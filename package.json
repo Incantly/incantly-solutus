@@ -1,0 +1,7 @@
+{
+  "name": "incantly-solutus",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ]
+}
