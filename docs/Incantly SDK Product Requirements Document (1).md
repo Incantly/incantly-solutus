@@ -676,6 +676,20 @@ The cost to manage is that every iframe boots its own copy of the engine. Mount 
 - iPad app: leave web inspection off in release builds.
 - The real advantage is the quality of the kit, the rules, the examples and the evals, not secrecy about how figures are drawn.
 
+### 18.6 Hiding generation inside the TipTap node
+
+Section 18.5 sets the principle: nothing in a browser is fully hidden, so the aim is to shrink the surface. The host tries the following in release builds, so that opening devtools on a note shows a running figure, not a transcript of how it was made.
+
+| Leak | What the host does |
+| --- | --- |
+| Node attributes | The node stores only the three fragments, the learner's changed values and the snapshot (HO-1). The prompt, rules, plan, model name, agent conversation, check reports and repair history never reach the client: generation and repair run server-side, and only fragments that passed the probe cross the bridge |
+| Bridge messages | Traffic stays within the message list in HO-3. No postMessage payload carries generation data or debugging scaffolding |
+| Console output | The engine and inc-bridge make no console calls in release; the build strips any that remain (18.5). The error boundary (RT-7) catches agent-thrown exceptions and reports them over the bridge, so a running figure leaves no uncaught errors in the console |
+| Web inspection | On iPad, web inspection is off in release builds. On web nothing is suppressed, and no anti-devtools tricks are added: debugger loops and blocked context menus are hostile to legitimate users and do not stop a determined reader |
+| Network tab | The iframe makes no requests (no network, strict CSP; 18.4), and its engine arrives pre-warmed (25.4), so there is no generation traffic to observe while a figure runs |
+
+What remains visible is the scene's own code, which is the learner's content (18.5). That is accepted. The goal is a console clean of generation internals, not an impossible wall.
+
 ## 19. The README and rules/core.md
 
 ### 19.1 Kit README outline
@@ -742,6 +756,7 @@ Rules
 | RM-2 | Fragment validator: allowed kit calls only, size caps, token-only colours | P0 |
 | RM-3 | Sandboxed iframe, bridge and one repair attempt | P0 |
 | RM-4 | Track lines of agent code per figure; add a catalog component when a pattern repeats | P1 |
+| RM-5 | Release host exposes no generation artefacts: no engine or bridge console output, no generation metadata in node attributes or bridge messages, no anti-devtools tricks (18.6) | P0 |
 | CH-1 | In-app check suite (run, numbers, sweep, frame cost, budget, bounds, parts, tokens) under 1 second | P0 |
 | CH-2 | Offline CI checks: screenshots, depth-order audit, line-end check | P1 |
 | CH-3 | Check failures are sent to the agent as specific messages for one repair attempt | P0 |
