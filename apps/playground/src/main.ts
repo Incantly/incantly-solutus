@@ -1,10 +1,12 @@
 import './styles.css';
 import { mountEditorPage } from './editor-page';
+import { mountGeneratePage } from './generate-page';
 import { mountAttackPage, mountComparePage, mountSandboxPage } from './sandbox-page';
 import { mountScenePage } from './scene-page';
 
 const pages: Record<string, (root: HTMLElement, params: URLSearchParams) => void> = {
   editor: mountEditorPage,
+  generate: mountGeneratePage,
   scene: mountScenePage,
   sandbox: mountSandboxPage,
   compare: mountComparePage,

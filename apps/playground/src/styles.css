@@ -88,3 +88,75 @@ main {
   margin: 8px 0 0;
   font-size: 0.9rem;
 }
+
+/* Making a figure: the skeleton card, then a quiet line if it cannot be built. */
+.incantly-figure--generating {
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, CanvasText 15%, Canvas);
+}
+.incantly-skeleton__title {
+  margin: 0 0 8px;
+  font-weight: 600;
+}
+.incantly-skeleton__shimmer {
+  background: linear-gradient(90deg, color-mix(in srgb, CanvasText 8%, Canvas) 25%, color-mix(in srgb, CanvasText 14%, Canvas) 50%, color-mix(in srgb, CanvasText 8%, Canvas) 75%);
+  background-size: 200% 100%;
+  animation: incantly-shimmer 1.4s linear infinite;
+}
+@keyframes incantly-shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .incantly-skeleton__shimmer {
+    animation: none;
+  }
+}
+.incantly-skeleton__controls {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+.incantly-skeleton__control {
+  display: grid;
+  grid-template-columns: 12rem 1fr;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9rem;
+  opacity: 0.7;
+}
+.incantly-skeleton__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.incantly-skeleton__request {
+  flex-basis: 100%;
+  margin: 0;
+  font-style: italic;
+  opacity: 0.75;
+}
+
+.generate-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 16px;
+}
+.generate-form label {
+  flex-basis: 100%;
+  font-weight: 600;
+}
+.generate-form input {
+  flex: 1;
+  min-width: 12rem;
+  padding: 6px 8px;
+  font: inherit;
+}
