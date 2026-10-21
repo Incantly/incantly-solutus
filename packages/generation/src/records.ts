@@ -45,6 +45,12 @@ export interface FailureRecord {
   readonly cost: number;
   readonly timings: GenerationState['timings'];
   readonly failure: string | null;
+  /** How the scene was made: written whole, adapted by edits, or from the concept cache. */
+  readonly mode: GenerationState['mode'];
+  /** A repair was due but skipped because it would have ended after the deadline. */
+  readonly deadlineSkipped: boolean;
+  /** Lines of the agent's script in the last candidate (RM-4). */
+  readonly lines: number | null;
 }
 
 export function outcomeOf(state: GenerationState): Outcome {
@@ -78,6 +84,9 @@ export function failureRecord(state: GenerationState, probedOn: FailureRecord['p
     cost: Math.round(state.cost * 1e6) / 1e6,
     timings: { ...state.timings },
     failure: state.failure ? `${state.failure.stage}: ${state.failure.reason}` : null,
+    mode: state.mode,
+    deadlineSkipped: state.deadlineSkipped,
+    lines: last?.fragments.js ? last.fragments.js.replace(/\n$/, '').split('\n').length : null,
   };
 }
 
