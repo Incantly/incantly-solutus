@@ -1,4 +1,4 @@
-import { SCENE_SIZES, SIZE_BUDGETS, type ControlKind, type PlanOutput, type PlanParameter, type SceneKind, type ScenePlan, type SceneSize, type SingularPoint } from '@incantly/core';
+import { INC_FUNCTIONS, SCENE_SIZES, SIZE_BUDGETS, type ControlKind, type PlanOutput, type PlanParameter, type SceneKind, type ScenePlan, type SceneSize, type SingularPoint } from '@incantly/core';
 import { CAPABILITIES, capability, capabilityNames } from './catalog';
 
 /**
@@ -373,6 +373,8 @@ export function validatePlan(input: unknown): PlanValidation {
 
   const capabilities: string[] = [];
   for (const [i, raw] of (readList(input.capabilities, 'capabilities', problems) ?? []).entries()) {
+    // A core call every scene already has (idea, model, param...) is not a capability: not worth a re-plan.
+    if (typeof raw === 'string' && !capability(raw) && Object.hasOwn(INC_FUNCTIONS, raw)) continue;
     if (typeof raw !== 'string' || !capability(raw)) {
       problems.push({
         rule: 'unknown-capability',

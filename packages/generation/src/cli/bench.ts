@@ -123,15 +123,16 @@ function readRun(runDir: string): BenchReply[] {
         if (u && entry.message?.id) usage.set(entry.message.id, { input: u.input_tokens ?? 0, output: u.output_tokens ?? 0, cacheRead: u.cache_read_input_tokens ?? 0 });
       }
     }
-    const text = results.get(agent);
+    const text = typeof results.get(agent) === 'string' ? (results.get(agent) as string) : '';
     const sum = [...usage.values()].reduce((a, u) => ({ input: a.input + u.input, output: a.output + u.output, cacheRead: a.cacheRead + u.cacheRead }), { input: 0, output: 0, cacheRead: 0 });
     const key = label.slice(label.indexOf(':') + 1);
     out.push({
       key,
-      text: typeof text === 'string' ? text : '',
+      text,
       ms: start !== null && end !== null ? end - start : 0,
       ...(model ? { model } : {}),
-      outputTokens: sum.output,
+      // Transcripts record the usage of a reply as it starts streaming, so its output is counted from the text.
+      outputTokens: Math.max(sum.output, Math.ceil(text.length / 3.5)),
       inputTokens: sum.input,
       cacheReadTokens: sum.cacheRead,
     });

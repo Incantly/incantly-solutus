@@ -37,6 +37,13 @@ describe('the plan validator', () => {
     expect(rules(plan({ capabilities: ['graph2d', 'readout'] }))).toEqual([]);
   });
 
+  it('passes over core calls listed as capabilities, which every scene has, rather than re-plan', () => {
+    const result = validatePlan(plan({ capabilities: ['graph2d', 'idea', 'model', 'readout'] }));
+    expect(result.problems).toEqual([]);
+    expect(result.plan!.capabilities).not.toContain('idea');
+    expect(result.plan!.capabilities).not.toContain('model');
+  });
+
   it('needs something to draw on', () => {
     expect(rules(plan({ capabilities: ['readout', 'steps'] }))).toEqual(['no-stage']);
     expect(rules(plan({ capabilities: ['svg', 'readout', 'steps'] }))).toEqual([]);
