@@ -1,6 +1,6 @@
-import { sandboxAdapter } from '@incantly/core';
+import { sandboxAdapter, VALIDATOR_VERSION } from '@incantly/core';
 import { GenerationClient, Telemetry, figureGenerator, type TelemetryEvent } from '@incantly/generation/client';
-import { FigureGeneration, FigureNode, MemoryFigureStore, flushFigures, type FigureGenerate, type FigureGenerationResult, type FigureRequest, type GenerationStageView, type SkeletonView } from '@incantly/tiptap';
+import { FigureGeneration, FigureNode, MemoryFigureStore, flushFigures, newFigureId, type FigureGenerate, type FigureGenerationResult, type FigureRequest, type GenerationStageView, type SkeletonView } from '@incantly/tiptap';
 import { Editor, type JSONContent } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 
@@ -436,7 +436,6 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
     inputBox.style.height = 'auto';
 
     const baseGenerate = figureGenerator({ client: client!, signals: telemetry.emit });
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- the editor and its reopen handle reuse this exact wrapper, so its references sit inside its own body
     async function generate(figureRequest: FigureRequest, hooks: Parameters<FigureGenerate>[1]): Promise<FigureGenerationResult> {
       let planText = '';
       let sceneText = '';
@@ -504,7 +503,19 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
         turns.push(turn);
         latest = turn;
         handle.editor = editor;
-        editor.commands.generateFigure({ prompt: request }, editor.state.doc.content.size);
+        // The figure is already approved; insert it with its fragments. The
+        // generateFigure command would run this checker flow all over again.
+        editor.commands.insertFigure({
+          figureId: newFigureId(),
+          concept: result.figure.concept,
+          fragments: result.figure.fragments,
+          description: result.figure.description,
+          meta: {
+            ...(result.figure.generationId ? { generationId: result.figure.generationId } : {}),
+            approvedAt: result.figure.approvedAt,
+            validatorVersion: VALIDATOR_VERSION,
+          },
+        });
         activeChat.messages.push({ role: 'assistant', content: 'Generated interactive figure.' });
       } else {
         // The fallback is the outcome: it never reaches the 'checking' stage,
@@ -519,6 +530,18 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
       }
       return result;
     };
+
+    // Kick the run off: the wrapper above is also the editor's regeneration
+    // hook, but the first run starts here — waiting for an editor command
+    // meant the request was never sent at all.
+    void generate({ prompt: request }, {
+      onSkeleton: () => {},
+      onStage: () => {},
+      signal: new AbortController().signal,
+    }).catch((error: unknown) => {
+      settleStages(planStage, sceneStage, [planOutput, sceneOutput]);
+      showAssistantError(error instanceof Error ? error.message : String(error));
+    });
 
     assistantMessage.scrollIntoView({ block: 'end', behavior: 'smooth' });
   }
