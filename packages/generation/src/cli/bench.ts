@@ -105,16 +105,31 @@ switch (command) {
     const only = values.only?.split(',');
     if (only) prompts = prompts.filter((p) => only.some((o) => p.id.startsWith(o)));
     const name = `bench-${stage}-${values.tag}`;
+    // Prompts share most of their text (rules, contract, examples): each paragraph is stored once.
+    const chunks: string[] = [];
+    const index = new Map<string, number>();
+    const items = prompts.map((p) => ({
+      id: p.id,
+      parts: p.prompt.split('\n\n').map((chunk) => {
+        let i = index.get(chunk);
+        if (i === undefined) {
+          i = chunks.push(chunk) - 1;
+          index.set(chunk, i);
+        }
+        return i;
+      }),
+    }));
     const script = [
       'export const meta = {',
       `  name: ${JSON.stringify(name)},`,
       `  description: ${JSON.stringify(`Latency bench: ${prompts.length} ${stage} prompts on ${model} (effort ${effort}), one subagent per prompt`)},`,
       `  phases: [{ title: ${JSON.stringify(stage)} }],`,
       '}',
-      `const ITEMS = ${JSON.stringify(prompts)}`,
+      `const CHUNKS = ${JSON.stringify(chunks)}`,
+      `const ITEMS = ${JSON.stringify(items)}`,
       `phase(${JSON.stringify(stage)})`,
       'const results = await parallel(ITEMS.map((item) => () =>',
-      `  agent(item.prompt, { label: ${JSON.stringify(`${stage}:`)} + item.id, phase: ${JSON.stringify(stage)}, model: ${JSON.stringify(model)}, effort: ${JSON.stringify(effort)} })`,
+      `  agent(item.parts.map((i) => CHUNKS[i]).join("\\n\\n"), { label: ${JSON.stringify(`${stage}:`)} + item.id, phase: ${JSON.stringify(stage)}, model: ${JSON.stringify(model)}, effort: ${JSON.stringify(effort)} })`,
       '    .then((text) => (typeof text === "string" ? text.length : 0))))',
       'return { prompts: ITEMS.length, replied: results.filter((n) => n > 0).length }',
       '',
