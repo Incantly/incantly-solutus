@@ -20,7 +20,28 @@ export interface FigureViewOptions {
   readonly settleMs: number;
   readonly theme: 'light' | 'dark' | 'auto';
   readonly onError?: ((report: FigureErrorReport) => void) | null | undefined;
+  readonly signals?: ((signal: FigureSignal) => void) | null | undefined;
 }
+
+/**
+ * What a figure in a note says about how it is used, for the host's product
+ * signals: ids, parameter names and numbers only, never note content.
+ */
+export type FigureSignal =
+  | { readonly type: 'figure-shown'; readonly figureId: string; readonly generationId?: string }
+  /** From mounting to the first drawing, and to controls that respond. */
+  | { readonly type: 'first-paint'; readonly figureId: string; readonly ms: number }
+  | { readonly type: 'interactive'; readonly figureId: string; readonly ms: number }
+  /** Once per figure and parameter while the note is open. */
+  | { readonly type: 'parameter-changed'; readonly figureId: string; readonly parameter: string }
+  | { readonly type: 'step-reached'; readonly figureId: string; readonly step: number; readonly count: number }
+  | { readonly type: 'steps-completed'; readonly figureId: string; readonly count: number }
+  /** The first time a shown figure goes away; abandoned when it was left within a minute without being used. */
+  | { readonly type: 'figure-left'; readonly figureId: string; readonly visibleMs: number; readonly interacted: boolean; readonly abandoned: boolean }
+  | { readonly type: 'restore-failure'; readonly figureId: string; readonly reason: 'source-missing' | 'invalid' };
+
+/** A figure left within this long without being used counts as abandoned. */
+export const ABANDON_MS = 60_000;
 
 /**
  * A problem a figure in a note ran into, for the host's own reporting: the
@@ -70,6 +91,18 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
   private focusOnLive: 'first' | 'last' | null = null;
   private mountedAt = 0;
   private generation = 0;
+  private noticeTimer: ReturnType<typeof setTimeout> | null = null;
+  private notice: string | null = null;
+  /** How the learner used the figure while the note is open, for product signals. */
+  private readonly usage = {
+    shownAt: null as number | null,
+    visibleSince: null as number | null,
+    visibleMs: 0,
+    interacted: false,
+    parameters: new Set<string>(),
+    completed: false,
+    left: false,
+  };
 
   constructor(
     private node: ProseMirrorNode,
@@ -97,6 +130,10 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
     // A click on a placeholder asks for the live figure.
     this.frame.addEventListener('click', () => {
       if (this.state === 'placeholder') this.options.scheduler.activate(this);
+    });
+    // Focus moving into the live figure is using it.
+    this.frame.addEventListener('focusin', () => {
+      if (this.state === 'live') this.usage.interacted = true;
     });
     this.renderPlaceholder();
     this.options.scheduler.register(this);
@@ -165,6 +202,8 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
 
   destroy(): void {
     if (this.state === 'destroyed') return;
+    this.left();
+    if (this.noticeTimer !== null) clearTimeout(this.noticeTimer);
     this.flush();
     this.options.scheduler.unregister(this);
     this.teardown();
@@ -186,6 +225,7 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
       // The node may have been suspended, destroyed or remounted while the fragments loaded.
       if (generation !== this.generation || this.state !== 'mounting') return;
       if (!fragments) {
+        this.signal({ type: 'restore-failure', figureId: this.attrs.figureId, reason: 'source-missing' });
         this.fail({ phase: 'mount', message: 'The figure source is not available' });
         return;
       }
@@ -195,14 +235,17 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
 
   pause(): void {
     this.handle?.pause();
+    this.hidden();
   }
 
   resume(): void {
     this.handle?.resume();
+    if (this.usage.shownAt !== null && this.usage.visibleSince === null) this.usage.visibleSince = performance.now();
   }
 
   async suspend(): Promise<void> {
     if (!this.isLive) return;
+    this.left();
     const handle = this.handle;
     this.state = 'suspending';
     this.dom.dataset.state = 'suspending';
@@ -289,11 +332,24 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
         scheduler.touch(this);
         this.pending.values = { ...this.pending.values, ...changed };
         this.settle();
+        this.used();
+        for (const parameter of Object.keys(changed)) {
+          if (this.usage.parameters.has(parameter)) continue;
+          this.usage.parameters.add(parameter);
+          this.signal({ type: 'parameter-changed', figureId: this.attrs.figureId, parameter });
+        }
       },
-      onStep: (position) => {
+      onStep: (position, count) => {
         scheduler.touch(this);
         this.pending.step = position;
         this.settle();
+        this.used();
+        if (position === null || !count) return;
+        this.signal({ type: 'step-reached', figureId: this.attrs.figureId, step: position, count });
+        if (position === count - 1 && !this.usage.completed) {
+          this.usage.completed = true;
+          this.signal({ type: 'steps-completed', figureId: this.attrs.figureId, count });
+        }
       },
       onDescription: (text) => {
         this.pending.description = text;
@@ -316,16 +372,21 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
       // The adapter refused the scene (for example, it failed validation) before returning.
       handle.destroy();
       container.remove();
-      if (this.state === 'mounting') this.fail(reported ?? { phase: 'mount', message: 'The figure did not pass validation' }, reported);
+      if (this.state === 'mounting') {
+        this.signal({ type: 'restore-failure', figureId: this.attrs.figureId, reason: 'invalid' });
+        this.fail(reported ?? { phase: 'mount', message: 'The figure did not pass validation' }, reported);
+      }
       return;
     }
     this.state = 'live';
     this.dom.dataset.state = 'live';
-    this.status.hidden = true;
+    this.renderStatus();
     const generation = this.generation;
     void handle.ready.then((state) => {
       if (state !== 'live' || this.state !== 'live' || generation !== this.generation) return;
-      this.options.scheduler.recordReady(performance.now() - this.mountedAt);
+      const now = performance.now();
+      this.options.scheduler.recordReady(now - this.mountedAt);
+      this.shown(now);
       container.classList.remove('is-booting');
       for (const child of [...this.frame.children]) if (child !== container) child.remove();
       this.frame.classList.add('is-live');
@@ -346,6 +407,7 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
    */
   private fail(error: ErrorView, reported: ErrorView | null = null): void {
     if (this.state === 'destroyed' || this.state === 'failed') return;
+    this.left();
     if (reported === error) this.failure = error;
     else this.report(error, true);
     this.teardown();
@@ -462,8 +524,81 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
         this.frame.replaceChildren(image);
       });
     }
-    this.status.hidden = this.state !== 'failed';
-    this.status.textContent = this.state === 'failed' ? 'This figure could not be shown. Its description is below.' : '';
+    this.renderStatus();
+  }
+
+  // -------------------------------------------------------------------------
+  // Product signals and notices
+  // -------------------------------------------------------------------------
+
+  private signal(signal: FigureSignal): void {
+    try {
+      this.options.signals?.(signal);
+    } catch {
+      // A host's signals must never break the note.
+    }
+  }
+
+  private shown(now: number): void {
+    const figureId = this.attrs.figureId;
+    const ms = Math.round(now - this.mountedAt);
+    if (this.usage.shownAt === null) {
+      this.usage.shownAt = now;
+      const generationId = this.attrs.meta.generationId;
+      this.signal({ type: 'figure-shown', figureId, ...(generationId ? { generationId } : {}) });
+    }
+    this.usage.visibleSince ??= now;
+    this.signal({ type: 'first-paint', figureId, ms });
+    this.signal({ type: 'interactive', figureId, ms });
+  }
+
+  private used(): void {
+    this.usage.interacted = true;
+    this.clearNotice();
+  }
+
+  private hidden(): void {
+    if (this.usage.visibleSince === null) return;
+    this.usage.visibleMs += performance.now() - this.usage.visibleSince;
+    this.usage.visibleSince = null;
+  }
+
+  /** The first time a shown figure goes away: suspended, failed, deleted or the note closed. */
+  private left(): void {
+    if (this.usage.shownAt === null || this.usage.left) return;
+    this.hidden();
+    this.usage.left = true;
+    const visibleMs = Math.round(this.usage.visibleMs);
+    this.signal({
+      type: 'figure-left',
+      figureId: this.attrs.figureId,
+      visibleMs,
+      interacted: this.usage.interacted,
+      abandoned: !this.usage.interacted && visibleMs < ABANDON_MS,
+    });
+  }
+
+  /** Shows one quiet line under the figure for a while, such as that it is a standard version. */
+  notify(message: string, ms = 10_000): void {
+    if (this.noticeTimer !== null) clearTimeout(this.noticeTimer);
+    this.notice = message;
+    this.noticeTimer = setTimeout(() => this.clearNotice(), ms);
+    this.renderStatus();
+  }
+
+  private clearNotice(): void {
+    if (this.noticeTimer === null) return;
+    clearTimeout(this.noticeTimer);
+    this.noticeTimer = null;
+    this.notice = null;
+    this.renderStatus();
+  }
+
+  /** The line under the figure: why it failed, or a passing notice. */
+  private renderStatus(): void {
+    const text = this.state === 'failed' ? 'This figure could not be shown. Its description is below.' : (this.notice ?? '');
+    if (this.status.textContent !== text) this.status.textContent = text;
+    this.status.hidden = text === '';
   }
 
   /** The last problem the figure ran into, fatal or not. */

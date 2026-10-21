@@ -1,0 +1,328 @@
+import { VALIDATOR_VERSION } from '@incantly/core';
+import { Extension } from '@tiptap/core';
+import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
+import { Plugin, PluginKey, type EditorState, type Transaction } from '@tiptap/pm/state';
+import { Decoration, DecorationSet, type EditorView } from '@tiptap/pm/view';
+import { DEFAULT_ASPECT, type FigureFragments } from './attributes';
+import { newFigureId } from './figure-node';
+import { FIGURE_TRANSACTION, figureViews } from './node-view';
+
+/**
+ * Making a new figure in a note (PRD 25.2, 27.1). The command places a
+ * skeleton where the figure will go: a card with the title, the control row
+ * with its sliders disabled and a shimmer where the drawing will be, drawn
+ * from the plan as soon as it arrives. Only an approved figure is inserted
+ * into the note; nothing half-made is ever stored. When the figure cannot be
+ * built the card says so in one line and offers Retry, which starts afresh.
+ *
+ * The host supplies `generate`: @incantly/generation/client's figureGenerator
+ * runs the service, the device probe, the one repair and the fallback ladder.
+ */
+
+export interface FigureRequest {
+  readonly prompt: string;
+  readonly noteContext?: string;
+}
+
+/** The skeleton: names and numbers from the plan. */
+export interface SkeletonView {
+  readonly concept: string;
+  readonly parameters: ReadonlyArray<{ readonly name: string; readonly unit?: string; readonly min: number; readonly max: number; readonly default: number }>;
+  readonly steps: number;
+}
+
+export type GenerationStageView = 'planning' | 'building' | 'checking' | 'repairing';
+
+export interface GeneratedFigure {
+  readonly fragments: FigureFragments;
+  readonly concept: string;
+  readonly description: string;
+  readonly generationId: string | null;
+  readonly approvedAt: string;
+}
+
+export type FigureGenerationResult =
+  | { readonly kind: 'figure'; readonly figure: GeneratedFigure; readonly notice?: string }
+  | { readonly kind: 'failed'; readonly message: string };
+
+export type FigureGenerate = (
+  request: FigureRequest,
+  hooks: { readonly onSkeleton: (skeleton: SkeletonView) => void; readonly onStage: (stage: GenerationStageView) => void; readonly signal: AbortSignal },
+) => Promise<FigureGenerationResult>;
+
+export interface FigureGenerationOptions {
+  generate: FigureGenerate | null;
+}
+
+declare module '@tiptap/core' {
+  interface Commands<ReturnType> {
+    figureGeneration: {
+      /** Makes a figure for the request, placed after the block at the selection, or at `at`. */
+      generateFigure: (request: FigureRequest, at?: number) => ReturnType;
+    };
+  }
+}
+
+const STAGE_TEXT: Readonly<Record<GenerationStageView, string>> = {
+  planning: 'Planning the figure…',
+  building: 'Drawing the figure…',
+  checking: 'Checking that it works…',
+  repairing: 'Fixing a problem…',
+};
+
+type Meta = { readonly add: { readonly id: string; readonly pos: number; readonly element: HTMLElement } } | { readonly remove: string };
+
+export const figureGenerationKey = new PluginKey<DecorationSet>('incantlyFigureGeneration');
+
+/** One figure being made: its card in the note and the work behind it. */
+class GenerationTask {
+  readonly element: HTMLElement;
+  private controller = new AbortController();
+  private readonly title: HTMLElement;
+  private readonly frame: HTMLElement;
+  private readonly controls: HTMLElement;
+  private readonly status: HTMLElement;
+  private readonly actions: HTMLElement;
+  finished = false;
+
+  constructor(
+    readonly id: string,
+    private readonly request: FigureRequest,
+    private readonly view: EditorView,
+    private readonly generate: FigureGenerate,
+  ) {
+    const doc = view.dom.ownerDocument;
+    this.element = doc.createElement('figure');
+    this.element.className = 'incantly-figure incantly-figure--generating';
+    this.element.contentEditable = 'false';
+    this.element.dataset.generation = id;
+    this.title = doc.createElement('p');
+    this.title.className = 'incantly-skeleton__title';
+    this.frame = doc.createElement('div');
+    this.frame.className = 'incantly-figure__frame';
+    this.frame.style.aspectRatio = `1 / ${DEFAULT_ASPECT}`;
+    const shimmer = doc.createElement('div');
+    shimmer.className = 'incantly-figure__skeleton incantly-skeleton__shimmer';
+    this.frame.append(shimmer);
+    this.controls = doc.createElement('div');
+    this.controls.className = 'incantly-skeleton__controls';
+    this.status = doc.createElement('p');
+    this.status.className = 'incantly-figure__status';
+    this.status.setAttribute('role', 'status');
+    this.actions = doc.createElement('div');
+    this.actions.className = 'incantly-skeleton__actions';
+    this.actions.hidden = true;
+    this.element.append(this.title, this.frame, this.controls, this.status, this.actions);
+  }
+
+  start(): void {
+    this.finished = false;
+    this.controller = new AbortController();
+    this.element.setAttribute('aria-busy', 'true');
+    this.element.classList.remove('is-failed');
+    this.actions.hidden = true;
+    this.actions.replaceChildren();
+    this.title.textContent = 'Making a figure';
+    this.element.setAttribute('aria-label', 'Making a figure');
+    this.controls.replaceChildren();
+    this.frame.hidden = false;
+    this.stage('planning');
+    void this.generate(this.request, {
+      onSkeleton: (skeleton) => this.skeleton(skeleton),
+      onStage: (stage) => this.stage(stage),
+      signal: this.controller.signal,
+    }).then(
+      (result) => this.done(result),
+      () => this.done({ kind: 'failed', message: 'This figure could not be built.' }),
+    );
+  }
+
+  cancel(): void {
+    this.controller.abort();
+  }
+
+  private stage(stage: GenerationStageView): void {
+    if (!this.finished) this.status.textContent = STAGE_TEXT[stage];
+  }
+
+  /** The plan arrived: the card takes the figure's title and its control row. */
+  private skeleton(skeleton: SkeletonView): void {
+    if (this.finished) return;
+    const doc = this.element.ownerDocument;
+    this.title.textContent = skeleton.concept;
+    this.element.setAttribute('aria-label', `Making a figure: ${skeleton.concept}`);
+    const rows = skeleton.parameters.map((p) => {
+      const label = doc.createElement('label');
+      label.className = 'incantly-skeleton__control';
+      const name = doc.createElement('span');
+      name.textContent = p.unit ? `${p.name} (${p.unit})` : p.name;
+      const input = doc.createElement('input');
+      input.type = 'range';
+      input.disabled = true;
+      input.min = String(p.min);
+      input.max = String(p.max);
+      input.value = String(p.default);
+      input.tabIndex = -1;
+      label.append(name, input);
+      return label;
+    });
+    this.controls.replaceChildren(...rows);
+  }
+
+  private done(result: FigureGenerationResult): void {
+    if (this.finished || this.controller.signal.aborted) return;
+    this.finished = true;
+    this.element.removeAttribute('aria-busy');
+    if (result.kind === 'figure') {
+      insertFigure(this.view, this.id, result.figure, result.notice);
+      return;
+    }
+    // One quiet line, the request it was for, and a way to try again.
+    const doc = this.element.ownerDocument;
+    this.element.classList.add('is-failed');
+    this.frame.hidden = true;
+    this.controls.replaceChildren();
+    this.status.textContent = result.message;
+    const request = doc.createElement('p');
+    request.className = 'incantly-skeleton__request';
+    request.textContent = this.request.prompt;
+    const retry = doc.createElement('button');
+    retry.type = 'button';
+    retry.textContent = 'Retry';
+    retry.addEventListener('click', () => this.start());
+    const dismiss = doc.createElement('button');
+    dismiss.type = 'button';
+    dismiss.textContent = 'Dismiss';
+    dismiss.addEventListener('click', () => removeTask(this.view, this.id));
+    this.actions.replaceChildren(request, retry, dismiss);
+    this.actions.hidden = false;
+  }
+}
+
+const tasks = new WeakMap<EditorView, Map<string, GenerationTask>>();
+
+function tasksOf(view: EditorView): Map<string, GenerationTask> {
+  let map = tasks.get(view);
+  if (!map) {
+    map = new Map();
+    tasks.set(view, map);
+  }
+  return map;
+}
+
+/** Where a task's card is now, after any edits around it. */
+function positionOf(state: EditorState, id: string): number | null {
+  const set = figureGenerationKey.getState(state);
+  const found = set?.find(undefined, undefined, (spec: { id?: string }) => spec.id === id)[0];
+  return found ? found.from : null;
+}
+
+function removeTask(view: EditorView, id: string): void {
+  tasksOf(view).get(id)?.cancel();
+  tasksOf(view).delete(id);
+  if (!view.isDestroyed) view.dispatch(view.state.tr.setMeta(figureGenerationKey, { remove: id } satisfies Meta));
+}
+
+function insertFigure(view: EditorView, id: string, figure: GeneratedFigure, notice?: string): void {
+  if (view.isDestroyed) return;
+  const pos = positionOf(view.state, id);
+  tasksOf(view).delete(id);
+  const type = view.state.schema.nodes.incantlyFigure;
+  if (pos === null || !type) return;
+  const node = type.create({
+    figureId: newFigureId(),
+    concept: figure.concept,
+    fragments: figure.fragments,
+    description: figure.description,
+    meta: {
+      ...(figure.generationId ? { generationId: figure.generationId } : {}),
+      approvedAt: figure.approvedAt,
+      validatorVersion: VALIDATOR_VERSION,
+    },
+  });
+  // Adding a figure is an ordinary edit: undo takes it out again.
+  const tr: Transaction = view.state.tr.insert(pos, node).setMeta(figureGenerationKey, { remove: id } satisfies Meta).setMeta(FIGURE_TRANSACTION, 'generated');
+  view.dispatch(tr);
+  if (notice) {
+    const dom = view.nodeDOM(pos);
+    if (dom instanceof Element) figureViews.get(dom)?.notify(notice);
+  }
+}
+
+/** The position after the top-level block that holds `pos`: a figure goes between blocks. */
+function blockBoundary(doc: ProseMirrorNode, pos: number): number {
+  const $pos = doc.resolve(Math.max(0, Math.min(pos, doc.content.size)));
+  return $pos.depth === 0 ? $pos.pos : $pos.after(1);
+}
+
+let taskCounter = 0;
+
+export const FigureGeneration = Extension.create<FigureGenerationOptions>({
+  name: 'figureGeneration',
+
+  addOptions() {
+    return { generate: null };
+  },
+
+  addCommands() {
+    return {
+      generateFigure:
+        (request, at) =>
+        ({ view, state, dispatch }) => {
+          const generate = this.options.generate;
+          if (!generate || request.prompt.trim() === '') return false;
+          if (!dispatch) return true;
+          const pos = blockBoundary(state.doc, at ?? state.selection.to);
+          const id = `task-${++taskCounter}`;
+          const task = new GenerationTask(id, { ...request, prompt: request.prompt.trim() }, view, generate);
+          tasksOf(view).set(id, task);
+          dispatch(state.tr.setMeta(figureGenerationKey, { add: { id, pos, element: task.element } } satisfies Meta));
+          task.start();
+          return true;
+        },
+    };
+  },
+
+  addProseMirrorPlugins() {
+    return [
+      new Plugin<DecorationSet>({
+        key: figureGenerationKey,
+        state: {
+          init: () => DecorationSet.empty,
+          apply: (tr, set) => {
+            let next = set.map(tr.mapping, tr.doc);
+            const meta = tr.getMeta(figureGenerationKey) as Meta | undefined;
+            if (meta && 'add' in meta) {
+              const widget = Decoration.widget(meta.add.pos, meta.add.element, {
+                id: meta.add.id,
+                side: -1,
+                ignoreSelection: true,
+                // The card's buttons are its own; the editor leaves their events alone.
+                stopEvent: () => true,
+              });
+              next = next.add(tr.doc, [widget]);
+            } else if (meta && 'remove' in meta) {
+              next = next.remove(next.find(undefined, undefined, (spec: { id?: string }) => spec.id === meta.remove));
+            }
+            return next;
+          },
+        },
+        props: {
+          decorations: (state) => figureGenerationKey.getState(state),
+        },
+        view: (view) => ({
+          destroy: () => {
+            // Closing the note cancels the figures still being made; none is half stored.
+            for (const task of tasksOf(view).values()) task.cancel();
+            tasks.delete(view);
+          },
+        }),
+      }),
+    ];
+  },
+});
+
+/** Figures being made in an editor, for hosts and tests. */
+export function pendingFigures(view: EditorView): number {
+  return tasksOf(view).size;
+}

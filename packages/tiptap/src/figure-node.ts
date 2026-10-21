@@ -14,7 +14,7 @@ import {
   sanitizeValues,
   type FigureAttributes,
 } from './attributes';
-import { FIGURE_TRANSACTION, FigureNodeView, figureViews, type FigureErrorReport } from './node-view';
+import { FIGURE_TRANSACTION, FigureNodeView, figureViews, type FigureErrorReport, type FigureSignal } from './node-view';
 import { LiveFigureScheduler, type SchedulerOptions } from './scheduler';
 import type { FigureStore } from './store';
 
@@ -36,6 +36,8 @@ export interface FigureNodeOptions {
   theme: 'light' | 'dark' | 'auto';
   /** Hears about each problem a live figure runs into, for the host's own reporting. */
   onError: ((report: FigureErrorReport) => void) | null;
+  /** Hears how figures are used, for product signals: ids, names and numbers only. */
+  signals: ((signal: FigureSignal) => void) | null;
 }
 
 declare module '@tiptap/core' {
@@ -121,7 +123,7 @@ export const FigureNode = Node.create<FigureNodeOptions>({
   draggable: true,
 
   addOptions() {
-    return { snapshots: null, adapter: null, store: null, scheduler: {}, settleMs: 600, theme: 'auto', onError: null };
+    return { snapshots: null, adapter: null, store: null, scheduler: {}, settleMs: 600, theme: 'auto', onError: null, signals: null };
   },
 
   addAttributes() {
@@ -236,6 +238,7 @@ export const FigureNode = Node.create<FigureNodeOptions>({
         settleMs: this.options.settleMs,
         theme: this.options.theme,
         onError: this.options.onError,
+        signals: this.options.signals,
       });
     };
   },
