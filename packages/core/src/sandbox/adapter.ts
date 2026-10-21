@@ -194,7 +194,13 @@ class SandboxedFigure implements FigureHandle {
     this.deadlines = { ...DEFAULT_DEADLINES, ...options.deadlines };
     const scene = validation.scene;
     if (!scene) {
-      this.fail({ phase: 'mount', message: 'The figure did not pass validation' });
+      // The first error names the failure kind; the fragments themselves are never echoed back.
+      const first = validation.diagnostics.find((d) => d.severity === 'error');
+      this.fail({
+        phase: 'mount',
+        message: `The figure did not pass validation${first ? ` (${first.rule} in ${first.fragment})` : ''}`,
+        ...(first ? { line: first.line, column: first.column } : {}),
+      });
       return;
     }
     const channel = newChannelId();
@@ -303,8 +309,10 @@ class SandboxedFigure implements FigureHandle {
   private fail(error: ErrorView, report = true): void {
     if (this.state === 'failed' || this.state === 'destroyed') return;
     this.teardown();
-    this.setState('failed');
+    // The cause is reported before the state changes, as the in-thread adapter does, so a state listener knows why.
     if (report) this.options.onError?.(error);
+    if (this.state !== 'booting' && this.state !== 'live') return;
+    this.setState('failed');
     this.settle('failed');
   }
 
