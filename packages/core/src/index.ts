@@ -31,3 +31,26 @@ export type { Fragments, MountedFigure, TrustedMountOptions } from './engine/mou
 export { FigureRenderer } from './renderer/renderer';
 export type { RendererOptions } from './renderer/renderer';
 export { THEME_CSS } from './renderer/theme';
+
+export { validateScene, formatDiagnostic, hasErrors, SCENE_LIMITS } from './validation';
+export type { Diagnostic, SceneFragments, SceneLimits, SceneValidation, ValidatedScene } from './validation';
+
+export { probeScene } from './probe';
+export type { ProbeCheck, ProbeFailure, ProbeOptions, ProbeReport, ProbeSpec } from './probe';
+
+export { BRIDGE_VERSION } from './protocol/bridge';
+export type { FrameMessage, HostMessage } from './protocol/bridge';
+
+export { DEFAULT_DEADLINES, mountSandboxed, presentScene, probeSandboxed, sandboxAdapter } from './sandbox/adapter';
+export type {
+  Deadlines,
+  ExecutionAdapter,
+  FigureCallbacks,
+  FigureHandle,
+  FigureState,
+  MountOptions,
+  PresentResult,
+  ProbeOutcome,
+  SandboxProbeOptions,
+} from './sandbox/adapter';
+export { inThreadAdapter, mountInThread } from './engine/in-thread-adapter';
