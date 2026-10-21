@@ -18,6 +18,10 @@ export function mountInThread(container: HTMLElement, fragments: SceneFragments,
   try {
     figure = mountTrusted(container, fragments, {
       ...(options.values ? { values: options.values } : {}),
+      ...(options.formulas ? { formulas: options.formulas } : {}),
+      ...(options.style ? { style: options.style } : {}),
+      ...(options.figureNumber !== undefined ? { figureNumber: options.figureNumber } : {}),
+      ...(options.onFormulas ? { onFormulas: options.onFormulas } : {}),
       ...(options.step !== undefined ? { step: options.step } : {}),
       ...(options.autoplay !== undefined ? { autoplay: options.autoplay } : {}),
       ...(options.reducedMotion !== undefined ? { reducedMotion: options.reducedMotion } : {}),

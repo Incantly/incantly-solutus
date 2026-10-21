@@ -18,19 +18,26 @@ export interface ShellOptions {
   /** The figure's unguessable channel id. */
   readonly channel: string;
   readonly lang?: string;
+  /** Trusted CSS from the integrator, already checked by `hostCss`. */
+  readonly hostCss?: string;
 }
 
 let themeHash: string | null = null;
 
-/** The frame's content security policy for a scene's CSS. */
-export function contentSecurityPolicy(css: string): string {
+/**
+ * The frame's content security policy for a scene's CSS and the host's own.
+ * Fonts may come only from data URLs inside the host CSS; nothing loads over
+ * the network.
+ */
+export function contentSecurityPolicy(css: string, hostCss = ''): string {
   themeHash ??= cspHash(THEME_CSS);
-  const styles = css ? `${themeHash} ${cspHash(css)}` : themeHash;
+  const styles = [themeHash, ...(hostCss ? [cspHash(hostCss)] : []), ...(css ? [cspHash(css)] : [])].join(' ');
   return [
     "default-src 'none'",
     `script-src ${FRAME_SCRIPT_HASH}`,
     `style-src ${styles}`,
     'img-src blob: data:',
+    'font-src data:',
     'worker-src blob:',
     "form-action 'none'",
     "base-uri 'none'",
@@ -40,14 +47,16 @@ export function contentSecurityPolicy(css: string): string {
 export function buildShell(options: ShellOptions): string {
   if (!/^[a-f0-9]{32}$/.test(options.channel)) throw new Error('A frame needs a 128-bit hex channel id');
   if (/<\//.test(options.css) || options.css.includes('<')) throw new Error('Scene CSS must be validated before it reaches a frame');
+  if (options.hostCss && options.hostCss.includes('<')) throw new Error('Host CSS must go through hostCss() before it reaches a frame');
   const lang = options.lang && /^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$/.test(options.lang) ? options.lang : 'en';
   return (
     '<!doctype html>' +
     `<html lang="${lang}" class="inc-frame" data-channel="${options.channel}">` +
     '<head><meta charset="utf-8">' +
-    `<meta http-equiv="Content-Security-Policy" content="${contentSecurityPolicy(options.css)}">` +
+    `<meta http-equiv="Content-Security-Policy" content="${contentSecurityPolicy(options.css, options.hostCss ?? '')}">` +
     '<meta name="referrer" content="no-referrer">' +
     `<style data-incantly-theme>${THEME_CSS}</style>` +
+    (options.hostCss ? `<style data-incantly-host>${options.hostCss}</style>` : '') +
     (options.css ? `<style>${options.css}</style>` : '') +
     '</head><body>' +
     `<div class="inc-root" data-figure-id="${FRAME_SCOPE}"><div class="inc-scene">${options.html}</div></div>` +

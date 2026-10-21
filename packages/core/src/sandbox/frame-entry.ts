@@ -103,6 +103,7 @@ let hostVisible = true;
 let onScreen = true;
 let mountedSent = false;
 let pendingValues: Record<string, number> | null = null;
+let pendingFormulas: Record<string, string> | null = null;
 let pendingDescription: string | null = null;
 let valuesTimer: ReturnType<typeof setTimeout> | null = null;
 let lastHeight = -1;
@@ -218,12 +219,20 @@ function start(init: InitMessage): void {
   }
 
   if (init.live?.theme === 'light' || init.live?.theme === 'dark') root.dataset.theme = init.live.theme;
+  const figureNumber = init.live?.figureNumber;
   renderer = new FigureRenderer({
     root,
     channel: workerChannel,
     scope: 'incfig',
     visibility: 'external',
+    // The style is plain data the renderer checks again; it can only set names, lengths and colours.
+    ...(init.live?.style ? { style: init.live.style } : {}),
+    ...(typeof figureNumber === 'number' && Number.isInteger(figureNumber) && figureNumber > 0 && figureNumber < 10_000 ? { figureNumber } : {}),
     onValues: (values) => queueReport(values, null),
+    onFormulas: (formulas) => {
+      pendingFormulas = { ...pendingFormulas, ...formulas };
+      queueReport(null, null);
+    },
     onStep: (step, count) => send({ type: 'step', step, ...(count !== undefined ? { count } : {}) }),
     onError: (error) => send({ type: 'error', error }),
     onUpdate: (update) => {
@@ -260,6 +269,8 @@ function flushReport(): void {
   if (valuesTimer !== null) clearTimeout(valuesTimer);
   valuesTimer = null;
   if (pendingValues) send({ type: 'values', values: pendingValues });
+  if (pendingFormulas) send({ type: 'formulas', formulas: pendingFormulas });
+  pendingFormulas = null;
   if (pendingDescription !== null) send({ type: 'description', text: pendingDescription.slice(0, 2000) });
   pendingValues = null;
   pendingDescription = null;

@@ -1,4 +1,5 @@
 import type { ProbeReport, ProbeSpec } from '../probe/probe';
+import type { FigureStyle } from '../renderer/style';
 import type { ErrorView } from './ui';
 
 /**
@@ -20,11 +21,17 @@ export interface ConnectMessage {
 
 export interface LiveOptions {
   readonly values?: Readonly<Record<string, number>>;
+  /** Formulas the learner edited, by index. */
+  readonly formulas?: Readonly<Record<string, string>>;
   readonly step?: number | null;
   readonly autoplay?: boolean;
   readonly reducedMotion?: boolean;
   readonly seed?: number;
   readonly theme?: 'light' | 'dark' | 'auto';
+  /** The integrator's style without its CSS, which the frame document carries. Checked again in the frame. */
+  readonly style?: FigureStyle;
+  /** The figure's number in its document, for the card's title. */
+  readonly figureNumber?: number;
 }
 
 export interface ProbeRequest {
@@ -65,6 +72,8 @@ export type FrameMessageBody =
   | { readonly type: 'mounted' }
   | { readonly type: 'error'; readonly error: ErrorView }
   | { readonly type: 'values'; readonly values: Readonly<Record<string, number>> }
+  /** Formulas the learner edited, by index, for persistence. */
+  | { readonly type: 'formulas'; readonly formulas: Readonly<Record<string, string>> }
   /** The teaching position, and how many steps there are. */
   | { readonly type: 'step'; readonly step: number | null; readonly count?: number }
   /** The text alternative changed, so the host can keep it for placeholders and print. */
@@ -98,6 +107,7 @@ export const FRAME_MESSAGE_TYPES: ReadonlySet<string> = new Set([
   'mounted',
   'error',
   'values',
+  'formulas',
   'step',
   'description',
   'escape',
@@ -114,6 +124,12 @@ const isValues = (value: unknown): value is Record<string, number> =>
   isRecord(value) && Object.keys(value).length <= 16 && Object.values(value).every((v) => typeof v === 'number' && Number.isFinite(v));
 
 const isStep = (value: unknown): value is number | null => value === null || (typeof value === 'number' && Number.isInteger(value) && value >= 0);
+
+/** Learner formulas: at most eight, keyed by index, each short text. */
+export const isFormulas = (value: unknown): value is Record<string, string> =>
+  isRecord(value) &&
+  Object.keys(value).length <= 8 &&
+  Object.entries(value).every(([key, text]) => /^[0-7]$/.test(key) && typeof text === 'string' && text.length <= 200);
 
 function envelope(data: unknown, channel: string, types: ReadonlySet<string>): Record<string, unknown> | null {
   if (!isRecord(data) || data.v !== BRIDGE_VERSION || data.channel !== channel) return null;
@@ -168,6 +184,8 @@ export function parseFrameMessage(data: unknown, channel: string): FrameMessage 
         : null;
     case 'values':
       return isValues(m.values) ? (m as unknown as FrameMessage) : null;
+    case 'formulas':
+      return isFormulas(m.formulas) ? (m as unknown as FrameMessage) : null;
     case 'step':
       return isStep(m.step) && (m.count === undefined || (isStep(m.count) && m.count !== null && m.count <= 100)) ? (m as unknown as FrameMessage) : null;
     case 'description':

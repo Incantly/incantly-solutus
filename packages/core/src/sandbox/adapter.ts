@@ -1,6 +1,7 @@
 import type { ProbeReport, ProbeSpec } from '../probe/probe';
 import { parseFrameMessage, type FrameMessage, type HostMessageBody, type LiveOptions, type ProbeRequest } from '../protocol/bridge';
 import type { ErrorView } from '../protocol/ui';
+import { hostCss, styleForBridge, type FigureStyle } from '../renderer/style';
 import { validateScene, type SceneFragments, type SceneValidation, type ValidatedScene } from '../validation';
 import { WORKER_SCRIPT } from './generated/bundles';
 import { buildShell, newChannelId } from './shell';
@@ -27,6 +28,8 @@ export const DEFAULT_DEADLINES: Deadlines = { mountMs: 4000, heartbeatMs: 2000, 
 
 export interface FigureCallbacks {
   readonly onValues?: (values: Readonly<Record<string, number>>) => void;
+  /** Formulas the learner edited, by index. */
+  readonly onFormulas?: (formulas: Readonly<Record<string, string>>) => void;
   /** The teaching position, and how many steps the figure has. */
   readonly onStep?: (step: number | null, count?: number) => void;
   readonly onError?: (error: ErrorView) => void;
@@ -37,7 +40,9 @@ export interface FigureCallbacks {
   readonly onEscape?: (direction: 'out' | 'forward' | 'backward') => void;
 }
 
-export interface MountOptions extends LiveOptions, FigureCallbacks {
+export interface MountOptions extends Omit<LiveOptions, 'style'>, FigureCallbacks {
+  /** How the integrator styles the figure, including trusted CSS of their own. */
+  readonly style?: FigureStyle;
   /** Accessible name of the frame. */
   readonly title?: string;
   readonly lang?: string;
@@ -89,12 +94,14 @@ class FrameConnection {
     scene: ValidatedScene,
     private readonly channel: string,
     private readonly handlers: ConnectionHandlers,
-    options: { readonly title: string; readonly hidden?: boolean; readonly lang?: string },
+    options: { readonly title: string; readonly hidden?: boolean; readonly lang?: string; readonly hostCss?: string },
   ) {
     const doc = container.ownerDocument;
     const frame = doc.createElement('iframe');
     // allow-scripts only: an opaque origin with no access to the host, its storage or its cookies.
     frame.setAttribute('sandbox', 'allow-scripts');
+    // Full screen is asked for by the trusted renderer on a learner's tap; scene code has no DOM to ask with.
+    frame.setAttribute('allow', 'fullscreen');
     frame.setAttribute('referrerpolicy', 'no-referrer');
     frame.title = options.title;
     frame.style.border = '0';
@@ -112,7 +119,13 @@ class FrameConnection {
       frame.style.visibility = 'hidden';
     }
     frame.addEventListener('load', () => this.onLoad());
-    frame.srcdoc = buildShell({ html: scene.html, css: scene.css, channel, ...(options.lang ? { lang: options.lang } : {}) });
+    frame.srcdoc = buildShell({
+      html: scene.html,
+      css: scene.css,
+      channel,
+      ...(options.lang ? { lang: options.lang } : {}),
+      ...(options.hostCss ? { hostCss: options.hostCss } : {}),
+    });
     this.frame = frame;
     container.append(frame);
   }
@@ -205,14 +218,19 @@ class SandboxedFigure implements FigureHandle {
       return;
     }
     const channel = newChannelId();
+    const style = styleForBridge(options.style);
     const live: LiveOptions = {
       ...(options.values ? { values: options.values } : {}),
+      ...(options.formulas ? { formulas: options.formulas } : {}),
       ...(options.step !== undefined ? { step: options.step } : {}),
       ...(options.autoplay !== undefined ? { autoplay: options.autoplay } : {}),
       ...(options.reducedMotion !== undefined ? { reducedMotion: options.reducedMotion } : {}),
       ...(options.seed !== undefined ? { seed: options.seed } : {}),
       ...(options.theme ? { theme: options.theme } : {}),
+      ...(style ? { style } : {}),
+      ...(options.figureNumber !== undefined ? { figureNumber: options.figureNumber } : {}),
     };
+    const css = hostCss(options.style);
     this.connection = new FrameConnection(
       container,
       scene,
@@ -221,7 +239,7 @@ class SandboxedFigure implements FigureHandle {
         onMessage: (message) => this.onMessage(message, scene, live),
         onNavigate: () => this.fail({ phase: 'unresponsive', message: 'The figure tried to navigate and was removed' }),
       },
-      { title: options.title ?? 'Interactive figure', ...(options.lang ? { lang: options.lang } : {}) },
+      { title: options.title ?? 'Interactive figure', ...(options.lang ? { lang: options.lang } : {}), ...(css ? { hostCss: css } : {}) },
     );
     this.mountTimer = setTimeout(() => this.fail({ phase: 'unresponsive', message: 'The figure did not start in time' }), this.deadlines.mountMs);
     this.doc.addEventListener('visibilitychange', this.onVisibility);
@@ -245,6 +263,9 @@ class SandboxedFigure implements FigureHandle {
         break;
       case 'values':
         this.options.onValues?.(message.values);
+        break;
+      case 'formulas':
+        this.options.onFormulas?.(message.formulas);
         break;
       case 'step':
         this.options.onStep?.(message.step, message.count);

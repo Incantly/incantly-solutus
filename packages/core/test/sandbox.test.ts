@@ -65,6 +65,7 @@ describe('bridge messages', () => {
       'description',
       'error',
       'escape',
+      'formulas',
       'mounted',
       'pong',
       'probe',

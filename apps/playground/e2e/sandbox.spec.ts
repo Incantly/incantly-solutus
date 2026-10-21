@@ -53,6 +53,7 @@ test.describe('sandbox (Phase 3 gate)', () => {
       expect.stringMatching(/^script-src 'sha256-[A-Za-z0-9+/]+=*'$/),
       expect.stringMatching(/^style-src 'sha256-[A-Za-z0-9+/]+=*' 'sha256-[A-Za-z0-9+/]+=*'$/),
       'img-src blob: data:',
+      'font-src data:',
       'worker-src blob:',
       "form-action 'none'",
       "base-uri 'none'",

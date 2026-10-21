@@ -93,6 +93,7 @@ function boot(message: WorkerBoot): void {
   const live = message.live ?? {};
   runtime = new SceneRuntime({
     ...(live.values ? { values: live.values } : {}),
+    ...(live.formulas ? { formulas: live.formulas } : {}),
     ...(live.step !== undefined ? { step: live.step } : {}),
     ...(live.autoplay !== undefined ? { autoplay: live.autoplay } : {}),
     ...(live.reducedMotion !== undefined ? { reducedMotion: live.reducedMotion } : {}),
