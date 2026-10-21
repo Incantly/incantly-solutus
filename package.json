@@ -22,7 +22,9 @@
     "test:perf": "playwright test --project=perf --pass-with-no-tests",
     "presize": "npm run generate",
     "size": "node scripts/check-engine-size.mjs",
-    "check": "npm run lint && npm run typecheck && npm test && npm run size"
+    "check": "npm run lint && npm run typecheck && npm test && npm run size",
+    "evals": "npm run evals --workspace @incantly/generation --",
+    "serve": "npm run serve --workspace @incantly/generation"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.13.0",
