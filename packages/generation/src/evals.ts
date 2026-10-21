@@ -107,6 +107,8 @@ export interface EvalSummary {
   readonly firstFragmentMs: Latency;
   readonly repairMs: Latency;
   readonly tokens: ModelUsage & { readonly perTrial: number };
+  /** Share of trials whose calls read the fixed context from the prompt cache (SP-1). */
+  readonly cacheHitRate: number;
   readonly cost: number;
   /** The v0.1 gate: at least 85% first time and 95% after one repair, and no broken figure shown. */
   readonly gate: {
@@ -270,6 +272,7 @@ export function summarize(trials: readonly TrialResult[], promptsVersion: number
     firstFragmentMs: latency(trials.flatMap((t) => (t.firstFragmentMs === null ? [] : [t.firstFragmentMs]))),
     repairMs: latency(trials.filter((t) => t.repairs > 0).map((t) => t.repairMs)),
     tokens: { ...usage, perTrial: trials.length ? Math.round((usage.inputTokens + usage.outputTokens + usage.cacheReadTokens + usage.cacheWriteTokens) / trials.length) : 0 },
+    cacheHitRate: trials.length ? Math.round((trials.filter((t) => t.usage.cacheReadTokens > 0).length / trials.length) * 1000) / 1000 : 0,
     cost: Math.round(trials.reduce((sum, t) => sum + t.cost, 0) * 100) / 100,
     gate: {
       firstAttempt: overall.firstAttempt.rate >= 0.85,
@@ -304,6 +307,8 @@ export function summaryMarkdown(summary: EvalSummary): string {
     `Latency: p50 ${summary.latencyMs.p50} ms, p95 ${summary.latencyMs.p95} ms, max ${summary.latencyMs.max} ms. First fragment p50 ${summary.firstFragmentMs.p50} ms. Repairs p50 ${summary.repairMs.p50} ms.`,
     '',
     `Tokens: ${summary.tokens.inputTokens} input, ${summary.tokens.cacheReadTokens} cache reads, ${summary.tokens.cacheWriteTokens} cache writes, ${summary.tokens.outputTokens} output; ${summary.tokens.perTrial} a trial. Cost about $${summary.cost.toFixed(2)}.`,
+    '',
+    `Prompt cache: the fixed context was read from the cache in ${percent(summary.cacheHitRate)} of trials.`,
     '',
     'Failures of the final candidate:',
     '',

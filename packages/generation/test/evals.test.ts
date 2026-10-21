@@ -109,6 +109,8 @@ describe('running the evals', () => {
     expect(text).toContain('# Generation evals: reference, prompts v1');
     expect(text).toContain('| First attempt | 100.0% (95% CI ');
     expect(text).toContain('| Broken figures shown | 0 | none |');
+    // The stand-in model reports no cache use; the real one reports it in its usage fields.
+    expect(text).toContain('Prompt cache: the fixed context was read from the cache in 0.0% of trials.');
   });
 });
 
