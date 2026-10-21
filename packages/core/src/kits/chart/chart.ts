@@ -202,7 +202,7 @@ export class ChartKit implements Chart {
     if (!isTone(tone)) fail(`Unknown tone "${String(tone)}"`);
     const label = checkText(options.label, 'rule label') ?? null;
     const line = this.stage.line(0, 0, 0, 0, { layer: 'front', tone, dashed: options.dashed ?? true });
-    const text = this.stage.text(0, 0, '', { layer: 'labels', tone }).set({ 'font-size': 11, 'text-anchor': 'end' });
+    const text = this.stage.text(0, 0, '', { layer: 'labels', tone }).set({ 'font-size': 12, 'text-anchor': 'end' });
     this.rules.push({ value, line, text, label });
     return line;
   }
@@ -372,7 +372,7 @@ export class ChartKit implements Chart {
 
   private label(record: SeriesRecord, i: number): TextHandle {
     while (record.labels.length <= i) {
-      record.labels.push(this.stage.text(0, 0, '', { parent: record.group }).set({ 'font-size': 11, 'text-anchor': 'middle' }).hide());
+      record.labels.push(this.stage.text(0, 0, '', { parent: record.group }).set({ 'font-size': 12, 'text-anchor': 'middle' }).hide());
     }
     return record.labels[i]!;
   }
@@ -389,7 +389,7 @@ export class ChartKit implements Chart {
       // The last slice touches the first: never give them one colour.
       if (index === count - 1 && index > 0 && tone === SERIES_TONES[0] && count % SERIES_TONES.length === 1) tone = SERIES_TONES[1]!;
       record.slices.push(this.stage.path('', { parent: record.group, tone, fill: true }));
-      record.sliceLabels.push(this.stage.text(0, 0, '', { layer: 'labels' }).set({ 'font-size': 11, 'text-anchor': 'middle' }).hide());
+      record.sliceLabels.push(this.stage.text(0, 0, '', { layer: 'labels' }).set({ 'font-size': 12, 'text-anchor': 'middle' }).hide());
       record.sliceNames.push(this.stage.text(0, 0, '', { layer: 'labels' }).set({ 'font-size': 12 }).hide());
     }
     return record.slices[i]!;
@@ -402,7 +402,7 @@ export class ChartKit implements Chart {
     const xTicks: Handle[] = [];
     for (let i = 0; i < TICK_POOL; i++) {
       grid.push(stage.line(0, 0, 0, 0, { layer: 'back', tone: 'faint' }).hide());
-      labels.push(stage.text(0, 0, '', { layer: 'back' }).set({ 'font-size': 11, 'text-anchor': 'end' }).hide());
+      labels.push(stage.text(0, 0, '', { layer: 'back' }).set({ 'font-size': 12, 'text-anchor': 'end' }).hide());
       xTicks.push(stage.line(0, 0, 0, 0, { layer: 'back', tone: 'mid' }).hide());
     }
     const yName = this.options.yLabel || this.options.unit ? stage.text(0, 0, '', { layer: 'back' }).set({ 'font-size': 12, 'text-anchor': 'middle' }) : null;

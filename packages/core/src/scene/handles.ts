@@ -213,6 +213,8 @@ export class StageHandle implements Stage {
     }
     if (options.dashed) this.graph.setFlags(node, { dashed: true });
     if (options.fill) this.graph.setFlags(node, { fill: true });
+    // Circles and rects are filled by default; fill: false draws only their outline.
+    if (options.fill === false && (kind === 'circle' || kind === 'rect')) this.graph.setFlags(node, { extra: 'inc-outline' });
     if (options.shade !== undefined) {
       if (!SHADES.has(options.shade)) throw new SceneApiError(`Unknown shade "${String(options.shade)}"; use sphere, cylinder or soft`);
       this.graph.setFlags(node, { shade: options.shade, fill: true });

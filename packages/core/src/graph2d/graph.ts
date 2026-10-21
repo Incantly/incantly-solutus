@@ -447,8 +447,8 @@ export class Graph2D implements Graph, ViewController {
       this.axes.axisX = stage.line(0, 0, 0, 0, { layer: 'back', tone: 'mid' });
       if (!this.numberLine) this.axes.axisY = stage.line(0, 0, 0, 0, { layer: 'back', tone: 'mid' });
       for (let i = 0; i < TICK_POOL; i++) {
-        this.axes.labelsX.push(stage.text(0, 0, '', { layer: 'back' }).set({ 'font-size': 11, 'text-anchor': 'middle' }).hide());
-        if (!this.numberLine) this.axes.labelsY.push(stage.text(0, 0, '', { layer: 'back' }).set({ 'font-size': 11, 'text-anchor': 'end' }).hide());
+        this.axes.labelsX.push(stage.text(0, 0, '', { layer: 'back' }).set({ 'font-size': 12, 'text-anchor': 'middle' }).hide());
+        if (!this.numberLine) this.axes.labelsY.push(stage.text(0, 0, '', { layer: 'back' }).set({ 'font-size': 12, 'text-anchor': 'end' }).hide());
         // A number line marks each tick on its axis.
         if (this.numberLine) this.axes.gridX.push(stage.line(0, 0, 0, 0, { layer: 'back', tone: 'mid' }).hide());
       }
@@ -1188,7 +1188,7 @@ export class Graph2D implements Graph, ViewController {
   private markPoints(tone: Tone, find: () => Array<[number, number, string]>, owner?: VNode): void {
     const dots = this.inner.path(undefined, { layer: 'front', tone, fill: true });
     const labels: TextHandle[] = [];
-    for (let i = 0; i < 6; i++) labels.push(this.inner.text(0, 0, '', { layer: 'labels', tone }).set({ 'font-size': 11, 'text-anchor': 'middle' }).hide());
+    for (let i = 0; i < 6; i++) labels.push(this.inner.text(0, 0, '', { layer: 'labels', tone }).set({ 'font-size': 12, 'text-anchor': 'middle' }).hide());
     this.ctx.onRedraw(() => {
       const hidden = owner?.hidden ?? false;
       const points = hidden ? [] : find().filter(([x, y]) => this.inView(x, y)).slice(0, 6);

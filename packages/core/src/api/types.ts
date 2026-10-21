@@ -178,7 +178,7 @@ export interface ElementOptions {
   readonly tone?: Tone;
   readonly parent?: Group;
   readonly dashed?: boolean;
-  /** Fill a path or polyline with its tone instead of stroking it. */
+  /** Fill a path or polyline with its tone instead of stroking it; false outlines a circle or rect instead of filling it. */
   readonly fill?: boolean;
   readonly shade?: Shade;
 }

@@ -1,6 +1,14 @@
 import type { Layer, ViewBox } from '../api/types';
 import { RENDERABLE_ATTRIBUTES, type ElementKind, type SceneCommand, type StageZoom } from '../protocol/scene-commands';
 
+/** Paint attributes the theme also sets, mapped to the variables its rules read. */
+const STYLED_ATTRIBUTES: Readonly<Record<string, string>> = {
+  'stroke-width': '--inc-sw',
+  'stroke-linecap': '--inc-cap',
+  'stroke-linejoin': '--inc-join',
+  'font-size': '--inc-fs',
+};
+
 export const SVG_NS = 'http://www.w3.org/2000/svg';
 const LAYERS: readonly Layer[] = ['back', 'mid', 'front', 'labels'];
 /** The only elements a scene can create, whatever a Worker sends. */
@@ -216,6 +224,13 @@ export class SceneDom {
         if (!element || !RENDERABLE_ATTRIBUTES.has(command.name)) return;
         if (command.value === null) element.removeAttribute(command.name);
         else element.setAttribute(command.name, command.value);
+        // The theme's rules outrank presentation attributes, so these reach the
+        // theme through variables it reads, where focus can still override them.
+        const variable = STYLED_ATTRIBUTES[command.name];
+        if (variable) {
+          if (command.value === null) (element as SVGElement).style.removeProperty(variable);
+          else (element as SVGElement).style.setProperty(variable, /^-?[\d.]+$/.test(command.value) ? `${command.value}px` : command.value);
+        }
         this.stats.writes++;
         return;
       }

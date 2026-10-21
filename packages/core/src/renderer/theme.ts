@@ -131,16 +131,18 @@ html.inc-frame, html.inc-frame body { margin: 0; padding: 0; background: transpa
 .inc-stage-host { position: relative; }
 .inc-stage { display: block; width: 100%; height: var(--inc-scene-height, auto); overflow: visible; }
 .inc-stage[data-zoomed] { overflow: hidden; }
+/* A scene's own stroke-width, linecap, linejoin and font-size arrive as --inc-sw, --inc-cap, --inc-join and --inc-fs. */
 .inc-stage path, .inc-stage line, .inc-stage polyline {
   fill: none;
   stroke: var(--inc-tone, var(--inc-fg));
-  stroke-width: 2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+  stroke-width: var(--inc-sw, 2px);
+  stroke-linecap: var(--inc-cap, round);
+  stroke-linejoin: var(--inc-join, round);
   vector-effect: non-scaling-stroke;
 }
 .inc-stage circle, .inc-stage rect { fill: var(--inc-tone, var(--inc-mid)); stroke: none; }
-.inc-stage text { fill: var(--inc-tone, var(--inc-fg)); font-size: 14px; }
+.inc-stage :is(circle, rect).inc-outline { fill: none; stroke: var(--inc-tone, var(--inc-fg)); stroke-width: var(--inc-sw, 2px); vector-effect: non-scaling-stroke; }
+.inc-stage text { fill: var(--inc-tone, var(--inc-fg)); font-size: var(--inc-fs, 14px); }
 .inc-stage .inc-fill:is(path, polyline) { fill: var(--inc-tone, var(--inc-mid)); stroke: none; }
 .inc-stage .inc-fill:is(.inc-shade-sphere, .inc-shade-cylinder, .inc-shade-soft) { fill: var(--inc-grad, var(--inc-tone, var(--inc-mid))); }
 .inc-stage .inc-stop-light { stop-color: color-mix(in srgb, var(--inc-tone, var(--inc-mid)) 55%, #ffffff); }
@@ -149,7 +151,7 @@ html.inc-frame, html.inc-frame body { margin: 0; padding: 0; background: transpa
 .inc-stage .inc-tone-mid { --inc-tone: var(--inc-mid); }
 .inc-stage .inc-tone-hi { --inc-tone: var(--inc-hi); }
 .inc-stage .inc-tone-lit { --inc-tone: var(--inc-lit); }
-.inc-stage .inc-tone-faint { --inc-tone: var(--inc-faint); stroke-width: 1; }
+.inc-stage .inc-tone-faint { --inc-tone: var(--inc-faint); stroke-width: var(--inc-sw, 1px); }
 .inc-stage .inc-tone-a { --inc-tone: var(--inc-a); }
 .inc-stage .inc-tone-b { --inc-tone: var(--inc-b); }
 .inc-stage .inc-tone-c { --inc-tone: var(--inc-c); }
@@ -181,7 +183,7 @@ html.inc-frame, html.inc-frame body { margin: 0; padding: 0; background: transpa
 .inc-stage .inc-part { cursor: pointer; }
 .inc-stage .inc-part:focus { outline: none; }
 .inc-stage .inc-part.is-focus, .inc-stage .inc-part:focus-visible { --inc-tone: var(--inc-lit); }
-.inc-stage .inc-part:is(.is-focus, :focus-visible):is(path, line, polyline) { stroke-width: 3.5; }
+.inc-stage .inc-part:is(.is-focus, :focus-visible):is(path, line, polyline) { stroke-width: calc(var(--inc-sw, 2px) + 1.5px); }
 .inc-stage .inc-part:is(.is-focus, :focus-visible):is(circle, rect) { stroke: var(--inc-fg); stroke-width: 2; }
 .inc-stage .inc-draggable { cursor: grab; touch-action: none; }
 .inc-stage .inc-draggable:focus { outline: none; }

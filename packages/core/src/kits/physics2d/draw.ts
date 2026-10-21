@@ -174,7 +174,7 @@ export class Painter {
       const tone = FORCE_TONES[kind];
       const arrow = stage.path('', { layer: 'front', tone }).set({ 'stroke-width': kind === 'net' ? 3 : 2.5 });
       if (kind === 'net') arrow.dashed(true);
-      const label = options.labels === false ? null : stage.text(0, 0, '', { layer: 'labels', tone }).set({ 'font-size': 11 });
+      const label = options.labels === false ? null : stage.text(0, 0, '', { layer: 'labels', tone }).set({ 'font-size': 12 });
       const parts = options.components ? ([stage.path('', { layer: 'front', tone, dashed: true }), stage.path('', { layer: 'front', tone, dashed: true })] as const) : null;
       return { kind, arrow, label, parts };
     });
