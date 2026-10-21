@@ -38,11 +38,38 @@ describe('bridge messages', () => {
     expect(parseFrameMessage(envelope({ type: 'snapshot', id: 1, png: 'data:image/png;base64,AAAA' }), CHANNEL)).not.toBeNull();
     expect(parseFrameMessage(envelope({ type: 'error', error: { phase: 'frame' } }), CHANNEL)).toBeNull();
     expect(parseFrameMessage(envelope({ type: 'values', values: { a: 1 } }), CHANNEL)).not.toBeNull();
+    expect(parseFrameMessage(envelope({ type: 'description', text: 'A wave.' }), CHANNEL)).not.toBeNull();
+    expect(parseFrameMessage(envelope({ type: 'description', text: 'x'.repeat(2001) }), CHANNEL)).toBeNull();
+    expect(parseFrameMessage(envelope({ type: 'escape', direction: 'sideways' }), CHANNEL)).toBeNull();
+    expect(parseHostMessage(envelope({ type: 'focus', edge: 'last' }), CHANNEL)).not.toBeNull();
   });
 
   it('carries no generation data: every message type is on the documented list', () => {
-    expect([...HOST_MESSAGE_TYPES].sort()).toEqual(['destroy', 'init', 'pause', 'ping', 'reducedMotion', 'resume', 'setValues', 'snapshot', 'step']);
-    expect([...FRAME_MESSAGE_TYPES].sort()).toEqual(['error', 'mounted', 'pong', 'probe', 'ready', 'resize', 'snapshot', 'step', 'values']);
+    expect([...HOST_MESSAGE_TYPES].sort()).toEqual([
+      'destroy',
+      'focus',
+      'init',
+      'pause',
+      'ping',
+      'reducedMotion',
+      'resume',
+      'setValues',
+      'snapshot',
+      'step',
+    ]);
+    expect([...FRAME_MESSAGE_TYPES].sort()).toEqual([
+      'description',
+      'error',
+      'escape',
+      'mounted',
+      'pong',
+      'probe',
+      'ready',
+      'resize',
+      'snapshot',
+      'step',
+      'values',
+    ]);
   });
 
   it('recognises the connect message', () => {

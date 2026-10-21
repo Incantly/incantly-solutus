@@ -56,6 +56,8 @@ export type HostMessageBody =
   | { readonly type: 'reducedMotion'; readonly value: boolean }
   | { readonly type: 'snapshot'; readonly id: number }
   | { readonly type: 'ping'; readonly id: number }
+  /** Moves keyboard focus into the figure, to its first or last control. */
+  | { readonly type: 'focus'; readonly edge: 'first' | 'last' }
   | { readonly type: 'destroy' };
 
 export type FrameMessageBody =
@@ -64,6 +66,10 @@ export type FrameMessageBody =
   | { readonly type: 'error'; readonly error: ErrorView }
   | { readonly type: 'values'; readonly values: Readonly<Record<string, number>> }
   | { readonly type: 'step'; readonly step: number | null }
+  /** The text alternative changed, so the host can keep it for placeholders and print. */
+  | { readonly type: 'description'; readonly text: string }
+  /** Keyboard focus is leaving the figure: Escape, or Tab past either end. */
+  | { readonly type: 'escape'; readonly direction: 'out' | 'forward' | 'backward' }
   | { readonly type: 'snapshot'; readonly id: number; readonly png: string | null }
   | { readonly type: 'pong'; readonly id: number }
   | { readonly type: 'resize'; readonly height: number }
@@ -82,6 +88,7 @@ export const HOST_MESSAGE_TYPES: ReadonlySet<string> = new Set([
   'reducedMotion',
   'snapshot',
   'ping',
+  'focus',
   'destroy',
 ]);
 
@@ -91,6 +98,8 @@ export const FRAME_MESSAGE_TYPES: ReadonlySet<string> = new Set([
   'error',
   'values',
   'step',
+  'description',
+  'escape',
   'snapshot',
   'pong',
   'resize',
@@ -140,6 +149,8 @@ export function parseHostMessage(data: unknown, channel: string): HostMessage | 
     case 'snapshot':
     case 'ping':
       return typeof m.id === 'number' ? (m as unknown as HostMessage) : null;
+    case 'focus':
+      return m.edge === 'first' || m.edge === 'last' ? (m as unknown as HostMessage) : null;
     default:
       return m as unknown as HostMessage;
   }
@@ -158,6 +169,10 @@ export function parseFrameMessage(data: unknown, channel: string): FrameMessage 
       return isValues(m.values) ? (m as unknown as FrameMessage) : null;
     case 'step':
       return isStep(m.step) ? (m as unknown as FrameMessage) : null;
+    case 'description':
+      return typeof m.text === 'string' && m.text.length <= 2000 ? (m as unknown as FrameMessage) : null;
+    case 'escape':
+      return m.direction === 'out' || m.direction === 'forward' || m.direction === 'backward' ? (m as unknown as FrameMessage) : null;
     case 'snapshot':
       return typeof m.id === 'number' && (m.png === null || (typeof m.png === 'string' && m.png.startsWith('data:image/png;base64,')))
         ? (m as unknown as FrameMessage)

@@ -30,6 +30,10 @@ export interface FigureCallbacks {
   readonly onStep?: (step: number | null) => void;
   readonly onError?: (error: ErrorView) => void;
   readonly onState?: (state: FigureState) => void;
+  /** The text alternative changed. */
+  readonly onDescription?: (text: string) => void;
+  /** Keyboard focus is leaving the figure. */
+  readonly onEscape?: (direction: 'out' | 'forward' | 'backward') => void;
 }
 
 export interface MountOptions extends LiveOptions, FigureCallbacks {
@@ -50,6 +54,8 @@ export interface FigureHandle {
   /** Returns the figure to saved learner values and teaching position. */
   restore(state: { readonly values?: Readonly<Record<string, number>>; readonly step?: number | null }): void;
   setReducedMotion(value: boolean): void;
+  /** Moves keyboard focus into the figure. */
+  focus(edge?: 'first' | 'last'): void;
   snapshot(): Promise<string | null>;
   destroy(): void;
 }
@@ -233,6 +239,12 @@ class SandboxedFigure implements FigureHandle {
       case 'step':
         this.options.onStep?.(message.step);
         break;
+      case 'description':
+        this.options.onDescription?.(message.text);
+        break;
+      case 'escape':
+        this.options.onEscape?.(message.direction);
+        break;
       case 'resize':
         if (this.connection) this.connection.frame.style.height = `${Math.min(message.height, 4000)}px`;
         break;
@@ -309,6 +321,13 @@ class SandboxedFigure implements FigureHandle {
 
   setReducedMotion(value: boolean): void {
     this.connection?.post({ type: 'reducedMotion', value });
+  }
+
+  focus(edge: 'first' | 'last' = 'first'): void {
+    if (!this.connection) return;
+    // The frame element takes focus first, so the browser lets the frame move it inside.
+    this.connection.frame.focus();
+    this.connection.post({ type: 'focus', edge });
   }
 
   snapshot(): Promise<string | null> {

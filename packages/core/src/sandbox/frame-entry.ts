@@ -103,6 +103,7 @@ let hostVisible = true;
 let onScreen = true;
 let mountedSent = false;
 let pendingValues: Record<string, number> | null = null;
+let pendingDescription: string | null = null;
 let valuesTimer: ReturnType<typeof setTimeout> | null = null;
 let lastHeight = -1;
 const observers: Array<{ disconnect(): void }> = [];
@@ -137,6 +138,11 @@ function onHostMessage(message: HostMessage): void {
     case 'ping':
       send({ type: 'pong', id: message.id });
       break;
+    case 'focus': {
+      const targets = focusable();
+      (message.edge === 'first' ? targets[0] : targets[targets.length - 1])?.focus();
+      break;
+    }
     case 'destroy':
       destroy();
       break;
@@ -210,14 +216,15 @@ function start(init: InitMessage): void {
     channel: workerChannel,
     scope: 'incfig',
     visibility: 'external',
-    onValues: (values) => queueValues(values),
+    onValues: (values) => queueReport(values, null),
     onStep: (step) => send({ type: 'step', step }),
     onError: (error) => send({ type: 'error', error }),
-    onUpdate: () => {
+    onUpdate: (update) => {
       if (!mountedSent) {
         mountedSent = true;
         send({ type: 'mounted' });
       }
+      if (typeof update.ui.description === 'string') queueReport(null, update.ui.description);
     },
   });
   // The mount update answers the boot message.
@@ -226,15 +233,48 @@ function start(init: InitMessage): void {
   observe();
 }
 
-function queueValues(values: Readonly<Record<string, number>>): void {
-  pendingValues = { ...pendingValues, ...values };
+/** Values and the text alternative go to the host at most every 100 ms, always ending with the latest. */
+function queueReport(values: Readonly<Record<string, number>> | null, description: string | null): void {
+  if (values) pendingValues = { ...pendingValues, ...values };
+  if (description !== null) pendingDescription = description;
   if (valuesTimer !== null) return;
   valuesTimer = setTimeout(() => {
     valuesTimer = null;
     if (pendingValues) send({ type: 'values', values: pendingValues });
+    if (pendingDescription !== null) send({ type: 'description', text: pendingDescription.slice(0, 2000) });
     pendingValues = null;
+    pendingDescription = null;
   }, VALUES_INTERVAL_MS);
 }
+
+const FOCUSABLE = 'button, input, select, summary, [tabindex="0"]';
+
+/** The figure's keyboard stops, in order, skipping anything hidden. */
+function focusable(): HTMLElement[] {
+  if (!root) return [];
+  return [...root.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(
+    (el) => !el.closest('[hidden]') && !(el as HTMLButtonElement).disabled,
+  );
+}
+
+// Escape, or Tab past either end, hands keyboard focus back to the host document.
+doc.addEventListener('keydown', (event) => {
+  if (!port) return;
+  if (event.key === 'Escape' && !event.defaultPrevented) {
+    send({ type: 'escape', direction: 'out' });
+    return;
+  }
+  if (event.key !== 'Tab') return;
+  const targets = focusable();
+  const active = doc.activeElement;
+  if (!event.shiftKey && active === targets[targets.length - 1]) {
+    event.preventDefault();
+    send({ type: 'escape', direction: 'forward' });
+  } else if (event.shiftKey && active === targets[0]) {
+    event.preventDefault();
+    send({ type: 'escape', direction: 'backward' });
+  }
+});
 
 function updateVisibility(): void {
   renderer?.setVisible(hostVisible && onScreen && doc.visibilityState !== 'hidden');
