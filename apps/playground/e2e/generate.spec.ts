@@ -37,6 +37,22 @@ async function waitDrawn(page: Page): Promise<void> {
   await expect(frame(page).locator('svg.inc-stage')).toBeVisible();
 }
 
+test('starts an ephemeral Anthropic SDK session with selectable models', async ({ page }) => {
+  await page.goto('/?page=generate');
+  await expect(page.getByRole('heading', { name: 'Generate and inspect a scene' })).toBeVisible();
+  await expect(page.getByLabel('Ask for a figure')).toBeHidden();
+  await expect(page.getByLabel('Scene and repair model')).toHaveValue('claude-sonnet-5-5');
+  await expect(page.getByLabel('Planning model')).toHaveValue('claude-haiku-5-5');
+  await page.getByLabel('Scene and repair model').selectOption('claude-opus-5-5');
+  await page.getByLabel('Anthropic API key').fill('sk-ant-test-session-key-not-real');
+  await page.getByRole('button', { name: 'Start SDK session' }).click();
+  await expect(page.getByRole('status')).toHaveText('Claude Opus 5.5 is ready.');
+  await expect(page.getByLabel('Anthropic API key')).toHaveValue('');
+  await expect(page.getByLabel('Anthropic API key')).toBeDisabled();
+  await expect(page.getByLabel('Ask for a figure')).toBeVisible();
+  await expect(page.locator('body')).not.toContainText('sk-ant-test-session-key-not-real');
+});
+
 const JOURNEYS = [
   { prompt: 'Explain projectile motion for a physics student.', concept: 'projectile motion', slider: 'Launch speed', steps: 4, animated: true },
   { prompt: 'Show me how amplitude and frequency change a sine wave.', concept: 'sine wave', slider: 'Amplitude', steps: 3, animated: true },
@@ -46,7 +62,7 @@ const JOURNEYS = [
 test.describe('the learner journey through generation', () => {
   for (const journey of JOURNEYS) {
     test(`${journey.concept}: skeleton, approved figure, use, steps, reopen, reduced motion`, async ({ page }) => {
-      await page.goto('/?page=generate');
+      await page.goto('/?page=generate&reference=1');
       await ask(page, journey.prompt);
 
       // A structured loading skeleton, drawn from the plan.
@@ -58,6 +74,9 @@ test.describe('the learner journey through generation', () => {
       // A probe-approved figure, stored with its approval.
       await waitDrawn(page);
       await expect(card(page)).toHaveCount(0);
+      await expect(page.getByText('Inspect generated source')).toBeVisible();
+      await page.getByText('Inspect generated source').click();
+      await expect(page.locator('.agent-source code').last()).toContainText('inc.model');
       const stored = await figureAttrs(page);
       expect(stored).toMatchObject({ concept: journey.concept, meta: { approvedAt: expect.any(String), validatorVersion: 1 } });
       expect(String((stored!.meta as { generationId?: string }).generationId)).toMatch(/^gen-/);
@@ -123,7 +142,7 @@ test.describe('repair and fallback in the note', () => {
   });
 
   test('a figure that cannot be built leaves one line, the request and Retry, and nothing in the note', async ({ page }) => {
-    await page.goto('/?page=generate');
+    await page.goto('/?page=generate&reference=1');
     await ask(page, 'Explain photosynthesis in leaves');
     await expect(card(page).locator('.incantly-figure__status')).toHaveText('This figure could not be built.', { timeout: 10_000 });
     await expect(card(page)).toHaveAttribute('aria-label', 'Figure not built');
@@ -137,7 +156,7 @@ test.describe('repair and fallback in the note', () => {
   });
 
   test('switching generation off stops new figures and leaves stored ones working', async ({ page }) => {
-    await page.goto('/?page=generate');
+    await page.goto('/?page=generate&reference=1');
     await ask(page, 'Show me a sine wave.');
     await waitDrawn(page);
     await page.evaluate(async () => (window.__playground as unknown as Handle).setGeneration(false));
@@ -154,7 +173,7 @@ test.describe('repair and fallback in the note', () => {
 });
 
 test('product signals describe the journey without any note content', async ({ page }) => {
-  await page.goto('/?page=generate');
+  await page.goto('/?page=generate&reference=1');
   const prompt = 'Explain projectile motion to my study group tomorrow';
   await ask(page, prompt);
   await waitDrawn(page);

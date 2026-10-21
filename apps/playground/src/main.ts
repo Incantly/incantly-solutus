@@ -16,7 +16,7 @@ const pages: Record<string, (root: HTMLElement, params: URLSearchParams) => void
 const params = new URLSearchParams(location.search);
 const root = document.getElementById('app');
 if (!root) throw new Error('Missing #app');
-const page = pages[params.get('page') ?? 'editor'];
+const page = pages[params.get('page') ?? 'generate'];
 if (!page) {
   root.textContent = `Unknown page. Try one of: ${Object.keys(pages).join(', ')}`;
 } else {

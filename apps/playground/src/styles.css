@@ -1,19 +1,320 @@
 :root {
   color-scheme: light dark;
-  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica', 'Arial', sans-serif;
   line-height: 1.5;
+  --sidebar-width: 260px;
+  --sidebar-bg: color-mix(in srgb, CanvasText 4%, Canvas);
+  --chat-bg: Canvas;
+  --input-bg: color-mix(in srgb, CanvasText 5%, Canvas);
+  --border-color: color-mix(in srgb, CanvasText 12%, Canvas);
+  --hover-bg: color-mix(in srgb, CanvasText 8%, Canvas);
+  --active-bg: color-mix(in srgb, CanvasText 12%, Canvas);
+}
+
+* {
+  box-sizing: border-box;
 }
 
 body {
   margin: 0;
-  background: Canvas;
+  background: var(--chat-bg);
   color: CanvasText;
+  overflow: hidden;
 }
 
-main {
-  max-width: 760px;
+#app {
+  display: flex;
+  height: 100vh;
+  width: 100vw;
+}
+
+.sidebar {
+  width: var(--sidebar-width);
+  background: var(--sidebar-bg);
+  border-right: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+
+.sidebar-header {
+  padding: 12px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.new-chat-btn {
+  width: 100%;
+  padding: 10px 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: transparent;
+  color: CanvasText;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: background 0.15s ease;
+}
+
+.new-chat-btn:hover {
+  background: var(--hover-bg);
+}
+
+.chat-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.chat-item {
+  padding: 10px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  transition: background 0.15s ease;
+  font-size: 0.9rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-item:hover {
+  background: var(--hover-bg);
+}
+
+.chat-item.active {
+  background: var(--active-bg);
+}
+
+.chat-item-icon {
+  flex-shrink: 0;
+  opacity: 0.6;
+}
+
+.sidebar-footer {
+  padding: 12px;
+  border-top: 1px solid var(--border-color);
+}
+
+.settings-btn {
+  width: 100%;
+  padding: 10px 12px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: CanvasText;
+  font: inherit;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  transition: background 0.15s ease;
+}
+
+.settings-btn:hover {
+  background: var(--hover-bg);
+}
+
+.main-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.chat-header {
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.model-selector {
+  padding: 6px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: Canvas;
+  color: CanvasText;
+  font: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.chat-title {
+  font-size: 1rem;
+  font-weight: 600;
+  flex: 1;
+}
+
+.messages-container {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.message {
+  max-width: 768px;
+  width: 100%;
   margin: 0 auto;
-  padding: 24px 16px 96px;
+  display: flex;
+  gap: 12px;
+}
+
+.message-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--border-color);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+.message.user .message-avatar {
+  background: Highlight;
+  color: HighlightText;
+}
+
+.message-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.message-content p:last-child {
+  margin-bottom: 0;
+}
+
+.input-container {
+  padding: 16px 20px 24px;
+  flex-shrink: 0;
+}
+
+.input-wrapper {
+  max-width: 768px;
+  margin: 0 auto;
+  position: relative;
+}
+
+.input-box {
+  width: 100%;
+  min-height: 52px;
+  max-height: 200px;
+  padding: 14px 52px 14px 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--input-bg);
+  color: CanvasText;
+  font: inherit;
+  font-size: 0.95rem;
+  resize: none;
+  outline: none;
+  transition: border-color 0.15s ease;
+  line-height: 1.5;
+}
+
+.input-box:focus {
+  border-color: Highlight;
+}
+
+.input-box::placeholder {
+  color: color-mix(in srgb, CanvasText 50%, Canvas);
+}
+
+.send-btn {
+  position: absolute;
+  bottom: 10px;
+  right: 10px;
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 8px;
+  background: Highlight;
+  color: HighlightText;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.5;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+
+.send-btn:not(:disabled):hover {
+  opacity: 1;
+}
+
+.send-btn:disabled {
+  background: var(--border-color);
+  cursor: not-allowed;
+}
+
+.welcome-screen {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 20px;
+}
+
+.welcome-title {
+  font-size: 2rem;
+  font-weight: 700;
+  margin: 0 0 12px;
+}
+
+.welcome-subtitle {
+  font-size: 1rem;
+  opacity: 0.7;
+  margin: 0 0 32px;
+}
+
+.prompt-gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px;
+  width: 100%;
+  max-width: 640px;
+}
+
+.prompt-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: Canvas;
+  color: CanvasText;
+  font: inherit;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.prompt-chip:hover {
+  background: var(--hover-bg);
+  border-color: Highlight;
+}
+
+.prompt-chip svg {
+  flex-shrink: 0;
+  opacity: 0.6;
 }
 
 .editor {
@@ -25,7 +326,7 @@ main {
 }
 
 .incantly-figure {
-  margin: 24px 0;
+  margin: 16px 0;
 }
 
 .incantly-figure__frame {
@@ -60,6 +361,7 @@ main {
   max-width: 760px;
   margin: 16px auto;
 }
+
 .figure-fallback {
   padding: 16px;
   border: 1px dashed currentColor;
@@ -71,39 +373,50 @@ main {
   outline-offset: 4px;
   border-radius: 8px;
 }
+
 .incantly-figure__frame.is-live {
   background: transparent;
   border-radius: 10px;
 }
+
 .incantly-figure__frame:not(.is-live) {
   cursor: pointer;
 }
+
 .incantly-figure__live.is-booting {
   position: absolute;
   inset: 0;
   opacity: 0;
   pointer-events: none;
 }
+
 .incantly-figure__status {
   margin: 8px 0 0;
   font-size: 0.9rem;
 }
 
-/* Making a figure: the skeleton card, then a quiet line if it cannot be built. */
 .incantly-figure--generating {
   padding: 12px;
   border-radius: 10px;
   border: 1px solid color-mix(in srgb, CanvasText 15%, Canvas);
 }
+
 .incantly-skeleton__title {
   margin: 0 0 8px;
   font-weight: 600;
 }
+
 .incantly-skeleton__shimmer {
-  background: linear-gradient(90deg, color-mix(in srgb, CanvasText 8%, Canvas) 25%, color-mix(in srgb, CanvasText 14%, Canvas) 50%, color-mix(in srgb, CanvasText 8%, Canvas) 75%);
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, CanvasText 8%, Canvas) 25%,
+    color-mix(in srgb, CanvasText 14%, Canvas) 50%,
+    color-mix(in srgb, CanvasText 8%, Canvas) 75%
+  );
   background-size: 200% 100%;
   animation: incantly-shimmer 1.4s linear infinite;
 }
+
 @keyframes incantly-shimmer {
   from {
     background-position: 200% 0;
@@ -112,16 +425,19 @@ main {
     background-position: -200% 0;
   }
 }
+
 @media (prefers-reduced-motion: reduce) {
   .incantly-skeleton__shimmer {
     animation: none;
   }
 }
+
 .incantly-skeleton__controls {
   display: grid;
   gap: 6px;
   margin-top: 10px;
 }
+
 .incantly-skeleton__control {
   display: grid;
   grid-template-columns: 12rem 1fr;
@@ -130,12 +446,14 @@ main {
   font-size: 0.9rem;
   opacity: 0.7;
 }
+
 .incantly-skeleton__actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
 }
+
 .incantly-skeleton__request {
   flex-basis: 100%;
   margin: 0;
@@ -143,20 +461,250 @@ main {
   opacity: 0.75;
 }
 
-.generate-form {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-  margin-bottom: 16px;
+.agent-source {
+  margin-top: 16px;
+  border-top: 1px solid var(--border-color);
+  padding-top: 12px;
 }
-.generate-form label {
-  flex-basis: 100%;
+
+.agent-source summary {
+  cursor: pointer;
+  font-weight: 650;
+  font-size: 0.9rem;
+}
+
+.agent-source section {
+  margin-top: 12px;
+}
+
+.agent-source h4 {
+  margin: 0 0 5px;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+}
+
+.agent-source code {
+  display: block;
+  max-height: 22rem;
+  overflow: auto;
+  padding: 12px;
+  border-radius: 8px;
+  white-space: pre;
+  font: 0.78rem/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: color-mix(in srgb, CanvasText 7%, Canvas);
+}
+
+.settings-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1001;
+}
+
+.settings-modal[hidden] {
+  display: none;
+}
+
+.settings-content {
+  background: Canvas;
+  border-radius: 12px;
+  width: 90%;
+  max-width: 500px;
+  max-height: 80vh;
+  overflow-y: auto;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+}
+
+.settings-header {
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.settings-header h2 {
+  margin: 0;
+  font-size: 1.25rem;
   font-weight: 600;
 }
-.generate-form input {
-  flex: 1;
-  min-width: 12rem;
-  padding: 6px 8px;
+
+.close-settings-btn {
+  border: none;
+  background: transparent;
+  color: CanvasText;
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  opacity: 0.6;
+  transition: opacity 0.15s ease;
+}
+
+.close-settings-btn:hover {
+  opacity: 1;
+}
+
+.settings-body {
+  padding: 24px;
+}
+
+.setting-group {
+  margin-bottom: 24px;
+}
+
+.setting-group:last-child {
+  margin-bottom: 0;
+}
+
+.setting-group label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.setting-description {
+  font-size: 0.85rem;
+  opacity: 0.7;
+  margin: 0 0 10px;
+}
+
+.setting-select,
+.setting-input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: Canvas;
+  color: CanvasText;
   font: inherit;
+  font-size: 0.95rem;
+}
+
+.setting-input {
+  font-family: ui-monospace, monospace;
+}
+
+.generation-stage {
+  margin-bottom: 16px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: color-mix(in srgb, CanvasText 4%, Canvas);
+  border: 1px solid var(--border-color);
+}
+
+.generation-stage[hidden] {
+  display: none;
+}
+
+.stage-header {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: color-mix(in srgb, CanvasText 2%, Canvas);
+}
+
+.stage-label {
+  margin: 0;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.8;
+}
+
+.stage-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: Highlight;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.9); }
+}
+
+.streaming-text {
+  padding: 12px 14px;
+  font-family: ui-monospace, SFMono-Regular, 'Cascadia Code', 'Roboto Mono', Menlo, monospace;
+  font-size: 0.85rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 400px;
+  overflow-y: auto;
+  color: CanvasText;
+  min-height: 60px;
+}
+
+.streaming-text:empty::before {
+  content: 'Waiting for response...';
+  opacity: 0.5;
+}
+
+.streaming-text::after {
+  content: '▋';
+  animation: blink 1s infinite;
+  color: Highlight;
+  font-weight: 300;
+}
+
+@keyframes blink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
+}
+
+.plan-summary {
+  padding: 12px;
+  margin-bottom: 12px;
+  border-radius: 6px;
+  background: color-mix(in srgb, CanvasText 8%, Canvas);
+  border-left: 3px solid Highlight;
+}
+
+.skeleton-header {
+  font-size: 0.95rem;
+  margin-bottom: 6px;
+}
+
+.skeleton-details {
+  display: flex;
+  gap: 8px;
+  font-size: 0.8rem;
+  opacity: 0.7;
+}
+
+.validation-status {
+  margin: 0;
+  padding: 12px 14px;
+  font-size: 0.9rem;
+}
+
+@media (max-width: 760px) {
+  :root {
+    --sidebar-width: 0;
+  }
+
+  .sidebar {
+    position: fixed;
+    left: -260px;
+    top: 0;
+    height: 100vh;
+    z-index: 1000;
+    transition: left 0.3s ease;
+  }
+
+  .sidebar.open {
+    left: 0;
+  }
+
+  .mobile-menu-btn {
+    display: block;
+  }
 }

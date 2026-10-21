@@ -56,6 +56,7 @@ export interface GenerationRun {
   readonly existing?: { readonly hasFragments: boolean; readonly hasSnapshot: boolean };
   readonly onSkeleton?: (skeleton: Skeleton) => void;
   readonly onStage?: (stage: GenerationStage) => void;
+  readonly onText?: (purpose: 'plan' | 'scene' | 'repair', delta: string) => void;
   readonly signals?: (signal: ProductSignal) => void;
   readonly signal?: AbortSignal;
   readonly now?: () => number;
@@ -98,7 +99,9 @@ export async function runGeneration(run: GenerationRun): Promise<GenerationOutco
   run.onStage?.('planning');
   try {
     for await (const event of run.client.generate(run.request, run.signal)) {
-      if (event.type === 'plan') {
+      if (event.type === 'delta') {
+        run.onText?.(event.purpose, event.text);
+      } else if (event.type === 'plan') {
         run.signals?.({ type: 'time-to-skeleton', ms: now() - started });
         run.onSkeleton?.(event.skeleton);
         run.onStage?.('building');

@@ -39,6 +39,7 @@ export function figureGenerator(options: {
     hooks: {
       readonly onSkeleton: (skeleton: Pick<Skeleton, 'concept' | 'parameters' | 'steps'>) => void;
       readonly onStage: (stage: GenerationStage) => void;
+      readonly onText?: (purpose: 'plan' | 'scene' | 'repair', delta: string) => void;
       readonly signal: AbortSignal;
     },
   ): Promise<{ readonly kind: 'figure'; readonly figure: ApprovedFigure; readonly notice?: string } | { readonly kind: 'failed'; readonly message: string }> => {
@@ -48,6 +49,7 @@ export function figureGenerator(options: {
       probe: options.probe ?? sandboxProbe(),
       onSkeleton: hooks.onSkeleton,
       onStage: hooks.onStage,
+      ...(hooks.onText ? { onText: hooks.onText } : {}),
       ...(options.signals ? { signals: options.signals } : {}),
       signal: hooks.signal,
     });

@@ -38,6 +38,8 @@ export interface GeneratorOptions {
 
 export interface GenerationHooks {
   readonly onPlan?: (plan: ScenePlan) => void;
+  /** Raw model text as it streams, for developer tooling and progress UIs. */
+  readonly onText?: (purpose: CallPurpose, delta: string) => void;
   /** A fragment finished streaming, with whether it passed its own checks. */
   readonly onFragment?: (name: FragmentName, ok: boolean) => void;
   readonly onAttempt?: (attempt: Attempt) => void;
@@ -152,7 +154,7 @@ export class Generator {
     const started = this.now();
     let replan: { previous: string; problems: string } | undefined;
     for (let attempt = 0; attempt <= this.replans; attempt++) {
-      const reply = await this.call(state, 'plan', planPrompt(request, replan), signal);
+      const reply = await this.call(state, 'plan', planPrompt(request, replan), signal, (text) => hooks.onText?.('plan', text));
       if (reply === null) return;
       const parsed = parsePlanReply(reply);
       const validation = parsed.problem
@@ -186,7 +188,10 @@ export class Generator {
       state.timings.firstFragmentMs ??= this.now() - state.startedAt;
       hooks.onFragment?.(name, fragmentPasses(name, source));
     });
-    const reply = await this.call(state, 'scene', prompt, signal, (text) => stream.push(text));
+    const reply = await this.call(state, 'scene', prompt, signal, (text) => {
+      stream.push(text);
+      hooks.onText?.('scene', text);
+    });
     if (reply === null) return;
     const parsed = stream.end();
     state.timings.sceneMs = this.now() - started;
@@ -221,7 +226,7 @@ export class Generator {
     if (!plan || !current) throw new Error('Nothing to repair');
     state.repairsUsed++;
     const started = this.now();
-    const reply = await this.call(state, 'repair', repairPrompt(report, current.fragments, plan), signal);
+    const reply = await this.call(state, 'repair', repairPrompt(report, current.fragments, plan), signal, (text) => hooks.onText?.('repair', text));
     state.timings.repairMs += this.now() - started;
     if (reply === null) return null;
     const parsed = new FragmentStream();

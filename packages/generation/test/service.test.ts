@@ -86,13 +86,19 @@ describe('the generation service', () => {
   it('streams the skeleton, fragment progress and a validated scene, then records the device’s approval', async () => {
     const { post, records } = await start();
     const stream = await events(await post('/v1/generations', { prompt: 'Explain projectile motion for a physics student.', noteContext: 'Chapter 3: kinematics' }));
-    expect(stream.map((e) => e.event)).toEqual(['accepted', 'plan', 'fragment', 'fragment', 'fragment', 'scene']);
-    const skeleton = stream[1]!.data.skeleton as Record<string, unknown>;
+    // Text deltas stream the plan as it is written; the structured events keep their order.
+    expect(stream.filter((e) => e.event !== 'delta').map((e) => e.event)).toEqual(['accepted', 'plan', 'fragment', 'fragment', 'fragment', 'scene']);
+    const deltas = stream.filter((e) => e.event === 'delta');
+    expect(deltas.length).toBeGreaterThan(0);
+    expect(deltas[0]!.data).toMatchObject({ purpose: 'plan' });
+    const skeleton = stream.find((e) => e.event === 'plan')!.data.skeleton as Record<string, unknown>;
     expect(skeleton).toMatchObject({ concept: 'projectile motion', kind: 'motion', parts: 5, steps: 4 });
     // Names and numbers only: no plan prose reaches the client.
     expect(JSON.stringify(skeleton)).not.toContain('why');
     expect(JSON.stringify(skeleton)).not.toContain(REFERENCE_SCENES.projectile!.plan.idea);
-    const scene = stream[5]!.data as unknown as SceneEvent;
+    // The plan itself is never sent: deltas carry the reply text, not the parsed plan.
+    expect(JSON.stringify(skeleton)).not.toContain(JSON.stringify(stream.find((e) => e.event === 'plan')));
+    const scene = stream.at(-1)!.data as unknown as SceneEvent;
     expect(scene.spec).toEqual({ parts: REFERENCE_SCENES.projectile!.plan.parts, steps: 4, singularPoints: [] });
     expect((await deviceProbe(scene)).ok).toBe(true);
 
@@ -132,8 +138,8 @@ describe('the generation service', () => {
   it('falls back without a standard figure when no plan passes', async () => {
     const { post, records } = await start();
     const stream = await events(await post('/v1/generations', { prompt: 'Explain photosynthesis.' }));
-    expect(stream.map((e) => e.event)).toEqual(['accepted', 'fallback']);
-    expect(stream[1]!.data).toMatchObject({ reason: 'plan', standard: null });
+    expect(stream.filter((e) => e.event !== 'delta').map((e) => e.event)).toEqual(['accepted', 'fallback']);
+    expect(stream.at(-1)!.data).toMatchObject({ reason: 'plan', standard: null });
     expect(records.records[0]).toMatchObject({ outcome: 'failed-plan' });
   });
 

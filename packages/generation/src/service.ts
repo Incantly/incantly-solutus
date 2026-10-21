@@ -346,9 +346,14 @@ export class GenerationService {
     const state = generator.begin();
     send('accepted', { generationId: state.id });
     try {
-      await generator.planStage(state, request, { onPlan: (plan) => send('plan', { generationId: state.id, skeleton: skeletonOf(plan) }) }, signal);
+      const hooks = {
+        onPlan: (plan: ScenePlan) => send('plan', { generationId: state.id, skeleton: skeletonOf(plan) }),
+        onText: (purpose: 'plan' | 'scene' | 'repair', text: string) => send('delta', { purpose, text }),
+        onFragment: (name: string, ok: boolean) => send('fragment', { name, ok }),
+      };
+      await generator.planStage(state, request, hooks, signal);
       if (state.plan) {
-        await generator.buildStage(state, { onFragment: (name, ok) => send('fragment', { name, ok }) }, signal);
+        await generator.buildStage(state, hooks, signal);
       }
       generator.finish(state);
     } finally {
