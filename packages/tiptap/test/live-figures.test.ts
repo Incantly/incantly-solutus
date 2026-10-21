@@ -325,6 +325,40 @@ describe('live figures: persistence', () => {
   });
 });
 
+describe('live figures: lifecycle', () => {
+  it('deleting a live figure ends its instance and releases its observer slot', async () => {
+    const { editor, fake, observer, figures } = setup();
+    observer.set([figures()[0]!], true);
+    await vi.advanceTimersByTimeAsync(100);
+    const live = fake.mounts[0]!;
+    let pos = -1;
+    editor.state.doc.descendants((node, p) => {
+      if (pos < 0 && node.type.name === 'incantlyFigure') pos = p;
+    });
+    editor.commands.setNodeSelection(pos);
+    editor.commands.deleteSelection();
+    expect(live.state).toBe('destroyed');
+    expect(observer.observed.size).toBe(5);
+    expect(figureScheduler(editor)!.stats.registered).toBe(5);
+  });
+
+  it('treats repeated pause, resume, mount and suspend as no-ops', async () => {
+    const { fake, observer, figures, view } = setup();
+    observer.set([figures()[0]!], true);
+    await vi.advanceTimersByTimeAsync(100);
+    view(0).mount();
+    view(0).mount();
+    expect(fake.mounts).toHaveLength(1);
+    view(0).pause();
+    view(0).pause();
+    view(0).resume();
+    await Promise.all([view(0).suspend(), view(0).suspend()]);
+    expect(fake.mounts[0]!.state).toBe('destroyed');
+    await view(0).suspend();
+    expect(figures()[0]!.dataset.state).toBe('placeholder');
+  });
+});
+
 describe('live figures: editor integration', () => {
   it('Enter on a selected figure starts it and moves keyboard focus inside', async () => {
     const { editor, fake, figures } = setup();
