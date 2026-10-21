@@ -120,9 +120,10 @@ export interface EvalSummary {
   };
 }
 
+// camelCase splits into words, but a lone capital stays put: pH is one word.
 const words = (name: string) =>
   name
-    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/([a-z])([A-Z])(?=[a-z])/g, '$1 $2')
     .toLowerCase()
     .trim();
 

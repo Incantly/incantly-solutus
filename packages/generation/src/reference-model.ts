@@ -47,6 +47,15 @@ const KEYWORDS: Readonly<Record<string, readonly string[]>> = {
   'sine-wave': ['sine', 'sinus', 'sin(', 'wave', 'amplitude', 'frequency', 'phase', 'trig', 'periodic', 'oscillat'],
   projectile: ['projectile', 'thrown', 'throw', 'ball', 'cannon', 'launch', 'trajector', 'parabola', 'range', 'gravity', 'vertical velocity', 'horizontal speed'],
   'thin-lens': ['lens', 'focal', 'ray', 'image', 'convex', 'optic', 'magnif', 'refract'],
+  buoyancy: ['buoyan', 'float', 'sink', 'archimedes', 'upthrust', 'displace', 'density', 'dense', 'water'],
+  pendulum: ['pendulum', 'swing', 'bob'],
+  spring: ['spring', 'hooke', 'oscillat', 'stiffness', 'harmonic', 'mass on', 'of a spring', 'on a spring'],
+  magnets: ['magnet', 'pole', 'north', 'south', 'compass', 'field line'],
+  ohm: ['ohm', 'circuit', 'current', 'voltage', 'resist', 'battery', 'ammeter', 'v = ir', 'wire'],
+  titration: ['titrat', 'equivalence', 'ph ', 'ph.', 'ph?', 'acid', 'alkali', 'neutralis', 'neutraliz', 'burette'],
+  normal: ['normal distribution', 'bell', 'standard deviation', '68', 'gaussian', 'mean', 'z-score', 'z score'],
+  derivative: ['derivative', 'tangent', 'slope', 'differentia', 'secant', 'rate of change', 'gradient'],
+  gas: ['gas', 'particle', 'pressure', 'boyle', 'charles', 'kinetic theory', 'molecule', 'pv'],
 };
 
 export function conceptFor(text: string, scenes: Readonly<Record<string, ReferenceScene>> = REFERENCE_SCENES): ReferenceScene | null {

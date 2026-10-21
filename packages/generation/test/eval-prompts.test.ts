@@ -1,11 +1,26 @@
 import { describe, expect, it } from 'vitest';
+import { REFERENCE_SCENES } from '@incantly/core/scenes';
 import { loadEvalPrompts } from '../src';
 
 describe('eval prompt set', () => {
   const set = loadEvalPrompts();
 
-  it('covers exactly the three v0.1 concepts', () => {
-    expect(set.concepts.map((c) => c.id).sort()).toEqual(['projectile-motion', 'sine-wave', 'thin-lens']);
+  it('covers the twelve launch concepts, each with its own reviewed example (EX-1, EX-2)', () => {
+    expect(set.concepts.map((c) => c.id).sort()).toEqual([
+      'buoyancy',
+      'derivative',
+      'gas',
+      'magnets',
+      'normal',
+      'ohm',
+      'pendulum',
+      'projectile-motion',
+      'sine-wave',
+      'spring',
+      'thin-lens',
+      'titration',
+    ]);
+    for (const concept of set.concepts) expect(REFERENCE_SCENES[concept.example], concept.id).toBeDefined();
   });
 
   it('has several distinct phrasings per concept', () => {

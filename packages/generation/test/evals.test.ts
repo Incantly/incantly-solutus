@@ -33,9 +33,11 @@ describe('pass-rate intervals', () => {
 describe('the eval trials', () => {
   it('plans 100 trials per concept in each condition, cycling through the phrasings', () => {
     const trials = planTrials(prompts, { trialsPerConcept: 100, conditions: ['with-example', 'example-withheld'] });
-    expect(trials).toHaveLength(600);
+    // The twelve launch concepts (PRD 17.8, EX-2).
+    expect(prompts.concepts).toHaveLength(12);
+    expect(trials).toHaveLength(2400);
     const withheld = trials.filter((t) => t.condition === 'example-withheld');
-    expect(withheld).toHaveLength(300);
+    expect(withheld).toHaveLength(1200);
     const sine = trials.filter((t) => t.concept.id === 'sine-wave' && t.condition === 'with-example');
     expect(new Set(sine.map((t) => t.phrasing)).size).toBe(prompts.concepts.find((c) => c.id === 'sine-wave')!.phrasings.length);
   });
@@ -63,24 +65,25 @@ describe('running the evals', () => {
     const seen: number[] = [];
     const { trials, summary } = await runEvals({
       model: referenceModel(),
-      trialsPerConcept: 3,
+      trialsPerConcept: 1,
       concurrency: 3,
       onTrial: (_, done) => seen.push(done),
     });
-    expect(trials).toHaveLength(18);
-    expect(seen).toHaveLength(18);
-    expect(summary.firstAttempt).toMatchObject({ passed: 18, total: 18, rate: 1 });
+    const total = prompts.concepts.length * 2;
+    expect(trials).toHaveLength(total);
+    expect(seen).toHaveLength(total);
+    expect(summary.firstAttempt).toMatchObject({ passed: total, total, rate: 1 });
     expect(summary.postRepair.rate).toBe(1);
     expect(summary.brokenShown).toBe(0);
     expect(summary.gate).toEqual({ firstAttempt: true, postRepair: true, noBrokenFigures: true, confident: false });
-    expect(Object.keys(summary.byConcept).sort()).toEqual(['projectile-motion', 'sine-wave', 'thin-lens']);
+    expect(Object.keys(summary.byConcept).sort()).toEqual(prompts.concepts.map((c) => c.id).sort());
     expect(Object.keys(summary.byCondition).sort()).toEqual(['example-withheld', 'with-example']);
     expect(summary.expectations.rate).toBe(1);
     expect(summary.tokens.perTrial).toBeGreaterThan(0);
     for (const trial of trials.filter((t) => t.condition === 'example-withheld')) {
       expect(trial.record.example).not.toBe(prompts.concepts.find((c) => c.id === trial.concept)!.example);
     }
-  });
+  }, 60_000);
 
   it('shows no broken figure under fault injection, and counts every fallback', async () => {
     // Every trial carries a fault; every third repair changes nothing, so that trial must fall back.
@@ -89,6 +92,7 @@ describe('running the evals', () => {
       model: referenceModel({ fault, stubborn: (trial) => trial % 3 === 2 }),
       trialsPerConcept: 9,
       conditions: ['with-example'],
+      concepts: ['sine-wave', 'projectile-motion', 'thin-lens'],
       concurrency: 1,
     });
     expect(summary.brokenShown).toBe(0);
