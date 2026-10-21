@@ -185,13 +185,27 @@ const TONE_SET: ReadonlySet<string> = new Set(TONES);
 /** inc calls that declare the scene, so they belong at the top level. */
 const MOUNT_ONLY: ReadonlySet<string> = new Set([
   'param',
+  'toggle',
+  'choice',
+  'color',
+  'button',
+  'presets',
+  'link',
   'model',
   'onFrame',
+  'simulate',
+  'timeline',
+  'onReset',
+  'onParamChange',
+  'onStep',
   'readout',
+  'table',
   'idea',
   'steps',
   'explain',
   'describe',
+  'predict',
+  'compare',
   'svg',
   'graph2d',
   'formula',
@@ -199,14 +213,12 @@ const MOUNT_ONLY: ReadonlySet<string> = new Set([
 
 /** Handle methods that create a new element. Created once, then moved. */
 const CREATES_ELEMENTS: Readonly<Partial<Record<HandleKind, ReadonlySet<string>>>> = {
-  Stage: new Set(['group', 'path', 'line', 'circle', 'rect', 'text', 'polyline', 'part']),
+  Stage: new Set(['group', 'path', 'line', 'circle', 'rect', 'text', 'polyline', 'part', 'connector', 'callout', 'repeat', 'dots']),
   Graph: new Set(['plot', 'parametric', 'point', 'segment', 'arrow', 'trail', 'label']),
 };
 
-/** inc calls whose function arguments run every frame or on every change. */
-const CALLBACK_INC_CALLS: ReadonlySet<string> = new Set(['onFrame', 'readout', 'explain', 'describe', 'model']);
+/** inc calls whose text callbacks are checked for numbers typed into prose. */
 const TEXT_INC_CALLS: ReadonlySet<string> = new Set(['readout', 'explain', 'describe']);
-const CALLBACK_GRAPH_METHODS: ReadonlySet<string> = new Set(['plot', 'parametric']);
 
 const ARRAY_METHODS = [
   'at',
@@ -1194,18 +1206,16 @@ class JsValidator {
       if (notCallable) this.report('not-a-function', `${describeType(calleeType)} is not a function`, callee.start);
     }
 
-    // Context for the arguments: callbacks that run on every frame or change.
+    // Context for the arguments: a function handed to the SDK runs later, on a
+    // frame, a change, a drag or a button, so it must not create elements.
     let argumentContext = ctx;
     if (receiver.t === 'inc' && method !== null) {
       this.incCall(method, node, ctx);
-      if (CALLBACK_INC_CALLS.has(method)) {
-        argumentContext = { ...ctx, callback: `inc.${method}`, text: ctx.text || TEXT_INC_CALLS.has(method) };
-      }
+      argumentContext = { ...ctx, callback: `inc.${method}`, text: ctx.text || TEXT_INC_CALLS.has(method) };
     }
+    if (receiver.t === 'ns' && method !== null) argumentContext = { ...ctx, callback: `inc.${receiver.ns}.${method}` };
     if (receiver.t === 'handle' && method !== null) {
-      if (receiver.kind === 'Graph' && CALLBACK_GRAPH_METHODS.has(method)) {
-        argumentContext = { ...ctx, callback: `graph.${method}` };
-      }
+      argumentContext = { ...ctx, callback: `${receiver.kind.charAt(0).toLowerCase()}${receiver.kind.slice(1)}.${method}` };
       const creates = CREATES_ELEMENTS[receiver.kind];
       if (creates?.has(method) && ctx.callback) {
         this.report(
@@ -1267,9 +1277,12 @@ class JsValidator {
     }
     switch (method) {
       case 'param':
+      case 'toggle':
+      case 'choice':
+      case 'color':
         this.paramCount++;
         if (this.paramCount > this.limits.params) {
-          this.report('too-many-params', `A figure has at most ${this.limits.params} adjustable parameters`, node.start);
+          this.report('too-many-params', `A figure has at most ${this.limits.params} controls (parameters, toggles, choices and colours)`, node.start);
         }
         break;
       case 'svg':

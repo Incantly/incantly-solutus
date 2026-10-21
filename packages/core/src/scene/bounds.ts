@@ -211,3 +211,56 @@ export function stageBounds(graph: SceneGraph, stageId: number): StageBounds {
   visit(stageId, IDENTITY);
   return { box: union, visibleElements: boxes.size, boxes };
 }
+
+/** The transform from an element's own coordinates to its stage's, through every parent group. */
+function worldMatrix(graph: SceneGraph, node: VNode): Matrix {
+  const chain: VNode[] = [];
+  let current: VNode | undefined = node;
+  while (current && current.kind !== 'stage') {
+    chain.push(current);
+    current = current.parent === null ? undefined : graph.nodes.get(current.parent);
+  }
+  let m: Matrix = IDENTITY;
+  for (let i = chain.length - 1; i >= 0; i--) m = multiply(m, local(chain[i]!.transform));
+  return m;
+}
+
+/** An element's box in its stage's coordinates (a group's covers its children), or null when it draws nothing. */
+export function elementBox(graph: SceneGraph, id: number): Box | null {
+  const node = graph.nodes.get(id);
+  if (!node || node.kind === 'stage') return null;
+  const box: Box = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
+  const add = (m: Matrix, points: ReadonlyArray<readonly [number, number]>) => {
+    for (const [px, py] of points) {
+      const wx = m[0] * px + m[2] * py + m[4];
+      const wy = m[1] * px + m[3] * py + m[5];
+      box.minX = Math.min(box.minX, wx);
+      box.minY = Math.min(box.minY, wy);
+      box.maxX = Math.max(box.maxX, wx);
+      box.maxY = Math.max(box.maxY, wy);
+    }
+  };
+  const visit = (n: VNode, m: Matrix) => {
+    if (n.kind === 'g') {
+      for (const child of n.children) {
+        const c = graph.nodes.get(child);
+        if (c && !c.hidden) visit(c, multiply(m, local(c.transform)));
+      }
+      return;
+    }
+    if (n.kind === 'use' && n.source !== null) {
+      const source = graph.nodes.get(n.source);
+      if (source) visit(source, m);
+      return;
+    }
+    add(m, localPoints(n));
+  };
+  visit(node, worldMatrix(graph, node));
+  return Number.isFinite(box.minX) ? box : null;
+}
+
+/** The centre of an element in its stage's coordinates, or null when it draws nothing. */
+export function elementCentre(graph: SceneGraph, id: number): readonly [number, number] | null {
+  const box = elementBox(graph, id);
+  return box ? [(box.minX + box.maxX) / 2, (box.minY + box.maxY) / 2] : null;
+}

@@ -5,6 +5,8 @@ export const EASINGS: Readonly<Record<Ease, (k: number) => number>> = {
   in: (k) => k * k * k,
   out: (k) => 1 - (1 - k) ** 3,
   inOut: (k) => (k < 0.5 ? 4 * k * k * k : 1 - (-2 * k + 2) ** 3 / 2),
+  // A damped spring that overshoots a little and settles exactly at 1.
+  spring: (k) => (k >= 1 ? 1 : 1 - Math.exp(-6 * k) * Math.cos(9 * k) * (1 - k)),
 };
 
 export interface TweenState {

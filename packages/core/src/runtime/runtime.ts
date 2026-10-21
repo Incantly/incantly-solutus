@@ -1,4 +1,5 @@
 import type {
+  DragInfo,
   FormulaOptions,
   FrameInfo,
   GraphOptions,
@@ -8,28 +9,39 @@ import type {
   ParamOptions,
   ParamValues,
   PathHelpers,
+  PredictOptions,
   Readable,
+  SimulateOptions,
   Stage,
   StageOptions,
+  StateValue,
   Step,
+  TableOptions,
+  TimelineOptions,
   TweenOptions,
+  Values,
+  Vec2,
 } from '../api/types';
 import { ExpressionError } from '../expr';
 import { DEFAULT_GRAPH_VIEWBOX, Graph2D, plotRect, validateGraphOptions } from '../graph2d/graph';
-import type { RuntimeUpdate } from '../protocol/runtime-messages';
-import { SPEEDS } from '../protocol/runtime-messages';
-import type { ErrorPhase, ErrorView, ParamView, UiState } from '../protocol/ui';
+import type { RuntimeUpdate, ViewAction } from '../protocol/runtime-messages';
+import { SPEEDS, type LoopMode } from '../protocol/runtime-messages';
+import type { ActionView, ErrorPhase, ErrorView, LegendView, ParamView, PredictView, UiState } from '../protocol/ui';
 import { EMPTY_UI } from '../protocol/ui';
 import { SceneApiError } from '../scene/errors';
 import { geometry } from '../scene/geometry';
-import { SceneGraph } from '../scene/graph';
+import { SceneGraph, type GraphServices, type VNode } from '../scene/graph';
 import { PartRegistry, StageHandle, formatReadable } from '../scene/handles';
 import { createPathHelpers } from '../scene/path';
-import { createParamState, snap, type ParamState } from './params';
+import { choiceControl, colorControl, toggleControl } from './controls';
+import { createFormula, type FormulaRecord } from './formula';
 import { isErrorLike, isRunaway } from './fuel';
+import { History } from './history';
+import type { KitContext, ParamInfo, ViewController } from './kit';
+import { createParamState, snap, type ControlShape, type ParamState } from './params';
 import { mulberry32 } from './random';
+import { Timeline, isSettingName } from './timeline';
 import { advanceTween, type TweenState } from './tween';
-import { createFormula } from './formula';
 
 export type SceneFunction = (inc: Inc, math: Math) => void;
 
@@ -37,10 +49,12 @@ export interface RuntimeOptions {
   readonly seed?: number;
   /** Largest time step in seconds; longer gaps (a backgrounded tab) are capped. */
   readonly maxDt?: number;
-  /** v0.1 figures have at most three adjustable parameters. */
+  /** Most adjustable controls a figure may have; the plan's size sets a tighter budget. */
   readonly maxParams?: number;
-  /** Learner values to restore instead of the authored defaults. */
+  /** Learner values to restore instead of the authored defaults; `$` names hold timing settings. */
   readonly values?: Readonly<Record<string, number>>;
+  /** Formulas the learner edited, by index. */
+  readonly formulas?: Readonly<Record<string, string>>;
   readonly reducedMotion?: boolean;
   /** Start playing after mount. Reduced motion always starts paused. */
   readonly autoplay?: boolean;
@@ -48,10 +62,15 @@ export interface RuntimeOptions {
   readonly step?: number | null;
   /** Maps a thrown error to its line and column in the scene fragment, when the host can. */
   readonly locate?: (error: unknown) => { readonly line: number; readonly column: number } | null;
+  /** Wall clock in milliseconds, for grouping changes into undo steps. */
+  readonly now?: () => number;
 }
 
 /** Seconds a step takes to move parameters to its values. */
 export const STEP_TRANSITION_SECONDS = 0.6;
+
+/** Fixed steps a simulation may take in one frame before it drops the backlog. */
+export const MAX_SUBSTEPS = 240;
 
 export interface SceneErrorRecord {
   readonly phase: ErrorPhase;
@@ -76,8 +95,64 @@ interface ReadoutEntry {
   text: string;
 }
 
+interface DragBinding {
+  readonly node: VNode;
+  readonly label: string;
+  readonly map: (p: DragInfo) => Values | void;
+  readonly toLocal: (x: number, y: number) => Vec2;
+  readonly end?: () => void;
+  start: Vec2 | null;
+}
+
+interface ActionRecord {
+  readonly label: string;
+  readonly kind: 'button' | 'preset';
+  readonly run: () => Values | void;
+  readonly values?: Values;
+}
+
+interface LegendRecord {
+  readonly node: VNode;
+  readonly label: string;
+  readonly toggle: boolean;
+}
+
+interface TableRecord {
+  readonly title: string;
+  readonly columns: readonly string[];
+  readonly rows: () => ReadonlyArray<ReadonlyArray<Readable>>;
+  cells: string[][];
+}
+
+interface PredictRecord {
+  readonly options: PredictOptions;
+  chosen: number | null;
+  revealed: boolean;
+  answer: number | null;
+  explanation: string | null;
+}
+
+interface SimulationRecord {
+  readonly fn: (dt: number) => void;
+  readonly step: number;
+  acc: number;
+}
+
+interface LinkRecord {
+  readonly a: string;
+  readonly b: string;
+  readonly aToB: (a: number) => number;
+  readonly bToA: (b: number) => number;
+}
+
 const MAX_READOUTS = 12;
 const MAX_TEXT = 600;
+const MAX_ACTIONS = 8;
+const MAX_TABLE_ROWS = 30;
+const MAX_TABLE_COLUMNS = 8;
+const MAX_STATE_KEYS = 64;
+/** Tones that set a part apart enough to earn a legend entry. */
+const ACCENTS = new Set(['a', 'b', 'c', 'lit']);
 
 type Lifecycle = 'idle' | 'mounting' | 'mounted' | 'failed' | 'destroyed';
 
@@ -130,16 +205,47 @@ export class SceneRuntime {
   private error: ErrorView | null = null;
   private lastUi: UiState = EMPTY_UI;
   private pendingValues: Record<string, number> | null = null;
+  private pendingFormulas: Record<string, string> | null = null;
   private resetPending = false;
   private readonly maxDt: number;
   private readonly maxParams: number;
+  private readonly history: History;
+
+  // Interaction
+  private drags = new Map<number, DragBinding>();
+  private hovers = new Map<number, (p: Vec2 | null) => void>();
+  private views = new Map<number, ViewController>();
+  private stageZoom = new Map<number, boolean>();
+  // Controls and teaching
+  private actions: ActionRecord[] = [];
+  private links: LinkRecord[] = [];
+  private legend: LegendRecord[] = [];
+  private tables: TableRecord[] = [];
+  private formulas: FormulaRecord[] = [];
+  private prediction: PredictRecord | null = null;
+  private compare: { available: boolean; on: boolean; ghosts: Map<number, VNode> } = { available: false, on: false, ghosts: new Map() };
+  // Time
+  private timeline: Timeline | null = null;
+  private simulations: SimulationRecord[] = [];
+  private flows = new Map<VNode, number>();
+  // State and hooks
+  private stateValues = new Map<string, StateValue>();
+  private stateListeners = new Map<string, Array<(value: StateValue) => void>>();
+  private changed = new Set<string>();
+  private resetHooks: Array<() => void> = [];
+  private paramHooks: Array<(name: string, value: number) => void> = [];
+  private stepHooks: Array<(index: number | null) => void> = [];
+  private stepHookPending: number | null | undefined = undefined;
+  private reportedUnknown = new Set<string>();
 
   constructor(private readonly options: RuntimeOptions = {}) {
     this.random = mulberry32(options.seed ?? 1);
     this.maxDt = options.maxDt ?? 0.05;
-    this.maxParams = options.maxParams ?? 3;
+    this.maxParams = options.maxParams ?? 8;
     this.reducedMotion = options.reducedMotion ?? false;
+    this.history = new History(options.now ?? (() => Date.now()));
     this.path = createPathHelpers((requested) => this.reportCap(requested));
+    this.graph.services = this.services();
     this.inc = this.createInc();
   }
 
@@ -161,6 +267,10 @@ export class SceneRuntime {
     }
     this.playing = this.lifecycle === 'mounted' && (this.options.autoplay ?? true) && !this.reducedMotion;
     this.dirty = true;
+    if (this.lifecycle === 'mounted') {
+      this.publishInteractions();
+      for (const hook of this.resetHooks) this.guard('hook', hook);
+    }
     const restoreStep = this.options.step;
     if (this.lifecycle === 'mounted' && this.stepList && !this.restoredStep && isStepIndex(restoreStep, this.stepList.length)) {
       // A saved teaching position returns without animating; it is already persisted.
@@ -190,6 +300,7 @@ export class SceneRuntime {
     this.tweens = [];
     this.stepTransition = null;
     this.readouts = [];
+    this.simulations = [];
     this.playing = false;
   }
 
@@ -228,12 +339,9 @@ export class SceneRuntime {
       this.stepTween(capped);
       this.dirty = true;
     }
-    if (this.playing) {
-      const dt = capped * this.speed;
-      this.time += dt;
-      this.runFrame(dt);
-      this.stats.playingFrames++;
-    } else {
+    this.drainChanges();
+    if (this.playing) this.advance(capped * this.speed);
+    else {
       this.runFrame(0);
       this.stats.pausedRedraws++;
     }
@@ -242,11 +350,99 @@ export class SceneRuntime {
     return this.flush();
   }
 
+  /** Moves scene time on by `dt`: fixed simulation steps, then one frame. */
+  private advance(dt: number): void {
+    this.simulate(dt);
+    this.time += dt;
+    this.runFrame(dt);
+    this.stats.playingFrames++;
+    if (this.timeline?.finished(this.time)) this.playing = false;
+  }
+
+  private simulate(dt: number): void {
+    for (const sim of this.simulations) {
+      sim.acc += dt;
+      let steps = 0;
+      while (sim.acc >= sim.step && steps < MAX_SUBSTEPS) {
+        if (!this.guard('frame', () => sim.fn(sim.step))) {
+          sim.acc = 0;
+          break;
+        }
+        sim.acc -= sim.step;
+        steps++;
+      }
+      // A long stall drops its backlog rather than spiralling.
+      if (steps >= MAX_SUBSTEPS) sim.acc = 0;
+    }
+  }
+
+  /** One frame forward while paused (the settings panel's frame step). */
+  stepFrame(): void {
+    if (this.lifecycle !== 'mounted' || this.playing) return;
+    this.drainChanges();
+    this.advance((1 / 60) * this.speed);
+    this.dirty = false;
+    this.refreshText();
+  }
+
   /** A learner's change. Outside step mode it is persisted; inside, leaving steps undoes it. */
   setParam(name: string, value: number): void {
-    // The learner takes over from a step transition: land it, then apply their value.
+    if (isSettingName(name)) {
+      this.setValues({ [name]: value });
+      return;
+    }
+    this.learnerChange({ [name]: value }, 'control');
+  }
+
+  /**
+   * Applies values the learner caused, by a control, a drag, a button or a
+   * preset: lands any step transition first, keeps linked parameters in step,
+   * and records one undo entry.
+   */
+  private learnerChange(values: Values, source: 'control' | 'drag' | 'action' | 'undo', close = false): void {
+    if (this.lifecycle !== 'mounted') return;
     if (this.stepTransition) this.finishStepTransition();
-    this.applyParam(name, value, this.stepIndex === null);
+    const persist = this.stepIndex === null;
+    const before: Record<string, number> = {};
+    const touched = new Set<string>();
+    const apply = (name: string, value: number) => {
+      const state = this.params.get(name);
+      if (!state) return;
+      if (!touched.has(name)) before[name] = state.value;
+      touched.add(name);
+      this.applyParam(name, value, persist);
+    };
+    for (const [name, value] of Object.entries(values)) {
+      if (!this.params.has(name)) {
+        this.unknownParam(name, source === 'drag' ? 'drag' : 'action');
+        continue;
+      }
+      if (typeof value !== 'number' || !Number.isFinite(value)) continue;
+      apply(name, value);
+      // A linked partner follows, unless these values set it themselves.
+      for (const link of this.links) {
+        const partner = link.a === name ? link.b : link.b === name ? link.a : null;
+        if (!partner || partner in values) continue;
+        const fn = link.a === name ? link.aToB : link.bToA;
+        const current = this.params.get(name)!.value;
+        let next = Number.NaN;
+        this.guard('action', () => {
+          next = fn(current);
+        });
+        if (Number.isFinite(next)) apply(partner, next);
+      }
+    }
+    if (persist && source !== 'undo') {
+      const after: Record<string, number> = {};
+      for (const name of touched) after[name] = this.params.get(name)!.value;
+      this.history.record(before, after, close);
+    }
+  }
+
+  private unknownParam(name: string, phase: ErrorPhase): void {
+    if (this.reportedUnknown.has(name)) return;
+    this.reportedUnknown.add(name);
+    this.record(phase, new SceneApiError(`"${name}" is not a parameter`));
   }
 
   private finishStepTransition(): void {
@@ -264,15 +460,30 @@ export class SceneRuntime {
     state.value = next;
     this.paramVersion++;
     this.dirty = true;
+    this.changed.add(name);
     if (persist) (this.pendingValues ??= {})[name] = next;
   }
 
   setValues(values: Readonly<Record<string, number>>): void {
-    for (const [name, value] of Object.entries(values)) this.setParam(name, value);
+    const settings: Record<string, number> = {};
+    const params: Record<string, number> = {};
+    for (const [name, value] of Object.entries(values)) (isSettingName(name) ? settings : params)[name] = value;
+    if (Object.keys(settings).length > 0 && this.timeline) {
+      if (this.timeline.apply(Timeline.decode(settings))) {
+        this.dirty = true;
+        this.pendingValues = { ...this.pendingValues, ...this.timeline.encode() };
+      }
+    }
+    for (const [name, value] of Object.entries(params)) {
+      if (this.params.has(name)) this.learnerChange({ [name]: value }, 'control');
+    }
   }
 
   play(): void {
-    if (this.lifecycle === 'mounted') this.playing = true;
+    if (this.lifecycle !== 'mounted') return;
+    // A timeline that played once starts again from the beginning.
+    if (this.timeline?.finished(this.time)) this.time = 0;
+    this.playing = true;
   }
 
   pause(): void {
@@ -295,6 +506,180 @@ export class SceneRuntime {
     if (reduced) {
       this.playing = false;
       this.dirty = true;
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Interaction
+  // -------------------------------------------------------------------------
+
+  /** The learner drags an element; x and y are stage coordinates. */
+  drag(id: number, phase: 'start' | 'move' | 'end', x: number, y: number): void {
+    const binding = this.drags.get(id);
+    if (!binding || this.lifecycle !== 'mounted' || !Number.isFinite(x) || !Number.isFinite(y)) return;
+    const point = binding.toLocal(x, y);
+    if (phase === 'start' || !binding.start) {
+      binding.start = point;
+      this.history.close();
+    }
+    const start = binding.start;
+    const info: DragInfo = Object.freeze({ x: point[0], y: point[1], startX: start[0], startY: start[1], dx: point[0] - start[0], dy: point[1] - start[1] });
+    let values: unknown;
+    this.guard('drag', () => {
+      values = binding.map(info);
+    });
+    if (isValues(values)) this.learnerChange(values, 'drag', phase === 'end');
+    if (phase === 'end') {
+      binding.start = null;
+      this.history.close();
+      if (binding.end) this.guard('drag', binding.end);
+    }
+    this.dirty = true;
+  }
+
+  /** The pointer moved over a stage that listens, or left it. */
+  hover(stage: number, x: number | null, y: number | null): void {
+    const handler = this.hovers.get(stage);
+    if (!handler || this.lifecycle !== 'mounted') return;
+    const point: Vec2 | null = x === null || y === null || !Number.isFinite(x) || !Number.isFinite(y) ? null : [x, y];
+    this.guard('drag', () => handler(point));
+    this.dirty = true;
+  }
+
+  /** A zoom, pan, orbit or camera change on a stage whose view the kit owns. */
+  view(stage: number, action: ViewAction): void {
+    const controller = this.views.get(stage);
+    if (!controller || this.lifecycle !== 'mounted') return;
+    let redraw = false;
+    this.guard('drag', () => {
+      redraw = controller.apply(action);
+    });
+    if (redraw) this.dirty = true;
+  }
+
+  /** Tells the renderer how each stage answers the pointer. */
+  private publishInteractions(): void {
+    for (const stage of this.graph.stages) {
+      const controller = this.views.get(stage.id);
+      const zoomable = this.stageZoom.get(stage.id) !== false;
+      this.graph.setInteraction(stage.id, {
+        zoom: !zoomable ? 'none' : controller ? 'runtime' : 'viewbox',
+        hover: this.hovers.has(stage.id),
+        orbit: controller?.orbit ?? false,
+        views: controller?.views ?? [],
+      });
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Buttons, presets, legend, formulas, predictions, history, timing, compare
+  // -------------------------------------------------------------------------
+
+  action(index: number): void {
+    const record = this.actions[index];
+    if (!record || this.lifecycle !== 'mounted') return;
+    if (record.kind === 'preset') {
+      this.learnerChange(record.values!, 'action', true);
+      return;
+    }
+    let values: unknown;
+    this.guard('action', () => {
+      values = record.run();
+    });
+    if (isValues(values)) this.learnerChange(values, 'action', true);
+    this.dirty = true;
+  }
+
+  setLegend(id: number, visible: boolean): void {
+    const record = this.legend.find((r) => r.node.id === id);
+    if (!record || !record.toggle) return;
+    if (record.node.hidden === !visible) return;
+    this.graph.setFlags(record.node, { hidden: !visible });
+    this.dirty = true;
+  }
+
+  editFormula(index: number, source: string): void {
+    const record = this.formulas[index];
+    if (!record || !record.editable) return;
+    const before = record.source;
+    record.edit(source);
+    if (record.source !== before) {
+      (this.pendingFormulas ??= {})[String(index)] = record.source;
+      this.paramVersion++;
+    }
+    // The error, or its clearing, shows either way.
+    this.dirty = true;
+  }
+
+  predict(index: number, choice: number | null, reveal = false): void {
+    const record = this.prediction;
+    if (index !== 0 || !record || this.lifecycle !== 'mounted') return;
+    if (!record.revealed && (choice === null || (Number.isInteger(choice) && choice >= 0 && choice < record.options.options.length))) {
+      record.chosen = choice;
+    }
+    if (reveal && !record.revealed && record.chosen !== null) {
+      record.revealed = true;
+      const answer = record.options.answer;
+      this.guard('action', () => {
+        const value = typeof answer === 'function' ? answer() : answer;
+        record.answer = Number.isInteger(value) && value >= 0 && value < record.options.options.length ? value : null;
+      });
+      if (record.options.reveal) {
+        const target: Record<string, number> = { ...this.values() };
+        for (const [name, value] of Object.entries(record.options.reveal)) if (this.params.has(name)) target[name] = value;
+        this.moveTo(target, this.reducedMotion);
+      }
+      this.refreshPrediction();
+    }
+    this.dirty = true;
+  }
+
+  undo(): void {
+    const values = this.history.undo();
+    if (values) this.learnerChange(values, 'undo');
+  }
+
+  redo(): void {
+    const values = this.history.redo();
+    if (values) this.learnerChange(values, 'undo');
+  }
+
+  setTiming(settings: { readonly duration?: number; readonly loop?: LoopMode; readonly ease?: TimelineOptions['ease'] }): void {
+    if (!this.timeline || !this.timeline.apply(settings)) return;
+    this.pendingValues = { ...this.pendingValues, ...this.timeline.encode() };
+    this.dirty = true;
+  }
+
+  setCompare(on: boolean): void {
+    if (!this.compare.available || this.lifecycle !== 'mounted') return;
+    this.compare.on = on;
+    if (on) this.snapshotGhosts();
+    for (const ghost of this.compare.ghosts.values()) {
+      if (ghost.hidden === on) this.graph.setFlags(ghost, { hidden: !on });
+    }
+    this.dirty = true;
+  }
+
+  /** Faint copies of every curve now drawn, to compare against after a change (TE-5). */
+  private snapshotGhosts(): void {
+    for (const stage of this.graph.stages) {
+      const stageNode = this.graph.nodes.get(stage.id)!;
+      for (const node of [...this.graph.nodes.values()]) {
+        if (node.stage !== stage.id || node.hidden || node.layer !== 'mid') continue;
+        if (node.kind !== 'path' && node.kind !== 'polyline') continue;
+        if (node.extra.includes('inc-ghost')) continue;
+        let ghost = this.compare.ghosts.get(node.id);
+        if (!ghost) {
+          if (this.compare.ghosts.size >= 40) break;
+          ghost = this.graph.create(node.kind, stageNode, 'back');
+          this.graph.setExtra(ghost, 'inc-ghost');
+          if (node.fill) this.graph.setFlags(ghost, { fill: true });
+          this.compare.ghosts.set(node.id, ghost);
+        }
+        const attribute = node.kind === 'path' ? 'd' : 'points';
+        this.graph.setAttribute(ghost, attribute, node.attrs.get(attribute) ?? null);
+        this.graph.setAttribute(ghost, 'transform', node.attrs.get('transform') ?? null);
+      }
     }
   }
 
@@ -356,6 +741,7 @@ export class SceneRuntime {
     this.moveTo(target, immediate || this.reducedMotion);
     this.playing = step.hold ? false : saved.playing && !this.reducedMotion;
     this.pendingStep = index;
+    this.stepHookPending = index;
     this.dirty = true;
   }
 
@@ -368,6 +754,7 @@ export class SceneRuntime {
     for (const [name, value] of Object.entries(saved.values)) this.applyParam(name, value, false);
     this.playing = saved.playing && !this.reducedMotion;
     this.pendingStep = null;
+    this.stepHookPending = null;
     this.dirty = true;
   }
 
@@ -398,12 +785,14 @@ export class SceneRuntime {
     return this.rebuild(this.stepSaved ? { ...this.stepSaved.values } : this.values());
   }
 
-  /** Rebuilds the scene with the authored defaults. */
+  /** Rebuilds the scene with the authored defaults. Undoable. */
   reset(): RuntimeUpdate {
     const defaults: Record<string, number> = {};
     for (const p of this.params.values()) defaults[p.name] = p.defaultValue;
+    const before = this.learnerValues();
     const update = this.rebuild(defaults);
-    return { ...update, values: { ...defaults } };
+    this.history.record(before, defaults, true);
+    return { ...update, values: { ...defaults }, ui: { ...update.ui, history: { undo: this.history.canUndo, redo: this.history.canRedo } } };
   }
 
   /** Current parameter values (what the drawing shows). */
@@ -422,12 +811,15 @@ export class SceneRuntime {
     const scene = this.scene;
     if (!scene || this.lifecycle === 'destroyed') return this.flush();
     const wasPlaying = this.stepSaved ? this.stepSaved.playing : this.playing;
+    const timing = this.timeline?.encode();
+    const formulas = Object.fromEntries(this.formulas.map((f, i) => [String(i), f.source] as const));
     if (this.stepIndex !== null) this.pendingStep = null;
     this.stepIndex = null;
     this.stepSaved = null;
     this.stepTransition = null;
     this.learnerFocus = null;
     this.graph = new SceneGraph();
+    this.graph.services = this.services();
     this.parts = new PartRegistry(this.graph);
     this.params = new Map();
     this.paramHandles = new Set();
@@ -446,19 +838,65 @@ export class SceneRuntime {
     this.framesRun = 0;
     this.time = 0;
     this.random = mulberry32(this.options.seed ?? 1);
+    this.drags = new Map();
+    this.hovers = new Map();
+    this.views = new Map();
+    this.stageZoom = new Map();
+    this.actions = [];
+    this.links = [];
+    this.legend = [];
+    this.tables = [];
+    this.formulas = [];
+    this.prediction = null;
+    this.compare = { available: false, on: false, ghosts: new Map() };
+    this.timeline = null;
+    this.simulations = [];
+    this.flows = new Map();
+    this.stateValues = new Map();
+    this.stateListeners = new Map();
+    this.changed = new Set();
+    this.resetHooks = [];
+    this.paramHooks = [];
+    this.stepHooks = [];
+    this.reportedUnknown = new Set();
     this.resetPending = true;
-    const update = this.mount(scene, values);
+    this.rebuildFormulas = formulas;
+    const update = this.mount(scene, { ...values, ...timing });
+    this.rebuildFormulas = null;
     this.playing = this.lifecycle === 'mounted' && wasPlaying;
     return { ...update, needsFrame: this.needsFrame() };
   }
+
+  private rebuildFormulas: Readonly<Record<string, string>> | null = null;
 
   // -------------------------------------------------------------------------
   // Frames and text
   // -------------------------------------------------------------------------
 
+  /** Runs state and parameter listeners for changes since the last frame. */
+  private drainChanges(): void {
+    for (let round = 0; round < 8 && (this.changed.size > 0 || this.stepHookPending !== undefined); round++) {
+      const keys = [...this.changed];
+      this.changed.clear();
+      for (const key of keys) {
+        const listeners = this.stateListeners.get(key);
+        const value = this.readState(key);
+        if (listeners && value !== undefined) for (const listener of listeners) this.guard('hook', () => listener(value));
+        const param = this.params.get(key);
+        if (param) for (const hook of this.paramHooks) this.guard('hook', () => hook(key, param.value));
+      }
+      if (this.stepHookPending !== undefined) {
+        const index = this.stepHookPending;
+        this.stepHookPending = undefined;
+        for (const hook of this.stepHooks) this.guard('hook', () => hook(index));
+      }
+    }
+  }
+
   private runFrame(dt: number): void {
     const runtime = this;
     const time = this.time;
+    const timeline = this.timeline;
     // Reading time or dt marks the scene as animated; a still scene stops asking for frames.
     const frame: FrameInfo = Object.freeze({
       get time() {
@@ -469,11 +907,20 @@ export class SceneRuntime {
         runtime.usesTime = true;
         return dt;
       },
+      get progress() {
+        runtime.usesTime = true;
+        return timeline ? timeline.progress(time) : 0;
+      },
     });
     this.framesRun++;
     let ok = true;
     for (const callback of this.frameCallbacks) ok = this.guard('frame', () => callback(frame)) && ok;
     for (const redraw of this.redraws) ok = this.guard('plot', redraw) && ok;
+    for (const [node, speed] of this.flows) {
+      // Dashes move with scene time, so they stop when paused and under reduced motion.
+      const offset = -((time * speed) % 14);
+      this.graph.setAttribute(node, 'stroke-dashoffset', Math.round(offset * 100) / 100);
+    }
     this.stats.framesExecuted++;
     if (ok && this.error && this.error.phase !== 'mount') this.error = null;
   }
@@ -502,6 +949,26 @@ export class SceneRuntime {
         this.description = clip(String(fn()));
       });
     }
+    for (const table of this.tables) {
+      this.guard('readout', () => {
+        const rows = table.rows();
+        if (!Array.isArray(rows)) throw new SceneApiError(`Table "${table.title}" rows must be a list`);
+        table.cells = rows
+          .slice(0, MAX_TABLE_ROWS)
+          .map((row) => (Array.isArray(row) ? row : [row]).slice(0, table.columns.length).map((cell) => clip(formatReadable(cell as Readable), 40)));
+      });
+    }
+    this.refreshPrediction();
+  }
+
+  private refreshPrediction(): void {
+    const record = this.prediction;
+    if (!record || !record.revealed) return;
+    const explain = record.options.explain;
+    if (explain === undefined) return;
+    this.guard('explain', () => {
+      record.explanation = clip(String(typeof explain === 'function' ? explain() : explain));
+    });
   }
 
   private stepTween(dt: number): void {
@@ -548,6 +1015,10 @@ export class SceneRuntime {
       update.step = this.pendingStep;
       this.pendingStep = undefined;
     }
+    if (this.pendingFormulas) {
+      update.formulas = this.pendingFormulas;
+      this.pendingFormulas = null;
+    }
     return update;
   }
 
@@ -563,11 +1034,22 @@ export class SceneRuntime {
       step: p.step,
       value: p.value,
       defaultValue: p.defaultValue,
+      kind: p.kind,
+      options: p.options,
+      buttons: p.buttons,
+      linked: p.linked,
+    }));
+    const values = this.values();
+    const actions: ActionView[] = this.actions.map((a, index) => ({
+      index,
+      label: a.label,
+      kind: a.kind,
+      active: a.kind === 'preset' && Object.entries(a.values ?? {}).every(([name, value]) => values[name] === snapTo(this.params.get(name), value)),
     }));
     return {
       params,
       readouts: this.readouts.map((r) => ({ label: r.label, text: r.text })),
-      parts: [...this.parts.parts.values()].map((p) => ({ name: p.name, label: p.label, info: p.info, id: p.node.id })),
+      parts: [...this.parts.parts.values()].map((p) => ({ name: p.name, label: p.label, info: p.info, id: p.node.id, tone: p.node.tone })),
       playing: this.playing,
       animated: this.animated,
       speed: this.speed,
@@ -577,7 +1059,65 @@ export class SceneRuntime {
       steps: this.stepsView(),
       focus: this.learnerFocus ?? this.stepFocus(),
       error: this.error,
+      actions,
+      legend: this.legendView(),
+      formulas: this.formulas.map((f, index) => ({ index, label: f.label, source: f.source, editable: f.editable, error: f.error, draft: f.draft })),
+      predict: this.predictView(),
+      tables: this.tables.map((t) => ({ title: t.title, columns: t.columns, rows: t.cells })),
+      timing: this.timeline?.view() ?? null,
+      history: { undo: this.history.canUndo, redo: this.history.canRedo },
+      card: { title: this.graph.stages[0]?.title ?? null, hint: this.hint() },
+      views: [...this.views.entries()].map(([id, controller]) => ({ id, changed: controller.changed() })),
+      compare: { available: this.compare.available, on: this.compare.on },
     };
+  }
+
+  private legendView(): LegendView[] {
+    const out: LegendView[] = this.legend.map((r) => ({
+      id: r.node.id,
+      label: r.label,
+      tone: r.node.tone,
+      visible: !r.node.hidden,
+      toggle: r.toggle,
+      part: r.node.part,
+      dashed: r.node.dashed,
+    }));
+    // Parts in accent tones name what each colour means, when there are two or more.
+    const listed = new Set(out.map((entry) => entry.id));
+    const accented = [...this.parts.parts.values()].filter((p) => p.node.tone && ACCENTS.has(p.node.tone) && !listed.has(p.node.id));
+    if (accented.length >= 2 && new Set(accented.map((p) => p.node.tone)).size >= 2) {
+      for (const p of accented) {
+        out.push({ id: p.node.id, label: p.label, tone: p.node.tone, visible: !p.node.hidden, toggle: false, part: p.name, dashed: p.node.dashed });
+      }
+    }
+    return out;
+  }
+
+  private predictView(): PredictView | null {
+    const record = this.prediction;
+    if (!record) return null;
+    return {
+      index: 0,
+      question: record.options.question,
+      options: record.options.options,
+      chosen: record.chosen,
+      revealed: record.revealed,
+      answer: record.revealed ? record.answer : null,
+      explanation: record.revealed ? record.explanation : null,
+    };
+  }
+
+  /** One line on how to use the figure, from what it offers (BR-7). */
+  private hint(): string | null {
+    const drags = [...new Set([...this.drags.values()].map((d) => d.label))];
+    const controls = this.params.size > 0;
+    if (drags.length > 0) {
+      const what = drags.length === 1 ? drags[0]! : 'the highlighted parts';
+      return controls ? `Drag ${what} or change the values below.` : `Drag ${what}.`;
+    }
+    if (controls) return 'Change the values below to see what happens.';
+    if (this.stepList) return 'Walk through it step by step.';
+    return null;
   }
 
   private stepFocus(): string | null {
@@ -660,6 +1200,76 @@ export class SceneRuntime {
   }
 
   // -------------------------------------------------------------------------
+  // Services for handles and kits
+  // -------------------------------------------------------------------------
+
+  private services(): GraphServices {
+    return {
+      addDrag: (node, label, map, toLocal) => this.addDrag(node, label, map, toLocal),
+      onRedraw: (fn) => {
+        this.redraws.push(fn);
+      },
+      setFlow: (node, speed) => {
+        const extra = node.extra.replace(/\binc-flow\b/, '').trim();
+        if (speed === 0) {
+          this.flows.delete(node);
+          this.graph.setExtra(node, extra);
+          return;
+        }
+        this.flows.set(node, speed);
+        this.usesTime = true;
+        this.graph.setExtra(node, `${extra} inc-flow`.trim());
+      },
+    };
+  }
+
+  private addDrag(node: VNode, label: string, map: (p: DragInfo) => Values | void, toLocal: (x: number, y: number) => Vec2 = (x, y) => [x, y], end?: () => void): void {
+    if (this.drags.has(node.id)) throw new SceneApiError('That element can already be dragged');
+    if (this.drags.size >= 24) throw new SceneApiError('At most 24 draggable elements');
+    const text = String(label).slice(0, 60);
+    this.drags.set(node.id, { node, label: text, map, toLocal, ...(end ? { end } : {}), start: null });
+    this.graph.markDrag(node, text);
+  }
+
+  /** The services a drawing kit gets for one stage. */
+  kitContext(stage: StageHandle, stageId: number): KitContext {
+    const runtime = this;
+    return {
+      stage,
+      path: this.path,
+      time: () => runtime.time,
+      markTimeUse: () => {
+        runtime.usesTime = true;
+      },
+      onRedraw: (fn) => runtime.redraws.push(fn),
+      reportCap: (n) => runtime.reportCap(n),
+      isFormula: (value): value is ReturnType<Inc['formula']> => typeof value === 'function' && typeof (value as { source?: unknown }).source === 'string',
+      addDrag: (node, label, map, toLocal, end) => runtime.addDrag(node, label, map, toLocal, end),
+      addHover: (fn) => {
+        runtime.hovers.set(stageId, fn);
+      },
+      setView: (controller) => {
+        runtime.views.set(stageId, controller);
+      },
+      addLegend: (node, label, toggle) => {
+        if (runtime.legend.length < 12) runtime.legend.push({ node, label: String(label).slice(0, 60), toggle });
+      },
+      param: (name): ParamInfo | undefined => {
+        const p = runtime.params.get(name);
+        return p ? { value: p.value, min: p.min, max: p.max, step: p.step } : undefined;
+      },
+      simulate: (fn, step) => {
+        runtime.simulations.push({ fn, step, acc: 0 });
+        runtime.usesTime = true;
+      },
+      reducedMotion: () => runtime.reducedMotion,
+      warn: (message) => {
+        if (runtime.graph.diagnostics.length < 200) runtime.graph.diagnostics.push({ kind: 'budget', message });
+      },
+    };
+  }
+
+  // -------------------------------------------------------------------------
   // The inc API
   // -------------------------------------------------------------------------
 
@@ -681,20 +1291,104 @@ export class SceneRuntime {
     });
   }
 
+  private addParam(name: string, options: ParamOptions, shape?: ControlShape): ParamState {
+    if (this.params.has(name)) throw new SceneApiError(`Parameter "${name}" is declared twice`);
+    if (this.params.size >= this.maxParams) throw new SceneApiError(`A figure has at most ${this.maxParams} adjustable parameters`);
+    const state = createParamState(name, options ?? ({} as ParamOptions), this.restoreValues?.[name], shape);
+    this.params.set(name, state);
+    this.paramHandles.add(state.handle);
+    this.paramVersion++;
+    return state;
+  }
+
+  private readState(key: string): StateValue | undefined {
+    const param = this.params.get(key);
+    return param ? param.value : this.stateValues.get(key);
+  }
+
   private createInc(): Inc {
     const runtime = this;
+    const state = Object.freeze({
+      get(key: string): StateValue | undefined {
+        return runtime.readState(String(key));
+      },
+      set(key: string, value: StateValue): void {
+        if (typeof key !== 'string' || key === '' || key.length > 40) throw new SceneApiError('A state key is a short name');
+        if (runtime.params.has(key)) {
+          if (typeof value !== 'number') throw new SceneApiError(`"${key}" is a parameter and holds a number`);
+          runtime.applyParam(key, value, false);
+          return;
+        }
+        const ok = (typeof value === 'number' && Number.isFinite(value)) || typeof value === 'boolean' || (typeof value === 'string' && value.length <= 200);
+        if (!ok) throw new SceneApiError(`State "${key}" must be a finite number, true or false, or short text`);
+        if (runtime.stateValues.get(key) === value) return;
+        if (!runtime.stateValues.has(key) && runtime.stateValues.size >= MAX_STATE_KEYS) throw new SceneApiError(`At most ${MAX_STATE_KEYS} state values`);
+        runtime.stateValues.set(key, value);
+        runtime.changed.add(key);
+        runtime.dirty = true;
+      },
+      on(key: string, callback: (value: StateValue) => void): void {
+        if (typeof callback !== 'function') throw new SceneApiError('inc.state.on needs a function');
+        const list = runtime.stateListeners.get(key) ?? [];
+        if (list.length >= 8) throw new SceneApiError(`At most 8 listeners for "${key}"`);
+        list.push(callback);
+        runtime.stateListeners.set(key, list);
+      },
+    });
     const inc: Inc = {
       param(name: string, options: ParamOptions): Param {
         runtime.requireMounting('param');
-        if (runtime.params.has(name)) throw new SceneApiError(`Parameter "${name}" is declared twice`);
-        if (runtime.params.size >= runtime.maxParams) {
-          throw new SceneApiError(`A figure has at most ${runtime.maxParams} adjustable parameters`);
+        return runtime.addParam(name, options).handle;
+      },
+      toggle(name, options) {
+        runtime.requireMounting('toggle');
+        const { param, shape } = toggleControl(name, options);
+        return runtime.addParam(name, param, shape).handle as ReturnType<Inc['toggle']>;
+      },
+      choice(name, options) {
+        runtime.requireMounting('choice');
+        const { param, shape } = choiceControl(name, options);
+        return runtime.addParam(name, param, shape).handle as ReturnType<Inc['choice']>;
+      },
+      color(name, options) {
+        runtime.requireMounting('color');
+        const { param, shape } = colorControl(name, options);
+        return runtime.addParam(name, param, shape).handle as ReturnType<Inc['color']>;
+      },
+      button(label, action) {
+        runtime.requireMounting('button');
+        if (typeof label !== 'string' || label.trim() === '' || label.length > 40) throw new SceneApiError('A button needs a short label');
+        if (typeof action !== 'function') throw new SceneApiError(`Button "${label}" needs a function`);
+        if (runtime.actions.length >= MAX_ACTIONS) throw new SceneApiError(`At most ${MAX_ACTIONS} buttons and presets`);
+        runtime.actions.push({ label, kind: 'button', run: action });
+      },
+      presets(presets) {
+        runtime.requireMounting('presets');
+        const entries = Object.entries(presets ?? {});
+        if (entries.length === 0) throw new SceneApiError('inc.presets needs at least one named set of values');
+        for (const [label, values] of entries) {
+          if (label.trim() === '' || label.length > 40) throw new SceneApiError('A preset needs a short name');
+          if (typeof values !== 'object' || values === null) throw new SceneApiError(`Preset "${label}" needs parameter values`);
+          for (const [name, value] of Object.entries(values)) {
+            if (!runtime.params.has(name)) throw new SceneApiError(`Preset "${label}" sets "${name}", which is not a parameter declared before it`);
+            if (typeof value !== 'number' || !Number.isFinite(value)) throw new SceneApiError(`Preset "${label}" sets ${name} to something that is not a number`);
+          }
+          if (runtime.actions.length >= MAX_ACTIONS) throw new SceneApiError(`At most ${MAX_ACTIONS} buttons and presets`);
+          const frozen = Object.freeze({ ...values });
+          runtime.actions.push({ label, kind: 'preset', run: () => frozen, values: frozen });
         }
-        const state = createParamState(name, options ?? ({} as ParamOptions), runtime.restoreValues?.[name]);
-        runtime.params.set(name, state);
-        runtime.paramHandles.add(state.handle);
-        runtime.paramVersion++;
-        return state.handle;
+      },
+      link(a, b, aToB, bToA) {
+        runtime.requireMounting('link');
+        const first = runtime.params.get(a);
+        const second = runtime.params.get(b);
+        if (!first || !second) throw new SceneApiError('inc.link joins two parameters declared before it');
+        if (a === b) throw new SceneApiError('inc.link needs two different parameters');
+        if (typeof aToB !== 'function' || typeof bToA !== 'function') throw new SceneApiError('inc.link needs a function each way');
+        if (first.linked || second.linked) throw new SceneApiError('A parameter can be linked to one other');
+        first.linked = b;
+        second.linked = a;
+        runtime.links.push({ a, b, aToB, bToA });
       },
       model<T extends object>(compute: (values: ParamValues) => T): Model<T> {
         runtime.requireMounting('model');
@@ -722,6 +1416,38 @@ export class SceneRuntime {
         if (typeof callback !== 'function') throw new SceneApiError('inc.onFrame needs a function');
         runtime.frameCallbacks.push(callback);
       },
+      simulate(step, options: SimulateOptions = {}) {
+        runtime.requireMounting('simulate');
+        if (typeof step !== 'function') throw new SceneApiError('inc.simulate needs a function of dt');
+        const dt = options.step ?? 1 / 120;
+        if (!(Number.isFinite(dt) && dt >= 1 / 2000 && dt <= 0.1)) throw new SceneApiError('inc.simulate step must be from 1/2000 to 0.1 seconds');
+        if (runtime.simulations.length >= 4) throw new SceneApiError('At most 4 simulations');
+        runtime.simulations.push({ fn: step, step: dt, acc: 0 });
+        runtime.usesTime = true;
+      },
+      timeline(options) {
+        runtime.requireMounting('timeline');
+        if (runtime.timeline) throw new SceneApiError('A figure has one timeline');
+        runtime.timeline = new Timeline(options);
+        runtime.timeline.apply(Timeline.decode(runtime.restoreValues));
+        runtime.usesTime = true;
+      },
+      state,
+      onReset(callback) {
+        runtime.requireMounting('onReset');
+        if (typeof callback !== 'function') throw new SceneApiError('inc.onReset needs a function');
+        runtime.resetHooks.push(callback);
+      },
+      onParamChange(callback) {
+        runtime.requireMounting('onParamChange');
+        if (typeof callback !== 'function') throw new SceneApiError('inc.onParamChange needs a function');
+        runtime.paramHooks.push(callback);
+      },
+      onStep(callback) {
+        runtime.requireMounting('onStep');
+        if (typeof callback !== 'function') throw new SceneApiError('inc.onStep needs a function');
+        runtime.stepHooks.push(callback);
+      },
       readout(entries) {
         runtime.requireMounting('readout');
         for (const [label, fn] of Object.entries(entries ?? {})) {
@@ -729,6 +1455,16 @@ export class SceneRuntime {
           if (runtime.readouts.length >= MAX_READOUTS) throw new SceneApiError(`At most ${MAX_READOUTS} readouts`);
           runtime.readouts.push({ label: clip(label, 60), fn, text: '' });
         }
+      },
+      table(options: TableOptions) {
+        runtime.requireMounting('table');
+        if (typeof options?.title !== 'string' || options.title.trim() === '') throw new SceneApiError('inc.table needs a title');
+        if (!Array.isArray(options.columns) || options.columns.length === 0 || options.columns.length > MAX_TABLE_COLUMNS) {
+          throw new SceneApiError(`inc.table needs from 1 to ${MAX_TABLE_COLUMNS} column names`);
+        }
+        if (typeof options.rows !== 'function') throw new SceneApiError('inc.table rows must be a function of the model');
+        if (runtime.tables.length >= 2) throw new SceneApiError('At most 2 tables');
+        runtime.tables.push({ title: clip(options.title, 80), columns: options.columns.map((c) => clip(String(c), 40)), rows: options.rows, cells: [] });
       },
       idea(sentence) {
         runtime.requireMounting('idea');
@@ -757,12 +1493,34 @@ export class SceneRuntime {
         if (typeof fn !== 'function') throw new SceneApiError('inc.describe needs a function');
         runtime.describeFn = fn;
       },
+      predict(options: PredictOptions) {
+        runtime.requireMounting('predict');
+        if (runtime.prediction) throw new SceneApiError('A figure asks one prediction');
+        if (typeof options?.question !== 'string' || options.question.trim() === '' || options.question.length > 200) {
+          throw new SceneApiError('inc.predict needs a short question');
+        }
+        if (!Array.isArray(options.options) || options.options.length < 2 || options.options.length > 5) {
+          throw new SceneApiError('inc.predict needs from 2 to 5 options');
+        }
+        if (typeof options.answer !== 'function' && !(Number.isInteger(options.answer) && options.answer >= 0 && options.answer < options.options.length)) {
+          throw new SceneApiError('inc.predict answer is an option index or a function of the model');
+        }
+        for (const name of Object.keys(options.reveal ?? {})) {
+          if (!runtime.params.has(name)) throw new SceneApiError(`inc.predict reveals "${name}", which is not a parameter declared before it`);
+        }
+        runtime.prediction = { options: Object.freeze({ ...options, options: [...options.options] }), chosen: null, revealed: false, answer: null, explanation: null };
+      },
+      compare() {
+        runtime.requireMounting('compare');
+        runtime.compare.available = true;
+      },
       svg(selector: string, options: StageOptions): Stage {
         runtime.requireMounting('svg');
         if (typeof options?.title !== 'string' || options.title.trim() === '') {
           throw new SceneApiError('inc.svg needs a title for its accessible name');
         }
         const node = runtime.graph.createStage(selector, options.viewBox, options.title, options.description ?? '');
+        runtime.stageZoom.set(node.id, options.zoom !== false);
         return new StageHandle(runtime.graph, node, options.viewBox, runtime.parts);
       },
       graph2d(selector: string, options: GraphOptions) {
@@ -770,27 +1528,26 @@ export class SceneRuntime {
         validateGraphOptions(options);
         const viewBox = options.viewBox ?? DEFAULT_GRAPH_VIEWBOX;
         const node = runtime.graph.createStage(selector, viewBox, options.title, options.description ?? '', plotRect(viewBox));
+        runtime.stageZoom.set(node.id, options.zoom !== false);
         const stage = new StageHandle(runtime.graph, node, viewBox, runtime.parts);
-        return new Graph2D(
-          {
-            stage,
-            path: runtime.path,
-            time: () => runtime.time,
-            markTimeUse: () => {
-              runtime.usesTime = true;
-            },
-            onRedraw: (redraw) => runtime.redraws.push(redraw),
-            reportCap: (n) => runtime.reportCap(n),
-            isFormula: (value): value is ReturnType<Inc['formula']> =>
-              typeof value === 'function' && typeof (value as { source?: unknown }).source === 'string',
-          },
-          options,
-          viewBox,
-        );
+        return new Graph2D(runtime.kitContext(stage, node.id), options, viewBox);
       },
       formula(source: string, options?: FormulaOptions) {
         try {
-          return createFormula(source, options, runtime.paramHandles, () => runtime.time);
+          const index = runtime.formulas.length;
+          const restored = runtime.rebuildFormulas?.[String(index)] ?? runtime.options.formulas?.[String(index)];
+          return createFormula(
+            source,
+            options,
+            runtime.paramHandles,
+            () => runtime.time,
+            (record) => {
+              if (runtime.formulas.length >= 8) throw new SceneApiError('At most 8 formulas');
+              runtime.formulas.push(record);
+              if (restored !== undefined && record.editable) record.edit(restored);
+            },
+            () => new Map([...runtime.params.values()].map((p) => [p.name, p.handle] as const)),
+          );
         } catch (error) {
           if (error instanceof ExpressionError) {
             throw new SceneApiError(`Formula "${source}": ${error.message} at position ${error.position}`);
@@ -813,6 +1570,14 @@ export class SceneRuntime {
   }
 }
 
+function isValues(value: unknown): value is Values {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function snapTo(state: ParamState | undefined, value: number): number {
+  return state ? snap(state, value) : value;
+}
+
 function isStepIndex(value: unknown, count: number): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value < count;
 }
@@ -820,4 +1585,3 @@ function isStepIndex(value: unknown, count: number): value is number {
 function clip(text: string, max = MAX_TEXT): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
-

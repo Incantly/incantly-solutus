@@ -416,23 +416,21 @@ export const VALIDATOR_CASES: readonly ValidatorCase[] = [
 
   // --- Budgets ---------------------------------------------------------------------------
   {
-    name: 'more than three parameters',
+    name: 'more than eight controls',
     fragment: 'js',
     rule: 'too-many-params',
     bad: {
       js: js(
-        "const a = inc.param('a', { min: 0, max: 1, value: 0 });",
-        "const b = inc.param('b', { min: 0, max: 1, value: 0 });",
-        "const c = inc.param('c', { min: 0, max: 1, value: 0 });",
-        "const d = inc.param('d', { min: 0, max: 1, value: 0 });",
+        ...['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((n) => `const ${n} = inc.param('${n}', { min: 0, max: 1, value: 0 });`),
+        "const h = inc.toggle('h', { value: true });",
+        "const i = inc.choice('i', { options: ['x', 'y'] });",
       ),
     },
-    at: "inc.param('d'",
+    at: "inc.choice('i'",
     twin: {
       js: js(
-        "const a = inc.param('a', { min: 0, max: 1, value: 0 });",
-        "const b = inc.param('b', { min: 0, max: 1, value: 0 });",
-        "const c = inc.param('c', { min: 0, max: 1, value: 0 });",
+        ...['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((n) => `const ${n} = inc.param('${n}', { min: 0, max: 1, value: 0 });`),
+        "const h = inc.toggle('h', { value: true });",
       ),
     },
   },

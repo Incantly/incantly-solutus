@@ -1,6 +1,7 @@
 import type { Layer, ViewBox } from '../api/types';
 
-export type ElementKind = 'g' | 'path' | 'line' | 'circle' | 'rect' | 'text' | 'polyline';
+/** `use` repeats another element of the same stage (SV-6). */
+export type ElementKind = 'g' | 'path' | 'line' | 'circle' | 'rect' | 'text' | 'polyline' | 'use';
 
 /**
  * Drawing instructions from the scene runtime to the renderer. Ids are
@@ -23,6 +24,8 @@ export type SceneCommand =
       readonly kind: ElementKind;
       readonly parent: number;
       readonly layer: Layer;
+      /** For `use`: the element it repeats. */
+      readonly source?: number;
     }
   | { readonly op: 'attr'; readonly id: number; readonly name: string; readonly value: string | null }
   | { readonly op: 'text'; readonly id: number; readonly value: string }
@@ -33,7 +36,30 @@ export type SceneCommand =
       readonly name: string;
       readonly label: string;
       readonly info: string;
-    };
+    }
+  /** The learner can drag this element; the runtime turns the pointer into parameter values. */
+  | { readonly op: 'drag'; readonly id: number; readonly label: string }
+  /** How a stage answers the pointer: who zooms it, whether hovering is reported, its camera views. */
+  | {
+      readonly op: 'interact';
+      readonly id: number;
+      /** `viewbox`: the renderer zooms and pans the drawing itself. `runtime`: it sends view messages and the kit redraws. */
+      readonly zoom: StageZoom;
+      /** Whether pointer movement over the stage is sent to the runtime (tracing a curve). */
+      readonly hover: boolean;
+      /** Dragging the background orbits the camera rather than panning. */
+      readonly orbit: boolean;
+      /** Named camera views offered in the stage toolbar. */
+      readonly views: readonly string[];
+    }
+  /** The part an element belongs to when it is not inside the part's own element (3D faces in shared slots). */
+  | { readonly op: 'owner'; readonly id: number; readonly part: string | null }
+  /** Many small dots drawn on a canvas that shares the stage's coordinates. Coordinates are x0, y0, x1, y1, ... */
+  | { readonly op: 'dots'; readonly id: number; readonly stage: number; readonly layer: 'back' | 'front'; readonly tone: string; readonly r: number; readonly points: readonly number[] }
+  /** Puts an element's children in this order (a 3D depth sort that changed). */
+  | { readonly op: 'order'; readonly id: number; readonly children: readonly number[] };
+
+export type StageZoom = 'viewbox' | 'runtime' | 'none';
 
 /** Attributes the renderer will write. Anything else is dropped. */
 export const RENDERABLE_ATTRIBUTES: ReadonlySet<string> = new Set([

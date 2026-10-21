@@ -6,6 +6,9 @@
  * clauses make the TypeScript compiler fail if this file and `types.ts` drift.
  */
 import type {
+  Choice,
+  ColorParam,
+  Dots,
   Formula,
   GeometryHelpers,
   Graph,
@@ -24,7 +27,9 @@ import type {
   PolylineHandle,
   Segment,
   Stage,
+  State,
   TextHandle,
+  Toggle,
   Tone,
 } from './types';
 
@@ -35,6 +40,10 @@ export const SCENE_SCHEMA_VERSION = 1;
 
 export type HandleKind =
   | 'Param'
+  | 'Toggle'
+  | 'Choice'
+  | 'ColorParam'
+  | 'Dots'
   | 'Model'
   | 'Stage'
   | 'Element'
@@ -79,17 +88,32 @@ const elementMethods = {
   hide: 'self',
   tone: 'self',
   dashed: 'self',
+  flow: 'self',
 } as const satisfies Methods<Handle>;
 
 export const INC_FUNCTIONS = {
   param: 'Param',
+  toggle: 'Toggle',
+  choice: 'Choice',
+  color: 'ColorParam',
+  button: null,
+  presets: null,
+  link: null,
   model: 'Model',
   onFrame: null,
+  simulate: null,
+  timeline: null,
+  onReset: null,
+  onParamChange: null,
+  onStep: null,
   readout: null,
+  table: null,
   idea: null,
   steps: null,
   explain: null,
   describe: null,
+  predict: null,
+  compare: null,
   svg: 'Stage',
   graph2d: 'Graph',
   formula: 'Formula',
@@ -98,6 +122,11 @@ export const INC_FUNCTIONS = {
 } as const satisfies Methods<Inc>;
 
 export const INC_NAMESPACES = {
+  state: {
+    get: null,
+    set: null,
+    on: null,
+  } satisfies Methods<State>,
   path: {
     line: null,
     curve: null,
@@ -114,13 +143,26 @@ export const INC_NAMESPACES = {
     clipRay: 'Segment',
     clipLine: 'Segment',
   } satisfies Methods<GeometryHelpers>,
-} as const satisfies Record<'path' | 'geom', Record<string, Returns>>;
+} as const satisfies Record<'state' | 'path' | 'geom', Record<string, Returns>>;
 
 export const HANDLES: Readonly<Record<HandleKind, HandleSpec>> = {
   Param: {
     methods: {},
     properties: { name: null, value: null, min: null, max: null } satisfies Properties<Param>,
   },
+  Toggle: {
+    methods: {},
+    properties: { name: null, value: null, min: null, max: null, on: null } satisfies Properties<Toggle>,
+  },
+  Choice: {
+    methods: {},
+    properties: { name: null, value: null, min: null, max: null, selected: null } satisfies Properties<Choice>,
+  },
+  ColorParam: {
+    methods: {},
+    properties: { name: null, value: null, min: null, max: null, tone: null } satisfies Properties<ColorParam>,
+  },
+  Dots: { methods: { set: 'self', tone: 'self' } satisfies Methods<Dots>, properties: {} },
   Model: { methods: {}, properties: {}, open: true },
   Stage: {
     methods: {
@@ -132,6 +174,11 @@ export const HANDLES: Readonly<Record<HandleKind, HandleSpec>> = {
       text: 'Text',
       polyline: 'Polyline',
       part: 'argument',
+      drag: 'argument',
+      connector: 'Path',
+      callout: 'Text',
+      repeat: null,
+      dots: 'Dots',
     } satisfies Methods<Stage>,
     properties: { viewBox: null } satisfies Properties<Stage>,
   },

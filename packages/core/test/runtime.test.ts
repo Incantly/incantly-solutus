@@ -49,11 +49,16 @@ describe('scene runtime: mounting', () => {
     expect(runtime.isMounted).toBe(false);
   });
 
-  it('allows at most three parameters', () => {
+  it('allows at most eight controls, or fewer when the host says so', () => {
     const { first } = mount((inc) => {
+      for (const name of ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i']) inc.param(name, { min: 0, max: 1, value: 0 });
+    });
+    expect(first.ui.error?.message).toBe('A figure has at most 8 adjustable parameters');
+    const small = new SceneRuntime({ maxParams: 3 });
+    const update = small.mount((inc) => {
       for (const name of ['a', 'b', 'c', 'd']) inc.param(name, { min: 0, max: 1, value: 0 });
     });
-    expect(first.ui.error?.message).toBe('A figure has at most 3 adjustable parameters');
+    expect(update.ui.error?.message).toBe('A figure has at most 3 adjustable parameters');
   });
 
   it.each([
