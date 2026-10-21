@@ -246,9 +246,11 @@ for (const size of PROFILES) {
       const minutes = perf.frames.reduce((sum, f) => sum + f, 0) / 60_000;
       metrics.scrollLongTasksPerMinute = Number((metrics.scrollLongTasks / Math.max(minutes, 1 / 60)).toFixed(2));
       // Initial gate: dropped-frame rate under 5% during the stress scroll, and no sustained task over 50 ms.
-      // An isolated pause (a major garbage collection on a shared runner) is not sustained: at most one a minute.
+      // An isolated pause (a major garbage collection on a shared runner) is not sustained: about one a
+      // minute is allowed, two at least however short the scroll, and none may freeze the page.
       expect(metrics.scrollDroppedFrameRate).toBeLessThan(0.05);
-      expect(metrics.scrollLongTasksPerMinute).toBeLessThanOrEqual(1);
+      expect(metrics.scrollLongTasks).toBeLessThanOrEqual(Math.max(2, Math.ceil(minutes)));
+      expect(metrics.scrollLongestTaskMs).toBeLessThan(250);
       const stats = await handle(page, (h) => h.scheduler());
       metrics.peakLiveFigures = Math.max(peak.value, stats.peakLive);
       expect(metrics.peakLiveFigures).toBeLessThanOrEqual(3);
