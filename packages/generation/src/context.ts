@@ -39,7 +39,7 @@ Rules for every scene
 1. One model drives everything. Compute every number the learner sees from inc.model. Never type a computed number into a label, readout or sentence.
 2. Every adjustable quantity is an inc.param with the plan's name, bounds and default; at most three. Never write inputs, sliders, buttons, listeners, timers or animation loops.
 3. Declare everything once, at the top level: params, model, stages, elements, parts, inc.onFrame, inc.readout, inc.explain, inc.describe, inc.steps. Callbacks only update what already exists; never create elements inside them.
-4. Build shapes once and move them with at, set, rotate and scale. Rebuild path data only when its shape changes.
+4. Build shapes once and move them with at, set, rotate and scale. Rebuild path data only when its shape changes. Keep every shape inside its stage at every parameter value.
 5. Animate only from the frame's time and dt. A paused redraw has dt = 0 and must still draw the current state. Every parameter value inside its range, including both ends, must draw without errors, NaN or Infinity; guard the plan's singular points.
 6. Colour comes only from tones: lo, mid, hi, lit, faint, a, b, c. Use one lit accent. Never write a colour value.
 7. Show the real thing. Write the actual formula in the source with inc.formula or Math; never call a function that is not in the contract. Name quantities with their units.
