@@ -43,6 +43,8 @@ export default defineConfig([
         { argsIgnorePattern: '^_', varsIgnorePattern: '^_', caughtErrorsIgnorePattern: '^_' },
       ],
       'no-console': ['error', { allow: ['warn', 'error'] }],
+      // Object-literal handles keep their own `this` for chaining, so the owner is aliased by name.
+      '@typescript-eslint/no-this-alias': ['error', { allowedNames: ['runtime', 'graph', 'renderer', 'host'] }],
       eqeqeq: ['error', 'always'],
     },
   },

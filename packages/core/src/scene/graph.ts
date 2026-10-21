@@ -36,6 +36,7 @@ export interface StageRecord {
   readonly viewBox: ViewBox;
   readonly title: string;
   readonly description: string;
+  readonly clip?: ViewBox;
 }
 
 export const ELEMENT_LIMIT = 2000;
@@ -62,7 +63,7 @@ export class SceneGraph {
     return this.elementCount;
   }
 
-  createStage(selector: string, viewBox: ViewBox, title: string, description: string): VNode {
+  createStage(selector: string, viewBox: ViewBox, title: string, description: string, clip?: ViewBox): VNode {
     if (!/^#[A-Za-z][\w-]*$/.test(selector)) {
       throw new SceneApiError(`Stage selector must be an element id such as "#stage", got "${selector}"`);
     }
@@ -76,7 +77,14 @@ export class SceneGraph {
     const id = this.nextId++;
     const node = this.makeNode(id, 'stage', null, 'mid', id);
     this.nodes.set(id, node);
-    const record: StageRecord = { id, selector, viewBox: [x, y, width, height], title, description };
+    const record: StageRecord = {
+      id,
+      selector,
+      viewBox: [x, y, width, height],
+      title,
+      description,
+      ...(clip ? { clip } : {}),
+    };
     this.stages.push(record);
     this.queue.push({ op: 'stage', ...record });
     return node;

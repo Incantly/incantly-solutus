@@ -14,6 +14,8 @@ export type SceneCommand =
       readonly viewBox: ViewBox;
       readonly title: string;
       readonly description: string;
+      /** Optional clip rectangle for the stage's middle layer, e.g. a graph's plot area. */
+      readonly clip?: ViewBox;
     }
   | {
       readonly op: 'create';
