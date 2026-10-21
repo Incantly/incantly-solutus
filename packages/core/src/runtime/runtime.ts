@@ -1301,6 +1301,7 @@ export class SceneRuntime {
       },
       setOwner: (node, part) => runtime.graph.setOwner(node, part),
       now: runtime.options.now ?? (() => Date.now()),
+      paramVersion: () => runtime.paramVersion,
     };
   }
 

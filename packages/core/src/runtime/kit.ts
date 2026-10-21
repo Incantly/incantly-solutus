@@ -61,6 +61,8 @@ export interface KitContext {
   setOwner(node: VNode, part: string | null): void;
   /** Wall-clock milliseconds, for measuring how long drawing takes. */
   now(): number;
+  /** A number that changes whenever a parameter or an edited formula changes. */
+  paramVersion(): number;
 }
 
 export interface ElementLook {
