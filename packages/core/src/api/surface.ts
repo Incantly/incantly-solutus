@@ -16,6 +16,7 @@ import type {
   GraphCurve,
   GraphPoint,
   GraphSegment,
+  GraphMark,
   GraphTrail,
   Handle,
   Inc,
@@ -56,6 +57,7 @@ export type HandleKind =
   | 'GraphSegment'
   | 'GraphArrow'
   | 'GraphTrail'
+  | 'GraphMark'
   | 'Formula'
   | 'Point'
   | 'Line'
@@ -194,17 +196,34 @@ export const HANDLES: Readonly<Record<HandleKind, HandleSpec>> = {
       toX: null,
       toY: null,
       plot: 'Curve',
+      plotX: 'Curve',
+      polar: 'Curve',
       parametric: 'Curve',
+      scatter: 'Curve',
+      bars: 'Curve',
+      histogram: 'Curve',
+      area: 'Curve',
+      between: 'Curve',
+      field: 'Curve',
+      slopes: 'Curve',
+      implicit: 'Curve',
       point: 'GraphPoint',
       segment: 'GraphSegment',
       arrow: 'GraphArrow',
       trail: 'GraphTrail',
       label: 'Text',
+      bracket: 'GraphMark',
+      dimension: 'GraphMark',
+      trace: 'GraphPoint',
+      handle: 'GraphPoint',
+      drag: null,
+      marks: null,
+      crossings: null,
     } satisfies Methods<Graph>,
     properties: { stage: 'Stage' } satisfies Properties<Graph>,
   },
   Curve: {
-    methods: { show: 'self', tone: 'self' } satisfies Methods<GraphCurve>,
+    methods: { show: 'self', tone: 'self', reveal: 'self' } satisfies Methods<GraphCurve>,
     properties: { handle: 'Path' } satisfies Properties<GraphCurve>,
   },
   GraphPoint: {
@@ -222,6 +241,10 @@ export const HANDLES: Readonly<Record<HandleKind, HandleSpec>> = {
   GraphTrail: {
     methods: { add: 'self', clear: 'self' } satisfies Methods<GraphTrail>,
     properties: { handle: 'Polyline' } satisfies Properties<GraphTrail>,
+  },
+  GraphMark: {
+    methods: { between: 'self', text: 'self', show: 'self', tone: 'self' } satisfies Methods<GraphMark>,
+    properties: { handle: 'Path' } satisfies Properties<GraphMark>,
   },
   Formula: {
     methods: { evaluate: null } satisfies Methods<Formula>,

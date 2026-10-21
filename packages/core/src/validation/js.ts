@@ -214,7 +214,31 @@ const MOUNT_ONLY: ReadonlySet<string> = new Set([
 /** Handle methods that create a new element. Created once, then moved. */
 const CREATES_ELEMENTS: Readonly<Partial<Record<HandleKind, ReadonlySet<string>>>> = {
   Stage: new Set(['group', 'path', 'line', 'circle', 'rect', 'text', 'polyline', 'part', 'connector', 'callout', 'repeat', 'dots']),
-  Graph: new Set(['plot', 'parametric', 'point', 'segment', 'arrow', 'trail', 'label']),
+  Graph: new Set([
+    'plot',
+    'plotX',
+    'polar',
+    'parametric',
+    'scatter',
+    'bars',
+    'histogram',
+    'area',
+    'between',
+    'field',
+    'slopes',
+    'implicit',
+    'point',
+    'segment',
+    'arrow',
+    'trail',
+    'label',
+    'bracket',
+    'dimension',
+    'trace',
+    'handle',
+    'marks',
+    'crossings',
+  ]),
 };
 
 /** inc calls whose text callbacks are checked for numbers typed into prose. */

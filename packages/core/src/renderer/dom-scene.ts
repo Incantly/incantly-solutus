@@ -159,7 +159,8 @@ export class SceneDom {
           rect.setAttribute('height', String(h));
           clipPath.append(rect);
           defs.append(clipPath);
-          layers.mid.setAttribute('clip-path', `url(#${clipId})`);
+          // A graph's plotted marks stay inside the plot area as the learner zooms and pans; its axes live on the back layer.
+          for (const layer of ['mid', 'front', 'labels'] as const) layers[layer].setAttribute('clip-path', `url(#${clipId})`);
         }
         host.classList.add('inc-stage-host');
         host.append(svg);

@@ -13,6 +13,8 @@ export interface ViewController {
   readonly orbit: boolean;
   /** Named views the stage toolbar offers. */
   readonly views: readonly string[];
+  /** Who zooms the stage: the kit (`runtime`), or the renderer through its view box when the kit cannot redraw everything. */
+  mode?(): 'runtime' | 'viewbox';
 }
 
 export interface ParamInfo {

@@ -23,7 +23,7 @@ import type {
   Vec2,
 } from '../api/types';
 import { ExpressionError } from '../expr';
-import { DEFAULT_GRAPH_VIEWBOX, Graph2D, plotRect, validateGraphOptions } from '../graph2d/graph';
+import { DEFAULT_GRAPH_VIEWBOX, Graph2D, NUMBER_LINE_VIEWBOX, plotRect, validateGraphOptions } from '../graph2d/graph';
 import type { RuntimeUpdate, ViewAction } from '../protocol/runtime-messages';
 import { SPEEDS, type LoopMode } from '../protocol/runtime-messages';
 import type { ActionView, ErrorPhase, ErrorView, LegendView, ParamView, PredictView, UiState } from '../protocol/ui';
@@ -563,7 +563,7 @@ export class SceneRuntime {
       const controller = this.views.get(stage.id);
       const zoomable = this.stageZoom.get(stage.id) !== false;
       this.graph.setInteraction(stage.id, {
-        zoom: !zoomable ? 'none' : controller ? 'runtime' : 'viewbox',
+        zoom: !zoomable ? 'none' : controller ? (controller.mode?.() ?? 'runtime') : 'viewbox',
         hover: this.hovers.has(stage.id),
         orbit: controller?.orbit ?? false,
         views: controller?.views ?? [],
@@ -1526,8 +1526,9 @@ export class SceneRuntime {
       graph2d(selector: string, options: GraphOptions) {
         runtime.requireMounting('graph2d');
         validateGraphOptions(options);
-        const viewBox = options.viewBox ?? DEFAULT_GRAPH_VIEWBOX;
-        const node = runtime.graph.createStage(selector, viewBox, options.title, options.description ?? '', plotRect(viewBox));
+        const numberLine = options.axes === 'x';
+        const viewBox = options.viewBox ?? (numberLine ? NUMBER_LINE_VIEWBOX : DEFAULT_GRAPH_VIEWBOX);
+        const node = runtime.graph.createStage(selector, viewBox, options.title, options.description ?? '', plotRect(viewBox, numberLine));
         runtime.stageZoom.set(node.id, options.zoom !== false);
         const stage = new StageHandle(runtime.graph, node, viewBox, runtime.parts);
         return new Graph2D(runtime.kitContext(stage, node.id), options, viewBox);

@@ -414,14 +414,57 @@ export interface CurveOptions {
   readonly tone?: Tone;
   readonly samples?: number;
   readonly dashed?: boolean;
+  /** Names the curve in the legend, where the learner can hide it. */
+  readonly label?: string;
+  /** Fill under it with its tone. */
+  readonly fill?: boolean;
 }
 
 export type PlotFunction = ((x: number, time: number) => number) | Formula;
+
+/** Points in data units, or a function of the model that returns them. */
+export type PointsSource = ReadonlyArray<Vec2> | (() => ReadonlyArray<Vec2>);
+
+/** Numbers, or a function of the model that returns them. */
+export type ValuesSource = readonly number[] | (() => readonly number[]);
+
+/** A bound that can follow the model. */
+export type Bound = number | (() => number);
 
 export interface GraphCurve {
   readonly handle: PathHandle;
   show(visible?: boolean): this;
   tone(name: Tone): this;
+  /** Draws only the first fraction of it, from 0 to 1, to animate plotting. */
+  reveal(fraction: number): this;
+}
+
+export interface SeriesOptions {
+  readonly tone?: Tone;
+  readonly label?: string;
+  /** Dot radius for scatter plots, in stage units. */
+  readonly r?: number;
+}
+
+export interface BarOptions extends SeriesOptions {
+  /** Bar width in data units; by default most of the gap between bars. */
+  readonly width?: number;
+}
+
+export interface HistogramOptions extends SeriesOptions {
+  readonly bins: number;
+  /** The range binned; by default the graph's x range. */
+  readonly range?: Vec2;
+  /** Heights as densities (area 1) rather than counts. */
+  readonly density?: boolean;
+}
+
+export interface FieldOptions {
+  readonly tone?: Tone;
+  /** Grid spacing in data units; by default about 16 arrows across. */
+  readonly step?: number;
+  /** Data units of arrow per unit of field; by default arrows are scaled to fit. */
+  readonly scale?: number;
 }
 
 export interface GraphPoint {
@@ -451,11 +494,34 @@ export interface GraphTrail {
   clear(): this;
 }
 
+/** A bracket or a dimension line with its text, in data units. */
+export interface GraphMark {
+  readonly handle: PathHandle;
+  between(x1: number, y1: number, x2: number, y2: number): this;
+  text(value: Readable): this;
+  show(visible?: boolean): this;
+  tone(name: Tone): this;
+}
+
+export interface HandleOptions {
+  /** A parameter name to drag, or a fixed number. */
+  readonly x: string | number;
+  readonly y: string | number;
+  readonly tone?: Tone;
+  readonly r?: number;
+  /** What the learner drags, for the hint and screen readers. */
+  readonly label?: string;
+}
+
 export interface Graph {
   readonly stage: Stage;
   toX(x: number): number;
   toY(y: number): number;
   plot(fn: PlotFunction, options?: CurveOptions): GraphCurve;
+  /** x = f(y). */
+  plotX(fn: (y: number, time: number) => number, options?: CurveOptions): GraphCurve;
+  /** r = f(theta), theta from `from` to `to` (default a full turn). */
+  polar(fn: (theta: number, time: number) => number, options?: CurveOptions & { readonly from?: number; readonly to?: number }): GraphCurve;
   parametric(
     fx: (t: number) => number,
     fy: (t: number) => number,
@@ -463,11 +529,37 @@ export interface Graph {
     t1: number,
     options?: CurveOptions,
   ): GraphCurve;
+  scatter(points: PointsSource, options?: SeriesOptions): GraphCurve;
+  /** Bars from y = 0 to each point's y, centred on its x. */
+  bars(points: PointsSource, options?: BarOptions): GraphCurve;
+  histogram(values: ValuesSource, options: HistogramOptions): GraphCurve;
+  /** The area between y = f(x) and y = 0 from `from` to `to`. */
+  area(fn: PlotFunction, from: Bound, to: Bound, options?: CurveOptions): GraphCurve;
+  /** The region between two curves from `from` to `to`. */
+  between(f: PlotFunction, g: PlotFunction, from: Bound, to: Bound, options?: CurveOptions): GraphCurve;
+  /** Arrows of a vector field. */
+  field(fn: (x: number, y: number) => Vec2, options?: FieldOptions): GraphCurve;
+  /** Short segments with slope dy/dx = f(x, y). */
+  slopes(fn: (x: number, y: number) => number, options?: FieldOptions): GraphCurve;
+  /** The curve F(x, y) = 0; with fill, the region where F < 0 is shaded. */
+  implicit(fn: (x: number, y: number) => number, options?: CurveOptions): GraphCurve;
   point(x: number, y: number, options?: { readonly tone?: Tone; readonly r?: number }): GraphPoint;
   segment(x1: number, y1: number, x2: number, y2: number, options?: CurveOptions): GraphSegment;
   arrow(x: number, y: number, dx: number, dy: number, options?: CurveOptions): GraphArrow;
   trail(options?: { readonly tone?: Tone; readonly max?: number }): GraphTrail;
   label(x: number, y: number, value: Readable, options?: ElementOptions): TextHandle;
+  bracket(x1: number, y1: number, x2: number, y2: number, text?: Readable, options?: { readonly tone?: Tone }): GraphMark;
+  dimension(x1: number, y1: number, x2: number, y2: number, text?: Readable, options?: { readonly tone?: Tone }): GraphMark;
+  /** A point the learner can drag along a curve, showing its coordinates. Follows the pointer on hover. */
+  trace(curve: GraphCurve, options?: { readonly tone?: Tone; readonly digits?: number }): GraphPoint;
+  /** A point the learner drags to set parameters. */
+  handle(options: HandleOptions): GraphPoint;
+  /** Lets the learner drag an item; `map` gets the pointer in data units. */
+  drag(item: GraphPoint | GraphSegment | GraphArrow | GraphCurve | Handle, map: DragMap, options?: { readonly label?: string }): void;
+  /** Marks roots and turning points of a curve. */
+  marks(curve: GraphCurve, options?: { readonly roots?: boolean; readonly extrema?: boolean; readonly tone?: Tone }): void;
+  /** Marks where two curves cross. */
+  crossings(a: GraphCurve, b: GraphCurve, options?: { readonly tone?: Tone }): void;
 }
 
 // ---------------------------------------------------------------------------
