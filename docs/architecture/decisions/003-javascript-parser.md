@@ -9,11 +9,11 @@
 
 ## Decision
 
-Use [acorn](https://github.com/acornjs/acorn) with acorn-walk, pinned to an exact version.
+Use [acorn](https://github.com/acornjs/acorn), pinned to an exact version.
 
 - Parse as a script with `ecmaVersion: 2020` and `locations: true`.
 - The same build runs in Node and in the browser.
-- The validator walks the ESTree syntax tree with an allow-list: any node type it does not recognise is rejected.
+- The validator walks the ESTree syntax tree itself, with one `switch` per node kind: any node type it does not handle is rejected. acorn-walk is not used, because a generic walker visits node types the allow-list never names.
 
 ## Consequences
 

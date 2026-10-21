@@ -10,5 +10,8 @@
   },
   "devDependencies": {
     "mathjs": "^15.2.0"
+  },
+  "dependencies": {
+    "acorn": "8.19.0"
   }
 }

@@ -25,6 +25,7 @@ import type {
   Segment,
   Stage,
   TextHandle,
+  Tone,
 } from './types';
 
 export const SDK_VERSION = '0.1.0';
@@ -241,6 +242,11 @@ export const ALLOWED_NUMBER = [
   'POSITIVE_INFINITY',
   'NEGATIVE_INFINITY',
 ] as const;
+
+/** Theme tones, the only way a scene picks a colour. */
+export const TONES = ['lo', 'mid', 'hi', 'lit', 'faint', 'a', 'b', 'c'] as const satisfies readonly Tone[];
+// Fails to compile if a tone is added to the type but not to the list.
+const _everyTone: Exclude<Tone, (typeof TONES)[number]> extends never ? true : false = true;
 
 /** Free identifiers a scene may reference besides its own declarations. */
 export const ALLOWED_GLOBALS = ['inc', 'Math', 'Number', 'isFinite', 'isNaN', 'Infinity', 'NaN', 'undefined'] as const;
