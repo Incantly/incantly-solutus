@@ -337,17 +337,17 @@ export class TablesPanel {
     tables.forEach((table, i) => {
       const body = this.element.querySelectorAll('table')[i]?.querySelector('tbody');
       if (!body) return;
-      const rows = body.rows;
       for (let r = 0; r < table.rows.length; r++) {
-        const tr = rows[r] ?? body.insertRow();
+        let tr = body.children[r];
+        if (!tr) tr = body.appendChild(this.doc.createElement('tr'));
         const cells = table.rows[r]!;
         for (let c = 0; c < table.columns.length; c++) {
-          const td = tr.cells[c] ?? tr.insertCell();
+          const td = tr.children[c] ?? tr.appendChild(this.doc.createElement('td'));
           const text = cells[c] ?? '';
           if (td.textContent !== text) td.textContent = text;
         }
       }
-      while (body.rows.length > table.rows.length) body.deleteRow(-1);
+      while (body.children.length > table.rows.length) body.lastElementChild?.remove();
     });
     this.element.hidden = tables.length === 0;
   }

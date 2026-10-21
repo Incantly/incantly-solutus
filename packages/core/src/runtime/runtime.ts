@@ -270,6 +270,8 @@ export class SceneRuntime {
     if (this.lifecycle === 'mounted') {
       this.publishInteractions();
       for (const hook of this.resetHooks) this.guard('hook', hook);
+      // What the scene set while starting is where it starts, not a change for listeners.
+      this.changed.clear();
     }
     const restoreStep = this.options.step;
     if (this.lifecycle === 'mounted' && this.stepList && !this.restoredStep && isStepIndex(restoreStep, this.stepList.length)) {
