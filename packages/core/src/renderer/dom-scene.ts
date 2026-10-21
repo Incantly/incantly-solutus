@@ -1,8 +1,10 @@
 import type { Layer } from '../api/types';
-import { RENDERABLE_ATTRIBUTES, type SceneCommand } from '../protocol/scene-commands';
+import { RENDERABLE_ATTRIBUTES, type ElementKind, type SceneCommand } from '../protocol/scene-commands';
 
 export const SVG_NS = 'http://www.w3.org/2000/svg';
 const LAYERS: readonly Layer[] = ['back', 'mid', 'front', 'labels'];
+/** The only elements a scene can create, whatever a Worker sends. */
+const KINDS: ReadonlySet<string> = new Set(['g', 'path', 'line', 'circle', 'rect', 'text', 'polyline'] satisfies ElementKind[]);
 
 interface StageDom {
   readonly svg: SVGSVGElement;
@@ -100,6 +102,7 @@ export class SceneDom {
         return;
       }
       case 'create': {
+        if (!KINDS.has(command.kind) || this.elements.has(command.id)) return;
         const stage = this.stages.get(command.parent);
         const parent = stage ? stage.layers[command.layer] : this.elements.get(command.parent);
         if (!parent) return;

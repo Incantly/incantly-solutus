@@ -62,6 +62,7 @@ export const THEME_CSS = `
     --inc-danger: #ff8787;
   }
 }
+html.inc-frame, html.inc-frame body { margin: 0; padding: 0; background: transparent; }
 .inc-figure *, .inc-figure *::before, .inc-figure *::after { box-sizing: border-box; }
 .inc-figure [hidden] { display: none !important; }
 .inc-idea { margin: 0 0 8px; font-weight: 600; }
