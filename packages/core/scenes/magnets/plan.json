@@ -1,0 +1,37 @@
+{
+  "concept": "bar magnets",
+  "idea": "Opposite poles pull together and like poles push apart, and the force grows quickly as the gap between the magnets closes.",
+  "kind": "diagram",
+  "size": "quick",
+  "capabilities": ["graph2d", "controls", "readout", "explain", "describe", "steps"],
+  "parameters": [
+    {
+      "name": "gap",
+      "unit": "cm",
+      "min": 1,
+      "max": 8,
+      "default": 4,
+      "why": "From almost touching to far enough apart that the pull is weak; both magnets stay on the stage."
+    },
+    {
+      "name": "flip",
+      "min": 0,
+      "max": 1,
+      "default": 0,
+      "why": "Turns the right magnet round, so like poles face each other.",
+      "control": "toggle"
+    }
+  ],
+  "model": {
+    "inputs": ["gap", "flip"],
+    "outputs": [
+      { "name": "force", "dependsOn": ["gap", "flip"] },
+      { "name": "half", "dependsOn": ["gap", "flip"] },
+      { "name": "repel", "dependsOn": ["flip"] }
+    ]
+  },
+  "parts": ["Left magnet", "Right magnet", "Field"],
+  "moves": "Nothing moves on its own; the right magnet slides as the gap changes and its poles swap when it flips, with the field arrows following.",
+  "steps": ["The field runs from N to S", "Opposite poles attract", "Like poles repel", "Closer means much stronger"],
+  "singularPoints": []
+}
