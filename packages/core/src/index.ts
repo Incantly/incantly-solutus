@@ -41,7 +41,8 @@ export type { Diagnostic, SceneFragments, SceneLimits, SceneValidation, Validate
 export { compileIsolated, ISOLATED_SCRIPT_NAME, probeScene } from './probe';
 export type { IsolatedScene, ProbeCheck, ProbeError, ProbeFailure, ProbeOptions, ProbeReport, ProbeSpec, ProbeStats, ScriptEvaluator } from './probe';
 
-export type { PlanOutput, PlanParameter, SceneKind, ScenePlan, SingularPoint } from './protocol/plan';
+export type { ControlKind, PlanOutput, PlanParameter, SceneKind, ScenePlan, SceneSize, SingularPoint, SizeBudget } from './protocol/plan';
+export { SCENE_SIZES, SIZE_BUDGETS } from './protocol/plan';
 
 export { BRIDGE_VERSION } from './protocol/bridge';
 export type { FrameMessage, HostMessage } from './protocol/bridge';

@@ -17,6 +17,8 @@ export interface ProbeSpec {
   readonly steps?: number;
   /** Parameter states where the model is singular, such as an object at a lens's focal length. */
   readonly singularPoints?: ReadonlyArray<Readonly<Record<string, number>>>;
+  /** Drawn elements the plan's size allows. */
+  readonly elements?: number;
 }
 
 export interface ProbeOptions {
@@ -239,7 +241,7 @@ class Probe {
     if (nonFinite) this.fail({ check: 'numbers', message: nonFinite, values: this.defaults, playing: true, time: runtime.time });
 
     this.elements = runtime.graph.size;
-    const budget = this.options.elementBudget ?? 300;
+    const budget = this.options.elementBudget ?? this.options.spec?.elements ?? 300;
     if (runtime.graph.size > budget) {
       this.fail({ check: 'budget', message: `The scene draws ${runtime.graph.size} elements; the budget is ${budget}` });
     }
