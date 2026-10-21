@@ -3,6 +3,7 @@ import { GenerationClient, Telemetry, figureGenerator, type TelemetryEvent } fro
 import { FigureGeneration, FigureNode, MemoryFigureStore, flushFigures, newFigureId, type FigureGenerate, type FigureGenerationResult, type FigureRequest, type GenerationStageView, type SkeletonView } from '@incantly/tiptap';
 import { Editor, type JSONContent } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
+import { clearDebug, loadDebug, recordDebug, recordingFetch } from './debug-log';
 
 interface Turn { editor: Editor; readonly host: HTMLElement; readonly generate: FigureGenerate }
 interface ChatMessage {
@@ -81,6 +82,13 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
     </div>
     <div class="chat-list"></div>
     <div class="sidebar-footer">
+      <button class="debug-btn">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="2" y="4" width="20" height="16" rx="2"></rect>
+          <path d="M7 9l3 3-3 3M13 15h4"></path>
+        </svg>
+        Debug log
+      </button>
       <button class="settings-btn">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <circle cx="12" cy="12" r="3"></circle>
@@ -135,6 +143,82 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
     </div>
   `;
   root.append(settingsModal);
+
+  const debugModal = document.createElement('div');
+  debugModal.className = 'debug-modal';
+  debugModal.hidden = true;
+  debugModal.innerHTML = `
+    <div class="debug-content">
+      <div class="debug-header">
+        <h2>Debug log</h2>
+        <button class="close-debug-btn">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+      <div class="debug-toolbar">
+        <button type="button" class="debug-copy-btn">Copy all as JSON</button>
+        <button type="button" class="debug-clear-btn">Clear</button>
+      </div>
+      <div class="debug-list"></div>
+    </div>
+  `;
+  root.append(debugModal);
+
+  const debugBtn = sidebar.querySelector('.debug-btn') as HTMLButtonElement;
+  const closeDebugBtn = debugModal.querySelector('.close-debug-btn') as HTMLButtonElement;
+  const debugList = debugModal.querySelector('.debug-list') as HTMLElement;
+
+  function renderDebugList(): void {
+    const entries = [...loadDebug()].reverse();
+    debugList.replaceChildren(...entries.map((entry) => {
+      const item = document.createElement('details');
+      item.className = `debug-entry is-${entry.kind}`;
+      const summary = document.createElement('summary');
+      summary.textContent = `${entry.at.slice(11, 19)} ${entry.kind} ${entry.label}${entry.status ? ` (HTTP ${entry.status})` : ''}`;
+      const pre = document.createElement('pre');
+      const payload = Object.fromEntries(Object.entries(entry).filter(([k]) => !['at', 'kind', 'label'].includes(k)));
+      pre.textContent = JSON.stringify(payload, null, 2);
+      item.append(summary, pre);
+      return item;
+    }));
+    if (entries.length === 0) {
+      const empty = document.createElement('p');
+      empty.className = 'debug-empty';
+      empty.textContent = 'Nothing recorded yet. Send a prompt and the request, answer and errors will appear here.';
+      debugList.append(empty);
+    }
+  }
+
+  debugBtn.addEventListener('click', () => {
+    renderDebugList();
+    debugModal.hidden = false;
+  });
+  closeDebugBtn.addEventListener('click', () => {
+    debugModal.hidden = true;
+  });
+  debugModal.querySelector('.debug-clear-btn')?.addEventListener('click', () => {
+    clearDebug();
+    renderDebugList();
+  });
+  debugModal.querySelector('.debug-copy-btn')?.addEventListener('click', async (event) => {
+    const button = event.target as HTMLButtonElement;
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(loadDebug(), null, 2));
+      button.textContent = 'Copied ✓';
+      setTimeout(() => {
+        button.textContent = 'Copy all as JSON';
+      }, 1500);
+    } catch (error) {
+      button.textContent = `Copy failed: ${String(error).slice(0, 60)}`;
+    }
+  });
+  setInterval(() => {
+    if (!debugModal.hidden) renderDebugList();
+  }, 1500);
+
 
   const mainContent = document.createElement('main');
   mainContent.className = 'main-content';
@@ -391,7 +475,7 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
 
   function useClient(baseUrl: string, _label: string): void {
     token = null;
-    client = new GenerationClient({ baseUrl, token: async () => (token ??= ((await (await fetch('/api/dev/token')).json()) as { token: string }).token) });
+    client = new GenerationClient({ baseUrl, token: async () => (token ??= ((await (await fetch('/api/dev/token')).json()) as { token: string }).token), fetch: recordingFetch() });
     inputBox.disabled = false;
     sendBtn.disabled = !inputBox.value.trim();
   }
@@ -480,6 +564,7 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
     const request = inputBox.value.trim();
     if (!request || generationInFlight) return;
     setGenerationBusy(true);
+    recordDebug({ kind: 'prompt', label: 'learner', body: { prompt: request } });
 
     try {
 
@@ -705,6 +790,7 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
         const node = editor.getJSON().content?.find((child) => child.type === 'incantlyFigure');
         activeChat.messages.push({ role: 'assistant', content: 'Generated interactive figure.', ...(node ? { figure: node } : {}) });
         saveChats();
+        recordDebug({ kind: 'done', label: 'figure', body: { concept: result.figure.concept, generationId: result.figure.generationId ?? null } });
       } else {
         // The fallback is the outcome: it never reaches the 'checking' stage,
         // so reveal the validation stage and stop the pulsing indicators —
@@ -721,6 +807,7 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
         previewCopy.textContent = result.message;
         activeChat.messages.push({ role: 'assistant', content: result.message });
         saveChats();
+        recordDebug({ kind: 'error', label: 'fallback', message: result.message });
       }
       return result;
     };
@@ -735,6 +822,8 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
         signal: new AbortController().signal,
       });
     } catch (error) {
+      const record = error as Error;
+      recordDebug({ kind: 'error', label: 'generation-run', message: String(error), body: { stack: String(record.stack ?? '') } });
       settleStages(planStage, sceneStage, [planOutput, sceneOutput]);
       validationStage.hidden = false;
       validationStatus.textContent = `✗ ${error instanceof Error ? error.message : String(error)}`;
@@ -760,6 +849,7 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
       // see why instead of a composer that silently swallows the send.
       const message = error instanceof Error ? error.message : String(error);
       showAssistantError(message);
+      recordDebug({ kind: 'error', label: 'send', message });
       const chat = chats.find((c) => c.id === currentChatId);
       if (chat) {
         chat.messages.push({ role: 'assistant', content: message });

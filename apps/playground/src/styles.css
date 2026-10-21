@@ -1008,10 +1008,6 @@ body {
   opacity: 0.5;
 }
 
-.streaming-text.finished::after {
-  content: none;
-}
-
 .streaming-text.finished:empty::before {
   content: 'No text arrived from the model.';
 }
@@ -1021,6 +1017,10 @@ body {
   animation: blink 1s infinite;
   color: Highlight;
   font-weight: 300;
+}
+
+.streaming-text.finished::after {
+  content: none;
 }
 
 @keyframes blink {
@@ -1075,4 +1075,147 @@ body {
   .mobile-menu-btn {
     display: block;
   }
+}
+
+.debug-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: CanvasText;
+  cursor: pointer;
+  font-size: 0.9rem;
+  transition: background 0.15s ease;
+}
+
+.debug-btn:hover {
+  background: var(--hover-bg, rgba(0, 0, 0, 0.05));
+}
+
+.debug-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1001;
+}
+
+.debug-modal[hidden] {
+  display: none;
+}
+
+.debug-content {
+  background: Canvas;
+  border-radius: 12px;
+  width: 92%;
+  max-width: 720px;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+}
+
+.debug-header {
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.debug-header h2 {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+.close-debug-btn {
+  border: none;
+  background: transparent;
+  color: CanvasText;
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  opacity: 0.6;
+  transition: opacity 0.15s ease;
+}
+
+.close-debug-btn:hover {
+  opacity: 1;
+}
+
+.debug-toolbar {
+  display: flex;
+  gap: 8px;
+  padding: 12px 24px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.debug-toolbar button {
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: CanvasText;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.debug-toolbar button:hover {
+  background: var(--hover-bg, rgba(0, 0, 0, 0.05));
+}
+
+.debug-list {
+  overflow-y: auto;
+  padding: 16px 24px;
+}
+
+.debug-entry {
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+
+.debug-entry summary {
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 600;
+  user-select: none;
+}
+
+.debug-entry.is-error summary {
+  color: #b3261e;
+}
+
+.debug-entry.is-refused summary,
+.debug-entry.is-failed summary {
+  color: #a01e14;
+}
+
+.debug-entry pre {
+  margin: 0;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border-color);
+  max-height: 280px;
+  overflow: auto;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.debug-empty {
+  color: CanvasText;
+  opacity: 0.6;
+  text-align: center;
+  padding: 24px 0;
 }
