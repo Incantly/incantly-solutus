@@ -33,7 +33,7 @@ export const DEFAULT_MAX_TOKENS: Readonly<Record<CallPurpose, number>> = { plan:
 /** The longest a generation may take, from request to a checked scene. */
 export const DEFAULT_DEADLINE_MS = 25_000;
 /** Time to keep in hand for validation, the probe and delivery after the last model call. */
-const DELIVERY_MS = 1_500;
+export const DELIVERY_MS = 1_500;
 
 export interface GeneratorOptions {
   readonly model: ModelClient;
@@ -262,7 +262,7 @@ export class Generator {
   private deadlineSignal(state: GenerationState, signal?: AbortSignal): AbortSignal | undefined {
     const remaining = this.remainingMs(state);
     if (!Number.isFinite(remaining)) return signal;
-    const timeout = AbortSignal.timeout(Math.max(1, remaining - DELIVERY_MS));
+    const timeout = AbortSignal.timeout(Math.max(1, Math.floor(remaining - DELIVERY_MS)));
     return signal ? AbortSignal.any([signal, timeout]) : timeout;
   }
 

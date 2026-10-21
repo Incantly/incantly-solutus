@@ -19,6 +19,9 @@ const LAUNCH: ReadonlyArray<readonly [id: string, concept: string, phrasings: re
   ['derivative', 'derivative as slope', ['Show the derivative as the slope of the tangent line.', 'Help me understand what a derivative means on a graph.']],
 ];
 
+/** Each launch concept's reviewed scene, withheld when the bench measures a concept the library lacks. */
+const EXAMPLES: Readonly<Record<string, string>> = { sine: 'sine-wave', lens: 'thin-lens' };
+
 export const LAUNCH_REQUESTS: readonly BenchRequest[] = LAUNCH.flatMap(([id, concept, phrasings]) =>
-  phrasings.map((prompt, i) => ({ id: `${id}-${i + 1}`, concept, request: { prompt } })),
+  phrasings.map((prompt, i) => ({ id: `${id}-${i + 1}`, concept, request: { prompt }, example: EXAMPLES[id] ?? id })),
 );
