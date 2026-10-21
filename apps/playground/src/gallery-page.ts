@@ -6,24 +6,15 @@ interface GalleryCard {
   readonly tag: string;
 }
 
-/** The four showcase prompts first, then the launch set from the PRD (17.8). */
+/**
+ * The gallery cards. One example is kept so the page stays a working
+ * reference; add the real gallery here as implementations land — each
+ * entry needs a short title, a tag for the search, and the exact
+ * learner prompt. Cars, engines, planes and the other showcase prompts
+ * are intentionally left out until their generations exist.
+ */
 const CARDS: readonly GalleryCard[] = [
-  { title: 'Bicycle drive', tag: '3D mechanism', prompt: 'A highly detailed 3D animation of a bicycle, showing how the pedals, chain, gears and wheels work together.' },
-  { title: 'How a PC works', tag: '3D', prompt: 'A 3D figure that explains the way a PC works: the CPU, RAM, storage and data flow between them.' },
   { title: 'Tones into one waveform', tag: 'Waves', prompt: 'How several pure tones with different frequencies combine into one waveform, with a control for how many tones are added.' },
-  { title: 'Car engine in detail', tag: '3D mechanism', prompt: 'A complex 3D animation of a car engine in detail: pistons, crankshaft, cylinders, valves and the four-stroke cycle, in order.' },
-  { title: 'Projectile motion', tag: 'Physics', prompt: 'Explain projectile motion for a physics student.' },
-  { title: 'Buoyancy', tag: 'Physics', prompt: 'Explain why some things float and others sink, for a physics student.' },
-  { title: 'Bar magnets', tag: 'Physics', prompt: 'Show the magnetic field of two bar magnets attracting and repelling each other.' },
-  { title: 'Sine wave', tag: 'Maths', prompt: 'Draw a sine wave whose amplitude, frequency and phase I can control.' },
-  { title: 'Simple pendulum', tag: 'Physics', prompt: 'Explain the motion of a simple pendulum and how its period depends on length.' },
-  { title: 'Spring-mass oscillator', tag: 'Physics', prompt: 'Explain a spring-mass oscillator: displacement, velocity and energy over time.' },
-  { title: "Ohm's law circuit", tag: 'Electricity', prompt: "Show Ohm's law on a simple circuit: change voltage and resistance, watch the current." },
-  { title: 'Lens ray diagram', tag: 'Optics', prompt: 'Explain how a convex lens forms an image with a ray diagram I can change.' },
-  { title: 'Titration curve', tag: 'Chemistry', prompt: 'Draw a titration curve and show how the pH changes as acid is added to a base.' },
-  { title: 'Ideal gas particles', tag: 'Physics', prompt: 'Show ideal gas particles bouncing in a box as I change temperature and volume.' },
-  { title: 'Normal distribution', tag: 'Statistics', prompt: 'Explain the normal distribution and what its mean and standard deviation do.' },
-  { title: 'Derivative as slope', tag: 'Maths', prompt: 'Explain the derivative as the slope of a curve at a point.' },
 ];
 
 export function mountGalleryPage(root: HTMLElement): void {
