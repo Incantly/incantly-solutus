@@ -6,6 +6,7 @@
  * clauses make the TypeScript compiler fail if this file and `types.ts` drift.
  */
 import type {
+  Calculus,
   Choice,
   ColorParam,
   Dots,
@@ -21,17 +22,21 @@ import type {
   Handle,
   Inc,
   Line,
+  MotionHelpers,
   Param,
   PathHandle,
   PathHelpers,
   Point,
   PolylineHandle,
   Segment,
+  ShapeHelpers,
   Stage,
   State,
   TextHandle,
   Toggle,
   Tone,
+  Units,
+  VectorHelpers,
 } from './types';
 
 export const SDK_VERSION = '0.1.0';
@@ -121,6 +126,8 @@ export const INC_FUNCTIONS = {
   formula: 'Formula',
   random: null,
   tween: null,
+  sym: null,
+  chem: null,
 } as const satisfies Methods<Inc>;
 
 export const INC_NAMESPACES = {
@@ -145,7 +152,67 @@ export const INC_NAMESPACES = {
     clipRay: 'Segment',
     clipLine: 'Segment',
   } satisfies Methods<GeometryHelpers>,
-} as const satisfies Record<'state' | 'path' | 'geom', Record<string, Returns>>;
+  calc: {
+    derivative: null,
+    integral: null,
+    root: null,
+    roots: null,
+    extrema: null,
+    interp: null,
+    euler: null,
+    rk4: null,
+    normal: null,
+    normalCdf: null,
+    clamp: null,
+    lerp: null,
+    map: null,
+  } satisfies Methods<Calculus>,
+  vec: {
+    add: null,
+    sub: null,
+    scale: null,
+    dot: null,
+    cross: null,
+    length: null,
+    normalize: null,
+    rotate: null,
+    angle: null,
+    lerp: null,
+    rotA: null,
+    mul: null,
+    apply: null,
+  } satisfies Methods<VectorHelpers>,
+  units: {
+    format: null,
+    convert: null,
+  } satisfies Methods<Units>,
+  motion: {
+    follow: null,
+    spring: null,
+    tour: null,
+    ease: null,
+    wave: null,
+  } satisfies Methods<MotionHelpers>,
+  shapes: {
+    spring: null,
+    zigzag: null,
+    coil: null,
+    wave: null,
+    gear: null,
+    hull: null,
+    lens: null,
+    battery: null,
+    capacitor: null,
+    ground: null,
+    bulb: null,
+    switch: null,
+    tank: null,
+    brace: null,
+    blob: null,
+    polygon: null,
+    regular: null,
+  } satisfies Methods<ShapeHelpers>,
+} as const satisfies Record<'state' | 'path' | 'geom' | 'calc' | 'vec' | 'units' | 'motion' | 'shapes', Record<string, Returns>>;
 
 export const HANDLES: Readonly<Record<HandleKind, HandleSpec>> = {
   Param: {

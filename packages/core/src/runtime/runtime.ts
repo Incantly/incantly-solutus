@@ -29,6 +29,12 @@ import { SPEEDS, type LoopMode } from '../protocol/runtime-messages';
 import type { ActionView, ErrorPhase, ErrorView, LegendView, ParamView, PredictView, UiState } from '../protocol/ui';
 import { EMPTY_UI } from '../protocol/ui';
 import { SceneApiError } from '../scene/errors';
+import { calculus } from '../kit/calc';
+import { motion } from '../kit/motion';
+import { shapes } from '../kit/shapes';
+import { chem, sym } from '../kit/sym';
+import { units } from '../kit/units';
+import { vectors } from '../kit/vec';
 import { geometry } from '../scene/geometry';
 import { SceneGraph, type GraphServices, type VNode } from '../scene/graph';
 import { PartRegistry, StageHandle, formatReadable } from '../scene/handles';
@@ -1566,8 +1572,15 @@ export class SceneRuntime {
         if (runtime.tweens.length >= 16) throw new SceneApiError('Too many queued tweens');
         runtime.tweens.push({ options, elapsed: 0 });
       },
+      sym,
+      chem,
       path: this.path,
       geom: geometry,
+      calc: calculus,
+      vec: vectors,
+      units,
+      motion,
+      shapes,
     };
     return Object.freeze(inc);
   }

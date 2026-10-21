@@ -1123,12 +1123,12 @@ class JsValidator {
     }
     switch (object.t) {
       case 'inc': {
-        if (name === 'path' || name === 'geom') return { t: 'ns', ns: name };
+        if (Object.hasOwn(INC_NAMESPACES, name)) return { t: 'ns', ns: name as NamespaceName };
         if (name in INC_FUNCTIONS) return FUNCTION;
-        const suggestion = closest(name, [...Object.keys(INC_FUNCTIONS), 'path', 'geom']);
+        const suggestion = closest(name, [...Object.keys(INC_FUNCTIONS), ...Object.keys(INC_NAMESPACES)]);
         this.report(
           'unknown-sdk-call',
-          `inc.${name} is not part of the SDK${suggestion ? `; did you mean inc.${suggestion}?` : `. Available: ${listOf(Object.keys(INC_FUNCTIONS))}`}`,
+          `inc.${name} is not part of the SDK${suggestion ? `; did you mean inc.${suggestion}?` : `. Available: ${listOf([...Object.keys(INC_FUNCTIONS), ...Object.keys(INC_NAMESPACES)])}`}`,
           at.start,
         );
         return UNKNOWN;

@@ -370,6 +370,141 @@ export interface GeometryHelpers {
 }
 
 // ---------------------------------------------------------------------------
+// Kit helpers: numbers, vectors, units, motion, shapes and symbols
+// ---------------------------------------------------------------------------
+
+/** A turning point of a function. */
+export interface Extremum {
+  readonly x: number;
+  readonly y: number;
+  readonly kind: 'max' | 'min';
+}
+
+/** dy/dt for an ODE step: one rate per value of y. */
+export type Rate = (t: number, y: readonly number[]) => readonly number[];
+
+/** inc.calc: numerical tools, so scenes never hand-roll them. */
+export interface Calculus {
+  /** The slope of f at x. */
+  derivative(f: (x: number) => number, x: number, h?: number): number;
+  /** The area under f from a to b (Simpson's rule, n intervals). */
+  integral(f: (x: number) => number, a: number, b: number, n?: number): number;
+  /** One root of f in [a, b] where f changes sign, or null. */
+  root(f: (x: number) => number, a: number, b: number): number | null;
+  /** Every root of f in [a, b], scanning n intervals. */
+  roots(f: (x: number) => number, a: number, b: number, n?: number): number[];
+  /** Every maximum and minimum of f in [a, b]. */
+  extrema(f: (x: number) => number, a: number, b: number, n?: number): Extremum[];
+  /** Linear interpolation in a table; xs increasing. */
+  interp(xs: readonly number[], ys: readonly number[], x: number): number;
+  /** One Euler step of dy/dt = f(t, y); returns the new y. */
+  euler(f: Rate, t: number, y: readonly number[], dt: number): number[];
+  /** One Runge-Kutta (RK4) step of dy/dt = f(t, y); returns the new y. */
+  rk4(f: Rate, t: number, y: readonly number[], dt: number): number[];
+  /** The normal distribution's density. */
+  normal(x: number, mean?: number, sd?: number): number;
+  /** The normal distribution's cumulative probability. */
+  normalCdf(x: number, mean?: number, sd?: number): number;
+  clamp(x: number, lo: number, hi: number): number;
+  lerp(a: number, b: number, k: number): number;
+  /** Maps x from [a0, a1] to [b0, b1]. */
+  map(x: number, a0: number, a1: number, b0: number, b1: number): number;
+}
+
+/** A 3x3 matrix: nine numbers, row by row. */
+export type Mat3 = readonly [number, number, number, number, number, number, number, number, number];
+
+/** inc.vec: vectors as plain arrays of 2 or 3 numbers; every call returns a new array. */
+export interface VectorHelpers {
+  add(a: readonly number[], b: readonly number[]): number[];
+  sub(a: readonly number[], b: readonly number[]): number[];
+  scale(a: readonly number[], k: number): number[];
+  dot(a: readonly number[], b: readonly number[]): number;
+  /** The cross product of 3D vectors. */
+  cross(a: Vec3, b: Vec3): Vec3;
+  /** For 2D vectors, the z component of the cross product. */
+  cross(a: Vec2, b: Vec2): number;
+  length(a: readonly number[]): number;
+  normalize(a: readonly number[]): number[];
+  /** Rotates a 2D vector counter-clockwise by radians. */
+  rotate(a: Vec2, radians: number): Vec2;
+  /** The angle between two vectors in radians, 0 to pi. */
+  angle(a: readonly number[], b: readonly number[]): number;
+  lerp(a: readonly number[], b: readonly number[], k: number): number[];
+  /** The rotation by radians about an axis. */
+  rotA(axis: Vec3, radians: number): Mat3;
+  mul(a: Mat3, b: Mat3): Mat3;
+  apply(m: Mat3, v: Vec3): Vec3;
+}
+
+/** inc.units: values with units for display, and conversions within one quantity. */
+export interface Units {
+  /** format(12.345, 'm/s') is "12.35 m/s"; format(30, '°', 0) is "30°". */
+  format(value: number, unit?: string, digits?: number): string;
+  /** convert(100, 'C', 'F') is 212. Knows SI and common units of length, time, angle, mass, force, energy, power, pressure, speed, temperature, volume, frequency, current, voltage, resistance, amount and concentration. */
+  convert(value: number, from: string, to: string): number;
+}
+
+export interface SpringOptions {
+  readonly stiffness?: number;
+  readonly damping?: number;
+}
+
+export interface TourOptions {
+  /** Seconds to hold each value. */
+  readonly hold?: number;
+  /** Seconds to move to the next. */
+  readonly move?: number;
+  readonly ease?: Ease;
+}
+
+/** inc.motion: calm motion as pure functions of time, so it pauses with the figure. */
+export interface MotionHelpers {
+  /** Moves current toward target, closing half the gap every halfLife seconds. */
+  follow(current: number, target: number, dt: number, halfLife?: number): number;
+  /** A damped spring toward target; returns [position, velocity]. */
+  spring(position: number, velocity: number, target: number, dt: number, options?: SpringOptions): Vec2;
+  /** An idle tour: holds each value, then eases to the next, looping. */
+  tour(time: number, values: readonly number[], options?: TourOptions): number;
+  /** Eases k from [0, 1]. */
+  ease(k: number, name?: Ease): number;
+  /** Swings smoothly from 0 to 1 and back every period seconds. */
+  wave(time: number, period?: number): number;
+}
+
+/**
+ * inc.shapes: path data for shapes diagrams keep drawing. Each returns a
+ * string for stage.path(d) or handle.set(d); lines run from (x1, y1) to (x2, y2).
+ */
+export interface ShapeHelpers {
+  spring(x1: number, y1: number, x2: number, y2: number, options?: { readonly coils?: number; readonly width?: number }): string;
+  /** A resistor. */
+  zigzag(x1: number, y1: number, x2: number, y2: number, options?: { readonly teeth?: number; readonly width?: number }): string;
+  /** An inductor or solenoid seen side on. */
+  coil(x1: number, y1: number, x2: number, y2: number, options?: { readonly loops?: number; readonly width?: number }): string;
+  wave(x1: number, y1: number, x2: number, y2: number, options?: { readonly amplitude?: number; readonly wavelength?: number; readonly phase?: number }): string;
+  gear(cx: number, cy: number, r: number, options?: { readonly teeth?: number; readonly depth?: number }): string;
+  /** The outline around circles [cx, cy, r], such as a belt over pulleys. */
+  hull(circles: ReadonlyArray<Vec3>): string;
+  /** A lens; bulge above 0 is convex, below 0 concave. */
+  lens(cx: number, cy: number, height: number, options?: { readonly bulge?: number }): string;
+  battery(x1: number, y1: number, x2: number, y2: number, options?: { readonly cells?: number }): string;
+  capacitor(x1: number, y1: number, x2: number, y2: number, options?: { readonly gap?: number; readonly plate?: number }): string;
+  ground(x: number, y: number, size?: number): string;
+  bulb(cx: number, cy: number, r: number): string;
+  switch(x1: number, y1: number, x2: number, y2: number, closed: boolean): string;
+  /** An open-topped container. */
+  tank(x: number, y: number, w: number, h: number): string;
+  /** A curly brace with its point `depth` to the left of the line. */
+  brace(x1: number, y1: number, x2: number, y2: number, depth?: number): string;
+  /** A closed, gently irregular outline, such as a cell; the same seed draws the same shape. */
+  blob(cx: number, cy: number, r: number, options?: { readonly wobble?: number; readonly seed?: number }): string;
+  polygon(points: ReadonlyArray<Vec2>): string;
+  /** A regular polygon with `sides` sides. */
+  regular(cx: number, cy: number, r: number, sides: number, rotation?: number): string;
+}
+
+// ---------------------------------------------------------------------------
 // Formulas
 // ---------------------------------------------------------------------------
 
@@ -621,6 +756,15 @@ export interface Inc {
   /** Seeded random number in [0, 1). Same seed, same sequence. */
   random(): number;
   tween(options: TweenOptions): void;
+  /** Symbols as text for labels: sym('v_0^2') is "v₀²", sym('Delta theta') is "Δ θ", sym('F -> m*a') is "F → m·a". */
+  sym(source: string): string;
+  /** A chemical formula as text: chem('SO4^2-') is "SO₄²⁻"; chem('2H2 + O2 -> 2H2O') is "2H₂ + O₂ → 2H₂O". Charges need ^ except a single + or -. */
+  chem(source: string): string;
   readonly path: PathHelpers;
   readonly geom: GeometryHelpers;
+  readonly calc: Calculus;
+  readonly vec: VectorHelpers;
+  readonly units: Units;
+  readonly motion: MotionHelpers;
+  readonly shapes: ShapeHelpers;
 }
