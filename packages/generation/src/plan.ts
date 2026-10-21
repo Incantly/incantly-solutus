@@ -23,8 +23,7 @@ export type PlanRule =
   | 'unreachable-output'
   | 'unclear-idea'
   | 'too-many-parts'
-  | 'too-many-steps'
-  | 'invalid-singular-point';
+  | 'too-many-steps';
 
 export interface PlanProblem {
   readonly rule: PlanRule;
@@ -45,7 +44,7 @@ export const PLAN_LIMITS = {
   parts: 8,
   steps: 5,
   ideaMin: 20,
-  ideaMax: 200,
+  ideaMax: 240,
   ideaWords: 6,
   concept: 80,
   name: 40,
@@ -84,6 +83,38 @@ function readText(value: unknown, path: string, max: number, problems: Problems,
   return text;
 }
 
+/**
+ * Prose that only guides the scene call (moves, why, steps) is clipped rather
+ * than rejected: a re-plan costs a whole model call, and a long sentence is
+ * not wrong.
+ */
+function readProse(value: unknown, path: string, max: number, problems: Problems, required = true): string | null {
+  if (typeof value === 'string' && value.trim().replace(/\s+/g, ' ').length > max) {
+    const text = value.trim().replace(/\s+/g, ' ');
+    const cut = text.slice(0, max - 1);
+    const space = cut.lastIndexOf(' ');
+    return `${(space > max * 0.6 ? cut.slice(0, space) : cut).replace(/[,;:\s]+$/, '')}…`;
+  }
+  return readText(value, path, max, problems, required);
+}
+
+/**
+ * A name the scene can use as a JavaScript identifier: "equivalence volume (mL)"
+ * becomes equivalenceVolume. Units in brackets are dropped.
+ */
+export function identifierFrom(text: string): string | null {
+  const words = text
+    .replace(/\([^)]*\)|\[[^\]]*\]/g, ' ')
+    .split(/[^A-Za-z0-9]+/)
+    .filter(Boolean);
+  if (words.length === 0) return null;
+  const [first, ...rest] = words;
+  let name = first!.length > 1 && first === first!.toUpperCase() ? first! : first!.charAt(0).toLowerCase() + first!.slice(1);
+  for (const word of rest) name += word.charAt(0).toUpperCase() + word.slice(1);
+  if (!/^[A-Za-z]/.test(name)) name = `v${name}`;
+  return name.slice(0, 40);
+}
+
 function readNumber(value: unknown, path: string, problems: Problems): number | null {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
     problems.push({ rule: 'invalid-bounds', path, message: `${path} must be a finite number` });
@@ -112,7 +143,7 @@ export function unclearIdea(idea: string): string | null {
 }
 
 /** The well-formed parameters, and the names of all of them, so one bad number does not hide a name. */
-function readParameters(value: unknown, problems: Problems): { parameters: PlanParameter[]; names: Set<string> } {
+function readParameters(value: unknown, problems: Problems, renames: Map<string, string>): { parameters: PlanParameter[]; names: Set<string> } {
   const seen = new Set<string>();
   const list = readList(value, 'parameters', problems);
   if (!list) return { parameters: [], names: seen };
@@ -131,9 +162,16 @@ function readParameters(value: unknown, problems: Problems): { parameters: PlanP
       problems.push({ rule: 'schema', path, message: `${path} must be an object` });
       return;
     }
-    const name = readText(raw.name, `${path}.name`, PLAN_LIMITS.name, problems);
-    if (name !== null && !IDENTIFIER.test(name)) {
-      problems.push({ rule: 'schema', path: `${path}.name`, message: `"${name}" must be a name like launchSpeed: a letter, then letters or digits` });
+    const written = readText(raw.name, `${path}.name`, PLAN_LIMITS.name, problems);
+    let name = written;
+    if (written !== null && !IDENTIFIER.test(written)) {
+      const fixed = identifierFrom(written);
+      if (fixed && IDENTIFIER.test(fixed)) {
+        renames.set(written, fixed);
+        name = fixed;
+      } else {
+        problems.push({ rule: 'schema', path: `${path}.name`, message: `"${written}" must be a name like launchSpeed: a letter, then letters or digits` });
+      }
     }
     if (name !== null && seen.has(name)) problems.push({ rule: 'duplicate-name', path: `${path}.name`, message: `Two parameters are called "${name}"` });
     if (name !== null) seen.add(name);
@@ -146,7 +184,7 @@ function readParameters(value: unknown, problems: Problems): { parameters: PlanP
     } else if (min !== null && max !== null && fallback !== null && (fallback < min || fallback > max)) {
       problems.push({ rule: 'invalid-bounds', path: `${path}.default`, message: `${name ?? path}: the default ${fallback} lies outside ${min} to ${max}` });
     }
-    const why = readText(raw.why, `${path}.why`, PLAN_LIMITS.text, problems, false);
+    const why = readProse(raw.why, `${path}.why`, PLAN_LIMITS.text, problems, false);
     if (!why) {
       problems.push({
         rule: 'missing-justification',
@@ -161,15 +199,17 @@ function readParameters(value: unknown, problems: Problems): { parameters: PlanP
   return { parameters: out, names: seen };
 }
 
-function readModel(value: unknown, names: ReadonlySet<string>, problems: Problems): ScenePlan['model'] {
+function readModel(value: unknown, names: ReadonlySet<string>, problems: Problems, renames: ReadonlyMap<string, string>): ScenePlan['model'] {
+  const renamed = (name: string) => renames.get(name) ?? name;
   if (!isRecord(value)) {
     problems.push({ rule: 'schema', path: 'model', message: 'model must be an object with inputs and outputs' });
     return { inputs: [], outputs: [] };
   }
   const inputs: string[] = [];
   for (const [i, raw] of (readList(value.inputs, 'model.inputs', problems) ?? []).entries()) {
-    const input = readText(raw, `model.inputs[${i}]`, PLAN_LIMITS.name, problems);
-    if (input === null) continue;
+    const written = readText(raw, `model.inputs[${i}]`, PLAN_LIMITS.name, problems);
+    if (written === null) continue;
+    const input = renamed(written);
     if (!names.has(input)) {
       problems.push({ rule: 'unknown-input', path: `model.inputs[${i}]`, message: `The model input "${input}" is not a parameter; inputs are the parameters` });
       continue;
@@ -193,12 +233,16 @@ function readModel(value: unknown, names: ReadonlySet<string>, problems: Problem
       problems.push({ rule: 'schema', path, message: `${path} must be an object with a name and dependsOn` });
       continue;
     }
-    const name = readText(raw.name, `${path}.name`, PLAN_LIMITS.name, problems);
-    if (name === null) continue;
-    if (!IDENTIFIER.test(name)) problems.push({ rule: 'schema', path: `${path}.name`, message: `"${name}" must be a name like flightTime` });
+    const written = readText(raw.name, `${path}.name`, PLAN_LIMITS.name, problems);
+    if (written === null) continue;
+    const name = IDENTIFIER.test(written) ? written : identifierFrom(written);
+    if (name === null || !IDENTIFIER.test(name)) {
+      problems.push({ rule: 'schema', path: `${path}.name`, message: `"${written}" must be a name like flightTime` });
+      continue;
+    }
     if (seen.has(name)) problems.push({ rule: 'duplicate-name', path: `${path}.name`, message: `Two outputs are called "${name}"` });
     seen.add(name);
-    const depends = (readList(raw.dependsOn, `${path}.dependsOn`, problems) ?? []).filter((d): d is string => typeof d === 'string');
+    const depends = (readList(raw.dependsOn, `${path}.dependsOn`, problems) ?? []).filter((d): d is string => typeof d === 'string').map(renamed);
     const reachable = depends.filter((d) => inputs.includes(d));
     if (reachable.length === 0) {
       problems.push({
@@ -222,7 +266,7 @@ function readNames(value: unknown, path: string, max: number, rule: PlanRule, no
   if (list.length > max) problems.push({ rule, path, message: `The plan has ${list.length} ${noun}; at most ${max} are allowed` });
   const out: string[] = [];
   list.forEach((raw, i) => {
-    const text = readText(raw, `${path}[${i}]`, path === 'steps' ? PLAN_LIMITS.text : PLAN_LIMITS.name, problems);
+    const text = path === 'steps' ? readProse(raw, `${path}[${i}]`, PLAN_LIMITS.text, problems) : readText(raw, `${path}[${i}]`, PLAN_LIMITS.name, problems);
     if (text === null) return;
     if (out.includes(text)) problems.push({ rule: 'duplicate-name', path: `${path}[${i}]`, message: `"${text}" appears twice in ${path}` });
     else out.push(text);
@@ -230,35 +274,47 @@ function readNames(value: unknown, path: string, max: number, rule: PlanRule, no
   return out;
 }
 
-function readSingularPoints(value: unknown, parameters: readonly PlanParameter[], problems: Problems): SingularPoint[] {
+/**
+ * Singular points as a list of parameter states. Models also write a map,
+ * { "f": 0 } or { "f": [0, 10] } or { "f": [] }; those mean the same points and
+ * are read as such rather than sent back for a re-plan.
+ */
+export function singularPointList(value: unknown): unknown[] | null {
   if (value === undefined || value === null) return [];
-  const list = readList(value, 'singularPoints', problems) ?? [];
+  const expand = (record: Record<string, unknown>): unknown[] => {
+    const entries = Object.entries(record);
+    if (entries.length === 0) return [];
+    const listed = entries.filter(([, v]) => Array.isArray(v));
+    if (listed.length === 0) return [record];
+    // { "f": [0, 10] } names several points of one parameter; empty lists name none.
+    if (entries.length === 1) return (listed[0]![1] as unknown[]).map((v) => ({ [listed[0]![0]]: v }));
+    return entries.flatMap(([k, v]) => (Array.isArray(v) ? v.map((x) => ({ [k]: x })) : [{ [k]: v }]));
+  };
+  if (isRecord(value)) return expand(value);
+  if (!Array.isArray(value)) return null;
+  return value.flatMap((item) => (isRecord(item) && Object.values(item).some(Array.isArray) ? expand(item) : [item]));
+}
+
+/**
+ * The parameter states where the model is singular. They only add probe
+ * configurations, so anything the learner can never reach (a value outside the
+ * slider's range, a name that is not a parameter) is dropped, not re-planned.
+ */
+function readSingularPoints(value: unknown, parameters: readonly PlanParameter[], renames: ReadonlyMap<string, string>): SingularPoint[] {
+  const list = singularPointList(value) ?? [];
   const byName = new Map(parameters.map((p) => [p.name, p]));
   const out: SingularPoint[] = [];
-  list.forEach((raw, i) => {
-    const path = `singularPoints[${i}]`;
-    if (!isRecord(raw) || Object.keys(raw).length === 0) {
-      problems.push({ rule: 'invalid-singular-point', path, message: `${path} must name parameter values, like { "objectDistance": 8, "focalLength": 8 }` });
-      return;
-    }
+  for (const raw of list) {
+    if (!isRecord(raw)) continue;
     const point: Record<string, number> = {};
-    let valid = true;
-    for (const [name, v] of Object.entries(raw)) {
-      const parameter = byName.get(name);
-      if (!parameter) {
-        problems.push({ rule: 'invalid-singular-point', path: `${path}.${name}`, message: `"${name}" is not a parameter` });
-        valid = false;
-      } else if (typeof v !== 'number' || !Number.isFinite(v) || v < parameter.min || v > parameter.max) {
-        problems.push({
-          rule: 'invalid-singular-point',
-          path: `${path}.${name}`,
-          message: `${name} = ${String(v)} must be a number from ${parameter.min} to ${parameter.max}`,
-        });
-        valid = false;
-      } else point[name] = v;
+    let reachable = Object.keys(raw).length > 0;
+    for (const [written, v] of Object.entries(raw)) {
+      const parameter = byName.get(renames.get(written) ?? written);
+      if (!parameter || typeof v !== 'number' || !Number.isFinite(v) || v < parameter.min || v > parameter.max) reachable = false;
+      else point[parameter.name] = v;
     }
-    if (valid) out.push(point);
-  });
+    if (reachable && !out.some((p) => JSON.stringify(p) === JSON.stringify(point))) out.push(point);
+  }
   return out;
 }
 
@@ -267,7 +323,7 @@ export function validatePlan(input: unknown): PlanValidation {
   if (!isRecord(input)) {
     return { ok: false, plan: null, problems: [{ rule: 'schema', path: 'plan', message: 'The plan must be a JSON object' }] };
   }
-  const concept = readText(input.concept, 'concept', PLAN_LIMITS.concept, problems);
+  const concept = readProse(input.concept, 'concept', PLAN_LIMITS.concept, problems);
   const idea = readText(input.idea, 'idea', 1000, problems);
   if (idea !== null) {
     const reason = unclearIdea(idea);
@@ -292,13 +348,14 @@ export function validatePlan(input: unknown): PlanValidation {
     problems.push({ rule: 'no-stage', path: 'capabilities', message: 'The plan needs something to draw on: graph2d or svg' });
   }
 
-  const { parameters, names } = readParameters(input.parameters, problems);
-  const model = readModel(input.model, names, problems);
+  const renames = new Map<string, string>();
+  const { parameters, names } = readParameters(input.parameters, problems, renames);
+  const model = readModel(input.model, names, problems, renames);
   const parts = readNames(input.parts, 'parts', PLAN_LIMITS.parts, 'too-many-parts', 'parts', problems);
   if (parts.length === 0) problems.push({ rule: 'schema', path: 'parts', message: 'Name at least one visual part, so it can be highlighted and described' });
-  const moves = readText(input.moves, 'moves', PLAN_LIMITS.text, problems);
+  const moves = readProse(input.moves, 'moves', PLAN_LIMITS.text, problems);
   const steps = readNames(input.steps ?? [], 'steps', PLAN_LIMITS.steps, 'too-many-steps', 'steps', problems);
-  const singularPoints = readSingularPoints(input.singularPoints, parameters, problems);
+  const singularPoints = readSingularPoints(input.singularPoints, parameters, renames);
 
   if (problems.length > 0 || concept === null || idea === null || moves === null) return { ok: false, plan: null, problems };
 

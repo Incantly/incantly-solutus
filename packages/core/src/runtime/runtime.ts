@@ -733,7 +733,7 @@ export class SceneRuntime {
       idea(sentence) {
         runtime.requireMounting('idea');
         if (typeof sentence !== 'string' || sentence.trim() === '') throw new SceneApiError('inc.idea needs a sentence');
-        if (sentence.length > 200) throw new SceneApiError('The idea sentence must be 200 characters or fewer');
+        if (sentence.length > 240) throw new SceneApiError('The idea sentence must be 240 characters or fewer');
         runtime.idea = sentence;
       },
       steps(list) {

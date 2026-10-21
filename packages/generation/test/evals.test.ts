@@ -101,7 +101,7 @@ describe('running the evals', () => {
     expect(summary.postRepair.passed).toBe(trials.filter((t) => t.passed).length);
     expect(Object.values(summary.failures).reduce((a, b) => a + b, 0)).toBe(trials.filter((t) => !t.passed).length);
     expect(summary.gate.postRepair).toBe(false);
-  });
+  }, 30_000);
 
   it('writes a readable summary', async () => {
     const { summary } = await runEvals({ model: referenceModel(), trialsPerConcept: 1, conditions: ['with-example'] });

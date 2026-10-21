@@ -1,7 +1,7 @@
 import { REFERENCE_SCENES } from '@incantly/core/scenes';
 import { describe, expect, it } from 'vitest';
 import { CAPABILITIES, capabilityNames, catalogText } from '../src/catalog';
-import { PLAN_LIMITS, formatPlanProblems, unclearIdea, validatePlan, type PlanRule } from '../src/plan';
+import { PLAN_LIMITS, formatPlanProblems, identifierFrom, singularPointList, unclearIdea, validatePlan, type PlanRule } from '../src/plan';
 
 const projectile = REFERENCE_SCENES.projectile!.plan;
 
@@ -66,10 +66,45 @@ describe('the plan validator', () => {
     expect(rules(plan({ parameters: [speed, ...projectile.parameters.slice(1)] }))).toEqual(['missing-justification']);
   });
 
-  it('wants parameter names a scene can use', () => {
+  it('turns names a scene cannot use into identifiers everywhere they appear, and rejects names with no letters', () => {
     const speed = { ...projectile.parameters[0], name: 'launch speed' };
     const inputs = ['launch speed', 'angle', 'gravity'];
-    expect(rules(plan({ parameters: [speed, ...projectile.parameters.slice(1)], model: { ...projectile.model, inputs } }))).toContain('schema');
+    const outputs = projectile.model.outputs.map((o) => ({
+      name: o.name === 'range' ? 'range (m)' : o.name,
+      dependsOn: o.dependsOn.map((d) => (d === 'speed' ? 'launch speed' : d)),
+    }));
+    const result = validatePlan(plan({ parameters: [speed, ...projectile.parameters.slice(1)], model: { inputs, outputs } }));
+    expect(result.problems).toEqual([]);
+    expect(result.plan!.parameters[0]!.name).toBe('launchSpeed');
+    expect(result.plan!.model.inputs).toContain('launchSpeed');
+    expect(result.plan!.model.outputs.map((o) => o.name)).toContain('range');
+    expect(identifierFrom('moles of H+ or OH- remaining')).toBe('molesOfHOrOHRemaining');
+    expect(identifierFrom('pH')).toBe('pH');
+    expect(identifierFrom('equivalence volume (mL)')).toBe('equivalenceVolume');
+    expect(identifierFrom('2nd harmonic')).toBe('v2ndHarmonic');
+    const bad = { ...projectile.parameters[0], name: '???' };
+    expect(rules(plan({ parameters: [bad, ...projectile.parameters.slice(1)] }))).toContain('schema');
+  });
+
+  it('reads the other ways models write singular points', () => {
+    expect(singularPointList(undefined)).toEqual([]);
+    expect(singularPointList({})).toEqual([]);
+    expect(singularPointList({ f: [] })).toEqual([]);
+    expect(singularPointList({ f: 8 })).toEqual([{ f: 8 }]);
+    expect(singularPointList({ f: [8, 10] })).toEqual([{ f: 8 }, { f: 10 }]);
+    expect(singularPointList([{ f: [8] }, { u: 8, f: 8 }])).toEqual([{ f: 8 }, { u: 8, f: 8 }]);
+    expect(singularPointList('none')).toBeNull();
+    const lens = plan({ singularPoints: { angle: 45 } });
+    expect(validatePlan(lens).plan!.singularPoints).toEqual([{ angle: 45 }]);
+  });
+
+  it('clips long guidance instead of asking for a new plan', () => {
+    const long = 'The ball flies along its path and the arrows ride with it while the vertical arrow shrinks to zero at the very top of the arc. '.repeat(4);
+    const result = validatePlan(plan({ moves: long, steps: [long, 'Gravity changes the vertical velocity'] }));
+    expect(result.problems).toEqual([]);
+    expect(result.plan!.moves.length).toBeLessThanOrEqual(PLAN_LIMITS.text);
+    expect(result.plan!.moves.endsWith('…')).toBe(true);
+    expect(result.plan!.steps[0]!.length).toBeLessThanOrEqual(PLAN_LIMITS.text);
   });
 
   it('rejects outputs that no input can change', () => {
@@ -104,13 +139,19 @@ describe('the plan validator', () => {
     expect(rules(plan({ steps }))).toEqual(['too-many-steps']);
   });
 
-  it('checks declared singular points against the parameters', () => {
+  it('keeps the singular points a learner can reach and drops the rest without a re-plan', () => {
     const lens = REFERENCE_SCENES['thin-lens']!.plan;
-    const withPoints = (singularPoints: unknown) => ({ ...structuredClone(lens), singularPoints });
-    expect(rules(withPoints([{ objectDistance: 8, focalLength: 8 }]))).toEqual([]);
-    expect(rules(withPoints([{ distance: 8 }]))).toEqual(['invalid-singular-point']);
-    expect(rules(withPoints([{ objectDistance: 1000 }]))).toEqual(['invalid-singular-point']);
-    expect(rules(withPoints([{}]))).toEqual(['invalid-singular-point']);
+    const points = (singularPoints: unknown) => {
+      const result = validatePlan({ ...structuredClone(lens), singularPoints });
+      expect(result.problems).toEqual([]);
+      return result.plan!.singularPoints;
+    };
+    expect(points([{ objectDistance: 8, focalLength: 8 }])).toEqual([{ objectDistance: 8, focalLength: 8 }]);
+    expect(points([{ distance: 8 }])).toEqual([]);
+    expect(points([{ objectDistance: 1000 }])).toEqual([]);
+    expect(points([{}, 'f = 0', null])).toEqual([]);
+    expect(points({ focalLength: 0, objectDistance: 0 })).toEqual([]);
+    expect(points([{ objectDistance: 8, focalLength: 8 }, { objectDistance: 8, focalLength: 8 }])).toHaveLength(1);
   });
 
   it('normalizes what it can: whitespace, a missing describe capability, steps without the steps capability', () => {
