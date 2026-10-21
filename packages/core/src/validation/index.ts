@@ -5,6 +5,12 @@ import { instrumentSceneJs, type InstrumentedScene } from './instrument';
 import { validateSceneJs, type JsInfo } from './js';
 import { SCENE_LIMITS, type SceneLimits } from './limits';
 
+/**
+ * The version of the validator's rules. Stored with approved fragments, so a
+ * figure approved under older rules can be found and checked again.
+ */
+export const VALIDATOR_VERSION = 1;
+
 export interface SceneFragments {
   readonly html: string;
   readonly css: string;
