@@ -165,6 +165,7 @@ export class FigureRenderer {
     }
     if (ui.params !== undefined) this.controls.setParams(ui.params);
     if (ui.playing !== undefined) this.controls.setPlaying(ui.playing);
+    if (ui.animated !== undefined) this.controls.setAnimated(ui.animated);
     if (ui.speed !== undefined) this.controls.setSpeed(ui.speed);
     if (ui.readouts !== undefined) this.readouts.update(ui.readouts);
     this.teaching.update(ui, this.ui, update.reset === true);

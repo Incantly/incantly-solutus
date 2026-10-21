@@ -154,6 +154,30 @@ describe('trusted mount and renderer', () => {
     expect(idA).not.toBe(idB);
   });
 
+  it('hides play, restart and speed for a still scene, and keeps reset', () => {
+    const { figure, clock } = mount(
+      {},
+      {
+        html: "<div id='stage'></div>",
+        css: '',
+        js: `
+          const k = inc.param('k', { min: 0, max: 10, value: 2 });
+          const stage = inc.svg('#stage', { viewBox: [0, 0, 100, 100], title: 'Bar' });
+          const bar = stage.line(0, 0, 0, 0);
+          inc.onFrame(() => bar.set({ x2: k.value * 10 }));
+        `,
+      },
+    );
+    const visible = (selector: string) => !figure.root.querySelector<HTMLElement>(selector)!.closest('[hidden]');
+    expect(visible('button[data-action=toggle]')).toBe(true);
+    clock.runUntilIdle();
+    expect(visible('button[data-action=toggle]')).toBe(false);
+    expect(visible('button[data-action=restart]')).toBe(false);
+    expect(visible('select[data-action=speed]')).toBe(false);
+    expect(visible('button[data-action=reset]')).toBe(true);
+    expect(clock.pendingCount).toBe(0);
+  });
+
   it('stops all work after destroy', () => {
     const { figure, clock } = mount();
     clock.advance();

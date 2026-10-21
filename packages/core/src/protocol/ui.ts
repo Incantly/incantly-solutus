@@ -58,6 +58,12 @@ export interface UiState {
   readonly readouts: readonly ReadoutView[];
   readonly parts: readonly PartView[];
   readonly playing: boolean;
+  /**
+   * Whether anything in the scene follows time: true once a frame reads time,
+   * false when the first frame did not, null before any frame. A still scene
+   * gets no play controls and does no work while "playing".
+   */
+  readonly animated: boolean | null;
   readonly speed: number;
   readonly idea: string | null;
   readonly explanation: string | null;
@@ -73,6 +79,7 @@ export const EMPTY_UI: UiState = {
   readouts: [],
   parts: [],
   playing: false,
+  animated: null,
   speed: 1,
   idea: null,
   explanation: null,

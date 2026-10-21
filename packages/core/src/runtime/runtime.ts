@@ -123,6 +123,9 @@ export class SceneRuntime {
   private random: () => number;
   private dirty = true;
   private visible = true;
+  /** A frame read the time, or a plot follows it. */
+  private usesTime = false;
+  private framesRun = 0;
   private reducedMotion: boolean;
   private error: ErrorView | null = null;
   private lastUi: UiState = EMPTY_UI;
@@ -190,10 +193,17 @@ export class SceneRuntime {
     this.playing = false;
   }
 
-  /** True while there is drawing work to do: playing, dirty or animating a transition. */
+  /** True while there is drawing work to do: playing something that moves, dirty or animating a transition. */
   needsFrame(): boolean {
     if (this.lifecycle !== 'mounted' || !this.visible) return false;
-    return this.playing || this.dirty || this.tweens.length > 0 || this.stepTransition !== null;
+    const moving = this.playing && this.animated !== false;
+    return moving || this.dirty || this.tweens.length > 0 || this.stepTransition !== null;
+  }
+
+  /** Whether the scene follows time; null until a frame has run. */
+  get animated(): boolean | null {
+    if (this.usesTime) return true;
+    return this.framesRun > 0 ? false : null;
   }
 
   /**
@@ -432,6 +442,8 @@ export class SceneRuntime {
     this.describeFn = null;
     this.tweens = [];
     this.error = null;
+    this.usesTime = false;
+    this.framesRun = 0;
     this.time = 0;
     this.random = mulberry32(this.options.seed ?? 1);
     this.resetPending = true;
@@ -445,7 +457,20 @@ export class SceneRuntime {
   // -------------------------------------------------------------------------
 
   private runFrame(dt: number): void {
-    const frame: FrameInfo = Object.freeze({ time: this.time, dt });
+    const runtime = this;
+    const time = this.time;
+    // Reading time or dt marks the scene as animated; a still scene stops asking for frames.
+    const frame: FrameInfo = Object.freeze({
+      get time() {
+        runtime.usesTime = true;
+        return time;
+      },
+      get dt() {
+        runtime.usesTime = true;
+        return dt;
+      },
+    });
+    this.framesRun++;
     let ok = true;
     for (const callback of this.frameCallbacks) ok = this.guard('frame', () => callback(frame)) && ok;
     for (const redraw of this.redraws) ok = this.guard('plot', redraw) && ok;
@@ -544,6 +569,7 @@ export class SceneRuntime {
       readouts: this.readouts.map((r) => ({ label: r.label, text: r.text })),
       parts: [...this.parts.parts.values()].map((p) => ({ name: p.name, label: p.label, info: p.info, id: p.node.id })),
       playing: this.playing,
+      animated: this.animated,
       speed: this.speed,
       idea: this.idea,
       explanation: this.explanation,
@@ -749,6 +775,9 @@ export class SceneRuntime {
             stage,
             path: runtime.path,
             time: () => runtime.time,
+            markTimeUse: () => {
+              runtime.usesTime = true;
+            },
             onRedraw: (redraw) => runtime.redraws.push(redraw),
             reportCap: (n) => runtime.reportCap(n),
             isFormula: (value): value is ReturnType<Inc['formula']> =>

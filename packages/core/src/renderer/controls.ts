@@ -15,7 +15,9 @@ const formatSpeed = (speed: number) => `${speed}×`;
 export class ControlsView {
   readonly element: HTMLElement;
   private readonly toggle: HTMLButtonElement;
+  private readonly restart: HTMLButtonElement;
   private readonly speed: HTMLSelectElement;
+  private readonly speedLabel: HTMLLabelElement;
   private readonly paramsElement: HTMLElement;
   private readonly inputs = new Map<string, ParamInputs>();
   private signature = '';
@@ -34,10 +36,11 @@ export class ControlsView {
     const transport = doc.createElement('div');
     transport.className = 'inc-transport';
     this.toggle = this.button('toggle', 'Play');
-    const restart = this.button('restart', 'Restart');
+    this.restart = this.button('restart', 'Restart');
     const reset = this.button('reset', 'Reset');
     reset.title = 'Restore the original values';
     const speedLabel = doc.createElement('label');
+    this.speedLabel = speedLabel;
     speedLabel.textContent = 'Speed ';
     this.speed = doc.createElement('select');
     this.speed.dataset.action = 'speed';
@@ -49,7 +52,7 @@ export class ControlsView {
     }
     this.speed.value = '1';
     speedLabel.append(this.speed);
-    transport.append(this.toggle, restart, speedLabel, reset);
+    transport.append(this.toggle, this.restart, speedLabel, reset);
 
     this.paramsElement = doc.createElement('div');
     this.paramsElement.className = 'inc-params';
@@ -93,6 +96,14 @@ export class ControlsView {
   setPlaying(playing: boolean): void {
     this.toggle.dataset.playing = String(playing);
     this.toggle.textContent = playing ? 'Pause' : 'Play';
+  }
+
+  /** A still scene has nothing to play, restart or speed up. */
+  setAnimated(animated: boolean | null): void {
+    const still = animated === false;
+    this.toggle.hidden = still;
+    this.restart.hidden = still;
+    this.speedLabel.hidden = still;
   }
 
   setSpeed(speed: number): void {

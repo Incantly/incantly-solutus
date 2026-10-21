@@ -334,3 +334,53 @@ describe('formulas and tweens', () => {
     expect(runtime.needsFrame()).toBe(false);
   });
 });
+
+describe('scene runtime: still scenes', () => {
+  const still = (inc: Inc) => {
+    const k = inc.param('k', { min: 0, max: 10, value: 2 });
+    const stage = inc.svg('#s', { viewBox: [0, 0, 100, 100], title: 'Still' });
+    const bar = stage.line(0, 0, 0, 0);
+    inc.onFrame(() => bar.set({ x2: k.value * 10 }));
+  };
+
+  it('stops asking for frames once a playing scene shows it never reads time', () => {
+    const runtime = new SceneRuntime({ autoplay: true });
+    expect(runtime.mount(still).ui.animated).toBeNull();
+    expect(runtime.tick(FRAME).ui.animated).toBe(false);
+    expect(runtime.playing).toBe(true);
+    expect(runtime.needsFrame()).toBe(false);
+    runtime.tick(FRAME);
+    expect(runtime.stats.idleTicks).toBe(1);
+    runtime.setParam('k', 5);
+    expect(runtime.needsFrame()).toBe(true);
+    runtime.tick(FRAME);
+    expect(runtime.needsFrame()).toBe(false);
+  });
+
+  it('keeps animating a scene whose frames read time, or whose plot follows t', () => {
+    const reads = new SceneRuntime();
+    reads.mount((inc) => {
+      const stage = inc.svg('#s', { viewBox: [0, 0, 1, 1], title: 'T' });
+      const dot = stage.circle(0, 0, 1);
+      inc.onFrame(({ time }) => dot.at(time, 0));
+    });
+    expect(reads.tick(FRAME).ui.animated).toBe(true);
+    expect(reads.needsFrame()).toBe(true);
+
+    const plots = new SceneRuntime();
+    plots.mount((inc) => {
+      const g = inc.graph2d('#g', { x: [0, 1], y: [-1, 1], title: 'G' });
+      g.plot(inc.formula('sin(x - t)'));
+    });
+    plots.tick(FRAME);
+    expect(plots.uiState().animated).toBe(true);
+    expect(plots.needsFrame()).toBe(true);
+  });
+
+  it('forgets what it learned when the scene is rebuilt', () => {
+    const runtime = new SceneRuntime({ autoplay: true });
+    runtime.mount(still);
+    runtime.tick(FRAME);
+    expect(runtime.restart().ui.animated).toBeNull();
+  });
+});

@@ -38,6 +38,8 @@ export interface GraphContext {
   readonly onRedraw: (redraw: () => void) => void;
   readonly reportCap: (requested: number) => void;
   readonly isFormula: (value: unknown) => value is Formula;
+  /** Records that the scene changes with time, so it needs frames while playing. */
+  readonly markTimeUse: () => void;
 }
 
 /** Plot area inside a graph's view box. */
@@ -130,6 +132,8 @@ export class Graph2D implements Graph {
     const handle = this.stage.path(undefined, { tone: options.tone ?? 'lit', dashed: options.dashed ?? false });
     const samples = this.sampleCount(options.samples);
     if (this.ctx.isFormula(fn)) this.formulaLabel(fn.source);
+    // A formula that names t, or a function that takes time, moves on its own.
+    if (this.ctx.isFormula(fn) ? fn.variables.includes('t') : fn.length >= 2) this.ctx.markTimeUse();
     const evaluate = (x: number) => fn(x, this.ctx.time());
     const redraw = () => handle.d(this.sampleFunction(evaluate, samples));
     this.ctx.onRedraw(redraw);
