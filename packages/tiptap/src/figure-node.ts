@@ -1,7 +1,22 @@
-import { Node, mergeAttributes } from '@tiptap/core';
+import type { ExecutionAdapter } from '@incantly/core';
+import { Node, mergeAttributes, type Editor } from '@tiptap/core';
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
+import { NodeSelection, Plugin, PluginKey } from '@tiptap/pm/state';
 import type { NodeView } from '@tiptap/pm/view';
-import { DEFAULT_ASPECT, defaultAttributes, parseJson, parseNumber, type FigureAttributes } from './attributes';
+import {
+  CONTENT_REF,
+  DEFAULT_ASPECT,
+  defaultAttributes,
+  parseJson,
+  parseNumber,
+  sanitizeFragments,
+  sanitizeMeta,
+  sanitizeValues,
+  type FigureAttributes,
+} from './attributes';
+import { FIGURE_TRANSACTION, FigureNodeView, figureViews } from './node-view';
+import { LiveFigureScheduler, type SchedulerOptions } from './scheduler';
+import type { FigureStore } from './store';
 
 export interface SnapshotSource {
   /** Returns a renderable image URL for a snapshot hash, if it is available. */
@@ -9,7 +24,16 @@ export interface SnapshotSource {
 }
 
 export interface FigureNodeOptions {
+  /** Placeholder-only views use this to show snapshots. */
   snapshots: SnapshotSource | null;
+  /** Runs live figures. Without one, figures stay placeholders. */
+  adapter: ExecutionAdapter | null;
+  /** Where snapshots and large fragments are kept by content reference. */
+  store: FigureStore | null;
+  scheduler: SchedulerOptions;
+  /** Learner changes are saved this long after the last one. */
+  settleMs: number;
+  theme: 'light' | 'dark' | 'auto';
 }
 
 declare module '@tiptap/core' {
@@ -20,17 +44,21 @@ declare module '@tiptap/core' {
   }
 }
 
-const jsonAttribute = <T>(name: string, fallback: T) => ({
+const jsonAttribute = <T>(name: string, fallback: T, sanitize: (value: unknown) => T) => ({
   default: fallback,
-  parseHTML: (element: HTMLElement) => parseJson<T>(element.getAttribute(`data-${name}`), fallback),
+  parseHTML: (element: HTMLElement) => sanitize(parseJson<unknown>(element.getAttribute(`data-${name}`), fallback)),
   renderHTML: (attributes: Record<string, unknown>) => ({
     [`data-${name}`]: JSON.stringify(attributes[camel(name)] ?? fallback),
   }),
 });
 
-const textAttribute = (name: string, fallback: string | null) => ({
+const textAttribute = (name: string, fallback: string | null, pattern?: RegExp) => ({
   default: fallback,
-  parseHTML: (element: HTMLElement) => element.getAttribute(`data-${name}`) ?? fallback,
+  parseHTML: (element: HTMLElement) => {
+    const value = element.getAttribute(`data-${name}`);
+    if (value === null) return fallback;
+    return pattern && !pattern.test(value) ? fallback : value;
+  },
   renderHTML: (attributes: Record<string, unknown>) => {
     const value = attributes[camel(name)];
     return value === null || value === undefined ? {} : { [`data-${name}`]: String(value) };
@@ -54,9 +82,34 @@ function camel(name: string): string {
   return name.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
 }
 
+const schedulers = new WeakMap<Editor, LiveFigureScheduler>();
+
+function schedulerFor(editor: Editor, options: SchedulerOptions): LiveFigureScheduler {
+  let scheduler = schedulers.get(editor);
+  if (!scheduler) {
+    scheduler = new LiveFigureScheduler(options);
+    schedulers.set(editor, scheduler);
+  }
+  return scheduler;
+}
+
+/** The live-figure scheduler of an editor, if it has created one. */
+export function figureScheduler(editor: Editor): LiveFigureScheduler | undefined {
+  return schedulers.get(editor);
+}
+
+export function newFigureId(): string {
+  const bytes = new Uint8Array(8);
+  crypto.getRandomValues(bytes);
+  return `fig-${[...bytes].map((b) => b.toString(16).padStart(2, '0')).join('')}`;
+}
+
+const figureIds = new PluginKey('incantlyFigureIds');
+
 /**
  * The figure node. Every attribute is rendered to HTML so that copy and paste
- * and HTML export round-trip the figure; large content is stored by hash.
+ * and HTML export round-trip the figure; large content is stored by content
+ * reference. See ADR 007.
  */
 export const FigureNode = Node.create<FigureNodeOptions>({
   name: 'incantlyFigure',
@@ -66,25 +119,25 @@ export const FigureNode = Node.create<FigureNodeOptions>({
   draggable: true,
 
   addOptions() {
-    return { snapshots: null };
+    return { snapshots: null, adapter: null, store: null, scheduler: {}, settleMs: 600, theme: 'auto' };
   },
 
   addAttributes() {
     const d = defaultAttributes();
     return {
-      figureId: textAttribute('figure-id', d.figureId),
+      figureId: textAttribute('figure-id', d.figureId, /^[\w-]{1,64}$/),
       concept: textAttribute('concept', d.concept),
-      sdkVersion: textAttribute('sdk-version', d.sdkVersion),
+      sdkVersion: textAttribute('sdk-version', d.sdkVersion, /^\d+\.\d+\.\d+$/),
       schemaVersion: numberAttribute('schema-version', d.schemaVersion),
-      fragments: jsonAttribute('fragments', d.fragments),
-      fragmentsRef: textAttribute('fragments-ref', d.fragmentsRef),
-      defaults: jsonAttribute('defaults', d.defaults),
-      values: jsonAttribute('values', d.values),
+      fragments: jsonAttribute('fragments', d.fragments, sanitizeFragments),
+      fragmentsRef: textAttribute('fragments-ref', d.fragmentsRef, CONTENT_REF),
+      defaults: jsonAttribute('defaults', d.defaults, sanitizeValues),
+      values: jsonAttribute('values', d.values, sanitizeValues),
       step: numberAttribute('step', d.step),
-      snapshotRef: textAttribute('snapshot-ref', d.snapshotRef),
+      snapshotRef: textAttribute('snapshot-ref', d.snapshotRef, CONTENT_REF),
       description: textAttribute('description', d.description),
       aspect: numberAttribute('aspect', d.aspect),
-      meta: jsonAttribute('meta', d.meta),
+      meta: jsonAttribute('meta', d.meta, sanitizeMeta),
     };
   },
 
@@ -102,12 +155,86 @@ export const FigureNode = Node.create<FigureNodeOptions>({
       insertFigure:
         (attributes) =>
         ({ commands }) =>
-          commands.insertContent({ type: this.name, attrs: { ...defaultAttributes(), ...attributes } }),
+          commands.insertContent({
+            type: this.name,
+            attrs: { ...defaultAttributes(), figureId: newFigureId(), ...attributes },
+          }),
     };
   },
 
+  addKeyboardShortcuts() {
+    // Enter on a selected figure moves keyboard focus into it; the figure hands it back on Escape.
+    const enter = (edge: 'first' | 'last') => (): boolean => {
+      const { selection } = this.editor.state;
+      if (!(selection instanceof NodeSelection) || selection.node.type.name !== this.name) return false;
+      const dom = this.editor.view.nodeDOM(selection.from);
+      const view = dom instanceof Element ? figureViews.get(dom) : undefined;
+      if (!view) return false;
+      view.enter(edge);
+      return true;
+    };
+    return { Enter: enter('first'), Space: enter('first') };
+  },
+
+  addProseMirrorPlugins() {
+    const type = this.name;
+    return [
+      new Plugin({
+        key: figureIds,
+        // Pasted or duplicated figures get their own id, so every figure is addressed once.
+        appendTransaction: (transactions, _old, state) => {
+          const inserted = transactions.some((tr) =>
+            tr.steps.some((step) => {
+              const slice = (step as { slice?: { content: { descendants(f: (n: ProseMirrorNode) => boolean | void): void } } }).slice;
+              let found = false;
+              slice?.content.descendants((n) => {
+                if (n.type.name === type) found = true;
+                return !found;
+              });
+              return found;
+            }),
+          );
+          if (!inserted) return null;
+          const seen = new Set<string>();
+          let tr = state.tr;
+          let changed = false;
+          state.doc.descendants((node, pos) => {
+            if (node.type.name !== type) return true;
+            const id = String(node.attrs.figureId ?? '');
+            if (!id || seen.has(id)) {
+              const fresh = newFigureId();
+              tr = tr.setNodeAttribute(pos, 'figureId', fresh);
+              seen.add(fresh);
+              changed = true;
+            } else seen.add(id);
+            return false;
+          });
+          return changed ? tr.setMeta(FIGURE_TRANSACTION, 'ids') : null;
+        },
+      }),
+    ];
+  },
+
+  onDestroy() {
+    // Save what learners changed while the view still exists, then stop the scheduler.
+    const scheduler = schedulers.get(this.editor);
+    this.editor.view.dom.querySelectorAll('figure.incantly-figure').forEach((element) => figureViews.get(element)?.flush());
+    scheduler?.destroy();
+    schedulers.delete(this.editor);
+  },
+
   addNodeView() {
-    return ({ node }) => new PlaceholderView(node, this.options.snapshots);
+    return ({ node, editor, getPos }) => {
+      const adapter = this.options.adapter;
+      if (!adapter) return new PlaceholderView(node, this.options.snapshots);
+      return new FigureNodeView(node, editor, getPos, {
+        adapter,
+        store: this.options.store,
+        scheduler: schedulerFor(editor, this.options.scheduler),
+        settleMs: this.options.settleMs,
+        theme: this.options.theme,
+      });
+    };
   },
 });
 

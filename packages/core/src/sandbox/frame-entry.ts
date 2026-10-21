@@ -131,6 +131,8 @@ function onHostMessage(message: HostMessage): void {
       renderer?.send({ type: 'reducedMotion', value: message.value });
       break;
     case 'snapshot': {
+      // A snapshot usually comes before suspension: send the latest values first, in order.
+      flushReport();
       const svg = root?.querySelector<SVGSVGElement>('svg.inc-stage') ?? null;
       void snapshotStage(svg).then((png) => send({ type: 'snapshot', id: message.id, png }));
       break;
@@ -238,13 +240,16 @@ function queueReport(values: Readonly<Record<string, number>> | null, descriptio
   if (values) pendingValues = { ...pendingValues, ...values };
   if (description !== null) pendingDescription = description;
   if (valuesTimer !== null) return;
-  valuesTimer = setTimeout(() => {
-    valuesTimer = null;
-    if (pendingValues) send({ type: 'values', values: pendingValues });
-    if (pendingDescription !== null) send({ type: 'description', text: pendingDescription.slice(0, 2000) });
-    pendingValues = null;
-    pendingDescription = null;
-  }, VALUES_INTERVAL_MS);
+  valuesTimer = setTimeout(flushReport, VALUES_INTERVAL_MS);
+}
+
+function flushReport(): void {
+  if (valuesTimer !== null) clearTimeout(valuesTimer);
+  valuesTimer = null;
+  if (pendingValues) send({ type: 'values', values: pendingValues });
+  if (pendingDescription !== null) send({ type: 'description', text: pendingDescription.slice(0, 2000) });
+  pendingValues = null;
+  pendingDescription = null;
 }
 
 const FOCUSABLE = 'button, input, select, summary, [tabindex="0"]';
