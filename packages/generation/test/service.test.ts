@@ -125,7 +125,7 @@ describe('the generation service', () => {
     const stream = await events(await post('/v1/generations', { prompt: 'Explain projectile motion for a physics student.', noteContext: 'Chapter 3: kinematics' }));
     expect(stream.map((e) => e.event)).toEqual(['accepted', 'plan', 'fragment', 'fragment', 'fragment', 'scene']);
     const skeleton = stream[1]!.data.skeleton as Record<string, unknown>;
-    expect(skeleton).toMatchObject({ concept: 'projectile motion', kind: 'motion', parts: 5, steps: 4 });
+    expect(skeleton).toMatchObject({ concept: 'projectile motion', kind: 'motion', parts: REFERENCE_SCENES.projectile!.plan.parts.length, steps: 4 });
     // Names and numbers only: no plan prose reaches the client.
     expect(JSON.stringify(skeleton)).not.toContain('why');
     expect(JSON.stringify(skeleton)).not.toContain(REFERENCE_SCENES.projectile!.plan.idea);

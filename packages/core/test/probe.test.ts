@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import { loadKitModules } from '../src/kits/load';
+import { SIZE_BUDGETS } from '../src/protocol/plan';
 import { probeScene, type ProbeOptions, type ProbeReport } from '../src/probe';
 import { REFERENCE_SCENES } from '../src/scenes';
+import { validateScene } from '../src/validation';
 import { compileValidated } from './helpers/compile';
 
 const HTML = "<div id='stage'></div>";
@@ -38,12 +41,19 @@ describe('probe: passing scenes', () => {
     expect(report.stats.elements).toBe(1);
   });
 
-  it.each(Object.keys(REFERENCE_SCENES))('passes the reference scene %s with its own plan', (id) => {
+  it.each(Object.keys(REFERENCE_SCENES))('passes the reference scene %s with its own plan', async (id) => {
     const source = REFERENCE_SCENES[id]!;
     const { scene, fuel } = compileValidated(source);
+    const kits = await loadKitModules(validateScene(source).scene?.kits ?? []);
     const report = probeScene(scene, {
       beforeStep: fuel.refuel,
-      spec: { parts: source.plan.parts, steps: source.plan.steps.length, singularPoints: source.plan.singularPoints ?? [] },
+      runtime: { kits },
+      spec: {
+        parts: source.plan.parts,
+        steps: source.plan.steps.length,
+        singularPoints: source.plan.singularPoints ?? [],
+        elements: SIZE_BUDGETS[source.plan.size ?? 'quick'].elements,
+      },
     });
     expect(report.failures).toEqual([]);
   });

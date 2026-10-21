@@ -2,6 +2,7 @@
   "concept": "thin lens",
   "idea": "Rays from an object bend through a convex lens and meet again: where they meet is the image, set by the distance and the focal length.",
   "kind": "diagram",
+  "size": "quick",
   "capabilities": ["graph2d", "svg", "geometry", "readout", "explain", "describe", "steps"],
   "parameters": [
     {
@@ -40,7 +41,7 @@
     ]
   },
   "parts": ["Lens", "Object", "Image", "Parallel ray", "Central ray", "Focal ray"],
-  "moves": "Nothing moves on its own; the rays, the image and the focal points follow the sliders.",
+  "moves": "Nothing moves on its own; the rays, the image and the focal points follow the sliders, and dragging the object moves it.",
   "steps": [
     "The parallel ray bends through F′",
     "The central ray goes straight",
