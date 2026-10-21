@@ -1,0 +1,20 @@
+{
+  "name": "@incantly/tiptap",
+  "version": "0.1.0-dev",
+  "private": true,
+  "type": "module",
+  "description": "TipTap integration for Incantly figures: the figure node, its node view and the live-figure scheduler.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@incantly/core": "*",
+    "@tiptap/core": "3.32.0",
+    "@tiptap/pm": "3.32.0"
+  },
+  "devDependencies": {
+    "@tiptap/extension-image": "3.32.0",
+    "@tiptap/starter-kit": "3.32.0",
+    "fake-indexeddb": "6.2.5"
+  }
+}

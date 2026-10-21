@@ -1,7 +1,43 @@
 {
   "name": "incantly-solutus",
   "private": true,
+  "type": "module",
   "workspaces": [
-    "packages/*"
-  ]
+    "packages/*",
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "generate": "node scripts/generate.mjs",
+    "build": "npm run build --workspaces --if-present",
+    "pretypecheck": "npm run generate",
+    "typecheck": "tsc -p tsconfig.json",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test --project=chromium",
+    "test:e2e:all": "playwright test --project=chromium --project=webkit",
+    "test:perf": "playwright test --project=perf --pass-with-no-tests",
+    "presize": "npm run generate",
+    "size": "node scripts/check-engine-size.mjs",
+    "check": "npm run lint && npm run typecheck && npm test && npm run size",
+    "evals": "npm run evals --workspace @incantly/generation --",
+    "serve": "npm run serve --workspace @incantly/generation"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.13.0",
+    "@eslint/js": "10.0.1",
+    "@playwright/test": "1.56.0",
+    "@types/node": "22.20.5",
+    "esbuild": "0.28.2",
+    "eslint": "10.13.0",
+    "globals": "17.13.0",
+    "happy-dom": "21.0.4",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.72.0",
+    "vite": "8.3.5",
+    "vitest": "5.0.5"
+  }
 }

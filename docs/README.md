@@ -26,6 +26,13 @@ Incantly turns a concept in a learner's notes into a safe, interactive teaching 
 - [Generation pipeline](architecture/generation-pipeline.md): plan, generate, validate, probe, repair, and fallback.
 - [Performance and TipTap integration](architecture/performance-tiptap.md): large-document lifecycle, DOM, events, transactions, measurement, and the 300-figure stress suite.
 - [ADR 001](architecture/decisions/001-constrained-javascript.md): validated JavaScript against explicit SDK capabilities.
+- [ADR 002](architecture/decisions/002-execution-adapter.md): scene code runs in a Worker inside a sandboxed frame.
+- [ADR 003](architecture/decisions/003-javascript-parser.md): the validator parses scene JavaScript with acorn.
+- [ADR 004](architecture/decisions/004-expression-evaluator.md): formulas compile to closures through a small Pratt parser.
+- [ADR 005](architecture/decisions/005-content-security-policy.md): the figure frame's content security policy.
+- [ADR 006](architecture/decisions/006-scene-versioning.md): every stored scene carries SDK and schema versions.
+- [ADR 007](architecture/decisions/007-node-storage.md): how a figure is stored in a note, by content reference and outside the undo history.
+- [ADR 008](architecture/decisions/008-generation-service.md): the service plans, builds and repairs; the learner's device probes.
 
 ### SDK contracts
 
@@ -33,6 +40,7 @@ Incantly turns a concept in a learner's notes into a safe, interactive teaching 
 - [SVG](sdk/svg.md): the primary rendering layer.
 - [Graph 2D](sdk/graph2d.md): the first higher-level visualization component.
 - [Teaching](sdk/teaching.md): steps, explanations, descriptions, and pedagogical bounds.
+- [Scene subset](sdk/scene-subset.md): the JavaScript, HTML and CSS a scene may use, rule by rule.
 - [Extending the SDK](sdk/extending.md): how implementation agents promote repeated patterns into reusable capabilities.
 
 ### Delivery

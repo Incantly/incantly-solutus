@@ -6,3 +6,15 @@ coverage/
 .env
 .env.*
 !.env.example
+*.tsbuildinfo
+
+# Generated sandbox bundles (rebuilt by scripts/build-sandbox-bundles.mjs)
+packages/core/src/sandbox/generated/
+packages/core/src/scenes/generated.ts
+packages/generation/src/generated/
+
+# Test output
+test-results/
+playwright-report/
+blob-report/
+packages/generation/eval-results/

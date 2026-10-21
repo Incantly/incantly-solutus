@@ -1,0 +1,51 @@
+{
+  "concept": "projectile motion",
+  "idea": "A thrown ball keeps its horizontal speed while gravity changes its vertical speed, so its path is a parabola.",
+  "kind": "motion",
+  "capabilities": ["graph2d", "readout", "explain", "describe", "steps"],
+  "parameters": [
+    {
+      "name": "speed",
+      "unit": "m/s",
+      "min": 5,
+      "max": 20,
+      "default": 18,
+      "why": "From a gentle toss to a hard throw; at the top speed and the lowest gravity the path still fits the graph."
+    },
+    {
+      "name": "angle",
+      "unit": "degrees",
+      "min": 10,
+      "max": 80,
+      "default": 45,
+      "why": "Flat to steep throws; 0 and 90 degrees would hide one of the two velocity parts."
+    },
+    {
+      "name": "gravity",
+      "unit": "m/s²",
+      "min": 5,
+      "max": 20,
+      "default": 9.8,
+      "why": "Half to twice Earth's gravity; zero gravity would never bring the ball down."
+    }
+  ],
+  "model": {
+    "inputs": ["speed", "angle", "gravity"],
+    "outputs": [
+      { "name": "vx", "dependsOn": ["speed", "angle"] },
+      { "name": "vy", "dependsOn": ["speed", "angle"] },
+      { "name": "flight", "dependsOn": ["speed", "angle", "gravity"] },
+      { "name": "range", "dependsOn": ["speed", "angle", "gravity"] },
+      { "name": "peak", "dependsOn": ["speed", "angle", "gravity"] }
+    ]
+  },
+  "parts": ["Path", "Ball", "Horizontal velocity", "Vertical velocity", "Peak"],
+  "moves": "The ball flies along its path over and over; the arrows ride with it and the vertical one shrinks to zero at the peak.",
+  "steps": [
+    "Horizontal velocity is constant",
+    "Gravity changes the vertical velocity",
+    "The peak is where vertical velocity is zero",
+    "Stronger gravity shortens the range"
+  ],
+  "singularPoints": []
+}
