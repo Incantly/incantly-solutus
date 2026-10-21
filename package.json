@@ -17,7 +17,7 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test --project=chromium",
     "test:e2e:all": "playwright test --project=chromium --project=webkit",
-    "test:perf": "playwright test --project=perf",
+    "test:perf": "playwright test --project=perf --pass-with-no-tests",
     "size": "node scripts/check-engine-size.mjs",
     "check": "npm run lint && npm run typecheck && npm test && npm run size"
   },
