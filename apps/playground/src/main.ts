@@ -1,10 +1,14 @@
 import './styles.css';
 import { mountEditorPage } from './editor-page';
+import { mountAttackPage, mountComparePage, mountSandboxPage } from './sandbox-page';
 import { mountScenePage } from './scene-page';
 
 const pages: Record<string, (root: HTMLElement, params: URLSearchParams) => void> = {
   editor: mountEditorPage,
   scene: mountScenePage,
+  sandbox: mountSandboxPage,
+  compare: mountComparePage,
+  attack: mountAttackPage,
 };
 
 const params = new URLSearchParams(location.search);
