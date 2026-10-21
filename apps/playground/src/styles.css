@@ -65,3 +65,26 @@ main {
   border: 1px dashed currentColor;
   border-radius: 10px;
 }
+
+.incantly-figure.is-selected {
+  outline: 2px solid Highlight;
+  outline-offset: 4px;
+  border-radius: 8px;
+}
+.incantly-figure__frame.is-live {
+  background: transparent;
+  border-radius: 10px;
+}
+.incantly-figure__frame:not(.is-live) {
+  cursor: pointer;
+}
+.incantly-figure__live.is-booting {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+.incantly-figure__status {
+  margin: 8px 0 0;
+  font-size: 0.9rem;
+}
