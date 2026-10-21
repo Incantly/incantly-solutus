@@ -348,6 +348,7 @@ export class TeachingView {
       this.highlighted = element;
     }
     if (element && !element.classList.contains('is-focus')) element.classList.add('is-focus');
+    this.scene.focusOwner(part?.name ?? null);
     this.figureRoot.classList.toggle('has-focus', element !== null);
 
     // The step already says why its part matters; other parts show their note.

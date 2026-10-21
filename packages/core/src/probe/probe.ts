@@ -39,7 +39,7 @@ export interface ProbeOptions {
   /** Called before every runtime step, so the Worker can refuel. */
   readonly beforeStep?: () => void;
   /** Passed to every runtime the probe creates. */
-  readonly runtime?: Pick<RuntimeOptions, 'locate'>;
+  readonly runtime?: Pick<RuntimeOptions, 'locate' | 'kits'>;
 }
 
 export type ProbeCheck =

@@ -3,7 +3,7 @@ import { parseFrameMessage, type FrameMessage, type HostMessageBody, type LiveOp
 import type { ErrorView } from '../protocol/ui';
 import { hostCss, styleForBridge, type FigureStyle } from '../renderer/style';
 import { validateScene, type SceneFragments, type SceneValidation, type ValidatedScene } from '../validation';
-import { WORKER_SCRIPT } from './generated/bundles';
+import { workerScriptFor } from './worker-script';
 import { buildShell, newChannelId } from './shell';
 
 /**
@@ -163,11 +163,11 @@ class FrameConnection {
   }
 }
 
-function initMessage(scene: ValidatedScene, mode: 'live' | 'probe', extra: { live?: LiveOptions; probe?: ProbeRequest }): HostMessageBody {
+function initMessage(scene: ValidatedScene, worker: string, mode: 'live' | 'probe', extra: { live?: LiveOptions; probe?: ProbeRequest }): HostMessageBody {
   return {
     type: 'init',
     mode,
-    worker: WORKER_SCRIPT,
+    worker,
     scene: scene.instrumented.code,
     shifts: scene.instrumented.shifts,
     ...(extra.live ? { live: extra.live } : {}),
@@ -231,12 +231,15 @@ class SandboxedFigure implements FigureHandle {
       ...(options.figureNumber !== undefined ? { figureNumber: options.figureNumber } : {}),
     };
     const css = hostCss(options.style);
+    // Kit scripts load while the frame boots.
+    const worker = workerScriptFor(scene.kits);
+    worker.catch(() => this.fail({ phase: 'mount', message: 'A drawing kit this figure needs could not be loaded' }));
     this.connection = new FrameConnection(
       container,
       scene,
       channel,
       {
-        onMessage: (message) => this.onMessage(message, scene, live),
+        onMessage: (message) => this.onMessage(message, scene, live, worker),
         onNavigate: () => this.fail({ phase: 'unresponsive', message: 'The figure tried to navigate and was removed' }),
       },
       { title: options.title ?? 'Interactive figure', ...(options.lang ? { lang: options.lang } : {}), ...(css ? { hostCss: css } : {}) },
@@ -245,10 +248,13 @@ class SandboxedFigure implements FigureHandle {
     this.doc.addEventListener('visibilitychange', this.onVisibility);
   }
 
-  private onMessage(message: FrameMessage, scene: ValidatedScene, live: LiveOptions): void {
+  private onMessage(message: FrameMessage, scene: ValidatedScene, live: LiveOptions, worker: Promise<string>): void {
     switch (message.type) {
       case 'ready':
-        this.connection?.post(initMessage(scene, 'live', { live }));
+        void worker.then(
+          (code) => this.connection?.post(initMessage(scene, code, 'live', { live })),
+          () => undefined,
+        );
         break;
       case 'mounted':
         if (this.state !== 'booting') break;
@@ -407,8 +413,8 @@ export function mountUnvalidated(container: HTMLElement, fragments: SceneFragmen
   const validation: SceneValidation = {
     ok: true,
     diagnostics: [],
-    scene: { html: fragments.html, css: fragments.css, js: fragments.js, instrumented: { code: fragments.js, shifts: {} } },
-    info: { paramCount: 0, stages: [], parts: [], stepCount: null, hasIdea: false, hasDescribe: false, hasExplain: false },
+    scene: { html: fragments.html, css: fragments.css, js: fragments.js, instrumented: { code: fragments.js, shifts: {} }, kits: [] },
+    info: { paramCount: 0, stages: [], parts: [], stepCount: null, hasIdea: false, hasDescribe: false, hasExplain: false, kits: [] },
   };
   return new SandboxedFigure(container, validation, options);
 }
@@ -419,8 +425,8 @@ export function probeUnvalidated(fragments: SceneFragments, options: SandboxProb
     {
       ok: true,
       diagnostics: [],
-      scene: { html: fragments.html, css: fragments.css, js: fragments.js, instrumented: { code: fragments.js, shifts: {} } },
-      info: { paramCount: 0, stages: [], parts: [], stepCount: null, hasIdea: false, hasDescribe: false, hasExplain: false },
+      scene: { html: fragments.html, css: fragments.css, js: fragments.js, instrumented: { code: fragments.js, shifts: {} }, kits: [] },
+      info: { paramCount: 0, stages: [], parts: [], stepCount: null, hasIdea: false, hasDescribe: false, hasExplain: false, kits: [] },
     },
     options,
   );
@@ -485,14 +491,20 @@ function runProbe(validation: SceneValidation, options: SandboxProbeOptions): Pr
       ...(options.spec ? { spec: options.spec } : {}),
       ...(options.seed !== undefined ? { seed: options.seed } : {}),
     };
+    const worker = workerScriptFor(scene.kits);
+    worker.catch(() => finish(failedReport('mount', 'A drawing kit this scene needs could not be loaded', performance.now() - started)));
     connection = new FrameConnection(
       container,
       scene,
       newChannelId(),
       {
         onMessage: (message) => {
-          if (message.type === 'ready') connection?.post(initMessage(scene, 'probe', { probe }));
-          else if (message.type === 'probe') finish(message.report);
+          if (message.type === 'ready') {
+            void worker.then(
+              (code) => connection?.post(initMessage(scene, code, 'probe', { probe })),
+              () => undefined,
+            );
+          } else if (message.type === 'probe') finish(message.report);
           else if (message.type === 'error') finish(failedReport('mount', message.error.message, performance.now() - started));
         },
         onNavigate: () => finish(failedReport('mount', 'The scene tried to navigate', performance.now() - started)),

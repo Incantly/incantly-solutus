@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { Inc } from '../src/api/types';
-import { calculus as calc } from '../src/kit/calc';
-import { motion } from '../src/kit/motion';
-import { shapes } from '../src/kit/shapes';
-import { chem, sym } from '../src/kit/sym';
-import { units } from '../src/kit/units';
-import { vectors as vec } from '../src/kit/vec';
+import { calculus as calc } from '../src/helpers/calc';
+import { motion } from '../src/helpers/motion';
+import { shapes } from '../src/helpers/shapes';
+import { chem, sym } from '../src/helpers/sym';
+import { units } from '../src/helpers/units';
+import { vectors as vec } from '../src/helpers/vec';
 import { SceneRuntime } from '../src/runtime/runtime';
 import { validateSceneJs } from '../src/validation/js';
 

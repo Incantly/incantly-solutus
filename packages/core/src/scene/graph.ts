@@ -248,7 +248,7 @@ export class SceneGraph {
     this.setAttribute(node, 'transform', parts.length ? parts.join(' ') : null);
   }
 
-  setFlags(node: VNode, flags: Partial<Pick<VNode, 'tone' | 'dashed' | 'hidden' | 'part' | 'fill' | 'shade'>>): void {
+  setFlags(node: VNode, flags: Partial<Pick<VNode, 'tone' | 'dashed' | 'hidden' | 'part' | 'fill' | 'shade' | 'extra'>>): void {
     Object.assign(node, flags);
     this.updateClass(node);
   }

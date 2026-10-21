@@ -11,6 +11,7 @@ import {
   type HandleKind,
   type Returns,
 } from '../api/surface';
+import { isKitCall, kitsFor, type KitName } from '../runtime/kits';
 import { isColourLiteral, NAMED_COLOURS } from './colours';
 import { LineIndex, type Diagnostic } from './diagnostics';
 import { SCENE_LIMITS, type SceneLimits } from './limits';
@@ -38,6 +39,8 @@ export interface JsInfo {
   readonly hasIdea: boolean;
   readonly hasDescribe: boolean;
   readonly hasExplain: boolean;
+  /** Kits the scene calls, which the host loads before it runs. */
+  readonly kits: readonly KitName[];
 }
 
 export interface JsValidation {
@@ -208,12 +211,23 @@ const MOUNT_ONLY: ReadonlySet<string> = new Set([
   'compare',
   'svg',
   'graph2d',
+  'space3d',
+  'graph3d',
+  'physics2d',
+  'chart',
+  'flow',
   'formula',
 ]);
 
 /** Handle methods that create a new element. Created once, then moved. */
 const CREATES_ELEMENTS: Readonly<Partial<Record<HandleKind, ReadonlySet<string>>>> = {
   Stage: new Set(['group', 'path', 'line', 'circle', 'rect', 'text', 'polyline', 'part', 'connector', 'callout', 'repeat', 'dots']),
+  Space3D: new Set(['box', 'sphere', 'cylinder', 'cone', 'plane', 'torus', 'mesh', 'group', 'line', 'arrow', 'arc', 'point', 'label', 'grid', 'axes', 'fieldLines', 'part', 'drag']),
+  Graph3D: new Set(['surface', 'parametric', 'curve', 'point', 'vector', 'line', 'plane', 'label', 'part']),
+  Surface3D: new Set(['section']),
+  World2D: new Set(['ball', 'box', 'polygon', 'ramp', 'spring', 'rope', 'rod', 'hinge', 'pulley', 'tank', 'field', 'forces', 'onHit', 'onTouch']),
+  Chart: new Set(['series', 'points', 'rule']),
+  Flow: new Set(['node', 'edge']),
   Graph: new Set([
     'plot',
     'plotX',
@@ -468,6 +482,7 @@ class JsValidator {
   private reportedDepth = false;
   private paramCount = 0;
   private readonly stages: StageReference[] = [];
+  private readonly kitCalls = new Set<string>();
   private readonly parts: string[] = [];
   private stepCount: number | null = null;
   private hasIdea = false;
@@ -524,6 +539,7 @@ class JsValidator {
         hasIdea: this.hasIdea,
         hasDescribe: this.hasDescribe,
         hasExplain: this.hasExplain,
+        kits: kitsFor(this.kitCalls),
       },
     };
   }
@@ -1310,7 +1326,13 @@ class JsValidator {
         }
         break;
       case 'svg':
-      case 'graph2d': {
+      case 'graph2d':
+      case 'space3d':
+      case 'graph3d':
+      case 'physics2d':
+      case 'chart':
+      case 'flow': {
+        if (isKitCall(method)) this.kitCalls.add(method);
         const [selector] = node.arguments;
         const value =
           selector?.type === 'Literal' && typeof selector.value === 'string'

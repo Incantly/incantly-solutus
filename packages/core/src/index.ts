@@ -16,6 +16,9 @@ export type { CompiledExpression } from './expr';
 
 export { SceneRuntime } from './runtime/runtime';
 export type { RuntimeOptions, RuntimeStats, SceneErrorRecord, SceneFunction } from './runtime/runtime';
+export { KIT_NAMES, KIT_OF, kitsFor } from './runtime/kits';
+export type { KitCall, KitEntry, KitModule, KitName, KitRegistry } from './runtime/kits';
+export { availableKits, loadKitModules } from './kits/load';
 
 export type { RendererMessage, RuntimeUpdate } from './protocol/runtime-messages';
 export type { SceneCommand } from './protocol/scene-commands';

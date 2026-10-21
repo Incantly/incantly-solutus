@@ -1,4 +1,4 @@
-import type { DragInfo, Formula, PathHelpers, Values, Vec2 } from '../api/types';
+import type { DragInfo, Formula, PathHelpers, Shade, Tone, Values, Vec2 } from '../api/types';
 import type { ViewAction } from '../protocol/runtime-messages';
 import type { VNode } from '../scene/graph';
 import type { StageHandle } from '../scene/handles';
@@ -55,4 +55,20 @@ export interface KitContext {
   reducedMotion(): boolean;
   /** Records a problem the scene did not throw for, such as a budget warning. */
   warn(message: string): void;
+  /** Restyles an element the kit reuses, such as a 3D face slot, as one change. */
+  restyle(node: VNode, look: ElementLook): void;
+  /** Names the part a reused element draws for now, or null. */
+  setOwner(node: VNode, part: string | null): void;
+  /** Wall-clock milliseconds, for measuring how long drawing takes. */
+  now(): number;
+}
+
+export interface ElementLook {
+  readonly tone?: Tone | null;
+  readonly dashed?: boolean;
+  readonly hidden?: boolean;
+  readonly fill?: boolean;
+  readonly shade?: Shade | null;
+  /** Extra classes, such as a 3D face's lighting level. */
+  readonly extra?: string;
 }

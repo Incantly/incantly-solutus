@@ -1,7 +1,13 @@
 import type {
+  Chart,
+  ChartOptions,
   DragInfo,
+  Flow,
+  FlowOptions,
   FormulaOptions,
   FrameInfo,
+  Graph3D,
+  Graph3DOptions,
   GraphOptions,
   Inc,
   Model,
@@ -9,9 +15,12 @@ import type {
   ParamOptions,
   ParamValues,
   PathHelpers,
+  Physics2DOptions,
   PredictOptions,
   Readable,
   SimulateOptions,
+  Space3D,
+  Space3DOptions,
   Stage,
   StageOptions,
   StateValue,
@@ -21,6 +30,7 @@ import type {
   TweenOptions,
   Values,
   Vec2,
+  World2D,
 } from '../api/types';
 import { ExpressionError } from '../expr';
 import { DEFAULT_GRAPH_VIEWBOX, Graph2D, NUMBER_LINE_VIEWBOX, plotRect, validateGraphOptions } from '../graph2d/graph';
@@ -29,12 +39,12 @@ import { SPEEDS, type LoopMode } from '../protocol/runtime-messages';
 import type { ActionView, ErrorPhase, ErrorView, LegendView, ParamView, PredictView, UiState } from '../protocol/ui';
 import { EMPTY_UI } from '../protocol/ui';
 import { SceneApiError } from '../scene/errors';
-import { calculus } from '../kit/calc';
-import { motion } from '../kit/motion';
-import { shapes } from '../kit/shapes';
-import { chem, sym } from '../kit/sym';
-import { units } from '../kit/units';
-import { vectors } from '../kit/vec';
+import { calculus } from '../helpers/calc';
+import { motion } from '../helpers/motion';
+import { shapes } from '../helpers/shapes';
+import { chem, sym } from '../helpers/sym';
+import { units } from '../helpers/units';
+import { vectors } from '../helpers/vec';
 import { geometry } from '../scene/geometry';
 import { SceneGraph, type GraphServices, type VNode } from '../scene/graph';
 import { PartRegistry, StageHandle, formatReadable } from '../scene/handles';
@@ -44,6 +54,7 @@ import { createFormula, type FormulaRecord } from './formula';
 import { isErrorLike, isRunaway } from './fuel';
 import { History } from './history';
 import type { KitContext, ParamInfo, ViewController } from './kit';
+import { KIT_OF, type KitCall, type KitRegistry } from './kits';
 import { createParamState, snap, type ControlShape, type ParamState } from './params';
 import { mulberry32 } from './random';
 import { Timeline, isSettingName } from './timeline';
@@ -70,6 +81,8 @@ export interface RuntimeOptions {
   readonly locate?: (error: unknown) => { readonly line: number; readonly column: number } | null;
   /** Wall clock in milliseconds, for grouping changes into undo steps. */
   readonly now?: () => number;
+  /** Kits the scene may call: 3D, physics, charts, flowcharts. Loaded by the host. */
+  readonly kits?: KitRegistry;
 }
 
 /** Seconds a step takes to move parameters to its values. */
@@ -1274,7 +1287,38 @@ export class SceneRuntime {
       warn: (message) => {
         if (runtime.graph.diagnostics.length < 200) runtime.graph.diagnostics.push({ kind: 'budget', message });
       },
+      restyle: (node, look) => {
+        const flags: Parameters<SceneGraph['setFlags']>[1] = {};
+        let changed = false;
+        for (const key of ['tone', 'dashed', 'hidden', 'fill', 'shade', 'extra'] as const) {
+          const value = look[key];
+          if (value !== undefined && node[key] !== value) {
+            (flags as Record<string, unknown>)[key] = value;
+            changed = true;
+          }
+        }
+        if (changed) runtime.graph.setFlags(node, flags);
+      },
+      setOwner: (node, part) => runtime.graph.setOwner(node, part),
+      now: runtime.options.now ?? (() => Date.now()),
     };
+  }
+
+  /** A stage drawn by a kit: inc.space3d, inc.graph3d, inc.physics2d, inc.chart, inc.flow. */
+  private kitStage(call: KitCall, selector: string, options: unknown): unknown {
+    this.requireMounting(call);
+    const name = KIT_OF[call];
+    const entry = this.options.kits?.[name]?.calls[call];
+    if (!entry) throw new SceneApiError(`inc.${call} needs the ${name} kit, which this page did not load`);
+    if (typeof options !== 'object' || options === null) throw new SceneApiError(`inc.${call} needs an options object with a title`);
+    const { title, description, zoom } = options as { title?: unknown; description?: unknown; zoom?: unknown };
+    if (typeof title !== 'string' || title.trim() === '') throw new SceneApiError(`inc.${call} needs a title for its accessible name`);
+    if (description !== undefined && typeof description !== 'string') throw new SceneApiError(`inc.${call}: description must be text`);
+    const { viewBox, clip } = entry.layout(options);
+    const node = this.graph.createStage(selector, viewBox, title, (description as string | undefined) ?? '', clip);
+    this.stageZoom.set(node.id, zoom !== false);
+    const stage = new StageHandle(this.graph, node, viewBox, this.parts);
+    return entry.create(this.kitContext(stage, node.id), options);
   }
 
   // -------------------------------------------------------------------------
@@ -1541,6 +1585,11 @@ export class SceneRuntime {
         const stage = new StageHandle(runtime.graph, node, viewBox, runtime.parts);
         return new Graph2D(runtime.kitContext(stage, node.id), options, viewBox);
       },
+      space3d: (selector: string, options: Space3DOptions) => runtime.kitStage('space3d', selector, options) as Space3D,
+      graph3d: (selector: string, options: Graph3DOptions) => runtime.kitStage('graph3d', selector, options) as Graph3D,
+      physics2d: (selector: string, options: Physics2DOptions) => runtime.kitStage('physics2d', selector, options) as World2D,
+      chart: (selector: string, options: ChartOptions) => runtime.kitStage('chart', selector, options) as Chart,
+      flow: (selector: string, options: FlowOptions) => runtime.kitStage('flow', selector, options) as Flow,
       formula(source: string, options?: FormulaOptions) {
         try {
           const index = runtime.formulas.length;

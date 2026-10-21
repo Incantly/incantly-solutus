@@ -4,6 +4,7 @@ import { validateSceneHtml } from './html';
 import { instrumentSceneJs, type InstrumentedScene } from './instrument';
 import { validateSceneJs, type JsInfo } from './js';
 import { SCENE_LIMITS, type SceneLimits } from './limits';
+import type { KitName } from '../runtime/kits';
 
 /**
  * The version of the validator's rules. Stored with approved fragments, so a
@@ -25,6 +26,8 @@ export interface ValidatedScene {
   readonly js: string;
   /** The script with fuel and key guards, ready for the Worker. */
   readonly instrumented: InstrumentedScene;
+  /** Kits the scene calls; the host loads them before it runs. */
+  readonly kits: readonly KitName[];
 }
 
 export interface SceneValidation {
@@ -83,7 +86,7 @@ export function validateScene(fragments: SceneFragments, options: ValidateOption
     diagnostics.push({
       fragment: 'js',
       rule: 'no-stage',
-      message: 'The scene never draws: create a stage with inc.svg or inc.graph2d',
+      message: 'The scene never draws: create a stage with inc.svg, inc.graph2d or a kit such as inc.space3d',
       line: 1,
       column: 1,
       severity: 'error',
@@ -97,7 +100,7 @@ export function validateScene(fragments: SceneFragments, options: ValidateOption
     diagnostics,
     scene:
       ok && js.program
-        ? { html: html.html, css: cssSource, js: jsSource, instrumented: instrumentSceneJs(jsSource, js.program) }
+        ? { html: html.html, css: cssSource, js: jsSource, instrumented: instrumentSceneJs(jsSource, js.program), kits: js.info.kits }
         : null,
     info: js.info,
   };

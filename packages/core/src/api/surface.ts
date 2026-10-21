@@ -6,10 +6,17 @@
  * clauses make the TypeScript compiler fail if this file and `types.ts` drift.
  */
 import type {
+  Arrow3D,
+  Body2D,
   Calculus,
+  Chart,
+  ChartSeries,
   Choice,
   ColorParam,
   Dots,
+  Flow,
+  FlowEdge,
+  FlowNode,
   Formula,
   GeometryHelpers,
   Graph,
@@ -19,10 +26,16 @@ import type {
   GraphSegment,
   GraphMark,
   GraphTrail,
+  Graph3D,
+  Group3D,
   Handle,
   Inc,
+  Joint2D,
+  Label3D,
   Line,
+  Line3D,
   MotionHelpers,
+  Object3D,
   Param,
   PathHandle,
   PathHelpers,
@@ -30,13 +43,17 @@ import type {
   PolylineHandle,
   Segment,
   ShapeHelpers,
+  Space3D,
   Stage,
   State,
+  Surface3D,
+  Tank2D,
   TextHandle,
   Toggle,
   Tone,
   Units,
   VectorHelpers,
+  World2D,
 } from './types';
 
 export const SDK_VERSION = '0.1.0';
@@ -66,7 +83,24 @@ export type HandleKind =
   | 'Formula'
   | 'Point'
   | 'Line'
-  | 'Segment';
+  | 'Segment'
+  | 'Space3D'
+  | 'Graph3D'
+  | 'Object3D'
+  | 'Group3D'
+  | 'Line3D'
+  | 'Arrow3D'
+  | 'Label3D'
+  | 'Surface3D'
+  | 'World2D'
+  | 'Body2D'
+  | 'Joint2D'
+  | 'Tank2D'
+  | 'Chart'
+  | 'ChartSeries'
+  | 'Flow'
+  | 'FlowNode'
+  | 'FlowEdge';
 
 /**
  * What a member returns: another handle kind, `self` for chainable methods,
@@ -85,6 +119,17 @@ export interface HandleSpec {
 
 type Methods<T> = { [K in keyof T as T[K] extends (...args: never[]) => unknown ? K : never]: Returns };
 type Properties<T> = { [K in keyof T as T[K] extends (...args: never[]) => unknown ? never : K]: Returns };
+
+const object3dMethods = {
+  at: 'self',
+  rotate: 'self',
+  orient: 'self',
+  scale: 'self',
+  tone: 'self',
+  show: 'self',
+  hide: 'self',
+  screen: null,
+} as const satisfies Methods<Object3D>;
 
 const elementMethods = {
   set: 'self',
@@ -123,6 +168,11 @@ export const INC_FUNCTIONS = {
   compare: null,
   svg: 'Stage',
   graph2d: 'Graph',
+  space3d: 'Space3D',
+  graph3d: 'Graph3D',
+  physics2d: 'World2D',
+  chart: 'Chart',
+  flow: 'Flow',
   formula: 'Formula',
   random: null,
   tween: null,
@@ -321,6 +371,113 @@ export const HANDLES: Readonly<Record<HandleKind, HandleSpec>> = {
   Point: { methods: {}, properties: { x: null, y: null } satisfies Properties<Point> },
   Line: { methods: {}, properties: { a: 'Point', b: 'Point' } satisfies Properties<Line> },
   Segment: { methods: {}, properties: { from: 'Point', to: 'Point' } satisfies Properties<Segment> },
+  Space3D: {
+    methods: {
+      box: 'Object3D',
+      sphere: 'Object3D',
+      cylinder: 'Object3D',
+      cone: 'Object3D',
+      plane: 'Object3D',
+      torus: 'Object3D',
+      mesh: 'Object3D',
+      group: 'Group3D',
+      line: 'Line3D',
+      arrow: 'Arrow3D',
+      arc: 'Line3D',
+      point: 'Object3D',
+      label: 'Label3D',
+      grid: 'Object3D',
+      axes: 'Group3D',
+      fieldLines: 'Group3D',
+      part: 'argument',
+      drag: 'argument',
+      pick: null,
+      camera: null,
+      view: null,
+      project: null,
+    } satisfies Methods<Space3D>,
+    properties: { stage: 'Stage' } satisfies Properties<Space3D>,
+  },
+  Graph3D: {
+    methods: {
+      surface: 'Surface3D',
+      parametric: 'Surface3D',
+      curve: 'Line3D',
+      point: 'Object3D',
+      vector: 'Arrow3D',
+      line: 'Line3D',
+      plane: 'Surface3D',
+      label: 'Label3D',
+      part: 'argument',
+      camera: null,
+      view: null,
+      project: null,
+    } satisfies Methods<Graph3D>,
+    properties: { stage: 'Stage' } satisfies Properties<Graph3D>,
+  },
+  Object3D: { methods: object3dMethods, properties: {} },
+  Group3D: { methods: { ...object3dMethods, explode: 'self' } satisfies Methods<Group3D>, properties: {} },
+  Line3D: { methods: { ...object3dMethods, points: 'self' } satisfies Methods<Line3D>, properties: {} },
+  Arrow3D: { methods: { ...object3dMethods, set: 'self', label: 'self' } satisfies Methods<Arrow3D>, properties: {} },
+  Label3D: {
+    methods: { at: 'self', text: 'self', tone: 'self', show: 'self', hide: 'self' } satisfies Methods<Label3D>,
+    properties: {},
+  },
+  Surface3D: { methods: { ...object3dMethods, section: 'Line3D' } satisfies Methods<Surface3D>, properties: {} },
+  World2D: {
+    methods: {
+      ball: 'Body2D',
+      box: 'Body2D',
+      polygon: 'Body2D',
+      ramp: 'Body2D',
+      spring: 'Joint2D',
+      rope: 'Joint2D',
+      rod: 'Joint2D',
+      hinge: 'Joint2D',
+      pulley: 'Joint2D',
+      tank: 'Tank2D',
+      field: null,
+      forces: null,
+      onHit: null,
+      onTouch: null,
+      energy: null,
+      restart: null,
+      toStage: null,
+    } satisfies Methods<World2D>,
+    properties: { time: null, stage: 'Stage' } satisfies Properties<World2D>,
+  },
+  Body2D: {
+    methods: { force: null, place: 'self', velocity: 'self', push: 'self', tone: 'self', show: 'self', hide: 'self' } satisfies Methods<Body2D>,
+    properties: { x: null, y: null, angle: null, vx: null, vy: null, speed: null, mass: null, handle: 'Element' } satisfies Properties<Body2D>,
+  },
+  Joint2D: {
+    methods: { setLength: 'self', show: 'self', hide: 'self' } satisfies Methods<Joint2D>,
+    properties: { tension: null, length: null, handle: 'Element' } satisfies Properties<Joint2D>,
+  },
+  Tank2D: {
+    methods: { buoyancy: null } satisfies Methods<Tank2D>,
+    properties: { level: null, displaced: null } satisfies Properties<Tank2D>,
+  },
+  Chart: {
+    methods: { series: 'ChartSeries', points: 'ChartSeries', rule: 'Element', highlight: null } satisfies Methods<Chart>,
+    properties: { stage: 'Stage' } satisfies Properties<Chart>,
+  },
+  ChartSeries: {
+    methods: { set: 'self', tone: 'self', show: 'self', hide: 'self' } satisfies Methods<ChartSeries>,
+    properties: { name: null } satisfies Properties<ChartSeries>,
+  },
+  Flow: {
+    methods: { node: 'FlowNode', edge: 'FlowEdge', active: null } satisfies Methods<Flow>,
+    properties: { stage: 'Stage' } satisfies Properties<Flow>,
+  },
+  FlowNode: {
+    methods: { label: 'self', tone: 'self', centre: null } satisfies Methods<FlowNode>,
+    properties: { id: null } satisfies Properties<FlowNode>,
+  },
+  FlowEdge: {
+    methods: { label: 'self', tone: 'self', dashed: 'self', flow: 'self' } satisfies Methods<FlowEdge>,
+    properties: {},
+  },
 };
 
 /** Pure Math members a scene may use. Math.random is excluded: use inc.random. */

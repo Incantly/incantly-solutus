@@ -1,6 +1,9 @@
 import type { ExecutionAdapter, FigureHandle, FigureState, MountOptions } from '../sandbox/adapter';
 import { snapshotStage } from '../sandbox/snapshot';
 import type { SceneFragments } from '../validation';
+import { loadKitModules } from '../kits/load';
+import type { KitRegistry } from '../runtime/kits';
+import { validateSceneJs } from '../validation/js';
 import { mountTrusted } from './mount';
 
 /**
@@ -15,37 +18,52 @@ export function mountInThread(container: HTMLElement, fragments: SceneFragments,
     options.onState?.(next);
   };
   let figure: ReturnType<typeof mountTrusted> | null = null;
-  try {
-    figure = mountTrusted(container, fragments, {
-      ...(options.values ? { values: options.values } : {}),
-      ...(options.formulas ? { formulas: options.formulas } : {}),
-      ...(options.style ? { style: options.style } : {}),
-      ...(options.figureNumber !== undefined ? { figureNumber: options.figureNumber } : {}),
-      ...(options.onFormulas ? { onFormulas: options.onFormulas } : {}),
-      ...(options.step !== undefined ? { step: options.step } : {}),
-      ...(options.autoplay !== undefined ? { autoplay: options.autoplay } : {}),
-      ...(options.reducedMotion !== undefined ? { reducedMotion: options.reducedMotion } : {}),
-      ...(options.seed !== undefined ? { seed: options.seed } : {}),
-      ...(options.theme ? { theme: options.theme } : {}),
-      visibility: 'observe',
-      ...(options.onValues ? { onValues: options.onValues } : {}),
-      ...(options.onStep ? { onStep: options.onStep } : {}),
-      ...(options.onError ? { onError: options.onError } : {}),
-      ...(options.onDescription
-        ? {
-            onUpdate: (update) => {
-              if (typeof update.ui.description === 'string') options.onDescription?.(update.ui.description);
-            },
-          }
-        : {}),
-    });
-    if (options.onEscape) listenForEscape(figure.root, options.onEscape);
-    setState(figure.runtime.isMounted ? 'live' : 'failed');
-  } catch (error) {
-    options.onError?.({ phase: 'mount', message: error instanceof Error ? error.message : 'The figure could not start' });
-    setState('failed');
-  }
-  const ready = Promise.resolve(state);
+  let destroyed = false;
+  const start = (kits: KitRegistry): FigureState => {
+    if (destroyed) return state;
+    try {
+      figure = mountTrusted(container, fragments, {
+        kits,
+        ...(options.values ? { values: options.values } : {}),
+        ...(options.formulas ? { formulas: options.formulas } : {}),
+        ...(options.style ? { style: options.style } : {}),
+        ...(options.figureNumber !== undefined ? { figureNumber: options.figureNumber } : {}),
+        ...(options.onFormulas ? { onFormulas: options.onFormulas } : {}),
+        ...(options.step !== undefined ? { step: options.step } : {}),
+        ...(options.autoplay !== undefined ? { autoplay: options.autoplay } : {}),
+        ...(options.reducedMotion !== undefined ? { reducedMotion: options.reducedMotion } : {}),
+        ...(options.seed !== undefined ? { seed: options.seed } : {}),
+        ...(options.theme ? { theme: options.theme } : {}),
+        visibility: 'observe',
+        ...(options.onValues ? { onValues: options.onValues } : {}),
+        ...(options.onStep ? { onStep: options.onStep } : {}),
+        ...(options.onError ? { onError: options.onError } : {}),
+        ...(options.onDescription
+          ? {
+              onUpdate: (update) => {
+                if (typeof update.ui.description === 'string') options.onDescription?.(update.ui.description);
+              },
+            }
+          : {}),
+      });
+      if (options.onEscape) listenForEscape(figure.root, options.onEscape);
+      setState(figure.runtime.isMounted ? 'live' : 'failed');
+    } catch (error) {
+      options.onError?.({ phase: 'mount', message: error instanceof Error ? error.message : 'The figure could not start' });
+      setState('failed');
+    }
+    return state;
+  };
+  // Without kits the figure mounts at once; with them, once their modules have loaded.
+  const needed = validateSceneJs(fragments.js).info.kits;
+  const ready =
+    needed.length === 0
+      ? Promise.resolve(start({}))
+      : loadKitModules(needed).then(start, () => {
+          options.onError?.({ phase: 'mount', message: 'A drawing kit this figure needs could not be loaded' });
+          setState('failed');
+          return state;
+        });
   return {
     get state() {
       return state;
@@ -71,6 +89,7 @@ export function mountInThread(container: HTMLElement, fragments: SceneFragments,
     },
     snapshot: () => snapshotStage(figure?.root.querySelector<SVGSVGElement>('svg.inc-stage') ?? null),
     destroy: () => {
+      destroyed = true;
       figure?.destroy();
       figure = null;
       setState('destroyed');

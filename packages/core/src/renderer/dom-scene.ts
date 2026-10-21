@@ -54,6 +54,7 @@ export class SceneDom {
   private readonly ids = new WeakMap<Element, number>();
   private readonly dots = new Map<number, DotsState>();
   private readonly dirtyCanvases = new Set<number>();
+  private focusedOwner: string | null = null;
   readonly stats: SceneDomStats = { writes: 0 };
   /** Called when a stage appears or its interaction changes, for the pointer controller. */
   onStage: ((stage: StageDom) => void) | null = null;
@@ -90,6 +91,16 @@ export class SceneDom {
 
   allStages(): StageDom[] {
     return [...this.stages.values()];
+  }
+
+  /** Highlights every element drawing for a part that lives in shared slots (3D faces). */
+  focusOwner(part: string | null): void {
+    if (part === this.focusedOwner) return;
+    this.focusedOwner = part;
+    for (const element of this.elements.values()) {
+      const owner = element.getAttribute('data-owner');
+      if (owner !== null) element.classList.toggle('is-focus', owner === part);
+    }
   }
 
   clear(): void {
@@ -262,6 +273,8 @@ export class SceneDom {
         if (!element) return;
         if (command.part === null) element.removeAttribute('data-owner');
         else element.setAttribute('data-owner', command.part);
+        // A reused slot takes on or drops the highlight of the part it now draws for.
+        element.classList.toggle('is-focus', command.part !== null && command.part === this.focusedOwner);
         return;
       }
       case 'order': {
