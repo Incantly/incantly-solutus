@@ -190,6 +190,8 @@ describe('making a figure in a note', () => {
     expect(card()?.classList.contains('is-failed')).toBe(true);
     expect(card()?.querySelector('.incantly-figure__status')?.textContent).toBe('This figure could not be built.');
     expect(card()?.querySelector('.incantly-skeleton__request')?.textContent).toBe('Explain photosynthesis');
+    expect(card()?.getAttribute('aria-label')).toBe('Figure not built');
+    expect(card()?.querySelector<HTMLElement>('.incantly-skeleton__title')?.hidden).toBe(true);
     expect(figures()).toHaveLength(0);
 
     const button = (name: string) => [...card()!.querySelectorAll('button')].find((b) => b.textContent === name)!;

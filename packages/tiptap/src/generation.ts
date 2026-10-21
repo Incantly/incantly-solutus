@@ -83,6 +83,7 @@ class GenerationTask {
   private readonly controls: HTMLElement;
   private readonly status: HTMLElement;
   private readonly actions: HTMLElement;
+  private concept: string | null = null;
   finished = false;
 
   constructor(
@@ -122,6 +123,8 @@ class GenerationTask {
     this.element.classList.remove('is-failed');
     this.actions.hidden = true;
     this.actions.replaceChildren();
+    this.concept = null;
+    this.title.hidden = false;
     this.title.textContent = 'Making a figure';
     this.element.setAttribute('aria-label', 'Making a figure');
     this.controls.replaceChildren();
@@ -149,6 +152,7 @@ class GenerationTask {
   private skeleton(skeleton: SkeletonView): void {
     if (this.finished) return;
     const doc = this.element.ownerDocument;
+    this.concept = skeleton.concept;
     this.title.textContent = skeleton.concept;
     this.element.setAttribute('aria-label', `Making a figure: ${skeleton.concept}`);
     const rows = skeleton.parameters.map((p) => {
@@ -180,6 +184,9 @@ class GenerationTask {
     // One quiet line, the request it was for, and a way to try again.
     const doc = this.element.ownerDocument;
     this.element.classList.add('is-failed');
+    // Nothing is being made any more: the title is the concept, if the plan named one.
+    this.title.hidden = this.concept === null;
+    this.element.setAttribute('aria-label', this.concept ? `Figure not built: ${this.concept}` : 'Figure not built');
     this.frame.hidden = true;
     this.controls.replaceChildren();
     this.status.textContent = result.message;
