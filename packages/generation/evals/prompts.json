@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "notes": "Learner-style requests for the three v0.1 concepts. Several phrasings per concept keep trials from all sharing one wording. Run each concept with and without its own reviewed example in the generation context.",
+  "concepts": [
+    {
+      "id": "sine-wave",
+      "concept": "sine wave",
+      "example": "sine-wave",
+      "expects": {
+        "quantities": [["amplitude", "height"], ["frequency", "angular frequency", "omega"], ["phase", "shift"]],
+        "minParams": 2,
+        "maxParams": 3,
+        "readouts": [],
+        "singularPoints": false
+      },
+      "phrasings": [
+        "Show me how amplitude, frequency and phase change a sine wave.",
+        "I don't get what the A and the omega do in y = A sin(omega x + phi). Can you show me?",
+        "Visualise a sine wave so I can see what the frequency changes.",
+        "Make an interactive graph of y = A*sin(wx + phi).",
+        "Explain phase shift on a sine curve.",
+        "How does changing the amplitude of a wave change its graph?",
+        "My notes say 'frequency = how often it repeats'. Show that on a sine wave.",
+        "Help me understand sinusoidal functions for my trig test.",
+        "Draw a moving sine wave and let me change how tall and how tight it is.",
+        "What happens to sin(x) when I multiply x by a bigger number?"
+      ]
+    },
+    {
+      "id": "projectile-motion",
+      "concept": "projectile motion",
+      "example": "projectile",
+      "expects": {
+        "quantities": [["speed", "launch speed", "velocity"], ["angle", "launch angle"], ["gravity", "g"]],
+        "minParams": 2,
+        "maxParams": 3,
+        "readouts": [["range", "distance"], ["peak", "max height", "maximum height"]],
+        "singularPoints": false
+      },
+      "phrasings": [
+        "Explain projectile motion for a physics student.",
+        "Why does a ball thrown at 45 degrees go the furthest?",
+        "Show how launch speed and angle change where a projectile lands.",
+        "I need to see why horizontal speed stays constant in projectile motion.",
+        "Make a simulation of a cannonball with adjustable gravity.",
+        "How does gravity on the Moon change a projectile's path?",
+        "Visualise the range and maximum height of a projectile.",
+        "Show the horizontal and vertical components of velocity for a thrown ball.",
+        "My notes: 'the vertical velocity is zero at the top'. Show me that.",
+        "Help me picture a parabola traced by a kicked football."
+      ]
+    },
+    {
+      "id": "thin-lens",
+      "concept": "thin lens ray diagram",
+      "example": "thin-lens",
+      "expects": {
+        "quantities": [["object distance", "object position", "u", "do"], ["focal length", "f"]],
+        "minParams": 2,
+        "maxParams": 3,
+        "readouts": [["image distance", "v", "di"], ["magnification", "m"]],
+        "singularPoints": true
+      },
+      "phrasings": [
+        "Draw a ray diagram for a convex lens.",
+        "Show me where the image forms when I move the object closer to a lens.",
+        "Explain the thin lens equation 1/f = 1/u + 1/v with a diagram.",
+        "Why does a magnifying glass make a virtual image?",
+        "Show how focal length changes where a lens forms an image.",
+        "I don't understand the three principal rays for a converging lens.",
+        "What happens when the object is exactly at the focal point of a lens?",
+        "Make a ray diagram where I can drag the object distance.",
+        "Help me understand real versus virtual images for my optics exam.",
+        "Show the magnification of a convex lens as the object moves."
+      ]
+    }
+  ]
+}

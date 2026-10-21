@@ -1,0 +1,13 @@
+{
+  "name": "@incantly/generation",
+  "version": "0.1.0-dev",
+  "private": true,
+  "type": "module",
+  "description": "Server-side generation: plan, scene, static validation, repair, fallbacks, evals and the generation service.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@incantly/core": "*"
+  }
+}
