@@ -109,6 +109,8 @@ html.inc-frame, html.inc-frame body { margin: 0; padding: 0; background: transpa
 }
 .inc-figure[data-layout='left'] .inc-body { grid-template-columns: var(--inc-panel-width, minmax(220px, 36%)) minmax(0, 1fr); }
 .inc-figure[data-layout='left'] .inc-panel { order: -1; }
+/* A side panel is narrow: its rows lay out by its own width, stacking label over slider. */
+.inc-figure:is([data-layout='right'], [data-layout='left']) .inc-panel { container-type: inline-size; }
 .inc-figure[data-layout='overlay'] .inc-body { position: relative; display: block; }
 .inc-figure[data-layout='overlay'] .inc-panel {
   position: absolute;
@@ -295,8 +297,8 @@ html.inc-frame, html.inc-frame body { margin: 0; padding: 0; background: transpa
 .inc-param--toggle { grid-template-columns: auto 1fr; }
 .inc-param:is(.inc-param--choice, .inc-param--color) { grid-template-columns: minmax(120px, 1fr) 2fr; }
 @container (max-width: 420px) {
-  .inc-param { grid-template-columns: 1fr 88px; }
-  .inc-param .inc-param__label { grid-column: 1 / -1; }
+  .inc-param:not(.inc-param--toggle) { grid-template-columns: 1fr 88px; }
+  .inc-param:not(.inc-param--toggle) .inc-param__label { grid-column: 1 / -1; }
   .inc-param:is(.inc-param--choice, .inc-param--color) { grid-template-columns: 1fr; }
 }
 .inc-param__label { font-weight: 500; }

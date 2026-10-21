@@ -3,6 +3,7 @@ import { mountEditorPage } from './editor-page';
 import { mountGeneratePage } from './generate-page';
 import { mountAttackPage, mountComparePage, mountSandboxPage } from './sandbox-page';
 import { mountScenePage } from './scene-page';
+import { mountStylePage } from './style-page';
 
 const pages: Record<string, (root: HTMLElement, params: URLSearchParams) => void> = {
   editor: mountEditorPage,
@@ -11,6 +12,7 @@ const pages: Record<string, (root: HTMLElement, params: URLSearchParams) => void
   sandbox: mountSandboxPage,
   compare: mountComparePage,
   attack: mountAttackPage,
+  style: mountStylePage,
 };
 
 const params = new URLSearchParams(location.search);

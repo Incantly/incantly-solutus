@@ -160,3 +160,74 @@ main {
   padding: 6px 8px;
   font: inherit;
 }
+
+/* The figure look page: settings beside a live figure. */
+main.style-page {
+  max-width: 1200px;
+  display: grid;
+  grid-template-columns: minmax(240px, 300px) minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+}
+@media (max-width: 760px) {
+  main.style-page {
+    grid-template-columns: 1fr;
+  }
+}
+.style-panel {
+  display: grid;
+  gap: 12px;
+  position: sticky;
+  top: 16px;
+}
+.style-panel fieldset {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 12px 12px;
+  border: 1px solid color-mix(in srgb, CanvasText 15%, Canvas);
+  border-radius: 10px;
+}
+.style-panel legend {
+  font-weight: 600;
+  padding: 0 4px;
+}
+.style-field {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9rem;
+}
+.style-field select,
+.style-field input[type='range'] {
+  max-width: 10rem;
+}
+.style-code {
+  margin-top: 16px;
+  padding: 12px;
+  overflow: auto;
+  font-size: 0.8rem;
+  border-radius: 10px;
+  background: color-mix(in srgb, CanvasText 6%, Canvas);
+}
+.style-slot {
+  border-radius: 20px;
+  transition: background 0.3s;
+}
+.style-slot:not([data-backdrop='plain']) {
+  padding: 28px;
+}
+.style-slot[data-backdrop='aurora'] {
+  background:
+    radial-gradient(circle at 15% 20%, #a5b4fc 0, transparent 45%),
+    radial-gradient(circle at 85% 30%, #f9a8d4 0, transparent 40%),
+    radial-gradient(circle at 50% 90%, #67e8f9 0, transparent 50%),
+    #eef2ff;
+}
+.style-slot[data-backdrop='dusk'] {
+  background:
+    radial-gradient(circle at 20% 15%, #7c3aed 0, transparent 45%),
+    radial-gradient(circle at 80% 85%, #0ea5e9 0, transparent 45%),
+    #0f172a;
+}
