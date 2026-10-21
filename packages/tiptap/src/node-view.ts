@@ -1,4 +1,4 @@
-import type { ErrorView, ExecutionAdapter, FigureHandle } from '@incantly/core';
+import { mergeStyles, type ErrorView, type ExecutionAdapter, type FigureHandle, type FigureStyle } from '@incantly/core';
 import type { Editor } from '@tiptap/core';
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 import { NodeSelection, TextSelection } from '@tiptap/pm/state';
@@ -21,6 +21,8 @@ export interface FigureViewOptions {
   readonly theme: 'light' | 'dark' | 'auto';
   readonly onError?: ((report: FigureErrorReport) => void) | null | undefined;
   readonly signals?: ((signal: FigureSignal) => void) | null | undefined;
+  /** The editor's style for every figure; each figure's `look` goes over it. */
+  readonly style?: FigureStyle | null | undefined;
 }
 
 /**
@@ -64,6 +66,7 @@ export const figureViews = new WeakMap<Element, FigureNodeView>();
 
 interface Pending {
   values?: Record<string, number>;
+  formulas?: Record<string, string>;
   step?: number | null;
   description?: string;
   snapshot?: string;
@@ -93,6 +96,8 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
   private generation = 0;
   private noticeTimer: ReturnType<typeof setTimeout> | null = null;
   private notice: string | null = null;
+  /** The figure's number in the note, when the editor numbers figures. */
+  private number: number | null = null;
   /** How the learner used the figure while the note is open, for product signals. */
   private readonly usage = {
     shownAt: null as number | null,
@@ -177,8 +182,24 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
       this.renderPlaceholder();
     } else {
       this.renderCaption();
+      // A new look restyles the live figure in place.
+      if (JSON.stringify(before.look) !== JSON.stringify(after.look)) this.handle?.setStyle(this.style());
     }
     return true;
+  }
+
+  /** The editor's style with this figure's own look over it. */
+  private style(): FigureStyle | undefined {
+    return mergeStyles(this.options.style ?? undefined, this.attrs.look ?? undefined);
+  }
+
+  /** Sets the figure's number in the note; the editor renumbers as figures come and go. */
+  setNumber(figureNumber: number | null): void {
+    if (figureNumber === this.number) return;
+    this.number = figureNumber;
+    if (figureNumber === null) delete this.dom.dataset.number;
+    else this.dom.dataset.number = String(figureNumber);
+    this.handle?.setNumber(figureNumber);
   }
 
   /** Events inside the live figure belong to it; the shell and caption stay with the editor. */
@@ -320,12 +341,17 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
     const scheduler = this.options.scheduler;
     // Values the learner changed since the last save win over the stored ones.
     const values = { ...attrs.values, ...this.pending.values };
+    const formulas = { ...attrs.formulas, ...this.pending.formulas };
     const step = this.pending.step !== undefined ? this.pending.step : attrs.step;
+    const style = this.style();
     // The latest problem this instance reported; adapters report it before they change state.
     let reported: ErrorView | null = null;
     this.handle = this.options.adapter.mount(container, fragments, {
       values,
       step,
+      ...(Object.keys(formulas).length > 0 ? { formulas } : {}),
+      ...(style ? { style } : {}),
+      ...(this.number !== null ? { figureNumber: this.number } : {}),
       theme: this.options.theme,
       title: attrs.concept ? `Interactive figure: ${attrs.concept}` : 'Interactive figure',
       onValues: (changed) => {
@@ -350,6 +376,12 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
           this.usage.completed = true;
           this.signal({ type: 'steps-completed', figureId: this.attrs.figureId, count });
         }
+      },
+      onFormulas: (changed) => {
+        scheduler.touch(this);
+        this.pending.formulas = { ...this.pending.formulas, ...changed };
+        this.settle();
+        this.used();
       },
       onDescription: (text) => {
         this.pending.description = text;
@@ -475,6 +507,10 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
     if (pending.values) {
       const values = { ...attrs.values, ...pending.values };
       if (JSON.stringify(values) !== JSON.stringify(attrs.values)) changes.push(['values', values]);
+    }
+    if (pending.formulas) {
+      const formulas = { ...attrs.formulas, ...pending.formulas };
+      if (JSON.stringify(formulas) !== JSON.stringify(attrs.formulas)) changes.push(['formulas', formulas]);
     }
     if (pending.step !== undefined && pending.step !== attrs.step) changes.push(['step', pending.step]);
     if (pending.description !== undefined && pending.description !== attrs.description) changes.push(['description', pending.description]);

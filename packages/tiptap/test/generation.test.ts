@@ -40,6 +40,9 @@ class FakeFigure implements FigureHandle {
   setValues() {}
   restore() {}
   setReducedMotion() {}
+  setStyle() {}
+  setTheme() {}
+  setNumber() {}
   focus() {}
   measure() {
     return { width: 760, height: 480 };

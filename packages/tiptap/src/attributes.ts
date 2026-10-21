@@ -1,4 +1,4 @@
-import { SCENE_SCHEMA_VERSION, SDK_VERSION } from '@incantly/core';
+import { SCENE_SCHEMA_VERSION, SDK_VERSION, checkStyle, type FigureStyle } from '@incantly/core';
 
 /** The three approved scene fragments. */
 export interface FigureFragments {
@@ -31,6 +31,13 @@ export interface FigureAttributes {
   readonly aspect: number;
   /** Repair and migration metadata. Never prompts, plans or model details. */
   readonly meta: FigureMeta;
+  /** Formulas the learner edited, by index. */
+  readonly formulas: Readonly<Record<string, string>>;
+  /**
+   * This figure's own look over the editor's style: preset, tokens, classes,
+   * layout and which parts show. Never CSS: documents travel between people.
+   */
+  readonly look: FigureStyle | null;
 }
 
 /**
@@ -76,6 +83,22 @@ export function sanitizeFragments(value: unknown): FigureFragments | null {
     : null;
 }
 
+/** Edited formulas from a note: at most eight, keyed by index, each short text. */
+export function sanitizeFormulas(value: unknown): Record<string, string> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const out: Record<string, string> = {};
+  for (const [key, text] of Object.entries(value as Record<string, unknown>).slice(0, 8)) {
+    if (/^[0-7]$/.test(key) && typeof text === 'string' && text.length <= 200) out[key] = text;
+  }
+  return out;
+}
+
+/** A figure's look from a note: only valid style fields, never CSS; null when nothing is set. */
+export function sanitizeLook(value: unknown): FigureStyle | null {
+  const look = checkStyle(value);
+  return Object.keys(look).length > 0 ? look : null;
+}
+
 export const CONTENT_REF = /^sha256:[0-9a-f]{64}$/;
 
 export const DEFAULT_ASPECT = 9 / 16;
@@ -95,6 +118,8 @@ export function defaultAttributes(): FigureAttributes {
     description: '',
     aspect: DEFAULT_ASPECT,
     meta: {},
+    formulas: {},
+    look: null,
   };
 }
 

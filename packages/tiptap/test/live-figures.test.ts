@@ -1,4 +1,4 @@
-import type { ExecutionAdapter, FigureHandle, FigureState, MountOptions } from '@incantly/core';
+import type { ExecutionAdapter, FigureHandle, FigureState, FigureStyle, MountOptions } from '@incantly/core';
 import { Editor, type JSONContent } from '@tiptap/core';
 import Image from '@tiptap/extension-image';
 import { DOMParser as ProseMirrorDOMParser, Slice } from '@tiptap/pm/model';
@@ -65,6 +65,15 @@ class FakeFigure implements FigureHandle {
   setValues() {}
   restore() {}
   setReducedMotion() {}
+  styles: unknown[] = [];
+  numbers: Array<number | null> = [];
+  setStyle(style: unknown) {
+    this.styles.push(style);
+  }
+  setTheme() {}
+  setNumber(figureNumber: number | null) {
+    this.numbers.push(figureNumber);
+  }
   focus(edge: 'first' | 'last' = 'first') {
     this.focused.push(edge);
   }
@@ -124,6 +133,8 @@ function setup(
     limit?: number;
     store?: MemoryFigureStore;
     onError?: (report: FigureErrorReport) => void;
+    style?: FigureStyle;
+    numbering?: boolean;
   } = {},
 ) {
   const fake = fakeAdapter(options.fail);
@@ -142,6 +153,8 @@ function setup(
         settleMs: 500,
         scheduler: { limit: options.limit ?? 3, settleMs: 100, suspendAfterMs: 2000, createObserver: observer.factory },
         onError: options.onError ?? null,
+        style: options.style ?? null,
+        numbering: options.numbering ?? false,
       }),
     ],
     content: options.content ?? createFixtureDocument({ figures: 6, figure: () => ({ fragments: FRAGMENTS }) }),
@@ -360,6 +373,73 @@ describe('live figures: persistence', () => {
     expect(view(0).canRun).toBe(false);
     expect(figures()[0]!.querySelector('.incantly-figure__status')?.textContent).toContain('could not be shown');
     expect(figures()[0]!.querySelector('figcaption')?.textContent).toBeTruthy();
+  });
+});
+
+describe('live figures: styles, numbers and formulas', () => {
+  it("mounts with the editor's style and the figure's own look over it, and restyles in place when the look changes", async () => {
+    const { editor, fake, observer, figures, attrs } = setup({
+      style: { preset: 'glass', css: '.host {}', classNames: { button: 'rounded-full' }, layout: { controls: 'right', size: 'lg' } },
+      content: createFixtureDocument({ figures: 2, figure: (i) => ({ fragments: FRAGMENTS, ...(i === 0 ? { look: { preset: 'outline', layout: { sceneHeight: '420px' } } } : {}) }) }),
+    });
+    observer.set(figures(), true);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(fake.mounts[0]!.options.style).toMatchObject({
+      preset: 'outline',
+      css: '.host {}',
+      classNames: { button: 'rounded-full' },
+      layout: { controls: 'right', size: 'lg', sceneHeight: '420px' },
+    });
+    expect(fake.mounts[1]!.options.style).toMatchObject({ preset: 'glass', layout: { controls: 'right', size: 'lg' } });
+    // Select the second figure and give it a look of its own: the live figure restyles, and the change can be undone.
+    let pos = -1;
+    let seen = 0;
+    editor.state.doc.descendants((node, p) => {
+      if (node.type.name === 'incantlyFigure' && seen++ === 1) pos = p;
+    });
+    editor.commands.setNodeSelection(pos);
+    expect(editor.commands.setFigureLook({ preset: 'soft', css: 'body { display: none }', show: { legend: false } } as FigureStyle)).toBe(true);
+    expect(attrs(1).look).toEqual({ preset: 'soft', show: { legend: false } });
+    expect(fake.mounts[1]!.styles.at(-1)).toMatchObject({ preset: 'soft', css: '.host {}', show: { legend: false } });
+    editor.commands.undo();
+    expect(attrs(1).look).toBeNull();
+    expect(fake.mounts[1]!.styles.at(-1)).toMatchObject({ preset: 'glass' });
+  });
+
+  it('numbers figures in the note and renumbers them as figures come and go', async () => {
+    const { editor, fake, observer, figures } = setup({ numbering: true, content: createFixtureDocument({ figures: 3, figure: () => ({ fragments: FRAGMENTS }) }) });
+    expect(figures().map((f) => f.dataset.number)).toEqual(['1', '2', '3']);
+    observer.set(figures(), true);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(fake.mounts.map((m) => m.options.figureNumber)).toEqual([1, 2, 3]);
+    let first = -1;
+    editor.state.doc.descendants((node, p) => {
+      if (first < 0 && node.type.name === 'incantlyFigure') first = p;
+    });
+    editor.view.dispatch(editor.state.tr.delete(first, first + editor.state.doc.nodeAt(first)!.nodeSize));
+    expect(figures().map((f) => f.dataset.number)).toEqual(['1', '2']);
+    expect(fake.mounts[1]!.numbers.at(-1)).toBe(1);
+    expect(fake.mounts[2]!.numbers.at(-1)).toBe(2);
+  });
+
+  it('saves formulas the learner edited and gives them back when the figure mounts again', async () => {
+    const { fake, observer, figures, attrs } = setup();
+    observer.set([figures()[0]!], true);
+    await vi.advanceTimersByTimeAsync(100);
+    fake.mounts[0]!.options.onFormulas?.({ 0: 'x^2 + 1' });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(attrs(0).formulas).toEqual({ 0: 'x^2 + 1' });
+  });
+
+  it('keeps stylesheets and unknown fields out of a pasted look, and bad formulas out of a pasted figure', () => {
+    const { editor } = setup({ content: { type: 'doc', content: [{ type: 'paragraph' }] } });
+    const element = document.createElement('div');
+    element.innerHTML =
+      '<figure data-incantly-figure="" data-figure-id="fig-y" data-look=\'{"preset":"glass","css":"body{}","tokens":{"lit":"url(x)","radius":"9px"},"evil":1}\' ' +
+      'data-formulas=\'{"0":"x+1","9":"y","1":5}\'><figcaption>Pasted</figcaption></figure>';
+    const attrs = ProseMirrorDOMParser.fromSchema(editor.schema).parse(element).firstChild!.attrs;
+    expect(attrs.look).toEqual({ preset: 'glass', tokens: { radius: '9px' } });
+    expect(attrs.formulas).toEqual({ 0: 'x+1' });
   });
 });
 

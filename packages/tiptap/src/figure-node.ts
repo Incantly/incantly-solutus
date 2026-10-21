@@ -1,4 +1,4 @@
-import type { ExecutionAdapter } from '@incantly/core';
+import { checkStyle, type ExecutionAdapter, type FigureStyle } from '@incantly/core';
 import { Node, mergeAttributes, type Editor } from '@tiptap/core';
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 import { NodeSelection, Plugin, PluginKey } from '@tiptap/pm/state';
@@ -9,7 +9,9 @@ import {
   defaultAttributes,
   parseJson,
   parseNumber,
+  sanitizeFormulas,
   sanitizeFragments,
+  sanitizeLook,
   sanitizeMeta,
   sanitizeValues,
   type FigureAttributes,
@@ -38,12 +40,23 @@ export interface FigureNodeOptions {
   onError: ((report: FigureErrorReport) => void) | null;
   /** Hears how figures are used, for product signals: ids, names and numbers only. */
   signals: ((signal: FigureSignal) => void) | null;
+  /**
+   * How every figure in this editor looks: a preset, design tokens, classes per
+   * part (for Tailwind and the like), the host's own CSS, the layout of the
+   * controls around the drawing, the drawing's height and which parts show.
+   * A figure's `look` attribute goes over it.
+   */
+  style: FigureStyle | null;
+  /** Show each figure's number in the note (Fig 1, Fig 2) on its card. */
+  numbering: boolean;
 }
 
 declare module '@tiptap/core' {
   interface Commands<ReturnType> {
     incantlyFigure: {
       insertFigure: (attributes: Partial<FigureAttributes>) => ReturnType;
+      /** Sets the selected figure's own look over the editor's style; null goes back to the editor's. */
+      setFigureLook: (look: FigureStyle | null) => ReturnType;
     };
   }
 }
@@ -119,6 +132,7 @@ export function newFigureId(): string {
 }
 
 const figureIds = new PluginKey('incantlyFigureIds');
+const figureNumbers = new PluginKey('incantlyFigureNumbers');
 
 /**
  * The figure node. Every attribute is rendered to HTML so that copy and paste
@@ -133,7 +147,7 @@ export const FigureNode = Node.create<FigureNodeOptions>({
   draggable: true,
 
   addOptions() {
-    return { snapshots: null, adapter: null, store: null, scheduler: {}, settleMs: 600, theme: 'auto', onError: null, signals: null };
+    return { snapshots: null, adapter: null, store: null, scheduler: {}, settleMs: 600, theme: 'auto', onError: null, signals: null, style: null, numbering: false };
   },
 
   addAttributes() {
@@ -152,6 +166,8 @@ export const FigureNode = Node.create<FigureNodeOptions>({
       description: textAttribute('description', d.description),
       aspect: numberAttribute('aspect', d.aspect),
       meta: jsonAttribute('meta', d.meta, sanitizeMeta),
+      formulas: jsonAttribute('formulas', d.formulas, sanitizeFormulas),
+      look: jsonAttribute('look', d.look, sanitizeLook),
     };
   },
 
@@ -173,6 +189,15 @@ export const FigureNode = Node.create<FigureNodeOptions>({
             type: this.name,
             attrs: { ...defaultAttributes(), figureId: newFigureId(), ...attributes },
           }),
+      setFigureLook:
+        (look) =>
+        ({ state, tr, dispatch }) => {
+          const { selection } = state;
+          if (!(selection instanceof NodeSelection) || selection.node.type.name !== this.name) return false;
+          const checked = look === null ? null : checkStyle(look);
+          if (dispatch) tr.setNodeAttribute(selection.from, 'look', checked && Object.keys(checked).length > 0 ? checked : null);
+          return true;
+        },
     };
   },
 
@@ -192,7 +217,30 @@ export const FigureNode = Node.create<FigureNodeOptions>({
 
   addProseMirrorPlugins() {
     const type = this.name;
+    const numbering = this.options.numbering;
     return [
+      // Numbers figures in document order (Fig 1, Fig 2) as they come and go.
+      ...(numbering
+        ? [
+            new Plugin({
+              key: figureNumbers,
+              view: (view) => {
+                const renumber = () => {
+                  let n = 0;
+                  view.state.doc.descendants((node, pos) => {
+                    if (node.type.name !== type) return true;
+                    n++;
+                    const dom = view.nodeDOM(pos);
+                    if (dom instanceof Element) figureViews.get(dom)?.setNumber(n);
+                    return false;
+                  });
+                };
+                renumber();
+                return { update: (_view, previous) => (previous.doc.eq(view.state.doc) ? undefined : renumber()) };
+              },
+            }),
+          ]
+        : []),
       new Plugin({
         key: figureIds,
         // Pasted or duplicated figures get their own id, so every figure is addressed once.
@@ -249,6 +297,7 @@ export const FigureNode = Node.create<FigureNodeOptions>({
         theme: this.options.theme,
         onError: this.options.onError,
         signals: this.options.signals,
+        style: this.options.style,
       });
     };
   },
