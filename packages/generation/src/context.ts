@@ -66,7 +66,13 @@ export const PLAN_FORMAT = `PLAN format. Reply with one JSON object in a \`\`\`j
 }
 Sizes: quick (the default: one view, up to ${SIZE_BUDGETS.quick.controls} controls and ${SIZE_BUDGETS.quick.parts} parts), standard (a second view, such as a graph beside the scene: up to ${SIZE_BUDGETS.standard.controls} controls and ${SIZE_BUDGETS.standard.parts} parts), rich (several linked panels, only when the learner asks for that much: up to ${SIZE_BUDGETS.rich.controls} controls and ${SIZE_BUDGETS.rich.parts} parts).
 A parameter is a slider unless it says "control": "toggle" (min 0, max 1) or "control": "choice" with "options": ["first", "second"] (min 0, max one less than the options).
-List singular points where the model is undefined inside the bounds, or [] when there are none.`;
+List singular points where the model is undefined inside the bounds, or [] when there are none.
+Concepts with a reviewed figure: ${reviewedConcepts().join(', ')}. When the request is one of these, use that name exactly as the concept.`;
+
+/** The concepts that have a reviewed scene; a plan that reuses one of these names starts from that scene. */
+export function reviewedConcepts(examples: Readonly<Record<string, ReferenceScene>> = REFERENCE_SCENES): string[] {
+  return [...new Set(Object.values(examples).map((e) => e.plan.concept))].sort();
+}
 
 export const BUILD_FORMAT = `BUILD format. This is the BUILD call: the plan is settled. Reply with exactly three fenced blocks, html, css and js, in that order, and nothing else: no plan, no JSON, no prose.
 \`\`\`html

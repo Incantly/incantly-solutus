@@ -11,7 +11,9 @@ import {
   estimateTokens,
   nearestExample,
   planPrompt,
+  reviewedConcepts,
   scenePrompt,
+  startingScene,
 } from '../src/context';
 import { SDK_CONTRACT } from '../src/generated/contract';
 import { PLAN_LIMITS } from '../src/plan';
@@ -30,6 +32,15 @@ describe('the generation context', () => {
     expect(CORE_RULES).toContain(`a quick figure is about ${SIZE_BUDGETS.quick.lines} lines`);
     expect(CORE_RULES).toContain('under 500 samples per curve');
     expect(PLAN_FORMAT).toContain(`up to ${PLAN_LIMITS.params} controls and ${PLAN_LIMITS.parts} parts`);
+  });
+
+  it('names the reviewed concepts in the plan call, so a plan for one of them starts from its scene', () => {
+    const concepts = reviewedConcepts();
+    expect(concepts).toHaveLength(Object.keys(REFERENCE_SCENES).length);
+    expect(PLAN_FORMAT).toContain(`Concepts with a reviewed figure: ${concepts.join(', ')}.`);
+    for (const scene of Object.values(REFERENCE_SCENES)) {
+      expect(startingScene({ ...scene.plan, idea: 'Something else entirely.' })?.id, scene.id).toBe(scene.id);
+    }
   });
 
   it('maps every capability to declarations that exist in the SDK contract', () => {
