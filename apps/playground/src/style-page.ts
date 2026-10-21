@@ -8,7 +8,7 @@ import { referenceScene, referenceSceneIds } from '@incantly/core/scenes';
  * in for a compiled Tailwind stylesheet; any utility CSS works the same way.
  */
 
-const PRESETS: readonly StylePreset[] = ['default', 'glass', 'soft', 'outline', 'minimal', 'contrast'];
+const PRESETS: readonly StylePreset[] = ['default', 'glass', 'soft', 'outline', 'minimal', 'contrast', 'paper', 'blueprint', 'sepia'];
 const PLACEMENTS = ['below', 'above', 'right', 'left', 'overlay'] as const;
 const SIZES = ['sm', 'md', 'lg'] as const;
 const DENSITIES = ['compact', 'comfortable', 'spacious'] as const;

@@ -7,7 +7,8 @@
  * lengths and colours.
  */
 
-export type StylePreset = 'default' | 'glass' | 'minimal' | 'outline' | 'contrast' | 'soft';
+/** Card looks (glass, minimal, outline, soft), a high-contrast one, and whole palettes (paper, blueprint, sepia). */
+export type StylePreset = 'default' | 'glass' | 'minimal' | 'outline' | 'contrast' | 'soft' | 'paper' | 'blueprint' | 'sepia';
 
 /** Every element of the figure an integrator can add classes to. */
 export type StyleSlot =
@@ -178,7 +179,7 @@ export interface ResolvedStyle {
   readonly show: Readonly<Record<ShowPart, boolean>>;
 }
 
-const PRESETS: readonly StylePreset[] = ['default', 'glass', 'minimal', 'outline', 'contrast', 'soft'];
+const PRESETS: readonly StylePreset[] = ['default', 'glass', 'minimal', 'outline', 'contrast', 'soft', 'paper', 'blueprint', 'sepia'];
 const PLACEMENTS: readonly ControlsPlacement[] = ['below', 'above', 'right', 'left', 'overlay'];
 const SHOW_DEFAULTS: Readonly<Record<ShowPart, boolean>> = {
   header: true,
