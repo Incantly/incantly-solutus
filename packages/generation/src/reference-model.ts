@@ -43,7 +43,7 @@ export interface ReferenceModelOptions {
 /** Words that pick a concept out of a learner's request. */
 const KEYWORDS: Readonly<Record<string, readonly string[]>> = {
   'sine-wave': ['sine', 'sinus', 'sin(', 'wave', 'amplitude', 'frequency', 'phase', 'trig', 'periodic', 'oscillat'],
-  projectile: ['projectile', 'thrown', 'throw', 'ball', 'cannon', 'launch', 'trajector', 'parabola', 'range', 'gravity'],
+  projectile: ['projectile', 'thrown', 'throw', 'ball', 'cannon', 'launch', 'trajector', 'parabola', 'range', 'gravity', 'vertical velocity', 'horizontal speed'],
   'thin-lens': ['lens', 'focal', 'ray', 'image', 'convex', 'optic', 'magnif', 'refract'],
 };
 
