@@ -61,6 +61,10 @@ export function mountInThread(container: HTMLElement, fragments: SceneFragments,
       const targets = figure ? focusable(figure.root) : [];
       (edge === 'first' ? targets[0] : targets[targets.length - 1])?.focus();
     },
+    measure: () => {
+      const rect = figure?.root.getBoundingClientRect();
+      return rect && rect.width > 0 && rect.height > 0 ? { width: rect.width, height: rect.height } : null;
+    },
     snapshot: () => snapshotStage(figure?.root.querySelector<SVGSVGElement>('svg.inc-stage') ?? null),
     destroy: () => {
       figure?.destroy();

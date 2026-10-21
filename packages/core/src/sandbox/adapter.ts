@@ -56,6 +56,8 @@ export interface FigureHandle {
   setReducedMotion(value: boolean): void;
   /** Moves keyboard focus into the figure. */
   focus(edge?: 'first' | 'last'): void;
+  /** The figure's laid-out size, once it has one. Browsers do not lay out off-screen frames. */
+  measure(): { readonly width: number; readonly height: number } | null;
   snapshot(): Promise<string | null>;
   destroy(): void;
 }
@@ -173,6 +175,7 @@ class SandboxedFigure implements FigureHandle {
   private pingId = 0;
   private awaitingPong: number | null = null;
   private snapshots = new Map<number, (png: string | null) => void>();
+  private laidOut = false;
   private snapshotId = 0;
   private readonly deadlines: Deadlines;
   private readonly doc: Document;
@@ -246,7 +249,10 @@ class SandboxedFigure implements FigureHandle {
         this.options.onEscape?.(message.direction);
         break;
       case 'resize':
-        if (this.connection) this.connection.frame.style.height = `${Math.min(message.height, 4000)}px`;
+        if (this.connection) {
+          this.connection.frame.style.height = `${Math.min(message.height, 4000)}px`;
+          this.laidOut = true;
+        }
         break;
       case 'snapshot':
         this.snapshots.get(message.id)?.(message.png);
@@ -321,6 +327,12 @@ class SandboxedFigure implements FigureHandle {
 
   setReducedMotion(value: boolean): void {
     this.connection?.post({ type: 'reducedMotion', value });
+  }
+
+  measure(): { width: number; height: number } | null {
+    if (!this.connection || !this.laidOut) return null;
+    const rect = this.connection.frame.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0 ? { width: rect.width, height: rect.height } : null;
   }
 
   focus(edge: 'first' | 'last' = 'first'): void {

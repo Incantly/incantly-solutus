@@ -133,7 +133,9 @@ function onHostMessage(message: HostMessage): void {
     case 'snapshot': {
       // A snapshot usually comes before suspension: send the latest values first, in order.
       flushReport();
-      const svg = root?.querySelector<SVGSVGElement>('svg.inc-stage') ?? null;
+      // A frame the browser kept off-screen may never have drawn: an empty picture is worse than none.
+      const drawn = (renderer?.stats.workFrames ?? 0) > 0;
+      const svg = drawn ? (root?.querySelector<SVGSVGElement>('svg.inc-stage') ?? null) : null;
       void snapshotStage(svg).then((png) => send({ type: 'snapshot', id: message.id, png }));
       break;
     }
