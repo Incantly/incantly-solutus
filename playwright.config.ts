@@ -15,7 +15,7 @@ export default defineConfig({
     trace: 'retain-on-failure',
   },
   webServer: {
-    command: `npm run dev --workspace @incantly/playground -- --port ${port}`,
+    command: `node scripts/generate.mjs && npm run dev --workspace @incantly/playground -- --port ${port}`,
     url: `http://127.0.0.1:${port}`,
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,

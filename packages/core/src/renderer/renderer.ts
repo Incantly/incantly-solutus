@@ -32,6 +32,10 @@ export interface RendererStats {
   loopStarts: number;
   ticksSent: number;
   updates: number;
+  /** Milliseconds from sending a tick until its update was applied, summed. */
+  workMs: number;
+  /** Ticks whose round trip was measured. */
+  workFrames: number;
 }
 
 /**
@@ -41,7 +45,7 @@ export interface RendererStats {
 export class FigureRenderer {
   readonly root: HTMLElement;
   readonly scene: SceneDom;
-  readonly stats: RendererStats = { frameRequests: 0, loopStarts: 0, ticksSent: 0, updates: 0 };
+  readonly stats: RendererStats = { frameRequests: 0, loopStarts: 0, ticksSent: 0, updates: 0, workMs: 0, workFrames: 0 };
   ui: UiState = EMPTY_UI;
 
   private readonly clock: FrameClock;
@@ -57,6 +61,7 @@ export class FigureRenderer {
   private lastTime: number | null = null;
   private running = false;
   private awaiting = false;
+  private tickStart: number | null = null;
   private destroyed = false;
   private onScreen = true;
 
@@ -101,6 +106,8 @@ export class FigureRenderer {
     if (this.destroyed) return;
     this.awaiting = false;
     this.stats.updates++;
+    const tickStart = this.tickStart;
+    this.tickStart = null;
     if (update.reset) this.scene.clear();
     this.scene.apply(update.commands);
     const ui = update.ui;
@@ -122,6 +129,10 @@ export class FigureRenderer {
     if (update.values) this.options.onValues?.(update.values);
     if (update.step !== undefined) this.options.onStep?.(update.step);
     this.options.onUpdate?.(update, this.ui);
+    if (tickStart !== null) {
+      this.stats.workMs += performance.now() - tickStart;
+      this.stats.workFrames++;
+    }
 
     if (update.needsFrame) this.schedule();
     else this.idle();
@@ -175,6 +186,7 @@ export class FigureRenderer {
     }
     this.awaiting = true;
     this.stats.ticksSent++;
+    this.tickStart = performance.now();
     this.send({ type: 'tick', dt });
   };
 

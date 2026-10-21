@@ -1,8 +1,10 @@
 import './styles.css';
 import { mountEditorPage } from './editor-page';
+import { mountScenePage } from './scene-page';
 
 const pages: Record<string, (root: HTMLElement, params: URLSearchParams) => void> = {
   editor: mountEditorPage,
+  scene: mountScenePage,
 };
 
 const params = new URLSearchParams(location.search);
