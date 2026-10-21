@@ -840,6 +840,8 @@ export interface Space3D {
   /** A flat rectangle in the xy plane, seen from both sides. */
   plane(w: number, d: number, options?: Solid3DOptions): Object3D;
   torus(R: number, r: number, options?: Solid3DOptions): Object3D;
+  /** A cylinder from one point to another: a rod, a bond, a strut. */
+  tube(from: Vec3, to: Vec3, r: number, options?: Solid3DOptions): Object3D;
   mesh(data: Mesh3DData, options?: Solid3DOptions): Object3D;
   group(options?: Solid3DOptions): Group3D;
   line(points: ReadonlyArray<Vec3>, options?: Line3DOptions): Line3D;

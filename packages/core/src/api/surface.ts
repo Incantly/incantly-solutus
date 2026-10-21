@@ -379,6 +379,7 @@ export const HANDLES: Readonly<Record<HandleKind, HandleSpec>> = {
       cone: 'Object3D',
       plane: 'Object3D',
       torus: 'Object3D',
+      tube: 'Object3D',
       mesh: 'Object3D',
       group: 'Group3D',
       line: 'Line3D',

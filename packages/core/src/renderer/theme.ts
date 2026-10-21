@@ -153,15 +153,26 @@ html.inc-frame, html.inc-frame body { margin: 0; padding: 0; background: transpa
 .inc-stage .inc-tone-a { --inc-tone: var(--inc-a); }
 .inc-stage .inc-tone-b { --inc-tone: var(--inc-b); }
 .inc-stage .inc-tone-c { --inc-tone: var(--inc-c); }
-.inc-stage .inc-lum-0 { fill: color-mix(in srgb, var(--inc-tone, var(--inc-mid)) 55%, #000000); }
-.inc-stage .inc-lum-1 { fill: color-mix(in srgb, var(--inc-tone, var(--inc-mid)) 68%, #000000); }
-.inc-stage .inc-lum-2 { fill: color-mix(in srgb, var(--inc-tone, var(--inc-mid)) 80%, #000000); }
-.inc-stage .inc-lum-3 { fill: var(--inc-tone, var(--inc-mid)); }
-.inc-stage .inc-lum-4 { fill: color-mix(in srgb, var(--inc-tone, var(--inc-mid)) 82%, #ffffff); }
-.inc-stage .inc-lum-5 { fill: color-mix(in srgb, var(--inc-tone, var(--inc-mid)) 66%, #ffffff); }
-.inc-stage .inc-lum-6 { fill: color-mix(in srgb, var(--inc-tone, var(--inc-mid)) 50%, #ffffff); }
+.inc-stage .inc-lum-0 { --inc-face: color-mix(in srgb, var(--inc-tone, var(--inc-mid)) 55%, #000000); }
+.inc-stage .inc-lum-1 { --inc-face: color-mix(in srgb, var(--inc-tone, var(--inc-mid)) 68%, #000000); }
+.inc-stage .inc-lum-2 { --inc-face: color-mix(in srgb, var(--inc-tone, var(--inc-mid)) 80%, #000000); }
+.inc-stage .inc-lum-3 { --inc-face: var(--inc-tone, var(--inc-mid)); }
+.inc-stage .inc-lum-4 { --inc-face: color-mix(in srgb, var(--inc-tone, var(--inc-mid)) 82%, #ffffff); }
+.inc-stage .inc-lum-5 { --inc-face: color-mix(in srgb, var(--inc-tone, var(--inc-mid)) 66%, #ffffff); }
+.inc-stage .inc-lum-6 { --inc-face: color-mix(in srgb, var(--inc-tone, var(--inc-mid)) 50%, #ffffff); }
+.inc-stage :is(.inc-lum-0, .inc-lum-1, .inc-lum-2, .inc-lum-3, .inc-lum-4, .inc-lum-5, .inc-lum-6) { fill: var(--inc-face); }
 .inc-stage .inc-face { stroke: color-mix(in srgb, var(--inc-tone, var(--inc-mid)) 60%, #000000); stroke-width: 0.6; stroke-opacity: 0.5; }
+/* Round solids and surfaces: each facet's edge in its own colour closes the seams between them. */
+.inc-stage .inc-face.inc-smooth { stroke: var(--inc-face, var(--inc-tone, var(--inc-mid))); stroke-width: 0.8; stroke-opacity: 1; }
+.inc-stage .inc-face.inc-glass { fill-opacity: 0.16; stroke: var(--inc-tone, var(--inc-mid)); stroke-opacity: 0.35; stroke-width: 0.6; }
+/* Pieces of one see-through face: no edges between them. */
+.inc-stage .inc-face.inc-glass.inc-tile { stroke: none; }
 .inc-stage .inc-face.inc-wire { fill: none; stroke: var(--inc-tone, var(--inc-mid)); stroke-width: 1; stroke-opacity: 1; }
+.inc-stage .inc-on-face { stroke-width: 1.3; }
+.inc-figure.has-focus .inc-stage .inc-slots > :not(.is-focus) { opacity: 0.25; }
+.inc-stage .inc-slots > .is-focus { --inc-tone: var(--inc-lit); }
+.inc-stage circle.inc-grab.inc-draggable { fill: transparent; stroke: none; cursor: grab; }
+.inc-stage circle.inc-grab.inc-draggable:is(:hover, :focus-visible, .is-dragging) { stroke: var(--inc-focus); stroke-opacity: 0.6; stroke-width: 1.5; stroke-dasharray: 4 4; }
 .inc-stage .inc-dashed { stroke-dasharray: 6 5; }
 .inc-stage .inc-flow { stroke-dasharray: 8 6; }
 .inc-stage .inc-ghost { stroke: var(--inc-mid); stroke-opacity: 0.55; stroke-dasharray: 3 4; fill-opacity: 0.18; }
