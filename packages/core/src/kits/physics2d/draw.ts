@@ -152,7 +152,7 @@ export class Painter {
   }
 
   /** Draws a tank; returns the outline of its walls. */
-  tank(tank: Tank, tone: Tone | undefined): PathHandle {
+  tank(tank: Tank, tone: Tone | undefined): { readonly walls: PathHandle; readonly liquid: PathHandle } {
     const stage = this.ctx.stage;
     const liquid = stage.path('', { layer: 'back', tone: tone ?? 'b', fill: true }).set({ 'fill-opacity': 0.28 });
     const surface = stage.path('', { layer: 'back', tone: tone ?? 'b' });
@@ -164,7 +164,7 @@ export class Painter {
     const d = `M${fmt(x0)} ${fmt(top)}L${fmt(x0)} ${fmt(bottom)}L${fmt(x1)} ${fmt(bottom)}L${fmt(x1)} ${fmt(top)}L${fmt(ix1)} ${fmt(top)}L${fmt(ix1)} ${fmt(floor)}L${fmt(ix0)} ${fmt(floor)}L${fmt(ix0)} ${fmt(top)}Z`;
     const walls = stage.path(d, { layer: 'mid', tone: 'mid', fill: true });
     this.tanks.push({ tank, liquid, surface });
-    return walls;
+    return { walls, liquid };
   }
 
   forces(body: Body, options: ForceArrowOptions): void {

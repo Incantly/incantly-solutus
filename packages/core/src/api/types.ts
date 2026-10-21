@@ -1089,6 +1089,8 @@ export interface Joint2D {
 export interface Tank2D {
   /** Height of the surface now, metres. */
   readonly level: number;
+  /** The liquid, for parts and callouts. */
+  readonly handle: PathHandle;
   /** Liquid pushed aside, m³ per metre of depth. */
   readonly displaced: number;
   /** The upward push on a body now, newtons. */

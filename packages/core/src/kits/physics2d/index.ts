@@ -566,12 +566,13 @@ function createWorld(ctx: KitContext, raw: Physics2DOptions): World2D {
       );
       world.tanks.push(tank);
       world.updateLevels();
-      const outline = painter.tank(tank, checkTone(o.tone, 'world.tank'));
+      const drawn = painter.tank(tank, checkTone(o.tone, 'world.tank'));
       for (const wall of tank.walls) {
-        wall.handle = handleFor(wall, outline);
+        wall.handle = handleFor(wall, drawn.walls);
         bodies.set(wall.handle, wall);
       }
       const handle: Tank2D = {
+        handle: drawn.liquid,
         get level() {
           return tank.level;
         },

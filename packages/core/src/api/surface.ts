@@ -459,7 +459,7 @@ export const HANDLES: Readonly<Record<HandleKind, HandleSpec>> = {
   },
   Tank2D: {
     methods: { buoyancy: null } satisfies Methods<Tank2D>,
-    properties: { level: null, displaced: null } satisfies Properties<Tank2D>,
+    properties: { level: null, displaced: null, handle: 'Path' } satisfies Properties<Tank2D>,
   },
   Chart: {
     methods: { series: 'ChartSeries', points: 'ChartSeries', rule: 'Element', highlight: null } satisfies Methods<Chart>,
