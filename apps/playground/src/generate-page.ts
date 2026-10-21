@@ -41,7 +41,6 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
   let latest: Turn | null = null;
   let token: string | null = null;
   let client: GenerationClient | null = null;
-  let galleryOriginalPrompt = '';
 
   const sidebar = document.createElement('aside');
   sidebar.className = 'sidebar';
@@ -122,34 +121,10 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
   galleryBtn.type = 'button';
   galleryBtn.className = 'gallery-btn';
   galleryBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg><span>Gallery of generations</span>';
+  galleryBtn.addEventListener('click', () => {
+    location.href = '/?page=gallery';
+  });
   chatHeader.append(chatTitleEl, galleryBtn);
-
-  const galleryModal = document.createElement('div');
-  galleryModal.className = 'settings-modal gallery';
-  galleryModal.hidden = true;
-  galleryModal.innerHTML = `
-    <div class="settings-content">
-      <div class="settings-header">
-        <h2>Gallery of generations</h2>
-        <button class="close-gallery-btn" aria-label="Close gallery">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <line x1="18" y1="6" x2="6" y2="18"></line>
-            <line x1="6" y1="6" x2="18" y2="18"></line>
-          </svg>
-        </button>
-      </div>
-      <div class="settings-body">
-        <p class="setting-description">Pick a prompt and the agent generates it straight away.</p>
-        <div class="prompt-gallery" aria-label="Prompts the agent can generate">
-          <button class="prompt-chip" data-prompt="A highly detailed 3D animation of a bicycle, showing how the pedals, chain, gears and wheels work together."></button>
-          <button class="prompt-chip" data-prompt="A 3D figure that explains the way a PC works: the CPU, RAM, storage and data flow between them."></button>
-          <button class="prompt-chip" data-prompt="How several pure tones with different frequencies combine into one waveform, with a control for how many tones are added."></button>
-          <button class="prompt-chip" data-prompt="A complex 3D animation of a car engine in detail: pistons, crankshaft, cylinders, valves and the four-stroke cycle, in order."></button>
-        </div>
-      </div>
-    </div>
-  `;
-  root.append(galleryModal);
 
   const messagesContainer = document.createElement('div');
   messagesContainer.className = 'messages-container';
@@ -202,35 +177,6 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
       settingsModal.hidden = true;
     }
   });
-
-  const closeGalleryBtn = galleryModal.querySelector('.close-gallery-btn') as HTMLButtonElement;
-  galleryBtn.addEventListener('click', () => {
-    galleryModal.hidden = false;
-  });
-  closeGalleryBtn.addEventListener('click', () => {
-    galleryModal.hidden = true;
-  });
-  galleryModal.addEventListener('click', (e) => {
-    if (e.target === galleryModal) {
-      galleryModal.hidden = true;
-    }
-  });
-  for (const chip of Array.from(galleryModal.querySelectorAll('.prompt-chip')) as HTMLButtonElement[]) {
-    chip.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg><span></span>';
-    (chip.querySelector('span') as HTMLElement).textContent = chip.dataset.prompt ?? '';
-    chip.addEventListener('click', () => {
-      galleryModal.hidden = true;
-      if (inputBox.value.trim()) {
-        galleryOriginalPrompt = inputBox.value;
-      } else galleryOriginalPrompt = '';
-      inputBox.value = chip.dataset.prompt ?? '';
-      void handleSend().finally(() => {
-        inputBox.value = galleryOriginalPrompt;
-        inputBox.style.height = 'auto';
-        sendBtn.disabled = !inputBox.value.trim();
-      });
-    });
-  }
 
   inputBox.addEventListener('input', () => {
     sendBtn.disabled = !inputBox.value.trim();
@@ -534,10 +480,10 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
       const setupResponse = await fetch('/api/dev/session', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ 
-          apiKey: apiKeyInput.value || undefined, 
-          planModel: planningModelSelect.value, 
-          sceneModel: sceneModelSelect.value 
+        body: JSON.stringify({
+          apiKey: apiKeyInput.value || undefined,
+          planModel: planningModelSelect.value,
+          sceneModel: sceneModelSelect.value
         }),
       });
       const answer = (await setupResponse.json()) as { id?: string; baseUrl?: string; message?: string };
@@ -547,6 +493,15 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
       }
     } catch (_e) {
       // Fail silently if no session is available
+    }
+    // A prompt handed over from the gallery generates on arrival.
+    const handed = params.get('prompt');
+    if (handed) {
+      inputBox.value = handed;
+      inputBox.dispatchEvent(new Event('input'));
+      await handleSend();
+      // Clean the address so a reload does not start the same generation twice.
+      history.replaceState(null, '', '/?page=generate');
     }
   })();
 
