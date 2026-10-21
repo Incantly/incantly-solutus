@@ -271,6 +271,19 @@ describe('inc.space3d', () => {
     expect(line.every((n) => drawn.indexOf(n) < firstBox)).toBe(true);
   });
 
+  it('wraps a coil around a rod without a wrap call: each piece sorts on its own (BR-5)', () => {
+    const { runtime } = space((s) => {
+      s.cylinder(0.3, 4, { rotate: [0, 90, 0], tone: 'mid' });
+      s.coil(0.8, 3.5, 8, { tone: 'a' }).rotate(0, 90, 0);
+    }, { camera: { yaw: -60, pitch: 20, distance: 0 } });
+    const drawn = visibleSlots(runtime);
+    const rod = drawn.map((n, i) => (n.tone === 'mid' ? i : -1)).filter((i) => i >= 0);
+    const coil = drawn.map((n, i) => (n.tone === 'a' ? i : -1)).filter((i) => i >= 0);
+    // The back of the coil is drawn before the rod, the front after it.
+    expect(coil.some((i) => i < Math.min(...rod))).toBe(true);
+    expect(coil.some((i) => i > Math.max(...rod))).toBe(true);
+  });
+
   it('shades a sphere with a lit gradient, wires it as three rings, and ghosts it see-through', () => {
     const { runtime } = space((s) => {
       s.sphere(1, { tone: 'a' });

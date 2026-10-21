@@ -351,6 +351,21 @@ export class Space3DApi implements Space3D {
     return new Arrow3DHandle(this.engine, item, this.coords, record);
   }
 
+  coil(r: number, h: number, turns: number, options: Line3DOptions = {}): Line3D {
+    const radius = finiteNumber(r, 'coil r');
+    const height = finiteNumber(h, 'coil h');
+    const count = finiteNumber(turns, 'coil turns');
+    if (!(radius > 0) || !(height > 0) || !(count > 0 && count <= 80)) throw new SceneApiError('coil needs a positive radius and height and from 0 to 80 turns');
+    const n = Math.min(1999, Math.ceil(count * 24));
+    const points: Vec3[] = [];
+    for (let i = 0; i <= n; i++) {
+      const t = i / n;
+      const a = 2 * Math.PI * count * t;
+      points.push([radius * Math.cos(a), radius * Math.sin(a), -height / 2 + height * t]);
+    }
+    return this.line(points, options);
+  }
+
   arc(center: Vec3, from: Vec3, axis: Vec3, degrees: number, options: Line3DOptions = {}): Line3D {
     const c = readVec3(center, 'arc center');
     const f = readVec3(from, 'arc from');

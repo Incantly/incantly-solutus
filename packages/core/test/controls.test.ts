@@ -389,3 +389,49 @@ describe('stage helpers (DG-1, SV-6, SV-10, SV-13)', () => {
     expect(runtime.uiState().card).toEqual({ title: 'Stage', hint: 'Drag Bob or change the values below.' });
   });
 });
+
+describe('the idle tour (MO-1, BR-8)', () => {
+  const tour = (options: RuntimeOptions = {}) =>
+    run((inc) => {
+      inc.param('angle', { min: 0, max: 90, value: 45 });
+      const s = stage(inc);
+      s.circle(50, 50, 5);
+      inc.idle({ sweep: 'angle', after: 1, period: 4 });
+    }, options);
+
+  it('waits, then sweeps the parameter smoothly from where it is', () => {
+    const { runtime } = tour();
+    for (let i = 0; i < 20; i++) runtime.tick(0.05);
+    expect(runtime.values().angle).toBe(45);
+    const seen: number[] = [];
+    for (let i = 0; i < 40; i++) {
+      runtime.tick(0.05);
+      seen.push(runtime.values().angle!);
+    }
+    // No jump at the start, and it moves.
+    expect(Math.abs(seen[0]! - 45)).toBeLessThan(0.5);
+    expect(Math.max(...seen) - Math.min(...seen)).toBeGreaterThan(20);
+    // The sweep is not the learner's: nothing to undo, nothing persisted.
+    expect(runtime.uiState().history.undo).toBe(false);
+  });
+
+  it('stops for good at the first touch, and never runs under reduced motion', () => {
+    const { runtime } = tour();
+    for (let i = 0; i < 40; i++) runtime.tick(0.05);
+    runtime.touched();
+    const at = runtime.values().angle;
+    for (let i = 0; i < 40; i++) runtime.tick(0.05);
+    expect(runtime.values().angle).toBe(at);
+    const still = tour({ reducedMotion: true }).runtime;
+    for (let i = 0; i < 80; i++) still.tick(0.05);
+    expect(still.values().angle).toBe(45);
+  });
+
+  it('rejects a tour of something that is not a parameter', () => {
+    const error = run((inc) => {
+      stage(inc);
+      inc.idle({ sweep: 'nothing' });
+    }).mount.ui.error?.message;
+    expect(error).toContain('"nothing", which is not a parameter declared before it');
+  });
+});

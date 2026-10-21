@@ -1,6 +1,7 @@
 import type {
   Chart,
   ChartOptions,
+  IdleOptions,
   DragInfo,
   Flow,
   FlowOptions,
@@ -256,6 +257,10 @@ export class SceneRuntime {
   private stepHooks: Array<(index: number | null) => void> = [];
   private stepHookPending: number | null | undefined = undefined;
   private reportedUnknown = new Set<string>();
+  // The idle tour (MO-1): one parameter swept while nobody touches the figure.
+  private idleTour: { readonly name: string; readonly after: number; readonly period: number; elapsed: number; phase: number | null; from: number } | null = null;
+  /** The learner has touched the figure, so the tour never runs again, even after a reset. */
+  private idleEnded = false;
 
   constructor(private readonly options: RuntimeOptions = {}) {
     this.random = mulberry32(options.seed ?? 1);
@@ -329,7 +334,39 @@ export class SceneRuntime {
   needsFrame(): boolean {
     if (this.lifecycle !== 'mounted' || !this.visible) return false;
     const moving = this.playing && this.animated !== false;
-    return moving || this.dirty || this.tweens.length > 0 || this.stepTransition !== null;
+    return moving || this.dirty || this.tweens.length > 0 || this.stepTransition !== null || this.touring();
+  }
+
+  /** Whether the idle tour is waiting or sweeping. */
+  private touring(): boolean {
+    return this.idleTour !== null && !this.idleEnded && !this.reducedMotion && this.stepIndex === null;
+  }
+
+  /** The learner did something: the idle tour stops for good. */
+  touched(): void {
+    this.idleEnded = true;
+  }
+
+  /** Waits, then sweeps the tour's parameter across its range, starting from where it is. */
+  private tour(dt: number): void {
+    const tour = this.idleTour!;
+    const state = this.params.get(tour.name);
+    if (!state) return;
+    tour.elapsed += dt;
+    if (tour.elapsed < tour.after) return;
+    const span = state.max - state.min;
+    if (!(span > 0)) return;
+    if (tour.phase === null) {
+      // Start the cosine where it equals the current value, so nothing jumps.
+      const k = Math.min(1, Math.max(0, (state.value - state.min) / span));
+      tour.phase = Math.acos(1 - 2 * k) / (2 * Math.PI);
+      tour.from = state.value;
+    }
+    const since = tour.elapsed - tour.after;
+    const sweep = state.min + span * (0.5 - 0.5 * Math.cos(2 * Math.PI * (tour.phase + since / tour.period)));
+    // Ease into the sweep over the first second and a half, so it starts calmly.
+    const w = Math.min(1, since / 1.5);
+    this.applyParam(tour.name, tour.from + (sweep - tour.from) * w * w * (3 - 2 * w), false);
   }
 
   /** Whether the scene follows time; null until a frame has run. */
@@ -349,6 +386,7 @@ export class SceneRuntime {
       return this.flush();
     }
     const capped = Math.min(Math.max(Number.isFinite(realDt) ? realDt : 0, 0), this.maxDt);
+    if (this.touring()) this.tour(capped);
     if (this.stepTransition) {
       const transition = this.stepTransition;
       const { k, done } = advanceTween(transition, capped);
@@ -854,6 +892,7 @@ export class SceneRuntime {
     this.explainFn = null;
     this.describeFn = null;
     this.tweens = [];
+    this.idleTour = null;
     this.error = null;
     this.usesTime = false;
     this.framesRun = 0;
@@ -1621,6 +1660,17 @@ export class SceneRuntime {
         }
         if (runtime.tweens.length >= 16) throw new SceneApiError('Too many queued tweens');
         runtime.tweens.push({ options, elapsed: 0 });
+      },
+      idle(options: IdleOptions) {
+        runtime.requireMounting('idle');
+        if (runtime.idleTour) throw new SceneApiError('inc.idle is called once per figure');
+        const name = options?.sweep;
+        if (typeof name !== 'string' || !runtime.params.has(name)) throw new SceneApiError(`inc.idle sweeps "${String(name)}", which is not a parameter declared before it`);
+        const after = options.after ?? 4;
+        const period = options.period ?? 8;
+        if (!(after >= 0 && after <= 120)) throw new SceneApiError('inc.idle: after is from 0 to 120 seconds');
+        if (!(period >= 1 && period <= 120)) throw new SceneApiError('inc.idle: period is from 1 to 120 seconds');
+        runtime.idleTour = { name, after, period, elapsed: 0, phase: null, from: 0 };
       },
       sym,
       chem,

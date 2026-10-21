@@ -176,6 +176,7 @@ export const INC_FUNCTIONS = {
   formula: 'Formula',
   random: null,
   tween: null,
+  idle: null,
   sym: null,
   chem: null,
 } as const satisfies Methods<Inc>;
@@ -384,6 +385,7 @@ export const HANDLES: Readonly<Record<HandleKind, HandleSpec>> = {
       group: 'Group3D',
       line: 'Line3D',
       arrow: 'Arrow3D',
+      coil: 'Line3D',
       arc: 'Line3D',
       point: 'Object3D',
       label: 'Label3D',

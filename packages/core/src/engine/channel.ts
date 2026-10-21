@@ -7,11 +7,34 @@ export interface RuntimeChannel {
   onUpdate(listener: (update: RuntimeUpdate) => void): () => void;
 }
 
+const TOUCHES: ReadonlySet<RendererMessage['type']> = new Set<RendererMessage['type']>([
+  'setParam',
+  'play',
+  'pause',
+  'restart',
+  'reset',
+  'speed',
+  'step',
+  'drag',
+  'view',
+  'action',
+  'legend',
+  'formula',
+  'predict',
+  'undo',
+  'redo',
+  'timing',
+  'frame',
+  'compare',
+]);
+
 /**
  * Applies one renderer message to a runtime and returns the resulting update.
  * Shared by the in-thread channel and the Worker entry, so both behave alike.
  */
 export function handleRendererMessage(runtime: SceneRuntime, message: RendererMessage): RuntimeUpdate | null {
+  // Anything the learner does ends the idle tour; ticks, visibility and pointing do not.
+  if (TOUCHES.has(message.type)) runtime.touched();
   switch (message.type) {
     case 'tick':
       return runtime.tick(message.dt);

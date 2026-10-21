@@ -847,6 +847,8 @@ export interface Space3D {
   line(points: ReadonlyArray<Vec3>, options?: Line3DOptions): Line3D;
   /** A 3D segment with a head that always faces the viewer. */
   arrow(from: Vec3, to: Vec3, options?: Line3DOptions): Arrow3D;
+  /** A helix standing along z, such as a spring or a solenoid's wire; sorted piece by piece, so it wraps whatever runs through it. */
+  coil(r: number, h: number, turns: number, options?: Line3DOptions): Line3D;
   /** An angle arc: `from` (a vector from `center`) turned about `axis` by `degrees`. */
   arc(center: Vec3, from: Vec3, axis: Vec3, degrees: number, options?: Line3DOptions): Line3D;
   /** A dot that keeps its size on screen. */
@@ -1254,7 +1256,17 @@ export interface Flow {
 // Tweens
 // ---------------------------------------------------------------------------
 
-export type Ease ='linear' | 'in' | 'out' | 'inOut' | 'spring';
+export type Ease = 'linear' | 'in' | 'out' | 'inOut' | 'spring';
+
+/** A calm tour of one parameter while nobody touches the figure. */
+export interface IdleOptions {
+  /** The parameter to sweep across its range. */
+  readonly sweep: string;
+  /** Seconds without a touch before the tour starts. Default 4. */
+  readonly after?: number;
+  /** Seconds for one sweep there and back. Default 8. */
+  readonly period?: number;
+}
 
 export interface TweenOptions {
   /** Duration in seconds of scene time. */
@@ -1319,6 +1331,8 @@ export interface Inc {
   /** Seeded random number in [0, 1). Same seed, same sequence. */
   random(): number;
   tween(options: TweenOptions): void;
+  /** Sweeps a parameter gently when nobody touches the figure; stops at the first touch and under reduced motion. */
+  idle(options: IdleOptions): void;
   /** Symbols as text for labels: sym('v_0^2') is "v₀²", sym('Delta theta') is "Δ θ", sym('F -> m*a') is "F → m·a". */
   sym(source: string): string;
   /** A chemical formula as text: chem('SO4^2-') is "SO₄²⁻"; chem('2H2 + O2 -> 2H2O') is "2H₂ + O₂ → 2H₂O". Charges need ^ except a single + or -. */
