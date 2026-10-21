@@ -146,9 +146,11 @@ describe('costs', () => {
     expect(costOf('claude-haiku-5-5', { ...usage, outputTokens: 0, inputTokens: 0, cacheWriteTokens: 1_000_000 })).toBeCloseTo(0.125);
   });
 
-  it('prices an unknown model as the most expensive known one', () => {
+  it('prices an unknown model as the most expensive known one, and stand-ins at nothing', () => {
     const usage = { inputTokens: 0, outputTokens: 1_000_000, cacheReadTokens: 0, cacheWriteTokens: 0 };
     expect(costOf('some-new-model', usage)).toBeCloseTo(20);
+    expect(costOf('reference-scene', usage)).toBe(0);
+    expect(costOf('scripted-plan', usage)).toBe(0);
   });
 });
 

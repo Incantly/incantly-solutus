@@ -94,8 +94,12 @@ export const MODEL_PRICES: Readonly<Record<string, ModelPrice>> = {
   'claude-opus-5-5': { input: 4, output: 20, cacheRead: 0.05, cacheWrite: 1.25 },
 };
 
+/** Stand-in models (the scripted and reference models) cost nothing. */
+export const STAND_IN_PREFIXES = ['scripted-', 'reference-'] as const;
+
 /** What a call cost in US dollars; unknown models are priced as the most expensive known one. */
 export function costOf(model: string, usage: ModelUsage, prices: Readonly<Record<string, ModelPrice>> = MODEL_PRICES): number {
+  if (STAND_IN_PREFIXES.some((prefix) => model.startsWith(prefix))) return 0;
   const price =
     prices[model] ??
     Object.values(prices).reduce((max, p) => (p.output > max.output ? p : max), { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });

@@ -1,7 +1,7 @@
 import type { ScenePlan } from '@incantly/core';
 import { REFERENCE_SCENES, type ReferenceScene } from '@incantly/core/scenes';
 import { parsePlanReply } from './fragments';
-import { ScriptedModel, type ModelCall } from './models';
+import { ScriptedModel, type CallPurpose, type ModelCall } from './models';
 
 /**
  * A stand-in model that answers from the reviewed reference scenes, with
@@ -38,6 +38,8 @@ export interface ReferenceModelOptions {
   readonly latencyMs?: number;
   readonly chunk?: number;
   readonly scenes?: Readonly<Record<string, ReferenceScene>>;
+  /** Model names to report; the defaults mark a stand-in that costs nothing. */
+  readonly models?: Partial<Record<CallPurpose, string>>;
 }
 
 /** Words that pick a concept out of a learner's request. */
@@ -163,6 +165,6 @@ export function referenceModel(options: ReferenceModelOptions = {}): ScriptedMod
     name: 'reference',
     ...(options.chunk ? { chunk: options.chunk } : {}),
     ...(options.latencyMs ? { latencyMs: options.latencyMs } : {}),
-    models: { plan: 'reference-plan', scene: 'reference-scene', repair: 'reference-repair' },
+    models: { plan: 'reference-plan', scene: 'reference-scene', repair: 'reference-repair', ...options.models },
   });
 }
