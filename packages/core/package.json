@@ -6,5 +6,8 @@
   "description": "Incantly visualization SDK: scene runtime, renderer, sandbox, validator and probe.",
   "exports": {
     ".": "./src/index.ts"
+  },
+  "devDependencies": {
+    "mathjs": "^15.2.0"
   }
 }
