@@ -1,5 +1,5 @@
-import type { PlanOutput, PlanParameter, SceneKind, ScenePlan, SingularPoint } from '@incantly/core';
-import { capability, capabilityNames } from './catalog';
+import { SCENE_SIZES, SIZE_BUDGETS, type ControlKind, type PlanOutput, type PlanParameter, type SceneKind, type ScenePlan, type SceneSize, type SingularPoint } from '@incantly/core';
+import { CAPABILITIES, capability, capabilityNames } from './catalog';
 
 /**
  * The plan validator (PL-1, PL-2). The plan is the model's first, small reply:
@@ -39,10 +39,12 @@ export interface PlanValidation {
   readonly problems: readonly PlanProblem[];
 }
 
+/** Limits for the default size, quick; a standard or rich plan may have more controls and parts (SIZE_BUDGETS). */
 export const PLAN_LIMITS = {
-  params: 3,
-  parts: 8,
+  params: SIZE_BUDGETS.quick.controls,
+  parts: SIZE_BUDGETS.quick.parts,
   steps: 5,
+  choiceOptions: 8,
   ideaMin: 20,
   ideaMax: 240,
   ideaWords: 6,
@@ -142,17 +144,34 @@ export function unclearIdea(idea: string): string | null {
   return null;
 }
 
+/** A parameter's control: a slider unless the plan says toggle, or choice with its options. */
+function readControl(raw: Record<string, unknown>, path: string, problems: Problems): { kind: ControlKind; options: string[] } {
+  const kind = raw.control === undefined ? 'slider' : raw.control;
+  if (kind !== 'slider' && kind !== 'toggle' && kind !== 'choice') {
+    problems.push({ rule: 'schema', path: `${path}.control`, message: `${path}.control must be "slider", "toggle" or "choice"` });
+    return { kind: 'slider', options: [] };
+  }
+  if (kind !== 'choice') return { kind, options: [] };
+  const list = Array.isArray(raw.options) ? raw.options : null;
+  const options = (list ?? []).filter((o): o is string => typeof o === 'string' && o.trim() !== '').map((o) => o.trim().slice(0, PLAN_LIMITS.name));
+  if (!list || options.length < 2 || options.length > PLAN_LIMITS.choiceOptions || options.length !== list.length || new Set(options).size !== options.length) {
+    problems.push({ rule: 'schema', path: `${path}.options`, message: `A choice needs "options": from 2 to ${PLAN_LIMITS.choiceOptions} different, short names` });
+  }
+  return { kind, options };
+}
+
 /** The well-formed parameters, and the names of all of them, so one bad number does not hide a name. */
-function readParameters(value: unknown, problems: Problems, renames: Map<string, string>): { parameters: PlanParameter[]; names: Set<string> } {
+function readParameters(value: unknown, problems: Problems, renames: Map<string, string>, size: SceneSize): { parameters: PlanParameter[]; names: Set<string> } {
   const seen = new Set<string>();
   const list = readList(value, 'parameters', problems);
   if (!list) return { parameters: [], names: seen };
   if (list.length === 0) problems.push({ rule: 'no-params', path: 'parameters', message: 'A figure needs at least one parameter the learner can change' });
-  if (list.length > PLAN_LIMITS.params) {
+  const allowed = SIZE_BUDGETS[size].controls;
+  if (list.length > allowed) {
     problems.push({
       rule: 'too-many-params',
       path: 'parameters',
-      message: `The plan has ${list.length} parameters; at most ${PLAN_LIMITS.params} are allowed. Keep the ones that teach the idea`,
+      message: `The plan has ${list.length} parameters; a ${size} figure has at most ${allowed}. Keep the ones that teach the idea${size === 'rich' ? '' : ', or make it a larger size if the learner asked for that much'}`,
     });
   }
   const out: PlanParameter[] = [];
@@ -176,16 +195,23 @@ function readParameters(value: unknown, problems: Problems, renames: Map<string,
     if (name !== null && seen.has(name)) problems.push({ rule: 'duplicate-name', path: `${path}.name`, message: `Two parameters are called "${name}"` });
     if (name !== null) seen.add(name);
     const unit = readText(raw.unit, `${path}.unit`, PLAN_LIMITS.unit, problems, false);
-    const min = readNumber(raw.min, `${path}.min`, problems);
-    const max = readNumber(raw.max, `${path}.max`, problems);
-    const fallback = readNumber(raw.default, `${path}.default`, problems);
+    const control = readControl(raw, path, problems);
+    // A toggle runs from 0 to 1 and a choice over its options: their bounds follow, whatever the plan wrote.
+    let min = control.kind === 'slider' ? readNumber(raw.min, `${path}.min`, problems) : 0;
+    let max = control.kind === 'slider' ? readNumber(raw.max, `${path}.max`, problems) : control.kind === 'toggle' ? 1 : Math.max(1, control.options.length - 1);
+    let fallback = control.kind === 'slider' ? readNumber(raw.default, `${path}.default`, problems) : Math.round(typeof raw.default === 'number' && Number.isFinite(raw.default) ? raw.default : 0);
+    if (control.kind !== 'slider') {
+      fallback = Math.min(max!, Math.max(0, fallback ?? 0));
+      min = 0;
+      max = max!;
+    }
     if (min !== null && max !== null && !(min < max)) {
       problems.push({ rule: 'invalid-bounds', path, message: `${name ?? path}: min (${min}) must be less than max (${max})` });
     } else if (min !== null && max !== null && fallback !== null && (fallback < min || fallback > max)) {
       problems.push({ rule: 'invalid-bounds', path: `${path}.default`, message: `${name ?? path}: the default ${fallback} lies outside ${min} to ${max}` });
     }
     const why = readProse(raw.why, `${path}.why`, PLAN_LIMITS.text, problems, false);
-    if (!why) {
+    if (!why && control.kind === 'slider') {
       problems.push({
         rule: 'missing-justification',
         path: `${path}.why`,
@@ -193,7 +219,16 @@ function readParameters(value: unknown, problems: Problems, renames: Map<string,
       });
     }
     if (name !== null && min !== null && max !== null && fallback !== null) {
-      out.push({ name, ...(unit ? { unit } : {}), min, max, default: fallback, why: why ?? '' });
+      out.push({
+        name,
+        ...(unit ? { unit } : {}),
+        min,
+        max,
+        default: fallback,
+        why: why ?? '',
+        ...(control.kind !== 'slider' ? { control: control.kind } : {}),
+        ...(control.kind === 'choice' ? { options: control.options } : {}),
+      });
     }
   });
   return { parameters: out, names: seen };
@@ -333,6 +368,8 @@ export function validatePlan(input: unknown): PlanValidation {
   if (typeof kind !== 'string' || !(KINDS as readonly string[]).includes(kind)) {
     problems.push({ rule: 'schema', path: 'kind', message: `kind must be one of ${KINDS.join(', ')}` });
   }
+  // An unknown or missing size is quick: not worth a re-plan.
+  const size: SceneSize = typeof input.size === 'string' && (SCENE_SIZES as readonly string[]).includes(input.size) ? (input.size as SceneSize) : 'quick';
 
   const capabilities: string[] = [];
   for (const [i, raw] of (readList(input.capabilities, 'capabilities', problems) ?? []).entries()) {
@@ -345,13 +382,19 @@ export function validatePlan(input: unknown): PlanValidation {
     } else if (!capabilities.includes(raw)) capabilities.push(raw);
   }
   if (!capabilities.some((name) => capability(name)?.draws)) {
-    problems.push({ rule: 'no-stage', path: 'capabilities', message: 'The plan needs something to draw on: graph2d or svg' });
+    problems.push({
+      rule: 'no-stage',
+      path: 'capabilities',
+      message: `The plan needs something to draw on: ${CAPABILITIES.filter((c) => c.draws)
+        .map((c) => c.name)
+        .join(', ')}`,
+    });
   }
 
   const renames = new Map<string, string>();
-  const { parameters, names } = readParameters(input.parameters, problems, renames);
+  const { parameters, names } = readParameters(input.parameters, problems, renames, size);
   const model = readModel(input.model, names, problems, renames);
-  const parts = readNames(input.parts, 'parts', PLAN_LIMITS.parts, 'too-many-parts', 'parts', problems);
+  const parts = readNames(input.parts, 'parts', SIZE_BUDGETS[size].parts, 'too-many-parts', 'parts', problems);
   if (parts.length === 0) problems.push({ rule: 'schema', path: 'parts', message: 'Name at least one visual part, so it can be highlighted and described' });
   const moves = readProse(input.moves, 'moves', PLAN_LIMITS.text, problems);
   const steps = readNames(input.steps ?? [], 'steps', PLAN_LIMITS.steps, 'too-many-steps', 'steps', problems);
@@ -362,10 +405,13 @@ export function validatePlan(input: unknown): PlanValidation {
   // Every scene has a text alternative, and a plan with steps uses the steps capability.
   if (!capabilities.includes('describe')) capabilities.push('describe');
   if (steps.length > 0 && !capabilities.includes('steps')) capabilities.push('steps');
+  // Toggles and choices are controls of the controls capability.
+  if (parameters.some((p) => p.control === 'toggle' || p.control === 'choice') && !capabilities.includes('controls')) capabilities.push('controls');
   const plan: ScenePlan = {
     concept,
     idea,
     kind: kind as SceneKind,
+    size,
     capabilities,
     parameters,
     model,

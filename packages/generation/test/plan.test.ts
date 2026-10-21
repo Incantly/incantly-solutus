@@ -30,9 +30,9 @@ describe('the plan validator', () => {
   });
 
   it('rejects capabilities that are not in the catalog, naming the ones that are', () => {
-    const result = validatePlan(plan({ capabilities: ['graph2d', 'physics2d'] }));
+    const result = validatePlan(plan({ capabilities: ['graph2d', 'hologram'] }));
     expect(result.problems.map((p) => p.rule)).toEqual(['unknown-capability']);
-    expect(result.problems[0]!.message).toContain('physics2d');
+    expect(result.problems[0]!.message).toContain('hologram');
     expect(result.problems[0]!.message).toContain(capabilityNames().join(', '));
     expect(rules(plan({ capabilities: ['graph2d', 'readout'] }))).toEqual([]);
   });
@@ -161,7 +161,7 @@ describe('the plan validator', () => {
   });
 
   it('quotes its problems one per line for the re-plan request', () => {
-    const { problems } = validatePlan(plan({ capabilities: ['graph2d', 'physics2d'], idea: 'Projectiles.' }));
+    const { problems } = validatePlan(plan({ capabilities: ['graph2d', 'hologram'], idea: 'Projectiles.' }));
     const text = formatPlanProblems(problems);
     expect(text.split('\n')).toHaveLength(2);
     expect(text).toMatch(/^- unclear-idea at idea: /m);
