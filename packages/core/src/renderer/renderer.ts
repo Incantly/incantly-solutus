@@ -7,7 +7,7 @@ import { ControlsView, ReadoutsView } from './controls';
 import { SceneDom } from './dom-scene';
 import { FormulasPanel, HeaderView, LegendPanel, PredictPanel, TablesPanel } from './panels';
 import { PointerController } from './pointer';
-import { applySlotClasses, applyStyle, resolveStyle, type FigureStyle, type ResolvedStyle } from './style';
+import { applySlotClasses, applyStyle, clearStyle, resolveStyle, type FigureStyle, type ResolvedStyle } from './style';
 import { TeachingView } from './teaching';
 
 export interface RendererOptions {
@@ -61,7 +61,8 @@ export class FigureRenderer {
   readonly root: HTMLElement;
   readonly scene: SceneDom;
   readonly pointer: PointerController;
-  readonly style: ResolvedStyle;
+  /** The style now applied, checked. */
+  style: ResolvedStyle;
   readonly stats: RendererStats = { frameRequests: 0, loopStarts: 0, ticksSent: 0, updates: 0, workMs: 0, workFrames: 0 };
   ui: UiState = EMPTY_UI;
 
@@ -175,6 +176,30 @@ export class FigureRenderer {
     if ((options.visibility ?? 'observe') === 'observe') this.observeVisibility(doc, signal);
     this.observeReducedMotion(doc, signal);
     this.observeSize();
+  }
+
+  /**
+   * Restyles the figure in place, keeping the learner's values and position:
+   * preset, tokens, slot classes, layout and which parts show.
+   */
+  setStyle(style: FigureStyle | undefined): void {
+    if (this.destroyed) return;
+    clearStyle(this.root, this.style);
+    this.style = resolveStyle(style);
+    applyStyle(this.root, this.style);
+    const show = this.style.show;
+    this.controls.setShow({ transport: show.transport, speed: show.speed, settings: show.settings, undo: show.undo, fullscreen: show.fullscreen });
+  }
+
+  /** The figure's number in its document, or null for none; documents renumber as figures come and go. */
+  setNumber(figureNumber: number | null): void {
+    if (!this.destroyed) this.header.setNumber(figureNumber);
+  }
+
+  /** Switches between the light and dark themes, or back to following the system. */
+  setTheme(theme: 'light' | 'dark' | 'auto'): void {
+    if (theme === 'light' || theme === 'dark') this.root.dataset.theme = theme;
+    else delete this.root.dataset.theme;
   }
 
   /** Sends a message to the runtime. Never draws. */

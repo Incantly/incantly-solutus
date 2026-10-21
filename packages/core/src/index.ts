@@ -34,6 +34,8 @@ export type { Fragments, MountedFigure, TrustedMountOptions } from './engine/mou
 export { FigureRenderer } from './renderer/renderer';
 export type { RendererOptions } from './renderer/renderer';
 export { THEME_CSS } from './renderer/theme';
+export { STYLE_SLOTS, checkStyle, mergeStyles, resolveStyle } from './renderer/style';
+export type { ControlsPlacement, FigureLayout, FigureStyle, ShowPart, StylePreset, StyleSlot } from './renderer/style';
 
 export { validateScene, validateSceneCss, validateSceneHtml, validateSceneJs, formatDiagnostic, hasErrors, SCENE_LIMITS, VALIDATOR_VERSION } from './validation';
 export type { Diagnostic, SceneFragments, SceneLimits, SceneValidation, ValidatedScene } from './validation';

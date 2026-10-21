@@ -29,6 +29,13 @@ describe('bridge messages', () => {
     expect(parseHostMessage(envelope({ type: 'step', step: null }), CHANNEL)).not.toBeNull();
     expect(parseHostMessage(envelope({ type: 'init', mode: 'live', worker: '', scene: '', shifts: {} }), CHANNEL)).not.toBeNull();
     expect(parseHostMessage(envelope({ type: 'init', mode: 'admin', worker: '', scene: '', shifts: {} }), CHANNEL)).toBeNull();
+    expect(parseHostMessage(envelope({ type: 'style', style: { preset: 'glass' } }), CHANNEL)).not.toBeNull();
+    expect(parseHostMessage(envelope({ type: 'style', style: 'glass' }), CHANNEL)).toBeNull();
+    expect(parseHostMessage(envelope({ type: 'theme', theme: 'dark' }), CHANNEL)).not.toBeNull();
+    expect(parseHostMessage(envelope({ type: 'theme', theme: 'neon' }), CHANNEL)).toBeNull();
+    expect(parseHostMessage(envelope({ type: 'number', figureNumber: 3 }), CHANNEL)).not.toBeNull();
+    expect(parseHostMessage(envelope({ type: 'number', figureNumber: null }), CHANNEL)).not.toBeNull();
+    expect(parseHostMessage(envelope({ type: 'number', figureNumber: 2.5 }), CHANNEL)).toBeNull();
   });
 
   it('checks the shape of each frame message', () => {
@@ -53,6 +60,7 @@ describe('bridge messages', () => {
       'destroy',
       'focus',
       'init',
+      'number',
       'pause',
       'ping',
       'reducedMotion',
@@ -60,6 +68,8 @@ describe('bridge messages', () => {
       'setValues',
       'snapshot',
       'step',
+      'style',
+      'theme',
     ]);
     expect([...FRAME_MESSAGE_TYPES].sort()).toEqual([
       'description',

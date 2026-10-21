@@ -43,6 +43,7 @@ export class ControlsView {
   private readonly settingsButton: HTMLButtonElement;
   private readonly fullscreenButton: HTMLButtonElement;
   private readonly compareButton: HTMLButtonElement;
+  private readonly transport: HTMLElement;
   private readonly settings: HTMLElement;
   private readonly timing: HTMLElement;
   private readonly duration: HTMLInputElement;
@@ -67,7 +68,7 @@ export class ControlsView {
     private readonly scope: string,
     send: Send,
     signal: AbortSignal,
-    private readonly show: ControlsShow = { transport: true, speed: true, settings: true, undo: true, fullscreen: true },
+    private show: ControlsShow = { transport: true, speed: true, settings: true, undo: true, fullscreen: true },
   ) {
     this.element = doc.createElement('div');
     this.element.className = 'inc-controls';
@@ -115,6 +116,7 @@ export class ControlsView {
     this.fullscreenButton.hidden = !show.fullscreen || !(doc.fullscreenEnabled ?? false);
     transport.append(this.toggle, this.restart, speedLabel, reset, this.undoButton, this.redoButton, this.compareButton, this.settingsButton, this.fullscreenButton);
     transport.hidden = !show.transport;
+    this.transport = transport;
 
     // The settings panel: timing (when the scene has a timeline), frame-rate cap and frame step.
     this.settings = doc.createElement('div');
@@ -258,6 +260,20 @@ export class ControlsView {
     this.toggle.dataset.playing = String(playing);
     this.toggle.textContent = playing ? 'Pause' : 'Play';
     this.refreshFrameStep();
+  }
+
+  /** Shows or hides parts of the transport when the integrator restyles the figure. */
+  setShow(show: ControlsShow): void {
+    this.show = show;
+    this.transport.hidden = !show.transport;
+    this.speedLabel.hidden = this.animated === false || !show.speed;
+    this.undoButton.hidden = this.redoButton.hidden = !show.undo;
+    this.settingsButton.hidden = !show.settings;
+    if (!show.settings) {
+      this.settings.hidden = true;
+      this.settingsButton.setAttribute('aria-expanded', 'false');
+    }
+    this.fullscreenButton.hidden = !show.fullscreen || !(this.doc.fullscreenEnabled ?? false);
   }
 
   /** A still scene has nothing to play, restart or speed up. */

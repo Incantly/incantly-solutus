@@ -65,6 +65,11 @@ export type HostMessageBody =
   | { readonly type: 'ping'; readonly id: number }
   /** Moves keyboard focus into the figure, to its first or last control. */
   | { readonly type: 'focus'; readonly edge: 'first' | 'last' }
+  /** Restyles the live figure; its CSS stays what the frame was made with. Checked again in the frame. */
+  | { readonly type: 'style'; readonly style: FigureStyle }
+  | { readonly type: 'theme'; readonly theme: 'light' | 'dark' | 'auto' }
+  /** The figure's number in its document changed. */
+  | { readonly type: 'number'; readonly figureNumber: number | null }
   | { readonly type: 'destroy' };
 
 export type FrameMessageBody =
@@ -99,6 +104,9 @@ export const HOST_MESSAGE_TYPES: ReadonlySet<string> = new Set([
   'snapshot',
   'ping',
   'focus',
+  'style',
+  'theme',
+  'number',
   'destroy',
 ]);
 
@@ -168,6 +176,14 @@ export function parseHostMessage(data: unknown, channel: string): HostMessage | 
       return typeof m.id === 'number' ? (m as unknown as HostMessage) : null;
     case 'focus':
       return m.edge === 'first' || m.edge === 'last' ? (m as unknown as HostMessage) : null;
+    case 'style':
+      return isRecord(m.style) ? (m as unknown as HostMessage) : null;
+    case 'theme':
+      return m.theme === 'light' || m.theme === 'dark' || m.theme === 'auto' ? (m as unknown as HostMessage) : null;
+    case 'number':
+      return m.figureNumber === null || (typeof m.figureNumber === 'number' && Number.isInteger(m.figureNumber) && m.figureNumber > 0 && m.figureNumber < 10_000)
+        ? (m as unknown as HostMessage)
+        : null;
     default:
       return m as unknown as HostMessage;
   }

@@ -259,6 +259,57 @@ export function resolveStyle(style: FigureStyle | undefined): ResolvedStyle {
 }
 
 /**
+ * Only the valid parts of a style that were actually given, without defaults
+ * or CSS: what a document may store about one figure's look, since documents
+ * travel between people and must not carry stylesheets.
+ */
+export function checkStyle(style: unknown): FigureStyle {
+  if (!isRecord(style)) return {};
+  const given = style as FigureStyle;
+  const resolved = resolveStyle(given);
+  const out: { -readonly [K in keyof FigureStyle]?: FigureStyle[K] } = {};
+  if (given.preset !== undefined && resolved.preset === given.preset) out.preset = resolved.preset;
+  if (Object.keys(resolved.tokens).length > 0) out.tokens = resolved.tokens;
+  if (Object.keys(resolved.classNames).length > 0) out.classNames = resolved.classNames;
+  if (isRecord(given.layout)) {
+    const layout: Record<string, string> = {};
+    for (const key of Object.keys(given.layout)) {
+      const value = (resolved.layout as Record<string, string | undefined>)[key];
+      if (value !== undefined && value === (given.layout as Record<string, unknown>)[key]) layout[key] = value;
+    }
+    if (Object.keys(layout).length > 0) out.layout = layout as FigureLayout;
+  }
+  if (isRecord(given.show)) {
+    const show: Partial<Record<ShowPart, boolean>> = {};
+    for (const key of Object.keys(SHOW_DEFAULTS) as ShowPart[]) {
+      if (typeof (given.show as Record<string, unknown>)[key] === 'boolean') show[key] = resolved.show[key];
+    }
+    if (Object.keys(show).length > 0) out.show = show;
+  }
+  return out;
+}
+
+/** One style over another: the second wins field by field; classes add up; the first keeps its CSS. */
+export function mergeStyles(base: FigureStyle | undefined, over: FigureStyle | undefined): FigureStyle | undefined {
+  if (!over) return base;
+  if (!base) return over;
+  const classNames: Partial<Record<StyleSlot, string>> = { ...base.classNames };
+  for (const [slot, classes] of Object.entries(over.classNames ?? {}) as Array<[StyleSlot, string]>) {
+    classNames[slot] = [classNames[slot], classes].filter(Boolean).join(' ');
+  }
+  const preset = over.preset ?? base.preset;
+  const css = over.css ?? base.css;
+  return {
+    ...(preset ? { preset } : {}),
+    tokens: { ...base.tokens, ...over.tokens },
+    classNames,
+    layout: { ...base.layout, ...over.layout },
+    show: { ...base.show, ...over.show },
+    ...(css !== undefined ? { css } : {}),
+  };
+}
+
+/**
  * The style as plain data for the bridge: everything but the host CSS, which
  * goes into the frame document itself under the content security policy.
  */
@@ -288,6 +339,18 @@ export function applyStyle(root: HTMLElement, style: ResolvedStyle): void {
   if (style.layout.panelWidth) root.style.setProperty('--inc-panel-width', style.layout.panelWidth);
   for (const [part, shown] of Object.entries(style.show)) if (!shown) root.dataset[`hide${part.charAt(0).toUpperCase()}${part.slice(1)}`] = '';
   applySlotClasses(root, style);
+}
+
+/** Takes a style off a figure root before another goes on. Classes the SDK owns (inc-…) stay. */
+export function clearStyle(root: HTMLElement, style: ResolvedStyle): void {
+  for (const name of Object.keys(style.tokens)) root.style.removeProperty(`--inc-${name}`);
+  for (const name of ['--inc-scene-height', '--inc-max-width', '--inc-panel-width']) root.style.removeProperty(name);
+  for (const part of Object.keys(style.show)) delete root.dataset[`hide${part.charAt(0).toUpperCase()}${part.slice(1)}`];
+  for (const [slot, classes] of Object.entries(style.classNames) as Array<[StyleSlot, string]>) {
+    const list = classes.split(' ').filter((c) => !c.startsWith('inc-'));
+    const targets = slot === 'figure' ? [root] : [...root.querySelectorAll<Element>(SLOT_SELECTORS[slot])];
+    for (const target of targets) target.classList.remove(...list);
+  }
 }
 
 /** Adds the integrator's classes to every slot element now in the figure. Safe to call again after the DOM changes. */

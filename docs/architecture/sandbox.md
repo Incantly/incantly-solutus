@@ -60,6 +60,8 @@ Possible implementations may use an isolated document, a worker with a rendering
 
 The bridge accepts only documented message shapes from the execution instance created for that scene. Every instance receives an unguessable channel identifier, and messages without it are ignored. Transport-specific identity checks belong to the adapter.
 
+Host to frame: `init`, `pause`, `resume`, `setValues`, `step`, `reducedMotion`, `snapshot`, `ping`, `focus`, `style`, `theme`, `number` and `destroy`. `style` restyles a live figure in place (preset, tokens, slot classes, layout, shown parts) and is checked again in the frame; the integrator's trusted CSS is part of the frame document and its policy hashes, so changing it needs a new mount. Frame to host: `ready`, `mounted`, `error`, `values`, `formulas`, `step`, `description`, `escape`, `snapshot`, `pong`, `resize` and `probe`.
+
 ## Failure behavior
 
 A non-responsive, over-budget, or invalid execution instance is destroyed. The learner sees the last approved snapshot and text description, never a stack trace or empty box.

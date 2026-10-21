@@ -148,6 +148,16 @@ function onHostMessage(message: HostMessage): void {
       (message.edge === 'first' ? targets[0] : targets[targets.length - 1])?.focus();
       break;
     }
+    case 'style':
+      // Plain data the renderer checks again: names, lengths and colours only.
+      renderer?.setStyle(message.style);
+      break;
+    case 'theme':
+      renderer?.setTheme(message.theme);
+      break;
+    case 'number':
+      renderer?.setNumber(message.figureNumber);
+      break;
     case 'destroy':
       destroy();
       break;

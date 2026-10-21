@@ -29,6 +29,9 @@ export interface MountedFigure {
   readonly root: HTMLElement;
   readonly runtime: SceneRuntime;
   readonly renderer: FigureRenderer;
+  /** Restyles the figure in place, including its trusted CSS, keeping the learner's values. */
+  setStyle(style: FigureStyle | undefined): void;
+  setTheme(theme: 'light' | 'dark' | 'auto'): void;
   destroy(): void;
 }
 
@@ -68,13 +71,17 @@ export function mountTrusted(container: HTMLElement, fragments: Fragments, optio
   root.dataset.figureId = scope;
   if (options.theme && options.theme !== 'auto') root.dataset.theme = options.theme;
   // Host CSS usually lives in the page already; when it is passed, the figure carries it too.
-  const css = hostCss(options.style);
-  if (css) {
-    const style = doc.createElement('style');
-    style.dataset.incantlyHost = '';
-    style.textContent = css;
-    root.append(style);
-  }
+  let hostStyle: HTMLStyleElement | null = null;
+  const setHostCss = (css: string) => {
+    if (!css && !hostStyle) return;
+    if (!hostStyle) {
+      hostStyle = doc.createElement('style');
+      hostStyle.dataset.incantlyHost = '';
+      root.prepend(hostStyle);
+    }
+    hostStyle.textContent = css;
+  };
+  setHostCss(hostCss(options.style));
   if (fragments.css) {
     const style = doc.createElement('style');
     style.textContent = fragments.css;
@@ -113,6 +120,13 @@ export function mountTrusted(container: HTMLElement, fragments: Fragments, optio
     root,
     runtime,
     renderer,
+    setStyle(style) {
+      setHostCss(hostCss(style));
+      renderer.setStyle(style);
+    },
+    setTheme(theme) {
+      renderer.setTheme(theme);
+    },
     destroy() {
       renderer.destroy();
       root.remove();

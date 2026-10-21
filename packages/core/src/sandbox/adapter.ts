@@ -60,6 +60,15 @@ export interface FigureHandle {
   /** Returns the figure to saved learner values and teaching position. */
   restore(state: { readonly values?: Readonly<Record<string, number>>; readonly step?: number | null }): void;
   setReducedMotion(value: boolean): void;
+  /**
+   * Restyles the live figure without remounting it: preset, tokens, slot
+   * classes, layout and which parts show. Trusted CSS is part of the frame
+   * document, so a change to `css` needs a new mount.
+   */
+  setStyle(style: FigureStyle | undefined): void;
+  setTheme(theme: 'light' | 'dark' | 'auto'): void;
+  /** The figure's number in its document, shown in the card; null for none. */
+  setNumber(figureNumber: number | null): void;
   /** Moves keyboard focus into the figure. */
   focus(edge?: 'first' | 'last'): void;
   /** The figure's laid-out size, once it has one. Browsers do not lay out off-screen frames. */
@@ -191,6 +200,8 @@ class SandboxedFigure implements FigureHandle {
   private snapshots = new Map<number, (png: string | null) => void>();
   private laidOut = false;
   private snapshotId = 0;
+  /** Style and theme asked for before the frame was ready; they go with the init message. */
+  private early: { style?: FigureStyle | undefined; theme?: 'light' | 'dark' | 'auto'; figureNumber?: number | null } = {};
   private readonly deadlines: Deadlines;
   private readonly doc: Document;
   private readonly onVisibility = () => {
@@ -239,7 +250,7 @@ class SandboxedFigure implements FigureHandle {
       scene,
       channel,
       {
-        onMessage: (message) => this.onMessage(message, scene, live, worker),
+        onMessage: (message) => this.onMessage(message, scene, this.withEarly(live), worker),
         onNavigate: () => this.fail({ phase: 'unresponsive', message: 'The figure tried to navigate and was removed' }),
       },
       { title: options.title ?? 'Interactive figure', ...(options.lang ? { lang: options.lang } : {}), ...(css ? { hostCss: css } : {}) },
@@ -363,6 +374,31 @@ class SandboxedFigure implements FigureHandle {
 
   setReducedMotion(value: boolean): void {
     this.connection?.post({ type: 'reducedMotion', value });
+  }
+
+  setStyle(style: FigureStyle | undefined): void {
+    if (this.state === 'booting') this.early = { ...this.early, style };
+    // An empty style restores the defaults; the frame checks it again either way.
+    this.connection?.post({ type: 'style', style: styleForBridge(style) ?? {} });
+  }
+
+  setTheme(theme: 'light' | 'dark' | 'auto'): void {
+    if (this.state === 'booting') this.early = { ...this.early, theme };
+    this.connection?.post({ type: 'theme', theme });
+  }
+
+  setNumber(figureNumber: number | null): void {
+    if (this.state === 'booting') this.early = { ...this.early, figureNumber };
+    this.connection?.post({ type: 'number', figureNumber });
+  }
+
+  /** The live options with any style or theme set while the frame was starting. */
+  private withEarly(live: LiveOptions): LiveOptions {
+    const style = 'style' in this.early ? styleForBridge(this.early.style) : live.style;
+    const theme = this.early.theme ?? live.theme;
+    const figureNumber = 'figureNumber' in this.early ? this.early.figureNumber : live.figureNumber;
+    const { style: _style, theme: _theme, figureNumber: _number, ...rest } = live;
+    return { ...rest, ...(style ? { style } : {}), ...(theme ? { theme } : {}), ...(typeof figureNumber === 'number' ? { figureNumber } : {}) };
   }
 
   measure(): { width: number; height: number } | null {

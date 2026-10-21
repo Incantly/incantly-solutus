@@ -4,7 +4,7 @@ import { InThreadChannel, ManualClock, mountTrusted, type MountedFigure } from '
 import type { RendererMessage } from '../src/protocol/runtime-messages';
 import { mathElement, symbolText } from '../src/renderer/math';
 import { FORMULA_SETTLE_MS } from '../src/renderer/panels';
-import { hostCss, resolveStyle, styleForBridge } from '../src/renderer/style';
+import { checkStyle, hostCss, mergeStyles, resolveStyle, styleForBridge } from '../src/renderer/style';
 
 const mounted: MountedFigure[] = [];
 
@@ -307,6 +307,63 @@ describe('integrator styles', () => {
     expect(q(root, '.inc-speed').hidden).toBe(true);
     expect(root.hasAttribute('data-hide-description')).toBe(true);
     expect(q(root, '.inc-title').textContent).toBe('Figure 3 · Pendulum');
+  });
+
+  it('restyles a live figure in place, keeping its values, and switches theme and number', () => {
+    const { figure, root, clock } = mount(PENDULUM, {
+      style: { preset: 'glass', tokens: { lit: '#7c3aed' }, classNames: { button: 'rounded-full' }, show: { undo: false }, layout: { sceneHeight: '320px' } },
+    });
+    expect(q(root, 'button[data-action="undo"]').hidden).toBe(true);
+    figure.renderer.send({ type: 'setParam', name: 'angle', value: 40 });
+    clock.runUntilIdle();
+    figure.setStyle({ preset: 'outline', tokens: { radius: '4px' }, classNames: { button: 'border-2' }, layout: { controls: 'left' }, show: { transport: false } });
+    clock.runUntilIdle();
+    expect(root.dataset.preset).toBe('outline');
+    expect(root.dataset.layout).toBe('left');
+    expect(root.style.getPropertyValue('--inc-lit')).toBe('');
+    expect(root.style.getPropertyValue('--inc-radius')).toBe('4px');
+    expect(root.style.getPropertyValue('--inc-scene-height')).toBe('');
+    const toggle = q(root, 'button[data-action="toggle"]');
+    expect(toggle.classList.contains('rounded-full')).toBe(false);
+    expect(toggle.classList.contains('border-2')).toBe(true);
+    // SDK classes stay whatever the integrator adds or takes away.
+    expect(toggle.classList.contains('inc-primary')).toBe(true);
+    expect(q(root, 'button[data-action="undo"]').hidden).toBe(false);
+    expect(q(root, '.inc-transport').hidden).toBe(true);
+    expect(figure.runtime.values().angle).toBe(40);
+    figure.setTheme('dark');
+    expect(root.dataset.theme).toBe('dark');
+    figure.setTheme('auto');
+    expect(root.dataset.theme).toBeUndefined();
+    figure.renderer.setNumber(2);
+    expect(q(root, '.inc-title').textContent).toBe('Figure 2 · Pendulum');
+    figure.setStyle(undefined);
+    expect(root.dataset.preset).toBe('default');
+    expect(q(root, '.inc-transport').hidden).toBe(false);
+  });
+
+  it('keeps only the valid fields a style gives, and lays one style over another', () => {
+    expect(checkStyle({ preset: 'glass', css: '.x{}', tokens: { lit: 'url(x)', radius: '8px' }, layout: { controls: 'right', sceneHeight: '1e9; x' }, show: { speed: false, nope: true } })).toEqual({
+      preset: 'glass',
+      tokens: { radius: '8px' },
+      layout: { controls: 'right' },
+      show: { speed: false },
+    });
+    expect(checkStyle('glass')).toEqual({});
+    expect(checkStyle({ preset: 'nope' })).toEqual({});
+    const merged = mergeStyles(
+      { preset: 'glass', css: '.host{}', tokens: { lit: '#000' }, classNames: { button: 'rounded' }, layout: { controls: 'right', size: 'lg' } },
+      { preset: 'soft', tokens: { radius: '2px' }, classNames: { button: 'shadow' }, layout: { controls: 'below' }, show: { legend: false } },
+    );
+    expect(merged).toEqual({
+      preset: 'soft',
+      css: '.host{}',
+      tokens: { lit: '#000', radius: '2px' },
+      classNames: { button: 'rounded shadow' },
+      layout: { controls: 'below', size: 'lg' },
+      show: { legend: false },
+    });
+    expect(mergeStyles(undefined, { preset: 'soft' })).toEqual({ preset: 'soft' });
   });
 
   it('checks styles before they cross into a frame', () => {

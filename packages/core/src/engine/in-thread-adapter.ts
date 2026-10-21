@@ -79,6 +79,9 @@ export function mountInThread(container: HTMLElement, fragments: SceneFragments,
       }
     },
     setReducedMotion: (value) => figure?.renderer.send({ type: 'reducedMotion', value }),
+    setStyle: (style) => figure?.setStyle(style),
+    setTheme: (theme) => figure?.setTheme(theme),
+    setNumber: (figureNumber) => figure?.renderer.setNumber(figureNumber),
     focus: (edge = 'first') => {
       const targets = figure ? focusable(figure.root) : [];
       (edge === 'first' ? targets[0] : targets[targets.length - 1])?.focus();
