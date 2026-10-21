@@ -80,6 +80,17 @@ test.describe('sandbox (Phase 3 gate)', () => {
     await expect(page.locator('iframe')).toHaveAttribute('title', 'Interactive figure');
   });
 
+  test('a frame warmed before the scene exists checks it, kits and all, and then closes (PRD 25.4)', async ({ page }) => {
+    for (const scene of ['buoyancy', 'normal']) {
+      await open(page, `page=sandbox&scene=${scene}&probe=warm&wait=300`);
+      const state = await read(page);
+      expect(state.outcome, scene).toMatchObject({ status: 'passed', ok: true });
+      await expect(page.locator('iframe')).toHaveCount(0);
+    }
+    await open(page, 'page=sandbox&fixture=nan-at-max&probe=warm&wait=0');
+    expect((await read(page)).outcome).toMatchObject({ status: 'rejected', ok: false });
+  });
+
   test('a scene that fails the probe never appears to the learner', async ({ page }) => {
     await open(page, 'page=sandbox&fixture=nan-at-max&probe=1');
     const state = await read(page);

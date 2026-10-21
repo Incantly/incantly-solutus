@@ -49,7 +49,8 @@ export { SCENE_SIZES, SIZE_BUDGETS } from './protocol/plan';
 export { BRIDGE_VERSION } from './protocol/bridge';
 export type { FrameMessage, HostMessage } from './protocol/bridge';
 
-export { DEFAULT_DEADLINES, mountSandboxed, presentScene, probeSandboxed, sandboxAdapter } from './sandbox/adapter';
+export { DEFAULT_DEADLINES, mountSandboxed, presentScene, probeSandboxed, sandboxAdapter, warmProbe } from './sandbox/adapter';
+export { preloadKits } from './sandbox/worker-script';
 export type {
   Deadlines,
   ExecutionAdapter,
@@ -60,6 +61,7 @@ export type {
   PresentResult,
   ProbeOutcome,
   SandboxProbeOptions,
+  WarmProbe,
 } from './sandbox/adapter';
 export { inThreadAdapter, mountInThread } from './engine/in-thread-adapter';
 export { contentRef } from './sandbox/sha256';

@@ -3,7 +3,8 @@ import { parseFrameMessage, type FrameMessage, type HostMessageBody, type LiveOp
 import type { ErrorView } from '../protocol/ui';
 import { hostCss, styleForBridge, type FigureStyle } from '../renderer/style';
 import { validateScene, type SceneFragments, type SceneValidation, type ValidatedScene } from '../validation';
-import { workerScriptFor } from './worker-script';
+import type { KitName } from '../runtime/kits';
+import { preloadKits, workerScriptFor } from './worker-script';
 import { buildShell, newChannelId } from './shell';
 
 /**
@@ -100,7 +101,8 @@ class FrameConnection {
 
   constructor(
     container: HTMLElement,
-    scene: ValidatedScene,
+    /** The markup and styles the frame document carries: a validated scene's, or none for a probe. */
+    shell: { readonly html: string; readonly css: string },
     private readonly channel: string,
     private readonly handlers: ConnectionHandlers,
     options: { readonly title: string; readonly hidden?: boolean; readonly lang?: string; readonly hostCss?: string },
@@ -129,8 +131,8 @@ class FrameConnection {
     }
     frame.addEventListener('load', () => this.onLoad());
     frame.srcdoc = buildShell({
-      html: scene.html,
-      css: scene.css,
+      html: shell.html,
+      css: shell.css,
       channel,
       ...(options.lang ? { lang: options.lang } : {}),
       ...(options.hostCss ? { hostCss: options.hostCss } : {}),
@@ -503,51 +505,119 @@ export function probeSandboxed(fragments: SceneFragments, options: SandboxProbeO
 }
 
 function runProbe(validation: SceneValidation, options: SandboxProbeOptions): Promise<ProbeOutcome> {
-  const scene = validation.scene;
-  if (!scene) return Promise.resolve({ ok: false, validation, report: null });
-  const container = options.container ?? document.body;
-  const deadline = options.deadlineMs ?? DEFAULT_DEADLINES.probeMs;
-  const started = performance.now();
+  if (!validation.scene) return Promise.resolve({ ok: false, validation, report: null });
+  return new ProbeFrame(options.container ?? document.body).run(validation, options);
+}
 
-  return new Promise((resolve) => {
-    let connection: FrameConnection | null = null;
-    let done = false;
-    const finish = (report: ProbeReport) => {
-      if (done) return;
-      done = true;
-      clearTimeout(timer);
-      connection?.close();
-      resolve({ ok: report.ok, validation, report });
-    };
-    const timer = setTimeout(
-      () => finish(failedReport('timeout', `The probe did not finish within ${deadline} ms; the scene probably never stops`, deadline)),
-      deadline,
-    );
-    const probe: ProbeRequest = {
-      ...(options.spec ? { spec: options.spec } : {}),
-      ...(options.seed !== undefined ? { seed: options.seed } : {}),
-    };
-    const worker = workerScriptFor(scene.kits);
-    worker.catch(() => finish(failedReport('mount', 'A drawing kit this scene needs could not be loaded', performance.now() - started)));
-    connection = new FrameConnection(
+/**
+ * A probe frame booted before its scene exists (PRD 25.4). The frame and its
+ * script load while the scene is still being written, and the drawing kits
+ * the plan names with them, so the check starts the moment the fragments
+ * arrive. A probe needs no markup or styles, so the frame is the same for
+ * every scene. Each warm frame checks one scene, then closes.
+ */
+export interface WarmProbe {
+  /** Checks a scene in the warm frame; a second call gets a fresh frame. */
+  probe(fragments: SceneFragments, options?: Omit<SandboxProbeOptions, 'container'>): Promise<ProbeOutcome>;
+  /** Closes the frame if it was never used. */
+  dispose(): void;
+}
+
+export function warmProbe(options: { readonly container?: HTMLElement; readonly kits?: readonly KitName[] } = {}): WarmProbe {
+  const container = options.container ?? document.body;
+  if (options.kits) preloadKits(options.kits);
+  let frame: ProbeFrame | null = new ProbeFrame(container);
+  return {
+    probe(fragments, probeOptions = {}) {
+      const validation = validateScene(fragments);
+      const current = frame ?? new ProbeFrame(container);
+      frame = null;
+      if (!validation.scene) {
+        current.close();
+        return Promise.resolve({ ok: false, validation, report: null });
+      }
+      return current.run(validation, probeOptions);
+    },
+    dispose() {
+      frame?.close();
+      frame = null;
+    },
+  };
+}
+
+/** One hidden frame that boots on its own and then checks one validated scene. */
+class ProbeFrame {
+  private readonly connection: FrameConnection;
+  private ready = false;
+  private navigated = false;
+  private listener: { onReady(): void; onMessage(message: FrameMessage): void; onNavigate(): void } | null = null;
+
+  constructor(container: HTMLElement) {
+    this.connection = new FrameConnection(
       container,
-      scene,
+      { html: '', css: '' },
       newChannelId(),
       {
         onMessage: (message) => {
           if (message.type === 'ready') {
-            void worker.then(
-              (code) => connection?.post(initMessage(scene, code, 'probe', { probe })),
-              () => undefined,
-            );
-          } else if (message.type === 'probe') finish(message.report);
-          else if (message.type === 'error') finish(failedReport('mount', message.error.message, performance.now() - started));
+            this.ready = true;
+            this.listener?.onReady();
+          } else this.listener?.onMessage(message);
         },
-        onNavigate: () => finish(failedReport('mount', 'The scene tried to navigate', performance.now() - started)),
+        onNavigate: () => {
+          this.navigated = true;
+          this.listener?.onNavigate();
+        },
       },
       { title: 'Figure check', hidden: true },
     );
-  });
+  }
+
+  close(): void {
+    this.listener = null;
+    this.connection.close();
+  }
+
+  run(validation: SceneValidation, options: SandboxProbeOptions): Promise<ProbeOutcome> {
+    const scene = validation.scene!;
+    const deadline = options.deadlineMs ?? DEFAULT_DEADLINES.probeMs;
+    const started = performance.now();
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = (report: ProbeReport) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        this.close();
+        resolve({ ok: report.ok, validation, report });
+      };
+      const timer = setTimeout(
+        () => finish(failedReport('timeout', `The probe did not finish within ${deadline} ms; the scene probably never stops`, deadline)),
+        deadline,
+      );
+      const probe: ProbeRequest = {
+        ...(options.spec ? { spec: options.spec } : {}),
+        ...(options.seed !== undefined ? { seed: options.seed } : {}),
+      };
+      const worker = workerScriptFor(scene.kits);
+      worker.catch(() => finish(failedReport('mount', 'A drawing kit this scene needs could not be loaded', performance.now() - started)));
+      const send = () =>
+        void worker.then(
+          (code) => this.connection.post(initMessage(scene, code, 'probe', { probe })),
+          () => undefined,
+        );
+      this.listener = {
+        onReady: send,
+        onMessage: (message) => {
+          if (message.type === 'probe') finish(message.report);
+          else if (message.type === 'error') finish(failedReport('mount', message.error.message, performance.now() - started));
+        },
+        onNavigate: () => finish(failedReport('mount', 'The scene tried to navigate', performance.now() - started)),
+      };
+      if (this.navigated) finish(failedReport('mount', 'The scene tried to navigate', 0));
+      else if (this.ready) send();
+    });
+  }
 }
 
 export type PresentResult =

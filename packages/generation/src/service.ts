@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { SDK_VERSION, type ProbeCheck, type ProbeFailure, type ProbeReport, type ScenePlan } from '@incantly/core';
+import { SDK_VERSION, kitsFor, type ProbeCheck, type ProbeFailure, type ProbeReport, type ScenePlan } from '@incantly/core';
 import type { Authenticator, Learner } from './auth';
 import { ConceptCache, planKey, requestKey } from './cache';
 import { REQUEST_LIMITS, type LearnerRequest } from './context';
@@ -158,6 +158,7 @@ export function skeletonOf(plan: ScenePlan): Skeleton {
     parameters: plan.parameters.map((p) => ({ name: p.name, ...(p.unit ? { unit: p.unit } : {}), min: p.min, max: p.max, default: p.default })),
     parts: plan.parts.length,
     steps: plan.steps.length,
+    kits: kitsFor(plan.capabilities),
   };
 }
 

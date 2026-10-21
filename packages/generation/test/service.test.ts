@@ -9,7 +9,7 @@ import { ScriptedModel } from '../src/models';
 import { isolatedProbe } from '../src/probe';
 import { MemoryRecords } from '../src/records';
 import { referenceModel, type ReferenceModelOptions } from '../src/reference-model';
-import { GenerationService, sanitizeDeviceReport, type ServiceOptions } from '../src/service';
+import { GenerationService, sanitizeDeviceReport, skeletonOf, type ServiceOptions } from '../src/service';
 
 const SECRET = 'a-test-secret-that-is-long-enough-to-use';
 const servers: Array<{ server: Server; service: GenerationService }> = [];
@@ -125,7 +125,7 @@ describe('the generation service', () => {
     const stream = await events(await post('/v1/generations', { prompt: 'Explain projectile motion for a physics student.', noteContext: 'Chapter 3: kinematics' }));
     expect(stream.map((e) => e.event)).toEqual(['accepted', 'plan', 'fragment', 'fragment', 'fragment', 'scene']);
     const skeleton = stream[1]!.data.skeleton as Record<string, unknown>;
-    expect(skeleton).toMatchObject({ concept: 'projectile motion', kind: 'motion', parts: REFERENCE_SCENES.projectile!.plan.parts.length, steps: 4 });
+    expect(skeleton).toMatchObject({ concept: 'projectile motion', kind: 'motion', parts: REFERENCE_SCENES.projectile!.plan.parts.length, steps: 4, kits: [] });
     // Names and numbers only: no plan prose reaches the client.
     expect(JSON.stringify(skeleton)).not.toContain('why');
     expect(JSON.stringify(skeleton)).not.toContain(REFERENCE_SCENES.projectile!.plan.idea);
@@ -313,5 +313,13 @@ describe('learner tokens', () => {
     expect(authenticate(token.replace('learner_42', 'learner_43'))).toBeNull();
     expect(() => mintToken(SECRET, 'bad id!')).toThrow();
     expect(() => hmacAuthenticator('short')).toThrow();
+  });
+});
+
+describe('the skeleton', () => {
+  it('names the drawing kits the scene will load, so the device can fetch them early', () => {
+    expect(skeletonOf(REFERENCE_SCENES.buoyancy!.plan).kits).toEqual(['physics2d']);
+    expect(skeletonOf({ ...REFERENCE_SCENES.projectile!.plan, capabilities: ['graph3d', 'space3d', 'chart'] }).kits).toEqual(['space3d', 'chart']);
+    expect(skeletonOf(REFERENCE_SCENES['sine-wave']!.plan).kits).toEqual([]);
   });
 });

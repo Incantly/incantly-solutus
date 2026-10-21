@@ -1,4 +1,4 @@
-import type { ProbeReport, ProbeSpec, SceneKind } from '@incantly/core';
+import type { KitName, ProbeReport, ProbeSpec, SceneKind } from '@incantly/core';
 
 /**
  * The messages between the generation service and the learner's device.
@@ -12,6 +12,8 @@ export interface Skeleton {
   readonly parameters: ReadonlyArray<{ readonly name: string; readonly unit?: string; readonly min: number; readonly max: number; readonly default: number }>;
   readonly parts: number;
   readonly steps: number;
+  /** The drawing kits the scene will load, so the device can fetch them while the scene is written. */
+  readonly kits: readonly KitName[];
 }
 
 export interface SceneFragmentsMessage {

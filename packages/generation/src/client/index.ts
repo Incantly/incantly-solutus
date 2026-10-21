@@ -2,7 +2,7 @@
  * The learner device's side of generation. Browser-safe: nothing here
  * imports Node modules or the server pipeline.
  */
-import { probeSandboxed } from '@incantly/core';
+import { preloadKits, warmProbe, type WarmProbe } from '@incantly/core';
 import type { Skeleton } from '../protocol';
 import { runGeneration, type ApprovedFigure, type DeviceProbe, type GenerationStage } from './flow';
 import type { GenerationClient } from './service-client';
@@ -16,12 +16,28 @@ export { Telemetry, cleanSignal } from './telemetry';
 export type { FallbackLevel, ProductSignal, TelemetryEvent, TelemetryOptions } from './telemetry';
 export type { FallbackMessage, ProbeResponse, ProbeResult, SceneMessage, ServiceEvent, Skeleton } from '../protocol';
 
-/** Probes scenes in a fresh hidden sandbox on this device, through the same adapter learners' figures use. */
-export function sandboxProbe(container?: HTMLElement): DeviceProbe {
-  return async (fragments, spec) => {
-    const outcome = await probeSandboxed(fragments, { spec, ...(container ? { container } : {}) });
+/**
+ * Probes scenes in a fresh hidden sandbox on this device, through the same
+ * adapter learners' figures use. A frame boots as soon as this is made, while
+ * the plan and scene are still being written, and another as each is used,
+ * for a repair (PRD 25.4). `dispose` closes the one left over.
+ */
+export function sandboxProbe(container?: HTMLElement): DeviceProbe & { dispose(): void } {
+  const warm = () => warmProbe(container ? { container } : {});
+  let next: WarmProbe | null = null;
+  const probe = async (fragments: Parameters<DeviceProbe>[0], spec: Parameters<DeviceProbe>[1]) => {
+    const current = next ?? warm();
+    next = warm();
+    const outcome = await current.probe(fragments, { spec });
     return { ok: outcome.ok, report: outcome.report };
   };
+  next = warm();
+  return Object.assign(probe, {
+    dispose() {
+      next?.dispose();
+      next = null;
+    },
+  });
 }
 
 /**
@@ -42,15 +58,20 @@ export function figureGenerator(options: {
       readonly signal: AbortSignal;
     },
   ): Promise<{ readonly kind: 'figure'; readonly figure: ApprovedFigure; readonly notice?: string } | { readonly kind: 'failed'; readonly message: string }> => {
+    const own = options.probe ? null : sandboxProbe();
     const outcome = await runGeneration({
       client: options.client,
       request,
-      probe: options.probe ?? sandboxProbe(),
-      onSkeleton: hooks.onSkeleton,
+      probe: options.probe ?? own!,
+      onSkeleton: (skeleton) => {
+        // The plan names its drawing kits: fetch them while the scene is written.
+        preloadKits(skeleton.kits ?? []);
+        hooks.onSkeleton(skeleton);
+      },
       onStage: hooks.onStage,
       ...(options.signals ? { signals: options.signals } : {}),
       signal: hooks.signal,
-    });
+    }).finally(() => own?.dispose());
     if (outcome.kind === 'approved') return { kind: 'figure', figure: outcome.figure };
     if (outcome.level === 'standard' && outcome.figure) return { kind: 'figure', figure: outcome.figure, notice: outcome.message };
     return { kind: 'failed', message: outcome.message };

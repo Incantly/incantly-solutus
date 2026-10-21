@@ -18,3 +18,12 @@ export async function workerScriptFor(kits: readonly KitName[]): Promise<string>
   );
   return [WORKER_SCRIPT, ...scripts].join('\n');
 }
+
+/**
+ * Starts loading kit scripts before a scene needs them, for instance when a
+ * plan arrives and names its drawing kits. The module loader keeps them, so
+ * the scene's own Worker script is ready without waiting. Never fails.
+ */
+export function preloadKits(kits: readonly KitName[]): void {
+  for (const name of kits) void KIT_SCRIPTS[name]?.().catch(() => undefined);
+}
