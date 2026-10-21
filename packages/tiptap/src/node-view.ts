@@ -19,6 +19,23 @@ export interface FigureViewOptions {
   /** Persist learner changes this long after the last one. */
   readonly settleMs: number;
   readonly theme: 'light' | 'dark' | 'auto';
+  readonly onError?: ((report: FigureErrorReport) => void) | null | undefined;
+}
+
+/**
+ * A problem a figure in a note ran into, for the host's own reporting: the
+ * failure kind and the learner state it happened in (RP-11). It carries no
+ * note content: no fragments, description or concept.
+ */
+export interface FigureErrorReport {
+  readonly figureId: string;
+  /** The server-side generation record, when the figure was generated. */
+  readonly generationId?: string;
+  readonly error: ErrorView;
+  /** True when the figure could not run at all; false when it ran and paused itself. */
+  readonly fatal: boolean;
+  readonly values: Readonly<Record<string, number>>;
+  readonly step: number | null;
 }
 
 /** Node views by their DOM, so editor commands can reach the view of a selected node. */
@@ -112,10 +129,11 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
     const after = this.attrs;
     const sourceChanged =
       JSON.stringify(before.fragments) !== JSON.stringify(after.fragments) || before.fragmentsRef !== after.fragmentsRef;
-    if (sourceChanged && this.isLive) {
-      // New fragments (a regenerated figure, or undo of one): rebuild from the stored state.
+    if (sourceChanged && (this.isLive || this.state === 'failed')) {
+      // New fragments (a regenerated figure, or undo of one): rebuild from the stored state. A failed figure gets a new chance.
       this.teardown();
       this.state = 'placeholder';
+      this.failure = null;
       this.renderPlaceholder();
       this.options.scheduler.evaluate();
     } else if (!this.holdsInstance) {
@@ -260,6 +278,8 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
     // Values the learner changed since the last save win over the stored ones.
     const values = { ...attrs.values, ...this.pending.values };
     const step = this.pending.step !== undefined ? this.pending.step : attrs.step;
+    // The latest problem this instance reported; adapters report it before they change state.
+    let reported: ErrorView | null = null;
     this.handle = this.options.adapter.mount(container, fragments, {
       values,
       step,
@@ -280,8 +300,15 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
         this.settle();
       },
       onEscape: (direction) => this.onEscape(direction),
+      onError: (error) => {
+        // A figure that keeps hitting the same problem, say while a slider crosses a singular point, reports it once.
+        if (reported && sameError(reported, error)) return;
+        reported = error;
+        // Adapters report a problem just before they fail on it, so by the next microtask it is known whether it was fatal.
+        queueMicrotask(() => this.report(error, this.state === 'failed'));
+      },
       onState: (state) => {
-        if (state === 'failed' && this.state === 'live') this.fail({ phase: 'mount', message: 'The figure stopped working' });
+        if (state === 'failed' && this.state === 'live') this.fail(reported ?? { phase: 'mount', message: 'The figure stopped working' }, reported);
       },
     });
     const handle = this.handle;
@@ -289,7 +316,7 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
       // The adapter refused the scene (for example, it failed validation) before returning.
       handle.destroy();
       container.remove();
-      if (this.state === 'mounting') this.fail({ phase: 'mount', message: 'The figure did not pass validation' });
+      if (this.state === 'mounting') this.fail(reported ?? { phase: 'mount', message: 'The figure did not pass validation' }, reported);
       return;
     }
     this.state = 'live';
@@ -311,13 +338,41 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
     });
   }
 
-  private fail(error: ErrorView): void {
+  /**
+   * Gives up on the figure: it stays a placeholder with its description until
+   * its source is replaced. `reported` is the same problem when the adapter
+   * reported it, which is then passed on to the host already, so the host
+   * hears about each problem once.
+   */
+  private fail(error: ErrorView, reported: ErrorView | null = null): void {
     if (this.state === 'destroyed' || this.state === 'failed') return;
-    this.failure = error;
+    if (reported === error) this.failure = error;
+    else this.report(error, true);
     this.teardown();
     this.state = 'failed';
     this.renderPlaceholder();
     this.options.scheduler.evaluate();
+  }
+
+  /** Records a problem and tells the host, with the learner state it happened in. */
+  private report(error: ErrorView, fatal: boolean): void {
+    this.failure = error;
+    const onError = this.options.onError;
+    if (!onError) return;
+    const attrs = this.attrs;
+    const report: FigureErrorReport = {
+      figureId: attrs.figureId,
+      ...(attrs.meta.generationId ? { generationId: attrs.meta.generationId } : {}),
+      error,
+      fatal,
+      values: { ...attrs.values, ...this.pending.values },
+      step: this.pending.step !== undefined ? this.pending.step : attrs.step,
+    };
+    try {
+      onError(report);
+    } catch {
+      // A host's reporting must never break the note.
+    }
   }
 
   /** Ends the live instance, if any. */
@@ -411,8 +466,12 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
     this.status.textContent = this.state === 'failed' ? 'This figure could not be shown. Its description is below.' : '';
   }
 
-  /** Why the figure failed, for the host's own reporting. */
+  /** The last problem the figure ran into, fatal or not. */
   get lastError(): ErrorView | null {
     return this.failure;
   }
+}
+
+function sameError(a: ErrorView, b: ErrorView): boolean {
+  return a.phase === b.phase && a.message === b.message && a.line === b.line && a.column === b.column;
 }

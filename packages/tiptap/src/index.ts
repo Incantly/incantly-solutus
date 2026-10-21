@@ -10,7 +10,7 @@ export type { FigureAttributes, FigureFragments, FigureMeta } from './attributes
 export { FigureNode, PlaceholderView, figureScheduler, newFigureId } from './figure-node';
 export type { FigureNodeOptions, SnapshotSource } from './figure-node';
 export { FIGURE_TRANSACTION, FigureNodeView, figureViews } from './node-view';
-export type { FigureViewOptions, FigureViewState } from './node-view';
+export type { FigureErrorReport, FigureViewOptions, FigureViewState } from './node-view';
 export { LiveFigureScheduler } from './scheduler';
 export type { ObserverFactory, ObserverLike, ScheduledFigure, SchedulerOptions, SchedulerStats } from './scheduler';
 export { CachedFigureStore, INLINE_FRAGMENTS_LIMIT, MemoryFigureStore, fragmentsText } from './store';

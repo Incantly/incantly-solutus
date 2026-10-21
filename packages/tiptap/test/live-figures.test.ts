@@ -13,6 +13,7 @@ import {
   createFixtureDocument,
   figureScheduler,
   figureViews,
+  type FigureErrorReport,
   type FigureNodeView,
   type ObserverFactory,
 } from '../src';
@@ -37,10 +38,22 @@ class FakeFigure implements FigureHandle {
     fail = false,
   ) {
     if (fail) {
+      // Like the real adapters: the cause first, then the state.
+      options.onError?.({ phase: 'mount', message: 'The figure did not pass validation (unknown-sdk-call in js)', line: 1, column: 5 });
       this.state = 'failed';
       options.onState?.('failed');
     }
     this.ready = Promise.resolve(this.state);
+  }
+  /** The scene hit a problem and paused itself; the figure stays live. */
+  hit(message: string) {
+    this.options.onError?.({ phase: 'frame', message });
+  }
+  /** The figure stopped responding and the adapter removed it. */
+  crash() {
+    this.options.onError?.({ phase: 'unresponsive', message: 'The figure stopped responding and was removed' });
+    this.state = 'failed';
+    this.options.onState?.('failed');
   }
   pause() {
     this.paused = true;
@@ -67,16 +80,17 @@ class FakeFigure implements FigureHandle {
 
 function fakeAdapter(fail = false) {
   const mounts: FakeFigure[] = [];
+  const control = { fail };
   const adapter: ExecutionAdapter = {
     name: 'fake',
     mount(container, fragments, options = {}) {
-      const figure = new FakeFigure(fragments, options, fail);
+      const figure = new FakeFigure(fragments, options, control.fail);
       container.append(document.createElement('div'));
       mounts.push(figure);
       return figure;
     },
   };
-  return { adapter, mounts, live: () => mounts.filter((m) => m.state === 'live') };
+  return { adapter, mounts, control, live: () => mounts.filter((m) => m.state === 'live') };
 }
 
 /** An observer the test drives: figures are near the viewport only when the test says so. */
@@ -102,7 +116,15 @@ function fakeObserver() {
 
 const editors: Editor[] = [];
 
-function setup(options: { content?: JSONContent; fail?: boolean; limit?: number; store?: MemoryFigureStore } = {}) {
+function setup(
+  options: {
+    content?: JSONContent;
+    fail?: boolean;
+    limit?: number;
+    store?: MemoryFigureStore;
+    onError?: (report: FigureErrorReport) => void;
+  } = {},
+) {
   const fake = fakeAdapter(options.fail);
   const observer = fakeObserver();
   const store = options.store ?? new MemoryFigureStore();
@@ -118,6 +140,7 @@ function setup(options: { content?: JSONContent; fail?: boolean; limit?: number;
         store,
         settleMs: 500,
         scheduler: { limit: options.limit ?? 3, settleMs: 100, suspendAfterMs: 2000, createObserver: observer.factory },
+        onError: options.onError ?? null,
       }),
     ],
     content: options.content ?? createFixtureDocument({ figures: 6, figure: () => ({ fragments: FRAGMENTS }) }),
@@ -356,6 +379,93 @@ describe('live figures: lifecycle', () => {
     expect(fake.mounts[0]!.state).toBe('destroyed');
     await view(0).suspend();
     expect(figures()[0]!.dataset.state).toBe('placeholder');
+  });
+});
+
+describe('live figures: problems', () => {
+  const content = createFixtureDocument({
+    figures: 2,
+    figure: () => ({ fragments: FRAGMENTS, values: { k: 3 }, meta: { generationId: 'gen-7' } }),
+  });
+
+  it('tells the host once about a figure that cannot run, with the learner state and no note content', async () => {
+    const reports: FigureErrorReport[] = [];
+    const { observer, figures, attrs } = setup({ fail: true, content, onError: (r) => reports.push(r) });
+    observer.set([figures()[0]!], true);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(figures()[0]!.dataset.state).toBe('failed');
+    expect(reports).toEqual([
+      {
+        figureId: attrs(0).figureId,
+        generationId: 'gen-7',
+        error: { phase: 'mount', message: 'The figure did not pass validation (unknown-sdk-call in js)', line: 1, column: 5 },
+        fatal: true,
+        values: { k: 3 },
+        step: null,
+      },
+    ]);
+  });
+
+  it('tells the host about a problem a live figure paused on, once per problem, and keeps it live', async () => {
+    const reports: FigureErrorReport[] = [];
+    const { fake, observer, figures, view } = setup({ content, onError: (r) => reports.push(r) });
+    observer.set([figures()[0]!], true);
+    await vi.advanceTimersByTimeAsync(100);
+    const figure = fake.mounts[0]!;
+    figure.options.onValues?.({ k: 4 });
+    figure.hit('Math.sqrt(-1) is not a number');
+    figure.hit('Math.sqrt(-1) is not a number');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toMatchObject({ fatal: false, error: { phase: 'frame' }, values: { k: 4 } });
+    expect(figures()[0]!.dataset.state).toBe('live');
+    expect(view(0).lastError?.phase).toBe('frame');
+    figure.hit('Division by zero');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(reports.map((r) => r.error.message)).toEqual(['Math.sqrt(-1) is not a number', 'Division by zero']);
+  });
+
+  it('tells the host about a figure that stopped responding, as fatal, once', async () => {
+    const reports: FigureErrorReport[] = [];
+    const { fake, observer, figures } = setup({ content, onError: (r) => reports.push(r) });
+    observer.set([figures()[0]!], true);
+    await vi.advanceTimersByTimeAsync(100);
+    fake.mounts[0]!.crash();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(figures()[0]!.dataset.state).toBe('failed');
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toMatchObject({ fatal: true, error: { phase: 'unresponsive' } });
+  });
+
+  it('gives a failed figure a new chance when its source is replaced', async () => {
+    const { editor, fake, observer, figures } = setup({ fail: true, content });
+    observer.set([figures()[0]!], true);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(figures()[0]!.dataset.state).toBe('failed');
+    fake.control.fail = false;
+    let pos = -1;
+    editor.state.doc.descendants((node, p) => {
+      if (pos < 0 && node.type.name === 'incantlyFigure') pos = p;
+    });
+    // A regenerated figure replaces its fragments in an ordinary, undoable edit.
+    editor.view.dispatch(editor.state.tr.setNodeAttribute(pos, 'fragments', { ...FRAGMENTS, js: `${FRAGMENTS.js}\n// repaired` }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fake.mounts).toHaveLength(2);
+    expect(fake.mounts[1]!.fragments.js).toContain('repaired');
+    expect(figures()[0]!.dataset.state).toBe('live');
+  });
+
+  it('keeps the note working when the host reporting throws', async () => {
+    const { observer, figures } = setup({
+      fail: true,
+      content,
+      onError: () => {
+        throw new Error('the host reporting is broken');
+      },
+    });
+    observer.set([figures()[0]!], true);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(figures()[0]!.dataset.state).toBe('failed');
   });
 });
 

@@ -14,7 +14,7 @@ import {
   sanitizeValues,
   type FigureAttributes,
 } from './attributes';
-import { FIGURE_TRANSACTION, FigureNodeView, figureViews } from './node-view';
+import { FIGURE_TRANSACTION, FigureNodeView, figureViews, type FigureErrorReport } from './node-view';
 import { LiveFigureScheduler, type SchedulerOptions } from './scheduler';
 import type { FigureStore } from './store';
 
@@ -34,6 +34,8 @@ export interface FigureNodeOptions {
   /** Learner changes are saved this long after the last one. */
   settleMs: number;
   theme: 'light' | 'dark' | 'auto';
+  /** Hears about each problem a live figure runs into, for the host's own reporting. */
+  onError: ((report: FigureErrorReport) => void) | null;
 }
 
 declare module '@tiptap/core' {
@@ -119,7 +121,7 @@ export const FigureNode = Node.create<FigureNodeOptions>({
   draggable: true,
 
   addOptions() {
-    return { snapshots: null, adapter: null, store: null, scheduler: {}, settleMs: 600, theme: 'auto' };
+    return { snapshots: null, adapter: null, store: null, scheduler: {}, settleMs: 600, theme: 'auto', onError: null };
   },
 
   addAttributes() {
@@ -233,6 +235,7 @@ export const FigureNode = Node.create<FigureNodeOptions>({
         scheduler: schedulerFor(editor, this.options.scheduler),
         settleMs: this.options.settleMs,
         theme: this.options.theme,
+        onError: this.options.onError,
       });
     };
   },
