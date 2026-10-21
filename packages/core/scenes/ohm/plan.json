@@ -1,0 +1,41 @@
+{
+  "concept": "Ohm's law circuit",
+  "idea": "Current is voltage divided by resistance: more voltage pushes more current round a circuit, and more resistance lets less through.",
+  "kind": "diagram",
+  "size": "quick",
+  "capabilities": ["svg", "shapes", "idle", "readout", "explain", "describe", "steps"],
+  "parameters": [
+    {
+      "name": "voltage",
+      "unit": "V",
+      "min": 1,
+      "max": 12,
+      "default": 6,
+      "why": "From one cell to a car battery: safe, everyday voltages."
+    },
+    {
+      "name": "resistance",
+      "unit": "Ω",
+      "min": 2,
+      "max": 20,
+      "default": 4,
+      "why": "A tenfold range, so the current changes clearly; zero resistance would short the battery."
+    }
+  ],
+  "model": {
+    "inputs": ["voltage", "resistance"],
+    "outputs": [
+      { "name": "I", "dependsOn": ["voltage", "resistance"] },
+      { "name": "P", "dependsOn": ["voltage", "resistance"] }
+    ]
+  },
+  "parts": ["Battery", "Resistor", "Ammeter", "Current"],
+  "moves": "Dashes on the wires flow round the loop at a speed set by the current; the resistor glows brighter as it gives off more power.",
+  "steps": [
+    "Current is voltage over resistance",
+    "Double the voltage, double the current",
+    "More resistance, less current",
+    "The resistor turns energy into heat"
+  ],
+  "singularPoints": []
+}
