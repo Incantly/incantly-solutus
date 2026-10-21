@@ -13,9 +13,12 @@ import { parse, type AnyNode, type Program } from 'acorn';
  * agent's own and columns map back through `originalColumn`.
  */
 
+import type { ColumnShift, InstrumentedScene } from './instrument-map';
 import { FUEL_FUNCTION, KEY_FUNCTION } from './names';
 
 export { FUEL_FUNCTION, KEY_FUNCTION };
+export { originalColumn } from './instrument-map';
+export type { ColumnShift, InstrumentedScene } from './instrument-map';
 
 interface Insertion {
   readonly offset: number;
@@ -25,17 +28,6 @@ interface Insertion {
   readonly depth: number;
 }
 
-export interface ColumnShift {
-  /** 1-based column in the original line where text was inserted. */
-  readonly column: number;
-  readonly length: number;
-}
-
-export interface InstrumentedScene {
-  readonly code: string;
-  /** Inserted text per 1-based line, in column order. */
-  readonly shifts: Readonly<Record<number, readonly ColumnShift[]>>;
-}
 
 export function instrumentSceneJs(source: string, program: Program): InstrumentedScene {
   const insertions: Insertion[] = [];
@@ -106,20 +98,6 @@ export function instrumentSceneJs(source: string, program: Program): Instrumente
   // The result must still be valid script: anything else is an engine bug.
   parse(code, { ecmaVersion: 2020, sourceType: 'script' });
   return { code, shifts };
-}
-
-/** Maps a 1-based column in an instrumented line back to the agent's original column. */
-export function originalColumn(scene: InstrumentedScene, line: number, column: number): number {
-  const shifts = scene.shifts[line];
-  if (!shifts) return column;
-  let shifted = 0;
-  for (const shift of shifts) {
-    const at = shift.column + shifted;
-    if (column < at) break;
-    if (column < at + shift.length) return shift.column;
-    shifted += shift.length;
-  }
-  return column - shifted;
 }
 
 function isLiteralKey(node: AnyNode): boolean {
