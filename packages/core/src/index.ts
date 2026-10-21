@@ -32,7 +32,7 @@ export { FigureRenderer } from './renderer/renderer';
 export type { RendererOptions } from './renderer/renderer';
 export { THEME_CSS } from './renderer/theme';
 
-export { validateScene, formatDiagnostic, hasErrors, SCENE_LIMITS } from './validation';
+export { validateScene, validateSceneCss, validateSceneHtml, validateSceneJs, formatDiagnostic, hasErrors, SCENE_LIMITS } from './validation';
 export type { Diagnostic, SceneFragments, SceneLimits, SceneValidation, ValidatedScene } from './validation';
 
 export { compileIsolated, ISOLATED_SCRIPT_NAME, probeScene } from './probe';
