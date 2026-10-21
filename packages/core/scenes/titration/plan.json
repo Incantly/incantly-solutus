@@ -1,0 +1,50 @@
+{
+  "concept": "titration curve",
+  "idea": "Adding base to an acid barely changes the pH until the acid is almost used up, then the pH leaps through 7 at the equivalence point.",
+  "kind": "graph",
+  "size": "quick",
+  "capabilities": ["graph2d", "idle", "readout", "explain", "describe", "steps"],
+  "parameters": [
+    {
+      "name": "acid",
+      "unit": "mol/L",
+      "min": 0.05,
+      "max": 0.2,
+      "default": 0.1,
+      "why": "Typical school laboratory strengths of a strong acid."
+    },
+    {
+      "name": "base",
+      "unit": "mol/L",
+      "min": 0.05,
+      "max": 0.2,
+      "default": 0.1,
+      "why": "The same range for the base, so equivalence can come before, at or after 25 mL."
+    },
+    {
+      "name": "added",
+      "unit": "mL",
+      "min": 0,
+      "max": 50,
+      "default": 15,
+      "why": "One full burette: twice the base needed at equal strengths."
+    }
+  ],
+  "model": {
+    "inputs": ["acid", "base", "added"],
+    "outputs": [
+      { "name": "now", "dependsOn": ["acid", "base", "added"] },
+      { "name": "start", "dependsOn": ["acid"] },
+      { "name": "equivalence", "dependsOn": ["acid", "base"] }
+    ]
+  },
+  "parts": ["Curve", "Equivalence", "Mixture"],
+  "moves": "The marked mixture rides along the curve as base is added, and the equivalence line moves with the concentrations; left alone, the base added sweeps back and forth.",
+  "steps": [
+    "Acid in excess: the pH barely moves",
+    "Near equivalence the pH leaps",
+    "At equivalence the pH is 7",
+    "Stronger base reaches equivalence sooner"
+  ],
+  "singularPoints": []
+}
