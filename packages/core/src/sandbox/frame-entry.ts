@@ -221,7 +221,7 @@ function start(init: InitMessage): void {
     scope: 'incfig',
     visibility: 'external',
     onValues: (values) => queueReport(values, null),
-    onStep: (step) => send({ type: 'step', step }),
+    onStep: (step, count) => send({ type: 'step', step, ...(count !== undefined ? { count } : {}) }),
     onError: (error) => send({ type: 'error', error }),
     onUpdate: (update) => {
       if (!mountedSent) {

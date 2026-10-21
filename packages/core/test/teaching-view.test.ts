@@ -140,11 +140,19 @@ describe('teaching view: the walkthrough', () => {
 
   it('reports step positions to the host and restores a saved position', () => {
     const steps: Array<number | null> = [];
-    const { root } = mount({ onStep: (step) => steps.push(step) });
+    const counts: Array<number | undefined> = [];
+    const { root } = mount({
+      onStep: (step, count) => {
+        steps.push(step);
+        counts.push(count);
+      },
+    });
     stepButton(root, 'enter').click();
     stepButton(root, 'next').click();
     stepButton(root, 'exit').click();
     expect(steps).toEqual([0, 1, null]);
+    // With the count, the host can tell when a learner finished the walkthrough.
+    expect(counts).toEqual([3, 3, 3]);
 
     const restored = mount({ step: 1 }).root;
     expect(q(restored, '.inc-steps__progress').textContent).toBe('Step 2 of 3');

@@ -20,7 +20,8 @@ export interface RendererOptions {
    */
   readonly visibility?: 'observe' | 'external';
   readonly onValues?: (values: Readonly<Record<string, number>>) => void;
-  readonly onStep?: (step: number | null) => void;
+  /** The teaching position, and how many steps the figure has. */
+  readonly onStep?: (step: number | null, count?: number) => void;
   readonly onError?: (error: ErrorView) => void;
   readonly onUpdate?: (update: RuntimeUpdate, ui: UiState) => void;
 }
@@ -175,7 +176,7 @@ export class FigureRenderer {
       if (ui.error) this.options.onError?.(ui.error);
     }
     if (update.values) this.options.onValues?.(update.values);
-    if (update.step !== undefined) this.options.onStep?.(update.step);
+    if (update.step !== undefined) this.options.onStep?.(update.step, this.ui.steps?.count);
     this.options.onUpdate?.(update, this.ui);
     if (tickStart !== null) {
       this.stats.workMs += performance.now() - tickStart;

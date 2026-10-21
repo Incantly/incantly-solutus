@@ -33,6 +33,10 @@ describe('bridge messages', () => {
 
   it('checks the shape of each frame message', () => {
     expect(parseFrameMessage(envelope({ type: 'ready' }), CHANNEL)).not.toBeNull();
+    expect(parseFrameMessage(envelope({ type: 'step', step: 2, count: 3 }), CHANNEL)).not.toBeNull();
+    expect(parseFrameMessage(envelope({ type: 'step', step: null }), CHANNEL)).not.toBeNull();
+    expect(parseFrameMessage(envelope({ type: 'step', step: 1, count: -1 }), CHANNEL)).toBeNull();
+    expect(parseFrameMessage(envelope({ type: 'step', step: 1, count: 'all' }), CHANNEL)).toBeNull();
     expect(parseFrameMessage(envelope({ type: 'resize', height: -4 }), CHANNEL)).toBeNull();
     expect(parseFrameMessage(envelope({ type: 'snapshot', id: 1, png: 'javascript:alert(1)' }), CHANNEL)).toBeNull();
     expect(parseFrameMessage(envelope({ type: 'snapshot', id: 1, png: 'data:image/png;base64,AAAA' }), CHANNEL)).not.toBeNull();

@@ -27,7 +27,8 @@ export const DEFAULT_DEADLINES: Deadlines = { mountMs: 4000, heartbeatMs: 2000, 
 
 export interface FigureCallbacks {
   readonly onValues?: (values: Readonly<Record<string, number>>) => void;
-  readonly onStep?: (step: number | null) => void;
+  /** The teaching position, and how many steps the figure has. */
+  readonly onStep?: (step: number | null, count?: number) => void;
   readonly onError?: (error: ErrorView) => void;
   readonly onState?: (state: FigureState) => void;
   /** The text alternative changed. */
@@ -246,7 +247,7 @@ class SandboxedFigure implements FigureHandle {
         this.options.onValues?.(message.values);
         break;
       case 'step':
-        this.options.onStep?.(message.step);
+        this.options.onStep?.(message.step, message.count);
         break;
       case 'description':
         this.options.onDescription?.(message.text);

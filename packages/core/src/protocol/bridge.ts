@@ -65,7 +65,8 @@ export type FrameMessageBody =
   | { readonly type: 'mounted' }
   | { readonly type: 'error'; readonly error: ErrorView }
   | { readonly type: 'values'; readonly values: Readonly<Record<string, number>> }
-  | { readonly type: 'step'; readonly step: number | null }
+  /** The teaching position, and how many steps there are. */
+  | { readonly type: 'step'; readonly step: number | null; readonly count?: number }
   /** The text alternative changed, so the host can keep it for placeholders and print. */
   | { readonly type: 'description'; readonly text: string }
   /** Keyboard focus is leaving the figure: Escape, or Tab past either end. */
@@ -168,7 +169,7 @@ export function parseFrameMessage(data: unknown, channel: string): FrameMessage 
     case 'values':
       return isValues(m.values) ? (m as unknown as FrameMessage) : null;
     case 'step':
-      return isStep(m.step) ? (m as unknown as FrameMessage) : null;
+      return isStep(m.step) && (m.count === undefined || (isStep(m.count) && m.count !== null && m.count <= 100)) ? (m as unknown as FrameMessage) : null;
     case 'description':
       return typeof m.text === 'string' && m.text.length <= 2000 ? (m as unknown as FrameMessage) : null;
     case 'escape':
