@@ -43,7 +43,12 @@ export interface RuntimeOptions {
   readonly reducedMotion?: boolean;
   /** Start playing after mount. Reduced motion always starts paused. */
   readonly autoplay?: boolean;
+  /** Teaching-step position to restore, or null outside step mode. */
+  readonly step?: number | null;
 }
+
+/** Seconds a step takes to move parameters to its values. */
+export const STEP_TRANSITION_SECONDS = 0.6;
 
 export interface SceneErrorRecord {
   readonly phase: ErrorPhase;
@@ -105,6 +110,11 @@ export class SceneRuntime {
   private explanation: string | null = null;
   private description: string | null = null;
   private tweens: TweenState[] = [];
+  private stepTransition: TweenState | null = null;
+  private stepIndex: number | null = null;
+  private stepSaved: { readonly values: Record<string, number>; readonly playing: boolean } | null = null;
+  private learnerFocus: string | null = null;
+  private pendingStep: number | null | undefined = undefined;
   private random: () => number;
   private dirty = true;
   private visible = true;
@@ -143,11 +153,19 @@ export class SceneRuntime {
     }
     this.playing = this.lifecycle === 'mounted' && (this.options.autoplay ?? true) && !this.reducedMotion;
     this.dirty = true;
+    const restoreStep = this.options.step;
+    if (this.lifecycle === 'mounted' && this.stepList && !this.restoredStep && isStepIndex(restoreStep, this.stepList.length)) {
+      // A saved teaching position returns without animating; it is already persisted.
+      this.restoredStep = true;
+      this.enterSteps(restoreStep, true);
+      this.pendingStep = undefined;
+    }
     // A fresh renderer needs the complete UI, not a diff against defaults.
     return { ...this.flush(), ui: this.uiState() };
   }
 
   private restoreValues: Readonly<Record<string, number>> | undefined;
+  private restoredStep = false;
 
   get isMounted(): boolean {
     return this.lifecycle === 'mounted';
@@ -162,6 +180,7 @@ export class SceneRuntime {
     this.frameCallbacks = [];
     this.redraws = [];
     this.tweens = [];
+    this.stepTransition = null;
     this.readouts = [];
     this.playing = false;
   }
@@ -169,7 +188,7 @@ export class SceneRuntime {
   /** True while there is drawing work to do: playing, dirty or animating a transition. */
   needsFrame(): boolean {
     if (this.lifecycle !== 'mounted' || !this.visible) return false;
-    return this.playing || this.dirty || this.tweens.length > 0;
+    return this.playing || this.dirty || this.tweens.length > 0 || this.stepTransition !== null;
   }
 
   /**
@@ -183,6 +202,13 @@ export class SceneRuntime {
       return this.flush();
     }
     const capped = Math.min(Math.max(Number.isFinite(realDt) ? realDt : 0, 0), this.maxDt);
+    if (this.stepTransition) {
+      const transition = this.stepTransition;
+      const { k, done } = advanceTween(transition, capped);
+      this.guard('tween', () => transition.options.apply(k));
+      if (done) this.stepTransition = null;
+      this.dirty = true;
+    }
     if (this.tweens.length > 0) {
       this.stepTween(capped);
       this.dirty = true;
@@ -201,7 +227,21 @@ export class SceneRuntime {
     return this.flush();
   }
 
+  /** A learner's change. Outside step mode it is persisted; inside, leaving steps undoes it. */
   setParam(name: string, value: number): void {
+    // The learner takes over from a step transition: land it, then apply their value.
+    if (this.stepTransition) this.finishStepTransition();
+    this.applyParam(name, value, this.stepIndex === null);
+  }
+
+  private finishStepTransition(): void {
+    const transition = this.stepTransition;
+    if (!transition) return;
+    this.stepTransition = null;
+    this.guard('tween', () => transition.options.apply(1));
+  }
+
+  private applyParam(name: string, value: number, persist: boolean): void {
     const state = this.params.get(name);
     if (!state || this.lifecycle !== 'mounted') return;
     const next = snap(state, value);
@@ -209,7 +249,7 @@ export class SceneRuntime {
     state.value = next;
     this.paramVersion++;
     this.dirty = true;
-    (this.pendingValues ??= {})[name] = next;
+    if (persist) (this.pendingValues ??= {})[name] = next;
   }
 
   setValues(values: Readonly<Record<string, number>>): void {
@@ -243,15 +283,104 @@ export class SceneRuntime {
     }
   }
 
-  /** Step navigation. The teaching layer fills this in. */
-  step(_action: 'enter' | 'next' | 'prev' | 'exit' | 'goto', _index?: number): void {}
+  // -------------------------------------------------------------------------
+  // Teaching steps
+  // -------------------------------------------------------------------------
 
-  /** Directs attention to a registered part. The teaching layer fills this in. */
-  focusPart(_name: string | null): void {}
+  get currentStep(): number | null {
+    return this.stepIndex;
+  }
+
+  step(action: 'enter' | 'next' | 'prev' | 'exit' | 'goto', index?: number): void {
+    if (this.lifecycle !== 'mounted' || !this.stepList) return;
+    const last = this.stepList.length - 1;
+    const clamp = (i: number) => Math.max(0, Math.min(last, Math.floor(i)));
+    switch (action) {
+      case 'enter':
+        this.enterSteps(clamp(index ?? 0), false);
+        break;
+      case 'next':
+        if (this.stepIndex === null) this.enterSteps(0, false);
+        else if (this.stepIndex < last) this.gotoStep(this.stepIndex + 1, false);
+        break;
+      case 'prev':
+        if (this.stepIndex !== null && this.stepIndex > 0) this.gotoStep(this.stepIndex - 1, false);
+        break;
+      case 'goto':
+        if (index === undefined || !Number.isFinite(index)) break;
+        if (this.stepIndex === null) this.enterSteps(clamp(index), false);
+        else this.gotoStep(clamp(index), false);
+        break;
+      case 'exit':
+        this.exitSteps();
+        break;
+    }
+  }
+
+  /** Directs attention to a registered part, or clears the learner's focus. */
+  focusPart(name: string | null): void {
+    if (name !== null && !this.parts.parts.has(name)) return;
+    this.learnerFocus = name;
+  }
+
+  private enterSteps(index: number, immediate: boolean): void {
+    if (this.stepIndex === null) this.stepSaved = { values: this.values(), playing: this.playing };
+    this.gotoStep(index, immediate);
+  }
+
+  private gotoStep(index: number, immediate: boolean): void {
+    const steps = this.stepList;
+    const saved = this.stepSaved;
+    if (!steps || !saved) return;
+    const step = steps[index];
+    if (!step) return;
+    this.stepIndex = index;
+    // Each step's values build on the earlier steps, so going back is exact.
+    const target: Record<string, number> = { ...saved.values };
+    for (let i = 0; i <= index; i++) Object.assign(target, steps[i]?.set ?? {});
+    this.moveTo(target, immediate || this.reducedMotion);
+    this.playing = step.hold ? false : saved.playing && !this.reducedMotion;
+    this.pendingStep = index;
+    this.dirty = true;
+  }
+
+  private exitSteps(): void {
+    const saved = this.stepSaved;
+    if (this.stepIndex === null || !saved) return;
+    this.stepIndex = null;
+    this.stepSaved = null;
+    this.stepTransition = null;
+    for (const [name, value] of Object.entries(saved.values)) this.applyParam(name, value, false);
+    this.playing = saved.playing && !this.reducedMotion;
+    this.pendingStep = null;
+    this.dirty = true;
+  }
+
+  /** Moves parameters to `target`, animated unless `immediate`. Never persisted. */
+  private moveTo(target: Readonly<Record<string, number>>, immediate: boolean): void {
+    const from = this.values();
+    const names = Object.keys(target).filter((name) => this.params.has(name) && target[name] !== from[name]);
+    this.stepTransition = null;
+    if (names.length === 0) return;
+    if (immediate) {
+      for (const name of names) this.applyParam(name, target[name]!, false);
+      return;
+    }
+    this.stepTransition = {
+      elapsed: 0,
+      options: {
+        duration: STEP_TRANSITION_SECONDS,
+        ease: 'inOut',
+        apply: (k) => {
+          for (const name of names) this.applyParam(name, from[name]! + (target[name]! - from[name]!) * k, false);
+        },
+      },
+    };
+  }
 
   /** Rebuilds the scene at time zero, keeping the learner's values. */
   restart(): RuntimeUpdate {
-    return this.rebuild(this.values());
+    return this.rebuild(this.stepSaved ? { ...this.stepSaved.values } : this.values());
   }
 
   /** Rebuilds the scene with the authored defaults. */
@@ -262,16 +391,27 @@ export class SceneRuntime {
     return { ...update, values: { ...defaults } };
   }
 
+  /** Current parameter values (what the drawing shows). */
   values(): Record<string, number> {
     const out: Record<string, number> = {};
     for (const p of this.params.values()) out[p.name] = p.value;
     return out;
   }
 
+  /** The learner's own values: during step mode, the values they will return to. */
+  learnerValues(): Record<string, number> {
+    return this.stepSaved ? { ...this.stepSaved.values } : this.values();
+  }
+
   private rebuild(values: Record<string, number>): RuntimeUpdate {
     const scene = this.scene;
     if (!scene || this.lifecycle === 'destroyed') return this.flush();
-    const wasPlaying = this.playing;
+    const wasPlaying = this.stepSaved ? this.stepSaved.playing : this.playing;
+    if (this.stepIndex !== null) this.pendingStep = null;
+    this.stepIndex = null;
+    this.stepSaved = null;
+    this.stepTransition = null;
+    this.learnerFocus = null;
     this.graph = new SceneGraph();
     this.parts = new PartRegistry(this.graph);
     this.params = new Map();
@@ -374,6 +514,10 @@ export class SceneRuntime {
       update.values = this.pendingValues;
       this.pendingValues = null;
     }
+    if (this.pendingStep !== undefined) {
+      update.step = this.pendingStep;
+      this.pendingStep = undefined;
+    }
     return update;
   }
 
@@ -399,9 +543,25 @@ export class SceneRuntime {
       idea: this.idea,
       explanation: this.explanation,
       description: this.description,
-      steps: this.stepList ? { count: this.stepList.length, index: null, say: null, focus: null } : null,
-      focus: null,
+      steps: this.stepsView(),
+      focus: this.learnerFocus ?? this.stepFocus(),
       error: this.error,
+    };
+  }
+
+  private stepFocus(): string | null {
+    if (this.stepIndex === null) return null;
+    return this.stepList?.[this.stepIndex]?.focus ?? null;
+  }
+
+  private stepsView(): UiState['steps'] {
+    if (!this.stepList) return null;
+    const step = this.stepIndex === null ? undefined : this.stepList[this.stepIndex];
+    return {
+      count: this.stepList.length,
+      index: this.stepIndex,
+      say: step?.say ?? null,
+      focus: step?.focus ?? null,
     };
   }
 
@@ -604,6 +764,10 @@ export class SceneRuntime {
     };
     return Object.freeze(inc);
   }
+}
+
+function isStepIndex(value: unknown, count: number): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value < count;
 }
 
 function clip(text: string, max = MAX_TEXT): string {
