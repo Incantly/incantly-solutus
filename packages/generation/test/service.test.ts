@@ -93,7 +93,7 @@ describe('the generation service', () => {
     expect(JSON.stringify(skeleton)).not.toContain('why');
     expect(JSON.stringify(skeleton)).not.toContain(REFERENCE_SCENES.projectile!.plan.idea);
     const scene = stream[5]!.data as unknown as SceneEvent;
-    expect(scene.spec).toEqual({ parts: REFERENCE_SCENES.projectile!.plan.parts, steps: 4, singularPoints: [] });
+    expect(scene.spec).toEqual({ parts: REFERENCE_SCENES.projectile!.plan.parts, steps: 4, singularPoints: [], elements: 400 });
     expect((await deviceProbe(scene)).ok).toBe(true);
 
     const approved = await post(`/v1/generations/${scene.generationId}/probe`, { ok: true });

@@ -58,7 +58,7 @@ describe('repair reports', () => {
     expect(report.text).toContain(`WHERE    AGENT_JS line ${line}, column 12`);
     expect(report.text).toContain(`> ${line} |   empty[2].at(0, 0);`);
     expect(report.text).toMatch(/^LIKELY {3}an index or key is out of range/m);
-    expect(report.text).toMatch(/^RULE {5}5\. Animate only from the frame's time and dt/m);
+    expect(report.text).toMatch(/^RULE {5}5\. Animate only from frame\.time and frame\.dt/m);
     expect(report.summary).toContain(`at js:${line}:12`);
   });
 
@@ -114,7 +114,9 @@ describe('the repair call', () => {
     expect(prompt.user).toContain('```js\n' + fragments.js.replace(/\n$/, '') + '\n```');
     expect(prompt.user).toContain('speed from 5 to 20');
     expect(prompt.system[1]!.text).toContain('- graph2d: ');
-    expect(prompt.system[1]!.text).toContain('only the fragments you change');
+    // Edits, not whole fragments: a repair costs a few lines of output.
+    expect(prompt.system[1]!.text).toContain('Reply with edits only');
+    expect(prompt.system[1]!.text).toContain('<<<<<<< SEARCH');
     expect(prompt.system[1]!.text).not.toContain('interface Graph {');
   });
 

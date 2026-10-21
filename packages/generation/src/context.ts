@@ -1,4 +1,4 @@
-import type { ScenePlan } from '@incantly/core';
+import { SIZE_BUDGETS, type ScenePlan } from '@incantly/core';
 import { REFERENCE_SCENES, type ReferenceScene } from '@incantly/core/scenes';
 import { CAPABILITIES, CORE_CONTRACT, capability, catalogText } from './catalog';
 import { SDK_CONTRACT } from './generated/contract';
@@ -31,41 +31,44 @@ export interface LearnerRequest {
 /** Limits on learner text sent to the model. */
 export const REQUEST_LIMITS = { prompt: 500, noteContext: 600 } as const;
 
-export const CORE_RULES = `You write interactive STEM figures for a learner's notes with the Incantly kit. The kit already builds the parameter controls, play and pause, the readout panel, step navigation, the theme and the card around the figure. You choose kit features and configure them; you never build infrastructure.
+export const CORE_RULES = `You write interactive STEM figures for a learner's notes with the Incantly kit. The kit already builds controls, play and pause, readouts, steps, legends, zoom, dragging, the card and the theme. You pick kit features and configure them; you never build infrastructure.
 
-There are two calls. PLAN: return the plan as one JSON object. BUILD: return three fenced blocks, \`\`\`html, \`\`\`css and \`\`\`js, in that order, and nothing else.
+There are two calls. PLAN: reply with the plan as one JSON object. BUILD: reply with three fenced blocks, html, css and js, and nothing else.
 
 Rules for every scene
-1. One model drives everything. Compute every number the learner sees from inc.model. Never type a computed number into a label, readout or sentence.
-2. Every adjustable quantity is an inc.param with the plan's name, bounds and default; at most three. Never write inputs, sliders, buttons, listeners, timers or animation loops.
-3. Declare everything once, at the top level: params, model, stages, elements, parts, inc.onFrame, inc.readout, inc.explain, inc.describe, inc.steps. Callbacks only update what already exists; never create elements inside them.
-4. Build shapes once and move them with at, set, rotate and scale. Rebuild path data only when its shape changes. Keep every shape inside its stage at every parameter value.
-5. Animate only from the frame's time and dt. A paused redraw has dt = 0 and must still draw the current state. Every parameter value inside its range, including both ends, must draw without errors, NaN or Infinity; guard the plan's singular points.
+1. One model drives everything. Compute every number the learner sees; never type a computed number into a label, readout or sentence.
+2. The controls are the plan's parameters, with its names, bounds and defaults: inc.param for a slider, inc.toggle or inc.choice where the plan says so. Never write inputs, listeners, timers or animation loops.
+3. Declare everything once, at the top level: controls, model, stages, elements, parts and callbacks. Callbacks only update what already exists; never create elements inside them.
+4. Build shapes once and move them with at, set, rotate and scale. Keep every shape inside its stage at every parameter value.
+5. Animate only from frame.time and frame.dt. A paused redraw (dt = 0) still draws the current state. Every value in range, both ends included, must draw without NaN; guard the plan's singular points.
 6. Colour comes only from tones: lo, mid, hi, lit, faint, a, b, c. Use one lit accent. Never write a colour value.
-7. Show the real thing. Write the actual formula in the source with inc.formula or Math; never call a function that is not in the contract. Name quantities with their units.
-8. Register every part the plan names, with exactly that name: stage.part(name, handle, { label, info }).
-9. Call inc.idea once with the plan's idea, inc.describe with a function of the model, and inc.steps with the plan's steps: each says one thing, focuses a part and may set parameters.
-10. JavaScript is a small subset: const and let, arrow functions, if, switch, the conditional operator, for loops with a visible numeric bound (for (let i = 0; i <= 120; i++)), for...of over arrays, Math (inc.random instead of Math.random), template strings. Never var, function, class, this, new, try, throw, while, regular expressions, window, document, globalThis, fetch, eval or timers.
-11. Stay small: under 300 drawn elements, under 500 samples per curve, about 120 lines.
-12. HTML is a few plain elements; each stage is a div with an id, usually <div id="stage"></div>. No script, style, svg, img, inputs or inline styles. CSS only lays out that HTML, usually #stage { max-width: 760px; margin: 0 auto; }, with var(--inc-...) tokens and no colours or url().
+7. Show the real thing: the actual formula and true units, with the kit's helpers (calc, vec, units, shapes, sym) instead of your own. Never call anything that is not in the contract.
+8. Register every part the plan names, with exactly that name, through part() on its stage or kit.
+9. Call inc.idea once with the plan's idea, inc.describe with a function of the model, and inc.steps with the plan's steps.
+10. JavaScript is a small subset: const and let, arrow functions, if, switch, the conditional operator, for loops with a visible numeric bound (for (let i = 0; i <= 120; i++)), for...of, Math (inc.random instead of Math.random), template strings. Never var, function, class, this, new, try, throw, while, regular expressions, window, document, globalThis, fetch, eval or timers.
+11. Write little and let the kit do the work: a quick figure is about ${SIZE_BUDGETS.quick.lines} lines, standard ${SIZE_BUDGETS.standard.lines}, rich ${SIZE_BUDGETS.rich.lines}; under 500 samples per curve.
+12. HTML is one div per stage with an id, usually <div id="stage"></div>, and nothing else. CSS only lays it out, usually #stage { max-width: 760px; margin: 0 auto; }, with var(--inc-...) tokens and no colours or url().
 13. If you are not sure the kit has something, it does not. Use only the catalog and the contract you are given.`;
 
-export const PLAN_FORMAT = `PLAN format. Reply with one JSON object in a \`\`\`json fence:
+export const PLAN_FORMAT = `PLAN format. Reply with one JSON object in a \`\`\`json fence; keep every text short:
 {
   "concept": "short name of the concept",
   "idea": "One sentence: what moves and what that motion means.",
   "kind": "graph" | "motion" | "diagram",
-  "capabilities": ["names from the catalog only; graph2d or svg to draw on"],
-  "parameters": [{ "name": "camelCase", "unit": "m/s", "min": 5, "max": 20, "default": 12, "why": "why these bounds teach well" }],
+  "size": "quick" | "standard" | "rich",
+  "capabilities": ["catalog names only; at least one stage: graph2d, svg, space3d, graph3d, physics2d, chart or flow"],
+  "parameters": [{ "name": "camelCase", "unit": "m/s", "min": 5, "max": 20, "default": 12, "why": "a few words on these bounds" }],
   "model": { "inputs": ["every parameter name"], "outputs": [{ "name": "range", "dependsOn": ["speed", "angle"] }] },
-  "parts": ["Named visual parts, at most 8"],
-  "moves": "What moves or changes as time passes or parameters change.",
+  "parts": ["named visual parts"],
+  "moves": "What moves or changes.",
   "steps": ["Two to five teaching steps, one point each"],
   "singularPoints": [{ "parameterName": 8 }]
 }
-One to three parameters with meaningful bounds; list singular points where the model is undefined inside the bounds, or [] when there are none.`;
+Sizes: quick (the default: one view, up to ${SIZE_BUDGETS.quick.controls} controls and ${SIZE_BUDGETS.quick.parts} parts), standard (a second view, such as a graph beside the scene: up to ${SIZE_BUDGETS.standard.controls} controls and ${SIZE_BUDGETS.standard.parts} parts), rich (several linked panels, only when the learner asks for that much: up to ${SIZE_BUDGETS.rich.controls} controls and ${SIZE_BUDGETS.rich.parts} parts).
+A parameter is a slider unless it says "control": "toggle" (min 0, max 1) or "control": "choice" with "options": ["first", "second"] (min 0, max one less than the options).
+List singular points where the model is undefined inside the bounds, or [] when there are none.`;
 
-export const BUILD_FORMAT = `BUILD format. Reply with exactly three fenced blocks and nothing else:
+export const BUILD_FORMAT = `BUILD format. This is the BUILD call: the plan is settled. Reply with exactly three fenced blocks, html, css and js, in that order, and nothing else: no plan, no JSON, no prose.
 \`\`\`html
 ...
 \`\`\`
@@ -75,6 +78,17 @@ export const BUILD_FORMAT = `BUILD format. Reply with exactly three fenced block
 \`\`\`js
 ...
 \`\`\``;
+
+/** Asking only for differences from a reviewed scene of the same concept (PRD 25.5). */
+export const EDIT_FORMAT = `EDIT format. You start from the reviewed scene below, written for this concept. Change only what this plan needs: its names, bounds, defaults, parts, steps and idea. Reply with edit blocks only, one per fragment you change:
+\`\`\`edit js
+<<<<<<< SEARCH
+a few whole lines copied exactly from the starting scene
+=======
+what replaces them
+>>>>>>> REPLACE
+\`\`\`
+A block may hold several SEARCH/REPLACE pairs, applied in order; each SEARCH must match one place. If nothing needs to change, reply with an empty \`\`\`edit js block. If a fragment needs rewriting, reply with it whole in its usual \`\`\`js (or html, css) block instead.`;
 
 /** A rough token count: about 3.5 characters per token for English and code. */
 export function estimateTokens(text: string): number {
@@ -178,21 +192,62 @@ export interface ScenePromptOptions {
   /** Examples left out, by id. */
   readonly withhold?: readonly string[];
   readonly examples?: Readonly<Record<string, ReferenceScene>>;
+  /** Start from a reviewed scene of the same concept, asking only for differences (default true). */
+  readonly adapt?: boolean;
 }
 
-/** The scene call: the plan, the contract it needs, and the nearest reviewed example. */
-export function scenePrompt(plan: ScenePlan, options: ScenePromptOptions = {}): { readonly prompt: Prompt; readonly example: string | null } {
+export interface ScenePrompt {
+  readonly prompt: Prompt;
+  /** The example shown, by id. */
+  readonly example: string | null;
+  /** 'adapt': the reply edits `start`; 'write': the reply is the whole scene. */
+  readonly mode: 'write' | 'adapt';
+  readonly start: ReferenceScene | null;
+}
+
+function sizeLine(plan: ScenePlan): string {
+  const size = plan.size ?? 'quick';
+  const budget = SIZE_BUDGETS[size];
+  return `Size: ${size}, about ${budget.lines} lines, at most ${budget.controls} controls and ${budget.elements} drawn elements.`;
+}
+
+/** The reviewed scene for the same concept, when there is one this plan can start from. */
+export function startingScene(plan: ScenePlan, options: ScenePromptOptions = {}): ReferenceScene | null {
+  if (options.adapt === false) return null;
+  const examples = Object.fromEntries(Object.entries(options.examples ?? REFERENCE_SCENES).filter(([id]) => !options.withhold?.includes(id)));
+  const same = standardFigure(plan.concept, examples);
+  if (!same) return null;
+  // Starting from a scene drawn on another kind of stage would mean rewriting it.
+  const stages = (capabilities: readonly string[]) => capabilities.filter((c) => capability(c)?.draws);
+  const shared = stages(same.plan.capabilities).some((c) => plan.capabilities.includes(c));
+  return shared ? same : null;
+}
+
+/**
+ * The scene call: the plan, the contract it needs and either a reviewed
+ * scene of the same concept to adapt by edits, or the nearest reviewed
+ * example to follow while writing the scene whole.
+ */
+export function scenePrompt(plan: ScenePlan, options: ScenePromptOptions = {}): ScenePrompt {
+  const start = startingScene(plan, options);
+  const contract = ['CONTRACT. The kit API your scene may use, as TypeScript declarations; the scene itself is plain JavaScript.', '```ts', contractFor(plan.capabilities), '```'];
+  const planText = ['```json', JSON.stringify(plan, null, 2), '```'].join('\n');
+  if (start) {
+    // The starting scene sits in the cached prefix: requests for the same concept share it.
+    const reference = [
+      EDIT_FORMAT,
+      ...contract,
+      `THE STARTING SCENE: reviewed, for ${start.plan.concept}. Its plan:`,
+      JSON.stringify(start.plan),
+      ...(['html', 'css', 'js'] as const).flatMap((name) => ['```' + name, start[name].trim(), '```']),
+    ].join('\n');
+    const user = ['Adapt the starting scene to this plan.', planText, sizeLine(plan)].join('\n');
+    return { prompt: { system: [coreBlock(), { text: reference, cache: true }], user }, example: start.id, mode: 'adapt', start };
+  }
   const example = nearestExample(plan, options);
-  const reference = [
-    BUILD_FORMAT,
-    'CONTRACT. The kit API your scene may use, as TypeScript declarations; the scene itself is plain JavaScript.',
-    '```ts',
-    contractFor(plan.capabilities),
-    '```',
-    ...(example ? [exampleText(example)] : []),
-  ].join('\n');
-  const user = ['Build the scene for this plan.', '```json', JSON.stringify(plan, null, 2), '```'].join('\n');
-  return { prompt: { system: [coreBlock(), { text: reference, cache: true }], user }, example: example?.id ?? null };
+  const reference = [BUILD_FORMAT, ...contract, ...(example ? [exampleText(example)] : [])].join('\n');
+  const user = ['Build the scene for this plan.', planText, sizeLine(plan)].join('\n');
+  return { prompt: { system: [coreBlock(), { text: reference, cache: true }], user }, example: example?.id ?? null, mode: 'write', start: null };
 }
 
 /** Catalog lines for the capabilities a plan uses, for repair requests. */
@@ -202,4 +257,41 @@ export function catalogLines(capabilities: readonly string[]): string {
     .filter((c) => c !== undefined)
     .map((c) => `- ${c.line}`)
     .join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// The reviewed scene of the same concept: the starting point for edits, and
+// the second rung of the fallback ladder
+// ---------------------------------------------------------------------------
+
+function conceptWords(text: string): Set<string> {
+  return new Set(
+    text
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((w) => w.length > 2)
+      .map((w) => w.replace(/(es|s)$/, '')),
+  );
+}
+
+/**
+ * The reviewed figure for the same concept, if there is one: the second rung
+ * of the fallback ladder (RP-9). Unlike the nearest example in the context, it
+ * must be the same concept, not merely a similar scene.
+ */
+export function standardFigure(concept: string, examples: Readonly<Record<string, ReferenceScene>> = REFERENCE_SCENES): ReferenceScene | null {
+  const wanted = conceptWords(concept);
+  let best: ReferenceScene | null = null;
+  let bestScore = 0;
+  for (const example of Object.values(examples)) {
+    const words = conceptWords(`${example.plan.concept} ${example.id.replace(/-/g, ' ')}`);
+    let shared = 0;
+    for (const w of wanted) if (words.has(w)) shared++;
+    const score = wanted.size === 0 ? 0 : shared / Math.min(wanted.size, conceptWords(example.plan.concept).size);
+    if (score > bestScore) {
+      best = example;
+      bestScore = score;
+    }
+  }
+  return bestScore >= 0.5 ? best : null;
 }

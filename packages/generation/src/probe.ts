@@ -1,12 +1,12 @@
 import { createContext, Script } from 'node:vm';
-import { compileIsolated, loadKitModules, probeScene, type ProbeReport, type ProbeSpec, type ScenePlan, type ValidatedScene } from '@incantly/core';
+import { compileIsolated, loadKitModules, probeScene, SIZE_BUDGETS, type ProbeReport, type ProbeSpec, type ScenePlan, type ValidatedScene } from '@incantly/core';
 
 /** Probes a validated scene against what its plan declares. */
 export type SceneProber = (scene: ValidatedScene, spec: ProbeSpec) => Promise<ProbeReport>;
 
 /** What the probe checks from a plan: names and numbers only, so the same spec can go to a learner's device. */
 export function probeSpecFor(plan: ScenePlan): ProbeSpec {
-  return { parts: [...plan.parts], steps: plan.steps.length, singularPoints: [...(plan.singularPoints ?? [])] };
+  return { parts: [...plan.parts], steps: plan.steps.length, singularPoints: [...(plan.singularPoints ?? [])], elements: SIZE_BUDGETS[plan.size ?? 'quick'].elements };
 }
 
 /**

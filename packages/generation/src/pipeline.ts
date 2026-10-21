@@ -1,6 +1,7 @@
-import { SDK_VERSION, validateScene, validateSceneCss, validateSceneHtml, validateSceneJs, type ProbeReport, type ScenePlan, type ValidatedScene } from '@incantly/core';
-import { REFERENCE_SCENES, type ReferenceScene } from '@incantly/core/scenes';
+import { SCENE_LIMITS, SDK_VERSION, SIZE_BUDGETS, validateScene, validateSceneCss, validateSceneHtml, validateSceneJs, type ProbeReport, type ScenePlan, type ValidatedScene } from '@incantly/core';
+import type { ReferenceScene } from '@incantly/core/scenes';
 import { planPrompt, scenePrompt, type LearnerRequest, type Prompt } from './context';
+import { applyFragmentEdits, parseEdits, withoutEditBlocks } from './edits';
 import { FragmentStream, missingFragments, parsePlanReply, type FragmentName, type FragmentSet } from './fragments';
 import { ModelError, NO_USAGE, addUsage, costOf, type CallPurpose, type ModelClient, type ModelUsage } from './models';
 import { formatPlanProblems, validatePlan, type PlanProblem } from './plan';
@@ -14,13 +15,25 @@ import { parseReport, probeReport, repairPrompt, validationReport, type RepairRe
  *     fail -> structured report -> one repair -> validation and probe again
  *     -> approved, or failed (the caller falls back)
  *
+ * The scene call either writes the scene whole, following the nearest
+ * reviewed example, or, when a reviewed scene of the same concept exists,
+ * asks only for edits to it (PRD 25.5), which is several times faster.
+ * Repairs are edits too. Everything runs against a deadline (25 seconds by
+ * default): a repair that would not finish in time is not started, and the
+ * caller falls back to the reviewed figure.
+ *
  * On the service the probe runs on the learner's device, so the service
  * stops at validation and repairs a failed device probe on request; evals run
  * the whole pipeline in process with the isolated probe.
  */
 
 /** Enough for a plan of about 600 tokens and a scene of about 2,000, with room; a runaway reply stops here. */
-export const DEFAULT_MAX_TOKENS: Readonly<Record<CallPurpose, number>> = { plan: 1500, scene: 5000, repair: 5000 };
+export const DEFAULT_MAX_TOKENS: Readonly<Record<CallPurpose, number>> = { plan: 1500, scene: 5000, repair: 3000 };
+
+/** The longest a generation may take, from request to a checked scene. */
+export const DEFAULT_DEADLINE_MS = 25_000;
+/** Time to keep in hand for validation, the probe and delivery after the last model call. */
+const DELIVERY_MS = 1_500;
 
 export interface GeneratorOptions {
   readonly model: ModelClient;
@@ -34,6 +47,10 @@ export interface GeneratorOptions {
   readonly withhold?: readonly string[];
   readonly examples?: Readonly<Record<string, ReferenceScene>>;
   readonly maxTokens?: Partial<Record<CallPurpose, number>>;
+  /** Milliseconds from the start to a checked scene; 0 for none. Default 25 seconds. */
+  readonly deadlineMs?: number;
+  /** Start from a reviewed scene of the same concept and ask only for edits. Default true. */
+  readonly adapt?: boolean;
   readonly now?: () => number;
 }
 
@@ -94,6 +111,10 @@ export class GenerationState {
   repairsUsed = 0;
   failure: GenerationFailure | null = null;
   readonly timings: { planMs?: number; firstFragmentMs?: number; sceneMs?: number; repairMs: number; totalMs?: number } = { repairMs: 0 };
+  /** How the scene was made: written whole, or adapted from a reviewed scene by edits. */
+  mode: 'write' | 'adapt' | null = null;
+  /** A repair that was due but would not have finished before the deadline. */
+  deadlineSkipped = false;
   readonly sdkVersion = SDK_VERSION;
 
   constructor(
@@ -153,7 +174,7 @@ export class Generator {
     const started = this.now();
     let replan: { previous: string; problems: string } | undefined;
     for (let attempt = 0; attempt <= this.replans; attempt++) {
-      const reply = await this.call(state, 'plan', planPrompt(request, replan), signal);
+      const reply = await this.call(state, 'plan', planPrompt(request, replan), this.deadlineSignal(state, signal));
       if (reply === null) return;
       const parsed = parsePlanReply(reply);
       const validation = parsed.problem
@@ -172,28 +193,81 @@ export class Generator {
     this.fail(state, 'plan', `The plan was rejected: ${state.planProblems.map((p) => p.rule).join(', ')}`);
   }
 
-  /** The scene call and its checks, then repairs while the budget allows. */
+  /** The scene call and its checks, then repairs while the budget and the deadline allow. */
   async buildStage(state: GenerationState, hooks: GenerationHooks = {}, signal?: AbortSignal): Promise<void> {
     const plan = state.plan;
     if (!plan) throw new Error('Plan first');
     state.status = 'building';
     const started = this.now();
-    const { prompt, example } = scenePrompt(plan, {
+    const { prompt, example, mode, start } = scenePrompt(plan, {
       ...(this.options.withhold ? { withhold: this.options.withhold } : {}),
       ...(this.options.examples ? { examples: this.options.examples } : {}),
+      ...(this.options.adapt === false ? { adapt: false } : {}),
     });
     state.example = example;
-    const stream = new FragmentStream((name, source) => {
+    state.mode = mode;
+    const maxTokens = this.options.maxTokens?.scene ?? SIZE_BUDGETS[plan.size ?? 'quick'].sceneTokens;
+    if (mode === 'adapt' && start) {
+      // The starting scene's markup is known now: the host can lay it out before the edits arrive.
       state.timings.firstFragmentMs ??= this.now() - state.startedAt;
-      hooks.onFragment?.(name, fragmentPasses(name, source));
-    });
-    const reply = await this.call(state, 'scene', prompt, signal, (text) => stream.push(text));
-    if (reply === null) return;
-    const parsed = stream.end();
-    state.timings.sceneMs = this.now() - started;
-    const attempt = await this.check(state, 'scene', parsed.fragments, [...missingFragments(parsed.fragments)], parsed.problems, Object.keys(parsed.fragments) as FragmentName[]);
-    hooks.onAttempt?.(attempt);
+      hooks.onFragment?.('html', true);
+      hooks.onFragment?.('css', true);
+      const reply = await this.call(state, 'scene', prompt, this.deadlineSignal(state, signal), undefined, Math.min(maxTokens, 2500));
+      if (reply === null) return;
+      state.timings.sceneMs = this.now() - started;
+      const base: FragmentSet = { html: start.html, css: start.css, js: start.js };
+      const { fragments, problems, changed } = this.edited(base, reply);
+      hooks.onFragment?.('js', problems.length === 0 && fragments.js !== undefined && fragmentPasses('js', fragments.js));
+      const attempt = await this.check(state, 'scene', fragments, [...missingFragments(fragments)], problems, changed);
+      hooks.onAttempt?.(attempt);
+    } else {
+      const stream = new FragmentStream((name, source) => {
+        state.timings.firstFragmentMs ??= this.now() - state.startedAt;
+        hooks.onFragment?.(name, fragmentPasses(name, source));
+      });
+      const reply = await this.call(state, 'scene', prompt, this.deadlineSignal(state, signal), (text) => stream.push(text), maxTokens);
+      if (reply === null) return;
+      const parsed = stream.end();
+      state.timings.sceneMs = this.now() - started;
+      const attempt = await this.check(state, 'scene', parsed.fragments, [...missingFragments(parsed.fragments)], parsed.problems, Object.keys(parsed.fragments) as FragmentName[]);
+      hooks.onAttempt?.(attempt);
+    }
     await this.repairWhileAllowed(state, hooks, signal);
+  }
+
+  /** A reply of edits and whole fragments, applied over `base`. */
+  private edited(base: FragmentSet, reply: string): { fragments: FragmentSet; problems: string[]; changed: FragmentName[] } {
+    const parsedEdits = parseEdits(reply);
+    const stream = new FragmentStream();
+    stream.push(withoutEditBlocks(reply));
+    const whole = stream.end();
+    const applied = applyFragmentEdits(base, parsedEdits.edits);
+    const fragments: FragmentSet = { ...applied.fragments, ...whole.fragments };
+    // What actually differs from the base: a fragment returned unchanged is not a change.
+    const changed = (['html', 'css', 'js'] as const).filter((name) => fragments[name] !== base[name]);
+    const problems = [...parsedEdits.problems, ...whole.problems, ...applied.failed.map((f) => `Edit failed: ${f}`)];
+    if (!parsedEdits.found && Object.keys(whole.fragments).length === 0) problems.push('The reply held no edit blocks and no fragments');
+    return { fragments, problems, changed };
+  }
+
+  /** The remaining time before the deadline, in milliseconds; Infinity without one. */
+  remainingMs(state: GenerationState): number {
+    const deadline = this.options.deadlineMs ?? DEFAULT_DEADLINE_MS;
+    return deadline > 0 ? deadline - (this.now() - state.startedAt) : Number.POSITIVE_INFINITY;
+  }
+
+  /** The caller's signal, also aborted when the deadline passes. */
+  private deadlineSignal(state: GenerationState, signal?: AbortSignal): AbortSignal | undefined {
+    const remaining = this.remainingMs(state);
+    if (!Number.isFinite(remaining)) return signal;
+    const timeout = AbortSignal.timeout(Math.max(1, remaining - DELIVERY_MS));
+    return signal ? AbortSignal.any([signal, timeout]) : timeout;
+  }
+
+  /** How long a repair is likely to take: an edit reply is shorter than the scene was. */
+  private repairEstimateMs(state: GenerationState): number {
+    const scene = state.calls.find((c) => c.purpose === 'scene' && !c.error);
+    return Math.max(2_500, (scene?.ms ?? 8_000) * 0.6) + DELIVERY_MS;
   }
 
   /** Whether another automatic repair may run (RP-4). */
@@ -207,6 +281,11 @@ export class Generator {
 
   private async repairWhileAllowed(state: GenerationState, hooks: GenerationHooks, signal?: AbortSignal): Promise<void> {
     while (this.canRepair(state) && state.status !== 'failed') {
+      if (this.remainingMs(state) < this.repairEstimateMs(state)) {
+        // It would not finish in time: fall back now rather than make the learner wait past the deadline.
+        state.deadlineSkipped = true;
+        break;
+      }
       await this.repair(state, state.current!.report!, hooks, signal);
     }
     this.settle(state);
@@ -222,22 +301,17 @@ export class Generator {
     if (!plan || !current) throw new Error('Nothing to repair');
     state.repairsUsed++;
     const started = this.now();
-    const reply = await this.call(state, 'repair', repairPrompt(report, current.fragments, plan), signal);
+    const reply = await this.call(state, 'repair', repairPrompt(report, current.fragments, plan), this.deadlineSignal(state, signal));
     state.timings.repairMs += this.now() - started;
     if (reply === null) return null;
-    const parsed = new FragmentStream();
-    parsed.push(reply);
-    const { fragments: returned, problems } = parsed.end();
-    const changed = (Object.keys(returned) as FragmentName[]).filter((name) => returned[name] !== current.fragments[name]);
+    const { fragments: merged, problems, changed } = this.edited(current.fragments, reply);
     let attempt: Attempt;
-    if (Object.keys(returned).length === 0) {
-      attempt = await this.check(state, 'repair', current.fragments, [], [...problems, 'The reply contained no fenced blocks'], []);
-    } else if (changed.length === 0) {
+    if (changed.length === 0 && problems.length === 0 && current.failed !== 'reply') {
       // The same fragments again: the failure stands, and there is nothing more to try (RP-4).
+      // (After an unreadable reply, the same fragments in a readable one are worth checking.)
       attempt = { ...current, purpose: 'repair', changed: [] };
       state.attempts.push(attempt);
     } else {
-      const merged: FragmentSet = { ...current.fragments, ...returned };
       attempt = await this.check(state, 'repair', merged, missingFragments(merged), problems, changed);
     }
     hooks.onAttempt?.(attempt);
@@ -288,7 +362,9 @@ export class Generator {
     if (missing.length > 0 || problems.length > 0) {
       return record({ passed: false, failed: 'reply', report: parseReport(problems, missing, number, of), probe: null, scene: null });
     }
-    const validation = validateScene({ html: fragments.html!, css: fragments.css!, js: fragments.js! });
+    // The plan's size sets how many controls the scene may declare.
+    const limits = { ...SCENE_LIMITS, params: SIZE_BUDGETS[plan.size ?? 'quick'].controls };
+    const validation = validateScene({ html: fragments.html!, css: fragments.css!, js: fragments.js! }, { limits });
     if (!validation.ok || !validation.scene) {
       return record({ passed: false, failed: 'validation', report: validationReport(validation.diagnostics, fragments, number, of), probe: null, scene: null });
     }
@@ -307,13 +383,14 @@ export class Generator {
     prompt: Prompt,
     signal: AbortSignal | undefined,
     onText?: (text: string) => void,
+    maxTokens?: number,
   ): Promise<string | null> {
     const started = this.now();
     try {
       const reply = await this.options.model.complete({
         purpose,
         prompt,
-        maxTokens: this.options.maxTokens?.[purpose] ?? DEFAULT_MAX_TOKENS[purpose],
+        maxTokens: maxTokens ?? this.options.maxTokens?.[purpose] ?? DEFAULT_MAX_TOKENS[purpose],
         ...(signal ? { signal } : {}),
         ...(onText ? { onText } : {}),
       });
@@ -359,38 +436,4 @@ function fragmentPasses(name: FragmentName, source: string): boolean {
   return !diagnostics.some((d) => d.severity === 'error');
 }
 
-// ---------------------------------------------------------------------------
-// The reviewed standard figure (fallback level 2)
-// ---------------------------------------------------------------------------
-
-function conceptWords(text: string): Set<string> {
-  return new Set(
-    text
-      .toLowerCase()
-      .split(/[^a-z0-9]+/)
-      .filter((w) => w.length > 2)
-      .map((w) => w.replace(/(es|s)$/, '')),
-  );
-}
-
-/**
- * The reviewed figure for the same concept, if there is one: the second rung
- * of the fallback ladder (RP-9). Unlike the nearest example in the context, it
- * must be the same concept, not merely a similar scene.
- */
-export function standardFigure(concept: string, examples: Readonly<Record<string, ReferenceScene>> = REFERENCE_SCENES): ReferenceScene | null {
-  const wanted = conceptWords(concept);
-  let best: ReferenceScene | null = null;
-  let bestScore = 0;
-  for (const example of Object.values(examples)) {
-    const words = conceptWords(`${example.plan.concept} ${example.id.replace(/-/g, ' ')}`);
-    let shared = 0;
-    for (const w of wanted) if (words.has(w)) shared++;
-    const score = wanted.size === 0 ? 0 : shared / Math.min(wanted.size, conceptWords(example.plan.concept).size);
-    if (score > bestScore) {
-      best = example;
-      bestScore = score;
-    }
-  }
-  return bestScore >= 0.5 ? best : null;
-}
+export { standardFigure } from './context';

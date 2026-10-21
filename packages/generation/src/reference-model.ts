@@ -72,6 +72,32 @@ function sceneReply(html: string, css: string, js: string): string {
   return `${fence('html', html)}\n${fence('css', css)}\n${fence('js', js)}\n`;
 }
 
+/**
+ * An edit reply turning `before` into `after`: one SEARCH/REPLACE over the
+ * lines that differ, with a line of context, or the whole script when the
+ * changes are scattered.
+ */
+export function editReply(before: string, after: string): string {
+  if (before === after) return '```edit js\n```\n';
+  const a = before.replace(/\n$/, '').split('\n');
+  const b = after.replace(/\n$/, '').split('\n');
+  let start = 0;
+  while (start < a.length && start < b.length && a[start] === b[start]) start++;
+  let end = 0;
+  while (end < a.length - start && end < b.length - start && a[a.length - 1 - end] === b[b.length - 1 - end]) end++;
+  const removed = a.slice(start, a.length - end);
+  const added = b.slice(start, b.length - end);
+  if (removed.length > 12 || added.length > 12) return fence('js', after);
+  // One line of context, so the SEARCH is never empty and stays unique.
+  const before1 = start > 0 ? [a[start - 1]!] : [];
+  const search = [...before1, ...removed];
+  const replace = [...before1, ...added];
+  if (search.length === 0) return `\`\`\`edit js\n<<<<<<< SEARCH\n=======\n${replace.join('\n')}\n>>>>>>> REPLACE\n\`\`\`\n`;
+  const occurrences = before.split(search.join('\n')).length - 1;
+  if (occurrences !== 1) return fence('js', after);
+  return `\`\`\`edit js\n<<<<<<< SEARCH\n${search.join('\n')}\n=======\n${replace.join('\n')}\n>>>>>>> REPLACE\n\`\`\`\n`;
+}
+
 /** Injects a fault into a reference scene's script. */
 export function faultyScript(scene: ReferenceScene, fault: Fault): string {
   const js = scene.js;
@@ -150,6 +176,12 @@ export function referenceModel(options: ReferenceModelOptions = {}): ScriptedMod
     const scene = conceptFor(planned?.concept ?? user, scenes) ?? Object.values(scenes)[0]!;
     const fault = faultFor(trial);
     if (call.purpose === 'scene') {
+      // Asked for edits to the reviewed scene of the same concept: reply with only the changes.
+      const editing = call.prompt.system.some((block) => block.text.startsWith('EDIT format'));
+      if (editing) {
+        const reply = editReply(scene.js, fault === 'cut-off' ? faultyScript(scene, 'forbidden-call') : faultyScript(scene, fault));
+        return fault === 'cut-off' ? reply.slice(0, Math.max(12, Math.floor(reply.length / 2))) : reply;
+      }
       if (fault === 'cut-off') {
         const reply = sceneReply(scene.html, scene.css, scene.js);
         return reply.slice(0, reply.indexOf('```js') + Math.floor(scene.js.length / 2));

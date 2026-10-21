@@ -1,6 +1,6 @@
 import type { Diagnostic, ProbeFailure, ProbeReport, ScenePlan } from '@incantly/core';
 import { formatDiagnostic } from '@incantly/core';
-import { BUILD_FORMAT, CORE_RULES, catalogLines, contractFor, coreBlock, type Prompt } from './context';
+import { CORE_RULES, catalogLines, contractFor, coreBlock, type Prompt } from './context';
 import type { FragmentName, FragmentSet } from './fragments';
 
 /**
@@ -253,7 +253,15 @@ export function probeReport(report: ProbeReport, fragments: FragmentSet, plan: S
 // The repair call
 // ---------------------------------------------------------------------------
 
-export const REPAIR_FORMAT = `REPAIR format. Fix the reported failure. Reply with only the fragments you change, each in its own fenced block (\`\`\`html, \`\`\`css or \`\`\`js), complete, and nothing else. Keep everything that already works.`;
+export const REPAIR_FORMAT = `REPAIR format. Fix the reported failure and keep everything that already works. Reply with edits only, one block per fragment you change, and nothing else:
+\`\`\`edit js
+<<<<<<< SEARCH
+a few whole lines copied exactly from the fragment
+=======
+what replaces them
+>>>>>>> REPLACE
+\`\`\`
+A block may hold several SEARCH/REPLACE pairs, applied in order; each SEARCH must match one place. If a fragment needs rewriting, reply with it whole in its usual \`\`\`js (or html, css) block instead.`;
 
 /**
  * The repair call (RP-5): only the report, the fragments as they stand, the
@@ -264,7 +272,6 @@ export function repairPrompt(report: RepairReport, fragments: FragmentSet, plan:
   const unknownName = /^unknown-(sdk-call|method|property)$/.test(report.check);
   const reference = [
     REPAIR_FORMAT,
-    BUILD_FORMAT.replace('exactly three fenced blocks', 'the fenced blocks you change'),
     'Capabilities this scene uses:',
     catalogLines(plan.capabilities),
     ...(unknownName ? ['CONTRACT', '```ts', contractFor(plan.capabilities), '```'] : []),

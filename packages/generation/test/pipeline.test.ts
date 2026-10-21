@@ -11,13 +11,14 @@ const REQUESTS = {
   'thin-lens': 'How does a convex lens form an image?',
 } as const;
 
-function generator(fault: Fault = 'none', options: { stubborn?: boolean; maxRepairs?: number; probe?: boolean; withhold?: string[] } = {}) {
+function generator(fault: Fault = 'none', options: { stubborn?: boolean; maxRepairs?: number; probe?: boolean; withhold?: string[]; adapt?: boolean } = {}) {
   const model = referenceModel({ fault, ...(options.stubborn !== undefined ? { stubborn: options.stubborn } : {}) });
   const generate = new Generator({
     model,
     probe: options.probe === false ? null : isolatedProbe,
     ...(options.maxRepairs !== undefined ? { maxRepairs: options.maxRepairs } : {}),
     ...(options.withhold ? { withhold: options.withhold } : {}),
+    ...(options.adapt !== undefined ? { adapt: options.adapt } : {}),
   });
   return { model, generate };
 }
@@ -68,7 +69,8 @@ describe('the generation pipeline', () => {
 
   for (const [fault, failed, check] of cases) {
     it(`repairs a scene that fails ${failed} (${fault}) once, and checks the repair completely before approving it`, async () => {
-      const { model, generate } = generator(fault);
+      // Written whole, so each fault reaches the checks as a complete scene.
+      const { model, generate } = generator(fault, { adapt: false });
       const state = await generate.generate({ prompt: REQUESTS.projectile });
       const [first, repaired] = state.attempts;
       expect(first).toMatchObject({ passed: false, failed, report: { check } });
@@ -98,7 +100,7 @@ describe('the generation pipeline', () => {
     expect(unchanged.model.calls.filter((c) => c.purpose === 'repair')).toHaveLength(1);
 
     // A cut-off reply repaired with a script that is different but still broken.
-    const changed = generator('cut-off', { stubborn: true, maxRepairs: 2 });
+    const changed = generator('cut-off', { stubborn: true, maxRepairs: 2, adapt: false });
     const state = await changed.generate.generate({ prompt: REQUESTS['sine-wave'] });
     expect(changed.model.calls.filter((c) => c.purpose === 'repair')).toHaveLength(2);
     expect(state.attempts.map((a) => a.failed)).toEqual(['reply', 'validation', 'validation']);
@@ -135,7 +137,7 @@ describe('the generation pipeline', () => {
   });
 
   it('reports the plan and each fragment as it streams, checked on its own', async () => {
-    const { generate } = generator('forbidden-call');
+    const { generate } = generator('forbidden-call', { adapt: false });
     const events: string[] = [];
     const state = await generate.generate(
       { prompt: REQUESTS['thin-lens'] },
@@ -143,6 +145,39 @@ describe('the generation pipeline', () => {
     );
     expect(events).toEqual(['plan:thin lens', 'html:true', 'css:true', 'js:false']);
     expect(state.timings.firstFragmentMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it('adapts the reviewed scene of the same concept with edits: few output tokens, the same checks', async () => {
+    const { model, generate } = generator();
+    const state = await generate.generate({ prompt: REQUESTS.projectile });
+    expect(state.mode).toBe('adapt');
+    expect(state.status).toBe('approved');
+    expect(state.scene?.js).toBe(REFERENCE_SCENES.projectile!.js);
+    expect(model.calls.map((c) => c.purpose)).toEqual(['plan', 'scene']);
+    // Nothing to change: the reply is one empty edit block.
+    const reply = await referenceModel().complete(model.calls[1]!);
+    expect(reply.text.trim()).toBe('```edit js\n```');
+  });
+
+  it('repairs a fault that an edit brought in, and an edit reply that was cut off', async () => {
+    for (const fault of ['frame-throw', 'forbidden-call', 'cut-off'] as const) {
+      const { generate } = generator(fault);
+      const state = await generate.generate({ prompt: REQUESTS['thin-lens'] });
+      expect(state.mode, fault).toBe('adapt');
+      expect(state.attempts[0]!.passed, fault).toBe(false);
+      expect(state.status, fault).toBe('approved');
+      expect(state.scene?.js, fault).toBe(REFERENCE_SCENES['thin-lens']!.js);
+    }
+  });
+
+  it('skips a repair that would end after the deadline, so the caller falls back in time', async () => {
+    let clock = 0;
+    const model = referenceModel({ fault: 'frame-throw' });
+    const generate = new Generator({ model, probe: isolatedProbe, deadlineMs: 25_000, now: () => (clock += 6_000) });
+    const state = await generate.generate({ prompt: REQUESTS.projectile });
+    expect(state.deadlineSkipped).toBe(true);
+    expect(state.status).toBe('failed');
+    expect(model.calls.filter((c) => c.purpose === 'repair')).toHaveLength(0);
   });
 
   it('can leave the concept’s own example out of the context', async () => {
