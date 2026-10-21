@@ -55,7 +55,7 @@ describe('figure node attributes', () => {
       defaults: { focalLength: 10, objectDistance: 25 },
       values: { focalLength: 12, objectDistance: 30 },
       step: 2,
-      snapshotRef: 'sha256-abc',
+      snapshotRef: `sha256:${'ab'.repeat(32)}`,
       description: 'Rays meet where the image forms.',
       aspect: 0.5,
       meta: { validatorVersion: 1 },
