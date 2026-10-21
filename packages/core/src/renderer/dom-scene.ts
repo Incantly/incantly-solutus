@@ -60,7 +60,8 @@ export class SceneDom {
         svg.setAttribute('role', 'graphics-document');
         svg.setAttribute('aria-roledescription', 'figure');
         svg.setAttribute('aria-labelledby', titleId);
-        svg.setAttribute('aria-describedby', descId);
+        // The live text alternative joins the static description once the scene provides one.
+        svg.setAttribute('aria-describedby', `${descId} ${this.scope}-description`);
         svg.setAttribute('focusable', 'false');
         const title = doc.createElementNS(SVG_NS, 'title');
         title.id = titleId;

@@ -86,14 +86,30 @@ export class FigureRenderer {
     this.readouts = new ReadoutsView(doc);
     const send = this.send;
     this.controls = new ControlsView(doc, options.scope, send, signal);
-    this.teaching = new TeachingView(doc, options.scope, send, signal, this.scene);
+    this.teaching = new TeachingView({
+      doc,
+      scope: options.scope,
+      send,
+      signal,
+      scene: this.scene,
+      figureRoot: this.root,
+      sceneRoot,
+    });
 
     sceneRoot.before(this.idea);
-    sceneRoot.after(this.errorBanner, this.readouts.element, this.controls.element, this.teaching.element);
+    sceneRoot.after(
+      this.errorBanner,
+      this.teaching.partInfoElement,
+      this.readouts.element,
+      this.teaching.element,
+      this.controls.element,
+      this.teaching.descriptionElement,
+    );
 
     this.unsubscribe = options.channel.onUpdate((update) => this.apply(update));
 
     if ((options.visibility ?? 'observe') === 'observe') this.observeVisibility(doc, signal);
+    this.observeReducedMotion(doc, signal);
   }
 
   /** Sends a message to the runtime. Never draws. */
@@ -120,7 +136,7 @@ export class FigureRenderer {
     if (ui.playing !== undefined) this.controls.setPlaying(ui.playing);
     if (ui.speed !== undefined) this.controls.setSpeed(ui.speed);
     if (ui.readouts !== undefined) this.readouts.update(ui.readouts);
-    this.teaching.update(ui, this.ui);
+    this.teaching.update(ui, this.ui, update.reset === true);
     if (ui.error !== undefined) {
       this.errorBanner.hidden = ui.error === null;
       this.errorBanner.textContent = ui.error ? 'This figure hit a problem and paused. Try changing a value or Restart.' : '';
@@ -189,6 +205,13 @@ export class FigureRenderer {
     this.tickStart = performance.now();
     this.send({ type: 'tick', dt });
   };
+
+  /** The starting preference is passed at mount; this follows changes while the figure is open. */
+  private observeReducedMotion(doc: Document, signal: AbortSignal): void {
+    const query = doc.defaultView?.matchMedia?.('(prefers-reduced-motion: reduce)');
+    if (!query || typeof query.addEventListener !== 'function') return;
+    query.addEventListener('change', (event) => this.send({ type: 'reducedMotion', value: event.matches }), { signal });
+  }
 
   private observeVisibility(doc: Document, signal: AbortSignal): void {
     const view = doc.defaultView;

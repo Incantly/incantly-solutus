@@ -63,6 +63,7 @@ export const THEME_CSS = `
   }
 }
 .inc-figure *, .inc-figure *::before, .inc-figure *::after { box-sizing: border-box; }
+.inc-figure [hidden] { display: none !important; }
 .inc-idea { margin: 0 0 8px; font-weight: 600; }
 .inc-scene { position: relative; }
 .inc-stage { display: block; width: 100%; height: auto; overflow: visible; }
@@ -88,9 +89,15 @@ export const THEME_CSS = `
 .inc-stage .inc-hidden { display: none; }
 .inc-stage .inc-part { cursor: pointer; }
 .inc-stage .inc-part:focus { outline: none; }
-.inc-stage .inc-part.is-focus { --inc-tone: var(--inc-lit); }
-.inc-stage .inc-part.is-focus:is(path, line, polyline) { stroke-width: 3; }
-.inc-figure.has-focus .inc-stage .inc-part:not(.is-focus) { opacity: 0.35; transition: opacity 0.18s; }
+.inc-stage .inc-part.is-focus, .inc-stage .inc-part:focus-visible { --inc-tone: var(--inc-lit); }
+.inc-stage .inc-part:is(.is-focus, :focus-visible):is(path, line, polyline) { stroke-width: 3.5; }
+.inc-stage .inc-part:is(.is-focus, :focus-visible):is(circle, rect) { stroke: var(--inc-fg); stroke-width: 2; }
+.inc-stage [data-layer='mid'] > *, .inc-stage [data-layer='front'] > * { transition: opacity 0.18s; }
+.inc-figure.has-focus .inc-stage :is([data-layer='mid'], [data-layer='front']) > :not(.is-focus):not(:has(.is-focus)) {
+  opacity: 0.3;
+}
+.inc-part-info { margin: 6px 0 0; min-height: 1.45em; }
+.inc-part-info.is-hint { color: var(--inc-muted); font-size: 12px; }
 .inc-readouts { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
 .inc-readouts:empty { display: none; }
 .inc-readout { background: var(--inc-card); border-radius: 8px; padding: 6px 10px; min-width: 96px; }
@@ -111,7 +118,7 @@ export const THEME_CSS = `
   cursor: pointer;
 }
 .inc-figure button[aria-pressed='true'] { border-color: var(--inc-fg); }
-.inc-figure button:disabled { opacity: 0.5; cursor: default; }
+.inc-figure button:disabled, .inc-figure button[aria-disabled='true'] { opacity: 0.5; cursor: default; }
 .inc-figure select { background: var(--inc-card); border: 1px solid var(--inc-line); border-radius: 8px; padding: 4px 8px; }
 .inc-figure :focus-visible { outline: 2px solid var(--inc-focus); outline-offset: 2px; }
 @media (pointer: coarse) {
@@ -135,12 +142,18 @@ export const THEME_CSS = `
 .inc-teaching { margin-top: 10px; display: grid; gap: 8px; }
 .inc-teaching:empty { display: none; }
 .inc-explain { margin: 0; }
-.inc-steps { background: var(--inc-card); border-radius: 8px; padding: 8px 12px; display: grid; gap: 6px; }
-.inc-steps__say { margin: 0; }
+.inc-steps { background: var(--inc-card); border-radius: 8px; padding: 8px 12px; }
+.inc-steps__start { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.inc-steps__count { color: var(--inc-muted); font-size: 12px; }
+.inc-steps__active { display: grid; gap: 8px; }
+.inc-steps__say { margin: 0; font-weight: 500; }
 .inc-steps__nav { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.inc-steps__progress { color: var(--inc-muted); font-size: 12px; }
+.inc-steps__progress { color: var(--inc-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.inc-steps button { background: var(--inc-bg); }
+.inc-description { margin-top: 10px; }
 .inc-describe summary { cursor: pointer; color: var(--inc-muted); }
 .inc-describe p { margin: 6px 0 0; }
+.inc-print-only { display: none; }
 .inc-visually-hidden {
   position: absolute;
   width: 1px;
@@ -151,5 +164,10 @@ export const THEME_CSS = `
 }
 @media (prefers-reduced-motion: reduce) {
   .inc-figure * { transition: none !important; }
+}
+@media print {
+  .inc-figure { break-inside: avoid; }
+  .inc-controls, .inc-steps, .inc-describe, .inc-part-info { display: none !important; }
+  .inc-print-only { display: block; margin: 6px 0 0; }
 }
 `.trim();
