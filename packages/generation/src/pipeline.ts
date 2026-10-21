@@ -19,7 +19,8 @@ import { parseReport, probeReport, repairPrompt, validationReport, type RepairRe
  * the whole pipeline in process with the isolated probe.
  */
 
-export const DEFAULT_MAX_TOKENS: Readonly<Record<CallPurpose, number>> = { plan: 3000, scene: 16000, repair: 16000 };
+/** Enough for a plan of about 600 tokens and a scene of about 2,000, with room; a runaway reply stops here. */
+export const DEFAULT_MAX_TOKENS: Readonly<Record<CallPurpose, number>> = { plan: 1500, scene: 5000, repair: 5000 };
 
 export interface GeneratorOptions {
   readonly model: ModelClient;

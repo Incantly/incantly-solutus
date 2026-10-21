@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { planPrompt } from '../src/context';
-import { AnthropicClient, DEFAULT_MODELS, ModelError, ScriptedModel, costOf, type ModelCall } from '../src/models';
+import { AnthropicClient, DEFAULT_MODELS, ModelError, ScriptedModel, costOf, thinkingField, type ModelCall } from '../src/models';
 
 const encoder = new TextEncoder();
 
@@ -69,11 +69,22 @@ describe('the Anthropic client', () => {
     expect(headers['anthropic-version']).toBe('2023-06-01');
     const body = JSON.parse(String(init.body)) as Record<string, unknown>;
     expect(body).toMatchObject({ model: DEFAULT_MODELS.plan, max_tokens: 2000, stream: true, output_config: { effort: 'low' } });
+    // Thinking is off by default: the plan model takes `disabled`.
+    expect(body.thinking).toEqual({ type: 'disabled' });
     expect(body.system).toEqual([
       { type: 'text', text: expect.stringContaining('Rules for every scene'), cache_control: { type: 'ephemeral' } },
       { type: 'text', text: expect.stringContaining('PLAN format'), cache_control: { type: 'ephemeral' } },
     ]);
     expect(body.messages).toEqual([{ role: 'user', content: expect.stringContaining('Show me a sine wave') }]);
+  });
+
+  it('turns thinking off the way each model accepts, or leaves it adaptive when asked', () => {
+    expect(thinkingField('claude-sonnet-5-5', 'off')).toEqual({ type: 'between_tools' });
+    expect(thinkingField('claude-haiku-5-5', 'off')).toEqual({ type: 'disabled' });
+    expect(thinkingField('claude-sonnet-5-5', 'adaptive')).toBeNull();
+    const client = new AnthropicClient({ apiKey: 'k', thinking: { scene: 'adaptive' } });
+    expect(client.body(call({ purpose: 'scene' })).thinking).toBeUndefined();
+    expect(client.body(call({ purpose: 'repair' })).thinking).toEqual({ type: 'between_tools' });
   });
 
   it('streams the text, never the thinking, and reads usage with cache counts', async () => {

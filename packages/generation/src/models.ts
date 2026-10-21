@@ -113,11 +113,19 @@ export function costOf(model: string, usage: ModelUsage, prices: Readonly<Record
 
 export type Effort = 'low' | 'medium' | 'high';
 
+/**
+ * Whether the model thinks before it answers. `off` is the fast path: on the
+ * 5.5 models adaptive thinking is on unless a request turns it off, and in a
+ * bench of the launch prompts it took about two thirds of every scene call.
+ */
+export type Thinking = 'off' | 'adaptive';
+
 export interface AnthropicOptions {
   readonly apiKey: string;
   /** Defaults: a small fast model plans, the balanced model builds and repairs. */
   readonly models?: Partial<Record<CallPurpose, string>>;
   readonly effort?: Partial<Record<CallPurpose, Effort>>;
+  readonly thinking?: Partial<Record<CallPurpose, Thinking>>;
   readonly baseUrl?: string;
   /** Per call, including the whole stream. */
   readonly timeoutMs?: number;
@@ -133,6 +141,18 @@ export const DEFAULT_MODELS: Readonly<Record<CallPurpose, string>> = {
 };
 
 const DEFAULT_EFFORT: Readonly<Record<CallPurpose, Effort>> = { plan: 'low', scene: 'medium', repair: 'medium' };
+
+const DEFAULT_THINKING: Readonly<Record<CallPurpose, Thinking>> = { plan: 'off', scene: 'off', repair: 'off' };
+
+/**
+ * The request's thinking field. Claude Sonnet 5.5 turns up-front thinking off
+ * with `between_tools` and rejects `disabled`; other models take `disabled`.
+ * Adaptive thinking is the models' default, so it is sent as nothing.
+ */
+export function thinkingField(model: string, thinking: Thinking): Record<string, unknown> | null {
+  if (thinking === 'adaptive') return null;
+  return model.startsWith('claude-sonnet-5-5') ? { type: 'between_tools' } : { type: 'disabled' };
+}
 
 interface StreamState {
   text: string;
@@ -156,10 +176,13 @@ export class AnthropicClient implements ModelClient {
 
   /** The request body for a call: system blocks with cache breakpoints, one user turn, streaming. */
   body(call: ModelCall): Record<string, unknown> {
+    const model = this.modelFor(call.purpose);
+    const thinking = thinkingField(model, this.options.thinking?.[call.purpose] ?? DEFAULT_THINKING[call.purpose]);
     return {
-      model: this.modelFor(call.purpose),
+      model,
       max_tokens: call.maxTokens,
       stream: true,
+      ...(thinking ? { thinking } : {}),
       system: call.prompt.system.map((block) => ({
         type: 'text',
         text: block.text,
