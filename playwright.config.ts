@@ -25,7 +25,8 @@ export default defineConfig({
     { name: 'webkit', use: { ...devices['Desktop Safari'] }, testIgnore: /perf\// },
     {
       name: 'perf',
-      use: { ...devices['Desktop Chrome'] },
+      // Tracing snapshots the whole document on every action, which would be measured as the note's own cost.
+      use: { ...devices['Desktop Chrome'], trace: 'off' },
       testMatch: /perf\/.*\.spec\.ts/,
       fullyParallel: false,
     },

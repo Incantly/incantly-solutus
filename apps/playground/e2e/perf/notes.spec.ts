@@ -19,6 +19,18 @@ const here = dirname(fileURLToPath(import.meta.url));
 const BASELINE_PATH = join(here, 'baseline.json');
 /** Timing measures may be this much worse than the baseline before the suite fails. */
 const TOLERANCE = 1.75;
+/**
+ * Absolute slack per timing measure, so a small baseline does not fail on
+ * runner noise: a cold dev server or a busy shared machine adds tens of
+ * milliseconds to booting a frame, never a few hundred.
+ */
+const NOISE_FLOORS = {
+  typingLatencyP95Ms: 10,
+  dragFramesP95Ms: 10,
+  scrollDroppedFrameRate: 0.05,
+  firstFigureReadyMs: 150,
+  editorReadyMs: 100,
+} as const;
 
 interface Metrics {
   profile: number;
@@ -27,6 +39,7 @@ interface Metrics {
   openMiddleMounts: number;
   peakLiveFigures: number;
   scrollLongTasks: number;
+  scrollLongTasksPerMinute: number;
   scrollLongestTaskMs: number;
   scrollDroppedFrameRate: number;
   typingLatencyP95Ms: number;
@@ -78,6 +91,12 @@ const INSTRUMENT = () => {
   };
   (perf as unknown as { stop(): void }).stop = () => {
     perf.recording = false;
+  };
+  // Continues recording without clearing, after a pause for something that is not being measured.
+  (perf as unknown as { resume(): void }).resume = () => {
+    if (perf.recording) return;
+    perf.recording = true;
+    requestAnimationFrame(loop);
   };
   // Typing latency: from keydown to the editor's first DOM change.
   let pressed = 0;
@@ -210,12 +229,13 @@ for (const size of PROFILES) {
       const cycles = 3;
       const heaps: number[] = [];
       for (let i = 0; i < cycles; i++) {
-        // The 300-figure note is scrolled in longer strides so a run stays within minutes.
-        await scrollCycle(page, peak, size >= 300 ? 1500 : 600);
+        if (i > 0) await page.evaluate(() => (window as unknown as { __perf: { resume(): void } }).__perf.resume());
+        await scrollCycle(page, peak, 600);
         await page.waitForTimeout(size >= 100 ? 2000 : 1700); // let away figures suspend
+        // The forced garbage collection behind a heap reading is not the learner's scroll: it is left out.
+        await page.evaluate(() => (window as unknown as { __perf: { stop(): void } }).__perf.stop());
         heaps.push(await heap(cdp));
       }
-      await page.evaluate(() => (window as unknown as { __perf: { stop(): void } }).__perf.stop());
       // Memory levels off: the last full cycle adds (almost) nothing to the one before.
       metrics.heapCycleGrowthRatio = Number((heaps[cycles - 1]! / Math.max(1, heaps[cycles - 2]!)).toFixed(3));
       expect(metrics.heapCycleGrowthRatio).toBeLessThan(1.1);
@@ -223,6 +243,12 @@ for (const size of PROFILES) {
       metrics.scrollLongTasks = perf.longTasks.filter((d) => d > 50).length;
       metrics.scrollLongestTaskMs = Math.round(Math.max(0, ...perf.longTasks));
       metrics.scrollDroppedFrameRate = Number((perf.frames.filter((f) => f > 25).length / Math.max(1, perf.frames.length)).toFixed(3));
+      const minutes = perf.frames.reduce((sum, f) => sum + f, 0) / 60_000;
+      metrics.scrollLongTasksPerMinute = Number((metrics.scrollLongTasks / Math.max(minutes, 1 / 60)).toFixed(2));
+      // Initial gate: dropped-frame rate under 5% during the stress scroll, and no sustained task over 50 ms.
+      // An isolated pause (a major garbage collection on a shared runner) is not sustained: at most one a minute.
+      expect(metrics.scrollDroppedFrameRate).toBeLessThan(0.05);
+      expect(metrics.scrollLongTasksPerMinute).toBeLessThanOrEqual(1);
       const stats = await handle(page, (h) => h.scheduler());
       metrics.peakLiveFigures = Math.max(peak.value, stats.peakLive);
       expect(metrics.peakLiveFigures).toBeLessThanOrEqual(3);
@@ -389,7 +415,8 @@ for (const size of PROFILES) {
     const version = page.context().browser()?.version() ?? 'unknown';
     const result = {
       ...metrics,
-      environment: `${browserName} ${version}, ${process.platform} ${process.arch}, ${process.env.CI ? 'CI runner' : 'local'}`,
+      // Every result names its environment; PERF_ENVIRONMENT describes the machine when recording a baseline.
+      environment: `${browserName} ${version}, ${process.platform} ${process.arch}, ${process.env.PERF_ENVIRONMENT ?? (process.env.CI ? 'CI runner' : 'local')}`,
     };
     await testInfo.attach(`perf-${size}.json`, { body: JSON.stringify(result, null, 2), contentType: 'application/json' });
     writeFileSync(testInfo.outputPath(`perf-${size}.json`), JSON.stringify(result, null, 2));
@@ -402,12 +429,10 @@ for (const size of PROFILES) {
     }
     const accepted = baseline[String(size)];
     if (!accepted) return;
-    for (const key of ['typingLatencyP95Ms', 'dragFramesP95Ms', 'scrollDroppedFrameRate', 'firstFigureReadyMs', 'editorReadyMs'] as const) {
+    for (const [key, floor] of Object.entries(NOISE_FLOORS) as Array<[keyof typeof NOISE_FLOORS, number]>) {
       const was = accepted[key];
       const now = metrics[key];
       if (typeof was !== 'number' || typeof now !== 'number') continue;
-      // Small absolute floors keep a near-zero baseline from failing on noise.
-      const floor = key === 'scrollDroppedFrameRate' ? 0.05 : 10;
       expect(now, `${key} regressed against the baseline`).toBeLessThanOrEqual(Math.max(was * TOLERANCE, was + floor));
     }
   });
