@@ -92,6 +92,10 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
     return this.state === 'mounting' || this.state === 'live';
   }
 
+  get holdsInstance(): boolean {
+    return this.isLive || this.state === 'suspending';
+  }
+
   get canRun(): boolean {
     return this.state !== 'failed' && this.state !== 'destroyed' && (this.attrs.fragments !== null || this.attrs.fragmentsRef !== null);
   }
@@ -113,7 +117,7 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
       this.state = 'placeholder';
       this.renderPlaceholder();
       this.options.scheduler.evaluate();
-    } else if (!this.isLive) {
+    } else if (!this.holdsInstance) {
       this.renderPlaceholder();
     } else {
       this.renderCaption();
@@ -184,8 +188,7 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
     this.dom.dataset.state = 'suspending';
     this.generation++;
     // Keep the reserved size, so the placeholder takes exactly the live figure's place.
-    const width = this.frame.getBoundingClientRect().width;
-    const height = this.frame.getBoundingClientRect().height;
+    const size = handle?.measure() ?? null;
     let snapshotRef: string | null = null;
     if (handle && handle.state === 'live' && this.options.store) {
       const png = await handle.snapshot();
@@ -200,7 +203,7 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
     }
     if (this.state !== 'suspending') return;
     if (snapshotRef) this.pending.snapshot = snapshotRef;
-    if (width > 0 && height > 0) this.pending.aspect = Math.round((height / width) * 1000) / 1000;
+    if (size) this.pending.aspect = Math.round((size.height / size.width) * 1000) / 1000;
     this.teardown();
     this.state = 'placeholder';
     this.flush();

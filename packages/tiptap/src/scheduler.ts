@@ -33,8 +33,10 @@ export interface SchedulerOptions {
 /** What the scheduler needs from a node view. */
 export interface ScheduledFigure {
   readonly element: Element;
-  /** True while an execution instance exists or is starting. */
+  /** Starting or running: the scheduler may pause, resume or suspend it. */
   readonly isLive: boolean;
+  /** Starting, running or still shutting down: it holds an execution instance and counts against the limit. */
+  readonly holdsInstance: boolean;
   /** False when the figure cannot run (no fragments, failed): it stays a placeholder. */
   readonly canRun: boolean;
   mount(): void;
@@ -102,15 +104,12 @@ export class LiveFigureScheduler {
     this.lastUsed.set(figure, this.now());
   }
 
-  /** The learner asked for this figure (a click or Enter): mount it now, making room if needed. */
+  /** The learner asked for this figure (a click or Enter): mount it as soon as a slot is free. */
   activate(figure: ScheduledFigure): void {
     if (!this.figures.has(figure.element) || !figure.canRun) return;
     this.touch(figure);
     this.pinned.add(figure);
-    if (!figure.isLive) {
-      this.makeRoom(1, figure);
-      this.start(figure);
-    }
+    if (!figure.holdsInstance) this.evaluate();
   }
 
   isNear(figure: ScheduledFigure): boolean {
@@ -132,37 +131,47 @@ export class LiveFigureScheduler {
         figure.pause();
       }
     }
-    // Near figures that can run, most recently used first, then in document order.
+    // Near or requested figures that can run: requested first, then most recently used, then in document order.
     const order = [...this.figures.values()];
     const candidates = order
-      .filter((f) => this.near.has(f) && !f.isLive && f.canRun)
-      .sort((a, b) => (this.lastUsed.get(b) ?? 0) - (this.lastUsed.get(a) ?? 0) || order.indexOf(a) - order.indexOf(b));
+      .filter((f) => (this.near.has(f) || this.pinned.has(f)) && !f.holdsInstance && f.canRun)
+      .sort(
+        (a, b) =>
+          Number(this.pinned.has(b)) - Number(this.pinned.has(a)) ||
+          (this.lastUsed.get(b) ?? 0) - (this.lastUsed.get(a) ?? 0) ||
+          order.indexOf(a) - order.indexOf(b),
+      );
     for (const figure of candidates) {
-      if (this.live().length >= this.limit && !this.makeRoom(1, figure)) break;
-      this.start(figure);
+      if (this.occupied() < this.limit) {
+        this.start(figure);
+        continue;
+      }
+      // A slot frees only once a suspension has finished; evaluation runs again then.
+      this.makeRoom(figure);
+      break;
     }
     this.scheduleSuspensions();
   }
 
-  /** Suspends away figures to free `count` slots for `forFigure`. Returns false if it cannot. */
-  private makeRoom(count: number, forFigure: ScheduledFigure): boolean {
-    let free = this.limit - this.live().length;
-    if (free >= count) return true;
-    const victims = this.live()
+  /** Starts suspending one figure to make room for `forFigure`, if any may give up its slot. */
+  private makeRoom(forFigure: ScheduledFigure): void {
+    if (this.suspending > 0) return;
+    const victim = this.live()
       .filter((f) => f !== forFigure && !this.pinned.has(f))
       .sort((a, b) => {
         // Away before near, then least recently used.
         const away = Number(this.near.has(a)) - Number(this.near.has(b));
         return away || (this.lastUsed.get(a) ?? 0) - (this.lastUsed.get(b) ?? 0);
-      });
-    for (const victim of victims) {
-      if (free >= count) break;
-      // Only away figures, or near ones displaced by an explicit activation, give up their slot.
-      if (this.near.has(victim) && !this.pinned.has(forFigure)) break;
-      void this.suspend(victim);
-      free++;
-    }
-    return free >= count;
+      })[0];
+    // Only an away figure, or a near one displaced by an explicit request, gives up its slot.
+    if (!victim || (this.near.has(victim) && !this.pinned.has(forFigure))) return;
+    void this.suspend(victim);
+  }
+
+  private occupied(): number {
+    let count = 0;
+    for (const figure of this.figures.values()) if (figure.holdsInstance) count++;
+    return count;
   }
 
   private start(figure: ScheduledFigure): void {
@@ -172,14 +181,21 @@ export class LiveFigureScheduler {
     this.updateLiveStats();
   }
 
+  private suspending = 0;
+
   private async suspend(figure: ScheduledFigure): Promise<void> {
     this.awaySince.delete(figure);
     this.pinned.delete(figure);
     this.stats.suspends++;
-    const done = figure.suspend();
-    this.updateLiveStats();
-    await done;
-    this.updateLiveStats();
+    this.suspending++;
+    try {
+      await figure.suspend();
+    } finally {
+      this.suspending--;
+      this.updateLiveStats();
+      // A slot may be free now.
+      if (!this.destroyed) this.evaluate();
+    }
   }
 
   private live(): ScheduledFigure[] {
@@ -187,7 +203,7 @@ export class LiveFigureScheduler {
   }
 
   private updateLiveStats(): void {
-    this.stats.live = this.live().length;
+    this.stats.live = this.occupied();
     this.stats.near = this.near.size;
     this.stats.peakLive = Math.max(this.stats.peakLive, this.stats.live);
   }

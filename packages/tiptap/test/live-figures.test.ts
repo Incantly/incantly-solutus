@@ -54,6 +54,9 @@ class FakeFigure implements FigureHandle {
   focus(edge: 'first' | 'last' = 'first') {
     this.focused.push(edge);
   }
+  measure() {
+    return { width: 760, height: 800 };
+  }
   snapshot() {
     return Promise.resolve(PNG);
   }
@@ -189,6 +192,7 @@ describe('live figures: the scheduler', () => {
     expect(live.state).toBe('destroyed');
     expect(figures()[0]!.dataset.state).toBe('placeholder');
     expect(attrs(0).snapshotRef).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(attrs(0).aspect).toBeCloseTo(800 / 760, 3);
     expect(await store.getSnapshot(attrs(0).snapshotRef as string)).toBe(PNG);
     expect(figures()[0]!.querySelector('img.incantly-figure__snapshot')?.getAttribute('src')).toBe(PNG);
   });
