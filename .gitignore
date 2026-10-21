@@ -10,6 +10,7 @@ coverage/
 
 # Generated sandbox bundles (rebuilt by scripts/build-sandbox-bundles.mjs)
 packages/core/src/sandbox/generated/
+packages/core/src/scenes/generated.ts
 
 # Test output
 test-results/
