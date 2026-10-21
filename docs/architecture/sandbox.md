@@ -63,3 +63,42 @@ The bridge accepts only documented message shapes from the execution instance cr
 ## Failure behavior
 
 A non-responsive, over-budget, or invalid execution instance is destroyed. The learner sees the last approved snapshot and text description, never a stack trace or empty box.
+
+## The v0.1 implementation
+
+The first adapter follows [ADR 002](decisions/002-execution-adapter.md). Code lives in `packages/core/src/sandbox`, `validation` and `probe`.
+
+| Layer | What it does | Where |
+| --- | --- | --- |
+| Validator | Allow-lists for the three fragments, with fragment-relative locations. See the [scene subset](../sdk/scene-subset.md) | `validation/` |
+| Canonical HTML | The frame receives HTML rebuilt from the parsed tree, never the original text | `validation/html.ts` |
+| Instrumentation | Fuel in every loop and function body; a guard on every computed key | `validation/instrument.ts` |
+| Wrapper | The scene sees exactly `inc`, a `Math` without `random`, a reduced `Number`, `isFinite` and `isNaN`; ambient globals are shadowed with `undefined` | `sandbox/scene-wrapper.ts` |
+| Worker | Scene code runs in a dedicated Worker with no DOM. After the scene registers, network, storage and worker globals are neutralized | `sandbox/worker-entry.ts` |
+| Frame | `sandbox="allow-scripts"` only, built from `srcdoc`, under the [ADR 005](decisions/005-content-security-policy.md) policy with hashes for the frame script, theme and scene CSS | `sandbox/shell.ts`, `sandbox/frame-entry.ts` |
+| Renderer | Builds DOM only through `createElementNS`, `setAttribute` with an attribute allow-list, and `textContent`; ignores element kinds outside the SDK's list | `renderer/` |
+| Bridge | A transferred `MessagePort`; every message carries the version and a 128-bit channel id and is checked for shape | `protocol/bridge.ts` |
+| Watchdogs | The frame terminates a Worker that leaves a message unanswered for 2.5 s. The host removes a frame that does not draw within 4 s, misses a heartbeat (every 2 s), or loads a second time. A probe must report within 3 s | `sandbox/frame-entry.ts`, `sandbox/adapter.ts` |
+| Probe | Runs in a fresh hidden frame through the same adapter before a new scene is shown | `probe/`, `sandbox/adapter.ts` |
+
+`presentScene` is the learner-facing path for a new scene: probe hidden, then mount only if it passed. `mountSandboxed` mounts a scene that was already approved; it validates again before mounting. `@incantly/core/testing` mounts without the validator, for the security tests only.
+
+### Tested
+
+- Every forbidden construct has a rejected fixture with its line and column, and a valid twin that must pass (`packages/core/test/validation.test.ts`).
+- Deliberately broken scenes fail the probe for the expected reason, and a rejected scene never mounts (`probe.test.ts`, `apps/playground/e2e/sandbox.spec.ts`).
+- With the validator skipped on purpose, a hostile scene still cannot reach the host page, its globals, storage or the network: the Worker sees `undefined` for every ambient global, `eval` through a function's constructor fails under the policy, and images, CSS images and module imports are blocked by the policy before any request is made.
+- A Worker that never returns is terminated while the host keeps its 50 ms heartbeat; a scene that never mounts or never finishes its probe is removed; a frame that navigates is removed.
+- The same scene source draws the same figure on the in-thread and sandbox adapters.
+
+### Release hygiene (RM-5)
+
+- No `console` calls in shipped sources (lint) and none in the frame and Worker bundles, which are built with `console` and `debugger` dropped.
+- Bridge messages are limited to the documented list, which carries no prompts, plans, model names or check reports. The probe receives only part names, a step count and singular points.
+- The iPad host must ship with web inspection off in release builds (`WKWebView.isInspectable = false`). This is a setting in the native host, outside this repository.
+
+### Still open
+
+- An external security review of the boundary. The tests above are the starting checklist.
+- Running the browser suite on WebKit and on the baseline iPad. CI runs WebKit; the iPad web view needs a device run.
+- Recovery when the iPad web-content process is killed belongs to the native host: it should reload the note, and figures rebuild from stored data.
