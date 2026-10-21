@@ -27,4 +27,5 @@ export type { Authenticator, Learner } from './auth';
 export { DEFAULT_LIMITS, LimitKeeper } from './limits';
 export type { Limits, Refusal } from './limits';
 export { GenerationService, RETENTION, createService, sanitizeDeviceReport, skeletonOf } from './service';
-export type { FallbackMessage, SceneMessage, ServiceOptions, Skeleton } from './service';
+export type { ServiceOptions } from './service';
+export type { FallbackMessage, FallbackReason, ProbeResponse, ProbeResult, SceneMessage, ServiceEvent, Skeleton } from './protocol';

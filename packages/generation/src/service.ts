@@ -1,11 +1,12 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { SDK_VERSION, type ProbeCheck, type ProbeFailure, type ProbeReport, type ProbeSpec, type ScenePlan } from '@incantly/core';
+import { SDK_VERSION, type ProbeCheck, type ProbeFailure, type ProbeReport, type ScenePlan } from '@incantly/core';
 import type { Authenticator, Learner } from './auth';
 import { REQUEST_LIMITS, type LearnerRequest } from './context';
 import { DEFAULT_LIMITS, LimitKeeper, type Limits, type Refusal } from './limits';
 import type { ModelClient } from './models';
 import { Generator, standardFigure, type GenerationState } from './pipeline';
 import { probeSpecFor } from './probe';
+import type { FallbackMessage, SceneMessage, Skeleton } from './protocol';
 import { failureRecord, type RecordSink } from './records';
 
 /**
@@ -40,30 +41,7 @@ export interface ServiceOptions {
   readonly now?: () => number;
 }
 
-/** What the skeleton needs from the plan: names and numbers only (PRD 18.6). */
-export interface Skeleton {
-  readonly concept: string;
-  readonly kind: ScenePlan['kind'];
-  readonly parameters: ReadonlyArray<{ readonly name: string; readonly unit?: string; readonly min: number; readonly max: number; readonly default: number }>;
-  readonly parts: number;
-  readonly steps: number;
-}
-
-export interface SceneMessage {
-  readonly generationId: string;
-  readonly fragments: { readonly html: string; readonly css: string; readonly js: string };
-  readonly spec: ProbeSpec;
-  readonly sdkVersion: string;
-  readonly concept: string;
-  readonly description: string;
-}
-
-export interface FallbackMessage {
-  readonly generationId: string | null;
-  readonly reason: 'plan' | 'scene' | 'model' | 'timeout' | 'off' | 'limit';
-  /** The reviewed figure for the same concept, when there is one. */
-  readonly standard: (Omit<SceneMessage, 'generationId'> & { readonly id: string }) | null;
-}
+export type { FallbackMessage, ProbeResponse, SceneMessage, Skeleton } from './protocol';
 
 export const RETENTION = {
   noteText: 'The request and any note text are sent to the model provider for the plan call and are not stored by this service or written to logs or records.',
