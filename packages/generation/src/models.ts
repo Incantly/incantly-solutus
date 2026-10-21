@@ -119,7 +119,7 @@ export interface AnthropicOptions {
   readonly models?: Partial<Record<CallPurpose, string>>;
   readonly effort?: Partial<Record<CallPurpose, Effort>>;
   readonly baseUrl?: string;
-  /** Per call, including the whole stream. */
+  /** Per silent gap: each stream read resets it, so a stream that keeps arriving may run as long as it needs. */
   readonly timeoutMs?: number;
   /** Tries after a busy or dropped response that streamed no text yet. */
   readonly retries?: number;
@@ -188,10 +188,20 @@ export class AnthropicClient implements ModelClient {
 
   private async once(call: ModelCall, onFirstText: () => void): Promise<ModelReply> {
     const started = Date.now();
-    const timeout = AbortSignal.timeout(this.options.timeoutMs ?? 60_000);
-    const signal = call.signal ? AbortSignal.any([call.signal, timeout]) : timeout;
+    const timeoutMs = this.options.timeoutMs ?? 60_000;
+    // An absolute cap kills healthy long scene streams: a rich scene can
+    // stream past any fixed budget while every event still arrives well
+    // inside it. The cap is per silent gap instead — each read resets it, so
+    // only a stream that goes quiet for timeoutMs actually gets cut.
+    const timeout = new AbortController();
+    let gap = setTimeout(() => timeout.abort(), timeoutMs);
+    const reopenGap = (): void => {
+      clearTimeout(gap);
+      gap = setTimeout(() => timeout.abort(), timeoutMs);
+    };
+    const signal = call.signal ? AbortSignal.any([call.signal, timeout.signal]) : timeout.signal;
     const abortError = () =>
-      timeout.aborted ? new ModelError('timeout', `The model did not finish within ${this.options.timeoutMs ?? 60_000} ms`) : new ModelError('aborted', 'The call was cancelled');
+      timeout.signal.aborted ? new ModelError('timeout', `The model went silent for over ${timeoutMs} ms`) : new ModelError('aborted', 'The call was cancelled');
     let response: Response;
     try {
       response = await this.fetcher(`${this.options.baseUrl ?? 'https://api.anthropic.com'}/v1/messages`, {
@@ -218,6 +228,7 @@ export class AnthropicClient implements ModelClient {
     try {
       for (;;) {
         const { done, value } = await reader.read();
+        reopenGap();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
         let boundary = buffer.indexOf('\n\n');
@@ -238,6 +249,7 @@ export class AnthropicClient implements ModelClient {
       throw new ModelError('network', `The stream broke off: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       reader.releaseLock();
+      clearTimeout(gap);
     }
     if (buffer.trim()) {
       const delta = applyEvent(buffer, state);

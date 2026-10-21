@@ -37,7 +37,7 @@ There are two calls. PLAN: return the plan as one JSON object. BUILD: return thr
 
 Rules for every scene
 1. One model drives everything. Compute every number the learner sees from inc.model. Never type a computed number into a label, readout or sentence.
-2. Every adjustable quantity is an inc.param with the plan's name, bounds and default; at most three. Never write inputs, sliders, buttons, listeners, timers or animation loops.
+2. Every adjustable quantity is an inc.param with the plan's name, bounds and default; at most three. Never write inputs, sliders, buttons, listeners, timers or animation loops. Declare every inc.param before anything that reads it: an inc.formula string, an at/set value or a readout function may only name params already declared above it, with that exact spelling.
 3. Declare everything once, at the top level: params, model, stages, elements, parts, inc.onFrame, inc.readout, inc.explain, inc.describe, inc.steps. Callbacks only update what already exists; never create elements inside them.
 4. Build shapes once and move them with at, set, rotate and scale. Rebuild path data only when its shape changes. Keep every shape inside its stage at every parameter value.
 5. Animate only from the frame's time and dt. A paused redraw has dt = 0 and must still draw the current state. Every parameter value inside its range, including both ends, must draw without errors, NaN or Infinity; guard the plan's singular points.
@@ -61,9 +61,9 @@ export const PLAN_FORMAT = `PLAN format. Reply with one JSON object in a \`\`\`j
   "parts": ["Named visual parts, at most 8"],
   "moves": "What moves or changes as time passes or parameters change.",
   "steps": ["Two to five teaching steps, one point each"],
-  "singularPoints": [{ "parameterName": 8 }]
+  "singularPoints": []
 }
-One to three parameters with meaningful bounds; list singular points where the model is undefined inside the bounds, or [] when there are none.`;
+One to three parameters with meaningful bounds. Every model output dependsOn entry must name one of model.inputs; time is not an input. List only singular points that fall inside the declared parameter bounds, using the actual parameter name as the key, for example [{ "objectDistance": 8 }]. If an undefined value is outside the allowed range, it is not a singular point for this figure; return [] when there are none. Be concise and return only the fenced JSON, with no explanation before or after it.`;
 
 export const BUILD_FORMAT = `BUILD format. Reply with exactly three fenced blocks and nothing else:
 \`\`\`html

@@ -371,7 +371,7 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
     const host = document.createElement('div');
     host.className = 'figure-container';
     const regenFailed = (): Promise<Extract<FigureGenerationResult, { kind: 'failed' }>> =>
-      Promise.resolve({ kind: 'failed', message: 'Regenerate the figure to remake it.' });
+      Promise.resolve({ kind: 'failed', message: 'Regenerate the figure to remake it.', reason: 'remade', level: 'text' });
     const editor = createEditor(host, '<p></p>', regenFailed);
     editor.commands.insertContent(content);
     const turn: Turn = { editor, host, generate: regenFailed };
@@ -807,7 +807,7 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
         previewCopy.textContent = result.message;
         activeChat.messages.push({ role: 'assistant', content: result.message });
         saveChats();
-        recordDebug({ kind: 'error', label: 'fallback', message: result.message });
+        recordDebug({ kind: 'error', label: 'fallback', message: result.message, body: { prompt: request } });
       }
       return result;
     };
