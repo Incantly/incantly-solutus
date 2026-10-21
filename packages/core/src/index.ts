@@ -54,3 +54,4 @@ export type {
   SandboxProbeOptions,
 } from './sandbox/adapter';
 export { inThreadAdapter, mountInThread } from './engine/in-thread-adapter';
+export { contentRef } from './sandbox/sha256';

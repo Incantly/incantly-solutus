@@ -83,3 +83,8 @@ export function base64(bytes: Uint8Array): string {
 export function cspHash(text: string): string {
   return `'sha256-${base64(sha256(new TextEncoder().encode(text)))}'`;
 }
+
+/** A content reference for stored text: 'sha256:' and the hex digest. */
+export function contentRef(text: string): string {
+  return `sha256:${[...sha256(new TextEncoder().encode(text))].map((b) => b.toString(16).padStart(2, '0')).join('')}`;
+}
