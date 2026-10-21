@@ -32,6 +32,7 @@ const { values } = parseArgs({
   },
 });
 
+const say = (text: string) => process.stdout.write(`${text}\n`);
 const dir = values.dir;
 mkdirSync(dir, { recursive: true });
 const path = (name: string) => join(dir, name);
@@ -57,7 +58,7 @@ switch (command) {
   case 'plan-prompts': {
     const items = planItems(requests());
     write('plan-prompts.json', items);
-    console.log(`${items.length} plan prompts, ${Math.round(items.reduce((n, i) => n + i.prompt.length, 0) / items.length)} characters each on average`);
+    say(`${items.length} plan prompts, ${Math.round(items.reduce((n, i) => n + i.prompt.length, 0) / items.length)} characters each on average`);
     break;
   }
   case 'check-plans': {
@@ -65,8 +66,8 @@ switch (command) {
     const outcomes = checkPlans(items, replies());
     write('plan-check.json', outcomes);
     const passed = outcomes.filter((o) => o.plan).length;
-    console.log(`${passed}/${outcomes.length} plans passed`);
-    for (const o of outcomes.filter((o) => !o.plan)) console.log(`  ${o.id}: ${o.problems.map((p) => `${p.rule} (${p.path})`).join(', ')}`);
+    say(`${passed}/${outcomes.length} plans passed`);
+    for (const o of outcomes.filter((o) => !o.plan)) say(`  ${o.id}: ${o.problems.map((p) => `${p.rule} (${p.path})`).join(', ')}`);
     break;
   }
   case 'check-scenes':
@@ -81,10 +82,10 @@ switch (command) {
       const check = await checkScene(reply.id, plan, reply.text, previous?.get(reply.id), reply.model ?? values.tag);
       records.push({ id: reply.id, reply, check });
       const status = check.passed ? 'pass' : `FAIL ${check.failed}: ${check.report?.summary ?? ''}`;
-      console.log(`${reply.id.padEnd(28)} ${String(check.jsLines).padStart(4)} lines ${status}`);
+      say(`${reply.id.padEnd(28)} ${String(check.jsLines).padStart(4)} lines ${status}`);
     }
     write(`${command === 'check-scenes' ? 'scene' : 'repair'}-check-${values.tag}.json`, records);
-    console.log(`${records.filter((r) => r.check.passed).length}/${records.length} passed`);
+    say(`${records.filter((r) => r.check.passed).length}/${records.length} passed`);
     break;
   }
   case 'workflow': {
@@ -135,10 +136,10 @@ switch (command) {
       '',
     ].join('\n');
     writeFileSync(path(`${name}.workflow.js`), script);
-    console.log(`${path(`${name}.workflow.js`)}: ${prompts.length} prompts`);
+    say(`${path(`${name}.workflow.js`)}: ${prompts.length} prompts`);
     break;
   }
   default:
-    console.error('Commands: plan-prompts, check-plans, check-scenes, check-repairs, workflow');
+    process.stderr.write('Commands: plan-prompts, check-plans, check-scenes, check-repairs, workflow\n');
     process.exit(1);
 }
