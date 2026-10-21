@@ -246,7 +246,8 @@ function createWorld(ctx: KitContext, raw: Physics2DOptions): World2D {
     const group = painter.body(body, tone, raw.label);
     body.handle = handleFor(body, group);
     bodies.set(body.handle, body);
-    if (draggable) grab(body, raw.label === undefined ? name : String(raw.label));
+    // The hint names what the learner can drag: its label, or plainly what it is.
+    if (draggable) grab(body, raw.label === undefined ? `the ${kind === 'polygon' ? 'shape' : kind}` : String(raw.label));
     if (!fixed) {
       if (body.x < 0 || body.x > view.width || body.y < 0 || body.y > view.height) {
         ctx.warn(`${name} starts at [${body.x.toFixed(2)}, ${body.y.toFixed(2)}], outside the ${view.width.toFixed(1)} m by ${view.height.toFixed(1)} m world; positions are in metres from the bottom left`);

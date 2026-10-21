@@ -268,6 +268,8 @@ export class Painter {
     set.reference = Math.max(largest, set.reference * 0.97);
     const perNewton = set.scale ?? (set.reference > 0 ? 80 / set.reference : 0);
     const [sx, sy] = this.view.toStage(body.x, body.y);
+    // Labels already placed this draw, so arrows that point the same way do not print over each other.
+    const placed: Array<{ x: number; y: number; w: number }> = [];
     set.items.forEach((item, i) => {
       const [fx, fy] = forces[i]!;
       const size = Math.hypot(fx, fy);
@@ -288,8 +290,17 @@ export class Painter {
       if (item.label) {
         const ux = dx / length;
         const uy = dy / length;
-        item.label.set({ x: sx + dx + ux * 6, y: sy + dy + uy * 6 + 4, 'text-anchor': Math.abs(ux) < 0.3 ? 'middle' : ux > 0 ? 'start' : 'end' });
-        item.label.text(`${item.kind} ${size < 100 ? size.toFixed(1) : Math.round(size)} N`);
+        const text = `${item.kind} ${size < 100 ? size.toFixed(1) : Math.round(size)} N`;
+        const anchor = Math.abs(ux) < 0.3 ? 'middle' : ux > 0 ? 'start' : 'end';
+        const w = text.length * 6.2;
+        const x = sx + dx + ux * 6;
+        let y = sy + dy + uy * 6 + 4;
+        const left = anchor === 'start' ? x : anchor === 'end' ? x - w : x - w / 2;
+        const step = uy < 0 ? -13 : 13;
+        for (let tries = 0; tries < 6 && placed.some((p) => Math.abs(p.y - y) < 12 && left < p.x + p.w && p.x < left + w); tries++) y += step;
+        placed.push({ x: left, y, w });
+        item.label.set({ x, y, 'text-anchor': anchor });
+        item.label.text(text);
       }
     });
   }
