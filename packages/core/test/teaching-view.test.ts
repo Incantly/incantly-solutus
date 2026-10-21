@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ManualClock, mountTrusted, type MountedFigure } from '../src';
+import { SETTLE_ANNOUNCE_MS } from '../src/renderer/renderer';
 import { PART_HINT } from '../src/renderer/teaching';
 
 const SCENE = {
@@ -254,6 +255,60 @@ describe('teaching view: part highlighting', () => {
   });
 });
 
+describe('renderer announcements', () => {
+  it('announces the readouts once a learner change settles, not on every input or frame', () => {
+    vi.useFakeTimers();
+    try {
+      const container = document.createElement('div');
+      document.body.append(container);
+      const clock = new ManualClock();
+      const figure = mountTrusted(
+        container,
+        {
+          html: "<div id='s'></div>",
+          css: '',
+          js: `
+            const k = inc.param('k', { min: 0, max: 10, step: 1, value: 1, label: 'K' });
+            inc.svg('#s', { viewBox: [0, 0, 10, 10], title: 'K' });
+            inc.readout({ Double: () => String(k.value * 2), Time: () => 'always changing' });
+          `,
+        },
+        { clock, visibility: 'external', autoplay: false },
+      );
+      mounted.push(figure);
+      clock.runUntilIdle();
+      const live = figure.root.querySelector<HTMLElement>(':scope > [aria-live]')!;
+      expect(figure.root.querySelector('.inc-readouts')?.hasAttribute('aria-live')).toBe(false);
+      const range = figure.root.querySelector<HTMLInputElement>('input[type=range]')!;
+      for (const value of [2, 3, 4]) {
+        range.value = String(value);
+        range.dispatchEvent(new Event('input', { bubbles: true }));
+        clock.runUntilIdle();
+        vi.advanceTimersByTime(SETTLE_ANNOUNCE_MS / 2);
+      }
+      expect(live.textContent).toBe('');
+      vi.advanceTimersByTime(SETTLE_ANNOUNCE_MS);
+      expect(live.textContent).toBe('Double 8. Time always changing.');
+
+      // Back to the same readouts: nothing new to say.
+      live.textContent = '';
+      range.value = '4';
+      range.dispatchEvent(new Event('input', { bubbles: true }));
+      vi.advanceTimersByTime(SETTLE_ANNOUNCE_MS * 2);
+      expect(live.textContent).toBe('');
+
+      // Destroy cancels a pending announcement.
+      range.value = '5';
+      range.dispatchEvent(new Event('input', { bubbles: true }));
+      figure.destroy();
+      mounted.pop();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('teaching view: text alternative and motion preferences', () => {
   it('links the live description to the drawing and keeps a print copy', () => {
     const { root } = mount();
@@ -276,6 +331,7 @@ describe('teaching view: text alternative and motion preferences', () => {
       'inc-teaching',
       'inc-controls',
       'inc-description',
+      'inc-visually-hidden',
     ]);
   });
 

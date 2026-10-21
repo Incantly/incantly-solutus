@@ -171,7 +171,12 @@ export class ControlsView {
   }
 }
 
-/** Live values derived from the model. Text nodes change only when their text does. */
+/**
+ * Live values derived from the model. Text nodes change only when their text
+ * does. It is not a live region: a readout that follows time would talk over
+ * everything while the figure plays. The renderer announces readouts once a
+ * learner's change settles instead.
+ */
 export class ReadoutsView {
   readonly element: HTMLElement;
   private signature = '';
@@ -180,8 +185,6 @@ export class ReadoutsView {
   constructor(private readonly doc: Document) {
     this.element = doc.createElement('div');
     this.element.className = 'inc-readouts';
-    this.element.setAttribute('role', 'status');
-    this.element.setAttribute('aria-live', 'polite');
   }
 
   update(readouts: readonly ReadoutView[]): void {

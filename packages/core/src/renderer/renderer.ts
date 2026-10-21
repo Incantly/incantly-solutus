@@ -25,6 +25,9 @@ export interface RendererOptions {
   readonly onUpdate?: (update: RuntimeUpdate, ui: UiState) => void;
 }
 
+/** How long after a learner's last change the new readouts are announced. */
+export const SETTLE_ANNOUNCE_MS = 750;
+
 export interface RendererStats {
   /** Animation frames requested. */
   frameRequests: number;
@@ -55,6 +58,9 @@ export class FigureRenderer {
   private readonly teaching: TeachingView;
   private readonly idea: HTMLElement;
   private readonly errorBanner: HTMLElement;
+  private readonly announcer: HTMLElement;
+  private announceTimer: ReturnType<typeof setTimeout> | null = null;
+  private announceBaseline = '';
   private readonly unsubscribe: () => void;
   private observer: IntersectionObserver | null = null;
   private frameHandle: number | null = null;
@@ -83,6 +89,10 @@ export class FigureRenderer {
     this.errorBanner.className = 'inc-error';
     this.errorBanner.setAttribute('role', 'alert');
     this.errorBanner.hidden = true;
+    this.announcer = doc.createElement('p');
+    this.announcer.className = 'inc-visually-hidden';
+    this.announcer.setAttribute('aria-live', 'polite');
+    this.announcer.setAttribute('aria-atomic', 'true');
     this.readouts = new ReadoutsView(doc);
     const send = this.send;
     this.controls = new ControlsView(doc, options.scope, send, signal);
@@ -104,6 +114,7 @@ export class FigureRenderer {
       this.teaching.element,
       this.controls.element,
       this.teaching.descriptionElement,
+      this.announcer,
     );
 
     this.unsubscribe = options.channel.onUpdate((update) => this.apply(update));
@@ -115,8 +126,28 @@ export class FigureRenderer {
   /** Sends a message to the runtime. Never draws. */
   readonly send = (message: Parameters<RuntimeChannel['send']>[0]): void => {
     if (this.destroyed) return;
+    if (message.type === 'setParam' || message.type === 'setValues' || message.type === 'reset') this.armAnnouncement();
     this.options.channel.send(message);
   };
+
+  /** Waits for the learner to stop changing values, then says what the readouts now show. */
+  private armAnnouncement(): void {
+    if (this.announceTimer === null) this.announceBaseline = this.summary();
+    else clearTimeout(this.announceTimer);
+    this.announceTimer = setTimeout(() => {
+      this.announceTimer = null;
+      if (this.destroyed) return;
+      const text = this.summary();
+      if (text === '' || text === this.announceBaseline) return;
+      this.announcer.textContent = text;
+    }, SETTLE_ANNOUNCE_MS);
+  }
+
+  /** Readouts in one sentence, or the explanation when the figure has no readouts. */
+  private summary(): string {
+    const readouts = this.ui.readouts.map((r) => `${r.label} ${r.text}`).join('. ');
+    return readouts ? `${readouts}.` : (this.ui.explanation ?? '');
+  }
 
   apply(update: RuntimeUpdate): void {
     if (this.destroyed) return;
@@ -164,6 +195,8 @@ export class FigureRenderer {
     this.options.channel.send({ type: 'destroy' });
     this.destroyed = true;
     this.controller.abort();
+    if (this.announceTimer !== null) clearTimeout(this.announceTimer);
+    this.announceTimer = null;
     this.observer?.disconnect();
     this.observer = null;
     if (this.frameHandle !== null) this.clock.cancel(this.frameHandle);
