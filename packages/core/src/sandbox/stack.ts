@@ -18,6 +18,8 @@ export interface StackMap {
   /** Lines of agent code. */
   readonly sceneLines: number;
   readonly shifts: InstrumentedScene['shifts'];
+  /** Only frames in this script count, when the scene is not alone in its script's stack. */
+  readonly file?: string;
 }
 
 /** The first frame of a stack that lies inside the scene, as a fragment location. */
@@ -25,6 +27,7 @@ export function locateInStack(stack: string, map: StackMap): SceneLocation | nul
   // V8: "at f (blob:null/uuid:12:34)" or "at blob:null/uuid:12:34"; JavaScriptCore and Gecko: "f@blob:null/uuid:12:34".
   const pattern = /:(\d+):(\d+)\)?\s*$/;
   for (const raw of stack.split('\n')) {
+    if (map.file !== undefined && !raw.includes(`${map.file}:`)) continue;
     const match = pattern.exec(raw.trim());
     if (!match) continue;
     const line = Number(match[1]) - map.lineOffset;

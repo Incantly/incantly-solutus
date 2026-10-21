@@ -39,5 +39,22 @@ export function createFuel(limit: number = FUEL_PER_STEP): FuelTank {
 }
 
 export function isRunaway(error: unknown): boolean {
-  return error instanceof RunawayError || (error instanceof Error && error.name === 'RunawayError');
+  return error instanceof RunawayError || (isErrorLike(error) && error.name === 'RunawayError');
+}
+
+export interface ErrorLike {
+  readonly name: string;
+  readonly message: string;
+  readonly stack?: string;
+}
+
+/**
+ * Whether a thrown value looks like an Error. Scenes can run in another realm
+ * (a Worker, or the isolated context of the eval probe), where `instanceof
+ * Error` is false for the errors they throw.
+ */
+export function isErrorLike(error: unknown): error is ErrorLike {
+  if (typeof error !== 'object' || error === null) return false;
+  const { name, message } = error as { name?: unknown; message?: unknown };
+  return typeof message === 'string' && typeof name === 'string';
 }

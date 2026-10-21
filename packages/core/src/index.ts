@@ -35,8 +35,10 @@ export { THEME_CSS } from './renderer/theme';
 export { validateScene, formatDiagnostic, hasErrors, SCENE_LIMITS } from './validation';
 export type { Diagnostic, SceneFragments, SceneLimits, SceneValidation, ValidatedScene } from './validation';
 
-export { probeScene } from './probe';
-export type { ProbeCheck, ProbeFailure, ProbeOptions, ProbeReport, ProbeSpec } from './probe';
+export { compileIsolated, ISOLATED_SCRIPT_NAME, probeScene } from './probe';
+export type { IsolatedScene, ProbeCheck, ProbeError, ProbeFailure, ProbeOptions, ProbeReport, ProbeSpec, ProbeStats, ScriptEvaluator } from './probe';
+
+export type { PlanOutput, PlanParameter, SceneKind, ScenePlan, SingularPoint } from './protocol/plan';
 
 export { BRIDGE_VERSION } from './protocol/bridge';
 export type { FrameMessage, HostMessage } from './protocol/bridge';

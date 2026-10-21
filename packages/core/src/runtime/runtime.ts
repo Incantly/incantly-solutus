@@ -26,7 +26,7 @@ import { SceneGraph } from '../scene/graph';
 import { PartRegistry, StageHandle, formatReadable } from '../scene/handles';
 import { createPathHelpers } from '../scene/path';
 import { createParamState, snap, type ParamState } from './params';
-import { isRunaway } from './fuel';
+import { isErrorLike, isRunaway } from './fuel';
 import { mulberry32 } from './random';
 import { advanceTween, type TweenState } from './tween';
 import { createFormula } from './formula';
@@ -634,9 +634,10 @@ export class SceneRuntime {
   record(phase: ErrorPhase, error: unknown): void {
     // A runaway loop is reported as such, wherever it was caught.
     const where = isRunaway(error) ? 'runaway' : phase;
-    const name = error instanceof Error ? error.name : 'Error';
-    const message = clip(error instanceof Error ? error.message : String(error));
-    const stack = error instanceof Error ? error.stack : undefined;
+    // Errors thrown in another realm are not `instanceof Error` here.
+    const name = isErrorLike(error) ? error.name : 'Error';
+    const message = clip(isErrorLike(error) ? error.message : String(error));
+    const stack = isErrorLike(error) && typeof error.stack === 'string' ? error.stack : undefined;
     const location = this.locateError(error);
     const at = location ? { line: location.line, column: location.column } : {};
     if (this.errors.length < 50) this.errors.push({ phase: where, message, name, ...(stack ? { stack } : {}), ...at });
