@@ -101,8 +101,10 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
         </div>
         <div class="setting-group">
           <label for="api-key">API Key (Optional)</label>
-          <p class="setting-description">Your Anthropic API key for direct model access</p>
+          <p class="setting-description">Your Anthropic API key. Leave empty to use the dev server's ANTHROPIC_API_KEY.</p>
           <input type="password" id="api-key" class="setting-input" placeholder="sk-ant-..." autocomplete="off">
+          <button type="button" class="test-key-btn">Test connection</button>
+          <p class="test-key-status" hidden></p>
         </div>
       </div>
     </div>
@@ -175,6 +177,30 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
   settingsModal.addEventListener('click', (e) => {
     if (e.target === settingsModal) {
       settingsModal.hidden = true;
+    }
+  });
+
+  const testKeyBtn = settingsModal.querySelector('.test-key-btn') as HTMLButtonElement;
+  const testKeyStatus = settingsModal.querySelector('.test-key-status') as HTMLParagraphElement;
+  testKeyBtn.addEventListener('click', async () => {
+    testKeyBtn.disabled = true;
+    testKeyStatus.hidden = false;
+    testKeyStatus.className = 'test-key-status pending';
+    testKeyStatus.textContent = 'Checking with Anthropic…';
+    try {
+      const answer = await fetch('/api/dev/models', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ apiKey: apiKeyInput.value || undefined }),
+      });
+      const result = (await answer.json()) as { ok?: boolean; message?: string; source?: string };
+      testKeyStatus.className = `test-key-status ${result.ok ? 'ok' : 'fail'}`;
+      testKeyStatus.textContent = `${result.ok ? '✓' : '✗'} ${result.message ?? answer.statusText} (key source: ${result.source ?? 'unknown'})`;
+    } catch (error) {
+      testKeyStatus.className = 'test-key-status fail';
+      testKeyStatus.textContent = `✗ The check itself failed: ${error instanceof Error ? error.message : String(error)}`;
+    } finally {
+      testKeyBtn.disabled = false;
     }
   });
 

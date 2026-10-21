@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { defineConfig, type Plugin, type ViteDevServer } from 'vite';
+import { defineConfig, loadEnv, type Plugin, type ViteDevServer } from 'vite';
 
 /**
  * The generation service, mounted in the dev server for the playground and its
@@ -9,8 +9,37 @@ import { defineConfig, type Plugin, type ViteDevServer } from 'vite';
  * one whose repairs change nothing. The interactive playground creates an
  * ephemeral Anthropic session at /api/dev/session. Its API key stays only in
  * this process's memory and is addressed from the browser by an opaque id.
+ *
+ * The dev server also serves a key check at /api/dev/models: it calls
+ * Anthropic's models endpoint with the key given in the body, or with the
+ * server's ANTHROPIC_API_KEY env var when no key is given, and reports
+ * whether it works. Shell env vars win over .env files.
  */
 const DEV_SECRET = 'playground-only-secret-never-used-in-production';
+
+function anthropicEnv(): { key: string | null; source: string } {
+  const env = loadEnv('development', process.cwd(), 'ANTHROPIC_');
+  const fromShell = process.env.ANTHROPIC_API_KEY ?? process.env.ANTHROPIC_AUTH_TOKEN;
+  const key = fromShell ?? env.ANTHROPIC_API_KEY ?? env.ANTHROPIC_AUTH_TOKEN ?? null;
+  return { key, source: fromShell ? 'shell' : key ? '.env' : 'none' };
+}
+
+async function keyProbe(key: string): Promise<{ ok: boolean; message: string; models?: string[] }> {
+  try {
+    const answer = await fetch('https://api.anthropic.com/v1/models?limit=100', {
+      headers: { 'x-api-key': key.trim(), 'anthropic-version': '2023-06-01' },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!answer.ok) {
+      return { ok: false, message: `Anthropic answered ${answer.status} (${answer.statusText || 'request failed'}) for that key.` };
+    }
+    const payload = (await answer.json()) as { data?: Array<{ id?: string }> };
+    const models = (payload.data ?? []).map((m) => m.id ?? '').filter(Boolean).sort();
+    return { ok: true, message: `Key works: ${models.length} models visible.`, models };
+  } catch (error) {
+    return { ok: false, message: `Could not reach Anthropic: ${error instanceof Error ? error.message : String(error)}` };
+  }
+}
 
 type Generation = typeof import('@incantly/generation');
 
@@ -77,12 +106,26 @@ function generationService(): Plugin {
           };
           if (path === '/api/dev/session' && req.method === 'POST') {
             const input = (await body(req)) as { apiKey?: unknown; planModel?: unknown; sceneModel?: unknown };
-            if (typeof input.apiKey !== 'string' || input.apiKey.trim().length < 20) return json(400, { message: 'Enter a valid Anthropic API key.' });
+            const givenKey = typeof input.apiKey === 'string' && input.apiKey.trim().length >= 20 ? input.apiKey.trim() : null;
+            const effective = givenKey ?? anthropicEnv().key;
+            if (!effective) {
+              return json(400, { message: 'Enter a valid Anthropic API key, or set ANTHROPIC_API_KEY in the dev server environment.' });
+            }
             if (typeof input.planModel !== 'string' || !models.has(input.planModel)) return json(400, { message: 'Choose a supported planning model.' });
             if (typeof input.sceneModel !== 'string' || !models.has(input.sceneModel)) return json(400, { message: 'Choose a supported scene model.' });
             const id = randomUUID();
-            sessions.set(id, { apiKey: input.apiKey.trim(), planModel: input.planModel, sceneModel: input.sceneModel });
-            return json(201, { id, baseUrl: `/api/session/${id}/v1` });
+            sessions.set(id, { apiKey: effective, planModel: input.planModel, sceneModel: input.sceneModel });
+            return json(201, { id, baseUrl: `/api/session/${id}/v1`, keySource: givenKey !== null ? 'entered' : 'env' });
+          }
+          if (path === '/api/dev/models' && req.method === 'POST') {
+            const input = (await body(req)) as { apiKey?: unknown };
+            const givenKey = typeof input.apiKey === 'string' && input.apiKey !== '' ? input.apiKey.trim() : null;
+            const effective = givenKey ?? anthropicEnv().key;
+            if (!effective) {
+              return json(400, { ok: false, message: 'No key to check: pass an apiKey in the body or set ANTHROPIC_API_KEY on the dev server.' });
+            }
+            const probe = await keyProbe(effective);
+            return json(probe.ok ? 200 : 401, { ...probe, source: givenKey !== null ? 'entered' : anthropicEnv().source });
           }
           const removeSession = /^\/api\/dev\/session\/([\w-]+)$/.exec(path);
           if (removeSession && req.method === 'DELETE') {
