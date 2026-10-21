@@ -331,7 +331,29 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
   };
   window.__playground = handle as unknown as typeof window.__playground;
 
-  async function handleSend(): Promise<void> {
+  /** Everything that failed before or during the launch, shown as one assistant line. */
+  function showAssistantError(message: string): void {
+    const errorMessage = document.createElement('div');
+    errorMessage.className = 'message assistant';
+    errorMessage.innerHTML = `
+      <div class="message-avatar">AI</div>
+      <div class="message-content"><p class="generation-error"></p></div>
+    `;
+    (errorMessage.querySelector('.generation-error') as HTMLElement).textContent = message;
+    if (welcomeScreen.parentNode) welcomeScreen.remove();
+    messagesContainer.append(errorMessage);
+    errorMessage.scrollIntoView({ block: 'end', behavior: 'smooth' });
+  }
+
+  function settleStages(plan: HTMLElement, scene: HTMLElement, outputs: Array<HTMLDivElement>): void {
+    for (const stage of [plan, scene]) {
+      const indicator = stage.querySelector('.stage-indicator');
+      if (indicator) (indicator as HTMLElement).hidden = true;
+    }
+    for (const output of outputs) output.classList.add('finished');
+  }
+
+  async function launchGeneration(): Promise<void> {
     const request = inputBox.value.trim();
     if (!request) return;
 
@@ -468,6 +490,7 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
       });
       
       if (result.kind === 'figure') {
+        settleStages(planStage, sceneStage, [planOutput, sceneOutput]);
         validationStatus.textContent = result.notice ?? '✓ Probe passed';
         validationStatus.style.color = 'green';
 
@@ -484,6 +507,12 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
         editor.commands.generateFigure({ prompt: request }, editor.state.doc.content.size);
         activeChat.messages.push({ role: 'assistant', content: 'Generated interactive figure.' });
       } else {
+        // The fallback is the outcome: it never reaches the 'checking' stage,
+        // so reveal the validation stage and stop the pulsing indicators —
+        // otherwise the failure would sit hidden under a forever-pulsing plan.
+        settleStages(planStage, sceneStage, [planOutput, sceneOutput]);
+        validationStage.hidden = false;
+        sceneStage.hidden = true;
         validationStatus.textContent = `✗ ${result.message}`;
         validationStatus.style.color = 'red';
         activeChat.messages.push({ role: 'assistant', content: result.message });
@@ -492,6 +521,16 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
     };
 
     assistantMessage.scrollIntoView({ block: 'end', behavior: 'smooth' });
+  }
+
+  async function handleSend(): Promise<void> {
+    try {
+      await launchGeneration();
+    } catch (error) {
+      // A throw here means nothing was generated at all — the learner must
+      // see why instead of a composer that silently swallows the send.
+      showAssistantError(error instanceof Error ? error.message : String(error));
+    }
   }
 
   sendBtn.addEventListener('click', handleSend);
