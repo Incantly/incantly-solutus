@@ -222,7 +222,7 @@ const MOUNT_ONLY: ReadonlySet<string> = new Set([
 /** Handle methods that create a new element. Created once, then moved. */
 const CREATES_ELEMENTS: Readonly<Partial<Record<HandleKind, ReadonlySet<string>>>> = {
   Stage: new Set(['group', 'path', 'line', 'circle', 'rect', 'text', 'polyline', 'part', 'connector', 'callout', 'repeat', 'dots']),
-  Space3D: new Set(['box', 'sphere', 'cylinder', 'cone', 'plane', 'torus', 'mesh', 'group', 'line', 'arrow', 'arc', 'point', 'label', 'grid', 'axes', 'fieldLines', 'part', 'drag']),
+  Space3D: new Set(['box', 'sphere', 'cylinder', 'cone', 'plane', 'torus', 'tube', 'mesh', 'group', 'line', 'arrow', 'arc', 'point', 'label', 'grid', 'axes', 'fieldLines', 'part', 'drag']),
   Graph3D: new Set(['surface', 'parametric', 'curve', 'point', 'vector', 'line', 'plane', 'label', 'part']),
   Surface3D: new Set(['section']),
   World2D: new Set(['ball', 'box', 'polygon', 'ramp', 'spring', 'rope', 'rod', 'hinge', 'pulley', 'tank', 'field', 'forces', 'onHit', 'onTouch']),
@@ -379,6 +379,8 @@ interface Context {
   readonly owner: Binding | null;
   /** Inside a callback that runs every frame or on every change. */
   readonly callback: string | null;
+  /** The SDK call whose arguments these are: a function among them becomes that call's callback. */
+  readonly pending: string | null;
   /** Inside a readout, explain or describe callback. */
   readonly text: boolean;
   readonly depth: number;
@@ -523,7 +525,7 @@ class JsValidator {
     }
     if (program) {
       const scope = new Scope(null);
-      const ctx: Context = { scope, inFunction: false, owner: null, callback: null, text: false, depth: 0 };
+      const ctx: Context = { scope, inFunction: false, owner: null, callback: null, pending: null, text: false, depth: 0 };
       this.declareBlock(program.body, scope);
       for (const statement of program.body) this.statement(statement, ctx);
       this.checkRecursion();
@@ -1089,6 +1091,9 @@ class JsValidator {
       scope: new Scope(ctx.scope),
       inFunction: true,
       owner: owner ?? ctx.owner,
+      // A function handed to the SDK runs later, on a frame, a change, a drag or a button.
+      callback: ctx.pending ?? ctx.callback,
+      pending: null,
     });
     for (const param of node.params) {
       for (const id of patternIdentifiers(param)) this.declare(inner.scope, id.name, 'param', id.start);
@@ -1248,14 +1253,15 @@ class JsValidator {
 
     // Context for the arguments: a function handed to the SDK runs later, on a
     // frame, a change, a drag or a button, so it must not create elements.
+    // Other arguments are evaluated now, in the caller's own context.
     let argumentContext = ctx;
     if (receiver.t === 'inc' && method !== null) {
       this.incCall(method, node, ctx);
-      argumentContext = { ...ctx, callback: `inc.${method}`, text: ctx.text || TEXT_INC_CALLS.has(method) };
+      argumentContext = { ...ctx, pending: `inc.${method}`, text: ctx.text || TEXT_INC_CALLS.has(method) };
     }
-    if (receiver.t === 'ns' && method !== null) argumentContext = { ...ctx, callback: `inc.${receiver.ns}.${method}` };
+    if (receiver.t === 'ns' && method !== null) argumentContext = { ...ctx, pending: `inc.${receiver.ns}.${method}` };
     if (receiver.t === 'handle' && method !== null) {
-      argumentContext = { ...ctx, callback: `${receiver.kind.charAt(0).toLowerCase()}${receiver.kind.slice(1)}.${method}` };
+      argumentContext = { ...ctx, pending: `${receiver.kind.charAt(0).toLowerCase()}${receiver.kind.slice(1)}.${method}` };
       const creates = CREATES_ELEMENTS[receiver.kind];
       if (creates?.has(method) && ctx.callback) {
         this.report(
