@@ -243,6 +243,12 @@ export class SceneRuntime {
     }
   }
 
+  /** Step navigation. The teaching layer fills this in. */
+  step(_action: 'enter' | 'next' | 'prev' | 'exit' | 'goto', _index?: number): void {}
+
+  /** Directs attention to a registered part. The teaching layer fills this in. */
+  focusPart(_name: string | null): void {}
+
   /** Rebuilds the scene at time zero, keeping the learner's values. */
   restart(): RuntimeUpdate {
     return this.rebuild(this.values());
