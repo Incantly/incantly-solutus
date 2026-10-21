@@ -31,6 +31,7 @@ Incantly turns a concept in a learner's notes into a safe, interactive teaching 
 - [ADR 004](architecture/decisions/004-expression-evaluator.md): formulas compile to closures through a small Pratt parser.
 - [ADR 005](architecture/decisions/005-content-security-policy.md): the figure frame's content security policy.
 - [ADR 006](architecture/decisions/006-scene-versioning.md): every stored scene carries SDK and schema versions.
+- [ADR 007](architecture/decisions/007-node-storage.md): how a figure is stored in a note, by content reference and outside the undo history.
 
 ### SDK contracts
 
