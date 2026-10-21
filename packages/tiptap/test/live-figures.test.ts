@@ -13,6 +13,7 @@ import {
   createFixtureDocument,
   figureScheduler,
   figureViews,
+  flushFigures,
   type FigureErrorReport,
   type FigureNodeView,
   type ObserverFactory,
@@ -308,6 +309,20 @@ describe('live figures: persistence', () => {
     reopened.observer.set([reopened.figures()[1]!], true);
     await vi.advanceTimersByTimeAsync(100);
     expect(reopened.fake.mounts[0]!.options).toMatchObject({ values: { amplitude: 3.5 }, step: 2 });
+  });
+
+  it('saves pending changes on request, before the note is read to be stored', async () => {
+    const { editor, fake, observer, figures, attrs } = setup();
+    observer.set([figures()[0]!], true);
+    await vi.advanceTimersByTimeAsync(100);
+    fake.mounts[0]!.options.onValues?.({ k: 4 });
+    fake.mounts[0]!.options.onStep?.(null);
+    expect(attrs(0).values).toEqual({});
+    flushFigures(editor);
+    expect(attrs(0).values).toEqual({ k: 4 });
+    // Nothing is left to save afterwards.
+    await vi.advanceTimersByTimeAsync(600);
+    expect(attrs(0).values).toEqual({ k: 4 });
   });
 
   it('saves pending changes when the editor is destroyed', async () => {

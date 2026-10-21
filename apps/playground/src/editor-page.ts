@@ -1,6 +1,6 @@
 import { inThreadAdapter, sandboxAdapter } from '@incantly/core';
 import { REFERENCE_SCENES } from '@incantly/core/scenes';
-import { FigureNode, MemoryFigureStore, countFigures, createFixtureDocument, figureScheduler, type FigureErrorReport } from '@incantly/tiptap';
+import { FigureNode, MemoryFigureStore, countFigures, createFixtureDocument, figureScheduler, flushFigures, type FigureErrorReport } from '@incantly/tiptap';
 import { Editor, type JSONContent } from '@tiptap/core';
 import Image from '@tiptap/extension-image';
 import StarterKit from '@tiptap/starter-kit';
@@ -84,6 +84,8 @@ export function mountEditorPage(root: HTMLElement, params: URLSearchParams): voi
     scheduler: () => (editor ? figureScheduler(editor)?.stats : undefined),
     /** Closes the note and opens it again from what was saved. */
     reopen: () => {
+      // Save what the learner changed but has not been saved yet, then read the note.
+      flushFigures(editor);
       const saved = editor.getJSON();
       editor.destroy();
       element.replaceChildren();

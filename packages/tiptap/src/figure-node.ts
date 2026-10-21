@@ -97,6 +97,16 @@ function schedulerFor(editor: Editor, options: SchedulerOptions): LiveFigureSche
   return scheduler;
 }
 
+/**
+ * Saves what learners changed in the editor's figures and has not been saved
+ * yet. Call it before reading the document to store it; destroying the editor
+ * does it too, but only after the document has been read.
+ */
+export function flushFigures(editor: Editor): void {
+  if (editor.isDestroyed) return;
+  editor.view.dom.querySelectorAll('figure.incantly-figure').forEach((element) => figureViews.get(element)?.flush());
+}
+
 /** The live-figure scheduler of an editor, if it has created one. */
 export function figureScheduler(editor: Editor): LiveFigureScheduler | undefined {
   return schedulers.get(editor);
@@ -222,7 +232,7 @@ export const FigureNode = Node.create<FigureNodeOptions>({
   onDestroy() {
     // Save what learners changed while the view still exists, then stop the scheduler.
     const scheduler = schedulers.get(this.editor);
-    this.editor.view.dom.querySelectorAll('figure.incantly-figure').forEach((element) => figureViews.get(element)?.flush());
+    flushFigures(this.editor);
     scheduler?.destroy();
     schedulers.delete(this.editor);
   },

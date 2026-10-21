@@ -7,7 +7,7 @@ export {
   sanitizeValues,
 } from './attributes';
 export type { FigureAttributes, FigureFragments, FigureMeta } from './attributes';
-export { FigureNode, PlaceholderView, figureScheduler, newFigureId } from './figure-node';
+export { FigureNode, PlaceholderView, figureScheduler, flushFigures, newFigureId } from './figure-node';
 export type { FigureNodeOptions, SnapshotSource } from './figure-node';
 export { ABANDON_MS, FIGURE_TRANSACTION, FigureNodeView, figureViews } from './node-view';
 export type { FigureErrorReport, FigureSignal, FigureViewOptions, FigureViewState } from './node-view';
