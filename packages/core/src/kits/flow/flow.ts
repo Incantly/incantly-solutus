@@ -184,7 +184,8 @@ export class FlowKit implements Flow {
     this.nodes.set(id, record);
     this.setLabel(record, label);
     // Each node is a part named by its id, so a step can focus it and the learner can point at it.
-    this.stage.part(id, group, { label: label.trim() === '' ? id : label, ...(options.info ? { info: options.info } : {}) });
+    // A node's tone marks emphasis, not a category, so it earns no legend entry.
+    this.stage.part(id, group, { label: label.trim() === '' ? id : label, ...(options.info ? { info: options.info } : {}) }, { legend: false });
     this.stale = true;
     return this.nodeHandle(record);
   }

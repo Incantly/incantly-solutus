@@ -156,6 +156,13 @@ export interface PartRecord {
   readonly label: string;
   readonly info: string;
   readonly node: VNode;
+  /** Whether its colour may earn a legend entry; kits whose tones only mark emphasis say no. */
+  readonly legend: boolean;
+}
+
+/** How a kit registers a part beyond what scenes can say. */
+export interface PartUse {
+  readonly legend?: boolean;
 }
 
 export class PartRegistry {
@@ -163,7 +170,7 @@ export class PartRegistry {
 
   constructor(private readonly graph: SceneGraph) {}
 
-  register(name: string, handle: Handle, options: PartOptions = {}): void {
+  register(name: string, handle: Handle, options: PartOptions = {}, use: PartUse = {}): void {
     if (typeof name !== 'string' || name.trim() === '' || name.length > 60) {
       throw new SceneApiError('A part needs a short, non-empty name');
     }
@@ -171,7 +178,7 @@ export class PartRegistry {
     const node = nodeOf(handle);
     const label = options.label ?? name;
     const info = options.info ?? '';
-    this.parts.set(name, { name, label, info, node });
+    this.parts.set(name, { name, label, info, node, legend: use.legend !== false });
     this.graph.markPart(node, name, label, info);
   }
 }
@@ -245,8 +252,8 @@ export class StageHandle implements Stage {
     return new PolylineElementHandle(this.graph, this.make('polyline', options)).points(points);
   }
 
-  part<H extends Handle>(name: string, handle: H, options?: PartOptions): H {
-    this.parts.register(name, handle, options);
+  part<H extends Handle>(name: string, handle: H, options?: PartOptions, use?: PartUse): H {
+    this.parts.register(name, handle, options, use);
     return handle;
   }
 

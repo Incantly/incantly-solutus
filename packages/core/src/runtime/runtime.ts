@@ -1105,7 +1105,7 @@ export class SceneRuntime {
     }));
     // Parts in accent tones name what each colour means, when there are two or more.
     const listed = new Set(out.map((entry) => entry.id));
-    const accented = [...this.parts.parts.values()].filter((p) => p.node.tone && ACCENTS.has(p.node.tone) && !listed.has(p.node.id));
+    const accented = [...this.parts.parts.values()].filter((p) => p.legend && p.node.tone && ACCENTS.has(p.node.tone) && !listed.has(p.node.id));
     if (accented.length >= 2 && new Set(accented.map((p) => p.node.tone)).size >= 2) {
       for (const p of accented) {
         out.push({ id: p.node.id, label: p.label, tone: p.node.tone, visible: !p.node.hidden, toggle: false, part: p.name, dashed: p.node.dashed });
