@@ -42,7 +42,8 @@ export default defineConfig([
         'error',
         { argsIgnorePattern: '^_', varsIgnorePattern: '^_', caughtErrorsIgnorePattern: '^_' },
       ],
-      'no-console': ['error', { allow: ['warn', 'error'] }],
+      // Release hygiene (RM-5): the engine, bridge and host integration never write to the console.
+      'no-console': 'error',
       // Object-literal handles keep their own `this` for chaining, so the owner is aliased by name.
       '@typescript-eslint/no-this-alias': ['error', { allowedNames: ['runtime', 'graph', 'renderer', 'host'] }],
       eqeqeq: ['error', 'always'],
