@@ -101,7 +101,7 @@ export { formatDiagnostic, hasErrors, LineIndex } from './diagnostics';
 export type { Diagnostic, Fragment, Position, Severity } from './diagnostics';
 export { FUEL_FUNCTION, KEY_FUNCTION, instrumentSceneJs, originalColumn } from './instrument';
 export type { ColumnShift, InstrumentedScene } from './instrument';
-export { BLOCKED_PROPERTIES, validateSceneJs } from './js';
+export { validateSceneJs } from './js';
 export type { JsInfo, JsValidation, StageReference } from './js';
 export { validateSceneHtml } from './html';
 export type { HtmlValidation } from './html';

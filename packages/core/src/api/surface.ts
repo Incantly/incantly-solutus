@@ -248,6 +248,23 @@ export const TONES = ['lo', 'mid', 'hi', 'lit', 'faint', 'a', 'b', 'c'] as const
 // Fails to compile if a tone is added to the type but not to the list.
 const _everyTone: Exclude<Tone, (typeof TONES)[number]> extends never ? true : false = true;
 
+/** Property names that lead to constructors, prototypes or other functions' internals. */
+export const BLOCKED_PROPERTIES: ReadonlySet<string> = new Set([
+  'constructor',
+  'prototype',
+  '__proto__',
+  '__defineGetter__',
+  '__defineSetter__',
+  '__lookupGetter__',
+  '__lookupSetter__',
+  'caller',
+  'callee',
+  'arguments',
+  'call',
+  'apply',
+  'bind',
+]);
+
 /** Free identifiers a scene may reference besides its own declarations. */
 export const ALLOWED_GLOBALS = ['inc', 'Math', 'Number', 'isFinite', 'isNaN', 'Infinity', 'NaN', 'undefined'] as const;
 

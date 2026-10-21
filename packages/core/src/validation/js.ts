@@ -3,6 +3,7 @@ import {
   ALLOWED_GLOBALS,
   ALLOWED_MATH,
   ALLOWED_NUMBER,
+  BLOCKED_PROPERTIES,
   HANDLES,
   INC_FUNCTIONS,
   INC_NAMESPACES,
@@ -180,22 +181,6 @@ const MATH_MEMBERS: ReadonlySet<string> = new Set(ALLOWED_MATH);
 const NUMBER_MEMBERS: ReadonlySet<string> = new Set(ALLOWED_NUMBER);
 const TONE_SET: ReadonlySet<string> = new Set(TONES);
 
-/** Property names that lead to constructors, prototypes or other functions' internals. */
-export const BLOCKED_PROPERTIES: ReadonlySet<string> = new Set([
-  'constructor',
-  'prototype',
-  '__proto__',
-  '__defineGetter__',
-  '__defineSetter__',
-  '__lookupGetter__',
-  '__lookupSetter__',
-  'caller',
-  'callee',
-  'arguments',
-  'call',
-  'apply',
-  'bind',
-]);
 
 /** inc calls that declare the scene, so they belong at the top level. */
 const MOUNT_ONLY: ReadonlySet<string> = new Set([

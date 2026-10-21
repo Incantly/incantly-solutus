@@ -13,8 +13,9 @@ import { parse, type AnyNode, type Program } from 'acorn';
  * agent's own and columns map back through `originalColumn`.
  */
 
-export const FUEL_FUNCTION = '__incFuel';
-export const KEY_FUNCTION = '__incKey';
+import { FUEL_FUNCTION, KEY_FUNCTION } from './names';
+
+export { FUEL_FUNCTION, KEY_FUNCTION };
 
 interface Insertion {
   readonly offset: number;
