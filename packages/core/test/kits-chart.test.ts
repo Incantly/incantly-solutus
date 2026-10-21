@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Chart, ChartOptions, Inc } from '../src/api/types';
+import type { Chart, ChartOptions, ChartSeries, Inc } from '../src/api/types';
 import { kit } from '../src/kits/chart';
 import { areaPath, linePath, slicePath } from '../src/kits/chart/chart';
 import { binCounts, boxStats, niceRange, niceStep, quantile, regression, tickText, ticks, valueText } from '../src/kits/chart/scale';
@@ -203,6 +203,34 @@ describe('bar, stacked, line and area charts (DG-3)', () => {
     // The remaining series takes the whole width of each column.
     const smallBars = shown(children(runtime, small!, 'rect'));
     expect(num(smallBars[0]!, 'width')).toBeGreaterThan(60);
+  });
+
+  it('shows, hides and recolours series from their handles', () => {
+    let series!: ChartSeries;
+    const { runtime } = run((inc) => {
+      const show = inc.toggle('show', { value: true });
+      const chart = inc.chart('#c', { title: 'Handles', categories: ['a'] });
+      series = chart.series('s', [1]);
+      inc.onParamChange(() => series.show(show.on).tone(show.on ? 'b' : 'a'));
+    });
+    const group = seriesGroups(runtime)[0]!;
+    runtime.setParam('show', 0);
+    runtime.tick(0);
+    expect(group.hidden).toBe(true);
+    expect(group.tone).toBe('a');
+    runtime.setParam('show', 1);
+    runtime.tick(0);
+    expect(group.hidden).toBe(false);
+    expect(series.name).toBe('s');
+  });
+
+  it('draws an empty chart without errors', () => {
+    for (const kind of ['bar', 'line', 'pie', 'histogram', 'box', 'scatter'] as const) {
+      const { runtime, mount } = chartScene({ title: 'Empty', kind }, () => undefined);
+      expect(mount.ui.error).toBeNull();
+      expect(runtime.uiState().error).toBeNull();
+      expect(runtime.graph.diagnostics).toEqual([]);
+    }
   });
 
   it('highlights one category and dims the others, and prints values on request', () => {

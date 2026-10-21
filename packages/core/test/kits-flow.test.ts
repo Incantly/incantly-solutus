@@ -103,7 +103,7 @@ describe('flow layout (DG-4)', () => {
     expect(layout.crossings).toBe(0);
     const segments = edges.map((e) => ({ a: e.from, b: e.to }));
     expect(countCrossings(layout.ranks, segments)).toBe(0);
-    // K3,3 cannot be uncrossed: three crossings is the least possible in two layers.
+    // K3,3 cannot be uncrossed: in two layers every order crosses 3 × 3 = 9 times.
     const k33 = layoutFlow(nodes, ['x', 'y', 'z'].flatMap((t) => ['a', 'b', 'c'].map((f) => edge(f, t))), 'down');
     expect(k33.crossings).toBe(9);
   });
@@ -308,6 +308,12 @@ describe('inc.flow', () => {
     const last = kids(runtime, kids(runtime, edgeLayer)[6]!)[0]!;
     expect(last.dashed).toBe(true);
     expect(last.classValue).toContain('inc-flow');
+  });
+
+  it('draws nothing, and reports nothing, before it has nodes', () => {
+    const { runtime, mount } = run((inc) => void inc.flow('#f', { title: 'Empty' }));
+    expect(mount.ui.error).toBeNull();
+    expect(runtime.graph.diagnostics).toEqual([]);
   });
 
   it('refuses unknown and repeated ids plainly', () => {

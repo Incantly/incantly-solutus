@@ -315,6 +315,7 @@ export class FlowKit implements Flow {
   private arrange(): void {
     this.stale = false;
     const list = [...this.nodes.values()];
+    if (list.length === 0) return;
     const layout = layoutFlow(
       list.map((n) => ({ id: n.id, w: n.w, h: n.h, ...(n.layer !== undefined ? { layer: n.layer } : {}) })),
       this.edges.map((e) => ({ from: e.from.id, to: e.to.id, labelled: e.label !== null && e.label !== '' })),
@@ -367,7 +368,7 @@ export class FlowKit implements Flow {
     const width = Math.max(1, maxX - minX);
     const height = Math.max(1, maxY - minY);
     // Rounded as the transform attribute will be, so centre() reports exactly where nodes are drawn.
-    const fit = list.length === 0 ? 1 : Math.min(MAX_SCALE, (vw - 2 * PAD) / width, (vh - 2 * PAD) / height);
+    const fit = Math.min(MAX_SCALE, (vw - 2 * PAD) / width, (vh - 2 * PAD) / height);
     this.scale = Math.max(0.01, Math.floor(fit * 100) / 100);
     this.offset = [round(vx + vw / 2 - this.scale * (minX + width / 2)), round(vy + vh / 2 - this.scale * (minY + height / 2))];
     this.root.at(this.offset[0], this.offset[1]).scale(this.scale);
