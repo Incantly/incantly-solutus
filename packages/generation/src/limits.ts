@@ -71,6 +71,8 @@ export class LimitKeeper {
     if (this.serviceDay !== day) {
       this.serviceDay = day;
       this.serviceSpentUsd = 0;
+      // A new day: forget learners with nothing running, so the table does not grow for ever.
+      for (const [id, other] of this.learners) if (other !== usage && other.running === 0) this.learners.delete(id);
     }
     return usage;
   }

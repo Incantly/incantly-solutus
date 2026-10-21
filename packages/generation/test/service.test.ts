@@ -168,10 +168,15 @@ describe('the generation service', () => {
     expect(refused.status).toBe(429);
     expect(await refused.json()).toMatchObject({ code: 'cost-limit' });
 
-    const limits = new LimitKeeper({ perMinute: 10, perDay: 10, concurrent: 2, learnerDailyUsd: 10, serviceDailyUsd: 1 });
+    let now = Date.parse('2026-10-21T23:59:00Z');
+    const limits = new LimitKeeper({ perMinute: 10, perDay: 10, concurrent: 2, learnerDailyUsd: 10, serviceDailyUsd: 1 }, () => now);
     limits.spend('a', 0.6);
     limits.spend('b', 0.6);
-    expect(limits.admit('c')).toMatchObject({ ok: false, refusal: { code: 'service-cost-limit' } });
+    expect(limits.admit('c')).toMatchObject({ ok: false, refusal: { code: 'service-cost-limit', retryAfterSeconds: 60 } });
+    // A new UTC day starts afresh.
+    now += 120_000;
+    expect(limits.admit('c')).toMatchObject({ ok: true });
+    expect(limits.usage('a')).toEqual({ today: 0, spentUsd: 0, running: 0 });
   });
 
   it('ends a generation that runs past its deadline with a fallback', async () => {
