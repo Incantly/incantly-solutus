@@ -106,6 +106,13 @@ test.describe('figures in notes (Phase 4 gate)', () => {
     await expect.poll(() => page.evaluate(() => document.activeElement?.classList.contains('ProseMirror'))).toBe(true);
   });
 
+  test('a figure in a note opens in a still state when the learner prefers reduced motion', async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await openNote(page, 'size=1');
+    await waitLive(page, 0);
+    await expect(frameOf(page, 0).getByRole('button', { name: 'Play' })).toBeVisible();
+  });
+
   test('a figure in a note has an accessible name, and its parts, controls and steps inside', async ({ page }) => {
     await openNote(page, 'size=3');
     await waitLive(page, 0);

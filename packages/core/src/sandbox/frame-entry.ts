@@ -200,13 +200,16 @@ function start(init: InitMessage): void {
     }
   };
 
+  // Unless the host says otherwise, a figure starts the way the learner's own setting asks:
+  // with reduced motion, in a still state (the renderer then follows any change).
+  const live = init.live && init.live.reducedMotion === undefined ? { ...init.live, reducedMotion: prefersReducedMotion() } : init.live;
   const boot: WorkerInbound = {
     type: 'boot',
     mode: init.mode,
     lineOffset,
     sceneLines,
     shifts: init.shifts,
-    ...(init.live ? { live: init.live } : {}),
+    ...(live ? { live } : {}),
     ...(init.probe ? { probe: init.probe } : {}),
   };
   if (init.mode === 'probe') {
@@ -235,6 +238,14 @@ function start(init: InitMessage): void {
   workerChannel.expectAnswer();
   workerChannel.post(boot);
   observe();
+}
+
+function prefersReducedMotion(): boolean {
+  try {
+    return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  } catch {
+    return false;
+  }
 }
 
 /** Values and the text alternative go to the host at most every 100 ms, always ending with the latest. */
