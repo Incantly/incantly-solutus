@@ -119,6 +119,13 @@ describe('probe: deliberately broken scenes fail for the expected reason', () =>
     expect(checks(report)).toContain('frame-cost');
   });
 
+  it('a frame that throws is reported as such, not also as too slow', () => {
+    let clock = 0;
+    const report = probe(build({}, 'inc.onFrame(() => { const none = undefined; none.x; });'), { now: () => (clock += 10) });
+    expect(checks(report)[0]).toBe('runs');
+    expect(checks(report)).not.toContain('frame-cost');
+  });
+
   it('missing teaching: no idea, no description, no steps, a missing part', () => {
     const report = probe(build({ idea: '', describe: '', steps: '' }), { spec: { parts: ['Bar', 'Label'] } });
     expect(checks(report)).toEqual(['idea', 'description', 'parts', 'steps']);

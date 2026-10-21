@@ -225,11 +225,13 @@ class Probe {
     this.defaults = Object.fromEntries(ui.params.map((p) => [p.name, p.defaultValue]));
 
     const frames = this.options.frames ?? 60;
+    let threw = false;
     for (let i = 0; i < frames; i++) {
       this.tick(runtime, FRAME, true);
       const error = this.firstError(runtime);
       if (error) {
         this.fail({ check: 'runs', message: `The scene threw on frame ${i + 1}`, values: this.defaults, playing: true, time: runtime.time, error });
+        threw = true;
         break;
       }
     }
@@ -246,9 +248,10 @@ class Probe {
 
     this.bounds(runtime);
 
+    // A frame that threw costs the error and its stack trace, not the drawing: its cost says nothing.
     const frameBudget = this.options.frameBudgetMs ?? 8;
     const average = this.measuredFrames ? this.frameMs / this.measuredFrames : 0;
-    if (average > frameBudget) {
+    if (!threw && average > frameBudget) {
       this.fail({ check: 'frame-cost', message: `An average frame takes ${round(average)} ms; the budget is ${frameBudget} ms` });
     }
 
