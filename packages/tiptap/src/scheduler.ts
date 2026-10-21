@@ -53,12 +53,26 @@ export interface SchedulerStats {
   suspends: number;
   /** Highest number of live figures seen at once. */
   peakLive: number;
+  /** Figures that drew, and how long from mount to first drawing, in milliseconds. */
+  ready: number;
+  readyMsTotal: number;
+  readyMsMax: number;
 }
 
 const defaultObserver: ObserverFactory = (callback, rootMargin) => new IntersectionObserver((entries) => callback(entries), { rootMargin });
 
 export class LiveFigureScheduler {
-  readonly stats: SchedulerStats = { registered: 0, near: 0, live: 0, mounts: 0, suspends: 0, peakLive: 0 };
+  readonly stats: SchedulerStats = {
+    registered: 0,
+    near: 0,
+    live: 0,
+    mounts: 0,
+    suspends: 0,
+    peakLive: 0,
+    ready: 0,
+    readyMsTotal: 0,
+    readyMsMax: 0,
+  };
   private readonly figures = new Map<Element, ScheduledFigure>();
   private readonly near = new Set<ScheduledFigure>();
   private readonly lastUsed = new Map<ScheduledFigure, number>();
@@ -110,6 +124,13 @@ export class LiveFigureScheduler {
     this.touch(figure);
     this.pinned.add(figure);
     if (!figure.holdsInstance) this.evaluate();
+  }
+
+  /** A mounted figure drew for the first time, `ms` after it was mounted. */
+  recordReady(ms: number): void {
+    this.stats.ready++;
+    this.stats.readyMsTotal += ms;
+    this.stats.readyMsMax = Math.max(this.stats.readyMsMax, ms);
   }
 
   isNear(figure: ScheduledFigure): boolean {

@@ -94,4 +94,11 @@ export function mountEditorPage(root: HTMLElement, params: URLSearchParams): voi
   };
   window.__playground = handle as unknown as typeof window.__playground;
   create(createFixtureDocument({ figures: size, ...(live ? { figure: figureAttributes } : {}) }));
+
+  // Open the note at a position, as a link into the middle of a note would.
+  const at = Number(params.get('at'));
+  if (at > 0 && at <= 1) {
+    const figures = element.querySelectorAll('figure.incantly-figure');
+    figures[Math.min(figures.length - 1, Math.floor(at * figures.length))]?.scrollIntoView({ block: 'start' });
+  }
 }

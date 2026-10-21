@@ -51,6 +51,7 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
   private snapshotUrl: string | undefined;
   private failure: ErrorView | null = null;
   private focusOnLive: 'first' | 'last' | null = null;
+  private mountedAt = 0;
   private generation = 0;
 
   constructor(
@@ -161,6 +162,7 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
     if (this.isLive || this.state === 'destroyed' || this.state === 'failed') return;
     this.state = 'mounting';
     this.dom.dataset.state = 'mounting';
+    this.mountedAt = performance.now();
     const generation = ++this.generation;
     void this.fragments().then((fragments) => {
       // The node may have been suspended, destroyed or remounted while the fragments loaded.
@@ -296,6 +298,7 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
     const generation = this.generation;
     void handle.ready.then((state) => {
       if (state !== 'live' || this.state !== 'live' || generation !== this.generation) return;
+      this.options.scheduler.recordReady(performance.now() - this.mountedAt);
       container.classList.remove('is-booting');
       for (const child of [...this.frame.children]) if (child !== container) child.remove();
       this.frame.classList.add('is-live');
