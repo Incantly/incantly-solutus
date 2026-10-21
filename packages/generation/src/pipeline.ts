@@ -111,8 +111,10 @@ export class GenerationState {
   repairsUsed = 0;
   failure: GenerationFailure | null = null;
   readonly timings: { planMs?: number; firstFragmentMs?: number; sceneMs?: number; repairMs: number; totalMs?: number } = { repairMs: 0 };
-  /** How the scene was made: written whole, or adapted from a reviewed scene by edits. */
-  mode: 'write' | 'adapt' | null = null;
+  /** How the scene was made: written whole, adapted from a reviewed scene by edits, or taken from the concept cache. */
+  mode: 'write' | 'adapt' | 'cache' | null = null;
+  /** Which cache key found it: the request, before planning, or the plan. */
+  cached: 'request' | 'plan' | null = null;
   /** A repair that was due but would not have finished before the deadline. */
   deadlineSkipped = false;
   readonly sdkVersion = SDK_VERSION;
@@ -268,6 +270,24 @@ export class Generator {
   private repairEstimateMs(state: GenerationState): number {
     const scene = state.calls.find((c) => c.purpose === 'scene' && !c.error);
     return Math.max(2_500, (scene?.ms ?? 8_000) * 0.6) + DELIVERY_MS;
+  }
+
+  /**
+   * Takes an approved figure from the concept cache instead of the scene
+   * call. It is validated again, as everything is, and the device probes it
+   * as usual. Returns false when it no longer validates.
+   */
+  fromCache(state: GenerationState, figure: { readonly plan: ScenePlan; readonly fragments: Required<FragmentSet> }, key: 'request' | 'plan'): boolean {
+    const limits = { ...SCENE_LIMITS, params: SIZE_BUDGETS[figure.plan.size ?? 'quick'].controls };
+    const validation = validateScene(figure.fragments, { limits });
+    if (!validation.ok || !validation.scene) return false;
+    state.plan ??= figure.plan;
+    state.mode = 'cache';
+    state.cached = key;
+    state.timings.sceneMs = 0;
+    state.attempts.push({ purpose: 'scene', fragments: { ...figure.fragments }, changed: [], passed: true, failed: null, report: null, probe: null, scene: validation.scene });
+    this.settle(state);
+    return true;
   }
 
   /** Whether another automatic repair may run (RP-4). */

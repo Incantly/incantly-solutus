@@ -65,6 +65,43 @@ async function deviceProbe(scene: { fragments: { html: string; css: string; js: 
 
 type SceneEvent = { generationId: string; fragments: { html: string; css: string; js: string }; spec: ProbeSpec };
 
+describe('the concept cache (PRD 25.6)', () => {
+  it('answers a repeated request from an approved figure, with no model call', async () => {
+    const model = referenceModel();
+    const { post } = await start({ model });
+    const first = await events(await post('/v1/generations', { prompt: 'Explain projectile motion for a physics student.' }));
+    const scene = first.at(-1)!.data as unknown as SceneEvent;
+    await post(`/v1/generations/${scene.generationId}/probe`, { ok: true });
+    const callsBefore = model.calls.length;
+    // The same words in another order and case: the same key.
+    const second = await events(await post('/v1/generations', { prompt: 'explain PROJECTILE motion, for a physics student' }));
+    expect(second.map((e) => e.event)).toEqual(['accepted', 'plan', 'scene']);
+    expect(model.calls.length).toBe(callsBefore);
+    expect((second.at(-1)!.data as unknown as SceneEvent).fragments.js).toBe(scene.fragments.js);
+  });
+
+  it('skips only the scene call when a new request plans the same figure', async () => {
+    const model = referenceModel();
+    const { post } = await start({ model });
+    const first = await events(await post('/v1/generations', { prompt: 'Explain projectile motion for a physics student.' }));
+    await post(`/v1/generations/${(first.at(-1)!.data as unknown as SceneEvent).generationId}/probe`, { ok: true });
+    const callsBefore = model.calls.length;
+    await events(await post('/v1/generations', { prompt: 'What path does a thrown ball follow?' }));
+    expect(model.calls.slice(callsBefore).map((c) => c.purpose)).toEqual(['plan']);
+  });
+
+  it('never stores a figure made with note text, and never caches what the device did not approve', async () => {
+    const model = referenceModel();
+    const { post, service } = await start({ model });
+    const withNote = await events(await post('/v1/generations', { prompt: 'Explain projectile motion.', noteContext: 'My teacher said...' }));
+    await post(`/v1/generations/${(withNote.at(-1)!.data as unknown as SceneEvent).generationId}/probe`, { ok: true });
+    // Only the plan key was stored; the request key was not.
+    expect(service.cache?.stats().size).toBe(1);
+    await events(await post('/v1/generations', { prompt: 'How does a convex lens form an image?' }));
+    expect(service.cache?.stats().size).toBe(1);
+  });
+});
+
 describe('the generation service', () => {
   it('states its status and its retention rule', async () => {
     const { base } = await start({ sessionMinutes: 10, recordsRetentionDays: 14 });

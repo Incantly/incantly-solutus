@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { SDK_VERSION, type ProbeCheck, type ProbeFailure, type ProbeReport, type ScenePlan } from '@incantly/core';
 import type { Authenticator, Learner } from './auth';
+import { ConceptCache, planKey, requestKey } from './cache';
 import { REQUEST_LIMITS, type LearnerRequest } from './context';
 import { DEFAULT_LIMITS, LimitKeeper, type Limits, type Refusal } from './limits';
 import type { ModelClient } from './models';
@@ -38,6 +39,8 @@ export interface ServiceOptions {
   /** Browser origins allowed to call the service directly. */
   readonly allowedOrigins?: readonly string[];
   readonly prefix?: string;
+  /** Approved figures reused for the same request or plan (PRD 25.6); null turns the cache off. */
+  readonly cache?: ConceptCache | null;
   readonly now?: () => number;
 }
 
@@ -55,6 +58,8 @@ interface Session {
   readonly learner: Learner;
   expiresAt: number;
   busy: boolean;
+  /** The request's cache key, when the figure may be shared: it was asked for without note text. */
+  readonly requestKey: string | null;
 }
 
 class HttpError extends Error {
@@ -171,9 +176,11 @@ export class GenerationService {
   private readonly now: () => number;
   private readonly prefix: string;
   private readonly sweeper: ReturnType<typeof setInterval>;
+  readonly cache: ConceptCache | null;
 
   constructor(private readonly options: ServiceOptions) {
     this.now = options.now ?? (() => Date.now());
+    this.cache = options.cache === undefined ? new ConceptCache({ now: this.now }) : options.cache;
     this.limits = new LimitKeeper(options.limits ?? DEFAULT_LIMITS, this.now);
     this.prefix = options.prefix ?? '/v1';
     this.sweeper = setInterval(() => void this.sweep(), 60_000);
@@ -345,10 +352,21 @@ export class GenerationService {
     const generator = this.generator();
     const state = generator.begin();
     send('accepted', { generationId: state.id });
+    const key = requestKey(request.prompt);
     try {
-      await generator.planStage(state, request, { onPlan: (plan) => send('plan', { generationId: state.id, skeleton: skeletonOf(plan) }) }, signal);
-      if (state.plan) {
-        await generator.buildStage(state, { onFragment: (name, ok) => send('fragment', { name, ok }) }, signal);
+      // The same request was answered before: no model call at all.
+      const known = this.cache?.get(key) ?? null;
+      if (known && generator.fromCache(state, known, 'request')) {
+        send('plan', { generationId: state.id, skeleton: skeletonOf(state.plan!) });
+      } else {
+        await generator.planStage(state, request, { onPlan: (plan) => send('plan', { generationId: state.id, skeleton: skeletonOf(plan) }) }, signal);
+        if (state.plan) {
+          // A different request that plans the same figure: no scene call.
+          const planned = this.cache?.get(planKey(state.plan)) ?? null;
+          if (!(planned && generator.fromCache(state, { ...planned, plan: state.plan }, 'plan'))) {
+            await generator.buildStage(state, { onFragment: (name, ok) => send('fragment', { name, ok }) }, signal);
+          }
+        }
       }
       generator.finish(state);
     } finally {
@@ -358,7 +376,14 @@ export class GenerationService {
     }
 
     if (state.status === 'validated' && state.scene) {
-      this.sessions.set(state.id, { state, generator, learner, expiresAt: this.now() + (this.options.sessionMinutes ?? 15) * 60_000, busy: false });
+      this.sessions.set(state.id, {
+        state,
+        generator,
+        learner,
+        expiresAt: this.now() + (this.options.sessionMinutes ?? 15) * 60_000,
+        busy: false,
+        requestKey: request.noteContext ? null : key,
+      });
       send('scene', this.sceneMessage(state));
     } else {
       const reason = timeout.aborted ? 'timeout' : (state.failure?.stage ?? 'scene');
@@ -382,6 +407,11 @@ export class GenerationService {
     if (body.ok === true) {
       generator.deviceApproved(state, { ok: true, failures: [], stats: { configurations: 0, frames: 0, averageFrameMs: 0, elements: 0, durationMs: 0 } });
       this.sessions.delete(id);
+      // Approved on a device: the next learner to ask the same can have it at once.
+      const scene = state.scene;
+      if (this.cache && scene && state.plan) {
+        this.cache.put([session.requestKey, planKey(state.plan)], { plan: state.plan, fragments: { html: scene.html, css: scene.css, js: scene.js }, sdkVersion: SDK_VERSION });
+      }
       await this.record(state);
       this.json(res, 200, { status: 'approved', generationId: id });
       return;
