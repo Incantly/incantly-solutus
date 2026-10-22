@@ -4,6 +4,7 @@ import { kit } from '../src/kits/space3d';
 import { Camera, VIEWS } from '../src/kits/space3d/camera';
 import { clipBetween, niceTicks } from '../src/kits/space3d/graph';
 import { boxMesh, coneMesh, customMesh, cylinderMesh, planeMesh, torusMesh } from '../src/kits/space3d/mesh';
+import { planeAxes } from '../src/kits/space3d/space';
 import { isKitModule, KIT_GLOBAL, type KitModule } from '../src/runtime/kits';
 import { SceneRuntime, type RuntimeOptions } from '../src/runtime/runtime';
 import { KIT_SCRIPTS } from '../src/sandbox/generated/kit-scripts';
@@ -244,6 +245,30 @@ describe('inc.space3d', () => {
     expect(shown.some((n) => n.extra.includes('inc-smooth'))).toBe(true);
     expect(labels(runtime).map((n) => n.text).sort()).toEqual(['F', 'path', 'x', 'y', 'z', 'θ']);
     expect(shown.every((n) => !(n.attrs.get('d') ?? '').includes('NaN'))).toBe(true);
+  });
+
+  it('lays a grid on any plane by its normal, with square, unit directions across it (C3-12)', () => {
+    const dot = (a: readonly number[], b: readonly number[]) => a[0]! * b[0]! + a[1]! * b[1]! + a[2]! * b[2]!;
+    for (const normal of [[1, 1, 0], [1, 2, 3], [0, 0, 5], [0, -1, 0]] as const) {
+      const lift = planeAxes({ normal });
+      const u = lift(1, 0);
+      const v = lift(0, 1);
+      expect(dot(u, normal)).toBeCloseTo(0, 9);
+      expect(dot(v, normal)).toBeCloseTo(0, 9);
+      expect(dot(u, v)).toBeCloseTo(0, 9);
+      expect(Math.hypot(...u)).toBeCloseTo(1, 9);
+      expect(Math.hypot(...v)).toBeCloseTo(1, 9);
+    }
+    // A tilted plane keeps one direction level; the floor by its normal is the floor by name.
+    expect(planeAxes({ normal: [1, 1, 1] })(1, 0)[2]).toBeCloseTo(0, 9);
+    expect(planeAxes({ normal: [0, 0, 1] })(2, 3)).toEqual(planeAxes('xy')(2, 3));
+    expect(() => planeAxes({ normal: [0, 0, 0] })).toThrow(/must not be zero/);
+    expect(() => planeAxes('xw')).toThrow(/grid plane must be/);
+    const { runtime, mount } = space((s) => {
+      s.grid({ plane: { normal: [1, 1, 1] }, size: 2, at: [0, 0, 1] });
+    });
+    expect(mount.ui.error).toBeNull();
+    expect(visibleSlots(runtime).length).toBeGreaterThanOrEqual(10);
   });
 
   it('splits a large floor so what stands behind its middle is not covered', () => {

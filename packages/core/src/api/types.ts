@@ -838,8 +838,8 @@ export interface Mesh3DData {
 }
 
 export interface GridOptions {
-  /** 'xy' (default, the floor), 'xz' or 'yz'. */
-  readonly plane?: 'xy' | 'xz' | 'yz';
+  /** 'xy' (default, the floor), 'xz', 'yz', or any plane through `at` square to `normal`, such as { normal: [1, 1, 0] }. */
+  readonly plane?: 'xy' | 'xz' | 'yz' | { readonly normal: Vec3 };
   /** Half the width. Default 5. */
   readonly size?: number;
   /** Spacing between lines. Default 1. */

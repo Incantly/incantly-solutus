@@ -48,6 +48,31 @@ export interface Coordinates {
 
 export const IDENTITY_COORDINATES: Coordinates = { point: (p) => p };
 
+/**
+ * Two square directions across a grid's plane, as a function placing a point
+ * (u, v) on it: the three axis planes by name, or any plane by its normal
+ * (C3-12), with u kept level where the plane allows.
+ */
+export function planeAxes(plane: unknown): (u: number, v: number) => Vec3 {
+  if (plane === 'xy') return (u, v) => [u, v, 0];
+  if (plane === 'xz') return (u, v) => [u, 0, v];
+  if (plane === 'yz') return (u, v) => [0, u, v];
+  if (typeof plane !== 'object' || plane === null || !('normal' in plane)) {
+    throw new SceneApiError(`grid plane must be 'xy', 'xz', 'yz' or { normal: [x, y, z] }, got "${String(plane)}"`);
+  }
+  const n = readVec3((plane as { normal: unknown }).normal, 'grid normal');
+  const length = Math.hypot(n[0], n[1], n[2]);
+  if (!(length > 1e-9)) throw new SceneApiError('A grid normal must not be zero');
+  const [nx, ny, nz] = [n[0] / length, n[1] / length, n[2] / length];
+  // u lies across the plane and level (no z) unless the plane is the floor itself; v completes the pair.
+  const level = Math.hypot(nx, ny) > 1e-6;
+  let [ux, uy, uz] = level ? [-ny, nx, 0] : [1, 0, 0];
+  const lu = Math.hypot(ux, uy, uz);
+  [ux, uy, uz] = [ux / lu, uy / lu, uz / lu];
+  const [vx, vy, vz] = [ny * uz - nz * uy, nz * ux - nx * uz, nx * uy - ny * ux];
+  return (a, b) => [a * ux + b * vx, a * uy + b * vy, a * uz + b * vz];
+}
+
 function finiteNumber(value: unknown, name: string): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) throw new SceneApiError(`${name} must be a finite number`);
   return value;
@@ -404,12 +429,11 @@ export class Space3DApi implements Space3D {
 
   grid(options: GridOptions = {}): Object3D {
     const plane = options.plane ?? 'xy';
-    if (plane !== 'xy' && plane !== 'xz' && plane !== 'yz') throw new SceneApiError(`grid plane must be 'xy', 'xz' or 'yz', got "${String(plane)}"`);
     const size = options.size === undefined ? 5 : finiteNumber(options.size, 'grid size');
     const step = options.step === undefined ? 1 : finiteNumber(options.step, 'grid step');
     if (!(size > 0) || !(step > 0) || size / step > 50) throw new SceneApiError('A grid needs a positive size and step, with at most 50 lines each way');
     const at = options.at === undefined ? ([0, 0, 0] as Vec3) : this.coords.point(readVec3(options.at, 'grid at'));
-    const lift = (u: number, v: number): Vec3 => (plane === 'xy' ? [u, v, 0] : plane === 'xz' ? [u, 0, v] : [0, u, v]);
+    const lift = planeAxes(plane);
     const lines: Vec3[][] = [];
     const count = Math.floor(size / step + 1e-9);
     for (let i = -count; i <= count; i++) {
