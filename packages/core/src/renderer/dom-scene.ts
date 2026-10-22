@@ -74,6 +74,7 @@ interface DotsState {
   readonly tone: string;
   readonly r: number;
   readonly points: readonly number[];
+  readonly glow: boolean;
 }
 
 export interface SceneDomStats {
@@ -287,6 +288,7 @@ export class SceneDom {
         const dragging = element.classList.contains('is-dragging');
         element.setAttribute('class', command.value + (focused ? ' is-focus' : '') + (dragging ? ' is-dragging' : ''));
         this.shade(element, command.value);
+        this.glow(element, command.value);
         this.stats.writes++;
         return;
       }
@@ -344,7 +346,7 @@ export class SceneDom {
       case 'dots': {
         if (!this.stages.has(command.stage)) return;
         const previous = this.dots.get(command.id);
-        this.dots.set(command.id, { stage: command.stage, layer: command.layer, tone: command.tone, r: command.r, points: command.points });
+        this.dots.set(command.id, { stage: command.stage, layer: command.layer, tone: command.tone, r: command.r, points: command.points, glow: command.glow === true });
         this.dirtyCanvases.add(command.stage);
         if (previous && previous.stage !== command.stage) this.dirtyCanvases.add(previous.stage);
         return;
@@ -383,6 +385,41 @@ export class SceneDom {
     element.setAttribute('width', round(w));
     element.setAttribute('height', round(h));
     math.box.style.justifyContent = math.anchor === 'start' ? 'flex-start' : math.anchor === 'end' ? 'flex-end' : 'center';
+  }
+
+  /**
+   * Glowing elements get a soft halo in their own tone (FX-1): one blur filter
+   * per stage, sized to its view box, set as a style property as gradients are.
+   */
+  private glow(element: Element, classes: string): void {
+    const svgElement = element as SVGElement;
+    if (!/\binc-glow\b/.test(classes)) {
+      if (svgElement.style.getPropertyValue('filter')) svgElement.style.removeProperty('filter');
+      return;
+    }
+    const stage = this.stageOf(element);
+    if (!stage) return;
+    const id = `${this.scope}-glow-${stage.id}`;
+    if (!stage.gradients.has('glow')) {
+      stage.gradients.add('glow');
+      const doc = element.ownerDocument;
+      const filter = doc.createElementNS(SVG_NS, 'filter');
+      filter.id = id;
+      for (const [name, value] of [['x', '-50%'], ['y', '-50%'], ['width', '200%'], ['height', '200%']] as const) filter.setAttribute(name, value);
+      const blur = doc.createElementNS(SVG_NS, 'feGaussianBlur');
+      blur.setAttribute('in', 'SourceGraphic');
+      blur.setAttribute('stdDeviation', round(stage.viewBox[2] / 150));
+      blur.setAttribute('result', 'halo');
+      const merge = doc.createElementNS(SVG_NS, 'feMerge');
+      for (const input of ['halo', 'halo', 'SourceGraphic']) {
+        const node = doc.createElementNS(SVG_NS, 'feMergeNode');
+        node.setAttribute('in', input);
+        merge.append(node);
+      }
+      filter.append(blur, merge);
+      stage.defs.append(filter);
+    }
+    svgElement.style.setProperty('filter', `url(#${id})`);
   }
 
   /** Filled shapes with a shade get a gradient in their tone, made once per stage. */
@@ -477,8 +514,12 @@ export class SceneDom {
     const oy = (height - vh * scale) / 2;
     const style = stage.host.ownerDocument.defaultView?.getComputedStyle(stage.svg);
     for (const set of sets) {
-      context.fillStyle = style?.getPropertyValue(`--inc-${set.tone}`).trim() || '#888';
+      const colour = style?.getPropertyValue(`--inc-${set.tone}`).trim() || '#888';
+      context.fillStyle = colour;
       const r = Math.max(0.5, set.r * scale);
+      // Glowing dots carry a halo in their own colour.
+      context.shadowColor = set.glow ? colour : 'transparent';
+      context.shadowBlur = set.glow ? Math.max(4, r * 3) : 0;
       context.beginPath();
       for (let i = 0; i + 1 < set.points.length; i += 2) {
         const x = ox + (set.points[i]! - vx) * scale;

@@ -187,6 +187,8 @@ export interface ElementOptions {
   /** Fill a path or polyline with its tone instead of stroking it; false outlines a circle or rect instead of filling it. */
   readonly fill?: boolean;
   readonly shade?: Shade;
+  /** A soft halo in its own tone, for light, heat or a charge. */
+  readonly glow?: boolean;
 }
 
 /** Attributes a scene may set directly. Colours come only from tones. */
@@ -234,6 +236,8 @@ export interface Handle {
   dashed(on?: boolean): this;
   /** Moves dashes along the stroke at `speed` units per second (current, flow); 0 stops. */
   flow(speed: number): this;
+  /** A soft halo in its own tone, such as a lamp that is on. */
+  glow(on?: boolean): this;
 }
 
 export interface PathHandle extends Handle {
@@ -296,6 +300,8 @@ export interface DotsOptions {
   readonly tone?: Tone;
   readonly r?: number;
   readonly layer?: 'back' | 'front';
+  /** Each dot glows in its tone, as sparks, stars or charges. */
+  readonly glow?: boolean;
 }
 
 /** Many small dots (particles) drawn on a canvas sharing the stage's coordinates. */

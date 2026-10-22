@@ -29,6 +29,8 @@ v0.1 provides:
 
 Each returns a handle with change-only attribute writes and transform helpers such as `set`, `at`, `rotate`, `scale`, `show`, and `tone`.
 
+`glow: true` (or `handle.glow(on)`) gives an element a soft halo in its own tone, for a lamp that is on, a hot wire or a charged sphere: one blur filter per stage, sized to its view box, which exported pictures keep. Dot clouds take `glow: true` too, for sparks, stars or charges on the canvas layer (FX-1).
+
 ## Equations and chemical formulas (DG-5)
 
 `svg.equation(x, y, source, { anchor, size, tone })` draws an equation as maths, centred on its point by default (`anchor: 'start'` or `'end'` puts that end of it there; `size` is in stage units, 16 by default). Each side of its `=` and `≈` signs is read by the same safe parser as `inc.formula`, so fractions stack, powers rise, roots and Greek letters show as written, trailing digits become subscripts and factors sit side by side:

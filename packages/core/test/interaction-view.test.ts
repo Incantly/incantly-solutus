@@ -749,3 +749,33 @@ describe('measuring a drawing (VI-5)', () => {
     expect(root.querySelector('.inc-zoombar button[data-view="measure"]')).toBeNull();
   });
 });
+
+describe('glow (FX-1)', () => {
+  it('gives a glowing element a halo in its own tone, from one filter per stage, kept in exported pictures', () => {
+    const { root, clock } = mount(`
+      const on = inc.toggle('on', { value: true, label: 'Lamp on' });
+      const stage = inc.svg('#stage', { viewBox: [0, 0, 300, 200], title: 'Lamp' });
+      const lamp = stage.circle(150, 100, 20, { tone: 'lit', glow: true });
+      const sparks = stage.dots({ tone: 'lit', r: 2, glow: true });
+      sparks.set([[100, 50], [200, 150]]);
+      inc.onFrame(() => lamp.glow(on.value === 1));
+    `);
+    const lamp = q<SVGCircleElement>(root, 'svg.inc-stage circle.inc-tone-lit');
+    expect(lamp.classList.contains('inc-glow')).toBe(true);
+    const filter = lamp.style.getPropertyValue('filter');
+    expect(filter).toMatch(/^url\(#.+-glow-\d+\)$/);
+    const id = /#([^)]+)/.exec(filter)![1]!;
+    const defs = q(root, `svg.inc-stage filter[id="${id}"]`);
+    expect(defs.querySelector('feGaussianBlur')!.getAttribute('stdDeviation')).toBe('2');
+    // The exported copy carries the filter as an attribute, with the filter in its defs.
+    const markup = decodeURIComponent(exportStage(q<SVGSVGElement>(root, 'svg.inc-stage'))!);
+    expect(markup).toMatch(/<circle[^>]*filter="url\((&quot;)?#[^"&]+-glow-\d+(&quot;)?\)"/);
+    expect(markup).toContain(`<filter id="${id}"`);
+    const toggle = q<HTMLInputElement>(root, 'input.inc-switch');
+    toggle.checked = false;
+    toggle.dispatchEvent(new Event('input', { bubbles: true }));
+    clock.runUntilIdle();
+    expect(lamp.classList.contains('inc-glow')).toBe(false);
+    expect(lamp.style.getPropertyValue('filter')).toBe('');
+  });
+});

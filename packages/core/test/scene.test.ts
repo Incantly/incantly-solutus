@@ -234,6 +234,18 @@ describe('stage bounds', () => {
   });
 });
 
+describe('glow (FX-1)', () => {
+  it('marks a glowing element with a class, and dots with a glowing flag', () => {
+    const { graph, stage } = setup();
+    const lamp = stage.circle(10, 10, 5, { tone: 'lit', glow: true });
+    expect(graph.flush()).toContainEqual({ op: 'class', id: 2, value: 'inc-tone-lit inc-glow' });
+    lamp.glow(false);
+    expect(graph.flush()).toEqual([{ op: 'class', id: 2, value: 'inc-tone-lit' }]);
+    stage.dots({ glow: true }).set([[1, 1]]);
+    expect(graph.flush()).toContainEqual(expect.objectContaining({ op: 'dots', glow: true, points: [1, 1] }));
+  });
+});
+
 describe('equations (DG-5)', () => {
   it('draw as a math element on the labels layer, centred, 16 units by default', () => {
     const { graph, stage } = setup();

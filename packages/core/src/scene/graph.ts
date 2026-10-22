@@ -29,6 +29,8 @@ export interface VNode {
   /** Filled with its tone rather than stroked (paths and polylines). */
   fill: boolean;
   shade: Shade | null;
+  /** A soft halo in its own tone (FX-1). */
+  glow: boolean;
   /** Kit classes: focus marks on 3D faces, ghosts. */
   extra: string;
   classValue: string;
@@ -98,7 +100,7 @@ export class SceneGraph {
   private readonly interactions = new Map<number, string>();
   private readonly partInfo = new Map<number, { name: string; label: string; info: string }>();
   private readonly dots = new Map<number, string>();
-  private readonly dotState = new Map<number, { stage: number; layer: 'back' | 'front'; tone: string; r: number; points: number[] }>();
+  private readonly dotState = new Map<number, { stage: number; layer: 'back' | 'front'; tone: string; r: number; points: number[]; glow?: boolean }>();
 
   /** A fresh id for something drawn outside the element tree (a dots layer). */
   newId(): number {
@@ -189,12 +191,12 @@ export class SceneGraph {
   }
 
   /** Dots on a canvas sharing a stage's coordinates; points are x0, y0, x1, y1, ... */
-  setDots(id: number, stage: number, layer: 'back' | 'front', tone: string, r: number, points: readonly number[]): void {
-    const key = `${layer}|${tone}|${r}|${points.join(',')}`;
+  setDots(id: number, stage: number, layer: 'back' | 'front', tone: string, r: number, points: readonly number[], glow = false): void {
+    const key = `${layer}|${tone}|${r}|${glow ? 1 : 0}|${points.join(',')}`;
     if (this.dots.get(id) === key) return;
     this.dots.set(id, key);
-    this.dotState.set(id, { stage, layer, tone, r, points: [...points] });
-    this.queue.push({ op: 'dots', id, stage, layer, tone, r, points: [...points] });
+    this.dotState.set(id, { stage, layer, tone, r, points: [...points], ...(glow ? { glow } : {}) });
+    this.queue.push({ op: 'dots', id, stage, layer, tone, r, points: [...points], ...(glow ? { glow } : {}) });
   }
 
   /** Sets the kit's own classes on an element (focus marks, ghosts). */
@@ -256,7 +258,7 @@ export class SceneGraph {
     this.setAttribute(node, 'transform', parts.length ? parts.join(' ') : null);
   }
 
-  setFlags(node: VNode, flags: Partial<Pick<VNode, 'tone' | 'dashed' | 'hidden' | 'part' | 'fill' | 'shade' | 'extra'>>): void {
+  setFlags(node: VNode, flags: Partial<Pick<VNode, 'tone' | 'dashed' | 'hidden' | 'part' | 'fill' | 'shade' | 'glow' | 'extra'>>): void {
     Object.assign(node, flags);
     this.updateClass(node);
   }
@@ -305,6 +307,7 @@ export class SceneGraph {
     if (node.part) classes.push('inc-part');
     if (node.fill) classes.push('inc-fill');
     if (node.shade) classes.push(`inc-shade-${node.shade}`);
+    if (node.glow) classes.push('inc-glow');
     if (node.extra) classes.push(node.extra);
     const value = classes.join(' ');
     if (value === node.classValue) return;
@@ -332,6 +335,7 @@ export class SceneGraph {
       part: null,
       fill: false,
       shade: null,
+      glow: false,
       extra: '',
       classValue: '',
       transform: identity(),

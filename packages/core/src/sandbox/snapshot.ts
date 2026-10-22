@@ -25,6 +25,8 @@ const INHERITED = [
 const OWN: ReadonlyArray<readonly [string, string]> = [
   ['opacity', '1'],
   ['dominant-baseline', 'auto'],
+  // A glow's filter is set as a style; the copy carries it as an attribute, with the filter itself in its defs.
+  ['filter', 'none'],
 ];
 const MAX_WIDTH = 1600;
 const SVG_NS = 'http://www.w3.org/2000/svg';

@@ -165,6 +165,7 @@ const elementMethods = {
   tone: 'self',
   dashed: 'self',
   flow: 'self',
+  glow: 'self',
 } as const satisfies Methods<Handle>;
 
 export const INC_FUNCTIONS = {

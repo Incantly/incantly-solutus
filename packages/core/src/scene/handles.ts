@@ -125,6 +125,11 @@ export class ElementHandle implements Handle {
     services(this.graph).setFlow(this.node, speed);
     return this;
   }
+
+  glow(on = true): this {
+    if (this.node.glow !== on) this.graph.setFlags(this.node, { glow: on === true });
+    return this;
+  }
 }
 
 export class PathElementHandle extends ElementHandle implements PathHandle {
@@ -230,6 +235,7 @@ export class StageHandle implements Stage {
       if (!SHADES.has(options.shade)) throw new SceneApiError(`Unknown shade "${String(options.shade)}"; use sphere, cylinder or soft`);
       this.graph.setFlags(node, { shade: options.shade, fill: true });
     }
+    if (options.glow) this.graph.setFlags(node, { glow: true });
     return node;
   }
 
@@ -342,6 +348,7 @@ export class StageHandle implements Stage {
     if (!(Number.isFinite(r) && r > 0 && r <= 50)) throw new SceneApiError('dots need a radius from 0 to 50');
     const layer = options.layer ?? 'front';
     if (layer !== 'back' && layer !== 'front') throw new SceneApiError('dots go on the back or front layer');
+    const glow = options.glow === true;
     const graph = this.graph;
     const stage = this.stageNode.id;
     const id = graph.newId();
@@ -356,13 +363,13 @@ export class StageHandle implements Stage {
           const [x, y] = point;
           if (Number.isFinite(x) && Number.isFinite(y)) flat.push(Math.round(x * 100) / 100, Math.round(y * 100) / 100);
         }
-        graph.setDots(id, stage, layer, current, r, flat);
+        graph.setDots(id, stage, layer, current, r, flat, glow);
         return dots;
       },
       tone(name) {
         if (!TONES.has(name)) throw new SceneApiError(`Unknown tone "${String(name)}"`);
         current = name;
-        graph.setDots(id, stage, layer, current, r, flat);
+        graph.setDots(id, stage, layer, current, r, flat, glow);
         return dots;
       },
     };

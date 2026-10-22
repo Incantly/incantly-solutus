@@ -58,7 +58,7 @@ export type SceneCommand =
   /** The part an element belongs to when it is not inside the part's own element (3D faces in shared slots). */
   | { readonly op: 'owner'; readonly id: number; readonly part: string | null }
   /** Many small dots drawn on a canvas that shares the stage's coordinates. Coordinates are x0, y0, x1, y1, ... */
-  | { readonly op: 'dots'; readonly id: number; readonly stage: number; readonly layer: 'back' | 'front'; readonly tone: string; readonly r: number; readonly points: readonly number[] }
+  | { readonly op: 'dots'; readonly id: number; readonly stage: number; readonly layer: 'back' | 'front'; readonly tone: string; readonly r: number; readonly points: readonly number[]; readonly glow?: boolean }
   /** Puts an element's children in this order (a 3D depth sort that changed). */
   | { readonly op: 'order'; readonly id: number; readonly children: readonly number[] };
 
