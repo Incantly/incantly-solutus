@@ -360,14 +360,20 @@ export class GenerationService {
       if (known && generator.fromCache(state, known, 'request')) {
         send('plan', { generationId: state.id, skeleton: skeletonOf(state.plan!) });
       } else {
-        await generator.planStage(state, request, { onPlan: (plan) => send('plan', { generationId: state.id, skeleton: skeletonOf(plan) }) }, signal);
-        if (state.plan) {
-          // A different request that plans the same figure: no scene call.
-          const planned = this.cache?.get(planKey(state.plan)) ?? null;
-          if (!(planned && generator.fromCache(state, { ...planned, plan: state.plan }, 'plan'))) {
-            await generator.buildStage(state, { onFragment: (name, ok) => send('fragment', { name, ok }) }, signal);
-          }
-        }
+        await generator.run(
+          state,
+          request,
+          {
+            onPlan: (plan) => send('plan', { generationId: state.id, skeleton: skeletonOf(plan) }),
+            onFragment: (name, ok) => send('fragment', { name, ok }),
+            // A different request that plans the same figure: no scene call.
+            cached: (plan) => {
+              const planned = this.cache?.get(planKey(plan)) ?? null;
+              return planned !== null && generator.fromCache(state, { ...planned, plan }, 'plan');
+            },
+          },
+          signal,
+        );
       }
       generator.finish(state);
     } finally {

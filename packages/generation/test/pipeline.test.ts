@@ -11,7 +11,10 @@ const REQUESTS = {
   'thin-lens': 'How does a convex lens form an image?',
 } as const;
 
-function generator(fault: Fault = 'none', options: { stubborn?: boolean; maxRepairs?: number; probe?: boolean; withhold?: string[]; adapt?: boolean } = {}) {
+function generator(
+  fault: Fault = 'none',
+  options: { stubborn?: boolean; maxRepairs?: number; probe?: boolean; withhold?: string[]; adapt?: boolean; retrieve?: boolean } = {},
+) {
   const model = referenceModel({ fault, ...(options.stubborn !== undefined ? { stubborn: options.stubborn } : {}) });
   const generate = new Generator({
     model,
@@ -19,6 +22,7 @@ function generator(fault: Fault = 'none', options: { stubborn?: boolean; maxRepa
     ...(options.maxRepairs !== undefined ? { maxRepairs: options.maxRepairs } : {}),
     ...(options.withhold ? { withhold: options.withhold } : {}),
     ...(options.adapt !== undefined ? { adapt: options.adapt } : {}),
+    ...(options.retrieve !== undefined ? { retrieve: options.retrieve } : {}),
   });
   return { model, generate };
 }
@@ -26,7 +30,7 @@ function generator(fault: Fault = 'none', options: { stubborn?: boolean; maxRepa
 describe('the generation pipeline', () => {
   it('plans, builds and approves each concept on the first attempt', async () => {
     for (const [id, prompt] of Object.entries(REQUESTS)) {
-      const { model, generate } = generator();
+      const { model, generate } = generator('none', { retrieve: false });
       const state = await generate.generate({ prompt });
       expect(state.status, id).toBe('approved');
       expect(state.firstAttemptPassed).toBe(true);
@@ -41,7 +45,7 @@ describe('the generation pipeline', () => {
   });
 
   it('re-plans once with the problems when the plan is rejected', async () => {
-    const { model, generate } = generator('bad-plan');
+    const { model, generate } = generator('bad-plan', { retrieve: false });
     const state = await generate.generate({ prompt: REQUESTS.projectile });
     expect(state.status).toBe('approved');
     expect(model.calls.map((c) => c.purpose)).toEqual(['plan', 'plan', 'scene']);
@@ -107,7 +111,7 @@ describe('the generation pipeline', () => {
   });
 
   it('stops at validation without a probe, and repairs a failed device probe on request', async () => {
-    const { model, generate } = generator('frame-throw', { probe: false });
+    const { model, generate } = generator('frame-throw', { probe: false, retrieve: false });
     const state = await generate.generate({ prompt: REQUESTS.projectile });
     expect(state.status).toBe('validated');
     expect(model.calls.map((c) => c.purpose)).toEqual(['plan', 'scene']);
@@ -133,7 +137,7 @@ describe('the generation pipeline', () => {
     const state = await new Generator({ model, probe: isolatedProbe }).generate({ prompt: REQUESTS.projectile });
     expect(state.status).toBe('failed');
     expect(state.failure).toEqual({ stage: 'model', reason: 'overloaded: Overloaded' });
-    expect(state.calls.at(-1)?.error).toContain('overloaded');
+    expect(state.calls.find((c) => c.purpose === 'scene')?.error).toContain('overloaded');
   });
 
   it('reports the plan and each fragment as it streams, checked on its own', async () => {
@@ -148,7 +152,7 @@ describe('the generation pipeline', () => {
   });
 
   it('adapts the reviewed scene of the same concept with edits: few output tokens, the same checks', async () => {
-    const { model, generate } = generator();
+    const { model, generate } = generator('none', { retrieve: false });
     const state = await generate.generate({ prompt: REQUESTS.projectile });
     expect(state.mode).toBe('adapt');
     expect(state.status).toBe('approved');
@@ -198,6 +202,57 @@ describe('the generation pipeline', () => {
     expect(state.deadlineSkipped).toBe(false);
     expect(state.status).toBe('approved');
     expect(state.repairsUsed).toBe(1);
+  });
+
+  it('starts adapting the reviewed scene a request names at once, with the plan call beside it only to confirm (PRD 25.5)', async () => {
+    for (const [id, prompt] of Object.entries(REQUESTS)) {
+      const { model, generate } = generator();
+      const plans: string[] = [];
+      const state = await generate.generate({ prompt }, { onPlan: (plan) => plans.push(plan.concept) });
+      expect(state.status, id).toBe('approved');
+      expect(state.retrieved).toBe(id);
+      expect(state.mode).toBe('adapt');
+      expect(state.scene?.js).toBe(REFERENCE_SCENES[id]!.js);
+      // The scene call goes first; the skeleton is the reviewed plan, at once.
+      expect(model.calls.map((c) => c.purpose)).toEqual(['scene', 'plan']);
+      expect(model.calls[0]!.prompt.system[1]!.text).toContain('LIBRARY format');
+      expect(model.calls[0]!.prompt.user).toContain(prompt);
+      expect(plans).toEqual([REFERENCE_SCENES[id]!.plan.concept]);
+      expect(state.calls).toHaveLength(2);
+    }
+  });
+
+  it('stops the library build when the plan names another concept, and goes on from that plan', async () => {
+    const sine = REFERENCE_SCENES['sine-wave']!;
+    const model = new ScriptedModel(async (call) => {
+      if (call.purpose === 'plan') return '```json\n' + JSON.stringify(sine.plan) + '\n```';
+      if (call.prompt.system[1]!.text.includes('LIBRARY format')) {
+        // A slow library build, stopped when the plan disagrees.
+        await new Promise((_, reject) => call.signal?.addEventListener('abort', () => reject(new ModelError('aborted', 'stopped'))));
+      }
+      return '```edit js\n```';
+    });
+    const plans: string[] = [];
+    const state = await new Generator({ model, probe: isolatedProbe }).generate({ prompt: REQUESTS.projectile }, { onPlan: (plan) => plans.push(plan.concept) });
+    expect(model.calls.map((c) => c.purpose)).toEqual(['scene', 'plan', 'scene']);
+    expect(plans).toEqual(['projectile motion', 'sine wave']);
+    expect(state.retrieved).toBeNull();
+    expect(state.example).toBe('sine-wave');
+    expect(state.status).toBe('approved');
+    expect(state.scene?.js).toBe(sine.js);
+  });
+
+  it('takes a plan the library reply adds, when the request needed other names', async () => {
+    const projectile = REFERENCE_SCENES.projectile!;
+    const plan = { ...projectile.plan, steps: projectile.plan.steps.slice(0, 3) };
+    const js = projectile.js.replace(/\n {2}\{ say: 'Stronger gravity[^\n]*\n/, '\n');
+    const model = new ScriptedModel((call) => {
+      if (call.purpose === 'plan') return '```json\n' + JSON.stringify(projectile.plan) + '\n```';
+      return '```js\n' + js + '```\n```json\n' + JSON.stringify(plan) + '\n```';
+    });
+    const state = await new Generator({ model, probe: isolatedProbe }).generate({ prompt: REQUESTS.projectile });
+    expect(state.status, state.failure?.reason).toBe('approved');
+    expect(state.plan?.steps).toHaveLength(3);
   });
 
   it('can leave the concept’s own example out of the context', async () => {

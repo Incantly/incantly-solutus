@@ -1,12 +1,13 @@
 import { SCENE_LIMITS, SDK_VERSION, SIZE_BUDGETS, validateScene, validateSceneCss, validateSceneHtml, validateSceneJs, type ProbeReport, type ScenePlan, type ValidatedScene } from '@incantly/core';
 import type { ReferenceScene } from '@incantly/core/scenes';
-import { planPrompt, scenePrompt, type LearnerRequest, type Prompt } from './context';
+import { libraryPrompt, planPrompt, scenePrompt, standardFigure, type LearnerRequest, type Prompt } from './context';
 import { applyFragmentEdits, parseEdits, withoutEditBlocks } from './edits';
 import { FragmentStream, missingFragments, parsePlanReply, type FragmentName, type FragmentSet } from './fragments';
 import { ModelError, NO_USAGE, addUsage, costOf, type CallPurpose, type ModelClient, type ModelUsage } from './models';
 import { formatPlanProblems, validatePlan, type PlanProblem } from './plan';
 import { probeSpecFor, type SceneProber } from './probe';
 import { parseReport, probeReport, repairPrompt, validationReport, type RepairReport } from './report';
+import { retrieveExample } from './retrieve';
 
 /**
  * The generation pipeline (PRD 27.1):
@@ -17,7 +18,9 @@ import { parseReport, probeReport, repairPrompt, validationReport, type RepairRe
  *
  * The scene call either writes the scene whole, following the nearest
  * reviewed example, or, when a reviewed scene of the same concept exists,
- * asks only for edits to it (PRD 25.5), which is several times faster.
+ * asks only for edits to it (PRD 25.5), which is several times faster. When
+ * the request itself plainly names a reviewed concept, that scene is adapted
+ * at once, with the plan call running beside it only to confirm the concept.
  * Repairs are edits too. Everything runs against a deadline (25 seconds by
  * default): a repair that would not finish in time is not started, and the
  * caller falls back to the reviewed figure.
@@ -51,11 +54,15 @@ export interface GeneratorOptions {
   readonly deadlineMs?: number;
   /** Start from a reviewed scene of the same concept and ask only for edits. Default true. */
   readonly adapt?: boolean;
+  /** Start adapting the reviewed scene a request names before its plan arrives. Default true; needs adapt. */
+  readonly retrieve?: boolean;
   readonly now?: () => number;
 }
 
 export interface GenerationHooks {
   readonly onPlan?: (plan: ScenePlan) => void;
+  /** Between a plan and its scene call: true when the caller already has the figure (the concept cache). */
+  readonly cached?: (plan: ScenePlan) => boolean;
   /** A fragment finished streaming, with whether it passed its own checks. */
   readonly onFragment?: (name: FragmentName, ok: boolean) => void;
   readonly onAttempt?: (attempt: Attempt) => void;
@@ -113,6 +120,8 @@ export class GenerationState {
   readonly timings: { planMs?: number; firstFragmentMs?: number; sceneMs?: number; repairMs: number; totalMs?: number } = { repairMs: 0 };
   /** How the scene was made: written whole, adapted from a reviewed scene by edits, or taken from the concept cache. */
   mode: 'write' | 'adapt' | 'cache' | null = null;
+  /** The reviewed scene the request named, adapted before the plan arrived; null otherwise. */
+  retrieved: string | null = null;
   /** Which cache key found it: the request, before planning, or the plan. */
   cached: 'request' | 'plan' | null = null;
   /** A repair that was due but would not have finished before the deadline. */
@@ -162,9 +171,127 @@ export class Generator {
   /** The whole pipeline, in process. */
   async generate(request: LearnerRequest, hooks: GenerationHooks = {}, signal?: AbortSignal): Promise<GenerationState> {
     const state = this.begin();
-    await this.planStage(state, request, hooks, signal);
-    if (state.plan) await this.buildStage(state, hooks, signal);
+    await this.run(state, request, hooks, signal);
     return this.finish(state);
+  }
+
+  /**
+   * Plans and builds. A request that plainly names a reviewed concept is
+   * built from that scene at once, while the plan call confirms the concept.
+   */
+  async run(state: GenerationState, request: LearnerRequest, hooks: GenerationHooks = {}, signal?: AbortSignal): Promise<void> {
+    const retrieved =
+      this.options.adapt === false || this.options.retrieve === false
+        ? null
+        : retrieveExample(request, {
+            ...(this.options.withhold ? { withhold: this.options.withhold } : {}),
+            ...(this.options.examples ? { examples: this.options.examples } : {}),
+          });
+    if (retrieved) {
+      await this.libraryStage(state, retrieved, request, hooks, signal);
+      return;
+    }
+    await this.planStage(state, request, hooks, signal);
+    if (state.plan && !hooks.cached?.(state.plan)) await this.buildStage(state, hooks, signal);
+  }
+
+  /**
+   * The library path (PRD 25.5): the reviewed scene the request names is
+   * adapted to the request at once, and its plan is the skeleton the learner
+   * sees straight away. The plan call runs beside the build only to confirm
+   * the concept; if it names another one, the build stops and the pipeline
+   * goes on from that plan as usual, having lost no time.
+   */
+  private async libraryStage(state: GenerationState, scene: ReferenceScene, request: LearnerRequest, hooks: GenerationHooks, signal?: AbortSignal): Promise<void> {
+    state.status = 'building';
+    state.mode = 'adapt';
+    state.example = scene.id;
+    state.retrieved = scene.id;
+    state.plan = scene.plan;
+    hooks.onPlan?.(scene.plan);
+    state.timings.firstFragmentMs ??= this.now() - state.startedAt;
+    hooks.onFragment?.('html', true);
+    hooks.onFragment?.('css', true);
+    const started = this.now();
+    const stop = new AbortController();
+    const buildSignal = signal ? AbortSignal.any([signal, stop.signal]) : stop.signal;
+    const maxTokens = Math.min(this.options.maxTokens?.scene ?? SIZE_BUDGETS[scene.plan.size ?? 'quick'].sceneTokens, 2500);
+    const building = this.call(state, 'scene', libraryPrompt(scene, request), this.deadlineSignal(state, buildSignal), undefined, maxTokens);
+    const check = await this.confirm(request, scene, signal);
+    state.calls.push(...check.state.calls);
+    if (check.plan) state.timings.planMs = check.state.timings.planMs;
+    if (!check.confirmed) {
+      // Another concept: stop the build, which was ours to stop, and go on from the plan as usual.
+      stop.abort();
+      await building;
+      state.failure = null;
+      state.status = 'planning';
+      state.mode = null;
+      state.example = null;
+      state.retrieved = null;
+      state.plan = null;
+      if (check.plan) {
+        state.plan = check.plan;
+        hooks.onPlan?.(check.plan);
+      } else {
+        await this.planStage(state, request, hooks, signal);
+      }
+      if (state.plan && !hooks.cached?.(state.plan)) await this.buildStage(state, hooks, signal);
+      return;
+    }
+    if (check.plan && hooks.cached) {
+      // An approved figure for this very plan is ready now; the build is not.
+      const reviewed = state.plan;
+      state.plan = check.plan;
+      if (hooks.cached(check.plan)) {
+        const settled = { status: state.status, failure: state.failure };
+        stop.abort();
+        await building;
+        state.status = settled.status;
+        state.failure = settled.failure;
+        return;
+      }
+      state.plan = reviewed;
+    }
+    const reply = await building;
+    if (reply === null) return;
+    return this.finishLibrary(state, scene, reply, started, hooks, signal);
+  }
+
+  /** Checks a library reply: its edits over the reviewed scene, and any plan it brings. */
+  private async finishLibrary(state: GenerationState, scene: ReferenceScene, reply: string, started: number, hooks: GenerationHooks, signal?: AbortSignal): Promise<void> {
+    state.timings.sceneMs = this.now() - started;
+    // A plan in the reply replaces the reviewed one, when the request needed other names or steps.
+    const json = /```json\s*\n[\s\S]*?\n\s*```/i.exec(reply);
+    const problems: string[] = [];
+    if (json) {
+      const parsed = parsePlanReply(json[0]);
+      const validation = parsed.problem ? null : validatePlan(parsed.value);
+      if (validation?.plan) state.plan = validation.plan;
+      else problems.push(`The updated plan was not accepted: ${parsed.problem ?? formatPlanProblems(validation?.problems ?? [])}`);
+    }
+    const base: FragmentSet = { html: scene.html, css: scene.css, js: scene.js };
+    const edited = this.edited(base, json ? reply.replace(json[0], '') : reply);
+    hooks.onFragment?.('js', edited.problems.length === 0 && edited.fragments.js !== undefined && fragmentPasses('js', edited.fragments.js));
+    const attempt = await this.check(state, 'scene', edited.fragments, missingFragments(edited.fragments), [...edited.problems, ...problems], edited.changed);
+    hooks.onAttempt?.(attempt);
+    await this.repairWhileAllowed(state, hooks, signal);
+  }
+
+  /** One plan call beside the library build: its concept confirms the retrieval, or names another. */
+  private async confirm(request: LearnerRequest, scene: ReferenceScene, signal?: AbortSignal): Promise<{ readonly confirmed: boolean; readonly plan: ScenePlan | null; readonly state: GenerationState }> {
+    const check = this.begin();
+    const started = this.now();
+    const reply = await this.call(check, 'plan', planPrompt(request), this.deadlineSignal(check, signal));
+    // Without a plan to say otherwise, the request's own words stand.
+    if (reply === null) return { confirmed: true, plan: null, state: check };
+    const parsed = parsePlanReply(reply);
+    const value = parsed.value as { concept?: unknown } | null;
+    const concept = typeof value?.concept === 'string' ? value.concept : null;
+    const plan = parsed.problem ? null : validatePlan(parsed.value).plan;
+    if (plan) check.timings.planMs = this.now() - started;
+    const confirmed = concept === null || standardFigure(concept, { [scene.id]: scene }) !== null;
+    return { confirmed, plan, state: check };
   }
 
   begin(): GenerationState {

@@ -2,6 +2,7 @@ import type { ScenePlan } from '@incantly/core';
 import { REFERENCE_SCENES, type ReferenceScene } from '@incantly/core/scenes';
 import { parsePlanReply } from './fragments';
 import { ScriptedModel, type CallPurpose, type ModelCall } from './models';
+import { conceptScores } from './retrieve';
 
 /**
  * A stand-in model that answers from the reviewed reference scenes, with
@@ -42,35 +43,10 @@ export interface ReferenceModelOptions {
   readonly models?: Partial<Record<CallPurpose, string>>;
 }
 
-/** Words that pick a concept out of a learner's request. */
-const KEYWORDS: Readonly<Record<string, readonly string[]>> = {
-  'sine-wave': ['sine', 'sinus', 'sin(', 'wave', 'amplitude', 'frequency', 'phase', 'trig', 'periodic', 'oscillat'],
-  projectile: ['projectile', 'thrown', 'throw', 'ball', 'cannon', 'launch', 'trajector', 'parabola', 'range', 'gravity', 'vertical velocity', 'horizontal speed'],
-  'thin-lens': ['lens', 'focal', 'ray', 'image', 'convex', 'optic', 'magnif', 'refract'],
-  buoyancy: ['buoyan', 'float', 'sink', 'archimedes', 'upthrust', 'displace', 'density', 'dense', 'water'],
-  pendulum: ['pendulum', 'swing', 'bob'],
-  spring: ['spring', 'hooke', 'oscillat', 'stiffness', 'harmonic', 'mass on', 'of a spring', 'on a spring'],
-  magnets: ['magnet', 'pole', 'north', 'south', 'compass', 'field line'],
-  ohm: ['ohm', 'circuit', 'current', 'voltage', 'resist', 'battery', 'ammeter', 'v = ir', 'wire'],
-  titration: ['titrat', 'equivalence', 'ph ', 'ph.', 'ph?', 'acid', 'alkali', 'neutralis', 'neutraliz', 'burette'],
-  normal: ['normal distribution', 'bell', 'standard deviation', '68', 'gaussian', 'mean', 'z-score', 'z score'],
-  derivative: ['derivative', 'tangent', 'slope', 'differentia', 'secant', 'rate of change', 'gradient'],
-  gas: ['gas', 'particle', 'pressure', 'boyle', 'charles', 'kinetic theory', 'molecule', 'pv'],
-};
-
+/** The reviewed scene a text is about: retrieval's own scores, whichever concept leads. */
 export function conceptFor(text: string, scenes: Readonly<Record<string, ReferenceScene>> = REFERENCE_SCENES): ReferenceScene | null {
-  const lower = text.toLowerCase();
-  let best: ReferenceScene | null = null;
-  let bestScore = 0;
-  for (const scene of Object.values(scenes)) {
-    const words = KEYWORDS[scene.id] ?? scene.plan.concept.toLowerCase().split(/\s+/);
-    const score = words.reduce((sum, word) => sum + (lower.includes(word) ? 1 : 0), 0);
-    if (score > bestScore) {
-      best = scene;
-      bestScore = score;
-    }
-  }
-  return best;
+  const [best] = conceptScores(text, scenes);
+  return best && best.score > 0 ? best.scene : null;
 }
 
 function fence(name: string, source: string): string {
@@ -169,13 +145,21 @@ export function referenceModel(options: ReferenceModelOptions = {}): ScriptedMod
   const faultFor = (trial: number): Fault => (typeof options.fault === 'function' ? options.fault(trial) : options.fault ?? 'none');
   const stubbornFor = (trial: number): boolean => (typeof options.stubborn === 'function' ? options.stubborn(trial) : options.stubborn ?? false);
   let trial = -1;
+  // A library build starts before its plan call, which only confirms it: the two are one trial.
+  let confirming: string | null = null;
 
   const script = (call: ModelCall): string => {
     const user = call.prompt.user;
+    const request = /The learner asked: "([^"]*)"/.exec(user)?.[1] ?? '';
+    const library = call.purpose === 'scene' && call.prompt.system.some((block) => block.text.includes('LIBRARY format'));
+    if (library) {
+      trial++;
+      confirming = request;
+    }
     if (call.purpose === 'plan') {
       const replan = user.includes('Your previous plan was rejected');
-      if (!replan) trial++;
-      const request = /The learner asked: "([^"]*)"/.exec(user)?.[1] ?? '';
+      if (!replan && confirming !== request) trial++;
+      confirming = null;
       const scene = conceptFor(request, scenes);
       if (!scene) return fence('json', JSON.stringify(unsupportedPlan(request)));
       const plan = faultFor(trial) === 'bad-plan' && !replan ? overfullPlan(scene.plan) : scene.plan;

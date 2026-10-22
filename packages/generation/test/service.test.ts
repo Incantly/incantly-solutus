@@ -82,12 +82,20 @@ describe('the concept cache (PRD 25.6)', () => {
 
   it('skips only the scene call when a new request plans the same figure', async () => {
     const model = referenceModel();
-    const { post } = await start({ model });
+    const { post, service } = await start({ model });
     const first = await events(await post('/v1/generations', { prompt: 'Explain projectile motion for a physics student.' }));
     await post(`/v1/generations/${(first.at(-1)!.data as unknown as SceneEvent).generationId}/probe`, { ok: true });
     const callsBefore = model.calls.length;
-    await events(await post('/v1/generations', { prompt: 'What path does a thrown ball follow?' }));
+    // Too few words to name the concept, so it is planned first, and the plan finds the figure.
+    await events(await post('/v1/generations', { prompt: 'What path does a ball follow when you kick it?' }));
     expect(model.calls.slice(callsBefore).map((c) => c.purpose)).toEqual(['plan']);
+    // A request that names the concept starts its build at once, and still takes the approved figure.
+    const callsThen = model.calls.length;
+    const hits = service.cache!.stats().hits;
+    const third = await events(await post('/v1/generations', { prompt: 'Why does a ball thrown at 45 degrees go the furthest?' }));
+    expect(model.calls.slice(callsThen).map((c) => c.purpose).sort()).toEqual(['plan', 'scene']);
+    expect(service.cache!.stats().hits).toBe(hits + 1);
+    expect((third.at(-1)!.data as unknown as SceneEvent).fragments.js).toBe(REFERENCE_SCENES.projectile!.js);
   });
 
   it('never stores a figure made with note text, and never caches what the device did not approve', async () => {

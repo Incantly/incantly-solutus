@@ -96,6 +96,9 @@ what replaces them
 \`\`\`
 A block may hold several SEARCH/REPLACE pairs, applied in order; each SEARCH must match one place. If nothing needs to change, reply with an empty \`\`\`edit js block. If a fragment needs rewriting, reply with it whole in its usual \`\`\`js (or html, css) block instead.`;
 
+/** Starting from the reviewed scene a request names, before any plan (PRD 25.5). */
+export const LIBRARY_FORMAT = `LIBRARY format. The reviewed scene below already teaches this concept well. Change it only as far as the learner's request needs: often a default, a step, a preset or a label; often nothing at all. Reply with edit blocks only, as in the EDIT format, or with an empty \`\`\`edit js block when the scene already answers the request. Keep its parameter and part names and its number of steps. Only if the request needs a different parameter, part or number of steps, add the whole updated plan in a \`\`\`json block after the edits.`;
+
 /** A rough token count: about 3.5 characters per token for English and code. */
 export function estimateTokens(text: string): number {
   return Math.ceil(text.length / 3.5);
@@ -254,6 +257,30 @@ export function scenePrompt(plan: ScenePlan, options: ScenePromptOptions = {}): 
   const reference = [BUILD_FORMAT, ...contract, ...(example ? [exampleText(example)] : [])].join('\n');
   const user = ['Build the scene for this plan.', planText, sizeLine(plan)].join('\n');
   return { prompt: { system: [coreBlock(), { text: reference, cache: true }], user }, example: example?.id ?? null, mode: 'write', start: null };
+}
+
+/**
+ * The library call: the reviewed scene a request names, adapted to the
+ * request itself, with no plan to wait for. The system blocks are the same
+ * for every request about this concept, so their prefix is cached across
+ * learners; only the request is new.
+ */
+export function libraryPrompt(scene: ReferenceScene, request: LearnerRequest): Prompt {
+  const reference = [
+    EDIT_FORMAT,
+    LIBRARY_FORMAT,
+    'CONTRACT. The kit API your scene may use, as TypeScript declarations; the scene itself is plain JavaScript.',
+    '```ts',
+    contractFor(scene.plan.capabilities),
+    '```',
+    `THE REVIEWED SCENE: ${scene.plan.concept}. Its plan:`,
+    JSON.stringify(scene.plan),
+    ...(['html', 'css', 'js'] as const).flatMap((name) => ['```' + name, scene[name].trim(), '```']),
+  ].join('\n');
+  const lines = [`The learner asked: "${clip(request.prompt, REQUEST_LIMITS.prompt)}"`];
+  if (request.noteContext) lines.push(`Text near the request in their note: "${clip(request.noteContext, REQUEST_LIMITS.noteContext)}"`);
+  lines.push('Adapt the reviewed scene to this request, changing only what it needs.');
+  return { system: [coreBlock(), { text: reference, cache: true }], user: lines.join('\n') };
 }
 
 /** Catalog lines for the capabilities a plan uses, for repair requests. */
