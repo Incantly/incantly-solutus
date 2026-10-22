@@ -571,6 +571,8 @@ describe('moves in order and views on one state (C3-8, C3-9)', () => {
         inc.tween({ duration: 0.5, apply: (k) => void log.push(`${name} ${k.toFixed(2)}`), commit: () => void log.push(`${name} done`) });
       }
     });
+    // Moves play in scene time, so the figure plays.
+    runtime.play();
     for (let i = 0; i < 18; i++) runtime.tick(0.1);
     const done = log.filter((l) => l.endsWith('done'));
     expect(done).toEqual(['first done', 'second done', 'third done']);

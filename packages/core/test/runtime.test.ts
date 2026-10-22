@@ -348,21 +348,45 @@ describe('formulas and tweens', () => {
     ).toContain('must be a parameter or a finite number');
   });
 
-  it('drives frames while a tween runs, even when paused, then commits', () => {
+  it('runs a tween in scene time: frozen while paused, at the learner\'s speed while playing, then commits (C3-7)', () => {
     const ks: number[] = [];
     let committed = false;
     const { runtime } = mount(
       (inc) => {
-        inc.tween({ duration: 0.1, ease: 'linear', apply: (k) => ks.push(k), commit: () => (committed = true) });
+        inc.tween({ duration: 0.2, ease: 'linear', apply: (k) => ks.push(k), commit: () => (committed = true) });
       },
       { autoplay: false },
     );
+    // Paused: k holds, and the tween asks for no frames.
     runtime.tick(0.05);
-    expect(runtime.needsFrame()).toBe(true);
     runtime.tick(0.05);
-    expect(ks).toEqual([0.5, 1]);
-    expect(committed).toBe(true);
+    expect(ks).toEqual([]);
     expect(runtime.needsFrame()).toBe(false);
+    runtime.play();
+    runtime.tick(0.05);
+    // Pausing mid-way freezes it without cancelling.
+    runtime.pause();
+    runtime.tick(0.05);
+    expect(ks).toEqual([0.25]);
+    // At twice the speed, the rest takes half the time.
+    runtime.play();
+    runtime.setSpeed(2);
+    runtime.tick(0.05);
+    runtime.tick(0.05);
+    expect(ks.map((k) => Math.round(k * 1e9) / 1e9)).toEqual([0.25, 0.75, 1]);
+    expect(committed).toBe(true);
+  });
+
+  it('lands a tween at its end under reduced motion, playing or not', () => {
+    const ks: number[] = [];
+    const { runtime } = mount(
+      (inc) => {
+        inc.tween({ duration: 1, ease: 'linear', apply: (k) => ks.push(k) });
+      },
+      { autoplay: false, reducedMotion: true },
+    );
+    runtime.tick(0.016);
+    expect(ks).toEqual([1]);
   });
 });
 

@@ -381,7 +381,9 @@ export class SceneRuntime {
   needsFrame(): boolean {
     if (this.lifecycle !== 'mounted' || !this.visible) return false;
     const moving = this.playing && this.animated !== false;
-    return moving || this.dirty || this.tweens.length > 0 || this.stepTransition !== null || this.touring();
+    // A tween moves in scene time: it waits while paused (C3-7), and under reduced motion it lands at once.
+    const tweening = this.tweens.length > 0 && (this.playing || this.reducedMotion);
+    return moving || this.dirty || tweening || this.stepTransition !== null || this.touring();
   }
 
   /** Whether the idle tour is waiting or sweeping. */
@@ -442,8 +444,14 @@ export class SceneRuntime {
       if (done) this.stepTransition = null;
       this.dirty = true;
     }
-    if (this.tweens.length > 0) {
-      this.stepTween(capped);
+    // Tweens move in scene time, at the learner's speed; pausing freezes k without cancelling (C3-7). Under
+    // reduced motion each lands at its end, as steps do, so a learner who asked for no motion still sees the change.
+    if (this.tweens.length > 0 && this.reducedMotion) {
+      // A commit may queue the next move: at most a full queue lands in one frame.
+      for (let i = 0; i < 16 && this.tweens.length > 0; i++) this.stepTween(Number.POSITIVE_INFINITY);
+      this.dirty = true;
+    } else if (this.tweens.length > 0 && this.playing) {
+      this.stepTween(capped * this.speed);
       this.dirty = true;
     }
     this.drainChanges();
