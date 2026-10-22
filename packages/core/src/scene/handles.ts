@@ -23,6 +23,7 @@ import type {
   ViewBox,
 } from '../api/types';
 import type { ElementKind } from '../protocol/scene-commands';
+import { bindMethods } from './bind';
 import { elementBox } from './bounds';
 import { SceneApiError } from './errors';
 import { fmt } from './format';
@@ -229,6 +230,7 @@ export class StageHandle implements Stage {
   ) {
     this.viewBox = viewBox;
     nodes.set(this, stageNode);
+    bindMethods(this);
   }
 
   private make(kind: ElementKind, options: ElementOptions = {}, source?: VNode): VNode {

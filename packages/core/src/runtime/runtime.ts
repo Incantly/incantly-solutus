@@ -44,6 +44,7 @@ import type { StageMeasure } from '../protocol/scene-commands';
 import { SPEEDS, type LoopMode } from '../protocol/runtime-messages';
 import type { ActionView, ErrorPhase, ErrorView, LegendView, ParamView, PredictView, UiState } from '../protocol/ui';
 import { EMPTY_UI } from '../protocol/ui';
+import { bindMethods } from '../scene/bind';
 import { SceneApiError } from '../scene/errors';
 import { calculus } from '../helpers/calc';
 import { motion } from '../helpers/motion';
@@ -1421,7 +1422,9 @@ export class SceneRuntime {
     const node = this.graph.createStage(selector, viewBox, title, (description as string | undefined) ?? '', clip);
     this.stageZoom.set(node.id, zoom !== false);
     const stage = new StageHandle(this.graph, node, viewBox, this.parts);
-    return entry.create(this.kitContext(stage, node.id), options);
+    const made = entry.create(this.kitContext(stage, node.id), options);
+    // A kit's methods, too, may be taken off it and called alone.
+    return typeof made === 'object' && made !== null ? bindMethods(made) : made;
   }
 
   // -------------------------------------------------------------------------

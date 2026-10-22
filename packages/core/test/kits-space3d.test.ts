@@ -567,6 +567,15 @@ describe('inc.space3d', () => {
     expect(error((s) => void s.view('under' as never))).toContain('Unknown view "under"');
   });
 
+  it('lets a scene take a kit method off its object and call it alone', () => {
+    const { mount, runtime } = space((s) => {
+      const { box, part } = s;
+      part('Crate', box(1, { tone: 'a' }));
+    });
+    expect(mount.ui.error).toBeNull();
+    expect(runtime.uiState().parts.map((p) => p.name)).toEqual(['Crate']);
+  });
+
   it('gives an arrow made without a label one the first time it is labelled', () => {
     // Once a scene labelled its field arrow on every frame without making it with a label, and threw on frame 1.
     const { runtime, mount } = space((s, inc) => {

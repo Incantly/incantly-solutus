@@ -35,6 +35,7 @@ import type {
 import type { ViewAction } from '../protocol/runtime-messages';
 import type { StageMeasure } from '../protocol/scene-commands';
 import { AWAITING_MAP, type KitContext, type ViewController } from '../runtime/kit';
+import { bindMethods } from '../scene/bind';
 import { SceneApiError } from '../scene/errors';
 import { fmt } from '../scene/format';
 import type { VNode } from '../scene/graph';
@@ -168,7 +169,9 @@ class GraphStage implements Stage {
   constructor(
     private readonly inner: StageHandle,
     private readonly raw: () => void,
-  ) {}
+  ) {
+    bindMethods(this);
+  }
   get viewBox(): ViewBox {
     return this.inner.viewBox;
   }
@@ -289,6 +292,7 @@ export class Graph2D implements Graph, ViewController {
     this.drawAxes();
     if (options.zoom !== false) ctx.setView(this);
     ctx.setMeasure(this.measure());
+    bindMethods(this);
   }
 
   /** How the measuring tool reads the graph: in the axes' own units, while both axes are linear (VI-5). */

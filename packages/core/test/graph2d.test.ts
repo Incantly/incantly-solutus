@@ -39,6 +39,24 @@ describe('graph2d', () => {
     expect(toY(0)).toBe(340);
   });
 
+  it('lets a scene take a graph or stage method off it and call it alone', () => {
+    // Once a lens scene wrote const X = graph.toX and threw on its first X(0).
+    let mapped: number[] = [];
+    const { mount } = run((inc) => {
+      const g = inc.graph2d('#g', { x: [0, 10], y: [0, 10], title: 'Map' });
+      const X = g.toX;
+      const { toY } = g;
+      const line = g.stage.line;
+      line(X(0), toY(0), X(10), toY(10), { tone: 'a' });
+      const s = inc.svg('#s', { viewBox: [0, 0, 100, 100], title: 'Stage' });
+      const { circle } = s;
+      circle(50, 50, 4);
+      mapped = [X(0), X(10), toY(10)];
+    });
+    expect(mount.ui.error).toBeNull();
+    expect(mapped).toEqual([52, 740, 20]);
+  });
+
   it('plots a formula, shows its source and redraws when a parameter changes', () => {
     let curveId = 0;
     const { runtime } = run((inc) => {
