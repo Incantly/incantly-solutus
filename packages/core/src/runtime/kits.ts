@@ -3,16 +3,16 @@ import type { KitContext } from './kit';
 
 /**
  * Kits are drawing modules the base runtime does not carry: 3D, physics,
- * charts and flowcharts (PRD 30: "kits load on demand"; DG-6). The validator
+ * charts, flowcharts and chemistry (PRD 30: "kits load on demand"; DG-6). The validator
  * records which a scene calls; the host then loads only those, as modules on
  * the page or as scripts joined to the sandbox Worker ahead of the scene.
  */
-export type KitName = 'space3d' | 'physics2d' | 'chart' | 'flow';
+export type KitName = 'space3d' | 'physics2d' | 'chart' | 'flow' | 'chemistry';
 
 /** The inc calls kits answer. */
-export type KitCall = 'space3d' | 'graph3d' | 'physics2d' | 'chart' | 'flow';
+export type KitCall = 'space3d' | 'graph3d' | 'physics2d' | 'chart' | 'flow' | 'chemistry';
 
-export const KIT_NAMES: readonly KitName[] = ['space3d', 'physics2d', 'chart', 'flow'];
+export const KIT_NAMES: readonly KitName[] = ['space3d', 'physics2d', 'chart', 'flow', 'chemistry'];
 
 /** The kit behind each call. */
 export const KIT_OF: Readonly<Record<KitCall, KitName>> = Object.freeze({
@@ -21,6 +21,7 @@ export const KIT_OF: Readonly<Record<KitCall, KitName>> = Object.freeze({
   physics2d: 'physics2d',
   chart: 'chart',
   flow: 'flow',
+  chemistry: 'chemistry',
 });
 
 export function isKitCall(name: string): name is KitCall {

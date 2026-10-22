@@ -1290,6 +1290,215 @@ export interface Flow {
 }
 
 // ---------------------------------------------------------------------------
+// Chemistry: inc.chemistry (the chemistry kit, loaded on demand)
+// ---------------------------------------------------------------------------
+
+export interface ChemistryOptions {
+  readonly title: string;
+  readonly description?: string;
+  /** Default [0, 0, 640, 400]. */
+  readonly viewBox?: ViewBox;
+  /** Stage units per ångström for molecules. Default 40: a C–H bond is 44 long. */
+  readonly scale?: number;
+  /** 'balls' (default) shades each atom as a ball; 'symbols' writes symbols joined by lines, as a displayed formula. */
+  readonly look?: 'balls' | 'symbols';
+}
+
+export interface AtomOptions {
+  readonly tone?: Tone;
+  /** Radius in stage units. Default: from the element's size. */
+  readonly r?: number;
+  /** An ion's charge: 1 shows +, -2 shows 2−. */
+  readonly charge?: number;
+  /** The learner can drag it; its bonds follow. */
+  readonly draggable?: boolean;
+}
+
+export interface Atom {
+  /** Its symbol, such as 'O'. */
+  readonly element: string;
+  readonly x: number;
+  readonly y: number;
+  at(x: number, y: number): this;
+  charge(value: number): this;
+  /** A partial charge beside it, δ+ or δ−; null removes it. */
+  partial(sign: '+' | '-' | null): this;
+  tone(name: Tone): this;
+  show(visible?: boolean): this;
+  hide(): this;
+  /** The drawn atom, for parts, callouts and connectors. */
+  readonly handle: Handle;
+}
+
+export interface BondOptions {
+  /** 1, 2 or 3 lines; 1.5 is one solid and one dashed, as in benzene. Default 1. */
+  readonly order?: 1 | 1.5 | 2 | 3;
+  /** 'ionic' draws no line; 'hydrogen' a dotted one between the atoms' surfaces. Default 'covalent'. */
+  readonly kind?: 'covalent' | 'ionic' | 'hydrogen';
+  readonly tone?: Tone;
+}
+
+export interface Bond {
+  readonly a: Atom;
+  readonly b: Atom;
+  order(value: 1 | 1.5 | 2 | 3): this;
+  /** How formed it is, from 0 to 1: it thins and fades as it breaks. */
+  strength(value: number): this;
+  tone(name: Tone): this;
+  show(visible?: boolean): this;
+  hide(): this;
+  readonly handle: Handle;
+}
+
+/** A structure of your own: atoms as [element, x, y, charge?] in ångströms (y down), bonds as [from, to, order?] by index. */
+export interface MoleculeStructure {
+  readonly atoms: ReadonlyArray<readonly [string, number, number, number?]>;
+  readonly bonds?: ReadonlyArray<readonly [number, number, number?]>;
+  /** A polyatomic ion's charge, shown at its top right. */
+  readonly charge?: number;
+}
+
+export interface MoleculeOptions {
+  /** Its centre. Default: the middle of the stage. */
+  readonly at?: Vec2;
+  /** Degrees clockwise. */
+  readonly angle?: number;
+  /** Dots for each atom's lone pairs, from its valence electrons. */
+  readonly lonePairs?: boolean;
+  /** δ+ and δ− on atoms at the ends of polar bonds, from electronegativity. */
+  readonly polar?: boolean;
+  /** The learner can drag it around. */
+  readonly draggable?: boolean;
+}
+
+export interface Molecule {
+  /** As given, such as 'H2O'. */
+  readonly formula: string;
+  /** Its atoms in the order the formula writes them: H2O is H, H, O. */
+  readonly atoms: readonly Atom[];
+  readonly bonds: readonly Bond[];
+  readonly x: number;
+  readonly y: number;
+  readonly angle: number;
+  at(x: number, y: number): this;
+  /** Turns it to an angle in degrees, clockwise. */
+  rotate(degrees: number): this;
+  show(visible?: boolean): this;
+  hide(): this;
+  readonly handle: Handle;
+}
+
+export interface ShellOptions {
+  /** Electrons in each shell, innermost first. Default: the ground state. */
+  readonly electrons?: readonly number[];
+  /** Radius of the first shell. Default 27; each next one is `gap` further out (default 16). */
+  readonly r?: number;
+  readonly gap?: number;
+  /** 'dot' (default) or 'cross', for dot-and-cross diagrams. */
+  readonly mark?: 'dot' | 'cross';
+  /** Turns per second while playing. Default 0. */
+  readonly spin?: number;
+  /** The electrons' tone. Default 'b'. */
+  readonly tone?: Tone;
+}
+
+/** A Bohr model: the nucleus and its electrons in shells; an ion shows in brackets with its charge. */
+export interface Shells {
+  readonly element: string;
+  /** Protons in the nucleus. */
+  readonly protons: number;
+  /** Electrons in each shell now, innermost first. */
+  readonly electrons: readonly number[];
+  /** Protons minus electrons: 0 for an atom, 1 for Na+. */
+  readonly charge: number;
+  /** Sets the electrons in each shell, as when an atom gives one away. */
+  setElectrons(perShell: readonly number[]): this;
+  /** Where an electron is drawn now, by shell (0 is innermost) and index. */
+  electron(shell: number, index: number): Vec2;
+  at(x: number, y: number): this;
+  show(visible?: boolean): this;
+  hide(): this;
+  readonly handle: Handle;
+}
+
+export interface ReactionOptions {
+  /** Where it plays: [x, y, width, height]. Default: the stage. */
+  readonly box?: ViewBox;
+  /** Structures for formulas the kit does not know. */
+  readonly structures?: Readonly<Record<string, MoleculeStructure>>;
+  /** Write the equation beneath it. Default true. */
+  readonly equation?: boolean;
+}
+
+/** Bond energies in kJ/mol from average bond enthalpies: in to break, out to make, and the change (negative gives energy out). */
+export interface ReactionEnergy {
+  readonly broken: number;
+  readonly formed: number;
+  readonly change: number;
+}
+
+/** A balanced equation acted out: the reactants' bonds break, their atoms move, the products' bonds form. */
+export interface Reaction {
+  /** 0 shows the reactants, 1 the products. */
+  progress(value: number): this;
+  /** Every bond in the reactants, such as 'H–H' and 'O=O'. */
+  readonly broken: readonly string[];
+  /** Every bond in the products. */
+  readonly formed: readonly string[];
+  /** Null when a bond is ionic or has no tabled value. */
+  readonly energy: ReactionEnergy | null;
+  /** Each atom, the same one throughout. */
+  readonly atoms: readonly Atom[];
+  readonly handle: Handle;
+}
+
+export interface ProfileOptions {
+  /** Energies of the reactants, the top of the hump and the products. */
+  readonly reactants: number;
+  readonly peak: number;
+  readonly products: number;
+  /** A lower top for the catalysed path, drawn dashed. */
+  readonly catalysed?: number;
+  /** Where it is drawn: [x, y, width, height]. Default: the stage. */
+  readonly box?: ViewBox;
+  /** Default 'kJ/mol'. */
+  readonly unit?: string;
+  /** Arrows and values for the activation energy and the energy change. Default true. */
+  readonly labels?: boolean;
+  /** Default ['reactants', 'products']. */
+  readonly names?: readonly [string, string];
+}
+
+/** An energy profile: reactants, the activation hump and products. */
+export interface Profile {
+  set(values: { readonly reactants?: number; readonly peak?: number; readonly products?: number; readonly catalysed?: number | null }): this;
+  /** A ball on the curve at this point of the reaction, 0 to 1; null hides it. */
+  marker(progress: number | null): this;
+  /** The energy on the curve at a point of the reaction, 0 to 1. */
+  energy(progress: number): number;
+  /** The peak above the reactants. */
+  readonly activation: number;
+  /** Products minus reactants: negative when energy is given out. */
+  readonly change: number;
+  readonly handle: Handle;
+}
+
+export interface Chemistry {
+  /** One atom, drawn as a ball (or a symbol) in the element's tone. */
+  atom(element: string, x: number, y: number, options?: AtomOptions): Atom;
+  /** A bond between two atoms that follows them as they move. */
+  bond(a: Atom, b: Atom, options?: BondOptions): Bond;
+  /** A molecule or ion from its formula (H2O, CO2, NH4+, SO4^2-, C2H5OH, NaCl, CCl4, ...), with real bond lengths and angles, or from a structure you give. */
+  molecule(formula: string | MoleculeStructure, options?: MoleculeOptions): Molecule;
+  /** The electron shells of an element, centred on (x, y). */
+  shells(element: string, x: number, y: number, options?: ShellOptions): Shells;
+  /** A balanced equation, such as '2H2 + O2 -> 2H2O', acted out by its atoms. */
+  reaction(equation: string, options?: ReactionOptions): Reaction;
+  profile(options: ProfileOptions): Profile;
+  readonly stage: Stage;
+}
+
+// ---------------------------------------------------------------------------
 // Tweens
 // ---------------------------------------------------------------------------
 
@@ -1371,6 +1580,8 @@ export interface Inc {
   chart(selector: string, options: ChartOptions): Chart;
   /** A flowchart or state diagram that lays itself out. */
   flow(selector: string, options: FlowOptions): Flow;
+  /** Atoms, bonds, molecules, electron shells, reactions and energy profiles. */
+  chemistry(selector: string, options: ChemistryOptions): Chemistry;
   /** A formula of x, t, the parameters by name and its vars, such as inc.formula('A*sin(k*x - w*t)', { vars: { A: amplitude } }). */
   formula(source: string, options?: FormulaOptions): Formula;
   /** Seeded random number in [0, 1). Same seed, same sequence. */

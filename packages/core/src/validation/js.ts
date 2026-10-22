@@ -216,6 +216,7 @@ const MOUNT_ONLY: ReadonlySet<string> = new Set([
   'physics2d',
   'chart',
   'flow',
+  'chemistry',
   'formula',
   'idle',
 ]);
@@ -226,6 +227,7 @@ const CREATES_ELEMENTS: Readonly<Partial<Record<HandleKind, ReadonlySet<string>>
   Space3D: new Set(['box', 'sphere', 'cylinder', 'cone', 'plane', 'torus', 'tube', 'mesh', 'group', 'line', 'arrow', 'coil', 'arc', 'point', 'label', 'grid', 'axes', 'fieldLines', 'part', 'drag']),
   Graph3D: new Set(['surface', 'parametric', 'curve', 'point', 'vector', 'line', 'plane', 'label', 'part']),
   Surface3D: new Set(['section']),
+  Chemistry: new Set(['atom', 'bond', 'molecule', 'shells', 'reaction', 'profile']),
   World2D: new Set(['ball', 'box', 'polygon', 'ramp', 'spring', 'rope', 'rod', 'hinge', 'pulley', 'tank', 'field', 'forces', 'onHit', 'onTouch']),
   Chart: new Set(['series', 'points', 'rule']),
   Flow: new Set(['node', 'edge']),
@@ -1359,7 +1361,8 @@ class JsValidator {
       case 'graph3d':
       case 'physics2d':
       case 'chart':
-      case 'flow': {
+      case 'flow':
+      case 'chemistry': {
         if (isKitCall(method)) this.kitCalls.add(method);
         const [selector] = node.arguments;
         const value =

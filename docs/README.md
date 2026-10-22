@@ -43,6 +43,7 @@ Incantly turns a concept in a learner's notes into a safe, interactive teaching 
 - [Scene subset](sdk/scene-subset.md): the JavaScript, HTML and CSS a scene may use, rule by rule.
 - [Styling figures](sdk/styling.md): presets, tokens, Tailwind classes per part, layout, size and shown parts, for every figure or one.
 - [Touching the figure](sdk/interaction.md): dragging, tracing, zooming and turning figures with mouse, touch and keyboard.
+- [Chemistry](sdk/chemistry.md): atoms, bonds and molecules from formulas, lone pairs, electron shells, reactions acted out with bond energies, and energy profiles.
 - [Extending the SDK](sdk/extending.md): how implementation agents promote repeated patterns into reusable capabilities.
 
 ### Delivery

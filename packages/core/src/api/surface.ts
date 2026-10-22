@@ -7,10 +7,13 @@
  */
 import type {
   Arrow3D,
+  Atom,
   Body2D,
+  Bond,
   Calculus,
   Chart,
   ChartSeries,
+  Chemistry,
   Choice,
   ColorParam,
   Dots,
@@ -34,6 +37,7 @@ import type {
   Label3D,
   Line,
   Line3D,
+  Molecule,
   MotionHelpers,
   Object3D,
   Param,
@@ -41,8 +45,11 @@ import type {
   PathHelpers,
   Point,
   PolylineHandle,
+  Profile,
+  Reaction,
   Segment,
   ShapeHelpers,
+  Shells,
   Space3D,
   Stage,
   State,
@@ -100,7 +107,14 @@ export type HandleKind =
   | 'ChartSeries'
   | 'Flow'
   | 'FlowNode'
-  | 'FlowEdge';
+  | 'FlowEdge'
+  | 'Chemistry'
+  | 'Atom'
+  | 'Bond'
+  | 'Molecule'
+  | 'Shells'
+  | 'Reaction'
+  | 'Profile';
 
 /**
  * What a member returns: another handle kind, `self` for chainable methods,
@@ -174,6 +188,7 @@ export const INC_FUNCTIONS = {
   physics2d: 'World2D',
   chart: 'Chart',
   flow: 'Flow',
+  chemistry: 'Chemistry',
   formula: 'Formula',
   random: null,
   tween: null,
@@ -487,6 +502,34 @@ export const HANDLES: Readonly<Record<HandleKind, HandleSpec>> = {
   FlowEdge: {
     methods: { label: 'self', tone: 'self', dashed: 'self', flow: 'self' } satisfies Methods<FlowEdge>,
     properties: {},
+  },
+  Chemistry: {
+    methods: { atom: 'Atom', bond: 'Bond', molecule: 'Molecule', shells: 'Shells', reaction: 'Reaction', profile: 'Profile' } satisfies Methods<Chemistry>,
+    properties: { stage: 'Stage' } satisfies Properties<Chemistry>,
+  },
+  Atom: {
+    methods: { at: 'self', charge: 'self', partial: 'self', tone: 'self', show: 'self', hide: 'self' } satisfies Methods<Atom>,
+    properties: { element: null, x: null, y: null, handle: 'Element' } satisfies Properties<Atom>,
+  },
+  Bond: {
+    methods: { order: 'self', strength: 'self', tone: 'self', show: 'self', hide: 'self' } satisfies Methods<Bond>,
+    properties: { a: 'Atom', b: 'Atom', handle: 'Element' } satisfies Properties<Bond>,
+  },
+  Molecule: {
+    methods: { at: 'self', rotate: 'self', show: 'self', hide: 'self' } satisfies Methods<Molecule>,
+    properties: { formula: null, atoms: null, bonds: null, x: null, y: null, angle: null, handle: 'Element' } satisfies Properties<Molecule>,
+  },
+  Shells: {
+    methods: { setElectrons: 'self', electron: null, at: 'self', show: 'self', hide: 'self' } satisfies Methods<Shells>,
+    properties: { element: null, protons: null, electrons: null, charge: null, handle: 'Element' } satisfies Properties<Shells>,
+  },
+  Reaction: {
+    methods: { progress: 'self' } satisfies Methods<Reaction>,
+    properties: { broken: null, formed: null, energy: null, atoms: null, handle: 'Element' } satisfies Properties<Reaction>,
+  },
+  Profile: {
+    methods: { set: 'self', marker: 'self', energy: null } satisfies Methods<Profile>,
+    properties: { activation: null, change: null, handle: 'Element' } satisfies Properties<Profile>,
   },
 };
 

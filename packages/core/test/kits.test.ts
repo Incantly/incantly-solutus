@@ -27,7 +27,7 @@ describe('kits load on demand (DG-6)', () => {
   it('maps calls to kits once each, in a stable order', () => {
     expect(kitsFor(['graph3d', 'svg', 'space3d', 'flow', 'chart'])).toEqual(['space3d', 'chart', 'flow']);
     expect(kitsFor(['svg', 'graph2d'])).toEqual([]);
-    expect(KIT_NAMES).toEqual(['space3d', 'physics2d', 'chart', 'flow']);
+    expect(KIT_NAMES).toEqual(['space3d', 'physics2d', 'chart', 'flow', 'chemistry']);
   });
 
   it('records the kits a scene calls, and checks their stage selectors', () => {

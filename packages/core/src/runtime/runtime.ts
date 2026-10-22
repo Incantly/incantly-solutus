@@ -1,6 +1,8 @@
 import type {
   Chart,
   ChartOptions,
+  Chemistry,
+  ChemistryOptions,
   IdleOptions,
   DragInfo,
   Flow,
@@ -1670,6 +1672,7 @@ export class SceneRuntime {
       physics2d: (selector: string, options: Physics2DOptions) => runtime.kitStage('physics2d', selector, options) as World2D,
       chart: (selector: string, options: ChartOptions) => runtime.kitStage('chart', selector, options) as Chart,
       flow: (selector: string, options: FlowOptions) => runtime.kitStage('flow', selector, options) as Flow,
+      chemistry: (selector: string, options: ChemistryOptions) => runtime.kitStage('chemistry', selector, options) as Chemistry,
       formula(source: string, options?: FormulaOptions) {
         try {
           const index = runtime.formulas.length;
