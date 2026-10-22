@@ -26,6 +26,12 @@ function expectedPosition(fragments: Fragments, fragment: 'html' | 'css' | 'js',
 const errors = (diagnostics: readonly Diagnostic[]) => diagnostics.filter((d) => d.severity === 'error');
 
 describe('validator: messages that name the fix', () => {
+  it('points a helper used without inc. at the SDK one', () => {
+    // Once a lens scene called sym(...) and was asked whether it meant its own constant S.
+    const result = validateScene(scene({ js: `${BASE_JS}\nconst S = 2;\nconst label = sym('x^2');` }));
+    expect(errors(result.diagnostics).map((d) => d.message)).toContain('"sym" is not defined; did you mean inc.sym?');
+  });
+
   it('names the cap for a loop to a count that can change, and the loop for Array.from', () => {
     // Once diffusion scenes looped to a particle count the controls change, and seasons scenes built orbits with Array.from.
     const loop = validateScene(scene({ js: `${BASE_JS}\nlet n = 0;\ninc.onFrame(() => {\n  n = 40;\n  for (let i = 0; i < n; i++) dot.at(i, 0);\n});` }));

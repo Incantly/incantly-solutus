@@ -1085,7 +1085,10 @@ class JsValidator {
     }
     const why = FORBIDDEN_GLOBALS[name];
     if (why) this.report('forbidden-global', `${name} ${why}`, node.start);
-    else {
+    else if (Object.hasOwn(INC_NAMESPACES, name) || Object.hasOwn(INC_FUNCTIONS, name)) {
+      // A helper used without inc., as sym for inc.sym: the scene meant the SDK's own.
+      this.report('unknown-global', `"${name}" is not defined; did you mean inc.${name}?`, node.start);
+    } else {
       const suggestion = closest(name, [...ALLOWED_GLOBAL_SET, ...allNames(ctx.scope)]);
       this.report(
         'unknown-global',
