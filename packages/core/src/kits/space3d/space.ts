@@ -2,6 +2,8 @@ import type {
   Arrow3D,
   AxesOptions,
   CameraOptions,
+  Dots3D,
+  Dots3DOptions,
   DragMap,
   FieldLineOptions,
   GridOptions,
@@ -33,9 +35,9 @@ import type {
 import { rotA } from '../../helpers/vec';
 import type { KitContext } from '../../runtime/kit';
 import { SceneApiError } from '../../scene/errors';
-import { formatReadable } from '../../scene/handles';
+import { formatReadable, MAX_DOTS } from '../../scene/handles';
 import { readVec3 } from './camera';
-import { Engine3D, euler, extentWithin, Item, toneOf, transformPoint, type Emitter, type LabelRecord, type Look } from './engine';
+import { Engine3D, euler, extentWithin, Item, toneOf, transformPoint, type Cloud, type Emitter, type LabelRecord, type Look } from './engine';
 import { boxMesh, coneMesh, customMesh, cylinderMesh, latheMesh, planeMesh, segmentsOf, torusMesh, type Mesh } from './mesh';
 import { MODEL_NAMES, MODELS } from './models';
 
@@ -285,6 +287,34 @@ export class Arrow3DHandle extends Object3DHandle implements Arrow3D {
   label(text: Readable): this {
     if (!this.labelRecord) throw new SceneApiError('This arrow was made without a label; give it one with the label option');
     this.labelRecord.text = formatReadable(text);
+    return this;
+  }
+}
+
+/** Dots at world points (FX-1, BR-12): the engine projects them every draw onto the stage's canvas layer. */
+export class Dots3DHandle extends Object3DHandle implements Dots3D {
+  constructor(
+    engine: Engine3D,
+    item: Item,
+    coords: Coordinates,
+    private readonly cloud: Cloud,
+  ) {
+    super(engine, item, coords);
+  }
+
+  set(points: ReadonlyArray<Vec3>): this {
+    if (!Array.isArray(points)) throw new SceneApiError('dots.set needs a list of [x, y, z] points');
+    if (points.length > MAX_DOTS) throw new SceneApiError(`At most ${MAX_DOTS} dots`);
+    const kept: Vec3[] = [];
+    for (const p of points as unknown[]) {
+      if (Array.isArray(p) && p.length === 3 && p.every((n) => typeof n === 'number' && Number.isFinite(n))) kept.push(this.coords.point(p as unknown as Vec3));
+    }
+    this.cloud.points = kept;
+    return this;
+  }
+
+  override tone(name: Tone): this {
+    this.cloud.dots.tone(name);
     return this;
   }
 }
@@ -701,6 +731,21 @@ export class Space3DApi implements Space3D {
       this.engine.label([0, 0, 0], label, toneOf(options.tone, null), 10, () => pointAlong(item, 0.5));
     }
     return handle;
+  }
+
+  dots(options: Dots3DOptions = {}): Dots3D {
+    if (typeof options !== 'object' || options === null) throw new SceneApiError('dots options must be an object');
+    const parent = parentOf(options.parent, this.engine);
+    // The stage's own dots check the tone, radius and layer.
+    const flat = this.stage.dots({
+      ...(options.tone !== undefined ? { tone: options.tone } : {}),
+      ...(options.r !== undefined ? { r: options.r } : {}),
+      layer: options.layer ?? 'back',
+      glow: options.glow === true,
+    });
+    const item = new Item({ type: 'custom', emit: () => undefined, bounds: null }, null, parent);
+    item.name = 'dots';
+    return new Dots3DHandle(this.engine, item, this.coords, this.engine.cloud(item, flat));
   }
 
   point(at: Vec3, options: { readonly tone?: Tone; readonly parent?: Group3D; readonly r?: number } = {}): Object3D {

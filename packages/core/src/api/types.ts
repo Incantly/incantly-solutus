@@ -861,6 +861,23 @@ export interface Arrow3D extends Object3D {
   label(text: Readable): this;
 }
 
+export interface Dots3DOptions {
+  readonly tone?: Tone;
+  /** Dot radius in stage units, the same near and far: from 0 to 50. Default 3. */
+  readonly r?: number;
+  /** 'back' (default) behind every solid, showing through a see-through look: 'ghost'; 'front' over the whole figure. */
+  readonly layer?: 'back' | 'front';
+  /** Each dot glows in its tone, as stars, sparks or charges. */
+  readonly glow?: boolean;
+  /** A group the dots move, turn and hide with. */
+  readonly parent?: Group3D;
+}
+
+/** Up to 2000 dots at points [x, y, z], placed, turned and scaled as one object. Points that are not three numbers are left out. */
+export interface Dots3D extends Object3D {
+  set(points: ReadonlyArray<Vec3>): this;
+}
+
 export interface Label3D {
   /** Moves the label to a point or onto an object. */
   at(target: Vec3 | Object3D): this;
@@ -1049,6 +1066,12 @@ export interface Space3D {
   arc(center: Vec3, from: Vec3, axis: Vec3, degrees: number, options?: Line3DOptions): Line3D;
   /** A dot that keeps its size on screen. */
   point(at: Vec3, options?: { readonly tone?: Tone; readonly parent?: Group3D; readonly r?: number }): Object3D;
+  /**
+   * Dots at world points, such as stars, a gas or a cloud of charge, drawn on
+   * the stage's canvas layer in the figure's own camera (FX-1, BR-12): they
+   * follow every turn and zoom, and do not widen the view.
+   */
+  dots(options?: Dots3DOptions): Dots3D;
   /** Text at a point or object, pushed outward from the figure's centre so labels do not collide. */
   label(target: Vec3 | Object3D, text: Readable, options?: { readonly tone?: Tone; readonly offset?: number }): Label3D;
   grid(options?: GridOptions): Object3D;

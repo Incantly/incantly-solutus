@@ -1,4 +1,4 @@
-import type { DragMap, Handle, Mat3, PartOptions, PathHandle, Readable, TextHandle, Tone, Vec2, Vec3, View3D, ViewBox } from '../../api/types';
+import type { Dots, DragMap, Handle, Mat3, PartOptions, PathHandle, Readable, TextHandle, Tone, Vec2, Vec3, View3D, ViewBox } from '../../api/types';
 import { apply, IDENTITY, mul } from '../../helpers/vec';
 import type { ViewAction } from '../../protocol/runtime-messages';
 import type { AuditTurn, DepthAudit, KitContext, ViewController } from '../../runtime/kit';
@@ -173,6 +173,15 @@ interface LabelRecord {
   readonly leader: { readonly line: Handle; readonly dot: Handle } | null;
 }
 
+/** Dots at world points, drawn on one of the stage's canvas layers in this figure's camera (FX-1, BR-12). */
+export interface Cloud {
+  readonly item: Item;
+  readonly dots: Dots;
+  points: readonly Vec3[];
+  /** The stage points sent last, so a view that has not moved sends nothing. */
+  sent: readonly number[];
+}
+
 /** Room between a column of labels and the figure, and between labels in it. */
 const LEADER_GAP = 22;
 const LEADER_ROW = 18;
@@ -292,6 +301,7 @@ export class Engine3D implements ViewController {
   private readonly slotGroup: Handle;
   private readonly labels: LabelRecord[] = [];
   private readonly grabs: Grab[] = [];
+  private readonly clouds: Cloud[] = [];
   private drawn = false;
   private budgetChecked = false;
   private warnedCap = false;
@@ -441,6 +451,38 @@ export class Engine3D implements ViewController {
     this.grabs.push({ item, handle, node });
   }
 
+  /** Dots at world points that follow the item they belong to; the stage's canvas draws them, not the face pool. */
+  cloud(item: Item, dots: Dots): Cloud {
+    const cloud: Cloud = { item, dots, points: [], sent: [] };
+    this.clouds.push(cloud);
+    return cloud;
+  }
+
+  /**
+   * Projects each cloud's points through the camera onto the stage, leaving
+   * out those behind the eye; a hidden cloud draws none. A cloud lies on its
+   * canvas layer whole, behind every solid or over the whole figure, so it
+   * is not sorted with the faces.
+   */
+  private drawClouds(): void {
+    for (const cloud of this.clouds) {
+      const flat: number[] = [];
+      if (cloud.item.shown) {
+        for (const p of cloud.points) {
+          const c = this.camera.toCamera(transformPoint(cloud.item.world, p));
+          if (!this.camera.visible(c[2])) continue;
+          const q = this.camera.project(c);
+          flat.push(Math.round(q.x * 100) / 100, Math.round(q.y * 100) / 100);
+        }
+      }
+      if (flat.length === cloud.sent.length && flat.every((v, i) => v === cloud.sent[i])) continue;
+      cloud.sent = flat;
+      const points: Vec2[] = [];
+      for (let i = 0; i < flat.length; i += 2) points.push([flat[i]!, flat[i + 1]!]);
+      cloud.dots.set(points);
+    }
+  }
+
   label(target: Vec3 | Item, text: Readable, tone: Tone | null, offset: number, follow: (() => Vec3 | null) | null = null, leader = false): LabelRecord {
     if (this.labels.length >= MAX_LABELS) throw new SceneApiError(`A 3D figure has at most ${MAX_LABELS} labels`);
     const handle = this.ctx.stage.text(0, 0, '', { layer: 'labels', ...(tone ? { tone } : {}) });
@@ -570,6 +612,7 @@ export class Engine3D implements ViewController {
       this.camera.settle(centre, this.room(radius));
       this.drawn = true;
     }
+    if (!this.auditing) this.drawClouds();
     const out: Drawable[] = [];
     const emitter = this.emitter(out);
     let things = 0;

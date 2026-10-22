@@ -567,6 +567,80 @@ describe('inc.space3d', () => {
     expect(error((s) => void s.view('under' as never))).toContain('Unknown view "under"');
     expect(error((s) => void s.part('Twice', s.part('Once', s.box(1))))).toContain('already the part "Once"');
   });
+
+  it('draws dots at world points on the stage’s canvas layer, in the figure’s own camera (FX-1, BR-12)', () => {
+    const POINTS: Vec3[] = [
+      [0, 0, 0],
+      [1, 0, 0],
+      [0, 1, 0],
+      [0, 0, 1],
+    ];
+    let world!: Space3D;
+    const { runtime, mount, first } = space((s, inc) => {
+      world = s;
+      const on = inc.toggle('on', { value: true, label: 'Show the gas' });
+      s.box(1, { tone: 'a' });
+      const gas = s.group();
+      // A point that is not three numbers is left out.
+      s.dots({ tone: 'c', r: 2, glow: true, parent: gas }).set([...POINTS, [Number.NaN, 0, 0], [1, 2] as never]);
+      inc.onFrame(() => gas.show(on.value === 1));
+    });
+    type Sent = { layer: string; tone: string; r: number; glow?: boolean; points: number[] };
+    const sent = (commands: ReadonlyArray<{ op: string }>) => commands.filter((c) => c.op === 'dots').at(-1) as Sent | undefined;
+    const at = (points: readonly Vec3[]) => points.flatMap((p) => world.project(p).map((v) => Math.round(v * 100) / 100));
+    const start = sent([...mount.commands, ...first.commands])!;
+    // Behind every solid by default, on the stage's own canvas layer.
+    expect(start).toMatchObject({ layer: 'back', tone: 'c', r: 2, glow: true });
+    expect(start.points).toEqual(at(POINTS));
+    // Turned, they follow the camera; a view that has not moved sends nothing.
+    runtime.view(stageId(runtime), { kind: 'orbit', dx: 0.25, dy: 0.1 });
+    const turned = sent(runtime.tick(0).commands)!;
+    expect(turned.points).toEqual(at(POINTS));
+    expect(turned.points).not.toEqual(start.points);
+    expect(sent(runtime.tick(0).commands)).toBeUndefined();
+    // They hide and show with their group.
+    runtime.setParam('on', 0);
+    expect(sent(runtime.tick(0).commands)!.points).toEqual([]);
+    runtime.setParam('on', 1);
+    expect(sent(runtime.tick(0).commands)!.points).toEqual(at(POINTS));
+    // Moved as one object, and over the whole figure when asked.
+    const { first: placed } = space((s) => {
+      world = s;
+      s.box(1);
+      s.dots({ layer: 'front' }).set([[0, 0, 0]]).at(0, 0, 2);
+    });
+    expect(sent(placed.commands)).toMatchObject({ layer: 'front', points: at([[0, 0, 2]]) });
+    expect(validateSceneJs("const s = inc.space3d('#s', { title: 'Stars' });\ns.dots({ tone: 'lit', glow: true }).set([[0, 0, 5]]).rotate(0, 0, 30).tone('a');").diagnostics).toEqual([]);
+  });
+
+  it('checks a 3D dot cloud as the stage checks its dots', () => {
+    const errors: string[] = [];
+    space((s) => {
+      const attempts = [
+        () => s.dots({ r: 0 }),
+        () => s.dots({ layer: 'mid' as never }),
+        () => s.dots({ tone: 'pink' as never }),
+        () => s.dots().set(Array.from({ length: 2001 }, (): Vec3 => [0, 0, 0])),
+        () => s.dots().set('stars' as never),
+        () => s.dots().tone('pink' as never),
+      ];
+      for (const attempt of attempts) {
+        try {
+          attempt();
+        } catch (error) {
+          errors.push((error as Error).message);
+        }
+      }
+    });
+    expect(errors).toEqual([
+      'dots need a radius from 0 to 50',
+      'dots go on the back or front layer',
+      'Unknown tone "pink"',
+      'At most 2000 dots',
+      'dots.set needs a list of [x, y, z] points',
+      'Unknown tone "pink"',
+    ]);
+  });
 });
 
 describe('inc.graph3d', () => {

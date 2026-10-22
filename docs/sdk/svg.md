@@ -16,6 +16,18 @@ The engine creates a responsive SVG with a view box, unique ID namespace, access
 
 Dots (`stage.dots`) and fluids (`stage.fluid`) are drawn on canvas layers that share the stage's coordinates and follow its zoom. A canvas on the `back` layer sits between the back layer and the rest of the drawing (FX-1, BR-12): the first time a stage has one, its back layer moves to an SVG of its own under the canvas, so the stack is the back layer, the canvases behind, the middle, front and label layers, then the canvases in front. A grid, an axis or a tank's water on the back layer lies under a flow, and what stands in the flow lies over it. The back layer's SVG takes the drawing's theme and view box, and takes no pointer, as the back layer never does.
 
+A 3D figure puts dots at world points on the same canvas layers with `space.dots({ tone, r, layer, glow, parent })`, in the figure's own camera: they follow every turn and zoom, lie behind every solid by default (a see-through `look: 'ghost'` shows them through it) or over the whole figure with `layer: 'front'`, and are placed, turned and hidden as one object, or with their group. `set(points)` takes up to 2000 points `[x, y, z]`; they do not widen the view the camera fits.
+
+```js
+// A gas in a see-through box: each molecule bounces between the walls on its own course, and turns with the box.
+space.box(2, { look: 'ghost', tone: 'b' });
+const gas = space.dots({ tone: 'a', r: 2.5 });
+const bounce = (u) => 1 - Math.abs((((u % 4) + 4) % 4) - 2);
+const courses = [];
+for (let i = 0; i < 60; i++) courses.push([Math.sin(i * 1.7), Math.cos(i * 2.3), Math.sin(i * 0.9 + 1)]);
+inc.onFrame(({ time }) => gas.set(courses.map(([a, b, c], i) => [bounce(a * time + 0.61 * i), bounce(b * time + 1.37 * i), bounce(c * time + 2.11 * i)])));
+```
+
 ## Primitive builders
 
 v0.1 provides:

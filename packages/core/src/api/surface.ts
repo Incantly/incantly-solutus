@@ -19,6 +19,7 @@ import type {
   Choice,
   ColorParam,
   Dots,
+  Dots3D,
   Fluid,
   Flow,
   FlowEdge,
@@ -106,6 +107,7 @@ export type HandleKind =
   | 'Model3D'
   | 'Line3D'
   | 'Arrow3D'
+  | 'Dots3D'
   | 'Label3D'
   | 'Surface3D'
   | 'World2D'
@@ -430,6 +432,7 @@ export const HANDLES: Readonly<Record<HandleKind, HandleSpec>> = {
       coil: 'Line3D',
       arc: 'Line3D',
       point: 'Object3D',
+      dots: 'Dots3D',
       label: 'Label3D',
       grid: 'Object3D',
       axes: 'Group3D',
@@ -465,6 +468,7 @@ export const HANDLES: Readonly<Record<HandleKind, HandleSpec>> = {
   Model3D: { methods: { ...object3dMethods, explode: 'self', piece: 'Object3D' } satisfies Methods<Model3D>, properties: { pieces: null } satisfies Properties<Model3D> },
   Line3D: { methods: { ...object3dMethods, points: 'self' } satisfies Methods<Line3D>, properties: {} },
   Arrow3D: { methods: { ...object3dMethods, set: 'self', label: 'self' } satisfies Methods<Arrow3D>, properties: {} },
+  Dots3D: { methods: { ...object3dMethods, set: 'self' } satisfies Methods<Dots3D>, properties: {} },
   Label3D: {
     methods: { at: 'self', text: 'self', tone: 'self', show: 'self', hide: 'self' } satisfies Methods<Label3D>,
     properties: {},
