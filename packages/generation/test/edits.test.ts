@@ -17,6 +17,22 @@ describe('edit replies (PRD 25.5, RP-5)', () => {
     expect(applied.text).toContain('dot.at(0, wave(time));');
   });
 
+  it('finds a SEARCH copied with other spacing: from the middle of a line, indented otherwise, or broken in two', () => {
+    // Once a reply copied the start of a long line with two spaces more than the fragment had, and the edit failed.
+    const line = '    `Air at ${model.U.toFixed(1)} m/s streams past a cylinder of radius 11 cm spinning at ${spin.value} revolutions a second.`,';
+    const source = ['inc.describe(', '  () =>', line, ');'].join('\n');
+    const midLine = applyEdits(source, [{ search: '      `Air at ${model.U.toFixed(1)} m/s streams past a cylinder of radius 11 cm spinning', replace: '      `Air at ${model.U.toFixed(1)} m/s streams past a ball of radius 11 cm spinning' }]);
+    expect(midLine.failed).toEqual([]);
+    // The rest of the line, and its indentation, stay as they were.
+    expect(midLine.text).toBe(['inc.describe(', '  () =>', line.replace('a cylinder', 'a ball'), ');'].join('\n'));
+    const broken = applyEdits(source, [{ search: 'm/s streams past a cylinder\n of radius 11 cm', replace: 'm/s streams past a ball of radius 11 cm' }]);
+    expect(broken.failed).toEqual([]);
+    expect(broken.text).toContain('streams past a ball of radius 11 cm spinning');
+    // Still once only: spacing taken loosely must not make an edit land in two places.
+    const twice = `${source}\n${source}`;
+    expect(applyEdits(twice, [{ search: '  `Air at   ${model.U.toFixed(1)}', replace: 'x' }]).failed[0]).toMatch(/more than one place/);
+  });
+
   it('says when an edit matches nowhere or in more than one place', () => {
     const twice = `${SCENE}\n${SCENE}`;
     expect(applyEdits(SCENE, [{ search: 'const nothing = 1;', replace: 'const something = 2;' }]).failed).toEqual(['edit 1 did not match: copy its SEARCH text exactly from the fragment']);

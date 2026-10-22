@@ -114,10 +114,50 @@ function placedOnce(text: string, wanted: string): boolean {
   return found === 1;
 }
 
+/** Text with each run of spaces, tabs and line breaks as one space, and where each kept character stands in the original. */
+function squeezed(text: string): { readonly text: string; readonly at: readonly number[] } {
+  let out = '';
+  const at: number[] = [];
+  let space = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]!;
+    if (c === ' ' || c === '\t' || c === '\n' || c === '\r') {
+      if (!space && out.length > 0) {
+        out += ' ';
+        at.push(i);
+      }
+      space = true;
+    } else {
+      out += c;
+      at.push(i);
+      space = false;
+    }
+  }
+  return { text: out, at };
+}
+
+/**
+ * Where `search` stands in `text` when runs of whitespace count as one
+ * space: a SEARCH copied with other indentation, from the middle of a line,
+ * or with a long line broken in two. 'many' when it stands in more than one
+ * place, null when nowhere.
+ */
+function looseMatch(text: string, search: string): { readonly start: number; readonly end: number } | 'many' | null {
+  const needle = squeezed(search.trim()).text;
+  if (needle === '') return null;
+  const hay = squeezed(text);
+  const found = occurrences(hay.text, needle);
+  if (found.length > 1) return 'many';
+  if (found.length === 0) return null;
+  const first = found[0]!;
+  return { start: hay.at[first]!, end: hay.at[first + needle.length - 1]! + 1 };
+}
+
 /**
  * Applies edits in order. Each SEARCH must match once: exactly, or else line
- * by line with surrounding spaces ignored. An empty SEARCH appends. An edit
- * whose SEARCH is gone but whose replacement stands once already is taken as
+ * by line with surrounding spaces ignored, or else with every run of
+ * whitespace taken as one space. An empty SEARCH appends. An edit whose
+ * SEARCH is gone but whose replacement stands once already is taken as
  * applied, as when a reply repeats its edits.
  */
 export function applyEdits(source: string, edits: readonly Edit[]): Applied {
@@ -149,10 +189,16 @@ export function applyEdits(source: string, edits: readonly Edit[]): Applied {
       text = lines.join('\n');
       return;
     }
+    // With every run of whitespace as one space: the text around the match, its indentation too, stays as it was.
+    const loose = exact.length === 0 && starts.length === 0 ? looseMatch(text, edit.search) : null;
+    if (loose && loose !== 'many') {
+      text = text.slice(0, loose.start) + edit.replace.trim() + text.slice(loose.end);
+      return;
+    }
     // A reply that repeats an edit, correcting itself, finds its replacement already in place: nothing to do.
-    if (exact.length === 0 && starts.length === 0 && edit.replace.trim() !== '' && placedOnce(text, edit.replace)) return;
+    if (exact.length === 0 && starts.length === 0 && loose === null && edit.replace.trim() !== '' && placedOnce(text, edit.replace)) return;
     failed.push(
-      exact.length > 1 || starts.length > 1
+      exact.length > 1 || starts.length > 1 || loose === 'many'
         ? `edit ${number} matches more than one place; include a line or two more so its SEARCH is unique`
         : `edit ${number} did not match: copy its SEARCH text exactly from the fragment`,
     );
