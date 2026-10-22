@@ -299,6 +299,7 @@ export interface CalloutOptions {
 export interface DotsOptions {
   readonly tone?: Tone;
   readonly r?: number;
+  /** 'front' (default) over the whole drawing; 'back' over the back layer and under the rest of the drawing. */
   readonly layer?: 'back' | 'front';
   /** Each dot glows in its tone, as sparks, stars or charges. */
   readonly glow?: boolean;
@@ -322,7 +323,7 @@ export interface FluidOptions {
   readonly tone?: Tone;
   /** Dot radius and streak width. Default 1.5. */
   readonly r?: number;
-  /** Default 'back', behind the drawing, so what stands in the flow stays on top. */
+  /** Default 'back': over the back layer (a grid, a tank's water) and under the rest of the drawing, so what stands in the flow stays on top. */
   readonly layer?: 'back' | 'front';
   readonly glow?: boolean;
 }

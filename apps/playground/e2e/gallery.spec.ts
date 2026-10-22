@@ -44,7 +44,10 @@ for (const theme of ['light', 'dark'] as const) {
           const my = box.height * 0.05;
           const outside: string[] = [];
           let drawn = 0;
-          for (const el of svg.querySelectorAll('circle, rect, line, path, polyline, polygon, ellipse, text')) {
+          // A stage with canvases behind its drawing keeps its back layer in an SVG of its own, under them (FX-1, BR-12).
+          const backdrop = [...(svg.parentElement?.children ?? [])].find((el) => el.classList.contains('inc-backdrop'));
+          const shapes = 'circle, rect, line, path, polyline, polygon, ellipse, text';
+          for (const el of [...svg.querySelectorAll(shapes), ...(backdrop?.querySelectorAll(shapes) ?? [])]) {
             if (el.closest('defs, [hidden]')) continue;
             const r = el.getBoundingClientRect();
             if (r.width === 0 && r.height === 0) continue;

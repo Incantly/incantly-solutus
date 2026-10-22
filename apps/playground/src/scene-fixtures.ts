@@ -1,7 +1,8 @@
 /**
  * Scene fixtures for the sandbox browser tests: broken scenes the probe must
- * reject, and hostile scenes that skip the validator on purpose, to show the
- * layers beneath it hold on their own. Test data only.
+ * reject, hostile scenes that skip the validator on purpose, to show the
+ * layers beneath it hold on their own, and a scene that draws on every layer
+ * of a stage. Test data only.
  */
 
 export interface FixtureScene {
@@ -12,8 +13,26 @@ export interface FixtureScene {
 
 const STAGE = "<div id='stage'></div>";
 
-/** Validated scenes: each passes the validator but fails one probe check, or throws where expected. */
+/** Validated scenes: each passes the validator but fails one probe check or throws where expected, or draws on every layer. */
 export const SCENE_FIXTURES: Readonly<Record<string, FixtureScene>> = {
+  /**
+   * One thing on each layer of the stack (FX-1, BR-12): a band on the back
+   * layer, dots on the canvas behind the drawing, a disc in the drawing over
+   * the middle dot, and a dot on the canvas in front over the disc.
+   */
+  layers: {
+    html: STAGE,
+    css: '',
+    js: [
+      "inc.idea('Dots lie over a band, under a disc, and over it.');",
+      "const stage = inc.svg('#stage', { viewBox: [0, 0, 200, 100], title: 'Layers' });",
+      "stage.rect(0, 30, 200, 40, { tone: 'a', layer: 'back' });",
+      "stage.dots({ tone: 'c', r: 6, layer: 'back' }).set([[40, 50], [100, 50], [160, 50]]);",
+      "stage.circle(100, 50, 14, { tone: 'b' });",
+      "stage.dots({ tone: 'lit', r: 3 }).set([[100, 50]]);",
+      "inc.describe(() => 'Three dots over a band; a disc covers the middle one, and a small dot sits on the disc.');",
+    ].join('\n'),
+  },
   /** Throws on line 7, column 30 once time passes half a second. */
   'throws-later': {
     html: STAGE,

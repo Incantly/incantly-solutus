@@ -139,12 +139,17 @@ html.inc-frame, html.inc-frame body { margin: 0; padding: 0; background: transpa
 .inc-scene[data-panels='column'] { display: flex; flex-direction: column; gap: var(--inc-gap); }
 .inc-scene[data-panels='grid'] { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--inc-gap); }
 .inc-scene[data-panels] > * { margin: 0; }
-/* The host stacks its own layers: the back canvas under the drawing, the front canvas over it. */
+/*
+ * The host stacks its own layers (FX-1, BR-12): the back layer's own SVG at the bottom, the canvases
+ * behind the drawing over it, the drawing, then the canvases in front. The renderer lays the back
+ * layer's SVG and the canvases over the drawing's box.
+ */
 .inc-stage-host { position: relative; isolation: isolate; }
 .inc-stage { display: block; width: 100%; height: var(--inc-scene-height, auto); overflow: visible; }
-.inc-stage[data-zoomed] { overflow: hidden; }
+.inc-backdrop { position: absolute; z-index: -2; overflow: visible; pointer-events: none; }
+:is(.inc-stage, .inc-backdrop)[data-zoomed] { overflow: hidden; }
 /* A scene's own stroke-width, linecap, linejoin and font-size arrive as --inc-sw, --inc-cap, --inc-join and --inc-fs. */
-.inc-stage path, .inc-stage line, .inc-stage polyline {
+:is(.inc-stage, .inc-backdrop) path, :is(.inc-stage, .inc-backdrop) line, :is(.inc-stage, .inc-backdrop) polyline {
   fill: none;
   stroke: var(--inc-tone, var(--inc-fg));
   stroke-width: var(--inc-sw, 2px);
@@ -152,58 +157,58 @@ html.inc-frame, html.inc-frame body { margin: 0; padding: 0; background: transpa
   stroke-linejoin: var(--inc-join, round);
   vector-effect: non-scaling-stroke;
 }
-.inc-stage circle, .inc-stage rect { fill: var(--inc-tone, var(--inc-mid)); stroke: none; }
-.inc-stage :is(circle, rect).inc-outline { fill: none; stroke: var(--inc-tone, var(--inc-fg)); stroke-width: var(--inc-sw, 2px); vector-effect: non-scaling-stroke; }
-.inc-stage text { fill: var(--inc-tone, var(--inc-fg)); font-size: var(--inc-fs, 14px); }
+:is(.inc-stage, .inc-backdrop) circle, :is(.inc-stage, .inc-backdrop) rect { fill: var(--inc-tone, var(--inc-mid)); stroke: none; }
+:is(.inc-stage, .inc-backdrop) :is(circle, rect).inc-outline { fill: none; stroke: var(--inc-tone, var(--inc-fg)); stroke-width: var(--inc-sw, 2px); vector-effect: non-scaling-stroke; }
+:is(.inc-stage, .inc-backdrop) text { fill: var(--inc-tone, var(--inc-fg)); font-size: var(--inc-fs, 14px); }
 /* An equation (DG-5): MathML in a box the renderer places around its point; the maths may overflow the box. */
-.inc-stage foreignObject[data-math] { overflow: visible; pointer-events: none; }
-.inc-stage .inc-math { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; color: var(--inc-tone, var(--inc-fg)); font-family: var(--inc-font); font-size: var(--inc-fs, 16px); line-height: 1; white-space: nowrap; }
-.inc-stage .inc-math math { font-size: inherit; }
-.inc-stage .inc-fill:is(path, polyline) { fill: var(--inc-tone, var(--inc-mid)); stroke: none; }
-.inc-stage .inc-fill:is(.inc-shade-sphere, .inc-shade-cylinder, .inc-shade-soft) { fill: var(--inc-grad, var(--inc-tone, var(--inc-mid))); }
-.inc-stage .inc-stop-light { stop-color: color-mix(in srgb, var(--inc-tone, var(--inc-mid)) 55%, #ffffff); }
-.inc-stage .inc-stop-dark { stop-color: color-mix(in srgb, var(--inc-tone, var(--inc-mid)) 82%, #000000); }
-.inc-stage .inc-tone-lo { --inc-tone: var(--inc-lo); }
-.inc-stage .inc-tone-mid { --inc-tone: var(--inc-mid); }
-.inc-stage .inc-tone-hi { --inc-tone: var(--inc-hi); }
-.inc-stage .inc-tone-lit { --inc-tone: var(--inc-lit); }
-.inc-stage .inc-tone-faint { --inc-tone: var(--inc-faint); stroke-width: var(--inc-sw, 1px); }
-.inc-stage .inc-tone-a { --inc-tone: var(--inc-a); }
-.inc-stage .inc-tone-b { --inc-tone: var(--inc-b); }
-.inc-stage .inc-tone-c { --inc-tone: var(--inc-c); }
-.inc-stage .inc-tone-water { --inc-tone: var(--inc-water); }
-.inc-stage .inc-lum-0 { --inc-face: color-mix(in srgb, var(--inc-tone, var(--inc-mid)) 55%, #000000); }
-.inc-stage .inc-lum-1 { --inc-face: color-mix(in srgb, var(--inc-tone, var(--inc-mid)) 68%, #000000); }
-.inc-stage .inc-lum-2 { --inc-face: color-mix(in srgb, var(--inc-tone, var(--inc-mid)) 80%, #000000); }
-.inc-stage .inc-lum-3 { --inc-face: var(--inc-tone, var(--inc-mid)); }
-.inc-stage .inc-lum-4 { --inc-face: color-mix(in srgb, var(--inc-tone, var(--inc-mid)) 82%, #ffffff); }
-.inc-stage .inc-lum-5 { --inc-face: color-mix(in srgb, var(--inc-tone, var(--inc-mid)) 66%, #ffffff); }
-.inc-stage .inc-lum-6 { --inc-face: color-mix(in srgb, var(--inc-tone, var(--inc-mid)) 50%, #ffffff); }
-.inc-stage :is(.inc-lum-0, .inc-lum-1, .inc-lum-2, .inc-lum-3, .inc-lum-4, .inc-lum-5, .inc-lum-6) { fill: var(--inc-face); }
-.inc-stage .inc-face { stroke: color-mix(in srgb, var(--inc-tone, var(--inc-mid)) 60%, #000000); stroke-width: 0.6; stroke-opacity: 0.5; }
+:is(.inc-stage, .inc-backdrop) foreignObject[data-math] { overflow: visible; pointer-events: none; }
+:is(.inc-stage, .inc-backdrop) .inc-math { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; color: var(--inc-tone, var(--inc-fg)); font-family: var(--inc-font); font-size: var(--inc-fs, 16px); line-height: 1; white-space: nowrap; }
+:is(.inc-stage, .inc-backdrop) .inc-math math { font-size: inherit; }
+:is(.inc-stage, .inc-backdrop) .inc-fill:is(path, polyline) { fill: var(--inc-tone, var(--inc-mid)); stroke: none; }
+:is(.inc-stage, .inc-backdrop) .inc-fill:is(.inc-shade-sphere, .inc-shade-cylinder, .inc-shade-soft) { fill: var(--inc-grad, var(--inc-tone, var(--inc-mid))); }
+:is(.inc-stage, .inc-backdrop) .inc-stop-light { stop-color: color-mix(in srgb, var(--inc-tone, var(--inc-mid)) 55%, #ffffff); }
+:is(.inc-stage, .inc-backdrop) .inc-stop-dark { stop-color: color-mix(in srgb, var(--inc-tone, var(--inc-mid)) 82%, #000000); }
+:is(.inc-stage, .inc-backdrop) .inc-tone-lo { --inc-tone: var(--inc-lo); }
+:is(.inc-stage, .inc-backdrop) .inc-tone-mid { --inc-tone: var(--inc-mid); }
+:is(.inc-stage, .inc-backdrop) .inc-tone-hi { --inc-tone: var(--inc-hi); }
+:is(.inc-stage, .inc-backdrop) .inc-tone-lit { --inc-tone: var(--inc-lit); }
+:is(.inc-stage, .inc-backdrop) .inc-tone-faint { --inc-tone: var(--inc-faint); stroke-width: var(--inc-sw, 1px); }
+:is(.inc-stage, .inc-backdrop) .inc-tone-a { --inc-tone: var(--inc-a); }
+:is(.inc-stage, .inc-backdrop) .inc-tone-b { --inc-tone: var(--inc-b); }
+:is(.inc-stage, .inc-backdrop) .inc-tone-c { --inc-tone: var(--inc-c); }
+:is(.inc-stage, .inc-backdrop) .inc-tone-water { --inc-tone: var(--inc-water); }
+:is(.inc-stage, .inc-backdrop) .inc-lum-0 { --inc-face: color-mix(in srgb, var(--inc-tone, var(--inc-mid)) 55%, #000000); }
+:is(.inc-stage, .inc-backdrop) .inc-lum-1 { --inc-face: color-mix(in srgb, var(--inc-tone, var(--inc-mid)) 68%, #000000); }
+:is(.inc-stage, .inc-backdrop) .inc-lum-2 { --inc-face: color-mix(in srgb, var(--inc-tone, var(--inc-mid)) 80%, #000000); }
+:is(.inc-stage, .inc-backdrop) .inc-lum-3 { --inc-face: var(--inc-tone, var(--inc-mid)); }
+:is(.inc-stage, .inc-backdrop) .inc-lum-4 { --inc-face: color-mix(in srgb, var(--inc-tone, var(--inc-mid)) 82%, #ffffff); }
+:is(.inc-stage, .inc-backdrop) .inc-lum-5 { --inc-face: color-mix(in srgb, var(--inc-tone, var(--inc-mid)) 66%, #ffffff); }
+:is(.inc-stage, .inc-backdrop) .inc-lum-6 { --inc-face: color-mix(in srgb, var(--inc-tone, var(--inc-mid)) 50%, #ffffff); }
+:is(.inc-stage, .inc-backdrop) :is(.inc-lum-0, .inc-lum-1, .inc-lum-2, .inc-lum-3, .inc-lum-4, .inc-lum-5, .inc-lum-6) { fill: var(--inc-face); }
+:is(.inc-stage, .inc-backdrop) .inc-face { stroke: color-mix(in srgb, var(--inc-tone, var(--inc-mid)) 60%, #000000); stroke-width: 0.6; stroke-opacity: 0.5; }
 /* Round solids and surfaces: each facet's edge in its own colour closes the seams between them. */
-.inc-stage .inc-face.inc-smooth { stroke: var(--inc-face, var(--inc-tone, var(--inc-mid))); stroke-width: 0.8; stroke-opacity: 1; }
-.inc-stage .inc-face.inc-glass { fill-opacity: 0.16; stroke: var(--inc-tone, var(--inc-mid)); stroke-opacity: 0.35; stroke-width: 0.6; }
+:is(.inc-stage, .inc-backdrop) .inc-face.inc-smooth { stroke: var(--inc-face, var(--inc-tone, var(--inc-mid))); stroke-width: 0.8; stroke-opacity: 1; }
+:is(.inc-stage, .inc-backdrop) .inc-face.inc-glass { fill-opacity: 0.16; stroke: var(--inc-tone, var(--inc-mid)); stroke-opacity: 0.35; stroke-width: 0.6; }
 /* Pieces of one see-through face: no edges between them. */
-.inc-stage .inc-face.inc-glass.inc-tile { stroke: none; }
+:is(.inc-stage, .inc-backdrop) .inc-face.inc-glass.inc-tile { stroke: none; }
 /* A night side or a shadow: dark in either theme, whatever lies under it. */
-.inc-stage .inc-face.inc-shadow { fill: #000000; fill-opacity: 0.42; stroke: none; }
-.inc-stage .inc-face.inc-wire { fill: none; stroke: var(--inc-tone, var(--inc-mid)); stroke-width: 1; stroke-opacity: 1; }
-.inc-stage .inc-on-face { stroke-width: 1.3; }
+:is(.inc-stage, .inc-backdrop) .inc-face.inc-shadow { fill: #000000; fill-opacity: 0.42; stroke: none; }
+:is(.inc-stage, .inc-backdrop) .inc-face.inc-wire { fill: none; stroke: var(--inc-tone, var(--inc-mid)); stroke-width: 1; stroke-opacity: 1; }
+:is(.inc-stage, .inc-backdrop) .inc-on-face { stroke-width: 1.3; }
 .inc-figure.has-focus .inc-stage .inc-slots > :not(.is-focus) { opacity: 0.25; }
 .inc-stage .inc-slots > .is-focus { --inc-tone: var(--inc-lit); }
 .inc-stage circle.inc-grab.inc-draggable { fill: transparent; stroke: none; cursor: grab; }
 .inc-stage circle.inc-grab.inc-draggable:is(:hover, :focus-visible, .is-dragging) { stroke: var(--inc-focus); stroke-opacity: 0.6; stroke-width: 1.5; stroke-dasharray: 4 4; }
-.inc-stage .inc-dashed { stroke-dasharray: 6 5; }
-.inc-stage .inc-flow { stroke-dasharray: 8 6; }
-.inc-stage .inc-ghost { stroke: var(--inc-mid); stroke-opacity: 0.55; stroke-dasharray: 3 4; fill-opacity: 0.18; }
-.inc-stage .inc-ghost.inc-fill { fill: var(--inc-mid); stroke: none; }
-.inc-stage .inc-hidden { display: none; }
+:is(.inc-stage, .inc-backdrop) .inc-dashed { stroke-dasharray: 6 5; }
+:is(.inc-stage, .inc-backdrop) .inc-flow { stroke-dasharray: 8 6; }
+:is(.inc-stage, .inc-backdrop) .inc-ghost { stroke: var(--inc-mid); stroke-opacity: 0.55; stroke-dasharray: 3 4; fill-opacity: 0.18; }
+:is(.inc-stage, .inc-backdrop) .inc-ghost.inc-fill { fill: var(--inc-mid); stroke: none; }
+:is(.inc-stage, .inc-backdrop) .inc-hidden { display: none; }
 .inc-stage .inc-part { cursor: pointer; }
 .inc-stage .inc-part:focus { outline: none; }
-.inc-stage .inc-part.is-focus, .inc-stage .inc-part:focus-visible { --inc-tone: var(--inc-lit); }
-.inc-stage .inc-part:is(.is-focus, :focus-visible):is(path, line, polyline) { stroke-width: calc(var(--inc-sw, 2px) + 1.5px); }
-.inc-stage .inc-part:is(.is-focus, :focus-visible):is(circle, rect) { stroke: var(--inc-fg); stroke-width: 2; }
+:is(.inc-stage, .inc-backdrop) .inc-part.is-focus, :is(.inc-stage, .inc-backdrop) .inc-part:focus-visible { --inc-tone: var(--inc-lit); }
+:is(.inc-stage, .inc-backdrop) .inc-part:is(.is-focus, :focus-visible):is(path, line, polyline) { stroke-width: calc(var(--inc-sw, 2px) + 1.5px); }
+:is(.inc-stage, .inc-backdrop) .inc-part:is(.is-focus, :focus-visible):is(circle, rect) { stroke: var(--inc-fg); stroke-width: 2; }
 .inc-stage .inc-draggable { cursor: grab; touch-action: none; }
 .inc-stage .inc-draggable:focus { outline: none; }
 .inc-stage .inc-draggable.is-dragging { cursor: grabbing; }

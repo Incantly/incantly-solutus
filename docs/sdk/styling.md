@@ -92,6 +92,8 @@ Tokens given in a style apply in both light and dark themes. For a colour that d
 | `readouts`, `readout`, `legend`, `formula`, `table` | The values the figure reports, its legend, formulas and tables |
 | `steps`, `predict`, `zoombar`, `description` | Teaching steps, prediction prompts, the zoom buttons, the text description |
 
+A stage with dots or a fluid behind its drawing stacks its back layer and those canvases under the `stage` SVG (FX-1, BR-12), so give the drawing area a background through `scene` (or the `scene-bg` token), not through `stage`, which would cover them.
+
 A figure lives in a sandboxed frame, so the host page's stylesheet does not reach it. To use Tailwind, give the compiled stylesheet as `css`: it is added to the frame and allowed by its hash, and nothing in it can reach the network.
 
 ```ts

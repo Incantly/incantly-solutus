@@ -1,11 +1,12 @@
 /**
- * A short video of a stage as it plays (PRD 6.10b). The drawing is copied to
- * a canvas as often as it can be, with the dot layers behind and in front of
- * it, and the browser's MediaRecorder records the canvas: WebM where the
- * browser makes it, MP4 otherwise. Equations go in as text, as in a PNG
- * snapshot, so the canvas stays readable and can be recorded.
+ * A short video of a stage as it plays (PRD 6.10b). The stage is copied to a
+ * canvas as often as it can be, layer by layer as it is stacked (the back
+ * layer, the canvases behind, the drawing, the canvases in front), and the
+ * browser's MediaRecorder records the canvas: WebM where the browser makes
+ * it, MP4 otherwise. Equations go in as text, as in a PNG snapshot, so the
+ * canvas stays readable and can be recorded.
  */
-import { backgroundOf, rasterise } from './snapshot';
+import { backgroundOf, stackPictures, type PictureCache } from './snapshot';
 
 export interface ClipOptions {
   /** How long the clip runs, in seconds: 0.5 to 20. Default 4. */
@@ -58,22 +59,20 @@ export async function recordStage(svg: SVGSVGElement | null, options: ClipOption
   const context = canvas.getContext('2d');
   if (!context || typeof canvas.captureStream !== 'function') return null;
   const background = backgroundOf(svg);
-  // Dot clouds and fluids, behind the drawing and in front of it, in the order they are stacked.
-  const layers = (place: 'back' | 'front') => [...(svg.parentElement?.querySelectorAll<HTMLCanvasElement>(`canvas.inc-dots--${place}`) ?? [])];
+  // A layer that has not changed since the last frame, such as the back layer under a fluid, is not decoded again.
+  const cache: PictureCache = new Map();
   let busy = false;
   const paint = async (): Promise<void> => {
     if (busy) return;
     busy = true;
     try {
-      const { image } = await rasterise(svg, true);
+      const pictures = await stackPictures(svg, true, cache);
       context.clearRect(0, 0, canvas.width, canvas.height);
       if (background) {
         context.fillStyle = background;
         context.fillRect(0, 0, canvas.width, canvas.height);
       }
-      for (const layer of layers('back')) if (layer.width > 0) context.drawImage(layer, 0, 0, canvas.width, canvas.height);
-      context.drawImage(image, 0, 0, canvas.width, canvas.height);
-      for (const layer of layers('front')) if (layer.width > 0) context.drawImage(layer, 0, 0, canvas.width, canvas.height);
+      for (const picture of pictures) context.drawImage(picture, 0, 0, canvas.width, canvas.height);
     } catch {
       // A frame that fails to copy keeps the last one.
     } finally {

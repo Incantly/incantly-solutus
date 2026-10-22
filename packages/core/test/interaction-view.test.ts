@@ -419,6 +419,74 @@ describe('full screen, layout and shading (VI-6, SV-5)', () => {
     expect(arcs[0]![2]).toBeGreaterThan(4);
   });
 
+  it('stacks the back layer under the canvases behind the drawing, and keeps the stack in exported pictures (FX-1, BR-12)', async () => {
+    const { THEME_CSS } = await import('../src/renderer/theme');
+    const context = { fillStyle: '', shadowColor: '', shadowBlur: 0, clearRect: () => undefined, beginPath: () => undefined, moveTo: () => undefined, arc: () => undefined, fill: () => undefined };
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(context as unknown as CanvasRenderingContext2D);
+    vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockReturnValue('data:image/png;base64,c3RpbGw=');
+    vi.spyOn(SVGElement.prototype, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 400, bottom: 200, width: 400, height: 200, toJSON: () => ({}) } as DOMRect);
+    const { root, clock } = mount(`
+      const more = inc.toggle('more', { value: false, label: 'Another ball' });
+      const stage = inc.svg('#stage', { viewBox: [0, 0, 200, 100], title: 'Layers' });
+      stage.rect(0, 30, 200, 40, { tone: 'a', layer: 'back' });
+      stage.dots({ tone: 'c', r: 6, layer: 'back' }).set([[40, 50], [160, 50]]);
+      stage.circle(100, 50, 14, { tone: 'b' });
+      stage.dots({ tone: 'lit', r: 3 }).set([[100, 50]]);
+      let ball = null;
+      inc.onFrame(() => {
+        if (more.value === 1 && !ball) ball = stage.circle(40, 50, 8, { tone: 'lit', fill: true, shade: 'sphere', layer: 'back' });
+      });
+    `);
+    const svg = q<SVGSVGElement>(root, 'svg.inc-stage');
+    const backdrop = q<SVGSVGElement>(root, 'svg.inc-backdrop');
+    const behind = q<HTMLCanvasElement>(root, 'canvas.inc-dots--back');
+    // The back layer has moved to an SVG of its own; the drawing keeps the rest.
+    expect(backdrop.querySelector('[data-layer="back"] rect')).not.toBeNull();
+    expect(svg.querySelector('[data-layer="back"]')).toBeNull();
+    expect(svg.querySelector('[data-layer="mid"] circle')).not.toBeNull();
+    // One host holds them, and the theme stacks them: the back layer, the canvas behind, the drawing, the canvas in front.
+    expect(backdrop.parentElement).toBe(svg.parentElement);
+    expect(behind.nextElementSibling).toBe(svg);
+    expect(THEME_CSS).toContain('.inc-backdrop { position: absolute; z-index: -2;');
+    expect(THEME_CSS).toContain('.inc-dots--back { z-index: -1; }');
+    expect(THEME_CSS).toContain(':is(.inc-stage, .inc-backdrop) .inc-tone-a { --inc-tone: var(--inc-a); }');
+    // It keeps its axes and labels readable, and takes no pointer.
+    expect(backdrop.getAttribute('aria-hidden')).toBeNull();
+    expect(backdrop.getAttribute('role')).toBe('none');
+    // Laid over the drawing's box at its view box, and following its zoom.
+    expect(backdrop.getAttribute('viewBox')).toBe('0 0 200 100');
+    expect([backdrop.style.left, backdrop.style.top, backdrop.style.width, backdrop.style.height]).toEqual(['0px', '0px', '400px', '200px']);
+    q<HTMLButtonElement>(root, '.inc-zoombar button[data-view="in"]').click();
+    expect(svg.getAttribute('viewBox')).not.toBe('0 0 200 100');
+    expect(backdrop.getAttribute('viewBox')).toBe(svg.getAttribute('viewBox'));
+    expect(backdrop.hasAttribute('data-zoomed')).toBe(true);
+    q<HTMLButtonElement>(root, '.inc-zoombar button[data-view="reset"]').click();
+    expect(backdrop.getAttribute('viewBox')).toBe('0 0 200 100');
+    expect(backdrop.hasAttribute('data-zoomed')).toBe(false);
+    // A shaded piece put on the back layer later still finds its stage's gradient.
+    const toggle = q<HTMLInputElement>(root, 'input.inc-switch');
+    toggle.checked = true;
+    toggle.dispatchEvent(new Event('input', { bubbles: true }));
+    clock.runUntilIdle();
+    const ball = q<SVGCircleElement>(backdrop, 'circle');
+    const gradient = /^url\(#(.+)\)$/.exec(ball.style.getPropertyValue('--inc-grad'))?.[1];
+    expect(gradient).toMatch(/-sphere-lit$/);
+    expect(svg.querySelector(`defs radialGradient[id="${gradient}"]`)).not.toBeNull();
+    // The exported picture is the stack: the back layer's SVG, a still of the canvas behind, the drawing, a still of the canvas in front.
+    const markup = decodeURIComponent(exportStage(svg)!);
+    expect(markup).toMatch(/^data:image\/svg\+xml;charset=utf-8,<svg[^>]*viewBox="0 0 400 200"/);
+    const [under, between, over] = markup.split('<image');
+    expect(over).toBeDefined();
+    expect(markup.split('<image')).toHaveLength(3);
+    expect(under).toContain('<rect');
+    expect(under).toMatch(/<circle[^>]*fill="url\((&quot;)?#[^"&]+-sphere-lit(&quot;)?\)"/);
+    expect(between).toContain('href="data:image/png;base64,c3RpbGw="');
+    expect(between).toMatch(/<radialGradient id="[^"]+-sphere-lit"/);
+    expect(between).toContain('<circle');
+    expect(over).not.toContain('<circle');
+    expect(markup).not.toContain('class=');
+  });
+
   it('shades filled shapes with one gradient per tone and shade in each stage, under the figure’s own ids', () => {
     const { root } = mount(`
       const stage = inc.svg('#stage', { viewBox: [0, 0, 200, 200], title: 'Shaded' });

@@ -56,6 +56,12 @@ export interface StageDom {
   canvases: { back?: HTMLCanvasElement; front?: HTMLCanvasElement };
   /** A canvas for each fluid, which keeps what it drew so streaks fade (FX-1), by dots id. */
   readonly trails: Map<number, TrailCanvas>;
+  /**
+   * The back layer's own SVG, under the canvases behind the drawing (FX-1,
+   * BR-12): made when the stage first has such a canvas, so the stack is the
+   * back layer, the canvases behind, the drawing, then the canvases in front.
+   */
+  backdrop: SVGSVGElement | null;
 }
 
 interface TrailCanvas {
@@ -132,10 +138,10 @@ export class SceneDom {
     return this.stages.get(id);
   }
 
-  /** The stage an SVG element belongs to. */
+  /** The stage an SVG element belongs to, in its drawing or on its back layer's own SVG. */
   stageOf(element: Element): StageDom | undefined {
-    const svg = element.closest('svg.inc-stage');
-    for (const stage of this.stages.values()) if (stage.svg === svg) return stage;
+    const svg = element.closest('svg.inc-stage, svg.inc-backdrop');
+    for (const stage of this.stages.values()) if (stage.svg === svg || stage.backdrop === svg) return stage;
     return undefined;
   }
 
@@ -160,6 +166,7 @@ export class SceneDom {
   clear(): void {
     for (const stage of this.stages.values()) {
       stage.svg.remove();
+      stage.backdrop?.remove();
       stage.canvases.back?.remove();
       stage.canvases.front?.remove();
       for (const trail of stage.trails.values()) trail.canvas.remove();
@@ -245,6 +252,7 @@ export class SceneDom {
           gradients: new Set(),
           canvases: {},
           trails: new Map(),
+          backdrop: null,
         };
         this.stages.set(command.id, stage);
         this.stats.writes++;
@@ -514,12 +522,58 @@ export class SceneDom {
         canvas = stage.host.ownerDocument.createElement('canvas');
         canvas.className = `inc-dots inc-dots--${layer}`;
         canvas.setAttribute('aria-hidden', 'true');
-        if (layer === 'back') stage.svg.before(canvas);
-        else stage.svg.after(canvas);
+        this.place(stage, canvas, layer);
         stage.canvases[layer] = canvas;
       }
       this.paintCanvas(stage, canvas, sets);
     }
+    this.fitBackdrop(stage);
+  }
+
+  /**
+   * Puts a canvas in the stage's stack (FX-1, BR-12). One behind the drawing
+   * goes over the back layer, which the first time moves to an SVG of its own
+   * under the canvases; one in front goes over everything.
+   */
+  private place(stage: StageDom, canvas: HTMLCanvasElement, layer: 'back' | 'front'): void {
+    if (layer === 'front') {
+      stage.svg.after(canvas);
+      return;
+    }
+    if (!stage.backdrop) {
+      const backdrop = stage.host.ownerDocument.createElementNS(SVG_NS, 'svg') as SVGSVGElement;
+      backdrop.setAttribute('class', 'inc-backdrop');
+      // Its axes and labels stay readable, after the drawing that names the figure; the stack is set by the theme.
+      backdrop.setAttribute('role', 'none');
+      backdrop.setAttribute('focusable', 'false');
+      backdrop.append(stage.layers.back);
+      stage.svg.after(backdrop);
+      stage.backdrop = backdrop;
+    }
+    stage.svg.before(canvas);
+  }
+
+  /** Lays the back layer's SVG over the drawing, at the view box the learner has zoomed to. */
+  private fitBackdrop(stage: StageDom): void {
+    const backdrop = stage.backdrop;
+    if (!backdrop) return;
+    const rect = stage.svg.getBoundingClientRect();
+    const host = stage.host.getBoundingClientRect();
+    const box: ReadonlyArray<readonly [string, string]> = [
+      ['left', `${rect.left - host.left}px`],
+      ['top', `${rect.top - host.top}px`],
+      ['width', `${rect.width}px`],
+      ['height', `${rect.height}px`],
+    ];
+    for (const [name, value] of box) if (backdrop.style.getPropertyValue(name) !== value) backdrop.style.setProperty(name, value);
+    const viewBox = stage.svg.getAttribute('viewBox') ?? stage.viewBox.join(' ');
+    if (backdrop.getAttribute('viewBox') !== viewBox) backdrop.setAttribute('viewBox', viewBox);
+    const ratio = stage.svg.getAttribute('preserveAspectRatio');
+    if (ratio !== backdrop.getAttribute('preserveAspectRatio')) {
+      if (ratio === null) backdrop.removeAttribute('preserveAspectRatio');
+      else backdrop.setAttribute('preserveAspectRatio', ratio);
+    }
+    backdrop.toggleAttribute('data-zoomed', stage.svg.hasAttribute('data-zoomed'));
   }
 
   /**
@@ -557,8 +611,7 @@ export class SceneDom {
       const canvas = doc.createElement('canvas');
       canvas.className = `inc-dots inc-dots--${set.layer} inc-fluid`;
       canvas.setAttribute('aria-hidden', 'true');
-      if (set.layer === 'back') stage.svg.before(canvas);
-      else stage.svg.after(canvas);
+      this.place(stage, canvas, set.layer);
       trail = { canvas, previous: null, at: 0, frame: '' };
       stage.trails.set(id, trail);
     }

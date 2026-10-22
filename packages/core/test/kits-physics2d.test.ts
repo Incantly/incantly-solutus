@@ -308,7 +308,7 @@ describe('liquids (PH-5)', () => {
     expect(validateSceneJs("const s = inc.svg('#s', { viewBox: [0, 0, 10, 10], title: 'T' });\ns.rect(0, 0, 4, 4, { tone: 'water', fill: true });").diagnostics).toEqual([]);
     const { THEME_CSS } = await import('../src/renderer/theme');
     expect(THEME_CSS.match(/--inc-water: #[0-9a-f]{6};/g)?.length).toBeGreaterThanOrEqual(3);
-    expect(THEME_CSS).toContain('.inc-stage .inc-tone-water { --inc-tone: var(--inc-water); }');
+    expect(THEME_CSS).toContain(':is(.inc-stage, .inc-backdrop) .inc-tone-water { --inc-tone: var(--inc-water); }');
   });
 });
 

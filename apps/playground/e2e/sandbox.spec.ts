@@ -275,6 +275,125 @@ test.describe('sandbox (Phase 3 gate)', () => {
     await expect(page.frameLocator('iframe').locator('button[data-action="toggle"]')).toHaveAttribute('data-playing', 'false');
   });
 
+  test('a stage stacks its back layer, the dots behind, the drawing and the dots in front, in the frame and in every picture of it (FX-1, BR-12)', async ({ page, browserName }, testInfo) => {
+    await open(page, 'page=sandbox&fixture=layers&autoplay=0');
+    const frame = page.frameLocator('iframe');
+    const stage = frame.locator('svg.inc-stage');
+    await expect(stage).toBeVisible();
+    await expect(frame.locator('svg.inc-backdrop rect')).toHaveCount(1);
+    await expect(frame.locator('canvas.inc-dots--back')).toHaveCount(1);
+    // Each layer's colour, as the browser paints it, and where each should show in a 200 × 100 view box.
+    const tone = await stage.evaluate((svg) => {
+      const style = getComputedStyle(svg);
+      const context = document.createElement('canvas').getContext('2d', { willReadFrequently: true })!;
+      const rgb = (name: string) => {
+        context.clearRect(0, 0, 1, 1);
+        context.fillStyle = style.getPropertyValue(`--inc-${name}`).trim();
+        context.fillRect(0, 0, 1, 1);
+        return [...context.getImageData(0, 0, 1, 1).data.slice(0, 3)];
+      };
+      const stacking = (selector: string) => getComputedStyle(svg.parentElement!.querySelector(selector)!).zIndex;
+      return { band: rgb('a'), disc: rgb('b'), behind: rgb('c'), front: rgb('lit'), zBackdrop: stacking('svg.inc-backdrop'), zBehind: stacking('canvas.inc-dots--back') };
+    });
+    expect([tone.zBackdrop, tone.zBehind]).toEqual(['-2', '-1']);
+    const POINTS: Array<readonly [string, number, number, number[]]> = [
+      ['the band', 70, 40, tone.band],
+      ['a dot behind the drawing, over the band', 40, 50, tone.behind],
+      ['another, at the far end', 160, 50, tone.behind],
+      ['the disc, over the dot behind it', 104.5, 50, tone.disc],
+      ['the dot in front, over the disc', 100, 50, tone.front],
+    ];
+    /** The colour at each point, in stage units, of a picture of the stage. */
+    const sample = (src: string) =>
+      page.evaluate(
+        async ({ src, points }) => {
+          const image = new Image();
+          image.src = src;
+          await image.decode();
+          const canvas = document.createElement('canvas');
+          canvas.width = image.naturalWidth;
+          canvas.height = image.naturalHeight;
+          const context = canvas.getContext('2d', { willReadFrequently: true })!;
+          context.drawImage(image, 0, 0);
+          const s = Math.min(canvas.width / 200, canvas.height / 100);
+          const ox = (canvas.width - 200 * s) / 2;
+          const oy = (canvas.height - 100 * s) / 2;
+          return points.map(([x, y]) => [...context.getImageData(Math.round(ox + x * s), Math.round(oy + y * s), 1, 1).data.slice(0, 3)]);
+        },
+        { src, points: POINTS.map(([, x, y]) => [x, y] as const) },
+      );
+    const expectStack = (colours: number[][], picture: string) =>
+      POINTS.forEach(([what, , , want], i) => {
+        const got = colours[i]!;
+        expect(Math.max(...got.map((v, c) => Math.abs(v - want[c]!))), `${what}, in ${picture}: ${got.join(',')} against ${want.join(',')}`).toBeLessThanOrEqual(12);
+      });
+    // On the page.
+    const shot = await stage.screenshot();
+    expectStack(await sample(`data:image/png;base64,${shot.toString('base64')}`), 'the frame');
+    // In the PNG snapshot and the exported SVG, which carries a still of each canvas in its place.
+    const pictures = await page.evaluate(async () => {
+      const figure = (window.__playground as unknown as { figure: { exportSvg(): Promise<string | null>; snapshot(): Promise<string | null> } }).figure;
+      return { svg: await figure.exportSvg(), png: await figure.snapshot() };
+    });
+    expectStack(await sample(pictures.png!), 'the PNG snapshot');
+    const markup = decodeURIComponent(pictures.svg!.slice(pictures.svg!.indexOf(',') + 1));
+    expect(markup.match(/<image /g)).toHaveLength(2);
+    // The exported SVG as an image on a page, where the browser draws the stills it carries.
+    await page.evaluate(({ svg, png }) => {
+      document.body.replaceChildren();
+      for (const src of [svg!, png!]) {
+        const img = document.createElement('img');
+        img.src = src;
+        img.style.cssText = 'display:block;width:640px;margin:4px';
+        document.body.append(img);
+      }
+    }, pictures);
+    await page.waitForFunction(() => [...document.images].every((img) => img.complete && img.naturalWidth > 0));
+    const exported = await page.locator('img').first().screenshot();
+    expectStack(await sample(`data:image/png;base64,${exported.toString('base64')}`), 'the exported SVG');
+    await page.screenshot({ path: testInfo.outputPath('layer-pictures.png'), fullPage: true });
+    if (browserName !== 'chromium') return;
+    // In a video too: its first frame, where colours come back near enough to tell the dot from the band and the disc.
+    await open(page, 'page=sandbox&fixture=layers&autoplay=0');
+    await expect(page.frameLocator('iframe').locator('svg.inc-backdrop rect')).toHaveCount(1);
+    const frameColours = await page.evaluate(
+      async ({ points }) => {
+        const figure = (window.__playground as unknown as { figure: { exportClip(options: { seconds: number; fps: number }): Promise<Blob | null> } }).figure;
+        const video = await figure.exportClip({ seconds: 0.6, fps: 10 });
+        if (!video) return null;
+        const player = document.createElement('video');
+        player.muted = true;
+        player.src = URL.createObjectURL(video);
+        document.body.append(player);
+        // The first frame the browser presents as it plays.
+        await new Promise<void>((resolve) => {
+          player.requestVideoFrameCallback(() => {
+            player.pause();
+            resolve();
+          });
+          void player.play();
+        });
+        const canvas = document.createElement('canvas');
+        canvas.width = player.videoWidth;
+        canvas.height = player.videoHeight;
+        const context = canvas.getContext('2d', { willReadFrequently: true })!;
+        context.drawImage(player, 0, 0);
+        const s = Math.min(canvas.width / 200, canvas.height / 100);
+        const ox = (canvas.width - 200 * s) / 2;
+        const oy = (canvas.height - 100 * s) / 2;
+        return points.map(([x, y]) => [...context.getImageData(Math.round(ox + x * s), Math.round(oy + y * s), 1, 1).data.slice(0, 3)]);
+      },
+      { points: POINTS.map(([, x, y]) => [x, y] as const) },
+    );
+    test.skip(frameColours === null, 'This browser cannot record a canvas');
+    const distance = (a: number[], b: number[]) => Math.hypot(...a.map((v, c) => v - b[c]!));
+    const [band, behind, , disc, front] = frameColours!;
+    expect(distance(behind!, tone.behind)).toBeLessThan(distance(behind!, tone.band));
+    expect(distance(disc!, tone.disc)).toBeLessThan(distance(disc!, tone.behind));
+    expect(distance(front!, tone.front)).toBeLessThan(distance(front!, tone.disc));
+    expect(distance(band!, tone.band)).toBeLessThan(distance(band!, tone.behind));
+  });
+
   test('an equation draws as maths in the frame, and keeps it in the exported picture and the snapshot (DG-5)', async ({ page }, testInfo) => {
     await open(page, 'page=sandbox&scene=pendulum&autoplay=0');
     const frame = page.frameLocator('iframe');

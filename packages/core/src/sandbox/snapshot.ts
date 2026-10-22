@@ -81,12 +81,11 @@ function serialize({ clone, styles }: Painted): string {
   return new XMLSerializer().serializeToString(clone).replace(/data-inc-style="(\d+)"/g, (_, i: string) => `style="${escape(styles[Number(i)] ?? '')}"`);
 }
 
-function painted(svg: SVGSVGElement, flat = false): Painted {
+function painted(svg: SVGSVGElement, flat = false, written: string[] = []): Painted {
   const rect = svg.getBoundingClientRect();
   const width = Math.max(1, Math.round(rect.width));
   const height = Math.max(1, Math.round(rect.height));
   const clone = svg.cloneNode(true) as SVGSVGElement;
-  const written: string[] = [];
   const source = [svg, ...svg.querySelectorAll('*')];
   const target = [clone, ...clone.querySelectorAll('*')];
   const styles = new Map<Element, CSSStyleDeclaration>();
@@ -163,16 +162,66 @@ function painted(svg: SVGSVGElement, flat = false): Painted {
 }
 
 /**
+ * A stage's layers from the bottom up (FX-1, BR-12): its back layer's own
+ * SVG, the canvases behind the drawing, the drawing, then the canvases in
+ * front. A stage without canvases is its drawing alone.
+ */
+export type StackLayer = { readonly svg: SVGSVGElement; readonly canvas?: undefined } | { readonly canvas: HTMLCanvasElement; readonly svg?: undefined };
+
+export function stackOf(svg: SVGSVGElement): StackLayer[] {
+  const siblings = [...(svg.parentElement?.children ?? [])];
+  const canvases = (place: 'back' | 'front'): StackLayer[] =>
+    siblings.filter((e) => e.localName === 'canvas' && e.classList.contains(`inc-dots--${place}`)).map((canvas) => ({ canvas: canvas as HTMLCanvasElement }));
+  const backdrop = siblings.find((e) => e.localName === 'svg' && e.classList.contains('inc-backdrop')) as SVGSVGElement | undefined;
+  return [...(backdrop ? [{ svg: backdrop }] : []), ...canvases('back'), { svg }, ...canvases('front')];
+}
+
+/** A canvas that has been painted, which a picture can take in. */
+const paintedCanvas = (canvas: HTMLCanvasElement) => canvas.width > 0 && canvas.height > 0;
+
+/**
  * The stage as a standalone SVG image with its theme written in (SV-14), as
  * a data URL: safe to show in an <img> or to download, as an image cannot run
- * anything. Dots on a canvas layer are not part of it.
+ * anything. A stage with canvas layers (dots, fluids) is drawn as its stack:
+ * the back layer's SVG, a still of each canvas behind, the drawing, a still
+ * of each canvas in front.
  */
 export function exportStage(svg: SVGSVGElement | null): string | null {
   if (!svg) return null;
   try {
-    const picture = painted(svg);
-    const background = getComputedStyle(svg.closest('.inc-figure') ?? svg).backgroundColor;
-    if (background && background !== 'rgba(0, 0, 0, 0)' && background !== 'transparent') {
+    const layers = stackOf(svg).filter((layer) => !layer.canvas || paintedCanvas(layer.canvas));
+    const background = backgroundOf(svg);
+    let picture: Painted;
+    if (layers.length === 1) picture = painted(svg);
+    else {
+      const styles: string[] = [];
+      const drawing = painted(svg, false, styles);
+      const { width, height } = drawing;
+      const root = svg.ownerDocument.createElementNS(SVG_NS, 'svg') as SVGSVGElement;
+      root.setAttribute('xmlns', SVG_NS);
+      root.setAttribute('width', String(width));
+      root.setAttribute('height', String(height));
+      root.setAttribute('viewBox', `0 0 ${width} ${height}`);
+      for (const layer of layers) {
+        if (layer.canvas) {
+          const image = svg.ownerDocument.createElementNS(SVG_NS, 'image');
+          image.setAttribute('width', String(width));
+          image.setAttribute('height', String(height));
+          image.setAttribute('preserveAspectRatio', 'none');
+          image.setAttribute('href', layer.canvas.toDataURL('image/png'));
+          root.append(image);
+          continue;
+        }
+        // Each SVG keeps its own view box, laid over the same box; the back layer's points at the drawing's defs.
+        const copy = layer.svg === svg ? drawing.clone : painted(layer.svg, false, styles).clone;
+        copy.removeAttribute('xmlns');
+        copy.setAttribute('width', String(width));
+        copy.setAttribute('height', String(height));
+        root.append(copy);
+      }
+      picture = { clone: root, width, height, styles };
+    }
+    if (background) {
       picture.styles.push(`background: ${background}`);
       picture.clone.setAttribute('data-inc-style', String(picture.styles.length - 1));
     }
@@ -183,36 +232,61 @@ export function exportStage(svg: SVGSVGElement | null): string | null {
 }
 
 /**
- * The stage as a PNG data URL. Drawing an equation's MathML marks the canvas
- * unreadable in some browsers, so a stage with equations falls back to them
- * as text.
+ * The stage as a PNG data URL, with its canvas layers. Drawing an equation's
+ * MathML marks the canvas unreadable in some browsers, so a stage with
+ * equations falls back to them as text.
  */
 export async function snapshotStage(svg: SVGSVGElement | null): Promise<string | null> {
   if (!svg) return null;
   const picture = await drawn(svg, false);
-  if (picture !== null || !svg.querySelector('foreignObject[data-math]')) return picture;
+  if (picture !== null || !stackOf(svg).some((layer) => layer.svg?.querySelector('foreignObject[data-math]'))) return picture;
   return drawn(svg, true);
 }
 
-/**
- * The stage drawn as an image, ready for a canvas: the standalone copy,
- * decoded by the browser. `flat` writes equations as text, which keeps a
- * canvas readable everywhere.
- */
-export async function rasterise(svg: SVGSVGElement, flat: boolean): Promise<{ readonly image: HTMLImageElement; readonly width: number; readonly height: number }> {
-  const picture = painted(svg, flat);
-  const url = URL.createObjectURL(new Blob([serialize(picture)], { type: 'image/svg+xml' }));
+/** Decoded pictures of a stage's SVG layers, by place in the stack, kept while their markup stays the same. */
+export type PictureCache = Map<number, { readonly markup: string; readonly image: HTMLImageElement }>;
+
+/** A standalone copy decoded by the browser. */
+async function decode(markup: string): Promise<HTMLImageElement> {
+  const url = URL.createObjectURL(new Blob([markup], { type: 'image/svg+xml' }));
   try {
-    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+    return await new Promise<HTMLImageElement>((resolve, reject) => {
       const img = new Image();
       img.onload = () => resolve(img);
       img.onerror = () => reject(new Error('snapshot image failed'));
       img.src = url;
     });
-    return { image, width: picture.width, height: picture.height };
   } finally {
     URL.revokeObjectURL(url);
   }
+}
+
+/**
+ * A stage's layers as pictures ready for a canvas, from the bottom up: each
+ * SVG as a standalone copy the browser has decoded, each painted canvas as it
+ * is. The back layer's SVG takes a copy of the drawing's defs, where its
+ * gradients and glows are. `flat` writes equations as text, which keeps a
+ * canvas readable everywhere. Draw them all at once, after this resolves, so
+ * no frame catches the stack half drawn.
+ */
+export async function stackPictures(svg: SVGSVGElement, flat: boolean, cache?: PictureCache): Promise<Array<HTMLImageElement | HTMLCanvasElement>> {
+  const drawing = painted(svg, flat);
+  const defs = drawing.clone.querySelector('defs');
+  const pictures = stackOf(svg).map(async (layer, place): Promise<HTMLImageElement | HTMLCanvasElement | null> => {
+    if (layer.canvas) return paintedCanvas(layer.canvas) ? layer.canvas : null;
+    let picture = drawing;
+    if (layer.svg !== svg) {
+      picture = painted(layer.svg, flat);
+      if (defs) picture.clone.prepend(defs.cloneNode(true));
+    }
+    const markup = serialize(picture);
+    const kept = cache?.get(place);
+    if (kept?.markup === markup) return kept.image;
+    const image = await decode(markup);
+    cache?.set(place, { markup, image });
+    return image;
+  });
+  return (await Promise.all(pictures)).filter((picture): picture is HTMLImageElement | HTMLCanvasElement => picture !== null);
 }
 
 /** The colour behind a stage, from the figure it sits in. */
@@ -223,7 +297,10 @@ export function backgroundOf(svg: SVGSVGElement): string | null {
 
 async function drawn(svg: SVGSVGElement, flat: boolean): Promise<string | null> {
   try {
-    const { image, width, height } = await rasterise(svg, flat);
+    const rect = svg.getBoundingClientRect();
+    const width = Math.max(1, Math.round(rect.width));
+    const height = Math.max(1, Math.round(rect.height));
+    const pictures = await stackPictures(svg, flat);
     const scale = Math.min(window.devicePixelRatio || 1, MAX_WIDTH / width, 2);
     const canvas = document.createElement('canvas');
     canvas.width = Math.round(width * scale);
@@ -235,7 +312,7 @@ async function drawn(svg: SVGSVGElement, flat: boolean): Promise<string | null> 
       context.fillStyle = background;
       context.fillRect(0, 0, canvas.width, canvas.height);
     }
-    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    for (const picture of pictures) context.drawImage(picture, 0, 0, canvas.width, canvas.height);
     return canvas.toDataURL('image/png');
   } catch {
     return null;
