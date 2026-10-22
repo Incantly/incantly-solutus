@@ -5,7 +5,7 @@ import { REFERENCE_SCENES } from '@incantly/core/scenes';
 import { afterEach, describe, expect, it } from 'vitest';
 import { hmacAuthenticator, mintToken } from '../src/auth';
 import { LimitKeeper } from '../src/limits';
-import { ScriptedModel } from '../src/models';
+import { ScriptedModel, type ModelClient } from '../src/models';
 import { isolatedProbe } from '../src/probe';
 import { MemoryRecords } from '../src/records';
 import { referenceModel, type ReferenceModelOptions } from '../src/reference-model';
@@ -82,7 +82,16 @@ describe('the concept cache (PRD 25.6)', () => {
 
   it('skips only the scene call when a new request plans the same figure', async () => {
     const model = referenceModel();
-    const { post, service } = await start({ model });
+    // Builds take a moment here, so a plan beside a library build is in first and can find the approved figure.
+    const slowBuilds: ModelClient = {
+      name: model.name,
+      modelFor: (purpose) => model.modelFor(purpose),
+      complete: async (call) => {
+        if (call.purpose === 'scene') await new Promise((resolve) => setTimeout(resolve, 30));
+        return model.complete(call);
+      },
+    };
+    const { post, service } = await start({ model: slowBuilds });
     const first = await events(await post('/v1/generations', { prompt: 'Explain projectile motion for a physics student.' }));
     await post(`/v1/generations/${(first.at(-1)!.data as unknown as SceneEvent).generationId}/probe`, { ok: true });
     const callsBefore = model.calls.length;

@@ -1,7 +1,7 @@
 import { REFERENCE_SCENES } from '@incantly/core/scenes';
 import { describe, expect, it } from 'vitest';
-import { ModelError, ScriptedModel, type ModelClient } from '../src/models';
-import { Generator, standardFigure, type FailedCheck } from '../src/pipeline';
+import { ModelError, NO_USAGE, ScriptedModel, type ModelClient } from '../src/models';
+import { Generator, conceptAndIdea, standardFigure, type FailedCheck } from '../src/pipeline';
 import { isolatedProbe } from '../src/probe';
 import { faultyScript, referenceModel, type Fault } from '../src/reference-model';
 
@@ -220,6 +220,43 @@ describe('the generation pipeline', () => {
       expect(plans).toEqual([REFERENCE_SCENES[id]!.plan.concept]);
       expect(state.calls).toHaveLength(2);
     }
+  });
+
+  it("confirms a library build from the plan's first words, and stops the plan once the build is in (PRD 25.5)", async () => {
+    const projectile = REFERENCE_SCENES.projectile!;
+    let planStopped = false;
+    const model: ModelClient = {
+      name: 'test',
+      modelFor: (purpose) => `test-${purpose}`,
+      complete: async (call) => {
+        if (call.purpose === 'plan') {
+          // The concept and idea stream in; the rest of the plan would take longer than the build.
+          const text = '```json\n' + JSON.stringify(projectile.plan) + '\n```';
+          call.onText?.(text.slice(0, text.indexOf('"kind"')));
+          await new Promise((_, reject) =>
+            call.signal?.addEventListener('abort', () => {
+              planStopped = true;
+              reject(new ModelError('aborted', 'stopped'));
+            }),
+          );
+        }
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        return { text: '```edit js\n```', model: 'test-scene', usage: NO_USAGE, stopReason: 'end_turn', ms: 5 };
+      },
+    };
+    const state = await new Generator({ model, probe: isolatedProbe }).generate({ prompt: REQUESTS.projectile });
+    expect(state.status, state.failure?.reason).toBe('approved');
+    expect(state.retrieved).toBe('projectile');
+    // The learner never waited for the plan's last words: the call was stopped once the build was in.
+    expect(planStopped).toBe(true);
+    expect(state.calls.find((c) => c.purpose === 'plan')?.error).toMatch(/^aborted/);
+    expect(state.timings.planMs).toBeLessThan(state.timings.totalMs!);
+  });
+
+  it('reads a streaming plan\'s concept and idea once both are complete', () => {
+    expect(conceptAndIdea('```json\n{ "concept": "projectile mot')).toBeNull();
+    expect(conceptAndIdea('{ "concept": "projectile motion", "idea": "A ball')).toBeNull();
+    expect(conceptAndIdea('{ "concept": "projectile motion", "idea": "A ball \\"flies\\" in an arc.", "ki')).toEqual({ concept: 'projectile motion', idea: 'A ball "flies" in an arc.' });
   });
 
   it('stops the library build when the plan names another concept, and goes on from that plan', async () => {

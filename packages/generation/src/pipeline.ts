@@ -203,8 +203,11 @@ export class Generator {
    * The library path (PRD 25.5): the reviewed scene the request names is
    * adapted to the request at once, and its plan is the skeleton the learner
    * sees straight away. The plan call runs beside the build only to confirm
-   * the concept; if it names another one, the build stops and the pipeline
-   * goes on from that plan as usual, having lost no time.
+   * the concept, which it does as soon as its concept and idea have streamed
+   * in; if it names another one, the build stops and the pipeline goes on
+   * from that plan as usual, having lost no time. Once the build is in, a
+   * plan still writing is stopped: the learner never waits for its last
+   * words.
    */
   private async libraryStage(state: GenerationState, scene: ReferenceScene, request: LearnerRequest, hooks: GenerationHooks, signal?: AbortSignal): Promise<void> {
     state.status = 'building';
@@ -221,13 +224,14 @@ export class Generator {
     const buildSignal = signal ? AbortSignal.any([signal, stop.signal]) : stop.signal;
     const maxTokens = Math.min(this.options.maxTokens?.scene ?? SIZE_BUDGETS[scene.plan.size ?? 'quick'].sceneTokens, 2500);
     const building = this.call(state, 'scene', libraryPrompt(scene, request), this.deadlineSignal(state, buildSignal), undefined, maxTokens);
-    const check = await this.confirm(request, scene, signal);
-    state.calls.push(...check.state.calls);
-    if (check.plan) state.timings.planMs = check.state.timings.planMs;
-    if (!check.confirmed) {
+    const beside = this.planBeside(request, scene, signal);
+    if (!(await beside.verdict)) {
       // Another concept: stop the build, which was ours to stop, and go on from the plan as usual.
       stop.abort();
       await building;
+      const check = await beside.finished;
+      state.calls.push(...check.state.calls);
+      state.timings.planMs = check.plan ? check.state.timings.planMs : check.verdictMs;
       state.failure = null;
       state.status = 'planning';
       state.mode = null;
@@ -243,7 +247,14 @@ export class Generator {
       if (state.plan && !hooks.cached?.(state.plan)) await this.buildStage(state, hooks, signal);
       return;
     }
-    if (check.plan && hooks.cached) {
+    // Confirmed. A plan that ends before the build may still find an approved figure for this very plan; once
+    // the build is in, the plan is not needed, and is stopped.
+    const first = await Promise.race([building.then(() => 'build' as const), beside.finished.then(() => 'plan' as const)]);
+    if (first === 'build') beside.stop();
+    const check = await beside.finished;
+    state.calls.push(...check.state.calls);
+    state.timings.planMs = check.plan ? check.state.timings.planMs : check.verdictMs;
+    if (first === 'plan' && check.plan && hooks.cached) {
       // An approved figure for this very plan is ready now; the build is not.
       const reviewed = state.plan;
       state.plan = check.plan;
@@ -317,27 +328,53 @@ export class Generator {
     });
   }
 
-  /** One plan call beside the library build: its concept confirms the retrieval, or names another. */
-  private async confirm(request: LearnerRequest, scene: ReferenceScene, signal?: AbortSignal): Promise<{ readonly confirmed: boolean; readonly plan: ScenePlan | null; readonly state: GenerationState }> {
+  /**
+   * One plan call beside the library build. Its concept and idea confirm the
+   * retrieval, or name another concept, as soon as both have streamed in
+   * (they come first in the plan format), or else when the call ends.
+   */
+  private planBeside(request: LearnerRequest, scene: ReferenceScene, signal?: AbortSignal): PlanBeside {
     const check = this.begin();
     const started = this.now();
-    const reply = await this.call(check, 'plan', planPrompt(request), this.deadlineSignal(check, signal));
-    // Without a plan to say otherwise, the request's own words stand.
-    if (reply === null) return { confirmed: true, plan: null, state: check };
-    const parsed = parsePlanReply(reply);
-    const value = parsed.value as { concept?: unknown; idea?: unknown } | null;
-    const concept = typeof value?.concept === 'string' ? value.concept : null;
-    const idea = typeof value?.idea === 'string' ? value.idea : '';
-    const plan = parsed.problem ? null : validatePlan(parsed.value).plan;
-    if (plan) check.timings.planMs = this.now() - started;
-    const confirmed =
+    const stop = new AbortController();
+    const planSignal = signal ? AbortSignal.any([signal, stop.signal]) : stop.signal;
+    const judge = (concept: string | null, idea: string): boolean =>
       concept === null ||
       standardFigure(concept, { [scene.id]: scene }) !== null ||
       aboutScene(`${concept}. ${idea}`, scene.id, {
         ...(this.options.withhold ? { withhold: this.options.withhold } : {}),
         ...(this.options.examples ? { examples: this.options.examples } : {}),
       });
-    return { confirmed, plan, state: check };
+    let verdictMs: number | null = null;
+    let settle: (confirmed: boolean) => void = () => {};
+    const verdict = new Promise<boolean>((resolve) => {
+      settle = (confirmed) => {
+        if (verdictMs !== null) return;
+        verdictMs = this.now() - started;
+        resolve(confirmed);
+      };
+    });
+    let streamed = '';
+    const onText = (delta: string) => {
+      if (verdictMs !== null) return;
+      streamed += delta;
+      const early = conceptAndIdea(streamed);
+      if (early) settle(judge(early.concept, early.idea));
+    };
+    const finished = this.call(check, 'plan', planPrompt(request), this.deadlineSignal(check, planSignal), onText).then((reply) => {
+      // Without a plan to say otherwise, the request's own words stand.
+      if (reply === null) {
+        settle(true);
+        return { plan: null, state: check, verdictMs: verdictMs ?? this.now() - started };
+      }
+      const parsed = parsePlanReply(reply);
+      const value = parsed.value as { concept?: unknown; idea?: unknown } | null;
+      const plan = parsed.problem ? null : validatePlan(parsed.value).plan;
+      if (plan) check.timings.planMs = this.now() - started;
+      settle(judge(typeof value?.concept === 'string' ? value.concept : null, typeof value?.idea === 'string' ? value.idea : ''));
+      return { plan, state: check, verdictMs: verdictMs ?? this.now() - started };
+    });
+    return { verdict, finished, stop: () => stop.abort() };
   }
 
   begin(): GenerationState {
@@ -650,6 +687,32 @@ export class Generator {
     state.timings.totalMs = this.now() - state.startedAt;
     return state;
   }
+}
+
+/** The plan call beside a library build. */
+interface PlanBeside {
+  /** Whether the plan names the retrieved scene's concept: as soon as its concept and idea are in, or at its end. */
+  readonly verdict: Promise<boolean>;
+  /** The call, ended or stopped: its plan, if it got that far, and when its verdict came. */
+  readonly finished: Promise<{ readonly plan: ScenePlan | null; readonly state: GenerationState; readonly verdictMs: number }>;
+  /** Stops the call: its plan is not needed any more. */
+  stop(): void;
+}
+
+/** A plan's concept and idea as it streams in, once both strings are complete; null before. */
+export function conceptAndIdea(text: string): { readonly concept: string; readonly idea: string } | null {
+  const field = (name: string): string | null => {
+    const match = new RegExp(`"${name}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"`).exec(text);
+    if (!match) return null;
+    try {
+      return JSON.parse(`"${match[1]!}"`) as string;
+    } catch {
+      return null;
+    }
+  };
+  const concept = field('concept');
+  const idea = concept === null ? null : field('idea');
+  return concept !== null && idea !== null ? { concept, idea } : null;
 }
 
 /** A streamed fragment's own checks; the whole scene is validated together once it is complete. */
