@@ -1220,7 +1220,8 @@ class JsValidator {
         if (spec.open) return UNKNOWN;
         if (spec.callable && called) break;
         const names = [...Object.keys(spec.methods), ...Object.keys(spec.properties)];
-        const suggestion = closest(name, names);
+        // set(...) on a label that has no set: its words are set with text(...), whatever name is closest in letters.
+        const suggestion = name === 'set' && 'text' in spec.methods ? 'text' : closest(name, names);
         this.report(
           called ? 'unknown-method' : 'unknown-property',
           `${object.kind} handles have no ${called ? 'method' : 'property'} "${name}"${suggestion ? `; did you mean ${suggestion}?` : `. Available: ${listOf(names)}`}`,

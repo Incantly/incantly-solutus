@@ -26,6 +26,17 @@ function expectedPosition(fragments: Fragments, fragment: 'html' | 'css' | 'js',
 const errors = (diagnostics: readonly Diagnostic[]) => diagnostics.filter((d) => d.severity === 'error');
 
 describe('validator: messages that name the fix', () => {
+  it('points set on a 3D label at text, its words', () => {
+    // Once a seasons scene called set on a 3D label and was asked whether it meant at.
+    const js = [
+      "const space = inc.space3d('#stage', { title: 'Orbit' });",
+      "const label = space.label([0, 0, 0], 'a');",
+      "label.set('b');",
+    ].join('\n');
+    const result = validateScene(scene({ js }));
+    expect(errors(result.diagnostics).map((d) => d.message)).toContain('Label3D handles have no method "set"; did you mean text?');
+  });
+
   it('points a helper used without inc. at the SDK one', () => {
     // Once a lens scene called sym(...) and was asked whether it meant its own constant S.
     const result = validateScene(scene({ js: `${BASE_JS}\nconst S = 2;\nconst label = sym('x^2');` }));
