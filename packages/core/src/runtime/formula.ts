@@ -1,9 +1,12 @@
-import type { Formula, FormulaOptions, Param } from '../api/types';
+import type { Formula, FormulaInput, FormulaOptions, Param } from '../api/types';
 import { compileExpression, CONSTANTS, ExpressionError, type CompiledExpression } from '../expr';
 import { SceneApiError } from '../scene/errors';
 
 /** Longest formula a learner may type. */
 export const MAX_FORMULA_LENGTH = 200;
+
+/** A formula's own variable: x, or y for x = f(y), theta for r = f(theta), t for a parametric curve (G2-2). */
+export const FORMULA_INPUTS: readonly FormulaInput[] = ['x', 'y', 'theta', 't'];
 
 /**
  * One formula of a scene. Its compiled form can be replaced when the learner
@@ -24,14 +27,16 @@ export class FormulaRecord {
     readonly editable: boolean,
     private readonly vars: Readonly<Record<string, Param | number>>,
     private readonly params: () => ReadonlyMap<string, Param>,
+    /** Its own variable: x, or y, theta or t (G2-2). */
+    readonly input: FormulaInput = 'x',
   ) {
     this.source = source;
     this.compiled = compileExpression(source, this.allowedNames());
   }
 
-  /** Names a formula may use: x and t, its own variables, and every parameter declared so far, by its name (FM-3). */
+  /** Names a formula may use: its own variable and t, its own variables, and every parameter declared so far, by its name (FM-3). */
   private allowedNames(): string[] {
-    const names = ['x', 't', ...Object.keys(this.vars)];
+    const names: string[] = [this.input, ...(this.input === 't' ? [] : ['t']), ...Object.keys(this.vars)];
     for (const name of this.params().keys()) if (!names.includes(name) && /^[A-Za-z_]\w*$/.test(name)) names.push(name);
     return names;
   }
@@ -64,16 +69,17 @@ export class FormulaRecord {
     return message;
   }
 
-  bind(x: number, t: number): Record<string, number> {
+  /** The scope for one value of the formula's own variable at time t. A parametric formula's t is its parameter, not time. */
+  bind(value: number, t: number): Record<string, number> {
     const scope = this.scope;
-    for (const [name, value] of Object.entries(this.vars)) scope[name] = typeof value === 'number' ? value : value.value;
+    for (const [name, bound] of Object.entries(this.vars)) scope[name] = typeof bound === 'number' ? bound : bound.value;
     for (const name of this.compiled.variables) {
-      if (name === 'x' || name === 't' || name in this.vars) continue;
+      if (name === this.input || name === 't' || name in this.vars) continue;
       const param = this.params().get(name);
       if (param) scope[name] = param.value;
     }
-    scope.x = x;
-    scope.t = t;
+    if (this.input !== 't') scope.t = t;
+    scope[this.input] = value;
     return scope;
   }
 }
@@ -97,21 +103,24 @@ export function createFormula(
   const vars = Object.fromEntries(
     Object.entries(given).filter(([name, value]) => !(Object.hasOwn(CONSTANTS, name) && typeof value === 'number' && Math.abs(value - CONSTANTS[name]!) < 1e-9)),
   ) as typeof given;
+  const input = options?.input ?? 'x';
+  if (!FORMULA_INPUTS.includes(input)) throw new SceneApiError(`A formula's input is ${FORMULA_INPUTS.join(', ')}, not "${String(input)}"`);
   const names = Object.keys(vars);
   for (const name of names) {
-    if (name === 'x' || name === 't') throw new SceneApiError(`"${name}" is reserved in formulas`);
+    if (name === input || name === 't') throw new SceneApiError(`"${name}" is reserved in formulas`);
     const value = vars[name];
     const ok = typeof value === 'number' ? Number.isFinite(value) : params.has(value as Param);
     if (!ok) throw new SceneApiError(`Formula variable "${name}" must be a parameter or a finite number`);
   }
   const label = options?.label ?? '';
   if (typeof label !== 'string' || label.length > 60) throw new SceneApiError('A formula label is a short piece of text');
-  const record = new FormulaRecord(source, label, options?.editable === true, vars, byName);
+  const record = new FormulaRecord(source, label, options?.editable === true, vars, byName, input);
   register?.(record);
-  const formula = (x: number, t: number = time()) => record.compiled.evaluate(record.bind(x, t));
+  const formula = (value: number, t: number = time()) => record.compiled.evaluate(record.bind(value, t));
   Object.defineProperties(formula, {
     source: { get: () => record.source, enumerable: true },
     variables: { get: () => Object.freeze([...record.compiled.variables]), enumerable: true },
+    input: { value: input, enumerable: true },
     evaluate: {
       value: (extra: Readonly<Record<string, number>>) => {
         const scope = record.bind(Number.NaN, time());

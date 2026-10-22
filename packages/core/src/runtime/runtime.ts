@@ -1739,8 +1739,10 @@ export class SceneRuntime {
             const unknown = /^Unknown variable "(\w+)"$/.exec(error.message);
             const names = [...runtime.params.keys()].filter((name) => /^[A-Za-z_]\w*$/.test(name));
             // Say how to bind the name: a parameter's own name, or vars.
+            // y or theta as the variable of the curve itself: x = f(y) for graph.plotX, r = f(theta) for graph.polar (G2-2).
+            const own = unknown && (unknown[1] === 'y' || unknown[1] === 'theta') ? `, or make it the formula's own variable: { input: '${unknown[1]}' }` : '';
             const hint = unknown
-              ? `. Use a parameter by its own name${names.length > 0 ? ` (${names.slice(0, 8).join(', ')})` : ''}, or bind it: { vars: { ${unknown[1]}: aParameter } }`
+              ? `. Use a parameter by its own name${names.length > 0 ? ` (${names.slice(0, 8).join(', ')})` : ''}, or bind it: { vars: { ${unknown[1]}: aParameter } }${own}`
               : '';
             throw new SceneApiError(`Formula "${source}": ${error.message} at position ${error.position}${hint}`);
           }

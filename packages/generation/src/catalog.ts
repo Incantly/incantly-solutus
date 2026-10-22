@@ -208,7 +208,7 @@ export const CAPABILITIES: readonly Capability[] = [
   {
     name: 'formula',
     draws: false,
-    line: 'formula: a maths expression bound to parameters, shown as maths, optionally editable by the learner; call it as f(x, t) (inc.formula).',
+    line: 'formula: a maths expression bound to parameters, shown as maths, optionally editable by the learner; call it as f(x, t); input y, theta or t for plotX, polar and parametric curves (inc.formula).',
     contract: ['Formula', 'FormulaOptions'],
   },
   // Helpers: no stage of their own.

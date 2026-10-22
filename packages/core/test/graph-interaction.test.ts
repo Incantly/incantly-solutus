@@ -238,6 +238,39 @@ describe('series (G2-2, G2-3, G2-4, G2-5, G2-13)', () => {
     expect((attr(runtime, ids.histogram!, 'd')!.match(/Z/g) ?? []).length).toBe(6);
   });
 
+  it('plots x = f(y), r = f(theta) and (x(t), y(t)) from formulas, each written over the plot (G2-2)', () => {
+    const ids: Record<string, number> = {};
+    const { runtime, mount } = run((inc) => {
+      const a = inc.param('a', { min: 0.5, max: 2, value: 1 });
+      const g = inc.graph2d('#g', { x: [-3, 3], y: [-3, 3], title: 'Formulas' });
+      ids.plotX = idOf(g.plotX(inc.formula('y^2 - 2', { input: 'y' })).handle);
+      ids.polar = idOf(g.polar(inc.formula('a*(1 + cos(theta))', { input: 'theta' })).handle);
+      ids.parametric = idOf(g.parametric(inc.formula('2*cos(t)', { input: 't' }), inc.formula('sin(t)', { input: 't' }), 0, 2 * Math.PI).handle);
+      void a;
+    });
+    expect(mount.ui.error).toBeNull();
+    expect(texts(runtime)).toEqual(expect.arrayContaining(['x = y^2 - 2', 'r = a*(1 + cos(theta))', '(x, y) = (2*cos(t), sin(t))']));
+    // The cardioid r = 1 + cos(theta) passes through (2, 0) at theta = 0: stage (52 + 5/6 * 688, 180).
+    const cardioid = pathPoints(attr(runtime, ids.polar!, 'd')!);
+    expect(cardioid.some(([x, y]) => Math.abs(x - (52 + (5 / 6) * 688)) < 2 && Math.abs(y - 180) < 2)).toBe(true);
+    // The ellipse (2 cos t, sin t) reaches x = -2 at t = pi: t is the curve's parameter here, not scene time.
+    const ellipse = pathPoints(attr(runtime, ids.parametric!, 'd')!);
+    expect(Math.min(...ellipse.map(([x]) => x))).toBeCloseTo(52 + (1 / 6) * 688, 0);
+    // x = y^2 - 2 at y = 0 is x = -2.
+    const parabola = pathPoints(attr(runtime, ids.plotX!, 'd')!);
+    expect(parabola.some(([x, y]) => Math.abs(x - (52 + (1 / 6) * 688)) < 2 && Math.abs(y - 180) < 2)).toBe(true);
+    // A formula of another variable is named for what it is.
+    const wrong = run((inc) => {
+      inc.graph2d('#g', { x: [-3, 3], y: [-3, 3], title: 'Wrong' }).polar(inc.formula('1 + cos(x)'));
+    });
+    expect(wrong.mount.ui.error?.message).toContain("polar needs a formula of theta: inc.formula('...', { input: 'theta' }); this one is a formula of x");
+    const unknown = run((inc) => {
+      inc.formula('y^2', {});
+    });
+    expect(unknown.mount.ui.error?.message).toContain('Unknown variable "y"');
+    expect(unknown.mount.ui.error?.message).toContain("or make it the formula's own variable: { input: 'y' }");
+  });
+
   it('reveals a fraction of a curve, to animate plotting', () => {
     let id = 0;
     let curve: GraphCurve | null = null;

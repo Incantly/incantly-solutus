@@ -579,11 +579,21 @@ export interface ShapeHelpers {
  * with a restricted parser, never with eval.
  */
 export interface Formula {
-  (x: number, t?: number): number;
+  /** The formula at a value of its own variable, x unless it was made with another, and a time t (scene time by default). */
+  (value: number, t?: number): number;
   readonly source: string;
   readonly variables: readonly string[];
+  /** Its own variable: x, or y, theta or t when made with that input. */
+  readonly input: FormulaInput;
   evaluate(scope: Readonly<Record<string, number>>): number;
 }
+
+/**
+ * A formula's own variable. x for y = f(x); y for x = f(y) (graph.plotX);
+ * theta for r = f(theta) (graph.polar); t for a parametric curve's
+ * parameter (graph.parametric), when scene time is not available in it.
+ */
+export type FormulaInput = 'x' | 'y' | 'theta' | 't';
 
 export interface FormulaOptions {
   /** Short names for parameters or numbers, such as { A: amplitude }. Parameters declared before the formula can also be used by their own names. */
@@ -591,6 +601,8 @@ export interface FormulaOptions {
   /** Show the formula as maths the learner can edit; their edit replaces it everywhere. */
   readonly editable?: boolean;
   readonly label?: string;
+  /** Its own variable, x by default: y for x = f(y), theta for r = f(theta), t for a parametric curve. */
+  readonly input?: FormulaInput;
 }
 
 // ---------------------------------------------------------------------------
@@ -725,10 +737,11 @@ export interface Graph {
   toX(x: number): number;
   toY(y: number): number;
   plot(fn: PlotFunction, options?: CurveOptions): GraphCurve;
-  /** x = f(y). */
+  /** x = f(y): a function of y, or a formula made with input: 'y', shown as x = its source. */
   plotX(fn: (y: number, time: number) => number, options?: CurveOptions): GraphCurve;
-  /** r = f(theta), theta from `from` to `to` (default a full turn). */
+  /** r = f(theta), theta from `from` to `to` (default a full turn): a function, or a formula made with input: 'theta', shown as r = its source. */
   polar(fn: (theta: number, time: number) => number, options?: CurveOptions & { readonly from?: number; readonly to?: number }): GraphCurve;
+  /** (x(t), y(t)) for t from t0 to t1: two functions, or two formulas made with input: 't', shown as (x, y) = their sources. */
   parametric(
     fx: (t: number) => number,
     fy: (t: number) => number,

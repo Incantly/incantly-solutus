@@ -608,15 +608,25 @@ export class Graph2D implements Graph, ViewController {
   }
 
   private watchTime(fn: PlotFunction | ((a: number, b: number) => number)): void {
-    // A formula that names t, or a function that takes time, moves on its own.
-    if (this.ctx.isFormula(fn) ? fn.variables.includes('t') : fn.length >= 2) this.ctx.markTimeUse();
+    // A formula that names t (when t is time, not its own variable), or a function that takes time, moves on its own.
+    if (this.ctx.isFormula(fn) ? fn.input !== 't' && fn.variables.includes('t') : fn.length >= 2) this.ctx.markTimeUse();
+  }
+
+  /** A formula given to a curve must be a formula of that curve's variable (G2-2). */
+  private formulaOf(fn: unknown, input: Formula['input'], call: string): Formula | null {
+    if (!this.ctx.isFormula(fn)) return null;
+    if (fn.input !== input) {
+      throw new SceneApiError(`${call} needs a formula of ${input}: inc.formula('...', { input: '${input}' }); this one is a formula of ${fn.input}`);
+    }
+    return fn;
   }
 
   plot(fn: PlotFunction, options: CurveOptions = {}): GraphCurve {
     if (typeof fn !== 'function') throw new SceneApiError('plot needs a function or a formula');
     const { curve, handle, node } = this.curve(options);
     const samples = this.sampleCount(options.samples);
-    if (this.ctx.isFormula(fn)) this.formulaLabel(fn);
+    const formula = this.formulaOf(fn, 'x', 'plot');
+    if (formula) this.formulaLabel(() => `y = ${formula.source}`);
     this.watchTime(fn);
     const evaluate = this.evaluate(fn);
     const record = this.record(curve, node, evaluate);
@@ -629,9 +639,11 @@ export class Graph2D implements Graph, ViewController {
   }
 
   plotX(fn: (y: number, time: number) => number, options: CurveOptions = {}): GraphCurve {
-    if (typeof fn !== 'function') throw new SceneApiError('plotX needs a function of y');
+    if (typeof fn !== 'function') throw new SceneApiError('plotX needs a function of y, or a formula of y');
     const { curve, handle, node } = this.curve(options);
     const samples = this.sampleCount(options.samples);
+    const formula = this.formulaOf(fn, 'y', 'plotX');
+    if (formula) this.formulaLabel(() => `x = ${formula.source}`);
     this.watchTime(fn);
     const record = this.record(curve, node);
     this.ctx.onRedraw(() => {
@@ -648,17 +660,19 @@ export class Graph2D implements Graph, ViewController {
   }
 
   polar(fn: (theta: number, time: number) => number, options: CurveOptions & { readonly from?: number; readonly to?: number } = {}): GraphCurve {
-    if (typeof fn !== 'function') throw new SceneApiError('polar needs a function of theta');
+    if (typeof fn !== 'function') throw new SceneApiError('polar needs a function of theta, or a formula of theta');
     const from = options.from ?? 0;
     const to = options.to ?? 2 * Math.PI;
     if (!Number.isFinite(from) || !Number.isFinite(to)) throw new SceneApiError('polar needs a finite theta range');
+    const formula = this.formulaOf(fn, 'theta', 'polar');
+    if (formula) this.formulaLabel(() => `r = ${formula.source}`);
     return this.parametric(
       (t) => fn(t, this.ctx.time()) * Math.cos(t),
       (t) => fn(t, this.ctx.time()) * Math.sin(t),
       from,
       to,
       options,
-      fn.length >= 2,
+      formula ? formula.variables.includes('t') : fn.length >= 2,
     );
   }
 
@@ -670,9 +684,14 @@ export class Graph2D implements Graph, ViewController {
     options: CurveOptions = {},
     timed = false,
   ): GraphCurve {
-    if (typeof fx !== 'function' || typeof fy !== 'function') throw new SceneApiError('parametric needs two functions');
+    if (typeof fx !== 'function' || typeof fy !== 'function') throw new SceneApiError('parametric needs two functions, or two formulas of t');
     const { curve, handle, node } = this.curve(options);
     const samples = this.sampleCount(options.samples);
+    // Formulas of t, the curve's parameter: shown together as the point they trace.
+    const formulaX = this.formulaOf(fx, 't', 'parametric');
+    const formulaY = this.formulaOf(fy, 't', 'parametric');
+    if (formulaX && formulaY) this.formulaLabel(() => `(x, y) = (${formulaX.source}, ${formulaY.source})`);
+    else if (formulaX || formulaY) throw new SceneApiError('parametric needs two formulas of t, or two functions');
     if (timed) this.ctx.markTimeUse();
     const record = this.record(curve, node);
     this.ctx.onRedraw(() => {
@@ -1375,11 +1394,12 @@ export class Graph2D implements Graph, ViewController {
     return { stage, data };
   }
 
-  private formulaLabel(formula: Formula): void {
+  /** A curve's formula, written over the plot: y = ..., x = ..., r = ... or (x, y) = (...). */
+  private formulaLabel(source: () => string): void {
     const [left, top] = this.rect;
-    const text = this.inner.text(left + 8, top + 16 + this.formulaLabels * 18, `y = ${formula.source}`, { layer: 'labels' }).set({ 'font-size': 13 });
+    const text = this.inner.text(left + 8, top + 16 + this.formulaLabels * 18, source(), { layer: 'labels' }).set({ 'font-size': 13 });
     // An edited formula shows its new text.
-    this.ctx.onRedraw(() => text.text(`y = ${formula.source}`));
+    this.ctx.onRedraw(() => text.text(source()));
     this.formulaLabels++;
   }
 }

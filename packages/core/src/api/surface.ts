@@ -408,7 +408,7 @@ export const HANDLES: Readonly<Record<HandleKind, HandleSpec>> = {
   },
   Formula: {
     methods: { evaluate: null } satisfies Methods<Formula>,
-    properties: { source: null, variables: null } satisfies Properties<Formula>,
+    properties: { source: null, variables: null, input: null } satisfies Properties<Formula>,
     callable: true,
   },
   Point: { methods: {}, properties: { x: null, y: null } satisfies Properties<Point> },
