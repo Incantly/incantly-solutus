@@ -123,7 +123,9 @@ test.describe('the learner journey through generation', () => {
 });
 
 test.describe('repair and fallback in the note', () => {
-  test('a scene that fails on the device is repaired once and then shown', async ({ page }) => {
+  test('a scene that fails on the device is repaired once and then shown', async ({ page, request }) => {
+    // A figure an earlier run against the same dev server approved would come from the cache, with nothing to repair.
+    await request.get('/api/dev/reset?fault=frame-throw');
     await page.goto('/?page=generate&fault=frame-throw');
     await ask(page, 'Explain projectile motion.');
     await expect(card(page).locator('.incantly-figure__status')).toHaveText(/Fixing a problem|Checking that it works/, { timeout: 10_000 });

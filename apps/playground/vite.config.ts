@@ -8,7 +8,8 @@ import { defineConfig, type Plugin, type ViteDevServer } from 'vite';
  * a reference model that injects that fault, or /api/fault/<fault>-stubborn/v1
  * one whose repairs change nothing. Dev only: /api/dev/token mints a token
  * for a test learner, /api/dev/switch turns generation off and on,
- * /api/dev/records lists the failure records, /api/dev/gallery/review
+ * /api/dev/records lists the failure records, oldest first,
+ * /api/dev/reset?fault=<fault> starts that fault's service afresh, /api/dev/gallery/review
  * accepts or turns down a published figure, as the gallery command does, and
  * /api/dev/gallery/clear empties the gallery.
  */
@@ -68,7 +69,16 @@ function generationService(): Plugin {
             enabled = new URL(req.url ?? '', 'http://x').searchParams.get('on') !== '0';
             return json(200, { enabled });
           }
-          if (path === '/api/dev/records') return json(200, [...services.values()].flatMap((s) => s.records.records));
+          if (path === '/api/dev/reset') {
+            // A fresh service for one fault, as a new dev server would have: a figure an earlier run approved is not cached.
+            const fault = new URL(req.url ?? '', 'http://x').searchParams.get('fault') ?? '';
+            return json(200, { reset: /^[a-z-]+$/.test(fault) && services.delete(`/api/fault/${fault}/v1`) });
+          }
+          if (path === '/api/dev/records') {
+            // Every service's records in the order they were made, so the last is the latest whichever service made it.
+            const records = [...services.values()].flatMap((s) => s.records.records as Array<{ at?: string }>);
+            return json(200, records.sort((a, b) => String(a.at ?? '').localeCompare(String(b.at ?? ''))));
+          }
           if (path === '/api/dev/gallery/clear') {
             gallery?.entries.clear();
             return json(200, { cleared: true });
