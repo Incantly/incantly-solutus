@@ -409,6 +409,7 @@ export class SceneRuntime {
     // Ease into the sweep over the first second and a half, so it starts calmly.
     const w = Math.min(1, since / 1.5);
     this.applyParam(tour.name, tour.from + (sweep - tour.from) * w * w * (3 - 2 * w), false);
+    this.followPartners([tour.name], new Set([tour.name]));
   }
 
   /** Whether the scene follows time; null until a frame has run. */
@@ -564,6 +565,28 @@ export class SceneRuntime {
     this.dirty = true;
     this.changed.add(name);
     if (persist) (this.pendingValues ??= {})[name] = next;
+  }
+
+  /**
+   * Moves the linked partner of each parameter moved (CT-8), as a learner's
+   * change does: a step, a prediction's reveal, the idle tour and
+   * inc.state.set keep a pair such as frequency and period in step. A
+   * partner in `fixed`, set by the same move, keeps its own value.
+   */
+  private followPartners(moved: Iterable<string>, fixed: ReadonlySet<string>): void {
+    for (const name of moved) {
+      for (const link of this.links) {
+        const partner = link.a === name ? link.b : link.b === name ? link.a : null;
+        if (!partner || fixed.has(partner) || !this.params.has(partner)) continue;
+        const fn = link.a === name ? link.aToB : link.bToA;
+        const current = this.params.get(name)!.value;
+        let next = Number.NaN;
+        this.guard('action', () => {
+          next = fn(current);
+        });
+        if (Number.isFinite(next)) this.applyParam(partner, next, false);
+      }
+    }
   }
 
   setValues(values: Readonly<Record<string, number>>): void {
@@ -735,7 +758,7 @@ export class SceneRuntime {
       if (record.options.reveal) {
         const target: Record<string, number> = { ...this.values() };
         for (const [name, value] of Object.entries(record.options.reveal)) if (this.params.has(name)) target[name] = value;
-        this.moveTo(target, this.reducedMotion);
+        this.moveTo(target, this.reducedMotion, Object.keys(record.options.reveal));
       }
       this.refreshPrediction();
     }
@@ -843,10 +866,14 @@ export class SceneRuntime {
     const step = steps[index];
     if (!step) return;
     this.stepIndex = index;
-    // Each step's values build on the earlier steps, so going back is exact.
+    // Each step's values build on the earlier steps, so going back is exact; linked partners follow the values the steps set.
     const target: Record<string, number> = { ...saved.values };
-    for (let i = 0; i <= index; i++) Object.assign(target, steps[i]?.set ?? {});
-    this.moveTo(target, immediate || this.reducedMotion);
+    const set = new Set<string>();
+    for (let i = 0; i <= index; i++) {
+      Object.assign(target, steps[i]?.set ?? {});
+      for (const name of Object.keys(steps[i]?.set ?? {})) set.add(name);
+    }
+    this.moveTo(target, immediate || this.reducedMotion, set);
     this.playing = step.hold ? false : saved.playing && !this.reducedMotion;
     this.pendingStep = index;
     this.stepHookPending = index;
@@ -867,13 +894,17 @@ export class SceneRuntime {
   }
 
   /** Moves parameters to `target`, animated unless `immediate`. Never persisted. */
-  private moveTo(target: Readonly<Record<string, number>>, immediate: boolean): void {
+  /** Moves to `target`; `set` names the values the move sets itself, which their linked partners follow. */
+  private moveTo(target: Readonly<Record<string, number>>, immediate: boolean, set: Iterable<string> = Object.keys(target)): void {
     const from = this.values();
     const names = Object.keys(target).filter((name) => this.params.has(name) && target[name] !== from[name]);
+    // Linked partners follow the values moved, all the way; a partner the move sets itself keeps that value.
+    const fixed = new Set(set);
     this.stepTransition = null;
     if (names.length === 0) return;
     if (immediate) {
       for (const name of names) this.applyParam(name, target[name]!, false);
+      this.followPartners(names, fixed);
       return;
     }
     this.stepTransition = {
@@ -883,6 +914,7 @@ export class SceneRuntime {
         ease: 'inOut',
         apply: (k) => {
           for (const name of names) this.applyParam(name, from[name]! + (target[name]! - from[name]!) * k, false);
+          this.followPartners(names, fixed);
         },
       },
     };
@@ -1485,6 +1517,7 @@ export class SceneRuntime {
         if (runtime.params.has(key)) {
           if (typeof value !== 'number') throw new SceneApiError(`"${key}" is a parameter and holds a number`);
           runtime.applyParam(key, value, false);
+          runtime.followPartners([key], new Set([key]));
           return;
         }
         const ok = (typeof value === 'number' && Number.isFinite(value)) || typeof value === 'boolean' || (typeof value === 'string' && value.length <= 200);

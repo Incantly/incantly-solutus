@@ -93,6 +93,33 @@ describe('buttons, presets and linked parameters (CT-6, CT-8)', () => {
     expect(runtime.values()).toEqual({ frequency: 4, period: 0.25 });
     expect(runtime.uiState().params.map((p) => p.linked)).toEqual(['period', 'frequency']);
   });
+
+  it('keeps linked parameters in step when a step, a reveal or the scene moves one', () => {
+    // Once a step setting the frequency left the period where it was for as long as the step lasted.
+    let setPeriod: (value: number) => void = () => {};
+    const { runtime } = run((inc) => {
+      inc.param('frequency', { min: 0.5, max: 5, step: 0.01, value: 1 });
+      inc.param('period', { min: 0.2, max: 2, step: 0.01, value: 1 });
+      inc.link('frequency', 'period', (f) => 1 / f, (p) => 1 / p);
+      stage(inc);
+      inc.steps([{ say: 'Twice as often.', set: { frequency: 2 } }, { say: 'Both set.', set: { frequency: 4, period: 0.5 } }]);
+      setPeriod = (value) => inc.state.set('period', value);
+    });
+    // A step moves its values over a short transition; the partner follows all the way.
+    runtime.step('goto', 0);
+    for (let i = 0; i < 60; i++) runtime.tick(1 / 60);
+    expect(runtime.values()).toEqual({ frequency: 2, period: 0.5 });
+    // A step that sets both keeps both, linked or not.
+    runtime.setReducedMotion(true);
+    runtime.step('goto', 1);
+    runtime.tick(0);
+    expect(runtime.values()).toEqual({ frequency: 4, period: 0.5 });
+    // The scene moving one, through inc.state.set, moves the other.
+    runtime.step('exit');
+    runtime.tick(0);
+    setPeriod(0.25);
+    expect(runtime.values()).toEqual({ frequency: 4, period: 0.25 });
+  });
 });
 
 describe('undo and redo (CT-5)', () => {
