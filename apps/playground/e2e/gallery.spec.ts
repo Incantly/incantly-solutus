@@ -7,8 +7,8 @@ import { referenceSceneIds } from '@incantly/core/scenes';
  * something, and keeps every drawn element and every line end inside its
  * drawing, measured from the browser's own layout rather than the runtime's
  * geometry. Each figure's picture is saved with the test results as a contact
- * sheet for review. The depth order of 3D figures is audited in the space3d
- * kit's tests.
+ * sheet for review, and compared with its golden image in golden.spec.ts. The
+ * depth order of 3D figures is audited in the space3d kit's tests.
  */
 
 interface GalleryHandle {
