@@ -17,7 +17,23 @@ export type { FigureRepairRun, LiveProblem, StoredFigure } from './repair';
 export type { ApprovedFigure, ChangeOutcome, ChangeRun, DeviceProbe, DeviceProbeResult, GenerationOutcome, GenerationRun, GenerationStage } from './flow';
 export { Telemetry, cleanSignal } from './telemetry';
 export type { FallbackLevel, ProductSignal, TelemetryEvent, TelemetryOptions } from './telemetry';
-export type { ChangeRequest, ChangeResponse, FallbackMessage, ProbeResponse, ProbeResult, RepairRequest, RepairResponse, SceneMessage, ServiceEvent, Skeleton } from '../protocol';
+export type {
+  ChangeRequest,
+  ChangeResponse,
+  FallbackMessage,
+  GalleryCard,
+  GalleryFigure,
+  GalleryReceipt,
+  GalleryStatus,
+  GallerySubmission,
+  ProbeResponse,
+  ProbeResult,
+  RepairRequest,
+  RepairResponse,
+  SceneMessage,
+  ServiceEvent,
+  Skeleton,
+} from '../protocol';
 
 /**
  * Probes scenes in a fresh hidden sandbox on this device, through the same

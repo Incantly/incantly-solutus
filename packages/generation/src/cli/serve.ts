@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { hmacAuthenticator } from '../auth';
+import { FileGalleryStore } from '../gallery';
 import { DEFAULT_LIMITS, type Limits } from '../limits';
 import { AnthropicClient, type ModelClient } from '../models';
 import { JsonlRecords } from '../records';
@@ -22,6 +23,7 @@ import { GenerationService } from '../service';
  *   INCANTLY_RECORDS_DIR, INCANTLY_RECORDS_DAYS   failure records and their retention (default 30 days)
  *   INCANTLY_LIMITS              JSON overriding perMinute, perDay, concurrent, learnerDailyUsd, serviceDailyUsd
  *   INCANTLY_ALLOWED_ORIGINS     comma-separated browser origins
+ *   INCANTLY_GALLERY_DIR         keeps the community gallery there (needs INCANTLY_TICKET_SECRET); review it with npm run gallery
  *   PORT                         default 8787
  */
 
@@ -58,6 +60,7 @@ const service = new GenerationService({
   generationTimeoutMs: Number(env.INCANTLY_GENERATION_TIMEOUT_MS ?? 45_000),
   allowedOrigins: (env.INCANTLY_ALLOWED_ORIGINS ?? '').split(',').filter(Boolean),
   ...(env.INCANTLY_TICKET_SECRET ? { ticketSecret: env.INCANTLY_TICKET_SECRET } : {}),
+  ...(env.INCANTLY_GALLERY_DIR ? { gallery: new FileGalleryStore(env.INCANTLY_GALLERY_DIR) } : {}),
 });
 
 const purge = () => void records?.purge();

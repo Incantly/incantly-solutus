@@ -1,5 +1,17 @@
 import type { LearnerRequest } from '../context';
-import type { ChangeRequest, ChangeResponse, ProbeResponse, ProbeResult, RepairRequest, RepairResponse, ServiceEvent } from '../protocol';
+import type {
+  ChangeRequest,
+  ChangeResponse,
+  GalleryCard,
+  GalleryFigure,
+  GalleryReceipt,
+  GallerySubmission,
+  ProbeResponse,
+  ProbeResult,
+  RepairRequest,
+  RepairResponse,
+  ServiceEvent,
+} from '../protocol';
 
 /**
  * The browser's side of the generation service: start a generation and read
@@ -100,6 +112,33 @@ export class GenerationClient {
   /** Asks for a change to a figure the learner has, in their words (HO-8). */
   async change(request: ChangeRequest, signal?: AbortSignal): Promise<ChangeResponse> {
     return this.postJson<ChangeResponse>('changes', request, signal);
+  }
+
+  /** Publishes a finished figure to the community gallery, where it waits for a reviewer (GL-1). */
+  async publish(submission: GallerySubmission, signal?: AbortSignal): Promise<GalleryReceipt> {
+    return this.postJson<GalleryReceipt>('gallery', submission, signal);
+  }
+
+  /** The figures reviewers accepted, newest first. */
+  async gallery(signal?: AbortSignal): Promise<readonly GalleryCard[]> {
+    return (await this.getJson<{ figures: GalleryCard[] }>('gallery', signal)).figures;
+  }
+
+  /** One accepted figure, with its fragments and a ticket of its own, to add to a note. */
+  async galleryFigure(id: string, signal?: AbortSignal): Promise<GalleryFigure> {
+    return this.getJson<GalleryFigure>(`gallery/${encodeURIComponent(id)}`, signal);
+  }
+
+  private async getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
+    let response: Response;
+    try {
+      response = await this.fetcher(`${this.options.baseUrl}/${path}`, { method: 'GET', headers: await this.headers(), ...(signal ? { signal } : {}) });
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      throw new ServiceError(0, 'network', 'The figure service could not be reached');
+    }
+    if (!response.ok) throw await this.refusal(response);
+    return (await response.json()) as T;
   }
 
   private async postJson<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {

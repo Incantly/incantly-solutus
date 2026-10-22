@@ -30,4 +30,7 @@ export { GenerationService, RETENTION, createService, sanitizeDeviceReport, skel
 export type { ServiceOptions } from './service';
 export type { FallbackMessage, FallbackReason, ProbeResponse, ProbeResult, RepairRequest, RepairResponse, SceneMessage, ServiceEvent, Skeleton } from './protocol';
 export { MAX_TICKET_LENGTH, issueTicket, readTicket } from './ticket';
+export { FileGalleryStore, MemoryGalleryStore, galleryCard, galleryFigure, galleryId, isListed, matchFor, promote, promotionProblem, sceneFiles, sceneSlug, submitterOf } from './gallery';
+export type { GalleryEntry, GalleryStore } from './gallery';
+export type { GalleryCard, GalleryFigure, GalleryReceipt, GalleryStatus, GallerySubmission } from './protocol';
 export type { TicketFragments } from './ticket';

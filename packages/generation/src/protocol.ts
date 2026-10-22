@@ -91,3 +91,43 @@ export interface ChangeRequest {
 /** The answer to a change: the changed scene to probe, then report like any other, or why there is none. */
 export type ChangeResponse = ({ readonly status: 'scene' } & SceneMessage) | { readonly status: 'failed'; readonly reason: FallbackReason };
 
+
+/**
+ * A learner publishes a finished figure to the community gallery (GL-1,
+ * BR-13), with the request that made it. The ticket proves the service made
+ * these fragments; nothing is shown to anyone until a reviewer accepts it.
+ */
+export interface GallerySubmission {
+  readonly ticket: string;
+  readonly fragments: SceneFragmentsMessage;
+  /** The request the figure was made from, in the learner's words: 3 to 500 characters. */
+  readonly prompt: string;
+  /** What it shows, at most 80 characters. Default the plan's concept. */
+  readonly title?: string;
+}
+
+/** Where a gallery entry is: waiting for review, listed, turned down, or made a reviewed scene. */
+export type GalleryStatus = 'pending' | 'accepted' | 'rejected' | 'promoted';
+
+export interface GalleryReceipt {
+  readonly id: string;
+  readonly status: GalleryStatus;
+}
+
+/** A listed figure, as other learners see it in the gallery. */
+export interface GalleryCard {
+  readonly id: string;
+  readonly title: string;
+  readonly prompt: string;
+  /** The plan's idea sentence. */
+  readonly idea: string;
+  readonly kind: SceneKind;
+  readonly sdkVersion: string;
+  readonly reviewedAt: string | null;
+}
+
+/** A listed figure with what it takes to add it to a note, and a fresh ticket so it can be repaired there. */
+export interface GalleryFigure extends GalleryCard {
+  readonly fragments: SceneFragmentsMessage;
+  readonly ticket?: string;
+}
