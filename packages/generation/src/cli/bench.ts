@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
-import { benchRound, readJson, type BenchCondition, type BenchReply, type BenchResult, type PendingCall } from '../bench';
+import { benchRound, readJson, type BenchCondition, type BenchLatency, type BenchReply, type BenchResult, type PendingCall } from '../bench';
 import { LAUNCH_REQUESTS } from '../launch';
 import { spread } from '../metrics';
 
@@ -33,8 +33,10 @@ const { values } = parseArgs({
     effort: { type: 'string', default: 'low' },
     calibration: { type: 'boolean', default: false },
     deadline: { type: 'string' },
+    latency: { type: 'string', default: 'text' },
   },
 });
+
 
 const say = (text: string) => process.stdout.write(`${text}\n`);
 const dir = values.dir;
@@ -52,7 +54,8 @@ function replies(): BenchReply[] {
   return existsSync(path('replies.json')) ? readJson<BenchReply[]>(path('replies.json')) : [];
 }
 
-const options = values.deadline !== undefined ? { deadlineMs: Number(values.deadline) } : {};
+const latency = (values.latency === 'raw' ? 'raw' : 'text') as BenchLatency;
+const options = { latency, ...(values.deadline !== undefined ? { deadlineMs: Number(values.deadline) } : {}) };
 
 /** A workflow script that sends each prompt to a subagent and returns only counts. */
 function workflowScript(name: string, description: string, calls: ReadonlyArray<{ readonly label: string; readonly prompt: string; readonly model: string; readonly phase: string }>): string {
@@ -105,6 +108,7 @@ function readRun(runDir: string): BenchReply[] {
     if (!existsSync(file)) continue;
     let start: number | null = null;
     let end: number | null = null;
+    let thought: number | null = null;
     let model: string | undefined;
     const usage = new Map<string, { input: number; output: number; cacheRead: number }>();
     for (const line of readFileSync(file, 'utf8').split('\n')) {
@@ -112,12 +116,18 @@ function readRun(runDir: string): BenchReply[] {
       const entry = JSON.parse(line) as {
         type?: string;
         timestamp?: string;
-        message?: { id?: string; model?: string; usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number } };
+        message?: {
+          id?: string;
+          model?: string;
+          content?: ReadonlyArray<{ type?: string }>;
+          usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number };
+        };
       };
       const t = entry.timestamp ? Date.parse(entry.timestamp) : null;
       if (entry.type === 'user' && start === null && t !== null) start = t;
       if (entry.type === 'assistant') {
         if (t !== null) end = t;
+        if (t !== null && entry.message?.content?.some((c) => c.type === 'thinking' || c.type === 'redacted_thinking')) thought = t;
         model = entry.message?.model ?? model;
         const u = entry.message?.usage;
         if (u && entry.message?.id) usage.set(entry.message.id, { input: u.input_tokens ?? 0, output: u.output_tokens ?? 0, cacheRead: u.cache_read_input_tokens ?? 0 });
@@ -130,6 +140,7 @@ function readRun(runDir: string): BenchReply[] {
       key,
       text,
       ms: start !== null && end !== null ? end - start : 0,
+      ...(thought !== null && start !== null ? { thinkMs: thought - start } : {}),
       ...(model ? { model } : {}),
       // Transcripts record the usage of a reply as it starts streaming, so its output is counted from the text.
       outputTokens: Math.max(sum.output, Math.ceil(text.length / 3.5)),
@@ -148,13 +159,16 @@ function stats(values: readonly number[]): string {
   return s.count === 0 ? '–' : `${seconds(s.p50)} / ${seconds(s.p90)} / ${seconds(s.max)} / ${seconds(s.mean)}`;
 }
 
-function report(results: readonly BenchResult[], overheadMs: Record<string, number>): string {
+function report(results: readonly BenchResult[], overheadMs: Record<string, number>, raw: readonly BenchResult[]): string {
   const lines: string[] = [];
   const done = results.filter((r) => !r.pending);
   lines.push('# Generation bench', '');
   lines.push(
     `${done.length} generations: ${requests().length} launch requests (PRD 17.8) in ${conditions.length} condition${conditions.length > 1 ? 's' : ''}. Plans on ${values.plan}, scenes and repairs on ${values.scene}, effort ${values.effort}, each call one subagent.`,
-    'Times are what a learner waits for, on the pipeline\'s own clock: each model call\'s measured wall time plus this machine\'s validation and probe. Calls are cut off at the deadline as the service would cut them.',
+    "Times are what a learner waits for, on the pipeline's own clock: each model call's time plus this machine's validation and probe. Calls are cut off at the deadline as the service would cut them.",
+    latency === 'text'
+      ? 'Subagents think before some replies; the service calls models with thinking off, so each call counts from its start to the end of its reply less the time spent thinking. The last section gives the times as measured, thinking included.'
+      : 'Each call counts its whole measured time, thinking included.',
     '',
   );
   lines.push('## Summary', '', '| Condition | Generations | Approved | First attempt | Repaired | Failed | Total p50 / p90 / max / mean (s) | Within 25 s | 5 to 20 s |', '| --- | --- | --- | --- | --- | --- | --- | --- | --- |');
@@ -216,6 +230,15 @@ function report(results: readonly BenchResult[], overheadMs: Record<string, numb
     lines.push('', '## Why generations failed', '');
     for (const r of failed) lines.push(`- ${r.id} (${r.condition}): ${r.failureReason ?? 'unknown'}`);
   }
+  if (latency === 'text') {
+    const rawDone = raw.filter((r) => !r.pending);
+    lines.push('', '## As measured, thinking included', '', '| Condition | Approved | Total p50 / p90 / max / mean (s) | Within 25 s |', '| --- | --- | --- | --- |');
+    for (const condition of conditions) {
+      const rows = rawDone.filter((r) => r.condition === condition);
+      const totals = rows.map((r) => r.timings.totalMs);
+      lines.push(`| ${condition} | ${rows.filter((r) => r.passed).length} of ${rows.length} | ${stats(totals)} | ${percent(totals.filter((t) => t <= 25_000).length, rows.length)} |`);
+    }
+  }
   return `${lines.join('\n')}\n`;
 }
 
@@ -270,8 +293,9 @@ switch (command) {
       if (!model) continue;
       overhead[model] = spread(calibration.filter((c) => c.model === model).map((c) => c.ms)).p50 ?? 0;
     }
+    const raw = latency === 'text' ? (await benchRound(requests(), conditions, replies(), { ...options, latency: 'raw' })).results : round.results;
     write('results.json', round.results);
-    write('report.md', report(round.results, overhead));
+    write('report.md', report(round.results, overhead, raw));
     say(`${path('report.md')}: ${round.results.filter((r) => !r.pending).length} complete, ${round.results.filter((r) => r.pending).length} still waiting`);
     break;
   }

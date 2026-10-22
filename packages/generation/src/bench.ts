@@ -38,6 +38,8 @@ export interface BenchReply {
   readonly text: string;
   /** Wall time of the call in milliseconds. */
   readonly ms: number;
+  /** Of that, the time until a thinking block closed: the service calls models without thinking. */
+  readonly thinkMs?: number;
   readonly model?: string;
   readonly outputTokens?: number;
   readonly inputTokens?: number;
@@ -153,6 +155,8 @@ export interface BenchResult {
   readonly repairs: number;
   /** The check each failed attempt failed. */
   readonly failures: readonly string[];
+  /** Each failed attempt's report, as the repair call quoted it. */
+  readonly reports: readonly string[];
   readonly failureReason: string | null;
   readonly deadlineSkipped: boolean;
   readonly timings: { readonly planMs: number; readonly sceneMs: number; readonly repairMs: number; readonly totalMs: number; readonly checkMs: number };
@@ -166,14 +170,22 @@ export interface BenchRound {
   readonly pending: readonly PendingCall[];
 }
 
+/**
+ * raw: each call takes the time it took. text: thinking time is taken out,
+ * since the service calls models with thinking off; what is left is the time
+ * to the first token and the time to write the reply.
+ */
+export type BenchLatency = 'raw' | 'text';
+
 /** Runs every request in every condition with the replies so far. */
 export async function benchRound(
   requests: readonly BenchRequest[],
   conditions: readonly BenchCondition[],
   replies: readonly BenchReply[],
-  options: { readonly deadlineMs?: number } = {},
+  options: { readonly deadlineMs?: number; readonly latency?: BenchLatency } = {},
 ): Promise<BenchRound> {
-  const byKey = new Map(replies.map((r) => [r.key, r] as const));
+  const latency = options.latency ?? 'raw';
+  const byKey = new Map(replies.map((r) => [r.key, latency === 'text' && r.thinkMs ? { ...r, ms: r.ms - r.thinkMs } : r] as const));
   const pending: PendingCall[] = [];
   const results: BenchResult[] = [];
   for (const condition of conditions) {
@@ -228,6 +240,7 @@ function resultOf(request: BenchRequest, condition: BenchCondition, state: Gener
     passed: last?.passed ?? false,
     repairs: state.repairsUsed,
     failures: attempts.filter((a) => !a.passed).map((a) => (a.failed === 'probe' ? `probe:${a.report?.check ?? '?'}` : (a.failed ?? 'unknown'))),
+    reports: attempts.filter((a) => !a.passed).map((a) => a.report?.text ?? ''),
     failureReason: state.failure?.reason ?? null,
     deadlineSkipped: state.deadlineSkipped,
     timings: {
