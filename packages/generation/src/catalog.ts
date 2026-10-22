@@ -16,7 +16,7 @@ export interface Capability {
   readonly draws: boolean;
 }
 
-const STAGE = ['StageOptions', 'ElementOptions', 'Shade', 'Layer', 'Stage', 'PartOptions', 'Handle', 'PathHandle', 'TextHandle', 'PolylineHandle', 'Group'];
+const STAGE = ['StageOptions', 'ElementOptions', 'EquationOptions', 'Shade', 'Layer', 'Stage', 'PartOptions', 'Handle', 'PathHandle', 'TextHandle', 'PolylineHandle', 'Group'];
 const DRAG = ['DragInfo', 'DragMap', 'Values'];
 const SPACE = ['Vec3', 'Mat3', 'CameraOptions', 'View3D', 'Object3D', 'Group3D', 'Line3DOptions', 'Line3D', 'Arrow3D', 'Label3D', 'PartOptions'];
 
@@ -52,7 +52,7 @@ export const CAPABILITIES: readonly Capability[] = [
   {
     name: 'svg',
     draws: true,
-    line: 'svg: a diagram in your own units: groups, paths, lines, circles, rects, text, connectors and callouts that follow elements, copies, dot clouds, shading, dragging (inc.svg).',
+    line: 'svg: a diagram in your own units: groups, paths, lines, circles, rects, text, equations as maths, connectors and callouts that follow elements, copies, dot clouds, shading, dragging (inc.svg).',
     contract: [...STAGE, 'GeometryAttribute', 'AttributeValues', 'ConnectorOptions', 'CalloutOptions', 'DotsOptions', 'Dots', ...DRAG],
   },
   {
@@ -100,6 +100,30 @@ export const CAPABILITIES: readonly Capability[] = [
     draws: true,
     line: 'flow: a flowchart or state diagram that lays itself out; nodes, labelled edges, an active node (inc.flow).',
     contract: ['FlowOptions', 'FlowNodeOptions', 'FlowEdgeOptions', 'FlowNode', 'FlowEdge', 'Flow', ...STAGE],
+  },
+  {
+    name: 'chemistry',
+    draws: true,
+    line: 'chemistry: atoms, bonds and molecules from formulas with real geometry, lone pairs, partial charges, electron shells, reactions acted out with bond energies, energy profiles (inc.chemistry).',
+    contract: [
+      'ChemistryOptions',
+      'AtomOptions',
+      'Atom',
+      'BondOptions',
+      'Bond',
+      'MoleculeStructure',
+      'MoleculeOptions',
+      'Molecule',
+      'ShellOptions',
+      'Shells',
+      'ReactionOptions',
+      'ReactionEnergy',
+      'Reaction',
+      'ProfileOptions',
+      'Profile',
+      'Chemistry',
+      ...STAGE,
+    ],
   },
   // Controls and time.
   {
