@@ -58,7 +58,8 @@ export async function recordStage(svg: SVGSVGElement | null, options: ClipOption
   const context = canvas.getContext('2d');
   if (!context || typeof canvas.captureStream !== 'function') return null;
   const background = backgroundOf(svg);
-  const layers = (place: 'back' | 'front') => svg.parentElement?.querySelector<HTMLCanvasElement>(`canvas.inc-dots--${place}`) ?? null;
+  // Dot clouds and fluids, behind the drawing and in front of it, in the order they are stacked.
+  const layers = (place: 'back' | 'front') => [...(svg.parentElement?.querySelectorAll<HTMLCanvasElement>(`canvas.inc-dots--${place}`) ?? [])];
   let busy = false;
   const paint = async (): Promise<void> => {
     if (busy) return;
@@ -70,11 +71,9 @@ export async function recordStage(svg: SVGSVGElement | null, options: ClipOption
         context.fillStyle = background;
         context.fillRect(0, 0, canvas.width, canvas.height);
       }
-      const back = layers('back');
-      if (back && back.width > 0) context.drawImage(back, 0, 0, canvas.width, canvas.height);
+      for (const layer of layers('back')) if (layer.width > 0) context.drawImage(layer, 0, 0, canvas.width, canvas.height);
       context.drawImage(image, 0, 0, canvas.width, canvas.height);
-      const front = layers('front');
-      if (front && front.width > 0) context.drawImage(front, 0, 0, canvas.width, canvas.height);
+      for (const layer of layers('front')) if (layer.width > 0) context.drawImage(layer, 0, 0, canvas.width, canvas.height);
     } catch {
       // A frame that fails to copy keeps the last one.
     } finally {

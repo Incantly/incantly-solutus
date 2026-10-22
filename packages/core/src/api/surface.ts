@@ -19,6 +19,7 @@ import type {
   Choice,
   ColorParam,
   Dots,
+  Fluid,
   Flow,
   FlowEdge,
   FlowNode,
@@ -80,6 +81,7 @@ export type HandleKind =
   | 'Choice'
   | 'ColorParam'
   | 'Dots'
+  | 'Fluid'
   | 'Model'
   | 'Stage'
   | 'Element'
@@ -316,6 +318,7 @@ export const HANDLES: Readonly<Record<HandleKind, HandleSpec>> = {
     properties: { name: null, value: null, min: null, max: null, tone: null } satisfies Properties<ColorParam>,
   },
   Dots: { methods: { set: 'self', tone: 'self' } satisfies Methods<Dots>, properties: {} },
+  Fluid: { methods: { tone: 'self', show: 'self', hide: 'self', reset: 'self' } satisfies Methods<Fluid>, properties: {} },
   Model: { methods: {}, properties: {}, open: true },
   Stage: {
     methods: {
@@ -333,6 +336,7 @@ export const HANDLES: Readonly<Record<HandleKind, HandleSpec>> = {
       callout: 'Text',
       repeat: null,
       dots: 'Dots',
+      fluid: 'Fluid',
     } satisfies Methods<Stage>,
     properties: { viewBox: null } satisfies Properties<Stage>,
   },

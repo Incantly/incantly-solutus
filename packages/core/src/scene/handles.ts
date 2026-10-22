@@ -5,6 +5,8 @@ import type {
   Dots,
   DotsOptions,
   DragMap,
+  Fluid,
+  FluidOptions,
   ElementOptions,
   EquationOptions,
   Handle,
@@ -31,6 +33,8 @@ export const LAYERS: ReadonlySet<string> = new Set<Layer>(['back', 'mid', 'front
 export const SHADES: ReadonlySet<string> = new Set<Shade>(['sphere', 'cylinder', 'soft']);
 /** Dots one layer may hold. */
 export const MAX_DOTS = 2000;
+/** Particles one fluid may carry. */
+export const MAX_FLUID = 2000;
 
 function services(graph: SceneGraph): GraphServices {
   if (!graph.services) throw new SceneApiError('This figure cannot do that outside a running scene');
@@ -375,6 +379,123 @@ export class StageHandle implements Stage {
     };
     graph.setDots(id, stage, layer, current, r, flat);
     return dots;
+  }
+
+  /**
+   * A fluid (FX-1): particles carried by a velocity field with a midpoint
+   * step on every frame that moves scene time, starting again at seeded
+   * random places when they leave their region or grow old, and drawn on a
+   * canvas of their own that lets their streaks fade.
+   */
+  fluid(velocity: (x: number, y: number) => Vec2, options: FluidOptions = {}): Fluid {
+    if (typeof velocity !== 'function') throw new SceneApiError('fluid needs a function (x, y) => [vx, vy], in stage units per second');
+    if (typeof options !== 'object' || options === null) throw new SceneApiError('fluid options must be an object');
+    const count = options.count ?? 400;
+    if (!(Number.isInteger(count) && count >= 10 && count <= MAX_FLUID)) throw new SceneApiError(`A fluid carries from 10 to ${MAX_FLUID} particles`);
+    const tone = options.tone ?? 'b';
+    if (!TONES.has(tone)) throw new SceneApiError(`Unknown tone "${String(tone)}"`);
+    const r = options.r ?? 1.5;
+    if (!(Number.isFinite(r) && r > 0 && r <= 20)) throw new SceneApiError('A fluid particle radius is from 0 to 20');
+    const life = options.life ?? 4;
+    if (!(Number.isFinite(life) && life >= 0.2 && life <= 60)) throw new SceneApiError('A fluid particle lives from 0.2 to 60 seconds');
+    const trail = options.trail ?? 0.6;
+    if (!(Number.isFinite(trail) && trail >= 0 && trail <= 3)) throw new SceneApiError('A fluid trail lasts from 0 to 3 seconds');
+    // Behind the drawing by default, so what stands in the flow and its labels stay on top.
+    const layer = options.layer ?? 'back';
+    if (layer !== 'back' && layer !== 'front') throw new SceneApiError('A fluid goes on the back or front layer');
+    const glow = options.glow === true;
+    const region = options.region ?? this.viewBox;
+    if (!Array.isArray(region) || region.length !== 4 || !region.every(Number.isFinite) || !(region[2] > 0 && region[3] > 0)) {
+      throw new SceneApiError('A fluid region is [x, y, width, height] with a positive width and height');
+    }
+    const [rx, ry, rw, rh] = region;
+    const graph = this.graph;
+    const stage = this.stageNode.id;
+    const id = graph.newId();
+    const service = services(graph);
+    const xs = new Float64Array(count);
+    const ys = new Float64Array(count);
+    const ages = new Float64Array(count);
+    let current: Tone = tone;
+    let shown = true;
+    /** Particles that started again since the last publish: they draw no streak from where they were. */
+    let restarts: number[] = [];
+    // A particle leaving the region by a little is still drawn as it goes.
+    const margin = 0.02 * Math.max(rw, rh);
+    const sample = (x: number, y: number): Vec2 | null => {
+      const v = velocity(x, y);
+      if (!Array.isArray(v) || v.length !== 2) throw new SceneApiError('A fluid velocity must return [vx, vy]');
+      return Number.isFinite(v[0]) && Number.isFinite(v[1]) ? v : null;
+    };
+    // A new place in the region, where the flow is defined: not inside an obstacle whose velocity is not a number.
+    const place = (i: number, age: number) => {
+      for (let tries = 0; tries < 8; tries++) {
+        xs[i] = rx + service.random() * rw;
+        ys[i] = ry + service.random() * rh;
+        if (sample(xs[i]!, ys[i]!)) break;
+      }
+      ages[i] = age;
+      restarts.push(i);
+    };
+    // Ages start spread out, so particles do not all start again at once.
+    const scatter = () => {
+      for (let i = 0; i < count; i++) place(i, service.random() * life);
+    };
+    const publish = () => {
+      const flat: number[] = [];
+      if (shown) for (let i = 0; i < count; i++) flat.push(Math.round(xs[i]! * 100) / 100, Math.round(ys[i]! * 100) / 100);
+      graph.setDots(id, stage, layer, current, r, flat, glow, trail, restarts);
+      restarts = [];
+    };
+    service.onStep((dt) => {
+      if (!(dt > 0)) return;
+      for (let i = 0; i < count; i++) {
+        const x = xs[i]!;
+        const y = ys[i]!;
+        // Midpoint step: the velocity halfway along the step, so particles follow curved flow.
+        const a = sample(x, y);
+        const b = a ? sample(x + (a[0] * dt) / 2, y + (a[1] * dt) / 2) : null;
+        const age = ages[i]! + dt;
+        if (!b || age > life) {
+          place(i, 0);
+          continue;
+        }
+        const nx = x + b[0] * dt;
+        const ny = y + b[1] * dt;
+        if (nx < rx - margin || nx > rx + rw + margin || ny < ry - margin || ny > ry + rh + margin) {
+          place(i, 0);
+          continue;
+        }
+        xs[i] = nx;
+        ys[i] = ny;
+        ages[i] = age;
+      }
+      publish();
+    });
+    scatter();
+    publish();
+    const fluid: Fluid = {
+      tone(name) {
+        if (!TONES.has(name)) throw new SceneApiError(`Unknown tone "${String(name)}"`);
+        current = name;
+        publish();
+        return fluid;
+      },
+      show(visible = true) {
+        shown = visible !== false;
+        publish();
+        return fluid;
+      },
+      hide() {
+        return fluid.show(false);
+      },
+      reset() {
+        scatter();
+        publish();
+        return fluid;
+      },
+    };
+    return fluid;
   }
 
   /** The node of a handle drawn on this stage. */

@@ -310,6 +310,32 @@ export interface Dots {
   tone(name: Tone): this;
 }
 
+export interface FluidOptions {
+  /** Particles carried by the flow, from 10 to 2000. Default 400. */
+  readonly count?: number;
+  /** Where particles start, and start again when they leave it: [x, y, width, height] in stage units. Default the view box. */
+  readonly region?: ViewBox;
+  /** Seconds a particle drifts before it starts again elsewhere, so the flow stays filled. Default 4. */
+  readonly life?: number;
+  /** Seconds a particle's streak takes to fade, from 0 (dots only) to 3. Default 0.6. */
+  readonly trail?: number;
+  readonly tone?: Tone;
+  /** Dot radius and streak width. Default 1.5. */
+  readonly r?: number;
+  /** Default 'back', behind the drawing, so what stands in the flow stays on top. */
+  readonly layer?: 'back' | 'front';
+  readonly glow?: boolean;
+}
+
+/** Particles carried by a velocity field, drawn with fading streaks on the stage's canvas layer (FX-1). */
+export interface Fluid {
+  tone(name: Tone): this;
+  show(visible?: boolean): this;
+  hide(): this;
+  /** Scatters every particle afresh. */
+  reset(): this;
+}
+
 export interface Stage {
   readonly viewBox: ViewBox;
   group(options?: ElementOptions): Group;
@@ -336,6 +362,12 @@ export interface Stage {
   /** Copies of an element, each placed with at(). */
   repeat(handle: Handle, count: number): Handle[];
   dots(options?: DotsOptions): Dots;
+  /**
+   * A flowing fluid, wind or current: particles carried by `velocity`, a
+   * function of the stage point giving [vx, vy] in stage units per second
+   * (y points down), that move while the figure plays and leave fading streaks.
+   */
+  fluid(velocity: (x: number, y: number) => Vec2, options?: FluidOptions): Fluid;
 }
 
 // ---------------------------------------------------------------------------

@@ -54,6 +54,18 @@ export interface StageDom {
   readonly gradients: Set<string>;
   /** Canvas layers for dots, made on first use. */
   canvases: { back?: HTMLCanvasElement; front?: HTMLCanvasElement };
+  /** A canvas for each fluid, which keeps what it drew so streaks fade (FX-1), by dots id. */
+  readonly trails: Map<number, TrailCanvas>;
+}
+
+interface TrailCanvas {
+  readonly canvas: HTMLCanvasElement;
+  /** Where each particle was last drawn, in stage units, or null to start afresh. */
+  previous: readonly number[] | null;
+  /** When it was last painted, in ms. */
+  at: number;
+  /** The canvas size and view box it was painted at: a change starts it afresh. */
+  frame: string;
 }
 
 /** Where an equation sits, and the HTML box its MathML is drawn in. */
@@ -75,6 +87,10 @@ interface DotsState {
   readonly r: number;
   readonly points: readonly number[];
   readonly glow: boolean;
+  /** Seconds a streak takes to fade; above 0 for a fluid. */
+  readonly trail: number;
+  /** Dots that started again elsewhere since the last paint. */
+  readonly restarts: ReadonlySet<number>;
 }
 
 export interface SceneDomStats {
@@ -146,6 +162,7 @@ export class SceneDom {
       stage.svg.remove();
       stage.canvases.back?.remove();
       stage.canvases.front?.remove();
+      for (const trail of stage.trails.values()) trail.canvas.remove();
     }
     this.stages.clear();
     this.elements.clear();
@@ -159,9 +176,12 @@ export class SceneDom {
     this.dirtyCanvases.clear();
   }
 
-  /** Repaints every canvas layer, after a resize or a zoom. */
+  /** Repaints every canvas layer, after a resize or a zoom; fluids start their streaks afresh. */
   repaintDots(): void {
-    for (const stage of this.stages.keys()) this.paintDots(stage);
+    for (const [id, stage] of this.stages) {
+      for (const trail of stage.trails.values()) trail.previous = null;
+      this.paintDots(id);
+    }
   }
 
   private applyOne(command: SceneCommand): void {
@@ -224,6 +244,7 @@ export class SceneDom {
           interaction: { zoom: 'viewbox', hover: false, orbit: false, views: [], measure: null },
           gradients: new Set(),
           canvases: {},
+          trails: new Map(),
         };
         this.stages.set(command.id, stage);
         this.stats.writes++;
@@ -346,7 +367,16 @@ export class SceneDom {
       case 'dots': {
         if (!this.stages.has(command.stage)) return;
         const previous = this.dots.get(command.id);
-        this.dots.set(command.id, { stage: command.stage, layer: command.layer, tone: command.tone, r: command.r, points: command.points, glow: command.glow === true });
+        this.dots.set(command.id, {
+          stage: command.stage,
+          layer: command.layer,
+          tone: command.tone,
+          r: command.r,
+          points: command.points,
+          glow: command.glow === true,
+          trail: typeof command.trail === 'number' && command.trail > 0 ? Math.min(3, command.trail) : 0,
+          restarts: new Set(command.restarts ?? []),
+        });
         this.dirtyCanvases.add(command.stage);
         if (previous && previous.stage !== command.stage) this.dirtyCanvases.add(previous.stage);
         return;
@@ -475,8 +505,9 @@ export class SceneDom {
   private paintDots(stageId: number): void {
     const stage = this.stages.get(stageId);
     if (!stage) return;
+    for (const [id, set] of this.dots) if (set.stage === stageId && set.trail > 0) this.paintTrail(stage, id, set);
     for (const layer of ['back', 'front'] as const) {
-      const sets = [...this.dots.values()].filter((d) => d.stage === stageId && d.layer === layer);
+      const sets = [...this.dots.values()].filter((d) => d.stage === stageId && d.layer === layer && d.trail === 0);
       let canvas = stage.canvases[layer];
       if (sets.length === 0 && !canvas) continue;
       if (!canvas) {
@@ -491,7 +522,12 @@ export class SceneDom {
     }
   }
 
-  private paintCanvas(stage: StageDom, canvas: HTMLCanvasElement, sets: readonly DotsState[]): void {
+  /**
+   * Lays a canvas over the stage at the device's pixel ratio and gives the
+   * map from stage units to its pixels: the stage's current view box (which
+   * zooming changes) with its letterboxing.
+   */
+  private fitCanvas(stage: StageDom, canvas: HTMLCanvasElement) {
     const rect = stage.svg.getBoundingClientRect();
     const ratio = stage.host.ownerDocument.defaultView?.devicePixelRatio ?? 1;
     const width = Math.max(1, Math.round(rect.width * ratio));
@@ -503,15 +539,85 @@ export class SceneDom {
     canvas.style.height = `${rect.height}px`;
     canvas.style.left = `${rect.left - host.left}px`;
     canvas.style.top = `${rect.top - host.top}px`;
+    const viewBox = stage.svg.getAttribute('viewBox') ?? stage.viewBox.join(' ');
+    const [vx = 0, vy = 0, vw = 1, vh = 1] = viewBox.split(/[\s,]+/).map(Number);
+    const scale = Math.min(width / vw, height / vh);
+    return { width, height, vx, vy, scale, ox: (width - vw * scale) / 2, oy: (height - vh * scale) / 2, frame: `${width}x${height}|${viewBox}` };
+  }
+
+  /**
+   * A fluid's canvas (FX-1): what it drew fades by the time since it last
+   * painted, then each particle's step since then is drawn as a streak
+   * ending in a dot. A particle that started again elsewhere draws no streak.
+   */
+  private paintTrail(stage: StageDom, id: number, set: DotsState): void {
+    const doc = stage.host.ownerDocument;
+    let trail = stage.trails.get(id);
+    if (!trail) {
+      const canvas = doc.createElement('canvas');
+      canvas.className = `inc-dots inc-dots--${set.layer} inc-fluid`;
+      canvas.setAttribute('aria-hidden', 'true');
+      if (set.layer === 'back') stage.svg.before(canvas);
+      else stage.svg.after(canvas);
+      trail = { canvas, previous: null, at: 0, frame: '' };
+      stage.trails.set(id, trail);
+    }
+    const fit = this.fitCanvas(stage, trail.canvas);
+    const context = trail.canvas.getContext('2d');
+    if (!context) return;
+    const now = doc.defaultView?.performance.now() ?? Date.now();
+    if (fit.frame !== trail.frame || trail.previous === null) {
+      context.clearRect(0, 0, fit.width, fit.height);
+      trail.previous = null;
+      trail.frame = fit.frame;
+    } else {
+      // Fades to a twentieth in `trail` seconds.
+      const fade = 1 - Math.exp(((now - trail.at) / 1000) * (-3 / set.trail));
+      context.globalCompositeOperation = 'destination-out';
+      context.fillStyle = `rgba(0, 0, 0, ${Math.min(1, Math.max(0, fade))})`;
+      context.fillRect(0, 0, fit.width, fit.height);
+      context.globalCompositeOperation = 'source-over';
+    }
+    trail.at = now;
+    const colour = doc.defaultView?.getComputedStyle(stage.svg).getPropertyValue(`--inc-${set.tone}`).trim() || '#888';
+    const r = Math.max(0.5, set.r * fit.scale);
+    const at = (i: number): [number, number] => [fit.ox + (set.points[i]! - fit.vx) * fit.scale, fit.oy + (set.points[i + 1]! - fit.vy) * fit.scale];
+    context.shadowColor = set.glow ? colour : 'transparent';
+    context.shadowBlur = set.glow ? Math.max(4, r * 3) : 0;
+    const previous = trail.previous;
+    if (previous && previous.length === set.points.length) {
+      // A dot that started again, or jumped across a tenth of the view, is not a step.
+      const jump = (0.1 * Math.max(fit.width, fit.height)) ** 2;
+      context.strokeStyle = colour;
+      context.lineWidth = r * 1.4;
+      context.lineCap = 'round';
+      context.beginPath();
+      for (let i = 0; i + 1 < set.points.length; i += 2) {
+        const [x, y] = at(i);
+        const px = fit.ox + (previous[i]! - fit.vx) * fit.scale;
+        const py = fit.oy + (previous[i + 1]! - fit.vy) * fit.scale;
+        if (set.restarts.has(i / 2) || (x - px) ** 2 + (y - py) ** 2 > jump) continue;
+        context.moveTo(px, py);
+        context.lineTo(x, y);
+      }
+      context.stroke();
+    }
+    context.fillStyle = colour;
+    context.beginPath();
+    for (let i = 0; i + 1 < set.points.length; i += 2) {
+      const [x, y] = at(i);
+      context.moveTo(x + r, y);
+      context.arc(x, y, r, 0, Math.PI * 2);
+    }
+    context.fill();
+    trail.previous = set.points;
+  }
+
+  private paintCanvas(stage: StageDom, canvas: HTMLCanvasElement, sets: readonly DotsState[]): void {
+    const { width, height, vx, vy, scale, ox, oy } = this.fitCanvas(stage, canvas);
     const context = canvas.getContext('2d');
     if (!context) return;
     context.clearRect(0, 0, width, height);
-    // The canvas shares the stage's current view box (which zooming changes) and its letterboxing.
-    const box = (stage.svg.getAttribute('viewBox') ?? stage.viewBox.join(' ')).split(/[\s,]+/).map(Number);
-    const [vx = 0, vy = 0, vw = 1, vh = 1] = box;
-    const scale = Math.min(width / vw, height / vh);
-    const ox = (width - vw * scale) / 2;
-    const oy = (height - vh * scale) / 2;
     const style = stage.host.ownerDocument.defaultView?.getComputedStyle(stage.svg);
     for (const set of sets) {
       const colour = style?.getPropertyValue(`--inc-${set.tone}`).trim() || '#888';

@@ -73,6 +73,10 @@ export interface GraphServices {
   onRedraw(fn: () => void): void;
   /** Moves dashes along a stroke at `speed` units per second. */
   setFlow(node: VNode, speed: number): void;
+  /** Runs on every frame that moves scene time, with the step in seconds; registering one makes the scene animated. */
+  onStep(fn: (dt: number) => void): void;
+  /** The scene's seeded random numbers, from 0 to 1, the same on every run. */
+  random(): number;
 }
 
 const identity = (): Transform => ({ tx: 0, ty: 0, rotation: 0, rcx: 0, rcy: 0, sx: 1, sy: 1 });
@@ -100,7 +104,7 @@ export class SceneGraph {
   private readonly interactions = new Map<number, string>();
   private readonly partInfo = new Map<number, { name: string; label: string; info: string }>();
   private readonly dots = new Map<number, string>();
-  private readonly dotState = new Map<number, { stage: number; layer: 'back' | 'front'; tone: string; r: number; points: number[]; glow?: boolean }>();
+  private readonly dotState = new Map<number, { stage: number; layer: 'back' | 'front'; tone: string; r: number; points: number[]; glow?: boolean; trail?: number }>();
 
   /** A fresh id for something drawn outside the element tree (a dots layer). */
   newId(): number {
@@ -191,12 +195,14 @@ export class SceneGraph {
   }
 
   /** Dots on a canvas sharing a stage's coordinates; points are x0, y0, x1, y1, ... */
-  setDots(id: number, stage: number, layer: 'back' | 'front', tone: string, r: number, points: readonly number[], glow = false): void {
-    const key = `${layer}|${tone}|${r}|${glow ? 1 : 0}|${points.join(',')}`;
+  setDots(id: number, stage: number, layer: 'back' | 'front', tone: string, r: number, points: readonly number[], glow = false, trail = 0, restarts: readonly number[] = []): void {
+    const key = `${layer}|${tone}|${r}|${glow ? 1 : 0}|${trail}|${points.join(',')}`;
     if (this.dots.get(id) === key) return;
     this.dots.set(id, key);
-    this.dotState.set(id, { stage, layer, tone, r, points: [...points], ...(glow ? { glow } : {}) });
-    this.queue.push({ op: 'dots', id, stage, layer, tone, r, points: [...points], ...(glow ? { glow } : {}) });
+    const extra = { ...(glow ? { glow } : {}), ...(trail > 0 ? { trail } : {}) };
+    this.dotState.set(id, { stage, layer, tone, r, points: [...points], ...extra });
+    // Restarts belong to this step only: a snapshot replays where the dots are, not how they got there.
+    this.queue.push({ op: 'dots', id, stage, layer, tone, r, points: [...points], ...extra, ...(restarts.length > 0 ? { restarts: [...restarts] } : {}) });
   }
 
   /** Sets the kit's own classes on an element (focus marks, ghosts). */

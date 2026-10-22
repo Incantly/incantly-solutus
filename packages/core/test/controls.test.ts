@@ -371,6 +371,68 @@ describe('stage helpers (DG-1, SV-6, SV-10, SV-13)', () => {
     expect(runtime.uiState().animated).toBe(true);
   });
 
+  it('carries a fluid through its velocity field only while time moves, starting particles again where they leave (FX-1)', () => {
+    const dotsOf = (commands: ReadonlyArray<{ op: string }>) => commands.filter((c) => c.op === 'dots').at(-1) as { points: number[]; trail?: number; tone: string; layer: string } | undefined;
+    const scene = (inc: Inc) => {
+      const strength = inc.param('strength', { min: 0, max: 40, value: 20 });
+      const s = stage(inc);
+      // A steady wind to the right, at `strength` units per second, over the left half of the stage.
+      s.fluid(() => [strength.value, 0], { count: 50, region: [0, 0, 50, 100], life: 10, trail: 0.8, tone: 'water', layer: 'back' });
+    };
+    const { runtime, mount } = run(scene);
+    const start = dotsOf(mount.commands)!;
+    expect(start).toMatchObject({ trail: 0.8, tone: 'water', layer: 'back' });
+    expect(start.points).toHaveLength(100);
+    for (let i = 0; i < start.points.length; i += 2) {
+      expect(start.points[i]).toBeGreaterThanOrEqual(0);
+      expect(start.points[i]).toBeLessThanOrEqual(50);
+    }
+    // Paused: nothing moves, even when the field changes.
+    runtime.setParam('strength', 40);
+    expect(dotsOf(runtime.tick(0.1).commands)).toBeUndefined();
+    expect(runtime.uiState().animated).toBe(true);
+    runtime.play();
+    const moved = dotsOf(runtime.tick(0.05).commands)!;
+    // Each particle moved 40 * 0.05 = 2 units right, or started again inside the region.
+    for (let i = 0; i < moved.points.length; i += 2) {
+      const step = moved.points[i]! - start.points[i]!;
+      if (Math.abs(moved.points[i + 1]! - start.points[i + 1]!) < 1e-9) expect(step).toBeCloseTo(2, 1);
+      expect(moved.points[i]).toBeLessThanOrEqual(51);
+    }
+    // Particles that blow out of the region start again inside it, and say so, so they draw no streak across the stage.
+    const restarted = new Set<number>();
+    for (let i = 0; i < 20; i++) {
+      const step = runtime.tick(0.05).commands.filter((c) => c.op === 'dots').at(-1) as { points: number[]; restarts?: number[] } | undefined;
+      for (const index of step?.restarts ?? []) {
+        restarted.add(index);
+        expect(step!.points[index * 2]).toBeLessThanOrEqual(50);
+      }
+    }
+    expect(restarted.size).toBeGreaterThan(5);
+    // The same seed gives the same flow.
+    const again = run(scene);
+    expect(dotsOf(again.mount.commands)!.points).toEqual(start.points);
+  });
+
+  it('refuses a fluid without a velocity function, or with too many particles', () => {
+    const errors: string[] = [];
+    run((inc) => {
+      const s = stage(inc);
+      for (const attempt of [() => s.fluid(null as never), () => s.fluid(() => [0, 0], { count: 5000 }), () => s.fluid(() => [0, 0], { region: [0, 0, 0, 10] })]) {
+        try {
+          attempt();
+        } catch (error) {
+          errors.push((error as Error).message);
+        }
+      }
+    });
+    expect(errors).toEqual([
+      'fluid needs a function (x, y) => [vx, vy], in stage units per second',
+      'A fluid carries from 10 to 2000 particles',
+      'A fluid region is [x, y, width, height] with a positive width and height',
+    ]);
+  });
+
   it('lets a scene drag any element and map the pointer to values', () => {
     let id = 0;
     const { runtime, mount } = run((inc) => {

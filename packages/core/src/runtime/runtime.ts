@@ -272,6 +272,8 @@ export class SceneRuntime {
   private timeline: Timeline | null = null;
   private simulations: SimulationRecord[] = [];
   private flows = new Map<VNode, number>();
+  /** What moves with scene time on its own, such as a fluid's particles. */
+  private steppers: Array<(dt: number) => void> = [];
   // State and hooks
   private stateValues = new Map<string, StateValue>();
   private stateListeners = new Map<string, Array<(value: StateValue) => void>>();
@@ -451,6 +453,7 @@ export class SceneRuntime {
   /** Moves scene time on by `dt`: fixed simulation steps, then one frame. */
   private advance(dt: number): void {
     this.simulate(dt);
+    for (const step of this.steppers) if (!this.guard('frame', () => step(dt))) break;
     this.time += dt;
     this.runFrame(dt);
     this.stats.playingFrames++;
@@ -954,6 +957,7 @@ export class SceneRuntime {
     this.timeline = null;
     this.simulations = [];
     this.flows = new Map();
+    this.steppers = [];
     this.stateValues = new Map();
     this.stateListeners = new Map();
     this.changed = new Set();
@@ -1312,6 +1316,11 @@ export class SceneRuntime {
       onRedraw: (fn) => {
         this.redraws.push(fn);
       },
+      onStep: (fn) => {
+        this.steppers.push(fn);
+        this.usesTime = true;
+      },
+      random: () => this.random(),
       setFlow: (node, speed) => {
         const extra = node.extra.replace(/\binc-flow\b/, '').trim();
         if (speed === 0) {

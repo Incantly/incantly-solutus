@@ -224,6 +224,10 @@ class GraphStage implements Stage {
     this.raw();
     return this.inner.dots(options);
   }
+  fluid(velocity: Parameters<StageHandle['fluid']>[0], options?: Parameters<StageHandle['fluid']>[1]) {
+    this.raw();
+    return this.inner.fluid(velocity, options);
+  }
 }
 
 /**

@@ -29,6 +29,22 @@ v0.1 provides:
 
 Each returns a handle with change-only attribute writes and transform helpers such as `set`, `at`, `rotate`, `scale`, `show`, and `tone`.
 
+`stage.fluid(velocity, options)` draws a flowing fluid, wind or current (FX-1): particles carried by `velocity`, a function of the stage point that returns `[vx, vy]` in stage units per second (y points down), which move while the figure plays and leave streaks that fade. Each particle takes a midpoint step every frame, and starts again at a seeded random place in `region` (default the view box) when it leaves it, grows older than `life` seconds (default 4), or meets a velocity that is not a number, as inside an obstacle, so a field that returns `[NaN, NaN]` inside a shape keeps the flow out of it. `count` is 10 to 2000 particles (default 400), `trail` the seconds a streak takes to fade (0 to 3, default 0.6), and `r` the dot radius and streak width. A fluid sits on the back canvas layer by default, behind the drawing, so what stands in the flow stays on top; its canvas keeps what it drew and fades it, and starts afresh when the view is zoomed or resized. Paused, it holds still. `tone`, `show`, `hide` and `reset` change it later.
+
+```js
+// Air past a cylinder of radius R at (300, 150): uniform flow plus a doublet.
+const speed = inc.param('speed', { min: 10, max: 120, value: 60, unit: 'm/s' });
+stage.fluid((x, y) => {
+  const dx = x - 300;
+  const dy = y - 150;
+  const r2 = dx * dx + dy * dy;
+  if (r2 < R * R) return [NaN, NaN];
+  const k = (R * R) / (r2 * r2);
+  return [speed.value * (1 - k * (dx * dx - dy * dy)), -speed.value * 2 * k * dx * dy];
+}, { count: 700, trail: 0.8 });
+stage.circle(300, 150, R, { tone: 'mid', fill: true, shade: 'sphere' });
+```
+
 `glow: true` (or `handle.glow(on)`) gives an element a soft halo in its own tone, for a lamp that is on, a hot wire or a charged sphere: one blur filter per stage, sized to its view box, which exported pictures keep. Dot clouds take `glow: true` too, for sparks, stars or charges on the canvas layer (FX-1).
 
 ## Equations and chemical formulas (DG-5)
@@ -73,7 +89,7 @@ The parts registry drives highlight, dimming, keyboard focus, teaching-step focu
 
 ## Snapshot
 
-The stage can produce a PNG snapshot after resolving theme tokens, used for persistence and fallback (`handle.snapshot()`), and export itself as a standalone SVG image with the theme's colours, lines and fonts written in (`handle.exportSvg()`, SV-14). The export is a `data:image/svg+xml` URL: show it in an `<img>` or offer it as a download, rather than pasting it into a page as markup. Dots on a canvas layer are not part of it. An equation keeps its MathML in the export, inside a `<switch>` with a line of text (T ≈ 2π√(L/g)) for programs that cannot draw it; a PNG snapshot falls back to that text where drawing MathML to a canvas is not allowed. Styles the copy needs are written into its markup as it is serialized, never set on an element, so the frame's policy has nothing to refuse.
+The stage can produce a PNG snapshot after resolving theme tokens, used for persistence and fallback (`handle.snapshot()`), and export itself as a standalone SVG image with the theme's colours, lines and fonts written in (`handle.exportSvg()`, SV-14). The export is a `data:image/svg+xml` URL: show it in an `<img>` or offer it as a download, rather than pasting it into a page as markup. Dots and fluids on a canvas layer are not part of it; a video clip records them. An equation keeps its MathML in the export, inside a `<switch>` with a line of text (T ≈ 2π√(L/g)) for programs that cannot draw it; a PNG snapshot falls back to that text where drawing MathML to a canvas is not allowed. Styles the copy needs are written into its markup as it is serialized, never set on an element, so the frame's policy has nothing to refuse.
 
 ## Video clips
 

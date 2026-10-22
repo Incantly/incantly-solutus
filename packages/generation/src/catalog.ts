@@ -52,13 +52,13 @@ export const CAPABILITIES: readonly Capability[] = [
   {
     name: 'svg',
     draws: true,
-    line: 'svg: a diagram in your own units: groups, paths, lines, circles, rects, text, equations as maths, connectors and callouts that follow elements, copies, dot clouds, shading, dragging (inc.svg).',
-    contract: [...STAGE, 'GeometryAttribute', 'AttributeValues', 'ConnectorOptions', 'CalloutOptions', 'DotsOptions', 'Dots', ...DRAG],
+    line: 'svg: a diagram in your own units: groups, paths, lines, circles, rects, text, equations as maths, connectors and callouts, copies, dot clouds, flowing fluids, shading, dragging (inc.svg).',
+    contract: [...STAGE, 'GeometryAttribute', 'AttributeValues', 'ConnectorOptions', 'CalloutOptions', 'DotsOptions', 'Dots', 'FluidOptions', 'Fluid', ...DRAG],
   },
   {
     name: 'space3d',
     draws: true,
-    line: 'space3d: a 3D scene the learner turns: ready-made models (rocket, beaker, car…) with labelled pieces, solids, lathes, tubes, coils, meshes, arrows, arcs, labels, grids, axes, field lines, dragging.',
+    line: 'space3d: a 3D scene the learner turns (inc.space3d): ready-made models (rocket, beaker, car…), solids, lathes, tubes, coils, meshes, arrows, angle arcs, labels, grids, axes, field lines, dragging.',
     contract: ['Space3DOptions', 'Solid3DOptions', 'Mesh3DData', 'LatheOptions', 'ModelName', 'ModelOptions', 'Model3D', 'GridOptions', 'AxesOptions', 'FieldLineOptions', 'Space3D', ...SPACE, ...DRAG, ...STAGE],
   },
   {
