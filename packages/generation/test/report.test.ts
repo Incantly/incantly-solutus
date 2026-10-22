@@ -114,6 +114,14 @@ describe('repair reports', () => {
     const report = parseReport(['The js block was never closed'], ['js'], 1, 1);
     expect(report.text).toContain('ERROR    The js block was never closed');
     expect(report.text).toContain('ERROR    Missing fragment: js');
+    expect(report.text).toContain('LIKELY   the reply was cut off');
+  });
+
+  it('asks only for the edits that failed when the others applied, not for the scene again', () => {
+    // Once a repair after one failed edit wrote the whole scene again and ran past the deadline.
+    const report = parseReport(['Edit failed: js: edit 8 did not match: copy its SEARCH text exactly from the fragment'], [], 1, 1);
+    expect(report.text).toContain('LIKELY   the other edits were applied, and the fragment below is as they left it: send only the edits that failed');
+    expect(report.text).not.toContain('cut off');
   });
 
   it('numbers the source context like the fragment', () => {

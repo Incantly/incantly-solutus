@@ -118,7 +118,13 @@ export function parseReport(problems: readonly string[], missing: readonly Fragm
   const lines = [header(attempt, of), '', 'FAILURE  reply'];
   for (const problem of problems) lines.push(`ERROR    ${problem}`);
   if (missing.length > 0) lines.push(`ERROR    Missing fragment${missing.length === 1 ? '' : 's'}: ${missing.join(', ')}`);
-  lines.push('LIKELY   the reply was cut off or did not use one fenced block per fragment');
+  // Edits that failed among others that applied: the fragment shown is as those left it, so only the failed ones need sending.
+  const edits = problems.length > 0 && missing.length === 0 && problems.every((p) => p.startsWith('Edit failed:'));
+  lines.push(
+    edits
+      ? 'LIKELY   the other edits were applied, and the fragment below is as they left it: send only the edits that failed, each SEARCH copied exactly from it'
+      : 'LIKELY   the reply was cut off or did not use one fenced block per fragment',
+  );
   return {
     kind: 'parse',
     check: 'reply',
