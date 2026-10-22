@@ -7,10 +7,16 @@ import type {
   GridOptions,
   Group3D,
   Label3D,
+  LatheOptions,
   Line3D,
   Line3DOptions,
   Mat3,
   Mesh3DData,
+  Model3D,
+  ModelData,
+  ModelName,
+  ModelNode,
+  ModelOptions,
   Object3D,
   PartOptions,
   Readable,
@@ -29,8 +35,9 @@ import type { KitContext } from '../../runtime/kit';
 import { SceneApiError } from '../../scene/errors';
 import { formatReadable } from '../../scene/handles';
 import { readVec3 } from './camera';
-import { Engine3D, euler, Item, toneOf, transformPoint, type Emitter, type LabelRecord, type Look } from './engine';
-import { boxMesh, coneMesh, customMesh, cylinderMesh, planeMesh, segmentsOf, torusMesh } from './mesh';
+import { Engine3D, euler, extentWithin, Item, toneOf, transformPoint, type Emitter, type LabelRecord, type Look } from './engine';
+import { boxMesh, coneMesh, customMesh, cylinderMesh, latheMesh, planeMesh, segmentsOf, torusMesh, type Mesh } from './mesh';
+import { MODEL_NAMES, MODELS } from './models';
 
 /** Maps a handle the scene holds back to its item. */
 const items = new WeakMap<object, Item>();
@@ -163,6 +170,89 @@ export class Group3DHandle extends Object3DHandle implements Group3D {
     this.item.explode = value;
     return this;
   }
+}
+
+/** A piece of a model (S3-9): a group placed within the model, whose tone reaches every solid it holds. */
+class PieceHandle extends Object3DHandle {
+  constructor(
+    engine: Engine3D,
+    item: Item,
+    coords: Coordinates,
+    private readonly solids: readonly Item[],
+  ) {
+    super(engine, item, coords);
+  }
+
+  override tone(name: Tone): this {
+    const tone = toneOf(name, null);
+    this.item.tone = tone;
+    this.engine.retone(this.item);
+    for (const solid of this.solids) solid.tone = tone;
+    return this;
+  }
+}
+
+export class Model3DHandle extends Group3DHandle implements Model3D {
+  constructor(
+    engine: Engine3D,
+    item: Item,
+    coords: Coordinates,
+    private readonly named: ReadonlyMap<string, PieceHandle>,
+    /** What takes the main colour: solids, and pieces for their legend entries. */
+    private readonly mains: readonly Item[],
+  ) {
+    super(engine, item, coords);
+  }
+
+  get pieces(): readonly string[] {
+    return [...this.named.keys()];
+  }
+
+  piece(name: string): Object3D {
+    const piece = typeof name === 'string' ? this.named.get(name) : undefined;
+    if (!piece) throw new SceneApiError(`This model has no piece "${String(name)}"; its pieces are ${this.pieces.join(', ') || 'none'}`);
+    return piece;
+  }
+
+  override tone(name: Tone): this {
+    const tone = toneOf(name, null);
+    for (const item of this.mains) {
+      item.tone = tone;
+      this.engine.retone(item);
+    }
+    return this;
+  }
+}
+
+/** The solids a model node may hold, one each. */
+const SHAPES = ['box', 'sphere', 'cylinder', 'cone', 'torus', 'plane', 'tube', 'lathe', 'mesh'] as const;
+type ShapeName = (typeof SHAPES)[number];
+const MAX_MODEL_NODES = 200;
+const MAX_MODEL_DEPTH = 8;
+/** Facets around a model's round solids where its data does not say: its pieces are small, so fewer than a lone solid's 24. */
+const MODEL_SEGMENTS = 16;
+type ModelTone = Tone | 'main' | 'trim';
+
+/** Where a tube from a to b sits: a cylinder along z, centred between them and turned onto the direction from one to the other. */
+function tubePlacement(a: Vec3, b: Vec3): { readonly length: number; readonly position: Vec3; readonly rotation: Mat3 | null } {
+  const d: Vec3 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+  const length = Math.hypot(...d);
+  if (!(length > 1e-9)) throw new SceneApiError('tube needs two different points');
+  const u: Vec3 = [d[0] / length, d[1] / length, d[2] / length];
+  const axis: Vec3 = [-u[1], u[0], 0];
+  const sin = Math.hypot(axis[0], axis[1]);
+  const rotation = sin < 1e-9 ? (u[2] > 0 ? null : rotA([1, 0, 0], Math.PI)) : rotA(axis, Math.atan2(sin, u[2]));
+  return { length, position: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2], rotation };
+}
+
+/** A copy of a lathe profile, so later changes to the scene's array do not reach the solid. */
+function copyProfile(profile: unknown): unknown {
+  return Array.isArray(profile) ? profile.map((p: unknown) => (Array.isArray(p) ? [...(p as unknown[])] : p)) : profile;
+}
+
+function pairOf(value: unknown, name: string): readonly [number, number] {
+  if (!Array.isArray(value) || value.length !== 2) throw new SceneApiError(`A model ${name} needs two numbers`);
+  return [finiteNumber(value[0], `model ${name}`), finiteNumber(value[1], `model ${name}`)];
 }
 
 export class Line3DHandle extends Object3DHandle implements Line3D {
@@ -330,23 +420,217 @@ export class Space3DApi implements Space3D {
   tube(from: Vec3, to: Vec3, r: number, options: Solid3DOptions = {}): Object3D {
     const a = this.coords.point(readVec3(from, 'tube from'));
     const b = this.coords.point(readVec3(to, 'tube to'));
-    const d: Vec3 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
-    const length = Math.hypot(...d);
-    if (!(length > 1e-9)) throw new SceneApiError('tube needs two different points');
+    const { length, position, rotation } = tubePlacement(a, b);
     const handle = this.solid((n) => cylinderMesh(r, length, n), true, options);
     const item = itemOf(handle, 'tube');
-    item.position = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2];
-    // Turn the cylinder's z axis onto the direction from one end to the other.
-    const u: Vec3 = [d[0] / length, d[1] / length, d[2] / length];
-    const axis: Vec3 = [-u[1], u[0], 0];
-    const sin = Math.hypot(axis[0], axis[1]);
-    item.rotation = sin < 1e-9 ? (u[2] > 0 ? item.rotation : rotA([1, 0, 0], Math.PI)) : rotA(axis, Math.atan2(sin, u[2]));
+    item.position = position;
+    if (rotation) item.rotation = rotation;
     return handle;
   }
 
   mesh(data: Mesh3DData, options?: Solid3DOptions): Object3D {
     const mesh = customMesh(data);
     return this.solid(() => mesh, false, options);
+  }
+
+  lathe(profile: ReadonlyArray<Vec2>, options: LatheOptions = {}): Object3D {
+    const points = copyProfile(profile);
+    const open = options.open === true;
+    return this.solid((n) => latheMesh(points, n, open), true, options);
+  }
+
+  /**
+   * A model from the library or from data (S3-9). Each node becomes an item;
+   * a named node is also wrapped in a group of its own at the node's place,
+   * so its piece turns and scales about that point while the node's own
+   * turn and scale stay inside, as in glTF.
+   */
+  model(source: ModelName | ModelData, options: ModelOptions = {}): Model3D {
+    if (typeof options !== 'object' || options === null) throw new SceneApiError('model options must be an object');
+    let data: ModelData;
+    if (typeof source === 'string') {
+      if (!Object.prototype.hasOwnProperty.call(MODELS, source)) throw new SceneApiError(`Unknown model "${source}"; the ready-made models are ${MODEL_NAMES.join(', ')}`);
+      data = MODELS[source];
+    } else if (typeof source === 'object' && source !== null && Array.isArray((source as ModelData).nodes) && (source as ModelData).nodes.length > 0) {
+      data = source;
+    } else {
+      throw new SceneApiError('model needs a ready-made model name, such as "rocket", or data { nodes: [...] }');
+    }
+    const main = toneOf(options.tone, toneOf(data.tone, 'mid'))!;
+    const trim = toneOf(options.trim, toneOf(data.trim, 'a'))!;
+    const lookAll = options.look === undefined ? null : lookOf(options.look, 'solid');
+    const segmentsAll = options.segments === undefined ? null : segmentsOf(options.segments);
+    const bias = options.bias === undefined ? 0 : finiteNumber(options.bias, 'bias');
+    const root = new Item({ type: 'group' }, main, parentOf(options.parent, this.engine));
+    const named = new Map<string, PieceHandle>();
+    const pieceItems = new Map<string, { readonly item: Item; readonly label: string; readonly hidden: boolean }>();
+    const mains: Item[] = [root];
+    /** Each solid's bias in the model's units, set once its size is known. */
+    const biases: Array<readonly [Item, number]> = [];
+    let count = 0;
+
+    const solidOf = (shape: ShapeName, node: ModelNode, parent: Item, tone: Tone, segments: number): Item => {
+      const round = (make: (n: number) => Mesh) => new Item({ type: 'mesh', mesh: make(segments), segments, rebuild: make }, tone, parent);
+      const fixed = (mesh: Mesh) => new Item({ type: 'mesh', mesh, segments: null, rebuild: null }, tone, parent);
+      switch (shape) {
+        case 'box': {
+          const s = node.box;
+          const [sx, sy, sz] = typeof s === 'number' ? [s, s, s] : readVec3(s, 'model box size');
+          return fixed(boxMesh(sx, sy, sz));
+        }
+        case 'sphere': {
+          const r = finiteNumber(node.sphere, 'model sphere radius');
+          if (!(r > 0)) throw new SceneApiError('A model sphere radius must be above 0');
+          return new Item({ type: 'sphere', r, segments }, tone, parent);
+        }
+        case 'cylinder': {
+          const [r, h] = pairOf(node.cylinder, 'cylinder [r, h]');
+          return round((n) => cylinderMesh(r, h, n));
+        }
+        case 'cone': {
+          const [r, h] = pairOf(node.cone, 'cone [r, h]');
+          return round((n) => coneMesh(r, h, n));
+        }
+        case 'torus': {
+          const [R, r] = pairOf(node.torus, 'torus [R, r]');
+          if (!(R > r)) throw new SceneApiError('A model torus needs its ring radius R larger than its tube radius r');
+          return round((n) => torusMesh(R, r, n));
+        }
+        case 'plane': {
+          const [w, d] = pairOf(node.plane, 'plane [w, d]');
+          return fixed(planeMesh(w, d));
+        }
+        case 'tube': {
+          const t = node.tube;
+          if (!Array.isArray(t) || t.length !== 3) throw new SceneApiError('A model tube needs [from, to, r]');
+          const { length, position, rotation } = tubePlacement(readVec3(t[0], 'model tube from'), readVec3(t[1], 'model tube to'));
+          const r = finiteNumber(t[2], 'model tube radius');
+          const item = round((n) => cylinderMesh(r, length, n));
+          item.position = position;
+          if (rotation) item.rotation = rotation;
+          return item;
+        }
+        case 'lathe': {
+          const points = copyProfile(node.lathe);
+          const open = node.open === true;
+          return round((n) => latheMesh(points, n, open));
+        }
+        case 'mesh':
+          return fixed(customMesh(node.mesh as Mesh3DData));
+      }
+    };
+
+    const build = (
+      value: unknown,
+      parent: Item,
+      inherited: { readonly tone: ModelTone; readonly look: Look; readonly segments: number; readonly bias: number },
+      depth: number,
+      collect: readonly Item[][],
+    ): void => {
+      if (++count > MAX_MODEL_NODES) throw new SceneApiError(`A model has at most ${MAX_MODEL_NODES} nodes`);
+      if (depth > MAX_MODEL_DEPTH) throw new SceneApiError(`Model nodes nest at most ${MAX_MODEL_DEPTH} deep`);
+      if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new SceneApiError('Each model node must be an object, such as { box: 1, at: [0, 0, 0.5] }');
+      const node = value as ModelNode;
+      const shapes = SHAPES.filter((s) => node[s] !== undefined);
+      if (shapes.length > 1) throw new SceneApiError(`A model node holds one solid, but this one has ${shapes.join(' and ')}`);
+      const shape = shapes[0];
+      const tone: ModelTone = node.tone === undefined ? inherited.tone : node.tone === 'main' || node.tone === 'trim' ? node.tone : toneOf(node.tone, null)!;
+      const resolved = tone === 'main' ? main : tone === 'trim' ? trim : tone;
+      const look = lookOf(node.look, inherited.look);
+      const segments = segmentsAll ?? (node.segments === undefined ? inherited.segments : segmentsOf(node.segments));
+      const nodeBias = node.bias === undefined ? inherited.bias : finiteNumber(node.bias, 'model node bias');
+      const children: readonly unknown[] = node.children === undefined ? [] : node.children;
+      if (!Array.isArray(children)) throw new SceneApiError("A model node's children must be a list of nodes");
+      const name = node.name;
+      if (name !== undefined) {
+        if (typeof name !== 'string' || name.trim() === '' || name.length > 40) throw new SceneApiError('A model piece name must be a short, non-empty string');
+        if (pieceItems.has(name)) throw new SceneApiError(`This model names two pieces "${name}"`);
+      }
+      if (node.label !== undefined && (typeof node.label !== 'string' || node.label.length > 60)) throw new SceneApiError('A model piece label must be a string of at most 60 characters');
+      const at = node.at === undefined ? null : readVec3(node.at, 'model node at');
+      const rotate = node.rotate === undefined ? null : readVec3(node.rotate, 'model node rotate');
+      const scale = node.scale === undefined ? null : scaleOf(node.scale);
+
+      // A piece: a group at the node's place, which the scene moves and turns.
+      let outer: Item | null = null;
+      const pieceSolids: Item[] = [];
+      const lists = name === undefined ? collect : [...collect, pieceSolids];
+      if (name !== undefined) {
+        outer = new Item({ type: 'group' }, resolved, parent);
+        if (at) outer.position = at;
+        if (node.hidden === true) outer.visible = false;
+        if (tone === 'main') mains.push(outer);
+        pieceItems.set(name, { item: outer, label: node.label ?? name, hidden: node.hidden === true });
+        // Set before its children, so the pieces are listed in the data's order; its solids fill in as they are made.
+        named.set(name, new PieceHandle(this.engine, outer, this.coords, pieceSolids));
+      }
+      const holder = outer ?? parent;
+      const keep = (solid: Item) => {
+        solid.look = lookAll ?? look;
+        biases.push([solid, nodeBias]);
+        for (const list of lists) list.push(solid);
+        if (tone === 'main') mains.push(solid);
+      };
+      // The node's own item: its solid, or a group for its solid and children (a tube places its cylinder itself).
+      let own: Item;
+      if (shape === undefined || children.length > 0 || shape === 'tube') {
+        own = new Item({ type: 'group' }, resolved, holder);
+        if (shape !== undefined) keep(solidOf(shape, node, own, resolved, segments));
+      } else {
+        own = solidOf(shape, node, holder, resolved, segments);
+        keep(own);
+      }
+      if (!outer && at) own.position = at;
+      if (rotate) own.rotation = euler(rotate[0], rotate[1], rotate[2]);
+      if (scale) own.scale = scale;
+      if (!outer && node.hidden === true) own.visible = false;
+      for (const child of children) build(child, own, { tone, look, segments, bias: nodeBias }, depth + 1, lists);
+    };
+    for (const node of data.nodes) build(node, root, { tone: 'main', look: 'solid', segments: MODEL_SEGMENTS, bias: 0 }, 0, []);
+
+    // Sized by its largest side: 2 for the library, the data's own size otherwise.
+    const size = options.size === undefined ? (typeof source === 'string' ? 2 : null) : finiteNumber(options.size, 'model size');
+    let k = 1;
+    if (size !== null) {
+      if (!(size > 0)) throw new SceneApiError('model size must be above 0');
+      const points = extentWithin(root);
+      let largest = 0;
+      for (let i = 0; i < 3; i++) {
+        const values = points.map((p) => p[i]!);
+        if (values.length > 0) largest = Math.max(largest, Math.max(...values) - Math.min(...values));
+      }
+      if (largest > 1e-9) k = size / largest;
+    }
+    const scale = options.scale === undefined ? ([1, 1, 1] as Vec3) : scaleOf(options.scale);
+    root.scale = [scale[0] * k, scale[1] * k, scale[2] * k];
+    const reach = k * Math.max(Math.abs(scale[0]), Math.abs(scale[1]), Math.abs(scale[2]));
+    for (const [solid, own] of biases) solid.bias = bias + own * reach;
+    if (options.at !== undefined) root.position = this.coords.point(readVec3(options.at, 'at'));
+    if (options.rotate !== undefined) {
+      const [rx, ry, rz] = readVec3(options.rotate, 'rotate');
+      root.rotation = euler(rx, ry, rz);
+    }
+
+    const chosen = (value: unknown, what: string): string[] => {
+      if (value === undefined || value === false) return [];
+      if (value === true) return [...pieceItems.keys()].filter((p) => !pieceItems.get(p)!.hidden);
+      if (!Array.isArray(value)) throw new SceneApiError(`model ${what} must be true or a list of piece names`);
+      return value.map((p: unknown) => {
+        if (typeof p !== 'string' || !pieceItems.has(p)) {
+          throw new SceneApiError(`model ${what}: "${String(p)}" is not a piece of this model; its pieces are ${[...pieceItems.keys()].join(', ') || 'none'}`);
+        }
+        return p;
+      });
+    };
+    for (const name of chosen(options.parts, 'parts')) {
+      const piece = pieceItems.get(name)!;
+      this.engine.part(piece.item, name, { label: piece.label });
+    }
+    for (const name of chosen(options.labels, 'labels')) {
+      const piece = pieceItems.get(name)!;
+      this.engine.label(piece.item, piece.label, null, 10, null, true);
+    }
+    return new Model3DHandle(this.engine, root, this.coords, named, mains);
   }
 
   group(options?: Solid3DOptions): Group3D {

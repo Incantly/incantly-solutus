@@ -33,6 +33,7 @@ import type {
   GraphTrail,
   Graph3D,
   Group3D,
+  Model3D,
   Handle,
   Helix,
   Inc,
@@ -100,6 +101,7 @@ export type HandleKind =
   | 'Graph3D'
   | 'Object3D'
   | 'Group3D'
+  | 'Model3D'
   | 'Line3D'
   | 'Arrow3D'
   | 'Label3D'
@@ -416,6 +418,8 @@ export const HANDLES: Readonly<Record<HandleKind, HandleSpec>> = {
       torus: 'Object3D',
       tube: 'Object3D',
       mesh: 'Object3D',
+      lathe: 'Object3D',
+      model: 'Model3D',
       group: 'Group3D',
       line: 'Line3D',
       arrow: 'Arrow3D',
@@ -454,6 +458,7 @@ export const HANDLES: Readonly<Record<HandleKind, HandleSpec>> = {
   },
   Object3D: { methods: object3dMethods, properties: {} },
   Group3D: { methods: { ...object3dMethods, explode: 'self' } satisfies Methods<Group3D>, properties: {} },
+  Model3D: { methods: { ...object3dMethods, explode: 'self', piece: 'Object3D' } satisfies Methods<Model3D>, properties: { pieces: null } satisfies Properties<Model3D> },
   Line3D: { methods: { ...object3dMethods, points: 'self' } satisfies Methods<Line3D>, properties: {} },
   Arrow3D: { methods: { ...object3dMethods, set: 'self', label: 'self' } satisfies Methods<Arrow3D>, properties: {} },
   Label3D: {

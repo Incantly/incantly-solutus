@@ -58,8 +58,8 @@ export const CAPABILITIES: readonly Capability[] = [
   {
     name: 'space3d',
     draws: true,
-    line: 'space3d: a 3D scene the learner turns: solids, tubes, coils, meshes, groups, arrows, angle arcs, labels, grids, axes, field lines, dragging (inc.space3d).',
-    contract: ['Space3DOptions', 'Solid3DOptions', 'Mesh3DData', 'GridOptions', 'AxesOptions', 'FieldLineOptions', 'Space3D', ...SPACE, ...DRAG, ...STAGE],
+    line: 'space3d: a 3D scene the learner turns: ready-made models (rocket, beaker, car…) with labelled pieces, solids, lathes, tubes, coils, meshes, arrows, arcs, labels, grids, axes, field lines, dragging.',
+    contract: ['Space3DOptions', 'Solid3DOptions', 'Mesh3DData', 'LatheOptions', 'ModelName', 'ModelOptions', 'Model3D', 'GridOptions', 'AxesOptions', 'FieldLineOptions', 'Space3D', ...SPACE, ...DRAG, ...STAGE],
   },
   {
     name: 'graph3d',

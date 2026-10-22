@@ -138,7 +138,13 @@ interface LabelRecord {
   visible: boolean;
   /** Where it was placed last, for collision checks. */
   box: { x: number; y: number; w: number; h: number; dx: number; dy: number } | null;
+  /** A label in a column beside the figure, joined to its target by a line ending in a dot (S3-9). */
+  readonly leader: { readonly line: Handle; readonly dot: Handle } | null;
 }
+
+/** Room between a column of labels and the figure, and between labels in it. */
+const LEADER_GAP = 22;
+const LEADER_ROW = 18;
 
 interface Grab {
   readonly item: Item;
@@ -203,6 +209,43 @@ function stretch(m: Mat3): number {
   return Math.max(Math.hypot(m[0], m[3], m[6]), Math.hypot(m[1], m[4], m[7]), Math.hypot(m[2], m[5], m[8]));
 }
 
+/**
+ * Points that bound what an item holds, in its own frame, leaving out hidden
+ * items: for sizing a model to its largest side (S3-9).
+ */
+export function extentWithin(item: Item): Vec3[] {
+  const out: Vec3[] = [];
+  const visit = (at: Item, tr: Transform) => {
+    if (!at.visible) return;
+    const g = at.geometry;
+    const own: readonly Vec3[] =
+      g.type === 'mesh'
+        ? g.mesh.vertices
+        : g.type === 'sphere'
+          ? [
+              [g.r, 0, 0],
+              [-g.r, 0, 0],
+              [0, g.r, 0],
+              [0, -g.r, 0],
+              [0, 0, g.r],
+              [0, 0, -g.r],
+            ]
+          : g.type === 'line'
+            ? g.points
+            : g.type === 'arrow'
+              ? [g.from, g.to]
+              : g.type === 'point'
+                ? [[0, 0, 0]]
+                : g.type === 'custom' && g.bounds
+                  ? g.bounds()
+                  : [];
+    for (const p of own) out.push(transformPoint(tr, p));
+    for (const child of at.children) visit(child, compose(tr, local(child, null, 0)));
+  };
+  visit(item, IDENTITY_TRANSFORM);
+  return out;
+}
+
 function centreOf(children: readonly Item[]): Vec3 {
   if (children.length === 0) return [0, 0, 0];
   const sum = children.reduce<Vec3>((s, c) => [s[0] + c.position[0], s[1] + c.position[1], s[2] + c.position[2]], [0, 0, 0]);
@@ -262,7 +305,7 @@ export class Engine3D implements ViewController {
       case 'fit': {
         const { centre, radius } = this.bounds();
         this.radius = radius;
-        this.camera.fit(centre, radius);
+        this.camera.fit(centre, this.room(radius));
         return true;
       }
       case 'preset':
@@ -291,7 +334,12 @@ export class Engine3D implements ViewController {
     if (this.drawn) return;
     this.updateWorld(this.root, IDENTITY_TRANSFORM, true, null);
     const { centre, radius } = this.bounds();
-    this.camera.fit(centre, radius);
+    this.camera.fit(centre, this.room(radius));
+  }
+
+  /** The radius the view is fitted to: wider when labels stand in columns beside the figure, so they have room. */
+  private room(radius: number): number {
+    return this.labels.some((label) => label.leader) ? radius * 1.25 : radius;
   }
 
   projectWorld(p: Vec3): Vec2 {
@@ -352,10 +400,13 @@ export class Engine3D implements ViewController {
     this.grabs.push({ item, handle, node });
   }
 
-  label(target: Vec3 | Item, text: Readable, tone: Tone | null, offset: number, follow: (() => Vec3 | null) | null = null): LabelRecord {
+  label(target: Vec3 | Item, text: Readable, tone: Tone | null, offset: number, follow: (() => Vec3 | null) | null = null, leader = false): LabelRecord {
     if (this.labels.length >= MAX_LABELS) throw new SceneApiError(`A 3D figure has at most ${MAX_LABELS} labels`);
     const handle = this.ctx.stage.text(0, 0, '', { layer: 'labels', ...(tone ? { tone } : {}) });
-    const record: LabelRecord = { handle, node: nodeOf(handle), target, follow, text: formatReadable(text), tone, offset, visible: true, box: null };
+    const lines = leader
+      ? { line: this.ctx.stage.line(0, 0, 0, 0, { layer: 'labels', tone: tone ?? 'mid' }), dot: this.ctx.stage.circle(0, 0, 2.5, { layer: 'labels', tone: tone ?? 'mid' }) }
+      : null;
+    const record: LabelRecord = { handle, node: nodeOf(handle), target, follow, text: formatReadable(text), tone, offset, visible: true, box: null, leader: lines };
     handle.set({ 'dominant-baseline': 'middle' });
     this.labels.push(record);
     return record;
@@ -475,7 +526,7 @@ export class Engine3D implements ViewController {
       this.checkBudget();
       const { centre, radius } = this.bounds();
       this.radius = radius;
-      this.camera.settle(centre, radius);
+      this.camera.settle(centre, this.room(radius));
       this.drawn = true;
     }
     const out: Drawable[] = [];
@@ -895,7 +946,10 @@ export class Engine3D implements ViewController {
           ? g.r * stretch(target.world.m)
           : g.type === 'mesh'
             ? g.mesh.radius * stretch(target.world.m) * 0.75
-            : 0;
+            : g.type === 'group'
+              ? // A group, such as a model: as far as what it holds reaches from its origin.
+                extentWithin(target).reduce((m, p) => Math.max(m, Math.hypot(p[0], p[1], p[2])), 0) * stretch(target.world.m)
+              : 0;
       return { at: [q.x, q.y], radius: r * this.camera.state.scale * q.k };
     }
     const c = this.camera.toCamera(target);
@@ -904,10 +958,117 @@ export class Engine3D implements ViewController {
     return { at: [q.x, q.y], radius: 0 };
   }
 
+  /** Where a leader meets its target: the middle of what the target draws, on the stage. */
+  private leaderAnchor(target: Vec3 | Item): Vec2 | null {
+    let centre: Vec3;
+    if (target instanceof Item) {
+      if (!target.shown) return null;
+      const points: Vec3[] = [];
+      this.extent(target, points);
+      if (points.length === 0) return null;
+      const lo = [Infinity, Infinity, Infinity];
+      const hi = [-Infinity, -Infinity, -Infinity];
+      for (const p of points) {
+        for (let i = 0; i < 3; i++) {
+          lo[i] = Math.min(lo[i]!, p[i]!);
+          hi[i] = Math.max(hi[i]!, p[i]!);
+        }
+      }
+      centre = [(lo[0]! + hi[0]!) / 2, (lo[1]! + hi[1]!) / 2, (lo[2]! + hi[2]!) / 2];
+    } else centre = target;
+    const c = this.camera.toCamera(centre);
+    if (!this.camera.visible(c[2])) return null;
+    const q = this.camera.project(c);
+    return [q.x, q.y];
+  }
+
+  /**
+   * Labels with leaders (a model's pieces, S3-9) stand in a column beside the
+   * thing they belong to, on the side their piece leans to when there is
+   * room, in the order of their pieces from top to bottom, each joined to its
+   * piece by a line.
+   */
+  private placeLeaders(placed: NonNullable<LabelRecord['box']>[]): void {
+    type Row = { label: LabelRecord; at: Vec2; w: number };
+    // Each label goes beside the top-level object that holds its target, such as its model.
+    const groups = new Map<Item, Row[]>();
+    for (const label of this.labels) {
+      if (!label.leader) continue;
+      const at = label.visible && label.text !== '' ? this.leaderAnchor(label.target) : null;
+      if (!at) {
+        label.handle.hide();
+        label.leader.line.hide();
+        label.leader.dot.hide();
+        label.box = null;
+        continue;
+      }
+      let owner = label.target instanceof Item ? label.target : this.root;
+      while (owner.parent && owner.parent !== this.root) owner = owner.parent;
+      const rows = groups.get(owner) ?? [];
+      rows.push({ label, at, w: label.text.length * 7.4 + 4 });
+      groups.set(owner, rows);
+    }
+    for (const [owner, rows] of groups) this.placeColumns(owner, rows, placed);
+  }
+
+  private placeColumns(owner: Item, rows: { label: LabelRecord; at: Vec2; w: number }[], placed: NonNullable<LabelRecord['box']>[]): void {
+    let minX = Infinity;
+    let maxX = -Infinity;
+    const points: Vec3[] = [];
+    this.extent(owner, points);
+    for (const p of points) {
+      const c = this.camera.toCamera(p);
+      if (!this.camera.visible(c[2])) continue;
+      const q = this.camera.project(c);
+      minX = Math.min(minX, q.x);
+      maxX = Math.max(maxX, q.x);
+    }
+    if (!Number.isFinite(minX)) return;
+    const [vx, vy, vw, vh] = this.viewBox;
+    const middle = (minX + maxX) / 2;
+    const columns: Record<'left' | 'right', typeof rows> = { left: [], right: [] };
+    for (const row of rows) {
+      const fits = { left: minX - LEADER_GAP - row.w >= vx, right: maxX + LEADER_GAP + row.w <= vx + vw };
+      let side: 'left' | 'right' = row.at[0] < middle - 0.15 * (maxX - minX) ? 'left' : 'right';
+      if (!fits[side] && fits[side === 'left' ? 'right' : 'left']) side = side === 'left' ? 'right' : 'left';
+      columns[side].push(row);
+    }
+    for (const side of ['left', 'right'] as const) {
+      const column = columns[side].sort((a, b) => a.at[1] - b.at[1]);
+      const ys = column.map((row) => row.at[1]);
+      for (let i = 1; i < ys.length; i++) ys[i] = Math.max(ys[i]!, ys[i - 1]! + LEADER_ROW);
+      // A column that runs off the bottom moves up as a whole, as far as the top allows.
+      const over = ys.length > 0 ? ys[ys.length - 1]! - (vy + vh - LEADER_ROW / 2) : 0;
+      if (over > 0) {
+        const room = ys.length > 0 ? ys[0]! - (vy + LEADER_ROW / 2) : 0;
+        const shift = Math.min(over, Math.max(0, room));
+        for (let i = 0; i < ys.length; i++) ys[i] = ys[i]! - shift;
+      }
+      column.forEach((row, i) => {
+        const y = ys[i]!;
+        const { label } = row;
+        // Kept on the stage when there is no room beside the figure.
+        const x = side === 'right' ? Math.min(maxX + LEADER_GAP, vx + vw - row.w - 2) : Math.max(minX - LEADER_GAP, vx + row.w + 2);
+        const leader = label.leader!;
+        leader.line.set({ x1: row.at[0], y1: row.at[1], x2: side === 'right' ? x - 4 : x + 4, y2: y });
+        leader.dot.set({ cx: row.at[0], cy: row.at[1] });
+        leader.line.show();
+        leader.dot.show();
+        label.handle.text(label.text);
+        label.handle.set({ x, y, 'text-anchor': side === 'right' ? 'start' : 'end' });
+        label.handle.show();
+        label.box = { x: side === 'right' ? x : x - row.w, y: y - 8.5, w: row.w, h: 17, dx: side === 'right' ? 1 : -1, dy: 0 };
+        placed.push(label.box);
+      });
+    }
+  }
+
   private placeLabels(): void {
     const [mx, my] = this.camera.centre();
     const placed: NonNullable<LabelRecord['box']>[] = [];
+    this.placeLeaders(placed);
     for (const label of this.labels) {
+      if (label.leader) continue;
       const point = label.follow ? label.follow() : null;
       const anchor = !label.visible || (label.follow && !point) ? null : this.anchorOf(point ?? label.target);
       if (!anchor || label.text === '') {

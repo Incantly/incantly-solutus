@@ -843,6 +843,122 @@ export interface Mesh3DData {
   readonly faces: ReadonlyArray<readonly number[]>;
 }
 
+export interface LatheOptions extends Solid3DOptions {
+  /** Leave ends off the axis open, as for a glass, instead of capping them. */
+  readonly open?: boolean;
+}
+
+/**
+ * Ready-made models (S3-9), 2 units on their largest side, standing on z = 0 or centred (c), vehicles facing +x.
+ * Pieces in brackets, * hidden: rocket [nose body window fins engine flame*], satellite c [body panels dish],
+ * airplane c [fuselage wings tail engines], car [body cabin wheels], cart [body wheels], boat [hull cabin],
+ * wind-turbine [tower nacelle rotor], tree and pine [trunk leaves], house [walls roof door windows chimney],
+ * person [head body legs], table [top legs], ramp (30°, down toward +x), pulley c [wheel axle mount],
+ * mass [weight hook], magnet [north south], compass [case needle], battery [body cap terminal],
+ * bulb [glass filament base], flask, beaker and test-tube [glass liquid], burner [base barrel flame],
+ * prism, lens c, concave-lens c (axis x), gear c [gear hub], planet c [planet axis*], ringed-planet c [planet rings].
+ */
+export type ModelName =
+  | 'rocket'
+  | 'satellite'
+  | 'airplane'
+  | 'car'
+  | 'cart'
+  | 'boat'
+  | 'wind-turbine'
+  | 'tree'
+  | 'pine'
+  | 'house'
+  | 'person'
+  | 'table'
+  | 'ramp'
+  | 'pulley'
+  | 'mass'
+  | 'magnet'
+  | 'compass'
+  | 'battery'
+  | 'bulb'
+  | 'flask'
+  | 'beaker'
+  | 'test-tube'
+  | 'burner'
+  | 'prism'
+  | 'lens'
+  | 'concave-lens'
+  | 'gear'
+  | 'planet'
+  | 'ringed-planet';
+
+/**
+ * One node of a model of your own, glTF-style: at most one solid, given as
+ * the Space3D call of the same name takes it, placed and turned within its
+ * parent, with children placed within it.
+ */
+export interface ModelNode {
+  /** Makes it a piece: model.piece(name) reaches it, and the parts and labels options name it. */
+  readonly name?: string;
+  /** What the legend and labels call it. Default its name. */
+  readonly label?: string;
+  readonly box?: number | Vec3;
+  readonly sphere?: number;
+  /** [r, h]: standing along z, centred. */
+  readonly cylinder?: readonly [number, number];
+  /** [r, h]: standing along z, centred, its tip up. */
+  readonly cone?: readonly [number, number];
+  /** [R, r]: lying in the xy plane. */
+  readonly torus?: readonly [number, number];
+  /** [w, d]: flat in the xy plane. */
+  readonly plane?: readonly [number, number];
+  /** [from, to, r]. */
+  readonly tube?: readonly [Vec3, Vec3, number];
+  /** A profile of [r, z] points turned about z, as space.lathe takes it. */
+  readonly lathe?: ReadonlyArray<Vec2>;
+  /** For a lathe: leave ends off the axis open. */
+  readonly open?: boolean;
+  readonly mesh?: Mesh3DData;
+  readonly at?: Vec3;
+  /** Degrees about x, then y, then z. */
+  readonly rotate?: Vec3;
+  readonly scale?: number | Vec3;
+  /** 'main' and 'trim' are the model's two colours, set by its tone and trim options. Default the parent's, or 'main'. */
+  readonly tone?: Tone | 'main' | 'trim';
+  /** Default the parent's, or 'solid'. */
+  readonly look?: 'solid' | 'wire' | 'ghost' | 'shadow';
+  readonly segments?: number;
+  /** Starts hidden, for piece(name).show() to reveal. */
+  readonly hidden?: boolean;
+  /** Moves it toward the viewer in the drawing order, in the model's units, for something flat on a face such as a door. Default the parent's. */
+  readonly bias?: number;
+  readonly children?: ReadonlyArray<ModelNode>;
+}
+
+/** A model of your own, in the shape of the ready-made ones. */
+export interface ModelData {
+  readonly nodes: ReadonlyArray<ModelNode>;
+  /** What 'main' stands for. Default 'mid'. */
+  readonly tone?: Tone;
+  /** What 'trim' stands for. Default 'a'. */
+  readonly trim?: Tone;
+}
+
+export interface ModelOptions extends Solid3DOptions {
+  /** Its largest side. Default 2 for a ready-made model; data keeps its own size. */
+  readonly size?: number;
+  /** Its second colour; tone sets the main one. */
+  readonly trim?: Tone;
+  /** Names its pieces as parts (true, or a list of pieces). */
+  readonly parts?: boolean | ReadonlyArray<string>;
+  /** Labels its pieces beside it, joined by leaders (true, or a list). */
+  readonly labels?: boolean | ReadonlyArray<string>;
+}
+
+/** A placed model: a group of named pieces. */
+export interface Model3D extends Group3D {
+  /** A piece by name, such as 'nose': an object that turns about its own origin. */
+  piece(name: string): Object3D;
+  readonly pieces: ReadonlyArray<string>;
+}
+
 export interface GridOptions {
   /** 'xy' (default, the floor), 'xz', 'yz', or any plane through `at` square to `normal`, such as { normal: [1, 1, 0] }. */
   readonly plane?: 'xy' | 'xz' | 'yz' | { readonly normal: Vec3 };
@@ -886,6 +1002,10 @@ export interface Space3D {
   /** A cylinder from one point to another: a rod, a bond, a strut. */
   tube(from: Vec3, to: Vec3, r: number, options?: Solid3DOptions): Object3D;
   mesh(data: Mesh3DData, options?: Solid3DOptions): Object3D;
+  /** A solid of revolution: [r, z] profile points (2 to 120) turned about z, such as a vase or a volume of revolution. */
+  lathe(profile: ReadonlyArray<Vec2>, options?: LatheOptions): Object3D;
+  /** A ready-made model (ModelName), or ModelData of your own. */
+  model(name: ModelName | ModelData, options?: ModelOptions): Model3D;
   group(options?: Solid3DOptions): Group3D;
   line(points: ReadonlyArray<Vec3>, options?: Line3DOptions): Line3D;
   /** A 3D segment with a head that always faces the viewer. */

@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import type { Graph3D, Graph3DOptions, Inc, Space3D, Space3DOptions, Vec2 } from '../src/api/types';
+import type { Graph3D, Graph3DOptions, Group3D, Inc, Mesh3DData, Model3D, Space3D, Space3DOptions, Vec2, Vec3 } from '../src/api/types';
 import { kit } from '../src/kits/space3d';
 import { Camera, VIEWS } from '../src/kits/space3d/camera';
+import { extentWithin, type Item } from '../src/kits/space3d/engine';
 import { clipBetween, niceTicks } from '../src/kits/space3d/graph';
-import { boxMesh, coneMesh, customMesh, cylinderMesh, planeMesh, torusMesh } from '../src/kits/space3d/mesh';
-import { planeAxes } from '../src/kits/space3d/space';
+import { boxMesh, coneMesh, customMesh, cylinderMesh, extrudeData, latheMesh, loftData, planeMesh, torusMesh } from '../src/kits/space3d/mesh';
+import { MODEL_NAMES } from '../src/kits/space3d/models';
+import { itemOf, planeAxes } from '../src/kits/space3d/space';
 import { isKitModule, KIT_GLOBAL, type KitModule } from '../src/runtime/kits';
 import { SceneRuntime, type RuntimeOptions } from '../src/runtime/runtime';
 import { KIT_SCRIPTS } from '../src/sandbox/generated/kit-scripts';
@@ -77,10 +79,79 @@ describe('3D meshes', () => {
       const n = normal(p);
       expect(n[0] * tube[0] + n[1] * tube[1] + n[2] * tube[2]).toBeGreaterThan(0);
     }
+    // Solids of revolution and slabs (S3-9), however their outlines run.
+    const lathes = [latheMesh([[1, 0], [1, 2]], 12), latheMesh([[1, 2], [1, 0]], 12), latheMesh([[0, 0], [1, 0.5], [0.6, 2], [0, 2.2]], 12)];
+    const slabs = (['xy', 'xz', 'yz'] as const).flatMap((plane) => [extrudeData([[0, 0], [2, 0], [1, 1.5]], 0.5, plane), extrudeData([[1, 1.5], [2, 0], [0, 0]], 0.5, plane)]);
+    for (const mesh of [...lathes, ...slabs.map(customMesh)]) {
+      const c = mean(mesh.vertices);
+      for (const face of mesh.faces) {
+        const p = face.map((i) => mesh.vertices[i]!);
+        const n = normal(p);
+        const f = mean(p);
+        expect(n[0] * (f[0] - c[0]) + n[1] * (f[1] - c[1]) + n[2] * (f[2] - c[2])).toBeGreaterThan(0);
+      }
+    }
     expect(boxMesh(1, 1, 1).edges).toHaveLength(12);
     expect(cylinderMesh(1, 1, 24).faces).toHaveLength(26);
     expect(planeMesh(1, 1).twoSided).toBe(true);
     expect(() => customMesh({ vertices: [[0, 0, 0], [1, 0, 0], [0, 1, 0]], faces: [[0, 1, 5]] })).toThrow('names vertex 5');
+  });
+});
+
+/** The signed volume of a closed mesh: its true volume when every face winds counter-clockwise from outside. */
+function volume(mesh: Mesh3DData): number {
+  let sum = 0;
+  for (const face of mesh.faces) {
+    const a = mesh.vertices[face[0]!]!;
+    for (let i = 1; i + 1 < face.length; i++) {
+      const b = mesh.vertices[face[i]!]!;
+      const c = mesh.vertices[face[i + 1]!]!;
+      sum += a[0] * (b[1] * c[2] - b[2] * c[1]) + a[1] * (b[2] * c[0] - b[0] * c[2]) + a[2] * (b[0] * c[1] - b[1] * c[0]);
+    }
+  }
+  return sum / 6;
+}
+
+describe('lathes, slabs and lofts (S3-9)', () => {
+  /** The area of a regular n-gon of radius 1, the cross-section of a round solid. */
+  const polygon = (n: number) => (n / 2) * Math.sin((2 * Math.PI) / n);
+
+  it('turns a profile about z into a closed solid, capping ends off the axis', () => {
+    const up = latheMesh([[1, 0], [1, 2]], 16);
+    expect(volume(up)).toBeCloseTo(2 * polygon(16), 9);
+    expect(volume(latheMesh([[1, 2], [1, 0]], 16))).toBeCloseTo(2 * polygon(16), 9);
+    // Flat caps are one face each, as on a cylinder; a point makes a cone.
+    expect(up.faces).toHaveLength(16 + 2);
+    expect(volume(latheMesh([[1, 0], [0, 3]], 16))).toBeCloseTo(polygon(16), 9);
+    // A profile that ends where it starts is a ring: a washer between radii 1 and 2.
+    const washer = latheMesh([[1, 0], [2, 0], [2, 1], [1, 1], [1, 0]], 16);
+    expect(volume(washer)).toBeCloseTo(3 * polygon(16), 9);
+    // Open ends stay open, and the faces are drawn from both sides, as for a glass.
+    const cup = latheMesh([[0, 0], [1, 0], [1, 1]], 16, true);
+    expect(cup.twoSided).toBe(true);
+    expect(cup.faces).toHaveLength(1 + 16);
+    expect(up.smooth).toBe(true);
+  });
+
+  it('pulls an outline, concave or not, either way round, into a slab, and stacks outlines into a loft', () => {
+    const l: Array<readonly [number, number]> = [[0, 0], [2, 0], [2, 1], [1, 1], [1, 2], [0, 2]];
+    for (const plane of ['xy', 'xz', 'yz'] as const) {
+      expect(volume(extrudeData(l, 0.5, plane))).toBeCloseTo(1.5, 9);
+      expect(volume(extrudeData([...l].reverse(), 0.5, plane))).toBeCloseTo(1.5, 9);
+    }
+    const square = (side: number): Array<readonly [number, number]> => [[-side / 2, -side / 2], [side / 2, -side / 2], [side / 2, side / 2], [-side / 2, side / 2]];
+    expect(volume(loftData([{ z: 0, points: square(2) }, { z: 1, points: square(2) }]))).toBeCloseTo(4, 9);
+    // A frustum: h / 3 (A + B + √(AB)).
+    expect(volume(loftData([{ z: 0, points: square(2) }, { z: 1, points: square(1) }]))).toBeCloseTo(7 / 3, 9);
+    // Outlines running clockwise are turned round, all the same way.
+    expect(volume(loftData([{ z: 0, points: [...square(2)].reverse() }, { z: 1, points: [...square(1)].reverse() }]))).toBeCloseTo(7 / 3, 9);
+  });
+
+  it('refuses profiles it cannot turn', () => {
+    expect(() => latheMesh([[1, 0]], 12)).toThrow('from 2 to 120 profile points');
+    expect(() => latheMesh([[-1, 0], [1, 1]], 12)).toThrow('negative radius');
+    expect(() => latheMesh([[0, 0], [0, 1]], 12)).toThrow('off the axis');
+    expect(() => latheMesh(Array.from({ length: 100 }, (_, i) => [1, i]), 96)).toThrow('faces');
   });
 });
 
@@ -600,6 +671,205 @@ describe('inc.graph3d', () => {
   });
 });
 
+describe('the model library (S3-9)', () => {
+  /** The lengths of the sides of the box around some points. */
+  const sides = (points: readonly Vec3[]) => [0, 1, 2].map((i) => Math.max(...points.map((p) => p[i]!)) - Math.min(...points.map((p) => p[i]!)));
+  const facesIn = (item: Item): number => (item.geometry.type === 'mesh' ? item.geometry.mesh.faces.length : 0) + item.children.reduce((n, c) => n + facesIn(c), 0);
+  /** Models centred on their position; the rest stand on z = 0. */
+  const CENTRED = new Set(['satellite', 'airplane', 'pulley', 'lens', 'concave-lens', 'gear', 'planet', 'ringed-planet']);
+
+  it('places every ready-made model 2 units at its largest side, standing or centred, in few faces', () => {
+    for (const name of MODEL_NAMES) {
+      let holder!: Group3D;
+      let model!: Model3D;
+      const { runtime } = space((s) => {
+        holder = s.group();
+        model = s.model(name, { parent: holder });
+      });
+      expect(runtime.uiState().error, name).toBeNull();
+      expect(runtime.graph.diagnostics, name).toEqual([]);
+      const points = extentWithin(itemOf(holder, 'test'));
+      expect(Math.max(...sides(points)), name).toBeCloseTo(2, 6);
+      const bottom = Math.min(...points.map((p) => p[2]));
+      if (CENTRED.has(name)) expect(bottom, name).toBeLessThan(-0.1);
+      else expect(bottom, name).toBeCloseTo(0, 6);
+      // A model costs a few hundred faces at most, so a scene can hold several within its budget.
+      expect(facesIn(itemOf(model, 'test')), name).toBeLessThan(300);
+      expect(visibleSlots(runtime).length, name).toBeGreaterThan(0);
+      expect(model.pieces.length, name).toBeGreaterThan(0);
+    }
+  });
+
+  it('reaches pieces by name in the order of its data, tones them, and shows hidden ones', () => {
+    let rocket!: Model3D;
+    const { runtime } = space((s, inc) => {
+      rocket = s.model('rocket', { tone: 'b', trim: 'c' });
+      const stage = inc.param('stage', { min: 0, max: 2, step: 1, value: 0 });
+      inc.onFrame(() => {
+        if (stage.value >= 1) rocket.piece('nose').tone('a');
+        if (stage.value >= 2) {
+          rocket.tone('hi');
+          rocket.piece('flame').show();
+        }
+      });
+    });
+    expect(rocket.pieces).toEqual(['engine', 'flame', 'fins', 'body', 'window', 'nose']);
+    const tones = () => new Set(faces(runtime).map((n) => n.tone));
+    // Main and trim follow the options; fixed tones stay; the flame starts hidden.
+    expect(tones()).toEqual(new Set(['b', 'c', 'mid']));
+    runtime.setValues({ stage: 1 });
+    runtime.tick(0);
+    expect(tones()).toEqual(new Set(['a', 'b', 'c', 'mid']));
+    runtime.setValues({ stage: 2 });
+    runtime.tick(0);
+    expect(tones()).toEqual(new Set(['a', 'hi', 'c', 'mid', 'lit']));
+    expect(() => rocket.piece('wing')).toThrow('its pieces are engine, flame, fins, body, window, nose');
+  });
+
+  it('turns a piece about its own origin, keeping the turn its data gives it', () => {
+    let pulley!: Model3D;
+    space((s) => {
+      pulley = s.model('pulley');
+    });
+    const root = itemOf(pulley, 'test');
+    const before = sides(extentWithin(root));
+    // The wheel stands on its axle along y: spinning it about y leaves it in place.
+    pulley.piece('wheel').rotate(0, 45, 0);
+    const after = sides(extentWithin(root));
+    for (let i = 0; i < 3; i++) expect(after[i]).toBeCloseTo(before[i]!, 6);
+    // Tipped about x, it lies flat: lower than the mount above it reaches.
+    pulley.piece('wheel').rotate(90, 0, 0);
+    expect(Math.min(...extentWithin(root).map((p) => p[2]))).toBeGreaterThan(-0.2);
+    // Moving a piece carries what it holds: the rocket's window rides on its body.
+    let rocket!: Model3D;
+    space((s) => {
+      rocket = s.model('rocket');
+    });
+    const window = rocket.piece('window').screen();
+    rocket.piece('body').at(0, 0, 1.4);
+    expect(rocket.piece('window').screen()[1]).toBeLessThan(window[1]);
+  });
+
+  it('sizes a model by its largest side and keeps stickers on its faces in front at any size', () => {
+    let holder!: Group3D;
+    let house!: Model3D;
+    space((s) => {
+      holder = s.group();
+      house = s.model('house', { parent: holder, size: 4, scale: [1, 1, 2] });
+    });
+    const [, , height] = sides(extentWithin(itemOf(holder, 'test')));
+    // Its largest side (1.7 units of roof) is 4, then z is doubled: 1.56 high to the chimney's top becomes 1.56 * (4 / 1.7) * 2.
+    expect(height).toBeCloseTo(1.56 * (4 / 1.7) * 2, 6);
+    const door = itemOf(house.piece('door'), 'test').children[0]!;
+    expect(door.bias).toBeCloseTo(0.3 * (4 / 1.7) * 2, 6);
+  });
+
+  it('names its pieces as parts and labels them in columns beside it, joined by leaders', () => {
+    const { runtime } = space(
+      (s) => {
+        s.model('rocket', { parts: true, labels: true });
+      },
+      { viewBox: [0, 0, 640, 440] },
+    );
+    // The hidden flame is left out until it is asked for by name.
+    expect(runtime.uiState().parts.map((p) => [p.name, p.label])).toEqual([
+      ['engine', 'Engine'],
+      ['fins', 'Fins'],
+      ['body', 'Fuel tank'],
+      ['window', 'Window'],
+      ['nose', 'Nose cone'],
+    ]);
+    const byText = new Map(labels(runtime).map((n) => [n.text, n]));
+    expect([...byText.keys()].sort()).toEqual(['Engine', 'Fins', 'Fuel tank', 'Nose cone', 'Window']);
+    const y = (text: string) => Number(byText.get(text)!.attrs.get('y'));
+    // Top to bottom in the order of the pieces, and apart.
+    expect(y('Nose cone')).toBeLessThan(y('Fuel tank'));
+    expect(y('Fins')).toBeLessThan(y('Engine'));
+    expect(y('Engine') - y('Fins')).toBeGreaterThanOrEqual(18);
+    // The window faces the camera's left, so its label stands in a column on the left.
+    expect(byText.get('Window')!.attrs.get('text-anchor')).toBe('end');
+    expect(byText.get('Nose cone')!.attrs.get('text-anchor')).toBe('start');
+    // Each label has a leader from its piece, ending in a dot on the piece.
+    const leaders = nodes(runtime).filter((n) => n.kind === 'line' && !n.hidden);
+    expect(leaders).toHaveLength(5);
+    const nose = byText.get('Nose cone')!;
+    const toNose = leaders.find((n) => Math.abs(Number(n.attrs.get('y2')) - y('Nose cone')) < 1e-6)!;
+    expect(Number(toNose.attrs.get('x2'))).toBeLessThan(Number(nose.attrs.get('x')));
+    expect(nodes(runtime).filter((n) => n.kind === 'circle' && !n.hidden)).toHaveLength(5);
+  });
+
+  it('spreads its pieces apart in an exploded view', () => {
+    let rocket!: Model3D;
+    space(
+      (s) => {
+        rocket = s.model('rocket');
+      },
+      { camera: { yaw: -90, pitch: 0, distance: 0, scale: 100 } },
+    );
+    const nose = rocket.piece('nose').screen()[1];
+    const engine = rocket.piece('engine').screen()[1];
+    rocket.explode(1);
+    expect(rocket.piece('nose').screen()[1]).toBeLessThan(nose - 50);
+    expect(rocket.piece('engine').screen()[1]).toBeGreaterThan(engine + 50);
+  });
+
+  it('builds a model of the scene’s own from glTF-style data, at its own size', () => {
+    let holder!: Group3D;
+    let lamp!: Model3D;
+    space((s) => {
+      holder = s.group();
+      lamp = s.model(
+        {
+          tone: 'c',
+          nodes: [
+            { name: 'base', box: [1, 1, 0.2], at: [0, 0, 0.1] },
+            { name: 'post', label: 'Post', cylinder: [0.05, 1], at: [0, 0, 0.7], tone: 'trim', children: [{ name: 'bulb', sphere: 0.15, at: [0, 0, 0.6], tone: 'lit' }] },
+          ],
+        },
+        { parent: holder },
+      );
+    });
+    expect(lamp.pieces).toEqual(['base', 'post', 'bulb']);
+    // From the floor to the top of the bulb: 1.3 + 0.15.
+    expect(Math.max(...sides(extentWithin(itemOf(holder, 'test'))))).toBeCloseTo(1.45, 6);
+    const bulb = lamp.piece('bulb').screen();
+    lamp.piece('post').at(1, 0, 0.7);
+    expect(lamp.piece('bulb').screen()).not.toEqual(bulb);
+  });
+
+  it('refuses bad models with plain messages', () => {
+    const errors: string[] = [];
+    space((s) => {
+      const attempt = (f: () => unknown) => {
+        try {
+          f();
+          errors.push('');
+        } catch (error) {
+          errors.push((error as Error).message);
+        }
+      };
+      attempt(() => s.model('spaceship' as never));
+      attempt(() => s.model({ nodes: [] }));
+      attempt(() => s.model({ nodes: [{ box: 1, sphere: 1 }] }));
+      attempt(() => s.model({ nodes: [{ name: 'a', box: 1 }, { name: 'a', box: 1 }] }));
+      attempt(() => s.model({ nodes: [{ cylinder: [1] as never }] }));
+      attempt(() => s.model({ nodes: [{ box: 1, tone: 'red' as never }] }));
+      attempt(() => s.model('rocket', { parts: ['wing'] }));
+      attempt(() => s.model('rocket', { size: 0 }));
+      attempt(() => s.lathe([[1, 0]]));
+    });
+    expect(errors[0]).toContain('the ready-made models are rocket, satellite');
+    expect(errors[1]).toContain('data { nodes: [...] }');
+    expect(errors[2]).toContain('box and sphere');
+    expect(errors[3]).toContain('two pieces "a"');
+    expect(errors[4]).toContain('needs two numbers');
+    expect(errors[5]).toContain('Unknown tone "red"');
+    expect(errors[6]).toContain('"wing" is not a piece of this model');
+    expect(errors[7]).toContain('model size must be above 0');
+    expect(errors[8]).toContain('from 2 to 120 profile points');
+  });
+});
+
 describe('3D scenes in the sandbox', () => {
   it('pass the validator', () => {
     const js = `
@@ -613,6 +883,9 @@ inc.onFrame(() => {
   cube.orient(inc.vec.rotA([0, 0, 1], (turn.value * Math.PI) / 180));
   label.text('turned ' + Math.round(turn.value) + '°');
 });
+const rocket = space.model('rocket', { at: [3, 0, 0], size: 1.5, labels: ['nose', 'fins'] });
+rocket.piece('flame').show();
+space.lathe([[0.5, 0], [0.3, 1]], { at: [-3, 0, 0] });
 const graph = inc.graph3d('#graph', { title: 'A bowl', x: [-2, 2], y: [-2, 2], z: [0, 8] });
 const bowl = graph.surface((x, y) => x * x + y * y, { contours: [1, 4] });
 bowl.section('x', () => turn.value / 45 - 1);
@@ -620,6 +893,9 @@ bowl.section('x', () => turn.value / 45 - 1);
     const { diagnostics, info } = validateSceneJs(js);
     expect(diagnostics).toEqual([]);
     expect(info.kits).toEqual(['space3d']);
+    // A model is made once, then moved.
+    const again = validateSceneJs(`const space = inc.space3d('#s', { title: 'Cars' });\ninc.onFrame(() => { space.model('car'); });`);
+    expect(again.diagnostics.map((d) => d.rule)).toContain('element-in-frame');
   });
 
   it('runs from the built kit script on the Worker’s own modules', async () => {
