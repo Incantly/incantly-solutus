@@ -242,6 +242,21 @@ describe('the generation pipeline', () => {
     expect(state.scene?.js).toBe(sine.js);
   });
 
+  it('keeps the library build when the plan names the same concept in its own words', async () => {
+    const normal = REFERENCE_SCENES.normal!;
+    const model = new ScriptedModel((call) => {
+      if (call.purpose === 'plan') {
+        const plan = { ...normal.plan, concept: '68-95-99.7 rule', idea: 'Shading the bell curve within one, two and three standard deviations of the mean shows where 68%, 95% and 99.7% of values fall.' };
+        return '```json\n' + JSON.stringify(plan) + '\n```';
+      }
+      return '```edit js\n```';
+    });
+    const state = await new Generator({ model, probe: isolatedProbe }).generate({ prompt: 'Show the 68-95-99.7 rule on a bell curve' });
+    expect(model.calls.map((c) => c.purpose)).toEqual(['scene', 'plan']);
+    expect(state.retrieved).toBe('normal');
+    expect(state.status, state.failure?.reason).toBe('approved');
+  });
+
   it('takes a plan the library reply adds, when the request needed other names', async () => {
     const projectile = REFERENCE_SCENES.projectile!;
     const plan = { ...projectile.plan, steps: projectile.plan.steps.slice(0, 3) };

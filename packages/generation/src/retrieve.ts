@@ -50,6 +50,23 @@ export function conceptScores(
     .sort((a, b) => b.score - a.score || a.scene.id.localeCompare(b.scene.id));
 }
 
+/**
+ * Whether a text, such as a plan's concept and idea, is about this reviewed
+ * scene: it scores, and no other concept scores higher. Plans name concepts
+ * in their own words ("68-95-99.7 rule" for the normal distribution), so the
+ * match words decide, not the scene's own title.
+ */
+export function aboutScene(
+  text: string,
+  id: string,
+  options: { readonly examples?: Readonly<Record<string, ReferenceScene>>; readonly withhold?: readonly string[] } = {},
+): boolean {
+  const examples = Object.fromEntries(Object.entries(options.examples ?? REFERENCE_SCENES).filter(([key]) => key === id || !options.withhold?.includes(key)));
+  const scores = conceptScores(text, examples);
+  const own = scores.find((s) => s.scene.id === id)?.score ?? 0;
+  return own > 0 && own >= (scores[0]?.score ?? 0);
+}
+
 /** The reviewed scene the request plainly asks for, or null when none clearly leads. */
 export function retrieveExample(
   request: LearnerRequest,

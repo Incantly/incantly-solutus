@@ -87,6 +87,13 @@ describe('repair reports', () => {
     expect(report.text).toContain('LIKELY   a division by zero');
   });
 
+  it('says why text overflows a stage only a few units wide', () => {
+    const small = { check: 'bounds' as const, message: '1 element of the stage #stage lies outside its viewBox [-2.6, -0.4, 5.2, 3.9] at the default values: the text reaches x = 86.1, right of 2.6' };
+    expect(likelyCause(small)).toMatch(/text is 12 units tall, so in a viewBox only 5.2 wide it covers the stage/);
+    const wide = { check: 'bounds' as const, message: '1 element of the stage #stage lies outside its viewBox [0, 0, 760, 380] at the default values: the text reaches x = 811.7, right of 760' };
+    expect(likelyCause(wide)).toMatch(/scale them to the viewBox/);
+  });
+
   it('names a runaway loop and the other failures found', () => {
     const failure = { check: 'runs' as const, message: 'The scene threw on frame 1', error: { phase: 'runaway', name: 'RunawayError', message: 'too many iterations' } };
     expect(likelyCause(failure)).toMatch(/loop never ends/);

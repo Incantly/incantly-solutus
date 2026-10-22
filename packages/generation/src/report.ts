@@ -196,10 +196,16 @@ export function likelyCause(failure: ProbeFailure): string | null {
       return 'the model is undefined at the plan’s singular point; handle that state explicitly';
     case 'paused-change':
       return 'the drawing changes only when time advances: draw from the model in inc.onFrame and use dt only to advance state. If this parameter rightly changes nothing in the motion, still show it: label or size what it describes';
-    case 'bounds':
-      return /Nothing is drawn/.test(failure.message)
-        ? 'the coordinates do not match the stage: check the viewBox or the graph x and y ranges'
-        : 'some coordinates leave the stage; scale them to the viewBox or the graph ranges';
+    case 'bounds': {
+      if (/Nothing is drawn/.test(failure.message)) return 'the coordinates do not match the stage: check the viewBox or the graph x and y ranges';
+      // Text and points are sized like pixels: in a viewBox a few units wide they cover the whole stage.
+      const box = /viewBox \[(-?[\d.]+), (-?[\d.]+), (-?[\d.]+), (-?[\d.]+)\]/.exec(failure.message);
+      const width = box ? Number(box[3]) : Number.NaN;
+      if (width < 60) {
+        return `stage units work like pixels: text is 12 units tall, so in a viewBox only ${width} wide it covers the stage. Use a viewBox a few hundred units wide, such as [0, 0, 520, 390], and scale the model's metres to it`;
+      }
+      return 'some coordinates leave the stage; scale them to the viewBox or the graph ranges';
+    }
     case 'budget':
       return 'too many elements: draw a curve as one path, and create elements once';
     case 'frame-cost':

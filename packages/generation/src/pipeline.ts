@@ -7,7 +7,7 @@ import { ModelError, NO_USAGE, addUsage, costOf, type CallPurpose, type ModelCli
 import { formatPlanProblems, validatePlan, type PlanProblem } from './plan';
 import { probeSpecFor, type SceneProber } from './probe';
 import { parseReport, probeReport, repairPrompt, validationReport, type RepairReport } from './report';
-import { retrieveExample } from './retrieve';
+import { aboutScene, retrieveExample } from './retrieve';
 
 /**
  * The generation pipeline (PRD 27.1):
@@ -288,11 +288,18 @@ export class Generator {
     // Without a plan to say otherwise, the request's own words stand.
     if (reply === null) return { confirmed: true, plan: null, state: check };
     const parsed = parsePlanReply(reply);
-    const value = parsed.value as { concept?: unknown } | null;
+    const value = parsed.value as { concept?: unknown; idea?: unknown } | null;
     const concept = typeof value?.concept === 'string' ? value.concept : null;
+    const idea = typeof value?.idea === 'string' ? value.idea : '';
     const plan = parsed.problem ? null : validatePlan(parsed.value).plan;
     if (plan) check.timings.planMs = this.now() - started;
-    const confirmed = concept === null || standardFigure(concept, { [scene.id]: scene }) !== null;
+    const confirmed =
+      concept === null ||
+      standardFigure(concept, { [scene.id]: scene }) !== null ||
+      aboutScene(`${concept}. ${idea}`, scene.id, {
+        ...(this.options.withhold ? { withhold: this.options.withhold } : {}),
+        ...(this.options.examples ? { examples: this.options.examples } : {}),
+      });
     return { confirmed, plan, state: check };
   }
 
@@ -397,12 +404,13 @@ export class Generator {
 
   /**
    * How long a repair is likely to take. It replies with edits, a few lines,
-   * so it takes a fraction of the scene call: the bench measured 1 to 4 s
-   * after scenes of 8 to 20 s.
+   * so it takes a fraction of the scene call: two benches measured 1 to 3.3 s
+   * after scenes of 7 to 20 s. A repair that runs long is cut off at the
+   * deadline anyway, so the estimate only spares a call that cannot finish.
    */
   private repairEstimateMs(state: GenerationState): number {
     const scene = state.calls.find((c) => c.purpose === 'scene' && !c.error);
-    return Math.min(6_000, Math.max(2_500, (scene?.ms ?? 8_000) * 0.3)) + DELIVERY_MS;
+    return Math.min(4_000, Math.max(2_000, (scene?.ms ?? 8_000) * 0.2)) + DELIVERY_MS;
   }
 
   /**
