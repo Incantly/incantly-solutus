@@ -263,6 +263,8 @@ const regular: ShapeHelpers['regular'] = (cx, cy, r, sides, rotation = 0) => {
 export const shapes: ShapeHelpers = Object.freeze({
   spring,
   zigzag,
+  // The name people reach for first draws the same symbol.
+  resistor: zigzag,
   coil,
   wave,
   gear,

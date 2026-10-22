@@ -54,6 +54,7 @@ export function samplePoints(
 export function createPathHelpers(report?: CapReporter): PathHelpers {
   return {
     line: (points) => polylinePath(points),
+    polyline: (points) => polylinePath(points),
     curve(fn, x0, x1, steps, map = (x, y) => [x, y]) {
       return polylinePath(samplePoints(fn, x0, x1, clampSteps(steps, report), map));
     },

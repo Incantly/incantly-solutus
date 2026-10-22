@@ -40,8 +40,13 @@ function services(graph: SceneGraph): GraphServices {
 const nodes = new WeakMap<object, VNode>();
 
 export function nodeOf(handle: unknown): VNode {
-  const node = typeof handle === 'object' && handle !== null ? nodes.get(handle) : undefined;
-  if (!node) throw new SceneApiError('Expected a handle returned by the SDK');
+  let node = typeof handle === 'object' && handle !== null ? nodes.get(handle) : undefined;
+  // A graph item (point, curve, arrow...) stands for its drawn handle.
+  if (!node && typeof handle === 'object' && handle !== null && 'handle' in handle) {
+    const inner = (handle as { handle: unknown }).handle;
+    node = typeof inner === 'object' && inner !== null ? nodes.get(inner) : undefined;
+  }
+  if (!node) throw new SceneApiError('Expected an element the SDK made, such as stage.circle(...) or graph.point(...); dots and plain objects cannot be used here');
   return node;
 }
 
@@ -62,6 +67,11 @@ export class ElementHandle implements Handle {
 
   protected get node(): VNode {
     return nodes.get(this)!;
+  }
+
+  /** The element itself, so every drawn thing has a handle as graph items do. */
+  get handle(): this {
+    return this;
   }
 
   set(attributes: AttributeValues): this {

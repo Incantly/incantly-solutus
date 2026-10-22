@@ -215,6 +215,8 @@ export type GeometryAttribute =
 export type AttributeValues = Readonly<Partial<Record<GeometryAttribute, number | string>>>;
 
 export interface Handle {
+  /** The element itself, as graph items have one: anything drawn can be passed as x.handle. */
+  readonly handle: this;
   /** Writes attributes. Unchanged values cost nothing. */
   set(attributes: AttributeValues): this;
   at(x: number, y: number): this;
@@ -317,6 +319,8 @@ export interface Stage {
 
 export interface PathHelpers {
   line(points: ReadonlyArray<Vec2>): string;
+  /** The same as line. */
+  polyline(points: ReadonlyArray<Vec2>): string;
   /** Samples y = f(x). Starts a new subpath after a non-finite sample. */
   curve(
     fn: (x: number) => number,
@@ -480,6 +484,8 @@ export interface ShapeHelpers {
   spring(x1: number, y1: number, x2: number, y2: number, options?: { readonly coils?: number; readonly width?: number }): string;
   /** A resistor. */
   zigzag(x1: number, y1: number, x2: number, y2: number, options?: { readonly teeth?: number; readonly width?: number }): string;
+  /** The same as zigzag. */
+  resistor(x1: number, y1: number, x2: number, y2: number, options?: { readonly teeth?: number; readonly width?: number }): string;
   /** An inductor or solenoid seen side on. */
   coil(x1: number, y1: number, x2: number, y2: number, options?: { readonly loops?: number; readonly width?: number }): string;
   wave(x1: number, y1: number, x2: number, y2: number, options?: { readonly amplitude?: number; readonly wavelength?: number; readonly phase?: number }): string;

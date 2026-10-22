@@ -98,7 +98,7 @@ describe('scene graph', () => {
     const dot = stage.circle(0, 0, 1, { parent: g });
     expect(graph.nodes.get(3)?.layer).toBe('front');
     expect(() => stage.circle(0, 0, 1, { parent: dot })).toThrow('must be a group');
-    expect(() => stage.circle(0, 0, 1, { parent: {} as never })).toThrow('Expected a handle returned by the SDK');
+    expect(() => stage.circle(0, 0, 1, { parent: {} as never })).toThrow('Expected an element the SDK made');
   });
 
   it('registers named parts once', () => {
@@ -218,5 +218,30 @@ describe('stage bounds', () => {
   it('reports no box for an empty stage', () => {
     const { graph } = setup();
     expect(stageBounds(graph, 1)).toMatchObject({ box: null, visibleElements: 0 });
+  });
+});
+
+describe('handles that stand for their elements', () => {
+  it('lets a graph item stand for its handle, gives every element a handle, and names what it needs when neither fits', async () => {
+    const { SceneRuntime } = await import('../src/runtime/runtime');
+    const runtime = new SceneRuntime({ autoplay: false });
+    let thrown = '';
+    runtime.mount((inc) => {
+      const graph = inc.graph2d('#s', { x: [0, 10], y: [0, 10], title: 'G' });
+      const point = graph.point(1, 1);
+      const label = graph.label(2, 2, 'two');
+      graph.stage.part('Point', point as never, { label: 'Point' });
+      graph.stage.part('Label', label.handle, { label: 'Label' });
+      expect(label.handle).toBe(label);
+      expect(inc.path.polyline([[0, 0], [1, 1]])).toBe(inc.path.line([[0, 0], [1, 1]]));
+      expect(inc.shapes.resistor(0, 0, 10, 0)).toBe(inc.shapes.zigzag(0, 0, 10, 0));
+      try {
+        graph.handle({ x: 1, y: 2 });
+      } catch (error) {
+        thrown = (error as Error).message;
+      }
+    });
+    expect(runtime.uiState().parts.map((p) => p.name).sort()).toEqual(['Label', 'Point']);
+    expect(thrown).toContain("graph.handle needs x or y to name a parameter, in quotes, such as { x: 'phase', y: 0 }");
   });
 });

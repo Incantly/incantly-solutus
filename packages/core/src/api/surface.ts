@@ -189,6 +189,7 @@ export const INC_NAMESPACES = {
   } satisfies Methods<State>,
   path: {
     line: null,
+    polyline: null,
     curve: null,
     param: null,
     arc: null,
@@ -247,6 +248,7 @@ export const INC_NAMESPACES = {
   shapes: {
     spring: null,
     zigzag: null,
+    resistor: null,
     coil: null,
     wave: null,
     gear: null,
@@ -302,12 +304,12 @@ export const HANDLES: Readonly<Record<HandleKind, HandleSpec>> = {
     } satisfies Methods<Stage>,
     properties: { viewBox: null } satisfies Properties<Stage>,
   },
-  Element: { methods: elementMethods, properties: {} },
-  Path: { methods: { ...elementMethods, d: 'self' } satisfies Methods<PathHandle>, properties: {} },
-  Text: { methods: { ...elementMethods, text: 'self' } satisfies Methods<TextHandle>, properties: {} },
+  Element: { methods: elementMethods, properties: { handle: 'Element' } },
+  Path: { methods: { ...elementMethods, d: 'self' } satisfies Methods<PathHandle>, properties: { handle: 'Path' } },
+  Text: { methods: { ...elementMethods, text: 'self' } satisfies Methods<TextHandle>, properties: { handle: 'Text' } },
   Polyline: {
     methods: { ...elementMethods, points: 'self' } satisfies Methods<PolylineHandle>,
-    properties: {},
+    properties: { handle: 'Polyline' },
   },
   Graph: {
     methods: {

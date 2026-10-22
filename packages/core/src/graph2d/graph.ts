@@ -1123,7 +1123,9 @@ export class Graph2D implements Graph, ViewController {
       if (typeof axis === 'string' && !this.ctx.param(axis)) throw new SceneApiError(`handle: "${axis}" is not a parameter declared before it`);
       if (typeof axis === 'number' && !Number.isFinite(axis)) throw new SceneApiError('handle needs finite numbers');
     }
-    if (typeof options.x === 'number' && typeof options.y === 'number') throw new SceneApiError('A handle moves at least one parameter');
+    if (typeof options.x === 'number' && typeof options.y === 'number') {
+      throw new SceneApiError("graph.handle needs x or y to name a parameter, in quotes, such as { x: 'phase', y: 0 }; for a point that sets no parameter use graph.point, or graph.drag to map the pointer to parameters");
+    }
     const value = (axis: string | number) => (typeof axis === 'string' ? (this.ctx.param(axis)?.value ?? Number.NaN) : axis);
     const point = this.point(value(options.x), value(options.y), { tone: options.tone ?? 'lit', r: options.r ?? 8 });
     this.ctx.onRedraw(() => point.at(value(options.x), value(options.y)));
