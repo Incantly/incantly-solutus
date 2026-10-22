@@ -27,13 +27,41 @@ const OWN: ReadonlyArray<readonly [string, string]> = [
   ['dominant-baseline', 'auto'],
 ];
 const MAX_WIDTH = 1600;
+const SVG_NS = 'http://www.w3.org/2000/svg';
+/** What an equation's box needs to draw its MathML (DG-5): the browser runs it, other programs use the text beside it. */
+const MATH_EXTENSIONS = 'http://www.w3.org/1999/xhtml http://www.w3.org/1998/Math/MathML';
+
+/** The equation's own point, from its box and which way its maths is aligned. */
+function equationText(source: Element, box: CSSStyleDeclaration): SVGTextElement {
+  const doc = source.ownerDocument;
+  const text = doc.createElementNS(SVG_NS, 'text') as SVGTextElement;
+  const x = Number(source.getAttribute('x')) || 0;
+  const y = Number(source.getAttribute('y')) || 0;
+  const width = Number(source.getAttribute('width')) || 0;
+  const height = Number(source.getAttribute('height')) || 0;
+  const justify = box.getPropertyValue('justify-content');
+  const anchor = justify === 'flex-start' || justify === 'start' ? 'start' : justify === 'flex-end' || justify === 'end' ? 'end' : 'middle';
+  text.setAttribute('x', String(anchor === 'start' ? x : anchor === 'end' ? x + width : x + width / 2));
+  text.setAttribute('y', String(y + height / 2));
+  text.setAttribute('text-anchor', anchor);
+  text.setAttribute('dominant-baseline', 'central');
+  text.setAttribute('fill', box.getPropertyValue('color'));
+  text.setAttribute('font-size', box.getPropertyValue('font-size'));
+  text.setAttribute('font-family', box.getPropertyValue('font-family'));
+  const opacity = getComputedStyle(source).getPropertyValue('opacity');
+  if (opacity && opacity !== '1') text.setAttribute('opacity', opacity);
+  text.textContent = source.getAttribute('data-text') ?? '';
+  return text;
+}
 
 /**
  * A copy of a stage that stands alone: the computed colours, lines and fonts
  * written onto its elements, only where they change, and the classes, styles
- * and hidden elements that mean nothing outside the figure left out.
+ * and hidden elements that mean nothing outside the figure left out. An
+ * equation keeps its MathML with a line of text in its place for programs
+ * that cannot draw it, or with `flat`, becomes that text alone.
  */
-function painted(svg: SVGSVGElement): { readonly clone: SVGSVGElement; readonly width: number; readonly height: number } {
+function painted(svg: SVGSVGElement, flat = false): { readonly clone: SVGSVGElement; readonly width: number; readonly height: number } {
   const rect = svg.getBoundingClientRect();
   const width = Math.max(1, Math.round(rect.width));
   const height = Math.max(1, Math.round(rect.height));
@@ -50,6 +78,7 @@ function painted(svg: SVGSVGElement): { readonly clone: SVGSVGElement; readonly 
     return style;
   };
   const hidden: Element[] = [];
+  const equations: Array<readonly [Element, Element]> = [];
   source.forEach((element, i) => {
     const copy = target[i];
     if (!copy) return;
@@ -58,6 +87,19 @@ function painted(svg: SVGSVGElement): { readonly clone: SVGSVGElement; readonly 
       hidden.push(copy);
       return;
     }
+    const math = element.closest('foreignObject');
+    if (math && math !== element) {
+      // HTML and MathML take their look from styles: the box gets its own, written in.
+      if (element.classList.contains('inc-math')) {
+        copy.setAttribute(
+          'style',
+          `display:flex;align-items:center;justify-content:${style.justifyContent};width:100%;height:100%;line-height:1;white-space:nowrap;color:${style.color};font-family:${style.fontFamily};font-size:${style.fontSize}`,
+        );
+        copy.removeAttribute('class');
+      }
+      return;
+    }
+    if (element.hasAttribute('data-math')) equations.push([element, copy]);
     const parent = element === svg ? null : element.parentElement ? styleOf(element.parentElement) : null;
     for (const name of INHERITED) {
       const value = style.getPropertyValue(name);
@@ -76,6 +118,20 @@ function painted(svg: SVGSVGElement): { readonly clone: SVGSVGElement; readonly 
     copy.removeAttribute('tabindex');
   });
   for (const element of hidden) element.remove();
+  for (const [element, copy] of equations) {
+    if (!clone.contains(copy)) continue;
+    const box = element.querySelector('.inc-math');
+    const text = equationText(element, box ? styleOf(box) : styleOf(element));
+    copy.removeAttribute('data-text');
+    if (flat) {
+      copy.replaceWith(text);
+      continue;
+    }
+    const choice = element.ownerDocument.createElementNS(SVG_NS, 'switch');
+    copy.setAttribute('requiredExtensions', MATH_EXTENSIONS);
+    copy.replaceWith(choice);
+    choice.append(copy, text);
+  }
   clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
   clone.setAttribute('width', String(width));
   clone.setAttribute('height', String(height));
@@ -100,10 +156,21 @@ export function exportStage(svg: SVGSVGElement | null): string | null {
   }
 }
 
+/**
+ * The stage as a PNG data URL. Drawing an equation's MathML marks the canvas
+ * unreadable in some browsers, so a stage with equations falls back to them
+ * as text.
+ */
 export async function snapshotStage(svg: SVGSVGElement | null): Promise<string | null> {
   if (!svg) return null;
+  const picture = await drawn(svg, false);
+  if (picture !== null || !svg.querySelector('foreignObject[data-math]')) return picture;
+  return drawn(svg, true);
+}
+
+async function drawn(svg: SVGSVGElement, flat: boolean): Promise<string | null> {
   try {
-    const { clone, width, height } = painted(svg);
+    const { clone, width, height } = painted(svg, flat);
     const markup = new XMLSerializer().serializeToString(clone);
     const url = URL.createObjectURL(new Blob([markup], { type: 'image/svg+xml' }));
     try {

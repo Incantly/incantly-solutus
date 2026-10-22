@@ -219,6 +219,33 @@ describe('stage bounds', () => {
     const { graph } = setup();
     expect(stageBounds(graph, 1)).toMatchObject({ box: null, visibleElements: 0 });
   });
+
+  it('estimates an equation around its point: taller when a fraction stacks, to one side when anchored (DG-5)', () => {
+    const { graph, stage } = setup();
+    const law = stage.equation(380, 40, 'F = G*m1*m2/r^2', { size: 20 });
+    const centred = stageBounds(graph, 1).box!;
+    expect((centred.minX + centred.maxX) / 2).toBeCloseTo(380, 6);
+    expect((centred.minY + centred.maxY) / 2).toBeCloseTo(40, 6);
+    expect(centred.maxY - centred.minY).toBeCloseTo(48, 6);
+    law.set({ 'text-anchor': 'start' });
+    expect(stageBounds(graph, 1).box!.minX).toBe(380);
+    law.text('F = m*a');
+    expect(stageBounds(graph, 1).box!.maxY - stageBounds(graph, 1).box!.minY).toBeCloseTo(26, 6);
+  });
+});
+
+describe('equations (DG-5)', () => {
+  it('draw as a math element on the labels layer, centred, 16 units by default', () => {
+    const { graph, stage } = setup();
+    stage.equation(100, 50, 'E = m*c^2', { tone: 'a' });
+    const commands = graph.flush();
+    expect(commands).toContainEqual({ op: 'create', id: 2, kind: 'math', parent: 1, layer: 'labels' });
+    expect(commands).toContainEqual({ op: 'attr', id: 2, name: 'text-anchor', value: 'middle' });
+    expect(commands).toContainEqual({ op: 'attr', id: 2, name: 'font-size', value: '16' });
+    expect(commands).toContainEqual({ op: 'text', id: 2, value: 'E = m*c^2' });
+    expect(() => stage.equation(0, 0, 'x', { anchor: 'left' as never })).toThrow(/'start', 'middle' or 'end'/);
+    expect(() => stage.equation(0, 0, 'x', { size: 0 })).toThrow(/from 0 to 200/);
+  });
 });
 
 describe('handles that stand for their elements', () => {

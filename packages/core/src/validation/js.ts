@@ -222,7 +222,7 @@ const MOUNT_ONLY: ReadonlySet<string> = new Set([
 
 /** Handle methods that create a new element. Created once, then moved. */
 const CREATES_ELEMENTS: Readonly<Partial<Record<HandleKind, ReadonlySet<string>>>> = {
-  Stage: new Set(['group', 'path', 'line', 'circle', 'rect', 'text', 'polyline', 'part', 'connector', 'callout', 'repeat', 'dots']),
+  Stage: new Set(['group', 'path', 'line', 'circle', 'rect', 'text', 'equation', 'polyline', 'part', 'connector', 'callout', 'repeat', 'dots']),
   Space3D: new Set(['box', 'sphere', 'cylinder', 'cone', 'plane', 'torus', 'tube', 'mesh', 'group', 'line', 'arrow', 'coil', 'arc', 'point', 'label', 'grid', 'axes', 'fieldLines', 'part', 'drag']),
   Graph3D: new Set(['surface', 'parametric', 'curve', 'point', 'vector', 'line', 'plane', 'label', 'part']),
   Surface3D: new Set(['section']),
@@ -247,6 +247,7 @@ const CREATES_ELEMENTS: Readonly<Partial<Record<HandleKind, ReadonlySet<string>>
     'arrow',
     'trail',
     'label',
+    'equation',
     'bracket',
     'dimension',
     'trace',

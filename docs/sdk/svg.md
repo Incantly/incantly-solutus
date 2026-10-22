@@ -25,8 +25,22 @@ v0.1 provides:
 - `svg.rect`
 - `svg.text`
 - `svg.polyline`
+- `svg.equation` (below)
 
 Each returns a handle with change-only attribute writes and transform helpers such as `set`, `at`, `rotate`, `scale`, `show`, and `tone`.
+
+## Equations and chemical formulas (DG-5)
+
+`svg.equation(x, y, source, { anchor, size, tone })` draws an equation as maths, centred on its point by default (`anchor: 'start'` or `'end'` puts that end of it there; `size` is in stage units, 16 by default). Each side of its `=` and `≈` signs is read by the same safe parser as `inc.formula`, so fractions stack, powers rise, roots and Greek letters show as written, trailing digits become subscripts and factors sit side by side:
+
+```js
+const law = svg.equation(100, 64, 'T ≈ 2*pi*sqrt(L/g)', { size: 18 });
+inc.onFrame(() => law.text('F = ' + model.force.toFixed(1)));
+```
+
+A side that is not a formula is shown as written. The renderer builds the MathML with DOM calls from the parsed tree, never from markup, and places it in a box inside the drawing (a `foreignObject`) sized from the same estimate the runtime's bounds check uses. `graph.equation` does the same at a point in data units, and stays on it as the learner zooms and pans.
+
+Chemical formulas and plain symbols stay text: `svg.text(x, y, inc.chem('2H2 + O2 -> 2H2O'))` shows 2H₂ + O₂ → 2H₂O, and `inc.sym('v_0^2')` shows v₀².
 
 ## Path helpers
 
@@ -57,4 +71,4 @@ The parts registry drives highlight, dimming, keyboard focus, teaching-step focu
 
 ## Snapshot
 
-The stage can produce a PNG snapshot after resolving theme tokens, used for persistence and fallback (`handle.snapshot()`), and export itself as a standalone SVG image with the theme's colours, lines and fonts written in (`handle.exportSvg()`, SV-14). The export is a `data:image/svg+xml` URL: show it in an `<img>` or offer it as a download, rather than pasting it into a page as markup. Dots on a canvas layer are not part of it.
+The stage can produce a PNG snapshot after resolving theme tokens, used for persistence and fallback (`handle.snapshot()`), and export itself as a standalone SVG image with the theme's colours, lines and fonts written in (`handle.exportSvg()`, SV-14). The export is a `data:image/svg+xml` URL: show it in an `<img>` or offer it as a download, rather than pasting it into a page as markup. Dots on a canvas layer are not part of it. An equation keeps its MathML in the export, inside a `<switch>` with a line of text (T ≈ 2π√(L/g)) for programs that cannot draw it; a PNG snapshot falls back to that text where drawing MathML to a canvas is not allowed.

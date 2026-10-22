@@ -2,7 +2,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { InThreadChannel, ManualClock, mountTrusted, type MountedFigure } from '../src';
 import type { RendererMessage } from '../src/protocol/runtime-messages';
-import { mathElement, symbolText } from '../src/renderer/math';
+import { equationElement, linearEquation, mathElement, symbolText } from '../src/renderer/math';
+import { exportStage } from '../src/sandbox/snapshot';
 import { FORMULA_SETTLE_MS } from '../src/renderer/panels';
 import { checkStyle, hostCss, mergeStyles, resolveStyle, styleForBridge } from '../src/renderer/style';
 
@@ -604,5 +605,76 @@ describe('rendered maths (FM-4)', () => {
     expect(symbolText('v_0')).toEqual({ base: 'v', sub: '0' });
     expect(mathElement(document, '2*x', null as never)!.textContent).toBe('2x');
     expect(mathElement(document, 'x +', null as never)).toBeNull();
+  });
+});
+
+describe('equations in the drawing (DG-5)', () => {
+  const EQUATIONS = `
+    inc.idea('Gravity weakens with the square of the distance.');
+    const r = inc.param('r', { min: 1, max: 4, step: 1, value: 2, label: 'Distance' });
+    const stage = inc.svg('#stage', { viewBox: [0, 0, 400, 200], title: 'Gravity' });
+    stage.circle(60, 120, 12, { tone: 'lit' });
+    const law = stage.equation(200, 40, 'F = G*m1*m2/r^2', { tone: 'a' });
+    stage.part('Law', law, { label: 'The law', info: 'Newton’s law of gravitation.' });
+    const now = stage.equation(20, 160, 'F = 1', { anchor: 'start', size: 12 });
+    inc.onFrame(() => { now.text('F = 1/' + r.value * r.value); });
+    inc.describe(() => 'At distance ' + r.value + ' the pull is 1/' + r.value * r.value + '.');
+  `;
+
+  it('writes each side of an equation as maths: a stacked fraction, subscripts, factors side by side', () => {
+    const math = equationElement(document, 'F = G*m1*m2/r^2');
+    const row = math.firstElementChild!;
+    expect(row.tagName.toLowerCase()).toBe('mrow');
+    expect([...row.children].map((c) => c.tagName.toLowerCase())).toEqual(['mi', 'mo', 'mfrac']);
+    expect(math.querySelector('mfrac > :first-child')!.textContent).toBe('Gm1m2');
+    expect(math.querySelectorAll('msub')).toHaveLength(2);
+    expect(math.querySelector('mfrac msup')).toBeTruthy();
+    // A side that is not a formula is shown as written; == and <= are not split.
+    expect(equationElement(document, 'v = 12 m s')!.querySelector('mtext')!.textContent).toBe('12 m s');
+    expect(equationElement(document, 'a <= b')!.querySelector('mo')!.textContent).toBe('≤');
+    expect(linearEquation('F = G*m1*m2/r^2')).toBe('F = Gm₁m₂/r²');
+    expect(linearEquation('E = 1/2*m*v^2')).toBe('E = (1/2)mv²');
+    expect(linearEquation('p = m*2')).toBe('p = m·2');
+    expect(linearEquation('x = sqrt(a + b) ≈ 2*pi')).toBe('x = √(a + b) ≈ 2π');
+    expect(linearEquation('y = e^(-k*t)')).toBe('y = e^(−kt)');
+  });
+
+  it('draws an equation in the stage, placed around its point, and redraws it when its source changes', () => {
+    const { root, figure, clock } = mount(EQUATIONS);
+    const [law, now] = [...root.querySelectorAll('svg.inc-stage foreignObject[data-math]')];
+    expect(law?.closest('[data-layer]')?.getAttribute('data-layer')).toBe('labels');
+    expect(law?.getAttribute('class')).toContain('inc-tone-a');
+    expect(law?.getAttribute('data-part')).toBe('Law');
+    expect(law?.querySelector('.inc-math math mfrac')).toBeTruthy();
+    // Centred on (200, 40): the box is as far left of the point as right of it.
+    const x = Number(law!.getAttribute('x'));
+    const width = Number(law!.getAttribute('width'));
+    expect(x + width / 2).toBeCloseTo(200, 1);
+    expect(Number(law!.getAttribute('y')) + Number(law!.getAttribute('height')) / 2).toBeCloseTo(40, 1);
+    expect((law!.querySelector('.inc-math') as HTMLElement).style.justifyContent).toBe('center');
+    // Starting at (20, 160): the box starts at the point.
+    expect(Number(now!.getAttribute('x'))).toBe(20);
+    expect((now!.querySelector('.inc-math') as HTMLElement).style.justifyContent).toBe('flex-start');
+    expect((now as SVGElement).style.getPropertyValue('--inc-fs')).toBe('12px');
+    expect(now!.getAttribute('data-text')).toBe('F = 1/4');
+    const slider = q<HTMLInputElement>(root, 'input[type="range"]');
+    slider.value = '3';
+    slider.dispatchEvent(new Event('input', { bubbles: true }));
+    clock.runUntilIdle();
+    expect(figure.runtime.values().r).toBe(3);
+    expect(now!.getAttribute('data-text')).toBe('F = 1/9');
+    expect(now!.querySelector('mfrac > mn:last-child')!.textContent).toBe('9');
+  });
+
+  it('keeps an equation in an exported picture, with its text for programs that cannot draw MathML', () => {
+    const { root } = mount(EQUATIONS);
+    const url = exportStage(root.querySelector<SVGSVGElement>('svg.inc-stage'))!;
+    const markup = decodeURIComponent(url.slice(url.indexOf(',') + 1));
+    expect(markup).toContain('<switch>');
+    expect(markup).toMatch(/<foreignObject[^>]*requiredExtensions="http:\/\/www.w3.org\/1999\/xhtml http:\/\/www.w3.org\/1998\/Math\/MathML"/);
+    expect(markup).toContain('<math');
+    expect(markup).toContain('F = Gm₁m₂/r²</text>');
+    expect(markup).not.toContain('data-text');
+    expect(markup).not.toContain('class=');
   });
 });

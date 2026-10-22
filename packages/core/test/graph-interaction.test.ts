@@ -39,6 +39,20 @@ describe('graph zoom and pan (G2-6)', () => {
     expect(runtime.uiState().views[0]!.changed).toBe(false);
   });
 
+  it('keeps an equation on its data point as the learner pans (DG-5)', () => {
+    let lawId = 0;
+    const { runtime } = run((inc) => {
+      const g = inc.graph2d('#g', { x: [0, 10], y: [0, 10], title: 'Law' });
+      lawId = idOf(g.equation(5, 5, 'y = x^2/10', { anchor: 'start' }));
+    });
+    const stage = runtime.graph.stages[0]!.id;
+    expect(runtime.graph.nodes.get(lawId)).toMatchObject({ kind: 'math', text: 'y = x^2/10' });
+    expect(attr(runtime, lawId, 'x')).toBe('396');
+    runtime.view(stage, { kind: 'pan', dx: 68.8, dy: 0 });
+    runtime.tick(0);
+    expect(Number(attr(runtime, lawId, 'x'))).toBeCloseTo(464.8, 1);
+  });
+
   it('pans by stage units, keeps points on their data, and fits the y axis to the curves', () => {
     let pointId = 0;
     const { runtime } = run((inc) => {

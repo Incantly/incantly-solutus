@@ -390,6 +390,14 @@ export const VALIDATOR_CASES: readonly ValidatorCase[] = [
     twin: { js: js('const moving = stage.circle(0, 10, 2);', 'inc.onFrame(({ time }) => { moving.at(time, 0); });') },
   },
   {
+    name: 'writing an equation every frame',
+    fragment: 'js',
+    rule: 'element-in-frame',
+    bad: { js: js("inc.onFrame(({ time }) => { stage.equation(50, 20, 'x = ' + time); });") },
+    at: 'stage.equation(50',
+    twin: { js: js("const law = stage.equation(50, 20, 'x = 0');", "inc.onFrame(({ time }) => { law.text('x = ' + time.toFixed(1)); });") },
+  },
+  {
     name: 'declaring inside a callback',
     fragment: 'js',
     rule: 'mount-only',

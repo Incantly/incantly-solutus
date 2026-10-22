@@ -1,7 +1,8 @@
 import type { Layer, ViewBox } from '../api/types';
 
 /** `use` repeats another element of the same stage (SV-6). */
-export type ElementKind = 'g' | 'path' | 'line' | 'circle' | 'rect' | 'text' | 'polyline' | 'use';
+/** `math` is an equation drawn as maths (DG-5): its text is the formula's source. */
+export type ElementKind = 'g' | 'path' | 'line' | 'circle' | 'rect' | 'text' | 'polyline' | 'use' | 'math';
 
 /**
  * Drawing instructions from the scene runtime to the renderer. Ids are

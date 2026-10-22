@@ -1,5 +1,7 @@
 import type { Layer, ViewBox } from '../api/types';
+import { equationExtent } from '../protocol/equation';
 import { RENDERABLE_ATTRIBUTES, type ElementKind, type SceneCommand, type StageZoom } from '../protocol/scene-commands';
+import { equationElement, linearEquation } from './math';
 
 /** Paint attributes the theme also sets, mapped to the variables its rules read. */
 const STYLED_ATTRIBUTES: Readonly<Record<string, string>> = {
@@ -10,9 +12,12 @@ const STYLED_ATTRIBUTES: Readonly<Record<string, string>> = {
 };
 
 export const SVG_NS = 'http://www.w3.org/2000/svg';
+const XHTML_NS = 'http://www.w3.org/1999/xhtml';
 const LAYERS: readonly Layer[] = ['back', 'mid', 'front', 'labels'];
 /** The only elements a scene can create, whatever a Worker sends. */
-const KINDS: ReadonlySet<string> = new Set(['g', 'path', 'line', 'circle', 'rect', 'text', 'polyline', 'use'] satisfies ElementKind[]);
+const KINDS: ReadonlySet<string> = new Set(['g', 'path', 'line', 'circle', 'rect', 'text', 'polyline', 'use', 'math'] satisfies ElementKind[]);
+/** The attributes an equation's box is laid out from, rather than written. */
+const MATH_PLACEMENT: ReadonlySet<string> = new Set(['x', 'y', 'font-size', 'text-anchor']);
 const TONE = /\binc-tone-(lo|mid|hi|lit|faint|a|b|c|water)\b/;
 const SHADE = /\binc-shade-(sphere|cylinder|soft)\b/;
 
@@ -40,6 +45,18 @@ export interface StageDom {
   canvases: { back?: HTMLCanvasElement; front?: HTMLCanvasElement };
 }
 
+/** Where an equation sits, and the HTML box its MathML is drawn in. */
+interface MathState {
+  x: number;
+  y: number;
+  size: number;
+  anchor: 'start' | 'middle' | 'end';
+  source: string;
+  readonly box: HTMLElement;
+}
+
+const round = (n: number): string => String(Math.round(n * 100) / 100);
+
 interface DotsState {
   readonly stage: number;
   readonly layer: 'back' | 'front';
@@ -61,6 +78,7 @@ export class SceneDom {
   private readonly elements = new Map<number, Element>();
   private readonly ids = new WeakMap<Element, number>();
   private readonly dots = new Map<number, DotsState>();
+  private readonly maths = new Map<Element, MathState>();
   private readonly dirtyCanvases = new Set<number>();
   private focusedOwner: string | null = null;
   readonly stats: SceneDomStats = { writes: 0 };
@@ -120,6 +138,7 @@ export class SceneDom {
     this.stages.clear();
     this.elements.clear();
     this.dots.clear();
+    this.maths.clear();
   }
 
   apply(commands: readonly SceneCommand[]): void {
@@ -204,7 +223,7 @@ export class SceneDom {
         const stage = this.stages.get(command.parent);
         const parent = stage ? stage.layers[command.layer] : this.elements.get(command.parent);
         if (!parent) return;
-        const element = parent.ownerDocument.createElementNS(SVG_NS, command.kind);
+        const element = command.kind === 'math' ? this.mathElement(parent.ownerDocument) : parent.ownerDocument.createElementNS(SVG_NS, command.kind);
         if (command.kind === 'use') {
           // A copy points at its source by a scoped id the renderer gives it; nothing else may be referenced.
           const source = command.source === undefined ? undefined : this.elements.get(command.source);
@@ -222,7 +241,9 @@ export class SceneDom {
       case 'attr': {
         const element = this.elements.get(command.id);
         if (!element || !RENDERABLE_ATTRIBUTES.has(command.name)) return;
-        if (command.value === null) element.removeAttribute(command.name);
+        const math = this.maths.get(element);
+        if (math && MATH_PLACEMENT.has(command.name)) this.placeMath(element, math, command.name, command.value);
+        else if (command.value === null) element.removeAttribute(command.name);
         else element.setAttribute(command.name, command.value);
         // The theme's rules outrank presentation attributes, so these reach the
         // theme through variables it reads, where focus can still override them.
@@ -237,7 +258,14 @@ export class SceneDom {
       case 'text': {
         const element = this.elements.get(command.id);
         if (!element) return;
-        element.textContent = command.value;
+        const math = this.maths.get(element);
+        if (math) {
+          // New source rebuilds the maths; it is never parsed as markup.
+          math.source = command.value;
+          math.box.replaceChildren(equationElement(element.ownerDocument, command.value));
+          element.setAttribute('data-text', linearEquation(command.value));
+          this.placeMath(element, math);
+        } else element.textContent = command.value;
         this.stats.writes++;
         return;
       }
@@ -311,6 +339,39 @@ export class SceneDom {
         return;
       }
     }
+  }
+
+  /** An equation: an HTML box inside the drawing, holding the MathML the renderer builds (DG-5). */
+  private mathElement(doc: Document): Element {
+    const element = doc.createElementNS(SVG_NS, 'foreignObject');
+    element.setAttribute('data-math', '');
+    const box = doc.createElementNS(XHTML_NS, 'div') as HTMLElement;
+    box.className = 'inc-math';
+    element.append(box);
+    this.maths.set(element, { x: 0, y: 0, size: 16, anchor: 'middle', source: '', box });
+    return element;
+  }
+
+  /**
+   * Lays out an equation's box around its point from the size its source is
+   * estimated to take, with room to spare: the maths is centred on the point
+   * (or starts or ends there) and may overflow the box, which is never clipped.
+   */
+  private placeMath(element: Element, math: MathState, name?: string, value?: string | null): void {
+    const n = value === null || value === undefined ? Number.NaN : Number(value);
+    if (name === 'x') math.x = Number.isFinite(n) ? n : 0;
+    else if (name === 'y') math.y = Number.isFinite(n) ? n : 0;
+    else if (name === 'font-size') math.size = Number.isFinite(n) && n > 0 ? n : 16;
+    else if (name === 'text-anchor') math.anchor = value === 'start' || value === 'end' ? value : 'middle';
+    const { width, height } = equationExtent(math.source, math.size);
+    const w = width * 1.5 + math.size * 2;
+    const h = height + math.size;
+    const left = math.anchor === 'start' ? math.x : math.anchor === 'end' ? math.x - w : math.x - w / 2;
+    element.setAttribute('x', round(left));
+    element.setAttribute('y', round(math.y - h / 2));
+    element.setAttribute('width', round(w));
+    element.setAttribute('height', round(h));
+    math.box.style.justifyContent = math.anchor === 'start' ? 'flex-start' : math.anchor === 'end' ? 'flex-end' : 'center';
   }
 
   /** Filled shapes with a shade get a gradient in their tone, made once per stage. */

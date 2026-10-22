@@ -154,6 +154,10 @@ html.inc-frame, html.inc-frame body { margin: 0; padding: 0; background: transpa
 .inc-stage circle, .inc-stage rect { fill: var(--inc-tone, var(--inc-mid)); stroke: none; }
 .inc-stage :is(circle, rect).inc-outline { fill: none; stroke: var(--inc-tone, var(--inc-fg)); stroke-width: var(--inc-sw, 2px); vector-effect: non-scaling-stroke; }
 .inc-stage text { fill: var(--inc-tone, var(--inc-fg)); font-size: var(--inc-fs, 14px); }
+/* An equation (DG-5): MathML in a box the renderer places around its point; the maths may overflow the box. */
+.inc-stage foreignObject[data-math] { overflow: visible; pointer-events: none; }
+.inc-stage .inc-math { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; color: var(--inc-tone, var(--inc-fg)); font-family: var(--inc-font); font-size: var(--inc-fs, 16px); line-height: 1; white-space: nowrap; }
+.inc-stage .inc-math math { font-size: inherit; }
 .inc-stage .inc-fill:is(path, polyline) { fill: var(--inc-tone, var(--inc-mid)); stroke: none; }
 .inc-stage .inc-fill:is(.inc-shade-sphere, .inc-shade-cylinder, .inc-shade-soft) { fill: var(--inc-grad, var(--inc-tone, var(--inc-mid))); }
 .inc-stage .inc-stop-light { stop-color: color-mix(in srgb, var(--inc-tone, var(--inc-mid)) 55%, #ffffff); }

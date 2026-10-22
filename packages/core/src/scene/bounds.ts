@@ -1,3 +1,4 @@
+import { equationExtent } from '../protocol/equation';
 import type { SceneGraph, Transform, VNode } from './graph';
 
 export interface Box {
@@ -151,6 +152,18 @@ function localPoints(node: VNode): Array<[number, number]> {
         .filter(Boolean)
         .map((pair) => pair.split(',').map(Number) as [number, number])
         .filter(([px, py]) => Number.isFinite(px) && Number.isFinite(py));
+    case 'math': {
+      // An estimate, as for text, shared with the renderer.
+      const { width, height } = equationExtent(node.text ?? '', num(node, 'font-size', 16));
+      const x = num(node, 'x');
+      const y = num(node, 'y');
+      const anchor = node.attrs.get('text-anchor');
+      const left = anchor === 'start' ? x : anchor === 'end' ? x - width : x - width / 2;
+      return [
+        [left, y - height / 2],
+        [left + width, y + height / 2],
+      ];
+    }
     case 'text': {
       const size = num(node, 'font-size', 14);
       const width = (node.text ?? '').length * size * 0.6;

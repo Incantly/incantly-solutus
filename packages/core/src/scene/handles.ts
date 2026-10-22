@@ -6,6 +6,7 @@ import type {
   DotsOptions,
   DragMap,
   ElementOptions,
+  EquationOptions,
   Handle,
   Layer,
   PartOptions,
@@ -258,6 +259,16 @@ export class StageHandle implements Stage {
     return new TextElementHandle(this.graph, this.make('text', { layer: 'labels', ...options }))
       .set({ x, y })
       .text(value);
+  }
+
+  equation(x: number, y: number, source: Readable, options: EquationOptions = {}): TextHandle {
+    const anchor = options.anchor ?? 'middle';
+    if (anchor !== 'start' && anchor !== 'middle' && anchor !== 'end') throw new SceneApiError("An equation's anchor is 'start', 'middle' or 'end'");
+    const size = options.size ?? 16;
+    if (!(Number.isFinite(size) && size > 0 && size <= 200)) throw new SceneApiError("An equation's size is a number of stage units from 0 to 200");
+    return new TextElementHandle(this.graph, this.make('math', { layer: 'labels', ...options }))
+      .set({ x, y, 'text-anchor': anchor, 'font-size': size })
+      .text(source);
   }
 
   polyline(points: ReadonlyArray<Vec2>, options?: ElementOptions): PolylineHandle {

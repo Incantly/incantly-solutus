@@ -4,6 +4,7 @@ import type {
   CurveOptions,
   DragMap,
   ElementOptions,
+  EquationOptions,
   FieldOptions,
   Formula,
   Graph,
@@ -193,6 +194,10 @@ class GraphStage implements Stage {
   text(x: number, y: number, value: Readable, options?: ElementOptions) {
     this.raw();
     return this.inner.text(x, y, value, options);
+  }
+  equation(x: number, y: number, source: Readable, options?: EquationOptions) {
+    this.raw();
+    return this.inner.equation(x, y, source, options);
   }
   polyline(points: ReadonlyArray<Vec2>, options?: ElementOptions) {
     this.raw();
@@ -965,6 +970,17 @@ export class Graph2D implements Graph, ViewController {
 
   label(x: number, y: number, value: Readable, options?: ElementOptions): TextHandle {
     const handle = this.inner.text(0, 0, value, { layer: 'labels', ...options });
+    const place = () => {
+      const [px, py] = this.map(x, y);
+      handle.set({ x: px, y: py });
+    };
+    place();
+    this.remaps.push(place);
+    return handle;
+  }
+
+  equation(x: number, y: number, source: Readable, options?: EquationOptions): TextHandle {
+    const handle = this.inner.equation(0, 0, source, options);
     const place = () => {
       const [px, py] = this.map(x, y);
       handle.set({ x: px, y: py });

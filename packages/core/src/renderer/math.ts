@@ -70,6 +70,26 @@ const OPERATOR_TEXT: Readonly<Partial<Record<BinaryOperator, string>>> = {
   '||': ' or ',
 };
 
+/** Unicode scripts for the plain-text form of an equation, where a font has them. */
+const SUPERSCRIPT: Readonly<Record<string, string>> = {
+  '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴', '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹',
+  '+': '⁺', '-': '⁻', '−': '⁻', n: 'ⁿ', i: 'ⁱ', x: 'ˣ', t: 'ᵗ', k: 'ᵏ',
+};
+const SUBSCRIPT: Readonly<Record<string, string>> = {
+  '0': '₀', '1': '₁', '2': '₂', '3': '₃', '4': '₄', '5': '₅', '6': '₆', '7': '₇', '8': '₈', '9': '₉',
+};
+
+/** Every character through a script table, or null when one has no script form. */
+function scripted(text: string, table: Readonly<Record<string, string>>): string | null {
+  let out = '';
+  for (const c of text) {
+    const mapped = table[c];
+    if (mapped === undefined) return null;
+    out += mapped;
+  }
+  return out;
+}
+
 /** A name as maths: Greek words become letters, trailing digits become a subscript. */
 export function symbolText(name: string): { base: string; sub: string | null } {
   const match = /^([A-Za-z]+?)(?:_?(\d+))?$/.exec(name);
@@ -91,8 +111,29 @@ function precedenceOf(expr: Expr): number {
   }
 }
 
+function numberText(value: number): string {
+  return Number.isInteger(value) ? String(value) : String(Number(value.toPrecision(6)));
+}
+
+/**
+ * Whether a product is written side by side, without a dot: a number before a
+ * name or a bracket (2x) always, and in an equation any factor before a name,
+ * a call, a power of a name or a bracket (mgh, ½mv², G m₁m₂).
+ */
+function sideBySide(left: Expr, right: Expr, implicit: boolean): boolean {
+  const fenced = precedenceOf(right) < PRECEDENCE['*'];
+  const named = right.kind === 'variable' || right.kind === 'call';
+  if (left.kind === 'number') return named || fenced;
+  const power = right.kind === 'binary' && right.operator === '^' && right.left.kind === 'variable';
+  return implicit && (named || fenced || power);
+}
+
 class Builder {
-  constructor(private readonly doc: Document) {}
+  /** `implicit` writes products side by side, as equations are printed. */
+  constructor(
+    private readonly doc: Document,
+    private readonly implicit = false,
+  ) {}
 
   el(tag: string, ...children: Array<Element | string>): Element {
     const element = this.doc.createElementNS(MATHML_NS, tag);
@@ -116,10 +157,8 @@ class Builder {
 
   node(expr: Expr): Element {
     switch (expr.kind) {
-      case 'number': {
-        const text = Number.isInteger(expr.value) ? String(expr.value) : String(Number(expr.value.toPrecision(6)));
-        return this.el('mn', text);
-      }
+      case 'number':
+        return this.el('mn', numberText(expr.value));
       case 'variable': {
         const { base, sub } = symbolText(expr.name);
         const mi = this.el('mi', base);
@@ -146,10 +185,7 @@ class Builder {
     const rightMin = operator === '-' || operator === '%' ? p + 1 : p;
     const l = this.operand(left, p);
     const r = this.operand(right, rightMin);
-    // A number times a name or a bracket reads as 2x, without a dot.
-    if (operator === '*' && left.kind === 'number' && (right.kind === 'variable' || right.kind === 'call' || precedenceOf(right) < p)) {
-      return this.el('mrow', l, r);
-    }
+    if (operator === '*' && sideBySide(left, right, this.implicit)) return this.el('mrow', l, r);
     return this.el('mrow', l, this.mo(OPERATOR_TEXT[operator] ?? operator), r);
   }
 
@@ -189,4 +225,124 @@ export function mathElement(doc: Document, source: string, lead?: string): Eleme
     math.append(builder.el('mrow', sub ? builder.el('msub', mi, builder.el('mn', sub)) : mi, builder.mo('='), body));
   } else math.append(body);
   return math;
+}
+
+/** The same tree as one line of Unicode text, for pictures that cannot hold MathML. */
+class Linear {
+  operand(expr: Expr, min: number): string {
+    const text = this.node(expr);
+    return precedenceOf(expr) < min ? `(${text})` : text;
+  }
+
+  /** A root's or a function's argument: bare when it is one symbol. */
+  argument(expr: Expr): string {
+    return expr.kind === 'number' || expr.kind === 'variable' ? this.node(expr) : `(${this.node(expr)})`;
+  }
+
+  node(expr: Expr): string {
+    switch (expr.kind) {
+      case 'number':
+        return numberText(expr.value);
+      case 'variable': {
+        const { base, sub } = symbolText(expr.name);
+        return sub ? base + (scripted(sub, SUBSCRIPT) ?? `_${sub}`) : base;
+      }
+      case 'unary':
+        return (expr.operator === '-' ? '−' : expr.operator === '!' ? '¬' : '+') + this.operand(expr.operand, 8);
+      case 'binary':
+        return this.binary(expr.operator, expr.left, expr.right);
+      case 'call':
+        return this.call(expr.name, expr.args);
+      case 'conditional':
+        return `${this.operand(expr.test, 2)} ? ${this.operand(expr.consequent, 2)} : ${this.operand(expr.alternate, 2)}`;
+    }
+  }
+
+  power(base: string, exponent: Expr): string {
+    const text = this.node(exponent);
+    const simple = exponent.kind === 'number' || exponent.kind === 'variable' || (exponent.kind === 'unary' && exponent.operand.kind === 'number');
+    const raised = simple ? scripted(text, SUPERSCRIPT) : null;
+    if (raised !== null) return base + raised;
+    return `${base}^${simple ? text : `(${text})`}`;
+  }
+
+  binary(operator: BinaryOperator, left: Expr, right: Expr): string {
+    const p = PRECEDENCE[operator];
+    if (operator === '^') return this.power(this.operand(left, 10), right);
+    if (operator === '/') return `${this.operand(left, p)}/${this.operand(right, p + 1)}`;
+    const rightMin = operator === '-' || operator === '%' ? p + 1 : p;
+    const l = this.operand(left, p);
+    const r = this.operand(right, rightMin);
+    // Side by side after a fraction reads as one bigger fraction in a line, so the fraction keeps brackets: (1/2)mv².
+    if (operator === '*') return sideBySide(left, right, true) ? (left.kind === 'binary' && left.operator === '/' ? `(${l})` : l) + r : `${l}·${r}`;
+    return `${l} ${(OPERATOR_TEXT[operator] ?? operator).trim()} ${r}`;
+  }
+
+  call(name: string, args: readonly Expr[]): string {
+    const [first] = args;
+    if (name === 'sqrt' && first) return `√${this.argument(first)}`;
+    if (name === 'cbrt' && first) return `∛${this.argument(first)}`;
+    if (name === 'abs' && first) return `|${this.node(first)}|`;
+    if (name === 'exp' && first) return this.power('e', first);
+    if (name === 'pow' && args.length === 2) return this.power(this.operand(first!, 10), args[1]!);
+    return `${name}(${args.map((arg) => this.node(arg)).join(', ')})`;
+  }
+}
+
+/** Equals and approximately-equals signs between the sides of an equation, not inside <=, >=, == or !=. */
+const RELATION = /((?<![<>=!])=(?!=)|≈)/;
+
+interface Side {
+  /** The sign before this side; empty for the first. */
+  readonly relation: string;
+  readonly text: string;
+  /** The side's syntax tree, or null when it is not a formula. */
+  readonly expr: Expr | null;
+}
+
+function sidesOf(source: string): Side[] {
+  const pieces = source.split(RELATION);
+  const sides: Side[] = [];
+  for (let i = 0; i < pieces.length; i += 2) {
+    const text = pieces[i]!.trim();
+    let expr: Expr | null = null;
+    if (text) {
+      try {
+        expr = parseExpression(text);
+      } catch {
+        expr = null;
+      }
+    }
+    sides.push({ relation: i === 0 ? '' : pieces[i - 1]!, text, expr });
+  }
+  return sides;
+}
+
+/**
+ * An equation drawn in a stage, as MathML (DG-5): each side of its = signs is
+ * read by the same safe parser as formulas, so F = G*m1*m2/r^2 shows its
+ * fraction stacked and its factors side by side. A side that is not a
+ * formula is shown as it was written.
+ */
+export function equationElement(doc: Document, source: string): Element {
+  const builder = new Builder(doc, true);
+  const row = builder.el('mrow');
+  for (const side of sidesOf(source)) {
+    if (side.relation) row.append(builder.mo(side.relation));
+    if (side.expr) row.append(builder.node(side.expr));
+    else if (side.text) row.append(builder.el('mtext', side.text));
+  }
+  const math = builder.el('math', row);
+  math.setAttribute('display', 'inline');
+  // Fractions and roots at full size, as in a displayed equation, not shrunk to fit a line of text.
+  math.setAttribute('displaystyle', 'true');
+  return math;
+}
+
+/** The equation as one line of text, F = Gm₁m₂/r², for pictures that cannot hold MathML. */
+export function linearEquation(source: string): string {
+  const linear = new Linear();
+  return sidesOf(source)
+    .map((side) => (side.relation ? ` ${side.relation} ` : '') + (side.expr ? linear.node(side.expr) : side.text))
+    .join('');
 }

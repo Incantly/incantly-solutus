@@ -266,6 +266,13 @@ export interface DragInfo {
 /** Turns a drag into parameter values. */
 export type DragMap = (p: DragInfo) => Values | void;
 
+export interface EquationOptions extends ElementOptions {
+  /** Which side of the equation sits at x. Default 'middle'. */
+  readonly anchor?: 'start' | 'middle' | 'end';
+  /** Text size in stage units. Default 16. */
+  readonly size?: number;
+}
+
 export interface ConnectorOptions {
   readonly tone?: Tone;
   readonly dashed?: boolean;
@@ -303,6 +310,12 @@ export interface Stage {
   circle(cx: number, cy: number, r: number, options?: ElementOptions): Handle;
   rect(x: number, y: number, width: number, height: number, options?: ElementOptions): Handle;
   text(x: number, y: number, value: Readable, options?: ElementOptions): TextHandle;
+  /**
+   * An equation drawn as maths, centred on (x, y): fractions stack, powers
+   * rise, roots and Greek letters show as written, such as
+   * stage.equation(400, 40, 'F = G*m1*m2/r^2'). Its text() takes new source.
+   */
+  equation(x: number, y: number, source: Readable, options?: EquationOptions): TextHandle;
   polyline(points: ReadonlyArray<Vec2>, options?: ElementOptions): PolylineHandle;
   /** Registers a named part for highlighting, focus, steps and descriptions. */
   part<H extends Handle>(name: string, handle: H, options?: PartOptions): H;
@@ -701,6 +714,8 @@ export interface Graph {
   arrow(x: number, y: number, dx: number, dy: number, options?: CurveOptions): GraphArrow;
   trail(options?: { readonly tone?: Tone; readonly max?: number }): GraphTrail;
   label(x: number, y: number, value: Readable, options?: ElementOptions): TextHandle;
+  /** An equation drawn as maths at a point in data units, as stage.equation does (DG-5). */
+  equation(x: number, y: number, source: Readable, options?: EquationOptions): TextHandle;
   bracket(x1: number, y1: number, x2: number, y2: number, text?: Readable, options?: { readonly tone?: Tone }): GraphMark;
   dimension(x1: number, y1: number, x2: number, y2: number, text?: Readable, options?: { readonly tone?: Tone }): GraphMark;
   /** A point the learner can drag along a curve, showing its coordinates. Follows the pointer on hover. */
