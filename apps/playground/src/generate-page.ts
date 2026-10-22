@@ -1,5 +1,5 @@
 import { sandboxAdapter } from '@incantly/core';
-import { GenerationClient, Telemetry, figureGenerator, figureRepairer, type TelemetryEvent } from '@incantly/generation/client';
+import { GenerationClient, Telemetry, figureChanger, figureGenerator, figureRepairer, type TelemetryEvent } from '@incantly/generation/client';
 import { FigureGeneration, FigureNode, MemoryFigureStore, flushFigures } from '@incantly/tiptap';
 import { Editor, type JSONContent } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
@@ -41,9 +41,29 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
   button.textContent = 'Make a figure';
   form.append(label, input, button);
 
+  // A change to the selected figure, in the learner's words (HO-8).
+  const changeForm = document.createElement('form');
+  changeForm.className = 'generate-form';
+  const changeLabel = document.createElement('label');
+  changeLabel.htmlFor = 'figure-change';
+  changeLabel.textContent = 'Change the selected figure';
+  const changeInput = document.createElement('input');
+  changeInput.id = 'figure-change';
+  changeInput.name = 'change';
+  changeInput.type = 'text';
+  changeInput.autocomplete = 'off';
+  changeInput.placeholder = 'Start with weaker gravity';
+  const changeButton = document.createElement('button');
+  changeButton.type = 'submit';
+  changeButton.textContent = 'Change it';
+  const remake = document.createElement('button');
+  remake.type = 'button';
+  remake.textContent = 'Make it again';
+  changeForm.append(changeLabel, changeInput, changeButton, remake);
+
   const host = document.createElement('div');
   host.className = 'editor-host';
-  root.append(form, host);
+  root.append(form, changeForm, host);
 
   const store = new MemoryFigureStore();
   let editor: Editor;
@@ -68,7 +88,10 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
               values: report.values,
             }),
         }),
-        FigureGeneration.configure({ generate: figureGenerator({ client, signals: telemetry.emit }) }),
+        FigureGeneration.configure({
+          generate: figureGenerator({ client, signals: telemetry.emit }),
+          change: figureChanger({ client, signals: telemetry.emit }),
+        }),
       ],
       content,
       editorProps: { attributes: { class: 'editor', 'aria-label': 'Note editor' } },
@@ -83,6 +106,13 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
     editor.commands.generateFigure({ prompt }, editor.state.doc.content.size);
     input.value = '';
   });
+
+  changeForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const prompt = changeInput.value.trim();
+    if (prompt && editor.commands.changeFigure({ prompt })) changeInput.value = '';
+  });
+  remake.addEventListener('click', () => editor.commands.regenerateFigure());
 
   const handle = {
     ready: true,
