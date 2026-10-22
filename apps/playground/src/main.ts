@@ -1,5 +1,6 @@
 import './styles.css';
 import { mountEditorPage } from './editor-page';
+import { mountGalleryPage } from './gallery-page';
 import { mountGeneratePage } from './generate-page';
 import { mountAttackPage, mountComparePage, mountSandboxPage } from './sandbox-page';
 import { mountScenePage } from './scene-page';
@@ -13,6 +14,7 @@ const pages: Record<string, (root: HTMLElement, params: URLSearchParams) => void
   compare: mountComparePage,
   attack: mountAttackPage,
   style: mountStylePage,
+  gallery: mountGalleryPage,
 };
 
 const params = new URLSearchParams(location.search);
