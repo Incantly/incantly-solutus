@@ -2,6 +2,7 @@ import { SIZE_BUDGETS, type ScenePlan } from '@incantly/core';
 import { REFERENCE_SCENES, type ReferenceScene } from '@incantly/core/scenes';
 import { CAPABILITIES, CORE_CONTRACT, capability, catalogText } from './catalog';
 import { SDK_CONTRACT } from './generated/contract';
+import { STOP_WORDS } from './words';
 
 /**
  * The generation context (SP-1): short core rules and the catalog, always;
@@ -146,7 +147,7 @@ function words(text: string): Set<string> {
     text
       .toLowerCase()
       .split(/[^a-z0-9]+/)
-      .filter((w) => w.length > 2)
+      .filter((w) => w.length > 2 && !STOP_WORDS.has(w))
       .map((w) => w.replace(/(ing|es|s)$/, '')),
   );
 }
@@ -328,7 +329,7 @@ function conceptWords(text: string): Set<string> {
     text
       .toLowerCase()
       .split(/[^a-z0-9]+/)
-      .filter((w) => w.length > 2)
+      .filter((w) => w.length > 2 && !STOP_WORDS.has(w))
       .map((w) => w.replace(/(es|s)$/, '')),
   );
 }

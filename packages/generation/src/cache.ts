@@ -1,5 +1,6 @@
 import { SDK_VERSION, type ScenePlan } from '@incantly/core';
 import type { FragmentSet } from './fragments';
+import { STOP_WORDS } from './words';
 
 /**
  * The concept cache (PRD 25.6). Figures are generic, so an approved figure
@@ -22,10 +23,6 @@ interface Entry {
   readonly storedAt: number;
   hits: number;
 }
-
-const STOP_WORDS = new Set(
-  'a an the of to in on for and or with how what why when does do is are be show me explain please can you i my about from by as at that this it its into figure diagram visualise visualize draw make interactive simulation simulate'.split(' '),
-);
 
 function words(text: string): string[] {
   return [

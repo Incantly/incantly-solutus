@@ -292,4 +292,14 @@ describe('the standard figure fallback', () => {
     expect(standardFigure('photosynthesis')).toBeNull();
     expect(standardFigure('')).toBeNull();
   });
+
+  it('matches concepts on the words that name them, never on "the" or "how"', () => {
+    const withoutSeasons = Object.fromEntries(Object.entries(REFERENCE_SCENES).filter(([id]) => id !== 'seasons'));
+    // Once "the seasons" shared "the" with "the Magnus effect", and a plan for the seasons adapted the Magnus scene.
+    expect(standardFigure('the seasons', withoutSeasons)).toBeNull();
+    expect(standardFigure('the seasons')?.id).toBe('seasons');
+    expect(standardFigure('the Magnus effect')?.id).toBe('magnus');
+    expect(standardFigure('how the seasons work')?.id).toBe('seasons');
+    for (const scene of Object.values(REFERENCE_SCENES)) expect(standardFigure(scene.plan.concept)?.id, scene.id).toBe(scene.id);
+  });
 });
