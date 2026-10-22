@@ -11,6 +11,7 @@ import { defineConfig, type Plugin, type ViteDevServer } from 'vite';
  * /api/dev/records lists the failure records.
  */
 const DEV_SECRET = 'playground-only-secret-never-used-in-production';
+const DEV_TICKET_SECRET = 'playground-only-ticket-secret-never-used-in-production';
 
 type Generation = typeof import('@incantly/generation');
 
@@ -36,6 +37,8 @@ function generationService(): Plugin {
       prefix,
       enabled: () => enabled,
       limits: { ...g.DEFAULT_LIMITS, perMinute: 60, perDay: 1000, concurrent: 6 },
+      // Figures that hit a problem while live are repaired in the background (RP-7).
+      ticketSecret: DEV_TICKET_SECRET,
     });
     const entry = { handle: service.handle, records };
     services.set(prefix, entry);

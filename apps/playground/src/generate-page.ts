@@ -1,5 +1,5 @@
 import { sandboxAdapter } from '@incantly/core';
-import { GenerationClient, Telemetry, figureGenerator, type TelemetryEvent } from '@incantly/generation/client';
+import { GenerationClient, Telemetry, figureGenerator, figureRepairer, type TelemetryEvent } from '@incantly/generation/client';
 import { FigureGeneration, FigureNode, MemoryFigureStore, flushFigures } from '@incantly/tiptap';
 import { Editor, type JSONContent } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
@@ -7,7 +7,8 @@ import StarterKit from '@tiptap/starter-kit';
 /**
  * A note where the learner asks for figures: the generation service mounted
  * in the dev server, the device probe in the sandbox, the skeleton, the one
- * repair and the fallbacks, as a host would wire them. `fault=<fault>` points
+ * repair, the fallbacks and background repairs of live figures, as a host
+ * would wire them. `fault=<fault>` points
  * at a service whose reference model injects that fault.
  */
 export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): void {
@@ -55,6 +56,8 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
           adapter: sandboxAdapter,
           store,
           signals: telemetry.emit,
+          // A figure that hits a problem while live is repaired in the background, and swapped in once it passes here.
+          repair: figureRepairer({ client, signals: telemetry.emit }),
           onError: (report) =>
             telemetry.emit({
               type: 'figure-failure',
