@@ -169,6 +169,6 @@ describe('content security policy', () => {
     // The parser stays on the host: the frame and Worker never validate.
     expect(WORKER_SCRIPT).not.toContain('acorn');
     // The base runtime with the small general helpers; domain kits load on demand.
-    expect(WORKER_SCRIPT.length).toBeLessThan(130_000);
+    expect(WORKER_SCRIPT.length).toBeLessThan(135_000);
   });
 });

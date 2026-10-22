@@ -20,6 +20,17 @@ async function probe(fragments: { html: string; css: string; js: string }): Prom
 }
 
 describe('repair reports', () => {
+  it('names an element drawn outside its stage and points at the line that made it', async () => {
+    const fragments = withLine(/^const peak = graph\.segment\(0, 0, 0, 0, \{ tone: 'c', dashed: true \}\);$/m, "const peak = graph.segment(0, 0, 0, 0, { tone: 'c', dashed: true });\nconst stray = graph.label(140, 70, 'far away');");
+    const report = await probe(fragments);
+    const text = probeReport(report, fragments, projectile.plan).text;
+    const line = fragments.js.split('\n').findIndex((l) => l.startsWith('const stray')) + 1;
+    expect(report.failures[0]).toMatchObject({ check: 'bounds', error: { line } });
+    expect(report.failures[0]!.message).toMatch(/the text reaches x = [\d.]+, right of \d+/);
+    expect(text).toContain(`AGENT_JS line ${line}`);
+    expect(text).toContain("graph.label(140, 70, 'far away')");
+  });
+
   it('quotes a validator error with its rule, the fragment line and its neighbours, and the broken core rule', () => {
     const fragments = withLine(/^inc\.readout/m, "fetch('https://example.com');\ninc.readout");
     const { diagnostics } = validateScene(fragments);

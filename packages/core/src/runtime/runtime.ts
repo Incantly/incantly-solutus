@@ -84,6 +84,8 @@ export interface RuntimeOptions {
   readonly now?: () => number;
   /** Kits the scene may call: 3D, physics, charts, flowcharts. Loaded by the host. */
   readonly kits?: KitRegistry;
+  /** Records where the scene created each element (needs `locate`), so checks can point at the line. */
+  readonly traceSites?: boolean;
 }
 
 /** Seconds a step takes to move parameters to its values. */
@@ -270,7 +272,21 @@ export class SceneRuntime {
     this.history = new History(options.now ?? (() => Date.now()));
     this.path = createPathHelpers((requested) => this.reportCap(requested));
     this.graph.services = this.services();
+    this.graph.trace = this.siteTracer();
     this.inc = this.createInc();
+  }
+
+  /** The scene line creating an element now: the first frame of a fresh stack inside the scene. */
+  private siteTracer(): SceneGraph['trace'] {
+    if (!this.options.traceSites || !this.options.locate) return null;
+    return () => {
+      const limits = Error as unknown as { stackTraceLimit?: number };
+      const limit = limits.stackTraceLimit;
+      limits.stackTraceLimit = 50;
+      const probe = new Error('site');
+      limits.stackTraceLimit = limit;
+      return this.locateError(probe);
+    };
   }
 
   // -------------------------------------------------------------------------
@@ -879,6 +895,7 @@ export class SceneRuntime {
     this.learnerFocus = null;
     this.graph = new SceneGraph();
     this.graph.services = this.services();
+    this.graph.trace = this.siteTracer();
     this.parts = new PartRegistry(this.graph);
     this.params = new Map();
     this.paramHandles = new Set();

@@ -167,7 +167,7 @@ class Probe {
     return fn();
   }
 
-  private mount(values: Readonly<Record<string, number>> | undefined, autoplay: boolean): { runtime: SceneRuntime; ui: UiState } {
+  private mount(values: Readonly<Record<string, number>> | undefined, autoplay: boolean, traceSites = false): { runtime: SceneRuntime; ui: UiState } {
     this.checkTime();
     this.configurations++;
     const runtime = new SceneRuntime({
@@ -176,6 +176,8 @@ class Probe {
       autoplay,
       reducedMotion: false,
       ...(values ? { values } : {}),
+      // At the defaults, each element remembers its line, so a failure can point at it.
+      ...(traceSites ? { traceSites: true } : {}),
     });
     const update = this.step(() => runtime.mount(this.scene));
     return { runtime, ui: { ...runtime.uiState(), ...update.ui } as UiState };
@@ -217,7 +219,7 @@ class Probe {
 
   /** Mount, 60 frames, numbers, budget, bounds, frame cost and the teaching layer. Returns false when mounting failed. */
   private defaultRun(): boolean {
-    const { runtime, ui } = this.mount(undefined, true);
+    const { runtime, ui } = this.mount(undefined, true, true);
     const mountError = this.firstError(runtime);
     if (!runtime.isMounted || mountError) {
       this.fail({ check: 'mount', message: 'The scene threw while mounting', ...(mountError ? { error: mountError } : {}) });
@@ -269,20 +271,31 @@ class Probe {
       const bounds = stageBounds(runtime.graph, stage.id);
       visible += bounds.visibleElements;
       const [x, y, w, h] = stage.viewBox as ViewBox;
-      const outside: number[] = [];
+      const outside: Array<{ id: number; what: string }> = [];
       for (const [id, box] of bounds.boxes) {
         const node = runtime.graph.nodes.get(id);
         // A graph's plot layer is clipped to the plot area, so what crosses it is cut, not lost.
         if (stage.clip && node?.layer === 'mid') continue;
-        if (box.minX < x - w * margin || box.maxX > x + w * (1 + margin) || box.minY < y - h * margin || box.maxY > y + h * (1 + margin)) {
-          outside.push(id);
-        }
+        const over = [
+          box.minX < x - w * margin ? `x = ${round(box.minX)}, left of ${round(x)}` : null,
+          box.maxX > x + w * (1 + margin) ? `x = ${round(box.maxX)}, right of ${round(x + w)}` : null,
+          box.minY < y - h * margin ? `y = ${round(box.minY)}, above ${round(y)}` : null,
+          box.maxY > y + h * (1 + margin) ? `y = ${round(box.maxY)}, below ${round(y + h)}` : null,
+        ].filter((side): side is string => side !== null);
+        if (over.length > 0) outside.push({ id, what: `the ${node?.kind ?? 'element'}${node?.part ? ` "${node.part}"` : ''} reaches ${over.join(' and ')}` });
       }
       if (outside.length > 0) {
+        // Name the worst few, at the lines that made them, in stage units.
+        const sited = outside.map((o) => ({ ...o, site: runtime.graph.sites.get(o.id) }));
+        const shown = [...sited.filter((o) => o.site), ...sited.filter((o) => !o.site)].slice(0, 3);
+        const first = shown[0]!;
         this.fail({
           check: 'bounds',
-          message: `${outside.length} element${outside.length === 1 ? '' : 's'} of the stage ${stage.selector} lie outside its viewBox at the default values`,
+          message: `${outside.length} element${outside.length === 1 ? '' : 's'} of the stage ${stage.selector} ${outside.length === 1 ? 'lies' : 'lie'} outside its viewBox [${stage.viewBox.join(', ')}] at the default values: ${shown
+            .map((o) => `${o.what}${o.site ? ` (made at line ${o.site.line})` : ''}`)
+            .join('; ')}`,
           values: this.defaults,
+          ...(first.site ? { error: { phase: 'bounds', name: 'Bounds', message: `${first.what}, in stage units`, line: first.site.line, column: first.site.column } } : {}),
         });
       }
     }

@@ -88,6 +88,9 @@ export class SceneGraph {
   readonly diagnostics: Diagnostic[] = [];
   /** Set by the runtime; handles of a graph without one cannot drag, follow or flow. */
   services: GraphServices | null = null;
+  /** Where the scene created each element, when the runtime traces it (the probe does, to point at what is wrong). */
+  trace: (() => { readonly line: number; readonly column: number } | null) | null = null;
+  readonly sites = new Map<number, { readonly line: number; readonly column: number }>();
   private nextId = 1;
   private queue: SceneCommand[] = [];
   private elementCount = 0;
@@ -145,6 +148,8 @@ export class SceneGraph {
     this.nodes.set(id, node);
     parent.children.push(id);
     this.elementCount++;
+    const site = this.trace?.();
+    if (site) this.sites.set(id, site);
     this.queue.push({ op: 'create', id, kind, parent: parent.id, layer: node.layer, ...(source ? { source: source.id } : {}) });
     this.updateClass(node);
     return node;
