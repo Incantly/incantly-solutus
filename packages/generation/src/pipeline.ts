@@ -63,6 +63,8 @@ export interface GenerationHooks {
   readonly onPlan?: (plan: ScenePlan) => void;
   /** Between a plan and its scene call: true when the caller already has the figure (the concept cache). */
   readonly cached?: (plan: ScenePlan) => boolean;
+  /** Raw model text as it streams, for developer tooling and progress UIs. */
+  readonly onText?: (purpose: CallPurpose, delta: string) => void;
   /** A fragment finished streaming, with whether it passed its own checks. */
   readonly onFragment?: (name: FragmentName, ok: boolean) => void;
   readonly onAttempt?: (attempt: Attempt) => void;
@@ -223,8 +225,8 @@ export class Generator {
     const stop = new AbortController();
     const buildSignal = signal ? AbortSignal.any([signal, stop.signal]) : stop.signal;
     const maxTokens = Math.min(this.options.maxTokens?.scene ?? SIZE_BUDGETS[scene.plan.size ?? 'quick'].sceneTokens, 2500);
-    const building = this.call(state, 'scene', libraryPrompt(scene, request), this.deadlineSignal(state, buildSignal), undefined, maxTokens);
-    const beside = this.planBeside(request, scene, signal);
+    const building = this.call(state, 'scene', libraryPrompt(scene, request), this.deadlineSignal(state, buildSignal), this.streamed(hooks, 'scene'), maxTokens);
+    const beside = this.planBeside(request, scene, hooks, signal);
     if (!(await beside.verdict)) {
       // Another concept: stop the build, which was ours to stop, and go on from the plan as usual.
       stop.abort();
@@ -319,7 +321,7 @@ export class Generator {
     state.status = 'building';
     const started = this.now();
     const maxTokens = Math.min(this.options.maxTokens?.scene ?? SIZE_BUDGETS[figure.plan.size ?? 'quick'].sceneTokens, 2500);
-    const reply = await this.call(state, 'scene', changePrompt(figure.plan, figure.fragments, request), this.deadlineSignal(state, signal), undefined, maxTokens);
+    const reply = await this.call(state, 'scene', changePrompt(figure.plan, figure.fragments, request), this.deadlineSignal(state, signal), this.streamed(hooks, 'scene'), maxTokens);
     if (reply === null) return;
     state.timings.sceneMs = this.now() - started;
     await this.applyEdits(state, { ...figure.fragments }, reply, hooks, signal, () => {
@@ -333,7 +335,7 @@ export class Generator {
    * retrieval, or name another concept, as soon as both have streamed in
    * (they come first in the plan format), or else when the call ends.
    */
-  private planBeside(request: LearnerRequest, scene: ReferenceScene, signal?: AbortSignal): PlanBeside {
+  private planBeside(request: LearnerRequest, scene: ReferenceScene, hooks: GenerationHooks, signal?: AbortSignal): PlanBeside {
     const check = this.begin();
     const started = this.now();
     const stop = new AbortController();
@@ -361,7 +363,7 @@ export class Generator {
       const early = conceptAndIdea(streamed);
       if (early) settle(judge(early.concept, early.idea));
     };
-    const finished = this.call(check, 'plan', planPrompt(request), this.deadlineSignal(check, planSignal), onText).then((reply) => {
+    const finished = this.call(check, 'plan', planPrompt(request), this.deadlineSignal(check, planSignal), this.streamed(hooks, 'plan', onText)).then((reply) => {
       // Without a plan to say otherwise, the request's own words stand.
       if (reply === null) {
         settle(true);
@@ -386,7 +388,7 @@ export class Generator {
     const started = this.now();
     let replan: { previous: string; problems: string } | undefined;
     for (let attempt = 0; attempt <= this.replans; attempt++) {
-      const reply = await this.call(state, 'plan', planPrompt(request, replan), this.deadlineSignal(state, signal));
+      const reply = await this.call(state, 'plan', planPrompt(request, replan), this.deadlineSignal(state, signal), this.streamed(hooks, 'plan'));
       if (reply === null) return;
       const parsed = parsePlanReply(reply);
       const validation = parsed.problem
@@ -424,7 +426,7 @@ export class Generator {
       state.timings.firstFragmentMs ??= this.now() - state.startedAt;
       hooks.onFragment?.('html', true);
       hooks.onFragment?.('css', true);
-      const reply = await this.call(state, 'scene', prompt, this.deadlineSignal(state, signal), undefined, Math.min(maxTokens, 2500));
+      const reply = await this.call(state, 'scene', prompt, this.deadlineSignal(state, signal), this.streamed(hooks, 'scene'), Math.min(maxTokens, 2500));
       if (reply === null) return;
       state.timings.sceneMs = this.now() - started;
       const base: FragmentSet = { html: start.html, css: start.css, js: start.js };
@@ -437,7 +439,7 @@ export class Generator {
         state.timings.firstFragmentMs ??= this.now() - state.startedAt;
         hooks.onFragment?.(name, fragmentPasses(name, source));
       });
-      const reply = await this.call(state, 'scene', prompt, this.deadlineSignal(state, signal), (text) => stream.push(text), maxTokens);
+      const reply = await this.call(state, 'scene', prompt, this.deadlineSignal(state, signal), this.streamed(hooks, 'scene', (text) => stream.push(text)), maxTokens);
       if (reply === null) return;
       const parsed = stream.end();
       state.timings.sceneMs = this.now() - started;
@@ -561,7 +563,7 @@ export class Generator {
     if (!plan || !current) throw new Error('Nothing to repair');
     state.repairsUsed++;
     const started = this.now();
-    const reply = await this.call(state, 'repair', repairPrompt(report, current.fragments, plan), this.deadlineSignal(state, signal));
+    const reply = await this.call(state, 'repair', repairPrompt(report, current.fragments, plan), this.deadlineSignal(state, signal), this.streamed(hooks, 'repair'));
     state.timings.repairMs += this.now() - started;
     if (reply === null) return null;
     const { fragments: merged, problems, changed } = this.edited(current.fragments, reply);
@@ -637,6 +639,16 @@ export class Generator {
   }
 
   /** One model call, recorded; null when it failed (the generation is then failed). */
+  /** A call's streamed text for the onText hook, and for `also` when given; nothing to stream without either. */
+  private streamed(hooks: GenerationHooks, purpose: CallPurpose, also?: (text: string) => void): ((text: string) => void) | undefined {
+    const onText = hooks.onText;
+    if (!onText) return also;
+    return (text) => {
+      also?.(text);
+      onText(purpose, text);
+    };
+  }
+
   private async call(
     state: GenerationState,
     purpose: CallPurpose,

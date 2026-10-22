@@ -52,6 +52,7 @@ export interface FallbackMessage {
 /** Events of POST /generations, in order: accepted, plan, fragment..., then scene or fallback. */
 export type ServiceEvent =
   | { readonly type: 'accepted'; readonly generationId: string }
+  | { readonly type: 'delta'; readonly purpose: 'plan' | 'scene' | 'repair'; readonly text: string }
   | { readonly type: 'plan'; readonly generationId: string; readonly skeleton: Skeleton }
   | { readonly type: 'fragment'; readonly name: 'html' | 'css' | 'js'; readonly ok: boolean }
   | ({ readonly type: 'scene' } & SceneMessage)

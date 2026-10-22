@@ -367,6 +367,8 @@ interface Binding {
   type: ValueType;
   /** Value of a const bound to a number literal, for loop bounds. */
   constNumber?: number;
+  /** A const whose initializer is itself a visibly finite loop bound. */
+  constLoopBound?: boolean;
   /** Set while the body of the for loop that declared it is walked. */
   lockedLoopVariable?: boolean;
   /** Whether this binding holds an arrow function (for recursion checks). */
@@ -646,6 +648,9 @@ class JsValidator {
             binding.type = node.kind === 'const' ? type : UNKNOWN;
             const literal = declarator.init ? numericLiteral(declarator.init) : null;
             if (node.kind === 'const' && literal !== null) binding.constNumber = literal;
+            if (node.kind === 'const' && declarator.init && this.loopBound(declarator.init, ctx.scope) === null) {
+              binding.constLoopBound = true;
+            }
           } else {
             this.pattern(declarator.id, ctx, type);
           }
@@ -783,6 +788,7 @@ class JsValidator {
       if (binding?.constNumber !== undefined) {
         return Math.abs(binding.constNumber) <= limit ? null : `Loop bound ${bound.name} = ${binding.constNumber} is above the limit of ${limit}`;
       }
+      if (binding?.constLoopBound) return null;
       // A count that changes with the controls, such as a number of particles: the cap makes the bound visible.
       return `${bound.name} can change, so the loop has no visible bound: loop to Math.min(${bound.name}, ${limit}), a const number or an array's length`;
     }

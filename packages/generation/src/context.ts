@@ -38,17 +38,17 @@ There are two calls. PLAN: reply with the plan as one JSON object. BUILD: reply 
 
 Rules for every scene
 1. One model drives everything. Compute every number the learner sees; never type a computed number into a label, readout or sentence.
-2. The controls are the plan's parameters, with its names, bounds and defaults: inc.param for a slider, inc.toggle or inc.choice where the plan says so. Never write inputs, listeners, timers or animation loops.
+2. The controls are the plan's parameters, with its names, bounds and defaults: inc.param for a slider, inc.toggle or inc.choice where the plan says so. Never write inputs, listeners, timers or animation loops. Declare each control above whatever names it, such as a formula, spelled exactly.
 3. Declare everything once, at the top level: controls, model, stages, elements, parts and callbacks. Callbacks only update what already exists; never create elements inside them.
 4. Build shapes once and move them with at, set, rotate and scale. Stage units work like pixels (text is 12 units tall), so give a stage a viewBox a few hundred units wide and scale the model to it. Keep every shape inside its stage at every parameter value. Let the learner touch the figure: when moving the main object would change a parameter, make it draggable (graph.handle, graph.drag, stage.drag, draggable bodies).
 5. Animate only from frame.time and frame.dt. A paused redraw (dt = 0) still draws the current state, and moving any control while paused changes the drawing at once, even before time has run: draw what it sets, such as a length, an arrow's size or a label. Every value in range, both ends included, must draw without NaN; guard the plan's singular points.
 6. Colour comes only from tones: lo, mid, hi, lit, faint, a, b, c, water. Water is for liquids. Use one lit accent. Never write a colour value.
-7. Show the real thing: the actual formula and true units, with the kit's helpers (calc, vec, units, shapes, sym, chem) instead of your own. A law worth seeing in the drawing goes in stage.equation, which draws it as maths. Never call anything that is not in the contract.
+7. Show the real thing: the actual formula and true units, with the kit's helpers (calc, vec, units, shapes, sym, chem) instead of your own. A law worth seeing goes in stage.equation, drawn as maths. Never call anything that is not in the contract. Draw the real mechanism in its real shape and motion; boxes, arrows and labels only add to it.
 8. Register every part the plan names, with exactly that name, through part() on its stage or kit.
 9. Call inc.idea once with the plan's idea, inc.describe with a function of the model, and inc.steps with the plan's steps.
 10. JavaScript is a small subset: const and let, arrow functions, if, switch, the conditional operator, for loops with a visible numeric bound (for (let i = 0; i <= 120; i++)), for...of, Math (inc.random instead of Math.random), template strings. Never var, function, class, this, new, try, throw, while, regular expressions, window, document, globalThis, fetch, eval or timers.
 11. Write little and let the kit do the work (a 3D prop is one space.model call): a quick figure is about ${SIZE_BUDGETS.quick.lines} lines, standard ${SIZE_BUDGETS.standard.lines}, rich ${SIZE_BUDGETS.rich.lines}; under 500 samples per curve.
-12. HTML is one div per stage with an id, usually <div id="stage"></div>, and nothing else. CSS only lays it out, usually #stage { max-width: 760px; margin: 0 auto; }, with var(--inc-...) tokens and no colours or url(). Two panels, such as a scene beside its graph: one div each and inc.layout('row'), no CSS for it.
+12. HTML is one div per stage with an id, usually <div id="stage"></div>, and nothing else. CSS only lays it out, usually #stage { max-width: 760px; margin: 0 auto; }, with var(--inc-...) tokens and no colours or url(). Two panels: one div each and inc.layout('row'), no CSS for it.
 13. If you are not sure the kit has something, it does not. Use only the catalog and the contract you are given.`;
 
 export const PLAN_FORMAT = `PLAN format. Reply with one JSON object in a \`\`\`json fence; keep every text short:
@@ -63,11 +63,13 @@ export const PLAN_FORMAT = `PLAN format. Reply with one JSON object in a \`\`\`j
   "parts": ["things drawn in the figure that steps point at; never readouts, sliders, buttons or formulas, which the kit shows itself"],
   "moves": "What moves or changes.",
   "steps": ["Two to five teaching steps, one point each"],
-  "singularPoints": [{ "parameterName": 8 }]
+  "singularPoints": []
 }
 Sizes: quick (the default: one view, up to ${SIZE_BUDGETS.quick.controls} controls and ${SIZE_BUDGETS.quick.parts} parts), standard (a second view, such as a graph beside the scene: up to ${SIZE_BUDGETS.standard.controls} controls and ${SIZE_BUDGETS.standard.parts} parts), rich (several linked panels, only when the learner asks for that much: up to ${SIZE_BUDGETS.rich.controls} controls and ${SIZE_BUDGETS.rich.parts} parts).
 A parameter is a slider unless it says "control": "toggle" (min 0, max 1) or "control": "choice" with "options": ["first", "second"] (min 0, max one less than the options).
-List singular points where the model is undefined inside the bounds, or [] when there are none.
+Give every parameter meaningful bounds. Each model output's dependsOn names model inputs or other outputs; time is not an input.
+List only singular points that fall inside the declared parameter bounds, using the actual parameter name as the key, for example [{ "objectDistance": 8 }]. If an undefined value is outside the allowed range, it is not a singular point for this figure; return [] when there are none.
+Be concise and return only the fenced JSON, with no explanation before or after it.
 Concepts with a reviewed figure, and the stage it is drawn on: ${reviewedFigures().join('; ')}. When the request is one of these, use that name exactly as the concept, and that stage unless the learner asks for another kind of figure.`;
 
 /** The concepts that have a reviewed scene; a plan that reuses one of these names starts from that scene. */

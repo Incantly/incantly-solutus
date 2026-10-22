@@ -46,7 +46,7 @@ const JOURNEYS = [
 test.describe('the learner journey through generation', () => {
   for (const journey of JOURNEYS) {
     test(`${journey.concept}: skeleton, approved figure, use, steps, reopen, reduced motion`, async ({ page }) => {
-      await page.goto('/?page=generate');
+      await page.goto('/?page=note');
       // The skeleton may show for well under a second when the library has the concept: record what it shows.
       await page.evaluate(() => {
         const seen = { busy: false, titles: [] as string[], sliders: 0, figuresWhileBusy: 0 };
@@ -126,7 +126,7 @@ test.describe('repair and fallback in the note', () => {
   test('a scene that fails on the device is repaired once and then shown', async ({ page, request }) => {
     // A figure an earlier run against the same dev server approved would come from the cache, with nothing to repair.
     await request.get('/api/dev/reset?fault=frame-throw');
-    await page.goto('/?page=generate&fault=frame-throw');
+    await page.goto('/?page=note&fault=frame-throw');
     await ask(page, 'Explain projectile motion.');
     await expect(card(page).locator('.incantly-figure__status')).toHaveText(/Fixing a problem|Checking that it works/, { timeout: 10_000 });
     await waitDrawn(page);
@@ -135,7 +135,7 @@ test.describe('repair and fallback in the note', () => {
   });
 
   test('when the repair does not help, the reviewed figure for the concept is shown with a notice', async ({ page }) => {
-    await page.goto('/?page=generate&fault=missing-part-stubborn');
+    await page.goto('/?page=note&fault=missing-part-stubborn');
     await ask(page, 'How does a convex lens form an image?');
     await waitDrawn(page);
     await expect(figure(page).locator('.incantly-figure__status')).toHaveText('This is a standard version of this figure.');
@@ -144,7 +144,7 @@ test.describe('repair and fallback in the note', () => {
   });
 
   test('a figure that cannot be built leaves one line, the request and Retry, and nothing in the note', async ({ page }) => {
-    await page.goto('/?page=generate');
+    await page.goto('/?page=note');
     await ask(page, 'Explain photosynthesis in leaves');
     await expect(card(page).locator('.incantly-figure__status')).toHaveText('This figure could not be built.', { timeout: 10_000 });
     await expect(card(page)).toHaveAttribute('aria-label', 'Figure not built');
@@ -158,7 +158,7 @@ test.describe('repair and fallback in the note', () => {
   });
 
   test('switching generation off stops new figures and leaves stored ones working', async ({ page }) => {
-    await page.goto('/?page=generate');
+    await page.goto('/?page=note');
     await ask(page, 'Show me a sine wave.');
     await waitDrawn(page);
     await page.evaluate(async () => (window.__playground as unknown as Handle).setGeneration(false));
@@ -186,7 +186,7 @@ const selectFigure = (page: Page) =>
 
 test.describe('changing a figure in the note (HO-8)', () => {
   test('keeps the figure when a change cannot be made, and makes it again on request', async ({ page }) => {
-    await page.goto('/?page=generate');
+    await page.goto('/?page=note');
     await ask(page, 'Explain projectile motion.');
     await waitDrawn(page);
     const first = (await figureAttrs(page))!;
@@ -216,7 +216,7 @@ test.describe('changing a figure in the note (HO-8)', () => {
 
 test.describe('the community gallery (GL-1, BR-13)', () => {
   test('a learner publishes a figure with their request, a reviewer accepts it, and a note adds it from the gallery', async ({ page }) => {
-    await page.goto('/?page=generate');
+    await page.goto('/?page=note');
     await page.evaluate(async () => (window.__playground as unknown as { clearGallery(): Promise<unknown> }).clearGallery());
     await ask(page, 'Explain projectile motion.');
     await waitDrawn(page);
@@ -249,7 +249,7 @@ test.describe('the community gallery (GL-1, BR-13)', () => {
 });
 
 test('product signals describe the journey without any note content', async ({ page }) => {
-  await page.goto('/?page=generate');
+  await page.goto('/?page=note');
   const prompt = 'Explain projectile motion to my study group tomorrow';
   await ask(page, prompt);
   await waitDrawn(page);

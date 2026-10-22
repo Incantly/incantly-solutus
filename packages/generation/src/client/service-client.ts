@@ -40,7 +40,7 @@ export class ServiceError extends Error {
   }
 }
 
-const EVENT_TYPES = new Set(['accepted', 'plan', 'fragment', 'scene', 'fallback']);
+const EVENT_TYPES = new Set(['accepted', 'delta', 'plan', 'fragment', 'scene', 'fallback']);
 
 export class GenerationClient {
   private readonly fetcher: typeof fetch;

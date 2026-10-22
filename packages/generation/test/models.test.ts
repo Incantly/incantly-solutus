@@ -130,12 +130,41 @@ describe('the Anthropic client', () => {
     const stalled = fakeFetch([{ body: STREAM.slice(0, 200), stall: true }]);
     const late = await new AnthropicClient({ apiKey: 'k', fetch: stalled.fetcher, timeoutMs: 50 }).complete(call()).catch((e: unknown) => e);
     expect((late as ModelError).kind).toBe('timeout');
+    expect((late as ModelError).message).toContain('went silent');
 
     const cancel = new AbortController();
     const again = fakeFetch([{ body: STREAM.slice(0, 200), stall: true }]);
     const pending = new AnthropicClient({ apiKey: 'k', fetch: again.fetcher }).complete(call({ signal: cancel.signal })).catch((e: unknown) => e);
     setTimeout(() => cancel.abort(), 20);
     expect(((await pending) as ModelError).kind).toBe('aborted');
+  });
+
+  it('lets a stream live past the timeout while it keeps arriving, and cuts it once it goes quiet', async () => {
+    const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+    // Drip the body in ten pieces 80 ms apart: 800 ms total, well past a
+    // 120 ms cap, yet every silent gap is only 80 ms, so the call finishes.
+    const dribble = (async (url: string | URL | Request, init?: RequestInit) => {
+      void url;
+      void init;
+      const bytes = encoder.encode(STREAM);
+      const body = new ReadableStream<Uint8Array>({
+        async start(controller) {
+          const size = Math.ceil(bytes.length / 10);
+          for (let at = 0; at < bytes.length; at += size) {
+            await sleep(80);
+            controller.enqueue(bytes.slice(at, at + size));
+          }
+          controller.close();
+        },
+      });
+      return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+    }) as typeof fetch;
+    const reply = await new AnthropicClient({ apiKey: 'k', fetch: dribble, timeoutMs: 120 }).complete(call());
+    expect(reply.text).toBe('```json\n{"concept": "sine wave"}\n```');
+
+    const lateStall = fakeFetch([{ body: STREAM.slice(0, 250), stall: true }]);
+    const quiet = await new AnthropicClient({ apiKey: 'k', fetch: lateStall.fetcher, timeoutMs: 60 }).complete(call()).catch((e: unknown) => e);
+    expect((quiet as ModelError).kind).toBe('timeout');
   });
 
   it('maps an unreachable provider to a network error', async () => {

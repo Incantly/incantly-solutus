@@ -406,6 +406,8 @@ export class GenerationService {
           request,
           {
             onPlan: (plan) => send('plan', { generationId: state.id, skeleton: skeletonOf(plan) }),
+            // The model's text as it streams, for progress views and developer tools.
+            onText: (purpose, text) => send('delta', { purpose, text }),
             onFragment: (name, ok) => send('fragment', { name, ok }),
             // A different request that plans the same figure: no scene call.
             cached: (plan) => {

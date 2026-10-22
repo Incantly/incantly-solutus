@@ -58,6 +58,7 @@ export interface GenerationRun {
   readonly existing?: { readonly hasFragments: boolean; readonly hasSnapshot: boolean };
   readonly onSkeleton?: (skeleton: Skeleton) => void;
   readonly onStage?: (stage: GenerationStage) => void;
+  readonly onText?: (purpose: 'plan' | 'scene' | 'repair', delta: string) => void;
   readonly signals?: (signal: ProductSignal) => void;
   readonly signal?: AbortSignal;
   readonly now?: () => number;
@@ -101,7 +102,9 @@ export async function runGeneration(run: GenerationRun): Promise<GenerationOutco
   run.onStage?.('planning');
   try {
     for await (const event of run.client.generate(run.request, run.signal)) {
-      if (event.type === 'plan') {
+      if (event.type === 'delta') {
+        run.onText?.(event.purpose, event.text);
+      } else if (event.type === 'plan') {
         run.signals?.({ type: 'time-to-skeleton', ms: now() - started });
         run.onSkeleton?.(event.skeleton);
         run.onStage?.('building');
@@ -245,6 +248,13 @@ async function ladder(run: GenerationRun, message: FallbackMessage | null, reaso
   if (run.existing?.hasSnapshot) {
     return { kind: 'fallback', level: 'snapshot', reason, figure: null, message: 'The figure could not be remade. Its picture and description are kept.' };
   }
-  const why = reason === 'off' ? 'Making new figures is switched off for now.' : reason === 'limit' ? 'You have reached the limit for new figures for now.' : '';
+  const why =
+    reason === 'off'
+      ? 'Making new figures is switched off for now.'
+      : reason === 'limit'
+        ? 'You have reached the limit for new figures for now.'
+        : reason === 'timeout'
+          ? 'The model took too long to finish.'
+          : '';
   return { kind: 'fallback', level: 'text', reason, figure: null, message: `This figure could not be built.${why ? ` ${why}` : ''}` };
 }

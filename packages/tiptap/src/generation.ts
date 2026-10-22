@@ -55,11 +55,16 @@ export interface GeneratedFigure {
 
 export type FigureGenerationResult =
   | { readonly kind: 'figure'; readonly figure: GeneratedFigure; readonly notice?: string }
-  | { readonly kind: 'failed'; readonly message: string };
+  | { readonly kind: 'failed'; readonly message: string; readonly reason?: string; readonly level?: string };
 
 export type FigureGenerate = (
   request: FigureRequest,
-  hooks: { readonly onSkeleton: (skeleton: SkeletonView) => void; readonly onStage: (stage: GenerationStageView) => void; readonly signal: AbortSignal },
+  hooks: {
+    readonly onSkeleton: (skeleton: SkeletonView) => void;
+    readonly onStage: (stage: GenerationStageView) => void;
+    readonly onText?: (purpose: 'plan' | 'scene' | 'repair', delta: string) => void;
+    readonly signal: AbortSignal;
+  },
 ) => Promise<FigureGenerationResult>;
 
 /** Changes a figure the learner has, in their words (HO-8). */
@@ -106,6 +111,11 @@ const CHANGE_TEXT: Readonly<Record<GenerationStageView, string>> = {
   repairing: 'Fixing a problem…',
 };
 
+// Keep the latest progress state present long enough to reach a browser paint.
+// Network chunks can arrive together, especially under load, and without this
+// the approved figure can replace a freshly updated skeleton in the same turn.
+const MIN_PROGRESS_VISIBILITY_MS = 1_000;
+
 type Meta = { readonly add: { readonly id: string; readonly pos: number; readonly element: HTMLElement } } | { readonly remove: string };
 
 export const figureGenerationKey = new PluginKey<DecorationSet>('incantlyFigureGeneration');
@@ -131,6 +141,8 @@ class GenerationTask {
   private readonly status: HTMLElement;
   private readonly actions: HTMLElement;
   private concept: string | null = null;
+  private progressUpdatedAt = 0;
+  private hasStructuredProgress = false;
   finished = false;
 
   constructor(
@@ -175,6 +187,7 @@ class GenerationTask {
     this.actions.hidden = true;
     this.actions.replaceChildren();
     this.concept = null;
+    this.hasStructuredProgress = false;
     this.title.hidden = false;
     this.title.textContent = 'Making a figure';
     this.element.setAttribute('aria-label', 'Making a figure');
@@ -198,7 +211,11 @@ class GenerationTask {
   }
 
   private stage(stage: GenerationStageView): void {
-    if (!this.finished) this.status.textContent = STAGE_TEXT[stage];
+    if (!this.finished) {
+      this.status.textContent = STAGE_TEXT[stage];
+      this.progressUpdatedAt = Date.now();
+      if (stage !== 'planning') this.hasStructuredProgress = true;
+    }
   }
 
   /** The plan arrived: the card takes the figure's title and its control row. */
@@ -207,6 +224,8 @@ class GenerationTask {
     const doc = this.element.ownerDocument;
     this.concept = skeleton.concept;
     this.title.textContent = skeleton.concept;
+    this.progressUpdatedAt = Date.now();
+    this.hasStructuredProgress = true;
     this.element.setAttribute('aria-label', `Making a figure: ${skeleton.concept}`);
     const rows = skeleton.parameters.map((p) => {
       const label = doc.createElement('label');
@@ -228,6 +247,11 @@ class GenerationTask {
 
   private done(result: FigureGenerationResult): void {
     if (this.finished || this.controller.signal.aborted) return;
+    const remaining = this.hasStructuredProgress ? MIN_PROGRESS_VISIBILITY_MS - (Date.now() - this.progressUpdatedAt) : 0;
+    if (remaining > 0) {
+      setTimeout(() => this.done(result), remaining);
+      return;
+    }
     this.finished = true;
     // A warm frame nobody takes closes a little after this.
     this.lease?.release();
