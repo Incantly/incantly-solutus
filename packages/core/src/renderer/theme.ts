@@ -139,7 +139,8 @@ html.inc-frame, html.inc-frame body { margin: 0; padding: 0; background: transpa
 .inc-scene[data-panels='column'] { display: flex; flex-direction: column; gap: var(--inc-gap); }
 .inc-scene[data-panels='grid'] { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--inc-gap); }
 .inc-scene[data-panels] > * { margin: 0; }
-.inc-stage-host { position: relative; }
+/* The host stacks its own layers: the back canvas under the drawing, the front canvas over it. */
+.inc-stage-host { position: relative; isolation: isolate; }
 .inc-stage { display: block; width: 100%; height: var(--inc-scene-height, auto); overflow: visible; }
 .inc-stage[data-zoomed] { overflow: hidden; }
 /* A scene's own stroke-width, linecap, linejoin and font-size arrive as --inc-sw, --inc-cap, --inc-join and --inc-fs. */
@@ -226,6 +227,7 @@ html.inc-frame, html.inc-frame body { margin: 0; padding: 0; background: transpa
 .inc-measure-readout { position: absolute; left: 8px; bottom: 8px; max-width: calc(100% - 16px); margin: 0; padding: 4px 10px; border-radius: var(--inc-radius-sm); border: var(--inc-border-width) solid var(--inc-line); background: color-mix(in srgb, var(--inc-bg) 90%, transparent); color: var(--inc-fg); font-size: 0.86em; font-variant-numeric: tabular-nums; pointer-events: none; }
 .inc-stage[data-zoomed]:not([data-orbit]) { cursor: move; }
 .inc-dots { position: absolute; pointer-events: none; }
+.inc-dots--back { z-index: -1; }
 .inc-zoombar {
   position: absolute;
   top: 6px;
