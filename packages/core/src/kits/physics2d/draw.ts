@@ -154,7 +154,7 @@ export class Painter {
   /** Draws a tank; returns the outline of its walls. */
   tank(tank: Tank, tone: Tone | undefined): { readonly walls: PathHandle; readonly liquid: PathHandle } {
     const stage = this.ctx.stage;
-    const liquid = stage.path('', { layer: 'back', tone: tone ?? 'b', fill: true }).set({ 'fill-opacity': 0.28 });
+    const liquid = stage.path('', { layer: 'back', tone: tone ?? 'water', fill: true }).set({ 'fill-opacity': 0.28 });
     const surface = stage.path('', { layer: 'back', tone: tone ?? 'b' });
     const t = 0.1;
     const [x0, top] = this.view.toStage(tank.x0 - t, tank.height);

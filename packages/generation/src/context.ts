@@ -41,7 +41,7 @@ Rules for every scene
 3. Declare everything once, at the top level: controls, model, stages, elements, parts and callbacks. Callbacks only update what already exists; never create elements inside them.
 4. Build shapes once and move them with at, set, rotate and scale. Stage units work like pixels (text is 12 units tall), so give a stage a viewBox a few hundred units wide and scale the model to it. Keep every shape inside its stage at every parameter value. Let the learner touch the figure: when moving the main object would change a parameter, make it draggable (graph.handle, graph.drag, stage.drag, draggable bodies).
 5. Animate only from frame.time and frame.dt. A paused redraw (dt = 0) still draws the current state. Every value in range, both ends included, must draw without NaN; guard the plan's singular points.
-6. Colour comes only from tones: lo, mid, hi, lit, faint, a, b, c. Use one lit accent. Never write a colour value.
+6. Colour comes only from tones: lo, mid, hi, lit, faint, a, b, c, and water for liquids. Use one lit accent. Never write a colour value.
 7. Show the real thing: the actual formula and true units, with the kit's helpers (calc, vec, units, shapes, sym) instead of your own. Never call anything that is not in the contract.
 8. Register every part the plan names, with exactly that name, through part() on its stage or kit.
 9. Call inc.idea once with the plan's idea, inc.describe with a function of the model, and inc.steps with the plan's steps.

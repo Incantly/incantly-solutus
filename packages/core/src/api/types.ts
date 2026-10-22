@@ -8,7 +8,8 @@
  */
 
 /** Theme tones. Scenes never use literal colours. */
-export type Tone = 'lo' | 'mid' | 'hi' | 'lit' | 'faint' | 'a' | 'b' | 'c';
+/** Colours come only from tones; the theme gives each its light and dark value. `water` is for liquids. */
+export type Tone = 'lo' | 'mid' | 'hi' | 'lit' | 'faint' | 'a' | 'b' | 'c' | 'water';
 
 /** Shading for filled shapes: a lit ball, a lit cylinder or a soft top light. */
 export type Shade = 'sphere' | 'cylinder' | 'soft';

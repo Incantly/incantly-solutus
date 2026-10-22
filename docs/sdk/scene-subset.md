@@ -36,7 +36,7 @@ The validator parses with acorn (`ecmaVersion: 2020`, script) and walks the tree
 | `mount-only` | `inc.param`, `inc.model`, `inc.onFrame`, `inc.steps` and the other declarations inside a function |
 | `element-in-frame` | creating elements inside a callback that runs every frame or on every change |
 | `assign-global`, `assign-const`, `assign-sdk` | assigning to an undeclared name, a `const`, or SDK objects |
-| `hard-coded-colour`, `unknown-tone` | literal colours in strings; tones other than `lo`, `mid`, `hi`, `lit`, `faint`, `a`, `b`, `c` |
+| `hard-coded-colour`, `unknown-tone` | literal colours in strings; tones other than `lo`, `mid`, `hi`, `lit`, `faint`, `a`, `b`, `c`, `water` |
 | `stage-selector`, `missing-stage-host`, `no-stage` | stage hosts must be literal ids that exist in the HTML, and a scene must draw |
 | `too-many-params` | more than three parameters |
 | `budget-size`, `budget-ast`, `budget-depth`, `budget-string` | 16,000 characters, 6,000 syntax nodes, 24 levels of nesting, 600-character strings |

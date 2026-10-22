@@ -545,7 +545,7 @@ export const ALLOWED_NUMBER = [
 ] as const;
 
 /** Theme tones, the only way a scene picks a colour. */
-export const TONES = ['lo', 'mid', 'hi', 'lit', 'faint', 'a', 'b', 'c'] as const satisfies readonly Tone[];
+export const TONES = ['lo', 'mid', 'hi', 'lit', 'faint', 'a', 'b', 'c', 'water'] as const satisfies readonly Tone[];
 // Fails to compile if a tone is added to the type but not to the list.
 const _everyTone: Exclude<Tone, (typeof TONES)[number]> extends never ? true : false = true;
 

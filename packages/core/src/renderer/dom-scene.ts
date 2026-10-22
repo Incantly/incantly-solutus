@@ -13,7 +13,7 @@ export const SVG_NS = 'http://www.w3.org/2000/svg';
 const LAYERS: readonly Layer[] = ['back', 'mid', 'front', 'labels'];
 /** The only elements a scene can create, whatever a Worker sends. */
 const KINDS: ReadonlySet<string> = new Set(['g', 'path', 'line', 'circle', 'rect', 'text', 'polyline', 'use'] satisfies ElementKind[]);
-const TONE = /\binc-tone-(lo|mid|hi|lit|faint|a|b|c)\b/;
+const TONE = /\binc-tone-(lo|mid|hi|lit|faint|a|b|c|water)\b/;
 const SHADE = /\binc-shade-(sphere|cylinder|soft)\b/;
 
 /** How a stage answers the pointer, from its `interact` command. */

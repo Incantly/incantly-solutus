@@ -20,6 +20,7 @@ export const THEME_CSS = `
   --inc-a: #c2255c;
   --inc-b: #1971c2;
   --inc-c: #2b8a3e;
+  --inc-water: #1098ad;
   --inc-focus: #1971c2;
   --inc-danger: #c92a2a;
   --inc-shadow-color: rgba(20, 20, 30, 0.12);
@@ -60,6 +61,7 @@ export const THEME_CSS = `
   --inc-a: #f06595;
   --inc-b: #4dabf7;
   --inc-c: #69db7c;
+  --inc-water: #3bc9db;
   --inc-focus: #74c0fc;
   --inc-danger: #ff8787;
   --inc-shadow-color: rgba(0, 0, 0, 0.45);
@@ -79,6 +81,7 @@ export const THEME_CSS = `
     --inc-a: #f06595;
     --inc-b: #4dabf7;
     --inc-c: #69db7c;
+    --inc-water: #3bc9db;
     --inc-focus: #74c0fc;
     --inc-danger: #ff8787;
     --inc-shadow-color: rgba(0, 0, 0, 0.45);
@@ -157,6 +160,7 @@ html.inc-frame, html.inc-frame body { margin: 0; padding: 0; background: transpa
 .inc-stage .inc-tone-a { --inc-tone: var(--inc-a); }
 .inc-stage .inc-tone-b { --inc-tone: var(--inc-b); }
 .inc-stage .inc-tone-c { --inc-tone: var(--inc-c); }
+.inc-stage .inc-tone-water { --inc-tone: var(--inc-water); }
 .inc-stage .inc-lum-0 { --inc-face: color-mix(in srgb, var(--inc-tone, var(--inc-mid)) 55%, #000000); }
 .inc-stage .inc-lum-1 { --inc-face: color-mix(in srgb, var(--inc-tone, var(--inc-mid)) 68%, #000000); }
 .inc-stage .inc-lum-2 { --inc-face: color-mix(in srgb, var(--inc-tone, var(--inc-mid)) 80%, #000000); }
@@ -447,6 +451,7 @@ html.inc-frame, html.inc-frame body { margin: 0; padding: 0; background: transpa
   --inc-a: #9f1239;
   --inc-b: #1e40af;
   --inc-c: #3f6212;
+  --inc-water: #0e7490;
   --inc-focus: #1e40af;
   --inc-shadow-color: rgba(60, 45, 20, 0.14);
   --inc-font: 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
@@ -466,6 +471,7 @@ html.inc-frame, html.inc-frame body { margin: 0; padding: 0; background: transpa
   --inc-a: #ff9eb5;
   --inc-b: #7dd3fc;
   --inc-c: #8ef0b1;
+  --inc-water: #67e8f9;
   --inc-focus: #7dd3fc;
   --inc-danger: #ff9b9b;
   --inc-shadow-color: rgba(0, 10, 30, 0.5);
@@ -485,6 +491,7 @@ html.inc-frame, html.inc-frame body { margin: 0; padding: 0; background: transpa
   --inc-a: #9a3412;
   --inc-b: #4d5f8a;
   --inc-c: #5f7a3a;
+  --inc-water: #3f7f8c;
   --inc-focus: #9a3412;
   --inc-shadow-color: rgba(70, 50, 20, 0.16);
 }

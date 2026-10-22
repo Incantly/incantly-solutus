@@ -25,7 +25,7 @@ import { SceneApiError } from './errors';
 import { fmt } from './format';
 import type { GraphServices, SceneGraph, VNode } from './graph';
 
-export const TONES: ReadonlySet<string> = new Set<Tone>(['lo', 'mid', 'hi', 'lit', 'faint', 'a', 'b', 'c']);
+export const TONES: ReadonlySet<string> = new Set<Tone>(['lo', 'mid', 'hi', 'lit', 'faint', 'a', 'b', 'c', 'water']);
 export const LAYERS: ReadonlySet<string> = new Set<Layer>(['back', 'mid', 'front', 'labels']);
 export const SHADES: ReadonlySet<string> = new Set<Shade>(['sphere', 'cylinder', 'soft']);
 /** Dots one layer may hold. */

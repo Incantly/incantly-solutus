@@ -286,6 +286,15 @@ describe('liquids (PH-5)', () => {
     expect(sinker.force('buoyancy')[1]).toBeCloseTo(9800, 0);
     expect(sinker.force('normal')[1]).toBeCloseTo(9800, 0);
   });
+
+  it('draws the liquid in the water tone, which the theme gives a light and a dark value (6.9a)', async () => {
+    const { runtime } = run((inc) => void world(inc).tank({ x: 1, w: 4, depth: 2 }));
+    expect([...runtime.graph.nodes.values()].some((n) => n.tone === 'water')).toBe(true);
+    expect(validateSceneJs("const s = inc.svg('#s', { viewBox: [0, 0, 10, 10], title: 'T' });\ns.rect(0, 0, 4, 4, { tone: 'water', fill: true });").diagnostics).toEqual([]);
+    const { THEME_CSS } = await import('../src/renderer/theme');
+    expect(THEME_CSS.match(/--inc-water: #[0-9a-f]{6};/g)?.length).toBeGreaterThanOrEqual(3);
+    expect(THEME_CSS).toContain('.inc-stage .inc-tone-water { --inc-tone: var(--inc-water); }');
+  });
 });
 
 describe('charges and magnets (PH-4)', () => {

@@ -65,7 +65,7 @@ Tokens are the theme's CSS variables, given without the `--inc-` prefix. Values 
 | Token | What it sets |
 | --- | --- |
 | `bg`, `fg`, `muted`, `line`, `card` | Card background, text, secondary text, lines and borders, raised surfaces |
-| `a`, `b`, `c`, `lit` | The scene tones: the colours generated scenes draw with (`lit` is the highlight) |
+| `a`, `b`, `c`, `lit`, `water` | The scene tones: the colours generated scenes draw with (`lit` is the highlight, `water` is for liquids) |
 | `focus`, `danger` | Focus ring, error text |
 | `font`, `font-size` | Font family list and base size |
 | `radius`, `radius-sm` | Card corners, control corners |
