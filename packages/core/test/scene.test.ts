@@ -101,6 +101,15 @@ describe('scene graph', () => {
     expect(() => stage.circle(0, 0, 1, { parent: {} as never })).toThrow('Expected an element the SDK made');
   });
 
+  it('says why dots cannot stand where an element is needed, and what can', () => {
+    // Once a diffusion scene registered its particles, drawn as dots, as a part, and threw at mount.
+    const { stage } = setup();
+    const dots = stage.dots({ tone: 'a' });
+    expect(() => stage.part('particles', dots as never)).toThrow('Dots and fluids are drawn on a canvas, not as an element, so they cannot be a part');
+    expect(() => stage.part('particles', dots as never)).toThrow('the region they move in (stage.rect with fill: false)');
+    expect(() => stage.part('particles', {} as never)).toThrow('Expected an element the SDK made');
+  });
+
   it('registers named parts once, and renames an element registered again', () => {
     const { graph, parts, stage } = setup();
     const ball = stage.part('Ball', stage.circle(1, 1, 1), { label: 'Projectile', info: 'It flies.' });

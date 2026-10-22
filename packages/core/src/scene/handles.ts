@@ -43,6 +43,8 @@ function services(graph: SceneGraph): GraphServices {
 
 /** Maps handles back to their nodes. Objects a scene invents are not SDK handles. */
 const nodes = new WeakMap<object, VNode>();
+/** Dots and fluids: drawn on a canvas layer, with no element to stand for them. */
+const onCanvas = new WeakSet<object>();
 
 export function nodeOf(handle: unknown): VNode {
   let node = typeof handle === 'object' && handle !== null ? nodes.get(handle) : undefined;
@@ -50,6 +52,11 @@ export function nodeOf(handle: unknown): VNode {
   if (!node && typeof handle === 'object' && handle !== null && 'handle' in handle) {
     const inner = (handle as { handle: unknown }).handle;
     node = typeof inner === 'object' && inner !== null ? nodes.get(inner) : undefined;
+  }
+  if (!node && typeof handle === 'object' && handle !== null && onCanvas.has(handle)) {
+    throw new SceneApiError(
+      'Dots and fluids are drawn on a canvas, not as an element, so they cannot be a part, be dragged or hold elements: use an element drawn with them, such as the region they move in (stage.rect with fill: false) or a label beside them',
+    );
   }
   if (!node) throw new SceneApiError('Expected an element the SDK made, such as stage.circle(...) or graph.point(...); dots and plain objects cannot be used here');
   return node;
@@ -386,6 +393,7 @@ export class StageHandle implements Stage {
       },
     };
     graph.setDots(id, stage, layer, current, r, flat);
+    onCanvas.add(dots);
     return dots;
   }
 
@@ -503,6 +511,7 @@ export class StageHandle implements Stage {
         return fluid;
       },
     };
+    onCanvas.add(fluid);
     return fluid;
   }
 
