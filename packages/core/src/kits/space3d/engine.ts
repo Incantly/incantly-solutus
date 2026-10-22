@@ -643,9 +643,8 @@ export class Engine3D implements ViewController {
       }
       const limit = this.radius / 3;
       if (size > limit) {
-        const k = Math.min(6, Math.ceil(size / limit));
         const pieceStyle: FaceStyle = { ...style, smooth: true };
-        for (const piece of split(cam, k)) this.polygon(piece, piece.map((c) => this.camera.project(c)), pieceStyle, out, true);
+        for (const piece of split(cam, limit)) this.polygon(piece, piece.map((c) => this.camera.project(c)), pieceStyle, out, true);
         return;
       }
     }
@@ -958,30 +957,56 @@ export class Engine3D implements ViewController {
 }
 
 /** A polygon cut into k by k smaller pieces: a grid for a quad, a fan of subdivided triangles otherwise. */
-function split(polygon: readonly Vec3[], k: number): Vec3[][] {
+/**
+ * A large face as pieces no longer than `limit` across, so each sorts on its
+ * own. A quad is cut into a grid with as many rows and columns as its sides
+ * need, so a long thin face becomes a strip, not a square grid; other faces
+ * are fanned into triangles from their centre, and each triangle is halved
+ * across its longest side until it is short enough.
+ */
+function split(polygon: readonly Vec3[], limit: number): Vec3[][] {
   const mix = (a: Vec3, b: Vec3, t: number): Vec3 => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+  const length = (a: Vec3, b: Vec3) => Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+  const count = (side: number) => Math.max(1, Math.min(6, Math.ceil(side / limit)));
   const pieces: Vec3[][] = [];
   if (polygon.length === 4) {
     const [a, b, c, d] = polygon as [Vec3, Vec3, Vec3, Vec3];
+    const ku = count(Math.max(length(a, b), length(d, c)));
+    const kv = count(Math.max(length(a, d), length(b, c)));
     const at = (u: number, v: number) => mix(mix(a, b, u), mix(d, c, u), v);
-    for (let i = 0; i < k; i++) {
-      for (let j = 0; j < k; j++) pieces.push([at(i / k, j / k), at((i + 1) / k, j / k), at((i + 1) / k, (j + 1) / k), at(i / k, (j + 1) / k)]);
+    for (let i = 0; i < ku; i++) {
+      for (let j = 0; j < kv; j++) pieces.push([at(i / ku, j / kv), at((i + 1) / ku, j / kv), at((i + 1) / ku, (j + 1) / kv), at(i / ku, (j + 1) / kv)]);
     }
     return pieces;
   }
-  const centre = polygon.reduce<Vec3>((s, p) => [s[0] + p[0] / polygon.length, s[1] + p[1] / polygon.length, s[2] + p[2] / polygon.length], [0, 0, 0]);
-  for (let e = 0; e < polygon.length; e++) {
-    const p = polygon[e]!;
-    const q = polygon[(e + 1) % polygon.length]!;
-    // Barycentric rows of the triangle (centre, p, q), wound like the polygon.
-    const at = (i: number, j: number) => mix(mix(centre, p, i / k), mix(centre, q, i / k), i === 0 ? 0 : j / i);
-    for (let i = 0; i < k; i++) {
-      for (let j = 0; j <= i; j++) {
-        pieces.push([at(i, j), at(i + 1, j), at(i + 1, j + 1)]);
-        if (j < i) pieces.push([at(i, j), at(i + 1, j + 1), at(i, j + 1)]);
+  const halve = (t: readonly [Vec3, Vec3, Vec3], depth: number): void => {
+    let longest = 0;
+    let at = 0;
+    for (let e = 0; e < 3; e++) {
+      const l = length(t[e]!, t[(e + 1) % 3]!);
+      if (l > longest) {
+        longest = l;
+        at = e;
       }
     }
+    if (longest <= limit || depth >= 5) {
+      pieces.push([...t]);
+      return;
+    }
+    // Cut across the longest side, keeping the winding: (p, m, r) and (m, q, r).
+    const p = t[at]!;
+    const q = t[(at + 1) % 3]!;
+    const r = t[(at + 2) % 3]!;
+    const m = mix(p, q, 0.5);
+    halve([p, m, r], depth + 1);
+    halve([m, q, r], depth + 1);
+  };
+  if (polygon.length === 3) {
+    halve(polygon as unknown as readonly [Vec3, Vec3, Vec3], 0);
+    return pieces;
   }
+  const centre = polygon.reduce<Vec3>((s, p) => [s[0] + p[0] / polygon.length, s[1] + p[1] / polygon.length, s[2] + p[2] / polygon.length], [0, 0, 0]);
+  for (let e = 0; e < polygon.length; e++) halve([centre, polygon[e]!, polygon[(e + 1) % polygon.length]!], 0);
   return pieces;
 }
 
