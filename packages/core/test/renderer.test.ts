@@ -125,6 +125,51 @@ describe('trusted mount and renderer', () => {
     expect(number.value).toBe('8');
   });
 
+  it('stops when the page is hidden or the figure scrolls away, and goes on when it is back (RT-5)', () => {
+    // An IntersectionObserver the test drives, as the browser would on scrolling.
+    let report: (visible: boolean) => void = () => {};
+    const view = window as unknown as { IntersectionObserver?: unknown };
+    const original = view.IntersectionObserver;
+    view.IntersectionObserver = class {
+      constructor(callback: (entries: Array<{ isIntersecting: boolean }>) => void) {
+        report = (visible) => callback([{ isIntersecting: visible }]);
+      }
+      observe() {}
+      disconnect() {}
+    };
+    const hidden = (value: boolean) => {
+      Object.defineProperty(document, 'visibilityState', { value: value ? 'hidden' : 'visible', configurable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+    };
+    try {
+      const { figure, clock } = mount({ visibility: 'observe', autoplay: true });
+      report(true);
+      clock.advance();
+      const running = () => figure.runtime.needsFrame();
+      expect(running()).toBe(true);
+      // The learner switches tabs: the loop stops, time holds.
+      hidden(true);
+      clock.runUntilIdle();
+      expect(running()).toBe(false);
+      const time = figure.runtime.time;
+      clock.runUntilIdle();
+      expect(figure.runtime.time).toBe(time);
+      hidden(false);
+      clock.advance();
+      expect(running()).toBe(true);
+      // The figure scrolls out of view, then back.
+      report(false);
+      clock.runUntilIdle();
+      expect(running()).toBe(false);
+      report(true);
+      clock.advance();
+      expect(running()).toBe(true);
+    } finally {
+      view.IntersectionObserver = original;
+      Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    }
+  });
+
   it('writes nothing to the DOM when nothing changed', () => {
     const { figure, clock } = mount({ autoplay: false });
     clock.runUntilIdle();
