@@ -300,6 +300,22 @@ describe('formulas and tweens', () => {
     expect(wave?.evaluate({ x: Math.PI / 2, t: 0, A: 1 })).toBeCloseTo(1, 12);
   });
 
+  it('takes a built-in constant bound to its own value as the built-in, and refuses one bound to another', () => {
+    // Once a normal distribution scene bound pi: Math.PI and threw at mount.
+    let pdf: ReturnType<Inc['formula']> | undefined;
+    const fine = mount((inc) => {
+      const sd = inc.param('sd', { min: 0.5, max: 3, value: 1 });
+      pdf = inc.formula('exp(-x^2/(2*sd^2))/(sd*sqrt(2*pi))', { vars: { sd, pi: Math.PI } });
+    });
+    expect(fine.first.ui.error).toBeNull();
+    expect(pdf?.(0)).toBeCloseTo(1 / Math.sqrt(2 * Math.PI), 12);
+    // An eccentricity named e would read as Euler's number: still an error.
+    const clash = mount((inc) => {
+      inc.formula('e*x', { vars: { e: 0.3 } });
+    });
+    expect(clash.first.ui.error?.message).toContain('"e" is a built-in name and cannot be a variable');
+  });
+
   it('reports formula errors with their position', () => {
     const { first } = mount((inc) => {
       inc.formula('A*sin(x)', { vars: {} });

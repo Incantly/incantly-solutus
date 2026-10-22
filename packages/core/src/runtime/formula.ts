@@ -1,5 +1,5 @@
 import type { Formula, FormulaOptions, Param } from '../api/types';
-import { compileExpression, ExpressionError, type CompiledExpression } from '../expr';
+import { compileExpression, CONSTANTS, ExpressionError, type CompiledExpression } from '../expr';
 import { SceneApiError } from '../scene/errors';
 
 /** Longest formula a learner may type. */
@@ -91,7 +91,12 @@ export function createFormula(
   byName: () => ReadonlyMap<string, Param> = () => new Map(),
 ): Formula {
   if (typeof source !== 'string') throw new SceneApiError('inc.formula needs the formula as a string');
-  const vars = options?.vars ?? {};
+  const given = options?.vars ?? {};
+  // A built-in constant bound to its own value, as { pi: Math.PI }, is the built-in already: it is left out.
+  // Bound to another value, as an eccentricity named e, it is still an error, as reading it would read the constant.
+  const vars = Object.fromEntries(
+    Object.entries(given).filter(([name, value]) => !(Object.hasOwn(CONSTANTS, name) && typeof value === 'number' && Math.abs(value - CONSTANTS[name]!) < 1e-9)),
+  ) as typeof given;
   const names = Object.keys(vars);
   for (const name of names) {
     if (name === 'x' || name === 't') throw new SceneApiError(`"${name}" is reserved in formulas`);
