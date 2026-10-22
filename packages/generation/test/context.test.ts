@@ -12,6 +12,7 @@ import {
   nearestExample,
   planPrompt,
   reviewedConcepts,
+  reviewedFigures,
   scenePrompt,
   startingScene,
 } from '../src/context';
@@ -37,7 +38,14 @@ describe('the generation context', () => {
   it('names the reviewed concepts in the plan call, so a plan for one of them starts from its scene', () => {
     const concepts = reviewedConcepts();
     expect(concepts).toHaveLength(Object.keys(REFERENCE_SCENES).length);
-    expect(PLAN_FORMAT).toContain(`Concepts with a reviewed figure: ${concepts.join(', ')}.`);
+    // With the stage each is drawn on, so a plan for one picks the stage its scene can be adapted on.
+    const figures = reviewedFigures();
+    expect(figures).toHaveLength(concepts.length);
+    expect(PLAN_FORMAT).toContain(`Concepts with a reviewed figure, and the stage it is drawn on: ${figures.join('; ')}.`);
+    expect(figures).toContain('diffusion across a membrane (biology)');
+    expect(figures).toContain('the seasons (space3d)');
+    // Every stage a plan may choose is named, the chemistry and biology kits too.
+    for (const stage of CAPABILITIES.filter((c) => c.draws)) expect(PLAN_FORMAT).toMatch(new RegExp(`at least one stage: [^"]*\\b${stage.name}\\b`));
     for (const scene of Object.values(REFERENCE_SCENES)) {
       expect(startingScene({ ...scene.plan, idea: 'Something else entirely.' })?.id, scene.id).toBe(scene.id);
     }

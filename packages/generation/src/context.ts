@@ -57,7 +57,7 @@ export const PLAN_FORMAT = `PLAN format. Reply with one JSON object in a \`\`\`j
   "idea": "One sentence: what moves and what that motion means.",
   "kind": "graph" | "motion" | "diagram",
   "size": "quick" | "standard" | "rich",
-  "capabilities": ["catalog names only; at least one stage: graph2d, svg, space3d, graph3d, physics2d, chart or flow"],
+  "capabilities": ["catalog names only; at least one stage: ${stageNames()}"],
   "parameters": [{ "name": "camelCase", "unit": "m/s", "min": 5, "max": 20, "default": 12, "why": "a few words on these bounds" }],
   "model": { "inputs": ["every parameter name"], "outputs": [{ "name": "range", "dependsOn": ["speed", "angle"] }] },
   "parts": ["things drawn in the figure that steps point at; never readouts, sliders, buttons or formulas, which the kit shows itself"],
@@ -68,11 +68,29 @@ export const PLAN_FORMAT = `PLAN format. Reply with one JSON object in a \`\`\`j
 Sizes: quick (the default: one view, up to ${SIZE_BUDGETS.quick.controls} controls and ${SIZE_BUDGETS.quick.parts} parts), standard (a second view, such as a graph beside the scene: up to ${SIZE_BUDGETS.standard.controls} controls and ${SIZE_BUDGETS.standard.parts} parts), rich (several linked panels, only when the learner asks for that much: up to ${SIZE_BUDGETS.rich.controls} controls and ${SIZE_BUDGETS.rich.parts} parts).
 A parameter is a slider unless it says "control": "toggle" (min 0, max 1) or "control": "choice" with "options": ["first", "second"] (min 0, max one less than the options).
 List singular points where the model is undefined inside the bounds, or [] when there are none.
-Concepts with a reviewed figure: ${reviewedConcepts().join(', ')}. When the request is one of these, use that name exactly as the concept.`;
+Concepts with a reviewed figure, and the stage it is drawn on: ${reviewedFigures().join('; ')}. When the request is one of these, use that name exactly as the concept, and that stage unless the learner asks for another kind of figure.`;
 
 /** The concepts that have a reviewed scene; a plan that reuses one of these names starts from that scene. */
 export function reviewedConcepts(examples: Readonly<Record<string, ReferenceScene>> = REFERENCE_SCENES): string[] {
   return [...new Set(Object.values(examples).map((e) => e.plan.concept))].sort();
+}
+
+/**
+ * Each reviewed concept with the capabilities that draw its scene. A plan
+ * that names the concept but another stage writes the scene whole, as the
+ * reviewed one cannot be adapted onto a different stage; with the stage
+ * named, a plan picks it unless the learner wants another kind of figure.
+ */
+export function reviewedFigures(examples: Readonly<Record<string, ReferenceScene>> = REFERENCE_SCENES): string[] {
+  const figures = new Map<string, string>();
+  for (const e of Object.values(examples)) figures.set(e.plan.concept, `${e.plan.concept} (${e.plan.capabilities.filter((c) => capability(c)?.draws).join(', ')})`);
+  return [...figures.values()].sort();
+}
+
+/** The capabilities that draw a stage, as the plan format lists them. */
+function stageNames(): string {
+  const names = CAPABILITIES.filter((c) => c.draws).map((c) => c.name);
+  return `${names.slice(0, -1).join(', ')} or ${names.at(-1)}`;
 }
 
 export const BUILD_FORMAT = `BUILD format. This is the BUILD call: the plan is settled. Reply with exactly three fenced blocks, html, css and js, in that order, and nothing else: no plan, no JSON, no prose.
