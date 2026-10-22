@@ -54,6 +54,7 @@ Incantly turns a concept in a learner's notes into a safe, interactive teaching 
 - [Acceptance tests](implementation/acceptance-tests.md): executable product and engineering expectations.
 - [Generation bench](implementation/generation-bench.md): how long learners wait for a figure, measured with real model replies, and how it got there.
 - [Reference examples](implementation/reference-examples.md): inspected Claude artifacts and the implementation lessons they establish.
+- [Community gallery](implementation/gallery.md): publishing figures with their requests, review, the gallery for learners, and promotion to reviewed scenes.
 
 ### Research
 

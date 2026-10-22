@@ -168,17 +168,17 @@ test.describe('repair and fallback in the note', () => {
   });
 });
 
-test.describe('changing a figure in the note (HO-8)', () => {
-  const selectFigure = (page: Page) =>
-    page.evaluate(() => {
-      const editor = (window.__playground as unknown as { editor: { state: { doc: { descendants(f: (n: { type: { name: string } }, p: number) => void): void } }; commands: { setNodeSelection(pos: number): boolean } } }).editor;
-      let pos = -1;
-      editor.state.doc.descendants((node, p) => {
-        if (pos < 0 && node.type.name === 'incantlyFigure') pos = p;
-      });
-      editor.commands.setNodeSelection(pos);
+const selectFigure = (page: Page) =>
+  page.evaluate(() => {
+    const editor = (window.__playground as unknown as { editor: { state: { doc: { descendants(f: (n: { type: { name: string } }, p: number) => void): void } }; commands: { setNodeSelection(pos: number): boolean } } }).editor;
+    let pos = -1;
+    editor.state.doc.descendants((node, p) => {
+      if (pos < 0 && node.type.name === 'incantlyFigure') pos = p;
     });
+    editor.commands.setNodeSelection(pos);
+  });
 
+test.describe('changing a figure in the note (HO-8)', () => {
   test('keeps the figure when a change cannot be made, and makes it again on request', async ({ page }) => {
     await page.goto('/?page=generate');
     await ask(page, 'Explain projectile motion.');
@@ -205,6 +205,40 @@ test.describe('changing a figure in the note (HO-8)', () => {
     await expect.poll(async () => ((await figureAttrs(page))!.versions as Array<{ reason: string }>).map((v) => v.reason), { timeout: 15_000 }).toEqual(['restored']);
     expect((await figureAttrs(page))!.meta).toMatchObject({ ticket: (first.meta as { ticket?: string }).ticket });
     await waitDrawn(page);
+  });
+});
+
+test.describe('the community gallery (GL-1, BR-13)', () => {
+  test('a learner publishes a figure with their request, a reviewer accepts it, and a note adds it from the gallery', async ({ page }) => {
+    await page.goto('/?page=generate');
+    await page.evaluate(async () => (window.__playground as unknown as { clearGallery(): Promise<unknown> }).clearGallery());
+    await ask(page, 'Explain projectile motion.');
+    await waitDrawn(page);
+    await selectFigure(page);
+    const request = page.getByLabel('Publish the selected figure, with what you asked for');
+    await expect(request).toHaveValue('Explain projectile motion.');
+    await page.getByRole('button', { name: 'Publish' }).click();
+    const status = page.locator('.gallery-status');
+    await expect(status).toHaveText('Published: it shows in the gallery once a reviewer accepts it.');
+    const id = (await status.getAttribute('data-id'))!;
+    // Nobody sees it before a reviewer accepts it.
+    await page.getByRole('button', { name: 'Show the gallery' }).click();
+    await expect(page.locator('.gallery-list li')).toHaveText(['No figures have been accepted yet.']);
+    await page.evaluate(async (entry) => (window.__playground as unknown as { review(id: string, status: string): Promise<unknown> }).review(entry, 'accepted'), id);
+    await page.getByRole('button', { name: 'Show the gallery' }).click();
+    await expect(page.locator('.gallery-list li')).toContainText(['projectile motion "Explain projectile motion."']);
+    await page.getByRole('button', { name: 'Add projectile motion to the note' }).click();
+    await expect(figure(page)).toHaveCount(2);
+    const added = figure(page).nth(1);
+    await expect(added).toHaveAttribute('data-state', 'live', { timeout: 15_000 });
+    await added.scrollIntoViewIfNeeded();
+    await expect(added.frameLocator('iframe').locator('svg.inc-stage')).toBeVisible();
+    // The gallery gave it a ticket of its own, so the note can have it repaired or changed.
+    const attrs = await page.evaluate(() =>
+      (window.__playground as unknown as Handle).editor.getJSON().content?.filter((n) => n.type === 'incantlyFigure').map((n) => n.attrs),
+    );
+    expect((attrs![1]!.meta as { ticket?: string }).ticket).toMatch(/^[\w-]+\.[\w-]+$/);
+    expect(attrs![1]!.fragments).toEqual(attrs![0]!.fragments);
   });
 });
 

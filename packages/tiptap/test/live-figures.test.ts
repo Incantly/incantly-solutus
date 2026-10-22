@@ -330,6 +330,13 @@ describe('live figures: persistence', () => {
     expect(await view(0).picture()).toBe(PNG);
   });
 
+  it('gives the gallery what it needs to take a figure: fragments, ticket and concept, or nothing without a ticket (GL-1)', async () => {
+    const figure = (figureId: string, meta: Record<string, unknown>) => ({ type: 'incantlyFigure', attrs: { figureId, fragments: FRAGMENTS, concept: 'waves', meta } });
+    const { view } = setup({ content: { type: 'doc', content: [figure('signed', { ticket: 'payload.signature' }), figure('unsigned', {})] } });
+    expect(await view(0).publication()).toEqual({ ticket: 'payload.signature', fragments: FRAGMENTS, title: 'waves' });
+    expect(await view(1).publication()).toBeNull();
+  });
+
   it('keeps learner values out of undo, while undo still works for prose', async () => {
     const { editor, fake, observer, figures, attrs } = setup();
     editor.commands.setTextSelection(1);

@@ -373,6 +373,19 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
     return this.fragments();
   }
 
+  /**
+   * What the community gallery needs to take this figure (GL-1): its
+   * fragments, the ticket that proves the service made them, and its concept
+   * for a title. The host adds the request the learner publishes it with.
+   * Null for a figure with no ticket, which the gallery would turn down.
+   */
+  async publication(): Promise<{ readonly ticket: string; readonly fragments: FigureFragments; readonly title: string } | null> {
+    const ticket = this.attrs.meta.ticket;
+    if (!ticket) return null;
+    const fragments = await this.fragments().catch(() => null);
+    return fragments ? { ticket, fragments, title: this.attrs.concept } : null;
+  }
+
   private async fragments(): Promise<FigureFragments | null> {
     const attrs = this.attrs;
     if (attrs.fragments) return attrs.fragments;

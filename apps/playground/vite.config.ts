@@ -7,8 +7,10 @@ import { defineConfig, type Plugin, type ViteDevServer } from 'vite';
  * INCANTLY_MODEL=anthropic and ANTHROPIC_API_KEY), and /api/fault/<fault>/v1
  * a reference model that injects that fault, or /api/fault/<fault>-stubborn/v1
  * one whose repairs change nothing. Dev only: /api/dev/token mints a token
- * for a test learner, /api/dev/switch turns generation off and on, and
- * /api/dev/records lists the failure records.
+ * for a test learner, /api/dev/switch turns generation off and on,
+ * /api/dev/records lists the failure records, /api/dev/gallery/review
+ * accepts or turns down a published figure, as the gallery command does, and
+ * /api/dev/gallery/clear empties the gallery.
  */
 const DEV_SECRET = 'playground-only-secret-never-used-in-production';
 const DEV_TICKET_SECRET = 'playground-only-ticket-secret-never-used-in-production';
@@ -17,6 +19,8 @@ type Generation = typeof import('@incantly/generation');
 
 function generationService(): Plugin {
   let enabled = true;
+  // One gallery for every service the dev server mounts, kept in memory.
+  let gallery: import('@incantly/generation').MemoryGalleryStore | null = null;
   const services = new Map<string, { handle(req: IncomingMessage, res: ServerResponse): Promise<void>; records: { records: unknown[] } }>();
 
   async function serviceFor(server: ViteDevServer, prefix: string, fault: string | null) {
@@ -30,6 +34,7 @@ function generationService(): Plugin {
         ? new g.AnthropicClient({ apiKey: process.env.ANTHROPIC_API_KEY ?? '' })
         : g.referenceModel({ fault: name, stubborn, latencyMs: 250, chunk: 48 });
     const records = new g.MemoryRecords();
+    gallery ??= new g.MemoryGalleryStore();
     const service = new g.GenerationService({
       model,
       authenticate: g.hmacAuthenticator(DEV_SECRET),
@@ -39,6 +44,7 @@ function generationService(): Plugin {
       limits: { ...g.DEFAULT_LIMITS, perMinute: 60, perDay: 1000, concurrent: 6 },
       // Figures that hit a problem while live are repaired in the background (RP-7).
       ticketSecret: DEV_TICKET_SECRET,
+      gallery,
     });
     const entry = { handle: service.handle, records };
     services.set(prefix, entry);
@@ -63,6 +69,18 @@ function generationService(): Plugin {
             return json(200, { enabled });
           }
           if (path === '/api/dev/records') return json(200, [...services.values()].flatMap((s) => s.records.records));
+          if (path === '/api/dev/gallery/clear') {
+            gallery?.entries.clear();
+            return json(200, { cleared: true });
+          }
+          if (path === '/api/dev/gallery/review') {
+            const params = new URL(req.url ?? '', 'http://x').searchParams;
+            const entry = gallery ? await gallery.get(params.get('id') ?? '') : null;
+            const status = params.get('status');
+            if (!entry || !gallery || (status !== 'accepted' && status !== 'rejected')) return json(404, { reviewed: false });
+            await gallery.put({ ...entry, status, reviewedAt: new Date().toISOString() });
+            return json(200, { reviewed: true });
+          }
           const faulty = /^(\/api\/fault\/([a-z-]+)\/v1)\//.exec(path);
           const prefix = faulty ? faulty[1]! : '/api/v1';
           const service = await serviceFor(server, prefix, faulty ? faulty[2]! : null);
