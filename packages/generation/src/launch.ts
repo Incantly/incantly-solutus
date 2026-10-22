@@ -19,9 +19,26 @@ const LAUNCH: ReadonlyArray<readonly [id: string, concept: string, phrasings: re
   ['derivative', 'derivative as slope', ['Show the derivative as the slope of the tangent line.', 'Help me understand what a derivative means on a graph.']],
 ];
 
+/**
+ * The concepts reviewed since launch, which bring in the chemistry and biology
+ * kits, a ready-made 3D model and a fluid: two phrasings each, measured with
+ * the launch set when the bench runs with --set all.
+ */
+const LATER: ReadonlyArray<readonly [id: string, concept: string, phrasings: readonly [string, string]]> = [
+  ['cells', 'animal, plant and bacterial cells', ['Compare an animal cell, a plant cell and a bacterium.', 'Show me the organelles inside a plant cell.']],
+  ['diffusion', 'diffusion across a membrane', ['Show particles diffusing across a membrane.', 'How does active transport move particles against a concentration gradient?']],
+  ['combustion', 'bond energies in combustion', ['Explain why burning methane releases energy, using bond energies.', 'Show the energy profile of a combustion reaction.']],
+  ['seasons', 'the seasons', ['Why do we have seasons on Earth?', "Show how Earth's tilted axis causes summer and winter."]],
+  ['magnus', 'the Magnus effect', ['How does a spinning ball curve through the air?', 'Explain the Magnus effect with air flowing past a spinning cylinder.']],
+];
+
 /** Each launch concept's reviewed scene, withheld when the bench measures a concept the library lacks. */
 const EXAMPLES: Readonly<Record<string, string>> = { sine: 'sine-wave', lens: 'thin-lens' };
 
-export const LAUNCH_REQUESTS: readonly BenchRequest[] = LAUNCH.flatMap(([id, concept, phrasings]) =>
-  phrasings.map((prompt, i) => ({ id: `${id}-${i + 1}`, concept, request: { prompt }, example: EXAMPLES[id] ?? id })),
-);
+const requestsOf = (set: typeof LAUNCH): BenchRequest[] =>
+  set.flatMap(([id, concept, phrasings]) => phrasings.map((prompt, i) => ({ id: `${id}-${i + 1}`, concept, request: { prompt }, example: EXAMPLES[id] ?? id })));
+
+export const LAUNCH_REQUESTS: readonly BenchRequest[] = requestsOf(LAUNCH);
+
+/** The concepts reviewed since launch, in the same form. */
+export const LATER_REQUESTS: readonly BenchRequest[] = requestsOf(LATER);

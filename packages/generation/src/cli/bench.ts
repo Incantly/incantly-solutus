@@ -2,7 +2,7 @@ import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync } from 
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { benchRound, readJson, type BenchCondition, type BenchLatency, type BenchReply, type BenchResult, type PendingCall } from '../bench';
-import { LAUNCH_REQUESTS } from '../launch';
+import { LATER_REQUESTS, LAUNCH_REQUESTS } from '../launch';
 import { spread } from '../metrics';
 
 /**
@@ -34,6 +34,8 @@ const { values } = parseArgs({
     calibration: { type: 'boolean', default: false },
     deadline: { type: 'string' },
     latency: { type: 'string', default: 'text' },
+    // launch: the twelve launch concepts (PRD 17.8); all: with the concepts reviewed since.
+    set: { type: 'string', default: 'launch' },
   },
 });
 
@@ -47,7 +49,8 @@ const conditions = values.conditions.split(',') as BenchCondition[];
 
 function requests() {
   const only = values.only?.split(',');
-  return LAUNCH_REQUESTS.filter((r) => !only || only.some((o) => r.id.startsWith(o)));
+  const set = values.set === 'all' ? [...LAUNCH_REQUESTS, ...LATER_REQUESTS] : LAUNCH_REQUESTS;
+  return set.filter((r) => !only || only.some((o) => r.id.startsWith(o)));
 }
 
 function replies(): BenchReply[] {
@@ -178,7 +181,7 @@ function report(results: readonly BenchResult[], overheadMs: Record<string, numb
   const done = results.filter((r) => !r.pending);
   lines.push('# Generation bench', '');
   lines.push(
-    `${done.length} generations: ${requests().length} launch requests (PRD 17.8) in ${conditions.length} condition${conditions.length > 1 ? 's' : ''}. Plans on ${values.plan}, scenes and repairs on ${values.scene}, effort ${values.effort}, each call one subagent.`,
+    `${done.length} generations: ${requests().length} requests (${values.set === 'all' ? 'the launch set of PRD 17.8 and the concepts reviewed since' : 'the launch set of PRD 17.8'}) in ${conditions.length} condition${conditions.length > 1 ? 's' : ''}. Plans on ${values.plan}, scenes and repairs on ${values.scene}, effort ${values.effort}, each call one subagent.`,
     "Times are what a learner waits for, on the pipeline's own clock: each model call's time plus this machine's validation and probe. Calls are cut off at the deadline as the service would cut them.",
     latency === 'text'
       ? 'Subagents think before some replies; the service calls models with thinking off, so each call counts from its start to the end of its reply less the time spent thinking. The last section gives the times as measured, thinking included.'
