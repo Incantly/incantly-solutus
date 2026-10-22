@@ -51,10 +51,10 @@ const circle = (lat) => {
 };
 space.line(circle(0), { parent: frame, tone: 'faint' });
 const parallel = space.line(circle(latitude.value), { parent: frame, tone: 'c' });
-// The night side: a shadow over the half of Earth turned away from the Sun, just inside its outline.
+// The night side: a shadow over the half of Earth turned away from the Sun, lying on its surface and drawn over it.
 const dome = [];
-for (let i = 0; i <= 8; i++) dome.push([0.99 * E * Math.cos((i * Math.PI) / 16), 0.99 * E * Math.sin((i * Math.PI) / 16)]);
-const night = space.lathe(dome, { look: 'shadow', open: true, segments: 24 });
+for (let i = 0; i <= 8; i++) dome.push([E * Math.cos((i * Math.PI) / 16), E * Math.sin((i * Math.PI) / 16)]);
+const night = space.lathe(dome, { look: 'shadow', open: true, segments: 24, bias: 0.1 * E });
 const spot = space.point([R - E, 0, 0], { tone: 'lit' });
 const light = space.arrow([0.9, 0, 0], [R - E - 0.15, 0, 0], { tone: 'lit' });
 space.label(sun, 'Sun');

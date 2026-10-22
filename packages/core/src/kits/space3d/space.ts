@@ -376,52 +376,54 @@ export class Space3DApi implements Space3D {
     this.stage = engine.ctx.stage;
   }
 
-  private solid(make: (segments: number) => import('./mesh').Mesh, round: boolean, options: Solid3DOptions | undefined, fallbackTone: Tone | null = 'mid'): Object3D {
+  private solid(make: (segments: number) => import('./mesh').Mesh, round: boolean, options: Solid3DOptions | undefined, name: string, fallbackTone: Tone | null = 'mid'): Object3D {
     const segments = round ? segmentsOf(options?.segments) : null;
     const item = new Item(
       { type: 'mesh', mesh: make(segments ?? 0), segments, rebuild: round ? make : null },
       toneOf(options?.tone, fallbackTone),
       parentOf(options?.parent, this.engine),
     );
+    item.name = name;
     place(item, options, this.coords);
     return new Object3DHandle(this.engine, item, this.coords);
   }
 
   box(size: number | Vec3, options?: Solid3DOptions): Object3D {
     const [sx, sy, sz] = typeof size === 'number' ? [size, size, size] : readVec3(size, 'box size');
-    return this.solid(() => boxMesh(sx, sy, sz), false, options);
+    return this.solid(() => boxMesh(sx, sy, sz), false, options, 'box');
   }
 
   sphere(r: number, options?: Solid3DOptions): Object3D {
     const radius = finiteNumber(r, 'sphere radius');
     if (!(radius > 0)) throw new SceneApiError('sphere radius must be above 0');
     const item = new Item({ type: 'sphere', r: radius, segments: segmentsOf(options?.segments) }, toneOf(options?.tone, 'mid'), parentOf(options?.parent, this.engine));
+    item.name = 'sphere';
     place(item, options, this.coords);
     return new Object3DHandle(this.engine, item, this.coords);
   }
 
   cylinder(r: number, h: number, options?: Solid3DOptions): Object3D {
-    return this.solid((n) => cylinderMesh(r, h, n), true, options);
+    return this.solid((n) => cylinderMesh(r, h, n), true, options, 'cylinder');
   }
 
   cone(r: number, h: number, options?: Solid3DOptions): Object3D {
-    return this.solid((n) => coneMesh(r, h, n), true, options);
+    return this.solid((n) => coneMesh(r, h, n), true, options, 'cone');
   }
 
   plane(w: number, d: number, options?: Solid3DOptions): Object3D {
-    return this.solid(() => planeMesh(w, d), false, options, 'faint');
+    return this.solid(() => planeMesh(w, d), false, options, 'plane', 'faint');
   }
 
   torus(R: number, r: number, options?: Solid3DOptions): Object3D {
     if (!(R > r)) throw new SceneApiError('A torus needs its ring radius R larger than its tube radius r');
-    return this.solid((n) => torusMesh(R, r, n), true, options);
+    return this.solid((n) => torusMesh(R, r, n), true, options, 'torus');
   }
 
   tube(from: Vec3, to: Vec3, r: number, options: Solid3DOptions = {}): Object3D {
     const a = this.coords.point(readVec3(from, 'tube from'));
     const b = this.coords.point(readVec3(to, 'tube to'));
     const { length, position, rotation } = tubePlacement(a, b);
-    const handle = this.solid((n) => cylinderMesh(r, length, n), true, options);
+    const handle = this.solid((n) => cylinderMesh(r, length, n), true, options, 'tube');
     const item = itemOf(handle, 'tube');
     item.position = position;
     if (rotation) item.rotation = rotation;
@@ -430,13 +432,13 @@ export class Space3DApi implements Space3D {
 
   mesh(data: Mesh3DData, options?: Solid3DOptions): Object3D {
     const mesh = customMesh(data);
-    return this.solid(() => mesh, false, options);
+    return this.solid(() => mesh, false, options, 'mesh');
   }
 
   lathe(profile: ReadonlyArray<Vec2>, options: LatheOptions = {}): Object3D {
     const points = copyProfile(profile);
     const open = options.open === true;
-    return this.solid((n) => latheMesh(points, n, open), true, options);
+    return this.solid((n) => latheMesh(points, n, open), true, options, 'lathe');
   }
 
   /**
@@ -557,6 +559,7 @@ export class Space3DApi implements Space3D {
       const lists = name === undefined ? collect : [...collect, pieceSolids];
       if (name !== undefined) {
         outer = new Item({ type: 'group' }, resolved, parent);
+        outer.piece = name;
         if (at) outer.position = at;
         if (node.hidden === true) outer.visible = false;
         if (tone === 'main') mains.push(outer);
@@ -566,6 +569,7 @@ export class Space3DApi implements Space3D {
       }
       const holder = outer ?? parent;
       const keep = (solid: Item) => {
+        solid.name = shape ?? null;
         solid.look = lookAll ?? look;
         biases.push([solid, nodeBias]);
         for (const list of lists) list.push(solid);

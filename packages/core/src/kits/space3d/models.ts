@@ -190,10 +190,11 @@ const CAR: ModelData = {
       name: 'wheels',
       label: 'Wheels',
       tone: 'trim',
-      children: corners(0.6, 0.42, 0.2, {
+      // Just clear of the body's sides, so no wheel passes through it.
+      children: corners(0.6, 0.51, 0.2, {
         children: [
           { cylinder: [0.2, 0.15], rotate: WHEEL_Y },
-          { cylinder: [0.09, 0.17], rotate: WHEEL_Y, tone: 'lo', segments: 12 },
+          { cylinder: [0.09, 0.16], rotate: WHEEL_Y, tone: 'lo', segments: 12 },
         ],
       }),
     },
@@ -543,7 +544,15 @@ const PLANET: ModelData = {
   trim: 'hi',
   nodes: [
     { name: 'planet', label: 'Planet', sphere: 1 },
-    { name: 'axis', label: 'Axis', tone: 'trim', hidden: true, tube: [[0, 0, -1.3], [0, 0, 1.3], 0.02], segments: 8 },
+    // The axis shows where it stands out of the planet; what would run inside it is never drawn, so nothing passes through the planet.
+    {
+      name: 'axis',
+      label: 'Axis',
+      tone: 'trim',
+      hidden: true,
+      segments: 8,
+      children: [{ tube: [[0, 0, 1], [0, 0, 1.3], 0.02] }, { tube: [[0, 0, -1.3], [0, 0, -1], 0.02] }],
+    },
   ],
 };
 

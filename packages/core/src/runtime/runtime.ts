@@ -658,6 +658,11 @@ export class SceneRuntime {
     if (redraw) this.dirty = true;
   }
 
+  /** The stages whose kit owns their view, with their controllers: for offline checks (CH-2). */
+  viewControllers(): Array<readonly [number, ViewController]> {
+    return this.lifecycle === 'mounted' ? [...this.views] : [];
+  }
+
   /** Tells the renderer how each stage answers the pointer. */
   private publishInteractions(): void {
     for (const stage of this.graph.stages) {

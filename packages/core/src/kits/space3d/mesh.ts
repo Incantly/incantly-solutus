@@ -17,6 +17,43 @@ export interface Mesh {
   readonly twoSided: boolean;
   /** Distance from the centre to the farthest corner. */
   readonly radius: number;
+  /**
+   * Convex: every corner lies on or behind every face. Seen from anywhere,
+   * its faces turned to the viewer never cover each other, and where one
+   * turned away shows through, it is behind the one turned to the viewer.
+   */
+  readonly convex: boolean;
+}
+
+/** Corner-by-face checks above this, convexity goes unchecked: a mesh that large is drawn as not convex. */
+const CONVEX_CHECKS = 200_000;
+
+/** Whether every corner lies on or behind the plane of every face (Newell's normal, pointing out). */
+function isConvexMesh(vertices: readonly Vec3[], faces: readonly (readonly number[])[], radius: number): boolean {
+  if (faces.length * vertices.length > CONVEX_CHECKS) return false;
+  const slack = 1e-7 * Math.max(radius, 1e-9);
+  for (const face of faces) {
+    let nx = 0;
+    let ny = 0;
+    let nz = 0;
+    let cx = 0;
+    let cy = 0;
+    let cz = 0;
+    for (let i = 0; i < face.length; i++) {
+      const a = vertices[face[i]!]!;
+      const b = vertices[face[(i + 1) % face.length]!]!;
+      nx += (a[1] - b[1]) * (a[2] + b[2]);
+      ny += (a[2] - b[2]) * (a[0] + b[0]);
+      nz += (a[0] - b[0]) * (a[1] + b[1]);
+      cx += a[0] / face.length;
+      cy += a[1] / face.length;
+      cz += a[2] / face.length;
+    }
+    const length = Math.hypot(nx, ny, nz);
+    if (length < 1e-12) continue;
+    for (const v of vertices) if (((v[0] - cx) * nx + (v[1] - cy) * ny + (v[2] - cz) * nz) / length > slack) return false;
+  }
+  return true;
 }
 
 export const MAX_MESH_FACES = 2000;
@@ -36,7 +73,7 @@ function finish(vertices: Vec3[], faces: number[][], smooth: boolean, twoSided: 
     }
   }
   const radius = vertices.reduce((r, v) => Math.max(r, Math.hypot(v[0], v[1], v[2])), 0);
-  return { vertices, faces, edges, smooth, twoSided, radius };
+  return { vertices, faces, edges, smooth, twoSided, radius, convex: isConvexMesh(vertices, faces, radius) };
 }
 
 function positive(value: unknown, name: string): number {

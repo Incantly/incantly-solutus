@@ -16,6 +16,51 @@ export interface ViewController {
   readonly views: readonly string[];
   /** Who zooms the stage: the kit (`runtime`), or the renderer through its view box when the kit cannot redraw everything. */
   mode?(): 'runtime' | 'viewbox';
+  /**
+   * For offline checks (CH-2): draws the stage turned to `turn`, or as it
+   * stands, and audits the order it drew in. Costs far more than a draw.
+   */
+  audit?(turn?: AuditTurn): DepthAudit;
+}
+
+/** A camera turn, in degrees: yaw about the upright axis, pitch down toward the target. */
+export interface AuditTurn {
+  readonly yaw: number;
+  readonly pitch: number;
+}
+
+/** Two pieces of a 3D drawing where the farther is drawn over the nearer. */
+export interface DepthViolation {
+  /** The piece drawn underneath: a part's name, or the kind of thing. */
+  readonly under: string;
+  /** The piece drawn over it. */
+  readonly over: string;
+  /** How much of the stage shows it, in square stage units. */
+  readonly area: number;
+  /** A stage point where it shows. */
+  readonly at: Vec2;
+}
+
+/** The depth-order audit of one drawing: where two pieces overlap on the stage, the nearer must be drawn on top. */
+export interface DepthAudit {
+  readonly pieces: number;
+  /** Pairs whose boxes overlap on the stage, all checked. */
+  readonly pairs: number;
+  /** Pairs drawn in the wrong order: the nearer is underneath, and drawing it later would be right. */
+  readonly violations: readonly DepthViolation[];
+  /**
+   * Pairs that pass through each other: each is nearer somewhere in their
+   * overlap, so no drawing order shows both right. The geometry crosses
+   * itself; the audit names them and does not fail on them.
+   */
+  readonly crossings: readonly DepthViolation[];
+  /**
+   * Pairs drawn in the wrong order because their right order was in a ring:
+   * three or more pieces that each lie over the next, so that no order shows
+   * them all right. The engine gave up the least sure order of the ring; the
+   * audit names them and does not fail on them.
+   */
+  readonly rings: readonly DepthViolation[];
 }
 
 export interface ParamInfo {
