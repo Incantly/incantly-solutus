@@ -9,6 +9,7 @@ import {
   createFixtureDocument,
   figureViews,
   pendingFigures,
+  sanitizeVersions,
   type FigureChange,
   type FigureGenerate,
   type FigureGenerationResult,
@@ -61,8 +62,12 @@ class FakeFigure implements FigureHandle {
 
 const editors: Editor[] = [];
 
-function setup(generate: FigureGenerate, options: { signals?: (s: FigureSignal) => void; figures?: number; change?: FigureChange; meta?: Record<string, unknown> } = {}) {
+function setup(
+  generate: FigureGenerate,
+  options: { signals?: (s: FigureSignal) => void; figures?: number; change?: FigureChange; meta?: Record<string, unknown>; store?: boolean } = {},
+) {
   const mounts: FakeFigure[] = [];
+  const store = new MemoryFigureStore();
   const adapter: ExecutionAdapter = {
     name: 'fake',
     mount(container, _fragments, mountOptions = {}) {
@@ -85,7 +90,7 @@ function setup(generate: FigureGenerate, options: { signals?: (s: FigureSignal) 
       StarterKit,
       FigureNode.configure({
         adapter,
-        store: new MemoryFigureStore(),
+        store: options.store === false ? null : store,
         scheduler: { settleMs: 10, createObserver },
         ...(options.signals ? { signals: options.signals } : {}),
       }),
@@ -100,7 +105,7 @@ function setup(generate: FigureGenerate, options: { signals?: (s: FigureSignal) 
   const figures = () => editor.getJSON().content?.filter((n) => n.type === 'incantlyFigure') ?? [];
   const card = () => editor.view.dom.querySelector<HTMLElement>('figure.incantly-figure--generating');
   const show = (dom: Element) => near([{ target: dom, isIntersecting: true }]);
-  return { editor, figures, card, mounts, show };
+  return { editor, figures, card, mounts, show, store };
 }
 
 beforeEach(() => vi.useFakeTimers());
@@ -302,6 +307,70 @@ describe('changing a figure in a note (HO-8)', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(attrs(editor).values).toEqual({});
     expect(attrs(editor).fragments).toEqual(FRAGMENTS);
+  });
+
+  it('keeps the figure as it was in its history, and brings it back, which undo can undo (HO-9)', async () => {
+    const { generate } = controlled();
+    const moon = { ...FRAGMENTS, js: `${FRAGMENTS.js}\n// moon` };
+    const change: FigureChange = async () => ({ kind: 'figure', figure: { ...FIGURE, concept: 'projectile on the Moon', fragments: moon, ticket: 'signed.moon' } });
+    const { editor, store } = setup(generate, { figures: 1, change, meta: { ticket: 'signed.figure', generationId: 'gen-1' } });
+    select(editor);
+    editor.commands.changeFigure({ prompt: 'Make gravity weaker, like on the Moon' });
+    await vi.advanceTimersByTimeAsync(0);
+    const [kept] = attrs(editor).versions as Array<{ fragmentsRef: string; concept: string; reason: string; ticket?: string }>;
+    expect(kept).toMatchObject({ concept: 'projectile motion', reason: 'changed', ticket: 'signed.figure' });
+    expect(await store.getFragments(kept!.fragmentsRef)).toEqual(FRAGMENTS);
+    // The history keeps content only: never the learner's request.
+    expect(JSON.stringify(attrs(editor).versions)).not.toContain('Moon');
+    const history = editor.view.dom.querySelector<HTMLDetailsElement>('figure.incantly-figure .incantly-figure__versions')!;
+    expect(history.hidden).toBe(false);
+    expect(history.querySelector('summary')!.textContent).toBe('Earlier versions (1)');
+    expect(history.querySelector('li')!.textContent).toContain('Before a change');
+    history.querySelector<HTMLButtonElement>('button.incantly-figure__restore')!.click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(attrs(editor)).toMatchObject({ fragments: null, fragmentsRef: kept!.fragmentsRef, concept: 'projectile motion', values: {}, meta: { ticket: 'signed.figure' } });
+    const versions = attrs(editor).versions as Array<{ fragmentsRef: string; reason: string; concept: string }>;
+    expect(versions).toHaveLength(1);
+    expect(versions[0]).toMatchObject({ reason: 'restored', concept: 'projectile on the Moon' });
+    expect(await store.getFragments(versions[0]!.fragmentsRef)).toEqual(moon);
+    expect(editor.view.dom.querySelector('figure.incantly-figure .incantly-figure__versions li')!.textContent).toContain('Before going back to an earlier version');
+    // Going back is an ordinary edit: undo returns to the changed figure and its history.
+    editor.commands.undo();
+    expect((attrs(editor).fragments as { js: string }).js).toContain('// moon');
+    expect((attrs(editor).versions as unknown[]).length).toBe(1);
+    expect((attrs(editor).versions as Array<{ reason: string }>)[0]!.reason).toBe('changed');
+    select(editor);
+    expect(editor.commands.restoreFigureVersion(3)).toBe(false);
+    expect(editor.commands.restoreFigureVersion(0)).toBe(true);
+  });
+
+  it('records a figure made again, keeps at most six versions, and keeps none without a store', async () => {
+    const { generate, calls } = controlled();
+    const { editor } = setup(generate, { figures: 1 });
+    for (let k = 0; k < 7; k++) {
+      select(editor);
+      editor.commands.regenerateFigure();
+      calls[k]!.resolve({ kind: 'figure', figure: { ...FIGURE, fragments: { ...FRAGMENTS, js: `${FRAGMENTS.js}\n// ${k}` } } });
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    const versions = attrs(editor).versions as Array<{ reason: string }>;
+    expect(versions).toHaveLength(6);
+    expect(versions.every((v) => v.reason === 'remade')).toBe(true);
+    const bare = setup(controlled().generate, { figures: 1, store: false, change: async () => ({ kind: 'figure', figure: FIGURE }) });
+    select(bare.editor);
+    bare.editor.commands.changeFigure({ prompt: 'Anything' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(attrs(bare.editor).versions).toEqual([]);
+  });
+
+  it('reads a history from a note defensively', () => {
+    const ref = `sha256:${'a'.repeat(64)}`;
+    const good = { fragmentsRef: ref, concept: 'x', description: 'y', reason: 'changed', replacedAt: '2026-10-22T10:00:00.000Z', ticket: 'a.b', prompt: 'leaked' };
+    expect(sanitizeVersions([good, { ...good, fragmentsRef: 'nope' }, { ...good, reason: 'deleted' }, { ...good, replacedAt: 'soon' }, 'x'])).toEqual([
+      { fragmentsRef: ref, concept: 'x', description: 'y', ticket: 'a.b', reason: 'changed', replacedAt: '2026-10-22T10:00:00.000Z' },
+    ]);
+    expect(sanitizeVersions(Array.from({ length: 9 }, () => good))).toHaveLength(6);
+    expect(sanitizeVersions('[]')).toEqual([]);
   });
 
   it('needs a selected figure and a request', () => {

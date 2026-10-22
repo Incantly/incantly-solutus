@@ -197,6 +197,14 @@ test.describe('changing a figure in the note (HO-8)', () => {
     const id = (first.meta as { generationId?: string }).generationId;
     await expect.poll(async () => ((await figureAttrs(page))!.meta as { generationId?: string }).generationId, { timeout: 15_000 }).not.toBe(id);
     await waitDrawn(page);
+    // The figure it replaced is in its history (HO-9), and comes back from there.
+    const history = figure(page).locator('.incantly-figure__versions');
+    await expect(history.locator('summary')).toHaveText('Earlier versions (1)');
+    await history.locator('summary').click();
+    await history.getByRole('button', { name: /Go back to the version from/ }).click();
+    await expect.poll(async () => ((await figureAttrs(page))!.versions as Array<{ reason: string }>).map((v) => v.reason), { timeout: 15_000 }).toEqual(['restored']);
+    expect((await figureAttrs(page))!.meta).toMatchObject({ ticket: (first.meta as { ticket?: string }).ticket });
+    await waitDrawn(page);
   });
 });
 

@@ -38,6 +38,59 @@ export interface FigureAttributes {
    * layout and which parts show. Never CSS: documents travel between people.
    */
   readonly look: FigureStyle | null;
+  /** Earlier versions the learner can go back to, newest first (HO-9). */
+  readonly versions: readonly FigureVersion[];
+}
+
+/**
+ * An earlier version of a figure, kept when a change in the learner's words,
+ * making it again or going back to another version replaced it (HO-9). Its
+ * fragments are in the figure store under their content reference. Like the
+ * rest of the node it holds content only: never the request that changed it.
+ */
+export interface FigureVersion {
+  readonly fragmentsRef: string;
+  readonly concept: string;
+  readonly description: string;
+  /** Its last snapshot, so its placeholder shows straight away when it comes back. */
+  readonly snapshotRef?: string;
+  /** The service's signature on it, so a version brought back can still be repaired and changed. */
+  readonly ticket?: string;
+  /** What replaced it. */
+  readonly reason: VersionReason;
+  /** When it was replaced, as an ISO date. */
+  readonly replacedAt: string;
+}
+
+export type VersionReason = 'changed' | 'remade' | 'restored';
+
+/** Versions a figure keeps; the oldest goes first. */
+export const MAX_VERSIONS = 6;
+
+const REASONS: ReadonlySet<string> = new Set<VersionReason>(['changed', 'remade', 'restored']);
+const TICKET = /^[\w-]+\.[\w-]+$/;
+
+/** A figure's history from a note: well-formed versions only, newest first, at most MAX_VERSIONS. */
+export function sanitizeVersions(value: unknown): FigureVersion[] {
+  if (!Array.isArray(value)) return [];
+  const out: FigureVersion[] = [];
+  for (const raw of value.slice(0, MAX_VERSIONS)) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const v = raw as Record<string, unknown>;
+    if (typeof v.fragmentsRef !== 'string' || !CONTENT_REF.test(v.fragmentsRef)) continue;
+    if (typeof v.replacedAt !== 'string' || Number.isNaN(Date.parse(v.replacedAt))) continue;
+    if (typeof v.reason !== 'string' || !REASONS.has(v.reason)) continue;
+    out.push({
+      fragmentsRef: v.fragmentsRef,
+      concept: typeof v.concept === 'string' ? v.concept.slice(0, 200) : '',
+      description: typeof v.description === 'string' ? v.description.slice(0, 2000) : '',
+      ...(typeof v.snapshotRef === 'string' && CONTENT_REF.test(v.snapshotRef) ? { snapshotRef: v.snapshotRef } : {}),
+      ...(typeof v.ticket === 'string' && v.ticket.length <= 16_000 && TICKET.test(v.ticket) ? { ticket: v.ticket } : {}),
+      reason: v.reason as VersionReason,
+      replacedAt: v.replacedAt,
+    });
+  }
+  return out;
 }
 
 /**
@@ -124,6 +177,7 @@ export function defaultAttributes(): FigureAttributes {
     meta: {},
     formulas: {},
     look: null,
+    versions: [],
   };
 }
 

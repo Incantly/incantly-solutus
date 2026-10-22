@@ -1,12 +1,14 @@
 export {
   CONTENT_REF,
   DEFAULT_ASPECT,
+  MAX_VERSIONS,
   defaultAttributes,
   sanitizeFragments,
   sanitizeMeta,
   sanitizeValues,
+  sanitizeVersions,
 } from './attributes';
-export type { FigureAttributes, FigureFragments, FigureMeta } from './attributes';
+export type { FigureAttributes, FigureFragments, FigureMeta, FigureVersion, VersionReason } from './attributes';
 export { FigureNode, PlaceholderView, figureScheduler, flushFigures, newFigureId } from './figure-node';
 export type { FigureNodeOptions, SnapshotSource } from './figure-node';
 export { ABANDON_MS, FIGURE_TRANSACTION, FigureNodeView, figureViews } from './node-view';

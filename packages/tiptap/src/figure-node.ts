@@ -14,6 +14,7 @@ import {
   sanitizeLook,
   sanitizeMeta,
   sanitizeValues,
+  sanitizeVersions,
   type FigureAttributes,
 } from './attributes';
 import { FIGURE_TRANSACTION, FigureNodeView, figureViews, type FigureErrorReport, type FigureRepair, type FigureSignal } from './node-view';
@@ -63,6 +64,8 @@ declare module '@tiptap/core' {
       insertFigure: (attributes: Partial<FigureAttributes>) => ReturnType;
       /** Sets the selected figure's own look over the editor's style; null goes back to the editor's. */
       setFigureLook: (look: FigureStyle | null) => ReturnType;
+      /** Brings back an earlier version of the selected figure, or of the one with `figureId`, by its place in the history (HO-9). */
+      restoreFigureVersion: (index: number, figureId?: string) => ReturnType;
     };
   }
 }
@@ -174,6 +177,7 @@ export const FigureNode = Node.create<FigureNodeOptions>({
       meta: jsonAttribute('meta', d.meta, sanitizeMeta),
       formulas: jsonAttribute('formulas', d.formulas, sanitizeFormulas),
       look: jsonAttribute('look', d.look, sanitizeLook),
+      versions: jsonAttribute('versions', d.versions, sanitizeVersions),
     };
   },
 
@@ -202,6 +206,28 @@ export const FigureNode = Node.create<FigureNodeOptions>({
           if (!(selection instanceof NodeSelection) || selection.node.type.name !== this.name) return false;
           const checked = look === null ? null : checkStyle(look);
           if (dispatch) tr.setNodeAttribute(selection.from, 'look', checked && Object.keys(checked).length > 0 ? checked : null);
+          return true;
+        },
+      restoreFigureVersion:
+        (index, figureId) =>
+        ({ state, view, dispatch }) => {
+          let pos: number | null = null;
+          if (figureId === undefined) {
+            const { selection } = state;
+            if (selection instanceof NodeSelection && selection.node.type.name === this.name) pos = selection.from;
+          } else {
+            state.doc.descendants((node, at) => {
+              if (pos !== null) return false;
+              if (node.type.name === this.name && (node.attrs as FigureAttributes).figureId === figureId) pos = at;
+              return node.isBlock;
+            });
+          }
+          if (pos === null) return false;
+          const node = state.doc.nodeAt(pos);
+          const dom = view.nodeDOM(pos);
+          const figure = dom instanceof Element ? figureViews.get(dom) : undefined;
+          if (!node || !figure || !Number.isInteger(index) || !(node.attrs as FigureAttributes).versions[index]) return false;
+          if (dispatch) void figure.restore(index);
           return true;
         },
     };

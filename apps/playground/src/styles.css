@@ -88,6 +88,22 @@ main {
   margin: 8px 0 0;
   font-size: 0.9rem;
 }
+/* Earlier versions of a figure (HO-9): a quiet list under it. */
+.incantly-figure__versions {
+  margin: 8px 0 0;
+  font-size: 0.9rem;
+}
+.incantly-figure__versions summary {
+  cursor: pointer;
+  color: color-mix(in srgb, CanvasText 70%, Canvas);
+}
+.incantly-figure__versions ol {
+  margin: 6px 0 0;
+  padding-left: 20px;
+}
+.incantly-figure__versions li {
+  margin: 4px 0;
+}
 
 /* Making a figure: the skeleton card, then a quiet line if it cannot be built. */
 .incantly-figure--generating {

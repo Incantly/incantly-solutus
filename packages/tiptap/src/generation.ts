@@ -3,7 +3,7 @@ import { Extension } from '@tiptap/core';
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 import { NodeSelection, Plugin, PluginKey, type EditorState, type Transaction } from '@tiptap/pm/state';
 import { Decoration, DecorationSet, type EditorView } from '@tiptap/pm/view';
-import { DEFAULT_ASPECT, type FigureAttributes, type FigureFragments } from './attributes';
+import { DEFAULT_ASPECT, MAX_VERSIONS, type FigureAttributes, type FigureFragments } from './attributes';
 import { newFigureId } from './figure-node';
 import { FIGURE_TRANSACTION, figureViews } from './node-view';
 
@@ -472,22 +472,29 @@ async function changeInPlace(
     figureView()?.notify(result.message);
     return;
   }
+  // The figure as it was joins its history, so the learner can go back to it (HO-9).
+  const kept = (await figureView()?.keep(keepValues ? 'changed' : 'remade')) ?? null;
+  if (view.isDestroyed) return;
+  const now = figureAt(view.state, figureId);
+  if (!now) return;
   const { figure } = result;
-  const attrs = at.node.attrs as FigureAttributes;
+  const attrs = now.node.attrs as FigureAttributes;
   let tr: Transaction = view.state.tr
-    .setNodeAttribute(at.pos, 'fragments', figure.fragments)
-    .setNodeAttribute(at.pos, 'fragmentsRef', null)
-    .setNodeAttribute(at.pos, 'concept', figure.concept)
-    .setNodeAttribute(at.pos, 'description', figure.description)
-    .setNodeAttribute(at.pos, 'meta', {
+    .setNodeAttribute(now.pos, 'fragments', figure.fragments)
+    .setNodeAttribute(now.pos, 'fragmentsRef', null)
+    .setNodeAttribute(now.pos, 'snapshotRef', null)
+    .setNodeAttribute(now.pos, 'concept', figure.concept)
+    .setNodeAttribute(now.pos, 'description', figure.description)
+    .setNodeAttribute(now.pos, 'meta', {
       ...(figure.generationId ? { generationId: figure.generationId } : {}),
       approvedAt: figure.approvedAt,
       validatorVersion: VALIDATOR_VERSION,
       ...(figure.ticket ? { ticket: figure.ticket } : {}),
     });
+  if (kept) tr = tr.setNodeAttribute(now.pos, 'versions', [kept, ...attrs.versions].slice(0, MAX_VERSIONS));
   // A figure made again starts afresh; a changed one keeps the learner's values where they still apply.
-  if (!keepValues) tr = tr.setNodeAttribute(at.pos, 'values', {}).setNodeAttribute(at.pos, 'step', null).setNodeAttribute(at.pos, 'formulas', {});
-  else if (Object.keys(attrs.formulas).length > 0) tr = tr.setNodeAttribute(at.pos, 'formulas', {});
+  if (!keepValues) tr = tr.setNodeAttribute(now.pos, 'values', {}).setNodeAttribute(now.pos, 'step', null).setNodeAttribute(now.pos, 'formulas', {});
+  else if (Object.keys(attrs.formulas).length > 0) tr = tr.setNodeAttribute(now.pos, 'formulas', {});
   view.dispatch(tr.setMeta(FIGURE_TRANSACTION, 'changed'));
   if (result.notice) figureView()?.notify(result.notice);
 }

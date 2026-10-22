@@ -3,7 +3,7 @@ import type { Editor } from '@tiptap/core';
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 import { NodeSelection, TextSelection } from '@tiptap/pm/state';
 import type { NodeView, ViewMutationRecord } from '@tiptap/pm/view';
-import { DEFAULT_ASPECT, type FigureAttributes, type FigureFragments } from './attributes';
+import { DEFAULT_ASPECT, MAX_VERSIONS, type FigureAttributes, type FigureFragments, type FigureMeta, type FigureVersion, type VersionReason } from './attributes';
 import type { LiveFigureScheduler, ScheduledFigure } from './scheduler';
 import type { FigureStore } from './store';
 
@@ -110,6 +110,8 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
   private readonly frame: HTMLElement;
   private readonly caption: HTMLElement;
   private readonly status: HTMLElement;
+  /** Earlier versions to go back to (HO-9), shown when there are any. */
+  private readonly history: HTMLDetailsElement;
   private handle: FigureHandle | null = null;
   private pending: Pending = {};
   private settleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -162,7 +164,10 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
     this.status.hidden = true;
     this.caption = doc.createElement('figcaption');
     this.caption.className = 'incantly-figure__description';
-    this.dom.append(this.frame, this.status, this.caption);
+    this.history = doc.createElement('details');
+    this.history.className = 'incantly-figure__versions';
+    this.history.hidden = true;
+    this.dom.append(this.frame, this.status, this.history, this.caption);
     figureViews.set(this.dom, this);
 
     // A click on a placeholder asks for the live figure.
@@ -174,6 +179,7 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
       if (this.state === 'live') this.usage.interacted = true;
     });
     this.renderPlaceholder();
+    this.renderVersions();
     this.options.scheduler.register(this);
   }
 
@@ -204,6 +210,7 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
     const after = this.attrs;
     const sourceChanged =
       JSON.stringify(before.fragments) !== JSON.stringify(after.fragments) || before.fragmentsRef !== after.fragmentsRef;
+    if (JSON.stringify(before.versions) !== JSON.stringify(after.versions)) this.renderVersions();
     if (sourceChanged && (this.isLive || this.state === 'failed')) {
       // New fragments (a regenerated figure, or undo of one): rebuild from the stored state. A failed figure gets a new chance.
       this.teardown();
@@ -581,6 +588,85 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
     this.renderStatus();
   }
 
+  /**
+   * The figure as it is now, as a version to keep before something replaces
+   * it (HO-9): its fragments in the store by reference, and a fresh snapshot
+   * while it is live. Null without a store, where there is nowhere to keep it.
+   */
+  async keep(reason: VersionReason): Promise<FigureVersion | null> {
+    const store = this.options.store;
+    if (!store) return null;
+    const attrs = this.attrs;
+    let fragmentsRef: string | null;
+    try {
+      fragmentsRef = attrs.fragments ? await store.putFragments(attrs.fragments) : attrs.fragmentsRef;
+    } catch {
+      return null;
+    }
+    if (!fragmentsRef) return null;
+    let snapshotRef = this.pending.snapshot ?? attrs.snapshotRef ?? null;
+    if (this.handle && this.state === 'live') {
+      const png = await this.handle.snapshot().catch(() => null);
+      if (png) snapshotRef = await store.putSnapshot(png).catch(() => snapshotRef);
+    }
+    return {
+      fragmentsRef,
+      concept: attrs.concept,
+      description: this.pending.description ?? attrs.description,
+      ...(snapshotRef ? { snapshotRef } : {}),
+      ...(attrs.meta.ticket ? { ticket: attrs.meta.ticket } : {}),
+      reason,
+      replacedAt: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * Brings back an earlier version (HO-9), starting afresh at its own values;
+   * the figure as it is now joins the history, so going back can be undone
+   * either way: with undo, or from the history again.
+   */
+  async restore(index: number): Promise<boolean> {
+    const store = this.options.store;
+    const version = this.attrs.versions[index];
+    if (!store || !version || this.state === 'destroyed') return false;
+    this.flush();
+    const fragments = await store.getFragments(version.fragmentsRef).catch(() => undefined);
+    if (!fragments) {
+      this.notify('That version is no longer available.');
+      return false;
+    }
+    const current = await this.keep('restored');
+    if (!current || this.editor.isDestroyed) return false;
+    const pos = this.getPos();
+    if (typeof pos !== 'number') return false;
+    const view = this.editor.view;
+    const node = view.state.doc.nodeAt(pos);
+    if (!node || node.type !== this.node.type) return false;
+    const attrs = node.attrs as FigureAttributes;
+    // The history may have changed while the version loaded: find it again by what it is.
+    const rest = attrs.versions.filter((v) => !(v.fragmentsRef === version.fragmentsRef && v.replacedAt === version.replacedAt));
+    if (rest.length === attrs.versions.length) return false;
+    // The server record and approval belong to the version being replaced; the ticket travels with its scene.
+    const meta: FigureMeta = {
+      ...(attrs.meta.validatorVersion !== undefined ? { validatorVersion: attrs.meta.validatorVersion } : {}),
+      ...(version.ticket ? { ticket: version.ticket } : {}),
+    };
+    const tr = view.state.tr
+      .setNodeAttribute(pos, 'fragments', null)
+      .setNodeAttribute(pos, 'fragmentsRef', version.fragmentsRef)
+      .setNodeAttribute(pos, 'concept', version.concept)
+      .setNodeAttribute(pos, 'description', version.description)
+      .setNodeAttribute(pos, 'snapshotRef', version.snapshotRef ?? null)
+      .setNodeAttribute(pos, 'meta', meta)
+      .setNodeAttribute(pos, 'values', {})
+      .setNodeAttribute(pos, 'step', null)
+      .setNodeAttribute(pos, 'formulas', {})
+      .setNodeAttribute(pos, 'versions', [current, ...rest].slice(0, MAX_VERSIONS));
+    this.snapshotUrl = undefined;
+    view.dispatch(tr.setMeta(FIGURE_TRANSACTION, 'restored'));
+    return true;
+  }
+
   /** Goes back to the version that passed: the figure's own starting values, at no step, with its own formulas. */
   resetToWorking(): void {
     if (this.state === 'destroyed') return;
@@ -667,6 +753,37 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
     if (this.caption.textContent !== description) this.caption.textContent = description;
     const label = `Interactive figure${this.attrs.concept ? `: ${this.attrs.concept}` : ''}. Press Enter to use it.`;
     if (this.dom.getAttribute('aria-label') !== label) this.dom.setAttribute('aria-label', label);
+  }
+
+  /** The list of earlier versions, each with a button that brings it back. */
+  private renderVersions(): void {
+    const versions = this.attrs.versions;
+    this.history.hidden = versions.length === 0;
+    const doc = this.history.ownerDocument;
+    const summary = doc.createElement('summary');
+    summary.textContent = `Earlier versions (${versions.length})`;
+    const list = doc.createElement('ol');
+    versions.forEach((version, index) => {
+      const item = doc.createElement('li');
+      const label = doc.createElement('span');
+      const when = doc.createElement('time');
+      when.dateTime = version.replacedAt;
+      when.textContent = new Date(version.replacedAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+      label.append(doc.createTextNode(`${REASON_TEXT[version.reason]}, `), when);
+      const button = doc.createElement('button');
+      button.type = 'button';
+      button.className = 'incantly-figure__restore';
+      button.textContent = 'Go back to this version';
+      button.setAttribute('aria-label', `Go back to the version from ${when.textContent}${version.description ? `: ${version.description}` : ''}`);
+      button.addEventListener('click', () => {
+        void this.restore(index);
+      });
+      item.append(label, doc.createTextNode(' '), button);
+      list.append(item);
+    });
+    const open = this.history.open;
+    this.history.replaceChildren(summary, list);
+    this.history.open = open && versions.length > 0;
   }
 
   private renderPlaceholder(): void {
@@ -802,6 +919,13 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
     return this.failure;
   }
 }
+
+/** What replaced each earlier version, as the history says it. */
+const REASON_TEXT: Readonly<Record<VersionReason, string>> = {
+  changed: 'Before a change',
+  remade: 'Before it was made again',
+  restored: 'Before going back to an earlier version',
+};
 
 function sameError(a: ErrorView, b: ErrorView): boolean {
   return a.phase === b.phase && a.message === b.message && a.line === b.line && a.column === b.column;
