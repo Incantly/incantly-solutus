@@ -183,6 +183,8 @@ export function likelyCause(failure: ProbeFailure): string | null {
   if (/reading '[^']*'/.test(message) || /of undefined|of null/.test(message)) {
     return 'an index or key is out of range at this parameter state; check lengths and bounds before reading';
   }
+  const namespace = /\binc\.(state|calc|vec|units|motion|shapes|path|geom) is not a function/.exec(message);
+  if (namespace) return `inc.${namespace[1]} is an object of helpers, not a function: call one of its methods from the contract`;
   if (/is not a function/.test(message)) return 'a value is not what the code assumes; check the contract for that method';
   if (/is not available in scenes|Only numbers and strings/.test(message)) return 'a computed property name is not allowed; use a plain name or a number';
   switch (failure.check) {
@@ -193,7 +195,7 @@ export function likelyCause(failure: ProbeFailure): string | null {
     case 'singular':
       return 'the model is undefined at the plan’s singular point; handle that state explicitly';
     case 'paused-change':
-      return 'the drawing changes only when time advances; draw from the model in inc.onFrame and use dt only to advance state';
+      return 'the drawing changes only when time advances: draw from the model in inc.onFrame and use dt only to advance state. If this parameter rightly changes nothing in the motion, still show it: label or size what it describes';
     case 'bounds':
       return /Nothing is drawn/.test(failure.message)
         ? 'the coordinates do not match the stage: check the viewBox or the graph x and y ranges'
@@ -203,7 +205,7 @@ export function likelyCause(failure: ProbeFailure): string | null {
     case 'frame-cost':
       return 'too much work per frame: build shapes once and only move them';
     case 'parts':
-      return 'register each planned part with stage.part, using exactly the plan’s name';
+      return 'register each planned part with stage.part (or a kit’s part), using exactly the plan’s name, on an element drawn in the figure; a readout or formula is not a part, so draw a text label for it and register that';
     case 'steps':
       return 'inc.steps needs one step for each planned step';
     case 'idea':

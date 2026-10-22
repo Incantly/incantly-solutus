@@ -59,7 +59,7 @@ export const PLAN_FORMAT = `PLAN format. Reply with one JSON object in a \`\`\`j
   "capabilities": ["catalog names only; at least one stage: graph2d, svg, space3d, graph3d, physics2d, chart or flow"],
   "parameters": [{ "name": "camelCase", "unit": "m/s", "min": 5, "max": 20, "default": 12, "why": "a few words on these bounds" }],
   "model": { "inputs": ["every parameter name"], "outputs": [{ "name": "range", "dependsOn": ["speed", "angle"] }] },
-  "parts": ["named visual parts"],
+  "parts": ["things drawn in the figure that steps point at; never readouts, sliders, buttons or formulas, which the kit shows itself"],
   "moves": "What moves or changes.",
   "steps": ["Two to five teaching steps, one point each"],
   "singularPoints": [{ "parameterName": 8 }]

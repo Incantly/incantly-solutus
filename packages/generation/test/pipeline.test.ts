@@ -1,6 +1,6 @@
 import { REFERENCE_SCENES } from '@incantly/core/scenes';
 import { describe, expect, it } from 'vitest';
-import { ModelError, ScriptedModel } from '../src/models';
+import { ModelError, ScriptedModel, type ModelClient } from '../src/models';
 import { Generator, standardFigure, type FailedCheck } from '../src/pipeline';
 import { isolatedProbe } from '../src/probe';
 import { faultyScript, referenceModel, type Fault } from '../src/reference-model';
@@ -178,6 +178,26 @@ describe('the generation pipeline', () => {
     expect(state.deadlineSkipped).toBe(true);
     expect(state.status).toBe('failed');
     expect(model.calls.filter((c) => c.purpose === 'repair')).toHaveLength(0);
+  });
+
+  it('still repairs when an edit fits before the deadline: repairs take a fraction of the scene call', async () => {
+    let clock = 0;
+    const inner = referenceModel({ fault: 'frame-throw' });
+    const took: Record<string, number> = { plan: 2_000, scene: 14_000, repair: 3_000 };
+    const model: ModelClient = {
+      name: inner.name,
+      modelFor: (purpose) => inner.modelFor(purpose),
+      complete: async (call) => {
+        const reply = await inner.complete(call);
+        clock += took[call.purpose]!;
+        return { ...reply, ms: took[call.purpose]! };
+      },
+    };
+    const generate = new Generator({ model, probe: isolatedProbe, deadlineMs: 25_000, now: () => clock, adapt: false });
+    const state = await generate.generate({ prompt: REQUESTS.projectile });
+    expect(state.deadlineSkipped).toBe(false);
+    expect(state.status).toBe('approved');
+    expect(state.repairsUsed).toBe(1);
   });
 
   it('can leave the concept’s own example out of the context', async () => {

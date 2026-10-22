@@ -266,10 +266,14 @@ export class Generator {
     return signal ? AbortSignal.any([signal, timeout]) : timeout;
   }
 
-  /** How long a repair is likely to take: an edit reply is shorter than the scene was. */
+  /**
+   * How long a repair is likely to take. It replies with edits, a few lines,
+   * so it takes a fraction of the scene call: the bench measured 1 to 4 s
+   * after scenes of 8 to 20 s.
+   */
   private repairEstimateMs(state: GenerationState): number {
     const scene = state.calls.find((c) => c.purpose === 'scene' && !c.error);
-    return Math.max(2_500, (scene?.ms ?? 8_000) * 0.6) + DELIVERY_MS;
+    return Math.min(6_000, Math.max(2_500, (scene?.ms ?? 8_000) * 0.3)) + DELIVERY_MS;
   }
 
   /**
