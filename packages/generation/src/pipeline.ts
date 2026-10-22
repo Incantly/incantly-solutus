@@ -1,6 +1,6 @@
 import { SCENE_LIMITS, SDK_VERSION, SIZE_BUDGETS, validateScene, validateSceneCss, validateSceneHtml, validateSceneJs, type ProbeReport, type ScenePlan, type ValidatedScene } from '@incantly/core';
 import type { ReferenceScene } from '@incantly/core/scenes';
-import { libraryPrompt, planPrompt, scenePrompt, standardFigure, type LearnerRequest, type Prompt } from './context';
+import { changePrompt, libraryPrompt, planPrompt, scenePrompt, standardFigure, type LearnerRequest, type Prompt } from './context';
 import { applyFragmentEdits, parseEdits, withoutEditBlocks } from './edits';
 import { FragmentStream, missingFragments, parsePlanReply, type FragmentName, type FragmentSet } from './fragments';
 import { ModelError, NO_USAGE, addUsage, costOf, type CallPurpose, type ModelClient, type ModelUsage } from './models';
@@ -118,8 +118,12 @@ export class GenerationState {
   repairsUsed = 0;
   failure: GenerationFailure | null = null;
   readonly timings: { planMs?: number; firstFragmentMs?: number; sceneMs?: number; repairMs: number; totalMs?: number } = { repairMs: 0 };
-  /** How the scene was made: written whole, adapted from a reviewed scene by edits, taken from the concept cache, or brought from a note to be repaired. */
-  mode: 'write' | 'adapt' | 'cache' | 'stored' | null = null;
+  /**
+   * How the scene was made: written whole, adapted from a reviewed scene by
+   * edits, taken from the concept cache, brought from a note to be repaired,
+   * or changed as the learner asked.
+   */
+  mode: 'write' | 'adapt' | 'cache' | 'stored' | 'change' | null = null;
   /** The reviewed scene the request named, adapted before the plan arrived; null otherwise. */
   retrieved: string | null = null;
   /** Which cache key found it: the request, before planning, or the plan. */
@@ -263,21 +267,54 @@ export class Generator {
     // The build's own time: it often ends before the plan call that confirms it, which the learner waits for too.
     const build = [...state.calls].reverse().find((c) => c.purpose === 'scene' && !c.error);
     state.timings.sceneMs = build ? build.ms : this.now() - started;
-    // A plan in the reply replaces the reviewed one, when the request needed other names or steps.
+    await this.applyEdits(state, { html: scene.html, css: scene.css, js: scene.js }, reply, hooks, signal);
+  }
+
+  /**
+   * A reply of edits over `base`, with an updated plan in a json block when
+   * the request needed other names or steps: checked, then repaired while
+   * allowed. `unchanged` decides what a reply that changes nothing means: by
+   * default it is checked like any other.
+   */
+  private async applyEdits(state: GenerationState, base: FragmentSet, reply: string, hooks: GenerationHooks, signal?: AbortSignal, unchanged?: () => boolean): Promise<void> {
     const json = /```json\s*\n[\s\S]*?\n\s*```/i.exec(reply);
     const problems: string[] = [];
+    let planChanged = false;
     if (json) {
       const parsed = parsePlanReply(json[0]);
       const validation = parsed.problem ? null : validatePlan(parsed.value);
-      if (validation?.plan) state.plan = validation.plan;
-      else problems.push(`The updated plan was not accepted: ${parsed.problem ?? formatPlanProblems(validation?.problems ?? [])}`);
+      if (validation?.plan) {
+        planChanged = JSON.stringify(validation.plan) !== JSON.stringify(state.plan);
+        state.plan = validation.plan;
+      } else problems.push(`The updated plan was not accepted: ${parsed.problem ?? formatPlanProblems(validation?.problems ?? [])}`);
     }
-    const base: FragmentSet = { html: scene.html, css: scene.css, js: scene.js };
     const edited = this.edited(base, json ? reply.replace(json[0], '') : reply);
+    if (unchanged && edited.changed.length === 0 && !planChanged && edited.problems.length === 0 && problems.length === 0 && unchanged()) return;
     hooks.onFragment?.('js', edited.problems.length === 0 && edited.fragments.js !== undefined && fragmentPasses('js', edited.fragments.js));
     const attempt = await this.check(state, 'scene', edited.fragments, missingFragments(edited.fragments), [...edited.problems, ...problems], edited.changed);
     hooks.onAttempt?.(attempt);
     await this.repairWhileAllowed(state, hooks, signal);
+  }
+
+  /**
+   * Changes a figure the learner has, as they ask (HO-8): one call for edits
+   * over its fragments, from the plan and fragments a ticket signed, checked
+   * and repaired like any scene. A reply that changes nothing fails as
+   * 'unchanged', so the learner hears that the change could not be made.
+   */
+  async change(state: GenerationState, figure: { readonly plan: ScenePlan; readonly fragments: Required<FragmentSet> }, request: LearnerRequest, hooks: GenerationHooks = {}, signal?: AbortSignal): Promise<void> {
+    state.plan = figure.plan;
+    state.mode = 'change';
+    state.status = 'building';
+    const started = this.now();
+    const maxTokens = Math.min(this.options.maxTokens?.scene ?? SIZE_BUDGETS[figure.plan.size ?? 'quick'].sceneTokens, 2500);
+    const reply = await this.call(state, 'scene', changePrompt(figure.plan, figure.fragments, request), this.deadlineSignal(state, signal), undefined, maxTokens);
+    if (reply === null) return;
+    state.timings.sceneMs = this.now() - started;
+    await this.applyEdits(state, { ...figure.fragments }, reply, hooks, signal, () => {
+      this.fail(state, 'scene', 'unchanged');
+      return true;
+    });
   }
 
   /** One plan call beside the library build: its concept confirms the retrieval, or names another. */

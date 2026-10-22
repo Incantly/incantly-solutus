@@ -7,7 +7,7 @@ import { DEFAULT_LIMITS, LimitKeeper, type Limits, type Refusal } from './limits
 import type { ModelClient } from './models';
 import { Generator, standardFigure, type GenerationState } from './pipeline';
 import { probeSpecFor } from './probe';
-import type { FallbackMessage, RepairResponse, SceneMessage, Skeleton } from './protocol';
+import type { ChangeResponse, FallbackMessage, RepairResponse, SceneMessage, Skeleton } from './protocol';
 import { failureRecord, type RecordSink } from './records';
 import { issueTicket, readTicket } from './ticket';
 
@@ -23,6 +23,7 @@ import { issueTicket, readTicket } from './ticket';
  *   POST /v1/generations              { prompt, noteContext? }  -> event stream
  *   POST /v1/generations/:id/probe    { ok, report? }           -> approved, a repaired scene, or a fallback
  *   POST /v1/repairs                  { ticket, fragments, report } -> a repaired scene to probe, or failed (RP-7)
+ *   POST /v1/changes                  { ticket, fragments, prompt, noteContext? } -> the changed scene to probe, or failed (HO-8)
  */
 
 export interface ServiceOptions {
@@ -52,7 +53,7 @@ export interface ServiceOptions {
   readonly now?: () => number;
 }
 
-export type { FallbackMessage, ProbeResponse, RepairRequest, RepairResponse, SceneMessage, Skeleton } from './protocol';
+export type { ChangeRequest, ChangeResponse, FallbackMessage, ProbeResponse, RepairRequest, RepairResponse, SceneMessage, Skeleton } from './protocol';
 
 export const RETENTION = {
   noteText: 'The request and any note text are sent to the model provider for the plan call and are not stored by this service or written to logs or records.',
@@ -224,6 +225,7 @@ export class GenerationService {
       const probe = new RegExp(`^${this.prefix}/generations/([\\w-]{1,80})/probe$`).exec(path);
       if (req.method === 'POST' && probe) return await this.probeResult(req, res, probe[1]!);
       if (req.method === 'POST' && path === `${this.prefix}/repairs`) return await this.repairStored(req, res);
+      if (req.method === 'POST' && path === `${this.prefix}/changes`) return await this.changeStored(req, res);
       throw new HttpError(404, 'not-found', 'No such endpoint');
     } catch (error) {
       if (res.headersSent) {
@@ -529,6 +531,59 @@ export class GenerationService {
     }
     await this.record(state);
     this.json(res, 200, { status: 'failed', reason: timeout.aborted ? 'timeout' : (state.failure?.stage ?? 'scene') } satisfies RepairResponse);
+  }
+
+  /**
+   * A learner asks for a change to a figure they have (HO-8). The ticket
+   * proves the service signed these fragments and gives back their plan; one
+   * call replies with edits, which are checked and repaired like any scene,
+   * and the changed scene goes to the device to probe. The request is sent to
+   * the model and not stored, as for a new figure.
+   */
+  private async changeStored(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const learner = this.learner(req);
+    const secret = this.options.ticketSecret;
+    if (!secret) throw new HttpError(404, 'not-found', 'Figures are not changed here');
+    if (!this.enabled) throw new HttpError(503, 'generation-off', 'Making new figures is switched off for now');
+    const body = (await this.body(req, 160_000)) as { ticket?: unknown; fragments?: unknown; prompt?: unknown; noteContext?: unknown };
+    const fragments = readFragments(body.fragments);
+    if (!fragments) throw new HttpError(400, 'invalid-request', 'fragments must be { html, css, js }, each a string');
+    const request = readRequest({ prompt: body.prompt, noteContext: body.noteContext });
+    const plan = readTicket(secret, body.ticket, fragments);
+    if (!plan) throw new HttpError(403, 'invalid-ticket', 'That figure cannot be changed here');
+    const admitted = this.limits.admit(learner.id);
+    if (!admitted.ok) this.refuse(admitted.refusal);
+
+    const cancel = new AbortController();
+    res.on('close', () => {
+      if (!res.writableEnded) cancel.abort();
+    });
+    const timeout = AbortSignal.timeout(this.options.generationTimeoutMs ?? 45_000);
+    const generator = this.generator();
+    const state = generator.begin();
+    try {
+      await generator.change(state, { plan, fragments }, request, {}, AbortSignal.any([cancel.signal, timeout]));
+      generator.settle(state);
+      generator.finish(state);
+    } finally {
+      admitted.release();
+      this.limits.spend(learner.id, state.cost);
+    }
+    if (state.status === 'validated' && state.scene) {
+      this.sessions.set(state.id, {
+        state,
+        generator,
+        learner,
+        expiresAt: this.now() + (this.options.sessionMinutes ?? 15) * 60_000,
+        busy: false,
+        requestKey: null,
+      });
+      this.json(res, 200, { status: 'scene', ...this.sceneMessage(state) } satisfies ChangeResponse);
+      return;
+    }
+    await this.record(state);
+    const reason = state.failure?.reason === 'unchanged' ? 'unchanged' : timeout.aborted ? 'timeout' : (state.failure?.stage ?? 'scene');
+    this.json(res, 200, { status: 'failed', reason } satisfies ChangeResponse);
   }
 
   /** Records and forgets generations whose device never reported. */

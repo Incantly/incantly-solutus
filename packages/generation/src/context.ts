@@ -99,6 +99,9 @@ A block may hold several SEARCH/REPLACE pairs, applied in order; each SEARCH mus
 /** Starting from the reviewed scene a request names, before any plan (PRD 25.5). */
 export const LIBRARY_FORMAT = `LIBRARY format. The reviewed scene below already teaches this concept well. Change it only as far as the learner's request needs: often a default, a step, a preset or a label; often nothing at all. Reply with edit blocks only, as in the EDIT format, or with an empty \`\`\`edit js block when the scene already answers the request. Keep its parameter and part names and its number of steps. Only if the request needs a different parameter, part or number of steps, add the whole updated plan in a \`\`\`json block after the edits.`;
 
+/** Changing a figure the learner already has, as they ask (HO-8). */
+export const CHANGE_FORMAT = `CHANGE format. The figure below is in the learner's note and works. Make the change the learner asks for, and only that: keep everything the change does not touch as it is, names, steps and wording included. Reply with edit blocks only, as in the EDIT format. If the change needs another parameter, part or number of steps, also add the whole updated plan in a \`\`\`json block after the edits, and keep the scene and its plan in step. If this kit cannot make the change, reply with an empty \`\`\`edit js block.`;
+
 /** A rough token count: about 3.5 characters per token for English and code. */
 export function estimateTokens(text: string): number {
   return Math.ceil(text.length / 3.5);
@@ -280,6 +283,29 @@ export function libraryPrompt(scene: ReferenceScene, request: LearnerRequest): P
   const lines = [`The learner asked: "${clip(request.prompt, REQUEST_LIMITS.prompt)}"`];
   if (request.noteContext) lines.push(`Text near the request in their note: "${clip(request.noteContext, REQUEST_LIMITS.noteContext)}"`);
   lines.push('Adapt the reviewed scene to this request, changing only what it needs.');
+  return { system: [coreBlock(), { text: reference, cache: true }], user: lines.join('\n') };
+}
+
+/**
+ * The change call (HO-8): the learner's figure as it stands, its plan, the
+ * contract it uses, and the change they asked for. The reply is edits, so a
+ * change costs a few lines of output, not a new figure.
+ */
+export function changePrompt(plan: ScenePlan, fragments: { readonly html: string; readonly css: string; readonly js: string }, request: LearnerRequest): Prompt {
+  const reference = [
+    EDIT_FORMAT,
+    CHANGE_FORMAT,
+    'CONTRACT. The kit API your scene may use, as TypeScript declarations; the scene itself is plain JavaScript.',
+    '```ts',
+    contractFor(plan.capabilities),
+    '```',
+    `THE FIGURE AS IT STANDS: ${plan.concept}. Its plan:`,
+    JSON.stringify(plan),
+    ...(['html', 'css', 'js'] as const).flatMap((name) => ['```' + name, fragments[name].trim(), '```']),
+  ].join('\n');
+  const lines = [`The learner wants this change: "${clip(request.prompt, REQUEST_LIMITS.prompt)}"`];
+  if (request.noteContext) lines.push(`Text near the figure in their note: "${clip(request.noteContext, REQUEST_LIMITS.noteContext)}"`);
+  lines.push('Make this change to the figure, and nothing else.');
   return { system: [coreBlock(), { text: reference, cache: true }], user: lines.join('\n') };
 }
 

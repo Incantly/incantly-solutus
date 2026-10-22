@@ -39,7 +39,8 @@ export interface SceneMessage {
   readonly ticket?: string;
 }
 
-export type FallbackReason = 'plan' | 'scene' | 'model' | 'timeout' | 'off' | 'limit';
+/** Why no scene came: the plan, the scene or the model failed, time ran out, generation is off, a limit was reached, or a change changed nothing. */
+export type FallbackReason = 'plan' | 'scene' | 'model' | 'timeout' | 'off' | 'limit' | 'unchanged';
 
 export interface FallbackMessage {
   readonly generationId: string | null;
@@ -78,4 +79,15 @@ export interface RepairRequest {
 
 /** The answer to a repair request: a repaired scene to probe, then report like any other, or nothing that works. */
 export type RepairResponse = ({ readonly status: 'scene' } & SceneMessage) | { readonly status: 'failed'; readonly reason: FallbackReason };
+
+/** A change to a figure the learner has, in their words (HO-8): its fragments, its ticket, and what to change. */
+export interface ChangeRequest {
+  readonly ticket: string;
+  readonly fragments: SceneFragmentsMessage;
+  readonly prompt: string;
+  readonly noteContext?: string;
+}
+
+/** The answer to a change: the changed scene to probe, then report like any other, or why there is none. */
+export type ChangeResponse = ({ readonly status: 'scene' } & SceneMessage) | { readonly status: 'failed'; readonly reason: FallbackReason };
 
