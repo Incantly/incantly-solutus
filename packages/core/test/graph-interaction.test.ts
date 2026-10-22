@@ -304,6 +304,83 @@ describe('series (G2-2, G2-3, G2-4, G2-5, G2-13)', () => {
     expect(runtime.graph.nodes.get(id)!.hidden).toBe(true);
     expect(runtime.uiState().legend[0]!.visible).toBe(false);
   });
+
+  it('shades where F(x, y) < 0 behind an implicit curve, as an inequality (G2-5)', () => {
+    const { runtime } = run((inc) => {
+      inc.graph2d('#g', { x: [-3, 3], y: [-3, 3], title: 'Inequality' }).implicit((x, y) => x * x + y * y - 4, { fill: true, tone: 'b' });
+    });
+    const shade = [...runtime.graph.nodes.values()].find((n) => Number(n.attrs.get('fill-opacity')) === 0.18)!;
+    expect(shade).toBeDefined();
+    const corners = pathPoints(String(shade.attrs.get('d')));
+    // Inside the circle x² + y² < 4, around the origin at stage (396, 180), the cells are shaded; outside it, none are.
+    const data = corners.map(([x, y]) => [((x - 52) / 688) * 6 - 3, ((340 - y) / 320) * 6 - 3] as const);
+    expect(data.some(([x, y]) => Math.hypot(x, y) < 0.2)).toBe(true);
+    expect(data.every(([x, y]) => Math.hypot(x, y) < 2 + 0.2)).toBe(true);
+    // Without fill, there is no shade.
+    const plain = run((inc) => {
+      inc.graph2d('#g', { x: [-3, 3], y: [-3, 3], title: 'Curve' }).implicit((x, y) => x * x + y * y - 4);
+    });
+    expect([...plain.runtime.graph.nodes.values()].some((n) => Number(n.attrs.get('fill-opacity')) === 0.18)).toBe(false);
+  });
+
+  it('draws an arrow in data units that follows its data as the view changes (G2-4)', () => {
+    let id = 0;
+    const { runtime } = run((inc) => {
+      const g = inc.graph2d('#g', { x: [0, 10], y: [0, 10], title: 'Vectors' });
+      const arrow = g.arrow(0, 0, 2, 1, { tone: 'b' });
+      id = idOf(arrow.handle);
+      inc.onFrame(({ time }) => {
+        if (time > 0.5) arrow.from(5, 5, 2.5, 0);
+      });
+    });
+    // From (0, 0), at stage (52, 340), to (2, 1), at (52 + 2 × 68.8, 340 - 32).
+    const near = (points: ReadonlyArray<readonly [number, number]>, x: number, y: number) => points.some(([px, py]) => Math.abs(px - x) < 0.5 && Math.abs(py - y) < 0.5);
+    const first = pathPoints(attr(runtime, id, 'd')!);
+    expect(near(first, 52, 340)).toBe(true);
+    expect(near(first, 52 + 2 * 68.8, 340 - 32)).toBe(true);
+    runtime.play();
+    for (let i = 0; i < 40; i++) runtime.tick(1 / 60);
+    runtime.pause();
+    const moved = pathPoints(attr(runtime, id, 'd')!);
+    expect(near(moved, 396, 180)).toBe(true);
+    expect(near(moved, 396 + 2.5 * 68.8, 180)).toBe(true);
+    // Zoomed in twice about (5, 5), the arrow is twice as long on the stage.
+    runtime.view(runtime.graph.stages[0]!.id, { kind: 'zoom', x: 396, y: 180, factor: 2 });
+    runtime.tick(0);
+    const zoomed = pathPoints(attr(runtime, id, 'd')!);
+    expect(near(zoomed, 396, 180)).toBe(true);
+    expect(near(zoomed, 396 + 5 * 68.8, 180)).toBe(true);
+  });
+
+  it('moves a point with a trail behind it, which keeps its last points (G2-13)', () => {
+    let trailId = 0;
+    let pointId = 0;
+    const { runtime } = run((inc) => {
+      const g = inc.graph2d('#g', { x: [0, 10], y: [0, 10], title: 'Trail' });
+      const point = g.point(0, 0, { tone: 'lit' });
+      const trail = g.trail({ tone: 'faint', max: 20 });
+      trailId = idOf(trail.handle);
+      pointId = idOf(point.handle);
+      inc.onFrame(({ time }) => {
+        point.at(time * 4, time * 2);
+        trail.add(time * 4, time * 2);
+      });
+    });
+    runtime.play();
+    for (let i = 0; i < 60; i++) runtime.tick(1 / 60);
+    const points = String(attr(runtime, trailId, 'points'))
+      .trim()
+      .split(/\s+/)
+      .map((pair) => pair.split(',').map(Number) as [number, number]);
+    // At most 20 points, ending where the point is.
+    expect(points.length).toBe(20);
+    const [cx, cy] = [Number(attr(runtime, pointId, 'cx')), Number(attr(runtime, pointId, 'cy'))];
+    expect(points[points.length - 1]![0]).toBeCloseTo(cx, 1);
+    expect(points[points.length - 1]![1]).toBeCloseTo(cy, 1);
+    // The trail runs along the line y = x / 2 in data units: on the stage, from lower left up to the right.
+    expect(points[0]![0]).toBeLessThan(cx);
+    expect(points[0]![1]).toBeGreaterThan(cy);
+  });
 });
 
 describe('special points and annotations (G2-8, G2-11)', () => {
@@ -319,6 +396,21 @@ describe('special points and annotations (G2-8, G2-11)', () => {
     });
     const shown = texts(runtime);
     expect(shown).toEqual(expect.arrayContaining(['x = -1', 'x = 1', 'min (0, -1)', '(-1, 0)', '(2, 3)']));
+  });
+
+  it('places a label at a point in data units, and keeps it there as the view changes (G2-11)', () => {
+    let id = 0;
+    const { runtime } = run((inc) => {
+      const g = inc.graph2d('#g', { x: [0, 10], y: [0, 10], title: 'Label' });
+      id = idOf(g.label(7.5, 5, 'here', { tone: 'b' }));
+    });
+    expect(texts(runtime)).toContain('here');
+    expect(Number(attr(runtime, id, 'x'))).toBeCloseTo(52 + 0.75 * 688, 6);
+    expect(Number(attr(runtime, id, 'y'))).toBeCloseTo(180, 6);
+    // Zoomed in twice about (5, 5): x runs from 2.5 to 7.5, so the label sits at the right edge of the plot.
+    runtime.view(runtime.graph.stages[0]!.id, { kind: 'zoom', x: 396, y: 180, factor: 2 });
+    runtime.tick(0);
+    expect(Number(attr(runtime, id, 'x'))).toBeCloseTo(740, 6);
   });
 
   it('draws brackets and dimension lines with their text', () => {
@@ -338,6 +430,17 @@ describe('log scales and number lines (G2-12, DG-2)', () => {
     expect(tickText(0.1, 0.01)).toBe('0.1');
     const { runtime } = run((inc) => void inc.graph2d('#g', { x: [1, 1000], y: [0, 1], title: 'Log', scale: { x: 'log' } }));
     expect(texts(runtime)).toEqual(expect.arrayContaining(['1', '10', '100', '1000']));
+  });
+
+  it('ticks a log y axis, places data on it by powers of ten, and writes units into the axis names (G2-12)', () => {
+    let point = 0;
+    const { runtime } = run((inc) => {
+      const g = inc.graph2d('#g', { x: [0, 10], y: [1, 1000], title: 'Decay', scale: { y: 'log' }, labels: { x: 'time (s)', y: 'count (atoms)' } });
+      point = idOf(g.point(5, 10).handle);
+    });
+    expect(texts(runtime)).toEqual(expect.arrayContaining(['1', '10', '100', '1000', 'time (s)', 'count (atoms)']));
+    // 10 is a third of the way up from 1 to 1000.
+    expect(Number(attr(runtime, point, 'cy'))).toBeCloseTo(340 - 320 / 3, 1);
   });
 
   it('draws a number line with only its x axis', () => {
