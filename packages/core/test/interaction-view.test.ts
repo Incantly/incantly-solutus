@@ -357,6 +357,45 @@ describe('full screen, layout and shading (VI-6, SV-5)', () => {
     expect(THEME_CSS).toContain('@container (max-width: 560px)');
   });
 
+  it('paints dots on a canvas that shares the stage’s coordinates and follows its zoom (SV-13)', () => {
+    const arcs: Array<[number, number, number]> = [];
+    const fills: string[] = [];
+    const context = {
+      fillStyle: '',
+      clearRect: () => undefined,
+      beginPath: () => undefined,
+      moveTo: () => undefined,
+      arc: (x: number, y: number, r: number) => void arcs.push([x, y, r]),
+      fill() {
+        fills.push(this.fillStyle);
+      },
+    };
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(context as unknown as CanvasRenderingContext2D);
+    vi.spyOn(SVGElement.prototype, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 400, bottom: 400, width: 400, height: 400, toJSON: () => ({}) } as DOMRect);
+    const { root } = mount(`
+      const stage = inc.svg('#stage', { viewBox: [0, 0, 200, 200], title: 'Gas' });
+      stage.rect(0, 0, 200, 200, { tone: 'faint' });
+      stage.dots({ tone: 'a', r: 2, layer: 'back' }).set([[50, 50], [150, 100]]);
+    `);
+    const canvas = q<HTMLCanvasElement>(root, 'canvas.inc-dots--back');
+    // Behind the drawing, hidden from assistive technology, at the drawing's pixel size.
+    expect(canvas.nextElementSibling).toBe(q(root, 'svg.inc-stage'));
+    expect(canvas.getAttribute('aria-hidden')).toBe('true');
+    expect(canvas.width).toBe(400);
+    // Stage units, scaled to the canvas: 200 units across 400 pixels.
+    expect(arcs).toEqual([
+      [100, 100, 4],
+      [300, 200, 4],
+    ]);
+    expect(fills).toHaveLength(1);
+    // Zoomed in about the middle, the dots move with the drawing.
+    arcs.length = 0;
+    q<HTMLButtonElement>(root, '.inc-zoombar button[data-view="in"]').click();
+    expect(arcs.length).toBe(2);
+    expect(arcs[0]![0]).toBeLessThan(100);
+    expect(arcs[0]![2]).toBeGreaterThan(4);
+  });
+
   it('shades filled shapes with one gradient per tone and shade in each stage, under the figure’s own ids', () => {
     const { root } = mount(`
       const stage = inc.svg('#stage', { viewBox: [0, 0, 200, 200], title: 'Shaded' });

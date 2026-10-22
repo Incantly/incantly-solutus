@@ -117,6 +117,14 @@ describe('probe: deliberately broken scenes fail for the expected reason', () =>
     expect(report.failures.find((f) => f.check === 'paused-change')!.message).toContain('Moving height while paused');
   });
 
+  it('passes a drawing near its element budget, with a warning that suggests dots (SV-12)', () => {
+    const js = build({ bar: "const bar = stage.rect(40, 50, 20, 40, { tone: 'lit' });\nfor (let i = 0; i < 340; i++) stage.circle(5 + (i % 30) * 3, 5 + Math.floor(i / 30) * 3, 0.5, { tone: 'faint' });" });
+    const report = probe(js, { spec: { elements: 400 } });
+    expect(report.failures).toEqual([]);
+    expect(report.warnings?.[0]).toMatch(/of its 400 elements: draw many small dots with stage.dots/);
+    expect(probe(js, { spec: { elements: 1600 } }).warnings).toBeUndefined();
+  });
+
   it('a drawing outside the stage', () => {
     const report = probe(build({ bar: "const bar = stage.rect(140, 50, 20, 40, { tone: 'lit' });" }));
     expect(checks(report)).toEqual(['bounds']);

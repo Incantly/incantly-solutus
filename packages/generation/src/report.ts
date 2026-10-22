@@ -207,7 +207,7 @@ export function likelyCause(failure: ProbeFailure): string | null {
       return 'some coordinates leave the stage; scale them to the viewBox or the graph ranges';
     }
     case 'budget':
-      return 'too many elements: draw a curve as one path, and create elements once';
+      return 'too many elements: draw many small dots (particles, samples) with stage.dots, a curve as one path, and create elements once';
     case 'frame-cost':
       return 'too much work per frame: build shapes once and only move them';
     case 'parts':

@@ -186,6 +186,22 @@ describe('inc.space3d', () => {
     expect(near.screen()[0]).toBeGreaterThan(0);
   });
 
+  it('draws a sticker on a face in front of it with a depth bias, and behind it without (C3-6)', () => {
+    const order = (bias: number | undefined) => {
+      // A plate, and a thin sticker on the plate's face toward the camera: coplanar, so the sort alone cannot choose.
+      const { runtime } = space((s) => {
+        s.box([0.2, 2, 2], { at: [0, 0, 0], tone: 'a' });
+        s.box([0.2, 1, 1], { at: [0.001, 0, 0], tone: 'lit', ...(bias !== undefined ? { bias } : {}) });
+      }, { camera: { yaw: 0, pitch: 0, distance: 0 } });
+      return visibleSlots(runtime).map((n) => n.tone);
+    };
+    const biased = order(2);
+    // The sticker's faces come after every face of the plate it sits on.
+    expect(biased.lastIndexOf('a')).toBeLessThan(biased.indexOf('lit'));
+    const pushedBack = order(-2);
+    expect(pushedBack.lastIndexOf('lit')).toBeLessThan(pushedBack.indexOf('a'));
+  });
+
   it('moves groups with their parent and spreads them in an exploded view (S3-3, S3-7)', () => {
     let group!: ReturnType<Space3D['group']>;
     let child!: ReturnType<Space3D['sphere']>;

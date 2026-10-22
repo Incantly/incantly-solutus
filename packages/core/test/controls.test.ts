@@ -435,3 +435,59 @@ describe('the idle tour (MO-1, BR-8)', () => {
     expect(error).toContain('"nothing", which is not a parameter declared before it');
   });
 });
+
+describe('moves in order and views on one state (C3-8, C3-9)', () => {
+  it('queues tweens and plays them one after another, each committing once', () => {
+    const log: string[] = [];
+    const runtime = new SceneRuntime({ autoplay: false });
+    runtime.mount((inc) => {
+      inc.svg('#stage', { viewBox: [0, 0, 10, 10], title: 'Moves' });
+      for (const name of ['first', 'second', 'third']) {
+        inc.tween({ duration: 0.5, apply: (k) => void log.push(`${name} ${k.toFixed(2)}`), commit: () => void log.push(`${name} done`) });
+      }
+    });
+    for (let i = 0; i < 18; i++) runtime.tick(0.1);
+    const done = log.filter((l) => l.endsWith('done'));
+    expect(done).toEqual(['first done', 'second done', 'third done']);
+    // Never two at once: each starts after the one before it committed.
+    const starts = ['first', 'second', 'third'].map((name) => log.findIndex((l) => l.startsWith(`${name} `)));
+    expect(starts[1]).toBeGreaterThan(log.indexOf('first done'));
+    expect(starts[2]).toBeGreaterThan(log.indexOf('second done'));
+    // The queue holds sixteen: a seventeenth is a mistake the figure reports.
+    const full = new SceneRuntime({ autoplay: false });
+    full.mount((inc) => {
+      for (let i = 0; i < 17; i++) inc.tween({ duration: 1, apply: () => undefined });
+    });
+    expect(full.uiState().error?.message).toBe('Too many queued tweens');
+  });
+
+  it('keeps two stages in step from one model: a change redraws both', () => {
+    const runtime = new SceneRuntime({ autoplay: false });
+    let dot = 0;
+    let bar = 0;
+    runtime.mount((inc) => {
+      const height = inc.param('height', { min: 0, max: 10, value: 2, label: 'Height' });
+      const model = inc.model((v) => ({ energy: 9.8 * (v.height ?? 0) }));
+      const scene = inc.svg('#scene', { viewBox: [0, 0, 100, 100], title: 'Ball' });
+      const chart = inc.svg('#chart', { viewBox: [0, 0, 100, 100], title: 'Energy' });
+      const ball = scene.circle(50, 90, 4, { tone: 'lit' });
+      const column = chart.rect(40, 90, 20, 0, { tone: 'a', fill: true });
+      dot = (ball as unknown as { node: { id: number } }).node.id;
+      bar = (column as unknown as { node: { id: number } }).node.id;
+      inc.onFrame(() => {
+        ball.set({ cy: 90 - height.value * 8 });
+        column.set({ y: 90 - model.energy / 2, height: model.energy / 2 });
+      });
+    });
+    runtime.tick(0);
+    const attr = (id: number, name: string) => Number(runtime.graph.nodes.get(id)!.attrs.get(name));
+    expect(runtime.graph.stages).toHaveLength(2);
+    expect(attr(dot, 'cy')).toBeCloseTo(74, 6);
+    expect(attr(bar, 'height')).toBeCloseTo(9.8, 6);
+    runtime.setParam('height', 5);
+    runtime.tick(0);
+    expect(attr(dot, 'cy')).toBeCloseTo(50, 6);
+    expect(attr(bar, 'height')).toBeCloseTo(24.5, 6);
+  });
+});
+

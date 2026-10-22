@@ -93,7 +93,12 @@ export interface ProbeReport {
   readonly ok: boolean;
   readonly failures: readonly ProbeFailure[];
   readonly stats: ProbeStats;
+  /** What passed but is close to failing, such as a drawing near its element budget (SV-12). */
+  readonly warnings?: readonly string[];
 }
+
+/** Share of the element budget above which the probe warns (SV-12). */
+export const ELEMENT_WARNING_SHARE = 0.8;
 
 const FRAME = 1 / 60;
 const MAX_FAILURES_PER_CHECK = 4;
@@ -109,6 +114,7 @@ class Probe {
   private readonly now: () => number;
   private readonly started: number;
   private configurations = 0;
+  private readonly warnings: string[] = [];
   private frames = 0;
   private frameMs = 0;
   private measuredFrames = 0;
@@ -139,6 +145,7 @@ class Probe {
     return {
       ok: this.failures.length === 0,
       failures: this.failures,
+      ...(this.warnings.length > 0 ? { warnings: this.warnings } : {}),
       stats: {
         configurations: this.configurations,
         frames: this.frames,
@@ -249,6 +256,8 @@ class Probe {
     const budget = this.options.elementBudget ?? this.options.spec?.elements ?? 300;
     if (runtime.graph.size > budget) {
       this.fail({ check: 'budget', message: `The scene draws ${runtime.graph.size} elements; the budget is ${budget}` });
+    } else if (runtime.graph.size > budget * ELEMENT_WARNING_SHARE) {
+      this.warnings.push(`The scene draws ${runtime.graph.size} of its ${budget} elements: draw many small dots with stage.dots and a curve as one path`);
     }
     const capped = runtime.graph.diagnostics.find((d) => d.kind === 'samples-capped');
     if (capped) this.fail({ check: 'budget', message: capped.message });
