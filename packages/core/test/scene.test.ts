@@ -58,6 +58,14 @@ describe('scene graph', () => {
     const ball = stage.circle(1, 1, 1);
     expect(() => ball.set({ fill: 'red' } as never)).toThrow('Colours come from tones');
     expect(() => ball.set({ onclick: 'x' } as never)).toThrow('Unknown attribute "onclick"');
+    // The words of a text are not an attribute.
+    expect(() => stage.text(0, 0, 'a').set({ text: 'b' } as never)).toThrow('Set a text\'s words with .text(...)');
+  });
+
+  it('says a shape takes numbers, not functions, and is set again on each frame', () => {
+    // Once a repaired spring scene gave a rect's width as a function of the stiffness, and threw at mount.
+    const { stage } = setup();
+    expect(() => stage.rect(60, 262, (() => 8) as never, 8)).toThrow('Attribute "width" was given a function; give it a number, and set it again in inc.onFrame');
   });
 
   it('rejects attribute values that are not plain geometry', () => {

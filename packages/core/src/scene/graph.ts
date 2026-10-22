@@ -214,9 +214,15 @@ export class SceneGraph {
 
   setAttribute(node: VNode, name: string, value: number | string | null): void {
     if (!RENDERABLE_ATTRIBUTES.has(name)) {
+      // Words are not an attribute: scenes reach for set({ text }) on labels.
+      if (name === 'text' || name === 'textContent') throw new SceneApiError(`Unknown attribute "${name}". Set a text's words with .text(...).`);
       throw new SceneApiError(`Unknown attribute "${name}". Colours come from tones, not attributes.`);
     }
     let text: string | null;
+    if (typeof value === 'function') {
+      // Attributes are values, not live formulas: a shape that follows a control is set again on each frame.
+      throw new SceneApiError(`Attribute "${name}" was given a function; give it a number, and set it again in inc.onFrame to follow the controls`);
+    }
     if (value === null) {
       text = null;
     } else if (typeof value === 'number') {
