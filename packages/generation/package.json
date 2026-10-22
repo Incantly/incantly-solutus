@@ -15,6 +15,7 @@
     "build": "node scripts/build.mjs",
     "serve": "node scripts/build.mjs && node dist/serve.mjs",
     "evals": "node scripts/build.mjs && node dist/evals.mjs",
-    "gallery": "node scripts/build.mjs && node dist/gallery.mjs"
+    "gallery": "node scripts/build.mjs && node dist/gallery.mjs",
+    "metrics": "node scripts/build.mjs && node dist/metrics.mjs"
   }
 }

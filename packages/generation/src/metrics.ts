@@ -1,3 +1,4 @@
+import { closureOf, type ClosedClass } from './closed';
 import type { FailureRecord, Outcome } from './records';
 
 /**
@@ -23,6 +24,8 @@ export interface Recurring {
   readonly concepts: readonly string[];
   /** One report summary, for a feel of it. */
   readonly sample: string;
+  /** The kit function, engine behaviour or rule that closed its class so far, or null while it is open (RP-12). */
+  readonly closed: ClosedClass | null;
 }
 
 export interface Dashboard {
@@ -75,6 +78,7 @@ export function dashboard(records: readonly FailureRecord[], deadlineMs = 25_000
       count: e.count,
       concepts: [...e.concepts.entries()].sort((a, b) => b[1] - a[1]).map(([c]) => c),
       sample: e.sample,
+      closed: closureOf(check),
     }));
   const times = (pick: (r: FailureRecord) => number | undefined) => spread(records.map(pick).filter((v): v is number => v !== undefined));
   return {
@@ -124,7 +128,23 @@ export function dashboardText(d: Dashboard): string {
     '',
     d.recurring.length === 0
       ? 'None seen twice yet.'
-      : ['| Check | Times | Concepts | Example |', '| --- | --- | --- | --- |', ...d.recurring.map((r) => `| ${r.check} | ${r.count} | ${r.concepts.slice(0, 3).join(', ')} | ${r.sample.replace(/\|/g, '/')} |`)].join('\n'),
+      : [
+          '| Check | Times | Concepts | Example | Closed so far |',
+          '| --- | --- | --- | --- | --- |',
+          ...d.recurring.map(
+            (r) => `| ${r.check} | ${r.count} | ${r.concepts.slice(0, 3).join(', ')} | ${r.sample.replace(/\|/g, '/')} | ${r.closed ? `${r.closed.by}: ${r.closed.fix.replace(/\|/g, '/')}` : 'open'} |`,
+          ),
+          '',
+          openLine(d.recurring),
+        ].join('\n'),
     '',
   ].join('\n');
+}
+
+/** The recurring failures no kit function, engine behaviour or rule has closed yet: the next to close (RP-12). */
+function openLine(recurring: readonly Recurring[]): string {
+  const open = recurring.filter((r) => r.closed === null).map((r) => r.check);
+  return open.length === 0
+    ? 'Every recurring failure has a kit function, an engine behaviour or a rule against it; one that still recurs needs a stronger one.'
+    : `Open: ${open.join(', ')}. Close each with a kit function that removes the cause, or a core rule, and a test, and list it in closed.ts.`;
 }

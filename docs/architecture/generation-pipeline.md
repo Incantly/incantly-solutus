@@ -94,6 +94,8 @@ Use the first available option:
 
 Record the concept, plan, fragments before and after, validation or runtime report, SDK version, and outcome. Recurring failures should become a generic SDK capability, a clearer rule, or an executable regression test—not additional retries.
 
+The dashboard (`npm run metrics --workspace @incantly/generation -- records/`) lists every failure seen at least twice, with what has closed its class so far (RP-12): `closed.ts` names, for each check, the kit function, engine behaviour or core rule that removes its cause, and the test that keeps it closed, and a test checks that every one of those tests exists. A recurring failure with nothing against it is listed as open, the next to close. The classes closed so far: a paused redraw that changed nothing (the engine redraws at dt = 0 when a parameter changes), too many elements (`stage.dots`, and a warning near the budget), unknown helpers (the validator names the one meant), the forms scenes reach for (graph items stand for their handles, `inc.path.polyline`, `inc.shapes.resistor`), a second drag on one element, liquids without a tone (`water`), and parts named for readouts (`graph.part`, and plans name only drawn things).
+
 ## Implementation (v0.1)
 
 The pipeline lives in `packages/generation`. Where each step runs:
