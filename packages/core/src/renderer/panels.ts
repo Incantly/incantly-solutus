@@ -3,6 +3,9 @@ import type { FormulaView, LegendView, PredictView, TableView } from '../protoco
 import { setDisabled } from './controls';
 import { mathElement } from './math';
 
+/** What a formula of each variable gives, written before it. */
+const FORMULA_LEAD: Readonly<Record<FormulaView['input'], string | undefined>> = { x: 'y', y: 'x', theta: 'r', t: undefined };
+
 type Send = (message: RendererMessage) => void;
 
 /** How long after the learner stops typing a formula it is tried. */
@@ -161,7 +164,8 @@ export class FormulasPanel {
       const math = row.querySelector<HTMLElement>('.inc-formula__math');
       if (math && math.dataset.source !== formula.source) {
         math.dataset.source = formula.source;
-        const rendered = mathElement(this.doc, formula.source, 'y');
+        // Written as what it gives: y = f(x), x = f(y), r = f(theta); a parametric part as itself.
+        const rendered = mathElement(this.doc, formula.source, FORMULA_LEAD[formula.input]);
         math.replaceChildren(rendered ?? this.doc.createTextNode(formula.source));
       }
       const input = row.querySelector<HTMLInputElement>('input');

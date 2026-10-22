@@ -114,7 +114,8 @@ export function createFormula(
   }
   const label = options?.label ?? '';
   if (typeof label !== 'string' || label.length > 60) throw new SceneApiError('A formula label is a short piece of text');
-  const record = new FormulaRecord(source, label, options?.editable === true, vars, byName, input);
+  // Editable unless the scene says otherwise (FM-2): the learner may change a formula and see what follows.
+  const record = new FormulaRecord(source, label, options?.editable !== false, vars, byName, input);
   register?.(record);
   const formula = (value: number, t: number = time()) => record.compiled.evaluate(record.bind(value, t));
   Object.defineProperties(formula, {

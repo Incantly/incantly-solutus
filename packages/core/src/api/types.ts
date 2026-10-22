@@ -598,7 +598,7 @@ export type FormulaInput = 'x' | 'y' | 'theta' | 't';
 export interface FormulaOptions {
   /** Short names for parameters or numbers, such as { A: amplitude }. Parameters declared before the formula can also be used by their own names. */
   readonly vars?: Readonly<Record<string, Param | number>>;
-  /** Show the formula as maths the learner can edit; their edit replaces it everywhere. */
+  /** The learner can edit the formula, shown as maths beside its field; their edit replaces it everywhere. Default true; false keeps it fixed. */
   readonly editable?: boolean;
   readonly label?: string;
   /** Its own variable, x by default: y for x = f(y), theta for r = f(theta), t for a parametric curve. */

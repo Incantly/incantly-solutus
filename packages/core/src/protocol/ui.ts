@@ -1,4 +1,4 @@
-import type { Ease, Tone } from '../api/types';
+import type { Ease, FormulaInput, Tone } from '../api/types';
 import type { LoopMode } from './runtime-messages';
 
 /** UI state the runtime publishes; the renderer turns it into controls and text. */
@@ -74,6 +74,8 @@ export interface FormulaView {
   readonly label: string;
   readonly source: string;
   readonly editable: boolean;
+  /** Its own variable, which sets what it is written as: y = f(x), x = f(y), r = f(theta). */
+  readonly input: FormulaInput;
   /** Why the learner's last edit was not accepted; the figure keeps the previous formula. */
   readonly error: string | null;
   /** The text the learner is editing when it differs from `source` (an edit that failed). */

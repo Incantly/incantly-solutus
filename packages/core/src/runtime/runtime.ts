@@ -1267,7 +1267,7 @@ export class SceneRuntime {
       error: this.error,
       actions,
       legend: this.legendView(),
-      formulas: this.formulas.map((f, index) => ({ index, label: f.label, source: f.source, editable: f.editable, error: f.error, draft: f.draft })),
+      formulas: this.formulas.map((f, index) => ({ index, label: f.label, source: f.source, editable: f.editable, input: f.input, error: f.error, draft: f.draft })),
       predict: this.predictView(),
       tables: this.tables.map((t) => ({ title: t.title, columns: t.columns, rows: t.cells })),
       timing: this.timeline?.view() ?? null,

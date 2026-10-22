@@ -551,6 +551,26 @@ describe('panels: legend, formulas, prediction and tables', () => {
     vi.useRealTimers();
   });
 
+  it('lets the learner edit every formula unless the scene fixes it, written as what it gives (FM-2)', () => {
+    // Once only formulas made with editable: true could be edited, and the sine wave's own formula could not.
+    const { root, figure } = mount(`
+      const A = inc.param('A', { min: 0, max: 3, value: 1 });
+      const g = inc.graph2d('#stage', { x: [-3, 3], y: [-3, 3], title: 'Curves' });
+      g.plot(inc.formula('A*sin(x)'));
+      g.plotX(inc.formula('y^2 - 2', { input: 'y' }));
+      g.plot(inc.formula('x/2', { editable: false, label: 'Guide' }));
+      inc.formula('x*0', { editable: false });
+    `);
+    const rows = [...root.querySelectorAll<HTMLElement>('.inc-formula')];
+    // The fixed one with no label is not listed; the labelled fixed one is shown without a field.
+    expect(rows).toHaveLength(3);
+    expect(rows.map((row) => row.querySelector('input') !== null)).toEqual([true, true, false]);
+    // Written as what it gives: y = ..., x = ....
+    expect(rows[0]!.querySelector('.inc-formula__math math mi')?.textContent).toBe('y');
+    expect(rows[1]!.querySelector('.inc-formula__math math mi')?.textContent).toBe('x');
+    expect(figure.runtime.uiState().formulas.map((f) => f.editable)).toEqual([true, true, false, false]);
+  });
+
   it('asks a prediction before revealing it, and fills tables', () => {
     const { root, figure, clock } = mount(`
       const a = inc.param('a', { min: 0, max: 10, value: 2 });
