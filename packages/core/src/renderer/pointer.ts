@@ -28,6 +28,9 @@ export const MAX_ZOOM = 8;
 const NUDGE = 0.025;
 /** Below this many pixels a press is a tap, not a drag. */
 const TAP_SLOP = 6;
+/** Two taps this close in time and place are a double tap, which resets the view as a double click does. */
+const DOUBLE_TAP_MS = 320;
+const DOUBLE_TAP_SLOP = 28;
 
 interface View {
   x: number;
@@ -79,6 +82,7 @@ export class PointerController {
   private active: StageDom | null = null;
   private pending: Pending = { drag: null, hover: new Map(), view: new Map() };
   private frame: number | null = null;
+  private lastTap: { stage: StageDom; x: number; y: number; at: number } | null = null;
 
   constructor(private readonly options: PointerOptions) {
     const { sceneRoot, signal, doc } = options;
@@ -284,11 +288,30 @@ export class PointerController {
     if (gesture && tracked && this.pointers.size === 0) {
       this.background = null;
       // A tap (not a drag) on a zoomable stage activates it (VI-2).
-      if (!gesture.moved && !cancelled) this.setActive(gesture.stage);
+      if (!gesture.moved && !cancelled) {
+        this.setActive(gesture.stage);
+        this.tapped(gesture.stage, event);
+      }
     } else if (!tracked && !cancelled && event.pointerType === 'touch') {
       const stage = this.options.scene.stageOf(event.target as Element);
-      if (stage && (stage.interaction.zoom !== 'none' || stage.interaction.orbit)) this.setActive(stage);
+      if (stage && (stage.interaction.zoom !== 'none' || stage.interaction.orbit)) {
+        this.setActive(stage);
+        this.tapped(stage, event);
+      }
     }
+  }
+
+  /** A second touch tap soon after the first, near it, resets the view (VI-1); a mouse has the double click. */
+  private tapped(stage: StageDom, event: PointerEvent): void {
+    if (event.pointerType !== 'touch') return;
+    const at = event.timeStamp || performance.now();
+    const last = this.lastTap;
+    if (last && last.stage === stage && at - last.at < DOUBLE_TAP_MS && Math.hypot(event.clientX - last.x, event.clientY - last.y) < DOUBLE_TAP_SLOP) {
+      this.lastTap = null;
+      if (stage.interaction.zoom !== 'none') this.resetView(stage);
+      return;
+    }
+    this.lastTap = { stage, x: event.clientX, y: event.clientY, at };
   }
 
   private onOut(event: PointerEvent): void {

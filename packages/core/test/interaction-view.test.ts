@@ -143,6 +143,75 @@ describe('zooming and panning a drawing (SV-9, VI-1, VI-2)', () => {
     expect(figure.runtime.uiState().views[0]!.changed).toBe(false);
   });
 
+  it('pans a zoomed drawing by dragging its background with the pointer (EN-6)', () => {
+    const { root } = mount(PENDULUM);
+    const svg = q<SVGSVGElement>(root, 'svg.inc-stage');
+    // Not zoomed: a background drag has nothing to show and the view box stays.
+    press(svg, 'pointerdown', { clientX: 100, clientY: 100 });
+    press(svg, 'pointermove', { clientX: 140, clientY: 100 });
+    press(svg, 'pointerup', { clientX: 140, clientY: 100 });
+    expect(svg.getAttribute('viewBox')).toBe('0 0 200 200');
+    q<HTMLButtonElement>(root, '.inc-zoombar button[data-view="in"]').click();
+    const before = svg.getAttribute('viewBox')!.split(' ').map(Number);
+    press(svg, 'pointerdown', { clientX: 100, clientY: 100 });
+    press(svg, 'pointermove', { clientX: 130, clientY: 120 });
+    press(svg, 'pointermove', { clientX: 140, clientY: 130 });
+    press(svg, 'pointerup', { clientX: 140, clientY: 130 });
+    const after = svg.getAttribute('viewBox')!.split(' ').map(Number);
+    // The drawing follows the pointer: right and down shows what was left and above.
+    expect(after[0]).toBeLessThan(before[0]!);
+    expect(after[1]).toBeLessThan(before[1]!);
+    expect(after[2]).toBe(before[2]);
+  });
+
+  it('pinches with two fingers once the stage is active, and a double tap resets the view (VI-1)', () => {
+    const { root } = mount(PENDULUM);
+    const svg = q<SVGSVGElement>(root, 'svg.inc-stage');
+    const host = q(root, '.inc-stage-host');
+    const touch = (type: string, pointerId: number, clientX: number, clientY = 100) => press(svg, type, { pointerId, pointerType: 'touch', clientX, clientY });
+    // Before a tap, two fingers scroll the page: nothing zooms.
+    touch('pointerdown', 1, 80);
+    touch('pointerdown', 2, 120);
+    touch('pointermove', 2, 160);
+    touch('pointerup', 1, 80);
+    touch('pointerup', 2, 160);
+    expect(svg.getAttribute('viewBox')).toBe('0 0 200 200');
+    expect(host.classList.contains('is-active')).toBe(true);
+    // Active: fingers moving apart zoom in about their middle.
+    touch('pointerdown', 3, 80);
+    touch('pointerdown', 4, 120);
+    touch('pointermove', 4, 160);
+    touch('pointerup', 3, 80);
+    touch('pointerup', 4, 160);
+    const [, , w] = svg.getAttribute('viewBox')!.split(' ').map(Number);
+    expect(w).toBeLessThan(200);
+    // Two quick taps in one place: the view goes back.
+    touch('pointerdown', 5, 100);
+    touch('pointerup', 5, 100);
+    touch('pointerdown', 6, 102);
+    touch('pointerup', 6, 102);
+    expect(svg.getAttribute('viewBox')).toBe('0 0 200 200');
+  });
+
+  it('turns a 3D view by dragging its background, the same for every 3D figure (C3-5)', async () => {
+    const { kit } = await import('../src/kits/space3d');
+    const { root, clock, sent, figure } = mount(
+      `const space = inc.space3d('#stage', { title: 'Box' });
+       space.box(2, { tone: 'lit' });`,
+      { kits: { space3d: kit } },
+    );
+    const svg = q<SVGSVGElement>(root, 'svg.inc-stage');
+    expect(svg.hasAttribute('data-orbit')).toBe(true);
+    press(svg, 'pointerdown', { clientX: 300, clientY: 200 });
+    press(svg, 'pointermove', { clientX: 360, clientY: 210 });
+    clock.runUntilIdle();
+    press(svg, 'pointerup', { clientX: 360, clientY: 210 });
+    clock.runUntilIdle();
+    const orbit = sent.find((m) => m.type === 'view' && m.action.kind === 'orbit');
+    expect(orbit).toBeTruthy();
+    expect(figure.runtime.uiState().views[0]!.changed).toBe(true);
+  });
+
   it('reports hovering over a stage that traces', () => {
     const { root, clock, sent } = mount(`
       const g = inc.graph2d('#stage', { x: [0, 10], y: [0, 10], title: 'Trace' });
@@ -203,6 +272,32 @@ describe('controls (CT-3, CT-5, CT-6, CT-9)', () => {
     expect(figure.runtime.values().g).toBe(5);
   });
 
+  it('caps the frame rate from the settings panel without losing time (CT-4)', () => {
+    const { root, clock, figure } = mount(
+      `const stage = inc.svg('#stage', { viewBox: [0, 0, 100, 100], title: 'Moving' });
+       const dot = stage.circle(10, 50, 4, { tone: 'lit' });
+       inc.onFrame(({ time }) => dot.set({ cx: 10 + ((time * 20) % 80) }));`,
+      { autoplay: true, reducedMotion: false },
+    );
+    const ticks = () => figure.renderer.stats.ticksSent;
+    for (let i = 0; i < 30; i++) clock.advance(1000 / 60);
+    const smooth = ticks();
+    const cap = q<HTMLSelectElement>(root, 'select[data-setting="cap"]');
+    cap.value = '15';
+    cap.dispatchEvent(new Event('change', { bubbles: true }));
+    const start = figure.runtime.time;
+    for (let i = 0; i < 60; i++) clock.advance(1000 / 60);
+    // A second at 60 frames a second, drawn 15 times, and the scene still moved on by a second.
+    expect(ticks() - smooth).toBeGreaterThanOrEqual(14);
+    expect(ticks() - smooth).toBeLessThanOrEqual(16);
+    expect(figure.runtime.time - start).toBeGreaterThan(0.9);
+    cap.value = '0';
+    cap.dispatchEvent(new Event('change', { bubbles: true }));
+    const uncapped = ticks();
+    for (let i = 0; i < 30; i++) clock.advance(1000 / 60);
+    expect(ticks() - uncapped).toBeGreaterThanOrEqual(29);
+  });
+
   it('opens a settings panel with the timeline, a frame-rate cap and a frame step', () => {
     const { root, figure } = mount(CONTROLS);
     const gear = q<HTMLButtonElement>(root, 'button[data-action="settings"]');
@@ -220,6 +315,66 @@ describe('controls (CT-3, CT-5, CT-6, CT-9)', () => {
     expect(figure.runtime.uiState().timing).toEqual({ duration: 4, loop: 'pingpong', ease: 'linear' });
     q<HTMLButtonElement>(root, 'button[data-action="frame"]').click();
     expect(figure.runtime.time).toBeCloseTo(1 / 60);
+  });
+});
+
+describe('full screen, layout and shading (VI-6, SV-5)', () => {
+  it('fills the screen from its button, says so, and pads for the safe area', () => {
+    const doc = document as { -readonly [K in keyof Document]: Document[K] };
+    Object.defineProperty(document, 'fullscreenEnabled', { value: true, configurable: true });
+    let element: Element | null = null;
+    Object.defineProperty(document, 'fullscreenElement', { get: () => element, configurable: true });
+    const change = (to: Element | null) => {
+      element = to;
+      document.dispatchEvent(new Event('fullscreenchange'));
+    };
+    doc.exitFullscreen = vi.fn(async () => change(null));
+    try {
+      const { root } = mount(PENDULUM);
+      root.requestFullscreen = vi.fn(async () => change(root));
+      const button = q<HTMLButtonElement>(root, 'button[data-action="fullscreen"]');
+      expect(button.hidden).toBe(false);
+      expect(button.getAttribute('aria-pressed')).toBe('false');
+      button.click();
+      expect(root.requestFullscreen).toHaveBeenCalledTimes(1);
+      expect(button.getAttribute('aria-pressed')).toBe('true');
+      expect(button.getAttribute('aria-label')).toBe('Exit full screen');
+      button.click();
+      expect(doc.exitFullscreen).toHaveBeenCalledTimes(1);
+      expect(button.getAttribute('aria-pressed')).toBe('false');
+      expect(button.getAttribute('aria-label')).toBe('Full screen');
+    } finally {
+      delete (document as unknown as Record<string, unknown>).fullscreenEnabled;
+      delete (document as unknown as Record<string, unknown>).fullscreenElement;
+    }
+  });
+
+  it('lays out by its own width and pads a full-screen figure clear of notches', async () => {
+    const { THEME_CSS } = await import('../src/renderer/theme');
+    expect(THEME_CSS).toMatch(/\.inc-figure:fullscreen \{[^}]*env\(safe-area-inset-top\)[^}]*env\(safe-area-inset-left\)/);
+    // The figure is a size container, so its layout follows its own width, not the window's.
+    expect(THEME_CSS).toMatch(/\.inc-figure \{[^}]*container-type: inline-size/);
+    expect(THEME_CSS).toContain('@container (max-width: 560px)');
+  });
+
+  it('shades filled shapes with one gradient per tone and shade in each stage, under the figure’s own ids', () => {
+    const { root } = mount(`
+      const stage = inc.svg('#stage', { viewBox: [0, 0, 200, 200], title: 'Shaded' });
+      const a = stage.circle(50, 50, 20, { tone: 'lit', fill: true, shade: 'sphere' });
+      const b = stage.circle(120, 50, 20, { tone: 'lit', fill: true, shade: 'sphere' });
+      const c = stage.rect(20, 120, 60, 40, { tone: 'b', fill: true, shade: 'cylinder' });
+      const d = stage.rect(120, 120, 60, 40, { tone: 'b', fill: true });
+    `);
+    const gradients = [...root.querySelectorAll('svg.inc-stage defs radialGradient, svg.inc-stage defs linearGradient')];
+    expect(gradients.map((g) => g.tagName.toLowerCase()).sort()).toEqual(['lineargradient', 'radialgradient']);
+    const scope = root.querySelector('svg.inc-stage')!.getAttribute('aria-labelledby')!.split('-title-')[0]!;
+    for (const g of gradients) expect(g.id.startsWith(`${scope}-g`)).toBe(true);
+    const sphere = gradients.find((g) => g.tagName.toLowerCase() === 'radialgradient')!;
+    expect(sphere.getAttribute('class')).toBe('inc-tone-lit');
+    expect([...sphere.querySelectorAll('stop')].map((stop) => stop.getAttribute('class'))).toEqual(['inc-stop-light', 'inc-stop-dark']);
+    const shaded = [...root.querySelectorAll<SVGElement>('svg.inc-stage circle, svg.inc-stage rect')].map((el) => el.style.getPropertyValue('--inc-grad'));
+    expect(shaded.filter((v) => v === `url(#${sphere.id})`)).toHaveLength(2);
+    expect(shaded.filter((v) => v === '')).toHaveLength(1);
   });
 });
 

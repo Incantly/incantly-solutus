@@ -175,6 +175,8 @@ export class FigureRenderer {
 
     if ((options.visibility ?? 'observe') === 'observe') this.observeVisibility(doc, signal);
     this.observeReducedMotion(doc, signal);
+    // The full-screen button says whether the figure fills the screen, however it got there or left (VI-6).
+    doc.addEventListener('fullscreenchange', () => this.controls.setFullscreen(doc.fullscreenElement === this.root), { signal });
     this.observeSize();
   }
 

@@ -100,8 +100,8 @@ describe('scene runtime: one loop and dirty rendering', () => {
     const { runtime } = mount(ballScene(log));
     runtime.tick(FRAME);
     runtime.tick(5); // a backgrounded tab: capped at maxDt
-    expect(log.frames.map((f) => f.dt)).toEqual([FRAME, 0.05]);
-    expect(runtime.time).toBeCloseTo(FRAME + 0.05, 12);
+    expect(log.frames.map((f) => f.dt)).toEqual([FRAME, 0.1]);
+    expect(runtime.time).toBeCloseTo(FRAME + 0.1, 12);
   });
 
   it('does no work while paused and clean', () => {

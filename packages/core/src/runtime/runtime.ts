@@ -65,7 +65,11 @@ export type SceneFunction = (inc: Inc, math: Math) => void;
 
 export interface RuntimeOptions {
   readonly seed?: number;
-  /** Largest time step in seconds; longer gaps (a backgrounded tab) are capped. */
+  /**
+   * Largest time step in seconds; longer gaps (a backgrounded tab) are capped.
+   * Default 0.1: above the longest frame of the slowest frame-rate cap (15 fps),
+   * so a capped figure keeps time.
+   */
   readonly maxDt?: number;
   /** Most adjustable controls a figure may have; the plan's size sets a tighter budget. */
   readonly maxParams?: number;
@@ -266,7 +270,7 @@ export class SceneRuntime {
 
   constructor(private readonly options: RuntimeOptions = {}) {
     this.random = mulberry32(options.seed ?? 1);
-    this.maxDt = options.maxDt ?? 0.05;
+    this.maxDt = options.maxDt ?? 0.1;
     this.maxParams = options.maxParams ?? 8;
     this.reducedMotion = options.reducedMotion ?? false;
     this.history = new History(options.now ?? (() => Date.now()));

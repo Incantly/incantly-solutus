@@ -112,6 +112,7 @@ export class ControlsView {
     this.fullscreenButton = this.button('fullscreen', '⛶');
     this.fullscreenButton.classList.add('inc-icon-button');
     this.fullscreenButton.setAttribute('aria-label', 'Full screen');
+    this.fullscreenButton.setAttribute('aria-pressed', 'false');
     this.fullscreenButton.title = 'Full screen';
     this.fullscreenButton.hidden = !show.fullscreen || !(doc.fullscreenEnabled ?? false);
     transport.append(this.toggle, this.restart, speedLabel, reset, this.undoButton, this.redoButton, this.compareButton, this.settingsButton, this.fullscreenButton);
@@ -260,6 +261,14 @@ export class ControlsView {
     this.toggle.dataset.playing = String(playing);
     this.toggle.textContent = playing ? 'Pause' : 'Play';
     this.refreshFrameStep();
+  }
+
+  /** The figure entered or left full screen. */
+  setFullscreen(on: boolean): void {
+    this.fullscreenButton.setAttribute('aria-pressed', String(on));
+    const label = on ? 'Exit full screen' : 'Full screen';
+    this.fullscreenButton.setAttribute('aria-label', label);
+    this.fullscreenButton.title = label;
   }
 
   /** Shows or hides parts of the transport when the integrator restyles the figure. */
