@@ -4,7 +4,7 @@ import { BRIDGE_VERSION, FRAME_MESSAGE_TYPES, HOST_MESSAGE_TYPES, parseConnect, 
 import { FRAME_SCRIPT, FRAME_SCRIPT_HASH, WORKER_SCRIPT } from '../src/sandbox/generated/bundles';
 import { guardKey, SHADOWED_GLOBALS, wrapSceneSource, WRAPPER_LINES_BEFORE } from '../src/sandbox/scene-wrapper';
 import { cspHash, sha256, base64 } from '../src/sandbox/sha256';
-import { buildShell, contentSecurityPolicy, newChannelId } from '../src/sandbox/shell';
+import { buildShell, contentSecurityPolicy, newChannelId, newNonce } from '../src/sandbox/shell';
 import { clipSettings, clipType, recordStage } from '../src/sandbox/clip';
 import { locateInStack } from '../src/sandbox/stack';
 import { THEME_CSS } from '../src/renderer/theme';
@@ -190,6 +190,35 @@ describe('content security policy', () => {
     expect(() => buildShell({ html: '', css: '', channel: 'abc' })).toThrow();
     expect(newChannelId()).toMatch(/^[a-f0-9]{32}$/);
     expect(newChannelId()).not.toBe(newChannelId());
+  });
+
+  it('lets a frame booted before its scene take styles carrying its nonce, and nothing else (PRD 25.4)', () => {
+    const nonce = newNonce();
+    expect(nonce).toMatch(/^[A-Za-z0-9+/]{22}==$/);
+    expect(newNonce()).not.toBe(nonce);
+    const html = buildShell({ html: '', css: '', channel: CHANNEL, nonce });
+    const policy = /content="([^"]+)"/.exec(html)![1]!;
+    expect(policy).toBe(contentSecurityPolicy('', '', nonce));
+    expect(policy).toContain(`style-src ${cspHash(THEME_CSS)} 'nonce-${nonce}'`);
+    expect(policy).not.toContain('unsafe');
+    // A frame made with its scene needs none.
+    expect(contentSecurityPolicy('a{b:c}')).not.toContain('nonce-');
+    for (const bad of ['short', `${nonce}"; script-src *`, 'x'.repeat(24)]) expect(() => buildShell({ html: '', css: '', channel: CHANNEL, nonce: bad })).toThrow();
+    // The scene's markup and styles arrive with the init message, checked in shape and size.
+    const init = { type: 'init', mode: 'live', worker: '', scene: '', shifts: {} };
+    const fragments = { html: "<div id='stage'></div>", css: '#stage{margin:0}', nonce, lang: 'en-GB' };
+    expect(parseHostMessage(envelope({ ...init, fragments }), CHANNEL)).not.toBeNull();
+    expect(parseHostMessage(envelope({ ...init, fragments: { ...fragments, hostCss: '.inc-title{color:red}' } }), CHANNEL)).not.toBeNull();
+    for (const broken of [
+      { ...fragments, nonce: 'guessed' },
+      { ...fragments, html: 1 },
+      { ...fragments, css: 'x'.repeat(400_001) },
+      { ...fragments, lang: 'en"><script>' },
+      { ...fragments, hostCss: ['a'] },
+      'fragments',
+    ]) {
+      expect(parseHostMessage(envelope({ ...init, fragments: broken }), CHANNEL)).toBeNull();
+    }
   });
 
   it('ships sandbox bundles with no console calls, eval or markup that could escape a script element', () => {

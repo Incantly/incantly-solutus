@@ -1,12 +1,12 @@
 import type { ProbeReport, ProbeSpec } from '../probe/probe';
-import { parseFrameMessage, type FrameMessage, type HostMessageBody, type LiveOptions, type ProbeRequest } from '../protocol/bridge';
+import { parseFrameMessage, type ArrivingFragments, type FrameMessage, type HostMessageBody, type LiveOptions, type ProbeRequest } from '../protocol/bridge';
 import type { ErrorView } from '../protocol/ui';
 import { hostCss, styleForBridge, type FigureStyle } from '../renderer/style';
 import { validateScene, type SceneFragments, type SceneValidation, type ValidatedScene } from '../validation';
 import type { KitName } from '../runtime/kits';
 import { clipSettings, type ClipOptions } from './clip';
 import { preloadKits, workerScriptFor } from './worker-script';
-import { buildShell, newChannelId } from './shell';
+import { buildShell, newChannelId, newNonce } from './shell';
 
 /**
  * The host side of the sandbox execution adapter (ADR 002). It validates the
@@ -94,6 +94,24 @@ export interface FigureHandle {
 export interface ExecutionAdapter {
   readonly name: string;
   mount(container: HTMLElement, fragments: SceneFragments, options?: MountOptions): FigureHandle;
+  /**
+   * Boots what the next figure needs before its scene exists, such as while
+   * it is being made (PRD 25.4), for as long as the lease is held. Adapters
+   * with nothing to boot leave it out.
+   */
+  prewarm?(options?: PrewarmOptions): WarmLease;
+}
+
+export interface PrewarmOptions {
+  /** Where the frame waits, hidden, until a figure takes it. Default the document body. */
+  readonly container?: HTMLElement;
+  /** Drawing kits to fetch alongside, when the plan has named them. */
+  readonly kits?: readonly KitName[];
+}
+
+/** A hold on a warm frame: while any is held, one live frame stays booted for the next figure. */
+export interface WarmLease {
+  release(): void;
 }
 
 // ---------------------------------------------------------------------------
@@ -118,7 +136,7 @@ class FrameConnection {
     shell: { readonly html: string; readonly css: string },
     private readonly channel: string,
     private readonly handlers: ConnectionHandlers,
-    options: { readonly title: string; readonly hidden?: boolean; readonly lang?: string; readonly hostCss?: string },
+    options: { readonly title: string; readonly hidden?: boolean; readonly lang?: string; readonly hostCss?: string; readonly nonce?: string },
   ) {
     const doc = container.ownerDocument;
     const frame = doc.createElement('iframe');
@@ -149,6 +167,7 @@ class FrameConnection {
       channel,
       ...(options.lang ? { lang: options.lang } : {}),
       ...(options.hostCss ? { hostCss: options.hostCss } : {}),
+      ...(options.nonce ? { nonce: options.nonce } : {}),
     });
     this.frame = frame;
     container.append(frame);
@@ -187,7 +206,12 @@ class FrameConnection {
   }
 }
 
-function initMessage(scene: ValidatedScene, worker: string, mode: 'live' | 'probe', extra: { live?: LiveOptions; probe?: ProbeRequest }): HostMessageBody {
+function initMessage(
+  scene: ValidatedScene,
+  worker: string,
+  mode: 'live' | 'probe',
+  extra: { live?: LiveOptions; probe?: ProbeRequest; fragments?: ArrivingFragments },
+): HostMessageBody {
   return {
     type: 'init',
     mode,
@@ -196,7 +220,153 @@ function initMessage(scene: ValidatedScene, worker: string, mode: 'live' | 'prob
     shifts: scene.instrumented.shifts,
     ...(extra.live ? { live: extra.live } : {}),
     ...(extra.probe ? { probe: extra.probe } : {}),
+    ...(extra.fragments ? { fragments: extra.fragments } : {}),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Warm frames (PRD 25.4)
+// ---------------------------------------------------------------------------
+
+/** After the last lease goes, a warm frame no figure took waits this long for one, then closes. */
+const WARM_IDLE_MS = 15_000;
+
+/**
+ * A live figure's frame booted before its scene exists: the shell, the theme
+ * and the frame script, under a policy that lets in styles carrying its
+ * nonce. A figure takes it where it will show and hands it the scene's
+ * markup, styles and script by message.
+ */
+class WarmFrame {
+  readonly connection: FrameConnection;
+  readonly nonce = newNonce();
+  ready = false;
+  private navigated = false;
+  private listener: ConnectionHandlers | null = null;
+
+  constructor(container: HTMLElement) {
+    this.connection = new FrameConnection(
+      container,
+      { html: '', css: '' },
+      newChannelId(),
+      {
+        onMessage: (message) => {
+          if (message.type === 'ready') this.ready = true;
+          this.listener?.onMessage(message);
+        },
+        onNavigate: () => {
+          this.navigated = true;
+          this.listener?.onNavigate();
+        },
+      },
+      { title: 'Interactive figure', hidden: true, nonce: this.nonce },
+    );
+  }
+
+  /** Whether this frame can be moved into the container as it is, without loading again. */
+  fits(container: HTMLElement): boolean {
+    const frame = this.connection.frame;
+    if (this.navigated || !frame.isConnected || !container.isConnected || frame.ownerDocument !== container.ownerDocument) return false;
+    return frame.parentElement === container || canMove(container);
+  }
+
+  /**
+   * Moves the frame into the container with its document intact, shows it,
+   * and hands its messages to the figure from now on. Moving any other way
+   * would load the frame again, which the bridge takes for a navigation.
+   */
+  adopt(container: HTMLElement, title: string, listener: ConnectionHandlers): void {
+    const frame = this.connection.frame;
+    if (frame.parentElement !== container) (container as unknown as Movable).moveBefore(frame, null);
+    frame.title = title;
+    frame.removeAttribute('aria-hidden');
+    frame.removeAttribute('tabindex');
+    for (const name of ['position', 'left', 'top', 'height', 'visibility']) frame.style.removeProperty(name);
+    frame.style.width = '100%';
+    this.listener = listener;
+  }
+
+  close(): void {
+    this.listener = null;
+    this.connection.close();
+  }
+}
+
+interface Movable {
+  moveBefore(node: Node, child: Node | null): void;
+}
+
+/** Whether the browser moves an element, a frame among them, without loading it again (moveBefore). */
+function canMove(element: Element): boolean {
+  return typeof (element as unknown as Partial<Movable>).moveBefore === 'function';
+}
+
+/** The warm frame waiting for the next figure, and who wants one kept. */
+const warm: { frame: WarmFrame | null; holder: HTMLElement | null; leases: number; idle: ReturnType<typeof setTimeout> | null } = {
+  frame: null,
+  holder: null,
+  leases: 0,
+  idle: null,
+};
+
+function warmAnother(): void {
+  if (warm.frame || !warm.holder?.isConnected) return;
+  warm.frame = new WarmFrame(warm.holder);
+}
+
+/**
+ * Keeps one live figure's frame booted with the shell and engine while the
+ * lease is held, such as while a figure is being made (PRD 25.4). The next
+ * figure mounted takes it and gets its markup, styles and script by message
+ * instead of booting a frame of its own, and another is warmed behind it.
+ * A frame waiting in the document body is moved into its figure with
+ * moveBefore, which keeps its document; where the browser has no such move,
+ * only a frame warmed in the figure's own container is used.
+ */
+export function prewarmFigure(options: PrewarmOptions = {}): WarmLease {
+  if (options.kits) preloadKits(options.kits);
+  const holder = options.container ?? (typeof document === 'undefined' ? null : document.body);
+  if (!holder || (!options.container && !canMove(holder))) return { release: () => undefined };
+  warm.leases++;
+  if (warm.idle !== null) clearTimeout(warm.idle);
+  warm.idle = null;
+  if (warm.holder !== holder) {
+    warm.frame?.close();
+    warm.frame = null;
+    warm.holder = holder;
+  }
+  warmAnother();
+  let held = true;
+  return {
+    release() {
+      if (!held) return;
+      held = false;
+      warm.leases--;
+      if (warm.leases > 0) return;
+      warm.idle = setTimeout(() => {
+        warm.idle = null;
+        if (warm.leases > 0) return;
+        warm.frame?.close();
+        warm.frame = null;
+      }, WARM_IDLE_MS);
+    },
+  };
+}
+
+/**
+ * The warm frame, if one is waiting and can be moved into the container.
+ * While leases are held another is warmed behind it, unless it was warmed in
+ * the figure's own container, which is the figure's now.
+ */
+function takeWarmFrame(container: HTMLElement): WarmFrame | null {
+  const frame = warm.frame;
+  if (!frame) return null;
+  warm.frame = null;
+  const fits = frame.fits(container);
+  if (!fits) frame.close();
+  if (warm.holder === container) warm.holder = null;
+  else if (warm.leases > 0) queueMicrotask(warmAnother);
+  return fits ? frame : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -218,6 +388,8 @@ class SandboxedFigure implements FigureHandle {
   private snapshotId = 0;
   /** Style and theme asked for before the frame was ready; they go with the init message. */
   private early: { style?: FigureStyle | undefined; theme?: 'light' | 'dark' | 'auto'; figureNumber?: number | null } = {};
+  /** The frame was booted before this scene existed and taken over (PRD 25.4). */
+  warmed = false;
   private readonly deadlines: Deadlines;
   private readonly doc: Document;
   private readonly onVisibility = () => {
@@ -261,27 +433,48 @@ class SandboxedFigure implements FigureHandle {
     // Kit scripts load while the frame boots.
     const worker = workerScriptFor(scene.kits);
     worker.catch(() => this.fail({ phase: 'mount', message: 'A drawing kit this figure needs could not be loaded' }));
-    this.connection = new FrameConnection(
-      container,
-      scene,
-      channel,
-      {
-        onMessage: (message) => this.onMessage(message, scene, this.withEarly(live), worker),
-        onNavigate: () => this.fail({ phase: 'unresponsive', message: 'The figure tried to navigate and was removed' }),
-      },
-      { title: options.title ?? 'Interactive figure', ...(options.lang ? { lang: options.lang } : {}), ...(css ? { hostCss: css } : {}) },
-    );
+    const title = options.title ?? 'Interactive figure';
+    // A frame booted before this scene existed takes its markup and styles by message (PRD 25.4).
+    const warmed = takeWarmFrame(container);
+    const arriving: ArrivingFragments | undefined = warmed
+      ? { html: scene.html, css: scene.css, ...(css ? { hostCss: css } : {}), nonce: warmed.nonce, ...(options.lang ? { lang: options.lang } : {}) }
+      : undefined;
+    const handlers: ConnectionHandlers = {
+      onMessage: (message) => this.onMessage(message, scene, live, worker, arriving),
+      onNavigate: () => this.fail({ phase: 'unresponsive', message: 'The figure tried to navigate and was removed' }),
+    };
+    if (warmed) {
+      warmed.adopt(container, title, handlers);
+      this.connection = warmed.connection;
+      this.warmed = true;
+      if (warmed.ready) this.begin(scene, live, worker, arriving);
+    } else {
+      this.connection = new FrameConnection(container, scene, channel, handlers, {
+        title,
+        ...(options.lang ? { lang: options.lang } : {}),
+        ...(css ? { hostCss: css } : {}),
+      });
+    }
     this.mountTimer = setTimeout(() => this.fail({ phase: 'unresponsive', message: 'The figure did not start in time' }), this.deadlines.mountMs);
     this.doc.addEventListener('visibilitychange', this.onVisibility);
   }
 
-  private onMessage(message: FrameMessage, scene: ValidatedScene, live: LiveOptions, worker: Promise<string>): void {
+  /**
+   * The frame is ready: the scene goes in once its kits have loaded, with any
+   * style or theme set meanwhile, and with its markup and styles if the frame
+   * was warmed without them.
+   */
+  private begin(scene: ValidatedScene, live: LiveOptions, worker: Promise<string>, fragments: ArrivingFragments | undefined): void {
+    void worker.then(
+      (code) => this.connection?.post(initMessage(scene, code, 'live', { live: this.withEarly(live), ...(fragments ? { fragments } : {}) })),
+      () => undefined,
+    );
+  }
+
+  private onMessage(message: FrameMessage, scene: ValidatedScene, live: LiveOptions, worker: Promise<string>, fragments: ArrivingFragments | undefined): void {
     switch (message.type) {
       case 'ready':
-        void worker.then(
-          (code) => this.connection?.post(initMessage(scene, code, 'live', { live })),
-          () => undefined,
-        );
+        this.begin(scene, live, worker, fragments);
         break;
       case 'mounted':
         if (this.state !== 'booting') break;
@@ -512,7 +705,7 @@ export function probeUnvalidated(fragments: SceneFragments, options: SandboxProb
   );
 }
 
-export const sandboxAdapter: ExecutionAdapter = { name: 'sandbox', mount: mountSandboxed };
+export const sandboxAdapter: ExecutionAdapter = { name: 'sandbox', mount: mountSandboxed, prewarm: prewarmFigure };
 
 // ---------------------------------------------------------------------------
 // The probe, in a fresh hidden frame through the same adapter

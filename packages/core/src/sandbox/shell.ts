@@ -20,7 +20,22 @@ export interface ShellOptions {
   readonly lang?: string;
   /** Trusted CSS from the integrator, already checked by `hostCss`. */
   readonly hostCss?: string;
+  /**
+   * For a frame booted before its scene exists (PRD 25.4): the nonce the
+   * styles that arrive later by message carry, as the frame's policy allows
+   * no other style it was not made with.
+   */
+  readonly nonce?: string;
 }
+
+/** A nonce for styles a warm frame is handed later: 128 random bits, base64. */
+export function newNonce(): string {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return btoa(String.fromCharCode(...bytes));
+}
+
+const NONCE = /^[A-Za-z0-9+/]{22}==$/;
 
 let themeHash: string | null = null;
 
@@ -29,9 +44,9 @@ let themeHash: string | null = null;
  * Fonts may come only from data URLs inside the host CSS; nothing loads over
  * the network.
  */
-export function contentSecurityPolicy(css: string, hostCss = ''): string {
+export function contentSecurityPolicy(css: string, hostCss = '', nonce?: string): string {
   themeHash ??= cspHash(THEME_CSS);
-  const styles = [themeHash, ...(hostCss ? [cspHash(hostCss)] : []), ...(css ? [cspHash(css)] : [])].join(' ');
+  const styles = [themeHash, ...(hostCss ? [cspHash(hostCss)] : []), ...(css ? [cspHash(css)] : []), ...(nonce ? [`'nonce-${nonce}'`] : [])].join(' ');
   return [
     "default-src 'none'",
     `script-src ${FRAME_SCRIPT_HASH}`,
@@ -48,12 +63,13 @@ export function buildShell(options: ShellOptions): string {
   if (!/^[a-f0-9]{32}$/.test(options.channel)) throw new Error('A frame needs a 128-bit hex channel id');
   if (/<\//.test(options.css) || options.css.includes('<')) throw new Error('Scene CSS must be validated before it reaches a frame');
   if (options.hostCss && options.hostCss.includes('<')) throw new Error('Host CSS must go through hostCss() before it reaches a frame');
+  if (options.nonce !== undefined && !NONCE.test(options.nonce)) throw new Error('A frame nonce is 128 random bits in base64');
   const lang = options.lang && /^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$/.test(options.lang) ? options.lang : 'en';
   return (
     '<!doctype html>' +
     `<html lang="${lang}" class="inc-frame" data-channel="${options.channel}">` +
     '<head><meta charset="utf-8">' +
-    `<meta http-equiv="Content-Security-Policy" content="${contentSecurityPolicy(options.css, options.hostCss ?? '')}">` +
+    `<meta http-equiv="Content-Security-Policy" content="${contentSecurityPolicy(options.css, options.hostCss ?? '', options.nonce)}">` +
     '<meta name="referrer" content="no-referrer">' +
     `<style data-incantly-theme>${THEME_CSS}</style>` +
     (options.hostCss ? `<style data-incantly-host>${options.hostCss}</style>` : '') +

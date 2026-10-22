@@ -1,5 +1,5 @@
-import { VALIDATOR_VERSION } from '@incantly/core';
-import { Extension } from '@tiptap/core';
+import { VALIDATOR_VERSION, type ExecutionAdapter, type WarmLease } from '@incantly/core';
+import { Extension, type Editor } from '@tiptap/core';
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 import { NodeSelection, Plugin, PluginKey, type EditorState, type Transaction } from '@tiptap/pm/state';
 import { Decoration, DecorationSet, type EditorView } from '@tiptap/pm/view';
@@ -23,6 +23,10 @@ import { FIGURE_TRANSACTION, figureViews } from './node-view';
  * figureChanger edits the scene the service signed, and the device probes
  * the change before it replaces the figure. A change is an ordinary edit:
  * undo brings the figure back as it was.
+ *
+ * While a figure is being made or changed, the adapter the note's figures
+ * mount with boots the next figure's frame ahead of it (PRD 25.4), so the
+ * figure starts in a frame that is already running.
  */
 
 export interface FigureRequest {
@@ -106,10 +110,21 @@ type Meta = { readonly add: { readonly id: string; readonly pos: number; readonl
 
 export const figureGenerationKey = new PluginKey<DecorationSet>('incantlyFigureGeneration');
 
+/** Boots the next figure's frame while a figure is made or changed, for as long as the lease is held. */
+type Warm = () => WarmLease | null;
+
+/** The execution adapter the note's figures mount with, which may warm a frame ahead of the next one. */
+function warmerOf(editor: Editor): Warm {
+  const figure = editor.extensionManager.extensions.find((extension) => extension.name === 'incantlyFigure');
+  const adapter = (figure?.options as { adapter?: ExecutionAdapter | null } | undefined)?.adapter ?? null;
+  return () => adapter?.prewarm?.() ?? null;
+}
+
 /** One figure being made: its card in the note and the work behind it. */
 class GenerationTask {
   readonly element: HTMLElement;
   private controller = new AbortController();
+  private lease: WarmLease | null = null;
   private readonly title: HTMLElement;
   private readonly frame: HTMLElement;
   private readonly controls: HTMLElement;
@@ -123,6 +138,7 @@ class GenerationTask {
     private readonly request: FigureRequest,
     private readonly view: EditorView,
     private readonly generate: FigureGenerate,
+    private readonly warm: Warm,
   ) {
     const doc = view.dom.ownerDocument;
     this.element = doc.createElement('figure');
@@ -151,6 +167,9 @@ class GenerationTask {
   start(): void {
     this.finished = false;
     this.controller = new AbortController();
+    // The figure's frame boots while its scene is written.
+    this.lease?.release();
+    this.lease = this.warm();
     this.element.setAttribute('aria-busy', 'true');
     this.element.classList.remove('is-failed');
     this.actions.hidden = true;
@@ -174,6 +193,8 @@ class GenerationTask {
 
   cancel(): void {
     this.controller.abort();
+    this.lease?.release();
+    this.lease = null;
   }
 
   private stage(stage: GenerationStageView): void {
@@ -208,6 +229,9 @@ class GenerationTask {
   private done(result: FigureGenerationResult): void {
     if (this.finished || this.controller.signal.aborted) return;
     this.finished = true;
+    // A warm frame nobody takes closes a little after this.
+    this.lease?.release();
+    this.lease = null;
     this.element.removeAttribute('aria-busy');
     if (result.kind === 'figure') {
       insertFigure(this.view, this.id, result.figure, result.notice);
@@ -314,7 +338,7 @@ export const FigureGeneration = Extension.create<FigureGenerationOptions>({
           if (!dispatch) return true;
           const pos = blockBoundary(state.doc, at ?? state.selection.to);
           const id = `task-${++taskCounter}`;
-          const task = new GenerationTask(id, { ...request, prompt: request.prompt.trim() }, view, generate);
+          const task = new GenerationTask(id, { ...request, prompt: request.prompt.trim() }, view, generate, warmerOf(this.editor));
           tasksOf(view).set(id, task);
           dispatch(state.tr.setMeta(figureGenerationKey, { add: { id, pos, element: task.element } } satisfies Meta));
           task.start();
@@ -333,6 +357,7 @@ export const FigureGeneration = Extension.create<FigureGenerationOptions>({
           void changeInPlace(
             view,
             attrs.figureId,
+            warmerOf(this.editor),
             async (hooks) => {
               const fragments = attrs.fragments ?? (await sourceOf(view, at.pos));
               if (change && ticket && fragments) {
@@ -356,7 +381,13 @@ export const FigureGeneration = Extension.create<FigureGenerationOptions>({
           const prompt = (request.prompt ?? attrs.concept).trim();
           if (prompt === '') return false;
           if (!dispatch) return true;
-          void changeInPlace(view, attrs.figureId, (hooks) => generate({ prompt, ...(request.noteContext ? { noteContext: request.noteContext } : {}) }, { ...hooks, onSkeleton: () => undefined }), false);
+          void changeInPlace(
+            view,
+            attrs.figureId,
+            warmerOf(this.editor),
+            (hooks) => generate({ prompt, ...(request.noteContext ? { noteContext: request.noteContext } : {}) }, { ...hooks, onSkeleton: () => undefined }),
+            false,
+          );
           return true;
         },
     };
@@ -443,6 +474,7 @@ function changesOf(view: EditorView): Map<string, AbortController> {
 async function changeInPlace(
   view: EditorView,
   figureId: string,
+  warm: Warm,
   work: (hooks: { readonly onStage: (stage: GenerationStageView) => void; readonly signal: AbortSignal }) => Promise<FigureGenerationResult>,
   keepValues: boolean,
 ): Promise<void> {
@@ -450,6 +482,23 @@ async function changeInPlace(
   if (running.has(figureId)) return;
   const controller = new AbortController();
   running.set(figureId, controller);
+  // The changed figure's frame boots while the change is made.
+  const lease = warm();
+  try {
+    await changeWith(view, figureId, controller, work, keepValues);
+  } finally {
+    lease?.release();
+  }
+}
+
+async function changeWith(
+  view: EditorView,
+  figureId: string,
+  controller: AbortController,
+  work: (hooks: { readonly onStage: (stage: GenerationStageView) => void; readonly signal: AbortSignal }) => Promise<FigureGenerationResult>,
+  keepValues: boolean,
+): Promise<void> {
+  const running = changesOf(view);
   const figureView = () => {
     const at = figureAt(view.state, figureId);
     const dom = at ? view.nodeDOM(at.pos) : null;

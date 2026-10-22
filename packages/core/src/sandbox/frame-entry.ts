@@ -1,5 +1,5 @@
 import type { RuntimeChannel } from '../engine/channel';
-import { parseConnect, parseHostMessage, type FrameMessageBody, type HostMessage, type InitMessage } from '../protocol/bridge';
+import { parseConnect, parseHostMessage, type ArrivingFragments, type FrameMessageBody, type HostMessage, type InitMessage } from '../protocol/bridge';
 import type { RendererMessage, RuntimeUpdate } from '../protocol/runtime-messages';
 import type { ErrorView } from '../protocol/ui';
 import { FigureRenderer } from '../renderer/renderer';
@@ -184,8 +184,33 @@ async function clip(id: number, seconds: number | undefined, fps: number | undef
   send({ type: 'clip', id, video });
 }
 
+/**
+ * A frame booted before its scene (PRD 25.4) takes the scene's markup and
+ * styles from the host: the integrator's styles and then the scene's, each
+ * carrying the nonce the frame's policy was made with, then the validated
+ * markup, as the frame would have been made with them.
+ */
+function place(fragments: ArrivingFragments): void {
+  const scene = root?.querySelector<HTMLElement>('.inc-scene');
+  if (!scene) return;
+  if (fragments.lang) doc.documentElement.lang = fragments.lang;
+  for (const [css, kind] of [
+    [fragments.hostCss ?? '', 'host'],
+    [fragments.css, 'scene'],
+  ] as const) {
+    if (!css) continue;
+    const style = doc.createElement('style');
+    style.nonce = fragments.nonce;
+    style.dataset.incantly = kind;
+    style.textContent = css;
+    doc.head.append(style);
+  }
+  scene.innerHTML = fragments.html;
+}
+
 function start(init: InitMessage): void {
   if (!root) return;
+  if (init.fragments) place(init.fragments);
   const prefix = `${init.worker}\n__incRegister(`;
   const wrapped = wrapSceneSource(init.scene);
   const blob = new Blob([prefix, wrapped, ');\n'], { type: 'text/javascript' });

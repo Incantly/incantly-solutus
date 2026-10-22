@@ -52,6 +52,21 @@ export interface InitMessage {
   readonly shifts: Readonly<Record<number, ReadonlyArray<{ readonly column: number; readonly length: number }>>>;
   readonly live?: LiveOptions;
   readonly probe?: ProbeRequest;
+  /** For a frame booted before its scene (PRD 25.4): the markup and styles it was not made with. */
+  readonly fragments?: ArrivingFragments;
+}
+
+/**
+ * A validated scene's markup and styles, handed to a warm frame: the styles
+ * carry the nonce its policy was made with, and `lang` is the document's.
+ */
+export interface ArrivingFragments {
+  readonly html: string;
+  readonly css: string;
+  /** Trusted CSS from the integrator, already checked. */
+  readonly hostCss?: string;
+  readonly nonce: string;
+  readonly lang?: string;
 }
 
 export type HostMessageBody =
@@ -135,6 +150,20 @@ export const FRAME_MESSAGE_TYPES: ReadonlySet<string> = new Set([
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
+/** The most markup or style a scene may hand a warm frame, in characters. */
+const MAX_FRAGMENT = 400_000;
+
+const isArriving = (value: unknown): value is ArrivingFragments =>
+  isRecord(value) &&
+  typeof value.html === 'string' &&
+  value.html.length <= MAX_FRAGMENT &&
+  typeof value.css === 'string' &&
+  value.css.length <= MAX_FRAGMENT &&
+  (value.hostCss === undefined || (typeof value.hostCss === 'string' && value.hostCss.length <= MAX_FRAGMENT)) &&
+  typeof value.nonce === 'string' &&
+  /^[A-Za-z0-9+/]{22}==$/.test(value.nonce) &&
+  (value.lang === undefined || (typeof value.lang === 'string' && /^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$/.test(value.lang)));
+
 const isValues = (value: unknown): value is Record<string, number> =>
   isRecord(value) && Object.keys(value).length <= 16 && Object.values(value).every((v) => typeof v === 'number' && Number.isFinite(v));
 
@@ -169,7 +198,8 @@ export function parseHostMessage(data: unknown, channel: string): HostMessage | 
         typeof m.scene === 'string' &&
         isRecord(m.shifts) &&
         (m.live === undefined || isRecord(m.live)) &&
-        (m.probe === undefined || isRecord(m.probe))
+        (m.probe === undefined || isRecord(m.probe)) &&
+        (m.fragments === undefined || isArriving(m.fragments))
         ? (m as unknown as HostMessage)
         : null;
     case 'setValues':

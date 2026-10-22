@@ -66,6 +66,10 @@ test.describe('the learner journey through generation', () => {
       // A probe-approved figure, stored with its approval.
       await waitDrawn(page);
       await expect(card(page)).toHaveCount(0);
+      // It started in the frame booted while it was being made, which took its styles by message (PRD 25.4).
+      if (await page.evaluate(() => 'moveBefore' in Element.prototype)) {
+        await expect(frame(page).locator('style[data-incantly="scene"]')).toHaveCount(1);
+      }
 
       // Before it, a structured loading skeleton drawn from the plan, and nothing in the note.
       const seen = await page.evaluate(() => (window as unknown as { __seen: { busy: boolean; titles: string[]; sliders: number; figuresWhileBusy: number } }).__seen);

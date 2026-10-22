@@ -67,10 +67,12 @@ const editors: Editor[] = [];
 
 function setup(
   generate: FigureGenerate,
-  options: { signals?: (s: FigureSignal) => void; figures?: number; change?: FigureChange; meta?: Record<string, unknown>; store?: boolean } = {},
+  options: { signals?: (s: FigureSignal) => void; figures?: number; change?: FigureChange; meta?: Record<string, unknown>; store?: boolean; warm?: boolean } = {},
 ) {
   const mounts: FakeFigure[] = [];
   const store = new MemoryFigureStore();
+  /** Leases on a warm frame the adapter was asked for, and whether each was let go. */
+  const leases: boolean[] = [];
   const adapter: ExecutionAdapter = {
     name: 'fake',
     mount(container, _fragments, mountOptions = {}) {
@@ -79,6 +81,14 @@ function setup(
       mounts.push(figure);
       return figure;
     },
+    ...(options.warm
+      ? {
+          prewarm() {
+            const index = leases.push(false) - 1;
+            return { release: () => void (leases[index] = true) };
+          },
+        }
+      : {}),
   };
   let near: (entries: Array<{ target: Element; isIntersecting: boolean }>) => void = () => undefined;
   const createObserver: ObserverFactory = (callback) => {
@@ -108,7 +118,8 @@ function setup(
   const figures = () => editor.getJSON().content?.filter((n) => n.type === 'incantlyFigure') ?? [];
   const card = () => editor.view.dom.querySelector<HTMLElement>('figure.incantly-figure--generating');
   const show = (dom: Element) => near([{ target: dom, isIntersecting: true }]);
-  return { editor, figures, card, mounts, show, store };
+  const held = () => leases.filter((released) => !released).length;
+  return { editor, figures, card, mounts, show, store, leases, held };
 }
 
 beforeEach(() => vi.useFakeTimers());
@@ -240,6 +251,41 @@ describe('making a figure in a note', () => {
     const bare = new Editor({ element: document.createElement('div'), extensions: [StarterKit, FigureGeneration] });
     editors.push(bare);
     expect(bare.commands.generateFigure({ prompt: 'sine wave' })).toBe(false);
+  });
+});
+
+describe('warming the next figure’s frame (PRD 25.4)', () => {
+  it('asks the adapter to keep a frame booted while a figure is made, and lets it go when the figure is done', async () => {
+    const { generate, calls } = controlled();
+    const { editor, card, leases, held } = setup(generate, { warm: true });
+    editor.commands.generateFigure({ prompt: 'Explain projectile motion' });
+    expect(held()).toBe(1);
+    calls[0]!.resolve({ kind: 'figure', figure: FIGURE });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(held()).toBe(0);
+    // A figure that could not be built lets go too; Retry warms again, and closing the note lets go.
+    editor.commands.generateFigure({ prompt: 'Explain a black hole' });
+    calls[1]!.resolve({ kind: 'failed', message: 'This figure could not be built.' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(held()).toBe(0);
+    [...card()!.querySelectorAll('button')].find((b) => b.textContent === 'Retry')!.click();
+    expect(held()).toBe(1);
+    editor.destroy();
+    expect(held()).toBe(0);
+    expect(leases).toHaveLength(3);
+  });
+
+  it('keeps one booted while a figure is changed or made again, and asks nothing of an adapter that has nothing to warm', async () => {
+    const { generate, calls } = controlled();
+    const { editor, held } = setup(generate, { warm: true, figures: 1 });
+    expect(editor.commands.regenerateFigure({ figureId: editor.getJSON().content!.find((n) => n.type === 'incantlyFigure')!.attrs!.figureId as string })).toBe(true);
+    expect(held()).toBe(1);
+    calls[0]!.resolve({ kind: 'figure', figure: FIGURE });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(held()).toBe(0);
+    const plain = setup(controlled().generate);
+    expect(plain.editor.commands.generateFigure({ prompt: 'Explain projectile motion' })).toBe(true);
+    expect(plain.leases).toEqual([]);
   });
 });
 

@@ -91,6 +91,46 @@ test.describe('sandbox (Phase 3 gate)', () => {
     expect((await read(page)).outcome).toMatchObject({ status: 'rejected', ok: false });
   });
 
+  test('a live figure takes a frame booted before its scene existed, and gets its markup and styles by message (PRD 25.4)', async ({ page, browserName }) => {
+    const refused: string[] = [];
+    page.on('console', (message) => {
+      if (/Content Security Policy|Refused to apply/i.test(message.text())) refused.push(message.text());
+    });
+    // In its own slot, where every browser can use it; and waiting in the page body, which needs moveBefore.
+    const movable = await page.evaluate(() => 'moveBefore' in Element.prototype).catch(() => false);
+    for (const place of ['place', 'body'] as const) {
+      await open(page, `page=sandbox&scene=pendulum&live=warm&in=${place}&styled=1&wait=600&autoplay=0`);
+      const state = (await read(page)) as unknown as { states: string[]; mountedAt: number; timings: { mountMs: number } };
+      expect(state.states, place).toContain('live');
+      const figure = page.locator('.figure-slot iframe');
+      await expect(figure).toHaveCount(1);
+      await expect(figure).toBeVisible();
+      await expect(figure).toHaveAttribute('title', 'Interactive figure');
+      await expect(figure).not.toHaveAttribute('aria-hidden', 'true');
+      const frame = page.frameLocator('.figure-slot iframe');
+      await expect(frame.locator('svg.inc-stage')).toBeVisible();
+      const inside = await frame.locator('html').evaluate(() => ({
+        bootedAt: performance.timeOrigin,
+        // The scene's own CSS and the integrator's, both let in by the frame's nonce.
+        stageWidth: getComputedStyle(document.querySelector('#stage')!).maxWidth,
+        outline: getComputedStyle(document.querySelector('.inc-scene')!).outlineWidth,
+        styles: [...document.querySelectorAll('style')].map((style) => style.dataset.incantly ?? (style.hasAttribute('data-incantly-theme') ? 'theme' : 'other')),
+      }));
+      if (place === 'body' && !movable) {
+        // Without moveBefore the warm frame stays unused, and the figure boots one of its own.
+        expect(inside.bootedAt, place).toBeGreaterThan(state.mountedAt - 50);
+      } else {
+        // The frame was running long before the scene arrived.
+        expect(inside.bootedAt, place).toBeLessThan(state.mountedAt - 300);
+        expect(inside.styles, place).toEqual(['theme', 'host', 'scene']);
+      }
+      expect(inside.stageWidth, place).toBe('760px');
+      expect(inside.outline, place).toBe('3px');
+      test.info().annotations.push({ type: `warm-mount-ms (${place}, ${browserName})`, description: state.timings.mountMs.toFixed(0) });
+    }
+    expect(refused).toEqual([]);
+  });
+
   test('a scene that fails the probe never appears to the learner', async ({ page }) => {
     await open(page, 'page=sandbox&fixture=nan-at-max&probe=1');
     const state = await read(page);

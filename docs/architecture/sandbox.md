@@ -60,7 +60,7 @@ Possible implementations may use an isolated document, a worker with a rendering
 
 The bridge accepts only documented message shapes from the execution instance created for that scene. Every instance receives an unguessable channel identifier, and messages without it are ignored. Transport-specific identity checks belong to the adapter.
 
-Host to frame: `init`, `pause`, `resume`, `setValues`, `step`, `reducedMotion`, `snapshot` (a PNG, or with `format: 'svg'` an SVG image with the theme written in), `clip` (a short video of the drawing as it plays, with its length and frame rate), `ping`, `focus`, `style`, `theme`, `number` and `destroy`. `style` restyles a live figure in place (preset, tokens, slot classes, layout, shown parts) and is checked again in the frame; the integrator's trusted CSS is part of the frame document and its policy hashes, so changing it needs a new mount. Frame to host: `ready`, `mounted`, `error`, `values`, `formulas`, `step`, `description`, `escape`, `snapshot`, `clip` (a WebM or MP4 `Blob` of at most 64 MB, or null), `pong`, `resize` and `probe`.
+Host to frame: `init` (with the scene's markup and styles when the frame was warmed without them), `pause`, `resume`, `setValues`, `step`, `reducedMotion`, `snapshot` (a PNG, or with `format: 'svg'` an SVG image with the theme written in), `clip` (a short video of the drawing as it plays, with its length and frame rate), `ping`, `focus`, `style`, `theme`, `number` and `destroy`. `style` restyles a live figure in place (preset, tokens, slot classes, layout, shown parts) and is checked again in the frame; the integrator's trusted CSS is part of the frame document and its policy hashes, so changing it needs a new mount. Frame to host: `ready`, `mounted`, `error`, `values`, `formulas`, `step`, `description`, `escape`, `snapshot`, `clip` (a WebM or MP4 `Blob` of at most 64 MB, or null), `pong`, `resize` and `probe`.
 
 ## Failure behavior
 
@@ -77,13 +77,22 @@ The first adapter follows [ADR 002](decisions/002-execution-adapter.md). Code li
 | Instrumentation | Fuel in every loop and function body; a guard on every computed key | `validation/instrument.ts` |
 | Wrapper | The scene sees exactly `inc`, a `Math` without `random`, a reduced `Number`, `isFinite` and `isNaN`; ambient globals are shadowed with `undefined` | `sandbox/scene-wrapper.ts` |
 | Worker | Scene code runs in a dedicated Worker with no DOM. After the scene registers, network, storage and worker globals are neutralized | `sandbox/worker-entry.ts` |
-| Frame | `sandbox="allow-scripts"` only, built from `srcdoc`, under the [ADR 005](decisions/005-content-security-policy.md) policy with hashes for the frame script, theme and scene CSS | `sandbox/shell.ts`, `sandbox/frame-entry.ts` |
+| Frame | `sandbox="allow-scripts"` only, built from `srcdoc`, under the [ADR 005](decisions/005-content-security-policy.md) policy with hashes for the frame script, theme and scene CSS, or a style nonce for a frame warmed before its scene | `sandbox/shell.ts`, `sandbox/frame-entry.ts` |
 | Renderer | Builds DOM only through `createElementNS`, `setAttribute` with an attribute allow-list, and `textContent`; ignores element kinds outside the SDK's list | `renderer/` |
 | Bridge | A transferred `MessagePort`; every message carries the version and a 128-bit channel id and is checked for shape | `protocol/bridge.ts` |
 | Watchdogs | The frame terminates a Worker that leaves a message unanswered for 2.5 s. The host removes a frame that does not draw within 4 s, misses a heartbeat (every 2 s), or loads a second time. A probe must report within 3 s | `sandbox/frame-entry.ts`, `sandbox/adapter.ts` |
 | Probe | Runs in a fresh hidden frame through the same adapter before a new scene is shown | `probe/`, `sandbox/adapter.ts` |
 
 `presentScene` is the learner-facing path for a new scene: probe hidden, then mount only if it passed. `mountSandboxed` mounts a scene that was already approved; it validates again before mounting. `@incantly/core/testing` mounts without the validator, for the security tests only.
+
+### Warm frames (PRD 25.4)
+
+Booting a frame is cost the learner would otherwise wait for after a figure is approved, so frames boot ahead of their scenes:
+
+- **The probe.** `warmProbe()` boots a hidden probe frame while the plan and scene are still being written. A probe needs no markup or styles, so the frame is the same for every scene; each checks one scene and closes, and the generation client warms the next as each is used.
+- **The live figure.** `sandboxAdapter.prewarm()` (also `prewarmFigure()`) keeps one live frame booted, hidden, while the lease it returns is held: the shell, the theme and the frame script, with no scene. The next figure mounted takes it instead of making its own, and gets its validated markup, its CSS, the integrator's CSS and its language with the `init` message; another is warmed behind it while a lease is held. A frame nobody takes closes 15 s after the last lease is let go. The TipTap extension holds a lease while a figure is made or changed, so the figure starts in a frame that is already running.
+- **Its policy.** A warm frame cannot know the scene's CSS when it is made, so its policy allows the theme by hash and, for styles, one 128-bit nonce, which only the host and the frame's own script know. The frame script puts the integrator's CSS and then the scene's in style elements carrying it; nothing else can, and the policy is otherwise the same.
+- **Moving it.** A warm frame waiting in the page body is moved into its figure with `moveBefore`, which keeps its document; any other move would load the frame again, which the bridge treats as a navigation. Where a browser has no `moveBefore`, the page body warms nothing, and only a frame warmed in the figure's own container (`prewarm({ container })`) is used. In Chromium, a warm frame takes a figure from mount to drawn in a median of 80 ms against 107 ms for a cold one, or 59 ms when warmed in place; the saving grows on slower devices, where a frame takes 150 to 600 ms to boot.
 
 ### Tested
 

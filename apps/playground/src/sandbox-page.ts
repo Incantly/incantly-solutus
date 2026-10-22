@@ -73,6 +73,24 @@ export function mountSandboxPage(root: HTMLElement, params: URLSearchParams): vo
     }, Number(params.get('wait') ?? 400));
     return;
   }
+  if (params.get('live') === 'warm') {
+    // The figure's frame boots while the scene is "being written" (here, a short wait), in the page body or with
+    // `in=place` in its own slot, and then takes the scene by message (PRD 25.4). `styled=1` adds trusted CSS.
+    const lease = sandboxAdapter.prewarm!(params.get('in') === 'place' ? { container } : {});
+    setTimeout(() => {
+      const started = performance.now();
+      s.mountedAt = performance.timeOrigin + started;
+      const style = params.get('styled') === '1' ? { css: '.inc-scene { outline: 3px solid rgb(1, 2, 3); }' } : undefined;
+      const figure = sandboxAdapter.mount(container, scene, { ...options, ...(style ? { style } : {}) });
+      lease.release();
+      s.figure = figure;
+      void figure.ready.then(() => {
+        s.timings = { mountMs: performance.now() - started };
+        s.ready = true;
+      });
+    }, Number(params.get('wait') ?? 400));
+    return;
+  }
   if (params.get('probe') === '1') {
     const id = params.get('scene');
     const plan = id ? referenceScene(id)?.plan : undefined;
@@ -101,9 +119,13 @@ export function mountSandboxPage(root: HTMLElement, params: URLSearchParams): vo
     });
     return;
   }
+  const started = performance.now();
   const figure = sandboxAdapter.mount(container, scene, options);
   s.figure = figure;
-  void figure.ready.then(() => (s.ready = true));
+  void figure.ready.then(() => {
+    s.timings = { mountMs: performance.now() - started };
+    s.ready = true;
+  });
 }
 
 /** The same scene source on both adapters, side by side. */
