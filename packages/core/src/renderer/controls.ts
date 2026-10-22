@@ -54,6 +54,10 @@ export class ControlsView {
   private readonly paramsElement: HTMLElement;
   private readonly actionsElement: HTMLElement;
   private readonly inputs = new Map<string, ParamInputs>();
+  /** Each parameter's value as the figure last reported it. */
+  private readonly latest = new Map<string, string>();
+  /** Number fields to bring back to the figure's value at its next report, focused or not. */
+  private readonly resync = new Set<string>();
   private signature = '';
   private actionsSignature = '';
   private playing = false;
@@ -178,10 +182,20 @@ export class ControlsView {
       },
       { signal },
     );
+    // A number field the learner left, or committed with Enter, shows the value the figure took, clamped or
+    // snapped to its step, at once and again at the next state, even while the field still has focus (CT-2).
+    const settle = (target: EventTarget | null) => {
+      if (!(target instanceof HTMLInputElement) || target.type !== 'number' || !target.dataset.param) return;
+      const latest = this.latest.get(target.dataset.param);
+      if (latest !== undefined && target.value !== latest) target.value = latest;
+      this.resync.add(target.dataset.param);
+    };
+    this.element.addEventListener('focusout', (event) => settle(event.target), { signal });
     this.element.addEventListener(
       'change',
       (event) => {
         const target = event.target as HTMLElement;
+        settle(target);
         if (target === this.speed) send({ type: 'speed', value: Number(this.speed.value) });
         else if (target instanceof HTMLSelectElement && target.dataset.param) send({ type: 'setParam', name: target.dataset.param, value: Number(target.value) });
         else if (target === this.duration) {
@@ -358,8 +372,11 @@ export class ControlsView {
         if (inputs.range.value !== value) inputs.range.value = value;
         inputs.range.setAttribute('aria-valuetext', `${value}${param.unit ? ` ${param.unit}` : ''}`);
       }
-      // Never fight a learner who is typing into the number field.
-      if (inputs.number && this.doc.activeElement !== inputs.number && inputs.number.value !== value) inputs.number.value = value;
+      this.latest.set(param.name, value);
+      // Never fight a learner who is typing into the number field; once they commit or leave it, it shows the value taken.
+      const typing = inputs.number !== undefined && this.doc.activeElement === inputs.number && !this.resync.has(param.name);
+      if (inputs.number && !typing && inputs.number.value !== value) inputs.number.value = value;
+      this.resync.delete(param.name);
       if (inputs.check) inputs.check.checked = param.value === 1;
       if (inputs.select && inputs.select.value !== value) inputs.select.value = value;
       if (inputs.buttons) for (const button of inputs.buttons) button.setAttribute('aria-pressed', String(button.dataset.value === value));
