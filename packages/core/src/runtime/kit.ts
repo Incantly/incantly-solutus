@@ -25,6 +25,13 @@ export interface ParamInfo {
 }
 
 /**
+ * The map of a drag still to come: a graph handle placed at numbers sets no
+ * parameter itself, so the scene must give it one with graph.drag before it
+ * finishes mounting. The runtime checks that it did.
+ */
+export const AWAITING_MAP = (): void => undefined;
+
+/**
  * What a drawing kit (graph2d, space3d, physics2d, chart, flow) gets from the
  * runtime for one stage. Kits are SDK code: they may create elements at any
  * time, register drags and redraws, and read parameters.

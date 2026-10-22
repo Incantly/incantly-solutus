@@ -54,7 +54,7 @@ import { choiceControl, colorControl, toggleControl } from './controls';
 import { createFormula, type FormulaRecord } from './formula';
 import { isErrorLike, isRunaway } from './fuel';
 import { History } from './history';
-import type { KitContext, ParamInfo, ViewController } from './kit';
+import { AWAITING_MAP, type KitContext, type ParamInfo, type ViewController } from './kit';
 import { KIT_OF, type KitCall, type KitRegistry } from './kits';
 import { createParamState, snap, type ControlShape, type ParamState } from './params';
 import { mulberry32 } from './random';
@@ -300,6 +300,7 @@ export class SceneRuntime {
     try {
       scene(this.inc, Math);
       this.checkTeaching();
+      this.checkDrags();
       this.lifecycle = 'mounted';
     } catch (error) {
       this.lifecycle = 'failed';
@@ -1388,6 +1389,16 @@ export class SceneRuntime {
     }
   }
 
+  /** Every drag has a map once the scene has mounted: a handle placed at numbers gets one from graph.drag. */
+  private checkDrags(): void {
+    for (const binding of this.drags.values()) {
+      if (binding.map !== AWAITING_MAP) continue;
+      throw new SceneApiError(
+        `graph.handle at numbers sets no parameter, so "${binding.label}" needs a map: graph.drag(handle, (p) => ({ name: p.x })), or name parameters in quotes, such as { x: 'phase', y: 0 }`,
+      );
+    }
+  }
+
   private checkTeaching(): void {
     if (!this.stepList) return;
     this.stepList.forEach((step, index) => {
@@ -1665,7 +1676,13 @@ export class SceneRuntime {
           );
         } catch (error) {
           if (error instanceof ExpressionError) {
-            throw new SceneApiError(`Formula "${source}": ${error.message} at position ${error.position}`);
+            const unknown = /^Unknown variable "(\w+)"$/.exec(error.message);
+            const names = [...runtime.params.keys()].filter((name) => /^[A-Za-z_]\w*$/.test(name));
+            // Say how to bind the name: a parameter's own name, or vars.
+            const hint = unknown
+              ? `. Use a parameter by its own name${names.length > 0 ? ` (${names.slice(0, 8).join(', ')})` : ''}, or bind it: { vars: { ${unknown[1]}: aParameter } }`
+              : '';
+            throw new SceneApiError(`Formula "${source}": ${error.message} at position ${error.position}${hint}`);
           }
           throw error;
         }

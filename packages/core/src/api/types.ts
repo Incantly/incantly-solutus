@@ -526,6 +526,7 @@ export interface Formula {
 }
 
 export interface FormulaOptions {
+  /** Short names for parameters or numbers, such as { A: amplitude }. Parameters declared before the formula can also be used by their own names. */
   readonly vars?: Readonly<Record<string, Param | number>>;
   /** Show the formula as maths the learner can edit; their edit replaces it everywhere. */
   readonly editable?: boolean;
@@ -575,6 +576,7 @@ export type Bound = number | (() => number);
 export interface GraphCurve {
   readonly handle: PathHandle;
   show(visible?: boolean): this;
+  hide(): this;
   tone(name: Tone): this;
   /** Draws only the first fraction of it, from 0 to 1, to animate plotting. */
   reveal(fraction: number): this;
@@ -612,6 +614,7 @@ export interface GraphPoint {
   readonly handle: Handle;
   at(x: number, y: number): this;
   show(visible?: boolean): this;
+  hide(): this;
   tone(name: Tone): this;
 }
 
@@ -619,6 +622,7 @@ export interface GraphSegment {
   readonly handle: Handle;
   between(x1: number, y1: number, x2: number, y2: number): this;
   show(visible?: boolean): this;
+  hide(): this;
   tone(name: Tone): this;
 }
 
@@ -626,6 +630,7 @@ export interface GraphArrow {
   readonly handle: PathHandle;
   from(x: number, y: number, dx: number, dy: number): this;
   show(visible?: boolean): this;
+  hide(): this;
   tone(name: Tone): this;
 }
 
@@ -641,6 +646,7 @@ export interface GraphMark {
   between(x1: number, y1: number, x2: number, y2: number): this;
   text(value: Readable): this;
   show(visible?: boolean): this;
+  hide(): this;
   tone(name: Tone): this;
 }
 
@@ -1337,6 +1343,7 @@ export interface Inc {
   chart(selector: string, options: ChartOptions): Chart;
   /** A flowchart or state diagram that lays itself out. */
   flow(selector: string, options: FlowOptions): Flow;
+  /** A formula of x, t, the parameters by name and its vars, such as inc.formula('A*sin(k*x - w*t)', { vars: { A: amplitude } }). */
   formula(source: string, options?: FormulaOptions): Formula;
   /** Seeded random number in [0, 1). Same seed, same sequence. */
   random(): number;

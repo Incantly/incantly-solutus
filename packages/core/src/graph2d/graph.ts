@@ -32,7 +32,7 @@ import type {
   ViewBox,
 } from '../api/types';
 import type { ViewAction } from '../protocol/runtime-messages';
-import type { KitContext, ViewController } from '../runtime/kit';
+import { AWAITING_MAP, type KitContext, type ViewController } from '../runtime/kit';
 import { SceneApiError } from '../scene/errors';
 import { fmt } from '../scene/format';
 import type { VNode } from '../scene/graph';
@@ -142,6 +142,9 @@ class Curve implements GraphCurve {
   show(visible = true): this {
     this.handle.show(visible);
     return this;
+  }
+  hide(): this {
+    return this.show(false);
   }
   tone(name: Tone): this {
     this.handle.tone(name);
@@ -860,6 +863,9 @@ export class Graph2D implements Graph, ViewController {
         handle.show(visible);
         return this;
       },
+      hide() {
+        return this.show(false);
+      },
       tone(name: Tone) {
         handle.tone(name);
         return this;
@@ -892,6 +898,9 @@ export class Graph2D implements Graph, ViewController {
         handle.show(visible);
         return this;
       },
+      hide() {
+        return this.show(false);
+      },
       tone(name: Tone) {
         handle.tone(name);
         return this;
@@ -920,6 +929,9 @@ export class Graph2D implements Graph, ViewController {
       show(visible = true) {
         handle.show(visible);
         return this;
+      },
+      hide() {
+        return this.show(false);
       },
       tone(name: Tone) {
         handle.tone(name);
@@ -1027,6 +1039,9 @@ export class Graph2D implements Graph, ViewController {
         text.show(visible);
         return this;
       },
+      hide() {
+        return this.show(false);
+      },
       tone(name: Tone) {
         handle.tone(name);
         text.tone(name);
@@ -1113,6 +1128,9 @@ export class Graph2D implements Graph, ViewController {
         dot.show(visible);
         return this;
       },
+      hide() {
+        return this.show(false);
+      },
       tone(name: Tone) {
         dot.tone(name);
         label.tone(name);
@@ -1130,7 +1148,10 @@ export class Graph2D implements Graph, ViewController {
       if (typeof axis === 'number' && !Number.isFinite(axis)) throw new SceneApiError('handle needs finite numbers');
     }
     if (typeof options.x === 'number' && typeof options.y === 'number') {
-      throw new SceneApiError("graph.handle needs x or y to name a parameter, in quotes, such as { x: 'phase', y: 0 }; for a point that sets no parameter use graph.point, or graph.drag to map the pointer to parameters");
+      // A handle at numbers sets nothing itself: the scene moves it with at() and gives it a map with graph.drag.
+      const point = this.point(options.x, options.y, { tone: options.tone ?? 'lit', r: options.r ?? 8 });
+      this.ctx.addDrag(nodeOf(point.handle), options.label ?? 'the point', AWAITING_MAP, this.toData);
+      return point;
     }
     const value = (axis: string | number) => (typeof axis === 'string' ? (this.ctx.param(axis)?.value ?? Number.NaN) : axis);
     const point = this.point(value(options.x), value(options.y), { tone: options.tone ?? 'lit', r: options.r ?? 8 });

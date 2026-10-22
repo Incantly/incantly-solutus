@@ -225,7 +225,6 @@ describe('handles that stand for their elements', () => {
   it('lets a graph item stand for its handle, gives every element a handle, and names what it needs when neither fits', async () => {
     const { SceneRuntime } = await import('../src/runtime/runtime');
     const runtime = new SceneRuntime({ autoplay: false });
-    let thrown = '';
     runtime.mount((inc) => {
       const graph = inc.graph2d('#s', { x: [0, 10], y: [0, 10], title: 'G' });
       const point = graph.point(1, 1);
@@ -235,13 +234,25 @@ describe('handles that stand for their elements', () => {
       expect(label.handle).toBe(label);
       expect(inc.path.polyline([[0, 0], [1, 1]])).toBe(inc.path.line([[0, 0], [1, 1]]));
       expect(inc.shapes.resistor(0, 0, 10, 0)).toBe(inc.shapes.zigzag(0, 0, 10, 0));
-      try {
-        graph.handle({ x: 1, y: 2 });
-      } catch (error) {
-        thrown = (error as Error).message;
-      }
     });
     expect(runtime.uiState().parts.map((p) => p.name).sort()).toEqual(['Label', 'Point']);
-    expect(thrown).toContain("graph.handle needs x or y to name a parameter, in quotes, such as { x: 'phase', y: 0 }");
+    // A handle at numbers sets no parameter: graph.drag gives it a map, or the mount says what it needs.
+    const mapped = new SceneRuntime({ autoplay: false });
+    mapped.mount((inc) => {
+      inc.param('speed', { min: 0, max: 10, value: 5 });
+      const graph = inc.graph2d('#s', { x: [0, 10], y: [0, 10], title: 'G' });
+      const tip = graph.handle({ x: 0, y: 0, label: 'the arrow tip' });
+      graph.drag(tip, (p) => ({ speed: p.x }));
+      tip.hide().show();
+    });
+    expect(mapped.isMounted).toBe(true);
+    const unmapped = new SceneRuntime({ autoplay: false });
+    unmapped.mount((inc) => {
+      const graph = inc.graph2d('#s', { x: [0, 10], y: [0, 10], title: 'G' });
+      graph.handle({ x: 1, y: 2, label: 'the tip' });
+    });
+    const thrown = unmapped.uiState().error?.message ?? '';
+    expect(unmapped.isMounted).toBe(false);
+    expect(thrown).toContain('graph.handle at numbers sets no parameter, so "the tip" needs a map: graph.drag(handle, (p) => ({ name: p.x }))');
   });
 });

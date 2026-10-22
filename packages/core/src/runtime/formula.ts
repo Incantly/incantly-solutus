@@ -26,13 +26,13 @@ export class FormulaRecord {
     private readonly params: () => ReadonlyMap<string, Param>,
   ) {
     this.source = source;
-    this.compiled = compileExpression(source, this.allowedNames(false));
+    this.compiled = compileExpression(source, this.allowedNames());
   }
 
-  /** Names a formula may use: x and t, its own variables, and, for a learner's edit, every parameter. */
-  private allowedNames(edit: boolean): string[] {
+  /** Names a formula may use: x and t, its own variables, and every parameter declared so far, by its name (FM-3). */
+  private allowedNames(): string[] {
     const names = ['x', 't', ...Object.keys(this.vars)];
-    if (edit) for (const name of this.params().keys()) if (!names.includes(name) && /^[A-Za-z_]\w*$/.test(name)) names.push(name);
+    for (const name of this.params().keys()) if (!names.includes(name) && /^[A-Za-z_]\w*$/.test(name)) names.push(name);
     return names;
   }
 
@@ -47,7 +47,7 @@ export class FormulaRecord {
     }
     if (text.length > MAX_FORMULA_LENGTH) return this.reject(text, `Keep the formula under ${MAX_FORMULA_LENGTH} characters`);
     try {
-      this.compiled = compileExpression(text, this.allowedNames(true));
+      this.compiled = compileExpression(text, this.allowedNames());
     } catch (error) {
       const message = error instanceof ExpressionError ? `${error.message} at position ${error.position + 1}` : 'That is not a formula the figure can read';
       return this.reject(text, message);

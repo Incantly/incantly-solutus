@@ -344,19 +344,19 @@ export const HANDLES: Readonly<Record<HandleKind, HandleSpec>> = {
     properties: { stage: 'Stage' } satisfies Properties<Graph>,
   },
   Curve: {
-    methods: { show: 'self', tone: 'self', reveal: 'self' } satisfies Methods<GraphCurve>,
+    methods: { show: 'self', hide: 'self', tone: 'self', reveal: 'self' } satisfies Methods<GraphCurve>,
     properties: { handle: 'Path' } satisfies Properties<GraphCurve>,
   },
   GraphPoint: {
-    methods: { at: 'self', show: 'self', tone: 'self' } satisfies Methods<GraphPoint>,
+    methods: { at: 'self', show: 'self', hide: 'self', tone: 'self' } satisfies Methods<GraphPoint>,
     properties: { handle: 'Element' } satisfies Properties<GraphPoint>,
   },
   GraphSegment: {
-    methods: { between: 'self', show: 'self', tone: 'self' } satisfies Methods<GraphSegment>,
+    methods: { between: 'self', show: 'self', hide: 'self', tone: 'self' } satisfies Methods<GraphSegment>,
     properties: { handle: 'Element' } satisfies Properties<GraphSegment>,
   },
   GraphArrow: {
-    methods: { from: 'self', show: 'self', tone: 'self' } satisfies Methods<GraphArrow>,
+    methods: { from: 'self', show: 'self', hide: 'self', tone: 'self' } satisfies Methods<GraphArrow>,
     properties: { handle: 'Path' } satisfies Properties<GraphArrow>,
   },
   GraphTrail: {
@@ -364,7 +364,7 @@ export const HANDLES: Readonly<Record<HandleKind, HandleSpec>> = {
     properties: { handle: 'Polyline' } satisfies Properties<GraphTrail>,
   },
   GraphMark: {
-    methods: { between: 'self', text: 'self', show: 'self', tone: 'self' } satisfies Methods<GraphMark>,
+    methods: { between: 'self', text: 'self', show: 'self', hide: 'self', tone: 'self' } satisfies Methods<GraphMark>,
     properties: { handle: 'Path' } satisfies Properties<GraphMark>,
   },
   Formula: {

@@ -304,7 +304,17 @@ describe('formulas and tweens', () => {
     const { first } = mount((inc) => {
       inc.formula('A*sin(x)', { vars: {} });
     });
-    expect(first.ui.error?.message).toBe('Formula "A*sin(x)": Unknown variable "A" at position 0');
+    expect(first.ui.error?.message).toBe('Formula "A*sin(x)": Unknown variable "A" at position 0. Use a parameter by its own name, or bind it: { vars: { A: aParameter } }');
+    // A parameter is a formula variable by its own name.
+    let law: ReturnType<Inc['formula']> | undefined;
+    const named = mount((inc) => {
+      inc.param('temperature', { min: 200, max: 600, value: 300 });
+      inc.param('volume', { min: 1, max: 5, value: 2 });
+      law = inc.formula('0.8314*temperature/volume');
+      inc.formula('T/V');
+    });
+    expect(law?.(0)).toBeCloseTo((0.8314 * 300) / 2, 9);
+    expect(named.first.ui.error?.message).toBe('Formula "T/V": Unknown variable "T" at position 0. Use a parameter by its own name (temperature, volume), or bind it: { vars: { T: aParameter } }');
     expect(
       mount((inc) => {
         inc.formula('sin(x', {});
