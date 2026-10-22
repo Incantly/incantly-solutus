@@ -85,8 +85,11 @@ class FakeFigure implements FigureHandle {
   snapshot() {
     return Promise.resolve(PNG);
   }
+  /** The drawing as a still image, numbered so a test can tell a fresh one from an old one. */
+  exports = 0;
   exportSvg() {
-    return Promise.resolve(null);
+    this.exports++;
+    return Promise.resolve(`data:image/svg+xml;charset=utf-8,%3Csvg%3E${this.exports}%3C%2Fsvg%3E`);
   }
   destroy() {
     this.state = 'destroyed';
@@ -285,6 +288,27 @@ describe('live figures: persistence', () => {
     await vi.advanceTimersByTimeAsync(500);
     expect(persisted).toEqual(['persist:false']);
     expect(attrs(0)).toMatchObject({ values: { k: 20 }, step: 1, description: 'A figure at k = 20.' });
+  });
+
+  it('prints a still of each live figure in place of its frame, as the learner left it (6.10)', async () => {
+    const { fake, observer, figures } = setup();
+    observer.set([figures()[0]!], true);
+    await vi.advanceTimersByTimeAsync(100);
+    const figure = figures()[0]!;
+    const still = () => figure.querySelector<HTMLImageElement>('img.incantly-figure__print')!;
+    const live = () => figure.querySelector<HTMLElement>('.incantly-figure__live')!;
+    expect(still().src).toContain('%3E1%3C');
+    expect(still().style.display).toBe('none');
+    // The learner moves a slider: once it settles, the still is made again.
+    fake.mounts[0]!.options.onValues?.({ k: 3 });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(still().src).toContain('%3E2%3C');
+    window.dispatchEvent(new Event('beforeprint'));
+    expect(live().style.display).toBe('none');
+    expect(still().style.display).toBe('block');
+    window.dispatchEvent(new Event('afterprint'));
+    expect(live().style.display).toBe('');
+    expect(still().style.display).toBe('none');
   });
 
   it('keeps learner values out of undo, while undo still works for prose', async () => {

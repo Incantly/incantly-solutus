@@ -112,6 +112,9 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
   private readonly status: HTMLElement;
   /** Earlier versions to go back to (HO-9), shown when there are any. */
   private readonly history: HTMLDetailsElement;
+  /** The live drawing as a still vector image, printed in its place (6.10). */
+  private printImage: HTMLImageElement | null = null;
+  private printing = 0;
   private handle: FigureHandle | null = null;
   private pending: Pending = {};
   private settleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -473,6 +476,8 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
       for (const child of [...this.frame.children]) if (child !== container) child.remove();
       this.frame.classList.add('is-live');
       this.frame.style.aspectRatio = '';
+      watchPrinting(this);
+      void this.refreshPrint();
       if (this.focusOnLive !== null) {
         const edge = this.focusOnLive;
         this.focusOnLive = null;
@@ -693,6 +698,9 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
   /** Ends the live instance, if any. */
   private teardown(): void {
     this.generation++;
+    unwatchPrinting(this);
+    this.printImage?.remove();
+    this.printImage = null;
     this.handle?.destroy();
     this.handle = null;
     this.frame.classList.remove('is-live');
@@ -742,6 +750,47 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
     for (const [name, value] of changes) tr = tr.setNodeAttribute(pos, name, value);
     // Exploring a figure is not editing the note: it never enters the undo history.
     view.dispatch(tr.setMeta('addToHistory', false).setMeta(FIGURE_TRANSACTION, 'persist'));
+    if (pending.values || pending.step !== undefined || pending.formulas) void this.refreshPrint();
+  }
+
+  /**
+   * Keeps a still of the live drawing for printing (6.10): the figure's own
+   * vector export, made when it first draws and again when the learner's
+   * changes settle, so a printed note shows the figure as they left it.
+   */
+  private async refreshPrint(attempt = 0): Promise<void> {
+    const handle = this.handle;
+    if (!handle || this.state !== 'live') return;
+    const generation = this.generation;
+    const url = await handle.exportSvg().catch(() => null);
+    if (generation !== this.generation || this.state !== 'live') return;
+    if (!url) {
+      // A frame that has not drawn yet has no picture to give: ask again shortly, a few times.
+      if (attempt < 3) setTimeout(() => void this.refreshPrint(attempt + 1), 400 * (attempt + 1));
+      return;
+    }
+    if (!this.printImage) {
+      const image = this.dom.ownerDocument.createElement('img');
+      image.className = 'incantly-figure__print';
+      // The description under the figure is its text alternative; the still repeats the drawing only.
+      image.alt = '';
+      image.style.display = 'none';
+      this.frame.append(image);
+      this.printImage = image;
+    }
+    this.printImage.src = url;
+    if (this.printing > 0) this.print(true);
+  }
+
+  /** While the page prints, the still stands in for the live frame, which may not print whole. */
+  print(on: boolean): void {
+    this.printing = on ? 1 : 0;
+    const live = this.frame.querySelector<HTMLElement>('.incantly-figure__live');
+    const still = this.printImage;
+    if (!live || !still || !still.src) return;
+    live.style.display = on ? 'none' : '';
+    still.style.display = on ? 'block' : 'none';
+    still.style.width = on ? '100%' : '';
   }
 
   // -------------------------------------------------------------------------
@@ -918,6 +967,29 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
   get lastError(): ErrorView | null {
     return this.failure;
   }
+}
+
+/** Live figures by window, so one pair of print listeners serves every figure on the page. */
+const printWatch = new WeakMap<Window, Set<FigureNodeView>>();
+
+function watchPrinting(view: FigureNodeView): void {
+  const win = view.dom.ownerDocument.defaultView;
+  if (!win) return;
+  let views = printWatch.get(win);
+  if (!views) {
+    const set = new Set<FigureNodeView>();
+    views = set;
+    printWatch.set(win, set);
+    // Before the page lays out for printing, every live figure swaps its frame for its still; after, it swaps back.
+    win.addEventListener('beforeprint', () => set.forEach((v) => v.print(true)));
+    win.addEventListener('afterprint', () => set.forEach((v) => v.print(false)));
+  }
+  views.add(view);
+}
+
+function unwatchPrinting(view: FigureNodeView): void {
+  const win = view.dom.ownerDocument.defaultView;
+  if (win) printWatch.get(win)?.delete(view);
 }
 
 /** What replaced each earlier version, as the history says it. */

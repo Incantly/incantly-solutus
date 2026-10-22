@@ -125,6 +125,25 @@ test.describe('figures in notes (Phase 4 gate)', () => {
     await expect(frame.getByRole('group', { name: 'Walkthrough' })).toBeVisible();
   });
 
+  test('a printed note shows each live figure as a still of its drawing, with no console errors (6.10)', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('console', (message) => {
+      if (message.type() === 'error') errors.push(message.text());
+    });
+    await openNote(page, 'size=1');
+    await waitLive(page, 0);
+    const still = figure(page, 0).locator('img.incantly-figure__print');
+    await expect(still).toHaveAttribute('src', /^data:image\/svg\+xml/, { timeout: 10_000 });
+    await expect(still).toBeHidden();
+    await page.evaluate(() => window.dispatchEvent(new Event('beforeprint')));
+    await expect(still).toBeVisible();
+    await expect(figure(page, 0).locator('.incantly-figure__live')).toBeHidden();
+    expect(await still.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBeGreaterThan(100);
+    await page.evaluate(() => window.dispatchEvent(new Event('afterprint')));
+    await expect(figure(page, 0).locator('iframe')).toBeVisible();
+    expect(errors).toEqual([]);
+  });
+
   test('scrolling a 50-figure note keeps at most three live figures and leaves snapshots behind', async ({ page }) => {
     await openNote(page, 'size=50&suspendAfter=400');
     await waitLive(page, 0);
