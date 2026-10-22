@@ -1,4 +1,4 @@
-import { mergeStyles, type ErrorView, type ExecutionAdapter, type FigureHandle, type FigureStyle } from '@incantly/core';
+import { VALIDATOR_VERSION, mergeStyles, type ErrorView, type ExecutionAdapter, type FigureHandle, type FigureStyle } from '@incantly/core';
 import type { Editor } from '@tiptap/core';
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 import { NodeSelection, TextSelection } from '@tiptap/pm/state';
@@ -23,7 +23,31 @@ export interface FigureViewOptions {
   readonly signals?: ((signal: FigureSignal) => void) | null | undefined;
   /** The editor's style for every figure; each figure's `look` goes over it. */
   readonly style?: FigureStyle | null | undefined;
+  /** Repairs a figure that hit a problem while live (RP-7). */
+  readonly repair?: FigureRepair | null | undefined;
 }
+
+/** What a background repair is given: the figure as stored, its ticket, and the problem with the learner's state. */
+export interface FigureRepairRequest {
+  readonly figureId: string;
+  readonly generationId?: string;
+  readonly fragments: FigureFragments;
+  readonly ticket: string;
+  readonly error: ErrorView;
+  readonly values: Readonly<Record<string, number>>;
+  readonly step: number | null;
+}
+
+/** A repaired scene that passed its probe on this device, to swap in at the learner's values. */
+export interface RepairedFigure {
+  readonly fragments: FigureFragments;
+  readonly generationId: string | null;
+  readonly approvedAt: string;
+  readonly ticket: string | null;
+}
+
+/** Repairs a figure in the background; null when it could not be repaired. */
+export type FigureRepair = (request: FigureRepairRequest, signal: AbortSignal) => Promise<RepairedFigure | null>;
 
 /**
  * What a figure in a note says about how it is used, for the host's product
@@ -98,6 +122,11 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
   private notice: string | null = null;
   /** The figure's number in the note, when the editor numbers figures. */
   private number: number | null = null;
+  /** A background repair (RP-7): none, running, or one that did not work, which offers the working version. */
+  private mending: 'idle' | 'repairing' | 'failed' = 'idle';
+  private mendAbort: AbortController | null = null;
+  /** Repairs swapped in while the note is open: one at most. */
+  private mended = 0;
   /** How the learner used the figure while the note is open, for product signals. */
   private readonly usage = {
     shownAt: null as number | null,
@@ -223,6 +252,7 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
 
   destroy(): void {
     if (this.state === 'destroyed') return;
+    this.mendAbort?.abort();
     this.left();
     if (this.noticeTimer !== null) clearTimeout(this.noticeTimer);
     this.flush();
@@ -393,7 +423,11 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
         if (reported && sameError(reported, error)) return;
         reported = error;
         // Adapters report a problem just before they fail on it, so by the next microtask it is known whether it was fatal.
-        queueMicrotask(() => this.report(error, this.state === 'failed'));
+        queueMicrotask(() => {
+          const fatal = this.state === 'failed';
+          this.report(error, fatal);
+          if (!fatal) void this.mend(error);
+        });
       },
       onState: (state) => {
         if (state === 'failed' && this.state === 'live') this.fail(reported ?? { phase: 'mount', message: 'The figure stopped working' }, reported);
@@ -467,6 +501,98 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
     } catch {
       // A host's reporting must never break the note.
     }
+  }
+
+  /**
+   * The live figure hit a problem and froze at its last good frame (RP-7).
+   * With a repairer and the figure's ticket, a quiet line says it is being
+   * fixed while the repair runs; a repair that passed on this device is
+   * swapped in at the learner's values. Otherwise, or when the repair does
+   * not work, the line offers the working version.
+   */
+  private async mend(error: ErrorView): Promise<void> {
+    if (this.mending !== 'idle' || this.state !== 'live') return;
+    const attrs = this.attrs;
+    const repair = this.options.repair;
+    const ticket = attrs.meta.ticket;
+    if (!repair || !ticket || this.mended > 0) {
+      this.mending = 'failed';
+      this.renderStatus();
+      return;
+    }
+    const fragments = await this.fragments();
+    if (!fragments || this.state !== 'live') return;
+    this.mending = 'repairing';
+    this.renderStatus();
+    const abort = new AbortController();
+    this.mendAbort = abort;
+    const values = { ...attrs.values, ...this.pending.values };
+    const step = this.pending.step !== undefined ? this.pending.step : attrs.step;
+    let repaired: RepairedFigure | null;
+    try {
+      repaired = await repair(
+        { figureId: attrs.figureId, ...(attrs.meta.generationId ? { generationId: attrs.meta.generationId } : {}), fragments, ticket, error, values, step },
+        abort.signal,
+      );
+    } catch {
+      repaired = null;
+    }
+    this.mendAbort = null;
+    // The figure may have been suspended or deleted while the repair ran.
+    if (abort.signal.aborted || (this.state as FigureViewState) === 'destroyed') return;
+    if (!repaired) {
+      this.mending = 'failed';
+      this.renderStatus();
+      return;
+    }
+    this.mended++;
+    this.mending = 'idle';
+    this.swapIn(repaired);
+  }
+
+  /** Puts a repaired scene in the note, out of the undo history; the figure remounts at the learner's values. */
+  private swapIn(repaired: RepairedFigure): void {
+    // The learner's latest values go into the node first, so the new scene starts from them.
+    this.flush();
+    if (this.editor.isDestroyed) return;
+    const pos = this.getPos();
+    if (typeof pos !== 'number') return;
+    const view = this.editor.view;
+    const node = view.state.doc.nodeAt(pos);
+    if (!node || node.type !== this.node.type) return;
+    const meta = {
+      ...(node.attrs as FigureAttributes).meta,
+      ...(repaired.generationId ? { generationId: repaired.generationId } : {}),
+      approvedAt: repaired.approvedAt,
+      validatorVersion: VALIDATOR_VERSION,
+      ...(repaired.ticket ? { ticket: repaired.ticket } : {}),
+    };
+    const tr = view.state.tr.setNodeAttribute(pos, 'fragments', repaired.fragments).setNodeAttribute(pos, 'fragmentsRef', null).setNodeAttribute(pos, 'meta', meta);
+    view.dispatch(tr.setMeta('addToHistory', false).setMeta(FIGURE_TRANSACTION, 'repaired'));
+    this.renderStatus();
+  }
+
+  /** Goes back to the version that passed: the figure's own starting values, at no step, with its own formulas. */
+  resetToWorking(): void {
+    if (this.state === 'destroyed') return;
+    this.mendAbort?.abort();
+    this.mendAbort = null;
+    this.mending = 'idle';
+    this.pending = {};
+    if (!this.editor.isDestroyed) {
+      const pos = this.getPos();
+      const node = typeof pos === 'number' ? this.editor.view.state.doc.nodeAt(pos) : null;
+      if (typeof pos === 'number' && node && node.type === this.node.type) {
+        const attrs = node.attrs as FigureAttributes;
+        const tr = this.editor.view.state.tr.setNodeAttribute(pos, 'values', { ...attrs.defaults }).setNodeAttribute(pos, 'step', null).setNodeAttribute(pos, 'formulas', {});
+        this.editor.view.dispatch(tr.setMeta('addToHistory', false).setMeta(FIGURE_TRANSACTION, 'persist'));
+      }
+    }
+    this.teardown();
+    this.state = 'placeholder';
+    this.failure = null;
+    this.renderPlaceholder();
+    this.options.scheduler.activate(this);
   }
 
   /** Ends the live instance, if any. */
@@ -630,10 +756,28 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
     this.renderStatus();
   }
 
-  /** The line under the figure: why it failed, or a passing notice. */
+  /** The line under the figure: why it failed, that it is being fixed, the way back to the working version, or a passing notice. */
   private renderStatus(): void {
-    const text = this.state === 'failed' ? 'This figure could not be shown. Its description is below.' : (this.notice ?? '');
-    if (this.status.textContent !== text) this.status.textContent = text;
+    if (this.state !== 'failed' && this.mending === 'failed') {
+      if (!this.status.querySelector('button')) {
+        const doc = this.status.ownerDocument;
+        const reset = doc.createElement('button');
+        reset.type = 'button';
+        reset.className = 'incantly-figure__reset';
+        reset.textContent = 'Reset to the working version';
+        reset.addEventListener('click', () => this.resetToWorking());
+        this.status.replaceChildren(doc.createTextNode('This figure hit a problem. '), reset);
+      }
+      this.status.hidden = false;
+      return;
+    }
+    const text =
+      this.state === 'failed'
+        ? 'This figure could not be shown. Its description is below.'
+        : this.mending === 'repairing'
+          ? 'This figure hit a problem and is being fixed.'
+          : (this.notice ?? '');
+    if (this.status.textContent !== text || this.status.querySelector('button')) this.status.textContent = text;
     this.status.hidden = text === '';
   }
 

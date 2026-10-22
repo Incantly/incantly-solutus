@@ -53,15 +53,19 @@ export interface FigureMeta {
   readonly approvedAt?: string;
   /** The validator version that approved the fragments. */
   readonly validatorVersion?: number;
+  /** The generation service's signature on the scene, sent back to repair it in the background (RP-7). */
+  readonly ticket?: string;
 }
 
 export function sanitizeMeta(value: unknown): FigureMeta {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
   const raw = value as Record<string, unknown>;
-  const meta: { generationId?: string; approvedAt?: string; validatorVersion?: number } = {};
+  const meta: { generationId?: string; approvedAt?: string; validatorVersion?: number; ticket?: string } = {};
   if (typeof raw.generationId === 'string' && /^[\w-]{1,64}$/.test(raw.generationId)) meta.generationId = raw.generationId;
   if (typeof raw.approvedAt === 'string' && !Number.isNaN(Date.parse(raw.approvedAt))) meta.approvedAt = raw.approvedAt;
   if (typeof raw.validatorVersion === 'number' && Number.isInteger(raw.validatorVersion)) meta.validatorVersion = raw.validatorVersion;
+  // Opaque to the note: only the service can read or check it.
+  if (typeof raw.ticket === 'string' && raw.ticket.length <= 16_000 && /^[\w-]+\.[\w-]+$/.test(raw.ticket)) meta.ticket = raw.ticket;
   return meta;
 }
 

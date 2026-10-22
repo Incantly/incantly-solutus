@@ -16,7 +16,9 @@ import {
   flushFigures,
   type FigureErrorReport,
   type FigureNodeView,
+  type FigureRepair,
   type ObserverFactory,
+  type RepairedFigure,
 } from '../src';
 
 // prosemirror-view exports its clipboard parser for tests, without a type declaration.
@@ -135,6 +137,7 @@ function setup(
     onError?: (report: FigureErrorReport) => void;
     style?: FigureStyle;
     numbering?: boolean;
+    repair?: FigureRepair;
   } = {},
 ) {
   const fake = fakeAdapter(options.fail);
@@ -155,6 +158,7 @@ function setup(
         onError: options.onError ?? null,
         style: options.style ?? null,
         numbering: options.numbering ?? false,
+        repair: options.repair ?? null,
       }),
     ],
     content: options.content ?? createFixtureDocument({ figures: 6, figure: () => ({ fragments: FRAGMENTS }) }),
@@ -518,6 +522,59 @@ describe('live figures: problems', () => {
     figure.hit('Division by zero');
     await vi.advanceTimersByTimeAsync(0);
     expect(reports.map((r) => r.error.message)).toEqual(['Math.sqrt(-1) is not a number', 'Division by zero']);
+  });
+
+  it('repairs a figure that hit a problem while live in the background, and swaps the repair in at the learner’s values (RP-7)', async () => {
+    const signed = createFixtureDocument({ figures: 1, figure: () => ({ fragments: FRAGMENTS, values: { k: 3 }, meta: { generationId: 'gen-7', ticket: 'signed.payload' } }) });
+    let finish: (figure: RepairedFigure | null) => void = () => undefined;
+    const repair = vi.fn<FigureRepair>(() => new Promise((resolve) => (finish = resolve)));
+    const { editor, fake, observer, figures, attrs } = setup({ content: signed, repair });
+    observer.set([figures()[0]!], true);
+    await vi.advanceTimersByTimeAsync(100);
+    const figure = fake.mounts[0]!;
+    figure.options.onValues?.({ k: 4 });
+    figure.hit("Cannot read properties of undefined (reading 'at')");
+    await vi.advanceTimersByTimeAsync(0);
+    // Frozen at its last good frame, with a quiet line, while the repair runs.
+    const status = () => figures()[0]!.querySelector<HTMLElement>('.incantly-figure__status')!;
+    expect(status().textContent).toBe('This figure hit a problem and is being fixed.');
+    expect(figures()[0]!.dataset.state).toBe('live');
+    expect(repair).toHaveBeenCalledTimes(1);
+    expect(repair.mock.calls[0]![0]).toMatchObject({ ticket: 'signed.payload', generationId: 'gen-7', fragments: FRAGMENTS, error: { phase: 'frame' }, values: { k: 4 }, step: null });
+    finish({ fragments: { ...FRAGMENTS, js: `${FRAGMENTS.js}\n// repaired` }, generationId: 'gen-8', approvedAt: '2026-10-22T03:00:00.000Z', ticket: 'signed.again' });
+    await vi.advanceTimersByTimeAsync(0);
+    // Swapped in at the learner's values, and the line is gone.
+    expect(fake.mounts).toHaveLength(2);
+    expect(fake.mounts[1]!.fragments.js).toContain('// repaired');
+    expect(fake.mounts[1]!.options.values).toEqual({ k: 4 });
+    expect(attrs(0).meta).toMatchObject({ generationId: 'gen-8', ticket: 'signed.again', approvedAt: '2026-10-22T03:00:00.000Z' });
+    expect(status().hidden).toBe(true);
+    // A repair is not the learner's edit: undo does not bring the broken version back.
+    editor.commands.undo();
+    expect((attrs(0).fragments as { js: string }).js).toContain('// repaired');
+  });
+
+  it('offers the working version when the repair does not work, or when the figure cannot be repaired here', async () => {
+    const signed = createFixtureDocument({ figures: 2, figure: (i) => ({ fragments: FRAGMENTS, values: { k: 3 }, defaults: { k: 1 }, meta: i === 0 ? { ticket: 'signed.payload' } : {} }) });
+    const repair = vi.fn<FigureRepair>(async () => null);
+    const { fake, observer, figures, attrs } = setup({ content: signed, repair });
+    observer.set(figures(), true);
+    await vi.advanceTimersByTimeAsync(100);
+    for (const figure of fake.mounts) figure.hit('Division by zero');
+    await vi.advanceTimersByTimeAsync(0);
+    // The first was sent for repair and came back with nothing; the second has no ticket, so it was not sent.
+    expect(repair).toHaveBeenCalledTimes(1);
+    for (const dom of figures()) {
+      expect(dom.querySelector('.incantly-figure__status')?.textContent).toBe('This figure hit a problem. Reset to the working version');
+    }
+    // The way back: the values it started from, no step, its own formulas, in a fresh instance.
+    figures()[1]!.querySelector<HTMLButtonElement>('.incantly-figure__reset')!.click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(attrs(1)).toMatchObject({ values: { k: 1 }, step: null, formulas: {} });
+    const fresh = fake.mounts.at(-1)!;
+    expect(fake.mounts).toHaveLength(3);
+    expect(fresh.options.values).toEqual({ k: 1 });
+    expect(figures()[1]!.querySelector<HTMLElement>('.incantly-figure__status')!.hidden).toBe(true);
   });
 
   it('tells the host about a figure that stopped responding, as fatal, once', async () => {

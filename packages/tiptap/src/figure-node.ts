@@ -16,7 +16,7 @@ import {
   sanitizeValues,
   type FigureAttributes,
 } from './attributes';
-import { FIGURE_TRANSACTION, FigureNodeView, figureViews, type FigureErrorReport, type FigureSignal } from './node-view';
+import { FIGURE_TRANSACTION, FigureNodeView, figureViews, type FigureErrorReport, type FigureRepair, type FigureSignal } from './node-view';
 import { LiveFigureScheduler, type SchedulerOptions } from './scheduler';
 import type { FigureStore } from './store';
 
@@ -49,6 +49,12 @@ export interface FigureNodeOptions {
   style: FigureStyle | null;
   /** Show each figure's number in the note (Fig 1, Fig 2) on its card. */
   numbering: boolean;
+  /**
+   * Repairs a figure that hit a problem while live, in the background (RP-7),
+   * such as @incantly/generation/client's figureRepairer. Without it, a figure
+   * that hits a problem offers to go back to its working version.
+   */
+  repair: FigureRepair | null;
 }
 
 declare module '@tiptap/core' {
@@ -147,7 +153,7 @@ export const FigureNode = Node.create<FigureNodeOptions>({
   draggable: true,
 
   addOptions() {
-    return { snapshots: null, adapter: null, store: null, scheduler: {}, settleMs: 600, theme: 'auto', onError: null, signals: null, style: null, numbering: false };
+    return { snapshots: null, adapter: null, store: null, scheduler: {}, settleMs: 600, theme: 'auto', onError: null, signals: null, style: null, numbering: false, repair: null };
   },
 
   addAttributes() {
@@ -298,6 +304,7 @@ export const FigureNode = Node.create<FigureNodeOptions>({
         onError: this.options.onError,
         signals: this.options.signals,
         style: this.options.style,
+        repair: this.options.repair,
       });
     };
   },

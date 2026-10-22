@@ -39,6 +39,8 @@ export interface GeneratedFigure {
   readonly description: string;
   readonly generationId: string | null;
   readonly approvedAt: string;
+  /** The service's signature on the scene, kept for a background repair (RP-7). */
+  readonly ticket?: string | null;
 }
 
 export type FigureGenerationResult =
@@ -245,6 +247,7 @@ function insertFigure(view: EditorView, id: string, figure: GeneratedFigure, not
       ...(figure.generationId ? { generationId: figure.generationId } : {}),
       approvedAt: figure.approvedAt,
       validatorVersion: VALIDATOR_VERSION,
+      ...(figure.ticket ? { ticket: figure.ticket } : {}),
     },
   });
   // Adding a figure is an ordinary edit: undo takes it out again.
