@@ -47,17 +47,32 @@ test.describe('the learner journey through generation', () => {
   for (const journey of JOURNEYS) {
     test(`${journey.concept}: skeleton, approved figure, use, steps, reopen, reduced motion`, async ({ page }) => {
       await page.goto('/?page=generate');
+      // The skeleton may show for well under a second when the library has the concept: record what it shows.
+      await page.evaluate(() => {
+        const seen = { busy: false, titles: [] as string[], sliders: 0, figuresWhileBusy: 0 };
+        (window as unknown as { __seen: typeof seen }).__seen = seen;
+        new MutationObserver(() => {
+          const card = document.querySelector('figure.incantly-figure--generating');
+          if (!card) return;
+          if (card.getAttribute('aria-busy') === 'true') seen.busy = true;
+          const title = card.querySelector('.incantly-skeleton__title')?.textContent;
+          if (title && !seen.titles.includes(title)) seen.titles.push(title);
+          seen.sliders = Math.max(seen.sliders, card.querySelectorAll('input[type=range][disabled]').length);
+          seen.figuresWhileBusy = Math.max(seen.figuresWhileBusy, document.querySelectorAll('figure.incantly-figure:not(.incantly-figure--generating)').length);
+        }).observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true });
+      });
       await ask(page, journey.prompt);
-
-      // A structured loading skeleton, drawn from the plan.
-      await expect(card(page)).toHaveAttribute('aria-busy', 'true');
-      await expect(card(page).locator('.incantly-skeleton__title')).toHaveText(journey.concept);
-      await expect(card(page).locator('input[type=range][disabled]')).toHaveCount(3);
-      expect(await figureAttrs(page)).toBeUndefined();
 
       // A probe-approved figure, stored with its approval.
       await waitDrawn(page);
       await expect(card(page)).toHaveCount(0);
+
+      // Before it, a structured loading skeleton drawn from the plan, and nothing in the note.
+      const seen = await page.evaluate(() => (window as unknown as { __seen: { busy: boolean; titles: string[]; sliders: number; figuresWhileBusy: number } }).__seen);
+      expect(seen.busy).toBe(true);
+      expect(seen.titles).toContain(journey.concept);
+      expect(seen.sliders).toBe(3);
+      expect(seen.figuresWhileBusy).toBe(0);
       const stored = await figureAttrs(page);
       expect(stored).toMatchObject({ concept: journey.concept, meta: { approvedAt: expect.any(String), validatorVersion: 1 } });
       expect(String((stored!.meta as { generationId?: string }).generationId)).toMatch(/^gen-/);
@@ -150,6 +165,38 @@ test.describe('repair and fallback in the note', () => {
     } finally {
       await page.evaluate(async () => (window.__playground as unknown as Handle).setGeneration(true));
     }
+  });
+});
+
+test.describe('changing a figure in the note (HO-8)', () => {
+  const selectFigure = (page: Page) =>
+    page.evaluate(() => {
+      const editor = (window.__playground as unknown as { editor: { state: { doc: { descendants(f: (n: { type: { name: string } }, p: number) => void): void } }; commands: { setNodeSelection(pos: number): boolean } } }).editor;
+      let pos = -1;
+      editor.state.doc.descendants((node, p) => {
+        if (pos < 0 && node.type.name === 'incantlyFigure') pos = p;
+      });
+      editor.commands.setNodeSelection(pos);
+    });
+
+  test('keeps the figure when a change cannot be made, and makes it again on request', async ({ page }) => {
+    await page.goto('/?page=generate');
+    await ask(page, 'Explain projectile motion.');
+    await waitDrawn(page);
+    const first = (await figureAttrs(page))!;
+    // The service signed the scene, so the note can ask for changes and background repairs.
+    expect((first.meta as { ticket?: string }).ticket).toMatch(/^[\w-]+\.[\w-]+$/);
+    await selectFigure(page);
+    await page.getByLabel('Change the selected figure').fill('Turn the ball into a poem');
+    await page.getByRole('button', { name: 'Change it' }).click();
+    // The reference model makes no change: the figure stays as it was, and says so.
+    await expect(figure(page).locator('.incantly-figure__status')).toHaveText('That change is not one this figure can make, so it is unchanged.', { timeout: 15_000 });
+    expect((await figureAttrs(page))!.fragments).toEqual(first.fragments);
+    await selectFigure(page);
+    await page.getByRole('button', { name: 'Make it again' }).click();
+    const id = (first.meta as { generationId?: string }).generationId;
+    await expect.poll(async () => ((await figureAttrs(page))!.meta as { generationId?: string }).generationId, { timeout: 15_000 }).not.toBe(id);
+    await waitDrawn(page);
   });
 });
 
