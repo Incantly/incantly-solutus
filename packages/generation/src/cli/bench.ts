@@ -180,13 +180,36 @@ function report(results: readonly BenchResult[], overheadMs: Record<string, numb
       `| ${condition} | ${rows.length} | ${approved.length} (${percent(approved.length, rows.length)}) | ${rows.filter((r) => r.firstAttempt).length} (${percent(rows.filter((r) => r.firstAttempt).length, rows.length)}) | ${rows.filter((r) => r.passed && !r.firstAttempt).length} | ${rows.filter((r) => !r.passed).length} | ${stats(totals)} | ${percent(totals.filter((t) => t <= 25_000).length, rows.length)} | ${percent(totals.filter((t) => t >= 5_000 && t <= 20_000).length, rows.length)} |`,
     );
   }
-  lines.push('', '## Stages (p50 / p90 / max / mean, seconds)', '', '| Condition | Plan | Scene, adapted by edits | Scene, written whole | Repair | Local checks |', '| --- | --- | --- | --- | --- | --- |');
+  lines.push(
+    '',
+    '## Stages (p50 / p90 / max / mean, seconds)',
+    '',
+    'A library build starts from the reviewed scene the request names and runs beside the plan call, so its time overlaps the plan\'s.',
+    '',
+    '| Condition | Plan | Scene, library build | Scene, adapted after the plan | Scene, written whole | Repair | Local checks |',
+    '| --- | --- | --- | --- | --- | --- | --- |',
+  );
   for (const condition of conditions) {
     const rows = done.filter((r) => r.condition === condition);
-    const scene = (mode: string) => rows.filter((r) => r.mode === mode).map((r) => r.timings.sceneMs);
+    const scene = (keep: (r: BenchResult) => boolean) => rows.filter(keep).map((r) => r.timings.sceneMs);
     lines.push(
-      `| ${condition} | ${stats(rows.map((r) => r.timings.planMs))} | ${stats(scene('adapt'))} | ${stats(scene('write'))} | ${stats(rows.filter((r) => r.repairs > 0).map((r) => r.timings.repairMs))} | ${stats(rows.map((r) => r.timings.checkMs))} |`,
+      `| ${condition} | ${stats(rows.map((r) => r.timings.planMs))} | ${stats(scene((r) => r.retrieved !== null))} | ${stats(scene((r) => r.mode === 'adapt' && r.retrieved === null))} | ${stats(scene((r) => r.mode === 'write'))} | ${stats(rows.filter((r) => r.repairs > 0).map((r) => r.timings.repairMs))} | ${stats(rows.map((r) => r.timings.checkMs))} |`,
     );
+  }
+  lines.push('', '## By path', '', '| Condition | Path | Generations | Approved | Total p50 / p90 / max / mean (s) |', '| --- | --- | --- | --- | --- |');
+  for (const condition of conditions) {
+    const rows = done.filter((r) => r.condition === condition);
+    const paths: Array<[string, (r: BenchResult) => boolean]> = [
+      ['library build', (r) => r.retrieved !== null],
+      ['plan, then edits', (r) => r.retrieved === null && r.mode === 'adapt'],
+      ['plan, then written whole', (r) => r.mode === 'write'],
+      ['no scene', (r) => r.mode === null],
+    ];
+    for (const [name, keep] of paths) {
+      const these = rows.filter(keep);
+      if (these.length === 0) continue;
+      lines.push(`| ${condition} | ${name} | ${these.length} | ${these.filter((r) => r.passed).length} | ${stats(these.map((r) => r.timings.totalMs))} |`);
+    }
   }
   lines.push('', '## Output', '', '| Condition | Mode | Scenes | Scene output tokens p50 / max | Script characters p50 / max |', '| --- | --- | --- | --- | --- |');
   for (const condition of conditions) {
@@ -218,11 +241,12 @@ function report(results: readonly BenchResult[], overheadMs: Record<string, numb
       lines.push(`| ${condition} | ${stats(adjusted)} | ${percent(adjusted.filter((t) => t <= 25_000).length, rows.length)} |`);
     }
   }
-  lines.push('', '## Every generation', '', '| Request | Condition | Mode | Example | Plan s | Scene s | Repair s | Total s | Result | Failures |', '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |');
+  lines.push('', '## Every generation', '', '| Request | Condition | Path | Example | Plan s | Scene s | Repair s | Total s | Result | Failures |', '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |');
   for (const r of done) {
     const result = r.passed ? (r.firstAttempt ? 'first attempt' : 'repaired') : `failed${r.deadlineSkipped ? ' (repair skipped for time)' : ''}`;
+    const path = r.retrieved !== null ? 'library' : (r.mode ?? '–');
     lines.push(
-      `| ${r.id} | ${r.condition} | ${r.mode ?? '–'} | ${r.example ?? '–'} | ${seconds(r.timings.planMs)} | ${seconds(r.timings.sceneMs)} | ${r.repairs > 0 ? seconds(r.timings.repairMs) : '–'} | ${seconds(r.timings.totalMs)} | ${result} | ${r.failures.join(', ') || '–'} |`,
+      `| ${r.id} | ${r.condition} | ${path} | ${r.example ?? '–'} | ${seconds(r.timings.planMs)} | ${seconds(r.timings.sceneMs)} | ${r.repairs > 0 ? seconds(r.timings.repairMs) : '–'} | ${seconds(r.timings.totalMs)} | ${result} | ${r.failures.join(', ') || '–'} |`,
     );
   }
   const failed = done.filter((r) => !r.passed);

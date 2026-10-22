@@ -76,7 +76,11 @@ export function callKey(request: string, condition: BenchCondition, purpose: Cal
 /** Characters per token for code and English, to apply a call's token limit to a recorded reply. */
 const CHARS_PER_TOKEN = 3.5;
 
-/** Scene time as the learner would see it: recorded model time plus this process's own work. */
+/**
+ * Time as the learner would see it: this process's own work, plus each
+ * recorded call, which ends its measured time after it started. Calls that
+ * run side by side end together at the later of their ends.
+ */
 class BenchClock {
   private readonly started = performance.now();
   private modelMs = 0;
@@ -85,8 +89,10 @@ class BenchClock {
     return this.modelMs + (performance.now() - this.started);
   }
 
-  advance(ms: number): void {
-    this.modelMs += ms;
+  /** Moves the clock on to `at`, if it is not there already. */
+  reach(at: number): void {
+    const now = this.now();
+    if (at > now) this.modelMs += at - now;
   }
 }
 
@@ -110,7 +116,10 @@ class ReplayModel implements ModelClient {
   }
 
   async complete(call: ModelCall): Promise<ModelReply> {
+    const start = this.clock.now();
     const key = callKey(this.request, this.condition, call.purpose, this.counts[call.purpose]++);
+    // Calls the pipeline starts together all start now, before any of them moves the clock.
+    await Promise.resolve();
     const reply = this.replies.get(key);
     if (!reply) {
       this.pending.push({ key, purpose: call.purpose, prompt: promptText(call.prompt) });
@@ -119,10 +128,12 @@ class ReplayModel implements ModelClient {
     // The real call is cut off at the deadline: a reply that took longer never arrived.
     const remaining = this.remaining();
     if (reply.ms > remaining) {
-      this.clock.advance(Math.max(0, remaining));
+      this.clock.reach(start + Math.max(0, remaining));
       throw new ModelError('timeout', `The ${call.purpose} call would have run past the deadline (${Math.round(reply.ms)} ms with ${Math.round(remaining)} ms left)`);
     }
-    this.clock.advance(reply.ms);
+    // The pipeline stops a call it no longer needs: the call ends there.
+    if (call.signal?.aborted) throw new ModelError('aborted', 'The call was stopped');
+    this.clock.reach(start + reply.ms);
     // The real call stops at its token limit: a longer reply arrives cut off.
     const limit = Math.floor(call.maxTokens * CHARS_PER_TOKEN);
     const cut = reply.text.length > limit;
@@ -148,6 +159,8 @@ export interface BenchResult {
   readonly pending: boolean;
   readonly status: GenerationState['status'];
   readonly mode: GenerationState['mode'];
+  /** Built from the reviewed scene the request named, before its plan arrived. */
+  readonly retrieved: string | null;
   readonly example: string | null;
   readonly size: string | null;
   readonly firstAttempt: boolean;
@@ -204,8 +217,7 @@ export async function benchRound(
         ...(condition === 'novel' && request.example ? { withhold: [request.example] } : {}),
       });
       state = generator.begin();
-      await generator.planStage(state, request.request);
-      if (state.plan) await generator.buildStage(state);
+      await generator.run(state, request.request);
       generator.finish(state);
       // A plan reply shared by both conditions is only asked for once.
       if (pending.length > before) {
@@ -234,6 +246,7 @@ function resultOf(request: BenchRequest, condition: BenchCondition, state: Gener
     pending,
     status: state.status,
     mode: state.mode,
+    retrieved: state.retrieved,
     example: state.example,
     size: state.plan?.size ?? null,
     firstAttempt: attempts[0]?.passed ?? false,

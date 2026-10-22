@@ -29,18 +29,21 @@ async function run(ms: (call: PendingCall) => number) {
 describe('the agent bench', () => {
   it('runs the real pipeline in rounds, asking once for each plan, and times what a learner waits for', async () => {
     const { results, rounds } = await run((call) => (call.purpose === 'plan' ? 3000 : 9000));
-    // Round 1: the two plans, shared by both conditions. Round 2: four scenes. Then nothing.
-    expect(rounds.map((r) => r.map((p) => p.purpose).sort())).toEqual([['plan', 'plan'], ['scene', 'scene', 'scene', 'scene']]);
-    expect(rounds[0]!.map((p) => p.key).sort()).toEqual([callKey('ohm-1', 'library', 'plan', 0), callKey('projectile-1', 'library', 'plan', 0)]);
+    // Round 1: the two plans, shared by both conditions, and the two library builds that start beside them.
+    // Round 2: the two scenes written whole for the novel condition. Then nothing.
+    expect(rounds.map((r) => r.map((p) => p.purpose).sort())).toEqual([['plan', 'plan', 'scene', 'scene'], ['scene', 'scene']]);
+    expect(rounds[0]!.filter((p) => p.purpose === 'plan').map((p) => p.key).sort()).toEqual([callKey('ohm-1', 'library', 'plan', 0), callKey('projectile-1', 'library', 'plan', 0)]);
     expect(results).toHaveLength(4);
     for (const r of results) {
       expect(r.pending, r.id).toBe(false);
       expect(r.passed, `${r.id} ${r.condition}: ${r.failureReason}`).toBe(true);
       expect(r.mode).toBe(r.condition === 'library' ? 'adapt' : 'write');
+      expect(r.retrieved).toBe(r.condition === 'library' ? r.id.replace(/-\d$/, '') : null);
       expect(r.timings.planMs).toBeGreaterThanOrEqual(3000);
-      expect(r.timings.sceneMs).toBeGreaterThanOrEqual(9000);
-      expect(r.timings.totalMs).toBeGreaterThanOrEqual(12_000);
-      expect(r.timings.totalMs).toBeLessThan(25_000);
+      expect(r.timings.sceneMs).toBeGreaterThanOrEqual(r.condition === 'library' ? 0 : 9000);
+      // Library builds run beside their plan call: the learner waits for the longer of the two.
+      expect(r.timings.totalMs).toBeGreaterThanOrEqual(r.condition === 'library' ? 9000 : 12_000);
+      expect(r.timings.totalMs).toBeLessThan(r.condition === 'library' ? 10_000 : 25_000);
     }
     // Withheld, the concept's own scene is not the example.
     expect(results.find((r) => r.condition === 'novel' && r.id === 'ohm-1')!.example).not.toBe('ohm');
