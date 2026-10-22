@@ -299,7 +299,7 @@ What remains are the section 10 targets that need a device: time to first render
 | RP-9 | Fallback ladder | P0 | Done | Done | |
 | RP-10 | Probe watchdog at 3 s | P0 | Done | Done | |
 | RP-11 | Repair log | P1 | Done | Done | Failure records. |
-| RP-12 | Recurring failures become kit functions or rules | P1 | Missing | Done | The dashboard lists failures seen twice with what closed each class so far, from `closed.ts`: seven classes closed by kit functions, engine behaviours or rules, each with the test that keeps it closed; the rest are listed as open (metrics.test.ts). |
+| RP-12 | Recurring failures become kit functions or rules | P1 | Missing | Done | The dashboard lists failures seen twice with what closed each class so far, failure by failure, from `closed.ts`: five classes closed by kit functions or engine behaviours and two named by rules, each with the test that keeps it closed; the rest are listed as open (metrics.test.ts). |
 | RP-13 | Dashboard metrics | P1 | Partial | Done | `metrics.ts` and the `metrics` CLI: pass rates, repair share, timings, lines, recurring failures (metrics.test.ts). |
 
 ## Section 25: generating in seconds

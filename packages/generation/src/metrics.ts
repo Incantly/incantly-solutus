@@ -1,4 +1,4 @@
-import { closureOf, type ClosedClass } from './closed';
+import { closureFor, removesCause, type ClosedClass } from './closed';
 import type { FailureRecord, Outcome } from './records';
 
 /**
@@ -24,8 +24,10 @@ export interface Recurring {
   readonly concepts: readonly string[];
   /** One report summary, for a feel of it. */
   readonly sample: string;
-  /** The kit function, engine behaviour or rule that closed its class so far, or null while it is open (RP-12). */
-  readonly closed: ClosedClass | null;
+  /** What closed or named the class of its failures, and how many of them each covers (RP-12). */
+  readonly closures: ReadonlyArray<{ readonly closure: ClosedClass; readonly count: number }>;
+  /** Its failures no kit function or engine behaviour has closed: still to close, with or without a rule against them. */
+  readonly open: number;
 }
 
 export interface Dashboard {
@@ -60,13 +62,17 @@ export function dashboard(records: readonly FailureRecord[], deadlineMs = 25_000
   const settled = records.filter((r) => r.outcome !== 'pending');
   const built = records.filter((r) => r.mode !== null);
   const failed = outcomes['failed-plan'] + outcomes['failed-scene'] + outcomes['failed-model'];
-  const byCheck = new Map<string, { count: number; concepts: Map<string, number>; sample: string }>();
+  const byCheck = new Map<string, { count: number; concepts: Map<string, number>; sample: string; closures: Map<ClosedClass, number>; open: number }>();
   for (const r of records) {
     for (const report of r.reports) {
-      const entry = byCheck.get(report.check) ?? { count: 0, concepts: new Map<string, number>(), sample: report.summary };
+      const entry = byCheck.get(report.check) ?? { count: 0, concepts: new Map<string, number>(), sample: report.summary, closures: new Map<ClosedClass, number>(), open: 0 };
       entry.count++;
       const concept = r.concept ?? 'unknown';
       entry.concepts.set(concept, (entry.concepts.get(concept) ?? 0) + 1);
+      // Each failure by its own words: a closure may cover only some failures of a broad check, such as mount.
+      const closure = closureFor(report);
+      if (closure) entry.closures.set(closure, (entry.closures.get(closure) ?? 0) + 1);
+      if (!closure || !removesCause(closure)) entry.open++;
       byCheck.set(report.check, entry);
     }
   }
@@ -78,7 +84,8 @@ export function dashboard(records: readonly FailureRecord[], deadlineMs = 25_000
       count: e.count,
       concepts: [...e.concepts.entries()].sort((a, b) => b[1] - a[1]).map(([c]) => c),
       sample: e.sample,
-      closed: closureOf(check),
+      closures: [...e.closures.entries()].sort((a, b) => b[1] - a[1]).map(([closure, count]) => ({ closure, count })),
+      open: e.open,
     }));
   const times = (pick: (r: FailureRecord) => number | undefined) => spread(records.map(pick).filter((v): v is number => v !== undefined));
   return {
@@ -132,7 +139,7 @@ export function dashboardText(d: Dashboard): string {
           '| Check | Times | Concepts | Example | Closed so far |',
           '| --- | --- | --- | --- | --- |',
           ...d.recurring.map(
-            (r) => `| ${r.check} | ${r.count} | ${r.concepts.slice(0, 3).join(', ')} | ${r.sample.replace(/\|/g, '/')} | ${r.closed ? `${r.closed.by}: ${r.closed.fix.replace(/\|/g, '/')}` : 'open'} |`,
+            (r) => `| ${r.check} | ${r.count} | ${r.concepts.slice(0, 3).join(', ')} | ${r.sample.replace(/\|/g, '/')} | ${closedSoFar(r).replace(/\|/g, '/')} |`,
           ),
           '',
           openLine(d.recurring),
@@ -141,10 +148,18 @@ export function dashboardText(d: Dashboard): string {
   ].join('\n');
 }
 
-/** The recurring failures no kit function, engine behaviour or rule has closed yet: the next to close (RP-12). */
+/** What has closed a recurring failure's class so far: all of it, part of it, only a rule against it, or nothing. */
+function closedSoFar(r: Recurring): string {
+  const fixes = r.closures.map(({ closure, count }) => `${closure.by}${count < r.count ? ` (${count} of ${r.count})` : ''}: ${closure.fix}`).join(' ');
+  if (r.closures.length === 0) return 'open';
+  if (r.open === 0) return `closed by ${fixes}`;
+  return r.open === r.count ? `open, ${fixes}` : `partly closed by ${fixes}`;
+}
+
+/** The recurring failures no kit function or engine behaviour has closed yet, rule or not: the next to close (RP-12). */
 function openLine(recurring: readonly Recurring[]): string {
-  const open = recurring.filter((r) => r.closed === null).map((r) => r.check);
+  const open = recurring.filter((r) => r.open > 0).map((r) => r.check);
   return open.length === 0
-    ? 'Every recurring failure has a kit function, an engine behaviour or a rule against it; one that still recurs needs a stronger one.'
-    : `Open: ${open.join(', ')}. Close each with a kit function that removes the cause, or a core rule, and a test, and list it in closed.ts.`;
+    ? 'Every recurring failure has a kit function or an engine behaviour against it; one that still recurs needs a stronger one.'
+    : `Open: ${open.join(', ')}. Close each with a kit function or an engine behaviour that removes the cause, or at least a core rule, with a test, and list it in closed.ts.`;
 }

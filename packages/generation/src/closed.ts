@@ -3,14 +3,16 @@
  * coming back becomes a kit function or an engine behaviour that removes its
  * cause, or at least a core rule that names it; the check that caught it
  * stays, and a test keeps the class closed. The dashboard marks each
- * recurring failure with what closed its class, or says it is open: the next
- * one to close.
+ * recurring failure with what closed its class, or names the rule against it,
+ * or says it is open: the next one to close.
  */
 
 export interface ClosedClass {
   /** The failing check or validator rule, as failure records name it. */
   readonly check: string;
-  /** A kit function, an engine behaviour, or a core rule. */
+  /** The failures of that check it covers, by the words of their report; without it, every failure of the check. */
+  readonly match?: RegExp;
+  /** A kit function or an engine behaviour removes the cause. A rule only names it, so the class stays open to a kit function. */
   readonly by: 'kit' | 'engine' | 'rule';
   /** What closed it, in a sentence. */
   readonly fix: string;
@@ -32,38 +34,47 @@ export const CLOSED_CLASSES: readonly ClosedClass[] = [
     test: { file: 'core/test/probe.test.ts', name: 'passes a drawing near its element budget, with a warning that suggests dots (SV-12)' },
   },
   {
-    check: 'unknown-sdk-call',
-    by: 'kit',
-    fix: 'The validator names the helper a scene meant, such as inc.calc.integral for inc.calc.integrate, so one repair finds it (rule 13).',
-    test: { file: 'core/test/helpers.test.ts', name: 'suggests the helper a scene meant: a close name, or two names joined' },
-  },
-  {
-    check: 'unknown-method',
-    by: 'kit',
-    fix: 'The forms scenes reach for work: a graph item stands for its handle, every element has a handle, and inc.path.polyline and inc.shapes.resistor draw what line and zigzag draw.',
-    test: { file: 'core/test/scene.test.ts', name: 'lets a graph item stand for its handle, gives every element a handle, and names what it needs when neither fits' },
-  },
-  {
     check: 'mount',
+    match: /can already be dragged/,
     by: 'engine',
     fix: 'A later drag on an element says how it drags instead of failing at mount.',
     test: { file: 'core/test/graph-interaction.test.ts', name: 'lets a later drag on a handle say how it drags, instead of failing' },
   },
   {
     check: 'unknown-tone',
+    match: /"water" is not a tone/,
     by: 'kit',
     fix: 'A water tone for liquids, in light, dark and every palette, listed with the other tones in the core rules (rule 6).',
     test: { file: 'core/test/kits-physics2d.test.ts', name: 'draws the liquid in the water tone, which the theme gives a light and a dark value (6.9a)' },
   },
   {
-    check: 'parts',
+    check: 'unknown-property',
+    match: /handles have no property "handle"/,
     by: 'kit',
-    fix: 'graph.part names a graph item as a part, as stage.part does an element, and plans name only things drawn in the figure as parts (rule 8).',
+    fix: 'Every element has a handle that is itself, and a graph item stands for its drawn handle.',
+    test: { file: 'core/test/scene.test.ts', name: 'lets a graph item stand for its handle, gives every element a handle, and names what it needs when neither fits' },
+  },
+  {
+    check: 'unknown-sdk-call',
+    by: 'rule',
+    fix: 'Rule 13: only the catalog and the contract; the validator names the helper a scene meant, such as inc.calc.integral for inc.calc.integrate, so one repair finds it.',
+    test: { file: 'core/test/helpers.test.ts', name: 'suggests the helper a scene meant: a close name, or two names joined' },
+  },
+  {
+    check: 'parts',
+    by: 'rule',
+    fix: 'Rule 8: register every planned part; plans name only things drawn in the figure as parts, and graph.part names a graph item as stage.part does an element.',
     test: { file: 'core/test/graph-interaction.test.ts', name: 'names a graph item as a part, as stage.part does for an element' },
   },
 ];
 
-/** What closed the class of a failing check, or null while it is open. */
-export function closureOf(check: string): ClosedClass | null {
-  return CLOSED_CLASSES.find((closed) => closed.check === check) ?? null;
+/** What has closed, or named, the class of one failure: by its check, and by its report's words where a closure names them. */
+export function closureFor(report: { readonly check: string; readonly summary: string; readonly text?: string }): ClosedClass | null {
+  const words = `${report.summary}\n${report.text ?? ''}`;
+  return CLOSED_CLASSES.find((closed) => closed.check === report.check && (closed.match === undefined || closed.match.test(words))) ?? null;
+}
+
+/** Whether a closure removes the cause, rather than naming it in a rule. */
+export function removesCause(closed: ClosedClass): boolean {
+  return closed.by !== 'rule';
 }

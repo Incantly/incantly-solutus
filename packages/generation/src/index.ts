@@ -23,7 +23,7 @@ export type { FailureRecord, Outcome, RecordSink } from './records';
 export { runEvals, summarize, summaryMarkdown, wilson } from './evals';
 export { dashboard, dashboardText, spread } from './metrics';
 export type { Dashboard, Recurring, Spread } from './metrics';
-export { CLOSED_CLASSES, closureOf } from './closed';
+export { CLOSED_CLASSES, closureFor, removesCause } from './closed';
 export type { ClosedClass } from './closed';
 export type { EvalOptions, EvalSummary, Rate, TrialResult } from './evals';
 export { hmacAuthenticator, mintToken } from './auth';
