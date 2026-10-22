@@ -27,8 +27,9 @@ describe('warm frames (PRD 25.4)', () => {
     document.body.append(slot);
     const lease = sandboxAdapter.prewarm!({ container: slot });
     const waiting = slot.querySelector('iframe')!;
-    // Hidden, out of the tab order, with a policy that lets in styles carrying its nonce.
+    // Hidden above the page, out of the tab order, with a policy that lets in styles carrying its nonce.
     expect(waiting.getAttribute('aria-hidden')).toBe('true');
+    expect([waiting.style.left, waiting.style.top]).toEqual(['0px', '-10000px']);
     expect(waiting.srcdoc).toMatch(/style-src [^;"]*'nonce-[A-Za-z0-9+/]{22}=='/);
     expect(waiting.srcdoc).toContain('<div class="inc-scene"></div>');
     const figure = mountSandboxed(slot, scene(), { title: 'Interactive figure: a sine wave' });
@@ -81,6 +82,33 @@ describe('warm frames (PRD 25.4)', () => {
     expect(waiting.isConnected).toBe(false);
     await vi.advanceTimersByTimeAsync(0);
     expect(elsewhere.querySelectorAll('iframe')).toHaveLength(1);
+    lease.release();
+    figure.destroy();
+    // Let go in the same moment as the mount, nothing is warmed behind it.
+    vi.advanceTimersByTime(20_000);
+    const brief = prewarmFigure({ container: elsewhere });
+    const again = mountSandboxed(slot, scene());
+    brief.release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(elsewhere.querySelectorAll('iframe')).toHaveLength(0);
+    again.destroy();
+  });
+
+  it('gives a figure a frame of its own when the warm frame loads again as it is moved', async () => {
+    const slot = document.createElement('div');
+    document.body.append(slot);
+    const lease = prewarmFigure({ container: slot });
+    const waiting = slot.querySelector('iframe')!;
+    const figure = mountSandboxed(slot, scene(), { lang: 'zh_CN' });
+    // A browser that reloads a moved frame fires its load again: the bridge reads that as a navigation.
+    for (let i = 0; i < 3 && waiting.isConnected; i++) waiting.dispatchEvent(new Event('load'));
+    expect(waiting.isConnected).toBe(false);
+    const own = slot.querySelector('iframe')!;
+    expect(own).not.toBe(waiting);
+    // Made with the scene in it, and the language a frame can carry, here none, so its own.
+    expect(own.srcdoc).not.toContain("'nonce-");
+    expect(own.srcdoc).toContain('<html lang="en"');
+    expect(figure.state).toBe('booting');
     lease.release();
     figure.destroy();
   });

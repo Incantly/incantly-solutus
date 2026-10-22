@@ -5,6 +5,7 @@ import { FRAME_SCRIPT, FRAME_SCRIPT_HASH, WORKER_SCRIPT } from '../src/sandbox/g
 import { guardKey, SHADOWED_GLOBALS, wrapSceneSource, WRAPPER_LINES_BEFORE } from '../src/sandbox/scene-wrapper';
 import { cspHash, sha256, base64 } from '../src/sandbox/sha256';
 import { buildShell, contentSecurityPolicy, newChannelId, newNonce } from '../src/sandbox/shell';
+import { frameLang } from '../src/protocol/bridge';
 import { clipSettings, clipType, recordStage } from '../src/sandbox/clip';
 import { locateInStack } from '../src/sandbox/stack';
 import { THEME_CSS } from '../src/renderer/theme';
@@ -209,6 +210,16 @@ describe('content security policy', () => {
     const fragments = { html: "<div id='stage'></div>", css: '#stage{margin:0}', nonce, lang: 'en-GB' };
     expect(parseHostMessage(envelope({ ...init, fragments }), CHANNEL)).not.toBeNull();
     expect(parseHostMessage(envelope({ ...init, fragments: { ...fragments, hostCss: '.inc-title{color:red}' } }), CHANNEL)).not.toBeNull();
+    // A frame warmed without its scene takes any language a frame made with it would; anything else is left out by the host.
+    for (const tag of ['en', 'en-GB', 'zh-Hant-TW', 'ar-u-nu-latn', 'en-US-u-hc-h23']) {
+      expect(frameLang(tag)).toBe(tag);
+      expect(buildShell({ html: '', css: '', channel: CHANNEL, lang: tag })).toContain(`<html lang="${tag}"`);
+      expect(parseHostMessage(envelope({ ...init, fragments: { ...fragments, lang: tag } }), CHANNEL), tag).not.toBeNull();
+    }
+    for (const tag of ['zh_CN', 'e', 'en-', 'en"><b', '']) {
+      expect(frameLang(tag), tag).toBeUndefined();
+      expect(buildShell({ html: '', css: '', channel: CHANNEL, lang: tag })).toContain('<html lang="en"');
+    }
     for (const broken of [
       { ...fragments, nonce: 'guessed' },
       { ...fragments, html: 1 },

@@ -1,5 +1,5 @@
 import type { ProbeReport, ProbeSpec } from '../probe/probe';
-import { parseFrameMessage, type ArrivingFragments, type FrameMessage, type HostMessageBody, type LiveOptions, type ProbeRequest } from '../protocol/bridge';
+import { frameLang, parseFrameMessage, type ArrivingFragments, type FrameMessage, type HostMessageBody, type LiveOptions, type ProbeRequest } from '../protocol/bridge';
 import type { ErrorView } from '../protocol/ui';
 import { hostCss, styleForBridge, type FigureStyle } from '../renderer/style';
 import { validateScene, type SceneFragments, type SceneValidation, type ValidatedScene } from '../validation';
@@ -153,9 +153,10 @@ class FrameConnection {
     if (options.hidden) {
       frame.setAttribute('aria-hidden', 'true');
       frame.tabIndex = -1;
+      // Parked above the page, where nothing scrolls to it, whichever way the page's text runs.
       frame.style.position = 'absolute';
-      frame.style.left = '-10000px';
-      frame.style.top = '0';
+      frame.style.left = '0';
+      frame.style.top = '-10000px';
       frame.style.width = '760px';
       frame.style.height = '480px';
       frame.style.visibility = 'hidden';
@@ -309,8 +310,9 @@ const warm: { frame: WarmFrame | null; holder: HTMLElement | null; leases: numbe
   idle: null,
 };
 
+/** Warms the next frame, while a lease is still held. */
 function warmAnother(): void {
-  if (warm.frame || !warm.holder?.isConnected) return;
+  if (warm.frame || warm.leases === 0 || !warm.holder?.isConnected) return;
   warm.frame = new WarmFrame(warm.holder);
 }
 
@@ -348,6 +350,7 @@ export function prewarmFigure(options: PrewarmOptions = {}): WarmLease {
         if (warm.leases > 0) return;
         warm.frame?.close();
         warm.frame = null;
+        warm.holder = null;
       }, WARM_IDLE_MS);
     },
   };
@@ -436,24 +439,37 @@ class SandboxedFigure implements FigureHandle {
     const title = options.title ?? 'Interactive figure';
     // A frame booted before this scene existed takes its markup and styles by message (PRD 25.4).
     const warmed = takeWarmFrame(container);
+    // A tag a frame cannot carry is left out, as a frame made with its scene falls back to its own.
+    const lang = frameLang(options.lang);
     const arriving: ArrivingFragments | undefined = warmed
-      ? { html: scene.html, css: scene.css, ...(css ? { hostCss: css } : {}), nonce: warmed.nonce, ...(options.lang ? { lang: options.lang } : {}) }
+      ? { html: scene.html, css: scene.css, ...(css ? { hostCss: css } : {}), nonce: warmed.nonce, ...(lang ? { lang } : {}) }
       : undefined;
-    const handlers: ConnectionHandlers = {
-      onMessage: (message) => this.onMessage(message, scene, live, worker, arriving),
-      onNavigate: () => this.fail({ phase: 'unresponsive', message: 'The figure tried to navigate and was removed' }),
-    };
+    const navigated = () => this.fail({ phase: 'unresponsive', message: 'The figure tried to navigate and was removed' });
+    // A frame of its own, made with the scene's markup and styles.
+    const own = () =>
+      new FrameConnection(
+        container,
+        scene,
+        channel,
+        { onMessage: (message) => this.onMessage(message, scene, live, worker, undefined), onNavigate: navigated },
+        { title, ...(lang ? { lang } : {}), ...(css ? { hostCss: css } : {}) },
+      );
     if (warmed) {
-      warmed.adopt(container, title, handlers);
+      warmed.adopt(container, title, {
+        onMessage: (message) => this.onMessage(message, scene, live, worker, arriving),
+        onNavigate: () => {
+          // A warm frame that loads again was not moved whole: before the scene runs, it gets a frame of its own instead.
+          if (this.state !== 'booting' || !this.warmed) return navigated();
+          this.warmed = false;
+          this.connection?.close();
+          this.connection = own();
+        },
+      });
       this.connection = warmed.connection;
       this.warmed = true;
       if (warmed.ready) this.begin(scene, live, worker, arriving);
     } else {
-      this.connection = new FrameConnection(container, scene, channel, handlers, {
-        title,
-        ...(options.lang ? { lang: options.lang } : {}),
-        ...(css ? { hostCss: css } : {}),
-      });
+      this.connection = own();
     }
     this.mountTimer = setTimeout(() => this.fail({ phase: 'unresponsive', message: 'The figure did not start in time' }), this.deadlines.mountMs);
     this.doc.addEventListener('visibilitychange', this.onVisibility);

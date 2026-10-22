@@ -1,3 +1,4 @@
+import { frameLang } from '../protocol/bridge';
 import { THEME_CSS } from '../renderer/theme';
 import { FRAME_SCRIPT, FRAME_SCRIPT_HASH } from './generated/bundles';
 import { cspHash } from './sha256';
@@ -64,7 +65,7 @@ export function buildShell(options: ShellOptions): string {
   if (/<\//.test(options.css) || options.css.includes('<')) throw new Error('Scene CSS must be validated before it reaches a frame');
   if (options.hostCss && options.hostCss.includes('<')) throw new Error('Host CSS must go through hostCss() before it reaches a frame');
   if (options.nonce !== undefined && !NONCE.test(options.nonce)) throw new Error('A frame nonce is 128 random bits in base64');
-  const lang = options.lang && /^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$/.test(options.lang) ? options.lang : 'en';
+  const lang = frameLang(options.lang) ?? 'en';
   return (
     '<!doctype html>' +
     `<html lang="${lang}" class="inc-frame" data-channel="${options.channel}">` +

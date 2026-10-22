@@ -150,6 +150,14 @@ export const FRAME_MESSAGE_TYPES: ReadonlySet<string> = new Set([
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
+/** A language tag a frame document can carry: letters, then subtags of letters and digits, as in en-GB or ar-u-nu-latn. */
+const LANG_TAG = /^[A-Za-z]{2,3}(-[A-Za-z0-9]{1,8})*$/;
+
+/** The language a frame is written in: the host's tag when it is one, or none, so the frame keeps its own. */
+export function frameLang(lang: string | undefined): string | undefined {
+  return lang !== undefined && lang.length <= 35 && LANG_TAG.test(lang) ? lang : undefined;
+}
+
 /** The most markup or style a scene may hand a warm frame, in characters. */
 const MAX_FRAGMENT = 400_000;
 
@@ -162,7 +170,7 @@ const isArriving = (value: unknown): value is ArrivingFragments =>
   (value.hostCss === undefined || (typeof value.hostCss === 'string' && value.hostCss.length <= MAX_FRAGMENT)) &&
   typeof value.nonce === 'string' &&
   /^[A-Za-z0-9+/]{22}==$/.test(value.nonce) &&
-  (value.lang === undefined || (typeof value.lang === 'string' && /^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$/.test(value.lang)));
+  (value.lang === undefined || (typeof value.lang === 'string' && frameLang(value.lang) === value.lang));
 
 const isValues = (value: unknown): value is Record<string, number> =>
   isRecord(value) && Object.keys(value).length <= 16 && Object.values(value).every((v) => typeof v === 'number' && Number.isFinite(v));
