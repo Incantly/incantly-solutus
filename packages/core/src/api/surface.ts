@@ -337,6 +337,7 @@ export const HANDLES: Readonly<Record<HandleKind, HandleSpec>> = {
       trace: 'GraphPoint',
       handle: 'GraphPoint',
       drag: null,
+      part: 'argument',
       marks: null,
       crossings: null,
     } satisfies Methods<Graph>,

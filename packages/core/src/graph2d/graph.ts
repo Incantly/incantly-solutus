@@ -17,6 +17,7 @@ import type {
   Handle,
   HandleOptions,
   HistogramOptions,
+  PartOptions,
   PathHandle,
   PlotFunction,
   PointsSource,
@@ -223,6 +224,11 @@ class GraphStage implements Stage {
  * handles, marks for roots, turning points and crossings, annotations, log
  * scales and number lines.
  */
+/** The element behind a graph item; an element is its own. */
+function handleOf(item: unknown): Handle {
+  return typeof item === 'object' && item !== null && 'handle' in item ? (item as { handle: Handle }).handle : (item as Handle);
+}
+
 export class Graph2D implements Graph, ViewController {
   readonly stage: Stage;
   readonly orbit = false;
@@ -1146,9 +1152,13 @@ export class Graph2D implements Graph, ViewController {
 
   drag(item: GraphPoint | GraphSegment | GraphArrow | GraphCurve | Handle, map: DragMap, options: { readonly label?: string } = {}): void {
     if (typeof map !== 'function') throw new SceneApiError('drag needs a function that turns the pointer into parameter values');
-    const handle = typeof item === 'object' && item !== null && 'handle' in item ? (item as { handle: Handle }).handle : (item as Handle);
-    const node = nodeOf(handle);
+    const node = nodeOf(handleOf(item));
     this.ctx.addDrag(node, options.label ?? node.part ?? 'the point', map, this.toData);
+  }
+
+  part<T extends GraphPoint | GraphSegment | GraphArrow | GraphCurve | GraphMark | GraphTrail | Handle>(name: string, item: T, options: PartOptions = {}): T {
+    this.inner.part(name, handleOf(item), options);
+    return item;
   }
 
   // -------------------------------------------------------------------------

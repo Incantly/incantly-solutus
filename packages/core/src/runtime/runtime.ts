@@ -1301,8 +1301,8 @@ export class SceneRuntime {
   }
 
   private addDrag(node: VNode, label: string, map: (p: DragInfo) => Values | void, toLocal: (x: number, y: number) => Vec2 = (x, y) => [x, y], end?: () => void): void {
-    if (this.drags.has(node.id)) throw new SceneApiError('That element can already be dragged');
-    if (this.drags.size >= 24) throw new SceneApiError('At most 24 draggable elements');
+    // A second drag on the same element, such as graph.drag on a graph.handle, says how it drags now: the later one wins.
+    if (!this.drags.has(node.id) && this.drags.size >= 24) throw new SceneApiError('At most 24 draggable elements');
     const text = String(label).slice(0, 60);
     this.drags.set(node.id, { node, label: text, map, toLocal, ...(end ? { end } : {}), start: null });
     this.graph.markDrag(node, text);

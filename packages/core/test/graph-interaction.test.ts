@@ -132,6 +132,35 @@ describe('tracing and handles (G2-7, G2-10)', () => {
     expect(runtime.values().a).toBe(4.2);
   });
 
+  it('lets a later drag on a handle say how it drags, instead of failing', () => {
+    let handle = 0;
+    const { runtime } = run((inc) => {
+      inc.param('phase', { min: -5, max: 5, step: 0.5, value: 0 });
+      inc.param('amplitude', { min: 0.5, max: 3, step: 0.5, value: 1 });
+      const g = inc.graph2d('#g', { x: [-5, 5], y: [-5, 5], title: 'Wave' });
+      const h = g.handle({ x: 'phase', y: 'amplitude', label: 'the crest' });
+      handle = idOf(h.handle);
+      // Amplitude is a size: the later map keeps it positive, whichever side the learner drags to.
+      g.drag(h, (p) => ({ phase: p.x, amplitude: Math.abs(p.y) }), { label: 'the crest' });
+    });
+    expect(runtime.isMounted).toBe(true);
+    // Stage (52 + 0.7 * 688, 20 + 0.75 * 320) is data (2, -2.5).
+    runtime.drag(handle, 'start', 396, 180);
+    runtime.drag(handle, 'end', 52 + 0.7 * 688, 20 + 0.75 * 320);
+    expect(runtime.values()).toEqual({ phase: 2, amplitude: 2.5 });
+  });
+
+  it('names a graph item as a part, as stage.part does for an element', () => {
+    let point = 0;
+    const { runtime } = run((inc) => {
+      const g = inc.graph2d('#g', { x: [0, 10], y: [0, 10], title: 'Parts' });
+      const p = g.part('current point', g.point(1, 2), { label: 'Current length', info: 'Where the present length sits on the curve.' });
+      point = idOf(p.handle);
+    });
+    expect(runtime.isMounted).toBe(true);
+    expect(runtime.graph.nodes.get(point)?.part).toBe('current point');
+  });
+
   it('reports a drag map that names an unknown parameter, and keeps running', () => {
     let point = 0;
     const { runtime } = run((inc) => {

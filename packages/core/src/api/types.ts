@@ -302,7 +302,7 @@ export interface Stage {
   polyline(points: ReadonlyArray<Vec2>, options?: ElementOptions): PolylineHandle;
   /** Registers a named part for highlighting, focus, steps and descriptions. */
   part<H extends Handle>(name: string, handle: H, options?: PartOptions): H;
-  /** Lets the learner drag an element; `map` turns the pointer into parameter values. */
+  /** Lets the learner drag an element; `map` turns the pointer into parameter values. A later drag on the same element replaces the earlier one. */
   drag<H extends Handle>(handle: H, map: DragMap, options?: { readonly label?: string }): H;
   /** A line between two elements that follows them. */
   connector(a: Handle, b: Handle, options?: ConnectorOptions): PathHandle;
@@ -695,8 +695,10 @@ export interface Graph {
   trace(curve: GraphCurve, options?: { readonly tone?: Tone; readonly digits?: number }): GraphPoint;
   /** A point the learner drags to set parameters. */
   handle(options: HandleOptions): GraphPoint;
-  /** Lets the learner drag an item; `map` gets the pointer in data units. */
+  /** Lets the learner drag an item; `map` gets the pointer in data units. A later drag on the same item replaces the earlier one. */
   drag(item: GraphPoint | GraphSegment | GraphArrow | GraphCurve | Handle, map: DragMap, options?: { readonly label?: string }): void;
+  /** Names an item for highlighting, steps, the legend and descriptions, as stage.part does for elements. */
+  part<T extends GraphPoint | GraphSegment | GraphArrow | GraphCurve | GraphMark | GraphTrail | Handle>(name: string, item: T, options?: PartOptions): T;
   /** Marks roots and turning points of a curve. */
   marks(curve: GraphCurve, options?: { readonly roots?: boolean; readonly extrema?: boolean; readonly tone?: Tone }): void;
   /** Marks where two curves cross. */

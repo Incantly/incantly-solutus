@@ -339,7 +339,12 @@ export class Engine3D implements ViewController {
 
   drag(item: Item, map: DragMap, label: string | undefined): void {
     if (typeof map !== 'function') throw new SceneApiError('drag needs a function that turns the pointer into parameter values');
-    if (this.grabs.some((g) => g.item === item)) throw new SceneApiError('That object can already be dragged');
+    const known = this.grabs.find((g) => g.item === item);
+    if (known) {
+      // Dragged already: the later map wins.
+      this.ctx.addDrag(known.node, String(label ?? item.part ?? 'the object').slice(0, 60), map);
+      return;
+    }
     const handle = this.ctx.stage.circle(0, 0, 14, { layer: 'front' });
     const node = nodeOf(handle);
     this.ctx.restyle(node, { extra: 'inc-grab' });
