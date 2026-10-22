@@ -90,12 +90,19 @@ function scripted(text: string, table: Readonly<Record<string, string>>): string
   return out;
 }
 
-/** A name as maths: Greek words become letters, trailing digits become a subscript. */
+/** One letter, Latin or Greek, with any primes after it: the name of a function such as f′ or φ. */
+function isLetterName(name: string): boolean {
+  return /^[A-Za-z\u0391-\u03A9\u03B1-\u03C9]['\u2032]*$/.test(name);
+}
+
+/** A name as maths: Greek words become letters, trailing digits become a subscript, and primes stay primes (L' is L′). */
 export function symbolText(name: string): { base: string; sub: string | null } {
-  const match = /^([A-Za-z]+?)(?:_?(\d+))?$/.exec(name);
-  const word = match?.[1] ?? name;
+  const primes = /['\u2032]*$/.exec(name)![0].length;
+  const bare = name.slice(0, name.length - primes);
+  const match = /^([A-Za-z\u0391-\u03A9\u03B1-\u03C9]+?)(?:_?(\d+))?$/.exec(bare);
+  const word = match?.[1] ?? bare;
   const sub = match?.[2] ?? null;
-  return { base: GREEK[word] ?? word, sub };
+  return { base: (GREEK[word] ?? word) + '\u2032'.repeat(primes), sub };
 }
 
 function precedenceOf(expr: Expr): number {
@@ -161,7 +168,7 @@ class Builder {
         return this.el('mn', numberText(expr.value));
       case 'variable': {
         const { base, sub } = symbolText(expr.name);
-        const mi = this.el('mi', base);
+        const mi = this.symbol(base);
         return sub ? this.el('msub', mi, this.el('mn', sub)) : mi;
       }
       case 'unary': {
@@ -189,6 +196,16 @@ class Builder {
     return this.el('mrow', l, this.mo(OPERATOR_TEXT[operator] ?? operator), r);
   }
 
+  /** A symbol: a letter in italic, with any primes after it set close (L′). */
+  symbol(base: string): Element {
+    const primed = /^(.)(\u2032+)$/u.exec(base);
+    if (!primed) return this.el('mi', base);
+    const prime = this.mo(primed[2]!);
+    prime.setAttribute('lspace', '0');
+    prime.setAttribute('rspace', '0');
+    return this.el('mrow', this.el('mi', primed[1]!), prime);
+  }
+
   call(name: string, args: readonly Expr[]): Element {
     const [first] = args;
     if (name === 'sqrt' && first) return this.el('msqrt', this.node(first));
@@ -201,8 +218,10 @@ class Builder {
       if (i > 0) list.append(this.mo(','));
       list.append(this.node(arg));
     });
-    const fn = this.el('mi', name === 'ln' || name === 'log' ? name : name);
-    fn.setAttribute('mathvariant', 'normal');
+    // A function of one letter, such as f′ or φ, is a symbol in italic; a named one, such as sin, is upright.
+    const letter = isLetterName(name);
+    const fn = letter ? this.symbol(symbolText(name).base) : this.el('mi', name);
+    if (!letter) fn.setAttribute('mathvariant', 'normal');
     return this.el('mrow', fn, this.mo('⁡'), this.fenced(list));
   }
 }
@@ -221,7 +240,7 @@ export function mathElement(doc: Document, source: string, lead?: string): Eleme
   math.setAttribute('display', 'inline');
   if (lead) {
     const { base, sub } = symbolText(lead);
-    const mi = builder.el('mi', base);
+    const mi = builder.symbol(base);
     math.append(builder.el('mrow', sub ? builder.el('msub', mi, builder.el('mn', sub)) : mi, builder.mo('='), body));
   } else math.append(body);
   return math;
@@ -285,7 +304,7 @@ class Linear {
     if (name === 'abs' && first) return `|${this.node(first)}|`;
     if (name === 'exp' && first) return this.power('e', first);
     if (name === 'pow' && args.length === 2) return this.power(this.operand(first!, 10), args[1]!);
-    return `${name}(${args.map((arg) => this.node(arg)).join(', ')})`;
+    return `${isLetterName(name) ? symbolText(name).base : name}(${args.map((arg) => this.node(arg)).join(', ')})`;
   }
 }
 

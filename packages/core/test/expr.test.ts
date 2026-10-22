@@ -35,6 +35,11 @@ describe('expression parser', () => {
     expect(run(source)).toBeCloseTo(expected, 12);
   });
 
+  it('reads Greek letters as names, as a scene may write them', () => {
+    expect(run('ρ*g*h', { ρ: 1000, g: 9.8, h: 2 })).toBeCloseTo(19600, 9);
+    expect(run('2*π*r', { π: Math.PI, r: 1 })).toBeCloseTo(2 * Math.PI, 12);
+  });
+
   it('agrees with math.js on operator precedence', () => {
     for (const source of ['2+3*4', '2^3^2', '-2^2', '10-4-3', '8/4/2', '2*-3', '-(2+3)^2', '1+2*3^2/4-5']) {
       expect(run(source), source).toBeCloseTo(mathjsEvaluate(source) as number, 12);

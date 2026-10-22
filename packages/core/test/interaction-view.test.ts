@@ -637,6 +637,14 @@ describe('equations in the drawing (DG-5)', () => {
     expect(linearEquation('E = 1/2*m*v^2')).toBe('E = (1/2)mv²');
     expect(linearEquation('p = m*2')).toBe('p = m·2');
     expect(linearEquation('x = sqrt(a + b) ≈ 2*pi')).toBe('x = √(a + b) ≈ 2π');
+    // Greek letters as written and primes after a name, as an agent writes them.
+    expect(linearEquation("L' = ρ*U*Γ")).toBe('L′ = ρUΓ');
+    expect(linearEquation("f''(x) = -omega^2*x")).toBe('f′′(x) = −ω²x');
+    // A primed letter is the letter in italic with its prime set close.
+    const primed = equationElement(document, "L' = ρ*U*Γ")!;
+    expect(primed.querySelector('mi')!.textContent).toBe('L');
+    expect(primed.querySelector('mo')!.textContent).toBe('′');
+    expect(symbolText('θ_2')).toEqual({ base: 'θ', sub: '2' });
     expect(linearEquation('y = e^(-k*t)')).toBe('y = e^(−kt)');
   });
 
