@@ -15,7 +15,7 @@ bio.stage.part('Chloroplasts', plant.organelle('chloroplasts'), { label: 'Chloro
 | Kind | Organelles |
 | --- | --- |
 | animal | cytoplasm, membrane, er, golgi, mitochondria, ribosomes, nucleus, nucleolus |
-| plant | wall, cytoplasm, membrane, vacuole, chloroplasts, mitochondria, ribosomes, nucleus, nucleolus |
+| plant | wall, cytoplasm, membrane, vacuole, chloroplasts, er, golgi, mitochondria, ribosomes, nucleus, nucleolus |
 | bacterium | flagellum, wall, cytoplasm, membrane, nucleoid, plasmids, ribosomes |
 
 `organelles` draws only some of them. Each organelle is its own group: `cell.organelle('nucleus')` returns it, for a part, a callout or a connector, or to fade or hide it; `cell.where('nucleus')` gives a point on it for a label or an arrow. The kit refuses an organelle a cell does not have ("an animal cell has no vacuole"). The animal cell's outline is a gently irregular blob, and the same `seed` draws the same one.

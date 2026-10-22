@@ -13,7 +13,7 @@ import type { StageHandle } from '../../scene/handles';
 
 const KINDS: Readonly<Record<CellKind, readonly Organelle[]>> = {
   animal: ['cytoplasm', 'membrane', 'er', 'golgi', 'mitochondria', 'ribosomes', 'nucleus', 'nucleolus'],
-  plant: ['wall', 'cytoplasm', 'membrane', 'vacuole', 'chloroplasts', 'mitochondria', 'ribosomes', 'nucleus', 'nucleolus'],
+  plant: ['wall', 'cytoplasm', 'membrane', 'vacuole', 'chloroplasts', 'er', 'golgi', 'mitochondria', 'ribosomes', 'nucleus', 'nucleolus'],
   bacterium: ['flagellum', 'wall', 'cytoplasm', 'membrane', 'nucleoid', 'plasmids', 'ribosomes'],
 };
 
@@ -176,6 +176,21 @@ export function drawCell(stage: StageHandle, x: number, y: number, options: Cell
         path(chloroplasts, cristae(cx, cy, W * 0.13, W * 0.065, angle), 'c').set({ 'stroke-width': 1.2 });
       }
     }
+    const nx = left + W * 0.13;
+    const ny = top + H * 0.38;
+    const nr = W * 0.07;
+    // The ER wraps the nucleus on the side away from the wall, turned down, clear of the chloroplast above.
+    const er = group('er', [nx + nr * 1.62, ny + nr * 0.3]);
+    if (er) {
+      for (const k of [0, 1, 2]) path(er, arc(nx, ny, nr * (1.3 + 0.17 * k), -40, 70), 'a').set({ 'stroke-width': 1.8 });
+    }
+    // The Golgi's stacked sacs, below the ER, between a mitochondrion and the vacuole, in the animal cell's tone.
+    const gx = left + W * 0.23;
+    const gy = top + H * 0.7;
+    const golgi = group('golgi', [gx, gy + W * 0.04]);
+    if (golgi) {
+      for (const k of [0, 1, 2, 3]) path(golgi, arc(gx, gy + W * 0.1, W * (0.035 + 0.012 * k), -140, -40), 'c').set({ 'stroke-width': 2.2 });
+    }
     const mito = group('mitochondria', [left + W * 0.12, top + H * 0.62]);
     if (mito) {
       for (const [mx, my, angle] of [[left + W * 0.12, top + H * 0.62, 60], [left + W * 0.88, top + H * 0.55, -60]] as const) {
@@ -191,9 +206,6 @@ export function drawCell(stage: StageHandle, x: number, y: number, options: Cell
         stage.circle(left + W * (0.25 + along * 0.5), edge, Math.max(1.5, W * 0.008), { parent: ribosomes, tone: 'hi' });
       }
     }
-    const nx = left + W * 0.13;
-    const ny = top + H * 0.38;
-    const nr = W * 0.07;
     const nucleus = group('nucleus', [nx - nr * 0.7, ny - nr * 0.7]);
     if (nucleus) {
       stage.circle(nx, ny, nr, { parent: nucleus, tone: 'b' }).set({ 'fill-opacity': 0.25 });

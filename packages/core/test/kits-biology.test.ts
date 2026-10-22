@@ -42,6 +42,10 @@ describe('cells', () => {
     expect(animal!.organelles).toEqual(['cytoplasm', 'membrane', 'er', 'golgi', 'mitochondria', 'ribosomes', 'nucleus', 'nucleolus']);
     expect(plant!.organelles).toContain('vacuole');
     expect(plant!.organelles).toContain('wall');
+    // Plant cells have an ER and a Golgi too: twice a plant scene asked for its ER and threw.
+    expect(plant!.organelles).toEqual(expect.arrayContaining(['er', 'golgi']));
+    expect(nodeOf(plant!.organelle('er')).children).toHaveLength(3);
+    expect(nodeOf(plant!.organelle('golgi')).children).toHaveLength(4);
     expect(bacterium!.organelles).toEqual(['flagellum', 'wall', 'cytoplasm', 'membrane', 'nucleoid', 'plasmids', 'ribosomes']);
     expect(runtime.uiState().parts.map((p) => p.name)).toEqual(['Nucleus', 'Chloroplasts']);
     // Three mitochondria in the animal cell, each a capsule with its folds.

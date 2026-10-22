@@ -55,6 +55,13 @@ export const CLOSED_CLASSES: readonly ClosedClass[] = [
     test: { file: 'core/test/kits-space3d.test.ts', name: 'gives an arrow made without a label one the first time it is labelled' },
   },
   {
+    check: 'mount',
+    match: /plant cell (?:draws|has) no (?:er|golgi)/,
+    by: 'kit',
+    fix: 'A plant cell draws its endoplasmic reticulum and Golgi as an animal cell does, so a scene about organelles can name them in either.',
+    test: { file: 'core/test/kits-biology.test.ts', name: 'draws each kind with its own organelles, each a group a part can name' },
+  },
+  {
     check: 'unknown-tone',
     match: /"water" is not a tone/,
     by: 'kit',
