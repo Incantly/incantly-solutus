@@ -123,37 +123,6 @@ export function clipBetween(polygon: readonly Vec3[], lo: number, hi: number): V
   return below.length < 3 ? [] : clip(below, (p) => p[2] >= lo, lo);
 }
 
-/** The runs of a polyline between two heights. */
-function runsBetween(points: readonly (Vec3 | null)[], lo: number, hi: number): Vec3[][] {
-  const runs: Vec3[][] = [];
-  let run: Vec3[] = [];
-  const inside = (p: Vec3) => p[2] >= lo && p[2] <= hi;
-  const flush = () => {
-    if (run.length >= 2) runs.push(run);
-    run = [];
-  };
-  for (let i = 0; i < points.length; i++) {
-    const p = points[i];
-    if (!p) {
-      flush();
-      continue;
-    }
-    const prev = i > 0 ? points[i - 1] : null;
-    if (prev && inside(prev) !== inside(p)) {
-      const level = inside(prev) ? (p[2] > hi ? hi : lo) : prev[2] > hi ? hi : lo;
-      const k = (level - prev[2]) / (p[2] - prev[2]);
-      const cross: Vec3 = [prev[0] + (p[0] - prev[0]) * k, prev[1] + (p[1] - prev[1]) * k, level];
-      if (inside(prev)) {
-        run.push(cross);
-        flush();
-      } else run.push(cross);
-    }
-    if (inside(p)) run.push(p);
-  }
-  flush();
-  return runs;
-}
-
 class Surface3DHandle extends Object3DHandle implements Surface3D {
   constructor(
     engine: Engine3D,
@@ -307,28 +276,16 @@ export class Graph3DApi implements Graph3D {
   }
 
   /**
-   * Draws a sampled grid of data points as faces or a wire mesh, cut to the
-   * box's heights when `clip` is given, with contour lines lying on the faces.
+   * Draws a sampled grid of data points as faces, cut to the box's heights
+   * when `clip` is given, with contour lines lying on the faces. The 'wire'
+   * look draws each cell's outline instead of filling it: a shaded wireframe
+   * (G3-2), lit by the lamp and sorted by depth with everything else.
    */
   private emitGrid(out: Emitter, points: (Vec3 | null)[][], tone: Tone | null, lookName: Look, contours: readonly number[], clip: Range | null): void {
     const n = points.length - 1;
     const world = (p: Vec3) => this.coords.point(p);
     const lo = clip?.lo ?? -Infinity;
     const hi = clip?.hi ?? Infinity;
-    if (lookName === 'wire') {
-      for (let i = 0; i <= n; i++) for (const run of runsBetween(points[i]!, lo, hi)) out.line(run.map(world), { tone });
-      for (let j = 0; j <= n; j++) for (const run of runsBetween(points.map((row) => row[j] ?? null), lo, hi)) out.line(run.map(world), { tone });
-      if (contours.length > 0) {
-        for (let i = 0; i < n; i++) {
-          for (let j = 0; j < n; j++) {
-            const cell = [points[i]![j], points[i + 1]![j], points[i + 1]![j + 1], points[i]![j + 1]];
-            if (!cell.every((p): p is Vec3 => p !== null)) continue;
-            for (const segment of cellContours(cell, contours.filter((c) => c >= lo && c <= hi))) out.line(segment.map(world), { tone: null, bias: 0.004 });
-          }
-        }
-      }
-      return;
-    }
     const levels = contours.filter((c) => c >= lo && c <= hi);
     for (let i = 0; i < n; i++) {
       for (let j = 0; j < n; j++) {

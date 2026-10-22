@@ -700,6 +700,26 @@ describe('inc.graph3d', () => {
     expect(drawn.every((n) => n.extra.includes('inc-smooth'))).toBe(true);
   });
 
+  it('draws a shaded wireframe: each cell outlined in its own light, sorted by depth with the rest (G3-2)', async () => {
+    const { runtime } = graph((g) => {
+      g.surface((x, y) => x * x + y * y, { resolution: 12, look: 'wire', tone: 'b' });
+      g.point([0, 0, 6], { tone: 'c' });
+    }, { grid: false, axes: false });
+    const wires = visibleSlots(runtime).filter((n) => n.extra.includes('inc-wire'));
+    // One outline per cell inside the box, lit: several light levels, as a bowl turns toward and away from the lamp.
+    expect(wires.length).toBeGreaterThan(12 * 12 * 0.4);
+    expect(wires.every((n) => /inc-lum-\d/.test(n.extra) && n.attrs.get('d')!.endsWith('Z'))).toBe(true);
+    expect(new Set(wires.map(lum)).size).toBeGreaterThan(2);
+    // Sorted with everything else: the point above the bowl is drawn among the wires, not after all of them.
+    const drawn = visibleSlots(runtime);
+    const point = drawn.findIndex((n) => n.tone === 'c');
+    expect(point).toBeGreaterThan(-1);
+    expect(drawn.slice(0, point).some((n) => n.extra.includes('inc-wire'))).toBe(true);
+    expect(drawn.slice(point + 1).some((n) => n.extra.includes('inc-wire'))).toBe(true);
+    const { THEME_CSS } = await import('../src/renderer/theme');
+    expect(THEME_CSS).toContain('.inc-face.inc-wire:is(.inc-lum-0, .inc-lum-1, .inc-lum-2, .inc-lum-3, .inc-lum-4, .inc-lum-5, .inc-lum-6) { stroke: var(--inc-face); }');
+  });
+
   it('follows parameters, because surfaces are sampled on every draw', () => {
     let count = 0;
     const { runtime } = graph((g, inc) => {

@@ -1020,9 +1020,9 @@ export class Engine3D implements ViewController {
     const distance = this.camera.state.distance;
     // Toward the eye from the face (C3-3): the eye sits at z = distance, or at infinity without perspective.
     const facing = distance > 0 ? nx * -cx + ny * -cy + nz * (distance - cz) : nz;
-    // Edge-on faces are lines, whichever side rounding puts them on.
+    // Edge-on faces are lines, whichever side rounding puts them on; a wire face is drawn edge-on too, as its outline.
     const edgeOn = 1e-9 * n * (distance > 0 ? Math.hypot(cx, cy, distance - cz) : 1);
-    if (Math.abs(facing) <= edgeOn) return;
+    if (Math.abs(facing) <= edgeOn && style.look !== 'wire') return;
     let sign = 1;
     if (facing < 0) {
       if (!style.twoSided) return;
@@ -1033,9 +1033,10 @@ export class Engine3D implements ViewController {
     let d = `M${fmt(screen[0]!.x)} ${fmt(screen[0]!.y)}`;
     for (let i = 1; i < screen.length; i++) d += `L${fmt(screen[i]!.x)} ${fmt(screen[i]!.y)}`;
     d += 'Z';
+    // A wire face is a shaded wireframe (G3-2): its outline takes the lamp's light, as a solid face's fill does.
     const extra =
       style.look === 'wire'
-        ? 'inc-face inc-wire'
+        ? `inc-face inc-wire inc-lum-${level}`
         : style.look === 'shadow'
           ? 'inc-face inc-shadow'
           : `inc-face inc-lum-${level}${style.look === 'ghost' ? ' inc-glass' : ''}${style.smooth ? (style.look === 'ghost' ? ' inc-tile' : ' inc-smooth') : ''}`;

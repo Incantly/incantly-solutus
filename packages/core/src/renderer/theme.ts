@@ -196,6 +196,8 @@ html.inc-frame, html.inc-frame body { margin: 0; padding: 0; background: transpa
 /* A night side or a shadow: dark in either theme, whatever lies under it. */
 :is(.inc-stage, .inc-backdrop) .inc-face.inc-shadow { fill: #000000; fill-opacity: 0.42; stroke: none; }
 :is(.inc-stage, .inc-backdrop) .inc-face.inc-wire { fill: none; stroke: var(--inc-tone, var(--inc-mid)); stroke-width: 1; stroke-opacity: 1; }
+/* A shaded wireframe (G3-2): each wire takes its face's light. */
+:is(.inc-stage, .inc-backdrop) .inc-face.inc-wire:is(.inc-lum-0, .inc-lum-1, .inc-lum-2, .inc-lum-3, .inc-lum-4, .inc-lum-5, .inc-lum-6) { stroke: var(--inc-face); }
 :is(.inc-stage, .inc-backdrop) .inc-on-face { stroke-width: 1.3; }
 .inc-figure.has-focus .inc-stage .inc-slots > :not(.is-focus) { opacity: 0.25; }
 .inc-stage .inc-slots > .is-focus { --inc-tone: var(--inc-lit); }
