@@ -175,6 +175,8 @@ export interface StageOptions {
   readonly description?: string;
   /** Learners may zoom and pan; default true. */
   readonly zoom?: boolean;
+  /** Offers the measuring tool, reading lengths in `unit` with `per` stage units to one, such as { unit: 'm', per: 110 }. */
+  readonly measure?: { readonly unit: string; readonly per: number };
 }
 
 export interface ElementOptions {

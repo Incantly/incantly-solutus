@@ -216,6 +216,12 @@ html.inc-frame, html.inc-frame body { margin: 0; padding: 0; background: transpa
 .inc-stage-host.is-active > .inc-stage.inc-zoomable { touch-action: none; }
 .inc-stage-host.is-active { outline: 2px dashed color-mix(in srgb, var(--inc-focus) 55%, transparent); outline-offset: 3px; border-radius: var(--inc-radius-sm); }
 .inc-stage[data-orbit] { cursor: grab; }
+/* The measuring tool (VI-5): points, lines and an angle's arc over the stage, and the reading in a chip. */
+.inc-stage.is-measuring { cursor: crosshair; }
+.inc-stage .inc-measure { pointer-events: none; }
+.inc-stage .inc-measure path { fill: none; stroke: var(--inc-focus); stroke-width: 2px; stroke-dasharray: 6 4; vector-effect: non-scaling-stroke; }
+.inc-stage .inc-measure circle { fill: var(--inc-focus); stroke: var(--inc-bg); stroke-width: 1.5px; vector-effect: non-scaling-stroke; }
+.inc-measure-readout { position: absolute; left: 8px; bottom: 8px; max-width: calc(100% - 16px); margin: 0; padding: 4px 10px; border-radius: var(--inc-radius-sm); border: var(--inc-border-width) solid var(--inc-line); background: color-mix(in srgb, var(--inc-bg) 90%, transparent); color: var(--inc-fg); font-size: 0.86em; font-variant-numeric: tabular-nums; pointer-events: none; }
 .inc-stage[data-zoomed]:not([data-orbit]) { cursor: move; }
 .inc-dots { position: absolute; pointer-events: none; }
 .inc-zoombar {
@@ -239,6 +245,7 @@ html.inc-frame, html.inc-frame body { margin: 0; padding: 0; background: transpa
   border: var(--inc-border-width) solid var(--inc-line);
 }
 @media (pointer: coarse) { .inc-figure .inc-zoombar button, .inc-figure .inc-zoombar select { min-height: 36px; min-width: 36px; } .inc-zoombar { opacity: 0.9; } }
+.inc-figure .inc-zoombar button[aria-pressed='true'] { background: var(--inc-focus); border-color: var(--inc-focus); color: var(--inc-bg); }
 .inc-part-info { margin: 0; min-height: 1.45em; }
 .inc-part-info.is-hint { color: var(--inc-muted); font-size: 0.86em; }
 .inc-legend { display: flex; flex-wrap: wrap; gap: 6px 12px; margin: 0; padding: 0; list-style: none; font-size: 0.9em; }

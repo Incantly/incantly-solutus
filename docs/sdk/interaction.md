@@ -63,3 +63,18 @@ The generation rules ask for it: when moving the main object would change a para
 ## Zoom, pan and 3D views
 
 Stages, graphs and 3D views zoom unless their options say `zoom: false`. A graph re-ticks its axes as the learner zooms; a plain stage zooms its view box, up to eight times. The zoom buttons (`zoombar` slot, hidden with `show: { zoom: false }`) do the same from the keyboard. 3D views orbit by default (`mode: 'orbit'`); `'iso'` keeps a fixed isometric camera and `'fixed'` keeps the camera the scene sets.
+
+## Measuring
+
+The stage toolbar has a measuring tool (VI-5, the ↔ button) wherever a stage says what its units are. With it pressed, taps place points instead of dragging or panning: two points read a distance, a third the angle at the second point between the other two, and a fourth starts again. The reading shows in a chip on the stage, read out as it changes; Escape or the button puts the tool away. The marks belong to the learner's session and are left out of snapshots and exported pictures.
+
+Distances and angles come out in the stage's own units:
+
+| Stage | Units |
+| --- | --- |
+| `inc.graph2d` | the axes' units, while both axes are linear; zooming and panning start the points again, since the data under them moved |
+| `inc.physics2d` | metres |
+| `inc.chemistry` | ångströms, so bond lengths and bond angles can be checked |
+| `inc.svg` with `measure: { unit: 'm', per: 110 }` | the given unit, `per` stage units to one |
+
+A plain stage, a 3D stage, a log axis or a number line offers no tool. A kit gives its stage a measure with `ctx.setMeasure` as its view changes: real coordinates are `origin + scale * x` on each axis.

@@ -40,6 +40,7 @@ import type {
 import { ExpressionError } from '../expr';
 import { DEFAULT_GRAPH_VIEWBOX, Graph2D, NUMBER_LINE_VIEWBOX, plotRect, validateGraphOptions } from '../graph2d/graph';
 import type { RuntimeUpdate, ViewAction } from '../protocol/runtime-messages';
+import type { StageMeasure } from '../protocol/scene-commands';
 import { SPEEDS, type LoopMode } from '../protocol/runtime-messages';
 import type { ActionView, ErrorPhase, ErrorView, LegendView, ParamView, PredictView, UiState } from '../protocol/ui';
 import { EMPTY_UI } from '../protocol/ui';
@@ -192,6 +193,15 @@ type Lifecycle = 'idle' | 'mounting' | 'mounted' | 'failed' | 'destroyed';
  * no clock: the renderer drives it with ticks, so the same runtime works in a
  * Worker, in the page and in Node.
  */
+/** A stage's measure, checked: finite, non-zero scales and a short unit name. */
+function checkMeasure(measure: StageMeasure): StageMeasure {
+  const [sx, sy] = measure.scale;
+  const [ox, oy] = measure.origin;
+  if (![sx, sy, ox, oy].every(Number.isFinite) || sx === 0 || sy === 0) throw new SceneApiError('A measure needs finite, non-zero scales');
+  const unit = String(measure.unit ?? '').slice(0, 12);
+  return Object.freeze({ scale: [sx, sy] as const, origin: [ox, oy] as const, unit });
+}
+
 export class SceneRuntime {
   graph = new SceneGraph();
   parts = new PartRegistry(this.graph);
@@ -246,6 +256,8 @@ export class SceneRuntime {
   private hovers = new Map<number, (p: Vec2 | null) => void>();
   private views = new Map<number, ViewController>();
   private stageZoom = new Map<number, boolean>();
+  /** How the measuring tool reads each stage that offers it (VI-5). */
+  private measures = new Map<number, StageMeasure>();
   // Controls and teaching
   private actions: ActionRecord[] = [];
   private links: LinkRecord[] = [];
@@ -653,6 +665,7 @@ export class SceneRuntime {
         hover: this.hovers.has(stage.id),
         orbit: controller?.orbit ?? false,
         views: controller?.views ?? [],
+        measure: this.measures.get(stage.id) ?? null,
       });
     }
   }
@@ -930,6 +943,7 @@ export class SceneRuntime {
     this.hovers = new Map();
     this.views = new Map();
     this.stageZoom = new Map();
+    this.measures = new Map();
     this.actions = [];
     this.links = [];
     this.legend = [];
@@ -1340,6 +1354,12 @@ export class SceneRuntime {
       setView: (controller) => {
         runtime.views.set(stageId, controller);
       },
+      setMeasure: (measure) => {
+        if (measure === null) runtime.measures.delete(stageId);
+        else runtime.measures.set(stageId, checkMeasure(measure));
+        // Once the scene is running, a changed view tells the renderer at once.
+        if (runtime.lifecycle === 'mounted') runtime.publishInteractions();
+      },
       addLegend: (node, label, toggle) => {
         if (runtime.legend.length < 12) runtime.legend.push({ node, label: String(label).slice(0, 60), toggle });
       },
@@ -1657,6 +1677,11 @@ export class SceneRuntime {
         }
         const node = runtime.graph.createStage(selector, options.viewBox, options.title, options.description ?? '');
         runtime.stageZoom.set(node.id, options.zoom !== false);
+        if (options.measure !== undefined) {
+          const { unit, per } = options.measure as { unit?: unknown; per?: unknown };
+          if (typeof per !== 'number' || !Number.isFinite(per) || per <= 0) throw new SceneApiError('inc.svg: measure.per is the stage units that make one unit, a positive number');
+          runtime.measures.set(node.id, checkMeasure({ scale: [1 / per, 1 / per], origin: [0, 0], unit: typeof unit === 'string' ? unit : '' }));
+        }
         return new StageHandle(runtime.graph, node, options.viewBox, runtime.parts);
       },
       graph2d(selector: string, options: GraphOptions) {

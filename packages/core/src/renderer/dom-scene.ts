@@ -1,6 +1,6 @@
 import type { Layer, ViewBox } from '../api/types';
 import { equationExtent } from '../protocol/equation';
-import { RENDERABLE_ATTRIBUTES, type ElementKind, type SceneCommand, type StageZoom } from '../protocol/scene-commands';
+import { RENDERABLE_ATTRIBUTES, type ElementKind, type SceneCommand, type StageMeasure, type StageZoom } from '../protocol/scene-commands';
 import { equationElement, linearEquation } from './math';
 
 /** Paint attributes the theme also sets, mapped to the variables its rules read. */
@@ -27,6 +27,17 @@ export interface StageInteractionView {
   readonly hover: boolean;
   readonly orbit: boolean;
   readonly views: readonly string[];
+  /** How the measuring tool reads the stage, or null when it offers none. */
+  readonly measure: StageMeasure | null;
+}
+
+/** A measure from a Worker, used only when every number in it is sound. */
+function soundMeasure(value: unknown): StageMeasure | null {
+  if (!value || typeof value !== 'object') return null;
+  const { scale, origin, unit } = value as { scale?: unknown; origin?: unknown; unit?: unknown };
+  const pair = (v: unknown): v is readonly [number, number] => Array.isArray(v) && v.length === 2 && v.every((n) => typeof n === 'number' && Number.isFinite(n));
+  if (!pair(scale) || !pair(origin) || scale[0] === 0 || scale[1] === 0) return null;
+  return { scale: [scale[0], scale[1]], origin: [origin[0], origin[1]], unit: typeof unit === 'string' ? unit.slice(0, 12) : '' };
 }
 
 export interface StageDom {
@@ -209,7 +220,7 @@ export class SceneDom {
           layers,
           defs,
           viewBox: command.viewBox,
-          interaction: { zoom: 'viewbox', hover: false, orbit: false, views: [] },
+          interaction: { zoom: 'viewbox', hover: false, orbit: false, views: [], measure: null },
           gradients: new Set(),
           canvases: {},
         };
@@ -305,7 +316,7 @@ export class SceneDom {
       case 'interact': {
         const stage = this.stages.get(command.id);
         if (!stage) return;
-        stage.interaction = { zoom: command.zoom, hover: command.hover, orbit: command.orbit, views: command.views };
+        stage.interaction = { zoom: command.zoom, hover: command.hover, orbit: command.orbit, views: command.views, measure: soundMeasure(command.measure) };
         stage.svg.dataset.zoom = command.zoom;
         if (command.orbit) stage.svg.dataset.orbit = '';
         this.onStage?.(stage);

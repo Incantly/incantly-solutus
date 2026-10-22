@@ -39,6 +39,28 @@ describe('graph zoom and pan (G2-6)', () => {
     expect(runtime.uiState().views[0]!.changed).toBe(false);
   });
 
+  it('tells the measuring tool its axes’ units, and again when the view changes (VI-5)', () => {
+    const { runtime, mount } = run((inc) => {
+      inc.graph2d('#g', { x: [0, 10], y: [0, 10], title: 'Measure' });
+    });
+    const stage = runtime.graph.stages[0]!.id;
+    const first = interaction(mount.commands) as unknown as { measure: { scale: [number, number]; origin: [number, number] } };
+    // The plot is 688 by 320 units from (52, 20): 10 across and 10 up.
+    expect(first.measure.scale[0]).toBeCloseTo(10 / 688, 9);
+    expect(first.measure.scale[1]).toBeCloseTo(-10 / 320, 9);
+    expect(first.measure.origin[0] + first.measure.scale[0] * 52).toBeCloseTo(0, 9);
+    expect(first.measure.origin[1] + first.measure.scale[1] * 340).toBeCloseTo(0, 9);
+    runtime.view(stage, { kind: 'zoom', x: 396, y: 180, factor: 2 });
+    const update = runtime.tick(0);
+    const zoomed = interaction(update.commands) as unknown as { measure: { scale: [number, number] } };
+    expect(zoomed.measure.scale[0]).toBeCloseTo(5 / 688, 9);
+    // Log axes are not a straight scale: no tool.
+    const log = run((inc) => {
+      inc.graph2d('#g', { x: [1, 1000], y: [0, 1], title: 'Log', scale: { x: 'log' } });
+    });
+    expect(interaction(log.mount.commands)).toMatchObject({ measure: null });
+  });
+
   it('keeps an equation on its data point as the learner pans (DG-5)', () => {
     let lawId = 0;
     const { runtime } = run((inc) => {

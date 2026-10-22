@@ -52,6 +52,8 @@ export type SceneCommand =
       readonly orbit: boolean;
       /** Named camera views offered in the stage toolbar. */
       readonly views: readonly string[];
+      /** How the measuring tool reads lengths on this stage, or null when it has none (VI-5). */
+      readonly measure: StageMeasure | null;
     }
   /** The part an element belongs to when it is not inside the part's own element (3D faces in shared slots). */
   | { readonly op: 'owner'; readonly id: number; readonly part: string | null }
@@ -61,6 +63,21 @@ export type SceneCommand =
   | { readonly op: 'order'; readonly id: number; readonly children: readonly number[] };
 
 export type StageZoom = 'viewbox' | 'runtime' | 'none';
+
+/**
+ * How the measuring tool reads a stage (VI-5): real coordinates are an
+ * affine map of stage units on each axis, u = origin + scale * x, so
+ * distances and angles come out in the stage's own units, such as metres on a
+ * physics stage or the axes' units on a graph.
+ */
+export interface StageMeasure {
+  /** Real units per stage unit along x and y; negative where the real axis points the other way. */
+  readonly scale: readonly [number, number];
+  /** The real coordinates of the stage point (0, 0). */
+  readonly origin: readonly [number, number];
+  /** The unit's name, such as m or Å; empty for plain numbers. */
+  readonly unit: string;
+}
 
 /** Attributes the renderer will write. Anything else is dropped. */
 export const RENDERABLE_ATTRIBUTES: ReadonlySet<string> = new Set([

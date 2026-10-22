@@ -1,5 +1,6 @@
 import type { DragInfo, Formula, PathHelpers, Shade, Tone, Values, Vec2 } from '../api/types';
 import type { ViewAction } from '../protocol/runtime-messages';
+import type { StageMeasure } from '../protocol/scene-commands';
 import type { VNode } from '../scene/graph';
 import type { StageHandle } from '../scene/handles';
 
@@ -53,6 +54,8 @@ export interface KitContext {
   addHover(fn: (p: Vec2 | null) => void): void;
   /** The kit owns this stage's zoom, pan and camera. */
   setView(controller: ViewController): void;
+  /** How the measuring tool reads this stage, as its view stands; null offers no tool (VI-5). */
+  setMeasure(measure: StageMeasure | null): void;
   /** A legend entry for an element; `toggle` lets the learner hide it. */
   addLegend(node: VNode, label: string, toggle: boolean): void;
   param(name: string): ParamInfo | undefined;

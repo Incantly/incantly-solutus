@@ -141,6 +141,21 @@ describe('inc.physics2d: motion (PH-1, PH-2, PH-8)', () => {
   });
 });
 
+describe('measuring the world (VI-5)', () => {
+  it('reads the stage in metres, y up from the bottom', () => {
+    const { commands } = run((inc) => {
+      world(inc, { scale: 50 });
+    });
+    const interact = commands.find((c) => c.op === 'interact') as unknown as { measure: { scale: [number, number]; origin: [number, number]; unit: string } };
+    expect(interact.measure.unit).toBe('m');
+    expect(interact.measure.scale).toEqual([0.02, -0.02]);
+    // The stage's bottom left corner is the world's origin.
+    const [bx, by, , bh] = (commands.find((c) => c.op === 'stage') as unknown as { viewBox: [number, number, number, number] }).viewBox;
+    expect(interact.measure.origin[0] + interact.measure.scale[0] * bx).toBeCloseTo(0, 9);
+    expect(interact.measure.origin[1] + interact.measure.scale[1] * (by + bh)).toBeCloseTo(0, 9);
+  });
+});
+
 describe('joints (PH-3)', () => {
   it('springs oscillate with period 2π√(m/k) and keep their energy', () => {
     let ball!: Body2D;

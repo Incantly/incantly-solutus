@@ -138,6 +138,8 @@ function painted(svg: SVGSVGElement, flat = false): Painted {
     copy.removeAttribute('tabindex');
   });
   for (const element of hidden) element.remove();
+  // The measuring tool's marks belong to the learner's session, not to the picture.
+  for (const element of clone.querySelectorAll('.inc-measure')) element.remove();
   for (const [element, copy] of equations) {
     if (!clone.contains(copy)) continue;
     const box = element.querySelector('.inc-math');

@@ -172,6 +172,8 @@ export class ChemistryKit implements Chemistry {
     this.looseBonds = this.stage.group();
     this.looseAtoms = this.stage.group();
     ctx.onRedraw(() => this.flush());
+    // The measuring tool reads bond lengths and angles in ångströms.
+    ctx.setMeasure({ scale: [1 / this.scale, 1 / this.scale], origin: [0, 0], unit: 'Å' });
   }
 
   /** Stage units for a size given at the default scale. */

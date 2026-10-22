@@ -90,6 +90,9 @@ function createWorld(ctx: KitContext, raw: Physics2DOptions): World2D {
   const opts = options<Physics2DOptions>(raw, 'inc.physics2d');
   const scale = opts.scale === undefined ? 50 : finiteNumber(opts.scale, 'inc.physics2d: scale', (n) => n > 0 && n <= 10_000, 'stage units per metre, above 0');
   const view = new View(ctx.stage.viewBox, scale);
+  // The measuring tool reads the world in metres, y up from the bottom of the stage.
+  const [bx, by, , bh] = ctx.stage.viewBox;
+  ctx.setMeasure({ scale: [1 / scale, -1 / scale], origin: [-bx / scale, (by + bh) / scale], unit: 'm' });
   const painter = new Painter(ctx, view);
   const gravity = opts.gravity;
   if (gravity !== undefined && typeof gravity !== 'function') finiteNumber(gravity, 'inc.physics2d: gravity');

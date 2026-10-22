@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { InThreadChannel, ManualClock, mountTrusted, type MountedFigure } from '../src';
 import type { RendererMessage } from '../src/protocol/runtime-messages';
 import { equationElement, linearEquation, mathElement, symbolText } from '../src/renderer/math';
+import { measureText } from '../src/renderer/pointer';
 import { exportStage } from '../src/sandbox/snapshot';
 import { FORMULA_SETTLE_MS } from '../src/renderer/panels';
 import { checkStyle, hostCss, mergeStyles, resolveStyle, styleForBridge } from '../src/renderer/style';
@@ -681,5 +682,70 @@ describe('equations in the drawing (DG-5)', () => {
     expect(box.match(/ style="/g)).toHaveLength(1);
     expect(box).toContain('display:flex');
     expect(markup).not.toContain('data-inc-style');
+  });
+});
+
+describe('measuring a drawing (VI-5)', () => {
+  const RAMP = `
+    inc.idea('A ramp rises at an angle.');
+    const stage = inc.svg('#stage', { viewBox: [0, 0, 200, 200], title: 'Ramp', measure: { unit: 'm', per: 50 } });
+    stage.path('M20 180 L180 180 L180 60 Z', { tone: 'mid' });
+  `;
+
+  it('reads distances and angles in the stage’s own units', () => {
+    const metres = { scale: [0.02, 0.02] as const, origin: [0, 0] as const, unit: 'm' };
+    expect(measureText(metres, [])).toBe('Tap two points to measure a distance, or three for an angle.');
+    expect(measureText(metres, [{ x: 0, y: 0 }])).toBe('Tap a second point.');
+    expect(measureText(metres, [{ x: 0, y: 0 }, { x: 30, y: 40 }])).toBe('Distance 1 m. Tap a third point for an angle.');
+    expect(measureText(metres, [{ x: 100, y: 0 }, { x: 0, y: 0 }, { x: 0, y: 100 }])).toBe('Angle 90.0°, between sides of 2 m and 2 m.');
+    // On a graph, in the axes' units: one stage unit is 0.5 across and 0.25 up.
+    const graph = { scale: [0.5, -0.25] as const, origin: [0, 0] as const, unit: '' };
+    expect(measureText(graph, [{ x: 0, y: 0 }, { x: 6, y: -16 }])).toBe('Distance 5. Tap a third point for an angle.');
+  });
+
+  it('offers the tool on a stage that declares its units, and measures the taps made with it', () => {
+    const { root } = mount(RAMP);
+    const svg = q<SVGSVGElement>(root, 'svg.inc-stage');
+    const button = q<HTMLButtonElement>(root, '.inc-zoombar button[data-view="measure"]');
+    expect(button.getAttribute('aria-pressed')).toBe('false');
+    button.click();
+    expect(button.getAttribute('aria-pressed')).toBe('true');
+    expect(svg.classList.contains('is-measuring')).toBe(true);
+    const readout = q(root, '.inc-measure-readout');
+    expect(readout.getAttribute('role')).toBe('status');
+    // Taps place points instead of panning: 180 − 20 = 160 units is 3.2 m.
+    press(svg, 'pointerdown', { clientX: 20, clientY: 180 });
+    press(svg, 'pointerdown', { clientX: 180, clientY: 180 });
+    expect(readout.textContent).toBe('Distance 3.2 m. Tap a third point for an angle.');
+    press(svg, 'pointerdown', { clientX: 180, clientY: 60 });
+    expect(readout.textContent).toBe('Angle 90.0°, between sides of 3.2 m and 2.4 m.');
+    expect(svg.querySelectorAll('.inc-measure circle')).toHaveLength(3);
+    expect(svg.querySelectorAll('.inc-measure path')).toHaveLength(2);
+    // A fourth tap starts again; Escape puts the tool away.
+    press(svg, 'pointerdown', { clientX: 100, clientY: 100 });
+    expect(svg.querySelectorAll('.inc-measure circle')).toHaveLength(1);
+    key(svg, 'Escape');
+    expect(root.querySelector('.inc-measure')).toBeNull();
+    expect(root.querySelector('.inc-measure-readout')).toBeNull();
+    expect(button.getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('measures a graph in its axes’ units, and keeps the marks out of pictures', () => {
+    const { root, figure } = mount(`
+      const g = inc.graph2d('#stage', { x: [0, 10], y: [0, 10], title: 'Graph', viewBox: [0, 0, 400, 300] });
+      g.plot((x) => x);
+    `);
+    const measure = figure.runtime.graph.snapshotCommands().find((c) => c.op === 'interact')!;
+    expect(measure).toMatchObject({ measure: { unit: '' } });
+    q<HTMLButtonElement>(root, '.inc-zoombar button[data-view="measure"]').click();
+    const svg = q<SVGSVGElement>(root, 'svg.inc-stage');
+    press(svg, 'pointerdown', { clientX: 100, clientY: 100 });
+    const url = exportStage(svg)!;
+    expect(decodeURIComponent(url)).not.toContain('inc-measure');
+  });
+
+  it('offers no tool on a stage that does not say what its units are', () => {
+    const { root } = mount(PENDULUM);
+    expect(root.querySelector('.inc-zoombar button[data-view="measure"]')).toBeNull();
   });
 });

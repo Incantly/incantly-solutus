@@ -368,6 +368,15 @@ describe('the chemistry kit', () => {
   });
 });
 
+describe('measuring molecules (VI-5)', () => {
+  it('reads bond lengths in ångströms', () => {
+    const { mount } = run((inc) => {
+      inc.chemistry('#c', { title: 'Water', scale: 50 }).molecule('H2O');
+    });
+    expect(mount.commands.find((c) => c.op === 'interact')).toMatchObject({ measure: { scale: [0.02, 0.02], origin: [0, 0], unit: 'Å' } });
+  });
+});
+
 describe('the chemistry kit script', () => {
   it('registers itself in the Worker and draws with the runtime’s own modules', async () => {
     const code = await KIT_SCRIPTS.chemistry!();

@@ -1,5 +1,5 @@
 import type { DragInfo, Layer, Shade, Tone, Values, Vec2, ViewBox } from '../api/types';
-import { RENDERABLE_ATTRIBUTES, type ElementKind, type SceneCommand, type StageZoom } from '../protocol/scene-commands';
+import { RENDERABLE_ATTRIBUTES, type ElementKind, type SceneCommand, type StageMeasure, type StageZoom } from '../protocol/scene-commands';
 import { SceneApiError, type Diagnostic } from './errors';
 import { fmt, hasNonFinite } from './format';
 
@@ -49,6 +49,7 @@ export interface StageInteraction {
   readonly hover: boolean;
   readonly orbit: boolean;
   readonly views: readonly string[];
+  readonly measure: StageMeasure | null;
 }
 
 export interface StageRecord {

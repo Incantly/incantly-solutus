@@ -1,7 +1,8 @@
 import type { RendererMessage, ViewAction } from '../protocol/runtime-messages';
+import type { StageMeasure } from '../protocol/scene-commands';
 import type { StageView } from '../protocol/ui';
 import type { FrameClock } from '../engine/clock';
-import type { SceneDom, StageDom } from './dom-scene';
+import { SVG_NS, type SceneDom, type StageDom } from './dom-scene';
 
 type Send = (message: RendererMessage) => void;
 
@@ -56,6 +57,14 @@ interface BackgroundGesture {
   moved: boolean;
 }
 
+/** The measuring tool on one stage (VI-5): the points tapped so far, the drawing over the stage, and the reading. */
+interface Measuring {
+  readonly stage: StageDom;
+  points: Array<{ readonly x: number; readonly y: number }>;
+  readonly layer: SVGGElement;
+  readonly readout: HTMLElement;
+}
+
 interface Pending {
   drag: { id: number; x: number; y: number } | null;
   hover: Map<number, { x: number | null; y: number | null }>;
@@ -83,6 +92,7 @@ export class PointerController {
   private pending: Pending = { drag: null, hover: new Map(), view: new Map() };
   private frame: number | null = null;
   private lastTap: { stage: StageDom; x: number; y: number; at: number } | null = null;
+  private measuring: Measuring | null = null;
 
   constructor(private readonly options: PointerOptions) {
     const { sceneRoot, signal, doc } = options;
@@ -111,15 +121,20 @@ export class PointerController {
     const zoomable = stage.interaction.zoom !== 'none';
     if (!this.views.has(stage.id)) this.views.set(stage.id, viewOf(stage));
     stage.svg.classList.toggle('inc-zoomable', zoomable || stage.interaction.orbit);
-    if ((this.options.zoombar ?? true) && (zoomable || stage.interaction.views.length > 0)) this.toolbar(stage);
+    if ((this.options.zoombar ?? true) && (zoomable || stage.interaction.views.length > 0 || stage.interaction.measure)) this.toolbar(stage);
     else {
       this.bars.get(stage.id)?.remove();
       this.bars.delete(stage.id);
+    }
+    if (this.measuring?.stage === stage) {
+      if (stage.interaction.measure) this.drawMeasure();
+      else this.stopMeasuring();
     }
   }
 
   /** Stages were rebuilt: views and toolbars start again. */
   reset(): void {
+    this.stopMeasuring();
     for (const bar of this.bars.values()) bar.remove();
     this.bars.clear();
     this.views.clear();
@@ -176,6 +191,13 @@ export class PointerController {
     if (target.closest('.inc-zoombar')) return;
     const stage = this.options.scene.stageOf(target);
     if (!stage) return;
+    if (this.measuring?.stage === stage) {
+      // While measuring, a tap places a point; nothing drags or pans.
+      event.preventDefault();
+      const inverse = this.inverse(stage);
+      if (inverse) this.addPoint(this.toStage(inverse, event.clientX, event.clientY));
+      return;
+    }
     const draggable = target.closest('[data-drag]');
     if (draggable && stage.svg.contains(draggable)) {
       const id = this.options.scene.idOf(draggable);
@@ -346,6 +368,10 @@ export class PointerController {
 
   private onKey(event: KeyboardEvent): void {
     const target = event.target as Element;
+    if (event.key === 'Escape' && this.measuring) {
+      this.stopMeasuring();
+      return;
+    }
     if (event.key === 'Escape' && this.active) {
       this.setActive(null);
       return;
@@ -475,12 +501,21 @@ export class PointerController {
       }
       bar.append(select);
     }
-    button('reset', '⟲', 'Reset view');
+    if (stage.interaction.zoom !== 'none' || stage.interaction.orbit || stage.interaction.views.length > 0) button('reset', '⟲', 'Reset view');
+    if (stage.interaction.measure) {
+      const measure = button('measure', '↔', 'Measure: tap two points for a distance, three for an angle');
+      measure.setAttribute('aria-pressed', String(this.measuring?.stage === stage));
+    }
     bar.addEventListener(
       'click',
       (event) => {
         const action = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-view]')?.dataset.view;
         if (!action) return;
+        if (action === 'measure') {
+          if (this.measuring?.stage === stage) this.stopMeasuring();
+          else this.startMeasuring(stage);
+          return;
+        }
         const [x, y, w, h] = viewArray(this.views.get(stage.id) ?? viewOf(stage));
         if (action === 'in') this.zoom(stage, x + w / 2, y + h / 2, 1.5);
         else if (action === 'out') this.zoom(stage, x + w / 2, y + h / 2, 1 / 1.5);
@@ -516,10 +551,85 @@ export class PointerController {
   }
 
   // -------------------------------------------------------------------------
+  // Measuring (VI-5)
+  // -------------------------------------------------------------------------
+
+  private startMeasuring(stage: StageDom): void {
+    this.stopMeasuring();
+    const doc = this.options.doc;
+    const layer = doc.createElementNS(SVG_NS, 'g') as SVGGElement;
+    layer.setAttribute('class', 'inc-measure');
+    layer.setAttribute('aria-hidden', 'true');
+    stage.svg.append(layer);
+    const readout = doc.createElement('p');
+    readout.className = 'inc-measure-readout';
+    readout.setAttribute('role', 'status');
+    stage.host.append(readout);
+    stage.svg.classList.add('is-measuring');
+    this.measuring = { stage, points: [], layer, readout };
+    this.bars.get(stage.id)?.querySelector('button[data-view="measure"]')?.setAttribute('aria-pressed', 'true');
+    this.drawMeasure();
+  }
+
+  stopMeasuring(): void {
+    const measuring = this.measuring;
+    if (!measuring) return;
+    this.measuring = null;
+    measuring.layer.remove();
+    measuring.readout.remove();
+    measuring.stage.svg.classList.remove('is-measuring');
+    this.bars.get(measuring.stage.id)?.querySelector('button[data-view="measure"]')?.setAttribute('aria-pressed', 'false');
+  }
+
+  /** Two points measure a distance, a third an angle at the second; a fourth starts again. */
+  private addPoint(point: { x: number; y: number }): void {
+    const measuring = this.measuring;
+    if (!measuring) return;
+    measuring.points = measuring.points.length >= 3 ? [point] : [...measuring.points, point];
+    this.drawMeasure();
+  }
+
+  /** The points, the lines between them and the angle's arc over the stage, and the reading beside it. */
+  private drawMeasure(): void {
+    const measuring = this.measuring;
+    const measure = measuring?.stage.interaction.measure;
+    if (!measuring || !measure) return;
+    const { points, layer, stage } = measuring;
+    const doc = this.options.doc;
+    const px = this.unitsPerPixel(stage);
+    const shapes: Element[] = [];
+    if (points.length >= 2) {
+      const d = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${round(p.x)} ${round(p.y)}`).join('');
+      shapes.push(svgElement(doc, 'path', { d }));
+    }
+    if (points.length === 3) {
+      const [a, b, c] = points as [{ x: number; y: number }, { x: number; y: number }, { x: number; y: number }];
+      const r = Math.min(Math.hypot(a.x - b.x, a.y - b.y), Math.hypot(c.x - b.x, c.y - b.y), 36 * px) * 0.6;
+      const from = Math.atan2(a.y - b.y, a.x - b.x);
+      let sweep = Math.atan2(c.y - b.y, c.x - b.x) - from;
+      while (sweep <= -Math.PI) sweep += 2 * Math.PI;
+      while (sweep > Math.PI) sweep -= 2 * Math.PI;
+      const x1 = b.x + r * Math.cos(from);
+      const y1 = b.y + r * Math.sin(from);
+      const x2 = b.x + r * Math.cos(from + sweep);
+      const y2 = b.y + r * Math.sin(from + sweep);
+      shapes.push(svgElement(doc, 'path', { d: `M${round(x1)} ${round(y1)}A${round(r)} ${round(r)} 0 0 ${sweep > 0 ? 1 : 0} ${round(x2)} ${round(y2)}` }));
+    }
+    for (const p of points) shapes.push(svgElement(doc, 'circle', { cx: String(round(p.x)), cy: String(round(p.y)), r: String(round(4 * px)) }));
+    layer.replaceChildren(...shapes);
+    measuring.readout.textContent = measureText(measure, points);
+  }
+
+  // -------------------------------------------------------------------------
   // Sending
   // -------------------------------------------------------------------------
 
   private queueView(stage: number, kind: 'zoom' | 'pan' | 'orbit', value: { x: number; y: number; factor: number } | { dx: number; dy: number }): void {
+    // A kit that redraws for a new view moves what lay under the points: they start again.
+    if (this.measuring?.stage.id === stage && this.measuring.points.length > 0) {
+      this.measuring.points = [];
+      this.drawMeasure();
+    }
     const entry = this.pending.view.get(stage) ?? { zoom: null, pan: null, orbit: null };
     if (kind === 'zoom') {
       const v = value as { x: number; y: number; factor: number };
@@ -594,4 +704,44 @@ function elementCentre(element: Element, inverse: DOMMatrix): { x: number; y: nu
   if (!screen) return null;
   const p = new DOMPoint(box.x + box.width / 2, box.y + box.height / 2).matrixTransform(screen).matrixTransform(inverse);
   return { x: p.x, y: p.y };
+}
+
+function svgElement(doc: Document, name: string, attributes: Readonly<Record<string, string>>): Element {
+  const element = doc.createElementNS(SVG_NS, name);
+  for (const [key, value] of Object.entries(attributes)) element.setAttribute(key, value);
+  return element;
+}
+
+/** A length to three significant figures, with its unit. */
+function length(value: number, unit: string): string {
+  const shown = Math.abs(value) >= 1e6 || (value !== 0 && Math.abs(value) < 1e-3) ? value.toPrecision(3) : String(Number(value.toPrecision(3)));
+  return unit ? `${shown} ${unit}` : shown;
+}
+
+/**
+ * What the measuring tool reads out, in the stage's own units: a distance
+ * between two points; with a third, both distances and the angle at the
+ * second point between the other two.
+ */
+export function measureText(measure: StageMeasure, points: ReadonlyArray<{ readonly x: number; readonly y: number }>): string {
+  const real = (p: { readonly x: number; readonly y: number }): [number, number] => [measure.origin[0] + measure.scale[0] * p.x, measure.origin[1] + measure.scale[1] * p.y];
+  const distance = (p: { x: number; y: number }, q: { x: number; y: number }) => {
+    const [px, py] = real(p);
+    const [qx, qy] = real(q);
+    return Math.hypot(qx - px, qy - py);
+  };
+  if (points.length === 0) return 'Tap two points to measure a distance, or three for an angle.';
+  if (points.length === 1) return 'Tap a second point.';
+  const [a, b, c] = points as [{ x: number; y: number }, { x: number; y: number }, { x: number; y: number } | undefined];
+  if (!c) return `Distance ${length(distance(a, b), measure.unit)}. Tap a third point for an angle.`;
+  const [ax, ay] = real(a);
+  const [bx, by] = real(b);
+  const [cx, cy] = real(c);
+  const ux = ax - bx;
+  const uy = ay - by;
+  const vx = cx - bx;
+  const vy = cy - by;
+  const norms = Math.hypot(ux, uy) * Math.hypot(vx, vy);
+  const angle = norms > 0 ? (Math.acos(Math.min(1, Math.max(-1, (ux * vx + uy * vy) / norms))) * 180) / Math.PI : 0;
+  return `Angle ${angle.toFixed(1)}°, between sides of ${length(distance(b, a), measure.unit)} and ${length(distance(b, c), measure.unit)}.`;
 }
