@@ -272,6 +272,9 @@ describe('controls (CT-3, CT-5, CT-6, CT-9)', () => {
     expect(figure.runtime.values().g).toBe(1.6);
     key(q(root, '.inc-controls'), 'z', { ctrlKey: true, shiftKey: true });
     expect(figure.runtime.values().g).toBe(5);
+    // Ctrl+Z undoes, as the button does.
+    key(q(root, '.inc-controls'), 'z', { ctrlKey: true });
+    expect(figure.runtime.values().g).toBe(1.6);
   });
 
   it('caps the frame rate from the settings panel without losing time (CT-4)', () => {

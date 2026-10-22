@@ -65,6 +65,11 @@ import { KIT_OF, type KitCall, type KitRegistry } from './kits';
 import { createParamState, snap, type ControlShape, type ParamState } from './params';
 import { mulberry32 } from './random';
 import { Timeline, isSettingName } from './timeline';
+import type { HistoryValue } from './history';
+
+/** A formula's key in the undo history. */
+const formulaKey = (index: number) => `formula:${index}`;
+const FORMULA_KEY = /^formula:(\d+)$/;
 import { advanceTween, type TweenState } from './tween';
 
 export type SceneFunction = (inc: Inc, math: Math) => void;
@@ -737,9 +742,42 @@ export class SceneRuntime {
     if (record.source !== before) {
       (this.pendingFormulas ??= {})[String(index)] = record.source;
       this.paramVersion++;
+      this.history.record({ [formulaKey(index)]: before }, { [formulaKey(index)]: record.source }, true);
     }
     // The error, or its clearing, shows either way.
     this.dirty = true;
+  }
+
+  /** Puts a formula back to a source it had, as undo, redo and reset do; it is saved like an edit. */
+  private restoreFormula(index: number, source: string): void {
+    const record = this.formulas[index];
+    if (!record || record.source === source) return;
+    record.edit(source);
+    (this.pendingFormulas ??= {})[String(index)] = record.source;
+    this.paramVersion++;
+    this.dirty = true;
+  }
+
+  /** Every formula's source, as history keys. */
+  private formulaSources(): Record<string, string> {
+    return Object.fromEntries(this.formulas.map((record, index) => [formulaKey(index), record.source] as const));
+  }
+
+  /** Applies an undo or redo: parameter values, timing settings and formula sources. */
+  private applyHistory(values: Readonly<Record<string, HistoryValue>>): void {
+    const params: Record<string, number> = {};
+    const settings: Record<string, number> = {};
+    for (const [key, value] of Object.entries(values)) {
+      const formula = FORMULA_KEY.exec(key);
+      if (formula) {
+        if (typeof value === 'string') this.restoreFormula(Number(formula[1]), value);
+      } else if (typeof value === 'number') (isSettingName(key) ? settings : params)[key] = value;
+    }
+    if (Object.keys(settings).length > 0 && this.timeline?.apply(Timeline.decode(settings))) {
+      this.pendingValues = { ...this.pendingValues, ...this.timeline.encode() };
+      this.dirty = true;
+    }
+    if (Object.keys(params).length > 0) this.learnerChange(params, 'undo');
   }
 
   predict(index: number, choice: number | null, reveal = false): void {
@@ -767,17 +805,21 @@ export class SceneRuntime {
 
   undo(): void {
     const values = this.history.undo();
-    if (values) this.learnerChange(values, 'undo');
+    if (values) this.applyHistory(values);
   }
 
   redo(): void {
     const values = this.history.redo();
-    if (values) this.learnerChange(values, 'undo');
+    if (values) this.applyHistory(values);
   }
 
   setTiming(settings: { readonly duration?: number; readonly loop?: LoopMode; readonly ease?: TimelineOptions['ease'] }): void {
-    if (!this.timeline || !this.timeline.apply(settings)) return;
-    this.pendingValues = { ...this.pendingValues, ...this.timeline.encode() };
+    if (!this.timeline) return;
+    const before = this.timeline.encode();
+    if (!this.timeline.apply(settings)) return;
+    const after = this.timeline.encode();
+    this.pendingValues = { ...this.pendingValues, ...after };
+    this.history.record(before, after, true);
     this.dirty = true;
   }
 
@@ -925,14 +967,29 @@ export class SceneRuntime {
     return this.rebuild(this.stepSaved ? { ...this.stepSaved.values } : this.values());
   }
 
-  /** Rebuilds the scene with the authored defaults. Undoable. */
+  /**
+   * Rebuilds the scene as the agent made it: its parameter defaults, its own
+   * formulas and its timing, whatever the learner edited. Undoable.
+   */
   reset(): RuntimeUpdate {
     const defaults: Record<string, number> = {};
     for (const p of this.params.values()) defaults[p.name] = p.defaultValue;
-    const before = this.learnerValues();
-    const update = this.rebuild(defaults);
-    this.history.record(before, defaults, true);
-    return { ...update, values: { ...defaults }, ui: { ...update.ui, history: { undo: this.history.canUndo, redo: this.history.canRedo } } };
+    const before: Record<string, HistoryValue> = { ...this.learnerValues(), ...this.timeline?.encode(), ...this.formulaSources() };
+    const edited = this.formulaSources();
+    const update = this.rebuild(defaults, true);
+    const timing = this.timeline?.encode() ?? {};
+    const formulas = this.formulaSources();
+    // The note keeps the agent's formulas and timing again, as it keeps the defaults.
+    for (const [key, source] of Object.entries(formulas)) if (edited[key] !== source) (this.pendingFormulas ??= {})[FORMULA_KEY.exec(key)![1]!] = source;
+    if (this.timeline) this.pendingValues = { ...this.pendingValues, ...timing };
+    this.history.record(before, { ...defaults, ...timing, ...formulas }, true);
+    const flushed = this.flush();
+    return {
+      ...update,
+      ...(flushed.formulas ? { formulas: flushed.formulas } : {}),
+      values: { ...defaults, ...timing },
+      ui: { ...update.ui, history: { undo: this.history.canUndo, redo: this.history.canRedo } },
+    };
   }
 
   /** Current parameter values (what the drawing shows). */
@@ -947,12 +1004,14 @@ export class SceneRuntime {
     return this.stepSaved ? { ...this.stepSaved.values } : this.values();
   }
 
-  private rebuild(values: Record<string, number>): RuntimeUpdate {
+  /** Remounts the scene with these values; `original` drops the learner's formula edits and timing, as reset does. */
+  private rebuild(values: Record<string, number>, original = false): RuntimeUpdate {
     const scene = this.scene;
     if (!scene || this.lifecycle === 'destroyed') return this.flush();
     const wasPlaying = this.stepSaved ? this.stepSaved.playing : this.playing;
-    const timing = this.timeline?.encode();
-    const formulas = Object.fromEntries(this.formulas.map((f, i) => [String(i), f.source] as const));
+    const timing = original ? undefined : this.timeline?.encode();
+    const formulas = original ? {} : Object.fromEntries(this.formulas.map((f, i) => [String(i), f.source] as const));
+    this.originalFormulas = original;
     if (this.stepIndex !== null) this.pendingStep = null;
     this.stepIndex = null;
     this.stepSaved = null;
@@ -1007,11 +1066,14 @@ export class SceneRuntime {
     this.rebuildFormulas = formulas;
     const update = this.mount(scene, { ...values, ...timing });
     this.rebuildFormulas = null;
+    this.originalFormulas = false;
     this.playing = this.lifecycle === 'mounted' && wasPlaying;
     return { ...update, needsFrame: this.needsFrame() };
   }
 
   private rebuildFormulas: Readonly<Record<string, string>> | null = null;
+  /** A reset remounts with the agent's own formulas, not the edits a note saved. */
+  private originalFormulas = false;
 
   // -------------------------------------------------------------------------
   // Frames and text
@@ -1754,7 +1816,7 @@ export class SceneRuntime {
       formula(source: string, options?: FormulaOptions) {
         try {
           const index = runtime.formulas.length;
-          const restored = runtime.rebuildFormulas?.[String(index)] ?? runtime.options.formulas?.[String(index)];
+          const restored = runtime.originalFormulas ? undefined : (runtime.rebuildFormulas?.[String(index)] ?? runtime.options.formulas?.[String(index)]);
           return createFormula(
             source,
             options,

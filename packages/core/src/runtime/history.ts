@@ -1,12 +1,16 @@
 /**
- * Undo and redo of the learner's own changes (CT-5). A drag or one run of
- * slider input is one entry: changes to the same parameters close together
- * in time merge into the entry before them.
+ * Undo and redo of the learner's own changes (CT-5): parameter values,
+ * formula edits and timing settings. A drag or one run of slider input is
+ * one entry: changes to the same parameters close together in time merge
+ * into the entry before them.
  */
 
+/** A parameter's or a timing setting's number, or a formula's source. */
+export type HistoryValue = number | string;
+
 export interface HistoryEntry {
-  readonly before: Readonly<Record<string, number>>;
-  after: Record<string, number>;
+  readonly before: Readonly<Record<string, HistoryValue>>;
+  after: Record<string, HistoryValue>;
   at: number;
   /** Closed entries never merge: a drag ended, or an undo happened. */
   closed: boolean;
@@ -30,7 +34,7 @@ export class History {
   }
 
   /** Records a change from `before` to `after` (the values of the parameters it touched). */
-  record(before: Readonly<Record<string, number>>, after: Readonly<Record<string, number>>, close = false): void {
+  record(before: Readonly<Record<string, HistoryValue>>, after: Readonly<Record<string, HistoryValue>>, close = false): void {
     const names = Object.keys(after);
     if (names.length === 0 || names.every((name) => before[name] === after[name])) return;
     this.future.length = 0;
@@ -56,7 +60,7 @@ export class History {
   }
 
   /** The values to go back to, or null. */
-  undo(): Readonly<Record<string, number>> | null {
+  undo(): Readonly<Record<string, HistoryValue>> | null {
     const entry = this.past.pop();
     if (!entry) return null;
     entry.closed = true;
@@ -64,7 +68,7 @@ export class History {
     return entry.before;
   }
 
-  redo(): Readonly<Record<string, number>> | null {
+  redo(): Readonly<Record<string, HistoryValue>> | null {
     const entry = this.future.pop();
     if (!entry) return null;
     this.past.push(entry);

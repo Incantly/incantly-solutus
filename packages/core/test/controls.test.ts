@@ -123,6 +123,42 @@ describe('buttons, presets and linked parameters (CT-6, CT-8)', () => {
 });
 
 describe('undo and redo (CT-5)', () => {
+  it('undoes formula edits and timing changes too, and resets to the agent\'s formula and timing', () => {
+    // Once Undo reverted only values, and an edited formula and changed timing survived Reset.
+    let source = () => '';
+    const { runtime } = run((inc) => {
+      inc.param('A', { min: 0, max: 5, step: 0.5, value: 1 });
+      const wave = inc.formula('A*sin(x)', { editable: true });
+      inc.timeline({ duration: 4 });
+      stage(inc);
+      source = () => wave.source;
+    });
+    const timing = () => runtime.uiState().timing?.duration;
+    runtime.editFormula(0, 'A*cos(x)');
+    runtime.setTiming({ duration: 8 });
+    runtime.setParam('A', 3);
+    expect([source(), timing(), runtime.values().A]).toEqual(['A*cos(x)', 8, 3]);
+    runtime.undo();
+    expect([source(), timing(), runtime.values().A]).toEqual(['A*cos(x)', 8, 1]);
+    runtime.undo();
+    expect(timing()).toBe(4);
+    runtime.undo();
+    expect(source()).toBe('A*sin(x)');
+    runtime.redo();
+    runtime.redo();
+    expect([source(), timing()]).toEqual(['A*cos(x)', 8]);
+    // Reset goes back to what the agent made: defaults, its own formula and its own timing; and it saves them.
+    const reset = runtime.reset();
+    runtime.tick(0);
+    expect([source(), timing(), runtime.values().A]).toEqual(['A*sin(x)', 4, 1]);
+    expect(reset.formulas).toEqual({ '0': 'A*sin(x)' });
+    expect(reset.values).toMatchObject({ A: 1, $duration: 4 });
+    // And Reset is undone like any change.
+    runtime.undo();
+    runtime.tick(0);
+    expect([source(), timing()]).toEqual(['A*cos(x)', 8]);
+  });
+
   it('merges a run of slider input into one step and undoes resets', () => {
     let now = 0;
     const { runtime } = run(
