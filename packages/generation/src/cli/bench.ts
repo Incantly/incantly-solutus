@@ -159,6 +159,20 @@ function stats(values: readonly number[]): string {
   return s.count === 0 ? '–' : `${seconds(s.p50)} / ${seconds(s.p90)} / ${seconds(s.max)} / ${seconds(s.mean)}`;
 }
 
+/**
+ * The subagent overhead in one generation's time: each call's, except that a
+ * library build and the plan call beside it ran side by side, so the learner
+ * waited for one overhead, not two.
+ */
+function overheadOf(r: BenchResult, overheadMs: Record<string, number>): number {
+  const each = r.calls.map((c) => overheadMs[c.model] ?? 0);
+  const total = each.reduce((sum, ms) => sum + ms, 0);
+  if (r.retrieved === null) return total;
+  const scene = r.calls.findIndex((c) => c.purpose === 'scene');
+  const plan = r.calls.findIndex((c) => c.purpose === 'plan');
+  return scene < 0 || plan < 0 ? total : total - Math.min(each[scene]!, each[plan]!);
+}
+
 function report(results: readonly BenchResult[], overheadMs: Record<string, number>, raw: readonly BenchResult[]): string {
   const lines: string[] = [];
   const done = results.filter((r) => !r.pending);
@@ -231,14 +245,14 @@ function report(results: readonly BenchResult[], overheadMs: Record<string, numb
       '',
       ...Object.entries(overheadMs).map(([model, ms]) => `- ${model}: ${seconds(ms)} s per call (median)`),
       '',
-      `Subtracting it from every call (${Object.keys(overheadMs).length} models), the totals above become an estimate of the API path:`,
+      `Subtracting it from every call (${Object.keys(overheadMs).length} models), once for a library build and the plan call beside it, the totals above become an estimate of the API path:`,
       '',
       '| Condition | Estimated total p50 / p90 / max / mean (s) | Within 25 s |',
       '| --- | --- | --- |',
     );
     for (const condition of conditions) {
       const rows = done.filter((r) => r.condition === condition);
-      const adjusted = rows.map((r) => r.timings.totalMs - r.calls.reduce((sum, c) => sum + (overheadMs[c.model] ?? 0), 0));
+      const adjusted = rows.map((r) => r.timings.totalMs - overheadOf(r, overheadMs));
       lines.push(`| ${condition} | ${stats(adjusted)} | ${percent(adjusted.filter((t) => t <= 25_000).length, rows.length)} |`);
     }
   }
