@@ -8,9 +8,11 @@
 import type {
   Arrow3D,
   Atom,
+  Biology,
   Body2D,
   Bond,
   Calculus,
+  Cell,
   Chart,
   ChartSeries,
   Chemistry,
@@ -32,11 +34,13 @@ import type {
   Graph3D,
   Group3D,
   Handle,
+  Helix,
   Inc,
   Joint2D,
   Label3D,
   Line,
   Line3D,
+  Membrane,
   Molecule,
   MotionHelpers,
   Object3D,
@@ -53,6 +57,7 @@ import type {
   Space3D,
   Stage,
   State,
+  Stream,
   Surface3D,
   Tank2D,
   TextHandle,
@@ -114,7 +119,12 @@ export type HandleKind =
   | 'Molecule'
   | 'Shells'
   | 'Reaction'
-  | 'Profile';
+  | 'Profile'
+  | 'Biology'
+  | 'Cell'
+  | 'Membrane'
+  | 'Helix'
+  | 'Stream';
 
 /**
  * What a member returns: another handle kind, `self` for chainable methods,
@@ -189,6 +199,7 @@ export const INC_FUNCTIONS = {
   chart: 'Chart',
   flow: 'Flow',
   chemistry: 'Chemistry',
+  biology: 'Biology',
   formula: 'Formula',
   random: null,
   tween: null,
@@ -530,6 +541,26 @@ export const HANDLES: Readonly<Record<HandleKind, HandleSpec>> = {
   Profile: {
     methods: { set: 'self', marker: 'self', energy: null } satisfies Methods<Profile>,
     properties: { activation: null, change: null, handle: 'Element' } satisfies Properties<Profile>,
+  },
+  Biology: {
+    methods: { cell: 'Cell', membrane: 'Membrane', helix: 'Helix', stream: 'Stream' } satisfies Methods<Biology>,
+    properties: { stage: 'Stage' } satisfies Properties<Biology>,
+  },
+  Cell: {
+    methods: { organelle: 'Element', where: null, at: 'self', show: 'self', hide: 'self' } satisfies Methods<Cell>,
+    properties: { kind: null, organelles: null, handle: 'Element' } satisfies Properties<Cell>,
+  },
+  Membrane: {
+    methods: { set: 'self', reset: 'self' } satisfies Methods<Membrane>,
+    properties: { left: null, right: null, crossed: null, handle: 'Element' } satisfies Properties<Membrane>,
+  },
+  Helix: {
+    methods: { unzip: 'self', base: 'Element' } satisfies Methods<Helix>,
+    properties: { sequence: null, partner: null, handle: 'Element' } satisfies Properties<Helix>,
+  },
+  Stream: {
+    methods: { set: 'self', at: null } satisfies Methods<Stream>,
+    properties: { handle: 'Element' } satisfies Properties<Stream>,
   },
 };
 

@@ -1499,6 +1499,150 @@ export interface Chemistry {
 }
 
 // ---------------------------------------------------------------------------
+// Biology: inc.biology (the biology kit, loaded on demand)
+// ---------------------------------------------------------------------------
+
+export interface BiologyOptions {
+  readonly title: string;
+  readonly description?: string;
+  /** Default [0, 0, 640, 400]. */
+  readonly viewBox?: ViewBox;
+}
+
+export type CellKind = 'animal' | 'plant' | 'bacterium';
+
+export type Organelle =
+  | 'membrane'
+  | 'cytoplasm'
+  | 'nucleus'
+  | 'nucleolus'
+  | 'mitochondria'
+  | 'ribosomes'
+  | 'er'
+  | 'golgi'
+  | 'vacuole'
+  | 'chloroplasts'
+  | 'wall'
+  | 'nucleoid'
+  | 'plasmids'
+  | 'flagellum';
+
+export interface CellOptions {
+  /** Default 'animal'. */
+  readonly kind?: CellKind;
+  /** Its width in stage units. Default 300. */
+  readonly size?: number;
+  /** The organelles to draw. Default: every one the kind has. */
+  readonly organelles?: readonly Organelle[];
+  /** The same seed draws the same outline. Default 1. */
+  readonly seed?: number;
+}
+
+/** A cell with its organelles: animal, plant or bacterium. */
+export interface Cell {
+  readonly kind: CellKind;
+  /** The organelles drawn. */
+  readonly organelles: readonly Organelle[];
+  /** An organelle's drawing, for parts, callouts and connectors. */
+  organelle(name: Organelle): Handle;
+  /** A point on an organelle, for labels and arrows. */
+  where(name: Organelle): Vec2;
+  at(x: number, y: number): this;
+  show(visible?: boolean): this;
+  hide(): this;
+  readonly handle: Handle;
+}
+
+export interface MembraneOptions {
+  /** Where it is drawn: [x, y, width, height]; the membrane runs down the middle. Default: the stage. */
+  readonly box?: ViewBox;
+  /** Particles on the left and the right at the start. */
+  readonly particles: readonly [number, number];
+  /** Channel proteins particles pass through. Default 3; 0 lets them cross anywhere. */
+  readonly channels?: number;
+  /** The chance a particle reaching a channel goes through, 0 to 1. Default 1. */
+  readonly permeability?: number;
+  /** Particles a second pumped from left to right against the gradient, as in active transport. Default 0. */
+  readonly pump?: number;
+  /** Stage units a second. Default 60. */
+  readonly speed?: number;
+  readonly tone?: Tone;
+}
+
+/** Particles diffusing across a membrane: down their gradient through channels, or pumped against it. */
+export interface Membrane {
+  /** Particles on each side now. */
+  readonly left: number;
+  readonly right: number;
+  /** Particles that have crossed: left to right, minus right to left. */
+  readonly crossed: number;
+  set(values: { readonly permeability?: number; readonly pump?: number; readonly speed?: number }): this;
+  /** Starts again with these particles on each side. */
+  reset(left: number, right: number): this;
+  readonly handle: Handle;
+}
+
+export interface HelixOptions {
+  /** One strand's bases, read 5′ to 3′: A, T, G and C. */
+  readonly sequence: string;
+  /** Its two ends. */
+  readonly from: Vec2;
+  readonly to: Vec2;
+  /** Half its width. Default 34. */
+  readonly radius?: number;
+  /** Base pairs per full turn. Default 10. */
+  readonly perTurn?: number;
+  /** Letters on the bases. Default true. */
+  readonly letters?: boolean;
+  /** Turns per second while playing. Default 0. */
+  readonly spin?: number;
+}
+
+/** DNA's double helix: two backbones and the base pairs between them, A with T and G with C. */
+export interface Helix {
+  readonly sequence: string;
+  /** The paired strand, base by base: ATGC pairs with TACG. */
+  readonly partner: string;
+  /** Opens the strands from the start: 0 joined, 1 fully apart, as in replication. */
+  unzip(fraction: number): this;
+  /** One base pair's drawing, for parts. */
+  base(index: number): Handle;
+  readonly handle: Handle;
+}
+
+export interface StreamOptions {
+  /** Particles along the path. Default 12. */
+  readonly count?: number;
+  /** Stage units a second; negative runs backwards. Default 40. */
+  readonly speed?: number;
+  /** 'dot' (default) or 'cell', a disc like a red blood cell. */
+  readonly shape?: 'dot' | 'cell';
+  /** Radius in stage units. Default 5. */
+  readonly size?: number;
+  readonly tone?: Tone;
+  /** Draws the path as a vessel this wide. Default 0: not drawn. */
+  readonly width?: number;
+}
+
+/** Particles flowing along a path, such as blood cells through a vessel. */
+export interface Stream {
+  set(values: { readonly speed?: number }): this;
+  /** Where particle `index` is now. */
+  at(index: number): Vec2;
+  readonly handle: Handle;
+}
+
+export interface Biology {
+  /** A cell with its organelles, centred on (x, y). */
+  cell(x: number, y: number, options?: CellOptions): Cell;
+  membrane(options: MembraneOptions): Membrane;
+  helix(options: HelixOptions): Helix;
+  /** Particles flowing along the path through these points. */
+  stream(points: ReadonlyArray<Vec2>, options?: StreamOptions): Stream;
+  readonly stage: Stage;
+}
+
+// ---------------------------------------------------------------------------
 // Tweens
 // ---------------------------------------------------------------------------
 
@@ -1582,6 +1726,8 @@ export interface Inc {
   flow(selector: string, options: FlowOptions): Flow;
   /** Atoms, bonds, molecules, electron shells, reactions and energy profiles. */
   chemistry(selector: string, options: ChemistryOptions): Chemistry;
+  /** Cells and their organelles, membranes, DNA and flows. */
+  biology(selector: string, options: BiologyOptions): Biology;
   /** A formula of x, t, the parameters by name and its vars, such as inc.formula('A*sin(k*x - w*t)', { vars: { A: amplitude } }). */
   formula(source: string, options?: FormulaOptions): Formula;
   /** Seeded random number in [0, 1). Same seed, same sequence. */

@@ -44,6 +44,7 @@ Incantly turns a concept in a learner's notes into a safe, interactive teaching 
 - [Styling figures](sdk/styling.md): presets, tokens, Tailwind classes per part, layout, size and shown parts, for every figure or one.
 - [Touching the figure](sdk/interaction.md): dragging, tracing, zooming and turning figures with mouse, touch and keyboard.
 - [Chemistry](sdk/chemistry.md): atoms, bonds and molecules from formulas, lone pairs, electron shells, reactions acted out with bond energies, and energy profiles.
+- [Biology](sdk/biology.md): cells and their organelles, diffusion and active transport across a membrane, DNA's double helix, and flows along vessels.
 - [Extending the SDK](sdk/extending.md): how implementation agents promote repeated patterns into reusable capabilities.
 
 ### Delivery

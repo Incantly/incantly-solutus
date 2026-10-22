@@ -1,4 +1,6 @@
 import type {
+  Biology,
+  BiologyOptions,
   Chart,
   ChartOptions,
   Chemistry,
@@ -1673,6 +1675,7 @@ export class SceneRuntime {
       chart: (selector: string, options: ChartOptions) => runtime.kitStage('chart', selector, options) as Chart,
       flow: (selector: string, options: FlowOptions) => runtime.kitStage('flow', selector, options) as Flow,
       chemistry: (selector: string, options: ChemistryOptions) => runtime.kitStage('chemistry', selector, options) as Chemistry,
+      biology: (selector: string, options: BiologyOptions) => runtime.kitStage('biology', selector, options) as Biology,
       formula(source: string, options?: FormulaOptions) {
         try {
           const index = runtime.formulas.length;
