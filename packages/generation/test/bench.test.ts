@@ -40,7 +40,9 @@ describe('the agent bench', () => {
       expect(r.mode).toBe(r.condition === 'library' ? 'adapt' : 'write');
       expect(r.retrieved).toBe(r.condition === 'library' ? r.id.replace(/-\d$/, '') : null);
       expect(r.timings.planMs).toBeGreaterThanOrEqual(3000);
-      expect(r.timings.sceneMs).toBeGreaterThanOrEqual(r.condition === 'library' ? 0 : 9000);
+      // The scene's own time, whether or not a plan ran beside it.
+      expect(r.timings.sceneMs).toBeGreaterThanOrEqual(9000);
+      expect(r.timings.sceneMs).toBeLessThan(10_000);
       // Library builds run beside their plan call: the learner waits for the longer of the two.
       expect(r.timings.totalMs).toBeGreaterThanOrEqual(r.condition === 'library' ? 9000 : 12_000);
       expect(r.timings.totalMs).toBeLessThan(r.condition === 'library' ? 10_000 : 25_000);

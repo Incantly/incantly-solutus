@@ -260,7 +260,9 @@ export class Generator {
 
   /** Checks a library reply: its edits over the reviewed scene, and any plan it brings. */
   private async finishLibrary(state: GenerationState, scene: ReferenceScene, reply: string, started: number, hooks: GenerationHooks, signal?: AbortSignal): Promise<void> {
-    state.timings.sceneMs = this.now() - started;
+    // The build's own time: it often ends before the plan call that confirms it, which the learner waits for too.
+    const build = [...state.calls].reverse().find((c) => c.purpose === 'scene' && !c.error);
+    state.timings.sceneMs = build ? build.ms : this.now() - started;
     // A plan in the reply replaces the reviewed one, when the request needed other names or steps.
     const json = /```json\s*\n[\s\S]*?\n\s*```/i.exec(reply);
     const problems: string[] = [];
