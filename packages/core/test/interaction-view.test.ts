@@ -676,5 +676,10 @@ describe('equations in the drawing (DG-5)', () => {
     expect(markup).toContain('F = Gm₁m₂/r²</text>');
     expect(markup).not.toContain('data-text');
     expect(markup).not.toContain('class=');
+    // The equation's box carries its look in one style attribute, written into the text, not set on an element.
+    const box = /<div[^>]*>/.exec(markup)![0];
+    expect(box.match(/ style="/g)).toHaveLength(1);
+    expect(box).toContain('display:flex');
+    expect(markup).not.toContain('data-inc-style');
   });
 });

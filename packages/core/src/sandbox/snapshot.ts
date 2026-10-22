@@ -61,11 +61,30 @@ function equationText(source: Element, box: CSSStyleDeclaration): SVGTextElement
  * equation keeps its MathML with a line of text in its place for programs
  * that cannot draw it, or with `flat`, becomes that text alone.
  */
-function painted(svg: SVGSVGElement, flat = false): { readonly clone: SVGSVGElement; readonly width: number; readonly height: number } {
+interface Painted {
+  readonly clone: SVGSVGElement;
+  readonly width: number;
+  readonly height: number;
+  /** Styles for elements marked data-inc-style, written into the markup as it is serialized. */
+  readonly styles: string[];
+}
+
+/**
+ * The copy as markup. Styles are written into the text, never set on an
+ * element: the frame's policy refuses style attributes, and a copy does not
+ * need the browser to apply them, only to carry them.
+ */
+function serialize({ clone, styles }: Painted): string {
+  const escape = (text: string) => text.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  return new XMLSerializer().serializeToString(clone).replace(/data-inc-style="(\d+)"/g, (_, i: string) => `style="${escape(styles[Number(i)] ?? '')}"`);
+}
+
+function painted(svg: SVGSVGElement, flat = false): Painted {
   const rect = svg.getBoundingClientRect();
   const width = Math.max(1, Math.round(rect.width));
   const height = Math.max(1, Math.round(rect.height));
   const clone = svg.cloneNode(true) as SVGSVGElement;
+  const written: string[] = [];
   const source = [svg, ...svg.querySelectorAll('*')];
   const target = [clone, ...clone.querySelectorAll('*')];
   const styles = new Map<Element, CSSStyleDeclaration>();
@@ -91,10 +110,11 @@ function painted(svg: SVGSVGElement, flat = false): { readonly clone: SVGSVGElem
     if (math && math !== element) {
       // HTML and MathML take their look from styles: the box gets its own, written in.
       if (element.classList.contains('inc-math')) {
-        copy.setAttribute(
-          'style',
+        written.push(
           `display:flex;align-items:center;justify-content:${style.justifyContent};width:100%;height:100%;line-height:1;white-space:nowrap;color:${style.color};font-family:${style.fontFamily};font-size:${style.fontSize}`,
         );
+        copy.setAttribute('data-inc-style', String(written.length - 1));
+        copy.removeAttribute('style');
         copy.removeAttribute('class');
       }
       return;
@@ -135,7 +155,7 @@ function painted(svg: SVGSVGElement, flat = false): { readonly clone: SVGSVGElem
   clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
   clone.setAttribute('width', String(width));
   clone.setAttribute('height', String(height));
-  return { clone, width, height };
+  return { clone, width, height, styles: written };
 }
 
 /**
@@ -146,11 +166,13 @@ function painted(svg: SVGSVGElement, flat = false): { readonly clone: SVGSVGElem
 export function exportStage(svg: SVGSVGElement | null): string | null {
   if (!svg) return null;
   try {
-    const { clone } = painted(svg);
+    const picture = painted(svg);
     const background = getComputedStyle(svg.closest('.inc-figure') ?? svg).backgroundColor;
-    if (background && background !== 'rgba(0, 0, 0, 0)' && background !== 'transparent') clone.setAttribute('style', `background: ${background}`);
-    const markup = new XMLSerializer().serializeToString(clone);
-    return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(markup)}`;
+    if (background && background !== 'rgba(0, 0, 0, 0)' && background !== 'transparent') {
+      picture.styles.push(`background: ${background}`);
+      picture.clone.setAttribute('data-inc-style', String(picture.styles.length - 1));
+    }
+    return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(serialize(picture))}`;
   } catch {
     return null;
   }
@@ -170,8 +192,9 @@ export async function snapshotStage(svg: SVGSVGElement | null): Promise<string |
 
 async function drawn(svg: SVGSVGElement, flat: boolean): Promise<string | null> {
   try {
-    const { clone, width, height } = painted(svg, flat);
-    const markup = new XMLSerializer().serializeToString(clone);
+    const picture = painted(svg, flat);
+    const { width, height } = picture;
+    const markup = serialize(picture);
     const url = URL.createObjectURL(new Blob([markup], { type: 'image/svg+xml' }));
     try {
       const image = await new Promise<HTMLImageElement>((resolve, reject) => {
