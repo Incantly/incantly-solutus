@@ -223,7 +223,7 @@ function report(results: readonly BenchResult[], overheadMs: Record<string, numb
     '',
     '## Stages (p50 / p90 / max / mean, seconds)',
     '',
-    "Each stage is its model calls' own time. A library build starts from the reviewed scene the request names and runs beside the plan call, so its time overlaps the plan's: the learner waits for the longer of the two.",
+    "Scene and repair stages are their model calls' own time; the plan stage is the time to the plan, or beside a library build the time to its verdict. A library build starts from the reviewed scene the request names and runs beside the plan call, which confirms it from its first words and is stopped once the build is in: the learner waits for the longer of the verdict and the build.",
     '',
     '| Condition | Plan | Scene, library build | Scene, adapted after the plan | Scene, written whole | Repair | Local checks |',
     '| --- | --- | --- | --- | --- | --- | --- |',
@@ -232,7 +232,7 @@ function report(results: readonly BenchResult[], overheadMs: Record<string, numb
     const rows = done.filter((r) => r.condition === condition);
     const scene = (keep: (r: BenchResult) => boolean) => rows.filter(keep).map((r) => callMs(r, 'scene'));
     lines.push(
-      `| ${condition} | ${stats(rows.map((r) => callMs(r, 'plan')))} | ${stats(scene((r) => r.retrieved !== null))} | ${stats(scene((r) => r.mode === 'adapt' && r.retrieved === null))} | ${stats(scene((r) => r.mode === 'write'))} | ${stats(rows.filter((r) => r.repairs > 0).map((r) => callMs(r, 'repair')))} | ${stats(rows.map((r) => r.timings.checkMs))} |`,
+      `| ${condition} | ${stats(rows.map((r) => r.timings.planMs))} | ${stats(scene((r) => r.retrieved !== null))} | ${stats(scene((r) => r.mode === 'adapt' && r.retrieved === null))} | ${stats(scene((r) => r.mode === 'write'))} | ${stats(rows.filter((r) => r.repairs > 0).map((r) => callMs(r, 'repair')))} | ${stats(rows.map((r) => r.timings.checkMs))} |`,
     );
   }
   lines.push('', '## By path', '', '| Condition | Path | Generations | Approved | Total p50 / p90 / max / mean (s) |', '| --- | --- | --- | --- | --- |');
@@ -286,7 +286,7 @@ function report(results: readonly BenchResult[], overheadMs: Record<string, numb
     const result = r.passed ? (r.firstAttempt ? 'first attempt' : 'repaired') : `failed${r.deadlineSkipped ? ' (repair skipped for time)' : ''}`;
     const path = r.retrieved !== null ? 'library' : (r.mode ?? '–');
     lines.push(
-      `| ${r.id} | ${r.condition} | ${path} | ${r.example ?? '–'} | ${seconds(callMs(r, 'plan'))} | ${seconds(callMs(r, 'scene'))} | ${r.repairs > 0 ? seconds(callMs(r, 'repair')) : '–'} | ${seconds(r.timings.totalMs)} | ${result} | ${r.failures.join(', ') || '–'} |`,
+      `| ${r.id} | ${r.condition} | ${path} | ${r.example ?? '–'} | ${seconds(r.timings.planMs)} | ${seconds(callMs(r, 'scene'))} | ${r.repairs > 0 ? seconds(callMs(r, 'repair')) : '–'} | ${seconds(r.timings.totalMs)} | ${result} | ${r.failures.join(', ') || '–'} |`,
     );
   }
   const failed = done.filter((r) => !r.passed);

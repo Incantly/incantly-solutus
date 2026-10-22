@@ -79,11 +79,17 @@ const CHARS_PER_TOKEN = 3.5;
 /**
  * Time as the learner would see it: this process's own work, plus each
  * recorded call, which ends its measured time after it started. Calls that
- * run side by side end together at the later of their ends.
+ * run side by side wait on the clock, which moves on to the earliest of
+ * their times once the pipeline has nothing else to do, so they end in the
+ * order of their times, and the pipeline can act on one, stopping another,
+ * before the later one would have ended.
  */
 class BenchClock {
   private readonly started = performance.now();
   private modelMs = 0;
+  private readonly timers: Array<{ readonly at: number; readonly order: number; readonly fire: () => void }> = [];
+  private order = 0;
+  private pumping = false;
 
   now(): number {
     return this.modelMs + (performance.now() - this.started);
@@ -94,7 +100,47 @@ class BenchClock {
     const now = this.now();
     if (at > now) this.modelMs += at - now;
   }
+
+  /** Resolves true at `at`, after everything due earlier; or false at once when `signal` aborts first. */
+  until(at: number, signal?: AbortSignal): Promise<boolean> {
+    if (signal?.aborted) return Promise.resolve(false);
+    return new Promise((resolve) => {
+      const timer = {
+        at,
+        order: this.order++,
+        fire: () => {
+          signal?.removeEventListener('abort', abort);
+          this.reach(at);
+          resolve(true);
+        },
+      };
+      const abort = () => {
+        const i = this.timers.indexOf(timer);
+        if (i >= 0) this.timers.splice(i, 1);
+        resolve(false);
+      };
+      signal?.addEventListener('abort', abort, { once: true });
+      this.timers.push(timer);
+      this.pump();
+    });
+  }
+
+  /** Fires the earliest timer once the pipeline is idle: every promise it was running has settled. */
+  private pump(): void {
+    if (this.pumping) return;
+    this.pumping = true;
+    setImmediate(() => {
+      this.pumping = false;
+      if (this.timers.length === 0) return;
+      this.timers.sort((a, b) => a.at - b.at || a.order - b.order);
+      this.timers.shift()!.fire();
+      if (this.timers.length > 0) this.pump();
+    });
+  }
 }
+
+/** Pieces a recorded reply streams in: enough for the pipeline to act on its first words. */
+const STREAM_PIECES = 8;
 
 
 /** Answers from recorded replies; a call without one is recorded as pending and ends the generation. */
@@ -109,6 +155,7 @@ class ReplayModel implements ModelClient {
     private readonly pending: PendingCall[],
     private readonly clock: BenchClock,
     private readonly remaining: () => number,
+    private readonly firstTokenMs: Readonly<Record<string, number>>,
   ) {}
 
   modelFor(purpose: CallPurpose): string {
@@ -125,21 +172,32 @@ class ReplayModel implements ModelClient {
       this.pending.push({ key, purpose: call.purpose, prompt: promptText(call.prompt) });
       throw new Error(`pending reply ${key}`);
     }
+    const stopped = () => new ModelError('aborted', 'The call was stopped');
     // The real call is cut off at the deadline: a reply that took longer never arrived.
     const remaining = this.remaining();
     if (reply.ms > remaining) {
-      this.clock.reach(start + Math.max(0, remaining));
+      if (!(await this.clock.until(start + Math.max(0, remaining), call.signal))) throw stopped();
       throw new ModelError('timeout', `The ${call.purpose} call would have run past the deadline (${Math.round(reply.ms)} ms with ${Math.round(remaining)} ms left)`);
     }
-    // The pipeline stops a call it no longer needs: the call ends there.
-    if (call.signal?.aborted) throw new ModelError('aborted', 'The call was stopped');
-    this.clock.reach(start + reply.ms);
     // The real call stops at its token limit: a longer reply arrives cut off.
     const limit = Math.floor(call.maxTokens * CHARS_PER_TOKEN);
     const cut = reply.text.length > limit;
     const text = cut ? reply.text.slice(0, limit) : reply.text;
-    // The pipeline reads a whole scene as it streams in.
-    call.onText?.(text);
+    if (call.onText) {
+      // The text streams in from the first token to the end of the reply, at an even pace: the pipeline reads
+      // a scene as it comes and confirms a library build from a plan's first words.
+      const first = Math.min(reply.ms, this.firstTokenMs[reply.model ?? ''] ?? 0);
+      let sent = 0;
+      for (let piece = 1; piece <= STREAM_PIECES; piece++) {
+        // A call the pipeline stops ends there.
+        if (!(await this.clock.until(start + first + ((reply.ms - first) * piece) / STREAM_PIECES, call.signal))) throw stopped();
+        const upTo = Math.round((text.length * piece) / STREAM_PIECES);
+        call.onText(text.slice(sent, upTo));
+        sent = upTo;
+      }
+    } else if (!(await this.clock.until(start + reply.ms, call.signal))) {
+      throw stopped();
+    }
     return {
       text,
       model: reply.model ?? this.modelFor(call.purpose),
@@ -229,7 +287,15 @@ export async function benchRound(
       let generator: Generator | null = null;
       let state: GenerationState | null = null;
       // A call is cut off when the deadline, less the time to deliver a fallback, passes: as in the service.
-      const model = new ReplayModel(request.id, condition, byKey, pending, clock, () => (generator && state ? generator.remainingMs(state) - DELIVERY_MS : Infinity));
+      const model = new ReplayModel(
+        request.id,
+        condition,
+        byKey,
+        pending,
+        clock,
+        () => (generator && state ? generator.remainingMs(state) - DELIVERY_MS : Infinity),
+        options.firstTokenMs ?? {},
+      );
       generator = new Generator({
         model,
         probe: isolatedProbe,

@@ -64,6 +64,20 @@ describe('the agent bench', () => {
     expect(replyMs({ ...thought, thinkMs: undefined }, 'text', { 'claude-sonnet-5-5': 1500 })).toBe(9000);
   });
 
+  it('lets a library build end before its plan: the plan confirms from its first words and is stopped', async () => {
+    const { results } = await run((call) => (call.purpose === 'plan' ? 9000 : 3000));
+    const library = results.filter((r) => r.condition === 'library');
+    expect(library).toHaveLength(2);
+    for (const r of library) {
+      expect(r.passed, `${r.id}: ${r.failureReason}`).toBe(true);
+      // The learner waits for the build, not for the plan's last words.
+      expect(r.timings.totalMs).toBeGreaterThanOrEqual(3000);
+      expect(r.timings.totalMs).toBeLessThan(4000);
+      expect(r.timings.planMs).toBeLessThan(3000);
+      expect(r.calls.find((c) => c.purpose === 'plan')?.error).toMatch(/^aborted/);
+    }
+  });
+
   it('cuts a call off at the deadline, as the service would', async () => {
     const { results } = await run((call) => (call.purpose === 'plan' ? 4000 : 24_000));
     for (const r of results) {
