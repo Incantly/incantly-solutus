@@ -86,6 +86,26 @@ interface MathState {
 
 const round = (n: number): string => String(Math.round(n * 100) / 100);
 
+/**
+ * Where a layer goes to lie exactly over the drawing: the drawing's box in
+ * the host's own CSS pixels, from inside the host's border (absolute
+ * positions start there), and undoing any transform the host is under, which
+ * the screen rectangles include. `screen` is the box as the screen shows it.
+ */
+function placeOver(stage: StageDom): { left: number; top: number; width: number; height: number; screen: DOMRect } {
+  const screen = stage.svg.getBoundingClientRect();
+  const host = stage.host.getBoundingClientRect();
+  const sx = stage.host.offsetWidth > 0 && host.width > 0 ? host.width / stage.host.offsetWidth : 1;
+  const sy = stage.host.offsetHeight > 0 && host.height > 0 ? host.height / stage.host.offsetHeight : 1;
+  return {
+    left: (screen.left - host.left) / sx - stage.host.clientLeft,
+    top: (screen.top - host.top) / sy - stage.host.clientTop,
+    width: screen.width / sx,
+    height: screen.height / sy,
+    screen,
+  };
+}
+
 interface DotsState {
   readonly stage: number;
   readonly layer: 'back' | 'front';
@@ -557,13 +577,12 @@ export class SceneDom {
   private fitBackdrop(stage: StageDom): void {
     const backdrop = stage.backdrop;
     if (!backdrop) return;
-    const rect = stage.svg.getBoundingClientRect();
-    const host = stage.host.getBoundingClientRect();
+    const place = placeOver(stage);
     const box: ReadonlyArray<readonly [string, string]> = [
-      ['left', `${rect.left - host.left}px`],
-      ['top', `${rect.top - host.top}px`],
-      ['width', `${rect.width}px`],
-      ['height', `${rect.height}px`],
+      ['left', `${place.left}px`],
+      ['top', `${place.top}px`],
+      ['width', `${place.width}px`],
+      ['height', `${place.height}px`],
     ];
     for (const [name, value] of box) if (backdrop.style.getPropertyValue(name) !== value) backdrop.style.setProperty(name, value);
     const viewBox = stage.svg.getAttribute('viewBox') ?? stage.viewBox.join(' ');
@@ -582,17 +601,17 @@ export class SceneDom {
    * zooming changes) with its letterboxing.
    */
   private fitCanvas(stage: StageDom, canvas: HTMLCanvasElement) {
-    const rect = stage.svg.getBoundingClientRect();
+    const place = placeOver(stage);
     const ratio = stage.host.ownerDocument.defaultView?.devicePixelRatio ?? 1;
-    const width = Math.max(1, Math.round(rect.width * ratio));
-    const height = Math.max(1, Math.round(rect.height * ratio));
+    // As many pixels as the drawing covers on the screen, whatever transform it is under.
+    const width = Math.max(1, Math.round(place.screen.width * ratio));
+    const height = Math.max(1, Math.round(place.screen.height * ratio));
     if (canvas.width !== width) canvas.width = width;
     if (canvas.height !== height) canvas.height = height;
-    const host = stage.host.getBoundingClientRect();
-    canvas.style.width = `${rect.width}px`;
-    canvas.style.height = `${rect.height}px`;
-    canvas.style.left = `${rect.left - host.left}px`;
-    canvas.style.top = `${rect.top - host.top}px`;
+    canvas.style.width = `${place.width}px`;
+    canvas.style.height = `${place.height}px`;
+    canvas.style.left = `${place.left}px`;
+    canvas.style.top = `${place.top}px`;
     const viewBox = stage.svg.getAttribute('viewBox') ?? stage.viewBox.join(' ');
     const [vx = 0, vy = 0, vw = 1, vh = 1] = viewBox.split(/[\s,]+/).map(Number);
     const scale = Math.min(width / vw, height / vh);

@@ -434,6 +434,30 @@ test.describe('sandbox (Phase 3 gate)', () => {
     expect(distance(band!, tone.band)).toBeLessThan(distance(band!, tone.behind));
   });
 
+  test('the layers of a stack stay over the drawing in a stage with a border and padding of its own (FX-1, BR-12)', async ({ page }) => {
+    await open(page, 'page=sandbox&fixture=layers-framed&autoplay=0');
+    const frame = page.frameLocator('iframe');
+    await expect(frame.locator('svg.inc-backdrop rect')).toHaveCount(1);
+    const boxes = await frame.locator('svg.inc-stage').evaluate((svg) => {
+      const box = (el: Element) => {
+        const r = el.getBoundingClientRect();
+        return [r.left, r.top, r.width, r.height].map((v) => Math.round(v * 10) / 10);
+      };
+      const host = svg.parentElement!;
+      return {
+        drawing: box(svg),
+        backdrop: box(host.querySelector('svg.inc-backdrop')!),
+        canvas: box(host.querySelector('canvas.inc-dots--back')!),
+        // The band on the back layer, and the outline drawn over it in the drawing, at the same coordinates.
+        band: box(host.querySelector('svg.inc-backdrop rect')!),
+        outline: box(svg.querySelector('[data-layer="mid"] rect')!),
+      };
+    });
+    expect(boxes.backdrop).toEqual(boxes.drawing);
+    expect(boxes.canvas).toEqual(boxes.drawing);
+    for (let i = 0; i < 4; i++) expect(Math.abs(boxes.band[i]! - boxes.outline[i]!), `band against outline, ${i}`).toBeLessThanOrEqual(1);
+  });
+
   test('an equation draws as maths in the frame, and keeps it in the exported picture and the snapshot (DG-5)', async ({ page }, testInfo) => {
     await open(page, 'page=sandbox&scene=pendulum&autoplay=0');
     const frame = page.frameLocator('iframe');

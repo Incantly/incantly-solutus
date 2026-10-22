@@ -33,6 +33,20 @@ export const SCENE_FIXTURES: Readonly<Record<string, FixtureScene>> = {
       "inc.describe(() => 'Three dots over a band; a disc covers the middle one, and a small dot sits on the disc.');",
     ].join('\n'),
   },
+  /** The same stack in a stage with a border and padding of its own, and an outline in the drawing over the band. */
+  'layers-framed': {
+    html: STAGE,
+    css: '#stage { border: 6px solid var(--inc-line); padding: 4px; }',
+    js: [
+      "inc.idea('Dots lie over a band, under a disc, and over it.');",
+      "const stage = inc.svg('#stage', { viewBox: [0, 0, 200, 100], title: 'Layers' });",
+      "stage.rect(0, 30, 200, 40, { tone: 'a', layer: 'back' });",
+      "stage.dots({ tone: 'c', r: 6, layer: 'back' }).set([[40, 50], [100, 50], [160, 50]]);",
+      "stage.circle(100, 50, 14, { tone: 'b' });",
+      "stage.rect(0, 30, 200, 40, { tone: 'hi', fill: false });",
+      "inc.describe(() => 'Three dots over a band, framed; a disc covers the middle one.');",
+    ].join('\n'),
+  },
   /** Throws on line 7, column 30 once time passes half a second. */
   'throws-later': {
     html: STAGE,
