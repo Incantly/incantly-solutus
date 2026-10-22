@@ -13,6 +13,24 @@ function errorOf(source: string, variables: string[] = []): ExpressionError {
   return result.error;
 }
 
+describe('the built-ins the PRD names (FM-5)', () => {
+  const at = (source: string, x: number) => compileExpression(source, ['x']).evaluate({ x });
+  it('evaluates log, ln, sign and step, with the rest of the list', () => {
+    // log is the natural logarithm, as ln is; log10 and log2 name their bases.
+    expect(at('log(x)', Math.E)).toBeCloseTo(1, 12);
+    expect(at('ln(x)', Math.E ** 2)).toBeCloseTo(2, 12);
+    expect(at('log10(x)', 1000)).toBeCloseTo(3, 12);
+    expect(at('log2(x)', 8)).toBeCloseTo(3, 12);
+    expect([at('sign(x)', -3), at('sign(x)', 0), at('sign(x)', 2.5)]).toEqual([-1, 0, 1]);
+    expect([at('step(x)', -0.1), at('step(x)', 0), at('step(x)', 4)]).toEqual([0, 1, 1]);
+    // A piecewise function from step: |x| written without abs.
+    expect(at('x*(2*step(x) - 1)', -2)).toBe(2);
+    expect(at('abs(x) + floor(x) + min(x, 1) + max(x, 0)', -1.5)).toBeCloseTo(1.5 - 2 - 1.5 + 0, 12);
+    expect(at('exp(x) + sin(x) + cos(x) + tan(x)', 0)).toBeCloseTo(2, 12);
+    expect(Number.isNaN(at('log(x)', -1))).toBe(true);
+  });
+});
+
 describe('expression parser', () => {
   it.each([
     ['2+3*4', 14],
