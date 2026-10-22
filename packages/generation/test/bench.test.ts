@@ -1,6 +1,6 @@
 import { REFERENCE_SCENES } from '@incantly/core/scenes';
 import { describe, expect, it } from 'vitest';
-import { benchRound, callKey, type BenchReply, type PendingCall } from '../src/bench';
+import { benchRound, callKey, replyMs, type BenchReply, type PendingCall } from '../src/bench';
 import { LAUNCH_REQUESTS } from '../src/launch';
 
 const requests = LAUNCH_REQUESTS.filter((r) => r.id === 'projectile-1' || r.id === 'ohm-1');
@@ -49,6 +49,19 @@ describe('the agent bench', () => {
     }
     // Withheld, the concept's own scene is not the example.
     expect(results.find((r) => r.condition === 'novel' && r.id === 'ohm-1')!.example).not.toBe('ohm');
+  });
+
+  it('counts a reply that began by thinking from a first token, as the service calls models with thinking off', () => {
+    const thought: BenchReply = { key: 'k', text: 'x', ms: 9000, thinkMs: 6000, model: 'claude-sonnet-5-5' };
+    expect(replyMs(thought, 'raw')).toBe(9000);
+    // Without a measured first token, only the time to write the reply.
+    expect(replyMs(thought, 'text')).toBe(3000);
+    // With one, that time and the writing.
+    expect(replyMs(thought, 'text', { 'claude-sonnet-5-5': 1500 })).toBe(4500);
+    // Never more than the reply took.
+    expect(replyMs({ ...thought, thinkMs: 500 }, 'text', { 'claude-sonnet-5-5': 1500 })).toBe(9000);
+    // A reply that did not think counts as it was measured.
+    expect(replyMs({ ...thought, thinkMs: undefined }, 'text', { 'claude-sonnet-5-5': 1500 })).toBe(9000);
   });
 
   it('cuts a call off at the deadline, as the service would', async () => {

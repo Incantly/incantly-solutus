@@ -57,8 +57,19 @@ function replies(): BenchReply[] {
   return existsSync(path('replies.json')) ? readJson<BenchReply[]>(path('replies.json')) : [];
 }
 
+/** Each model's median time to a one-word reply through a subagent: its time to a first token, with the subagent's own cost. */
+function calibrated(): Record<string, number> {
+  const calibration = existsSync(path('calibration.json')) ? readJson<BenchReply[]>(path('calibration.json')) : [];
+  const medians: Record<string, number> = {};
+  for (const model of new Set(calibration.map((c) => c.model ?? ''))) {
+    if (model) medians[model] = spread(calibration.filter((c) => c.model === model).map((c) => c.ms)).p50 ?? 0;
+  }
+  return medians;
+}
+
 const latency = (values.latency === 'raw' ? 'raw' : 'text') as BenchLatency;
-const options = { latency, ...(values.deadline !== undefined ? { deadlineMs: Number(values.deadline) } : {}) };
+const overhead = calibrated();
+const options = { latency, firstTokenMs: overhead, ...(values.deadline !== undefined ? { deadlineMs: Number(values.deadline) } : {}) };
 
 /** A workflow script that sends each prompt to a subagent and returns only counts. */
 function workflowScript(name: string, description: string, calls: ReadonlyArray<{ readonly label: string; readonly prompt: string; readonly model: string; readonly phase: string }>): string {
@@ -162,6 +173,11 @@ function stats(values: readonly number[]): string {
   return s.count === 0 ? '–' : `${seconds(s.p50)} / ${seconds(s.p90)} / ${seconds(s.max)} / ${seconds(s.mean)}`;
 }
 
+/** A generation's time in calls for one purpose, leaving out a library build its plan stopped (it ran beside the plan). */
+function callMs(r: BenchResult, purpose: BenchResult['calls'][number]['purpose']): number {
+  return r.calls.filter((c) => c.purpose === purpose && !c.error?.startsWith('aborted')).reduce((sum, c) => sum + c.ms, 0);
+}
+
 /**
  * The subagent overhead in one generation's time: each call's, except that a
  * library build and the plan call beside it ran side by side, so the learner
@@ -184,7 +200,7 @@ function report(results: readonly BenchResult[], overheadMs: Record<string, numb
     `${done.length} generations: ${requests().length} requests (${values.set === 'all' ? 'the launch set of PRD 17.8 and the concepts reviewed since' : 'the launch set of PRD 17.8'}) in ${conditions.length} condition${conditions.length > 1 ? 's' : ''}. Plans on ${values.plan}, scenes and repairs on ${values.scene}, effort ${values.effort}, each call one subagent.`,
     "Times are what a learner waits for, on the pipeline's own clock: each model call's time plus this machine's validation and probe. Calls are cut off at the deadline as the service would cut them.",
     latency === 'text'
-      ? 'Subagents think before some replies; the service calls models with thinking off, so each call counts from its start to the end of its reply less the time spent thinking. The last section gives the times as measured, thinking included.'
+      ? `Subagents think before some replies; the service calls models with thinking off. A reply that began by thinking counts its model's time to a first token${Object.keys(overheadMs).length > 0 ? ' (the one-word replies of the calibration, below)' : ''}, then the time from the end of its thinking to the end of the reply; the others count as measured. The last section gives the times as measured, thinking included.`
       : 'Each call counts its whole measured time, thinking included.',
     '',
   );
@@ -201,16 +217,16 @@ function report(results: readonly BenchResult[], overheadMs: Record<string, numb
     '',
     '## Stages (p50 / p90 / max / mean, seconds)',
     '',
-    'A library build starts from the reviewed scene the request names and runs beside the plan call, so its time overlaps the plan\'s.',
+    "Each stage is its model calls' own time. A library build starts from the reviewed scene the request names and runs beside the plan call, so its time overlaps the plan's: the learner waits for the longer of the two.",
     '',
     '| Condition | Plan | Scene, library build | Scene, adapted after the plan | Scene, written whole | Repair | Local checks |',
     '| --- | --- | --- | --- | --- | --- | --- |',
   );
   for (const condition of conditions) {
     const rows = done.filter((r) => r.condition === condition);
-    const scene = (keep: (r: BenchResult) => boolean) => rows.filter(keep).map((r) => r.timings.sceneMs);
+    const scene = (keep: (r: BenchResult) => boolean) => rows.filter(keep).map((r) => callMs(r, 'scene'));
     lines.push(
-      `| ${condition} | ${stats(rows.map((r) => r.timings.planMs))} | ${stats(scene((r) => r.retrieved !== null))} | ${stats(scene((r) => r.mode === 'adapt' && r.retrieved === null))} | ${stats(scene((r) => r.mode === 'write'))} | ${stats(rows.filter((r) => r.repairs > 0).map((r) => r.timings.repairMs))} | ${stats(rows.map((r) => r.timings.checkMs))} |`,
+      `| ${condition} | ${stats(rows.map((r) => callMs(r, 'plan')))} | ${stats(scene((r) => r.retrieved !== null))} | ${stats(scene((r) => r.mode === 'adapt' && r.retrieved === null))} | ${stats(scene((r) => r.mode === 'write'))} | ${stats(rows.filter((r) => r.repairs > 0).map((r) => callMs(r, 'repair')))} | ${stats(rows.map((r) => r.timings.checkMs))} |`,
     );
   }
   lines.push('', '## By path', '', '| Condition | Path | Generations | Approved | Total p50 / p90 / max / mean (s) |', '| --- | --- | --- | --- | --- |');
@@ -248,9 +264,9 @@ function report(results: readonly BenchResult[], overheadMs: Record<string, numb
       '',
       ...Object.entries(overheadMs).map(([model, ms]) => `- ${model}: ${seconds(ms)} s per call (median)`),
       '',
-      `Subtracting it from every call (${Object.keys(overheadMs).length} models), once for a library build and the plan call beside it, the totals above become an estimate of the API path:`,
+      `Subtracting it from every call (${Object.keys(overheadMs).length} models), once for a library build and the plan call beside it, gives a lower bound for the API path: a one-word reply's time also holds the API's own time to a first token, which an API call pays too. The measured totals above are the upper bound.`,
       '',
-      '| Condition | Estimated total p50 / p90 / max / mean (s) | Within 25 s |',
+      '| Condition | API path, lower bound: total p50 / p90 / max / mean (s) | Within 25 s |',
       '| --- | --- | --- |',
     );
     for (const condition of conditions) {
@@ -264,7 +280,7 @@ function report(results: readonly BenchResult[], overheadMs: Record<string, numb
     const result = r.passed ? (r.firstAttempt ? 'first attempt' : 'repaired') : `failed${r.deadlineSkipped ? ' (repair skipped for time)' : ''}`;
     const path = r.retrieved !== null ? 'library' : (r.mode ?? '–');
     lines.push(
-      `| ${r.id} | ${r.condition} | ${path} | ${r.example ?? '–'} | ${seconds(r.timings.planMs)} | ${seconds(r.timings.sceneMs)} | ${r.repairs > 0 ? seconds(r.timings.repairMs) : '–'} | ${seconds(r.timings.totalMs)} | ${result} | ${r.failures.join(', ') || '–'} |`,
+      `| ${r.id} | ${r.condition} | ${path} | ${r.example ?? '–'} | ${seconds(callMs(r, 'plan'))} | ${seconds(callMs(r, 'scene'))} | ${r.repairs > 0 ? seconds(callMs(r, 'repair')) : '–'} | ${seconds(r.timings.totalMs)} | ${result} | ${r.failures.join(', ') || '–'} |`,
     );
   }
   const failed = done.filter((r) => !r.passed);
@@ -329,12 +345,6 @@ switch (command) {
   }
   case 'report': {
     const round = await benchRound(requests(), conditions, replies(), options);
-    const calibration = existsSync(path('calibration.json')) ? readJson<BenchReply[]>(path('calibration.json')) : [];
-    const overhead: Record<string, number> = {};
-    for (const model of new Set(calibration.map((c) => c.model ?? ''))) {
-      if (!model) continue;
-      overhead[model] = spread(calibration.filter((c) => c.model === model).map((c) => c.ms)).p50 ?? 0;
-    }
     const raw = latency === 'text' ? (await benchRound(requests(), conditions, replies(), { ...options, latency: 'raw' })).results : round.results;
     write('results.json', round.results);
     write('report.md', report(round.results, overhead, raw));

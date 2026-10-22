@@ -190,15 +190,36 @@ export interface BenchRound {
  */
 export type BenchLatency = 'raw' | 'text';
 
+export interface BenchOptions {
+  readonly deadlineMs?: number;
+  readonly latency?: BenchLatency;
+  /**
+   * Each model's time to a first token, by model name: in text latency it
+   * stands in for the start of a reply that began by thinking, whose thinking
+   * is taken out. Without it, such a reply counts only the time to write it.
+   */
+  readonly firstTokenMs?: Readonly<Record<string, number>>;
+}
+
+/**
+ * The time a reply counts for. In text latency, a reply that began by
+ * thinking counts its model's time to a first token, then the time from the
+ * end of its thinking to the end of its reply; never more than it took.
+ */
+export function replyMs(reply: BenchReply, latency: BenchLatency, firstTokenMs: Readonly<Record<string, number>> = {}): number {
+  if (latency === 'raw' || !reply.thinkMs) return reply.ms;
+  return Math.min(reply.ms, reply.ms - reply.thinkMs + (firstTokenMs[reply.model ?? ''] ?? 0));
+}
+
 /** Runs every request in every condition with the replies so far. */
 export async function benchRound(
   requests: readonly BenchRequest[],
   conditions: readonly BenchCondition[],
   replies: readonly BenchReply[],
-  options: { readonly deadlineMs?: number; readonly latency?: BenchLatency } = {},
+  options: BenchOptions = {},
 ): Promise<BenchRound> {
   const latency = options.latency ?? 'raw';
-  const byKey = new Map(replies.map((r) => [r.key, latency === 'text' && r.thinkMs ? { ...r, ms: r.ms - r.thinkMs } : r] as const));
+  const byKey = new Map(replies.map((r) => [r.key, { ...r, ms: replyMs(r, latency, options.firstTokenMs) }] as const));
   const pending: PendingCall[] = [];
   const results: BenchResult[] = [];
   for (const condition of conditions) {
