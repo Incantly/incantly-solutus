@@ -3,7 +3,7 @@ import { REFERENCE_SCENES } from '@incantly/core/scenes';
 import { loadEvalPrompts, type EvalConcept, type EvalPromptSet } from './eval-prompts';
 import { costOf, type ModelClient, type ModelUsage, NO_USAGE, addUsage } from './models';
 import { Generator, type GenerationState } from './pipeline';
-import { isolatedProbe, probeSpecFor, type SceneProber } from './probe';
+import { isolatedOffline, isolatedProbe, probeSpecFor, type OfflineChecker, type SceneProber } from './probe';
 import { failureRecord, type FailureRecord } from './records';
 
 /**
@@ -24,6 +24,8 @@ export interface EvalOptions {
   readonly conditions?: readonly Condition[];
   readonly concepts?: readonly string[];
   readonly probe?: SceneProber;
+  /** The offline checks run on each approved figure (CH-2); null skips them. */
+  readonly offline?: OfflineChecker | null;
   readonly concurrency?: number;
   readonly maxRepairs?: number;
   readonly onTrial?: (trial: TrialResult, done: number, total: number) => void;
@@ -44,6 +46,8 @@ export interface TrialResult {
   readonly expectations: readonly string[];
   /** An approved scene that fails an independent re-check: must never happen. */
   readonly broken: boolean;
+  /** What the offline checks found in an approved figure: 3D overlaps drawn in the wrong order, and line ends in mid-air. Null when not checked. */
+  readonly offline: { readonly depth: number; readonly looseEnds: number } | null;
   readonly ms: number;
   readonly firstFragmentMs: number | null;
   readonly repairMs: number;
@@ -101,6 +105,8 @@ export interface EvalSummary {
   readonly byCondition: Readonly<Record<string, GroupSummary>>;
   readonly expectations: Rate;
   readonly brokenShown: number;
+  /** Approved figures the offline checks ran on, and how many drew 3D overlaps out of order or left a line end in mid-air (CH-2). */
+  readonly offline: { readonly checked: number; readonly depth: number; readonly looseEnds: number };
   /** Failures of the final candidate, by where they failed. */
   readonly failures: Readonly<Record<string, number>>;
   readonly latencyMs: Latency;
@@ -171,6 +177,16 @@ export function planTrials(prompts: EvalPromptSet, options: { trialsPerConcept: 
 }
 
 /** An approved scene, checked again from scratch: the invariant that no broken figure is shown. */
+/** The offline checks on an approved figure, by count; null when there is none to check. */
+async function offlineFindings(state: GenerationState, check: OfflineChecker | null): Promise<TrialResult['offline']> {
+  if (!check || state.status !== 'approved' || !state.plan || !state.current) return null;
+  const { html, css, js } = state.current.fragments;
+  const validation = validateScene({ html: html ?? '', css: css ?? '', js: js ?? '' });
+  if (!validation.scene) return null;
+  const report = await check(validation.scene, state.plan);
+  return { depth: report.violations.length, looseEnds: report.looseEnds.length };
+}
+
 async function brokenWhenShown(state: GenerationState, probe: SceneProber): Promise<boolean> {
   if (state.status !== 'approved' || !state.scene || !state.plan) return false;
   const { html, css, js } = state.current!.fragments;
@@ -183,6 +199,7 @@ async function brokenWhenShown(state: GenerationState, probe: SceneProber): Prom
 export async function runEvals(options: EvalOptions): Promise<{ readonly trials: readonly TrialResult[]; readonly summary: EvalSummary }> {
   const prompts = options.prompts ?? loadEvalPrompts();
   const probe = options.probe ?? isolatedProbe;
+  const offline = options.offline === undefined ? isolatedOffline : options.offline;
   const planned = planTrials(prompts, {
     trialsPerConcept: options.trialsPerConcept ?? 100,
     conditions: options.conditions ?? ['with-example', 'example-withheld'],
@@ -203,6 +220,7 @@ export async function runEvals(options: EvalOptions): Promise<{ readonly trials:
     });
     const state = await generator.generate({ prompt });
     const broken = await brokenWhenShown(state, probe);
+    const found = await offlineFindings(state, offline);
     const last = state.current;
     const failure =
       state.status === 'approved'
@@ -222,6 +240,7 @@ export async function runEvals(options: EvalOptions): Promise<{ readonly trials:
       failure,
       expectations: checkExpectations(state.plan, trial.concept, state.current?.fragments.js ?? null),
       broken,
+      offline: found,
       ms: state.timings.totalMs ?? 0,
       firstFragmentMs: state.timings.firstFragmentMs ?? null,
       repairMs: state.timings.repairMs,
@@ -268,6 +287,11 @@ export function summarize(trials: readonly TrialResult[], promptsVersion: number
     byCondition: by((t) => t.condition),
     expectations: wilson(trials.filter((t) => t.expectations.length === 0).length, trials.length),
     brokenShown,
+    offline: {
+      checked: trials.filter((t) => t.offline).length,
+      depth: trials.filter((t) => (t.offline?.depth ?? 0) > 0).length,
+      looseEnds: trials.filter((t) => (t.offline?.looseEnds ?? 0) > 0).length,
+    },
     failures,
     latencyMs: latency(trials.map((t) => t.ms)),
     firstFragmentMs: latency(trials.flatMap((t) => (t.firstFragmentMs === null ? [] : [t.firstFragmentMs]))),
@@ -300,6 +324,7 @@ export function summaryMarkdown(summary: EvalSummary): string {
     `| After one repair | ${rate(summary.postRepair)} | ${summary.gate.postRepair ? 'meets 95%' : 'below 95%'} |`,
     `| Broken figures shown | ${summary.brokenShown} | ${summary.gate.noBrokenFigures ? 'none' : 'FAILS'} |`,
     `| Plan matches the eval set | ${rate(summary.expectations)} | reported |`,
+    `| Offline checks (CH-2) | of ${summary.offline.checked} approved figures, ${summary.offline.depth} drew a 3D overlap out of order and ${summary.offline.looseEnds} left a line end in mid-air | reported |`,
     '',
     '| Group | First attempt | After one repair |',
     '| --- | --- | --- |',

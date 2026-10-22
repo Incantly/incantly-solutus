@@ -91,6 +91,12 @@ for (let i = 0; i <= 16; i++) profile.push([Math.sqrt(i / 4), i / 4]);
 space.lathe(profile, { rotate: [0, 90, 0], tone: 'b', look: 'ghost' });
 ```
 
+## Drawing order
+
+The engine draws what is nearest last. It sorts the pieces it draws by their middles, then mends that order wherever two pieces overlap on the stage: each pair is compared where it overlaps, by the depth of its own geometry there (the plane of a face, the front of a sphere, the point along a line), and the nearer goes on top. Faces of one convex solid are ordered without looking; a face that passes through another, such as a chimney through a roof, is cut into tiles so the parts on either side sort on their own; and a line breaks where it crosses a sphere's outline, so a ring round a planet goes behind it and comes out in front. Pieces that pass through each other can still show a sliver drawn the wrong way where they meet, so models and scenes are built so that pieces meet rather than pass through: the car's wheels stand clear of its body, and the planet's axis stands out of it rather than through it.
+
+Every ready-made model and every reviewed 3D scene is audited offline at 60 turns, all the way round from below, level and above: wherever two pieces overlap, the nearer must be drawn on top ([the offline checks](../architecture/generation-pipeline.md#offline-checks)).
+
 ## Cost
 
-A ready-made model has at most 300 faces, about 50 to 250 drawn elements once the faces turned away are left out and large faces are cut so they sort with their neighbours. A quick figure's budget of 400 elements holds one or two models beside a grid and a few arrows; a standard figure holds more. The library adds about 8 KB to the space3d kit, which only loads for scenes that call it.
+A ready-made model has at most 300 faces, about 50 to 250 drawn elements once the faces turned away are left out and large faces are cut so they sort with their neighbours, and up to a quarter more where faces that pass through each other are cut into tiles. A quick figure's budget of 400 elements holds one or two models beside a grid and a few arrows; a standard figure holds more. Mending the order costs about 0.5 to 3.5 ms a draw for a model on a laptop, more for a scene with many lines round spheres. The library adds about 8 KB to the space3d kit, which only loads for scenes that call it.

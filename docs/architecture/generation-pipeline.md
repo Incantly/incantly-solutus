@@ -61,6 +61,13 @@ An isolated probe instance mounts the scene through the configured execution ada
 
 The probe has a host-enforced deadline. An execution instance that stops responding is destroyed and treated as failed.
 
+## Offline checks
+
+Some checks are too slow for a learner's device, and none should stand in a learner's way, so they run offline (PRD 17.7, CH-2): in CI over every reviewed scene and every ready-made 3D model, and in the evals over every approved figure, where they report without failing anything. `offlineChecks(scene)` in `@incantly/core` runs them on a scene at its defaults.
+
+- **Depth order.** Every 3D stage is turned to 60 camera turns, every 30 degrees all the way round, from below, level and above, and drawn at each. Every pair of pieces that overlaps on the stage is sampled all over the overlap, and at each sample the depth of both is read from its own geometry. A nearer piece drawn underneath is a violation. Pieces that pass through each other, so that each is nearer somewhere, and pieces that lie in a ring, each over the next, have no right order; they are reported with the area drawn wrong, for review, and do not fail.
+- **Line ends.** In a diagram every plain line must end on something: a shape, another line, a dot, a label or the edge of the stage. A wire that stops short of the resistor, or a leader short of its label, is reported with the point and the scene line that drew it. Dashed guides, arrows, curves drawn in many short pieces, symbols of many strokes such as a battery's plates, and lines that something rests on, hangs from or slides along (a floor, a ceiling, a track) are left alone, and so are graphs and 3D stages, which draw their own lines.
+
 ## Repair
 
 v0.1 permits one automatic repair. The repair request contains only:
@@ -136,7 +143,7 @@ Every generation leaves a failure record (`records.ts`), written as daily JSON l
 
 ### Evals
 
-`npm run evals -- --model anthropic --trials 100` runs the versioned prompts (`evals/prompts.json`) through the whole pipeline: 100 trials per concept, once with the reviewed examples and once with each concept's own example withheld, so 600 trials. It needs `ANTHROPIC_API_KEY`. The summary reports first-attempt and post-repair pass rates with 95% Wilson intervals, by concept and by condition, how well plans match the eval set, latency, tokens, prompt-cache hits and cost. Every approved scene is validated and probed again from scratch, and a scene that fails that is counted as a broken figure shown; the gate requires none. `--gate` exits non-zero unless the v0.1 targets are met.
+`npm run evals -- --model anthropic --trials 100` runs the versioned prompts (`evals/prompts.json`) through the whole pipeline: 100 trials per concept, once with the reviewed examples and once with each concept's own example withheld, so 600 trials. It needs `ANTHROPIC_API_KEY`. The summary reports first-attempt and post-repair pass rates with 95% Wilson intervals, by concept and by condition, how well plans match the eval set, latency, tokens, prompt-cache hits and cost. Every approved scene is validated and probed again from scratch, and a scene that fails that is counted as a broken figure shown; the gate requires none. The offline checks run on every approved figure, the line-end check only on diagrams, and the summary counts the figures that drew a 3D overlap out of order or left a line end in mid-air; they are reported, not gated. `--gate` exits non-zero unless the v0.1 targets are met.
 
 `--model reference` runs the same suite against a stand-in that serves the reviewed scenes, and `--faults 0.3` injects faults into that share of trials: plan rejections, validator and probe failures, cut-off replies, and repairs that change nothing. It measures the pipeline, never a model, and is the fault-injection half of the gate.
 

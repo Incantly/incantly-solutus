@@ -1,5 +1,16 @@
 import { createContext, Script } from 'node:vm';
-import { compileIsolated, loadKitModules, probeScene, SIZE_BUDGETS, type ProbeReport, type ProbeSpec, type ScenePlan, type ValidatedScene } from '@incantly/core';
+import {
+  compileIsolated,
+  loadKitModules,
+  offlineChecks,
+  probeScene,
+  SIZE_BUDGETS,
+  type OfflineReport,
+  type ProbeReport,
+  type ProbeSpec,
+  type ScenePlan,
+  type ValidatedScene,
+} from '@incantly/core';
 
 /** Probes a validated scene against what its plan declares. */
 export type SceneProber = (scene: ValidatedScene, spec: ProbeSpec) => Promise<ProbeReport>;
@@ -17,10 +28,9 @@ export function probeSpecFor(plan: ScenePlan): ProbeSpec {
  * device in the sandbox instead (RP-1).
  */
 export const isolatedProbe: SceneProber = async (scene, spec) => {
-  const context = createContext(Object.create(null) as object, { codeGeneration: { strings: false, wasm: false } });
   let compiled;
   try {
-    compiled = compileIsolated(scene, (source, filename) => new Script(source, { filename }).runInContext(context, { timeout: 1000 }));
+    compiled = compile(scene);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return {
@@ -31,4 +41,29 @@ export const isolatedProbe: SceneProber = async (scene, spec) => {
   }
   const kits = await loadKitModules(scene.kits);
   return probeScene(compiled.scene, { spec, beforeStep: compiled.fuel.refuel, runtime: { locate: compiled.locate, kits } });
+};
+
+/** A scene compiled in a fresh context that has no Node globals and cannot turn strings into code. */
+function compile(scene: ValidatedScene) {
+  const context = createContext(Object.create(null) as object, { codeGeneration: { strings: false, wasm: false } });
+  return compileIsolated(scene, (source, filename) => new Script(source, { filename }).runInContext(context, { timeout: 1000 }));
+}
+
+/** Runs the offline checks on an approved scene: the depth-order audit, and for a diagram the line-end check. */
+export type OfflineChecker = (scene: ValidatedScene, plan: ScenePlan) => Promise<OfflineReport>;
+
+/**
+ * The offline checks (CH-2) outside a browser, for the eval harness: the
+ * depth-order audit of every 3D stage at every turn, and the line-end check
+ * when the plan is a diagram. They report; they never stop a learner's figure.
+ */
+export const isolatedOffline: OfflineChecker = async (scene, plan) => {
+  let compiled;
+  try {
+    compiled = compile(scene);
+  } catch (error) {
+    return { ok: false, turns: 0, violations: [], crossing: 0, ring: 0, looseEnds: [], error: error instanceof Error ? error.message : String(error) };
+  }
+  const kits = await loadKitModules(scene.kits);
+  return offlineChecks(compiled.scene, { runtime: { locate: compiled.locate, kits }, beforeStep: compiled.fuel.refuel, lineEnds: plan.kind === 'diagram' });
 };

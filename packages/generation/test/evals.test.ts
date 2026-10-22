@@ -79,6 +79,8 @@ describe('running the evals', () => {
     expect(Object.keys(summary.byConcept).sort()).toEqual(prompts.concepts.map((c) => c.id).sort());
     expect(Object.keys(summary.byCondition).sort()).toEqual(['example-withheld', 'with-example']);
     expect(summary.expectations.rate).toBe(1);
+    // Every approved figure passes the offline checks: no 3D overlap out of order, no line end in mid-air (CH-2).
+    expect(summary.offline).toEqual({ checked: total, depth: 0, looseEnds: 0 });
     expect(summary.tokens.perTrial).toBeGreaterThan(0);
     for (const trial of trials.filter((t) => t.condition === 'example-withheld')) {
       expect(trial.record.example).not.toBe(prompts.concepts.find((c) => c.id === trial.concept)!.example);
@@ -113,9 +115,40 @@ describe('running the evals', () => {
     expect(text).toContain('# Generation evals: reference, prompts v1');
     expect(text).toContain('| First attempt | 100.0% (95% CI ');
     expect(text).toContain('| Broken figures shown | 0 | none |');
+    expect(text).toMatch(/\| Offline checks \(CH-2\) \| of \d+ approved figures, 0 drew a 3D overlap out of order and 0 left a line end in mid-air \| reported \|/);
     // The stand-in model reports no cache use; the real one reports it in its usage fields.
     expect(text).toContain('Prompt cache: the fixed context was read from the cache in 0.0% of trials.');
   });
+});
+
+describe('offline checks in the evals (CH-2)', () => {
+  it('counts the approved figures the offline checks find fault with, without failing them', async () => {
+    const at: readonly [number, number] = [10, 20];
+    const { trials, summary } = await runEvals({
+      model: referenceModel(),
+      trialsPerConcept: 2,
+      conditions: ['with-example'],
+      concepts: ['sine-wave'],
+      offline: async (_, plan) => ({
+        ok: false,
+        turns: 60,
+        violations: [{ under: 'a solid', over: 'a sphere', area: 12, at, stage: 1, turn: { yaw: 30, pitch: 45 } }],
+        crossing: 0,
+        ring: 0,
+        looseEnds: plan.kind === 'diagram' ? [] : [{ stage: 1, element: 4, kind: 'line', at }],
+      }),
+    });
+    expect(trials.every((t) => t.passed)).toBe(true);
+    expect(trials.map((t) => t.offline)).toEqual([
+      { depth: 1, looseEnds: 1 },
+      { depth: 1, looseEnds: 1 },
+    ]);
+    expect(summary.offline).toEqual({ checked: 2, depth: 2, looseEnds: 2 });
+    // Skipped, they report nothing.
+    const skipped = await runEvals({ model: referenceModel(), trialsPerConcept: 1, conditions: ['with-example'], concepts: ['sine-wave'], offline: null });
+    expect(skipped.trials[0]!.offline).toBeNull();
+    expect(skipped.summary.offline).toEqual({ checked: 0, depth: 0, looseEnds: 0 });
+  }, 30_000);
 });
 
 describe('failure records', () => {
