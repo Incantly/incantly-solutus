@@ -234,6 +234,47 @@ test.describe('sandbox (Phase 3 gate)', () => {
     expect(size.width).toBeGreaterThan(100);
   });
 
+  test('a live figure records a short video of itself playing, even when paused (6.10b)', async ({ page }) => {
+    await open(page, 'page=sandbox&scene=pendulum&autoplay=0');
+    test.skip(!(await page.evaluate(() => typeof MediaRecorder !== 'undefined')), 'This browser cannot record a canvas');
+    const clip = await page.evaluate(async () => {
+      const figure = (window.__playground as unknown as { figure: { exportClip(options: { seconds: number; fps: number }): Promise<Blob | null> } }).figure;
+      const video = await figure.exportClip({ seconds: 1.5, fps: 12 });
+      if (!video) return null;
+      // Played back by the browser: it has a picture of the figure's size, and the pendulum moves in it.
+      const player = document.createElement('video');
+      player.muted = true;
+      player.src = URL.createObjectURL(video);
+      document.body.append(player);
+      await player.play();
+      const canvas = document.createElement('canvas');
+      const frames: string[] = [];
+      await new Promise<void>((resolve) => {
+        const grab = () => {
+          if (frames.length >= 2 || player.ended) return resolve();
+          if (player.currentTime >= frames.length * 0.6) {
+            canvas.width = player.videoWidth;
+            canvas.height = player.videoHeight;
+            canvas.getContext('2d')!.drawImage(player, 0, 0);
+            frames.push(canvas.toDataURL('image/png'));
+          }
+          player.requestVideoFrameCallback(grab);
+        };
+        player.requestVideoFrameCallback(grab);
+        player.onended = () => resolve();
+      });
+      return { type: video.type, size: video.size, width: player.videoWidth, height: player.videoHeight, moved: frames.length === 2 && frames[0] !== frames[1] };
+    });
+    expect(clip).not.toBeNull();
+    expect(clip!.type).toMatch(/^video\/(webm|mp4)$/);
+    expect(clip!.size).toBeGreaterThan(2000);
+    expect(clip!.width).toBeGreaterThan(200);
+    expect(clip!.width % 2).toBe(0);
+    expect(clip!.moved).toBe(true);
+    // The figure was paused before the clip, and is paused again after it.
+    await expect(page.frameLocator('iframe').locator('button[data-action="toggle"]')).toHaveAttribute('data-playing', 'false');
+  });
+
   test('an equation draws as maths in the frame, and keeps it in the exported picture and the snapshot (DG-5)', async ({ page }, testInfo) => {
     await open(page, 'page=sandbox&scene=pendulum&autoplay=0');
     const frame = page.frameLocator('iframe');

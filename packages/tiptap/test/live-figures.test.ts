@@ -91,6 +91,12 @@ class FakeFigure implements FigureHandle {
     this.exports++;
     return Promise.resolve(`data:image/svg+xml;charset=utf-8,%3Csvg%3E${this.exports}%3C%2Fsvg%3E`);
   }
+  /** The options of the last clip asked for. */
+  clipOptions: unknown = null;
+  exportClip(options?: unknown) {
+    this.clipOptions = options ?? null;
+    return Promise.resolve(new Blob(['clip'], { type: 'video/webm' }));
+  }
   destroy() {
     this.state = 'destroyed';
   }
@@ -309,6 +315,19 @@ describe('live figures: persistence', () => {
     window.dispatchEvent(new Event('afterprint'));
     expect(live().style.display).toBe('');
     expect(still().style.display).toBe('none');
+  });
+
+  it('hands a live figure over as a picture or a video for the host to save (SV-14, 6.10b)', async () => {
+    const { fake, observer, figures, view } = setup();
+    // Not live yet: nothing to give.
+    expect(await view(0).clip()).toBeNull();
+    observer.set([figures()[0]!], true);
+    await vi.advanceTimersByTimeAsync(100);
+    const video = await view(0).clip({ seconds: 3 });
+    expect(video?.type).toBe('video/webm');
+    expect(fake.mounts[0]!.clipOptions).toEqual({ seconds: 3 });
+    expect(await view(0).picture('svg')).toMatch(/^data:image\/svg\+xml/);
+    expect(await view(0).picture()).toBe(PNG);
   });
 
   it('keeps learner values out of undo, while undo still works for prose', async () => {

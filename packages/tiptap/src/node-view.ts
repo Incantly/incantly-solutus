@@ -1,4 +1,4 @@
-import { VALIDATOR_VERSION, mergeStyles, type ErrorView, type ExecutionAdapter, type FigureHandle, type FigureStyle } from '@incantly/core';
+import { VALIDATOR_VERSION, mergeStyles, type ClipOptions, type ErrorView, type ExecutionAdapter, type FigureHandle, type FigureStyle } from '@incantly/core';
 import type { Editor } from '@tiptap/core';
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 import { NodeSelection, TextSelection } from '@tiptap/pm/state';
@@ -623,6 +623,28 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
       reason,
       replacedAt: new Date().toISOString(),
     };
+  }
+
+  /**
+   * The live drawing as a picture to save or share (SV-14): a PNG or an SVG
+   * image with the theme written in, as a data URL. Null while the figure is
+   * not live.
+   */
+  picture(format: 'png' | 'svg' = 'png'): Promise<string | null> {
+    const handle = this.handle;
+    if (!handle || this.state !== 'live') return Promise.resolve(null);
+    return (format === 'svg' ? handle.exportSvg() : handle.snapshot()).catch(() => null);
+  }
+
+  /**
+   * A short video of the figure as it plays (6.10b), as the browser records
+   * it (WebM or MP4). Null while the figure is not live, or where the browser
+   * cannot record.
+   */
+  clip(options?: ClipOptions): Promise<Blob | null> {
+    const handle = this.handle;
+    if (!handle || this.state !== 'live') return Promise.resolve(null);
+    return handle.exportClip(options).catch(() => null);
   }
 
   /**

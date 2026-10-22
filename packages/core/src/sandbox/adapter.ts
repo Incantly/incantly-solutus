@@ -4,6 +4,7 @@ import type { ErrorView } from '../protocol/ui';
 import { hostCss, styleForBridge, type FigureStyle } from '../renderer/style';
 import { validateScene, type SceneFragments, type SceneValidation, type ValidatedScene } from '../validation';
 import type { KitName } from '../runtime/kits';
+import { clipSettings, type ClipOptions } from './clip';
 import { preloadKits, workerScriptFor } from './worker-script';
 import { buildShell, newChannelId } from './shell';
 
@@ -81,6 +82,12 @@ export interface FigureHandle {
    * into a page as markup.
    */
   exportSvg(): Promise<string | null>;
+  /**
+   * A short video of the drawing as it plays (6.10b), WebM or MP4 as the
+   * browser records it; a still figure that is paused plays while it records.
+   * Null where the browser cannot record a canvas.
+   */
+  exportClip(options?: ClipOptions): Promise<Blob | null>;
   destroy(): void;
 }
 
@@ -206,6 +213,7 @@ class SandboxedFigure implements FigureHandle {
   private pingId = 0;
   private awaitingPong: number | null = null;
   private snapshots = new Map<number, (picture: string | null) => void>();
+  private clips = new Map<number, (video: Blob | null) => void>();
   private laidOut = false;
   private snapshotId = 0;
   /** Style and theme asked for before the frame was ready; they go with the init message. */
@@ -311,6 +319,10 @@ class SandboxedFigure implements FigureHandle {
         this.snapshots.get(message.id)?.(message.svg !== undefined ? message.svg : message.png);
         this.snapshots.delete(message.id);
         break;
+      case 'clip':
+        this.clips.get(message.id)?.(message.video);
+        this.clips.delete(message.id);
+        break;
       case 'pong':
         if (message.id === this.awaitingPong) this.awaitingPong = null;
         break;
@@ -351,6 +363,8 @@ class SandboxedFigure implements FigureHandle {
     this.connection = null;
     for (const resolve of this.snapshots.values()) resolve(null);
     this.snapshots.clear();
+    for (const resolve of this.clips.values()) resolve(null);
+    this.clips.clear();
   }
 
   private fail(error: ErrorView, report = true): void {
@@ -428,6 +442,20 @@ class SandboxedFigure implements FigureHandle {
 
   exportSvg(): Promise<string | null> {
     return this.picture('svg');
+  }
+
+  exportClip(options: ClipOptions = {}): Promise<Blob | null> {
+    if (!this.connection || this.state !== 'live') return Promise.resolve(null);
+    const { seconds, fps } = clipSettings(options);
+    const id = ++this.snapshotId;
+    return new Promise((resolve) => {
+      this.clips.set(id, resolve);
+      this.connection?.post({ type: 'clip', id, seconds, fps });
+      // The recording itself, then as long as a mount may take to hand it over.
+      setTimeout(() => {
+        if (this.clips.delete(id)) resolve(null);
+      }, seconds * 1000 + this.deadlines.mountMs);
+    });
   }
 
   private picture(format: 'png' | 'svg'): Promise<string | null> {

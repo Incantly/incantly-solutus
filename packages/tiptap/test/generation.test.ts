@@ -55,6 +55,9 @@ class FakeFigure implements FigureHandle {
   exportSvg() {
     return Promise.resolve(null);
   }
+  exportClip() {
+    return Promise.resolve(null);
+  }
   destroy() {
     this.state = 'destroyed';
   }

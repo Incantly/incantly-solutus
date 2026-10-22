@@ -4,6 +4,7 @@ import type { RendererMessage, RuntimeUpdate } from '../protocol/runtime-message
 import type { ErrorView } from '../protocol/ui';
 import { FigureRenderer } from '../renderer/renderer';
 import { wrapSceneSource, WRAPPER_LINES_BEFORE } from './scene-wrapper';
+import { recordStage } from './clip';
 import { exportStage, snapshotStage } from './snapshot';
 import type { WorkerInbound, WorkerOutbound } from './worker-protocol';
 
@@ -141,6 +142,9 @@ function onHostMessage(message: HostMessage): void {
       else void snapshotStage(svg).then((png) => send({ type: 'snapshot', id: message.id, png }));
       break;
     }
+    case 'clip':
+      void clip(message.id, message.seconds, message.fps);
+      break;
     case 'ping':
       send({ type: 'pong', id: message.id });
       break;
@@ -163,6 +167,21 @@ function onHostMessage(message: HostMessage): void {
       destroy();
       break;
   }
+}
+
+/**
+ * Records the drawing as it plays (6.10b). A figure that moves but was
+ * paused plays while it records and pauses again after; one that has never
+ * drawn gives no clip.
+ */
+async function clip(id: number, seconds: number | undefined, fps: number | undefined): Promise<void> {
+  const drawn = (renderer?.stats.workFrames ?? 0) > 0;
+  const svg = drawn ? (root?.querySelector<SVGSVGElement>('svg.inc-stage') ?? null) : null;
+  const paused = renderer !== null && renderer.ui.animated === true && !renderer.ui.playing;
+  if (svg && paused) renderer?.send({ type: 'play' });
+  const video = await recordStage(svg, { ...(seconds !== undefined ? { seconds } : {}), ...(fps !== undefined ? { fps } : {}) }).catch(() => null);
+  if (svg && paused) renderer?.send({ type: 'pause' });
+  send({ type: 'clip', id, video });
 }
 
 function start(init: InitMessage): void {

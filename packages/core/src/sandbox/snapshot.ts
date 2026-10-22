@@ -194,35 +194,49 @@ export async function snapshotStage(svg: SVGSVGElement | null): Promise<string |
   return drawn(svg, true);
 }
 
+/**
+ * The stage drawn as an image, ready for a canvas: the standalone copy,
+ * decoded by the browser. `flat` writes equations as text, which keeps a
+ * canvas readable everywhere.
+ */
+export async function rasterise(svg: SVGSVGElement, flat: boolean): Promise<{ readonly image: HTMLImageElement; readonly width: number; readonly height: number }> {
+  const picture = painted(svg, flat);
+  const url = URL.createObjectURL(new Blob([serialize(picture)], { type: 'image/svg+xml' }));
+  try {
+    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error('snapshot image failed'));
+      img.src = url;
+    });
+    return { image, width: picture.width, height: picture.height };
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+/** The colour behind a stage, from the figure it sits in. */
+export function backgroundOf(svg: SVGSVGElement): string | null {
+  const background = getComputedStyle(svg.closest('.inc-figure') ?? svg).backgroundColor;
+  return background && background !== 'rgba(0, 0, 0, 0)' && background !== 'transparent' ? background : null;
+}
+
 async function drawn(svg: SVGSVGElement, flat: boolean): Promise<string | null> {
   try {
-    const picture = painted(svg, flat);
-    const { width, height } = picture;
-    const markup = serialize(picture);
-    const url = URL.createObjectURL(new Blob([markup], { type: 'image/svg+xml' }));
-    try {
-      const image = await new Promise<HTMLImageElement>((resolve, reject) => {
-        const img = new Image();
-        img.onload = () => resolve(img);
-        img.onerror = () => reject(new Error('snapshot image failed'));
-        img.src = url;
-      });
-      const scale = Math.min(window.devicePixelRatio || 1, MAX_WIDTH / width, 2);
-      const canvas = document.createElement('canvas');
-      canvas.width = Math.round(width * scale);
-      canvas.height = Math.round(height * scale);
-      const context = canvas.getContext('2d');
-      if (!context) return null;
-      const background = getComputedStyle(svg.closest('.inc-figure') ?? svg).backgroundColor;
-      if (background) {
-        context.fillStyle = background;
-        context.fillRect(0, 0, canvas.width, canvas.height);
-      }
-      context.drawImage(image, 0, 0, canvas.width, canvas.height);
-      return canvas.toDataURL('image/png');
-    } finally {
-      URL.revokeObjectURL(url);
+    const { image, width, height } = await rasterise(svg, flat);
+    const scale = Math.min(window.devicePixelRatio || 1, MAX_WIDTH / width, 2);
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(width * scale);
+    canvas.height = Math.round(height * scale);
+    const context = canvas.getContext('2d');
+    if (!context) return null;
+    const background = backgroundOf(svg);
+    if (background) {
+      context.fillStyle = background;
+      context.fillRect(0, 0, canvas.width, canvas.height);
     }
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL('image/png');
   } catch {
     return null;
   }

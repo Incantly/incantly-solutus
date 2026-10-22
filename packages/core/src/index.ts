@@ -64,4 +64,6 @@ export type {
   WarmProbe,
 } from './sandbox/adapter';
 export { inThreadAdapter, mountInThread } from './engine/in-thread-adapter';
+export { CLIP_LIMITS, clipSettings, clipType } from './sandbox/clip';
+export type { ClipOptions } from './sandbox/clip';
 export { contentRef } from './sandbox/sha256';

@@ -5,6 +5,7 @@ import { FRAME_SCRIPT, FRAME_SCRIPT_HASH, WORKER_SCRIPT } from '../src/sandbox/g
 import { guardKey, SHADOWED_GLOBALS, wrapSceneSource, WRAPPER_LINES_BEFORE } from '../src/sandbox/scene-wrapper';
 import { cspHash, sha256, base64 } from '../src/sandbox/sha256';
 import { buildShell, contentSecurityPolicy, newChannelId } from '../src/sandbox/shell';
+import { clipSettings, clipType, recordStage } from '../src/sandbox/clip';
 import { locateInStack } from '../src/sandbox/stack';
 import { THEME_CSS } from '../src/renderer/theme';
 
@@ -53,10 +54,19 @@ describe('bridge messages', () => {
     expect(parseFrameMessage(envelope({ type: 'description', text: 'x'.repeat(2001) }), CHANNEL)).toBeNull();
     expect(parseFrameMessage(envelope({ type: 'escape', direction: 'sideways' }), CHANNEL)).toBeNull();
     expect(parseHostMessage(envelope({ type: 'focus', edge: 'last' }), CHANNEL)).not.toBeNull();
+    // A clip (6.10b): asked for with numbers, answered with a video or nothing.
+    expect(parseHostMessage(envelope({ type: 'clip', id: 1, seconds: 2, fps: 12 }), CHANNEL)).not.toBeNull();
+    expect(parseHostMessage(envelope({ type: 'clip', id: 1, seconds: '2' }), CHANNEL)).toBeNull();
+    expect(parseFrameMessage(envelope({ type: 'clip', id: 1, video: null }), CHANNEL)).not.toBeNull();
+    expect(parseFrameMessage(envelope({ type: 'clip', id: 1, video: new Blob(['x'], { type: 'video/webm' }) }), CHANNEL)).not.toBeNull();
+    expect(parseFrameMessage(envelope({ type: 'clip', id: 1, video: new Blob(['x'], { type: 'text/html' }) }), CHANNEL)).toBeNull();
+    expect(parseFrameMessage(envelope({ type: 'clip', id: 1, video: new Blob([], { type: 'video/webm' }) }), CHANNEL)).toBeNull();
+    expect(parseFrameMessage(envelope({ type: 'clip', id: 1, video: 'data:video/webm;base64,AAAA' }), CHANNEL)).toBeNull();
   });
 
   it('carries no generation data: every message type is on the documented list', () => {
     expect([...HOST_MESSAGE_TYPES].sort()).toEqual([
+      'clip',
       'destroy',
       'focus',
       'init',
@@ -72,6 +82,7 @@ describe('bridge messages', () => {
       'theme',
     ]);
     expect([...FRAME_MESSAGE_TYPES].sort()).toEqual([
+      'clip',
       'description',
       'error',
       'escape',
@@ -90,6 +101,27 @@ describe('bridge messages', () => {
   it('recognises the connect message', () => {
     expect(parseConnect({ incantly: 'connect', v: 1, channel: CHANNEL }, CHANNEL)).not.toBeNull();
     expect(parseConnect({ incantly: 'connect', v: 1, channel: 'x' }, CHANNEL)).toBeNull();
+  });
+});
+
+describe('video clips (6.10b)', () => {
+  it('keeps a clip between half a second and twenty, at 4 to 30 frames a second', () => {
+    expect(clipSettings()).toEqual({ seconds: 4, fps: 24 });
+    expect(clipSettings({ seconds: 100, fps: 1 })).toEqual({ seconds: 20, fps: 4 });
+    expect(clipSettings({ seconds: 0, fps: 120 })).toEqual({ seconds: 0.5, fps: 30 });
+    expect(clipSettings({ seconds: Number.NaN, fps: 12.4 })).toEqual({ seconds: 4, fps: 12 });
+  });
+
+  it('records in the first video format the browser offers, and gives none where it records none', async () => {
+    expect(clipType()).toBeNull();
+    expect(await recordStage(null)).toBeNull();
+    const scope = globalThis as unknown as { MediaRecorder?: unknown };
+    scope.MediaRecorder = { isTypeSupported: (type: string) => type === 'video/webm;codecs=vp8' || type === 'video/mp4' };
+    try {
+      expect(clipType()).toBe('video/webm;codecs=vp8');
+    } finally {
+      delete scope.MediaRecorder;
+    }
   });
 });
 

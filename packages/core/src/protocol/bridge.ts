@@ -63,6 +63,8 @@ export type HostMessageBody =
   | { readonly type: 'reducedMotion'; readonly value: boolean }
   /** A picture of the drawing: a PNG (the default), or an SVG with the theme written in (SV-14). */
   | { readonly type: 'snapshot'; readonly id: number; readonly format?: 'png' | 'svg' }
+  /** A short video of the drawing as it plays (6.10b). */
+  | { readonly type: 'clip'; readonly id: number; readonly seconds?: number; readonly fps?: number }
   | { readonly type: 'ping'; readonly id: number }
   /** Moves keyboard focus into the figure, to its first or last control. */
   | { readonly type: 'focus'; readonly edge: 'first' | 'last' }
@@ -87,6 +89,8 @@ export type FrameMessageBody =
   /** Keyboard focus is leaving the figure: Escape, or Tab past either end. */
   | { readonly type: 'escape'; readonly direction: 'out' | 'forward' | 'backward' }
   | { readonly type: 'snapshot'; readonly id: number; readonly png: string | null; readonly svg?: string | null }
+  /** The recorded video, or null where the frame could not record one. */
+  | { readonly type: 'clip'; readonly id: number; readonly video: Blob | null }
   | { readonly type: 'pong'; readonly id: number }
   | { readonly type: 'resize'; readonly height: number }
   | { readonly type: 'probe'; readonly report: ProbeReport };
@@ -103,6 +107,7 @@ export const HOST_MESSAGE_TYPES: ReadonlySet<string> = new Set([
   'step',
   'reducedMotion',
   'snapshot',
+  'clip',
   'ping',
   'focus',
   'style',
@@ -121,6 +126,7 @@ export const FRAME_MESSAGE_TYPES: ReadonlySet<string> = new Set([
   'description',
   'escape',
   'snapshot',
+  'clip',
   'pong',
   'resize',
   'probe',
@@ -174,6 +180,10 @@ export function parseHostMessage(data: unknown, channel: string): HostMessage | 
       return typeof m.value === 'boolean' ? (m as unknown as HostMessage) : null;
     case 'snapshot':
       return typeof m.id === 'number' && (m.format === undefined || m.format === 'png' || m.format === 'svg') ? (m as unknown as HostMessage) : null;
+    case 'clip':
+      return typeof m.id === 'number' && (m.seconds === undefined || typeof m.seconds === 'number') && (m.fps === undefined || typeof m.fps === 'number')
+        ? (m as unknown as HostMessage)
+        : null;
     case 'ping':
       return typeof m.id === 'number' ? (m as unknown as HostMessage) : null;
     case 'focus':
@@ -214,6 +224,13 @@ export function parseFrameMessage(data: unknown, channel: string): FrameMessage 
       return typeof m.id === 'number' &&
         (m.png === null || (typeof m.png === 'string' && m.png.startsWith('data:image/png;base64,'))) &&
         (m.svg === undefined || m.svg === null || (typeof m.svg === 'string' && m.svg.startsWith('data:image/svg+xml;') && m.svg.length < 8_000_000))
+        ? (m as unknown as FrameMessage)
+        : null;
+    case 'clip':
+      // A video and nothing else, of a size a short clip can have.
+      return typeof m.id === 'number' &&
+        (m.video === null ||
+          (typeof Blob !== 'undefined' && m.video instanceof Blob && /^video\/(webm|mp4)$/.test(m.video.type) && m.video.size > 0 && m.video.size <= 64 * 1024 * 1024))
         ? (m as unknown as FrameMessage)
         : null;
     case 'pong':
