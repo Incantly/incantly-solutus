@@ -1,9 +1,10 @@
 import type { LearnerRequest } from '../context';
-import type { ProbeResponse, ProbeResult, ServiceEvent } from '../protocol';
+import type { ProbeResponse, ProbeResult, RepairRequest, RepairResponse, ServiceEvent } from '../protocol';
 
 /**
  * The browser's side of the generation service: start a generation and read
- * its event stream, and report the device's probe result. Browser-safe.
+ * its event stream, report the device's probe result, and ask for a figure's
+ * background repair. Browser-safe.
  */
 
 export interface GenerationClientOptions {
@@ -89,6 +90,24 @@ export class GenerationClient {
     } finally {
       reader.releaseLock();
     }
+  }
+
+  /** Asks for a background repair of a figure that hit a problem while live (RP-7). */
+  async repair(request: RepairRequest, signal?: AbortSignal): Promise<RepairResponse> {
+    let response: Response;
+    try {
+      response = await this.fetcher(`${this.options.baseUrl}/repairs`, {
+        method: 'POST',
+        headers: await this.headers(),
+        body: JSON.stringify(request),
+        ...(signal ? { signal } : {}),
+      });
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      throw new ServiceError(0, 'network', 'The figure service could not be reached');
+    }
+    if (!response.ok) throw await this.refusal(response);
+    return (await response.json()) as RepairResponse;
   }
 
   /** Reports what the device's probe found, and gets back the next step. */

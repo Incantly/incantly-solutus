@@ -12,6 +12,7 @@ import { GenerationService } from '../service';
  *
  *   ANTHROPIC_API_KEY            the model provider's key (not needed with INCANTLY_MODEL=reference)
  *   INCANTLY_TOKEN_SECRET        at least 32 characters, shared with the host backend that mints learner tokens
+ *   INCANTLY_TICKET_SECRET       at least 32 characters, kept by this service only: signs scenes so figures can be repaired in the background
  *   INCANTLY_MODEL               anthropic (default) or reference, a stand-in that serves the reviewed scenes
  *   INCANTLY_PLAN_MODEL, INCANTLY_SCENE_MODEL   model ids
  *   INCANTLY_MODEL_TIMEOUT_MS    per model call (default 30000)
@@ -56,6 +57,7 @@ const service = new GenerationService({
   recordsRetentionDays: recordsDays,
   generationTimeoutMs: Number(env.INCANTLY_GENERATION_TIMEOUT_MS ?? 45_000),
   allowedOrigins: (env.INCANTLY_ALLOWED_ORIGINS ?? '').split(',').filter(Boolean),
+  ...(env.INCANTLY_TICKET_SECRET ? { ticketSecret: env.INCANTLY_TICKET_SECRET } : {}),
 });
 
 const purge = () => void records?.purge();

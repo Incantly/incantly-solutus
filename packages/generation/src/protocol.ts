@@ -31,6 +31,12 @@ export interface SceneMessage {
   readonly concept: string;
   /** The idea sentence, the figure's text alternative until it reports its own. */
   readonly description: string;
+  /**
+   * The service's signature on this scene's plan and fragments, when it can
+   * repair figures in the background (RP-7). The device keeps it with the
+   * figure and sends it back with a repair request.
+   */
+  readonly ticket?: string;
 }
 
 export type FallbackReason = 'plan' | 'scene' | 'model' | 'timeout' | 'off' | 'limit';
@@ -58,3 +64,18 @@ export type ProbeResponse =
   | { readonly status: 'approved'; readonly generationId: string }
   | ({ readonly status: 'scene' } & SceneMessage)
   | ({ readonly status: 'fallback' } & FallbackMessage);
+
+/**
+ * A figure in a note hit a problem after it was live (RP-7): its fragments as
+ * stored, the ticket that came with them, and what went wrong, as a probe
+ * report of the learner's state.
+ */
+export interface RepairRequest {
+  readonly ticket: string;
+  readonly fragments: SceneFragmentsMessage;
+  readonly report: ProbeReport;
+}
+
+/** The answer to a repair request: a repaired scene to probe, then report like any other, or nothing that works. */
+export type RepairResponse = ({ readonly status: 'scene' } & SceneMessage) | { readonly status: 'failed'; readonly reason: FallbackReason };
+

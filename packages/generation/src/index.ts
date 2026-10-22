@@ -28,4 +28,6 @@ export { DEFAULT_LIMITS, LimitKeeper } from './limits';
 export type { Limits, Refusal } from './limits';
 export { GenerationService, RETENTION, createService, sanitizeDeviceReport, skeletonOf } from './service';
 export type { ServiceOptions } from './service';
-export type { FallbackMessage, FallbackReason, ProbeResponse, ProbeResult, SceneMessage, ServiceEvent, Skeleton } from './protocol';
+export type { FallbackMessage, FallbackReason, ProbeResponse, ProbeResult, RepairRequest, RepairResponse, SceneMessage, ServiceEvent, Skeleton } from './protocol';
+export { MAX_TICKET_LENGTH, issueTicket, readTicket } from './ticket';
+export type { TicketFragments } from './ticket';

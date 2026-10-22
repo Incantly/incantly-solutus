@@ -2,19 +2,22 @@
  * The learner device's side of generation. Browser-safe: nothing here
  * imports Node modules or the server pipeline.
  */
-import { preloadKits, warmProbe, type WarmProbe } from '@incantly/core';
+import { preloadKits, warmProbe, type ErrorView, type WarmProbe } from '@incantly/core';
 import type { Skeleton } from '../protocol';
 import { runGeneration, type ApprovedFigure, type DeviceProbe, type GenerationStage } from './flow';
+import { repairFigure } from './repair';
 import type { GenerationClient } from './service-client';
 import type { ProductSignal } from './telemetry';
 
 export { GenerationClient, ServiceError } from './service-client';
 export type { GenerationClientOptions } from './service-client';
 export { runGeneration } from './flow';
+export { liveProblemReport, repairFigure } from './repair';
+export type { FigureRepairRun, LiveProblem, StoredFigure } from './repair';
 export type { ApprovedFigure, DeviceProbe, DeviceProbeResult, GenerationOutcome, GenerationRun, GenerationStage } from './flow';
 export { Telemetry, cleanSignal } from './telemetry';
 export type { FallbackLevel, ProductSignal, TelemetryEvent, TelemetryOptions } from './telemetry';
-export type { FallbackMessage, ProbeResponse, ProbeResult, SceneMessage, ServiceEvent, Skeleton } from '../protocol';
+export type { FallbackMessage, ProbeResponse, ProbeResult, RepairRequest, RepairResponse, SceneMessage, ServiceEvent, Skeleton } from '../protocol';
 
 /**
  * Probes scenes in a fresh hidden sandbox on this device, through the same
@@ -77,3 +80,41 @@ export function figureGenerator(options: {
     return { kind: 'failed', message: outcome.message };
   };
 }
+
+/**
+ * The function @incantly/tiptap's FigureNode calls to repair a figure that hit
+ * a problem while live (RP-7): the service repairs the scene it signed, and
+ * this device probes the repair, at the learner's values too, before it is
+ * swapped in.
+ */
+export function figureRepairer(options: {
+  readonly client: GenerationClient;
+  readonly probe?: DeviceProbe;
+  readonly signals?: (signal: ProductSignal) => void;
+}) {
+  return async (
+    request: {
+      readonly fragments: { readonly html: string; readonly css: string; readonly js: string };
+      readonly ticket: string;
+      readonly error: ErrorView;
+      readonly values: Readonly<Record<string, number>>;
+    },
+    signal: AbortSignal,
+  ): Promise<{ readonly fragments: ApprovedFigure['fragments']; readonly generationId: string | null; readonly approvedAt: string; readonly ticket: string | null } | null> => {
+    const own = options.probe ? null : sandboxProbe();
+    try {
+      const figure = await repairFigure({
+        client: options.client,
+        probe: options.probe ?? own!,
+        figure: { fragments: request.fragments, ticket: request.ticket },
+        problem: { error: request.error, values: request.values },
+        ...(options.signals ? { signals: options.signals } : {}),
+        signal,
+      });
+      return figure ? { fragments: figure.fragments, generationId: figure.generationId, approvedAt: figure.approvedAt, ticket: figure.ticket } : null;
+    } finally {
+      own?.dispose();
+    }
+  };
+}
+

@@ -32,6 +32,8 @@ export interface ApprovedFigure {
   /** The reviewed standard figure, shown because generation failed. */
   readonly standard: boolean;
   readonly approvedAt: string;
+  /** The service's signature on the scene, kept with the figure for a background repair (RP-7); null when there is none. */
+  readonly ticket: string | null;
 }
 
 export type GenerationOutcome =
@@ -67,7 +69,7 @@ const NOT_VALID: ProbeReport = {
   stats: { configurations: 0, frames: 0, averageFrameMs: 0, elements: 0, durationMs: 0 },
 };
 
-function approved(scene: Omit<SceneMessage, 'generationId'> & { readonly generationId?: string }, standard: boolean): ApprovedFigure {
+export function approved(scene: Omit<SceneMessage, 'generationId'> & { readonly generationId?: string }, standard: boolean): ApprovedFigure {
   return {
     fragments: scene.fragments,
     concept: scene.concept,
@@ -75,6 +77,7 @@ function approved(scene: Omit<SceneMessage, 'generationId'> & { readonly generat
     generationId: standard ? null : (scene.generationId ?? null),
     standard,
     approvedAt: new Date().toISOString(),
+    ticket: standard ? null : (scene.ticket ?? null),
   };
 }
 

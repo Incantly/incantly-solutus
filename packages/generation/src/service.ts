@@ -7,8 +7,9 @@ import { DEFAULT_LIMITS, LimitKeeper, type Limits, type Refusal } from './limits
 import type { ModelClient } from './models';
 import { Generator, standardFigure, type GenerationState } from './pipeline';
 import { probeSpecFor } from './probe';
-import type { FallbackMessage, SceneMessage, Skeleton } from './protocol';
+import type { FallbackMessage, RepairResponse, SceneMessage, Skeleton } from './protocol';
 import { failureRecord, type RecordSink } from './records';
+import { issueTicket, readTicket } from './ticket';
 
 /**
  * The generation service: an authenticated HTTP endpoint for the plan, scene
@@ -21,6 +22,7 @@ import { failureRecord, type RecordSink } from './records';
  *   GET  /v1/status
  *   POST /v1/generations              { prompt, noteContext? }  -> event stream
  *   POST /v1/generations/:id/probe    { ok, report? }           -> approved, a repaired scene, or a fallback
+ *   POST /v1/repairs                  { ticket, fragments, report } -> a repaired scene to probe, or failed (RP-7)
  */
 
 export interface ServiceOptions {
@@ -41,10 +43,16 @@ export interface ServiceOptions {
   readonly prefix?: string;
   /** Approved figures reused for the same request or plan (PRD 25.6); null turns the cache off. */
   readonly cache?: ConceptCache | null;
+  /**
+   * Signs every validated scene so figures can ask for a background repair
+   * when they hit a problem while live (RP-7); at least 32 characters. Without
+   * it the repairs endpoint is off.
+   */
+  readonly ticketSecret?: string;
   readonly now?: () => number;
 }
 
-export type { FallbackMessage, ProbeResponse, SceneMessage, Skeleton } from './protocol';
+export type { FallbackMessage, ProbeResponse, RepairRequest, RepairResponse, SceneMessage, Skeleton } from './protocol';
 
 export const RETENTION = {
   noteText: 'The request and any note text are sent to the model provider for the plan call and are not stored by this service or written to logs or records.',
@@ -91,7 +99,8 @@ const CHECKS: ReadonlySet<string> = new Set<ProbeCheck>([
   'timeout',
 ]);
 
-const PHASES: ReadonlySet<string> = new Set(['mount', 'frame', 'model', 'readout', 'explain', 'describe', 'tween', 'plot', 'runaway', 'unresponsive']);
+/** Every phase a figure reports a problem in, at the probe or while live (ErrorPhase). */
+const PHASES: ReadonlySet<string> = new Set(['mount', 'frame', 'model', 'readout', 'explain', 'describe', 'tween', 'plot', 'drag', 'action', 'hook', 'runaway', 'unresponsive']);
 
 function text(value: unknown, max: number): string | null {
   if (typeof value !== 'string') return null;
@@ -171,6 +180,15 @@ function readRequest(body: unknown): LearnerRequest {
   return { prompt: prompt.trim(), ...(noteContext ? { noteContext: noteContext.slice(0, REQUEST_LIMITS.noteContext * 2) } : {}) };
 }
 
+/** Fragments from a device: three strings of a size a scene can be. */
+function readFragments(value: unknown): { readonly html: string; readonly css: string; readonly js: string } | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const { html, css, js } = value as Record<string, unknown>;
+  if (typeof html !== 'string' || typeof css !== 'string' || typeof js !== 'string') return null;
+  if (html.length > 20_000 || css.length > 20_000 || js.length > 60_000) return null;
+  return { html, css, js };
+}
+
 export class GenerationService {
   private readonly sessions = new Map<string, Session>();
   private readonly limits: LimitKeeper;
@@ -205,6 +223,7 @@ export class GenerationService {
       if (req.method === 'POST' && path === `${this.prefix}/generations`) return await this.generate(req, res);
       const probe = new RegExp(`^${this.prefix}/generations/([\\w-]{1,80})/probe$`).exec(path);
       if (req.method === 'POST' && probe) return await this.probeResult(req, res, probe[1]!);
+      if (req.method === 'POST' && path === `${this.prefix}/repairs`) return await this.repairStored(req, res);
       throw new HttpError(404, 'not-found', 'No such endpoint');
     } catch (error) {
       if (res.headersSent) {
@@ -263,12 +282,12 @@ export class GenerationService {
     return learner;
   }
 
-  private async body(req: IncomingMessage): Promise<unknown> {
+  private async body(req: IncomingMessage, limit = 16_384): Promise<unknown> {
     const chunks: Buffer[] = [];
     let size = 0;
     for await (const chunk of req as AsyncIterable<Buffer>) {
       size += chunk.length;
-      if (size > 16_384) throw new HttpError(413, 'too-large', 'The body is too large');
+      if (size > limit) throw new HttpError(413, 'too-large', 'The body is too large');
       chunks.push(chunk);
     }
     try {
@@ -285,13 +304,16 @@ export class GenerationService {
   private sceneMessage(state: GenerationState): SceneMessage {
     const scene = state.scene!;
     const plan = state.plan!;
+    const fragments = { html: scene.html, css: scene.css, js: scene.js };
+    const secret = this.options.ticketSecret;
     return {
       generationId: state.id,
-      fragments: { html: scene.html, css: scene.css, js: scene.js },
+      fragments,
       spec: probeSpecFor(plan),
       sdkVersion: SDK_VERSION,
       concept: plan.concept,
       description: plan.idea,
+      ...(secret ? { ticket: issueTicket(secret, plan, fragments) } : {}),
     };
   }
 
@@ -453,6 +475,60 @@ export class GenerationService {
       return;
     }
     return stop(timeout.aborted ? 'timeout' : (state.failure?.stage ?? 'scene'));
+  }
+
+  /**
+   * A figure in a note hit a problem after it was live (RP-7). Its ticket
+   * proves the service signed these very fragments and gives back their plan;
+   * the device's report says what went wrong, at the learner's values. One
+   * repair, and the repaired scene goes back to the device to probe, reported
+   * through the usual probe endpoint, which approves it with a new ticket.
+   */
+  private async repairStored(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const learner = this.learner(req);
+    const secret = this.options.ticketSecret;
+    if (!secret) throw new HttpError(404, 'not-found', 'Figures are not repaired here');
+    if (!this.enabled) throw new HttpError(503, 'generation-off', 'Repairing figures is switched off for now');
+    const body = (await this.body(req, 160_000)) as { ticket?: unknown; fragments?: unknown; report?: unknown };
+    const fragments = readFragments(body.fragments);
+    if (!fragments) throw new HttpError(400, 'invalid-request', 'fragments must be { html, css, js }, each a string');
+    const plan = readTicket(secret, body.ticket, fragments);
+    if (!plan) throw new HttpError(403, 'invalid-ticket', 'That figure cannot be repaired here');
+    const report = sanitizeDeviceReport(body.report, plan, fragments.js.split('\n').length);
+    if (!report) throw new HttpError(400, 'invalid-request', 'report must be { failures } from the device');
+    const admitted = this.limits.admit(learner.id);
+    if (!admitted.ok) this.refuse(admitted.refusal);
+
+    const generator = this.generator();
+    const state = generator.begin();
+    const timeout = AbortSignal.timeout(this.options.generationTimeoutMs ?? 45_000);
+    try {
+      const adopted = generator.adopt(state, { plan, fragments });
+      // A scene the validator now rejects is repaired from that; one it accepts, from what the device saw.
+      const repairReport = adopted.passed ? generator.deviceFailed(state, report) : adopted.report!;
+      if (generator.canRepair(state)) {
+        await generator.repair(state, repairReport, {}, timeout);
+        generator.settle(state);
+      }
+      generator.finish(state);
+    } finally {
+      admitted.release();
+      this.limits.spend(learner.id, state.cost);
+    }
+    if (state.status === 'validated' && state.scene) {
+      this.sessions.set(state.id, {
+        state,
+        generator,
+        learner,
+        expiresAt: this.now() + (this.options.sessionMinutes ?? 15) * 60_000,
+        busy: false,
+        requestKey: null,
+      });
+      this.json(res, 200, { status: 'scene', ...this.sceneMessage(state) } satisfies RepairResponse);
+      return;
+    }
+    await this.record(state);
+    this.json(res, 200, { status: 'failed', reason: timeout.aborted ? 'timeout' : (state.failure?.stage ?? 'scene') } satisfies RepairResponse);
   }
 
   /** Records and forgets generations whose device never reported. */

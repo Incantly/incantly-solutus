@@ -118,8 +118,8 @@ export class GenerationState {
   repairsUsed = 0;
   failure: GenerationFailure | null = null;
   readonly timings: { planMs?: number; firstFragmentMs?: number; sceneMs?: number; repairMs: number; totalMs?: number } = { repairMs: 0 };
-  /** How the scene was made: written whole, adapted from a reviewed scene by edits, or taken from the concept cache. */
-  mode: 'write' | 'adapt' | 'cache' | null = null;
+  /** How the scene was made: written whole, adapted from a reviewed scene by edits, taken from the concept cache, or brought from a note to be repaired. */
+  mode: 'write' | 'adapt' | 'cache' | 'stored' | null = null;
   /** The reviewed scene the request named, adapted before the plan arrived; null otherwise. */
   retrieved: string | null = null;
   /** Which cache key found it: the request, before planning, or the plan. */
@@ -429,6 +429,31 @@ export class Generator {
     state.attempts.push({ purpose: 'scene', fragments: { ...figure.fragments }, changed: [], passed: true, failed: null, report: null, probe: null, scene: validation.scene });
     this.settle(state);
     return true;
+  }
+
+  /**
+   * Takes up a figure approved before, from a learner's note, to repair it
+   * after it hit a problem while live (RP-7). Its plan and fragments come
+   * from a ticket the service signed. It is validated again: a scene the
+   * current validator rejects is recorded as failing validation, so the
+   * repair can fix that too.
+   */
+  adopt(state: GenerationState, figure: { readonly plan: ScenePlan; readonly fragments: Required<FragmentSet> }): Attempt {
+    const plan = figure.plan;
+    state.plan = plan;
+    state.mode = 'stored';
+    state.status = 'building';
+    const limits = { ...SCENE_LIMITS, params: SIZE_BUDGETS[plan.size ?? 'quick'].controls };
+    const validation = validateScene(figure.fragments, { limits });
+    const fragments: FragmentSet = { ...figure.fragments };
+    const attempt: Attempt =
+      validation.ok && validation.scene
+        ? { purpose: 'scene', fragments, changed: [], passed: true, failed: null, report: null, probe: null, scene: validation.scene }
+        : { purpose: 'scene', fragments, changed: [], passed: false, failed: 'validation', report: validationReport(validation.diagnostics, fragments, 1, Math.max(this.maxRepairs, 1)), probe: null, scene: null };
+    state.attempts.push(attempt);
+    state.status = attempt.passed ? 'validated' : 'failed';
+    if (!attempt.passed) state.failure = { stage: 'scene', reason: attempt.report!.summary };
+    return attempt;
   }
 
   /** Whether another automatic repair may run (RP-4). */
