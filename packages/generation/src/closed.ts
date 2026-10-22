@@ -48,6 +48,13 @@ export const CLOSED_CLASSES: readonly ClosedClass[] = [
     test: { file: 'core/test/kits-space3d.test.ts', name: 'lets a later part() rename an object that is a part already, as a model names its pieces' },
   },
   {
+    check: 'runs',
+    match: /made without a label/,
+    by: 'kit',
+    fix: 'A 3D arrow made without a label gets one the first time label() is called, so a readout at its tip needs no option at creation.',
+    test: { file: 'core/test/kits-space3d.test.ts', name: 'gives an arrow made without a label one the first time it is labelled' },
+  },
+  {
     check: 'unknown-tone',
     match: /"water" is not a tone/,
     by: 'kit',

@@ -858,6 +858,7 @@ export interface Line3D extends Object3D {
 
 export interface Arrow3D extends Object3D {
   set(from: Vec3, to: Vec3): this;
+  /** The label at its tip; an arrow made without the label option gets one the first time. */
   label(text: Readable): this;
 }
 

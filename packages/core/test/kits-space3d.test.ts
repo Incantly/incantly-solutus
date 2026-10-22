@@ -567,6 +567,18 @@ describe('inc.space3d', () => {
     expect(error((s) => void s.view('under' as never))).toContain('Unknown view "under"');
   });
 
+  it('gives an arrow made without a label one the first time it is labelled', () => {
+    // Once a scene labelled its field arrow on every frame without making it with a label, and threw on frame 1.
+    const { runtime, mount } = space((s, inc) => {
+      const probe = s.arrow([0, 0, 0], [1, 0, 0], { tone: 'a' });
+      inc.onFrame(() => probe.label(`${(0.5).toFixed(2)} T`));
+    });
+    expect(mount.ui.error).toBeNull();
+    runtime.tick(0.016);
+    expect(runtime.uiState().error).toBeNull();
+    expect(labels(runtime).map((n) => n.text)).toContain('0.50 T');
+  });
+
   it('lets a later part() rename an object that is a part already, as a model names its pieces', () => {
     // Once a scene named a bar magnet's north piece "north pole", as its plan did, and the figure threw at mount.
     const { runtime } = space((s) => {

@@ -271,7 +271,9 @@ export class Arrow3DHandle extends Object3DHandle implements Arrow3D {
     engine: Engine3D,
     item: Item,
     coords: Coordinates,
-    private readonly labelRecord: LabelRecord | null,
+    private labelRecord: LabelRecord | null,
+    /** Makes the label of an arrow made without one, the first time it is given one. */
+    private readonly makeLabel: () => LabelRecord,
   ) {
     super(engine, item, coords);
   }
@@ -284,8 +286,9 @@ export class Arrow3DHandle extends Object3DHandle implements Arrow3D {
     return this;
   }
 
+  /** Sets the label at the arrow's tip; an arrow made without a label gets one now. */
   label(text: Readable): this {
-    if (!this.labelRecord) throw new SceneApiError('This arrow was made without a label; give it one with the label option');
+    this.labelRecord ??= this.makeLabel();
     this.labelRecord.text = formatReadable(text);
     return this;
   }
@@ -692,8 +695,9 @@ export class Space3DApi implements Space3D {
       toneOf(options.tone, null),
       parentOf(options.parent, this.engine),
     );
-    const record = options.label !== undefined ? this.engine.label([0, 0, 0], options.label, toneOf(options.tone, null), 10, () => (item.shown ? tipOf(item) : null)) : null;
-    return new Arrow3DHandle(this.engine, item, this.coords, record);
+    const label = (text: Readable) => this.engine.label([0, 0, 0], text, toneOf(options.tone, null), 10, () => (item.shown ? tipOf(item) : null));
+    const record = options.label !== undefined ? label(options.label) : null;
+    return new Arrow3DHandle(this.engine, item, this.coords, record, () => label(''));
   }
 
   coil(r: number, h: number, turns: number, options: Line3DOptions = {}): Line3D {
