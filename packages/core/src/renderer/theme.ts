@@ -133,6 +133,12 @@ html.inc-frame, html.inc-frame body { margin: 0; padding: 0; background: transpa
   .inc-figure[data-layout='overlay'] .inc-panel { position: static; max-height: none; backdrop-filter: none; }
 }
 .inc-scene { position: relative; background: var(--inc-scene-bg); border-radius: var(--inc-radius-sm); }
+/* inc.layout (VI-7): the scene's panels side by side, one above another, or two by two; side by side stacks when narrow. */
+.inc-scene[data-panels='row'] { display: flex; flex-wrap: wrap; gap: var(--inc-gap); align-items: flex-start; }
+.inc-scene[data-panels='row'] > * { flex: 1 1 240px; min-width: 0; }
+.inc-scene[data-panels='column'] { display: flex; flex-direction: column; gap: var(--inc-gap); }
+.inc-scene[data-panels='grid'] { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--inc-gap); }
+.inc-scene[data-panels] > * { margin: 0; }
 .inc-stage-host { position: relative; }
 .inc-stage { display: block; width: 100%; height: var(--inc-scene-height, auto); overflow: visible; }
 .inc-stage[data-zoomed] { overflow: hidden; }

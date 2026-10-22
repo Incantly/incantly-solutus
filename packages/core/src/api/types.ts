@@ -8,6 +8,9 @@
  */
 
 /** Theme tones. Scenes never use literal colours. */
+/** How a scene's panels sit together: side by side, one above another, or two by two. */
+export type PanelLayout = 'row' | 'column' | 'grid';
+
 /** Colours come only from tones; the theme gives each its light and dark value. `water` is for liquids. */
 export type Tone = 'lo' | 'mid' | 'hi' | 'lit' | 'faint' | 'a' | 'b' | 'c' | 'water';
 
@@ -1328,6 +1331,13 @@ export interface Inc {
   /** A live table beside the drawing. */
   table(options: TableOptions): void;
   idea(sentence: string): void;
+  /**
+   * Lays the scene's panels, the elements its stages are drawn in, out
+   * together: 'row' puts them side by side and stacks them when the figure is
+   * narrow, 'column' puts them one above another, 'grid' two by two. Panels
+   * of one scene share its model, controls and timeline (VI-7, C3-9).
+   */
+  layout(kind: PanelLayout): void;
   steps(steps: readonly Step[]): void;
   explain(text: () => string): void;
   describe(text: () => string): void;

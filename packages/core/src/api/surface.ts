@@ -161,6 +161,7 @@ export const INC_FUNCTIONS = {
   readout: null,
   table: null,
   idea: null,
+  layout: null,
   steps: null,
   explain: null,
   describe: null,

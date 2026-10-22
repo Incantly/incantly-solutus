@@ -239,7 +239,7 @@ export const CAPABILITIES: readonly Capability[] = [
 ];
 
 /** Declarations every scene call receives: parameters, the model, frames and the inc object. */
-export const CORE_CONTRACT: readonly string[] = ['Tone', 'Readable', 'Vec2', 'ViewBox', 'ParamOptions', 'Param', 'ParamValues', 'Model', 'FrameInfo', 'Inc'];
+export const CORE_CONTRACT: readonly string[] = ['Tone', 'Readable', 'Vec2', 'ViewBox', 'ParamOptions', 'Param', 'ParamValues', 'Model', 'FrameInfo', 'PanelLayout', 'Inc'];
 
 const BY_NAME = new Map(CAPABILITIES.map((c) => [c.name, c]));
 

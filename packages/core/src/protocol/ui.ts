@@ -166,6 +166,8 @@ export interface UiState {
   readonly views: readonly StageView[];
   /** Whether a ghost of an earlier state is shown, when the scene offers one (TE-5). */
   readonly compare: { readonly available: boolean; readonly on: boolean };
+  /** How the scene's panels sit together, when it has more than one (VI-7). */
+  readonly panels: 'row' | 'column' | 'grid' | null;
 }
 
 export const EMPTY_UI: UiState = {
@@ -191,4 +193,5 @@ export const EMPTY_UI: UiState = {
   card: { title: null, hint: null },
   views: [],
   compare: { available: false, on: false },
+  panels: null,
 };

@@ -258,6 +258,11 @@ export class FigureRenderer {
     if (ui.history !== undefined) this.controls.setHistory(ui.history);
     if (ui.timing !== undefined) this.controls.setTiming(ui.timing);
     if (ui.compare !== undefined) this.controls.setCompare(ui.compare);
+    if (ui.panels !== undefined) {
+      const sceneRoot = this.root.querySelector<HTMLElement>('.inc-scene');
+      if (sceneRoot && ui.panels) sceneRoot.dataset.panels = ui.panels;
+      else if (sceneRoot) delete sceneRoot.dataset.panels;
+    }
     if (ui.readouts !== undefined) this.readouts.update(ui.readouts);
     if (ui.legend !== undefined) this.legend.update(ui.legend);
     if (ui.formulas !== undefined) this.formulas.update(ui.formulas);

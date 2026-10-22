@@ -349,6 +349,27 @@ describe('full screen, layout and shading (VI-6, SV-5)', () => {
     }
   });
 
+  it('lays a scene’s panels out side by side, one above another or two by two (VI-7)', async () => {
+    const two = "<div id='scene'></div><div id='graph'></div>";
+    const { root, figure } = mount(
+      `inc.layout('row');
+       const a = inc.param('a', { min: 0, max: 1, value: 0.5, label: 'A' });
+       inc.svg('#scene', { viewBox: [0, 0, 100, 100], title: 'Scene' }).circle(50, 50, 10, { tone: 'lit' });
+       inc.graph2d('#graph', { x: [0, 1], y: [0, 1], title: 'Graph' }).plot((x) => a.value * x);`,
+      {},
+      two,
+    );
+    expect(q(root, '.inc-scene').dataset.panels).toBe('row');
+    expect(root.querySelectorAll('svg.inc-stage')).toHaveLength(2);
+    expect(figure.runtime.uiState().panels).toBe('row');
+    const { THEME_CSS } = await import('../src/renderer/theme');
+    expect(THEME_CSS).toContain(".inc-scene[data-panels='row'] { display: flex; flex-wrap: wrap;");
+    const { SceneRuntime } = await import('../src/runtime/runtime');
+    const wrong = new SceneRuntime({ autoplay: false });
+    wrong.mount((inc) => inc.layout('sideways' as never));
+    expect(wrong.uiState().error?.message).toBe("inc.layout takes 'row', 'column' or 'grid'");
+  });
+
   it('lays out by its own width and pads a full-screen figure clear of notches', async () => {
     const { THEME_CSS } = await import('../src/renderer/theme');
     expect(THEME_CSS).toMatch(/\.inc-figure:fullscreen \{[^}]*env\(safe-area-inset-top\)[^}]*env\(safe-area-inset-left\)/);

@@ -250,6 +250,8 @@ export class SceneRuntime {
   private formulas: FormulaRecord[] = [];
   private prediction: PredictRecord | null = null;
   private compare: { available: boolean; on: boolean; ghosts: Map<number, VNode> } = { available: false, on: false, ghosts: new Map() };
+  /** How the scene's panels sit together (VI-7). */
+  private panels: 'row' | 'column' | 'grid' | null = null;
   // Time
   private timeline: Timeline | null = null;
   private simulations: SimulationRecord[] = [];
@@ -1151,6 +1153,7 @@ export class SceneRuntime {
       card: { title: this.graph.stages[0]?.title ?? null, hint: this.hint() },
       views: [...this.views.entries()].map(([id, controller]) => ({ id, changed: controller.changed() })),
       compare: { available: this.compare.available, on: this.compare.on },
+      panels: this.panels,
     };
   }
 
@@ -1589,6 +1592,11 @@ export class SceneRuntime {
         if (typeof options.rows !== 'function') throw new SceneApiError('inc.table rows must be a function of the model');
         if (runtime.tables.length >= 2) throw new SceneApiError('At most 2 tables');
         runtime.tables.push({ title: clip(options.title, 80), columns: options.columns.map((c) => clip(String(c), 40)), rows: options.rows, cells: [] });
+      },
+      layout(kind) {
+        runtime.requireMounting('layout');
+        if (kind !== 'row' && kind !== 'column' && kind !== 'grid') throw new SceneApiError("inc.layout takes 'row', 'column' or 'grid'");
+        runtime.panels = kind;
       },
       idea(sentence) {
         runtime.requireMounting('idea');
