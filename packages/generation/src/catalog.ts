@@ -125,6 +125,12 @@ export const CAPABILITIES: readonly Capability[] = [
       ...STAGE,
     ],
   },
+  {
+    name: 'biology',
+    draws: true,
+    line: "biology: animal, plant and bacterial cells with organelles, diffusion and active transport across a membrane, DNA's double helix, flows along vessels (inc.biology).",
+    contract: ['BiologyOptions', 'CellKind', 'Organelle', 'CellOptions', 'Cell', 'MembraneOptions', 'Membrane', 'HelixOptions', 'Helix', 'StreamOptions', 'Stream', 'Biology', ...STAGE],
+  },
   // Controls and time.
   {
     name: 'controls',
