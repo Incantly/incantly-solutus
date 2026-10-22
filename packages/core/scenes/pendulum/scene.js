@@ -42,6 +42,8 @@ const kinetic = stage.rect(640, 370, 40, 0, { tone: 'a', fill: true, parent: ene
 const potential = stage.rect(700, 370, 40, 0, { tone: 'b', fill: true, parent: energy });
 stage.text(636, 392, 'kinetic', { tone: 'mid', parent: energy });
 stage.text(696, 392, 'potential', { tone: 'mid', parent: energy });
+// The small-angle period, written as it is on paper.
+stage.equation(100, 64, 'T ≈ 2*pi*sqrt(L/g)', { size: 18 });
 stage.drag(bob, (p) => {
   const angle = Math.atan2(p.x - PX, p.y - PY);
   side = angle < 0 ? -1 : 1;

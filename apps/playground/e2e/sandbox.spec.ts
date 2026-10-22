@@ -233,4 +233,36 @@ test.describe('sandbox (Phase 3 gate)', () => {
     }, svg);
     expect(size.width).toBeGreaterThan(100);
   });
+
+  test('an equation draws as maths in the frame, and keeps it in the exported picture and the snapshot (DG-5)', async ({ page }, testInfo) => {
+    await open(page, 'page=sandbox&scene=pendulum&autoplay=0');
+    const frame = page.frameLocator('iframe');
+    const maths = frame.locator('svg.inc-stage foreignObject[data-math] math');
+    await expect(maths).toHaveCount(1);
+    // The fraction under the root is laid out as maths: it has height, stacked over two lines.
+    const fraction = await frame.locator('svg.inc-stage mfrac').evaluate((el) => el.getBoundingClientRect().height);
+    const letter = await frame.locator('svg.inc-stage mi').first().evaluate((el) => el.getBoundingClientRect().height);
+    expect(fraction).toBeGreaterThan(letter * 1.5);
+    const pictures = await page.evaluate(async () => {
+      const figure = (window.__playground as unknown as { figure: { exportSvg(): Promise<string | null>; snapshot(): Promise<string | null> } }).figure;
+      return { svg: await figure.exportSvg(), png: await figure.snapshot() };
+    });
+    const markup = decodeURIComponent(pictures.svg!.slice(pictures.svg!.indexOf(',') + 1));
+    expect(markup).toContain('<switch>');
+    expect(markup).toContain('<math');
+    expect(markup).toContain('T ≈ 2π√(L/g)</text>');
+    expect(pictures.png).toMatch(/^data:image\/png;base64,/);
+    // Both pictures drawn on the page, for a look at the contact sheet.
+    await page.evaluate(({ svg, png }) => {
+      document.body.replaceChildren();
+      for (const src of [svg!, png!]) {
+        const img = document.createElement('img');
+        img.src = src;
+        img.style.cssText = 'display:block;width:640px;border:1px solid #ccc;margin:4px';
+        document.body.append(img);
+      }
+    }, pictures);
+    await page.waitForFunction(() => [...document.images].every((img) => img.complete && img.naturalWidth > 0));
+    await page.screenshot({ path: testInfo.outputPath('equation-pictures.png'), fullPage: true });
+  });
 });
