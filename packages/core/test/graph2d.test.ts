@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import type { Inc } from '../src/api/types';
-import { niceStep, ticks } from '../src/graph2d/graph';
+import type { GraphSegment, Inc } from '../src/api/types';
+import { clipSegment, niceStep, ticks } from '../src/graph2d/graph';
+import { nodeOf } from '../src/scene/handles';
 import { pathPoints } from '../src/scene/bounds';
 import { SceneRuntime } from '../src/runtime/runtime';
 
@@ -55,6 +56,32 @@ describe('graph2d', () => {
     });
     expect(mount.ui.error).toBeNull();
     expect(mapped).toEqual([52, 740, 20]);
+  });
+
+  it('cuts a segment to the plot area, as curves are, and hides one wholly outside it', () => {
+    // Once tangent and secant lines through steep points ran off the figure and failed the bounds check.
+    let tangent: GraphSegment | null = null;
+    let away: GraphSegment | null = null;
+    const { runtime } = run((inc) => {
+      const g = inc.graph2d('#g', { x: [0, 10], y: [0, 10], title: 'Cut' });
+      tangent = g.segment(2, -40, 8, 50, { tone: 'a' });
+      away = g.segment(20, 20, 30, 30);
+    });
+    const line = runtime.graph.nodes.get(nodeOf(tangent!.handle).id)!;
+    const ys = [Number(line.attrs.get('y1')), Number(line.attrs.get('y2'))];
+    // The plot area of the default view box is [52, 20, 688, 320].
+    for (const y of ys) {
+      expect(y).toBeGreaterThanOrEqual(20 - 1e-9);
+      expect(y).toBeLessThanOrEqual(340 + 1e-9);
+    }
+    expect(nodeOf(away!.handle).hidden).toBe(true);
+    // Brought back into the range, it shows again; a scene's own hide still wins.
+    away!.between(1, 1, 9, 9);
+    expect(nodeOf(away!.handle).hidden).toBe(false);
+    away!.hide().between(2, 2, 8, 8);
+    expect(nodeOf(away!.handle).hidden).toBe(true);
+    expect(clipSegment(0, 0, 10, 10, [2, 2, 4, 4])).toEqual([2, 2, 6, 6]);
+    expect(clipSegment(0, 0, 1, 1, [2, 2, 4, 4])).toBeNull();
   });
 
   it('plots a formula, shows its source and redraws when a parameter changes', () => {

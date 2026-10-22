@@ -245,6 +245,35 @@ function handleOf(item: unknown): Handle {
   return typeof item === 'object' && item !== null && 'handle' in item ? (item as { handle: Handle }).handle : (item as Handle);
 }
 
+/** A segment cut to a rectangle [left, top, width, height] (Liang–Barsky), or null when none of it lies inside. */
+export function clipSegment(ax: number, ay: number, bx: number, by: number, rect: ViewBox): [number, number, number, number] | null {
+  const [left, top, width, height] = rect;
+  const dx = bx - ax;
+  const dy = by - ay;
+  let t0 = 0;
+  let t1 = 1;
+  for (const [p, q] of [
+    [-dx, ax - left],
+    [dx, left + width - ax],
+    [-dy, ay - top],
+    [dy, top + height - ay],
+  ] as const) {
+    if (p === 0) {
+      if (q < 0) return null;
+      continue;
+    }
+    const r = q / p;
+    if (p < 0) {
+      if (r > t1) return null;
+      if (r > t0) t0 = r;
+    } else {
+      if (r < t0) return null;
+      if (r < t1) t1 = r;
+    }
+  }
+  return [ax + t0 * dx, ay + t0 * dy, ax + t1 * dx, ay + t1 * dy];
+}
+
 export class Graph2D implements Graph, ViewController {
   readonly stage: Stage;
   readonly orbit = false;
@@ -899,6 +928,11 @@ export class Graph2D implements Graph, ViewController {
     };
   }
 
+  /**
+   * A segment between two data points, cut to the plot area as plotted curves
+   * are: a tangent or secant through a steep point ends at the axes' box
+   * rather than running off the figure. One wholly outside the plot is hidden.
+   */
   segment(x1: number, y1: number, x2: number, y2: number, options: CurveOptions = {}): GraphSegment {
     const handle: Handle = this.inner.line(0, 0, 0, 0, {
       layer: 'front',
@@ -906,10 +940,16 @@ export class Graph2D implements Graph, ViewController {
       dashed: options.dashed ?? false,
     });
     let coords: [number, number, number, number] = [x1, y1, x2, y2];
+    let shown = true;
+    let inside = true;
     const place = () => {
       const [ax, ay] = this.map(coords[0], coords[1]);
       const [bx, by] = this.map(coords[2], coords[3]);
-      handle.set({ x1: ax, y1: ay, x2: bx, y2: by });
+      // A point that is not a number stays one, so the probe can name it.
+      const cut = [ax, ay, bx, by].every(Number.isFinite) ? clipSegment(ax, ay, bx, by, this.rect) : [ax, ay, bx, by];
+      inside = cut !== null;
+      if (cut) handle.set({ x1: cut[0], y1: cut[1], x2: cut[2], y2: cut[3] });
+      handle.show(shown && inside);
     };
     place();
     this.remaps.push(place);
@@ -921,7 +961,8 @@ export class Graph2D implements Graph, ViewController {
         return this;
       },
       show(visible = true) {
-        handle.show(visible);
+        shown = visible !== false;
+        handle.show(shown && inside);
         return this;
       },
       hide() {
