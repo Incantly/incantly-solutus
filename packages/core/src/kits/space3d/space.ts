@@ -743,9 +743,18 @@ export class Space3DApi implements Space3D {
       layer: options.layer ?? 'back',
       glow: options.glow === true,
     });
-    const item = new Item({ type: 'custom', emit: () => undefined, bounds: null }, null, parent);
+    let cloud: Cloud | null = null;
+    // Labels and screen() point at the middle of the dots, as a line's do at the middle of its points.
+    const centre = (): Vec3 | null => {
+      const points = cloud?.points ?? [];
+      if (points.length === 0) return null;
+      const sum = points.reduce<Vec3>((s, p) => [s[0] + p[0], s[1] + p[1], s[2] + p[2]], [0, 0, 0]);
+      return [sum[0] / points.length, sum[1] / points.length, sum[2] / points.length];
+    };
+    const item = new Item({ type: 'custom', emit: () => undefined, bounds: null, centre }, null, parent);
     item.name = 'dots';
-    return new Dots3DHandle(this.engine, item, this.coords, this.engine.cloud(item, flat));
+    cloud = this.engine.cloud(item, flat);
+    return new Dots3DHandle(this.engine, item, this.coords, cloud);
   }
 
   point(at: Vec3, options: { readonly tone?: Tone; readonly parent?: Group3D; readonly r?: number } = {}): Object3D {

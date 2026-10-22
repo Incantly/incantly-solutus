@@ -62,7 +62,13 @@ export type Geometry =
   | { readonly type: 'line'; points: Vec3[]; arrow: boolean; dashed: boolean; closed: boolean }
   | { readonly type: 'arrow'; from: Vec3; to: Vec3; dashed: boolean }
   | { readonly type: 'point'; r: number }
-  | { readonly type: 'custom'; readonly emit: (out: Emitter, item: Item) => void; readonly bounds: (() => Vec3[]) | null };
+  | {
+      readonly type: 'custom';
+      readonly emit: (out: Emitter, item: Item) => void;
+      readonly bounds: (() => Vec3[]) | null;
+      /** Where its labels and screen() point at, in its own space, when that is not its origin. */
+      readonly centre?: () => Vec3 | null;
+    };
 
 /** One node of the 3D scene. */
 export class Item {
@@ -515,7 +521,8 @@ export class Engine3D implements ViewController {
       return transformPoint(world, [sum[0] / g.points.length, sum[1] / g.points.length, sum[2] / g.points.length]);
     }
     if (g.type === 'arrow') return transformPoint(world, [(g.from[0] + g.to[0]) / 2, (g.from[1] + g.to[1]) / 2, (g.from[2] + g.to[2]) / 2]);
-    return transformPoint(world, [0, 0, 0]);
+    const centre = g.type === 'custom' ? g.centre?.() : null;
+    return transformPoint(world, centre ?? [0, 0, 0]);
   }
 
   /** World-space points that bound an item, for fitting the view. */

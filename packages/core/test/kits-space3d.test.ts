@@ -576,13 +576,14 @@ describe('inc.space3d', () => {
       [0, 0, 1],
     ];
     let world!: Space3D;
+    let cloud!: ReturnType<Space3D['dots']>;
     const { runtime, mount, first } = space((s, inc) => {
       world = s;
       const on = inc.toggle('on', { value: true, label: 'Show the gas' });
       s.box(1, { tone: 'a' });
       const gas = s.group();
       // A point that is not three numbers is left out.
-      s.dots({ tone: 'c', r: 2, glow: true, parent: gas }).set([...POINTS, [Number.NaN, 0, 0], [1, 2] as never]);
+      cloud = s.dots({ tone: 'c', r: 2, glow: true, parent: gas }).set([...POINTS, [Number.NaN, 0, 0], [1, 2] as never]);
       inc.onFrame(() => gas.show(on.value === 1));
     });
     type Sent = { layer: string; tone: string; r: number; glow?: boolean; points: number[] };
@@ -592,6 +593,10 @@ describe('inc.space3d', () => {
     // Behind every solid by default, on the stage's own canvas layer.
     expect(start).toMatchObject({ layer: 'back', tone: 'c', r: 2, glow: true });
     expect(start.points).toEqual(at(POINTS));
+    // Its labels and screen() point at the middle of the dots.
+    const middle = world.project([0.25, 0.25, 0.25]);
+    expect(cloud.screen()[0]).toBeCloseTo(middle[0], 6);
+    expect(cloud.screen()[1]).toBeCloseTo(middle[1], 6);
     // Turned, they follow the camera; a view that has not moved sends nothing.
     runtime.view(stageId(runtime), { kind: 'orbit', dx: 0.25, dy: 0.1 });
     const turned = sent(runtime.tick(0).commands)!;
