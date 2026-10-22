@@ -47,6 +47,36 @@ export const SCENE_FIXTURES: Readonly<Record<string, FixtureScene>> = {
       "inc.describe(() => 'Three dots over a band, framed; a disc covers the middle one.');",
     ].join('\n'),
   },
+  /**
+   * Every kind of control a scene can ask for (6.9, CT-10): a slider with its
+   * number field, a switch, a choice as buttons and as a menu, tone swatches,
+   * a button, presets, an editable formula, a legend that hides curves, the
+   * zoom bar, a prediction, steps and the description.
+   */
+  controls: {
+    html: STAGE,
+    css: '',
+    js: [
+      "inc.idea('A wave whose height, shape and colour the learner sets.');",
+      "const amplitude = inc.param('amplitude', { min: 0.5, max: 2, step: 0.1, value: 1, label: 'Height', unit: 'm' });",
+      "const mirrored = inc.toggle('mirrored', { value: true, label: 'Mirror' });",
+      "const shape = inc.choice('shape', { options: ['Smooth', 'Sharp'], value: 0, buttons: true, label: 'Shape' });",
+      "const pace = inc.choice('pace', { options: ['Slow', 'Fast'], value: 0, label: 'Pace' });",
+      "const tone = inc.color('tone', { value: 'b', options: ['a', 'b', 'c'], label: 'Colour' });",
+      "inc.button('Tallest', () => ({ amplitude: 2 }));",
+      "inc.presets({ Low: { amplitude: 0.5 }, High: { amplitude: 1.8 } });",
+      "inc.timeline({ duration: 4, loop: 'loop' });",
+      "const wave = inc.formula('A*sin(x - t)', { vars: { A: amplitude }, label: 'Wave' });",
+      "const graph = inc.graph2d('#stage', { x: [-6, 6], y: [-3, 3], title: 'Wave', labels: { x: 'x', y: 'y' } });",
+      "const curve = graph.plot((x, t) => (shape.value === 1 ? Math.sign(wave(x, t)) * amplitude.value : wave(x, t)) * (pace.value + 1) / 2, { tone: 'b', label: 'Wave' });",
+      "graph.plot((x, t) => (mirrored.value === 1 ? -1 : 0) * wave(x, t), { tone: 'c', dashed: true, label: 'Mirror' });",
+      "graph.stage.part('Wave', curve.handle, { label: 'The wave', info: 'Its height is the amplitude.' });",
+      "inc.readout({ Height: () => amplitude.value.toFixed(1) + ' m', Colour: () => tone.tone });",
+      "inc.predict({ question: 'What does the tallest wave reach?', options: ['1 m', '2 m'], answer: 1, reveal: { amplitude: 2 } });",
+      "inc.steps([{ say: 'The wave travels right.' }, { say: 'Taller.', set: { amplitude: 1.8 } }]);",
+      "inc.describe(() => 'A wave ' + amplitude.value.toFixed(1) + ' m tall, ' + (mirrored.on ? 'with' : 'without') + ' its mirror.');",
+    ].join('\n'),
+  },
   /** Throws on line 7, column 30 once time passes half a second. */
   'throws-later': {
     html: STAGE,

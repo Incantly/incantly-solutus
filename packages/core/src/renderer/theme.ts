@@ -31,6 +31,8 @@ export const THEME_CSS = `
   --inc-gap: 10px;
   --inc-pad: 12px;
   --inc-control-height: 36px;
+  /* The smallest a control's hit area may be: 36 px, 44 px on touch screens (6.9). Tokens cannot take a control below it. */
+  --inc-target: 36px;
   --inc-border-width: 1px;
   --inc-surface: var(--inc-card);
   --inc-button-bg: var(--inc-card);
@@ -92,9 +94,9 @@ html.inc-frame, html.inc-frame body { margin: 0; padding: 0; background: transpa
 .inc-figure [hidden] { display: none !important; }
 .inc-figure[data-align='center'] { margin-inline: auto; }
 .inc-figure[data-align='end'] { margin-inline-start: auto; }
-.inc-figure[data-density='compact'] { --inc-gap: 6px; --inc-pad: 8px; --inc-control-height: 32px; }
+.inc-figure[data-density='compact'] { --inc-gap: 6px; --inc-pad: 8px; --inc-control-height: 36px; }
 .inc-figure[data-density='spacious'] { --inc-gap: 14px; --inc-pad: 18px; }
-.inc-figure[data-size='sm'] { --inc-font-size: 13px; --inc-control-height: 32px; }
+.inc-figure[data-size='sm'] { --inc-font-size: 13px; --inc-control-height: 36px; }
 .inc-figure[data-size='lg'] { --inc-font-size: 16px; --inc-control-height: 44px; }
 .inc-header { display: flex; flex-direction: column; gap: 2px; margin: 0 0 6px; }
 .inc-title { margin: 0; font-weight: 600; }
@@ -244,8 +246,8 @@ html.inc-frame, html.inc-frame body { margin: 0; padding: 0; background: transpa
 }
 .inc-stage-host:is(:hover, :focus-within, .is-active) > .inc-zoombar, .inc-zoombar:focus-within { opacity: 1; }
 .inc-figure .inc-zoombar button, .inc-figure .inc-zoombar select {
-  min-height: 28px;
-  min-width: 28px;
+  min-height: var(--inc-target);
+  min-width: var(--inc-target);
   padding: 0 6px;
   font-size: 13px;
   line-height: 1;
@@ -253,7 +255,7 @@ html.inc-frame, html.inc-frame body { margin: 0; padding: 0; background: transpa
   background: color-mix(in srgb, var(--inc-bg) 85%, transparent);
   border: var(--inc-border-width) solid var(--inc-line);
 }
-@media (pointer: coarse) { .inc-figure .inc-zoombar button, .inc-figure .inc-zoombar select { min-height: 36px; min-width: 36px; } .inc-zoombar { opacity: 0.9; } }
+@media (pointer: coarse) { .inc-zoombar { opacity: 0.9; } }
 .inc-figure .inc-zoombar button[aria-pressed='true'] { background: var(--inc-focus); border-color: var(--inc-focus); color: var(--inc-bg); }
 .inc-part-info { margin: 0; min-height: 1.45em; }
 .inc-part-info.is-hint { color: var(--inc-muted); font-size: 0.86em; }
@@ -261,8 +263,10 @@ html.inc-frame, html.inc-frame body { margin: 0; padding: 0; background: transpa
 .inc-legend__item { display: inline-flex; align-items: center; gap: 6px; }
 .inc-legend__swatch { width: 14px; height: 4px; border-radius: 2px; background: var(--inc-swatch, var(--inc-mid)); flex: none; }
 .inc-legend__swatch.is-dashed { background: repeating-linear-gradient(90deg, var(--inc-swatch, var(--inc-mid)) 0 4px, transparent 4px 7px); }
-.inc-figure .inc-legend__toggle { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 2px 8px; }
-.inc-figure .inc-legend__toggle[aria-pressed='false'] { opacity: 0.5; text-decoration: line-through; }
+.inc-figure .inc-legend__toggle { display: inline-flex; align-items: center; gap: 6px; min-height: var(--inc-target); padding: 2px 8px; }
+/* A hidden curve's entry stays readable: muted text struck through, its swatch faded (CT-10, contrast). */
+.inc-figure .inc-legend__toggle[aria-pressed='false'] { color: var(--inc-muted); text-decoration: line-through; }
+.inc-figure .inc-legend__toggle[aria-pressed='false'] .inc-legend__swatch { opacity: 0.35; }
 .inc-swatch--lo { --inc-swatch: var(--inc-lo); }
 .inc-swatch--mid { --inc-swatch: var(--inc-mid); }
 .inc-swatch--hi { --inc-swatch: var(--inc-hi); }
@@ -302,29 +306,30 @@ html.inc-frame, html.inc-frame body { margin: 0; padding: 0; background: transpa
 .inc-figure button, .inc-figure select, .inc-figure input {
   font: inherit;
   color: inherit;
-  min-height: var(--inc-control-height);
+  min-height: max(var(--inc-target), var(--inc-control-height));
 }
 .inc-figure button {
   background: var(--inc-button-bg);
   border: var(--inc-border-width) solid var(--inc-line);
   border-radius: var(--inc-radius-sm);
   padding: 4px 12px;
+  min-width: var(--inc-target);
   cursor: pointer;
 }
 .inc-figure button.inc-primary { border-color: var(--inc-fg); font-weight: 600; }
-.inc-figure button.inc-icon-button { min-width: var(--inc-control-height); padding: 4px 8px; }
-.inc-figure button.inc-chip { border-radius: 999px; padding: 2px 12px; min-height: calc(var(--inc-control-height) - 4px); }
+.inc-figure button.inc-icon-button { min-width: max(var(--inc-target), var(--inc-control-height)); padding: 4px 8px; }
+.inc-figure button.inc-chip { border-radius: 999px; padding: 2px 12px; min-height: max(var(--inc-target), calc(var(--inc-control-height) - 4px)); }
 .inc-figure button[aria-pressed='true'] { border-color: var(--inc-fg); }
 .inc-figure button.inc-chip[aria-pressed='true'] { background: var(--inc-fg); color: var(--inc-bg); }
 .inc-figure button:disabled, .inc-figure button[aria-disabled='true'] { opacity: 0.5; cursor: default; }
 .inc-figure select { background: var(--inc-button-bg); border: var(--inc-border-width) solid var(--inc-line); border-radius: var(--inc-radius-sm); padding: 4px 8px; }
 .inc-figure :focus-visible { outline: 2px solid var(--inc-focus); outline-offset: 2px; }
 @media (pointer: coarse) {
-  .inc-figure { --inc-control-height: 44px; }
+  .inc-figure { --inc-control-height: 44px; --inc-target: 44px; }
 }
 .inc-params { display: grid; gap: var(--inc-gap); }
 .inc-param { display: grid; grid-template-columns: minmax(120px, 1fr) 2fr 88px; align-items: center; gap: var(--inc-gap); }
-.inc-param--toggle { grid-template-columns: auto 1fr; }
+.inc-param--toggle { grid-template-columns: auto 1fr; min-height: var(--inc-target); }
 .inc-param:is(.inc-param--choice, .inc-param--color) { grid-template-columns: minmax(120px, 1fr) 2fr; }
 @container (max-width: 420px) {
   .inc-param:not(.inc-param--toggle) { grid-template-columns: 1fr 88px; }
@@ -368,14 +373,22 @@ html.inc-frame, html.inc-frame body { margin: 0; padding: 0; background: transpa
   box-shadow: 0 1px 2px var(--inc-shadow-color);
   transition: transform 0.15s;
 }
+.inc-figure input.inc-switch::after {
+  /* The hit area: the track is 24 px tall, the target 36 (44 on touch). */
+  content: '';
+  position: absolute;
+  inset: calc((24px - var(--inc-target)) / 2) -2px;
+}
 .inc-figure input.inc-switch:checked { background: var(--inc-lit); }
 .inc-figure input.inc-switch:checked::before { transform: translateX(18px); }
 .inc-segmented { display: inline-flex; flex-wrap: wrap; border: var(--inc-border-width) solid var(--inc-line); border-radius: var(--inc-radius-sm); overflow: hidden; }
 .inc-figure .inc-segmented button { border: 0; border-radius: 0; background: transparent; }
 .inc-figure .inc-segmented button + button { border-inline-start: var(--inc-border-width) solid var(--inc-line); }
 .inc-figure .inc-segmented button[aria-pressed='true'] { background: var(--inc-fg); color: var(--inc-bg); }
-.inc-swatches { display: flex; flex-wrap: wrap; gap: 8px; }
-.inc-figure button.inc-swatch { width: 30px; min-height: 30px; height: 30px; padding: 0; border-radius: 50%; background: var(--inc-swatch); border: 2px solid transparent; }
+.inc-swatches { display: flex; flex-wrap: wrap; gap: 6px; }
+.inc-figure button.inc-swatch { position: relative; width: calc(var(--inc-target) - 6px); min-width: 0; min-height: 0; height: calc(var(--inc-target) - 6px); padding: 0; border-radius: 50%; background: var(--inc-swatch); border: 2px solid transparent; }
+/* Each swatch's hit area is the target, and with the 6 px gap the next one's starts where it ends. */
+.inc-figure button.inc-swatch::after { content: ''; position: absolute; inset: -5px; border-radius: 50%; }
 .inc-figure button.inc-swatch[aria-pressed='true'] { border-color: var(--inc-fg); box-shadow: inset 0 0 0 2px var(--inc-bg); }
 .inc-settings { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; background: var(--inc-surface); border-radius: var(--inc-radius-sm); padding: 10px; }
 .inc-settings__timing { display: contents; }
@@ -396,7 +409,9 @@ html.inc-frame, html.inc-frame body { margin: 0; padding: 0; background: transpa
 .inc-steps__progress { color: var(--inc-muted); font-size: 0.86em; font-variant-numeric: tabular-nums; }
 .inc-steps button { background: var(--inc-bg); }
 .inc-description { margin-top: 10px; }
-.inc-describe summary { cursor: pointer; color: var(--inc-muted); }
+.inc-describe summary { position: relative; cursor: pointer; color: var(--inc-muted); }
+/* A 36 px hit area (44 on touch) around the one line, without moving what is around it. */
+.inc-describe summary::after { content: ''; position: absolute; inset: calc((1.45em - var(--inc-target)) / 2) 0; }
 .inc-describe p { margin: 6px 0 0; }
 .inc-print-only { display: none; }
 .inc-visually-hidden {

@@ -70,7 +70,7 @@ Tokens are the theme's CSS variables, given without the `--inc-` prefix. Values 
 | `font`, `font-size` | Font family list and base size |
 | `radius`, `radius-sm` | Card corners, control corners |
 | `gap`, `pad` | Space between rows, padding inside the card |
-| `control-height`, `border-width` | Height of buttons and inputs, width of borders |
+| `control-height`, `border-width` | Height of buttons and inputs, width of borders. A control's hit area never goes below 36 px, or 44 px on a touch screen, whatever the height, density or size (PRD 6.9): a smaller switch or swatch keeps its look and gets a larger invisible hit area |
 | `surface`, `button-bg` | Panel and button fills |
 | `shadow`, `blur` | Card shadow; the glass preset's backdrop blur |
 | `scene-bg` | Background behind the drawing |
