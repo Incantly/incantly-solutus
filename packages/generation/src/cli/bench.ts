@@ -18,6 +18,9 @@ import { spread } from '../metrics';
  *   node dist/bench.mjs calibrate --dir bench/run   # the fixed cost of a subagent call, to subtract
  *   node dist/bench.mjs ingest --dir bench/run --run <dir> --calibration
  *   node dist/bench.mjs report --dir bench/run      # results.json and report.md
+ *
+ * --plan, --scene and --repair name the models (haiku, sonnet, opus); repairs
+ * default to the scene model. --set all adds the concepts reviewed since launch.
  */
 
 const [command] = process.argv.slice(2);
@@ -30,6 +33,8 @@ const { values } = parseArgs({
     conditions: { type: 'string', default: 'library,novel' },
     plan: { type: 'string', default: 'haiku' },
     scene: { type: 'string', default: 'sonnet' },
+    // Repairs on another model than scenes; by default the scene model.
+    repair: { type: 'string' },
     effort: { type: 'string', default: 'low' },
     calibration: { type: 'boolean', default: false },
     deadline: { type: 'string' },
@@ -46,6 +51,7 @@ mkdirSync(dir, { recursive: true });
 const path = (name: string) => join(dir, name);
 const write = (name: string, data: unknown) => writeFileSync(path(name), typeof data === 'string' ? data : `${JSON.stringify(data, null, 2)}\n`);
 const conditions = values.conditions.split(',') as BenchCondition[];
+const repairModel = values.repair ?? values.scene;
 
 function requests() {
   const only = values.only?.split(',');
@@ -197,7 +203,7 @@ function report(results: readonly BenchResult[], overheadMs: Record<string, numb
   const done = results.filter((r) => !r.pending);
   lines.push('# Generation bench', '');
   lines.push(
-    `${done.length} generations: ${requests().length} requests (${values.set === 'all' ? 'the launch set of PRD 17.8 and the concepts reviewed since' : 'the launch set of PRD 17.8'}) in ${conditions.length} condition${conditions.length > 1 ? 's' : ''}. Plans on ${values.plan}, scenes and repairs on ${values.scene}, effort ${values.effort}, each call one subagent.`,
+    `${done.length} generations: ${requests().length} requests (${values.set === 'all' ? 'the launch set of PRD 17.8 and the concepts reviewed since' : 'the launch set of PRD 17.8'}) in ${conditions.length} condition${conditions.length > 1 ? 's' : ''}. Plans on ${values.plan}, ${repairModel === values.scene ? `scenes and repairs on ${values.scene}` : `scenes on ${values.scene}, repairs on ${repairModel}`}, effort ${values.effort}, each call one subagent.`,
     "Times are what a learner waits for, on the pipeline's own clock: each model call's time plus this machine's validation and probe. Calls are cut off at the deadline as the service would cut them.",
     latency === 'text'
       ? `Subagents think before some replies; the service calls models with thinking off. A reply that began by thinking counts its model's time to a first token${Object.keys(overheadMs).length > 0 ? ' (the one-word replies of the calibration, below)' : ''}, then the time from the end of its thinking to the end of the reply; the others count as measured. The last section gives the times as measured, thinking included.`
@@ -312,7 +318,7 @@ switch (command) {
     const calls = round.pending.map((p: PendingCall) => ({
       label: `${p.purpose}:${p.key}`,
       prompt: p.prompt,
-      model: p.purpose === 'plan' ? values.plan : values.scene,
+      model: p.purpose === 'plan' ? values.plan : p.purpose === 'repair' ? repairModel : values.scene,
       phase: p.purpose,
     }));
     write(`round-${n}.workflow.js`, workflowScript(`bench-round-${n}`, `Generation bench round ${n}: ${calls.length} model calls (${[...new Set(calls.map((c) => c.phase))].join(', ')}), one subagent each`, calls));
@@ -325,7 +331,7 @@ switch (command) {
   }
   case 'calibrate': {
     // The fixed cost of one subagent call: a reply of one word, for subtracting from the measured times.
-    const calls = [values.plan, values.scene].flatMap((model) =>
+    const calls = [...new Set([values.plan, values.scene, repairModel])].flatMap((model) =>
       [1, 2, 3, 4, 5].map((i) => ({ label: `calibrate:${model}-${i}`, prompt: 'Do not use any tools. Reply with the single word OK.', model, phase: 'calibrate' })),
     );
     write('calibrate.workflow.js', workflowScript('bench-calibrate', `Generation bench calibration: ${calls.length} one-word calls`, calls));
