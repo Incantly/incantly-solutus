@@ -89,6 +89,7 @@ export interface ModelPrice {
  * configuration when prices change.
  */
 export const MODEL_PRICES: Readonly<Record<string, ModelPrice>> = {
+  'claude-haiku-4-5': { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 },
   'claude-haiku-5-5': { input: 0.1, output: 0.5, cacheRead: 0.1, cacheWrite: 1.25 },
   'claude-sonnet-5-5': { input: 2, output: 10, cacheRead: 0.05, cacheWrite: 1.25 },
   'claude-opus-5-5': { input: 4, output: 20, cacheRead: 0.05, cacheWrite: 1.25 },
@@ -119,8 +120,8 @@ export interface AnthropicOptions {
   readonly models?: Partial<Record<CallPurpose, string>>;
   readonly effort?: Partial<Record<CallPurpose, Effort>>;
   readonly baseUrl?: string;
-  /** Per silent gap: each stream read resets it, so a stream that keeps arriving may run as long as it needs. */
-  readonly timeoutMs?: number;
+  /** Per silent gap: each stream read resets it. Null disables the provider-call timeout. */
+  readonly timeoutMs?: number | null;
   /** Tries after a busy or dropped response that streamed no text yet. */
   readonly retries?: number;
   readonly fetch?: typeof fetch;
@@ -132,7 +133,7 @@ export const DEFAULT_MODELS: Readonly<Record<CallPurpose, string>> = {
   repair: 'claude-sonnet-5-5',
 };
 
-const DEFAULT_EFFORT: Readonly<Record<CallPurpose, Effort>> = { plan: 'low', scene: 'medium', repair: 'medium' };
+const DEFAULT_EFFORT: Readonly<Record<CallPurpose, Effort>> = { plan: 'low', scene: 'low', repair: 'low' };
 
 interface StreamState {
   text: string;
@@ -188,20 +189,22 @@ export class AnthropicClient implements ModelClient {
 
   private async once(call: ModelCall, onFirstText: () => void): Promise<ModelReply> {
     const started = Date.now();
-    const timeoutMs = this.options.timeoutMs ?? 60_000;
+    const timeoutMs = this.options.timeoutMs;
     // An absolute cap kills healthy long scene streams: a rich scene can
     // stream past any fixed budget while every event still arrives well
     // inside it. The cap is per silent gap instead — each read resets it, so
     // only a stream that goes quiet for timeoutMs actually gets cut.
-    const timeout = new AbortController();
-    let gap = setTimeout(() => timeout.abort(), timeoutMs);
+    const timeout = timeoutMs === null ? null : new AbortController();
+    const waitMs = timeoutMs ?? 60_000;
+    let gap = timeout ? setTimeout(() => timeout.abort(), waitMs) : null;
     const reopenGap = (): void => {
-      clearTimeout(gap);
-      gap = setTimeout(() => timeout.abort(), timeoutMs);
+      if (!timeout) return;
+      if (gap) clearTimeout(gap);
+      gap = setTimeout(() => timeout.abort(), waitMs);
     };
-    const signal = call.signal ? AbortSignal.any([call.signal, timeout.signal]) : timeout.signal;
+    const signal = call.signal && timeout ? AbortSignal.any([call.signal, timeout.signal]) : (call.signal ?? timeout?.signal);
     const abortError = () =>
-      timeout.signal.aborted ? new ModelError('timeout', `The model went silent for over ${timeoutMs} ms`) : new ModelError('aborted', 'The call was cancelled');
+      timeout?.signal.aborted ? new ModelError('timeout', `The model went silent for over ${waitMs} ms`) : new ModelError('aborted', 'The call was cancelled');
     let response: Response;
     try {
       response = await this.fetcher(`${this.options.baseUrl ?? 'https://api.anthropic.com'}/v1/messages`, {
@@ -215,7 +218,7 @@ export class AnthropicClient implements ModelClient {
         signal,
       });
     } catch (error) {
-      if (signal.aborted) throw abortError();
+      if (signal?.aborted) throw abortError();
       throw new ModelError('network', `The model could not be reached: ${error instanceof Error ? error.message : String(error)}`);
     }
     if (!response.ok) throw await httpError(response);
@@ -244,12 +247,12 @@ export class AnthropicClient implements ModelClient {
         }
       }
     } catch (error) {
-      if (signal.aborted) throw abortError();
+      if (signal?.aborted) throw abortError();
       if (error instanceof ModelError) throw error;
       throw new ModelError('network', `The stream broke off: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       reader.releaseLock();
-      clearTimeout(gap);
+      if (gap) clearTimeout(gap);
     }
     if (buffer.trim()) {
       const delta = applyEvent(buffer, state);

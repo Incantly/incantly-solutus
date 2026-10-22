@@ -50,7 +50,7 @@ function generationService(): Plugin {
     { handle(req: IncomingMessage, res: ServerResponse): Promise<void>; close(): Promise<void>; records: { records: unknown[] } }
   >();
   const sessions = new Map<string, { apiKey: string; planModel: string; sceneModel: string }>();
-  const models = new Set(['claude-haiku-5-5', 'claude-sonnet-5-5', 'claude-opus-5-5']);
+  const models = new Set(['claude-haiku-4-5', 'claude-haiku-5-5', 'claude-sonnet-5-5', 'claude-opus-5-5']);
 
   async function body(req: IncomingMessage): Promise<unknown> {
     const chunks: Buffer[] = [];
@@ -76,6 +76,7 @@ function generationService(): Plugin {
       ? new g.AnthropicClient({
           apiKey: session.apiKey,
           models: { plan: session.planModel, scene: session.sceneModel, repair: session.sceneModel },
+          timeoutMs: null,
         })
       : g.referenceModel({ fault: name, stubborn, latencyMs: 250, chunk: 48 });
     const records = new g.MemoryRecords();
@@ -85,10 +86,9 @@ function generationService(): Plugin {
       records,
       prefix,
       enabled: () => enabled,
-      // A real playground call includes planning plus a streamed scene, and a
-      // rich scene can stream for minutes. The model-side cap guards silence;
-      // the wall here has to be generous enough for a healthy stream.
-      generationTimeoutMs: session ? 300_000 : 45_000,
+      // A healthy Anthropic request may take longer for a complex scene. Real
+      // sessions therefore have no elapsed-time wall at either layer.
+      generationTimeoutMs: session ? null : 45_000,
       limits: { ...g.DEFAULT_LIMITS, perMinute: 60, perDay: 1000, concurrent: 6 },
     });
     const entry = { handle: service.handle, close: () => service.close(), records };
