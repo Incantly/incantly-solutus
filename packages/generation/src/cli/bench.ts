@@ -216,7 +216,8 @@ function report(results: readonly BenchResult[], overheadMs: Record<string, numb
     for (const mode of ['adapt', 'write']) {
       const rows = done.filter((r) => r.condition === condition && r.mode === mode);
       if (rows.length === 0) continue;
-      const tokens = spread(rows.map((r) => r.calls.find((c) => c.purpose === 'scene')?.outputTokens ?? 0));
+      // The scene call that made the figure: a library build stopped by its plan comes first.
+      const tokens = spread(rows.map((r) => [...r.calls].reverse().find((c) => c.purpose === 'scene')?.outputTokens ?? 0));
       const chars = spread(rows.map((r) => r.jsChars));
       lines.push(`| ${condition} | ${mode} | ${rows.length} | ${tokens.p50} / ${tokens.max} | ${chars.p50} / ${chars.max} |`);
     }
