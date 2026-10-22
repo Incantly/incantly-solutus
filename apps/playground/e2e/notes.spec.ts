@@ -68,6 +68,30 @@ test.describe('figures in notes (Phase 4 gate)', () => {
     expect(persisted).toBeGreaterThan(0);
   });
 
+  test('saved figures open and run with no network at all (section 10, offline)', async ({ page, context }) => {
+    await openNote(page, 'size=3');
+    await waitLive(page, 0);
+    // From here on the browser is offline; every request is noted.
+    const requests: string[] = [];
+    page.on('request', (request) => requests.push(request.url()));
+    await context.setOffline(true);
+    try {
+      await page.evaluate(() => (window.__playground as unknown as EditorHandle).reopen());
+      await waitLive(page, 0);
+      const frame = frameOf(page, 0);
+      const slider = frame.getByRole('slider', { name: 'Amplitude' });
+      const before = await slider.inputValue();
+      await slider.focus();
+      await page.keyboard.press('ArrowRight');
+      await expect(slider).not.toHaveValue(before);
+      await expect(frame.locator('svg.inc-stage path').first()).toHaveAttribute('d', /^M/);
+      // The frames are written from srcdoc and the scenes run in blob Workers: nothing goes to the network.
+      expect(requests.filter((url) => !/^(blob|data|about):/.test(url))).toEqual([]);
+    } finally {
+      await context.setOffline(false);
+    }
+  });
+
   test('keyboard focus moves from the text into a figure and back out', async ({ page }) => {
     await openNote(page, 'size=3');
     await waitLive(page, 0);

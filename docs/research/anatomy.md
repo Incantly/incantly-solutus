@@ -70,12 +70,12 @@ Against Anatomy's 30 minutes to 14 hours, the difference is not a faster model. 
 - Trusting a developer to review every generated result: every result is validated and probed instead.
 - Anatomy as a runtime dependency. Ideas are reimplemented; no source is copied.
 
-## Next ideas from Anatomy
+## Next ideas from Anatomy, and where they went
 
-- **Line ends in the probe.** A check, like `lines.mjs`, that a plain line ends on another element or inside the stage's frame, for lines the scene did not make with `connector`. Cheap to run; needs care to avoid flagging axes and rays.
-- **Contact sheets for reviewers.** The playground could render the probe's states (each parameter at its ends, each step) as one sheet, so a reviewed scene is checked by eye in seconds before it joins the library. Development only, no model tokens.
-- **A printable handout.** A figure's states, steps and description on an A4 page, from the same model and snapshot that persistence already makes.
-- **A growing library.** Approved generations that teachers keep could be reviewed and promoted to reviewed scenes with their own match words, so the library path covers more requests over time.
+- **Line ends.** Built as an offline check, like `lines.mjs`: in a diagram every plain line must end on a shape, another line, a dot, a label or the stage's edge. It leaves arrows, dashed guides, curves, symbols, floors and tracks alone, runs over every reviewed scene in CI and every approved figure in the evals, and reports rather than fails ([offline checks](../architecture/generation-pipeline.md#offline-checks)).
+- **Contact sheets for reviewers.** The playground's gallery page draws every reviewed scene in its sandbox, in light and dark, and the browser checks save each picture with the test results and compare it with its golden image at three widths. Still an idea: one sheet with each parameter at its ends and each step, from the probe's states.
+- **A printable handout.** Printing a note prints each live figure as a still of its drawing, as the learner left it, with its description. Still an idea: a page with the figure's states and steps.
+- **A growing library.** The community gallery: a figure a learner publishes with its request is reviewed, and an accepted one is promoted to a reviewed scene with match words from its concept, title and request, so the library path covers more requests over time.
 
 ## Licensing note
 
