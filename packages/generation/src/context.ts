@@ -178,9 +178,10 @@ function overlap(a: Set<string>, b: Set<string>): number {
 }
 
 /**
- * The reviewed example closest to a plan: its concept and idea first, then
- * the kit features it shares. `withhold` leaves examples out, as leak-free
- * evals do with a concept's own example.
+ * The reviewed example closest to a plan: one drawn on the same kind of
+ * stage first, as a scene follows its example's use of the kit; then its
+ * concept and idea; then the other features it shares. `withhold` leaves
+ * examples out, as leak-free evals do with a concept's own example.
  */
 export function nearestExample(
   plan: Pick<ScenePlan, 'concept' | 'idea' | 'capabilities'>,
@@ -188,12 +189,16 @@ export function nearestExample(
 ): ReferenceScene | null {
   const examples = Object.values(options.examples ?? REFERENCE_SCENES).filter((e) => !options.withhold?.includes(e.id));
   const concept = words(`${plan.concept} ${plan.idea}`);
-  const features = new Set(plan.capabilities);
+  const draws = (name: string) => capability(name)?.draws === true;
+  const stages = new Set(plan.capabilities.filter(draws));
+  const features = new Set(plan.capabilities.filter((c) => !draws(c)));
   let best: ReferenceScene | null = null;
   let bestScore = -1;
   for (const example of examples) {
-    const shared = example.plan.capabilities.filter((c) => features.has(c)).length / Math.max(1, example.plan.capabilities.length);
-    const score = 2 * overlap(concept, words(`${example.plan.concept} ${example.plan.idea}`)) + shared;
+    // An Ohm's law circuit drawn in SVG learns nothing from a membrane drawn with the biology kit, however close the words.
+    const stage = example.plan.capabilities.some((c) => stages.has(c)) ? 3 : 0;
+    const shared = example.plan.capabilities.filter((c) => features.has(c)).length / Math.max(1, features.size);
+    const score = stage + 2 * overlap(concept, words(`${example.plan.concept} ${example.plan.idea}`)) + 0.5 * shared;
     if (score > bestScore || (score === bestScore && best && example.id < best.id)) {
       best = example;
       bestScore = score;

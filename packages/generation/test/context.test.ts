@@ -76,6 +76,13 @@ describe('the generation context', () => {
     );
     const withheld = nearestExample(projectile, { withhold: ['projectile'] });
     expect(withheld?.id).not.toBe('projectile');
+    // Drawn on the same kind of stage first: once an SVG circuit followed the biology kit's membrane, and a
+    // plant cell followed the seasons in 3D, while a biology example stood by.
+    const ohm = { concept: "Ohm's law circuit", idea: 'Current flows round the circuit, more when the voltage is higher.', capabilities: ['svg', 'readout'] };
+    const forOhm = nearestExample(ohm, { withhold: ['ohm'] });
+    expect(forOhm?.plan.capabilities).toContain('svg');
+    const cells = { concept: 'Plant cell organelles', idea: 'A plant cell keeps its DNA in a nucleus and makes food in its chloroplasts.', capabilities: ['biology', 'steps'] };
+    expect(nearestExample(cells, { withhold: ['cells'] })?.id).toBe('diffusion');
     expect(nearestExample(projectile, { withhold: Object.keys(REFERENCE_SCENES) })).toBeNull();
   });
 
