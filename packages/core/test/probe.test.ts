@@ -99,6 +99,16 @@ describe('probe: deliberately broken scenes fail for the expected reason', () =>
     expect(report.failures.map((f) => [f.check, f.message.split(' with')[0]])).toContainEqual(['numbers', 'Model output model.image is Infinity']);
   });
 
+  it('a throw at the state where a live figure hit a problem, which the spec names (RP-7)', () => {
+    const js = build({
+      param: "const h = inc.param('height', { min: 1, max: 9, step: 0.01, value: 4, label: 'Height' });",
+      frame: "inc.onFrame(() => { const list = []; if (Math.abs(h.value - 6.42) < 0.001) list[2].at(0, 0); bar.set({ y: 90 - h.value * 10, height: h.value * 10 }); });",
+    });
+    expect(probe(js).failures).toEqual([]);
+    const report = probe(js, { spec: { states: [{ height: 6.42, unknown: 1 }] } });
+    expect(report.failures[0]).toMatchObject({ check: 'interior', values: { height: 6.42 }, error: { phase: 'frame' } });
+  });
+
   it('a slider that does nothing while paused (the paused-slider bug)', () => {
     const report = probe(
       build({ frame: "inc.onFrame(({ time, dt }) => { if (dt > 0) bar.set({ y: 90 - h.value * 10 - Math.sin(time), height: h.value * 10 }); });" }),

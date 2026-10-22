@@ -17,6 +17,8 @@ export interface ProbeSpec {
   readonly steps?: number;
   /** Parameter states where the model is singular, such as an object at a lens's focal length. */
   readonly singularPoints?: ReadonlyArray<Readonly<Record<string, number>>>;
+  /** Further states the scene must run in, such as where a live figure hit a problem (RP-7). */
+  readonly states?: ReadonlyArray<Readonly<Record<string, number>>>;
   /** Drawn elements the plan's size allows. */
   readonly elements?: number;
 }
@@ -128,6 +130,7 @@ class Probe {
         this.pausedChange();
         this.sweep();
         this.singularPoints();
+        this.givenStates();
         this.interiorPoints();
       }
     } catch (error) {
@@ -377,6 +380,14 @@ class Probe {
   private singularPoints(): void {
     for (const point of this.options.spec?.singularPoints ?? []) {
       this.configuration('singular', { ...this.defaults, ...point });
+    }
+  }
+
+  private givenStates(): void {
+    for (const state of (this.options.spec?.states ?? []).slice(0, 4)) {
+      const values: Record<string, number> = { ...this.defaults };
+      for (const [name, value] of Object.entries(state)) if (name in values && Number.isFinite(value)) values[name] = value;
+      this.configuration('interior', values);
     }
   }
 
