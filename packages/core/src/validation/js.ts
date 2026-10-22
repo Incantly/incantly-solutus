@@ -338,6 +338,8 @@ type NamespaceName = keyof typeof INC_NAMESPACES;
 type ValueType =
   | { readonly t: 'inc' }
   | { readonly t: 'ns'; readonly ns: NamespaceName }
+  /** A helper of a namespace, such as inc.calc.normal: a function, not an object. */
+  | { readonly t: 'ns-fn'; readonly ns: NamespaceName; readonly name: string }
   | { readonly t: 'math' }
   | { readonly t: 'number-ns' }
   | { readonly t: 'handle'; readonly kind: HandleKind }
@@ -400,6 +402,8 @@ function describeType(type: ValueType): string {
       return 'inc';
     case 'ns':
       return `inc.${type.ns}`;
+    case 'ns-fn':
+      return `inc.${type.ns}.${type.name}`;
     case 'math':
       return 'Math';
     case 'number-ns':
@@ -860,7 +864,7 @@ class JsValidator {
       }
       case 'MemberExpression': {
         const type = this.expression(node.object as Expression, ctx);
-        if (type.t === 'handle' || type.t === 'inc' || type.t === 'ns' || type.t === 'math' || type.t === 'number-ns') {
+        if (type.t === 'handle' || type.t === 'inc' || type.t === 'ns' || type.t === 'ns-fn' || type.t === 'math' || type.t === 'number-ns') {
           this.report('assign-sdk', `${describeType(type)} is read-only; use its methods instead`, node.start);
         }
         if (node.computed) this.expression(node.property as Expression, ctx);
@@ -1157,8 +1161,24 @@ class JsValidator {
       }
       case 'ns': {
         const members = INC_NAMESPACES[object.ns];
-        if (name in members) return FUNCTION;
-        this.report('unknown-sdk-call', `inc.${object.ns}.${name} is not part of the SDK. Available: ${listOf(Object.keys(members))}`, at.start);
+        if (name in members) return { t: 'ns-fn', ns: object.ns, name };
+        const suggestion = closest(name, Object.keys(members));
+        this.report(
+          'unknown-sdk-call',
+          `inc.${object.ns}.${name} is not part of the SDK${suggestion ? `; did you mean inc.${object.ns}.${suggestion}?` : '.'} Available: ${listOf(Object.keys(members))}`,
+          at.start,
+        );
+        return UNKNOWN;
+      }
+      case 'ns-fn': {
+        // inc.calc.normal.cdf: a helper is a function; a related one may join the two names.
+        const members = INC_NAMESPACES[object.ns];
+        const joined = `${object.name}${name.charAt(0).toUpperCase()}${name.slice(1)}`;
+        this.report(
+          'unknown-sdk-call',
+          `inc.${object.ns}.${object.name} is a function, not an object of helpers${joined in members ? `; did you mean inc.${object.ns}.${joined}?` : `: call it as inc.${object.ns}.${object.name}(...)`}`,
+          at.start,
+        );
         return UNKNOWN;
       }
       case 'math':

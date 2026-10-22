@@ -113,7 +113,9 @@ export class SceneGraph {
       throw new SceneApiError(`Stage selector must be an element id such as "#stage", got "${selector}"`);
     }
     if (this.stages.some((stage) => stage.selector === selector)) {
-      throw new SceneApiError(`A stage already exists in ${selector}`);
+      throw new SceneApiError(
+        `A stage already exists in ${selector}: each stage or graph needs its own element. Add one to the HTML, such as <div id="graph"></div>, and pass "#graph"; or draw on the stage you have`,
+      );
     }
     const [x, y, width, height] = viewBox;
     if (![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0) {

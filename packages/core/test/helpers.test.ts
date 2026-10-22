@@ -245,4 +245,13 @@ inc.onFrame((frame) => {
     expect(messages[0]).toContain('inc.calc.differentiate is not part of the SDK. Available: clamp, derivative,');
     expect(messages[1]).toContain('inc.kits is not part of the SDK');
   });
+
+  it('suggests the helper a scene meant: a close name, or two names joined', () => {
+    const { diagnostics } = validateSceneJs(`const p = inc.calc.integrate((x) => x, 0, 1);\nconst q = inc.calc.normal.cdf(1) - inc.calc.normal.cdf(-1);\nconst r = inc.calc.normal(0, 0, 1);`);
+    const messages = diagnostics.map((d) => d.message);
+    expect(messages[0]).toContain('inc.calc.integrate is not part of the SDK; did you mean inc.calc.integral? Available:');
+    expect(messages[1]).toBe('inc.calc.normal is a function, not an object of helpers; did you mean inc.calc.normalCdf?');
+    // Called as a function, the helper is fine.
+    expect(diagnostics).toHaveLength(3);
+  });
 });
