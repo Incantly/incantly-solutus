@@ -80,7 +80,9 @@ function finiteNumber(value: unknown, name: string): number {
 
 function lookOf(value: unknown, fallback: Look): Look {
   if (value === undefined) return fallback;
-  if (value !== 'solid' && value !== 'wire' && value !== 'ghost') throw new SceneApiError(`look must be 'solid', 'wire' or 'ghost', got "${String(value)}"`);
+  if (value !== 'solid' && value !== 'wire' && value !== 'ghost' && value !== 'shadow') {
+    throw new SceneApiError(`look must be 'solid', 'wire', 'ghost' or 'shadow', got "${String(value)}"`);
+  }
   return value;
 }
 

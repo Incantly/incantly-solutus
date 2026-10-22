@@ -782,8 +782,8 @@ export interface Solid3DOptions {
   readonly scale?: number | Vec3;
   readonly tone?: Tone;
   readonly parent?: Group3D;
-  /** 'solid' (default) is shaded; 'wire' draws edges only; 'ghost' is faint and see-through. */
-  readonly look?: 'solid' | 'wire' | 'ghost';
+  /** 'solid' (default) is shaded; 'wire' draws edges only; 'ghost' is faint and see-through; 'shadow' is a dark see-through layer, for a night side or a shadow. */
+  readonly look?: 'solid' | 'wire' | 'ghost' | 'shadow';
   /** Moves it toward the viewer in the depth order, for a sticker on a face. */
   readonly bias?: number;
   /** Facets around round solids. Default 24. */

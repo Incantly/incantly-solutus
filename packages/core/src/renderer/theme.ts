@@ -185,6 +185,8 @@ html.inc-frame, html.inc-frame body { margin: 0; padding: 0; background: transpa
 .inc-stage .inc-face.inc-glass { fill-opacity: 0.16; stroke: var(--inc-tone, var(--inc-mid)); stroke-opacity: 0.35; stroke-width: 0.6; }
 /* Pieces of one see-through face: no edges between them. */
 .inc-stage .inc-face.inc-glass.inc-tile { stroke: none; }
+/* A night side or a shadow: dark in either theme, whatever lies under it. */
+.inc-stage .inc-face.inc-shadow { fill: #000000; fill-opacity: 0.42; stroke: none; }
 .inc-stage .inc-face.inc-wire { fill: none; stroke: var(--inc-tone, var(--inc-mid)); stroke-width: 1; stroke-opacity: 1; }
 .inc-stage .inc-on-face { stroke-width: 1.3; }
 .inc-figure.has-focus .inc-stage .inc-slots > :not(.is-focus) { opacity: 0.25; }

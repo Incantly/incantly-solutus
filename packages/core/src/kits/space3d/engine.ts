@@ -17,7 +17,7 @@ import type { Mesh } from './mesh';
  * never changes, so a frame is attribute writes only.
  */
 
-export type Look = 'solid' | 'wire' | 'ghost';
+export type Look = 'solid' | 'wire' | 'ghost' | 'shadow';
 
 export interface Transform {
   readonly m: Mat3;
@@ -605,7 +605,8 @@ export class Engine3D implements ViewController {
       out.push({ path: d, depth, tone: item.tone, fill: false, shade: null, dashed: false, extra: 'inc-face inc-wire', owner: item.owner });
       return;
     }
-    const ghost = item.look === 'ghost';
+    // See-through looks are seen from both sides.
+    const ghost = item.look === 'ghost' || item.look === 'shadow';
     for (const face of mesh.faces) {
       this.polygon(
         face.map((i) => cam[i]!),
@@ -689,7 +690,9 @@ export class Engine3D implements ViewController {
     const extra =
       style.look === 'wire'
         ? 'inc-face inc-wire'
-        : `inc-face inc-lum-${level}${style.look === 'ghost' ? ' inc-glass' : ''}${style.smooth ? (style.look === 'ghost' ? ' inc-tile' : ' inc-smooth') : ''}`;
+        : style.look === 'shadow'
+          ? 'inc-face inc-shadow'
+          : `inc-face inc-lum-${level}${style.look === 'ghost' ? ' inc-glass' : ''}${style.smooth ? (style.look === 'ghost' ? ' inc-tile' : ' inc-smooth') : ''}`;
     const depth = cz + (style.bias ?? 0);
     out.push({ path: d, depth, tone: style.tone, fill: false, shade: null, dashed: false, extra, owner: style.owner ?? null });
     if (style.overlay) {
@@ -731,14 +734,15 @@ export class Engine3D implements ViewController {
     }
     const d = `M${fmt(q.x - radius)} ${fmt(q.y)}a${fmt(radius)} ${fmt(radius)} 0 1 0 ${fmt(2 * radius)} 0a${fmt(radius)} ${fmt(radius)} 0 1 0 ${fmt(-2 * radius)} 0Z`;
     const ghost = item.look === 'ghost';
+    const shadow = item.look === 'shadow';
     out.push({
       path: d,
       depth: c[2] + item.bias,
       tone: item.tone,
-      fill: !ghost,
-      shade: ghost ? null : 'sphere',
+      fill: !ghost && !shadow,
+      shade: ghost || shadow ? null : 'sphere',
       dashed: false,
-      extra: ghost ? 'inc-face inc-lum-4 inc-glass' : '',
+      extra: ghost ? 'inc-face inc-lum-4 inc-glass' : shadow ? 'inc-face inc-shadow' : '',
       owner: item.owner,
     });
   }

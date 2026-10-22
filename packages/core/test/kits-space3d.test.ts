@@ -337,6 +337,19 @@ describe('inc.space3d', () => {
     expect(shown.filter((n) => n.extra.includes('inc-glass'))).toHaveLength(1);
   });
 
+  it('lays a shadow: a dark see-through layer, the same in either theme, seen from both sides', () => {
+    const { runtime } = space((s) => {
+      s.sphere(1, { tone: 'b' });
+      s.sphere(1, { at: [3, 0, 0], look: 'shadow' });
+      // A closed box in shadow shows its far faces through its near ones.
+      s.box(1, { at: [-3, 0, 0], look: 'shadow' });
+    });
+    const shadows = visibleSlots(runtime).filter((n) => n.extra.includes('inc-shadow'));
+    expect(shadows).toHaveLength(1 + 6);
+    // No tone shading: its colour comes from the shadow alone.
+    for (const n of shadows) expect(n.extra).not.toMatch(/inc-lum|inc-glass/);
+  });
+
   it('pushes labels outward from the figure and keeps them apart (C3-13)', () => {
     const { runtime } = space((s) => {
       s.box(2);
@@ -475,7 +488,7 @@ describe('inc.space3d', () => {
   it('refuses bad input with plain messages', () => {
     const error = (build: (s: Space3D) => void) => space(build).mount.ui.error?.message;
     expect(error((s) => void s.box(-1))).toBe('box width must be a positive number');
-    expect(error((s) => void s.sphere(1, { look: 'shiny' as never }))).toContain("look must be 'solid', 'wire' or 'ghost'");
+    expect(error((s) => void s.sphere(1, { look: 'shiny' as never }))).toContain("look must be 'solid', 'wire', 'ghost' or 'shadow'");
     expect(error((s) => void s.box(1, { tone: 'pink' as never }))).toBe('Unknown tone "pink"');
     expect(error((s) => void s.line([[0, 0, 0]]))).toContain('from 2 to 2000 points');
     expect(error((s) => void s.box(1).orient([1, 0, 0] as never))).toContain('nine finite numbers');
