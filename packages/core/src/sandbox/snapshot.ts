@@ -5,6 +5,8 @@
  * blob: URL, which the frame's policy allows (img-src blob: data:).
  */
 
+import { MAX_PICTURE_CHARS } from '../protocol/bridge';
+
 /** Paint that children inherit: written where it differs from the parent's, and in full on the root. */
 const INHERITED = [
   'fill',
@@ -180,6 +182,25 @@ export function stackOf(svg: SVGSVGElement): StackLayer[] {
 const paintedCanvas = (canvas: HTMLCanvasElement) => canvas.width > 0 && canvas.height > 0;
 
 /**
+ * A still of a canvas layer at the picture's own size: the extra pixels a
+ * high-density screen paints would only make the exported file larger.
+ */
+function stillOf(canvas: HTMLCanvasElement, width: number, height: number): string {
+  if (canvas.width <= width && canvas.height <= height) return canvas.toDataURL('image/png');
+  try {
+    const small = canvas.ownerDocument.createElement('canvas');
+    small.width = width;
+    small.height = height;
+    const context = small.getContext('2d');
+    if (!context) throw new Error('no 2D context');
+    context.drawImage(canvas, 0, 0, width, height);
+    return small.toDataURL('image/png');
+  } catch {
+    return canvas.toDataURL('image/png');
+  }
+}
+
+/**
  * The stage as a standalone SVG image with its theme written in (SV-14), as
  * a data URL: safe to show in an <img> or to download, as an image cannot run
  * anything. A stage with canvas layers (dots, fluids) is drawn as its stack:
@@ -190,45 +211,53 @@ export function exportStage(svg: SVGSVGElement | null): string | null {
   if (!svg) return null;
   try {
     const layers = stackOf(svg).filter((layer) => !layer.canvas || paintedCanvas(layer.canvas));
-    const background = backgroundOf(svg);
-    let picture: Painted;
-    if (layers.length === 1) picture = painted(svg);
-    else {
-      const styles: string[] = [];
-      const drawing = painted(svg, false, styles);
-      const { width, height } = drawing;
-      const root = svg.ownerDocument.createElementNS(SVG_NS, 'svg') as SVGSVGElement;
-      root.setAttribute('xmlns', SVG_NS);
-      root.setAttribute('width', String(width));
-      root.setAttribute('height', String(height));
-      root.setAttribute('viewBox', `0 0 ${width} ${height}`);
-      for (const layer of layers) {
-        if (layer.canvas) {
-          const image = svg.ownerDocument.createElementNS(SVG_NS, 'image');
-          image.setAttribute('width', String(width));
-          image.setAttribute('height', String(height));
-          image.setAttribute('preserveAspectRatio', 'none');
-          image.setAttribute('href', layer.canvas.toDataURL('image/png'));
-          root.append(image);
-          continue;
-        }
-        // Each SVG keeps its own view box, laid over the same box; the back layer's points at the drawing's defs.
-        const copy = layer.svg === svg ? drawing.clone : painted(layer.svg, false, styles).clone;
-        copy.removeAttribute('xmlns');
-        copy.setAttribute('width', String(width));
-        copy.setAttribute('height', String(height));
-        root.append(copy);
-      }
-      picture = { clone: root, width, height, styles };
-    }
-    if (background) {
-      picture.styles.push(`background: ${background}`);
-      picture.clone.setAttribute('data-inc-style', String(picture.styles.length - 1));
-    }
-    return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(serialize(picture))}`;
+    const picture = exportLayers(svg, layers);
+    // Stills of large, busy canvases can outgrow what the bridge carries: the drawing alone is better than nothing.
+    if (picture.length >= MAX_PICTURE_CHARS && layers.some((layer) => layer.canvas)) return exportLayers(svg, layers.filter((layer) => !layer.canvas));
+    return picture;
   } catch {
     return null;
   }
+}
+
+/** The given layers as one standalone SVG image, as a data URL. */
+function exportLayers(svg: SVGSVGElement, layers: readonly StackLayer[]): string {
+  const background = backgroundOf(svg);
+  let picture: Painted;
+  if (layers.length === 1) picture = painted(svg);
+  else {
+    const styles: string[] = [];
+    const drawing = painted(svg, false, styles);
+    const { width, height } = drawing;
+    const root = svg.ownerDocument.createElementNS(SVG_NS, 'svg') as SVGSVGElement;
+    root.setAttribute('xmlns', SVG_NS);
+    root.setAttribute('width', String(width));
+    root.setAttribute('height', String(height));
+    root.setAttribute('viewBox', `0 0 ${width} ${height}`);
+    for (const layer of layers) {
+      if (layer.canvas) {
+        const image = svg.ownerDocument.createElementNS(SVG_NS, 'image');
+        image.setAttribute('width', String(width));
+        image.setAttribute('height', String(height));
+        image.setAttribute('preserveAspectRatio', 'none');
+        image.setAttribute('href', stillOf(layer.canvas, width, height));
+        root.append(image);
+        continue;
+      }
+      // Each SVG keeps its own view box, laid over the same box; the back layer's points at the drawing's defs.
+      const copy = layer.svg === svg ? drawing.clone : painted(layer.svg, false, styles).clone;
+      copy.removeAttribute('xmlns');
+      copy.setAttribute('width', String(width));
+      copy.setAttribute('height', String(height));
+      root.append(copy);
+    }
+    picture = { clone: root, width, height, styles };
+  }
+  if (background) {
+    picture.styles.push(`background: ${background}`);
+    picture.clone.setAttribute('data-inc-style', String(picture.styles.length - 1));
+  }
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(serialize(picture))}`;
 }
 
 /**

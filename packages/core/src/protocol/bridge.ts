@@ -158,6 +158,9 @@ export function frameLang(lang: string | undefined): string | undefined {
   return lang !== undefined && lang.length <= 35 && LANG_TAG.test(lang) ? lang : undefined;
 }
 
+/** The longest exported picture, as a data URL, that the bridge carries back to the host. */
+export const MAX_PICTURE_CHARS = 8_000_000;
+
 /** The most markup or style a scene may hand a warm frame, in characters. */
 const MAX_FRAGMENT = 400_000;
 
@@ -261,7 +264,7 @@ export function parseFrameMessage(data: unknown, channel: string): FrameMessage 
     case 'snapshot':
       return typeof m.id === 'number' &&
         (m.png === null || (typeof m.png === 'string' && m.png.startsWith('data:image/png;base64,'))) &&
-        (m.svg === undefined || m.svg === null || (typeof m.svg === 'string' && m.svg.startsWith('data:image/svg+xml;') && m.svg.length < 8_000_000))
+        (m.svg === undefined || m.svg === null || (typeof m.svg === 'string' && m.svg.startsWith('data:image/svg+xml;') && m.svg.length < MAX_PICTURE_CHARS))
         ? (m as unknown as FrameMessage)
         : null;
     case 'clip':
