@@ -1,3 +1,5 @@
+import { noise } from './noise';
+
 export interface FunctionSpec {
   readonly arity: number | readonly [min: number, max: number];
   readonly fn: (...args: number[]) => number;
@@ -39,6 +41,7 @@ export const FUNCTIONS: Readonly<Record<string, FunctionSpec>> = Object.freeze(
     hypot: { arity: [1, 16], fn: Math.hypot },
     clamp: { arity: 3, fn: clamp },
     step: { arity: 1, fn: (x: number) => (x < 0 ? 0 : 1) },
+    noise: { arity: [1, 2], fn: (x: number, y?: number) => noise(x, y) },
   } satisfies Record<string, FunctionSpec>),
 );
 

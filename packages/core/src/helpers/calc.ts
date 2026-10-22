@@ -1,4 +1,5 @@
 import type { Calculus, Extremum, Rate } from '../api/types';
+import { noise } from '../expr/noise';
 import { SceneApiError } from '../scene/errors';
 
 /**
@@ -160,4 +161,6 @@ export const lerp = (a: number, b: number, k: number): number => a + (b - a) * k
 /** Maps x from [a0, a1] to [b0, b1]. */
 export const map = (x: number, a0: number, a1: number, b0: number, b1: number): number => b0 + ((x - a0) / (a1 - a0)) * (b1 - b0);
 
-export const calculus: Calculus = Object.freeze({ derivative, integral, root, roots, extrema, interp, euler, rk4, normal, normalCdf, clamp, lerp, map });
+export const calculus: Calculus = Object.freeze({ derivative, integral, root, roots, extrema, interp, euler, rk4, normal, normalCdf, clamp, lerp, map, noise });
+
+export { noise };

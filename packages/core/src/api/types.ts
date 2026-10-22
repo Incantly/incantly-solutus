@@ -413,6 +413,8 @@ export interface Calculus {
   lerp(a: number, b: number, k: number): number;
   /** Maps x from [a0, a1] to [b0, b1]. */
   map(x: number, a0: number, a1: number, b0: number, b1: number): number;
+  /** Smooth noise from -1 to 1, the same on every device: features about one unit apart, 0 at whole numbers. */
+  noise(x: number, y?: number): number;
 }
 
 /** A 3x3 matrix: nine numbers, row by row. */

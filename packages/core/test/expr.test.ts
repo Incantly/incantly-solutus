@@ -56,6 +56,27 @@ describe('expression parser', () => {
     expect(abs.evaluate({ x: -3 })).toBe(3);
     expect(abs.evaluate({ x: 4 })).toBe(4);
   });
+
+  it('has smooth noise in one and two dimensions, the same every time (FM-5)', () => {
+    const one = compileExpression('noise(x)', ['x']);
+    const two = compileExpression('noise(x, y)', ['x', 'y']);
+    const xs = Array.from({ length: 4001 }, (_, i) => -20 + i * 0.01);
+    const values = xs.map((x) => one.evaluate({ x }));
+    // From -1 to 1, 0 on the lattice, and not flat in between.
+    expect(Math.max(...values.map(Math.abs))).toBeLessThanOrEqual(1);
+    expect(Math.max(...values) - Math.min(...values)).toBeGreaterThan(0.8);
+    for (const x of [-3, 0, 2, 7]) expect(one.evaluate({ x })).toBeCloseTo(0, 12);
+    // Continuous: neighbours 0.01 apart differ by little.
+    for (let i = 1; i < values.length; i++) expect(Math.abs(values[i]! - values[i - 1]!)).toBeLessThan(0.05);
+    // Deterministic, here and in two dimensions.
+    expect(compileExpression('noise(x)', ['x']).evaluate({ x: 3.7 })).toBe(one.evaluate({ x: 3.7 }));
+    const grid = xs.slice(0, 400).map((x, i) => two.evaluate({ x, y: i * 0.013 }));
+    expect(Math.max(...grid.map(Math.abs))).toBeLessThanOrEqual(1);
+    expect(new Set(grid.map((v) => v.toFixed(3))).size).toBeGreaterThan(100);
+    expect(two.evaluate({ x: 1.25, y: -4.5 })).toBe(two.evaluate({ x: 1.25, y: -4.5 }));
+    expect(Number.isNaN(one.evaluate({ x: Number.POSITIVE_INFINITY }))).toBe(true);
+    expect(errorOf('noise(1, 2, 3)').message).toMatch(/noise/);
+  });
 });
 
 describe('expression errors carry source positions', () => {

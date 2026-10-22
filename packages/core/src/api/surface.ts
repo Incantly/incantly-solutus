@@ -218,6 +218,7 @@ export const INC_NAMESPACES = {
     clamp: null,
     lerp: null,
     map: null,
+    noise: null,
   } satisfies Methods<Calculus>,
   vec: {
     add: null,

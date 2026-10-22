@@ -12,6 +12,12 @@ import { validateSceneJs } from '../src/validation/js';
 const close = (a: number, b: number, digits = 6) => expect(a).toBeCloseTo(b, digits);
 
 describe('inc.calc (FM-6, FM-7)', () => {
+  it('gives scenes the same smooth noise as formulas (FM-5)', async () => {
+    const { compileExpression } = await import('../src/expr');
+    for (const x of [-2.3, 0.4, 5.75]) expect(calc.noise(x)).toBe(compileExpression('noise(x)', ['x']).evaluate({ x }));
+    expect(calc.noise(0.4, 1.6)).toBe(compileExpression('noise(x, y)', ['x', 'y']).evaluate({ x: 0.4, y: 1.6 }));
+  });
+
   it('differentiates, integrates and finds roots and turning points', () => {
     close(calc.derivative(Math.sin, 0), 1);
     close(calc.derivative((x) => x * x * x, 2), 12, 4);
