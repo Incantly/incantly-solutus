@@ -284,6 +284,14 @@ export const VALIDATOR_CASES: readonly ValidatorCase[] = [
     twin: { js: js('const N = 500;', 'for (let i = 0; i <= N; i++) { dot.at(i, 0); }') },
   },
   {
+    name: 'loop bounded by a count that can change',
+    fragment: 'js',
+    rule: 'unbounded-loop',
+    bad: { js: js('let n = 0;', 'inc.onFrame(() => {', '  n = 40;', '  for (let i = 0; i < n; i++) dot.at(i, 0);', '});') },
+    at: 'n; i++',
+    twin: { js: js('let n = 0;', 'inc.onFrame(() => {', '  n = 40;', '  for (let i = 0; i < Math.min(n, 500); i++) dot.at(i, 0);', '});') },
+  },
+  {
     name: 'loop stepping away from its bound',
     fragment: 'js',
     rule: 'unbounded-loop',

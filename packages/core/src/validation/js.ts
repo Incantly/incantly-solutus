@@ -139,9 +139,12 @@ const FORBIDDEN_GLOBALS: Readonly<Record<string, string>> = (() => {
       'Atomics',
       'SharedArrayBuffer',
     ],
+    // Array.from({ length: n }, ...) is the idiom models reach for: the subset builds lists with a bounded loop.
+    'is not part of the scene subset; build a list with a for loop and a visible bound: const points = []; for (let i = 0; i <= 72; i++) points.push([i, 0])': [
+      'Array',
+    ],
     'is not part of the scene subset': [
       'Object',
-      'Array',
       'String',
       'Boolean',
       'Symbol',
@@ -780,7 +783,8 @@ class JsValidator {
       if (binding?.constNumber !== undefined) {
         return Math.abs(binding.constNumber) <= limit ? null : `Loop bound ${bound.name} = ${binding.constNumber} is above the limit of ${limit}`;
       }
-      return `Bound the loop by a number, a const number, an array's length or Math.min(value, ${limit})`;
+      // A count that changes with the controls, such as a number of particles: the cap makes the bound visible.
+      return `${bound.name} can change, so the loop has no visible bound: loop to Math.min(${bound.name}, ${limit}), a const number or an array's length`;
     }
     if (bound.type === 'MemberExpression' && !bound.computed && bound.property.type === 'Identifier' && bound.property.name === 'length') {
       return null;

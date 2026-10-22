@@ -25,6 +25,17 @@ function expectedPosition(fragments: Fragments, fragment: 'html' | 'css' | 'js',
 
 const errors = (diagnostics: readonly Diagnostic[]) => diagnostics.filter((d) => d.severity === 'error');
 
+describe('validator: messages that name the fix', () => {
+  it('names the cap for a loop to a count that can change, and the loop for Array.from', () => {
+    // Once diffusion scenes looped to a particle count the controls change, and seasons scenes built orbits with Array.from.
+    const loop = validateScene(scene({ js: `${BASE_JS}\nlet n = 0;\ninc.onFrame(() => {\n  n = 40;\n  for (let i = 0; i < n; i++) dot.at(i, 0);\n});` }));
+    expect(errors(loop.diagnostics).map((d) => d.message)).toContain("n can change, so the loop has no visible bound: loop to Math.min(n, 5000), a const number or an array's length");
+    const array = validateScene(scene({ js: `${BASE_JS}\nconst points = Array.from({ length: 73 }, (_, i) => [i, 0]);` }));
+    const global = errors(array.diagnostics).find((d) => d.rule === 'forbidden-global');
+    expect(global?.message).toContain('Array is not part of the scene subset; build a list with a for loop and a visible bound');
+  });
+});
+
 describe('validator: every forbidden construct is rejected where it is written', () => {
   it.each(VALIDATOR_CASES.map((c) => [c.name, c] as const))('%s', (_name, c) => {
     const bad = scene({ js: BASE_JS, ...c.bad });
