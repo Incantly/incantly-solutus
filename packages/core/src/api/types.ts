@@ -352,7 +352,7 @@ export interface Stage {
    */
   equation(x: number, y: number, source: Readable, options?: EquationOptions): TextHandle;
   polyline(points: ReadonlyArray<Vec2>, options?: ElementOptions): PolylineHandle;
-  /** Registers a named part for highlighting, focus, steps and descriptions. */
+  /** Registers a named part for highlighting, focus, steps and descriptions. Naming a part again renames it. */
   part<H extends Handle>(name: string, handle: H, options?: PartOptions): H;
   /** Lets the learner drag an element; `map` turns the pointer into parameter values. A later drag on the same element replaces the earlier one. */
   drag<H extends Handle>(handle: H, map: DragMap, options?: { readonly label?: string }): H;
@@ -1078,7 +1078,7 @@ export interface Space3D {
   axes(options?: AxesOptions): Group3D;
   /** Lines traced through a vector field from seed points, such as electric or magnetic field lines. */
   fieldLines(field: (p: Vec3) => Vec3, seeds: ReadonlyArray<Vec3>, options?: FieldLineOptions): Group3D;
-  /** Names an object for highlighting, steps, the legend and descriptions. */
+  /** Names an object for highlighting, steps, the legend and descriptions. Naming a part again, such as a model's piece, renames it. */
   part<T extends Object3D>(name: string, object: T, options?: PartOptions): T;
   /** Lets the learner drag an object; `map` gets the pointer in stage units (see pick). */
   drag<T extends Object3D>(object: T, map: DragMap, options?: { readonly label?: string }): T;

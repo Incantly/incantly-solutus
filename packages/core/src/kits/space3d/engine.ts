@@ -306,6 +306,8 @@ export class Engine3D implements ViewController {
   private readonly slots: Slot[] = [];
   private readonly slotGroup: Handle;
   private readonly labels: LabelRecord[] = [];
+  /** Each part's proxy element, by the object it stands for. */
+  private readonly proxies = new Map<Item, Handle>();
   private readonly grabs: Grab[] = [];
   private readonly clouds: Cloud[] = [];
   private drawn = false;
@@ -427,11 +429,21 @@ export class Engine3D implements ViewController {
     return [q.x, q.y];
   }
 
-  /** A part proxy: an empty element the part registry and the legend hold; the faces name it as their owner. */
+  /**
+   * A part proxy: an empty element the part registry and the legend hold; the
+   * faces name it as their owner. An object that is a part already, such as a
+   * piece a ready-made model names, takes the later name, label and info.
+   */
   part(item: Item, name: string, options: PartOptions | undefined): void {
-    if (item.part !== null) throw new SceneApiError(`That object is already the part "${item.part}"`);
+    const known = this.proxies.get(item);
+    if (known) {
+      this.ctx.stage.part(name, known, options);
+      item.part = name;
+      return;
+    }
     const proxy = this.ctx.stage.group();
     this.ctx.stage.part(name, proxy, options);
+    this.proxies.set(item, proxy);
     item.part = name;
     item.proxy = nodeOf(proxy);
     if (item.tone) proxy.tone(item.tone);

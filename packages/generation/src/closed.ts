@@ -41,6 +41,13 @@ export const CLOSED_CLASSES: readonly ClosedClass[] = [
     test: { file: 'core/test/graph-interaction.test.ts', name: 'lets a later drag on a handle say how it drags, instead of failing' },
   },
   {
+    check: 'mount',
+    match: /is already the part/,
+    by: 'engine',
+    fix: "A later part() on an element or 3D object that is a part already renames it, with the later label and info, so a scene can name a ready-made model's pieces in its plan's words.",
+    test: { file: 'core/test/kits-space3d.test.ts', name: 'lets a later part() rename an object that is a part already, as a model names its pieces' },
+  },
+  {
     check: 'unknown-tone',
     match: /"water" is not a tone/,
     by: 'kit',

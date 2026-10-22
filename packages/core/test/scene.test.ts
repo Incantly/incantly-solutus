@@ -101,12 +101,17 @@ describe('scene graph', () => {
     expect(() => stage.circle(0, 0, 1, { parent: {} as never })).toThrow('Expected an element the SDK made');
   });
 
-  it('registers named parts once', () => {
+  it('registers named parts once, and renames an element registered again', () => {
     const { graph, parts, stage } = setup();
     const ball = stage.part('Ball', stage.circle(1, 1, 1), { label: 'Projectile', info: 'It flies.' });
     expect(parts.parts.get('Ball')?.label).toBe('Projectile');
     expect(graph.flush().at(-1)).toEqual({ op: 'part', id: 2, name: 'Ball', label: 'Projectile', info: 'It flies.' });
-    expect(() => stage.part('Ball', ball)).toThrow('registered twice');
+    // Two elements cannot share a name.
+    expect(() => stage.part('Ball', stage.circle(2, 2, 1))).toThrow('registered twice');
+    // The same element again takes the later name, label and info, as a later drag replaces an earlier.
+    stage.part('Shot', ball, { label: 'Shot', info: 'It flies far.' });
+    expect([...parts.parts.keys()]).toEqual(['Shot']);
+    expect(graph.flush().at(-1)).toEqual({ op: 'part', id: 2, name: 'Shot', label: 'Shot', info: 'It flies far.' });
   });
 
   it('rejects stage selectors that are not ids and repeated stages', () => {

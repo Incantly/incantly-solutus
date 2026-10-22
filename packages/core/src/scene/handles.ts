@@ -190,12 +190,20 @@ export class PartRegistry {
 
   constructor(private readonly graph: SceneGraph) {}
 
+  /**
+   * Registers an element as a part. A later part() on an element that is a
+   * part already renames it, with the later label and info, as a later drag
+   * replaces an earlier: a kit may name its pieces, and a scene name them
+   * again in its plan's words. Two elements cannot share a name.
+   */
   register(name: string, handle: Handle, options: PartOptions = {}, use: PartUse = {}): void {
     if (typeof name !== 'string' || name.trim() === '' || name.length > 60) {
       throw new SceneApiError('A part needs a short, non-empty name');
     }
-    if (this.parts.has(name)) throw new SceneApiError(`Part "${name}" is registered twice`);
     const node = nodeOf(handle);
+    const taken = this.parts.get(name);
+    if (taken && taken.node !== node) throw new SceneApiError(`Part "${name}" is registered twice`);
+    for (const [old, record] of this.parts) if (record.node === node && old !== name) this.parts.delete(old);
     const label = options.label ?? name;
     const info = options.info ?? '';
     this.parts.set(name, { name, label, info, node, legend: use.legend !== false });

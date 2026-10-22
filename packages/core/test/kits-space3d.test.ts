@@ -565,7 +565,28 @@ describe('inc.space3d', () => {
     expect(error((s) => void s.box(1).orient([1, 0, 0] as never))).toContain('nine finite numbers');
     expect(error((s) => void s.torus(1, 2))).toContain('larger than its tube radius');
     expect(error((s) => void s.view('under' as never))).toContain('Unknown view "under"');
-    expect(error((s) => void s.part('Twice', s.part('Once', s.box(1))))).toContain('already the part "Once"');
+  });
+
+  it('lets a later part() rename an object that is a part already, as a model names its pieces', () => {
+    // Once a scene named a bar magnet's north piece "north pole", as its plan did, and the figure threw at mount.
+    const { runtime } = space((s) => {
+      const magnet = s.model('magnet', { parts: true });
+      s.part('north pole', magnet.piece('north'), { label: 'North pole', info: 'Field lines leave here.' });
+      s.part('Twice', s.part('Once', s.box(1)));
+    });
+    expect(runtime.uiState().parts.map((p) => [p.name, p.label, p.info])).toEqual([
+      ['south', 'South pole', ''],
+      ['north pole', 'North pole', 'Field lines leave here.'],
+      ['Twice', 'Twice', ''],
+    ]);
+    // Two objects still cannot share a name.
+    const error = (build: (s: Space3D) => void) => space(build).mount.ui.error?.message;
+    expect(
+      error((s) => {
+        s.part('Box', s.sphere(1));
+        s.part('Box', s.box(1));
+      }),
+    ).toContain('registered twice');
   });
 
   it('draws dots at world points on the stage’s canvas layer, in the figure’s own camera (FX-1, BR-12)', () => {
