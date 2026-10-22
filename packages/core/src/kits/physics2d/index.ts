@@ -5,6 +5,7 @@ import type {
   Energy,
   ForceArrowOptions,
   ForceKind,
+  Handle,
   HingeOptions,
   Joint2D,
   Live,
@@ -634,6 +635,11 @@ function createWorld(ctx: KitContext, raw: Physics2DOptions): World2D {
     toStage(p) {
       const [x, y] = finitePoint(p, 'world.toStage');
       return view.toStage(x, y);
+    },
+    part(name, item, partOptions) {
+      // A body, a tank or a joint stands for its drawn handle, as on the stage.
+      ctx.stage.part(name, item as unknown as Handle, partOptions);
+      return item;
     },
     get time() {
       return world.time;

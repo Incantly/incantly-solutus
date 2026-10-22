@@ -1,18 +1,4 @@
-import type {
-  Flow,
-  FlowEdge,
-  FlowEdgeOptions,
-  FlowNode,
-  FlowNodeOptions,
-  FlowOptions,
-  Handle,
-  PathHandle,
-  Readable,
-  TextHandle,
-  Tone,
-  Vec2,
-  ViewBox,
-} from '../../api/types';
+import type { Flow, FlowEdge, FlowEdgeOptions, FlowNode, FlowNodeOptions, FlowOptions, Handle, PartOptions, PathHandle, Readable, TextHandle, Tone, Vec2, ViewBox } from '../../api/types';
 import type { KitContext } from '../../runtime/kit';
 import { SceneApiError } from '../../scene/errors';
 import { fmt } from '../../scene/format';
@@ -147,6 +133,12 @@ export class FlowKit implements Flow {
       if (this.stale) this.arrange();
       this.paintActive();
     });
+  }
+
+  /** Names an element or a kit object for highlighting, steps and descriptions, as stage.part does. */
+  part<T extends Handle | { readonly handle: Handle }>(name: string, item: T, options?: PartOptions): T {
+    this.stage.part(name, item as unknown as Handle, options);
+    return item;
   }
 
   // -------------------------------------------------------------------------

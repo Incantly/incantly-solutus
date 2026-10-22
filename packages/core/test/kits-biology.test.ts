@@ -53,6 +53,17 @@ describe('cells', () => {
     expect(runtime.uiState().error).toBeNull();
   });
 
+  it('names a cell or an organelle as a part through bio.part, as on the stage', () => {
+    const { runtime } = run((inc) => {
+      const bio = inc.biology('#b', { title: 'Cell' });
+      const cell = bio.cell(320, 200);
+      bio.part('Animal cell', cell);
+      bio.part('Nucleus', cell.organelle('nucleus'), { info: 'It holds the DNA.' });
+    });
+    expect(runtime.uiState().error).toBeNull();
+    expect(runtime.uiState().parts.map((p) => p.name)).toEqual(['Animal cell', 'Nucleus']);
+  });
+
   it('places an organelle where the cell is, and moves with it', () => {
     let cell: Cell | null = null;
     run((inc) => {

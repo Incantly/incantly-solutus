@@ -1,28 +1,4 @@
-import type {
-  Atom,
-  AtomOptions,
-  Bond,
-  BondOptions,
-  Chemistry,
-  ChemistryOptions,
-  DragInfo,
-  Handle,
-  Molecule,
-  MoleculeOptions,
-  MoleculeStructure,
-  PathHandle,
-  Profile,
-  ProfileOptions,
-  Reaction,
-  ReactionEnergy,
-  ReactionOptions,
-  ShellOptions,
-  Shells,
-  TextHandle,
-  Tone,
-  Vec2,
-  ViewBox,
-} from '../../api/types';
+import type { Atom, AtomOptions, Bond, BondOptions, Chemistry, ChemistryOptions, DragInfo, Handle, Molecule, MoleculeOptions, MoleculeStructure, PartOptions, PathHandle, Profile, ProfileOptions, Reaction, ReactionEnergy, ReactionOptions, ShellOptions, Shells, TextHandle, Tone, Vec2, ViewBox } from '../../api/types';
 import { chem } from '../../helpers/sym';
 import type { KitContext } from '../../runtime/kit';
 import { SceneApiError } from '../../scene/errors';
@@ -174,6 +150,12 @@ export class ChemistryKit implements Chemistry {
     ctx.onRedraw(() => this.flush());
     // The measuring tool reads bond lengths and angles in ångströms.
     ctx.setMeasure({ scale: [1 / this.scale, 1 / this.scale], origin: [0, 0], unit: 'Å' });
+  }
+
+  /** Names an element or a kit object for highlighting, steps and descriptions, as stage.part does. */
+  part<T extends Handle | { readonly handle: Handle }>(name: string, item: T, options?: PartOptions): T {
+    this.stage.part(name, item as unknown as Handle, options);
+    return item;
   }
 
   /** Stage units for a size given at the default scale. */

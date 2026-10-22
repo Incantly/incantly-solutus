@@ -493,6 +493,7 @@ export const HANDLES: Readonly<Record<HandleKind, HandleSpec>> = {
       energy: null,
       restart: null,
       toStage: null,
+      part: 'argument',
     } satisfies Methods<World2D>,
     properties: { time: null, stage: 'Stage' } satisfies Properties<World2D>,
   },
@@ -509,7 +510,7 @@ export const HANDLES: Readonly<Record<HandleKind, HandleSpec>> = {
     properties: { level: null, displaced: null, handle: 'Path' } satisfies Properties<Tank2D>,
   },
   Chart: {
-    methods: { series: 'ChartSeries', points: 'ChartSeries', rule: 'Element', highlight: null } satisfies Methods<Chart>,
+    methods: { series: 'ChartSeries', points: 'ChartSeries', rule: 'Element', highlight: null, part: 'argument' } satisfies Methods<Chart>,
     properties: { stage: 'Stage' } satisfies Properties<Chart>,
   },
   ChartSeries: {
@@ -517,7 +518,7 @@ export const HANDLES: Readonly<Record<HandleKind, HandleSpec>> = {
     properties: { name: null } satisfies Properties<ChartSeries>,
   },
   Flow: {
-    methods: { node: 'FlowNode', edge: 'FlowEdge', active: null } satisfies Methods<Flow>,
+    methods: { node: 'FlowNode', edge: 'FlowEdge', active: null, part: 'argument' } satisfies Methods<Flow>,
     properties: { stage: 'Stage' } satisfies Properties<Flow>,
   },
   FlowNode: {
@@ -529,7 +530,7 @@ export const HANDLES: Readonly<Record<HandleKind, HandleSpec>> = {
     properties: {},
   },
   Chemistry: {
-    methods: { atom: 'Atom', bond: 'Bond', molecule: 'Molecule', shells: 'Shells', reaction: 'Reaction', profile: 'Profile' } satisfies Methods<Chemistry>,
+    methods: { atom: 'Atom', bond: 'Bond', molecule: 'Molecule', shells: 'Shells', reaction: 'Reaction', profile: 'Profile', part: 'argument' } satisfies Methods<Chemistry>,
     properties: { stage: 'Stage' } satisfies Properties<Chemistry>,
   },
   Atom: {
@@ -557,7 +558,7 @@ export const HANDLES: Readonly<Record<HandleKind, HandleSpec>> = {
     properties: { activation: null, change: null, handle: 'Element' } satisfies Properties<Profile>,
   },
   Biology: {
-    methods: { cell: 'Cell', membrane: 'Membrane', helix: 'Helix', stream: 'Stream' } satisfies Methods<Biology>,
+    methods: { cell: 'Cell', membrane: 'Membrane', helix: 'Helix', stream: 'Stream', part: 'argument' } satisfies Methods<Biology>,
     properties: { stage: 'Stage' } satisfies Properties<Biology>,
   },
   Cell: {

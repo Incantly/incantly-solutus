@@ -280,6 +280,24 @@ describe('joints (PH-3)', () => {
   });
 });
 
+describe('parts on the world', () => {
+  it('names a body or a tank as a part through world.part, as on the stage', () => {
+    // Once a repaired buoyancy scene called world.part, as rule 8 reads, and the world had none.
+    const { runtime, mount } = run((inc) => {
+      const w = world(inc);
+      const block = w.box({ at: [2, 1], w: 0.5, h: 0.5 });
+      const tank = w.tank({ x: 1, w: 4, depth: 2 });
+      w.part('object', block, { label: 'Object', info: 'It floats.' });
+      w.part('liquid', tank.handle, { label: 'Liquid' });
+    });
+    expect(mount.ui.error).toBeNull();
+    expect(runtime.uiState().parts.map((p) => [p.name, p.label])).toEqual([
+      ['object', 'Object'],
+      ['liquid', 'Liquid'],
+    ]);
+  });
+});
+
 describe('liquids (PH-5)', () => {
   it('floats light bodies, sinks dense ones, and raises the level by what they displace', () => {
     let floater!: Body2D;

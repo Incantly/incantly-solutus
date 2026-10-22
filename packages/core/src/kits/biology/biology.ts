@@ -1,19 +1,4 @@
-import type {
-  Biology,
-  BiologyOptions,
-  Cell,
-  CellOptions,
-  Dots,
-  Helix,
-  HelixOptions,
-  Membrane,
-  MembraneOptions,
-  Stream,
-  StreamOptions,
-  Tone,
-  Vec2,
-  ViewBox,
-} from '../../api/types';
+import type { Biology, BiologyOptions, Cell, CellOptions, Dots, Handle, Helix, HelixOptions, Membrane, MembraneOptions, PartOptions, Stream, StreamOptions, Tone, Vec2, ViewBox } from '../../api/types';
 import type { KitContext } from '../../runtime/kit';
 import { SceneApiError } from '../../scene/errors';
 import { fmt } from '../../scene/format';
@@ -96,6 +81,12 @@ export class BiologyKit implements Biology {
   ) {
     this.stage = ctx.stage;
     this.viewBox = biologyLayout(options).viewBox;
+  }
+
+  /** Names an element or a kit object for highlighting, steps and descriptions, as stage.part does. */
+  part<T extends Handle | { readonly handle: Handle }>(name: string, item: T, options?: PartOptions): T {
+    this.stage.part(name, item as unknown as Handle, options);
+    return item;
   }
 
   cell(x: number, y: number, options?: CellOptions): Cell {

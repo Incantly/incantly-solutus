@@ -1358,6 +1358,8 @@ export interface World2D {
   /** Simulated seconds since the start. */
   readonly time: number;
   readonly stage: Stage;
+  /** Names an element, or a kit object with a handle such as a body, a tank or a molecule, for highlighting, steps and descriptions, as stage.part does. Naming a part again renames it. */
+  part<T extends Handle | { readonly handle: Handle }>(name: string, item: T, options?: PartOptions): T;
 }
 
 // ---------------------------------------------------------------------------
@@ -1417,6 +1419,8 @@ export interface Chart {
   /** Picks out one category by index, or none with null. */
   highlight(index: number | null): void;
   readonly stage: Stage;
+  /** Names an element, or a kit object with a handle such as a body, a tank or a molecule, for highlighting, steps and descriptions, as stage.part does. Naming a part again renames it. */
+  part<T extends Handle | { readonly handle: Handle }>(name: string, item: T, options?: PartOptions): T;
 }
 
 // ---------------------------------------------------------------------------
@@ -1472,6 +1476,8 @@ export interface Flow {
   /** Picks out a node, such as the current state; null for none. */
   active(id: string | null): void;
   readonly stage: Stage;
+  /** Names an element, or a kit object with a handle such as a body, a tank or a molecule, for highlighting, steps and descriptions, as stage.part does. Naming a part again renames it. */
+  part<T extends Handle | { readonly handle: Handle }>(name: string, item: T, options?: PartOptions): T;
 }
 
 // ---------------------------------------------------------------------------
@@ -1681,6 +1687,8 @@ export interface Chemistry {
   reaction(equation: string, options?: ReactionOptions): Reaction;
   profile(options: ProfileOptions): Profile;
   readonly stage: Stage;
+  /** Names an element, or a kit object with a handle such as a body, a tank or a molecule, for highlighting, steps and descriptions, as stage.part does. Naming a part again renames it. */
+  part<T extends Handle | { readonly handle: Handle }>(name: string, item: T, options?: PartOptions): T;
 }
 
 // ---------------------------------------------------------------------------
@@ -1825,6 +1833,8 @@ export interface Biology {
   /** Particles flowing along the path through these points. */
   stream(points: ReadonlyArray<Vec2>, options?: StreamOptions): Stream;
   readonly stage: Stage;
+  /** Names an element, or a kit object with a handle such as a body, a tank or a molecule, for highlighting, steps and descriptions, as stage.part does. Naming a part again renames it. */
+  part<T extends Handle | { readonly handle: Handle }>(name: string, item: T, options?: PartOptions): T;
 }
 
 // ---------------------------------------------------------------------------

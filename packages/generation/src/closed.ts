@@ -76,6 +76,13 @@ export const CLOSED_CLASSES: readonly ClosedClass[] = [
     test: { file: 'core/test/scene.test.ts', name: 'lets a graph item stand for its handle, gives every element a handle, and names what it needs when neither fits' },
   },
   {
+    check: 'unknown-method',
+    match: /handles have no method "part"/,
+    by: 'kit',
+    fix: 'Every kit object has part(), as rule 8 reads: the world, charts, flows, chemistry and biology name a body, a tank, a molecule or a cell as the stage does.',
+    test: { file: 'core/test/kits-physics2d.test.ts', name: 'names a body or a tank as a part through world.part, as on the stage' },
+  },
+  {
     check: 'unknown-sdk-call',
     by: 'rule',
     fix: 'Rule 13: only the catalog and the contract; the validator names the helper a scene meant, such as inc.calc.integral for inc.calc.integrate, so one repair finds it.',

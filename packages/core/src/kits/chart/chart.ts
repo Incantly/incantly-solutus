@@ -1,18 +1,4 @@
-import type {
-  Chart,
-  ChartData,
-  ChartKind,
-  ChartOptions,
-  ChartSeries,
-  ChartSeriesOptions,
-  Dots,
-  Handle,
-  PathHandle,
-  TextHandle,
-  Tone,
-  Vec2,
-  ViewBox,
-} from '../../api/types';
+import type { Chart, ChartData, ChartKind, ChartOptions, ChartSeries, ChartSeriesOptions, Dots, Handle, PartOptions, PathHandle, TextHandle, Tone, Vec2, ViewBox } from '../../api/types';
 import type { KitContext } from '../../runtime/kit';
 import { SceneApiError } from '../../scene/errors';
 import { fmt } from '../../scene/format';
@@ -171,6 +157,12 @@ export class ChartKit implements Chart {
     ctx.addHover((p) => {
       this.pointer = p;
     });
+  }
+
+  /** Names an element or a kit object for highlighting, steps and descriptions, as stage.part does. */
+  part<T extends Handle | { readonly handle: Handle }>(name: string, item: T, options?: PartOptions): T {
+    this.stage.part(name, item as unknown as Handle, options);
+    return item;
   }
 
   // -------------------------------------------------------------------------
