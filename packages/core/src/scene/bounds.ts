@@ -9,11 +9,11 @@ export interface Box {
 }
 
 /** Affine matrix [a, b, c, d, e, f] as in SVG: x' = a x + c y + e, y' = b x + d y + f. */
-type Matrix = readonly [number, number, number, number, number, number];
+export type Matrix = readonly [number, number, number, number, number, number];
 
-const IDENTITY: Matrix = [1, 0, 0, 1, 0, 0];
+export const IDENTITY: Matrix = [1, 0, 0, 1, 0, 0];
 
-function multiply(m: Matrix, n: Matrix): Matrix {
+export function multiply(m: Matrix, n: Matrix): Matrix {
   return [
     m[0] * n[0] + m[2] * n[1],
     m[1] * n[0] + m[3] * n[1],
@@ -24,7 +24,7 @@ function multiply(m: Matrix, n: Matrix): Matrix {
   ];
 }
 
-function local(t: Transform): Matrix {
+export function local(t: Transform): Matrix {
   let m: Matrix = [1, 0, 0, 1, t.tx, t.ty];
   if (t.rotation !== 0) {
     const r = (t.rotation * Math.PI) / 180;
@@ -226,7 +226,7 @@ export function stageBounds(graph: SceneGraph, stageId: number): StageBounds {
 }
 
 /** The transform from an element's own coordinates to its stage's, through every parent group. */
-function worldMatrix(graph: SceneGraph, node: VNode): Matrix {
+export function worldMatrix(graph: SceneGraph, node: VNode): Matrix {
   const chain: VNode[] = [];
   let current: VNode | undefined = node;
   while (current && current.kind !== 'stage') {

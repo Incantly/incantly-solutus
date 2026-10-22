@@ -21,6 +21,8 @@ const stage = inc.svg('#stage', { viewBox: [0, 0, 600, 340], zoom: false, title:
 const walls = stage.path('M530 30H30V290H530', { tone: 'mid' });
 const piston = stage.rect(0, TOP, 12, BOTTOM - TOP, { tone: 'b', fill: true });
 const rod = stage.line(0, 160, 548, 160, { tone: 'mid' });
+// The rod ends in a handle.
+stage.circle(548, 160, 6, { tone: 'mid' });
 const thermometer = stage.group();
 stage.rect(566, 40, 18, 250, { tone: 'faint', parent: thermometer }).set({ rx: 9 });
 const column = stage.rect(571, 0, 8, 0, { tone: 'lit', fill: true, parent: thermometer });

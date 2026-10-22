@@ -42,8 +42,8 @@ export type { Diagnostic, SceneFragments, SceneLimits, SceneValidation, Validate
 
 export { compileIsolated, ISOLATED_SCRIPT_NAME, probeScene } from './probe';
 export type { IsolatedScene, ProbeCheck, ProbeError, ProbeFailure, ProbeOptions, ProbeReport, ProbeSpec, ProbeStats, ScriptEvaluator } from './probe';
-export { AUDIT_TURNS, auditDepthOf, offlineChecks } from './probe';
-export type { DepthFinding, OfflineOptions, OfflineReport } from './probe';
+export { AUDIT_TURNS, auditDepthOf, looseLineEnds, offlineChecks } from './probe';
+export type { DepthFinding, LooseEnd, OfflineOptions, OfflineReport } from './probe';
 export type { AuditTurn, DepthAudit, DepthViolation } from './runtime/kit';
 
 export type { ControlKind, PlanOutput, PlanParameter, SceneKind, ScenePlan, SceneSize, SingularPoint, SizeBudget } from './protocol/plan';
