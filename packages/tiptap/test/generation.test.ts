@@ -9,6 +9,7 @@ import {
   createFixtureDocument,
   figureViews,
   pendingFigures,
+  type FigureChange,
   type FigureGenerate,
   type FigureGenerationResult,
   type FigureSignal,
@@ -57,7 +58,7 @@ class FakeFigure implements FigureHandle {
 
 const editors: Editor[] = [];
 
-function setup(generate: FigureGenerate, options: { signals?: (s: FigureSignal) => void; figures?: number } = {}) {
+function setup(generate: FigureGenerate, options: { signals?: (s: FigureSignal) => void; figures?: number; change?: FigureChange; meta?: Record<string, unknown> } = {}) {
   const mounts: FakeFigure[] = [];
   const adapter: ExecutionAdapter = {
     name: 'fake',
@@ -85,9 +86,12 @@ function setup(generate: FigureGenerate, options: { signals?: (s: FigureSignal) 
         scheduler: { settleMs: 10, createObserver },
         ...(options.signals ? { signals: options.signals } : {}),
       }),
-      FigureGeneration.configure({ generate }),
+      FigureGeneration.configure({ generate, change: options.change ?? null }),
     ],
-    content: createFixtureDocument({ figures: options.figures ?? 0, figure: () => ({ fragments: FRAGMENTS }) }),
+    content: createFixtureDocument({
+      figures: options.figures ?? 0,
+      figure: () => ({ fragments: FRAGMENTS, concept: 'projectile motion', values: { speed: 12 }, ...(options.meta ? { meta: options.meta } : {}) }),
+    }),
   });
   editors.push(editor);
   const figures = () => editor.getJSON().content?.filter((n) => n.type === 'incantlyFigure') ?? [];
@@ -225,6 +229,85 @@ describe('making a figure in a note', () => {
     const bare = new Editor({ element: document.createElement('div'), extensions: [StarterKit, FigureGeneration] });
     editors.push(bare);
     expect(bare.commands.generateFigure({ prompt: 'sine wave' })).toBe(false);
+  });
+});
+
+describe('changing a figure in a note (HO-8)', () => {
+  const select = (editor: Editor) => {
+    let pos = -1;
+    editor.state.doc.descendants((node, p) => {
+      if (pos < 0 && node.type.name === 'incantlyFigure') pos = p;
+    });
+    editor.commands.setNodeSelection(pos);
+  };
+  const attrs = (editor: Editor) => editor.getJSON().content!.find((n) => n.type === 'incantlyFigure')!.attrs!;
+  const status = (editor: Editor) => editor.view.dom.querySelector<HTMLElement>('figure.incantly-figure .incantly-figure__status')!;
+
+  it('changes the selected figure in the learner’s words, keeps their values, and undo brings it back', async () => {
+    const { generate } = controlled();
+    let finish: (result: FigureGenerationResult) => void = () => undefined;
+    const requests: Array<Parameters<FigureChange>[0]> = [];
+    const change: FigureChange = (request, hooks) =>
+      new Promise((resolve) => {
+        requests.push(request);
+        hooks.onStage('building');
+        finish = resolve;
+      });
+    const { editor } = setup(generate, { figures: 1, change, meta: { ticket: 'signed.figure', generationId: 'gen-1' } });
+    select(editor);
+    expect(editor.commands.changeFigure({ prompt: 'Make gravity weaker, like on the Moon' })).toBe(true);
+    expect(requests[0]).toMatchObject({ ticket: 'signed.figure', fragments: FRAGMENTS, prompt: 'Make gravity weaker, like on the Moon' });
+    expect(status(editor).textContent).toBe('Changing the figure…');
+    finish({ kind: 'figure', figure: { ...FIGURE, fragments: { ...FRAGMENTS, js: `${FRAGMENTS.js}\n// moon` }, generationId: 'gen-2', ticket: 'signed.again' } });
+    await vi.advanceTimersByTimeAsync(0);
+    expect((attrs(editor).fragments as { js: string }).js).toContain('// moon');
+    expect(attrs(editor).values).toEqual({ speed: 12 });
+    expect(attrs(editor).meta).toMatchObject({ generationId: 'gen-2', ticket: 'signed.again', validatorVersion: VALIDATOR_VERSION });
+    expect(status(editor).hidden).toBe(true);
+    // An ordinary edit: undo brings the figure back as it was.
+    editor.commands.undo();
+    expect((attrs(editor).fragments as { js: string }).js).not.toContain('// moon');
+  });
+
+  it('keeps the figure and says why when the change cannot be made', async () => {
+    const { generate } = controlled();
+    const change: FigureChange = async () => ({ kind: 'failed', message: 'That change is not one this figure can make, so it is unchanged.' });
+    const { editor } = setup(generate, { figures: 1, change, meta: { ticket: 'signed.figure' } });
+    select(editor);
+    editor.commands.changeFigure({ prompt: 'Turn it into a poem' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(attrs(editor).fragments).toEqual(FRAGMENTS);
+    expect(status(editor).textContent).toBe('That change is not one this figure can make, so it is unchanged.');
+  });
+
+  it('makes a figure the service never signed again, with the change in the request, and remakes one from its concept', async () => {
+    const { generate, calls } = controlled();
+    const change = vi.fn<FigureChange>();
+    const { editor } = setup(generate, { figures: 1, change });
+    select(editor);
+    editor.commands.changeFigure({ prompt: 'Add air resistance' });
+    expect(change).not.toHaveBeenCalled();
+    expect(calls[0]!.prompt).toBe('projectile motion: Add air resistance');
+    calls[0]!.resolve({ kind: 'figure', figure: { ...FIGURE, fragments: { ...FRAGMENTS, js: `${FRAGMENTS.js}\n// air` } } });
+    await vi.advanceTimersByTimeAsync(0);
+    expect((attrs(editor).fragments as { js: string }).js).toContain('// air');
+    // Made again from its concept: it starts afresh.
+    select(editor);
+    expect(editor.commands.regenerateFigure()).toBe(true);
+    expect(calls[1]!.prompt).toBe('projectile motion');
+    calls[1]!.resolve({ kind: 'figure', figure: FIGURE });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(attrs(editor).values).toEqual({});
+    expect(attrs(editor).fragments).toEqual(FRAGMENTS);
+  });
+
+  it('needs a selected figure and a request', () => {
+    const { generate } = controlled();
+    const { editor } = setup(generate, { figures: 1 });
+    expect(editor.commands.changeFigure({ prompt: 'Make it bigger' })).toBe(false);
+    select(editor);
+    expect(editor.commands.changeFigure({ prompt: '  ' })).toBe(false);
+    expect(editor.commands.changeFigure({ prompt: 'Make it bigger', figureId: 'no-such-figure' })).toBe(false);
   });
 });
 

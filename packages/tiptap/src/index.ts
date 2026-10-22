@@ -12,7 +12,7 @@ export type { FigureNodeOptions, SnapshotSource } from './figure-node';
 export { ABANDON_MS, FIGURE_TRANSACTION, FigureNodeView, figureViews } from './node-view';
 export type { FigureErrorReport, FigureRepair, FigureRepairRequest, FigureSignal, FigureViewOptions, FigureViewState, RepairedFigure } from './node-view';
 export { FigureGeneration, figureGenerationKey, pendingFigures } from './generation';
-export type { FigureGenerate, FigureGenerationOptions, FigureGenerationResult, FigureRequest, GeneratedFigure, GenerationStageView, SkeletonView } from './generation';
+export type { FigureChange, FigureChangeRequest, FigureGenerate, FigureGenerationOptions, FigureGenerationResult, FigureRequest, GeneratedFigure, GenerationStageView, SkeletonView } from './generation';
 export { LiveFigureScheduler } from './scheduler';
 export type { ObserverFactory, ObserverLike, ScheduledFigure, SchedulerOptions, SchedulerStats } from './scheduler';
 export { CachedFigureStore, INLINE_FRAGMENTS_LIMIT, MemoryFigureStore, fragmentsText } from './store';

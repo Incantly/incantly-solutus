@@ -120,6 +120,8 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
   private generation = 0;
   private noticeTimer: ReturnType<typeof setTimeout> | null = null;
   private notice: string | null = null;
+  /** What a change in progress is doing, such as changing the figure in the learner's words (HO-8). */
+  private busy: string | null = null;
   /** The figure's number in the note, when the editor numbers figures. */
   private number: number | null = null;
   /** A background repair (RP-7): none, running, or one that did not work, which offers the working version. */
@@ -155,6 +157,8 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
     this.frame.className = 'incantly-figure__frame';
     this.status = doc.createElement('p');
     this.status.className = 'incantly-figure__status';
+    // Read out as it changes: being fixed, being changed, kept as it was.
+    this.status.setAttribute('role', 'status');
     this.status.hidden = true;
     this.caption = doc.createElement('figcaption');
     this.caption.className = 'incantly-figure__description';
@@ -353,6 +357,11 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
   // -------------------------------------------------------------------------
   // Live instance
   // -------------------------------------------------------------------------
+
+  /** The figure's fragments as stored, inline or by reference. */
+  source(): Promise<FigureFragments | null> {
+    return this.fragments();
+  }
 
   private async fragments(): Promise<FigureFragments | null> {
     const attrs = this.attrs;
@@ -740,6 +749,13 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
     });
   }
 
+  /** Shows what a change to the figure is doing until it ends; null when it has. */
+  working(text: string | null): void {
+    this.busy = text;
+    if (text !== null) this.clearNotice();
+    this.renderStatus();
+  }
+
   /** Shows one quiet line under the figure for a while, such as that it is a standard version. */
   notify(message: string, ms = 10_000): void {
     if (this.noticeTimer !== null) clearTimeout(this.noticeTimer);
@@ -776,7 +792,7 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
         ? 'This figure could not be shown. Its description is below.'
         : this.mending === 'repairing'
           ? 'This figure hit a problem and is being fixed.'
-          : (this.notice ?? '');
+          : (this.busy ?? this.notice ?? '');
     if (this.status.textContent !== text || this.status.querySelector('button')) this.status.textContent = text;
     this.status.hidden = text === '';
   }

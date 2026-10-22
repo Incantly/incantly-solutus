@@ -1,9 +1,9 @@
 import { VALIDATOR_VERSION } from '@incantly/core';
 import { Extension } from '@tiptap/core';
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
-import { Plugin, PluginKey, type EditorState, type Transaction } from '@tiptap/pm/state';
+import { NodeSelection, Plugin, PluginKey, type EditorState, type Transaction } from '@tiptap/pm/state';
 import { Decoration, DecorationSet, type EditorView } from '@tiptap/pm/view';
-import { DEFAULT_ASPECT, type FigureFragments } from './attributes';
+import { DEFAULT_ASPECT, type FigureAttributes, type FigureFragments } from './attributes';
 import { newFigureId } from './figure-node';
 import { FIGURE_TRANSACTION, figureViews } from './node-view';
 
@@ -17,6 +17,12 @@ import { FIGURE_TRANSACTION, figureViews } from './node-view';
  *
  * The host supplies `generate`: @incantly/generation/client's figureGenerator
  * runs the service, the device probe, the one repair and the fallback ladder.
+ *
+ * A figure already in the note can be changed in the learner's words, or made
+ * again (HO-8). The host supplies `change`: @incantly/generation/client's
+ * figureChanger edits the scene the service signed, and the device probes
+ * the change before it replaces the figure. A change is an ordinary edit:
+ * undo brings the figure back as it was.
  */
 
 export interface FigureRequest {
@@ -52,8 +58,21 @@ export type FigureGenerate = (
   hooks: { readonly onSkeleton: (skeleton: SkeletonView) => void; readonly onStage: (stage: GenerationStageView) => void; readonly signal: AbortSignal },
 ) => Promise<FigureGenerationResult>;
 
+/** Changes a figure the learner has, in their words (HO-8). */
+export type FigureChange = (
+  request: { readonly fragments: FigureFragments; readonly ticket: string | null; readonly prompt: string; readonly noteContext?: string },
+  hooks: { readonly onStage: (stage: GenerationStageView) => void; readonly signal: AbortSignal },
+) => Promise<FigureGenerationResult>;
+
 export interface FigureGenerationOptions {
   generate: FigureGenerate | null;
+  /** Changes a figure already in the note; without it, a change makes the figure again with the change in the request. */
+  change: FigureChange | null;
+}
+
+/** Which figure a change is for: the selected one, or the one with this id. */
+export interface FigureChangeRequest extends FigureRequest {
+  readonly figureId?: string;
 }
 
 declare module '@tiptap/core' {
@@ -61,6 +80,10 @@ declare module '@tiptap/core' {
     figureGeneration: {
       /** Makes a figure for the request, placed after the block at the selection, or at `at`. */
       generateFigure: (request: FigureRequest, at?: number) => ReturnType;
+      /** Changes the selected figure, or the one with `figureId`, as the request says (HO-8). */
+      changeFigure: (request: FigureChangeRequest) => ReturnType;
+      /** Makes the selected figure, or the one with `figureId`, again: from its concept, or from `prompt` (HO-8). */
+      regenerateFigure: (request?: Partial<FigureChangeRequest>) => ReturnType;
     };
   }
 }
@@ -68,6 +91,13 @@ declare module '@tiptap/core' {
 const STAGE_TEXT: Readonly<Record<GenerationStageView, string>> = {
   planning: 'Planning the figure…',
   building: 'Drawing the figure…',
+  checking: 'Checking that it works…',
+  repairing: 'Fixing a problem…',
+};
+
+const CHANGE_TEXT: Readonly<Record<GenerationStageView, string>> = {
+  planning: 'Planning the change…',
+  building: 'Changing the figure…',
   checking: 'Checking that it works…',
   repairing: 'Fixing a problem…',
 };
@@ -271,7 +301,7 @@ export const FigureGeneration = Extension.create<FigureGenerationOptions>({
   name: 'figureGeneration',
 
   addOptions() {
-    return { generate: null };
+    return { generate: null, change: null };
   },
 
   addCommands() {
@@ -288,6 +318,45 @@ export const FigureGeneration = Extension.create<FigureGenerationOptions>({
           tasksOf(view).set(id, task);
           dispatch(state.tr.setMeta(figureGenerationKey, { add: { id, pos, element: task.element } } satisfies Meta));
           task.start();
+          return true;
+        },
+      changeFigure:
+        (request) =>
+        ({ view, state, dispatch }) => {
+          const { change, generate } = this.options;
+          const prompt = request.prompt.trim();
+          const at = figureAt(state, request.figureId);
+          if (!at || prompt === '' || (!change && !generate)) return false;
+          if (!dispatch) return true;
+          const attrs = at.node.attrs as FigureAttributes;
+          const ticket = attrs.meta.ticket ?? null;
+          void changeInPlace(
+            view,
+            attrs.figureId,
+            async (hooks) => {
+              const fragments = attrs.fragments ?? (await sourceOf(view, at.pos));
+              if (change && ticket && fragments) {
+                return change({ fragments, ticket, prompt, ...(request.noteContext ? { noteContext: request.noteContext } : {}) }, hooks);
+              }
+              // Without the service's signature, the figure is made again with the change in the request.
+              if (!generate) return { kind: 'failed', message: 'This figure cannot be changed here.' };
+              return generate({ prompt: `${attrs.concept ? `${attrs.concept}: ` : ''}${prompt}` }, { ...hooks, onSkeleton: () => undefined });
+            },
+            true,
+          );
+          return true;
+        },
+      regenerateFigure:
+        (request = {}) =>
+        ({ view, state, dispatch }) => {
+          const generate = this.options.generate;
+          const at = figureAt(state, request.figureId);
+          if (!at || !generate) return false;
+          const attrs = at.node.attrs as FigureAttributes;
+          const prompt = (request.prompt ?? attrs.concept).trim();
+          if (prompt === '') return false;
+          if (!dispatch) return true;
+          void changeInPlace(view, attrs.figureId, (hooks) => generate({ prompt, ...(request.noteContext ? { noteContext: request.noteContext } : {}) }, { ...hooks, onSkeleton: () => undefined }), false);
           return true;
         },
     };
@@ -322,9 +391,11 @@ export const FigureGeneration = Extension.create<FigureGenerationOptions>({
         },
         view: (view) => ({
           destroy: () => {
-            // Closing the note cancels the figures still being made; none is half stored.
+            // Closing the note cancels the figures still being made or changed; none is half stored.
             for (const task of tasksOf(view).values()) task.cancel();
             tasks.delete(view);
+            for (const controller of changesOf(view).values()) controller.abort();
+            changes.delete(view);
           },
         }),
       }),
@@ -336,3 +407,95 @@ export const FigureGeneration = Extension.create<FigureGenerationOptions>({
 export function pendingFigures(view: EditorView): number {
   return tasksOf(view).size;
 }
+
+/** The figure a change is for: the one with this id, or the selected one. */
+function figureAt(state: EditorState, figureId?: string): { readonly pos: number; readonly node: ProseMirrorNode } | null {
+  if (figureId === undefined) {
+    const { selection } = state;
+    return selection instanceof NodeSelection && selection.node.type.name === 'incantlyFigure' ? { pos: selection.from, node: selection.node } : null;
+  }
+  let found: { pos: number; node: ProseMirrorNode } | null = null;
+  state.doc.descendants((node, pos) => {
+    if (found) return false;
+    if (node.type.name === 'incantlyFigure' && (node.attrs as FigureAttributes).figureId === figureId) found = { pos, node };
+    return node.isBlock;
+  });
+  return found;
+}
+
+/** Changes being made, by editor and figure id, so a second change waits its turn and closing the note cancels them. */
+const changes = new WeakMap<EditorView, Map<string, AbortController>>();
+
+function changesOf(view: EditorView): Map<string, AbortController> {
+  let map = changes.get(view);
+  if (!map) {
+    map = new Map();
+    changes.set(view, map);
+  }
+  return map;
+}
+
+/**
+ * Runs a change to a figure in the note: a quiet line under the figure says
+ * what is happening, and the result replaces the figure in one ordinary,
+ * undoable edit, or the figure stays as it was with one line saying why.
+ */
+async function changeInPlace(
+  view: EditorView,
+  figureId: string,
+  work: (hooks: { readonly onStage: (stage: GenerationStageView) => void; readonly signal: AbortSignal }) => Promise<FigureGenerationResult>,
+  keepValues: boolean,
+): Promise<void> {
+  const running = changesOf(view);
+  if (running.has(figureId)) return;
+  const controller = new AbortController();
+  running.set(figureId, controller);
+  const figureView = () => {
+    const at = figureAt(view.state, figureId);
+    const dom = at ? view.nodeDOM(at.pos) : null;
+    return dom instanceof Element ? figureViews.get(dom) : undefined;
+  };
+  figureView()?.working(CHANGE_TEXT.planning);
+  let result: FigureGenerationResult;
+  try {
+    result = await work({ onStage: (stage) => figureView()?.working(CHANGE_TEXT[stage]), signal: controller.signal });
+  } catch {
+    result = { kind: 'failed', message: 'The figure could not be changed, so the working version is kept.' };
+  } finally {
+    running.delete(figureId);
+  }
+  if (controller.signal.aborted || view.isDestroyed) return;
+  figureView()?.working(null);
+  const at = figureAt(view.state, figureId);
+  if (!at) return;
+  if (result.kind === 'failed') {
+    figureView()?.notify(result.message);
+    return;
+  }
+  const { figure } = result;
+  const attrs = at.node.attrs as FigureAttributes;
+  let tr: Transaction = view.state.tr
+    .setNodeAttribute(at.pos, 'fragments', figure.fragments)
+    .setNodeAttribute(at.pos, 'fragmentsRef', null)
+    .setNodeAttribute(at.pos, 'concept', figure.concept)
+    .setNodeAttribute(at.pos, 'description', figure.description)
+    .setNodeAttribute(at.pos, 'meta', {
+      ...(figure.generationId ? { generationId: figure.generationId } : {}),
+      approvedAt: figure.approvedAt,
+      validatorVersion: VALIDATOR_VERSION,
+      ...(figure.ticket ? { ticket: figure.ticket } : {}),
+    });
+  // A figure made again starts afresh; a changed one keeps the learner's values where they still apply.
+  if (!keepValues) tr = tr.setNodeAttribute(at.pos, 'values', {}).setNodeAttribute(at.pos, 'step', null).setNodeAttribute(at.pos, 'formulas', {});
+  else if (Object.keys(attrs.formulas).length > 0) tr = tr.setNodeAttribute(at.pos, 'formulas', {});
+  view.dispatch(tr.setMeta(FIGURE_TRANSACTION, 'changed'));
+  if (result.notice) figureView()?.notify(result.notice);
+}
+
+/** A figure's fragments when the note keeps them by reference: its live view loads them from the store. */
+async function sourceOf(view: EditorView, pos: number): Promise<FigureFragments | null> {
+  const dom = view.nodeDOM(pos);
+  const figure = dom instanceof Element ? figureViews.get(dom) : undefined;
+  return figure ? figure.source() : null;
+}
+
