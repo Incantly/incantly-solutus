@@ -153,9 +153,11 @@ export interface FigureStyle {
   readonly preset?: StylePreset;
   /**
    * Design tokens, without the `--inc-` prefix: colours (`bg`, `fg`, `muted`,
-   * `line`, `card`, `lit`, `a`, `b`, `c`, `focus`), `radius`, `font`,
-   * `font-size`, `gap`, `control-height`, `shadow`, `blur`, `surface`,
-   * `scene-bg`. Values are plain CSS values: colours, lengths, font lists.
+   * `line`, `card`, `lit`, `a`, `b`, `c`, `focus`, `danger`), `radius`,
+   * `radius-sm`, `font`, `font-size`, `gap`, `pad`, `control-height`,
+   * `border-width`, `shadow`, `surface`, `button-bg`, `scene-bg`, and `blur`
+   * (the glass preset's backdrop blur). Values are plain CSS values: colours,
+   * lengths, font lists. See docs/sdk/styling.md.
    */
   readonly tokens?: Readonly<Record<string, string>>;
   /** Extra classes per slot, for utility CSS such as Tailwind. */

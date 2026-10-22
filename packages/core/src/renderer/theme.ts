@@ -390,9 +390,10 @@ html.inc-frame, html.inc-frame body { margin: 0; padding: 0; background: transpa
   --inc-radius: 18px;
   --inc-radius-sm: 12px;
   --inc-shadow: 0 10px 40px rgba(31, 38, 135, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  --inc-blur: 18px;
   border: 1px solid rgba(255, 255, 255, 0.6);
-  backdrop-filter: blur(var(--inc-glass-blur, 18px)) saturate(160%);
-  -webkit-backdrop-filter: blur(var(--inc-glass-blur, 18px)) saturate(160%);
+  backdrop-filter: blur(var(--inc-blur)) saturate(160%);
+  -webkit-backdrop-filter: blur(var(--inc-blur)) saturate(160%);
 }
 .inc-figure[data-preset='glass'][data-theme='dark'] {
   --inc-bg: rgba(24, 24, 32, 0.55);
