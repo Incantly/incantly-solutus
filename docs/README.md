@@ -49,6 +49,7 @@ Incantly turns a concept in a learner's notes into a safe, interactive teaching 
 
 - [Vertical slice](implementation/vertical-slice.md): build order and boundaries.
 - [Acceptance tests](implementation/acceptance-tests.md): executable product and engineering expectations.
+- [Generation bench](implementation/generation-bench.md): how long learners wait for a figure, measured with real model replies, and how it got there.
 - [Reference examples](implementation/reference-examples.md): inspected Claude artifacts and the implementation lessons they establish.
 
 ### Research

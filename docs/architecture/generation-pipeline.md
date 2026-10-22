@@ -103,7 +103,7 @@ The pipeline lives in `packages/generation`. Where each step runs:
 
 ### Context and models
 
-The core rules (under 1,500 tokens) and the capability catalog open every call as one block marked for prompt caching, so the plan, scene and repair calls share a cache entry. The scene call adds only the declarations of the SDK's own type contract that the plan's capabilities need (extracted from `packages/core/src/api/types.ts` by `scripts/generate.mjs`) and the nearest reviewed example. The plan goes to `claude-haiku-5-5` at low effort; scenes and repairs to `claude-sonnet-5-5` at medium effort. Both are configurable. Model calls stream, carry a deadline, and retry once when the provider is busy and nothing has streamed yet.
+The core rules and the capability catalog open every call as one block marked for prompt caching, so the plan, scene and repair calls share a cache entry. The scene call adds only the declarations of the SDK's own type contract that the plan's capabilities need (extracted from `packages/core/src/api/types.ts` by `scripts/generate.mjs`) and the nearest reviewed example. The plan goes to `claude-haiku-5-5` at low effort; scenes and repairs to `claude-sonnet-5-5` at medium effort; thinking is off for all three. All of it is configurable. Model calls stream, carry a deadline, and retry once when the provider is busy and nothing has streamed yet.
 
 ### Repair
 
@@ -139,3 +139,29 @@ Every generation leaves a failure record (`records.ts`), written as daily JSON l
 `npm run evals -- --model anthropic --trials 100` runs the versioned prompts (`evals/prompts.json`) through the whole pipeline: 100 trials per concept, once with the reviewed examples and once with each concept's own example withheld, so 600 trials. It needs `ANTHROPIC_API_KEY`. The summary reports first-attempt and post-repair pass rates with 95% Wilson intervals, by concept and by condition, how well plans match the eval set, latency, tokens, prompt-cache hits and cost. Every approved scene is validated and probed again from scratch, and a scene that fails that is counted as a broken figure shown; the gate requires none. `--gate` exits non-zero unless the v0.1 targets are met.
 
 `--model reference` runs the same suite against a stand-in that serves the reviewed scenes, and `--faults 0.3` injects faults into that share of trials: plan rejections, validator and probe failures, cut-off replies, and repairs that change nothing. It measures the pipeline, never a model, and is the fault-injection half of the gate.
+
+## Speed
+
+Every generation has a deadline of 25 seconds from the request to a checked scene (`DEFAULT_DEADLINE_MS`), of which 1.5 s is kept for the checks and delivery (`DELIVERY_MS`). A model call is cut off when only that is left; a repair starts only when its estimate, 2 to 4 s, fits in what remains; and when no candidate passes in time, the device takes the next rung of the fallback ladder. So no learner waits longer than the deadline.
+
+A request takes one of four paths:
+
+| Path | When | Calls | Bench, run 4 (p50 / max) |
+| --- | --- | --- | --- |
+| Library build | The request plainly names a reviewed concept | The scene call adapts that scene by edits at once; the plan call runs beside it only to confirm the concept | 3.1 / 6.1 s, all approved |
+| Plan, then edits | The plan names a reviewed concept the request did not | Plan, then edits to that scene | 13.1 s (one generation) |
+| Plan, then written whole | No reviewed scene for the concept | Plan, then the scene written whole after the nearest reviewed example | 16.1 / 19.2 s, 22 of 23 approved |
+| Concept cache | The same request, or a plan for a figure approved before | No scene call | the plan call, or nothing |
+
+What makes it fast, and what each saves:
+
+- **Retrieval** (`retrieve.ts`). Each reviewed scene lists names and keywords in its `match.json`; a name counts three points and a keyword one, and a request needs three points, or two when no other concept scores at all, and more than any other concept. The scene call starts before any plan, and its system blocks are the same for every request about that concept, so they stay cached. The skeleton the learner sees is the reviewed plan, at once.
+- **Confirmation, not waiting.** The plan call beside a library build confirms the concept when its concept and idea score for that scene. If it names another concept, the build is stopped and the pipeline goes on from that plan, having lost no time.
+- **Edits, not rewrites** (`edits.ts`). Adapting and repairing reply with SEARCH/REPLACE edits: a library reply is often one empty edit block, six tokens, and a repair 35 to 220. Edits match exactly, or line by line ignoring indentation; an edit whose replacement already stands counts as applied, so a reply that repeats itself still works.
+- **Small, cached prompts.** One cached block of rules and catalog; only the contract the plan needs; one example. Thinking off on every call; a small model for plans.
+- **Budgets by size.** Quick, standard and rich figures have their own line, output-token, control and part budgets, and the scene call's token limit follows them.
+- **Checks that cost no tokens.** The validator and the probe find the problem and the report quotes the failing check, the parameter state and the agent's own line, so one short repair usually fixes it.
+- **On the device.** The probe frame boots while the plan and scene are still being written, with the plan's drawing kits preloaded; a warm frame saves 80 to 180 ms, and the probe takes 200 to 500 ms.
+
+The [generation bench](../implementation/generation-bench.md) measures all of this with real model replies, every generation, every stage.
+
