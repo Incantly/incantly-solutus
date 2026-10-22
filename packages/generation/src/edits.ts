@@ -98,9 +98,27 @@ function occurrences(haystack: string, needle: string): number[] {
   return out;
 }
 
+/** Whether `wanted` stands in `text` exactly once, exactly or line by line with surrounding spaces ignored. */
+function placedOnce(text: string, wanted: string): boolean {
+  const exact = occurrences(text, wanted).length;
+  if (exact > 0) return exact === 1;
+  const want = wanted.split('\n').map((l) => l.trim());
+  while (want.length > 0 && want[0] === '') want.shift();
+  while (want.length > 0 && want.at(-1) === '') want.pop();
+  if (want.length === 0) return false;
+  const lines = text.split('\n');
+  let found = 0;
+  for (let s = 0; s + want.length <= lines.length && found < 2; s++) {
+    if (want.every((w, k) => lines[s + k]!.trim() === w)) found++;
+  }
+  return found === 1;
+}
+
 /**
  * Applies edits in order. Each SEARCH must match once: exactly, or else line
- * by line with surrounding spaces ignored. An empty SEARCH appends.
+ * by line with surrounding spaces ignored. An empty SEARCH appends. An edit
+ * whose SEARCH is gone but whose replacement stands once already is taken as
+ * applied, as when a reply repeats its edits.
  */
 export function applyEdits(source: string, edits: readonly Edit[]): Applied {
   let text = source;
@@ -131,6 +149,8 @@ export function applyEdits(source: string, edits: readonly Edit[]): Applied {
       text = lines.join('\n');
       return;
     }
+    // A reply that repeats an edit, correcting itself, finds its replacement already in place: nothing to do.
+    if (exact.length === 0 && starts.length === 0 && edit.replace.trim() !== '' && placedOnce(text, edit.replace)) return;
     failed.push(
       exact.length > 1 || starts.length > 1
         ? `edit ${number} matches more than one place; include a line or two more so its SEARCH is unique`
