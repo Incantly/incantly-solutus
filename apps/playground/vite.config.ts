@@ -85,6 +85,10 @@ function generationService(): Plugin {
       records,
       prefix,
       enabled: () => enabled,
+      // A real playground call includes planning plus a streamed scene, and a
+      // rich scene can stream for minutes. The model-side cap guards silence;
+      // the wall here has to be generous enough for a healthy stream.
+      generationTimeoutMs: session ? 300_000 : 45_000,
       limits: { ...g.DEFAULT_LIMITS, perMinute: 60, perDay: 1000, concurrent: 6 },
     });
     const entry = { handle: service.handle, close: () => service.close(), records };

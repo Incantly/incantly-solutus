@@ -279,7 +279,7 @@ class Probe {
       if (outside.length > 0) {
         this.fail({
           check: 'bounds',
-          message: `${outside.length} element${outside.length === 1 ? '' : 's'} of the stage ${stage.selector} lie outside its viewBox at the default values`,
+          message: `${outside.length} element${outside.length === 1 ? '' : 's'} of the stage ${stage.selector} lie outside its viewBox at the default values: ${outside.join(', ')}`,
           values: this.defaults,
         });
       }

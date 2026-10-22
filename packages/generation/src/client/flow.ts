@@ -170,6 +170,13 @@ async function ladder(run: GenerationRun, message: FallbackMessage | null, reaso
   if (run.existing?.hasSnapshot) {
     return { kind: 'fallback', level: 'snapshot', reason, figure: null, message: 'The figure could not be remade. Its picture and description are kept.' };
   }
-  const why = reason === 'off' ? 'Making new figures is switched off for now.' : reason === 'limit' ? 'You have reached the limit for new figures for now.' : '';
+  const why =
+    reason === 'off'
+      ? 'Making new figures is switched off for now.'
+      : reason === 'limit'
+        ? 'You have reached the limit for new figures for now.'
+        : reason === 'timeout'
+          ? 'The model took too long to finish.'
+          : '';
   return { kind: 'fallback', level: 'text', reason, figure: null, message: `This figure could not be built.${why ? ` ${why}` : ''}` };
 }

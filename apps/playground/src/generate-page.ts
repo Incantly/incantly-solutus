@@ -3,13 +3,37 @@ import { GenerationClient, Telemetry, figureGenerator, type TelemetryEvent } fro
 import { FigureGeneration, FigureNode, MemoryFigureStore, flushFigures, newFigureId, type FigureGenerate, type FigureGenerationResult, type FigureRequest, type GenerationStageView, type SkeletonView } from '@incantly/tiptap';
 import { Editor, type JSONContent } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
+import { clearDebug, loadDebug, recordDebug, recordingFetch } from './debug-log';
 
 interface Turn { editor: Editor; readonly host: HTMLElement; readonly generate: FigureGenerate }
+interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  /** The finished figure node, kept so the chat re-mounts it after a reload. */
+  figure?: JSONContent;
+}
 interface Chat {
   id: string;
   title: string;
-  createdAt: Date;
-  messages: Array<{ role: 'user' | 'assistant'; content: string }>;
+  createdAt: string;
+  messages: ChatMessage[];
+}
+
+/** Where chats survive reloads. The API key is deliberately never kept: it stays in the page and the server session. */
+const CHATS_KEY = 'incantly-playground-chats';
+
+interface SavedChats {
+  chats: Array<Pick<Chat, 'id' | 'title' | 'createdAt' | 'messages'>>;
+  currentChatId: string | null;
+}
+
+function loadChats(): SavedChats | null {
+  try {
+    const saved = localStorage.getItem(CHATS_KEY);
+    return saved ? (JSON.parse(saved) as SavedChats) : null;
+  } catch {
+    return null;
+  }
 }
 
 function sourcePanel(result: Extract<FigureGenerationResult, { kind: 'figure' }>): HTMLElement {
@@ -41,6 +65,8 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
   let latest: Turn | null = null;
   let token: string | null = null;
   let client: GenerationClient | null = null;
+  let generationInFlight = false;
+  let sessionSetup: Promise<void> | null = null;
 
   const sidebar = document.createElement('aside');
   sidebar.className = 'sidebar';
@@ -56,6 +82,13 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
     </div>
     <div class="chat-list"></div>
     <div class="sidebar-footer">
+      <button class="debug-btn">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="2" y="4" width="20" height="16" rx="2"></rect>
+          <path d="M7 9l3 3-3 3M13 15h4"></path>
+        </svg>
+        Debug log
+      </button>
       <button class="settings-btn">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <circle cx="12" cy="12" r="3"></circle>
@@ -110,6 +143,82 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
     </div>
   `;
   root.append(settingsModal);
+
+  const debugModal = document.createElement('div');
+  debugModal.className = 'debug-modal';
+  debugModal.hidden = true;
+  debugModal.innerHTML = `
+    <div class="debug-content">
+      <div class="debug-header">
+        <h2>Debug log</h2>
+        <button class="close-debug-btn">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+      <div class="debug-toolbar">
+        <button type="button" class="debug-copy-btn">Copy all as JSON</button>
+        <button type="button" class="debug-clear-btn">Clear</button>
+      </div>
+      <div class="debug-list"></div>
+    </div>
+  `;
+  root.append(debugModal);
+
+  const debugBtn = sidebar.querySelector('.debug-btn') as HTMLButtonElement;
+  const closeDebugBtn = debugModal.querySelector('.close-debug-btn') as HTMLButtonElement;
+  const debugList = debugModal.querySelector('.debug-list') as HTMLElement;
+
+  function renderDebugList(): void {
+    const entries = [...loadDebug()].reverse();
+    debugList.replaceChildren(...entries.map((entry) => {
+      const item = document.createElement('details');
+      item.className = `debug-entry is-${entry.kind}`;
+      const summary = document.createElement('summary');
+      summary.textContent = `${entry.at.slice(11, 19)} ${entry.kind} ${entry.label}${entry.status ? ` (HTTP ${entry.status})` : ''}`;
+      const pre = document.createElement('pre');
+      const payload = Object.fromEntries(Object.entries(entry).filter(([k]) => !['at', 'kind', 'label'].includes(k)));
+      pre.textContent = JSON.stringify(payload, null, 2);
+      item.append(summary, pre);
+      return item;
+    }));
+    if (entries.length === 0) {
+      const empty = document.createElement('p');
+      empty.className = 'debug-empty';
+      empty.textContent = 'Nothing recorded yet. Send a prompt and the request, answer and errors will appear here.';
+      debugList.append(empty);
+    }
+  }
+
+  debugBtn.addEventListener('click', () => {
+    renderDebugList();
+    debugModal.hidden = false;
+  });
+  closeDebugBtn.addEventListener('click', () => {
+    debugModal.hidden = true;
+  });
+  debugModal.querySelector('.debug-clear-btn')?.addEventListener('click', () => {
+    clearDebug();
+    renderDebugList();
+  });
+  debugModal.querySelector('.debug-copy-btn')?.addEventListener('click', async (event) => {
+    const button = event.target as HTMLButtonElement;
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(loadDebug(), null, 2));
+      button.textContent = 'Copied ✓';
+      setTimeout(() => {
+        button.textContent = 'Copy all as JSON';
+      }, 1500);
+    } catch (error) {
+      button.textContent = `Copy failed: ${String(error).slice(0, 60)}`;
+    }
+  });
+  setInterval(() => {
+    if (!debugModal.hidden) renderDebugList();
+  }, 1500);
+
 
   const mainContent = document.createElement('main');
   mainContent.className = 'main-content';
@@ -166,6 +275,21 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
   const sceneModelSelect = settingsModal.querySelector('#scene-model') as HTMLSelectElement;
   const apiKeyInput = settingsModal.querySelector('#api-key') as HTMLInputElement;
 
+  // The chosen models carry across visits; the key never does.
+  const MODEL_KEY = 'incantly-playground-models';
+  try {
+    const modelsSaved = JSON.parse(localStorage.getItem(MODEL_KEY) ?? 'null') as { planModel?: string; sceneModel?: string } | null;
+    if (modelsSaved && [...planningModelSelect.options].some((o) => o.value === modelsSaved.planModel)) planningModelSelect.value = modelsSaved.planModel!;
+    if (modelsSaved && [...sceneModelSelect.options].some((o) => o.value === modelsSaved.sceneModel)) sceneModelSelect.value = modelsSaved.sceneModel!;
+  } catch {
+    // No saved models, or a shape we cannot use: defaults it is.
+  }
+  for (const select of [planningModelSelect, sceneModelSelect]) {
+    select.addEventListener('change', () => {
+      localStorage.setItem(MODEL_KEY, JSON.stringify({ planModel: planningModelSelect.value, sceneModel: sceneModelSelect.value }));
+    });
+  }
+
   settingsBtn.addEventListener('click', () => {
     settingsModal.hidden = false;
   });
@@ -219,12 +343,49 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
     }
   });
 
+  function saveChats(): void {
+    // Figures ride inside their messages, so a chat is portable; a full
+    // store that would not fit is dropped instead of half-saving.
+    const saved: SavedChats = {
+      chats: chats.slice(0, 30).map((c) => ({ id: c.id, title: c.title, createdAt: c.createdAt, messages: c.messages.filter((m) => typeof m.content === 'string' && (!m.figure || typeof m.figure === 'object')) })),
+      currentChatId,
+    };
+    try {
+      localStorage.setItem(CHATS_KEY, JSON.stringify(saved));
+    } catch {
+      // Quota exceeded: drop the oldest chat and try once more.
+      if (saved.chats.length > 1) {
+        saved.chats.pop();
+        try {
+          localStorage.setItem(CHATS_KEY, JSON.stringify(saved));
+        } catch {
+          // Nothing that helps available: leave the older copy in place.
+        }
+      }
+    }
+  }
+
+  /** Remounts a kept figure in a small editor so the sandbox iframe comes back. */
+  const ephemeralTurns: Turn[] = [];
+  function mountSavedFigure(content: JSONContent): HTMLElement {
+    const host = document.createElement('div');
+    host.className = 'figure-container';
+    const regenFailed = (): Promise<Extract<FigureGenerationResult, { kind: 'failed' }>> =>
+      Promise.resolve({ kind: 'failed', message: 'Regenerate the figure to remake it.', reason: 'remade', level: 'text' });
+    const editor = createEditor(host, '<p></p>', regenFailed);
+    editor.commands.insertContent(content);
+    const turn: Turn = { editor, host, generate: regenFailed };
+    turns.push(turn);
+    ephemeralTurns.push(turn);
+    return host;
+  }
+
   function startNewChat(): void {
     const chatId = crypto.randomUUID();
     const chat: Chat = {
       id: chatId,
       title: 'New chat',
-      createdAt: new Date(),
+      createdAt: new Date().toISOString(),
       messages: [],
     };
     chats.unshift(chat);
@@ -235,8 +396,7 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
     inputBox.value = '';
     sendBtn.disabled = true;
     chatTitleEl.textContent = 'New chat';
-    welcomeScreen.querySelector('.welcome-title')!.textContent = 'Incantly SDK Playground';
-    welcomeScreen.querySelector('.welcome-subtitle')!.textContent = 'Generate interactive teaching scenes with the SDK contract';
+    saveChats();
   }
 
   newChatBtn.addEventListener('click', startNewChat);
@@ -250,8 +410,9 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
         <svg class="chat-item-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
         </svg>
-        <span>${chat.title}</span>
+        <span></span>
       `;
+      (chatItem.querySelector('span') as HTMLSpanElement).textContent = chat.title;
       chatItem.addEventListener('click', () => selectChat(chat.id));
       chatList.append(chatItem);
     });
@@ -264,9 +425,14 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
     chatTitleEl.textContent = chat.title;
     renderChatList();
     renderMessages(chat);
+    saveChats();
   }
 
   function renderMessages(chat: Chat): void {
+    // editors whose chat just left the screen go away with it
+    for (const turn of ephemeralTurns.splice(0)) {
+      if (!turn.editor.isDestroyed) turn.editor.destroy();
+    }
     messagesContainer.innerHTML = '';
     if (chat.messages.length === 0) {
       messagesContainer.append(welcomeScreen);
@@ -275,10 +441,16 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
     chat.messages.forEach((msg) => {
       const messageEl = document.createElement('div');
       messageEl.className = `message ${msg.role}`;
-      messageEl.innerHTML = `
-        <div class="message-avatar">${msg.role === 'user' ? 'U' : 'AI'}</div>
-        <div class="message-content"><p>${msg.content}</p></div>
-      `;
+      const avatar = document.createElement('div');
+      avatar.className = 'message-avatar';
+      avatar.textContent = msg.role === 'user' ? 'U' : 'AI';
+      const content = document.createElement('div');
+      content.className = 'message-content';
+      const paragraph = document.createElement('p');
+      paragraph.textContent = msg.content;
+      content.append(paragraph);
+      if (msg.figure) content.append(mountSavedFigure(msg.figure));
+      messageEl.append(avatar, content);
       messagesContainer.append(messageEl);
     });
   }
@@ -303,9 +475,44 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
 
   function useClient(baseUrl: string, _label: string): void {
     token = null;
-    client = new GenerationClient({ baseUrl, token: async () => (token ??= ((await (await fetch('/api/dev/token')).json()) as { token: string }).token) });
+    client = new GenerationClient({ baseUrl, token: async () => (token ??= ((await (await fetch('/api/dev/token')).json()) as { token: string }).token), fetch: recordingFetch() });
     inputBox.disabled = false;
     sendBtn.disabled = !inputBox.value.trim();
+  }
+
+  function setGenerationBusy(busy: boolean): void {
+    generationInFlight = busy;
+    inputBox.disabled = busy;
+    sendBtn.disabled = busy || !inputBox.value.trim();
+    newChatBtn.disabled = busy;
+    planningModelSelect.disabled = busy;
+    sceneModelSelect.disabled = busy;
+    apiKeyInput.disabled = busy;
+    sendBtn.setAttribute('aria-busy', String(busy));
+  }
+
+  async function ensureSession(): Promise<void> {
+    if (client) return;
+    if (sessionSetup) return sessionSetup;
+    sessionSetup = (async () => {
+      const setupResponse = await fetch('/api/dev/session', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          apiKey: apiKeyInput.value || undefined,
+          planModel: planningModelSelect.value,
+          sceneModel: sceneModelSelect.value,
+        }),
+      });
+      const answer = (await setupResponse.json()) as { id?: string; baseUrl?: string; message?: string };
+      if (!setupResponse.ok || !answer.id || !answer.baseUrl) throw new Error(answer.message ?? 'Failed to start session');
+      sessionId = answer.id;
+      apiKeyInput.value = '';
+      useClient(answer.baseUrl, sceneModelSelect.selectedOptions[0]?.textContent ?? sceneModelSelect.value);
+    })().finally(() => {
+      sessionSetup = null;
+    });
+    return sessionSetup;
   }
 
   const handle = {
@@ -355,28 +562,18 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
 
   async function launchGeneration(): Promise<void> {
     const request = inputBox.value.trim();
-    if (!request) return;
+    if (!request || generationInFlight) return;
+    setGenerationBusy(true);
+    recordDebug({ kind: 'prompt', label: 'learner', body: { prompt: request } });
 
-    if (!currentChatId) startNewChat();
-    const chat: Chat | undefined = chats.find(c => c.id === currentChatId);
-    if (!chat) return;
-    const activeChat: Chat = chat;
+    try {
 
-    if (!client) {
-      const setupResponse = await fetch('/api/dev/session', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ 
-          apiKey: apiKeyInput.value || undefined, 
-          planModel: planningModelSelect.value, 
-          sceneModel: sceneModelSelect.value 
-        }),
-      });
-      const answer = (await setupResponse.json()) as { id?: string; baseUrl?: string; message?: string };
-      if (!setupResponse.ok || !answer.id || !answer.baseUrl) throw new Error(answer.message ?? 'Failed to start session');
-      sessionId = answer.id;
-      useClient(answer.baseUrl, sceneModelSelect.selectedOptions[0]?.textContent ?? sceneModelSelect.value);
-    }
+      if (!currentChatId) startNewChat();
+      const chat: Chat | undefined = chats.find(c => c.id === currentChatId);
+      if (!chat) return;
+      const activeChat: Chat = chat;
+
+      await ensureSession();
 
     activeChat.messages.push({ role: 'user', content: request });
     if (activeChat.messages.length === 1) {
@@ -385,13 +582,19 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
       chatTitleEl.textContent = title;
       renderChatList();
     }
+    saveChats();
 
     const userMessage = document.createElement('div');
     userMessage.className = 'message user';
-    userMessage.innerHTML = `
-      <div class="message-avatar">U</div>
-      <div class="message-content"><p>${request}</p></div>
-    `;
+    const userAvatar = document.createElement('div');
+    userAvatar.className = 'message-avatar';
+    userAvatar.textContent = 'U';
+    const userContent = document.createElement('div');
+    userContent.className = 'message-content';
+    const userText = document.createElement('p');
+    userText.textContent = request;
+    userContent.append(userText);
+    userMessage.append(userAvatar, userContent);
     if (welcomeScreen.parentNode) welcomeScreen.remove();
     messagesContainer.append(userMessage);
 
@@ -400,26 +603,47 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
     assistantMessage.innerHTML = `
       <div class="message-avatar">AI</div>
       <div class="message-content">
-        <div class="generation-stage">
-          <div class="stage-header">
-            <p class="stage-label">Planning</p>
-            <div class="stage-indicator"></div>
+        <section class="scene-preview" aria-busy="true">
+          <div class="scene-preview-header">
+            <div>
+              <p class="scene-preview-eyebrow">Interactive scene</p>
+              <h3 class="scene-preview-title">Preparing your scene</h3>
+            </div>
+            <span class="scene-preview-status">Planning</span>
           </div>
-          <div class="plan-output streaming-text"></div>
-        </div>
-        <div class="generation-stage" hidden>
-          <div class="stage-header">
-            <p class="stage-label">Building Scene</p>
-            <div class="stage-indicator"></div>
+          <div class="scene-preview-canvas">
+            <div class="scene-preview-shape scene-preview-shape-main"></div>
+            <div class="scene-preview-shape scene-preview-shape-small"></div>
+            <div class="scene-preview-line"></div>
           </div>
-          <div class="scene-output streaming-text"></div>
-        </div>
-        <div class="generation-stage" hidden>
-          <div class="stage-header">
-            <p class="stage-label">Validating</p>
+          <div class="scene-preview-footer">
+            <p class="scene-preview-copy">Working out what the scene should teach…</p>
+            <div class="scene-preview-parameters"></div>
           </div>
-          <p class="validation-status"></p>
-        </div>
+        </section>
+        <details class="generation-details">
+          <summary>View generation details and code</summary>
+          <div class="generation-stage">
+            <div class="stage-header">
+              <p class="stage-label">Planning</p>
+              <div class="stage-indicator"></div>
+            </div>
+            <div class="plan-output streaming-text"></div>
+          </div>
+          <div class="generation-stage" hidden>
+            <div class="stage-header">
+              <p class="stage-label">Building Scene</p>
+              <div class="stage-indicator"></div>
+            </div>
+            <div class="scene-output streaming-text"></div>
+          </div>
+          <div class="generation-stage" hidden>
+            <div class="stage-header">
+              <p class="stage-label">Validating</p>
+            </div>
+            <p class="validation-status"></p>
+          </div>
+        </details>
       </div>
     `;
     messagesContainer.append(assistantMessage);
@@ -430,6 +654,13 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
     const planOutput = planStage.querySelector('.plan-output') as HTMLDivElement;
     const sceneOutput = sceneStage.querySelector('.scene-output') as HTMLDivElement;
     const validationStatus = validationStage.querySelector('.validation-status') as HTMLParagraphElement;
+    const preview = assistantMessage.querySelector('.scene-preview') as HTMLElement;
+    const previewCanvas = preview.querySelector('.scene-preview-canvas') as HTMLDivElement;
+    const previewTitle = preview.querySelector('.scene-preview-title') as HTMLHeadingElement;
+    const previewStatus = preview.querySelector('.scene-preview-status') as HTMLSpanElement;
+    const previewCopy = preview.querySelector('.scene-preview-copy') as HTMLParagraphElement;
+    const previewParameters = preview.querySelector('.scene-preview-parameters') as HTMLDivElement;
+    const details = assistantMessage.querySelector('.generation-details') as HTMLDetailsElement;
 
     inputBox.value = '';
     sendBtn.disabled = true;
@@ -439,19 +670,31 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
     async function generate(figureRequest: FigureRequest, hooks: Parameters<FigureGenerate>[1]): Promise<FigureGenerationResult> {
       let planText = '';
       let sceneText = '';
+      let repairText = '';
+      let frame = 0;
+
+      const flushText = () => {
+        frame = 0;
+        planOutput.textContent = planText;
+        sceneOutput.textContent = repairText ? `${sceneText}\n\n--- Repair ---\n${repairText}` : sceneText;
+        planOutput.scrollTop = planOutput.scrollHeight;
+        sceneOutput.scrollTop = sceneOutput.scrollHeight;
+      };
+      const scheduleTextFlush = () => {
+        if (!frame) frame = requestAnimationFrame(flushText);
+      };
       
       const result = await baseGenerate(figureRequest, {
         ...hooks,
         onText: (purpose, delta) => {
           if (purpose === 'plan') {
             planText += delta;
-            planOutput.textContent = planText;
-            planOutput.scrollTop = planOutput.scrollHeight;
           } else if (purpose === 'scene') {
             sceneText += delta;
-            sceneOutput.textContent = sceneText;
-            sceneOutput.scrollTop = sceneOutput.scrollHeight;
+          } else {
+            repairText += delta;
           }
+          scheduleTextFlush();
         },
         onSkeleton: (skeleton: SkeletonView) => {
           hooks.onSkeleton(skeleton);
@@ -459,7 +702,7 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
           summary.className = 'plan-summary';
           summary.innerHTML = `
             <div class="skeleton-header">
-              <strong>📋 ${skeleton.concept}</strong>
+              <strong></strong>
             </div>
             <div class="skeleton-details">
               <span>${skeleton.parameters.length} parameters</span>
@@ -467,26 +710,48 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
               <span>${skeleton.steps} steps</span>
             </div>
           `;
-          planOutput.insertBefore(summary, planOutput.firstChild);
+          (summary.querySelector('strong') as HTMLElement).textContent = `📋 ${skeleton.concept}`;
+          planStage.insertBefore(summary, planOutput);
+          previewTitle.textContent = skeleton.concept;
+          previewCopy.textContent = `Building with ${skeleton.steps} teaching steps.`;
+          previewParameters.replaceChildren(...skeleton.parameters.map((parameter) => {
+            const chip = document.createElement('span');
+            chip.textContent = parameter.name;
+            return chip;
+          }));
         },
         onStage: (stage: GenerationStageView) => {
           hooks.onStage(stage);
           if (stage === 'planning') {
+            previewStatus.textContent = 'Planning';
+            previewCopy.textContent = 'Working out what the scene should teach…';
             planStage.hidden = false;
             sceneStage.hidden = true;
             validationStage.hidden = true;
           } else if (stage === 'building') {
+            previewStatus.textContent = 'Creating';
+            previewCopy.textContent = 'Drawing the interactive scene…';
+            preview.classList.add('is-building');
             planStage.hidden = false;
             sceneStage.hidden = false;
             sceneStage.querySelector('.stage-label')!.textContent = 'Building Scene';
           } else if (stage === 'checking') {
+            previewStatus.textContent = 'Checking';
+            previewCopy.textContent = 'Checking controls, motion, and accessibility…';
             validationStage.hidden = false;
             validationStatus.textContent = 'Running device probe...';
           } else if (stage === 'repairing') {
+            previewStatus.textContent = 'Refining';
+            previewCopy.textContent = 'Fixing the scene before showing it…';
+            sceneStage.hidden = false;
+            sceneStage.querySelector('.stage-label')!.textContent = 'Repairing Scene';
+            validationStage.hidden = false;
             validationStatus.textContent = 'Repairing scene...';
           }
         },
       });
+      if (frame) cancelAnimationFrame(frame);
+      flushText();
       
       if (result.kind === 'figure') {
         settleStages(planStage, sceneStage, [planOutput, sceneOutput]);
@@ -495,9 +760,14 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
 
         const host = document.createElement('div');
         host.className = 'figure-container';
-        assistantMessage.querySelector('.message-content')!.append(host);
+        previewCanvas.replaceChildren(host);
+        preview.classList.add('is-ready');
+        preview.classList.remove('is-building');
+        preview.setAttribute('aria-busy', 'false');
+        previewStatus.textContent = 'Ready';
+        previewCopy.textContent = result.notice ?? 'The scene passed its checks and is ready to use.';
         const sourceEl = sourcePanel(result);
-        assistantMessage.querySelector('.message-content')!.append(sourceEl);
+        details.append(sourceEl);
         const editor = createEditor(host, '<p></p>', generate);
         const turn = { editor, host, generate };
         turns.push(turn);
@@ -516,7 +786,11 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
             validatorVersion: VALIDATOR_VERSION,
           },
         });
-        activeChat.messages.push({ role: 'assistant', content: 'Generated interactive figure.' });
+        // Keep the figure node itself so a reload remounts the scene.
+        const node = editor.getJSON().content?.find((child) => child.type === 'incantlyFigure');
+        activeChat.messages.push({ role: 'assistant', content: 'Generated interactive figure.', ...(node ? { figure: node } : {}) });
+        saveChats();
+        recordDebug({ kind: 'done', label: 'figure', body: { concept: result.figure.concept, generationId: result.figure.generationId ?? null } });
       } else {
         // The fallback is the outcome: it never reaches the 'checking' stage,
         // so reveal the validation stage and stop the pulsing indicators —
@@ -526,7 +800,14 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
         sceneStage.hidden = true;
         validationStatus.textContent = `✗ ${result.message}`;
         validationStatus.style.color = 'red';
+        preview.classList.add('is-error');
+        preview.classList.remove('is-building');
+        preview.setAttribute('aria-busy', 'false');
+        previewStatus.textContent = 'Could not finish';
+        previewCopy.textContent = result.message;
         activeChat.messages.push({ role: 'assistant', content: result.message });
+        saveChats();
+        recordDebug({ kind: 'error', label: 'fallback', message: result.message, body: { prompt: request } });
       }
       return result;
     };
@@ -534,16 +815,30 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
     // Kick the run off: the wrapper above is also the editor's regeneration
     // hook, but the first run starts here — waiting for an editor command
     // meant the request was never sent at all.
-    void generate({ prompt: request }, {
-      onSkeleton: () => {},
-      onStage: () => {},
-      signal: new AbortController().signal,
-    }).catch((error: unknown) => {
+    try {
+      await generate({ prompt: request }, {
+        onSkeleton: () => {},
+        onStage: () => {},
+        signal: new AbortController().signal,
+      });
+    } catch (error) {
+      const record = error as Error;
+      recordDebug({ kind: 'error', label: 'generation-run', message: String(error), body: { stack: String(record.stack ?? '') } });
       settleStages(planStage, sceneStage, [planOutput, sceneOutput]);
-      showAssistantError(error instanceof Error ? error.message : String(error));
-    });
+      validationStage.hidden = false;
+      validationStatus.textContent = `✗ ${error instanceof Error ? error.message : String(error)}`;
+      validationStatus.style.color = 'red';
+      preview.classList.add('is-error');
+      preview.setAttribute('aria-busy', 'false');
+      previewStatus.textContent = 'Stopped';
+      previewCopy.textContent = error instanceof Error ? error.message : String(error);
+      return;
+    }
 
     assistantMessage.scrollIntoView({ block: 'end', behavior: 'smooth' });
+    } finally {
+      setGenerationBusy(false);
+    }
   }
 
   async function handleSend(): Promise<void> {
@@ -552,11 +847,30 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
     } catch (error) {
       // A throw here means nothing was generated at all — the learner must
       // see why instead of a composer that silently swallows the send.
-      showAssistantError(error instanceof Error ? error.message : String(error));
+      const message = error instanceof Error ? error.message : String(error);
+      showAssistantError(message);
+      recordDebug({ kind: 'error', label: 'send', message });
+      const chat = chats.find((c) => c.id === currentChatId);
+      if (chat) {
+        chat.messages.push({ role: 'assistant', content: message });
+        saveChats();
+      }
     }
   }
 
   sendBtn.addEventListener('click', handleSend);
+
+  // Bring back the chats of the last visit — including their figures.
+  const restored = loadChats();
+  if (restored && restored.chats.length > 0) {
+    chats.push(...restored.chats);
+    const wanted = restored.currentChatId && chats.some((c) => c.id === restored.currentChatId) ? restored.currentChatId : chats[0]!.id;
+    const selected = chats.find((c) => c.id === wanted)!;
+    currentChatId = wanted;
+    chatTitleEl.textContent = selected.title;
+    renderChatList();
+    renderMessages(selected);
+  }
 
   const fault = params.get('fault');
   if (params.get('reference') === '1' || fault) {
@@ -564,24 +878,6 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
   }
 
   void (async () => {
-    try {
-      const setupResponse = await fetch('/api/dev/session', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          apiKey: apiKeyInput.value || undefined,
-          planModel: planningModelSelect.value,
-          sceneModel: sceneModelSelect.value
-        }),
-      });
-      const answer = (await setupResponse.json()) as { id?: string; baseUrl?: string; message?: string };
-      if (setupResponse.ok && answer.id && answer.baseUrl) {
-        sessionId = answer.id;
-        useClient(answer.baseUrl, sceneModelSelect.selectedOptions[0]?.textContent ?? sceneModelSelect.value);
-      }
-    } catch (_e) {
-      // Fail silently if no session is available
-    }
     // A prompt handed over from the gallery generates on arrival.
     const handed = params.get('prompt');
     if (handed) {
@@ -594,6 +890,7 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
   })();
 
   window.addEventListener('pagehide', () => {
+    saveChats();
     for (const turn of turns) turn.editor.destroy();
     if (sessionId) void fetch(`/api/dev/session/${sessionId}`, { method: 'DELETE', keepalive: true });
   }, { once: true });
