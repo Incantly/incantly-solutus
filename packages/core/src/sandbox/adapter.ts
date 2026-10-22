@@ -75,17 +75,19 @@ export interface FigureHandle {
   focus(edge?: 'first' | 'last'): void;
   /** The figure's laid-out size, once it has one. Browsers do not lay out off-screen frames. */
   measure(): { readonly width: number; readonly height: number } | null;
+  /** The drawing as a PNG data URL (6.10a): every panel of a figure laid out in panels, each where it sits. */
   snapshot(): Promise<string | null>;
   /**
    * The drawing as an SVG image with the theme written in, as a data URL
-   * (SV-14). Show it in an <img> or offer it as a download; do not paste it
-   * into a page as markup.
+   * (SV-14), every panel where it sits. Show it in an <img> or offer it as a
+   * download; do not paste it into a page as markup.
    */
   exportSvg(): Promise<string | null>;
   /**
-   * A short video of the drawing as it plays (6.10b), WebM or MP4 as the
-   * browser records it; a still figure that is paused plays while it records.
-   * Null where the browser cannot record a canvas.
+   * A short video of the drawing as it plays (6.10b), every panel where it
+   * sits, WebM or MP4 as the browser records it; a still figure that is
+   * paused plays while it records. Null where the browser cannot record a
+   * canvas.
    */
   exportClip(options?: ClipOptions): Promise<Blob | null>;
   destroy(): void;

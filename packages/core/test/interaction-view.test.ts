@@ -4,7 +4,7 @@ import { InThreadChannel, ManualClock, mountTrusted, type MountedFigure } from '
 import type { RendererMessage } from '../src/protocol/runtime-messages';
 import { equationElement, linearEquation, mathElement, symbolText } from '../src/renderer/math';
 import { measureText } from '../src/renderer/pointer';
-import { exportStage } from '../src/sandbox/snapshot';
+import { exportStage, exportStages, stagesOf } from '../src/sandbox/snapshot';
 import { FORMULA_SETTLE_MS } from '../src/renderer/panels';
 import { checkStyle, hostCss, mergeStyles, resolveStyle, styleForBridge } from '../src/renderer/style';
 
@@ -373,6 +373,33 @@ describe('full screen, layout and shading (VI-6, SV-5)', () => {
     const wrong = new SceneRuntime({ autoplay: false });
     wrong.mount((inc) => inc.layout('sideways' as never));
     expect(wrong.uiState().error?.message).toBe("inc.layout takes 'row', 'column' or 'grid'");
+  });
+
+  it('exports every panel of a figure in one picture, each in its own place (6.10)', () => {
+    const two = "<div id='scene'></div><div id='graph'></div>";
+    const { root } = mount(
+      `inc.layout('row');
+       inc.svg('#scene', { viewBox: [0, 0, 100, 100], title: 'Scene' }).circle(50, 50, 10, { tone: 'lit' });
+       inc.graph2d('#graph', { x: [0, 1], y: [0, 1], title: 'Graph' }).plot((x) => x);`,
+      {},
+      two,
+    );
+    const stages = stagesOf(root);
+    expect(stages).toHaveLength(2);
+    // Each stage where it sits: the second to the right of the first.
+    vi.spyOn(stages[0]!, 'getBoundingClientRect').mockReturnValue({ x: 10, y: 20, left: 10, top: 20, right: 210, bottom: 220, width: 200, height: 200, toJSON: () => ({}) } as DOMRect);
+    vi.spyOn(stages[1]!, 'getBoundingClientRect').mockReturnValue({ x: 220, y: 20, left: 220, top: 20, right: 520, bottom: 220, width: 300, height: 200, toJSON: () => ({}) } as DOMRect);
+    const markup = decodeURIComponent(exportStages(stages)!.split(',')[1]!);
+    const tags = [...markup.matchAll(/<svg([^>]*)>/g)].map(([, attributes]) =>
+      Object.fromEntries([...attributes!.matchAll(/([\w:-]+)="([^"]*)"/g)].map(([, name, value]) => [name, value])),
+    );
+    expect(tags[0]).toMatchObject({ width: '510', height: '200', viewBox: '0 0 510 200' });
+    expect(tags).toContainEqual(expect.objectContaining({ x: '0', y: '0', width: '200', height: '200' }));
+    expect(tags).toContainEqual(expect.objectContaining({ x: '210', y: '0', width: '300', height: '200' }));
+    expect(markup).toContain('<circle');
+    // A stage inside something hidden is not in the picture.
+    stages[1]!.closest('.inc-stage-host')!.setAttribute('hidden', '');
+    expect(stagesOf(root)).toHaveLength(1);
   });
 
   it('lays out by its own width and pads a full-screen figure clear of notches', async () => {

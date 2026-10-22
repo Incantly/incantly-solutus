@@ -77,6 +77,24 @@ export const SCENE_FIXTURES: Readonly<Record<string, FixtureScene>> = {
       "inc.describe(() => 'A wave ' + amplitude.value.toFixed(1) + ' m tall, ' + (mirrored.on ? 'with' : 'without') + ' its mirror.');",
     ].join('\n'),
   },
+  /**
+   * Two panels side by side (VI-7): a square in one, a disc in the other, so
+   * a picture of the figure shows whether it holds both (6.10).
+   */
+  panels: {
+    html: "<div id='left'></div><div id='right'></div>",
+    css: '',
+    js: [
+      "inc.layout('row');",
+      "inc.idea('A square beside a disc.');",
+      "const left = inc.svg('#left', { viewBox: [0, 0, 100, 100], title: 'Square' });",
+      "left.rect(10, 10, 80, 80, { tone: 'a' });",
+      "const right = inc.svg('#right', { viewBox: [0, 0, 100, 100], title: 'Disc' });",
+      "const disc = right.circle(50, 50, 40, { tone: 'c' });",
+      "inc.onFrame(({ time }) => disc.at(5 * Math.sin(time), 0));",
+      "inc.describe(() => 'A square in the left panel and a disc in the right.');",
+    ].join('\n'),
+  },
   /** Throws on line 7, column 30 once time passes half a second. */
   'throws-later': {
     html: STAGE,

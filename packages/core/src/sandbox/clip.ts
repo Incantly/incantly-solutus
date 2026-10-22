@@ -1,12 +1,13 @@
 /**
- * A short video of a stage as it plays (PRD 6.10b). The stage is copied to a
- * canvas as often as it can be, layer by layer as it is stacked (the back
- * layer, the canvases behind, the drawing, the canvases in front), and the
- * browser's MediaRecorder records the canvas: WebM where the browser makes
- * it, MP4 otherwise. Equations go in as text, as in a PNG snapshot, so the
- * canvas stays readable and can be recorded.
+ * A short video of a figure's drawing as it plays (PRD 6.10b). Each stage is
+ * copied to a canvas as often as it can be, layer by layer as it is stacked
+ * (the back layer, the canvases behind, the drawing, the canvases in front),
+ * where it sits on the page, so a figure of two panels is recorded whole;
+ * the browser's MediaRecorder records the canvas: WebM where the browser
+ * makes it, MP4 otherwise. Equations go in as text, as in a PNG snapshot, so
+ * the canvas stays readable and can be recorded.
  */
-import { backgroundOf, stackPictures, type PictureCache } from './snapshot';
+import { backgroundOf, paintStages, placeStages, stackPictures, type PictureCache } from './snapshot';
 
 export interface ClipOptions {
   /** How long the clip runs, in seconds: 0.5 to 20. Default 4. */
@@ -39,40 +40,44 @@ export function clipType(): string | null {
 const even = (n: number) => Math.max(2, 2 * Math.round(n / 2));
 const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-/**
- * Records the stage for `seconds`, or resolves null where the browser cannot
- * record a canvas. Frames that are still being copied when the next is due
- * are skipped, so a slow drawing gives a clip at a lower frame rate, not a
- * slower one.
- */
+/** Records one stage; see recordStages. */
 export async function recordStage(svg: SVGSVGElement | null, options: ClipOptions = {}): Promise<Blob | null> {
+  return recordStages(svg ? [svg] : [], options);
+}
+
+/**
+ * Records a figure's stages for `seconds`, or resolves null where the browser
+ * cannot record a canvas. Frames that are still being copied when the next
+ * is due are skipped, so a slow drawing gives a clip at a lower frame rate,
+ * not a slower one.
+ */
+export async function recordStages(svgs: readonly SVGSVGElement[], options: ClipOptions = {}): Promise<Blob | null> {
   const type = clipType();
-  if (!svg || !type) return null;
+  const first = svgs[0];
+  if (!first || !type) return null;
   const { seconds, fps } = clipSettings(options);
-  const rect = svg.getBoundingClientRect();
-  if (!(rect.width > 0 && rect.height > 0)) return null;
-  const scale = Math.min(window.devicePixelRatio || 1, CLIP_LIMITS.maxWidth / rect.width, 2);
-  const canvas = svg.ownerDocument.createElement('canvas');
+  if (!svgs.every((svg) => svg.getBoundingClientRect().width > 0)) return null;
+  const { stages, width, height } = placeStages(svgs);
+  if (!(width > 1 && height > 1)) return null;
+  const scale = Math.min(window.devicePixelRatio || 1, CLIP_LIMITS.maxWidth / width, 2);
+  const canvas = first.ownerDocument.createElement('canvas');
   // Video encoders want even sizes.
-  canvas.width = even(rect.width * scale);
-  canvas.height = even(rect.height * scale);
+  canvas.width = even(width * scale);
+  canvas.height = even(height * scale);
   const context = canvas.getContext('2d');
   if (!context || typeof canvas.captureStream !== 'function') return null;
-  const background = backgroundOf(svg);
+  const background = backgroundOf(first);
   // A layer that has not changed since the last frame, such as the back layer under a fluid, is not decoded again.
-  const cache: PictureCache = new Map();
+  const caches: PictureCache[] = stages.map(() => new Map());
+  // Even sizes may round the canvas up a pixel: stages are drawn at the scale of its width.
+  const drawScale = canvas.width / width;
   let busy = false;
   const paint = async (): Promise<void> => {
     if (busy) return;
     busy = true;
     try {
-      const pictures = await stackPictures(svg, true, cache);
-      context.clearRect(0, 0, canvas.width, canvas.height);
-      if (background) {
-        context.fillStyle = background;
-        context.fillRect(0, 0, canvas.width, canvas.height);
-      }
-      for (const picture of pictures) context.drawImage(picture, 0, 0, canvas.width, canvas.height);
+      const pictures = await Promise.all(stages.map((stage, i) => stackPictures(stage.svg, true, caches[i])));
+      paintStages(context, stages, pictures, drawScale, background);
     } catch {
       // A frame that fails to copy keeps the last one.
     } finally {

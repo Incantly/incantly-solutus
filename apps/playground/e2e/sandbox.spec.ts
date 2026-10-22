@@ -315,6 +315,108 @@ test.describe('sandbox (Phase 3 gate)', () => {
     await expect(page.frameLocator('iframe').locator('button[data-action="toggle"]')).toHaveAttribute('data-playing', 'false');
   });
 
+  test('a figure of two panels is pictured, exported, printed and recorded whole, each panel where it sits (6.10a, 6.10b, 6.10c)', async ({ page, browserName }, testInfo) => {
+    await open(page, 'page=sandbox&fixture=panels&autoplay=0');
+    const frame = page.frameLocator('iframe');
+    await expect(frame.locator('svg.inc-stage')).toHaveCount(2);
+    // Each panel's centre, as a share of the box that holds both, and its colour on the page.
+    const panels = await frame.locator('.inc-scene').evaluate((scene) => {
+      const stages = [...scene.querySelectorAll('svg.inc-stage')].map((svg) => svg.getBoundingClientRect());
+      const left = Math.min(...stages.map((r) => r.left));
+      const top = Math.min(...stages.map((r) => r.top));
+      const width = Math.max(...stages.map((r) => r.right)) - left;
+      const height = Math.max(...stages.map((r) => r.bottom)) - top;
+      const style = getComputedStyle(scene);
+      const context = document.createElement('canvas').getContext('2d', { willReadFrequently: true })!;
+      const rgb = (name: string) => {
+        context.clearRect(0, 0, 1, 1);
+        context.fillStyle = style.getPropertyValue(`--inc-${name}`).trim();
+        context.fillRect(0, 0, 1, 1);
+        return [...context.getImageData(0, 0, 1, 1).data.slice(0, 3)];
+      };
+      return {
+        centres: stages.map((r) => [(r.left + r.width / 2 - left) / width, (r.top + r.height / 2 - top) / height] as const),
+        sideBySide: stages[1]!.left >= stages[0]!.right - 1,
+        colours: [rgb('a'), rgb('c')],
+      };
+    });
+    expect(panels.sideBySide).toBe(true);
+    /** The colour at each panel's centre in a picture of the figure. */
+    const sample = (src: string) =>
+      page.evaluate(
+        async ({ src, centres }) => {
+          const image = new Image();
+          image.src = src;
+          await image.decode();
+          const canvas = document.createElement('canvas');
+          canvas.width = image.naturalWidth;
+          canvas.height = image.naturalHeight;
+          const context = canvas.getContext('2d', { willReadFrequently: true })!;
+          context.drawImage(image, 0, 0);
+          return { width: canvas.width, height: canvas.height, colours: centres.map(([x, y]) => [...context.getImageData(Math.round(x * canvas.width), Math.round(y * canvas.height), 1, 1).data.slice(0, 3)]) };
+        },
+        { src, centres: panels.centres },
+      );
+    const expectBoth = (got: { width: number; height: number; colours: number[][] }, picture: string) => {
+      expect(got.width, `${picture} is as wide as both panels`).toBeGreaterThan(got.height * 1.5);
+      panels.colours.forEach((want, i) => {
+        const colour = got.colours[i]!;
+        expect(Math.max(...colour.map((v, c) => Math.abs(v - want[c]!))), `panel ${i + 1} in ${picture}: ${colour.join(',')} against ${want.join(',')}`).toBeLessThanOrEqual(12);
+      });
+    };
+    const pictures = await page.evaluate(async () => {
+      const figure = (window.__playground as unknown as { figure: { exportSvg(): Promise<string | null>; snapshot(): Promise<string | null> } }).figure;
+      return { svg: await figure.exportSvg(), png: await figure.snapshot() };
+    });
+    // The snapshot that stands in for a suspended figure (6.10a), and the still that prints in its place (6.10c), are the PNG and the SVG.
+    expectBoth(await sample(pictures.png!), 'the PNG snapshot');
+    const markup = decodeURIComponent(pictures.svg!.slice(pictures.svg!.indexOf(',') + 1));
+    expect(markup.match(/<svg/g)?.length).toBeGreaterThanOrEqual(3);
+    expectBoth(await sample(pictures.svg!), 'the exported SVG');
+    await page.evaluate(({ svg, png }) => {
+      document.body.replaceChildren();
+      for (const src of [svg!, png!]) {
+        const img = document.createElement('img');
+        img.src = src;
+        img.style.cssText = 'display:block;width:640px;border:1px solid #ccc;margin:4px';
+        document.body.append(img);
+      }
+    }, pictures);
+    await page.waitForFunction(() => [...document.images].every((img) => img.complete && img.naturalWidth > 0));
+    await page.screenshot({ path: testInfo.outputPath('panel-pictures.png'), fullPage: true });
+    if (browserName !== 'chromium') return;
+    // And a video of it playing (6.10b): its first frame holds both panels.
+    await open(page, 'page=sandbox&fixture=panels&autoplay=0');
+    await expect(frame.locator('svg.inc-stage')).toHaveCount(2);
+    const still = await page.evaluate(async () => {
+      const figure = (window.__playground as unknown as { figure: { exportClip(options: { seconds: number; fps: number }): Promise<Blob | null> } }).figure;
+      const video = await figure.exportClip({ seconds: 0.6, fps: 10 });
+      if (!video) return null;
+      const player = document.createElement('video');
+      player.muted = true;
+      player.src = URL.createObjectURL(video);
+      document.body.append(player);
+      await new Promise<void>((resolve) => {
+        player.requestVideoFrameCallback(() => {
+          player.pause();
+          resolve();
+        });
+        void player.play();
+      });
+      const canvas = document.createElement('canvas');
+      canvas.width = player.videoWidth;
+      canvas.height = player.videoHeight;
+      canvas.getContext('2d')!.drawImage(player, 0, 0);
+      return canvas.toDataURL('image/png');
+    });
+    test.skip(still === null, 'This browser cannot record a canvas');
+    const frameColours = await sample(still!);
+    const distance = (a: number[], b: number[]) => Math.hypot(...a.map((v, c) => v - b[c]!));
+    expect(frameColours.width).toBeGreaterThan(frameColours.height * 1.5);
+    expect(distance(frameColours.colours[0]!, panels.colours[0]!)).toBeLessThan(distance(frameColours.colours[0]!, panels.colours[1]!));
+    expect(distance(frameColours.colours[1]!, panels.colours[1]!)).toBeLessThan(distance(frameColours.colours[1]!, panels.colours[0]!));
+  });
+
   test('a stage stacks its back layer, the dots behind, the drawing and the dots in front, in the frame and in every picture of it (FX-1, BR-12)', async ({ page, browserName }, testInfo) => {
     await open(page, 'page=sandbox&fixture=layers&autoplay=0');
     const frame = page.frameLocator('iframe');

@@ -1,6 +1,6 @@
 import type { ExecutionAdapter, FigureHandle, FigureState, MountOptions } from '../sandbox/adapter';
-import { recordStage } from '../sandbox/clip';
-import { exportStage, snapshotStage } from '../sandbox/snapshot';
+import { recordStages } from '../sandbox/clip';
+import { exportStages, snapshotStages, stagesOf } from '../sandbox/snapshot';
 import type { SceneFragments } from '../validation';
 import { loadKitModules } from '../kits/load';
 import type { KitRegistry } from '../runtime/kits';
@@ -91,9 +91,10 @@ export function mountInThread(container: HTMLElement, fragments: SceneFragments,
       const rect = figure?.root.getBoundingClientRect();
       return rect && rect.width > 0 && rect.height > 0 ? { width: rect.width, height: rect.height } : null;
     },
-    snapshot: () => snapshotStage(figure?.root.querySelector<SVGSVGElement>('svg.inc-stage') ?? null),
-    exportSvg: async () => exportStage(figure?.root.querySelector<SVGSVGElement>('svg.inc-stage') ?? null),
-    exportClip: (options) => recordStage(figure?.root.querySelector<SVGSVGElement>('svg.inc-stage') ?? null, options),
+    // Every panel of the figure, where it sits (6.10).
+    snapshot: () => snapshotStages(stagesOf(figure?.root)),
+    exportSvg: async () => exportStages(stagesOf(figure?.root)),
+    exportClip: (options) => recordStages(stagesOf(figure?.root), options),
     destroy: () => {
       destroyed = true;
       figure?.destroy();

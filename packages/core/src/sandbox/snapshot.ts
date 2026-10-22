@@ -1,8 +1,10 @@
 /**
- * A PNG snapshot of a stage, for placeholders and sharing (PRD 23.11). Theme
- * colours live in CSS variables, so the clone gets the computed colours
- * written onto each element before it is drawn to a canvas. The image is a
- * blob: URL, which the frame's policy allows (img-src blob: data:).
+ * A PNG snapshot of a figure's drawing, for placeholders and sharing (PRD
+ * 23.11), and its SVG export (6.10). Theme colours live in CSS variables, so
+ * the clone gets the computed colours written onto each element before it is
+ * drawn to a canvas. A figure of several panels (VI-7) is pictured whole,
+ * each stage where it sits. The image is a blob: URL, which the frame's
+ * policy allows (img-src blob: data:).
  */
 
 import { MAX_PICTURE_CHARS } from '../protocol/bridge';
@@ -181,6 +183,33 @@ export function stackOf(svg: SVGSVGElement): StackLayer[] {
 /** A canvas that has been painted, which a picture can take in. */
 const paintedCanvas = (canvas: HTMLCanvasElement) => canvas.width > 0 && canvas.height > 0;
 
+/** A figure's stages, its panels (VI-7), in the order they are laid out; one inside something hidden is left out. */
+export function stagesOf(root: ParentNode | null | undefined): SVGSVGElement[] {
+  if (!root) return [];
+  return [...root.querySelectorAll<SVGSVGElement>('svg.inc-stage')].filter((svg) => svg.closest('[hidden]') === null);
+}
+
+/** A stage's box within the smallest box that holds every stage, in CSS pixels. */
+export interface PlacedStage {
+  readonly svg: SVGSVGElement;
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+/** Where each stage sits in the picture of them all, as they are laid out on the page, and the picture's size. */
+export function placeStages(svgs: readonly SVGSVGElement[]): { readonly stages: PlacedStage[]; readonly width: number; readonly height: number } {
+  const rects = svgs.map((svg) => svg.getBoundingClientRect());
+  const left = Math.min(...rects.map((rect) => rect.left));
+  const top = Math.min(...rects.map((rect) => rect.top));
+  const stages = svgs.map((svg, i) => {
+    const rect = rects[i]!;
+    return { svg, x: Math.round(rect.left - left), y: Math.round(rect.top - top), width: Math.max(1, Math.round(rect.width)), height: Math.max(1, Math.round(rect.height)) };
+  });
+  return { stages, width: Math.max(1, ...stages.map((s) => s.x + s.width)), height: Math.max(1, ...stages.map((s) => s.y + s.height)) };
+}
+
 /**
  * A still of a canvas layer at the picture's own size: the extra pixels a
  * high-density screen paints would only make the exported file larger.
@@ -208,25 +237,65 @@ function stillOf(canvas: HTMLCanvasElement, width: number, height: number): stri
  * of each canvas in front.
  */
 export function exportStage(svg: SVGSVGElement | null): string | null {
-  if (!svg) return null;
+  return exportStages(svg ? [svg] : []);
+}
+
+/**
+ * Every stage of a figure as one standalone SVG image (6.10b), each where it
+ * sits on the page: a figure of two panels exports both. One stage exports
+ * as it is.
+ */
+export function exportStages(svgs: readonly SVGSVGElement[]): string | null {
+  if (svgs.length === 0) return null;
   try {
-    const layers = stackOf(svg).filter((layer) => !layer.canvas || paintedCanvas(layer.canvas));
-    const picture = exportLayers(svg, layers);
+    const picture = exportPanels(svgs, true);
     // Stills of large, busy canvases can outgrow what the bridge carries: the drawing alone is better than nothing.
-    if (picture.length >= MAX_PICTURE_CHARS && layers.some((layer) => layer.canvas)) return exportLayers(svg, layers.filter((layer) => !layer.canvas));
+    const canvases = svgs.some((svg) => stackOf(svg).some((layer) => layer.canvas && paintedCanvas(layer.canvas)));
+    if (picture.length >= MAX_PICTURE_CHARS && canvases) return exportPanels(svgs, false);
     return picture;
   } catch {
     return null;
   }
 }
 
-/** The given layers as one standalone SVG image, as a data URL. */
-function exportLayers(svg: SVGSVGElement, layers: readonly StackLayer[]): string {
-  const background = backgroundOf(svg);
+/** The stages as one standalone SVG image, as a data URL, with or without stills of their canvases. */
+function exportPanels(svgs: readonly SVGSVGElement[], withCanvases: boolean): string {
+  const layersOf = (svg: SVGSVGElement) => stackOf(svg).filter((layer) => !layer.canvas || (withCanvases && paintedCanvas(layer.canvas)));
+  const first = svgs[0]!;
   let picture: Painted;
-  if (layers.length === 1) picture = painted(svg);
+  if (svgs.length === 1) picture = stackCopy(first, layersOf(first), []);
   else {
+    const { stages, width, height } = placeStages(svgs);
     const styles: string[] = [];
+    const root = first.ownerDocument.createElementNS(SVG_NS, 'svg') as SVGSVGElement;
+    root.setAttribute('xmlns', SVG_NS);
+    root.setAttribute('width', String(width));
+    root.setAttribute('height', String(height));
+    root.setAttribute('viewBox', `0 0 ${width} ${height}`);
+    for (const stage of stages) {
+      const copy = stackCopy(stage.svg, layersOf(stage.svg), styles).clone;
+      copy.removeAttribute('xmlns');
+      copy.setAttribute('x', String(stage.x));
+      copy.setAttribute('y', String(stage.y));
+      copy.setAttribute('width', String(stage.width));
+      copy.setAttribute('height', String(stage.height));
+      root.append(copy);
+    }
+    picture = { clone: root, width, height, styles };
+  }
+  const background = backgroundOf(first);
+  if (background) {
+    picture.styles.push(`background: ${background}`);
+    picture.clone.setAttribute('data-inc-style', String(picture.styles.length - 1));
+  }
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(serialize(picture))}`;
+}
+
+/** One stage's layers as one standalone copy, its styles collected into `styles`. */
+function stackCopy(svg: SVGSVGElement, layers: readonly StackLayer[], styles: string[]): Painted {
+  let picture: Painted;
+  if (layers.length === 1) picture = painted(svg, false, styles);
+  else {
     const drawing = painted(svg, false, styles);
     const { width, height } = drawing;
     const root = svg.ownerDocument.createElementNS(SVG_NS, 'svg') as SVGSVGElement;
@@ -253,11 +322,7 @@ function exportLayers(svg: SVGSVGElement, layers: readonly StackLayer[]): string
     }
     picture = { clone: root, width, height, styles };
   }
-  if (background) {
-    picture.styles.push(`background: ${background}`);
-    picture.clone.setAttribute('data-inc-style', String(picture.styles.length - 1));
-  }
-  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(serialize(picture))}`;
+  return picture;
 }
 
 /**
@@ -266,10 +331,15 @@ function exportLayers(svg: SVGSVGElement, layers: readonly StackLayer[]): string
  * equations falls back to them as text.
  */
 export async function snapshotStage(svg: SVGSVGElement | null): Promise<string | null> {
-  if (!svg) return null;
-  const picture = await drawn(svg, false);
-  if (picture !== null || !stackOf(svg).some((layer) => layer.svg?.querySelector('foreignObject[data-math]'))) return picture;
-  return drawn(svg, true);
+  return snapshotStages(svg ? [svg] : []);
+}
+
+/** Every stage of a figure as one PNG data URL (6.10a), each where it sits on the page. */
+export async function snapshotStages(svgs: readonly SVGSVGElement[]): Promise<string | null> {
+  if (svgs.length === 0) return null;
+  const picture = await drawn(svgs, false);
+  if (picture !== null || !svgs.some((svg) => stackOf(svg).some((layer) => layer.svg?.querySelector('foreignObject[data-math]')))) return picture;
+  return drawn(svgs, true);
 }
 
 /** Decoded pictures of a stage's SVG layers, by place in the stack, kept while their markup stays the same. */
@@ -324,24 +394,35 @@ export function backgroundOf(svg: SVGSVGElement): string | null {
   return background && background !== 'rgba(0, 0, 0, 0)' && background !== 'transparent' ? background : null;
 }
 
-async function drawn(svg: SVGSVGElement, flat: boolean): Promise<string | null> {
+/** Draws each stage's pictures where the stage sits, over the figure's background. */
+export function paintStages(
+  context: CanvasRenderingContext2D,
+  stages: readonly PlacedStage[],
+  pictures: ReadonlyArray<ReadonlyArray<HTMLImageElement | HTMLCanvasElement>>,
+  scale: number,
+  background: string | null,
+): void {
+  context.clearRect(0, 0, context.canvas.width, context.canvas.height);
+  if (background) {
+    context.fillStyle = background;
+    context.fillRect(0, 0, context.canvas.width, context.canvas.height);
+  }
+  stages.forEach((stage, i) => {
+    for (const picture of pictures[i] ?? []) context.drawImage(picture, stage.x * scale, stage.y * scale, stage.width * scale, stage.height * scale);
+  });
+}
+
+async function drawn(svgs: readonly SVGSVGElement[], flat: boolean): Promise<string | null> {
   try {
-    const rect = svg.getBoundingClientRect();
-    const width = Math.max(1, Math.round(rect.width));
-    const height = Math.max(1, Math.round(rect.height));
-    const pictures = await stackPictures(svg, flat);
+    const { stages, width, height } = placeStages(svgs);
+    const pictures = await Promise.all(stages.map((stage) => stackPictures(stage.svg, flat)));
     const scale = Math.min(window.devicePixelRatio || 1, MAX_WIDTH / width, 2);
     const canvas = document.createElement('canvas');
     canvas.width = Math.round(width * scale);
     canvas.height = Math.round(height * scale);
     const context = canvas.getContext('2d');
     if (!context) return null;
-    const background = backgroundOf(svg);
-    if (background) {
-      context.fillStyle = background;
-      context.fillRect(0, 0, canvas.width, canvas.height);
-    }
-    for (const picture of pictures) context.drawImage(picture, 0, 0, canvas.width, canvas.height);
+    paintStages(context, stages, pictures, scale, backgroundOf(svgs[0]!));
     return canvas.toDataURL('image/png');
   } catch {
     return null;

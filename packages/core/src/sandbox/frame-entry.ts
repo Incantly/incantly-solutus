@@ -4,8 +4,8 @@ import type { RendererMessage, RuntimeUpdate } from '../protocol/runtime-message
 import type { ErrorView } from '../protocol/ui';
 import { FigureRenderer } from '../renderer/renderer';
 import { wrapSceneSource, WRAPPER_LINES_BEFORE } from './scene-wrapper';
-import { recordStage } from './clip';
-import { exportStage, snapshotStage } from './snapshot';
+import { recordStages } from './clip';
+import { exportStages, snapshotStages, stagesOf } from './snapshot';
 import type { WorkerInbound, WorkerOutbound } from './worker-protocol';
 
 /**
@@ -137,9 +137,10 @@ function onHostMessage(message: HostMessage): void {
       flushReport();
       // A frame the browser kept off-screen may never have drawn: an empty picture is worse than none.
       const drawn = (renderer?.stats.workFrames ?? 0) > 0;
-      const svg = drawn ? (root?.querySelector<SVGSVGElement>('svg.inc-stage') ?? null) : null;
-      if (message.format === 'svg') send({ type: 'snapshot', id: message.id, png: null, svg: exportStage(svg) });
-      else void snapshotStage(svg).then((png) => send({ type: 'snapshot', id: message.id, png }));
+      // Every panel of the figure, where it sits (6.10a, 6.10c).
+      const stages = drawn ? stagesOf(root) : [];
+      if (message.format === 'svg') send({ type: 'snapshot', id: message.id, png: null, svg: exportStages(stages) });
+      else void snapshotStages(stages).then((png) => send({ type: 'snapshot', id: message.id, png }));
       break;
     }
     case 'clip':
@@ -176,11 +177,11 @@ function onHostMessage(message: HostMessage): void {
  */
 async function clip(id: number, seconds: number | undefined, fps: number | undefined): Promise<void> {
   const drawn = (renderer?.stats.workFrames ?? 0) > 0;
-  const svg = drawn ? (root?.querySelector<SVGSVGElement>('svg.inc-stage') ?? null) : null;
+  const stages = drawn ? stagesOf(root) : [];
   const paused = renderer !== null && renderer.ui.animated === true && !renderer.ui.playing;
-  if (svg && paused) renderer?.send({ type: 'play' });
-  const video = await recordStage(svg, { ...(seconds !== undefined ? { seconds } : {}), ...(fps !== undefined ? { fps } : {}) }).catch(() => null);
-  if (svg && paused) renderer?.send({ type: 'pause' });
+  if (stages.length > 0 && paused) renderer?.send({ type: 'play' });
+  const video = await recordStages(stages, { ...(seconds !== undefined ? { seconds } : {}), ...(fps !== undefined ? { fps } : {}) }).catch(() => null);
+  if (stages.length > 0 && paused) renderer?.send({ type: 'pause' });
   send({ type: 'clip', id, video });
 }
 
