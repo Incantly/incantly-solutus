@@ -123,6 +123,10 @@ describe('membranes', () => {
     expect(m.crossed).toBe(20);
     m.reset(10, 0);
     expect([m.left, m.right, m.crossed]).toEqual([10, 0, 0]);
+    // Counts worked out from the model are rounded to whole particles: once a diffusion scene passed 15 * 0.8.
+    m.reset(15 * 0.8 + 0.4, 2.4);
+    expect([m.left, m.right]).toEqual([12, 2]);
+    expect(() => m.reset(-1, 0)).toThrow(/0 or more/);
     expect(() => m.set({ permeability: 2 })).toThrow(/from 0 to 1/);
   });
 

@@ -1741,7 +1741,7 @@ export interface Cell {
 export interface MembraneOptions {
   /** Where it is drawn: [x, y, width, height]; the membrane runs down the middle. Default: the stage. */
   readonly box?: ViewBox;
-  /** Particles on the left and the right at the start. */
+  /** Particles on the left and the right at the start, rounded to whole particles. */
   readonly particles: readonly [number, number];
   /** Channel proteins particles pass through. Default 3; 0 lets them cross anywhere. */
   readonly channels?: number;

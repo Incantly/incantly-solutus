@@ -113,10 +113,14 @@ export class BiologyKit implements Biology {
     this.membranes++;
     if (typeof options !== 'object' || options === null) fail('biology: membrane needs { particles: [left, right] }');
     const box = options.box === undefined ? this.viewBox : checkBox(options.box, 'a membrane’s box');
+    // Counts worked out from the model, such as a concentration times a volume, are rounded to whole particles.
     const counts = (value: unknown): [number, number] => {
-      if (!Array.isArray(value) || value.length !== 2 || !value.every((n) => Number.isInteger(n) && n >= 0)) fail('biology: particles is [left, right], two whole numbers');
-      if (value[0] + value[1] > MAX_PARTICLES) fail(`biology: a membrane holds at most ${MAX_PARTICLES} particles`);
-      return [value[0], value[1]];
+      if (!Array.isArray(value) || value.length !== 2 || !value.every((n) => typeof n === 'number' && Number.isFinite(n) && n >= 0)) {
+        fail('biology: particles is [left, right], two numbers of particles, 0 or more');
+      }
+      const [left, right] = [Math.round(value[0] as number), Math.round(value[1] as number)];
+      if (left + right > MAX_PARTICLES) fail(`biology: a membrane holds at most ${MAX_PARTICLES} particles`);
+      return [left, right];
     };
     let [startLeft, startRight] = counts(options.particles);
     const channels = options.channels ?? 3;
