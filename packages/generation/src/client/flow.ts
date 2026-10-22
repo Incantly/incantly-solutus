@@ -1,6 +1,6 @@
 import type { ProbeReport, ProbeSpec } from '@incantly/core';
 import type { LearnerRequest } from '../context';
-import type { FallbackMessage, SceneFragmentsMessage, SceneMessage, Skeleton } from '../protocol';
+import type { ChangeResponse, FallbackMessage, SceneFragmentsMessage, SceneMessage, Skeleton } from '../protocol';
 import { ServiceError, type GenerationClient } from './service-client';
 import type { FallbackLevel, ProductSignal } from './telemetry';
 
@@ -117,6 +117,36 @@ export async function runGeneration(run: GenerationRun): Promise<GenerationOutco
     reason = reasonOf(error);
   }
 
+  if (candidate) {
+    const checked = await checkOnDevice(run, candidate, now);
+    repaired = checked.repaired;
+    if (checked.figure) {
+      run.signals?.({ type: 'generation', ms: now() - started, outcome: 'approved', repaired });
+      return { kind: 'approved', figure: checked.figure, repaired };
+    }
+    if (checked.fallback) fallback = checked.fallback;
+    if (checked.reason) reason = checked.reason;
+  }
+
+  const outcome = await ladder(run, fallback, reason);
+  run.signals?.({ type: 'generation', ms: now() - started, outcome: 'fallback', repaired, fallback: outcome.level, reason });
+  return outcome;
+}
+
+/**
+ * Probes a scene on this device and, when it fails, sends the report back for
+ * its repair and probes the repair (RP-1, RP-4): the approved figure, or the
+ * fallback the service sent and why.
+ */
+async function checkOnDevice(
+  run: Pick<GenerationRun, 'client' | 'probe' | 'onStage' | 'signals' | 'signal'>,
+  first: SceneMessage,
+  now: () => number,
+): Promise<{ readonly figure: ApprovedFigure | null; readonly repaired: boolean; readonly fallback: FallbackMessage | null; readonly reason: string | null }> {
+  let candidate: SceneMessage | null = first;
+  let repaired = false;
+  let fallback: FallbackMessage | null = null;
+  let reason: string | null = null;
   while (candidate) {
     run.onStage?.('checking');
     const result = await run.probe(candidate.fragments, candidate.spec);
@@ -124,8 +154,7 @@ export async function runGeneration(run: GenerationRun): Promise<GenerationOutco
     if (result.ok) {
       // The service records the outcome; the learner does not wait for it.
       void run.client.reportProbe(candidate.generationId, { ok: true }).catch(() => undefined);
-      run.signals?.({ type: 'generation', ms: now() - started, outcome: 'approved', repaired });
-      return { kind: 'approved', figure: approved(candidate, false), repaired };
+      return { figure: approved(candidate, false), repaired, fallback, reason };
     }
     run.onStage?.('repairing');
     const repairStarted = now();
@@ -148,10 +177,56 @@ export async function runGeneration(run: GenerationRun): Promise<GenerationOutco
     }
     candidate = null;
   }
+  return { figure: null, repaired, fallback, reason };
+}
 
-  const outcome = await ladder(run, fallback, reason);
-  run.signals?.({ type: 'generation', ms: now() - started, outcome: 'fallback', repaired, fallback: outcome.level, reason });
-  return outcome;
+/** A change to a figure the learner has (HO-8), from their device: the change, checked here like any new scene. */
+export interface ChangeRun {
+  readonly client: GenerationClient;
+  readonly probe: DeviceProbe;
+  readonly figure: { readonly fragments: SceneFragmentsMessage; readonly ticket: string | null };
+  readonly request: LearnerRequest;
+  readonly onStage?: (stage: GenerationStage) => void;
+  readonly signals?: (signal: ProductSignal) => void;
+  readonly signal?: AbortSignal;
+  readonly now?: () => number;
+}
+
+export type ChangeOutcome =
+  | { readonly kind: 'changed'; readonly figure: ApprovedFigure; readonly repaired: boolean }
+  /** The figure keeps its working version; one quiet line says why. */
+  | { readonly kind: 'kept'; readonly reason: string; readonly message: string };
+
+/** Asks for a change to a figure, probes the changed scene on this device, and hands it back only when it passed. */
+export async function runChange(run: ChangeRun): Promise<ChangeOutcome> {
+  const now = run.now ?? (() => performance.now());
+  const started = now();
+  const kept = (reason: string): ChangeOutcome => {
+    run.signals?.({ type: 'generation', ms: now() - started, outcome: 'fallback', repaired: false, fallback: 'last-approved', reason });
+    const message =
+      reason === 'unchanged'
+        ? 'That change is not one this figure can make, so it is unchanged.'
+        : reason === 'off'
+          ? 'Changing figures is switched off for now, so this one is unchanged.'
+          : reason === 'limit'
+            ? 'You have reached the limit for figures for now, so this one is unchanged.'
+            : 'The figure could not be changed, so the working version is kept.';
+    return { kind: 'kept', reason, message };
+  };
+  if (!run.figure.ticket) return kept('unsigned');
+  run.onStage?.('building');
+  let response: ChangeResponse;
+  try {
+    response = await run.client.change({ ticket: run.figure.ticket, fragments: run.figure.fragments, ...run.request }, run.signal);
+  } catch (error) {
+    if (run.signal?.aborted) throw error;
+    return kept(reasonOf(error));
+  }
+  if (response.status !== 'scene') return kept(response.reason);
+  const checked = await checkOnDevice(run, response, now);
+  if (!checked.figure) return kept(checked.reason ?? 'scene');
+  run.signals?.({ type: 'generation', ms: now() - started, outcome: 'approved', repaired: checked.repaired });
+  return { kind: 'changed', figure: checked.figure, repaired: checked.repaired };
 }
 
 /** The fallback ladder (RP-9): the first rung that is available. */

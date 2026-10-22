@@ -1,5 +1,5 @@
 import type { LearnerRequest } from '../context';
-import type { ProbeResponse, ProbeResult, RepairRequest, RepairResponse, ServiceEvent } from '../protocol';
+import type { ChangeRequest, ChangeResponse, ProbeResponse, ProbeResult, RepairRequest, RepairResponse, ServiceEvent } from '../protocol';
 
 /**
  * The browser's side of the generation service: start a generation and read
@@ -94,12 +94,21 @@ export class GenerationClient {
 
   /** Asks for a background repair of a figure that hit a problem while live (RP-7). */
   async repair(request: RepairRequest, signal?: AbortSignal): Promise<RepairResponse> {
+    return this.postJson<RepairResponse>('repairs', request, signal);
+  }
+
+  /** Asks for a change to a figure the learner has, in their words (HO-8). */
+  async change(request: ChangeRequest, signal?: AbortSignal): Promise<ChangeResponse> {
+    return this.postJson<ChangeResponse>('changes', request, signal);
+  }
+
+  private async postJson<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
     let response: Response;
     try {
-      response = await this.fetcher(`${this.options.baseUrl}/repairs`, {
+      response = await this.fetcher(`${this.options.baseUrl}/${path}`, {
         method: 'POST',
         headers: await this.headers(),
-        body: JSON.stringify(request),
+        body: JSON.stringify(body),
         ...(signal ? { signal } : {}),
       });
     } catch (error) {
@@ -107,7 +116,7 @@ export class GenerationClient {
       throw new ServiceError(0, 'network', 'The figure service could not be reached');
     }
     if (!response.ok) throw await this.refusal(response);
-    return (await response.json()) as RepairResponse;
+    return (await response.json()) as T;
   }
 
   /** Reports what the device's probe found, and gets back the next step. */

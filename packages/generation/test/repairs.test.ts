@@ -4,12 +4,13 @@ import { validateScene, type ProbeSpec } from '@incantly/core';
 import { REFERENCE_SCENES } from '@incantly/core/scenes';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { hmacAuthenticator, mintToken } from '../src/auth';
-import { figureRepairer } from '../src/client';
+import { figureChanger, figureRepairer } from '../src/client';
 import type { DeviceProbe } from '../src/client/flow';
 import { liveProblemReport, repairFigure } from '../src/client/repair';
 import { GenerationClient } from '../src/client/service-client';
 import { isolatedProbe } from '../src/probe';
 import { MemoryRecords } from '../src/records';
+import { ScriptedModel } from '../src/models';
 import { faultyScript, referenceModel } from '../src/reference-model';
 import { GenerationService } from '../src/service';
 import { issueTicket, readTicket } from '../src/ticket';
@@ -27,9 +28,8 @@ afterEach(async () => {
   }
 });
 
-async function serve(ticketSecret: string | null = TICKETS) {
+async function serve(ticketSecret: string | null = TICKETS, model: ScriptedModel = referenceModel()) {
   const records = new MemoryRecords();
-  const model = referenceModel();
   const service = new GenerationService({ model, authenticate: hmacAuthenticator(SECRET), records, ...(ticketSecret ? { ticketSecret } : {}) });
   const server = createServer((req, res) => void service.handle(req, res));
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -124,3 +124,51 @@ describe('repairing a live figure in the background (RP-7)', () => {
     expect(result).toBeNull();
   });
 });
+
+describe('changing a figure in the learner’s words (HO-8)', () => {
+  const GRAVITY = "const gravity = inc.param('gravity', { min: 5, max: 20, step: 0.1, value: 9.8,";
+  const LOWER = "const gravity = inc.param('gravity', { min: 5, max: 20, step: 0.1, value: 5,";
+  const fixed = { html: projectile.html, css: projectile.css, js: projectile.js };
+  /** A model that makes the change by an edit, as the change prompt asks. */
+  const editing = () =>
+    new ScriptedModel((call) => {
+      if (!call.prompt.system.some((b) => b.text.includes('CHANGE format'))) return '```edit js\n```';
+      return ['```edit js', '<<<<<<< SEARCH', GRAVITY, '=======', LOWER, '>>>>>>> REPLACE', '```'].join('\n');
+    });
+
+  it('edits the scene the ticket signed, as the learner asked, and the device approves the change', async () => {
+    const model = editing();
+    const { client } = await serve(TICKETS, model);
+    const change = figureChanger({ client, probe: device });
+    const result = await change(
+      { fragments: fixed, ticket: issueTicket(TICKETS, projectile.plan, fixed), prompt: 'Start with weaker gravity' },
+      { onStage: () => undefined, signal: new AbortController().signal },
+    );
+    expect(result.kind).toBe('figure');
+    if (result.kind !== 'figure') return;
+    expect(result.figure.fragments.js).toContain(LOWER);
+    expect(result.figure.ticket).toBeTruthy();
+    // One call: the figure as it stands and the learner's words, answered with edits.
+    expect(model.calls.map((c) => c.purpose)).toEqual(['scene']);
+    expect(model.calls[0]!.prompt.user).toContain('The learner wants this change: "Start with weaker gravity"');
+    expect(model.calls[0]!.prompt.system[1]!.text).toContain('THE FIGURE AS IT STANDS: projectile motion');
+  });
+
+  it('keeps the figure when the reply changes nothing, or when the figure was never signed', async () => {
+    const { client } = await serve();
+    const change = figureChanger({ client, probe: device });
+    const hooks = { onStage: () => undefined, signal: new AbortController().signal };
+    const unchanged = await change({ fragments: fixed, ticket: issueTicket(TICKETS, projectile.plan, fixed), prompt: 'Turn it into a poem' }, hooks);
+    expect(unchanged).toEqual({ kind: 'failed', message: 'That change is not one this figure can make, so it is unchanged.' });
+    const unsigned = await change({ fragments: fixed, ticket: null, prompt: 'Start with weaker gravity' }, hooks);
+    expect(unsigned).toEqual({ kind: 'failed', message: 'The figure could not be changed, so the working version is kept.' });
+  });
+
+  it('refuses fragments the ticket did not sign', async () => {
+    const { post } = await serve(TICKETS, editing());
+    const response = await post('/changes', { ticket: issueTicket(TICKETS, projectile.plan, fixed), fragments: broken, prompt: 'Start with weaker gravity' });
+    expect(response.status).toBe(403);
+    expect((await post('/changes', { ticket: issueTicket(TICKETS, projectile.plan, fixed), fragments: fixed, prompt: '' })).status).toBe(400);
+  });
+});
+
