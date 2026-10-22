@@ -260,7 +260,7 @@ function readModel(value: unknown, names: ReadonlySet<string>, problems: Problem
       });
     }
   }
-  const outputs: PlanOutput[] = [];
+  const written: Array<{ readonly name: string; readonly path: string; readonly depends: readonly string[] }> = [];
   const seen = new Set<string>();
   for (const [i, raw] of (readList(value.outputs, 'model.outputs', problems) ?? []).entries()) {
     const path = `model.outputs[${i}]`;
@@ -268,30 +268,52 @@ function readModel(value: unknown, names: ReadonlySet<string>, problems: Problem
       problems.push({ rule: 'schema', path, message: `${path} must be an object with a name and dependsOn` });
       continue;
     }
-    const written = readText(raw.name, `${path}.name`, PLAN_LIMITS.name, problems);
-    if (written === null) continue;
-    const name = IDENTIFIER.test(written) ? written : identifierFrom(written);
+    const text = readText(raw.name, `${path}.name`, PLAN_LIMITS.name, problems);
+    if (text === null) continue;
+    const name = IDENTIFIER.test(text) ? text : identifierFrom(text);
     if (name === null || !IDENTIFIER.test(name)) {
-      problems.push({ rule: 'schema', path: `${path}.name`, message: `"${written}" must be a name like flightTime` });
+      problems.push({ rule: 'schema', path: `${path}.name`, message: `"${text}" must be a name like flightTime` });
       continue;
     }
     if (seen.has(name)) problems.push({ rule: 'duplicate-name', path: `${path}.name`, message: `Two outputs are called "${name}"` });
     seen.add(name);
     const depends = (readList(raw.dependsOn, `${path}.dependsOn`, problems) ?? []).filter((d): d is string => typeof d === 'string').map(renamed);
-    const reachable = depends.filter((d) => inputs.includes(d));
+    written.push({ name, path, depends });
+  }
+  // An output may depend on another output, as a gradient on the concentration it is worked out from: it then
+  // depends on the inputs that output depends on.
+  const byName = new Map(written.map((o) => [o.name, o]));
+  const inputsOf = (output: (typeof written)[number], visiting: Set<string>): string[] => {
+    const found: string[] = [];
+    for (const d of output.depends) {
+      if (inputs.includes(d)) found.push(d);
+      else {
+        const other = byName.get(d);
+        if (other && !visiting.has(d)) found.push(...inputsOf(other, new Set([...visiting, d])));
+      }
+    }
+    return [...new Set(found)];
+  };
+  const outputs: PlanOutput[] = [];
+  for (const output of written) {
+    const reachable = inputsOf(output, new Set([output.name]));
     if (reachable.length === 0) {
       problems.push({
         rule: 'unreachable-output',
-        path,
-        message: `No input can change the output "${name}"; drop it or say which parameters it depends on`,
+        path: output.path,
+        message: `No input can change the output "${output.name}"; drop it or say which parameters it depends on`,
       });
       continue;
     }
-    const strangers = depends.filter((d) => !inputs.includes(d));
+    const strangers = output.depends.filter((d) => !inputs.includes(d) && !byName.has(d));
     if (strangers.length > 0) {
-      problems.push({ rule: 'unknown-input', path: `${path}.dependsOn`, message: `"${name}" depends on ${strangers.join(', ')}, which ${strangers.length === 1 ? 'is' : 'are'} not inputs` });
+      problems.push({
+        rule: 'unknown-input',
+        path: `${output.path}.dependsOn`,
+        message: `"${output.name}" depends on ${strangers.join(', ')}, which ${strangers.length === 1 ? 'is neither an input nor an output' : 'are neither inputs nor outputs'}`,
+      });
     }
-    outputs.push({ name, dependsOn: reachable });
+    outputs.push({ name: output.name, dependsOn: reachable });
   }
   return { inputs, outputs };
 }

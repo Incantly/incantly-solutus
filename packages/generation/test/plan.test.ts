@@ -123,6 +123,30 @@ describe('the plan validator', () => {
     expect(rules(plan({ model: { ...projectile.model, outputs: twin } }))).toEqual([]);
   });
 
+  it('lets an output depend on another output, and so on the inputs that one depends on', () => {
+    // Once a plan for active transport was rejected twice: its gradient depended on the inside concentration, an output.
+    const outputs = [
+      { name: 'gradient', dependsOn: ['speed', 'range'] },
+      { name: 'range', dependsOn: ['speed', 'angle', 'gravity'] },
+      { name: 'spread', dependsOn: ['gradient'] },
+    ];
+    const result = validatePlan(plan({ model: { ...projectile.model, outputs } }));
+    expect(result.problems).toEqual([]);
+    expect(result.plan!.model.outputs).toEqual([
+      { name: 'gradient', dependsOn: ['speed', 'angle', 'gravity'] },
+      { name: 'range', dependsOn: ['speed', 'angle', 'gravity'] },
+      { name: 'spread', dependsOn: ['speed', 'angle', 'gravity'] },
+    ]);
+    // Outputs that only depend on each other reach no input.
+    const loop = [...projectile.model.outputs, { name: 'a', dependsOn: ['b'] }, { name: 'b', dependsOn: ['a'] }];
+    expect(rules(plan({ model: { ...projectile.model, outputs: loop } }))).toEqual(['unreachable-output', 'unreachable-output']);
+    // A name that is neither an input nor an output is still named.
+    const stranger = [...projectile.model.outputs, { name: 'drag', dependsOn: ['speed', 'airDensity'] }];
+    const named = validatePlan(plan({ model: { ...projectile.model, outputs: stranger } }));
+    expect(named.problems.map((p) => p.rule)).toEqual(['unknown-input']);
+    expect(named.problems[0]!.message).toContain('airDensity, which is neither an input nor an output');
+  });
+
   it('rejects inputs that are not parameters, and parameters that are not inputs', () => {
     expect(rules(plan({ model: { ...projectile.model, inputs: [...projectile.model.inputs, 'time'] } }))).toEqual(['unknown-input']);
     expect(rules(plan({ model: { ...projectile.model, inputs: ['speed', 'angle'] } }))).toContain('unused-parameter');
