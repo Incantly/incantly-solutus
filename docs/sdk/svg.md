@@ -57,4 +57,4 @@ The parts registry drives highlight, dimming, keyboard focus, teaching-step focu
 
 ## Snapshot
 
-The stage can produce a PNG snapshot after resolving theme tokens. Snapshot capability is used for persistence and fallback; editable SVG export is deferred.
+The stage can produce a PNG snapshot after resolving theme tokens, used for persistence and fallback (`handle.snapshot()`), and export itself as a standalone SVG image with the theme's colours, lines and fonts written in (`handle.exportSvg()`, SV-14). The export is a `data:image/svg+xml` URL: show it in an `<img>` or offer it as a download, rather than pasting it into a page as markup. Dots on a canvas layer are not part of it.

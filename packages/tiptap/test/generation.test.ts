@@ -51,6 +51,9 @@ class FakeFigure implements FigureHandle {
   snapshot() {
     return Promise.resolve('data:image/png;base64,iVBORw0KGgo=');
   }
+  exportSvg() {
+    return Promise.resolve(null);
+  }
   destroy() {
     this.state = 'destroyed';
   }

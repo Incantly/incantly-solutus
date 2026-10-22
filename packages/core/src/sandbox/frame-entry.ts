@@ -4,7 +4,7 @@ import type { RendererMessage, RuntimeUpdate } from '../protocol/runtime-message
 import type { ErrorView } from '../protocol/ui';
 import { FigureRenderer } from '../renderer/renderer';
 import { wrapSceneSource, WRAPPER_LINES_BEFORE } from './scene-wrapper';
-import { snapshotStage } from './snapshot';
+import { exportStage, snapshotStage } from './snapshot';
 import type { WorkerInbound, WorkerOutbound } from './worker-protocol';
 
 /**
@@ -137,7 +137,8 @@ function onHostMessage(message: HostMessage): void {
       // A frame the browser kept off-screen may never have drawn: an empty picture is worse than none.
       const drawn = (renderer?.stats.workFrames ?? 0) > 0;
       const svg = drawn ? (root?.querySelector<SVGSVGElement>('svg.inc-stage') ?? null) : null;
-      void snapshotStage(svg).then((png) => send({ type: 'snapshot', id: message.id, png }));
+      if (message.format === 'svg') send({ type: 'snapshot', id: message.id, png: null, svg: exportStage(svg) });
+      else void snapshotStage(svg).then((png) => send({ type: 'snapshot', id: message.id, png }));
       break;
     }
     case 'ping':

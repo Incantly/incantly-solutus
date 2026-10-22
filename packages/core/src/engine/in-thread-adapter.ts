@@ -1,5 +1,5 @@
 import type { ExecutionAdapter, FigureHandle, FigureState, MountOptions } from '../sandbox/adapter';
-import { snapshotStage } from '../sandbox/snapshot';
+import { exportStage, snapshotStage } from '../sandbox/snapshot';
 import type { SceneFragments } from '../validation';
 import { loadKitModules } from '../kits/load';
 import type { KitRegistry } from '../runtime/kits';
@@ -91,6 +91,7 @@ export function mountInThread(container: HTMLElement, fragments: SceneFragments,
       return rect && rect.width > 0 && rect.height > 0 ? { width: rect.width, height: rect.height } : null;
     },
     snapshot: () => snapshotStage(figure?.root.querySelector<SVGSVGElement>('svg.inc-stage') ?? null),
+    exportSvg: async () => exportStage(figure?.root.querySelector<SVGSVGElement>('svg.inc-stage') ?? null),
     destroy: () => {
       destroyed = true;
       figure?.destroy();

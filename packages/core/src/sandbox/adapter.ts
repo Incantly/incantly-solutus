@@ -75,6 +75,12 @@ export interface FigureHandle {
   /** The figure's laid-out size, once it has one. Browsers do not lay out off-screen frames. */
   measure(): { readonly width: number; readonly height: number } | null;
   snapshot(): Promise<string | null>;
+  /**
+   * The drawing as an SVG image with the theme written in, as a data URL
+   * (SV-14). Show it in an <img> or offer it as a download; do not paste it
+   * into a page as markup.
+   */
+  exportSvg(): Promise<string | null>;
   destroy(): void;
 }
 
@@ -199,7 +205,7 @@ class SandboxedFigure implements FigureHandle {
   private heartbeat: ReturnType<typeof setInterval> | null = null;
   private pingId = 0;
   private awaitingPong: number | null = null;
-  private snapshots = new Map<number, (png: string | null) => void>();
+  private snapshots = new Map<number, (picture: string | null) => void>();
   private laidOut = false;
   private snapshotId = 0;
   /** Style and theme asked for before the frame was ready; they go with the init message. */
@@ -302,7 +308,7 @@ class SandboxedFigure implements FigureHandle {
         }
         break;
       case 'snapshot':
-        this.snapshots.get(message.id)?.(message.png);
+        this.snapshots.get(message.id)?.(message.svg !== undefined ? message.svg : message.png);
         this.snapshots.delete(message.id);
         break;
       case 'pong':
@@ -417,11 +423,19 @@ class SandboxedFigure implements FigureHandle {
   }
 
   snapshot(): Promise<string | null> {
+    return this.picture('png');
+  }
+
+  exportSvg(): Promise<string | null> {
+    return this.picture('svg');
+  }
+
+  private picture(format: 'png' | 'svg'): Promise<string | null> {
     if (!this.connection || this.state !== 'live') return Promise.resolve(null);
     const id = ++this.snapshotId;
     return new Promise((resolve) => {
       this.snapshots.set(id, resolve);
-      this.connection?.post({ type: 'snapshot', id });
+      this.connection?.post({ type: 'snapshot', id, ...(format === 'svg' ? { format } : {}) });
       setTimeout(() => {
         if (this.snapshots.delete(id)) resolve(null);
       }, this.deadlines.mountMs);

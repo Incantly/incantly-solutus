@@ -211,4 +211,26 @@ test.describe('sandbox (Phase 3 gate)', () => {
     expect(size.width).toBeGreaterThan(100);
     expect(size.height).toBeGreaterThan(50);
   });
+
+  test('a live figure exports its drawing as an SVG image with the theme written in (SV-14)', async ({ page }) => {
+    await open(page, 'page=sandbox&scene=sine-wave&autoplay=0');
+    const svg = await page.evaluate(async () => {
+      const figure = (window.__playground as unknown as { figure: { exportSvg(): Promise<string | null> } }).figure;
+      return figure.exportSvg();
+    });
+    expect(svg).toMatch(/^data:image\/svg\+xml;charset=utf-8,/);
+    const markup = decodeURIComponent(svg!.slice(svg!.indexOf(',') + 1));
+    // Colours written in, not CSS variables or classes, so it stands alone.
+    expect(markup).toContain('<svg');
+    expect(markup).not.toContain('var(--inc-');
+    expect(markup).not.toContain('class="inc-');
+    expect(markup).toMatch(/stroke="rgb\(/);
+    const size = await page.evaluate(async (src) => {
+      const image = new Image();
+      image.src = src!;
+      await image.decode();
+      return { width: image.naturalWidth, height: image.naturalHeight };
+    }, svg);
+    expect(size.width).toBeGreaterThan(100);
+  });
 });

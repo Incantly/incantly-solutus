@@ -61,7 +61,8 @@ export type HostMessageBody =
   | { readonly type: 'setValues'; readonly values: Readonly<Record<string, number>> }
   | { readonly type: 'step'; readonly step: number | null }
   | { readonly type: 'reducedMotion'; readonly value: boolean }
-  | { readonly type: 'snapshot'; readonly id: number }
+  /** A picture of the drawing: a PNG (the default), or an SVG with the theme written in (SV-14). */
+  | { readonly type: 'snapshot'; readonly id: number; readonly format?: 'png' | 'svg' }
   | { readonly type: 'ping'; readonly id: number }
   /** Moves keyboard focus into the figure, to its first or last control. */
   | { readonly type: 'focus'; readonly edge: 'first' | 'last' }
@@ -85,7 +86,7 @@ export type FrameMessageBody =
   | { readonly type: 'description'; readonly text: string }
   /** Keyboard focus is leaving the figure: Escape, or Tab past either end. */
   | { readonly type: 'escape'; readonly direction: 'out' | 'forward' | 'backward' }
-  | { readonly type: 'snapshot'; readonly id: number; readonly png: string | null }
+  | { readonly type: 'snapshot'; readonly id: number; readonly png: string | null; readonly svg?: string | null }
   | { readonly type: 'pong'; readonly id: number }
   | { readonly type: 'resize'; readonly height: number }
   | { readonly type: 'probe'; readonly report: ProbeReport };
@@ -172,6 +173,7 @@ export function parseHostMessage(data: unknown, channel: string): HostMessage | 
     case 'reducedMotion':
       return typeof m.value === 'boolean' ? (m as unknown as HostMessage) : null;
     case 'snapshot':
+      return typeof m.id === 'number' && (m.format === undefined || m.format === 'png' || m.format === 'svg') ? (m as unknown as HostMessage) : null;
     case 'ping':
       return typeof m.id === 'number' ? (m as unknown as HostMessage) : null;
     case 'focus':
@@ -209,7 +211,9 @@ export function parseFrameMessage(data: unknown, channel: string): FrameMessage 
     case 'escape':
       return m.direction === 'out' || m.direction === 'forward' || m.direction === 'backward' ? (m as unknown as FrameMessage) : null;
     case 'snapshot':
-      return typeof m.id === 'number' && (m.png === null || (typeof m.png === 'string' && m.png.startsWith('data:image/png;base64,')))
+      return typeof m.id === 'number' &&
+        (m.png === null || (typeof m.png === 'string' && m.png.startsWith('data:image/png;base64,'))) &&
+        (m.svg === undefined || m.svg === null || (typeof m.svg === 'string' && m.svg.startsWith('data:image/svg+xml;') && m.svg.length < 8_000_000))
         ? (m as unknown as FrameMessage)
         : null;
     case 'pong':
