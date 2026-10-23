@@ -109,6 +109,11 @@ describe('validator: JavaScript details', () => {
     expect(result.diagnostics[0]!.message).toContain('Path handles have no method "text"');
   });
 
+  it('lets a number be written with any of the number formatters', () => {
+    const js = ['const x = 0.000123;', 'const a = x.toFixed(2);', 'const b = x.toPrecision(3);', 'const c = x.toExponential(1);', 'const d = `${a} ${b} ${c}`.trim();'].join('\n');
+    expect(validateSceneJs(js).diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+  });
+
   it('suggests the closest name for typos', () => {
     const result = validateSceneJs("const p = inc.parm('k', { min: 0, max: 1, value: 0 });");
     expect(result.diagnostics[0]!.message).toBe('inc.parm is not part of the SDK; did you mean inc.param?');

@@ -43,31 +43,25 @@ Rules for every scene
 4. Build shapes once and move them with at, set, rotate and scale. Stage units work like pixels (text is 12 units tall), so give a stage a viewBox a few hundred units wide and scale the model to it. Keep every shape inside its stage at every parameter value. Let the learner touch the figure: when moving the main object would change a parameter, make it draggable (graph.handle, graph.drag, stage.drag, draggable bodies).
 5. Animate only from frame.time and frame.dt. A paused redraw (dt = 0) still draws the current state, and moving any control while paused changes the drawing at once, even before time has run: draw what it sets, such as a length, an arrow's size or a label. Every value in range, both ends included, must draw without NaN; guard the plan's singular points.
 6. Colour comes only from tones: lo, mid, hi, lit, faint, a, b, c, water. Water is for liquids. Use one lit accent. Never write a colour value.
-7. Show the real thing: the actual formula and true units, with the kit's helpers (calc, vec, units, shapes, sym, chem) instead of your own. A law worth seeing goes in stage.equation, drawn as maths. Never call anything that is not in the contract. Draw the real mechanism in its real shape and motion; boxes, arrows and labels only add to it.
+7. Show the real thing: the actual formula and true units, with the kit's helpers (calc, vec, units, shapes, sym, chem) instead of your own. A law worth seeing goes in stage.equation, drawn as maths. Never call anything that is not in the contract. Draw the real mechanism in its real shape and motion, on the whole object the learner names, so it is recognisable; boxes, arrows and labels only add to it. Build a construction (tiling, chain, spiral) piece by piece in the model, each piece against the one before.
 8. Register every part the plan names, with exactly that name, through part() on its stage or kit.
 9. Call inc.idea once with the plan's idea, inc.describe with a function of the model, and inc.steps with the plan's steps.
-10. JavaScript is a small subset: const and let, arrow functions, if, switch, the conditional operator, for loops with a visible numeric bound (for (let i = 0; i <= 120; i++)), for...of, Math (inc.random instead of Math.random), template strings. Never var, function, class, this, new, try, throw, while, regular expressions, window, document, globalThis, fetch, eval or timers.
+10. JavaScript is a small subset: const and let, arrow functions, if, switch, the conditional operator, for loops with a numeric bound written in the loop (i <= 120, or i <= Math.min(n, 120) when the count varies), for...of, Math (inc.random instead of Math.random), template strings. The only globals are inc, Math, Number, isFinite and isNaN: write \`\${x}\` instead of String(x). Never var, function, class, this, new, try, throw, while, regular expressions, window, document, globalThis, fetch, eval or timers.
 11. Write little and let the kit do the work (a 3D prop is one space.model call): a quick figure is about ${SIZE_BUDGETS.quick.lines} lines, standard ${SIZE_BUDGETS.standard.lines}, rich ${SIZE_BUDGETS.rich.lines}; under 500 samples per curve.
 12. HTML is one div per stage with an id, usually <div id="stage"></div>, and nothing else. CSS only lays it out, usually #stage { max-width: 760px; margin: 0 auto; }, with var(--inc-...) tokens and no colours or url(). Two panels: one div each and inc.layout('row'), no CSS for it.
 13. If you are not sure the kit has something, it does not. Use only the catalog and the contract you are given.`;
 
-export const PLAN_FORMAT = `PLAN format. Reply with one JSON object in a \`\`\`json fence; keep every text short:
-{
-  "concept": "short name of the concept",
-  "idea": "One sentence: what moves and what that motion means.",
-  "kind": "graph" | "motion" | "diagram",
-  "size": "quick" | "standard" | "rich",
-  "capabilities": ["catalog names only; at least one stage: ${stageNames()}"],
-  "parameters": [{ "name": "camelCase", "unit": "m/s", "min": 5, "max": 20, "default": 12, "why": "a few words on these bounds" }],
-  "model": { "inputs": ["every parameter name"], "outputs": [{ "name": "range", "dependsOn": ["speed", "angle"] }] },
-  "parts": ["things drawn in the figure that steps point at; never readouts, sliders, buttons or formulas, which the kit shows itself"],
-  "moves": "What moves or changes.",
-  "steps": ["Two to five teaching steps, one point each"],
-  "singularPoints": []
-}
-Sizes: quick (the default: one view, up to ${SIZE_BUDGETS.quick.controls} controls and ${SIZE_BUDGETS.quick.parts} parts), standard (a second view, such as a graph beside the scene: up to ${SIZE_BUDGETS.standard.controls} controls and ${SIZE_BUDGETS.standard.parts} parts), rich (several linked panels, only when the learner asks for that much: up to ${SIZE_BUDGETS.rich.controls} controls and ${SIZE_BUDGETS.rich.parts} parts).
+/**
+ * The plan's format. Every plan token is time the learner waits before the
+ * scene call can start (PRD 16.1: about 150 tokens out), so the JSON is
+ * compact, the prose is a few words, and quick is the size to pick.
+ */
+export const PLAN_FORMAT = `PLAN format. Reply with one compact JSON object in a \`\`\`json fence: no indentation, no line breaks inside it. Every word is time the learner waits, so write few: the idea under 25 words, each why 2 to 5 words, moves under 12 words, each step under 14 words.
+{"concept":"short name of the concept","idea":"One sentence: what moves and what that motion means.","kind":"graph"|"motion"|"diagram","size":"quick"|"standard"|"rich","capabilities":["catalog names only; at least one stage: ${stageNames()}"],"parameters":[{"name":"camelCase","unit":"m/s","min":5,"max":20,"default":12,"why":"typical throwing speeds"}],"model":{"inputs":["every parameter name"],"outputs":[{"name":"range","dependsOn":["speed","angle"]}]},"parts":["ball","cannon"],"moves":"What moves or changes.","steps":["Two to four teaching steps, one point each"],"singularPoints":[]}
+Sizes: quick (one view, up to ${SIZE_BUDGETS.quick.controls} controls and ${SIZE_BUDGETS.quick.parts} parts) when there is one thing to see, and its figure arrives soonest; standard (a second view, such as a graph beside the scene: up to ${SIZE_BUDGETS.standard.controls} controls and ${SIZE_BUDGETS.standard.parts} parts) when the learner asks to see several things or one view cannot show them all; rich (several linked panels, up to ${SIZE_BUDGETS.rich.controls} controls and ${SIZE_BUDGETS.rich.parts} parts) only when the learner asks for that much.
 A parameter is a slider unless it says "control": "toggle" (min 0, max 1) or "control": "choice" with "options": ["first", "second"] (min 0, max one less than the options).
-Give every parameter meaningful bounds. Each model output's dependsOn names model inputs or other outputs; time is not an input.
+Parts are things drawn in the figure that steps point at, each named in a few words (under 40 characters): every thing the learner asks to see, and, when the learner names an object (a bicycle, a heart, an engine), that object whole with its frame, body or case, so the figure looks like the real thing; never readouts, sliders, buttons or formulas, which the kit shows itself. Capabilities include the helpers that draw those parts' real shapes, such as shapes for gears and belts and path for arcs.
+Give every parameter meaningful bounds. Each model output's dependsOn names model inputs or other outputs; time is not an input, and a constant such as π or φ is not an output.
 List only singular points that fall inside the declared parameter bounds, using the actual parameter name as the key, for example [{ "objectDistance": 8 }]. If an undefined value is outside the allowed range, it is not a singular point for this figure; return [] when there are none.
 Be concise and return only the fenced JSON, with no explanation before or after it.
 Concepts with a reviewed figure, and the stage it is drawn on: ${reviewedFigures().join('; ')}. When the request is one of these, use that name exactly as the concept, and that stage unless the learner asks for another kind of figure.`;
@@ -182,11 +176,14 @@ function overlap(a: Set<string>, b: Set<string>): number {
 /**
  * The reviewed example closest to a plan: one drawn on the same kind of
  * stage first, as a scene follows its example's use of the kit; then its
- * concept and idea; then the other features it shares. `withhold` leaves
- * examples out, as leak-free evals do with a concept's own example.
+ * concept and idea; then the kind of figure and the other features it
+ * shares. A scene follows its example's length too, and every line of it is
+ * time the learner waits, so between otherwise close examples the shorter
+ * one wins. `withhold` leaves examples out, as leak-free evals do with a
+ * concept's own example.
  */
 export function nearestExample(
-  plan: Pick<ScenePlan, 'concept' | 'idea' | 'capabilities'>,
+  plan: Pick<ScenePlan, 'concept' | 'idea' | 'capabilities'> & Partial<Pick<ScenePlan, 'kind'>>,
   options: { readonly withhold?: readonly string[]; readonly examples?: Readonly<Record<string, ReferenceScene>> } = {},
 ): ReferenceScene | null {
   const examples = Object.values(options.examples ?? REFERENCE_SCENES).filter((e) => !options.withhold?.includes(e.id));
@@ -200,7 +197,11 @@ export function nearestExample(
     // An Ohm's law circuit drawn in SVG learns nothing from a membrane drawn with the biology kit, however close the words.
     const stage = example.plan.capabilities.some((c) => stages.has(c)) ? 3 : 0;
     const shared = example.plan.capabilities.filter((c) => features.has(c)).length / Math.max(1, features.size);
-    const score = stage + 2 * overlap(concept, words(`${example.plan.concept} ${example.plan.idea}`)) + 0.5 * shared;
+    // A graph follows a graph and a mechanism a moving scene, more than any shared helper.
+    const kind = plan.kind !== undefined && example.plan.kind === plan.kind ? 1 : 0;
+    // 0.25 per hundred lines: enough to choose between near ties, never to outweigh the stage, the words or the kind.
+    const length = 0.25 * (example.js.split('\n').length / 100);
+    const score = stage + 2 * overlap(concept, words(`${example.plan.concept} ${example.plan.idea}`)) + kind + 0.5 * shared - length;
     if (score > bestScore || (score === bestScore && best && example.id < best.id)) {
       best = example;
       bestScore = score;
@@ -246,7 +247,8 @@ export interface ScenePrompt {
 function sizeLine(plan: ScenePlan): string {
   const size = plan.size ?? 'quick';
   const budget = SIZE_BUDGETS[size];
-  return `Size: ${size}, about ${budget.lines} lines, at most ${budget.controls} controls and ${budget.elements} drawn elements.`;
+  // The scene call streams at about a hundred and fifty tokens a second: its length is the learner's wait.
+  return `Size: ${size}: js about ${budget.lines} lines, at most ${budget.controls} controls and ${budget.elements} drawn elements. No comments, no blank lines.`;
 }
 
 /** The reviewed scene for the same concept, when there is one this plan can start from. */
@@ -269,7 +271,7 @@ export function startingScene(plan: ScenePlan, options: ScenePromptOptions = {})
 export function scenePrompt(plan: ScenePlan, options: ScenePromptOptions = {}): ScenePrompt {
   const start = startingScene(plan, options);
   const contract = ['CONTRACT. The kit API your scene may use, as TypeScript declarations; the scene itself is plain JavaScript.', '```ts', contractFor(plan.capabilities), '```'];
-  const planText = ['```json', JSON.stringify(plan, null, 2), '```'].join('\n');
+  const planText = ['```json', JSON.stringify(plan), '```'].join('\n');
   if (start) {
     // The starting scene sits in the cached prefix: requests for the same concept share it.
     const reference = [

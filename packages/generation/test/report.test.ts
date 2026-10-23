@@ -54,6 +54,16 @@ describe('repair reports', () => {
     expect(report.text).toContain('...and 3 more');
   });
 
+  it('quotes one error of each kind before more of one kind, so a repair sees every kind', () => {
+    const js = `${projectile.js}\n${Array.from({ length: 6 }, (_, i) => `window.x${i} = 1;`).join('\n')}\nconst late = (1).toBogus(2);`;
+    const fragments = { html: projectile.html, css: projectile.css, js };
+    const report = validationReport(validateScene(fragments).diagnostics, fragments);
+    expect(report.text.match(/^ERROR /gm)).toHaveLength(5);
+    expect(report.text).toContain('toBogus');
+    expect(report.summary).toContain('unknown-method');
+    expect(report.text).toMatch(/\.\.\.and \d+ more: forbidden-global at js line \d+/);
+  });
+
   it('reports a probe failure with the parameter state, the real error, the mapped line, a likely cause and the rule', async () => {
     const fragments = withLine(/^inc\.onFrame\(\(\{ time \}\) => \{$/m, 'const empty = [];\ninc.onFrame(({ time }) => {\n  empty[2].at(0, 0);');
     const result = await probe(fragments);

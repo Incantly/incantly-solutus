@@ -114,9 +114,15 @@ describe('the plan validator', () => {
     expect(result.plan!.steps[0]!.length).toBeLessThanOrEqual(PLAN_LIMITS.text);
   });
 
-  it('rejects outputs that no input can change', () => {
-    const outputs = [...projectile.model.outputs, { name: 'mass', dependsOn: [] }];
-    expect(rules(plan({ model: { ...projectile.model, outputs } }))).toEqual(['unreachable-output']);
+  it('rejects outputs that no input can change, and drops one declared constant', () => {
+    // A constant such as φ, declared with no dependencies, is dropped rather than worth a re-plan; an output that
+    // depends on it and on an input stays.
+    const outputs = [...projectile.model.outputs, { name: 'phi', dependsOn: [] }, { name: 'error', dependsOn: ['range', 'phi'] }];
+    const constant = validatePlan(plan({ model: { ...projectile.model, outputs } }));
+    expect(constant.problems).toEqual([]);
+    expect(constant.plan!.model.outputs.map((o) => o.name)).toEqual([...projectile.model.outputs.map((o) => o.name), 'error']);
+    const onlyConstant = [...projectile.model.outputs, { name: 'phi', dependsOn: [] }, { name: 'area', dependsOn: ['phi'] }];
+    expect(rules(plan({ model: { ...projectile.model, outputs: onlyConstant } }))).toEqual(['unreachable-output']);
     const unknown = [...projectile.model.outputs, { name: 'drag', dependsOn: ['airDensity'] }];
     expect(rules(plan({ model: { ...projectile.model, outputs: unknown } }))).toEqual(['unreachable-output']);
     const twin = [...projectile.model.outputs, { name: 'drag', dependsOn: ['speed'] }];

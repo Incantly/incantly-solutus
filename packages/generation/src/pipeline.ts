@@ -46,6 +46,12 @@ export const MAX_REPLY_TOKENS = 16_000;
 export const DEFAULT_DEADLINE_MS = 300_000;
 /** Time to keep in hand for validation, the probe and delivery after the last model call. */
 export const DELIVERY_MS = 1_500;
+/**
+ * How long writing a prefix ahead usually takes: the scene call waits for it
+ * no later than this long after it began. A write that began just before the
+ * plan ended saves little more than this wait, so it is never waited out.
+ */
+export const WARM_MS = 1_000;
 /** The plan's own deadline, counted from its first call; the build never waits past it. */
 export const PLAN_DEADLINE_MS = 120_000;
 
@@ -69,6 +75,13 @@ export interface GeneratorOptions {
   readonly adapt?: boolean;
   /** Start adapting the reviewed scene a request names before its plan arrives. Default true; needs adapt. */
   readonly retrieve?: boolean;
+  /**
+   * Write the scene call's cached prefix while the plan is still streaming,
+   * once the plan's head (concept, kind, capabilities and parameters) is in,
+   * so the scene call reads it instead of waiting for it. Default true; a
+   * model client without `warm` skips it.
+   */
+  readonly warm?: boolean;
   readonly now?: () => number;
 }
 
@@ -88,6 +101,8 @@ export interface CallRecord {
   readonly model: string;
   readonly usage: ModelUsage;
   readonly ms: number;
+  /** Milliseconds to the first streamed text, when the model streamed. */
+  readonly firstTextMs?: number;
   /** The output-token cap the call was made with. */
   readonly maxTokens?: number;
   error?: string;
@@ -222,6 +237,10 @@ export class GenerationState {
   cached: 'request' | 'plan' | null = null;
   /** A repair that was due but would not have finished before the deadline. */
   deadlineSkipped = false;
+  /** The scene prefix written while the plan streamed: its model and what it cost. Not a call: it writes no reply. */
+  warmed: { readonly model: string; readonly usage: ModelUsage } | null = null;
+  /** That write while it runs, and when it began: the scene call waits a moment for it rather than write the same prefix beside it. */
+  warming: { readonly done: Promise<void>; readonly at: number } | null = null;
   readonly sdkVersion = SDK_VERSION;
 
   constructor(
@@ -240,11 +259,11 @@ export class GenerationState {
   }
 
   get usage(): ModelUsage {
-    return this.calls.reduce((sum, call) => addUsage(sum, call.usage), NO_USAGE);
+    return this.calls.reduce((sum, call) => addUsage(sum, call.usage), this.warmed?.usage ?? NO_USAGE);
   }
 
   get cost(): number {
-    return this.calls.reduce((sum, call) => sum + costOf(call.model, call.usage), 0);
+    return this.calls.reduce((sum, call) => sum + costOf(call.model, call.usage), this.warmed ? costOf(this.warmed.model, this.warmed.usage) : 0);
   }
 
   /** Passed on the first scene, without a repair. */
@@ -480,7 +499,8 @@ export class Generator {
     const started = this.now();
     let replan: { previous: string; problems: string } | undefined;
     for (let attempt = 0; attempt <= this.replans; attempt++) {
-      const reply = await this.call(state, 'plan', planPrompt(request, replan), this.planDeadlineSignal(signal), this.streamed(hooks, 'plan'));
+      const warm = attempt === 0 ? this.warmer(state, signal) : undefined;
+      const reply = await this.call(state, 'plan', planPrompt(request, replan), this.planDeadlineSignal(signal), this.streamed(hooks, 'plan', warm));
       if (reply === null) return;
       const parsed = parsePlanReply(reply);
       const validation = parsed.problem
@@ -499,6 +519,42 @@ export class Generator {
     this.fail(state, 'plan', `The plan was rejected: ${state.planProblems.map((p) => p.rule).join(', ')}`);
   }
 
+  /**
+   * Watches the plan as it streams and, once its head is in, writes the
+   * scene call's cached prefix (PRD 25.1): the scene call then starts on a
+   * warm cache instead of writing ten thousand tokens of contract and example
+   * first. It runs beside the plan, writes no reply, and its failure costs
+   * nothing but the time it would have saved.
+   */
+  private warmer(state: GenerationState, signal?: AbortSignal): ((text: string) => void) | undefined {
+    const model = this.options.model;
+    if (this.options.warm === false || !model.warm) return undefined;
+    let streamed = '';
+    let sent = false;
+    return (delta) => {
+      if (sent) return;
+      streamed += delta;
+      const head = planHead(streamed);
+      if (!head) return;
+      sent = true;
+      const { prompt } = scenePrompt(head, {
+        ...(this.options.withhold ? { withhold: this.options.withhold } : {}),
+        ...(this.options.examples ? { examples: this.options.examples } : {}),
+        ...(this.options.adapt === false ? { adapt: false } : {}),
+      });
+      const at = this.now();
+      const done = model.warm!({ purpose: 'scene', prompt, ...(signal ? { signal } : {}) }).then(
+        (usage) => {
+          state.warmed = { model: model.modelFor('scene'), usage };
+        },
+        () => {
+          // A prefix not written ahead is written by the scene call itself, as before.
+        },
+      );
+      state.warming = { done, at };
+    };
+  }
+
   /** The scene call and its checks, then repairs while the budget and the deadline allow. */
   async buildStage(state: GenerationState, hooks: GenerationHooks = {}, signal?: AbortSignal): Promise<void> {
     const plan = state.plan;
@@ -514,6 +570,10 @@ export class Generator {
     state.example = example;
     state.mode = mode;
     const maxTokens = this.options.maxTokens?.scene ?? SIZE_BUDGETS[plan.size ?? 'quick'].sceneTokens;
+    // A prefix still being written ahead may be nearly done: a scene call sent beside it would write it again and
+    // start no sooner. It is waited for only until its usual length has passed since it began.
+    const wait = state.warming ? state.warming.at + WARM_MS - this.now() : 0;
+    if (state.warming && wait > 0) await Promise.race([state.warming.done, new Promise((resolve) => setTimeout(resolve, wait))]);
     if (mode === 'adapt' && start) {
       // The starting scene's markup is known now: the host can lay it out before the edits arrive.
       state.timings.firstFragmentMs ??= this.now() - state.startedAt;
@@ -797,13 +857,13 @@ export class Generator {
       }
       const text = join ? sofar + join.end(reply.text) : reply.text;
       if (reply.stopReason === 'max_tokens') {
-        state.calls.push({ purpose, model: reply.model, usage: reply.usage, ms: reply.ms, maxTokens: capped, truncated: true });
+        state.calls.push({ purpose, model: reply.model, usage: reply.usage, ms: reply.ms, ...firstText(reply), maxTokens: capped, truncated: true });
         if (capped >= MAX_REPLY_TOKENS) return text;
         if (text.trim() === '') reset?.();
         sofar = text;
         continue;
       }
-      state.calls.push({ purpose, model: reply.model, usage: reply.usage, ms: reply.ms, maxTokens: capped });
+      state.calls.push({ purpose, model: reply.model, usage: reply.usage, ms: reply.ms, ...firstText(reply), maxTokens: capped });
       return text;
     }
   }
@@ -843,6 +903,37 @@ interface PlanBeside {
   stop(): void;
 }
 
+/**
+ * The plan as far as the scene call's prefix needs it, once its head has
+ * streamed in: everything before "model" (concept, idea, kind, size,
+ * capabilities and parameters, in the plan format's order), checked as a
+ * plan with the rest filled in. The prefix depends only on the head, so the
+ * filler never reaches it. Null before the head is complete, or when it is
+ * not a plan.
+ */
+export function planHead(text: string): ScenePlan | null {
+  const open = text.indexOf('{');
+  const model = /"model"\s*:\s*\{/.exec(text)?.index ?? -1;
+  if (open < 0 || model < open) return null;
+  let head: Record<string, unknown>;
+  try {
+    head = JSON.parse(`${text.slice(open, model).replace(/[\s,]+$/, '')}}`) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+  const names = (Array.isArray(head.parameters) ? head.parameters : []).flatMap((p) =>
+    typeof p === 'object' && p !== null && typeof (p as { name?: unknown }).name === 'string' ? [(p as { name: string }).name] : [],
+  );
+  return validatePlan({
+    ...head,
+    model: { inputs: names, outputs: [{ name: 'value', dependsOn: names }] },
+    parts: ['figure'],
+    moves: 'It moves.',
+    steps: ['Look.'],
+    singularPoints: [],
+  }).plan;
+}
+
 /** A plan's concept and idea as it streams in, once both strings are complete; null before. */
 export function conceptAndIdea(text: string): { readonly concept: string; readonly idea: string } | null {
   const field = (name: string): string | null => {
@@ -857,6 +948,10 @@ export function conceptAndIdea(text: string): { readonly concept: string; readon
   const concept = field('concept');
   const idea = concept === null ? null : field('idea');
   return concept !== null && idea !== null ? { concept, idea } : null;
+}
+
+function firstText(reply: ModelReply): { firstTextMs?: number } {
+  return reply.firstTextMs !== undefined ? { firstTextMs: reply.firstTextMs } : {};
 }
 
 /** A streamed fragment's own checks; the whole scene is validated together once it is complete. */

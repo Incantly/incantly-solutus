@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import type { ScenePlan } from '@incantly/core';
 import type { FragmentSet } from './fragments';
 import type { ModelUsage } from './models';
-import type { GenerationState } from './pipeline';
+import type { CallRecord, GenerationState } from './pipeline';
 import type { PlanProblem } from './plan';
 
 /**
@@ -44,6 +44,8 @@ export interface FailureRecord {
   readonly usage: ModelUsage;
   readonly cost: number;
   readonly timings: GenerationState['timings'];
+  /** Each model call: how long it took, how soon its text began, and what it wrote and read from the cache (PRD 25.7). */
+  readonly calls: readonly CallTiming[];
   readonly failure: string | null;
   /** How the scene was made: written whole, adapted by edits, or from the concept cache. */
   readonly mode: GenerationState['mode'];
@@ -51,6 +53,15 @@ export interface FailureRecord {
   readonly deadlineSkipped: boolean;
   /** Lines of the agent's script in the last candidate (RM-4). */
   readonly lines: number | null;
+}
+
+export interface CallTiming {
+  readonly purpose: CallRecord['purpose'];
+  readonly ms: number;
+  readonly firstTextMs: number | null;
+  readonly outputTokens: number;
+  readonly cacheReadTokens: number;
+  readonly error?: string;
 }
 
 export function outcomeOf(state: GenerationState): Outcome {
@@ -83,6 +94,14 @@ export function failureRecord(state: GenerationState, probedOn: FailureRecord['p
     usage: state.usage,
     cost: Math.round(state.cost * 1e6) / 1e6,
     timings: { ...state.timings },
+    calls: state.calls.map((c) => ({
+      purpose: c.purpose,
+      ms: c.ms,
+      firstTextMs: c.firstTextMs ?? null,
+      outputTokens: c.usage.outputTokens,
+      cacheReadTokens: c.usage.cacheReadTokens,
+      ...(c.error ? { error: c.error } : {}),
+    })),
     failure: state.failure ? `${state.failure.stage}: ${state.failure.reason}` : null,
     mode: state.mode,
     deadlineSkipped: state.deadlineSkipped,

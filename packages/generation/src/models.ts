@@ -53,6 +53,8 @@ export interface ModelReply {
   readonly usage: ModelUsage;
   readonly stopReason: string | null;
   readonly ms: number;
+  /** Milliseconds from the request to the first streamed text: the model's wait, apart from its writing. */
+  readonly firstTextMs?: number;
 }
 
 export interface ModelClient {
@@ -60,6 +62,19 @@ export interface ModelClient {
   /** The model a call of this purpose goes to, for records and cost. */
   modelFor(purpose: CallPurpose): string;
   complete(call: ModelCall): Promise<ModelReply>;
+  /**
+   * Writes a call's cached prefix ahead of the call itself and writes no
+   * reply: the call that follows reads the prefix instead of waiting for it
+   * (PRD 25.1). Optional; a client without a prompt cache leaves it out.
+   */
+  warm?(call: WarmCall): Promise<ModelUsage>;
+}
+
+/** A call whose cached prefix is written ahead of it: only its purpose and system blocks count. */
+export interface WarmCall {
+  readonly purpose: CallPurpose;
+  readonly prompt: Prompt;
+  readonly signal?: AbortSignal;
 }
 
 export type ModelErrorKind = 'timeout' | 'aborted' | 'overloaded' | 'rate-limited' | 'auth' | 'invalid-request' | 'server' | 'network' | 'protocol';
@@ -234,6 +249,31 @@ export class AnthropicClient implements ModelClient {
     };
   }
 
+  /**
+   * A max_tokens 0 request: the API writes the cache up to the last
+   * breakpoint and answers at once with no output. It must not stream, and
+   * it sends the call's own model, thinking and effort, which are part of
+   * the cached prefix.
+   */
+  async warm(call: WarmCall): Promise<ModelUsage> {
+    const body = { ...this.body({ purpose: call.purpose, prompt: call.prompt, maxTokens: 0 }), max_tokens: 0, stream: false };
+    let response: Response;
+    try {
+      response = await this.fetcher(`${this.options.baseUrl ?? 'https://api.anthropic.com'}/v1/messages`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-api-key': this.options.apiKey, 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify(body),
+        signal: call.signal ?? AbortSignal.timeout(this.options.timeoutMs ?? 60_000),
+      });
+    } catch (error) {
+      throw new ModelError('network', `The model could not be reached: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (!response.ok) throw await httpError(response);
+    const reply = (await response.json()) as { usage?: Record<string, unknown> };
+    const n = (key: string) => (typeof reply.usage?.[key] === 'number' ? (reply.usage[key] as number) : 0);
+    return { inputTokens: n('input_tokens'), outputTokens: n('output_tokens'), cacheReadTokens: n('cache_read_input_tokens'), cacheWriteTokens: n('cache_creation_input_tokens') };
+  }
+
   async complete(call: ModelCall): Promise<ModelReply> {
     const attempts = 1 + Math.max(0, this.options.retries ?? 1);
     let last: unknown;
@@ -286,6 +326,7 @@ export class AnthropicClient implements ModelClient {
     if (!response.body) throw new ModelError('protocol', 'The model sent no body');
 
     const state: StreamState = { text: '', model: this.modelFor(call.purpose), stopReason: null, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+    let firstTextMs: number | undefined;
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
@@ -301,7 +342,10 @@ export class AnthropicClient implements ModelClient {
           buffer = buffer.slice(boundary + 2);
           const delta = applyEvent(event, state);
           if (delta) {
-            if (state.text.length === delta.length) onFirstText();
+            if (state.text.length === delta.length) {
+              firstTextMs = Date.now() - started;
+              onFirstText();
+            }
             call.onText?.(delta);
           }
           boundary = buffer.indexOf('\n\n');
@@ -330,6 +374,7 @@ export class AnthropicClient implements ModelClient {
         cacheWriteTokens: state.usage.cacheWrite,
       },
       ms: Date.now() - started,
+      ...(firstTextMs !== undefined ? { firstTextMs } : {}),
     };
   }
 }

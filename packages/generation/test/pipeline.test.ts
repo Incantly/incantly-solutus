@@ -2,7 +2,9 @@ import { SIZE_BUDGETS } from '@incantly/core';
 import { REFERENCE_SCENES } from '@incantly/core/scenes';
 import { describe, expect, it } from 'vitest';
 import { ModelError, NO_USAGE, ScriptedModel, type CallPurpose, type ModelCall, type ModelClient } from '../src/models';
-import { DEFAULT_MAX_TOKENS, MAX_REPLY_TOKENS, Generator, conceptAndIdea, standardFigure, type FailedCheck } from '../src/pipeline';
+import { scenePrompt } from '../src/context';
+import { DEFAULT_MAX_TOKENS, MAX_REPLY_TOKENS, Generator, conceptAndIdea, planHead, standardFigure, type FailedCheck } from '../src/pipeline';
+import { validatePlan } from '../src/plan';
 import { isolatedProbe } from '../src/probe';
 import { faultyScript, referenceModel, type Fault } from '../src/reference-model';
 
@@ -392,6 +394,55 @@ describe('the generation pipeline', () => {
     expect(conceptAndIdea('```json\n{ "concept": "projectile mot')).toBeNull();
     expect(conceptAndIdea('{ "concept": "projectile motion", "idea": "A ball')).toBeNull();
     expect(conceptAndIdea('{ "concept": "projectile motion", "idea": "A ball \\"flies\\" in an arc.", "ki')).toEqual({ concept: 'projectile motion', idea: 'A ball "flies" in an arc.' });
+  });
+
+  it('reads a streaming plan\'s head, which gives the scene call the same prefix as the whole plan', () => {
+    for (const scene of Object.values(REFERENCE_SCENES)) {
+      const plan = validatePlan(scene.plan).plan!;
+      for (const text of [JSON.stringify(plan), JSON.stringify(plan, null, 2)]) {
+        const reply = '```json\n' + text + '\n```';
+        const cut = reply.indexOf('"model"');
+        expect(planHead(reply.slice(0, cut + 5)), scene.id).toBeNull();
+        const head = planHead(reply.slice(0, cut + 12));
+        expect(head, scene.id).not.toBeNull();
+        expect(scenePrompt(head!).prompt.system, scene.id).toEqual(scenePrompt(plan).prompt.system);
+      }
+    }
+    expect(planHead('{"concept": "a", "idea": "unfinished')).toBeNull();
+  });
+
+  it('writes the scene call\'s prefix while the plan streams, before the plan ends', async () => {
+    const sine = REFERENCE_SCENES['sine-wave']!;
+    const events: string[] = [];
+    let warmed: ModelCall['prompt'] | null = null;
+    const scripted = new ScriptedModel((call) => {
+      events.push(`${call.purpose} reply`);
+      return call.purpose === 'plan' ? '```json\n' + JSON.stringify(sine.plan) + '\n```' : '```edit js\n```';
+    }, { chunk: 16 });
+    const model: ModelClient = {
+      name: 'warming',
+      modelFor: (purpose: CallPurpose) => scripted.modelFor(purpose),
+      complete: (call: ModelCall) =>
+        scripted.complete({
+          ...call,
+          ...(call.onText ? { onText: (delta: string) => { call.onText!(delta); if (call.purpose === 'plan' && delta.includes('}],"steps"')) events.push('plan streaming'); } } : {}),
+        }),
+      warm: async (call) => {
+        events.push(`warm ${call.purpose}`);
+        warmed = call.prompt;
+        return { ...NO_USAGE, cacheWriteTokens: 9000 };
+      },
+    };
+    const state = await new Generator({ model, probe: isolatedProbe, retrieve: false }).generate({ prompt: 'Show me a sine wave.' });
+    expect(state.status, state.failure?.reason).toBe('approved');
+    expect(events.indexOf('warm scene')).toBeGreaterThan(-1);
+    expect(events.indexOf('warm scene')).toBeLessThan(events.indexOf('scene reply'));
+    // The prefix it wrote is the scene call's own.
+    expect(warmed!.system).toEqual(scenePrompt(state.plan!).prompt.system);
+    expect(state.usage.cacheWriteTokens).toBeGreaterThanOrEqual(9000);
+    // Off, or with a client that cannot warm, nothing is written ahead.
+    const off = await new Generator({ model, probe: isolatedProbe, retrieve: false, warm: false }).generate({ prompt: 'Show me a sine wave.' });
+    expect(off.warmed).toBeNull();
   });
 
   it('stops the library build when the plan names another concept, and goes on from that plan', async () => {

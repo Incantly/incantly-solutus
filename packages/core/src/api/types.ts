@@ -227,7 +227,9 @@ export interface Handle {
   readonly handle: this;
   /** Writes attributes. Unchanged values cost nothing. */
   set(attributes: AttributeValues): this;
+  /** Moves it so its own (0, 0) sits at x, y. */
   at(x: number, y: number): this;
+  /** Turns it clockwise about cx, cy in its own units, before at() moves it: after at(x, y), leave the pivot out. */
   rotate(degrees: number, cx?: number, cy?: number): this;
   scale(sx: number, sy?: number): this;
   show(visible?: boolean): this;
@@ -549,6 +551,7 @@ export interface ShapeHelpers {
   /** An inductor or solenoid seen side on. */
   coil(x1: number, y1: number, x2: number, y2: number, options?: { readonly loops?: number; readonly width?: number }): string;
   wave(x1: number, y1: number, x2: number, y2: number, options?: { readonly amplitude?: number; readonly wavelength?: number; readonly phase?: number }): string;
+  /** A gear or sprocket of outer radius r; depth is the teeth's height, a fraction of r under 1 (default 0.18), else units. */
   gear(cx: number, cy: number, r: number, options?: { readonly teeth?: number; readonly depth?: number }): string;
   /** The outline around circles [cx, cy, r], such as a belt over pulleys. */
   hull(circles: ReadonlyArray<Vec3>): string;

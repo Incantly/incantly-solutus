@@ -84,7 +84,9 @@ const wave: ShapeHelpers['wave'] = (x1, y1, x2, y2, options = {}) => {
 const gear: ShapeHelpers['gear'] = (cx, cy, r, options = {}) => {
   finite('gear', cx, cy, r);
   const teeth = count(options.teeth, 12, 3, 120, 'gear teeth');
-  const depth = r * (options.depth ?? 0.18);
+  // Under 1 the depth is a fraction of the radius; 1 or more is stage units, as a scene writing depth: 4 means.
+  const asked = options.depth ?? 0.18;
+  const depth = Math.min(r * 0.5, Math.max(0, asked < 1 ? r * asked : asked));
   const points: Vec2[] = [];
   for (let i = 0; i < teeth; i++) {
     const a = (i / teeth) * 2 * Math.PI;

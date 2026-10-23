@@ -294,8 +294,12 @@ function readModel(value: unknown, names: ReadonlySet<string>, problems: Problem
     }
     return [...new Set(found)];
   };
+  // An output declared with no dependencies is a constant, such as φ: the scene computes it, but it is not an
+  // output. It is dropped rather than rejected, as a re-plan costs a whole model call.
+  const constants = new Set(written.filter((o) => o.depends.length === 0).map((o) => o.name));
   const outputs: PlanOutput[] = [];
   for (const output of written) {
+    if (constants.has(output.name)) continue;
     const reachable = inputsOf(output, new Set([output.name]));
     if (reachable.length === 0) {
       problems.push({

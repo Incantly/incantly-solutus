@@ -138,17 +138,24 @@ export function parseReport(problems: readonly string[], missing: readonly Fragm
 // Static validation
 // ---------------------------------------------------------------------------
 
-/** At most this many validator errors are quoted; the first ones usually explain the rest. */
+/**
+ * At most this many validator errors are quoted, one of each kind first: a
+ * repair that never saw a kind of error leaves it in place, and a second
+ * failure ends the generation.
+ */
 const MAX_DIAGNOSTICS = 5;
 
 export function validationReport(diagnostics: readonly Diagnostic[], fragments: FragmentSet, attempt = 1, of = 1): RepairReport {
   const errors = diagnostics.filter((d) => d.severity === 'error');
-  const quoted = errors.slice(0, MAX_DIAGNOSTICS);
+  const firsts = errors.filter((d, i) => errors.findIndex((e) => e.rule === d.rule) === i);
+  const chosen = new Set([...new Set([...firsts, ...errors])].slice(0, MAX_DIAGNOSTICS));
+  const quoted = errors.filter((d) => chosen.has(d));
+  const rest = errors.filter((d) => !chosen.has(d));
   const lines = [header(attempt, of), '', 'FAILURE  validation: the scene was rejected before it ran'];
   for (const diagnostic of quoted) {
     lines.push('', `ERROR    ${formatDiagnostic(diagnostic)}`, ...where(diagnostic.fragment, diagnostic.line, diagnostic.column, fragments));
   }
-  if (errors.length > quoted.length) lines.push('', `         ...and ${errors.length - quoted.length} more of the same kinds.`);
+  if (rest.length > 0) lines.push('', `         ...and ${rest.length} more: ${rest.map((d) => `${d.rule} at ${d.fragment} line ${d.line}`).join('; ')}.`);
   const rules = quoted.map(ruleFor);
   lines.push('', quoteRules(rules));
   const first = quoted[0];

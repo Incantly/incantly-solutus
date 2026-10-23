@@ -154,6 +154,19 @@ describe('inc.shapes (SV-4, DG-1)', () => {
     expect(shapes.blob(0, 0, 10, { seed: 3 })).toBe(shapes.blob(0, 0, 10, { seed: 3 }));
   });
 
+  it('keeps a gear\'s teeth between half its radius and its rim, whether depth is a fraction or units', () => {
+    // A sprocket once asked for depth: 4, meaning units, and drew spikes three radii long.
+    const radii = (d: string) => {
+      const n = d.match(/-?\d+(\.\d+)?/g)!.map(Number);
+      return n.filter((_, i) => i % 2 === 0).map((x, i) => Math.hypot(x - 50, n[2 * i + 1]! - 50));
+    };
+    for (const [depth, inner] of [[undefined, 50 * 0.82], [0.1, 45], [4, 46], [500, 25]] as const) {
+      const r = radii(shapes.gear(50, 50, 50, { teeth: 20, ...(depth !== undefined ? { depth } : {}) }));
+      expect(Math.max(...r), String(depth)).toBeCloseTo(50, 1);
+      expect(Math.min(...r), String(depth)).toBeCloseTo(inner, 1);
+    }
+  });
+
   it('draws circuit symbols, lenses, tanks and braces', () => {
     for (const d of [
       shapes.battery(0, 0, 100, 0, { cells: 2 }),

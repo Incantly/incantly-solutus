@@ -110,7 +110,7 @@ describe('the generation context', () => {
     expect(prompt.system[1]!.text).toContain('This is the BUILD call');
     expect(prompt.system[1]!.text).toContain('interface Graph {');
     expect(prompt.system[1]!.text).toContain(REFERENCE_SCENES.projectile!.js.trim().split('\n')[0]);
-    expect(prompt.user).toContain('"concept": "ball thrown on another planet"');
+    expect(prompt.user).toContain('"concept":"ball thrown on another planet"');
     expect(prompt.user).toContain('Size: quick');
   });
 

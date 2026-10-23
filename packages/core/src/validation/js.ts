@@ -317,7 +317,7 @@ const STRING_METHODS = [
   'trimEnd',
   'trimStart',
 ];
-const NUMBER_METHODS = ['toFixed', 'toPrecision', 'toString'];
+const NUMBER_METHODS = ['toFixed', 'toPrecision', 'toExponential', 'toString'];
 
 /** Every method name a scene may call on a value whose type the validator could not follow. */
 const KNOWN_METHODS: ReadonlySet<string> = (() => {
@@ -1374,7 +1374,7 @@ class JsValidator {
     if (method !== null && ARRAY_RETURNING.has(method) && (receiver.t === 'array' || receiver.t === 'string' || receiver.t === 'unknown')) {
       return method === 'split' || receiver.t === 'array' ? ARRAY : UNKNOWN;
     }
-    if (method === 'toFixed' || method === 'toPrecision') return STRING;
+    if (method === 'toFixed' || method === 'toPrecision' || method === 'toExponential') return STRING;
     if (calleeType.t === 'handle' && calleeType.kind === 'Formula') return NUMBER;
     return UNKNOWN;
   }
