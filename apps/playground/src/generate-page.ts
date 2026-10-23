@@ -4,6 +4,7 @@ import { FigureGeneration, FigureNode, MemoryFigureStore, flushFigures, newFigur
 import { Editor, type JSONContent } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import { clearDebug, loadDebug, recordDebug, recordingFetch } from './debug-log';
+import { CHATS_KEY, keepFigure } from './saved-chats';
 
 interface Turn { editor: Editor; readonly host: HTMLElement; readonly generate: FigureGenerate }
 interface ChatMessage {
@@ -19,8 +20,6 @@ interface Chat {
   messages: ChatMessage[];
 }
 
-/** Where chats survive reloads. The API key is deliberately never kept: it stays in the page and the server session. */
-const CHATS_KEY = 'incantly-playground-chats';
 
 interface SavedChats {
   chats: Array<Pick<Chat, 'id' | 'title' | 'createdAt' | 'messages'>>;
@@ -821,6 +820,8 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
         const node = editor.getJSON().content?.find((child) => child.type === 'incantlyFigure');
         activeChat.messages.push({ role: 'assistant', content: 'Generated interactive figure.', ...(node ? { figure: node } : {}) });
         saveChats();
+        // Kept on the dev server too, so the gallery draws it in any browser.
+        void keepFigure(request, { concept: result.figure.concept, fragments: result.figure.fragments });
         recordDebug({ kind: 'done', label: 'figure', body: { concept: result.figure.concept, generationId: result.figure.generationId ?? null, durationMs: Math.round(elapsedMs) } });
       } else {
         // The fallback is the outcome: it never reaches the 'checking' stage,

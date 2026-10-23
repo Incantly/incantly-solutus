@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { defineConfig, loadEnv, type Plugin, type ViteDevServer } from 'vite';
@@ -14,6 +15,11 @@ import { defineConfig, loadEnv, type Plugin, type ViteDevServer } from 'vite';
  * accepts or turns down a published figure, as the gallery command does, and
  * /api/dev/gallery/clear empties the gallery.
  *
+ * /api/dev/figures keeps the figures the chat approved, by prompt, in a
+ * git-ignored file beside this config: GET lists them, POST keeps one, the
+ * latest for a prompt replacing the one before. The gallery draws a prompt
+ * card from it in any browser, and it survives a restart of this server.
+ *
  * The interactive playground creates an
  * ephemeral Anthropic session at /api/dev/session. Its API key stays only in
  * this process's memory and is addressed from the browser by an opaque id.
@@ -24,6 +30,34 @@ import { defineConfig, loadEnv, type Plugin, type ViteDevServer } from 'vite';
  * whether it works. Shell env vars win over .env files.
  */
 const DEV_SECRET = 'playground-only-secret-never-used-in-production';
+const FIGURES_FILE = fileURLToPath(new URL('./.generated/figures.json', import.meta.url));
+
+interface KeptFigure {
+  readonly prompt: string;
+  readonly concept: string;
+  readonly fragments: { readonly html: string; readonly css: string; readonly js: string };
+  readonly approvedAt: string;
+}
+
+async function keptFigures(): Promise<KeptFigure[]> {
+  try {
+    const figures = JSON.parse(await readFile(FIGURES_FILE, 'utf8')) as unknown;
+    return Array.isArray(figures) ? (figures as KeptFigure[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** A figure as the chat sends it, or null: strings only, and no bigger than a scene may be. */
+function readFigure(input: unknown): KeptFigure | null {
+  if (typeof input !== 'object' || input === null) return null;
+  const { prompt, concept, fragments } = input as { prompt?: unknown; concept?: unknown; fragments?: unknown };
+  if (typeof prompt !== 'string' || prompt.trim() === '' || prompt.length > 2000 || typeof concept !== 'string' || concept.length > 200) return null;
+  if (typeof fragments !== 'object' || fragments === null) return null;
+  const { html, css, js } = fragments as { html?: unknown; css?: unknown; js?: unknown };
+  if (typeof html !== 'string' || typeof css !== 'string' || typeof js !== 'string' || html.length + css.length + js.length > 200_000) return null;
+  return { prompt: prompt.trim(), concept, fragments: { html, css, js }, approvedAt: new Date().toISOString() };
+}
 const DEV_TICKET_SECRET = 'playground-only-ticket-secret-never-used-in-production';
 
 function anthropicEnv(): { key: string | null; source: string } {
@@ -68,12 +102,12 @@ function generationService(): Plugin {
   const sessions = new Map<string, { apiKey: string; planModel: string; sceneModel: string }>();
   const models = new Set(['claude-haiku-5-5', 'claude-sonnet-5-5', 'claude-opus-5-5']);
 
-  async function body(req: IncomingMessage): Promise<unknown> {
+  async function body(req: IncomingMessage, limit = 16_384): Promise<unknown> {
     const chunks: Buffer[] = [];
     let size = 0;
     for await (const chunk of req as AsyncIterable<Buffer>) {
       size += chunk.length;
-      if (size > 16_384) throw new Error('Request body is too large');
+      if (size > limit) throw new Error('Request body is too large');
       chunks.push(chunk);
     }
     return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown;
@@ -176,6 +210,17 @@ function generationService(): Plugin {
             // Every service's records in the order they were made, so the last is the latest whichever service made it.
             const records = [...services.values()].flatMap((s) => s.records.records as Array<{ at?: string }>);
             return json(200, records.sort((a, b) => String(a.at ?? '').localeCompare(String(b.at ?? ''))));
+          }
+          if (path === '/api/dev/figures' && req.method === 'GET') return json(200, await keptFigures());
+          if (path === '/api/dev/figures' && req.method === 'POST') {
+            const figure = readFigure(await body(req, 256_000));
+            if (!figure) return json(400, { kept: false });
+            const figures = [figure, ...(await keptFigures()).filter((f) => f.prompt !== figure.prompt)].slice(0, 200);
+            await mkdir(fileURLToPath(new URL('./.generated/', import.meta.url)), { recursive: true });
+            // Written whole, then moved into place, so a reader never sees half a file.
+            await writeFile(`${FIGURES_FILE}.tmp`, JSON.stringify(figures, null, 1));
+            await rename(`${FIGURES_FILE}.tmp`, FIGURES_FILE);
+            return json(200, { kept: true });
           }
           if (path === '/api/dev/gallery/clear') {
             gallery?.entries.clear();

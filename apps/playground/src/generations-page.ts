@@ -1,5 +1,6 @@
 import { sandboxAdapter, type FigureHandle, type FigureStyle } from '@incantly/core';
 import { referenceScene, referenceSceneIds } from '@incantly/core/scenes';
+import { keptFigures, savedFigureFor, type SavedFigure } from './saved-chats';
 
 /** The gallery: every generation the agent can make, as searchable boxes. */
 
@@ -27,6 +28,21 @@ const PROMPT_CARDS: readonly GalleryCard[] = [
 ];
 
 /** Generated from packages/core/scenes by scripts/generate.mjs. */
+/** Figures the dev server keeps for the chat, by prompt; filled when the page loads. */
+let kept: ReadonlyMap<string, SavedFigure> = new Map();
+
+/**
+ * What a card draws: its reviewed scene, or else the latest figure the chat
+ * built for its prompt, as the dev server keeps it or this browser saved it.
+ * A prompt card nobody has generated yet has none.
+ */
+function figureFor(card: GalleryCard): { readonly concept: string; readonly html: string; readonly css: string; readonly js: string } | null {
+  const scene = card.sceneId ? referenceScene(card.sceneId) : undefined;
+  if (scene) return { concept: scene.plan.concept, html: scene.html, css: scene.css, js: scene.js };
+  const saved = kept.get(card.prompt.trim()) ?? savedFigureFor(card.prompt);
+  return saved ? { concept: saved.concept, ...saved.fragments } : null;
+}
+
 function reviewedCards(): GalleryCard[] {
   return referenceSceneIds().flatMap((sceneId) => {
     const scene = referenceScene(sceneId);
@@ -71,6 +87,10 @@ export function mountGenerationsPage(root: HTMLElement): void {
   grid.setAttribute('aria-label', 'Generations');
 
   const catalog = [...PROMPT_CARDS, ...reviewedCards()];
+  // A prompt card's figure may be on the dev server: thumbnails mount once it has answered.
+  const figuresReady = keptFigures().then((figures) => {
+    kept = figures;
+  });
   const cards: Array<{ el: HTMLElement; card: GalleryCard }> = [];
   const previews: FigureHandle[] = [];
   let preview: FigureHandle | null = null;
@@ -126,12 +146,12 @@ export function mountGenerationsPage(root: HTMLElement): void {
     preview = null;
     const visual = detail.querySelector('.gallery-detail__visual') as HTMLElement;
     visual.replaceChildren();
-    const scene = card.sceneId ? referenceScene(card.sceneId) : undefined;
+    const scene = figureFor(card);
     if (scene) {
       // Controls beside the drawing, so the whole figure fits the screen at once.
       preview = sandboxAdapter.mount(visual, { html: scene.html, css: scene.css, js: scene.js }, {
         autoplay: false,
-        title: `Interactive figure: ${scene.plan.concept}`,
+        title: `Interactive figure: ${scene.concept}`,
         style: { layout: { controls: 'right', panelWidth: '340px', sceneHeight: '70vh' } },
       });
     } else {
@@ -167,14 +187,14 @@ export function mountGenerationsPage(root: HTMLElement): void {
   const mountThumbnail = (visual: HTMLElement): void => {
     const entry = byVisual.get(visual);
     if (!entry) return;
-    const scene = entry.card.sceneId ? referenceScene(entry.card.sceneId) : undefined;
+    const scene = figureFor(entry.card);
     if (!scene) return;
     visual.replaceChildren();
     // A thumbnail stays paused and alone in its box: the drawing, not the whole figure.
     previews.push(
       sandboxAdapter.mount(visual, { html: scene.html, css: scene.css, js: scene.js }, {
         autoplay: false,
-        title: `Interactive figure: ${scene.plan.concept}`,
+        title: `Interactive figure: ${scene.concept}`,
         style: thumbnailStyle,
         onError: (error) => entry.errors.push(`${error.phase}: ${error.message}`),
       }),
@@ -210,8 +230,7 @@ export function mountGenerationsPage(root: HTMLElement): void {
     const visual = el.querySelector('.gallery-card__visual') as HTMLElement;
     const errors: string[] = [];
     byVisual.set(visual, { card, errors });
-    if (cardPreviews) cardPreviews.observe(visual);
-    else mountThumbnail(visual);
+    void figuresReady.then(() => (cardPreviews ? cardPreviews.observe(visual) : mountThumbnail(visual)));
     el.addEventListener('click', () => {
       for (const other of cards) other.el.classList.remove('is-picked');
       el.classList.add('is-picked');

@@ -319,7 +319,21 @@ export function mergeStyles(base: FigureStyle | undefined, over: FigureStyle | u
 export function styleForBridge(style: FigureStyle | undefined): FigureStyle | undefined {
   if (!style) return undefined;
   const resolved = resolveStyle(style);
-  return { preset: resolved.preset, tokens: resolved.tokens, classNames: resolved.classNames, layout: resolved.layout, show: resolved.show };
+  const sceneHeight = hostViewportLength(resolved.layout.sceneHeight);
+  const layout = sceneHeight ? { ...resolved.layout, sceneHeight } : resolved.layout;
+  return { preset: resolved.preset, tokens: resolved.tokens, classNames: resolved.classNames, layout, show: resolved.show };
+}
+
+/**
+ * A sandboxed frame grows to fit what it draws, so inside it a viewport
+ * height is the frame's own: a scene 70vh tall makes the frame taller, which
+ * makes the scene taller, up to the frame's cap. The host resolves it against
+ * its own window before the style crosses into the frame.
+ */
+export function hostViewportLength(length: string | undefined, height = typeof globalThis.innerHeight === 'number' ? globalThis.innerHeight : 0): string | undefined {
+  const match = length ? /^(\d+(?:\.\d+)?)(?:vh|svh|dvh)$/.exec(length) : null;
+  if (!match || !(height > 0)) return length;
+  return `${Math.round((Number(match[1]) * height) / 100)}px`;
 }
 
 /** Host CSS a frame can carry: a stylesheet with nothing that could close the style element. */

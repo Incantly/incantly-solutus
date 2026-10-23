@@ -14,6 +14,9 @@ packages/core/src/scenes/generated.ts
 packages/core/src/kits/generated.ts
 packages/generation/src/generated/
 
+# Figures the playground's chat approved (apps/playground/vite.config.ts)
+apps/playground/.generated/
+
 # Test output
 test-results/
 playwright-report/

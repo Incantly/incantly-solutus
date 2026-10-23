@@ -6,7 +6,7 @@ import { equationElement, linearEquation, mathElement, symbolText } from '../src
 import { measureText } from '../src/renderer/pointer';
 import { exportStage, exportStages, stagesOf } from '../src/sandbox/snapshot';
 import { FORMULA_SETTLE_MS } from '../src/renderer/panels';
-import { checkStyle, hostCss, mergeStyles, resolveStyle, styleForBridge } from '../src/renderer/style';
+import { checkStyle, hostCss, hostViewportLength, mergeStyles, resolveStyle, styleForBridge } from '../src/renderer/style';
 
 const mounted: MountedFigure[] = [];
 
@@ -710,6 +710,21 @@ describe('integrator styles', () => {
     expect(styleForBridge({ css: '.x{}', preset: 'soft' })).not.toHaveProperty('css');
     expect(hostCss({ css: '.a::before { content: "<" }' })).toBe('.a::before { content: "\\3c " }');
     expect(hostCss({ css: '</style><script>' })).toBe('');
+  });
+
+  it("resolves a scene height in viewport units against the host's window, not the frame's", () => {
+    // Inside a frame that grows to fit its content, 70vh is 70% of the frame: the scene and the frame chase each other.
+    expect(hostViewportLength('70vh', 800)).toBe('560px');
+    expect(hostViewportLength('50.5dvh', 1000)).toBe('505px');
+    expect(hostViewportLength('360px', 800)).toBe('360px');
+    expect(hostViewportLength('70vh', 0)).toBe('70vh');
+    const before = globalThis.innerHeight;
+    Object.defineProperty(globalThis, 'innerHeight', { value: 600, configurable: true, writable: true });
+    try {
+      expect(styleForBridge({ layout: { sceneHeight: '70vh' } })?.layout?.sceneHeight).toBe('420px');
+    } finally {
+      Object.defineProperty(globalThis, 'innerHeight', { value: before, configurable: true, writable: true });
+    }
   });
 });
 
