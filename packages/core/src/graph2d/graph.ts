@@ -1050,24 +1050,33 @@ export class Graph2D implements Graph, ViewController {
   }
 
   label(x: number, y: number, value: Readable, options?: ElementOptions): TextHandle {
-    const handle = this.inner.text(0, 0, value, { layer: 'labels', ...options });
-    const place = () => {
-      const [px, py] = this.map(x, y);
-      handle.set({ x: px, y: py });
-    };
-    place();
-    this.remaps.push(place);
-    return handle;
+    return this.placed(this.inner.text(0, 0, value, { layer: 'labels', ...options }), x, y);
   }
 
   equation(x: number, y: number, source: Readable, options?: EquationOptions): TextHandle {
-    const handle = this.inner.equation(0, 0, source, options);
+    return this.placed(this.inner.equation(0, 0, source, options), x, y);
+  }
+
+  /**
+   * Keeps a text at a point in data units, through zoom and resize. Its at()
+   * moves it in data units too, as a graph point's does: a label that follows
+   * a value is written label.at(n, value), never in the stage's pixels.
+   */
+  private placed(handle: TextHandle, x: number, y: number): TextHandle {
+    let px = x;
+    let py = y;
     const place = () => {
-      const [px, py] = this.map(x, y);
-      handle.set({ x: px, y: py });
+      const [sx, sy] = this.map(px, py);
+      handle.set({ x: sx, y: sy });
     };
     place();
     this.remaps.push(place);
+    handle.at = (nx: number, ny: number) => {
+      px = nx;
+      py = ny;
+      place();
+      return handle;
+    };
     return handle;
   }
 

@@ -1,4 +1,5 @@
 import { closureFor, removesCause, type ClosedClass } from './closed';
+import { DEFAULT_DEADLINE_MS } from './pipeline';
 import type { FailureRecord, Outcome } from './records';
 
 /**
@@ -56,7 +57,7 @@ export function spread(values: readonly number[]): Spread {
 
 const share = (part: number, whole: number) => (whole === 0 ? null : part / whole);
 
-export function dashboard(records: readonly FailureRecord[], deadlineMs = 25_000): Dashboard {
+export function dashboard(records: readonly FailureRecord[], deadlineMs = DEFAULT_DEADLINE_MS): Dashboard {
   const outcomes: Record<Outcome, number> = { 'first-attempt': 0, repaired: 0, 'failed-plan': 0, 'failed-scene': 0, 'failed-model': 0, pending: 0 };
   for (const r of records) outcomes[r.outcome]++;
   const settled = records.filter((r) => r.outcome !== 'pending');

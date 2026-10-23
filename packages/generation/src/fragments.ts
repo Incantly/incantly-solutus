@@ -22,11 +22,25 @@ const FENCE = /^\s*```\s*([A-Za-z]*)\s*$/;
 export class FragmentStream {
   private buffer = '';
   private open: { readonly name: FragmentName | null; readonly language: string; readonly lines: string[] } | null = null;
-  private readonly found: FragmentSet = {};
-  private readonly problems: string[] = [];
+  private found: FragmentSet = {};
+  private problems: string[] = [];
   private ended = false;
 
   constructor(private readonly onFragment?: (name: FragmentName, source: string) => void) {}
+
+  /**
+   * Starts the reply over. A call retried after a max_tokens cut-off
+   * re-streams from its top: what the first attempt left half-parsed must
+   * not stand, so the fragments found so far and the problems they caused
+   * are dropped too.
+   */
+  reset(): void {
+    this.buffer = '';
+    this.open = null;
+    this.found = {};
+    this.problems = [];
+    this.ended = false;
+  }
 
   /** Feeds the next piece of the reply. */
   push(delta: string): void {

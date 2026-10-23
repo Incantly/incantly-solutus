@@ -40,6 +40,24 @@ describe('graph2d', () => {
     expect(toY(0)).toBe(340);
   });
 
+  it('moves a label or an equation in data units, as a point moves', () => {
+    // A Fibonacci scene once wrote tag.at(8, 471) on a 0 to 7000 axis and its label fell far below the stage.
+    let ids: number[] = [];
+    let expected: Array<[number, number]> = [];
+    const { runtime } = run((inc) => {
+      const g = inc.graph2d('#g', { x: [0, 21], y: [0, 7000], title: 'Terms' });
+      const tag = g.label(1, 3500, 'F1 = 1').at(8, 471);
+      const eq = g.equation(1, 3500, 'F_n').at(20, 6500);
+      ids = [nodeOf(tag).id, nodeOf(eq).id];
+      expected = [[g.toX(8), g.toY(471)], [g.toX(20), g.toY(6500)]];
+    });
+    ids.forEach((id, i) => {
+      const attrs = runtime.graph.nodes.get(id)!.attrs;
+      expect(Number(attrs.get('x'))).toBeCloseTo(expected[i]![0], 1);
+      expect(Number(attrs.get('y'))).toBeCloseTo(expected[i]![1], 1);
+    });
+  });
+
   it('lets a scene take a graph or stage method off it and call it alone', () => {
     // Once a lens scene wrote const X = graph.toX and threw on its first X(0).
     let mapped: number[] = [];

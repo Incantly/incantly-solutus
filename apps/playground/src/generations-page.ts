@@ -1,21 +1,44 @@
+import { sandboxAdapter, type FigureHandle, type FigureStyle } from '@incantly/core';
+import { referenceScene, referenceSceneIds } from '@incantly/core/scenes';
+
 /** The gallery: every generation the agent can make, as searchable boxes. */
 
 interface GalleryCard {
   readonly title: string;
   readonly prompt: string;
   readonly tag: string;
+  /** A reviewed scene mounts live in the detail panel; prompt-only cards generate first. */
+  readonly sceneId?: string;
 }
 
 /**
- * The gallery cards. One example is kept so the page stays a working
- * reference; add the real gallery here as implementations land — each
- * entry needs a short title, a tag for the search, and the exact
- * learner prompt. Cars, engines, planes and the other showcase prompts
- * are intentionally left out until their generations exist.
+ * The gallery cards. Real generations join here as implementations land —
+ * each entry needs a short title, a tag for the search, and the exact
+ * learner prompt.
  */
-const CARDS: readonly GalleryCard[] = [
-  { title: 'Tones into one waveform', tag: 'Waves', prompt: 'How several pure tones with different frequencies combine into one waveform, with a control for how many tones are added.' },
+const PROMPT_CARDS: readonly GalleryCard[] = [
+  {
+    title: 'Bicycle chain and derailleur',
+    tag: 'Mechanics',
+    prompt: 'I want to learn the way a bicycle works, like the chains. Some bicycles have the back chain and two extra knobs underneath. How does that work? Can you show me a representation of it?',
+  },
+  { title: 'Fibonacci sequence', tag: 'Sequences', prompt: 'Show me the Fibonacci sequence: each term is the sum of the two before it, and how fast the terms grow.' },
+  { title: 'Golden ratio', tag: 'Sequences', prompt: 'Show me the golden ratio: how the ratio of consecutive Fibonacci numbers settles on φ, and the golden rectangle and spiral it makes.' },
 ];
+
+/** Generated from packages/core/scenes by scripts/generate.mjs. */
+function reviewedCards(): GalleryCard[] {
+  return referenceSceneIds().flatMap((sceneId) => {
+    const scene = referenceScene(sceneId);
+    if (!scene) return [];
+    return [{
+      sceneId,
+      title: scene.plan.concept,
+      tag: `Reviewed ${scene.plan.kind}`,
+      prompt: `Show me ${scene.plan.concept}. ${scene.plan.idea}`.slice(0, 500),
+    }];
+  });
+}
 
 export function mountGenerationsPage(root: HTMLElement): void {
   root.className = 'gallery-page';
@@ -47,7 +70,28 @@ export function mountGenerationsPage(root: HTMLElement): void {
   grid.className = 'gallery-grid';
   grid.setAttribute('aria-label', 'Generations');
 
+  const catalog = [...PROMPT_CARDS, ...reviewedCards()];
   const cards: Array<{ el: HTMLElement; card: GalleryCard }> = [];
+  const previews: FigureHandle[] = [];
+  let preview: FigureHandle | null = null;
+  /** The card thumbnail shows the drawing only, no header or controls. */
+  const thumbnailStyle: FigureStyle = {
+    show: {
+      header: false,
+      idea: false,
+      readouts: false,
+      legend: false,
+      controls: false,
+      transport: false,
+      speed: false,
+      settings: false,
+      undo: false,
+      fullscreen: false,
+      steps: false,
+      description: false,
+      zoom: false,
+    },
+  };
 
   // The detail panel that slides in from the side when a card is picked.
   const overlay = document.createElement('div');
@@ -67,7 +111,7 @@ export function mountGenerationsPage(root: HTMLElement): void {
         </svg>
       </button>
     </div>
-    <span class="gallery-detail__visual" aria-hidden="true"><span class="gallery-card__shimmer"></span></span>
+    <div class="gallery-detail__visual"></div>
     <h2 class="gallery-detail__title"></h2>
     <p class="gallery-detail__prompt"></p>
     <button type="button" class="gallery-detail__generate">Generate in chat</button>
@@ -78,11 +122,30 @@ export function mountGenerationsPage(root: HTMLElement): void {
     detail.querySelector('.gallery-detail__title')!.textContent = card.title;
     detail.querySelector('.gallery-detail__prompt')!.textContent = card.prompt;
     detail.dataset.prompt = card.prompt;
+    preview?.destroy();
+    preview = null;
+    const visual = detail.querySelector('.gallery-detail__visual') as HTMLElement;
+    visual.replaceChildren();
+    const scene = card.sceneId ? referenceScene(card.sceneId) : undefined;
+    if (scene) {
+      // Controls beside the drawing, so the whole figure fits the screen at once.
+      preview = sandboxAdapter.mount(visual, { html: scene.html, css: scene.css, js: scene.js }, {
+        autoplay: false,
+        title: `Interactive figure: ${scene.plan.concept}`,
+        style: { layout: { controls: 'right', panelWidth: '340px', sceneHeight: '70vh' } },
+      });
+    } else {
+      const shimmer = document.createElement('span');
+      shimmer.className = 'gallery-card__shimmer';
+      visual.append(shimmer);
+    }
     overlay.hidden = false;
     detail.hidden = false;
     (detail.querySelector('.gallery-detail__generate') as HTMLButtonElement).focus();
   };
   const closeDetail = (): void => {
+    preview?.destroy();
+    preview = null;
     overlay.hidden = true;
     detail.hidden = true;
     for (const { el } of cards) el.classList.remove('is-picked');
@@ -98,7 +161,39 @@ export function mountGenerationsPage(root: HTMLElement): void {
     if (prompt) location.href = `/?page=generate&prompt=${encodeURIComponent(prompt)}`;
   });
 
-  for (const card of CARDS) {
+  // Each card mounts its own live drawing as the learner scrolls to it, so a
+  // preview beats a shimmer and pages with many cards still load fast.
+  const byVisual = new Map<HTMLElement, { card: GalleryCard; errors: string[] }>();
+  const mountThumbnail = (visual: HTMLElement): void => {
+    const entry = byVisual.get(visual);
+    if (!entry) return;
+    const scene = entry.card.sceneId ? referenceScene(entry.card.sceneId) : undefined;
+    if (!scene) return;
+    visual.replaceChildren();
+    // A thumbnail stays paused and alone in its box: the drawing, not the whole figure.
+    previews.push(
+      sandboxAdapter.mount(visual, { html: scene.html, css: scene.css, js: scene.js }, {
+        autoplay: false,
+        title: `Interactive figure: ${scene.plan.concept}`,
+        style: thumbnailStyle,
+        onError: (error) => entry.errors.push(`${error.phase}: ${error.message}`),
+      }),
+    );
+  };
+  const cardPreviews = 'IntersectionObserver' in window
+    ? new IntersectionObserver(
+        (entries) => {
+          for (const entry of entries) {
+            if (!entry.isIntersecting) continue;
+            cardPreviews!.unobserve(entry.target);
+            mountThumbnail(entry.target as HTMLElement);
+          }
+        },
+        { rootMargin: '300px 0px 0px' },
+      )
+    : undefined;
+
+  for (const card of catalog) {
     const el = document.createElement('button');
     el.type = 'button';
     el.className = 'gallery-card';
@@ -112,6 +207,11 @@ export function mountGenerationsPage(root: HTMLElement): void {
     (el.querySelector('.gallery-card__tag') as HTMLElement).textContent = card.tag;
     (el.querySelector('.gallery-card__title') as HTMLElement).textContent = card.title;
     (el.querySelector('.gallery-card__prompt') as HTMLElement).textContent = card.prompt;
+    const visual = el.querySelector('.gallery-card__visual') as HTMLElement;
+    const errors: string[] = [];
+    byVisual.set(visual, { card, errors });
+    if (cardPreviews) cardPreviews.observe(visual);
+    else mountThumbnail(visual);
     el.addEventListener('click', () => {
       for (const other of cards) other.el.classList.remove('is-picked');
       el.classList.add('is-picked');
@@ -138,4 +238,13 @@ export function mountGenerationsPage(root: HTMLElement): void {
   empty.textContent = 'Nothing matches that search.';
 
   root.append(header, grid, empty, overlay, detail);
+  window.__playground = {
+    ready: true,
+    page: 'generations',
+    cards: catalog.map((card) => ({ title: card.title, tag: card.tag, prompt: card.prompt, sceneId: card.sceneId ?? null })),
+  };
+  window.addEventListener('pagehide', () => {
+    preview?.destroy();
+    for (const handle of previews) handle.destroy();
+  }, { once: true });
 }

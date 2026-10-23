@@ -55,7 +55,7 @@ export interface GeneratedFigure {
 
 export type FigureGenerationResult =
   | { readonly kind: 'figure'; readonly figure: GeneratedFigure; readonly notice?: string }
-  | { readonly kind: 'failed'; readonly message: string; readonly reason?: string; readonly level?: string };
+  | { readonly kind: 'failed'; readonly message: string; readonly reason?: string; readonly level?: string; readonly generationId?: string | null };
 
 export type FigureGenerate = (
   request: FigureRequest,

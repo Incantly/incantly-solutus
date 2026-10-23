@@ -28,9 +28,9 @@ export interface SizeBudget {
 }
 
 export const SIZE_BUDGETS: Readonly<Record<SceneSize, SizeBudget>> = Object.freeze({
-  quick: { controls: 3, parts: 8, elements: 400, lines: 60, sceneTokens: 3500, seconds: 10 },
-  standard: { controls: 6, parts: 12, elements: 800, lines: 100, sceneTokens: 5000, seconds: 20 },
-  rich: { controls: 8, parts: 16, elements: 1600, lines: 150, sceneTokens: 6500, seconds: 25 },
+  quick: { controls: 3, parts: 8, elements: 400, lines: 60, sceneTokens: 6000, seconds: 10 },
+  standard: { controls: 6, parts: 12, elements: 800, lines: 100, sceneTokens: 10000, seconds: 20 },
+  rich: { controls: 8, parts: 16, elements: 1600, lines: 150, sceneTokens: 14000, seconds: 25 },
 });
 
 export const SCENE_SIZES = Object.keys(SIZE_BUDGETS) as SceneSize[];

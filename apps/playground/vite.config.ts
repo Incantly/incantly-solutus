@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { defineConfig, loadEnv, type Plugin, type ViteDevServer } from 'vite';
 
@@ -26,7 +27,12 @@ const DEV_SECRET = 'playground-only-secret-never-used-in-production';
 const DEV_TICKET_SECRET = 'playground-only-ticket-secret-never-used-in-production';
 
 function anthropicEnv(): { key: string | null; source: string } {
-  const env = loadEnv('development', process.cwd(), 'ANTHROPIC_');
+  // .env files live beside this config; a dev server started from another
+  // directory must still find them. Shell env vars win over both files.
+  const env = {
+    ...loadEnv('development', process.cwd(), 'ANTHROPIC_'),
+    ...loadEnv('development', fileURLToPath(new URL('.', import.meta.url)), 'ANTHROPIC_'),
+  };
   const fromShell = process.env.ANTHROPIC_API_KEY ?? process.env.ANTHROPIC_AUTH_TOKEN;
   const key = fromShell ?? env.ANTHROPIC_API_KEY ?? env.ANTHROPIC_AUTH_TOKEN ?? null;
   return { key, source: fromShell ? 'shell' : key ? '.env' : 'none' };
@@ -96,10 +102,10 @@ function generationService(): Plugin {
       records,
       prefix,
       enabled: () => enabled,
-      // A real playground call includes planning plus a streamed scene, and a
-      // rich scene can stream for minutes. The model-side cap guards silence;
-      // the wall here has to be generous enough for a healthy stream.
-      generationTimeoutMs: session ? 300_000 : 45_000,
+      // A real playground call plans (its own two-minute budget) and then
+      // streams a scene for up to five minutes, and a repair may join it.
+      // The model-side cap guards silence; the wall has room for all three.
+      generationTimeoutMs: session ? 420_000 : 45_000,
       limits: { ...g.DEFAULT_LIMITS, perMinute: 60, perDay: 1000, concurrent: 6 },
       // Figures that hit a problem while live are repaired in the background (RP-7).
       ticketSecret: DEV_TICKET_SECRET,

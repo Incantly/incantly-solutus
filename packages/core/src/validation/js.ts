@@ -11,6 +11,7 @@ import {
   type HandleKind,
   type Returns,
 } from '../api/surface';
+import { RENDERABLE_ATTRIBUTES } from '../protocol/scene-commands';
 import { isKitCall, kitsFor, type KitName } from '../runtime/kits';
 import { isColourLiteral, NAMED_COLOURS } from './colours';
 import { LineIndex, type Diagnostic } from './diagnostics';
@@ -224,6 +225,9 @@ const MOUNT_ONLY: ReadonlySet<string> = new Set([
   'formula',
   'idle',
 ]);
+
+/** Drawn elements, whose set() takes SVG attributes. */
+const ATTRIBUTE_HANDLES: ReadonlySet<string> = new Set(['Element', 'Path', 'Text', 'Polyline']);
 
 /** Handle methods that create a new element. Created once, then moved. */
 const CREATES_ELEMENTS: Readonly<Partial<Record<HandleKind, ReadonlySet<string>>>> = {
@@ -496,6 +500,8 @@ class JsValidator {
   private readonly index: LineIndex;
   private nodes = 0;
   private reportedAstBudget = false;
+  /** inc.model calls so far: a scene has exactly one model, and a second throws at mount. */
+  private models = 0;
   private reportedDepth = false;
   private paramCount = 0;
   private readonly stages: StageReference[] = [];
@@ -744,13 +750,17 @@ class JsValidator {
 
     const test = node.test;
     let direction: 'up' | 'down' | null = null;
-    if (
-      test &&
-      test.type === 'BinaryExpression' &&
-      test.left.type === 'Identifier' &&
-      test.left.name === counter &&
-      ['<', '<=', '>', '>='].includes(test.operator)
-    ) {
+    const compares = (side: Expression | null | undefined): side is Extract<AnyNode, { type: 'BinaryExpression' }> =>
+      !!side && side.type === 'BinaryExpression' && side.left.type === 'Identifier' && side.left.name === counter && ['<', '<=', '>', '>='].includes(side.operator);
+    // i < n && i <= 200: the loop ends at the first comparison that fails, so one visible bound is enough.
+    const capped =
+      test && test.type === 'LogicalExpression' && test.operator === '&&'
+        ? [test.right, test.left].find((side) => compares(side) && this.loopBound(side.right as Expression, inner.scope) === null)
+        : undefined;
+    if (capped && compares(capped)) {
+      direction = capped.operator === '<' || capped.operator === '<=' ? 'up' : 'down';
+      this.expression(test!, inner);
+    } else if (compares(test)) {
       this.count(test);
       direction = test.operator === '<' || test.operator === '<=' ? 'up' : 'down';
       this.expression(test.right, inner);
@@ -1314,6 +1324,23 @@ class JsValidator {
         const [name] = node.arguments;
         if (name && name.type === 'Literal' && typeof name.value === 'string') this.parts.push(name.value);
       }
+      if (method === 'set' && ATTRIBUTE_HANDLES.has(receiver.kind)) {
+        // The runtime throws on any other attribute; the same names are known here, before the scene runs.
+        const [values] = node.arguments;
+        if (values && values.type === 'ObjectExpression') {
+          for (const property of values.properties) {
+            if (property.type !== 'Property' || property.computed) continue;
+            const key = property.key.type === 'Identifier' ? property.key.name : property.key.type === 'Literal' ? String(property.key.value) : null;
+            if (key === null || RENDERABLE_ATTRIBUTES.has(key)) continue;
+            const words = key === 'text' || key === 'textContent';
+            this.report(
+              'unknown-property',
+              words ? `"${key}" is not an attribute: set a text's words with .text(...)` : `"${key}" is not an attribute an element can be given; colours come from tones`,
+              property.key.start,
+            );
+          }
+        }
+      }
       if (method === 'tone') {
         const [tone] = node.arguments;
         if (tone && tone.type === 'Literal' && typeof tone.value === 'string' && !TONE_SET.has(tone.value)) {
@@ -1360,6 +1387,9 @@ class JsValidator {
         `inc.${method} declares the scene, so call it once at the top level, not inside a function`,
         node.callee.start,
       );
+    }
+    if (method === 'model' && ++this.models > 1) {
+      this.report('mount-only', 'A scene has exactly one inc.model: return every output from the one model', node.callee.start);
     }
     switch (method) {
       case 'param':

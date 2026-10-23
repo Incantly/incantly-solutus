@@ -767,8 +767,9 @@ export interface Graph {
   segment(x1: number, y1: number, x2: number, y2: number, options?: CurveOptions): GraphSegment;
   arrow(x: number, y: number, dx: number, dy: number, options?: CurveOptions): GraphArrow;
   trail(options?: { readonly tone?: Tone; readonly max?: number }): GraphTrail;
+  /** Text at a point in data units; its at(x, y) moves it in data units too, as a point's does. */
   label(x: number, y: number, value: Readable, options?: ElementOptions): TextHandle;
-  /** An equation drawn as maths at a point in data units, as stage.equation does (DG-5). */
+  /** An equation drawn as maths at a point in data units, as stage.equation does (DG-5); its at() takes data units. */
   equation(x: number, y: number, source: Readable, options?: EquationOptions): TextHandle;
   bracket(x1: number, y1: number, x2: number, y2: number, text?: Readable, options?: { readonly tone?: Tone }): GraphMark;
   dimension(x1: number, y1: number, x2: number, y2: number, text?: Readable, options?: { readonly tone?: Tone }): GraphMark;

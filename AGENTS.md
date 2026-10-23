@@ -12,3 +12,11 @@
 - When a generated item needs to show how it was produced, put the actual formula and primitive operations in the expression source. Use existing runtime primitives such as `triangle`, `midpoint`, `join`, and `dilate`; do not display a placeholder such as `sierpinski(...)` unless that function has been explicitly implemented and registered in the expression runtime.
 - Keep the displayed expression source and the generated scene synchronized. A scene-only renderer may optimize execution, but it must not replace the authored formula with a fake function name.
 - Never add a TypeScript helper, hard-coded polygon generator, animation loop, or scene-specific renderer in an app/playground to make a demo work. If the SDK cannot parse or evaluate the authored formula, extend the generic SDK tokenizer/parser/evaluator/scene contracts first; keep the playground as a generic consumer.
+
+## Real generation acceptance
+
+- After changing the generation pipeline, model client, scene contract, validator, probe, or Playground generation flow, validate it through the running Playground rather than treating mocked or unit tests as proof.
+- Open `http://127.0.0.1:5173/?page=generations` in a real browser. Generate the Bicycle chain and derailleur, Fibonacci sequence, and Golden ratio cards through **Generate in chat**. These calls must use the configured real model session and the same SDK path a learner uses.
+- Wait up to three minutes for each generation. A pass means the Playground reaches **Ready**, mounts a live figure, and records a `done figure` debug entry. Open the figure and confirm it is visibly drawn; do not count a skeleton, source-only response, reviewed fallback, or generic success message as a pass.
+- On failure, open **Debug log** and use the matching `generationId`, `reason`, and `diagnostic` record to identify the real stage and cause. Fix the generic SDK, generation, validation, or probe path, then repeat the failed real prompt. Do not add scene-specific Playground code to make an acceptance prompt pass.
+- Visit **Gallery of generations** after the run and verify the three acceptance cards remain searchable and open the intended prompt. Report each prompt's real outcome and plan, scene, validation, and probe timing when available.

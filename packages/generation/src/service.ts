@@ -436,7 +436,7 @@ export class GenerationService {
       });
       send('scene', this.sceneMessage(state));
     } else {
-      const reason = timeout.aborted ? 'timeout' : (state.failure?.stage ?? 'scene');
+      const reason = timeout.aborted || state.deadlineHit ? 'timeout' : (state.failure?.stage ?? 'scene');
       send('fallback', this.fallback(state, reason, state.plan?.concept ?? request.prompt));
       await this.record(state);
     }
@@ -549,7 +549,7 @@ export class GenerationService {
       return;
     }
     await this.record(state);
-    this.json(res, 200, { status: 'failed', reason: timeout.aborted ? 'timeout' : (state.failure?.stage ?? 'scene') } satisfies RepairResponse);
+    this.json(res, 200, { status: 'failed', reason: timeout.aborted || state.deadlineHit ? 'timeout' : (state.failure?.stage ?? 'scene') } satisfies RepairResponse);
   }
 
   /**
@@ -601,7 +601,7 @@ export class GenerationService {
       return;
     }
     await this.record(state);
-    const reason = state.failure?.reason === 'unchanged' ? 'unchanged' : timeout.aborted ? 'timeout' : (state.failure?.stage ?? 'scene');
+    const reason = state.failure?.reason === 'unchanged' ? 'unchanged' : timeout.aborted || state.deadlineHit ? 'timeout' : (state.failure?.stage ?? 'scene');
     this.json(res, 200, { status: 'failed', reason } satisfies ChangeResponse);
   }
 

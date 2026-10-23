@@ -77,7 +77,7 @@ export function figureGenerator(options: {
       readonly onText?: (purpose: 'plan' | 'scene' | 'repair', delta: string) => void;
       readonly signal: AbortSignal;
     },
-  ): Promise<{ readonly kind: 'figure'; readonly figure: ApprovedFigure; readonly notice?: string } | { readonly kind: 'failed'; readonly message: string; readonly reason: string; readonly level: string }> => {
+  ): Promise<{ readonly kind: 'figure'; readonly figure: ApprovedFigure; readonly notice?: string } | { readonly kind: 'failed'; readonly message: string; readonly reason: string; readonly level: string; readonly generationId: string | null }> => {
     const own = options.probe ? null : sandboxProbe();
     const outcome = await runGeneration({
       client: options.client,
@@ -95,7 +95,7 @@ export function figureGenerator(options: {
     }).finally(() => own?.dispose());
     if (outcome.kind === 'approved') return { kind: 'figure', figure: outcome.figure };
     if (outcome.level === 'standard' && outcome.figure) return { kind: 'figure', figure: outcome.figure, notice: outcome.message };
-    return { kind: 'failed', message: outcome.message, reason: outcome.reason, level: outcome.level };
+    return { kind: 'failed', message: outcome.message, reason: outcome.reason, level: outcome.level, generationId: outcome.generationId };
   };
 }
 

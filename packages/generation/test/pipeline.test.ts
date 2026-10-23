@@ -1,7 +1,8 @@
+import { SIZE_BUDGETS } from '@incantly/core';
 import { REFERENCE_SCENES } from '@incantly/core/scenes';
 import { describe, expect, it } from 'vitest';
-import { ModelError, NO_USAGE, ScriptedModel, type ModelClient } from '../src/models';
-import { Generator, conceptAndIdea, standardFigure, type FailedCheck } from '../src/pipeline';
+import { ModelError, NO_USAGE, ScriptedModel, type CallPurpose, type ModelCall, type ModelClient } from '../src/models';
+import { DEFAULT_MAX_TOKENS, MAX_REPLY_TOKENS, Generator, conceptAndIdea, standardFigure, type FailedCheck } from '../src/pipeline';
 import { isolatedProbe } from '../src/probe';
 import { faultyScript, referenceModel, type Fault } from '../src/reference-model';
 
@@ -140,6 +141,108 @@ describe('the generation pipeline', () => {
     expect(state.calls.find((c) => c.purpose === 'scene')?.error).toContain('overloaded');
   });
 
+  it('asks for the rest of a scene call cut off at max_tokens, keeping what already streamed', async () => {
+    // Written whole: the first reply stops inside the js block, as a real cut-off does, and the next call writes only the rest.
+    const scene = REFERENCE_SCENES.projectile!;
+    const whole = `\`\`\`html\n${scene.html}\n\`\`\`\n\`\`\`css\n${scene.css}\n\`\`\`\n\`\`\`js\n${scene.js}\n\`\`\`\n`;
+    const cut = Math.floor(whole.length * 0.6);
+    const sceneCalls: ModelCall[] = [];
+    const model = new ScriptedModel((call) => {
+      if (call.purpose === 'plan') return `Here is the plan.\n\`\`\`json\n${JSON.stringify(scene.plan)}\n\`\`\`\n`;
+      sceneCalls.push(call);
+      return sceneCalls.length === 1 ? { text: whole.slice(0, cut), stopReason: 'max_tokens' } : whole.slice(cut);
+    });
+    const state = await new Generator({ model, probe: isolatedProbe, adapt: false, retrieve: false }).generate({ prompt: REQUESTS.projectile });
+    expect(state.status).toBe('approved');
+    expect(state.firstAttemptPassed).toBe(true);
+    expect(sceneCalls).toHaveLength(2);
+    expect(sceneCalls[1]!.continueFrom).toBe(whole.slice(0, cut));
+    expect(state.attempts).toHaveLength(1);
+    expect(state.attempts[0]!.fragments.js).toBe(`${scene.js}\n`);
+    expect(state.calls.map((c) => c.maxTokens)).toEqual([DEFAULT_MAX_TOKENS.plan, SIZE_BUDGETS.quick.sceneTokens, SIZE_BUDGETS.quick.sceneTokens * 2]);
+    expect(state.calls.filter((c) => c.truncated)).toHaveLength(1);
+    expect(state.attempts[0]!.report).toBeNull();
+  });
+
+  it('drops the stretch a continuation restates before going on', async () => {
+    const scene = REFERENCE_SCENES.projectile!;
+    const whole = `\`\`\`html\n${scene.html}\n\`\`\`\n\`\`\`css\n${scene.css}\n\`\`\`\n\`\`\`js\n${scene.js}\n\`\`\`\n`;
+    const cut = Math.floor(whole.length * 0.6);
+    let scenes = 0;
+    const model = new ScriptedModel((call) => {
+      if (call.purpose === 'plan') return `Here is the plan.\n\`\`\`json\n${JSON.stringify(scene.plan)}\n\`\`\`\n`;
+      scenes++;
+      // The continuation starts 80 characters back, repeating the end of what was written.
+      return scenes === 1 ? { text: whole.slice(0, cut), stopReason: 'max_tokens' } : whole.slice(cut - 80);
+    });
+    const state = await new Generator({ model, probe: isolatedProbe, adapt: false, retrieve: false }).generate({ prompt: REQUESTS.projectile });
+    expect(state.status).toBe('approved');
+    expect(state.attempts[0]!.fragments.js).toBe(`${scene.js}\n`);
+  });
+
+  it('asks again whole when a call was cut off before it wrote anything', async () => {
+    const scene = REFERENCE_SCENES.projectile!;
+    const whole = `\`\`\`html\n${scene.html}\n\`\`\`\n\`\`\`css\n${scene.css}\n\`\`\`\n\`\`\`js\n${scene.js}\n\`\`\`\n`;
+    const sceneCalls: ModelCall[] = [];
+    const model = new ScriptedModel((call) => {
+      if (call.purpose === 'plan') return `Here is the plan.\n\`\`\`json\n${JSON.stringify(scene.plan)}\n\`\`\`\n`;
+      sceneCalls.push(call);
+      // Its thinking ate the whole cap.
+      return sceneCalls.length === 1 ? { text: '', stopReason: 'max_tokens' } : whole;
+    });
+    const state = await new Generator({ model, probe: isolatedProbe, adapt: false, retrieve: false }).generate({ prompt: REQUESTS.projectile });
+    expect(state.status).toBe('approved');
+    expect(sceneCalls[1]!.continueFrom).toBeUndefined();
+    expect(sceneCalls[1]!.maxTokens).toBe(SIZE_BUDGETS.quick.sceneTokens * 2);
+  });
+
+  it('gives a probe failure its own repair after a repair spent on validation', async () => {
+    // The scene fails validation; its repair validates but throws in a frame; the probe's own repair fixes that.
+    const scene = REFERENCE_SCENES.projectile!;
+    const fenced = (js: string) => `\`\`\`html\n${scene.html}\n\`\`\`\n\`\`\`css\n${scene.css}\n\`\`\`\n\`\`\`js\n${js}\n\`\`\`\n`;
+    let repairs = 0;
+    const model = new ScriptedModel((call) => {
+      if (call.purpose === 'plan') return `Here is the plan.\n\`\`\`json\n${JSON.stringify(scene.plan)}\n\`\`\`\n`;
+      if (call.purpose === 'scene') return fenced(faultyScript(scene, 'forbidden-call'));
+      repairs++;
+      return `\`\`\`js\n${repairs === 1 ? faultyScript(scene, 'frame-throw') : scene.js}\n\`\`\`\n`;
+    });
+    const state = await new Generator({ model, probe: isolatedProbe, adapt: false, retrieve: false }).generate({ prompt: REQUESTS.projectile });
+    expect(state.attempts.map((a) => a.failed)).toEqual(['validation', 'probe', null]);
+    expect(state.repairsFor).toEqual({ static: 1, probe: 1 });
+    expect(state.status).toBe('approved');
+  });
+
+  it('still allows one repair of each kind: a second validation failure falls back', async () => {
+    const scene = REFERENCE_SCENES.projectile!;
+    const fenced = (js: string) => `\`\`\`html\n${scene.html}\n\`\`\`\n\`\`\`css\n${scene.css}\n\`\`\`\n\`\`\`js\n${js}\n\`\`\`\n`;
+    const model = new ScriptedModel((call) => {
+      if (call.purpose === 'plan') return `Here is the plan.\n\`\`\`json\n${JSON.stringify(scene.plan)}\n\`\`\`\n`;
+      if (call.purpose === 'scene') return fenced(faultyScript(scene, 'forbidden-call'));
+      return `\`\`\`js\n${faultyScript(scene, 'unknown-call')}\n\`\`\`\n`;
+    });
+    const state = await new Generator({ model, probe: isolatedProbe, adapt: false, retrieve: false }).generate({ prompt: REQUESTS.projectile });
+    expect(state.status).toBe('failed');
+    expect(model.calls.filter((c) => c.purpose === 'repair')).toHaveLength(1);
+  });
+
+  it('takes a reply still cut off at the ceiling as a reply-format failure, and reports it for repair', async () => {
+    const scene = REFERENCE_SCENES.projectile!;
+    const whole = `\`\`\`html\n${scene.html}\n\`\`\`\n\`\`\`css\n${scene.css}\n\`\`\`\n\`\`\`js\n${scene.js}\n\`\`\`\n`;
+    const model = new ScriptedModel((call) => {
+      if (call.purpose === 'plan') return `Here is the plan.\n\`\`\`json\n${JSON.stringify(scene.plan)}\n\`\`\`\n`;
+      // Cut at every scene or repair call: the doubling reaches the ceiling and the reply stays unreadable.
+      return { text: whole.slice(0, Math.floor(whole.length * 0.6)), stopReason: 'max_tokens' };
+    });
+    const state = await new Generator({ model, probe: isolatedProbe, adapt: false, retrieve: false }).generate({ prompt: REQUESTS.projectile });
+    expect(state.status).toBe('failed');
+    expect(state.failure?.stage).toBe('scene');
+    expect(state.attempts.map((a) => a.failed)).toEqual(['reply', 'reply']);
+    // scene: budget, twice it, the ceiling; repair: the scene budget, twice it, the ceiling.
+    expect(state.calls.filter((c) => c.purpose === 'scene' && c.truncated).map((c) => c.maxTokens)).toEqual([SIZE_BUDGETS.quick.sceneTokens, SIZE_BUDGETS.quick.sceneTokens * 2, MAX_REPLY_TOKENS]);
+    expect(state.calls.filter((c) => c.purpose === 'repair' && c.truncated).map((c) => c.maxTokens)).toEqual([SIZE_BUDGETS.quick.sceneTokens, SIZE_BUDGETS.quick.sceneTokens * 2, MAX_REPLY_TOKENS]);
+  });
+
   it('reports the plan and each fragment as it streams, checked on its own', async () => {
     const { generate } = generator('forbidden-call', { adapt: false });
     const events: string[] = [];
@@ -174,35 +277,67 @@ describe('the generation pipeline', () => {
     }
   });
 
-  it('skips a repair that would end after the deadline, so the caller falls back in time', async () => {
+  /** A model whose calls take the given time on a clock that moves only when a call finishes. */
+  function timedModel(took: Record<string, number>, fault: Fault) {
     let clock = 0;
-    const model = referenceModel({ fault: 'frame-throw' });
-    const generate = new Generator({ model, probe: isolatedProbe, deadlineMs: 25_000, now: () => (clock += 6_000) });
+    const inner = referenceModel({ fault });
+    const calls: ModelCall[] = [];
+    const model = {
+      name: inner.name,
+      calls,
+      modelFor: (purpose: CallPurpose) => inner.modelFor(purpose),
+      complete: async (call: ModelCall) => {
+        calls.push(call);
+        const reply = await inner.complete(call);
+        clock += took[call.purpose]!;
+        return { ...reply, ms: took[call.purpose]! };
+      },
+    };
+    return { model, now: () => clock };
+  }
+
+  it('skips a repair that would end after the build deadline, so the caller falls back in time', async () => {
+    // The build starts at 0 with a 14 s scene; 2 s are left, and a repair needs about 4.3 s.
+    const { model, now } = timedModel({ plan: 0, scene: 14_000, repair: 3_000 }, 'frame-throw');
+    const generate = new Generator({ model, probe: isolatedProbe, deadlineMs: 16_000, now, adapt: false });
     const state = await generate.generate({ prompt: REQUESTS.projectile });
     expect(state.deadlineSkipped).toBe(true);
     expect(state.status).toBe('failed');
     expect(model.calls.filter((c) => c.purpose === 'repair')).toHaveLength(0);
   });
 
-  it('still repairs when an edit fits before the deadline: repairs take a fraction of the scene call', async () => {
-    let clock = 0;
-    const inner = referenceModel({ fault: 'frame-throw' });
-    const took: Record<string, number> = { plan: 2_000, scene: 14_000, repair: 3_000 };
-    const model: ModelClient = {
-      name: inner.name,
-      modelFor: (purpose) => inner.modelFor(purpose),
-      complete: async (call) => {
-        const reply = await inner.complete(call);
-        clock += took[call.purpose]!;
-        return { ...reply, ms: took[call.purpose]! };
-      },
-    };
-    const generate = new Generator({ model, probe: isolatedProbe, deadlineMs: 25_000, now: () => clock, adapt: false });
+  it('still repairs when an edit fits before the build deadline: repairs take a fraction of the scene call', async () => {
+    const { model, now } = timedModel({ plan: 2_000, scene: 14_000, repair: 3_000 }, 'frame-throw');
+    const generate = new Generator({ model, probe: isolatedProbe, deadlineMs: 25_000, now, adapt: false });
     const state = await generate.generate({ prompt: REQUESTS.projectile });
     expect(state.deadlineSkipped).toBe(false);
     expect(state.status).toBe('approved');
     expect(state.repairsUsed).toBe(1);
   });
+
+  it('starts the build deadline when the build starts, so a long plan does not eat the scene time', async () => {
+    // The plan takes 200 s, far past any build deadline counted from the request; the build still gets its full 5 minutes.
+    const { model, now } = timedModel({ plan: 200_000, scene: 14_000, repair: 3_000 }, 'none');
+    const generate = new Generator({ model, probe: isolatedProbe, deadlineMs: 300_000, now, adapt: false });
+    const state = await generate.generate({ prompt: REQUESTS.projectile });
+    expect(state.status).toBe('approved');
+    expect(state.deadlineHit).toBe(false);
+    expect(state.buildStartedAt).toBe(200_000);
+  });
+
+  it('marks a build cut off by its deadline, so the service reports a timeout', async () => {
+    // A scene that takes longer than the whole build deadline: the deadline cancels it.
+    const model = new ScriptedModel(async (call) => {
+      if (call.purpose === 'plan') return `\`\`\`json\n${JSON.stringify(REFERENCE_SCENES.projectile!.plan)}\n\`\`\``;
+      await new Promise((_, reject) => call.signal?.addEventListener('abort', () => reject(new ModelError('aborted', 'The call was cancelled'))));
+      return '';
+    });
+    const generate = new Generator({ model, probe: isolatedProbe, deadlineMs: 80, adapt: false, retrieve: false });
+    const state = await generate.generate({ prompt: REQUESTS.projectile });
+    expect(state.status).toBe('failed');
+    expect(state.deadlineHit).toBe(true);
+  });
+
 
   it('starts adapting the reviewed scene a request names at once, with the plan call beside it only to confirm (PRD 25.5)', async () => {
     for (const [id, prompt] of Object.entries(REQUESTS)) {

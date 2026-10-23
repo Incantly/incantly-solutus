@@ -6,6 +6,7 @@ import { FragmentStream, missingFragments, parsePlanReply, type FragmentName, ty
 import { ModelError, NO_USAGE, addUsage, costOf, type CallPurpose, type ModelClient, type ModelUsage } from './models';
 import { formatPlanProblems, validatePlan, type PlanProblem } from './plan';
 import { probeSpecFor, type SceneProber } from './probe';
+import type { ModelReply } from './models';
 import { parseReport, probeReport, repairPrompt, validationReport, type RepairReport } from './report';
 import { aboutScene, retrieveExample } from './retrieve';
 
@@ -14,6 +15,8 @@ import { aboutScene, retrieveExample } from './retrieve';
  *
  *   plan -> validate plan (one re-plan) -> scene -> static validation -> probe
  *     fail -> structured report -> one repair -> validation and probe again
+ *     (a failure caught before the scene runs and one its probe catches each
+ *     get their own repair, so fixing the first never spends the second)
  *     -> approved, or failed (the caller falls back)
  *
  * The scene call either writes the scene whole, following the nearest
@@ -21,8 +24,8 @@ import { aboutScene, retrieveExample } from './retrieve';
  * asks only for edits to it (PRD 25.5), which is several times faster. When
  * the request itself plainly names a reviewed concept, that scene is adapted
  * at once, with the plan call running beside it only to confirm the concept.
- * Repairs are edits too. Everything runs against a deadline (25 seconds by
- * default): a repair that would not finish in time is not started, and the
+ * Repairs are edits too. Everything runs against a deadline (three minutes
+ * by default): a repair that would not finish in time is not started, and the
  * caller falls back to the reviewed figure.
  *
  * On the service the probe runs on the learner's device, so the service
@@ -33,10 +36,18 @@ import { aboutScene, retrieveExample } from './retrieve';
 /** Enough for a plan of about 600 tokens and a scene of about 2,000, with room; a runaway reply stops here. */
 export const DEFAULT_MAX_TOKENS: Readonly<Record<CallPurpose, number>> = { plan: 1500, scene: 5000, repair: 3000 };
 
-/** The longest a generation may take, from request to a checked scene. */
-export const DEFAULT_DEADLINE_MS = 25_000;
+/** A call retried after a max_tokens cut-off is never asked for more than this. */
+export const MAX_REPLY_TOKENS = 16_000;
+
+/**
+ * The build's deadline: five minutes counting from the moment the build
+ * begins, not from the request, so the plan call never eats the scene's time.
+ */
+export const DEFAULT_DEADLINE_MS = 300_000;
 /** Time to keep in hand for validation, the probe and delivery after the last model call. */
 export const DELIVERY_MS = 1_500;
+/** The plan's own deadline, counted from its first call; the build never waits past it. */
+export const PLAN_DEADLINE_MS = 120_000;
 
 export interface GeneratorOptions {
   readonly model: ModelClient;
@@ -50,8 +61,10 @@ export interface GeneratorOptions {
   readonly withhold?: readonly string[];
   readonly examples?: Readonly<Record<string, ReferenceScene>>;
   readonly maxTokens?: Partial<Record<CallPurpose, number>>;
-  /** Milliseconds from the start to a checked scene; 0 for none. Default 25 seconds. */
+  /** Milliseconds from the start of a build to a checked scene; 0 for none. Default five minutes. */
   readonly deadlineMs?: number;
+  /** Milliseconds from the first plan call to a plan; 0 for none. Default two minutes. */
+  readonly planDeadlineMs?: number;
   /** Start from a reviewed scene of the same concept and ask only for edits. Default true. */
   readonly adapt?: boolean;
   /** Start adapting the reviewed scene a request names before its plan arrives. Default true; needs adapt. */
@@ -75,10 +88,25 @@ export interface CallRecord {
   readonly model: string;
   readonly usage: ModelUsage;
   readonly ms: number;
-  readonly error?: string;
+  /** The output-token cap the call was made with. */
+  readonly maxTokens?: number;
+  error?: string;
+  /** The reply was cut off at max_tokens and the call was retried (or gave up) with a larger budget. */
+  truncated?: boolean;
 }
 
 export type FailedCheck = 'reply' | 'validation' | 'probe';
+
+/**
+ * The two repair budgets. A reply or validation failure is caught before the
+ * scene runs, a probe failure only once it runs; each gets its own repair, so
+ * fixing a validation error never spends the repair a probe failure needs.
+ */
+export type RepairKind = 'static' | 'probe';
+
+export function repairKind(failed: FailedCheck | null): RepairKind {
+  return failed === 'probe' ? 'probe' : 'static';
+}
 
 export interface Attempt {
   readonly purpose: 'scene' | 'repair';
@@ -100,6 +128,62 @@ export interface GenerationFailure {
   readonly reason: string;
 }
 
+/** The shortest repeat of a reply's end that a continuation is taken to have restated. */
+const MIN_OVERLAP = 24;
+/** How much of a continuation's start is held back to look for that repeat. */
+const OVERLAP_WINDOW = 400;
+
+/**
+ * Streams the rest of a reply cut off at max_tokens. Asked to go on from the
+ * exact character, a model sometimes restates the last stretch first: the
+ * start of the continuation is held until that repeat can be dropped, then
+ * everything streams on as it comes.
+ */
+export class Continuation {
+  private held = '';
+  private decided = false;
+  private kept = '';
+
+  constructor(
+    private readonly before: string,
+    private readonly emit?: (text: string) => void,
+  ) {}
+
+  push(delta: string): void {
+    if (this.decided) {
+      this.kept += delta;
+      this.emit?.(delta);
+      return;
+    }
+    this.held += delta;
+    if (this.held.length >= OVERLAP_WINDOW) this.decide();
+  }
+
+  /** The continuation with any repeat dropped; `whole` is the full reply text, for a model that did not stream it. */
+  end(whole: string): string {
+    if (!this.decided && this.held === '' && this.kept === '' && whole !== '') this.held = whole;
+    if (!this.decided) this.decide();
+    return this.kept;
+  }
+
+  private decide(): void {
+    this.decided = true;
+    const repeat = overlap(this.before, this.held);
+    const rest = this.held.slice(repeat);
+    this.held = '';
+    this.kept += rest;
+    if (rest) this.emit?.(rest);
+  }
+}
+
+/** How many characters at the start of `after` repeat the end of `before`; 0 below MIN_OVERLAP. */
+export function overlap(before: string, after: string): number {
+  for (let k = Math.min(before.length, after.length, OVERLAP_WINDOW); k >= MIN_OVERLAP; k--) {
+    if (before.endsWith(after.slice(0, k))) return k;
+  }
+  return 0;
+}
+
 let counter = 0;
 
 export function newGenerationId(): string {
@@ -118,7 +202,13 @@ export class GenerationState {
   readonly attempts: Attempt[] = [];
   readonly calls: CallRecord[] = [];
   repairsUsed = 0;
+  /** Repairs used per kind; each kind has its own budget of `maxRepairs`. */
+  readonly repairsFor: Record<RepairKind, number> = { static: 0, probe: 0 };
   failure: GenerationFailure | null = null;
+  /** When the build began; the deadline counts from here, not from the request. */
+  buildStartedAt: number | null = null;
+  /** A deadline cut a call off: the service reports that as `timeout`, not a plain model error. */
+  deadlineHit = false;
   readonly timings: { planMs?: number; firstFragmentMs?: number; sceneMs?: number; repairMs: number; totalMs?: number } = { repairMs: 0 };
   /**
    * How the scene was made: written whole, adapted from a reviewed scene by
@@ -213,6 +303,7 @@ export class Generator {
    */
   private async libraryStage(state: GenerationState, scene: ReferenceScene, request: LearnerRequest, hooks: GenerationHooks, signal?: AbortSignal): Promise<void> {
     state.status = 'building';
+    state.buildStartedAt ??= this.now();
     state.mode = 'adapt';
     state.example = scene.id;
     state.retrieved = scene.id;
@@ -319,6 +410,7 @@ export class Generator {
     state.plan = figure.plan;
     state.mode = 'change';
     state.status = 'building';
+    state.buildStartedAt ??= this.now();
     const started = this.now();
     const maxTokens = Math.min(this.options.maxTokens?.scene ?? SIZE_BUDGETS[figure.plan.size ?? 'quick'].sceneTokens, 2500);
     const reply = await this.call(state, 'scene', changePrompt(figure.plan, figure.fragments, request), this.deadlineSignal(state, signal), this.streamed(hooks, 'scene'), maxTokens);
@@ -363,7 +455,7 @@ export class Generator {
       const early = conceptAndIdea(streamed);
       if (early) settle(judge(early.concept, early.idea));
     };
-    const finished = this.call(check, 'plan', planPrompt(request), this.deadlineSignal(check, planSignal), this.streamed(hooks, 'plan', onText)).then((reply) => {
+    const finished = this.call(check, 'plan', planPrompt(request), this.planDeadlineSignal(planSignal), this.streamed(hooks, 'plan', onText)).then((reply) => {
       // Without a plan to say otherwise, the request's own words stand.
       if (reply === null) {
         settle(true);
@@ -388,7 +480,7 @@ export class Generator {
     const started = this.now();
     let replan: { previous: string; problems: string } | undefined;
     for (let attempt = 0; attempt <= this.replans; attempt++) {
-      const reply = await this.call(state, 'plan', planPrompt(request, replan), this.deadlineSignal(state, signal), this.streamed(hooks, 'plan'));
+      const reply = await this.call(state, 'plan', planPrompt(request, replan), this.planDeadlineSignal(signal), this.streamed(hooks, 'plan'));
       if (reply === null) return;
       const parsed = parsePlanReply(reply);
       const validation = parsed.problem
@@ -412,6 +504,7 @@ export class Generator {
     const plan = state.plan;
     if (!plan) throw new Error('Plan first');
     state.status = 'building';
+    state.buildStartedAt ??= this.now();
     const started = this.now();
     const { prompt, example, mode, start } = scenePrompt(plan, {
       ...(this.options.withhold ? { withhold: this.options.withhold } : {}),
@@ -439,7 +532,7 @@ export class Generator {
         state.timings.firstFragmentMs ??= this.now() - state.startedAt;
         hooks.onFragment?.(name, fragmentPasses(name, source));
       });
-      const reply = await this.call(state, 'scene', prompt, this.deadlineSignal(state, signal), this.streamed(hooks, 'scene', (text) => stream.push(text)), maxTokens);
+      const reply = await this.call(state, 'scene', prompt, this.deadlineSignal(state, signal), this.streamed(hooks, 'scene', (text) => stream.push(text)), maxTokens, () => stream.reset());
       if (reply === null) return;
       const parsed = stream.end();
       state.timings.sceneMs = this.now() - started;
@@ -464,17 +557,29 @@ export class Generator {
     return { fragments, problems, changed };
   }
 
-  /** The remaining time before the deadline, in milliseconds; Infinity without one. */
+  /** The remaining time before the build's deadline, in milliseconds; Infinity without one. */
   remainingMs(state: GenerationState): number {
     const deadline = this.options.deadlineMs ?? DEFAULT_DEADLINE_MS;
-    return deadline > 0 ? deadline - (this.now() - state.startedAt) : Number.POSITIVE_INFINITY;
+    const from = state.buildStartedAt ?? state.startedAt;
+    return deadline > 0 ? deadline - (this.now() - from) : Number.POSITIVE_INFINITY;
   }
 
-  /** The caller's signal, also aborted when the deadline passes. */
+  /** The caller's signal, also aborted when the deadline passes; the abort marks the state as out of time. */
   private deadlineSignal(state: GenerationState, signal?: AbortSignal): AbortSignal | undefined {
     const remaining = this.remainingMs(state);
     if (!Number.isFinite(remaining)) return signal;
     const timeout = AbortSignal.timeout(Math.max(1, Math.floor(remaining - DELIVERY_MS)));
+    timeout.addEventListener('abort', () => {
+      state.deadlineHit = true;
+    });
+    return signal ? AbortSignal.any([signal, timeout]) : timeout;
+  }
+
+  /** A plan's own signal: it never eats the build's deadline, and it runs no longer than the plan's budget. */
+  private planDeadlineSignal(signal?: AbortSignal): AbortSignal | undefined {
+    const deadline = this.options.planDeadlineMs ?? PLAN_DEADLINE_MS;
+    if (deadline <= 0) return signal;
+    const timeout = AbortSignal.timeout(deadline);
     return signal ? AbortSignal.any([signal, timeout]) : timeout;
   }
 
@@ -519,6 +624,7 @@ export class Generator {
     state.plan = plan;
     state.mode = 'stored';
     state.status = 'building';
+    state.buildStartedAt ??= this.now();
     const limits = { ...SCENE_LIMITS, params: SIZE_BUDGETS[plan.size ?? 'quick'].controls };
     const validation = validateScene(figure.fragments, { limits });
     const fragments: FragmentSet = { ...figure.fragments };
@@ -532,13 +638,14 @@ export class Generator {
     return attempt;
   }
 
-  /** Whether another automatic repair may run (RP-4). */
+  /** Whether another automatic repair may run (RP-4), from the budget of the kind of failure that stands. */
   canRepair(state: GenerationState): boolean {
-    if (state.repairsUsed >= this.maxRepairs) return false;
     const last = state.attempts.at(-1);
     if (!last || last.passed) return false;
-    // A further repair only when the previous one changed something: identical output means nothing more to offer.
-    return state.repairsUsed === 0 || (last.purpose === 'repair' && last.changed.length > 0);
+    const used = state.repairsFor[repairKind(last.failed)];
+    if (used >= this.maxRepairs) return false;
+    // A further repair of a kind only when the previous one changed something: identical output means nothing more to offer.
+    return used === 0 || (last.purpose === 'repair' && last.changed.length > 0);
   }
 
   private async repairWhileAllowed(state: GenerationState, hooks: GenerationHooks, signal?: AbortSignal): Promise<void> {
@@ -562,8 +669,10 @@ export class Generator {
     const current = state.current;
     if (!plan || !current) throw new Error('Nothing to repair');
     state.repairsUsed++;
+    state.repairsFor[repairKind(current.failed)]++;
     const started = this.now();
-    const reply = await this.call(state, 'repair', repairPrompt(report, current.fragments, plan), this.deadlineSignal(state, signal), this.streamed(hooks, 'repair'));
+    // A repair that must return a whole fragment the scene could not fit needs the scene's own budget.
+    const reply = await this.call(state, 'repair', repairPrompt(report, current.fragments, plan), this.deadlineSignal(state, signal), this.streamed(hooks, 'repair'), SIZE_BUDGETS[plan.size ?? 'quick'].sceneTokens);
     state.timings.repairMs += this.now() - started;
     if (reply === null) return null;
     const { fragments: merged, problems, changed } = this.edited(current.fragments, reply);
@@ -638,7 +747,6 @@ export class Generator {
     return record({ passed: true, failed: null, report: null, probe: report, scene: validation.scene });
   }
 
-  /** One model call, recorded; null when it failed (the generation is then failed). */
   /** A call's streamed text for the onText hook, and for `also` when given; nothing to stream without either. */
   private streamed(hooks: GenerationHooks, purpose: CallPurpose, also?: (text: string) => void): ((text: string) => void) | undefined {
     const onText = hooks.onText;
@@ -656,23 +764,47 @@ export class Generator {
     signal: AbortSignal | undefined,
     onText?: (text: string) => void,
     maxTokens?: number,
+    /** Starts the reply's consumer over: a retried call re-streams from the top. */
+    reset?: () => void,
   ): Promise<string | null> {
     const started = this.now();
-    try {
-      const reply = await this.options.model.complete({
-        purpose,
-        prompt,
-        maxTokens: maxTokens ?? this.options.maxTokens?.[purpose] ?? DEFAULT_MAX_TOKENS[purpose],
-        ...(signal ? { signal } : {}),
-        ...(onText ? { onText } : {}),
-      });
-      state.calls.push({ purpose, model: reply.model, usage: reply.usage, ms: reply.ms });
-      return reply.text;
-    } catch (error) {
-      const reason = error instanceof ModelError ? `${error.kind}: ${error.message}` : error instanceof Error ? error.message : String(error);
-      state.calls.push({ purpose, model: this.options.model.modelFor(purpose), usage: NO_USAGE, ms: this.now() - started, error: reason });
-      this.fail(state, 'model', reason);
-      return null;
+    const budget = maxTokens ?? this.options.maxTokens?.[purpose] ?? DEFAULT_MAX_TOKENS[purpose];
+    // A reply cut off at max_tokens is not a format error: it is a budget one.
+    // The next call asks for the rest only, so the text already streamed
+    // stands and the learner never waits for it twice. A call cut off before
+    // it wrote anything (its thinking ate the cap) is asked again whole. Each
+    // retry doubles the cap up to the hard ceiling.
+    let sofar = '';
+    for (let attempt = 0; ; attempt++) {
+      const capped = attempt === 0 ? budget : Math.min(budget * 2 ** attempt, MAX_REPLY_TOKENS);
+      const join = sofar ? new Continuation(sofar, onText) : null;
+      const stream = join ? (text: string) => join.push(text) : onText;
+      let reply: ModelReply;
+      try {
+        reply = await this.options.model.complete({
+          purpose,
+          prompt,
+          maxTokens: capped,
+          ...(signal ? { signal } : {}),
+          ...(stream ? { onText: stream } : {}),
+          ...(sofar ? { continueFrom: sofar } : {}),
+        });
+      } catch (error) {
+        const reason = error instanceof ModelError ? `${error.kind}: ${error.message}` : error instanceof Error ? error.message : String(error);
+        state.calls.push({ purpose, model: this.options.model.modelFor(purpose), usage: NO_USAGE, ms: this.now() - started, maxTokens: capped, error: reason });
+        this.fail(state, 'model', reason);
+        return null;
+      }
+      const text = join ? sofar + join.end(reply.text) : reply.text;
+      if (reply.stopReason === 'max_tokens') {
+        state.calls.push({ purpose, model: reply.model, usage: reply.usage, ms: reply.ms, maxTokens: capped, truncated: true });
+        if (capped >= MAX_REPLY_TOKENS) return text;
+        if (text.trim() === '') reset?.();
+        sofar = text;
+        continue;
+      }
+      state.calls.push({ purpose, model: reply.model, usage: reply.usage, ms: reply.ms, maxTokens: capped });
+      return text;
     }
   }
 

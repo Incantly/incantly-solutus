@@ -16,7 +16,17 @@ export interface ModelCall {
   readonly signal?: AbortSignal;
   /** Text as it streams in. Thinking is never passed on. */
   readonly onText?: (delta: string) => void;
+  /**
+   * A reply of this same call that was cut off at max_tokens: the model is
+   * shown it and asked for the rest only. Assistant prefill is rejected on
+   * current models, so it goes as an assistant turn and a user turn after it.
+   */
+  readonly continueFrom?: string;
 }
+
+/** The user turn that asks for the rest of a reply cut off at max_tokens. */
+export const CONTINUE_PROMPT =
+  'Your reply above was cut off at the output limit. Continue it from the exact character where it stopped. Do not repeat anything, do not start over, add no preamble, and do not reopen a fenced block that is already open.';
 
 export interface ModelUsage {
   /** Input tokens after the last cache breakpoint. */
@@ -146,12 +156,35 @@ const DEFAULT_THINKING: Readonly<Record<CallPurpose, Thinking>> = { plan: 'off',
 
 /**
  * The request's thinking field. Claude Sonnet 5.5 turns up-front thinking off
- * with `between_tools` and rejects `disabled`; other models take `disabled`.
- * Adaptive thinking is the models' default, so it is sent as nothing.
+ * with `between_tools`, Claude Haiku 5.5 accepts `disabled`, and Claude Opus
+ * 5.5 is always adaptive. Adaptive thinking is the models' default, so it is
+ * sent as nothing for Opus rather than sending a field the API rejects.
  */
 export function thinkingField(model: string, thinking: Thinking): Record<string, unknown> | null {
   if (thinking === 'adaptive') return null;
-  return model.startsWith('claude-sonnet-5-5') ? { type: 'between_tools' } : { type: 'disabled' };
+  if (model.startsWith('claude-sonnet-5-5')) return { type: 'between_tools' };
+  if (model.startsWith('claude-opus-5-5')) return null;
+  return { type: 'disabled' };
+}
+
+/** Claude Opus 5.5 thinks on every call: no thinking field turns it off. */
+export function alwaysThinks(model: string): boolean {
+  return model.startsWith('claude-opus-5-5');
+}
+
+/**
+ * Output tokens added for a model that thinks though thinking was asked off.
+ * Its thinking counts against max_tokens, and a cap sized for the reply alone
+ * cuts the reply off after the thinking ate it.
+ */
+export const THINKING_HEADROOM = 8_000;
+
+/**
+ * Effort for a call. Where thinking cannot be turned off, effort is the only
+ * thing that keeps it short: a call that asked for thinking off runs at low.
+ */
+export function effortFor(model: string, thinking: Thinking, effort: Effort): Effort {
+  return thinking === 'off' && alwaysThinks(model) ? 'low' : effort;
 }
 
 interface StreamState {
@@ -177,10 +210,12 @@ export class AnthropicClient implements ModelClient {
   /** The request body for a call: system blocks with cache breakpoints, one user turn, streaming. */
   body(call: ModelCall): Record<string, unknown> {
     const model = this.modelFor(call.purpose);
-    const thinking = thinkingField(model, this.options.thinking?.[call.purpose] ?? DEFAULT_THINKING[call.purpose]);
+    const asked = this.options.thinking?.[call.purpose] ?? DEFAULT_THINKING[call.purpose];
+    const thinking = thinkingField(model, asked);
+    const effort = effortFor(model, asked, this.options.effort?.[call.purpose] ?? DEFAULT_EFFORT[call.purpose]);
     return {
       model,
-      max_tokens: call.maxTokens,
+      max_tokens: asked === 'off' && alwaysThinks(model) ? call.maxTokens + THINKING_HEADROOM : call.maxTokens,
       stream: true,
       ...(thinking ? { thinking } : {}),
       system: call.prompt.system.map((block) => ({
@@ -188,8 +223,14 @@ export class AnthropicClient implements ModelClient {
         text: block.text,
         ...(block.cache ? { cache_control: { type: 'ephemeral' } } : {}),
       })),
-      messages: [{ role: 'user', content: call.prompt.user }],
-      output_config: { effort: this.options.effort?.[call.purpose] ?? DEFAULT_EFFORT[call.purpose] },
+      messages: call.continueFrom
+        ? [
+            { role: 'user', content: call.prompt.user },
+            { role: 'assistant', content: call.continueFrom },
+            { role: 'user', content: CONTINUE_PROMPT },
+          ]
+        : [{ role: 'user', content: call.prompt.user }],
+      output_config: { effort },
     };
   }
 
@@ -389,7 +430,7 @@ export class ScriptedModel implements ModelClient {
   readonly calls: ModelCall[] = [];
 
   constructor(
-    private readonly script: (call: ModelCall, index: number) => string | Promise<string>,
+    private readonly script: (call: ModelCall, index: number) => string | ScriptedReply | Promise<string | ScriptedReply>,
     private readonly options: ScriptedOptions = {},
   ) {
     this.name = options.name ?? 'scripted';
@@ -404,7 +445,8 @@ export class ScriptedModel implements ModelClient {
     const index = this.calls.push(call) - 1;
     if (this.options.latencyMs) await delay(this.options.latencyMs, call.signal);
     if (call.signal?.aborted) throw new ModelError('aborted', 'The call was cancelled');
-    const text = await this.script(call, index);
+    const answer = await this.script(call, index);
+    const text = typeof answer === 'object' ? answer.text : answer;
     const chunk = Math.max(1, this.options.chunk ?? 64);
     for (let i = 0; i < text.length; i += chunk) {
       if (call.signal?.aborted) throw new ModelError('aborted', 'The call was cancelled');
@@ -414,11 +456,17 @@ export class ScriptedModel implements ModelClient {
     return {
       text,
       model: this.modelFor(call.purpose),
-      stopReason: 'end_turn',
+      stopReason: typeof answer === 'object' && answer.stopReason !== null && answer.stopReason !== undefined ? answer.stopReason : 'end_turn',
       usage: { inputTokens: Math.ceil((system.length + call.prompt.user.length) / 3.5), outputTokens: Math.ceil(text.length / 3.5), cacheReadTokens: 0, cacheWriteTokens: 0 },
       ms: Date.now() - started,
     };
   }
+}
+
+/** A reply a script gives: a string is read as `end_turn`; stop reasons override it. */
+export interface ScriptedReply {
+  readonly text: string;
+  readonly stopReason?: string | null;
 }
 
 function delay(ms: number, signal?: AbortSignal): Promise<void> {

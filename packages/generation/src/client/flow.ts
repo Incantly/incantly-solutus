@@ -42,6 +42,8 @@ export type GenerationOutcome =
       readonly kind: 'fallback';
       readonly level: FallbackLevel;
       readonly reason: string;
+      /** The service record to inspect in developer tooling, when a run began. */
+      readonly generationId: string | null;
       /** The standard figure, for that rung. */
       readonly figure: ApprovedFigure | null;
       /** One quiet line for the learner. */
@@ -234,19 +236,20 @@ export async function runChange(run: ChangeRun): Promise<ChangeOutcome> {
 
 /** The fallback ladder (RP-9): the first rung that is available. */
 async function ladder(run: GenerationRun, message: FallbackMessage | null, reason: string): Promise<Extract<GenerationOutcome, { kind: 'fallback' }>> {
+  const generationId = message?.generationId ?? null;
   if (run.existing?.hasFragments) {
-    return { kind: 'fallback', level: 'last-approved', reason, figure: null, message: 'The figure could not be remade, so the working version is kept.' };
+    return { kind: 'fallback', level: 'last-approved', reason, generationId, figure: null, message: 'The figure could not be remade, so the working version is kept.' };
   }
   const standard = message?.standard;
   if (standard) {
     // Reviewed, and still checked on this device like any other scene.
     const checked = await run.probe(standard.fragments, standard.spec);
     if (checked.ok) {
-      return { kind: 'fallback', level: 'standard', reason, figure: approved(standard, true), message: 'This is a standard version of this figure.' };
+      return { kind: 'fallback', level: 'standard', reason, generationId, figure: approved(standard, true), message: 'This is a standard version of this figure.' };
     }
   }
   if (run.existing?.hasSnapshot) {
-    return { kind: 'fallback', level: 'snapshot', reason, figure: null, message: 'The figure could not be remade. Its picture and description are kept.' };
+    return { kind: 'fallback', level: 'snapshot', reason, generationId, figure: null, message: 'The figure could not be remade. Its picture and description are kept.' };
   }
   const why =
     reason === 'off'
@@ -254,7 +257,13 @@ async function ladder(run: GenerationRun, message: FallbackMessage | null, reaso
       : reason === 'limit'
         ? 'You have reached the limit for new figures for now.'
         : reason === 'timeout'
-          ? 'The model took too long to finish.'
-          : '';
-  return { kind: 'fallback', level: 'text', reason, figure: null, message: `This figure could not be built.${why ? ` ${why}` : ''}` };
+          ? 'It ran out of time building the figure. Try asking again.'
+          : reason === 'plan'
+            ? 'No plan for the figure could be made. Try phrasing the request a little differently.'
+            : reason === 'model'
+              ? 'The model did not answer as expected. Check the connection, then try again.'
+              : reason === 'scene'
+                ? 'What the model wrote did not pass the checks. Try again, or ask for it a different way.'
+                : '';
+  return { kind: 'fallback', level: 'text', reason, generationId, figure: null, message: `This figure could not be built.${why ? ` ${why}` : ''}` };
 }

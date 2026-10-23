@@ -1,6 +1,6 @@
 import { REFERENCE_SCENES } from '@incantly/core/scenes';
 import { describe, expect, it } from 'vitest';
-import { benchRound, callKey, replyMs, type BenchReply, type PendingCall } from '../src/bench';
+import { benchRound, callKey, replyMs, type BenchOptions, type BenchReply, type PendingCall } from '../src/bench';
 import { LAUNCH_REQUESTS } from '../src/launch';
 
 const requests = LAUNCH_REQUESTS.filter((r) => r.id === 'projectile-1' || r.id === 'ohm-1');
@@ -14,11 +14,11 @@ function answer(call: PendingCall, ms: number): BenchReply {
   return { key: call.key, ms, text: ['html', 'css', 'js'].map((f) => `\`\`\`${f}\n${scene[f as 'html' | 'css' | 'js']}\n\`\`\``).join('\n') };
 }
 
-async function run(ms: (call: PendingCall) => number) {
+async function run(ms: (call: PendingCall) => number, options: BenchOptions = {}) {
   const replies: BenchReply[] = [];
   const rounds: PendingCall[][] = [];
   for (let i = 0; i < 5; i++) {
-    const round = await benchRound(requests, ['library', 'novel'], replies);
+    const round = await benchRound(requests, ['library', 'novel'], replies, options);
     if (round.pending.length === 0) return { results: round.results, rounds };
     rounds.push([...round.pending]);
     replies.push(...round.pending.map((p) => answer(p, ms(p))));
@@ -79,12 +79,12 @@ describe('the agent bench', () => {
   });
 
   it('cuts a call off at the deadline, as the service would', async () => {
-    const { results } = await run((call) => (call.purpose === 'plan' ? 4000 : 24_000));
+    const { results } = await run((call) => (call.purpose === 'plan' ? 4000 : 24_000), { deadlineMs: 25_000 });
     for (const r of results) {
       expect(r.passed).toBe(false);
       expect(r.failureReason).toMatch(/timeout: The scene call would have run past the deadline/);
-      // Cut off with time left to deliver a fallback.
-      expect(r.timings.totalMs).toBeLessThanOrEqual(24_000);
+      // The deadline counts from the build's start, after the 4 s plan: the build is cut off with its own time left to deliver.
+      expect(r.timings.totalMs! - (r.timings.planMs ?? 0)).toBeLessThanOrEqual(24_000);
     }
   });
 });

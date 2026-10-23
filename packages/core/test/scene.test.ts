@@ -237,6 +237,25 @@ describe('stage bounds', () => {
     ]);
   });
 
+  it('measures an arc by the curve itself, not by its radius round each end', () => {
+    const box = (d: string) => {
+      const points = pathPoints(d);
+      const xs = points.map((p) => p[0]);
+      const ys = points.map((p) => p[1]);
+      return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)].map((v) => Math.round(v * 1000) / 1000 + 0);
+    };
+    // A golden-spiral quarter arc across a 100 square at (200, 100), either way round, stays in the square.
+    expect(box('M 300 200 A 100 100 0 0 1 200 100')).toEqual([200, 100, 300, 200]);
+    expect(box('M 300 200 A 100 100 0 0 0 200 100')).toEqual([200, 100, 300, 200]);
+    // A half circle bulges by its radius on one side only.
+    expect(box('M 0 50 A 50 50 0 0 1 100 50')).toEqual([0, 0, 100, 50]);
+    expect(box('M 0 50 A 50 50 0 1 0 100 50')).toEqual([0, 50, 100, 100]);
+    // Radii too small to reach are scaled up, and an ellipse turned by 90° swaps its extents.
+    expect(box('M 0 0 A 1 1 0 0 1 20 0')).toEqual([0, -10, 20, 0]);
+    // Turned by 90°, the ellipse's long axis runs down the y axis and the half ellipse bulges 10 to the right.
+    expect(box('M 0 -20 A 20 10 90 0 1 0 20')).toEqual([0, -20, 10, 20]);
+  });
+
   it('reports no box for an empty stage', () => {
     const { graph } = setup();
     expect(stageBounds(graph, 1)).toMatchObject({ box: null, visibleElements: 0 });

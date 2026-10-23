@@ -117,7 +117,7 @@ The core rules and the capability catalog open every call as one block marked fo
 
 ### Repair
 
-A failed candidate gets one automatic repair. Its report quotes the failing check, the parameter state with the bounds marked, the real error, the agent's own line with its neighbours, a likely cause from the failure taxonomy and the core rules broken (`report.ts`). The repair call sends only that report, the fragments as they stand, the capability lines and, when the failure is an unknown name, the contract. A repair that returns the same fragments ends the attempt. `maxRepairs` above one allows a further repair only when the previous one changed something (RP-4); v0.1 keeps one.
+A failed candidate gets one automatic repair. Its report quotes the failing check, the parameter state with the bounds marked, the real error, the agent's own line with its neighbours, a likely cause from the failure taxonomy and the core rules broken (`report.ts`). The repair call sends only that report, the fragments as they stand, the capability lines and, when the failure is an unknown name, the contract. A repair that returns the same fragments ends the attempt. Failures caught before the scene runs (an unreadable reply, a validation error) and failures its probe catches have separate budgets of one repair each, so a validation repair never spends the repair a probe failure needs; the probe can only run once validation passes, so the second repair is the first chance to fix what it finds. `maxRepairs` above one allows a further repair of the same kind only when the previous one changed something (RP-4); v0.1 keeps one of each.
 
 ### The service
 
@@ -152,7 +152,7 @@ Every generation leaves a failure record (`records.ts`), written as daily JSON l
 
 ## Speed
 
-Every generation has a deadline of 25 seconds from the request to a checked scene (`DEFAULT_DEADLINE_MS`), of which 1.5 s is kept for the checks and delivery (`DELIVERY_MS`). A model call is cut off when only that is left; a repair starts only when its estimate, 2 to 4 s, fits in what remains; and when no candidate passes in time, the device takes the next rung of the fallback ladder. So no learner waits longer than the deadline.
+Every generation has a hard deadline of three minutes from the request to a checked scene (`DEFAULT_DEADLINE_MS`), of which 1.5 s is kept for the checks and delivery (`DELIVERY_MS`). The product target remains a figure within 10 seconds; the longer hard ceiling prevents a healthy real-model stream from being cancelled merely because it missed that target. A model call is cut off when only the delivery reserve remains; a repair starts only when its estimate, 2 to 4 s, fits in what remains; and when no candidate passes in time, the device takes the next rung of the fallback ladder.
 
 A request takes one of four paths:
 

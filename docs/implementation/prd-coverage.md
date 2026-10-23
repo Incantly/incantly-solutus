@@ -20,7 +20,7 @@ The baseline column is the state at commit `2f8b0a1` (the end of v0.1, Phases 0 
 
 Every row is done. Three of them are done differently from the letter of the PRD, on purpose:
 
-- **PL-3.** Parts are capped at 8, 12 and 16 for quick, standard and rich figures, under the PRD's 12, 30 and 60, and a rich figure has 25 s rather than 40: every part is a line the scene call writes, and every generation must finish within 25 s.
+- **PL-3.** Parts are capped at 8, 12 and 16 for quick, standard and rich figures, under the PRD's 12, 30 and 60. The product still targets a figure within 10 s, while the pipeline's hard failure ceiling is three minutes so a healthy streamed scene is not discarded solely for missing the target.
 - **BR-12.** The three-layer stack holds a canvas effects layer, the PRD's P2 plan, not WebGL.
 - **Retrieve, do not re-derive (25.5).** Reviewed scenes are matched by their names and keywords, not by embeddings.
 
@@ -193,7 +193,7 @@ What remains are the section 10 targets that need a device: time to first render
 | BR-13 | Community gallery | P2 | Missing | Done | A learner publishes a figure with its request; a reviewer accepts it, and accepted figures become examples a note can add (gallery.test.ts, generation.test.ts, generate.spec.ts). |
 | PL-1 | Two-stage generation | P0 | Done | Done | |
 | PL-2 | Plan validator | P0 | Done | Done | |
-| PL-3 | Size classes with budgets | P0 | Missing | Done | Quick, standard and rich budgets for controls, parts, elements, lines, reply tokens and seconds (protocol/plan.ts), enforced by the plan validator, the scene validator and the probe, and tested for every size (sizes.test.ts). Parts are capped at 8, 12 and 16, under the PRD's 12, 30 and 60, and rich at 25 s rather than 40, to keep every generation within 25 s. |
+| PL-3 | Size classes with budgets | P0 | Missing | Done | Quick, standard and rich budgets for controls, parts, elements, lines, reply tokens and seconds (protocol/plan.ts), enforced by the plan validator and the scene validator. Parts are capped at 8, 12 and 16, under the PRD's 12, 30 and 60. The 10 s product target is measured separately from the three-minute hard failure ceiling. |
 | MD-1 | `inc.model` | P0 | Done | Done | |
 | MD-2 | Validator flags computed numbers typed into text | P1 | Done | Done | Rule `number-in-text` (validation.test.ts). |
 | RM-1 | Shell loader | P0 | Done | Done | |

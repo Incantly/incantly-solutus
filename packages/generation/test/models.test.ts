@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { planPrompt } from '../src/context';
-import { AnthropicClient, DEFAULT_MODELS, ModelError, ScriptedModel, costOf, thinkingField, type ModelCall } from '../src/models';
+import { AnthropicClient, CONTINUE_PROMPT, DEFAULT_MODELS, ModelError, ScriptedModel, THINKING_HEADROOM, costOf, thinkingField, type ModelCall } from '../src/models';
 
 const encoder = new TextEncoder();
 
@@ -81,10 +81,26 @@ describe('the Anthropic client', () => {
   it('turns thinking off the way each model accepts, or leaves it adaptive when asked', () => {
     expect(thinkingField('claude-sonnet-5-5', 'off')).toEqual({ type: 'between_tools' });
     expect(thinkingField('claude-haiku-5-5', 'off')).toEqual({ type: 'disabled' });
+    expect(thinkingField('claude-opus-5-5', 'off')).toBeNull();
     expect(thinkingField('claude-sonnet-5-5', 'adaptive')).toBeNull();
+    const opus = new AnthropicClient({ apiKey: 'k', models: { scene: 'claude-opus-5-5' } });
+    expect(opus.body(call({ purpose: 'scene' })).thinking).toBeUndefined();
+    // Opus cannot turn thinking off: it runs at low effort, with room for its thinking above the reply's cap.
+    expect(opus.body(call({ purpose: 'scene' })).output_config).toEqual({ effort: 'low' });
+    expect(opus.body(call({ purpose: 'scene', maxTokens: 6000 })).max_tokens).toBe(6000 + THINKING_HEADROOM);
+    expect(new AnthropicClient({ apiKey: 'k' }).body(call({ purpose: 'scene', maxTokens: 6000 })).max_tokens).toBe(6000);
     const client = new AnthropicClient({ apiKey: 'k', thinking: { scene: 'adaptive' } });
     expect(client.body(call({ purpose: 'scene' })).thinking).toBeUndefined();
     expect(client.body(call({ purpose: 'repair' })).thinking).toEqual({ type: 'between_tools' });
+  });
+
+  it('asks for the rest of a cut-off reply in a turn after it, never as a prefill', () => {
+    const body = new AnthropicClient({ apiKey: 'k' }).body(call({ purpose: 'scene', continueFrom: '```js\nconst a = 1;' }));
+    expect(body.messages).toEqual([
+      { role: 'user', content: expect.any(String) },
+      { role: 'assistant', content: '```js\nconst a = 1;' },
+      { role: 'user', content: CONTINUE_PROMPT },
+    ]);
   });
 
   it('streams the text, never the thinking, and reads usage with cache counts', async () => {
