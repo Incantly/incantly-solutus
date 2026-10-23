@@ -3,7 +3,7 @@ import { REFERENCE_SCENES } from '@incantly/core/scenes';
 import { describe, expect, it } from 'vitest';
 import { ModelError, NO_USAGE, ScriptedModel, type CallPurpose, type ModelCall, type ModelClient } from '../src/models';
 import { scenePrompt } from '../src/context';
-import { DEFAULT_MAX_TOKENS, MAX_REPLY_TOKENS, Generator, conceptAndIdea, planHead, standardFigure, type FailedCheck } from '../src/pipeline';
+import { DEFAULT_MAX_TOKENS, MAX_REPLY_TOKENS, Generator, conceptAndIdea, planHead, progressed, standardFigure, type Attempt, type FailedCheck } from '../src/pipeline';
 import { validatePlan } from '../src/plan';
 import { isolatedProbe } from '../src/probe';
 import { faultyScript, referenceModel, type Fault } from '../src/reference-model';
@@ -93,7 +93,7 @@ describe('the generation pipeline', () => {
     });
   }
 
-  it('makes no more than one automatic repair', async () => {
+  it('stops repairing when a repair changes nothing', async () => {
     const { model, generate } = generator('frame-throw', { stubborn: true });
     const state = await generate.generate({ prompt: REQUESTS['sine-wave'] });
     expect(state.status).toBe('failed');
@@ -198,7 +198,7 @@ describe('the generation pipeline', () => {
     expect(sceneCalls[1]!.maxTokens).toBe(SIZE_BUDGETS.quick.sceneTokens * 2);
   });
 
-  it('gives a probe failure its own repair after a repair spent on validation', async () => {
+  it('repairs a probe failure after a repair spent on validation', async () => {
     // The scene fails validation; its repair validates but throws in a frame; the probe's own repair fixes that.
     const scene = REFERENCE_SCENES.projectile!;
     const fenced = (js: string) => `\`\`\`html\n${scene.html}\n\`\`\`\n\`\`\`css\n${scene.css}\n\`\`\`\n\`\`\`js\n${js}\n\`\`\`\n`;
@@ -211,21 +211,65 @@ describe('the generation pipeline', () => {
     });
     const state = await new Generator({ model, probe: isolatedProbe, adapt: false, retrieve: false }).generate({ prompt: REQUESTS.projectile });
     expect(state.attempts.map((a) => a.failed)).toEqual(['validation', 'probe', null]);
-    expect(state.repairsFor).toEqual({ static: 1, probe: 1 });
+    expect(state.repairsUsed).toBe(2);
     expect(state.status).toBe('approved');
   });
 
-  it('still allows one repair of each kind: a second validation failure falls back', async () => {
+  it('stops when a repair brings back the failure before it', async () => {
     const scene = REFERENCE_SCENES.projectile!;
     const fenced = (js: string) => `\`\`\`html\n${scene.html}\n\`\`\`\n\`\`\`css\n${scene.css}\n\`\`\`\n\`\`\`js\n${js}\n\`\`\`\n`;
+    let repairs = 0;
     const model = new ScriptedModel((call) => {
       if (call.purpose === 'plan') return `Here is the plan.\n\`\`\`json\n${JSON.stringify(scene.plan)}\n\`\`\`\n`;
       if (call.purpose === 'scene') return fenced(faultyScript(scene, 'forbidden-call'));
-      return `\`\`\`js\n${faultyScript(scene, 'unknown-call')}\n\`\`\`\n`;
+      // A different failure, then the same one written differently: the second repair made no progress.
+      repairs++;
+      return `\`\`\`js\n${faultyScript(scene, 'unknown-call')}${repairs === 2 ? 'const unused = 1;\n' : ''}\n\`\`\`\n`;
     });
     const state = await new Generator({ model, probe: isolatedProbe, adapt: false, retrieve: false }).generate({ prompt: REQUESTS.projectile });
     expect(state.status).toBe('failed');
-    expect(model.calls.filter((c) => c.purpose === 'repair')).toHaveLength(1);
+    expect(state.attempts.map((a) => a.faults)).toEqual([['forbidden-global'], ['unknown-sdk-call'], ['unknown-sdk-call']]);
+    expect(model.calls.filter((c) => c.purpose === 'repair')).toHaveLength(2);
+  });
+
+  it('repairs up to three times while each repair makes progress, then falls back', async () => {
+    const scene = REFERENCE_SCENES.projectile!;
+    const fenced = (js: string) => `\`\`\`html\n${scene.html}\n\`\`\`\n\`\`\`css\n${scene.css}\n\`\`\`\n\`\`\`js\n${js}\n\`\`\`\n`;
+    const faults = ['unknown-call', 'frame-throw', 'forbidden-call'] as const;
+    let repairs = 0;
+    const model = new ScriptedModel((call) => {
+      if (call.purpose === 'plan') return `Here is the plan.\n\`\`\`json\n${JSON.stringify(scene.plan)}\n\`\`\`\n`;
+      if (call.purpose === 'scene') return fenced(faultyScript(scene, 'forbidden-call'));
+      return `\`\`\`js\n${faultyScript(scene, faults[repairs++]!)}\n\`\`\`\n`;
+    });
+    const state = await new Generator({ model, probe: isolatedProbe, adapt: false, retrieve: false }).generate({ prompt: REQUESTS.projectile });
+    expect(state.attempts.map((a) => a.failed)).toEqual(['validation', 'validation', 'probe', 'validation']);
+    expect(state.repairsUsed).toBe(3);
+    expect(state.status).toBe('failed');
+  });
+
+  it('approves a scene its third repair fixed', async () => {
+    const scene = REFERENCE_SCENES.projectile!;
+    const fenced = (js: string) => `\`\`\`html\n${scene.html}\n\`\`\`\n\`\`\`css\n${scene.css}\n\`\`\`\n\`\`\`js\n${js}\n\`\`\`\n`;
+    const replies = [faultyScript(scene, 'unknown-call'), faultyScript(scene, 'frame-throw'), scene.js];
+    let repairs = 0;
+    const model = new ScriptedModel((call) => {
+      if (call.purpose === 'plan') return `Here is the plan.\n\`\`\`json\n${JSON.stringify(scene.plan)}\n\`\`\`\n`;
+      if (call.purpose === 'scene') return fenced(faultyScript(scene, 'forbidden-call'));
+      return `\`\`\`js\n${replies[repairs++]!}\n\`\`\`\n`;
+    });
+    const state = await new Generator({ model, probe: isolatedProbe, adapt: false, retrieve: false }).generate({ prompt: REQUESTS.projectile });
+    expect(state.attempts.map((a) => a.failed)).toEqual(['validation', 'validation', 'probe', null]);
+    expect(state.status).toBe('approved');
+  });
+
+  it('counts fewer or different failures as progress, and the same or more as none', () => {
+    const attempt = (failed: FailedCheck, faults: string[]) => ({ failed, faults }) as unknown as Attempt;
+    expect(progressed(attempt('probe', ['bounds']), attempt('validation', ['unknown-global']))).toBe(true);
+    expect(progressed(attempt('probe', ['bounds', 'bounds']), attempt('probe', ['bounds']))).toBe(true);
+    expect(progressed(attempt('probe', ['bounds']), attempt('probe', ['runs']))).toBe(true);
+    expect(progressed(attempt('probe', ['bounds']), attempt('probe', ['bounds']))).toBe(false);
+    expect(progressed(attempt('probe', ['bounds']), attempt('probe', ['bounds', 'runs']))).toBe(false);
   });
 
   it('takes a reply still cut off at the ceiling as a reply-format failure, and reports it for repair', async () => {

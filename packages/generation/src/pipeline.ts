@@ -14,9 +14,9 @@ import { aboutScene, retrieveExample } from './retrieve';
  * The generation pipeline (PRD 27.1):
  *
  *   plan -> validate plan (one re-plan) -> scene -> static validation -> probe
- *     fail -> structured report -> one repair -> validation and probe again
- *     (a failure caught before the scene runs and one its probe catches each
- *     get their own repair, so fixing the first never spends the second)
+ *     fail -> structured report -> repair -> validation and probe again
+ *     (up to three repairs of any failure, stopping early when a repair
+ *     brings back the same failures, or more of them)
  *     -> approved, or failed (the caller falls back)
  *
  * The scene call either writes the scene whole, following the nearest
@@ -59,7 +59,7 @@ export interface GeneratorOptions {
   readonly model: ModelClient;
   /** Probes each candidate. Without one, candidates stop at static validation. */
   readonly probe?: SceneProber | null;
-  /** Automatic repairs per generation. v0.1 allows one; a further one runs only if the previous repair changed something (RP-4). */
+  /** Automatic repairs per generation, of any kind; default three. A further one runs only while the repair before it made progress (RP-4). */
   readonly maxRepairs?: number;
   /** Re-plans after a rejected plan. */
   readonly replans?: number;
@@ -113,14 +113,17 @@ export interface CallRecord {
 export type FailedCheck = 'reply' | 'validation' | 'probe';
 
 /**
- * The two repair budgets. A reply or validation failure is caught before the
- * scene runs, a probe failure only once it runs; each gets its own repair, so
- * fixing a validation error never spends the repair a probe failure needs.
+ * Whether a repair moved on from the failure before it. Failing a different
+ * check is progress; failing the same one is progress only with fewer
+ * failures, or different ones. The same failures again, or more of them,
+ * mean another repair would likely go round in circles.
  */
-export type RepairKind = 'static' | 'probe';
-
-export function repairKind(failed: FailedCheck | null): RepairKind {
-  return failed === 'probe' ? 'probe' : 'static';
+export function progressed(before: Attempt, after: Attempt): boolean {
+  if (before.failed !== after.failed) return true;
+  const was = [...(before.faults ?? [])].sort();
+  const now = [...(after.faults ?? [])].sort();
+  if (now.length !== was.length) return now.length < was.length;
+  return now.some((fault, i) => fault !== was[i]);
 }
 
 export interface Attempt {
@@ -133,6 +136,8 @@ export interface Attempt {
   readonly failed: FailedCheck | null;
   readonly report: RepairReport | null;
   readonly probe: ProbeReport | null;
+  /** The failing checks or validator rules, one per failure, to tell whether a repair made progress. */
+  readonly faults?: readonly string[];
   readonly scene: ValidatedScene | null;
   /** Certain fixes the validator applied to this candidate itself, with no model call. */
   readonly fixed?: readonly string[];
@@ -219,8 +224,6 @@ export class GenerationState {
   readonly attempts: Attempt[] = [];
   readonly calls: CallRecord[] = [];
   repairsUsed = 0;
-  /** Repairs used per kind; each kind has its own budget of `maxRepairs`. */
-  readonly repairsFor: Record<RepairKind, number> = { static: 0, probe: 0 };
   failure: GenerationFailure | null = null;
   /** When the build began; the deadline counts from here, not from the request. */
   buildStartedAt: number | null = null;
@@ -280,7 +283,7 @@ export class Generator {
   private readonly now: () => number;
 
   constructor(private readonly options: GeneratorOptions) {
-    this.maxRepairs = Math.max(0, options.maxRepairs ?? 1);
+    this.maxRepairs = Math.max(0, options.maxRepairs ?? 3);
     this.replans = Math.max(0, options.replans ?? 1);
     this.now = options.now ?? (() => Date.now());
   }
@@ -700,26 +703,36 @@ export class Generator {
     return attempt;
   }
 
-  /** Whether another automatic repair may run (RP-4), from the budget of the kind of failure that stands. */
+  /** Whether another automatic repair may run (RP-4): within the budget, and only while the repairs make progress. */
   canRepair(state: GenerationState): boolean {
     const last = state.attempts.at(-1);
     if (!last || last.passed) return false;
-    const used = state.repairsFor[repairKind(last.failed)];
-    if (used >= this.maxRepairs) return false;
-    // A further repair of a kind only when the previous one changed something: identical output means nothing more to offer.
-    return used === 0 || (last.purpose === 'repair' && last.changed.length > 0);
+    if (state.repairsUsed >= this.maxRepairs) return false;
+    if (last.purpose !== 'repair') return true;
+    // Identical output means nothing more to offer; the same failure again, or a worse one, means going round in circles.
+    const before = state.attempts.at(-2);
+    return last.changed.length > 0 && (!before || progressed(before, last));
   }
 
   private async repairWhileAllowed(state: GenerationState, hooks: GenerationHooks, signal?: AbortSignal): Promise<void> {
-    while (this.canRepair(state) && state.status !== 'failed') {
+    while (this.canRepair(state)) {
       if (this.remainingMs(state) < this.repairEstimateMs(state)) {
         // It would not finish in time: fall back now rather than make the learner wait past the deadline.
         state.deadlineSkipped = true;
         break;
       }
-      await this.repair(state, state.current!.report!, hooks, signal);
+      if (!(await this.repair(state, state.current!.report!, hooks, signal))) break;
     }
     this.settle(state);
+  }
+
+  /**
+   * Repairs a failure the learner's device reported, then whatever that
+   * repair fails before it runs, while the budget and the progress allow.
+   */
+  async repairReported(state: GenerationState, report: RepairReport, hooks: GenerationHooks = {}, signal?: AbortSignal): Promise<void> {
+    if (await this.repair(state, report, hooks, signal)) await this.repairWhileAllowed(state, hooks, signal);
+    else this.settle(state);
   }
 
   /**
@@ -731,7 +744,6 @@ export class Generator {
     const current = state.current;
     if (!plan || !current) throw new Error('Nothing to repair');
     state.repairsUsed++;
-    state.repairsFor[repairKind(current.failed)]++;
     const started = this.now();
     // A repair that must return a whole fragment the scene could not fit needs the scene's own budget.
     const reply = await this.call(state, 'repair', repairPrompt(report, current.fragments, plan), this.deadlineSignal(state, signal), this.streamed(hooks, 'repair'), SIZE_BUDGETS[plan.size ?? 'quick'].sceneTokens);
@@ -761,7 +773,7 @@ export class Generator {
     if (!plan || !current || !current.passed) throw new Error('No validated scene to fail');
     const number = state.repairsUsed + 1;
     const repairReport = probeReport(report, current.fragments, plan, number, Math.max(this.maxRepairs, number));
-    state.attempts[state.attempts.length - 1] = { ...current, passed: false, failed: 'probe', report: repairReport, probe: report };
+    state.attempts[state.attempts.length - 1] = { ...current, passed: false, failed: 'probe', report: repairReport, probe: report, faults: report.failures.map((f) => f.check) };
     state.status = 'failed';
     state.failure = { stage: 'scene', reason: repairReport.summary };
     return repairReport;
@@ -794,7 +806,7 @@ export class Generator {
       return full;
     };
     if (missing.length > 0 || problems.length > 0) {
-      return record({ passed: false, failed: 'reply', report: parseReport(problems, missing, number, of), probe: null, scene: null });
+      return record({ passed: false, failed: 'reply', report: parseReport(problems, missing, number, of), probe: null, scene: null, faults: [...problems, ...missing] });
     }
     // The plan's size sets how many controls the scene may declare.
     const limits = { ...SCENE_LIMITS, params: SIZE_BUDGETS[plan.size ?? 'quick'].controls };
@@ -806,12 +818,13 @@ export class Generator {
       fixes = fixed.applied;
     }
     if (!validation.ok || !validation.scene) {
-      return record({ passed: false, failed: 'validation', report: validationReport(validation.diagnostics, fragments, number, of), probe: null, scene: null });
+      const faults = validation.diagnostics.filter((d) => d.severity === 'error').map((d) => d.rule);
+      return record({ passed: false, failed: 'validation', report: validationReport(validation.diagnostics, fragments, number, of), probe: null, scene: null, faults });
     }
     if (!this.options.probe) return record({ passed: true, failed: null, report: null, probe: null, scene: validation.scene });
     const report = await this.options.probe(validation.scene, probeSpecFor(plan));
     if (!report.ok) {
-      return record({ passed: false, failed: 'probe', report: probeReport(report, fragments, plan, number, of), probe: report, scene: validation.scene });
+      return record({ passed: false, failed: 'probe', report: probeReport(report, fragments, plan, number, of), probe: report, scene: validation.scene, faults: report.failures.map((f) => f.check) });
     }
     return record({ passed: true, failed: null, report: null, probe: report, scene: validation.scene });
   }

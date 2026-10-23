@@ -16,7 +16,7 @@ import { issueTicket, readTicket } from './ticket';
  * The generation service: an authenticated HTTP endpoint for the plan, scene
  * and repair calls. The plan and static validation run here; the learner's
  * device probes the scene in its sandbox and reports back, and a failed probe
- * gets one repair. Limits are per learner, every model call has a deadline,
+ * is repaired, up to three times while each repair makes progress. Limits are per learner, every model call has a deadline,
  * a switch turns generation off without touching stored figures (they never
  * call this service), and nothing the learner wrote is kept.
  *
@@ -484,8 +484,7 @@ export class GenerationService {
     const timeout = AbortSignal.timeout(this.options.generationTimeoutMs ?? 45_000);
     const before = state.cost;
     try {
-      await generator.repair(state, repairReport, {}, timeout);
-      generator.settle(state);
+      await generator.repairReported(state, repairReport, {}, timeout);
     } finally {
       session.busy = false;
       this.limits.spend(learner.id, state.cost - before);
@@ -501,8 +500,8 @@ export class GenerationService {
   /**
    * A figure in a note hit a problem after it was live (RP-7). Its ticket
    * proves the service signed these very fragments and gives back their plan;
-   * the device's report says what went wrong, at the learner's values. One
-   * repair, and the repaired scene goes back to the device to probe, reported
+   * the device's report says what went wrong, at the learner's values. It is
+   * repaired, and the repaired scene goes back to the device to probe, reported
    * through the usual probe endpoint, which approves it with a new ticket.
    */
   private async repairStored(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -527,10 +526,7 @@ export class GenerationService {
       const adopted = generator.adopt(state, { plan, fragments });
       // A scene the validator now rejects is repaired from that; one it accepts, from what the device saw.
       const repairReport = adopted.passed ? generator.deviceFailed(state, report) : adopted.report!;
-      if (generator.canRepair(state)) {
-        await generator.repair(state, repairReport, {}, timeout);
-        generator.settle(state);
-      }
+      if (generator.canRepair(state)) await generator.repairReported(state, repairReport, {}, timeout);
       generator.finish(state);
     } finally {
       admitted.release();

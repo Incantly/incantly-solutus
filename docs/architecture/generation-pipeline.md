@@ -13,7 +13,7 @@ concept
 
 failure after generation
   -> focused error report
-  -> one repair attempt
+  -> up to three repairs, while each makes progress
   -> validate and probe again
   -> reveal or fallback
 ```
@@ -71,7 +71,7 @@ Some checks are too slow for a learner's device, and none should stand in a lear
 
 ## Repair
 
-v0.1 permits one automatic repair. The repair request contains only:
+A failed scene gets up to three automatic repairs, and stops early when a repair makes no progress. The repair request contains only:
 
 - Failure kind and exact parameter state.
 - Mapped fragment line and nearby source.
@@ -106,7 +106,7 @@ The pipeline lives in `packages/generation`. Where each step runs:
 | Scene, each fragment checked as it streams in | Service | `fragments.ts`, `pipeline.ts` |
 | Static validation | Service, and again on the device before anything mounts | `@incantly/core` validator |
 | Probe | The learner's device, in a fresh hidden sandbox | `@incantly/generation/client` with core's `probeSandboxed` |
-| One repair | Service, from the device's probe report or a static failure | `report.ts`, `pipeline.ts` |
+| Up to three repairs | Service, from the device's probe report or a static failure | `report.ts`, `pipeline.ts` |
 | Fallback ladder | The device | `client/flow.ts` |
 | Skeleton and insertion into the note | The device | `@incantly/tiptap` `FigureGeneration` |
 | Evals | Node, with the same probe in an isolated context | `evals.ts`, `probe.ts` |
@@ -117,7 +117,7 @@ The core rules and the capability catalog open every call as one block marked fo
 
 ### Repair
 
-A failed candidate gets one automatic repair. Its report quotes the failing check, the parameter state with the bounds marked, the real error, the agent's own line with its neighbours, a likely cause from the failure taxonomy and the core rules broken (`report.ts`). The repair call sends only that report, the fragments as they stand, the capability lines and, when the failure is an unknown name, the contract. A repair that returns the same fragments ends the attempt. Failures caught before the scene runs (an unreadable reply, a validation error) and failures its probe catches have separate budgets of one repair each, so a validation repair never spends the repair a probe failure needs; the probe can only run once validation passes, so the second repair is the first chance to fix what it finds. `maxRepairs` above one allows a further repair of the same kind only when the previous one changed something (RP-4); v0.1 keeps one of each.
+A failed candidate gets up to three automatic repairs in total (`maxRepairs`), of any kind. Its report quotes the failing check, the parameter state with the bounds marked, the real error, the agent's own line with its neighbours, a likely cause from the failure taxonomy and the core rules broken (`report.ts`). The repair call sends only that report, the fragments as they stand, the capability lines and, when the failure is an unknown name, the contract. A further repair runs only while the one before made progress (`progressed`): a repair that returns the same fragments ends it, and so does one that fails the same check with the same failures again, or more of them, since repairs can otherwise go round in circles. Failing a different check, or the same check with fewer or different failures, counts as progress. On the service, a repair of a device's probe report that then fails validation is repaired again at once, within the same budget; the repaired scene goes back to the device, whose next failed probe asks for the next repair. Each repair also needs time left before the deadline.
 
 ### The service
 
@@ -175,7 +175,7 @@ What makes it fast, and what each saves:
 - **A short plan.** Both models write about 150 to 200 tokens a second, so every token out is the learner's wait. The plan format asks for one compact JSON line with a few words of prose per field and the quick size unless the learner asks for two views: on the acceptance prompts plans fell from 570 to 870 tokens (4 to 13 s) to 330 to 500 (2 to 4 s). A constant declared as a model output (φ with no dependencies) is dropped rather than re-planned, as a re-plan costs a whole call.
 - **A short scene.** The scene call is told the js line budget and to write no comments or blank lines; a scene written whole follows an example of the same kind of figure (graph, motion, diagram) and, between near ties, the shorter example. Quick scenes fell from 120 to 150 lines (3,600 tokens) to 35 to 55 (1,100 to 1,600).
 - **The scene prefix written ahead** (`warm`). The plan streams concept, kind, capabilities and parameters before its model, parts and steps, and those alone fix the scene call's system blocks. Once they are in (`planHead`), a `max_tokens: 0` request writes that prefix to the prompt cache while the plan finishes; it writes no reply and is not a model round trip on the path. The scene call waits for it at most until a second after it began (`WARM_MS`), then reads ten to fifteen thousand cached tokens instead of writing them: its first text came after about 1.5 s instead of about 2 s, in a bench of twelve runs each way.
-- **One repair, not two.** A validation report quotes one error of each kind before more of one kind, so a repair never leaves a kind it was not shown; rule 10 names the bounded loop (`i <= Math.min(n, 120)`) and the template string the model otherwise misses, and `toExponential` is allowed beside `toFixed` and `toPrecision`.
+- **Few repairs.** A validation report quotes one error of each kind before more of one kind, so a repair never leaves a kind it was not shown; rule 10 names the bounded loop (`i <= Math.min(n, 120)`) and the template string the model otherwise misses, and `toExponential` is allowed beside `toFixed` and `toPrecision`.
 - **Budgets by size.** Quick, standard and rich figures have their own line, output-token, control and part budgets, and the scene call's token limit follows them.
 - **Checks that cost no tokens.** The validator and the probe find the problem and the report quotes the failing check, the parameter state and the agent's own line, so one short repair usually fixes it.
 - **On the device.** The probe frame boots while the plan and scene are still being written, with the plan's drawing kits preloaded; a warm frame saves 80 to 180 ms, and the probe takes 200 to 500 ms.

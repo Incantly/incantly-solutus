@@ -103,7 +103,8 @@ describe('running the evals', () => {
     expect(trials.filter((t) => t.firstAttempt).every((t) => t.record.planProblems.length === 0)).toBe(true);
     const stubborn = trials.filter((t) => t.index % 3 === 2 && FAULTS[t.index % FAULTS.length] !== 'bad-plan');
     for (const trial of stubborn) expect(trial.passed, `${trial.index}`).toBe(false);
-    expect(trials.every((t) => t.repairs <= 1)).toBe(true);
+    // A stubborn repair stops once it brings back the failure before it: the first time, or the second after a cut-off reply.
+    expect(trials.every((t) => t.repairs <= (FAULTS[t.index % FAULTS.length] === 'cut-off' ? 2 : 1))).toBe(true);
     expect(summary.postRepair.passed).toBe(trials.filter((t) => t.passed).length);
     expect(Object.values(summary.failures).reduce((a, b) => a + b, 0)).toBe(trials.filter((t) => !t.passed).length);
     expect(summary.gate.postRepair).toBe(false);

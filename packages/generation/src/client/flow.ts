@@ -7,7 +7,7 @@ import type { FallbackLevel, ProductSignal } from './telemetry';
 /**
  * A generation from the learner's side (PRD 27.1, RP-1, RP-9): show the
  * skeleton as soon as the plan arrives, probe every scene in a fresh hidden
- * sandbox on this device, send a failed probe back for its one repair, and
+ * sandbox on this device, send a failed probe back for its repair, and
  * reveal only a scene that passed. When nothing passes, take the first rung
  * of the fallback ladder that is available. A learner never sees a broken
  * figure, a raw error or an empty box.
