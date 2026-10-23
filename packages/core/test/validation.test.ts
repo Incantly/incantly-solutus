@@ -5,6 +5,7 @@ import {
   FUEL_FUNCTION,
   KEY_FUNCTION,
   LineIndex,
+  fixScene,
   formatDiagnostic,
   instrumentSceneJs,
   originalColumn,
@@ -107,6 +108,35 @@ describe('validator: JavaScript details', () => {
     const result = validateSceneJs(js);
     expect(result.diagnostics.map((d) => `${d.rule}:${d.line}`)).toEqual(['unknown-method:4']);
     expect(result.diagnostics[0]!.message).toContain('Path handles have no method "text"');
+  });
+
+  it('offers a certain fix where there is one, and fixScene applies it with no model call', () => {
+    const js = (body: string) =>
+      [
+        "const n = inc.param('n', { min: 1, max: 20, value: 5 });",
+        "const stage = inc.svg('#stage', { viewBox: [0, 0, 100, 100], title: 'S' });",
+        'const dot = stage.circle(10, 10, 2);',
+        'let count = 3;',
+        body,
+        "inc.onFrame(() => { count = n.value; dot.at(count, 10); });",
+      ].join('\n');
+    const html = '<div id="stage"></div>';
+    // A loop the controls can lengthen is capped at the limit; a void that only marks a name used is dropped.
+    const broken = { html, css: '', js: js('for (let i = 0; i < count; i++) { dot.at(i, 10); }\nvoid dot;') };
+    const before = validateScene(broken);
+    expect(before.ok).toBe(false);
+    expect(before.diagnostics.filter((d) => d.fix).map((d) => d.rule)).toEqual(['unbounded-loop', 'forbidden-syntax']);
+    const fixed = fixScene(broken);
+    expect(fixed.validation.ok).toBe(true);
+    expect(fixed.fragments.js).toContain('for (let i = 0; i < Math.min(count, 5000); i++)');
+    expect(fixed.fragments.js).not.toContain('void');
+    expect(fixed.applied).toEqual(['dropped void dot', 'capped a loop at Math.min(count, 5000)']);
+    // A loop counting down has no certain fix; neither has anything else; a valid scene is left alone.
+    const down = { html, css: '', js: js('for (let i = 100; i > count; i--) { dot.at(i, 10); }') };
+    expect(fixScene(down).applied).toEqual([]);
+    expect(fixScene(down).validation.ok).toBe(false);
+    const fine = { html, css: '', js: js('') };
+    expect(fixScene(fine).fragments).toBe(fine);
   });
 
   it('checks the names a helper takes its arguments by, before the scene runs', () => {

@@ -13,6 +13,21 @@ export interface Diagnostic {
   /** 1-based column within the line. */
   readonly column: number;
   readonly severity: Severity;
+  /** The change that certainly fixes it, when there is one: applied without asking the model again. */
+  readonly fix?: Fix;
+}
+
+/**
+ * A certain fix: replace start..end of the fragment's source with text. Only
+ * fixes whose meaning is plain are offered, such as capping a loop the
+ * controls can lengthen at the validator's own limit.
+ */
+export interface Fix {
+  readonly start: number;
+  readonly end: number;
+  readonly text: string;
+  /** What it did, in a few words, for records and the debug log. */
+  readonly note: string;
 }
 
 export interface Position {

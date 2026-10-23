@@ -106,8 +106,43 @@ export function validateScene(fragments: SceneFragments, options: ValidateOption
   };
 }
 
+export interface FixedScene {
+  readonly fragments: SceneFragments;
+  /** What each applied fix did, in order. */
+  readonly applied: readonly string[];
+  readonly validation: SceneValidation;
+}
+
+/**
+ * The scene with the validator's certain fixes applied, the way a compiler
+ * applies its own suggestions, and validated again: no model call. Two passes
+ * at most, as a fix may let the validator see past it; fixes that overlap
+ * one already applied wait for the next pass. What no fix covers is left for
+ * a repair.
+ */
+export function fixScene(fragments: SceneFragments, options: ValidateOptions = {}): FixedScene {
+  let current = fragments;
+  const applied: string[] = [];
+  let validation = validateScene(current, options);
+  for (let pass = 0; pass < 2 && !validation.ok; pass++) {
+    const fixes = validation.diagnostics.flatMap((d) => (d.severity === 'error' && d.fragment === 'js' && d.fix ? [d.fix] : []));
+    if (fixes.length === 0 || typeof current.js !== 'string') break;
+    let js = current.js;
+    let before = Number.POSITIVE_INFINITY;
+    for (const fix of [...fixes].sort((a, b) => b.start - a.start)) {
+      if (fix.end > before) continue;
+      js = js.slice(0, fix.start) + fix.text + js.slice(fix.end);
+      before = fix.start;
+      applied.push(fix.note);
+    }
+    current = { ...current, js };
+    validation = validateScene(current, options);
+  }
+  return { fragments: current, applied, validation };
+}
+
 export { formatDiagnostic, hasErrors, LineIndex } from './diagnostics';
-export type { Diagnostic, Fragment, Position, Severity } from './diagnostics';
+export type { Diagnostic, Fix, Fragment, Position, Severity } from './diagnostics';
 export { FUEL_FUNCTION, KEY_FUNCTION, instrumentSceneJs, originalColumn } from './instrument';
 export type { ColumnShift, InstrumentedScene } from './instrument';
 export { validateSceneJs } from './js';

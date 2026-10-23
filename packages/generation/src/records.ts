@@ -44,6 +44,8 @@ export interface FailureRecord {
   readonly usage: ModelUsage;
   readonly cost: number;
   readonly timings: GenerationState['timings'];
+  /** Certain fixes the validator applied itself, with no model call. */
+  readonly fixes: readonly string[];
   /** Each model call: how long it took, how soon its text began, and what it wrote and read from the cache (PRD 25.7). */
   readonly calls: readonly CallTiming[];
   readonly failure: string | null;
@@ -94,6 +96,7 @@ export function failureRecord(state: GenerationState, probedOn: FailureRecord['p
     usage: state.usage,
     cost: Math.round(state.cost * 1e6) / 1e6,
     timings: { ...state.timings },
+    fixes: state.attempts.flatMap((a) => a.fixed ?? []),
     calls: state.calls.map((c) => ({
       purpose: c.purpose,
       ms: c.ms,

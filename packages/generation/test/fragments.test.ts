@@ -48,7 +48,10 @@ describe('scene replies', () => {
   });
 
   it('reports blocks it cannot use', () => {
-    expect(parseFragments('```html\n<div></div>\n```\n```html\n<p></p>\n```').problems).toEqual(['There is more than one html block']);
+    // A second block of the same fragment revises the first: the later one stands.
+    const revised = parseFragments('```html\n<div id="stage"></div>\n```\n```html\n<div id="left"></div>\n```');
+    expect(revised.problems).toEqual([]);
+    expect(revised.fragments.html).toBe('<div id="left"></div>\n');
     expect(parseFragments('```python\nprint(1)\n```').problems).toEqual(['A ```python block is not one of html, css or js']);
     expect(parseFragments('```js\nconst a = 1;').problems).toEqual(['The js block was never closed']);
     expect(missingFragments(parseFragments('```js\nconst a = 1;\n```').fragments)).toEqual(['html', 'css']);

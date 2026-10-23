@@ -61,7 +61,7 @@ async function failureDiagnostic(generationId: string): Promise<unknown> {
     const records = (await answer.json()) as Array<Record<string, unknown>>;
     const record = records.find((entry) => entry.id === generationId);
     if (!record) return { unavailable: 'No server failure record was found for this generation' };
-    const fields = ['outcome', 'failure', 'concept', 'models', 'timings', 'calls', 'planProblems', 'reports', 'repairs', 'example', 'mode', 'deadlineSkipped', 'usage'] as const;
+    const fields = ['outcome', 'failure', 'concept', 'models', 'timings', 'calls', 'fixes', 'planProblems', 'reports', 'repairs', 'example', 'mode', 'deadlineSkipped', 'usage'] as const;
     return Object.fromEntries(fields.filter((field) => field in record).map((field) => [field, record[field]]));
   } catch (error) {
     return { unavailable: error instanceof Error ? error.message : String(error) };

@@ -390,6 +390,23 @@ describe('the generation pipeline', () => {
     expect(state.timings.planMs).toBeLessThan(state.timings.totalMs!);
   });
 
+  it('applies the validator\'s certain fixes itself, so a capped loop needs no repair call', async () => {
+    const sine = REFERENCE_SCENES['sine-wave']!;
+    const js = `${sine.js.trim()}\nlet count = 3;\nfor (let i = 0; i < count; i++) { count += 0; }\n`;
+    const model = new ScriptedModel((call) =>
+      call.purpose === 'plan'
+        ? '```json\n' + JSON.stringify(sine.plan) + '\n```'
+        : ['```html', sine.html.trim(), '```', '```css', sine.css.trim(), '```', '```js', js, '```'].join('\n'),
+    );
+    const state = await new Generator({ model, probe: isolatedProbe, adapt: false, retrieve: false }).generate({ prompt: 'Show me a sine wave.' });
+    expect(state.status, state.failure?.reason).toBe('approved');
+    expect(state.firstAttemptPassed).toBe(true);
+    expect(state.repairsUsed).toBe(0);
+    expect(model.calls.map((c) => c.purpose)).toEqual(['plan', 'scene']);
+    expect(state.attempts[0]!.fixed).toEqual(['capped a loop at Math.min(count, 5000)']);
+    expect(state.scene!.js).toContain('i < Math.min(count, 5000)');
+  });
+
   it('reads a streaming plan\'s concept and idea once both are complete', () => {
     expect(conceptAndIdea('```json\n{ "concept": "projectile mot')).toBeNull();
     expect(conceptAndIdea('{ "concept": "projectile motion", "idea": "A ball')).toBeNull();

@@ -91,10 +91,8 @@ export class FragmentStream {
       this.problems.push(`A \`\`\`${language || ' '} block is not one of html, css or js`);
       return;
     }
-    if (this.found[name] !== undefined) {
-      this.problems.push(`There is more than one ${name} block`);
-      return;
-    }
+    // A second block of the same fragment is the model revising its first, as when it moves a figure from #stage to
+    // two panels: the later one stands, and validation checks it against the script as always.
     const source = `${lines.join('\n')}\n`;
     this.found[name] = source;
     this.onFragment?.(name, source);

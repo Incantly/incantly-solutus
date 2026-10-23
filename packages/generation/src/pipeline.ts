@@ -1,4 +1,4 @@
-import { SCENE_LIMITS, SDK_VERSION, SIZE_BUDGETS, validateScene, validateSceneCss, validateSceneHtml, validateSceneJs, type ProbeReport, type ScenePlan, type ValidatedScene } from '@incantly/core';
+import { SCENE_LIMITS, SDK_VERSION, SIZE_BUDGETS, fixScene, validateScene, validateSceneCss, validateSceneHtml, validateSceneJs, type ProbeReport, type ScenePlan, type ValidatedScene } from '@incantly/core';
 import type { ReferenceScene } from '@incantly/core/scenes';
 import { changePrompt, libraryPrompt, planPrompt, scenePrompt, standardFigure, type LearnerRequest, type Prompt } from './context';
 import { applyFragmentEdits, parseEdits, withoutEditBlocks } from './edits';
@@ -134,6 +134,8 @@ export interface Attempt {
   readonly report: RepairReport | null;
   readonly probe: ProbeReport | null;
   readonly scene: ValidatedScene | null;
+  /** Certain fixes the validator applied to this candidate itself, with no model call. */
+  readonly fixed?: readonly string[];
 }
 
 export type GenerationStatus = 'planning' | 'building' | 'validated' | 'approved' | 'failed';
@@ -785,8 +787,9 @@ export class Generator {
     const plan = state.plan!;
     const number = state.repairsUsed + 1;
     const of = Math.max(this.maxRepairs, number);
+    let fixes: readonly string[] = [];
     const record = (attempt: Omit<Attempt, 'purpose' | 'fragments' | 'changed'>): Attempt => {
-      const full: Attempt = { purpose, fragments, changed, ...attempt };
+      const full: Attempt = { purpose, fragments, changed, ...attempt, ...(fixes.length > 0 ? { fixed: fixes } : {}) };
       state.attempts.push(full);
       return full;
     };
@@ -795,7 +798,13 @@ export class Generator {
     }
     // The plan's size sets how many controls the scene may declare.
     const limits = { ...SCENE_LIMITS, params: SIZE_BUDGETS[plan.size ?? 'quick'].controls };
-    const validation = validateScene({ html: fragments.html!, css: fragments.css!, js: fragments.js! }, { limits });
+    // What the validator can fix for certain, it fixes, as a compiler applies its own suggestions; only the rest needs a repair.
+    const fixed = fixScene({ html: fragments.html!, css: fragments.css!, js: fragments.js! }, { limits });
+    const validation = fixed.validation;
+    if (fixed.applied.length > 0) {
+      fragments = { ...fragments, js: fixed.fragments.js };
+      fixes = fixed.applied;
+    }
     if (!validation.ok || !validation.scene) {
       return record({ passed: false, failed: 'validation', report: validationReport(validation.diagnostics, fragments, number, of), probe: null, scene: null });
     }

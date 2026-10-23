@@ -37,8 +37,8 @@ export { THEME_CSS } from './renderer/theme';
 export { STYLE_SLOTS, checkStyle, mergeStyles, resolveStyle } from './renderer/style';
 export type { ControlsPlacement, FigureLayout, FigureStyle, ShowPart, StylePreset, StyleSlot } from './renderer/style';
 
-export { validateScene, validateSceneCss, validateSceneHtml, validateSceneJs, formatDiagnostic, hasErrors, SCENE_LIMITS, VALIDATOR_VERSION } from './validation';
-export type { Diagnostic, SceneFragments, SceneLimits, SceneValidation, ValidatedScene } from './validation';
+export { fixScene, validateScene, validateSceneCss, validateSceneHtml, validateSceneJs, formatDiagnostic, hasErrors, SCENE_LIMITS, VALIDATOR_VERSION } from './validation';
+export type { Diagnostic, FixedScene, SceneFragments, SceneLimits, SceneValidation, ValidatedScene } from './validation';
 
 export { compileIsolated, ISOLATED_SCRIPT_NAME, probeScene } from './probe';
 export type { IsolatedScene, ProbeCheck, ProbeError, ProbeFailure, ProbeOptions, ProbeReport, ProbeSpec, ProbeStats, ScriptEvaluator } from './probe';

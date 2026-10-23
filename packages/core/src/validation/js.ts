@@ -14,7 +14,7 @@ import {
 import { RENDERABLE_ATTRIBUTES } from '../protocol/scene-commands';
 import { isKitCall, kitsFor, type KitName } from '../runtime/kits';
 import { isColourLiteral, NAMED_COLOURS } from './colours';
-import { LineIndex, type Diagnostic } from './diagnostics';
+import { LineIndex, type Diagnostic, type Fix } from './diagnostics';
 import { SCENE_LIMITS, type SceneLimits } from './limits';
 
 /**
@@ -586,9 +586,9 @@ class JsValidator {
     };
   }
 
-  private report(rule: string, message: string, offset: number, severity: 'error' | 'warning' = 'error'): void {
+  private report(rule: string, message: string, offset: number, severity: 'error' | 'warning' = 'error', fix?: Fix): void {
     const { line, column } = this.index.position(offset);
-    this.diagnostics.push({ fragment: 'js', rule, message, line, column, severity });
+    this.diagnostics.push({ fragment: 'js', rule, message, line, column, severity, ...(fix ? { fix } : {}) });
   }
 
   private count(node: AnyNode): void {
@@ -656,6 +656,16 @@ class JsValidator {
     switch (node.type) {
       case 'ExpressionStatement':
         if (node.directive !== undefined) return; // "use strict"
+        if (node.expression.type === 'UnaryExpression' && node.expression.operator === 'void' && node.expression.argument.type === 'Identifier') {
+          // void name; only marks a name as used: dropping the statement changes nothing.
+          this.report('forbidden-syntax', 'The void operator is not allowed in scenes', node.expression.start, 'error', {
+            start: node.start,
+            end: node.end,
+            text: '',
+            note: `dropped void ${node.expression.argument.name}`,
+          });
+          return;
+        }
         this.expression(node.expression, ctx);
         return;
       case 'VariableDeclaration': {
@@ -784,7 +794,17 @@ class JsValidator {
       direction = test.operator === '<' || test.operator === '<=' ? 'up' : 'down';
       this.expression(test.right, inner);
       const problem = this.loopBound(test.right, inner.scope);
-      if (problem) fail(problem, test.right);
+      // Counting up to a bound the controls can change: capping it at the limit is certain, and changes nothing below it.
+      if (problem && direction === 'up') {
+        const bound = this.source.slice(test.right.start, test.right.end);
+        const limit = this.limits.loopBound;
+        this.report('unbounded-loop', problem, test.right.start, 'error', {
+          start: test.right.start,
+          end: test.right.end,
+          text: `Math.min(${bound}, ${limit})`,
+          note: `capped a loop at Math.min(${bound.length > 30 ? `${bound.slice(0, 27)}...` : bound}, ${limit})`,
+        });
+      } else if (problem) fail(problem, test.right);
     } else {
       fail(`A for loop must compare its counter with a bound, as in ${counter} < 10`, test ?? node);
       if (test) this.expression(test, inner);
