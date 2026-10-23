@@ -15,6 +15,7 @@ import type {
   PathHandle,
   PolylineHandle,
   Readable,
+  RotateOptions,
   Shade,
   Stage,
   TextHandle,
@@ -101,8 +102,18 @@ export class ElementHandle implements Handle {
     return this;
   }
 
-  rotate(degrees: number, cx = 0, cy = 0): this {
-    this.graph.setTransform(this.node, { rotation: degrees, rcx: cx, rcy: cy });
+  rotate(degrees: number, pivot?: RotateOptions | number, cy = 0): this {
+    if (typeof pivot === 'object' && pivot !== null) {
+      // { about: [x, y] }, or the { x, y } or SVG's { cx, cy } a scene reaches for first.
+      const named = pivot as { about?: unknown; x?: unknown; y?: unknown; cx?: unknown; cy?: unknown };
+      const pair = (a: unknown, b: unknown) => (typeof a === 'number' && typeof b === 'number' ? [a, b] : undefined);
+      const about = named.about ?? pair(named.x, named.y) ?? pair(named.cx, named.cy);
+      if (!Array.isArray(about) || about.length !== 2) throw new SceneApiError('rotate(degrees, { about: [x, y] }) needs about as a point [x, y]');
+      this.graph.setTransform(this.node, { rotation: degrees, rcx: Number(about[0]), rcy: Number(about[1]), rparent: 1 });
+      return this;
+    }
+    // The older form: a pivot in the element's own units, before at().
+    this.graph.setTransform(this.node, { rotation: degrees, rcx: typeof pivot === 'number' ? pivot : 0, rcy: cy, rparent: 0 });
     return this;
   }
 
@@ -220,7 +231,12 @@ export class PartRegistry {
 }
 
 export class StageHandle implements Stage {
-  readonly viewBox: ViewBox;
+  private readonly declared: ViewBox;
+
+  /** The stage's view now: what the scene declared, or what a stage that fits its drawing framed. */
+  get viewBox(): ViewBox {
+    return this.graph.stages.find((stage) => stage.id === this.stageNode.id)?.viewBox ?? this.declared;
+  }
 
   constructor(
     private readonly graph: SceneGraph,
@@ -228,7 +244,7 @@ export class StageHandle implements Stage {
     viewBox: ViewBox,
     private readonly parts: PartRegistry,
   ) {
-    this.viewBox = viewBox;
+    this.declared = viewBox;
     nodes.set(this, stageNode);
     bindMethods(this);
   }

@@ -28,6 +28,8 @@ export type SceneCommand =
       /** For `use`: the element it repeats. */
       readonly source?: number;
     }
+  /** A stage's view changes, as a stage that fits its drawing does. */
+  | { readonly op: 'viewBox'; readonly id: number; readonly viewBox: ViewBox }
   | { readonly op: 'attr'; readonly id: number; readonly name: string; readonly value: string | null }
   | { readonly op: 'text'; readonly id: number; readonly value: string }
   | { readonly op: 'class'; readonly id: number; readonly value: string }

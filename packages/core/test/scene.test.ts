@@ -75,13 +75,30 @@ describe('scene graph', () => {
     expect(() => p.set({ 'stroke-dasharray': '<script>' })).toThrow('not plain geometry');
   });
 
+  it('turns about a point in the units at() uses, wherever at() put it', () => {
+    // A bicycle wheel once sat at (440, 150) and turned about (440, 150) in its own units, flinging its spokes off the stage.
+    const { graph, stage } = setup();
+    const g = stage.group();
+    graph.flush();
+    g.at(440, 150).rotate(30, { about: [440, 150] });
+    expect(graph.flush().at(-1)).toMatchObject({ name: 'transform', value: 'translate(440 150) rotate(30 0 0)' });
+    g.at(400, 100);
+    expect(graph.flush().at(-1)).toMatchObject({ name: 'transform', value: 'translate(400 100) rotate(30 40 50)' });
+    g.rotate(30, { x: 400, y: 100 } as never);
+    expect(graph.flush().at(-1)).toMatchObject({ name: 'transform', value: 'translate(400 100) rotate(30 0 0)' });
+    expect(() => g.rotate(10, { about: 5 } as never)).toThrow('about as a point');
+  });
+
   it('composes translate, rotate and scale into one transform', () => {
     const { graph, stage } = setup();
     const g = stage.group();
     graph.flush();
-    g.at(10, 20).rotate(45, 1, 2).scale(2);
+    g.at(10, 20).rotate(45, { about: [11, 22] }).scale(2);
     const last = graph.flush().at(-1);
     expect(last).toEqual({ op: 'attr', id: 2, name: 'transform', value: 'translate(10 20) rotate(45 1 2) scale(2 2)' });
+    // Saved figures turn about a pivot in their own units, as they always did.
+    (g as unknown as { rotate(degrees: number, cx: number, cy: number): unknown }).rotate(45, 3, 4);
+    expect(graph.flush().at(-1)).toEqual({ op: 'attr', id: 2, name: 'transform', value: 'translate(10 20) rotate(45 3 4) scale(2 2)' });
     g.at(0, 0).rotate(0).scale(1);
     expect(graph.flush().at(-1)).toEqual({ op: 'attr', id: 2, name: 'transform', value: null });
   });
@@ -171,14 +188,19 @@ describe('path helpers', () => {
   });
 
   it('draws arrows with a head and nothing for zero length', () => {
-    expect(path.arrow(0, 0, 10, 0, 4)).toMatch(/^M0 0L10 0 M/);
-    expect(path.arrow(0, 0, 0, 0)).toBe('');
+    expect(path.arrow({ from: [0, 0], to: [10, 0] }, 4)).toMatch(/^M0 0L10 0 M/);
+    expect(path.arrow({ from: [0, 0], by: [0, 0] })).toBe('');
+    expect(() => path.arrow({ from: [0, 0], to: [1, 1], by: [1, 1] } as never)).toThrow('to: [x, y]');
+    expect(() => path.arrow({ to: [1, 1] } as never)).toThrow('from: [x, y]');
   });
 
   it('draws an arrow along an offset, so its tip is the start plus the offset', () => {
     // A jet engine's repair once read dx, dy as the end point: arrow(542, 130, 542 + 61, 130) ran off the stage.
-    expect(path.arrow(542, 130, 61, 0, 10)).toMatch(/^M542 130L603 130 M/);
-    expect(path.arrow(150, 245, 20, -30)).toMatch(/^M150 245L170 215 M/);
+    expect(path.arrow({ from: [542, 130], by: [61, 0] }, 10)).toMatch(/^M542 130L603 130 M/);
+    expect(path.arrow({ from: [542, 130], to: [603, 130] }, 10)).toBe(path.arrow({ from: [542, 130], by: [61, 0] }, 10));
+    // Saved figures call it as (x, y, dx, dy, head), and still draw the same arrow.
+    const positional = path.arrow as unknown as (x: number, y: number, dx: number, dy: number, head?: number) => string;
+    expect(positional(150, 245, 20, -30)).toBe(path.arrow({ from: [150, 245], by: [20, -30] }));
   });
 
   it('samples arcs and parametric curves', () => {

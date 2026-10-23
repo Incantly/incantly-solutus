@@ -319,6 +319,25 @@ const STRING_METHODS = [
 ];
 const NUMBER_METHODS = ['toFixed', 'toPrecision', 'toExponential', 'toString'];
 
+/**
+ * Helpers that take their arguments by name, so that a number cannot be read
+ * as the wrong thing: an arrow's offset taken for its tip, a pivot taken in
+ * the wrong units, a tooth depth taken for a fraction. Each lists the names
+ * its options object may hold and, for each thing it needs, the ways of
+ * naming it: exactly one of them, whole. The names a model reaches for first
+ * ({ x, y } or SVG's { cx, cy } for a pivot, cx, cy and r for a gear) are among them.
+ */
+const NAMED_ARGUMENTS: Readonly<Record<string, { readonly index: number; readonly keys: readonly string[]; readonly needs: ReadonlyArray<ReadonlyArray<readonly string[]>>; readonly example: string }>> = {
+  'path.arrow': { index: 0, keys: ['from', 'to', 'by'], needs: [[['from']], [['to'], ['by']]], example: '{ from: [x, y], to: [x, y] } or { from: [x, y], by: [dx, dy] }' },
+  'shapes.gear': {
+    index: 0,
+    keys: ['center', 'cx', 'cy', 'radius', 'r', 'teeth', 'toothDepth', 'rotation'],
+    needs: [[['center'], ['cx', 'cy']], [['radius'], ['r']]],
+    example: '{ center: [x, y], radius, teeth, toothDepth }',
+  },
+  rotate: { index: 1, keys: ['about', 'x', 'y', 'cx', 'cy'], needs: [[['about'], ['x', 'y'], ['cx', 'cy']]], example: '{ about: [x, y] }' },
+};
+
 /** Every method name a scene may call on a value whose type the validator could not follow. */
 const KNOWN_METHODS: ReadonlySet<string> = (() => {
   const names = new Set<string>([...ARRAY_METHODS, ...STRING_METHODS, ...NUMBER_METHODS]);
@@ -1309,7 +1328,11 @@ class JsValidator {
       this.incCall(method, node, ctx);
       argumentContext = { ...ctx, pending: `inc.${method}`, text: ctx.text || TEXT_INC_CALLS.has(method) };
     }
-    if (receiver.t === 'ns' && method !== null) argumentContext = { ...ctx, pending: `inc.${receiver.ns}.${method}` };
+    if (receiver.t === 'ns' && method !== null) {
+      argumentContext = { ...ctx, pending: `inc.${receiver.ns}.${method}` };
+      const named = NAMED_ARGUMENTS[`${receiver.ns}.${method}`];
+      if (named) this.namedArgument(node.arguments[named.index], named, `inc.${receiver.ns}.${method}`);
+    }
     if (receiver.t === 'handle' && method !== null) {
       argumentContext = { ...ctx, pending: `${receiver.kind.charAt(0).toLowerCase()}${receiver.kind.slice(1)}.${method}` };
       const creates = CREATES_ELEMENTS[receiver.kind];
@@ -1320,6 +1343,7 @@ class JsValidator {
           callee.start,
         );
       }
+      if (method === 'rotate') this.namedArgument(node.arguments[1], NAMED_ARGUMENTS.rotate!, `${receiver.kind.charAt(0).toLowerCase()}${receiver.kind.slice(1)}.rotate`);
       if (method === 'part') {
         const [name] = node.arguments;
         if (name && name.type === 'Literal' && typeof name.value === 'string') this.parts.push(name.value);
@@ -1377,6 +1401,26 @@ class JsValidator {
     if (method === 'toFixed' || method === 'toPrecision' || method === 'toExponential') return STRING;
     if (calleeType.t === 'handle' && calleeType.kind === 'Formula') return NUMBER;
     return UNKNOWN;
+  }
+
+  /** An options object a helper takes by name: only its names, the ones it needs, and one of a pair where it takes either. */
+  private namedArgument(argument: AnyNode | undefined, spec: (typeof NAMED_ARGUMENTS)[string], call: string): void {
+    if (!argument || argument.type !== 'ObjectExpression') return;
+    const keys: string[] = [];
+    for (const property of argument.properties) {
+      if (property.type !== 'Property' || property.computed) return;
+      const key = property.key.type === 'Identifier' ? property.key.name : property.key.type === 'Literal' ? String(property.key.value) : null;
+      if (key === null) return;
+      keys.push(key);
+      if (!spec.keys.includes(key)) this.report('unknown-property', `${call} takes ${spec.example}; "${key}" is not one of its names`, property.key.start);
+    }
+    // Each thing it needs is named one way, whole: { about } or { x, y }, never both or half of one.
+    const named = spec.needs.every((ways) => {
+      const whole = ways.filter((way) => way.every((key) => keys.includes(key)));
+      const touched = ways.filter((way) => way.some((key) => keys.includes(key)));
+      return whole.length === 1 && touched.length === 1;
+    });
+    if (!named) this.report('invalid-argument', `${call} takes ${spec.example}`, argument.start);
   }
 
   /** Rules for the inc calls themselves. */

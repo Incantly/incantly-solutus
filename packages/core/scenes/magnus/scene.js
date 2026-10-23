@@ -60,7 +60,7 @@ stage.part('Wind', gusts, { label: 'Wind', info: 'The air coming in, before the 
 
 let angle = 0;
 inc.onFrame(({ dt }) => {
-  arrows.forEach((arrow, i) => arrow.d(inc.path.arrow(16, 90 * (i + 1), model.U * 2.5, 0, 8)));
+  arrows.forEach((arrow, i) => arrow.d(inc.path.arrow({ from: [16, 90 * (i + 1)], by: [model.U * 2.5, 0] }, 8)));
   // The mark turns at the cylinder's spin, slowed down like the flow; on the stage, clockwise for positive spin.
   angle += (2 * Math.PI * spin.value * dt * SHOW) / 40;
   mark.set({ x2: CX + R * Math.cos(angle), y2: CY + R * Math.sin(angle) });
@@ -72,7 +72,7 @@ inc.onFrame(({ dt }) => {
     const end = -Math.PI / 2 + sign * 0.9;
     const ex = CX + (R + 14) * Math.cos(end);
     const ey = CY + (R + 14) * Math.sin(end);
-    turn.d(`${inc.path.arc(CX, CY, R + 14, Math.min(start, end), Math.max(start, end))}${inc.path.arrow(ex, ey, -sign * 8 * Math.sin(end), sign * 8 * Math.cos(end), 7)}`);
+    turn.d(`${inc.path.arc(CX, CY, R + 14, Math.min(start, end), Math.max(start, end))}${inc.path.arrow({ from: [ex, ey], by: [-sign * 8 * Math.sin(end), sign * 8 * Math.cos(end)] }, 7)}`);
   }
   // Stagnation points: on the surface while |sin θ| ≤ 1, below the middle when the cylinder lifts; one point off the surface beyond.
   if (Math.abs(model.s) <= 1) {
@@ -90,7 +90,7 @@ inc.onFrame(({ dt }) => {
   }
   // Lift drawn 1 stage unit per newton per metre, up for positive lift.
   const length = Math.max(-150, Math.min(150, model.lift));
-  lift.d(Math.abs(length) < 2 ? '' : inc.path.arrow(CX, CY, 0, -length, 10));
+  lift.d(Math.abs(length) < 2 ? '' : inc.path.arrow({ from: [CX, CY], by: [0, -length] }, 10));
 });
 
 inc.readout({

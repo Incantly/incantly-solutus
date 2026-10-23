@@ -1069,7 +1069,7 @@ export class ChemistryKit implements Chemistry {
       const span = hi - lo || 1;
       range = [lo - span * 0.12, hi + span * 0.18];
       axes.d(`M${fmt(px)} ${fmt(py)}L${fmt(px)} ${fmt(py + ph)}L${fmt(px + pw)} ${fmt(py + ph)}`);
-      energyAxis.set({ x: Number((box[0] + this.u(9)).toFixed(2)), y: Number((py + ph / 2).toFixed(2)) }).rotate(-90, Number((box[0] + this.u(9)).toFixed(2)), Number((py + ph / 2).toFixed(2)));
+      energyAxis.set({ x: Number((box[0] + this.u(9)).toFixed(2)), y: Number((py + ph / 2).toFixed(2)) }).rotate(-90, { about: [Number((box[0] + this.u(9)).toFixed(2)), Number((py + ph / 2).toFixed(2))] });
       progressAxis.set({ x: Number((px + pw / 2).toFixed(2)), y: Number((py + ph + this.u(16)).toFixed(2)) });
       const main = shape(peak);
       curve.d(this.ctx.path.curve(main, 0, 1, 120, (t, e) => [sx(t), sy(e)]));

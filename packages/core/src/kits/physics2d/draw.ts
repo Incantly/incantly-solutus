@@ -282,10 +282,10 @@ export class Painter {
       item.parts?.[0].show(visible && Math.abs(dx) >= 2 && Math.abs(dy) >= 2);
       item.parts?.[1].show(visible && Math.abs(dx) >= 2 && Math.abs(dy) >= 2);
       if (!visible) return;
-      item.arrow.d(this.ctx.path.arrow(sx, sy, dx, dy, Math.min(9, length / 3)));
+      item.arrow.d(this.ctx.path.arrow({ from: [sx, sy], by: [dx, dy] }, Math.min(9, length / 3)));
       if (item.parts) {
-        item.parts[0].d(this.ctx.path.arrow(sx, sy, dx, 0, Math.min(7, Math.abs(dx) / 3)));
-        item.parts[1].d(this.ctx.path.arrow(sx, sy, 0, dy, Math.min(7, Math.abs(dy) / 3)));
+        item.parts[0].d(this.ctx.path.arrow({ from: [sx, sy], by: [dx, 0] }, Math.min(7, Math.abs(dx) / 3)));
+        item.parts[1].d(this.ctx.path.arrow({ from: [sx, sy], by: [0, dy] }, Math.min(7, Math.abs(dy) / 3)));
       }
       if (item.label) {
         const ux = dx / length;

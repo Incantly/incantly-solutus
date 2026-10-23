@@ -63,7 +63,7 @@ inc.onFrame(() => {
   swing.d(inc.path.arc(PX, PY, R, Math.PI / 2 - model.theta0, Math.PI / 2 + model.theta0));
   string.set({ x2: x, y2: y });
   bob.set({ cx: x, cy: y });
-  pull.d(inc.path.arrow(x, y + 16, 0, model.g * 3));
+  pull.d(inc.path.arrow({ from: [x, y + 16], by: [0, model.g * 3] }));
   // Kinetic energy ½(Lω)² as a share of the total gL(1 − cos θ₀); potential is the rest.
   const k = Math.min(1, (0.5 * (model.L * omega) ** 2) / (model.g * model.L * (1 - Math.cos(model.theta0))));
   kinetic.set({ y: 370 - 220 * k, height: 220 * k });

@@ -520,7 +520,7 @@ export class ChartKit implements Chart {
     if (axis.yName) {
       const name = [this.options.yLabel, this.options.unit ? `(${this.options.unit})` : ''].filter(Boolean).join(' ');
       const x = left - 44;
-      axis.yName.text(name).set({ x, y: top + height / 2 }).rotate(-90, x, top + height / 2);
+      axis.yName.text(name).set({ x, y: top + height / 2 }).rotate(-90, { about: [x, top + height / 2] });
     }
   }
 
@@ -538,7 +538,7 @@ export class ChartKit implements Chart {
         return;
       }
       label.text(name).show();
-      if (fit.slant) label.set({ x, y: bottom + 14, 'text-anchor': 'end' }).rotate(-35, x, bottom + 14);
+      if (fit.slant) label.set({ x, y: bottom + 14, 'text-anchor': 'end' }).rotate(-35, { about: [x, bottom + 14] });
       else label.set({ x, y: bottom + 18, 'text-anchor': 'middle' }).rotate(0);
       label.set({ opacity: this.dimmed(i) ? DIM : 1 });
     });

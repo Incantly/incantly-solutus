@@ -169,14 +169,22 @@ export interface TableOptions {
 
 export type Layer = 'back' | 'mid' | 'front' | 'labels';
 
+/** A pivot in the same units as at(). */
+export interface RotateOptions {
+  readonly about: Vec2;
+}
+
 export interface StageOptions {
-  readonly viewBox: ViewBox;
+  /** Optional with fit. */
+  readonly viewBox?: ViewBox;
   readonly title: string;
   readonly description?: string;
   /** Learners may zoom and pan; default true. */
   readonly zoom?: boolean;
   /** Offers the measuring tool, reading lengths in `unit` with `per` stage units to one, such as { unit: 'm', per: 110 }. */
   readonly measure?: { readonly unit: string; readonly per: number };
+  /** Frames whatever it draws, growing if the drawing later reaches past it. */
+  readonly fit?: boolean;
 }
 
 export interface ElementOptions {
@@ -229,8 +237,8 @@ export interface Handle {
   set(attributes: AttributeValues): this;
   /** Moves it so its own (0, 0) sits at x, y. */
   at(x: number, y: number): this;
-  /** Turns it clockwise about cx, cy in its own units, before at() moves it: after at(x, y), leave the pivot out. */
-  rotate(degrees: number, cx?: number, cy?: number): this;
+  /** Turns it clockwise about where at() put it, or about a point. */
+  rotate(degrees: number, pivot?: RotateOptions): this;
   scale(sx: number, sy?: number): this;
   show(visible?: boolean): this;
   hide(): this;
@@ -377,6 +385,9 @@ export interface Stage {
 // Path and geometry helpers (concept-neutral primitives)
 // ---------------------------------------------------------------------------
 
+/** Where an arrow starts and where its tip is: give to, or by for an offset from the start. */
+export type ArrowPoints = { readonly from: Vec2; readonly to: Vec2 } | { readonly from: Vec2; readonly by: Vec2 };
+
 export interface PathHelpers {
   line(points: ReadonlyArray<Vec2>): string;
   /** The same as line. */
@@ -399,8 +410,8 @@ export interface PathHelpers {
   ): string;
   /** Circular arc; angles in radians. */
   arc(cx: number, cy: number, r: number, a0: number, a1: number): string;
-  /** An arrow from (x, y) along the offset (dx, dy): its tip is at (x + dx, y + dy), not at (dx, dy). */
-  arrow(x: number, y: number, dx: number, dy: number, head?: number): string;
+  /** An arrow from a point to its tip: { from: [x, y], to: [x, y] }, or { from, by: [dx, dy] } for a tip at from + by. */
+  arrow(arrow: ArrowPoints, head?: number): string;
 }
 
 export interface Point {
@@ -539,6 +550,16 @@ export interface MotionHelpers {
   wave(time: number, period?: number): number;
 }
 
+export interface GearOptions {
+  readonly center: Vec2;
+  readonly radius: number;
+  readonly teeth?: number;
+  /** How tall the teeth stand, in stage units. */
+  readonly toothDepth?: number;
+  /** How far it has turned, in radians, as regular() takes it. */
+  readonly rotation?: number;
+}
+
 /**
  * inc.shapes: path data for shapes diagrams keep drawing. Each returns a
  * string for stage.path(d) or handle.set(d); lines run from (x1, y1) to (x2, y2).
@@ -552,8 +573,8 @@ export interface ShapeHelpers {
   /** An inductor or solenoid seen side on. */
   coil(x1: number, y1: number, x2: number, y2: number, options?: { readonly loops?: number; readonly width?: number }): string;
   wave(x1: number, y1: number, x2: number, y2: number, options?: { readonly amplitude?: number; readonly wavelength?: number; readonly phase?: number }): string;
-  /** A gear or sprocket of outer radius r; depth is the teeth's height, a fraction of r under 1 (default 0.18), else units. */
-  gear(cx: number, cy: number, r: number, options?: { readonly teeth?: number; readonly depth?: number }): string;
+  /** A gear or sprocket: its centre, its outer radius and its teeth, toothDepth in stage units (default 0.18 of the radius). */
+  gear(gear: GearOptions): string;
   /** The outline around circles [cx, cy, r], such as a belt over pulleys. */
   hull(circles: ReadonlyArray<Vec3>): string;
   /** A lens; bulge above 0 is convex, below 0 concave. */

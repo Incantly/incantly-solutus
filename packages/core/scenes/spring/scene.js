@@ -54,7 +54,7 @@ inc.onFrame(({ time }) => {
   spring.d(inc.shapes.spring(60, top + model.side / 2, face, top + model.side / 2, { coils: 12, width: 12 }));
   springLabel.set({ x: (60 + face) / 2, y: top + model.side / 2 - 22 }).text(`k = ${model.k.toFixed(0)} N/m`);
   // F = -kx, drawn 16 stage units per newton above the block.
-  force.d(inc.path.arrow(face + model.side / 2, top - 14, -model.k * x * 16, 0));
+  force.d(inc.path.arrow({ from: [face + model.side / 2, top - 14], by: [-model.k * x * 16, 0] }));
 });
 
 inc.readout({

@@ -109,6 +109,23 @@ describe('validator: JavaScript details', () => {
     expect(result.diagnostics[0]!.message).toContain('Path handles have no method "text"');
   });
 
+  it('checks the names a helper takes its arguments by, before the scene runs', () => {
+    const errors = (js: string) => validateSceneJs(js).diagnostics.filter((d) => d.severity === 'error').map((d) => `${d.rule}:${d.line}`);
+    const stage = "const stage = inc.svg('#stage', { fit: true, title: 'S' });\nconst g = stage.group();";
+    expect(errors(`${stage}\nconst a = inc.path.arrow({ from: [0, 0], to: [10, 0] }, 8);\nconst b = inc.shapes.gear({ center: [50, 50], radius: 20, teeth: 12, toothDepth: 3 });\ng.at(5, 5).rotate(30, { about: [5, 5] });`)).toEqual([]);
+    // An arrow with both a tip and an offset, or neither; a gear with a misspelt name; a pivot by another name.
+    expect(errors(`${stage}\nconst a = inc.path.arrow({ from: [0, 0], to: [1, 0], by: [1, 0] });`)).toEqual(['invalid-argument:3']);
+    expect(errors(`${stage}\nconst a = inc.path.arrow({ from: [0, 0] });`)).toEqual(['invalid-argument:3']);
+    expect(errors(`${stage}\nconst b = inc.shapes.gear({ center: [5, 5], radius: 4, depth: 3 });`)).toEqual(['unknown-property:3']);
+    expect(errors(`${stage}\ng.rotate(30, { pivot: [5, 5] });`)).toEqual(['unknown-property:3', 'invalid-argument:3']);
+    // The names a model reaches for first mean the same: a pivot { x, y }, a gear's cx, cy and r; half of one is not enough.
+    expect(errors(`${stage}\ng.rotate(30, { x: 5, y: 5 });\ng.rotate(30, { cx: 5, cy: 5 });\nconst c = inc.shapes.gear({ cx: 5, cy: 5, r: 4 });`)).toEqual([]);
+    expect(errors(`${stage}\ng.rotate(30, { x: 5 });`)).toEqual(['invalid-argument:3']);
+    expect(errors(`${stage}\nconst c = inc.shapes.gear({ center: [5, 5], cx: 5, cy: 5, r: 4 });`)).toEqual(['invalid-argument:3']);
+    // Saved figures that call them by position still validate.
+    expect(errors(`${stage}\nconst a = inc.path.arrow(0, 0, 10, 0);\ng.rotate(30, 1, 2);`)).toEqual([]);
+  });
+
   it('lets a number be written with any of the number formatters', () => {
     const js = ['const x = 0.000123;', 'const a = x.toFixed(2);', 'const b = x.toPrecision(3);', 'const c = x.toExponential(1);', 'const d = `${a} ${b} ${c}`.trim();'].join('\n');
     expect(validateSceneJs(js).diagnostics.filter((d) => d.severity === 'error')).toEqual([]);

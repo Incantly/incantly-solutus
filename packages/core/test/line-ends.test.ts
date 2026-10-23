@@ -71,7 +71,7 @@ describe('the line-end check (CH-2)', () => {
   it('leaves arrows, dashed guides, curves and symbols alone', () => {
     const scene = (stage: Stage, inc: Inc) => {
       // A force in free space ends in its head; a guide may stop anywhere.
-      stage.path(inc.path.arrow(100, 100, 80, 0), { tone: 'a' });
+      stage.path(inc.path.arrow({ from: [100, 100], by: [80, 0] }), { tone: 'a' });
       stage.line(200, 50, 200, 150, { tone: 'faint', dashed: true });
       // A wave drawn in short straight pieces, and a battery's plates.
       stage.path(inc.path.curve((x: number) => 200 + 20 * Math.sin(x / 15), 250, 450, 30), { tone: 'b' });

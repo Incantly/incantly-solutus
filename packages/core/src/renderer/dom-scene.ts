@@ -47,8 +47,8 @@ export interface StageDom {
   readonly host: HTMLElement;
   readonly layers: Readonly<Record<Layer, SVGGElement>>;
   readonly defs: SVGDefsElement;
-  /** The view box the scene declared; zooming changes the attribute, not this. */
-  readonly viewBox: ViewBox;
+  /** The view box the scene declared, or a fitting stage framed; zooming changes the attribute, not this. */
+  viewBox: ViewBox;
   interaction: StageInteractionView;
   /** Gradients made so far, by key. */
   readonly gradients: Set<string>;
@@ -362,6 +362,17 @@ export class SceneDom {
         element.setAttribute('aria-label', label ? `${label}. Drag, or use the arrow keys, to change it` : `${command.label}: drag, or use the arrow keys`);
         element.setAttribute('aria-roledescription', 'draggable');
         this.stats.writes++;
+        return;
+      }
+      case 'viewBox': {
+        const stage = this.stages.get(command.id);
+        if (!stage || command.viewBox.length !== 4 || !command.viewBox.every(Number.isFinite)) return;
+        // A learner who has zoomed keeps their view; zooming back out returns to the new frame.
+        const unzoomed = (stage.svg.getAttribute('viewBox') ?? '') === stage.viewBox.join(' ');
+        stage.viewBox = [command.viewBox[0], command.viewBox[1], command.viewBox[2], command.viewBox[3]];
+        if (unzoomed) stage.svg.setAttribute('viewBox', stage.viewBox.join(' '));
+        this.stats.writes++;
+        this.paintDots(command.id);
         return;
       }
       case 'interact': {

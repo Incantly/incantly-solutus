@@ -131,6 +131,13 @@ describe('probe: deliberately broken scenes fail for the expected reason', () =>
     expect(report.failures[0]!.message).toContain('outside its viewBox');
   });
 
+  it('nothing outside a stage that fits its drawing, which frames it once and only grows', () => {
+    // The same bar far outside: a stage given fit: true frames it instead of failing.
+    const outside = "const bar = stage.rect(140, 50, 20, 40, { tone: 'lit' });";
+    expect(probe(build({ bar: outside, stage: "const stage = inc.svg('#stage', { fit: true, title: 'Bar', description: 'One bar.' });" })).failures).toEqual([]);
+    expect(probe(build({ bar: outside, stage: "const stage = inc.svg('#stage', { viewBox: [0, 0, 100, 100], fit: true, title: 'Bar', description: 'One bar.' });" })).failures).toEqual([]);
+  });
+
   it('nothing drawn at all', () => {
     const report = probe(build({ frame: 'inc.onFrame(() => { bar.hide(); });' }));
     expect(report.failures.map((f) => f.message)).toContain('Nothing is drawn at the default values');

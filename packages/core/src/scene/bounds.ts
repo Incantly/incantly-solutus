@@ -1,5 +1,5 @@
 import { equationExtent } from '../protocol/equation';
-import type { SceneGraph, Transform, VNode } from './graph';
+import { pivotOf, type SceneGraph, type Transform, type VNode } from './graph';
 
 export interface Box {
   minX: number;
@@ -30,9 +30,10 @@ export function local(t: Transform): Matrix {
     const r = (t.rotation * Math.PI) / 180;
     const cos = Math.cos(r);
     const sin = Math.sin(r);
-    m = multiply(m, [1, 0, 0, 1, t.rcx, t.rcy]);
+    const [cx, cy] = pivotOf(t);
+    m = multiply(m, [1, 0, 0, 1, cx, cy]);
     m = multiply(m, [cos, sin, -sin, cos, 0, 0]);
-    m = multiply(m, [1, 0, 0, 1, -t.rcx, -t.rcy]);
+    m = multiply(m, [1, 0, 0, 1, -cx, -cy]);
   }
   if (t.sx !== 1 || t.sy !== 1) m = multiply(m, [t.sx, 0, 0, t.sy, 0, 0]);
   return m;

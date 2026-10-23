@@ -1,4 +1,5 @@
-import type { PathHelpers, Vec2 } from '../api/types';
+import type { ArrowPoints, PathHelpers, Vec2 } from '../api/types';
+import { SceneApiError } from './errors';
 import { fmt } from './format';
 
 /** The scoped SVG contract caps every plotted curve at 500 samples. */
@@ -51,6 +52,26 @@ export function samplePoints(
   return points;
 }
 
+/**
+ * An arrow's start and offset from either form: { from, to } or { from, by },
+ * or the older (x, y, dx, dy) that saved figures still use.
+ */
+function arrowSpan(args: readonly unknown[]): { x: number; y: number; dx: number; dy: number; head: unknown } {
+  const [first] = args;
+  if (typeof first !== 'object' || first === null) {
+    const [x, y, dx, dy, head] = args as number[];
+    return { x: Number(x), y: Number(y), dx: Number(dx), dy: Number(dy), head };
+  }
+  const points = first as Partial<Record<'from' | 'to' | 'by', Vec2>>;
+  const pair = (value: unknown): value is Vec2 => Array.isArray(value) && value.length === 2;
+  if (!pair(points.from) || pair(points.to) === pair(points.by)) {
+    throw new SceneApiError('path.arrow takes { from: [x, y], to: [x, y] } or { from: [x, y], by: [dx, dy] }');
+  }
+  const [x, y] = points.from;
+  const [dx, dy] = pair(points.to) ? [points.to[0] - x, points.to[1] - y] : points.by!;
+  return { x, y, dx, dy, head: args[1] };
+}
+
 export function createPathHelpers(report?: CapReporter): PathHelpers {
   return {
     line: (points) => polylinePath(points),
@@ -76,7 +97,9 @@ export function createPathHelpers(report?: CapReporter): PathHelpers {
       }
       return polylinePath(points);
     },
-    arrow(x, y, dx, dy, head = 9) {
+    arrow(...args: [ArrowPoints, number?]) {
+      const { x, y, dx, dy, head: asked } = arrowSpan(args);
+      const head = typeof asked === 'number' ? asked : 9;
       const ex = x + dx;
       const ey = y + dy;
       if (![x, y, ex, ey].every(Number.isFinite)) return '';

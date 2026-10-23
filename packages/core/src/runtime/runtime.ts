@@ -53,6 +53,7 @@ import { chem, sym } from '../helpers/sym';
 import { units } from '../helpers/units';
 import { vectors } from '../helpers/vec';
 import { geometry } from '../scene/geometry';
+import { stageBounds } from '../scene/bounds';
 import { SceneGraph, type GraphServices, type VNode } from '../scene/graph';
 import { PartRegistry, StageHandle, formatReadable } from '../scene/handles';
 import { createPathHelpers } from '../scene/path';
@@ -103,6 +104,11 @@ export interface RuntimeOptions {
   readonly traceSites?: boolean;
 }
 
+
+/** Where a stage that fits its drawing starts, before its first frame frames it. */
+const FIT_START = [0, 0, 600, 400] as const;
+/** The margin round a fitted drawing, as a share of its larger side. */
+const FIT_MARGIN = 0.06;
 /** Seconds a step takes to move parameters to its values. */
 export const STEP_TRANSITION_SECONDS = 0.6;
 
@@ -262,6 +268,8 @@ export class SceneRuntime {
   private hovers = new Map<number, (p: Vec2 | null) => void>();
   private views = new Map<number, ViewController>();
   private stageZoom = new Map<number, boolean>();
+  /** Stages that fit their drawing, and whether each has been framed yet. */
+  private fits = new Map<number, boolean>();
   /** How the measuring tool reads each stage that offers it (VI-5). */
   private measures = new Map<number, StageMeasure>();
   // Controls and teaching
@@ -1051,6 +1059,7 @@ export class SceneRuntime {
     this.hovers = new Map();
     this.views = new Map();
     this.stageZoom = new Map();
+    this.fits = new Map();
     this.measures = new Map();
     this.actions = [];
     this.links = [];
@@ -1130,6 +1139,7 @@ export class SceneRuntime {
     let ok = true;
     for (const callback of this.frameCallbacks) ok = this.guard('frame', () => callback(frame)) && ok;
     for (const redraw of this.redraws) ok = this.guard('plot', redraw) && ok;
+    this.fitStages();
     for (const [node, speed] of this.flows) {
       // Dashes move with scene time, so they stop when paused and under reduced motion.
       const offset = -((time * speed) % 14);
@@ -1137,6 +1147,28 @@ export class SceneRuntime {
     }
     this.stats.framesExecuted++;
     if (ok && this.error && this.error.phase !== 'mount') this.error = null;
+  }
+
+  /**
+   * Frames each stage that fits its drawing: the first frame that draws
+   * something sets its view to the drawing with a margin, and a later frame
+   * that reaches past the view grows it, never shrinks it, so the figure
+   * does not jump as it moves.
+   */
+  private fitStages(): void {
+    for (const [id, framed] of this.fits) {
+      const record = this.graph.stages.find((stage) => stage.id === id);
+      const box = stageBounds(this.graph, id).box;
+      if (!record || !box || ![box.minX, box.minY, box.maxX, box.maxY].every(Number.isFinite)) continue;
+      const [x, y, w, h] = record.viewBox;
+      if (framed && box.minX >= x && box.minY >= y && box.maxX <= x + w && box.maxY <= y + h) continue;
+      const pad = Math.max(10, Math.max(box.maxX - box.minX, box.maxY - box.minY) * FIT_MARGIN);
+      let [left, top, right, bottom] = [box.minX - pad, box.minY - pad, box.maxX + pad, box.maxY + pad];
+      if (framed) [left, top, right, bottom] = [Math.min(left, x), Math.min(top, y), Math.max(right, x + w), Math.max(bottom, y + h)];
+      const round = (v: number) => Math.round(v * 100) / 100;
+      this.fits.set(id, true);
+      this.graph.setViewBox(id, [round(left), round(top), round(right - left), round(bottom - top)]);
+    }
   }
 
   private refreshText(): void {
@@ -1795,14 +1827,18 @@ export class SceneRuntime {
         if (typeof options?.title !== 'string' || options.title.trim() === '') {
           throw new SceneApiError('inc.svg needs a title for its accessible name');
         }
-        const node = runtime.graph.createStage(selector, options.viewBox, options.title, options.description ?? '');
+        const fit = (options as { fit?: unknown }).fit === true;
+        const viewBox = options.viewBox ?? (fit ? FIT_START : undefined);
+        if (!viewBox) throw new SceneApiError('inc.svg needs a viewBox, or fit: true to frame whatever it draws');
+        const node = runtime.graph.createStage(selector, viewBox, options.title, options.description ?? '');
+        if (fit) runtime.fits.set(node.id, false);
         runtime.stageZoom.set(node.id, options.zoom !== false);
         if (options.measure !== undefined) {
           const { unit, per } = options.measure as { unit?: unknown; per?: unknown };
           if (typeof per !== 'number' || !Number.isFinite(per) || per <= 0) throw new SceneApiError('inc.svg: measure.per is the stage units that make one unit, a positive number');
           runtime.measures.set(node.id, checkMeasure({ scale: [1 / per, 1 / per], origin: [0, 0], unit: typeof unit === 'string' ? unit : '' }));
         }
-        return new StageHandle(runtime.graph, node, options.viewBox, runtime.parts);
+        return new StageHandle(runtime.graph, node, viewBox, runtime.parts);
       },
       graph2d(selector: string, options: GraphOptions) {
         runtime.requireMounting('graph2d');

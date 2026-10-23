@@ -1001,7 +1001,7 @@ export class Graph2D implements Graph, ViewController {
       const [px, py, pdx, pdy] = coords;
       const [sx, sy] = this.map(px, py);
       const [ex, ey] = this.map(px + pdx, py + pdy);
-      handle.d(this.ctx.path.arrow(sx, sy, ex - sx, ey - sy));
+      handle.d(this.ctx.path.arrow({ from: [sx, sy], to: [ex, ey] }));
     };
     place();
     this.remaps.push(place);

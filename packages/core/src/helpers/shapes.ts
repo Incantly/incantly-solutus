@@ -81,15 +81,25 @@ const wave: ShapeHelpers['wave'] = (x1, y1, x2, y2, options = {}) => {
   return polylinePath(along(x1, y1, x2, y2, n, (k) => amplitude * Math.sin((2 * Math.PI * k * length) / wavelength + phase)));
 };
 
-const gear: ShapeHelpers['gear'] = (cx, cy, r, options = {}) => {
+const gear = (...args: unknown[]): string => {
+  // { center, radius, teeth, toothDepth } in stage units, or the older (cx, cy, r, { teeth, depth }) that saved figures use.
+  const named = typeof args[0] === 'object' && args[0] !== null && !Array.isArray(args[0]);
+  const options = (named ? args[0] : (args[3] ?? {})) as { center?: Vec2; cx?: number; cy?: number; radius?: number; r?: number; teeth?: number; toothDepth?: number; depth?: number; rotation?: number };
+  // center and radius, or the cx, cy and r a scene reaches for first.
+  const center = options.center ?? (typeof options.cx === 'number' && typeof options.cy === 'number' ? ([options.cx, options.cy] as const) : undefined);
+  if (named && (!Array.isArray(center) || center.length !== 2)) throw new SceneApiError('shapes.gear takes { center: [x, y], radius, teeth, toothDepth }');
+  const [cx, cy] = named ? center! : [args[0] as number, args[1] as number];
+  const r = named ? Number(options.radius ?? options.r) : (args[2] as number);
   finite('gear', cx, cy, r);
   const teeth = count(options.teeth, 12, 3, 120, 'gear teeth');
-  // Under 1 the depth is a fraction of the radius; 1 or more is stage units, as a scene writing depth: 4 means.
-  const asked = options.depth ?? 0.18;
-  const depth = Math.min(r * 0.5, Math.max(0, asked < 1 ? r * asked : asked));
+  // toothDepth is stage units. The older depth is a fraction of the radius under 1 and units from 1, as a scene writing depth: 4 means.
+  const asked = named ? (options.toothDepth ?? r * 0.18) : (options.depth ?? 0.18);
+  const units = named || asked >= 1 ? asked : r * asked;
+  const depth = Math.min(r * 0.5, Math.max(0, units));
+  const turn = Number.isFinite(options.rotation) ? options.rotation! : 0;
   const points: Vec2[] = [];
   for (let i = 0; i < teeth; i++) {
-    const a = (i / teeth) * 2 * Math.PI;
+    const a = turn + (i / teeth) * 2 * Math.PI;
     const step = (2 * Math.PI) / teeth;
     for (const [da, rr] of [
       [0, r - depth],

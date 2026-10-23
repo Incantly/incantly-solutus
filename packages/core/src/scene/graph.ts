@@ -9,6 +9,8 @@ export interface Transform {
   rotation: number;
   rcx: number;
   rcy: number;
+  /** 1 when rcx, rcy are in the parent's units, as at() is (rotate(deg, { about })); 0 in the element's own. */
+  rparent: number;
   sx: number;
   sy: number;
 }
@@ -57,7 +59,8 @@ export interface StageInteraction {
 export interface StageRecord {
   readonly id: number;
   readonly selector: string;
-  readonly viewBox: ViewBox;
+  /** Changes only for a stage that fits its drawing. */
+  viewBox: ViewBox;
   readonly title: string;
   readonly description: string;
   readonly clip?: ViewBox;
@@ -79,7 +82,12 @@ export interface GraphServices {
   random(): number;
 }
 
-const identity = (): Transform => ({ tx: 0, ty: 0, rotation: 0, rcx: 0, rcy: 0, sx: 1, sy: 1 });
+const identity = (): Transform => ({ tx: 0, ty: 0, rotation: 0, rcx: 0, rcy: 0, rparent: 0, sx: 1, sy: 1 });
+
+/** The point a transform turns about, in the element's own units: a pivot given in the parent's units is taken back through at(). */
+export function pivotOf(t: Transform): Vec2 {
+  return t.rparent ? [t.rcx - t.tx, t.rcy - t.ty] : [t.rcx, t.rcy];
+}
 
 /** Attribute values must be plain geometry: no markup, URLs or script. */
 const SAFE_VALUE = /^[\w\s.,+\-%#()]*$/;
@@ -265,7 +273,10 @@ export class SceneGraph {
     node.transform = next;
     const parts: string[] = [];
     if (next.tx !== 0 || next.ty !== 0) parts.push(`translate(${fmt(next.tx)} ${fmt(next.ty)})`);
-    if (next.rotation !== 0) parts.push(`rotate(${fmt(next.rotation)} ${fmt(next.rcx)} ${fmt(next.rcy)})`);
+    if (next.rotation !== 0) {
+      const [cx, cy] = pivotOf(next);
+      parts.push(`rotate(${fmt(next.rotation)} ${fmt(cx)} ${fmt(cy)})`);
+    }
     if (next.sx !== 1 || next.sy !== 1) parts.push(`scale(${fmt(next.sx)} ${fmt(next.sy)})`);
     this.setAttribute(node, 'transform', parts.length ? parts.join(' ') : null);
   }
@@ -280,6 +291,15 @@ export class SceneGraph {
     this.partInfo.set(node.id, { name, label, info });
     this.updateClass(node);
     this.queue.push({ op: 'part', id: node.id, name, label, info });
+  }
+
+  /** Changes a stage's view, as a stage that fits its drawing does; the same view again costs nothing. */
+  setViewBox(stageId: number, viewBox: ViewBox): void {
+    const record = this.stages.find((stage) => stage.id === stageId);
+    if (!record || !viewBox.every(Number.isFinite) || viewBox[2] <= 0 || viewBox[3] <= 0) return;
+    if (record.viewBox.every((value, i) => value === viewBox[i])) return;
+    record.viewBox = viewBox;
+    this.queue.push({ op: 'viewBox', id: stageId, viewBox });
   }
 
   /** Removes and returns the commands produced since the last flush. */

@@ -143,7 +143,7 @@ describe('inc.shapes (SV-4, DG-1)', () => {
   });
 
   it('closes gears, hulls, blobs and polygons', () => {
-    for (const d of [shapes.gear(50, 50, 20), shapes.hull([[0, 0, 10], [100, 0, 20]]), shapes.blob(0, 0, 10, { seed: 3 }), shapes.regular(0, 0, 10, 6), shapes.polygon([[0, 0], [1, 0], [0, 1]])]) {
+    for (const d of [shapes.gear({ center: [50, 50], radius: 20 }), shapes.hull([[0, 0, 10], [100, 0, 20]]), shapes.blob(0, 0, 10, { seed: 3 }), shapes.regular(0, 0, 10, 6), shapes.polygon([[0, 0], [1, 0], [0, 1]])]) {
       expect(d.startsWith('M')).toBe(true);
       expect(d.endsWith('Z')).toBe(true);
     }
@@ -160,11 +160,21 @@ describe('inc.shapes (SV-4, DG-1)', () => {
       const n = d.match(/-?\d+(\.\d+)?/g)!.map(Number);
       return n.filter((_, i) => i % 2 === 0).map((x, i) => Math.hypot(x - 50, n[2 * i + 1]! - 50));
     };
-    for (const [depth, inner] of [[undefined, 50 * 0.82], [0.1, 45], [4, 46], [500, 25]] as const) {
-      const r = radii(shapes.gear(50, 50, 50, { teeth: 20, ...(depth !== undefined ? { depth } : {}) }));
-      expect(Math.max(...r), String(depth)).toBeCloseTo(50, 1);
-      expect(Math.min(...r), String(depth)).toBeCloseTo(inner, 1);
+    for (const [toothDepth, inner] of [[undefined, 50 * 0.82], [5, 45], [4, 46], [500, 25]] as const) {
+      const r = radii(shapes.gear({ center: [50, 50], radius: 50, teeth: 20, ...(toothDepth !== undefined ? { toothDepth } : {}) }));
+      expect(Math.max(...r), String(toothDepth)).toBeCloseTo(50, 1);
+      expect(Math.min(...r), String(toothDepth)).toBeCloseTo(inner, 1);
     }
+    // Saved figures call it as (cx, cy, r, { depth }), a fraction under 1 and units from 1.
+    const positional = shapes.gear as unknown as (cx: number, cy: number, r: number, options?: { teeth?: number; depth?: number }) => string;
+    expect(positional(50, 50, 50, { teeth: 20, depth: 0.1 })).toBe(shapes.gear({ center: [50, 50], radius: 50, teeth: 20, toothDepth: 5 }));
+    expect(positional(50, 50, 50, { teeth: 20, depth: 4 })).toBe(shapes.gear({ center: [50, 50], radius: 50, teeth: 20, toothDepth: 4 }));
+    expect(() => shapes.gear({ radius: 5 } as never)).toThrow('center: [x, y]');
+    expect(shapes.gear({ cx: 50, cy: 50, r: 50, teeth: 20 } as never)).toBe(shapes.gear({ center: [50, 50], radius: 50, teeth: 20 }));
+    // Turned by a whole tooth, a gear looks the same; by half a tooth, it does not.
+    const step = (2 * Math.PI) / 20;
+    expect(shapes.gear({ center: [50, 50], radius: 50, teeth: 20, rotation: step * 20 })).toBe(shapes.gear({ center: [50, 50], radius: 50, teeth: 20 }));
+    expect(shapes.gear({ center: [50, 50], radius: 50, teeth: 20, rotation: step / 2 })).not.toBe(shapes.gear({ center: [50, 50], radius: 50, teeth: 20 }));
   });
 
   it('draws circuit symbols, lenses, tanks and braces', () => {
