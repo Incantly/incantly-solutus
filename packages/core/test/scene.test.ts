@@ -175,6 +175,12 @@ describe('path helpers', () => {
     expect(path.arrow(0, 0, 0, 0)).toBe('');
   });
 
+  it('draws an arrow along an offset, so its tip is the start plus the offset', () => {
+    // A jet engine's repair once read dx, dy as the end point: arrow(542, 130, 542 + 61, 130) ran off the stage.
+    expect(path.arrow(542, 130, 61, 0, 10)).toMatch(/^M542 130L603 130 M/);
+    expect(path.arrow(150, 245, 20, -30)).toMatch(/^M150 245L170 215 M/);
+  });
+
   it('samples arcs and parametric curves', () => {
     expect(path.arc(0, 0, 1, 0, Math.PI).startsWith('M1 0')).toBe(true);
     expect(path.param((t) => t, (t) => t * t, 0, 1, 2)).toBe('M0 0L0.5 0.25L1 1');

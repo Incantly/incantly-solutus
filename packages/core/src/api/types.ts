@@ -399,6 +399,7 @@ export interface PathHelpers {
   ): string;
   /** Circular arc; angles in radians. */
   arc(cx: number, cy: number, r: number, a0: number, a1: number): string;
+  /** An arrow from (x, y) along the offset (dx, dy): its tip is at (x + dx, y + dy), not at (dx, dy). */
   arrow(x: number, y: number, dx: number, dy: number, head?: number): string;
 }
 
