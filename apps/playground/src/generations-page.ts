@@ -18,13 +18,16 @@ interface GalleryCard {
  * learner prompt.
  */
 const PROMPT_CARDS: readonly GalleryCard[] = [
+  // Gears drawn with inc.shapes.gear and turned with rotate(deg, { about }).
+  { title: 'Meshing gears', tag: 'Mechanics', prompt: 'Show me two gears meshing: a small gear driving a big one. How does the number of teeth change how fast each one turns?' },
+  // Forces drawn with inc.path.arrow({ from, by }).
   {
-    title: 'Bicycle chain and derailleur',
-    tag: 'Mechanics',
-    prompt: 'I want to learn the way a bicycle works, like the chains. Some bicycles have the back chain and two extra knobs underneath. How does that work? Can you show me a representation of it?',
+    title: 'Forces on a ramp',
+    tag: 'Forces',
+    prompt: 'Show me the forces on a block on a ramp: its weight, the normal force and friction as arrows, and how tilting the ramp changes them.',
   },
-  { title: 'Fibonacci sequence', tag: 'Sequences', prompt: 'Show me the Fibonacci sequence: each term is the sum of the two before it, and how fast the terms grow.' },
-  { title: 'Golden ratio', tag: 'Sequences', prompt: 'Show me the golden ratio: how the ratio of consecutive Fibonacci numbers settles on φ, and the golden rectangle and spiral it makes.' },
+  // A loop as long as the learner asks, which the validator caps itself.
+  { title: 'Area under a curve', tag: 'Calculus', prompt: 'Show me how rectangles under a curve add up to its area, and how the estimate gets closer as I use more rectangles.' },
 ];
 
 /** Generated from packages/core/scenes by scripts/generate.mjs. */

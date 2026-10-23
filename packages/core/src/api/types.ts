@@ -175,7 +175,6 @@ export interface RotateOptions {
 }
 
 export interface StageOptions {
-  /** Optional with fit. */
   readonly viewBox?: ViewBox;
   readonly title: string;
   readonly description?: string;
@@ -183,7 +182,7 @@ export interface StageOptions {
   readonly zoom?: boolean;
   /** Offers the measuring tool, reading lengths in `unit` with `per` stage units to one, such as { unit: 'm', per: 110 }. */
   readonly measure?: { readonly unit: string; readonly per: number };
-  /** Frames whatever it draws, growing if the drawing later reaches past it. */
+  /** Frames whatever it draws. */
   readonly fit?: boolean;
 }
 
@@ -237,7 +236,7 @@ export interface Handle {
   set(attributes: AttributeValues): this;
   /** Moves it so its own (0, 0) sits at x, y. */
   at(x: number, y: number): this;
-  /** Turns it clockwise about where at() put it, or about a point. */
+  /** Clockwise, about where at() put it or a point. */
   rotate(degrees: number, pivot?: RotateOptions): this;
   scale(sx: number, sy?: number): this;
   show(visible?: boolean): this;

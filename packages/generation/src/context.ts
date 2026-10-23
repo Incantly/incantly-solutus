@@ -60,7 +60,7 @@ export const PLAN_FORMAT = `PLAN format. Reply with one compact JSON object in a
 {"concept":"short name of the concept","idea":"One sentence: what moves and what that motion means.","kind":"graph"|"motion"|"diagram","size":"quick"|"standard"|"rich","capabilities":["catalog names only; at least one stage: ${stageNames()}"],"parameters":[{"name":"camelCase","unit":"m/s","min":5,"max":20,"default":12,"why":"typical throwing speeds"}],"model":{"inputs":["every parameter name"],"outputs":[{"name":"range","dependsOn":["speed","angle"]}]},"parts":["ball","cannon"],"moves":"What moves or changes.","steps":["Two to four teaching steps, one point each"],"singularPoints":[]}
 Sizes: quick (one view, up to ${SIZE_BUDGETS.quick.controls} controls and ${SIZE_BUDGETS.quick.parts} parts) when there is one thing to see, and its figure arrives soonest; standard (a second view, such as a graph beside the scene: up to ${SIZE_BUDGETS.standard.controls} controls and ${SIZE_BUDGETS.standard.parts} parts) when the learner asks to see several things or one view cannot show them all; rich (several linked panels, up to ${SIZE_BUDGETS.rich.controls} controls and ${SIZE_BUDGETS.rich.parts} parts) only when the learner asks for that much.
 A parameter is a slider unless it says "control": "toggle" (min 0, max 1) or "control": "choice" with "options": ["first", "second"] (min 0, max one less than the options).
-Parts are things drawn in the figure that steps point at, each named in a few words (under 40 characters): every thing the learner asks to see, and, when the learner names an object (a bicycle, a heart, an engine), that object whole with its frame, body or case, so the figure looks like the real thing; never readouts, sliders, buttons or formulas, which the kit shows itself. Capabilities include the helpers that draw those parts' real shapes, such as shapes for gears and belts and path for arcs.
+Parts are things drawn in the figure that steps point at, each named in a few words (under 40 characters): every thing the learner asks to see, and, when the learner names an object (a bicycle, a heart, an engine), that object whole with its frame, body or case, so the figure looks like the real thing; never readouts, sliders, buttons or formulas, which the kit shows itself. Capabilities include the helpers that draw those parts' real shapes, such as shapes for gears and belts and path for arrows and arcs.
 Give every parameter meaningful bounds. Each model output's dependsOn names model inputs or other outputs; time is not an input, and a constant such as π or φ is not an output.
 List only singular points that fall inside the declared parameter bounds, using the actual parameter name as the key, for example [{ "objectDistance": 8 }]. If an undefined value is outside the allowed range, it is not a singular point for this figure; return [] when there are none.
 Be concise and return only the fenced JSON, with no explanation before or after it.
@@ -357,7 +357,8 @@ function conceptWords(text: string): Set<string> {
       .toLowerCase()
       .split(/[^a-z0-9]+/)
       .filter((w) => w.length > 2 && !STOP_WORDS.has(w))
-      .map((w) => w.replace(/(es|s)$/, '')),
+      // Plurals meet their singular: lenses and lens, waves and wave (not wav), magnets and magnet.
+      .map((w) => (/(s|x|z|ch|sh)es$/.test(w) ? w.slice(0, -2) : w.endsWith('s') && !w.endsWith('ss') ? w.slice(0, -1) : w)),
   );
 }
 
@@ -370,15 +371,21 @@ export function standardFigure(concept: string, examples: Readonly<Record<string
   const wanted = conceptWords(concept);
   let best: ReferenceScene | null = null;
   let bestScore = 0;
+  if (wanted.size === 0) return null;
   for (const example of Object.values(examples)) {
     const words = conceptWords(`${example.plan.concept} ${example.id.replace(/-/g, ' ')}`);
     let shared = 0;
     for (const w of wanted) if (words.has(w)) shared++;
-    const score = wanted.size === 0 ? 0 : shared / Math.min(wanted.size, conceptWords(example.plan.concept).size);
+    // Both sides share at least half their words, and one side more than half: one common word, such as "curve" in
+    // "area under a curve" and "titration curve", or "motion" in "Brownian motion", is not the same concept.
+    const ofWanted = shared / wanted.size;
+    const ofConcept = Math.min(1, shared / conceptWords(example.plan.concept).size);
+    if (ofWanted < 0.5 || ofConcept < 0.5 || Math.max(ofWanted, ofConcept) <= 0.5) continue;
+    const score = ofWanted + ofConcept;
     if (score > bestScore) {
       best = example;
       bestScore = score;
     }
   }
-  return bestScore >= 0.5 ? best : null;
+  return best;
 }

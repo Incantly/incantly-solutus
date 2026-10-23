@@ -530,6 +530,12 @@ describe('the standard figure fallback', () => {
     expect(standardFigure('thin lens ray diagram')?.id).toBe('thin-lens');
     expect(standardFigure('Sine waves')?.id).toBe('sine-wave');
     expect(standardFigure('photosynthesis')).toBeNull();
+    // One common word is not the same concept: a Riemann sum once started from the titration curve.
+    expect(standardFigure('Riemann sums: area under a curve')).toBeNull();
+    expect(standardFigure('Brownian motion')).toBeNull();
+    expect(standardFigure('wave interference')).toBeNull();
+    expect(standardFigure('normal force on a ramp')).toBeNull();
+    expect(standardFigure('titration')?.id).toBe('titration');
     expect(standardFigure('')).toBeNull();
   });
 

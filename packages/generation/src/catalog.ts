@@ -16,7 +16,7 @@ export interface Capability {
   readonly draws: boolean;
 }
 
-const STAGE = ['StageOptions', 'ElementOptions', 'EquationOptions', 'Shade', 'Layer', 'Stage', 'PartOptions', 'Handle', 'PathHandle', 'TextHandle', 'PolylineHandle', 'Group'];
+const STAGE = ['StageOptions', 'ElementOptions', 'EquationOptions', 'Shade', 'Layer', 'Stage', 'PartOptions', 'RotateOptions', 'Handle', 'PathHandle', 'TextHandle', 'PolylineHandle', 'Group'];
 const DRAG = ['DragInfo', 'DragMap', 'Values'];
 const SPACE = ['Vec3', 'Mat3', 'CameraOptions', 'View3D', 'Object3D', 'Group3D', 'Line3DOptions', 'Line3D', 'Arrow3D', 'Label3D', 'PartOptions'];
 
@@ -240,7 +240,7 @@ export const CAPABILITIES: readonly Capability[] = [
     name: 'shapes',
     draws: false,
     line: 'shapes: path data for springs, resistors, coils, waves, gears, belts, lenses, cells, circuit symbols, tanks, braces, blobs, polygons (inc.shapes).',
-    contract: ['ShapeHelpers'],
+    contract: ['GearOptions', 'ShapeHelpers'],
   },
   {
     name: 'symbols',
@@ -252,7 +252,7 @@ export const CAPABILITIES: readonly Capability[] = [
     name: 'path',
     draws: false,
     line: 'path: path data for polylines, sampled curves that break at discontinuities, parametric curves, arcs and arrows (inc.path).',
-    contract: ['PathHelpers'],
+    contract: ['ArrowPoints', 'PathHelpers'],
   },
   {
     name: 'geometry',
