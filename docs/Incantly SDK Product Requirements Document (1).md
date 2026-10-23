@@ -1705,7 +1705,7 @@ plan -> validate plan -> generate scene -> static validate -> PROBE RUN (hidden)
    pass -> mount for the learner
    fail -> error report -> agent repair (attempt 1) -> static validate -> PROBE RUN
             pass -> mount
-            fail -> attempt 2, only if attempt 1 actually changed something
+            fail -> attempt 2, then 3, each only if the one before made progress
                       fail -> fallback (27.6)
 ```
 
@@ -1790,7 +1790,7 @@ Each repair writes a record: the concept, the plan, the fragments before and aft
 | RP-1 | Probe run in a hidden frame before anything is shown to the learner | P0 |
 | RP-2 | Error reports carry check, parameter values, real error, mapped line with context, and the rule broken | P0 |
 | RP-3 | Fragment line-number mapping from the shell back to the agent's own code | P0 |
-| RP-4 | One automatic repair attempt; a second only if the first changed the output | P0 |
+| RP-4 | Up to three automatic repairs; another only while the one before made progress (it changed the output and did not bring back the same failures, or more of them) | P0 |
 | RP-5 | Repair calls send only the report, the fragments and the relevant catalog lines | P1 |
 | RP-6 | Repair returns only the fragments that change | P1 |
 | RP-7 | Runtime errors after mount freeze the last good frame and repair in the background | P0 |
@@ -1803,4 +1803,4 @@ Each repair writes a record: the concept, the plan, the fragments before and aft
 
 ### 27.9 Targets
 
-From section 11, now with the repair loop attached: 85 percent of figures pass the probe on the first attempt, 97 percent after one repair, and a repair adds no more than 6 seconds. If post-repair pass rate sits below 95 percent, the fix is a kit function or a better example, not a third retry.
+From section 11, now with the repair loop attached: 85 percent of figures pass the probe on the first attempt, 97 percent after one repair, and a repair adds no more than 6 seconds. If post-repair pass rate sits below 95 percent, the fix is a kit function or a better example, not a fourth retry.
