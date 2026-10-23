@@ -16,7 +16,7 @@
 ## Real generation acceptance
 
 - After changing the generation pipeline, model client, scene contract, validator, probe, or Playground generation flow, validate it through the running Playground rather than treating mocked or unit tests as proof.
-- Open `http://127.0.0.1:5173/?page=generations` in a real browser. Generate the Bicycle chain and derailleur, Fibonacci sequence, and Golden ratio cards through **Generate in chat**. These calls must use the configured real model session and the same SDK path a learner uses.
+- Open `http://127.0.0.1:5173/?page=generations` in a real browser. Generate the Meshing gears, Forces on a ramp, and Area under a curve cards through **Generate in chat**. These calls must use the configured real model session and the same SDK path a learner uses.
 - Wait up to three minutes for each generation. A pass means the Playground reaches **Ready**, mounts a live figure, and records a `done figure` debug entry. Open the figure and confirm it is visibly drawn; do not count a skeleton, source-only response, reviewed fallback, or generic success message as a pass.
 - On failure, open **Debug log** and use the matching `generationId`, `reason`, and `diagnostic` record to identify the real stage and cause. Fix the generic SDK, generation, validation, or probe path, then repeat the failed real prompt. Do not add scene-specific Playground code to make an acceptance prompt pass.
 - Visit **Gallery of generations** after the run and verify the three acceptance cards remain searchable and open the intended prompt. Report each prompt's real outcome and plan, scene, validation, and probe timing when available.
