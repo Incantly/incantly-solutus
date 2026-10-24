@@ -274,6 +274,10 @@ export class FigureRenderer {
     if (ui.playing !== undefined) this.controls.setPlaying(ui.playing);
     if (ui.animated !== undefined) this.controls.setAnimated(ui.animated);
     if (ui.playing !== undefined || ui.animated !== undefined) this.updateAudible();
+    if (ui.volume !== undefined) {
+      this.sound.setVolume(ui.volume);
+      this.controls.setVolume(ui.volume);
+    }
     if (ui.speed !== undefined) this.controls.setSpeed(ui.speed);
     if (ui.actions !== undefined) this.controls.setActions(ui.actions);
     if (ui.history !== undefined) this.controls.setHistory(ui.history);

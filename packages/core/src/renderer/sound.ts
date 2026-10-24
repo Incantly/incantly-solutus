@@ -1,6 +1,7 @@
 import type { NoiseColor } from '../api/types';
 import { SOUND_LIMITS } from '../kits/sound/limits';
 import type { SceneCommand, SoundState } from '../protocol/scene-commands';
+import { DEFAULT_VOLUME } from '../protocol/ui';
 
 /**
  * Plays a figure's sounds with Web Audio, on the page that shows it. The
@@ -113,6 +114,8 @@ export class SoundPlayer {
   private bus: GainNode | null = null;
   private enabled = false;
   private audible = true;
+  /** The learner's volume, over the scene's own gains. */
+  private volume = DEFAULT_VOLUME;
   private recentNotes: number[] = [];
   private notesSeen = false;
 
@@ -150,6 +153,14 @@ export class SoundPlayer {
     } else {
       this.teardown();
     }
+  }
+
+  /** The learner's volume from 0 to 1. */
+  setVolume(volume: number): void {
+    const next = Number.isFinite(volume) ? Math.min(1, Math.max(0, volume)) : DEFAULT_VOLUME;
+    if (next === this.volume) return;
+    this.volume = next;
+    this.fade();
   }
 
   /** Whether the figure may sound now: playing, or still with nothing to play, and in sight. */
@@ -193,7 +204,7 @@ export class SoundPlayer {
 
   private fade(): void {
     if (!this.bus || !this.out) return;
-    this.bus.gain.setTargetAtTime(this.audible ? 1 : 0, this.out.context.currentTime, GLIDE);
+    this.bus.gain.setTargetAtTime(this.audible ? this.volume : 0, this.out.context.currentTime, GLIDE);
   }
 
   private start(id: number, state: SoundState): void {
