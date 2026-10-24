@@ -1,6 +1,6 @@
 {
   "name": "@incantly/core",
-  "version": "0.1.0-dev",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "description": "Incantly visualization SDK: scene runtime, renderer, sandbox, validator and probe.",
