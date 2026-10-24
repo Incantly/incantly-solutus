@@ -22,3 +22,6 @@ test-results/
 playwright-report/
 blob-report/
 packages/generation/eval-results/
+
+# Built packages for GitHub Packages (scripts/release-packages.mjs)
+.release/

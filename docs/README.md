@@ -10,6 +10,7 @@ Incantly turns a concept in a learner's notes into a safe, interactive teaching 
 4. [Vertical-slice implementation](implementation/vertical-slice.md)
 5. [Acceptance tests](implementation/acceptance-tests.md)
 6. [Claude reference examples](implementation/reference-examples.md)
+7. [Installing the SDK in other projects](installing.md): private packages from GitHub Packages, locally and when deploying
 
 ## Documentation map
 
