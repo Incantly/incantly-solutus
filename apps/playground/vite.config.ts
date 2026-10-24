@@ -140,7 +140,8 @@ function generationService(): Plugin {
       // streams a scene for up to five minutes, and a repair may join it.
       // The model-side cap guards silence; the wall has room for all three.
       generationTimeoutMs: session ? 420_000 : 45_000,
-      limits: { ...g.DEFAULT_LIMITS, perMinute: 60, perDay: 1000, concurrent: 6 },
+      // A developer runs many figures a day on their own key: a learner's $1 a day would stop them within the hour.
+      limits: { ...g.DEFAULT_LIMITS, perMinute: 60, perDay: 1000, concurrent: 6, learnerDailyUsd: 50 },
       // Figures that hit a problem while live are repaired in the background (RP-7).
       ticketSecret: DEV_TICKET_SECRET,
       gallery,
