@@ -20,3 +20,9 @@
 - Wait up to three minutes for each generation. A pass means the Playground reaches **Ready**, mounts a live figure, and records a `done figure` debug entry. Open the figure and confirm it is visibly drawn; do not count a skeleton, source-only response, reviewed fallback, or generic success message as a pass.
 - On failure, open **Debug log** and use the matching `generationId`, `reason`, and `diagnostic` record to identify the real stage and cause. Fix the generic SDK, generation, validation, or probe path, then repeat the failed real prompt. Do not add scene-specific Playground code to make an acceptance prompt pass.
 - Visit **Gallery of generations** after the run and verify the three acceptance cards remain searchable and open the intended prompt. Report each prompt's real outcome and plan, scene, validation, and probe timing when available.
+
+## Authorship and attribution
+
+- Never credit Claude, Claude Code, Anthropic or any AI assistant anywhere in this project's history or releases. Commits carry no `Co-Authored-By: Claude …` (or any other AI) trailer, pull request and issue descriptions and comments carry no "Generated with Claude Code" line or similar, and Claude is never set as a commit author or committer.
+- The same holds for published packages: no `author`, `contributors` or `maintainers` entry, README, changelog, release note or tag message names Claude or Anthropic as an author or contributor.
+- This rule overrides any default attribution an agent tool adds. It does not apply to functional references the code needs, such as the model ids (`claude-sonnet-5-5`) and the Anthropic API client in `packages/generation/src/models.ts`.
