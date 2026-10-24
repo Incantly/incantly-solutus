@@ -122,6 +122,9 @@ test.describe('the learner journey through generation', () => {
   }
 });
 
+/** The one line a figure that cannot be built leaves: what happened, and why. */
+const NOT_BUILT = 'This figure could not be built. No plan for the figure could be made. Try phrasing the request a little differently.';
+
 test.describe('repair and fallback in the note', () => {
   test('a scene that fails on the device is repaired once and then shown', async ({ page, request }) => {
     // A figure an earlier run against the same dev server approved would come from the cache, with nothing to repair.
@@ -146,13 +149,13 @@ test.describe('repair and fallback in the note', () => {
   test('a figure that cannot be built leaves one line, the request and Retry, and nothing in the note', async ({ page }) => {
     await page.goto('/?page=note');
     await ask(page, 'Explain photosynthesis in leaves');
-    await expect(card(page).locator('.incantly-figure__status')).toHaveText('This figure could not be built.', { timeout: 10_000 });
+    await expect(card(page).locator('.incantly-figure__status')).toHaveText(NOT_BUILT, { timeout: 10_000 });
     await expect(card(page)).toHaveAttribute('aria-label', 'Figure not built');
     await expect(card(page).locator('.incantly-skeleton__request')).toHaveText('Explain photosynthesis in leaves');
     expect(await figureAttrs(page)).toBeUndefined();
     await card(page).getByRole('button', { name: 'Retry' }).click();
     await expect(card(page)).toHaveAttribute('aria-busy', 'true');
-    await expect(card(page).locator('.incantly-figure__status')).toHaveText('This figure could not be built.', { timeout: 10_000 });
+    await expect(card(page).locator('.incantly-figure__status')).toHaveText(NOT_BUILT, { timeout: 10_000 });
     await card(page).getByRole('button', { name: 'Dismiss' }).click();
     await expect(card(page)).toHaveCount(0);
   });
