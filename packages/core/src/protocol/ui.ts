@@ -147,6 +147,8 @@ export interface UiState {
    */
   readonly animated: boolean | null;
   readonly speed: number;
+  /** The learner's volume for the figure's sound, from 0 to 1; the scene's own gains are multiplied by it. */
+  readonly volume: number;
   readonly idea: string | null;
   readonly explanation: string | null;
   readonly description: string | null;
@@ -172,6 +174,12 @@ export interface UiState {
   readonly panels: 'row' | 'column' | 'grid' | null;
 }
 
+/** Where a figure's sound starts: half volume, under the limiter and quiet master gain. */
+export const DEFAULT_VOLUME = 0.5;
+
+/** The setting a learner's volume is saved under, beside the timing settings. */
+export const VOLUME_SETTING = '$volume';
+
 export const EMPTY_UI: UiState = {
   params: [],
   readouts: [],
@@ -179,6 +187,7 @@ export const EMPTY_UI: UiState = {
   playing: false,
   animated: null,
   speed: 1,
+  volume: DEFAULT_VOLUME,
   idea: null,
   explanation: null,
   description: null,

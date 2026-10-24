@@ -1,6 +1,7 @@
 import type { RendererMessage } from '../protocol/runtime-messages';
 import { EASES, FRAME_CAPS, LOOP_MODES, SPEEDS } from '../protocol/runtime-messages';
 import type { ActionView, ParamView, ReadoutView, TimingView } from '../protocol/ui';
+import { DEFAULT_VOLUME, VOLUME_SETTING } from '../protocol/ui';
 
 type Send = (message: RendererMessage) => void;
 
@@ -69,6 +70,10 @@ export class ControlsView {
   /** The learner switched sound on or off. */
   onSound: ((on: boolean) => void) | null = null;
   private readonly soundButton: HTMLButtonElement;
+  /** Made only for a figure that has sound, so a silent figure carries no extra slider. */
+  private volumeLabel: HTMLLabelElement | null = null;
+  private volume: HTMLInputElement | null = null;
+  private volumeValue = DEFAULT_VOLUME;
 
   constructor(
     private readonly doc: Document,
@@ -294,6 +299,36 @@ export class ControlsView {
     this.soundButton.setAttribute('aria-pressed', String(on));
     this.soundButton.textContent = on ? 'Sound on' : 'Sound off';
     this.soundButton.title = on ? 'Silence this figure' : 'Play this figure’s sound';
+    if (available) this.makeVolume().hidden = !on;
+  }
+
+  setVolume(volume: number): void {
+    this.volumeValue = volume;
+    const input = this.volume;
+    if (!input) return;
+    // Not while the learner drags it: the runtime's echo would fight the pointer.
+    if (this.doc.activeElement !== input) input.value = String(volume);
+    input.setAttribute('aria-valuetext', `${Math.round(volume * 100)}%`);
+  }
+
+  /** The learner's own volume, beside the Sound button; the scene's gains are what it teaches. */
+  private makeVolume(): HTMLLabelElement {
+    if (this.volumeLabel) return this.volumeLabel;
+    const label = this.doc.createElement('label');
+    label.className = 'inc-volume';
+    label.textContent = 'Volume ';
+    const input = this.doc.createElement('input');
+    input.type = 'range';
+    input.min = '0';
+    input.max = '1';
+    input.step = '0.05';
+    input.dataset.param = VOLUME_SETTING;
+    label.append(input);
+    this.soundButton.after(label);
+    this.volumeLabel = label;
+    this.volume = input;
+    this.setVolume(this.volumeValue);
+    return label;
   }
 
   /** The figure entered or left full screen. */

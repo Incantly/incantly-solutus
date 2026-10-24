@@ -47,7 +47,7 @@ import type { RuntimeUpdate, ViewAction } from '../protocol/runtime-messages';
 import type { StageMeasure } from '../protocol/scene-commands';
 import { SPEEDS, type LoopMode } from '../protocol/runtime-messages';
 import type { ActionView, ErrorPhase, ErrorView, LegendView, ParamView, PredictView, UiState } from '../protocol/ui';
-import { EMPTY_UI } from '../protocol/ui';
+import { DEFAULT_VOLUME, EMPTY_UI, VOLUME_SETTING } from '../protocol/ui';
 import { bindMethods } from '../scene/bind';
 import { SceneApiError } from '../scene/errors';
 import { calculus } from '../helpers/calc';
@@ -261,6 +261,8 @@ export class SceneRuntime {
   private error: ErrorView | null = null;
   private lastUi: UiState = EMPTY_UI;
   private pendingValues: Record<string, number> | null = null;
+  /** The learner's volume, a setting kept with the figure like its timing. */
+  private volume = DEFAULT_VOLUME;
   private pendingFormulas: Record<string, string> | null = null;
   private resetPending = false;
   private readonly maxDt: number;
@@ -339,6 +341,7 @@ export class SceneRuntime {
     this.scene = scene;
     this.lifecycle = 'mounting';
     this.restoreValues = values;
+    this.volume = volumeOf(values?.[VOLUME_SETTING]) ?? this.volume;
     try {
       scene(this.inc, Math);
       this.checkTeaching();
@@ -618,6 +621,15 @@ export class SceneRuntime {
     const settings: Record<string, number> = {};
     const params: Record<string, number> = {};
     for (const [name, value] of Object.entries(values)) (isSettingName(name) ? settings : params)[name] = value;
+    if (VOLUME_SETTING in settings) {
+      const volume = volumeOf(settings[VOLUME_SETTING]);
+      delete settings[VOLUME_SETTING];
+      if (volume !== null && volume !== this.volume) {
+        this.volume = volume;
+        this.dirty = true;
+        this.pendingValues = { ...this.pendingValues, [VOLUME_SETTING]: volume };
+      }
+    }
     if (Object.keys(settings).length > 0 && this.timeline) {
       if (this.timeline.apply(Timeline.decode(settings))) {
         this.dirty = true;
@@ -1303,6 +1315,7 @@ export class SceneRuntime {
       playing: this.playing,
       animated: this.animated,
       speed: this.speed,
+      volume: this.volume,
       idea: this.idea,
       explanation: this.explanation,
       description: this.description,
@@ -1939,6 +1952,11 @@ export class SceneRuntime {
     };
     return Object.freeze(inc);
   }
+}
+
+/** A saved or chosen volume from 0 to 1, or null when it is not one. */
+function volumeOf(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : null;
 }
 
 function isValues(value: unknown): value is Values {

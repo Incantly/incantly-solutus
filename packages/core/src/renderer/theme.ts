@@ -304,6 +304,9 @@ html.inc-frame, html.inc-frame body { margin: 0; padding: 0; background: transpa
 .inc-predict__result:empty { display: none; }
 .inc-controls { display: flex; flex-direction: column; gap: var(--inc-gap); }
 .inc-transport { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.inc-volume { display: inline-flex; align-items: center; gap: 6px; }
+.inc-volume[hidden] { display: none; }
+.inc-volume input { width: 96px; accent-color: var(--inc-lit); }
 .inc-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .inc-figure button, .inc-figure select, .inc-figure input {
   font: inherit;

@@ -209,6 +209,19 @@ describe('sound in the validator and the probe', () => {
 // The host side: the player and the sound button
 // ---------------------------------------------------------------------------
 
+describe('the learner’s volume in the runtime', () => {
+  it('is a setting kept with the figure, restored when it mounts', () => {
+    const runtime = new SceneRuntime({ autoplay: false, kits: { sound: kit }, values: { $volume: 0.3 } });
+    expect(runtime.mount((inc) => void inc.sound.voice({ frequency: 440 })).ui.volume).toBe(0.3);
+    runtime.setParam('$volume', 0.8);
+    const update = runtime.tick(0);
+    expect(update.ui.volume).toBe(0.8);
+    expect(update.values).toEqual({ $volume: 0.8 });
+    runtime.setParam('$volume', Number.NaN);
+    expect(runtime.tick(0).ui.volume).toBeUndefined();
+  });
+});
+
 describe('the sound player', () => {
   it('stays silent and makes no audio context until it is switched on', () => {
     const audio = fakeAudio();
@@ -277,7 +290,21 @@ describe('the sound player', () => {
     const bus = audio.context.gains[1]!;
     player.setAudible(false);
     player.setAudible(true);
-    expect(bus.gain.targets).toEqual([1, 0, 1]);
+    expect(bus.gain.targets).toEqual([0.5, 0, 0.5]);
+  });
+
+  it('plays at the learner’s volume, half by default, over the scene’s own gains', () => {
+    const audio = fakeAudio();
+    const player = new SoundPlayer(audio.factory);
+    player.setEnabled(true);
+    const bus = audio.context.gains[1]!;
+    expect(bus.gain.value).toBe(0.5);
+    player.setVolume(0.2);
+    expect(bus.gain.value).toBe(0.2);
+    player.setVolume(7);
+    expect(bus.gain.value).toBe(1);
+    player.setAudible(false);
+    expect(bus.gain.value).toBe(0);
   });
 });
 
@@ -322,6 +349,28 @@ describe('the sound button', () => {
     expect(audio.context.sources[0]?.stoppedAt).not.toBeNull();
   });
 
+  it('shows a volume slider while sound is on, and saves the learner’s volume with the figure', () => {
+    const audio = fakeAudio();
+    const clock = new ManualClock();
+    const container = document.createElement('div');
+    document.body.append(container);
+    const saved: Array<Readonly<Record<string, number>>> = [];
+    const figure = mountTrusted(container, TONE_SCENE, { clock, visibility: 'external', kits: { sound: kit }, audio: audio.factory, onValues: (values) => saved.push(values) });
+    mounted.push(figure);
+    clock.advance();
+    const volume = figure.root.querySelector<HTMLInputElement>('.inc-volume input')!;
+    expect(volume.closest('label')!.hidden).toBe(true);
+    figure.root.querySelector<HTMLButtonElement>('button[data-action=sound]')!.click();
+    expect(volume.closest('label')!.hidden).toBe(false);
+    expect(volume.value).toBe('0.5');
+    volume.value = '0.2';
+    volume.dispatchEvent(new Event('input', { bubbles: true }));
+    clock.advance();
+    expect(saved.at(-1)).toEqual({ $volume: 0.2 });
+    expect(audio.context.gains[1]!.gain.value).toBe(0.2);
+    expect(volume.getAttribute('aria-valuetext')).toBe('20%');
+  });
+
   it('is not offered on a figure without sound', () => {
     const clock = new ManualClock();
     const container = document.createElement('div');
@@ -330,5 +379,6 @@ describe('the sound button', () => {
     mounted.push(figure);
     clock.advance();
     expect(figure.root.querySelector<HTMLButtonElement>('button[data-action=sound]')!.hidden).toBe(true);
+    expect(figure.root.querySelector('.inc-volume')).toBeNull();
   });
 });
