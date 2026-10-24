@@ -1,4 +1,4 @@
-import type { Layer, ViewBox } from '../api/types';
+import type { Layer, NoiseColor, ViewBox, Waveform } from '../api/types';
 
 /** `use` repeats another element of the same stage (SV-6). */
 /** `math` is an equation drawn as maths (DG-5): its text is the formula's source. */
@@ -75,7 +75,17 @@ export type SceneCommand =
       readonly restarts?: readonly number[];
     }
   /** Puts an element's children in this order (a 3D depth sort that changed). */
-  | { readonly op: 'order'; readonly id: number; readonly children: readonly number[] };
+  | { readonly op: 'order'; readonly id: number; readonly children: readonly number[] }
+  /** A tone or noise that sounds until it is silenced; the same id again changes it. */
+  | { readonly op: 'sound'; readonly id: number; readonly sound: SoundState }
+  | { readonly op: 'silence'; readonly id: number }
+  /** A short note that fades out by itself. */
+  | { readonly op: 'note'; readonly wave: Waveform; readonly frequency: number; readonly duration: number; readonly gain: number };
+
+/** What a sound is now: frequencies in hertz, gains from 0 to 1, already in range. */
+export type SoundState =
+  | { readonly kind: 'tone'; readonly wave: Waveform; readonly frequency: number; readonly gain: number }
+  | { readonly kind: 'noise'; readonly color: NoiseColor; readonly gain: number };
 
 export type StageZoom = 'viewbox' | 'runtime' | 'none';
 
@@ -124,3 +134,4 @@ export const RENDERABLE_ATTRIBUTES: ReadonlySet<string> = new Set([
   'stroke-opacity',
   'transform',
 ]);
+

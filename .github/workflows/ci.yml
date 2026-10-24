@@ -28,7 +28,8 @@ jobs:
 
   browser:
     name: Browser tests (Chromium and WebKit)
-    runs-on: ubuntu-latest
+    # Playwright 1.56 installs its browsers only on Ubuntu 24.04 and earlier; ubuntu-latest is now 26.04.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -49,7 +50,8 @@ jobs:
     name: Performance suite (300-node profile)
     # The full profile needs stable hardware; run it on main and on demand.
     if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
+    # Playwright 1.56 installs its browsers only on Ubuntu 24.04 and earlier; ubuntu-latest is now 26.04.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

@@ -7,6 +7,7 @@ import { ControlsView, ReadoutsView } from './controls';
 import { SceneDom } from './dom-scene';
 import { FormulasPanel, HeaderView, LegendPanel, PredictPanel, TablesPanel } from './panels';
 import { PointerController } from './pointer';
+import { isSoundCommand, SoundPlayer, type AudioContextFactory } from './sound';
 import { applySlotClasses, applyStyle, clearStyle, resolveStyle, type FigureStyle, type ResolvedStyle } from './style';
 import { TeachingView } from './teaching';
 
@@ -32,6 +33,8 @@ export interface RendererOptions {
   readonly onStep?: (step: number | null, count?: number) => void;
   readonly onError?: (error: ErrorView) => void;
   readonly onUpdate?: (update: RuntimeUpdate, ui: UiState) => void;
+  /** Makes the page's audio context; tests pass a stand-in. */
+  readonly audio?: AudioContextFactory;
 }
 
 /** How long after a learner's last change the new readouts are announced. */
@@ -61,6 +64,7 @@ export class FigureRenderer {
   readonly root: HTMLElement;
   readonly scene: SceneDom;
   readonly pointer: PointerController;
+  readonly sound: SoundPlayer;
   /** The style now applied, checked. */
   style: ResolvedStyle;
   readonly stats: RendererStats = { frameRequests: 0, loopStarts: 0, ticksSent: 0, updates: 0, workMs: 0, workFrames: 0 };
@@ -91,6 +95,8 @@ export class FigureRenderer {
   private tickStart: number | null = null;
   private destroyed = false;
   private onScreen = true;
+  /** In sight, as the renderer or its host last said. */
+  private visible = true;
   /** Time held back by a frame-rate cap, in seconds. */
   private capped = 0;
 
@@ -130,6 +136,11 @@ export class FigureRenderer {
       fullscreen: show.fullscreen,
     });
     this.controls.onFullscreen = () => this.toggleFullscreen();
+    this.sound = new SoundPlayer(options.audio);
+    this.controls.onSound = (on) => {
+      this.sound.setEnabled(on);
+      this.controls.setSound(true, this.sound.isOn);
+    };
     this.controls.onFrameCap = () => {
       this.capped = 0;
     };
@@ -241,8 +252,17 @@ export class FigureRenderer {
     if (update.reset) {
       this.scene.clear();
       this.pointer.reset();
+      this.sound.clear();
     }
-    this.scene.apply(update.commands);
+    const sounds = update.commands.filter(isSoundCommand);
+    if (sounds.length > 0) {
+      const had = this.sound.hasSound;
+      this.sound.apply(sounds);
+      if (!had && this.sound.hasSound) this.controls.setSound(true, this.sound.isOn);
+      this.scene.apply(update.commands.filter((c) => !isSoundCommand(c)));
+    } else {
+      this.scene.apply(update.commands);
+    }
     const ui = update.ui;
     this.ui = { ...this.ui, ...ui };
     if (ui.idea !== undefined) {
@@ -253,6 +273,7 @@ export class FigureRenderer {
     if (ui.params !== undefined) this.controls.setParams(ui.params);
     if (ui.playing !== undefined) this.controls.setPlaying(ui.playing);
     if (ui.animated !== undefined) this.controls.setAnimated(ui.animated);
+    if (ui.playing !== undefined || ui.animated !== undefined) this.updateAudible();
     if (ui.speed !== undefined) this.controls.setSpeed(ui.speed);
     if (ui.actions !== undefined) this.controls.setActions(ui.actions);
     if (ui.history !== undefined) this.controls.setHistory(ui.history);
@@ -293,7 +314,14 @@ export class FigureRenderer {
 
   /** Visibility decided by the host (TipTap node view, sandbox adapter). */
   setVisible(visible: boolean): void {
+    this.visible = visible;
+    this.updateAudible();
     this.send({ type: 'visible', value: visible });
+  }
+
+  /** A figure sounds while it plays, or while it is still with nothing to play, and only in sight. */
+  private updateAudible(): void {
+    this.sound.setAudible(this.visible && (this.ui.playing || this.ui.animated === false));
   }
 
   destroy(): void {
@@ -302,6 +330,7 @@ export class FigureRenderer {
     this.destroyed = true;
     this.controller.abort();
     this.pointer.destroy();
+    this.sound.destroy();
     if (this.announceTimer !== null) clearTimeout(this.announceTimer);
     this.announceTimer = null;
     this.observer?.disconnect();
@@ -384,6 +413,12 @@ export class FigureRenderer {
     this.resizer.observe(this.root);
   }
 
+  private seen(visible: boolean): void {
+    this.visible = visible;
+    this.updateAudible();
+    this.send({ type: 'visible', value: visible });
+  }
+
   private observeVisibility(doc: Document, signal: AbortSignal): void {
     const view = doc.defaultView;
     if (view && 'IntersectionObserver' in view) {
@@ -391,13 +426,13 @@ export class FigureRenderer {
         const entry = entries[entries.length - 1];
         if (!entry) return;
         this.onScreen = entry.isIntersecting;
-        this.send({ type: 'visible', value: this.onScreen && doc.visibilityState !== 'hidden' });
+        this.seen(this.onScreen && doc.visibilityState !== 'hidden');
       });
       this.observer.observe(this.root);
     }
     doc.addEventListener(
       'visibilitychange',
-      () => this.send({ type: 'visible', value: this.onScreen && doc.visibilityState !== 'hidden' }),
+      () => this.seen(this.onScreen && doc.visibilityState !== 'hidden'),
       { signal },
     );
   }

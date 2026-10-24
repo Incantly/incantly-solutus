@@ -12,7 +12,7 @@ import {
   type Returns,
 } from '../api/surface';
 import { RENDERABLE_ATTRIBUTES } from '../protocol/scene-commands';
-import { isKitCall, kitsFor, type KitName } from '../runtime/kits';
+import { isKitCall, KIT_NAMESPACES, kitsFor, type KitName } from '../runtime/kits';
 import { isColourLiteral, NAMED_COLOURS } from './colours';
 import { LineIndex, type Diagnostic, type Fix } from './diagnostics';
 import { SCENE_LIMITS, type SceneLimits } from './limits';
@@ -406,6 +406,10 @@ class Scope {
     return this.bindings.get(name) ?? this.parent?.lookup(name);
   }
 }
+
+/** The calls whose `color` is a noise colour, and those colours. */
+const NOISE_CALLS: ReadonlySet<string> = new Set(['inc.sound.noise', 'noise.set']);
+const NOISE_COLORS: ReadonlySet<string> = new Set(['white', 'pink', 'brown']);
 
 interface Context {
   readonly scope: Scope;
@@ -1019,7 +1023,7 @@ class JsValidator {
           }
           const value = property.value as Expression;
           if (key !== null && value.type === 'Literal' && typeof value.value === 'string') {
-            this.checkStyleValue(key, value.value, value.start);
+            this.checkStyleValue(key, value.value, value.start, ctx.pending);
           }
           if (!property.shorthand) this.expression(value, ctx);
           else this.identifier((value as { name: string }).name, value as AnyNode, ctx);
@@ -1117,7 +1121,9 @@ class JsValidator {
   }
 
   /** Object properties that set a colour or tone. */
-  private checkStyleValue(key: string, value: string, offset: number): void {
+  private checkStyleValue(key: string, value: string, offset: number, call: string | null): void {
+    // A noise's colour names how its loudness spreads over frequencies, not a colour to draw.
+    if (key === 'color' && NOISE_CALLS.has(call ?? '') && NOISE_COLORS.has(value)) return;
     if (key === 'tone' && !TONE_SET.has(value)) {
       this.report('unknown-tone', `"${value}" is not a tone; use one of ${TONES.join(', ')}`, offset);
     } else if (['fill', 'stroke', 'color', 'colour', 'background'].includes(key) && NAMED_COLOURS.has(value.toLowerCase())) {
@@ -1216,7 +1222,10 @@ class JsValidator {
     }
     switch (object.t) {
       case 'inc': {
-        if (Object.hasOwn(INC_NAMESPACES, name)) return { t: 'ns', ns: name as NamespaceName };
+        if (Object.hasOwn(INC_NAMESPACES, name)) {
+          if (Object.hasOwn(KIT_NAMESPACES, name)) this.kitCalls.add(name);
+          return { t: 'ns', ns: name as NamespaceName };
+        }
         if (name in INC_FUNCTIONS) return FUNCTION;
         const suggestion = closest(name, [...Object.keys(INC_FUNCTIONS), ...Object.keys(INC_NAMESPACES)]);
         this.report(

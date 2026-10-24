@@ -21,6 +21,9 @@ const pages: Record<string, (root: HTMLElement, params: URLSearchParams) => void
   gallery: mountGalleryPage,
 };
 
+/** Pages laid out as the chat app; the others keep the plain page their tests and fixtures expect. */
+const CHAT_PAGES: ReadonlySet<string> = new Set(['generate', 'generations']);
+
 const params = new URLSearchParams(location.search);
 const root = document.getElementById('app');
 if (!root) throw new Error('Missing #app');
@@ -28,5 +31,6 @@ const page = pages[params.get('page') ?? 'generate'];
 if (!page) {
   root.textContent = `Unknown page. Try one of: ${Object.keys(pages).join(', ')}`;
 } else {
+  if (CHAT_PAGES.has(params.get('page') ?? 'generate')) root.dataset.layout = 'chat';
   page(root, params);
 }
