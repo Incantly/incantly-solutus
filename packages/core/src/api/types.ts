@@ -1902,6 +1902,70 @@ export interface TweenOptions {
 }
 
 // ---------------------------------------------------------------------------
+// Sound
+// ---------------------------------------------------------------------------
+
+/** The shape of a tone's wave. */
+export type Waveform = 'sine' | 'square' | 'sawtooth' | 'triangle';
+
+/** White noise has every frequency equally; pink and brown lean ever more to the low ones. */
+export type NoiseColor = 'white' | 'pink' | 'brown';
+
+export interface VoiceOptions {
+  /** Hertz, from 20 to 20,000; middle A is 440. */
+  readonly frequency: number;
+  /** Default 'sine'. */
+  readonly wave?: Waveform;
+  /** Loudness from 0 to 1. Default 0.5. */
+  readonly gain?: number;
+}
+
+export interface NoiseOptions {
+  /** Default 'white'. */
+  readonly color?: NoiseColor;
+  /** Loudness from 0 to 1. Default 0.5. */
+  readonly gain?: number;
+}
+
+export interface NoteOptions {
+  /** Hertz, from 20 to 20,000. */
+  readonly frequency: number;
+  /** Seconds, from 0.02 to 2. Default 0.2. */
+  readonly duration?: number;
+  /** Default 'sine'. */
+  readonly wave?: Waveform;
+  /** Loudness from 0 to 1. Default 0.5. */
+  readonly gain?: number;
+}
+
+/** A tone that sounds until it is stopped; create it once, and set it in inc.onFrame to follow the controls. */
+export interface Voice {
+  set(changes: Partial<VoiceOptions>): Voice;
+  /** Silences it for good; start another to sound again. */
+  stop(): void;
+}
+
+/** Noise that sounds until it is stopped; set({ color }) changes its colour in place. */
+export interface Noise {
+  set(changes: NoiseOptions): Noise;
+  /** Silences it for good; start another to sound again. */
+  stop(): void;
+}
+
+/**
+ * Sound the learner switches on with the figure's sound button; it is silent
+ * until then, and while the figure is paused or out of sight. At most 8 tones
+ * and noises at once.
+ */
+export interface Sound {
+  /** A tone: inc.sound.voice({ frequency: freq.value, wave: 'sine' }). */
+  voice(options: VoiceOptions): Voice;
+  noise(options?: NoiseOptions): Noise;
+  /** A short pluck that fades out, such as a pendulum crossing the middle. */
+  note(options: NoteOptions): void;
+}
+
+// ---------------------------------------------------------------------------
 // The inc object
 // ---------------------------------------------------------------------------
 
@@ -1979,4 +2043,5 @@ export interface Inc {
   readonly units: Units;
   readonly motion: MotionHelpers;
   readonly shapes: ShapeHelpers;
+  readonly sound: Sound;
 }

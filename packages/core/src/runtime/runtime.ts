@@ -1,5 +1,9 @@
 import type {
   Biology,
+  NoiseOptions,
+  NoteOptions,
+  Sound,
+  VoiceOptions,
   BiologyOptions,
   Chart,
   ChartOptions,
@@ -1542,6 +1546,16 @@ export class SceneRuntime {
     };
   }
 
+  private sound: Sound | null = null;
+
+  private soundKit(): Sound {
+    if (this.sound) return this.sound;
+    const make = this.options.kits?.sound?.sound;
+    if (!make) throw new SceneApiError('inc.sound needs the sound kit, which this page did not load');
+    this.sound = make(() => this.graph);
+    return this.sound;
+  }
+
   /** A stage drawn by a kit: inc.space3d, inc.graph3d, inc.physics2d, inc.chart, inc.flow. */
   private kitStage(call: KitCall, selector: string, options: unknown): unknown {
     this.requireMounting(call);
@@ -1916,6 +1930,12 @@ export class SceneRuntime {
       units,
       motion,
       shapes,
+      // Its kit loads only for scenes that use it; the first call makes it.
+      sound: Object.freeze({
+        voice: (options: VoiceOptions) => runtime.soundKit().voice(options),
+        noise: (options?: NoiseOptions) => runtime.soundKit().noise(options),
+        note: (options: NoteOptions) => runtime.soundKit().note(options),
+      }),
     };
     return Object.freeze(inc);
   }

@@ -261,6 +261,12 @@ export const CAPABILITIES: readonly Capability[] = [
     contract: ['GeometryHelpers', 'Point', 'Line', 'Segment', 'Bounds'],
   },
   {
+    name: 'sound',
+    draws: false,
+    line: 'sound: tones, noise and notes that follow the model (inc.sound).',
+    contract: ['Waveform', 'NoiseColor', 'VoiceOptions', 'NoiseOptions', 'NoteOptions', 'Voice', 'Noise', 'Sound'],
+  },
+  {
     name: 'random',
     draws: false,
     line: 'random: a seeded random number in [0, 1); the same sequence on every run (inc.random).',

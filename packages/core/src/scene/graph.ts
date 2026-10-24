@@ -1,5 +1,5 @@
 import type { DragInfo, Layer, Shade, Tone, Values, Vec2, ViewBox } from '../api/types';
-import { RENDERABLE_ATTRIBUTES, type ElementKind, type SceneCommand, type StageMeasure, type StageZoom } from '../protocol/scene-commands';
+import { RENDERABLE_ATTRIBUTES, type ElementKind, type SceneCommand, type SoundState, type StageMeasure, type StageZoom } from '../protocol/scene-commands';
 import { SceneApiError, type Diagnostic } from './errors';
 import { fmt, hasNonFinite } from './format';
 
@@ -112,6 +112,8 @@ export class SceneGraph {
   private readonly interactions = new Map<number, string>();
   private readonly partInfo = new Map<number, { name: string; label: string; info: string }>();
   private readonly dots = new Map<number, string>();
+  /** The tones and noises sounding now, by id. */
+  readonly sounds = new Map<number, SoundState>();
   private readonly dotState = new Map<number, { stage: number; layer: 'back' | 'front'; tone: string; r: number; points: number[]; glow?: boolean; trail?: number }>();
 
   /** A fresh id for something drawn outside the element tree (a dots layer). */
@@ -211,6 +213,29 @@ export class SceneGraph {
     this.dotState.set(id, { stage, layer, tone, r, points: [...points], ...extra });
     // Restarts belong to this step only: a snapshot replays where the dots are, not how they got there.
     this.queue.push({ op: 'dots', id, stage, layer, tone, r, points: [...points], ...extra, ...(restarts.length > 0 ? { restarts: [...restarts] } : {}) });
+  }
+
+  /** Starts a sound, or changes one; the same sound again costs nothing. */
+  setSound(id: number, sound: SoundState): void {
+    const previous = this.sounds.get(id);
+    if (previous && JSON.stringify(previous) === JSON.stringify(sound)) return;
+    this.sounds.set(id, sound);
+    this.queue.push({ op: 'sound', id, sound });
+  }
+
+  silence(id: number): void {
+    if (!this.sounds.delete(id)) return;
+    this.queue.push({ op: 'silence', id });
+  }
+
+  /** A note belongs to its moment: a snapshot does not play it again. */
+  note(note: Omit<Extract<SceneCommand, { op: 'note' }>, 'op'>): void {
+    this.queue.push({ op: 'note', ...note });
+  }
+
+  /** A number the scene gave that cannot be drawn or played, for the probe. */
+  reportValue(message: string): void {
+    if (this.diagnostics.length < 200) this.diagnostics.push({ kind: 'non-finite', message });
   }
 
   /** Sets the kit's own classes on an element (focus marks, ghosts). */
@@ -328,6 +353,7 @@ export class SceneGraph {
     }
     for (const [id, dots] of this.dotState) out.push({ op: 'dots', id, ...dots });
     for (const [id, key] of this.interactions) out.push({ op: 'interact', id, ...(JSON.parse(key) as StageInteraction) });
+    for (const [id, sound] of this.sounds) out.push({ op: 'sound', id, sound });
     return out;
   }
 

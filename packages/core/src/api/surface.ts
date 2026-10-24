@@ -45,6 +45,7 @@ import type {
   Line3D,
   Membrane,
   Molecule,
+  Noise,
   MotionHelpers,
   Object3D,
   Param,
@@ -57,6 +58,7 @@ import type {
   Segment,
   ShapeHelpers,
   Shells,
+  Sound,
   Space3D,
   Stage,
   State,
@@ -68,6 +70,7 @@ import type {
   Tone,
   Units,
   VectorHelpers,
+  Voice,
   World2D,
 } from './types';
 
@@ -130,7 +133,9 @@ export type HandleKind =
   | 'Cell'
   | 'Membrane'
   | 'Helix'
-  | 'Stream';
+  | 'Stream'
+  | 'Voice'
+  | 'Noise';
 
 /**
  * What a member returns: another handle kind, `self` for chainable methods,
@@ -300,7 +305,12 @@ export const INC_NAMESPACES = {
     polygon: null,
     regular: null,
   } satisfies Methods<ShapeHelpers>,
-} as const satisfies Record<'state' | 'path' | 'geom' | 'calc' | 'vec' | 'units' | 'motion' | 'shapes', Record<string, Returns>>;
+  sound: {
+    voice: 'Voice',
+    noise: 'Noise',
+    note: null,
+  } satisfies Methods<Sound>,
+} as const satisfies Record<'state' | 'path' | 'geom' | 'calc' | 'vec' | 'units' | 'motion' | 'shapes' | 'sound', Record<string, Returns>>;
 
 export const HANDLES: Readonly<Record<HandleKind, HandleSpec>> = {
   Param: {
@@ -320,6 +330,8 @@ export const HANDLES: Readonly<Record<HandleKind, HandleSpec>> = {
     properties: { name: null, value: null, min: null, max: null, tone: null } satisfies Properties<ColorParam>,
   },
   Dots: { methods: { set: 'self', tone: 'self' } satisfies Methods<Dots>, properties: {} },
+  Voice: { methods: { set: 'self', stop: null } satisfies Methods<Voice>, properties: {} },
+  Noise: { methods: { set: 'self', stop: null } satisfies Methods<Noise>, properties: {} },
   Fluid: { methods: { tone: 'self', show: 'self', hide: 'self', reset: 'self' } satisfies Methods<Fluid>, properties: {} },
   Model: { methods: {}, properties: {}, open: true },
   Stage: {

@@ -23,6 +23,7 @@ export interface TrustedMountOptions extends RuntimeOptions {
   readonly onStep?: RendererOptions['onStep'];
   readonly onError?: RendererOptions['onError'];
   readonly onUpdate?: RendererOptions['onUpdate'];
+  readonly audio?: RendererOptions['audio'];
 }
 
 export interface MountedFigure {
@@ -113,6 +114,7 @@ export function mountTrusted(container: HTMLElement, fragments: Fragments, optio
     ...(options.onStep ? { onStep: options.onStep } : {}),
     ...(options.onError ? { onError: options.onError } : {}),
     ...(options.onUpdate ? { onUpdate: options.onUpdate } : {}),
+    ...(options.audio ? { audio: options.audio } : {}),
   });
   channel.start(compileTrusted(fragments.js));
 
