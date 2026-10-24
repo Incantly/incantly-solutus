@@ -1,0 +1,34 @@
+{
+  "concept": "animal, plant and bacterial cells",
+  "idea": "Every cell has a membrane, cytoplasm and ribosomes; animal and plant cells keep their DNA in a nucleus, plants add a wall, chloroplasts and a vacuole, and bacteria have no nucleus at all.",
+  "kind": "diagram",
+  "size": "standard",
+  "capabilities": ["biology", "controls", "explain", "describe", "steps"],
+  "parameters": [
+    {
+      "name": "highlight",
+      "min": 0,
+      "max": 3,
+      "default": 0,
+      "control": "choice",
+      "options": ["Everything", "In every cell", "Plants, not animals", "Bacteria only"],
+      "why": "Picks out what all cells share and what only some kinds have."
+    }
+  ],
+  "model": {
+    "inputs": ["highlight"],
+    "outputs": [
+      { "name": "pick", "dependsOn": ["highlight"] },
+      { "name": "name", "dependsOn": ["highlight"] }
+    ]
+  },
+  "parts": ["Membrane", "Nucleus", "Mitochondria", "Ribosomes", "Cell wall", "Chloroplasts", "Vacuole", "Nucleoid"],
+  "moves": "Choosing what to show brightens those organelles in each cell and fades the rest.",
+  "steps": [
+    "What every cell shares",
+    "The nucleus and mitochondria of animal and plant cells",
+    "What plant cells add",
+    "Bacteria have no nucleus"
+  ],
+  "singularPoints": []
+}

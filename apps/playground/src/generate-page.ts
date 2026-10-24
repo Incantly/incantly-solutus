@@ -4,6 +4,7 @@ import { FigureGeneration, FigureNode, MemoryFigureStore, flushFigures, newFigur
 import { Editor, type JSONContent } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import { clearDebug, loadDebug, recordDebug, recordingFetch } from './debug-log';
+import { CHATS_KEY, keepFigure } from './saved-chats';
 
 interface Turn { editor: Editor; readonly host: HTMLElement; readonly generate: FigureGenerate }
 interface ChatMessage {
@@ -19,8 +20,6 @@ interface Chat {
   messages: ChatMessage[];
 }
 
-/** Where chats survive reloads. The API key is deliberately never kept: it stays in the page and the server session. */
-const CHATS_KEY = 'incantly-playground-chats';
 
 interface SavedChats {
   chats: Array<Pick<Chat, 'id' | 'title' | 'createdAt' | 'messages'>>;
@@ -52,6 +51,21 @@ function sourcePanel(result: Extract<FigureGenerationResult, { kind: 'figure' }>
     details.append(section);
   }
   return details;
+}
+
+/** The useful, bounded part of a server failure record for the dev-only log. */
+async function failureDiagnostic(generationId: string): Promise<unknown> {
+  try {
+    const answer = await fetch('/api/dev/records');
+    if (!answer.ok) return { unavailable: `The records endpoint answered ${answer.status}` };
+    const records = (await answer.json()) as Array<Record<string, unknown>>;
+    const record = records.find((entry) => entry.id === generationId);
+    if (!record) return { unavailable: 'No server failure record was found for this generation' };
+    const fields = ['outcome', 'failure', 'concept', 'models', 'timings', 'calls', 'fixes', 'planProblems', 'reports', 'repairs', 'example', 'mode', 'deadlineSkipped', 'usage'] as const;
+    return Object.fromEntries(fields.filter((field) => field in record).map((field) => [field, record[field]]));
+  } catch (error) {
+    return { unavailable: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): void {
@@ -133,10 +147,9 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
           </select>
         </div>
         <div class="setting-group">
-          <label for="api-key">API Key (Optional)</label>
-          <p class="setting-description">Your Anthropic API key. Leave empty to use the dev server's ANTHROPIC_API_KEY.</p>
-          <input type="password" id="api-key" class="setting-input" placeholder="sk-ant-..." autocomplete="off">
-          <button type="button" class="test-key-btn">Test connection</button>
+          <label for="api-key-test">Connection</label>
+          <p class="setting-description">The dev server's ANTHROPIC_API_KEY is used; copy apps/playground/.env.example to .env and set it there.</p>
+          <button type="button" class="test-key-btn" id="api-key-test">Test connection</button>
           <p class="test-key-status" hidden></p>
         </div>
       </div>
@@ -233,7 +246,7 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
   galleryBtn.className = 'gallery-btn';
   galleryBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg><span>Gallery of generations</span>';
   galleryBtn.addEventListener('click', () => {
-    location.href = '/?page=gallery';
+    location.href = '/?page=generations';
   });
   chatHeader.append(chatTitleEl, galleryBtn);
 
@@ -273,9 +286,8 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
   const closeSettingsBtn = settingsModal.querySelector('.close-settings-btn') as HTMLButtonElement;
   const planningModelSelect = settingsModal.querySelector('#planning-model') as HTMLSelectElement;
   const sceneModelSelect = settingsModal.querySelector('#scene-model') as HTMLSelectElement;
-  const apiKeyInput = settingsModal.querySelector('#api-key') as HTMLInputElement;
 
-  // The chosen models carry across visits; the key never does.
+  // The chosen models carry across visits; the key stays in the dev server's .env.
   const MODEL_KEY = 'incantly-playground-models';
   try {
     const modelsSaved = JSON.parse(localStorage.getItem(MODEL_KEY) ?? 'null') as { planModel?: string; sceneModel?: string } | null;
@@ -315,7 +327,7 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
       const answer = await fetch('/api/dev/models', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ apiKey: apiKeyInput.value || undefined }),
+        body: JSON.stringify({}),
       });
       const result = (await answer.json()) as { ok?: boolean; message?: string; source?: string };
       testKeyStatus.className = `test-key-status ${result.ok ? 'ok' : 'fail'}`;
@@ -487,7 +499,6 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
     newChatBtn.disabled = busy;
     planningModelSelect.disabled = busy;
     sceneModelSelect.disabled = busy;
-    apiKeyInput.disabled = busy;
     sendBtn.setAttribute('aria-busy', String(busy));
   }
 
@@ -499,7 +510,6 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          apiKey: apiKeyInput.value || undefined,
           planModel: planningModelSelect.value,
           sceneModel: sceneModelSelect.value,
         }),
@@ -507,7 +517,6 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
       const answer = (await setupResponse.json()) as { id?: string; baseUrl?: string; message?: string };
       if (!setupResponse.ok || !answer.id || !answer.baseUrl) throw new Error(answer.message ?? 'Failed to start session');
       sessionId = answer.id;
-      apiKeyInput.value = '';
       useClient(answer.baseUrl, sceneModelSelect.selectedOptions[0]?.textContent ?? sceneModelSelect.value);
     })().finally(() => {
       sessionSetup = null;
@@ -609,7 +618,10 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
               <p class="scene-preview-eyebrow">Interactive scene</p>
               <h3 class="scene-preview-title">Preparing your scene</h3>
             </div>
-            <span class="scene-preview-status">Planning</span>
+            <div class="scene-preview-meta">
+              <span class="scene-preview-timer" aria-live="off">0s</span>
+              <span class="scene-preview-status">Planning</span>
+            </div>
           </div>
           <div class="scene-preview-canvas">
             <div class="scene-preview-shape scene-preview-shape-main"></div>
@@ -658,6 +670,22 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
     const previewCanvas = preview.querySelector('.scene-preview-canvas') as HTMLDivElement;
     const previewTitle = preview.querySelector('.scene-preview-title') as HTMLHeadingElement;
     const previewStatus = preview.querySelector('.scene-preview-status') as HTMLSpanElement;
+    const previewTimer = preview.querySelector('.scene-preview-timer') as HTMLSpanElement;
+    // The learner's clock: counts from the send until the figure is ready or the build has given up.
+    const startedAt = performance.now();
+    const formatSeconds = (ms: number): string => {
+      const total = Math.round(ms / 1000);
+      return total >= 60 ? `${Math.floor(total / 60)}m ${total % 60}s` : `${total}s`;
+    };
+    const ticker = setInterval(() => {
+      previewTimer.textContent = formatSeconds(performance.now() - startedAt);
+    }, 250);
+    const stopClock = (): number => {
+      clearInterval(ticker);
+      const elapsed = performance.now() - startedAt;
+      previewTimer.textContent = formatSeconds(elapsed);
+      return elapsed;
+    };
     const previewCopy = preview.querySelector('.scene-preview-copy') as HTMLParagraphElement;
     const previewParameters = preview.querySelector('.scene-preview-parameters') as HTMLDivElement;
     const details = assistantMessage.querySelector('.generation-details') as HTMLDetailsElement;
@@ -752,6 +780,7 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
       });
       if (frame) cancelAnimationFrame(frame);
       flushText();
+      const elapsedMs = stopClock();
       
       if (result.kind === 'figure') {
         settleStages(planStage, sceneStage, [planOutput, sceneOutput]);
@@ -765,6 +794,7 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
         preview.classList.remove('is-building');
         preview.setAttribute('aria-busy', 'false');
         previewStatus.textContent = 'Ready';
+        previewTimer.textContent = `Built in ${formatSeconds(elapsedMs)}`;
         previewCopy.textContent = result.notice ?? 'The scene passed its checks and is ready to use.';
         const sourceEl = sourcePanel(result);
         details.append(sourceEl);
@@ -790,7 +820,9 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
         const node = editor.getJSON().content?.find((child) => child.type === 'incantlyFigure');
         activeChat.messages.push({ role: 'assistant', content: 'Generated interactive figure.', ...(node ? { figure: node } : {}) });
         saveChats();
-        recordDebug({ kind: 'done', label: 'figure', body: { concept: result.figure.concept, generationId: result.figure.generationId ?? null } });
+        // Kept on the dev server too, so the gallery draws it in any browser.
+        void keepFigure(request, { concept: result.figure.concept, fragments: result.figure.fragments });
+        recordDebug({ kind: 'done', label: 'figure', body: { concept: result.figure.concept, generationId: result.figure.generationId ?? null, durationMs: Math.round(elapsedMs) } });
       } else {
         // The fallback is the outcome: it never reaches the 'checking' stage,
         // so reveal the validation stage and stop the pulsing indicators —
@@ -804,10 +836,27 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
         preview.classList.remove('is-building');
         preview.setAttribute('aria-busy', 'false');
         previewStatus.textContent = 'Could not finish';
+        previewTimer.textContent = `Stopped after ${formatSeconds(elapsedMs)}`;
         previewCopy.textContent = result.message;
         activeChat.messages.push({ role: 'assistant', content: result.message });
         saveChats();
-        recordDebug({ kind: 'error', label: 'fallback', message: result.message, body: { prompt: request } });
+        const recordFallback = (diagnostic: unknown) =>
+          recordDebug({
+            kind: 'error',
+            label: `fallback:${result.reason ?? 'unknown'}`,
+            message: result.message,
+            body: {
+              prompt: request,
+              reason: result.reason ?? null,
+              level: result.level ?? null,
+              generationId: result.generationId ?? null,
+              diagnostic,
+            },
+          });
+        // Diagnostics are dev-only evidence after the outcome. They must not
+        // add another wait to the learner-facing generation path.
+        if (result.generationId) void failureDiagnostic(result.generationId).then(recordFallback);
+        else recordFallback(null);
       }
       return result;
     };
@@ -823,7 +872,8 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
       });
     } catch (error) {
       const record = error as Error;
-      recordDebug({ kind: 'error', label: 'generation-run', message: String(error), body: { stack: String(record.stack ?? '') } });
+      const elapsed = stopClock();
+      recordDebug({ kind: 'error', label: 'generation-run', message: String(error), body: { stack: String(record.stack ?? ''), durationMs: Math.round(elapsed) } });
       settleStages(planStage, sceneStage, [planOutput, sceneOutput]);
       validationStage.hidden = false;
       validationStatus.textContent = `✗ ${error instanceof Error ? error.message : String(error)}`;
@@ -831,6 +881,7 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
       preview.classList.add('is-error');
       preview.setAttribute('aria-busy', 'false');
       previewStatus.textContent = 'Stopped';
+      previewTimer.textContent = `Stopped after ${formatSeconds(elapsed)}`;
       previewCopy.textContent = error instanceof Error ? error.message : String(error);
       return;
     }

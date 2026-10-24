@@ -284,6 +284,38 @@ export const VALIDATOR_CASES: readonly ValidatorCase[] = [
     twin: { js: js('const N = 500;', 'for (let i = 0; i <= N; i++) { dot.at(i, 0); }') },
   },
   {
+    name: 'loop bounded by a count that can change',
+    fragment: 'js',
+    rule: 'unbounded-loop',
+    bad: { js: js('let n = 0;', 'inc.onFrame(() => {', '  n = 40;', '  for (let i = 0; i < n; i++) dot.at(i, 0);', '});') },
+    at: 'n; i++',
+    twin: { js: js('let n = 0;', 'inc.onFrame(() => {', '  n = 40;', '  for (let i = 0; i < Math.min(n, 500); i++) dot.at(i, 0);', '});') },
+  },
+  {
+    name: 'words set as an attribute',
+    fragment: 'js',
+    rule: 'unknown-property',
+    bad: { js: js("const label = stage.text(10, 10, '');", "inc.onFrame(() => label.set({ text: 'rpm' }));") },
+    at: "text: 'rpm'",
+    twin: { js: js("const label = stage.text(10, 10, '');", "inc.onFrame(() => label.text('rpm').set({ 'font-size': 14 }));") },
+  },
+  {
+    name: 'a second model',
+    fragment: 'js',
+    rule: 'mount-only',
+    bad: { js: js('const a = inc.model(() => ({ x: 1 }));', 'const b = inc.model(() => ({ y: 2 }));') },
+    at: 'inc.model(() => ({ y',
+    twin: { js: js('const a = inc.model(() => ({ x: 1, y: 2 }));') },
+  },
+  {
+    name: 'changing count capped with && by a visible bound',
+    fragment: 'js',
+    rule: 'unbounded-loop',
+    bad: { js: js('let n = 0;', 'inc.onFrame(() => {', '  n = 40;', '  for (let i = 0; i < n || i <= 200; i++) dot.at(i, 0);', '});') },
+    at: 'i < n ||',
+    twin: { js: js('let n = 0;', 'inc.onFrame(() => {', '  n = 40;', '  for (let i = 0; i < n && i <= 200; i++) dot.at(i, 0);', '});') },
+  },
+  {
     name: 'aliased dynamic loop bound',
     fragment: 'js',
     rule: 'unbounded-loop',
@@ -398,6 +430,14 @@ export const VALIDATOR_CASES: readonly ValidatorCase[] = [
     twin: { js: js('const moving = stage.circle(0, 10, 2);', 'inc.onFrame(({ time }) => { moving.at(time, 0); });') },
   },
   {
+    name: 'writing an equation every frame',
+    fragment: 'js',
+    rule: 'element-in-frame',
+    bad: { js: js("inc.onFrame(({ time }) => { stage.equation(50, 20, 'x = ' + time); });") },
+    at: 'stage.equation(50',
+    twin: { js: js("const law = stage.equation(50, 20, 'x = 0');", "inc.onFrame(({ time }) => { law.text('x = ' + time.toFixed(1)); });") },
+  },
+  {
     name: 'declaring inside a callback',
     fragment: 'js',
     rule: 'mount-only',
@@ -424,23 +464,21 @@ export const VALIDATOR_CASES: readonly ValidatorCase[] = [
 
   // --- Budgets ---------------------------------------------------------------------------
   {
-    name: 'more than three parameters',
+    name: 'more than eight controls',
     fragment: 'js',
     rule: 'too-many-params',
     bad: {
       js: js(
-        "const a = inc.param('a', { min: 0, max: 1, value: 0 });",
-        "const b = inc.param('b', { min: 0, max: 1, value: 0 });",
-        "const c = inc.param('c', { min: 0, max: 1, value: 0 });",
-        "const d = inc.param('d', { min: 0, max: 1, value: 0 });",
+        ...['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((n) => `const ${n} = inc.param('${n}', { min: 0, max: 1, value: 0 });`),
+        "const h = inc.toggle('h', { value: true });",
+        "const i = inc.choice('i', { options: ['x', 'y'] });",
       ),
     },
-    at: "inc.param('d'",
+    at: "inc.choice('i'",
     twin: {
       js: js(
-        "const a = inc.param('a', { min: 0, max: 1, value: 0 });",
-        "const b = inc.param('b', { min: 0, max: 1, value: 0 });",
-        "const c = inc.param('c', { min: 0, max: 1, value: 0 });",
+        ...['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((n) => `const ${n} = inc.param('${n}', { min: 0, max: 1, value: 0 });`),
+        "const h = inc.toggle('h', { value: true });",
       ),
     },
   },

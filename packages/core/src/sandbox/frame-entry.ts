@@ -1,10 +1,11 @@
 import type { RuntimeChannel } from '../engine/channel';
-import { parseConnect, parseHostMessage, type FrameMessageBody, type HostMessage, type InitMessage } from '../protocol/bridge';
+import { parseConnect, parseHostMessage, type ArrivingFragments, type FrameMessageBody, type HostMessage, type InitMessage } from '../protocol/bridge';
 import type { RendererMessage, RuntimeUpdate } from '../protocol/runtime-messages';
 import type { ErrorView } from '../protocol/ui';
 import { FigureRenderer } from '../renderer/renderer';
 import { wrapSceneSource, WRAPPER_LINES_BEFORE } from './scene-wrapper';
-import { snapshotStage } from './snapshot';
+import { recordStages } from './clip';
+import { exportStages, snapshotStages, stagesOf } from './snapshot';
 import type { WorkerInbound, WorkerOutbound } from './worker-protocol';
 
 /**
@@ -103,6 +104,7 @@ let hostVisible = true;
 let onScreen = true;
 let mountedSent = false;
 let pendingValues: Record<string, number> | null = null;
+let pendingFormulas: Record<string, string> | null = null;
 let pendingDescription: string | null = null;
 let valuesTimer: ReturnType<typeof setTimeout> | null = null;
 let lastHeight = -1;
@@ -135,10 +137,15 @@ function onHostMessage(message: HostMessage): void {
       flushReport();
       // A frame the browser kept off-screen may never have drawn: an empty picture is worse than none.
       const drawn = (renderer?.stats.workFrames ?? 0) > 0;
-      const svg = drawn ? (root?.querySelector<SVGSVGElement>('svg.inc-stage') ?? null) : null;
-      void snapshotStage(svg).then((png) => send({ type: 'snapshot', id: message.id, png }));
+      // Every panel of the figure, where it sits (6.10a, 6.10c).
+      const stages = drawn ? stagesOf(root) : [];
+      if (message.format === 'svg') send({ type: 'snapshot', id: message.id, png: null, svg: exportStages(stages) });
+      else void snapshotStages(stages).then((png) => send({ type: 'snapshot', id: message.id, png }));
       break;
     }
+    case 'clip':
+      void clip(message.id, message.seconds, message.fps);
+      break;
     case 'ping':
       send({ type: 'pong', id: message.id });
       break;
@@ -147,14 +154,64 @@ function onHostMessage(message: HostMessage): void {
       (message.edge === 'first' ? targets[0] : targets[targets.length - 1])?.focus();
       break;
     }
+    case 'style':
+      // Plain data the renderer checks again: names, lengths and colours only.
+      renderer?.setStyle(message.style);
+      break;
+    case 'theme':
+      renderer?.setTheme(message.theme);
+      break;
+    case 'number':
+      renderer?.setNumber(message.figureNumber);
+      break;
     case 'destroy':
       destroy();
       break;
   }
 }
 
+/**
+ * Records the drawing as it plays (6.10b). A figure that moves but was
+ * paused plays while it records and pauses again after; one that has never
+ * drawn gives no clip.
+ */
+async function clip(id: number, seconds: number | undefined, fps: number | undefined): Promise<void> {
+  const drawn = (renderer?.stats.workFrames ?? 0) > 0;
+  const stages = drawn ? stagesOf(root) : [];
+  const paused = renderer !== null && renderer.ui.animated === true && !renderer.ui.playing;
+  if (stages.length > 0 && paused) renderer?.send({ type: 'play' });
+  const video = await recordStages(stages, { ...(seconds !== undefined ? { seconds } : {}), ...(fps !== undefined ? { fps } : {}) }).catch(() => null);
+  if (stages.length > 0 && paused) renderer?.send({ type: 'pause' });
+  send({ type: 'clip', id, video });
+}
+
+/**
+ * A frame booted before its scene (PRD 25.4) takes the scene's markup and
+ * styles from the host: the integrator's styles and then the scene's, each
+ * carrying the nonce the frame's policy was made with, then the validated
+ * markup, as the frame would have been made with them.
+ */
+function place(fragments: ArrivingFragments): void {
+  const scene = root?.querySelector<HTMLElement>('.inc-scene');
+  if (!scene) return;
+  if (fragments.lang) doc.documentElement.lang = fragments.lang;
+  for (const [css, kind] of [
+    [fragments.hostCss ?? '', 'host'],
+    [fragments.css, 'scene'],
+  ] as const) {
+    if (!css) continue;
+    const style = doc.createElement('style');
+    style.nonce = fragments.nonce;
+    style.dataset.incantly = kind;
+    style.textContent = css;
+    doc.head.append(style);
+  }
+  scene.innerHTML = fragments.html;
+}
+
 function start(init: InitMessage): void {
   if (!root) return;
+  if (init.fragments) place(init.fragments);
   const prefix = `${init.worker}\n__incRegister(`;
   const wrapped = wrapSceneSource(init.scene);
   const blob = new Blob([prefix, wrapped, ');\n'], { type: 'text/javascript' });
@@ -218,12 +275,20 @@ function start(init: InitMessage): void {
   }
 
   if (init.live?.theme === 'light' || init.live?.theme === 'dark') root.dataset.theme = init.live.theme;
+  const figureNumber = init.live?.figureNumber;
   renderer = new FigureRenderer({
     root,
     channel: workerChannel,
     scope: 'incfig',
     visibility: 'external',
+    // The style is plain data the renderer checks again; it can only set names, lengths and colours.
+    ...(init.live?.style ? { style: init.live.style } : {}),
+    ...(typeof figureNumber === 'number' && Number.isInteger(figureNumber) && figureNumber > 0 && figureNumber < 10_000 ? { figureNumber } : {}),
     onValues: (values) => queueReport(values, null),
+    onFormulas: (formulas) => {
+      pendingFormulas = { ...pendingFormulas, ...formulas };
+      queueReport(null, null);
+    },
     onStep: (step, count) => send({ type: 'step', step, ...(count !== undefined ? { count } : {}) }),
     onError: (error) => send({ type: 'error', error }),
     onUpdate: (update) => {
@@ -260,6 +325,8 @@ function flushReport(): void {
   if (valuesTimer !== null) clearTimeout(valuesTimer);
   valuesTimer = null;
   if (pendingValues) send({ type: 'values', values: pendingValues });
+  if (pendingFormulas) send({ type: 'formulas', formulas: pendingFormulas });
+  pendingFormulas = null;
   if (pendingDescription !== null) send({ type: 'description', text: pendingDescription.slice(0, 2000) });
   pendingValues = null;
   pendingDescription = null;

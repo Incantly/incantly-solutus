@@ -24,7 +24,10 @@ The node is `incantlyFigure`, with these attributes, all rendered as `data-*` at
 | `snapshotRef` | Content reference of the last snapshot, or null |
 | `description` | The current text alternative, shown under placeholders and printed |
 | `aspect` | Height over width of the live figure, so placeholders reserve the same space |
-| `meta` | Only `generationId`, `approvedAt` and `validatorVersion` |
+| `meta` | Only `generationId`, `approvedAt`, `validatorVersion` and `ticket`, the service's opaque signature on the scene, sent back to repair or change it |
+| `formulas` | Formulas the learner edited, by index |
+| `look` | The figure's own look over the editor's style: preset, tokens, classes, layout and shown parts; never CSS |
+| `versions` | Earlier versions the learner can go back to, newest first, at most six (HO-9) |
 
 - **Content references.** Snapshots are always stored outside the node, in a `FigureStore`, under `sha256:` plus the hex digest of the content. Fragments stay inline while their JSON is at most 16 KB (the three reference scenes are about 3 to 9 KB) and move to the store above that. The reference is an ordinary rendered attribute, so copy, paste and export carry it; identical content is stored once. A `CachedFigureStore` keeps content seen once in IndexedDB so figures work offline, and checks content against its reference before trusting it.
 - **Nothing derived or transient** is stored: no model values, per-frame state, DOM, handles or timestamps.
@@ -32,6 +35,7 @@ The node is `incantlyFigure`, with these attributes, all rendered as `data-*` at
 - **Persistence.** The live figure reports values (throttled to one message per 100 ms) and the node view saves them, with the step position and text alternative, in one transaction once interaction has settled for 600 ms, when the figure is suspended, and when the editor is destroyed. Nothing is dispatched when nothing changed.
 - **Undo.** Learner exploration is not note editing: these transactions carry `addToHistory: false`. Undo and redo move through the note's text and structure only, and never reset a figure's sliders. Replacing a figure's fragments (for example after regeneration) is an ordinary, undoable edit.
 - **Placeholders** show the snapshot, or a skeleton, at the stored aspect ratio, with the description underneath, so replacing them causes no scroll jump.
+- **Version history (HO-9).** When a change in the learner's words, making the figure again or going back to an earlier version replaces a figure, the figure as it was joins `versions`: its fragments go to the store under their content reference, with its concept, description, a fresh snapshot, its ticket, what replaced it (`changed`, `remade` or `restored`) and when. A version holds content only, never the request that changed it, so the note still carries no prompts. Going back (`restoreFigureVersion`, or the list under the figure) is one ordinary, undoable edit that starts the version afresh at its own values, and the figure it replaces joins the history in turn. Background repairs fix the same figure and are not versions. Without a store there is nowhere to keep versions, and none are kept.
 
 ## Consequences
 

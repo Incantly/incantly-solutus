@@ -26,7 +26,7 @@ export const SCENE_LIMITS: SceneLimits = {
   cssChars: 4_000,
   astNodes: 6_000,
   depth: 24,
-  params: 3,
+  params: 8,
   loopBound: 5_000,
   stringChars: 600,
   htmlElements: 120,

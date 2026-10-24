@@ -1,4 +1,4 @@
-import { SCENE_SCHEMA_VERSION, SDK_VERSION } from '@incantly/core';
+import { SCENE_SCHEMA_VERSION, SDK_VERSION, checkStyle, type FigureStyle } from '@incantly/core';
 
 /** The three approved scene fragments. */
 export interface FigureFragments {
@@ -31,6 +31,66 @@ export interface FigureAttributes {
   readonly aspect: number;
   /** Repair and migration metadata. Never prompts, plans or model details. */
   readonly meta: FigureMeta;
+  /** Formulas the learner edited, by index. */
+  readonly formulas: Readonly<Record<string, string>>;
+  /**
+   * This figure's own look over the editor's style: preset, tokens, classes,
+   * layout and which parts show. Never CSS: documents travel between people.
+   */
+  readonly look: FigureStyle | null;
+  /** Earlier versions the learner can go back to, newest first (HO-9). */
+  readonly versions: readonly FigureVersion[];
+}
+
+/**
+ * An earlier version of a figure, kept when a change in the learner's words,
+ * making it again or going back to another version replaced it (HO-9). Its
+ * fragments are in the figure store under their content reference. Like the
+ * rest of the node it holds content only: never the request that changed it.
+ */
+export interface FigureVersion {
+  readonly fragmentsRef: string;
+  readonly concept: string;
+  readonly description: string;
+  /** Its last snapshot, so its placeholder shows straight away when it comes back. */
+  readonly snapshotRef?: string;
+  /** The service's signature on it, so a version brought back can still be repaired and changed. */
+  readonly ticket?: string;
+  /** What replaced it. */
+  readonly reason: VersionReason;
+  /** When it was replaced, as an ISO date. */
+  readonly replacedAt: string;
+}
+
+export type VersionReason = 'changed' | 'remade' | 'restored';
+
+/** Versions a figure keeps; the oldest goes first. */
+export const MAX_VERSIONS = 6;
+
+const REASONS: ReadonlySet<string> = new Set<VersionReason>(['changed', 'remade', 'restored']);
+const TICKET = /^[\w-]+\.[\w-]+$/;
+
+/** A figure's history from a note: well-formed versions only, newest first, at most MAX_VERSIONS. */
+export function sanitizeVersions(value: unknown): FigureVersion[] {
+  if (!Array.isArray(value)) return [];
+  const out: FigureVersion[] = [];
+  for (const raw of value.slice(0, MAX_VERSIONS)) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const v = raw as Record<string, unknown>;
+    if (typeof v.fragmentsRef !== 'string' || !CONTENT_REF.test(v.fragmentsRef)) continue;
+    if (typeof v.replacedAt !== 'string' || Number.isNaN(Date.parse(v.replacedAt))) continue;
+    if (typeof v.reason !== 'string' || !REASONS.has(v.reason)) continue;
+    out.push({
+      fragmentsRef: v.fragmentsRef,
+      concept: typeof v.concept === 'string' ? v.concept.slice(0, 200) : '',
+      description: typeof v.description === 'string' ? v.description.slice(0, 2000) : '',
+      ...(typeof v.snapshotRef === 'string' && CONTENT_REF.test(v.snapshotRef) ? { snapshotRef: v.snapshotRef } : {}),
+      ...(typeof v.ticket === 'string' && v.ticket.length <= 16_000 && TICKET.test(v.ticket) ? { ticket: v.ticket } : {}),
+      reason: v.reason as VersionReason,
+      replacedAt: v.replacedAt,
+    });
+  }
+  return out;
 }
 
 /**
@@ -46,15 +106,19 @@ export interface FigureMeta {
   readonly approvedAt?: string;
   /** The validator version that approved the fragments. */
   readonly validatorVersion?: number;
+  /** The generation service's signature on the scene, sent back to repair it in the background (RP-7). */
+  readonly ticket?: string;
 }
 
 export function sanitizeMeta(value: unknown): FigureMeta {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
   const raw = value as Record<string, unknown>;
-  const meta: { generationId?: string; approvedAt?: string; validatorVersion?: number } = {};
+  const meta: { generationId?: string; approvedAt?: string; validatorVersion?: number; ticket?: string } = {};
   if (typeof raw.generationId === 'string' && /^[\w-]{1,64}$/.test(raw.generationId)) meta.generationId = raw.generationId;
   if (typeof raw.approvedAt === 'string' && !Number.isNaN(Date.parse(raw.approvedAt))) meta.approvedAt = raw.approvedAt;
   if (typeof raw.validatorVersion === 'number' && Number.isInteger(raw.validatorVersion)) meta.validatorVersion = raw.validatorVersion;
+  // Opaque to the note: only the service can read or check it.
+  if (typeof raw.ticket === 'string' && raw.ticket.length <= 16_000 && /^[\w-]+\.[\w-]+$/.test(raw.ticket)) meta.ticket = raw.ticket;
   return meta;
 }
 
@@ -76,6 +140,22 @@ export function sanitizeFragments(value: unknown): FigureFragments | null {
     : null;
 }
 
+/** Edited formulas from a note: at most eight, keyed by index, each short text. */
+export function sanitizeFormulas(value: unknown): Record<string, string> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const out: Record<string, string> = {};
+  for (const [key, text] of Object.entries(value as Record<string, unknown>).slice(0, 8)) {
+    if (/^[0-7]$/.test(key) && typeof text === 'string' && text.length <= 200) out[key] = text;
+  }
+  return out;
+}
+
+/** A figure's look from a note: only valid style fields, never CSS; null when nothing is set. */
+export function sanitizeLook(value: unknown): FigureStyle | null {
+  const look = checkStyle(value);
+  return Object.keys(look).length > 0 ? look : null;
+}
+
 export const CONTENT_REF = /^sha256:[0-9a-f]{64}$/;
 
 export const DEFAULT_ASPECT = 9 / 16;
@@ -95,6 +175,9 @@ export function defaultAttributes(): FigureAttributes {
     description: '',
     aspect: DEFAULT_ASPECT,
     meta: {},
+    formulas: {},
+    look: null,
+    versions: [],
   };
 }
 

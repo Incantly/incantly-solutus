@@ -1,7 +1,8 @@
 /**
  * Scene fixtures for the sandbox browser tests: broken scenes the probe must
- * reject, and hostile scenes that skip the validator on purpose, to show the
- * layers beneath it hold on their own. Test data only.
+ * reject, hostile scenes that skip the validator on purpose, to show the
+ * layers beneath it hold on their own, and a scene that draws on every layer
+ * of a stage. Test data only.
  */
 
 export interface FixtureScene {
@@ -12,8 +13,88 @@ export interface FixtureScene {
 
 const STAGE = "<div id='stage'></div>";
 
-/** Validated scenes: each passes the validator but fails one probe check, or throws where expected. */
+/** Validated scenes: each passes the validator but fails one probe check or throws where expected, or draws on every layer. */
 export const SCENE_FIXTURES: Readonly<Record<string, FixtureScene>> = {
+  /**
+   * One thing on each layer of the stack (FX-1, BR-12): a band on the back
+   * layer, dots on the canvas behind the drawing, a disc in the drawing over
+   * the middle dot, and a dot on the canvas in front over the disc.
+   */
+  layers: {
+    html: STAGE,
+    css: '',
+    js: [
+      "inc.idea('Dots lie over a band, under a disc, and over it.');",
+      "const stage = inc.svg('#stage', { viewBox: [0, 0, 200, 100], title: 'Layers' });",
+      "stage.rect(0, 30, 200, 40, { tone: 'a', layer: 'back' });",
+      "stage.dots({ tone: 'c', r: 6, layer: 'back' }).set([[40, 50], [100, 50], [160, 50]]);",
+      "stage.circle(100, 50, 14, { tone: 'b' });",
+      "stage.dots({ tone: 'lit', r: 3 }).set([[100, 50]]);",
+      "inc.describe(() => 'Three dots over a band; a disc covers the middle one, and a small dot sits on the disc.');",
+    ].join('\n'),
+  },
+  /** The same stack in a stage with a border and padding of its own, and an outline in the drawing over the band. */
+  'layers-framed': {
+    html: STAGE,
+    css: '#stage { border: 6px solid var(--inc-line); padding: 4px; }',
+    js: [
+      "inc.idea('Dots lie over a band, under a disc, and over it.');",
+      "const stage = inc.svg('#stage', { viewBox: [0, 0, 200, 100], title: 'Layers' });",
+      "stage.rect(0, 30, 200, 40, { tone: 'a', layer: 'back' });",
+      "stage.dots({ tone: 'c', r: 6, layer: 'back' }).set([[40, 50], [100, 50], [160, 50]]);",
+      "stage.circle(100, 50, 14, { tone: 'b' });",
+      "stage.rect(0, 30, 200, 40, { tone: 'hi', fill: false });",
+      "inc.describe(() => 'Three dots over a band, framed; a disc covers the middle one.');",
+    ].join('\n'),
+  },
+  /**
+   * Every kind of control a scene can ask for (6.9, CT-10): a slider with its
+   * number field, a switch, a choice as buttons and as a menu, tone swatches,
+   * a button, presets, an editable formula, a legend that hides curves, the
+   * zoom bar, a prediction, steps and the description.
+   */
+  controls: {
+    html: STAGE,
+    css: '',
+    js: [
+      "inc.idea('A wave whose height, shape and colour the learner sets.');",
+      "const amplitude = inc.param('amplitude', { min: 0.5, max: 2, step: 0.1, value: 1, label: 'Height', unit: 'm' });",
+      "const mirrored = inc.toggle('mirrored', { value: true, label: 'Mirror' });",
+      "const shape = inc.choice('shape', { options: ['Smooth', 'Sharp'], value: 0, buttons: true, label: 'Shape' });",
+      "const pace = inc.choice('pace', { options: ['Slow', 'Fast'], value: 0, label: 'Pace' });",
+      "const tone = inc.color('tone', { value: 'b', options: ['a', 'b', 'c'], label: 'Colour' });",
+      "inc.button('Tallest', () => ({ amplitude: 2 }));",
+      "inc.presets({ Low: { amplitude: 0.5 }, High: { amplitude: 1.8 } });",
+      "inc.timeline({ duration: 4, loop: 'loop' });",
+      "const wave = inc.formula('A*sin(x - t)', { vars: { A: amplitude }, label: 'Wave' });",
+      "const graph = inc.graph2d('#stage', { x: [-6, 6], y: [-3, 3], title: 'Wave', labels: { x: 'x', y: 'y' } });",
+      "const curve = graph.plot((x, t) => (shape.value === 1 ? Math.sign(wave(x, t)) * amplitude.value : wave(x, t)) * (pace.value + 1) / 2, { tone: 'b', label: 'Wave' });",
+      "graph.plot((x, t) => (mirrored.value === 1 ? -1 : 0) * wave(x, t), { tone: 'c', dashed: true, label: 'Mirror' });",
+      "graph.stage.part('Wave', curve.handle, { label: 'The wave', info: 'Its height is the amplitude.' });",
+      "inc.readout({ Height: () => amplitude.value.toFixed(1) + ' m', Colour: () => tone.tone });",
+      "inc.predict({ question: 'What does the tallest wave reach?', options: ['1 m', '2 m'], answer: 1, reveal: { amplitude: 2 } });",
+      "inc.steps([{ say: 'The wave travels right.' }, { say: 'Taller.', set: { amplitude: 1.8 } }]);",
+      "inc.describe(() => 'A wave ' + amplitude.value.toFixed(1) + ' m tall, ' + (mirrored.on ? 'with' : 'without') + ' its mirror.');",
+    ].join('\n'),
+  },
+  /**
+   * Two panels side by side (VI-7): a square in one, a disc in the other, so
+   * a picture of the figure shows whether it holds both (6.10).
+   */
+  panels: {
+    html: "<div id='left'></div><div id='right'></div>",
+    css: '',
+    js: [
+      "inc.layout('row');",
+      "inc.idea('A square beside a disc.');",
+      "const left = inc.svg('#left', { viewBox: [0, 0, 100, 100], title: 'Square' });",
+      "left.rect(10, 10, 80, 80, { tone: 'a' });",
+      "const right = inc.svg('#right', { viewBox: [0, 0, 100, 100], title: 'Disc' });",
+      "const disc = right.circle(50, 50, 40, { tone: 'c' });",
+      "inc.onFrame(({ time }) => disc.at(5 * Math.sin(time), 0));",
+      "inc.describe(() => 'A square in the left panel and a disc in the right.');",
+    ].join('\n'),
+  },
   /** Throws on line 7, column 30 once time passes half a second. */
   'throws-later': {
     html: STAGE,

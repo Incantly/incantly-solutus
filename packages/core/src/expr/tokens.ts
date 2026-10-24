@@ -22,8 +22,11 @@ export const MAX_SOURCE_LENGTH = 2000;
 const OPERATORS = ['<=', '>=', '==', '!=', '&&', '||', '+', '-', '*', '/', '%', '^', '<', '>', '!', '?', ':'];
 
 const isDigit = (c: string) => c >= '0' && c <= '9';
-const isIdentStart = (c: string) => (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c === '_';
+/** Latin and Greek letters: a formula or an equation may write ρ as well as rho. */
+const isIdentStart = (c: string) => (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c === '_' || (c >= '\u0391' && c <= '\u03A9') || (c >= '\u03B1' && c <= '\u03C9');
 const isIdentPart = (c: string) => isIdentStart(c) || isDigit(c);
+/** Primes after a name, as in f' or L′. */
+const isPrime = (c: string) => c === "'" || c === '\u2032';
 
 export function tokenize(source: string): Token[] {
   if (source.length > MAX_SOURCE_LENGTH) {
@@ -60,6 +63,7 @@ export function tokenize(source: string): Token[] {
     if (isIdentStart(c)) {
       const start = i;
       while (i < source.length && isIdentPart(source.charAt(i))) i++;
+      while (i < source.length && isPrime(source.charAt(i))) i++;
       tokens.push({ type: 'identifier', value: source.slice(start, i), position: start });
       continue;
     }

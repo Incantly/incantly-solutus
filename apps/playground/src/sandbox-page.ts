@@ -1,4 +1,4 @@
-import { inThreadAdapter, presentScene, sandboxAdapter, type ErrorView, type FigureHandle } from '@incantly/core';
+import { inThreadAdapter, presentScene, sandboxAdapter, warmProbe, type ErrorView, type FigureHandle } from '@incantly/core';
 import { referenceScene } from '@incantly/core/scenes';
 import { mountUnvalidated, probeUnvalidated } from '@incantly/core/testing';
 import { ATTACK_FIXTURES, SCENE_FIXTURES, type FixtureScene } from './scene-fixtures';
@@ -58,17 +58,57 @@ export function mountSandboxPage(root: HTMLElement, params: URLSearchParams): vo
     autoplay: params.get('autoplay') !== '0',
     title: 'Interactive figure',
   };
+  if (params.get('probe') === 'warm') {
+    // A frame boots while the scene is "being written" (here, a short wait), then checks it at once (PRD 25.4).
+    const id = params.get('scene');
+    const plan = id ? referenceScene(id)?.plan : undefined;
+    const warm = warmProbe({ container });
+    setTimeout(() => {
+      const started = performance.now();
+      void warm.probe(scene, plan ? { spec: { parts: plan.parts, steps: plan.steps.length, singularPoints: plan.singularPoints ?? [] } } : {}).then((outcome) => {
+        s.timings = { probeMs: performance.now() - started };
+        s.outcome = { status: outcome.ok ? 'passed' : 'rejected', ok: outcome.ok, report: outcome.report };
+        s.ready = true;
+      });
+    }, Number(params.get('wait') ?? 400));
+    return;
+  }
+  if (params.get('live') === 'warm') {
+    // The figure's frame boots while the scene is "being written" (here, a short wait), in the page body or with
+    // `in=place` in its own slot, and then takes the scene by message (PRD 25.4). `styled=1` adds trusted CSS.
+    const lease = sandboxAdapter.prewarm!(params.get('in') === 'place' ? { container } : {});
+    setTimeout(() => {
+      const started = performance.now();
+      s.mountedAt = performance.timeOrigin + started;
+      const style = params.get('styled') === '1' ? { css: '.inc-scene { outline: 3px solid rgb(1, 2, 3); }' } : undefined;
+      const figure = sandboxAdapter.mount(container, scene, { ...options, ...(style ? { style } : {}) });
+      lease.release();
+      s.figure = figure;
+      void figure.ready.then(() => {
+        s.timings = { mountMs: performance.now() - started };
+        s.ready = true;
+      });
+    }, Number(params.get('wait') ?? 400));
+    return;
+  }
   if (params.get('probe') === '1') {
     const id = params.get('scene');
     const plan = id ? referenceScene(id)?.plan : undefined;
+    // How long the learner waits once the fragments are here: the hidden probe, then the live mount.
+    const started = performance.now();
     void presentScene(container, scene, {
       ...options,
       ...(plan ? { spec: { parts: plan.parts, steps: plan.steps.length, singularPoints: plan.singularPoints ?? [] } } : {}),
     }).then((result) => {
+      const probed = performance.now();
       s.outcome = { status: result.status, ok: result.probe.ok, report: result.probe.report, diagnostics: result.probe.validation.diagnostics };
+      s.timings = { probeMs: probed - started };
       if (result.status === 'live') {
         s.figure = result.figure;
-        void result.figure.ready.then(() => (s.ready = true));
+        void result.figure.ready.then(() => {
+          s.timings = { probeMs: probed - started, mountMs: performance.now() - probed };
+          s.ready = true;
+        });
       } else {
         const fallback = document.createElement('p');
         fallback.className = 'figure-fallback';
@@ -79,9 +119,13 @@ export function mountSandboxPage(root: HTMLElement, params: URLSearchParams): vo
     });
     return;
   }
+  const started = performance.now();
   const figure = sandboxAdapter.mount(container, scene, options);
   s.figure = figure;
-  void figure.ready.then(() => (s.ready = true));
+  void figure.ready.then(() => {
+    s.timings = { mountMs: performance.now() - started };
+    s.ready = true;
+  });
 }
 
 /** The same scene source on both adapters, side by side. */

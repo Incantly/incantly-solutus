@@ -1,4 +1,5 @@
 import type { Param, ParamOptions } from '../api/types';
+import type { ControlKind } from '../protocol/ui';
 import { SceneApiError } from '../scene/errors';
 
 export interface ParamState {
@@ -12,7 +13,23 @@ export interface ParamState {
   readonly defaultValue: number;
   value: number;
   readonly handle: Param;
+  readonly kind: ControlKind;
+  /** Choice labels, or tone names for a colour. */
+  readonly options: readonly string[];
+  readonly buttons: boolean;
+  /** The parameter a link keeps in step with this one. */
+  linked: string | null;
 }
+
+export interface ControlShape {
+  readonly kind: ControlKind;
+  readonly options: readonly string[];
+  readonly buttons: boolean;
+  /** Extra read-only properties on the handle, such as `on` or `selected`. */
+  readonly extras?: (state: ParamState) => PropertyDescriptorMap;
+}
+
+const SLIDER: ControlShape = { kind: 'slider', options: [], buttons: false };
 
 const NAME = /^[A-Za-z][\w ]{0,39}$/;
 
@@ -26,7 +43,7 @@ export function snap(state: Pick<ParamState, 'min' | 'max' | 'step'>, value: num
   return tidy(Math.min(state.max, Math.max(state.min, snapped)));
 }
 
-export function createParamState(name: string, options: ParamOptions, restored: number | undefined): ParamState {
+export function createParamState(name: string, options: ParamOptions, restored: number | undefined, shape: ControlShape = SLIDER): ParamState {
   if (typeof name !== 'string' || !NAME.test(name)) {
     throw new SceneApiError(`Parameter name "${String(name)}" must start with a letter and use letters, digits, spaces or _`);
   }
@@ -51,6 +68,10 @@ export function createParamState(name: string, options: ParamOptions, restored: 
     defaultValue: value,
     value,
     handle: undefined as unknown as Param,
+    kind: shape.kind,
+    options: shape.options,
+    buttons: shape.buttons,
+    linked: null,
   };
   if (restored !== undefined && Number.isFinite(restored)) state.value = snap(state, restored);
   (state as { handle: Param }).handle = Object.freeze(
@@ -61,6 +82,7 @@ export function createParamState(name: string, options: ParamOptions, restored: 
         min: { value: min, enumerable: true },
         max: { value: max, enumerable: true },
         value: { get: () => state.value, enumerable: true },
+        ...(shape.extras?.(state) ?? {}),
       },
     ),
   ) as Param;

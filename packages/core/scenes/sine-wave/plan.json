@@ -2,6 +2,7 @@
   "concept": "sine wave",
   "idea": "Amplitude sets how tall a sine wave is; frequency sets how often it repeats.",
   "kind": "graph",
+  "size": "quick",
   "capabilities": ["graph2d", "formula", "readout", "explain", "describe", "steps"],
   "parameters": [
     {

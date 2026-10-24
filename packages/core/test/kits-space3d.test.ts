@@ -1,0 +1,1065 @@
+import { describe, expect, it } from 'vitest';
+import type { Graph3D, Graph3DOptions, Group3D, Inc, Mesh3DData, Model3D, Space3D, Space3DOptions, Vec2, Vec3 } from '../src/api/types';
+import { kit } from '../src/kits/space3d';
+import { Camera, VIEWS } from '../src/kits/space3d/camera';
+import { extentWithin, type Item } from '../src/kits/space3d/engine';
+import { clipBetween, niceTicks } from '../src/kits/space3d/graph';
+import { boxMesh, coneMesh, customMesh, cylinderMesh, extrudeData, latheMesh, loftData, planeMesh, torusMesh } from '../src/kits/space3d/mesh';
+import { MODEL_NAMES } from '../src/kits/space3d/models';
+import { itemOf, planeAxes } from '../src/kits/space3d/space';
+import { isKitModule, KIT_GLOBAL, type KitModule } from '../src/runtime/kits';
+import { SceneRuntime, type RuntimeOptions } from '../src/runtime/runtime';
+import { KIT_SCRIPTS } from '../src/sandbox/generated/kit-scripts';
+import { SHARED_GLOBAL, SHARED_MODULES } from '../src/sandbox/kit-shared';
+import type { VNode } from '../src/scene/graph';
+import { validateSceneJs } from '../src/validation/js';
+
+function run(scene: (inc: Inc) => void, options: RuntimeOptions = {}) {
+  const runtime = new SceneRuntime({ autoplay: false, kits: { space3d: kit }, ...options });
+  const mount = runtime.mount(scene);
+  const first = runtime.tick(0);
+  return { runtime, mount, first };
+}
+
+function space(build: (s: Space3D, inc: Inc) => void, options: Partial<Space3DOptions> = {}, runtimeOptions: RuntimeOptions = {}) {
+  return run((inc) => build(inc.space3d('#s', { title: 'Space', ...options }), inc), runtimeOptions);
+}
+
+function graph(build: (g: Graph3D, inc: Inc) => void, options: Partial<Graph3DOptions> = {}) {
+  return run((inc) => build(inc.graph3d('#g', { title: 'Graph', x: [-2, 2], y: [-2, 2], z: [0, 8], ...options }), inc));
+}
+
+const nodes = (runtime: SceneRuntime) => [...runtime.graph.nodes.values()];
+/** The pooled face and line slots, in DOM order. */
+const slots = (runtime: SceneRuntime): VNode[] => {
+  const group = nodes(runtime).find((n) => n.kind === 'g' && n.extra === 'inc-slots')!;
+  return group.children.map((id) => runtime.graph.nodes.get(id)!);
+};
+const visibleSlots = (runtime: SceneRuntime) => slots(runtime).filter((n) => !n.hidden);
+const faces = (runtime: SceneRuntime) => visibleSlots(runtime).filter((n) => n.extra.includes('inc-face') && !n.extra.includes('inc-wire'));
+const lum = (node: VNode) => Number(/inc-lum-(\d)/.exec(node.extra)?.[1]);
+/** The corners of a face path. */
+const corners = (node: VNode): Vec2[] => [...(node.attrs.get('d') ?? '').matchAll(/[ML](-?[\d.]+) (-?[\d.]+)/g)].map((m) => [Number(m[1]), Number(m[2])]);
+const centre = (node: VNode): Vec2 => {
+  const c = corners(node);
+  return [c.reduce((s, p) => s + p[0], 0) / c.length, c.reduce((s, p) => s + p[1], 0) / c.length];
+};
+const labels = (runtime: SceneRuntime) => nodes(runtime).filter((n) => n.kind === 'text' && !n.hidden);
+const stageId = (runtime: SceneRuntime) => runtime.graph.stages[0]!.id;
+
+describe('3D meshes', () => {
+  it('wind every face counter-clockwise from outside', () => {
+    const normal = (p: readonly (readonly number[])[]): [number, number, number] => {
+      // Newell's normal of a polygon.
+      const n: [number, number, number] = [0, 0, 0];
+      p.forEach((a, i) => {
+        const b = p[(i + 1) % p.length]!;
+        n[0] += (a[1]! - b[1]!) * (a[2]! + b[2]!);
+        n[1] += (a[2]! - b[2]!) * (a[0]! + b[0]!);
+        n[2] += (a[0]! - b[0]!) * (a[1]! + b[1]!);
+      });
+      return n;
+    };
+    const mean = (p: readonly (readonly number[])[]): [number, number, number] => [0, 1, 2].map((k) => p.reduce((s, v) => s + v[k]!, 0) / p.length) as [number, number, number];
+    for (const mesh of [boxMesh(1, 2, 3), cylinderMesh(1, 2, 12), coneMesh(1, 2, 12)]) {
+      for (const face of mesh.faces) {
+        const p = face.map((i) => mesh.vertices[i]!);
+        const n = normal(p);
+        const c = mean(p);
+        expect(n[0] * c[0] + n[1] * c[1] + n[2] * c[2]).toBeGreaterThan(0);
+      }
+    }
+    // A torus's faces point away from the middle of its tube.
+    const torus = torusMesh(2, 0.5, 16);
+    for (const face of torus.faces) {
+      const p = face.map((i) => torus.vertices[i]!);
+      const c = mean(p);
+      const ring = Math.hypot(c[0], c[1]);
+      const tube: [number, number, number] = [c[0] - (2 * c[0]) / ring, c[1] - (2 * c[1]) / ring, c[2]];
+      const n = normal(p);
+      expect(n[0] * tube[0] + n[1] * tube[1] + n[2] * tube[2]).toBeGreaterThan(0);
+    }
+    // Solids of revolution and slabs (S3-9), however their outlines run.
+    const lathes = [latheMesh([[1, 0], [1, 2]], 12), latheMesh([[1, 2], [1, 0]], 12), latheMesh([[0, 0], [1, 0.5], [0.6, 2], [0, 2.2]], 12)];
+    const slabs = (['xy', 'xz', 'yz'] as const).flatMap((plane) => [extrudeData([[0, 0], [2, 0], [1, 1.5]], 0.5, plane), extrudeData([[1, 1.5], [2, 0], [0, 0]], 0.5, plane)]);
+    for (const mesh of [...lathes, ...slabs.map(customMesh)]) {
+      const c = mean(mesh.vertices);
+      for (const face of mesh.faces) {
+        const p = face.map((i) => mesh.vertices[i]!);
+        const n = normal(p);
+        const f = mean(p);
+        expect(n[0] * (f[0] - c[0]) + n[1] * (f[1] - c[1]) + n[2] * (f[2] - c[2])).toBeGreaterThan(0);
+      }
+    }
+    expect(boxMesh(1, 1, 1).edges).toHaveLength(12);
+    expect(cylinderMesh(1, 1, 24).faces).toHaveLength(26);
+    expect(planeMesh(1, 1).twoSided).toBe(true);
+    expect(() => customMesh({ vertices: [[0, 0, 0], [1, 0, 0], [0, 1, 0]], faces: [[0, 1, 5]] })).toThrow('names vertex 5');
+  });
+});
+
+/** The signed volume of a closed mesh: its true volume when every face winds counter-clockwise from outside. */
+function volume(mesh: Mesh3DData): number {
+  let sum = 0;
+  for (const face of mesh.faces) {
+    const a = mesh.vertices[face[0]!]!;
+    for (let i = 1; i + 1 < face.length; i++) {
+      const b = mesh.vertices[face[i]!]!;
+      const c = mesh.vertices[face[i + 1]!]!;
+      sum += a[0] * (b[1] * c[2] - b[2] * c[1]) + a[1] * (b[2] * c[0] - b[0] * c[2]) + a[2] * (b[0] * c[1] - b[1] * c[0]);
+    }
+  }
+  return sum / 6;
+}
+
+describe('lathes, slabs and lofts (S3-9)', () => {
+  /** The area of a regular n-gon of radius 1, the cross-section of a round solid. */
+  const polygon = (n: number) => (n / 2) * Math.sin((2 * Math.PI) / n);
+
+  it('turns a profile about z into a closed solid, capping ends off the axis', () => {
+    const up = latheMesh([[1, 0], [1, 2]], 16);
+    expect(volume(up)).toBeCloseTo(2 * polygon(16), 9);
+    expect(volume(latheMesh([[1, 2], [1, 0]], 16))).toBeCloseTo(2 * polygon(16), 9);
+    // Flat caps are one face each, as on a cylinder; a point makes a cone.
+    expect(up.faces).toHaveLength(16 + 2);
+    expect(volume(latheMesh([[1, 0], [0, 3]], 16))).toBeCloseTo(polygon(16), 9);
+    // A profile that ends where it starts is a ring: a washer between radii 1 and 2.
+    const washer = latheMesh([[1, 0], [2, 0], [2, 1], [1, 1], [1, 0]], 16);
+    expect(volume(washer)).toBeCloseTo(3 * polygon(16), 9);
+    // Open ends stay open, and the faces are drawn from both sides, as for a glass.
+    const cup = latheMesh([[0, 0], [1, 0], [1, 1]], 16, true);
+    expect(cup.twoSided).toBe(true);
+    expect(cup.faces).toHaveLength(1 + 16);
+    expect(up.smooth).toBe(true);
+  });
+
+  it('pulls an outline, concave or not, either way round, into a slab, and stacks outlines into a loft', () => {
+    const l: Array<readonly [number, number]> = [[0, 0], [2, 0], [2, 1], [1, 1], [1, 2], [0, 2]];
+    for (const plane of ['xy', 'xz', 'yz'] as const) {
+      expect(volume(extrudeData(l, 0.5, plane))).toBeCloseTo(1.5, 9);
+      expect(volume(extrudeData([...l].reverse(), 0.5, plane))).toBeCloseTo(1.5, 9);
+    }
+    const square = (side: number): Array<readonly [number, number]> => [[-side / 2, -side / 2], [side / 2, -side / 2], [side / 2, side / 2], [-side / 2, side / 2]];
+    expect(volume(loftData([{ z: 0, points: square(2) }, { z: 1, points: square(2) }]))).toBeCloseTo(4, 9);
+    // A frustum: h / 3 (A + B + √(AB)).
+    expect(volume(loftData([{ z: 0, points: square(2) }, { z: 1, points: square(1) }]))).toBeCloseTo(7 / 3, 9);
+    // Outlines running clockwise are turned round, all the same way.
+    expect(volume(loftData([{ z: 0, points: [...square(2)].reverse() }, { z: 1, points: [...square(1)].reverse() }]))).toBeCloseTo(7 / 3, 9);
+  });
+
+  it('refuses profiles it cannot turn', () => {
+    expect(() => latheMesh([[1, 0]], 12)).toThrow('from 2 to 120 profile points');
+    expect(() => latheMesh([[-1, 0], [1, 1]], 12)).toThrow('negative radius');
+    expect(() => latheMesh([[0, 0], [0, 1]], 12)).toThrow('off the axis');
+    expect(() => latheMesh(Array.from({ length: 100 }, (_, i) => [1, i]), 96)).toThrow('faces');
+  });
+});
+
+describe('the 3D camera (C3-2)', () => {
+  const camera = (yaw: number, pitch: number, distance = 0) => {
+    const c = new Camera([0, 0, 400, 400], { yaw, pitch, scale: 100, distance, target: [0, 0, 0] }, 'orbit');
+    c.settle([0, 0, 0], 1);
+    return c;
+  };
+  const screen = (c: Camera, p: [number, number, number]) => {
+    const q = c.project(c.toCamera(p));
+    return [q.x, q.y];
+  };
+
+  it('looks along +y from the front, down from the top, and evenly at iso', () => {
+    const front = camera(VIEWS.front.yaw, VIEWS.front.pitch);
+    expect(screen(front, [1, 0, 0])).toEqual([300, 200]);
+    expect(screen(front, [0, 0, 1])).toEqual([200, 100]);
+    const top = camera(VIEWS.top.yaw, VIEWS.top.pitch);
+    const [tx, ty] = screen(top, [0, 1, 0]);
+    expect(tx).toBeCloseTo(200, 6);
+    expect(ty).toBeCloseTo(100, 6);
+    const iso = camera(VIEWS.iso.yaw, VIEWS.iso.pitch);
+    const x = screen(iso, [1, 0, 0]);
+    const y = screen(iso, [0, 1, 0]);
+    // The x and y axes mirror each other, and z points straight up.
+    expect(x[0]! - 200).toBeCloseTo(-(y[0]! - 200), 9);
+    expect(x[1]).toBeCloseTo(y[1]!, 9);
+    expect(screen(iso, [0, 0, 1])[0]).toBeCloseTo(200, 9);
+  });
+
+  it('enlarges nearer things with perspective and picks points back off the floor', () => {
+    const flat = camera(30, 30);
+    const deep = camera(30, 30, 6);
+    const near = deep.project(deep.toCamera([1, 1, 0]));
+    const far = deep.project(deep.toCamera([-1, -1, 0]));
+    expect(near.k).toBeGreaterThan(1);
+    expect(far.k).toBeLessThan(1);
+    for (const c of [flat, deep]) {
+      const p = c.project(c.toCamera([0.7, -0.4, 0.5]));
+      const back = c.pick(p.x, p.y, 0.5)!;
+      expect(back[0]).toBeCloseTo(0.7, 9);
+      expect(back[1]).toBeCloseTo(-0.4, 9);
+    }
+  });
+
+  it('turns, zooms about the pointer and resets', () => {
+    const c = camera(30, 20);
+    expect(c.orbit(0.1, 0.1)).toBe(true);
+    expect(c.state.yaw).toBeCloseTo(30 - 22, 9);
+    expect(c.state.pitch).toBeCloseTo(36, 9);
+    c.orbit(0, 10);
+    expect(c.state.pitch).toBe(89);
+    const before = c.project(c.toCamera([0.5, 0.5, 0]));
+    c.zoom(before.x, before.y, 2);
+    const after = c.project(c.toCamera([0.5, 0.5, 0]));
+    expect(after.x).toBeCloseTo(before.x, 9);
+    expect(after.y).toBeCloseTo(before.y, 9);
+    expect(c.changed()).toBe(true);
+    c.reset();
+    expect(c.changed()).toBe(false);
+  });
+});
+
+describe('inc.space3d', () => {
+  it('culls faces turned away from the eye (C3-3) and lights the rest', () => {
+    const { runtime } = space((s) => s.box(2), { camera: { yaw: 35, pitch: 25, distance: 0 } });
+    const drawn = faces(runtime);
+    expect(drawn).toHaveLength(3);
+    // The top faces the lamp more than the side away from it.
+    const levels = drawn.map(lum).sort();
+    expect(new Set(levels).size).toBeGreaterThan(1);
+    const front = space((s) => s.box(2), { camera: { yaw: -90, pitch: 0, distance: 0 } }).runtime;
+    expect(faces(front)).toHaveLength(1);
+  });
+
+  it('culls against the eye, not a fixed direction, under perspective', () => {
+    // Looking straight at a face from close up, the side faces of a long box stay hidden but its near face shows.
+    const { runtime } = space((s) => s.box([1, 6, 1]), { camera: { yaw: -90, pitch: 0, distance: 8 } });
+    expect(faces(runtime)).toHaveLength(1);
+    // From slightly off-axis, perspective reveals a side face that an eye at infinity would not see.
+    const near = space((s) => s.box([1, 1, 1], { at: [1.2, 0, 0] }), { camera: { yaw: -90, pitch: 0, distance: 3, target: [0, 0, 0] } }).runtime;
+    expect(faces(near).length).toBe(2);
+  });
+
+  it('writes the depth order into fixed slots: no reordering, only attribute writes (C3-4)', () => {
+    let near!: ReturnType<Space3D['box']>;
+    const { runtime } = space((s) => {
+      s.box(1, { at: [-2, 0, 0], tone: 'a' });
+      near = s.box(1, { at: [2, 0, 0], tone: 'b' });
+    }, { camera: { yaw: 0, pitch: 10, distance: 0 } });
+    // From +x, the box at x = 2 is nearer, so it is drawn last.
+    let shown = visibleSlots(runtime);
+    expect(shown.at(-1)!.tone).toBe('b');
+    expect(shown[0]!.tone).toBe('a');
+    const ids = slots(runtime).map((n) => n.id);
+    // Turn half way round: the order flips, in the same elements.
+    runtime.view(stageId(runtime), { kind: 'orbit', dx: 180 / 220, dy: 0 });
+    const update = runtime.tick(0);
+    shown = visibleSlots(runtime);
+    expect(shown.at(-1)!.tone).toBe('a');
+    expect(slots(runtime).map((n) => n.id)).toEqual(ids);
+    expect(update.commands.some((c) => c.op === 'order' || c.op === 'create')).toBe(false);
+    expect(near.screen()[0]).toBeGreaterThan(0);
+  });
+
+  it('draws a sticker on a face in front of it with a depth bias, and behind it without (C3-6)', () => {
+    const order = (bias: number | undefined) => {
+      // A plate, and a thin sticker on the plate's face toward the camera: coplanar, so the sort alone cannot choose.
+      const { runtime } = space((s) => {
+        s.box([0.2, 2, 2], { at: [0, 0, 0], tone: 'a' });
+        s.box([0.2, 1, 1], { at: [0.001, 0, 0], tone: 'lit', ...(bias !== undefined ? { bias } : {}) });
+      }, { camera: { yaw: 0, pitch: 0, distance: 0 } });
+      return visibleSlots(runtime).map((n) => n.tone);
+    };
+    const biased = order(2);
+    // The sticker's faces come after every face of the plate it sits on.
+    expect(biased.lastIndexOf('a')).toBeLessThan(biased.indexOf('lit'));
+    const pushedBack = order(-2);
+    expect(pushedBack.lastIndexOf('lit')).toBeLessThan(pushedBack.indexOf('a'));
+  });
+
+  it('moves groups with their parent and spreads them in an exploded view (S3-3, S3-7)', () => {
+    let group!: ReturnType<Space3D['group']>;
+    let child!: ReturnType<Space3D['sphere']>;
+    const { runtime } = space((s, inc) => {
+      group = s.group({ at: [0, 0, 0] });
+      child = s.sphere(0.5, { parent: group, at: [1, 0, 0] });
+      s.sphere(0.5, { parent: group, at: [-1, 0, 0] });
+      inc.onFrame(() => undefined);
+    }, { camera: { yaw: -90, pitch: 0, scale: 50, distance: 0, target: [0, 0, 0] } });
+    const before = child.screen();
+    expect(before[0]).toBeCloseTo(320 + 50, 6);
+    group.rotate(0, 0, 90);
+    runtime.tick(0);
+    // Turned a quarter about z, the child now points straight away from the front camera.
+    expect(child.screen()[0]).toBeCloseTo(320, 6);
+    group.rotate(0, 0, 0).explode(1);
+    expect(child.screen()[0]).toBeCloseTo(320 + 100, 6);
+  });
+
+  it('draws round solids, planes, tori, meshes, lines, arrows, arcs, points, grids and axes', () => {
+    const { runtime, mount } = space((s) => {
+      s.cylinder(0.5, 1, { at: [-2, 0, 0] });
+      s.cone(0.5, 1, { at: [0, 0, 0], tone: 'a' });
+      s.torus(1, 0.3, { at: [2, 0, 0], look: 'wire' });
+      s.plane(2, 2, { at: [0, 0, -1] });
+      s.mesh({ vertices: [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]], faces: [[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]] }, { at: [0, 2, 0], look: 'ghost' });
+      s.line([[0, 0, 0], [1, 1, 1], [2, 0, 1]], { dashed: true, label: 'path' });
+      s.arrow([0, 0, 0], [0, 0, 2], { tone: 'b', label: 'F' });
+      s.arc([0, 0, 0], [1, 0, 0], [0, 0, 1], 90, { label: 'θ' });
+      s.point([1, 1, 1], { tone: 'lit' });
+      s.grid({ size: 3 });
+      s.axes({ length: 2 });
+    });
+    expect(mount.ui.error).toBeNull();
+    const shown = visibleSlots(runtime);
+    expect(shown.some((n) => n.extra.includes('inc-wire'))).toBe(true);
+    expect(shown.some((n) => n.extra.includes('inc-glass'))).toBe(true);
+    expect(shown.some((n) => n.dashed)).toBe(true);
+    expect(shown.some((n) => n.fill && n.tone === 'b')).toBe(true); // an arrowhead
+    expect(shown.some((n) => n.extra.includes('inc-smooth'))).toBe(true);
+    expect(labels(runtime).map((n) => n.text).sort()).toEqual(['F', 'path', 'x', 'y', 'z', 'θ']);
+    expect(shown.every((n) => !(n.attrs.get('d') ?? '').includes('NaN'))).toBe(true);
+  });
+
+  it('lays a grid on any plane by its normal, with square, unit directions across it (C3-12)', () => {
+    const dot = (a: readonly number[], b: readonly number[]) => a[0]! * b[0]! + a[1]! * b[1]! + a[2]! * b[2]!;
+    for (const normal of [[1, 1, 0], [1, 2, 3], [0, 0, 5], [0, -1, 0]] as const) {
+      const lift = planeAxes({ normal });
+      const u = lift(1, 0);
+      const v = lift(0, 1);
+      expect(dot(u, normal)).toBeCloseTo(0, 9);
+      expect(dot(v, normal)).toBeCloseTo(0, 9);
+      expect(dot(u, v)).toBeCloseTo(0, 9);
+      expect(Math.hypot(...u)).toBeCloseTo(1, 9);
+      expect(Math.hypot(...v)).toBeCloseTo(1, 9);
+    }
+    // A tilted plane keeps one direction level; the floor by its normal is the floor by name.
+    expect(planeAxes({ normal: [1, 1, 1] })(1, 0)[2]).toBeCloseTo(0, 9);
+    expect(planeAxes({ normal: [0, 0, 1] })(2, 3)).toEqual(planeAxes('xy')(2, 3));
+    expect(() => planeAxes({ normal: [0, 0, 0] })).toThrow(/must not be zero/);
+    expect(() => planeAxes('xw')).toThrow(/grid plane must be/);
+    const { runtime, mount } = space((s) => {
+      s.grid({ plane: { normal: [1, 1, 1] }, size: 2, at: [0, 0, 1] });
+    });
+    expect(mount.ui.error).toBeNull();
+    expect(visibleSlots(runtime).length).toBeGreaterThanOrEqual(10);
+  });
+
+  it('splits a large floor so what stands behind its middle is not covered', () => {
+    let box!: ReturnType<Space3D['box']>;
+    const { runtime } = space((s) => {
+      s.plane(10, 10, { tone: 'faint' });
+      box = s.box(1, { at: [0, 3, 0.5], tone: 'a' });
+    }, { camera: { yaw: -90, pitch: 25, distance: 0 } });
+    const drawn = visibleSlots(runtime);
+    const floor = drawn.filter((n) => n.tone === 'faint');
+    expect(floor.length).toBeGreaterThan(1);
+    // The floor piece the box stands on is drawn before the box, and the box before nearer floor pieces is fine either way.
+    const [bx, by] = box.screen();
+    const under = floor.reduce((best, n) => {
+      const [cx, cy] = centre(n);
+      const [ex, ey] = centre(best);
+      return Math.hypot(cx - bx, cy - by - 10) < Math.hypot(ex - bx, ey - by - 10) ? n : best;
+    });
+    const firstBox = drawn.findIndex((n) => n.tone === 'a');
+    expect(drawn.indexOf(under)).toBeLessThan(firstBox);
+    // Without splitting, the whole floor (centred in front of the box) would sort after it.
+    expect(drawn.slice(firstBox).some((n) => n.tone === 'faint')).toBe(true);
+  });
+
+  it('runs a tube between two points and keeps long lines sorted with what they pass', () => {
+    let rod!: ReturnType<Space3D['tube']>;
+    const { runtime } = space((s) => {
+      rod = s.tube([0, 0, 0], [0, 0, 2], 0.1, { tone: 'b' });
+      s.tube([0, 0, 0], [2, 0, 0], 0.1);
+      // A long line passing behind a box must not be drawn over it.
+      s.box(1, { at: [0, 0, 0], tone: 'a' });
+      s.line([[-4, 3, 0], [4, 3, 0]], { tone: 'c' });
+    }, { camera: { yaw: -90, pitch: 10, distance: 0 } });
+    const [x, y] = rod.screen();
+    expect(Number.isFinite(x) && Number.isFinite(y)).toBe(true);
+    const drawn = visibleSlots(runtime);
+    const line = drawn.filter((n) => n.tone === 'c');
+    expect(line.length).toBeGreaterThan(1);
+    // Behind the box from the front: every piece of the line is drawn before the box's faces.
+    const firstBox = drawn.findIndex((n) => n.tone === 'a');
+    expect(line.every((n) => drawn.indexOf(n) < firstBox)).toBe(true);
+  });
+
+  it('wraps a coil around a rod without a wrap call: each piece sorts on its own (BR-5)', () => {
+    const { runtime } = space((s) => {
+      s.cylinder(0.3, 4, { rotate: [0, 90, 0], tone: 'mid' });
+      s.coil(0.8, 3.5, 8, { tone: 'a' }).rotate(0, 90, 0);
+    }, { camera: { yaw: -60, pitch: 20, distance: 0 } });
+    const drawn = visibleSlots(runtime);
+    const rod = drawn.map((n, i) => (n.tone === 'mid' ? i : -1)).filter((i) => i >= 0);
+    const coil = drawn.map((n, i) => (n.tone === 'a' ? i : -1)).filter((i) => i >= 0);
+    // The back of the coil is drawn before the rod, the front after it.
+    expect(coil.some((i) => i < Math.min(...rod))).toBe(true);
+    expect(coil.some((i) => i > Math.max(...rod))).toBe(true);
+  });
+
+  it('shades a sphere with a lit gradient, wires it as three rings, and ghosts it see-through', () => {
+    const { runtime } = space((s) => {
+      s.sphere(1, { tone: 'a' });
+      s.sphere(1, { at: [3, 0, 0], look: 'wire' });
+      s.sphere(1, { at: [-3, 0, 0], look: 'ghost' });
+    });
+    const shown = visibleSlots(runtime);
+    expect(shown.filter((n) => n.shade === 'sphere')).toHaveLength(1);
+    expect(shown.filter((n) => n.extra.includes('inc-wire'))).toHaveLength(1);
+    expect(shown.filter((n) => n.extra.includes('inc-glass'))).toHaveLength(1);
+  });
+
+  it('lays a shadow: a dark see-through layer, the same in either theme, seen from both sides', () => {
+    const { runtime } = space((s) => {
+      s.sphere(1, { tone: 'b' });
+      s.sphere(1, { at: [3, 0, 0], look: 'shadow' });
+      // A closed box in shadow shows its far faces through its near ones.
+      s.box(1, { at: [-3, 0, 0], look: 'shadow' });
+    });
+    const shadows = visibleSlots(runtime).filter((n) => n.extra.includes('inc-shadow'));
+    expect(shadows).toHaveLength(1 + 6);
+    // No tone shading: its colour comes from the shadow alone.
+    for (const n of shadows) expect(n.extra).not.toMatch(/inc-lum|inc-glass/);
+  });
+
+  it('pushes labels outward from the figure and keeps them apart (C3-13)', () => {
+    const { runtime } = space((s) => {
+      s.box(2);
+      s.label([3, 0, 0], 'right');
+      s.label([-3, 0, 0], 'left');
+      s.label([0, 0, 3], 'first');
+      s.label([0, 0, 3], 'second');
+    }, { camera: { yaw: -90, pitch: 0, scale: 40, distance: 0, target: [0, 0, 0] } });
+    const byText = new Map(labels(runtime).map((n) => [n.text, n]));
+    const right = byText.get('right')!;
+    expect(Number(right.attrs.get('x'))).toBeGreaterThan(320 + 120);
+    expect(right.attrs.get('text-anchor')).toBe('start');
+    expect(byText.get('left')!.attrs.get('text-anchor')).toBe('end');
+    const a = byText.get('first')!;
+    const b = byText.get('second')!;
+    expect(Math.abs(Number(a.attrs.get('y')) - Number(b.attrs.get('y')))).toBeGreaterThanOrEqual(14);
+  });
+
+  it('names parts on the faces they draw, with a legend for accent tones (S3-6)', () => {
+    const { runtime, first } = space((s) => {
+      s.part('Anode', s.box(1, { at: [-1.5, 0, 0], tone: 'a' }), { info: 'Where oxidation happens' });
+      s.part('Cathode', s.box(1, { at: [1.5, 0, 0], tone: 'b' }));
+    });
+    expect(runtime.uiState().parts.map((p) => p.name)).toEqual(['Anode', 'Cathode']);
+    const owners = first.commands.filter((c) => c.op === 'owner');
+    expect(new Set(owners.map((c) => (c as { part: string | null }).part))).toEqual(new Set(['Anode', 'Cathode']));
+    expect(runtime.uiState().legend.map((l) => [l.label, l.tone])).toEqual([
+      ['Anode', 'a'],
+      ['Cathode', 'b'],
+    ]);
+    // Pointing at a part focuses it, as for 2D parts.
+    runtime.focusPart('Anode');
+    expect(runtime.uiState().focus).toBe('Anode');
+  });
+
+  it('lets the learner drag an object across the floor (VI-4)', () => {
+    let ball!: ReturnType<Space3D['sphere']>;
+    let s3!: Space3D;
+    const { runtime } = space((s, inc) => {
+      s3 = s;
+      const x = inc.param('x', { min: -3, max: 3, value: 0 });
+      const y = inc.param('y', { min: -3, max: 3, value: 0 });
+      s.plane(6, 6, { at: [0, 0, 0] });
+      ball = s.sphere(0.4, { tone: 'a' });
+      s.drag(ball, (p) => {
+        const hit = s.pick(p.x, p.y, 0);
+        return hit ? { x: hit[0], y: hit[1] } : undefined;
+      });
+      inc.onFrame(() => ball.at(x.value, y.value, 0));
+    });
+    const grab = nodes(runtime).find((n) => n.drag !== null)!;
+    expect(grab.extra).toContain('inc-grab');
+    const target = s3.project([1.5, -1, 0]);
+    runtime.drag(grab.id, 'start', target[0], target[1]);
+    runtime.drag(grab.id, 'end', target[0], target[1]);
+    runtime.tick(0);
+    expect(runtime.values().x).toBeCloseTo(1.5, 1);
+    expect(runtime.values().y).toBeCloseTo(-1, 1);
+  });
+
+  it('answers the stage toolbar: presets, reset and zoom', () => {
+    const { runtime } = space((s) => void s.box(1));
+    const id = stageId(runtime);
+    const interact = runtime.graph.flush().concat(runtime.tick(0).commands);
+    void interact;
+    runtime.view(id, { kind: 'preset', name: 'top' });
+    runtime.tick(0);
+    expect(runtime.uiState().views.find((v) => v.id === id)?.changed).toBe(true);
+    runtime.view(id, { kind: 'reset' });
+    runtime.tick(0);
+    expect(runtime.uiState().views.find((v) => v.id === id)?.changed).toBe(false);
+    const snapshot = runtime.graph.snapshotCommands().find((c) => c.op === 'interact') as unknown as { zoom: string; orbit: boolean; views: string[] };
+    expect(snapshot).toMatchObject({ zoom: 'runtime', orbit: true, views: ['front', 'side', 'top', 'iso'] });
+  });
+
+  it('keeps an isometric figure isometric', () => {
+    const { runtime } = space((s) => void s.box(1), { mode: 'iso' });
+    const id = stageId(runtime);
+    runtime.view(id, { kind: 'orbit', dx: 0.3, dy: 0.2 });
+    runtime.tick(0);
+    expect(runtime.uiState().views.find((v) => v.id === id)?.changed).toBe(false);
+    const snapshot = runtime.graph.snapshotCommands().find((c) => c.op === 'interact') as unknown as { orbit: boolean };
+    expect(snapshot.orbit).toBe(false);
+  });
+
+  it('coarsens round solids above the face budget and says so (S3-10)', () => {
+    const { runtime } = space(
+      (s) => {
+        for (let i = 0; i < 12; i++) s.torus(1, 0.3, { at: [i * 3, 0, 0], segments: 48 });
+      },
+      { budget: 600 },
+    );
+    expect(runtime.graph.diagnostics.map((d) => d.message).join(' ')).toContain('more than its budget of 600');
+    expect(faces(runtime).length).toBeLessThan(12 * 48 * 24);
+  });
+
+  it('traces field lines through a field (S3-8)', () => {
+    const { runtime } = space((s) => {
+      // The field of a positive and a negative charge.
+      const plus = [-1, 0, 0] as const;
+      const minus = [1, 0, 0] as const;
+      const field = (p: readonly number[]) => {
+        const f = [0, 0, 0];
+        for (const [c, q] of [[plus, 1], [minus, -1]] as const) {
+          const d = [p[0]! - c[0], p[1]! - c[1], p[2]! - c[2]];
+          const r3 = Math.hypot(d[0]!, d[1]!, d[2]!) ** 3;
+          for (let i = 0; i < 3; i++) f[i]! += (q * d[i]!) / r3;
+        }
+        return f as unknown as [number, number, number];
+      };
+      s.fieldLines(field, [[-0.9, 0.1, 0], [-0.9, -0.1, 0]], { sinks: [[1, 0, 0]] });
+    });
+    const lines = visibleSlots(runtime).filter((n) => !n.fill);
+    expect(lines.length).toBeGreaterThan(4);
+  });
+
+  it('lowers detail when drawing is slow (G3-7)', () => {
+    let clock = 0;
+    const { runtime } = graph((g) => void g.surface((x, y) => x * x + y * y, { resolution: 40 }), {});
+    void runtime;
+    const slow = run(
+      (inc) => {
+        const g = inc.graph3d('#g', { title: 'Slow', x: [-1, 1], y: [-1, 1], z: [0, 2] });
+        g.surface((x, y) => x * x + y * y, { resolution: 40 });
+      },
+      { now: () => (clock += 20) },
+    ).runtime;
+    for (let i = 0; i < 6; i++) {
+      slow.view(stageId(slow), { kind: 'orbit', dx: 0.01, dy: 0 });
+      slow.tick(0);
+    }
+    expect(slow.graph.diagnostics.map((d) => d.message).join(' ')).toContain('surfaces now use fewer samples');
+    expect(faces(slow).length).toBeLessThan(40 * 40);
+  });
+
+  it('refuses bad input with plain messages', () => {
+    const error = (build: (s: Space3D) => void) => space(build).mount.ui.error?.message;
+    expect(error((s) => void s.box(-1))).toBe('box width must be a positive number');
+    expect(error((s) => void s.sphere(1, { look: 'shiny' as never }))).toContain("look must be 'solid', 'wire', 'ghost' or 'shadow'");
+    expect(error((s) => void s.box(1, { tone: 'pink' as never }))).toBe('Unknown tone "pink"');
+    expect(error((s) => void s.line([[0, 0, 0]]))).toContain('from 2 to 2000 points');
+    expect(error((s) => void s.box(1).orient([1, 0, 0] as never))).toContain('nine finite numbers');
+    expect(error((s) => void s.torus(1, 2))).toContain('larger than its tube radius');
+    expect(error((s) => void s.view('under' as never))).toContain('Unknown view "under"');
+  });
+
+  it('lets a scene take a kit method off its object and call it alone', () => {
+    const { mount, runtime } = space((s) => {
+      const { box, part } = s;
+      part('Crate', box(1, { tone: 'a' }));
+    });
+    expect(mount.ui.error).toBeNull();
+    expect(runtime.uiState().parts.map((p) => p.name)).toEqual(['Crate']);
+  });
+
+  it('gives an arrow made without a label one the first time it is labelled', () => {
+    // Once a scene labelled its field arrow on every frame without making it with a label, and threw on frame 1.
+    const { runtime, mount } = space((s, inc) => {
+      const probe = s.arrow([0, 0, 0], [1, 0, 0], { tone: 'a' });
+      inc.onFrame(() => probe.label(`${(0.5).toFixed(2)} T`));
+    });
+    expect(mount.ui.error).toBeNull();
+    runtime.tick(0.016);
+    expect(runtime.uiState().error).toBeNull();
+    expect(labels(runtime).map((n) => n.text)).toContain('0.50 T');
+  });
+
+  it('lets a later part() rename an object that is a part already, as a model names its pieces', () => {
+    // Once a scene named a bar magnet's north piece "north pole", as its plan did, and the figure threw at mount.
+    const { runtime } = space((s) => {
+      const magnet = s.model('magnet', { parts: true });
+      s.part('north pole', magnet.piece('north'), { label: 'North pole', info: 'Field lines leave here.' });
+      s.part('Twice', s.part('Once', s.box(1)));
+    });
+    expect(runtime.uiState().parts.map((p) => [p.name, p.label, p.info])).toEqual([
+      ['south', 'South pole', ''],
+      ['north pole', 'North pole', 'Field lines leave here.'],
+      ['Twice', 'Twice', ''],
+    ]);
+    // Two objects still cannot share a name.
+    const error = (build: (s: Space3D) => void) => space(build).mount.ui.error?.message;
+    expect(
+      error((s) => {
+        s.part('Box', s.sphere(1));
+        s.part('Box', s.box(1));
+      }),
+    ).toContain('registered twice');
+  });
+
+  it('draws dots at world points on the stage’s canvas layer, in the figure’s own camera (FX-1, BR-12)', () => {
+    const POINTS: Vec3[] = [
+      [0, 0, 0],
+      [1, 0, 0],
+      [0, 1, 0],
+      [0, 0, 1],
+    ];
+    let world!: Space3D;
+    let cloud!: ReturnType<Space3D['dots']>;
+    const { runtime, mount, first } = space((s, inc) => {
+      world = s;
+      const on = inc.toggle('on', { value: true, label: 'Show the gas' });
+      s.box(1, { tone: 'a' });
+      const gas = s.group();
+      // A point that is not three numbers is left out.
+      cloud = s.dots({ tone: 'c', r: 2, glow: true, parent: gas }).set([...POINTS, [Number.NaN, 0, 0], [1, 2] as never]);
+      inc.onFrame(() => gas.show(on.value === 1));
+    });
+    type Sent = { layer: string; tone: string; r: number; glow?: boolean; points: number[] };
+    const sent = (commands: ReadonlyArray<{ op: string }>) => commands.filter((c) => c.op === 'dots').at(-1) as Sent | undefined;
+    const at = (points: readonly Vec3[]) => points.flatMap((p) => world.project(p).map((v) => Math.round(v * 100) / 100));
+    const start = sent([...mount.commands, ...first.commands])!;
+    // Behind every solid by default, on the stage's own canvas layer.
+    expect(start).toMatchObject({ layer: 'back', tone: 'c', r: 2, glow: true });
+    expect(start.points).toEqual(at(POINTS));
+    // Its labels and screen() point at the middle of the dots.
+    const middle = world.project([0.25, 0.25, 0.25]);
+    expect(cloud.screen()[0]).toBeCloseTo(middle[0], 6);
+    expect(cloud.screen()[1]).toBeCloseTo(middle[1], 6);
+    // Turned, they follow the camera; a view that has not moved sends nothing.
+    runtime.view(stageId(runtime), { kind: 'orbit', dx: 0.25, dy: 0.1 });
+    const turned = sent(runtime.tick(0).commands)!;
+    expect(turned.points).toEqual(at(POINTS));
+    expect(turned.points).not.toEqual(start.points);
+    expect(sent(runtime.tick(0).commands)).toBeUndefined();
+    // They hide and show with their group.
+    runtime.setParam('on', 0);
+    expect(sent(runtime.tick(0).commands)!.points).toEqual([]);
+    runtime.setParam('on', 1);
+    expect(sent(runtime.tick(0).commands)!.points).toEqual(at(POINTS));
+    // Moved as one object, and over the whole figure when asked.
+    const { first: placed } = space((s) => {
+      world = s;
+      s.box(1);
+      s.dots({ layer: 'front' }).set([[0, 0, 0]]).at(0, 0, 2);
+    });
+    expect(sent(placed.commands)).toMatchObject({ layer: 'front', points: at([[0, 0, 2]]) });
+    expect(validateSceneJs("const s = inc.space3d('#s', { title: 'Stars' });\ns.dots({ tone: 'lit', glow: true }).set([[0, 0, 5]]).rotate(0, 0, 30).tone('a');").diagnostics).toEqual([]);
+  });
+
+  it('checks a 3D dot cloud as the stage checks its dots', () => {
+    const errors: string[] = [];
+    space((s) => {
+      const attempts = [
+        () => s.dots({ r: 0 }),
+        () => s.dots({ layer: 'mid' as never }),
+        () => s.dots({ tone: 'pink' as never }),
+        () => s.dots().set(Array.from({ length: 2001 }, (): Vec3 => [0, 0, 0])),
+        () => s.dots().set('stars' as never),
+        () => s.dots().tone('pink' as never),
+      ];
+      for (const attempt of attempts) {
+        try {
+          attempt();
+        } catch (error) {
+          errors.push((error as Error).message);
+        }
+      }
+    });
+    expect(errors).toEqual([
+      'dots need a radius from 0 to 50',
+      'dots go on the back or front layer',
+      'Unknown tone "pink"',
+      'At most 2000 dots',
+      'dots.set needs a list of [x, y, z] points',
+      'Unknown tone "pink"',
+    ]);
+  });
+});
+
+describe('inc.graph3d', () => {
+  it('samples surfaces in the data box, cut off where they leave it (G3-1, G3-2)', () => {
+    const { runtime } = graph((g) => void g.surface((x, y) => x * x + y * y, { resolution: 20 }), { grid: false, axes: false });
+    const drawn = faces(runtime);
+    // Every corner of x² + y² over [-2, 2]² stays under 8 except where both coordinates are near 2.
+    expect(drawn.length).toBeGreaterThan(20 * 20 * 0.4);
+    expect(drawn.length).toBeLessThanOrEqual(20 * 20);
+    expect(drawn.every((n) => n.extra.includes('inc-smooth'))).toBe(true);
+  });
+
+  it('draws a shaded wireframe: each cell outlined in its own light, sorted by depth with the rest (G3-2)', async () => {
+    const { runtime } = graph((g) => {
+      g.surface((x, y) => x * x + y * y, { resolution: 12, look: 'wire', tone: 'b' });
+      g.point([0, 0, 6], { tone: 'c' });
+    }, { grid: false, axes: false });
+    const wires = visibleSlots(runtime).filter((n) => n.extra.includes('inc-wire'));
+    // One outline per cell inside the box, lit: several light levels, as a bowl turns toward and away from the lamp.
+    expect(wires.length).toBeGreaterThan(12 * 12 * 0.4);
+    expect(wires.every((n) => /inc-lum-\d/.test(n.extra) && n.attrs.get('d')!.endsWith('Z'))).toBe(true);
+    expect(new Set(wires.map(lum)).size).toBeGreaterThan(2);
+    // Sorted with everything else: the point above the bowl is drawn among the wires, not after all of them.
+    const drawn = visibleSlots(runtime);
+    const point = drawn.findIndex((n) => n.tone === 'c');
+    expect(point).toBeGreaterThan(-1);
+    expect(drawn.slice(0, point).some((n) => n.extra.includes('inc-wire'))).toBe(true);
+    expect(drawn.slice(point + 1).some((n) => n.extra.includes('inc-wire'))).toBe(true);
+    const { THEME_CSS } = await import('../src/renderer/theme');
+    expect(THEME_CSS).toContain('.inc-face.inc-wire:is(.inc-lum-0, .inc-lum-1, .inc-lum-2, .inc-lum-3, .inc-lum-4, .inc-lum-5, .inc-lum-6) { stroke: var(--inc-face); }');
+  });
+
+  it('follows parameters, because surfaces are sampled on every draw', () => {
+    let count = 0;
+    const { runtime } = graph((g, inc) => {
+      const a = inc.param('a', { min: 0, max: 2, value: 1 });
+      g.surface((x, y) => {
+        count++;
+        return a.value * (x + y) + 4;
+      });
+    });
+    const before = count;
+    runtime.setParam('a', 0.5);
+    runtime.tick(0);
+    expect(count).toBeGreaterThan(before);
+  });
+
+  it('draws parametric surfaces, curves, points, vectors, planes and labels (G3-3, G3-4)', () => {
+    const { runtime, mount } = graph((g) => {
+      g.parametric((u, v) => [Math.cos(u) * Math.sin(v), Math.sin(u) * Math.sin(v), 4 + Math.cos(v)], { u: [0, 2 * Math.PI], v: [0, Math.PI], resolution: 12 });
+      g.curve((t) => [Math.cos(t), Math.sin(t), t], { t: [0, 8], tone: 'c' });
+      g.point(() => [1, 1, 1], { label: 'P' });
+      g.vector([0, 0, 0], [1, 1, 4], { label: 'v' });
+      g.plane([0, 0, 1], 2);
+      g.label([0, 0, 7], 'top');
+    });
+    expect(mount.ui.error).toBeNull();
+    const texts = labels(runtime).map((n) => n.text);
+    expect(texts).toEqual(expect.arrayContaining(['P', 'v', 'top', 'x', 'y', 'z']));
+    expect(visibleSlots(runtime).some((n) => n.tone === 'c')).toBe(true);
+  });
+
+  it('cuts surfaces off cleanly at the top and bottom of the box', () => {
+    const square: [number, number, number][] = [
+      [0, 0, 0],
+      [1, 0, 0],
+      [1, 1, 2],
+      [0, 1, 2],
+    ];
+    const cut = clipBetween(square, 0, 1);
+    expect(cut).toHaveLength(4);
+    expect(Math.max(...cut.map((p) => p[2]))).toBe(1);
+    expect(clipBetween(square, 3, 4)).toEqual([]);
+    const { runtime } = graph((g) => void g.surface((x, y) => x * x + y * y, { resolution: 12 }), { grid: false, axes: false, z: [0, 6] });
+    // Cells crossing the top of the box are cut, not dropped: a clean edge instead of a jagged one.
+    expect(faces(runtime).some((n) => corners(n).length !== 4)).toBe(true);
+  });
+
+  it('clips a plane to the box', () => {
+    const { runtime } = graph((g) => void g.plane([0, 0, 1], 4, { look: 'solid', tone: 'b' }), { grid: false, axes: false });
+    const plane = faces(runtime).find((n) => n.tone === 'b')!;
+    expect(corners(plane)).toHaveLength(4);
+  });
+
+  it('draws contour lines and a cross-section that follows its value (G3-6)', () => {
+    let position = 0;
+    const { runtime } = graph((g, inc) => {
+      const at = inc.param('at', { min: -2, max: 2, value: 0 });
+      const s = g.surface((x, y) => x * x + y * y, { contours: [1, 2, 4], resolution: 16 });
+      s.section('x', () => at.value, { tone: 'c' });
+      inc.onFrame(() => void (position = at.value));
+    }, { grid: false, axes: false });
+    const drawn = visibleSlots(runtime);
+    const contours = drawn.filter((n) => n.extra === 'inc-on-face');
+    expect(contours.length).toBeGreaterThan(3);
+    // Each contour piece is drawn straight after the face it lies on.
+    for (const piece of contours) expect(drawn[drawn.indexOf(piece) - 1]!.extra).toMatch(/inc-face|inc-on-face/);
+    const before = visibleSlots(runtime).filter((n) => n.tone === 'c').map((n) => n.attrs.get('d')).join();
+    runtime.setParam('at', 1);
+    runtime.tick(0);
+    const after = visibleSlots(runtime).filter((n) => n.tone === 'c').map((n) => n.attrs.get('d')).join();
+    expect(after).not.toBe(before);
+    expect(position).toBe(1);
+  });
+
+  it('puts panes on the far sides and moves them as the camera turns', () => {
+    // From above, the floor pane lies below the middle of the figure; from below, above it.
+    const floor = (pitch: number) => {
+      const { runtime } = graph(() => undefined, { grid: ['xy'], camera: { yaw: 45, pitch, distance: 0 } });
+      const panes = visibleSlots(runtime).filter((n) => n.extra.includes('inc-glass'));
+      expect(panes.length).toBeGreaterThan(0);
+      // Panes are drawn first, behind everything else.
+      expect(visibleSlots(runtime)[0]).toBe(panes[0]);
+      return panes.map((n) => centre(n)[1]).reduce((a, b) => a + b, 0) / panes.length;
+    };
+    expect(floor(30)).toBeGreaterThan(220);
+    expect(floor(-30)).toBeLessThan(220);
+    expect(niceTicks(0, 8)).toEqual([0, 2, 4, 6, 8]);
+    expect(niceTicks(-2, 2)).toEqual([-2, -1, 0, 1, 2]);
+    const { runtime } = graph(() => undefined);
+    expect(labels(runtime).map((n) => n.text)).toEqual(expect.arrayContaining(['0', '2', '4', '6', '8', '-2', '-1', '1', 'x', 'y', 'z']));
+  });
+});
+
+describe('the model library (S3-9)', () => {
+  /** The lengths of the sides of the box around some points. */
+  const sides = (points: readonly Vec3[]) => [0, 1, 2].map((i) => Math.max(...points.map((p) => p[i]!)) - Math.min(...points.map((p) => p[i]!)));
+  const facesIn = (item: Item): number => (item.geometry.type === 'mesh' ? item.geometry.mesh.faces.length : 0) + item.children.reduce((n, c) => n + facesIn(c), 0);
+  /** Models centred on their position; the rest stand on z = 0. */
+  const CENTRED = new Set(['satellite', 'airplane', 'pulley', 'lens', 'concave-lens', 'gear', 'planet', 'ringed-planet']);
+
+  it('places every ready-made model 2 units at its largest side, standing or centred, in few faces', () => {
+    for (const name of MODEL_NAMES) {
+      let holder!: Group3D;
+      let model!: Model3D;
+      const { runtime } = space((s) => {
+        holder = s.group();
+        model = s.model(name, { parent: holder });
+      });
+      expect(runtime.uiState().error, name).toBeNull();
+      expect(runtime.graph.diagnostics, name).toEqual([]);
+      const points = extentWithin(itemOf(holder, 'test'));
+      expect(Math.max(...sides(points)), name).toBeCloseTo(2, 6);
+      const bottom = Math.min(...points.map((p) => p[2]));
+      if (CENTRED.has(name)) expect(bottom, name).toBeLessThan(-0.1);
+      else expect(bottom, name).toBeCloseTo(0, 6);
+      // A model costs a few hundred faces at most, so a scene can hold several within its budget.
+      expect(facesIn(itemOf(model, 'test')), name).toBeLessThan(300);
+      expect(visibleSlots(runtime).length, name).toBeGreaterThan(0);
+      expect(model.pieces.length, name).toBeGreaterThan(0);
+    }
+  });
+
+  it('reaches pieces by name in the order of its data, tones them, and shows hidden ones', () => {
+    let rocket!: Model3D;
+    const { runtime } = space((s, inc) => {
+      rocket = s.model('rocket', { tone: 'b', trim: 'c' });
+      const stage = inc.param('stage', { min: 0, max: 2, step: 1, value: 0 });
+      inc.onFrame(() => {
+        if (stage.value >= 1) rocket.piece('nose').tone('a');
+        if (stage.value >= 2) {
+          rocket.tone('hi');
+          rocket.piece('flame').show();
+        }
+      });
+    });
+    expect(rocket.pieces).toEqual(['engine', 'flame', 'fins', 'body', 'window', 'nose']);
+    const tones = () => new Set(faces(runtime).map((n) => n.tone));
+    // Main and trim follow the options; fixed tones stay; the flame starts hidden.
+    expect(tones()).toEqual(new Set(['b', 'c', 'mid']));
+    runtime.setValues({ stage: 1 });
+    runtime.tick(0);
+    expect(tones()).toEqual(new Set(['a', 'b', 'c', 'mid']));
+    runtime.setValues({ stage: 2 });
+    runtime.tick(0);
+    expect(tones()).toEqual(new Set(['a', 'hi', 'c', 'mid', 'lit']));
+    expect(() => rocket.piece('wing')).toThrow('its pieces are engine, flame, fins, body, window, nose');
+  });
+
+  it('turns a piece about its own origin, keeping the turn its data gives it', () => {
+    let pulley!: Model3D;
+    space((s) => {
+      pulley = s.model('pulley');
+    });
+    const root = itemOf(pulley, 'test');
+    const before = sides(extentWithin(root));
+    // The wheel stands on its axle along y: spinning it about y leaves it in place.
+    pulley.piece('wheel').rotate(0, 45, 0);
+    const after = sides(extentWithin(root));
+    for (let i = 0; i < 3; i++) expect(after[i]).toBeCloseTo(before[i]!, 6);
+    // Tipped about x, it lies flat: lower than the mount above it reaches.
+    pulley.piece('wheel').rotate(90, 0, 0);
+    expect(Math.min(...extentWithin(root).map((p) => p[2]))).toBeGreaterThan(-0.2);
+    // Moving a piece carries what it holds: the rocket's window rides on its body.
+    let rocket!: Model3D;
+    space((s) => {
+      rocket = s.model('rocket');
+    });
+    const window = rocket.piece('window').screen();
+    rocket.piece('body').at(0, 0, 1.4);
+    expect(rocket.piece('window').screen()[1]).toBeLessThan(window[1]);
+  });
+
+  it('sizes a model by its largest side and keeps stickers on its faces in front at any size', () => {
+    let holder!: Group3D;
+    let house!: Model3D;
+    space((s) => {
+      holder = s.group();
+      house = s.model('house', { parent: holder, size: 4, scale: [1, 1, 2] });
+    });
+    const [, , height] = sides(extentWithin(itemOf(holder, 'test')));
+    // Its largest side (1.7 units of roof) is 4, then z is doubled: 1.56 high to the chimney's top becomes 1.56 * (4 / 1.7) * 2.
+    expect(height).toBeCloseTo(1.56 * (4 / 1.7) * 2, 6);
+    const door = itemOf(house.piece('door'), 'test').children[0]!;
+    expect(door.bias).toBeCloseTo(0.3 * (4 / 1.7) * 2, 6);
+  });
+
+  it('names its pieces as parts and labels them in columns beside it, joined by leaders', () => {
+    const { runtime } = space(
+      (s) => {
+        s.model('rocket', { parts: true, labels: true });
+      },
+      { viewBox: [0, 0, 640, 440] },
+    );
+    // The hidden flame is left out until it is asked for by name.
+    expect(runtime.uiState().parts.map((p) => [p.name, p.label])).toEqual([
+      ['engine', 'Engine'],
+      ['fins', 'Fins'],
+      ['body', 'Fuel tank'],
+      ['window', 'Window'],
+      ['nose', 'Nose cone'],
+    ]);
+    const byText = new Map(labels(runtime).map((n) => [n.text, n]));
+    expect([...byText.keys()].sort()).toEqual(['Engine', 'Fins', 'Fuel tank', 'Nose cone', 'Window']);
+    const y = (text: string) => Number(byText.get(text)!.attrs.get('y'));
+    // Top to bottom in the order of the pieces, and apart.
+    expect(y('Nose cone')).toBeLessThan(y('Fuel tank'));
+    expect(y('Fins')).toBeLessThan(y('Engine'));
+    expect(y('Engine') - y('Fins')).toBeGreaterThanOrEqual(18);
+    // The window faces the camera's left, so its label stands in a column on the left.
+    expect(byText.get('Window')!.attrs.get('text-anchor')).toBe('end');
+    expect(byText.get('Nose cone')!.attrs.get('text-anchor')).toBe('start');
+    // Each label has a leader from its piece, ending in a dot on the piece.
+    const leaders = nodes(runtime).filter((n) => n.kind === 'line' && !n.hidden);
+    expect(leaders).toHaveLength(5);
+    const nose = byText.get('Nose cone')!;
+    const toNose = leaders.find((n) => Math.abs(Number(n.attrs.get('y2')) - y('Nose cone')) < 1e-6)!;
+    expect(Number(toNose.attrs.get('x2'))).toBeLessThan(Number(nose.attrs.get('x')));
+    expect(nodes(runtime).filter((n) => n.kind === 'circle' && !n.hidden)).toHaveLength(5);
+  });
+
+  it('spreads its pieces apart in an exploded view', () => {
+    let rocket!: Model3D;
+    space(
+      (s) => {
+        rocket = s.model('rocket');
+      },
+      { camera: { yaw: -90, pitch: 0, distance: 0, scale: 100 } },
+    );
+    const nose = rocket.piece('nose').screen()[1];
+    const engine = rocket.piece('engine').screen()[1];
+    rocket.explode(1);
+    expect(rocket.piece('nose').screen()[1]).toBeLessThan(nose - 50);
+    expect(rocket.piece('engine').screen()[1]).toBeGreaterThan(engine + 50);
+  });
+
+  it('builds a model of the scene’s own from glTF-style data, at its own size', () => {
+    let holder!: Group3D;
+    let lamp!: Model3D;
+    space((s) => {
+      holder = s.group();
+      lamp = s.model(
+        {
+          tone: 'c',
+          nodes: [
+            { name: 'base', box: [1, 1, 0.2], at: [0, 0, 0.1] },
+            { name: 'post', label: 'Post', cylinder: [0.05, 1], at: [0, 0, 0.7], tone: 'trim', children: [{ name: 'bulb', sphere: 0.15, at: [0, 0, 0.6], tone: 'lit' }] },
+          ],
+        },
+        { parent: holder },
+      );
+    });
+    expect(lamp.pieces).toEqual(['base', 'post', 'bulb']);
+    // From the floor to the top of the bulb: 1.3 + 0.15.
+    expect(Math.max(...sides(extentWithin(itemOf(holder, 'test'))))).toBeCloseTo(1.45, 6);
+    const bulb = lamp.piece('bulb').screen();
+    lamp.piece('post').at(1, 0, 0.7);
+    expect(lamp.piece('bulb').screen()).not.toEqual(bulb);
+  });
+
+  it('refuses bad models with plain messages', () => {
+    const errors: string[] = [];
+    space((s) => {
+      const attempt = (f: () => unknown) => {
+        try {
+          f();
+          errors.push('');
+        } catch (error) {
+          errors.push((error as Error).message);
+        }
+      };
+      attempt(() => s.model('spaceship' as never));
+      attempt(() => s.model({ nodes: [] }));
+      attempt(() => s.model({ nodes: [{ box: 1, sphere: 1 }] }));
+      attempt(() => s.model({ nodes: [{ name: 'a', box: 1 }, { name: 'a', box: 1 }] }));
+      attempt(() => s.model({ nodes: [{ cylinder: [1] as never }] }));
+      attempt(() => s.model({ nodes: [{ box: 1, tone: 'red' as never }] }));
+      attempt(() => s.model('rocket', { parts: ['wing'] }));
+      attempt(() => s.model('rocket', { size: 0 }));
+      attempt(() => s.lathe([[1, 0]]));
+    });
+    expect(errors[0]).toContain('the ready-made models are rocket, satellite');
+    expect(errors[1]).toContain('data { nodes: [...] }');
+    expect(errors[2]).toContain('box and sphere');
+    expect(errors[3]).toContain('two pieces "a"');
+    expect(errors[4]).toContain('needs two numbers');
+    expect(errors[5]).toContain('Unknown tone "red"');
+    expect(errors[6]).toContain('"wing" is not a piece of this model');
+    expect(errors[7]).toContain('model size must be above 0');
+    expect(errors[8]).toContain('from 2 to 120 profile points');
+  });
+});
+
+describe('3D scenes in the sandbox', () => {
+  it('pass the validator', () => {
+    const js = `
+inc.idea('A cube has six faces, but at most three can face you at once.');
+const turn = inc.param('turn', { min: 0, max: 90, value: 30, label: 'Turn', unit: '°' });
+const space = inc.space3d('#space', { title: 'A cube', camera: { yaw: 30, pitch: 25 } });
+const cube = space.part('Cube', space.box(2, { tone: 'a' }), { info: 'Six square faces' });
+const label = space.label(cube, 'cube');
+space.axes({ length: 2 });
+inc.onFrame(() => {
+  cube.orient(inc.vec.rotA([0, 0, 1], (turn.value * Math.PI) / 180));
+  label.text('turned ' + Math.round(turn.value) + '°');
+});
+const rocket = space.model('rocket', { at: [3, 0, 0], size: 1.5, labels: ['nose', 'fins'] });
+rocket.piece('flame').show();
+space.lathe([[0.5, 0], [0.3, 1]], { at: [-3, 0, 0] });
+const graph = inc.graph3d('#graph', { title: 'A bowl', x: [-2, 2], y: [-2, 2], z: [0, 8] });
+const bowl = graph.surface((x, y) => x * x + y * y, { contours: [1, 4] });
+bowl.section('x', () => turn.value / 45 - 1);
+`;
+    const { diagnostics, info } = validateSceneJs(js);
+    expect(diagnostics).toEqual([]);
+    expect(info.kits).toEqual(['space3d']);
+    // A model is made once, then moved.
+    const again = validateSceneJs(`const space = inc.space3d('#s', { title: 'Cars' });\ninc.onFrame(() => { space.model('car'); });`);
+    expect(again.diagnostics.map((d) => d.rule)).toContain('element-in-frame');
+  });
+
+  it('runs from the built kit script on the Worker’s own modules', async () => {
+    const code = await KIT_SCRIPTS.space3d!();
+    const scope = globalThis as unknown as Record<string, unknown>;
+    scope[SHARED_GLOBAL] = SHARED_MODULES;
+    try {
+      new Function(code)();
+      const registered = (scope[KIT_GLOBAL] as Record<string, unknown>).space3d;
+      expect(isKitModule(registered)).toBe(true);
+      const runtime = new SceneRuntime({ autoplay: false, kits: { space3d: registered as KitModule } });
+      runtime.mount((inc) => {
+        const s = inc.space3d('#s', { title: 'Built' });
+        s.part('Box', s.box(1, { tone: 'a' }));
+        s.part('Ball', s.sphere(0.5, { at: [2, 0, 0], tone: 'b' }));
+      });
+      runtime.tick(0);
+      expect(runtime.uiState().error).toBeNull();
+      expect(runtime.uiState().parts.map((p) => p.name)).toEqual(['Box', 'Ball']);
+      expect(faces(runtime).length).toBeGreaterThan(0);
+    } finally {
+      delete scope[SHARED_GLOBAL];
+      delete scope[KIT_GLOBAL];
+    }
+  });
+});

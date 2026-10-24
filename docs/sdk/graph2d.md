@@ -1,6 +1,6 @@
 # Graph 2D SDK contract
 
-v0.1 implements only the graph behavior required by the sine-wave and projectile scenes. It is not intended to match a full graphing calculator.
+The 2D graph draws curves, data and annotations in data units over Cartesian axes, a number line or log scales, and lets the learner zoom, pan, trace and drag.
 
 ## Creation
 
@@ -8,28 +8,35 @@ v0.1 implements only the graph behavior required by the sine-wave and projectile
 const graph = inc.graph2d('#stage', {
   x: [-7, 7],
   y: [-5, 5],
-  axes: true,
-  grid: true,
-  labels: { x: 'x', y: 'y' }
+  title: 'A sine wave',
+  labels: { x: 'time (s)', y: 'height (m)' },
+  scale: { y: 'log' }, // optional: log x or y axes with decade ticks
 });
 ```
 
-## Included
+## Curves
 
-- Responsive Cartesian axes, ticks, grid, and labels.
-- Plot `y = f(x)` from an SDK formula or a restricted pure callback.
-- Plot a parametric path from `x(t)` and `y(t)`.
-- Points, line segments, arrows, and a moving marker.
-- A revealed path or trail controlled by scene time.
-- Automatic clipping and safe handling of non-finite samples.
-- Reset view and automatic fit to the authored domain.
+- `plot(f)`: y = f(x), from a formula or a function of x (and time).
+- `plotX(f)`: x = f(y), from a function of y or a formula made with `{ input: 'y' }`.
+- `polar(f, { from, to })`: r = f(theta), from a function of theta or a formula made with `{ input: 'theta' }`.
+- `parametric(fx, fy, t0, t1)`: the point (x(t), y(t)), from two functions or two formulas made with `{ input: 't' }`; in those, t is the curve's parameter, not scene time.
+- `implicit(F)`: the curve F(x, y) = 0; with `fill: true` the region where F < 0 is shaded.
+- `area`, `between`, `field`, `slopes`, `scatter`, `bars`, `histogram`.
 
-## Deferred
+A formula's source is written over the plot, as `y = ...`, `x = ...`, `r = ...` or `(x, y) = (...)`, and an edited formula shows its new text.
 
-- Learner zoom and pan.
-- Polar, implicit, inequality, and vector-field plots.
-- Trace, automatic roots and intersections, legends, and draggable handles.
-- Bars, histograms, regions, logarithmic scales, and multi-axis charts.
+```js
+const a = inc.param('a', { min: 0.5, max: 2, value: 1 });
+graph.polar(inc.formula('a*(1 + cos(theta))', { input: 'theta' }));
+graph.parametric(inc.formula('2*cos(t)', { input: 't' }), inc.formula('sin(t)', { input: 't' }), 0, 2 * Math.PI);
+```
+
+## Marks and interaction
+
+- Points, segments (cut to the plot area, as curves are), arrows, trails, labels, equations, brackets and dimension lines, all in data units.
+- `marks` for roots and turning points, `crossings` where two curves meet, `trace` to follow a curve.
+- `handle` and `drag` let the learner move what a parameter sets; `part` names an item for steps, highlights and the description.
+- `reveal(fraction)` draws a curve over time; zoom and pan are the learner's, with reset.
 
 ## Formula source
 

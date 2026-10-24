@@ -11,6 +11,8 @@ const domFreeModules = [
   'packages/core/src/runtime/**/*.ts',
   'packages/core/src/scene/**/*.ts',
   'packages/core/src/graph2d/**/*.ts',
+  'packages/core/src/helpers/**/*.ts',
+  'packages/core/src/kits/**/*.ts',
   'packages/core/src/probe/**/*.ts',
   'packages/core/src/protocol/**/*.ts',
   'packages/core/src/validation/**/*.ts',

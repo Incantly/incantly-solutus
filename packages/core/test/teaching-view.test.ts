@@ -327,20 +327,14 @@ describe('teaching view: text alternative and motion preferences', () => {
     expect(copy.textContent).toBe('Bar A is 2 and bar B is 4.');
   });
 
-  it('places part notes under the drawing, teaching above the controls and the description last', () => {
+  it('places the card head and idea first, the drawing beside a panel of notes, readouts, teaching and controls, and the description last', () => {
     const { root } = mount();
     const order = [...root.children].map((el) => el.className.split(' ')[0]);
-    expect(order).toEqual([
-      'inc-idea',
-      'inc-scene',
-      'inc-error',
-      'inc-part-info',
-      'inc-readouts',
-      'inc-teaching',
-      'inc-controls',
-      'inc-description',
-      'inc-visually-hidden',
-    ]);
+    expect(order).toEqual(['inc-header', 'inc-idea', 'inc-body', 'inc-description', 'inc-visually-hidden']);
+    const body = root.querySelector('.inc-body')!;
+    expect([...body.children].map((el) => el.className.split(' ')[0])).toEqual(['inc-scene', 'inc-panel']);
+    const panel = [...root.querySelector('.inc-panel')!.children].map((el) => el.className.split(' ')[0]);
+    expect(panel).toEqual(['inc-error', 'inc-part-info', 'inc-legend', 'inc-readouts', 'inc-tables', 'inc-formulas', 'inc-predict', 'inc-teaching', 'inc-controls']);
   });
 
   it('pauses when the learner turns on reduced motion while the figure is open', () => {

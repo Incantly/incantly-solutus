@@ -68,6 +68,30 @@ test.describe('figures in notes (Phase 4 gate)', () => {
     expect(persisted).toBeGreaterThan(0);
   });
 
+  test('saved figures open and run with no network at all (section 10, offline)', async ({ page, context }) => {
+    await openNote(page, 'size=3');
+    await waitLive(page, 0);
+    // From here on the browser is offline; every request is noted.
+    const requests: string[] = [];
+    page.on('request', (request) => requests.push(request.url()));
+    await context.setOffline(true);
+    try {
+      await page.evaluate(() => (window.__playground as unknown as EditorHandle).reopen());
+      await waitLive(page, 0);
+      const frame = frameOf(page, 0);
+      const slider = frame.getByRole('slider', { name: 'Amplitude' });
+      const before = await slider.inputValue();
+      await slider.focus();
+      await page.keyboard.press('ArrowRight');
+      await expect(slider).not.toHaveValue(before);
+      await expect(frame.locator('svg.inc-stage path').first()).toHaveAttribute('d', /^M/);
+      // The frames are written from srcdoc and the scenes run in blob Workers: nothing goes to the network.
+      expect(requests.filter((url) => !/^(blob|data|about):/.test(url))).toEqual([]);
+    } finally {
+      await context.setOffline(false);
+    }
+  });
+
   test('keyboard focus moves from the text into a figure and back out', async ({ page }) => {
     await openNote(page, 'size=3');
     await waitLive(page, 0);
@@ -123,6 +147,25 @@ test.describe('figures in notes (Phase 4 gate)', () => {
     await expect(frame.locator('[role="graphics-symbol"]')).toHaveCount(4);
     await expect(frame.getByRole('slider', { name: 'Frequency (rad per unit)' })).toBeVisible();
     await expect(frame.getByRole('group', { name: 'Walkthrough' })).toBeVisible();
+  });
+
+  test('a printed note shows each live figure as a still of its drawing, with no console errors (6.10)', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('console', (message) => {
+      if (message.type() === 'error') errors.push(message.text());
+    });
+    await openNote(page, 'size=1');
+    await waitLive(page, 0);
+    const still = figure(page, 0).locator('img.incantly-figure__print');
+    await expect(still).toHaveAttribute('src', /^data:image\/svg\+xml/, { timeout: 10_000 });
+    await expect(still).toBeHidden();
+    await page.evaluate(() => window.dispatchEvent(new Event('beforeprint')));
+    await expect(still).toBeVisible();
+    await expect(figure(page, 0).locator('.incantly-figure__live')).toBeHidden();
+    expect(await still.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBeGreaterThan(100);
+    await page.evaluate(() => window.dispatchEvent(new Event('afterprint')));
+    await expect(figure(page, 0).locator('iframe')).toBeVisible();
+    expect(errors).toEqual([]);
   });
 
   test('scrolling a 50-figure note keeps at most three live figures and leaves snapshots behind', async ({ page }) => {

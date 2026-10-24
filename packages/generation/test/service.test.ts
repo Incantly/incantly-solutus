@@ -5,11 +5,11 @@ import { REFERENCE_SCENES } from '@incantly/core/scenes';
 import { afterEach, describe, expect, it } from 'vitest';
 import { hmacAuthenticator, mintToken } from '../src/auth';
 import { LimitKeeper } from '../src/limits';
-import { ScriptedModel } from '../src/models';
+import { ScriptedModel, type ModelClient } from '../src/models';
 import { isolatedProbe } from '../src/probe';
 import { MemoryRecords } from '../src/records';
 import { referenceModel, type ReferenceModelOptions } from '../src/reference-model';
-import { GenerationService, sanitizeDeviceReport, type ServiceOptions } from '../src/service';
+import { GenerationService, sanitizeDeviceReport, skeletonOf, type ServiceOptions } from '../src/service';
 
 const SECRET = 'a-test-secret-that-is-long-enough-to-use';
 const servers: Array<{ server: Server; service: GenerationService }> = [];
@@ -65,6 +65,60 @@ async function deviceProbe(scene: { fragments: { html: string; css: string; js: 
 
 type SceneEvent = { generationId: string; fragments: { html: string; css: string; js: string }; spec: ProbeSpec };
 
+describe('the concept cache (PRD 25.6)', () => {
+  it('answers a repeated request from an approved figure, with no model call', async () => {
+    const model = referenceModel();
+    const { post } = await start({ model });
+    const first = await events(await post('/v1/generations', { prompt: 'Explain projectile motion for a physics student.' }));
+    const scene = first.at(-1)!.data as unknown as SceneEvent;
+    await post(`/v1/generations/${scene.generationId}/probe`, { ok: true });
+    const callsBefore = model.calls.length;
+    // The same words in another order and case: the same key.
+    const second = await events(await post('/v1/generations', { prompt: 'explain PROJECTILE motion, for a physics student' }));
+    expect(second.map((e) => e.event)).toEqual(['accepted', 'plan', 'scene']);
+    expect(model.calls.length).toBe(callsBefore);
+    expect((second.at(-1)!.data as unknown as SceneEvent).fragments.js).toBe(scene.fragments.js);
+  });
+
+  it('skips only the scene call when a new request plans the same figure', async () => {
+    const model = referenceModel();
+    // Builds take a moment here, so a plan beside a library build is in first and can find the approved figure.
+    const slowBuilds: ModelClient = {
+      name: model.name,
+      modelFor: (purpose) => model.modelFor(purpose),
+      complete: async (call) => {
+        if (call.purpose === 'scene') await new Promise((resolve) => setTimeout(resolve, 30));
+        return model.complete(call);
+      },
+    };
+    const { post, service } = await start({ model: slowBuilds });
+    const first = await events(await post('/v1/generations', { prompt: 'Explain projectile motion for a physics student.' }));
+    await post(`/v1/generations/${(first.at(-1)!.data as unknown as SceneEvent).generationId}/probe`, { ok: true });
+    const callsBefore = model.calls.length;
+    // Too few words to name the concept, so it is planned first, and the plan finds the figure.
+    await events(await post('/v1/generations', { prompt: 'What path does a ball follow when you kick it?' }));
+    expect(model.calls.slice(callsBefore).map((c) => c.purpose)).toEqual(['plan']);
+    // A request that names the concept starts its build at once, and still takes the approved figure.
+    const callsThen = model.calls.length;
+    const hits = service.cache!.stats().hits;
+    const third = await events(await post('/v1/generations', { prompt: 'Why does a ball thrown at 45 degrees go the furthest?' }));
+    expect(model.calls.slice(callsThen).map((c) => c.purpose).sort()).toEqual(['plan', 'scene']);
+    expect(service.cache!.stats().hits).toBe(hits + 1);
+    expect((third.at(-1)!.data as unknown as SceneEvent).fragments.js).toBe(REFERENCE_SCENES.projectile!.js);
+  });
+
+  it('never stores a figure made with note text, and never caches what the device did not approve', async () => {
+    const model = referenceModel();
+    const { post, service } = await start({ model });
+    const withNote = await events(await post('/v1/generations', { prompt: 'Explain projectile motion.', noteContext: 'My teacher said...' }));
+    await post(`/v1/generations/${(withNote.at(-1)!.data as unknown as SceneEvent).generationId}/probe`, { ok: true });
+    // Only the plan key was stored; the request key was not.
+    expect(service.cache?.stats().size).toBe(1);
+    await events(await post('/v1/generations', { prompt: 'How does a convex lens form an image?' }));
+    expect(service.cache?.stats().size).toBe(1);
+  });
+});
+
 describe('the generation service', () => {
   it('states its status and its retention rule', async () => {
     const { base } = await start({ sessionMinutes: 10, recordsRetentionDays: 14 });
@@ -86,20 +140,20 @@ describe('the generation service', () => {
   it('streams the skeleton, fragment progress and a validated scene, then records the device’s approval', async () => {
     const { post, records } = await start();
     const stream = await events(await post('/v1/generations', { prompt: 'Explain projectile motion for a physics student.', noteContext: 'Chapter 3: kinematics' }));
-    // Text deltas stream the plan as it is written; the structured events keep their order.
+    // Text deltas stream the model's replies as they are written; the structured events keep their order.
     expect(stream.filter((e) => e.event !== 'delta').map((e) => e.event)).toEqual(['accepted', 'plan', 'fragment', 'fragment', 'fragment', 'scene']);
     const deltas = stream.filter((e) => e.event === 'delta');
     expect(deltas.length).toBeGreaterThan(0);
-    expect(deltas[0]!.data).toMatchObject({ purpose: 'plan' });
+    expect(deltas.some((d) => d.data.purpose === 'plan')).toBe(true);
     const skeleton = stream.find((e) => e.event === 'plan')!.data.skeleton as Record<string, unknown>;
-    expect(skeleton).toMatchObject({ concept: 'projectile motion', kind: 'motion', parts: 5, steps: 4 });
+    expect(skeleton).toMatchObject({ concept: 'projectile motion', kind: 'motion', parts: REFERENCE_SCENES.projectile!.plan.parts.length, steps: 4, kits: [] });
     // Names and numbers only: no plan prose reaches the client.
     expect(JSON.stringify(skeleton)).not.toContain('why');
     expect(JSON.stringify(skeleton)).not.toContain(REFERENCE_SCENES.projectile!.plan.idea);
     // The plan itself is never sent: deltas carry the reply text, not the parsed plan.
     expect(JSON.stringify(skeleton)).not.toContain(JSON.stringify(stream.find((e) => e.event === 'plan')));
     const scene = stream.at(-1)!.data as unknown as SceneEvent;
-    expect(scene.spec).toEqual({ parts: REFERENCE_SCENES.projectile!.plan.parts, steps: 4, singularPoints: [] });
+    expect(scene.spec).toEqual({ parts: REFERENCE_SCENES.projectile!.plan.parts, steps: 4, singularPoints: [], elements: 400 });
     expect((await deviceProbe(scene)).ok).toBe(true);
 
     const approved = await post(`/v1/generations/${scene.generationId}/probe`, { ok: true });
@@ -282,5 +336,13 @@ describe('learner tokens', () => {
     expect(authenticate(token.replace('learner_42', 'learner_43'))).toBeNull();
     expect(() => mintToken(SECRET, 'bad id!')).toThrow();
     expect(() => hmacAuthenticator('short')).toThrow();
+  });
+});
+
+describe('the skeleton', () => {
+  it('names the drawing kits the scene will load, so the device can fetch them early', () => {
+    expect(skeletonOf(REFERENCE_SCENES.buoyancy!.plan).kits).toEqual(['physics2d']);
+    expect(skeletonOf({ ...REFERENCE_SCENES.projectile!.plan, capabilities: ['graph3d', 'space3d', 'chart'] }).kits).toEqual(['space3d', 'chart']);
+    expect(skeletonOf(REFERENCE_SCENES['sine-wave']!.plan).kits).toEqual([]);
   });
 });

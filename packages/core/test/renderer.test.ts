@@ -100,6 +100,76 @@ describe('trusted mount and renderer', () => {
     expect(clock.pendingCount).toBe(0);
   });
 
+  it('shows the value the figure took in the number field once the learner commits or leaves it (CT-2)', () => {
+    const { figure, clock } = mount({ autoplay: false });
+    clock.runUntilIdle();
+    const number = input(figure.root, 'input[type=number]');
+    number.focus();
+    // 14 is above the maximum of 10: the figure takes 10, while the field keeps what is being typed.
+    number.value = '14';
+    number.dispatchEvent(new Event('input', { bubbles: true }));
+    clock.runUntilIdle();
+    expect(figure.root.querySelector('.inc-readout__value')?.textContent).toBe('10 m/s');
+    expect(number.value).toBe('14');
+    // Committed with Enter: the field shows 10, though it keeps the focus.
+    number.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(number.value).toBe('10');
+    expect(document.activeElement).toBe(number);
+    // Left after typing 7.6: the figure snaps to 8, and so does the field once the learner leaves it.
+    number.value = '7.6';
+    number.dispatchEvent(new Event('input', { bubbles: true }));
+    clock.runUntilIdle();
+    number.blur();
+    clock.runUntilIdle();
+    expect(figure.root.querySelector('.inc-readout__value')?.textContent).toBe('8 m/s');
+    expect(number.value).toBe('8');
+  });
+
+  it('stops when the page is hidden or the figure scrolls away, and goes on when it is back (RT-5)', () => {
+    // An IntersectionObserver the test drives, as the browser would on scrolling.
+    let report: (visible: boolean) => void = () => {};
+    const view = window as unknown as { IntersectionObserver?: unknown };
+    const original = view.IntersectionObserver;
+    view.IntersectionObserver = class {
+      constructor(callback: (entries: Array<{ isIntersecting: boolean }>) => void) {
+        report = (visible) => callback([{ isIntersecting: visible }]);
+      }
+      observe() {}
+      disconnect() {}
+    };
+    const hidden = (value: boolean) => {
+      Object.defineProperty(document, 'visibilityState', { value: value ? 'hidden' : 'visible', configurable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+    };
+    try {
+      const { figure, clock } = mount({ visibility: 'observe', autoplay: true });
+      report(true);
+      clock.advance();
+      const running = () => figure.runtime.needsFrame();
+      expect(running()).toBe(true);
+      // The learner switches tabs: the loop stops, time holds.
+      hidden(true);
+      clock.runUntilIdle();
+      expect(running()).toBe(false);
+      const time = figure.runtime.time;
+      clock.runUntilIdle();
+      expect(figure.runtime.time).toBe(time);
+      hidden(false);
+      clock.advance();
+      expect(running()).toBe(true);
+      // The figure scrolls out of view, then back.
+      report(false);
+      clock.runUntilIdle();
+      expect(running()).toBe(false);
+      report(true);
+      clock.advance();
+      expect(running()).toBe(true);
+    } finally {
+      view.IntersectionObserver = original;
+      Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    }
+  });
+
   it('writes nothing to the DOM when nothing changed', () => {
     const { figure, clock } = mount({ autoplay: false });
     clock.runUntilIdle();

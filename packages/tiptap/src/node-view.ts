@@ -1,9 +1,9 @@
-import type { ErrorView, ExecutionAdapter, FigureHandle } from '@incantly/core';
+import { VALIDATOR_VERSION, mergeStyles, type ClipOptions, type ErrorView, type ExecutionAdapter, type FigureHandle, type FigureStyle } from '@incantly/core';
 import type { Editor } from '@tiptap/core';
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 import { NodeSelection, TextSelection } from '@tiptap/pm/state';
 import type { NodeView, ViewMutationRecord } from '@tiptap/pm/view';
-import { DEFAULT_ASPECT, type FigureAttributes, type FigureFragments } from './attributes';
+import { DEFAULT_ASPECT, MAX_VERSIONS, type FigureAttributes, type FigureFragments, type FigureMeta, type FigureVersion, type VersionReason } from './attributes';
 import type { LiveFigureScheduler, ScheduledFigure } from './scheduler';
 import type { FigureStore } from './store';
 
@@ -21,7 +21,33 @@ export interface FigureViewOptions {
   readonly theme: 'light' | 'dark' | 'auto';
   readonly onError?: ((report: FigureErrorReport) => void) | null | undefined;
   readonly signals?: ((signal: FigureSignal) => void) | null | undefined;
+  /** The editor's style for every figure; each figure's `look` goes over it. */
+  readonly style?: FigureStyle | null | undefined;
+  /** Repairs a figure that hit a problem while live (RP-7). */
+  readonly repair?: FigureRepair | null | undefined;
 }
+
+/** What a background repair is given: the figure as stored, its ticket, and the problem with the learner's state. */
+export interface FigureRepairRequest {
+  readonly figureId: string;
+  readonly generationId?: string;
+  readonly fragments: FigureFragments;
+  readonly ticket: string;
+  readonly error: ErrorView;
+  readonly values: Readonly<Record<string, number>>;
+  readonly step: number | null;
+}
+
+/** A repaired scene that passed its probe on this device, to swap in at the learner's values. */
+export interface RepairedFigure {
+  readonly fragments: FigureFragments;
+  readonly generationId: string | null;
+  readonly approvedAt: string;
+  readonly ticket: string | null;
+}
+
+/** Repairs a figure in the background; null when it could not be repaired. */
+export type FigureRepair = (request: FigureRepairRequest, signal: AbortSignal) => Promise<RepairedFigure | null>;
 
 /**
  * What a figure in a note says about how it is used, for the host's product
@@ -64,6 +90,7 @@ export const figureViews = new WeakMap<Element, FigureNodeView>();
 
 interface Pending {
   values?: Record<string, number>;
+  formulas?: Record<string, string>;
   step?: number | null;
   description?: string;
   snapshot?: string;
@@ -83,6 +110,11 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
   private readonly frame: HTMLElement;
   private readonly caption: HTMLElement;
   private readonly status: HTMLElement;
+  /** Earlier versions to go back to (HO-9), shown when there are any. */
+  private readonly history: HTMLDetailsElement;
+  /** The live drawing as a still vector image, printed in its place (6.10). */
+  private printImage: HTMLImageElement | null = null;
+  private printing = 0;
   private handle: FigureHandle | null = null;
   private pending: Pending = {};
   private settleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -93,6 +125,15 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
   private generation = 0;
   private noticeTimer: ReturnType<typeof setTimeout> | null = null;
   private notice: string | null = null;
+  /** What a change in progress is doing, such as changing the figure in the learner's words (HO-8). */
+  private busy: string | null = null;
+  /** The figure's number in the note, when the editor numbers figures. */
+  private number: number | null = null;
+  /** A background repair (RP-7): none, running, or one that did not work, which offers the working version. */
+  private mending: 'idle' | 'repairing' | 'failed' = 'idle';
+  private mendAbort: AbortController | null = null;
+  /** Repairs swapped in while the note is open: one at most. */
+  private mended = 0;
   /** How the learner used the figure while the note is open, for product signals. */
   private readonly usage = {
     shownAt: null as number | null,
@@ -121,10 +162,15 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
     this.frame.className = 'incantly-figure__frame';
     this.status = doc.createElement('p');
     this.status.className = 'incantly-figure__status';
+    // Read out as it changes: being fixed, being changed, kept as it was.
+    this.status.setAttribute('role', 'status');
     this.status.hidden = true;
     this.caption = doc.createElement('figcaption');
     this.caption.className = 'incantly-figure__description';
-    this.dom.append(this.frame, this.status, this.caption);
+    this.history = doc.createElement('details');
+    this.history.className = 'incantly-figure__versions';
+    this.history.hidden = true;
+    this.dom.append(this.frame, this.status, this.history, this.caption);
     figureViews.set(this.dom, this);
 
     // A click on a placeholder asks for the live figure.
@@ -136,6 +182,7 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
       if (this.state === 'live') this.usage.interacted = true;
     });
     this.renderPlaceholder();
+    this.renderVersions();
     this.options.scheduler.register(this);
   }
 
@@ -166,6 +213,7 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
     const after = this.attrs;
     const sourceChanged =
       JSON.stringify(before.fragments) !== JSON.stringify(after.fragments) || before.fragmentsRef !== after.fragmentsRef;
+    if (JSON.stringify(before.versions) !== JSON.stringify(after.versions)) this.renderVersions();
     if (sourceChanged && (this.isLive || this.state === 'failed')) {
       // New fragments (a regenerated figure, or undo of one): rebuild from the stored state. A failed figure gets a new chance.
       this.teardown();
@@ -177,8 +225,24 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
       this.renderPlaceholder();
     } else {
       this.renderCaption();
+      // A new look restyles the live figure in place.
+      if (JSON.stringify(before.look) !== JSON.stringify(after.look)) this.handle?.setStyle(this.style());
     }
     return true;
+  }
+
+  /** The editor's style with this figure's own look over it. */
+  private style(): FigureStyle | undefined {
+    return mergeStyles(this.options.style ?? undefined, this.attrs.look ?? undefined);
+  }
+
+  /** Sets the figure's number in the note; the editor renumbers as figures come and go. */
+  setNumber(figureNumber: number | null): void {
+    if (figureNumber === this.number) return;
+    this.number = figureNumber;
+    if (figureNumber === null) delete this.dom.dataset.number;
+    else this.dom.dataset.number = String(figureNumber);
+    this.handle?.setNumber(figureNumber);
   }
 
   /** Events inside the live figure belong to it; the shell and caption stay with the editor. */
@@ -202,6 +266,7 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
 
   destroy(): void {
     if (this.state === 'destroyed') return;
+    this.mendAbort?.abort();
     this.left();
     if (this.noticeTimer !== null) clearTimeout(this.noticeTimer);
     this.flush();
@@ -303,6 +368,24 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
   // Live instance
   // -------------------------------------------------------------------------
 
+  /** The figure's fragments as stored, inline or by reference. */
+  source(): Promise<FigureFragments | null> {
+    return this.fragments();
+  }
+
+  /**
+   * What the community gallery needs to take this figure (GL-1): its
+   * fragments, the ticket that proves the service made them, and its concept
+   * for a title. The host adds the request the learner publishes it with.
+   * Null for a figure with no ticket, which the gallery would turn down.
+   */
+  async publication(): Promise<{ readonly ticket: string; readonly fragments: FigureFragments; readonly title: string } | null> {
+    const ticket = this.attrs.meta.ticket;
+    if (!ticket) return null;
+    const fragments = await this.fragments().catch(() => null);
+    return fragments ? { ticket, fragments, title: this.attrs.concept } : null;
+  }
+
   private async fragments(): Promise<FigureFragments | null> {
     const attrs = this.attrs;
     if (attrs.fragments) return attrs.fragments;
@@ -320,12 +403,17 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
     const scheduler = this.options.scheduler;
     // Values the learner changed since the last save win over the stored ones.
     const values = { ...attrs.values, ...this.pending.values };
+    const formulas = { ...attrs.formulas, ...this.pending.formulas };
     const step = this.pending.step !== undefined ? this.pending.step : attrs.step;
+    const style = this.style();
     // The latest problem this instance reported; adapters report it before they change state.
     let reported: ErrorView | null = null;
     this.handle = this.options.adapter.mount(container, fragments, {
       values,
       step,
+      ...(Object.keys(formulas).length > 0 ? { formulas } : {}),
+      ...(style ? { style } : {}),
+      ...(this.number !== null ? { figureNumber: this.number } : {}),
       theme: this.options.theme,
       title: attrs.concept ? `Interactive figure: ${attrs.concept}` : 'Interactive figure',
       onValues: (changed) => {
@@ -351,6 +439,12 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
           this.signal({ type: 'steps-completed', figureId: this.attrs.figureId, count });
         }
       },
+      onFormulas: (changed) => {
+        scheduler.touch(this);
+        this.pending.formulas = { ...this.pending.formulas, ...changed };
+        this.settle();
+        this.used();
+      },
       onDescription: (text) => {
         this.pending.description = text;
         this.settle();
@@ -361,7 +455,11 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
         if (reported && sameError(reported, error)) return;
         reported = error;
         // Adapters report a problem just before they fail on it, so by the next microtask it is known whether it was fatal.
-        queueMicrotask(() => this.report(error, this.state === 'failed'));
+        queueMicrotask(() => {
+          const fatal = this.state === 'failed';
+          this.report(error, fatal);
+          if (!fatal) void this.mend(error);
+        });
       },
       onState: (state) => {
         if (state === 'failed' && this.state === 'live') this.fail(reported ?? { phase: 'mount', message: 'The figure stopped working' }, reported);
@@ -391,6 +489,8 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
       for (const child of [...this.frame.children]) if (child !== container) child.remove();
       this.frame.classList.add('is-live');
       this.frame.style.aspectRatio = '';
+      watchPrinting(this);
+      void this.refreshPrint();
       if (this.focusOnLive !== null) {
         const edge = this.focusOnLive;
         this.focusOnLive = null;
@@ -437,9 +537,205 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
     }
   }
 
+  /**
+   * The live figure hit a problem and froze at its last good frame (RP-7).
+   * With a repairer and the figure's ticket, a quiet line says it is being
+   * fixed while the repair runs; a repair that passed on this device is
+   * swapped in at the learner's values. Otherwise, or when the repair does
+   * not work, the line offers the working version.
+   */
+  private async mend(error: ErrorView): Promise<void> {
+    if (this.mending !== 'idle' || this.state !== 'live') return;
+    const attrs = this.attrs;
+    const repair = this.options.repair;
+    const ticket = attrs.meta.ticket;
+    if (!repair || !ticket || this.mended > 0) {
+      this.mending = 'failed';
+      this.renderStatus();
+      return;
+    }
+    const fragments = await this.fragments();
+    if (!fragments || this.state !== 'live') return;
+    this.mending = 'repairing';
+    this.renderStatus();
+    const abort = new AbortController();
+    this.mendAbort = abort;
+    const values = { ...attrs.values, ...this.pending.values };
+    const step = this.pending.step !== undefined ? this.pending.step : attrs.step;
+    let repaired: RepairedFigure | null;
+    try {
+      repaired = await repair(
+        { figureId: attrs.figureId, ...(attrs.meta.generationId ? { generationId: attrs.meta.generationId } : {}), fragments, ticket, error, values, step },
+        abort.signal,
+      );
+    } catch {
+      repaired = null;
+    }
+    this.mendAbort = null;
+    // The figure may have been suspended or deleted while the repair ran.
+    if (abort.signal.aborted || (this.state as FigureViewState) === 'destroyed') return;
+    if (!repaired) {
+      this.mending = 'failed';
+      this.renderStatus();
+      return;
+    }
+    this.mended++;
+    this.mending = 'idle';
+    this.swapIn(repaired);
+  }
+
+  /** Puts a repaired scene in the note, out of the undo history; the figure remounts at the learner's values. */
+  private swapIn(repaired: RepairedFigure): void {
+    // The learner's latest values go into the node first, so the new scene starts from them.
+    this.flush();
+    if (this.editor.isDestroyed) return;
+    const pos = this.getPos();
+    if (typeof pos !== 'number') return;
+    const view = this.editor.view;
+    const node = view.state.doc.nodeAt(pos);
+    if (!node || node.type !== this.node.type) return;
+    const meta = {
+      ...(node.attrs as FigureAttributes).meta,
+      ...(repaired.generationId ? { generationId: repaired.generationId } : {}),
+      approvedAt: repaired.approvedAt,
+      validatorVersion: VALIDATOR_VERSION,
+      ...(repaired.ticket ? { ticket: repaired.ticket } : {}),
+    };
+    const tr = view.state.tr.setNodeAttribute(pos, 'fragments', repaired.fragments).setNodeAttribute(pos, 'fragmentsRef', null).setNodeAttribute(pos, 'meta', meta);
+    view.dispatch(tr.setMeta('addToHistory', false).setMeta(FIGURE_TRANSACTION, 'repaired'));
+    this.renderStatus();
+  }
+
+  /**
+   * The figure as it is now, as a version to keep before something replaces
+   * it (HO-9): its fragments in the store by reference, and a fresh snapshot
+   * while it is live. Null without a store, where there is nowhere to keep it.
+   */
+  async keep(reason: VersionReason): Promise<FigureVersion | null> {
+    const store = this.options.store;
+    if (!store) return null;
+    const attrs = this.attrs;
+    let fragmentsRef: string | null;
+    try {
+      fragmentsRef = attrs.fragments ? await store.putFragments(attrs.fragments) : attrs.fragmentsRef;
+    } catch {
+      return null;
+    }
+    if (!fragmentsRef) return null;
+    let snapshotRef = this.pending.snapshot ?? attrs.snapshotRef ?? null;
+    if (this.handle && this.state === 'live') {
+      const png = await this.handle.snapshot().catch(() => null);
+      if (png) snapshotRef = await store.putSnapshot(png).catch(() => snapshotRef);
+    }
+    return {
+      fragmentsRef,
+      concept: attrs.concept,
+      description: this.pending.description ?? attrs.description,
+      ...(snapshotRef ? { snapshotRef } : {}),
+      ...(attrs.meta.ticket ? { ticket: attrs.meta.ticket } : {}),
+      reason,
+      replacedAt: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * The live drawing as a picture to save or share (SV-14): a PNG or an SVG
+   * image with the theme written in, as a data URL. Null while the figure is
+   * not live.
+   */
+  picture(format: 'png' | 'svg' = 'png'): Promise<string | null> {
+    const handle = this.handle;
+    if (!handle || this.state !== 'live') return Promise.resolve(null);
+    return (format === 'svg' ? handle.exportSvg() : handle.snapshot()).catch(() => null);
+  }
+
+  /**
+   * A short video of the figure as it plays (6.10b), as the browser records
+   * it (WebM or MP4). Null while the figure is not live, or where the browser
+   * cannot record.
+   */
+  clip(options?: ClipOptions): Promise<Blob | null> {
+    const handle = this.handle;
+    if (!handle || this.state !== 'live') return Promise.resolve(null);
+    return handle.exportClip(options).catch(() => null);
+  }
+
+  /**
+   * Brings back an earlier version (HO-9), starting afresh at its own values;
+   * the figure as it is now joins the history, so going back can be undone
+   * either way: with undo, or from the history again.
+   */
+  async restore(index: number): Promise<boolean> {
+    const store = this.options.store;
+    const version = this.attrs.versions[index];
+    if (!store || !version || this.state === 'destroyed') return false;
+    this.flush();
+    const fragments = await store.getFragments(version.fragmentsRef).catch(() => undefined);
+    if (!fragments) {
+      this.notify('That version is no longer available.');
+      return false;
+    }
+    const current = await this.keep('restored');
+    if (!current || this.editor.isDestroyed) return false;
+    const pos = this.getPos();
+    if (typeof pos !== 'number') return false;
+    const view = this.editor.view;
+    const node = view.state.doc.nodeAt(pos);
+    if (!node || node.type !== this.node.type) return false;
+    const attrs = node.attrs as FigureAttributes;
+    // The history may have changed while the version loaded: find it again by what it is.
+    const rest = attrs.versions.filter((v) => !(v.fragmentsRef === version.fragmentsRef && v.replacedAt === version.replacedAt));
+    if (rest.length === attrs.versions.length) return false;
+    // The server record and approval belong to the version being replaced; the ticket travels with its scene.
+    const meta: FigureMeta = {
+      ...(attrs.meta.validatorVersion !== undefined ? { validatorVersion: attrs.meta.validatorVersion } : {}),
+      ...(version.ticket ? { ticket: version.ticket } : {}),
+    };
+    const tr = view.state.tr
+      .setNodeAttribute(pos, 'fragments', null)
+      .setNodeAttribute(pos, 'fragmentsRef', version.fragmentsRef)
+      .setNodeAttribute(pos, 'concept', version.concept)
+      .setNodeAttribute(pos, 'description', version.description)
+      .setNodeAttribute(pos, 'snapshotRef', version.snapshotRef ?? null)
+      .setNodeAttribute(pos, 'meta', meta)
+      .setNodeAttribute(pos, 'values', {})
+      .setNodeAttribute(pos, 'step', null)
+      .setNodeAttribute(pos, 'formulas', {})
+      .setNodeAttribute(pos, 'versions', [current, ...rest].slice(0, MAX_VERSIONS));
+    this.snapshotUrl = undefined;
+    view.dispatch(tr.setMeta(FIGURE_TRANSACTION, 'restored'));
+    return true;
+  }
+
+  /** Goes back to the version that passed: the figure's own starting values, at no step, with its own formulas. */
+  resetToWorking(): void {
+    if (this.state === 'destroyed') return;
+    this.mendAbort?.abort();
+    this.mendAbort = null;
+    this.mending = 'idle';
+    this.pending = {};
+    if (!this.editor.isDestroyed) {
+      const pos = this.getPos();
+      const node = typeof pos === 'number' ? this.editor.view.state.doc.nodeAt(pos) : null;
+      if (typeof pos === 'number' && node && node.type === this.node.type) {
+        const attrs = node.attrs as FigureAttributes;
+        const tr = this.editor.view.state.tr.setNodeAttribute(pos, 'values', { ...attrs.defaults }).setNodeAttribute(pos, 'step', null).setNodeAttribute(pos, 'formulas', {});
+        this.editor.view.dispatch(tr.setMeta('addToHistory', false).setMeta(FIGURE_TRANSACTION, 'persist'));
+      }
+    }
+    this.teardown();
+    this.state = 'placeholder';
+    this.failure = null;
+    this.renderPlaceholder();
+    this.options.scheduler.activate(this);
+  }
+
   /** Ends the live instance, if any. */
   private teardown(): void {
     this.generation++;
+    unwatchPrinting(this);
+    this.printImage?.remove();
+    this.printImage = null;
     this.handle?.destroy();
     this.handle = null;
     this.frame.classList.remove('is-live');
@@ -476,6 +772,10 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
       const values = { ...attrs.values, ...pending.values };
       if (JSON.stringify(values) !== JSON.stringify(attrs.values)) changes.push(['values', values]);
     }
+    if (pending.formulas) {
+      const formulas = { ...attrs.formulas, ...pending.formulas };
+      if (JSON.stringify(formulas) !== JSON.stringify(attrs.formulas)) changes.push(['formulas', formulas]);
+    }
     if (pending.step !== undefined && pending.step !== attrs.step) changes.push(['step', pending.step]);
     if (pending.description !== undefined && pending.description !== attrs.description) changes.push(['description', pending.description]);
     if (pending.snapshot !== undefined && pending.snapshot !== attrs.snapshotRef) changes.push(['snapshotRef', pending.snapshot]);
@@ -485,6 +785,47 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
     for (const [name, value] of changes) tr = tr.setNodeAttribute(pos, name, value);
     // Exploring a figure is not editing the note: it never enters the undo history.
     view.dispatch(tr.setMeta('addToHistory', false).setMeta(FIGURE_TRANSACTION, 'persist'));
+    if (pending.values || pending.step !== undefined || pending.formulas) void this.refreshPrint();
+  }
+
+  /**
+   * Keeps a still of the live drawing for printing (6.10): the figure's own
+   * vector export, made when it first draws and again when the learner's
+   * changes settle, so a printed note shows the figure as they left it.
+   */
+  private async refreshPrint(attempt = 0): Promise<void> {
+    const handle = this.handle;
+    if (!handle || this.state !== 'live') return;
+    const generation = this.generation;
+    const url = await handle.exportSvg().catch(() => null);
+    if (generation !== this.generation || this.state !== 'live') return;
+    if (!url) {
+      // A frame that has not drawn yet has no picture to give: ask again shortly, a few times.
+      if (attempt < 3) setTimeout(() => void this.refreshPrint(attempt + 1), 400 * (attempt + 1));
+      return;
+    }
+    if (!this.printImage) {
+      const image = this.dom.ownerDocument.createElement('img');
+      image.className = 'incantly-figure__print';
+      // The description under the figure is its text alternative; the still repeats the drawing only.
+      image.alt = '';
+      image.style.display = 'none';
+      this.frame.append(image);
+      this.printImage = image;
+    }
+    this.printImage.src = url;
+    if (this.printing > 0) this.print(true);
+  }
+
+  /** While the page prints, the still stands in for the live frame, which may not print whole. */
+  print(on: boolean): void {
+    this.printing = on ? 1 : 0;
+    const live = this.frame.querySelector<HTMLElement>('.incantly-figure__live');
+    const still = this.printImage;
+    if (!live || !still || !still.src) return;
+    live.style.display = on ? 'none' : '';
+    still.style.display = on ? 'block' : 'none';
+    still.style.width = on ? '100%' : '';
   }
 
   // -------------------------------------------------------------------------
@@ -496,6 +837,37 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
     if (this.caption.textContent !== description) this.caption.textContent = description;
     const label = `Interactive figure${this.attrs.concept ? `: ${this.attrs.concept}` : ''}. Press Enter to use it.`;
     if (this.dom.getAttribute('aria-label') !== label) this.dom.setAttribute('aria-label', label);
+  }
+
+  /** The list of earlier versions, each with a button that brings it back. */
+  private renderVersions(): void {
+    const versions = this.attrs.versions;
+    this.history.hidden = versions.length === 0;
+    const doc = this.history.ownerDocument;
+    const summary = doc.createElement('summary');
+    summary.textContent = `Earlier versions (${versions.length})`;
+    const list = doc.createElement('ol');
+    versions.forEach((version, index) => {
+      const item = doc.createElement('li');
+      const label = doc.createElement('span');
+      const when = doc.createElement('time');
+      when.dateTime = version.replacedAt;
+      when.textContent = new Date(version.replacedAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+      label.append(doc.createTextNode(`${REASON_TEXT[version.reason]}, `), when);
+      const button = doc.createElement('button');
+      button.type = 'button';
+      button.className = 'incantly-figure__restore';
+      button.textContent = 'Go back to this version';
+      button.setAttribute('aria-label', `Go back to the version from ${when.textContent}${version.description ? `: ${version.description}` : ''}`);
+      button.addEventListener('click', () => {
+        void this.restore(index);
+      });
+      item.append(label, doc.createTextNode(' '), button);
+      list.append(item);
+    });
+    const open = this.history.open;
+    this.history.replaceChildren(summary, list);
+    this.history.open = open && versions.length > 0;
   }
 
   private renderPlaceholder(): void {
@@ -578,6 +950,13 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
     });
   }
 
+  /** Shows what a change to the figure is doing until it ends; null when it has. */
+  working(text: string | null): void {
+    this.busy = text;
+    if (text !== null) this.clearNotice();
+    this.renderStatus();
+  }
+
   /** Shows one quiet line under the figure for a while, such as that it is a standard version. */
   notify(message: string, ms = 10_000): void {
     if (this.noticeTimer !== null) clearTimeout(this.noticeTimer);
@@ -594,10 +973,28 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
     this.renderStatus();
   }
 
-  /** The line under the figure: why it failed, or a passing notice. */
+  /** The line under the figure: why it failed, that it is being fixed, the way back to the working version, or a passing notice. */
   private renderStatus(): void {
-    const text = this.state === 'failed' ? 'This figure could not be shown. Its description is below.' : (this.notice ?? '');
-    if (this.status.textContent !== text) this.status.textContent = text;
+    if (this.state !== 'failed' && this.mending === 'failed') {
+      if (!this.status.querySelector('button')) {
+        const doc = this.status.ownerDocument;
+        const reset = doc.createElement('button');
+        reset.type = 'button';
+        reset.className = 'incantly-figure__reset';
+        reset.textContent = 'Reset to the working version';
+        reset.addEventListener('click', () => this.resetToWorking());
+        this.status.replaceChildren(doc.createTextNode('This figure hit a problem. '), reset);
+      }
+      this.status.hidden = false;
+      return;
+    }
+    const text =
+      this.state === 'failed'
+        ? 'This figure could not be shown. Its description is below.'
+        : this.mending === 'repairing'
+          ? 'This figure hit a problem and is being fixed.'
+          : (this.busy ?? this.notice ?? '');
+    if (this.status.textContent !== text || this.status.querySelector('button')) this.status.textContent = text;
     this.status.hidden = text === '';
   }
 
@@ -606,6 +1003,36 @@ export class FigureNodeView implements NodeView, ScheduledFigure {
     return this.failure;
   }
 }
+
+/** Live figures by window, so one pair of print listeners serves every figure on the page. */
+const printWatch = new WeakMap<Window, Set<FigureNodeView>>();
+
+function watchPrinting(view: FigureNodeView): void {
+  const win = view.dom.ownerDocument.defaultView;
+  if (!win) return;
+  let views = printWatch.get(win);
+  if (!views) {
+    const set = new Set<FigureNodeView>();
+    views = set;
+    printWatch.set(win, set);
+    // Before the page lays out for printing, every live figure swaps its frame for its still; after, it swaps back.
+    win.addEventListener('beforeprint', () => set.forEach((v) => v.print(true)));
+    win.addEventListener('afterprint', () => set.forEach((v) => v.print(false)));
+  }
+  views.add(view);
+}
+
+function unwatchPrinting(view: FigureNodeView): void {
+  const win = view.dom.ownerDocument.defaultView;
+  if (win) printWatch.get(win)?.delete(view);
+}
+
+/** What replaced each earlier version, as the history says it. */
+const REASON_TEXT: Readonly<Record<VersionReason, string>> = {
+  changed: 'Before a change',
+  remade: 'Before it was made again',
+  restored: 'Before going back to an earlier version',
+};
 
 function sameError(a: ErrorView, b: ErrorView): boolean {
   return a.phase === b.phase && a.message === b.message && a.line === b.line && a.column === b.column;

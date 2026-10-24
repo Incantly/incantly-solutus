@@ -2,6 +2,7 @@
   "concept": "projectile motion",
   "idea": "A thrown ball keeps its horizontal speed while gravity changes its vertical speed, so its path is a parabola.",
   "kind": "motion",
+  "size": "quick",
   "capabilities": ["graph2d", "readout", "explain", "describe", "steps"],
   "parameters": [
     {
@@ -39,8 +40,8 @@
       { "name": "peak", "dependsOn": ["speed", "angle", "gravity"] }
     ]
   },
-  "parts": ["Path", "Ball", "Horizontal velocity", "Vertical velocity", "Peak"],
-  "moves": "The ball flies along its path over and over; the arrows ride with it and the vertical one shrinks to zero at the peak.",
+  "parts": ["Path", "Ball", "Launch velocity", "Horizontal velocity", "Vertical velocity", "Peak"],
+  "moves": "The ball flies along its path over and over; the arrows ride with it and the vertical one shrinks to zero at the peak. Dragging the launch arrow aims the throw.",
   "steps": [
     "Horizontal velocity is constant",
     "Gravity changes the vertical velocity",

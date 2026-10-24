@@ -5,6 +5,7 @@ import {
   FUEL_FUNCTION,
   KEY_FUNCTION,
   LineIndex,
+  fixScene,
   formatDiagnostic,
   instrumentSceneJs,
   originalColumn,
@@ -24,6 +25,34 @@ function expectedPosition(fragments: Fragments, fragment: 'html' | 'css' | 'js',
 }
 
 const errors = (diagnostics: readonly Diagnostic[]) => diagnostics.filter((d) => d.severity === 'error');
+
+describe('validator: messages that name the fix', () => {
+  it('points set on a 3D label at text, its words', () => {
+    // Once a seasons scene called set on a 3D label and was asked whether it meant at.
+    const js = [
+      "const space = inc.space3d('#stage', { title: 'Orbit' });",
+      "const label = space.label([0, 0, 0], 'a');",
+      "label.set('b');",
+    ].join('\n');
+    const result = validateScene(scene({ js }));
+    expect(errors(result.diagnostics).map((d) => d.message)).toContain('Label3D handles have no method "set"; did you mean text?');
+  });
+
+  it('points a helper used without inc. at the SDK one', () => {
+    // Once a lens scene called sym(...) and was asked whether it meant its own constant S.
+    const result = validateScene(scene({ js: `${BASE_JS}\nconst S = 2;\nconst label = sym('x^2');` }));
+    expect(errors(result.diagnostics).map((d) => d.message)).toContain('"sym" is not defined; did you mean inc.sym?');
+  });
+
+  it('names the cap for a loop to a count that can change, and the loop for Array.from', () => {
+    // Once diffusion scenes looped to a particle count the controls change, and seasons scenes built orbits with Array.from.
+    const loop = validateScene(scene({ js: `${BASE_JS}\nlet n = 0;\ninc.onFrame(() => {\n  n = 40;\n  for (let i = 0; i < n; i++) dot.at(i, 0);\n});` }));
+    expect(errors(loop.diagnostics).map((d) => d.message)).toContain("n can change, so the loop has no visible bound: loop to Math.min(n, 5000), a const number or an array's length");
+    const array = validateScene(scene({ js: `${BASE_JS}\nconst points = Array.from({ length: 73 }, (_, i) => [i, 0]);` }));
+    const global = errors(array.diagnostics).find((d) => d.rule === 'forbidden-global');
+    expect(global?.message).toContain('Array is not part of the scene subset; build a list with a for loop and a visible bound');
+  });
+});
 
 describe('validator: every forbidden construct is rejected where it is written', () => {
   it.each(VALIDATOR_CASES.map((c) => [c.name, c] as const))('%s', (_name, c) => {
@@ -79,6 +108,57 @@ describe('validator: JavaScript details', () => {
     const result = validateSceneJs(js);
     expect(result.diagnostics.map((d) => `${d.rule}:${d.line}`)).toEqual(['unknown-method:4']);
     expect(result.diagnostics[0]!.message).toContain('Path handles have no method "text"');
+  });
+
+  it('offers a certain fix where there is one, and fixScene applies it with no model call', () => {
+    const js = (body: string) =>
+      [
+        "const n = inc.param('n', { min: 1, max: 20, value: 5 });",
+        "const stage = inc.svg('#stage', { viewBox: [0, 0, 100, 100], title: 'S' });",
+        'const dot = stage.circle(10, 10, 2);',
+        'let count = 3;',
+        body,
+        "inc.onFrame(() => { count = n.value; dot.at(count, 10); });",
+      ].join('\n');
+    const html = '<div id="stage"></div>';
+    // A loop the controls can lengthen is capped at the limit; a void that only marks a name used is dropped.
+    const broken = { html, css: '', js: js('for (let i = 0; i < count; i++) { dot.at(i, 10); }\nvoid dot;') };
+    const before = validateScene(broken);
+    expect(before.ok).toBe(false);
+    expect(before.diagnostics.filter((d) => d.fix).map((d) => d.rule)).toEqual(['unbounded-loop', 'forbidden-syntax']);
+    const fixed = fixScene(broken);
+    expect(fixed.validation.ok).toBe(true);
+    expect(fixed.fragments.js).toContain('for (let i = 0; i < Math.min(count, 5000); i++)');
+    expect(fixed.fragments.js).not.toContain('void');
+    expect(fixed.applied).toEqual(['dropped void dot', 'capped a loop at Math.min(count, 5000)']);
+    // A loop counting down has no certain fix; neither has anything else; a valid scene is left alone.
+    const down = { html, css: '', js: js('for (let i = 100; i > count; i--) { dot.at(i, 10); }') };
+    expect(fixScene(down).applied).toEqual([]);
+    expect(fixScene(down).validation.ok).toBe(false);
+    const fine = { html, css: '', js: js('') };
+    expect(fixScene(fine).fragments).toBe(fine);
+  });
+
+  it('checks the names a helper takes its arguments by, before the scene runs', () => {
+    const errors = (js: string) => validateSceneJs(js).diagnostics.filter((d) => d.severity === 'error').map((d) => `${d.rule}:${d.line}`);
+    const stage = "const stage = inc.svg('#stage', { fit: true, title: 'S' });\nconst g = stage.group();";
+    expect(errors(`${stage}\nconst a = inc.path.arrow({ from: [0, 0], to: [10, 0] }, 8);\nconst b = inc.shapes.gear({ center: [50, 50], radius: 20, teeth: 12, toothDepth: 3 });\ng.at(5, 5).rotate(30, { about: [5, 5] });`)).toEqual([]);
+    // An arrow with both a tip and an offset, or neither; a gear with a misspelt name; a pivot by another name.
+    expect(errors(`${stage}\nconst a = inc.path.arrow({ from: [0, 0], to: [1, 0], by: [1, 0] });`)).toEqual(['invalid-argument:3']);
+    expect(errors(`${stage}\nconst a = inc.path.arrow({ from: [0, 0] });`)).toEqual(['invalid-argument:3']);
+    expect(errors(`${stage}\nconst b = inc.shapes.gear({ center: [5, 5], radius: 4, depth: 3 });`)).toEqual(['unknown-property:3']);
+    expect(errors(`${stage}\ng.rotate(30, { pivot: [5, 5] });`)).toEqual(['unknown-property:3', 'invalid-argument:3']);
+    // The names a model reaches for first mean the same: a pivot { x, y }, a gear's cx, cy and r; half of one is not enough.
+    expect(errors(`${stage}\ng.rotate(30, { x: 5, y: 5 });\ng.rotate(30, { cx: 5, cy: 5 });\nconst c = inc.shapes.gear({ cx: 5, cy: 5, r: 4 });`)).toEqual([]);
+    expect(errors(`${stage}\ng.rotate(30, { x: 5 });`)).toEqual(['invalid-argument:3']);
+    expect(errors(`${stage}\nconst c = inc.shapes.gear({ center: [5, 5], cx: 5, cy: 5, r: 4 });`)).toEqual(['invalid-argument:3']);
+    // Saved figures that call them by position still validate.
+    expect(errors(`${stage}\nconst a = inc.path.arrow(0, 0, 10, 0);\ng.rotate(30, 1, 2);`)).toEqual([]);
+  });
+
+  it('lets a number be written with any of the number formatters', () => {
+    const js = ['const x = 0.000123;', 'const a = x.toFixed(2);', 'const b = x.toPrecision(3);', 'const c = x.toExponential(1);', 'const d = `${a} ${b} ${c}`.trim();'].join('\n');
+    expect(validateSceneJs(js).diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
   });
 
   it('suggests the closest name for typos', () => {

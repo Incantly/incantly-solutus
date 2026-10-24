@@ -36,7 +36,7 @@ async function tabThrough(page: Page, presses: number) {
 test.describe('teaching and accessibility (Phase 2 gate)', () => {
   test('reaches every control, part and step with the keyboard, always with visible focus', async ({ page }) => {
     await openScene(page, 'scene=sine-wave&autoplay=0');
-    const seen = await tabThrough(page, 20);
+    const seen = await tabThrough(page, 32);
     const names = seen.map((s) => s.name);
     for (const expected of [
       'The wave: Its shape repeats every period.',

@@ -1,6 +1,6 @@
 import type { Diagnostic, ProbeFailure, ProbeReport, ScenePlan } from '@incantly/core';
 import { formatDiagnostic } from '@incantly/core';
-import { BUILD_FORMAT, CORE_RULES, catalogLines, contractFor, coreBlock, type Prompt } from './context';
+import { CORE_RULES, catalogLines, contractFor, coreBlock, type Prompt } from './context';
 import type { FragmentName, FragmentSet } from './fragments';
 
 /**
@@ -118,7 +118,13 @@ export function parseReport(problems: readonly string[], missing: readonly Fragm
   const lines = [header(attempt, of), '', 'FAILURE  reply'];
   for (const problem of problems) lines.push(`ERROR    ${problem}`);
   if (missing.length > 0) lines.push(`ERROR    Missing fragment${missing.length === 1 ? '' : 's'}: ${missing.join(', ')}`);
-  lines.push('LIKELY   the reply was cut off or did not use one fenced block per fragment');
+  // Edits that failed among others that applied: the fragment shown is as those left it, so only the failed ones need sending.
+  const edits = problems.length > 0 && missing.length === 0 && problems.every((p) => p.startsWith('Edit failed:'));
+  lines.push(
+    edits
+      ? 'LIKELY   the other edits were applied, and the fragment below is as they left it: send only the edits that failed, each SEARCH copied exactly from it'
+      : 'LIKELY   the reply was cut off or did not use one fenced block per fragment',
+  );
   return {
     kind: 'parse',
     check: 'reply',
@@ -132,17 +138,24 @@ export function parseReport(problems: readonly string[], missing: readonly Fragm
 // Static validation
 // ---------------------------------------------------------------------------
 
-/** At most this many validator errors are quoted; the first ones usually explain the rest. */
+/**
+ * At most this many validator errors are quoted, one of each kind first: a
+ * repair that never saw a kind of error leaves it in place, and a second
+ * failure ends the generation.
+ */
 const MAX_DIAGNOSTICS = 5;
 
 export function validationReport(diagnostics: readonly Diagnostic[], fragments: FragmentSet, attempt = 1, of = 1): RepairReport {
   const errors = diagnostics.filter((d) => d.severity === 'error');
-  const quoted = errors.slice(0, MAX_DIAGNOSTICS);
+  const firsts = errors.filter((d, i) => errors.findIndex((e) => e.rule === d.rule) === i);
+  const chosen = new Set([...new Set([...firsts, ...errors])].slice(0, MAX_DIAGNOSTICS));
+  const quoted = errors.filter((d) => chosen.has(d));
+  const rest = errors.filter((d) => !chosen.has(d));
   const lines = [header(attempt, of), '', 'FAILURE  validation: the scene was rejected before it ran'];
   for (const diagnostic of quoted) {
     lines.push('', `ERROR    ${formatDiagnostic(diagnostic)}`, ...where(diagnostic.fragment, diagnostic.line, diagnostic.column, fragments));
   }
-  if (errors.length > quoted.length) lines.push('', `         ...and ${errors.length - quoted.length} more of the same kinds.`);
+  if (rest.length > 0) lines.push('', `         ...and ${rest.length} more: ${rest.map((d) => `${d.rule} at ${d.fragment} line ${d.line}`).join('; ')}.`);
   const rules = quoted.map(ruleFor);
   lines.push('', quoteRules(rules));
   const first = quoted[0];
@@ -183,6 +196,8 @@ export function likelyCause(failure: ProbeFailure): string | null {
   if (/reading '[^']*'/.test(message) || /of undefined|of null/.test(message)) {
     return 'an index or key is out of range at this parameter state; check lengths and bounds before reading';
   }
+  const namespace = /\binc\.(state|calc|vec|units|motion|shapes|path|geom) is not a function/.exec(message);
+  if (namespace) return `inc.${namespace[1]} is an object of helpers, not a function: call one of its methods from the contract`;
   if (/is not a function/.test(message)) return 'a value is not what the code assumes; check the contract for that method';
   if (/is not available in scenes|Only numbers and strings/.test(message)) return 'a computed property name is not allowed; use a plain name or a number';
   switch (failure.check) {
@@ -193,17 +208,23 @@ export function likelyCause(failure: ProbeFailure): string | null {
     case 'singular':
       return 'the model is undefined at the plan’s singular point; handle that state explicitly';
     case 'paused-change':
-      return 'the drawing changes only when time advances; draw from the model in inc.onFrame and use dt only to advance state';
-    case 'bounds':
-      return /Nothing is drawn/.test(failure.message)
-        ? 'the coordinates do not match the stage: check the viewBox or the graph x and y ranges'
-        : 'some coordinates leave the stage; scale them to the viewBox or the graph ranges';
+      return 'the drawing changes only when time advances: draw from the model in inc.onFrame and use dt only to advance state. If this parameter rightly changes nothing in the motion, still show it: label or size what it describes';
+    case 'bounds': {
+      if (/Nothing is drawn/.test(failure.message)) return 'the coordinates do not match the stage: check the viewBox or the graph x and y ranges';
+      // Text and points are sized like pixels: in a viewBox a few units wide they cover the whole stage.
+      const box = /viewBox \[(-?[\d.]+), (-?[\d.]+), (-?[\d.]+), (-?[\d.]+)\]/.exec(failure.message);
+      const width = box ? Number(box[3]) : Number.NaN;
+      if (width < 60) {
+        return `stage units work like pixels: text is 12 units tall, so in a viewBox only ${width} wide it covers the stage. Use a viewBox a few hundred units wide, such as [0, 0, 520, 390], and scale the model's metres to it`;
+      }
+      return 'some coordinates leave the stage; scale them to the viewBox or the graph ranges';
+    }
     case 'budget':
-      return 'too many elements: draw a curve as one path, and create elements once';
+      return 'too many elements: draw many small dots (particles, samples) with stage.dots, a curve as one path, and create elements once';
     case 'frame-cost':
       return 'too much work per frame: build shapes once and only move them';
     case 'parts':
-      return 'register each planned part with stage.part, using exactly the plan’s name';
+      return 'register each planned part with stage.part (or a kit’s part), using exactly the plan’s name, on an element drawn in the figure; a readout or formula is not a part, so draw a text label for it and register that';
     case 'steps':
       return 'inc.steps needs one step for each planned step';
     case 'idea':
@@ -253,7 +274,15 @@ export function probeReport(report: ProbeReport, fragments: FragmentSet, plan: S
 // The repair call
 // ---------------------------------------------------------------------------
 
-export const REPAIR_FORMAT = `REPAIR format. Fix the reported failure. Reply with only the fragments you change, each in its own fenced block (\`\`\`html, \`\`\`css or \`\`\`js), complete, and nothing else. Keep everything that already works.`;
+export const REPAIR_FORMAT = `REPAIR format. Fix the reported failure and keep everything that already works. Reply with edits only, one block per fragment you change, and nothing else:
+\`\`\`edit js
+<<<<<<< SEARCH
+a few whole lines copied exactly from the fragment
+=======
+what replaces them
+>>>>>>> REPLACE
+\`\`\`
+A block may hold several SEARCH/REPLACE pairs, applied in order; each SEARCH must match one place. If a fragment needs rewriting, reply with it whole in its usual \`\`\`js (or html, css) block instead.`;
 
 /**
  * The repair call (RP-5): only the report, the fragments as they stand, the
@@ -264,7 +293,6 @@ export function repairPrompt(report: RepairReport, fragments: FragmentSet, plan:
   const unknownName = /^unknown-(sdk-call|method|property)$/.test(report.check);
   const reference = [
     REPAIR_FORMAT,
-    BUILD_FORMAT.replace('exactly three fenced blocks', 'the fenced blocks you change'),
     'Capabilities this scene uses:',
     catalogLines(plan.capabilities),
     ...(unknownName ? ['CONTRACT', '```ts', contractFor(plan.capabilities), '```'] : []),

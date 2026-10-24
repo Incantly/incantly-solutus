@@ -6,6 +6,24 @@
  * clauses make the TypeScript compiler fail if this file and `types.ts` drift.
  */
 import type {
+  Arrow3D,
+  Atom,
+  Biology,
+  Body2D,
+  Bond,
+  Calculus,
+  Cell,
+  Chart,
+  ChartSeries,
+  Chemistry,
+  Choice,
+  ColorParam,
+  Dots,
+  Dots3D,
+  Fluid,
+  Flow,
+  FlowEdge,
+  FlowNode,
   Formula,
   GeometryHelpers,
   Graph,
@@ -13,19 +31,44 @@ import type {
   GraphCurve,
   GraphPoint,
   GraphSegment,
+  GraphMark,
   GraphTrail,
+  Graph3D,
+  Group3D,
+  Model3D,
   Handle,
+  Helix,
   Inc,
+  Joint2D,
+  Label3D,
   Line,
+  Line3D,
+  Membrane,
+  Molecule,
+  MotionHelpers,
+  Object3D,
   Param,
   PathHandle,
   PathHelpers,
   Point,
   PolylineHandle,
+  Profile,
+  Reaction,
   Segment,
+  ShapeHelpers,
+  Shells,
+  Space3D,
   Stage,
+  State,
+  Stream,
+  Surface3D,
+  Tank2D,
   TextHandle,
+  Toggle,
   Tone,
+  Units,
+  VectorHelpers,
+  World2D,
 } from './types';
 
 export const SDK_VERSION = '0.1.0';
@@ -35,6 +78,11 @@ export const SCENE_SCHEMA_VERSION = 1;
 
 export type HandleKind =
   | 'Param'
+  | 'Toggle'
+  | 'Choice'
+  | 'ColorParam'
+  | 'Dots'
+  | 'Fluid'
   | 'Model'
   | 'Stage'
   | 'Element'
@@ -47,10 +95,42 @@ export type HandleKind =
   | 'GraphSegment'
   | 'GraphArrow'
   | 'GraphTrail'
+  | 'GraphMark'
   | 'Formula'
   | 'Point'
   | 'Line'
-  | 'Segment';
+  | 'Segment'
+  | 'Space3D'
+  | 'Graph3D'
+  | 'Object3D'
+  | 'Group3D'
+  | 'Model3D'
+  | 'Line3D'
+  | 'Arrow3D'
+  | 'Dots3D'
+  | 'Label3D'
+  | 'Surface3D'
+  | 'World2D'
+  | 'Body2D'
+  | 'Joint2D'
+  | 'Tank2D'
+  | 'Chart'
+  | 'ChartSeries'
+  | 'Flow'
+  | 'FlowNode'
+  | 'FlowEdge'
+  | 'Chemistry'
+  | 'Atom'
+  | 'Bond'
+  | 'Molecule'
+  | 'Shells'
+  | 'Reaction'
+  | 'Profile'
+  | 'Biology'
+  | 'Cell'
+  | 'Membrane'
+  | 'Helix'
+  | 'Stream';
 
 /**
  * What a member returns: another handle kind, `self` for chainable methods,
@@ -70,6 +150,17 @@ export interface HandleSpec {
 type Methods<T> = { [K in keyof T as T[K] extends (...args: never[]) => unknown ? K : never]: Returns };
 type Properties<T> = { [K in keyof T as T[K] extends (...args: never[]) => unknown ? never : K]: Returns };
 
+const object3dMethods = {
+  at: 'self',
+  rotate: 'self',
+  orient: 'self',
+  scale: 'self',
+  tone: 'self',
+  show: 'self',
+  hide: 'self',
+  screen: null,
+} as const satisfies Methods<Object3D>;
+
 const elementMethods = {
   set: 'self',
   at: 'self',
@@ -79,27 +170,60 @@ const elementMethods = {
   hide: 'self',
   tone: 'self',
   dashed: 'self',
+  flow: 'self',
+  glow: 'self',
 } as const satisfies Methods<Handle>;
 
 export const INC_FUNCTIONS = {
   param: 'Param',
+  toggle: 'Toggle',
+  choice: 'Choice',
+  color: 'ColorParam',
+  button: null,
+  presets: null,
+  link: null,
   model: 'Model',
   onFrame: null,
+  simulate: null,
+  timeline: null,
+  onReset: null,
+  onParamChange: null,
+  onStep: null,
   readout: null,
+  table: null,
   idea: null,
+  layout: null,
   steps: null,
   explain: null,
   describe: null,
+  predict: null,
+  compare: null,
   svg: 'Stage',
   graph2d: 'Graph',
+  space3d: 'Space3D',
+  graph3d: 'Graph3D',
+  physics2d: 'World2D',
+  chart: 'Chart',
+  flow: 'Flow',
+  chemistry: 'Chemistry',
+  biology: 'Biology',
   formula: 'Formula',
   random: null,
   tween: null,
+  idle: null,
+  sym: null,
+  chem: null,
 } as const satisfies Methods<Inc>;
 
 export const INC_NAMESPACES = {
+  state: {
+    get: null,
+    set: null,
+    on: null,
+  } satisfies Methods<State>,
   path: {
     line: null,
+    polyline: null,
     curve: null,
     param: null,
     arc: null,
@@ -114,13 +238,89 @@ export const INC_NAMESPACES = {
     clipRay: 'Segment',
     clipLine: 'Segment',
   } satisfies Methods<GeometryHelpers>,
-} as const satisfies Record<'path' | 'geom', Record<string, Returns>>;
+  calc: {
+    derivative: null,
+    integral: null,
+    root: null,
+    roots: null,
+    extrema: null,
+    interp: null,
+    euler: null,
+    rk4: null,
+    normal: null,
+    normalCdf: null,
+    clamp: null,
+    lerp: null,
+    map: null,
+    noise: null,
+  } satisfies Methods<Calculus>,
+  vec: {
+    add: null,
+    sub: null,
+    scale: null,
+    dot: null,
+    cross: null,
+    length: null,
+    normalize: null,
+    rotate: null,
+    angle: null,
+    lerp: null,
+    rotA: null,
+    mul: null,
+    apply: null,
+  } satisfies Methods<VectorHelpers>,
+  units: {
+    format: null,
+    convert: null,
+  } satisfies Methods<Units>,
+  motion: {
+    follow: null,
+    spring: null,
+    tour: null,
+    ease: null,
+    wave: null,
+  } satisfies Methods<MotionHelpers>,
+  shapes: {
+    spring: null,
+    zigzag: null,
+    resistor: null,
+    coil: null,
+    wave: null,
+    gear: null,
+    hull: null,
+    lens: null,
+    battery: null,
+    capacitor: null,
+    ground: null,
+    bulb: null,
+    switch: null,
+    tank: null,
+    brace: null,
+    blob: null,
+    polygon: null,
+    regular: null,
+  } satisfies Methods<ShapeHelpers>,
+} as const satisfies Record<'state' | 'path' | 'geom' | 'calc' | 'vec' | 'units' | 'motion' | 'shapes', Record<string, Returns>>;
 
 export const HANDLES: Readonly<Record<HandleKind, HandleSpec>> = {
   Param: {
     methods: {},
     properties: { name: null, value: null, min: null, max: null } satisfies Properties<Param>,
   },
+  Toggle: {
+    methods: {},
+    properties: { name: null, value: null, min: null, max: null, on: null } satisfies Properties<Toggle>,
+  },
+  Choice: {
+    methods: {},
+    properties: { name: null, value: null, min: null, max: null, selected: null } satisfies Properties<Choice>,
+  },
+  ColorParam: {
+    methods: {},
+    properties: { name: null, value: null, min: null, max: null, tone: null } satisfies Properties<ColorParam>,
+  },
+  Dots: { methods: { set: 'self', tone: 'self' } satisfies Methods<Dots>, properties: {} },
+  Fluid: { methods: { tone: 'self', show: 'self', hide: 'self', reset: 'self' } satisfies Methods<Fluid>, properties: {} },
   Model: { methods: {}, properties: {}, open: true },
   Stage: {
     methods: {
@@ -130,60 +330,253 @@ export const HANDLES: Readonly<Record<HandleKind, HandleSpec>> = {
       circle: 'Element',
       rect: 'Element',
       text: 'Text',
+      equation: 'Text',
       polyline: 'Polyline',
       part: 'argument',
+      drag: 'argument',
+      connector: 'Path',
+      callout: 'Text',
+      repeat: null,
+      dots: 'Dots',
+      fluid: 'Fluid',
     } satisfies Methods<Stage>,
     properties: { viewBox: null } satisfies Properties<Stage>,
   },
-  Element: { methods: elementMethods, properties: {} },
-  Path: { methods: { ...elementMethods, d: 'self' } satisfies Methods<PathHandle>, properties: {} },
-  Text: { methods: { ...elementMethods, text: 'self' } satisfies Methods<TextHandle>, properties: {} },
+  Element: { methods: elementMethods, properties: { handle: 'Element' } },
+  Path: { methods: { ...elementMethods, d: 'self' } satisfies Methods<PathHandle>, properties: { handle: 'Path' } },
+  Text: { methods: { ...elementMethods, text: 'self' } satisfies Methods<TextHandle>, properties: { handle: 'Text' } },
   Polyline: {
     methods: { ...elementMethods, points: 'self' } satisfies Methods<PolylineHandle>,
-    properties: {},
+    properties: { handle: 'Polyline' },
   },
   Graph: {
     methods: {
       toX: null,
       toY: null,
       plot: 'Curve',
+      plotX: 'Curve',
+      polar: 'Curve',
       parametric: 'Curve',
+      scatter: 'Curve',
+      bars: 'Curve',
+      histogram: 'Curve',
+      area: 'Curve',
+      between: 'Curve',
+      field: 'Curve',
+      slopes: 'Curve',
+      implicit: 'Curve',
       point: 'GraphPoint',
       segment: 'GraphSegment',
       arrow: 'GraphArrow',
       trail: 'GraphTrail',
       label: 'Text',
+      equation: 'Text',
+      bracket: 'GraphMark',
+      dimension: 'GraphMark',
+      trace: 'GraphPoint',
+      handle: 'GraphPoint',
+      drag: null,
+      part: 'argument',
+      marks: null,
+      crossings: null,
     } satisfies Methods<Graph>,
     properties: { stage: 'Stage' } satisfies Properties<Graph>,
   },
   Curve: {
-    methods: { show: 'self', tone: 'self' } satisfies Methods<GraphCurve>,
+    methods: { show: 'self', hide: 'self', tone: 'self', reveal: 'self' } satisfies Methods<GraphCurve>,
     properties: { handle: 'Path' } satisfies Properties<GraphCurve>,
   },
   GraphPoint: {
-    methods: { at: 'self', show: 'self', tone: 'self' } satisfies Methods<GraphPoint>,
+    methods: { at: 'self', show: 'self', hide: 'self', tone: 'self' } satisfies Methods<GraphPoint>,
     properties: { handle: 'Element' } satisfies Properties<GraphPoint>,
   },
   GraphSegment: {
-    methods: { between: 'self', show: 'self', tone: 'self' } satisfies Methods<GraphSegment>,
+    methods: { between: 'self', show: 'self', hide: 'self', tone: 'self' } satisfies Methods<GraphSegment>,
     properties: { handle: 'Element' } satisfies Properties<GraphSegment>,
   },
   GraphArrow: {
-    methods: { from: 'self', show: 'self', tone: 'self' } satisfies Methods<GraphArrow>,
+    methods: { from: 'self', show: 'self', hide: 'self', tone: 'self' } satisfies Methods<GraphArrow>,
     properties: { handle: 'Path' } satisfies Properties<GraphArrow>,
   },
   GraphTrail: {
     methods: { add: 'self', clear: 'self' } satisfies Methods<GraphTrail>,
     properties: { handle: 'Polyline' } satisfies Properties<GraphTrail>,
   },
+  GraphMark: {
+    methods: { between: 'self', text: 'self', show: 'self', hide: 'self', tone: 'self' } satisfies Methods<GraphMark>,
+    properties: { handle: 'Path' } satisfies Properties<GraphMark>,
+  },
   Formula: {
     methods: { evaluate: null } satisfies Methods<Formula>,
-    properties: { source: null, variables: null } satisfies Properties<Formula>,
+    properties: { source: null, variables: null, input: null } satisfies Properties<Formula>,
     callable: true,
   },
   Point: { methods: {}, properties: { x: null, y: null } satisfies Properties<Point> },
   Line: { methods: {}, properties: { a: 'Point', b: 'Point' } satisfies Properties<Line> },
   Segment: { methods: {}, properties: { from: 'Point', to: 'Point' } satisfies Properties<Segment> },
+  Space3D: {
+    methods: {
+      box: 'Object3D',
+      sphere: 'Object3D',
+      cylinder: 'Object3D',
+      cone: 'Object3D',
+      plane: 'Object3D',
+      torus: 'Object3D',
+      tube: 'Object3D',
+      mesh: 'Object3D',
+      lathe: 'Object3D',
+      model: 'Model3D',
+      group: 'Group3D',
+      line: 'Line3D',
+      arrow: 'Arrow3D',
+      coil: 'Line3D',
+      arc: 'Line3D',
+      point: 'Object3D',
+      dots: 'Dots3D',
+      label: 'Label3D',
+      grid: 'Object3D',
+      axes: 'Group3D',
+      fieldLines: 'Group3D',
+      part: 'argument',
+      drag: 'argument',
+      pick: null,
+      camera: null,
+      view: null,
+      project: null,
+    } satisfies Methods<Space3D>,
+    properties: { stage: 'Stage' } satisfies Properties<Space3D>,
+  },
+  Graph3D: {
+    methods: {
+      surface: 'Surface3D',
+      parametric: 'Surface3D',
+      curve: 'Line3D',
+      point: 'Object3D',
+      vector: 'Arrow3D',
+      line: 'Line3D',
+      plane: 'Surface3D',
+      label: 'Label3D',
+      part: 'argument',
+      camera: null,
+      view: null,
+      project: null,
+    } satisfies Methods<Graph3D>,
+    properties: { stage: 'Stage' } satisfies Properties<Graph3D>,
+  },
+  Object3D: { methods: object3dMethods, properties: {} },
+  Group3D: { methods: { ...object3dMethods, explode: 'self' } satisfies Methods<Group3D>, properties: {} },
+  Model3D: { methods: { ...object3dMethods, explode: 'self', piece: 'Object3D' } satisfies Methods<Model3D>, properties: { pieces: null } satisfies Properties<Model3D> },
+  Line3D: { methods: { ...object3dMethods, points: 'self' } satisfies Methods<Line3D>, properties: {} },
+  Arrow3D: { methods: { ...object3dMethods, set: 'self', label: 'self' } satisfies Methods<Arrow3D>, properties: {} },
+  Dots3D: { methods: { ...object3dMethods, set: 'self' } satisfies Methods<Dots3D>, properties: {} },
+  Label3D: {
+    methods: { at: 'self', text: 'self', tone: 'self', show: 'self', hide: 'self' } satisfies Methods<Label3D>,
+    properties: {},
+  },
+  Surface3D: { methods: { ...object3dMethods, section: 'Line3D' } satisfies Methods<Surface3D>, properties: {} },
+  World2D: {
+    methods: {
+      ball: 'Body2D',
+      box: 'Body2D',
+      polygon: 'Body2D',
+      ramp: 'Body2D',
+      spring: 'Joint2D',
+      rope: 'Joint2D',
+      rod: 'Joint2D',
+      hinge: 'Joint2D',
+      pulley: 'Joint2D',
+      tank: 'Tank2D',
+      field: null,
+      forces: null,
+      onHit: null,
+      onTouch: null,
+      energy: null,
+      restart: null,
+      toStage: null,
+      part: 'argument',
+    } satisfies Methods<World2D>,
+    properties: { time: null, stage: 'Stage' } satisfies Properties<World2D>,
+  },
+  Body2D: {
+    methods: { force: null, place: 'self', velocity: 'self', push: 'self', tone: 'self', show: 'self', hide: 'self' } satisfies Methods<Body2D>,
+    properties: { x: null, y: null, angle: null, vx: null, vy: null, speed: null, mass: null, handle: 'Element' } satisfies Properties<Body2D>,
+  },
+  Joint2D: {
+    methods: { setLength: 'self', show: 'self', hide: 'self' } satisfies Methods<Joint2D>,
+    properties: { tension: null, length: null, handle: 'Element' } satisfies Properties<Joint2D>,
+  },
+  Tank2D: {
+    methods: { buoyancy: null } satisfies Methods<Tank2D>,
+    properties: { level: null, displaced: null, handle: 'Path' } satisfies Properties<Tank2D>,
+  },
+  Chart: {
+    methods: { series: 'ChartSeries', points: 'ChartSeries', rule: 'Element', highlight: null, part: 'argument' } satisfies Methods<Chart>,
+    properties: { stage: 'Stage' } satisfies Properties<Chart>,
+  },
+  ChartSeries: {
+    methods: { set: 'self', tone: 'self', show: 'self', hide: 'self' } satisfies Methods<ChartSeries>,
+    properties: { name: null } satisfies Properties<ChartSeries>,
+  },
+  Flow: {
+    methods: { node: 'FlowNode', edge: 'FlowEdge', active: null, part: 'argument' } satisfies Methods<Flow>,
+    properties: { stage: 'Stage' } satisfies Properties<Flow>,
+  },
+  FlowNode: {
+    methods: { label: 'self', tone: 'self', centre: null } satisfies Methods<FlowNode>,
+    properties: { id: null } satisfies Properties<FlowNode>,
+  },
+  FlowEdge: {
+    methods: { label: 'self', tone: 'self', dashed: 'self', flow: 'self' } satisfies Methods<FlowEdge>,
+    properties: {},
+  },
+  Chemistry: {
+    methods: { atom: 'Atom', bond: 'Bond', molecule: 'Molecule', shells: 'Shells', reaction: 'Reaction', profile: 'Profile', part: 'argument' } satisfies Methods<Chemistry>,
+    properties: { stage: 'Stage' } satisfies Properties<Chemistry>,
+  },
+  Atom: {
+    methods: { at: 'self', charge: 'self', partial: 'self', tone: 'self', show: 'self', hide: 'self' } satisfies Methods<Atom>,
+    properties: { element: null, x: null, y: null, handle: 'Element' } satisfies Properties<Atom>,
+  },
+  Bond: {
+    methods: { order: 'self', strength: 'self', tone: 'self', show: 'self', hide: 'self' } satisfies Methods<Bond>,
+    properties: { a: 'Atom', b: 'Atom', handle: 'Element' } satisfies Properties<Bond>,
+  },
+  Molecule: {
+    methods: { at: 'self', rotate: 'self', show: 'self', hide: 'self' } satisfies Methods<Molecule>,
+    properties: { formula: null, atoms: null, bonds: null, x: null, y: null, angle: null, handle: 'Element' } satisfies Properties<Molecule>,
+  },
+  Shells: {
+    methods: { setElectrons: 'self', electron: null, at: 'self', show: 'self', hide: 'self' } satisfies Methods<Shells>,
+    properties: { element: null, protons: null, electrons: null, charge: null, handle: 'Element' } satisfies Properties<Shells>,
+  },
+  Reaction: {
+    methods: { progress: 'self' } satisfies Methods<Reaction>,
+    properties: { broken: null, formed: null, energy: null, atoms: null, handle: 'Element' } satisfies Properties<Reaction>,
+  },
+  Profile: {
+    methods: { set: 'self', marker: 'self', energy: null } satisfies Methods<Profile>,
+    properties: { activation: null, change: null, handle: 'Element' } satisfies Properties<Profile>,
+  },
+  Biology: {
+    methods: { cell: 'Cell', membrane: 'Membrane', helix: 'Helix', stream: 'Stream', part: 'argument' } satisfies Methods<Biology>,
+    properties: { stage: 'Stage' } satisfies Properties<Biology>,
+  },
+  Cell: {
+    methods: { organelle: 'Element', where: null, at: 'self', show: 'self', hide: 'self' } satisfies Methods<Cell>,
+    properties: { kind: null, organelles: null, handle: 'Element' } satisfies Properties<Cell>,
+  },
+  Membrane: {
+    methods: { set: 'self', reset: 'self' } satisfies Methods<Membrane>,
+    properties: { left: null, right: null, crossed: null, handle: 'Element' } satisfies Properties<Membrane>,
+  },
+  Helix: {
+    methods: { unzip: 'self', base: 'Element' } satisfies Methods<Helix>,
+    properties: { sequence: null, partner: null, handle: 'Element' } satisfies Properties<Helix>,
+  },
+  Stream: {
+    methods: { set: 'self', at: null } satisfies Methods<Stream>,
+    properties: { handle: 'Element' } satisfies Properties<Stream>,
+  },
 };
 
 /** Pure Math members a scene may use. Math.random is excluded: use inc.random. */
@@ -244,7 +637,7 @@ export const ALLOWED_NUMBER = [
 ] as const;
 
 /** Theme tones, the only way a scene picks a colour. */
-export const TONES = ['lo', 'mid', 'hi', 'lit', 'faint', 'a', 'b', 'c'] as const satisfies readonly Tone[];
+export const TONES = ['lo', 'mid', 'hi', 'lit', 'faint', 'a', 'b', 'c', 'water'] as const satisfies readonly Tone[];
 // Fails to compile if a tone is added to the type but not to the list.
 const _everyTone: Exclude<Tone, (typeof TONES)[number]> extends never ? true : false = true;
 

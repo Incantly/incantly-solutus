@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { defineConfig, loadEnv, type Plugin, type ViteDevServer } from 'vite';
 
@@ -6,7 +8,19 @@ import { defineConfig, loadEnv, type Plugin, type ViteDevServer } from 'vite';
  * The generation service, mounted in the dev server for the playground and its
  * browser tests: /api/v1 runs the reference model, and /api/fault/<fault>/v1
  * a reference model that injects that fault, or /api/fault/<fault>-stubborn/v1
- * one whose repairs change nothing. The interactive playground creates an
+ * one whose repairs change nothing. Dev only: /api/dev/token mints a token
+ * for a test learner, /api/dev/switch turns generation off and on,
+ * /api/dev/records lists the failure records, oldest first,
+ * /api/dev/reset?fault=<fault> starts that fault's service afresh, /api/dev/gallery/review
+ * accepts or turns down a published figure, as the gallery command does, and
+ * /api/dev/gallery/clear empties the gallery.
+ *
+ * /api/dev/figures keeps the figures the chat approved, by prompt, in a
+ * git-ignored file beside this config: GET lists them, POST keeps one, the
+ * latest for a prompt replacing the one before. The gallery draws a prompt
+ * card from it in any browser, and it survives a restart of this server.
+ *
+ * The interactive playground creates an
  * ephemeral Anthropic session at /api/dev/session. Its API key stays only in
  * this process's memory and is addressed from the browser by an opaque id.
  *
@@ -16,9 +30,43 @@ import { defineConfig, loadEnv, type Plugin, type ViteDevServer } from 'vite';
  * whether it works. Shell env vars win over .env files.
  */
 const DEV_SECRET = 'playground-only-secret-never-used-in-production';
+const FIGURES_FILE = fileURLToPath(new URL('./.generated/figures.json', import.meta.url));
+
+interface KeptFigure {
+  readonly prompt: string;
+  readonly concept: string;
+  readonly fragments: { readonly html: string; readonly css: string; readonly js: string };
+  readonly approvedAt: string;
+}
+
+async function keptFigures(): Promise<KeptFigure[]> {
+  try {
+    const figures = JSON.parse(await readFile(FIGURES_FILE, 'utf8')) as unknown;
+    return Array.isArray(figures) ? (figures as KeptFigure[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** A figure as the chat sends it, or null: strings only, and no bigger than a scene may be. */
+function readFigure(input: unknown): KeptFigure | null {
+  if (typeof input !== 'object' || input === null) return null;
+  const { prompt, concept, fragments } = input as { prompt?: unknown; concept?: unknown; fragments?: unknown };
+  if (typeof prompt !== 'string' || prompt.trim() === '' || prompt.length > 2000 || typeof concept !== 'string' || concept.length > 200) return null;
+  if (typeof fragments !== 'object' || fragments === null) return null;
+  const { html, css, js } = fragments as { html?: unknown; css?: unknown; js?: unknown };
+  if (typeof html !== 'string' || typeof css !== 'string' || typeof js !== 'string' || html.length + css.length + js.length > 200_000) return null;
+  return { prompt: prompt.trim(), concept, fragments: { html, css, js }, approvedAt: new Date().toISOString() };
+}
+const DEV_TICKET_SECRET = 'playground-only-ticket-secret-never-used-in-production';
 
 function anthropicEnv(): { key: string | null; source: string } {
-  const env = loadEnv('development', process.cwd(), 'ANTHROPIC_');
+  // .env files live beside this config; a dev server started from another
+  // directory must still find them. Shell env vars win over both files.
+  const env = {
+    ...loadEnv('development', process.cwd(), 'ANTHROPIC_'),
+    ...loadEnv('development', fileURLToPath(new URL('.', import.meta.url)), 'ANTHROPIC_'),
+  };
   const fromShell = process.env.ANTHROPIC_API_KEY ?? process.env.ANTHROPIC_AUTH_TOKEN;
   const key = fromShell ?? env.ANTHROPIC_API_KEY ?? env.ANTHROPIC_AUTH_TOKEN ?? null;
   return { key, source: fromShell ? 'shell' : key ? '.env' : 'none' };
@@ -45,6 +93,8 @@ type Generation = typeof import('@incantly/generation');
 
 function generationService(): Plugin {
   let enabled = true;
+  // One gallery for every service the dev server mounts, kept in memory.
+  let gallery: import('@incantly/generation').MemoryGalleryStore | null = null;
   const services = new Map<
     string,
     { handle(req: IncomingMessage, res: ServerResponse): Promise<void>; close(): Promise<void>; records: { records: unknown[] } }
@@ -52,12 +102,12 @@ function generationService(): Plugin {
   const sessions = new Map<string, { apiKey: string; planModel: string; sceneModel: string }>();
   const models = new Set(['claude-haiku-5-5', 'claude-sonnet-5-5', 'claude-opus-5-5']);
 
-  async function body(req: IncomingMessage): Promise<unknown> {
+  async function body(req: IncomingMessage, limit = 16_384): Promise<unknown> {
     const chunks: Buffer[] = [];
     let size = 0;
     for await (const chunk of req as AsyncIterable<Buffer>) {
       size += chunk.length;
-      if (size > 16_384) throw new Error('Request body is too large');
+      if (size > limit) throw new Error('Request body is too large');
       chunks.push(chunk);
     }
     return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown;
@@ -79,17 +129,22 @@ function generationService(): Plugin {
         })
       : g.referenceModel({ fault: name, stubborn, latencyMs: 250, chunk: 48 });
     const records = new g.MemoryRecords();
+    gallery ??= new g.MemoryGalleryStore();
     const service = new g.GenerationService({
       model,
       authenticate: g.hmacAuthenticator(DEV_SECRET),
       records,
       prefix,
       enabled: () => enabled,
-      // A real playground call includes planning plus a streamed scene, and a
-      // rich scene can stream for minutes. The model-side cap guards silence;
-      // the wall here has to be generous enough for a healthy stream.
-      generationTimeoutMs: session ? 300_000 : 45_000,
-      limits: { ...g.DEFAULT_LIMITS, perMinute: 60, perDay: 1000, concurrent: 6 },
+      // A real playground call plans (its own two-minute budget) and then
+      // streams a scene for up to five minutes, and a repair may join it.
+      // The model-side cap guards silence; the wall has room for all three.
+      generationTimeoutMs: session ? 420_000 : 45_000,
+      // A developer runs many figures a day on their own key: a learner's $1 a day would stop them within the hour.
+      limits: { ...g.DEFAULT_LIMITS, perMinute: 60, perDay: 1000, concurrent: 6, learnerDailyUsd: 50 },
+      // Figures that hit a problem while live are repaired in the background (RP-7).
+      ticketSecret: DEV_TICKET_SECRET,
+      gallery,
     });
     const entry = { handle: service.handle, close: () => service.close(), records };
     services.set(prefix, entry);
@@ -147,7 +202,39 @@ function generationService(): Plugin {
             enabled = new URL(req.url ?? '', 'http://x').searchParams.get('on') !== '0';
             return json(200, { enabled });
           }
-          if (path === '/api/dev/records') return json(200, [...services.values()].flatMap((s) => s.records.records));
+          if (path === '/api/dev/reset') {
+            // A fresh service for one fault, as a new dev server would have: a figure an earlier run approved is not cached.
+            const fault = new URL(req.url ?? '', 'http://x').searchParams.get('fault') ?? '';
+            return json(200, { reset: /^[a-z-]+$/.test(fault) && services.delete(`/api/fault/${fault}/v1`) });
+          }
+          if (path === '/api/dev/records') {
+            // Every service's records in the order they were made, so the last is the latest whichever service made it.
+            const records = [...services.values()].flatMap((s) => s.records.records as Array<{ at?: string }>);
+            return json(200, records.sort((a, b) => String(a.at ?? '').localeCompare(String(b.at ?? ''))));
+          }
+          if (path === '/api/dev/figures' && req.method === 'GET') return json(200, await keptFigures());
+          if (path === '/api/dev/figures' && req.method === 'POST') {
+            const figure = readFigure(await body(req, 256_000));
+            if (!figure) return json(400, { kept: false });
+            const figures = [figure, ...(await keptFigures()).filter((f) => f.prompt !== figure.prompt)].slice(0, 200);
+            await mkdir(fileURLToPath(new URL('./.generated/', import.meta.url)), { recursive: true });
+            // Written whole, then moved into place, so a reader never sees half a file.
+            await writeFile(`${FIGURES_FILE}.tmp`, JSON.stringify(figures, null, 1));
+            await rename(`${FIGURES_FILE}.tmp`, FIGURES_FILE);
+            return json(200, { kept: true });
+          }
+          if (path === '/api/dev/gallery/clear') {
+            gallery?.entries.clear();
+            return json(200, { cleared: true });
+          }
+          if (path === '/api/dev/gallery/review') {
+            const params = new URL(req.url ?? '', 'http://x').searchParams;
+            const entry = gallery ? await gallery.get(params.get('id') ?? '') : null;
+            const status = params.get('status');
+            if (!entry || !gallery || (status !== 'accepted' && status !== 'rejected')) return json(404, { reviewed: false });
+            await gallery.put({ ...entry, status, reviewedAt: new Date().toISOString() });
+            return json(200, { reviewed: true });
+          }
           const session = /^(\/api\/session\/([\w-]+)\/v1)\//.exec(path);
           const faulty = /^(\/api\/fault\/([a-z-]+)\/v1)\//.exec(path);
           const prefix = session ? session[1]! : faulty ? faulty[1]! : '/api/v1';

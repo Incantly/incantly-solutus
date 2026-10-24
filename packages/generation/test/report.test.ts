@@ -20,6 +20,17 @@ async function probe(fragments: { html: string; css: string; js: string }): Prom
 }
 
 describe('repair reports', () => {
+  it('names an element drawn outside its stage and points at the line that made it', async () => {
+    const fragments = withLine(/^const peak = graph\.segment\(0, 0, 0, 0, \{ tone: 'c', dashed: true \}\);$/m, "const peak = graph.segment(0, 0, 0, 0, { tone: 'c', dashed: true });\nconst stray = graph.label(140, 70, 'far away');");
+    const report = await probe(fragments);
+    const text = probeReport(report, fragments, projectile.plan).text;
+    const line = fragments.js.split('\n').findIndex((l) => l.startsWith('const stray')) + 1;
+    expect(report.failures[0]).toMatchObject({ check: 'bounds', error: { line } });
+    expect(report.failures[0]!.message).toMatch(/the text reaches x = [\d.]+, right of \d+/);
+    expect(text).toContain(`AGENT_JS line ${line}`);
+    expect(text).toContain("graph.label(140, 70, 'far away')");
+  });
+
   it('quotes a validator error with its rule, the fragment line and its neighbours, and the broken core rule', () => {
     const fragments = withLine(/^inc\.readout/m, "fetch('https://example.com');\ninc.readout");
     const { diagnostics } = validateScene(fragments);
@@ -43,6 +54,16 @@ describe('repair reports', () => {
     expect(report.text).toContain('...and 3 more');
   });
 
+  it('quotes one error of each kind before more of one kind, so a repair sees every kind', () => {
+    const js = `${projectile.js}\n${Array.from({ length: 6 }, (_, i) => `window.x${i} = 1;`).join('\n')}\nconst late = (1).toBogus(2);`;
+    const fragments = { html: projectile.html, css: projectile.css, js };
+    const report = validationReport(validateScene(fragments).diagnostics, fragments);
+    expect(report.text.match(/^ERROR /gm)).toHaveLength(5);
+    expect(report.text).toContain('toBogus');
+    expect(report.summary).toContain('unknown-method');
+    expect(report.text).toMatch(/\.\.\.and \d+ more: forbidden-global at js line \d+/);
+  });
+
   it('reports a probe failure with the parameter state, the real error, the mapped line, a likely cause and the rule', async () => {
     const fragments = withLine(/^inc\.onFrame\(\(\{ time \}\) => \{$/m, 'const empty = [];\ninc.onFrame(({ time }) => {\n  empty[2].at(0, 0);');
     const result = await probe(fragments);
@@ -58,7 +79,7 @@ describe('repair reports', () => {
     expect(report.text).toContain(`WHERE    AGENT_JS line ${line}, column 12`);
     expect(report.text).toContain(`> ${line} |   empty[2].at(0, 0);`);
     expect(report.text).toMatch(/^LIKELY {3}an index or key is out of range/m);
-    expect(report.text).toMatch(/^RULE {5}5\. Animate only from the frame's time and dt/m);
+    expect(report.text).toMatch(/^RULE {5}5\. Animate only from frame\.time and frame\.dt/m);
     expect(report.summary).toContain(`at js:${line}:12`);
   });
 
@@ -74,6 +95,13 @@ describe('repair reports', () => {
     );
     expect(report.text).toContain('WHEN     speed = 5 m/s (minimum), angle = 80 degrees (maximum), gravity = 12 m/s², t = 0 s, paused');
     expect(report.text).toContain('LIKELY   a division by zero');
+  });
+
+  it('says why text overflows a stage only a few units wide', () => {
+    const small = { check: 'bounds' as const, message: '1 element of the stage #stage lies outside its viewBox [-2.6, -0.4, 5.2, 3.9] at the default values: the text reaches x = 86.1, right of 2.6' };
+    expect(likelyCause(small)).toMatch(/text is 12 units tall, so in a viewBox only 5.2 wide it covers the stage/);
+    const wide = { check: 'bounds' as const, message: '1 element of the stage #stage lies outside its viewBox [0, 0, 760, 380] at the default values: the text reaches x = 811.7, right of 760' };
+    expect(likelyCause(wide)).toMatch(/scale them to the viewBox/);
   });
 
   it('names a runaway loop and the other failures found', () => {
@@ -96,6 +124,14 @@ describe('repair reports', () => {
     const report = parseReport(['The js block was never closed'], ['js'], 1, 1);
     expect(report.text).toContain('ERROR    The js block was never closed');
     expect(report.text).toContain('ERROR    Missing fragment: js');
+    expect(report.text).toContain('LIKELY   the reply was cut off');
+  });
+
+  it('asks only for the edits that failed when the others applied, not for the scene again', () => {
+    // Once a repair after one failed edit wrote the whole scene again and ran past the deadline.
+    const report = parseReport(['Edit failed: js: edit 8 did not match: copy its SEARCH text exactly from the fragment'], [], 1, 1);
+    expect(report.text).toContain('LIKELY   the other edits were applied, and the fragment below is as they left it: send only the edits that failed');
+    expect(report.text).not.toContain('cut off');
   });
 
   it('numbers the source context like the fragment', () => {
@@ -114,7 +150,9 @@ describe('the repair call', () => {
     expect(prompt.user).toContain('```js\n' + fragments.js.replace(/\n$/, '') + '\n```');
     expect(prompt.user).toContain('speed from 5 to 20');
     expect(prompt.system[1]!.text).toContain('- graph2d: ');
-    expect(prompt.system[1]!.text).toContain('only the fragments you change');
+    // Edits, not whole fragments: a repair costs a few lines of output.
+    expect(prompt.system[1]!.text).toContain('Reply with edits only');
+    expect(prompt.system[1]!.text).toContain('<<<<<<< SEARCH');
     expect(prompt.system[1]!.text).not.toContain('interface Graph {');
   });
 

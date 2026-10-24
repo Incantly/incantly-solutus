@@ -97,4 +97,34 @@ test.describe('reference sine wave (Phase 1 gate)', () => {
     expect(after.renderer.frameRequests).toBe(before.renderer.frameRequests);
     expect(await page.locator('.inc-figure').count()).toBe(0);
   });
+
+  test('measures the graph in its axes’ units with two taps, and an angle with three (VI-5)', async ({ page }, testInfo) => {
+    await openScene(page, 'scene=sine-wave&autoplay=0');
+    const svg = page.locator('svg.inc-stage').first();
+    const tool = page.getByRole('button', { name: /^Measure/ });
+    await tool.click();
+    await expect(tool).toHaveAttribute('aria-pressed', 'true');
+    // Two points one unit apart on the x axis: the graph runs from -2π to 2π across its plot area.
+    const point = (x: number, y: number) =>
+      svg.evaluate(
+        (el: SVGSVGElement, [sx, sy]) => {
+          const p = new DOMPoint(sx, sy).matrixTransform(el.getScreenCTM()!);
+          return { x: p.x, y: p.y };
+        },
+        [x, y] as const,
+      );
+    const a = await point(100, 180);
+    const b = await point(400, 180);
+    const c = await point(400, 60);
+    await page.mouse.click(a.x, a.y);
+    await page.mouse.click(b.x, b.y);
+    const readout = page.locator('.inc-measure-readout');
+    await expect(readout).toHaveText(/^Distance [\d.]+\. Tap a third point for an angle\.$/);
+    await page.mouse.click(c.x, c.y);
+    await expect(readout).toHaveText(/^Angle [\d.]+°, between sides of [\d.]+ and [\d.]+\.$/);
+    await expect(svg.locator('.inc-measure circle')).toHaveCount(3);
+    await page.locator('.inc-figure').screenshot({ path: testInfo.outputPath('measuring.png') });
+    await page.keyboard.press('Escape');
+    await expect(svg.locator('.inc-measure')).toHaveCount(0);
+  });
 });

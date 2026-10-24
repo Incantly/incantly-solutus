@@ -1,4 +1,5 @@
 import { FigureRenderer, type RendererOptions } from '../renderer/renderer';
+import { hostCss, type FigureStyle } from '../renderer/style';
 import { THEME_CSS } from '../renderer/theme';
 import { SceneRuntime, type RuntimeOptions, type SceneFunction } from '../runtime/runtime';
 import { InThreadChannel } from './channel';
@@ -15,7 +16,10 @@ export interface TrustedMountOptions extends RuntimeOptions {
   readonly clock?: FrameClock;
   readonly figureId?: string;
   readonly visibility?: RendererOptions['visibility'];
+  readonly style?: FigureStyle;
+  readonly figureNumber?: number;
   readonly onValues?: RendererOptions['onValues'];
+  readonly onFormulas?: RendererOptions['onFormulas'];
   readonly onStep?: RendererOptions['onStep'];
   readonly onError?: RendererOptions['onError'];
   readonly onUpdate?: RendererOptions['onUpdate'];
@@ -25,6 +29,9 @@ export interface MountedFigure {
   readonly root: HTMLElement;
   readonly runtime: SceneRuntime;
   readonly renderer: FigureRenderer;
+  /** Restyles the figure in place, including its trusted CSS, keeping the learner's values. */
+  setStyle(style: FigureStyle | undefined): void;
+  setTheme(theme: 'light' | 'dark' | 'auto'): void;
   destroy(): void;
 }
 
@@ -63,6 +70,18 @@ export function mountTrusted(container: HTMLElement, fragments: Fragments, optio
   const root = doc.createElement('div');
   root.dataset.figureId = scope;
   if (options.theme && options.theme !== 'auto') root.dataset.theme = options.theme;
+  // Host CSS usually lives in the page already; when it is passed, the figure carries it too.
+  let hostStyle: HTMLStyleElement | null = null;
+  const setHostCss = (css: string) => {
+    if (!css && !hostStyle) return;
+    if (!hostStyle) {
+      hostStyle = doc.createElement('style');
+      hostStyle.dataset.incantlyHost = '';
+      root.prepend(hostStyle);
+    }
+    hostStyle.textContent = css;
+  };
+  setHostCss(hostCss(options.style));
   if (fragments.css) {
     const style = doc.createElement('style');
     style.textContent = fragments.css;
@@ -87,7 +106,10 @@ export function mountTrusted(container: HTMLElement, fragments: Fragments, optio
     scope,
     ...(options.clock ? { clock: options.clock } : {}),
     visibility: options.visibility ?? 'observe',
+    ...(options.style ? { style: options.style } : {}),
+    ...(options.figureNumber !== undefined ? { figureNumber: options.figureNumber } : {}),
     ...(options.onValues ? { onValues: options.onValues } : {}),
+    ...(options.onFormulas ? { onFormulas: options.onFormulas } : {}),
     ...(options.onStep ? { onStep: options.onStep } : {}),
     ...(options.onError ? { onError: options.onError } : {}),
     ...(options.onUpdate ? { onUpdate: options.onUpdate } : {}),
@@ -98,6 +120,13 @@ export function mountTrusted(container: HTMLElement, fragments: Fragments, optio
     root,
     runtime,
     renderer,
+    setStyle(style) {
+      setHostCss(hostCss(style));
+      renderer.setStyle(style);
+    },
+    setTheme(theme) {
+      renderer.setTheme(theme);
+    },
     destroy() {
       renderer.destroy();
       root.remove();

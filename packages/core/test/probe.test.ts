@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import { loadKitModules } from '../src/kits/load';
+import { SIZE_BUDGETS } from '../src/protocol/plan';
 import { probeScene, type ProbeOptions, type ProbeReport } from '../src/probe';
 import { REFERENCE_SCENES } from '../src/scenes';
+import { validateScene } from '../src/validation';
 import { compileValidated } from './helpers/compile';
 
 const HTML = "<div id='stage'></div>";
@@ -38,12 +41,19 @@ describe('probe: passing scenes', () => {
     expect(report.stats.elements).toBe(1);
   });
 
-  it.each(Object.keys(REFERENCE_SCENES))('passes the reference scene %s with its own plan', (id) => {
+  it.each(Object.keys(REFERENCE_SCENES))('passes the reference scene %s with its own plan', async (id) => {
     const source = REFERENCE_SCENES[id]!;
     const { scene, fuel } = compileValidated(source);
+    const kits = await loadKitModules(validateScene(source).scene?.kits ?? []);
     const report = probeScene(scene, {
       beforeStep: fuel.refuel,
-      spec: { parts: source.plan.parts, steps: source.plan.steps.length, singularPoints: source.plan.singularPoints ?? [] },
+      runtime: { kits },
+      spec: {
+        parts: source.plan.parts,
+        steps: source.plan.steps.length,
+        singularPoints: source.plan.singularPoints ?? [],
+        elements: SIZE_BUDGETS[source.plan.size ?? 'quick'].elements,
+      },
     });
     expect(report.failures).toEqual([]);
   });
@@ -89,6 +99,16 @@ describe('probe: deliberately broken scenes fail for the expected reason', () =>
     expect(report.failures.map((f) => [f.check, f.message.split(' with')[0]])).toContainEqual(['numbers', 'Model output model.image is Infinity']);
   });
 
+  it('a throw at the state where a live figure hit a problem, which the spec names (RP-7)', () => {
+    const js = build({
+      param: "const h = inc.param('height', { min: 1, max: 9, step: 0.01, value: 4, label: 'Height' });",
+      frame: "inc.onFrame(() => { const list = []; if (Math.abs(h.value - 6.42) < 0.001) list[2].at(0, 0); bar.set({ y: 90 - h.value * 10, height: h.value * 10 }); });",
+    });
+    expect(probe(js).failures).toEqual([]);
+    const report = probe(js, { spec: { states: [{ height: 6.42, unknown: 1 }] } });
+    expect(report.failures[0]).toMatchObject({ check: 'interior', values: { height: 6.42 }, error: { phase: 'frame' } });
+  });
+
   it('a slider that does nothing while paused (the paused-slider bug)', () => {
     const report = probe(
       build({ frame: "inc.onFrame(({ time, dt }) => { if (dt > 0) bar.set({ y: 90 - h.value * 10 - Math.sin(time), height: h.value * 10 }); });" }),
@@ -97,10 +117,25 @@ describe('probe: deliberately broken scenes fail for the expected reason', () =>
     expect(report.failures.find((f) => f.check === 'paused-change')!.message).toContain('Moving height while paused');
   });
 
+  it('passes a drawing near its element budget, with a warning that suggests dots (SV-12)', () => {
+    const js = build({ bar: "const bar = stage.rect(40, 50, 20, 40, { tone: 'lit' });\nfor (let i = 0; i < 340; i++) stage.circle(5 + (i % 30) * 3, 5 + Math.floor(i / 30) * 3, 0.5, { tone: 'faint' });" });
+    const report = probe(js, { spec: { elements: 400 } });
+    expect(report.failures).toEqual([]);
+    expect(report.warnings?.[0]).toMatch(/of its 400 elements: draw many small dots with stage.dots/);
+    expect(probe(js, { spec: { elements: 1600 } }).warnings).toBeUndefined();
+  });
+
   it('a drawing outside the stage', () => {
     const report = probe(build({ bar: "const bar = stage.rect(140, 50, 20, 40, { tone: 'lit' });" }));
     expect(checks(report)).toEqual(['bounds']);
     expect(report.failures[0]!.message).toContain('outside its viewBox');
+  });
+
+  it('nothing outside a stage that fits its drawing, which frames it once and only grows', () => {
+    // The same bar far outside: a stage given fit: true frames it instead of failing.
+    const outside = "const bar = stage.rect(140, 50, 20, 40, { tone: 'lit' });";
+    expect(probe(build({ bar: outside, stage: "const stage = inc.svg('#stage', { fit: true, title: 'Bar', description: 'One bar.' });" })).failures).toEqual([]);
+    expect(probe(build({ bar: outside, stage: "const stage = inc.svg('#stage', { viewBox: [0, 0, 100, 100], fit: true, title: 'Bar', description: 'One bar.' });" })).failures).toEqual([]);
   });
 
   it('nothing drawn at all', () => {

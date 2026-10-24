@@ -11,8 +11,10 @@ import {
   type HandleKind,
   type Returns,
 } from '../api/surface';
+import { RENDERABLE_ATTRIBUTES } from '../protocol/scene-commands';
+import { isKitCall, kitsFor, type KitName } from '../runtime/kits';
 import { isColourLiteral, NAMED_COLOURS } from './colours';
-import { LineIndex, type Diagnostic } from './diagnostics';
+import { LineIndex, type Diagnostic, type Fix } from './diagnostics';
 import { SCENE_LIMITS, type SceneLimits } from './limits';
 
 /**
@@ -38,6 +40,8 @@ export interface JsInfo {
   readonly hasIdea: boolean;
   readonly hasDescribe: boolean;
   readonly hasExplain: boolean;
+  /** Kits the scene calls, which the host loads before it runs. */
+  readonly kits: readonly KitName[];
 }
 
 export interface JsValidation {
@@ -136,9 +140,12 @@ const FORBIDDEN_GLOBALS: Readonly<Record<string, string>> = (() => {
       'Atomics',
       'SharedArrayBuffer',
     ],
+    // Array.from({ length: n }, ...) is the idiom models reach for: the subset builds lists with a bounded loop.
+    'is not part of the scene subset; build a list with a for loop and a visible bound: const points = []; for (let i = 0; i <= 72; i++) points.push([i, 0])': [
+      'Array',
+    ],
     'is not part of the scene subset': [
       'Object',
-      'Array',
       'String',
       'Boolean',
       'Symbol',
@@ -185,28 +192,84 @@ const TONE_SET: ReadonlySet<string> = new Set(TONES);
 /** inc calls that declare the scene, so they belong at the top level. */
 const MOUNT_ONLY: ReadonlySet<string> = new Set([
   'param',
+  'toggle',
+  'choice',
+  'color',
+  'button',
+  'presets',
+  'link',
   'model',
   'onFrame',
+  'simulate',
+  'timeline',
+  'onReset',
+  'onParamChange',
+  'onStep',
   'readout',
+  'table',
   'idea',
   'steps',
   'explain',
   'describe',
+  'predict',
+  'compare',
   'svg',
   'graph2d',
+  'space3d',
+  'graph3d',
+  'physics2d',
+  'chart',
+  'flow',
+  'chemistry',
+  'biology',
   'formula',
+  'idle',
 ]);
+
+/** Drawn elements, whose set() takes SVG attributes. */
+const ATTRIBUTE_HANDLES: ReadonlySet<string> = new Set(['Element', 'Path', 'Text', 'Polyline']);
 
 /** Handle methods that create a new element. Created once, then moved. */
 const CREATES_ELEMENTS: Readonly<Partial<Record<HandleKind, ReadonlySet<string>>>> = {
-  Stage: new Set(['group', 'path', 'line', 'circle', 'rect', 'text', 'polyline', 'part']),
-  Graph: new Set(['plot', 'parametric', 'point', 'segment', 'arrow', 'trail', 'label']),
+  Stage: new Set(['group', 'path', 'line', 'circle', 'rect', 'text', 'equation', 'polyline', 'part', 'connector', 'callout', 'repeat', 'dots', 'fluid']),
+  Space3D: new Set(['box', 'sphere', 'cylinder', 'cone', 'plane', 'torus', 'tube', 'mesh', 'lathe', 'model', 'group', 'line', 'arrow', 'coil', 'arc', 'point', 'label', 'grid', 'axes', 'fieldLines', 'part', 'drag']),
+  Graph3D: new Set(['surface', 'parametric', 'curve', 'point', 'vector', 'line', 'plane', 'label', 'part']),
+  Surface3D: new Set(['section']),
+  Chemistry: new Set(['atom', 'bond', 'molecule', 'shells', 'reaction', 'profile']),
+  Biology: new Set(['cell', 'membrane', 'helix', 'stream']),
+  World2D: new Set(['ball', 'box', 'polygon', 'ramp', 'spring', 'rope', 'rod', 'hinge', 'pulley', 'tank', 'field', 'forces', 'onHit', 'onTouch']),
+  Chart: new Set(['series', 'points', 'rule']),
+  Flow: new Set(['node', 'edge']),
+  Graph: new Set([
+    'plot',
+    'plotX',
+    'polar',
+    'parametric',
+    'scatter',
+    'bars',
+    'histogram',
+    'area',
+    'between',
+    'field',
+    'slopes',
+    'implicit',
+    'point',
+    'segment',
+    'arrow',
+    'trail',
+    'label',
+    'equation',
+    'bracket',
+    'dimension',
+    'trace',
+    'handle',
+    'marks',
+    'crossings',
+  ]),
 };
 
-/** inc calls whose function arguments run every frame or on every change. */
-const CALLBACK_INC_CALLS: ReadonlySet<string> = new Set(['onFrame', 'readout', 'explain', 'describe', 'model']);
+/** inc calls whose text callbacks are checked for numbers typed into prose. */
 const TEXT_INC_CALLS: ReadonlySet<string> = new Set(['readout', 'explain', 'describe']);
-const CALLBACK_GRAPH_METHODS: ReadonlySet<string> = new Set(['plot', 'parametric']);
 
 const ARRAY_METHODS = [
   'at',
@@ -254,7 +317,26 @@ const STRING_METHODS = [
   'trimEnd',
   'trimStart',
 ];
-const NUMBER_METHODS = ['toFixed', 'toPrecision', 'toString'];
+const NUMBER_METHODS = ['toFixed', 'toPrecision', 'toExponential', 'toString'];
+
+/**
+ * Helpers that take their arguments by name, so that a number cannot be read
+ * as the wrong thing: an arrow's offset taken for its tip, a pivot taken in
+ * the wrong units, a tooth depth taken for a fraction. Each lists the names
+ * its options object may hold and, for each thing it needs, the ways of
+ * naming it: exactly one of them, whole. The names a model reaches for first
+ * ({ x, y } or SVG's { cx, cy } for a pivot, cx, cy and r for a gear) are among them.
+ */
+const NAMED_ARGUMENTS: Readonly<Record<string, { readonly index: number; readonly keys: readonly string[]; readonly needs: ReadonlyArray<ReadonlyArray<readonly string[]>>; readonly example: string }>> = {
+  'path.arrow': { index: 0, keys: ['from', 'to', 'by'], needs: [[['from']], [['to'], ['by']]], example: '{ from: [x, y], to: [x, y] } or { from: [x, y], by: [dx, dy] }' },
+  'shapes.gear': {
+    index: 0,
+    keys: ['center', 'cx', 'cy', 'radius', 'r', 'teeth', 'toothDepth', 'rotation'],
+    needs: [[['center'], ['cx', 'cy']], [['radius'], ['r']]],
+    example: '{ center: [x, y], radius, teeth, toothDepth }',
+  },
+  rotate: { index: 1, keys: ['about', 'x', 'y', 'cx', 'cy'], needs: [[['about'], ['x', 'y'], ['cx', 'cy']]], example: '{ about: [x, y] }' },
+};
 
 /** Every method name a scene may call on a value whose type the validator could not follow. */
 const KNOWN_METHODS: ReadonlySet<string> = (() => {
@@ -287,6 +369,8 @@ type NamespaceName = keyof typeof INC_NAMESPACES;
 type ValueType =
   | { readonly t: 'inc' }
   | { readonly t: 'ns'; readonly ns: NamespaceName }
+  /** A helper of a namespace, such as inc.calc.normal: a function, not an object. */
+  | { readonly t: 'ns-fn'; readonly ns: NamespaceName; readonly name: string }
   | { readonly t: 'math' }
   | { readonly t: 'number-ns' }
   | { readonly t: 'handle'; readonly kind: HandleKind }
@@ -331,6 +415,8 @@ interface Context {
   readonly owner: Binding | null;
   /** Inside a callback that runs every frame or on every change. */
   readonly callback: string | null;
+  /** The SDK call whose arguments these are: a function among them becomes that call's callback. */
+  readonly pending: string | null;
   /** Inside a readout, explain or describe callback. */
   readonly text: boolean;
   readonly depth: number;
@@ -349,6 +435,8 @@ function describeType(type: ValueType): string {
       return 'inc';
     case 'ns':
       return `inc.${type.ns}`;
+    case 'ns-fn':
+      return `inc.${type.ns}.${type.name}`;
     case 'math':
       return 'Math';
     case 'number-ns':
@@ -431,9 +519,12 @@ class JsValidator {
   private readonly index: LineIndex;
   private nodes = 0;
   private reportedAstBudget = false;
+  /** inc.model calls so far: a scene has exactly one model, and a second throws at mount. */
+  private models = 0;
   private reportedDepth = false;
   private paramCount = 0;
   private readonly stages: StageReference[] = [];
+  private readonly kitCalls = new Set<string>();
   private readonly parts: string[] = [];
   private stepCount: number | null = null;
   private hasIdea = false;
@@ -474,7 +565,7 @@ class JsValidator {
     }
     if (program) {
       const scope = new Scope(null);
-      const ctx: Context = { scope, inFunction: false, owner: null, callback: null, text: false, depth: 0 };
+      const ctx: Context = { scope, inFunction: false, owner: null, callback: null, pending: null, text: false, depth: 0 };
       this.declareBlock(program.body, scope);
       for (const statement of program.body) this.statement(statement, ctx);
       this.checkRecursion();
@@ -490,13 +581,14 @@ class JsValidator {
         hasIdea: this.hasIdea,
         hasDescribe: this.hasDescribe,
         hasExplain: this.hasExplain,
+        kits: kitsFor(this.kitCalls),
       },
     };
   }
 
-  private report(rule: string, message: string, offset: number, severity: 'error' | 'warning' = 'error'): void {
+  private report(rule: string, message: string, offset: number, severity: 'error' | 'warning' = 'error', fix?: Fix): void {
     const { line, column } = this.index.position(offset);
-    this.diagnostics.push({ fragment: 'js', rule, message, line, column, severity });
+    this.diagnostics.push({ fragment: 'js', rule, message, line, column, severity, ...(fix ? { fix } : {}) });
   }
 
   private count(node: AnyNode): void {
@@ -564,6 +656,16 @@ class JsValidator {
     switch (node.type) {
       case 'ExpressionStatement':
         if (node.directive !== undefined) return; // "use strict"
+        if (node.expression.type === 'UnaryExpression' && node.expression.operator === 'void' && node.expression.argument.type === 'Identifier') {
+          // void name; only marks a name as used: dropping the statement changes nothing.
+          this.report('forbidden-syntax', 'The void operator is not allowed in scenes', node.expression.start, 'error', {
+            start: node.start,
+            end: node.end,
+            text: '',
+            note: `dropped void ${node.expression.argument.name}`,
+          });
+          return;
+        }
         this.expression(node.expression, ctx);
         return;
       case 'VariableDeclaration': {
@@ -677,18 +779,32 @@ class JsValidator {
 
     const test = node.test;
     let direction: 'up' | 'down' | null = null;
-    if (
-      test &&
-      test.type === 'BinaryExpression' &&
-      test.left.type === 'Identifier' &&
-      test.left.name === counter &&
-      ['<', '<=', '>', '>='].includes(test.operator)
-    ) {
+    const compares = (side: Expression | null | undefined): side is Extract<AnyNode, { type: 'BinaryExpression' }> =>
+      !!side && side.type === 'BinaryExpression' && side.left.type === 'Identifier' && side.left.name === counter && ['<', '<=', '>', '>='].includes(side.operator);
+    // i < n && i <= 200: the loop ends at the first comparison that fails, so one visible bound is enough.
+    const capped =
+      test && test.type === 'LogicalExpression' && test.operator === '&&'
+        ? [test.right, test.left].find((side) => compares(side) && this.loopBound(side.right as Expression, inner.scope) === null)
+        : undefined;
+    if (capped && compares(capped)) {
+      direction = capped.operator === '<' || capped.operator === '<=' ? 'up' : 'down';
+      this.expression(test!, inner);
+    } else if (compares(test)) {
       this.count(test);
       direction = test.operator === '<' || test.operator === '<=' ? 'up' : 'down';
       this.expression(test.right, inner);
       const problem = this.loopBound(test.right, inner.scope);
-      if (problem) fail(problem, test.right);
+      // Counting up to a bound the controls can change: capping it at the limit is certain, and changes nothing below it.
+      if (problem && direction === 'up') {
+        const bound = this.source.slice(test.right.start, test.right.end);
+        const limit = this.limits.loopBound;
+        this.report('unbounded-loop', problem, test.right.start, 'error', {
+          start: test.right.start,
+          end: test.right.end,
+          text: `Math.min(${bound}, ${limit})`,
+          note: `capped a loop at Math.min(${bound.length > 30 ? `${bound.slice(0, 27)}...` : bound}, ${limit})`,
+        });
+      } else if (problem) fail(problem, test.right);
     } else {
       fail(`A for loop must compare its counter with a bound, as in ${counter} < 10`, test ?? node);
       if (test) this.expression(test, inner);
@@ -722,7 +838,8 @@ class JsValidator {
         return Math.abs(binding.constNumber) <= limit ? null : `Loop bound ${bound.name} = ${binding.constNumber} is above the limit of ${limit}`;
       }
       if (binding?.constLoopBound) return null;
-      return `Bound the loop by a number, a const number, an array's length or Math.min(value, ${limit})`;
+      // A count that changes with the controls, such as a number of particles: the cap makes the bound visible.
+      return `${bound.name} can change, so the loop has no visible bound: loop to Math.min(${bound.name}, ${limit}), a const number or an array's length`;
     }
     if (bound.type === 'MemberExpression' && !bound.computed && bound.property.type === 'Identifier' && bound.property.name === 'length') {
       return null;
@@ -811,7 +928,7 @@ class JsValidator {
       }
       case 'MemberExpression': {
         const type = this.expression(node.object as Expression, ctx);
-        if (type.t === 'handle' || type.t === 'inc' || type.t === 'ns' || type.t === 'math' || type.t === 'number-ns') {
+        if (type.t === 'handle' || type.t === 'inc' || type.t === 'ns' || type.t === 'ns-fn' || type.t === 'math' || type.t === 'number-ns') {
           this.report('assign-sdk', `${describeType(type)} is read-only; use its methods instead`, node.start);
         }
         if (node.computed) this.expression(node.property as Expression, ctx);
@@ -1023,7 +1140,10 @@ class JsValidator {
     }
     const why = FORBIDDEN_GLOBALS[name];
     if (why) this.report('forbidden-global', `${name} ${why}`, node.start);
-    else {
+    else if (Object.hasOwn(INC_NAMESPACES, name) || Object.hasOwn(INC_FUNCTIONS, name)) {
+      // A helper used without inc., as sym for inc.sym: the scene meant the SDK's own.
+      this.report('unknown-global', `"${name}" is not defined; did you mean inc.${name}?`, node.start);
+    } else {
       const suggestion = closest(name, [...ALLOWED_GLOBAL_SET, ...allNames(ctx.scope)]);
       this.report(
         'unknown-global',
@@ -1043,6 +1163,9 @@ class JsValidator {
       scope: new Scope(ctx.scope),
       inFunction: true,
       owner: owner ?? ctx.owner,
+      // A function handed to the SDK runs later, on a frame, a change, a drag or a button.
+      callback: ctx.pending ?? ctx.callback,
+      pending: null,
     });
     for (const param of node.params) {
       for (const id of patternIdentifiers(param)) this.declare(inner.scope, id.name, 'param', id.start);
@@ -1093,20 +1216,36 @@ class JsValidator {
     }
     switch (object.t) {
       case 'inc': {
-        if (name === 'path' || name === 'geom') return { t: 'ns', ns: name };
+        if (Object.hasOwn(INC_NAMESPACES, name)) return { t: 'ns', ns: name as NamespaceName };
         if (name in INC_FUNCTIONS) return FUNCTION;
-        const suggestion = closest(name, [...Object.keys(INC_FUNCTIONS), 'path', 'geom']);
+        const suggestion = closest(name, [...Object.keys(INC_FUNCTIONS), ...Object.keys(INC_NAMESPACES)]);
         this.report(
           'unknown-sdk-call',
-          `inc.${name} is not part of the SDK${suggestion ? `; did you mean inc.${suggestion}?` : `. Available: ${listOf(Object.keys(INC_FUNCTIONS))}`}`,
+          `inc.${name} is not part of the SDK${suggestion ? `; did you mean inc.${suggestion}?` : `. Available: ${listOf([...Object.keys(INC_FUNCTIONS), ...Object.keys(INC_NAMESPACES)])}`}`,
           at.start,
         );
         return UNKNOWN;
       }
       case 'ns': {
         const members = INC_NAMESPACES[object.ns];
-        if (name in members) return FUNCTION;
-        this.report('unknown-sdk-call', `inc.${object.ns}.${name} is not part of the SDK. Available: ${listOf(Object.keys(members))}`, at.start);
+        if (name in members) return { t: 'ns-fn', ns: object.ns, name };
+        const suggestion = closest(name, Object.keys(members));
+        this.report(
+          'unknown-sdk-call',
+          `inc.${object.ns}.${name} is not part of the SDK${suggestion ? `; did you mean inc.${object.ns}.${suggestion}?` : '.'} Available: ${listOf(Object.keys(members))}`,
+          at.start,
+        );
+        return UNKNOWN;
+      }
+      case 'ns-fn': {
+        // inc.calc.normal.cdf: a helper is a function; a related one may join the two names.
+        const members = INC_NAMESPACES[object.ns];
+        const joined = `${object.name}${name.charAt(0).toUpperCase()}${name.slice(1)}`;
+        this.report(
+          'unknown-sdk-call',
+          `inc.${object.ns}.${object.name} is a function, not an object of helpers${joined in members ? `; did you mean inc.${object.ns}.${joined}?` : `: call it as inc.${object.ns}.${object.name}(...)`}`,
+          at.start,
+        );
         return UNKNOWN;
       }
       case 'math':
@@ -1136,7 +1275,8 @@ class JsValidator {
         if (spec.open) return UNKNOWN;
         if (spec.callable && called) break;
         const names = [...Object.keys(spec.methods), ...Object.keys(spec.properties)];
-        const suggestion = closest(name, names);
+        // set(...) on a label that has no set: its words are set with text(...), whatever name is closest in letters.
+        const suggestion = name === 'set' && 'text' in spec.methods ? 'text' : closest(name, names);
         this.report(
           called ? 'unknown-method' : 'unknown-property',
           `${object.kind} handles have no ${called ? 'method' : 'property'} "${name}"${suggestion ? `; did you mean ${suggestion}?` : `. Available: ${listOf(names)}`}`,
@@ -1200,18 +1340,21 @@ class JsValidator {
       if (notCallable) this.report('not-a-function', `${describeType(calleeType)} is not a function`, callee.start);
     }
 
-    // Context for the arguments: callbacks that run on every frame or change.
+    // Context for the arguments: a function handed to the SDK runs later, on a
+    // frame, a change, a drag or a button, so it must not create elements.
+    // Other arguments are evaluated now, in the caller's own context.
     let argumentContext = ctx;
     if (receiver.t === 'inc' && method !== null) {
       this.incCall(method, node, ctx);
-      if (CALLBACK_INC_CALLS.has(method)) {
-        argumentContext = { ...ctx, callback: `inc.${method}`, text: ctx.text || TEXT_INC_CALLS.has(method) };
-      }
+      argumentContext = { ...ctx, pending: `inc.${method}`, text: ctx.text || TEXT_INC_CALLS.has(method) };
+    }
+    if (receiver.t === 'ns' && method !== null) {
+      argumentContext = { ...ctx, pending: `inc.${receiver.ns}.${method}` };
+      const named = NAMED_ARGUMENTS[`${receiver.ns}.${method}`];
+      if (named) this.namedArgument(node.arguments[named.index], named, `inc.${receiver.ns}.${method}`);
     }
     if (receiver.t === 'handle' && method !== null) {
-      if (receiver.kind === 'Graph' && CALLBACK_GRAPH_METHODS.has(method)) {
-        argumentContext = { ...ctx, callback: `graph.${method}` };
-      }
+      argumentContext = { ...ctx, pending: `${receiver.kind.charAt(0).toLowerCase()}${receiver.kind.slice(1)}.${method}` };
       const creates = CREATES_ELEMENTS[receiver.kind];
       if (creates?.has(method) && ctx.callback) {
         this.report(
@@ -1220,9 +1363,27 @@ class JsValidator {
           callee.start,
         );
       }
+      if (method === 'rotate') this.namedArgument(node.arguments[1], NAMED_ARGUMENTS.rotate!, `${receiver.kind.charAt(0).toLowerCase()}${receiver.kind.slice(1)}.rotate`);
       if (method === 'part') {
         const [name] = node.arguments;
         if (name && name.type === 'Literal' && typeof name.value === 'string') this.parts.push(name.value);
+      }
+      if (method === 'set' && ATTRIBUTE_HANDLES.has(receiver.kind)) {
+        // The runtime throws on any other attribute; the same names are known here, before the scene runs.
+        const [values] = node.arguments;
+        if (values && values.type === 'ObjectExpression') {
+          for (const property of values.properties) {
+            if (property.type !== 'Property' || property.computed) continue;
+            const key = property.key.type === 'Identifier' ? property.key.name : property.key.type === 'Literal' ? String(property.key.value) : null;
+            if (key === null || RENDERABLE_ATTRIBUTES.has(key)) continue;
+            const words = key === 'text' || key === 'textContent';
+            this.report(
+              'unknown-property',
+              words ? `"${key}" is not an attribute: set a text's words with .text(...)` : `"${key}" is not an attribute an element can be given; colours come from tones`,
+              property.key.start,
+            );
+          }
+        }
       }
       if (method === 'tone') {
         const [tone] = node.arguments;
@@ -1257,9 +1418,29 @@ class JsValidator {
     if (method !== null && ARRAY_RETURNING.has(method) && (receiver.t === 'array' || receiver.t === 'string' || receiver.t === 'unknown')) {
       return method === 'split' || receiver.t === 'array' ? ARRAY : UNKNOWN;
     }
-    if (method === 'toFixed' || method === 'toPrecision') return STRING;
+    if (method === 'toFixed' || method === 'toPrecision' || method === 'toExponential') return STRING;
     if (calleeType.t === 'handle' && calleeType.kind === 'Formula') return NUMBER;
     return UNKNOWN;
+  }
+
+  /** An options object a helper takes by name: only its names, the ones it needs, and one of a pair where it takes either. */
+  private namedArgument(argument: AnyNode | undefined, spec: (typeof NAMED_ARGUMENTS)[string], call: string): void {
+    if (!argument || argument.type !== 'ObjectExpression') return;
+    const keys: string[] = [];
+    for (const property of argument.properties) {
+      if (property.type !== 'Property' || property.computed) return;
+      const key = property.key.type === 'Identifier' ? property.key.name : property.key.type === 'Literal' ? String(property.key.value) : null;
+      if (key === null) return;
+      keys.push(key);
+      if (!spec.keys.includes(key)) this.report('unknown-property', `${call} takes ${spec.example}; "${key}" is not one of its names`, property.key.start);
+    }
+    // Each thing it needs is named one way, whole: { about } or { x, y }, never both or half of one.
+    const named = spec.needs.every((ways) => {
+      const whole = ways.filter((way) => way.every((key) => keys.includes(key)));
+      const touched = ways.filter((way) => way.some((key) => keys.includes(key)));
+      return whole.length === 1 && touched.length === 1;
+    });
+    if (!named) this.report('invalid-argument', `${call} takes ${spec.example}`, argument.start);
   }
 
   /** Rules for the inc calls themselves. */
@@ -1271,15 +1452,29 @@ class JsValidator {
         node.callee.start,
       );
     }
+    if (method === 'model' && ++this.models > 1) {
+      this.report('mount-only', 'A scene has exactly one inc.model: return every output from the one model', node.callee.start);
+    }
     switch (method) {
       case 'param':
+      case 'toggle':
+      case 'choice':
+      case 'color':
         this.paramCount++;
         if (this.paramCount > this.limits.params) {
-          this.report('too-many-params', `A figure has at most ${this.limits.params} adjustable parameters`, node.start);
+          this.report('too-many-params', `A figure has at most ${this.limits.params} controls (parameters, toggles, choices and colours)`, node.start);
         }
         break;
       case 'svg':
-      case 'graph2d': {
+      case 'graph2d':
+      case 'space3d':
+      case 'graph3d':
+      case 'physics2d':
+      case 'chart':
+      case 'flow':
+      case 'chemistry':
+      case 'biology': {
+        if (isKitCall(method)) this.kitCalls.add(method);
         const [selector] = node.arguments;
         const value =
           selector?.type === 'Literal' && typeof selector.value === 'string'

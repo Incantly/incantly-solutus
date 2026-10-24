@@ -97,7 +97,7 @@ describe('generating a figure from the learner’s device', () => {
   it('ends with one plain line when nothing else is available', async () => {
     const { client } = await serve();
     const outcome = await runGeneration({ client, request: { prompt: 'Explain photosynthesis' }, probe: device });
-    expect(outcome).toEqual({ kind: 'fallback', level: 'text', reason: 'plan', figure: null, message: 'This figure could not be built.' });
+    expect(outcome).toEqual({ kind: 'fallback', level: 'text', reason: 'plan', generationId: expect.stringMatching(/^gen-/), figure: null, message: 'This figure could not be built. No plan for the figure could be made. Try phrasing the request a little differently.' });
   });
 
   it('says so when generation is switched off, and carries on', async () => {

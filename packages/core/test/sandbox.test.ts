@@ -4,7 +4,9 @@ import { BRIDGE_VERSION, FRAME_MESSAGE_TYPES, HOST_MESSAGE_TYPES, parseConnect, 
 import { FRAME_SCRIPT, FRAME_SCRIPT_HASH, WORKER_SCRIPT } from '../src/sandbox/generated/bundles';
 import { guardKey, SHADOWED_GLOBALS, wrapSceneSource, WRAPPER_LINES_BEFORE } from '../src/sandbox/scene-wrapper';
 import { cspHash, sha256, base64 } from '../src/sandbox/sha256';
-import { buildShell, contentSecurityPolicy, newChannelId } from '../src/sandbox/shell';
+import { buildShell, contentSecurityPolicy, newChannelId, newNonce } from '../src/sandbox/shell';
+import { frameLang } from '../src/protocol/bridge';
+import { clipSettings, clipType, recordStage } from '../src/sandbox/clip';
 import { locateInStack } from '../src/sandbox/stack';
 import { THEME_CSS } from '../src/renderer/theme';
 
@@ -29,6 +31,13 @@ describe('bridge messages', () => {
     expect(parseHostMessage(envelope({ type: 'step', step: null }), CHANNEL)).not.toBeNull();
     expect(parseHostMessage(envelope({ type: 'init', mode: 'live', worker: '', scene: '', shifts: {} }), CHANNEL)).not.toBeNull();
     expect(parseHostMessage(envelope({ type: 'init', mode: 'admin', worker: '', scene: '', shifts: {} }), CHANNEL)).toBeNull();
+    expect(parseHostMessage(envelope({ type: 'style', style: { preset: 'glass' } }), CHANNEL)).not.toBeNull();
+    expect(parseHostMessage(envelope({ type: 'style', style: 'glass' }), CHANNEL)).toBeNull();
+    expect(parseHostMessage(envelope({ type: 'theme', theme: 'dark' }), CHANNEL)).not.toBeNull();
+    expect(parseHostMessage(envelope({ type: 'theme', theme: 'neon' }), CHANNEL)).toBeNull();
+    expect(parseHostMessage(envelope({ type: 'number', figureNumber: 3 }), CHANNEL)).not.toBeNull();
+    expect(parseHostMessage(envelope({ type: 'number', figureNumber: null }), CHANNEL)).not.toBeNull();
+    expect(parseHostMessage(envelope({ type: 'number', figureNumber: 2.5 }), CHANNEL)).toBeNull();
   });
 
   it('checks the shape of each frame message', () => {
@@ -46,13 +55,23 @@ describe('bridge messages', () => {
     expect(parseFrameMessage(envelope({ type: 'description', text: 'x'.repeat(2001) }), CHANNEL)).toBeNull();
     expect(parseFrameMessage(envelope({ type: 'escape', direction: 'sideways' }), CHANNEL)).toBeNull();
     expect(parseHostMessage(envelope({ type: 'focus', edge: 'last' }), CHANNEL)).not.toBeNull();
+    // A clip (6.10b): asked for with numbers, answered with a video or nothing.
+    expect(parseHostMessage(envelope({ type: 'clip', id: 1, seconds: 2, fps: 12 }), CHANNEL)).not.toBeNull();
+    expect(parseHostMessage(envelope({ type: 'clip', id: 1, seconds: '2' }), CHANNEL)).toBeNull();
+    expect(parseFrameMessage(envelope({ type: 'clip', id: 1, video: null }), CHANNEL)).not.toBeNull();
+    expect(parseFrameMessage(envelope({ type: 'clip', id: 1, video: new Blob(['x'], { type: 'video/webm' }) }), CHANNEL)).not.toBeNull();
+    expect(parseFrameMessage(envelope({ type: 'clip', id: 1, video: new Blob(['x'], { type: 'text/html' }) }), CHANNEL)).toBeNull();
+    expect(parseFrameMessage(envelope({ type: 'clip', id: 1, video: new Blob([], { type: 'video/webm' }) }), CHANNEL)).toBeNull();
+    expect(parseFrameMessage(envelope({ type: 'clip', id: 1, video: 'data:video/webm;base64,AAAA' }), CHANNEL)).toBeNull();
   });
 
   it('carries no generation data: every message type is on the documented list', () => {
     expect([...HOST_MESSAGE_TYPES].sort()).toEqual([
+      'clip',
       'destroy',
       'focus',
       'init',
+      'number',
       'pause',
       'ping',
       'reducedMotion',
@@ -60,11 +79,15 @@ describe('bridge messages', () => {
       'setValues',
       'snapshot',
       'step',
+      'style',
+      'theme',
     ]);
     expect([...FRAME_MESSAGE_TYPES].sort()).toEqual([
+      'clip',
       'description',
       'error',
       'escape',
+      'formulas',
       'mounted',
       'pong',
       'probe',
@@ -79,6 +102,27 @@ describe('bridge messages', () => {
   it('recognises the connect message', () => {
     expect(parseConnect({ incantly: 'connect', v: 1, channel: CHANNEL }, CHANNEL)).not.toBeNull();
     expect(parseConnect({ incantly: 'connect', v: 1, channel: 'x' }, CHANNEL)).toBeNull();
+  });
+});
+
+describe('video clips (6.10b)', () => {
+  it('keeps a clip between half a second and twenty, at 4 to 30 frames a second', () => {
+    expect(clipSettings()).toEqual({ seconds: 4, fps: 24 });
+    expect(clipSettings({ seconds: 100, fps: 1 })).toEqual({ seconds: 20, fps: 4 });
+    expect(clipSettings({ seconds: 0, fps: 120 })).toEqual({ seconds: 0.5, fps: 30 });
+    expect(clipSettings({ seconds: Number.NaN, fps: 12.4 })).toEqual({ seconds: 4, fps: 12 });
+  });
+
+  it('records in the first video format the browser offers, and gives none where it records none', async () => {
+    expect(clipType()).toBeNull();
+    expect(await recordStage(null)).toBeNull();
+    const scope = globalThis as unknown as { MediaRecorder?: unknown };
+    scope.MediaRecorder = { isTypeSupported: (type: string) => type === 'video/webm;codecs=vp8' || type === 'video/mp4' };
+    try {
+      expect(clipType()).toBe('video/webm;codecs=vp8');
+    } finally {
+      delete scope.MediaRecorder;
+    }
   });
 });
 
@@ -149,6 +193,45 @@ describe('content security policy', () => {
     expect(newChannelId()).not.toBe(newChannelId());
   });
 
+  it('lets a frame booted before its scene take styles carrying its nonce, and nothing else (PRD 25.4)', () => {
+    const nonce = newNonce();
+    expect(nonce).toMatch(/^[A-Za-z0-9+/]{22}==$/);
+    expect(newNonce()).not.toBe(nonce);
+    const html = buildShell({ html: '', css: '', channel: CHANNEL, nonce });
+    const policy = /content="([^"]+)"/.exec(html)![1]!;
+    expect(policy).toBe(contentSecurityPolicy('', '', nonce));
+    expect(policy).toContain(`style-src ${cspHash(THEME_CSS)} 'nonce-${nonce}'`);
+    expect(policy).not.toContain('unsafe');
+    // A frame made with its scene needs none.
+    expect(contentSecurityPolicy('a{b:c}')).not.toContain('nonce-');
+    for (const bad of ['short', `${nonce}"; script-src *`, 'x'.repeat(24)]) expect(() => buildShell({ html: '', css: '', channel: CHANNEL, nonce: bad })).toThrow();
+    // The scene's markup and styles arrive with the init message, checked in shape and size.
+    const init = { type: 'init', mode: 'live', worker: '', scene: '', shifts: {} };
+    const fragments = { html: "<div id='stage'></div>", css: '#stage{margin:0}', nonce, lang: 'en-GB' };
+    expect(parseHostMessage(envelope({ ...init, fragments }), CHANNEL)).not.toBeNull();
+    expect(parseHostMessage(envelope({ ...init, fragments: { ...fragments, hostCss: '.inc-title{color:red}' } }), CHANNEL)).not.toBeNull();
+    // A frame warmed without its scene takes any language a frame made with it would; anything else is left out by the host.
+    for (const tag of ['en', 'en-GB', 'zh-Hant-TW', 'ar-u-nu-latn', 'en-US-u-hc-h23']) {
+      expect(frameLang(tag)).toBe(tag);
+      expect(buildShell({ html: '', css: '', channel: CHANNEL, lang: tag })).toContain(`<html lang="${tag}"`);
+      expect(parseHostMessage(envelope({ ...init, fragments: { ...fragments, lang: tag } }), CHANNEL), tag).not.toBeNull();
+    }
+    for (const tag of ['zh_CN', 'e', 'en-', 'en"><b', '']) {
+      expect(frameLang(tag), tag).toBeUndefined();
+      expect(buildShell({ html: '', css: '', channel: CHANNEL, lang: tag })).toContain('<html lang="en"');
+    }
+    for (const broken of [
+      { ...fragments, nonce: 'guessed' },
+      { ...fragments, html: 1 },
+      { ...fragments, css: 'x'.repeat(400_001) },
+      { ...fragments, lang: 'en"><script>' },
+      { ...fragments, hostCss: ['a'] },
+      'fragments',
+    ]) {
+      expect(parseHostMessage(envelope({ ...init, fragments: broken }), CHANNEL)).toBeNull();
+    }
+  });
+
   it('ships sandbox bundles with no console calls, eval or markup that could escape a script element', () => {
     for (const code of [FRAME_SCRIPT, WORKER_SCRIPT]) {
       expect(code).not.toMatch(/console\.(log|warn|error|info|debug)/);
@@ -157,6 +240,8 @@ describe('content security policy', () => {
     expect(FRAME_SCRIPT).not.toMatch(/<\/script|<script|<!--/i);
     // The parser stays on the host: the frame and Worker never validate.
     expect(WORKER_SCRIPT).not.toContain('acorn');
-    expect(WORKER_SCRIPT.length).toBeLessThan(120_000);
+    // The base runtime with the small general helpers, fluids and the table of every handle; domain kits load on demand.
+    expect(WORKER_SCRIPT.length).toBeLessThan(150_000);
+    expect(WORKER_SCRIPT).not.toContain('phosphorus');
   });
 });

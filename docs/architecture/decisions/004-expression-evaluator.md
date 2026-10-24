@@ -13,7 +13,8 @@ Scenes show authored formulas such as `A*sin(w*x + phi + t)` as source, and the 
 Implement a Pratt parser in `@incantly/core` that compiles an expression to a tree of closures.
 
 - Grammar: numbers, declared variables, `+ - * / ^`, unary minus, parentheses, function calls and comparisons for piecewise forms.
-- Functions come from an allow-listed table held in a prototype-free object.
+- Functions come from an allow-listed table held in a prototype-free object: `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sinh`, `cosh`, `tanh`, `sqrt`, `cbrt`, `exp`, `ln`, `log`, `log10`, `log2`, `abs`, `sign`, `floor`, `ceil`, `round`, `min`, `max`, `pow`, `hypot`, `clamp`, `step` and `noise` (PRD FM-5). `noise(x)` and `noise(x, y)` are smooth gradient noise from -1 to 1, hashed from the lattice so every device and every run sees the same values; scenes get the same function as `inc.calc.noise`.
+- A formula's variables are `x`, `t`, its own `vars`, and the scene's parameters by their own names.
 - There is no property access, no strings, no assignment and no `new Function`, so the evaluator works under a strict CSP.
 - The parser caps source length and nesting depth, and every error carries a source position.
 - math.js is a development dependency only, used as a test oracle that checks our results.

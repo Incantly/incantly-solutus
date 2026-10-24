@@ -75,6 +75,7 @@ describe('isolated compilation (the eval probe outside a browser)', () => {
         ].join('\n'),
         shifts: [],
       },
+      kits: [],
     };
     const compiled = compileIsolated(unvalidated, isolatedEvaluator());
     const runtime = new SceneRuntime({});

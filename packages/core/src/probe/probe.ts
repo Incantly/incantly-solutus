@@ -17,6 +17,10 @@ export interface ProbeSpec {
   readonly steps?: number;
   /** Parameter states where the model is singular, such as an object at a lens's focal length. */
   readonly singularPoints?: ReadonlyArray<Readonly<Record<string, number>>>;
+  /** Further states the scene must run in, such as where a live figure hit a problem (RP-7). */
+  readonly states?: ReadonlyArray<Readonly<Record<string, number>>>;
+  /** Drawn elements the plan's size allows. */
+  readonly elements?: number;
 }
 
 export interface ProbeOptions {
@@ -39,7 +43,7 @@ export interface ProbeOptions {
   /** Called before every runtime step, so the Worker can refuel. */
   readonly beforeStep?: () => void;
   /** Passed to every runtime the probe creates. */
-  readonly runtime?: Pick<RuntimeOptions, 'locate'>;
+  readonly runtime?: Pick<RuntimeOptions, 'locate' | 'kits'>;
 }
 
 export type ProbeCheck =
@@ -89,7 +93,12 @@ export interface ProbeReport {
   readonly ok: boolean;
   readonly failures: readonly ProbeFailure[];
   readonly stats: ProbeStats;
+  /** What passed but is close to failing, such as a drawing near its element budget (SV-12). */
+  readonly warnings?: readonly string[];
 }
+
+/** Share of the element budget above which the probe warns (SV-12). */
+export const ELEMENT_WARNING_SHARE = 0.8;
 
 const FRAME = 1 / 60;
 const MAX_FAILURES_PER_CHECK = 4;
@@ -105,6 +114,7 @@ class Probe {
   private readonly now: () => number;
   private readonly started: number;
   private configurations = 0;
+  private readonly warnings: string[] = [];
   private frames = 0;
   private frameMs = 0;
   private measuredFrames = 0;
@@ -126,6 +136,7 @@ class Probe {
         this.pausedChange();
         this.sweep();
         this.singularPoints();
+        this.givenStates();
         this.interiorPoints();
       }
     } catch (error) {
@@ -134,6 +145,7 @@ class Probe {
     return {
       ok: this.failures.length === 0,
       failures: this.failures,
+      ...(this.warnings.length > 0 ? { warnings: this.warnings } : {}),
       stats: {
         configurations: this.configurations,
         frames: this.frames,
@@ -165,7 +177,7 @@ class Probe {
     return fn();
   }
 
-  private mount(values: Readonly<Record<string, number>> | undefined, autoplay: boolean): { runtime: SceneRuntime; ui: UiState } {
+  private mount(values: Readonly<Record<string, number>> | undefined, autoplay: boolean, traceSites = false): { runtime: SceneRuntime; ui: UiState } {
     this.checkTime();
     this.configurations++;
     const runtime = new SceneRuntime({
@@ -174,6 +186,8 @@ class Probe {
       autoplay,
       reducedMotion: false,
       ...(values ? { values } : {}),
+      // At the defaults, each element remembers its line, so a failure can point at it.
+      ...(traceSites ? { traceSites: true } : {}),
     });
     const update = this.step(() => runtime.mount(this.scene));
     return { runtime, ui: { ...runtime.uiState(), ...update.ui } as UiState };
@@ -215,7 +229,7 @@ class Probe {
 
   /** Mount, 60 frames, numbers, budget, bounds, frame cost and the teaching layer. Returns false when mounting failed. */
   private defaultRun(): boolean {
-    const { runtime, ui } = this.mount(undefined, true);
+    const { runtime, ui } = this.mount(undefined, true, true);
     const mountError = this.firstError(runtime);
     if (!runtime.isMounted || mountError) {
       this.fail({ check: 'mount', message: 'The scene threw while mounting', ...(mountError ? { error: mountError } : {}) });
@@ -239,9 +253,11 @@ class Probe {
     if (nonFinite) this.fail({ check: 'numbers', message: nonFinite, values: this.defaults, playing: true, time: runtime.time });
 
     this.elements = runtime.graph.size;
-    const budget = this.options.elementBudget ?? 300;
+    const budget = this.options.elementBudget ?? this.options.spec?.elements ?? 300;
     if (runtime.graph.size > budget) {
       this.fail({ check: 'budget', message: `The scene draws ${runtime.graph.size} elements; the budget is ${budget}` });
+    } else if (runtime.graph.size > budget * ELEMENT_WARNING_SHARE) {
+      this.warnings.push(`The scene draws ${runtime.graph.size} of its ${budget} elements: draw many small dots with stage.dots and a curve as one path`);
     }
     const capped = runtime.graph.diagnostics.find((d) => d.kind === 'samples-capped');
     if (capped) this.fail({ check: 'budget', message: capped.message });
@@ -267,20 +283,31 @@ class Probe {
       const bounds = stageBounds(runtime.graph, stage.id);
       visible += bounds.visibleElements;
       const [x, y, w, h] = stage.viewBox as ViewBox;
-      const outside: number[] = [];
+      const outside: Array<{ id: number; what: string }> = [];
       for (const [id, box] of bounds.boxes) {
         const node = runtime.graph.nodes.get(id);
         // A graph's plot layer is clipped to the plot area, so what crosses it is cut, not lost.
         if (stage.clip && node?.layer === 'mid') continue;
-        if (box.minX < x - w * margin || box.maxX > x + w * (1 + margin) || box.minY < y - h * margin || box.maxY > y + h * (1 + margin)) {
-          outside.push(id);
-        }
+        const over = [
+          box.minX < x - w * margin ? `x = ${round(box.minX)}, left of ${round(x)}` : null,
+          box.maxX > x + w * (1 + margin) ? `x = ${round(box.maxX)}, right of ${round(x + w)}` : null,
+          box.minY < y - h * margin ? `y = ${round(box.minY)}, above ${round(y)}` : null,
+          box.maxY > y + h * (1 + margin) ? `y = ${round(box.maxY)}, below ${round(y + h)}` : null,
+        ].filter((side): side is string => side !== null);
+        if (over.length > 0) outside.push({ id, what: `the ${node?.kind ?? 'element'}${node?.part ? ` "${node.part}"` : ''} reaches ${over.join(' and ')}` });
       }
       if (outside.length > 0) {
+        // Name the worst few, at the lines that made them, in stage units.
+        const sited = outside.map((o) => ({ ...o, site: runtime.graph.sites.get(o.id) }));
+        const shown = [...sited.filter((o) => o.site), ...sited.filter((o) => !o.site)].slice(0, 3);
+        const first = shown[0]!;
         this.fail({
           check: 'bounds',
-          message: `${outside.length} element${outside.length === 1 ? '' : 's'} of the stage ${stage.selector} lie outside its viewBox at the default values: ${outside.join(', ')}`,
+          message: `${outside.length} element${outside.length === 1 ? '' : 's'} of the stage ${stage.selector} ${outside.length === 1 ? 'lies' : 'lie'} outside its viewBox [${stage.viewBox.join(', ')}] at the default values: ${shown
+            .map((o) => `${o.what}${o.site ? ` (made at line ${o.site.line})` : ''}`)
+            .join('; ')}`,
           values: this.defaults,
+          ...(first.site ? { error: { phase: 'bounds', name: 'Bounds', message: `${first.what}, in stage units`, line: first.site.line, column: first.site.column } } : {}),
         });
       }
     }
@@ -362,6 +389,14 @@ class Probe {
   private singularPoints(): void {
     for (const point of this.options.spec?.singularPoints ?? []) {
       this.configuration('singular', { ...this.defaults, ...point });
+    }
+  }
+
+  private givenStates(): void {
+    for (const state of (this.options.spec?.states ?? []).slice(0, 4)) {
+      const values: Record<string, number> = { ...this.defaults };
+      for (const [name, value] of Object.entries(state)) if (name in values && Number.isFinite(value)) values[name] = value;
+      this.configuration('interior', values);
     }
   }
 

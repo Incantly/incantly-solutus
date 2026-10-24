@@ -7,11 +7,34 @@ export interface RuntimeChannel {
   onUpdate(listener: (update: RuntimeUpdate) => void): () => void;
 }
 
+const TOUCHES: ReadonlySet<RendererMessage['type']> = new Set<RendererMessage['type']>([
+  'setParam',
+  'play',
+  'pause',
+  'restart',
+  'reset',
+  'speed',
+  'step',
+  'drag',
+  'view',
+  'action',
+  'legend',
+  'formula',
+  'predict',
+  'undo',
+  'redo',
+  'timing',
+  'frame',
+  'compare',
+]);
+
 /**
  * Applies one renderer message to a runtime and returns the resulting update.
  * Shared by the in-thread channel and the Worker entry, so both behave alike.
  */
 export function handleRendererMessage(runtime: SceneRuntime, message: RendererMessage): RuntimeUpdate | null {
+  // Anything the learner does ends the idle tour; ticks, visibility and pointing do not.
+  if (TOUCHES.has(message.type)) runtime.touched();
   switch (message.type) {
     case 'tick':
       return runtime.tick(message.dt);
@@ -45,6 +68,42 @@ export function handleRendererMessage(runtime: SceneRuntime, message: RendererMe
       break;
     case 'focusPart':
       runtime.focusPart(message.name);
+      break;
+    case 'drag':
+      runtime.drag(message.id, message.phase, message.x, message.y);
+      break;
+    case 'hover':
+      runtime.hover(message.stage, message.x, message.y);
+      break;
+    case 'view':
+      runtime.view(message.stage, message.action);
+      break;
+    case 'action':
+      runtime.action(message.index);
+      break;
+    case 'legend':
+      runtime.setLegend(message.id, message.visible);
+      break;
+    case 'formula':
+      runtime.editFormula(message.index, message.source);
+      break;
+    case 'predict':
+      runtime.predict(message.index, message.choice, message.reveal === true);
+      break;
+    case 'undo':
+      runtime.undo();
+      break;
+    case 'redo':
+      runtime.redo();
+      break;
+    case 'timing':
+      runtime.setTiming(message);
+      break;
+    case 'frame':
+      runtime.stepFrame();
+      break;
+    case 'compare':
+      runtime.setCompare(message.on);
       break;
     case 'destroy':
       runtime.destroy();

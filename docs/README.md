@@ -41,13 +41,20 @@ Incantly turns a concept in a learner's notes into a safe, interactive teaching 
 - [Graph 2D](sdk/graph2d.md): the first higher-level visualization component.
 - [Teaching](sdk/teaching.md): steps, explanations, descriptions, and pedagogical bounds.
 - [Scene subset](sdk/scene-subset.md): the JavaScript, HTML and CSS a scene may use, rule by rule.
+- [Styling figures](sdk/styling.md): presets, tokens, Tailwind classes per part, layout, size and shown parts, for every figure or one.
+- [Touching the figure](sdk/interaction.md): dragging, tracing, zooming and turning figures with mouse, touch and keyboard.
+- [Chemistry](sdk/chemistry.md): atoms, bonds and molecules from formulas, lone pairs, electron shells, reactions acted out with bond energies, and energy profiles.
+- [Biology](sdk/biology.md): cells and their organelles, diffusion and active transport across a membrane, DNA's double helix, and flows along vessels.
+- [3D models](sdk/models.md): ready-made models with named, labelled pieces and exploded views, models of your own as glTF-style data, and solids of revolution.
 - [Extending the SDK](sdk/extending.md): how implementation agents promote repeated patterns into reusable capabilities.
 
 ### Delivery
 
 - [Vertical slice](implementation/vertical-slice.md): build order and boundaries.
 - [Acceptance tests](implementation/acceptance-tests.md): executable product and engineering expectations.
+- [Generation bench](implementation/generation-bench.md): how long learners wait for a figure, measured with real model replies, and how it got there.
 - [Reference examples](implementation/reference-examples.md): inspected Claude artifacts and the implementation lessons they establish.
+- [Community gallery](implementation/gallery.md): publishing figures with their requests, review, the gallery for learners, and promotion to reviewed scenes.
 
 ### Research
 

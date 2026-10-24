@@ -288,7 +288,7 @@ body {
 .gallery-card__visual {
   position: relative;
   width: 100%;
-  height: 108px;
+  height: 170px;
   margin-bottom: 8px;
   border-radius: 10px;
   overflow: hidden;
@@ -335,7 +335,7 @@ body {
   opacity: 0.6;
 }
 
-/* The detail panel that slides in from the side when a card is picked. */
+/* The detail: the whole generation in full, over its own layer. */
 .gallery-overlay {
   position: fixed;
   inset: 0;
@@ -356,22 +356,21 @@ body {
 
 .gallery-detail {
   position: fixed;
-  top: 0;
-  right: 0;
-  height: 100vh;
-  width: min(560px, 94vw);
+  inset: 0;
   z-index: 101;
   background: Canvas;
-  border-left: 1px solid var(--border-color);
-  box-shadow: -16px 0 48px color-mix(in srgb, CanvasText 14%, transparent);
+  box-shadow: 0 0 48px color-mix(in srgb, CanvasText 14%, transparent);
   display: flex;
   flex-direction: column;
   gap: 12px;
-  padding: 20px;
+  padding: 16px clamp(20px, 6vw, 56px);
   overflow-y: auto;
-  transform: translateX(24px);
   opacity: 0;
   animation: gallery-detail-in 0.2s ease forwards;
+}
+
+.gallery-detail > * {
+  flex-shrink: 0;
 }
 
 .gallery-detail[hidden] {
@@ -379,8 +378,8 @@ body {
 }
 
 @keyframes gallery-detail-in {
-  from { transform: translateX(24px); opacity: 0; }
-  to { transform: translateX(0); opacity: 1; }
+  from { transform: translateY(12px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
 }
 
 .gallery-detail__head {
@@ -388,6 +387,7 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  align-self: stretch;
 }
 
 .gallery-detail__tag {
@@ -413,31 +413,46 @@ body {
   opacity: 1;
 }
 
+/* No fixed height, no clipping: the figure reports its own height, so the
+   whole drawing and every control stay in view. The button stays pinned so
+   it is always reachable. */
 .gallery-detail__visual {
   position: relative;
   display: block;
   width: 100%;
-  height: 300px;
+  max-width: 980px;
+  margin-inline: auto;
   border-radius: 12px;
-  overflow: hidden;
   background: color-mix(in srgb, CanvasText 6%, Canvas);
 }
 
 .gallery-detail__title {
   margin: 4px 0 0;
+  width: 100%;
+  max-width: 980px;
+  margin-inline: auto;
   font-size: 1.3rem;
   line-height: 1.2;
 }
 
 .gallery-detail__prompt {
   margin: 0;
+  width: 100%;
+  max-width: 980px;
+  margin-inline: auto;
   font-size: 0.95rem;
   line-height: 1.55;
   opacity: 0.8;
 }
 
 .gallery-detail__generate {
-  margin-top: auto;
+  position: sticky;
+  bottom: 0;
+  margin-top: 12px;
+  width: 100%;
+  max-width: 980px;
+  margin-inline: auto;
+  flex-shrink: 0;
   padding: 12px 18px;
   border: none;
   border-radius: 10px;
@@ -447,10 +462,16 @@ body {
   font-weight: 700;
   cursor: pointer;
   transition: opacity 0.15s ease;
+  box-shadow: 0 -8px 20px Canvas;
 }
 
 .gallery-detail__generate:hover {
   opacity: 0.88;
+}
+
+.gallery-detail__generate:focus-visible {
+  outline: 2px solid Highlight;
+  outline-offset: 2px;
 }
 
 .gallery-card.is-picked {
@@ -706,6 +727,22 @@ body {
 .incantly-figure__status {
   margin: 8px 0 0;
   font-size: 0.9rem;
+}
+/* Earlier versions of a figure (HO-9): a quiet list under it. */
+.incantly-figure__versions {
+  margin: 8px 0 0;
+  font-size: 0.9rem;
+}
+.incantly-figure__versions summary {
+  cursor: pointer;
+  color: color-mix(in srgb, CanvasText 70%, Canvas);
+}
+.incantly-figure__versions ol {
+  margin: 6px 0 0;
+  padding-left: 20px;
+}
+.incantly-figure__versions li {
+  margin: 4px 0;
 }
 
 .incantly-figure--generating {
@@ -1218,4 +1255,112 @@ body {
   opacity: 0.6;
   text-align: center;
   padding: 24px 0;
+}
+
+/* The figure look page: settings beside a live figure. */
+main.style-page {
+  max-width: 1200px;
+  display: grid;
+  grid-template-columns: minmax(240px, 300px) minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+}
+@media (max-width: 760px) {
+  main.style-page {
+    grid-template-columns: 1fr;
+  }
+}
+.style-panel {
+  display: grid;
+  gap: 12px;
+  position: sticky;
+  top: 16px;
+}
+.style-panel fieldset {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 12px 12px;
+  border: 1px solid color-mix(in srgb, CanvasText 15%, Canvas);
+  border-radius: 10px;
+}
+.style-panel legend {
+  font-weight: 600;
+  padding: 0 4px;
+}
+.style-field {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9rem;
+}
+.style-field select,
+.style-field input[type='range'] {
+  max-width: 10rem;
+}
+.style-code {
+  margin-top: 16px;
+  padding: 12px;
+  overflow: auto;
+  font-size: 0.8rem;
+  border-radius: 10px;
+  background: color-mix(in srgb, CanvasText 6%, Canvas);
+}
+.style-slot {
+  border-radius: 20px;
+  transition: background 0.3s;
+}
+.style-slot:not([data-backdrop='plain']) {
+  padding: 28px;
+}
+.style-slot[data-backdrop='aurora'] {
+  background:
+    radial-gradient(circle at 15% 20%, #a5b4fc 0, transparent 45%),
+    radial-gradient(circle at 85% 30%, #f9a8d4 0, transparent 40%),
+    radial-gradient(circle at 50% 90%, #67e8f9 0, transparent 50%),
+    #eef2ff;
+}
+.style-slot[data-backdrop='dusk'] {
+  background:
+    radial-gradient(circle at 20% 15%, #7c3aed 0, transparent 45%),
+    radial-gradient(circle at 80% 85%, #0ea5e9 0, transparent 45%),
+    #0f172a;
+}
+
+/* The gallery: every reviewed scene, a contact sheet for reviewers and the browser checks (CH-2). */
+.gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
+  gap: 24px;
+  padding: 16px;
+}
+.gallery[data-theme='dark'] {
+  background: #101014;
+  color: #ececf1;
+}
+.gallery__cell h2 {
+  font: 600 14px/1.4 system-ui, sans-serif;
+  margin: 0 0 8px;
+}
+
+
+/* The community gallery on the generate page (GL-1). */
+.gallery-list { margin: 12px 0; }
+.gallery-list h2 { font-size: 1rem; margin: 0 0 8px; }
+.gallery-list ul { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; }
+.gallery-list li { font-size: 0.9rem; }
+.gallery-status { margin: 4px 0 0; font-size: 0.85rem; color: #555; min-height: 1.2em; }
+
+/* Generation clock: seconds while building, the total when it is done. */
+.scene-preview-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.scene-preview-timer {
+  font-variant-numeric: tabular-nums;
+  font-size: 0.85rem;
+  color: var(--text-muted, #6b7280);
 }

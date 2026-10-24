@@ -14,7 +14,7 @@ The validator parses with acorn (`ecmaVersion: 2020`, script) and walks the tree
 - Literals (numbers, strings, booleans, `null`), arrays, plain objects, spread, template strings.
 - Arrow functions, anywhere a value goes. Not `async`.
 - `if`, `switch`, `return`, `break`, `continue` (no labels), the conditional operator, logical and arithmetic operators, optional chaining.
-- `for` loops with one `let` counter, a comparison with a visible bound and a fixed step: `for (let i = 0; i < 200; i++)`. The bound is a number up to 5,000, a `const` number, an array's `length`, `Math.min(value, bound)` or one of those plus or minus a number.
+- `for` loops with one `let` counter, a comparison with a visible bound and a fixed step: `for (let i = 0; i < 200; i++)`. The bound is a number up to 5,000, a `const` number, an array's `length`, `Math.min(value, bound)` or one of those plus or minus a number. A count the controls change, such as a number of particles, is looped to `Math.min(count, 5000)`. Lists are built with such a loop and `push`; `Array` and `Array.from` are not in the subset.
 - `for...of` over arrays.
 - Free names: `inc`, `Math` (without `random`), `Number` (the members in `ALLOWED_NUMBER`), `isFinite`, `isNaN`, `Infinity`, `NaN`, `undefined`.
 - SDK calls on `inc` and on the handles it returns, plus plain array, string and number methods.
@@ -36,7 +36,7 @@ The validator parses with acorn (`ecmaVersion: 2020`, script) and walks the tree
 | `mount-only` | `inc.param`, `inc.model`, `inc.onFrame`, `inc.steps` and the other declarations inside a function |
 | `element-in-frame` | creating elements inside a callback that runs every frame or on every change |
 | `assign-global`, `assign-const`, `assign-sdk` | assigning to an undeclared name, a `const`, or SDK objects |
-| `hard-coded-colour`, `unknown-tone` | literal colours in strings; tones other than `lo`, `mid`, `hi`, `lit`, `faint`, `a`, `b`, `c` |
+| `hard-coded-colour`, `unknown-tone` | literal colours in strings; tones other than `lo`, `mid`, `hi`, `lit`, `faint`, `a`, `b`, `c`, `water` |
 | `stage-selector`, `missing-stage-host`, `no-stage` | stage hosts must be literal ids that exist in the HTML, and a scene must draw |
 | `too-many-params` | more than three parameters |
 | `budget-size`, `budget-ast`, `budget-depth`, `budget-string` | 16,000 characters, 6,000 syntax nodes, 24 levels of nesting, 600-character strings |

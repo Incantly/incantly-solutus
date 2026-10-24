@@ -37,22 +37,6 @@ async function waitDrawn(page: Page): Promise<void> {
   await expect(frame(page).locator('svg.inc-stage')).toBeVisible();
 }
 
-test('starts an ephemeral Anthropic SDK session with selectable models', async ({ page }) => {
-  await page.goto('/?page=generate');
-  await expect(page.getByRole('heading', { name: 'Generate and inspect a scene' })).toBeVisible();
-  await expect(page.getByLabel('Ask for a figure')).toBeHidden();
-  await expect(page.getByLabel('Scene and repair model')).toHaveValue('claude-sonnet-5-5');
-  await expect(page.getByLabel('Planning model')).toHaveValue('claude-haiku-5-5');
-  await page.getByLabel('Scene and repair model').selectOption('claude-opus-5-5');
-  await page.getByLabel('Anthropic API key').fill('sk-ant-test-session-key-not-real');
-  await page.getByRole('button', { name: 'Start SDK session' }).click();
-  await expect(page.getByRole('status')).toHaveText('Claude Opus 5.5 is ready.');
-  await expect(page.getByLabel('Anthropic API key')).toHaveValue('');
-  await expect(page.getByLabel('Anthropic API key')).toBeDisabled();
-  await expect(page.getByLabel('Ask for a figure')).toBeVisible();
-  await expect(page.locator('body')).not.toContainText('sk-ant-test-session-key-not-real');
-});
-
 const JOURNEYS = [
   { prompt: 'Explain projectile motion for a physics student.', concept: 'projectile motion', slider: 'Launch speed', steps: 4, animated: true },
   { prompt: 'Show me how amplitude and frequency change a sine wave.', concept: 'sine wave', slider: 'Amplitude', steps: 3, animated: true },
@@ -62,21 +46,37 @@ const JOURNEYS = [
 test.describe('the learner journey through generation', () => {
   for (const journey of JOURNEYS) {
     test(`${journey.concept}: skeleton, approved figure, use, steps, reopen, reduced motion`, async ({ page }) => {
-      await page.goto('/?page=generate&reference=1');
+      await page.goto('/?page=note');
+      // The skeleton may show for well under a second when the library has the concept: record what it shows.
+      await page.evaluate(() => {
+        const seen = { busy: false, titles: [] as string[], sliders: 0, figuresWhileBusy: 0 };
+        (window as unknown as { __seen: typeof seen }).__seen = seen;
+        new MutationObserver(() => {
+          const card = document.querySelector('figure.incantly-figure--generating');
+          if (!card) return;
+          if (card.getAttribute('aria-busy') === 'true') seen.busy = true;
+          const title = card.querySelector('.incantly-skeleton__title')?.textContent;
+          if (title && !seen.titles.includes(title)) seen.titles.push(title);
+          seen.sliders = Math.max(seen.sliders, card.querySelectorAll('input[type=range][disabled]').length);
+          seen.figuresWhileBusy = Math.max(seen.figuresWhileBusy, document.querySelectorAll('figure.incantly-figure:not(.incantly-figure--generating)').length);
+        }).observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true });
+      });
       await ask(page, journey.prompt);
-
-      // A structured loading skeleton, drawn from the plan.
-      await expect(card(page)).toHaveAttribute('aria-busy', 'true');
-      await expect(card(page).locator('.incantly-skeleton__title')).toHaveText(journey.concept);
-      await expect(card(page).locator('input[type=range][disabled]')).toHaveCount(3);
-      expect(await figureAttrs(page)).toBeUndefined();
 
       // A probe-approved figure, stored with its approval.
       await waitDrawn(page);
       await expect(card(page)).toHaveCount(0);
-      await expect(page.getByText('Inspect generated source')).toBeVisible();
-      await page.getByText('Inspect generated source').click();
-      await expect(page.locator('.agent-source code').last()).toContainText('inc.model');
+      // It started in the frame booted while it was being made, which took its styles by message (PRD 25.4).
+      if (await page.evaluate(() => 'moveBefore' in Element.prototype)) {
+        await expect(frame(page).locator('style[data-incantly="scene"]')).toHaveCount(1);
+      }
+
+      // Before it, a structured loading skeleton drawn from the plan, and nothing in the note.
+      const seen = await page.evaluate(() => (window as unknown as { __seen: { busy: boolean; titles: string[]; sliders: number; figuresWhileBusy: number } }).__seen);
+      expect(seen.busy).toBe(true);
+      expect(seen.titles).toContain(journey.concept);
+      expect(seen.sliders).toBe(3);
+      expect(seen.figuresWhileBusy).toBe(0);
       const stored = await figureAttrs(page);
       expect(stored).toMatchObject({ concept: journey.concept, meta: { approvedAt: expect.any(String), validatorVersion: 1 } });
       expect(String((stored!.meta as { generationId?: string }).generationId)).toMatch(/^gen-/);
@@ -123,8 +123,10 @@ test.describe('the learner journey through generation', () => {
 });
 
 test.describe('repair and fallback in the note', () => {
-  test('a scene that fails on the device is repaired once and then shown', async ({ page }) => {
-    await page.goto('/?page=generate&fault=frame-throw');
+  test('a scene that fails on the device is repaired once and then shown', async ({ page, request }) => {
+    // A figure an earlier run against the same dev server approved would come from the cache, with nothing to repair.
+    await request.get('/api/dev/reset?fault=frame-throw');
+    await page.goto('/?page=note&fault=frame-throw');
     await ask(page, 'Explain projectile motion.');
     await expect(card(page).locator('.incantly-figure__status')).toHaveText(/Fixing a problem|Checking that it works/, { timeout: 10_000 });
     await waitDrawn(page);
@@ -133,7 +135,7 @@ test.describe('repair and fallback in the note', () => {
   });
 
   test('when the repair does not help, the reviewed figure for the concept is shown with a notice', async ({ page }) => {
-    await page.goto('/?page=generate&fault=missing-part-stubborn');
+    await page.goto('/?page=note&fault=missing-part-stubborn');
     await ask(page, 'How does a convex lens form an image?');
     await waitDrawn(page);
     await expect(figure(page).locator('.incantly-figure__status')).toHaveText('This is a standard version of this figure.');
@@ -142,7 +144,7 @@ test.describe('repair and fallback in the note', () => {
   });
 
   test('a figure that cannot be built leaves one line, the request and Retry, and nothing in the note', async ({ page }) => {
-    await page.goto('/?page=generate&reference=1');
+    await page.goto('/?page=note');
     await ask(page, 'Explain photosynthesis in leaves');
     await expect(card(page).locator('.incantly-figure__status')).toHaveText('This figure could not be built.', { timeout: 10_000 });
     await expect(card(page)).toHaveAttribute('aria-label', 'Figure not built');
@@ -156,7 +158,7 @@ test.describe('repair and fallback in the note', () => {
   });
 
   test('switching generation off stops new figures and leaves stored ones working', async ({ page }) => {
-    await page.goto('/?page=generate&reference=1');
+    await page.goto('/?page=note');
     await ask(page, 'Show me a sine wave.');
     await waitDrawn(page);
     await page.evaluate(async () => (window.__playground as unknown as Handle).setGeneration(false));
@@ -172,8 +174,82 @@ test.describe('repair and fallback in the note', () => {
   });
 });
 
+const selectFigure = (page: Page) =>
+  page.evaluate(() => {
+    const editor = (window.__playground as unknown as { editor: { state: { doc: { descendants(f: (n: { type: { name: string } }, p: number) => void): void } }; commands: { setNodeSelection(pos: number): boolean } } }).editor;
+    let pos = -1;
+    editor.state.doc.descendants((node, p) => {
+      if (pos < 0 && node.type.name === 'incantlyFigure') pos = p;
+    });
+    editor.commands.setNodeSelection(pos);
+  });
+
+test.describe('changing a figure in the note (HO-8)', () => {
+  test('keeps the figure when a change cannot be made, and makes it again on request', async ({ page }) => {
+    await page.goto('/?page=note');
+    await ask(page, 'Explain projectile motion.');
+    await waitDrawn(page);
+    const first = (await figureAttrs(page))!;
+    // The service signed the scene, so the note can ask for changes and background repairs.
+    expect((first.meta as { ticket?: string }).ticket).toMatch(/^[\w-]+\.[\w-]+$/);
+    await selectFigure(page);
+    await page.getByLabel('Change the selected figure').fill('Turn the ball into a poem');
+    await page.getByRole('button', { name: 'Change it' }).click();
+    // The reference model makes no change: the figure stays as it was, and says so.
+    await expect(figure(page).locator('.incantly-figure__status')).toHaveText('That change is not one this figure can make, so it is unchanged.', { timeout: 15_000 });
+    expect((await figureAttrs(page))!.fragments).toEqual(first.fragments);
+    await selectFigure(page);
+    await page.getByRole('button', { name: 'Make it again' }).click();
+    const id = (first.meta as { generationId?: string }).generationId;
+    await expect.poll(async () => ((await figureAttrs(page))!.meta as { generationId?: string }).generationId, { timeout: 15_000 }).not.toBe(id);
+    await waitDrawn(page);
+    // The figure it replaced is in its history (HO-9), and comes back from there.
+    const history = figure(page).locator('.incantly-figure__versions');
+    await expect(history.locator('summary')).toHaveText('Earlier versions (1)');
+    await history.locator('summary').click();
+    await history.getByRole('button', { name: /Go back to the version from/ }).click();
+    await expect.poll(async () => ((await figureAttrs(page))!.versions as Array<{ reason: string }>).map((v) => v.reason), { timeout: 15_000 }).toEqual(['restored']);
+    expect((await figureAttrs(page))!.meta).toMatchObject({ ticket: (first.meta as { ticket?: string }).ticket });
+    await waitDrawn(page);
+  });
+});
+
+test.describe('the community gallery (GL-1, BR-13)', () => {
+  test('a learner publishes a figure with their request, a reviewer accepts it, and a note adds it from the gallery', async ({ page }) => {
+    await page.goto('/?page=note');
+    await page.evaluate(async () => (window.__playground as unknown as { clearGallery(): Promise<unknown> }).clearGallery());
+    await ask(page, 'Explain projectile motion.');
+    await waitDrawn(page);
+    await selectFigure(page);
+    const request = page.getByLabel('Publish the selected figure, with what you asked for');
+    await expect(request).toHaveValue('Explain projectile motion.');
+    await page.getByRole('button', { name: 'Publish' }).click();
+    const status = page.locator('.gallery-status');
+    await expect(status).toHaveText('Published: it shows in the gallery once a reviewer accepts it.');
+    const id = (await status.getAttribute('data-id'))!;
+    // Nobody sees it before a reviewer accepts it.
+    await page.getByRole('button', { name: 'Show the gallery' }).click();
+    await expect(page.locator('.gallery-list li')).toHaveText(['No figures have been accepted yet.']);
+    await page.evaluate(async (entry) => (window.__playground as unknown as { review(id: string, status: string): Promise<unknown> }).review(entry, 'accepted'), id);
+    await page.getByRole('button', { name: 'Show the gallery' }).click();
+    await expect(page.locator('.gallery-list li')).toContainText(['projectile motion "Explain projectile motion."']);
+    await page.getByRole('button', { name: 'Add projectile motion to the note' }).click();
+    await expect(figure(page)).toHaveCount(2);
+    const added = figure(page).nth(1);
+    await expect(added).toHaveAttribute('data-state', 'live', { timeout: 15_000 });
+    await added.scrollIntoViewIfNeeded();
+    await expect(added.frameLocator('iframe').locator('svg.inc-stage')).toBeVisible();
+    // The gallery gave it a ticket of its own, so the note can have it repaired or changed.
+    const attrs = await page.evaluate(() =>
+      (window.__playground as unknown as Handle).editor.getJSON().content?.filter((n) => n.type === 'incantlyFigure').map((n) => n.attrs),
+    );
+    expect((attrs![1]!.meta as { ticket?: string }).ticket).toMatch(/^[\w-]+\.[\w-]+$/);
+    expect(attrs![1]!.fragments).toEqual(attrs![0]!.fragments);
+  });
+});
+
 test('product signals describe the journey without any note content', async ({ page }) => {
-  await page.goto('/?page=generate&reference=1');
+  await page.goto('/?page=note');
   const prompt = 'Explain projectile motion to my study group tomorrow';
   await ask(page, prompt);
   await waitDrawn(page);

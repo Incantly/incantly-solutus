@@ -2,6 +2,7 @@ import type { ScenePlan } from '@incantly/core';
 import { REFERENCE_SCENES, type ReferenceScene } from '@incantly/core/scenes';
 import { parsePlanReply } from './fragments';
 import { ScriptedModel, type CallPurpose, type ModelCall } from './models';
+import { conceptScores } from './retrieve';
 
 /**
  * A stand-in model that answers from the reviewed reference scenes, with
@@ -42,26 +43,10 @@ export interface ReferenceModelOptions {
   readonly models?: Partial<Record<CallPurpose, string>>;
 }
 
-/** Words that pick a concept out of a learner's request. */
-const KEYWORDS: Readonly<Record<string, readonly string[]>> = {
-  'sine-wave': ['sine', 'sinus', 'sin(', 'wave', 'amplitude', 'frequency', 'phase', 'trig', 'periodic', 'oscillat'],
-  projectile: ['projectile', 'thrown', 'throw', 'ball', 'cannon', 'launch', 'trajector', 'parabola', 'range', 'gravity', 'vertical velocity', 'horizontal speed'],
-  'thin-lens': ['lens', 'focal', 'ray', 'image', 'convex', 'optic', 'magnif', 'refract'],
-};
-
+/** The reviewed scene a text is about: retrieval's own scores, whichever concept leads. */
 export function conceptFor(text: string, scenes: Readonly<Record<string, ReferenceScene>> = REFERENCE_SCENES): ReferenceScene | null {
-  const lower = text.toLowerCase();
-  let best: ReferenceScene | null = null;
-  let bestScore = 0;
-  for (const scene of Object.values(scenes)) {
-    const words = KEYWORDS[scene.id] ?? scene.plan.concept.toLowerCase().split(/\s+/);
-    const score = words.reduce((sum, word) => sum + (lower.includes(word) ? 1 : 0), 0);
-    if (score > bestScore) {
-      best = scene;
-      bestScore = score;
-    }
-  }
-  return best;
+  const [best] = conceptScores(text, scenes);
+  return best && best.score > 0 ? best.scene : null;
 }
 
 function fence(name: string, source: string): string {
@@ -70,6 +55,32 @@ function fence(name: string, source: string): string {
 
 function sceneReply(html: string, css: string, js: string): string {
   return `${fence('html', html)}\n${fence('css', css)}\n${fence('js', js)}\n`;
+}
+
+/**
+ * An edit reply turning `before` into `after`: one SEARCH/REPLACE over the
+ * lines that differ, with a line of context, or the whole script when the
+ * changes are scattered.
+ */
+export function editReply(before: string, after: string): string {
+  if (before === after) return '```edit js\n```\n';
+  const a = before.replace(/\n$/, '').split('\n');
+  const b = after.replace(/\n$/, '').split('\n');
+  let start = 0;
+  while (start < a.length && start < b.length && a[start] === b[start]) start++;
+  let end = 0;
+  while (end < a.length - start && end < b.length - start && a[a.length - 1 - end] === b[b.length - 1 - end]) end++;
+  const removed = a.slice(start, a.length - end);
+  const added = b.slice(start, b.length - end);
+  if (removed.length > 12 || added.length > 12) return fence('js', after);
+  // One line of context, so the SEARCH is never empty and stays unique.
+  const before1 = start > 0 ? [a[start - 1]!] : [];
+  const search = [...before1, ...removed];
+  const replace = [...before1, ...added];
+  if (search.length === 0) return `\`\`\`edit js\n<<<<<<< SEARCH\n=======\n${replace.join('\n')}\n>>>>>>> REPLACE\n\`\`\`\n`;
+  const occurrences = before.split(search.join('\n')).length - 1;
+  if (occurrences !== 1) return fence('js', after);
+  return `\`\`\`edit js\n<<<<<<< SEARCH\n${search.join('\n')}\n=======\n${replace.join('\n')}\n>>>>>>> REPLACE\n\`\`\`\n`;
 }
 
 /** Injects a fault into a reference scene's script. */
@@ -134,13 +145,21 @@ export function referenceModel(options: ReferenceModelOptions = {}): ScriptedMod
   const faultFor = (trial: number): Fault => (typeof options.fault === 'function' ? options.fault(trial) : options.fault ?? 'none');
   const stubbornFor = (trial: number): boolean => (typeof options.stubborn === 'function' ? options.stubborn(trial) : options.stubborn ?? false);
   let trial = -1;
+  // A library build starts before its plan call, which only confirms it: the two are one trial.
+  let confirming: string | null = null;
 
   const script = (call: ModelCall): string => {
     const user = call.prompt.user;
+    const request = /The learner asked: "([^"]*)"/.exec(user)?.[1] ?? '';
+    const library = call.purpose === 'scene' && call.prompt.system.some((block) => block.text.includes('LIBRARY format'));
+    if (library) {
+      trial++;
+      confirming = request;
+    }
     if (call.purpose === 'plan') {
       const replan = user.includes('Your previous plan was rejected');
-      if (!replan) trial++;
-      const request = /The learner asked: "([^"]*)"/.exec(user)?.[1] ?? '';
+      if (!replan && confirming !== request) trial++;
+      confirming = null;
       const scene = conceptFor(request, scenes);
       if (!scene) return fence('json', JSON.stringify(unsupportedPlan(request)));
       const plan = faultFor(trial) === 'bad-plan' && !replan ? overfullPlan(scene.plan) : scene.plan;
@@ -150,6 +169,12 @@ export function referenceModel(options: ReferenceModelOptions = {}): ScriptedMod
     const scene = conceptFor(planned?.concept ?? user, scenes) ?? Object.values(scenes)[0]!;
     const fault = faultFor(trial);
     if (call.purpose === 'scene') {
+      // Asked for edits to the reviewed scene of the same concept: reply with only the changes.
+      const editing = call.prompt.system.some((block) => block.text.startsWith('EDIT format'));
+      if (editing) {
+        const reply = editReply(scene.js, fault === 'cut-off' ? faultyScript(scene, 'forbidden-call') : faultyScript(scene, fault));
+        return fault === 'cut-off' ? reply.slice(0, Math.max(12, Math.floor(reply.length / 2))) : reply;
+      }
       if (fault === 'cut-off') {
         const reply = sceneReply(scene.html, scene.css, scene.js);
         return reply.slice(0, reply.indexOf('```js') + Math.floor(scene.js.length / 2));

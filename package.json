@@ -24,7 +24,8 @@
     "size": "node scripts/check-engine-size.mjs",
     "check": "npm run lint && npm run typecheck && npm test && npm run size",
     "evals": "npm run evals --workspace @incantly/generation --",
-    "serve": "npm run serve --workspace @incantly/generation"
+    "serve": "npm run serve --workspace @incantly/generation",
+    "gallery": "npm run gallery --workspace @incantly/generation --"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.13.0",

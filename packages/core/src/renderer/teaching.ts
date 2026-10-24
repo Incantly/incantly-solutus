@@ -272,7 +272,10 @@ export class TeachingView {
     const partOf = (target: EventTarget | null): string | null => {
       if (!target || !(target as Element).closest) return null;
       const element = (target as Element).closest('[data-part]');
-      return element && sceneRoot.contains(element) ? element.getAttribute('data-part') : null;
+      if (element && sceneRoot.contains(element)) return element.getAttribute('data-part');
+      // 3D faces live in shared slots and name the part they draw for now.
+      const owned = (target as Element).closest('[data-owner]');
+      return owned && sceneRoot.contains(owned) ? owned.getAttribute('data-owner') : null;
     };
     sceneRoot.addEventListener(
       'pointerover',
@@ -345,6 +348,7 @@ export class TeachingView {
       this.highlighted = element;
     }
     if (element && !element.classList.contains('is-focus')) element.classList.add('is-focus');
+    this.scene.focusOwner(part?.name ?? null);
     this.figureRoot.classList.toggle('has-focus', element !== null);
 
     // The step already says why its part matters; other parts show their note.

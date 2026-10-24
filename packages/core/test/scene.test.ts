@@ -58,6 +58,14 @@ describe('scene graph', () => {
     const ball = stage.circle(1, 1, 1);
     expect(() => ball.set({ fill: 'red' } as never)).toThrow('Colours come from tones');
     expect(() => ball.set({ onclick: 'x' } as never)).toThrow('Unknown attribute "onclick"');
+    // The words of a text are not an attribute.
+    expect(() => stage.text(0, 0, 'a').set({ text: 'b' } as never)).toThrow('Set a text\'s words with .text(...)');
+  });
+
+  it('says a shape takes numbers, not functions, and is set again on each frame', () => {
+    // Once a repaired spring scene gave a rect's width as a function of the stiffness, and threw at mount.
+    const { stage } = setup();
+    expect(() => stage.rect(60, 262, (() => 8) as never, 8)).toThrow('Attribute "width" was given a function; give it a number, and set it again in inc.onFrame');
   });
 
   it('rejects attribute values that are not plain geometry', () => {
@@ -67,13 +75,30 @@ describe('scene graph', () => {
     expect(() => p.set({ 'stroke-dasharray': '<script>' })).toThrow('not plain geometry');
   });
 
+  it('turns about a point in the units at() uses, wherever at() put it', () => {
+    // A bicycle wheel once sat at (440, 150) and turned about (440, 150) in its own units, flinging its spokes off the stage.
+    const { graph, stage } = setup();
+    const g = stage.group();
+    graph.flush();
+    g.at(440, 150).rotate(30, { about: [440, 150] });
+    expect(graph.flush().at(-1)).toMatchObject({ name: 'transform', value: 'translate(440 150) rotate(30 0 0)' });
+    g.at(400, 100);
+    expect(graph.flush().at(-1)).toMatchObject({ name: 'transform', value: 'translate(400 100) rotate(30 40 50)' });
+    g.rotate(30, { x: 400, y: 100 } as never);
+    expect(graph.flush().at(-1)).toMatchObject({ name: 'transform', value: 'translate(400 100) rotate(30 0 0)' });
+    expect(() => g.rotate(10, { about: 5 } as never)).toThrow('about as a point');
+  });
+
   it('composes translate, rotate and scale into one transform', () => {
     const { graph, stage } = setup();
     const g = stage.group();
     graph.flush();
-    g.at(10, 20).rotate(45, 1, 2).scale(2);
+    g.at(10, 20).rotate(45, { about: [11, 22] }).scale(2);
     const last = graph.flush().at(-1);
     expect(last).toEqual({ op: 'attr', id: 2, name: 'transform', value: 'translate(10 20) rotate(45 1 2) scale(2 2)' });
+    // Saved figures turn about a pivot in their own units, as they always did.
+    (g as unknown as { rotate(degrees: number, cx: number, cy: number): unknown }).rotate(45, 3, 4);
+    expect(graph.flush().at(-1)).toEqual({ op: 'attr', id: 2, name: 'transform', value: 'translate(10 20) rotate(45 3 4) scale(2 2)' });
     g.at(0, 0).rotate(0).scale(1);
     expect(graph.flush().at(-1)).toEqual({ op: 'attr', id: 2, name: 'transform', value: null });
   });
@@ -98,15 +123,29 @@ describe('scene graph', () => {
     const dot = stage.circle(0, 0, 1, { parent: g });
     expect(graph.nodes.get(3)?.layer).toBe('front');
     expect(() => stage.circle(0, 0, 1, { parent: dot })).toThrow('must be a group');
-    expect(() => stage.circle(0, 0, 1, { parent: {} as never })).toThrow('Expected a handle returned by the SDK');
+    expect(() => stage.circle(0, 0, 1, { parent: {} as never })).toThrow('Expected an element the SDK made');
   });
 
-  it('registers named parts once', () => {
+  it('says why dots cannot stand where an element is needed, and what can', () => {
+    // Once a diffusion scene registered its particles, drawn as dots, as a part, and threw at mount.
+    const { stage } = setup();
+    const dots = stage.dots({ tone: 'a' });
+    expect(() => stage.part('particles', dots as never)).toThrow('Dots and fluids are drawn on a canvas, not as an element, so they cannot be a part');
+    expect(() => stage.part('particles', dots as never)).toThrow('the region they move in (stage.rect with fill: false)');
+    expect(() => stage.part('particles', {} as never)).toThrow('Expected an element the SDK made');
+  });
+
+  it('registers named parts once, and renames an element registered again', () => {
     const { graph, parts, stage } = setup();
     const ball = stage.part('Ball', stage.circle(1, 1, 1), { label: 'Projectile', info: 'It flies.' });
     expect(parts.parts.get('Ball')?.label).toBe('Projectile');
     expect(graph.flush().at(-1)).toEqual({ op: 'part', id: 2, name: 'Ball', label: 'Projectile', info: 'It flies.' });
-    expect(() => stage.part('Ball', ball)).toThrow('registered twice');
+    // Two elements cannot share a name.
+    expect(() => stage.part('Ball', stage.circle(2, 2, 1))).toThrow('registered twice');
+    // The same element again takes the later name, label and info, as a later drag replaces an earlier.
+    stage.part('Shot', ball, { label: 'Shot', info: 'It flies far.' });
+    expect([...parts.parts.keys()]).toEqual(['Shot']);
+    expect(graph.flush().at(-1)).toEqual({ op: 'part', id: 2, name: 'Shot', label: 'Shot', info: 'It flies far.' });
   });
 
   it('rejects stage selectors that are not ids and repeated stages', () => {
@@ -149,8 +188,19 @@ describe('path helpers', () => {
   });
 
   it('draws arrows with a head and nothing for zero length', () => {
-    expect(path.arrow(0, 0, 10, 0, 4)).toMatch(/^M0 0L10 0 M/);
-    expect(path.arrow(0, 0, 0, 0)).toBe('');
+    expect(path.arrow({ from: [0, 0], to: [10, 0] }, 4)).toMatch(/^M0 0L10 0 M/);
+    expect(path.arrow({ from: [0, 0], by: [0, 0] })).toBe('');
+    expect(() => path.arrow({ from: [0, 0], to: [1, 1], by: [1, 1] } as never)).toThrow('to: [x, y]');
+    expect(() => path.arrow({ to: [1, 1] } as never)).toThrow('from: [x, y]');
+  });
+
+  it('draws an arrow along an offset, so its tip is the start plus the offset', () => {
+    // A jet engine's repair once read dx, dy as the end point: arrow(542, 130, 542 + 61, 130) ran off the stage.
+    expect(path.arrow({ from: [542, 130], by: [61, 0] }, 10)).toMatch(/^M542 130L603 130 M/);
+    expect(path.arrow({ from: [542, 130], to: [603, 130] }, 10)).toBe(path.arrow({ from: [542, 130], by: [61, 0] }, 10));
+    // Saved figures call it as (x, y, dx, dy, head), and still draw the same arrow.
+    const positional = path.arrow as unknown as (x: number, y: number, dx: number, dy: number, head?: number) => string;
+    expect(positional(150, 245, 20, -30)).toBe(path.arrow({ from: [150, 245], by: [20, -30] }));
   });
 
   it('samples arcs and parametric curves', () => {
@@ -215,8 +265,102 @@ describe('stage bounds', () => {
     ]);
   });
 
+  it('measures an arc by the curve itself, not by its radius round each end', () => {
+    const box = (d: string) => {
+      const points = pathPoints(d);
+      const xs = points.map((p) => p[0]);
+      const ys = points.map((p) => p[1]);
+      return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)].map((v) => Math.round(v * 1000) / 1000 + 0);
+    };
+    // A golden-spiral quarter arc across a 100 square at (200, 100), either way round, stays in the square.
+    expect(box('M 300 200 A 100 100 0 0 1 200 100')).toEqual([200, 100, 300, 200]);
+    expect(box('M 300 200 A 100 100 0 0 0 200 100')).toEqual([200, 100, 300, 200]);
+    // A half circle bulges by its radius on one side only.
+    expect(box('M 0 50 A 50 50 0 0 1 100 50')).toEqual([0, 0, 100, 50]);
+    expect(box('M 0 50 A 50 50 0 1 0 100 50')).toEqual([0, 50, 100, 100]);
+    // Radii too small to reach are scaled up, and an ellipse turned by 90° swaps its extents.
+    expect(box('M 0 0 A 1 1 0 0 1 20 0')).toEqual([0, -10, 20, 0]);
+    // Turned by 90°, the ellipse's long axis runs down the y axis and the half ellipse bulges 10 to the right.
+    expect(box('M 0 -20 A 20 10 90 0 1 0 20')).toEqual([0, -20, 10, 20]);
+  });
+
   it('reports no box for an empty stage', () => {
     const { graph } = setup();
     expect(stageBounds(graph, 1)).toMatchObject({ box: null, visibleElements: 0 });
+  });
+
+  it('estimates an equation around its point: taller when a fraction stacks, to one side when anchored (DG-5)', () => {
+    const { graph, stage } = setup();
+    const law = stage.equation(380, 40, 'F = G*m1*m2/r^2', { size: 20 });
+    const centred = stageBounds(graph, 1).box!;
+    expect((centred.minX + centred.maxX) / 2).toBeCloseTo(380, 6);
+    expect((centred.minY + centred.maxY) / 2).toBeCloseTo(40, 6);
+    expect(centred.maxY - centred.minY).toBeCloseTo(48, 6);
+    law.set({ 'text-anchor': 'start' });
+    expect(stageBounds(graph, 1).box!.minX).toBe(380);
+    law.text('F = m*a');
+    expect(stageBounds(graph, 1).box!.maxY - stageBounds(graph, 1).box!.minY).toBeCloseTo(26, 6);
+  });
+});
+
+describe('glow (FX-1)', () => {
+  it('marks a glowing element with a class, and dots with a glowing flag', () => {
+    const { graph, stage } = setup();
+    const lamp = stage.circle(10, 10, 5, { tone: 'lit', glow: true });
+    expect(graph.flush()).toContainEqual({ op: 'class', id: 2, value: 'inc-tone-lit inc-glow' });
+    lamp.glow(false);
+    expect(graph.flush()).toEqual([{ op: 'class', id: 2, value: 'inc-tone-lit' }]);
+    stage.dots({ glow: true }).set([[1, 1]]);
+    expect(graph.flush()).toContainEqual(expect.objectContaining({ op: 'dots', glow: true, points: [1, 1] }));
+  });
+});
+
+describe('equations (DG-5)', () => {
+  it('draw as a math element on the labels layer, centred, 16 units by default', () => {
+    const { graph, stage } = setup();
+    stage.equation(100, 50, 'E = m*c^2', { tone: 'a' });
+    const commands = graph.flush();
+    expect(commands).toContainEqual({ op: 'create', id: 2, kind: 'math', parent: 1, layer: 'labels' });
+    expect(commands).toContainEqual({ op: 'attr', id: 2, name: 'text-anchor', value: 'middle' });
+    expect(commands).toContainEqual({ op: 'attr', id: 2, name: 'font-size', value: '16' });
+    expect(commands).toContainEqual({ op: 'text', id: 2, value: 'E = m*c^2' });
+    expect(() => stage.equation(0, 0, 'x', { anchor: 'left' as never })).toThrow(/'start', 'middle' or 'end'/);
+    expect(() => stage.equation(0, 0, 'x', { size: 0 })).toThrow(/from 0 to 200/);
+  });
+});
+
+describe('handles that stand for their elements', () => {
+  it('lets a graph item stand for its handle, gives every element a handle, and names what it needs when neither fits', async () => {
+    const { SceneRuntime } = await import('../src/runtime/runtime');
+    const runtime = new SceneRuntime({ autoplay: false });
+    runtime.mount((inc) => {
+      const graph = inc.graph2d('#s', { x: [0, 10], y: [0, 10], title: 'G' });
+      const point = graph.point(1, 1);
+      const label = graph.label(2, 2, 'two');
+      graph.stage.part('Point', point as never, { label: 'Point' });
+      graph.stage.part('Label', label.handle, { label: 'Label' });
+      expect(label.handle).toBe(label);
+      expect(inc.path.polyline([[0, 0], [1, 1]])).toBe(inc.path.line([[0, 0], [1, 1]]));
+      expect(inc.shapes.resistor(0, 0, 10, 0)).toBe(inc.shapes.zigzag(0, 0, 10, 0));
+    });
+    expect(runtime.uiState().parts.map((p) => p.name).sort()).toEqual(['Label', 'Point']);
+    // A handle at numbers sets no parameter: graph.drag gives it a map, or the mount says what it needs.
+    const mapped = new SceneRuntime({ autoplay: false });
+    mapped.mount((inc) => {
+      inc.param('speed', { min: 0, max: 10, value: 5 });
+      const graph = inc.graph2d('#s', { x: [0, 10], y: [0, 10], title: 'G' });
+      const tip = graph.handle({ x: 0, y: 0, label: 'the arrow tip' });
+      graph.drag(tip, (p) => ({ speed: p.x }));
+      tip.hide().show();
+    });
+    expect(mapped.isMounted).toBe(true);
+    const unmapped = new SceneRuntime({ autoplay: false });
+    unmapped.mount((inc) => {
+      const graph = inc.graph2d('#s', { x: [0, 10], y: [0, 10], title: 'G' });
+      graph.handle({ x: 1, y: 2, label: 'the tip' });
+    });
+    const thrown = unmapped.uiState().error?.message ?? '';
+    expect(unmapped.isMounted).toBe(false);
+    expect(thrown).toContain('graph.handle at numbers sets no parameter, so "the tip" needs a map: graph.drag(handle, (p) => ({ name: p.x }))');
   });
 });

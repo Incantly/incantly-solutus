@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import type { Inc } from '../src/api/types';
-import { niceStep, ticks } from '../src/graph2d/graph';
+import type { GraphSegment, Inc } from '../src/api/types';
+import { clipSegment, niceStep, ticks } from '../src/graph2d/graph';
+import { nodeOf } from '../src/scene/handles';
 import { pathPoints } from '../src/scene/bounds';
 import { SceneRuntime } from '../src/runtime/runtime';
 
@@ -37,6 +38,68 @@ describe('graph2d', () => {
     expect(toX(10)).toBe(740);
     expect(toY(10)).toBe(20);
     expect(toY(0)).toBe(340);
+  });
+
+  it('moves a label or an equation in data units, as a point moves', () => {
+    // A Fibonacci scene once wrote tag.at(8, 471) on a 0 to 7000 axis and its label fell far below the stage.
+    let ids: number[] = [];
+    let expected: Array<[number, number]> = [];
+    const { runtime } = run((inc) => {
+      const g = inc.graph2d('#g', { x: [0, 21], y: [0, 7000], title: 'Terms' });
+      const tag = g.label(1, 3500, 'F1 = 1').at(8, 471);
+      const eq = g.equation(1, 3500, 'F_n').at(20, 6500);
+      ids = [nodeOf(tag).id, nodeOf(eq).id];
+      expected = [[g.toX(8), g.toY(471)], [g.toX(20), g.toY(6500)]];
+    });
+    ids.forEach((id, i) => {
+      const attrs = runtime.graph.nodes.get(id)!.attrs;
+      expect(Number(attrs.get('x'))).toBeCloseTo(expected[i]![0], 1);
+      expect(Number(attrs.get('y'))).toBeCloseTo(expected[i]![1], 1);
+    });
+  });
+
+  it('lets a scene take a graph or stage method off it and call it alone', () => {
+    // Once a lens scene wrote const X = graph.toX and threw on its first X(0).
+    let mapped: number[] = [];
+    const { mount } = run((inc) => {
+      const g = inc.graph2d('#g', { x: [0, 10], y: [0, 10], title: 'Map' });
+      const X = g.toX;
+      const { toY } = g;
+      const line = g.stage.line;
+      line(X(0), toY(0), X(10), toY(10), { tone: 'a' });
+      const s = inc.svg('#s', { viewBox: [0, 0, 100, 100], title: 'Stage' });
+      const { circle } = s;
+      circle(50, 50, 4);
+      mapped = [X(0), X(10), toY(10)];
+    });
+    expect(mount.ui.error).toBeNull();
+    expect(mapped).toEqual([52, 740, 20]);
+  });
+
+  it('cuts a segment to the plot area, as curves are, and hides one wholly outside it', () => {
+    // Once tangent and secant lines through steep points ran off the figure and failed the bounds check.
+    let tangent: GraphSegment | null = null;
+    let away: GraphSegment | null = null;
+    const { runtime } = run((inc) => {
+      const g = inc.graph2d('#g', { x: [0, 10], y: [0, 10], title: 'Cut' });
+      tangent = g.segment(2, -40, 8, 50, { tone: 'a' });
+      away = g.segment(20, 20, 30, 30);
+    });
+    const line = runtime.graph.nodes.get(nodeOf(tangent!.handle).id)!;
+    const ys = [Number(line.attrs.get('y1')), Number(line.attrs.get('y2'))];
+    // The plot area of the default view box is [52, 20, 688, 320].
+    for (const y of ys) {
+      expect(y).toBeGreaterThanOrEqual(20 - 1e-9);
+      expect(y).toBeLessThanOrEqual(340 + 1e-9);
+    }
+    expect(nodeOf(away!.handle).hidden).toBe(true);
+    // Brought back into the range, it shows again; a scene's own hide still wins.
+    away!.between(1, 1, 9, 9);
+    expect(nodeOf(away!.handle).hidden).toBe(false);
+    away!.hide().between(2, 2, 8, 8);
+    expect(nodeOf(away!.handle).hidden).toBe(true);
+    expect(clipSegment(0, 0, 10, 10, [2, 2, 4, 4])).toEqual([2, 2, 6, 6]);
+    expect(clipSegment(0, 0, 1, 1, [2, 2, 4, 4])).toBeNull();
   });
 
   it('plots a formula, shows its source and redraws when a parameter changes', () => {

@@ -16,6 +16,9 @@ export type { CompiledExpression } from './expr';
 
 export { SceneRuntime } from './runtime/runtime';
 export type { RuntimeOptions, RuntimeStats, SceneErrorRecord, SceneFunction } from './runtime/runtime';
+export { KIT_NAMES, KIT_OF, kitsFor } from './runtime/kits';
+export type { KitCall, KitEntry, KitModule, KitName, KitRegistry } from './runtime/kits';
+export { availableKits, loadKitModules } from './kits/load';
 
 export type { RendererMessage, RuntimeUpdate } from './protocol/runtime-messages';
 export type { SceneCommand } from './protocol/scene-commands';
@@ -31,19 +34,26 @@ export type { Fragments, MountedFigure, TrustedMountOptions } from './engine/mou
 export { FigureRenderer } from './renderer/renderer';
 export type { RendererOptions } from './renderer/renderer';
 export { THEME_CSS } from './renderer/theme';
+export { STYLE_SLOTS, checkStyle, mergeStyles, resolveStyle } from './renderer/style';
+export type { ControlsPlacement, FigureLayout, FigureStyle, ShowPart, StylePreset, StyleSlot } from './renderer/style';
 
-export { validateScene, validateSceneCss, validateSceneHtml, validateSceneJs, formatDiagnostic, hasErrors, SCENE_LIMITS, VALIDATOR_VERSION } from './validation';
-export type { Diagnostic, SceneFragments, SceneLimits, SceneValidation, ValidatedScene } from './validation';
+export { fixScene, validateScene, validateSceneCss, validateSceneHtml, validateSceneJs, formatDiagnostic, hasErrors, SCENE_LIMITS, VALIDATOR_VERSION } from './validation';
+export type { Diagnostic, FixedScene, SceneFragments, SceneLimits, SceneValidation, ValidatedScene } from './validation';
 
 export { compileIsolated, ISOLATED_SCRIPT_NAME, probeScene } from './probe';
 export type { IsolatedScene, ProbeCheck, ProbeError, ProbeFailure, ProbeOptions, ProbeReport, ProbeSpec, ProbeStats, ScriptEvaluator } from './probe';
+export { AUDIT_TURNS, auditDepthOf, looseLineEnds, offlineChecks } from './probe';
+export type { DepthFinding, LooseEnd, OfflineOptions, OfflineReport } from './probe';
+export type { AuditTurn, DepthAudit, DepthViolation } from './runtime/kit';
 
-export type { PlanOutput, PlanParameter, SceneKind, ScenePlan, SingularPoint } from './protocol/plan';
+export type { ControlKind, PlanOutput, PlanParameter, SceneKind, ScenePlan, SceneSize, SingularPoint, SizeBudget } from './protocol/plan';
+export { SCENE_SIZES, SIZE_BUDGETS } from './protocol/plan';
 
 export { BRIDGE_VERSION } from './protocol/bridge';
 export type { FrameMessage, HostMessage } from './protocol/bridge';
 
-export { DEFAULT_DEADLINES, mountSandboxed, presentScene, probeSandboxed, sandboxAdapter } from './sandbox/adapter';
+export { DEFAULT_DEADLINES, mountSandboxed, presentScene, prewarmFigure, probeSandboxed, sandboxAdapter, warmProbe } from './sandbox/adapter';
+export { preloadKits } from './sandbox/worker-script';
 export type {
   Deadlines,
   ExecutionAdapter,
@@ -52,8 +62,13 @@ export type {
   FigureState,
   MountOptions,
   PresentResult,
+  PrewarmOptions,
   ProbeOutcome,
   SandboxProbeOptions,
+  WarmLease,
+  WarmProbe,
 } from './sandbox/adapter';
 export { inThreadAdapter, mountInThread } from './engine/in-thread-adapter';
+export { CLIP_LIMITS, clipSettings, clipType } from './sandbox/clip';
+export type { ClipOptions } from './sandbox/clip';
 export { contentRef } from './sandbox/sha256';

@@ -49,11 +49,16 @@ describe('scene runtime: mounting', () => {
     expect(runtime.isMounted).toBe(false);
   });
 
-  it('allows at most three parameters', () => {
+  it('allows at most eight controls, or fewer when the host says so', () => {
     const { first } = mount((inc) => {
+      for (const name of ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i']) inc.param(name, { min: 0, max: 1, value: 0 });
+    });
+    expect(first.ui.error?.message).toBe('A figure has at most 8 adjustable parameters');
+    const small = new SceneRuntime({ maxParams: 3 });
+    const update = small.mount((inc) => {
       for (const name of ['a', 'b', 'c', 'd']) inc.param(name, { min: 0, max: 1, value: 0 });
     });
-    expect(first.ui.error?.message).toBe('A figure has at most 3 adjustable parameters');
+    expect(update.ui.error?.message).toBe('A figure has at most 3 adjustable parameters');
   });
 
   it.each([
@@ -95,8 +100,8 @@ describe('scene runtime: one loop and dirty rendering', () => {
     const { runtime } = mount(ballScene(log));
     runtime.tick(FRAME);
     runtime.tick(5); // a backgrounded tab: capped at maxDt
-    expect(log.frames.map((f) => f.dt)).toEqual([FRAME, 0.05]);
-    expect(runtime.time).toBeCloseTo(FRAME + 0.05, 12);
+    expect(log.frames.map((f) => f.dt)).toEqual([FRAME, 0.1]);
+    expect(runtime.time).toBeCloseTo(FRAME + 0.1, 12);
   });
 
   it('does no work while paused and clean', () => {
@@ -295,11 +300,37 @@ describe('formulas and tweens', () => {
     expect(wave?.evaluate({ x: Math.PI / 2, t: 0, A: 1 })).toBeCloseTo(1, 12);
   });
 
+  it('takes a built-in constant bound to its own value as the built-in, and refuses one bound to another', () => {
+    // Once a normal distribution scene bound pi: Math.PI and threw at mount.
+    let pdf: ReturnType<Inc['formula']> | undefined;
+    const fine = mount((inc) => {
+      const sd = inc.param('sd', { min: 0.5, max: 3, value: 1 });
+      pdf = inc.formula('exp(-x^2/(2*sd^2))/(sd*sqrt(2*pi))', { vars: { sd, pi: Math.PI } });
+    });
+    expect(fine.first.ui.error).toBeNull();
+    expect(pdf?.(0)).toBeCloseTo(1 / Math.sqrt(2 * Math.PI), 12);
+    // An eccentricity named e would read as Euler's number: still an error.
+    const clash = mount((inc) => {
+      inc.formula('e*x', { vars: { e: 0.3 } });
+    });
+    expect(clash.first.ui.error?.message).toContain('"e" is a built-in name and cannot be a variable');
+  });
+
   it('reports formula errors with their position', () => {
     const { first } = mount((inc) => {
       inc.formula('A*sin(x)', { vars: {} });
     });
-    expect(first.ui.error?.message).toBe('Formula "A*sin(x)": Unknown variable "A" at position 0');
+    expect(first.ui.error?.message).toBe('Formula "A*sin(x)": Unknown variable "A" at position 0. Use a parameter by its own name, or bind it: { vars: { A: aParameter } }');
+    // A parameter is a formula variable by its own name.
+    let law: ReturnType<Inc['formula']> | undefined;
+    const named = mount((inc) => {
+      inc.param('temperature', { min: 200, max: 600, value: 300 });
+      inc.param('volume', { min: 1, max: 5, value: 2 });
+      law = inc.formula('0.8314*temperature/volume');
+      inc.formula('T/V');
+    });
+    expect(law?.(0)).toBeCloseTo((0.8314 * 300) / 2, 9);
+    expect(named.first.ui.error?.message).toBe('Formula "T/V": Unknown variable "T" at position 0. Use a parameter by its own name (temperature, volume), or bind it: { vars: { T: aParameter } }');
     expect(
       mount((inc) => {
         inc.formula('sin(x', {});
@@ -317,21 +348,45 @@ describe('formulas and tweens', () => {
     ).toContain('must be a parameter or a finite number');
   });
 
-  it('drives frames while a tween runs, even when paused, then commits', () => {
+  it('runs a tween in scene time: frozen while paused, at the learner\'s speed while playing, then commits (C3-7)', () => {
     const ks: number[] = [];
     let committed = false;
     const { runtime } = mount(
       (inc) => {
-        inc.tween({ duration: 0.1, ease: 'linear', apply: (k) => ks.push(k), commit: () => (committed = true) });
+        inc.tween({ duration: 0.2, ease: 'linear', apply: (k) => ks.push(k), commit: () => (committed = true) });
       },
       { autoplay: false },
     );
+    // Paused: k holds, and the tween asks for no frames.
     runtime.tick(0.05);
-    expect(runtime.needsFrame()).toBe(true);
     runtime.tick(0.05);
-    expect(ks).toEqual([0.5, 1]);
-    expect(committed).toBe(true);
+    expect(ks).toEqual([]);
     expect(runtime.needsFrame()).toBe(false);
+    runtime.play();
+    runtime.tick(0.05);
+    // Pausing mid-way freezes it without cancelling.
+    runtime.pause();
+    runtime.tick(0.05);
+    expect(ks).toEqual([0.25]);
+    // At twice the speed, the rest takes half the time.
+    runtime.play();
+    runtime.setSpeed(2);
+    runtime.tick(0.05);
+    runtime.tick(0.05);
+    expect(ks.map((k) => Math.round(k * 1e9) / 1e9)).toEqual([0.25, 0.75, 1]);
+    expect(committed).toBe(true);
+  });
+
+  it('lands a tween at its end under reduced motion, playing or not', () => {
+    const ks: number[] = [];
+    const { runtime } = mount(
+      (inc) => {
+        inc.tween({ duration: 1, ease: 'linear', apply: (k) => ks.push(k) });
+      },
+      { autoplay: false, reducedMotion: true },
+    );
+    runtime.tick(0.016);
+    expect(ks).toEqual([1]);
   });
 });
 

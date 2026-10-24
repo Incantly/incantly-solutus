@@ -2,7 +2,9 @@ import { handleRendererMessage } from '../engine/channel';
 import { probeScene } from '../probe/probe';
 import type { RendererMessage } from '../protocol/runtime-messages';
 import { createFuel, type FuelTank } from '../runtime/fuel';
+import { isKitModule, KIT_GLOBAL, type KitRegistry } from '../runtime/kits';
 import { SceneRuntime } from '../runtime/runtime';
+import { SHARED_GLOBAL, SHARED_MODULES } from './kit-shared';
 import { bindScene, type SceneFactory } from './scene-wrapper';
 import { locateInStack, type StackMap } from './stack';
 import type { WorkerBoot, WorkerInbound, WorkerOutbound } from './worker-protocol';
@@ -26,6 +28,22 @@ const post = scope.postMessage.bind(scope);
 let factory: SceneFactory | null = null;
 let runtime: SceneRuntime | null = null;
 let fuel: FuelTank = createFuel();
+let kits: KitRegistry = {};
+
+// Kit scripts joined after this one read the shared modules here, then register under KIT_GLOBAL.
+Object.defineProperty(scope, SHARED_GLOBAL, { configurable: true, value: SHARED_MODULES });
+
+/** Takes the kits that registered and removes both globals before the scene can run. */
+function takeKits(): KitRegistry {
+  const registered = scope[KIT_GLOBAL];
+  const out: Record<string, unknown> = {};
+  if (typeof registered === 'object' && registered !== null) {
+    for (const [name, kit] of Object.entries(registered)) if (isKitModule(kit) && kit.name === name) out[name] = kit;
+  }
+  delete (scope as Record<string, unknown>)[KIT_GLOBAL];
+  delete (scope as Record<string, unknown>)[SHARED_GLOBAL];
+  return Object.freeze(out) as KitRegistry;
+}
 
 Object.defineProperty(scope, '__incRegister', {
   configurable: true,
@@ -33,6 +51,7 @@ Object.defineProperty(scope, '__incRegister', {
     if (factory === null && typeof candidate === 'function') factory = candidate as SceneFactory;
     // One registration only; nothing can replace the scene later.
     delete (scope as Record<string, unknown>).__incRegister;
+    kits = takeKits();
     neutralize();
   },
 });
@@ -84,7 +103,7 @@ function boot(message: WorkerBoot): void {
       ...(message.probe?.frameBudgetMs !== undefined ? { frameBudgetMs: message.probe.frameBudgetMs } : {}),
       ...(message.probe?.elementBudget !== undefined ? { elementBudget: message.probe.elementBudget } : {}),
       beforeStep: fuel.refuel,
-      runtime: { locate },
+      runtime: { locate, kits },
     });
     post({ type: 'probe', report });
     return;
@@ -93,11 +112,13 @@ function boot(message: WorkerBoot): void {
   const live = message.live ?? {};
   runtime = new SceneRuntime({
     ...(live.values ? { values: live.values } : {}),
+    ...(live.formulas ? { formulas: live.formulas } : {}),
     ...(live.step !== undefined ? { step: live.step } : {}),
     ...(live.autoplay !== undefined ? { autoplay: live.autoplay } : {}),
     ...(live.reducedMotion !== undefined ? { reducedMotion: live.reducedMotion } : {}),
     ...(live.seed !== undefined ? { seed: live.seed } : {}),
     locate,
+    kits,
   });
   fuel.refuel();
   post({ type: 'update', update: runtime.mount(scene) });

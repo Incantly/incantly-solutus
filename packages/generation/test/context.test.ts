@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { CAPABILITIES, CORE_CONTRACT } from '../src/catalog';
 import {
   CORE_RULES,
+  PLAN_FORMAT,
   REQUEST_LIMITS,
   catalogLines,
   contractFor,
@@ -10,10 +11,14 @@ import {
   estimateTokens,
   nearestExample,
   planPrompt,
+  reviewedConcepts,
+  reviewedFigures,
   scenePrompt,
+  startingScene,
 } from '../src/context';
 import { SDK_CONTRACT } from '../src/generated/contract';
 import { PLAN_LIMITS } from '../src/plan';
+import { SIZE_BUDGETS } from '@incantly/core';
 
 const projectile = REFERENCE_SCENES.projectile!.plan;
 
@@ -25,9 +30,25 @@ describe('the generation context', () => {
   it('names exactly the SDK tones and the budgets the validator and probe enforce', () => {
     const tones = [...SDK_CONTRACT.Tone!.matchAll(/'(\w+)'/g)].map((m) => m[1]);
     expect(CORE_RULES).toContain(`tones: ${tones.join(', ')}.`);
-    expect(CORE_RULES).toContain(`at most ${['zero', 'one', 'two', 'three'][PLAN_LIMITS.params]}`);
-    expect(CORE_RULES).toContain('under 300 drawn elements');
+    expect(CORE_RULES).toContain(`a quick figure is about ${SIZE_BUDGETS.quick.lines} lines`);
     expect(CORE_RULES).toContain('under 500 samples per curve');
+    expect(PLAN_FORMAT).toContain(`up to ${PLAN_LIMITS.params} controls and ${PLAN_LIMITS.parts} parts`);
+  });
+
+  it('names the reviewed concepts in the plan call, so a plan for one of them starts from its scene', () => {
+    const concepts = reviewedConcepts();
+    expect(concepts).toHaveLength(Object.keys(REFERENCE_SCENES).length);
+    // With the stage each is drawn on, so a plan for one picks the stage its scene can be adapted on.
+    const figures = reviewedFigures();
+    expect(figures).toHaveLength(concepts.length);
+    expect(PLAN_FORMAT).toContain(`Concepts with a reviewed figure, and the stage it is drawn on: ${figures.join('; ')}.`);
+    expect(figures).toContain('diffusion across a membrane (biology)');
+    expect(figures).toContain('the seasons (space3d)');
+    // Every stage a plan may choose is named, the chemistry and biology kits too.
+    for (const stage of CAPABILITIES.filter((c) => c.draws)) expect(PLAN_FORMAT).toMatch(new RegExp(`at least one stage: [^"]*\\b${stage.name}\\b`));
+    for (const scene of Object.values(REFERENCE_SCENES)) {
+      expect(startingScene({ ...scene.plan, idea: 'Something else entirely.' })?.id, scene.id).toBe(scene.id);
+    }
   });
 
   it('maps every capability to declarations that exist in the SDK contract', () => {
@@ -55,6 +76,13 @@ describe('the generation context', () => {
     );
     const withheld = nearestExample(projectile, { withhold: ['projectile'] });
     expect(withheld?.id).not.toBe('projectile');
+    // Drawn on the same kind of stage first: once an SVG circuit followed the biology kit's membrane, and a
+    // plant cell followed the seasons in 3D, while a biology example stood by.
+    const ohm = { concept: "Ohm's law circuit", idea: 'Current flows round the circuit, more when the voltage is higher.', capabilities: ['svg', 'readout'] };
+    const forOhm = nearestExample(ohm, { withhold: ['ohm'] });
+    expect(forOhm?.plan.capabilities).toContain('svg');
+    const cells = { concept: 'Plant cell organelles', idea: 'A plant cell keeps its DNA in a nucleus and makes food in its chloroplasts.', capabilities: ['biology', 'steps'] };
+    expect(nearestExample(cells, { withhold: ['cells'] })?.id).toBe('diffusion');
     expect(nearestExample(projectile, { withhold: Object.keys(REFERENCE_SCENES) })).toBeNull();
   });
 
@@ -73,27 +101,44 @@ describe('the generation context', () => {
   });
 
   it('builds the scene call from the plan, the contract and the example, after the same cached prefix as the plan call', () => {
-    const { prompt, example } = scenePrompt(projectile);
+    const { prompt, example, mode } = scenePrompt({ ...projectile, concept: 'ball thrown on another planet' }, { adapt: false });
+    expect(mode).toBe('write');
     expect(example).toBe('projectile');
     expect(prompt.system[0]).toEqual(coreBlock());
     expect(prompt.system[0]).toEqual(planPrompt({ prompt: 'x' }).system[0]);
     expect(prompt.system.every((block) => block.cache)).toBe(true);
+    expect(prompt.system[1]!.text).toContain('This is the BUILD call');
     expect(prompt.system[1]!.text).toContain('interface Graph {');
     expect(prompt.system[1]!.text).toContain(REFERENCE_SCENES.projectile!.js.trim().split('\n')[0]);
-    expect(prompt.user).toContain('"concept": "projectile motion"');
+    expect(prompt.user).toContain('"concept":"ball thrown on another planet"');
+    expect(prompt.user).toContain('Size: quick');
   });
 
-  it('can leave the concept’s own example out', () => {
-    const { prompt, example } = scenePrompt(projectile, { withhold: ['projectile'] });
-    expect(example).not.toBe('projectile');
-    expect(prompt.system[1]!.text).not.toContain(REFERENCE_SCENES.projectile!.js.trim());
+  it('asks only for edits when a reviewed scene of the same concept exists (PRD 25.5)', () => {
+    const { prompt, example, mode, start } = scenePrompt(projectile);
+    expect(mode).toBe('adapt');
+    expect(example).toBe('projectile');
+    expect(start?.id).toBe('projectile');
+    // The starting scene is in the cached prefix, so every request for the concept shares it.
+    expect(prompt.system[1]!.cache).toBe(true);
+    expect(prompt.system[1]!.text).toContain('EDIT format');
+    expect(prompt.system[1]!.text).toContain(REFERENCE_SCENES.projectile!.js.trim());
+    expect(prompt.user).toContain('Adapt the starting scene to this plan.');
+    expect(prompt.user).not.toContain(REFERENCE_SCENES.projectile!.js.trim());
+    // Not when its stage is of another kind, nor when the example is withheld.
+    expect(scenePrompt({ ...projectile, capabilities: ['svg', 'describe'] }).mode).toBe('write');
+    expect(scenePrompt(projectile, { withhold: ['projectile'] }).mode).toBe('write');
   });
 
-  it('keeps the whole scene context to a few thousand tokens', () => {
+  it('keeps the whole scene context to a few thousand tokens, most of it cached', () => {
     for (const scene of Object.values(REFERENCE_SCENES)) {
-      const { prompt } = scenePrompt(scene.plan);
-      const tokens = estimateTokens(prompt.system.map((b) => b.text).join('\n') + prompt.user);
-      expect(tokens, scene.id).toBeLessThan(9000);
+      for (const adapt of [true, false]) {
+        const { prompt } = scenePrompt(scene.plan, { adapt });
+        const tokens = estimateTokens(prompt.system.map((b) => b.text).join('\n') + prompt.user);
+        expect(tokens, `${scene.id} ${adapt}`).toBeLessThan(12_000);
+        // What changes per request, outside the cached prefix, is only the plan.
+        expect(estimateTokens(prompt.user), `${scene.id} ${adapt}`).toBeLessThan(800);
+      }
     }
   });
 
