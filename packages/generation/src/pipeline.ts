@@ -118,6 +118,15 @@ export type FailedCheck = 'reply' | 'validation' | 'probe';
  * failures, or different ones. The same failures again, or more of them,
  * mean another repair would likely go round in circles.
  */
+/**
+ * A probe failure as a fault: its check and message with the numbers taken
+ * out, so a text pushed further off the stage is the same fault, and a loop
+ * that never ends is a different one from a property read of undefined.
+ */
+export function probeFaults(report: ProbeReport): string[] {
+  return report.failures.map((f) => `${f.check}: ${f.message.replace(/-?\d[\d.,]*/g, '#')}`);
+}
+
 export function progressed(before: Attempt, after: Attempt): boolean {
   if (before.failed !== after.failed) return true;
   const was = [...(before.faults ?? [])].sort();
@@ -773,7 +782,7 @@ export class Generator {
     if (!plan || !current || !current.passed) throw new Error('No validated scene to fail');
     const number = state.repairsUsed + 1;
     const repairReport = probeReport(report, current.fragments, plan, number, Math.max(this.maxRepairs, number));
-    state.attempts[state.attempts.length - 1] = { ...current, passed: false, failed: 'probe', report: repairReport, probe: report, faults: report.failures.map((f) => f.check) };
+    state.attempts[state.attempts.length - 1] = { ...current, passed: false, failed: 'probe', report: repairReport, probe: report, faults: probeFaults(report) };
     state.status = 'failed';
     state.failure = { stage: 'scene', reason: repairReport.summary };
     return repairReport;
@@ -824,7 +833,7 @@ export class Generator {
     if (!this.options.probe) return record({ passed: true, failed: null, report: null, probe: null, scene: validation.scene });
     const report = await this.options.probe(validation.scene, probeSpecFor(plan));
     if (!report.ok) {
-      return record({ passed: false, failed: 'probe', report: probeReport(report, fragments, plan, number, of), probe: report, scene: validation.scene, faults: report.failures.map((f) => f.check) });
+      return record({ passed: false, failed: 'probe', report: probeReport(report, fragments, plan, number, of), probe: report, scene: validation.scene, faults: probeFaults(report) });
     }
     return record({ passed: true, failed: null, report: null, probe: report, scene: validation.scene });
   }

@@ -1,9 +1,9 @@
-import { SIZE_BUDGETS } from '@incantly/core';
+import { SIZE_BUDGETS, type ProbeReport } from '@incantly/core';
 import { REFERENCE_SCENES } from '@incantly/core/scenes';
 import { describe, expect, it } from 'vitest';
 import { ModelError, NO_USAGE, ScriptedModel, type CallPurpose, type ModelCall, type ModelClient } from '../src/models';
 import { scenePrompt } from '../src/context';
-import { DEFAULT_MAX_TOKENS, MAX_REPLY_TOKENS, Generator, conceptAndIdea, planHead, progressed, standardFigure, type Attempt, type FailedCheck } from '../src/pipeline';
+import { DEFAULT_MAX_TOKENS, MAX_REPLY_TOKENS, Generator, conceptAndIdea, planHead, probeFaults, progressed, standardFigure, type Attempt, type FailedCheck } from '../src/pipeline';
 import { validatePlan } from '../src/plan';
 import { isolatedProbe } from '../src/probe';
 import { faultyScript, referenceModel, type Fault } from '../src/reference-model';
@@ -270,6 +270,15 @@ describe('the generation pipeline', () => {
     expect(progressed(attempt('probe', ['bounds']), attempt('probe', ['runs']))).toBe(true);
     expect(progressed(attempt('probe', ['bounds']), attempt('probe', ['bounds']))).toBe(false);
     expect(progressed(attempt('probe', ['bounds']), attempt('probe', ['bounds', 'runs']))).toBe(false);
+  });
+
+  it('tells probe failures apart by their message, not their numbers', () => {
+    const report = (...messages: [string, string][]) => ({ ok: false, failures: messages.map(([check, message]) => ({ check, message })), stats: {} }) as unknown as ProbeReport;
+    const offStage = probeFaults(report(['bounds', 'the text reaches x = 647.2, right of 640']));
+    expect(probeFaults(report(['bounds', 'the text reaches x = 1145, right of 640']))).toEqual(offStage);
+    const loop = probeFaults(report(['mount', 'The scene ran more than 250,000 loop iterations at js:56:42']));
+    const undefinedRead = probeFaults(report(['mount', "Cannot read properties of undefined (reading 'm') at js:43:31"]));
+    expect(loop).not.toEqual(undefinedRead);
   });
 
   it('takes a reply still cut off at the ceiling as a reply-format failure, and reports it for repair', async () => {
