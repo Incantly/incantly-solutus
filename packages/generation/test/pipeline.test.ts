@@ -535,6 +535,24 @@ describe('the generation pipeline', () => {
     expect(state.scene?.js).toBe(sine.js);
   });
 
+  it('stops the library build when the plan only mentions the reviewed concept as a part of another', async () => {
+    // "Sine wave" in the request finds the sine scene; the plan is Euler's formula, whose helix only looks like one side-on.
+    const sine = REFERENCE_SCENES['sine-wave']!;
+    const euler = { ...sine.plan, concept: "Euler's formula", idea: 'A helix along θ looks like a sine wave side-on and the unit circle end-on.' };
+    const model = new ScriptedModel(async (call) => {
+      if (call.purpose === 'plan') return '```json\n' + JSON.stringify(euler) + '\n```';
+      if (call.prompt.system[1]!.text.includes('LIBRARY format')) {
+        await new Promise((_, reject) => call.signal?.addEventListener('abort', () => reject(new ModelError('aborted', 'stopped'))));
+      }
+      return '```edit js\n```';
+    });
+    const plans: string[] = [];
+    await new Generator({ model, probe: isolatedProbe }).generate({ prompt: "Show me Euler's formula as a helix: side-on a sine wave, end-on the unit circle" }, { onPlan: (plan) => plans.push(plan.concept) });
+    expect(plans).toEqual(['sine wave', "Euler's formula"]);
+    // The library build, the plan, then a scene written for Euler's formula.
+    expect(model.calls.slice(0, 3).map((c) => c.purpose)).toEqual(['scene', 'plan', 'scene']);
+  });
+
   it('keeps the library build when the plan names the same concept in its own words', async () => {
     const normal = REFERENCE_SCENES.normal!;
     const model = new ScriptedModel((call) => {
