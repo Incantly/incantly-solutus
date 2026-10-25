@@ -107,6 +107,96 @@ describe('the concept cache (PRD 25.6)', () => {
     expect((third.at(-1)!.data as unknown as SceneEvent).fragments.js).toBe(REFERENCE_SCENES.projectile!.js);
   });
 
+  describe('near misses: a request that asks for more never gets the figure that lacks it', () => {
+    const top = {
+      concept: 'Spinning top',
+      idea: 'A faster spin keeps the top upright longer.',
+      kind: 'motion',
+      size: 'quick',
+      capabilities: ['svg'],
+      parameters: [{ name: 'speed', unit: 'rev/s', min: 1, max: 10, default: 5, why: 'typical spins' }],
+      model: { inputs: ['speed'], outputs: [{ name: 'lean', dependsOn: ['speed'] }] },
+      parts: ['top'],
+      moves: 'The top spins and leans.',
+      steps: ['Spin it faster.', 'It leans less.'],
+      singularPoints: [],
+    };
+    const scene = (label: string) =>
+      [
+        '```html',
+        "<div id='stage'></div>",
+        '```',
+        '```css',
+        '',
+        '```',
+        '```js',
+        "inc.idea('A faster spin keeps the top upright longer.');",
+        "const speed = inc.param('speed', { min: 1, max: 10, value: 5, unit: 'rev/s', label: 'Speed' });",
+        `const s = inc.svg('#stage', { viewBox: [0, 0, 100, 100], title: '${label}', description: 'A spinning top.' });`,
+        "const c = s.circle(50, 50, 10, { tone: 'lit' });",
+        'inc.onFrame(({ time }) => { c.at(50 + 10 * Math.cos(time * speed.value), 50); });',
+        "inc.describe(() => 'A top spinning at ' + speed.value + ' turns a second.');",
+        '```',
+      ].join('\n');
+    /** Plans as a planner would: the gyroscope when asked for one, and the offered figure when it fully answers. */
+    function planner() {
+      return new ScriptedModel((call) => {
+        if (call.purpose !== 'plan') return scene(call.prompt.user.includes('gyroscope') ? 'Top and gyroscope' : 'Top');
+        const asked = call.prompt.user;
+        if (asked.includes('gyroscope')) return '```json\n' + JSON.stringify({ ...top, idea: 'A top and a gyroscope both resist tipping when spun fast.', parts: ['top', 'gyroscope'] }) + '\n```';
+        const offered = /\n(f\d): Spinning top:/.exec(asked)?.[1];
+        // Choosing, it words the plan its own way, so only the choice, not the plan, finds the figure.
+        return '```json\n' + JSON.stringify(offered ? { ...top, idea: 'Spinning faster keeps a top standing up for longer.', reuse: offered } : top) + '\n```';
+      });
+    }
+
+    async function approved(post: Awaited<ReturnType<typeof start>>['post'], prompt: string) {
+      const made = await events(await post('/v1/generations', { prompt }));
+      const sceneEvent = made.at(-1)!;
+      expect(sceneEvent.event).toBe('scene');
+      await post(`/v1/generations/${(sceneEvent.data as unknown as SceneEvent).generationId}/probe`, { ok: true });
+      return sceneEvent.data as unknown as SceneEvent;
+    }
+
+    it('does not offer a figure that lacks a word the learner asked with, and builds anew', async () => {
+      const model = planner();
+      const { post } = await start({ model });
+      await approved(post, 'Show me a spinning top');
+      const before = model.calls.length;
+      const richer = await approved(post, 'Show me a spinning top with a gyroscope beside it');
+      const calls = model.calls.slice(before);
+      expect(calls.map((c) => c.purpose)).toEqual(['plan', 'scene']);
+      expect(calls[0]!.prompt.user).not.toContain('Figures already made');
+      expect(richer.fragments.js).toContain('Top and gyroscope');
+    });
+
+    it('offers a figure whose words take in the whole request, and reuses it when the plan call chooses it', async () => {
+      const model = planner();
+      const { post } = await start({ model });
+      const first = await approved(post, 'Show me a spinning top');
+      const before = model.calls.length;
+      const again = await events(await post('/v1/generations', { prompt: 'spinning top speed' }));
+      const calls = model.calls.slice(before);
+      expect(calls.map((c) => c.purpose)).toEqual(['plan']);
+      expect(calls[0]!.prompt.user).toContain('f1: Spinning top: A faster spin keeps the top upright longer.');
+      expect((again.at(-1)!.data as unknown as SceneEvent).fragments.js).toBe(first.fragments.js);
+    });
+
+    it('builds anew when the plan call does not choose an offered figure, or names one it was not offered', async () => {
+      const model = new ScriptedModel((call) => {
+        if (call.purpose !== 'plan') return scene('Top');
+        // The second plan names an id it was not offered (only f1 was).
+        const second = call.prompt.user.includes('speed');
+        return '```json\n' + JSON.stringify(second ? { ...top, idea: 'A spinning top precesses slowly around the vertical.', reuse: 'f7' } : top) + '\n```';
+      });
+      const { post } = await start({ model });
+      await approved(post, 'Show me a spinning top');
+      const before = model.calls.length;
+      await approved(post, 'spinning top speed');
+      expect(model.calls.slice(before).map((c) => c.purpose)).toEqual(['plan', 'scene']);
+    });
+  });
+
   it('never stores a figure made with note text, and never caches what the device did not approve', async () => {
     const model = referenceModel();
     const { post, service } = await start({ model });
