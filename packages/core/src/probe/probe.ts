@@ -193,6 +193,15 @@ class Probe {
     return { runtime, ui: { ...runtime.uiState(), ...update.ui } as UiState };
   }
 
+  /**
+   * Lets a paused figure finish what it is already doing, such as a camera
+   * turning to its first view, so a change is measured against where it
+   * comes to rest: at most three seconds of frames.
+   */
+  private settle(runtime: SceneRuntime): void {
+    for (let i = 0; i < 30 && runtime.needsFrame(); i++) this.tick(runtime, 0.1);
+  }
+
   private tick(runtime: SceneRuntime, dt: number, measure = false): void {
     const start = this.now();
     this.step(() => runtime.tick(dt));
@@ -354,7 +363,7 @@ class Probe {
   /** EN-4: moving any parameter while paused must change the drawing (the paused-slider bug, PRD 21.1). */
   private pausedChange(): void {
     const { runtime } = this.mount(undefined, false);
-    this.tick(runtime, 0);
+    this.settle(runtime);
     for (const param of this.params) {
       const target = param.defaultValue !== param.max ? param.max : param.min;
       const before = JSON.stringify(runtime.graph.snapshotCommands());
@@ -365,6 +374,8 @@ class Probe {
         this.fail({ check: 'paused-change', message: `The scene threw when ${param.name} moved while paused`, values: runtime.values(), playing: false, error });
         return;
       }
+      // A view that eases to follow the control, such as a camera turning, changes over the next moments, not in this frame.
+      this.settle(runtime);
       if (JSON.stringify(runtime.graph.snapshotCommands()) === before) {
         this.fail({
           check: 'paused-change',
@@ -374,7 +385,7 @@ class Probe {
         });
       }
       this.step(() => runtime.setParam(param.name, param.defaultValue));
-      this.tick(runtime, 0);
+      this.settle(runtime);
     }
   }
 

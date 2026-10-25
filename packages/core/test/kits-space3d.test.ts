@@ -486,11 +486,12 @@ describe('inc.space3d', () => {
     const id = stageId(runtime);
     const interact = runtime.graph.flush().concat(runtime.tick(0).commands);
     void interact;
+    // The toolbar's views and reset turn the camera over a moment rather than jumping.
     runtime.view(id, { kind: 'preset', name: 'top' });
-    runtime.tick(0);
+    for (let i = 0; i < 40; i++) runtime.tick(1 / 60);
     expect(runtime.uiState().views.find((v) => v.id === id)?.changed).toBe(true);
     runtime.view(id, { kind: 'reset' });
-    runtime.tick(0);
+    for (let i = 0; i < 40; i++) runtime.tick(1 / 60);
     expect(runtime.uiState().views.find((v) => v.id === id)?.changed).toBe(false);
     const snapshot = runtime.graph.snapshotCommands().find((c) => c.op === 'interact') as unknown as { zoom: string; orbit: boolean; views: string[] };
     expect(snapshot).toMatchObject({ zoom: 'runtime', orbit: true, views: ['front', 'side', 'top', 'iso'] });
@@ -1063,3 +1064,165 @@ bowl.section('x', () => turn.value / 45 - 1);
     }
   });
 });
+
+describe('camera moves', () => {
+  /** The stage point of a world point, as the camera stands. */
+  const at = (s: Space3D, p: Vec3): [number, number] => {
+    const [x, y] = s.project(p);
+    return [Math.round(x * 100) / 100, Math.round(y * 100) / 100];
+  };
+
+  it('eases to a named view over its seconds, playing or paused, and lands exactly on it', () => {
+    let s3!: Space3D;
+    const { runtime } = space((s) => {
+      s3 = s;
+      s.box(1);
+    });
+    const start = at(s3, [1, 0, 0]);
+    s3.view('front', { seconds: 1 });
+    expect(runtime.needsFrame()).toBe(true);
+    runtime.tick(0.5);
+    const half = at(s3, [1, 0, 0]);
+    expect(half).not.toEqual(start);
+    for (let i = 0; i < 40; i++) runtime.tick(1 / 30);
+    const front = at(s3, [1, 0, 0]);
+    // Side on to x: the point at x = 1 lies left or right of the centre, at its height.
+    s3.view('front');
+    expect(at(s3, [1, 0, 0])).toEqual(front);
+    expect(half).not.toEqual(front);
+    // Once it lands, a paused figure asks for no frames at all.
+    expect(runtime.needsFrame()).toBe(false);
+  });
+
+  it('turns the short way round', () => {
+    let s3!: Space3D;
+    const { runtime } = space((s) => {
+      s3 = s;
+      s.box(1);
+    }, { camera: { yaw: 170, pitch: 0 } });
+    s3.camera({ yaw: -170 }, { seconds: 1, ease: 'linear' });
+    runtime.tick(0.5);
+    // Halfway from 170° to -170° the short way is 180°, not 0°: the point at +x faces away.
+    const mid = new Camera([0, 0, 640, 440], { yaw: 180, pitch: 0, scale: 1 }, 'orbit');
+    const zero = new Camera([0, 0, 640, 440], { yaw: 0, pitch: 0, scale: 1 }, 'orbit');
+    const depth = (c: Camera) => c.toCamera([1, 0, 0])[2];
+    expect(depth(mid)).toBeLessThan(0);
+    expect(depth(zero)).toBeGreaterThan(0);
+    const ahead = at(s3, [0, 1, 0]);
+    // At 180° the +y axis points to the stage's left, as it does for a camera at 180°.
+    expect(ahead[0]).toBeLessThan(at(s3, [0, 0, 0])[0]);
+  });
+
+  it('keeps going when a script asks for the same view on every frame, and arrives', () => {
+    let s3!: Space3D;
+    const { runtime } = space((s, inc) => {
+      s3 = s;
+      s.box(1);
+      inc.onFrame(() => s.view('front', { seconds: 0.5 }));
+    });
+    for (let i = 0; i < 40; i++) runtime.tick(1 / 30);
+    const arrived = at(s3, [1, 0, 0]);
+    s3.view('front');
+    expect(at(s3, [1, 0, 0])).toEqual(arrived);
+    expect(runtime.needsFrame()).toBe(false);
+  });
+
+  it('moves within the fitted view when a script turns the camera from its very first frame', () => {
+    let s3!: Space3D;
+    const { runtime } = space((s, inc) => {
+      s3 = s;
+      s.box(2);
+      inc.onFrame(() => s.view('front', { seconds: 0.5 }));
+    });
+    runtime.tick(1 / 30);
+    // Fitted, the box spans a good part of the stage; unfitted, it would shrink to a dot at the centre.
+    const width = Math.abs(at(s3, [0, 1, 0])[0] - at(s3, [0, -1, 0])[0]);
+    expect(width).toBeGreaterThan(60);
+  });
+
+  it('cuts under reduced motion', () => {
+    let s3!: Space3D;
+    const { runtime } = space(
+      (s) => {
+        s3 = s;
+        s.box(1);
+      },
+      {},
+      { reducedMotion: true },
+    );
+    s3.view('top', { seconds: 2 });
+    expect(runtime.needsFrame()).toBe(false);
+    const now = at(s3, [1, 0, 0]);
+    s3.view('top');
+    expect(at(s3, [1, 0, 0])).toEqual(now);
+  });
+
+  it('fades perspective out for a flat view and back for flat: false', () => {
+    let s3!: Space3D;
+    const { runtime } = space((s) => {
+      s3 = s;
+      s.box(1);
+    });
+    const near = (p: Vec3) => at(s3, p);
+    s3.view('front', { seconds: 0.5, flat: true });
+    for (let i = 0; i < 40; i++) runtime.tick(1 / 30);
+    // Without perspective, the near and far corners of a face lie on the same stage point.
+    expect(near([0.5, -0.5, 0.5])).toEqual(near([0.5, 0.5, 0.5]));
+    s3.view('iso', { seconds: 0.5, flat: false });
+    for (let i = 0; i < 40; i++) runtime.tick(1 / 30);
+    s3.view('front');
+    expect(near([0.5, -0.5, 0.5])).not.toEqual(near([0.5, 0.5, 0.5]));
+  });
+
+  it('stops where it is when the learner turns the camera', () => {
+    let s3!: Space3D;
+    const { runtime } = space((s) => {
+      s3 = s;
+      s.box(1);
+    });
+    s3.view('top', { seconds: 1 });
+    runtime.tick(0.3);
+    runtime.view(stageId(runtime), { kind: 'orbit', dx: 0.05, dy: 0 });
+    const held = at(s3, [1, 0, 0]);
+    for (let i = 0; i < 40; i++) runtime.tick(1 / 30);
+    expect(at(s3, [1, 0, 0])).toEqual(held);
+    expect(runtime.needsFrame()).toBe(false);
+  });
+
+  it("turns to each step's view, back on the way back, and home when the steps end", () => {
+    let s3!: Space3D;
+    const { runtime } = space((s, inc) => {
+      s3 = s;
+      s.part('box', s.box(1));
+      inc.steps([
+        { say: 'Here is the box.' },
+        { say: 'From the front it is a square.', view: 'front', flat: true },
+        { say: 'From above, still a square.', view: 'top' },
+      ]);
+    });
+    const home = at(s3, [1, 0, 0]);
+    const settle = () => {
+      for (let i = 0; i < 60; i++) runtime.tick(1 / 30);
+    };
+    runtime.step('enter', 0);
+    settle();
+    expect(at(s3, [1, 0, 0])).toEqual(home);
+    runtime.step('next');
+    settle();
+    // The front view looks along y, flat: depth along y no longer moves a point on the stage.
+    const ahead = at(s3, [0, 1, 0]);
+    expect(at(s3, [0, 3, 0])).toEqual(ahead);
+    runtime.step('next');
+    settle();
+    const top = at(s3, [0, 0, 1]);
+    expect(at(s3, [0, 0, 3])[0]).toBeCloseTo(top[0], 1);
+    runtime.step('prev');
+    settle();
+    expect(at(s3, [0, 3, 0])).toEqual(at(s3, [0, 1, 0]));
+    runtime.step('exit');
+    settle();
+    expect(at(s3, [1, 0, 0])).toEqual(home);
+    expect(runtime.needsFrame()).toBe(false);
+  });
+});
+

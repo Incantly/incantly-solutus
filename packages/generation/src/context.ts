@@ -27,6 +27,15 @@ export interface LearnerRequest {
   readonly prompt: string;
   /** Text near the request in the note. Sent to the model only, never stored (see the service's retention rule). */
   readonly noteContext?: string;
+  /** Approved figures that may answer the request, from the concept cache: the plan may choose one instead of a new figure. */
+  readonly reusable?: readonly ReusableFigure[];
+}
+
+/** A figure the plan call is offered, by the id it may answer with. */
+export interface ReusableFigure {
+  readonly id: string;
+  readonly concept: string;
+  readonly idea: string;
 }
 
 /** Limits on learner text sent to the model. */
@@ -137,6 +146,15 @@ export function planPrompt(request: LearnerRequest, replan?: { readonly previous
   const lines = [`The learner asked: "${clip(request.prompt, REQUEST_LIMITS.prompt)}"`];
   if (request.noteContext) lines.push(`Text near the request in their note: "${clip(request.noteContext, REQUEST_LIMITS.noteContext)}"`);
   lines.push('Plan one figure that teaches this.');
+  // In the request, not the cached system prompt: most requests are offered none.
+  if (request.reusable && request.reusable.length > 0) {
+    lines.push(
+      '',
+      'Figures already made that may answer it:',
+      ...request.reusable.map((f) => `${f.id}: ${clip(f.concept, 80)}: ${clip(f.idea, 200)}`),
+      'If one answers the request fully, with nothing the learner asked for missing or different, add "reuse":"<its id>" to the plan; otherwise leave reuse out.',
+    );
+  }
   if (replan) {
     lines.push('', 'Your previous plan was rejected:', replan.previous, '', 'Problems:', replan.problems, '', 'Return a corrected plan.');
   }

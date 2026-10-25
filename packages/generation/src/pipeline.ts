@@ -87,8 +87,12 @@ export interface GeneratorOptions {
 
 export interface GenerationHooks {
   readonly onPlan?: (plan: ScenePlan) => void;
-  /** Between a plan and its scene call: true when the caller already has the figure (the concept cache). */
-  readonly cached?: (plan: ScenePlan) => boolean;
+  /**
+   * Between a plan and its scene call: true when the caller already has the
+   * figure (the concept cache), for this plan or for the figure the plan
+   * chose to reuse, by the id the request offered it under.
+   */
+  readonly cached?: (plan: ScenePlan, reuse: string | null) => boolean;
   /** Raw model text as it streams, for developer tooling and progress UIs. */
   readonly onText?: (purpose: CallPurpose, delta: string) => void;
   /** A fragment finished streaming, with whether it passed its own checks. */
@@ -247,8 +251,10 @@ export class GenerationState {
   mode: 'write' | 'adapt' | 'cache' | 'stored' | 'change' | null = null;
   /** The reviewed scene the request named, adapted before the plan arrived; null otherwise. */
   retrieved: string | null = null;
-  /** Which cache key found it: the request, before planning, or the plan. */
-  cached: 'request' | 'plan' | null = null;
+  /** How the concept cache found it: by the request, before planning; by the plan; or chosen by the plan call to reuse. */
+  cached: 'request' | 'plan' | 'reuse' | null = null;
+  /** The offered figure the plan call chose to reuse, by its id; null when it planned a new one. */
+  reuse: string | null = null;
   /** A repair that was due but would not have finished before the deadline. */
   deadlineSkipped = false;
   /** The scene prefix written while the plan streamed: its model and what it cost. Not a call: it writes no reply. */
@@ -321,7 +327,7 @@ export class Generator {
       return;
     }
     await this.planStage(state, request, hooks, signal);
-    if (state.plan && !hooks.cached?.(state.plan)) await this.buildStage(state, hooks, signal);
+    if (state.plan && !hooks.cached?.(state.plan, state.reuse)) await this.buildStage(state, hooks, signal);
   }
 
   /**
@@ -366,11 +372,12 @@ export class Generator {
       state.plan = null;
       if (check.plan) {
         state.plan = check.plan;
+        state.reuse = check.reuse;
         hooks.onPlan?.(check.plan);
       } else {
         await this.planStage(state, request, hooks, signal);
       }
-      if (state.plan && !hooks.cached?.(state.plan)) await this.buildStage(state, hooks, signal);
+      if (state.plan && !hooks.cached?.(state.plan, state.reuse)) await this.buildStage(state, hooks, signal);
       return;
     }
     // Confirmed. A plan that ends before the build may still find an approved figure for this very plan; once
@@ -384,7 +391,7 @@ export class Generator {
       // An approved figure for this very plan is ready now; the build is not.
       const reviewed = state.plan;
       state.plan = check.plan;
-      if (hooks.cached(check.plan)) {
+      if (hooks.cached(check.plan, check.reuse)) {
         const settled = { status: state.status, failure: state.failure };
         stop.abort();
         await building;
@@ -492,14 +499,14 @@ export class Generator {
       // Without a plan to say otherwise, the request's own words stand.
       if (reply === null) {
         settle(true);
-        return { plan: null, state: check, verdictMs: verdictMs ?? this.now() - started };
+        return { plan: null, reuse: null, state: check, verdictMs: verdictMs ?? this.now() - started };
       }
       const parsed = parsePlanReply(reply);
       const value = parsed.value as { concept?: unknown; idea?: unknown } | null;
       const plan = parsed.problem ? null : validatePlan(parsed.value).plan;
       if (plan) check.timings.planMs = this.now() - started;
       settle(judge(typeof value?.concept === 'string' ? value.concept : null, typeof value?.idea === 'string' ? value.idea : ''));
-      return { plan, state: check, verdictMs: verdictMs ?? this.now() - started };
+      return { plan, reuse: plan ? reuseOf(parsed.value) : null, state: check, verdictMs: verdictMs ?? this.now() - started };
     });
     return { verdict, finished, stop: () => stop.abort() };
   }
@@ -523,6 +530,7 @@ export class Generator {
       state.planProblems = validation.problems;
       if (validation.plan) {
         state.plan = validation.plan;
+        state.reuse = reuseOf(parsed.value);
         state.timings.planMs = this.now() - started;
         hooks.onPlan?.(validation.plan);
         return;
@@ -673,11 +681,13 @@ export class Generator {
    * call. It is validated again, as everything is, and the device probes it
    * as usual. Returns false when it no longer validates.
    */
-  fromCache(state: GenerationState, figure: { readonly plan: ScenePlan; readonly fragments: Required<FragmentSet> }, key: 'request' | 'plan'): boolean {
+  fromCache(state: GenerationState, figure: { readonly plan: ScenePlan; readonly fragments: Required<FragmentSet> }, key: 'request' | 'plan' | 'reuse'): boolean {
     const limits = { ...SCENE_LIMITS, params: SIZE_BUDGETS[figure.plan.size ?? 'quick'].controls };
     const validation = validateScene(figure.fragments, { limits });
     if (!validation.ok || !validation.scene) return false;
-    state.plan ??= figure.plan;
+    // A figure the plan call chose to reuse was built from its own plan, which the learner's figure keeps.
+    if (key === 'reuse') state.plan = figure.plan;
+    else state.plan ??= figure.plan;
     state.mode = 'cache';
     state.cached = key;
     state.timings.sceneMs = 0;
@@ -929,7 +939,7 @@ interface PlanBeside {
   /** Whether the plan names the retrieved scene's concept: as soon as its concept and idea are in, or at its end. */
   readonly verdict: Promise<boolean>;
   /** The call, ended or stopped: its plan, if it got that far, and when its verdict came. */
-  readonly finished: Promise<{ readonly plan: ScenePlan | null; readonly state: GenerationState; readonly verdictMs: number }>;
+  readonly finished: Promise<{ readonly plan: ScenePlan | null; readonly reuse: string | null; readonly state: GenerationState; readonly verdictMs: number }>;
   /** Stops the call: its plan is not needed any more. */
   stop(): void;
 }
@@ -993,3 +1003,9 @@ function fragmentPasses(name: FragmentName, source: string): boolean {
 }
 
 export { standardFigure } from './context';
+
+/** The offered figure a plan reply chose to reuse, by the id it was offered under; the plan validator keeps only plan fields. */
+function reuseOf(value: unknown): string | null {
+  const reuse = (value as { reuse?: unknown } | null)?.reuse;
+  return typeof reuse === 'string' && /^f\d{1,2}$/.test(reuse) ? reuse : null;
+}

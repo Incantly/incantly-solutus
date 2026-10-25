@@ -58,6 +58,32 @@ describe('probe: passing scenes', () => {
     expect(report.failures).toEqual([]);
   });
 
+  it('passes a slider that eases the camera to a view, which changes the drawing over a moment, and fails one the camera ignores', async () => {
+    const helix = async (follow: string) => {
+      const source = {
+        html: "<div id='s'></div>",
+        css: '',
+        js: [
+          "inc.idea('A helix side-on is a wave and end-on a circle.');",
+          "const view = inc.param('view', { min: 0, max: 1, step: 1, value: 0, label: 'View' });",
+          "const s = inc.space3d('#s', { title: 'Helix', description: 'A helix along x.', camera: { distance: 0 } });",
+          'const points = [];',
+          'for (let i = 0; i <= 120; i++) points.push([i / 20 - 3, Math.cos(i / 5), Math.sin(i / 5)]);',
+          "s.part('helix', s.line(points), { label: 'Helix' });",
+          // Nothing but the camera follows the slider, so only its eased turn can show the change.
+          `inc.onFrame(() => s.view(${follow}, { seconds: 1.2 }));`,
+          "inc.describe(() => 'A helix along x.');",
+          "inc.steps([{ say: 'Side-on it is a wave.', focus: 'helix' }, { say: 'End-on it is a circle.', set: { view: 1 } }]);",
+        ].join('\n'),
+      };
+      const { scene, fuel } = compileValidated(source);
+      const kits = await loadKitModules(validateScene(source).scene?.kits ?? []);
+      return probeScene(scene, { beforeStep: fuel.refuel, runtime: { kits }, spec: { parts: ['helix'], steps: 2 } });
+    };
+    expect((await helix("Math.round(view.value) === 1 ? 'side' : 'front'")).failures).toEqual([]);
+    expect(checks(await helix("'front'"))).toEqual(['paused-change']);
+  });
+
   it('is deterministic for the same seed', () => {
     const a = probe(build());
     const b = probe(build());

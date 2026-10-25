@@ -1,4 +1,4 @@
-import type { DragInfo, Formula, PathHelpers, Shade, Tone, Values, Vec2 } from '../api/types';
+import type { DragInfo, Formula, PathHelpers, Shade, Step, Tone, Values, Vec2 } from '../api/types';
 import type { ViewAction } from '../protocol/runtime-messages';
 import type { StageMeasure } from '../protocol/scene-commands';
 import type { VNode } from '../scene/graph';
@@ -14,6 +14,11 @@ export interface ViewController {
   readonly orbit: boolean;
   /** Named views the stage toolbar offers. */
   readonly views: readonly string[];
+  /**
+   * The walkthrough moved to step `index` of `steps`, or left it for null:
+   * the kit turns to the view the steps name there. `immediate` cuts.
+   */
+  steps?(steps: readonly Step[] | null, index: number | null, immediate: boolean): void;
   /** Who zooms the stage: the kit (`runtime`), or the renderer through its view box when the kit cannot redraw everything. */
   mode?(): 'runtime' | 'viewbox';
   /**
@@ -106,6 +111,12 @@ export interface KitContext {
   param(name: string): ParamInfo | undefined;
   /** Runs `fn` with a fixed time step while playing (PH-8). */
   simulate(fn: (dt: number) => void, step: number): void;
+  /**
+   * Runs `fn` on every frame with the wall-clock seconds since the last one,
+   * playing or paused, until it returns false: a view moving on its own, such
+   * as a camera turning to a named view. It costs nothing once it is done.
+   */
+  motion(fn: (dt: number) => boolean): void;
   /** Whether the learner asked for reduced motion. */
   reducedMotion(): boolean;
   /** Records a problem the scene did not throw for, such as a budget warning. */

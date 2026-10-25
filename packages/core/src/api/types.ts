@@ -135,14 +135,17 @@ export interface State {
 // ---------------------------------------------------------------------------
 
 export interface Step {
-  /** What the step says, shown outside the drawing. */
+  /** What the step says, beside the drawing. */
   readonly say: string;
-  /** Name of a registered part to direct attention to. */
+  /** A part to direct attention to. */
   readonly focus?: string;
-  /** Parameter values to move to on this step. */
+  /** Values to move to on this step. */
   readonly set?: Readonly<Record<string, number>>;
-  /** Pause time while this step is shown. */
+  /** Pause time on this step. */
   readonly hold?: boolean;
+  /** 3D stages turn to this view, eased; flat drops perspective. */
+  readonly view?: View3D;
+  readonly flat?: boolean;
 }
 
 /** Ask before revealing: the learner picks an answer, then the figure shows what happens. Never scored. */
@@ -819,11 +822,11 @@ export interface Graph {
 export interface CameraOptions {
   /** Turn about the upright z axis, in degrees. Default 35. */
   readonly yaw?: number;
-  /** Look down by this many degrees; 90 looks straight down. Default 25. */
+  /** Degrees looking down; 90 is straight down. Default 25. */
   readonly pitch?: number;
-  /** Stage units per world unit. Default: fits everything in view. */
+  /** Stage units per world unit. Default: fits the view. */
   readonly scale?: number;
-  /** Camera distance in world units, for perspective; 0 for none. Default: five times the scene's size. */
+  /** Distance for perspective, in world units; 0 for none. Default 5 × the scene's size. */
   readonly distance?: number;
   /** The world point at the centre of the view. Default [0, 0, 0]. */
   readonly target?: Vec3;
@@ -832,17 +835,24 @@ export interface CameraOptions {
 /** Named camera views: front looks along +y, side along -x, top straight down, iso is isometric. */
 export type View3D = 'front' | 'side' | 'top' | 'iso';
 
+/** Eases the camera there over seconds (default 0, a cut), even paused. flat: true drops perspective, false restores it. */
+export interface CameraMove {
+  readonly seconds?: number;
+  readonly ease?: Ease;
+  readonly flat?: boolean;
+}
+
 export interface Space3DOptions {
   readonly title: string;
   readonly description?: string;
   /** Default [0, 0, 640, 440]. */
   readonly viewBox?: ViewBox;
   readonly camera?: CameraOptions;
-  /** 'orbit' (default): dragging the background turns the camera; 'iso': fixed isometric; 'fixed': the camera options only. */
+  /** 'orbit' (default): dragging turns the camera; 'iso': fixed isometric; 'fixed': the scene's camera only. */
   readonly mode?: 'orbit' | 'iso' | 'fixed';
   /** Learners may zoom; default true. */
   readonly zoom?: boolean;
-  /** Most faces drawn at once; above it round solids get fewer facets and the figure warns. Default 1200. */
+  /** Most faces drawn at once; above it round solids get fewer facets. Default 1200. */
   readonly budget?: number;
 }
 
@@ -1091,7 +1101,7 @@ export interface Space3D {
   /** A cylinder from one point to another: a rod, a bond, a strut. */
   tube(from: Vec3, to: Vec3, r: number, options?: Solid3DOptions): Object3D;
   mesh(data: Mesh3DData, options?: Solid3DOptions): Object3D;
-  /** A solid of revolution: [r, z] profile points (2 to 120) turned about z, such as a vase or a volume of revolution. */
+  /** A solid of revolution: [r, z] profile points (2 to 120) turned about z. */
   lathe(profile: ReadonlyArray<Vec2>, options?: LatheOptions): Object3D;
   /** A ready-made model (ModelName), or ModelData of your own. */
   model(name: ModelName | ModelData, options?: ModelOptions): Model3D;
@@ -1099,45 +1109,45 @@ export interface Space3D {
   line(points: ReadonlyArray<Vec3>, options?: Line3DOptions): Line3D;
   /** A 3D segment with a head that always faces the viewer. */
   arrow(from: Vec3, to: Vec3, options?: Line3DOptions): Arrow3D;
-  /** A helix standing along z, such as a spring or a solenoid's wire; sorted piece by piece, so it wraps whatever runs through it. */
+  /** A helix along z (a spring, a solenoid's wire), sorted piece by piece so it wraps what runs through it. */
   coil(r: number, h: number, turns: number, options?: Line3DOptions): Line3D;
   /** An angle arc: `from` (a vector from `center`) turned about `axis` by `degrees`. */
   arc(center: Vec3, from: Vec3, axis: Vec3, degrees: number, options?: Line3DOptions): Line3D;
   /** A dot that keeps its size on screen. */
   point(at: Vec3, options?: { readonly tone?: Tone; readonly parent?: Group3D; readonly r?: number }): Object3D;
-  /**
-   * Dots at world points, such as stars, a gas or a cloud of charge, drawn on
-   * the stage's canvas layer in the figure's own camera (FX-1, BR-12): they
-   * follow every turn and zoom, and do not widen the view.
-   */
+  /** Dots at world points (stars, a gas, charge) on the canvas layer: they follow the camera and do not widen the view. */
   dots(options?: Dots3DOptions): Dots3D;
-  /** Text at a point or object, pushed outward from the figure's centre so labels do not collide. */
+  /** Text at a point or object, pushed outward so labels do not collide. */
   label(target: Vec3 | Object3D, text: Readable, options?: { readonly tone?: Tone; readonly offset?: number }): Label3D;
   grid(options?: GridOptions): Object3D;
   axes(options?: AxesOptions): Group3D;
-  /** Lines traced through a vector field from seed points, such as electric or magnetic field lines. */
+  /** Field lines traced through a vector field from seed points. */
   fieldLines(field: (p: Vec3) => Vec3, seeds: ReadonlyArray<Vec3>, options?: FieldLineOptions): Group3D;
-  /** Names an object for highlighting, steps, the legend and descriptions. Naming a part again, such as a model's piece, renames it. */
+  /** Names an object for highlighting, steps, legend and descriptions; naming it again renames it. */
   part<T extends Object3D>(name: string, object: T, options?: PartOptions): T;
   /** Lets the learner drag an object; `map` gets the pointer in stage units (see pick). */
   drag<T extends Object3D>(object: T, map: DragMap, options?: { readonly label?: string }): T;
-  /** The world point at height z under a stage point, or null when the view ray misses it. */
+  /** The world point at height z under a stage point, or null. */
   pick(x: number, y: number, z?: number): Vec3 | null;
   /** Moves the camera; options not given stay. */
-  camera(options: CameraOptions): void;
-  view(name: View3D): void;
+  camera(options: CameraOptions, move?: CameraMove): void;
+  view(name: View3D, move?: CameraMove): void;
   /** A world point in stage units. */
   project(p: Vec3): Vec2;
   /** The 2D stage underneath, for flat overlays. */
   readonly stage: Stage;
 }
 
+/** [min, max]; an end may be a function, read every draw, to follow a parameter: t: [0, () => turns.value * 2 * Math.PI]. */
+export type Span = readonly [number | (() => number), number | (() => number)];
+
 export interface Graph3DOptions {
   readonly title: string;
   readonly description?: string;
-  readonly x: Vec2;
-  readonly y: Vec2;
-  readonly z: Vec2;
+  /** The box grows to hold a curve whose t range follows a parameter. */
+  readonly x: Span;
+  readonly y: Span;
+  readonly z: Span;
   readonly viewBox?: ViewBox;
   readonly camera?: CameraOptions;
   /** Axis names. Default ['x', 'y', 'z']. */
@@ -1162,12 +1172,12 @@ export interface SurfaceOptions {
 }
 
 export interface ParametricSurfaceOptions extends SurfaceOptions {
-  readonly u: Vec2;
-  readonly v: Vec2;
+  readonly u: Span;
+  readonly v: Span;
 }
 
 export interface Curve3DOptions {
-  readonly t: Vec2;
+  readonly t: Span;
   readonly tone?: Tone;
   readonly steps?: number;
   readonly dashed?: boolean;
@@ -1194,8 +1204,8 @@ export interface Graph3D {
   plane(normal: Vec3, d: number, options?: { readonly tone?: Tone; readonly look?: 'solid' | 'wire' | 'ghost' }): Surface3D;
   label(at: Vec3, text: Readable, options?: { readonly tone?: Tone }): Label3D;
   part<T extends Object3D>(name: string, object: T, options?: PartOptions): T;
-  camera(options: CameraOptions): void;
-  view(name: View3D): void;
+  camera(options: CameraOptions, move?: CameraMove): void;
+  view(name: View3D, move?: CameraMove): void;
   project(p: Vec3): Vec2;
   readonly stage: Stage;
 }

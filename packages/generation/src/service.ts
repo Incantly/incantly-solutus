@@ -82,6 +82,8 @@ interface Session {
   busy: boolean;
   /** The request's cache key, when the figure may be shared: it was asked for without note text. */
   readonly requestKey: string | null;
+  /** The request itself on the same terms, for the words the cached figure can be said to answer. */
+  readonly request?: string;
 }
 
 class HttpError extends Error {
@@ -401,16 +403,20 @@ export class GenerationService {
       if (known && generator.fromCache(state, known, 'request')) {
         send('plan', { generationId: state.id, skeleton: skeletonOf(state.plan!) });
       } else {
+        // Figures that may answer it, for the plan call to choose from; each holds every word the learner asked with.
+        const reusable = this.cache?.candidates(request.prompt) ?? [];
         await generator.run(
           state,
-          request,
+          reusable.length > 0 ? { ...request, reusable: reusable.map(({ id, figure }) => ({ id, concept: figure.plan.concept, idea: figure.plan.idea })) } : request,
           {
             onPlan: (plan) => send('plan', { generationId: state.id, skeleton: skeletonOf(plan) }),
             // The model's text as it streams, for progress views and developer tools.
             onText: (purpose, text) => send('delta', { purpose, text }),
             onFragment: (name, ok) => send('fragment', { name, ok }),
-            // A different request that plans the same figure: no scene call.
-            cached: (plan) => {
+            // A figure the plan call chose for this request, or one made from this very plan: no scene call.
+            cached: (plan, reuse) => {
+              const chosen = reusable.find((c) => c.id === reuse)?.figure ?? null;
+              if (chosen && generator.fromCache(state, chosen, 'reuse')) return true;
               const planned = this.cache?.get(planKey(plan)) ?? null;
               return planned !== null && generator.fromCache(state, { ...planned, plan }, 'plan');
             },
@@ -433,6 +439,7 @@ export class GenerationService {
         expiresAt: this.now() + (this.options.sessionMinutes ?? 15) * 60_000,
         busy: false,
         requestKey: request.noteContext ? null : key,
+        ...(request.noteContext ? {} : { request: request.prompt }),
       });
       send('scene', this.sceneMessage(state));
     } else {
@@ -460,7 +467,7 @@ export class GenerationService {
       // Approved on a device: the next learner to ask the same can have it at once.
       const scene = state.scene;
       if (this.cache && scene && state.plan) {
-        this.cache.put([session.requestKey, planKey(state.plan)], { plan: state.plan, fragments: { html: scene.html, css: scene.css, js: scene.js }, sdkVersion: SDK_VERSION });
+        this.cache.put([session.requestKey, planKey(state.plan)], { plan: state.plan, fragments: { html: scene.html, css: scene.css, js: scene.js }, sdkVersion: SDK_VERSION }, session.request);
       }
       await this.record(state);
       this.json(res, 200, { status: 'approved', generationId: id });

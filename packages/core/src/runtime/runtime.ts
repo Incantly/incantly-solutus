@@ -294,6 +294,8 @@ export class SceneRuntime {
   private flows = new Map<VNode, number>();
   /** What moves with scene time on its own, such as a fluid's particles. */
   private steppers: Array<(dt: number) => void> = [];
+  /** Views moving in wall time, playing or paused, such as a camera turning; each ends by returning false. */
+  private moves: Array<(dt: number) => boolean> = [];
   // State and hooks
   private stateValues = new Map<string, StateValue>();
   private stateListeners = new Map<string, Array<(value: StateValue) => void>>();
@@ -398,7 +400,7 @@ export class SceneRuntime {
     const moving = this.playing && this.animated !== false;
     // A tween moves in scene time: it waits while paused (C3-7), and under reduced motion it lands at once.
     const tweening = this.tweens.length > 0 && (this.playing || this.reducedMotion);
-    return moving || this.dirty || tweening || this.stepTransition !== null || this.touring();
+    return moving || this.dirty || tweening || this.stepTransition !== null || !!this.moves[0] || this.touring();
   }
 
   /** Whether the idle tour is waiting or sweeping. */
@@ -459,6 +461,10 @@ export class SceneRuntime {
       if (done) this.stepTransition = null;
       this.dirty = true;
     }
+    // A view moves at the speed of the clock, not the learner's speed setting: it is the camera, not the scene.
+    // Motions are the kits' own code, never the scene's, so they run unguarded.
+    // The frame below draws whatever the moves changed.
+    if (this.moves[0]) this.moves = this.moves.filter((fn) => fn(capped));
     // Tweens move in scene time, at the learner's speed; pausing freezes k without cancelling (C3-7). Under
     // reduced motion each lands at its end, as steps do, so a learner who asked for no motion still sees the change.
     if (this.tweens.length > 0 && this.reducedMotion) {
@@ -948,6 +954,7 @@ export class SceneRuntime {
       for (const name of Object.keys(steps[i]?.set ?? {})) set.add(name);
     }
     this.moveTo(target, immediate || this.reducedMotion, set);
+    this.turn(index, immediate);
     this.playing = step.hold ? false : saved.playing && !this.reducedMotion;
     this.pendingStep = index;
     this.stepHookPending = index;
@@ -960,11 +967,17 @@ export class SceneRuntime {
     this.stepIndex = null;
     this.stepSaved = null;
     this.stepTransition = null;
+    this.turn(null, false);
     for (const [name, value] of Object.entries(saved.values)) this.applyParam(name, value, false);
     this.playing = saved.playing && !this.reducedMotion;
     this.pendingStep = null;
     this.stepHookPending = null;
     this.dirty = true;
+  }
+
+  /** Tells the stages whose kit owns their view where the walkthrough is, so a 3D camera turns to a step's view. */
+  private turn(index: number | null, immediate: boolean): void {
+    for (const c of this.views.values()) c.steps?.(this.stepList, index, immediate);
   }
 
   /** Moves parameters to `target`, animated unless `immediate`. Never persisted. */
@@ -1088,6 +1101,7 @@ export class SceneRuntime {
     this.simulations = [];
     this.flows = new Map();
     this.steppers = [];
+    this.moves = [];
     this.stateValues = new Map();
     this.stateListeners = new Map();
     this.changed = new Set();
@@ -1537,6 +1551,7 @@ export class SceneRuntime {
         runtime.simulations.push({ fn, step, acc: 0 });
         runtime.usesTime = true;
       },
+      motion: (fn) => void runtime.moves.push(fn),
       reducedMotion: () => runtime.reducedMotion,
       warn: (message) => {
         if (runtime.graph.diagnostics.length < 200) runtime.graph.diagnostics.push({ kind: 'budget', message });

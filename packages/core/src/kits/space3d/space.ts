@@ -1,6 +1,7 @@
 import type {
   Arrow3D,
   AxesOptions,
+  CameraMove,
   CameraOptions,
   Dots3D,
   Dots3DOptions,
@@ -53,6 +54,8 @@ export function itemOf(value: unknown, call: string): Item {
 /** How a figure's own coordinates become world coordinates: the identity in space3d, the data box in graph3d. */
 export interface Coordinates {
   point(p: Vec3): Vec3;
+  /** For coordinates that can move (a graph whose ranges follow parameters): how to place `key` again when they do. */
+  track?(key: object, place: () => void): void;
 }
 
 export const IDENTITY_COORDINATES: Coordinates = { point: (p) => p };
@@ -127,6 +130,7 @@ export class Object3DHandle implements Object3D {
 
   at(x: number, y: number, z: number): this {
     this.item.position = this.coords.point([finiteNumber(x, 'at x'), finiteNumber(y, 'at y'), finiteNumber(z, 'at z')]);
+    this.coords.track?.(this.item, () => this.at(x, y, z));
     return this;
   }
 
@@ -261,7 +265,9 @@ export class Line3DHandle extends Object3DHandle implements Line3D {
   points(points: ReadonlyArray<Vec3>): this {
     const g = this.item.geometry;
     if (g.type !== 'line') throw new SceneApiError('points() is for lines');
-    g.points = readPoints(points, 'points').map((p) => this.coords.point(p));
+    const read = readPoints(points, 'points');
+    g.points = read.map((p) => this.coords.point(p));
+    this.coords.track?.(this.item, () => this.points(read));
     return this;
   }
 }
@@ -283,6 +289,7 @@ export class Arrow3DHandle extends Object3DHandle implements Arrow3D {
     if (g.type !== 'arrow') throw new SceneApiError('set(from, to) is for arrows');
     g.from = this.coords.point(readVec3(from, 'arrow from'));
     g.to = this.coords.point(readVec3(to, 'arrow to'));
+    this.coords.track?.(this.item, () => this.set(from, to));
     return this;
   }
 
@@ -343,6 +350,7 @@ export class Label3DHandle implements Label3D {
 
   at(target: Vec3 | Object3D): this {
     this.record.target = targetOf(target, this.coords);
+    this.coords.track?.(this.record, () => this.at(target));
     return this;
   }
 
@@ -886,12 +894,12 @@ export class Space3DApi implements Space3D {
     return this.engine.pick(finiteNumber(x, 'pick x'), finiteNumber(y, 'pick y'), finiteNumber(z, 'pick z'));
   }
 
-  camera(options: CameraOptions): void {
-    this.engine.camera.set(options);
+  camera(options: CameraOptions, move?: CameraMove): void {
+    this.engine.moveCamera(options, move);
   }
 
-  view(name: View3D): void {
-    this.engine.camera.view(name);
+  view(name: View3D, move?: CameraMove): void {
+    this.engine.turnTo(name, move);
   }
 
   project(p: Vec3): Vec2 {
