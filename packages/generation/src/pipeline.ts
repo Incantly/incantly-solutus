@@ -472,10 +472,12 @@ export class Generator {
     const started = this.now();
     const stop = new AbortController();
     const planSignal = signal ? AbortSignal.any([signal, stop.signal]) : stop.signal;
+    // The plan's concept decides, not its idea: an idea may mention the reviewed concept as a part of another,
+    // as a plan of Euler's formula says its helix looks like a sine wave side-on, and that is not a sine wave figure.
     const judge = (concept: string | null, idea: string): boolean =>
       concept === null ||
       standardFigure(concept, { [scene.id]: scene }) !== null ||
-      aboutScene(`${concept}. ${idea}`, scene.id, {
+      aboutScene(concept.trim() === '' ? idea : concept, scene.id, {
         ...(this.options.withhold ? { withhold: this.options.withhold } : {}),
         ...(this.options.examples ? { examples: this.options.examples } : {}),
       });

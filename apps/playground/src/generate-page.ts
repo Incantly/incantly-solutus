@@ -253,6 +253,31 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
   const messagesContainer = document.createElement('div');
   messagesContainer.className = 'messages-container';
 
+  // The chat is the page's primary scroll surface, but its header, composer,
+  // and sidebar sit outside that element. Forward otherwise-unused vertical
+  // wheel gestures to the conversation so the pointer does not have to be
+  // directly over a message to move through the chat.
+  root.addEventListener('wheel', (event) => {
+    if (event.defaultPrevented || event.ctrlKey || event.deltaY === 0) return;
+    const target = event.target;
+    if (!(target instanceof Element) || messagesContainer.contains(target)) return;
+
+    for (let element: Element | null = target; element && element !== root; element = element.parentElement) {
+      if (!(element instanceof HTMLElement)) continue;
+      const overflowY = getComputedStyle(element).overflowY;
+      if (!/^(auto|scroll)$/.test(overflowY) || element.scrollHeight <= element.clientHeight) continue;
+      const canMove = event.deltaY < 0 ? element.scrollTop > 0 : element.scrollTop + element.clientHeight < element.scrollHeight;
+      if (canMove) return;
+    }
+
+    const canMoveChat = event.deltaY < 0
+      ? messagesContainer.scrollTop > 0
+      : messagesContainer.scrollTop + messagesContainer.clientHeight < messagesContainer.scrollHeight;
+    if (!canMoveChat) return;
+    event.preventDefault();
+    messagesContainer.scrollBy({ top: event.deltaY });
+  }, { passive: false });
+
   const welcomeScreen = document.createElement('div');
   welcomeScreen.className = 'welcome-screen';
   welcomeScreen.innerHTML = `
