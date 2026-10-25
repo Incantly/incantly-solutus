@@ -2,7 +2,7 @@ name: Release packages
 
 # Publishes @incantly/core, @incantly/tiptap and @incantly/generation to GitHub Packages
 # (npm.pkg.github.com), private to the Incantly organization. Bump "version" in the
-# three packages/*/package.json files, then push a tag that matches it, e.g. v0.1.0.
+# three packages/*/package.json files, then push a tag that matches it, e.g. v0.2.0.
 
 on:
   push:

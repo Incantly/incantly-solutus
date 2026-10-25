@@ -1,6 +1,6 @@
 {
   "name": "@incantly/generation",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Generation: plan, scene, validation, repair, fallbacks, evals and the service; ./client is the learner device side.",
