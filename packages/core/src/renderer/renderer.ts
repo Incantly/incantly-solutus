@@ -5,6 +5,7 @@ import type { ErrorView, UiState } from '../protocol/ui';
 import { EMPTY_UI } from '../protocol/ui';
 import { ControlsView, ReadoutsView } from './controls';
 import { SceneDom } from './dom-scene';
+import { PanesView } from './panes';
 import { FormulasPanel, HeaderView, LegendPanel, PredictPanel, TablesPanel } from './panels';
 import { PointerController } from './pointer';
 import { isSoundCommand, SoundPlayer, type AudioContextFactory } from './sound';
@@ -64,6 +65,7 @@ export class FigureRenderer {
   readonly root: HTMLElement;
   readonly scene: SceneDom;
   readonly pointer: PointerController;
+  private readonly panes: PanesView;
   readonly sound: SoundPlayer;
   /** The style now applied, checked. */
   style: ResolvedStyle;
@@ -158,7 +160,13 @@ export class FigureRenderer {
     this.predict = new PredictPanel(doc, send, signal);
     this.tables = new TablesPanel(doc);
     this.pointer = new PointerController({ doc, sceneRoot, scene: this.scene, send, signal, clock: this.clock, zoombar: show.zoom });
-    this.scene.onStage = (stage) => this.pointer.stageChanged(stage);
+    this.panes = new PanesView(doc, sceneRoot, signal);
+    this.panes.onChange = () => applySlotClasses(this.root, this.style);
+    this.panes.setHost(this.style.layout.panes);
+    this.scene.onStage = (stage) => {
+      this.pointer.stageChanged(stage);
+      this.panes.refresh();
+    };
 
     // The card: header and idea, then the drawing beside or above a panel of
     // everything the learner reads and changes (placed by the style's layout).
@@ -200,6 +208,7 @@ export class FigureRenderer {
     clearStyle(this.root, this.style);
     this.style = resolveStyle(style);
     applyStyle(this.root, this.style);
+    this.panes.setHost(this.style.layout.panes);
     const show = this.style.show;
     this.controls.setShow({ transport: show.transport, speed: show.speed, settings: show.settings, undo: show.undo, fullscreen: show.fullscreen });
   }
@@ -283,11 +292,7 @@ export class FigureRenderer {
     if (ui.history !== undefined) this.controls.setHistory(ui.history);
     if (ui.timing !== undefined) this.controls.setTiming(ui.timing);
     if (ui.compare !== undefined) this.controls.setCompare(ui.compare);
-    if (ui.panels !== undefined) {
-      const sceneRoot = this.root.querySelector<HTMLElement>('.inc-scene');
-      if (sceneRoot && ui.panels) sceneRoot.dataset.panels = ui.panels;
-      else if (sceneRoot) delete sceneRoot.dataset.panels;
-    }
+    if (ui.panels !== undefined) this.panes.setScene(ui.panels);
     if (ui.readouts !== undefined) this.readouts.update(ui.readouts);
     if (ui.legend !== undefined) this.legend.update(ui.legend);
     if (ui.formulas !== undefined) this.formulas.update(ui.formulas);

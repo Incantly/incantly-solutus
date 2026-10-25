@@ -27,6 +27,8 @@ inc.steps([
 
 The engine owns navigation, progress, keyboard behavior, parameter transitions, pausing, and restoration. Leaving step mode restores the learner's prior values.
 
+In a 3D figure a step can also turn the camera: `{ say: 'End-on, the helix is the unit circle.', view: 'side', flat: true }` eases every 3D stage to that view (see [interaction.md](interaction.md#camera-moves)).
+
 A figure uses the number of steps needed to teach its idea—normally two to four. Three steps are not mandatory when two are clearer.
 
 ## Explanation

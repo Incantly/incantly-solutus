@@ -64,6 +64,34 @@ The generation rules ask for it: when moving the main object would change a para
 
 Stages, graphs and 3D views zoom unless their options say `zoom: false`. A graph re-ticks its axes as the learner zooms; a plain stage zooms its view box, up to eight times. The zoom buttons (`zoombar` slot, hidden with `show: { zoom: false }`) do the same from the keyboard. 3D views orbit by default (`mode: 'orbit'`); `'iso'` keeps a fixed isometric camera and `'fixed'` keeps the camera the scene sets.
 
+### Camera moves
+
+A scene turns the camera with `space.view(name, move)` or `space.camera(options, move)`, on `inc.space3d` and `inc.graph3d` alike. Without a move the camera cuts; with one it eases there over `move.seconds` (up to 10) with `move.ease` (default `'inOut'`), turning the short way round:
+
+```js
+// A helix along x: side-on it is a sine wave, end-on the unit circle.
+inc.onFrame(() => space.view(view.value === 1 ? 'side' : 'front', { seconds: 1.2, flat: true }));
+```
+
+- **Clock time.** A move runs in wall-clock time, playing or paused and whatever the learner's speed setting: it is the camera, not the scene. The runtime asks for frames only while a camera moves, so a still figure costs nothing again once it lands.
+- **Asked every frame.** A script may ask for the same view on every frame, as above: a move to where the camera is already going keeps going instead of starting over.
+- **Perspective.** `flat: true` fades perspective out on the way, so a side view of a helix is an exact sine and an end-on view an exact circle; `flat: false` fades the figure's own perspective back in.
+- **The learner.** The toolbar's views and reset ease over 0.6 s. Dragging, zooming, panning or picking a view stops a move where it is, and the learner holds the camera: a scene asking again for what it last asked for, as one that asks every frame does, leaves the learner's view alone. A different ask takes the camera back, such as the learner moving the control the camera follows, and so do Reset and a step that names a view.
+- **Reduced motion.** Every move, the toolbar's included, cuts.
+- **Steps.** A step with `view` (and optionally `flat`) turns every 3D stage to that view over 1.2 s; going back turns to the view of the step before, and leaving the steps returns to the figure's own view.
+- **Checks.** The probe lets a paused figure come to rest before and after moving each control, so a control that eases the camera passes the paused-change check and one the camera ignores still fails it. A turn costs about 1.2 ms a frame for a scene of 36 solids and a 400-point line on a laptop.
+
+### Ranges that follow a parameter
+
+In `inc.graph3d`, either end of a range may be a function, read on every draw: the box's `x`, `y` and `z`, a parametric surface's `u` and `v`, and a curve's `t`. A curve whose `t` range follows a parameter grows the box to hold it, and the box goes back to its own range when the curve shrinks again. Ticks follow the box, and points, lines, vectors and labels given in data units are placed again where they belong.
+
+```js
+const turns = inc.param('turns', { min: 1, max: 6, step: 0.5, value: 2, label: 'Turns' });
+const g = inc.graph3d('#space', { title: 'A helix', x: [-1.5, 1.5], y: [-1.5, 1.5], z: [0, 13] });
+// Four turns run past 13: the θ axis grows to hold them.
+g.curve((t) => [Math.cos(t), Math.sin(t), t], { t: [0, () => turns.value * 2 * Math.PI] });
+```
+
 ## Measuring
 
 The stage toolbar has a measuring tool (VI-5, the ↔ button) wherever a stage says what its units are. With it pressed, taps place points instead of dragging or panning: two points read a distance, a third the angle at the second point between the other two, and a fourth starts again. The reading shows in a chip on the stage, read out as it changes; Escape or the button puts the tool away. The marks belong to the learner's session and are left out of snapshots and exported pictures.

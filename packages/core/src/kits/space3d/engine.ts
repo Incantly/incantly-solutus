@@ -1,4 +1,4 @@
-import type { Dots, DragMap, Handle, Mat3, PartOptions, PathHandle, Readable, TextHandle, Tone, Vec2, Vec3, View3D, ViewBox } from '../../api/types';
+import type { CameraMove, CameraOptions, Dots, DragMap, Handle, Mat3, PartOptions, PathHandle, Readable, Step, TextHandle, Tone, Vec2, Vec3, View3D, ViewBox } from '../../api/types';
 import { apply, IDENTITY, mul } from '../../helpers/vec';
 import type { ViewAction } from '../../protocol/runtime-messages';
 import type { AuditTurn, DepthAudit, KitContext, ViewController } from '../../runtime/kit';
@@ -7,7 +7,7 @@ import { fmt } from '../../scene/format';
 import type { VNode } from '../../scene/graph';
 import { formatReadable, nodeOf, TONES } from '../../scene/handles';
 import { auditDepth, type AuditPiece } from './audit';
-import { Camera, VIEW_NAMES, VIEWS, type Projected } from './camera';
+import { Camera, STEP_VIEW_SECONDS, TOOLBAR_MOVE_SECONDS, VIEW_NAMES, VIEWS, type Projected } from './camera';
 import { DEPTH_TOLERANCE, orderOf, prepare, relate, type PieceShape, type Prepared, type Pt } from './depth';
 import type { Mesh } from './mesh';
 
@@ -353,13 +353,15 @@ export class Engine3D implements ViewController {
   apply(action: ViewAction): boolean {
     switch (action.kind) {
       case 'orbit':
-        return this.camera.orbit(action.dx, action.dy);
+        return this.hold(this.camera.orbit(action.dx, action.dy));
       case 'zoom':
-        return this.options.zoom && this.camera.zoom(action.x, action.y, action.factor);
+        return this.hold(this.options.zoom && this.camera.zoom(action.x, action.y, action.factor));
       case 'pan':
-        return this.options.zoom && this.camera.pan(action.dx, action.dy);
+        return this.hold(this.options.zoom && this.camera.pan(action.dx, action.dy));
       case 'reset':
-        this.camera.reset();
+        this.held = false;
+        this.camera.reset({ seconds: TOOLBAR_MOVE_SECONDS }, this.ctx.reducedMotion());
+        this.follow();
         return true;
       case 'fit': {
         const { centre, radius } = this.bounds();
@@ -369,7 +371,9 @@ export class Engine3D implements ViewController {
       }
       case 'preset':
         if (!Object.hasOwn(VIEWS, action.name) || this.options.mode !== 'orbit') return false;
-        this.camera.view(action.name as View3D);
+        this.held = true;
+        this.camera.view(action.name as View3D, { seconds: TOOLBAR_MOVE_SECONDS }, this.ctx.reducedMotion());
+        this.follow();
         return true;
       default:
         return false;
@@ -378,6 +382,81 @@ export class Engine3D implements ViewController {
 
   changed(): boolean {
     return this.camera.changed();
+  }
+
+  /**
+   * Set once the learner turns, zooms or pans the view, or picks one. A scene
+   * asking again for the camera it last asked for, as one that asks every
+   * frame does, then leaves the learner's view alone; a different ask, such
+   * as a control the learner moved, Reset, or the next step, takes it back.
+   */
+  private held = false;
+  /** What the scene last asked of the camera, to tell a new ask from the same one again. */
+  private asked = '';
+
+  /** Holds the view for the learner when their move changed it. */
+  private hold(moved: boolean): boolean {
+    if (moved) this.held = true;
+    return moved;
+  }
+
+  /** Whether the scene may move the camera for this ask: not when it repeats itself while the learner holds the view. */
+  private ask(key: string): boolean {
+    if (this.held && key === this.asked) return false;
+    this.held = false;
+    this.asked = key;
+    return true;
+  }
+
+  /** Moves the camera, easing there when the move takes time; reduced motion cuts. */
+  moveCamera(options: CameraOptions, move: CameraMove | undefined): void {
+    if (!this.ask(`camera ${JSON.stringify(options)}`)) return;
+    this.camera.move(options, move, this.ctx.reducedMotion());
+    this.follow();
+  }
+
+  /**
+   * Turns to the view of step `index`: the last view named at or before it,
+   * as a step's values build on the earlier steps, or the starting view when
+   * there is none or the steps end. Steps that name no view leave the camera
+   * alone. The validator turns away a view that is not one of the names, so
+   * one that reaches here anyway is passed over rather than thrown.
+   */
+  steps(steps: readonly Step[] | null, index: number | null, immediate: boolean): void {
+    const named = (s: Step | undefined) => s?.view !== undefined && Object.hasOwn(VIEWS, s.view);
+    if (!steps?.some(named)) return;
+    // A step that names views takes the camera back from the learner.
+    this.held = false;
+    let step: Step | null = null;
+    if (index !== null) for (let i = 0; i <= index; i++) if (named(steps[i])) step = steps[i]!;
+    const move: CameraMove = { seconds: immediate ? 0 : STEP_VIEW_SECONDS, ...(typeof step?.flat === 'boolean' ? { flat: step.flat } : {}) };
+    if (step?.view) this.camera.view(step.view, move, this.ctx.reducedMotion());
+    else this.camera.reset(move, this.ctx.reducedMotion());
+    this.follow();
+  }
+
+  /** Turns to a named view, easing there when the move takes time; reduced motion cuts. */
+  turnTo(name: View3D, move: CameraMove | undefined): void {
+    if (!this.ask(`view ${String(name)}`)) return;
+    this.camera.view(name, move, this.ctx.reducedMotion());
+    this.follow();
+  }
+
+  /** Whether the runtime is driving the camera's move. */
+  private following = false;
+
+  /**
+   * Asks the runtime for frames while the camera moves, playing or paused,
+   * and for none once it lands: a still figure costs nothing again.
+   */
+  private follow(): void {
+    if (!this.camera.moving || this.following) return;
+    this.following = true;
+    this.ctx.motion((dt) => {
+      const going = this.camera.advance(dt);
+      if (!going) this.following = false;
+      return going;
+    });
   }
 
   mode(): 'runtime' {

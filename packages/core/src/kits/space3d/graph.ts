@@ -1,5 +1,6 @@
 import type {
   Arrow3D,
+  CameraMove,
   CameraOptions,
   Curve3DOptions,
   Graph3D,
@@ -36,16 +37,64 @@ import { Line3DHandle, Object3DHandle, Space3DApi, type Coordinates } from './sp
 const DEFAULT_RESOLUTION = 24;
 const MAX_CONTOURS = 12;
 
-interface Range {
-  readonly lo: number;
-  readonly hi: number;
+type End = number | (() => number);
+
+/** Most ticks niceTicks gives an axis, so an axis that moves keeps this many labels ready. */
+const MOVING_TICKS = 8;
+
+/**
+ * A range [min, max] whose ends may be functions, so it follows parameters.
+ * The functions are read once per draw by refresh(); a reading that is not
+ * a range keeps the last one that was. A box's range also stretches to take
+ * in what must fit (stretch), and goes back when it no longer must.
+ */
+class Range {
+  lo = NaN;
+  hi = NaN;
+  readonly live: boolean;
+  private base: readonly [number, number] = [NaN, NaN];
+  private need: readonly [number, number] | null = null;
+
+  constructor(private readonly ends: readonly [End, End]) {
+    this.live = ends.some((e) => typeof e === 'function');
+  }
+
+  /** Reads the ends again; true when the range moved. */
+  refresh(): boolean {
+    const [lo, hi] = this.ends.map((e) => (typeof e === 'function' ? Number(e()) : e)) as [number, number];
+    if (Number.isFinite(lo) && Number.isFinite(hi) && lo < hi) this.base = [lo, hi];
+    return this.settle();
+  }
+
+  /** Widens the range to take in [lo, hi] as well, or to its own again for null; true when it moved. */
+  stretch(need: readonly [number, number] | null): boolean {
+    this.need = need;
+    return this.settle();
+  }
+
+  private settle(): boolean {
+    const lo = this.need ? Math.min(this.base[0], this.need[0]) : this.base[0];
+    const hi = this.need ? Math.max(this.base[1], this.need[1]) : this.base[1];
+    if (!(lo < hi) || (lo === this.lo && hi === this.hi)) return false;
+    this.lo = lo;
+    this.hi = hi;
+    return true;
+  }
 }
 
 function range(value: unknown, name: string): Range {
-  if (!Array.isArray(value) || value.length !== 2 || !value.every((n) => typeof n === 'number' && Number.isFinite(n)) || !(value[0] < value[1])) {
-    throw new SceneApiError(`graph3d ${name} must be [min, max] with min below max`);
-  }
-  return { lo: value[0], hi: value[1] };
+  const r = Array.isArray(value) && value.length === 2 && value.every((e) => typeof e === 'function' || (typeof e === 'number' && Number.isFinite(e))) ? new Range(value as [End, End]) : null;
+  if (!r) throw new SceneApiError(`graph3d ${name} must be [min, max]; either end may be a function that returns a number`);
+  if (!r.refresh()) throw new SceneApiError(`graph3d ${name} must be [min, max] with min below max`);
+  return r;
+}
+
+/** A curve whose t range follows a parameter: sampled before the box settles, so the box can grow to hold it. */
+interface Stretching {
+  readonly item: Item;
+  sample(): void;
+  /** The curve's points in data units, from the latest sample. */
+  readonly data: Vec3[];
 }
 
 /** About five round tick values across a range. */
@@ -172,6 +221,14 @@ export class Graph3DApi implements Graph3D {
   private readonly y: Range;
   private readonly z: Range;
   private surfaces = 0;
+  /** How to place again what was given in data units, for when the box's ranges move. */
+  private readonly placed = new Map<object, () => void>();
+  /** Runs when the box's ranges move, after everything is placed again. */
+  private readonly rescaled: (() => void)[] = [];
+  /** Curves that may run past the box, which then grows to hold them. */
+  private readonly stretching: Stretching[] = [];
+  /** Readies the axes for a box that moves: set by the frame. */
+  private moves: () => void = () => {};
 
   constructor(
     readonly engine: Engine3D,
@@ -182,10 +239,41 @@ export class Graph3DApi implements Graph3D {
     this.z = range(options.z, 'z');
     const { x, y, z } = this;
     const map = (v: number, r: Range) => (2 * (v - r.lo)) / (r.hi - r.lo) - 1;
-    this.coords = { point: (p) => [map(p[0], x), map(p[1], y), map(p[2], z)] };
+    const point = (p: Vec3): Vec3 => [map(p[0], x), map(p[1], y), map(p[2], z)];
+    // Placements are kept from the start: a curve made later may still make the box move.
+    this.coords = { point, track: (key, place) => this.placed.set(key, place) };
+    // First in the scene, so the box has its new ranges before anything in it updates.
+    const watch = new Item({ type: 'group' }, null, engine.root);
+    watch.update = () => this.settle();
     this.space = new Space3DApi(engine, this.coords);
     this.stage = engine.ctx.stage;
     this.frame(options);
+  }
+
+  /** Reads the box's ranges and grows them to hold the stretching curves; when they move, places everything again. */
+  private settle(): void {
+    const ranges = [this.x, this.y, this.z];
+    let moved = ranges.map((r) => r.refresh()).some(Boolean);
+    if (this.stretching.length > 0) {
+      const lo = [Infinity, Infinity, Infinity];
+      const hi = [-Infinity, -Infinity, -Infinity];
+      for (const curve of this.stretching) {
+        if (!curve.item.visible) continue;
+        curve.sample();
+        for (const p of curve.data) {
+          for (let axis = 0; axis < 3; axis++) {
+            lo[axis] = Math.min(lo[axis]!, p[axis]!);
+            hi[axis] = Math.max(hi[axis]!, p[axis]!);
+          }
+        }
+      }
+      ranges.forEach((r, axis) => {
+        if (r.stretch(lo[axis]! < hi[axis]! ? [lo[axis]!, hi[axis]!] : null)) moved = true;
+      });
+    }
+    if (!moved) return;
+    for (const place of this.placed.values()) place();
+    for (const fn of this.rescaled) fn();
   }
 
   /** Panes, grids, axes, ticks and names: on the far panes and near edges for wherever the camera is. */
@@ -195,8 +283,9 @@ export class Graph3DApi implements Graph3D {
     const names = options.labels ?? ['x', 'y', 'z'];
     if (!Array.isArray(names) || names.length !== 3) throw new SceneApiError('graph3d labels must be three names');
     const axes = options.axes !== false;
-    const ticks = [niceTicks(this.x.lo, this.x.hi), niceTicks(this.y.lo, this.y.hi), niceTicks(this.z.lo, this.z.hi)];
     const ranges = [this.x, this.y, this.z];
+    const ticks = ranges.map((r) => niceTicks(r.lo, r.hi));
+    this.rescaled.push(() => ranges.forEach((r, axis) => (ticks[axis] = niceTicks(r.lo, r.hi))));
     const toWorld = (axis: number, v: number) => (2 * (v - ranges[axis]!.lo)) / (ranges[axis]!.hi - ranges[axis]!.lo) - 1;
     // Which side each pane is on, from the latest draw.
     const side = { floor: -1, wallY: -1, wallX: -1, zAt: [1, -1] as [number, number] };
@@ -248,15 +337,32 @@ export class Graph3DApi implements Graph3D {
       if (axis === 1) return [-side.wallX, w, side.floor];
       return [side.zAt[0], side.zAt[1], w];
     };
+    // One label per tick, each showing whichever tick is in its place now. An axis that moves keeps
+    // as many ready as it may have ticks; a fixed one only those it has, and is readied if it starts to move.
+    const records: ReturnType<Engine3D['label']>[][] = [[], [], []];
+    const add = (axis: number) => {
+      const k = records[axis]!.length;
+      const tick = () => ticks[axis]![k];
+      const record = engine.label([0, 0, 0], '', 'lo', 8, () => (tick() === undefined ? null : tickPoint(axis, tick()!)));
+      record.handle.set({ 'font-size': 12 });
+      records[axis]!.push(record);
+    };
+    const write = () => records.forEach((list, axis) => list.forEach((record, k) => (record.text = ticks[axis]![k] === undefined ? '' : tickText(ticks[axis]![k]!))));
+    const ready = (axis: number) => {
+      while (records[axis]!.length < MOVING_TICKS) add(axis);
+    };
     for (let axis = 0; axis < 3; axis++) {
-      for (const t of ticks[axis]!) {
-        const record = engine.label([0, 0, 0], tickText(t), 'lo', 8, () => tickPoint(axis, t));
-        record.handle.set({ 'font-size': 12 });
-      }
-      const lo = ranges[axis]!.lo;
-      const hi = ranges[axis]!.hi;
-      engine.label([0, 0, 0], String(names[axis]), null, 30, () => tickPoint(axis, (lo + hi) / 2));
+      if (ranges[axis]!.live) ready(axis);
+      else while (records[axis]!.length < ticks[axis]!.length) add(axis);
+      const r = ranges[axis]!;
+      engine.label([0, 0, 0], String(names[axis]), null, 30, () => tickPoint(axis, (r.lo + r.hi) / 2));
     }
+    write();
+    this.rescaled.push(write);
+    this.moves = () => {
+      for (let axis = 0; axis < 3; axis++) ready(axis);
+      write();
+    };
   }
 
   private resolution(requested: number, detail: number): number {
@@ -354,6 +460,8 @@ export class Graph3DApi implements Graph3D {
         type: 'custom',
         emit: (out: Emitter, self: Item) => {
           const n = this.resolution(requested, out.detail);
+          u.refresh();
+          v.refresh();
           const points = this.grid(
             (pu, pv) => {
               const p = f(pu, pv);
@@ -430,13 +538,26 @@ export class Graph3DApi implements Graph3D {
     const steps = options.steps === undefined ? 200 : options.steps;
     if (!Number.isInteger(steps) || steps < 2 || steps > 1000) throw new SceneApiError('curve steps must be a whole number from 2 to 1000');
     const item = new Item({ type: 'line', points: [], arrow: false, dashed: options.dashed === true, closed: false }, toneOf(options.tone, 'a'), this.engine.root);
+    const curve: Stretching = {
+      item,
+      data: [],
+      sample: () => {
+        t.refresh();
+        curve.data.length = 0;
+        for (let i = 0; i <= steps; i++) {
+          const p = f(t.lo + ((t.hi - t.lo) * i) / steps);
+          if (Array.isArray(p) && p.length === 3 && p.every((c) => typeof c === 'number' && Number.isFinite(c))) curve.data.push([p[0], p[1], p[2]]);
+        }
+      },
+    };
+    // A curve that stretches is sampled first, by the box, so the box can grow to hold it.
+    if (t.live) {
+      this.stretching.push(curve);
+      this.moves();
+    }
     item.update = () => {
-      const points: Vec3[] = [];
-      for (let i = 0; i <= steps; i++) {
-        const p = f(t.lo + ((t.hi - t.lo) * i) / steps);
-        if (Array.isArray(p) && p.length === 3 && p.every((c) => typeof c === 'number' && Number.isFinite(c))) points.push(this.coords.point([p[0], p[1], p[2]]));
-      }
-      (item.geometry as { points: Vec3[] }).points = points;
+      if (!t.live) curve.sample();
+      (item.geometry as { points: Vec3[] }).points = curve.data.map((p) => this.coords.point(p));
     };
     return new Line3DHandle(this.engine, item, this.coords);
   }
@@ -444,23 +565,43 @@ export class Graph3DApi implements Graph3D {
   point(at: Vec3 | (() => Vec3), options: { readonly tone?: Tone; readonly label?: Readable } = {}): Object3D {
     const item = new Item({ type: 'point', r: 4.5 }, toneOf(options.tone, 'lit'), this.engine.root);
     const handle = new GraphPointHandle(this.engine, item, this.coords, typeof at === 'function' ? at : null);
-    if (typeof at !== 'function') item.position = this.coords.point(readVec3(at, 'point'));
+    if (typeof at !== 'function') handle.at(...readVec3(at, 'point'));
     if (options.label !== undefined) this.engine.label([0, 0, 0], options.label, toneOf(options.tone, null), 10, () => (item.shown ? ([...item.world.t] as Vec3) : null));
     return handle;
   }
 
   vector(from: Vec3, to: Vec3, options: Line3DOptions = {}): Arrow3D {
-    return this.space.arrow(from, to, options);
+    // Set again through the handle, so it is placed again when the box's ranges move.
+    return this.space.arrow(from, to, options).set(from, to);
   }
 
   line(points: ReadonlyArray<Vec3>, options: Line3DOptions = {}): Line3D {
-    return this.space.line(points, options);
+    return this.space.line(points, options).points(points);
   }
 
   plane(normal: Vec3, d: number, options: { readonly tone?: Tone; readonly look?: Look } = {}): Surface3D {
     const n = readVec3(normal, 'plane normal');
     if (Math.hypot(...n) < 1e-12) throw new SceneApiError('plane needs a non-zero normal');
     if (typeof d !== 'number' || !Number.isFinite(d)) throw new SceneApiError('plane needs a finite d in n·p = d');
+    const lookName = look(options.look, 'ghost');
+    const item = new Item(
+      {
+        type: 'custom',
+        emit: (out: Emitter, self: Item) => {
+          const polygon = this.planePolygon(n, d);
+          if (polygon.length >= 3) out.face(polygon, { tone: self.tone, look: self.look, twoSided: true });
+        },
+        bounds: null,
+      },
+      toneOf(options.tone, 'b'),
+      this.engine.root,
+    );
+    item.look = lookName;
+    return new Surface3DHandle(this.engine, item, this.coords, this, null);
+  }
+
+  /** Where the plane n·p = d cuts the box as it stands, as a polygon in world units. */
+  private planePolygon(n: Vec3, d: number): Vec3[] {
     const { x, y, z } = this;
     const corners: Vec3[] = [];
     for (let i = 0; i < 8; i++) corners.push([i & 1 ? x.hi : x.lo, i & 2 ? y.hi : y.lo, i & 4 ? z.hi : z.lo]);
@@ -498,36 +639,23 @@ export class Graph3DApi implements Graph3D {
       };
       polygon = world.sort((a, b) => angle(a) - angle(b));
     }
-    const lookName = look(options.look, 'ghost');
-    const item = new Item(
-      {
-        type: 'custom',
-        emit: (out: Emitter, self: Item) => {
-          if (polygon.length >= 3) out.face(polygon, { tone: self.tone, look: self.look, twoSided: true });
-        },
-        bounds: null,
-      },
-      toneOf(options.tone, 'b'),
-      this.engine.root,
-    );
-    item.look = lookName;
-    return new Surface3DHandle(this.engine, item, this.coords, this, null);
+    return polygon;
   }
 
   label(at: Vec3, text: Readable, options: { readonly tone?: Tone } = {}): Label3D {
-    return this.space.label(at, text, options);
+    return this.space.label(at, text, options).at(at);
   }
 
   part<T extends Object3D>(name: string, object: T, options?: PartOptions): T {
     return this.space.part(name, object, options);
   }
 
-  camera(options: CameraOptions): void {
-    this.engine.camera.set(options);
+  camera(options: CameraOptions, move?: CameraMove): void {
+    this.engine.moveCamera(options, move);
   }
 
-  view(name: View3D): void {
-    this.engine.camera.view(name);
+  view(name: View3D, move?: CameraMove): void {
+    this.engine.turnTo(name, move);
   }
 
   project(p: Vec3): Vec2 {

@@ -142,6 +142,26 @@ html.inc-frame, html.inc-frame body { margin: 0; padding: 0; background: transpa
 .inc-scene[data-panels='grid'] { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--inc-gap); }
 .inc-scene[data-panels] > * { margin: 0; }
 /*
+ * The host's panes layout (style.layout.panes) 'focus': one pane large, the others small in a column beside
+ * it, stacked under it when narrow. Anything else the scene HTML holds spans the width.
+ */
+.inc-scene[data-panels='focus'] { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 1fr); gap: var(--inc-gap); align-items: start; }
+.inc-scene[data-panels='focus'] > .inc-pane[data-focus] { grid-column: 1; grid-row: 1 / span 8; }
+.inc-scene[data-panels='focus'] > .inc-pane:not([data-focus]) { grid-column: 2; }
+.inc-scene[data-panels='focus'] > :not(.inc-pane) { grid-column: 1 / -1; }
+@container (max-width: 560px) {
+  .inc-scene[data-panels='focus'] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .inc-scene[data-panels='focus'] > .inc-pane[data-focus] { grid-column: 1 / -1; grid-row: auto; }
+  .inc-scene[data-panels='focus'] > .inc-pane:not([data-focus]) { grid-column: auto; }
+}
+/* A pane enlarged by its button fills the scene; the others wait until it is put back. */
+.inc-scene[data-expanded] > :not([data-expanded]) { display: none; }
+.inc-scene[data-expanded] > [data-expanded] { grid-column: 1 / -1; grid-row: auto; flex-basis: 100%; }
+.inc-pane { position: relative; }
+.inc-figure button.inc-pane-button { position: absolute; top: 6px; left: 6px; z-index: 3; padding: 2px 8px; opacity: 0.85; }
+.inc-figure button.inc-pane-button:is(:hover, :focus-visible) { opacity: 1; }
+.inc-figure[data-hide-expand] .inc-pane-button { display: none; }
+/*
  * The host stacks its own layers (FX-1, BR-12): the back layer's own SVG at the bottom, the canvases
  * behind the drawing over it, the drawing, then the canvases in front. The renderer lays the back
  * layer's SVG and the canvases over the drawing's box.

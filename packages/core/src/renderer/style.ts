@@ -43,6 +43,7 @@ export type StyleSlot =
   | 'steps'
   | 'predict'
   | 'zoombar'
+  | 'pane'
   | 'description';
 
 export const STYLE_SLOTS: readonly StyleSlot[] = [
@@ -77,6 +78,7 @@ export const STYLE_SLOTS: readonly StyleSlot[] = [
   'steps',
   'predict',
   'zoombar',
+  'pane',
   'description',
 ];
 
@@ -113,14 +115,24 @@ export const SLOT_SELECTORS: Readonly<Record<StyleSlot, string>> = {
   steps: '.inc-steps',
   predict: '.inc-predict',
   zoombar: '.inc-zoombar',
+  pane: '.inc-pane',
   description: '.inc-description',
 };
 
 export type ControlsPlacement = 'below' | 'above' | 'right' | 'left' | 'overlay';
 
+/** How a figure's panes, the parts of its scene a drawing sits in, are laid out: 'auto' keeps the scene's own choice. */
+export type PanesLayout = 'auto' | 'row' | 'column' | 'grid' | 'focus';
+
 export interface FigureLayout {
   /** Where the controls and readouts sit relative to the drawing. Narrow figures stack them below. */
   readonly controls?: ControlsPlacement;
+  /**
+   * How the scene's panes sit together when it draws more than one, over the
+   * scene's own choice: side by side, one above another, two by two, or
+   * 'focus', one large with the others small beside it. Default 'auto'.
+   */
+  readonly panes?: PanesLayout;
   /** Height of each drawing: a CSS length such as `360px` or `50vh`; by default it follows the drawing's shape. */
   readonly sceneHeight?: string;
   /** Widest the figure grows: a CSS length. */
@@ -147,7 +159,8 @@ export type ShowPart =
   | 'steps'
   | 'description'
   | 'zoom'
-  | 'partInfo';
+  | 'partInfo'
+  | 'expand';
 
 export interface FigureStyle {
   readonly preset?: StylePreset;
@@ -183,6 +196,7 @@ export interface ResolvedStyle {
 
 const PRESETS: readonly StylePreset[] = ['default', 'glass', 'minimal', 'outline', 'contrast', 'soft', 'paper', 'blueprint', 'sepia'];
 const PLACEMENTS: readonly ControlsPlacement[] = ['below', 'above', 'right', 'left', 'overlay'];
+const PANES: readonly PanesLayout[] = ['auto', 'row', 'column', 'grid', 'focus'];
 const SHOW_DEFAULTS: Readonly<Record<ShowPart, boolean>> = {
   header: true,
   idea: true,
@@ -198,6 +212,7 @@ const SHOW_DEFAULTS: Readonly<Record<ShowPart, boolean>> = {
   description: true,
   zoom: true,
   partInfo: true,
+  expand: true,
 };
 
 /** Token names: lower-case words joined by hyphens. */
@@ -250,6 +265,7 @@ export function resolveStyle(style: FigureStyle | undefined): ResolvedStyle {
     classNames,
     layout: {
       controls: PLACEMENTS.includes(layout.controls as ControlsPlacement) ? (layout.controls as ControlsPlacement) : 'below',
+      panes: PANES.includes(layout.panes as PanesLayout) ? (layout.panes as PanesLayout) : 'auto',
       align: (['start', 'center', 'end', 'stretch'] as const).includes(layout.align as 'start') ? (layout.align as 'start') : 'stretch',
       density: (['compact', 'comfortable', 'spacious'] as const).includes(layout.density as 'compact') ? (layout.density as 'compact') : 'comfortable',
       size: (['sm', 'md', 'lg'] as const).includes(layout.size as 'sm') ? (layout.size as 'sm') : 'md',

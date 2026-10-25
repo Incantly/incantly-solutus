@@ -85,7 +85,7 @@ Tokens given in a style apply in both light and dark themes. For a colour that d
 | --- | --- |
 | `figure` | The card itself |
 | `header`, `title`, `hint`, `idea` | The heading block, the title, its hint line and the teaching idea |
-| `body`, `scene`, `stage` | The drawing and controls together, the drawing area, each SVG stage |
+| `body`, `scene`, `pane`, `stage` | The drawing and controls together, the drawing area, each pane a drawing sits in, each SVG stage |
 | `panel`, `controls`, `params`, `param`, `label` | The controls column, the control group, the parameter list, one parameter row and its label |
 | `slider`, `number`, `switch`, `select`, `segmented` | Each kind of input |
 | `button`, `primary`, `chip`, `transport`, `settings` | Every button, the main action, preset chips, play and pause, the settings menu |
@@ -125,12 +125,30 @@ Classes are names only (letters, digits and the punctuation utility frameworks u
 | `density` | `compact`, `comfortable`, `spacious` | `comfortable` |
 | `size` | `sm`, `md`, `lg`: text and control size | `md` |
 | `panelWidth` | Width of the side panel when controls sit left or right | About a third, at least 220 px |
+| `panes` | `auto`, `row`, `column`, `grid`, `focus`: how a scene's panes sit together | `auto`, the scene's own choice |
 
 Side panels fall back below the drawing when the figure is narrow, and their rows stack the label over the slider when the panel itself is narrow. Lengths accept `px`, `rem`, `em`, `vh`, `vw`, `svh`, `dvh`, `%` and `ch`.
 
+### Scenes with more than one drawing
+
+A generated scene may draw in more than one place, say a 3D helix and the waves it casts. Each element of its HTML that holds a drawing is a *pane*. The scene picks how its panes sit together (`inc.layout`: side by side, one above another, or two by two). `panes` overrides that for every figure you show:
+
+- `row`, `column` or `grid` lay the panes out that way whatever the scene chose. `row` stacks them when the figure is narrow.
+- `focus` draws one pane large with the others small in a column beside it, or in a row under it when the figure is narrow. A small pane's button (⇱) brings it forward.
+- `auto` keeps the scene's choice.
+
+Whatever the layout, a scene with more than one pane gives each a button (⤢) that enlarges it to the whole drawing area, and back (↙, or Escape). In a sandboxed frame, the frame grows and shrinks with it. Hide these buttons with `show: { expand: false }`, and style panes with the `pane` slot.
+
+```ts
+const style: FigureStyle = {
+  layout: { panes: 'focus' },
+  classNames: { pane: 'rounded-xl ring-1 ring-black/10' },
+};
+```
+
 ## Which parts show
 
-`show` turns parts off: `header`, `idea`, `readouts`, `legend`, `controls`, `transport` (play and pause), `speed`, `settings`, `undo`, `fullscreen`, `steps`, `description`, `zoom` (the zoom buttons; pinch and wheel zoom still work), and `partInfo` (the panel that names a part when the learner points at it). All are on by default. Turning a part off hides it; the figure keeps working, and its text description stays available to screen readers.
+`show` turns parts off: `header`, `idea`, `readouts`, `legend`, `controls`, `transport` (play and pause), `speed`, `settings`, `undo`, `fullscreen`, `steps`, `description`, `zoom` (the zoom buttons; pinch and wheel zoom still work), `partInfo` (the panel that names a part when the learner points at it), and `expand` (each pane's enlarge button). All are on by default. Turning a part off hides it; the figure keeps working, and its text description stays available to screen readers.
 
 ## Styles in TipTap
 
@@ -147,6 +165,10 @@ const editor = new Editor({
 
 // Over the editor's style, for the selected figure only; null goes back to the editor's.
 editor.commands.setFigureLook({ preset: 'paper', layout: { controls: 'left', sceneHeight: '480px' } });
+
+// Every figure in the editor shows its panes in the focus layout; this one side by side.
+FigureNode.configure({ adapter: sandboxAdapter, style: { layout: { panes: 'focus' } } });
+editor.commands.setFigureLook({ layout: { panes: 'row' } });
 ```
 
 A figure's own look is stored in the note as its `look` attribute. Notes travel between people, so the look keeps only what `checkStyle` accepts: preset, tokens, classes, layout and shown parts, never CSS. It goes over the editor's style with `mergeStyles`: fields of the look win, classes add up, and the editor keeps its CSS. Changing the look restyles the live figure without remounting it, and it is one undoable step.

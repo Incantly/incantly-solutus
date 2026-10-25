@@ -226,6 +226,9 @@ const MOUNT_ONLY: ReadonlySet<string> = new Set([
   'idle',
 ]);
 
+/** The named views a step may turn the 3D camera to (View3D). */
+const STEP_VIEWS: ReadonlySet<string> = new Set(['front', 'side', 'top', 'iso']);
+
 /** Drawn elements, whose set() takes SVG attributes. */
 const ATTRIBUTE_HANDLES: ReadonlySet<string> = new Set(['Element', 'Path', 'Text', 'Polyline']);
 
@@ -1501,7 +1504,20 @@ class JsValidator {
       }
       case 'steps': {
         const [list] = node.arguments;
-        if (list?.type === 'ArrayExpression') this.stepCount = list.elements.length;
+        if (list?.type === 'ArrayExpression') {
+          this.stepCount = list.elements.length;
+          // A step's view is one of the 3D camera's named views; the camera passes over any other.
+          for (const step of list.elements) {
+            if (step?.type !== 'ObjectExpression') continue;
+            for (const property of step.properties) {
+              if (property.type !== 'Property' || property.computed || property.key.type !== 'Identifier' || property.key.name !== 'view') continue;
+              const value = property.value;
+              if (value.type === 'Literal' && !STEP_VIEWS.has(String(value.value))) {
+                this.report('unknown-property', `A step's view is ${[...STEP_VIEWS].join(', ')}, not "${String(value.value)}"`, value.start);
+              }
+            }
+          }
+        }
         break;
       }
       case 'idea':

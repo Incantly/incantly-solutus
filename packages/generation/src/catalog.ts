@@ -18,7 +18,7 @@ export interface Capability {
 
 const STAGE = ['StageOptions', 'ElementOptions', 'EquationOptions', 'Shade', 'Layer', 'Stage', 'PartOptions', 'RotateOptions', 'Handle', 'PathHandle', 'TextHandle', 'PolylineHandle', 'Group'];
 const DRAG = ['DragInfo', 'DragMap', 'Values'];
-const SPACE = ['Vec3', 'Mat3', 'CameraOptions', 'View3D', 'Object3D', 'Group3D', 'Line3DOptions', 'Line3D', 'Arrow3D', 'Label3D', 'PartOptions'];
+const SPACE = ['Vec3', 'Mat3', 'CameraOptions', 'CameraMove', 'View3D', 'Object3D', 'Group3D', 'Line3DOptions', 'Line3D', 'Arrow3D', 'Label3D', 'PartOptions'];
 
 export const CAPABILITIES: readonly Capability[] = [
   // Stages: every plan has at least one.
@@ -64,8 +64,8 @@ export const CAPABILITIES: readonly Capability[] = [
   {
     name: 'graph3d',
     draws: true,
-    line: 'graph3d: a 3D graph the learner turns; surfaces z=f(x,y), parametric surfaces and curves, points, vectors, planes, contours, cross-sections (inc.graph3d).',
-    contract: ['Graph3DOptions', 'SurfaceOptions', 'ParametricSurfaceOptions', 'Curve3DOptions', 'Surface3D', 'Graph3D', ...SPACE, 'Stage'],
+    line: 'graph3d: a 3D graph the learner turns; surfaces z=f(x,y), parametric surfaces, curves, points, vectors, planes, contours, sections, view turns, slider-driven ranges (inc.graph3d).',
+    contract: ['Span', 'Graph3DOptions', 'SurfaceOptions', 'ParametricSurfaceOptions', 'Curve3DOptions', 'Surface3D', 'Graph3D', ...SPACE, 'Stage'],
   },
   {
     name: 'physics2d',

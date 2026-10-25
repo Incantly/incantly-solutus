@@ -292,6 +292,14 @@ export const VALIDATOR_CASES: readonly ValidatorCase[] = [
     twin: { js: js('let n = 0;', 'inc.onFrame(() => {', '  n = 40;', '  for (let i = 0; i < Math.min(n, 500); i++) dot.at(i, 0);', '});') },
   },
   {
+    name: 'a step view that is not a named view',
+    fragment: 'js',
+    rule: 'unknown-property',
+    bad: { js: js("inc.steps([{ say: 'Turn it.', view: 'end-on' }]);") },
+    at: "'end-on'",
+    twin: { js: js("inc.steps([{ say: 'Turn it.', view: 'side', flat: true }]);") },
+  },
+  {
     name: 'words set as an attribute',
     fragment: 'js',
     rule: 'unknown-property',
