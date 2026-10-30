@@ -19,11 +19,12 @@ const dog = zoo.skeleton({
   forelimb: { upper: 0.2, lower: 0.22, foot: 0.12 },
   hindlimb: { upper: 0.23, lower: 0.24, foot: 0.14 },
   tail: { length: 0.45, stiffness: 0.5 },
-  hints: { ears: 'floppy' },
   at: [400, 330],
   width: 560,
 });
 dog.move({ speed });
+// A floppy ear, drawn on the skull in place of the kit's plain one.
+dog.skin('ear', { points: [[-0.05, 0], [0.22, 0.02], [0.2, -0.45], [0.02, -0.4]], as: 'part', replace: true });
 zoo.part('Dog', dog, { label: 'Dog', info: 'Its body, gait and stride are worked out from its skeleton and speed.' });
 zoo.part('Hind legs', dog.piece('hindlimbs'), { label: 'Hind legs', info: 'The big thigh muscles drive the dog forward.' });
 zoo.part('Front legs', dog.piece('forelimbs'), { label: 'Front legs', info: 'They catch the body and steer.' });

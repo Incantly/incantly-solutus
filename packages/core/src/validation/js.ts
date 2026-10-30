@@ -242,6 +242,7 @@ const CREATES_ELEMENTS: Readonly<Partial<Record<HandleKind, ReadonlySet<string>>
   Chemistry: new Set(['atom', 'bond', 'molecule', 'shells', 'reaction', 'profile']),
   Biology: new Set(['cell', 'membrane', 'helix', 'stream']),
   Anatomy: new Set(['skeleton']),
+  Animal: new Set(['skin']),
   World2D: new Set(['ball', 'box', 'polygon', 'ramp', 'spring', 'rope', 'rod', 'hinge', 'pulley', 'tank', 'field', 'forces', 'onHit', 'onTouch']),
   Chart: new Set(['series', 'points', 'rule']),
   Flow: new Set(['node', 'edge']),

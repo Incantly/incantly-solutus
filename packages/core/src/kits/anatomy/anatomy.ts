@@ -12,13 +12,15 @@ import type {
   PartOptions,
   PathHandle,
   SkeletonSpec,
+  SkinBone,
+  SkinShape,
   Tone,
   Vec2,
   ViewBox,
 } from '../../api/types';
 import type { KitContext } from '../../runtime/kit';
 import { fmt } from '../../scene/format';
-import type { StageHandle } from '../../scene/handles';
+import { TONES, type StageHandle } from '../../scene/handles';
 import { planGait, type GaitPlan } from './gait';
 import { fail, readSkeleton, type Build, type Limb } from './skeleton';
 
@@ -133,17 +135,6 @@ const FOOT_ANGLE: Readonly<Record<FootPosture, number>> = { plantigrade: 0.17, d
 
 const ankleHeight = (limb: Limb) => Math.max(limb.foot * Math.sin(FOOT_ANGLE[limb.posture]), 0.12 * limb.foot);
 
-/** A seeded generator (mulberry32), so spots fall in the same places every run. */
-function seeded(seed: number): () => number {
-  let t = seed >>> 0;
-  return () => {
-    t = (t + 0x6d2b79f5) >>> 0;
-    let r = Math.imul(t ^ (t >>> 15), 1 | t);
-    r ^= r + Math.imul(r ^ (r >>> 7), 61 | r);
-    return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
 // ---------------------------------------------------------------------------
 // The body read from the bones
 // ---------------------------------------------------------------------------
@@ -227,30 +218,150 @@ function readRig(build: Build, body: Body): Rig {
   const stoop = fore ? clamp((1.6 - (hind.upper + hind.lower) / S) / 0.8, 0, 1) : 0;
   const tail = build.tail.length * body.tailR;
   const front = (build.neck + build.skull.length) * body.neckR + S * body.chestR * 0.5;
-  const thetaB = build.hints.wings ? 0.5 : (Math.PI / 2) * (1 - clamp((2.2 * tail) / (tail + front), 0, 0.8)) - 0.45 * stoop;
+  const thetaB = build.wings ? 0.5 : (Math.PI / 2) * (1 - clamp((2.2 * tail) / (tail + front), 0, 0.8)) - 0.45 * stoop;
   const hipB = ankleHeight(hind) + (extension - 0.12 * stoop) * (hind.upper + hind.lower);
   const neckQ = 0.7 + 0.5 * clamp(build.neck / S - 0.3, 0, 0.5);
   return { extension, hipQ, thetaQ, hipB, thetaB, neckQ, neckB: Math.max(thetaB - 0.1, 1.05) };
 }
 
+// ---------------------------------------------------------------------------
+// Bone frames: where skin is drawn
+// ---------------------------------------------------------------------------
+
+export const SKIN_BONES: readonly SkinBone[] = ['spine', 'neck', 'skull', 'ear', 'tail', 'wing', 'hindleg', 'thigh', 'shin', 'hindfoot', 'foreleg', 'upperArm', 'forearm', 'forefoot'];
+/** Bones on a leg, whose skin is drawn on the near and the far side. */
+const LIMB_BONES: ReadonlySet<SkinBone> = new Set(['hindleg', 'thigh', 'shin', 'hindfoot', 'foreleg', 'upperArm', 'forearm', 'forefoot']);
+const HIND_BONES: ReadonlySet<SkinBone> = new Set(['hindleg', 'thigh', 'shin', 'hindfoot']);
+/** Each bone of a leg belongs to its chain: replacing the chain's skin replaces theirs. */
+const CHAIN: Readonly<Partial<Record<SkinBone, SkinBone>>> = { thigh: 'hindleg', shin: 'hindleg', hindfoot: 'hindleg', upperArm: 'foreleg', forearm: 'foreleg', forefoot: 'foreleg' };
+const SKIN_KINDS = ['flesh', 'part', 'mark', 'line'] as const;
+type SkinKind = (typeof SKIN_KINDS)[number];
+/** Pieces of skin an animal may carry. */
+const MAX_SKIN = 40;
+const MAX_POINTS = 48;
+/** How far from its bone, in bone lengths, a point of skin may be before it would float off. */
+const SKIN_REACH = 3;
+
+/** A bone as the skin sees it: the line it runs along, and whether across points to its right rather than its left. */
+interface Frame {
+  readonly points: readonly P[];
+  readonly flip: boolean;
+  /** The kit's skin's half-width at each point, in metres, where it is round the bone (legs and tail), to hold marks inside it. */
+  readonly radii?: readonly number[];
+}
+
+const unit = (v: P): P => {
+  const l = len(v);
+  return l > 1e-12 ? [v[0] / l, v[1] / l] : [0, 1];
+};
+
+/**
+ * Maps [along, across], in lengths of the frame, to the body's metres. The
+ * normal blends between the segments at each joint, so skin drawn across a
+ * knee or along a bending back bends with it instead of cracking.
+ */
+export function onFrame(frame: Frame, along: number, across: number): P {
+  const pts = frame.points;
+  const segs: number[] = [];
+  let total = 0;
+  for (let i = 0; i + 1 < pts.length; i++) {
+    segs.push(len(sub(pts[i + 1]!, pts[i]!)));
+    total += segs[i]!;
+  }
+  if (segs.length === 0 || total < 1e-12) return pts[0] ?? [0, 0];
+  const d = along * total;
+  let i = 0;
+  let start = 0;
+  while (i < segs.length - 1 && start + segs[i]! < d) {
+    start += segs[i]!;
+    i++;
+  }
+  const u = (d - start) / Math.max(segs[i]!, 1e-12);
+  const point = lerpP(pts[i]!, pts[i + 1]!, u);
+  const left = (k: number): P => {
+    const v = unit(sub(pts[k + 1]!, pts[k]!));
+    return [-v[1], v[0]];
+  };
+  const a = i > 0 ? unit(add(left(i - 1), left(i))) : left(i);
+  const b = i < segs.length - 1 ? unit(add(left(i), left(i + 1))) : left(i);
+  const n = unit(lerpP(a, b, clamp(u, 0, 1)));
+  return add(point, mul(n, (frame.flip ? -across : across) * total));
+}
+
+/** The skin's half-width at `along`, in lengths of the frame, or null where the frame does not know it. */
+export function halfWidth(frame: Frame, along: number): number | null {
+  const { points: pts, radii } = frame;
+  if (!radii || radii.length !== pts.length || pts.length < 2) return null;
+  const segs: number[] = [];
+  let total = 0;
+  for (let i = 0; i + 1 < pts.length; i++) {
+    segs.push(len(sub(pts[i + 1]!, pts[i]!)));
+    total += segs[i]!;
+  }
+  if (total < 1e-12) return null;
+  let d = clamp(along, 0, 1) * total;
+  for (let i = 0; i < segs.length; i++) {
+    if (d <= segs[i]! || i === segs.length - 1) return lerp(radii[i]!, radii[i + 1]!, clamp(d / Math.max(segs[i]!, 1e-12), 0, 1)) / total;
+    d -= segs[i]!;
+  }
+  return null;
+}
+
+/** Twice the signed area: positive when the points run counter-clockwise. */
+function area(pts: readonly P[]): number {
+  let sum = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const [x0, y0] = pts[i]!;
+    const [x1, y1] = pts[(i + 1) % pts.length]!;
+    sum += x0 * y1 - x1 * y0;
+  }
+  return sum;
+}
+
+/** A path through stage points: a smooth Catmull-Rom curve or straight sides, closed or open. */
+function curve(pts: readonly Vec2[], closed: boolean, smoothly: boolean): string {
+  const n = pts.length;
+  if (n < 2) return '';
+  let d = `M${fmt(pts[0]![0])} ${fmt(pts[0]![1])}`;
+  if (!smoothly) {
+    for (let i = 1; i < n; i++) d += `L${fmt(pts[i]![0])} ${fmt(pts[i]![1])}`;
+    return closed ? `${d}Z` : d;
+  }
+  const at = (i: number): Vec2 => (closed ? pts[((i % n) + n) % n]! : pts[clamp(i, 0, n - 1)]!);
+  const last = closed ? n : n - 1;
+  for (let i = 0; i < last; i++) {
+    const p0 = at(i - 1);
+    const p1 = at(i);
+    const p2 = at(i + 1);
+    const p3 = at(i + 2);
+    const c1: Vec2 = [p1[0] + (p2[0] - p0[0]) / 6, p1[1] + (p2[1] - p0[1]) / 6];
+    const c2: Vec2 = [p2[0] - (p3[0] - p1[0]) / 6, p2[1] - (p3[1] - p1[1]) / 6];
+    d += `C${fmt(c1[0])} ${fmt(c1[1])} ${fmt(c2[0])} ${fmt(c2[1])} ${fmt(p2[0])} ${fmt(p2[1])}`;
+  }
+  return closed ? `${d}Z` : d;
+}
+
+/** A shape of the kit's own skin, and the bone it belongs to, so a scene can replace it. */
+type Skin = Shape & { readonly bone: SkinBone };
+const on = (bone: SkinBone, ...shapes: Shape[]): Skin[] => shapes.map((shape) => ({ ...shape, bone }));
+
 /** Where the body is on one frame. */
 interface Pose {
-  readonly far: Shape[];
-  readonly farHooves: Shape[];
-  readonly body: Shape[];
-  readonly neck: Shape[];
-  readonly head: Shape[];
-  readonly ears: Shape[];
-  readonly tail: Shape[];
-  readonly fore: Shape[];
-  readonly hind: Shape[];
-  readonly horns: Shape[];
-  readonly mane: Shape[];
-  readonly hooves: Shape[];
-  readonly marks: Shape[];
+  readonly far: Skin[];
+  readonly farHooves: Skin[];
+  readonly body: Skin[];
+  readonly neck: Skin[];
+  readonly head: Skin[];
+  readonly ears: Skin[];
+  readonly tail: Skin[];
+  readonly fore: Skin[];
+  readonly hind: Skin[];
+  readonly hooves: Skin[];
   readonly muscles: Shape[];
   readonly bones: Shape[];
-  readonly lines: Array<[P, P]>;
+  readonly mouth: Array<[P, P]>;
+  readonly frames: Partial<Record<SkinBone, Frame>>;
+  readonly farFrames: Partial<Record<SkinBone, Frame>>;
   eye: P;
   eyeR: number;
   nose: P | null;
@@ -267,7 +378,26 @@ interface Motion {
   readonly stepMode: AnatomyMode;
 }
 
-type Piece = 'ground' | 'shadow' | 'farOutline' | 'far' | 'farHooves' | 'outline' | 'tail' | 'body' | 'neck' | 'head' | 'hindOutline' | 'hind' | 'foreOutline' | 'fore' | 'earOutline' | 'ears' | 'horns' | 'mane' | 'marks' | 'hooves' | 'lines' | 'muscles' | 'bones';
+/** The layers an animal is drawn in, back to front: each its outlines, then its fills. */
+type LayerName = 'far' | 'body' | 'hind' | 'fore' | 'ear';
+interface Layer {
+  readonly group: Handle;
+  readonly line: PathHandle;
+  readonly fills: Handle;
+  readonly flesh: PathHandle;
+}
+
+/** A piece of skin a scene drew, in its bone's frame. */
+interface SkinPiece {
+  readonly bone: SkinBone;
+  readonly kind: SkinKind;
+  readonly local: readonly P[];
+  readonly closed: boolean;
+  readonly smooth: boolean;
+  /** Its own elements, near and far: an outline and a fill for a part, a fill for a mark, a stroke for a line. */
+  readonly near: { readonly line?: PathHandle; readonly fill: PathHandle } | null;
+  readonly far: { readonly line?: PathHandle; readonly fill: PathHandle } | null;
+}
 
 // ---------------------------------------------------------------------------
 // One animal
@@ -277,11 +407,18 @@ class AnimalFigure implements Animal {
   readonly handle: Handle;
   private readonly body: Body;
   private readonly rig: Rig;
-  private readonly spots: Array<readonly [number, number, number]>;
-  private readonly el: Record<Piece, PathHandle>;
-  private readonly eyeEl: Handle;
-  private readonly noseEl: Handle;
+  private readonly layers: Record<LayerName, Layer>;
+  private readonly pieces: Record<'tail' | 'body' | 'neck' | 'head' | 'hind' | 'fore' | 'ears' | 'far' | 'hooves' | 'foreHooves' | 'farHooves', PathHandle>;
+  private readonly face: { readonly group: Handle; readonly eye: Handle; readonly nose: Handle; readonly mouth: PathHandle };
+  private readonly ground: PathHandle;
+  private readonly shadow: PathHandle;
+  private readonly muscles: PathHandle;
+  private readonly bones: PathHandle;
+  private readonly skins: SkinPiece[] = [];
+  private readonly replaced = new Set<SkinBone>();
   private readonly scale: number;
+  private readonly outlinePx: number;
+  private readonly ink: Tone;
   private readonly origin: P;
   private readonly cx: number;
   private readonly groundWidth: number;
@@ -308,22 +445,21 @@ class AnimalFigure implements Animal {
     this.rig = readRig(build, this.body);
     this.blend = build.modes[0] === 'bipedal' ? 1 : 0;
     this.layer = build.show;
-    const random = seeded(4099);
-    this.spots = Array.from({ length: 16 }, () => [random(), random(), random()] as const);
+    const rest = (b: 0 | 1) => ({ p: 0, blend: b, plan: planGait(build, b ? 'bipedal' : 'quadruped', 0, 1), speed: 0, clock: 0, stepMode: (b ? 'bipedal' : 'quadruped') as AnatomyMode });
     // Where a planted foot stands, under its hip or shoulder at rest, for four legs and for two.
     this.neutral = { hind: [0, 0], fore: [0, 0] };
     for (const b of [0, 1] as const) {
-      const rest = this.pose({ p: 0, blend: b, plan: planGait(build, b ? 'bipedal' : 'quadruped', 0, 1), speed: 0, clock: 0, stepMode: b ? 'bipedal' : 'quadruped' }, true);
-      this.neutral.hind[b] = rest.hindRoot[0] + build.hind.foot * Math.cos(FOOT_ANGLE[build.hind.posture]) * 0.6;
-      this.neutral.fore[b] = build.fore ? rest.foreRoot[0] + build.fore.foot * Math.cos(FOOT_ANGLE[build.fore.posture]) * 0.35 : 0;
+      const roots = this.pose(rest(b), true);
+      this.neutral.hind[b] = roots.hindRoot[0] + build.hind.foot * Math.cos(FOOT_ANGLE[build.hind.posture]) * 0.6;
+      this.neutral.fore[b] = build.fore ? roots.foreRoot[0] + build.fore.foot * Math.cos(FOOT_ANGLE[build.fore.posture]) * 0.35 : 0;
     }
     // The animal is scaled to fit the room it is given, standing in every way it can move.
     let minX = Infinity;
     let maxX = -Infinity;
     let maxY = 0;
-    for (const b of build.modes.map((m) => (m === 'bipedal' ? 1 : 0))) {
-      const rest = this.pose({ p: 0, blend: b, plan: planGait(build, b ? 'bipedal' : 'quadruped', 0, 1), speed: 0, clock: 0, stepMode: b ? 'bipedal' : 'quadruped' });
-      for (const shape of [...rest.body, ...rest.head, ...rest.neck, ...rest.tail, ...rest.fore, ...rest.hind, ...rest.far, ...rest.horns]) {
+    for (const b of build.modes.map((m) => (m === 'bipedal' ? 1 : 0) as 0 | 1)) {
+      const pose = this.pose(rest(b));
+      for (const shape of [...pose.body, ...pose.head, ...pose.ears, ...pose.neck, ...pose.tail, ...pose.fore, ...pose.hind, ...pose.far]) {
         for (const [x, y] of outline(shape, 0)) {
           minX = Math.min(minX, x);
           maxX = Math.max(maxX, x);
@@ -339,44 +475,59 @@ class AnimalFigure implements Animal {
     this.origin = at;
     this.cx = (minX + maxX) / 2;
     this.groundWidth = (width * 1.1) / this.scale;
+    // A pixel or two of outline, whatever the scale.
+    this.outlinePx = clamp(0.006 * this.scale * build.size + 0.8, 1.2, 2.6);
 
     const group = stage.group();
     this.handle = group;
-    const path = (tone: Tone, fill = true) => stage.path('', { parent: group, tone, fill });
     const tone = build.tone;
-    this.el = {
-      ground: path('mid', false),
-      shadow: path('faint'),
-      farOutline: path('hi'),
-      far: path(tone),
-      farHooves: path('hi'),
-      outline: path('hi'),
-      tail: path(tone),
-      body: path(tone),
-      neck: path(tone),
-      head: path(tone),
-      horns: path('lo'),
-      mane: path('hi'),
-      marks: path('hi'),
-      hindOutline: path('hi'),
-      hind: path(tone),
-      foreOutline: path('hi'),
-      fore: path(tone),
-      hooves: path('hi'),
-      earOutline: path('hi'),
-      ears: path(tone),
-      lines: path('hi', false),
-      muscles: path('a'),
-      bones: path('hi'),
+    this.ground = stage.path('', { parent: group, tone: 'mid' });
+    this.shadow = stage.path('', { parent: group, tone: 'faint', fill: true });
+    this.shadow.set({ opacity: 0.8 });
+    // A dark body is outlined in a lighter tone, so its near legs still stand out from it.
+    const ink: Tone = tone === 'hi' ? 'mid' : 'hi';
+    this.ink = ink;
+    // Outlines are strokes drawn behind the fills: where shapes overlap, the fills cover the strokes between them, so the body has one outline.
+    const layer = (): Layer => {
+      const g = stage.group({ parent: group });
+      const line = stage.path('', { parent: g, tone: ink });
+      line.set({ 'stroke-width': Number(fmt(2 * this.outlinePx)) });
+      const fills = stage.group({ parent: g });
+      return { group: g, line, fills, flesh: null as unknown as PathHandle };
     };
-    this.el.far.set({ opacity: 0.72 });
-    this.el.mane.set({ opacity: 0.6 });
-    this.el.marks.set({ opacity: 0.5 });
-    this.el.shadow.set({ opacity: 0.8 });
-    this.el.lines.set({ 'stroke-width': 1 });
-    this.eyeEl = stage.circle(0, 0, 2, { parent: group, tone: 'hi' });
-    this.noseEl = stage.circle(0, 0, 2, { parent: group, tone: 'hi' });
-    if (!build.ground) this.el.ground.hide();
+    const fill = (l: Layer, t = tone) => stage.path('', { parent: l.fills, tone: t, fill: true });
+    const far = layer();
+    const bodyLayer = layer();
+    const hindLayer = layer();
+    const foreLayer = layer();
+    const earLayer = layer();
+    this.pieces = {
+      far: fill(far),
+      farHooves: fill(far, 'hi'),
+      tail: fill(bodyLayer),
+      body: fill(bodyLayer),
+      neck: fill(bodyLayer),
+      head: fill(bodyLayer),
+      hind: fill(hindLayer),
+      hooves: fill(hindLayer, 'hi'),
+      fore: fill(foreLayer),
+      foreHooves: fill(foreLayer, 'hi'),
+      ears: fill(earLayer),
+    };
+    // A scene's flesh joins each layer's own fills, under the parts and marks it adds later.
+    const withFlesh = (l: Layer): Layer => ({ ...l, flesh: fill(l) });
+    this.layers = { far: withFlesh(far), body: withFlesh(bodyLayer), hind: withFlesh(hindLayer), fore: withFlesh(foreLayer), ear: withFlesh(earLayer) };
+    const faceGroup = stage.group({ parent: group });
+    this.face = {
+      group: faceGroup,
+      eye: stage.circle(0, 0, 2, { parent: faceGroup, tone: 'hi' }),
+      nose: stage.circle(0, 0, 2, { parent: faceGroup, tone: 'hi' }),
+      mouth: stage.path('', { parent: faceGroup, tone: 'hi' }),
+    };
+    this.face.mouth.set({ 'stroke-width': 1 });
+    this.muscles = stage.path('', { parent: group, tone: 'a', fill: true });
+    this.bones = stage.path('', { parent: group, tone: 'hi', fill: true });
+    if (!build.ground) this.ground.hide();
     this.applyLayer();
     ctx.simulate((dt) => this.step(dt), STEP);
     this.draw();
@@ -486,6 +637,91 @@ class AnimalFigure implements Animal {
   }
 
   // -------------------------------------------------------------------------
+  // Skin the scene draws
+  // -------------------------------------------------------------------------
+
+  /** Whether a bone exists on this skeleton, to draw skin on. */
+  private hasBone(bone: SkinBone): boolean {
+    if (bone === 'tail') return this.build.tail.length > 0;
+    if (bone === 'wing') return this.build.wings;
+    if (LIMB_BONES.has(bone) && !HIND_BONES.has(bone)) return this.build.fore !== null;
+    return true;
+  }
+
+  skin(bone: SkinBone, shape: SkinShape): Handle {
+    if (!SKIN_BONES.includes(bone)) fail(`there is no bone "${String(bone)}" to draw skin on; the bones are ${SKIN_BONES.join(', ')}`);
+    if (!this.hasBone(bone)) fail(`this skeleton has no ${bone}`);
+    if (typeof shape !== 'object' || shape === null) fail('skin takes a shape: { points } or { at, r }, with as, tone, smooth and replace');
+    for (const key of Object.keys(shape)) if (!['points', 'at', 'r', 'smooth', 'as', 'tone', 'replace'].includes(key)) fail(`a skin shape has no "${key}"; it takes points, at, r, smooth, as, tone and replace`);
+    if (this.skins.length >= MAX_SKIN) fail(`an animal carries at most ${MAX_SKIN} pieces of skin`);
+    const kind: SkinKind = shape.as ?? 'flesh';
+    if (!SKIN_KINDS.includes(kind)) fail(`as is ${SKIN_KINDS.join(', ')}`);
+    const coord = (v: unknown, what: string): number => {
+      if (typeof v !== 'number' || !Number.isFinite(v)) fail(`${what} is a number of bone lengths`);
+      if (Math.abs(v) > SKIN_REACH) fail(`${what} is ${v} bone lengths from the ${bone}; skin that far away would float off it, so keep within ${SKIN_REACH}`);
+      return v;
+    };
+    let local: P[];
+    let closed = kind !== 'line';
+    if (shape.points !== undefined) {
+      if (shape.at !== undefined || shape.r !== undefined) fail('give points, or at and r, not both');
+      const least = kind === 'line' ? 2 : 3;
+      if (!Array.isArray(shape.points) || shape.points.length < least || shape.points.length > MAX_POINTS) fail(`points is a list of ${least} to ${MAX_POINTS} [along, across] pairs`);
+      local = shape.points.map((p, i) => {
+        if (!Array.isArray(p) || p.length !== 2) fail(`points[${i}] is [along, across]`);
+        return [coord(p[0], `points[${i}][0]`), coord(p[1], `points[${i}][1]`)] as P;
+      });
+    } else if (shape.at !== undefined) {
+      if (kind === 'line') fail('a line takes points');
+      if (!Array.isArray(shape.at) || shape.at.length !== 2) fail('at is [along, across]');
+      const c: P = [coord(shape.at[0], 'at[0]'), coord(shape.at[1], 'at[1]')];
+      const r = shape.r;
+      const [rx, ry] = typeof r === 'number' ? [r, r] : Array.isArray(r) && r.length === 2 ? [r[0], r[1]] : [NaN, NaN];
+      if (!(Number.isFinite(rx) && Number.isFinite(ry) && rx > 0 && ry > 0 && rx <= SKIN_REACH && ry <= SKIN_REACH)) fail('r is a radius in bone lengths, or [along, across] radii, above 0');
+      local = Array.from({ length: 20 }, (_, i) => {
+        const t = (i / 20) * 2 * Math.PI;
+        return [c[0] + rx! * Math.cos(t), c[1] + ry! * Math.sin(t)] as P;
+      });
+      closed = true;
+    } else fail('skin takes points, or at and r');
+    if (shape.tone !== undefined && (typeof shape.tone !== 'string' || !TONES.has(shape.tone))) fail(`unknown tone "${String(shape.tone)}"`);
+    if (shape.replace !== undefined && typeof shape.replace !== 'boolean') fail('replace is true or false');
+    if (shape.smooth !== undefined && typeof shape.smooth !== 'boolean') fail('smooth is true or false');
+    if (shape.replace) this.replaced.add(bone);
+    const tone: Tone = shape.tone ?? (kind === 'mark' || kind === 'line' ? 'hi' : this.build.tone);
+    const limb = LIMB_BONES.has(bone);
+    const home = this.layers[this.layerOf(bone)];
+    const make = (l: Layer) => {
+      if (kind === 'flesh') return null;
+      if (kind === 'line') {
+        const stroke = this.stage.path('', { parent: l.fills, tone });
+        stroke.set({ 'stroke-width': Number(fmt(Math.max(1, this.outlinePx * 0.7))) });
+        return { fill: stroke };
+      }
+      const line = kind === 'part' ? this.stage.path('', { parent: l.fills, tone: this.ink }) : undefined;
+      line?.set({ 'stroke-width': Number(fmt(2 * this.outlinePx)) });
+      return { line, fill: this.stage.path('', { parent: l.fills, tone, fill: true }) };
+    };
+    const piece: SkinPiece = { bone, kind, local, closed, smooth: shape.smooth !== false, near: make(home), far: limb ? make(this.layers.far) : null };
+    this.skins.push(piece);
+    this.draw();
+    return piece.near?.fill ?? home.flesh;
+  }
+
+  private layerOf(bone: SkinBone): LayerName {
+    if (bone === 'ear') return 'ear';
+    if (bone === 'wing') return 'fore';
+    if (HIND_BONES.has(bone)) return 'hind';
+    if (LIMB_BONES.has(bone)) return 'fore';
+    return 'body';
+  }
+
+  private isReplaced(bone: SkinBone): boolean {
+    const chain = CHAIN[bone];
+    return this.replaced.has(bone) || (chain !== undefined && this.replaced.has(chain));
+  }
+
+  // -------------------------------------------------------------------------
   // Showing and naming
   // -------------------------------------------------------------------------
 
@@ -498,20 +734,28 @@ class AnimalFigure implements Animal {
 
   private applyLayer(): void {
     const skin = this.layer === 'skin' ? 1 : this.layer === 'muscles' ? 0.3 : 0.18;
-    for (const key of ['outline', 'tail', 'body', 'hindOutline', 'hind', 'neck', 'head', 'earOutline', 'ears', 'foreOutline', 'fore', 'horns', 'hooves', 'farOutline', 'farHooves'] as const) this.el[key]!.set({ opacity: skin });
-    this.el.far!.set({ opacity: 0.72 * skin });
-    this.el.mane!.set({ opacity: 0.6 * skin });
-    this.el.marks!.set({ opacity: 0.5 * skin });
-    this.el.muscles!.show(this.layer === 'muscles');
-    this.el.bones!.show(this.layer === 'bones');
+    for (const name of ['body', 'hind', 'fore', 'ear'] as const) this.layers[name].group.set({ opacity: skin });
+    this.layers.far.group.set({ opacity: Number((0.72 * skin).toFixed(3)) });
+    this.face.group.set({ opacity: skin });
+    this.muscles.show(this.layer === 'muscles');
+    this.bones.show(this.layer === 'bones');
   }
 
   piece(name: AnatomyPiece): Handle {
-    const map: Record<AnatomyPiece, Piece> = { body: 'body', head: 'head', neck: 'neck', tail: 'tail', forelimbs: 'fore', hindlimbs: 'hind', muscles: 'muscles', bones: 'bones' };
+    const map: Record<AnatomyPiece, Handle> = {
+      body: this.pieces.body,
+      head: this.pieces.head,
+      neck: this.pieces.neck,
+      tail: this.pieces.tail,
+      forelimbs: this.pieces.fore,
+      hindlimbs: this.pieces.hind,
+      muscles: this.muscles,
+      bones: this.bones,
+    };
     if (!Object.hasOwn(map, name)) fail(`there is no piece "${String(name)}"; the pieces are ${Object.keys(map).join(', ')}`);
-    if (name === 'forelimbs' && !this.build.fore && !this.build.hints.wings) fail('this skeleton has no forelimbs');
+    if (name === 'forelimbs' && !this.build.fore && !this.build.wings) fail('this skeleton has no forelimbs');
     if (name === 'tail' && this.build.tail.length === 0) fail('this skeleton has no tail');
-    return this.el[map[name]]!;
+    return map[name];
   }
 
   // -------------------------------------------------------------------------
@@ -522,10 +766,10 @@ class AnimalFigure implements Animal {
     return [this.origin[0] + this.build.facing * (p[0] - this.cx) * this.scale, this.origin[1] - p[1] * this.scale];
   }
 
-  private path(shapes: readonly Shape[], grow = 0): string {
+  private path(shapes: readonly Shape[]): string {
     let d = '';
     for (const shape of shapes) {
-      const pts = outline(shape, grow);
+      const pts = outline(shape, 0);
       if (pts.length < 3) continue;
       d += 'M';
       for (let i = 0; i < pts.length; i++) {
@@ -535,6 +779,25 @@ class AnimalFigure implements Animal {
       d += 'Z';
     }
     return d;
+  }
+
+  /** A piece of the scene's skin on one side, as a stage path. */
+  private skinPath(piece: SkinPiece, frame: Frame | undefined): string {
+    if (!frame) return '';
+    // A mark is paint on the skin: on a leg or a tail, where the kit knows the skin's width, it is held inside it.
+    const hold = (a: number, c: number): number => {
+      if (piece.kind !== 'mark') return c;
+      const w = halfWidth(frame, a);
+      return w === null ? c : clamp(c, -0.92 * w, 0.92 * w);
+    };
+    let pts = piece.local.map(([a, c]) => onFrame(frame, a, hold(a, c)));
+    // Every closed piece winds the same way, so pieces that overlap in one path fill as one.
+    if (piece.closed && area(pts) < 0) pts = pts.reverse();
+    return curve(
+      pts.map((p) => this.map(p)),
+      piece.closed,
+      piece.smooth,
+    );
   }
 
   /**
@@ -568,58 +831,83 @@ class AnimalFigure implements Animal {
       this.warned = true;
       this.ctx.warn('anatomy: a foot could not reach its place on the ground; the legs are short for this speed');
     }
-    // A pixel or two of outline, whatever the scale.
-    const grow = clamp(0.006 * this.scale * this.build.size + 0.8, 1.2, 2.6) / this.scale;
-    const near = [...pose.body, ...pose.neck, ...pose.head, ...pose.tail, ...pose.horns, ...pose.mane];
-    this.el.farOutline!.d(this.path(pose.far, grow));
-    this.el.far!.d(this.path(pose.far));
-    this.el.farHooves!.d(this.path(pose.farHooves));
-    this.el.outline!.d(this.path(near, grow));
-    this.el.tail!.d(this.path(pose.tail));
-    this.el.body!.d(this.path(pose.body));
-    // The near limbs lie over the body, each with its own outline, as a drawing shows them.
-    this.el.hindOutline!.d(this.path(pose.hind, grow));
-    this.el.hind!.d(this.path(pose.hind));
-    this.el.foreOutline!.d(this.path(pose.fore, grow));
-    this.el.neck!.d(this.path(pose.neck));
-    this.el.head!.d(this.path(pose.head));
-    this.el.earOutline!.d(this.path(pose.ears, grow));
-    this.el.ears!.d(this.path(pose.ears));
-    this.el.fore!.d(this.path(pose.fore));
-    this.el.horns!.d(this.path(pose.horns));
-    this.el.mane!.d(this.path(pose.mane));
-    this.el.marks!.d(this.path(pose.marks));
-    this.el.hooves!.d(this.path(pose.hooves));
-    this.el.muscles!.d(this.path(pose.muscles));
-    this.el.bones!.d(this.path(pose.bones));
-    let lines = '';
-    for (const [a, b] of pose.lines) {
-      const [x0, y0] = this.map(a);
-      const [x1, y1] = this.map(b);
-      lines += `M${fmt(x0)} ${fmt(y0)}L${fmt(x1)} ${fmt(y1)}`;
+    const keep = (shapes: readonly Skin[]) => shapes.filter((s) => !this.isReplaced(s.bone));
+    const far = keep(pose.far);
+    const body = { tail: keep(pose.tail), body: keep(pose.body), neck: keep(pose.neck), head: keep(pose.head) };
+    const hind = keep(pose.hind);
+    const fore = keep(pose.fore);
+    const ears = keep(pose.ears);
+    // The scene's flesh on each layer, near and far.
+    const flesh: Record<LayerName, string> = { far: '', body: '', hind: '', fore: '', ear: '' };
+    for (const piece of this.skins) {
+      const near = this.skinPath(piece, pose.frames[piece.bone]);
+      const away = piece.far ? this.skinPath(piece, pose.farFrames[piece.bone]) : '';
+      if (piece.kind === 'flesh') {
+        flesh[this.layerOf(piece.bone)] += near;
+        flesh.far += away;
+        continue;
+      }
+      piece.near?.line?.d(near);
+      piece.near?.fill.d(near);
+      piece.far?.line?.d(away);
+      piece.far?.fill.d(away);
     }
-    this.el.lines!.d(lines);
-    const [ex, ey] = this.map(pose.eye);
-    this.eyeEl.set({ cx: Number(fmt(ex)), cy: Number(fmt(ey)), r: Number(fmt(Math.max(1.3, pose.eyeR * this.scale))) });
-    if (pose.nose) {
-      const [nx, ny] = this.map(pose.nose);
-      this.noseEl.set({ cx: Number(fmt(nx)), cy: Number(fmt(ny)), r: Number(fmt(Math.max(1.2, pose.eyeR * 0.85 * this.scale))) }).show();
-    } else this.noseEl.hide();
+    const layerDraw = (name: LayerName, shapes: readonly Shape[]) => {
+      const l = this.layers[name];
+      l.line.d(this.path(shapes) + flesh[name]);
+      l.flesh.d(flesh[name]);
+    };
+    layerDraw('far', far);
+    layerDraw('body', [...body.tail, ...body.body, ...body.neck, ...body.head]);
+    layerDraw('hind', hind);
+    layerDraw('fore', fore);
+    layerDraw('ear', ears);
+    this.pieces.far.d(this.path(far));
+    this.pieces.farHooves.d(this.path(keep(pose.farHooves)));
+    this.pieces.tail.d(this.path(body.tail));
+    this.pieces.body.d(this.path(body.body));
+    this.pieces.neck.d(this.path(body.neck));
+    this.pieces.head.d(this.path(body.head));
+    this.pieces.hind.d(this.path(hind));
+    this.pieces.fore.d(this.path(fore));
+    const hooves = keep(pose.hooves);
+    this.pieces.hooves.d(this.path(hooves.filter((s) => HIND_BONES.has(s.bone))));
+    this.pieces.foreHooves.d(this.path(hooves.filter((s) => !HIND_BONES.has(s.bone))));
+    this.pieces.ears.d(this.path(ears));
+    this.muscles.d(this.path(pose.muscles));
+    this.bones.d(this.path(pose.bones));
+    // The face belongs to the skull: a scene that redraws the skull draws its own.
+    const face = !this.isReplaced('skull');
+    this.face.group.show(face);
+    if (face) {
+      let mouth = '';
+      for (const [a, b] of pose.mouth) {
+        const [x0, y0] = this.map(a);
+        const [x1, y1] = this.map(b);
+        mouth += `M${fmt(x0)} ${fmt(y0)}L${fmt(x1)} ${fmt(y1)}`;
+      }
+      this.face.mouth.d(mouth);
+      const [ex, ey] = this.map(pose.eye);
+      this.face.eye.set({ cx: Number(fmt(ex)), cy: Number(fmt(ey)), r: Number(fmt(Math.max(1.3, pose.eyeR * this.scale))) });
+      if (pose.nose) {
+        const [nx, ny] = this.map(pose.nose);
+        this.face.nose.set({ cx: Number(fmt(nx)), cy: Number(fmt(ny)), r: Number(fmt(Math.max(1.2, pose.eyeR * 0.85 * this.scale))) }).show();
+      } else this.face.nose.hide();
+    }
     const shadowY = this.origin[1];
     const [sx0] = this.map([pose.shadow.x0, 0]);
     const [sx1] = this.map([pose.shadow.x1, 0]);
     const rx = Math.abs(sx1 - sx0) / 2;
     const mid = (sx0 + sx1) / 2;
     const ry = Math.max(1.5, rx * 0.06);
-    this.el.shadow!.d(`M${fmt(mid - rx)} ${fmt(shadowY)}A${fmt(rx)} ${fmt(ry)} 0 1 0 ${fmt(mid + rx)} ${fmt(shadowY)}A${fmt(rx)} ${fmt(ry)} 0 1 0 ${fmt(mid - rx)} ${fmt(shadowY)}Z`);
+    this.shadow.d(`M${fmt(mid - rx)} ${fmt(shadowY)}A${fmt(rx)} ${fmt(ry)} 0 1 0 ${fmt(mid + rx)} ${fmt(shadowY)}A${fmt(rx)} ${fmt(ry)} 0 1 0 ${fmt(mid - rx)} ${fmt(shadowY)}Z`);
     if (this.build.ground) {
       const W = this.groundWidth;
       const spacing = W / 9;
       const x0 = this.cx - W / 2;
-      let g = '';
       const [gx0, gy] = this.map([x0, 0]);
       const [gx1] = this.map([x0 + W, 0]);
-      g += `M${fmt(gx0)} ${fmt(gy)}L${fmt(gx1)} ${fmt(gy)}`;
+      let g = `M${fmt(gx0)} ${fmt(gy)}L${fmt(gx1)} ${fmt(gy)}`;
       const shift = this.groundX % spacing;
       for (let i = 0; i < 10; i++) {
         const x = x0 + i * spacing - shift;
@@ -628,20 +916,20 @@ class AnimalFigure implements Animal {
         const [bx, by] = this.map([x - spacing * 0.25, -spacing * 0.18]);
         g += `M${fmt(ax)} ${fmt(ay)}L${fmt(bx)} ${fmt(by)}`;
       }
-      this.el.ground!.d(g);
+      this.ground.d(g);
     }
   }
 
   /**
    * The whole body for one moment: the spine from the hips, the limbs placed
-   * by their feet, the head and tail hung on the spine, and the shapes of
-   * muscle and skin round each bone.
+   * by their feet, the head and tail hung on the spine, the kit's plain skin
+   * on each bone, and each bone's frame for the scene's own skin.
    */
   private pose(m: Motion): Pose;
   private pose(m: Motion, roots: true): { hindRoot: P; foreRoot: P };
   private pose(m: Motion, roots?: true): Pose | { hindRoot: P; foreRoot: P } {
     const { build, body, rig } = this;
-    const { hind, fore, hints } = build;
+    const { hind, fore } = build;
     const S = build.spine.length;
     const { plan, p } = m;
     const b = build.modes.includes('quadruped') ? (build.modes.includes('bipedal') ? m.blend : 0) : 1;
@@ -674,13 +962,12 @@ class AnimalFigure implements Animal {
       tail: [],
       fore: [],
       hind: [],
-      horns: [],
-      mane: [],
       hooves: [],
-      marks: [],
       muscles: [],
       bones: [],
-      lines: [],
+      mouth: [],
+      frames: {},
+      farFrames: {},
       eye: [0, 0],
       eyeR: 0,
       nose: null,
@@ -688,6 +975,7 @@ class AnimalFigure implements Animal {
       reached: true,
     };
     const bone = (a: P, c: P, r: number) => out.bones.push(cap(a, r, c, r * 0.8));
+    out.frames.spine = { points: [hipSpine, midSpine, shoulderSpine], flip: false };
 
     // Trunk: pelvis, waist and chest hang below the spine.
     // The chest is deep and the haunch rounded; the waist between them tucks up in runners.
@@ -695,15 +983,22 @@ class AnimalFigure implements Animal {
     const waistC = add(midSpine, mul(down, 0.8 * body.waistR));
     const chestC = add(add(shoulderSpine, mul(down, 0.88 * body.chestR)), mul(dir, -0.5 * body.chestR));
     out.body.push(
-      ell(pelvisC, body.pelvisR * 0.95, body.pelvisR * 0.85, theta),
-      ell(chestC, body.chestR * 0.95, body.chestR, theta),
-      cap(pelvisC, body.pelvisR * 0.8, waistC, body.waistR),
-      cap(waistC, body.waistR, chestC, body.chestR * 0.85),
-      cap(hipSpine, body.waistR * 0.35, midSpine, body.waistR * 0.35),
-      cap(midSpine, body.waistR * 0.35, shoulderSpine, body.waistR * 0.4),
+      ...on(
+        'spine',
+        ell(pelvisC, body.pelvisR * 0.95, body.pelvisR * 0.85, theta),
+        ell(chestC, body.chestR * 0.95, body.chestR, theta),
+        cap(pelvisC, body.pelvisR * 0.8, waistC, body.waistR),
+        cap(waistC, body.waistR, chestC, body.chestR * 0.85),
+        cap(hipSpine, body.waistR * 0.35, midSpine, body.waistR * 0.35),
+        cap(midSpine, body.waistR * 0.35, shoulderSpine, body.waistR * 0.4),
+      ),
     );
-    if (hints.hump) out.body.push(ell(add(midSpine, mul(up, body.waistR * 0.35)), S * 0.18, body.waistR * 0.55, theta));
-    if (hints.wings) out.fore.push(cap(add(shoulderSpine, mul(down, body.chestR * 0.3)), body.chestR * 0.75, add(add(hipSpine, mul(dir, -body.pelvisR * 0.8)), mul(down, body.pelvisR * 0.1)), body.chestR * 0.12));
+    if (build.wings) {
+      const root = add(shoulderSpine, mul(down, body.chestR * 0.3));
+      const tip = add(add(hipSpine, mul(dir, -body.pelvisR * 0.8)), mul(down, body.pelvisR * 0.1));
+      out.fore.push(...on('wing', cap(root, body.chestR * 0.75, tip, body.chestR * 0.12)));
+      out.frames.wing = { points: [root, tip], flip: false };
+    }
     out.muscles.push(cap(hipSpine, body.waistR * 0.3, shoulderSpine, body.waistR * 0.3));
     bone(hipSpine, midSpine, body.waistR * 0.09);
     bone(midSpine, shoulderSpine, body.waistR * 0.09);
@@ -713,35 +1008,16 @@ class AnimalFigure implements Animal {
     }
     bone(hipSpine, hipJoint, body.waistR * 0.08);
 
-    // Coat: spots and stripes fall on the trunk, where they are always inside the body.
-    if (hints.coat === 'spotted') {
-      for (const [u, v, s] of this.spots) {
-        const c = lerpP(pelvisC, chestC, u);
-        const r = lerp(body.pelvisR, body.chestR, u);
-        out.marks.push(ell(add(c, mul(down, (v - 0.4) * r * 1.2)), r * (0.09 + 0.06 * s), r * (0.08 + 0.05 * s)));
-      }
-    } else if (hints.coat === 'striped') {
-      for (let i = 0; i < 7; i++) {
-        const t = 0.06 + i * 0.14;
-        const top = lerpP(hipSpine, shoulderSpine, t);
-        const r = lerp(body.pelvisR, body.chestR, t);
-        out.marks.push(cap(add(top, mul(down, r * 0.2)), r * 0.09, add(add(top, mul(down, r * 1.2)), mul(dir, -r * 0.2)), r * 0.03));
-      }
-    }
-
     // Neck and head, hung from the front of the spine.
     const nod = plan.gait === 'stand' ? 0.02 * Math.sin(m.clock * 0.8) : 0.05 * Math.sin(2 * tau * p);
     const neckAngle = lerp(rig.neckQ, rig.neckB, b) + nod;
     const neckBase = add(add(shoulderSpine, mul(dir, body.chestR * 0.1)), mul(down, body.neckR * 0.3));
     const neckEnd = add(neckBase, polar(neckAngle, Math.max(build.neck, body.neckR * 0.5)));
-    out.neck.push(cap(neckBase, Math.max(body.neckR * 1.15, body.chestR * 0.6), neckEnd, body.neckR));
+    out.neck.push(...on('neck', cap(neckBase, Math.max(body.neckR * 1.15, body.chestR * 0.6), neckEnd, body.neckR)));
+    out.frames.neck = { points: [neckBase, neckEnd], flip: false };
     out.muscles.push(cap(neckBase, body.neckR * 0.8, neckEnd, body.neckR * 0.6));
     bone(shoulderSpine, neckEnd, body.waistR * 0.07);
-    if (hints.mane) {
-      const top = polar(neckAngle + Math.PI / 2);
-      out.mane.push(cap(add(neckBase, mul(top, body.neckR * 0.9)), body.neckR * 0.5, add(neckEnd, mul(top, body.neckR * 0.85)), body.neckR * 0.35));
-    }
-    const psi = lerp(-0.45, hints.wings ? 0 : -0.1, b) - nod * 0.5;
+    const psi = lerp(-0.45, build.wings ? 0 : -0.1, b) - nod * 0.5;
     const hd = polar(psi);
     const hu = polar(psi + Math.PI / 2);
     const cr = body.craniumR;
@@ -751,62 +1027,28 @@ class AnimalFigure implements Animal {
     const face = Math.max(cr * 1.2, sk * (1 - build.skull.snout));
     const snoutStart = add(add(back, mul(hd, face)), mul(hu, -cr * 0.15));
     const tip = add(add(back, mul(hd, sk)), mul(hu, -cr * 0.25));
-    out.head.push(ell(cranium, cr, cr * 0.92, psi));
-    if (len(sub(tip, snoutStart)) > 0.02 * sk) out.head.push(cap(snoutStart, cr * 0.62, tip, hints.beak ? cr * 0.05 : cr * 0.32));
+    out.frames.skull = { points: [back, add(back, mul(hd, sk))], flip: false };
+    out.head.push(...on('skull', ell(cranium, cr, cr * 0.92, psi)));
+    if (len(sub(tip, snoutStart)) > 0.02 * sk) out.head.push(...on('skull', cap(snoutStart, cr * 0.62, tip, cr * 0.32)));
     out.muscles.push(ell(add(add(cranium, mul(hd, cr * 0.35)), mul(hu, -cr * 0.35)), cr * 0.5, cr * 0.36, psi));
     out.bones.push(ell(cranium, cr * 0.75, cr * 0.65, psi), cap(snoutStart, cr * 0.3, tip, cr * 0.12));
     out.eye = add(add(cranium, mul(hd, cr * 0.55 + clamp(face - cr * 1.2, 0, cr * 0.6))), mul(hu, cr * 0.25));
     out.eyeR = cr * 0.15;
-    if (!hints.beak && len(sub(tip, snoutStart)) > cr * 0.4) {
+    if (len(sub(tip, snoutStart)) > cr * 0.4) {
       out.nose = add(tip, mul(hd, cr * 0.22));
-      out.lines.push([add(tip, mul(hu, -cr * 0.2)), add(lerpP(snoutStart, tip, 0.35), mul(hu, -cr * 0.42))]);
+      out.mouth.push([add(tip, mul(hu, -cr * 0.2)), add(lerpP(snoutStart, tip, 0.35), mul(hu, -cr * 0.42))]);
     }
-    if (hints.whiskers) {
-      const root = add(tip, mul(hd, -cr * 0.1));
-      for (const a of [0.3, 0, -0.3]) out.lines.push([root, add(root, polar(psi + a, cr * 1.3))]);
-    }
+    // A plain small ear, for the scene to replace with the ear its animal has.
     const earRoot = add(add(cranium, mul(hu, cr * 0.72)), mul(hd, -cr * 0.35));
-    const earDir = polar(psi + Math.PI / 2 + 0.45);
-    const swing = plan.gait === 'stand' ? 0 : 0.15 * Math.sin(tau * p * 2);
-    switch (hints.ears) {
-      case 'small':
-        out.ears.push(cap(earRoot, cr * 0.22, add(earRoot, mul(earDir, cr * 0.45)), cr * 0.09));
-        break;
-      case 'pointed':
-        out.ears.push(cap(earRoot, cr * 0.28, add(earRoot, mul(earDir, cr * 0.9)), cr * 0.04));
-        break;
-      case 'round':
-        out.ears.push(ell(add(earRoot, mul(earDir, cr * 0.38)), cr * 0.42, cr * 0.38, psi));
-        break;
-      case 'floppy':
-        out.ears.push(cap(add(earRoot, mul(hd, -cr * 0.05)), cr * 0.26, add(add(earRoot, mul(hu, -cr * 0.95)), mul(hd, -cr * (0.3 + swing))), cr * 0.22));
-        break;
-      case 'long':
-        out.ears.push(cap(earRoot, cr * 0.2, add(earRoot, mul(polar(psi + Math.PI / 2 + 0.6 + swing), cr * 2.2)), cr * 0.17));
-        break;
-      default:
-        break;
-    }
-    if (hints.horns) {
-      const base = add(cranium, mul(hu, cr * 0.75));
-      const mid = add(base, mul(polar(psi + Math.PI / 2 - 0.35), cr * 0.9));
-      out.horns.push(cap(base, cr * 0.16, mid, cr * 0.1), cap(mid, cr * 0.1, add(mid, mul(polar(psi + 0.5), cr * 0.6)), cr * 0.02));
-    }
-    if (hints.trunk) {
-      let at = tip;
-      let a = psi - 0.9;
-      for (let i = 0; i < 4; i++) {
-        const next = add(at, polar(a, sk * 0.42));
-        out.head.push(cap(at, cr * (0.32 - i * 0.05), next, cr * (0.27 - i * 0.05)));
-        at = next;
-        a -= 0.25 + 0.08 * Math.sin(m.clock + i);
-      }
-    }
+    out.frames.ear = { points: [earRoot, add(earRoot, mul(hd, sk))], flip: false };
+    out.ears.push(...on('ear', cap(earRoot, cr * 0.22, add(earRoot, mul(polar(psi + Math.PI / 2 + 0.45), cr * 0.45)), cr * 0.09)));
 
     // Tail: a chain from the pelvis that droops as it softens and swings with the stride.
     if (build.tail.length > 0.001) {
       const stiff = build.tail.stiffness;
       let at = add(add(hipSpine, mul(dir, -body.pelvisR * 0.35)), mul(down, body.pelvisR * 0.1));
+      const chain: P[] = [at];
+      const widths: number[] = [body.tailR];
       let a = theta + Math.PI + 0.3 + 0.6 * (1 - stiff) - Math.min(0.35, 0.05 * m.speed);
       const segments = 5;
       const sway = (1 - stiff) * 0.3 * Math.min(1, m.speed / (0.5 + build.size));
@@ -820,10 +1062,14 @@ class AnimalFigure implements Animal {
           a = Math.PI + 0.05;
           next = [at[0] - build.tail.length / segments, Math.max(r1, at[1] - 0.2 * r1)];
         }
-        out.tail.push(cap(at, r0, next, r1));
+        out.tail.push(...on('tail', cap(at, r0, next, r1)));
         bone(at, next, Math.max(r1 * 0.25, body.waistR * 0.03));
+        chain.push(next);
+        widths.push(r1);
         at = next;
       }
+      // The tail runs backwards, so across is turned to keep pointing up.
+      out.frames.tail = { points: chain, flip: true, radii: widths };
     }
 
     // Limbs. Each foot is placed on the ground by the gait, and the leg reaches it.
@@ -868,17 +1114,20 @@ class AnimalFigure implements Animal {
       const upperR0 = isHind ? body.thighR * 0.85 : body.shoulderR * 0.85;
       const midR = isHind ? body.kneeR : body.elbowR;
       const lowR = isHind ? body.hockR : body.wristR;
-      const bodyRoot = isHind ? pelvisC : chestC;
-      const shapes: Shape[] = [
-        cap(bodyRoot, (isHind ? body.pelvisR : body.chestR) * 0.8, root, upperR0),
-        cap(root, upperR0, knee, midR),
-        cap(knee, midR, ankle, lowR),
-        cap(ankle, lowR, toe, toeR),
-        ell(lerpP(root, knee, 0.42), 0.55 * limb.upper, isHind ? body.thighR : body.shoulderR, Math.atan2(knee[1] - root[1], knee[0] - root[0])),
+      const [chainBone, upperBone, lowerBone, footBone]: readonly SkinBone[] = isHind ? ['hindleg', 'thigh', 'shin', 'hindfoot'] : ['foreleg', 'upperArm', 'forearm', 'forefoot'];
+      const shapes: Skin[] = [
+        ...on(upperBone!, cap(root, upperR0, knee, midR), ell(lerpP(root, knee, 0.42), 0.55 * limb.upper, isHind ? body.thighR : body.shoulderR, Math.atan2(knee[1] - root[1], knee[0] - root[0]))),
+        ...on(lowerBone!, cap(knee, midR, ankle, lowR)),
+        ...on(footBone!, cap(ankle, lowR, toe, toeR)),
       ];
-      const hoof = limb.posture === 'unguligrade' ? [cap(lerpP(ankle, toe, 0.7), lowR * 0.95, toe, toeR * 1.1)] : [];
+      const hoof = limb.posture === 'unguligrade' ? on(footBone!, cap(lerpP(ankle, toe, 0.7), lowR * 0.95, toe, toeR * 1.1)) : [];
+      const frames = near ? out.frames : out.farFrames;
+      frames[chainBone!] = { points: [root, knee, ankle, toe], flip: false, radii: [upperR0, midR, lowR, toeR] };
+      frames[upperBone!] = { points: [root, knee], flip: false, radii: [upperR0, midR] };
+      frames[lowerBone!] = { points: [knee, ankle], flip: false, radii: [midR, lowR] };
+      frames[footBone!] = { points: [ankle, toe], flip: false, radii: [lowR, toeR] };
       if (near) {
-        (isHind ? out.hind : out.fore).push(...shapes.slice(1));
+        (isHind ? out.hind : out.fore).push(...shapes);
         out.hooves.push(...hoof);
         out.muscles.push(
           ell(lerpP(root, knee, 0.42), 0.5 * limb.upper, (isHind ? body.thighR : body.shoulderR) * 0.85, Math.atan2(knee[1] - root[1], knee[0] - root[0])),
@@ -891,7 +1140,7 @@ class AnimalFigure implements Animal {
         bone(ankle, toe, r * 0.6);
         for (const j of [root, knee, ankle]) out.bones.push(ell(j, r * 1.6, r * 1.6));
       } else {
-        out.far.push(...shapes.slice(1));
+        out.far.push(...shapes);
         out.farHooves.push(...hoof);
       }
     }

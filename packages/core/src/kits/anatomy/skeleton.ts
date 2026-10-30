@@ -1,4 +1,4 @@
-import type { AnatomyHints, AnatomyLayer, AnatomyMode, FootPosture, SkeletonSpec, Tone, Vec2 } from '../../api/types';
+import type { AnatomyLayer, AnatomyMode, FootPosture, SkeletonSpec, Tone, Vec2 } from '../../api/types';
 import { SceneApiError } from '../../scene/errors';
 import { TONES } from '../../scene/handles';
 
@@ -25,7 +25,8 @@ export interface Build {
   readonly tail: { readonly length: number; readonly stiffness: number };
   readonly stance: 'upright' | 'sprawl';
   readonly modes: readonly AnatomyMode[];
-  readonly hints: Required<AnatomyHints>;
+  /** The forelimbs are folded wings. */
+  readonly wings: boolean;
   readonly at?: Vec2;
   readonly width?: number;
   readonly facing: 1 | -1;
@@ -34,12 +35,9 @@ export interface Build {
   readonly show: AnatomyLayer;
 }
 
-const EARS = ['small', 'pointed', 'round', 'floppy', 'long', 'none'];
-const COATS = ['plain', 'spotted', 'striped'];
 const POSTURES: readonly FootPosture[] = ['plantigrade', 'digitigrade', 'unguligrade'];
 const LAYERS: readonly AnatomyLayer[] = ['skin', 'muscles', 'bones'];
-const HINT_FLAGS = ['mane', 'horns', 'trunk', 'hump', 'whiskers', 'beak', 'wings'] as const;
-const SPEC_KEYS = new Set(['size', 'skull', 'neck', 'spine', 'forelimb', 'hindlimb', 'tail', 'stance', 'modes', 'hints', 'at', 'width', 'facing', 'tone', 'ground', 'show']);
+const SPEC_KEYS = new Set(['size', 'skull', 'neck', 'spine', 'forelimb', 'hindlimb', 'tail', 'stance', 'modes', 'wings', 'at', 'width', 'facing', 'tone', 'ground', 'show']);
 
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 
@@ -77,6 +75,7 @@ export function readSkeleton(spec: SkeletonSpec): Build {
   if (typeof spec === 'string') fail(`give the bones, not a name: skeleton({ size, skull, neck, spine, forelimb, hindlimb, tail }), measured from the real ${String(spec)}'s skeleton`);
   if (!isObject(spec)) fail('skeleton takes the bones: { size, skull, neck, spine, forelimb, hindlimb, tail }');
   const raw = spec as Record<string, unknown>;
+  if (raw.hints !== undefined) fail('a skeleton has no hints: draw ears, coats, manes and markings yourself with animal.skin(bone, shape)');
   for (const key of Object.keys(raw)) if (!SPEC_KEYS.has(key)) fail(`a skeleton has no "${key}"`);
   const size = raw.size === undefined ? 1 : number(raw.size, 'size (body length in metres)', 0.01, 30);
   const part = (key: string, keys: readonly string[]): Record<string, unknown> => {
@@ -89,24 +88,11 @@ export function readSkeleton(spec: SkeletonSpec): Build {
   const neck = raw.neck === undefined ? { length: 0.15 } : part('neck', ['length']);
   const spine = raw.spine === undefined ? { length: 0.6 } : part('spine', ['length', 'flex']);
   const tail = raw.tail === undefined ? { length: 0.4 } : part('tail', ['length', 'stiffness']);
-  const hintsRaw = raw.hints === undefined ? {} : part('hints', ['ears', 'coat', ...HINT_FLAGS]);
-  if (hintsRaw.ears !== undefined && !EARS.includes(hintsRaw.ears as string)) fail(`hints.ears is ${EARS.join(', ')}`);
-  if (hintsRaw.coat !== undefined && !COATS.includes(hintsRaw.coat as string)) fail(`hints.coat is ${COATS.join(', ')}`);
-  for (const flag of HINT_FLAGS) if (hintsRaw[flag] !== undefined && typeof hintsRaw[flag] !== 'boolean') fail(`hints.${flag} is true or false`);
-  const hints: Required<AnatomyHints> = {
-    ears: (hintsRaw.ears as AnatomyHints['ears']) ?? 'small',
-    coat: (hintsRaw.coat as AnatomyHints['coat']) ?? 'plain',
-    mane: hintsRaw.mane === true,
-    horns: hintsRaw.horns === true,
-    trunk: hintsRaw.trunk === true,
-    hump: hintsRaw.hump === true,
-    whiskers: hintsRaw.whiskers === true,
-    beak: hintsRaw.beak === true,
-    wings: hintsRaw.wings === true,
-  } as Required<AnatomyHints>;
+  if (raw.wings !== undefined && typeof raw.wings !== 'boolean') fail('wings is true or false');
+  const wings = raw.wings === true;
   if (raw.hindlimb === undefined) fail('a skeleton needs a hindlimb: { upper, lower, foot }');
   const hind = limb(raw.hindlimb, 'hindlimb', size);
-  const fore = raw.forelimb === undefined || hints.wings ? null : limb(raw.forelimb, 'forelimb', size);
+  const fore = raw.forelimb === undefined || wings ? null : limb(raw.forelimb, 'forelimb', size);
   const stance = raw.stance ?? 'upright';
   if (stance !== 'upright' && stance !== 'sprawl') fail('stance is upright or sprawl');
   const spineLength = number(spine.length, 'spine.length', 0.1, 2) * size;
@@ -147,7 +133,7 @@ export function readSkeleton(spec: SkeletonSpec): Build {
     tail: { length: number(tail.length, 'tail.length', 0, 3) * size, stiffness: tail.stiffness === undefined ? 0.5 : number(tail.stiffness, 'tail.stiffness', 0, 1) },
     stance,
     modes,
-    hints,
+    wings,
     at,
     width: raw.width === undefined ? undefined : number(raw.width, 'width', 10, 1e5),
     facing: raw.facing === 'left' ? -1 : 1,

@@ -20,7 +20,6 @@ const ape = zoo.skeleton({
   hindlimb: { upper: 0.28, lower: 0.26, foot: 0.16, posture: 'plantigrade' },
   tail: { length: 0 },
   modes: ['quadruped', 'bipedal'],
-  hints: { ears: 'small' },
   at: [400, 360],
   width: 420,
 });

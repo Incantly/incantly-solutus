@@ -1911,21 +1911,6 @@ export interface LimbBones {
   readonly posture?: FootPosture;
 }
 
-/** Soft parts bones cannot tell. */
-export interface AnatomyHints {
-  readonly ears?: 'small' | 'pointed' | 'round' | 'floppy' | 'long' | 'none';
-  readonly coat?: 'plain' | 'spotted' | 'striped';
-  readonly mane?: boolean;
-  readonly horns?: boolean;
-  readonly trunk?: boolean;
-  readonly hump?: boolean;
-  readonly whiskers?: boolean;
-  /** A beak instead of a snout. */
-  readonly beak?: boolean;
-  /** The forelimbs are folded wings. */
-  readonly wings?: boolean;
-}
-
 /** The ways of moving a skeleton may support. */
 export type AnatomyMode = 'quadruped' | 'bipedal';
 
@@ -1954,7 +1939,8 @@ export interface SkeletonSpec {
   readonly stance?: 'upright' | 'sprawl';
   /** Ways of moving it supports; the first is how it starts. Default from the build. */
   readonly modes?: readonly AnatomyMode[];
-  readonly hints?: AnatomyHints;
+  /** The forelimbs are folded wings, as a bird's. */
+  readonly wings?: boolean;
   /** Where its feet stand on the stage: the middle of the animal, on the ground. */
   readonly at?: Vec2;
   /** Stage units the animal may take across; it is scaled to fit. */
@@ -1983,10 +1969,53 @@ export interface MoveOptions {
   readonly at?: number;
 }
 
+/**
+ * The bones skin is drawn on. Each is a frame that moves and bends with the
+ * animal: thigh, shin and hindfoot one bone each, hindleg the three as one
+ * chain that bends at the knee and ankle (likewise the foreleg). ear sits at
+ * the back of the skull and points the way the skull does.
+ */
+export type SkinBone = 'spine' | 'neck' | 'skull' | 'ear' | 'tail' | 'wing' | 'hindleg' | 'thigh' | 'shin' | 'hindfoot' | 'foreleg' | 'upperArm' | 'forearm' | 'forefoot';
+
+/**
+ * A piece of skin drawn in a bone's frame. Every point is [along, across],
+ * measured in lengths of that bone (or chain): along runs from 0 at its start
+ * (the hip end of the spine, the back of the skull, the top of a leg, the
+ * root of the tail) to 1 at its end, and across is up for the spine, neck,
+ * skull, ear, wing and tail, and forward for the legs. The kit moves it with
+ * the bone on every frame and outlines it with the body.
+ */
+export interface SkinShape {
+  /** The outline's points, at least 3; for a line, at least 2. */
+  readonly points?: readonly Vec2[];
+  /** Or an ellipse centred here, with radius r, or [along, across] radii. */
+  readonly at?: Vec2;
+  readonly r?: number | Vec2;
+  /** A smooth curve through the points (default), or straight sides. */
+  readonly smooth?: boolean;
+  /**
+   * flesh (default) joins the body: same tone, one outline round both.
+   * part sits over the body with its own outline: an ear, a collar, a horn.
+   * mark paints the skin with no outline: spots, a saddle, an eye, a nose.
+   * line is an open stroke: whiskers, a mouth, fur.
+   */
+  readonly as?: 'flesh' | 'part' | 'mark' | 'line';
+  /** Default: the body's tone for flesh and parts, hi for marks and lines. */
+  readonly tone?: Tone;
+  /** Removes the kit's own skin on this bone first, to draw it your own way. Replacing the skull takes its eye and nose too. */
+  readonly replace?: boolean;
+}
+
 /** An animal the kit grew from a skeleton. Its gait comes from its speed and build. */
 export interface Animal {
   /** Sets how it moves; the kit picks the gait. */
   move(options: MoveOptions): this;
+  /**
+   * Draws skin on a bone: the shapes that make the breed or species, such as
+   * a long muzzle, tall ears, a mane or a saddle. The kit's own plain skin
+   * stays everywhere else. Limb skin is drawn on both sides.
+   */
+  skin(bone: SkinBone, shape: SkinShape): Handle;
   show(layer: AnatomyLayer): this;
   /** A piece to name as a part, highlight or fade. */
   piece(name: AnatomyPiece): Handle;

@@ -19,7 +19,6 @@ const BONES = {
     forelimb: { upper: 0.2, lower: 0.22, foot: 0.12 },
     hindlimb: { upper: 0.23, lower: 0.24, foot: 0.14 },
     tail: { length: 0.45, stiffness: 0.5 },
-    hints: { ears: 'floppy' },
   },
   cat: {
     size: 0.5,
@@ -29,7 +28,6 @@ const BONES = {
     forelimb: { upper: 0.2, lower: 0.2, foot: 0.11 },
     hindlimb: { upper: 0.24, lower: 0.26, foot: 0.15 },
     tail: { length: 0.8, stiffness: 0.35 },
-    hints: { ears: 'pointed', whiskers: true },
   },
   horse: {
     size: 2.4,
@@ -39,7 +37,6 @@ const BONES = {
     forelimb: { upper: 0.16, lower: 0.2, foot: 0.2 },
     hindlimb: { upper: 0.2, lower: 0.22, foot: 0.24 },
     tail: { length: 0.35, stiffness: 0.3 },
-    hints: { ears: 'pointed', mane: true },
   },
   mouse: {
     size: 0.09,
@@ -49,7 +46,6 @@ const BONES = {
     forelimb: { upper: 0.12, lower: 0.12, foot: 0.08, posture: 'plantigrade' },
     hindlimb: { upper: 0.17, lower: 0.2, foot: 0.2, posture: 'plantigrade' },
     tail: { length: 1, stiffness: 0.2 },
-    hints: { ears: 'round', whiskers: true },
   },
   cheetah: {
     size: 1.3,
@@ -60,7 +56,6 @@ const BONES = {
     hindlimb: { upper: 0.25, lower: 0.3, foot: 0.17 },
     tail: { length: 0.6, stiffness: 0.6 },
     tone: 'lit',
-    hints: { ears: 'small', coat: 'spotted' },
   },
   bear: {
     size: 1.9,
@@ -70,7 +65,6 @@ const BONES = {
     forelimb: { upper: 0.2, lower: 0.17, foot: 0.08 },
     hindlimb: { upper: 0.2, lower: 0.17, foot: 0.13, posture: 'plantigrade' },
     tail: { length: 0.05, stiffness: 1 },
-    hints: { ears: 'round' },
   },
   ape: {
     size: 0.85,
@@ -81,7 +75,6 @@ const BONES = {
     hindlimb: { upper: 0.28, lower: 0.26, foot: 0.16, posture: 'plantigrade' },
     tail: { length: 0 },
     modes: ['quadruped', 'bipedal'],
-    hints: { ears: 'small' },
   },
   human: {
     size: 0.85,
@@ -92,7 +85,6 @@ const BONES = {
     hindlimb: { upper: 0.52, lower: 0.5, foot: 0.17, posture: 'plantigrade' },
     tail: { length: 0 },
     modes: ['bipedal'],
-    hints: { ears: 'small' },
   },
   bird: {
     size: 0.3,
@@ -102,7 +94,7 @@ const BONES = {
     hindlimb: { upper: 0.2, lower: 0.3, foot: 0.2 },
     tail: { length: 0.35, stiffness: 0.8 },
     modes: ['bipedal'],
-    hints: { ears: 'none', beak: true, wings: true },
+    wings: true,
   },
   lizard: {
     size: 0.3,
@@ -113,7 +105,6 @@ const BONES = {
     hindlimb: { upper: 0.14, lower: 0.14, foot: 0.12, posture: 'plantigrade' },
     tail: { length: 1.3, stiffness: 0.4 },
     stance: 'sprawl',
-    hints: { ears: 'none' },
   },
 } satisfies Record<string, SkeletonSpec>;
 
@@ -160,7 +151,7 @@ describe('anatomy: skeletons', () => {
     for (const name of Object.keys(BONES) as Name[]) {
       const { runtime, animal: a } = animal(name);
       expect(runtime.uiState().error, name).toBeNull();
-      expect(nodeOf(a.handle).children.length, name).toBeGreaterThan(15);
+      expect(nodeOf(a.handle).children.length, name).toBeGreaterThan(8);
       expect(nodeOf(a.piece('body')).attrs.get('d'), name).toMatch(/^M/);
     }
   });
@@ -204,8 +195,9 @@ describe('anatomy: skeletons', () => {
     expect(error((zoo) => zoo.skeleton('unicorn' as never))).toContain('give the bones, not a name');
     expect(error((zoo) => zoo.skeleton({ size: 1 }))).toContain('needs a hindlimb');
     expect(error((zoo) => zoo.skeleton({ ...BONES.dog, spine: { length: 0.5, flex: 2 } }))).toContain('spine.flex is a number from 0 to 1');
-    expect(error((zoo) => zoo.skeleton({ ...BONES.dog, hints: { ears: 'huge' as 'small' } }))).toContain('hints.ears is');
-    expect(error((zoo) => zoo.skeleton({ ...BONES.dog, wings: true } as never))).toContain('a skeleton has no "wings"');
+    // Soft parts are the scene's to draw, not a list of switches.
+    expect(error((zoo) => zoo.skeleton({ ...BONES.dog, hints: { ears: 'floppy' } } as never))).toContain('draw ears, coats, manes and markings yourself');
+    expect(error((zoo) => zoo.skeleton({ ...BONES.dog, mane: true } as never))).toContain('a skeleton has no "mane"');
     expect(error((zoo) => zoo.skeleton({ ...BONES.mouse, modes: ['quadruped', 'bipedal'] }))).toContain('too short to walk on two legs');
     expect(error((zoo) => zoo.skeleton({ ...BONES.bird, modes: ['quadruped'] }))).toContain('no forelimbs to stand on');
     expect(error((zoo) => zoo.skeleton(BONES.dog).move({ speed: -1 }))).toContain('speed is metres a second');
@@ -402,16 +394,76 @@ describe('anatomy: moving and showing', () => {
   });
 
   it('shows its muscles or its bones under a faded skin', () => {
-    const { animal: dog } = animal('dog');
+    const { runtime, animal: dog } = animal('dog');
+    // The skin fades as a layer: the body's opacity is set on the group it is drawn in.
+    const fade = () => {
+      let id: number | null = nodeOf(dog.piece('body')).parent;
+      while (id !== null) {
+        const node = runtime.graph.nodes.get(id)!;
+        if (node.attrs.has('opacity')) return Number(node.attrs.get('opacity'));
+        id = node.parent;
+      }
+      return 1;
+    };
     const hidden = (piece: 'muscles' | 'bones') => nodeOf(dog.piece(piece)).hidden;
     expect(hidden('muscles')).toBe(true);
     expect(hidden('bones')).toBe(true);
     dog.show('bones');
     expect(hidden('bones')).toBe(false);
     expect(hidden('muscles')).toBe(true);
-    expect(Number(nodeOf(dog.piece('body')).attrs.get('opacity'))).toBeLessThan(0.5);
+    expect(fade()).toBeLessThan(0.5);
     dog.show('skin');
-    expect(Number(nodeOf(dog.piece('body')).attrs.get('opacity'))).toBe(1);
+    expect(fade()).toBe(1);
+  });
+
+  it('lets the scene draw the skin that makes a breed, on bones that move it', () => {
+    let dog: Animal | undefined;
+    let ear: unknown;
+    let saddle: unknown;
+    const runtime = run((inc) => {
+      dog = inc.anatomy('#a', { title: 'Shepherd' }).skeleton(BONES.dog);
+      dog.move({ speed: 3 });
+      // A tall pointed ear in place of the plain one, a black saddle on the back, a longer muzzle and whiskers.
+      ear = dog.skin('ear', { points: [[0, -0.05], [0.12, 0.7], [0.3, 0.02]], as: 'part', replace: true });
+      saddle = dog.skin('spine', { points: [[0.1, 0.05], [0.9, 0.05], [0.8, -0.3], [0.2, -0.35]], as: 'mark' });
+      dog.skin('skull', { points: [[0.6, 0.1], [1.15, -0.05], [1.1, -0.25], [0.6, -0.3]] });
+      dog.skin('skull', { points: [[0.95, -0.15], [1.4, -0.05]], as: 'line' });
+      dog.skin('thigh', { at: [0.4, 0], r: [0.4, 0.3], as: 'mark', tone: 'lo' });
+    });
+    expect(runtime.uiState().error).toBeNull();
+    const d = (h: unknown) => nodeOf(h).attrs.get('d') ?? '';
+    // A part has its own outline and fill; a mark only a fill.
+    expect(d(ear)).toMatch(/^M.*C/);
+    expect(d(saddle)).toMatch(/Z$/);
+    // The plain ear is gone, and the skin moves with the animal.
+    const before = [d(ear), d(saddle)];
+    play(runtime, 0.3);
+    expect([d(ear), d(saddle)]).not.toEqual(before);
+    // Skin on a leg is drawn on the near side and the far side.
+    const marks = [...runtime.graph.nodes.values()].filter((n) => n.tone === 'lo' && n.fill && (n.attrs.get('d') ?? '').length > 0);
+    expect(marks.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('keeps skin on its bone, and refuses skin it cannot draw', () => {
+    expect(error((zoo) => zoo.skeleton(BONES.dog).skin('wing', { at: [0.5, 0], r: 0.2 }))).toContain('no wing');
+    expect(error((zoo) => zoo.skeleton(BONES.human).skin('tail', { at: [0.5, 0], r: 0.2 }))).toContain('no tail');
+    expect(error((zoo) => zoo.skeleton(BONES.dog).skin('ankle' as never, { at: [0.5, 0], r: 0.2 }))).toContain('there is no bone "ankle"');
+    expect(error((zoo) => zoo.skeleton(BONES.dog).skin('skull', { points: [[0, 0], [5, 0], [0, 1]] }))).toContain('would float off');
+    expect(error((zoo) => zoo.skeleton(BONES.dog).skin('skull', { points: [[0, 0], [1, 0]] }))).toContain('points is a list of 3');
+    expect(error((zoo) => zoo.skeleton(BONES.dog).skin('skull', { at: [0, 0], r: 0.1, as: 'fur' as 'mark' }))).toContain('as is flesh, part, mark, line');
+  });
+
+  it('bends skin drawn along a leg round the knee, instead of cracking', async () => {
+    const { onFrame } = await import('../src/kits/anatomy/anatomy');
+    const knee = { points: [[0, 1], [0, 0], [1, 0]] as Array<readonly [number, number]>, flip: false };
+    // At the knee, skin across the leg sits on the bisector of the two bones' sides, not on either one.
+    const [x, y] = onFrame(knee, 0.5, 0.1);
+    expect(x).toBeCloseTo(0.2 / Math.SQRT2, 6);
+    expect(y).toBeCloseTo(0.2 / Math.SQRT2, 6);
+    // Toward the end of the second bone, across has turned to its left: up from a bone running right.
+    const [, end] = onFrame(knee, 1, 0.1);
+    expect(end).toBeCloseTo(0.2, 6);
+    expect(onFrame(knee, 0.75, 0.1)[1]).toBeGreaterThan(y);
   });
 
   it('names an animal or its pieces as parts', () => {

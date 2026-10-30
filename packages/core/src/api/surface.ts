@@ -599,7 +599,7 @@ export const HANDLES: Readonly<Record<HandleKind, HandleSpec>> = {
     properties: { stage: 'Stage' } satisfies Properties<Anatomy>,
   },
   Animal: {
-    methods: { move: 'self', show: 'self', piece: 'Element' } satisfies Methods<Animal>,
+    methods: { move: 'self', skin: 'Element', show: 'self', piece: 'Element' } satisfies Methods<Animal>,
     properties: {
       gait: null,
       mode: null,
