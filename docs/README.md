@@ -48,6 +48,7 @@ Incantly turns a concept in a learner's notes into a safe, interactive teaching 
 - [Touching the figure](sdk/interaction.md): dragging, tracing, zooming and turning figures with mouse, touch and keyboard.
 - [Chemistry](sdk/chemistry.md): atoms, bonds and molecules from formulas, lone pairs, electron shells, reactions acted out with bond energies, and energy profiles.
 - [Biology](sdk/biology.md): cells and their organelles, diffusion and active transport across a membrane, DNA's double helix, and flows along vessels.
+- [Anatomy](sdk/anatomy.md) (design, not built): animals drawn and moved from a skeleton, with muscles, outline, posture and gait read from the bones.
 - [3D models](sdk/models.md): ready-made models with named, labelled pieces and exploded views, models of your own as glTF-style data, and solids of revolution.
 - [Extending the SDK](sdk/extending.md): how implementation agents promote repeated patterns into reusable capabilities.
 
