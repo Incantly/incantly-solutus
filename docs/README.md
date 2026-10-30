@@ -19,7 +19,7 @@ Incantly turns a concept in a learner's notes into a safe, interactive teaching 
 - [Vision](product/vision.md): problem, users, product principles, and non-goals.
 - [v0.1 scope](product/v1-scope.md): the deliberately narrow first release.
 - [Success metrics](product/success-metrics.md): what proves the product works.
-- [Video figures](product/video-figures.md): proposal for narrated, interactive films of 30 seconds to 4 minutes.
+- [Video figures](product/video-figures.md): plan for narrated, interactive films of 30 seconds to 4 minutes (PRD 28).
 
 ### Architecture
 
@@ -35,6 +35,7 @@ Incantly turns a concept in a learner's notes into a safe, interactive teaching 
 - [ADR 006](architecture/decisions/006-scene-versioning.md): every stored scene carries SDK and schema versions.
 - [ADR 007](architecture/decisions/007-node-storage.md): how a figure is stored in a note, by content reference and outside the undo history.
 - [ADR 008](architecture/decisions/008-generation-service.md): the service plans, builds and repairs; the learner's device probes.
+- [ADR 009](architecture/decisions/009-film-scene-calls.md) (proposed): a film makes one scene call per scene, in parallel.
 
 ### SDK contracts
 
