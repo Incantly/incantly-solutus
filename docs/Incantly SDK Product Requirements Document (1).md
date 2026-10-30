@@ -1804,3 +1804,48 @@ Each repair writes a record: the concept, the plan, the fragments before and aft
 ### 27.9 Targets
 
 From section 11, now with the repair loop attached: 85 percent of figures pass the probe on the first attempt, 97 percent after one repair, and a repair adds no more than 6 seconds. If post-repair pass rate sits below 95 percent, the fix is a kit function or a better example, not a fourth retry.
+
+## 28. Films: narrated figures over time
+
+The figure engine already has steps, a timeline, tweens, eased 3D camera moves, named parts and sound. A film strings these together under narration: 30 seconds to 4 minutes (presets 30 s, 1, 2, 3 and 4 min), played, scrubbed, touched, questioned and exported, and never a rendered file. The full plan is in [Video figures](product/video-figures.md). This section records the requirements and the rules that keep a film inside the speed budget. It extends 6.10, where video is a short clip at P2.
+
+### 28.1 Principles
+
+- The scene names what it wants on each beat (say this line, zoom to this part, pulse that one, cut); the engine does the timing, camera, captions and audio. Beats extend `inc.steps` (24.2), so the agent learns no second format.
+- A film runs on a fixed clock in fixed steps and can seek. Seeking to t gives the frame that playing to t gives, so scrubbing, export and narration agree.
+- Narration is made once, at generation time, never per viewer.
+- Text is placed by a solver and checked offline at every beat; the agent gives no coordinates for captions or callouts.
+- Viewers play; they do not edit.
+- The generation path gains no critic or review agent. A film of one scene is one plan call and one scene call. A film of several scenes makes one scene call per scene, in parallel ([ADR 009](architecture/decisions/009-film-scene-calls.md)).
+
+### 28.2 What changes in the engine
+
+Today time advances by the real gap between animation frames, capped (RT-1), and nothing can go to a time. In film mode the runtime advances in fixed steps, and seeking restarts the scene and replays its steps to the target without drawing until the last one. Scene state lives in the scene's closures inside the Worker and cannot be saved, so seeking is bounded by a cap on scene length, not by checkpoints. A probe check compares seeking with playing; a scene that keeps state outside the SDK fails it and is repaired like any other failure.
+
+### 28.3 Requirements
+
+| ID | Requirement | Priority |
+| --- | --- | --- |
+| FV-1 | Film mode: scene time advances in fixed steps whatever the display frame rate | P0 |
+| FV-2 | Seek to any time in a scene by replay, without drawing until the last step; scene length capped so a seek stays under the bench limit | P0 |
+| FV-3 | Probe check: seeking to three times equals playing to them (readouts and part positions) | P0 |
+| FV-4 | Beat fields on steps: `ease`, `cam`, `show`, `hide`, `mark`, `title`, `short`, `sfx`, `explore`, `predict`; `cut` per scene | P0 |
+| FV-5 | Layout solver: captions in a band outside the drawing, callouts placed in slots that cover no part, bundled fonts measured after loading | P0 |
+| FV-6 | Film checks per beat at 360, 640 and 960 px, light and dark: safe margin, caption lines, size, overlap, contrast, focus in frame, reading speed, one emphasis at a time | P0 |
+| FV-7 | Player: play, pause, scrub with thumbnails, speed, volume, captions and size, transcript with seek, chapters | P0 |
+| FV-8 | Offline MP4 export on the device: fixed clock, WebCodecs, faster than real time; the real-time recorder as fallback | P1 |
+| FV-9 | Narration through a speech provider interface, made at generation time; beat length is audio length plus a hold; word-timed captions; beat lengths estimated from words until audio arrives | P1 |
+| FV-10 | SDK-owned mixing of narration, cues and an optional bed ducked under speech; silent until the viewer turns sound on | P1 |
+| FV-11 | Storyboard plan with a shared film context; one scene call per scene, in parallel, each in a normal size budget; cache and reviewed scenes first | P1 |
+| FV-12 | Source map from beats to scene lines and parts; anchors by beat id, never by seconds | P1 |
+| FV-13 | Questions: Answer (one small call, streamed) and Show me (beat fields on the existing scene, no new scene code) | P1 |
+| FV-14 | Versions as patches over an unchanged base film; learner inserts private and pinned by anchor | P2 |
+| FV-15 | Another example, Change the film, and deck mode (beats advance on click) | P2 |
+
+### 28.4 Speed
+
+The first scene keeps the 16.1 budget: skeleton within 1 second, playable within 10 seconds of the tap. Later scenes join as they pass their checks. The plan call cap, the scene length cap, the number of scenes per length and the whole-film deadline come from the bench, within the three-minute generation ceiling. Speech never holds back the first scene.
+
+### 28.5 Acceptance
+
+Films of 30 s, 1, 2, 3 and 4 minutes generated through the running Playground reach Ready with a playable first scene inside the budget, and report plan, scene, speech, check and probe times. Seeking equals playing for every reviewed scene. Every beat passes the film checks. Narration and captions stay within one frame over 4 minutes. Export matches playback frame for frame.
