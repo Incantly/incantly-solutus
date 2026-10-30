@@ -19,6 +19,7 @@ Incantly turns a concept in a learner's notes into a safe, interactive teaching 
 - [Vision](product/vision.md): problem, users, product principles, and non-goals.
 - [v0.1 scope](product/v1-scope.md): the deliberately narrow first release.
 - [Success metrics](product/success-metrics.md): what proves the product works.
+- [Video figures](product/video-figures.md): proposal for narrated, interactive films of 30 seconds to 4 minutes.
 
 ### Architecture
 
