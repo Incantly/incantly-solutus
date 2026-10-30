@@ -1,20 +1,13 @@
 {
   "names": [
-    "gait*",
-    "animal locomotion",
-    "how animals run",
-    "how a dog runs",
-    "dog running",
-    "dog walking"
+    "dog*",
+    "pupp*",
+    "canine*"
   ],
   "keywords": [
-    "walk",
-    "trot",
-    "gallop",
-    "stride",
-    "running",
-    "dog",
-    "legs",
-    "quadruped"
+    "walk*",
+    "trot*",
+    "gallop*",
+    "gait*"
   ]
 }
