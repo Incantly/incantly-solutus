@@ -28,6 +28,11 @@ const PROMPT_CARDS: readonly GalleryCard[] = [
   },
   // A loop as long as the learner asks, which the validator caps itself.
   { title: 'Area under a curve', tag: 'Calculus', prompt: 'Show me how rectangles under a curve add up to its area, and how the estimate gets closer as I use more rectangles.' },
+  // Animals grown from a skeleton with inc.anatomy, their gait read from their bones and speed.
+  { title: 'A dog running', tag: 'Animals', prompt: 'Show me a dog running. How do its legs move as it speeds up from a walk to a gallop?' },
+  { title: 'A mouse running', tag: 'Animals', prompt: "Show me a mouse running. Why do its legs move so much faster than a horse's?" },
+  { title: 'A cheetah at full speed', tag: 'Animals', prompt: 'Show me a cheetah running at full speed, and how its back bends with each stride.' },
+  { title: 'An ape standing up', tag: 'Animals', prompt: 'Show me an ape walking on all fours, then standing up and walking on two legs.' },
 ];
 
 /** Generated from packages/core/scenes by scripts/generate.mjs. */

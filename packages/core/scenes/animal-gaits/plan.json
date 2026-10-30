@@ -1,0 +1,42 @@
+{
+  "concept": "how a dog walks, trots and gallops",
+  "idea": "As a dog speeds up it changes gait, from a walk to a trot to a gallop, at the same dimensionless speeds as animals of every size; its strides grow longer and each foot spends less of the stride on the ground.",
+  "kind": "motion",
+  "size": "standard",
+  "capabilities": ["anatomy", "controls", "readout", "explain", "describe", "steps"],
+  "parameters": [
+    {
+      "name": "speed",
+      "unit": "m/s",
+      "min": 0,
+      "max": 14,
+      "default": 3,
+      "why": "From standing to a dog's full gallop."
+    },
+    {
+      "name": "layer",
+      "min": 0,
+      "max": 2,
+      "default": 0,
+      "control": "choice",
+      "options": ["Skin", "Muscles", "Bones"],
+      "why": "Shows the muscles and bones the kit reads the body from."
+    }
+  ],
+  "model": {
+    "inputs": ["speed", "layer"],
+    "outputs": [
+      { "name": "show", "dependsOn": ["layer"] }
+    ]
+  },
+  "parts": ["Dog", "Hind legs", "Front legs", "Spine"],
+  "moves": "The dog moves on the spot over a ground that slides under it; its legs, back, head and tail move with the gait its speed calls for.",
+  "steps": [
+    "Walking: three feet down at once",
+    "Trotting: diagonal pairs",
+    "Galloping: the back bends and all feet leave the ground",
+    "The muscles under the skin",
+    "The bones it is built from"
+  ],
+  "singularPoints": []
+}

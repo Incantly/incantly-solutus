@@ -1886,6 +1886,140 @@ export interface Biology {
 }
 
 // ---------------------------------------------------------------------------
+// Anatomy: animals grown from their bones
+// ---------------------------------------------------------------------------
+
+export interface AnatomyOptions {
+  readonly title: string;
+  readonly description?: string;
+  /** Default [0, 0, 800, 400]. */
+  readonly viewBox?: ViewBox;
+}
+
+/** How a foot meets the ground: on the whole sole, on the toes, or on the tip of a hoof. */
+export type FootPosture = 'plantigrade' | 'digitigrade' | 'unguligrade';
+
+/** One limb, each bone as a fraction of the body length. */
+export interface LimbBones {
+  /** Thigh, or upper arm. */
+  readonly upper: number;
+  /** Shin, or forearm. */
+  readonly lower: number;
+  /** Foot or hand: the bones from the ankle or wrist to the tips of the toes. */
+  readonly foot: number;
+  /** Overrides the posture the kit reads from the foot's length. */
+  readonly posture?: FootPosture;
+}
+
+/** Soft parts bones cannot tell. */
+export interface AnatomyHints {
+  readonly ears?: 'small' | 'pointed' | 'round' | 'floppy' | 'long' | 'none';
+  readonly coat?: 'plain' | 'spotted' | 'striped';
+  readonly mane?: boolean;
+  readonly horns?: boolean;
+  readonly trunk?: boolean;
+  readonly hump?: boolean;
+  readonly whiskers?: boolean;
+  /** A beak instead of a snout. */
+  readonly beak?: boolean;
+  /** The forelimbs are folded wings. */
+  readonly wings?: boolean;
+}
+
+/** The ways of moving a skeleton may support. */
+export type AnatomyMode = 'quadruped' | 'bipedal';
+
+/**
+ * A skeleton: the only thing a scene writes about an animal. Lengths are
+ * fractions of `size`, the body length in metres from the nose to the root of
+ * the tail. The kit reads the posture, muscles, outline and gait from it.
+ */
+export interface SkeletonSpec {
+  /** Body length in metres, nose to the root of the tail. */
+  readonly size?: number;
+  /** `depth` is the skull's height as a fraction of its length; `snout` the share of the skull ahead of the eye. */
+  readonly skull?: { readonly length: number; readonly depth?: number; readonly snout?: number };
+  readonly neck?: { readonly length: number };
+  /** `flex`, from 0 (stiff, a horse) to 1 (a cheetah), is how far the back bends when running. */
+  readonly spine?: { readonly length: number; readonly flex?: number };
+  /** Leave out for an animal with none, or set hints.wings. */
+  readonly forelimb?: LimbBones;
+  readonly hindlimb?: LimbBones;
+  /** `stiffness` from 0 (whippy) to 1. Length 0 for no tail. */
+  readonly tail?: { readonly length: number; readonly stiffness?: number };
+  /** Limbs under the body (default) or out to the side, as a lizard's. */
+  readonly stance?: 'upright' | 'sprawl';
+  /** Ways of moving it supports; the first is how it starts. Default from the build. */
+  readonly modes?: readonly AnatomyMode[];
+  readonly hints?: AnatomyHints;
+  /** Where its feet stand on the stage: the middle of the animal, on the ground. */
+  readonly at?: Vec2;
+  /** Stage units the animal may take across; it is scaled to fit. */
+  readonly width?: number;
+  readonly facing?: 'right' | 'left';
+  /** Body tone. Default mid. */
+  readonly tone?: Tone;
+  /** Draws a ground line under it that moves with its speed. Default true. */
+  readonly ground?: boolean;
+  /** What shows: the skin (default), the muscles under it, or the bones. */
+  readonly show?: AnatomyLayer;
+}
+
+/** A reviewed example skeleton to start from: zoo.skeleton('dog', { ...changes }). */
+export type ExampleSkeleton = 'dog' | 'cat' | 'horse' | 'mouse' | 'cheetah' | 'bear' | 'ape' | 'human' | 'bird' | 'lizard';
+
+export type AnatomyLayer = 'skin' | 'muscles' | 'bones';
+
+/** The pieces of an animal a part can name. */
+export type AnatomyPiece = 'body' | 'head' | 'neck' | 'tail' | 'forelimbs' | 'hindlimbs' | 'muscles' | 'bones';
+
+export type Gait = 'stand' | 'walk' | 'trot' | 'gallop' | 'bound' | 'run';
+
+export interface MoveOptions {
+  /** Metres a second: a number, a parameter, or a function of the model. */
+  readonly speed?: number | Param | (() => number);
+  /** Switches to this way of moving, at scene time `at` seconds or now; a function is read every frame. */
+  readonly mode?: AnatomyMode | (() => AnatomyMode);
+  readonly at?: number;
+}
+
+/** An animal the kit grew from a skeleton. Its gait comes from its speed and build. */
+export interface Animal {
+  /** Sets how it moves; the kit picks the gait. */
+  move(options: MoveOptions): this;
+  show(layer: AnatomyLayer): this;
+  /** A piece to name as a part, highlight or fade. */
+  piece(name: AnatomyPiece): Handle;
+  readonly gait: Gait;
+  readonly mode: AnatomyMode;
+  /** Metres a second. */
+  readonly speed: number;
+  /** Metres from one footfall of a foot to its next. */
+  readonly stride: number;
+  /** Strides a second. */
+  readonly frequency: number;
+  /** Share of each stride with no foot on the ground. */
+  readonly airborne: number;
+  /** Share of each stride a foot is on the ground. */
+  readonly duty: number;
+  /** Dimensionless speed, v squared over g times hip height. */
+  readonly froude: number;
+  /** Hip height in metres. */
+  readonly hipHeight: number;
+  /** How its hind feet meet the ground. */
+  readonly posture: FootPosture;
+  readonly handle: Handle;
+}
+
+export interface Anatomy {
+  /** An animal from a skeleton, or from an example skeleton with changes. */
+  skeleton(spec: SkeletonSpec | ExampleSkeleton, changes?: SkeletonSpec): Animal;
+  readonly stage: Stage;
+  /** Names an element or an animal for highlighting, steps and descriptions, as stage.part does. */
+  part<T extends Handle | { readonly handle: Handle }>(name: string, item: T, options?: PartOptions): T;
+}
+
+// ---------------------------------------------------------------------------
 // Tweens
 // ---------------------------------------------------------------------------
 
@@ -2035,6 +2169,8 @@ export interface Inc {
   chemistry(selector: string, options: ChemistryOptions): Chemistry;
   /** Cells and their organelles, membranes, DNA and flows. */
   biology(selector: string, options: BiologyOptions): Biology;
+  /** Animals grown from a skeleton. */
+  anatomy(selector: string, options: AnatomyOptions): Anatomy;
   /** A formula of x, t, the parameters by name and its vars, such as inc.formula('A*sin(k*x - w*t)', { vars: { A: amplitude } }). */
   formula(source: string, options?: FormulaOptions): Formula;
   /** Seeded random number in [0, 1). Same seed, same sequence. */

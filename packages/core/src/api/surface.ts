@@ -6,6 +6,8 @@
  * clauses make the TypeScript compiler fail if this file and `types.ts` drift.
  */
 import type {
+  Anatomy,
+  Animal,
   Arrow3D,
   Atom,
   Biology,
@@ -134,6 +136,8 @@ export type HandleKind =
   | 'Membrane'
   | 'Helix'
   | 'Stream'
+  | 'Anatomy'
+  | 'Animal'
   | 'Voice'
   | 'Noise';
 
@@ -212,6 +216,7 @@ export const INC_FUNCTIONS = {
   flow: 'Flow',
   chemistry: 'Chemistry',
   biology: 'Biology',
+  anatomy: 'Anatomy',
   formula: 'Formula',
   random: null,
   tween: null,
@@ -588,6 +593,26 @@ export const HANDLES: Readonly<Record<HandleKind, HandleSpec>> = {
   Stream: {
     methods: { set: 'self', at: null } satisfies Methods<Stream>,
     properties: { handle: 'Element' } satisfies Properties<Stream>,
+  },
+  Anatomy: {
+    methods: { skeleton: 'Animal', part: 'argument' } satisfies Methods<Anatomy>,
+    properties: { stage: 'Stage' } satisfies Properties<Anatomy>,
+  },
+  Animal: {
+    methods: { move: 'self', show: 'self', piece: 'Element' } satisfies Methods<Animal>,
+    properties: {
+      gait: null,
+      mode: null,
+      speed: null,
+      stride: null,
+      frequency: null,
+      airborne: null,
+      duty: null,
+      froude: null,
+      hipHeight: null,
+      posture: null,
+      handle: 'Element',
+    } satisfies Properties<Animal>,
   },
 };
 

@@ -4,16 +4,16 @@ import type { KitContext } from './kit';
 
 /**
  * Kits are drawing modules the base runtime does not carry: 3D, physics,
- * charts, flowcharts, chemistry, biology and sound (PRD 30: "kits load on demand"; DG-6). The validator
+ * charts, flowcharts, chemistry, biology, anatomy and sound (PRD 30: "kits load on demand"; DG-6). The validator
  * records which a scene calls; the host then loads only those, as modules on
  * the page or as scripts joined to the sandbox Worker ahead of the scene.
  */
-export type KitName = 'space3d' | 'physics2d' | 'chart' | 'flow' | 'chemistry' | 'biology' | 'sound';
+export type KitName = 'space3d' | 'physics2d' | 'chart' | 'flow' | 'chemistry' | 'biology' | 'anatomy' | 'sound';
 
 /** The inc calls kits answer. */
-export type KitCall = 'space3d' | 'graph3d' | 'physics2d' | 'chart' | 'flow' | 'chemistry' | 'biology';
+export type KitCall = 'space3d' | 'graph3d' | 'physics2d' | 'chart' | 'flow' | 'chemistry' | 'biology' | 'anatomy';
 
-export const KIT_NAMES: readonly KitName[] = ['space3d', 'physics2d', 'chart', 'flow', 'chemistry', 'biology', 'sound'];
+export const KIT_NAMES: readonly KitName[] = ['space3d', 'physics2d', 'chart', 'flow', 'chemistry', 'biology', 'anatomy', 'sound'];
 
 /** inc namespaces a kit answers, as inc.sound.voice. */
 export const KIT_NAMESPACES: Readonly<Record<string, KitName>> = Object.freeze({ sound: 'sound' });
@@ -27,6 +27,7 @@ export const KIT_OF: Readonly<Record<KitCall, KitName>> = Object.freeze({
   flow: 'flow',
   chemistry: 'chemistry',
   biology: 'biology',
+  anatomy: 'anatomy',
 });
 
 export function isKitCall(name: string): name is KitCall {
