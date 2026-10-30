@@ -5,7 +5,6 @@ import type {
   AnatomyOptions,
   AnatomyPiece,
   Animal,
-  ExampleSkeleton,
   FootPosture,
   Gait,
   Handle,
@@ -917,10 +916,10 @@ export class AnatomyKit implements Anatomy {
     this.viewBox = anatomyLayout(options).viewBox;
   }
 
-  skeleton(spec: SkeletonSpec | ExampleSkeleton, changes?: SkeletonSpec): Animal {
+  skeleton(spec: SkeletonSpec): Animal {
     if (this.animals >= MAX_ANIMALS) fail(`a stage draws at most ${MAX_ANIMALS} animals`);
     this.animals++;
-    return new AnimalFigure(this.ctx, this.stage, readSkeleton(spec, changes), this.viewBox);
+    return new AnimalFigure(this.ctx, this.stage, readSkeleton(spec), this.viewBox);
   }
 
   part<T extends Handle | { readonly handle: Handle }>(name: string, item: T, options?: PartOptions): T {

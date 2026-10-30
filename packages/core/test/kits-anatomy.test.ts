@@ -1,13 +1,124 @@
 import { describe, expect, it } from 'vitest';
-import type { Anatomy, Animal, ExampleSkeleton, Inc } from '../src/api/types';
+import type { Anatomy, Animal, Inc, SkeletonSpec } from '../src/api/types';
 import { kit } from '../src/kits/anatomy';
 import { placeFoot, readBody } from '../src/kits/anatomy/anatomy';
 import { GAIT_RULES, planGait } from '../src/kits/anatomy/gait';
-import { EXAMPLES, readPosture, readSkeleton } from '../src/kits/anatomy/skeleton';
+import { readPosture, readSkeleton } from '../src/kits/anatomy/skeleton';
 import { kitsFor } from '../src/runtime/kits';
 import { SceneRuntime } from '../src/runtime/runtime';
 import type { VNode } from '../src/scene/graph';
 import { validateSceneJs } from '../src/validation/js';
+
+/** Bones for the tests, measured as a scene would measure them from each animal's real skeleton. */
+const BONES = {
+  dog: {
+    size: 0.9,
+    skull: { length: 0.24, depth: 0.5, snout: 0.5 },
+    neck: { length: 0.2 },
+    spine: { length: 0.56, flex: 0.45 },
+    forelimb: { upper: 0.2, lower: 0.22, foot: 0.12 },
+    hindlimb: { upper: 0.23, lower: 0.24, foot: 0.14 },
+    tail: { length: 0.45, stiffness: 0.5 },
+    hints: { ears: 'floppy' },
+  },
+  cat: {
+    size: 0.5,
+    skull: { length: 0.17, depth: 0.7, snout: 0.3 },
+    neck: { length: 0.13 },
+    spine: { length: 0.7, flex: 0.7 },
+    forelimb: { upper: 0.2, lower: 0.2, foot: 0.11 },
+    hindlimb: { upper: 0.24, lower: 0.26, foot: 0.15 },
+    tail: { length: 0.8, stiffness: 0.35 },
+    hints: { ears: 'pointed', whiskers: true },
+  },
+  horse: {
+    size: 2.4,
+    skull: { length: 0.26, depth: 0.38, snout: 0.65 },
+    neck: { length: 0.3 },
+    spine: { length: 0.44, flex: 0.15 },
+    forelimb: { upper: 0.16, lower: 0.2, foot: 0.2 },
+    hindlimb: { upper: 0.2, lower: 0.22, foot: 0.24 },
+    tail: { length: 0.35, stiffness: 0.3 },
+    hints: { ears: 'pointed', mane: true },
+  },
+  mouse: {
+    size: 0.09,
+    skull: { length: 0.3, depth: 0.6, snout: 0.5 },
+    neck: { length: 0.08 },
+    spine: { length: 0.62, flex: 0.8 },
+    forelimb: { upper: 0.12, lower: 0.12, foot: 0.08, posture: 'plantigrade' },
+    hindlimb: { upper: 0.17, lower: 0.2, foot: 0.2, posture: 'plantigrade' },
+    tail: { length: 1, stiffness: 0.2 },
+    hints: { ears: 'round', whiskers: true },
+  },
+  cheetah: {
+    size: 1.3,
+    skull: { length: 0.16, depth: 0.6, snout: 0.35 },
+    neck: { length: 0.17 },
+    spine: { length: 0.67, flex: 0.95 },
+    forelimb: { upper: 0.21, lower: 0.25, foot: 0.13 },
+    hindlimb: { upper: 0.25, lower: 0.3, foot: 0.17 },
+    tail: { length: 0.6, stiffness: 0.6 },
+    tone: 'lit',
+    hints: { ears: 'small', coat: 'spotted' },
+  },
+  bear: {
+    size: 1.9,
+    skull: { length: 0.22, depth: 0.6, snout: 0.45 },
+    neck: { length: 0.16 },
+    spine: { length: 0.62, flex: 0.3 },
+    forelimb: { upper: 0.2, lower: 0.17, foot: 0.08 },
+    hindlimb: { upper: 0.2, lower: 0.17, foot: 0.13, posture: 'plantigrade' },
+    tail: { length: 0.05, stiffness: 1 },
+    hints: { ears: 'round' },
+  },
+  ape: {
+    size: 0.85,
+    skull: { length: 0.2, depth: 0.9, snout: 0.25 },
+    neck: { length: 0.07 },
+    spine: { length: 0.6, flex: 0.2 },
+    forelimb: { upper: 0.36, lower: 0.33, foot: 0.14, posture: 'digitigrade' },
+    hindlimb: { upper: 0.28, lower: 0.26, foot: 0.16, posture: 'plantigrade' },
+    tail: { length: 0 },
+    modes: ['quadruped', 'bipedal'],
+    hints: { ears: 'small' },
+  },
+  human: {
+    size: 0.85,
+    skull: { length: 0.27, depth: 0.95, snout: 0.1 },
+    neck: { length: 0.08 },
+    spine: { length: 0.55, flex: 0.1 },
+    forelimb: { upper: 0.38, lower: 0.32, foot: 0.12 },
+    hindlimb: { upper: 0.52, lower: 0.5, foot: 0.17, posture: 'plantigrade' },
+    tail: { length: 0 },
+    modes: ['bipedal'],
+    hints: { ears: 'small' },
+  },
+  bird: {
+    size: 0.3,
+    skull: { length: 0.22, depth: 0.7, snout: 0.45 },
+    neck: { length: 0.22 },
+    spine: { length: 0.48, flex: 0.1 },
+    hindlimb: { upper: 0.2, lower: 0.3, foot: 0.2 },
+    tail: { length: 0.35, stiffness: 0.8 },
+    modes: ['bipedal'],
+    hints: { ears: 'none', beak: true, wings: true },
+  },
+  lizard: {
+    size: 0.3,
+    skull: { length: 0.22, depth: 0.45, snout: 0.5 },
+    neck: { length: 0.1 },
+    spine: { length: 0.68, flex: 0.5 },
+    forelimb: { upper: 0.12, lower: 0.12, foot: 0.08, posture: 'plantigrade' },
+    hindlimb: { upper: 0.14, lower: 0.14, foot: 0.12, posture: 'plantigrade' },
+    tail: { length: 1.3, stiffness: 0.4 },
+    stance: 'sprawl',
+    hints: { ears: 'none' },
+  },
+} satisfies Record<string, SkeletonSpec>;
+
+
+type Name = keyof typeof BONES;
 
 function run(scene: (inc: Inc) => void, options: { reducedMotion?: boolean } = {}) {
   const runtime = new SceneRuntime({ autoplay: false, kits: { anatomy: kit }, ...options });
@@ -23,10 +134,10 @@ function play(runtime: SceneRuntime, seconds: number, fps = 60): void {
 }
 
 /** An animal on its own stage, with the runtime that runs it. */
-function animal(spec: Parameters<Anatomy['skeleton']>[0], changes?: Parameters<Anatomy['skeleton']>[1], speed?: number) {
+function animal(spec: SkeletonSpec | Name, speed?: number) {
   let made: Animal | undefined;
   const runtime = run((inc) => {
-    made = inc.anatomy('#a', { title: 'Animal' }).skeleton(spec, changes);
+    made = inc.anatomy('#a', { title: 'Animal' }).skeleton(typeof spec === 'string' ? BONES[spec] : spec);
     if (speed !== undefined) made.move({ speed });
   });
   return { runtime, animal: made! };
@@ -39,14 +150,14 @@ const error = (scene: (zoo: Anatomy) => void) => {
 };
 
 const nodeOf = (handle: unknown) => (handle as { node: VNode }).node;
-const hipOf = (name: ExampleSkeleton) => {
-  const build = readSkeleton(name);
+const hipOf = (name: Name) => {
+  const build = readSkeleton(BONES[name]);
   return { build, hip: build.hind.foot * 0.5 + 0.9 * (build.hind.upper + build.hind.lower) };
 };
 
 describe('anatomy: skeletons', () => {
-  it('grows every example skeleton without an error, each a group of drawn pieces', () => {
-    for (const name of Object.keys(EXAMPLES) as ExampleSkeleton[]) {
+  it('grows every skeleton in the tests without an error, each a group of drawn pieces', () => {
+    for (const name of Object.keys(BONES) as Name[]) {
       const { runtime, animal: a } = animal(name);
       expect(runtime.uiState().error, name).toBeNull();
       expect(nodeOf(a.handle).children.length, name).toBeGreaterThan(15);
@@ -62,12 +173,12 @@ describe('anatomy: skeletons', () => {
     expect(animal('horse').animal.posture).toBe('unguligrade');
     expect(animal('human').animal.posture).toBe('plantigrade');
     // A posture the scene gives wins over the one the bones suggest.
-    expect(animal('dog', { hindlimb: { upper: 0.23, lower: 0.24, foot: 0.14, posture: 'plantigrade' } }).animal.posture).toBe('plantigrade');
+    expect(animal({ ...BONES.dog, hindlimb: { upper: 0.23, lower: 0.24, foot: 0.14, posture: 'plantigrade' } }).animal.posture).toBe('plantigrade');
   });
 
   it('builds runners light below the knee and heavy above it', () => {
-    const cheetah = readBody(readSkeleton('cheetah'));
-    const bear = readBody(readSkeleton('bear'));
+    const cheetah = readBody(readSkeleton(BONES.cheetah));
+    const bear = readBody(readSkeleton(BONES.bear));
     expect(cheetah.runner).toBeGreaterThan(bear.runner);
     expect(cheetah.kneeR / cheetah.thighR).toBeLessThan(bear.kneeR / bear.thighR);
     // A runner's waist tucks up between its chest and haunch.
@@ -89,19 +200,20 @@ describe('anatomy: skeletons', () => {
   });
 
   it('refuses a skeleton it cannot read, saying what is wrong', () => {
-    expect(error((zoo) => zoo.skeleton('unicorn' as ExampleSkeleton))).toContain('there is no example skeleton "unicorn"');
+    // The kit holds no animals: a name instead of bones is refused.
+    expect(error((zoo) => zoo.skeleton('unicorn' as never))).toContain('give the bones, not a name');
     expect(error((zoo) => zoo.skeleton({ size: 1 }))).toContain('needs a hindlimb');
-    expect(error((zoo) => zoo.skeleton('dog', { spine: { length: 0.5, flex: 2 } }))).toContain('spine.flex is a number from 0 to 1');
-    expect(error((zoo) => zoo.skeleton('dog', { hints: { ears: 'huge' as 'small' } }))).toContain('hints.ears is');
-    expect(error((zoo) => zoo.skeleton('dog', { wings: true } as never))).toContain('a skeleton has no "wings"');
-    expect(error((zoo) => zoo.skeleton('mouse', { modes: ['quadruped', 'bipedal'] }))).toContain('too short to walk on two legs');
-    expect(error((zoo) => zoo.skeleton('bird', { modes: ['quadruped'] }))).toContain('no forelimbs to stand on');
-    expect(error((zoo) => zoo.skeleton('dog').move({ speed: -1 }))).toContain('speed is metres a second');
-    expect(error((zoo) => zoo.skeleton('dog').move({ mode: 'bipedal' }))).toContain('this skeleton moves quadruped');
-    expect(error((zoo) => zoo.skeleton('human').piece('tail'))).toContain('no tail');
+    expect(error((zoo) => zoo.skeleton({ ...BONES.dog, spine: { length: 0.5, flex: 2 } }))).toContain('spine.flex is a number from 0 to 1');
+    expect(error((zoo) => zoo.skeleton({ ...BONES.dog, hints: { ears: 'huge' as 'small' } }))).toContain('hints.ears is');
+    expect(error((zoo) => zoo.skeleton({ ...BONES.dog, wings: true } as never))).toContain('a skeleton has no "wings"');
+    expect(error((zoo) => zoo.skeleton({ ...BONES.mouse, modes: ['quadruped', 'bipedal'] }))).toContain('too short to walk on two legs');
+    expect(error((zoo) => zoo.skeleton({ ...BONES.bird, modes: ['quadruped'] }))).toContain('no forelimbs to stand on');
+    expect(error((zoo) => zoo.skeleton(BONES.dog).move({ speed: -1 }))).toContain('speed is metres a second');
+    expect(error((zoo) => zoo.skeleton(BONES.dog).move({ mode: 'bipedal' }))).toContain('this skeleton moves quadruped');
+    expect(error((zoo) => zoo.skeleton(BONES.human).piece('tail'))).toContain('no tail');
     expect(
       error((zoo) => {
-        for (let i = 0; i < 7; i++) zoo.skeleton('mouse');
+        for (let i = 0; i < 7; i++) zoo.skeleton(BONES.mouse);
       }),
     ).toContain('at most 6 animals');
   });
@@ -111,7 +223,7 @@ describe('anatomy: gaits', () => {
   it('changes gait at the same dimensionless speeds whatever the size', () => {
     const dog = animal('dog').animal;
     const gaitAt = (speed: number) => {
-      const { animal: a } = animal('dog', undefined, speed);
+      const { animal: a } = animal('dog', speed);
       return a.gait;
     };
     expect(dog.gait).toBe('stand');
@@ -125,7 +237,7 @@ describe('anatomy: gaits', () => {
   });
 
   it('bounds a small, crouched body and gallops round the body with a flexible spine', () => {
-    expect(animal('mouse', undefined, 1.5).animal.gait).toBe('bound');
+    expect(animal('mouse', 1.5).animal.gait).toBe('bound');
     const cheetah = hipOf('cheetah');
     const horse = hipOf('horse');
     const rotary = planGait(cheetah.build, 'quadruped', 20, cheetah.hip);
@@ -161,7 +273,7 @@ describe('anatomy: gaits', () => {
   });
 
   it('never plants a foot further than its leg can sweep, so feet never slide', () => {
-    for (const name of ['dog', 'cheetah', 'horse', 'mouse'] as ExampleSkeleton[]) {
+    for (const name of ['dog', 'cheetah', 'horse', 'mouse'] as const) {
       const { build, hip } = hipOf(name);
       for (const speed of [0.5, 2, 5, 12, 30]) {
         const plan = planGait(build, 'quadruped', speed, hip);
@@ -198,7 +310,7 @@ describe('anatomy: moving and showing', () => {
     let dog: Animal | undefined;
     const runtime = run((inc) => {
       const speed = inc.param('speed', { min: 0, max: 14, value: 1 });
-      dog = inc.anatomy('#a', { title: 'Dog' }).skeleton('dog');
+      dog = inc.anatomy('#a', { title: 'Dog' }).skeleton(BONES.dog);
       dog.move({ speed });
     });
     expect(dog!.gait).toBe('walk');
@@ -215,7 +327,7 @@ describe('anatomy: moving and showing', () => {
     const frames = () => {
       let dog: Animal | undefined;
       const runtime = run((inc) => {
-        dog = inc.anatomy('#a', { title: 'Dog' }).skeleton('dog');
+        dog = inc.anatomy('#a', { title: 'Dog' }).skeleton(BONES.dog);
         dog.move({ speed: 6 });
       });
       play(runtime, 1.3);
@@ -227,7 +339,7 @@ describe('anatomy: moving and showing', () => {
   it('moves its legs while playing and holds still when paused', () => {
     let dog: Animal | undefined;
     const runtime = run((inc) => {
-      dog = inc.anatomy('#a', { title: 'Dog' }).skeleton('dog');
+      dog = inc.anatomy('#a', { title: 'Dog' }).skeleton(BONES.dog);
       dog.move({ speed: 3 });
     });
     const legs = () => nodeOf(dog!.piece('hindlimbs')).attrs.get('d');
@@ -243,7 +355,7 @@ describe('anatomy: moving and showing', () => {
     let dog: Animal | undefined;
     const runtime = run(
       (inc) => {
-        dog = inc.anatomy('#a', { title: 'Dog' }).skeleton('dog');
+        dog = inc.anatomy('#a', { title: 'Dog' }).skeleton(BONES.dog);
         dog.move({ speed: 3 });
       },
       { reducedMotion: true },
@@ -256,7 +368,7 @@ describe('anatomy: moving and showing', () => {
   it('stands up on two legs at the time it is told, if its skeleton allows', () => {
     let ape: Animal | undefined;
     const runtime = run((inc) => {
-      ape = inc.anatomy('#a', { title: 'Ape' }).skeleton('ape');
+      ape = inc.anatomy('#a', { title: 'Ape' }).skeleton(BONES.ape);
       ape.move({ speed: 1, mode: 'bipedal', at: 1 });
     });
     expect(ape!.mode).toBe('quadruped');
@@ -275,7 +387,7 @@ describe('anatomy: moving and showing', () => {
     const runtime = run((inc) => {
       inc.choice('posture', { options: ['On all fours', 'On two legs'] });
       const model = inc.model(({ posture }) => ({ mode: posture === 1 ? 'bipedal' : 'quadruped' }));
-      ape = inc.anatomy('#a', { title: 'Ape' }).skeleton('ape');
+      ape = inc.anatomy('#a', { title: 'Ape' }).skeleton(BONES.ape);
       ape.move({ speed: 1, mode: () => model.mode as 'bipedal' | 'quadruped' });
     });
     const body = () => nodeOf(ape!.piece('body')).attrs.get('d');
@@ -305,7 +417,7 @@ describe('anatomy: moving and showing', () => {
   it('names an animal or its pieces as parts', () => {
     const runtime = run((inc) => {
       const zoo = inc.anatomy('#a', { title: 'Dog' });
-      const dog = zoo.skeleton('dog');
+      const dog = zoo.skeleton(BONES.dog);
       zoo.part('Dog', dog, { label: 'Dog' });
       zoo.part('Hind legs', dog.piece('hindlimbs'));
     });
@@ -316,13 +428,13 @@ describe('anatomy: moving and showing', () => {
 describe('anatomy: validation', () => {
   it('loads the kit only for scenes that call inc.anatomy', () => {
     expect(kitsFor(['anatomy'])).toEqual(['anatomy']);
-    const result = validateSceneJs("const zoo = inc.anatomy('#stage', { title: 'Dog' });\nconst dog = zoo.skeleton('dog');\ndog.move({ speed: 3 });\ninc.describe(() => dog.gait);");
+    const result = validateSceneJs("const zoo = inc.anatomy('#stage', { title: 'Dog' });\nconst dog = zoo.skeleton({ size: 0.9, hindlimb: { upper: 0.23, lower: 0.24, foot: 0.14 }, forelimb: { upper: 0.2, lower: 0.22, foot: 0.12 } });\ndog.move({ speed: 3 });\ninc.describe(() => dog.gait);");
     expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
     expect(result.info.kits).toEqual(['anatomy']);
   });
 
   it('refuses a skeleton made in the frame loop, where it would be made again each frame', () => {
-    const result = validateSceneJs("const zoo = inc.anatomy('#stage', { title: 'Dog' });\ninc.onFrame(() => { zoo.skeleton('dog'); });");
+    const result = validateSceneJs("const zoo = inc.anatomy('#stage', { title: 'Dog' });\ninc.onFrame(() => { zoo.skeleton({ size: 0.9, hindlimb: { upper: 0.23, lower: 0.24, foot: 0.14 }, forelimb: { upper: 0.2, lower: 0.22, foot: 0.12 } }); });");
     expect(result.diagnostics.some((d) => d.severity === 'error')).toBe(true);
   });
 });

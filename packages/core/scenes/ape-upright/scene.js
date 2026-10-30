@@ -10,7 +10,20 @@ const zoo = inc.anatomy('#stage', {
   title: 'An ape on four legs and on two',
   description: 'An ape seen from the side, walking on the spot over a ground that slides under it, on its knuckles or upright.',
 });
-const ape = zoo.skeleton('ape', { at: [400, 360], width: 420 });
+// A chimpanzee's bones, as fractions of its 0.85 m body: arms longer than its legs, a short face and no tail.
+const ape = zoo.skeleton({
+  size: 0.85,
+  skull: { length: 0.2, depth: 0.9, snout: 0.25 },
+  neck: { length: 0.07 },
+  spine: { length: 0.6, flex: 0.2 },
+  forelimb: { upper: 0.36, lower: 0.33, foot: 0.14, posture: 'digitigrade' },
+  hindlimb: { upper: 0.28, lower: 0.26, foot: 0.16, posture: 'plantigrade' },
+  tail: { length: 0 },
+  modes: ['quadruped', 'bipedal'],
+  hints: { ears: 'small' },
+  at: [400, 360],
+  width: 420,
+});
 ape.move({ speed, mode: () => model.mode });
 zoo.part('Ape', ape, { label: 'Ape', info: 'Its posture, balance and gait are worked out from its skeleton.' });
 zoo.part('Arms', ape.piece('forelimbs'), { label: 'Arms', info: 'Longer than its legs: on all fours it walks on its knuckles.' });

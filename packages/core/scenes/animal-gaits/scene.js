@@ -10,7 +10,19 @@ const zoo = inc.anatomy('#stage', {
   title: 'A dog changing gait',
   description: 'A dog seen from the side, moving on the spot over a ground that slides under it.',
 });
-const dog = zoo.skeleton('dog', { at: [400, 330], width: 560 });
+// A dog's bones, as fractions of its 0.9 m body: a long snout, toes-down feet and a long tail.
+const dog = zoo.skeleton({
+  size: 0.9,
+  skull: { length: 0.24, depth: 0.5, snout: 0.5 },
+  neck: { length: 0.2 },
+  spine: { length: 0.56, flex: 0.45 },
+  forelimb: { upper: 0.2, lower: 0.22, foot: 0.12 },
+  hindlimb: { upper: 0.23, lower: 0.24, foot: 0.14 },
+  tail: { length: 0.45, stiffness: 0.5 },
+  hints: { ears: 'floppy' },
+  at: [400, 330],
+  width: 560,
+});
 dog.move({ speed });
 zoo.part('Dog', dog, { label: 'Dog', info: 'Its body, gait and stride are worked out from its skeleton and speed.' });
 zoo.part('Hind legs', dog.piece('hindlimbs'), { label: 'Hind legs', info: 'The big thigh muscles drive the dog forward.' });

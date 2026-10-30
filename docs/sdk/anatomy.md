@@ -35,7 +35,7 @@ Every step after the first is a rule in the kit, the same for every animal. Noth
 
 ## The skeleton
 
-`zoo.skeleton(spec)` takes the bones, or `zoo.skeleton('dog', { ...changes })` an example skeleton with changes, merged one level deep. Lengths are fractions of `size`, the body length in metres from the nose to the root of the tail; `size` keeps the real scale, which the gait rules need.
+`zoo.skeleton(spec)` takes the bones, and only the bones: the kit holds no animals and refuses a name such as `'dog'`. The agent measures each bone from what it knows of the real animal's skeleton, so a mouse, a dog and a cheetah differ because their bones do. Lengths are fractions of `size`, the body length in metres from the nose to the root of the tail; `size` keeps the real scale, which the gait rules need.
 
 | Field | Content |
 | --- | --- |
@@ -51,11 +51,7 @@ Every step after the first is a rule in the kit, the same for every animal. Noth
 | `at`, `width`, `facing` | Where it stands on the stage, the room it may take across, and which way it faces. It is scaled to fit. |
 | `tone`, `ground`, `show` | Body tone; whether a ground line passes under it; skin, muscles or bones. |
 
-The kit refuses a skeleton it cannot read, with what is wrong: "a skeleton needs a hindlimb", "spine.flex is a number from 0 to 1", "there is no example skeleton "unicorn"".
-
-### Example skeletons
-
-Reviewed example skeletons are data, not drawings, and are not needed: any skeleton works without one. They cut the scene to a line for common animals and give the plan call something to name: dog, cat, horse, mouse, cheetah, bear, ape, human, bird, lizard.
+The kit refuses a skeleton it cannot read, with what is wrong: "a skeleton needs a hindlimb", "spine.flex is a number from 0 to 1", "give the bones, not a name".
 
 ## Posture: read from the limb bones
 
@@ -129,7 +125,7 @@ Readouts come from the same model that moves the animal (PRD 17.2): `gait` (stan
 
 ## Checks
 
-The validator loads the kit only for scenes that call `inc.anatomy`, and refuses `skeleton` inside the frame loop. The unit tests (`packages/core/test/kits-anatomy.test.ts`) check every example skeleton, posture reading, gait changes by Froude number, rotary and transverse gallops, dynamic similarity of strides, that a planted foot keeps its place on the ground, that feet never have to sweep past their reach, determinism, reduced motion, modes, layers and parts.
+The validator loads the kit only for scenes that call `inc.anatomy`, and refuses `skeleton` inside the frame loop. The unit tests (`packages/core/test/kits-anatomy.test.ts`) check ten skeletons measured from real animals (dog, cat, horse, mouse, cheetah, bear, ape, human, bird, lizard; test data, not part of the SDK), posture reading, gait changes by Froude number, rotary and transverse gallops, dynamic similarity of strides, that a planted foot keeps its place on the ground, that feet never have to sweep past their reach, determinism, reduced motion, modes, layers and parts.
 
 ## Limits
 
@@ -140,7 +136,7 @@ Animals with a backbone. A stage draws at most 6 animals. Speeds up to 40 m/s. A
 - Probe checks in the generation probe for joint limits, two-legged balance and a closed gait cycle; the unit tests cover the gait maths, the probe does not yet check generated scenes for them.
 - Shaggy, scaly and feathered coats; a two-legged hop.
 - Animals without a backbone like ours: insects and crabs (skeleton outside), octopus, jellyfish and worms (no hard skeleton).
-- Two-legged bodies are rougher than four-legged ones: the human and bird examples read as figures, not portraits.
+- Two-legged bodies are rougher than four-legged ones: a human or bird skeleton reads as a figure, not a portrait.
 
 ## Open questions
 

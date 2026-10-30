@@ -142,7 +142,6 @@ export const CAPABILITIES: readonly Capability[] = [
       'AnatomyHints',
       'AnatomyMode',
       'SkeletonSpec',
-      'ExampleSkeleton',
       'AnatomyLayer',
       'AnatomyPiece',
       'Gait',

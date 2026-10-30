@@ -1930,9 +1930,12 @@ export interface AnatomyHints {
 export type AnatomyMode = 'quadruped' | 'bipedal';
 
 /**
- * A skeleton: the only thing a scene writes about an animal. Lengths are
- * fractions of `size`, the body length in metres from the nose to the root of
- * the tail. The kit reads the posture, muscles, outline and gait from it.
+ * A skeleton: the only thing a scene writes about an animal, measured from
+ * what you know of that animal's real bones. Lengths are fractions of `size`,
+ * the body length in metres from the nose to the root of the tail. The kit
+ * reads the posture, muscles, outline and gait from them, so get the
+ * proportions right: a cheetah's shin is longer than its thigh, a horse
+ * stands on long foot bones, a mouse has a long tail and short legs.
  */
 export interface SkeletonSpec {
   /** Body length in metres, nose to the root of the tail. */
@@ -1964,9 +1967,6 @@ export interface SkeletonSpec {
   /** What shows: the skin (default), the muscles under it, or the bones. */
   readonly show?: AnatomyLayer;
 }
-
-/** A reviewed example skeleton to start from: zoo.skeleton('dog', { ...changes }). */
-export type ExampleSkeleton = 'dog' | 'cat' | 'horse' | 'mouse' | 'cheetah' | 'bear' | 'ape' | 'human' | 'bird' | 'lizard';
 
 export type AnatomyLayer = 'skin' | 'muscles' | 'bones';
 
@@ -2012,8 +2012,8 @@ export interface Animal {
 }
 
 export interface Anatomy {
-  /** An animal from a skeleton, or from an example skeleton with changes. */
-  skeleton(spec: SkeletonSpec | ExampleSkeleton, changes?: SkeletonSpec): Animal;
+  /** An animal grown from its bones. */
+  skeleton(spec: SkeletonSpec): Animal;
   readonly stage: Stage;
   /** Names an element or an animal for highlighting, steps and descriptions, as stage.part does. */
   part<T extends Handle | { readonly handle: Handle }>(name: string, item: T, options?: PartOptions): T;
