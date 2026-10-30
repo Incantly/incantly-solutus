@@ -270,6 +270,25 @@ describe('anatomy: moving and showing', () => {
     expect(runtime.uiState().error).toBeNull();
   });
 
+  it('stands up when its posture changes while paused, as any change does (PRD 21.1)', () => {
+    let ape: Animal | undefined;
+    const runtime = run((inc) => {
+      inc.choice('posture', { options: ['On all fours', 'On two legs'] });
+      const model = inc.model(({ posture }) => ({ mode: posture === 1 ? 'bipedal' : 'quadruped' }));
+      ape = inc.anatomy('#a', { title: 'Ape' }).skeleton('ape');
+      ape.move({ speed: 1, mode: () => model.mode as 'bipedal' | 'quadruped' });
+    });
+    const body = () => nodeOf(ape!.piece('body')).attrs.get('d');
+    const before = body();
+    const hip = ape!.hipHeight;
+    runtime.setParam('posture', 1);
+    for (let i = 0; i < 90; i++) runtime.tick(1 / 60);
+    expect(ape!.mode).toBe('bipedal');
+    expect(ape!.hipHeight).not.toBe(hip);
+    expect(body()).not.toEqual(before);
+    expect(runtime.time).toBe(0);
+  });
+
   it('shows its muscles or its bones under a faded skin', () => {
     const { animal: dog } = animal('dog');
     const hidden = (piece: 'muscles' | 'bones') => nodeOf(dog.piece(piece)).hidden;

@@ -111,7 +111,7 @@ Parts sit on landmarks of the bones and move with them: the eye in the skull, th
 - **Stride length** is 2.3 × hip height × Froude^0.3 (dynamic similarity), and the stride rate is speed over stride, so a mouse's legs blur where a horse's stride is slow and long.
 - **Time on the ground** shortens as speed rises.
 - **Feet stay planted.** A planted foot sweeps back exactly as fast as the ground passes. A foot may sweep at most 1.1 × its leg's reach, so at speeds where it could not, the foot lifts sooner; past what the shortest stance (12% of the stride) can cover, strides grow no longer, only quicker. The legs reach their feet with two-bone inverse kinematics: knees forward, elbows back.
-- **Modes.** `ape.move({ mode: 'bipedal', at: 4 })` stands it up at 4 s over 1.2 s: the body pitches until it balances over the hips (a heavy tail holds it level, no tail stands it up), and the forelimbs hang and swing as arms. A mode the skeleton cannot support is refused: "this skeleton's hindlimbs are too short to walk on two legs".
+- **Modes.** `ape.move({ mode: 'bipedal', at: 4 })` stands it up at 4 s over 1.2 s, and `mode` may be a function of the model, such as a posture choice; the change runs whether the figure plays or is paused (PRD 21.1): the body pitches until it balances over the hips (a heavy tail holds it level, no tail stands it up), and the forelimbs hang and swing as arms. A mode the skeleton cannot support is refused: "this skeleton's hindlimbs are too short to walk on two legs".
 
 The stride advances in fixed steps of 1/60 s while the figure plays, so a run draws the same frames every time, and holds still when paused or under reduced motion.
 
@@ -125,7 +125,7 @@ Readouts come from the same model that moves the animal (PRD 17.2): `gait` (stan
 
 - The catalog lists the `anatomy` capability, so the plan names it and the scene prompt loads its types only for those scenes (PRD 17.9).
 - A scene with the kit is about 10 to 20 lines: a skeleton, a `move`, parts and steps.
-- The reviewed scene `animal-gaits` (a dog walking, trotting and galloping, with its muscles and bones) is retrieved as an example by concept (PRD 25.5).
+- The reviewed scenes `animal-gaits` (a dog walking, trotting and galloping, with its muscles and bones) and `ape-upright` (an ape on its knuckles and on two legs) are retrieved as examples by concept (PRD 25.5). Each names only its own animal, so a mouse or a cheetah prompt goes to the model, not to the dog.
 
 ## Checks
 

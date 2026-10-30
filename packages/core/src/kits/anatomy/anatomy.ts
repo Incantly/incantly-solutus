@@ -294,6 +294,7 @@ class AnimalFigure implements Animal {
   private groundX = 0;
   private clock = 0;
   private blend: number;
+  private settling = false;
   private layer: AnatomyLayer;
   private warned = false;
   private cache: { key: string; plan: GaitPlan } | null = null;
@@ -444,8 +445,6 @@ class AnimalFigure implements Animal {
 
   private step(dt: number): void {
     this.clock += dt;
-    const target = this.wantedMode() === 'bipedal' ? 1 : 0;
-    this.blend = target > this.blend ? Math.min(target, this.blend + dt / TRANSITION) : Math.max(target, this.blend - dt / TRANSITION);
     if (this.ctx.reducedMotion()) return;
     const plan = this.plan();
     this.phase = (this.phase + plan.frequency * dt) % 1;
@@ -539,7 +538,29 @@ class AnimalFigure implements Animal {
     return d;
   }
 
+  /**
+   * Starts the change between four legs and two when the wanted mode differs
+   * from the pose. It runs on the engine's motion hook, playing or paused, so
+   * a learner who switches posture while paused sees it happen (PRD 21.1).
+   */
+  private settleMode(): void {
+    const target = this.wantedMode() === 'bipedal' ? 1 : 0;
+    if (this.blend === target || this.settling) return;
+    if (this.ctx.reducedMotion()) {
+      this.blend = target;
+      return;
+    }
+    this.settling = true;
+    this.ctx.motion((dt) => {
+      const goal = this.wantedMode() === 'bipedal' ? 1 : 0;
+      this.blend = goal > this.blend ? Math.min(goal, this.blend + dt / TRANSITION) : Math.max(goal, this.blend - dt / TRANSITION);
+      this.settling = this.blend !== goal;
+      return this.settling;
+    });
+  }
+
   private draw(): void {
+    this.settleMode();
     const plan = this.plan();
     const reduced = this.ctx.reducedMotion();
     const motion: Motion = { p: this.phase, blend: this.blend, plan, speed: reduced ? 0 : this.currentSpeed(), clock: this.clock, stepMode: this.wantedMode() };
