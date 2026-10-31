@@ -556,8 +556,12 @@ class AnimalFigure implements Animal {
         if (!this.build.modes.includes(mode)) fail(`this skeleton moves ${this.build.modes.join(' or ')}, not ${String(mode)}; give it modes: [...] to allow more`);
         const when = at === undefined ? this.ctx.time() : at;
         if (!(Number.isFinite(when) && when >= 0)) fail('at is a scene time in seconds, 0 or more');
-        this.schedule.push({ at: when, mode });
-        this.schedule.sort((a, b) => a.at - b.at);
+        // A new instruction replaces any for later; of those already past, only the latest still counts.
+        // So a scene may call move every frame without the schedule growing.
+        const now = this.ctx.time();
+        const kept = this.schedule.filter((s) => s.at < when);
+        const past = kept.filter((s) => s.at <= now);
+        this.schedule = [...past.slice(-1), ...kept.filter((s) => s.at > now), { at: when, mode }];
       }
     } else if (at !== undefined) fail('at says when to change mode; give a mode with it');
     this.ctx.markTimeUse();

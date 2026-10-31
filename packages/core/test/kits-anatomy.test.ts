@@ -374,6 +374,19 @@ describe('anatomy: moving and showing', () => {
     expect(runtime.uiState().error).toBeNull();
   });
 
+  it('takes move every frame without slowing down', () => {
+    // A generated scene called move({ speed, mode, at }) in onFrame: the mode schedule grew each frame until frames took 20 ms.
+    let ape: Animal | undefined;
+    const runtime = run((inc) => {
+      ape = inc.anatomy('#a', { title: 'Ape' }).skeleton(BONES.ape);
+      inc.onFrame((f) => ape!.move({ speed: 1, mode: 'quadruped', at: f.time }));
+    });
+    play(runtime, 10);
+    expect((ape as unknown as { schedule: unknown[] }).schedule.length).toBeLessThanOrEqual(2);
+    expect(ape!.mode).toBe('quadruped');
+    expect(runtime.uiState().error).toBeNull();
+  });
+
   it('stands up when its posture changes while paused, as any change does (PRD 21.1)', () => {
     let ape: Animal | undefined;
     const runtime = run((inc) => {
