@@ -100,6 +100,19 @@ describe('the Bedrock client', () => {
     expect(sent(requests[1]!.init).max_tokens).toBe(7_000);
   });
 
+  it('asks a model that runs only through a cross-Region profile again by the profile’s ID', async () => {
+    // Kimi K3 refused on-demand calls by its base ID.
+    const refused = JSON.stringify({ message: 'Invocation of model ID moonshotai.kimi-k3 with on-demand throughput isn’t supported. Retry your request with the ID or ARN of an inference profile that contains this model.' });
+    const { fetcher, requests } = fakeFetch([{ status: 400, body: refused }, { body: STREAM }, { body: STREAM }]);
+    const client = new BedrockClient({ apiKey: 'k', region: 'eu-west-1', fetch: fetcher, retries: 0, models: { plan: 'moonshotai.kimi-k3' } });
+    await client.complete(call());
+    expect(sent(requests[1]!.init).model).toBe('eu.moonshotai.kimi-k3');
+    // Remembered: the next call goes to the profile at once, and records name it.
+    await client.complete(call());
+    expect(sent(requests[2]!.init).model).toBe('eu.moonshotai.kimi-k3');
+    expect(client.modelFor('plan')).toBe('eu.moonshotai.kimi-k3');
+  });
+
   it('asks again without a reasoning effort when a model refuses it', async () => {
     const refused = JSON.stringify({ message: 'Unsupported parameter: reasoning_effort' });
     const { fetcher, requests } = fakeFetch([{ status: 400, body: refused }, { body: STREAM }]);

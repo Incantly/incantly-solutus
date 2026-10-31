@@ -129,7 +129,7 @@ async function geminiProbe(key: string): Promise<{ ok: boolean; message: string;
  * Lists the open-weight text models a Bedrock key can reach in the Region:
  * GLM, DeepSeek, Qwen, Kimi and MiniMax, never Anthropic, OpenAI or xAI.
  */
-async function bedrockProbe(key: string, region: string): Promise<{ ok: boolean; message: string; models?: string[] }> {
+async function bedrockProbe(g: Generation, key: string, region: string): Promise<{ ok: boolean; message: string; models?: string[] }> {
   try {
     const answer = await fetch(`https://bedrock.${region}.amazonaws.com/foundation-models?byOutputModality=TEXT`, {
       headers: { authorization: `Bearer ${key.trim()}` },
@@ -138,14 +138,14 @@ async function bedrockProbe(key: string, region: string): Promise<{ ok: boolean;
     if (!answer.ok) {
       return { ok: false, message: `Bedrock in ${region} answered ${answer.status} (${answer.statusText || 'request failed'}) for that key.` };
     }
-    const payload = (await answer.json()) as { modelSummaries?: Array<{ modelId?: string }> };
+    const payload = (await answer.json()) as { modelSummaries?: Array<{ modelId?: string; inferenceTypesSupported?: string[] }> };
+    const geo = g.bedrockGeo(region);
     const models = (payload.modelSummaries ?? [])
-      .map((m) => m.modelId ?? '')
-      .filter((id) => /^(deepseek|qwen|zai|moonshot|moonshotai|minimax)\./.test(id))
+      .filter((m) => /^(deepseek|qwen|zai|moonshot|moonshotai|minimax)\./.test(m.modelId ?? ''))
       // DeepSeek-R1 and Kimi K2 Thinking have no Chat Completions API on Bedrock.
-      .filter((id) => !/^deepseek\.r1|kimi-k2-thinking/.test(id))
-      // GLM 5.3 runs only through a cross-Region profile.
-      .map((id) => (id === 'zai.glm-5.3' ? `${region.split('-')[0] === 'us' ? 'us' : 'global'}.${id}` : id))
+      .filter((m) => !/^deepseek\.r1|kimi-k2-thinking/.test(m.modelId ?? ''))
+      // A model that runs only through a cross-Region profile, such as GLM 5.3 or Kimi K3, is listed by the profile's name.
+      .map((m) => (m.inferenceTypesSupported && !m.inferenceTypesSupported.includes('ON_DEMAND') ? `${geo}.${m.modelId}` : m.modelId!))
       .sort();
     return { ok: true, message: `Key works in ${region}: ${models.length} GLM, DeepSeek, Qwen, Kimi and MiniMax models visible.`, models };
   } catch (error) {
@@ -279,7 +279,7 @@ function generationService(): Plugin {
             if (!effective) {
               return json(400, { ok: false, message: `No key to check: pass an apiKey in the body or set ${KEY_VARS[provider][0]} on the dev server.` });
             }
-            const probe = provider === 'gemini' ? await geminiProbe(effective) : provider === 'bedrock' ? await bedrockProbe(effective, bedrockRegion()) : await keyProbe(effective);
+            const probe = provider === 'gemini' ? await geminiProbe(effective) : provider === 'bedrock' ? await bedrockProbe(g, effective, bedrockRegion()) : await keyProbe(effective);
             return json(probe.ok ? 200 : 401, { ...probe, provider, source: givenKey !== null ? 'entered' : providerEnv(provider).source });
           }
           const removeSession = /^\/api\/dev\/session\/([\w-]+)$/.exec(path);
