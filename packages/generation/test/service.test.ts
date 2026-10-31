@@ -270,6 +270,19 @@ describe('the generation service', () => {
     expect(records.records[0]!.reports[0]!.text).toContain('FAILURE  runs');
   });
 
+  it('records the total time to the approval, including the repair the device asked for', async () => {
+    // A model slow enough that the repair's own time shows: the total once stopped at the first delivery.
+    const { post, records } = await start({ reference: { fault: 'frame-throw', latencyMs: 60 } });
+    const scene = (await events(await post('/v1/generations', { prompt: 'Show me a sine wave.' }))).at(-1)!.data as unknown as SceneEvent;
+    const failed = await deviceProbe(scene);
+    const repaired = (await (await post(`/v1/generations/${scene.generationId}/probe`, { ok: false, report: failed })).json()) as SceneEvent;
+    expect((await deviceProbe(repaired)).ok).toBe(true);
+    await post(`/v1/generations/${scene.generationId}/probe`, { ok: true });
+    const { timings } = records.records[0]!;
+    expect(timings.repairMs).toBeGreaterThan(0);
+    expect(timings.totalMs).toBeGreaterThanOrEqual((timings.planMs ?? 0) + (timings.sceneMs ?? 0) + timings.repairMs);
+  });
+
   it('falls back to the reviewed figure for the concept when the repair does not help', async () => {
     const { post, records } = await start({ reference: { fault: 'missing-part', stubborn: true } });
     const scene = (await events(await post('/v1/generations', { prompt: 'How does a convex lens form an image?' }))).at(-1)!.data as unknown as SceneEvent;

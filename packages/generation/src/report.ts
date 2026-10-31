@@ -107,6 +107,8 @@ function where(fragment: FragmentName | 'scene', line: number | undefined, colum
 }
 
 function header(attempt: number, of: number): string {
+  // A failure after the last repair is recorded, not repaired: it is not numbered as a repair that never runs.
+  if (attempt > of) return `FAILED after ${of} repairs: the figure still fails its check.`;
   return `REPAIR ${attempt} of ${of}: the figure failed its check. Return only the fragments you change, each in its fenced block.`;
 }
 
