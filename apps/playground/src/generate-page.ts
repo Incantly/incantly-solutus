@@ -328,10 +328,15 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
     ['claude-opus-5-5', 'Claude Opus 5.5'],
   ];
   let geminiModels: string[] = ['gemini-3.5-flash-lite', 'gemini-3.8-flash'];
+  /** The newest numbered Gemini model of a kind, such as gemini-3.8-flash, over aliases and previews. */
+  const newest = (ids: readonly string[], kind: RegExp) =>
+    ids
+      .filter((id) => kind.test(id))
+      .sort((a, b) => Number(/^gemini-([\d.]+)/.exec(b)?.[1] ?? 0) - Number(/^gemini-([\d.]+)/.exec(a)?.[1] ?? 0))[0];
   /** The provider's usual pick: a small fast model plans, a balanced one builds. */
   const defaultsFor = (provider: string, ids: readonly string[]) =>
     provider === 'gemini'
-      ? { plan: ids.find((id) => /flash-lite/.test(id)) ?? ids[0]!, scene: ids.find((id) => /flash(?!-lite)/.test(id)) ?? ids[0]! }
+      ? { plan: newest(ids, /^gemini-[\d.]+-flash-lite$/) ?? ids[0]!, scene: newest(ids, /^gemini-[\d.]+-flash$/) ?? ids[0]! }
       : { plan: 'claude-haiku-5-5', scene: 'claude-sonnet-5-5' };
   const fillModels = (wanted?: { planModel?: string; sceneModel?: string }) => {
     const provider = providerSelect.value;
