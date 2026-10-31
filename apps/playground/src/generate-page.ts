@@ -139,7 +139,7 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
         </div>
         <div class="setting-group">
           <label for="planning-model">Planning Model</label>
-          <p class="setting-description">A fast model that plans what the figure will teach (default: Haiku)</p>
+          <p class="setting-description">A fast model that plans what the figure will teach</p>
           <select id="planning-model" class="setting-select">
             <option value="claude-haiku-5-5">Claude Haiku 5.5</option>
             <option value="claude-sonnet-5-5">Claude Sonnet 5.5</option>
@@ -148,7 +148,7 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
         </div>
         <div class="setting-group">
           <label for="scene-model">Scene Generation Model</label>
-          <p class="setting-description">A capable model that builds the interactive scene (default: Sonnet)</p>
+          <p class="setting-description">A capable model that builds the interactive scene</p>
           <select id="scene-model" class="setting-select">
             <option value="claude-haiku-5-5">Claude Haiku 5.5</option>
             <option value="claude-sonnet-5-5" selected>Claude Sonnet 5.5</option>
