@@ -98,7 +98,7 @@ async function geminiProbe(key: string): Promise<{ ok: boolean; message: string;
     const models = (payload.models ?? [])
       .filter((m) => (m.supportedGenerationMethods ?? []).includes('generateContent'))
       .map((m) => (m.name ?? '').replace(/^models\//, ''))
-      .filter((name) => /^gemini-/.test(name) && !/(embedding|image|tts|audio|live)/.test(name))
+      .filter((name) => /^gemini-/.test(name) && !/(embedding|image|tts|audio|live|robotics|banana|transcribe|omni|computer-use|customtools)/.test(name))
       .sort()
       .reverse();
     return { ok: true, message: `Key works: ${models.length} Gemini models visible.`, models };
