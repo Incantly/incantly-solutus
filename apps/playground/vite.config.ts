@@ -142,6 +142,10 @@ async function bedrockProbe(key: string, region: string): Promise<{ ok: boolean;
     const models = (payload.modelSummaries ?? [])
       .map((m) => m.modelId ?? '')
       .filter((id) => /^(deepseek|qwen|zai|moonshot|moonshotai|minimax)\./.test(id))
+      // DeepSeek-R1 and Kimi K2 Thinking have no Chat Completions API on Bedrock.
+      .filter((id) => !/^deepseek\.r1|kimi-k2-thinking/.test(id))
+      // GLM 5.3 runs only through a cross-Region profile.
+      .map((id) => (id === 'zai.glm-5.3' ? `${region.split('-')[0] === 'us' ? 'us' : 'global'}.${id}` : id))
       .sort();
     return { ok: true, message: `Key works in ${region}: ${models.length} GLM, DeepSeek, Qwen, Kimi and MiniMax models visible.`, models };
   } catch (error) {
