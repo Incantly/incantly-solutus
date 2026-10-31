@@ -279,6 +279,26 @@ describe('the generation pipeline', () => {
     expect(state.repairsUsed).toBe(1);
   });
 
+  it('never lets edit markers reach the script, and says why', async () => {
+    const scene = REFERENCE_SCENES.projectile!;
+    const faulty = faultyScript(scene, 'forbidden-call');
+    const fenced = (js: string) => `\`\`\`html\n${scene.html}\n\`\`\`\n\`\`\`css\n${scene.css}\n\`\`\`\n\`\`\`js\n${js}\n\`\`\`\n`;
+    let repairs = 0;
+    const model = new ScriptedModel((call) => {
+      if (call.purpose === 'plan') return `Here is the plan.\n\`\`\`json\n${JSON.stringify(scene.plan)}\n\`\`\`\n`;
+      if (call.purpose === 'scene') return fenced(faulty);
+      repairs++;
+      // A whole script with a divider left in it, as a broken chain of edits leaves one.
+      return repairs === 1 ? `\`\`\`js\n${scene.js}\n=======\n\`\`\`\n` : `\`\`\`js\n${scene.js}\n\`\`\`\n`;
+    });
+    const state = await new Generator({ model, probe: isolatedProbe, adapt: false, retrieve: false }).generate({ prompt: REQUESTS.projectile });
+    const refused = state.attempts[1]!;
+    expect(refused.failed).toBe('reply');
+    expect(refused.fragments.js).toBe(state.attempts[0]!.fragments.js);
+    expect(refused.report?.text).toContain('would have kept a SEARCH, ======= or REPLACE line as code');
+    expect(state.status).toBe('approved');
+  });
+
   it('never lets a piece of the script, sent as a whole js block, replace the script', async () => {
     const scene = REFERENCE_SCENES.projectile!;
     const faulty = faultyScript(scene, 'forbidden-call');
