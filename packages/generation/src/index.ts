@@ -10,6 +10,8 @@ export { FragmentStream, parseFragments, parsePlanReply } from './fragments';
 export type { FragmentName, FragmentSet } from './fragments';
 export { AnthropicClient, DEFAULT_MODELS, MODEL_PRICES, ModelError, ScriptedModel, costOf } from './models';
 export { DEFAULT_GEMINI_MODELS, GeminiClient } from './gemini';
+export { BEDROCK_MODEL, BedrockClient, DEFAULT_BEDROCK_MODELS } from './bedrock';
+export type { BedrockEffort, BedrockOptions } from './bedrock';
 export type { GeminiOptions, GeminiThinking } from './gemini';
 export type { CallPurpose, ModelCall, ModelClient, ModelReply, ModelUsage } from './models';
 export { likelyCause, parseReport, probeReport, repairPrompt, validationReport } from './report';

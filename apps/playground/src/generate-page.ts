@@ -130,10 +130,11 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
       <div class="settings-body">
         <div class="setting-group">
           <label for="model-provider">Provider</label>
-          <p class="setting-description">Whose models plan and build the figure. Gemini uses the dev server's GEMINI_API_KEY.</p>
+          <p class="setting-description">Whose models plan and build the figure. Gemini uses the dev server's GEMINI_API_KEY; Bedrock uses AWS_BEARER_TOKEN_BEDROCK and AWS_REGION, and offers only open-weight GLM, DeepSeek, Qwen, Kimi and MiniMax models.</p>
           <select id="model-provider" class="setting-select">
             <option value="anthropic" selected>Anthropic</option>
             <option value="gemini">Google Gemini</option>
+            <option value="bedrock">Amazon Bedrock (GLM, DeepSeek, Qwen, Kimi, MiniMax)</option>
           </select>
         </div>
         <div class="setting-group">
@@ -156,7 +157,7 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
         </div>
         <div class="setting-group">
           <label for="api-key-test">Connection</label>
-          <p class="setting-description">The dev server's ANTHROPIC_API_KEY or GEMINI_API_KEY is used; copy apps/playground/.env.example to .env and set it there. Testing a Gemini key also lists the models it can reach.</p>
+          <p class="setting-description">The dev server's ANTHROPIC_API_KEY, GEMINI_API_KEY or AWS_BEARER_TOKEN_BEDROCK is used; copy apps/playground/.env.example to .env and set it there. Testing a Gemini or Bedrock key also lists the models it can reach.</p>
           <button type="button" class="test-key-btn" id="api-key-test">Test connection</button>
           <p class="test-key-status" hidden></p>
         </div>
@@ -327,7 +328,12 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
     ['claude-sonnet-5-5', 'Claude Sonnet 5.5'],
     ['claude-opus-5-5', 'Claude Opus 5.5'],
   ];
-  let geminiModels: string[] = ['gemini-3.5-flash-lite', 'gemini-3.8-flash'];
+  // Each listing provider's models: defaults until a key check lists the ones it can reach.
+  const listed: Record<'gemini' | 'bedrock', string[]> = {
+    gemini: ['gemini-3.5-flash-lite', 'gemini-3.8-flash'],
+    bedrock: ['zai.glm-4.7-flash', 'zai.glm-4.7', 'deepseek.v3.2'],
+  };
+  const listing = (provider: string): provider is 'gemini' | 'bedrock' => provider === 'gemini' || provider === 'bedrock';
   /** The newest numbered Gemini model of a kind, such as gemini-3.8-flash, over aliases and previews. */
   const newest = (ids: readonly string[], kind: RegExp) =>
     ids
@@ -337,10 +343,12 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
   const defaultsFor = (provider: string, ids: readonly string[]) =>
     provider === 'gemini'
       ? { plan: newest(ids, /^gemini-[\d.]+-flash-lite$/) ?? ids[0]!, scene: newest(ids, /^gemini-[\d.]+-flash$/) ?? ids[0]! }
-      : { plan: 'claude-haiku-5-5', scene: 'claude-sonnet-5-5' };
+      : provider === 'bedrock'
+        ? { plan: ids.find((id) => id === 'zai.glm-4.7-flash') ?? ids[0]!, scene: ids.find((id) => id === 'zai.glm-4.7') ?? ids[0]! }
+        : { plan: 'claude-haiku-5-5', scene: 'claude-sonnet-5-5' };
   const fillModels = (wanted?: { planModel?: string; sceneModel?: string }) => {
     const provider = providerSelect.value;
-    const options = provider === 'gemini' ? geminiModels.map((id) => [id, id] as const) : ANTHROPIC_MODELS;
+    const options = listing(provider) ? listed[provider].map((id) => [id, id] as const) : ANTHROPIC_MODELS;
     const picks = defaultsFor(provider, options.map(([id]) => id));
     for (const [select, fallback, want] of [
       [planningModelSelect, picks.plan, wanted?.planModel],
@@ -354,13 +362,14 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
   // The chosen provider and models carry across visits; the keys stay in the dev server's .env.
   const MODEL_KEY = 'incantly-playground-models';
   const saveModels = () =>
-    localStorage.setItem(MODEL_KEY, JSON.stringify({ provider: providerSelect.value, planModel: planningModelSelect.value, sceneModel: sceneModelSelect.value, geminiModels }));
+    localStorage.setItem(MODEL_KEY, JSON.stringify({ provider: providerSelect.value, planModel: planningModelSelect.value, sceneModel: sceneModelSelect.value, listed }));
   try {
-    const modelsSaved = JSON.parse(localStorage.getItem(MODEL_KEY) ?? 'null') as { provider?: string; planModel?: string; sceneModel?: string; geminiModels?: unknown } | null;
-    if (Array.isArray(modelsSaved?.geminiModels) && modelsSaved.geminiModels.every((m) => typeof m === 'string' && /^gemini-/.test(m)) && modelsSaved.geminiModels.length > 0) {
-      geminiModels = modelsSaved.geminiModels as string[];
+    const modelsSaved = JSON.parse(localStorage.getItem(MODEL_KEY) ?? 'null') as { provider?: string; planModel?: string; sceneModel?: string; listed?: Record<string, unknown> } | null;
+    for (const provider of ['gemini', 'bedrock'] as const) {
+      const saved = modelsSaved?.listed?.[provider];
+      if (Array.isArray(saved) && saved.length > 0 && saved.every((m) => typeof m === 'string' && m.length < 100)) listed[provider] = saved as string[];
     }
-    if (modelsSaved?.provider === 'gemini' || modelsSaved?.provider === 'anthropic') providerSelect.value = modelsSaved.provider;
+    if ([...providerSelect.options].some((o) => o.value === modelsSaved?.provider)) providerSelect.value = modelsSaved!.provider!;
     fillModels(modelsSaved ?? undefined);
   } catch {
     // No saved models, or a shape we cannot use: defaults it is.
@@ -400,7 +409,7 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
     testKeyStatus.hidden = false;
     testKeyStatus.className = 'test-key-status pending';
     const provider = providerSelect.value;
-    testKeyStatus.textContent = `Checking with ${provider === 'gemini' ? 'Google' : 'Anthropic'}…`;
+    testKeyStatus.textContent = `Checking with ${provider === 'gemini' ? 'Google' : provider === 'bedrock' ? 'Amazon Bedrock' : 'Anthropic'}…`;
     try {
       const answer = await fetch('/api/dev/models', {
         method: 'POST',
@@ -408,9 +417,9 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
         body: JSON.stringify({ provider }),
       });
       const result = (await answer.json()) as { ok?: boolean; message?: string; source?: string; models?: string[] };
-      // A Gemini key lists the models it can reach: offer those.
-      if (provider === 'gemini' && result.ok && result.models && result.models.length > 0) {
-        geminiModels = result.models;
+      // A Gemini or Bedrock key lists the models it can reach: offer those.
+      if (listing(provider) && result.ok && result.models && result.models.length > 0) {
+        listed[provider] = result.models;
         fillModels({ planModel: planningModelSelect.value, sceneModel: sceneModelSelect.value });
         saveModels();
       }
