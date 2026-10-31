@@ -379,7 +379,8 @@ export class AnthropicClient implements ModelClient {
   }
 }
 
-async function httpError(response: Response): Promise<ModelError> {
+/** A provider's failed response as a ModelError: its status picks the kind, its error message the text. */
+export async function httpError(response: Response): Promise<ModelError> {
   let detail = '';
   try {
     const body = (await response.json()) as { error?: { message?: string } };

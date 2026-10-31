@@ -129,6 +129,14 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
       </div>
       <div class="settings-body">
         <div class="setting-group">
+          <label for="model-provider">Provider</label>
+          <p class="setting-description">Whose models plan and build the figure. Gemini uses the dev server's GEMINI_API_KEY.</p>
+          <select id="model-provider" class="setting-select">
+            <option value="anthropic" selected>Anthropic</option>
+            <option value="gemini">Google Gemini</option>
+          </select>
+        </div>
+        <div class="setting-group">
           <label for="planning-model">Planning Model</label>
           <p class="setting-description">A fast model that plans what the figure will teach (default: Haiku)</p>
           <select id="planning-model" class="setting-select">
@@ -148,7 +156,7 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
         </div>
         <div class="setting-group">
           <label for="api-key-test">Connection</label>
-          <p class="setting-description">The dev server's ANTHROPIC_API_KEY is used; copy apps/playground/.env.example to .env and set it there.</p>
+          <p class="setting-description">The dev server's ANTHROPIC_API_KEY or GEMINI_API_KEY is used; copy apps/playground/.env.example to .env and set it there. Testing a Gemini key also lists the models it can reach.</p>
           <button type="button" class="test-key-btn" id="api-key-test">Test connection</button>
           <p class="test-key-status" hidden></p>
         </div>
@@ -309,21 +317,60 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
   const chatList = sidebar.querySelector('.chat-list') as HTMLDivElement;
   const settingsBtn = sidebar.querySelector('.settings-btn') as HTMLButtonElement;
   const closeSettingsBtn = settingsModal.querySelector('.close-settings-btn') as HTMLButtonElement;
+  const providerSelect = settingsModal.querySelector('#model-provider') as HTMLSelectElement;
   const planningModelSelect = settingsModal.querySelector('#planning-model') as HTMLSelectElement;
   const sceneModelSelect = settingsModal.querySelector('#scene-model') as HTMLSelectElement;
 
-  // The chosen models carry across visits; the key stays in the dev server's .env.
+  // Each provider's models. Anthropic's are fixed; Gemini's change often, so testing the key replaces these with the ones it can reach.
+  const ANTHROPIC_MODELS: ReadonlyArray<readonly [string, string]> = [
+    ['claude-haiku-5-5', 'Claude Haiku 5.5'],
+    ['claude-sonnet-5-5', 'Claude Sonnet 5.5'],
+    ['claude-opus-5-5', 'Claude Opus 5.5'],
+  ];
+  let geminiModels: string[] = ['gemini-3.5-flash-lite', 'gemini-3.8-flash'];
+  /** The provider's usual pick: a small fast model plans, a balanced one builds. */
+  const defaultsFor = (provider: string, ids: readonly string[]) =>
+    provider === 'gemini'
+      ? { plan: ids.find((id) => /flash-lite/.test(id)) ?? ids[0]!, scene: ids.find((id) => /flash(?!-lite)/.test(id)) ?? ids[0]! }
+      : { plan: 'claude-haiku-5-5', scene: 'claude-sonnet-5-5' };
+  const fillModels = (wanted?: { planModel?: string; sceneModel?: string }) => {
+    const provider = providerSelect.value;
+    const options = provider === 'gemini' ? geminiModels.map((id) => [id, id] as const) : ANTHROPIC_MODELS;
+    const picks = defaultsFor(provider, options.map(([id]) => id));
+    for (const [select, fallback, want] of [
+      [planningModelSelect, picks.plan, wanted?.planModel],
+      [sceneModelSelect, picks.scene, wanted?.sceneModel],
+    ] as const) {
+      select.replaceChildren(...options.map(([id, label]) => new Option(label, id)));
+      select.value = want && options.some(([id]) => id === want) ? want : fallback;
+    }
+  };
+
+  // The chosen provider and models carry across visits; the keys stay in the dev server's .env.
   const MODEL_KEY = 'incantly-playground-models';
+  const saveModels = () =>
+    localStorage.setItem(MODEL_KEY, JSON.stringify({ provider: providerSelect.value, planModel: planningModelSelect.value, sceneModel: sceneModelSelect.value, geminiModels }));
   try {
-    const modelsSaved = JSON.parse(localStorage.getItem(MODEL_KEY) ?? 'null') as { planModel?: string; sceneModel?: string } | null;
-    if (modelsSaved && [...planningModelSelect.options].some((o) => o.value === modelsSaved.planModel)) planningModelSelect.value = modelsSaved.planModel!;
-    if (modelsSaved && [...sceneModelSelect.options].some((o) => o.value === modelsSaved.sceneModel)) sceneModelSelect.value = modelsSaved.sceneModel!;
+    const modelsSaved = JSON.parse(localStorage.getItem(MODEL_KEY) ?? 'null') as { provider?: string; planModel?: string; sceneModel?: string; geminiModels?: unknown } | null;
+    if (Array.isArray(modelsSaved?.geminiModels) && modelsSaved.geminiModels.every((m) => typeof m === 'string' && /^gemini-/.test(m)) && modelsSaved.geminiModels.length > 0) {
+      geminiModels = modelsSaved.geminiModels as string[];
+    }
+    if (modelsSaved?.provider === 'gemini' || modelsSaved?.provider === 'anthropic') providerSelect.value = modelsSaved.provider;
+    fillModels(modelsSaved ?? undefined);
   } catch {
     // No saved models, or a shape we cannot use: defaults it is.
+    fillModels();
   }
+  providerSelect.addEventListener('change', () => {
+    fillModels();
+    saveModels();
+    // A new provider needs a new session: the next message starts one.
+    resetSession();
+  });
   for (const select of [planningModelSelect, sceneModelSelect]) {
     select.addEventListener('change', () => {
-      localStorage.setItem(MODEL_KEY, JSON.stringify({ planModel: planningModelSelect.value, sceneModel: sceneModelSelect.value }));
+      saveModels();
+      resetSession();
     });
   }
 
@@ -347,14 +394,21 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
     testKeyBtn.disabled = true;
     testKeyStatus.hidden = false;
     testKeyStatus.className = 'test-key-status pending';
-    testKeyStatus.textContent = 'Checking with Anthropic…';
+    const provider = providerSelect.value;
+    testKeyStatus.textContent = `Checking with ${provider === 'gemini' ? 'Google' : 'Anthropic'}…`;
     try {
       const answer = await fetch('/api/dev/models', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ provider }),
       });
-      const result = (await answer.json()) as { ok?: boolean; message?: string; source?: string };
+      const result = (await answer.json()) as { ok?: boolean; message?: string; source?: string; models?: string[] };
+      // A Gemini key lists the models it can reach: offer those.
+      if (provider === 'gemini' && result.ok && result.models && result.models.length > 0) {
+        geminiModels = result.models;
+        fillModels({ planModel: planningModelSelect.value, sceneModel: sceneModelSelect.value });
+        saveModels();
+      }
       testKeyStatus.className = `test-key-status ${result.ok ? 'ok' : 'fail'}`;
       testKeyStatus.textContent = `${result.ok ? '✓' : '✗'} ${result.message ?? answer.statusText} (key source: ${result.source ?? 'unknown'})`;
     } catch (error) {
@@ -510,6 +564,14 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
     });
   }
 
+  /** Ends the model session, so the next message starts one with the provider and models now chosen. */
+  function resetSession(): void {
+    if (!sessionId) return;
+    void fetch(`/api/dev/session/${sessionId}`, { method: 'DELETE', keepalive: true });
+    sessionId = null;
+    client = null;
+  }
+
   function useClient(baseUrl: string, _label: string): void {
     token = null;
     client = new GenerationClient({ baseUrl, token: async () => (token ??= ((await (await fetch('/api/dev/token')).json()) as { token: string }).token), fetch: recordingFetch() });
@@ -522,6 +584,7 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
     inputBox.disabled = busy;
     sendBtn.disabled = busy || !inputBox.value.trim();
     newChatBtn.disabled = busy;
+    providerSelect.disabled = busy;
     planningModelSelect.disabled = busy;
     sceneModelSelect.disabled = busy;
     sendBtn.setAttribute('aria-busy', String(busy));
@@ -535,6 +598,7 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
+          provider: providerSelect.value,
           planModel: planningModelSelect.value,
           sceneModel: sceneModelSelect.value,
         }),
