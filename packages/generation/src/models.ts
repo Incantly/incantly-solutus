@@ -383,8 +383,9 @@ export class AnthropicClient implements ModelClient {
 export async function httpError(response: Response): Promise<ModelError> {
   let detail = '';
   try {
-    const body = (await response.json()) as { error?: { message?: string } };
-    detail = body.error?.message ?? '';
+    // Anthropic, Gemini and OpenAI-style APIs nest the message under error; AWS puts it at the top.
+    const body = (await response.json()) as { error?: { message?: string }; message?: string; Message?: string };
+    detail = body.error?.message ?? body.message ?? body.Message ?? '';
   } catch {
     // Not JSON.
   }

@@ -21,15 +21,17 @@ import { defineConfig, loadEnv, type Plugin, type ViteDevServer } from 'vite';
  * card from it in any browser, and it survives a restart of this server.
  *
  * The interactive playground creates an ephemeral model session at
- * /api/dev/session, with Anthropic or Gemini as its provider. Its API key
+ * /api/dev/session, with Anthropic, Gemini or Amazon Bedrock (open-weight
+ * GLM, DeepSeek, Qwen, Kimi and MiniMax models) as its provider. Its API key
  * stays only in this process's memory and is addressed from the browser by an
  * opaque id.
  *
  * The dev server also serves a key check at /api/dev/models: it calls the
  * provider's models endpoint with the key given in the body, or with the
- * server's ANTHROPIC_API_KEY or GEMINI_API_KEY env var when no key is given,
- * and reports whether it works and, for Gemini, which models the key can
- * reach. Shell env vars win over .env files.
+ * server's ANTHROPIC_API_KEY, GEMINI_API_KEY or AWS_BEARER_TOKEN_BEDROCK env
+ * var when no key is given, and reports whether it works and, for Gemini and
+ * Bedrock, which models the key can reach. Bedrock uses AWS_REGION, default
+ * us-east-1. Shell env vars win over .env files.
  */
 const DEV_SECRET = 'playground-only-secret-never-used-in-production';
 const FIGURES_FILE = fileURLToPath(new URL('./.generated/figures.json', import.meta.url));
@@ -62,22 +64,38 @@ function readFigure(input: unknown): KeptFigure | null {
 }
 const DEV_TICKET_SECRET = 'playground-only-ticket-secret-never-used-in-production';
 
-type Provider = 'anthropic' | 'gemini';
+type Provider = 'anthropic' | 'gemini' | 'bedrock';
 
 /** The env vars each provider's key may come from, first match winning. */
 const KEY_VARS: Readonly<Record<Provider, readonly string[]>> = {
   anthropic: ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'],
   gemini: ['GEMINI_API_KEY', 'GOOGLE_API_KEY'],
+  bedrock: ['AWS_BEARER_TOKEN_BEDROCK', 'BEDROCK_API_KEY'],
 };
+
+const isProvider = (value: unknown): value is Provider => value === 'anthropic' || value === 'gemini' || value === 'bedrock';
+
+/** The dev server's model settings from the .env files beside this config and the shell, the shell winning. */
+function devEnv(): Record<string, string> {
+  // .env files live beside this config; a dev server started from another directory must still find them.
+  const prefixes = ['ANTHROPIC_', 'GEMINI_', 'GOOGLE_', 'AWS_', 'BEDROCK_'];
+  return {
+    ...loadEnv('development', process.cwd(), prefixes),
+    ...loadEnv('development', fileURLToPath(new URL('.', import.meta.url)), prefixes),
+  };
+}
+
+/** The AWS Region Bedrock calls go to. */
+function bedrockRegion(): string {
+  const env = devEnv();
+  const region = process.env.AWS_REGION ?? process.env.BEDROCK_REGION ?? env.AWS_REGION ?? env.BEDROCK_REGION ?? 'us-east-1';
+  return /^[a-z]{2}(-[a-z]+)+-\d$/.test(region) ? region : 'us-east-1';
+}
 
 function providerEnv(provider: Provider): { key: string | null; source: string } {
   // .env files live beside this config; a dev server started from another
   // directory must still find them. Shell env vars win over both files.
-  const prefixes = ['ANTHROPIC_', 'GEMINI_', 'GOOGLE_'];
-  const env = {
-    ...loadEnv('development', process.cwd(), prefixes),
-    ...loadEnv('development', fileURLToPath(new URL('.', import.meta.url)), prefixes),
-  };
+  const env = devEnv();
   const names = KEY_VARS[provider];
   const fromShell = names.map((name) => process.env[name]).find((value) => value) ?? null;
   const key = fromShell ?? names.map((name) => env[name]).find((value) => value) ?? null;
@@ -104,6 +122,30 @@ async function geminiProbe(key: string): Promise<{ ok: boolean; message: string;
     return { ok: true, message: `Key works: ${models.length} Gemini models visible.`, models };
   } catch (error) {
     return { ok: false, message: `Could not reach Google: ${error instanceof Error ? error.message : String(error)}` };
+  }
+}
+
+/**
+ * Lists the open-weight text models a Bedrock key can reach in the Region:
+ * GLM, DeepSeek, Qwen, Kimi and MiniMax, never Anthropic, OpenAI or xAI.
+ */
+async function bedrockProbe(key: string, region: string): Promise<{ ok: boolean; message: string; models?: string[] }> {
+  try {
+    const answer = await fetch(`https://bedrock.${region}.amazonaws.com/foundation-models?byOutputModality=TEXT`, {
+      headers: { authorization: `Bearer ${key.trim()}` },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!answer.ok) {
+      return { ok: false, message: `Bedrock in ${region} answered ${answer.status} (${answer.statusText || 'request failed'}) for that key.` };
+    }
+    const payload = (await answer.json()) as { modelSummaries?: Array<{ modelId?: string }> };
+    const models = (payload.modelSummaries ?? [])
+      .map((m) => m.modelId ?? '')
+      .filter((id) => /^(deepseek|qwen|zai|moonshot|moonshotai|minimax)\./.test(id))
+      .sort();
+    return { ok: true, message: `Key works in ${region}: ${models.length} GLM, DeepSeek, Qwen, Kimi and MiniMax models visible.`, models };
+  } catch (error) {
+    return { ok: false, message: `Could not reach Bedrock: ${error instanceof Error ? error.message : String(error)}` };
   }
 }
 
@@ -136,9 +178,11 @@ function generationService(): Plugin {
   >();
   const sessions = new Map<string, { provider: Provider; apiKey: string; planModel: string; sceneModel: string }>();
   const anthropicModels = new Set(['claude-haiku-5-5', 'claude-sonnet-5-5', 'claude-opus-5-5']);
-  // Gemini's names change often, so any Gemini model name is taken; the key check lists the real ones.
-  const supported = (provider: Provider, model: unknown): model is string =>
-    typeof model === 'string' && (provider === 'gemini' ? /^gemini-[\w.-]{1,60}$/.test(model) : anthropicModels.has(model));
+  // Gemini's and Bedrock's names change often, so any name of the right family is taken; the key check lists the real ones.
+  // Bedrock takes only open-weight GLM, DeepSeek, Qwen, Kimi and MiniMax models.
+  const supported = (g: Generation, provider: Provider, model: unknown): model is string =>
+    typeof model === 'string' &&
+    (provider === 'gemini' ? /^gemini-[\w.-]{1,60}$/.test(model) : provider === 'bedrock' ? g.BEDROCK_MODEL.test(model) : anthropicModels.has(model));
 
   async function body(req: IncomingMessage, limit = 16_384): Promise<unknown> {
     const chunks: Buffer[] = [];
@@ -165,7 +209,9 @@ function generationService(): Plugin {
       session && chosen
         ? session.provider === 'gemini'
           ? new g.GeminiClient({ apiKey: session.apiKey, models: chosen })
-          : new g.AnthropicClient({ apiKey: session.apiKey, models: chosen })
+          : session.provider === 'bedrock'
+            ? new g.BedrockClient({ apiKey: session.apiKey, region: bedrockRegion(), models: chosen })
+            : new g.AnthropicClient({ apiKey: session.apiKey, models: chosen })
         : g.referenceModel({ fault: name, stubborn, latencyMs: 250, chunk: 48 });
     const records = new g.MemoryRecords();
     gallery ??= new g.MemoryGalleryStore();
@@ -204,32 +250,32 @@ function generationService(): Plugin {
           };
           if (path === '/api/dev/session' && req.method === 'POST') {
             const input = (await body(req)) as { provider?: unknown; apiKey?: unknown; planModel?: unknown; sceneModel?: unknown };
-            const provider: Provider = input.provider === 'gemini' ? 'gemini' : 'anthropic';
+            const provider: Provider = isProvider(input.provider) ? input.provider : 'anthropic';
             const givenKey = typeof input.apiKey === 'string' && input.apiKey.trim().length >= 20 ? input.apiKey.trim() : null;
             const effective = givenKey ?? providerEnv(provider).key;
             if (!effective) {
               return json(400, {
                 message:
-                  provider === 'gemini'
-                    ? 'Set GEMINI_API_KEY in apps/playground/.env (or the dev server environment) to generate with Gemini.'
-                    : 'Enter a valid Anthropic API key, or set ANTHROPIC_API_KEY in the dev server environment.',
+                  provider === 'anthropic'
+                    ? 'Enter a valid Anthropic API key, or set ANTHROPIC_API_KEY in the dev server environment.'
+                    : `Set ${KEY_VARS[provider][0]} in apps/playground/.env (or the dev server environment) to generate with ${provider === 'gemini' ? 'Gemini' : 'Bedrock'}.`,
               });
             }
-            if (!supported(provider, input.planModel)) return json(400, { message: 'Choose a supported planning model.' });
-            if (!supported(provider, input.sceneModel)) return json(400, { message: 'Choose a supported scene model.' });
+            if (!supported(g, provider, input.planModel)) return json(400, { message: 'Choose a supported planning model.' });
+            if (!supported(g, provider, input.sceneModel)) return json(400, { message: 'Choose a supported scene model.' });
             const id = randomUUID();
             sessions.set(id, { provider, apiKey: effective, planModel: input.planModel, sceneModel: input.sceneModel });
             return json(201, { id, baseUrl: `/api/session/${id}/v1`, keySource: givenKey !== null ? 'entered' : 'env' });
           }
           if (path === '/api/dev/models' && req.method === 'POST') {
             const input = (await body(req)) as { provider?: unknown; apiKey?: unknown };
-            const provider: Provider = input.provider === 'gemini' ? 'gemini' : 'anthropic';
+            const provider: Provider = isProvider(input.provider) ? input.provider : 'anthropic';
             const givenKey = typeof input.apiKey === 'string' && input.apiKey !== '' ? input.apiKey.trim() : null;
             const effective = givenKey ?? providerEnv(provider).key;
             if (!effective) {
               return json(400, { ok: false, message: `No key to check: pass an apiKey in the body or set ${KEY_VARS[provider][0]} on the dev server.` });
             }
-            const probe = provider === 'gemini' ? await geminiProbe(effective) : await keyProbe(effective);
+            const probe = provider === 'gemini' ? await geminiProbe(effective) : provider === 'bedrock' ? await bedrockProbe(effective, bedrockRegion()) : await keyProbe(effective);
             return json(probe.ok ? 200 : 401, { ...probe, provider, source: givenKey !== null ? 'entered' : providerEnv(provider).source });
           }
           const removeSession = /^\/api\/dev\/session\/([\w-]+)$/.exec(path);
