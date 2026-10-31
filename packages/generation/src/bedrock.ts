@@ -18,6 +18,15 @@ export const DEFAULT_BEDROCK_MODELS: Readonly<Record<CallPurpose, string>> = {
 /** Model families this provider takes, with an optional cross-Region prefix such as us. or global. */
 export const BEDROCK_MODEL = /^(?:(?:us|eu|apac|jp|au|global)\.)?(?:deepseek|qwen|zai|moonshot|moonshotai|minimax)\.[\w.:-]{1,80}$/;
 
+/** The cross-Region inference profile prefix for an AWS Region: us, eu, apac, or global elsewhere. */
+export function bedrockGeo(region: string): string {
+  const area = region.split('-')[0];
+  return area === 'us' ? 'us' : area === 'eu' ? 'eu' : area === 'ap' ? 'apac' : 'global';
+}
+
+/** Whether a model ID already names a cross-Region inference profile. */
+const PROFILED = /^(?:us|eu|apac|jp|au|global)\./;
+
 /** Largest replies, in tokens, of models that allow less than a scene may ask for. */
 const OUTPUT_CAPS: ReadonlyArray<readonly [RegExp, number]> = [[/deepseek\.v3/, 8_192]];
 
@@ -52,6 +61,8 @@ export class BedrockClient implements ModelClient {
   private readonly noEffort = new Set<string>();
   /** Models that refused the reply's length, with the largest they took. */
   private readonly caps = new Map<string, number>();
+  /** Models Bedrock serves only through a cross-Region profile, by the profile's ID. */
+  private readonly profiles = new Map<string, string>();
 
   constructor(private readonly options: BedrockOptions) {
     if (!options.apiKey) throw new Error('A Bedrock API key is required');
@@ -63,7 +74,8 @@ export class BedrockClient implements ModelClient {
   }
 
   modelFor(purpose: CallPurpose): string {
-    return this.options.models?.[purpose] ?? DEFAULT_BEDROCK_MODELS[purpose];
+    const model = this.options.models?.[purpose] ?? DEFAULT_BEDROCK_MODELS[purpose];
+    return this.profiles.get(model) ?? model;
   }
 
   private endpoint(): string {
@@ -107,6 +119,13 @@ export class BedrockClient implements ModelClient {
         last = error;
         const model = this.modelFor(call.purpose);
         // A model that refuses a setting is asked again without it: twice at most, for effort and length.
+        // A model that runs only through a cross-Region profile is asked again by the profile's ID, once.
+        if (error instanceof ModelError && error.kind === 'invalid-request' && /on-demand throughput|inference profile/i.test(error.message) && !PROFILED.test(model)) {
+          const named = this.options.models?.[call.purpose] ?? DEFAULT_BEDROCK_MODELS[call.purpose];
+          this.profiles.set(named, `${bedrockGeo(this.options.region ?? 'us-east-1')}.${named}`);
+          attempt--;
+          continue;
+        }
         if (error instanceof ModelError && error.kind === 'invalid-request' && adjustments < 2) {
           if (/reasoning/i.test(error.message) && !this.noEffort.has(model)) {
             this.noEffort.add(model);
