@@ -1,7 +1,7 @@
 import { KIT_OF, SCENE_LIMITS, SDK_VERSION, SIZE_BUDGETS, fixScene, validateScene, validateSceneCss, validateSceneHtml, validateSceneJs, type ProbeReport, type ScenePlan, type ValidatedScene } from '@incantly/core';
 import type { ReferenceScene } from '@incantly/core/scenes';
 import { changePrompt, libraryPrompt, planPrompt, scenePrompt, standardFigure, type LearnerRequest, type Prompt } from './context';
-import { applyFragmentEdits, parseEdits, withoutEditBlocks, type Edit } from './edits';
+import { MARKER_LINE, applyFragmentEdits, parseEdits, withoutEditBlocks, type Edit } from './edits';
 import { FRAGMENT_NAMES, FragmentStream, missingFragments, parsePlanReply, type FragmentName, type FragmentSet } from './fragments';
 import { ModelError, NO_USAGE, addUsage, costOf, type CallPurpose, type ModelClient, type ModelUsage } from './models';
 import { formatPlanProblems, validatePlan, type PlanProblem } from './plan';
@@ -660,7 +660,16 @@ export class Generator {
       delete wholeFragments.js;
     }
     const applied = applyFragmentEdits(base, edits);
-    const fragments: FragmentSet = { ...applied.fragments, ...wholeFragments };
+    const merged: FragmentSet = { ...applied.fragments, ...wholeFragments };
+    // Edit markers left in a fragment would reach the script as code: keep the fragment as it was and say why.
+    const fragments: FragmentSet = { ...merged };
+    for (const name of FRAGMENT_NAMES) {
+      if (merged[name] !== undefined && merged[name] !== base[name] && MARKER_LINE.test(merged[name]!)) {
+        extra.push(`The ${name} fragment would have kept a SEARCH, ======= or REPLACE line as code, so the reply was not used for it. Send each change as one complete SEARCH/REPLACE pair.`);
+        if (base[name] === undefined) delete fragments[name];
+        else fragments[name] = base[name];
+      }
+    }
     // What actually differs from the base: a fragment returned unchanged is not a change.
     const changed = (['html', 'css', 'js'] as const).filter((name) => fragments[name] !== base[name]);
     const problems = [...parsedEdits.problems, ...whole.problems, ...extra, ...applied.failed.map((f) => `Edit failed: ${f}`)];
