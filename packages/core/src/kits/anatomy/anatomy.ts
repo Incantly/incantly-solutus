@@ -78,8 +78,8 @@ function outline(shape: Shape, grow: number): P[] {
     const sin = Math.sin(shape.angle);
     const rx = shape.rx + grow;
     const ry = shape.ry + grow;
-    for (let i = 0; i < 32; i++) {
-      const t = (i / 32) * 2 * Math.PI;
+    for (let i = 0; i < 20; i++) {
+      const t = (i / 20) * 2 * Math.PI;
       const x = rx * Math.cos(t);
       const y = ry * Math.sin(t);
       pts.push([cx + x * cos - y * sin, cy + x * sin + y * cos]);
@@ -93,9 +93,9 @@ function outline(shape: Shape, grow: number): P[] {
   const a = Math.atan2(shape.b[1] - shape.a[1], shape.b[0] - shape.a[0]);
   // The tangent lines touch each end circle this far round from the line between the centres.
   const phi = Math.acos(clamp((ra - rb) / d, -1, 1));
-  const nb = Math.max(4, Math.round((18 * phi) / Math.PI));
+  const nb = Math.max(3, Math.round((10 * phi) / Math.PI));
   for (let i = 0; i <= nb; i++) pts.push(add(shape.b, polar(a - phi + (2 * phi * i) / nb, rb)));
-  const na = Math.max(4, Math.round((18 * (Math.PI - phi)) / Math.PI));
+  const na = Math.max(3, Math.round((10 * (Math.PI - phi)) / Math.PI));
   for (let i = 0; i <= na; i++) pts.push(add(shape.a, polar(a + phi + (2 * (Math.PI - phi) * i) / na, ra)));
   return pts;
 }
@@ -733,6 +733,8 @@ class AnimalFigure implements Animal {
     if (layer !== 'skin' && layer !== 'muscles' && layer !== 'bones') fail('show takes skin, muscles or bones');
     this.layer = layer;
     this.applyLayer();
+    // Muscles and bones are drawn only while they show: draw them now, playing or not.
+    this.draw();
     return this;
   }
 
@@ -856,30 +858,42 @@ class AnimalFigure implements Animal {
       piece.far?.line?.d(away);
       piece.far?.fill.d(away);
     }
-    const layerDraw = (name: LayerName, shapes: readonly Shape[]) => {
+    // Each piece's path is built once: its layer's outline is the same paths joined.
+    const d = {
+      far: this.path(far),
+      tail: this.path(body.tail),
+      body: this.path(body.body),
+      neck: this.path(body.neck),
+      head: this.path(body.head),
+      hind: this.path(hind),
+      fore: this.path(fore),
+      ears: this.path(ears),
+    };
+    const layerDraw = (name: LayerName, outline: string) => {
       const l = this.layers[name];
-      l.line.d(this.path(shapes) + flesh[name]);
+      l.line.d(outline + flesh[name]);
       l.flesh.d(flesh[name]);
     };
-    layerDraw('far', far);
-    layerDraw('body', [...body.tail, ...body.body, ...body.neck, ...body.head]);
-    layerDraw('hind', hind);
-    layerDraw('fore', fore);
-    layerDraw('ear', ears);
-    this.pieces.far.d(this.path(far));
+    layerDraw('far', d.far);
+    layerDraw('body', d.tail + d.body + d.neck + d.head);
+    layerDraw('hind', d.hind);
+    layerDraw('fore', d.fore);
+    layerDraw('ear', d.ears);
+    this.pieces.far.d(d.far);
     this.pieces.farHooves.d(this.path(keep(pose.farHooves)));
-    this.pieces.tail.d(this.path(body.tail));
-    this.pieces.body.d(this.path(body.body));
-    this.pieces.neck.d(this.path(body.neck));
-    this.pieces.head.d(this.path(body.head));
-    this.pieces.hind.d(this.path(hind));
-    this.pieces.fore.d(this.path(fore));
+    this.pieces.tail.d(d.tail);
+    this.pieces.body.d(d.body);
+    this.pieces.neck.d(d.neck);
+    this.pieces.head.d(d.head);
+    this.pieces.hind.d(d.hind);
+    this.pieces.fore.d(d.fore);
     const hooves = keep(pose.hooves);
     this.pieces.hooves.d(this.path(hooves.filter((s) => HIND_BONES.has(s.bone))));
     this.pieces.foreHooves.d(this.path(hooves.filter((s) => !HIND_BONES.has(s.bone))));
-    this.pieces.ears.d(this.path(ears));
-    this.muscles.d(this.path(pose.muscles));
-    this.bones.d(this.path(pose.bones));
+    this.pieces.ears.d(d.ears);
+    // The muscle and bone layers are drawn only while they show.
+    this.muscles.d(this.layer === 'muscles' ? this.path(pose.muscles) : '');
+    this.bones.d(this.layer === 'bones' ? this.path(pose.bones) : '');
     // The face belongs to the skull: a scene that redraws the skull draws its own.
     const face = !this.isReplaced('skull');
     this.face.group.show(face);
