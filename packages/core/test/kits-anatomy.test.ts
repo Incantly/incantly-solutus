@@ -533,6 +533,24 @@ describe('anatomy: a stage of several animals, and forgiving calls', () => {
     expect(error((zoo) => zoo.skeleton(BONES.dog).piece('banana' as never))).toContain('there is no piece "banana"');
   });
 
+  it('lets several names for one piece each be a part a step can focus', () => {
+    // An elephant named "hind left leg" and "hind right leg": both meant the hind legs, the second name replaced
+    // the first on the one element, and the step that focused the first failed at mount.
+    const runtime = run((inc) => {
+      const zoo = inc.anatomy('#a', { title: 'Elephant' });
+      const elephant = zoo.skeleton(BONES.horse);
+      for (const name of ['hind left leg', 'hind right leg', 'left foot', 'hindlimbs']) zoo.part(name, elephant.piece(name));
+      // The same name asked again is the same handle, so asking every frame makes nothing new.
+      inc.onFrame(() => elephant.piece('hind left leg'));
+      inc.steps([{ say: 'One hind leg.', focus: 'hind left leg' }, { say: 'The other.', focus: 'hind right leg' }]);
+    });
+    expect(runtime.uiState().error).toBeNull();
+    expect(runtime.uiState().parts.map((p) => p.name)).toEqual(['hind left leg', 'hind right leg', 'left foot', 'hindlimbs']);
+    const size = runtime.graph.nodes.size;
+    play(runtime, 0.5);
+    expect(runtime.graph.nodes.size).toBe(size);
+  });
+
   it('moves in a gait the scene asks for, and raises or lowers the neck, both live while paused', () => {
     let dog: Animal | undefined;
     const runtime = run((inc) => {

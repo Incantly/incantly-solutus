@@ -442,6 +442,10 @@ class AnimalFigure implements Animal {
   private readonly muscles: PathHandle;
   private readonly bones: PathHandle;
   private readonly skins: SkinPiece[] = [];
+  /** Pieces handed out, by the name asked for, and the clear copies that trace a piece under a second name. */
+  private readonly asked = new Map<string, Handle>();
+  private readonly handedOut = new Set<AnatomyPiece>();
+  private readonly mirrors: Array<{ readonly piece: AnatomyPiece; readonly el: PathHandle }> = [];
   private readonly replaced = new Set<SkinBone>();
   private readonly outlinePx: number;
   private readonly ink: Tone;
@@ -786,7 +790,7 @@ class AnimalFigure implements Animal {
     this.bones.show(this.layer === 'bones');
   }
 
-  piece(name: AnatomyPiece | SkinBone): Handle {
+  piece(name: AnatomyPiece | SkinBone | (string & {})): Handle {
     const map: Record<AnatomyPiece, Handle> = {
       body: this.pieces.body,
       head: this.pieces.head,
@@ -797,11 +801,27 @@ class AnimalFigure implements Animal {
       muscles: this.muscles,
       bones: this.bones,
     };
+    const key = String(name);
+    const known = this.asked.get(key);
+    if (known) return known;
     const piece = pieceNamed(name);
     if (!piece) fail(`there is no piece "${String(name)}"; the pieces are ${Object.keys(map).join(', ')}`);
     if (piece === 'forelimbs' && !this.build.fore && !this.build.wings) fail('this skeleton has no forelimbs');
     if (piece === 'tail' && this.build.tail.length === 0) fail('this skeleton has no tail');
-    return map[piece];
+    // A second name for a piece ("left leg" and "left foot" are both the near hind leg) gets an element of its own,
+    // a clear copy that traces the piece, so each name can be a part a step focuses: one element holds one part name.
+    if (!this.handedOut.has(piece)) {
+      this.handedOut.add(piece);
+      this.asked.set(key, map[piece]);
+      return map[piece];
+    }
+    if (this.mirrors.length >= 16) fail('an animal hands out at most 16 more names for its pieces');
+    const copy = this.stage.path('', { parent: this.handle, tone: this.build.tone, fill: true });
+    copy.set({ 'fill-opacity': 0 });
+    this.mirrors.push({ piece, el: copy });
+    this.asked.set(key, copy);
+    this.draw();
+    return copy;
   }
 
   // -------------------------------------------------------------------------
@@ -946,8 +966,12 @@ class AnimalFigure implements Animal {
     this.pieces.foreHooves.d(this.path(hooves.filter((s) => !HIND_BONES.has(s.bone))));
     this.pieces.ears.d(d.ears);
     // The muscle and bone layers are drawn only while they show.
-    this.muscles.d(this.layer === 'muscles' ? this.path(pose.muscles) : '');
-    this.bones.d(this.layer === 'bones' ? this.path(pose.bones) : '');
+    const muscles = this.layer === 'muscles' ? this.path(pose.muscles) : '';
+    const bones = this.layer === 'bones' ? this.path(pose.bones) : '';
+    this.muscles.d(muscles);
+    this.bones.d(bones);
+    const traced: Record<AnatomyPiece, string> = { body: d.body, head: d.head, neck: d.neck, tail: d.tail, forelimbs: d.fore, hindlimbs: d.hind, muscles, bones };
+    for (const mirror of this.mirrors) mirror.el.d(traced[mirror.piece]);
     // The face belongs to the skull: a scene that redraws the skull draws its own.
     const face = !this.isReplaced('skull');
     this.face.group.show(face);

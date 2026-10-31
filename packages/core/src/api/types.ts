@@ -2032,8 +2032,13 @@ export interface Animal {
    */
   skin(bone: SkinBone, shape: SkinShape): Handle;
   show(layer: AnatomyLayer): this;
-  /** A piece to name as a part, highlight or fade: one of the pieces, or a skin bone name such as hindleg or skull, which means the piece it is in. */
-  piece(name: AnatomyPiece | SkinBone): Handle;
+  /**
+   * A piece to name as a part, highlight or fade: one of the pieces, or a
+   * skin bone name or everyday word (hindleg, skull, "left leg"), meaning the
+   * piece it is in. Seen from the side, a pair of legs is one piece; each name
+   * asked for gets its own handle, so each can be its own part.
+   */
+  piece(name: AnatomyPiece | SkinBone | (string & {})): Handle;
   readonly gait: Gait;
   readonly mode: AnatomyMode;
   /** Metres a second. */
