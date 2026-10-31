@@ -134,7 +134,7 @@ export const CAPABILITIES: readonly Capability[] = [
   {
     name: 'anatomy',
     draws: true,
-    line: 'anatomy: animals and people on a moving skeleton, with the skin you draw on its bones (inc.anatomy).',
+    line: 'anatomy: any whole animal or person walking, running or standing: you give its bones and draw its skin (inc.anatomy).',
     contract: [
       'AnatomyOptions',
       'FootPosture',
