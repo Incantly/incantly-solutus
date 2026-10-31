@@ -172,8 +172,11 @@ describe('the plan validator', () => {
     expect(rules(plan({ parts }))).toEqual(['too-many-parts']);
     expect(rules(plan({ parts: [] }))).toEqual(['schema']);
     expect(rules(plan({ parts: ['Ball', 'Ball'] }))).toEqual(['duplicate-name']);
-    const steps = Array.from({ length: PLAN_LIMITS.steps + 1 }, (_, i) => `Step ${i + 1}`);
-    expect(rules(plan({ steps }))).toEqual(['too-many-steps']);
+    // A longer walkthrough keeps its first steps rather than going back for a re-plan: GLM 4.7 Flash wrote seven, twice.
+    const steps = Array.from({ length: PLAN_LIMITS.steps + 2 }, (_, i) => `Step ${i + 1}`);
+    const result = validatePlan(plan({ steps }));
+    expect(result.problems).toEqual([]);
+    expect(result.plan!.steps).toEqual(steps.slice(0, PLAN_LIMITS.steps));
   });
 
   it('keeps the singular points a learner can reach and drops the rest without a re-plan', () => {
