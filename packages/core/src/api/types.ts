@@ -1920,7 +1920,10 @@ export type AnatomyMode = 'quadruped' | 'bipedal';
  * the body length in metres from the nose to the root of the tail. The kit
  * reads the posture, muscles, outline and gait from them, so get the
  * proportions right: a cheetah's shin is longer than its thigh, a horse
- * stands on long foot bones, a mouse has a long tail and short legs.
+ * stands on long foot bones, a mouse has a long tail and short legs. The kit
+ * gives it only a plain body, like no animal in particular: then draw what
+ * makes it this animal with animal.skin (its ears, muzzle, coat colour and
+ * markings, tail), as a cheetah's spots and tear lines or a zebra's stripes.
  */
 export interface SkeletonSpec {
   /** Body length in metres, nose to the root of the tail. */
