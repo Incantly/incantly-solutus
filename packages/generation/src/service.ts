@@ -463,6 +463,8 @@ export class GenerationService {
 
     if (body.ok === true) {
       generator.deviceApproved(state, { ok: true, failures: [], stats: { configurations: 0, frames: 0, averageFrameMs: 0, elements: 0, durationMs: 0 } });
+      // The total runs to the approval, so it counts the repairs the device asked for after the first delivery.
+      generator.finish(state);
       this.sessions.delete(id);
       // Approved on a device: the next learner to ask the same can have it at once.
       const scene = state.scene;

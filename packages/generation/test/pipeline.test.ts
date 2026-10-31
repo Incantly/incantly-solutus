@@ -248,6 +248,58 @@ describe('the generation pipeline', () => {
     expect(state.status).toBe('failed');
   });
 
+  it('numbers each repair against the limit, and records a failure after the last one as final, not as another repair', async () => {
+    const scene = REFERENCE_SCENES.projectile!;
+    const fenced = (js: string) => `\`\`\`html\n${scene.html}\n\`\`\`\n\`\`\`css\n${scene.css}\n\`\`\`\n\`\`\`js\n${js}\n\`\`\`\n`;
+    const faults = ['unknown-call', 'frame-throw', 'forbidden-call'] as const;
+    let repairs = 0;
+    const model = new ScriptedModel((call) => {
+      if (call.purpose === 'plan') return `Here is the plan.\n\`\`\`json\n${JSON.stringify(scene.plan)}\n\`\`\`\n`;
+      if (call.purpose === 'scene') return fenced(faultyScript(scene, 'forbidden-call'));
+      return `\`\`\`js\n${faultyScript(scene, faults[repairs++]!)}\n\`\`\`\n`;
+    });
+    const state = await new Generator({ model, probe: isolatedProbe, adapt: false, retrieve: false }).generate({ prompt: REQUESTS.projectile });
+    // Once printed REPAIR 4 of 4 though the limit was three and no fourth repair ran.
+    expect(state.attempts.map((a) => a.report?.text.split(':')[0])).toEqual(['REPAIR 1 of 3', 'REPAIR 2 of 3', 'REPAIR 3 of 3', 'FAILED after 3 repairs']);
+  });
+
+  it('reads SEARCH/REPLACE edits sent under a plain js fence as edits, not as the new script', async () => {
+    const scene = REFERENCE_SCENES.projectile!;
+    const faulty = faultyScript(scene, 'forbidden-call');
+    const fenced = (js: string) => `\`\`\`html\n${scene.html}\n\`\`\`\n\`\`\`css\n${scene.css}\n\`\`\`\n\`\`\`js\n${js}\n\`\`\`\n`;
+    const model = new ScriptedModel((call) => {
+      if (call.purpose === 'plan') return `Here is the plan.\n\`\`\`json\n${JSON.stringify(scene.plan)}\n\`\`\`\n`;
+      if (call.purpose === 'scene') return fenced(faulty);
+      // GLM 4.7 sent its edit under a js fence; it once became the whole script, markers and all.
+      return `\`\`\`js\n<<<<<<< SEARCH\n${faulty}\n=======\n${scene.js}\n>>>>>>> REPLACE\n\`\`\`\n`;
+    });
+    const state = await new Generator({ model, probe: isolatedProbe, adapt: false, retrieve: false }).generate({ prompt: REQUESTS.projectile });
+    expect(state.status).toBe('approved');
+    expect(state.scene?.js.trim()).toBe(scene.js.trim());
+    expect(state.repairsUsed).toBe(1);
+  });
+
+  it('never lets a piece of the script, sent as a whole js block, replace the script', async () => {
+    const scene = REFERENCE_SCENES.projectile!;
+    const faulty = faultyScript(scene, 'forbidden-call');
+    const fenced = (js: string) => `\`\`\`html\n${scene.html}\n\`\`\`\n\`\`\`css\n${scene.css}\n\`\`\`\n\`\`\`js\n${js}\n\`\`\`\n`;
+    let repairs = 0;
+    const model = new ScriptedModel((call) => {
+      if (call.purpose === 'plan') return `Here is the plan.\n\`\`\`json\n${JSON.stringify(scene.plan)}\n\`\`\`\n`;
+      if (call.purpose === 'scene') return fenced(faulty);
+      repairs++;
+      // The zebra's repair sent only its steps; the scene became that one call and failed with no stage.
+      return repairs === 1 ? "```js\ninc.steps([{ say: 'Watch the ball.' }]);\n```\n" : `\`\`\`js\n${scene.js}\n\`\`\`\n`;
+    });
+    const state = await new Generator({ model, probe: isolatedProbe, adapt: false, retrieve: false }).generate({ prompt: REQUESTS.projectile });
+    const piece = state.attempts[1]!;
+    expect(piece.failed).toBe('reply');
+    expect(piece.fragments.js).toBe(state.attempts[0]!.fragments.js);
+    expect(piece.report?.text).toContain('only part of the script');
+    expect(state.status).toBe('approved');
+    expect(state.scene?.js.trim()).toBe(scene.js.trim());
+  });
+
   it('approves a scene its third repair fixed', async () => {
     const scene = REFERENCE_SCENES.projectile!;
     const fenced = (js: string) => `\`\`\`html\n${scene.html}\n\`\`\`\n\`\`\`css\n${scene.css}\n\`\`\`\n\`\`\`js\n${js}\n\`\`\`\n`;
