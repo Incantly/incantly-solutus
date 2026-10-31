@@ -57,7 +57,7 @@ The scene writes the first and the fifth; every other step is a rule in the kit,
 | `stance` | `upright` (limbs under the body) or `sprawl` (out to the side, as a lizard's). |
 | `modes` | Ways of moving it supports, `quadruped` and `bipedal`; the first is how it starts. Default from the build. |
 | `wings` | The forelimbs are folded wings, as a bird's. |
-| `at`, `width`, `facing` | Where it stands on the stage, the room it may take across, and which way it faces. It is scaled to fit. |
+| `at`, `width`, `facing` | Where it stands on the stage, the room it may take across, and which way it faces. Every animal on a stage is drawn at one scale, the largest at which all of them fit, so their sizes compare as in life; animals given no `at` stand side by side on one ground line. |
 | `tone`, `ground`, `show` | Body tone; whether a ground line passes under it; skin, muscles or bones. |
 
 The kit refuses a skeleton it cannot read, with what is wrong: "a skeleton needs a hindlimb", "spine.flex is a number from 0 to 1", "give the bones, not a name".
@@ -128,7 +128,7 @@ dog.skin('tail', { points: [[0.05, 0.06], [0.55, 0.12], [1.05, 0], [0.55, -0.13]
 
 ## Movement: read from the build
 
-`animal.move({ speed, mode, at })`. The scene says how fast, in metres a second: a number, a parameter or a function of the model. The kit works out how, so a mouse and a cheetah differ without a "mouse gait" or a "cheetah gait" written anywhere. The rules (`GAIT_RULES` in `kits/anatomy/gait.ts`) are starting values from studies of animal gaits, to be tuned on the bench.
+`animal.move({ speed, mode, at, gait, neck })`. The scene says how fast, in metres a second: a number, a parameter or a function of the model. The kit works out how, so a mouse and a cheetah differ without a "mouse gait" or a "cheetah gait" written anywhere. The rules (`GAIT_RULES` in `kits/anatomy/gait.ts`) are starting values from studies of animal gaits, to be tuned on the bench.
 
 - **Gait from the Froude number**, v² / (g × hip height), under which animals of every size change gait at similar values: walk below 0.5, then trot, then gallop from 2.5. Two legs walk, then run.
 - **Which fast gait.** A body shorter than 0.3 m bounds from a Froude number of 1, hind feet together. A flexible spine (`flex` 0.6 or more) gallops round the body (rotary, as a cheetah or dog); a stiffer one gallops in the same order front and back (transverse, as a horse). At a gallop or bound the back bends and stretches with the stride.
@@ -137,11 +137,14 @@ dog.skin('tail', { points: [[0.05, 0.06], [0.55, 0.12], [1.05, 0], [0.55, -0.13]
 - **Feet stay planted.** A planted foot sweeps back exactly as fast as the ground passes. A foot may sweep at most 1.1 × its leg's reach, so at speeds where it could not, the foot lifts sooner; past what the shortest stance (12% of the stride) can cover, strides grow no longer, only quicker. The legs reach their feet with two-bone inverse kinematics: knees forward, elbows back.
 - **Modes.** `ape.move({ mode: 'bipedal', at: 4 })` stands it up at 4 s over 1.2 s, and `mode` may be a function of the model, such as a posture choice; the change runs whether the figure plays or is paused (PRD 21.1): the body pitches until it balances over the hips (a heavy tail holds it level, no tail stands it up), and the forelimbs hang and swing as arms. A mode the skeleton cannot support is refused: "this skeleton's hindlimbs are too short to walk on two legs".
 
+- **Asked-for gait and neck.** `gait` (stand, walk, trot, gallop, bound, run) moves the animal in that gait rather than the one its speed calls for, where its legs can make it; the speed still sets how fast they go. `neck` raises or lowers the neck and head, in degrees from -60 to 60. Both take a number, a parameter or a function, and both show at once when changed while paused, so a control for them changes the drawing as the probe requires.
+- **Several animals.** A scene may call `move` every frame; a new mode replaces any scheduled for later, so the schedule never grows.
+
 The stride advances in fixed steps of 1/60 s while the figure plays, so a run draws the same frames every time, and holds still when paused or under reduced motion.
 
 ## Parts, readouts and teaching
 
-`animal.piece(name)` returns a piece to name as a part with `zoo.part`, or to highlight: `body`, `head`, `neck`, `tail`, `forelimbs`, `hindlimbs`, `muscles`, `bones`. `zoo.part('Dog', dog)` names the whole animal. `animal.show('muscles')` or `'bones'` fades the skin to show the layer under it, so the reconstruction itself can be taught.
+`animal.piece(name)` returns a piece to name as a part with `zoo.part`, or to highlight: `body`, `head`, `neck`, `tail`, `forelimbs`, `hindlimbs`, `muscles`, `bones`. It also takes the skin's bone names and everyday words for them (`spine`, `skull`, `hindleg`, "front left leg", "trunk", "mane"), meaning the piece they are in; the near and far legs of a pair are one piece. `zoo.part('Dog', dog)` names the whole animal. `animal.show('muscles')` or `'bones'` fades the skin to show the layer under it, so the reconstruction itself can be taught.
 
 Readouts come from the same model that moves the animal (PRD 17.2): `gait` (stand, walk, trot, gallop, bound, run), `mode`, `speed`, `stride` (metres), `frequency` (strides a second), `duty` (share of the stride a foot is down), `airborne` (share with no foot down), `froude`, `hipHeight`, `posture`.
 
@@ -149,11 +152,11 @@ Readouts come from the same model that moves the animal (PRD 17.2): `gait` (stan
 
 - The catalog lists the `anatomy` capability, so the plan names it and the scene prompt loads its types only for those scenes (PRD 17.9).
 - A scene with the kit is about 10 to 30 lines: a skeleton, a `move`, the skin that makes the animal, parts and steps. The plain body means the scene only draws what makes its animal different, which keeps the scene call short (PRD 16.1).
-- The reviewed scenes `animal-gaits` (a dog walking, trotting and galloping, with its muscles and bones), `ape-upright` (an ape on its knuckles and on two legs) and `dog-breeds` (a German Shepherd and a Rottweiler on one skeleton, told apart only by skin) are retrieved as examples by concept (PRD 25.5). Each names only its own animal, so a mouse or a cheetah prompt goes to the model.
+- The reviewed scenes `animal-gaits` (a dog walking, trotting and galloping, with its muscles and bones), `ape-upright` (an ape on its knuckles and on two legs) `dog-breeds` (a German Shepherd and a Rottweiler on one skeleton, told apart only by skin) and `bird-walk` (a hen with wings, a level body, a beak, comb and tail feathers) are retrieved as examples by concept (PRD 25.5). Each names only its own animal, so a mouse or a cheetah prompt goes to the model.
 
 ## Checks
 
-The validator loads the kit only for scenes that call `inc.anatomy`, and refuses `skeleton` inside the frame loop. The unit tests (`packages/core/test/kits-anatomy.test.ts`) check ten skeletons measured from real animals (dog, cat, horse, mouse, cheetah, bear, ape, human, bird, lizard; test data, not part of the SDK), posture reading, gait changes by Froude number, rotary and transverse gallops, dynamic similarity of strides, that a planted foot keeps its place on the ground, that feet never have to sweep past their reach, determinism, reduced motion, modes, layers and parts, and skin: parts, marks, lines and replaced defaults move with their bones, limb skin is drawn on both sides, skin bends round a joint, and skin that would float off is refused.
+The validator loads the kit only for scenes that call `inc.anatomy`, and refuses `skeleton` inside the frame loop. The unit tests (`packages/core/test/kits-anatomy.test.ts`) check ten skeletons measured from real animals (dog, cat, horse, mouse, cheetah, bear, ape, human, bird, lizard; test data, not part of the SDK), posture reading, gait changes by Froude number, rotary and transverse gallops, dynamic similarity of strides, that a planted foot keeps its place on the ground, that feet never have to sweep past their reach, determinism, reduced motion, modes, layers and parts, and skin: parts, marks, lines and replaced defaults move with their bones, limb skin is drawn on both sides, skin bends round a joint, and skin that would float off is refused; several animals sharing a scale and standing side by side; piece names by bone and everyday word; and an asked-for gait and neck that change the drawing while paused.
 
 ## Limits
 

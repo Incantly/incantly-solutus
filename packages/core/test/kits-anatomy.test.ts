@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Anatomy, Animal, Inc, SkeletonSpec } from '../src/api/types';
 import { kit } from '../src/kits/anatomy';
-import { placeFoot, readBody } from '../src/kits/anatomy/anatomy';
+import { pieceNamed, placeFoot, readBody } from '../src/kits/anatomy/anatomy';
 import { GAIT_RULES, planGait } from '../src/kits/anatomy/gait';
 import { readPosture, readSkeleton } from '../src/kits/anatomy/skeleton';
 import { kitsFor } from '../src/runtime/kits';
@@ -487,6 +487,71 @@ describe('anatomy: moving and showing', () => {
       zoo.part('Hind legs', dog.piece('hindlimbs'));
     });
     expect(runtime.uiState().parts.map((p) => p.name)).toEqual(['Dog', 'Hind legs']);
+  });
+});
+
+describe('anatomy: a stage of several animals, and forgiving calls', () => {
+  /** How wide a path draws, from the x of its points. */
+  const spanOf = (d: string | undefined) => {
+    const xs = [...(d ?? '').matchAll(/[ML]\s*(-?[\d.]+)\s+(-?[\d.]+)/g)].map((m) => Number(m[1]));
+    return Math.max(...xs) - Math.min(...xs);
+  };
+  const middleOf = (d: string | undefined) => {
+    const xs = [...(d ?? '').matchAll(/[ML]\s*(-?[\d.]+)\s+(-?[\d.]+)/g)].map((m) => Number(m[1]));
+    return (Math.max(...xs) + Math.min(...xs)) / 2;
+  };
+
+  it('draws every animal on a stage at one scale, side by side when the scene gives no place', () => {
+    // A Shire came out smaller than an Arabian when each animal was scaled to fill its own room.
+    let shire: Animal | undefined;
+    let arabian: Animal | undefined;
+    run((inc) => {
+      const zoo = inc.anatomy('#a', { title: 'Horses', viewBox: [0, 0, 800, 400] });
+      shire = zoo.skeleton({ ...BONES.horse, size: 2.1 });
+      arabian = zoo.skeleton({ ...BONES.horse, size: 1.5 });
+    });
+    const big = nodeOf(shire!.piece('body')).attrs.get('d');
+    const small = nodeOf(arabian!.piece('body')).attrs.get('d');
+    expect(spanOf(big) / spanOf(small)).toBeCloseTo(2.1 / 1.5, 1);
+    // Side by side: the first stands on the left half of the stage, the second on the right.
+    expect(middleOf(big)).toBeLessThan(400);
+    expect(middleOf(small)).toBeGreaterThan(400);
+  });
+
+  it('names a piece by its bone or an everyday word, as well as by its own name', () => {
+    expect(pieceNamed('hindlimbs')).toBe('hindlimbs');
+    expect(pieceNamed('front left leg')).toBe('forelimbs');
+    expect(pieceNamed('forelimb left')).toBe('forelimbs');
+    expect(pieceNamed('back_leg')).toBe('hindlimbs');
+    expect(pieceNamed('hindleg')).toBe('hindlimbs');
+    expect(pieceNamed('spine')).toBe('body');
+    expect(pieceNamed('skull')).toBe('head');
+    expect(pieceNamed('trunk')).toBe('head');
+    expect(pieceNamed('mane')).toBe('neck');
+    expect(pieceNamed('wing')).toBe('forelimbs');
+    expect(pieceNamed('banana')).toBeNull();
+    expect(error((zoo) => zoo.skeleton(BONES.dog).piece('banana' as never))).toContain('there is no piece "banana"');
+  });
+
+  it('moves in a gait the scene asks for, and raises or lowers the neck, both live while paused', () => {
+    let dog: Animal | undefined;
+    const runtime = run((inc) => {
+      const gait = inc.choice('gait', { options: ['walk', 'gallop'] });
+      const neck = inc.param('neck', { min: -40, max: 40, value: 0 });
+      dog = inc.anatomy('#a', { title: 'Dog' }).skeleton(BONES.dog);
+      dog.move({ speed: 2, gait: () => (gait.value === 1 ? 'gallop' : 'walk'), neck });
+    });
+    expect(dog!.gait).toBe('walk');
+    const head = () => nodeOf(dog!.piece('head')).attrs.get('d');
+    const before = head();
+    runtime.setParam('neck', 30);
+    runtime.tick(0);
+    expect(head()).not.toEqual(before);
+    runtime.setParam('gait', 1);
+    runtime.tick(0);
+    expect(dog!.gait).toBe('gallop');
+    expect(error((zoo) => zoo.skeleton(BONES.dog).move({ gait: 'canter' as 'walk' }))).toContain('gait is stand, walk, trot, gallop, bound, run');
+    expect(error((zoo) => zoo.skeleton(BONES.dog).move({ neck: 90 }))).toContain('neck is degrees, from -60 to 60');
   });
 });
 

@@ -26,6 +26,7 @@ import { fail, readSkeleton, type Build, type Limb } from './skeleton';
 
 export const DEFAULT_ANATOMY_VIEWBOX: ViewBox = [0, 0, 800, 400];
 const MAX_ANIMALS = 6;
+const GAITS: readonly Gait[] = ['stand', 'walk', 'trot', 'gallop', 'bound', 'run'];
 /** The fixed step the stride moves in, seconds. */
 const STEP = 1 / 60;
 /** Metres a second; faster than any animal runs. */
@@ -218,7 +219,8 @@ function readRig(build: Build, body: Body): Rig {
   const stoop = fore ? clamp((1.6 - (hind.upper + hind.lower) / S) / 0.8, 0, 1) : 0;
   const tail = build.tail.length * body.tailR;
   const front = (build.neck + build.skull.length) * body.neckR + S * body.chestR * 0.5;
-  const thetaB = build.wings ? 0.5 : (Math.PI / 2) * (1 - clamp((2.2 * tail) / (tail + front), 0, 0.8)) - 0.45 * stoop;
+  // A bird carries its body nearly level over its legs, its tail and neck balancing each other.
+  const thetaB = build.wings ? 0.3 : (Math.PI / 2) * (1 - clamp((2.2 * tail) / (tail + front), 0, 0.8)) - 0.45 * stoop;
   const hipB = ankleHeight(hind) + (extension - 0.12 * stoop) * (hind.upper + hind.lower);
   const neckQ = 0.7 + 0.5 * clamp(build.neck / S - 0.3, 0, 0.5);
   return { extension, hipQ, thetaQ, hipB, thetaB, neckQ, neckB: Math.max(thetaB - 0.1, 1.05) };
@@ -376,6 +378,8 @@ interface Motion {
   readonly speed: number;
   readonly clock: number;
   readonly stepMode: AnatomyMode;
+  /** Radians the neck is raised. */
+  readonly neck?: number;
 }
 
 /** The layers an animal is drawn in, back to front: each its outlines, then its fills. */
@@ -399,6 +403,29 @@ interface SkinPiece {
   readonly far: { readonly line?: PathHandle; readonly fill: PathHandle } | null;
 }
 
+/**
+ * The piece a name means. Besides the pieces' own names it takes the skin's
+ * bone names (spine, skull, hindleg, upperArm…) and the words a scene uses
+ * for them ("front left leg", "back legs", "trunk", "mane"): one side of a
+ * pair is the pair, as the near and far legs are drawn as one piece.
+ */
+export function pieceNamed(name: unknown): AnatomyPiece | null {
+  if (typeof name !== 'string') return null;
+  const n = name.toLowerCase().replace(/[^a-z]+/g, ' ').trim();
+  if (!n) return null;
+  const exact: Record<string, AnatomyPiece> = { body: 'body', head: 'head', neck: 'neck', tail: 'tail', forelimbs: 'forelimbs', hindlimbs: 'hindlimbs', muscles: 'muscles', bones: 'bones' };
+  if (Object.hasOwn(exact, n)) return exact[n]!;
+  if (/\b(muscle|muscles)\b/.test(n)) return 'muscles';
+  if (/\b(bone|bones|skeleton|ribs)\b/.test(n)) return 'bones';
+  if (/\btail\b/.test(n)) return 'tail';
+  if (/\b(neck|mane|throat)\b/.test(n)) return 'neck';
+  if (/\b(head|skull|face|muzzle|snout|ear|ears|eye|eyes|nose|mouth|jaw|beak|trunk|horn|horns|tusk|tusks)\b/.test(n)) return 'head';
+  if (/\b(fore|front|arm|arms|upperarm|forearm|forefoot|foreleg|forelegs|forelimb|hand|hands|wing|wings|shoulder)\b/.test(n)) return 'forelimbs';
+  if (/\b(hind|back leg|back legs|rear|thigh|shin|hindfoot|hindleg|hindlegs|hindlimb|leg|legs|foot|feet|paw|paws|hoof|hooves|hip|hips)\b/.test(n)) return 'hindlimbs';
+  if (/\b(spine|back|torso|trunk|chest|belly|barrel|haunch|coat)\b/.test(n)) return 'body';
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // One animal
 // ---------------------------------------------------------------------------
@@ -416,14 +443,14 @@ class AnimalFigure implements Animal {
   private readonly bones: PathHandle;
   private readonly skins: SkinPiece[] = [];
   private readonly replaced = new Set<SkinBone>();
-  private readonly scale: number;
   private readonly outlinePx: number;
   private readonly ink: Tone;
-  private readonly origin: P;
   private readonly cx: number;
-  private readonly groundWidth: number;
+  private readonly slot: number;
   private readonly neutral: { hind: [number, number]; fore: [number, number] };
   private speedOf: () => number = () => 0;
+  private gaitOf: (() => Gait) | null = null;
+  private neckOf: () => number = () => 0;
   private modeOf: (() => AnatomyMode) | null = null;
   private schedule: Array<{ at: number; mode: AnatomyMode }> = [];
   private phase = 0;
@@ -439,7 +466,7 @@ class AnimalFigure implements Animal {
     private readonly ctx: KitContext,
     private readonly stage: StageHandle,
     private readonly build: Build,
-    viewBox: ViewBox,
+    private readonly layout: Layout,
   ) {
     this.body = readBody(build);
     this.rig = readRig(build, this.body);
@@ -467,14 +494,9 @@ class AnimalFigure implements Animal {
         }
       }
     }
-    const [vx, vy, vw, vh] = viewBox;
-    const at: P = build.at ?? [vx + vw / 2, vy + vh * 0.86];
-    const width = build.width ?? vw * 0.7;
-    const room = Math.max(10, at[1] - vy - vh * 0.06);
-    this.scale = Math.min(width / ((maxX - minX) * 1.15), room / (maxY * 1.12));
-    this.origin = at;
     this.cx = (minX + maxX) / 2;
-    this.groundWidth = (width * 1.1) / this.scale;
+    // The stage places every animal together, at one scale, so their sizes compare as they do in life.
+    this.slot = layout.add({ span: maxX - minX, height: maxY, ...(build.at ? { at: build.at } : {}), ...(build.width !== undefined ? { width: build.width } : {}) });
     // A pixel or two of outline, whatever the scale.
     this.outlinePx = clamp(0.006 * this.scale * build.size + 0.8, 1.2, 2.6);
 
@@ -540,8 +562,23 @@ class AnimalFigure implements Animal {
 
   move(options: MoveOptions): this {
     if (typeof options !== 'object' || options === null) fail('move takes { speed, mode, at }');
-    for (const key of Object.keys(options)) if (!['speed', 'mode', 'at'].includes(key)) fail(`move has no "${key}"; it takes speed, mode and at`);
-    const { speed, mode, at } = options;
+    for (const key of Object.keys(options)) if (!['speed', 'mode', 'at', 'gait', 'neck'].includes(key)) fail(`move has no "${key}"; it takes speed, mode, at, gait and neck`);
+    const { speed, mode, at, gait, neck } = options;
+    if (gait !== undefined) {
+      if (typeof gait === 'function') this.gaitOf = gait;
+      else {
+        if (!GAITS.includes(gait)) fail(`gait is ${GAITS.join(', ')}`);
+        this.gaitOf = () => gait;
+      }
+    }
+    if (neck !== undefined) {
+      if (typeof neck === 'number') {
+        if (!(Number.isFinite(neck) && Math.abs(neck) <= 60)) fail('neck is degrees, from -60 to 60');
+        this.neckOf = () => neck;
+      } else if (typeof neck === 'function') this.neckOf = neck as () => number;
+      else if (typeof neck === 'object' && neck !== null && typeof (neck as { value?: unknown }).value === 'number') this.neckOf = () => (neck as { value: number }).value;
+      else fail('neck is degrees: a number, a parameter, or a function');
+    }
     if (speed !== undefined) {
       if (typeof speed === 'number') {
         if (!(Number.isFinite(speed) && speed >= 0 && speed <= MAX_SPEED)) fail(`speed is metres a second, from 0 to ${MAX_SPEED}`);
@@ -592,8 +629,10 @@ class AnimalFigure implements Animal {
     const mode = this.wantedMode();
     const speed = this.currentSpeed();
     const hip = this.hipNow();
-    const key = `${speed}|${mode}|${hip.toFixed(5)}`;
-    if (this.cache?.key !== key) this.cache = { key, plan: planGait(this.build, mode, speed, hip) };
+    const asked = this.gaitOf?.();
+    const gait = typeof asked === 'string' && GAITS.includes(asked) ? asked : undefined;
+    const key = `${speed}|${mode}|${hip.toFixed(5)}|${gait ?? ''}`;
+    if (this.cache?.key !== key) this.cache = { key, plan: planGait(this.build, mode, speed, hip, gait) };
     return this.cache.plan;
   }
 
@@ -747,7 +786,7 @@ class AnimalFigure implements Animal {
     this.bones.show(this.layer === 'bones');
   }
 
-  piece(name: AnatomyPiece): Handle {
+  piece(name: AnatomyPiece | SkinBone): Handle {
     const map: Record<AnatomyPiece, Handle> = {
       body: this.pieces.body,
       head: this.pieces.head,
@@ -758,15 +797,28 @@ class AnimalFigure implements Animal {
       muscles: this.muscles,
       bones: this.bones,
     };
-    if (!Object.hasOwn(map, name)) fail(`there is no piece "${String(name)}"; the pieces are ${Object.keys(map).join(', ')}`);
-    if (name === 'forelimbs' && !this.build.fore && !this.build.wings) fail('this skeleton has no forelimbs');
-    if (name === 'tail' && this.build.tail.length === 0) fail('this skeleton has no tail');
-    return map[name];
+    const piece = pieceNamed(name);
+    if (!piece) fail(`there is no piece "${String(name)}"; the pieces are ${Object.keys(map).join(', ')}`);
+    if (piece === 'forelimbs' && !this.build.fore && !this.build.wings) fail('this skeleton has no forelimbs');
+    if (piece === 'tail' && this.build.tail.length === 0) fail('this skeleton has no tail');
+    return map[piece];
   }
 
   // -------------------------------------------------------------------------
   // Drawing
   // -------------------------------------------------------------------------
+
+  /** Pixels a metre, shared by every animal on the stage. */
+  private get scale(): number {
+    return this.layout.scale();
+  }
+  /** Where the middle of the animal stands on the ground. */
+  private get origin(): P {
+    return this.layout.place(this.slot).at;
+  }
+  private get groundWidth(): number {
+    return (this.layout.place(this.slot).width * 1.1) / this.scale;
+  }
 
   private map(p: P): Vec2 {
     return [this.origin[0] + this.build.facing * (p[0] - this.cx) * this.scale, this.origin[1] - p[1] * this.scale];
@@ -831,7 +883,9 @@ class AnimalFigure implements Animal {
     this.settleMode();
     const plan = this.plan();
     const reduced = this.ctx.reducedMotion();
-    const motion: Motion = { p: this.phase, blend: this.blend, plan, speed: reduced ? 0 : this.currentSpeed(), clock: this.clock, stepMode: this.wantedMode() };
+    const lift = this.neckOf();
+    const neck = typeof lift === 'number' && Number.isFinite(lift) ? (clamp(lift, -60, 60) * Math.PI) / 180 : 0;
+    const motion: Motion = { p: this.phase, blend: this.blend, plan, speed: reduced ? 0 : this.currentSpeed(), clock: this.clock, stepMode: this.wantedMode(), neck };
     const pose = this.pose(motion);
     if (!pose.reached && !this.warned) {
       this.warned = true;
@@ -1028,14 +1082,14 @@ class AnimalFigure implements Animal {
 
     // Neck and head, hung from the front of the spine.
     const nod = plan.gait === 'stand' ? 0.02 * Math.sin(m.clock * 0.8) : 0.05 * Math.sin(2 * tau * p);
-    const neckAngle = lerp(rig.neckQ, rig.neckB, b) + nod;
+    const neckAngle = lerp(rig.neckQ, rig.neckB, b) + nod + (m.neck ?? 0);
     const neckBase = add(add(shoulderSpine, mul(dir, body.chestR * 0.1)), mul(down, body.neckR * 0.3));
     const neckEnd = add(neckBase, polar(neckAngle, Math.max(build.neck, body.neckR * 0.5)));
     out.neck.push(...on('neck', cap(neckBase, Math.max(body.neckR * 1.15, body.chestR * 0.6), neckEnd, body.neckR)));
     out.frames.neck = { points: [neckBase, neckEnd], flip: false };
     out.muscles.push(cap(neckBase, body.neckR * 0.8, neckEnd, body.neckR * 0.6));
     bone(shoulderSpine, neckEnd, body.waistR * 0.07);
-    const psi = lerp(-0.45, build.wings ? 0 : -0.1, b) - nod * 0.5;
+    const psi = lerp(-0.45, build.wings ? 0 : -0.1, b) - nod * 0.5 + 0.5 * (m.neck ?? 0);
     const hd = polar(psi);
     const hu = polar(psi + Math.PI / 2);
     const cr = body.craniumR;
@@ -1170,9 +1224,64 @@ class AnimalFigure implements Animal {
 
 const round = (value: number, digits: number) => Number(value.toFixed(digits));
 
+/** One animal's room on the stage: its size in metres standing, and where the scene put it, if it did. */
+interface Room {
+  readonly span: number;
+  readonly height: number;
+  readonly at?: P;
+  readonly width?: number;
+}
+
+/**
+ * Places a stage's animals. They share one scale, the largest at which every
+ * one fits the room it has, so a horse beside a mouse is drawn as much
+ * bigger as it is. Animals the scene gives no place stand side by side on
+ * one ground line, sharing the stage's width.
+ */
+export class Layout {
+  private readonly rooms: Room[] = [];
+  private cache: { scale: number; places: Array<{ at: P; width: number }> } | null = null;
+
+  constructor(private readonly viewBox: ViewBox) {}
+
+  add(room: Room): number {
+    this.rooms.push(room);
+    this.cache = null;
+    return this.rooms.length - 1;
+  }
+
+  private solve(): { scale: number; places: Array<{ at: P; width: number }> } {
+    if (this.cache) return this.cache;
+    const [vx, vy, vw, vh] = this.viewBox;
+    const free = this.rooms.filter((r) => !r.at);
+    const places = this.rooms.map((room) => {
+      if (room.at) return { at: room.at, width: room.width ?? vw * 0.7 };
+      const i = free.indexOf(room);
+      const share = vw / free.length;
+      return { at: [vx + share * (i + 0.5), vy + vh * 0.86] as P, width: room.width ?? (free.length === 1 ? vw * 0.7 : share * 0.9) };
+    });
+    const fits = this.rooms.map((room, i) => {
+      const { at, width } = places[i]!;
+      const above = Math.max(10, at[1] - vy - vh * 0.06);
+      return Math.min(width / (room.span * 1.15), above / (room.height * 1.12));
+    });
+    this.cache = { scale: Math.min(...fits), places };
+    return this.cache;
+  }
+
+  scale(): number {
+    return this.solve().scale;
+  }
+
+  place(slot: number): { at: P; width: number } {
+    return this.solve().places[slot]!;
+  }
+}
+
 export class AnatomyKit implements Anatomy {
   readonly stage: StageHandle;
   private readonly viewBox: ViewBox;
+  private readonly layout: Layout;
   private animals = 0;
 
   constructor(
@@ -1181,12 +1290,13 @@ export class AnatomyKit implements Anatomy {
   ) {
     this.stage = ctx.stage;
     this.viewBox = anatomyLayout(options).viewBox;
+    this.layout = new Layout(this.viewBox);
   }
 
   skeleton(spec: SkeletonSpec): Animal {
     if (this.animals >= MAX_ANIMALS) fail(`a stage draws at most ${MAX_ANIMALS} animals`);
     this.animals++;
-    return new AnimalFigure(this.ctx, this.stage, readSkeleton(spec), this.viewBox);
+    return new AnimalFigure(this.ctx, this.stage, readSkeleton(spec), this.layout);
   }
 
   part<T extends Handle | { readonly handle: Handle }>(name: string, item: T, options?: PartOptions): T {

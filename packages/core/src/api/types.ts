@@ -1919,8 +1919,11 @@ export type AnatomyMode = 'quadruped' | 'bipedal';
  * what you know of that animal's real bones. Lengths are fractions of `size`,
  * the body length in metres from the nose to the root of the tail. The kit
  * reads the posture, muscles, outline and gait from them, so get the
- * proportions right: a cheetah's shin is longer than its thigh, a horse
- * stands on long foot bones, a mouse has a long tail and short legs. The kit
+ * proportions right: a cheetah's shin is longer than its thigh; a horse's
+ * foot bones (cannon and pastern) are as long as its shin, so it stands on
+ * hooves; a mouse has a long tail and short legs; a bird has wings: true,
+ * no forelimb, long legs and a level body. Lengths are fractions, rarely
+ * above 1 (a spine is about 0.5 to 0.7 of the body). The kit
  * gives it only a plain body, like no animal in particular: then draw what
  * makes it this animal with animal.skin (its ears, muzzle, coat colour and
  * markings, tail), as a cheetah's spots and tear lines or a zebra's stripes.
@@ -1944,7 +1947,12 @@ export interface SkeletonSpec {
   readonly modes?: readonly AnatomyMode[];
   /** The forelimbs are folded wings, as a bird's. */
   readonly wings?: boolean;
-  /** Where its feet stand on the stage: the middle of the animal, on the ground. */
+  /**
+   * Where its feet stand on the stage: the middle of the animal, on the
+   * ground. Leave it out to stand several animals side by side on one
+   * ground line. Every animal on a stage is drawn at one scale, so their
+   * sizes compare as in life.
+   */
   readonly at?: Vec2;
   /** Stage units the animal may take across; it is scaled to fit. */
   readonly width?: number;
@@ -1970,6 +1978,10 @@ export interface MoveOptions {
   /** Switches to this way of moving, at scene time `at` seconds or now; a function is read every frame. */
   readonly mode?: AnatomyMode | (() => AnatomyMode);
   readonly at?: number;
+  /** A gait to move in rather than the one the speed calls for; the speed still sets how fast the legs go. */
+  readonly gait?: Gait | (() => Gait);
+  /** Degrees to raise the neck and head (negative lowers them, as to graze): a number, a parameter, or a function. */
+  readonly neck?: number | Param | (() => number);
 }
 
 /**
@@ -2020,8 +2032,8 @@ export interface Animal {
    */
   skin(bone: SkinBone, shape: SkinShape): Handle;
   show(layer: AnatomyLayer): this;
-  /** A piece to name as a part, highlight or fade. */
-  piece(name: AnatomyPiece): Handle;
+  /** A piece to name as a part, highlight or fade: one of the pieces, or a skin bone name such as hindleg or skull, which means the piece it is in. */
+  piece(name: AnatomyPiece | SkinBone): Handle;
   readonly gait: Gait;
   readonly mode: AnatomyMode;
   /** Metres a second. */

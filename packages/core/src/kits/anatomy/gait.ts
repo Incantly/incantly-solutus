@@ -70,7 +70,7 @@ export function airborneShare(phases: Phases, duty: number, legs: readonly numbe
  * = 2.3 Froude^0.3), its stride rate from speed over stride, and a duty
  * factor short enough that a planted foot never has to slide.
  */
-export function planGait(build: Build, mode: AnatomyMode, speed: number, hipHeight: number): GaitPlan {
+export function planGait(build: Build, mode: AnatomyMode, speed: number, hipHeight: number, force?: Gait): GaitPlan {
   const legs = mode === 'bipedal' ? [0, 2] : [0, 1, 2, 3];
   if (!(speed > 0.01)) {
     return { gait: 'stand', phases: mode === 'bipedal' ? TWO_LEGS : WALK, duty: 1, stride: 0, frequency: 0, froude: 0, airborne: 0, bends: false };
@@ -80,22 +80,24 @@ export function planGait(build: Build, mode: AnatomyMode, speed: number, hipHeig
   let phases: Phases;
   let duty: number;
   let bends = false;
+  // A gait the scene asks for wins over the one the speed would pick, where the legs can make it.
+  const wanted = force && force !== 'stand' && (mode === 'bipedal' ? force === 'walk' || force === 'run' : force !== 'run') ? force : null;
   if (mode === 'bipedal') {
     phases = TWO_LEGS;
-    if (froude < GAIT_RULES.walkToRun) {
+    if (wanted ? wanted === 'walk' : froude < GAIT_RULES.walkToRun) {
       gait = 'walk';
       duty = 0.65 - 0.1 * froude;
     } else {
       gait = 'run';
       duty = Math.min(0.45, runningDuty(froude));
     }
-  } else if (froude < GAIT_RULES.walkToRun) {
+  } else if (wanted ? wanted === 'walk' : froude < GAIT_RULES.walkToRun) {
     gait = 'walk';
     phases = WALK;
-    duty = 0.75 - 0.3 * froude;
+    duty = Math.max(0.55, 0.75 - 0.3 * froude);
   } else {
-    const small = build.size < GAIT_RULES.smallBody;
-    const fast = froude >= GAIT_RULES.trotToGallop || (small && froude >= 1);
+    const small = wanted ? wanted === 'bound' : build.size < GAIT_RULES.smallBody;
+    const fast = wanted ? wanted !== 'trot' : froude >= GAIT_RULES.trotToGallop || (small && froude >= 1);
     duty = runningDuty(froude);
     if (!fast) {
       gait = 'trot';
