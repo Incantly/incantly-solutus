@@ -21,17 +21,18 @@ import { defineConfig, loadEnv, type Plugin, type ViteDevServer } from 'vite';
  * card from it in any browser, and it survives a restart of this server.
  *
  * The interactive playground creates an ephemeral model session at
- * /api/dev/session, with Anthropic, Gemini or Amazon Bedrock (open-weight
- * GLM, DeepSeek, Qwen, Kimi and MiniMax models) as its provider. Its API key
- * stays only in this process's memory and is addressed from the browser by an
- * opaque id.
+ * /api/dev/session, with Anthropic, Meta (Muse Spark and Muse Wonder),
+ * Gemini or Amazon Bedrock (open-weight GLM, DeepSeek, Qwen, Kimi and MiniMax
+ * models) as its provider. Its API key stays only in this process's memory
+ * and is addressed from the browser by an opaque id.
  *
  * The dev server also serves a key check at /api/dev/models: it calls the
  * provider's models endpoint with the key given in the body, or with the
- * server's ANTHROPIC_API_KEY, GEMINI_API_KEY or AWS_BEARER_TOKEN_BEDROCK env
- * var when no key is given, and reports whether it works and, for Gemini and
- * Bedrock, which models the key can reach. Bedrock uses AWS_REGION, default
- * us-east-1. Shell env vars win over .env files.
+ * server's ANTHROPIC_API_KEY, MODEL_API_KEY, GEMINI_API_KEY or
+ * AWS_BEARER_TOKEN_BEDROCK env var when no key is given, and reports whether
+ * it works and, for Gemini and Bedrock, which models the key can reach.
+ * Bedrock uses AWS_REGION, default us-east-1. Shell env vars win over .env
+ * files.
  */
 const DEV_SECRET = 'playground-only-secret-never-used-in-production';
 const FIGURES_FILE = fileURLToPath(new URL('./.generated/figures.json', import.meta.url));
@@ -64,21 +65,22 @@ function readFigure(input: unknown): KeptFigure | null {
 }
 const DEV_TICKET_SECRET = 'playground-only-ticket-secret-never-used-in-production';
 
-type Provider = 'anthropic' | 'gemini' | 'bedrock';
+type Provider = 'anthropic' | 'gemini' | 'bedrock' | 'spark';
 
 /** The env vars each provider's key may come from, first match winning. */
 const KEY_VARS: Readonly<Record<Provider, readonly string[]>> = {
   anthropic: ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'],
   gemini: ['GEMINI_API_KEY', 'GOOGLE_API_KEY'],
   bedrock: ['AWS_BEARER_TOKEN_BEDROCK', 'BEDROCK_API_KEY'],
+  spark: ['MODEL_API_KEY'],
 };
 
-const isProvider = (value: unknown): value is Provider => value === 'anthropic' || value === 'gemini' || value === 'bedrock';
+const isProvider = (value: unknown): value is Provider => value === 'anthropic' || value === 'gemini' || value === 'bedrock' || value === 'spark';
 
 /** The dev server's model settings from the .env files beside this config and the shell, the shell winning. */
 function devEnv(): Record<string, string> {
   // .env files live beside this config; a dev server started from another directory must still find them.
-  const prefixes = ['ANTHROPIC_', 'GEMINI_', 'GOOGLE_', 'AWS_', 'BEDROCK_'];
+  const prefixes = ['ANTHROPIC_', 'GEMINI_', 'GOOGLE_', 'AWS_', 'BEDROCK_', 'MODEL_'];
   return {
     ...loadEnv('development', process.cwd(), prefixes),
     ...loadEnv('development', fileURLToPath(new URL('.', import.meta.url)), prefixes),
@@ -153,6 +155,24 @@ async function bedrockProbe(g: Generation, key: string, region: string): Promise
   }
 }
 
+/** Checks a Meta Model API key by listing the Muse text models it can reach. */
+async function sparkProbe(key: string): Promise<{ ok: boolean; message: string; models?: string[] }> {
+  try {
+    const answer = await fetch('https://api.meta.ai/v1/models', {
+      headers: { authorization: `Bearer ${key.trim()}` },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!answer.ok) {
+      return { ok: false, message: `Meta answered ${answer.status} (${answer.statusText || 'request failed'}) for that key.` };
+    }
+    const payload = (await answer.json()) as { data?: Array<{ id?: string }> };
+    const models = (payload.data ?? []).map((m) => m.id ?? '').filter((id) => /^muse-(spark|wonder)-/.test(id)).sort();
+    return { ok: true, message: `Key works: ${models.length} Muse text models visible.`, models };
+  } catch (error) {
+    return { ok: false, message: `Could not reach Meta: ${error instanceof Error ? error.message : String(error)}` };
+  }
+}
+
 async function keyProbe(key: string): Promise<{ ok: boolean; message: string; models?: string[] }> {
   try {
     const answer = await fetch('https://api.anthropic.com/v1/models?limit=100', {
@@ -184,9 +204,16 @@ function generationService(): Plugin {
   const anthropicModels = new Set(['claude-haiku-5-5', 'claude-sonnet-5-5', 'claude-opus-5-5']);
   // Gemini's and Bedrock's names change often, so any name of the right family is taken; the key check lists the real ones.
   // Bedrock takes only open-weight GLM, DeepSeek, Qwen, Kimi and MiniMax models.
+  // Meta takes only its documented Muse Spark and Muse Wonder text models.
   const supported = (g: Generation, provider: Provider, model: unknown): model is string =>
     typeof model === 'string' &&
-    (provider === 'gemini' ? /^gemini-[\w.-]{1,60}$/.test(model) : provider === 'bedrock' ? g.BEDROCK_MODEL.test(model) : anthropicModels.has(model));
+    (provider === 'gemini'
+      ? /^gemini-[\w.-]{1,60}$/.test(model)
+      : provider === 'bedrock'
+        ? g.BEDROCK_MODEL.test(model)
+        : provider === 'spark'
+          ? g.SPARK_MODEL.test(model)
+          : anthropicModels.has(model));
 
   async function body(req: IncomingMessage, limit = 16_384): Promise<unknown> {
     const chunks: Buffer[] = [];
@@ -215,7 +242,9 @@ function generationService(): Plugin {
           ? new g.GeminiClient({ apiKey: session.apiKey, models: chosen })
           : session.provider === 'bedrock'
             ? new g.BedrockClient({ apiKey: session.apiKey, region: bedrockRegion(), models: chosen })
-            : new g.AnthropicClient({ apiKey: session.apiKey, models: chosen })
+            : session.provider === 'spark'
+              ? new g.SparkClient({ apiKey: session.apiKey, models: chosen })
+              : new g.AnthropicClient({ apiKey: session.apiKey, models: chosen })
         : g.referenceModel({ fault: name, stubborn, latencyMs: 250, chunk: 48 });
     const records = new g.MemoryRecords();
     gallery ??= new g.MemoryGalleryStore();
@@ -258,11 +287,9 @@ function generationService(): Plugin {
             const givenKey = typeof input.apiKey === 'string' && input.apiKey.trim().length >= 20 ? input.apiKey.trim() : null;
             const effective = givenKey ?? providerEnv(provider).key;
             if (!effective) {
+              const name = provider === 'gemini' ? 'Gemini' : provider === 'bedrock' ? 'Bedrock' : provider === 'spark' ? 'Meta' : 'Anthropic';
               return json(400, {
-                message:
-                  provider === 'anthropic'
-                    ? 'Enter a valid Anthropic API key, or set ANTHROPIC_API_KEY in the dev server environment.'
-                    : `Set ${KEY_VARS[provider][0]} in apps/playground/.env (or the dev server environment) to generate with ${provider === 'gemini' ? 'Gemini' : 'Bedrock'}.`,
+                message: `Enter a valid ${name} API key, or set ${KEY_VARS[provider][0]} in the dev server environment.`,
               });
             }
             if (!supported(g, provider, input.planModel)) return json(400, { message: 'Choose a supported planning model.' });
@@ -279,7 +306,14 @@ function generationService(): Plugin {
             if (!effective) {
               return json(400, { ok: false, message: `No key to check: pass an apiKey in the body or set ${KEY_VARS[provider][0]} on the dev server.` });
             }
-            const probe = provider === 'gemini' ? await geminiProbe(effective) : provider === 'bedrock' ? await bedrockProbe(g, effective, bedrockRegion()) : await keyProbe(effective);
+            const probe =
+              provider === 'gemini'
+                ? await geminiProbe(effective)
+                : provider === 'bedrock'
+                  ? await bedrockProbe(g, effective, bedrockRegion())
+                  : provider === 'spark'
+                    ? await sparkProbe(effective)
+                    : await keyProbe(effective);
             return json(probe.ok ? 200 : 401, { ...probe, provider, source: givenKey !== null ? 'entered' : providerEnv(provider).source });
           }
           const removeSession = /^\/api\/dev\/session\/([\w-]+)$/.exec(path);

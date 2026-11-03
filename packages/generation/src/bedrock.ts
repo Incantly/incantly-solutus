@@ -1,4 +1,4 @@
-import { CONTINUE_PROMPT, httpError, ModelError, type CallPurpose, type ModelCall, type ModelClient, type ModelReply } from './models';
+import { CONTINUE_PROMPT, applyChatEvent, httpError, ModelError, type CallPurpose, type ChatStreamState, type ModelCall, type ModelClient, type ModelReply } from './models';
 
 /**
  * Amazon Bedrock, as a third provider, for open-weight models: GLM, DeepSeek,
@@ -45,13 +45,6 @@ export interface BedrockOptions {
   /** Tries after a busy or dropped response that streamed no text yet. */
   readonly retries?: number;
   readonly fetch?: typeof fetch;
-}
-
-interface StreamState {
-  text: string;
-  model: string;
-  stopReason: string | null;
-  usage: { prompt: number; output: number; cached: number };
 }
 
 export class BedrockClient implements ModelClient {
@@ -181,7 +174,7 @@ export class BedrockClient implements ModelClient {
       clearTimeout(gap);
       throw new ModelError('protocol', 'The model sent no body');
     }
-    const state: StreamState = { text: '', model: this.modelFor(call.purpose), stopReason: null, usage: { prompt: 0, output: 0, cached: 0 } };
+    const state: ChatStreamState = { text: '', model: this.modelFor(call.purpose), stopReason: null, usage: { prompt: 0, output: 0, cached: 0 } };
     let firstTextMs: number | undefined;
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -234,40 +227,3 @@ export class BedrockClient implements ModelClient {
   }
 }
 
-/** Chat Completions finish reasons in the pipeline's words: a reply cut off at the limit is max_tokens. */
-const FINISH: Readonly<Record<string, string>> = { stop: 'end_turn', length: 'max_tokens' };
-
-/** Applies one Chat Completions stream event to the state; returns any new text. Reasoning is never passed on. */
-export function applyChatEvent(event: string, state: StreamState): string {
-  const data = event
-    .split('\n')
-    .filter((line) => line.startsWith('data:'))
-    .map((line) => line.slice(5).trimStart())
-    .join('\n');
-  if (!data || data === '[DONE]') return '';
-  let message: Record<string, unknown>;
-  try {
-    message = JSON.parse(data) as Record<string, unknown>;
-  } catch {
-    throw new ModelError('protocol', 'The model sent an unreadable event');
-  }
-  if (typeof message.error === 'object' && message.error !== null) {
-    const error = message.error as { message?: unknown; code?: unknown };
-    const text = typeof error.message === 'string' ? error.message : 'The model reported an error';
-    throw new ModelError(error.code === 429 || error.code === 'throttling' ? 'rate-limited' : 'server', text);
-  }
-  if (typeof message.model === 'string') state.model = message.model;
-  const usage = message.usage as { prompt_tokens?: unknown; completion_tokens?: unknown; prompt_tokens_details?: { cached_tokens?: unknown } } | undefined;
-  if (usage) {
-    if (typeof usage.prompt_tokens === 'number') state.usage.prompt = usage.prompt_tokens;
-    if (typeof usage.completion_tokens === 'number') state.usage.output = usage.completion_tokens;
-    if (typeof usage.prompt_tokens_details?.cached_tokens === 'number') state.usage.cached = usage.prompt_tokens_details.cached_tokens;
-  }
-  const choice = (message.choices as Array<{ delta?: { content?: unknown }; finish_reason?: unknown }> | undefined)?.[0];
-  if (!choice) return '';
-  if (typeof choice.finish_reason === 'string') state.stopReason = FINISH[choice.finish_reason] ?? choice.finish_reason;
-  const content = choice.delta?.content;
-  if (typeof content !== 'string' || content === '') return '';
-  state.text += content;
-  return content;
-}

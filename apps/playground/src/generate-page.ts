@@ -130,9 +130,10 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
       <div class="settings-body">
         <div class="setting-group">
           <label for="model-provider">Provider</label>
-          <p class="setting-description">Whose models plan and build the figure. Gemini uses the dev server's GEMINI_API_KEY; Bedrock uses AWS_BEARER_TOKEN_BEDROCK and AWS_REGION, and offers only open-weight GLM, DeepSeek, Qwen, Kimi and MiniMax models.</p>
+          <p class="setting-description">Whose models plan and build the figure. Meta offers Muse Spark and Muse Wonder; its Contributor variants are discounted in exchange for training use. Gemini uses the dev server's GEMINI_API_KEY; Bedrock uses AWS_BEARER_TOKEN_BEDROCK and AWS_REGION, and offers only open-weight GLM, DeepSeek, Qwen, Kimi and MiniMax models.</p>
           <select id="model-provider" class="setting-select">
             <option value="anthropic" selected>Anthropic</option>
+            <option value="spark">Meta (Muse Spark)</option>
             <option value="gemini">Google Gemini</option>
             <option value="bedrock">Amazon Bedrock (GLM, DeepSeek, Qwen, Kimi, MiniMax)</option>
           </select>
@@ -156,8 +157,13 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
           </select>
         </div>
         <div class="setting-group">
+          <label for="api-key">API key</label>
+          <p class="setting-description">Paste this provider's key to generate with it. It is sent to the dev server only, kept in memory on both ends, and never saved. Leave it empty to use the dev server's ANTHROPIC_API_KEY, MODEL_API_KEY, GEMINI_API_KEY or AWS_BEARER_TOKEN_BEDROCK (.env) instead.</p>
+          <input type="password" id="api-key" class="setting-input" placeholder="Paste key, or leave empty for the dev server's key" autocomplete="off" spellcheck="false" />
+        </div>
+        <div class="setting-group">
           <label for="api-key-test">Connection</label>
-          <p class="setting-description">The dev server's ANTHROPIC_API_KEY, GEMINI_API_KEY or AWS_BEARER_TOKEN_BEDROCK is used; copy apps/playground/.env.example to .env and set it there. Testing a Gemini or Bedrock key also lists the models it can reach.</p>
+          <p class="setting-description">Checks the pasted key, or the dev server's key when the field is empty. Testing a Gemini or Bedrock key also lists the models it can reach.</p>
           <button type="button" class="test-key-btn" id="api-key-test">Test connection</button>
           <p class="test-key-status" hidden></p>
         </div>
@@ -321,12 +327,28 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
   const providerSelect = settingsModal.querySelector('#model-provider') as HTMLSelectElement;
   const planningModelSelect = settingsModal.querySelector('#planning-model') as HTMLSelectElement;
   const sceneModelSelect = settingsModal.querySelector('#scene-model') as HTMLSelectElement;
+  const apiKeyInput = settingsModal.querySelector('#api-key') as HTMLInputElement;
 
-  // Each provider's models. Anthropic's are fixed; Gemini's change often, so testing the key replaces these with the ones it can reach.
+  // Pasted keys live here only: one per provider, memory only, never saved to storage.
+  const enteredKeys = new Map<string, string>();
+  const enteredKey = (): string | null => {
+    const key = apiKeyInput.value.trim();
+    return key === '' ? null : key;
+  };
+
+  // Each provider's models. Anthropic's and Meta's are fixed; Gemini's change often, so testing the key replaces these with the ones it can reach.
   const ANTHROPIC_MODELS: ReadonlyArray<readonly [string, string]> = [
     ['claude-haiku-5-5', 'Claude Haiku 5.5'],
     ['claude-sonnet-5-5', 'Claude Sonnet 5.5'],
     ['claude-opus-5-5', 'Claude Opus 5.5'],
+  ];
+  const SPARK_MODELS: ReadonlyArray<readonly [string, string]> = [
+    ['muse-spark-1.3-contributor', 'Muse Spark 1.3 Contributor (discounted)'],
+    ['muse-spark-1.3', 'Muse Spark 1.3'],
+    ['muse-spark-1.2-contributor', 'Muse Spark 1.2 Contributor (discounted)'],
+    ['muse-spark-1.2', 'Muse Spark 1.2'],
+    ['muse-spark-1.1', 'Muse Spark 1.1'],
+    ['muse-wonder-1.0', 'Muse Wonder 1.0'],
   ];
   // Each listing provider's models: defaults until a key check lists the ones it can reach.
   const listed: Record<'gemini' | 'bedrock', string[]> = {
@@ -345,10 +367,12 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
       ? { plan: newest(ids, /^gemini-[\d.]+-flash-lite$/) ?? ids[0]!, scene: newest(ids, /^gemini-[\d.]+-flash$/) ?? ids[0]! }
       : provider === 'bedrock'
         ? { plan: ids.find((id) => id === 'zai.glm-4.7-flash') ?? ids[0]!, scene: ids.find((id) => id === 'zai.glm-4.7') ?? ids[0]! }
-        : { plan: 'claude-haiku-5-5', scene: 'claude-sonnet-5-5' };
+        : provider === 'spark'
+          ? { plan: 'muse-spark-1.3-contributor', scene: 'muse-spark-1.3-contributor' }
+          : { plan: 'claude-haiku-5-5', scene: 'claude-sonnet-5-5' };
   const fillModels = (wanted?: { planModel?: string; sceneModel?: string }) => {
     const provider = providerSelect.value;
-    const options = listing(provider) ? listed[provider].map((id) => [id, id] as const) : ANTHROPIC_MODELS;
+    const options = listing(provider) ? listed[provider].map((id) => [id, id] as const) : provider === 'spark' ? SPARK_MODELS : ANTHROPIC_MODELS;
     const picks = defaultsFor(provider, options.map(([id]) => id));
     for (const [select, fallback, want] of [
       [planningModelSelect, picks.plan, wanted?.planModel],
@@ -378,7 +402,18 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
   providerSelect.addEventListener('change', () => {
     fillModels();
     saveModels();
+    // Each provider keeps its own pasted key; switching shows that provider's.
+    apiKeyInput.value = enteredKeys.get(providerSelect.value) ?? '';
     // A new provider needs a new session: the next message starts one.
+    resetSession();
+  });
+  apiKeyInput.addEventListener('input', () => {
+    const key = enteredKey();
+    if (key) enteredKeys.set(providerSelect.value, key);
+    else enteredKeys.delete(providerSelect.value);
+  });
+  apiKeyInput.addEventListener('change', () => {
+    // A new key needs a new session: the next message starts one.
     resetSession();
   });
   for (const select of [planningModelSelect, sceneModelSelect]) {
@@ -409,12 +444,13 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
     testKeyStatus.hidden = false;
     testKeyStatus.className = 'test-key-status pending';
     const provider = providerSelect.value;
-    testKeyStatus.textContent = `Checking with ${provider === 'gemini' ? 'Google' : provider === 'bedrock' ? 'Amazon Bedrock' : 'Anthropic'}…`;
+    testKeyStatus.textContent = `Checking with ${provider === 'gemini' ? 'Google' : provider === 'bedrock' ? 'Amazon Bedrock' : provider === 'spark' ? 'Meta' : 'Anthropic'}…`;
     try {
+      const key = enteredKey();
       const answer = await fetch('/api/dev/models', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ provider }),
+        body: JSON.stringify({ provider, ...(key ? { apiKey: key } : {}) }),
       });
       const result = (await answer.json()) as { ok?: boolean; message?: string; source?: string; models?: string[] };
       // A Gemini or Bedrock key lists the models it can reach: offer those.
@@ -601,6 +637,7 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
     providerSelect.disabled = busy;
     planningModelSelect.disabled = busy;
     sceneModelSelect.disabled = busy;
+    apiKeyInput.disabled = busy;
     sendBtn.setAttribute('aria-busy', String(busy));
   }
 
@@ -608,6 +645,7 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
     if (client) return;
     if (sessionSetup) return sessionSetup;
     sessionSetup = (async () => {
+      const key = enteredKey();
       const setupResponse = await fetch('/api/dev/session', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -615,6 +653,7 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
           provider: providerSelect.value,
           planModel: planningModelSelect.value,
           sceneModel: sceneModelSelect.value,
+          ...(key ? { apiKey: key } : {}),
         }),
       });
       const answer = (await setupResponse.json()) as { id?: string; baseUrl?: string; message?: string };
