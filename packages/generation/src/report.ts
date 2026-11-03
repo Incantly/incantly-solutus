@@ -191,10 +191,63 @@ function when(failure: ProbeFailure, plan: ScenePlan | null): string | null {
   return parts.length > 0 ? parts.join(', ') : null;
 }
 
+/**
+ * API-guard errors, hinted by message: the same guard can surface under any
+ * check that runs the line, so the check alone misleads (a spring error found
+ * while stepping is about the stiffness, not the steps).
+ */
+const GUARDS: ReadonlyArray<readonly [RegExp, (match: RegExpMatchArray) => string]> = [
+  [/has no values|has no points/, () => 'a series starts with data: pass initial values, or a function returning them for live data'],
+  [/has \d+ (values|points); at most (\d+)/, (m) => `keep the series to ${m[2]} ${m[1]}: sample or window the data`],
+  [/has \d+ values but the chart has (\d+) categories/, (m) => `a series holds exactly one value per category: match the chart's ${m[1]} categories`],
+  [/must be above 0/, () => 'a control reaches a value the kit rejects; clamp it above 0 where it is passed in'],
+  [/Expected an element the SDK made/, () => 'pass an element (stage.circle, …) or a kit object with a handle; a chart series is already a part under its own name'],
+  [/must be a point \[x, y\]/, () => 'pass both coordinates as an [x, y] pair'],
+];
+
+/** The guard hint for an error message, or null when no guard fired. */
+function guardHint(message: string): string | null {
+  for (const [pattern, hint] of GUARDS) {
+    const match = pattern.exec(message);
+    if (match) return hint(match);
+  }
+  return null;
+}
+
+/** Whether the failure is an API-guard error: its fix is in the contract, not the check's rule. */
+function guardFailure(failure: ProbeFailure): boolean {
+  return failure.error !== undefined && guardHint(failure.error.message) !== null;
+}
+
+/**
+ * Concrete moves from a bounds message: "the circle reaches y = 433, below
+ * 400" becomes "move the circle up by 33 units". Stage units grow right and
+ * down, so a negative y shift moves up. At most three moves; an element the
+ * message does not parse contributes none.
+ */
+function boundsShifts(message: string): string[] {
+  const shifts: string[] = [];
+  for (const part of message.split(';')) {
+    const who = /the (\w+(?: "[^"]+")?) reaches /.exec(part)?.[1];
+    if (!who) continue;
+    for (const match of part.matchAll(/([xy]) = (-?[\d.]+), (left of|right of|above|below) (-?[\d.]+)/g)) {
+      const [, axis, reached, , bound] = match;
+      const delta = Math.round((Number(bound) - Number(reached)) * 100) / 100;
+      if (!Number.isFinite(delta) || delta === 0) continue;
+      const move = axis === 'x' ? (delta > 0 ? 'right' : 'left') : delta > 0 ? 'down' : 'up';
+      shifts.push(`move the ${who} ${move} by ${Math.abs(delta)} units`);
+    }
+    if (shifts.length >= 3) break;
+  }
+  return shifts.slice(0, 3);
+}
+
 /** A hint from the failure taxonomy (PRD 27.7): what usually causes this. */
 export function likelyCause(failure: ProbeFailure): string | null {
   const message = failure.error?.message ?? '';
   if (failure.error?.phase === 'runaway') return 'a loop never ends, or does far too much work: give every loop a small fixed bound';
+  const guard = guardHint(message);
+  if (guard) return guard;
   if (/reading '[^']*'/.test(message) || /of undefined|of null/.test(message)) {
     return 'an index or key is out of range at this parameter state; check lengths and bounds before reading';
   }
@@ -218,6 +271,10 @@ export function likelyCause(failure: ProbeFailure): string | null {
       const width = box ? Number(box[3]) : Number.NaN;
       if (width < 60) {
         return `stage units work like pixels: text is 12 units tall, so in a viewBox only ${width} wide it covers the stage. Use a viewBox a few hundred units wide, such as [0, 0, 520, 390], and scale the model's metres to it`;
+      }
+      const shifts = boundsShifts(failure.message);
+      if (shifts.length > 0) {
+        return `${shifts.join('; ')} to fit the viewBox; if a shape is larger than the box, scale its coordinates instead. Then check every parameter value still fits`;
       }
       return 'some coordinates leave the stage; scale them to the viewBox or the graph ranges';
     }
@@ -260,7 +317,8 @@ export function probeReport(report: ProbeReport, fragments: FragmentSet, plan: S
       lines.push(`         ${other.check}: ${other.message}${at ? ` (${at})` : ''}`);
     }
   }
-  const rules = [first, ...others].map((f) => PROBE_RULES[f.check] ?? 5);
+  // A guard error's fix is in the contract (rule 13); the check that happened to run the line misleads.
+  const rules = [guardFailure(first) ? 13 : (PROBE_RULES[first.check] ?? 5), ...others.map((f) => PROBE_RULES[f.check] ?? 5)];
   lines.push(quoteRules(rules));
   const location = first.error?.line !== undefined ? ` at js:${first.error.line}:${first.error.column ?? 0}` : '';
   return {
@@ -289,15 +347,18 @@ A block may hold several SEARCH/REPLACE pairs, applied in order; each SEARCH mus
 /**
  * The repair call (RP-5): only the report, the fragments as they stand, the
  * catalog lines for the capabilities in use and, when the failure is an
- * unknown name, the contract for them. Never the conversation so far.
+ * unknown name or the probe caught it live, the contract for them. A probe
+ * failure's fix needs the API it tripped; one line per capability leaves the
+ * model guessing it from memory. Never the conversation so far.
  */
 export function repairPrompt(report: RepairReport, fragments: FragmentSet, plan: ScenePlan): Prompt {
   const unknownName = /^unknown-(sdk-call|method|property)$/.test(report.check);
+  const needsContract = unknownName || report.kind === 'probe';
   const reference = [
     REPAIR_FORMAT,
     'Capabilities this scene uses:',
     catalogLines(plan.capabilities),
-    ...(unknownName ? ['CONTRACT', '```ts', contractFor(plan.capabilities), '```'] : []),
+    ...(needsContract ? ['CONTRACT', '```ts', contractFor(plan.capabilities), '```'] : []),
   ].join('\n');
   const user = [
     report.text,

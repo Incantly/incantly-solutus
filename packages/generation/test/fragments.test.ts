@@ -75,4 +75,15 @@ describe('plan replies', () => {
     expect(parsePlanReply('no plan here').problem).toBe('The reply has no JSON object');
     expect(parsePlanReply('```json\n{ concept: lens }\n```').problem).toMatch(/^The plan is not valid JSON/);
   });
+
+  it('reads the plan before trailing prose, braces in strings not counted', () => {
+    const fenced = '```json\n{"concept":"ragdoll","idea":"A doll falls"}\nHere is why this plan works.\n```';
+    expect(parsePlanReply(fenced).value).toEqual({ concept: 'ragdoll', idea: 'A doll falls' });
+    const bare = 'Sure! {"concept":"lens"} Done: {"not": "a plan"}.';
+    expect(parsePlanReply(bare).value).toEqual({ concept: 'lens' });
+    const braces = '```json\n{"concept":"lens","note":"curly {braces} and \\"quotes\\""}\n```\ntrailing { words }';
+    expect(parsePlanReply(braces).value).toEqual({ concept: 'lens', note: 'curly {braces} and "quotes"' });
+    // Genuinely broken JSON still reports the strict error, not a salvage.
+    expect(parsePlanReply('```json\n{ concept: lens, trailing }\n```').problem).toMatch(/^The plan is not valid JSON/);
+  });
 });

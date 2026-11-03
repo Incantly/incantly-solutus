@@ -116,6 +116,38 @@ export interface ParsedJson {
   readonly problem: string | null;
 }
 
+/**
+ * The first complete JSON value in the text, or null: braces inside strings
+ * do not count, and a mismatched closer is not salvageable.
+ */
+function firstJsonValue(body: string): string | null {
+  const start = body.search(/[{[]/);
+  if (start < 0) return null;
+  const closers: string[] = [];
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < body.length; i++) {
+    const c = body[i]!;
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (c === '\\') escaped = true;
+      else if (c === '"') inString = false;
+      continue;
+    }
+    if (c === '"') {
+      inString = true;
+      continue;
+    }
+    if (c === '{') closers.push('}');
+    else if (c === '[') closers.push(']');
+    else if (c === '}' || c === ']') {
+      if (closers.pop() !== c) return null;
+      if (closers.length === 0) return body.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
 /** The plan object in a reply: the first ```json block, or else the outermost braces. */
 export function parsePlanReply(text: string): ParsedJson {
   const fenced = /```json\s*\n([\s\S]*?)\n\s*```/i.exec(text);
@@ -129,6 +161,17 @@ export function parsePlanReply(text: string): ParsedJson {
   try {
     return { value: JSON.parse(body) as unknown, problem: null };
   } catch (error) {
-    return { value: null, problem: `The plan is not valid JSON: ${error instanceof Error ? error.message : String(error)}` };
+    const problem = `The plan is not valid JSON: ${error instanceof Error ? error.message : String(error)}`;
+    // A complete plan followed by trailing prose still parses from the front;
+    // the schema judges what it reads, so only a real plan survives this.
+    const first = firstJsonValue(body);
+    if (first !== null) {
+      try {
+        return { value: JSON.parse(first) as unknown, problem: null };
+      } catch {
+        // Genuinely broken: report the strict error.
+      }
+    }
+    return { value: null, problem };
   }
 }
