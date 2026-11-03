@@ -1,0 +1,41 @@
+{
+  "concept": "an ape walking on four legs and on two",
+  "idea": "An ape walks on all fours, leaning on its knuckles, but its skeleton also lets it stand: its body tips up until it balances over its hips, and its arms hang free.",
+  "kind": "motion",
+  "size": "standard",
+  "capabilities": ["anatomy", "controls", "readout", "explain", "describe", "steps"],
+  "parameters": [
+    {
+      "name": "posture",
+      "min": 0,
+      "max": 1,
+      "default": 0,
+      "control": "choice",
+      "options": ["On all fours", "On two legs"],
+      "why": "The two ways its skeleton lets it move."
+    },
+    {
+      "name": "speed",
+      "unit": "m/s",
+      "min": 0,
+      "max": 3,
+      "default": 1,
+      "why": "From standing still to a quick walk or run."
+    }
+  ],
+  "model": {
+    "inputs": ["posture", "speed"],
+    "outputs": [
+      { "name": "mode", "dependsOn": ["posture"] }
+    ]
+  },
+  "parts": ["Ape", "Arms", "Legs", "Back"],
+  "moves": "The ape walks on the spot over a ground that slides under it; changing its posture tips its body up onto its legs or down onto its knuckles over about a second.",
+  "steps": [
+    "On all fours, the long arms take weight on the knuckles",
+    "Standing up, the body tips until it balances over the hips",
+    "On two legs the arms hang free and swing",
+    "Its legs are short for its body, so it stands with bent knees"
+  ],
+  "singularPoints": []
+}

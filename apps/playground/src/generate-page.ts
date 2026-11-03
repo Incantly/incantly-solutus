@@ -129,8 +129,18 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
       </div>
       <div class="settings-body">
         <div class="setting-group">
+          <label for="model-provider">Provider</label>
+          <p class="setting-description">Whose models plan and build the figure. Meta offers Muse Spark and Muse Wonder; its Contributor variants are discounted in exchange for training use. Gemini uses the dev server's GEMINI_API_KEY; Bedrock uses AWS_BEARER_TOKEN_BEDROCK and AWS_REGION, and offers only open-weight GLM, DeepSeek, Qwen, Kimi and MiniMax models.</p>
+          <select id="model-provider" class="setting-select">
+            <option value="anthropic" selected>Anthropic</option>
+            <option value="spark">Meta (Muse Spark)</option>
+            <option value="gemini">Google Gemini</option>
+            <option value="bedrock">Amazon Bedrock (GLM, DeepSeek, Qwen, Kimi, MiniMax)</option>
+          </select>
+        </div>
+        <div class="setting-group">
           <label for="planning-model">Planning Model</label>
-          <p class="setting-description">A fast model that plans what the figure will teach (default: Haiku)</p>
+          <p class="setting-description">A fast model that plans what the figure will teach</p>
           <select id="planning-model" class="setting-select">
             <option value="claude-haiku-5-5">Claude Haiku 5.5</option>
             <option value="claude-sonnet-5-5">Claude Sonnet 5.5</option>
@@ -139,7 +149,7 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
         </div>
         <div class="setting-group">
           <label for="scene-model">Scene Generation Model</label>
-          <p class="setting-description">A capable model that builds the interactive scene (default: Sonnet)</p>
+          <p class="setting-description">A capable model that builds the interactive scene</p>
           <select id="scene-model" class="setting-select">
             <option value="claude-haiku-5-5">Claude Haiku 5.5</option>
             <option value="claude-sonnet-5-5" selected>Claude Sonnet 5.5</option>
@@ -147,8 +157,13 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
           </select>
         </div>
         <div class="setting-group">
+          <label for="api-key">API key</label>
+          <p class="setting-description">Paste this provider's key to generate with it. It is sent to the dev server only, kept in memory on both ends, and never saved. Leave it empty to use the dev server's ANTHROPIC_API_KEY, MODEL_API_KEY, GEMINI_API_KEY or AWS_BEARER_TOKEN_BEDROCK (.env) instead.</p>
+          <input type="password" id="api-key" class="setting-input" placeholder="Paste key, or leave empty for the dev server's key" autocomplete="off" spellcheck="false" />
+        </div>
+        <div class="setting-group">
           <label for="api-key-test">Connection</label>
-          <p class="setting-description">The dev server's ANTHROPIC_API_KEY is used; copy apps/playground/.env.example to .env and set it there.</p>
+          <p class="setting-description">Checks the pasted key, or the dev server's key when the field is empty. Testing a Gemini or Bedrock key also lists the models it can reach.</p>
           <button type="button" class="test-key-btn" id="api-key-test">Test connection</button>
           <p class="test-key-status" hidden></p>
         </div>
@@ -309,21 +324,102 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
   const chatList = sidebar.querySelector('.chat-list') as HTMLDivElement;
   const settingsBtn = sidebar.querySelector('.settings-btn') as HTMLButtonElement;
   const closeSettingsBtn = settingsModal.querySelector('.close-settings-btn') as HTMLButtonElement;
+  const providerSelect = settingsModal.querySelector('#model-provider') as HTMLSelectElement;
   const planningModelSelect = settingsModal.querySelector('#planning-model') as HTMLSelectElement;
   const sceneModelSelect = settingsModal.querySelector('#scene-model') as HTMLSelectElement;
+  const apiKeyInput = settingsModal.querySelector('#api-key') as HTMLInputElement;
 
-  // The chosen models carry across visits; the key stays in the dev server's .env.
+  // Pasted keys live here only: one per provider, memory only, never saved to storage.
+  const enteredKeys = new Map<string, string>();
+  const enteredKey = (): string | null => {
+    const key = apiKeyInput.value.trim();
+    return key === '' ? null : key;
+  };
+
+  // Each provider's models. Anthropic's and Meta's are fixed; Gemini's change often, so testing the key replaces these with the ones it can reach.
+  const ANTHROPIC_MODELS: ReadonlyArray<readonly [string, string]> = [
+    ['claude-haiku-5-5', 'Claude Haiku 5.5'],
+    ['claude-sonnet-5-5', 'Claude Sonnet 5.5'],
+    ['claude-opus-5-5', 'Claude Opus 5.5'],
+  ];
+  const SPARK_MODELS: ReadonlyArray<readonly [string, string]> = [
+    ['muse-spark-1.3-contributor', 'Muse Spark 1.3 Contributor (discounted)'],
+    ['muse-spark-1.3', 'Muse Spark 1.3'],
+    ['muse-spark-1.2-contributor', 'Muse Spark 1.2 Contributor (discounted)'],
+    ['muse-spark-1.2', 'Muse Spark 1.2'],
+    ['muse-spark-1.1', 'Muse Spark 1.1'],
+    ['muse-wonder-1.0', 'Muse Wonder 1.0'],
+  ];
+  // Each listing provider's models: defaults until a key check lists the ones it can reach.
+  const listed: Record<'gemini' | 'bedrock', string[]> = {
+    gemini: ['gemini-3.5-flash-lite', 'gemini-3.8-flash'],
+    bedrock: ['zai.glm-4.7-flash', 'zai.glm-4.7', 'deepseek.v3.2'],
+  };
+  const listing = (provider: string): provider is 'gemini' | 'bedrock' => provider === 'gemini' || provider === 'bedrock';
+  /** The newest numbered Gemini model of a kind, such as gemini-3.8-flash, over aliases and previews. */
+  const newest = (ids: readonly string[], kind: RegExp) =>
+    ids
+      .filter((id) => kind.test(id))
+      .sort((a, b) => Number(/^gemini-([\d.]+)/.exec(b)?.[1] ?? 0) - Number(/^gemini-([\d.]+)/.exec(a)?.[1] ?? 0))[0];
+  /** The provider's usual pick: a small fast model plans, a balanced one builds. */
+  const defaultsFor = (provider: string, ids: readonly string[]) =>
+    provider === 'gemini'
+      ? { plan: newest(ids, /^gemini-[\d.]+-flash-lite$/) ?? ids[0]!, scene: newest(ids, /^gemini-[\d.]+-flash$/) ?? ids[0]! }
+      : provider === 'bedrock'
+        ? { plan: ids.find((id) => id === 'zai.glm-4.7-flash') ?? ids[0]!, scene: ids.find((id) => id === 'zai.glm-4.7') ?? ids[0]! }
+        : provider === 'spark'
+          ? { plan: 'muse-spark-1.3-contributor', scene: 'muse-spark-1.3-contributor' }
+          : { plan: 'claude-haiku-5-5', scene: 'claude-sonnet-5-5' };
+  const fillModels = (wanted?: { planModel?: string; sceneModel?: string }) => {
+    const provider = providerSelect.value;
+    const options = listing(provider) ? listed[provider].map((id) => [id, id] as const) : provider === 'spark' ? SPARK_MODELS : ANTHROPIC_MODELS;
+    const picks = defaultsFor(provider, options.map(([id]) => id));
+    for (const [select, fallback, want] of [
+      [planningModelSelect, picks.plan, wanted?.planModel],
+      [sceneModelSelect, picks.scene, wanted?.sceneModel],
+    ] as const) {
+      select.replaceChildren(...options.map(([id, label]) => new Option(label, id)));
+      select.value = want && options.some(([id]) => id === want) ? want : fallback;
+    }
+  };
+
+  // The chosen provider and models carry across visits; the keys stay in the dev server's .env.
   const MODEL_KEY = 'incantly-playground-models';
+  const saveModels = () =>
+    localStorage.setItem(MODEL_KEY, JSON.stringify({ provider: providerSelect.value, planModel: planningModelSelect.value, sceneModel: sceneModelSelect.value, listed }));
   try {
-    const modelsSaved = JSON.parse(localStorage.getItem(MODEL_KEY) ?? 'null') as { planModel?: string; sceneModel?: string } | null;
-    if (modelsSaved && [...planningModelSelect.options].some((o) => o.value === modelsSaved.planModel)) planningModelSelect.value = modelsSaved.planModel!;
-    if (modelsSaved && [...sceneModelSelect.options].some((o) => o.value === modelsSaved.sceneModel)) sceneModelSelect.value = modelsSaved.sceneModel!;
+    const modelsSaved = JSON.parse(localStorage.getItem(MODEL_KEY) ?? 'null') as { provider?: string; planModel?: string; sceneModel?: string; listed?: Record<string, unknown> } | null;
+    for (const provider of ['gemini', 'bedrock'] as const) {
+      const saved = modelsSaved?.listed?.[provider];
+      if (Array.isArray(saved) && saved.length > 0 && saved.every((m) => typeof m === 'string' && m.length < 100)) listed[provider] = saved as string[];
+    }
+    if ([...providerSelect.options].some((o) => o.value === modelsSaved?.provider)) providerSelect.value = modelsSaved!.provider!;
+    fillModels(modelsSaved ?? undefined);
   } catch {
     // No saved models, or a shape we cannot use: defaults it is.
+    fillModels();
   }
+  providerSelect.addEventListener('change', () => {
+    fillModels();
+    saveModels();
+    // Each provider keeps its own pasted key; switching shows that provider's.
+    apiKeyInput.value = enteredKeys.get(providerSelect.value) ?? '';
+    // A new provider needs a new session: the next message starts one.
+    resetSession();
+  });
+  apiKeyInput.addEventListener('input', () => {
+    const key = enteredKey();
+    if (key) enteredKeys.set(providerSelect.value, key);
+    else enteredKeys.delete(providerSelect.value);
+  });
+  apiKeyInput.addEventListener('change', () => {
+    // A new key needs a new session: the next message starts one.
+    resetSession();
+  });
   for (const select of [planningModelSelect, sceneModelSelect]) {
     select.addEventListener('change', () => {
-      localStorage.setItem(MODEL_KEY, JSON.stringify({ planModel: planningModelSelect.value, sceneModel: sceneModelSelect.value }));
+      saveModels();
+      resetSession();
     });
   }
 
@@ -347,14 +443,22 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
     testKeyBtn.disabled = true;
     testKeyStatus.hidden = false;
     testKeyStatus.className = 'test-key-status pending';
-    testKeyStatus.textContent = 'Checking with Anthropic…';
+    const provider = providerSelect.value;
+    testKeyStatus.textContent = `Checking with ${provider === 'gemini' ? 'Google' : provider === 'bedrock' ? 'Amazon Bedrock' : provider === 'spark' ? 'Meta' : 'Anthropic'}…`;
     try {
+      const key = enteredKey();
       const answer = await fetch('/api/dev/models', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ provider, ...(key ? { apiKey: key } : {}) }),
       });
-      const result = (await answer.json()) as { ok?: boolean; message?: string; source?: string };
+      const result = (await answer.json()) as { ok?: boolean; message?: string; source?: string; models?: string[] };
+      // A Gemini or Bedrock key lists the models it can reach: offer those.
+      if (listing(provider) && result.ok && result.models && result.models.length > 0) {
+        listed[provider] = result.models;
+        fillModels({ planModel: planningModelSelect.value, sceneModel: sceneModelSelect.value });
+        saveModels();
+      }
       testKeyStatus.className = `test-key-status ${result.ok ? 'ok' : 'fail'}`;
       testKeyStatus.textContent = `${result.ok ? '✓' : '✗'} ${result.message ?? answer.statusText} (key source: ${result.source ?? 'unknown'})`;
     } catch (error) {
@@ -510,6 +614,14 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
     });
   }
 
+  /** Ends the model session, so the next message starts one with the provider and models now chosen. */
+  function resetSession(): void {
+    if (!sessionId) return;
+    void fetch(`/api/dev/session/${sessionId}`, { method: 'DELETE', keepalive: true });
+    sessionId = null;
+    client = null;
+  }
+
   function useClient(baseUrl: string, _label: string): void {
     token = null;
     client = new GenerationClient({ baseUrl, token: async () => (token ??= ((await (await fetch('/api/dev/token')).json()) as { token: string }).token), fetch: recordingFetch() });
@@ -522,8 +634,10 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
     inputBox.disabled = busy;
     sendBtn.disabled = busy || !inputBox.value.trim();
     newChatBtn.disabled = busy;
+    providerSelect.disabled = busy;
     planningModelSelect.disabled = busy;
     sceneModelSelect.disabled = busy;
+    apiKeyInput.disabled = busy;
     sendBtn.setAttribute('aria-busy', String(busy));
   }
 
@@ -531,12 +645,15 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
     if (client) return;
     if (sessionSetup) return sessionSetup;
     sessionSetup = (async () => {
+      const key = enteredKey();
       const setupResponse = await fetch('/api/dev/session', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
+          provider: providerSelect.value,
           planModel: planningModelSelect.value,
           sceneModel: sceneModelSelect.value,
+          ...(key ? { apiKey: key } : {}),
         }),
       });
       const answer = (await setupResponse.json()) as { id?: string; baseUrl?: string; message?: string };

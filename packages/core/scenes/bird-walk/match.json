@@ -1,0 +1,18 @@
+{
+  "names": [
+    "bird*",
+    "hen*",
+    "chicken*",
+    "pigeon*",
+    "rooster*",
+    "duck*",
+    "ostrich*"
+  ],
+  "keywords": [
+    "wings",
+    "beak",
+    "feather*",
+    "two legs",
+    "walk*"
+  ]
+}

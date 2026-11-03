@@ -1,0 +1,13 @@
+{
+  "names": [
+    "dog*",
+    "pupp*",
+    "canine*"
+  ],
+  "keywords": [
+    "walk*",
+    "trot*",
+    "gallop*",
+    "gait*"
+  ]
+}

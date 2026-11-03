@@ -1,8 +1,8 @@
-import { SCENE_LIMITS, SDK_VERSION, SIZE_BUDGETS, fixScene, validateScene, validateSceneCss, validateSceneHtml, validateSceneJs, type ProbeReport, type ScenePlan, type ValidatedScene } from '@incantly/core';
+import { KIT_OF, SCENE_LIMITS, SDK_VERSION, SIZE_BUDGETS, fixScene, validateScene, validateSceneCss, validateSceneHtml, validateSceneJs, type ProbeReport, type ScenePlan, type ValidatedScene } from '@incantly/core';
 import type { ReferenceScene } from '@incantly/core/scenes';
 import { changePrompt, libraryPrompt, planPrompt, scenePrompt, standardFigure, type LearnerRequest, type Prompt } from './context';
-import { applyFragmentEdits, parseEdits, withoutEditBlocks } from './edits';
-import { FragmentStream, missingFragments, parsePlanReply, type FragmentName, type FragmentSet } from './fragments';
+import { MARKER_LINE, applyFragmentEdits, parseEdits, withoutEditBlocks, type Edit } from './edits';
+import { FRAGMENT_NAMES, FragmentStream, missingFragments, parsePlanReply, type FragmentName, type FragmentSet } from './fragments';
 import { ModelError, NO_USAGE, addUsage, costOf, type CallPurpose, type ModelClient, type ModelUsage } from './models';
 import { formatPlanProblems, validatePlan, type PlanProblem } from './plan';
 import { probeSpecFor, type SceneProber } from './probe';
@@ -626,18 +626,54 @@ export class Generator {
     await this.repairWhileAllowed(state, hooks, signal);
   }
 
-  /** A reply of edits and whole fragments, applied over `base`. */
+  /**
+   * A reply of edits and whole fragments, applied over `base`. Two shapes of
+   * reply are read for what they are, not as whole fragments that would
+   * overwrite the scene: SEARCH/REPLACE edits sent under a plain fence, and a
+   * script block that is only a piece of the script.
+   */
   private edited(base: FragmentSet, reply: string): { fragments: FragmentSet; problems: string[]; changed: FragmentName[] } {
     const parsedEdits = parseEdits(reply);
     const stream = new FragmentStream();
     stream.push(withoutEditBlocks(reply));
     const whole = stream.end();
-    const applied = applyFragmentEdits(base, parsedEdits.edits);
-    const fragments: FragmentSet = { ...applied.fragments, ...whole.fragments };
+    const wholeFragments: Partial<Record<FragmentName, string>> = { ...whole.fragments };
+    const edits: Partial<Record<FragmentName, Edit[]>> = { ...parsedEdits.edits };
+    const extra: string[] = [];
+    let found = parsedEdits.found;
+    for (const name of FRAGMENT_NAMES) {
+      const text = wholeFragments[name];
+      if (text === undefined) continue;
+      // Edits sent under a plain ```js fence: read them as edits to that fragment.
+      if (EDIT_MARKER.test(text)) {
+        const fenced = parseEdits(`\`\`\`edit ${name}\n${text}\`\`\``);
+        edits[name] = [...(edits[name] ?? []), ...(fenced.edits[name] ?? [])];
+        extra.push(...fenced.problems);
+        found = true;
+        delete wholeFragments[name];
+      }
+    }
+    // A script block that sets up no stage, over a script that does, is a piece of the script, not all of it.
+    const js = wholeFragments.js;
+    if (js !== undefined && base.js !== undefined && STAGE_CALL.test(base.js) && !STAGE_CALL.test(js)) {
+      extra.push('The js block held only part of the script (it sets up no stage), so it was not used. Send the lines you change as a SEARCH/REPLACE edit in an ```edit js block, or the whole script.');
+      delete wholeFragments.js;
+    }
+    const applied = applyFragmentEdits(base, edits);
+    const merged: FragmentSet = { ...applied.fragments, ...wholeFragments };
+    // Edit markers left in a fragment would reach the script as code: keep the fragment as it was and say why.
+    const fragments: FragmentSet = { ...merged };
+    for (const name of FRAGMENT_NAMES) {
+      if (merged[name] !== undefined && merged[name] !== base[name] && MARKER_LINE.test(merged[name]!)) {
+        extra.push(`The ${name} fragment would have kept a SEARCH, ======= or REPLACE line as code, so the reply was not used for it. Send each change as one complete SEARCH/REPLACE pair.`);
+        if (base[name] === undefined) delete fragments[name];
+        else fragments[name] = base[name];
+      }
+    }
     // What actually differs from the base: a fragment returned unchanged is not a change.
     const changed = (['html', 'css', 'js'] as const).filter((name) => fragments[name] !== base[name]);
-    const problems = [...parsedEdits.problems, ...whole.problems, ...applied.failed.map((f) => `Edit failed: ${f}`)];
-    if (!parsedEdits.found && Object.keys(whole.fragments).length === 0) problems.push('The reply held no edit blocks and no fragments');
+    const problems = [...parsedEdits.problems, ...whole.problems, ...extra, ...applied.failed.map((f) => `Edit failed: ${f}`)];
+    if (!found && Object.keys(whole.fragments).length === 0) problems.push('The reply held no edit blocks and no fragments');
     return { fragments, problems, changed };
   }
 
@@ -731,8 +767,9 @@ export class Generator {
     if (state.repairsUsed >= this.maxRepairs) return false;
     if (last.purpose !== 'repair') return true;
     // Identical output means nothing more to offer; the same failure again, or a worse one, means going round in circles.
+    // A reply in the wrong shape changed nothing but was told the shape to use: the next repair may still fix the scene.
     const before = state.attempts.at(-2);
-    return last.changed.length > 0 && (!before || progressed(before, last));
+    return (last.changed.length > 0 || last.failed === 'reply') && (!before || progressed(before, last));
   }
 
   private async repairWhileAllowed(state: GenerationState, hooks: GenerationHooks, signal?: AbortSignal): Promise<void> {
@@ -793,7 +830,7 @@ export class Generator {
     const current = state.current;
     if (!plan || !current || !current.passed) throw new Error('No validated scene to fail');
     const number = state.repairsUsed + 1;
-    const repairReport = probeReport(report, current.fragments, plan, number, Math.max(this.maxRepairs, number));
+    const repairReport = probeReport(report, current.fragments, plan, number, this.maxRepairs);
     state.attempts[state.attempts.length - 1] = { ...current, passed: false, failed: 'probe', report: repairReport, probe: report, faults: probeFaults(report) };
     state.status = 'failed';
     state.failure = { stage: 'scene', reason: repairReport.summary };
@@ -819,7 +856,7 @@ export class Generator {
   ): Promise<Attempt> {
     const plan = state.plan!;
     const number = state.repairsUsed + 1;
-    const of = Math.max(this.maxRepairs, number);
+    const of = this.maxRepairs;
     let fixes: readonly string[] = [];
     const record = (attempt: Omit<Attempt, 'purpose' | 'fragments' | 'changed'>): Attempt => {
       const full: Attempt = { purpose, fragments, changed, ...attempt, ...(fixes.length > 0 ? { fixed: fixes } : {}) };
@@ -935,6 +972,11 @@ export class Generator {
     return state;
   }
 }
+
+/** A SEARCH marker line, as in an edit block. */
+const EDIT_MARKER = /^\s*<{5,9}\s*SEARCH\s*$/m;
+/** The call that sets up a scene's stage: a whole script has one. */
+const STAGE_CALL = new RegExp(`\\binc\\.(?:${['svg', 'graph2d', ...Object.keys(KIT_OF)].join('|')})\\s*\\(`);
 
 /** The plan call beside a library build. */
 interface PlanBeside {

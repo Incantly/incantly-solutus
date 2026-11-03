@@ -1237,7 +1237,7 @@ export interface Physics2DOptions {
 }
 
 export interface BodyOptions {
-  /** Centre in metres. */
+  /** Centre in metres, as an [x, y] pair. */
   readonly at: Live<Vec2>;
   /** Degrees counter-clockwise. */
   readonly angle?: Live<number>;
@@ -1277,7 +1277,7 @@ export interface JointOptions {
 }
 
 export interface SpringJointOptions extends JointOptions {
-  /** N/m. Default 50. */
+  /** N/m, above 0. Default 50. */
   readonly stiffness?: Live<number>;
   /** N per m/s. Default 0.5. */
   readonly damping?: Live<number>;
@@ -1449,6 +1449,7 @@ export interface ChartSeriesOptions {
   readonly trend?: boolean;
 }
 
+/** A series handle: updates the series, and is not an element for part(). The series is already a part under its name. */
 export interface ChartSeries {
   readonly name: string;
   set(data: ChartData | ReadonlyArray<Vec2> | (() => ReadonlyArray<Vec2>)): this;
@@ -1458,9 +1459,9 @@ export interface ChartSeries {
 }
 
 export interface Chart {
-  /** One value per category; histograms and box plots take raw samples, one series per box. */
+  /** Exactly one value per category, 1 to 60 values; histograms and box plots take up to 20000 raw samples, one series per box. */
   series(name: string, data: ChartData, options?: ChartSeriesOptions): ChartSeries;
-  /** Points for a scatter chart. */
+  /** Scatter points as [x, y] pairs, 1 to 2000. */
   points(name: string, data: ReadonlyArray<Vec2> | (() => ReadonlyArray<Vec2>), options?: ChartSeriesOptions): ChartSeries;
   /** A level reference line, such as a mean. */
   rule(value: number | (() => number), options?: { readonly label?: string; readonly tone?: Tone; readonly dashed?: boolean }): Handle;
@@ -1886,6 +1887,189 @@ export interface Biology {
 }
 
 // ---------------------------------------------------------------------------
+// Anatomy: animals grown from their bones
+// ---------------------------------------------------------------------------
+
+export interface AnatomyOptions {
+  readonly title: string;
+  readonly description?: string;
+  /** Default [0, 0, 800, 400]. */
+  readonly viewBox?: ViewBox;
+}
+
+/** How a foot meets the ground: on the whole sole, on the toes, or on the tip of a hoof. */
+export type FootPosture = 'plantigrade' | 'digitigrade' | 'unguligrade';
+
+/** One limb, each bone as a fraction of the body length. */
+export interface LimbBones {
+  /** Thigh, or upper arm. */
+  readonly upper: number;
+  /** Shin, or forearm. */
+  readonly lower: number;
+  /** Foot or hand: the bones from the ankle or wrist to the tips of the toes. */
+  readonly foot: number;
+  /** Overrides the posture the kit reads from the foot's length. */
+  readonly posture?: FootPosture;
+}
+
+/** The ways of moving a skeleton may support. */
+export type AnatomyMode = 'quadruped' | 'bipedal';
+
+/**
+ * A skeleton: the only thing a scene writes about an animal, measured from
+ * what you know of that animal's real bones. Lengths are fractions of `size`,
+ * the body length in metres from the nose to the root of the tail. The kit
+ * reads the posture, muscles, outline and gait from them, so get the
+ * proportions right: a cheetah's shin is longer than its thigh; a horse's
+ * foot bones (cannon and pastern) are as long as its shin, so it stands on
+ * hooves; a mouse has a long tail and short legs; a bird has wings: true,
+ * no forelimb, long legs and a level body. Lengths are fractions, rarely
+ * above 1 (a spine is about 0.5 to 0.7 of the body). The kit
+ * gives it only a plain body, like no animal in particular: then draw what
+ * makes it this animal with animal.skin (its ears, muzzle, coat colour and
+ * markings, tail), as a cheetah's spots and tear lines or a zebra's stripes.
+ */
+export interface SkeletonSpec {
+  /** Body length in metres, nose to the root of the tail. */
+  readonly size?: number;
+  /** `depth` is the skull's height as a fraction of its length; `snout` the share of the skull ahead of the eye. */
+  readonly skull?: { readonly length: number; readonly depth?: number; readonly snout?: number };
+  readonly neck?: { readonly length: number };
+  /** `flex`, from 0 (stiff, a horse) to 1 (a cheetah), is how far the back bends when running. */
+  readonly spine?: { readonly length: number; readonly flex?: number };
+  /** Leave out for an animal with none, or set hints.wings. */
+  readonly forelimb?: LimbBones;
+  readonly hindlimb?: LimbBones;
+  /** `stiffness` from 0 (whippy) to 1. Length 0 for no tail. */
+  readonly tail?: { readonly length: number; readonly stiffness?: number };
+  /** Limbs under the body (default) or out to the side, as a lizard's. */
+  readonly stance?: 'upright' | 'sprawl';
+  /** Ways of moving it supports; the first is how it starts. Default from the build. */
+  readonly modes?: readonly AnatomyMode[];
+  /** The forelimbs are folded wings, as a bird's. */
+  readonly wings?: boolean;
+  /**
+   * Where its feet stand on the stage: the middle of the animal, on the
+   * ground. Leave it out to stand several animals side by side on one
+   * ground line. Every animal on a stage is drawn at one scale, so their
+   * sizes compare as in life.
+   */
+  readonly at?: Vec2;
+  /** Stage units the animal may take across; it is scaled to fit. */
+  readonly width?: number;
+  readonly facing?: 'right' | 'left';
+  /** Body tone. Default mid. */
+  readonly tone?: Tone;
+  /** Draws a ground line under it that moves with its speed. Default true. */
+  readonly ground?: boolean;
+  /** What shows: the skin (default), the muscles under it, or the bones. */
+  readonly show?: AnatomyLayer;
+}
+
+export type AnatomyLayer = 'skin' | 'muscles' | 'bones';
+
+/** The pieces of an animal a part can name. */
+export type AnatomyPiece = 'body' | 'head' | 'neck' | 'tail' | 'forelimbs' | 'hindlimbs' | 'muscles' | 'bones';
+
+export type Gait = 'stand' | 'walk' | 'trot' | 'gallop' | 'bound' | 'run';
+
+export interface MoveOptions {
+  /** Metres a second: a number, a parameter, or a function of the model. */
+  readonly speed?: number | Param | (() => number);
+  /** Switches to this way of moving, at scene time `at` seconds or now; a function is read every frame. */
+  readonly mode?: AnatomyMode | (() => AnatomyMode);
+  readonly at?: number;
+  /** A gait to move in rather than the one the speed calls for; the speed still sets how fast the legs go. */
+  readonly gait?: Gait | (() => Gait);
+  /** Degrees to raise the neck and head (negative lowers them, as to graze): a number, a parameter, or a function. */
+  readonly neck?: number | Param | (() => number);
+}
+
+/**
+ * The bones skin is drawn on. Each is a frame that moves and bends with the
+ * animal: thigh, shin and hindfoot one bone each, hindleg the three as one
+ * chain that bends at the knee and ankle (likewise the foreleg). ear sits at
+ * the back of the skull and points the way the skull does.
+ */
+export type SkinBone = 'spine' | 'neck' | 'skull' | 'ear' | 'tail' | 'wing' | 'hindleg' | 'thigh' | 'shin' | 'hindfoot' | 'foreleg' | 'upperArm' | 'forearm' | 'forefoot';
+
+/**
+ * A piece of skin drawn in a bone's frame. Every point is [along, across],
+ * measured in lengths of that bone (or chain): along runs from 0 at its start
+ * (the hip end of the spine, the back of the skull, the top of a leg, the
+ * root of the tail) to 1 at its end, and across is up for the spine, neck,
+ * skull, ear, wing and tail, and forward for the legs. The kit moves it with
+ * the bone on every frame and outlines it with the body.
+ */
+export interface SkinShape {
+  /** The outline's points, at least 3; for a line, at least 2. */
+  readonly points?: readonly Vec2[];
+  /** Or an ellipse centred here, with radius r, or [along, across] radii. */
+  readonly at?: Vec2;
+  readonly r?: number | Vec2;
+  /** A smooth curve through the points (default), or straight sides. */
+  readonly smooth?: boolean;
+  /**
+   * flesh (default) joins the body: same tone, one outline round both.
+   * part sits over the body with its own outline: an ear, a collar, a horn.
+   * mark paints the skin with no outline: spots, a saddle, an eye, a nose.
+   * line is an open stroke: whiskers, a mouth, fur.
+   */
+  readonly as?: 'flesh' | 'part' | 'mark' | 'line';
+  /** Default: the body's tone for flesh and parts, hi for marks and lines. */
+  readonly tone?: Tone;
+  /** Removes the kit's own skin on this bone first, to draw it your own way. Replacing the skull takes its eye and nose too. */
+  readonly replace?: boolean;
+}
+
+/** An animal the kit grew from a skeleton. Its gait comes from its speed and build. */
+export interface Animal {
+  /** Sets how it moves; the kit picks the gait. */
+  move(options: MoveOptions): this;
+  /**
+   * Draws skin on a bone: the shapes that make the breed or species, such as
+   * a long muzzle, tall ears, a mane or a saddle. The kit's own plain skin
+   * stays everywhere else. Limb skin is drawn on both sides.
+   */
+  skin(bone: SkinBone, shape: SkinShape): Handle;
+  show(layer: AnatomyLayer): this;
+  /**
+   * A piece to name as a part, highlight or fade: one of the pieces, or a
+   * skin bone name or everyday word (hindleg, skull, "left leg"), meaning the
+   * piece it is in. Seen from the side, a pair of legs is one piece; each name
+   * asked for gets its own handle, so each can be its own part.
+   */
+  piece(name: AnatomyPiece | SkinBone | (string & {})): Handle;
+  readonly gait: Gait;
+  readonly mode: AnatomyMode;
+  /** Metres a second. */
+  readonly speed: number;
+  /** Metres from one footfall of a foot to its next. */
+  readonly stride: number;
+  /** Strides a second. */
+  readonly frequency: number;
+  /** Share of each stride with no foot on the ground. */
+  readonly airborne: number;
+  /** Share of each stride a foot is on the ground. */
+  readonly duty: number;
+  /** Dimensionless speed, v squared over g times hip height. */
+  readonly froude: number;
+  /** Hip height in metres. */
+  readonly hipHeight: number;
+  /** How its hind feet meet the ground. */
+  readonly posture: FootPosture;
+  readonly handle: Handle;
+}
+
+export interface Anatomy {
+  /** An animal grown from its bones. */
+  skeleton(spec: SkeletonSpec): Animal;
+  readonly stage: Stage;
+  /** Names an element or an animal for highlighting, steps and descriptions, as stage.part does. */
+  part<T extends Handle | { readonly handle: Handle }>(name: string, item: T, options?: PartOptions): T;
+}
+
+// ---------------------------------------------------------------------------
 // Tweens
 // ---------------------------------------------------------------------------
 
@@ -2035,6 +2219,8 @@ export interface Inc {
   chemistry(selector: string, options: ChemistryOptions): Chemistry;
   /** Cells and their organelles, membranes, DNA and flows. */
   biology(selector: string, options: BiologyOptions): Biology;
+  /** Animals grown from a skeleton. */
+  anatomy(selector: string, options: AnatomyOptions): Anatomy;
   /** A formula of x, t, the parameters by name and its vars, such as inc.formula('A*sin(k*x - w*t)', { vars: { A: amplitude } }). */
   formula(source: string, options?: FormulaOptions): Formula;
   /** Seeded random number in [0, 1). Same seed, same sequence. */

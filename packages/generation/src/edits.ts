@@ -61,7 +61,7 @@ export function parseEdits(text: string): ParsedEdits {
 }
 
 function readBlock(name: FragmentName, lines: readonly string[], edits: Partial<Record<FragmentName, Edit[]>>, problems: string[]): void {
-  let state: 'outside' | 'search' | 'replace' = 'outside';
+  let state: 'outside' | 'search' | 'replace' | 'broken' = 'outside';
   let search: string[] = [];
   let replace: string[] = [];
   for (const line of lines) {
@@ -76,15 +76,34 @@ function readBlock(name: FragmentName, lines: readonly string[], edits: Partial<
     } else if (state === 'search') {
       if (DIVIDER.test(line)) state = 'replace';
       else search.push(line);
+    } else if (state === 'broken') {
+      // An edit with a second divider is dropped up to its end, or to the next edit's start.
+      if (REPLACE.test(line)) state = 'outside';
+      else if (SEARCH.test(line)) {
+        state = 'search';
+        search = [];
+        replace = [];
+      }
     } else if (REPLACE.test(line)) {
       (edits[name] ??= []).push({ search: search.join('\n'), replace: replace.join('\n') });
       state = 'outside';
+    } else if (DIVIDER.test(line) || SEARCH.test(line)) {
+      // Pairs chained without closing each one: the marker is never code, and the edit it broke is not applied.
+      problems.push(`An edit in the ${name} block has a second ======= or a <<<<<<< SEARCH before its >>>>>>> REPLACE; close each edit with >>>>>>> REPLACE before the next`);
+      if (SEARCH.test(line)) {
+        state = 'search';
+        search = [];
+        replace = [];
+      } else state = 'broken';
     } else {
       replace.push(line);
     }
   }
-  if (state !== 'outside') problems.push(`An edit in the ${name} block has no closing >>>>>>> REPLACE`);
+  if (state === 'search' || state === 'replace') problems.push(`An edit in the ${name} block has no closing >>>>>>> REPLACE`);
 }
+
+/** A line left over from an edit block: never part of a scene. */
+export const MARKER_LINE = /^\s*(?:<{5,9}\s*SEARCH|={5,9}|>{5,9}\s*REPLACE)\s*$/m;
 
 export interface Applied {
   readonly text: string;

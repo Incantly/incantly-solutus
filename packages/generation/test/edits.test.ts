@@ -6,6 +6,19 @@ const SCENE = ["const wave = inc.formula('A*sin(w*x + phi - t)', { vars: { A, w,
 const pair = (search: string, replace: string) => ['<<<<<<< SEARCH', search, '=======', replace, '>>>>>>> REPLACE'].join('\n');
 
 describe('edit replies (PRD 25.5, RP-5)', () => {
+  it('never keeps a second divider or a SEARCH line inside a replacement as code', () => {
+    // Kimi K3 chained pairs without closing each one; the second ======= became a line of the script, a syntax error.
+    const chained = ['```edit js', '<<<<<<< SEARCH', 'dot.at(0, wave(0));', '=======', 'dot.at(0, wave(1));', '=======', 'dot.at(0, wave(2));', '>>>>>>> REPLACE', '```'].join('\n');
+    const broken = parseEdits(chained);
+    expect(broken.edits.js ?? []).toEqual([]);
+    expect(broken.problems.join(' ')).toContain('close each edit with >>>>>>> REPLACE');
+    // A SEARCH inside a replacement starts the next edit; the one it broke is dropped, the next is applied.
+    const next = ['```edit js', '<<<<<<< SEARCH', 'dot.at(0, wave(0));', '=======', 'dot.at(0, wave(1));', '<<<<<<< SEARCH', "inc.describe(() => `A sine wave.`);", '=======', "inc.describe(() => `A wave.`);", '>>>>>>> REPLACE', '```'].join('\n');
+    const parsed = parseEdits(next);
+    expect(parsed.edits.js).toEqual([{ search: "inc.describe(() => `A sine wave.`);", replace: "inc.describe(() => `A wave.`);" }]);
+    expect(applyEdits(SCENE, parsed.edits.js!).text).not.toMatch(/^={5,}$|^<{5,}|^>{5,}/m);
+  });
+
   it('applies each edit where its SEARCH matches, exactly or line by line', () => {
     const applied = applyEdits(SCENE, [
       { search: "const wave = inc.formula('A*sin(w*x + phi - t)', { vars: { A, w, phi } });", replace: "const wave = inc.formula('A*sin(w*x + phi)', { vars: { A, w, phi } });" },

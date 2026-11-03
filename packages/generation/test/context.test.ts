@@ -51,6 +51,16 @@ describe('the generation context', () => {
     }
   });
 
+  it('states the chart and joint guards the runtime enforces, so scenes meet them first time', () => {
+    const chart = contractFor(['chart']);
+    expect(chart).toContain('1 to 60 values');
+    expect(chart).toContain('already a part under its name');
+    expect(chart).toContain('is not an element for part()');
+    const world = contractFor(['physics2d']);
+    expect(world).toContain('above 0');
+    expect(world).toContain('as an [x, y] pair');
+  });
+
   it('maps every capability to declarations that exist in the SDK contract', () => {
     for (const name of CORE_CONTRACT) expect(SDK_CONTRACT[name], name).toBeTypeOf('string');
     for (const entry of CAPABILITIES) {
@@ -135,7 +145,8 @@ describe('the generation context', () => {
       for (const adapt of [true, false]) {
         const { prompt } = scenePrompt(scene.plan, { adapt });
         const tokens = estimateTokens(prompt.system.map((b) => b.text).join('\n') + prompt.user);
-        expect(tokens, `${scene.id} ${adapt}`).toBeLessThan(12_000);
+        // Every kit adds a catalog line and an inc entry to the cached prefix; the anatomy kit took it past 12,000.
+        expect(tokens, `${scene.id} ${adapt}`).toBeLessThan(12_100);
         // What changes per request, outside the cached prefix, is only the plan.
         expect(estimateTokens(prompt.user), `${scene.id} ${adapt}`).toBeLessThan(800);
       }

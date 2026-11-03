@@ -131,6 +131,27 @@ export const CAPABILITIES: readonly Capability[] = [
     line: "biology: animal, plant and bacterial cells with organelles, diffusion and active transport across a membrane, DNA's double helix, flows along vessels (inc.biology).",
     contract: ['BiologyOptions', 'CellKind', 'Organelle', 'CellOptions', 'Cell', 'MembraneOptions', 'Membrane', 'HelixOptions', 'Helix', 'StreamOptions', 'Stream', 'Biology', ...STAGE],
   },
+  {
+    name: 'anatomy',
+    draws: true,
+    line: 'anatomy: any whole animal or person walking, running or standing: you give its bones and draw its skin (inc.anatomy).',
+    contract: [
+      'AnatomyOptions',
+      'FootPosture',
+      'LimbBones',
+      'AnatomyMode',
+      'SkeletonSpec',
+      'AnatomyLayer',
+      'AnatomyPiece',
+      'Gait',
+      'MoveOptions',
+      'SkinBone',
+      'SkinShape',
+      'Animal',
+      'Anatomy',
+      ...STAGE,
+    ],
+  },
   // Controls and time.
   {
     name: 'controls',

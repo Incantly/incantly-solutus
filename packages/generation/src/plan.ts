@@ -323,7 +323,9 @@ function readModel(value: unknown, names: ReadonlySet<string>, problems: Problem
 }
 
 function readNames(value: unknown, path: string, max: number, rule: PlanRule, noun: string, problems: Problems): string[] {
-  const list = readList(value, path, problems) ?? [];
+  let list = readList(value, path, problems) ?? [];
+  // A walkthrough longer than the limit keeps its first steps: a certain fix, cheaper than a re-plan.
+  if (path === 'steps' && list.length > max) list = list.slice(0, max);
   if (list.length > max) problems.push({ rule, path, message: `The plan has ${list.length} ${noun}; at most ${max} are allowed` });
   const out: string[] = [];
   list.forEach((raw, i) => {

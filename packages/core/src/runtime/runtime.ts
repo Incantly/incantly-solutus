@@ -1,4 +1,6 @@
 import type {
+  Anatomy,
+  AnatomyOptions,
   Biology,
   NoiseOptions,
   NoteOptions,
@@ -1899,6 +1901,7 @@ export class SceneRuntime {
       flow: (selector: string, options: FlowOptions) => runtime.kitStage('flow', selector, options) as Flow,
       chemistry: (selector: string, options: ChemistryOptions) => runtime.kitStage('chemistry', selector, options) as Chemistry,
       biology: (selector: string, options: BiologyOptions) => runtime.kitStage('biology', selector, options) as Biology,
+      anatomy: (selector: string, options: AnatomyOptions) => runtime.kitStage('anatomy', selector, options) as Anatomy,
       formula(source: string, options?: FormulaOptions) {
         try {
           const index = runtime.formulas.length;

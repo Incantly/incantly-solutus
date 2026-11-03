@@ -22,4 +22,13 @@ describe('retrieval (PRD 25.5)', () => {
     expect(aboutScene('diffusion across a membrane. Particles spread down the gradient.', 'diffusion')).toBe(true);
     expect(Object.keys(REFERENCE_SCENES)).toContain('diffusion');
   });
+
+  it('serves the reviewed dog only for a dog, never for another running animal', () => {
+    expect(retrieveExample({ prompt: 'Show me a dog running. How do its legs move as it speeds up from a walk to a gallop?' })?.id).toBe('animal-gaits');
+    // Once each fell back to the dog on "running", "legs" and "stride" alone.
+    for (const prompt of ["Show me a mouse running. Why do its legs move so much faster than a horse's?", 'Show me a cheetah running at full speed, and how its back bends with each stride.']) {
+      expect(retrieveExample({ prompt }), prompt).toBeNull();
+    }
+    expect(retrieveExample({ prompt: 'Show me an ape walking on all fours, then standing up and walking on two legs.' })?.id).toBe('ape-upright');
+  });
 });
