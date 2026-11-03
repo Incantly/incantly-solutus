@@ -109,14 +109,22 @@ export interface ModelPrice {
 }
 
 /**
- * List prices from platform.claude.com/docs/en/about-claude/pricing, checked
- * in October 2026. The service's cost limits use these; override them in its
- * configuration when prices change.
+ * List prices: Anthropic's from platform.claude.com/docs/en/about-claude/pricing,
+ * checked in October 2026; Meta's from dev.meta.ai/docs/pricing-rate-limits,
+ * checked in November 2026. The service's cost limits use these; override them
+ * in its configuration when prices change. Meta's cache is implicit, with no
+ * write premium, so its cacheWrite is 0.
  */
 export const MODEL_PRICES: Readonly<Record<string, ModelPrice>> = {
   'claude-haiku-5-5': { input: 0.1, output: 0.5, cacheRead: 0.1, cacheWrite: 1.25 },
   'claude-sonnet-5-5': { input: 2, output: 10, cacheRead: 0.05, cacheWrite: 1.25 },
   'claude-opus-5-5': { input: 4, output: 20, cacheRead: 0.05, cacheWrite: 1.25 },
+  'muse-spark-1.3': { input: 1.25, output: 4.25, cacheRead: 0.12, cacheWrite: 0 },
+  'muse-spark-1.2': { input: 1.25, output: 4.25, cacheRead: 0.12, cacheWrite: 0 },
+  'muse-spark-1.1': { input: 1.25, output: 4.25, cacheRead: 0.12, cacheWrite: 0 },
+  'muse-spark-1.3-contributor': { input: 0.1, output: 0.2, cacheRead: 0.02, cacheWrite: 0 },
+  'muse-spark-1.2-contributor': { input: 0.1, output: 0.2, cacheRead: 0.02, cacheWrite: 0 },
+  'muse-wonder-1.0': { input: 4, output: 20, cacheRead: 0.05, cacheWrite: 0 },
 };
 
 /** Stand-in models (the scripted and reference models) cost nothing. */
@@ -452,6 +460,56 @@ function applyEvent(event: string, state: StreamState): string {
       // ping, content_block_start and _stop, message_stop, and any new event types.
       return '';
   }
+}
+
+// ---------------------------------------------------------------------------
+// Chat Completions streams
+// ---------------------------------------------------------------------------
+
+/** What an OpenAI-compatible Chat Completions stream has said so far. */
+export interface ChatStreamState {
+  text: string;
+  model: string;
+  stopReason: string | null;
+  usage: { prompt: number; output: number; cached: number };
+}
+
+/** Chat Completions finish reasons in the pipeline's words: a reply cut off at the limit is max_tokens. */
+const FINISH: Readonly<Record<string, string>> = { stop: 'end_turn', length: 'max_tokens' };
+
+/** Applies one Chat Completions stream event to the state; returns any new text. Reasoning is never passed on. */
+export function applyChatEvent(event: string, state: ChatStreamState): string {
+  const data = event
+    .split('\n')
+    .filter((line) => line.startsWith('data:'))
+    .map((line) => line.slice(5).trimStart())
+    .join('\n');
+  if (!data || data === '[DONE]') return '';
+  let message: Record<string, unknown>;
+  try {
+    message = JSON.parse(data) as Record<string, unknown>;
+  } catch {
+    throw new ModelError('protocol', 'The model sent an unreadable event');
+  }
+  if (typeof message.error === 'object' && message.error !== null) {
+    const error = message.error as { message?: unknown; code?: unknown };
+    const text = typeof error.message === 'string' ? error.message : 'The model reported an error';
+    throw new ModelError(error.code === 429 || error.code === 'throttling' ? 'rate-limited' : 'server', text);
+  }
+  if (typeof message.model === 'string') state.model = message.model;
+  const usage = message.usage as { prompt_tokens?: unknown; completion_tokens?: unknown; prompt_tokens_details?: { cached_tokens?: unknown } } | undefined;
+  if (usage) {
+    if (typeof usage.prompt_tokens === 'number') state.usage.prompt = usage.prompt_tokens;
+    if (typeof usage.completion_tokens === 'number') state.usage.output = usage.completion_tokens;
+    if (typeof usage.prompt_tokens_details?.cached_tokens === 'number') state.usage.cached = usage.prompt_tokens_details.cached_tokens;
+  }
+  const choice = (message.choices as Array<{ delta?: { content?: unknown }; finish_reason?: unknown }> | undefined)?.[0];
+  if (!choice) return '';
+  if (typeof choice.finish_reason === 'string') state.stopReason = FINISH[choice.finish_reason] ?? choice.finish_reason;
+  const content = choice.delta?.content;
+  if (typeof content !== 'string' || content === '') return '';
+  state.text += content;
+  return content;
 }
 
 // ---------------------------------------------------------------------------

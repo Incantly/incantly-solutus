@@ -11,6 +11,8 @@ export type { FragmentName, FragmentSet } from './fragments';
 export { AnthropicClient, DEFAULT_MODELS, MODEL_PRICES, ModelError, ScriptedModel, costOf } from './models';
 export { DEFAULT_GEMINI_MODELS, GeminiClient } from './gemini';
 export { BEDROCK_MODEL, BedrockClient, DEFAULT_BEDROCK_MODELS, bedrockGeo } from './bedrock';
+export { DEFAULT_SPARK_MODELS, SPARK_MODEL, SparkClient } from './spark';
+export type { SparkEffort, SparkOptions } from './spark';
 export type { BedrockEffort, BedrockOptions } from './bedrock';
 export type { GeminiOptions, GeminiThinking } from './gemini';
 export type { CallPurpose, ModelCall, ModelClient, ModelReply, ModelUsage } from './models';
