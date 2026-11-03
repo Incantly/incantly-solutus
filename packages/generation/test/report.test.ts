@@ -101,7 +101,49 @@ describe('repair reports', () => {
     const small = { check: 'bounds' as const, message: '1 element of the stage #stage lies outside its viewBox [-2.6, -0.4, 5.2, 3.9] at the default values: the text reaches x = 86.1, right of 2.6' };
     expect(likelyCause(small)).toMatch(/text is 12 units tall, so in a viewBox only 5.2 wide it covers the stage/);
     const wide = { check: 'bounds' as const, message: '1 element of the stage #stage lies outside its viewBox [0, 0, 760, 380] at the default values: the text reaches x = 811.7, right of 760' };
-    expect(likelyCause(wide)).toMatch(/scale them to the viewBox/);
+    expect(likelyCause(wide)).toMatch(/move the text left by 51\.7 units/);
+  });
+
+  it('hints API-guard errors by message, not by check', () => {
+    // A spring error found while stepping is about the stiffness, not the steps.
+    const spring = { check: 'steps' as const, message: 'The scene threw on step 2', error: { phase: 'mount', name: 'SceneApiError', message: 'world.spring: stiffness must be above 0 N/m, got 0' } };
+    expect(likelyCause(spring)).toMatch(/clamp it above 0/);
+    expect(likelyCause(spring)).not.toMatch(/inc\.steps/);
+    const long = { check: 'mount' as const, message: 'The scene threw while mounting', error: { phase: 'mount', name: 'SceneApiError', message: 'Chart series "Setpoint" has 300 values; at most 60' } };
+    expect(likelyCause(long)).toMatch(/keep the series to 60/);
+    const empty = { check: 'mount' as const, message: 'The scene threw while mounting', error: { phase: 'mount', name: 'SceneApiError', message: 'Chart series "Process" has no values' } };
+    expect(likelyCause(empty)).toMatch(/starts with data/);
+    const categories = { check: 'mount' as const, message: 'The scene threw while mounting', error: { phase: 'mount', name: 'SceneApiError', message: 'Chart series "Process" has 8 values but the chart has 6 categories' } };
+    expect(likelyCause(categories)).toMatch(/exactly one value per category/);
+    const element = { check: 'mount' as const, message: 'The scene threw while mounting', error: { phase: 'mount', name: 'SceneApiError', message: 'Expected an element the SDK made, such as stage.circle(...) or graph.point(...); dots and plain objects cannot be used here' } };
+    expect(likelyCause(element)).toMatch(/already a part under its own name/);
+    const point = { check: 'mount' as const, message: 'The scene threw while mounting', error: { phase: 'mount', name: 'SceneApiError', message: 'world.box: at must be a point [x, y] of finite numbers, in metres' } };
+    expect(likelyCause(point)).toMatch(/as an \[x, y\] pair/);
+  });
+
+  it('quotes the contract rule for API-guard errors instead of the check’s rule', () => {
+    const report = probeReport(
+      {
+        ok: false,
+        failures: [{ check: 'mount', message: 'The scene threw while mounting', error: { phase: 'mount', name: 'SceneApiError', message: 'Chart series "Setpoint" has 300 values; at most 60', line: 32, column: 28 } }],
+        stats: { configurations: 1, frames: 1, averageFrameMs: 1, elements: 1, durationMs: 1 },
+      },
+      projectile,
+      projectile.plan,
+    );
+    expect(report.rules).toEqual([13]);
+    expect(report.text).toMatch(/RULE {5}13\. If you are not sure the kit has something/);
+    expect(report.text).toMatch(/LIKELY {3}keep the series to 60/);
+  });
+
+  it('turns bounds violations into concrete moves', () => {
+    const one = { check: 'bounds' as const, message: '1 element of the stage #stage lies outside its viewBox [0, 0, 600, 400] at the default values: the circle reaches y = 433.15, below 400 (made at line 20)' };
+    expect(likelyCause(one)).toMatch(/move the circle up by 33\.15 units/);
+    const two = { check: 'bounds' as const, message: '4 elements of the stage #stage lie outside its viewBox [0, 0, 600, 400] at the default values: the path reaches x = -220, left of 0 (made at line 12); the circle reaches y = 698.269, below 400 (made at line 14)' };
+    expect(likelyCause(two)).toMatch(/move the path right by 220 units; move the circle up by 298\.27 units/);
+    expect(likelyCause(two)).toMatch(/every parameter value still fits/);
+    // Unparseable bounds still get the general advice.
+    expect(likelyCause({ check: 'bounds' as const, message: 'shapes are offstage somewhere' })).toMatch(/scale them to the viewBox/);
   });
 
   it('names a runaway loop and the other failures found', () => {
@@ -161,5 +203,18 @@ describe('the repair call', () => {
     const report = validationReport(validateScene(fragments).diagnostics, fragments);
     expect(report.check).toBe('unknown-sdk-call');
     expect(repairPrompt(report, fragments, projectile.plan).system[1]!.text).toContain('interface Graph {');
+  });
+
+  it('adds the contract for probe failures, whose fixes need the API they tripped', () => {
+    const report = probeReport(
+      {
+        ok: false,
+        failures: [{ check: 'paused-change', message: 'Moving speed while paused does not change the drawing', values: { speed: 5 }, playing: false }],
+        stats: { configurations: 1, frames: 1, averageFrameMs: 1, elements: 1, durationMs: 1 },
+      },
+      projectile,
+      projectile.plan,
+    );
+    expect(repairPrompt(report, projectile, projectile.plan).system[1]!.text).toContain('interface Graph {');
   });
 });

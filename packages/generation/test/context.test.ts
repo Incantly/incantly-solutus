@@ -51,6 +51,16 @@ describe('the generation context', () => {
     }
   });
 
+  it('states the chart and joint guards the runtime enforces, so scenes meet them first time', () => {
+    const chart = contractFor(['chart']);
+    expect(chart).toContain('1 to 60 values');
+    expect(chart).toContain('already a part under its name');
+    expect(chart).toContain('is not an element for part()');
+    const world = contractFor(['physics2d']);
+    expect(world).toContain('above 0');
+    expect(world).toContain('as an [x, y] pair');
+  });
+
   it('maps every capability to declarations that exist in the SDK contract', () => {
     for (const name of CORE_CONTRACT) expect(SDK_CONTRACT[name], name).toBeTypeOf('string');
     for (const entry of CAPABILITIES) {

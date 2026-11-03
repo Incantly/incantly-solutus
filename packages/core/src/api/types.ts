@@ -1237,7 +1237,7 @@ export interface Physics2DOptions {
 }
 
 export interface BodyOptions {
-  /** Centre in metres. */
+  /** Centre in metres, as an [x, y] pair. */
   readonly at: Live<Vec2>;
   /** Degrees counter-clockwise. */
   readonly angle?: Live<number>;
@@ -1277,7 +1277,7 @@ export interface JointOptions {
 }
 
 export interface SpringJointOptions extends JointOptions {
-  /** N/m. Default 50. */
+  /** N/m, above 0. Default 50. */
   readonly stiffness?: Live<number>;
   /** N per m/s. Default 0.5. */
   readonly damping?: Live<number>;
@@ -1449,6 +1449,7 @@ export interface ChartSeriesOptions {
   readonly trend?: boolean;
 }
 
+/** A series handle: updates the series, and is not an element for part(). The series is already a part under its name. */
 export interface ChartSeries {
   readonly name: string;
   set(data: ChartData | ReadonlyArray<Vec2> | (() => ReadonlyArray<Vec2>)): this;
@@ -1458,9 +1459,9 @@ export interface ChartSeries {
 }
 
 export interface Chart {
-  /** One value per category; histograms and box plots take raw samples, one series per box. */
+  /** Exactly one value per category, 1 to 60 values; histograms and box plots take up to 20000 raw samples, one series per box. */
   series(name: string, data: ChartData, options?: ChartSeriesOptions): ChartSeries;
-  /** Points for a scatter chart. */
+  /** Scatter points as [x, y] pairs, 1 to 2000. */
   points(name: string, data: ReadonlyArray<Vec2> | (() => ReadonlyArray<Vec2>), options?: ChartSeriesOptions): ChartSeries;
   /** A level reference line, such as a mean. */
   rule(value: number | (() => number), options?: { readonly label?: string; readonly tone?: Tone; readonly dashed?: boolean }): Handle;
