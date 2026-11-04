@@ -238,6 +238,27 @@ describe('film ask: inserts', () => {
     expect(validateInsertClip({ anchor, lines: Array.from({ length: 5 }, () => ({ say: 'Too many.' })) }, film, params)).toMatchObject({ ok: false });
   });
 
+  it('hands each clip a unique id, even for the same words twice or elsewhere', async () => {
+    const { film } = await thirty();
+    const params = new Set<string>();
+    const lines = [{ say: 'The bob moves fastest at the bottom.', seconds: 3 }];
+    const first = validateInsertClip({ anchor: anchorFor(film, 's1b3', 1), lines }, film, params);
+    const second = validateInsertClip({ anchor: anchorFor(film, 's1b3', 1), lines }, film, params);
+    const elsewhere = validateInsertClip({ anchor: anchorFor(film, 's1b1', 0), lines }, film, params);
+    expect(first.ok && second.ok && elsewhere.ok).toBe(true);
+    if (!first.ok || !second.ok || !elsewhere.ok) return;
+    // Same asker, same words, same anchor: still two inserts, never one id.
+    expect(second.clip.id).not.toBe(first.clip.id);
+    // Same words at another anchor: no overwrite, no ambiguity.
+    expect(elsewhere.clip.id).not.toBe(first.clip.id);
+    for (const clip of [first.clip, second.clip, elsewhere.clip]) {
+      expect(clip.id).toMatch(/^[\w-]{1,80}$/);
+    }
+    // An asked-for id still lands untouched.
+    const named = validateInsertClip({ id: 'insert-1', anchor: anchorFor(film, 's1b3', 1), lines }, film, params);
+    expect(named.ok && named.clip.id).toBe('insert-1');
+  });
+
   function clip(film: CompiledFilm): InsertClip {
     const anchor = askAnchorFor(film, 's1b3', film.beats[2]!.start + 0.6)!;
     const valid = validateInsertClip({ anchor, lines: [{ say: 'First line.', seconds: 2 }, { say: 'Second line.', seconds: 3 }] }, film, new Set());

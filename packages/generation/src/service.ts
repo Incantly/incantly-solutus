@@ -10,7 +10,8 @@ import type { ModelClient } from './models';
 import { Generator, standardFigure, type GenerationState } from './pipeline';
 import { probeSpecFor } from './probe';
 import { MemoryAudioStore, narrateBeats, speechRefusalHttp } from './narration';
-import type { AskChangeResponse, AskExampleResponse, AskInsertResponse, AskSpeakResponse, ChangeResponse, FallbackMessage, GalleryReceipt, RepairResponse, SceneMessage, Skeleton } from './protocol';
+import type { FilmLibrary } from './film-library';
+import type { AskChangeResponse, AskExampleResponse, AskInsertResponse, AskSpeakResponse, ChangeResponse, FallbackMessage, FilmInsertsResponse, FilmVersionResponse, FilmVersionsResponse, GalleryReceipt, PromoteResponse, RepairResponse, SceneMessage, Skeleton } from './protocol';
 import { STUB_VOICES, type Narrator } from './tts';
 import { galleryCard, galleryFigure, galleryId, isListed, submitterOf, type GalleryStore } from './gallery';
 import { failureRecord, type RecordSink } from './records';
@@ -38,6 +39,12 @@ import { issueTicket, readTicket } from './ticket';
  *   POST /v1/ask/change               { prompt, film, version, beats } -> version N+1 as a patch, or failed
  *   POST /v1/ask/speak                { text, voice? } -> the answer spoken, when the asker opts in
  *   GET  /v1/voices                   -> the stub voice list
+ *   GET  /v1/films/:film/versions      -> the shared versions, oldest first
+ *   GET  /v1/films/:film/versions/:n   -> one version's patch
+ *   POST /v1/films/:film/versions      { patch, beats } -> the stored version, chain-checked
+ *   GET  /v1/films/:film/inserts       -> the asker's own inserts
+ *   POST /v1/films/:film/inserts       an insert clip -> its stored id, private to the asker
+ *   POST /v1/films/:film/promote       { insertId, patch, beats } -> the new shared version, author-only
  */
 
 export interface ServiceOptions {
@@ -72,6 +79,12 @@ export interface ServiceOptions {
   readonly gallery?: GalleryStore | null;
   /** Figures one learner may have waiting for review at once. Default 20. */
   readonly galleryPendingLimit?: number;
+  /**
+   * The film library: shared versions and private inserts. Without it the
+   * film endpoints are off. Storage, not generation: it answers while the
+   * switch is off, like the gallery.
+   */
+  readonly films?: FilmLibrary | null;
   /** Who speaks opted-in answers; the stub by default, so speech is silent until configured. */
   readonly narrator?: Narrator;
   readonly now?: () => number;
@@ -85,6 +98,7 @@ export const RETENTION = {
   sessions: 'A generation waiting for its device probe is kept in memory for the stated number of minutes.',
   gallery: 'A figure a learner publishes to the gallery is kept with the request they publish it with, its title, plan and fragments, and a one-way hash of the learner, until a reviewer removes it; only accepted figures are shown to others, without the hash.',
   ask: 'A question asked of a film, with its anchor, scene lines, values and thread, is sent to the model provider for the answering call and is never logged, stored or recorded by this service; opted-in speech is narrated and returned, never kept.',
+  films: 'A film\u2019s shared versions are kept as patches over its base; inserts stay private to their asker under a one-way hash, listed only for them, until the author promotes one to a shared version.',
 } as const;
 
 interface Session {
@@ -264,6 +278,16 @@ export class GenerationService {
       if (req.method === 'POST' && path === `${this.prefix}/ask/change`) return await this.changeFilm(req, res);
       if (req.method === 'POST' && path === `${this.prefix}/ask/speak`) return await this.speak(req, res);
       if (req.method === 'GET' && path === `${this.prefix}/voices`) return await this.voices(req, res);
+      const filmVersions = new RegExp(`^${this.prefix}/films/([\\w-]{1,80})/versions$`).exec(path);
+      if (req.method === 'GET' && filmVersions) return await this.filmVersions(req, res, filmVersions[1]!);
+      if (req.method === 'POST' && filmVersions) return await this.storeFilmVersion(req, res, filmVersions[1]!);
+      const filmVersion = new RegExp(`^${this.prefix}/films/([\\w-]{1,80})/versions/(\\d+)$`).exec(path);
+      if (req.method === 'GET' && filmVersion) return await this.filmVersion(req, res, filmVersion[1]!, Number(filmVersion[2]));
+      const filmInserts = new RegExp(`^${this.prefix}/films/([\\w-]{1,80})/inserts$`).exec(path);
+      if (req.method === 'GET' && filmInserts) return await this.filmInserts(req, res, filmInserts[1]!);
+      if (req.method === 'POST' && filmInserts) return await this.saveFilmInsert(req, res, filmInserts[1]!);
+      const filmPromote = new RegExp(`^${this.prefix}/films/([\\w-]{1,80})/promote$`).exec(path);
+      if (req.method === 'POST' && filmPromote) return await this.promoteFilmInsert(req, res, filmPromote[1]!);
       throw new HttpError(404, 'not-found', 'No such endpoint');
     } catch (error) {
       if (res.headersSent) {
@@ -925,6 +949,106 @@ export class GenerationService {
       estimated: beat.estimated,
       ...(beat.error ? { error: beat.error } : {}),
     } satisfies AskSpeakResponse);
+  }
+
+  /** The film library, or a 404 where films are not kept. */
+  private films(): FilmLibrary {
+    const films = this.options.films;
+    if (!films) throw new HttpError(404, 'not-found', 'Films are not kept here');
+    return films;
+  }
+
+  /** A film's shared versions, oldest first; corrupt records are skipped, never served. */
+  private async filmVersions(req: IncomingMessage, res: ServerResponse, film: string): Promise<void> {
+    this.learner(req);
+    const { versions } = await this.films().versions(film);
+    this.json(res, 200, { film, versions } satisfies FilmVersionsResponse);
+  }
+
+  /** One version's patch, validated on load. */
+  private async filmVersion(req: IncomingMessage, res: ServerResponse, film: string, version: number): Promise<void> {
+    this.learner(req);
+    const patch = await this.films().version(film, version);
+    if (!patch) throw new HttpError(404, 'not-found', `There is no version ${version} of that film`);
+    this.json(res, 200, { patch } satisfies FilmVersionResponse);
+  }
+
+  /**
+   * Stores an explicit-edit patch as the next version. The first version
+   * stored for a film claims its authorship; past that only the author
+   * stores, and a patch off the tip is a conflict, not a branch.
+   */
+  private async storeFilmVersion(req: IncomingMessage, res: ServerResponse, film: string): Promise<void> {
+    const learner = this.learner(req);
+    // Patches carry their beats' audio, so the body fits the largest patch the sanitizer accepts.
+    const body = (await this.body(req, 20_971_520)) as { patch?: unknown; beats?: unknown };
+    if (typeof body !== 'object' || body === null) throw new HttpError(400, 'invalid-request', 'The body must be a JSON object');
+    const named = (body.patch as { film?: unknown } | null)?.film;
+    if (named !== film) throw new HttpError(400, 'invalid-request', 'The patch names another film');
+    const stored = await this.films().storePatch(learner.id, body.patch, { beats: body.beats });
+    if (!stored.ok) {
+      if (stored.refused === 'not-author') throw new HttpError(403, 'not-author', stored.problems.join('; '));
+      if (stored.conflict) throw new HttpError(409, 'version-conflict', stored.problems.join('; '));
+      throw new HttpError(400, 'invalid-request', stored.problems.join('; '));
+    }
+    this.json(res, 201, { version: stored.version });
+  }
+
+  /** The asker's own inserts for a film; another asker's are never listed. */
+  private async filmInserts(req: IncomingMessage, res: ServerResponse, film: string): Promise<void> {
+    const learner = this.learner(req);
+    const entries = await this.films().insertsFor(learner.id, film);
+    this.json(res, 200, {
+      film,
+      inserts: entries.map((entry) => ({
+        id: entry.id,
+        anchor: { film: entry.insert.anchor.film, version: entry.insert.anchor.version, scene: entry.insert.anchor.scene, beat: entry.insert.anchor.beat, wordIndex: entry.insert.anchor.wordIndex },
+        lines: entry.insert.lines.map((line) => ({ say: line.say, seconds: line.seconds, ...(line.set ? { set: { ...line.set } } : {}) })),
+        seconds: entry.insert.seconds,
+        askedAt: entry.insert.askedAt,
+        promoted: entry.promoted,
+      })),
+    } satisfies FilmInsertsResponse);
+  }
+
+  /** Saves a private insert for its asker. */
+  private async saveFilmInsert(req: IncomingMessage, res: ServerResponse, film: string): Promise<void> {
+    const learner = this.learner(req);
+    const body = await this.body(req, 65_536);
+    const named = (body as { anchor?: { film?: unknown } } | null)?.anchor?.film;
+    if (named !== film) throw new HttpError(400, 'invalid-request', 'The insert is pinned to another film');
+    const saved = await this.films().saveInsert(learner.id, body);
+    if (!saved.ok) throw new HttpError(400, 'invalid-request', saved.problems.join('; '));
+    this.json(res, 201, { id: saved.id });
+  }
+
+  /**
+   * Promotes a private insert to a shared version. Author-only: anyone but
+   * the film's author is refused, and the patch must actually carry the
+   * insert's lines after its anchor.
+   */
+  private async promoteFilmInsert(req: IncomingMessage, res: ServerResponse, film: string): Promise<void> {
+    const learner = this.learner(req);
+    const body = (await this.body(req, 20_971_520)) as { insertId?: unknown; patch?: unknown; beats?: unknown };
+    if (typeof body !== 'object' || body === null || typeof body.insertId !== 'string') {
+      throw new HttpError(400, 'invalid-request', 'The body must carry the insert id and its patch');
+    }
+    const promoted = await this.films().promote(learner.id, film, body.insertId, body.patch, { beats: body.beats });
+    if (!promoted.ok) {
+      // Missing and forbidden answer alike: a non-author cannot probe
+      // insert-id existence across askers.
+      if (promoted.refused === 'not-author' || promoted.refused === 'missing') {
+        this.json(res, 404, { status: 'failed', reason: 'missing' } satisfies PromoteResponse);
+        return;
+      }
+      if (promoted.conflict) {
+        this.json(res, 409, { status: 'failed', reason: 'conflict' } satisfies PromoteResponse);
+        return;
+      }
+      this.json(res, 400, { status: 'failed', reason: 'invalid' } satisfies PromoteResponse);
+      return;
+    }
+    this.json(res, 201, { status: 'promoted', version: promoted.version, patch: promoted.patch } satisfies PromoteResponse);
   }
 
   /** Records and forgets generations whose device never reported. */

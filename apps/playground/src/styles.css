@@ -1459,6 +1459,12 @@ main.style-page {
 .inc-example-caption { margin: 0; font-size: 0.88rem; }
 .inc-example-figure { max-width: 560px; }
 .inc-version { margin: 0; font-size: 0.85rem; color: var(--text-muted, #6b7280); }
+.inc-version-wrap { display: flex; flex-direction: column; gap: 4px; }
+.inc-version-label { font-size: 0.85rem; color: var(--text-muted, #6b7280); display: flex; gap: 6px; align-items: center; }
+.inc-inserts ul { margin: 6px 0 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; }
+.inc-inserts-empty { color: var(--text-muted, #6b7280); font-size: 0.85rem; }
+.inc-inserts-status { margin: 6px 0 0; font-size: 0.82rem; color: var(--text-muted, #6b7280); }
+.inc-export-hint { margin: 4px 0; font-size: 0.82rem; color: var(--text-muted, #6b7280); }
 .inc-bookmarks ul { margin: 6px 0 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; }
 .inc-bookmarks-empty { color: var(--text-muted, #6b7280); font-size: 0.85rem; }
 .inc-shortcuts { font-size: 0.85rem; }

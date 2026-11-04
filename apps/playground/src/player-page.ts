@@ -12,13 +12,19 @@ import {
   compileTrusted,
   FilmController,
   FilmMixer,
+  FilmVersionStore,
+  flattenFilm,
+  flattenInsert,
+  flattenTranscript,
   fontsReady,
   formatFilmLink,
   InsertPlayer,
+  PrivateInsertStore,
+  promoteInsertClip,
+  reanchorAskAnchor,
   loadKitModules,
   mountTrusted,
   parseFilmLink,
-  patchSummary,
   PlayerModel,
   probeFilmAsync,
   probeSandboxed,
@@ -37,6 +43,7 @@ import {
   validateExampleClip,
   validateInsertClip,
   validateScene,
+  VersionPicker,
   WebAudioMixerBackend,
   FILM_BEAT_HOLD_SECONDS,
   FILM_FIXTURES,
@@ -49,6 +56,8 @@ import {
   type FilmReport,
   type FilmSceneSource,
   type FilmVersionPatch,
+  type InsertClip,
+  type StoredInsert,
   type KitRegistry,
   type PlayerState,
   type ProbeReport,
@@ -128,11 +137,6 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
   const compiled = compileFilm(JSON.parse(JSON.stringify(fixture.storyboard)) as unknown, sources);
   if (!compiled.ok || !compiled.film) throw new Error(compiled.diagnostics.map((d) => d.message).join('; '));
   let film = compiled.film;
-  // Every version played this session, by version: the in-memory seam the
-  // next slice's persistent storage and picker build on. Storage, promotion
-  // and the picker are that slice's; this slice only switches to N+1.
-  const versions = new Map<number, CompiledFilm>([[film.version, film]]);
-  const history: string[] = [`v${film.version}`];
 
   // Narration arrives before the first frame: the stub times every beat
   // through the same endpoint Cartesia would use. A failure leaves the film
@@ -156,6 +160,39 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
   } catch {
     // Estimated and silent.
   }
+
+  // Version storage: the film as narrated is the immutable base, and the
+  // service's patches rebuild every version on load — validated, so a
+  // tampered record never plays. Without the service the film is v1 alone.
+  let versionStore = new FilmVersionStore(film, sources);
+  try {
+    const token = await devToken();
+    const headers = { authorization: `Bearer ${token}` };
+    const listed = await fetch(`/api/v1/films/${film.id}/versions`, { headers });
+    if (listed.ok) {
+      const body = (await listed.json()) as { versions?: Array<{ version: number }> };
+      const patches: unknown[] = [];
+      for (const entry of body.versions ?? []) {
+        const one = await fetch(`/api/v1/films/${film.id}/versions/${entry.version}`, { headers });
+        if (!one.ok) throw new Error(`version ${entry.version} did not load`);
+        patches.push(((await one.json()) as { patch: unknown }).patch);
+      }
+      const loaded = FilmVersionStore.load(film, patches, sources);
+      if (loaded.ok) {
+        versionStore = loaded.store;
+        film = versionStore.get(versionStore.latest) ?? film;
+        for (const card of versionStore.list().slice(1)) {
+          const patch = versionStore.patch(card.version);
+          const parent = versionStore.get(card.parent ?? 0);
+          const at = versionStore.get(card.version);
+          if (patch && parent && at) attachPatchAudio(patch, parent, at, mixer);
+        }
+      }
+    }
+  } catch {
+    // Base only: the film plays on without its stored versions.
+  }
+  const picker = new VersionPicker(versionStore);
 
   const controller = new FilmController({
     runtime: figure.runtime,
@@ -232,7 +269,33 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
 
   let openAsk = (): void => undefined;
   const transport = buildTransport(player, model, film, mixer, () => openAsk(), { toggleLoop, copyLink });
-  const versionBadge = buildVersion(player, film.version, history);
+  // Switching versions re-resolves the position by beat id — the same beat
+  // and word on the new version, never carried seconds — and plays it.
+  const showFilm = (next: CompiledFilm): void => {
+    film = next;
+    controller.retime(film);
+    model.retime(film);
+    transport.setDuration(film.seconds);
+    player.querySelector('.inc-timeline')?.remove();
+    timeline = buildTimeline(player, model, film);
+    versionUi.refresh();
+    window.__playground!.film = film;
+  };
+  const switchVersion = (version: number): boolean => {
+    const next = picker.switchTo(version);
+    if (!next) return false;
+    const beat = controller.currentBeat;
+    const word = Math.max(0, model.currentWordIndex);
+    showFilm(next);
+    if (beat) {
+      const moved = reanchorAskAnchor(film, { film: film.id, version: film.version, scene: beat.sceneId, beat: beat.id, wordIndex: word, controlValues: {}, readouts: [] });
+      model.seek(moved ? moved.seconds : 0);
+    }
+    model.play();
+    void runChecks();
+    return true;
+  };
+  const versionUi = buildVersionPicker(player, () => picker.choices(), (version) => void switchVersion(version));
   const bookmarkUi = buildBookmarks(player, model);
   const transcript = buildTranscript(player, model);
   buildChapters(player, model);
@@ -268,9 +331,12 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
   // An explicit film edit, applied as version N+1: the patch applies
   // cleanly or not at all, the film checks re-run over the new narration and
   // timing (the scene is unchanged, so the validator and probe carry over),
-  // and only a passing version plays. Storage, promotion and the picker are
-  // the next slice's; until then the badge names the version, not a choice.
-  const applyPatch = async (patch: FilmVersionPatch): Promise<{ ok: true } | { ok: false; problems: readonly string[] }> => {
+  // the version persists to the service, and only a passing version plays.
+  // Changes build on the tip: from an old version the picker switches first.
+  const applyPatch = async (patch: FilmVersionPatch, options: { stored?: boolean } = {}): Promise<{ ok: true } | { ok: false; problems: readonly string[] }> => {
+    if (patch.parent !== versionStore.latest || patch.version !== versionStore.latest + 1) {
+      return { ok: false, problems: [`Version ${versionStore.latest} is the latest — switch to it first, then change the film.`] };
+    }
     const applied = applyFilmPatch(film, patch, sources);
     if (!applied.ok) return applied;
     const next = applied.film;
@@ -279,28 +345,42 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
       const first = report.failures[0];
       return { ok: false, problems: [`Version ${next.version} did not pass the film checks (${first?.check ?? 'checks'}), so the film stays on version ${film.version}.`] };
     }
-    // Only beats the patch changed may sound: audio riding along for an
-    // unchanged beat is ignored, never attached to the mixer.
-    const changed = new Set(patch.beats.map((beat) => beat.beat));
-    for (const line of patch.audio) {
-      if (!line.audioBase64 || !changed.has(line.beat)) continue;
-      mixer.attach({ beatId: line.beat, hash: `v${next.version}-${line.beat}`, pcm: base64ToBytes(line.audioBase64), sampleRate: line.sampleRate ?? 8000, seconds: line.seconds });
+    if (!options.stored) {
+      // Persisted before it lands locally, so a conflict never forks the chain.
+      try {
+        const token = await devToken();
+        const posted = await fetch(`/api/v1/films/${film.id}/versions`, {
+          method: 'POST',
+          headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+          body: JSON.stringify({ patch, beats: film.beats.map((beat) => ({ beat: beat.id, scene: beat.sceneId })) }),
+        });
+        if (posted.status === 409) return { ok: false, problems: ['Another version landed first — reload to pick it up, then change the film.'] };
+        // A service that does not keep films still leaves a playing version.
+      } catch {
+        // Local only: the film plays on without its stored versions.
+      }
     }
-    versions.set(next.version, next);
-    history.push(patchSummary(patch));
-    film = next;
-    controller.retime(film);
-    model.retime(film);
-    transport.setDuration(film.seconds);
-    player.querySelector('.inc-timeline')?.remove();
-    timeline = buildTimeline(player, model, film);
+    const appended = versionStore.putPatch(patch);
+    if (!appended.ok) return appended;
+    attachPatchAudio(patch, film, next, mixer);
+    picker.switchTo(next.version);
+    showFilm(versionStore.get(next.version) ?? next);
     badges.checks(report, report.failures);
     timeline.checks(report);
-    versionBadge.show(film.version, history);
-    window.__playground!.film = film;
     return { ok: true };
   };
 
+  // Private inserts: pinned by anchor, keyed by asker locally and on the
+  // service, so one asker never lists another's. The asker id rides the dev
+  // token; pins only, never scene state.
+  const askerStore = new PrivateInsertStore(memoryLocalStorage());
+  let askerId = 'playground-learner';
+  void devToken()
+    .then((token) => {
+      askerId = token.split('.')[0] || 'playground-learner';
+      return refreshInserts();
+    })
+    .catch(() => undefined);
   const askUi = buildAskSheet(player, {
     model,
     controller,
@@ -310,8 +390,96 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
     reducedMotion,
     applyPatch,
     requestBeats: () => film.beats.map((beat) => ({ beat: beat.id, scene: beat.sceneId, say: beat.step.say })),
+    keepInsert: (clip) => {
+      const stored = {
+        id: clip.id,
+        anchor: { film: clip.anchor.film, version: clip.anchor.version, scene: clip.anchor.scene, beat: clip.anchor.beat, wordIndex: clip.anchor.wordIndex },
+        lines: clip.lines.map((line) => ({ say: line.say, seconds: line.seconds, ...(line.set ? { set: { ...line.set } } : {}) })),
+        askedAt: Date.now(),
+      };
+      askerStore.save(askerId, stored);
+      insertsUi.refresh();
+      // The service keeps the asker's own copy; a failure still leaves the local one.
+      void (async () => {
+        try {
+          const token = await devToken();
+          await fetch(`/api/v1/films/${film.id}/inserts`, {
+            method: 'POST',
+            headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+            body: JSON.stringify(stored),
+          });
+        } catch {
+          // Local only.
+        }
+      })();
+    },
   });
   openAsk = askUi.open;
+  // Playing a saved insert switches to its version first, since pins are
+  // beat ids on the version they were asked on.
+  const playInsert = (id: string): string | null => {
+    const record = askerStore.get(askerId, film.id, id);
+    if (!record) return 'That insert is gone.';
+    if (record.anchor.version !== film.version && !switchVersion(record.anchor.version)) {
+      return `That insert was asked on version ${record.anchor.version}, which is gone.`;
+    }
+    const params = new Set(Object.keys(figure.runtime.values()));
+    const validated = validateInsertClip({ anchor: record.anchor, lines: record.lines }, film, params);
+    if (!validated.ok) return `That insert does not fit this film: ${validated.problems[0] ?? 'invalid'}.`;
+    return askUi.playClip({ ...validated.clip, id: record.id });
+  };
+  // Promoting shares an insert as the next version. Author-only on the
+  // service, where a missing insert and a forbidden one answer alike with
+  // 404; the insert was just re-saved, so 404 means anyone-but-the-author,
+  // and the page says so.
+  const promoteInsert = async (id: string): Promise<string> => {
+    const record = askerStore.get(askerId, film.id, id);
+    if (!record) return 'That insert is gone.';
+    const tip = versionStore.get(versionStore.latest) ?? film;
+    const built = promoteInsertClip(tip, record, `Share the insert after ${record.anchor.beat}.`);
+    if (!built.ok) return built.problems[0] ?? 'That insert does not fit this film.';
+    try {
+      const token = await devToken();
+      const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json' };
+      // The promotion needs the service's copy; re-saving is idempotent.
+      await fetch(`/api/v1/films/${tip.id}/inserts`, { method: 'POST', headers, body: JSON.stringify({ ...record, askedAt: record.askedAt }) }).catch(() => null);
+      const posted = await fetch(`/api/v1/films/${tip.id}/promote`, { method: 'POST', headers, body: JSON.stringify({ insertId: id, patch: built.patch, beats: tip.beats.map((beat) => ({ beat: beat.id, scene: beat.sceneId })) }) });
+      if (posted.status === 404) return 'Only the film\u2019s author can promote an insert.';
+      if (!posted.ok) return 'The promotion did not land — try again.';
+      const result = (await posted.json()) as { status?: string; patch?: FilmVersionPatch; version?: number };
+      if (result.status !== 'promoted' || !result.patch) return 'The promotion did not land — try again.';
+      const checked = sanitizeFilmPatch(result.patch);
+      if (!checked.ok) return `The new version did not fit: ${checked.problems[0] ?? 'invalid'}.`;
+      const applied = await applyPatch(checked.patch, { stored: true });
+      if (!applied.ok) return applied.problems[0] ?? 'The new version did not fit.';
+      insertsUi.refresh();
+      return `Version ${result.version} is playing.`;
+    } catch {
+      return 'The promotion did not land — try again.';
+    }
+  };
+  const insertsUi = buildInserts(player, {
+    list: () => askerStore.list(askerId, film.id),
+    play: playInsert,
+    promote: promoteInsert,
+  });
+  const refreshInserts = async (): Promise<void> => {
+    // The service's copies merge into the local list; failures leave it local-only.
+    try {
+      const token = await devToken();
+      const listed = await fetch(`/api/v1/films/${film.id}/inserts`, { headers: { authorization: `Bearer ${token}` } });
+      if (!listed.ok) return;
+      const body = (await listed.json()) as { inserts?: Array<{ id: string; anchor: unknown; lines: unknown; askedAt: number }> };
+      for (const entry of body.inserts ?? []) askerStore.save(askerId, entry);
+      insertsUi.refresh();
+    } catch {
+      // Local only.
+    }
+  };
+  buildExport(player, {
+    inserts: () => askerStore.list(askerId, film.id),
+    film: () => film,
+  });
 
   bindShortcuts({
     playPause: () => model.toggle(),
@@ -460,12 +628,22 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
     ask: () => askUi.state(),
     full: () => ({
       version: film.version,
-      history: [...history],
+      history: versionStore.list().map((card) => card.summary),
       loop: model.loopedBeat,
       bookmarks: model.bookmarks.map((bookmark) => ({ id: bookmark.id, beat: bookmark.beat, word: bookmark.wordIndex })),
       resumed,
       hash: window.location.hash,
       reducedMotion,
+    }),
+    versions: () => ({
+      current: film.version,
+      list: versionStore.list().map((card) => ({ version: card.version, summary: card.summary, reason: card.reason, beats: [...card.beats] })),
+      inserts: askerStore.list(askerId, film.id).map((entry) => ({ id: entry.id, beat: entry.anchor.beat, version: entry.anchor.version, lines: entry.lines.length })),
+      flatten: {
+        film: flattenFilm(film).beats.length,
+        filmPlus: flattenFilm(film, askerStore.list(askerId, film.id).map((entry) => ({ id: entry.id, anchor: entry.anchor, lines: entry.lines, seconds: entry.seconds }))).beats.length,
+        transcript: flattenTranscript(flattenFilm(film)).length,
+      },
     }),
     narration: () => ({ source: narrationSource, timed: film.beats.filter((beat) => beat.timed).length, beats: film.beats.length }),
     mixerEvents: () => [...mixBackend.events],
@@ -754,16 +932,199 @@ function buildTransport(
   };
 }
 
-/** The version badge: which version plays and how it came to be. The picker is the next slice's; this names, not chooses. */
-function buildVersion(player: HTMLElement, version: number, history: readonly string[]): { show(version: number, history: readonly string[]): void } {
+/** The version badge and picker: which version plays, how it came to be, and the choice of any version. */
+function buildVersionPicker(player: HTMLElement, choices: () => ReadonlyArray<{ version: number; summary: string; reason: string; current: boolean }>, onSwitch: (version: number) => void): { refresh(): void } {
+  const wrap = document.createElement('div');
+  wrap.className = 'inc-version-wrap';
   const badge = document.createElement('p');
   badge.className = 'inc-version';
-  const show = (at: number, past: readonly string[]): void => {
-    badge.textContent = `Version ${at} · ${past.join(' → ')}`;
+  const label = document.createElement('label');
+  label.className = 'inc-version-label';
+  label.textContent = 'Version ';
+  const select = document.createElement('select');
+  select.className = 'inc-version-picker';
+  select.setAttribute('aria-label', 'Version');
+  select.addEventListener('change', () => onSwitch(Number(select.value)));
+  label.append(select);
+  const refresh = (): void => {
+    const options = choices();
+    const at = options.find((choice) => choice.current) ?? options[options.length - 1];
+    badge.textContent = `Version ${at?.version ?? 1} · ${options.map((choice) => choice.summary).join(' → ')}`;
+    select.textContent = '';
+    for (const choice of options) {
+      const option = document.createElement('option');
+      option.value = String(choice.version);
+      option.textContent = choice.version === options[0]!.version ? `v${choice.version} · base` : `${choice.summary} — ${choice.reason}`;
+      if (choice.current) option.selected = true;
+      select.append(option);
+    }
   };
-  show(version, history);
-  player.append(badge);
-  return { show };
+  refresh();
+  wrap.append(badge, label);
+  player.append(wrap);
+  return { refresh };
+}
+
+/** The asker's own inserts: what was asked where, replayable and promotable. */
+function buildInserts(
+  player: HTMLElement,
+  actions: { list(): readonly StoredInsert[]; play(id: string): string | null; promote(id: string): Promise<string> },
+): { refresh(): void } {
+  const wrap = document.createElement('details');
+  wrap.className = 'inc-inserts';
+  const summary = document.createElement('summary');
+  summary.textContent = 'My inserts';
+  const list = document.createElement('ul');
+  const status = document.createElement('p');
+  status.className = 'inc-inserts-status';
+  status.hidden = true;
+  const refresh = (): void => {
+    list.textContent = '';
+    const entries = actions.list();
+    if (entries.length === 0) {
+      const empty = document.createElement('li');
+      empty.className = 'inc-inserts-empty';
+      empty.textContent = 'No inserts yet — ask for an explanation to keep one.';
+      list.append(empty);
+      return;
+    }
+    for (const entry of entries) {
+      const item = document.createElement('li');
+      item.dataset.insert = entry.id;
+      const text = document.createElement('span');
+      const first = entry.lines[0]?.say ?? '';
+      text.textContent = `${entry.anchor.beat} (v${entry.anchor.version}) · “${first.length > 60 ? `${first.slice(0, 60)}…` : first}”`;
+      const play = document.createElement('button');
+      play.type = 'button';
+      play.textContent = 'Play';
+      play.setAttribute('aria-label', `Play insert at ${entry.anchor.beat}`);
+      play.addEventListener('click', () => {
+        const problem = actions.play(entry.id);
+        status.hidden = problem === null;
+        if (problem) status.textContent = problem;
+      });
+      const promote = document.createElement('button');
+      promote.type = 'button';
+      promote.className = 'inc-insert-promote';
+      promote.textContent = 'Promote';
+      promote.setAttribute('aria-label', `Promote the insert at ${entry.anchor.beat} to a shared version`);
+      promote.addEventListener('click', () => {
+        promote.disabled = true;
+        status.hidden = false;
+        status.textContent = 'Promoting…';
+        void actions.promote(entry.id).then((message) => {
+          status.textContent = message;
+          promote.disabled = false;
+        });
+      });
+      item.append(text, ' ', play, ' ', promote);
+      list.append(item);
+    }
+  };
+  refresh();
+  wrap.append(summary, list, status);
+  player.append(wrap);
+  return { refresh };
+}
+
+/** Export, data only: flattened timelines the renderer will consume, and beat-text transcripts. */
+function buildExport(player: HTMLElement, sources: { film(): CompiledFilm; inserts(): readonly StoredInsert[] }): void {
+  const wrap = document.createElement('details');
+  wrap.className = 'inc-export';
+  const summary = document.createElement('summary');
+  summary.textContent = 'Export';
+  const hint = document.createElement('p');
+  hint.className = 'inc-export-hint';
+  hint.textContent = 'Timelines and transcripts only — the rendered video lands in a later slice.';
+  const clipOf = (entry: StoredInsert): InsertClip => ({ id: entry.id, anchor: entry.anchor, lines: entry.lines, seconds: entry.seconds });
+  const filmButton = document.createElement('button');
+  filmButton.type = 'button';
+  filmButton.className = 'inc-export-film';
+  filmButton.textContent = 'Film (JSON)';
+  filmButton.addEventListener('click', () => {
+    const film = sources.film();
+    downloadFile(`${film.id}-v${film.version}.json`, JSON.stringify(flattenFilm(film), null, 2), 'application/json');
+  });
+  const plusButton = document.createElement('button');
+  plusButton.type = 'button';
+  plusButton.className = 'inc-export-plus';
+  plusButton.textContent = 'Film + my inserts (JSON)';
+  plusButton.addEventListener('click', () => {
+    const film = sources.film();
+    const clips = sources.inserts().map(clipOf);
+    downloadFile(`${film.id}-v${film.version}-with-inserts.json`, JSON.stringify(flattenFilm(film, clips), null, 2), 'application/json');
+  });
+  const oneButton = document.createElement('button');
+  oneButton.type = 'button';
+  oneButton.className = 'inc-export-insert';
+  oneButton.textContent = 'Insert (JSON)';
+  const select = document.createElement('select');
+  select.className = 'inc-export-select';
+  select.setAttribute('aria-label', 'Insert to export');
+  const syncOptions = (): void => {
+    select.textContent = '';
+    for (const entry of sources.inserts()) {
+      const option = document.createElement('option');
+      option.value = entry.id;
+      option.textContent = `${entry.anchor.beat} · ${entry.lines.length} lines`;
+      select.append(option);
+    }
+    oneButton.disabled = sources.inserts().length === 0;
+  };
+  wrap.addEventListener('toggle', () => {
+    if (wrap.open) syncOptions();
+  });
+  syncOptions();
+  oneButton.addEventListener('click', () => {
+    const entry = sources.inserts().find((candidate) => candidate.id === select.value);
+    if (!entry) return;
+    downloadFile(`${entry.id}.json`, JSON.stringify(flattenInsert(sources.film(), clipOf(entry)), null, 2), 'application/json');
+  });
+  const transcriptButton = document.createElement('button');
+  transcriptButton.type = 'button';
+  transcriptButton.className = 'inc-export-transcript';
+  transcriptButton.textContent = 'Transcript (text)';
+  transcriptButton.addEventListener('click', () => {
+    const film = sources.film();
+    downloadFile(`${film.id}-v${film.version}-transcript.txt`, `${flattenTranscript(flattenFilm(film)).join('\n')}\n`, 'text/plain');
+  });
+  const row = document.createElement('div');
+  row.className = 'inc-ask-row';
+  row.append(filmButton, plusButton, transcriptButton);
+  const insertRow = document.createElement('div');
+  insertRow.className = 'inc-ask-row';
+  insertRow.append(select, oneButton);
+  wrap.append(summary, hint, row, insertRow);
+  player.append(wrap);
+}
+
+/** Downloads text through a blob link; the click is the gesture the browser needs. */
+function downloadFile(name: string, text: string, type: string): void {
+  const url = URL.createObjectURL(new Blob([text], { type }));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = name;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/**
+ * Attaches a patch's audio to the mixer: only beats the patch changed or
+ * spliced may sound. Audio riding along for an unchanged beat is ignored,
+ * never attached to the mixer.
+ */
+function attachPatchAudio(patch: FilmVersionPatch, parent: CompiledFilm, at: CompiledFilm, mixer: FilmMixer): void {
+  const fresh = new Set(at.beats.map((beat) => beat.id));
+  const changed = new Set(patch.beats.map((beat) => beat.beat));
+  for (const beat of parent.beats) {
+    if (!changed.has(beat.id)) fresh.delete(beat.id);
+  }
+  for (const line of patch.audio) {
+    if (!line.audioBase64 || !fresh.has(line.beat)) continue;
+    mixer.attach({ beatId: line.beat, hash: `v${at.version}-${line.beat}`, pcm: base64ToBytes(line.audioBase64), sampleRate: line.sampleRate ?? 8000, seconds: line.seconds });
+  }
 }
 
 function buildBookmarks(player: HTMLElement, model: PlayerModel): { add(label?: string): void } {
@@ -1162,6 +1523,8 @@ interface AskSheet {
   open(): void;
   tick(dt: number): void;
   caption(): string | null;
+  /** Plays a clip over the paused film: a saved insert, or the deeper rung's. Null when it plays, else why not. */
+  playClip(clip: InsertClip): string | null;
   state(): {
     sheet: boolean;
     answer: string;
@@ -1187,6 +1550,7 @@ function buildAskSheet(
     reducedMotion: boolean;
     applyPatch(patch: FilmVersionPatch): Promise<{ ok: true } | { ok: false; problems: readonly string[] }>;
     requestBeats(): ReadonlyArray<{ beat: string; scene: string; say: string }>;
+    keepInsert(clip: InsertClip): void;
   },
 ): AskSheet {
   const { model, controller, figure } = ctx;
@@ -1472,38 +1836,45 @@ function buildAskSheet(
         status.textContent = `The insert did not fit this scene: ${validated.problems[0] ?? 'invalid'}.`;
         return;
       }
-      if (!stack.push(anchor)) {
-        status.textContent = 'Finish this question first — questions nest two deep.';
+      const problem = startClip({ ...validated.clip, anchor });
+      if (problem) {
+        status.textContent = problem;
         return;
       }
-      const nested = players.length > 0;
-      const clip = { ...validated.clip, anchor };
-      const playing = new InsertPlayer(controller, ctx.film(), clip, {
-        applySet: (set) => touch(() => figure.runtime.setValues(set)),
-        ...(nested ? { resumeToFilm: false as const } : {}),
-        onEvent: (event) => {
-          if (event.type !== 'resume') return;
-          stack.pop();
-          players.pop();
-          if (players.length === 0) insertBanner.hidden = true;
-        },
-      });
-      players.push(playing);
-      if (!playing.play()) {
-        stack.pop();
-        players.pop();
-        if (players.length === 0) insertBanner.hidden = true;
-        status.textContent = 'The film moved on — ask again where you are.';
-        return;
-      }
+      ctx.keepInsert({ ...validated.clip, anchor });
       lastQuestion = question;
       lastDepthRung = 'deeper';
       status.textContent = '';
       sheet.hidden = true;
-      insertBanner.hidden = false;
     } catch {
       status.textContent = 'No insert came back — the film is still paused where you asked.';
     }
+  };
+
+  // One insert player for the deeper rung and saved inserts alike: lines in
+  // order, the back-to-film beat, then an auto-resume at the anchor word.
+  const startClip = (clip: InsertClip): string | null => {
+    if (!stack.push(clip.anchor)) return 'Finish this question first — questions nest two deep.';
+    const nested = players.length > 0;
+    const playing = new InsertPlayer(controller, ctx.film(), clip, {
+      applySet: (set) => touch(() => figure.runtime.setValues(set)),
+      ...(nested ? { resumeToFilm: false as const } : {}),
+      onEvent: (event) => {
+        if (event.type !== 'resume') return;
+        stack.pop();
+        players.pop();
+        if (players.length === 0) insertBanner.hidden = true;
+      },
+    });
+    players.push(playing);
+    if (!playing.play()) {
+      stack.pop();
+      players.pop();
+      if (players.length === 0) insertBanner.hidden = true;
+      return 'The film moved on — ask again where you are.';
+    }
+    insertBanner.hidden = false;
+    return null;
   };
 
   const askExample = async (question: string): Promise<void> => {
@@ -1720,6 +2091,7 @@ function buildAskSheet(
 
   return {
     open,
+    playClip: (clip) => startClip(clip),
     tick(dt: number): void {
       sideClip?.player.tick(dt);
       const top = players[players.length - 1];

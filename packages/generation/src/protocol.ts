@@ -226,3 +226,49 @@ export interface AskSpeakResponse {
   readonly estimated: boolean;
   readonly error?: string;
 }
+
+/** One film version as the service lists it: its link, its reason, and what changed. */
+export interface FilmVersionSummaryMessage {
+  readonly version: number;
+  readonly parent: number;
+  readonly reason: string;
+  readonly beats: readonly string[];
+  readonly inserts: ReadonlyArray<{ readonly after: string; readonly lines: number }>;
+  readonly summary: string;
+}
+
+/** A film's shared versions, oldest first. */
+export interface FilmVersionsResponse {
+  readonly film: string;
+  readonly versions: readonly FilmVersionSummaryMessage[];
+}
+
+/** One version's patch, for the player to apply. */
+export interface FilmVersionResponse {
+  readonly patch: FilmVersionPatch;
+}
+
+/** A private insert as its asker lists it: the clip, when it was asked, and whether it was promoted. */
+export interface FilmInsertMessage {
+  readonly id: string;
+  readonly anchor: AskAnchorMessage;
+  readonly lines: ReadonlyArray<{ readonly say: string; readonly seconds: number; readonly set?: Readonly<Record<string, number>> }>;
+  readonly seconds: number;
+  readonly askedAt: number;
+  readonly promoted: boolean;
+}
+
+/** An asker's own inserts for a film. */
+export interface FilmInsertsResponse {
+  readonly film: string;
+  readonly inserts: readonly FilmInsertMessage[];
+}
+
+/** The author promotes a private insert: its id and the promotion patch the client built. */
+export interface PromoteRequest {
+  readonly insertId: string;
+  readonly patch: FilmVersionPatch;
+}
+
+/** The answer to a promotion: the new shared version, or why there is none. */
+export type PromoteResponse = { readonly status: 'promoted'; readonly version: number; readonly patch: FilmVersionPatch } | { readonly status: 'failed'; readonly reason: 'missing' | 'invalid' | 'conflict' };
