@@ -5,6 +5,28 @@ async function openPlayer(page: Page, film: string): Promise<void> {
   await page.waitForFunction(() => window.__playground?.ready === true);
 }
 
+/** Seeks to a beat's start plus an offset, through the player's own model. */
+async function seekBeat(page: Page, index: number, offset: number): Promise<void> {
+  await page.evaluate(([i, off]) => {
+    const playground = window.__playground as unknown as { model: { seek(seconds: number): void }; film: { beats: Array<{ start: number }> } };
+    playground.model.seek(playground.film.beats[i]!.start + off);
+  }, [index, offset] as const);
+}
+
+interface AskState {
+  readonly sheet: boolean;
+  readonly answer: string;
+  readonly markers: number;
+  readonly stack: number;
+  readonly insert: string | null;
+  readonly remaining: number;
+  readonly showme: string | null;
+}
+
+async function askState(page: Page): Promise<AskState> {
+  return page.evaluate(() => (window.__playground?.ask as () => AskState)());
+}
+
 test('the player plays a silent film with captions and a transcript', async ({ page }) => {
   await openPlayer(page, 'thirty');
   await expect(page.locator('.inc-player h2')).toHaveText('How a pendulum keeps time');
@@ -96,6 +118,75 @@ test('the sound toggle schedules narration and stays silent until then', async (
   await expect
     .poll(async () => page.evaluate(() => (window.__playground?.mixerEvents as () => Array<{ type: string }>)()).then((events) => events.filter((e) => e.type === 'play').length))
     .toBeGreaterThan(0);
+});
+
+test('tap-to-ask streams an Answer and pins question markers', async ({ page }) => {
+  await openPlayer(page, 'thirty');
+  await seekBeat(page, 0, 0.5);
+  await page.getByRole('button', { name: 'Ask about this moment' }).click();
+  await expect(page.locator('.inc-ask-context')).toContainText('s1b1');
+  await expect(page.locator('.inc-ask-context')).toContainText('pendulum');
+
+  await page.locator('.inc-ask-input').fill('What hangs it?');
+  await page.locator('.inc-ask-chips button').first().click();
+  await expect(page.locator('.inc-ask-answer')).toContainText('fastest', { timeout: 15_000 });
+  await expect(page.locator('.inc-ask-status')).toContainText('First words in');
+
+  // Markers in the scrubber and the transcript, at the anchor.
+  await expect(page.locator('.inc-scrub-markers .inc-marker')).toHaveCount(1);
+  await expect(page.locator('.inc-transcript .inc-marker')).toHaveCount(1);
+  expect((await askState(page)).markers).toBe(1);
+
+  // The film stays paused where it was asked.
+  const stats = await page.evaluate(() => (window.__playground?.stats as () => { playing: boolean; beat: string | null })());
+  expect(stats.playing).toBe(false);
+  expect(stats.beat).toBe('s1b1');
+
+  // Answer speech is opt-in: the stub answers silently through the same endpoint.
+  await page.getByRole('button', { name: 'Hear answer' }).click();
+  await expect(page.locator('.inc-ask-speak-status')).toContainText('Answer speech:', { timeout: 15_000 });
+});
+
+test('Show me replays the beat on the live scene and restores it', async ({ page }) => {
+  await openPlayer(page, 'thirty');
+  await seekBeat(page, 2, 0.6);
+  await page.getByRole('button', { name: 'Ask about this moment' }).click();
+  await page.locator('.inc-ask-chips button').nth(1).click();
+  await expect(page.locator('.inc-showme')).toContainText('Showing s1b3');
+  await expect.poll(async () => (await askState(page)).showme).toBe('s1b3');
+
+  await page.locator('.inc-showme button').click();
+  await expect(page.locator('.inc-showme')).toBeHidden();
+  await expect.poll(async () => (await askState(page)).showme).toBeNull();
+});
+
+test('Explain deeper plays an insert and Back now resumes at the anchor word', async ({ page }) => {
+  await openPlayer(page, 'thirty');
+  await seekBeat(page, 2, 0.6);
+  await page.getByRole('button', { name: 'Ask about this moment' }).click();
+  await page.locator('.inc-ask-chips button').nth(2).click();
+  await expect(page.locator('.inc-insert')).toContainText('Explaining deeper', { timeout: 15_000 });
+  await expect(page.locator('.inc-caption')).toContainText('Here is the step again');
+  await expect.poll(async () => (await askState(page)).insert).toBe('insert');
+
+  await page.locator('.inc-insert button').click();
+  await expect.poll(async () => page.evaluate(() => (window.__playground?.stats as () => { playing: boolean })().playing)).toBe(true);
+  await expect.poll(async () => page.evaluate(() => (window.__playground?.stats as () => { beat: string | null })().beat)).toBe('s1b3');
+  await expect(page.locator('.inc-insert')).toBeHidden();
+});
+
+test('an insert auto-resumes at the anchor word after a back-to-film beat', async ({ page }) => {
+  await openPlayer(page, 'thirty');
+  await seekBeat(page, 4, 0.3);
+  await page.getByRole('button', { name: 'Ask about this moment' }).click();
+  await page.locator('.inc-ask-chips button').nth(2).click();
+  await expect(page.locator('.inc-insert')).toContainText('Explaining deeper', { timeout: 15_000 });
+  await expect(page.locator('.inc-caption')).toContainText('Back to the film', { timeout: 15_000 });
+  await expect
+    .poll(async () => page.evaluate(() => (window.__playground?.stats as () => { playing: boolean })().playing), { timeout: 20_000 })
+    .toBe(true);
+  await expect.poll(async () => page.evaluate(() => (window.__playground?.stats as () => { beat: string | null })().beat)).toBe('s1b5');
+  await expect(page.locator('.inc-insert')).toBeHidden();
 });
 
 test('narration settings keep the key in memory and need none for the stub', async ({ page }) => {

@@ -3,7 +3,8 @@ import type { FrameClock } from '../engine/clock';
 import type { RendererMessage, RuntimeUpdate } from '../protocol/runtime-messages';
 import { stageBounds, type Box } from '../scene/bounds';
 import type { VNode } from '../scene/graph';
-import { anchorFor, attachAudio, resolveAnchor, type BeatAudio, type CompiledBeat, type CompiledFilm, type FilmAnchor } from '../film/storyboard';
+import { askAnchorFor, resolveAskAnchor, type AskAnchor } from '../film/ask';
+import { attachAudio, resolveAnchor, type BeatAudio, type CompiledBeat, type CompiledFilm, type FilmAnchor } from '../film/storyboard';
 import { FILM_STEP_SECONDS, SceneRuntime } from './runtime';
 
 /**
@@ -230,10 +231,71 @@ export interface FilmChapter {
 
 export interface AskContext {
   readonly question: string;
-  readonly anchor: FilmAnchor;
+  readonly anchor: AskAnchor;
   readonly beat: CompiledBeat;
   /** The beat's narration and its neighbours, for the answering call. */
   readonly lines: readonly TranscriptLine[];
+}
+
+/**
+ * A Show-me replay on the live scene: the beat's set, focus, camera and
+ * marks, re-applied through the same runtime and kit behaviors the beat
+ * itself used — no new scene code. The replay is deterministic: the same
+ * beat on the same scene draws the same frame every time. Restoring returns
+ * the scene's values, visibility and focus; the camera stays where the
+ * replay framed it, which is where the film's own beat frames it too.
+ */
+export interface ShowMeSession {
+  readonly beat: CompiledBeat;
+  readonly cues: AppliedCues;
+  readonly restored: boolean;
+  /** Re-applies the beat's fields; the same inputs draw the same frame. */
+  replay(): AppliedCues;
+  /** Returns the scene's values, visibility and focus. */
+  restore(): void;
+}
+
+/** Replays a beat's fields on the live scene, pausing its values for a later restore. */
+export function beginShowMe(runtime: SceneRuntime, beat: CompiledBeat): ShowMeSession {
+  const step = beat.step;
+  const values = runtime.values();
+  const focus = runtime.uiState().focus;
+  const parts = [step.focus, step.cam?.to, ...(step.show ?? []), ...(step.hide ?? []), ...(step.mark ?? []).map((mark) => mark.part)].filter(
+    (name): name is string => typeof name === 'string' && name !== '',
+  );
+  const hidden = new Map<string, boolean>();
+  for (const name of new Set(parts)) {
+    const record = runtime.parts.parts.get(name);
+    if (record) hidden.set(name, record.node.hidden);
+  }
+  let restored = false;
+  const apply = (): AppliedCues => {
+    // setValues lands at once (no tween), through the learner's own change path, so the replay is exact.
+    if (step.set) runtime.setValues(step.set);
+    return applyBeatCues(runtime, step, { sfx: false });
+  };
+  const session: ShowMeSession = {
+    beat,
+    cues: apply(),
+    get restored() {
+      return restored;
+    },
+    replay: () => {
+      restored = false;
+      return apply();
+    },
+    restore: () => {
+      if (restored) return;
+      restored = true;
+      runtime.setValues(values);
+      for (const [name, was] of hidden) {
+        const record = runtime.parts.parts.get(name);
+        if (record && record.node.hidden !== was) runtime.graph.setFlags(record.node, { hidden: was });
+      }
+      if (runtime.uiState().focus !== focus) runtime.focusPart(focus);
+    },
+  };
+  return session;
 }
 
 /**
@@ -614,18 +676,37 @@ export class FilmController {
   }
 
   /**
-   * Asks about the film where it stands: the anchor, the beat and its
-   * neighbours for the answering call. Answering itself lands in a later
-   * slice; this is the hook custom chrome asks through.
+   * Pins the film where it stands: pauses the clock at the current word and
+   * anchors there, with the scene's values and readouts as the learner sees
+   * them. The ask sheet captures this when it opens.
+   */
+  anchorNow(): AskAnchor | null {
+    const beat = this.currentBeat;
+    if (!beat) return null;
+    this.pause();
+    return askAnchorFor(this.film, beat.id, this.time, { values: this.runtime.values(), readouts: this.runtime.uiState().readouts });
+  }
+
+  /**
+   * Asks about the film where it stands: the word-boundary anchor, the beat
+   * and its neighbours for the answering call. Pauses the film clock at the
+   * current word.
    */
   ask(question: string): AskContext | null {
     const beat = this.currentBeat;
-    if (!beat) return null;
-    const anchor = anchorFor(this.film, beat.id, Math.round((this.time - beat.start) * 1000));
-    if (!anchor) return null;
+    const anchor = this.anchorNow();
+    if (!beat || !anchor) return null;
     const at = this.film.beats.findIndex((candidate) => candidate.id === beat.id);
     const lines = this.transcript().slice(Math.max(0, at - 1), at + 2);
     return { question, anchor, beat, lines };
+  }
+
+  /** Seeks to an ask anchor: its beat, at the anchor word's start. */
+  seekAskAnchor(anchor: AskAnchor): boolean {
+    const seconds = resolveAskAnchor(this.film, anchor);
+    if (seconds === null) return false;
+    this.seek(seconds);
+    return true;
   }
 
   /**

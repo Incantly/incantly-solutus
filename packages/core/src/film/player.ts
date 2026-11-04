@@ -1,4 +1,5 @@
 import type { FilmController, FilmEvent } from '../runtime/film';
+import { markerSeconds, type AskAnchor, type AskMarker } from './ask';
 import { wordStarts, type CompiledBeat, type CompiledFilm, type FilmAnchor } from './storyboard';
 
 /**
@@ -48,6 +49,7 @@ export class PlayerModel {
   private speed = 1;
   private volume = 0.5;
   private selected: string | null = null;
+  private readonly marks: AskMarker[] = [];
   private readonly listeners = new Set<(event: PlayerEvent) => void>();
 
   constructor(
@@ -213,6 +215,46 @@ export class PlayerModel {
 
   ask(question: string) {
     return this.controller.ask(question);
+  }
+
+  /** Pins the film where it stands for the ask sheet, pausing at the current word. */
+  anchorNow() {
+    return this.controller.anchorNow();
+  }
+
+  seekAskAnchor(anchor: AskAnchor): boolean {
+    return this.controller.seekAskAnchor(anchor);
+  }
+
+  /** Pins a question marker where it was asked, for the scrubber and the transcript. */
+  addMarker(anchor: AskAnchor, question = ''): void {
+    this.marks.push({ anchor, question, askedAt: Date.now() });
+    this.emit({ type: 'chrome' });
+  }
+
+  get markers(): readonly AskMarker[] {
+    return this.marks;
+  }
+
+  /** Every marker's film seconds now, re-timing along with the audio. */
+  markerTimes(): number[] {
+    const times: number[] = [];
+    for (const marker of this.marks) {
+      const seconds = markerSeconds(this.film, marker);
+      if (seconds !== null) times.push(seconds);
+    }
+    return times;
+  }
+
+  /** The markers pinned to one beat, for the transcript. */
+  markersForBeat(beatId: string): readonly AskMarker[] {
+    return this.marks.filter((marker) => marker.anchor.beat === beatId);
+  }
+
+  clearMarkers(): void {
+    if (this.marks.length === 0) return;
+    this.marks.length = 0;
+    this.emit({ type: 'chrome' });
   }
 }
 

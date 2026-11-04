@@ -150,6 +150,14 @@ export function referenceModel(options: ReferenceModelOptions = {}): ScriptedMod
 
   const script = (call: ModelCall): string => {
     const user = call.prompt.user;
+    // Tap-to-ask calls answer from canned text, outside trials and faults: the
+    // playground and its browser tests ask through these.
+    if (call.prompt.system.some((block) => block.text.startsWith('ANSWER format'))) {
+      return 'The bob moves fastest through the bottom of its swing, where it has traded all its height for speed. Watch it pass the lowest point and see how quick it goes.';
+    }
+    if (call.prompt.system.some((block) => block.text.startsWith('INSERT format'))) {
+      return `Here is the insert.\n${fence('json', JSON.stringify({ lines: [{ say: 'Here is the step again, slowed down.', seconds: 2 }, { say: 'Watch the part the line names.', seconds: 2 }] }))}\n`;
+    }
     const request = /The learner asked: "([^"]*)"/.exec(user)?.[1] ?? '';
     const library = call.purpose === 'scene' && call.prompt.system.some((block) => block.text.includes('LIBRARY format'));
     if (library) {

@@ -16,8 +16,26 @@ export type { CompiledExpression } from './expr';
 
 export { SceneRuntime } from './runtime/runtime';
 export type { RuntimeOptions, RuntimeStats, SceneErrorRecord, SceneFunction, SeekOptions } from './runtime/runtime';
-export { FilmController, applyBeatCues, applyShowHide, beatTitle, cueSfx, framePart, isPausePoint, partBox, partBoxes, sfxNames, SFX_CUES } from './runtime/film';
-export type { AppliedCues, AskContext, FilmChapter, FilmControllerOptions, FilmEvent, FilmTransport, FramingIntent, TranscriptLine } from './runtime/film';
+export { FilmController, applyBeatCues, applyShowHide, beatTitle, beginShowMe, cueSfx, framePart, isPausePoint, partBox, partBoxes, sfxNames, SFX_CUES } from './runtime/film';
+export type { AppliedCues, AskContext, FilmChapter, FilmControllerOptions, FilmEvent, FilmTransport, FramingIntent, ShowMeSession, TranscriptLine } from './runtime/film';
+export {
+  anchorWords,
+  askAnchorFor,
+  askContextLine,
+  askWordIndex,
+  AskReturnStack,
+  InsertPlayer,
+  markerSeconds,
+  resolveAskAnchor,
+  routeQuestion,
+  validateInsertClip,
+  ASK_RETURN_STACK_MAX,
+  BACK_TO_FILM_SECONDS,
+  INSERT_MAX_LINES,
+  INSERT_MAX_LINE_SECONDS,
+  INSERT_MIN_LINE_SECONDS,
+} from './film/ask';
+export type { AskAnchor, AskMarker, AskReadout, AskRung, AskSnapshot, InsertClip, InsertEvent, InsertHost, InsertLine, InsertPhase } from './film/ask';
 export {
   anchorFor,
   attachAudio,

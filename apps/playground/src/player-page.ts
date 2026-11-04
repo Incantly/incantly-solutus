@@ -2,24 +2,31 @@ import {
   anchorFor,
   applyBeatCues,
   applyStyle,
+  AskReturnStack,
+  askContextLine,
   attachAudio,
+  beginShowMe,
   CAPTION_SCALES,
   compileFilm,
   compileTrusted,
   FilmController,
   FilmMixer,
   fontsReady,
+  InsertPlayer,
   loadKitModules,
   mountTrusted,
   PlayerModel,
   probeFilmAsync,
   probeScene,
   resolveStyle,
+  routeQuestion,
   solveCaption,
+  validateInsertClip,
   validateScene,
   WebAudioMixerBackend,
   FILM_BEAT_HOLD_SECONDS,
   FILM_FIXTURES,
+  type AskAnchor,
   type CompiledBeat,
   type CompiledFilm,
   type FilmFailure,
@@ -28,6 +35,9 @@ import {
   type KitRegistry,
   type PlayerState,
   type ProbeReport,
+  type RuntimeUpdate,
+  type SceneRuntime,
+  type ShowMeSession,
   type StylePreset,
 } from '@incantly/core';
 
@@ -153,7 +163,8 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
   caption.setAttribute('role', 'status');
   player.append(caption);
 
-  const transport = buildTransport(player, model, film, mixer);
+  let openAsk = (): void => undefined;
+  const transport = buildTransport(player, model, film, mixer, () => openAsk());
   const transcript = buildTranscript(player, model);
   buildChapters(player, model);
   let timeline = buildTimeline(player, model, film);
@@ -185,6 +196,15 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
     },
   });
 
+  const askUi = buildAskSheet(player, {
+    model,
+    controller,
+    film: () => film,
+    figure,
+    sceneJs: scene.js,
+  });
+  openAsk = askUi.open;
+
   let lastBeat: string | null = '__none__';
   let lastPlaying = false;
   let lastTime = -1;
@@ -201,6 +221,14 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
     wordSpans.forEach((span, i) => span.classList.toggle('is-active', i === index));
   };
   const applyCaption = (state: PlayerState): void => {
+    // An insert captions its own line over the paused film.
+    const insertText = askUi.caption();
+    if (insertText !== null) {
+      card.hidden = true;
+      caption.textContent = insertText;
+      wordSpans = [];
+      return;
+    }
     const beat = film.beats.find((candidate) => candidate.id === state.beat);
     const marks = beat?.step.mark ?? [];
     player.dataset.mark = marks.some((mark) => mark.type === 'pulse') ? 'pulse' : '';
@@ -233,9 +261,19 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
   model.on((event) => {
     if (event.type === 'chrome') applyCaption(model.state);
   });
+  let lastFrame = performance.now();
+  let lastInsertCaption = '';
   const sync = (): void => {
+    const frameNow = performance.now();
+    askUi.tick(Math.min(0.25, Math.max(0, (frameNow - lastFrame) / 1000)));
+    lastFrame = frameNow;
     controller.poll();
     const state = model.state;
+    const insertText = askUi.caption() ?? '';
+    if (insertText !== lastInsertCaption) {
+      lastInsertCaption = insertText;
+      applyCaption(state);
+    }
     if (state.beat !== lastBeat || state.playing !== lastPlaying) {
       applyCaption(state);
       transcript.sync(state.beat);
@@ -266,6 +304,7 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
     model,
     film,
     mixer,
+    ask: () => askUi.state(),
     narration: () => ({ source: narrationSource, timed: film.beats.filter((beat) => beat.timed).length, beats: film.beats.length }),
     mixerEvents: () => [...mixBackend.events],
     stats: () => ({ time: controller.time, beat: controller.currentBeat?.id ?? null, playing: controller.isPlaying, controller: { ...controller.stats } }),
@@ -419,6 +458,7 @@ function buildTransport(
   model: PlayerModel,
   film: CompiledFilm,
   mixer: FilmMixer,
+  onAsk: () => void,
 ): { syncTime(time: number, playing: boolean): void; setDuration(seconds: number): void; thumbs: HTMLElement } {
   const bar = document.createElement('div');
   bar.className = 'inc-transport inc-player-transport';
@@ -426,8 +466,16 @@ function buildTransport(
   play.type = 'button';
   play.textContent = 'Play';
   play.addEventListener('click', () => model.toggle());
+  const ask = document.createElement('button');
+  ask.type = 'button';
+  ask.className = 'inc-player-ask';
+  ask.textContent = 'Ask';
+  ask.setAttribute('aria-label', 'Ask about this moment');
+  ask.addEventListener('click', onAsk);
   const time = document.createElement('span');
   time.className = 'inc-player-time';
+  const scrubWrap = document.createElement('div');
+  scrubWrap.className = 'inc-scrub-wrap';
   const scrub = document.createElement('input');
   scrub.type = 'range';
   scrub.min = '0';
@@ -436,6 +484,24 @@ function buildTransport(
   scrub.value = '0';
   scrub.setAttribute('aria-label', 'Seek');
   scrub.addEventListener('input', () => model.seek(Number(scrub.value)));
+  const scrubMarkers = document.createElement('div');
+  scrubMarkers.className = 'inc-scrub-markers';
+  scrubWrap.append(scrub, scrubMarkers);
+  const renderMarkers = (): void => {
+    scrubMarkers.textContent = '';
+    const duration = Number(scrub.max);
+    if (!(duration > 0)) return;
+    for (const at of model.markerTimes()) {
+      const dot = document.createElement('span');
+      dot.className = 'inc-marker';
+      dot.style.left = `${Math.min(100, Math.max(0, (at / duration) * 100))}%`;
+      dot.title = 'Question asked here';
+      scrubMarkers.append(dot);
+    }
+  };
+  model.on((event) => {
+    if (event.type === 'chrome') renderMarkers();
+  });
   const speed = document.createElement('select');
   speed.setAttribute('aria-label', 'Speed');
   for (const value of [0.25, 0.5, 1, 2, 4]) {
@@ -484,7 +550,7 @@ function buildTransport(
   size.addEventListener('change', () => model.setCaptionSize(size.value as 'sm' | 'md' | 'lg'));
   const thumbs = document.createElement('div');
   thumbs.className = 'inc-player-thumbs';
-  bar.append(play, time, scrub, speed, volume, sound, captions, size);
+  bar.append(play, ask, time, scrubWrap, speed, volume, sound, captions, size);
   player.append(bar, thumbs);
   return {
     thumbs,
@@ -495,6 +561,7 @@ function buildTransport(
     },
     setDuration(seconds: number): void {
       scrub.max = seconds.toFixed(2);
+      renderMarkers();
     },
   };
 }
@@ -509,6 +576,7 @@ function buildTranscript(player: HTMLElement, model: PlayerModel): { sync(beat: 
   search.placeholder = 'Search the transcript';
   search.setAttribute('aria-label', 'Search the transcript');
   const list = document.createElement('ol');
+  let active = '';
   const render = (): void => {
     list.textContent = '';
     const query = search.value.trim().toLowerCase();
@@ -516,6 +584,7 @@ function buildTranscript(player: HTMLElement, model: PlayerModel): { sync(beat: 
       if (query && !line.say.toLowerCase().includes(query)) continue;
       const item = document.createElement('li');
       item.dataset.beat = line.beat;
+      item.classList.toggle('is-active', line.beat === active);
       const jump = document.createElement('button');
       jump.type = 'button';
       jump.textContent = formatTime(line.start);
@@ -523,19 +592,31 @@ function buildTranscript(player: HTMLElement, model: PlayerModel): { sync(beat: 
       const text = document.createElement('span');
       text.textContent = line.say;
       item.append(jump, ' ', text);
+      const marks = model.markersForBeat(line.beat);
+      if (marks.length > 0) {
+        const dot = document.createElement('span');
+        dot.className = 'inc-marker';
+        dot.textContent = `● ${marks.length}`;
+        dot.title = marks.map((mark) => mark.question || 'Question').join('\n');
+        item.append(' ', dot);
+      }
       list.append(item);
     }
   };
   search.addEventListener('input', render);
+  model.on((event) => {
+    if (event.type === 'chrome') render();
+  });
   render();
   wrap.append(heading, search, list);
   player.append(wrap);
   return {
     sync(beat: string | null): void {
+      active = beat ?? '';
       for (const item of list.querySelectorAll('li')) {
-        const active = item instanceof HTMLElement && item.dataset.beat === beat;
-        item.classList.toggle('is-active', active);
-        if (active) item.scrollIntoView({ block: 'nearest' });
+        const on = item instanceof HTMLElement && item.dataset.beat === beat;
+        item.classList.toggle('is-active', on);
+        if (on) item.scrollIntoView({ block: 'nearest' });
       }
     },
   };
@@ -772,6 +853,383 @@ function buildBadges(player: HTMLElement): { probe(report: ProbeReport): void; c
       checks.textContent = `checks: beat ${beat + 1} of ${beats}…`;
     },
   };
+}
+
+interface AskSheet {
+  open(): void;
+  tick(dt: number): void;
+  caption(): string | null;
+  state(): { sheet: boolean; answer: string; markers: number; stack: number; insert: string | null; remaining: number; showme: string | null };
+}
+
+function buildAskSheet(
+  player: HTMLElement,
+  ctx: {
+    model: PlayerModel;
+    controller: FilmController;
+    film: () => CompiledFilm;
+    figure: { runtime: SceneRuntime; renderer: { apply(update: RuntimeUpdate): void } };
+    sceneJs: string;
+  },
+): AskSheet {
+  const { model, controller, figure } = ctx;
+  const sheet = document.createElement('div');
+  sheet.className = 'inc-ask';
+  sheet.hidden = true;
+  const context = document.createElement('p');
+  context.className = 'inc-ask-context';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'inc-ask-input';
+  input.placeholder = 'Ask about this moment';
+  input.setAttribute('aria-label', 'Ask about this moment');
+  const send = document.createElement('button');
+  send.type = 'button';
+  send.textContent = 'Ask';
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.textContent = 'Close';
+  close.addEventListener('click', () => {
+    sheet.hidden = true;
+  });
+  const chips = document.createElement('div');
+  chips.className = 'inc-ask-chips';
+  const answer = document.createElement('div');
+  answer.className = 'inc-ask-answer';
+  answer.setAttribute('aria-live', 'polite');
+  const hear = document.createElement('button');
+  hear.type = 'button';
+  hear.textContent = 'Hear answer';
+  hear.disabled = true;
+  const speakStatus = document.createElement('span');
+  speakStatus.className = 'inc-ask-speak-status';
+  const status = document.createElement('p');
+  status.className = 'inc-ask-status';
+  const row = document.createElement('div');
+  row.className = 'inc-ask-row';
+  row.append(input, send, close);
+  const speakRow = document.createElement('div');
+  speakRow.className = 'inc-ask-row';
+  speakRow.append(hear, speakStatus);
+  sheet.append(context, row, chips, answer, speakRow, status);
+
+  const showmeBanner = document.createElement('div');
+  showmeBanner.className = 'inc-showme';
+  showmeBanner.hidden = true;
+  const showmeText = document.createElement('span');
+  const showmeBack = document.createElement('button');
+  showmeBack.type = 'button';
+  showmeBack.textContent = 'Back to film';
+  showmeBanner.append(showmeText, showmeBack);
+
+  const insertBanner = document.createElement('div');
+  insertBanner.className = 'inc-insert';
+  insertBanner.hidden = true;
+  const insertText = document.createElement('span');
+  const insertBack = document.createElement('button');
+  insertBack.type = 'button';
+  insertBack.textContent = 'Back now';
+  insertBanner.append(insertText, insertBack);
+  player.append(sheet, showmeBanner, insertBanner);
+
+  let anchor: AskAnchor | null = null;
+  let beat: CompiledBeat | null = null;
+  let lastAnswer = '';
+  let showme: ShowMeSession | null = null;
+  const thread: Array<{ q: string; a: string }> = [];
+  const stack = new AskReturnStack();
+  const players: InsertPlayer[] = [];
+
+  /** Pushes direct runtime writes to the live figure, as the seek path does. */
+  const touch = (fn: () => void): void => {
+    fn();
+    figure.renderer.apply(figure.runtime.flush());
+  };
+
+  const open = (): void => {
+    if (!sheet.hidden) {
+      input.focus();
+      return;
+    }
+    let pinned = model.anchorNow();
+    if (!pinned) {
+      model.seek(0);
+      pinned = model.anchorNow();
+    }
+    if (!pinned) {
+      status.textContent = 'Play the film first, then ask.';
+      sheet.hidden = false;
+      return;
+    }
+    anchor = pinned;
+    beat = ctx.film().beats.find((candidate) => candidate.id === pinned.beat) ?? null;
+    context.textContent = askContextLine(ctx.film(), pinned);
+    answer.textContent = '';
+    status.textContent = '';
+    input.value = '';
+    sheet.hidden = false;
+    input.focus();
+  };
+
+  const assemblyBody = (question: string): Record<string, unknown> => {
+    const film = ctx.film();
+    const lines = controller.transcript();
+    const at = lines.findIndex((line) => line.beat === anchor?.beat);
+    const neighbours = lines.slice(Math.max(0, at - 1), at + 2).filter((line) => line.beat !== anchor?.beat);
+    const jsLines = ctx.sceneJs.split('\n');
+    const sceneLines = (film.sourceMap[anchor?.beat ?? '']?.lines ?? [])
+      .map((n) => ({ n, text: jsLines[n - 1] ?? '' }))
+      .filter((line) => line.text !== '');
+    const scene = film.scenes.find((candidate) => candidate.id === anchor?.scene);
+    return {
+      question,
+      anchor: anchor ? { film: anchor.film, version: anchor.version, scene: anchor.scene, beat: anchor.beat, wordIndex: anchor.wordIndex } : null,
+      beat: beat ? { beat: beat.id, say: beat.step.say } : null,
+      neighbours: neighbours.map((line) => ({ beat: line.beat, say: line.say })),
+      sceneLines,
+      sceneSummary: scene?.title ?? '',
+      values: anchor?.controlValues ?? {},
+      readouts: anchor?.readouts ?? [],
+      thread: thread.map((turn) => ({ ...turn })),
+    };
+  };
+
+  const askAnswer = async (question: string): Promise<void> => {
+    status.textContent = 'Answering…';
+    answer.textContent = '';
+    hear.disabled = true;
+    speakStatus.textContent = '';
+    try {
+      const token = await devToken();
+      const full = await streamAsk(token, assemblyBody(question), (delta) => {
+        answer.textContent += delta;
+      });
+      lastAnswer = full.text;
+      hear.disabled = full.text === '';
+      thread.push({ q: question, a: full.text });
+      while (thread.length > 6) thread.shift();
+      status.textContent = `First words in ${Math.round(full.firstChunkMs)} ms.`;
+    } catch {
+      status.textContent = 'The answer did not arrive — the film is still paused where you asked.';
+    }
+  };
+
+  const askShowMe = (): void => {
+    if (!beat) return;
+    if (showme) touch(() => showme?.restore());
+    touch(() => {
+      showme = beginShowMe(figure.runtime, beat!);
+    });
+    showmeText.textContent = `Showing ${beat.id} — the beat replays on the scene. `;
+    showmeBanner.hidden = false;
+    sheet.hidden = true;
+  };
+  showmeBack.addEventListener('click', () => {
+    if (showme) touch(() => showme?.restore());
+    showme = null;
+    showmeBanner.hidden = true;
+  });
+
+  const askDeeper = async (question: string): Promise<void> => {
+    status.textContent = 'Writing the insert…';
+    try {
+      const token = await devToken();
+      const params = Object.keys(figure.runtime.values());
+      const posted = await fetch('/api/v1/ask/insert', {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ ...assemblyBody(question), params }),
+      });
+      const result = (await posted.json()) as { status?: string; clip?: { anchor: AskAnchor; lines: Array<{ say: string; seconds: number; set?: Record<string, number> }> } };
+      if (!posted.ok || result.status !== 'clip' || !result.clip || !anchor || !beat) {
+        status.textContent = 'No insert came back — the film is still paused where you asked.';
+        return;
+      }
+      const validated = validateInsertClip({ anchor: result.clip.anchor, lines: result.clip.lines }, ctx.film(), new Set(params));
+      if (!validated.ok) {
+        status.textContent = `The insert did not fit this scene: ${validated.problems[0] ?? 'invalid'}.`;
+        return;
+      }
+      if (!stack.push(anchor)) {
+        status.textContent = 'Finish this question first — questions nest two deep.';
+        return;
+      }
+      const nested = players.length > 0;
+      const clip = { ...validated.clip, anchor };
+      const playing = new InsertPlayer(controller, ctx.film(), clip, {
+        applySet: (set) => touch(() => figure.runtime.setValues(set)),
+        ...(nested ? { resumeToFilm: false as const } : {}),
+        onEvent: (event) => {
+          if (event.type !== 'resume') return;
+          stack.pop();
+          players.pop();
+          if (players.length === 0) insertBanner.hidden = true;
+        },
+      });
+      players.push(playing);
+      if (!playing.play()) {
+        stack.pop();
+        players.pop();
+        if (players.length === 0) insertBanner.hidden = true;
+        status.textContent = 'The film moved on — ask again where you are.';
+        return;
+      }
+      status.textContent = '';
+      sheet.hidden = true;
+      insertBanner.hidden = false;
+    } catch {
+      status.textContent = 'No insert came back — the film is still paused where you asked.';
+    }
+  };
+
+  const submit = (text: string, rung?: 'answer' | 'showme' | 'deeper'): void => {
+    const question = text.trim();
+    if (question === '') {
+      status.textContent = 'Ask something first.';
+      return;
+    }
+    if (!anchor || !beat) {
+      status.textContent = 'Play the film first, then ask.';
+      return;
+    }
+    model.addMarker(anchor, question);
+    const lane = rung ?? routeQuestion(question);
+    if (lane === 'showme') askShowMe();
+    else if (lane === 'deeper') void askDeeper(question);
+    else void askAnswer(question);
+  };
+  send.addEventListener('click', () => submit(input.value));
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') submit(input.value);
+  });
+  for (const [label, lane] of [['Explain this step', 'answer'], ['Show me', 'showme'], ['Explain deeper', 'deeper']] as const) {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.textContent = label;
+    chip.addEventListener('click', () => submit(input.value.trim() === '' ? label : input.value, lane));
+    chips.append(chip);
+  }
+  hear.addEventListener('click', () => {
+    if (lastAnswer === '') return;
+    hear.disabled = true;
+    speakStatus.textContent = 'Speaking…';
+    void (async () => {
+      try {
+        const token = await devToken();
+        const posted = await fetch('/api/v1/ask/speak', {
+          method: 'POST',
+          headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+          body: JSON.stringify({ text: lastAnswer }),
+        });
+        const result = (await posted.json()) as { seconds?: number; audioBase64?: string | null; sampleRate?: number };
+        if (!posted.ok) {
+          speakStatus.textContent = (result as { message?: string }).message ?? 'Speech is capped for today.';
+          return;
+        }
+        if (result.audioBase64) playPcm(base64ToBytes(result.audioBase64), result.sampleRate ?? 8000);
+        speakStatus.textContent = `Answer speech: ${(result.seconds ?? 0).toFixed(1)} s.`;
+      } catch {
+        speakStatus.textContent = 'Audio is not available here.';
+      } finally {
+        hear.disabled = lastAnswer === '';
+      }
+    })();
+  });
+  insertBack.addEventListener('click', () => {
+    players[players.length - 1]?.skipToFilm();
+  });
+
+  return {
+    open,
+    tick(dt: number): void {
+      const top = players[players.length - 1];
+      if (!top || top.currentPhase === 'done') return;
+      top.tick(dt);
+      const depth = players.length > 1 ? ` · follow-up ${players.length}` : '';
+      insertText.textContent = `Explaining deeper · ${Math.max(0, Math.ceil(top.remaining))} s${depth} `;
+    },
+    caption(): string | null {
+      const top = players[players.length - 1];
+      if (!top || top.currentPhase === 'done') return null;
+      if (top.currentPhase === 'back') return 'Back to the film…';
+      return top.currentLine?.say ?? null;
+    },
+    state() {
+      const top = players[players.length - 1];
+      return {
+        sheet: !sheet.hidden,
+        answer: answer.textContent ?? '',
+        markers: model.markers.length,
+        stack: stack.depth,
+        insert: top && top.currentPhase !== 'done' ? top.currentPhase : null,
+        remaining: top?.remaining ?? 0,
+        showme: showme && !showme.restored ? showme.beat.id : null,
+      };
+    },
+  };
+}
+
+/** The dev token, fetched once: the ask endpoints authenticate like generation. */
+let askToken: string | null = null;
+
+async function devToken(): Promise<string> {
+  askToken ??= ((await (await fetch('/api/dev/token')).json()) as { token: string }).token;
+  return askToken;
+}
+
+/** Streams an Answer, appending each delta as it arrives. */
+async function streamAsk(token: string, body: Record<string, unknown>, onDelta: (delta: string) => void): Promise<{ text: string; firstChunkMs: number }> {
+  const posted = await fetch('/api/v1/ask', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!posted.ok || !posted.body) throw new Error(`The service answered ${posted.status}`);
+  const reader = posted.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let text = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let boundary = buffer.indexOf('\n\n');
+    while (boundary >= 0) {
+      const block = buffer.slice(0, boundary);
+      buffer = buffer.slice(boundary + 2);
+      if (block.startsWith('event: ')) {
+        const [first, ...rest] = block.split('\n');
+        const data = JSON.parse(rest.join('\n').slice('data: '.length)) as { text?: string; firstChunkMs?: number; message?: string };
+        if (first === 'event: delta' && data.text) {
+          text += data.text;
+          onDelta(data.text);
+        } else if (first === 'event: done') {
+          reader.releaseLock();
+          return { text: data.text ?? text, firstChunkMs: data.firstChunkMs ?? 0 };
+        } else if (first === 'event: error') {
+          throw new Error(data.message ?? 'The model failed');
+        }
+      }
+      boundary = buffer.indexOf('\n\n');
+    }
+  }
+  throw new Error('The stream ended without an answer');
+}
+
+/** Plays mono 16-bit PCM through a fresh context; the Hear button is the gesture autoplay rules need. */
+function playPcm(pcm: Uint8Array, sampleRate: number): void {
+  const view = globalThis as unknown as { AudioContext?: typeof AudioContext };
+  if (!view.AudioContext || pcm.length < 2) return;
+  const context = new view.AudioContext();
+  const buffer = context.createBuffer(1, Math.floor(pcm.length / 2), sampleRate);
+  const data = buffer.getChannelData(0);
+  const words = new DataView(pcm.buffer, pcm.byteOffset, pcm.byteLength);
+  for (let i = 0; i < data.length; i++) data[i] = words.getInt16(i * 2, true) / 32768;
+  const source = context.createBufferSource();
+  source.buffer = buffer;
+  source.connect(context.destination);
+  source.onended = () => void context.close();
+  source.start();
 }
 
 async function buildThumbs(thumbs: HTMLElement, model: PlayerModel, film: CompiledFilm, fragments: { html: string; css: string; js: string }, kits: KitRegistry): Promise<void> {

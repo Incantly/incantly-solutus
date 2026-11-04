@@ -1444,3 +1444,21 @@ main.style-page {
 /* A pulse mark beats the focus highlight while its beat plays. */
 .inc-player[data-mark='pulse'] .inc-stage .is-focus { animation: inc-pulse 1s ease-in-out infinite; }
 @keyframes inc-pulse { 50% { opacity: 0.35; } }
+/* Tap-to-ask: the sheet, the banners and the question markers. */
+.inc-ask { border: 1px solid var(--border-color); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.inc-ask-context { margin: 0; font-size: 0.85rem; color: var(--text-muted, #6b7280); }
+.inc-ask-row { display: flex; gap: 8px; align-items: center; }
+.inc-ask-input { flex: 1 1 auto; padding: 6px 8px; }
+.inc-ask-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.inc-ask-answer { font-size: 0.92rem; min-height: 1.2em; }
+.inc-ask-answer:not(:empty) { border-left: 3px solid var(--inc-focus, #1971c2); padding-left: 8px; }
+.inc-ask-status { margin: 0; font-size: 0.82rem; color: var(--text-muted, #6b7280); }
+.inc-ask-speak-status { font-size: 0.82rem; color: var(--text-muted, #6b7280); }
+.inc-showme, .inc-insert { display: flex; gap: 8px; align-items: center; font-size: 0.88rem; border: 1px solid var(--border-color); border-radius: 10px; padding: 6px 10px; }
+/* Flex layouts override the hidden attribute's display:none; put it back. */
+.inc-ask[hidden], .inc-showme[hidden], .inc-insert[hidden] { display: none; }
+.inc-scrub-wrap { position: relative; flex: 1 1 120px; min-width: 80px; display: flex; }
+.inc-scrub-wrap input[type='range'] { flex: 1 1 auto; min-width: 0; }
+.inc-scrub-markers { position: absolute; inset: 0; pointer-events: none; }
+.inc-scrub-markers .inc-marker { position: absolute; top: -3px; width: 6px; height: 6px; border-radius: 999px; background: #d9480f; transform: translateX(-3px); }
+.inc-transcript .inc-marker { font-size: 0.75rem; color: #d9480f; white-space: nowrap; }
