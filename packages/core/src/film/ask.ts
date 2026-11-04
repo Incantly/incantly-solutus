@@ -100,22 +100,28 @@ export function askContextLine(film: CompiledFilm, anchor: AskAnchor): string {
 // The cheapest-rung router
 // ---------------------------------------------------------------------------
 
-/** The rung a question is answered on: a streamed Answer, a beat replay, or a new clip. Rungs 3-4 land in a later slice. */
-export type AskRung = 'answer' | 'showme' | 'deeper';
+/** The rung a question is answered on, cheapest first: a streamed Answer, a beat replay, an insert clip, or a new side-clip scene. The slowest rung runs only when the router picks it. Change-the-film is never routed: it is an explicit learner action (versions.ts). */
+export type AskRung = 'answer' | 'showme' | 'deeper' | 'example';
 
 /** Words that ask for a demonstration on the live scene. */
 const SHOW_WORDS = ['show', 'demonstrate', 'demonstration', 'demo', 'replay', 'watch', 'see it', 'again', 'animate', 'move it', 'how does it move'];
 
-/** Words that ask for a new clip: more than an answer and a replay can carry. */
-const DEEPER_WORDS = ['deeper', 'more detail', 'another example', 'tell me more', 'go deeper', 'full explanation', 'step by step', 'from the start', 'slow down'];
+/** Words that ask for an insert clip: more than an answer and a replay can carry. */
+const DEEPER_WORDS = ['deeper', 'more detail', 'tell me more', 'go deeper', 'full explanation', 'step by step', 'from the start', 'slow down'];
+
+/** Words that ask for another example: a new scene beside the film. The slowest rung, picked only on these words. */
+const EXAMPLE_WORDS = ['another example', 'different example', 'a new example', 'other example', 'one more example', 'side by side', 'side-by-side', 'compare with', 'compared to'];
 
 /**
  * Routes a question to its cheapest rung: an Answer first, Show me when a
- * demonstration fits, Explain deeper when it needs a new clip. Deterministic:
- * the same words always take the same rung.
+ * demonstration fits, Explain deeper when it needs an insert, Another example
+ * only when it asks for a new scene outright. The fuller need wins over the
+ * cheaper match, so "show me another example" takes the side clip, not the
+ * replay. Deterministic: the same words always take the same rung.
  */
 export function routeQuestion(question: string): AskRung {
   const text = question.toLowerCase();
+  if (EXAMPLE_WORDS.some((word) => text.includes(word))) return 'example';
   if (DEEPER_WORDS.some((word) => text.includes(word))) return 'deeper';
   if (SHOW_WORDS.some((word) => text.includes(word))) return 'showme';
   return 'answer';

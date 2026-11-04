@@ -1,4 +1,4 @@
-import type { KitName, ProbeReport, ProbeSpec, SceneKind } from '@incantly/core';
+import type { FilmVersionPatch, KitName, ProbeReport, ProbeSpec, SceneKind } from '@incantly/core';
 
 /**
  * The messages between the generation service and the learner's device.
@@ -159,6 +159,10 @@ export interface AskRequest {
   readonly readouts?: ReadonlyArray<{ readonly label: string; readonly text: string }>;
   readonly thread?: ReadonlyArray<{ readonly q: string; readonly a: string }>;
   readonly noteContext?: string;
+  /** Re-run depth: simpler or deeper than the film. Default standard. */
+  readonly depth?: 'simpler' | 'standard' | 'deeper';
+  /** The language code the answer is asked in. Default en. */
+  readonly language?: string;
 }
 
 /** Events of POST /v1/ask, in order: accepted, delta..., then done or error. */
@@ -183,6 +187,27 @@ export interface AskInsertLine {
 /** The answer to an insert request: the clip to play pinned to its anchor, or why there is none. */
 export type AskInsertResponse =
   | { readonly status: 'clip'; readonly clip: { readonly anchor: AskAnchorMessage; readonly lines: readonly AskInsertLine[]; readonly seconds: number } }
+  | { readonly status: 'failed'; readonly reason: 'model' | 'invalid' | 'limit' | 'off' };
+
+/** An Another-example question: an ask request; the side clip is a new scene, so no parent controls are needed. */
+export type AskExampleRequest = AskRequest;
+
+/** The answer to an example request: the side-clip scene to open pinned to its anchor, or why there is none. */
+export type AskExampleResponse =
+  | { readonly status: 'clip'; readonly clip: { readonly anchor: AskAnchorMessage; readonly html: string; readonly css: string; readonly js: string; readonly caption: string } }
+  | { readonly status: 'failed'; readonly reason: 'model' | 'invalid' | 'limit' | 'off' };
+
+/** An explicit film edit: the change in the learner's words, the film and version, and the beats as they are now. */
+export interface AskChangeRequest {
+  readonly prompt: string;
+  readonly film: string;
+  readonly version: number;
+  readonly beats: ReadonlyArray<{ readonly beat: string; readonly scene: string; readonly say: string }>;
+}
+
+/** The answer to a change: version N+1 as a patch, with the changed beats' audio, or why there is none. */
+export type AskChangeResponse =
+  | { readonly status: 'patch'; readonly patch: FilmVersionPatch }
   | { readonly status: 'failed'; readonly reason: 'model' | 'invalid' | 'limit' | 'off' };
 
 /** An answer the asker opts to hear: at most 2000 characters, spoken through the narration pipeline. */

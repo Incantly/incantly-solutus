@@ -158,6 +158,16 @@ export function referenceModel(options: ReferenceModelOptions = {}): ScriptedMod
     if (call.prompt.system.some((block) => block.text.startsWith('INSERT format'))) {
       return `Here is the insert.\n${fence('json', JSON.stringify({ lines: [{ say: 'Here is the step again, slowed down.', seconds: 2 }, { say: 'Watch the part the line names.', seconds: 2 }] }))}\n`;
     }
+    if (call.prompt.system.some((block) => block.text.startsWith('EXAMPLE format'))) {
+      const request = /The learner asked: "([^"]*)"/.exec(user)?.[1] ?? '';
+      const scene = conceptFor(request, scenes) ?? Object.values(scenes)[0]!;
+      return `Here is another example.\n${sceneReply(scene.html, scene.css, scene.js)}\nCaption: The same idea, shown another way.\n`;
+    }
+    if (call.prompt.system.some((block) => block.text.startsWith('CHANGE format'))) {
+      const first = /^(\S+?)\/(\S+?): "/m.exec(user);
+      const change = { beats: [{ beat: first?.[2] ?? 's1b1', scene: first?.[1] ?? 's1', say: 'Watch the same moment again, closely.' }] };
+      return `Here is the patch.\n${fence('json', JSON.stringify(change))}\n`;
+    }
     const request = /The learner asked: "([^"]*)"/.exec(user)?.[1] ?? '';
     const library = call.purpose === 'scene' && call.prompt.system.some((block) => block.text.includes('LIBRARY format'));
     if (library) {

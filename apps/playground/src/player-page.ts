@@ -1,6 +1,7 @@
 import {
   anchorFor,
   applyBeatCues,
+  applyFilmPatch,
   applyStyle,
   AskReturnStack,
   askContextLine,
@@ -12,15 +13,28 @@ import {
   FilmController,
   FilmMixer,
   fontsReady,
+  formatFilmLink,
   InsertPlayer,
   loadKitModules,
   mountTrusted,
+  parseFilmLink,
+  patchSummary,
   PlayerModel,
   probeFilmAsync,
+  probeSandboxed,
   probeScene,
+  resolveFilmLink,
+  resolveFilmPosition,
   resolveStyle,
+  ResumeStore,
   routeQuestion,
+  sandboxAdapter,
+  sanitizeFilmPatch,
+  shortcutFor,
+  SHORTCUTS,
+  SideClipPlayer,
   solveCaption,
+  validateExampleClip,
   validateInsertClip,
   validateScene,
   WebAudioMixerBackend,
@@ -29,12 +43,16 @@ import {
   type AskAnchor,
   type CompiledBeat,
   type CompiledFilm,
+  type FigureHandle,
   type FilmFailure,
   type FilmFixture,
   type FilmReport,
+  type FilmSceneSource,
+  type FilmVersionPatch,
   type KitRegistry,
   type PlayerState,
   type ProbeReport,
+  type ResumeStorage,
   type RuntimeUpdate,
   type SceneRuntime,
   type ShowMeSession,
@@ -73,6 +91,11 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
   const theme = params.get('theme');
   const preset = params.get('preset') as StylePreset | null;
   const hide = new Set((params.get('hide') ?? '').split(',').map((part) => part.trim()).filter(Boolean));
+  // Reduced motion, the same convention as figures: the media query, unless
+  // ?reduced-motion=0 forces motion or =1 forces stillness. The film then
+  // starts on a still beat with its caption instead of autoplaying.
+  const prefersReduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+  const reducedMotion = params.get('reduced-motion') === '1' || (params.get('reduced-motion') !== '0' && prefersReduced);
 
   // The player chrome is styled as FigureStyle slots and show flags, through
   // the same resolveStyle/applyStyle helpers and dataset convention as figures.
@@ -94,15 +117,22 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
     kits,
     film: true,
     autoplay: false,
+    reducedMotion,
     theme: theme === 'light' || theme === 'dark' ? theme : 'auto',
     figureId: 'film',
     style: { ...(preset ? { preset } : {}), show: { transport: false, speed: false, steps: false, settings: false, undo: false, fullscreen: false } },
   });
   const steps = figure.runtime.beats();
   if (!steps) throw new Error('The scene has no steps');
-  const compiled = compileFilm(JSON.parse(JSON.stringify(fixture.storyboard)) as unknown, [{ id: scene.id, js: scene.js, steps }]);
+  const sources: FilmSceneSource[] = [{ id: scene.id, js: scene.js, steps }];
+  const compiled = compileFilm(JSON.parse(JSON.stringify(fixture.storyboard)) as unknown, sources);
   if (!compiled.ok || !compiled.film) throw new Error(compiled.diagnostics.map((d) => d.message).join('; '));
   let film = compiled.film;
+  // Every version played this session, by version: the in-memory seam the
+  // next slice's persistent storage and picker build on. Storage, promotion
+  // and the picker are that slice's; this slice only switches to N+1.
+  const versions = new Map<number, CompiledFilm>([[film.version, film]]);
+  const history: string[] = [`v${film.version}`];
 
   // Narration arrives before the first frame: the stub times every beat
   // through the same endpoint Cartesia would use. A failure leaves the film
@@ -130,6 +160,7 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
   const controller = new FilmController({
     runtime: figure.runtime,
     film,
+    reducedMotion,
     transport: { send: (message) => figure.renderer.send(message), apply: (update) => figure.renderer.apply(update) },
   });
   const model = new PlayerModel(controller, film);
@@ -163,8 +194,46 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
   caption.setAttribute('role', 'status');
   player.append(caption);
 
+  // Resume positions: per-film keys in localStorage, position/ids/numbers
+  // only — never question or note text. Memory-backed where storage is gone.
+  const resume = new ResumeStore(memoryLocalStorage());
+  const saveResume = (): void => {
+    const beat = controller.currentBeat;
+    if (!beat) return;
+    resume.save(film.id, { v: film.version, beat: beat.id, w: Math.max(0, model.currentWordIndex), t: controller.time });
+  };
+  model.on((event) => {
+    if (event.type === 'pause' || event.type === 'seek') saveResume();
+  });
+
+  const toggleLoop = (): void => {
+    if (model.loopedBeat) model.loopBeat(null);
+    else {
+      const beat = controller.currentBeat ?? film.beats[0];
+      if (beat) {
+        if (!controller.currentBeat) model.seek(beat.start);
+        model.loopBeat(beat.id);
+      }
+    }
+  };
+  const copyLink = (): string => {
+    const beat = controller.currentBeat ?? film.beats[0];
+    if (!beat) return 'Play the film first.';
+    const hash = formatFilmLink({ film: film.id, version: film.version, beat: beat.id, word: Math.max(0, model.currentWordIndex) });
+    window.location.hash = hash;
+    try {
+      // The hash is set either way; the clipboard is a courtesy.
+      void navigator.clipboard?.writeText(window.location.href).catch(() => undefined);
+    } catch {
+      // No clipboard here at all.
+    }
+    return `Link to ${beat.id} copied.`;
+  };
+
   let openAsk = (): void => undefined;
-  const transport = buildTransport(player, model, film, mixer, () => openAsk());
+  const transport = buildTransport(player, model, film, mixer, () => openAsk(), { toggleLoop, copyLink });
+  const versionBadge = buildVersion(player, film.version, history);
+  const bookmarkUi = buildBookmarks(player, model);
   const transcript = buildTranscript(player, model);
   buildChapters(player, model);
   let timeline = buildTimeline(player, model, film);
@@ -196,14 +265,91 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
     },
   });
 
+  // An explicit film edit, applied as version N+1: the patch applies
+  // cleanly or not at all, the film checks re-run over the new narration and
+  // timing (the scene is unchanged, so the validator and probe carry over),
+  // and only a passing version plays. Storage, promotion and the picker are
+  // the next slice's; until then the badge names the version, not a choice.
+  const applyPatch = async (patch: FilmVersionPatch): Promise<{ ok: true } | { ok: false; problems: readonly string[] }> => {
+    const applied = applyFilmPatch(film, patch, sources);
+    if (!applied.ok) return applied;
+    const next = applied.film;
+    const report = await probeFilmAsync({ film: next, scenes: [{ id: scene.id, scene: compileTrusted(scene.js), kits }] });
+    if (!report.ok) {
+      const first = report.failures[0];
+      return { ok: false, problems: [`Version ${next.version} did not pass the film checks (${first?.check ?? 'checks'}), so the film stays on version ${film.version}.`] };
+    }
+    // Only beats the patch changed may sound: audio riding along for an
+    // unchanged beat is ignored, never attached to the mixer.
+    const changed = new Set(patch.beats.map((beat) => beat.beat));
+    for (const line of patch.audio) {
+      if (!line.audioBase64 || !changed.has(line.beat)) continue;
+      mixer.attach({ beatId: line.beat, hash: `v${next.version}-${line.beat}`, pcm: base64ToBytes(line.audioBase64), sampleRate: line.sampleRate ?? 8000, seconds: line.seconds });
+    }
+    versions.set(next.version, next);
+    history.push(patchSummary(patch));
+    film = next;
+    controller.retime(film);
+    model.retime(film);
+    transport.setDuration(film.seconds);
+    player.querySelector('.inc-timeline')?.remove();
+    timeline = buildTimeline(player, model, film);
+    badges.checks(report, report.failures);
+    timeline.checks(report);
+    versionBadge.show(film.version, history);
+    window.__playground!.film = film;
+    return { ok: true };
+  };
+
   const askUi = buildAskSheet(player, {
     model,
     controller,
     film: () => film,
     figure,
     sceneJs: scene.js,
+    reducedMotion,
+    applyPatch,
+    requestBeats: () => film.beats.map((beat) => ({ beat: beat.id, scene: beat.sceneId, say: beat.step.say })),
   });
   openAsk = askUi.open;
+
+  bindShortcuts({
+    playPause: () => model.toggle(),
+    back: () => model.seek(controller.time - 5),
+    forward: () => model.seek(controller.time + 5),
+    prevBeat: () => model.prevBeat(),
+    nextBeat: () => model.nextBeat(),
+    captions: () => model.setCaptions(!model.state.captionsOn),
+    sound: () => transport.toggleSound(),
+    ask: () => openAsk(),
+    loop: () => toggleLoop(),
+    bookmark: () => bookmarkUi.add(),
+  });
+  buildShortcutHelp(player);
+
+  // The opening position: a deep link first, then resume, then — under
+  // reduced motion — a still first beat with its caption.
+  const resumeNotice = document.createElement('p');
+  resumeNotice.className = 'inc-resume';
+  resumeNotice.hidden = true;
+  player.append(resumeNotice);
+  let resumed = false;
+  const linked = parseFilmLink(window.location.hash);
+  const linkedSeconds = linked ? resolveFilmLink(film, linked) : null;
+  if (linkedSeconds !== null) {
+    model.seek(linkedSeconds);
+  } else {
+    const stored = resume.load(film.id);
+    const at = stored ? resolveFilmPosition(film, stored) : null;
+    if (at !== null && stored) {
+      model.seek(at);
+      resumed = true;
+      resumeNotice.textContent = `Resumed where you left off: ${stored.beat}.`;
+      resumeNotice.hidden = false;
+    } else if (reducedMotion) {
+      model.seek(0);
+    }
+  }
 
   let lastBeat: string | null = '__none__';
   let lastPlaying = false;
@@ -263,11 +409,18 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
   });
   let lastFrame = performance.now();
   let lastInsertCaption = '';
+  let lastSaved = 0;
   const sync = (): void => {
     const frameNow = performance.now();
     askUi.tick(Math.min(0.25, Math.max(0, (frameNow - lastFrame) / 1000)));
     lastFrame = frameNow;
     controller.poll();
+    model.applyLoop();
+    // Resume autosaves while playing, at most every five seconds.
+    if (controller.isPlaying && frameNow - lastSaved > 5000) {
+      lastSaved = frameNow;
+      saveResume();
+    }
     const state = model.state;
     const insertText = askUi.caption() ?? '';
     if (insertText !== lastInsertCaption) {
@@ -305,6 +458,15 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
     film,
     mixer,
     ask: () => askUi.state(),
+    full: () => ({
+      version: film.version,
+      history: [...history],
+      loop: model.loopedBeat,
+      bookmarks: model.bookmarks.map((bookmark) => ({ id: bookmark.id, beat: bookmark.beat, word: bookmark.wordIndex })),
+      resumed,
+      hash: window.location.hash,
+      reducedMotion,
+    }),
     narration: () => ({ source: narrationSource, timed: film.beats.filter((beat) => beat.timed).length, beats: film.beats.length }),
     mixerEvents: () => [...mixBackend.events],
     stats: () => ({ time: controller.time, beat: controller.currentBeat?.id ?? null, playing: controller.isPlaying, controller: { ...controller.stats } }),
@@ -459,7 +621,8 @@ function buildTransport(
   film: CompiledFilm,
   mixer: FilmMixer,
   onAsk: () => void,
-): { syncTime(time: number, playing: boolean): void; setDuration(seconds: number): void; thumbs: HTMLElement } {
+  extra: { toggleLoop(): void; copyLink(): string },
+): { syncTime(time: number, playing: boolean): void; setDuration(seconds: number): void; toggleSound(): void; thumbs: HTMLElement } {
   const bar = document.createElement('div');
   bar.className = 'inc-transport inc-player-transport';
   const play = document.createElement('button');
@@ -548,12 +711,37 @@ function buildTransport(
     size.append(option);
   }
   size.addEventListener('change', () => model.setCaptionSize(size.value as 'sm' | 'md' | 'lg'));
+  const loop = document.createElement('button');
+  loop.type = 'button';
+  loop.className = 'inc-player-loop';
+  loop.textContent = 'Loop: off';
+  loop.setAttribute('aria-label', 'Loop the beat');
+  loop.addEventListener('click', () => extra.toggleLoop());
+  const link = document.createElement('button');
+  link.type = 'button';
+  link.className = 'inc-player-link';
+  link.textContent = 'Copy link';
+  link.setAttribute('aria-label', 'Copy a link to this moment');
+  const linkNote = document.createElement('span');
+  linkNote.className = 'inc-player-link-note';
+  link.addEventListener('click', () => {
+    linkNote.textContent = extra.copyLink();
+  });
+  model.on((event) => {
+    if (event.type !== 'chrome') return;
+    const looped = model.loopedBeat;
+    loop.textContent = looped ? `Loop: ${looped}` : 'Loop: off';
+    loop.setAttribute('aria-pressed', looped ? 'true' : 'false');
+  });
   const thumbs = document.createElement('div');
   thumbs.className = 'inc-player-thumbs';
-  bar.append(play, ask, time, scrubWrap, speed, volume, sound, captions, size);
+  bar.append(play, ask, time, scrubWrap, speed, volume, sound, captions, size, loop, link, linkNote);
   player.append(bar, thumbs);
   return {
     thumbs,
+    toggleSound(): void {
+      sound.click();
+    },
     syncTime(current: number, playing: boolean): void {
       play.textContent = playing ? 'Pause' : 'Play';
       time.textContent = `${formatTime(current)} / ${formatTime(scrub.max === '' ? film.seconds : Number(scrub.max))}`;
@@ -564,6 +752,121 @@ function buildTransport(
       renderMarkers();
     },
   };
+}
+
+/** The version badge: which version plays and how it came to be. The picker is the next slice's; this names, not chooses. */
+function buildVersion(player: HTMLElement, version: number, history: readonly string[]): { show(version: number, history: readonly string[]): void } {
+  const badge = document.createElement('p');
+  badge.className = 'inc-version';
+  const show = (at: number, past: readonly string[]): void => {
+    badge.textContent = `Version ${at} · ${past.join(' → ')}`;
+  };
+  show(version, history);
+  player.append(badge);
+  return { show };
+}
+
+function buildBookmarks(player: HTMLElement, model: PlayerModel): { add(label?: string): void } {
+  const wrap = document.createElement('div');
+  wrap.className = 'inc-bookmarks';
+  const heading = document.createElement('h3');
+  heading.textContent = 'Bookmarks';
+  const addButton = document.createElement('button');
+  addButton.type = 'button';
+  addButton.className = 'inc-bookmark-add';
+  addButton.textContent = 'Bookmark this moment';
+  const list = document.createElement('ul');
+  const render = (): void => {
+    list.textContent = '';
+    const bookmarks = model.bookmarks;
+    if (bookmarks.length === 0) {
+      const empty = document.createElement('li');
+      empty.className = 'inc-bookmarks-empty';
+      empty.textContent = 'No bookmarks yet.';
+      list.append(empty);
+      return;
+    }
+    for (const bookmark of bookmarks) {
+      const item = document.createElement('li');
+      item.dataset.bookmark = bookmark.id;
+      const jump = document.createElement('button');
+      jump.type = 'button';
+      jump.textContent = `${bookmark.label} (${formatTime(model.bookmarkTime(bookmark.id) ?? 0)})`;
+      jump.setAttribute('aria-label', `Jump to bookmark ${bookmark.label}`);
+      jump.addEventListener('click', () => model.jumpBookmark(bookmark.id));
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.textContent = 'Remove';
+      remove.setAttribute('aria-label', `Remove bookmark ${bookmark.label}`);
+      remove.addEventListener('click', () => model.removeBookmark(bookmark.id));
+      item.append(jump, ' ', remove);
+      list.append(item);
+    }
+  };
+  const add = (label?: string): void => {
+    model.addBookmark(label);
+  };
+  addButton.addEventListener('click', () => add());
+  model.on((event) => {
+    if (event.type === 'chrome') render();
+  });
+  render();
+  wrap.append(heading, addButton, list);
+  player.append(wrap);
+  return { add };
+}
+
+/** Binds the documented shortcuts, firing only outside fields and key-consuming controls. */
+function bindShortcuts(actions: Record<string, () => void>): void {
+  document.addEventListener('keydown', (event: KeyboardEvent) => {
+    if (event.metaKey || event.ctrlKey || event.altKey || event.defaultPrevented) return;
+    const target = event.target as HTMLElement | null;
+    const tag = target?.tagName?.toLowerCase();
+    if (tag === 'input' || tag === 'textarea' || tag === 'select' || tag === 'button' || target?.isContentEditable) return;
+    const shortcut = shortcutFor(event.key);
+    if (!shortcut) return;
+    const action = actions[shortcut.action];
+    if (!action) return;
+    event.preventDefault();
+    action();
+  });
+}
+
+/** The documented shortcut list, rendered from the same table the keys match. */
+function buildShortcutHelp(player: HTMLElement): void {
+  const wrap = document.createElement('details');
+  wrap.className = 'inc-shortcuts';
+  const summary = document.createElement('summary');
+  summary.textContent = 'Keyboard shortcuts';
+  const list = document.createElement('ul');
+  for (const shortcut of SHORTCUTS) {
+    const item = document.createElement('li');
+    const key = document.createElement('kbd');
+    key.textContent = shortcut.key;
+    item.append(key, ` ${shortcut.label}`);
+    list.append(item);
+  }
+  const note = document.createElement('p');
+  note.className = 'inc-shortcuts-note';
+  note.textContent = 'Shortcuts work when focus is not in a field or a button, so screen readers and text fields keep their keys.';
+  wrap.append(summary, list, note);
+  player.append(wrap);
+}
+
+/** localStorage, or a memory stand-in where storage is gone: the film plays on without resume. */
+function memoryLocalStorage(): ResumeStorage {
+  try {
+    const storage = window.localStorage;
+    storage.getItem('incantly.probe');
+    return storage;
+  } catch {
+    const data = new Map<string, string>();
+    return {
+      getItem: (key) => data.get(key) ?? null,
+      setItem: (key, value) => void data.set(key, value),
+      removeItem: (key) => void data.delete(key),
+    };
+  }
 }
 
 function buildTranscript(player: HTMLElement, model: PlayerModel): { sync(beat: string | null): void } {
@@ -859,7 +1162,18 @@ interface AskSheet {
   open(): void;
   tick(dt: number): void;
   caption(): string | null;
-  state(): { sheet: boolean; answer: string; markers: number; stack: number; insert: string | null; remaining: number; showme: string | null };
+  state(): {
+    sheet: boolean;
+    answer: string;
+    markers: number;
+    stack: number;
+    insert: string | null;
+    remaining: number;
+    showme: string | null;
+    example: string | null;
+    depth: string;
+    language: string;
+  };
 }
 
 function buildAskSheet(
@@ -870,6 +1184,9 @@ function buildAskSheet(
     film: () => CompiledFilm;
     figure: { runtime: SceneRuntime; renderer: { apply(update: RuntimeUpdate): void } };
     sceneJs: string;
+    reducedMotion: boolean;
+    applyPatch(patch: FilmVersionPatch): Promise<{ ok: true } | { ok: false; problems: readonly string[] }>;
+    requestBeats(): ReadonlyArray<{ beat: string; scene: string; say: string }>;
   },
 ): AskSheet {
   const { model, controller, figure } = ctx;
@@ -901,17 +1218,92 @@ function buildAskSheet(
   hear.type = 'button';
   hear.textContent = 'Hear answer';
   hear.disabled = true;
+  // The voice choice: the stub voice list until a Cartesia voice id is entered in Narration.
+  const voice = document.createElement('select');
+  voice.className = 'inc-ask-voice';
+  voice.setAttribute('aria-label', 'Voice for the spoken answer');
+  const voiceDefault = document.createElement('option');
+  voiceDefault.value = '';
+  voiceDefault.textContent = 'Default voice';
+  voice.append(voiceDefault);
+  let voicesLoaded = false;
+  const loadVoices = async (): Promise<void> => {
+    if (voicesLoaded) return;
+    voicesLoaded = true;
+    try {
+      const token = await devToken();
+      const answer = await fetch('/api/v1/voices', { headers: { authorization: `Bearer ${token}` } });
+      const result = (await answer.json()) as { voices?: Array<{ id: string; name: string }> };
+      for (const entry of result.voices ?? []) {
+        if (typeof entry.id !== 'string' || typeof entry.name !== 'string') continue;
+        const option = document.createElement('option');
+        option.value = entry.id;
+        option.textContent = entry.name;
+        voice.append(option);
+      }
+    } catch {
+      // The default voice speaks; the choice is a courtesy.
+    }
+  };
   const speakStatus = document.createElement('span');
   speakStatus.className = 'inc-ask-speak-status';
+  // Simpler / Deeper re-runs the last question at another depth.
+  const simpler = document.createElement('button');
+  simpler.type = 'button';
+  simpler.className = 'inc-ask-simpler';
+  simpler.textContent = 'Simpler';
+  const deeper = document.createElement('button');
+  deeper.type = 'button';
+  deeper.className = 'inc-ask-deeper';
+  deeper.textContent = 'Deeper';
+  // The language choice, mirroring the service's ASK_LANGUAGES: the model translates.
+  const language = document.createElement('select');
+  language.className = 'inc-ask-language';
+  language.setAttribute('aria-label', 'Answer language');
+  for (const [code, name] of [
+    ['en', 'English'],
+    ['es', 'Spanish'],
+    ['fr', 'French'],
+    ['de', 'German'],
+    ['it', 'Italian'],
+    ['pt', 'Portuguese'],
+  ] as const) {
+    const option = document.createElement('option');
+    option.value = code;
+    option.textContent = name;
+    language.append(option);
+  }
   const status = document.createElement('p');
   status.className = 'inc-ask-status';
   const row = document.createElement('div');
   row.className = 'inc-ask-row';
   row.append(input, send, close);
+  const depthRow = document.createElement('div');
+  depthRow.className = 'inc-ask-row';
+  depthRow.append(simpler, deeper, language);
   const speakRow = document.createElement('div');
   speakRow.className = 'inc-ask-row';
-  speakRow.append(hear, speakStatus);
-  sheet.append(context, row, chips, answer, speakRow, status);
+  speakRow.append(hear, voice, speakStatus);
+  // Change the film: an explicit edit, never routed. The input stays hidden
+  // until the learner asks to change the film itself.
+  const changeButton = document.createElement('button');
+  changeButton.type = 'button';
+  changeButton.className = 'inc-change-open';
+  changeButton.textContent = 'Change the film';
+  const changeRow = document.createElement('div');
+  changeRow.className = 'inc-ask-row inc-change-row';
+  changeRow.hidden = true;
+  const changeInput = document.createElement('input');
+  changeInput.type = 'text';
+  changeInput.className = 'inc-change-input';
+  changeInput.placeholder = 'Say what the film should change';
+  changeInput.setAttribute('aria-label', 'What the film should change');
+  const changeSend = document.createElement('button');
+  changeSend.type = 'button';
+  changeSend.className = 'inc-change-send';
+  changeSend.textContent = 'Make version';
+  changeRow.append(changeInput, changeSend);
+  sheet.append(context, row, chips, answer, depthRow, speakRow, changeButton, changeRow, status);
 
   const showmeBanner = document.createElement('div');
   showmeBanner.className = 'inc-showme';
@@ -930,15 +1322,40 @@ function buildAskSheet(
   insertBack.type = 'button';
   insertBack.textContent = 'Back now';
   insertBanner.append(insertText, insertBack);
-  player.append(sheet, showmeBanner, insertBanner);
+
+  // The side clip: its own figure playing independently beside the film,
+  // pinned to the anchor, with a return to the film.
+  const exampleWrap = document.createElement('div');
+  exampleWrap.className = 'inc-example';
+  exampleWrap.hidden = true;
+  const exampleCaption = document.createElement('p');
+  exampleCaption.className = 'inc-example-caption';
+  const exampleFigure = document.createElement('div');
+  exampleFigure.className = 'inc-example-figure';
+  const exampleRow = document.createElement('div');
+  exampleRow.className = 'inc-ask-row';
+  const exampleToggle = document.createElement('button');
+  exampleToggle.type = 'button';
+  exampleToggle.className = 'inc-example-toggle';
+  exampleToggle.textContent = 'Pause example';
+  const exampleReturn = document.createElement('button');
+  exampleReturn.type = 'button';
+  exampleReturn.className = 'inc-example-return';
+  exampleReturn.textContent = 'Return to film';
+  exampleRow.append(exampleToggle, exampleReturn);
+  exampleWrap.append(exampleCaption, exampleFigure, exampleRow);
+  player.append(sheet, showmeBanner, insertBanner, exampleWrap);
 
   let anchor: AskAnchor | null = null;
   let beat: CompiledBeat | null = null;
   let lastAnswer = '';
+  let lastQuestion = '';
+  let lastDepthRung: 'answer' | 'deeper' | null = null;
   let showme: ShowMeSession | null = null;
   const thread: Array<{ q: string; a: string }> = [];
   const stack = new AskReturnStack();
   const players: InsertPlayer[] = [];
+  let sideClip: { player: SideClipPlayer; figure: FigureHandle; caption: string; playing: boolean } | null = null;
 
   /** Pushes direct runtime writes to the live figure, as the seek path does. */
   const touch = (fn: () => void): void => {
@@ -969,9 +1386,10 @@ function buildAskSheet(
     input.value = '';
     sheet.hidden = false;
     input.focus();
+    void loadVoices();
   };
 
-  const assemblyBody = (question: string): Record<string, unknown> => {
+  const assemblyBody = (question: string, depth?: 'simpler' | 'standard' | 'deeper'): Record<string, unknown> => {
     const film = ctx.film();
     const lines = controller.transcript();
     const at = lines.findIndex((line) => line.beat === anchor?.beat);
@@ -991,24 +1409,28 @@ function buildAskSheet(
       values: anchor?.controlValues ?? {},
       readouts: anchor?.readouts ?? [],
       thread: thread.map((turn) => ({ ...turn })),
+      depth: depth ?? 'standard',
+      language: language.value === '' ? 'en' : language.value,
     };
   };
 
-  const askAnswer = async (question: string): Promise<void> => {
+  const askAnswer = async (question: string, depth: 'simpler' | 'standard' | 'deeper' = 'standard'): Promise<void> => {
     status.textContent = 'Answering…';
     answer.textContent = '';
     hear.disabled = true;
     speakStatus.textContent = '';
     try {
       const token = await devToken();
-      const full = await streamAsk(token, assemblyBody(question), (delta) => {
+      const full = await streamAsk(token, assemblyBody(question, depth), (delta) => {
         answer.textContent += delta;
       });
       lastAnswer = full.text;
+      lastQuestion = question;
+      lastDepthRung = 'answer';
       hear.disabled = full.text === '';
       thread.push({ q: question, a: full.text });
       while (thread.length > 6) thread.shift();
-      status.textContent = `First words in ${Math.round(full.firstChunkMs)} ms.`;
+      status.textContent = `First words in ${Math.round(full.firstChunkMs)} ms${depth === 'standard' ? '' : ` (${depth})`}.`;
     } catch {
       status.textContent = 'The answer did not arrive — the film is still paused where you asked.';
     }
@@ -1030,7 +1452,7 @@ function buildAskSheet(
     showmeBanner.hidden = true;
   });
 
-  const askDeeper = async (question: string): Promise<void> => {
+  const askDeeper = async (question: string, depth: 'simpler' | 'standard' | 'deeper' = 'standard'): Promise<void> => {
     status.textContent = 'Writing the insert…';
     try {
       const token = await devToken();
@@ -1038,7 +1460,7 @@ function buildAskSheet(
       const posted = await fetch('/api/v1/ask/insert', {
         method: 'POST',
         headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-        body: JSON.stringify({ ...assemblyBody(question), params }),
+        body: JSON.stringify({ ...assemblyBody(question, depth), params }),
       });
       const result = (await posted.json()) as { status?: string; clip?: { anchor: AskAnchor; lines: Array<{ say: string; seconds: number; set?: Record<string, number> }> } };
       if (!posted.ok || result.status !== 'clip' || !result.clip || !anchor || !beat) {
@@ -1074,6 +1496,8 @@ function buildAskSheet(
         status.textContent = 'The film moved on — ask again where you are.';
         return;
       }
+      lastQuestion = question;
+      lastDepthRung = 'deeper';
       status.textContent = '';
       sheet.hidden = true;
       insertBanner.hidden = false;
@@ -1082,7 +1506,161 @@ function buildAskSheet(
     }
   };
 
-  const submit = (text: string, rung?: 'answer' | 'showme' | 'deeper'): void => {
+  const askExample = async (question: string): Promise<void> => {
+    if (sideClip) returnFromExample();
+    status.textContent = 'Writing the side clip…';
+    try {
+      const token = await devToken();
+      const posted = await fetch('/api/v1/ask/example', {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify(assemblyBody(question)),
+      });
+      const result = (await posted.json()) as { status?: string; clip?: { anchor: AskAnchor; html: string; css: string; js: string; caption: string } };
+      if (!posted.ok || result.status !== 'clip' || !result.clip || !anchor || !beat) {
+        status.textContent = 'No side clip came back — the film is still paused where you asked.';
+        return;
+      }
+      const validated = validateExampleClip({ anchor: result.clip.anchor, html: result.clip.html, css: result.clip.css, js: result.clip.js, caption: result.clip.caption }, ctx.film());
+      if (!validated.ok) {
+        status.textContent = `The side clip did not fit this film: ${validated.problems[0] ?? 'invalid'}.`;
+        return;
+      }
+      // A generated scene: probed in a hidden sandbox like any generated
+      // scene, and mounted in the sandbox — never trusted on the page thread.
+      // The service already spent the one repair; what still fails its probe
+      // is rejected before playback, so a runaway clip cannot hang the page.
+      const fragments = { html: validated.clip.html, css: validated.clip.css, js: validated.clip.js };
+      const scene = validateScene(fragments);
+      const probed = await probeSandboxed(fragments, {
+        spec: { parts: [...scene.info.parts], ...(scene.info.stepCount === null ? {} : { steps: scene.info.stepCount }) },
+      });
+      if (!probed.ok || !probed.report || !probed.report.ok) {
+        const first = probed.report?.failures[0]?.message ?? probed.validation.diagnostics[0]?.message ?? 'invalid';
+        status.textContent = `The side clip did not pass its checks: ${first}.`;
+        return;
+      }
+      if (!stack.push(anchor)) {
+        status.textContent = 'Finish this question first — questions nest two deep.';
+        return;
+      }
+      exampleFigure.textContent = '';
+      const side = sandboxAdapter.mount(exampleFigure, fragments, { title: `Example: ${validated.clip.caption}`, reducedMotion: ctx.reducedMotion });
+      const clip = { ...validated.clip, anchor };
+      const playing = new SideClipPlayer(controller, ctx.film(), clip);
+      if (!playing.open()) {
+        stack.pop();
+        side.destroy();
+        exampleFigure.textContent = '';
+        status.textContent = 'The film moved on — ask again where you are.';
+        return;
+      }
+      sideClip = { player: playing, figure: side, caption: validated.clip.caption, playing: !ctx.reducedMotion };
+      exampleCaption.textContent = validated.clip.caption;
+      exampleToggle.textContent = 'Pause example';
+      exampleWrap.hidden = false;
+      sheet.hidden = true;
+      status.textContent = '';
+    } catch {
+      status.textContent = 'No side clip came back — the film is still paused where you asked.';
+    }
+  };
+
+  const returnFromExample = (): void => {
+    if (!sideClip) return;
+    const { player: playing, figure: side } = sideClip;
+    sideClip = null;
+    side.destroy();
+    exampleFigure.textContent = '';
+    exampleWrap.hidden = true;
+    stack.pop();
+    // An insert owns the film while it runs; the clip then just closes.
+    if (players.length === 0) playing.closeToFilm();
+  };
+  exampleReturn.addEventListener('click', returnFromExample);
+  exampleToggle.addEventListener('click', () => {
+    if (!sideClip) return;
+    if (sideClip.playing) {
+      sideClip.figure.pause();
+      sideClip.playing = false;
+      exampleToggle.textContent = 'Play example';
+    } else {
+      sideClip.figure.resume();
+      sideClip.playing = true;
+      exampleToggle.textContent = 'Pause example';
+    }
+  });
+
+  const askChange = async (prompt: string): Promise<void> => {
+    status.textContent = 'Writing the new version…';
+    try {
+      const token = await devToken();
+      const film = ctx.film();
+      const posted = await fetch('/api/v1/ask/change', {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ prompt, film: film.id, version: film.version, beats: ctx.requestBeats() }),
+      });
+      const result = (await posted.json()) as { status?: string; patch?: FilmVersionPatch };
+      if (!posted.ok || result.status !== 'patch' || !result.patch) {
+        status.textContent = 'No new version came back — the film is unchanged.';
+        return;
+      }
+      // A patch is untrusted input until it passes here: the service checked
+      // it too, but anything tampered with on the way is rejected client-side.
+      const checked = sanitizeFilmPatch(result.patch);
+      if (!checked.ok) {
+        status.textContent = `The new version did not fit: ${checked.problems[0] ?? 'invalid'}.`;
+        return;
+      }
+      const applied = await ctx.applyPatch(checked.patch);
+      if (!applied.ok) {
+        status.textContent = applied.problems[0] ?? 'The new version did not fit.';
+        return;
+      }
+      thread.length = 0;
+      status.textContent = `Version ${result.patch.version} is playing.`;
+      sheet.hidden = true;
+    } catch {
+      status.textContent = 'No new version came back — the film is unchanged.';
+    }
+  };
+  changeButton.addEventListener('click', () => {
+    changeRow.hidden = !changeRow.hidden;
+    if (!changeRow.hidden) changeInput.focus();
+  });
+  changeSend.addEventListener('click', () => {
+    const prompt = changeInput.value.trim();
+    if (prompt === '') {
+      status.textContent = 'Say what the film should change.';
+      return;
+    }
+    void askChange(prompt);
+  });
+  changeInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      const prompt = changeInput.value.trim();
+      if (prompt === '') status.textContent = 'Say what the film should change.';
+      else void askChange(prompt);
+    }
+  });
+
+  const rerunDepth = (depth: 'simpler' | 'deeper'): void => {
+    if (lastQuestion === '') {
+      status.textContent = 'Ask something first, then run it simpler or deeper.';
+      return;
+    }
+    if (!anchor || !beat) {
+      status.textContent = 'Play the film first, then ask.';
+      return;
+    }
+    if (lastDepthRung === 'deeper') void askDeeper(lastQuestion, depth);
+    else void askAnswer(lastQuestion, depth);
+  };
+  simpler.addEventListener('click', () => rerunDepth('simpler'));
+  deeper.addEventListener('click', () => rerunDepth('deeper'));
+
+  const submit = (text: string, rung?: 'answer' | 'showme' | 'deeper' | 'example'): void => {
     const question = text.trim();
     if (question === '') {
       status.textContent = 'Ask something first.';
@@ -1096,13 +1674,14 @@ function buildAskSheet(
     const lane = rung ?? routeQuestion(question);
     if (lane === 'showme') askShowMe();
     else if (lane === 'deeper') void askDeeper(question);
+    else if (lane === 'example') void askExample(question);
     else void askAnswer(question);
   };
   send.addEventListener('click', () => submit(input.value));
   input.addEventListener('keydown', (event) => {
     if (event.key === 'Enter') submit(input.value);
   });
-  for (const [label, lane] of [['Explain this step', 'answer'], ['Show me', 'showme'], ['Explain deeper', 'deeper']] as const) {
+  for (const [label, lane] of [['Explain this step', 'answer'], ['Show me', 'showme'], ['Explain deeper', 'deeper'], ['Another example', 'example']] as const) {
     const chip = document.createElement('button');
     chip.type = 'button';
     chip.textContent = label;
@@ -1119,7 +1698,7 @@ function buildAskSheet(
         const posted = await fetch('/api/v1/ask/speak', {
           method: 'POST',
           headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-          body: JSON.stringify({ text: lastAnswer }),
+          body: JSON.stringify({ text: lastAnswer, ...(voice.value !== '' ? { voice: voice.value } : {}) }),
         });
         const result = (await posted.json()) as { seconds?: number; audioBase64?: string | null; sampleRate?: number };
         if (!posted.ok) {
@@ -1142,6 +1721,7 @@ function buildAskSheet(
   return {
     open,
     tick(dt: number): void {
+      sideClip?.player.tick(dt);
       const top = players[players.length - 1];
       if (!top || top.currentPhase === 'done') return;
       top.tick(dt);
@@ -1164,6 +1744,9 @@ function buildAskSheet(
         insert: top && top.currentPhase !== 'done' ? top.currentPhase : null,
         remaining: top?.remaining ?? 0,
         showme: showme && !showme.restored ? showme.beat.id : null,
+        example: sideClip ? sideClip.caption : null,
+        depth: lastDepthRung ?? 'standard',
+        language: language.value === '' ? 'en' : language.value,
       };
     },
   };
