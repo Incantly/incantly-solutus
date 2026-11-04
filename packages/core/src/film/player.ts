@@ -17,6 +17,9 @@ export interface PlayerCaption {
   readonly title: { readonly text: string; readonly kind: 'card' | 'lower' } | null;
   readonly start: number;
   readonly seconds: number;
+  /** The beat's words with their starts in film seconds, for the karaoke highlight. */
+  readonly words: readonly string[];
+  readonly wordStarts: readonly number[];
 }
 
 export interface PlayerState {
@@ -49,7 +52,7 @@ export class PlayerModel {
 
   constructor(
     private readonly controller: FilmController,
-    private readonly film: CompiledFilm,
+    private film: CompiledFilm,
   ) {
     this.controller.on((event) => this.emit(event));
   }
@@ -57,6 +60,12 @@ export class PlayerModel {
   on(listener: (event: PlayerEvent) => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  /** Follows the controller onto a re-timed film; call it after controller.retime. */
+  retime(film: CompiledFilm): void {
+    this.film = film;
+    this.emit({ type: 'chrome' });
   }
 
   private emit(event: PlayerEvent): void {
@@ -172,6 +181,28 @@ export class PlayerModel {
     return beat ? wordStarts(beat).slice(0, TIMELINE_WORD_TICKS_PER_BEAT) : [];
   }
 
+  /**
+   * The word sounding at a film time: the last one started, or -1 before the
+   * first. The highlight follows the same starts the audio was timed with, so
+   * caption and audio stay within a frame of each other.
+   */
+  wordIndexAt(beatId: string, time: number): number {
+    const beat = this.film.beats.find((candidate) => candidate.id === beatId);
+    if (!beat) return -1;
+    const starts = wordStarts(beat);
+    let index = -1;
+    starts.forEach((start, i) => {
+      if (time + 1e-9 >= start) index = i;
+    });
+    return index;
+  }
+
+  /** The word sounding now in the current beat, for the karaoke highlight. */
+  get currentWordIndex(): number {
+    const beat = this.controller.currentBeat;
+    return beat ? this.wordIndexAt(beat.id, this.controller.time) : -1;
+  }
+
   /** Evenly spaced film times for the scrubber's thumbnails. */
   thumbTimes(count: number): number[] {
     const duration = this.controller.duration;
@@ -194,5 +225,7 @@ function toCaption(beat: CompiledBeat): PlayerCaption {
     title: title === undefined ? null : typeof title === 'string' ? { text: title, kind: 'lower' } : { text: title.text, kind: title.kind ?? 'lower' },
     start: beat.start,
     seconds: beat.seconds,
+    words: beat.words,
+    wordStarts: wordStarts(beat),
   };
 }

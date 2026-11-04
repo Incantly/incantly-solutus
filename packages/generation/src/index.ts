@@ -44,3 +44,47 @@ export { FileGalleryStore, MemoryGalleryStore, galleryCard, galleryFigure, galle
 export type { GalleryEntry, GalleryStore } from './gallery';
 export type { GalleryCard, GalleryFigure, GalleryReceipt, GalleryStatus, GallerySubmission } from './protocol';
 export type { TicketFragments } from './ticket';
+export {
+  CARTESIA_API_VERSION,
+  CARTESIA_MAX_AUDIO_BYTES,
+  CARTESIA_MAX_EVENT_BYTES,
+  CARTESIA_MAX_WORDS,
+  CARTESIA_SAMPLE_RATE,
+  CARTESIA_TOTAL_TIMEOUT_MS,
+  CARTESIA_USD_PER_MILLION_CHARS,
+  DEFAULT_CARTESIA_MODEL,
+  NARRATION_WORDS_PER_SECOND,
+  SPEECH_CREDITS_PER_CHAR,
+  STUB_SAMPLE_RATE,
+  CartesiaClient,
+  StubNarrator,
+  TtsError,
+  applyCartesiaSseEvent,
+  cartesiaHttpError,
+  cartesiaKeyFromEnv,
+  cartesiaRetentionAccepted,
+  checkCartesiaKey,
+  contentHash,
+  countSpeechWords,
+  estimateWordTimings,
+  speechCostUsd,
+  splitSpeechWords,
+  timingsSeconds,
+  validateWordTimings,
+} from './tts';
+export type { CartesiaOptions, SpeakReply, SpeakRequest, TtsErrorKind, WordTiming, Narrator } from './tts';
+export {
+  NARRATION_MAX_AUDIO_BYTES,
+  NARRATION_MAX_CACHED_LINES,
+  NARRATION_MAX_CLIPS,
+  NARRATION_MAX_TEXT_CHARS,
+  MemoryAudioStore,
+  MemoryNarrationCache,
+  NarrationQueue,
+  narrateBeats,
+  narrateFilm,
+  narrationKey,
+  speechRefusalHttp,
+  summarizeNarration,
+} from './narration';
+export type { AudioStore, NarrateOptions, NarratedBeat, NarratedFilm, NarrationBeat, NarrationCache, NarrationRun } from './narration';

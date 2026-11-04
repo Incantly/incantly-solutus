@@ -25,6 +25,7 @@ export {
   countWords,
   estimateBeatSeconds,
   resolveAnchor,
+  sanitizeWordStarts,
   splitWords,
   wordStarts,
   FILM_BEAT_HOLD_SECONDS,
@@ -44,6 +45,8 @@ export { PlayerModel, CAPTION_SCALES, TIMELINE_WORD_TICKS_PER_BEAT } from './fil
 export type { CaptionSize, PlayerCaption, PlayerEvent, PlayerState } from './film/player';
 export { FILM_FIXTURES, SIXTY_SECOND_FILM, THIRTY_SECOND_FILM } from './film/fixtures';
 export type { FilmFixture, FilmFixtureScene } from './film/fixtures';
+export { FilmMixer, MemoryMixerBackend, WebAudioMixerBackend, BED_DUCKED_LEVEL, BED_LEVEL, NARRATION_LEVEL } from './film/mixer';
+export type { MixerBackend, MixerClip, MixerEvent } from './film/mixer';
 export { KIT_NAMES, KIT_OF, kitsFor } from './runtime/kits';
 export type { KitCall, KitEntry, KitModule, KitName, KitRegistry } from './runtime/kits';
 export { availableKits, loadKitModules } from './kits/load';

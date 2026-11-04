@@ -33,6 +33,12 @@ import { defineConfig, loadEnv, type Plugin, type ViteDevServer } from 'vite';
  * it works and, for Gemini and Bedrock, which models the key can reach.
  * Bedrock uses AWS_REGION, default us-east-1. Shell env vars win over .env
  * files.
+ *
+ * Film narration is served the same way: /api/dev/narration-key checks a
+ * Cartesia key (the body's, or the server's CARTESIA_API_KEY) by listing one
+ * voice, and /api/dev/narrate narrates [{ id, text }] beats with the stub or
+ * with Cartesia, returning word starts and base64 PCM. Keys stay in memory on
+ * both ends and are never saved.
  */
 const DEV_SECRET = 'playground-only-secret-never-used-in-production';
 const FIGURES_FILE = fileURLToPath(new URL('./.generated/figures.json', import.meta.url));
@@ -80,7 +86,7 @@ const isProvider = (value: unknown): value is Provider => value === 'anthropic' 
 /** The dev server's model settings from the .env files beside this config and the shell, the shell winning. */
 function devEnv(): Record<string, string> {
   // .env files live beside this config; a dev server started from another directory must still find them.
-  const prefixes = ['ANTHROPIC_', 'GEMINI_', 'GOOGLE_', 'AWS_', 'BEDROCK_', 'MODEL_'];
+  const prefixes = ['ANTHROPIC_', 'GEMINI_', 'GOOGLE_', 'AWS_', 'BEDROCK_', 'MODEL_', 'CARTESIA_'];
   return {
     ...loadEnv('development', process.cwd(), prefixes),
     ...loadEnv('development', fileURLToPath(new URL('.', import.meta.url)), prefixes),
@@ -102,6 +108,29 @@ function providerEnv(provider: Provider): { key: string | null; source: string }
   const fromShell = names.map((name) => process.env[name]).find((value) => value) ?? null;
   const key = fromShell ?? names.map((name) => env[name]).find((value) => value) ?? null;
   return { key, source: fromShell ? 'shell' : key ? '.env' : 'none' };
+}
+
+/** The dev server's Cartesia key: CARTESIA_API_KEY from the shell or .env, memory only. */
+function cartesiaEnv(): { key: string | null; source: string } {
+  const env = devEnv();
+  const fromShell = process.env.CARTESIA_API_KEY ?? null;
+  const key = fromShell ?? env.CARTESIA_API_KEY ?? null;
+  return { key, source: fromShell ? 'shell' : key ? '.env' : 'none' };
+}
+
+/** Beats as the player sends them for narration, or null: ids and short lines only. */
+function readNarrationBeats(input: unknown): Array<{ beatId: string; text: string }> | null {
+  if (typeof input !== 'object' || input === null) return null;
+  const { beats } = input as { beats?: unknown };
+  if (!Array.isArray(beats) || beats.length === 0 || beats.length > 64) return null;
+  const out: Array<{ beatId: string; text: string }> = [];
+  for (const item of beats) {
+    if (typeof item !== 'object' || item === null) return null;
+    const { id, text } = item as { id?: unknown; text?: unknown };
+    if (typeof id !== 'string' || id === '' || id.length > 80 || typeof text !== 'string' || text === '' || text.length > 2000) return null;
+    out.push({ beatId: id, text });
+  }
+  return out;
 }
 
 /** Lists the Gemini models a key can reach that write text, newest names first. */
@@ -201,6 +230,9 @@ function generationService(): Plugin {
     { handle(req: IncomingMessage, res: ServerResponse): Promise<void>; close(): Promise<void>; records: { records: unknown[] } }
   >();
   const sessions = new Map<string, { provider: Provider; apiKey: string; planModel: string; sceneModel: string }>();
+  // One speech keeper for the dev narration endpoint, learner-scoped like the
+  // service: narration past the daily speech caps degrades to estimates.
+  let narrationLimits: import('@incantly/generation').LimitKeeper | null = null;
   const anthropicModels = new Set(['claude-haiku-5-5', 'claude-sonnet-5-5', 'claude-opus-5-5']);
   // Gemini's and Bedrock's names change often, so any name of the right family is taken; the key check lists the real ones.
   // Bedrock takes only open-weight GLM, DeepSeek, Qwen, Kimi and MiniMax models.
@@ -315,6 +347,60 @@ function generationService(): Plugin {
                     ? await sparkProbe(effective)
                     : await keyProbe(effective);
             return json(probe.ok ? 200 : 401, { ...probe, provider, source: givenKey !== null ? 'entered' : providerEnv(provider).source });
+          }
+          if (path === '/api/dev/narration-key' && req.method === 'POST') {
+            const input = (await body(req)) as { apiKey?: unknown };
+            const givenKey = typeof input.apiKey === 'string' && input.apiKey !== '' ? input.apiKey.trim() : null;
+            const env = cartesiaEnv();
+            const effective = givenKey ?? env.key;
+            if (!effective) {
+              return json(400, { ok: false, message: 'No key to check: paste a Cartesia key or set CARTESIA_API_KEY on the dev server.', source: 'none' });
+            }
+            const probe = await g.checkCartesiaKey(effective);
+            return json(probe.ok ? 200 : 401, { ...probe, source: givenKey !== null ? 'entered' : env.source });
+          }
+          if (path === '/api/dev/narrate' && req.method === 'POST') {
+            const input = (await body(req, 256_000)) as { beats?: unknown; source?: unknown; apiKey?: unknown; voice?: unknown };
+            const beats = readNarrationBeats(input);
+            if (!beats) return json(400, { ok: false, message: 'Send { beats: [{ id, text }] }.' });
+            const source = input.source === 'cartesia' ? 'cartesia' : 'stub';
+            const givenKey = typeof input.apiKey === 'string' && input.apiKey !== '' ? input.apiKey.trim() : null;
+            const voice = typeof input.voice === 'string' && input.voice !== '' ? input.voice.trim() : null;
+            let narrator: import('@incantly/generation').Narrator = new g.StubNarrator();
+            if (source === 'cartesia') {
+              const effective = givenKey ?? cartesiaEnv().key;
+              if (!effective) return json(400, { ok: false, message: 'Set CARTESIA_API_KEY to narrate with Cartesia; without it films generate silent with estimated lengths.' });
+              if (!voice) return json(400, { ok: false, message: 'A Cartesia voice id is required.' });
+              // Shell wins over .env, as for the key: the gate stays fail-closed when neither accepts.
+              const retentionAccepted = g.cartesiaRetentionAccepted({ ...devEnv(), ...process.env });
+              try {
+                narrator = new g.CartesiaClient({ apiKey: effective, voice, retentionAccepted });
+              } catch (error) {
+                if (error instanceof g.TtsError && error.kind === 'retention-not-accepted') return json(400, { ok: false, message: error.message });
+                throw error;
+              }
+            }
+            narrationLimits ??= new g.LimitKeeper({ ...g.DEFAULT_LIMITS });
+            const store = new g.MemoryAudioStore();
+            const run = await g.narrateBeats(beats, { narrator, store, limits: narrationLimits, learnerId: 'playground-learner', ...(voice ? { voice } : {}) });
+            return json(200, {
+              ok: true,
+              source: narrator.name,
+              chars: run.chars,
+              usd: run.usd,
+              beats: run.beats.map((beat) => ({
+                id: beat.beatId,
+                chars: beat.chars,
+                seconds: beat.seconds,
+                starts: beat.starts,
+                audioHash: beat.audioHash,
+                audioBase64: beat.audioHash ? Buffer.from(store.get(beat.audioHash)!).toString('base64') : null,
+                sampleRate: beat.sampleRate,
+                estimated: beat.estimated,
+                ...(beat.error ? { error: beat.error } : {}),
+                ...(beat.refused ? { refused: beat.refused } : {}),
+              })),
+            });
           }
           const removeSession = /^\/api\/dev\/session\/([\w-]+)$/.exec(path);
           if (removeSession && req.method === 'DELETE') {
