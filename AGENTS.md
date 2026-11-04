@@ -7,6 +7,7 @@
 - If planning or generation style becomes slow, find another way to make it fast: cache by concept (25.6), retrieve examples instead of re-deriving (25.5), pre-warmed iframes (25.4), skeleton in the first second (25.2), streamed fragments (25.3). Latency work always outranks sophistication work.
 - Check latency whenever you touch the pipeline: measure plan, scene, validate and probe times, and keep the §16.1 budget (figure on screen under 10 seconds from the tap, skeleton visible within 1 second). A regression against these targets is a bug.
 - When an agent uses the contract to generate anything, it must be really fast. Do not trade generation latency for prompt size: core.md stays under 1,500 tokens and references load only for the planned components (17.9).
+- Exception: a film of several scenes makes one scene call per scene, in parallel, as ADR 009 allows (docs/architecture/decisions/009-film-scene-calls.md); nothing else on the generation path gains a model call.
 
 - Do not invent a named expression function for a visual example or simulation.
 - When a generated item needs to show how it was produced, put the actual formula and primitive operations in the expression source. Use existing runtime primitives such as `triangle`, `midpoint`, `join`, and `dilate`; do not display a placeholder such as `sierpinski(...)` unless that function has been explicitly implemented and registered in the expression runtime.

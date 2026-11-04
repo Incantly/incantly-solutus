@@ -160,6 +160,11 @@ export class LimitKeeper {
     return { today: usage.today, spentUsd: usage.spentUsd, running: usage.running };
   }
 
+  /** Generations a learner may have running at once: a learner's films share one scene-call cap here. */
+  get concurrency(): number {
+    return this.limits.concurrent;
+  }
+
   /** A refusal for narrating more characters, or null. */
   checkSpeech(learnerId: string, chars: number): Refusal | null {
     const at = this.now();

@@ -1,7 +1,8 @@
 # ADR 009: one scene call per film scene, in parallel
 
-- Status: proposed
+- Status: accepted
 - Date: October 2026
+- Accepted: 2026-11-04
 
 ## Context
 

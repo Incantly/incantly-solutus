@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { SDK_VERSION, kitsFor, validateScene, type ProbeCheck, type ProbeFailure, type ProbeReport, type ScenePlan } from '@incantly/core';
+import { FILM_LENGTH_PRESETS, SDK_VERSION, filmDeadlineMs, kitsFor, validateScene, type ProbeCheck, type ProbeFailure, type ProbeReport, type ScenePlan } from '@incantly/core';
 import { ASK_LIMITS, generateExample, generateFilmPatch, generateInsert, sanitizeAnswerAssembly, sanitizeChangeAssembly, sanitizeInsertAssembly, speakAnswer, streamAnswer } from './ask';
 import type { Authenticator, Learner } from './auth';
 import { ConceptCache, planKey, requestKey } from './cache';
@@ -10,6 +10,7 @@ import type { ModelClient } from './models';
 import { Generator, standardFigure, type GenerationState } from './pipeline';
 import { probeSpecFor } from './probe';
 import { MemoryAudioStore, narrateBeats, speechRefusalHttp } from './narration';
+import { generateFilm, type FilmRequest } from './film';
 import type { FilmLibrary } from './film-library';
 import type { AskChangeResponse, AskExampleResponse, AskInsertResponse, AskSpeakResponse, ChangeResponse, FallbackMessage, FilmInsertsResponse, FilmVersionResponse, FilmVersionsResponse, GalleryReceipt, PromoteResponse, RepairResponse, SceneMessage, Skeleton } from './protocol';
 import { STUB_VOICES, type Narrator } from './tts';
@@ -45,13 +46,14 @@ import { issueTicket, readTicket } from './ticket';
  *   GET  /v1/films/:film/inserts       -> the asker's own inserts
  *   POST /v1/films/:film/inserts       an insert clip -> its stored id, private to the asker
  *   POST /v1/films/:film/promote       { insertId, patch, beats } -> the new shared version, author-only
+ *   POST /v1/films                      { prompt, lengthTarget?, noteContext? } -> event stream of the film
  */
 
 export interface ServiceOptions {
   readonly model: ModelClient;
   readonly authenticate: Authenticator;
   readonly limits?: Limits;
-  /** The switch: when it returns false no generation starts, and stored figures carry on as before. */
+  /** The switch: when it returns false no generation starts, films already running stop launching new scenes, and stored figures carry on as before. */
   readonly enabled?: () => boolean;
   readonly records?: RecordSink | null;
   /** Deadline for one generation request, all model calls included. */
@@ -223,6 +225,23 @@ function readRequest(body: unknown): LearnerRequest {
   return { prompt: prompt.trim(), ...(noteContext ? { noteContext: noteContext.slice(0, REQUEST_LIMITS.noteContext * 2) } : {}) };
 }
 
+/** A film request: a prompt, a length preset, and at most a little note. */
+function readFilmRequest(body: unknown): FilmRequest {
+  if (typeof body !== 'object' || body === null) throw new HttpError(400, 'invalid-request', 'The body must be a JSON object');
+  const { prompt, lengthTarget, noteContext } = body as { prompt?: unknown; lengthTarget?: unknown; noteContext?: unknown };
+  if (typeof prompt !== 'string' || prompt.trim().length === 0) throw new HttpError(400, 'invalid-request', 'prompt must be a non-empty string');
+  if (prompt.length > REQUEST_LIMITS.prompt * 2) throw new HttpError(400, 'invalid-request', `prompt must be at most ${REQUEST_LIMITS.prompt} characters`);
+  if (lengthTarget !== undefined && (typeof lengthTarget !== 'number' || !(FILM_LENGTH_PRESETS as readonly number[]).includes(lengthTarget))) {
+    throw new HttpError(400, 'invalid-request', `lengthTarget must be one of ${FILM_LENGTH_PRESETS.join(', ')} seconds`);
+  }
+  if (noteContext !== undefined && typeof noteContext !== 'string') throw new HttpError(400, 'invalid-request', 'noteContext must be a string');
+  return {
+    prompt: prompt.trim(),
+    ...(lengthTarget !== undefined ? { lengthTarget: lengthTarget as number } : {}),
+    ...(noteContext ? { noteContext: (noteContext as string).slice(0, REQUEST_LIMITS.noteContext * 2) } : {}),
+  };
+}
+
 /** Fragments from a device: three strings of a size a scene can be. */
 function readFragments(value: unknown): { readonly html: string; readonly css: string; readonly js: string } | null {
   if (typeof value !== 'object' || value === null) return null;
@@ -288,6 +307,7 @@ export class GenerationService {
       if (req.method === 'POST' && filmInserts) return await this.saveFilmInsert(req, res, filmInserts[1]!);
       const filmPromote = new RegExp(`^${this.prefix}/films/([\\w-]{1,80})/promote$`).exec(path);
       if (req.method === 'POST' && filmPromote) return await this.promoteFilmInsert(req, res, filmPromote[1]!);
+      if (req.method === 'POST' && path === `${this.prefix}/films`) return await this.generateFilm(req, res);
       throw new HttpError(404, 'not-found', 'No such endpoint');
     } catch (error) {
       if (res.headersSent) {
@@ -489,6 +509,78 @@ export class GenerationService {
       const reason = timeout.aborted || state.deadlineHit ? 'timeout' : (state.failure?.stage ?? 'scene');
       send('fallback', this.fallback(state, reason, state.plan?.concept ?? request.prompt));
       await this.record(state);
+    }
+    if (open()) res.end();
+  }
+
+  /**
+   * A learner asks for a film (ADR 009). One plan call writes the storyboard,
+   * then one scene call per scene in parallel; speech runs alongside. The film
+   * counts as one generation: admitted once, spent once for all its scene and
+   * narration dollars. Scenes are probed in process, like evals, so a scene
+   * the stream reports has passed its checks; the device re-probes on mount.
+   */
+  private async generateFilm(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const learner = this.learner(req);
+    if (!this.enabled) throw new HttpError(503, 'generation-off', 'Making new films is switched off for now');
+    const request = readFilmRequest(await this.body(req));
+    const admitted = this.limits.admit(learner.id);
+    if (!admitted.ok) this.refuse(admitted.refusal);
+
+    res.writeHead(200, {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-store',
+      'x-content-type-options': 'nosniff',
+      'x-accel-buffering': 'no',
+    });
+    const open = () => !res.writableEnded && !res.destroyed;
+    const send = (event: string, data: unknown) => {
+      if (open()) res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    };
+    const keepAlive = setInterval(() => {
+      if (open()) res.write(': keep-alive\n\n');
+    }, 10_000);
+    const cancel = new AbortController();
+    res.on('close', () => cancel.abort());
+    // Films run to their length's deadline, never cut short by the figures' timeout.
+    const timeout = AbortSignal.timeout(Math.max(this.options.generationTimeoutMs ?? 45_000, filmDeadlineMs(request.lengthTarget ?? 60)));
+    const signal = AbortSignal.any([cancel.signal, timeout]);
+
+    try {
+      const state = await generateFilm(
+        request,
+        {
+          model: this.options.model,
+          ...(this.options.narrator ? { narrator: this.options.narrator } : {}),
+          learnerId: learner.id,
+          limits: this.limits,
+          enabled: () => this.enabled,
+          signal,
+        },
+        {
+          onSkeleton: (skeleton) => send('skeleton', skeleton),
+          onPlan: (storyboard) => send('plan', { scenes: storyboard.scenes.map((scene) => ({ scene: scene.id, title: scene.idea ?? scene.id, beats: scene.beats.map((beat) => beat.id) })) }),
+          onScene: (result) =>
+            send('scene', result.ok ? { scene: result.sceneId, fragments: result.fragments } : { scene: result.sceneId, failed: result.failure ?? 'scene' }),
+          onText: (purpose, text) => send('delta', { purpose, text }),
+        },
+      );
+      this.limits.spend(learner.id, state.cost + state.speechUsd);
+      if (state.film && !state.fallback) {
+        send('film', {
+          generationId: state.id,
+          storyboard: state.storyboard,
+          scenes: state.keptScenes,
+          timings: state.timings,
+          speechChars: state.speechChars,
+          partial: state.partial,
+        });
+      } else {
+        send('fallback', { generationId: state.id, reason: state.fallback?.reason ?? 'scene', standard: state.fallback?.standard ?? null, keptScenes: state.keptScenes });
+      }
+    } finally {
+      clearInterval(keepAlive);
+      admitted.release();
     }
     if (open()) res.end();
   }

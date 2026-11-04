@@ -2,7 +2,7 @@ import type { ViewBox } from '../api/types';
 import type { KitRegistry } from '../runtime/kits';
 import { applyBeatCues, applyShowHide, partBox, partBoxes, sfxNames } from '../runtime/film';
 import { SceneRuntime, type SceneFunction } from '../runtime/runtime';
-import { FILM_READING_WPS_LIMIT, type CompiledBeat, type CompiledFilm } from './storyboard';
+import { FILM_READING_WPS_LIMIT, type CompiledBeat, type CompiledFilm, type FilmContext } from './storyboard';
 import { CAPTION_MIN_PX, CAPTION_MIN_STAGE_SHARE, SAFE_MARGIN_SHARE, solveCallouts, solveCaption, titleCardRect } from './solver';
 import type { Box } from '../scene/bounds';
 
@@ -11,10 +11,11 @@ import type { Box } from '../scene/bounds';
  * 960 px, light and dark. Safe margin, caption lines, size, overlap,
  * contrast, focus in frame, reading speed and one emphasis at a time. Audio
  * sync checks run when narration audio arrives; until then beats are
- * estimated and the checks say so.
+ * estimated and the checks say so. The context check runs per scene when the
+ * film carries a shared context: palette, parts, notation and units.
  */
 
-export type FilmCheck = 'safe-margin' | 'caption-lines' | 'size' | 'overlap' | 'contrast' | 'focus-in-frame' | 'reading-speed' | 'one-emphasis' | 'sfx' | 'audio-sync';
+export type FilmCheck = 'safe-margin' | 'caption-lines' | 'size' | 'overlap' | 'contrast' | 'focus-in-frame' | 'reading-speed' | 'one-emphasis' | 'sfx' | 'audio-sync' | 'context';
 
 export type FilmPoint = 'start' | 'mid' | 'end';
 
@@ -69,6 +70,55 @@ export interface ProbeFilmOptions {
   readonly beforeStep?: () => void;
   readonly now?: () => number;
   readonly onProgress?: (beat: number, beats: number) => void;
+  /** Scene id to its script: the context check reads palette, parts and units from it. */
+  readonly js?: Readonly<Record<string, string>>;
+}
+
+/** Imperial words an 'si' notation never uses. */
+const IMPERIAL_WORDS = ['inch', 'inches', 'foot', 'feet', 'pound', 'pounds', 'fahrenheit', 'mile', 'miles', 'gallon', 'gallons', 'ounce', 'ounces'];
+
+/** Most words a 'plain' tone allows in one line. */
+export const FILM_PLAIN_TONE_MAX_WORDS = 40;
+
+/**
+ * The context-conformance check (ADR 009 drift defence): one scene's script
+ * and one line against the shared film context. Palette: no colour values,
+ * tones only. Parts: names that match the context case-insensitively must
+ * match exactly. Units: a parameter's unit must equal the context's. Notation
+ * 'si': no imperial words. Tone 'plain': short lines, no semicolons. Empty
+ * context fields constrain nothing. Returns one message per breach.
+ */
+export function checkSceneContext(js: string, say: string, beatParts: readonly string[], context: FilmContext): string[] {
+  const problems: string[] = [];
+  if (context.palette !== '') {
+    const colour = /#[0-9a-f]{3,8}\b/i.exec(js);
+    if (colour) problems.push(`uses a colour value "${colour[0]}"; the "${context.palette}" palette uses tones only`);
+  }
+  if (context.parts.length > 0) {
+    const canonical = new Map(context.parts.map((part) => [part.toLowerCase(), part]));
+    const registered = [...js.matchAll(/\.part\(\s*['"]([^'"]+)['"]/g)].map((match) => match[1]!);
+    for (const name of [...beatParts, ...registered]) {
+      const want = canonical.get(name.toLowerCase());
+      if (want !== undefined && want !== name) problems.push(`names "${name}"; the film calls it "${want}"`);
+    }
+  }
+  if (Object.keys(context.units).length > 0) {
+    for (const match of js.matchAll(/inc\.param\(\s*['"]([^'"]+)['"][\s\S]{0,400}?unit:\s*['"]([^'"]+)['"]/g)) {
+      const want = context.units[match[1]!];
+      if (want !== undefined && want !== match[2]) problems.push(`measures "${match[1]}" in "${match[2]}"; the film uses "${want}"`);
+    }
+  }
+  if (context.notation.toLowerCase() === 'si') {
+    const words = say.toLowerCase().split(/[^a-z]+/);
+    const imperial = IMPERIAL_WORDS.find((word) => words.includes(word));
+    if (imperial) problems.push(`says "${imperial}"; the film's SI notation never uses imperial words`);
+  }
+  if (context.tone.toLowerCase() === 'plain') {
+    const count = say.trim().split(/\s+/).filter((word) => word !== '').length;
+    if (count > FILM_PLAIN_TONE_MAX_WORDS) problems.push(`says ${count} words; the film's plain tone keeps lines under ${FILM_PLAIN_TONE_MAX_WORDS}`);
+    else if (say.includes(';')) problems.push('joins sentences with a semicolon; the film\'s plain tone keeps one idea per sentence');
+  }
+  return [...new Set(problems)];
 }
 
 /** Default text and chip colours, the theme's own fg and bg. */
@@ -176,6 +226,16 @@ function checkBeat(shared: SharedChecks, beatNumber: number): void {
     return;
   }
   checkBeatOnce(beat, fail);
+  const context = options.film.context;
+  if (context) {
+    const step = beat.step;
+    const parts = [step.focus, step.cam?.to, ...(step.show ?? []), ...(step.hide ?? []), ...(step.mark ?? []).map((mark) => mark.part)].filter(
+      (name): name is string => typeof name === 'string' && name !== '',
+    );
+    for (const problem of checkSceneContext(options.js?.[beat.sceneId] ?? '', step.say, parts, context)) {
+      fail({ check: 'context', scene: beat.sceneId, beat: beat.id, message: `Beat "${beat.id}" ${problem}` });
+    }
+  }
   const sceneStart = options.film.scenes.find((scene) => scene.id === beat.sceneId)!.start;
   const runtime = new SceneRuntime({ ...(input.kits ? { kits: input.kits } : {}), seed: options.seed ?? 1 });
   options.beforeStep?.();
