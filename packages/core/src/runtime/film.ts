@@ -453,14 +453,20 @@ export class FilmController {
   }
 
   /**
-   * Advances the film by wall seconds, ticking the runtime in film mode.
-   * Driver mode only; observer mode polls while the renderer ticks.
+   * Advances the film by wall seconds, ticking the runtime in film mode, and
+   * returns the frame: the tick's update plus whatever the crossed beats
+   * applied. Driver mode only; observer mode polls while the renderer ticks.
    */
-  tick(dt: number): void {
-    if (this.transport) return;
-    if (!this.playing) return;
-    this.runtime.tick(dt);
+  tick(dt: number): RuntimeUpdate {
+    if (this.transport) return { commands: [], ui: {}, needsFrame: false };
+    if (!this.playing) return { commands: [], ui: {}, needsFrame: false };
+    const first = this.runtime.tick(dt);
     this.scan();
+    const second = this.runtime.flush();
+    if (second.commands.length === 0 && Object.keys(second.ui).length === 0 && second.values === undefined && second.step === undefined && second.formulas === undefined && second.reset === undefined) {
+      return first;
+    }
+    return mergeUpdates([first, second]);
   }
 
   /** Applies whatever beats the clock has crossed. Observer mode calls this once per frame. */

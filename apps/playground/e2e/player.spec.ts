@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { expect, test, type Page } from '@playwright/test';
 import { SCENE_FIXTURES } from '../src/scene-fixtures';
 
@@ -602,4 +602,143 @@ test('export downloads a transcript of beat text only', async ({ page }) => {
       'A gentle push at just the right moment keeps it swinging.\n' +
       'Every swing takes the same time, so the pendulum keeps time.\n',
   );
+});
+
+async function openPlayerExport(page: Page, film: string): Promise<void> {
+  await page.request.get('/api/dev/films/clear');
+  await page.goto(`/?page=player&film=${film}&export-debug=1&reduced-motion=0`);
+  await page.waitForFunction(() => window.__playground?.ready === true);
+}
+
+interface ExportLast {
+  readonly url: string;
+  readonly width: number;
+  readonly height: number;
+  readonly fps: number;
+  readonly frames: number;
+  readonly seconds: number;
+  readonly codec: string;
+  readonly hasAudio: boolean;
+  readonly fallback: boolean;
+  readonly speed: number;
+}
+
+async function exportLast(page: Page): Promise<ExportLast | null> {
+  return page.evaluate(() => (window.__playground?.exportLast as () => ExportLast | null)());
+}
+
+async function exportCompare(page: Page, frame: number): Promise<number | null> {
+  return page.evaluate((at) => (window.__playground?.exportCompare as (frame: number) => Promise<number | null>)(at), frame);
+}
+
+async function runVideoExport(page: Page, selection: string, resolution: string): Promise<void> {
+  await page.locator('.inc-export > summary').click();
+  await page.locator('.inc-export-video-selection').selectOption(selection);
+  await page.locator('.inc-export-video-resolution').selectOption(resolution);
+  await page.locator('.inc-export-video-go').click();
+}
+
+test('video export renders the film to MP4 with progress and a download', async ({ page }) => {
+  test.setTimeout(240_000);
+  await openPlayerExport(page, 'thirty');
+  await runVideoExport(page, 'film', '480');
+  await expect(page.locator('.inc-export-video-status')).toContainText('Done', { timeout: 180_000 });
+  const last = await exportLast(page);
+  expect(last).not.toBeNull();
+  expect(last!.fallback).toBe(false);
+  expect(last!.fps).toBe(30);
+  expect(last!.width).toBe(720);
+  expect(last!.height).toBe(566);
+  expect(last!.frames).toBeGreaterThan(700);
+  expect(['H.264', 'VP9', 'VP8']).toContain(last!.codec);
+  console.log(`export thirty: ${last!.codec}${last!.hasAudio ? ' + AAC' : ', silent'} ${last!.frames} frames in ${last!.seconds.toFixed(1)} s of film at ${last!.speed.toFixed(1)}x realtime`);
+  await expect(page.locator('.inc-export-video-download')).toBeVisible();
+  const download = page.waitForEvent('download');
+  await page.locator('.inc-export-video-download').click();
+  const file = await download;
+  expect(file.suggestedFilename()).toBe('pendulum-v1-480p.mp4');
+  const path = await file.path();
+  expect(path).not.toBeNull();
+  const { size } = await stat(path!);
+  expect(size).toBeGreaterThan(10_000);
+});
+
+test('exported frames match live playback frames at the same timestamps', async ({ page }) => {
+  test.setTimeout(240_000);
+  await openPlayerExport(page, 'thirty');
+  await runVideoExport(page, 'film', '480');
+  await expect(page.locator('.inc-export-video-status')).toContainText('Done', { timeout: 180_000 });
+  const last = await exportLast(page);
+  expect(last).not.toBeNull();
+  // Mean absolute channel difference, 0 to 255: the same raster pipeline
+  // draws both, so only sub-pixel rounding may differ.
+  for (const frame of [0, Math.floor(last!.frames / 2), last!.frames - 1]) {
+    const diff = await exportCompare(page, frame);
+    expect(diff).not.toBeNull();
+    console.log(`export thirty frame ${frame}: mean channel diff ${diff!.toFixed(3)}`);
+    expect(diff!).toBeLessThanOrEqual(1);
+  }
+});
+
+test('the exported MP4 plays back at the film length', async ({ page }) => {
+  test.setTimeout(240_000);
+  await openPlayerExport(page, 'thirty');
+  await runVideoExport(page, 'film', '480');
+  await expect(page.locator('.inc-export-video-status')).toContainText('Done', { timeout: 180_000 });
+  const last = await exportLast(page);
+  expect(last).not.toBeNull();
+  const probe = await page.evaluate(async (url) => {
+    const video = document.createElement('video');
+    video.muted = true;
+    video.preload = 'metadata';
+    video.src = url;
+    await new Promise<void>((resolve, reject) => {
+      video.onloadedmetadata = () => resolve();
+      video.onerror = () => reject(new Error('the export did not load as video'));
+    });
+    return { width: video.videoWidth, height: video.videoHeight, duration: video.duration };
+  }, last!.url);
+  expect(probe.width).toBe(last!.width);
+  expect(probe.height).toBe(last!.height);
+  expect(probe.duration).toBeCloseTo(last!.seconds, 0);
+});
+
+test('video export renders the sixty-second film', async ({ page }) => {
+  test.setTimeout(300_000);
+  await openPlayerExport(page, 'sixty');
+  await runVideoExport(page, 'film', '480');
+  await expect(page.locator('.inc-export-video-status')).toContainText('Done', { timeout: 240_000 });
+  const last = await exportLast(page);
+  expect(last).not.toBeNull();
+  expect(last!.fallback).toBe(false);
+  expect(last!.frames).toBeGreaterThan(1000);
+  console.log(`export sixty: ${last!.codec}${last!.hasAudio ? ' + AAC' : ', silent'} ${last!.frames} frames in ${last!.seconds.toFixed(1)} s of film at ${last!.speed.toFixed(1)}x realtime`);
+  const diff = await exportCompare(page, Math.floor(last!.frames / 2));
+  expect(diff).not.toBeNull();
+  expect(diff!).toBeLessThanOrEqual(1);
+});
+
+test('cancelling a video export stops it', async ({ page }) => {
+  test.setTimeout(240_000);
+  await openPlayerExport(page, 'thirty');
+  await runVideoExport(page, 'film', '720');
+  await page.locator('.inc-export-video-cancel').click();
+  await expect(page.locator('.inc-export-video-status')).toContainText('Cancelled', { timeout: 30_000 });
+  await expect(page.locator('.inc-export-video-download')).toBeHidden();
+});
+
+test('without WebCodecs the export labels its realtime fallback', async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.addInitScript(() => {
+    const view = window as unknown as Record<string, unknown>;
+    delete view.VideoEncoder;
+    delete view.AudioEncoder;
+  });
+  await page.request.get('/api/dev/films/clear');
+  await page.goto('/?page=player&film=thirty&reduced-motion=0');
+  await page.waitForFunction(() => window.__playground?.ready === true);
+  await runVideoExport(page, 'film', '480');
+  await expect(page.locator('.inc-export-video-status')).toContainText('fallback', { timeout: 30_000 });
+  await page.locator('.inc-export-video-cancel').click();
+  await expect(page.locator('.inc-export-video-status')).toContainText('Cancelled', { timeout: 30_000 });
 });
