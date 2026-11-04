@@ -57,7 +57,7 @@ export {
   FILM_SCENE_MAX_SECONDS,
   FILM_WORDS_PER_SECOND,
 } from './film/storyboard';
-export type { BeatAudio, CompiledBeat, CompiledFilm, CompiledFilmResult, CompiledScene, FilmAnchor, FilmContext, FilmDiagnostic, FilmSceneSource, SourceMapEntry, StoryboardBeat, StoryboardScene, StoryboardSpec } from './film/storyboard';
+export type { BeatAudio, CompiledBeat, CompiledFilm, CompiledFilmResult, CompiledScene, FilmAdvance, FilmAnchor, FilmContext, FilmDiagnostic, FilmSceneSource, SourceMapEntry, StoryboardBeat, StoryboardScene, StoryboardSpec } from './film/storyboard';
 export { fallbackWidth, fontsReady, measureFilmText, solveCallouts, solveCaption, titleCardRect, wrapText, CAPTION_MAX_LINES, CAPTION_MIN_PX, CAPTION_MIN_STAGE_SHARE, FILM_FONT_STACK, SAFE_MARGIN_SHARE } from './film/solver';
 export type { CalloutInput, CalloutPlacement, CalloutRequest, CaptionInput, CaptionLayout, MeasureText } from './film/solver';
 export { checkSceneContext, contrastRatio, luminance, probeFilm, probeFilmAsync, FILM_CONTRAST_MIN, FILM_PLAIN_TONE_MAX_WORDS, FILM_TOKENS } from './film/checks';
@@ -100,10 +100,13 @@ export {
   exportFrameSize,
   exportStepsPerFrame,
   exportSyncReport,
+  exportSlideFilename,
   exportTimelineFallback,
   exportTimelineMp4,
   exportVideoFilename,
+  planDeckSlides,
   planExportFilm,
+  renderDeckSlides,
   renderExportChunk,
   resampleMono16,
   sanitizeExportFilenameSegment,
@@ -122,6 +125,8 @@ export {
 } from './film/export';
 export type {
   AssembledExportAudio,
+  DeckSlide,
+  DeckSlideRef,
   ExportAudioSink,
   ExportCaptureSession,
   ExportDrivers,

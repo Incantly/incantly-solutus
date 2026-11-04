@@ -1384,7 +1384,8 @@ main.style-page {
 .inc-player[data-hideCaptions] .inc-caption,
 .inc-player[data-hideTranscript] .inc-transcript,
 .inc-player[data-hideChapters] .inc-chapters,
-.inc-player[data-hideTimeline] .inc-timeline { display: none; }
+.inc-player[data-hideTimeline] .inc-timeline,
+.inc-player[data-hideDeck] .inc-deck { display: none; }
 .inc-player-figure { position: relative; }
 .inc-player-card {
   position: absolute; top: 5%; left: 10%; right: 10%; padding: 10px 14px;

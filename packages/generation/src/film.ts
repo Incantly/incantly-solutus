@@ -242,7 +242,7 @@ export function validateStoryboard(input: unknown, lengthTarget?: number): Story
     problems.push(`The scenes' duration shares sum to ${shares.reduce((sum, share) => sum + share, 0).toFixed(2)}, not 1`);
   }
   if (problems.length > 0) return { ok: false, storyboard: null, problems };
-  const film = input.film as { title: string; id?: unknown; version?: unknown; lengthTarget?: unknown };
+  const film = input.film as { title: string; id?: unknown; version?: unknown; lengthTarget?: unknown; advance?: unknown };
   return {
     ok: true,
     storyboard: {
@@ -250,6 +250,7 @@ export function validateStoryboard(input: unknown, lengthTarget?: number): Story
         ...(typeof film.id === 'string' && film.id.trim() !== '' ? { id: film.id.trim().slice(0, 80) } : {}),
         title: film.title.trim().slice(0, 300),
         ...(typeof film.version === 'number' && Number.isInteger(film.version) && film.version > 0 ? { version: film.version } : {}),
+        ...(film.advance === 'time' || film.advance === 'click' ? { advance: film.advance } : {}),
         lengthTarget: target,
         ...(isRecord(context)
           ? {
