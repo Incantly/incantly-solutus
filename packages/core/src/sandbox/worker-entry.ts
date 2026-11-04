@@ -133,7 +133,8 @@ function handle(message: RendererMessage): void {
     return;
   }
   fuel.refuel();
-  const update = handleRendererMessage(runtime, message);
+  // A seek replays up to 3,600 steps inside one call; each step refuels, so fuel never stops a long seek.
+  const update = handleRendererMessage(runtime, message, { beforeStep: fuel.refuel });
   if (update) post({ type: 'update', update });
 }
 

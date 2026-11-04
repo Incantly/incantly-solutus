@@ -27,6 +27,8 @@ export type RendererMessage =
   | { readonly type: 'pause' }
   | { readonly type: 'restart' }
   | { readonly type: 'reset' }
+  /** Films only: restart and replay to this many seconds of scene time (FV-1). */
+  | { readonly type: 'seek'; readonly seconds: number }
   | { readonly type: 'speed'; readonly value: number }
   | { readonly type: 'visible'; readonly value: boolean }
   | { readonly type: 'reducedMotion'; readonly value: boolean }

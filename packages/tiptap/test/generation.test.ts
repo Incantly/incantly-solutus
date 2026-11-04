@@ -42,6 +42,7 @@ class FakeFigure implements FigureHandle {
   setValues() {}
   restore() {}
   setReducedMotion() {}
+  seek() {}
   setStyle() {}
   setTheme() {}
   setNumber() {}

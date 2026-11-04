@@ -1,5 +1,5 @@
 import type { RendererMessage, RuntimeUpdate } from '../protocol/runtime-messages';
-import type { SceneFunction, SceneRuntime } from '../runtime/runtime';
+import type { SceneFunction, SceneRuntime, SeekOptions } from '../runtime/runtime';
 
 /** How a renderer talks to a scene runtime, in the same thread or across a Worker boundary. */
 export interface RuntimeChannel {
@@ -13,6 +13,7 @@ const TOUCHES: ReadonlySet<RendererMessage['type']> = new Set<RendererMessage['t
   'pause',
   'restart',
   'reset',
+  'seek',
   'speed',
   'step',
   'drag',
@@ -31,8 +32,9 @@ const TOUCHES: ReadonlySet<RendererMessage['type']> = new Set<RendererMessage['t
 /**
  * Applies one renderer message to a runtime and returns the resulting update.
  * Shared by the in-thread channel and the Worker entry, so both behave alike.
+ * The Worker passes its refuel hook so a seek refuels every replayed step.
  */
-export function handleRendererMessage(runtime: SceneRuntime, message: RendererMessage): RuntimeUpdate | null {
+export function handleRendererMessage(runtime: SceneRuntime, message: RendererMessage, hooks: SeekOptions = {}): RuntimeUpdate | null {
   // Anything the learner does ends the idle tour; ticks, visibility and pointing do not.
   if (TOUCHES.has(message.type)) runtime.touched();
   switch (message.type) {
@@ -54,6 +56,8 @@ export function handleRendererMessage(runtime: SceneRuntime, message: RendererMe
       return runtime.restart();
     case 'reset':
       return runtime.reset();
+    case 'seek':
+      return runtime.seek(message.seconds, hooks);
     case 'speed':
       runtime.setSpeed(message.value);
       break;

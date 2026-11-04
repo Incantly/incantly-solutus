@@ -16,6 +16,34 @@ export type { CompiledExpression } from './expr';
 
 export { SceneRuntime } from './runtime/runtime';
 export type { RuntimeOptions, RuntimeStats, SceneErrorRecord, SceneFunction, SeekOptions } from './runtime/runtime';
+export { FilmController, applyBeatCues, applyShowHide, beatTitle, cueSfx, framePart, isPausePoint, partBox, partBoxes, sfxNames, SFX_CUES } from './runtime/film';
+export type { AppliedCues, AskContext, FilmChapter, FilmControllerOptions, FilmEvent, FilmTransport, FramingIntent, TranscriptLine } from './runtime/film';
+export {
+  anchorFor,
+  attachAudio,
+  compileFilm,
+  countWords,
+  estimateBeatSeconds,
+  resolveAnchor,
+  splitWords,
+  wordStarts,
+  FILM_BEAT_HOLD_SECONDS,
+  FILM_BEAT_MAX_SECONDS,
+  FILM_BEAT_MIN_SECONDS,
+  FILM_MAX_DIAGNOSTICS,
+  FILM_MAX_SCENES,
+  FILM_READING_WPS_LIMIT,
+  FILM_WORDS_PER_SECOND,
+} from './film/storyboard';
+export type { BeatAudio, CompiledBeat, CompiledFilm, CompiledFilmResult, CompiledScene, FilmAnchor, FilmDiagnostic, FilmSceneSource, SourceMapEntry, StoryboardBeat, StoryboardScene, StoryboardSpec } from './film/storyboard';
+export { fallbackWidth, fontsReady, measureFilmText, solveCallouts, solveCaption, titleCardRect, wrapText, CAPTION_MAX_LINES, CAPTION_MIN_PX, CAPTION_MIN_STAGE_SHARE, FILM_FONT_STACK, SAFE_MARGIN_SHARE } from './film/solver';
+export type { CalloutInput, CalloutPlacement, CalloutRequest, CaptionInput, CaptionLayout, MeasureText } from './film/solver';
+export { contrastRatio, luminance, probeFilm, probeFilmAsync, FILM_CONTRAST_MIN, FILM_TOKENS } from './film/checks';
+export type { FilmCheck, FilmFailure, FilmPoint, FilmReport, FilmReportStats, FilmSceneInput, FilmTheme, FilmTokens, ProbeFilmOptions } from './film/checks';
+export { PlayerModel, CAPTION_SCALES, TIMELINE_WORD_TICKS_PER_BEAT } from './film/player';
+export type { CaptionSize, PlayerCaption, PlayerEvent, PlayerState } from './film/player';
+export { FILM_FIXTURES, SIXTY_SECOND_FILM, THIRTY_SECOND_FILM } from './film/fixtures';
+export type { FilmFixture, FilmFixtureScene } from './film/fixtures';
 export { KIT_NAMES, KIT_OF, kitsFor } from './runtime/kits';
 export type { KitCall, KitEntry, KitModule, KitName, KitRegistry } from './runtime/kits';
 export { availableKits, loadKitModules } from './kits/load';
@@ -34,7 +62,7 @@ export type { Fragments, MountedFigure, TrustedMountOptions } from './engine/mou
 export { FigureRenderer } from './renderer/renderer';
 export type { RendererOptions } from './renderer/renderer';
 export { THEME_CSS } from './renderer/theme';
-export { STYLE_SLOTS, checkStyle, mergeStyles, resolveStyle } from './renderer/style';
+export { STYLE_SLOTS, applySlotClasses, applyStyle, checkStyle, clearStyle, mergeStyles, resolveStyle } from './renderer/style';
 export type { ControlsPlacement, FigureLayout, FigureStyle, ShowPart, StylePreset, StyleSlot } from './renderer/style';
 
 export { fixScene, validateScene, validateSceneCss, validateSceneHtml, validateSceneJs, formatDiagnostic, hasErrors, SCENE_LIMITS, VALIDATOR_VERSION } from './validation';

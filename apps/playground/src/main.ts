@@ -4,6 +4,7 @@ import { mountGalleryPage } from './gallery-page';
 import { mountGeneratePage } from './generate-page';
 import { mountGenerationsPage } from './generations-page';
 import { mountNotePage } from './note-page';
+import { mountPlayerPage } from './player-page';
 import { mountAttackPage, mountComparePage, mountSandboxPage } from './sandbox-page';
 import { mountScenePage } from './scene-page';
 import { mountStylePage } from './style-page';
@@ -13,6 +14,7 @@ const pages: Record<string, (root: HTMLElement, params: URLSearchParams) => void
   generate: mountGeneratePage,
   generations: (root) => mountGenerationsPage(root),
   note: mountNotePage,
+  player: mountPlayerPage,
   scene: mountScenePage,
   sandbox: mountSandboxPage,
   compare: mountComparePage,

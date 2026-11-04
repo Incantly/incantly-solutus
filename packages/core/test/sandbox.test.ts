@@ -38,6 +38,9 @@ describe('bridge messages', () => {
     expect(parseHostMessage(envelope({ type: 'number', figureNumber: 3 }), CHANNEL)).not.toBeNull();
     expect(parseHostMessage(envelope({ type: 'number', figureNumber: null }), CHANNEL)).not.toBeNull();
     expect(parseHostMessage(envelope({ type: 'number', figureNumber: 2.5 }), CHANNEL)).toBeNull();
+    expect(parseHostMessage(envelope({ type: 'seek', seconds: 12.5 }), CHANNEL)).not.toBeNull();
+    expect(parseHostMessage(envelope({ type: 'seek', seconds: '12' }), CHANNEL)).toBeNull();
+    expect(parseHostMessage(envelope({ type: 'seek', seconds: Number.NaN }), CHANNEL)).toBeNull();
   });
 
   it('checks the shape of each frame message', () => {
@@ -76,6 +79,7 @@ describe('bridge messages', () => {
       'ping',
       'reducedMotion',
       'resume',
+      'seek',
       'setValues',
       'snapshot',
       'step',
@@ -240,8 +244,8 @@ describe('content security policy', () => {
     expect(FRAME_SCRIPT).not.toMatch(/<\/script|<script|<!--/i);
     // The parser stays on the host: the frame and Worker never validate.
     expect(WORKER_SCRIPT).not.toContain('acorn');
-    // The base runtime with the small general helpers, fluids, the table of every handle and the film clock; domain kits load on demand.
-    expect(WORKER_SCRIPT.length).toBeLessThan(154_000);
+    // The base runtime with the small general helpers, fluids, the table of every handle, the film clock and the beat cues with seek transport; domain kits load on demand.
+    expect(WORKER_SCRIPT.length).toBeLessThan(156_000);
     expect(WORKER_SCRIPT).not.toContain('phosphorus');
   });
 });

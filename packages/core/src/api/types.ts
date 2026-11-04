@@ -148,6 +148,70 @@ export interface Step {
   readonly flat?: boolean;
 }
 
+/** How one scene ends and the next begins. */
+export type SceneCut = 'cut' | 'fade' | 'wipe' | 'push';
+
+/** A camera move to a part, eased; the next beat returns to wide unless it sets its own. */
+export interface BeatCam {
+  /** Part to frame. */
+  readonly to?: string;
+  /** Zoom factor about the part; 1 keeps the wide view. */
+  readonly zoom?: number;
+}
+
+/** One emphasis on a part: a pulse of its highlight, a draw-on, an arrow, a callout, or dimming the rest. */
+export interface BeatMark {
+  readonly type: 'pulse' | 'draw' | 'arrow' | 'callout' | 'dim';
+  /** Part to emphasize; annotation parts are drawn by the scene, hidden, and brought in by the beat. */
+  readonly part: string;
+}
+
+/** A title card over the drawing, or a lower third in the caption band. */
+export interface BeatTitle {
+  readonly text: string;
+  /** Default 'lower'. */
+  readonly kind?: 'card' | 'lower';
+}
+
+/** Pause and invite the learner to try a control, then resume the film. */
+export interface BeatExplore {
+  /** Control the learner is invited to change. */
+  readonly control: string;
+  /** Short invitation shown beside the drawing. */
+  readonly hint?: string;
+}
+
+/**
+ * One narrated beat of a film: a step with cues. The scene names what it
+ * wants on each beat (say this line, zoom to this part, pulse that one);
+ * the engine does the timing, camera, captions and audio. Every field is
+ * optional and additive over Step, so a beat is still a step.
+ */
+export interface Beat extends Step {
+  /** Stable id within the film, such as `s1b1`; the storyboard and anchors use it. */
+  readonly id?: string;
+  /** Seconds over which `set` moves; default is the step transition. */
+  readonly ease?: number;
+  /** Camera move to a part, eased. */
+  readonly cam?: BeatCam;
+  /** Parts brought in on this beat. */
+  readonly show?: readonly string[];
+  /** Parts taken out on this beat. */
+  readonly hide?: readonly string[];
+  /** Emphasis on parts, at most one moving at a time. */
+  readonly mark?: readonly BeatMark[];
+  /** Title card or lower third, placed by the layout solver. */
+  readonly title?: string | BeatTitle;
+  /** Short on-screen text for titles and callouts. */
+  readonly short?: string;
+  /** Named cue from the sound kit, such as `arrive` or `chime`. */
+  readonly sfx?: string;
+  /** Pause and invite the learner to try a control. */
+  readonly explore?: BeatExplore;
+  /** A prediction question that waits for the learner. */
+  readonly predict?: PredictOptions;
+}
+
 /** Ask before revealing: the learner picks an answer, then the figure shows what happens. Never scored. */
 export interface PredictOptions {
   readonly question: string;

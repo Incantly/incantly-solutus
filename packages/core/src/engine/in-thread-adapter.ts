@@ -80,6 +80,7 @@ export function mountInThread(container: HTMLElement, fragments: SceneFragments,
       }
     },
     setReducedMotion: (value) => figure?.renderer.send({ type: 'reducedMotion', value }),
+    seek: (seconds) => figure?.renderer.send({ type: 'seek', seconds }),
     setStyle: (style) => figure?.setStyle(style),
     setTheme: (theme) => figure?.setTheme(theme),
     setNumber: (figureNumber) => figure?.renderer.setNumber(figureNumber),

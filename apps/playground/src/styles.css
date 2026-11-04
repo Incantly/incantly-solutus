@@ -1375,3 +1375,63 @@ main.style-page {
   font-size: 0.85rem;
   color: var(--text-muted, #6b7280);
 }
+
+/* The film player (?page=player): chrome over a figure, in FigureStyle slots. */
+.inc-player { display: flex; flex-direction: column; gap: 12px; max-width: 960px; margin: 0 auto; padding: 16px 16px 96px; }
+.inc-player h2 { margin: 0; font-size: 1.2rem; }
+.inc-player h3 { margin: 0 0 6px; font-size: 0.95rem; }
+/* Show flags hide chrome parts, through the same dataset convention as figures. */
+.inc-player[data-hideCaptions] .inc-caption,
+.inc-player[data-hideTranscript] .inc-transcript,
+.inc-player[data-hideChapters] .inc-chapters,
+.inc-player[data-hideTimeline] .inc-timeline { display: none; }
+.inc-player-figure { position: relative; }
+.inc-player-card {
+  position: absolute; top: 5%; left: 10%; right: 10%; padding: 10px 14px;
+  background: var(--inc-bg, Canvas); color: var(--inc-fg, CanvasText);
+  border: 1px solid var(--border-color); border-radius: 10px;
+  font-weight: 600; text-align: center; pointer-events: none;
+}
+.inc-caption {
+  margin: 0; padding: 10px 12px; min-height: 3.2em;
+  background: var(--inc-card, var(--input-bg)); border: 1px solid var(--border-color);
+  border-radius: 10px; line-height: 1.35;
+}
+.inc-player-transport { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.inc-player-transport input[type='range'] { flex: 1 1 120px; min-width: 80px; }
+.inc-player-time { font-variant-numeric: tabular-nums; font-size: 0.85rem; white-space: nowrap; }
+.inc-player-thumbs { display: flex; gap: 8px; }
+.inc-player-thumb { flex: 1 1 0; min-width: 0; padding: 2px; border: 1px solid var(--border-color); border-radius: 8px; background: Canvas; cursor: pointer; }
+.inc-player-thumb svg { display: block; width: 100%; height: auto; border-radius: 6px; }
+.inc-transcript ol, .inc-chapters ul { margin: 0; padding-left: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; max-height: 220px; overflow: auto; }
+.inc-transcript li { padding: 4px 8px; border-radius: 8px; font-size: 0.9rem; }
+.inc-transcript li.is-active { background: var(--active-bg); font-weight: 600; }
+.inc-transcript input[type='search'] { width: 100%; margin-bottom: 6px; padding: 6px 8px; }
+.inc-timeline-lane { display: flex; gap: 8px; align-items: stretch; margin-bottom: 4px; }
+.inc-timeline-tag { flex: 0 0 88px; font-size: 0.75rem; color: var(--text-muted, #6b7280); padding-top: 4px; }
+.inc-timeline-track { position: relative; flex: 1 1 auto; min-height: 26px; background: var(--input-bg); border-radius: 6px; }
+.inc-timeline-clip {
+  position: absolute; top: 2px; bottom: 2px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  font-size: 0.72rem; border: 1px solid var(--border-color); border-radius: 5px; background: Canvas; cursor: pointer;
+}
+.inc-timeline-clip.is-active { outline: 2px solid var(--inc-focus, #1971c2); }
+.inc-timeline-clip.is-failing { border-color: #c92a2a; }
+.inc-timeline-pin { position: absolute; top: 2px; background: none; border: none; cursor: pointer; font-size: 0.8rem; }
+.inc-timeline-tick { position: absolute; top: 4px; bottom: 4px; width: 2px; background: CanvasText; opacity: 0.55; }
+.inc-timeline-cue {
+  position: absolute; top: 2px; font-size: 0.72rem; white-space: nowrap;
+  background: none; border: none; cursor: pointer; color: var(--text-muted, #6b7280); padding: 0;
+}
+.inc-timeline-playhead { position: absolute; top: 0; bottom: 0; width: 2px; background: #d9480f; pointer-events: none; }
+.inc-timeline-checks { font-size: 0.85rem; margin: 6px 0 0; }
+.inc-player-inspector dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; margin: 0; font-size: 0.85rem; }
+.inc-player-inspector dt { color: var(--text-muted, #6b7280); }
+.inc-player-inspector dd { margin: 0; overflow-wrap: anywhere; }
+.inc-player-badges { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.inc-player-badge { font-size: 0.8rem; padding: 2px 10px; border: 1px solid var(--border-color); border-radius: 999px; }
+.inc-player-badge[data-state='pass'] { border-color: #2b8a3e; }
+.inc-player-badge[data-state='fail'] { border-color: #c92a2a; }
+.inc-player-failures { font-size: 0.82rem; flex-basis: 100%; }
+/* A pulse mark beats the focus highlight while its beat plays. */
+.inc-player[data-mark='pulse'] .inc-stage .is-focus { animation: inc-pulse 1s ease-in-out infinite; }
+@keyframes inc-pulse { 50% { opacity: 0.35; } }
