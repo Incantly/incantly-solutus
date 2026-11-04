@@ -406,6 +406,8 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
   // token; pins only, never scene state.
   const askerStore = new PrivateInsertStore(memoryLocalStorage());
   let askerId = 'playground-learner';
+  // The Export section's insert selector, re-synced whenever inserts change; set once Export is built below.
+  let syncExportInserts: (() => void) | null = null;
   void devToken()
     .then((token) => {
       askerId = token.split('.')[0] || 'playground-learner';
@@ -430,6 +432,7 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
       };
       askerStore.save(askerId, stored);
       insertsUi.refresh();
+      syncExportInserts?.();
       // The service keeps the asker's own copy; a failure still leaves the local one.
       void (async () => {
         try {
@@ -503,6 +506,7 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
       const body = (await listed.json()) as { inserts?: Array<{ id: string; anchor: unknown; lines: unknown; askedAt: number }> };
       for (const entry of body.inserts ?? []) askerStore.save(askerId, entry);
       insertsUi.refresh();
+      syncExportInserts?.();
     } catch {
       // Local only.
     }
@@ -530,7 +534,7 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
   // The slide export keeps the last run's filenames, for the page's own
   // confirmation and the e2e suite: one still per beat, as a set.
   const slideDebug: { last: string[] | null } = { last: null };
-  buildExport(
+  const exportUi = buildExport(
     player,
     {
       inserts: () => askerStore.list(askerId, film.id),
@@ -563,6 +567,7 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
       debugFrames: params.get('export-debug') === '1',
     },
   );
+  syncExportInserts = exportUi.syncInserts;
 
   bindShortcuts({
     playPause: () => model.toggle(),
@@ -1208,7 +1213,7 @@ function buildExport(
   sources: { film(): CompiledFilm; inserts(): readonly StoredInsert[] },
   slides: { last: string[] | null },
   video: ExportVideoSources,
-): void {
+): { syncInserts(): void } {
   const wrap = document.createElement('details');
   wrap.className = 'inc-export';
   const summary = document.createElement('summary');
@@ -1278,6 +1283,9 @@ function buildExport(
   buildExportVideo(wrap, sources, select, video);
   buildExportSlides(wrap, sources, select, video, slides);
   player.append(wrap);
+  // Inserts created while Export is open re-sync the selector at once, instead
+  // of waiting for the next section toggle.
+  return { syncInserts: syncOptions };
 }
 
 const EXPORT_VIDEO_CODEC_NAMES: Readonly<Record<string, string>> = { avc: 'H.264', vp09: 'VP9', vp08: 'VP8' };
@@ -1630,7 +1638,14 @@ function buildExportSlides(
       return;
     }
     const plan = planned.plan;
-    const refs = planDeckSlides(plan);
+    let refs: ReturnType<typeof planDeckSlides>;
+    try {
+      refs = planDeckSlides(plan);
+    } catch (error) {
+      // Over-long decks are refused before any frame renders, as over-long videos are.
+      status.textContent = error instanceof Error ? error.message : 'The deck is too long to export as slides.';
+      return;
+    }
     const byScene = new Map(inputs.map((scene) => [scene.id, scene]));
     const wanted = new Map<number, Map<number, (typeof refs)[number]>>();
     for (const ref of refs) {

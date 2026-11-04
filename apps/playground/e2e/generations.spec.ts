@@ -1,0 +1,90 @@
+import { expect, test, type Page } from '@playwright/test';
+
+/**
+ * The Gallery of generations: films are searchable, open their intended
+ * prompt, and keep their acceptance cards. The three figure acceptance cards
+ * stay searchable and open their intended prompts too (AGENTS.md regression:
+ * full generation of those cards needs a real model session, which this
+ * suite never spends — it checks the cards reach the chat with the exact
+ * prompt instead).
+ */
+
+interface GalleryCard {
+  readonly title: string;
+  readonly tag: string;
+  readonly prompt: string;
+  readonly sceneId: string | null;
+  readonly playerFilm: string | null;
+}
+
+async function cards(page: Page): Promise<GalleryCard[]> {
+  return page.evaluate(() => (window.__playground?.cards as GalleryCard[] | undefined) ?? []);
+}
+
+async function openGallery(page: Page): Promise<void> {
+  await page.goto('/?page=generations');
+  await page.waitForFunction(() => window.__playground?.ready === true);
+}
+
+const FILMS = [
+  { title: 'How a pendulum keeps time', tag: 'Film · 30 s', prompt: 'Show me a 30-second film about how a pendulum keeps time.', film: 'thirty' },
+  { title: 'What a wave carries', tag: 'Film · 1 min', prompt: 'Show me a one-minute film about what a wave carries.', film: 'sixty' },
+] as const;
+
+const ACCEPTANCE = [
+  { title: 'Meshing gears', prompt: 'Show me two gears meshing: a small gear driving a big one. How does the number of teeth change how fast each one turns?' },
+  {
+    title: 'Forces on a ramp',
+    prompt: 'Show me the forces on a block on a ramp: its weight, the normal force and friction as arrows, and how tilting the ramp changes them.',
+  },
+  {
+    title: 'Area under a curve',
+    prompt: 'Show me how rectangles under a curve add up to its area, and how the estimate gets closer as I use more rectangles.',
+  },
+] as const;
+
+test('film cards are searchable and open their intended prompt in the player', async ({ page }) => {
+  await openGallery(page);
+  for (const film of FILMS) {
+    expect(await cards(page)).toContainEqual(expect.objectContaining({ title: film.title, tag: film.tag, prompt: film.prompt, playerFilm: film.film }));
+  }
+
+  // The tag narrows to the one film; a bare 'pendulum' would also match the reviewed pendulum figure.
+  await page.getByLabel('Search generations').fill('Film · 30 s');
+  await expect(page.locator('.gallery-card:not([hidden])')).toHaveCount(1);
+  await expect(page.locator('.gallery-card:not([hidden]) .gallery-card__title')).toHaveText('How a pendulum keeps time');
+
+  await page.locator('.gallery-card:not([hidden])').click();
+  await expect(page.locator('.gallery-detail__title')).toHaveText('How a pendulum keeps time');
+  await expect(page.locator('.gallery-detail__prompt')).toHaveText('Show me a 30-second film about how a pendulum keeps time.');
+  await expect(page.locator('.gallery-detail__generate')).toHaveText('Open in player');
+
+  await page.locator('.gallery-detail__generate').click();
+  await page.waitForURL((url) => url.searchParams.get('page') === 'player' && url.searchParams.get('film') === 'thirty');
+  await page.waitForFunction(() => window.__playground?.ready === true);
+  await expect(page.locator('.inc-player h2')).toHaveText('How a pendulum keeps time');
+});
+
+test('a film tag search keeps both films and hides the figures', async ({ page }) => {
+  await openGallery(page);
+  await page.getByLabel('Search generations').fill('Film ·');
+  const visible = page.locator('.gallery-card:not([hidden]) .gallery-card__title');
+  await expect(visible).toHaveCount(2);
+  await expect(visible.first()).toHaveText('How a pendulum keeps time');
+  await expect(visible.nth(1)).toHaveText('What a wave carries');
+});
+
+for (const card of ACCEPTANCE) {
+  test(`acceptance card still opens its intended prompt: ${card.title}`, async ({ page }) => {
+    await openGallery(page);
+    expect(await cards(page)).toContainEqual(expect.objectContaining({ title: card.title, prompt: card.prompt, playerFilm: null }));
+    await page.getByLabel('Search generations').fill(card.title);
+    await expect(page.locator('.gallery-card:not([hidden])')).toHaveCount(1);
+    await page.locator('.gallery-card:not([hidden])').click();
+    await expect(page.locator('.gallery-detail__title')).toHaveText(card.title);
+    await expect(page.locator('.gallery-detail__prompt')).toHaveText(card.prompt);
+    await expect(page.locator('.gallery-detail__generate')).toHaveText('Generate in chat');
+    await page.locator('.gallery-detail__generate').click();
+    await page.waitForURL((url) => url.searchParams.get('page') === 'generate' && url.searchParams.get('prompt') === card.prompt);
+  });
+}

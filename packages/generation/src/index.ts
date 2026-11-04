@@ -90,6 +90,14 @@ export type { GalleryEntry, GalleryStore } from './gallery';
 export type { GalleryCard, GalleryFigure, GalleryReceipt, GalleryStatus, GallerySubmission } from './protocol';
 export { FileFilmLibraryStore, FilmLibrary, MemoryFilmLibraryStore, filmAskerOf, versionSummary } from './film-library';
 export type { FilmInsertEntry, FilmLibraryStore, FilmVersionEntry, FilmVersionSummary } from './film-library';
+export { FILM_REFERENCE_CONTEXT, filmReferenceModel, filmReferenceSceneJs, filmReferenceSceneReply } from './film-reference';
+export type { FilmReferenceOptions } from './film-reference';
+export { loadFilmEvalPrompts } from './film-eval-prompts';
+export type { FilmEvalConcept, FilmEvalPromptSet } from './film-eval-prompts';
+export { checkFilmExpectations, filmSummaryMarkdown, planFilmTrials, recheckFilm, runFilmEvals, summarizeFilmEvals } from './film-evals';
+export type { FilmEvalOptions, FilmEvalSummary, FilmGroupSummary, FilmTrialResult } from './film-evals';
+export { FILM_MODEL_ALLOWANCE_MS, FILM_SEEK_LIMIT_MS, deriveFilmCaps, filmBenchMarkdown, runFilmBench } from './film-bench';
+export type { FilmBenchAnswer, FilmBenchCaps, FilmBenchDeadlineFit, FilmBenchExport, FilmBenchLengthLine, FilmBenchOptions, FilmBenchReport, FilmBenchSeek, FilmBenchSpeech } from './film-bench';
 export type { FilmInsertsResponse, FilmInsertMessage, FilmVersionResponse, FilmVersionsResponse, FilmVersionSummaryMessage, PromoteRequest, PromoteResponse } from './protocol';
 export type { TicketFragments } from './ticket';
 export {

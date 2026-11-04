@@ -6,6 +6,8 @@ import {
   compileFilm,
   compileTrusted,
   ExportCancellation,
+  ExportCancelledError,
+  EXPORT_DECK_MAX_SECONDS,
   exportFrameSize,
   exportSlideFilename,
   exportStepsPerFrame,
@@ -448,6 +450,33 @@ describe('film deck: one still per beat', () => {
     expect(fat.length).toBeLessThanOrEqual(EXPORT_FILENAME_MAX_CHARS);
     expect(fat.endsWith('.png')).toBe(true);
     expect(exportSlideFilename('pendulum', 1, null, 2, 6, 's1b2')).toBe('pendulum-v1-slide-02-s1b2.png');
+  });
+});
+
+describe('film deck: slide export refuses runaway timelines', () => {
+  // A ~2000 s film would plan ~200 slides over ~60k frames; only the plan's
+  // length matters to the refusal, which lands before any frame renders.
+  const runaway = { seconds: 2000, fps: 30, chunks: [], frames: 0, timeline: {} } as never;
+
+  it('refuses to plan slides past the deck cap', () => {
+    expect(EXPORT_DECK_MAX_SECONDS).toBe(600);
+    expect(() => planDeckSlides(runaway)).toThrow('The deck runs 2000 seconds of slides; at most 600');
+  });
+
+  it('refuses to render slides past the deck cap, before the first frame', () => {
+    const cancel = new ExportCancellation();
+    expect(() => [...renderDeckSlides(runaway, [], cancel)]).toThrow('The deck runs 2000 seconds of slides; at most 600');
+    expect(cancel.cancelled).toBe(false);
+  });
+
+  it('keeps cooperative cancellation on plans within the cap', async () => {
+    const { film, scenes } = await compileThirty({ advance: 'click' });
+    const inputs = toInputs(scenes);
+    const planned = planExportFilm(film, flattenFilm(film), inputs, {});
+    if (!planned.ok) throw new Error('no plan');
+    const cancel = new ExportCancellation();
+    cancel.cancel();
+    expect(() => [...renderDeckSlides(planned.plan, inputs, cancel)]).toThrow(ExportCancelledError);
   });
 });
 

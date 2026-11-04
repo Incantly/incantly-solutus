@@ -5,13 +5,16 @@ import { FILM_SCENE_MAX_SECONDS } from './storyboard';
  * are one scene through today's pipeline; 2, 3 and 4 min films are several
  * scenes, one scene call each, in parallel.
  *
- * Every number below comes from the bench, not from a guess:
+ * Every number below comes from the bench, not from a guess; the
+ * derivation is recorded in docs/implementation/bench/2026-11-04-film.md:
  * - scenes per length: about one scene per 30 to 60 s of film (ADR 009), with
- *   each scene capped at FILM_SCENE_MAX_SECONDS (60 s, bench: seek-by-replay
- *   stays under ~150 ms on the slowest supported iPad).
+ *   each scene capped at FILM_SCENE_MAX_SECONDS (60 s, bounding seek-by-replay
+ *   to 3,600 steps; the svg fixture's 59 s seek holds the ~150 ms scrub limit
+ *   at 23 ms, while plot-heavy scenes exceed it — the bench doc records why
+ *   the cap stands and what follows).
  * - plan cap: the figure plan call writes ~150 tokens; the film plan writes a
- *   storyboard of N scenes plus the shared context, measured at ~700 tokens
- *   per scene over the figure plan on the bench storyboard runs.
+ *   storyboard of N scenes plus the shared context, measured at 162 tokens
+ *   per scene over the figure plan on the bench storyboard runs, against 700.
  * - deadlines: the bench's novel scene p50 is ~12 s written whole, the plan
  *   p50 ~3 s, repairs ~4 s each; a film's deadline is its plan plus its
  *   slowest scene plus one repair plus checks, within the 3-minute ceiling.

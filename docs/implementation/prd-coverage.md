@@ -6,17 +6,18 @@ Every numbered requirement in the [product requirements document](../Incantly%20
 - **Partial**: some of it works; the note says what is missing. "Untested" means the code is there but no test exercises it.
 - **Missing**: not built yet.
 
-The baseline column is the state at commit `2f8b0a1` (the end of v0.1, Phases 0 to 5). The status column is the state at commit `2ebf98c`. Test files named in the notes are under `packages/*/test` and `apps/playground/e2e`.
+The baseline column is the state at commit `2f8b0a1` (the end of v0.1, Phases 0 to 5). The status column is the state at commit `2ebf98c`, with section 28 added on `feat/film-gallery-evals`. Test files named in the notes are under `packages/*/test` and `apps/playground/e2e`.
 
 ## Summary
 
-197 rows: every numbered requirement, the theme and output items of 6.9 and 6.10, and the items of section 25. Section 10 is listed at the end and not counted.
+212 rows: every numbered requirement, the theme and output items of 6.9 and 6.10, and the items of section 25. Section 10 is listed at the end and not counted.
 
 | | Done | Partial | Missing |
 | --- | --- | --- | --- |
 | Baseline (`2f8b0a1`) | 78 | 31 | 88 |
 | Earlier (`7a70424`) | 164 | 26 | 7 |
 | Now (`2ebf98c`) | 197 | 0 | 0 |
+| Films (`feat/film-gallery-evals`) | 212 | 0 | 0 |
 
 Every row is done. Three of them are done differently from the letter of the PRD, on purpose:
 
@@ -301,6 +302,26 @@ What remains are the section 10 targets that need a device: time to first render
 | RP-11 | Repair log | P1 | Done | Done | Failure records. |
 | RP-12 | Recurring failures become kit functions or rules | P1 | Missing | Done | The dashboard lists failures seen twice with what closed each class so far, failure by failure, from `closed.ts`: five classes closed by kit functions or engine behaviours and two named by rules, each with the test that keeps it closed; the rest are listed as open (metrics.test.ts). |
 | RP-13 | Dashboard metrics | P1 | Partial | Done | `metrics.ts` and the `metrics` CLI: pass rates, repair share, timings, lines, recurring failures (metrics.test.ts). |
+
+## 28 Films
+
+| ID | Requirement | P | Baseline | Status | Notes |
+| --- | --- | --- | --- | --- | --- |
+| FV-1 | Film mode: scene time advances in fixed steps whatever the display frame rate | P0 | Missing | Done | `SceneRuntime` in film mode steps 1/60 s; devices draw fewer frames, never different ones (film-clock.test.ts). |
+| FV-2 | Seek to any time in a scene by replay, without drawing until the last step; scene length capped so a seek stays under the bench limit | P0 | Missing | Done | `runtime.seek` restarts and replays to the target; scenes cap at 60 s (3,600 steps). Seek times are reported by `npm run film-bench` with the derivation in docs/implementation/bench/2026-11-04-film.md. |
+| FV-3 | Probe check: seeking to three times equals playing to them (readouts and part positions) | P0 | Missing | Done | The seek probe check (film-clock.test.ts); the player reports seek=play (player.spec.ts). |
+| FV-4 | Beat fields on steps: `ease`, `cam`, `show`, `hide`, `mark`, `title`, `short`, `sfx`, `explore`, `predict`; `cut` per scene | P0 | Missing | Done | `Beat` extends `Step`; `cut` per scene (film-beats.test.ts, docs/sdk/films.md). |
+| FV-5 | Layout solver: captions in a band outside the drawing, callouts placed in slots that cover no part, bundled fonts measured after loading | P0 | Missing | Done | The solver and `probeFilm` (film-checks.test.ts, film-solver.test.ts). |
+| FV-6 | Film checks per beat at 360, 640 and 960 px, light and dark: safe margin, caption lines, size, overlap, contrast, focus in frame, reading speed, one emphasis at a time | P0 | Missing | Done | `probeFilm` per beat at three widths in both themes (film-checks.test.ts). |
+| FV-7 | Player: play, pause, scrub with thumbnails, speed, volume, captions and size, transcript with seek, chapters | P0 | Missing | Done | The player page with transport, transcript, chapters and more (player.spec.ts). |
+| FV-8 | Offline MP4 export on the device: fixed clock, WebCodecs, faster than real time; the real-time recorder as fallback | P1 | Missing | Done | `exportTimelineMp4` with the frame-identity proof, `exportTimelineFallback` where WebCodecs is missing (film-export.test.ts, player.spec.ts). |
+| FV-9 | Narration through a speech provider interface, made at generation time; beat length is audio length plus a hold; word-timed captions; beat lengths estimated from words until audio arrives | P1 | Missing | Done | `Narrator` with the Cartesia client and the stub; estimated lengths until audio lands (film-narration.test.ts, narration.test.ts, tts.test.ts). |
+| FV-10 | SDK-owned mixing of narration, cues and an optional bed ducked under speech; silent until the viewer turns sound on | P1 | Missing | Done | `FilmMixer` with narration, cues and a ducked bed; sound starts off (film-narration.test.ts, player.spec.ts). |
+| FV-11 | Storyboard plan with a shared film context; one scene call per scene, in parallel, each in a normal size budget; cache and reviewed scenes first | P1 | Missing | Done | `generateFilm` under ADR 009: one plan, parallel scene calls, cache and reviewed scenes first (film-multiscene.test.ts). |
+| FV-12 | Source map from beats to scene lines and parts; anchors by beat id, never by seconds | P1 | Missing | Done | `compileFilm` source maps; `FilmAnchor` by beat id (film-ask.test.ts). |
+| FV-13 | Questions: Answer (one small call, streamed) and Show me (beat fields on the existing scene, no new scene code) | P1 | Missing | Done | `streamAnswer` with first-words timing; Show me replays beat fields on the live scene (film-ask.test.ts, player.spec.ts). |
+| FV-14 | Versions as patches over an unchanged base film; learner inserts private and pinned by anchor | P2 | Missing | Done | `FilmVersionStore` patches; `PrivateInsertStore` by asker hash with author-only promotion (film-versions.test.ts, player.spec.ts). |
+| FV-15 | Another example, Change the film, and deck mode (beats advance on click) | P2 | Missing | Done | The example and change rungs, and `advance: 'click'` with slide export (film-ask-full.test.ts, film-deck.test.ts, player.spec.ts). |
 
 ## Section 25: generating in seconds
 

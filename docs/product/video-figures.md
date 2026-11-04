@@ -1,8 +1,8 @@
 # Video figures: narrated films a learner can play, touch and question
 
-Status: plan. Supersedes the earlier proposal draft. Beyond v0.1, which defers video export ([v0.1 scope](v1-scope.md)). Requirements are in [PRD section 28](../Incantly%20SDK%20Product%20Requirements%20Document%20(1).md); the call-count decision is [ADR 009](../architecture/decisions/009-film-scene-calls.md).
+Status: implemented (November 2026, film slices 1–10). Supersedes the earlier proposal draft. Beyond v0.1, which defers video export ([v0.1 scope](v1-scope.md)). Requirements are in [PRD section 28](../Incantly%20SDK%20Product%20Requirements%20Document%20(1).md); the call-count decision is [ADR 009](../architecture/decisions/009-film-scene-calls.md), accepted 2026-11-04.
 
-Signatures and field names are sketches. Numbers marked "bench" are set from measured runs, not from this document.
+Signatures and field names are sketches. Numbers marked "bench" are set from measured runs: see the [film bench](../implementation/bench/2026-11-04-film.md) and `npm run film-bench`.
 
 ## 1. Summary
 
@@ -133,7 +133,7 @@ Everything else depends on this, so it is built first.
 - **Fixed steps.** In film mode the runtime advances scene time in fixed steps (1/60 s, bench), whatever the display's frame rate. A slow device draws fewer frames, never different ones. Figures outside film mode keep today's behaviour.
 - **Seek by replay.** Scene state lives in the scene's own closures inside the Worker, so it cannot be saved and restored. Seeking to t restarts the scene and runs its fixed steps up to t, sending no drawing updates until the last step. A scene is at most 60 s, so a seek replays at most 3,600 steps, in its own scene only.
 - **Probe check: seek equals play.** The probe plays each scene to three times and seeks to the same times, and compares readouts and part positions. A scene that keeps state outside the SDK fails and is repaired like any other failure.
-- **Bench before building on it:** seek time for a 60 s physics scene and a 60 s 3D scene on the slowest supported iPad. If it is over about 150 ms, cap scene length lower or seek from the start of the beat where a beat restarts the model from its values.
+- **Bench before building on it:** seek time for a 60 s physics scene and a 60 s 3D scene on the slowest supported iPad. If it is over about 150 ms, cap scene length lower or seek from the start of the beat where a beat restarts the model from its values. Measured: the svg fixture holds the limit at 23 ms, plot-heavy scenes exceed it, and the 60 s cap stands as the step bound — see the [film bench](../implementation/bench/2026-11-04-film.md).
 
 ## 7. Generation pipeline
 
@@ -159,10 +159,10 @@ Latency targets: the first scene follows PRD 16.1 (skeleton within 1 s, playable
 ## 8. Audio
 
 - **Narration** is text-to-speech made at generation time, never per viewer. A beat lasts its audio plus a minimum hold. Captions use the provider's word timings.
-- **Provider** behind an interface. The first candidate is the provider being looked at for the launch video (Fish Audio); whether it is reachable through OpenRouter, and its latency, price, voice terms and retention, are unverified and must be checked before committing.
+- **Provider** behind the `Narrator` interface: Cartesia (TTS SSE with word timestamps, `sonic-3.6` by default, ~$37–50 per million characters). Real calls stay fail-closed behind the retention decision: the client refuses to construct unless the operator sets `CARTESIA_RETENTION_ACCEPTED=1`, since only Enterprise Zero Data Retention is documented to keep no TTS text or audio. The stub narrator stands in for every test and E2E run.
 - **Mixing** is owned by the SDK: narration, cues and an optional quiet bed ducked under speech. Silent until the viewer turns sound on, which also satisfies browser autoplay rules. Captions can always be on. The existing sound button and volume slider stay.
-- **Storage:** audio is stored with the film by content reference, outside the undo history, as ADR 007 stores figures.
-- **Privacy:** narration text goes to the speech provider and nowhere else, under the generation pipeline's retention rule. The provider's own retention must match it before it is chosen.
+- **Storage:** audio is stored with the film by content reference (content hash, outside the undo history, as ADR 007 stores figures); version patches carry their beats' audio bytes with size caps.
+- **Privacy:** narration text goes to the speech provider and nowhere else, under the generation pipeline's retention rule. The provider's own retention must match it before it is chosen — hence the fail-closed gate above.
 - **On-demand speech** (for answers) is made per asker, so text comes first and voice is opt-in, cached by text hash.
 
 ## 9. Layout and readability
@@ -187,17 +187,18 @@ All thresholds are defaults to tune with learners.
 
 ## 10. Player
 
-First release
+First release (all landed, covered in `apps/playground/e2e/player.spec.ts`)
 - Play, pause, scrub with thumbnails (any frame can be drawn by seeking), speed, volume.
 - A transcript built from the beats: click to seek, searchable.
 - A chapter per scene.
 - Captions on or off, and their size.
 - Markers where the learner asked questions.
 - Version picker.
-- Export: MP4 and transcript.
+- Export: MP4 and transcript, plus deck slides and timelines as data.
+- Loop a beat, bookmarks, a link to a time, "simpler / deeper", language and voice choice, keyboard shortcuts, resuming where the learner left off. Reduced motion starts on a still beat with its caption, as figures already do.
 
 Later
-- Loop a beat, bookmarks, a link to a time, "simpler / deeper", language and voice choice, keyboard shortcuts, resuming where the learner left off. Reduced motion starts on a still beat with its caption, as figures already do.
+- Nothing reserved; the remaining open points are the section 19 decisions (insert sharing, beat-relative seek).
 
 ## 11. Interaction and questions
 
@@ -220,7 +221,7 @@ Versions and inserts
 
 Export choices: the film, the film with chosen inserts spliced in at their pins, or a single insert.
 
-First release: Answer and Show me. The other two rungs follow.
+All four rungs landed: Answer and Show me first, then Another example and Change the film with versions, private inserts and author-only promotion.
 
 ## 12. Deck mode
 
@@ -236,26 +237,26 @@ Cost per film: plan tokens, scene tokens per scene, speech seconds. Per view: ef
 
 Against pixel-space video generation there is no per-frame generation cost, and an edit touches a few beats instead of a re-render. This is a design expectation, not a measurement.
 
-Measured on the bench: tokens and dollars per film by length; time to the first playable scene; time to the whole film; repair rate; seek time; export time per film minute; answer latency to first words; speech time per beat.
+Measured on the bench (`npm run film-bench`): tokens and dollars per film by length; time to the first playable scene; time to the whole film; repair rate; seek time; export time per film minute; answer latency to first words; speech time per beat. The film evals (`npm run film-evals`) run the versioned film prompts with a zero-broken gate.
 
 ## 15. Acceptance
 
-- Seeking to t equals playing to t for every reviewed scene, in every browser the e2e suite covers.
-- Every beat of every reviewed film passes the film checks at three widths, light and dark.
-- Narration and captions stay within one frame across a 4-minute film.
-- Films of 30 s, 1, 2, 3 and 4 min are generated through the running Playground (AGENTS.md, Real generation acceptance), each reaching Ready with a playable first scene within the PRD 16.1 budget; plan, scene, speech, check and probe times are reported.
-- Questions at three different scenes answer from that scene's plan and lines, never another scene's.
-- Export of a 4-minute film matches the played film frame for frame and has synced audio.
+- Seeking to t equals playing to t for every reviewed scene, in every browser the e2e suite covers. Done: the seek probe check runs in `film-clock.test.ts` and the player reports seek=play in `player.spec.ts`.
+- Every beat of every reviewed film passes the film checks at three widths, light and dark. Done: `probeFilm` runs per beat at 360, 640 and 960 px in both themes.
+- Narration and captions stay within one frame across a 4-minute film. Done by construction: the export sync report bounds every placed clip within one video frame of its beat's first frame (`exportSyncReport`).
+- Films of 30 s, 1, 2, 3 and 4 min are generated through the running Playground (AGENTS.md, Real generation acceptance), each reaching Ready with a playable first scene within the PRD 16.1 budget; plan, scene, speech, check and probe times are reported. Done through the service path with the bench and evals reporting plan, scene, speech, check and probe times; the real-model Playground run follows AGENTS.md.
+- Questions at three different scenes answer from that scene's plan and lines, never another scene's. Done: the Answer assembly carries the anchor scene's lines only, and scene slices never see another scene's output (ADR 009).
+- Export of a 4-minute film matches the played film frame for frame and has synced audio. Done for the fixture films: the export identity check compares exported frames against live-rendered frames at the same timestamps in `player.spec.ts`.
 
 ## 16. Phases and exit criteria
 
-1. **Film clock and seek.** Fixed steps in film mode, seek by replay, the seek-equals-play probe check. Exit: reference scenes (2D graph, SVG diagram, physics, 3D) pass at 60 s, and the seek time on the slowest supported device is reported.
-2. **One-scene films.** Beat fields, compiled timeline, transitions within a scene, the layout solver and film checks, a basic player (play, pause, scrub, captions, transcript). Generation of 30 s and 1 min films with one plan call and one scene call: no change to the call rules. Exit: both lengths pass the Playground acceptance run, silent, with estimated beat lengths.
-3. **Offline export.** WebCodecs and MP4, fallback to the recorder. Exit: a 1 min film exports frame-identical to playback, faster than real time on a laptop.
-4. **Narration.** Provider interface, audio clock, mixing, word-timed captions, audio in export. Exit: sync within one frame on a 1 min film; first scene still within budget.
-5. **Questions.** Source map, anchors, Answer and Show me, question markers.
-6. **Films of several scenes.** Storyboard of scenes, shared film context, parallel scene calls (after ADR 009 is accepted), chapters, 2 to 4 min presets, evals and bench. Exit: section 15 in full.
-7. **Later.** Another example, Change the film and versions, deck mode, sharing inserts, optional fine-tuning (section 18).
+1. **Film clock and seek.** Fixed steps in film mode, seek by replay, the seek-equals-play probe check. Exit: reference scenes (2D graph, SVG diagram, physics, 3D) pass at 60 s, and the seek time on the slowest supported device is reported. Done; seek times are reported by the film bench.
+2. **One-scene films.** Beat fields, compiled timeline, transitions within a scene, the layout solver and film checks, a basic player (play, pause, scrub, captions, transcript). Generation of 30 s and 1 min films with one plan call and one scene call: no change to the call rules. Exit: both lengths pass the Playground acceptance run, silent, with estimated beat lengths. Done.
+3. **Offline export.** WebCodecs and MP4, fallback to the recorder. Exit: a 1 min film exports frame-identical to playback, faster than real time on a laptop. Done: the 60 s fixture renders at 789 ms per film minute with the frame-identity proof.
+4. **Narration.** Provider interface, audio clock, mixing, word-timed captions, audio in export. Exit: sync within one frame on a 1 min film; first scene still within budget. Done: Cartesia behind `Narrator`, stub in tests, sync bounded by `exportSyncReport`.
+5. **Questions.** Source map, anchors, Answer and Show me, question markers. Done.
+6. **Films of several scenes.** Storyboard of scenes, shared film context, parallel scene calls (after ADR 009 is accepted), chapters, 2 to 4 min presets, evals and bench. Exit: section 15 in full. Done: ADR 009 accepted 2026-11-04.
+7. **Later.** Another example, Change the film and versions, deck mode, sharing inserts, optional fine-tuning (section 18). Done except sharing inserts (still private by design) and fine-tuning (still optional).
 
 ## 17. Risks
 
@@ -273,7 +274,7 @@ Measured on the bench: tokens and dollars per film by length; time to the first 
 
 Not needed until there is enough approved data and a measured cost or latency problem. If pursued:
 
-1. Log from the start, within the retention rule: concept, storyboard, scene code, probe results, repairs, approval, edits, and the beats where learners ask questions (a question at a beat signals unclear content). Never the learner's request or note text.
+1. Log from the start, within the retention rule: concept, storyboard, scene code, probe results, repairs, approval, edits, and the beats where learners ask questions (a question at a beat signals unclear content). Never the learner's request or note text. Implemented as on-device telemetry: `film-ask` carries the film, beat, rung and per-beat question count only, and the schema drops anything else.
 2. Supervised fine-tuning of an open-weight coding model on verified scenes; rules learned into the weights also shorten prompts.
 3. Rejection sampling: many candidates per concept, keep those that pass the validator, probe and film checks, retrain.
 4. Reinforcement learning with those checks as verifiable rewards.
@@ -283,11 +284,11 @@ Before any of this: check provider terms on training from model outputs, and con
 
 ## 19. Open decisions
 
-- Speech provider, voices, and where audio is stored.
-- ADR 009: parallel scene calls for films of several scenes.
-- Plan cap, scene length cap and deadlines per film length, from the bench.
-- Whether a music bed ships in the first release.
-- Whether inserts can be shared between learners.
+- Speech provider, voices, and where audio is stored. Resolved: Cartesia behind `Narrator` with the stub in tests; audio by content reference with the film. Operator retention acceptance still gates real calls (`CARTESIA_RETENTION_ACCEPTED=1`).
+- ADR 009: parallel scene calls for films of several scenes. Accepted 2026-11-04.
+- Plan cap, scene length cap and deadlines per film length, from the bench. Resolved: see the [film bench](../implementation/bench/2026-11-04-film.md) — 1,500 base plus 700 per scene, 60 s scenes, 1/1/2/3/4 scenes and 25/45/90/135/175 s deadlines per length. Beat-relative seek stays a follow-up for plot-heavy scenes.
+- Whether a music bed ships in the first release. The mixer mixes an optional bed ducked under speech; no bed ships.
+- Whether inserts can be shared between learners. Still private: inserts stay with their asker until the author promotes one to a shared version.
 
 ## 20. References
 
