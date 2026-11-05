@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { SDK_VERSION, kitsFor, validateScene, type ProbeCheck, type ProbeFailure, type ProbeReport, type ScenePlan } from '@incantly/core';
-import { ASK_LIMITS, generateInsert, sanitizeAnswerAssembly, sanitizeInsertAssembly, speakAnswer, streamAnswer } from './ask';
+import { ASK_LIMITS, generateExample, generateFilmPatch, generateInsert, sanitizeAnswerAssembly, sanitizeChangeAssembly, sanitizeInsertAssembly, speakAnswer, streamAnswer } from './ask';
 import type { Authenticator, Learner } from './auth';
 import { ConceptCache, planKey, requestKey } from './cache';
 import { REQUEST_LIMITS, type LearnerRequest } from './context';
@@ -9,9 +9,9 @@ import { DEFAULT_LIMITS, LimitKeeper, type Limits, type Refusal } from './limits
 import type { ModelClient } from './models';
 import { Generator, standardFigure, type GenerationState } from './pipeline';
 import { probeSpecFor } from './probe';
-import { speechRefusalHttp } from './narration';
-import type { AskInsertResponse, AskSpeakResponse, ChangeResponse, FallbackMessage, GalleryReceipt, RepairResponse, SceneMessage, Skeleton } from './protocol';
-import type { Narrator } from './tts';
+import { MemoryAudioStore, narrateBeats, speechRefusalHttp } from './narration';
+import type { AskChangeResponse, AskExampleResponse, AskInsertResponse, AskSpeakResponse, ChangeResponse, FallbackMessage, GalleryReceipt, RepairResponse, SceneMessage, Skeleton } from './protocol';
+import { STUB_VOICES, type Narrator } from './tts';
 import { galleryCard, galleryFigure, galleryId, isListed, submitterOf, type GalleryStore } from './gallery';
 import { failureRecord, type RecordSink } from './records';
 import { issueTicket, readTicket } from './ticket';
@@ -34,7 +34,10 @@ import { issueTicket, readTicket } from './ticket';
  *   GET  /v1/gallery/:id              -> one accepted figure with its fragments and a fresh ticket
  *   POST /v1/ask                      { question, anchor, beat, ... } -> event stream of the Answer
  *   POST /v1/ask/insert               { question, anchor, beat, params, ... } -> the insert clip, or failed
+ *   POST /v1/ask/example              { question, anchor, beat, ... } -> the side-clip scene, or failed
+ *   POST /v1/ask/change               { prompt, film, version, beats } -> version N+1 as a patch, or failed
  *   POST /v1/ask/speak                { text, voice? } -> the answer spoken, when the asker opts in
+ *   GET  /v1/voices                   -> the stub voice list
  */
 
 export interface ServiceOptions {
@@ -257,7 +260,10 @@ export class GenerationService {
       if (req.method === 'GET' && listed) return await this.galleryEntry(req, res, listed[1]!);
       if (req.method === 'POST' && path === `${this.prefix}/ask`) return await this.answer(req, res);
       if (req.method === 'POST' && path === `${this.prefix}/ask/insert`) return await this.insert(req, res);
+      if (req.method === 'POST' && path === `${this.prefix}/ask/example`) return await this.example(req, res);
+      if (req.method === 'POST' && path === `${this.prefix}/ask/change`) return await this.changeFilm(req, res);
       if (req.method === 'POST' && path === `${this.prefix}/ask/speak`) return await this.speak(req, res);
+      if (req.method === 'GET' && path === `${this.prefix}/voices`) return await this.voices(req, res);
       throw new HttpError(404, 'not-found', 'No such endpoint');
     } catch (error) {
       if (res.headersSent) {
@@ -776,6 +782,110 @@ export class GenerationService {
     } finally {
       admitted.release();
     }
+  }
+
+  /**
+   * A learner asks for another example. The scene pipeline writes a side-clip
+   * scene, validated like any scene with one bounded repair, and the clip
+   * goes back pinned to its anchor for the player to open beside the film.
+   * The slowest rung; failures leave the film playing on.
+   */
+  private async example(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const learner = this.learner(req);
+    if (!this.enabled) {
+      this.json(res, 200, { status: 'failed', reason: 'off' } satisfies AskExampleResponse);
+      return;
+    }
+    const assembly = sanitizeAnswerAssembly(await this.body(req, 32_768));
+    if (!assembly.ok) throw new HttpError(400, 'invalid-request', assembly.problems.join('; '));
+    const admitted = this.limits.admit(learner.id);
+    if (!admitted.ok) this.refuse(admitted.refusal);
+    if (this.limits.checkSpend(learner.id)) {
+      admitted.release();
+      this.json(res, 200, { status: 'failed', reason: 'limit' } satisfies AskExampleResponse);
+      return;
+    }
+
+    const timeout = AbortSignal.timeout(this.options.generationTimeoutMs ?? 45_000);
+    try {
+      const generated = await generateExample(this.options.model, assembly.assembly, { signal: timeout });
+      if (!generated.ok) {
+        this.json(res, 200, { status: 'failed', reason: 'invalid' } satisfies AskExampleResponse);
+        return;
+      }
+      this.limits.spend(learner.id, generated.example.usd);
+      const clip = generated.example;
+      this.json(res, 200, { status: 'clip', clip: { anchor: clip.anchor, html: clip.html, css: clip.css, js: clip.js, caption: clip.caption } } satisfies AskExampleResponse);
+    } catch {
+      this.json(res, 200, { status: 'failed', reason: 'model' } satisfies AskExampleResponse);
+    } finally {
+      admitted.release();
+    }
+  }
+
+  /**
+   * A learner explicitly asks to change the film. The patch call writes the
+   * changed beats through the edits and repair path, the narration pipeline
+   * speaks them for the patch audio, and version N+1 goes back as a patch
+   * linked to its parent. The player applies it and re-runs the validator,
+   * the probe and the film checks before it plays. Storage, promotion and
+   * the picker land in the next slice; the patch already carries them.
+   */
+  private async changeFilm(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const learner = this.learner(req);
+    if (!this.enabled) {
+      this.json(res, 200, { status: 'failed', reason: 'off' } satisfies AskChangeResponse);
+      return;
+    }
+    const assembly = sanitizeChangeAssembly(await this.body(req, 65_536));
+    if (!assembly.ok) throw new HttpError(400, 'invalid-request', assembly.problems.join('; '));
+    const admitted = this.limits.admit(learner.id);
+    if (!admitted.ok) this.refuse(admitted.refusal);
+    if (this.limits.checkSpend(learner.id)) {
+      admitted.release();
+      this.json(res, 200, { status: 'failed', reason: 'limit' } satisfies AskChangeResponse);
+      return;
+    }
+
+    const timeout = AbortSignal.timeout(this.options.generationTimeoutMs ?? 45_000);
+    try {
+      const generated = await generateFilmPatch(this.options.model, assembly.assembly, { signal: timeout });
+      if (!generated.ok) {
+        this.json(res, 200, { status: 'failed', reason: 'invalid' } satisfies AskChangeResponse);
+        return;
+      }
+      this.limits.spend(learner.id, generated.generated.usd);
+      const store = new MemoryAudioStore();
+      const run = await narrateBeats(
+        generated.generated.patch.beats.map((beat) => ({ beatId: beat.beat, text: beat.say })),
+        { ...(this.options.narrator ? { narrator: this.options.narrator } : {}), store, learnerId: learner.id, limits: this.limits, signal: timeout },
+      );
+      if (run.beats.some((beat) => beat.refused)) {
+        this.json(res, 200, { status: 'failed', reason: 'limit' } satisfies AskChangeResponse);
+        return;
+      }
+      const audio = run.beats.map((beat) => {
+        const bytes = beat.audioHash ? store.get(beat.audioHash) : undefined;
+        return {
+          beat: beat.beatId,
+          seconds: beat.seconds,
+          words: [...beat.starts],
+          ...(bytes ? { audioBase64: Buffer.from(bytes).toString('base64') } : {}),
+          sampleRate: beat.sampleRate,
+        };
+      });
+      this.json(res, 200, { status: 'patch', patch: { ...generated.generated.patch, audio } } satisfies AskChangeResponse);
+    } catch {
+      this.json(res, 200, { status: 'failed', reason: 'model' } satisfies AskChangeResponse);
+    } finally {
+      admitted.release();
+    }
+  }
+
+  /** The stub voice list: the voice choice until a Cartesia voice id is entered. */
+  private async voices(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    this.learner(req);
+    this.json(res, 200, { voices: STUB_VOICES.map((voice) => ({ ...voice })) });
   }
 
   /**

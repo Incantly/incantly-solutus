@@ -11,6 +11,21 @@ import { wordStarts, type CompiledBeat, type CompiledFilm, type FilmAnchor } fro
 
 export type CaptionSize = 'sm' | 'md' | 'lg';
 
+/**
+ * A bookmarked moment: the film, its version, the beat and the word sounding
+ * there. Beat ids and word indexes, never seconds, so re-timed audio moves
+ * the bookmark along with its word. In-memory: the page never persists the
+ * label, which is the learner's own text.
+ */
+export interface FilmBookmark {
+  readonly id: string;
+  readonly film: string;
+  readonly version: number;
+  readonly beat: string;
+  readonly wordIndex: number;
+  readonly label: string;
+}
+
 export interface PlayerCaption {
   readonly beat: string;
   readonly say: string;
@@ -50,6 +65,9 @@ export class PlayerModel {
   private volume = 0.5;
   private selected: string | null = null;
   private readonly marks: AskMarker[] = [];
+  private looped: string | null = null;
+  private readonly bookmarksById = new Map<string, FilmBookmark>();
+  private bookmarkCounter = 0;
   private readonly listeners = new Set<(event: PlayerEvent) => void>();
 
   constructor(
@@ -255,6 +273,85 @@ export class PlayerModel {
     if (this.marks.length === 0) return;
     this.marks.length = 0;
     this.emit({ type: 'chrome' });
+  }
+
+  /**
+   * Loops one beat: while playing, the beat's end seeks back to its start.
+   * Null, or an unknown beat, loops nothing. The page calls applyLoop once
+   * per frame after the controller's poll or tick.
+   */
+  loopBeat(id: string | null): void {
+    this.looped = id && this.film.beats.some((beat) => beat.id === id) ? id : null;
+    this.emit({ type: 'chrome' });
+  }
+
+  get loopedBeat(): string | null {
+    return this.looped;
+  }
+
+  /** Seeks back to the looped beat's start when play crossed its end. */
+  applyLoop(): void {
+    if (!this.looped || !this.controller.isPlaying) return;
+    const beat = this.film.beats.find((candidate) => candidate.id === this.looped);
+    if (!beat) {
+      this.looped = null;
+      return;
+    }
+    if (this.controller.time + 1e-9 >= beat.start + beat.seconds) this.controller.seek(beat.start);
+  }
+
+  /**
+   * Bookmarks the moment on screen: the current beat and the word sounding
+   * there. Null before the first beat. The label defaults to the beat id.
+   */
+  addBookmark(label?: string): FilmBookmark | null {
+    const beat = this.controller.currentBeat;
+    if (!beat) return null;
+    const wordIndex = Math.max(0, this.wordIndexAt(beat.id, this.controller.time));
+    this.bookmarkCounter++;
+    const bookmark: FilmBookmark = {
+      id: `bookmark-${this.bookmarkCounter}`,
+      film: this.film.id,
+      version: this.film.version,
+      beat: beat.id,
+      wordIndex,
+      label: label?.trim() === '' || label === undefined ? beat.id : label.trim().slice(0, 80),
+    };
+    this.bookmarksById.set(bookmark.id, bookmark);
+    this.emit({ type: 'chrome' });
+    return bookmark;
+  }
+
+  get bookmarks(): readonly FilmBookmark[] {
+    return [...this.bookmarksById.values()];
+  }
+
+  /** Jumps to a bookmark: its beat, at its word's start. False when it is gone or its film moved on. */
+  jumpBookmark(id: string): boolean {
+    const bookmark = this.bookmarksById.get(id);
+    if (!bookmark || bookmark.film !== this.film.id || bookmark.version !== this.film.version) return false;
+    const beat = this.film.beats.find((candidate) => candidate.id === bookmark.beat);
+    if (!beat || beat.words.length === 0) return false;
+    const index = Math.min(Math.max(bookmark.wordIndex, 0), beat.words.length - 1);
+    this.controller.seek(wordStarts(beat)[index] ?? beat.start);
+    return true;
+  }
+
+  /** Removes a bookmark. False when it was already gone. */
+  removeBookmark(id: string): boolean {
+    if (!this.bookmarksById.delete(id)) return false;
+    this.emit({ type: 'chrome' });
+    return true;
+  }
+
+  /** The bookmark's film seconds now, re-timing along with the audio. Null when its film moved on. */
+  bookmarkTime(id: string): number | null {
+    const bookmark = this.bookmarksById.get(id);
+    if (!bookmark || bookmark.film !== this.film.id || bookmark.version !== this.film.version) return null;
+    const beat = this.film.beats.find((candidate) => candidate.id === bookmark.beat);
+    if (!beat || beat.words.length === 0) return null;
+    const index = Math.min(Math.max(bookmark.wordIndex, 0), beat.words.length - 1);
+    return wordStarts(beat)[index] ?? beat.start;
   }
 }
 

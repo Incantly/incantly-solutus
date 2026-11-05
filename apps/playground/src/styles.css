@@ -1455,8 +1455,20 @@ main.style-page {
 .inc-ask-status { margin: 0; font-size: 0.82rem; color: var(--text-muted, #6b7280); }
 .inc-ask-speak-status { font-size: 0.82rem; color: var(--text-muted, #6b7280); }
 .inc-showme, .inc-insert { display: flex; gap: 8px; align-items: center; font-size: 0.88rem; border: 1px solid var(--border-color); border-radius: 10px; padding: 6px 10px; }
+.inc-example { border: 1px solid var(--border-color); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.inc-example-caption { margin: 0; font-size: 0.88rem; }
+.inc-example-figure { max-width: 560px; }
+.inc-version { margin: 0; font-size: 0.85rem; color: var(--text-muted, #6b7280); }
+.inc-bookmarks ul { margin: 6px 0 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; }
+.inc-bookmarks-empty { color: var(--text-muted, #6b7280); font-size: 0.85rem; }
+.inc-shortcuts { font-size: 0.85rem; }
+.inc-shortcuts ul { margin: 6px 0; padding-left: 20px; display: flex; flex-direction: column; gap: 2px; }
+.inc-shortcuts kbd { border: 1px solid var(--border-color); border-radius: 4px; padding: 0 6px; font-family: inherit; }
+.inc-shortcuts-note { margin: 0; color: var(--text-muted, #6b7280); }
+.inc-resume { font-size: 0.85rem; color: var(--text-muted, #6b7280); }
+.inc-player-link-note { font-size: 0.8rem; color: var(--text-muted, #6b7280); }
 /* Flex layouts override the hidden attribute's display:none; put it back. */
-.inc-ask[hidden], .inc-showme[hidden], .inc-insert[hidden] { display: none; }
+.inc-ask[hidden], .inc-showme[hidden], .inc-insert[hidden], .inc-example[hidden] { display: none; }
 .inc-scrub-wrap { position: relative; flex: 1 1 120px; min-width: 80px; display: flex; }
 .inc-scrub-wrap input[type='range'] { flex: 1 1 auto; min-width: 0; }
 .inc-scrub-markers { position: absolute; inset: 0; pointer-events: none; }

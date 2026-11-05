@@ -40,7 +40,11 @@ export { GenerationService, RETENTION, createService, sanitizeDeviceReport, skel
 export type { ServiceOptions } from './service';
 export type {
   AskAnchorMessage,
+  AskChangeRequest,
+  AskChangeResponse,
   AskEvent,
+  AskExampleRequest,
+  AskExampleResponse,
   AskInsertLine,
   AskInsertRequest,
   AskInsertResponse,
@@ -59,18 +63,27 @@ export type {
 } from './protocol';
 export {
   ANSWER_FORMAT,
+  ASK_LANGUAGES,
   ASK_LIMITS,
+  CHANGE_FORMAT,
+  EXAMPLE_FORMAT,
   INSERT_FORMAT,
   answerPrompt,
+  changePrompt,
+  examplePrompt,
+  generateExample,
+  generateFilmPatch,
   generateInsert,
   insertPrompt,
+  parseExampleReply,
   parseInsertReply,
   sanitizeAnswerAssembly,
+  sanitizeChangeAssembly,
   sanitizeInsertAssembly,
   speakAnswer,
   streamAnswer,
 } from './ask';
-export type { AnswerAssembly, AnswerBeatLine, AnswerReadout, AnswerReply, AnswerSceneLine, AnswerThreadTurn, AskAnchorJson, GeneratedInsert, GeneratedInsertLine, InsertAssembly, SpokenAnswer } from './ask';
+export type { AnswerAssembly, AnswerBeatLine, AnswerDepth, AnswerReadout, AnswerReply, AnswerSceneLine, AnswerThreadTurn, AskAnchorJson, ChangeAssembly, ChangeBeatLine, GeneratedExample, GeneratedFilmPatch, GeneratedInsert, GeneratedInsertLine, InsertAssembly, SpokenAnswer } from './ask';
 export { MAX_TICKET_LENGTH, issueTicket, readTicket } from './ticket';
 export { FileGalleryStore, MemoryGalleryStore, galleryCard, galleryFigure, galleryId, isListed, matchFor, promote, promotionProblem, sceneFiles, sceneSlug, submitterOf } from './gallery';
 export type { GalleryEntry, GalleryStore } from './gallery';
@@ -88,6 +101,7 @@ export {
   NARRATION_WORDS_PER_SECOND,
   SPEECH_CREDITS_PER_CHAR,
   STUB_SAMPLE_RATE,
+  STUB_VOICES,
   CartesiaClient,
   StubNarrator,
   TtsError,
@@ -104,7 +118,7 @@ export {
   timingsSeconds,
   validateWordTimings,
 } from './tts';
-export type { CartesiaOptions, SpeakReply, SpeakRequest, TtsErrorKind, WordTiming, Narrator } from './tts';
+export type { CartesiaOptions, SpeakReply, SpeakRequest, StubVoice, TtsErrorKind, WordTiming, Narrator } from './tts';
 export {
   NARRATION_MAX_AUDIO_BYTES,
   NARRATION_MAX_CACHED_LINES,

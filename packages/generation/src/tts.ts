@@ -512,6 +512,19 @@ export async function checkCartesiaKey(apiKey: string, options: { readonly fetch
  * from the text. The default for every test and E2E run: no key, no network,
  * no cost, and the same bytes for the same text every time.
  */
+/** One stub voice: the voice choice until a Cartesia voice id is entered. Silent, like all stub audio. */
+export interface StubVoice {
+  readonly id: string;
+  readonly name: string;
+}
+
+/** The stub voice list: stable ids the player offers and the stub accepts. */
+export const STUB_VOICES: readonly StubVoice[] = [
+  { id: 'stub-aria', name: 'Aria (stub)' },
+  { id: 'stub-dan', name: 'Dan (stub)' },
+  { id: 'stub-wren', name: 'Wren (stub)' },
+];
+
 export class StubNarrator implements Narrator {
   readonly name = 'stub';
 

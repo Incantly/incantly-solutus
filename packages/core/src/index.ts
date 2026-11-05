@@ -60,7 +60,13 @@ export type { CalloutInput, CalloutPlacement, CalloutRequest, CaptionInput, Capt
 export { contrastRatio, luminance, probeFilm, probeFilmAsync, FILM_CONTRAST_MIN, FILM_TOKENS } from './film/checks';
 export type { FilmCheck, FilmFailure, FilmPoint, FilmReport, FilmReportStats, FilmSceneInput, FilmTheme, FilmTokens, ProbeFilmOptions } from './film/checks';
 export { PlayerModel, CAPTION_SCALES, TIMELINE_WORD_TICKS_PER_BEAT } from './film/player';
-export type { CaptionSize, PlayerCaption, PlayerEvent, PlayerState } from './film/player';
+export type { CaptionSize, FilmBookmark, PlayerCaption, PlayerEvent, PlayerState } from './film/player';
+export { examplePinSeconds, exampleReturnSeconds, SideClipPlayer, validateExampleClip, EXAMPLE_MAX_CAPTION_CHARS } from './film/example';
+export type { ExampleClip, SideClipEvent, SideClipPhase } from './film/example';
+export { applyFilmPatch, patchSummary, sanitizeFilmPatch, FILM_PATCH_LIMITS } from './film/versions';
+export type { FilmPatchAudio, FilmPatchBeat, FilmVersionPatch } from './film/versions';
+export { formatFilmLink, parseFilmLink, resolveFilmLink, resolveFilmPosition, resumeKey, ResumeStore, shortcutFor, SHORTCUTS } from './film/controls';
+export type { FilmLink, FilmPosition, PlayerShortcut, ResumeStorage, ShortcutAction } from './film/controls';
 export { FILM_FIXTURES, SIXTY_SECOND_FILM, THIRTY_SECOND_FILM } from './film/fixtures';
 export type { FilmFixture, FilmFixtureScene } from './film/fixtures';
 export { FilmMixer, MemoryMixerBackend, WebAudioMixerBackend, BED_DUCKED_LEVEL, BED_LEVEL, NARRATION_LEVEL } from './film/mixer';
