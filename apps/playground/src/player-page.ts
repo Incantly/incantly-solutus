@@ -808,7 +808,9 @@ function base64ToBytes(base64: string): Uint8Array {
 /**
  * The narration settings: an optional Cartesia key and voice, following the
  * model-key pattern exactly — sent to the dev server only, memory-only on
- * both ends, never saved; empty means the server's CARTESIA_API_KEY.
+ * both ends, never saved; empty means the server's CARTESIA_API_KEY and
+ * CARTESIA_VOICE_ID. The connection line shows the key and voice sources at
+ * a glance, without pressing Test connection.
  */
 function buildNarration(player: HTMLElement, actions: { narrate(key: string | null, voice: string | null): Promise<number> }): void {
   const wrap = document.createElement('details');
@@ -828,12 +830,39 @@ function buildNarration(player: HTMLElement, actions: { narrate(key: string | nu
   const voice = document.createElement('input');
   voice.type = 'text';
   voice.className = 'inc-narration-voice';
-  voice.placeholder = 'From the Voice Library or List Voices';
+  voice.placeholder = 'Paste voice id, or leave empty for the dev server’s voice';
   voice.setAttribute('autocomplete', 'off');
   voice.setAttribute('spellcheck', 'false');
   const hint = document.createElement('p');
   hint.className = 'inc-narration-hint';
-  hint.textContent = 'The key goes to the dev server only, is kept in memory on both ends, and is never saved. Without it the film stays on the stub’s silent timing.';
+  hint.textContent = 'The key goes to the dev server only, is kept in memory on both ends, and is never saved. Leave both fields empty to use the dev server’s key and voice; without them the film stays on the stub’s silent timing.';
+  const connection = document.createElement('p');
+  connection.className = 'inc-narration-connection';
+  connection.textContent = 'Cartesia: checking the dev server…';
+  const renderConnection = (result: { source?: string; voiceSource?: string; voiceTail?: string | null; connected?: boolean }): void => {
+    const keySource = result.source ?? 'unknown';
+    const voiceSource = result.voiceSource ?? 'unknown';
+    const tail = typeof result.voiceTail === 'string' && result.voiceTail !== '' ? `, voice …${result.voiceTail}` : '';
+    const ready = result.connected ?? (keySource !== 'none' && voiceSource !== 'none');
+    connection.textContent = `Cartesia ${ready ? 'connected' : 'not connected'} (key source: ${keySource}, voice source: ${voiceSource}${tail})`;
+  };
+  const readConnection = async (
+    enteredKey: string,
+    enteredVoice: string,
+  ): Promise<{ ok?: boolean; message?: string; source?: string; voiceSource?: string; voiceTail?: string | null; connected?: boolean }> => {
+    const answer = await fetch('/api/dev/narration-key', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...(enteredKey ? { apiKey: enteredKey } : {}), ...(enteredVoice ? { voice: enteredVoice } : {}) }),
+    });
+    return (await answer.json()) as { ok?: boolean; message?: string; source?: string; voiceSource?: string; voiceTail?: string | null; connected?: boolean };
+  };
+  // The env state, before anything is pressed: sources and the voice tail render even when the check itself fails.
+  void readConnection('', '')
+    .then(renderConnection)
+    .catch(() => {
+      connection.textContent = 'Cartesia: the dev server did not answer.';
+    });
   const test = document.createElement('button');
   test.type = 'button';
   test.textContent = 'Test connection';
@@ -845,14 +874,9 @@ function buildNarration(player: HTMLElement, actions: { narrate(key: string | nu
     testStatus.hidden = false;
     testStatus.textContent = 'Checking with Cartesia…';
     try {
-      const entered = key.value.trim();
-      const answer = await fetch('/api/dev/narration-key', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ ...(entered ? { apiKey: entered } : {}) }),
-      });
-      const result = (await answer.json()) as { ok?: boolean; message?: string; source?: string };
-      testStatus.textContent = `${result.ok ? '✓' : '✗'} ${result.message ?? answer.statusText} (key source: ${result.source ?? 'unknown'})`;
+      const answer = await readConnection(key.value.trim(), voice.value.trim());
+      testStatus.textContent = `${answer.ok ? '✓' : '✗'} ${answer.message ?? 'The check gave no message.'} (key source: ${answer.source ?? 'unknown'})`;
+      renderConnection(answer);
     } catch (error) {
       testStatus.textContent = `✗ The check itself failed: ${error instanceof Error ? error.message : String(error)}`;
     } finally {
@@ -882,7 +906,7 @@ function buildNarration(player: HTMLElement, actions: { narrate(key: string | nu
   });
   keyLabel.append(key);
   voiceLabel.append(voice);
-  wrap.append(summary, hint, keyLabel, voiceLabel, test, testStatus, narrate, narrateStatus);
+  wrap.append(summary, hint, connection, keyLabel, voiceLabel, test, testStatus, narrate, narrateStatus);
   player.append(wrap);
 }
 

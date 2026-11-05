@@ -36,9 +36,14 @@ import { defineConfig, loadEnv, type Plugin, type ViteDevServer } from 'vite';
  *
  * Film narration is served the same way: /api/dev/narration-key checks a
  * Cartesia key (the body's, or the server's CARTESIA_API_KEY) by listing one
- * voice, and /api/dev/narrate narrates [{ id, text }] beats with the stub or
- * with Cartesia, returning word starts and base64 PCM. Keys stay in memory on
- * both ends and are never saved.
+ * voice, and reports the key source alongside the voice source
+ * (entered/env/none), the voice id's tail, and whether the pair narrates,
+ * and /api/dev/narrate narrates
+ * [{ id, text }] beats with the stub or with Cartesia, returning word starts
+ * and base64 PCM. With CARTESIA_API_KEY and CARTESIA_VOICE_ID both on the
+ * server, Cartesia narration works with both UI fields empty; UI-entered
+ * values keep precedence. Keys stay in memory on both ends, are never saved,
+ * and never leave the server; an env voice shows only its tail.
  */
 const DEV_SECRET = 'playground-only-secret-never-used-in-production';
 const FIGURES_FILE = fileURLToPath(new URL('./.generated/figures.json', import.meta.url));
@@ -111,7 +116,7 @@ function providerEnv(provider: Provider): { key: string | null; source: string }
 }
 
 /** The dev server's Cartesia key: CARTESIA_API_KEY from the shell or .env, memory only. */
-function cartesiaEnv(): { key: string | null; source: string } {
+function cartesiaEnv(): { key: string | null; source: import('@incantly/generation').CartesiaKeySource } {
   const env = devEnv();
   const fromShell = process.env.CARTESIA_API_KEY ?? null;
   const key = fromShell ?? env.CARTESIA_API_KEY ?? null;
@@ -355,15 +360,21 @@ function generationService(): Plugin {
             return json(probe.ok ? 200 : 401, { ...probe, provider, source: givenKey !== null ? 'entered' : providerEnv(provider).source });
           }
           if (path === '/api/dev/narration-key' && req.method === 'POST') {
-            const input = (await body(req)) as { apiKey?: unknown };
+            const input = (await body(req)) as { apiKey?: unknown; voice?: unknown };
             const givenKey = typeof input.apiKey === 'string' && input.apiKey !== '' ? input.apiKey.trim() : null;
+            const givenVoice = typeof input.voice === 'string' && input.voice !== '' ? input.voice.trim() : null;
             const env = cartesiaEnv();
             const effective = givenKey ?? env.key;
+            // Shell wins over .env, as for the key; an entered voice wins over both.
+            const resolved = g.resolveCartesiaVoice(givenVoice, { ...devEnv(), ...process.env });
+            const keySource = givenKey !== null ? 'entered' : effective ? env.source : 'none';
+            const connection = g.cartesiaConnection(keySource, resolved.voice, resolved.source);
+            const status = { voiceSource: connection.voiceSource, voiceTail: connection.voiceTail, connected: connection.connected };
             if (!effective) {
-              return json(400, { ok: false, message: 'No key to check: paste a Cartesia key or set CARTESIA_API_KEY on the dev server.', source: 'none' });
+              return json(400, { ok: false, message: 'No key to check: paste a Cartesia key or set CARTESIA_API_KEY on the dev server.', source: 'none', ...status });
             }
             const probe = await g.checkCartesiaKey(effective);
-            return json(probe.ok ? 200 : 401, { ...probe, source: givenKey !== null ? 'entered' : env.source });
+            return json(probe.ok ? 200 : 401, { ...probe, source: keySource, ...status });
           }
           if (path === '/api/dev/narrate' && req.method === 'POST') {
             const input = (await body(req, 256_000)) as { beats?: unknown; source?: unknown; apiKey?: unknown; voice?: unknown };
@@ -371,12 +382,16 @@ function generationService(): Plugin {
             if (!beats) return json(400, { ok: false, message: 'Send { beats: [{ id, text }] }.' });
             const source = input.source === 'cartesia' ? 'cartesia' : 'stub';
             const givenKey = typeof input.apiKey === 'string' && input.apiKey !== '' ? input.apiKey.trim() : null;
-            const voice = typeof input.voice === 'string' && input.voice !== '' ? input.voice.trim() : null;
+            const givenVoice = typeof input.voice === 'string' && input.voice !== '' ? input.voice.trim() : null;
             let narrator: import('@incantly/generation').Narrator = new g.StubNarrator();
+            let voice: string | undefined;
             if (source === 'cartesia') {
               const effective = givenKey ?? cartesiaEnv().key;
               if (!effective) return json(400, { ok: false, message: 'Set CARTESIA_API_KEY to narrate with Cartesia; without it films generate silent with estimated lengths.' });
-              if (!voice) return json(400, { ok: false, message: 'A Cartesia voice id is required.' });
+              // An entered voice wins; an empty field falls back to the server's CARTESIA_VOICE_ID.
+              const resolved = g.resolveCartesiaVoice(givenVoice, { ...devEnv(), ...process.env });
+              if (!resolved.voice) return json(400, { ok: false, message: 'Paste a Cartesia voice id, or set CARTESIA_VOICE_ID on the dev server.' });
+              voice = resolved.voice;
               // Shell wins over .env, as for the key: the gate stays fail-closed when neither accepts.
               const retentionAccepted = g.cartesiaRetentionAccepted({ ...devEnv(), ...process.env });
               try {

@@ -6,15 +6,19 @@ import {
   StubNarrator,
   TtsError,
   applyCartesiaSseEvent,
+  cartesiaConnection,
   cartesiaHttpError,
   cartesiaRetentionAccepted,
+  cartesiaVoiceFromEnv,
   checkCartesiaKey,
   contentHash,
   countSpeechWords,
   estimateWordTimings,
+  resolveCartesiaVoice,
   speechCostUsd,
   timingsSeconds,
   validateWordTimings,
+  voiceTail,
 } from '../src/tts';
 import thirty from './fixtures/narration-thirty.json';
 import sixty from './fixtures/narration-sixty.json';
@@ -320,6 +324,74 @@ describe('tts: Cartesia client', () => {
     const error = new TtsError('rate-limited', 'slow down');
     expect(error.retryable).toBe(true);
     expect(new TtsError('auth', 'no').retryable).toBe(false);
+  });
+});
+
+describe('tts: Cartesia voice default', () => {
+  const voiceOf = (requested: string | null, env: NodeJS.ProcessEnv): [string | null, 'entered' | 'env' | 'none'] => {
+    const resolved = resolveCartesiaVoice(requested, env);
+    return [resolved.voice, resolved.source];
+  };
+
+  it('reads the default voice from CARTESIA_VOICE_ID, unset or empty meaning none', () => {
+    expect(cartesiaVoiceFromEnv({ CARTESIA_VOICE_ID: 'voice-id' } as NodeJS.ProcessEnv)).toBe('voice-id');
+    expect(cartesiaVoiceFromEnv({} as NodeJS.ProcessEnv)).toBe(null);
+    expect(cartesiaVoiceFromEnv({ CARTESIA_VOICE_ID: '' } as NodeJS.ProcessEnv)).toBe(null);
+    expect(cartesiaVoiceFromEnv({ CARTESIA_VOICE_ID: '   ' } as NodeJS.ProcessEnv)).toBe(null);
+  });
+
+  it('reads the process default voice, restored afterwards', () => {
+    const before = process.env.CARTESIA_VOICE_ID;
+    try {
+      delete process.env.CARTESIA_VOICE_ID;
+      expect(cartesiaVoiceFromEnv()).toBe(null);
+      process.env.CARTESIA_VOICE_ID = 'env-voice';
+      expect(cartesiaVoiceFromEnv()).toBe('env-voice');
+    } finally {
+      if (before === undefined) delete process.env.CARTESIA_VOICE_ID;
+      else process.env.CARTESIA_VOICE_ID = before;
+    }
+  });
+
+  it('lets an entered voice win over the server default', () => {
+    const env = { CARTESIA_VOICE_ID: 'env-voice' } as NodeJS.ProcessEnv;
+    expect(resolveCartesiaVoice('entered-voice', env)).toEqual({ voice: 'entered-voice', source: 'entered' });
+    expect(resolveCartesiaVoice('  entered-voice  ', env)).toEqual({ voice: 'entered-voice', source: 'entered' });
+  });
+
+  it('falls back to the server default on an empty field, and to none without it', () => {
+    const env = { CARTESIA_VOICE_ID: 'env-voice' } as NodeJS.ProcessEnv;
+    expect(resolveCartesiaVoice(null, env)).toEqual({ voice: 'env-voice', source: 'env' });
+    expect(resolveCartesiaVoice('', env)).toEqual({ voice: 'env-voice', source: 'env' });
+    expect(resolveCartesiaVoice('   ', env)).toEqual({ voice: 'env-voice', source: 'env' });
+    expect(resolveCartesiaVoice(undefined, env)).toEqual({ voice: 'env-voice', source: 'env' });
+    expect(resolveCartesiaVoice(null, {} as NodeJS.ProcessEnv)).toEqual({ voice: null, source: 'none' });
+    expect(resolveCartesiaVoice(null, { CARTESIA_VOICE_ID: '' } as NodeJS.ProcessEnv)).toEqual({ voice: null, source: 'none' });
+  });
+
+  it('reports none, partial and full connection states from the two sources', () => {
+    const none = { CARTESIA_VOICE_ID: undefined } as unknown as NodeJS.ProcessEnv;
+    const voiced = { CARTESIA_VOICE_ID: 'env-voice' } as NodeJS.ProcessEnv;
+    // Neither side: nothing to narrate with.
+    expect(cartesiaConnection('none', ...voiceOf(null, none))).toEqual({ keySource: 'none', voiceSource: 'none', voiceTail: null, connected: false });
+    // One side only: partial, still not connected.
+    expect(cartesiaConnection('.env', ...voiceOf(null, none)).connected).toBe(false);
+    expect(cartesiaConnection('none', ...voiceOf(null, voiced))).toEqual({ keySource: 'none', voiceSource: 'env', voiceTail: 'oice', connected: false });
+    // Both sides, from either origin: connected, with only the voice tail shown.
+    expect(cartesiaConnection('.env', ...voiceOf(null, voiced))).toEqual({ keySource: '.env', voiceSource: 'env', voiceTail: 'oice', connected: true });
+    expect(cartesiaConnection('entered', ...voiceOf('entered-voice', none))).toEqual({
+      keySource: 'entered',
+      voiceSource: 'entered',
+      voiceTail: 'oice',
+      connected: true,
+    });
+  });
+
+  it('shows only the last four characters of a voice id', () => {
+    expect(voiceTail('voice-abcdef')).toBe('cdef');
+    expect(voiceTail('abc')).toBe('abc');
+    expect(voiceTail(null)).toBe(null);
+    expect(voiceTail(undefined)).toBe(null);
   });
 });
 

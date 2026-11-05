@@ -238,6 +238,58 @@ export function cartesiaKeyFromEnv(env: NodeJS.ProcessEnv = process.env): string
   return key && key.trim() !== '' ? key : null;
 }
 
+/** The Cartesia default voice id from the environment, and only there. Empty or unset means the UI must supply a voice. */
+export function cartesiaVoiceFromEnv(env: NodeJS.ProcessEnv = process.env): string | null {
+  const voice = env.CARTESIA_VOICE_ID;
+  return voice && voice.trim() !== '' ? voice : null;
+}
+
+/** Where a narration voice came from: the UI field, the server environment, or nowhere. */
+export type CartesiaVoiceSource = 'entered' | 'env' | 'none';
+
+/**
+ * The voice a narration request resolves to, following the key convention:
+ * the UI-entered id wins, an empty field falls back to the server's
+ * CARTESIA_VOICE_ID, and with neither the voice stays required from the UI.
+ */
+export function resolveCartesiaVoice(
+  requested: string | null | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): { readonly voice: string | null; readonly source: CartesiaVoiceSource } {
+  if (requested && requested.trim() !== '') return { voice: requested.trim(), source: 'entered' };
+  const fromEnv = cartesiaVoiceFromEnv(env);
+  return fromEnv ? { voice: fromEnv, source: 'env' } : { voice: null, source: 'none' };
+}
+
+/**
+ * The last four characters of a voice id for status displays. The key never
+ * leaves the server, and an env voice shows only its tail — enough to tell
+ * voices apart at a glance, never the whole id.
+ */
+export function voiceTail(voice: string | null | undefined): string | null {
+  return voice ? voice.slice(-4) : null;
+}
+
+/** Where a narration key came from, as the dev server reports it. */
+export type CartesiaKeySource = 'entered' | 'shell' | '.env' | 'none';
+
+/**
+ * The Cartesia connection state the dev server reports and the player shows:
+ * both sources, the voice id's tail, and whether the pair narrates. The key
+ * itself never appears: only its source travels.
+ */
+export interface CartesiaConnection {
+  readonly keySource: CartesiaKeySource;
+  readonly voiceSource: CartesiaVoiceSource;
+  readonly voiceTail: string | null;
+  readonly connected: boolean;
+}
+
+/** Composes the connection state from a resolved key source and voice. Only a complete pair narrates. */
+export function cartesiaConnection(keySource: CartesiaKeySource, voice: string | null, voiceSource: CartesiaVoiceSource): CartesiaConnection {
+  return { keySource, voiceSource, voiceTail: voiceTail(voice), connected: keySource !== 'none' && voiceSource !== 'none' };
+}
+
 /**
  * Whether the operator accepts Cartesia's data retention for real TTS calls.
  * Fail-closed: only CARTESIA_RETENTION_ACCEPTED=1 accepts. The vendor decision

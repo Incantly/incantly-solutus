@@ -1406,6 +1406,7 @@ main.style-page {
 .inc-narration input { padding: 6px 8px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--input-bg); color: inherit; }
 .inc-narration-hint { margin: 0; font-size: 0.8rem; color: var(--text-muted, #6b7280); }
 .inc-narration-status { margin: 0; font-size: 0.85rem; }
+.inc-narration-connection { margin: 0; font-size: 0.85rem; }
 .inc-narration button { align-self: start; }
 .inc-player-transport { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .inc-player-transport input[type='range'] { flex: 1 1 120px; min-width: 80px; }
