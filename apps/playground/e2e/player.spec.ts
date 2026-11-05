@@ -219,7 +219,68 @@ test('narration settings keep the key in memory and need none for the stub', asy
   await expect(key).toHaveAttribute('type', 'password');
   await expect(key).toHaveAttribute('autocomplete', 'off');
   await expect(key).toHaveValue('');
+  await expect(page.locator('.inc-narration-voice')).toHaveValue('');
   await expect(page.locator('.inc-narration-hint')).toContainText('never saved');
+});
+
+test('the narration section shows the Cartesia connection state without a key check', async ({ page }) => {
+  await openPlayer(page, 'thirty');
+  await page.locator('.inc-narration > summary').click();
+  const connection = page.locator('.inc-narration-connection');
+  // At a glance, before Test connection is ever pressed: the state line names both sources.
+  await expect(connection).toContainText(/Cartesia (not )?connected \(key source: [\w.]+, voice source: \w+/, { timeout: 30_000 });
+  await expect(page.getByRole('button', { name: 'Test connection' })).toBeVisible();
+  // Autoconnect removes pasting, not the Sound toggle: films still open silent.
+  await expect(page.getByRole('button', { name: 'Sound' })).toHaveText('Sound: off');
+});
+
+test('the key check reports the voice source and never the key', async ({ page }) => {
+  await openPlayer(page, 'thirty');
+  const empty = await page.request.post('/api/dev/narration-key', { data: {} });
+  const shape = (await empty.json()) as Record<string, unknown>;
+  test.skip(shape.source !== 'none' || shape.voiceSource !== 'none', 'needs a dev server without CARTESIA_API_KEY and CARTESIA_VOICE_ID');
+  // None/none, with no probe and no network: the voice travels as a source, never as an id, and the key not at all.
+  expect(empty.status()).toBe(400);
+  expect(shape).toMatchObject({ ok: false, source: 'none', voiceSource: 'none', voiceTail: null, connected: false });
+  expect(shape).not.toHaveProperty('apiKey');
+  // Partial: an entered voice with no key still answers without a probe, as a source plus a tail.
+  const partial = await page.request.post('/api/dev/narration-key', { data: { voice: 'voice-sentinel-abcdef' } });
+  expect(partial.status()).toBe(400);
+  const part = (await partial.json()) as Record<string, unknown>;
+  expect(part).toMatchObject({ source: 'none', voiceSource: 'entered', voiceTail: 'cdef', connected: false });
+  expect(JSON.stringify(part)).not.toContain('voice-sentinel-abcdef');
+});
+
+test('cartesia narration with both fields empty falls back to the server default', async ({ page }) => {
+  await openPlayer(page, 'thirty');
+  const status = (await (await page.request.post('/api/dev/narration-key', { data: {} })).json()) as { source?: string; voiceSource?: string };
+  test.skip(status.source !== 'none' || status.voiceSource !== 'none', 'needs a dev server without CARTESIA_API_KEY and CARTESIA_VOICE_ID');
+  const beats = [{ id: 's1b1', text: 'A pendulum hangs from its pivot.' }];
+  // Both fields empty and nothing on the server: today's behavior — the key, then the voice, is required from the UI.
+  const keyless = await page.request.post('/api/dev/narrate', { data: { beats, source: 'cartesia' } });
+  expect(keyless.status()).toBe(400);
+  expect(((await keyless.json()) as { message?: string }).message).toMatch(/CARTESIA_API_KEY/);
+  const voiceless = await page.request.post('/api/dev/narrate', { data: { beats, source: 'cartesia', apiKey: 'test-key-sentinel-0000000000' } });
+  expect(voiceless.status()).toBe(400);
+  const voicelessBody = (await voiceless.json()) as Record<string, unknown>;
+  expect(voicelessBody.message).toMatch(/CARTESIA_VOICE_ID/);
+  // An entered key and voice resolve past both required gates — the retention gate answers, with zero network.
+  const entered = await page.request.post('/api/dev/narrate', {
+    data: { beats, source: 'cartesia', apiKey: 'test-key-sentinel-0000000000', voice: 'entered-voice-id' },
+  });
+  test.skip(entered.status() === 200, 'the dev server accepts Cartesia retention, so this request narrated for real');
+  expect(entered.status()).toBe(400);
+  const enteredBody = (await entered.json()) as Record<string, unknown>;
+  expect(enteredBody.message).toMatch(/RETENTION/);
+  // The key never leaves the server: no response carries it back.
+  for (const body of [voicelessBody, enteredBody]) {
+    expect(body).not.toHaveProperty('apiKey');
+    expect(JSON.stringify(body)).not.toContain('test-key-sentinel-0000000000');
+  }
+  // The button sends both fields empty and reports the server's answer.
+  await page.locator('.inc-narration > summary').click();
+  await page.getByRole('button', { name: 'Narrate with Cartesia' }).click();
+  await expect(page.locator('.inc-narration').getByText('The dev server did not answer.')).toBeVisible({ timeout: 15_000 });
 });
 
 test('Another example opens a side clip with its own playback and returns to the film', async ({ page }) => {

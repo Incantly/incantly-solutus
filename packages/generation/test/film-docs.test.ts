@@ -28,6 +28,7 @@ describe('film docs in sync', () => {
     expect(text).toContain('inc.steps');
     expect(text).toContain('shared context');
     expect(text).toContain('`say`');
+    expect(text).toContain('CARTESIA_VOICE_ID');
     expect(doc('docs/README.md')).toContain('(sdk/films.md)');
   });
 

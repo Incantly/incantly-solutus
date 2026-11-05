@@ -75,6 +75,16 @@ stay within one video frame of the audio. Scenes run at most 60 seconds on
 the fixed film clock and seek by replay, so seeking to t draws what
 playing to t draws.
 
+## Narration
+
+Beats narrate with the stub's silent timing by default, so a film never
+waits on speech. For Cartesia voices, set `CARTESIA_API_KEY` and
+`CARTESIA_VOICE_ID` (a Voice Library id) on the dev server: opening a film
+and pressing Narrate with Cartesia then works with both fields empty, the
+player shows the key and voice sources at a glance, and films stay silent
+until Sound is on. Pasted values override the server's, and the key is kept
+in memory on both ends and never saved.
+
 ## What the engine owns
 
 Layout, checks, player, questions, versions and export are the engine's,

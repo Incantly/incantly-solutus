@@ -120,16 +120,20 @@ export {
   cartesiaHttpError,
   cartesiaKeyFromEnv,
   cartesiaRetentionAccepted,
+  cartesiaVoiceFromEnv,
   checkCartesiaKey,
+  cartesiaConnection,
   contentHash,
   countSpeechWords,
   estimateWordTimings,
+  resolveCartesiaVoice,
   speechCostUsd,
   splitSpeechWords,
   timingsSeconds,
   validateWordTimings,
+  voiceTail,
 } from './tts';
-export type { CartesiaOptions, SpeakReply, SpeakRequest, StubVoice, TtsErrorKind, WordTiming, Narrator } from './tts';
+export type { CartesiaConnection, CartesiaKeySource, CartesiaOptions, CartesiaVoiceSource, SpeakReply, SpeakRequest, StubVoice, TtsErrorKind, WordTiming, Narrator } from './tts';
 export {
   NARRATION_MAX_AUDIO_BYTES,
   NARRATION_MAX_CACHED_LINES,
