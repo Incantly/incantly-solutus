@@ -10,6 +10,8 @@ interface GalleryCard {
   readonly tag: string;
   /** A reviewed scene mounts live in the detail panel; prompt-only cards generate first. */
   readonly sceneId?: string;
+  /** A film card opens its film in the player instead of generating in chat. */
+  readonly playerFilm?: string;
 }
 
 /**
@@ -33,6 +35,9 @@ const PROMPT_CARDS: readonly GalleryCard[] = [
   { title: 'A mouse running', tag: 'Animals', prompt: "Show me a mouse running. Why do its legs move so much faster than a horse's?" },
   { title: 'A cheetah at full speed', tag: 'Animals', prompt: 'Show me a cheetah running at full speed, and how its back bends with each stride.' },
   { title: 'An ape standing up', tag: 'Animals', prompt: 'Show me an ape walking on all fours, then standing up and walking on two legs.' },
+  // Films a learner can play, scrub, question and export in the player (PRD 28).
+  { title: 'How a pendulum keeps time', tag: 'Film · 30 s', prompt: 'Show me a 30-second film about how a pendulum keeps time.', playerFilm: 'thirty' },
+  { title: 'What a wave carries', tag: 'Film · 1 min', prompt: 'Show me a one-minute film about what a wave carries.', playerFilm: 'sixty' },
 ];
 
 /** Generated from packages/core/scenes by scripts/generate.mjs. */
@@ -150,6 +155,9 @@ export function mountGenerationsPage(root: HTMLElement): void {
     detail.querySelector('.gallery-detail__title')!.textContent = card.title;
     detail.querySelector('.gallery-detail__prompt')!.textContent = card.prompt;
     detail.dataset.prompt = card.prompt;
+    if (card.playerFilm) detail.dataset.film = card.playerFilm;
+    else delete detail.dataset.film;
+    (detail.querySelector('.gallery-detail__generate') as HTMLButtonElement).textContent = card.playerFilm ? 'Open in player' : 'Generate in chat';
     preview?.destroy();
     preview = null;
     const visual = detail.querySelector('.gallery-detail__visual') as HTMLElement;
@@ -185,6 +193,11 @@ export function mountGenerationsPage(root: HTMLElement): void {
     if (e.key === 'Escape' && !detail.hidden) closeDetail();
   });
   detail.querySelector('.gallery-detail__generate')!.addEventListener('click', () => {
+    const film = detail.dataset.film;
+    if (film) {
+      location.href = `/?page=player&film=${encodeURIComponent(film)}`;
+      return;
+    }
     const prompt = detail.dataset.prompt ?? '';
     if (prompt) location.href = `/?page=generate&prompt=${encodeURIComponent(prompt)}`;
   });
@@ -268,7 +281,7 @@ export function mountGenerationsPage(root: HTMLElement): void {
   window.__playground = {
     ready: true,
     page: 'generations',
-    cards: catalog.map((card) => ({ title: card.title, tag: card.tag, prompt: card.prompt, sceneId: card.sceneId ?? null })),
+    cards: catalog.map((card) => ({ title: card.title, tag: card.tag, prompt: card.prompt, sceneId: card.sceneId ?? null, playerFilm: card.playerFilm ?? null })),
   };
   window.addEventListener('pagehide', () => {
     preview?.destroy();

@@ -26,7 +26,9 @@
     "evals": "npm run evals --workspace @incantly/generation --",
     "serve": "npm run serve --workspace @incantly/generation",
     "gallery": "npm run gallery --workspace @incantly/generation --",
-    "release": "node scripts/release-packages.mjs"
+    "release": "node scripts/release-packages.mjs",
+    "film-bench": "npm run film-bench --workspace @incantly/generation --",
+    "film-evals": "npm run film-evals --workspace @incantly/generation --"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.13.0",

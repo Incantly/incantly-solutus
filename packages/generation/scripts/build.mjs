@@ -5,6 +5,8 @@
 //   dist/bench.mjs  - the agent bench (stage-by-stage prompts and checks)
 //   dist/metrics.mjs - the generation dashboard from failure records
 //   dist/gallery.mjs - the gallery review command
+//   dist/film-bench.mjs - the film bench (tokens, pace and the cap derivation)
+//   dist/film-evals.mjs - the film eval runner with its zero-broken gate
 import { build } from 'esbuild';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,7 +16,15 @@ const here = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 await generate();
 await build({
-  entryPoints: { serve: join(here, 'src/cli/serve.ts'), evals: join(here, 'src/cli/evals.ts'), bench: join(here, 'src/cli/bench.ts'), metrics: join(here, 'src/cli/metrics.ts'), gallery: join(here, 'src/cli/gallery.ts') },
+  entryPoints: {
+    serve: join(here, 'src/cli/serve.ts'),
+    evals: join(here, 'src/cli/evals.ts'),
+    bench: join(here, 'src/cli/bench.ts'),
+    metrics: join(here, 'src/cli/metrics.ts'),
+    gallery: join(here, 'src/cli/gallery.ts'),
+    'film-bench': join(here, 'src/cli/film-bench.ts'),
+    'film-evals': join(here, 'src/cli/film-evals.ts'),
+  },
   outdir: join(here, 'dist'),
   outExtension: { '.js': '.mjs' },
   bundle: true,

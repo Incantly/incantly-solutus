@@ -571,6 +571,23 @@ test('an insert is kept privately and promotes to a shared version', async ({ pa
   await expect(page.locator('.inc-caption')).toContainText('Here is the step again, slowed down.');
 });
 
+test('an insert created while Export is open re-syncs the Export selector', async ({ page }) => {
+  await openPlayer(page, 'thirty');
+  await page.locator('.inc-export > summary').click();
+  await expect(page.locator('.inc-export-select option')).toHaveCount(0);
+  await expect(page.locator('.inc-export-insert')).toBeDisabled();
+
+  await seekBeat(page, 2, 0.6);
+  await page.getByRole('button', { name: 'Ask about this moment' }).click();
+  await page.locator('.inc-ask-chips button').nth(2).click();
+  await expect(page.locator('.inc-insert')).toContainText('Explaining deeper', { timeout: 15_000 });
+  await expect.poll(async () => (await versionsState(page)).inserts.length).toBe(1);
+
+  // No section toggle: the selector lists the new insert at once.
+  await expect(page.locator('.inc-export-select option')).toHaveCount(1);
+  await expect(page.locator('.inc-export-insert')).toBeEnabled();
+});
+
 test('a refused promotion explains that only the author promotes', async ({ page }) => {
   await page.route('**/api/v1/films/pendulum/promote', (route) => route.fulfill({ status: 404, json: { status: 'failed', reason: 'missing' } }));
   await openPlayer(page, 'thirty');

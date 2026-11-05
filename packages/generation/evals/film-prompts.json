@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "notes": "Learner-style film requests, one concept per length preset (PRD 28, FV-11). Several phrasings per concept keep trials from all sharing one wording. The bench runs the same prompts for tokens and dollars per length; the film evals run them for pass rates with a zero-broken gate.",
+  "concepts": [
+    {
+      "id": "pendulum",
+      "concept": "how a pendulum keeps time",
+      "lengths": [30],
+      "phrasings": [
+        "Show me a 30-second film about how a pendulum keeps time.",
+        "Make a short film: why does a pendulum swing in the same time whatever its size?",
+        "A half-minute film on pendulums keeping time, please."
+      ]
+    },
+    {
+      "id": "wave",
+      "concept": "what a wave carries",
+      "lengths": [60],
+      "phrasings": [
+        "Show me a one-minute film about what a wave carries.",
+        "Make a 60-second film: a wave carries energy while the water only bobs.",
+        "I want a minute-long film explaining wave energy."
+      ]
+    },
+    {
+      "id": "ticket-queue",
+      "concept": "how a support team handles a ticket",
+      "lengths": [120],
+      "phrasings": [
+        "Show me a two-minute film about how a support team handles a ticket.",
+        "Make a film, about two minutes, on a ticket arriving, being triaged and resolved.",
+        "How does a ticket move through a support team? A 2-minute film, please."
+      ]
+    },
+    {
+      "id": "photosynthesis",
+      "concept": "how a leaf turns light into food",
+      "lengths": [180],
+      "phrasings": [
+        "Show me a three-minute film about how a leaf turns light into food.",
+        "Make a 3-minute film: sunlight, water and air becoming sugar in a leaf.",
+        "Photosynthesis as a three-minute film for a biology student."
+      ]
+    },
+    {
+      "id": "city-water",
+      "concept": "how water reaches a city tap",
+      "lengths": [240],
+      "phrasings": [
+        "Show me a four-minute film about how water reaches a city tap.",
+        "Make a 4-minute film: from reservoir through treatment to the tap.",
+        "A four-minute film on the journey of tap water, please."
+      ]
+    }
+  ]
+}

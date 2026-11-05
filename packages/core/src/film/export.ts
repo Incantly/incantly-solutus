@@ -49,6 +49,9 @@ export const EXPORT_MAX_DIMENSION = 2048;
 /** Longest an export may run, in seconds: the audio track allocates the whole timeline, so the cap bounds it. */
 export const EXPORT_MAX_AUDIO_SECONDS = 600;
 
+/** Longest a deck slide export may run, in seconds: slides render the same frames the video export encodes, so the same bound applies. */
+export const EXPORT_DECK_MAX_SECONDS = EXPORT_MAX_AUDIO_SECONDS;
+
 /** Longest one export download filename segment; storage ids already truncate to this. */
 export const EXPORT_FILENAME_SEGMENT_CHARS = 80;
 
@@ -441,8 +444,14 @@ export interface DeckSlide extends DeckSlideRef {
  * beat's first frame in its chunk's render. Frame 0 opens the chunk's first
  * beat; every later beat first shows in the frame whose lattice time crosses
  * its start — the same frame whose pixels the capture session would encode.
+ * Refuses plans past EXPORT_DECK_MAX_SECONDS before any work, as the video
+ * export refuses past EXPORT_MAX_AUDIO_SECONDS: a runaway timeline would
+ * otherwise render tens of thousands of frames for hundreds of stills.
  */
 export function planDeckSlides(plan: ExportPlan): DeckSlideRef[] {
+  if (plan.seconds > EXPORT_DECK_MAX_SECONDS) {
+    throw new ExportError(`The deck runs ${Math.ceil(plan.seconds)} seconds of slides; at most ${EXPORT_DECK_MAX_SECONDS}`);
+  }
   const slides: DeckSlideRef[] = [];
   let index = 0;
   for (const chunk of plan.chunks) {
@@ -462,7 +471,8 @@ export function planDeckSlides(plan: ExportPlan): DeckSlideRef[] {
  * Renders a deck's slides through the offline renderer: each chunk renders
  * once, in order, and every beat's opening frame is yielded as its still. The
  * frames are the video export's own frames, so capturing a slide through the
- * same session the video uses rasterizes the same pixels.
+ * same session the video uses rasterizes the same pixels. Over-long plans are
+ * refused before the first frame, and cancellation still stops between frames.
  */
 export function* renderDeckSlides(plan: ExportPlan, scenes: readonly ExportSceneInput[], cancel: ExportCancellation, hooks: RenderExportHooks = {}): Generator<DeckSlide, void, void> {
   const byScene = new Map(scenes.map((scene) => [scene.id, scene]));

@@ -1,9 +1,11 @@
 /**
  * Pilot telemetry (the product signals): whether learners change parameters
  * and finish walkthroughs, how fast figures appear, how generation and repair
- * go, and what fails. Every signal is ids, names, numbers and fixed words,
- * checked field by field, so no note content can leave the device: anything
- * that does not fit is dropped and counted.
+ * go, what fails, and how films play — starts, completions, scrubs, asks,
+ * inserts, resumes, exports and scene timings, with per-beat question counts
+ * as the unclear-content signal. Every signal is ids, names, numbers and
+ * fixed words, checked field by field, so no note, question or prompt content
+ * can leave the device: anything that does not fit is dropped and counted.
  */
 
 export type FallbackLevel = 'last-approved' | 'standard' | 'snapshot' | 'text';
@@ -42,7 +44,23 @@ export type ProductSignal =
       readonly values: Readonly<Record<string, number>>;
     }
   /** A stored figure could not be restored. */
-  | { readonly type: 'restore-failure'; readonly figureId: string; readonly reason: string };
+  | { readonly type: 'restore-failure'; readonly figureId: string; readonly reason: string }
+  /** A film started playing: its id, version and length target in seconds. */
+  | { readonly type: 'film-start'; readonly filmId: string; readonly version?: number; readonly length?: number }
+  /** A film played to its end: watch time, beats and version. */
+  | { readonly type: 'film-complete'; readonly filmId: string; readonly ms: number; readonly beats: number; readonly version?: number }
+  /** The learner scrubbed from one beat to another. */
+  | { readonly type: 'film-scrub'; readonly filmId: string; readonly from: string; readonly to: string }
+  /** The learner asked at a beat: the rung and how many questions this beat has drawn this session — the unclear-content signal. */
+  | { readonly type: 'film-ask'; readonly filmId: string; readonly beat: string; readonly rung: 'answer' | 'show-me' | 'example' | 'change'; readonly count: number }
+  /** An insert played: its anchor beat and line count. */
+  | { readonly type: 'film-insert'; readonly filmId: string; readonly beat: string; readonly lines: number }
+  /** Playback resumed where it was left: the beat and word. */
+  | { readonly type: 'film-resume'; readonly filmId: string; readonly beat: string; readonly word: number }
+  /** A film exported on the device: what kind, and how long it took. */
+  | { readonly type: 'film-export'; readonly filmId: string; readonly kind: 'video' | 'slides' | 'transcript' | 'data'; readonly ms: number }
+  /** A film scene turned playable: its id and the time from the tap. */
+  | { readonly type: 'film-scene'; readonly filmId: string; readonly scene: string; readonly ms: number };
 
 export type TelemetryEvent = ProductSignal & { readonly at: number; readonly session: string };
 
@@ -77,6 +95,14 @@ const SCHEMA: Readonly<Record<ProductSignal['type'], Readonly<Record<string, rea
   repair: { ms: ['ms', true], outcome: [['scene', 'fallback', 'error'], true] },
   'figure-failure': { figureId: ['token', true], generationId: ['token', false], kind: ['token', true], fatal: ['boolean', true], values: ['values', true] },
   'restore-failure': { figureId: ['token', true], reason: ['token', true] },
+  'film-start': { filmId: ['token', true], version: ['count', false], length: ['count', false] },
+  'film-complete': { filmId: ['token', true], ms: ['ms', true], beats: ['count', true], version: ['count', false] },
+  'film-scrub': { filmId: ['token', true], from: ['token', true], to: ['token', true] },
+  'film-ask': { filmId: ['token', true], beat: ['token', true], rung: [['answer', 'show-me', 'example', 'change'], true], count: ['count', true] },
+  'film-insert': { filmId: ['token', true], beat: ['token', true], lines: ['count', true] },
+  'film-resume': { filmId: ['token', true], beat: ['token', true], word: ['count', true] },
+  'film-export': { filmId: ['token', true], kind: [['video', 'slides', 'transcript', 'data'], true], ms: ['ms', true] },
+  'film-scene': { filmId: ['token', true], scene: ['token', true], ms: ['ms', true] },
 };
 
 function fits(field: Field, value: unknown): boolean {

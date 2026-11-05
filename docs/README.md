@@ -43,6 +43,7 @@ Incantly turns a concept in a learner's notes into a safe, interactive teaching 
 - [SVG](sdk/svg.md): the primary rendering layer.
 - [Graph 2D](sdk/graph2d.md): the first higher-level visualization component.
 - [Teaching](sdk/teaching.md): steps, explanations, descriptions, and pedagogical bounds.
+- [Films](sdk/films.md): beat cues on steps, the shared film context, and what the engine owns.
 - [Scene subset](sdk/scene-subset.md): the JavaScript, HTML and CSS a scene may use, rule by rule.
 - [Styling figures](sdk/styling.md): presets, tokens, Tailwind classes per part, layout, size and shown parts, for every figure or one.
 - [Touching the figure](sdk/interaction.md): dragging, tracing, zooming and turning figures with mouse, touch and keyboard.
