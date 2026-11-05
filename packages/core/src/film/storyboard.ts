@@ -32,8 +32,65 @@ export const FILM_MAX_DIAGNOSTICS = 200;
 /** Fastest narration the film checks accept, in words per second. */
 export const FILM_READING_WPS_LIMIT = 3.5;
 
+/** Longest a scene may run in seconds (bench: seek-by-replay stays under ~150 ms on the slowest supported iPad). */
+export const FILM_SCENE_MAX_SECONDS = 60;
+
 /** Scene cuts the compiler accepts. */
 const CUTS: readonly SceneCut[] = ['cut', 'fade', 'wipe', 'push'];
+
+/**
+ * The shared film context (ADR 009, video-figures.md PRD 28): palette, part
+ * names, notation, units and tone. The plan call writes it once; every scene
+ * call receives it in its cached prefix; per-scene checks enforce it. Scenes
+ * made apart never see each other, so this is the only thing keeping them in
+ * the same film.
+ */
+export interface FilmContext {
+  /** Palette name, e.g. 'default'. Scenes use tones only, never colour values. */
+  readonly palette: string;
+  /** Canonical part names across the whole film, spelled exactly. */
+  readonly parts: readonly string[];
+  /** Notation the film uses, e.g. 'si'; free-form, matched by the context check. */
+  readonly notation: string;
+  /** Units by parameter or concept name, e.g. { angle: 'rad' }. */
+  readonly units: Readonly<Record<string, string>>;
+  /** Narration tone, e.g. 'plain'. */
+  readonly tone: string;
+}
+
+/** A film context with nothing constrained: every check passes. */
+export const EMPTY_FILM_CONTEXT: FilmContext = Object.freeze({ palette: '', parts: [], notation: '', units: {}, tone: '' });
+
+function isFilmContext(value: unknown): value is FilmContext {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const c = value as Record<string, unknown>;
+  return (
+    typeof c.palette === 'string' &&
+    Array.isArray(c.parts) &&
+    (c.parts as unknown[]).every((p) => typeof p === 'string') &&
+    typeof c.notation === 'string' &&
+    typeof c.units === 'object' &&
+    c.units !== null &&
+    !Array.isArray(c.units) &&
+    Object.values(c.units as Record<string, unknown>).every((u) => typeof u === 'string') &&
+    typeof c.tone === 'string'
+  );
+}
+
+/** Reads a shared film context out of a storyboard's film block, or null when absent or malformed. */
+export function readFilmContext(film: unknown): FilmContext | null {
+  if (typeof film !== 'object' || film === null) return null;
+  const context = (film as Record<string, unknown>).context;
+  if (context === undefined) return null;
+  if (!isFilmContext(context)) return null;
+  return {
+    palette: context.palette.trim().slice(0, 40),
+    parts: context.parts.map((p) => p.trim().slice(0, 80)).filter((p) => p !== ''),
+    notation: context.notation.trim().slice(0, 40),
+    units: Object.fromEntries(Object.entries(context.units).map(([k, v]) => [k.trim().slice(0, 40), v.trim().slice(0, 24)])),
+    tone: context.tone.trim().slice(0, 40),
+  };
+}
 
 /** A beat as the storyboard names it. Execution fields must match the scene's step. */
 export interface StoryboardBeat {
@@ -60,10 +117,12 @@ export interface StoryboardScene {
   readonly beats: readonly StoryboardBeat[];
   /** How the scene ends; default 'cut'. */
   readonly cut?: SceneCut;
+  /** Share of the film's lengthTarget this scene takes, 0 to 1; the shares sum to ~1 when present. */
+  readonly durationShare?: number;
 }
 
 export interface StoryboardSpec {
-  readonly film: { readonly id?: string; readonly title: string; readonly version?: number; readonly lengthTarget?: number };
+  readonly film: { readonly id?: string; readonly title: string; readonly version?: number; readonly lengthTarget?: number; readonly context?: FilmContext };
   readonly scenes: readonly StoryboardScene[];
 }
 
@@ -104,6 +163,8 @@ export interface CompiledFilm {
   readonly seconds: number;
   /** Beat id to scene lines and parts, for questions and repair. */
   readonly sourceMap: Readonly<Record<string, SourceMapEntry>>;
+  /** The shared film context the plan wrote, when the storyboard carried one. */
+  readonly context?: FilmContext;
 }
 
 /** Where a beat comes from in its scene: its own lines and the parts it touches. */
@@ -279,8 +340,13 @@ export function compileFilm(spec: unknown, sources: readonly FilmSceneSource[]):
   }
   const filmId = typeof spec.film.id === 'string' && spec.film.id.trim() !== '' ? spec.film.id : 'film';
   const version = typeof spec.film.version === 'number' && Number.isInteger(spec.film.version) && spec.film.version > 0 ? spec.film.version : 1;
+  const context = readFilmContext(spec.film);
+  if ((spec.film as Record<string, unknown>).context !== undefined && context === null) {
+    error('The film context must be { palette, parts, notation, units, tone }');
+  }
   const byId = new Map(sources.map((source) => [source.id, source]));
   const seenBeats = new Set<string>();
+  const seenScenes = new Set<string>();
 
   interface BuiltScene {
     readonly scene: StoryboardScene;
@@ -295,6 +361,8 @@ export function compileFilm(spec: unknown, sources: readonly FilmSceneSource[]):
       return;
     }
     const scene = rawScene as unknown as StoryboardScene;
+    if (seenScenes.has(scene.id)) error(`Scene "${excerpt(scene.id)}" is used twice`, scene.id);
+    seenScenes.add(scene.id);
     const source = byId.get(scene.id);
     if (!source) {
       error(`Scene "${excerpt(scene.id)}" has no source`, scene.id);
@@ -302,6 +370,9 @@ export function compileFilm(spec: unknown, sources: readonly FilmSceneSource[]):
     }
     const cut = scene.cut ?? 'cut';
     if (!CUTS.includes(cut)) error(`Scene "${excerpt(scene.id)}" cuts with "${excerpt(String(scene.cut))}", which is not cut, fade, wipe or push`, scene.id);
+    if (scene.durationShare !== undefined && (!Number.isFinite(scene.durationShare) || scene.durationShare <= 0 || scene.durationShare > 1)) {
+      error(`Scene "${excerpt(scene.id)}" takes a duration share of ${String(scene.durationShare)}, which is not 0 to 1`, scene.id);
+    }
     if (!Array.isArray(scene.beats) || scene.beats.length === 0) {
       error(`Scene "${excerpt(scene.id)}" needs at least one beat`, scene.id);
       return;
@@ -360,6 +431,16 @@ export function compileFilm(spec: unknown, sources: readonly FilmSceneSource[]):
       beats,
     };
   });
+  for (const compiled of compiledScenes) {
+    if (compiled.seconds - 1e-9 > FILM_SCENE_MAX_SECONDS) {
+      warn(`Scene "${excerpt(compiled.id)}" runs ${compiled.seconds.toFixed(1)} s; scenes run at most ${FILM_SCENE_MAX_SECONDS} s`, compiled.id);
+    }
+  }
+  const shares = built.map(({ scene }) => scene.durationShare).filter((share): share is number => share !== undefined);
+  if (shares.length > 0 && shares.length === built.length) {
+    const total = shares.reduce((sum, share) => sum + share, 0);
+    if (Math.abs(total - 1) > 0.05) warn(`The scenes' duration shares sum to ${total.toFixed(2)}, not 1`);
+  }
   const compiledBeats = compiledScenes.flatMap((scene) => scene.beats);
   const film: CompiledFilm = {
     id: filmId,
@@ -369,6 +450,7 @@ export function compileFilm(spec: unknown, sources: readonly FilmSceneSource[]):
     beats: compiledBeats,
     seconds: compiledBeats.reduce((total, beat) => total + beat.seconds, 0),
     sourceMap: buildSourceMap(built),
+    ...(context ? { context } : {}),
   };
   for (const beat of compiledBeats) {
     const entry = film.sourceMap[beat.id]!;

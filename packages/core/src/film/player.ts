@@ -133,6 +133,17 @@ export class PlayerModel {
     return this.controller.seekBeat(id);
   }
 
+  /** Jumps to a chapter: its scene's first beat. False for an unknown scene. */
+  seekChapter(sceneId: string): boolean {
+    return this.controller.seekChapter(sceneId);
+  }
+
+  /** The chapter on screen now, or null before the first beat. */
+  chapterNow(): string | null {
+    const beat = this.controller.currentBeat;
+    return beat?.sceneId ?? null;
+  }
+
   seekAnchor(anchor: FilmAnchor): boolean {
     return this.controller.seekAnchor(anchor);
   }

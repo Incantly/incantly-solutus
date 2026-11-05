@@ -312,8 +312,14 @@ export interface FilmTransport {
 export interface FilmControllerOptions {
   readonly runtime: SceneRuntime;
   readonly film: CompiledFilm;
-  /** Scene to play; one-scene films play scene 0. Multi-scene sequencing lands later. */
+  /** Scene to play; one-scene films play scene 0. */
   readonly sceneIndex?: number;
+  /**
+   * One runtime per scene, in film order, for multi-scene films: the
+   * controller sequences across them, switching on seeks and scene ends. When
+   * absent the controller drives one scene through `runtime`, as before.
+   */
+  readonly runtimes?: readonly SceneRuntime[];
   /** Transport to the runtime's renderer, so play, pause and seek stay in sync with the figure. */
   readonly transport?: FilmTransport;
   /** Frame clock for controller-driven play; without one the host ticks or polls. */
@@ -325,16 +331,19 @@ export interface FilmControllerOptions {
 }
 
 /**
- * Drives one scene of a compiled film through a runtime in film mode. In
- * driver mode (no transport) the controller ticks the runtime itself, from
- * its clock or from manual tick calls. In observer mode (with transport) the
- * figure's renderer owns the frame loop and the host polls the controller
+ * Drives a compiled film through runtimes in film mode: one scene through
+ * `runtime`, or every scene through `runtimes`, sequencing across them. In
+ * driver mode (no transport) the controller ticks the active runtime itself,
+ * from its clock or from manual tick calls. In observer mode (with transport)
+ * the figure's renderer owns the frame loop and the host polls the controller
  * once per frame.
  */
 export class FilmController {
   private readonly runtime: SceneRuntime;
   private film: CompiledFilm;
   private readonly scene: number;
+  private runtimes: SceneRuntime[] | null;
+  private active: number;
   private readonly transport: FilmTransport | null;
   private readonly clock: FrameClock | null;
   private readonly reducedMotion: boolean;
@@ -359,6 +368,8 @@ export class FilmController {
     this.runtime = options.runtime;
     this.film = options.film;
     this.scene = options.sceneIndex ?? 0;
+    this.runtimes = options.runtimes && options.runtimes.length === options.film.scenes.length ? [...options.runtimes] : null;
+    this.active = this.runtimes ? 0 : this.scene;
     this.transport = options.transport ?? null;
     this.clock = options.clock ?? null;
     this.reducedMotion = options.reducedMotion ?? false;
@@ -367,21 +378,50 @@ export class FilmController {
     if (options.autoplay === true && !this.reducedMotion) this.play();
   }
 
+  /** True once the controller sequences across one runtime per scene. */
+  get multiScene(): boolean {
+    return this.runtimes !== null;
+  }
+
+  /** The active scene's index in the film. */
+  get sceneIndex(): number {
+    return this.runtimes ? this.active : this.scene;
+  }
+
+  private get activeRuntime(): SceneRuntime {
+    return this.runtimes ? this.runtimes[this.active]! : this.runtime;
+  }
+
   private get sceneData() {
-    return this.film.scenes[this.scene]!;
+    return this.film.scenes[this.runtimes ? this.active : this.scene]!;
   }
 
   private get sceneBeats(): readonly CompiledBeat[] {
     return this.sceneData.beats;
   }
 
-  /** Film seconds now: the scene's start plus the runtime's scene time. */
+  /**
+   * Later scenes join as they pass their checks: the host mounts each new
+   * scene's runtime and hands the whole ordered list back. Null clears back
+   * to one scene through `runtime`.
+   */
+  setRuntimes(runtimes: readonly SceneRuntime[] | null): void {
+    if (runtimes && runtimes.length === this.film.scenes.length) {
+      const id = this.film.scenes[this.runtimes ? this.active : this.scene]?.id;
+      this.runtimes = [...runtimes];
+      this.active = Math.max(0, this.film.scenes.findIndex((scene) => scene.id === id));
+    } else {
+      this.runtimes = null;
+    }
+  }
+
+  /** Film seconds now: the active scene's start plus its runtime's scene time. */
   get time(): number {
-    return this.sceneData.start + this.runtime.time;
+    return this.sceneData.start + this.activeRuntime.time;
   }
 
   get duration(): number {
-    return this.sceneData.start + this.sceneData.seconds;
+    return this.runtimes ? this.film.seconds : this.sceneData.start + this.sceneData.seconds;
   }
 
   get isPlaying(): boolean {
@@ -416,12 +456,15 @@ export class FilmController {
   }
 
   play(): void {
-    this.runtime.setFilm(true);
-    if (this.ended || this.time >= this.duration) this.seekBeat(this.sceneBeats[0]!.id);
+    this.activeRuntime.setFilm(true);
+    if (this.ended || this.time >= this.duration) {
+      if (this.runtimes) this.seek(0);
+      else this.seekBeat(this.sceneBeats[0]!.id);
+    }
     this.ended = false;
     this.playing = true;
     if (this.transport) this.transport.send({ type: 'play' });
-    else this.runtime.play();
+    else this.activeRuntime.play();
     this.scan();
     if (this.clock && this.frameHandle === null) {
       this.lastNow = this.now();
@@ -433,7 +476,7 @@ export class FilmController {
   pause(): void {
     this.playing = false;
     if (this.transport) this.transport.send({ type: 'pause' });
-    else this.runtime.pause();
+    else this.activeRuntime.pause();
     if (this.clock && this.frameHandle !== null) {
       this.clock.cancel(this.frameHandle);
       this.frameHandle = null;
@@ -443,13 +486,13 @@ export class FilmController {
 
   setSpeed(value: number): void {
     if (this.transport) this.transport.send({ type: 'speed', value });
-    else this.runtime.setSpeed(value);
+    else this.activeRuntime.setSpeed(value);
   }
 
   setVolume(value: number): void {
     const volume = Math.min(1, Math.max(0, Number.isFinite(value) ? value : 0.5));
     if (this.transport) this.transport.send({ type: 'setValues', values: { $volume: volume } });
-    else this.runtime.setValues({ $volume: volume });
+    else this.activeRuntime.setValues({ $volume: volume });
   }
 
   /**
@@ -460,9 +503,9 @@ export class FilmController {
   tick(dt: number): RuntimeUpdate {
     if (this.transport) return { commands: [], ui: {}, needsFrame: false };
     if (!this.playing) return { commands: [], ui: {}, needsFrame: false };
-    const first = this.runtime.tick(dt);
+    const first = this.activeRuntime.tick(dt);
     this.scan();
-    const second = this.runtime.flush();
+    const second = this.activeRuntime.flush();
     if (second.commands.length === 0 && Object.keys(second.ui).length === 0 && second.values === undefined && second.step === undefined && second.formulas === undefined && second.reset === undefined) {
       return first;
     }
@@ -481,41 +524,70 @@ export class FilmController {
     const dt = Math.max(0, (now - this.lastNow) / 1000);
     this.lastNow = now;
     // The clock drives the runtime; the scan applies the beats it crossed.
-    this.runtime.tick(dt);
+    this.activeRuntime.tick(dt);
     this.scan();
     if (this.playing && this.clock) this.frameHandle = this.clock.request(this.loop);
   };
 
-  /** Applies each beat whose start the clock has crossed, in order. */
+  /** Applies each beat whose start the clock has crossed, in order, sequencing across scenes. */
   private scan(): void {
     const started = this.now();
     try {
-      const beats = this.sceneBeats;
-      const end = this.sceneData.start + this.sceneData.seconds;
       for (;;) {
-        const next = this.beatIndex + 1;
-        const beat = beats[next];
-        if (!beat || this.time + 1e-9 < beat.start) break;
-        const cues = this.applyBeat(next, true);
-        this.emit({ type: 'beat', beat });
-        if (beat.step.sfx !== undefined) this.emit({ type: 'sfx', beat, name: beat.step.sfx, played: cues.sfxPlayed });
-        if (isPausePoint(beat.step)) {
-          const kind = beat.step.explore !== undefined ? 'explore' : beat.step.predict !== undefined ? 'predict' : 'hold';
-          this.pauseAtPoint();
-          this.emit({ type: 'pausePoint', beat, kind });
-          break;
+        const beats = this.sceneBeats;
+        const end = this.sceneData.start + this.sceneData.seconds;
+        for (;;) {
+          const next = this.beatIndex + 1;
+          const beat = beats[next];
+          if (!beat || this.time + 1e-9 < beat.start) break;
+          const cues = this.applyBeat(next, true);
+          this.emit({ type: 'beat', beat });
+          if (beat.step.sfx !== undefined) this.emit({ type: 'sfx', beat, name: beat.step.sfx, played: cues.sfxPlayed });
+          if (isPausePoint(beat.step)) {
+            const kind = beat.step.explore !== undefined ? 'explore' : beat.step.predict !== undefined ? 'predict' : 'hold';
+            this.pauseAtPoint();
+            this.emit({ type: 'pausePoint', beat, kind });
+            return;
+          }
+        }
+        if (!(this.time + FILM_STEP_SECONDS / 2 >= end && this.beatIndex >= beats.length - 1)) return;
+        if (!this.advanceScene()) {
+          this.finish();
+          return;
         }
       }
-      if (this.time + FILM_STEP_SECONDS / 2 >= end && this.beatIndex >= beats.length - 1) this.finish();
     } finally {
       this.boundaryMs += this.now() - started;
     }
   }
 
+  /** Moves to the next scene while playing, or false at the film's end. Single-scene controllers never advance. */
+  private advanceScene(): boolean {
+    if (!this.runtimes || this.active + 1 >= this.film.scenes.length) return false;
+    const from = this.film.scenes[this.active]!;
+    this.active++;
+    const to = this.film.scenes[this.active]!;
+    this.resetSceneState();
+    this.activeRuntime.setFilm(true);
+    if (this.playing && !this.transport) this.activeRuntime.play();
+    else if (this.playing && this.transport) this.transport.send({ type: 'play' });
+    this.emit({ type: 'cut', from: from.id, to: to.id });
+    return true;
+  }
+
+  /** Clears per-scene beat state when the active scene changes. */
+  private resetSceneState(): void {
+    this.beatIndex = -1;
+    this.authored.clear();
+    this.hiddenByFilm.clear();
+    this.lastCamBeat = -1;
+    this.lastCues = null;
+  }
+
   private pauseAtPoint(): void {
     this.playing = false;
     if (this.transport) this.transport.send({ type: 'pause' });
-    else this.runtime.pause();
+    else this.activeRuntime.pause();
     if (this.clock && this.frameHandle !== null) {
       this.clock.cancel(this.frameHandle);
       this.frameHandle = null;
@@ -523,8 +595,10 @@ export class FilmController {
   }
 
   private finish(): void {
-    const next = this.film.scenes[this.scene + 1];
-    if (next) this.emit({ type: 'cut', from: this.sceneData.id, to: next.id });
+    if (!this.runtimes) {
+      const next = this.film.scenes[this.scene + 1];
+      if (next) this.emit({ type: 'cut', from: this.sceneData.id, to: next.id });
+    }
     this.ended = true;
     this.pauseAtPoint();
     this.emit({ type: 'end' });
@@ -537,14 +611,14 @@ export class FilmController {
     this.beatsApplied++;
     // Mark-only annotation parts leave with their beat; show and hide accumulate.
     this.restoreMarks();
-    this.runtime.step('goto', beat.index);
-    if (this.playing && !this.transport) this.runtime.play();
+    this.activeRuntime.step('goto', beat.index);
+    if (this.playing && !this.transport) this.activeRuntime.play();
     else if (this.playing && this.transport) this.transport.send({ type: 'play' });
     this.captureAuthored(beat.step);
-    applyShowHide(this.runtime, beat.step);
+    applyShowHide(this.activeRuntime, beat.step);
     for (const name of beat.step.show ?? []) this.hiddenByFilm.delete(name);
     for (const name of beat.step.hide ?? []) this.hiddenByFilm.add(name);
-    const cues = applyBeatCues(this.runtime, beat.step, { sfx });
+    const cues = applyBeatCues(this.activeRuntime, beat.step, { sfx });
     this.lastCues = cues;
     if (beat.step.cam) this.lastCamBeat = index;
     else if (this.lastCamBeat !== -1 && this.lastCamBeat !== index) this.toWide();
@@ -553,14 +627,14 @@ export class FilmController {
 
   /** Beats without a camera return kit-owned stages to the wide view. */
   private toWide(): void {
-    for (const [stage] of this.runtime.viewControllers()) this.runtime.view(stage, { kind: 'reset' });
+    for (const [stage] of this.activeRuntime.viewControllers()) this.activeRuntime.view(stage, { kind: 'reset' });
     this.lastCamBeat = -1;
   }
 
   private captureAuthored(step: Beat): void {
     for (const name of [...(step.show ?? []), ...(step.hide ?? []), ...(step.mark ?? []).map((mark) => mark.part)]) {
       if (this.authored.has(name)) continue;
-      const record = this.runtime.parts.parts.get(name);
+      const record = this.activeRuntime.parts.parts.get(name);
       if (record) this.authored.set(name, record.node.hidden);
     }
   }
@@ -573,10 +647,10 @@ export class FilmController {
       if (mark.type !== 'arrow' && mark.type !== 'callout' && mark.type !== 'draw') continue;
       if (beat.step.show?.includes(mark.part)) continue;
       const authored = this.authored.get(mark.part);
-      const record = this.runtime.parts.parts.get(mark.part);
+      const record = this.activeRuntime.parts.parts.get(mark.part);
       if (!record) continue;
       const hidden = this.hiddenByFilm.has(mark.part) ? true : (authored ?? true);
-      if (record.node.hidden !== hidden) this.runtime.graph.setFlags(record.node, { hidden });
+      if (record.node.hidden !== hidden) this.activeRuntime.graph.setFlags(record.node, { hidden });
     }
   }
 
@@ -586,8 +660,17 @@ export class FilmController {
    * sets at once, the beat applies as at its boundary, and exact steps play
    * forward to the target. Transport mode needs the same thread (the
    * renderer's own channel), so the replay's reset reaches the figure.
+   * Multi-scene controllers switch to the scene holding the target first.
    */
   seek(seconds: number): void {
+    if (this.runtimes) {
+      const target = Number.isFinite(seconds) ? seconds : 0;
+      let sceneIndex = 0;
+      this.film.scenes.forEach((scene, i) => {
+        if (target + 1e-9 >= scene.start) sceneIndex = i;
+      });
+      if (sceneIndex !== this.active) this.switchScene(sceneIndex);
+    }
     const start = this.sceneData.start;
     const end = start + this.sceneData.seconds;
     const clamped = Math.min(Math.max(Number.isFinite(seconds) ? seconds : start, start), end);
@@ -599,27 +682,27 @@ export class FilmController {
     const beat = beats[index]!;
     this.seeks++;
     if (this.transport) this.transport.send({ type: 'seek', seconds: beat.start - start });
-    else this.runtime.seek(beat.start - start);
+    else this.activeRuntime.seek(beat.start - start);
     this.ended = false;
     this.authored.clear();
     this.hiddenByFilm.clear();
     this.lastCamBeat = -1;
     this.beatIndex = -1;
     // Earlier beats land their sets, as a played film has them landed when the beat starts.
-    this.runtime.setReducedMotion(true);
-    if (index > 0) this.runtime.step('goto', beats[index - 1]!.index);
-    this.runtime.setReducedMotion(this.reducedMotion);
+    this.activeRuntime.setReducedMotion(true);
+    if (index > 0) this.activeRuntime.step('goto', beats[index - 1]!.index);
+    this.activeRuntime.setReducedMotion(this.reducedMotion);
     for (let i = 0; i <= index; i++) {
       const earlier = beats[i]!;
       this.captureAuthored(earlier.step);
-      applyShowHide(this.runtime, earlier.step);
+      applyShowHide(this.activeRuntime, earlier.step);
       for (const name of earlier.step.show ?? []) this.hiddenByFilm.delete(name);
       for (const name of earlier.step.hide ?? []) this.hiddenByFilm.add(name);
     }
     this.beatIndex = index;
     this.beatsApplied++;
-    this.runtime.step('goto', beat.index);
-    this.lastCues = applyBeatCues(this.runtime, beat.step, { sfx: false });
+    this.activeRuntime.step('goto', beat.index);
+    this.lastCues = applyBeatCues(this.activeRuntime, beat.step, { sfx: false });
     if (beat.step.cam) this.lastCamBeat = index;
     // The replay's drawing updates reach the figure through the transport:
     // redraw and tick drain the command journal, and the graph only emits on
@@ -627,22 +710,23 @@ export class FilmController {
     // reset frame with no later repair. Driver mode has no figure to tell.
     const transport = this.transport;
     const replay: RuntimeUpdate[] = [];
-    const redrawn = this.runtime.redraw();
+    const redrawn = this.activeRuntime.redraw();
     if (transport) replay.push(redrawn);
     // Forward steps play the beat's opening exactly as playing there does, transitions included.
     // They run as direct frames, never wall ticks: ticks skip hidden or idle figures, which would
     // strand the seek at the beat's start.
-    this.runtime.play();
+    this.activeRuntime.play();
     const forward = Math.max(0, Math.round((clamped - beat.start) / FILM_STEP_SECONDS));
-    const stepped = this.runtime.playFilmSteps(forward);
+    const stepped = this.activeRuntime.playFilmSteps(forward);
     if (transport) replay.push(stepped);
     if (transport) transport.apply?.(mergeUpdates(replay));
     const resume = this.playing;
-    const atEnd = clamped + FILM_STEP_SECONDS / 2 >= end;
+    const filmEnd = this.runtimes ? this.film.seconds : end;
+    const atEnd = clamped + FILM_STEP_SECONDS / 2 >= filmEnd;
     this.playing = resume && !isPausePoint(beat.step) && !atEnd;
     if (this.transport) this.transport.send(this.playing ? { type: 'play' } : { type: 'pause' });
-    else if (this.playing) this.runtime.play();
-    else this.runtime.pause();
+    else if (this.playing) this.activeRuntime.play();
+    else this.activeRuntime.pause();
     this.lastNow = this.now();
     if (this.clock && this.playing && this.frameHandle === null) {
       this.frameHandle = this.clock.request(this.loop);
@@ -655,11 +739,35 @@ export class FilmController {
     if (atEnd) this.finish();
   }
 
-  /** Seeks to a beat by id. */
+  /** Switches the active scene for a seek, clearing per-scene state and emitting the cut. */
+  private switchScene(sceneIndex: number): void {
+    const from = this.film.scenes[this.active]!;
+    this.active = sceneIndex;
+    this.resetSceneState();
+    this.activeRuntime.setFilm(true);
+    this.emit({ type: 'cut', from: from.id, to: this.film.scenes[this.active]!.id });
+  }
+
+  /** Seeks to a beat by id, switching scenes when the beat lives elsewhere. */
   seekBeat(id: string): boolean {
+    if (this.runtimes) {
+      const beat = this.film.beats.find((candidate) => candidate.id === id);
+      if (!beat) return false;
+      this.seek(beat.start);
+      return true;
+    }
     const beat = this.sceneBeats.find((candidate) => candidate.id === id);
     if (!beat) return false;
     this.seek(beat.start);
+    return true;
+  }
+
+  /** Seeks to a chapter: its scene's first beat. False for an unknown scene. */
+  seekChapter(sceneId: string): boolean {
+    const scene = this.film.scenes.find((candidate) => candidate.id === sceneId);
+    if (!scene || scene.beats.length === 0) return false;
+    if (!this.runtimes && scene.id !== this.sceneData.id) return false;
+    this.seek(scene.start);
     return true;
   }
 
@@ -667,6 +775,10 @@ export class FilmController {
   seekAnchor(anchor: FilmAnchor): boolean {
     const seconds = resolveAnchor(this.film, anchor);
     if (seconds === null) return false;
+    if (!this.runtimes) {
+      const beat = this.film.beats.find((candidate) => candidate.id === anchor.beat && candidate.sceneId === anchor.scene);
+      if (!beat || beat.sceneId !== this.sceneData.id) return false;
+    }
     this.seek(seconds);
     return true;
   }
@@ -690,7 +802,7 @@ export class FilmController {
     const beat = this.currentBeat;
     if (!beat) return null;
     this.pause();
-    return askAnchorFor(this.film, beat.id, this.time, { values: this.runtime.values(), readouts: this.runtime.uiState().readouts });
+    return askAnchorFor(this.film, beat.id, this.time, { values: this.activeRuntime.values(), readouts: this.activeRuntime.uiState().readouts });
   }
 
   /**
@@ -730,8 +842,21 @@ export class FilmController {
    */
   retime(film: CompiledFilm): void {
     const id = this.currentBeat?.id;
+    const sceneId = this.runtimes ? this.film.scenes[this.active]?.id : undefined;
     this.film = film;
+    if (this.runtimes) {
+      if (this.runtimes.length !== film.scenes.length) this.runtimes = null;
+      else if (sceneId) this.active = Math.max(0, film.scenes.findIndex((scene) => scene.id === sceneId));
+      this.active = Math.min(this.active, film.scenes.length - 1);
+    }
     this.beatIndex = id ? Math.max(0, this.sceneBeats.findIndex((beat) => beat.id === id)) : -1;
+    if (this.beatIndex < 0 && id) {
+      const beat = film.beats.find((candidate) => candidate.id === id);
+      if (beat && this.runtimes) {
+        this.active = Math.max(0, film.scenes.findIndex((scene) => scene.id === beat.sceneId));
+        this.beatIndex = Math.max(0, this.sceneBeats.findIndex((candidate) => candidate.id === id));
+      }
+    }
     this.emit({ type: 'retime', film });
   }
 

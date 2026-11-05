@@ -42,22 +42,25 @@ export {
   compileFilm,
   countWords,
   estimateBeatSeconds,
+  readFilmContext,
   resolveAnchor,
   sanitizeWordStarts,
   splitWords,
   wordStarts,
+  EMPTY_FILM_CONTEXT,
   FILM_BEAT_HOLD_SECONDS,
   FILM_BEAT_MAX_SECONDS,
   FILM_BEAT_MIN_SECONDS,
   FILM_MAX_DIAGNOSTICS,
   FILM_MAX_SCENES,
   FILM_READING_WPS_LIMIT,
+  FILM_SCENE_MAX_SECONDS,
   FILM_WORDS_PER_SECOND,
 } from './film/storyboard';
-export type { BeatAudio, CompiledBeat, CompiledFilm, CompiledFilmResult, CompiledScene, FilmAnchor, FilmDiagnostic, FilmSceneSource, SourceMapEntry, StoryboardBeat, StoryboardScene, StoryboardSpec } from './film/storyboard';
+export type { BeatAudio, CompiledBeat, CompiledFilm, CompiledFilmResult, CompiledScene, FilmAnchor, FilmContext, FilmDiagnostic, FilmSceneSource, SourceMapEntry, StoryboardBeat, StoryboardScene, StoryboardSpec } from './film/storyboard';
 export { fallbackWidth, fontsReady, measureFilmText, solveCallouts, solveCaption, titleCardRect, wrapText, CAPTION_MAX_LINES, CAPTION_MIN_PX, CAPTION_MIN_STAGE_SHARE, FILM_FONT_STACK, SAFE_MARGIN_SHARE } from './film/solver';
 export type { CalloutInput, CalloutPlacement, CalloutRequest, CaptionInput, CaptionLayout, MeasureText } from './film/solver';
-export { contrastRatio, luminance, probeFilm, probeFilmAsync, FILM_CONTRAST_MIN, FILM_TOKENS } from './film/checks';
+export { checkSceneContext, contrastRatio, luminance, probeFilm, probeFilmAsync, FILM_CONTRAST_MIN, FILM_PLAIN_TONE_MAX_WORDS, FILM_TOKENS } from './film/checks';
 export type { FilmCheck, FilmFailure, FilmPoint, FilmReport, FilmReportStats, FilmSceneInput, FilmTheme, FilmTokens, ProbeFilmOptions } from './film/checks';
 export { PlayerModel, CAPTION_SCALES, TIMELINE_WORD_TICKS_PER_BEAT } from './film/player';
 export type { CaptionSize, FilmBookmark, PlayerCaption, PlayerEvent, PlayerState } from './film/player';
@@ -84,6 +87,8 @@ export { formatFilmLink, parseFilmLink, resolveFilmLink, resolveFilmPosition, re
 export type { FilmLink, FilmPosition, PlayerShortcut, ResumeStorage, ShortcutAction } from './film/controls';
 export { FILM_FIXTURES, SIXTY_SECOND_FILM, THIRTY_SECOND_FILM } from './film/fixtures';
 export type { FilmFixture, FilmFixtureScene } from './film/fixtures';
+export { filmDeadlineMs, filmPlanTokens, filmPresetFor, filmScenesFor, FILM_GENERATION_CEILING_MS, FILM_LENGTH_PRESETS, FILM_PLAN_BASE_TOKENS, FILM_PLAN_TOKENS_PER_SCENE, FILM_PRESET_SCENE_MAX_SECONDS } from './film/presets';
+export type { FilmPreset } from './film/presets';
 export { FilmMixer, MemoryMixerBackend, WebAudioMixerBackend, BED_DUCKED_LEVEL, BED_LEVEL, NARRATION_LEVEL } from './film/mixer';
 export type { MixerBackend, MixerClip, MixerEvent } from './film/mixer';
 export {
