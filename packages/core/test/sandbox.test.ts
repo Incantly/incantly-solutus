@@ -240,8 +240,8 @@ describe('content security policy', () => {
     expect(FRAME_SCRIPT).not.toMatch(/<\/script|<script|<!--/i);
     // The parser stays on the host: the frame and Worker never validate.
     expect(WORKER_SCRIPT).not.toContain('acorn');
-    // The base runtime with the small general helpers, fluids and the table of every handle; domain kits load on demand.
-    expect(WORKER_SCRIPT.length).toBeLessThan(151_000);
+    // The base runtime with the small general helpers, fluids, the table of every handle and the film clock; domain kits load on demand.
+    expect(WORKER_SCRIPT.length).toBeLessThan(154_000);
     expect(WORKER_SCRIPT).not.toContain('phosphorus');
   });
 });

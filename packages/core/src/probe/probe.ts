@@ -49,6 +49,7 @@ export interface ProbeOptions {
 export type ProbeCheck =
   | 'mount'
   | 'runs'
+  | 'seek'
   | 'numbers'
   | 'sweep'
   | 'paused-change'
@@ -101,6 +102,8 @@ export interface ProbeReport {
 export const ELEMENT_WARNING_SHARE = 0.8;
 
 const FRAME = 1 / 60;
+/** Scene times the seek check plays to and seeks to (FV-1). */
+const SEEK_SECONDS = [0.5, 1, 2];
 const MAX_FAILURES_PER_CHECK = 4;
 
 class ProbeStop extends Error {}
@@ -138,6 +141,7 @@ class Probe {
         this.singularPoints();
         this.givenStates();
         this.interiorPoints();
+        this.seekEqualsPlay();
       }
     } catch (error) {
       if (!(error instanceof ProbeStop)) throw error;
@@ -387,6 +391,70 @@ class Probe {
       this.step(() => runtime.setParam(param.name, param.defaultValue));
       this.settle(runtime);
     }
+  }
+
+  /**
+   * FV-1: seeking to t draws what playing to t draws. At three scene times it
+   * compares readouts and part positions; a scene that keeps state outside the
+   * SDK fails like any other failure.
+   */
+  private seekEqualsPlay(): void {
+    for (const seconds of SEEK_SECONDS) {
+      const played = this.snapshotAt(seconds, 'play');
+      const sought = this.snapshotAt(seconds, 'seek');
+      const error = played.error ?? sought.error;
+      if (error) {
+        this.fail({
+          check: 'seek',
+          message: `The scene threw while ${played.error ? 'playing' : 'seeking'} to ${seconds} s`,
+          values: this.defaults,
+          playing: true,
+          time: seconds,
+          error,
+        });
+        return;
+      }
+      if (played.readouts !== sought.readouts) {
+        this.fail({
+          check: 'seek',
+          message:
+            `Seeking to ${seconds} s shows different readouts from playing to the same time; ` +
+            `keep scene state in the SDK so a replayed scene matches (sought ${sought.readouts}, played ${played.readouts})`,
+          values: this.defaults,
+          playing: true,
+          time: seconds,
+        });
+      }
+      const drifted = played.parts.find((part, index) => part !== sought.parts[index]);
+      if (drifted !== undefined || played.parts.length !== sought.parts.length) {
+        this.fail({
+          check: 'seek',
+          message:
+            `Seeking to ${seconds} s puts part ${drifted ?? '(a part)'} somewhere else than playing there does; ` +
+            `keep scene state in the SDK so a replayed scene matches`,
+          values: this.defaults,
+          playing: true,
+          time: seconds,
+        });
+      }
+    }
+  }
+
+  /** Readouts and part positions at `seconds`, reached by playing or by seeking. */
+  private snapshotAt(seconds: number, mode: 'play' | 'seek'): { readouts: string; parts: string[]; error?: ProbeError } {
+    const { runtime } = this.mount(undefined, true);
+    const frames = Math.round(seconds / FRAME);
+    if (mode === 'play') {
+      for (let i = 0; i < frames; i++) this.tick(runtime, FRAME);
+    } else {
+      this.step(() => runtime.seek(seconds, { beforeStep: () => this.options.beforeStep?.() }));
+      this.frames += frames;
+    }
+    const parts = [...runtime.parts.parts.values()]
+      .sort((a, b) => (a.name < b.name ? -1 : 1))
+      .map((p) => `"${p.name}" ${p.node.kind} ${JSON.stringify([...p.node.attrs].sort())} ${JSON.stringify(p.node.text)}`);
+    const error = this.firstError(runtime);
+    return { readouts: JSON.stringify(runtime.uiState().readouts), parts, ...(error ? { error } : {}) };
   }
 
   /** Every parameter at its minimum, middle, maximum and default, playing and paused. */

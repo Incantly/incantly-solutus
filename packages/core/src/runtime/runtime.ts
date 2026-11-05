@@ -91,6 +91,13 @@ export interface RuntimeOptions {
   readonly maxDt?: number;
   /** Most adjustable controls a figure may have; the plan's size sets a tighter budget. */
   readonly maxParams?: number;
+  /**
+   * Film mode (FV-1): scene time advances in fixed 1/60 s steps whatever the
+   * display frame rate. Outside film mode behaviour is unchanged.
+   */
+  readonly film?: boolean;
+  /** Scene-length cap in seconds for film seeking; seeking past it clamps. Bench-tuned. */
+  readonly filmCapSeconds?: number;
   /** Learner values to restore instead of the authored defaults; `$` names hold timing settings. */
   readonly values?: Readonly<Record<string, number>>;
   /** Formulas the learner edited, by index. */
@@ -120,6 +127,18 @@ export const STEP_TRANSITION_SECONDS = 0.6;
 
 /** Fixed steps a simulation may take in one frame before it drops the backlog. */
 export const MAX_SUBSTEPS = 240;
+
+/** Scene time's fixed step in film mode: 1/60 s whatever the display frame rate (FV-1). */
+export const FILM_STEP_SECONDS = 1 / 60;
+
+/** Scene-length cap in seconds: a film scene lasts at most this long, which bounds seeking (bench). */
+export const FILM_LENGTH_CAP_SECONDS = 60;
+
+/** Hooks for a seek, which replays up to 3,600 steps inside one call. */
+export interface SeekOptions {
+  /** Called before the restart and every replayed step, so the Worker can refuel. */
+  readonly beforeStep?: () => void;
+}
 
 export interface SceneErrorRecord {
   readonly phase: ErrorPhase;
@@ -270,6 +289,10 @@ export class SceneRuntime {
   private readonly maxDt: number;
   private readonly maxParams: number;
   private readonly history: History;
+  private film: boolean;
+  /** Wall time carried towards the next fixed step in film mode. */
+  private filmAcc = 0;
+  private readonly filmCap: number;
 
   // Interaction
   private drags = new Map<number, DragBinding>();
@@ -316,6 +339,9 @@ export class SceneRuntime {
     this.random = mulberry32(options.seed ?? 1);
     this.maxDt = options.maxDt ?? 0.1;
     this.maxParams = options.maxParams ?? 8;
+    this.film = options.film ?? false;
+    const cap = options.filmCapSeconds;
+    this.filmCap = cap !== undefined && Number.isFinite(cap) && cap > 0 ? cap : FILM_LENGTH_CAP_SECONDS;
     this.reducedMotion = options.reducedMotion ?? false;
     this.history = new History(options.now ?? (() => Date.now()));
     this.path = createPathHelpers((requested) => this.reportCap(requested));
@@ -399,6 +425,11 @@ export class SceneRuntime {
   /** True while there is drawing work to do: playing something that moves, dirty or animating a transition. */
   needsFrame(): boolean {
     if (this.lifecycle !== 'mounted' || !this.visible) return false;
+    return this.needsWork();
+  }
+
+  /** The work check without the display's visibility, so an offline replay idles exactly as playing would. */
+  private needsWork(): boolean {
     const moving = this.playing && this.animated !== false;
     // A tween moves in scene time: it waits while paused (C3-7), and under reduced motion it lands at once.
     const tweening = this.tweens.length > 0 && (this.playing || this.reducedMotion);
@@ -455,10 +486,39 @@ export class SceneRuntime {
       return this.flush();
     }
     const capped = Math.min(Math.max(Number.isFinite(realDt) ? realDt : 0, 0), this.maxDt);
-    if (this.touring()) this.tour(capped);
+    if (this.film && this.playing) this.tickFilm(capped);
+    else this.frame(capped, capped * this.speed);
+    return this.flush();
+  }
+
+  /**
+   * One film tick (FV-1): the wall gap joins the accumulator and scene time
+   * advances in fixed 1/60 s steps. A slow device runs more steps per tick and
+   * draws fewer frames, never different ones.
+   */
+  private tickFilm(capped: number): void {
+    this.filmAcc += capped * this.speed;
+    let steps = Math.floor(this.filmAcc / FILM_STEP_SECONDS + 1e-9);
+    if (steps > MAX_SUBSTEPS) {
+      // A long stall drops its backlog rather than spiralling, as simulations do.
+      steps = MAX_SUBSTEPS;
+      this.filmAcc = 0;
+    } else {
+      this.filmAcc = Math.max(0, this.filmAcc - steps * FILM_STEP_SECONDS);
+    }
+    for (let i = 0; i < steps; i++) this.frame(FILM_STEP_SECONDS, FILM_STEP_SECONDS);
+  }
+
+  /**
+   * One frame's work: wall-driven motion (the tour, transitions, cameras) with
+   * `wall`, scene time with `scene`. A playing tick passes the capped gap;
+   * film ticks and seeks pass fixed 1/60 s steps.
+   */
+  private frame(wall: number, scene: number): void {
+    if (this.touring()) this.tour(wall);
     if (this.stepTransition) {
       const transition = this.stepTransition;
-      const { k, done } = advanceTween(transition, capped);
+      const { k, done } = advanceTween(transition, wall);
       this.guard('tween', () => transition.options.apply(k));
       if (done) this.stepTransition = null;
       this.dirty = true;
@@ -466,7 +526,7 @@ export class SceneRuntime {
     // A view moves at the speed of the clock, not the learner's speed setting: it is the camera, not the scene.
     // Motions are the kits' own code, never the scene's, so they run unguarded.
     // The frame below draws whatever the moves changed.
-    if (this.moves[0]) this.moves = this.moves.filter((fn) => fn(capped));
+    if (this.moves[0]) this.moves = this.moves.filter((fn) => fn(wall));
     // Tweens move in scene time, at the learner's speed; pausing freezes k without cancelling (C3-7). Under
     // reduced motion each lands at its end, as steps do, so a learner who asked for no motion still sees the change.
     if (this.tweens.length > 0 && this.reducedMotion) {
@@ -474,18 +534,17 @@ export class SceneRuntime {
       for (let i = 0; i < 16 && this.tweens.length > 0; i++) this.stepTween(Number.POSITIVE_INFINITY);
       this.dirty = true;
     } else if (this.tweens.length > 0 && this.playing) {
-      this.stepTween(capped * this.speed);
+      this.stepTween(scene);
       this.dirty = true;
     }
     this.drainChanges();
-    if (this.playing) this.advance(capped * this.speed);
+    if (this.playing) this.advance(scene);
     else {
       this.runFrame(0);
       this.stats.pausedRedraws++;
     }
     this.dirty = false;
     this.refreshText();
-    return this.flush();
   }
 
   /** Moves scene time on by `dt`: fixed simulation steps, then one frame. */
@@ -519,7 +578,7 @@ export class SceneRuntime {
   stepFrame(): void {
     if (this.lifecycle !== 'mounted' || this.playing) return;
     this.drainChanges();
-    this.advance((1 / 60) * this.speed);
+    this.advance(this.film ? FILM_STEP_SECONDS : (1 / 60) * this.speed);
     this.dirty = false;
     this.refreshText();
   }
@@ -677,6 +736,17 @@ export class SceneRuntime {
       this.playing = false;
       this.dirty = true;
     }
+  }
+
+  /** Whether scene time advances in fixed 1/60 s steps (FV-1). */
+  get isFilm(): boolean {
+    return this.film;
+  }
+
+  setFilm(on: boolean): void {
+    this.film = on;
+    // Leftover wall time must not leak across the switch.
+    this.filmAcc = 0;
   }
 
   // -------------------------------------------------------------------------
@@ -1015,6 +1085,36 @@ export class SceneRuntime {
   }
 
   /**
+   * Seeks to `seconds` of scene time (FV-1): restarts the scene and replays
+   * fixed 1/60 s steps to the target, sending no drawing updates until the
+   * last step. Past the scene-length cap it clamps. A replay that goes idle
+   * stops, as playing there would. Play state is kept: a paused figure stays
+   * paused at the new time.
+   */
+  seek(seconds: number, options: SeekOptions = {}): RuntimeUpdate {
+    if (!this.scene || this.lifecycle === 'destroyed') return this.flush();
+    const target = Math.min(Math.max(Number.isFinite(seconds) ? seconds : 0, 0), this.filmCap);
+    const steps = Math.round(target / FILM_STEP_SECONDS);
+    options.beforeStep?.();
+    this.rebuild(this.stepSaved ? { ...this.stepSaved.values } : this.values());
+    if (this.lifecycle !== 'mounted') return this.flush();
+    const resume = this.playing;
+    this.playing = true;
+    for (let i = 0; i < steps; i++) {
+      if (!this.needsWork()) break;
+      options.beforeStep?.();
+      this.frame(FILM_STEP_SECONDS, FILM_STEP_SECONDS);
+      // Intermediate steps move state forward without drawing; only the last step's update is sent.
+      this.graph.flush();
+    }
+    // A timeline that finished mid-replay stays finished, as after playing there.
+    this.playing = resume && this.playing;
+    const update = this.flush();
+    // The renderer is showing the old time: it rebuilds from the final state, like a fresh mount.
+    return { ...update, reset: true, commands: this.graph.snapshotCommands(), ui: this.uiState() };
+  }
+
+  /**
    * Rebuilds the scene as the agent made it: its parameter defaults, its own
    * formulas and its timing, whatever the learner edited. Undoable.
    */
@@ -1085,6 +1185,7 @@ export class SceneRuntime {
     this.usesTime = false;
     this.framesRun = 0;
     this.time = 0;
+    this.filmAcc = 0;
     this.random = mulberry32(this.options.seed ?? 1);
     this.drags = new Map();
     this.hovers = new Map();
