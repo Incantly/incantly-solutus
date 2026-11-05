@@ -44,6 +44,11 @@ export type StyleSlot =
   | 'predict'
   | 'zoombar'
   | 'pane'
+  | 'player'
+  | 'transcript'
+  | 'caption'
+  | 'chapters'
+  | 'timeline'
   | 'description';
 
 export const STYLE_SLOTS: readonly StyleSlot[] = [
@@ -79,6 +84,11 @@ export const STYLE_SLOTS: readonly StyleSlot[] = [
   'predict',
   'zoombar',
   'pane',
+  'player',
+  'transcript',
+  'caption',
+  'chapters',
+  'timeline',
   'description',
 ];
 
@@ -116,6 +126,11 @@ export const SLOT_SELECTORS: Readonly<Record<StyleSlot, string>> = {
   predict: '.inc-predict',
   zoombar: '.inc-zoombar',
   pane: '.inc-pane',
+  player: '.inc-player',
+  transcript: '.inc-transcript',
+  caption: '.inc-caption',
+  chapters: '.inc-chapters',
+  timeline: '.inc-timeline',
   description: '.inc-description',
 };
 
@@ -160,7 +175,11 @@ export type ShowPart =
   | 'description'
   | 'zoom'
   | 'partInfo'
-  | 'expand';
+  | 'expand'
+  | 'captions'
+  | 'transcript'
+  | 'chapters'
+  | 'timeline';
 
 export interface FigureStyle {
   readonly preset?: StylePreset;
@@ -213,6 +232,10 @@ const SHOW_DEFAULTS: Readonly<Record<ShowPart, boolean>> = {
   zoom: true,
   partInfo: true,
   expand: true,
+  captions: true,
+  transcript: true,
+  chapters: true,
+  timeline: true,
 };
 
 /** Token names: lower-case words joined by hyphens. */

@@ -62,6 +62,8 @@ export interface FigureHandle {
   /** Returns the figure to saved learner values and teaching position. */
   restore(state: { readonly values?: Readonly<Record<string, number>>; readonly step?: number | null }): void;
   setReducedMotion(value: boolean): void;
+  /** Films only: seeks the scene to this many seconds of scene time (FV-1). */
+  seek(seconds: number): void;
   /**
    * Restyles the live figure without remounting it: preset, tokens, slot
    * classes, layout and which parts show. Trusted CSS is part of the frame
@@ -607,6 +609,10 @@ class SandboxedFigure implements FigureHandle {
 
   setReducedMotion(value: boolean): void {
     this.connection?.post({ type: 'reducedMotion', value });
+  }
+
+  seek(seconds: number): void {
+    if (typeof seconds === 'number' && Number.isFinite(seconds)) this.connection?.post({ type: 'seek', seconds });
   }
 
   setStyle(style: FigureStyle | undefined): void {

@@ -132,6 +132,9 @@ function onHostMessage(message: HostMessage): void {
     case 'reducedMotion':
       renderer?.send({ type: 'reducedMotion', value: message.value });
       break;
+    case 'seek':
+      renderer?.send({ type: 'seek', seconds: message.seconds });
+      break;
     case 'snapshot': {
       // A snapshot usually comes before suspension: send the latest values first, in order.
       flushReport();

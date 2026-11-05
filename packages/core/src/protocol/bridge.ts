@@ -76,6 +76,8 @@ export type HostMessageBody =
   | { readonly type: 'setValues'; readonly values: Readonly<Record<string, number>> }
   | { readonly type: 'step'; readonly step: number | null }
   | { readonly type: 'reducedMotion'; readonly value: boolean }
+  /** Films only: the frame seeks its scene to this many seconds (FV-1). */
+  | { readonly type: 'seek'; readonly seconds: number }
   /** A picture of the drawing: a PNG (the default), or an SVG with the theme written in (SV-14). */
   | { readonly type: 'snapshot'; readonly id: number; readonly format?: 'png' | 'svg' }
   /** A short video of the drawing as it plays (6.10b). */
@@ -121,6 +123,7 @@ export const HOST_MESSAGE_TYPES: ReadonlySet<string> = new Set([
   'setValues',
   'step',
   'reducedMotion',
+  'seek',
   'snapshot',
   'clip',
   'ping',
@@ -219,6 +222,8 @@ export function parseHostMessage(data: unknown, channel: string): HostMessage | 
       return isStep(m.step) ? (m as unknown as HostMessage) : null;
     case 'reducedMotion':
       return typeof m.value === 'boolean' ? (m as unknown as HostMessage) : null;
+    case 'seek':
+      return typeof m.seconds === 'number' && Number.isFinite(m.seconds) ? (m as unknown as HostMessage) : null;
     case 'snapshot':
       return typeof m.id === 'number' && (m.format === undefined || m.format === 'png' || m.format === 'svg') ? (m as unknown as HostMessage) : null;
     case 'clip':

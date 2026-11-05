@@ -1,6 +1,7 @@
 import type {
   Anatomy,
   AnatomyOptions,
+  Beat,
   Biology,
   NoiseOptions,
   NoteOptions,
@@ -574,6 +575,17 @@ export class SceneRuntime {
     }
   }
 
+  /** Redraws the current state without advancing time, after cues landed on values the drawing has not seen. */
+  redraw(): RuntimeUpdate {
+    if (this.lifecycle !== 'mounted') return this.flush();
+    this.drainChanges();
+    this.runFrame(0);
+    this.stats.pausedRedraws++;
+    this.dirty = false;
+    this.refreshText();
+    return this.flush();
+  }
+
   /** One frame forward while paused (the settings panel's frame step). */
   stepFrame(): void {
     if (this.lifecycle !== 'mounted' || this.playing) return;
@@ -581,6 +593,19 @@ export class SceneRuntime {
     this.advance(this.film ? FILM_STEP_SECONDS : (1 / 60) * this.speed);
     this.dirty = false;
     this.refreshText();
+  }
+
+  /**
+   * Plays `count` fixed 1/60 s film steps for a film seek's forward phase. The
+   * frames run directly, as the seek replay's do, so a hidden or idle figure
+   * still lands on its target instead of stalling at the beat's start. One
+   * update carries every step's commands, for the transport.
+   */
+  playFilmSteps(count: number): RuntimeUpdate {
+    if (this.lifecycle !== 'mounted') return this.flush();
+    const steps = Math.max(0, Math.floor(Number.isFinite(count) ? count : 0));
+    for (let i = 0; i < steps; i++) this.frame(FILM_STEP_SECONDS, FILM_STEP_SECONDS);
+    return this.flush();
   }
 
   /** A learner's change. Outside step mode it is persisted; inside, leaving steps undoes it. */
@@ -974,6 +999,11 @@ export class SceneRuntime {
     return this.stepIndex;
   }
 
+  /** The scene's steps, with any beat fields, frozen; null without inc.steps. Films read their beats here. */
+  beats(): readonly Beat[] | null {
+    return this.lifecycle === 'mounted' || this.lifecycle === 'mounting' ? ((this.stepList as readonly Beat[] | null) ?? null) : null;
+  }
+
   step(action: 'enter' | 'next' | 'prev' | 'exit' | 'goto', index?: number): void {
     if (this.lifecycle !== 'mounted' || !this.stepList) return;
     const last = this.stepList.length - 1;
@@ -1025,7 +1055,7 @@ export class SceneRuntime {
       Object.assign(target, steps[i]?.set ?? {});
       for (const name of Object.keys(steps[i]?.set ?? {})) set.add(name);
     }
-    this.moveTo(target, immediate || this.reducedMotion, set);
+    this.moveTo(target, immediate || this.reducedMotion, set, (step as Beat).ease);
     this.turn(index, immediate);
     this.playing = step.hold ? false : saved.playing && !this.reducedMotion;
     this.pendingStep = index;
@@ -1053,8 +1083,8 @@ export class SceneRuntime {
   }
 
   /** Moves parameters to `target`, animated unless `immediate`. Never persisted. */
-  /** Moves to `target`; `set` names the values the move sets itself, which their linked partners follow. */
-  private moveTo(target: Readonly<Record<string, number>>, immediate: boolean, set: Iterable<string> = Object.keys(target)): void {
+  /** Moves to `target`; `set` names the values the move sets itself, which their linked partners follow. A beat's `ease` sets the seconds. */
+  private moveTo(target: Readonly<Record<string, number>>, immediate: boolean, set: Iterable<string> = Object.keys(target), ease?: number): void {
     const from = this.values();
     const names = Object.keys(target).filter((name) => this.params.has(name) && target[name] !== from[name]);
     // Linked partners follow the values moved, all the way; a partner the move sets itself keeps that value.
@@ -1066,10 +1096,11 @@ export class SceneRuntime {
       this.followPartners(names, fixed);
       return;
     }
+    const duration = ease === undefined ? STEP_TRANSITION_SECONDS : Math.min(10, Math.max(0, ease));
     this.stepTransition = {
       elapsed: 0,
       options: {
-        duration: STEP_TRANSITION_SECONDS,
+        duration,
         ease: 'inOut',
         apply: (k) => {
           for (const name of names) this.applyParam(name, from[name]! + (target[name]! - from[name]!) * k, false);
@@ -1729,11 +1760,51 @@ export class SceneRuntime {
   private checkTeaching(): void {
     if (!this.stepList) return;
     this.stepList.forEach((step, index) => {
+      const label = `Step ${index + 1}`;
       if (step.focus !== undefined && !this.parts.parts.has(step.focus)) {
-        throw new SceneApiError(`Step ${index + 1} focuses on "${step.focus}", which is not a registered part`);
+        throw new SceneApiError(`${label} focuses on "${step.focus}", which is not a registered part`);
       }
       for (const name of Object.keys(step.set ?? {})) {
-        if (!this.params.has(name)) throw new SceneApiError(`Step ${index + 1} sets "${name}", which is not a parameter`);
+        if (!this.params.has(name)) throw new SceneApiError(`${label} sets "${name}", which is not a parameter`);
+      }
+      // Beat fields name parts and controls the same way; a beat that names
+      // nothing it cannot see fails at mount like a step does.
+      const beat = step as Beat;
+      if (beat.cam?.to !== undefined && !this.parts.parts.has(beat.cam.to)) {
+        throw new SceneApiError(`${label} moves the camera to "${beat.cam.to}", which is not a registered part`);
+      }
+      for (const name of [...(beat.show ?? []), ...(beat.hide ?? [])]) {
+        if (!this.parts.parts.has(name)) throw new SceneApiError(`${label} shows or hides "${name}", which is not a registered part`);
+      }
+      for (const mark of beat.mark ?? []) {
+        if (mark.type !== 'pulse' && mark.type !== 'draw' && mark.type !== 'arrow' && mark.type !== 'callout' && mark.type !== 'dim') {
+          throw new SceneApiError(`${label} marks with "${String(mark.type)}", which is not pulse, draw, arrow, callout or dim`);
+        }
+        if (!this.parts.parts.has(mark.part)) throw new SceneApiError(`${label} marks "${mark.part}", which is not a registered part`);
+      }
+      if (beat.explore !== undefined && !this.params.has(beat.explore.control)) {
+        throw new SceneApiError(`${label} explores "${beat.explore.control}", which is not a parameter`);
+      }
+      if (beat.ease !== undefined && !(Number.isFinite(beat.ease) && beat.ease >= 0 && beat.ease <= 10)) {
+        throw new SceneApiError(`${label} eases over "${String(beat.ease)}", which is not 0 to 10 seconds`);
+      }
+      if (beat.cam?.zoom !== undefined && !(Number.isFinite(beat.cam.zoom) && beat.cam.zoom > 0)) {
+        throw new SceneApiError(`${label} zooms by "${String(beat.cam.zoom)}", which is not a positive number`);
+      }
+      if (beat.title !== undefined && typeof beat.title !== 'string' && beat.title.kind !== undefined && beat.title.kind !== 'card' && beat.title.kind !== 'lower') {
+        throw new SceneApiError(`${label} titles with kind "${String(beat.title.kind)}", which is not card or lower`);
+      }
+      const predict = beat.predict;
+      if (predict !== undefined) {
+        if (typeof predict.question !== 'string' || predict.question.trim() === '' || !Array.isArray(predict.options) || predict.options.length < 2 || predict.options.length > 5) {
+          throw new SceneApiError(`${label} predicts with a question that needs 2 to 5 options`);
+        }
+        if (typeof predict.answer !== 'function' && !(Number.isInteger(predict.answer) && predict.answer >= 0 && predict.answer < predict.options.length)) {
+          throw new SceneApiError(`${label} predicts with an answer that is not an option`);
+        }
+        for (const name of Object.keys(predict.reveal ?? {})) {
+          if (!this.params.has(name)) throw new SceneApiError(`${label} predicts revealing "${name}", which is not a parameter`);
+        }
       }
     });
   }
