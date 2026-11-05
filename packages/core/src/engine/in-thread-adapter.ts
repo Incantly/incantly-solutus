@@ -90,6 +90,7 @@ export function mountInThread(container: HTMLElement, fragments: SceneFragments,
     setStyle: (style) => figure?.setStyle(style),
     setTheme: (theme) => figure?.setTheme(theme),
     setNumber: (figureNumber) => figure?.renderer.setNumber(figureNumber),
+    setFullscreen: (value) => figure?.renderer.setFullscreenMirror(value),
     focus: (edge = 'first') => {
       const targets = figure ? focusable(figure.root) : [];
       (edge === 'first' ? targets[0] : targets[targets.length - 1])?.focus();

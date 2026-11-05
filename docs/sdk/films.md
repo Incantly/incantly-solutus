@@ -99,6 +99,10 @@ probed hidden first, drawn through a sandboxed figure — so a hostile scene
 cannot reach the page, and a scene that fails its checks refuses the film
 before the first frame.
 
+## Player fullscreen
+
+The transport's ⛶ button fullscreens the player root (`show.playerFullscreen`, on by default, `?hide=playerFullscreen` to hide): the film stage scales like figures with the same chrome-aware growth, captions, transport, Ask/markers, chapters, transcript and deck stay reachable, and exiting restores the exact layout and playback position. Stored films mounted sandboxed behave identically through the bridge, with no host mounts.
+
 ## What the engine owns
 
 Layout, checks, player, questions, versions and export are the engine's,

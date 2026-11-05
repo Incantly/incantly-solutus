@@ -1,5 +1,5 @@
 import { readFile, stat } from 'node:fs/promises';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 import { SCENE_FIXTURES } from '../src/scene-fixtures';
 
 // Serial: the dev server keeps one film library, so every test starts from no
@@ -1122,3 +1122,80 @@ test('single-scene films mount exactly as today', async ({ page }) => {
   await expect(page.locator('.inc-player-scene')).toHaveCount(0);
   await expect(page.locator('.inc-chapters li')).toHaveCount(1);
 });
+
+interface PlayerBox {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+async function playerBox(target: Locator): Promise<PlayerBox> {
+  const box = await target.boundingBox();
+  if (!box) throw new Error('the player target has no box');
+  return { x: box.x, y: box.y, width: box.width, height: box.height };
+}
+
+async function enterPlayerFullscreen(page: Page): Promise<void> {
+  await page.locator('.inc-player-fullscreen').click();
+  await page.waitForFunction(() => document.fullscreenElement !== null);
+}
+
+async function exitPlayerFullscreen(page: Page): Promise<void> {
+  // The toggle is the committable exit path: a synthetic Escape does not
+  // leave fullscreen in this harness, while the toggle drives the same
+  // fullscreenchange restore a real Esc takes.
+  await page.locator('.inc-player-fullscreen').click();
+  await page.waitForFunction(() => document.fullscreenElement === null);
+}
+
+for (const height of [537, 900]) {
+  test(`player fullscreen grows the trusted stage past its windowed box at a ${height} px viewport`, async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height });
+    await openPlayer(page, 'thirty');
+    const stage = page.locator('.inc-player-figure svg.inc-stage').first();
+    await expect(stage).toBeVisible();
+    const before = await playerBox(stage);
+    await enterPlayerFullscreen(page);
+    const after = await playerBox(stage);
+    expect(after.width, 'fullscreen stage width').toBeGreaterThan(before.width);
+    expect(after.height, 'fullscreen stage height').toBeGreaterThan(before.height);
+    // Chrome stays usable at the new size: the sound toggle still flips.
+    await page.getByRole('button', { name: 'Sound' }).click();
+    await expect(page.getByRole('button', { name: 'Sound' })).toHaveText('Sound: on');
+    await exitPlayerFullscreen(page);
+    expect(await playerBox(stage)).toEqual(before);
+  });
+}
+
+for (const height of [537, 900]) {
+  test(`player fullscreen grows the stored frame past its windowed box at a ${height} px viewport`, async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height });
+    await page.request.get('/api/dev/films/clear');
+    const { THIRTY_SECOND_FILM } = await import('@incantly/core');
+    const scene = THIRTY_SECOND_FILM.scenes[0]!;
+    const saved = await page.request.post('/api/dev/films', {
+      data: { id: 'gen-fullscreen-1', storyboard: THIRTY_SECOND_FILM.storyboard, scenes: [{ id: scene.id, html: scene.html, css: scene.css, js: scene.js }] },
+    });
+    expect(saved.ok()).toBe(true);
+    await page.goto('/?page=player&film=gen-fullscreen-1');
+    await page.waitForFunction(() => window.__playground?.ready === true);
+    const frame = page.locator('.inc-player-figure iframe').first();
+    await expect(frame).toBeVisible();
+    const guest = page.frameLocator('.inc-player-figure iframe').locator('svg.inc-stage').first();
+    await expect(guest).toBeVisible();
+    const before = await playerBox(frame);
+    await enterPlayerFullscreen(page);
+    // The guest reports its taller box over the resize bridge once the wider frame reflows it.
+    await expect.poll(async () => (await playerBox(frame)).height, 'fullscreen frame height').toBeGreaterThan(before.height);
+    const after = await playerBox(frame);
+    expect(after.width, 'fullscreen frame width').toBeGreaterThan(before.width);
+    // The guest never overflows its frame: the drawing sits fully inside it.
+    const drawing = await guest.boundingBox();
+    expect(drawing).not.toBeNull();
+    expect(drawing!.y, 'guest top').toBeGreaterThanOrEqual(after.y - 1);
+    expect(drawing!.y + drawing!.height, 'guest bottom').toBeLessThanOrEqual(after.y + after.height + 1);
+    await exitPlayerFullscreen(page);
+    await expect.poll(async () => playerBox(frame), 'restored frame box').toEqual(before);
+  });
+}

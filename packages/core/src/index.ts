@@ -66,6 +66,7 @@ export { applyCueState, beatCueState, buildStubScene, mountStubRuntime, pushAbso
 export type { BeatCueState, SanitizedSceneSnapshot, SandboxFilmScene } from './film/sandbox';
 export { PlayerModel, CAPTION_SCALES, TIMELINE_WORD_TICKS_PER_BEAT } from './film/player';
 export type { CaptionSize, FilmBookmark, PlayerCaption, PlayerEvent, PlayerState } from './film/player';
+export { bindPlayerFullscreen, isFullscreenEnabled, isPlayerFullscreen, refreshPlayerFullscreenVisibility, syncPlayerFullscreenButton, togglePlayerFullscreen } from './film/fullscreen';
 export { examplePinSeconds, exampleReturnSeconds, SideClipPlayer, validateExampleClip, EXAMPLE_MAX_CAPTION_CHARS } from './film/example';
 export type { ExampleClip, SideClipEvent, SideClipPhase } from './film/example';
 export { applyFilmPatch, insertBeatId, patchAudioProblems, patchSummary, promoteInsertClip, sanitizeFilmPatch, FILM_PATCH_LIMITS } from './film/versions';

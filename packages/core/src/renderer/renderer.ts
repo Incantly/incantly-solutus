@@ -195,7 +195,15 @@ export class FigureRenderer {
     if ((options.visibility ?? 'observe') === 'observe') this.observeVisibility(doc, signal);
     this.observeReducedMotion(doc, signal);
     // The full-screen button says whether the figure fills the screen, however it got there or left (VI-6).
-    doc.addEventListener('fullscreenchange', () => this.controls.setFullscreen(doc.fullscreenElement === this.root), { signal });
+    // Canvas layers and the back layer repaint at the new size, staying sharp with correct pointer mapping.
+    doc.addEventListener(
+      'fullscreenchange',
+      () => {
+        this.controls.setFullscreen(doc.fullscreenElement === this.root);
+        this.scene.repaintDots();
+      },
+      { signal },
+    );
     this.observeSize();
   }
 
@@ -222,6 +230,18 @@ export class FigureRenderer {
   setTheme(theme: 'light' | 'dark' | 'auto'): void {
     if (theme === 'light' || theme === 'dark') this.root.dataset.theme = theme;
     else delete this.root.dataset.theme;
+  }
+
+  /**
+   * Mirrors fullscreen sizing when the host (a film player), not the figure, is fullscreen: the same
+   * chrome-aware growth as :fullscreen via [data-fullscreen], for trusted figures directly and sandboxed
+   * figures through the bridge. Canvases repaint sharp at the new size; pointer mapping follows getScreenCTM.
+   */
+  setFullscreenMirror(on: boolean): void {
+    if (this.destroyed) return;
+    if (on) this.root.dataset.fullscreen = '';
+    else delete this.root.dataset.fullscreen;
+    this.scene.repaintDots();
   }
 
   /** Sends a message to the runtime. Never draws. */

@@ -76,6 +76,8 @@ export interface FigureHandle {
   note(note: { readonly wave: 'sine' | 'square' | 'sawtooth' | 'triangle'; readonly frequency: number; readonly duration: number; readonly gain: number }): void;
   /** Films only: a beat's camera; null returns kit-owned stages to the wide view. */
   framePart(part: string | null, zoom?: number): void;
+  /** Films only: the player entered or left fullscreen; the frame mirrors the sizing. */
+  setFullscreen?(value: boolean): void;
   /**
    * Restyles the live figure without remounting it: preset, tokens, slot
    * classes, layout and which parts show. Trusted CSS is part of the frame
@@ -405,8 +407,8 @@ class SandboxedFigure implements FigureHandle {
   private clips = new Map<number, (video: Blob | null) => void>();
   private laidOut = false;
   private snapshotId = 0;
-  /** Style and theme asked for before the frame was ready; they go with the init message. */
-  private early: { style?: FigureStyle | undefined; theme?: 'light' | 'dark' | 'auto'; figureNumber?: number | null } = {};
+  /** Style, theme and fullscreen asked for before the frame was ready; they go with the init message. */
+  private early: { style?: FigureStyle | undefined; theme?: 'light' | 'dark' | 'auto'; figureNumber?: number | null; fullscreen?: boolean } = {};
   /** The frame was booted before this scene existed and taken over (PRD 25.4). */
   warmed = false;
   private readonly deadlines: Deadlines;
@@ -447,6 +449,7 @@ class SandboxedFigure implements FigureHandle {
       ...(options.theme ? { theme: options.theme } : {}),
       ...(style ? { style } : {}),
       ...(options.figureNumber !== undefined ? { figureNumber: options.figureNumber } : {}),
+      ...(options.fullscreen !== undefined ? { fullscreen: options.fullscreen } : {}),
     };
     const css = hostCss(options.style);
     // Kit scripts load while the frame boots.
@@ -669,13 +672,35 @@ class SandboxedFigure implements FigureHandle {
     this.connection?.post({ type: 'number', figureNumber });
   }
 
-  /** The live options with any style or theme set while the frame was starting. */
+  setFullscreen(value: boolean): void {
+    if (typeof value !== 'boolean') return;
+    if (this.state === 'booting') this.early = { ...this.early, fullscreen: value };
+    const frame = this.connection?.frame;
+    if (frame) {
+      // The frame stays content-sized in fullscreen — the guest reports its taller box over the resize
+      // bridge as the wider frame reflows it. The floor pins the boot transient and any stall at a hair
+      // above the windowed box, so the frame structurally cannot come out smaller; resize heights above
+      // it still apply, and leaving fullscreen removes it so the windowed box restores exactly.
+      if (value) frame.style.minHeight = `${Math.ceil(frame.getBoundingClientRect().height) + 1}px`;
+      else frame.style.removeProperty('min-height');
+    }
+    this.connection?.post({ type: 'fullscreen', value });
+  }
+
+  /** The live options with any style, theme or fullscreen set while the frame was starting. */
   private withEarly(live: LiveOptions): LiveOptions {
     const style = 'style' in this.early ? styleForBridge(this.early.style) : live.style;
     const theme = this.early.theme ?? live.theme;
     const figureNumber = 'figureNumber' in this.early ? this.early.figureNumber : live.figureNumber;
-    const { style: _style, theme: _theme, figureNumber: _number, ...rest } = live;
-    return { ...rest, ...(style ? { style } : {}), ...(theme ? { theme } : {}), ...(typeof figureNumber === 'number' ? { figureNumber } : {}) };
+    const fullscreen = 'fullscreen' in this.early ? this.early.fullscreen : live.fullscreen;
+    const { style: _style, theme: _theme, figureNumber: _number, fullscreen: _fullscreen, ...rest } = live;
+    return {
+      ...rest,
+      ...(style ? { style } : {}),
+      ...(theme ? { theme } : {}),
+      ...(typeof figureNumber === 'number' ? { figureNumber } : {}),
+      ...(fullscreen !== undefined ? { fullscreen } : {}),
+    };
   }
 
   measure(): { width: number; height: number } | null {

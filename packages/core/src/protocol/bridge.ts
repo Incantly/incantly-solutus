@@ -35,6 +35,8 @@ export interface LiveOptions {
   readonly style?: FigureStyle;
   /** The figure's number in its document, for the card's title. */
   readonly figureNumber?: number;
+  /** Films only: the player is fullscreen, so the frame mirrors the fullscreen sizing from the first frame. */
+  readonly fullscreen?: boolean;
 }
 
 export interface ProbeRequest {
@@ -105,6 +107,8 @@ export type HostMessageBody =
   | { readonly type: 'theme'; readonly theme: 'light' | 'dark' | 'auto' }
   /** The figure's number in its document changed. */
   | { readonly type: 'number'; readonly figureNumber: number | null }
+  /** Films only: the player entered or left fullscreen; the frame mirrors the sizing. */
+  | { readonly type: 'fullscreen'; readonly value: boolean }
   | { readonly type: 'destroy' };
 
 export type FrameMessageBody =
@@ -152,6 +156,7 @@ export const HOST_MESSAGE_TYPES: ReadonlySet<string> = new Set([
   'style',
   'theme',
   'number',
+  'fullscreen',
   'destroy',
 ]);
 
@@ -295,6 +300,8 @@ export function parseHostMessage(data: unknown, channel: string): HostMessage | 
       return m.figureNumber === null || (typeof m.figureNumber === 'number' && Number.isInteger(m.figureNumber) && m.figureNumber > 0 && m.figureNumber < 10_000)
         ? (m as unknown as HostMessage)
         : null;
+    case 'fullscreen':
+      return typeof m.value === 'boolean' ? (m as unknown as HostMessage) : null;
     default:
       return m as unknown as HostMessage;
   }
