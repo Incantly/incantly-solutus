@@ -1,6 +1,6 @@
 {
   "name": "@incantly/tiptap",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "description": "TipTap integration for Incantly figures: the figure node, its node view and the live-figure scheduler.",
