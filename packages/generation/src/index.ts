@@ -88,6 +88,9 @@ export { MAX_TICKET_LENGTH, issueTicket, readTicket } from './ticket';
 export { FileGalleryStore, MemoryGalleryStore, galleryCard, galleryFigure, galleryId, isListed, matchFor, promote, promotionProblem, sceneFiles, sceneSlug, submitterOf } from './gallery';
 export type { GalleryEntry, GalleryStore } from './gallery';
 export type { GalleryCard, GalleryFigure, GalleryReceipt, GalleryStatus, GallerySubmission } from './protocol';
+export { FileFilmLibraryStore, FilmLibrary, MemoryFilmLibraryStore, filmAskerOf, versionSummary } from './film-library';
+export type { FilmInsertEntry, FilmLibraryStore, FilmVersionEntry, FilmVersionSummary } from './film-library';
+export type { FilmInsertsResponse, FilmInsertMessage, FilmVersionResponse, FilmVersionsResponse, FilmVersionSummaryMessage, PromoteRequest, PromoteResponse } from './protocol';
 export type { TicketFragments } from './ticket';
 export {
   CARTESIA_API_VERSION,

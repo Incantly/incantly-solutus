@@ -209,7 +209,10 @@ export function validateInsertClip(
   const problems: string[] = [];
   if (typeof input !== 'object' || input === null || Array.isArray(input)) return { ok: false, problems: ['The insert must be an object'] };
   const { id, anchor, lines } = input as { id?: unknown; anchor?: unknown; lines?: unknown };
-  const clipId = typeof id === 'string' && id !== '' ? id.slice(0, 80) : `insert-${Math.abs(hashLines(lines))}`;
+  // Unasked-for ids are unique per clip, never derived from the lines alone:
+  // two askers asking the same words — or one asker twice — must not share an
+  // insert, or promotion cannot tell whose is whose.
+  const clipId = typeof id === 'string' && id !== '' ? id.slice(0, 80) : `insert-${Math.abs(hashLines(lines))}-${Math.random().toString(36).slice(2, 10)}`;
   if (typeof anchor !== 'object' || anchor === null) return { ok: false, problems: ['The insert needs the anchor it interrupted'] };
   const pinned = anchor as Partial<AskAnchor>;
   const beat = film.beats.find((candidate) => candidate.id === pinned.beat && candidate.sceneId === pinned.scene);

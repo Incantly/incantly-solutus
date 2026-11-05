@@ -63,8 +63,23 @@ export { PlayerModel, CAPTION_SCALES, TIMELINE_WORD_TICKS_PER_BEAT } from './fil
 export type { CaptionSize, FilmBookmark, PlayerCaption, PlayerEvent, PlayerState } from './film/player';
 export { examplePinSeconds, exampleReturnSeconds, SideClipPlayer, validateExampleClip, EXAMPLE_MAX_CAPTION_CHARS } from './film/example';
 export type { ExampleClip, SideClipEvent, SideClipPhase } from './film/example';
-export { applyFilmPatch, patchSummary, sanitizeFilmPatch, FILM_PATCH_LIMITS } from './film/versions';
-export type { FilmPatchAudio, FilmPatchBeat, FilmVersionPatch } from './film/versions';
+export { applyFilmPatch, insertBeatId, patchAudioProblems, patchSummary, promoteInsertClip, sanitizeFilmPatch, FILM_PATCH_LIMITS } from './film/versions';
+export type { FilmPatchAudio, FilmPatchBeat, FilmPatchInsert, FilmPatchInsertLine, FilmVersionPatch } from './film/versions';
+export {
+  askerHashOf,
+  FilmVersionStore,
+  flattenFilm,
+  flattenInsert,
+  flattenTranscript,
+  insertIndexKey,
+  insertRecordKey,
+  PrivateInsertStore,
+  reanchorAskAnchor,
+  sanitizeStoredInsert,
+  VersionPicker,
+  FILM_LIBRARY_LIMITS,
+} from './film/library';
+export type { FilmVersionCard, FlattenedBeat, FlattenedTimeline, StoredInsert, VersionChoice } from './film/library';
 export { formatFilmLink, parseFilmLink, resolveFilmLink, resolveFilmPosition, resumeKey, ResumeStore, shortcutFor, SHORTCUTS } from './film/controls';
 export type { FilmLink, FilmPosition, PlayerShortcut, ResumeStorage, ShortcutAction } from './film/controls';
 export { FILM_FIXTURES, SIXTY_SECOND_FILM, THIRTY_SECOND_FILM } from './film/fixtures';

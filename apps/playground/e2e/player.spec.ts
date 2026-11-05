@@ -1,7 +1,13 @@
+import { readFile } from 'node:fs/promises';
 import { expect, test, type Page } from '@playwright/test';
 import { SCENE_FIXTURES } from '../src/scene-fixtures';
 
+// Serial: the dev server keeps one film library, so every test starts from no
+// stored versions and writers never race readers.
+test.describe.configure({ mode: 'serial' });
+
 async function openPlayer(page: Page, film: string): Promise<void> {
+  await page.request.get('/api/dev/films/clear');
   await page.goto(`/?page=player&film=${film}`);
   await page.waitForFunction(() => window.__playground?.ready === true);
 }
@@ -391,6 +397,7 @@ test('bookmarks add, jump and remove by beat and word', async ({ page }) => {
 });
 
 test('link-to-time deep links seek on load and copy from the transport', async ({ page }) => {
+  await page.request.get('/api/dev/films/clear');
   await page.goto('/?page=player&film=thirty#film=pendulum&v=1&beat=s1b4&w=1');
   await page.waitForFunction(() => window.__playground?.ready === true);
   await expect.poll(async () => page.evaluate(() => (window.__playground?.stats as () => { beat: string | null })().beat)).toBe('s1b4');
@@ -438,6 +445,7 @@ test('resume restores the film where it was left', async ({ page }) => {
 });
 
 test('reduced motion starts on a still beat with its caption', async ({ page }) => {
+  await page.request.get('/api/dev/films/clear');
   await page.goto('/?page=player&film=thirty&reduced-motion=1');
   await page.waitForFunction(() => window.__playground?.ready === true);
   expect((await fullState(page)).reducedMotion).toBe(true);
@@ -467,4 +475,131 @@ test('language and voice choices are offered for answers', async ({ page }) => {
   await expect.poll(async () => page.locator('.inc-ask-voice option').count(), { timeout: 15_000 }).toBeGreaterThan(1);
   await page.locator('.inc-ask-language').selectOption('es');
   expect((await askState(page)).language).toBe('es');
+});
+
+interface VersionsState {
+  readonly current: number;
+  readonly list: Array<{ version: number; summary: string; reason: string; beats: string[] }>;
+  readonly inserts: Array<{ id: string; beat: string; version: number; lines: number }>;
+  readonly flatten: { film: number; filmPlus: number; transcript: number };
+}
+
+async function versionsState(page: Page): Promise<VersionsState> {
+  return page.evaluate(() => (window.__playground?.versions as () => VersionsState)());
+}
+
+const VERSION_PATCH = {
+  status: 'patch',
+  patch: {
+    film: 'pendulum',
+    parent: 1,
+    version: 2,
+    reason: 'Open on the moment itself',
+    beats: [{ beat: 's1b1', scene: 's1', say: 'Watch the same moment again, closely.' }],
+    audio: [],
+  },
+};
+
+async function makeVersion2(page: Page): Promise<void> {
+  await seekBeat(page, 0, 0.5);
+  await page.getByRole('button', { name: 'Ask about this moment' }).click();
+  await page.locator('.inc-change-open').click();
+  await page.locator('.inc-change-input').fill('Open on the moment itself');
+  await page.locator('.inc-change-send').click();
+  await expect(page.locator('.inc-version')).toContainText('Version 2', { timeout: 60_000 });
+}
+
+test('the version picker lists versions and switches between them', async ({ page }) => {
+  await page.route('**/api/v1/ask/change', (route) => route.fulfill({ json: VERSION_PATCH }));
+  await openPlayer(page, 'thirty');
+  await expect(page.locator('.inc-version-picker option')).toHaveCount(1);
+  await makeVersion2(page);
+  await expect(page.locator('.inc-version-picker option')).toHaveCount(2);
+  await expect(page.locator('.inc-version-picker option').nth(1)).toContainText('v2 (s1b1)');
+  expect((await versionsState(page)).current).toBe(2);
+
+  // Back to v1: the old narration plays.
+  await page.locator('.inc-version-picker').selectOption('1');
+  await expect(page.locator('.inc-version')).toContainText('Version 1');
+  await page.evaluate(() => (window.__playground?.model as unknown as { seekBeat(id: string): void }).seekBeat('s1b1'));
+  await expect(page.locator('.inc-caption')).toContainText('pendulum hangs');
+
+  // Forward to v2: the new narration, playing.
+  await page.locator('.inc-version-picker').selectOption('2');
+  await expect(page.locator('.inc-caption')).toContainText('Watch the same moment again');
+  await expect.poll(async () => page.evaluate(() => (window.__playground?.stats as () => { playing: boolean })().playing)).toBe(true);
+});
+
+test('stored versions persist across a reload', async ({ page }) => {
+  await page.route('**/api/v1/ask/change', (route) => route.fulfill({ json: VERSION_PATCH }));
+  await openPlayer(page, 'thirty');
+  await makeVersion2(page);
+  await page.reload();
+  await page.waitForFunction(() => window.__playground?.ready === true);
+  await expect(page.locator('.inc-version')).toContainText('Version 2');
+  await expect(page.locator('.inc-version-picker option')).toHaveCount(2);
+  expect((await versionsState(page)).current).toBe(2);
+  await page.evaluate(() => (window.__playground?.model as unknown as { seekBeat(id: string): void }).seekBeat('s1b1'));
+  await expect(page.locator('.inc-caption')).toContainText('Watch the same moment again');
+});
+
+test('an insert is kept privately and promotes to a shared version', async ({ page }) => {
+  await openPlayer(page, 'thirty');
+  await seekBeat(page, 2, 0.6);
+  await page.getByRole('button', { name: 'Ask about this moment' }).click();
+  await page.locator('.inc-ask-chips button').nth(2).click();
+  await expect(page.locator('.inc-insert')).toContainText('Explaining deeper', { timeout: 15_000 });
+  await expect.poll(async () => (await versionsState(page)).inserts.length).toBe(1);
+  expect((await versionsState(page)).inserts[0]).toMatchObject({ beat: 's1b3', version: 1, lines: 2 });
+  expect((await versionsState(page)).flatten).toEqual({ film: 6, filmPlus: 8, transcript: 6 });
+
+  // Asker-scoped keys: no asker id in any key.
+  const keys = await page.evaluate(() => Object.keys(window.localStorage).filter((name) => name.includes('inserts')));
+  expect(keys.length).toBeGreaterThan(0);
+  for (const key of keys) expect(key).not.toContain('playground-learner');
+
+  await page.locator('.inc-insert button').click();
+  await expect.poll(async () => page.evaluate(() => (window.__playground?.stats as () => { playing: boolean })().playing)).toBe(true);
+  await page.locator('.inc-inserts > summary').click();
+  await expect(page.locator('.inc-inserts li[data-insert]')).toHaveCount(1);
+  await page.locator('.inc-insert-promote').click();
+  await expect(page.locator('.inc-version')).toContainText('Version 2', { timeout: 60_000 });
+  expect((await versionsState(page)).list[1]!.summary).toBe('v2 (+2 after s1b3)');
+
+  // The promoted beats play with the insert's words.
+  await page.evaluate(() => (window.__playground?.model as unknown as { seekBeat(id: string): void }).seekBeat('s1b3-v2-1'));
+  await expect(page.locator('.inc-caption')).toContainText('Here is the step again, slowed down.');
+});
+
+test('a refused promotion explains that only the author promotes', async ({ page }) => {
+  await page.route('**/api/v1/films/pendulum/promote', (route) => route.fulfill({ status: 404, json: { status: 'failed', reason: 'missing' } }));
+  await openPlayer(page, 'thirty');
+  await seekBeat(page, 2, 0.6);
+  await page.getByRole('button', { name: 'Ask about this moment' }).click();
+  await page.locator('.inc-ask-chips button').nth(2).click();
+  await expect(page.locator('.inc-insert')).toContainText('Explaining deeper', { timeout: 15_000 });
+  await page.locator('.inc-insert button').click();
+  await page.locator('.inc-inserts > summary').click();
+  await page.locator('.inc-insert-promote').click();
+  await expect(page.locator('.inc-inserts-status')).toContainText('Only the film', { timeout: 15_000 });
+  await expect(page.locator('.inc-version')).toContainText('Version 1');
+});
+
+test('export downloads a transcript of beat text only', async ({ page }) => {
+  await openPlayer(page, 'thirty');
+  expect((await versionsState(page)).flatten).toEqual({ film: 6, filmPlus: 6, transcript: 6 });
+  await page.locator('.inc-export > summary').click();
+  const download = page.waitForEvent('download');
+  await page.locator('.inc-export-transcript').click();
+  const file = await download;
+  expect(file.suggestedFilename()).toBe('pendulum-v1-transcript.txt');
+  const text = await readFile(await file.path(), 'utf8');
+  expect(text).toBe(
+    'A pendulum hangs from its pivot, pulled straight down by gravity.\n' +
+      'Pull the bob aside, let go, and watch the swing begin.\n' +
+      'It trades height for speed, moving fastest through the very bottom.\n' +
+      'Friction steals a little energy on every single passing swing.\n' +
+      'A gentle push at just the right moment keeps it swinging.\n' +
+      'Every swing takes the same time, so the pendulum keeps time.\n',
+  );
 });

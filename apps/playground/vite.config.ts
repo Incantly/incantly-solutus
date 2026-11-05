@@ -225,6 +225,9 @@ function generationService(): Plugin {
   let enabled = true;
   // One gallery for every service the dev server mounts, kept in memory.
   let gallery: import('@incantly/generation').MemoryGalleryStore | null = null;
+  // One film library for every service, kept in memory: shared versions and private inserts.
+  let films: import('@incantly/generation').FilmLibrary | null = null;
+  let filmStore: import('@incantly/generation').MemoryFilmLibraryStore | null = null;
   const services = new Map<
     string,
     { handle(req: IncomingMessage, res: ServerResponse): Promise<void>; close(): Promise<void>; records: { records: unknown[] } }
@@ -280,6 +283,8 @@ function generationService(): Plugin {
         : g.referenceModel({ fault: name, stubborn, latencyMs: 250, chunk: 48 });
     const records = new g.MemoryRecords();
     gallery ??= new g.MemoryGalleryStore();
+    filmStore ??= new g.MemoryFilmLibraryStore();
+    films ??= new g.FilmLibrary(filmStore);
     const service = new g.GenerationService({
       model,
       authenticate: g.hmacAuthenticator(DEV_SECRET),
@@ -295,6 +300,7 @@ function generationService(): Plugin {
       // Figures that hit a problem while live are repaired in the background (RP-7).
       ticketSecret: DEV_TICKET_SECRET,
       gallery,
+      films,
     });
     const entry = { handle: service.handle, close: () => service.close(), records };
     services.set(prefix, entry);
@@ -441,6 +447,10 @@ function generationService(): Plugin {
           }
           if (path === '/api/dev/gallery/clear') {
             gallery?.entries.clear();
+            return json(200, { cleared: true });
+          }
+          if (path === '/api/dev/films/clear') {
+            filmStore?.clear();
             return json(200, { cleared: true });
           }
           if (path === '/api/dev/gallery/review') {
