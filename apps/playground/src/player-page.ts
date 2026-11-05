@@ -10,6 +10,14 @@ import {
   CAPTION_SCALES,
   compileFilm,
   compileTrusted,
+  createBrowserFallbackRig,
+  ExportCancellation,
+  ExportCancelledError,
+  exportAvSyncBound,
+  exportFrameSize,
+  exportTimelineFallback,
+  exportTimelineMp4,
+  exportVideoFilename,
   FilmController,
   FilmMixer,
   FilmVersionStore,
@@ -19,9 +27,16 @@ import {
   fontsReady,
   formatFilmLink,
   InsertPlayer,
+  meanPixelDifference,
+  openBrowserCapture,
+  openWebCodecsAudio,
+  openWebCodecsVideo,
+  planExportFilm,
   PrivateInsertStore,
+  probeExportCodecs,
   promoteInsertClip,
   reanchorAskAnchor,
+  renderLiveExportPixels,
   loadKitModules,
   mountTrusted,
   parseFilmLink,
@@ -35,6 +50,7 @@ import {
   ResumeStore,
   routeQuestion,
   sandboxAdapter,
+  sanitizeExportFilenameSegment,
   sanitizeFilmPatch,
   shortcutFor,
   SHORTCUTS,
@@ -45,24 +61,30 @@ import {
   validateScene,
   VersionPicker,
   WebAudioMixerBackend,
+  EXPORT_FPS_DEFAULT,
   FILM_BEAT_HOLD_SECONDS,
   FILM_FIXTURES,
   type AskAnchor,
   type CompiledBeat,
   type CompiledFilm,
+  type ExportFrameSize,
+  type ExportPlan,
   type FigureHandle,
   type FilmFailure,
   type FilmFixture,
   type FilmReport,
   type FilmSceneSource,
   type FilmVersionPatch,
+  type FlattenedTimeline,
   type InsertClip,
+  type MixerClip,
   type StoredInsert,
   type KitRegistry,
   type PlayerState,
   type ProbeReport,
   type ResumeStorage,
   type RuntimeUpdate,
+  type SceneFunction,
   type SceneRuntime,
   type ShowMeSession,
   type StylePreset,
@@ -476,10 +498,58 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
       // Local only.
     }
   };
-  buildExport(player, {
-    inserts: () => askerStore.list(askerId, film.id),
-    film: () => film,
-  });
+  // The export identity check keeps sampled frames from the last video
+  // export (?export-debug=1) and compares them against live-rendered frames
+  // at the same timestamps, in the page.
+  const exportDebug: ExportVideoDebug = {
+    last: null,
+    compare: async (frame) => {
+      const last = exportDebug.last;
+      if (!last || last.plan.chunks.length !== 1) return null;
+      const kept = last.kept.get(frame);
+      if (!kept) return null;
+      const chunk = last.plan.chunks[0]!;
+      const fragments = fixture.scenes.find((candidate) => candidate.id === chunk.sceneId);
+      if (!fragments) return null;
+      const live = await renderLiveExportPixels(
+        { document, fragments: { html: fragments.html, css: fragments.css, js: fragments.js }, kits, film: last.film, size: last.size },
+        frame / last.fps,
+      );
+      return meanPixelDifference(kept, live);
+    },
+  };
+  buildExport(
+    player,
+    {
+      inserts: () => askerStore.list(askerId, film.id),
+      film: () => film,
+    },
+    {
+      pause: () => model.pause(),
+      fragments: (sceneId) => {
+        const found = fixture.scenes.find((candidate) => candidate.id === sceneId);
+        return found ? { html: found.html, css: found.css, js: found.js } : null;
+      },
+      inputs: () => fixture.scenes.map((candidate) => ({ id: candidate.id, scene: compileTrusted(candidate.js), kits })),
+      kits: () => kits,
+      clips: () => {
+        const out: MixerClip[] = [];
+        for (const beat of film.beats) {
+          const clip = mixer.clipFor(beat.id);
+          if (clip) out.push(clip);
+        }
+        return out;
+      },
+      stageSize: () => {
+        const stage = figure.runtime.graph.stages[0];
+        if (!stage) return null;
+        const [, , width, height] = stage.viewBox;
+        return { width, height };
+      },
+      debug: exportDebug,
+      debugFrames: params.get('export-debug') === '1',
+    },
+  );
 
   bindShortcuts({
     playPause: () => model.toggle(),
@@ -648,6 +718,12 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
     narration: () => ({ source: narrationSource, timed: film.beats.filter((beat) => beat.timed).length, beats: film.beats.length }),
     mixerEvents: () => [...mixBackend.events],
     stats: () => ({ time: controller.time, beat: controller.currentBeat?.id ?? null, playing: controller.isPlaying, controller: { ...controller.stats } }),
+    exportLast: () => {
+      const last = exportDebug.last;
+      if (!last) return null;
+      return { url: last.url, width: last.width, height: last.height, fps: last.fps, frames: last.frames, seconds: last.seconds, codec: last.codec, hasAudio: last.hasAudio, fallback: last.fallback, speed: last.speed };
+    },
+    exportCompare: (frame: number) => exportDebug.compare(frame),
   };
 
   const runChecks = async (): Promise<void> => {
@@ -1027,15 +1103,47 @@ function buildInserts(
   return { refresh };
 }
 
-/** Export, data only: flattened timelines the renderer will consume, and beat-text transcripts. */
-function buildExport(player: HTMLElement, sources: { film(): CompiledFilm; inserts(): readonly StoredInsert[] }): void {
+/** What the export identity check keeps from the last video export (?export-debug=1): sampled frames and their plan. */
+interface ExportVideoDebug {
+  last: {
+    readonly url: string;
+    readonly width: number;
+    readonly height: number;
+    readonly fps: number;
+    readonly frames: number;
+    readonly seconds: number;
+    readonly codec: string;
+    readonly hasAudio: boolean;
+    readonly fallback: boolean;
+    readonly speed: number;
+    readonly kept: ReadonlyMap<number, ImageData>;
+    readonly size: ExportFrameSize;
+    readonly plan: ExportPlan;
+    readonly film: CompiledFilm;
+  } | null;
+  compare(frame: number): Promise<number | null>;
+}
+
+interface ExportVideoSources {
+  pause(): void;
+  fragments(sceneId: string): { html: string; css: string; js: string } | null;
+  inputs(): ReadonlyArray<{ readonly id: string; readonly scene: SceneFunction; readonly kits?: KitRegistry }>;
+  kits(): KitRegistry;
+  clips(): MixerClip[];
+  stageSize(): { width: number; height: number } | null;
+  readonly debug: ExportVideoDebug;
+  readonly debugFrames: boolean;
+}
+
+/** Export: flattened timelines and transcripts as data, and the film as offline MP4 video. */
+function buildExport(player: HTMLElement, sources: { film(): CompiledFilm; inserts(): readonly StoredInsert[] }, video: ExportVideoSources): void {
   const wrap = document.createElement('details');
   wrap.className = 'inc-export';
   const summary = document.createElement('summary');
   summary.textContent = 'Export';
   const hint = document.createElement('p');
   hint.className = 'inc-export-hint';
-  hint.textContent = 'Timelines and transcripts only — the rendered video lands in a later slice.';
+  hint.textContent = 'Timelines and transcripts as data; the film itself as MP4, rendered offline on the fixed film clock.';
   const clipOf = (entry: StoredInsert): InsertClip => ({ id: entry.id, anchor: entry.anchor, lines: entry.lines, seconds: entry.seconds });
   const filmButton = document.createElement('button');
   filmButton.type = 'button';
@@ -1043,7 +1151,7 @@ function buildExport(player: HTMLElement, sources: { film(): CompiledFilm; inser
   filmButton.textContent = 'Film (JSON)';
   filmButton.addEventListener('click', () => {
     const film = sources.film();
-    downloadFile(`${film.id}-v${film.version}.json`, JSON.stringify(flattenFilm(film), null, 2), 'application/json');
+    downloadFile(`${sanitizeExportFilenameSegment(film.id)}-v${film.version}.json`, JSON.stringify(flattenFilm(film), null, 2), 'application/json');
   });
   const plusButton = document.createElement('button');
   plusButton.type = 'button';
@@ -1052,7 +1160,7 @@ function buildExport(player: HTMLElement, sources: { film(): CompiledFilm; inser
   plusButton.addEventListener('click', () => {
     const film = sources.film();
     const clips = sources.inserts().map(clipOf);
-    downloadFile(`${film.id}-v${film.version}-with-inserts.json`, JSON.stringify(flattenFilm(film, clips), null, 2), 'application/json');
+    downloadFile(`${sanitizeExportFilenameSegment(film.id)}-v${film.version}-with-inserts.json`, JSON.stringify(flattenFilm(film, clips), null, 2), 'application/json');
   });
   const oneButton = document.createElement('button');
   oneButton.type = 'button';
@@ -1078,7 +1186,7 @@ function buildExport(player: HTMLElement, sources: { film(): CompiledFilm; inser
   oneButton.addEventListener('click', () => {
     const entry = sources.inserts().find((candidate) => candidate.id === select.value);
     if (!entry) return;
-    downloadFile(`${entry.id}.json`, JSON.stringify(flattenInsert(sources.film(), clipOf(entry)), null, 2), 'application/json');
+    downloadFile(`${sanitizeExportFilenameSegment(entry.id)}.json`, JSON.stringify(flattenInsert(sources.film(), clipOf(entry)), null, 2), 'application/json');
   });
   const transcriptButton = document.createElement('button');
   transcriptButton.type = 'button';
@@ -1086,7 +1194,7 @@ function buildExport(player: HTMLElement, sources: { film(): CompiledFilm; inser
   transcriptButton.textContent = 'Transcript (text)';
   transcriptButton.addEventListener('click', () => {
     const film = sources.film();
-    downloadFile(`${film.id}-v${film.version}-transcript.txt`, `${flattenTranscript(flattenFilm(film)).join('\n')}\n`, 'text/plain');
+    downloadFile(`${sanitizeExportFilenameSegment(film.id)}-v${film.version}-transcript.txt`, `${flattenTranscript(flattenFilm(film)).join('\n')}\n`, 'text/plain');
   });
   const row = document.createElement('div');
   row.className = 'inc-ask-row';
@@ -1095,7 +1203,244 @@ function buildExport(player: HTMLElement, sources: { film(): CompiledFilm; inser
   insertRow.className = 'inc-ask-row';
   insertRow.append(select, oneButton);
   wrap.append(summary, hint, row, insertRow);
+  buildExportVideo(wrap, sources, select, video);
   player.append(wrap);
+}
+
+const EXPORT_VIDEO_CODEC_NAMES: Readonly<Record<string, string>> = { avc: 'H.264', vp09: 'VP9', vp08: 'VP8' };
+
+/**
+ * The film as video: the slice-6 selection (film, film plus inserts, one
+ * insert) rendered offline to MP4 at the chosen height, with progress,
+ * cancellation and a download. Where WebCodecs is missing the same timeline
+ * records in realtime through MediaRecorder instead, labelled fallback.
+ * Single inserts reuse the insert picked above.
+ */
+function buildExportVideo(
+  wrap: HTMLElement,
+  sources: { film(): CompiledFilm; inserts(): readonly StoredInsert[] },
+  insertSelect: HTMLSelectElement,
+  video: ExportVideoSources,
+): void {
+  const doc = wrap.ownerDocument;
+  const title = doc.createElement('h4');
+  title.className = 'inc-export-video-title';
+  title.textContent = 'Video';
+  const hint = doc.createElement('p');
+  hint.className = 'inc-export-hint';
+  hint.textContent = 'Offline MP4 on the fixed film clock, with narration where the beats have it.';
+  const selection = doc.createElement('select');
+  selection.className = 'inc-export-video-selection';
+  selection.setAttribute('aria-label', 'What to export');
+  for (const [value, text] of [
+    ['film', 'Film'],
+    ['plus', 'Film + my inserts'],
+    ['insert', 'Single insert'],
+  ] as const) {
+    const option = doc.createElement('option');
+    option.value = value;
+    option.textContent = text;
+    selection.append(option);
+  }
+  const resolution = doc.createElement('select');
+  resolution.className = 'inc-export-video-resolution';
+  resolution.setAttribute('aria-label', 'Export height');
+  for (const height of [480, 720, 1080]) {
+    const option = doc.createElement('option');
+    option.value = String(height);
+    option.textContent = `${height}p`;
+    if (height === 720) option.selected = true;
+    resolution.append(option);
+  }
+  const go = doc.createElement('button');
+  go.type = 'button';
+  go.className = 'inc-export-video-go';
+  go.textContent = 'Export MP4';
+  const cancelButton = doc.createElement('button');
+  cancelButton.type = 'button';
+  cancelButton.className = 'inc-export-video-cancel';
+  cancelButton.textContent = 'Cancel';
+  cancelButton.hidden = true;
+  const progress = doc.createElement('progress');
+  progress.className = 'inc-export-video-progress';
+  progress.max = 100;
+  progress.value = 0;
+  progress.hidden = true;
+  const status = doc.createElement('p');
+  status.className = 'inc-export-video-status';
+  status.setAttribute('role', 'status');
+  const download = doc.createElement('a');
+  download.className = 'inc-export-video-download';
+  download.textContent = 'Download the video';
+  download.hidden = true;
+  const controls = doc.createElement('div');
+  controls.className = 'inc-ask-row';
+  controls.append(selection, resolution, go, cancelButton);
+  wrap.append(title, hint, controls, progress, status, download);
+
+  let running = false;
+  let cancel: ExportCancellation | null = null;
+  cancelButton.addEventListener('click', () => cancel?.cancel());
+
+  const clipOf = (entry: StoredInsert): InsertClip => ({ id: entry.id, anchor: entry.anchor, lines: entry.lines, seconds: entry.seconds });
+
+  go.addEventListener('click', () => {
+    if (running) return;
+    void run();
+  });
+
+  async function run(): Promise<void> {
+    const film = sources.film();
+    let timeline: FlattenedTimeline;
+    let insertId: string | null;
+    if (selection.value === 'insert') {
+      const entry = sources.inserts().find((candidate) => candidate.id === insertSelect.value);
+      if (!entry) {
+        status.textContent = 'Pick one of your inserts above first.';
+        return;
+      }
+      timeline = flattenInsert(film, clipOf(entry));
+      insertId = entry.id;
+    } else if (selection.value === 'plus') {
+      timeline = flattenFilm(film, sources.inserts().map(clipOf));
+      insertId = 'with-inserts';
+    } else {
+      timeline = flattenFilm(film);
+      insertId = null;
+    }
+    const stage = video.stageSize();
+    if (!stage) {
+      status.textContent = 'The figure draws no stage to export.';
+      return;
+    }
+    let size: ExportFrameSize;
+    try {
+      size = exportFrameSize(stage.width, stage.height, Number(resolution.value));
+    } catch (error) {
+      status.textContent = error instanceof Error ? error.message : 'The export size is out of range.';
+      return;
+    }
+    const planned = planExportFilm(film, timeline, video.inputs(), {});
+    if (!planned.ok) {
+      status.textContent = planned.problems.join('; ');
+      return;
+    }
+    const plan = planned.plan;
+    running = true;
+    go.disabled = true;
+    cancelButton.hidden = false;
+    progress.hidden = false;
+    progress.value = 0;
+    download.hidden = true;
+    video.pause();
+    try {
+      await fontsReady();
+    } catch {
+      // Measuring falls back deterministically without loaded fonts.
+    }
+    const started = performance.now();
+    cancel = new ExportCancellation();
+    const support = await probeExportCodecs(size.frameWidth, size.frameHeight, EXPORT_FPS_DEFAULT);
+    const showProgress = (frame: number, frames: number, extra: string): void => {
+      progress.value = frames === 0 ? 0 : Math.round((100 * frame) / frames);
+      status.textContent = `${extra} frame ${frame} of ${frames}…`;
+    };
+    try {
+      if (support.video && support.videoCodecString) {
+        const codecName = EXPORT_VIDEO_CODEC_NAMES[support.video] ?? support.video;
+        status.textContent = `Exporting with ${codecName}…`;
+        const keepFrames = video.debugFrames ? new Set([0, Math.floor(plan.frames / 2), plan.frames - 1]) : undefined;
+        const kept = new Map<number, ImageData>();
+        const offsets: number[] = [];
+        let at = 0;
+        for (const chunk of plan.chunks) {
+          offsets.push(at);
+          at += chunk.frames;
+        }
+        const fragments = (sceneId: string): { html: string; css: string; js: string } => {
+          const found = video.fragments(sceneId);
+          if (!found) throw new Error(`Scene "${sceneId}" has no source to export`);
+          return found;
+        };
+        const result = await exportTimelineMp4({
+          film,
+          timeline,
+          scenes: video.inputs(),
+          clips: video.clips(),
+          size,
+          drivers: {
+            openCapture: (chunk) =>
+              openBrowserCapture(chunk, { document: doc, fragments, kits: video.kits(), size, keepFrames, kept, globalOffset: offsets[chunk.chunk] ?? 0 }),
+            openVideo: (width, height, fps) => openWebCodecsVideo(width, height, fps, support.video!, support.videoCodecString!),
+            openAudio: () => (support.audio ? openWebCodecsAudio() : Promise.resolve(null)),
+          },
+          cancel,
+          onProgress: (event) => showProgress(event.frame, event.frames, event.phase === 'video' ? 'Exporting' : event.phase === 'audio' ? 'Encoding narration,' : 'Muxing,'),
+        });
+        const wall = Math.max(1e-3, (performance.now() - started) / 1000);
+        const speed = result.seconds / wall;
+        const url = URL.createObjectURL(new Blob([result.bytes.slice()], { type: 'video/mp4' }));
+        download.href = url;
+        download.download = exportVideoFilename(film.id, film.version, insertId, resolution.value, 'mp4', false);
+        download.hidden = false;
+        const boundMs = Math.round(exportAvSyncBound(result.fps) * 1000);
+        status.textContent =
+          `Done · ${Math.round(result.bytes.length / 1024)} KB · ${speed.toFixed(1)}× realtime · ${codecName}${result.hasAudio ? ' + AAC' : ', silent'} · narration within ${boundMs} ms of its beat`;
+        if (video.debugFrames) {
+          video.debug.last = {
+            url,
+            width: result.width,
+            height: result.height,
+            fps: result.fps,
+            frames: result.frames,
+            seconds: result.seconds,
+            codec: codecName,
+            hasAudio: result.hasAudio,
+            fallback: false,
+            speed,
+            kept,
+            size,
+            plan,
+            film,
+          };
+        }
+      } else {
+        status.textContent = 'Recording the fallback in realtime…';
+        const fragments = (sceneId: string): { html: string; css: string; js: string } => {
+          const found = video.fragments(sceneId);
+          if (!found) throw new Error(`Scene "${sceneId}" has no source to export`);
+          return found;
+        };
+        const rig = createBrowserFallbackRig({ document: doc, fragments, kits: video.kits(), size, fps: 24 });
+        const result = await exportTimelineFallback({
+          film,
+          timeline,
+          scenes: video.inputs(),
+          openSession: rig.openSession,
+          recorder: rig.recorder,
+          clock: rig.clock,
+          cancel,
+          onProgress: (event) => showProgress(event.frame, event.frames, 'Recording the fallback,'),
+        });
+        const wall = Math.max(1e-3, (performance.now() - started) / 1000);
+        const speed = result.seconds / wall;
+        const url = URL.createObjectURL(new Blob([result.bytes.slice()], { type: result.mimeType }));
+        download.href = url;
+        const extension = result.mimeType.includes('mp4') ? 'mp4' : 'webm';
+        download.download = exportVideoFilename(film.id, film.version, insertId, resolution.value, extension, true);
+        download.hidden = false;
+        status.textContent = `Done · fallback · realtime · video-only · ${Math.round(result.bytes.length / 1024)} KB · ${speed.toFixed(1)}× realtime`;
+      }
+    } catch (error) {
+      if (error instanceof ExportCancelledError || cancel?.cancelled) status.textContent = 'Cancelled.';
+      else status.textContent = `The export failed: ${error instanceof Error ? error.message : 'unknown error'}`;
+    } finally {
+      running = false;
+      go.disabled = false;
+      cancelButton.hidden = true;
+      cancel = null;
+    }
+  }
 }
 
 /** Downloads text through a blob link; the click is the gesture the browser needs. */

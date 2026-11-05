@@ -86,6 +86,80 @@ export { FILM_FIXTURES, SIXTY_SECOND_FILM, THIRTY_SECOND_FILM } from './film/fix
 export type { FilmFixture, FilmFixtureScene } from './film/fixtures';
 export { FilmMixer, MemoryMixerBackend, WebAudioMixerBackend, BED_DUCKED_LEVEL, BED_LEVEL, NARRATION_LEVEL } from './film/mixer';
 export type { MixerBackend, MixerClip, MixerEvent } from './film/mixer';
+export {
+  assembleExportAudio,
+  ExportCancellation,
+  ExportCancelledError,
+  ExportError,
+  exportAvSyncBound,
+  exportFrameSize,
+  exportStepsPerFrame,
+  exportSyncReport,
+  exportTimelineFallback,
+  exportTimelineMp4,
+  exportVideoFilename,
+  planExportFilm,
+  renderExportChunk,
+  resampleMono16,
+  sanitizeExportFilenameSegment,
+  EXPORT_AUDIO_FRAME_SAMPLES,
+  EXPORT_FILENAME_MAX_CHARS,
+  EXPORT_FILENAME_SEGMENT_CHARS,
+  EXPORT_FPS_DEFAULT,
+  EXPORT_HEIGHTS,
+  EXPORT_KEYFRAME_EVERY,
+  EXPORT_MAX_AUDIO_SECONDS,
+  EXPORT_MAX_DIMENSION,
+  EXPORT_MAX_SAMPLE_RATE,
+  EXPORT_MIN_SAMPLE_RATE,
+  EXPORT_SAMPLE_RATE,
+  EXPORT_SEED,
+} from './film/export';
+export type {
+  AssembledExportAudio,
+  ExportAudioSink,
+  ExportCaptureSession,
+  ExportDrivers,
+  ExportFallbackOptions,
+  ExportFallbackResult,
+  ExportFrame,
+  ExportFrameSize,
+  ExportPhase,
+  ExportPlan,
+  ExportPlanChunk,
+  ExportProgress,
+  ExportSceneInput,
+  ExportSyncLine,
+  ExportSyncReport,
+  ExportVideoOptions,
+  ExportVideoResult,
+  ExportVideoSample,
+  ExportVideoSink,
+  FallbackClock,
+  FallbackRecorder,
+  FallbackSession,
+  PlanExportOptions,
+  RenderExportHooks,
+} from './film/export';
+export { listTopLevelBoxes, muxMp4, MP4_MVHD_TIMESCALE, MP4_VIDEO_TIMESCALE } from './film/mp4';
+export type { Mp4AudioTrack, Mp4Box, Mp4VideoCodec, Mp4VideoSample, Mp4VideoTrack } from './film/mp4';
+export {
+  createBrowserFallbackRig,
+  fallbackRecorderType,
+  hashPixels,
+  meanPixelDifference,
+  openBrowserCapture,
+  openWebCodecsAudio,
+  openWebCodecsVideo,
+  paintExportCaption,
+  probeExportCodecs,
+  renderLiveExportPixels,
+  resumeFallbackPlayback,
+  exportBitrate,
+  EXPORT_AUDIO_BITRATE,
+  EXPORT_AUDIO_CODEC,
+} from './film/webcodecs';
+export type { BrowserCaptureEnv, ExportCodecSupport, FallbackRigEnv, LiveExportFrameEnv, PixelMap } from './film/webcodecs';
 export { KIT_NAMES, KIT_OF, kitsFor } from './runtime/kits';
 export type { KitCall, KitEntry, KitModule, KitName, KitRegistry } from './runtime/kits';
 export { availableKits, loadKitModules } from './kits/load';
