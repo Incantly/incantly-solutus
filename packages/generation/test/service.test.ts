@@ -213,7 +213,7 @@ describe('the generation service', () => {
   it('states its status and its retention rule', async () => {
     const { base } = await start({ sessionMinutes: 10, recordsRetentionDays: 14 });
     const status = (await (await fetch(`${base}/v1/status`)).json()) as Record<string, unknown>;
-    expect(status).toMatchObject({ enabled: true, sdkVersion: '0.2.0', retention: { recordsDays: 14, sessionMinutes: 10 } });
+    expect(status).toMatchObject({ enabled: true, sdkVersion: '0.3.0', retention: { recordsDays: 14, sessionMinutes: 10 } });
     expect(JSON.stringify(status)).toContain('not stored');
   });
 

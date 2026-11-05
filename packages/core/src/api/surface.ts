@@ -76,7 +76,7 @@ import type {
   World2D,
 } from './types';
 
-export const SDK_VERSION = '0.2.0';
+export const SDK_VERSION = '0.3.0';
 
 /** Bumped when stored scenes would need migrating. */
 export const SCENE_SCHEMA_VERSION = 1;
