@@ -60,3 +60,49 @@ test('the one-minute film reports seek=play and passing film checks', async ({ p
   await expect(page.locator('.inc-player-badge').nth(1)).toContainText('seek=play: pass', { timeout: 30_000 });
   await expect(page.locator('.inc-player-badge').nth(2)).toContainText('all 8 beats pass', { timeout: 60_000 });
 });
+
+test('stub narration times the beats and highlights caption words', async ({ page }) => {
+  await openPlayer(page, 'thirty');
+  await expect
+    .poll(async () => page.evaluate(() => (window.__playground?.narration as () => { source: string; timed: number; beats: number })()))
+    .toMatchObject({ source: 'stub', timed: 6, beats: 6 });
+  await page.evaluate(() => (window.__playground?.model as unknown as { seek(seconds: number): void }).seek(0.1));
+  await expect(page.locator('.inc-caption-word')).not.toHaveCount(0);
+  await expect(page.locator('.inc-caption-word.is-active').first()).toContainText('A');
+
+  await page.locator('.inc-player-transport button').first().click();
+  await page.waitForFunction(() => {
+    const stats = (window.__playground?.stats as () => { time: number })();
+    return stats.time > 1.2;
+  });
+  await expect.poll(async () => page.locator('.inc-caption-word.is-active').first().textContent()).not.toBe('A');
+});
+
+test('the sound toggle schedules narration and stays silent until then', async ({ page }) => {
+  await openPlayer(page, 'thirty');
+  await page.evaluate(() => (window.__playground?.model as unknown as { seek(seconds: number): void }).seek(0.5));
+  await page.locator('.inc-player-transport button').first().click();
+  await page.waitForFunction(() => {
+    const stats = (window.__playground?.stats as () => { time: number })();
+    return stats.time > 0.8;
+  });
+  const silent = await page.evaluate(() => (window.__playground?.mixerEvents as () => Array<{ type: string }>)());
+  expect(silent.filter((event) => event.type === 'play')).toHaveLength(0);
+
+  const sound = page.getByRole('button', { name: 'Sound' });
+  await expect(sound).toHaveText('Sound: off');
+  await sound.click();
+  await expect(sound).toHaveText('Sound: on');
+  await expect
+    .poll(async () => page.evaluate(() => (window.__playground?.mixerEvents as () => Array<{ type: string }>)()).then((events) => events.filter((e) => e.type === 'play').length))
+    .toBeGreaterThan(0);
+});
+
+test('narration settings keep the key in memory and need none for the stub', async ({ page }) => {
+  await openPlayer(page, 'thirty');
+  const key = page.locator('.inc-narration-key');
+  await expect(key).toHaveAttribute('type', 'password');
+  await expect(key).toHaveAttribute('autocomplete', 'off');
+  await expect(key).toHaveValue('');
+  await expect(page.locator('.inc-narration-hint')).toContainText('never saved');
+});

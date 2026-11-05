@@ -3,7 +3,7 @@ import type { FrameClock } from '../engine/clock';
 import type { RendererMessage, RuntimeUpdate } from '../protocol/runtime-messages';
 import { stageBounds, type Box } from '../scene/bounds';
 import type { VNode } from '../scene/graph';
-import { anchorFor, resolveAnchor, type CompiledBeat, type CompiledFilm, type FilmAnchor } from '../film/storyboard';
+import { anchorFor, attachAudio, resolveAnchor, type BeatAudio, type CompiledBeat, type CompiledFilm, type FilmAnchor } from '../film/storyboard';
 import { FILM_STEP_SECONDS, SceneRuntime } from './runtime';
 
 /**
@@ -626,6 +626,15 @@ export class FilmController {
     const at = this.film.beats.findIndex((candidate) => candidate.id === beat.id);
     const lines = this.transcript().slice(Math.max(0, at - 1), at + 2);
     return { question, anchor, beat, lines };
+  }
+
+  /**
+   * Attaches one beat's narration audio as it arrives: the beat takes the
+   * audio's length plus the hold, what follows re-times, and the beat on
+   * screen stays on screen. Estimated 2.5 words per second until then.
+   */
+  attachAudio(beatId: string, audio: BeatAudio): void {
+    this.retime(attachAudio(this.film, beatId, audio));
   }
 
   /**

@@ -14,7 +14,7 @@ import type { Box } from '../scene/bounds';
  * estimated and the checks say so.
  */
 
-export type FilmCheck = 'safe-margin' | 'caption-lines' | 'size' | 'overlap' | 'contrast' | 'focus-in-frame' | 'reading-speed' | 'one-emphasis' | 'sfx';
+export type FilmCheck = 'safe-margin' | 'caption-lines' | 'size' | 'overlap' | 'contrast' | 'focus-in-frame' | 'reading-speed' | 'one-emphasis' | 'sfx' | 'audio-sync';
 
 export type FilmPoint = 'start' | 'mid' | 'end';
 
@@ -35,6 +35,8 @@ export interface FilmReportStats {
   readonly points: number;
   readonly ms: number;
   readonly msPerBeat: number;
+  /** Speech characters across every beat's line: what narrating the film bills. */
+  readonly speechChars: number;
 }
 
 export interface FilmReport {
@@ -138,11 +140,18 @@ function shareChecks(options: ProbeFilmOptions): SharedChecks {
 
 function finishReport(options: ProbeFilmOptions, shared: SharedChecks, ms: number): FilmReport {
   const beats = options.film.beats.length;
+  const estimated = options.film.beats.some((beat) => !beat.timed);
   return {
     ok: shared.failures.length === 0,
     failures: shared.failures,
-    warnings: ['Narration is estimated from words; audio and caption sync checks run when audio arrives.'],
-    stats: { beats, points: shared.points, ms: Math.round(ms * 10) / 10, msPerBeat: beats > 0 ? Math.round((ms / beats) * 10) / 10 : 0 },
+    warnings: estimated ? ['Narration is estimated from words; audio and caption sync checks run when audio arrives.'] : [],
+    stats: {
+      beats,
+      points: shared.points,
+      ms: Math.round(ms * 10) / 10,
+      msPerBeat: beats > 0 ? Math.round((ms / beats) * 10) / 10 : 0,
+      speechChars: options.film.beats.reduce((sum, beat) => sum + beat.step.say.length, 0),
+    },
   };
 }
 
@@ -226,6 +235,23 @@ function checkBeatOnce(beat: CompiledBeat, fail: (failure: FilmFailure) => void)
   }
   if (beat.step.sfx !== undefined && !sfxNames().includes(beat.step.sfx)) {
     fail({ check: 'sfx', scene: beat.sceneId, beat: beat.id, message: `Beat "${beat.id}" cues "${beat.step.sfx}", which is not a named cue (${sfxNames().join(', ')})` });
+  }
+  // Timed beats carry their audio's word starts; captions highlight from the
+  // same starts, so a bad one puts caption and audio out of sync.
+  if (beat.timed && beat.audioStarts !== undefined) {
+    const starts = beat.audioStarts;
+    if (starts.length !== beat.words.length) {
+      fail({ check: 'audio-sync', scene: beat.sceneId, beat: beat.id, message: `Beat "${beat.id}" times ${starts.length} words of ${beat.words.length}` });
+    }
+    let last = -Infinity;
+    starts.forEach((start, i) => {
+      if (!Number.isFinite(start) || start < 0 || start > beat.seconds) {
+        fail({ check: 'audio-sync', scene: beat.sceneId, beat: beat.id, message: `Beat "${beat.id}" word ${i + 1} starts outside the beat` });
+      } else if (start + 1e-9 < last) {
+        fail({ check: 'audio-sync', scene: beat.sceneId, beat: beat.id, message: `Beat "${beat.id}" word ${i + 1} starts before the word ahead of it` });
+      }
+      last = Math.max(last, start);
+    });
   }
 }
 

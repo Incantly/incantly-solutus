@@ -15,11 +15,23 @@ export interface Limits {
   readonly learnerDailyUsd: number;
   /** US dollars of model usage for the whole service per day. */
   readonly serviceDailyUsd: number;
+  /** Speech characters narrated per learner per day. Default 20,000 (about a dollar of speech). */
+  readonly speechCharsPerLearnerDay?: number;
+  /** Speech characters narrated for the whole service per day. Default 2,000,000. */
+  readonly speechCharsPerServiceDay?: number;
 }
 
-export const DEFAULT_LIMITS: Limits = { perMinute: 4, perDay: 60, concurrent: 2, learnerDailyUsd: 1, serviceDailyUsd: 100 };
+export const DEFAULT_LIMITS: Limits = {
+  perMinute: 4,
+  perDay: 60,
+  concurrent: 2,
+  learnerDailyUsd: 1,
+  serviceDailyUsd: 100,
+  speechCharsPerLearnerDay: 20_000,
+  speechCharsPerServiceDay: 2_000_000,
+};
 
-export type RefusalCode = 'rate-limit' | 'daily-limit' | 'busy' | 'cost-limit' | 'service-cost-limit';
+export type RefusalCode = 'rate-limit' | 'daily-limit' | 'busy' | 'cost-limit' | 'service-cost-limit' | 'speech-limit' | 'service-speech-limit';
 
 export interface Refusal {
   readonly code: RefusalCode;
@@ -33,6 +45,7 @@ interface LearnerUsage {
   today: number;
   spentUsd: number;
   running: number;
+  speechChars: number;
 }
 
 const DAY_MS = 86_400_000;
@@ -41,11 +54,21 @@ export class LimitKeeper {
   private readonly learners = new Map<string, LearnerUsage>();
   private serviceDay = '';
   private serviceSpentUsd = 0;
+  private serviceSpeechDay = '';
+  private serviceSpeechChars = 0;
 
   constructor(
     private readonly limits: Limits = DEFAULT_LIMITS,
     private readonly now: () => number = () => Date.now(),
   ) {}
+
+  private speechLearnerCap(): number {
+    return this.limits.speechCharsPerLearnerDay ?? DEFAULT_LIMITS.speechCharsPerLearnerDay!;
+  }
+
+  private speechServiceCap(): number {
+    return this.limits.speechCharsPerServiceDay ?? DEFAULT_LIMITS.speechCharsPerServiceDay!;
+  }
 
   private day(at: number): string {
     return new Date(at).toISOString().slice(0, 10);
@@ -59,13 +82,18 @@ export class LimitKeeper {
     let usage = this.learners.get(learnerId);
     const day = this.day(at);
     if (!usage) {
-      usage = { starts: [], day, today: 0, spentUsd: 0, running: 0 };
+      usage = { starts: [], day, today: 0, spentUsd: 0, running: 0, speechChars: 0 };
       this.learners.set(learnerId, usage);
     }
     if (usage.day !== day) {
       usage.day = day;
       usage.today = 0;
       usage.spentUsd = 0;
+      usage.speechChars = 0;
+    }
+    if (this.serviceSpeechDay !== day) {
+      this.serviceSpeechDay = day;
+      this.serviceSpeechChars = 0;
     }
     usage.starts = usage.starts.filter((t) => t > at - 60_000);
     if (this.serviceDay !== day) {
@@ -130,5 +158,52 @@ export class LimitKeeper {
   usage(learnerId: string): { readonly today: number; readonly spentUsd: number; readonly running: number } {
     const usage = this.usageOf(learnerId, this.now());
     return { today: usage.today, spentUsd: usage.spentUsd, running: usage.running };
+  }
+
+  /** A refusal for narrating more characters, or null. */
+  checkSpeech(learnerId: string, chars: number): Refusal | null {
+    const at = this.now();
+    const usage = this.usageOf(learnerId, at);
+    if (this.serviceSpeechChars + Math.max(0, chars) > this.speechServiceCap()) {
+      return { code: 'service-speech-limit', message: 'Narration has reached its budget for today', retryAfterSeconds: this.secondsToMidnight(at) };
+    }
+    if (usage.speechChars + Math.max(0, chars) > this.speechLearnerCap()) {
+      return { code: 'speech-limit', message: 'You have reached today’s limit for narration', retryAfterSeconds: this.secondsToMidnight(at) };
+    }
+    return null;
+  }
+
+  spendSpeech(learnerId: string, chars: number): void {
+    if (!(chars > 0)) return;
+    const usage = this.usageOf(learnerId, this.now());
+    usage.speechChars += chars;
+    this.serviceSpeechChars += chars;
+  }
+
+  /**
+   * Atomically checks and spends speech characters: the reservation for one
+   * request, made before it runs. Concurrent beats reserve in turn, so they
+   * cannot all pass the check and overshoot the caps together; a failed
+   * request returns its reservation through refundSpeech, since failures
+   * consume no credits.
+   */
+  reserveSpeech(learnerId: string, chars: number): Refusal | null {
+    const refusal = this.checkSpeech(learnerId, chars);
+    if (refusal) return refusal;
+    this.spendSpeech(learnerId, chars);
+    return null;
+  }
+
+  /** Returns a speech reservation when its request failed or never ran. */
+  refundSpeech(learnerId: string, chars: number): void {
+    if (!(chars > 0)) return;
+    const usage = this.usageOf(learnerId, this.now());
+    usage.speechChars = Math.max(0, usage.speechChars - chars);
+    this.serviceSpeechChars = Math.max(0, this.serviceSpeechChars - chars);
+  }
+
+  speechUsage(learnerId: string): { readonly chars: number; readonly serviceChars: number } {
+    const usage = this.usageOf(learnerId, this.now());
+    return { chars: usage.speechChars, serviceChars: this.serviceSpeechChars };
   }
 }

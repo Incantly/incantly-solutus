@@ -82,6 +82,8 @@ export interface CompiledBeat {
   readonly words: readonly string[];
   /** True once attachAudio replaced the estimate. */
   readonly timed: boolean;
+  /** Word starts in beat seconds from the narration audio, when its timings validated; captions tick from these. */
+  readonly audioStarts?: readonly number[];
 }
 
 export interface CompiledScene {
@@ -150,6 +152,21 @@ export interface FilmSceneSource {
 export interface BeatAudio {
   readonly seconds: number;
   readonly words?: readonly number[];
+}
+
+/**
+ * Word starts worth driving captions with: finite, monotonic, inside the
+ * audio, one per word. Anything else is dropped and the beat ticks from its
+ * estimate, so invalid timings never drive anything.
+ */
+export function sanitizeWordStarts(words: readonly number[] | undefined, wordCount: number, audioSeconds: number): readonly number[] | undefined {
+  if (words === undefined || words.length !== wordCount) return undefined;
+  let last = -Infinity;
+  for (const start of words) {
+    if (!Number.isFinite(start) || start < -1e-6 || start + 1e-9 < last || start - 1e-6 > audioSeconds) return undefined;
+    last = Math.max(last, start);
+  }
+  return [...words];
 }
 
 export function countWords(say: string): number {
@@ -418,11 +435,13 @@ export function resolveAnchor(film: CompiledFilm, anchor: FilmAnchor): number | 
 export function attachAudio(film: CompiledFilm, beatId: string, audio: BeatAudio): CompiledFilm {
   const at = film.beats.findIndex((beat) => beat.id === beatId);
   if (at === -1) return film;
-  const seconds = Math.min(FILM_BEAT_MAX_SECONDS, Math.max(FILM_BEAT_MIN_SECONDS, (Number.isFinite(audio.seconds) ? audio.seconds : 0) + FILM_BEAT_HOLD_SECONDS));
+  const audioSeconds = Number.isFinite(audio.seconds) ? audio.seconds : 0;
+  const seconds = Math.min(FILM_BEAT_MAX_SECONDS, Math.max(FILM_BEAT_MIN_SECONDS, audioSeconds + FILM_BEAT_HOLD_SECONDS));
+  const starts = sanitizeWordStarts(audio.words, film.beats[at]!.words.length, audioSeconds);
   let clock = 0;
   const beats = film.beats.map((beat, index) => {
     const length = index === at ? seconds : beat.seconds;
-    const next = { ...beat, start: clock, seconds: length, timed: index === at ? true : beat.timed };
+    const next = { ...beat, start: clock, seconds: length, timed: index === at ? true : beat.timed, ...(index === at ? { audioStarts: starts } : {}) };
     clock += length;
     return next;
   });
@@ -433,7 +452,11 @@ export function attachAudio(film: CompiledFilm, beatId: string, audio: BeatAudio
   return { ...film, scenes, beats, seconds: clock };
 }
 
-/** A beat's word starts in film seconds: estimated from 2.5 words per second until audio arrives. */
+/**
+ * A beat's word starts in film seconds: its narration audio's when they
+ * validated, estimated from 2.5 words per second until audio arrives.
+ */
 export function wordStarts(beat: CompiledBeat): readonly number[] {
+  if (beat.audioStarts && beat.audioStarts.length === beat.words.length) return beat.audioStarts.map((start) => beat.start + start);
   return beat.words.map((_, index) => beat.start + index / FILM_WORDS_PER_SECOND);
 }
