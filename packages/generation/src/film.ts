@@ -1202,21 +1202,59 @@ export async function generateFilm(request: FilmRequest, options: FilmGeneration
         gate.release();
       }
     })();
-    sceneTasks.set(index, task);
-    accountedTasks.push(task);
-    void task.then(
+    // A scene task never rejects out: a deadline abort or any other throw
+    // fails the scene, so the film still ends with its spend and a terminal
+    // event instead of a truncated stream.
+    const contained = task.then(
       (result) => {
-        if (sceneTasks.get(index) !== task) return;
+        if (sceneTasks.get(index) !== contained) return result;
         sceneResults.set(index, result);
         partial = compilePrefix();
         if (index === 0 && result.ok && result.fragments && firstSceneMs === null && partial) {
           firstSceneMs = now() - started;
-          hooks.onFirstScene?.(partial, result.fragments);
+          try {
+            hooks.onFirstScene?.(partial, result.fragments);
+          } catch {
+            // A failing listener never fails the scene.
+          }
         }
-        hooks.onScene?.(result, partial);
+        try {
+          hooks.onScene?.(result, partial);
+        } catch {
+          // A failing listener never fails the scene.
+        }
+        return result;
       },
-      () => {},
+      (): FilmSceneResult => {
+        const failed: FilmSceneResult = {
+          sceneId: slice.id,
+          ok: false,
+          fragments: null,
+          steps: null,
+          attempts: [],
+          repairsUsed: 0,
+          cached: false,
+          reviewed: false,
+          usage: NO_USAGE,
+          cost: 0,
+          ms: 0,
+          checkMs: 0,
+          probeMs: 0,
+          failure: aborted() ? 'timeout' : 'model',
+        };
+        if (sceneTasks.get(index) !== contained) return failed;
+        sceneResults.set(index, failed);
+        partial = compilePrefix();
+        try {
+          hooks.onScene?.(failed, partial);
+        } catch {
+          // A failing listener never fails the scene.
+        }
+        return failed;
+      },
     );
+    sceneTasks.set(index, contained);
+    accountedTasks.push(contained);
   };
 
   const replans = Math.max(0, options.replans ?? 1);
@@ -1359,7 +1397,7 @@ export async function generateFilm(request: FilmRequest, options: FilmGeneration
     scenesMs[result.sceneId] = result.ms;
   }
   // Every executed scene call counts toward spend, including tasks discarded
-  // after a rejection or a board mismatch: their model calls already ran.
+  // after a board mismatch: their model calls already ran.
   const accounted = await Promise.all(accountedTasks);
   for (const result of accounted) {
     usage = addUsage(usage, result.usage);

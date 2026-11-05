@@ -104,6 +104,12 @@ export class GenerationClient {
     }
   }
 
+  /** Starts a film generation and yields its events as they arrive. */
+  async *generateFilm(request: { readonly prompt: string; readonly lengthTarget?: number; readonly noteContext?: string }, signal?: AbortSignal): AsyncGenerator<import('./film-client').FilmGenerateEvent> {
+    const { generateFilmStream } = await import('./film-client');
+    yield* generateFilmStream({ baseUrl: this.options.baseUrl, token: this.options.token, fetch: this.fetcher }, request, signal);
+  }
+
   /** Asks for a background repair of a figure that hit a problem while live (RP-7). */
   async repair(request: RepairRequest, signal?: AbortSignal): Promise<RepairResponse> {
     return this.postJson<RepairResponse>('repairs', request, signal);

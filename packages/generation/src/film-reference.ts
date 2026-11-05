@@ -40,7 +40,8 @@ function sceneSays(scene: number, beats: number): string[] {
   return Array.from({ length: beats }, (_, i) => SAY_LINES[(scene + i) % SAY_LINES.length]!);
 }
 
-function storyboardFor(lengthTarget: number, scenes: number, title: string, beatsPerScene: number): string {
+/** The storyboard text for a length: shared by the film stand-in and the figure stand-in's film path. */
+export function filmReferenceStoryboard(lengthTarget: number, scenes: number, title: string, beatsPerScene: number): string {
   const slices: StoryboardScene[] = Array.from({ length: scenes }, (_, i) => ({
     id: `s${i + 1}`,
     idea: `A dot shifts aside, part ${i + 1} of ${scenes}`,
@@ -81,7 +82,7 @@ export function filmReferenceSceneReply(beats: ReadonlyArray<{ readonly say: str
 }
 
 /** The slice a scene call was asked for, read back out of its prompt. */
-function sliceOf(call: ModelCall): StoryboardScene | null {
+export function filmSliceOf(call: ModelCall): StoryboardScene | null {
   const fenced = /```json\n([\s\S]*?)\n```/.exec(call.prompt.user);
   if (!fenced) return null;
   try {
@@ -92,7 +93,7 @@ function sliceOf(call: ModelCall): StoryboardScene | null {
 }
 
 /** Spoken lines quoted in a repair prompt's js fragment, in order. */
-function saysOfJs(js: string): string[] {
+export function filmSaysOfJs(js: string): string[] {
   return [...js.matchAll(/say:\s*'((?:[^'\\]|\\.)*)'/g)].map((match) => match[1]!.replace(/\\'/g, "'").replace(/\\\\/g, '\\'));
 }
 
@@ -108,17 +109,17 @@ export function filmReferenceModel(options: FilmReferenceOptions = {}): Scripted
       const preset = filmPresetFor(lengthTarget);
       const request = /The learner asked: "([^"]*)"/.exec(user)?.[1] ?? 'dots shifting';
       const title = `Film about ${request}`.replace(/\s+/g, ' ').trim().slice(0, 120);
-      return storyboardFor(preset.seconds, preset.scenes, title, beatsPerScene);
+      return filmReferenceStoryboard(preset.seconds, preset.scenes, title, beatsPerScene);
     }
     if (call.purpose === 'scene') {
-      const slice = sliceOf(call);
+      const slice = filmSliceOf(call);
       const beats = slice?.beats ?? lastBeats;
       lastBeats = beats;
       return filmReferenceSceneReply(beats);
     }
     // A repair: the same figure rebuilt from the spoken lines the prompt quotes.
     const quoted = /```js\n([\s\S]*?)\n```/.exec(user)?.[1] ?? '';
-    const says = saysOfJs(quoted);
+    const says = filmSaysOfJs(quoted);
     const beats = says.length > 0 ? says.map((say) => ({ say })) : lastBeats;
     return `Fixed.\n${filmReferenceSceneReply(beats)}\n`;
   };

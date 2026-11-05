@@ -85,6 +85,20 @@ player shows the key and voice sources at a glance, and films stay silent
 until Sound is on. Pasted values override the server's, and the key is kept
 in memory on both ends and never saved.
 
+## Generate and play
+
+Type a prompt in the Gallery's Generate a film box, pick 30/60/120/180/240 s,
+and press Generate: it POSTs to the session's `POST /v1/films` (the same model
+session as Generate in chat), streams a skeleton within a second, plays the
+first passing scene at once, and joins later scenes as they pass, with a
+plan/scene/speech/check/probe timing report on completion. The finished film
+is kept in the dev server's memory for the session (`POST /api/dev/films`) and
+opens in the player at `?film=<id>`, which resolves the dev store first and
+fixtures second; a restart empties the store. Stored scenes play sandboxed —
+probed hidden first, drawn through a sandboxed figure — so a hostile scene
+cannot reach the page, and a scene that fails its checks refuses the film
+before the first frame.
+
 ## What the engine owns
 
 Layout, checks, player, questions, versions and export are the engine's,

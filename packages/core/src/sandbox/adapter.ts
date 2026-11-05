@@ -64,6 +64,18 @@ export interface FigureHandle {
   setReducedMotion(value: boolean): void;
   /** Films only: seeks the scene to this many seconds of scene time (FV-1). */
   seek(seconds: number): void;
+  /** Films only: whether the scene plays. Apart from host visibility, which pause and resume keep. */
+  setPlaying(value: boolean): void;
+  /** Films only: the film's speed, snapped to the nearest offered speed. */
+  setSpeed(value: number): void;
+  /** Films only: a beat's focus, as a part name, or cleared. */
+  focusPart(name: string | null): void;
+  /** Films only: a beat's show, hide and marks, as absolute part visibility. */
+  setPartVisible(name: string, visible: boolean): void;
+  /** Films only: one note of a beat's named sfx cue, as the cue resolves it. */
+  note(note: { readonly wave: 'sine' | 'square' | 'sawtooth' | 'triangle'; readonly frequency: number; readonly duration: number; readonly gain: number }): void;
+  /** Films only: a beat's camera; null returns kit-owned stages to the wide view. */
+  framePart(part: string | null, zoom?: number): void;
   /**
    * Restyles the live figure without remounting it: preset, tokens, slot
    * classes, layout and which parts show. Trusted CSS is part of the frame
@@ -613,6 +625,32 @@ class SandboxedFigure implements FigureHandle {
 
   seek(seconds: number): void {
     if (typeof seconds === 'number' && Number.isFinite(seconds)) this.connection?.post({ type: 'seek', seconds });
+  }
+
+  setPlaying(value: boolean): void {
+    if (typeof value === 'boolean') this.connection?.post({ type: 'playing', value });
+  }
+
+  setSpeed(value: number): void {
+    if (typeof value === 'number' && Number.isFinite(value)) this.connection?.post({ type: 'speed', value });
+  }
+
+  focusPart(name: string | null): void {
+    if (name === null || typeof name === 'string') this.connection?.post({ type: 'focusPart', name });
+  }
+
+  setPartVisible(name: string, visible: boolean): void {
+    if (typeof name === 'string' && typeof visible === 'boolean') this.connection?.post({ type: 'partVisible', name, visible });
+  }
+
+  note(note: { readonly wave: 'sine' | 'square' | 'sawtooth' | 'triangle'; readonly frequency: number; readonly duration: number; readonly gain: number }): void {
+    this.connection?.post({ type: 'note', wave: note.wave, frequency: note.frequency, duration: note.duration, gain: note.gain });
+  }
+
+  framePart(part: string | null, zoom = 1.5): void {
+    if ((part === null || typeof part === 'string') && typeof zoom === 'number' && Number.isFinite(zoom)) {
+      this.connection?.post({ type: 'frame', part, zoom });
+    }
   }
 
   setStyle(style: FigureStyle | undefined): void {

@@ -1,4 +1,5 @@
 import type { ProbeReport, ProbeSpec } from '../probe/probe';
+import type { Waveform } from '../api/types';
 import type { FigureStyle } from '../renderer/style';
 import type { ErrorView } from './ui';
 
@@ -25,6 +26,8 @@ export interface LiveOptions {
   readonly formulas?: Readonly<Record<string, string>>;
   readonly step?: number | null;
   readonly autoplay?: boolean;
+  /** Films only: the scene runs on the fixed film clock, seeking by replay. */
+  readonly film?: boolean;
   readonly reducedMotion?: boolean;
   readonly seed?: number;
   readonly theme?: 'light' | 'dark' | 'auto';
@@ -78,6 +81,18 @@ export type HostMessageBody =
   | { readonly type: 'reducedMotion'; readonly value: boolean }
   /** Films only: the frame seeks its scene to this many seconds (FV-1). */
   | { readonly type: 'seek'; readonly seconds: number }
+  /** Films only: whether the scene plays. Apart from visibility, which pause and resume keep. */
+  | { readonly type: 'playing'; readonly value: boolean }
+  /** Films only: the film's speed, snapped to the nearest offered speed. */
+  | { readonly type: 'speed'; readonly value: number }
+  /** Films only: a beat's focus, as a part name, or cleared. */
+  | { readonly type: 'focusPart'; readonly name: string | null }
+  /** Films only: a beat's show, hide and marks, as absolute part visibility. */
+  | { readonly type: 'partVisible'; readonly name: string; readonly visible: boolean }
+  /** Films only: one note of a beat's named sfx cue, as the cue resolves it. */
+  | { readonly type: 'note'; readonly wave: Waveform; readonly frequency: number; readonly duration: number; readonly gain: number }
+  /** Films only: a beat's camera; null returns kit-owned stages to the wide view. */
+  | { readonly type: 'frame'; readonly part: string | null; readonly zoom: number }
   /** A picture of the drawing: a PNG (the default), or an SVG with the theme written in (SV-14). */
   | { readonly type: 'snapshot'; readonly id: number; readonly format?: 'png' | 'svg' }
   /** A short video of the drawing as it plays (6.10b). */
@@ -124,6 +139,12 @@ export const HOST_MESSAGE_TYPES: ReadonlySet<string> = new Set([
   'step',
   'reducedMotion',
   'seek',
+  'playing',
+  'speed',
+  'focusPart',
+  'partVisible',
+  'note',
+  'frame',
   'snapshot',
   'clip',
   'ping',
@@ -224,6 +245,38 @@ export function parseHostMessage(data: unknown, channel: string): HostMessage | 
       return typeof m.value === 'boolean' ? (m as unknown as HostMessage) : null;
     case 'seek':
       return typeof m.seconds === 'number' && Number.isFinite(m.seconds) ? (m as unknown as HostMessage) : null;
+    case 'playing':
+      return typeof m.value === 'boolean' ? (m as unknown as HostMessage) : null;
+    case 'speed':
+      return typeof m.value === 'number' && Number.isFinite(m.value) ? (m as unknown as HostMessage) : null;
+    case 'focusPart':
+      return m.name === null || (typeof m.name === 'string' && m.name.length <= 60) ? (m as unknown as HostMessage) : null;
+    case 'partVisible':
+      return typeof m.name === 'string' && m.name.length <= 60 && typeof m.visible === 'boolean' ? (m as unknown as HostMessage) : null;
+    case 'note':
+      return (
+        (m.wave === 'sine' || m.wave === 'square' || m.wave === 'triangle' || m.wave === 'sawtooth') &&
+        typeof m.frequency === 'number' &&
+        Number.isFinite(m.frequency) &&
+        m.frequency > 0 &&
+        m.frequency <= 24000 &&
+        typeof m.duration === 'number' &&
+        Number.isFinite(m.duration) &&
+        m.duration > 0 &&
+        m.duration <= 30 &&
+        typeof m.gain === 'number' &&
+        Number.isFinite(m.gain) &&
+        m.gain >= 0 &&
+        m.gain <= 1
+      )
+        ? (m as unknown as HostMessage)
+        : null;
+    case 'frame':
+      return (
+        (m.part === null || (typeof m.part === 'string' && m.part.length <= 60)) && typeof m.zoom === 'number' && Number.isFinite(m.zoom)
+      )
+        ? (m as unknown as HostMessage)
+        : null;
     case 'snapshot':
       return typeof m.id === 'number' && (m.format === undefined || m.format === 'png' || m.format === 'svg') ? (m as unknown as HostMessage) : null;
     case 'clip':

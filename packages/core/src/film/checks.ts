@@ -166,6 +166,44 @@ export async function probeFilmAsync(options: ProbeFilmOptions): Promise<FilmRep
   return finishReport(options, shared, now() - started);
 }
 
+export interface ProbeFilmStaticOptions {
+  readonly film: CompiledFilm;
+  /** Scene id to its script: the context check reads palette, parts and units from it. */
+  readonly js?: Readonly<Record<string, string>>;
+  readonly now?: () => number;
+}
+
+/**
+ * The film checks that need no scene: reading speed, one emphasis, sfx
+ * names, audio sync and the shared-context read. Sandboxed films run these,
+ * where mounting the scene would run its script on the host; the geometry
+ * checks ride the sandbox probe instead, and the report says so.
+ */
+export function probeFilmStatic(options: ProbeFilmStaticOptions): FilmReport {
+  const now = options.now ?? (() => (typeof performance !== 'undefined' ? performance.now() : Date.now()));
+  const started = now();
+  const full: ProbeFilmOptions = { film: options.film, scenes: [] };
+  const shared = shareChecks(full);
+  for (const beat of options.film.beats) {
+    checkBeatOnce(beat, (failure) => failBeat(shared, failure));
+    const context = options.film.context;
+    if (context) {
+      const step = beat.step;
+      const parts = [step.focus, step.cam?.to, ...(step.show ?? []), ...(step.hide ?? []), ...(step.mark ?? []).map((mark) => mark.part)].filter(
+        (name): name is string => typeof name === 'string' && name !== '',
+      );
+      for (const problem of checkSceneContext(options.js?.[beat.sceneId] ?? '', step.say, parts, context)) {
+        failBeat(shared, { check: 'context', scene: beat.sceneId, beat: beat.id, message: `Beat "${beat.id}" ${problem}` });
+      }
+    }
+  }
+  const report = finishReport(full, shared, now() - started);
+  return {
+    ...report,
+    warnings: [...report.warnings, 'Safe margin, captions, overlap, contrast and focus-in-frame need the scene; the sandbox probe covers the scene itself.'],
+  };
+}
+
 interface SharedChecks {
   readonly options: ProbeFilmOptions;
   readonly widths: readonly number[];

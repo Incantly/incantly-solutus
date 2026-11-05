@@ -7,10 +7,10 @@ import { ConceptCache, planKey, requestKey } from './cache';
 import { REQUEST_LIMITS, type LearnerRequest } from './context';
 import { DEFAULT_LIMITS, LimitKeeper, type Limits, type Refusal } from './limits';
 import type { ModelClient } from './models';
-import { Generator, standardFigure, type GenerationState } from './pipeline';
+import { Generator, newGenerationId, standardFigure, type GenerationState } from './pipeline';
 import { probeSpecFor } from './probe';
 import { MemoryAudioStore, narrateBeats, speechRefusalHttp } from './narration';
-import { generateFilm, type FilmRequest } from './film';
+import { generateFilm, type FilmGenerationState, type FilmRequest } from './film';
 import type { FilmLibrary } from './film-library';
 import type { AskChangeResponse, AskExampleResponse, AskInsertResponse, AskSpeakResponse, ChangeResponse, FallbackMessage, FilmInsertsResponse, FilmVersionResponse, FilmVersionsResponse, GalleryReceipt, PromoteResponse, RepairResponse, SceneMessage, Skeleton } from './protocol';
 import { STUB_VOICES, type Narrator } from './tts';
@@ -220,7 +220,7 @@ function readRequest(body: unknown): LearnerRequest {
   if (typeof body !== 'object' || body === null) throw new HttpError(400, 'invalid-request', 'The body must be a JSON object');
   const { prompt, noteContext } = body as { prompt?: unknown; noteContext?: unknown };
   if (typeof prompt !== 'string' || prompt.trim().length === 0) throw new HttpError(400, 'invalid-request', 'prompt must be a non-empty string');
-  if (prompt.length > REQUEST_LIMITS.prompt * 2) throw new HttpError(400, 'invalid-request', `prompt must be at most ${REQUEST_LIMITS.prompt} characters`);
+  if (prompt.length > REQUEST_LIMITS.prompt * 2) throw new HttpError(400, 'invalid-request', `prompt must be at most ${REQUEST_LIMITS.prompt * 2} characters`);
   if (noteContext !== undefined && typeof noteContext !== 'string') throw new HttpError(400, 'invalid-request', 'noteContext must be a string');
   return { prompt: prompt.trim(), ...(noteContext ? { noteContext: noteContext.slice(0, REQUEST_LIMITS.noteContext * 2) } : {}) };
 }
@@ -230,7 +230,7 @@ function readFilmRequest(body: unknown): FilmRequest {
   if (typeof body !== 'object' || body === null) throw new HttpError(400, 'invalid-request', 'The body must be a JSON object');
   const { prompt, lengthTarget, noteContext } = body as { prompt?: unknown; lengthTarget?: unknown; noteContext?: unknown };
   if (typeof prompt !== 'string' || prompt.trim().length === 0) throw new HttpError(400, 'invalid-request', 'prompt must be a non-empty string');
-  if (prompt.length > REQUEST_LIMITS.prompt * 2) throw new HttpError(400, 'invalid-request', `prompt must be at most ${REQUEST_LIMITS.prompt} characters`);
+  if (prompt.length > REQUEST_LIMITS.prompt * 2) throw new HttpError(400, 'invalid-request', `prompt must be at most ${REQUEST_LIMITS.prompt * 2} characters`);
   if (lengthTarget !== undefined && (typeof lengthTarget !== 'number' || !(FILM_LENGTH_PRESETS as readonly number[]).includes(lengthTarget))) {
     throw new HttpError(400, 'invalid-request', `lengthTarget must be one of ${FILM_LENGTH_PRESETS.join(', ')} seconds`);
   }
@@ -546,8 +546,11 @@ export class GenerationService {
     const timeout = AbortSignal.timeout(Math.max(this.options.generationTimeoutMs ?? 45_000, filmDeadlineMs(request.lengthTarget ?? 60)));
     const signal = AbortSignal.any([cancel.signal, timeout]);
 
+    // Like figures: the spend lands in the finally and the stream always ends
+    // with a terminal event, even when the film threw before its own fallback.
+    let state: FilmGenerationState | null = null;
     try {
-      const state = await generateFilm(
+      state = await generateFilm(
         request,
         {
           model: this.options.model,
@@ -565,22 +568,32 @@ export class GenerationService {
           onText: (purpose, text) => send('delta', { purpose, text }),
         },
       );
-      this.limits.spend(learner.id, state.cost + state.speechUsd);
-      if (state.film && !state.fallback) {
-        send('film', {
-          generationId: state.id,
-          storyboard: state.storyboard,
-          scenes: state.keptScenes,
-          timings: state.timings,
-          speechChars: state.speechChars,
-          partial: state.partial,
-        });
-      } else {
-        send('fallback', { generationId: state.id, reason: state.fallback?.reason ?? 'scene', standard: state.fallback?.standard ?? null, keptScenes: state.keptScenes });
-      }
+    } catch {
+      // The terminal fallback below still ends the stream; the spend below is skipped only because no cost was accounted.
     } finally {
       clearInterval(keepAlive);
       admitted.release();
+      if (state) this.limits.spend(learner.id, state.cost + state.speechUsd);
+    }
+    if (state && state.film && !state.fallback) {
+      send('film', {
+        generationId: state.id,
+        storyboard: state.storyboard,
+        scenes: state.keptScenes,
+        timings: state.timings,
+        speechChars: state.speechChars,
+        partial: state.partial,
+      });
+    } else if (state) {
+      send('fallback', { generationId: state.id, reason: state.fallback?.reason ?? 'scene', standard: state.fallback?.standard ?? null, keptScenes: state.keptScenes });
+    } else {
+      const standard = standardFigure(request.prompt);
+      send('fallback', {
+        generationId: newGenerationId(),
+        reason: 'scene',
+        standard: standard ? { id: standard.id, fragments: { html: standard.html, css: standard.css, js: standard.js }, concept: standard.plan.concept, description: standard.plan.idea } : null,
+        keptScenes: [],
+      });
     }
     if (open()) res.end();
   }

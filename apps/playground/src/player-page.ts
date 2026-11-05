@@ -7,10 +7,12 @@ import {
   askContextLine,
   attachAudio,
   beginShowMe,
+  buildStubScene,
   CAPTION_SCALES,
   compileFilm,
   compileTrusted,
   createBrowserFallbackRig,
+  createSandboxedFallbackRig,
   ExportCancellation,
   ExportCancelledError,
   ExportError,
@@ -30,7 +32,9 @@ import {
   formatFilmLink,
   InsertPlayer,
   meanPixelDifference,
+  mountStubRuntime,
   openBrowserCapture,
+  openSandboxedCapture,
   openWebCodecsAudio,
   openWebCodecsVideo,
   planDeckSlides,
@@ -46,8 +50,11 @@ import {
   parseFilmLink,
   PlayerModel,
   probeFilmAsync,
+  probeFilmStatic,
   probeSandboxed,
   probeScene,
+  pushAbsoluteState,
+  renderSandboxedLivePixels,
   resolveFilmLink,
   resolveFilmPosition,
   resolveStyle,
@@ -56,6 +63,8 @@ import {
   sandboxAdapter,
   sanitizeExportFilenameSegment,
   sanitizeFilmPatch,
+  sanitizeProbedSnapshot,
+  SandboxFilmMirror,
   shortcutFor,
   SHORTCUTS,
   SideClipPlayer,
@@ -86,42 +95,69 @@ import {
   type KitRegistry,
   type PlayerState,
   type ProbeReport,
+  type RendererMessage,
   type ResumeStorage,
   type RuntimeUpdate,
+  type SanitizedSceneSnapshot,
   type SceneFunction,
   type SceneRuntime,
   type ShowMeSession,
   type StylePreset,
 } from '@incantly/core';
+import { resolveFilmSource, storedAsFixture, type StoredFilm } from '@incantly/generation/client';
 
 /**
  * The film player: a silent fixture film through the real controller, player
- * and probe path. `?film=thirty|sixty` picks the film; `?preset=` and
- * `?theme=` style the figure as an integrator would; `?hide=` (comma
- * separated: captions, transcript, chapters, timeline, deck) turns chrome
- * off; `?deck=1` opens in deck mode, where beats hold until clicked.
- * A generic consumer: no scene-specific code.
+ * and probe path. `?film=thirty|sixty` picks the film, or a generated film's
+ * id from the dev store; `?preset=` and `?theme=` style the figure as an
+ * integrator would; `?hide=` (comma separated: captions, transcript,
+ * chapters, timeline, deck) turns chrome off; `?deck=1` opens in deck mode,
+ * where beats hold until clicked. A generic consumer: no scene-specific code.
  */
 export function mountPlayerPage(root: HTMLElement, params: URLSearchParams): void {
   const key = params.get('film') ?? 'thirty';
-  const fixture = FILM_FIXTURES[key];
-  if (!fixture) {
-    root.textContent = `Unknown film "${params.get('film')}". Try one of: ${Object.keys(FILM_FIXTURES).join(', ')}`;
-    return;
-  }
   const status = document.createElement('p');
-  status.textContent = `Loading ${fixture.storyboard.film.title}…`;
+  status.textContent = 'Loading film…';
   root.append(status);
-  void start(root, params, fixture).catch((error: unknown) => {
+  void (async () => {
+    const resolved = await resolveFilmSource(key, {
+      loadStored: async (id): Promise<StoredFilm | FilmFixture | null> => {
+        try {
+          const answer = await fetch(`/api/dev/films/${encodeURIComponent(id)}`);
+          if (!answer.ok) return null;
+          return (await answer.json()) as StoredFilm;
+        } catch {
+          return null;
+        }
+      },
+      fixtures: FILM_FIXTURES,
+    });
+    if (!resolved) {
+      root.textContent = `Unknown film "${params.get('film')}". Try one of: ${Object.keys(FILM_FIXTURES).join(', ')}`;
+      return;
+    }
+    const fixture = storedAsFixture(resolved.film);
+    status.textContent = `Loading ${fixture.storyboard.film.title}…`;
+    await start(root, params, fixture, resolved.source === 'store');
+  })().catch((error: unknown) => {
     status.textContent = `The film could not start: ${error instanceof Error ? error.message : 'unknown error'}`;
+    // A failure past the first paint clears the loading line with it; the
+    // refusal still shows, so a rejected film never idles blank.
+    if (!status.isConnected) root.append(status);
   });
 }
 
-async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFixture): Promise<void> {
+async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFixture, isolated: boolean): Promise<void> {
   const scene = fixture.scenes[0]!;
-  const validation = validateScene({ html: scene.html, css: scene.css, js: scene.js });
-  if (!validation.ok || !validation.scene) throw new Error(validation.diagnostics.map((d) => d.message).join('; '));
-  const kits = await loadKitModules(validation.scene.kits);
+  const multi = fixture.scenes.length > 1;
+  // Every scene validates; single-scene films take the same path as today.
+  const validations = fixture.scenes.map((candidate) => validateScene({ html: candidate.html, css: candidate.css, js: candidate.js }));
+  const firstInvalid = validations.findIndex((validation) => !validation.ok || !validation.scene);
+  if (firstInvalid >= 0) {
+    const invalid = validations[firstInvalid]!;
+    throw new Error(invalid.diagnostics.map((d) => d.message).join('; '));
+  }
+  const kits = await loadKitModules([...new Set(validations.flatMap((v) => v.scene!.kits))]);
   root.textContent = '';
 
   const theme = params.get('theme');
@@ -149,18 +185,94 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
   const figureBox = document.createElement('div');
   figureBox.className = 'inc-player-figure';
   player.append(figureBox);
-  const figure = mountTrusted(figureBox, { html: scene.html, css: scene.css, js: scene.js }, {
-    kits,
-    film: true,
-    autoplay: false,
-    reducedMotion,
-    theme: theme === 'light' || theme === 'dark' ? theme : 'auto',
-    figureId: 'film',
-    style: { ...(preset ? { preset } : {}), show: { transport: false, speed: false, steps: false, settings: false, undo: false, fullscreen: false } },
-  });
-  const steps = figure.runtime.beats();
-  if (!steps) throw new Error('The scene has no steps');
-  const sources: FilmSceneSource[] = [{ id: scene.id, js: scene.js, steps }];
+  // One figure per scene, in film order; single-scene films mount exactly as
+  // today, multi-scene films stack theirs with only the active one shown.
+  const sceneBoxes: HTMLElement[] = [];
+  for (const [index, candidate] of fixture.scenes.entries()) {
+    const box = multi ? document.createElement('div') : figureBox;
+    if (multi) {
+      box.className = 'inc-player-scene';
+      box.dataset.scene = candidate.id;
+      box.hidden = index !== 0;
+      figureBox.append(box);
+      sceneBoxes.push(box);
+    }
+  }
+  const boxes: readonly HTMLElement[] = multi ? sceneBoxes : [figureBox];
+  const figureStyle = { ...(preset ? { preset } : {}), show: { transport: false, speed: false, steps: false, settings: false, undo: false, fullscreen: false } };
+  const figureTheme = theme === 'light' || theme === 'dark' ? theme : 'auto';
+  // Generated scenes from the dev store never run on the host: each is
+  // probed in a hidden sandbox, its beats compile from the checked
+  // snapshot, a stand-in keeps the film clock, and the sandboxed figure
+  // draws. Anything that fails its checks refuses the film before the
+  // first frame. Trusted static fixtures keep their direct mount.
+  const figures: Array<ReturnType<typeof mountTrusted>> = [];
+  let sandboxed: {
+    readonly snapshots: readonly SanitizedSceneSnapshot[];
+    readonly stubs: readonly SceneRuntime[];
+    readonly handles: readonly FigureHandle[];
+    readonly probes: readonly ProbeReport[];
+    mirror: SandboxFilmMirror | null;
+  } | null = null;
+  if (isolated) {
+    const snapshots: SanitizedSceneSnapshot[] = [];
+    const probes: ProbeReport[] = [];
+    for (const candidate of fixture.scenes) {
+      const fragments = { html: candidate.html, css: candidate.css, js: candidate.js };
+      const probed = await probeSandboxed(fragments, { spec: { parts: [...candidate.probe.parts], steps: candidate.probe.steps } });
+      if (!probed.ok || !probed.report || !probed.report.snapshot) {
+        const first = probed.report && !probed.report.ok ? probed.report.failures[0]?.message : probed.validation.diagnostics[0]?.message;
+        throw new Error(first ?? 'A stored scene did not pass its checks, so the film cannot start.');
+      }
+      const snapshot = sanitizeProbedSnapshot(probed.report.snapshot);
+      if (!snapshot) throw new Error('A stored scene did not pass its checks, so the film cannot start.');
+      probes.push(probed.report);
+      snapshots.push(snapshot);
+    }
+    const stubs = snapshots.map((snapshot) => mountStubRuntime(snapshot));
+    const title = fixture.storyboard.film.title;
+    const handles = fixture.scenes.map((candidate, index) =>
+      sandboxAdapter.mount(
+        boxes[index]!,
+        { html: candidate.html, css: candidate.css, js: candidate.js },
+        { title: multi ? `${title} (${candidate.id})` : title, film: true, autoplay: false, reducedMotion, theme: figureTheme, style: { ...figureStyle } },
+      ),
+    );
+    const states = await Promise.all(handles.map((handle) => handle.ready));
+    if (states.some((state) => state !== 'live')) {
+      for (const handle of handles) handle.destroy();
+      throw new Error('A stored scene did not start, so the film cannot start.');
+    }
+    sandboxed = { snapshots, stubs, handles, probes, mirror: null };
+  } else {
+    fixture.scenes.forEach((candidate, index) => {
+      figures.push(
+        mountTrusted(boxes[index]!, { html: candidate.html, css: candidate.css, js: candidate.js }, {
+          kits,
+          film: true,
+          autoplay: false,
+          reducedMotion,
+          theme: figureTheme,
+          figureId: multi ? `film-${candidate.id}` : 'film',
+          style: { ...figureStyle },
+        }),
+      );
+    });
+  }
+  const session = sandboxed;
+  const runtimes: readonly SceneRuntime[] = session ? session.stubs : figures.map((mounted) => mounted.runtime);
+  const snapshotFor = (sceneId: string): SanitizedSceneSnapshot | null => {
+    if (!session) return null;
+    const at = fixture.scenes.findIndex((candidate) => candidate.id === sceneId);
+    return at < 0 ? null : (session.snapshots[at] ?? null);
+  };
+  const sources: FilmSceneSource[] = [];
+  for (let index = 0; index < fixture.scenes.length; index++) {
+    const candidate = fixture.scenes[index]!;
+    const steps = runtimes[index]!.beats();
+    if (!steps) throw new Error(multi ? `Scene "${candidate.id}" has no steps` : 'The scene has no steps');
+    sources.push({ id: candidate.id, js: candidate.js, steps });
+  }
   const compiled = compileFilm(JSON.parse(JSON.stringify(fixture.storyboard)) as unknown, sources);
   if (!compiled.ok || !compiled.film) throw new Error(compiled.diagnostics.map((d) => d.message).join('; '));
   let film = compiled.film;
@@ -221,12 +333,70 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
   }
   const picker = new VersionPicker(versionStore);
 
-  const controller = new FilmController({
-    runtime: figure.runtime,
-    film,
-    reducedMotion,
-    transport: { send: (message) => figure.renderer.send(message), apply: (update) => figure.renderer.apply(update) },
-  });
+  // Single-scene films drive one runtime as today; multi-scene films sequence
+  // across one runtime per scene, routing the transport to the active figure.
+  // Sandboxed films drive their stand-ins with no transport instead — the
+  // frame loop ticks the controller, and the mirror plays every cue into
+  // the sandboxed figures, which draw.
+  let controller: FilmController;
+  if (!multi) {
+    controller = session
+      ? new FilmController({ runtime: runtimes[0]!, film, reducedMotion })
+      : new FilmController({
+          runtime: runtimes[0]!,
+          film,
+          reducedMotion,
+          transport: { send: (message) => figures[0]!.renderer.send(message), apply: (update) => figures[0]!.renderer.apply(update) },
+        });
+  } else {
+    let active = 0;
+    const routed = {
+      send: (message: RendererMessage): void => {
+        figures[active]?.renderer.send(message);
+      },
+      apply: (update: RuntimeUpdate): void => {
+        figures[active]?.renderer.apply(update);
+      },
+    };
+    controller = session
+      ? new FilmController({ runtime: runtimes[0]!, runtimes: [...runtimes], film, reducedMotion })
+      : new FilmController({
+          runtime: runtimes[0]!,
+          runtimes: figures.map((f) => f.runtime),
+          film,
+          reducedMotion,
+          transport: routed,
+        });
+    const showScene = (sceneId: string, cut: string): void => {
+      const index = film.scenes.findIndex((candidate) => candidate.id === sceneId);
+      if (index < 0) return;
+      active = index;
+      sceneBoxes.forEach((box, i) => {
+        box.hidden = i !== index;
+      });
+      figureBox.dataset.cut = cut;
+      figureBox.dataset.scene = sceneId;
+    };
+    controller.on((event) => {
+      if (event.type === 'cut') {
+        const to = film.scenes.find((candidate) => candidate.id === event.to);
+        showScene(event.to, to?.cut ?? 'cut');
+      } else if (event.type === 'seek') {
+        const to = film.scenes.find((candidate) => candidate.id === event.beat.sceneId);
+        showScene(event.beat.sceneId, to?.cut ?? 'cut');
+      }
+    });
+    figureBox.dataset.scene = film.scenes[0]?.id ?? '';
+    figureBox.dataset.cut = 'cut';
+  }
+  if (session) {
+    session.mirror = new SandboxFilmMirror(
+      controller,
+      fixture.scenes.map((candidate, index) => ({ id: candidate.id, stub: session.stubs[index]!, handle: session.handles[index]! })),
+      () => film,
+    );
+  }
+  const mirror = session?.mirror ?? null;
   const model = new PlayerModel(controller, film);
   // Deck mode: a click-authored film, or ?deck=1 on any film. The toggle
   // below flips it at any time, with no narration required.
@@ -371,7 +541,13 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
     const applied = applyFilmPatch(film, patch, sources);
     if (!applied.ok) return applied;
     const next = applied.film;
-    const report = await probeFilmAsync({ film: next, scenes: [{ id: scene.id, scene: compileTrusted(scene.js), kits }] });
+    // Sandboxed films check without their scenes: mounting a stored scene
+    // would run its script on the host. The geometry checks rode the
+    // sandbox probe at mount instead.
+    const filmJs = (): Record<string, string> => Object.fromEntries(fixture.scenes.map((candidate) => [candidate.id, candidate.js]));
+    const report = session
+      ? probeFilmStatic({ film: next, js: filmJs() })
+      : await probeFilmAsync({ film: next, scenes: fixture.scenes.map((candidate) => ({ id: candidate.id, scene: compileTrusted(candidate.js), kits })) });
     if (!report.ok) {
       const first = report.failures[0];
       return { ok: false, problems: [`Version ${next.version} did not pass the film checks (${first?.check ?? 'checks'}), so the film stays on version ${film.version}.`] };
@@ -414,12 +590,31 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
       return refreshInserts();
     })
     .catch(() => undefined);
+  const sceneJsFor = (sceneId: string): string => fixture.scenes.find((candidate) => candidate.id === sceneId)?.js ?? scene.js;
+  // Multi-scene Ask replays on the active scene's runtime; single-scene films
+  // keep their one runtime. Getters keep later code unchanged. On the
+  // sandboxed path the runtime is the stand-in, and applying carries its
+  // state across the bridge, as the seek path does.
+  const askFigure = multi
+    ? {
+        get runtime(): SceneRuntime {
+          return runtimes[controller.sceneIndex] ?? runtimes[0]!;
+        },
+        get renderer(): { apply(update: RuntimeUpdate): void } {
+          const at = controller.sceneIndex;
+          if (mirror) return { apply: () => mirror.syncScene(at) };
+          return figures[at]?.renderer ?? figures[0]!.renderer;
+        },
+      }
+    : mirror
+      ? { runtime: runtimes[0]!, renderer: { apply: () => mirror.syncScene(0) } }
+      : figures[0]!;
   const askUi = buildAskSheet(player, {
     model,
     controller,
     film: () => film,
-    figure,
-    sceneJs: scene.js,
+    figure: askFigure,
+    sceneJsFor,
     reducedMotion,
     applyPatch,
     requestBeats: () => film.beats.map((beat) => ({ beat: beat.id, scene: beat.sceneId, say: beat.step.say })),
@@ -457,7 +652,8 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
     if (record.anchor.version !== film.version && !switchVersion(record.anchor.version)) {
       return `That insert was asked on version ${record.anchor.version}, which is gone.`;
     }
-    const params = new Set(Object.keys(figure.runtime.values()));
+    const sceneIndex = multi ? Math.max(0, fixture.scenes.findIndex((candidate) => candidate.id === record.anchor.scene)) : 0;
+    const params = new Set(Object.keys((runtimes[sceneIndex] ?? runtimes[0]!).values()));
     const validated = validateInsertClip({ anchor: record.anchor, lines: record.lines }, film, params);
     if (!validated.ok) return `That insert does not fit this film: ${validated.problems[0] ?? 'invalid'}.`;
     return askUi.playClip({ ...validated.clip, id: record.id });
@@ -524,6 +720,15 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
       const chunk = last.plan.chunks[0]!;
       const fragments = fixture.scenes.find((candidate) => candidate.id === chunk.sceneId);
       if (!fragments) return null;
+      if (session) {
+        const snapshot = snapshotFor(chunk.sceneId);
+        if (!snapshot) return null;
+        const live = await renderSandboxedLivePixels(
+          { document, fragments: { html: fragments.html, css: fragments.css, js: fragments.js }, snapshot, film: last.film, size: last.size },
+          frame / last.fps,
+        );
+        return meanPixelDifference(kept, live);
+      }
       const live = await renderLiveExportPixels(
         { document, fragments: { html: fragments.html, css: fragments.css, js: fragments.js }, kits, film: last.film, size: last.size },
         frame / last.fps,
@@ -547,7 +752,11 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
         const found = fixture.scenes.find((candidate) => candidate.id === sceneId);
         return found ? { html: found.html, css: found.css, js: found.js } : null;
       },
-      inputs: () => fixture.scenes.map((candidate) => ({ id: candidate.id, scene: compileTrusted(candidate.js), kits })),
+      inputs: () =>
+        session
+          ? fixture.scenes.map((candidate) => ({ id: candidate.id, scene: buildStubScene(snapshotFor(candidate.id)!) }))
+          : fixture.scenes.map((candidate) => ({ id: candidate.id, scene: compileTrusted(candidate.js), kits })),
+      snapshots: session ? snapshotFor : undefined,
       kits: () => kits,
       clips: () => {
         const out: MixerClip[] = [];
@@ -558,7 +767,12 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
         return out;
       },
       stageSize: () => {
-        const stage = figure.runtime.graph.stages[0];
+        if (session) {
+          const sceneId = multi ? (film.scenes[controller.sceneIndex]?.id ?? fixture.scenes[0]!.id) : fixture.scenes[0]!.id;
+          return snapshotFor(sceneId)?.stage ?? null;
+        }
+        const activeFigure = multi ? (figures[controller.sceneIndex] ?? figures[0]!) : figures[0]!;
+        const stage = activeFigure.runtime.graph.stages[0];
         if (!stage) return null;
         const [, , width, height] = stage.viewBox;
         return { width, height };
@@ -668,9 +882,12 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
   let lastSaved = 0;
   const sync = (): void => {
     const frameNow = performance.now();
-    askUi.tick(Math.min(0.25, Math.max(0, (frameNow - lastFrame) / 1000)));
+    const dt = Math.min(0.25, Math.max(0, (frameNow - lastFrame) / 1000));
+    askUi.tick(dt);
     lastFrame = frameNow;
-    controller.poll();
+    // Sandboxed films tick their stand-ins here; trusted films poll while their renderer ticks.
+    if (session) controller.tick(dt);
+    else controller.poll();
     model.applyLoop();
     // Resume autosaves while playing, at most every five seconds.
     if (controller.isPlaying && frameNow - lastSaved > 5000) {
@@ -706,14 +923,20 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
   };
   requestAnimationFrame(sync);
 
+  const cuts: Array<{ from: string; to: string }> = [];
+  controller.on((event) => {
+    if (event.type === 'cut') cuts.push({ from: event.from, to: event.to });
+  });
   window.__playground = {
     ready: true,
     page: 'player',
-    figure,
+    figure: session ? { root: boxes[0]!, runtime: runtimes[0]!, handle: session.handles[0]! } : figures[0]!,
+    figures: session ? session.handles.map((handle, index) => ({ root: boxes[index]!, runtime: runtimes[index]!, handle })) : figures,
     controller,
     model,
     film,
     mixer,
+    scenes: () => ({ count: film.scenes.length, multi: controller.multiScene, active: controller.sceneIndex, cuts: [...cuts], chapters: model.chapters().map((chapter) => chapter.scene) }),
     ask: () => askUi.state(),
     full: () => ({
       version: film.version,
@@ -751,18 +974,35 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
   };
 
   const runChecks = async (): Promise<void> => {
-    const report = await probeFilmAsync({ film, scenes: [{ id: scene.id, scene: compileTrusted(scene.js), kits }], onProgress: (beat, beats) => badges.progress(beat, beats) });
+    if (session) {
+      const report = probeFilmStatic({ film, js: Object.fromEntries(fixture.scenes.map((candidate) => [candidate.id, candidate.js])) });
+      badges.checks(report, report.failures);
+      timeline.checks(report);
+      return;
+    }
+    const report = await probeFilmAsync({ film, scenes: fixture.scenes.map((candidate) => ({ id: candidate.id, scene: compileTrusted(candidate.js), kits })), onProgress: (beat, beats) => badges.progress(beat, beats) });
     badges.checks(report, report.failures);
     timeline.checks(report);
   };
 
   // Thumbnails, the probe and the film checks run after the first paint, so the film is playable at once.
-  setTimeout(() => void buildThumbs(transport.thumbs, model, film, { html: scene.html, css: scene.css, js: scene.js }, kits), 50);
+  const fragmentsFor = (sceneId: string): { html: string; css: string; js: string } => {
+    const found = fixture.scenes.find((candidate) => candidate.id === sceneId);
+    return found ? { html: found.html, css: found.css, js: found.js } : { html: scene.html, css: scene.css, js: scene.js };
+  };
+  setTimeout(() => void (session ? buildSandboxedThumbs(transport.thumbs, model, film, fragmentsFor, snapshotFor) : buildThumbs(transport.thumbs, model, film, fragmentsFor, kits, isolated)), 50);
   setTimeout(() => {
     void (async () => {
+      if (session) {
+        // The mount already probed every scene in the sandbox; the badges show that report.
+        badges.probe(combineProbes(session.probes));
+        await runChecks();
+        return;
+      }
       // The probe measures captions on a canvas; wait for the fonts it measures in.
       await fontsReady();
-      const probe = probeScene(compileTrusted(scene.js), { spec: { parts: [...scene.probe.parts], steps: scene.probe.steps }, runtime: { kits } });
+      const probes = fixture.scenes.map((candidate) => probeScene(compileTrusted(candidate.js), { spec: { parts: [...candidate.probe.parts], steps: candidate.probe.steps }, runtime: { kits } }));
+      const probe = probes.length === 1 ? probes[0]! : combineProbes(probes);
       badges.probe(probe);
       await runChecks();
     })();
@@ -1224,6 +1464,8 @@ interface ExportVideoSources {
   pause(): void;
   fragments(sceneId: string): { html: string; css: string; js: string } | null;
   inputs(): ReadonlyArray<{ readonly id: string; readonly scene: SceneFunction; readonly kits?: KitRegistry }>;
+  /** Checked snapshots for generated films: present exactly when the scenes must not run on the host. */
+  readonly snapshots?: (sceneId: string) => SanitizedSceneSnapshot | null;
   kits(): KitRegistry;
   clips(): MixerClip[];
   stageSize(): { width: number; height: number } | null;
@@ -1475,7 +1717,9 @@ function buildExportVideo(
           size,
           drivers: {
             openCapture: (chunk) =>
-              openBrowserCapture(chunk, { document: doc, fragments, kits: video.kits(), size, keepFrames, kept, globalOffset: offsets[chunk.chunk] ?? 0 }),
+              video.snapshots
+                ? openSandboxedCapture(chunk, { document: doc, fragments, kits: video.kits(), size, keepFrames, kept, globalOffset: offsets[chunk.chunk] ?? 0, snapshots: video.snapshots })
+                : openBrowserCapture(chunk, { document: doc, fragments, kits: video.kits(), size, keepFrames, kept, globalOffset: offsets[chunk.chunk] ?? 0 }),
             openVideo: (width, height, fps) => openWebCodecsVideo(width, height, fps, support.video!, support.videoCodecString!),
             openAudio: () => (support.audio ? openWebCodecsAudio() : Promise.resolve(null)),
           },
@@ -1516,7 +1760,9 @@ function buildExportVideo(
           if (!found) throw new Error(`Scene "${sceneId}" has no source to export`);
           return found;
         };
-        const rig = createBrowserFallbackRig({ document: doc, fragments, kits: video.kits(), size, fps: 24 });
+        const rig = video.snapshots
+          ? createSandboxedFallbackRig({ document: doc, fragments, kits: video.kits(), size, fps: 24, snapshots: video.snapshots })
+          : createBrowserFallbackRig({ document: doc, fragments, kits: video.kits(), size, fps: 24 });
         const result = await exportTimelineFallback({
           film,
           timeline,
@@ -1558,7 +1804,7 @@ function buildExportSlides(
   wrap: HTMLElement,
   sources: { film(): CompiledFilm; inserts(): readonly StoredInsert[] },
   insertSelect: HTMLSelectElement,
-  video: Pick<ExportVideoSources, 'pause' | 'fragments' | 'inputs' | 'kits' | 'stageSize'>,
+  video: Pick<ExportVideoSources, 'pause' | 'fragments' | 'inputs' | 'kits' | 'snapshots' | 'stageSize'>,
   slides: { last: string[] | null },
 ): void {
   const doc = wrap.ownerDocument;
@@ -1701,7 +1947,9 @@ function buildExportSlides(
         cancel.throwIfCancelled();
         const scene = byScene.get(chunk.sceneId);
         if (!scene) throw new ExportError(`Scene "${chunk.sceneId}" has no source to export`);
-        const session = await openBrowserCapture(chunk, { document: doc, fragments, kits: video.kits(), size });
+        const session = video.snapshots
+          ? await openSandboxedCapture(chunk, { document: doc, fragments, kits: video.kits(), size, snapshots: video.snapshots })
+          : await openBrowserCapture(chunk, { document: doc, fragments, kits: video.kits(), size });
         try {
           for (const frame of renderExportChunk(chunk, scene, cancel)) {
             const image = await session.capture(frame, frame.frame === 0);
@@ -2207,7 +2455,7 @@ function buildAskSheet(
     controller: FilmController;
     film: () => CompiledFilm;
     figure: { runtime: SceneRuntime; renderer: { apply(update: RuntimeUpdate): void } };
-    sceneJs: string;
+    sceneJsFor(sceneId: string): string;
     reducedMotion: boolean;
     applyPatch(patch: FilmVersionPatch): Promise<{ ok: true } | { ok: false; problems: readonly string[] }>;
     requestBeats(): ReadonlyArray<{ beat: string; scene: string; say: string }>;
@@ -2419,7 +2667,7 @@ function buildAskSheet(
     const lines = controller.transcript();
     const at = lines.findIndex((line) => line.beat === anchor?.beat);
     const neighbours = lines.slice(Math.max(0, at - 1), at + 2).filter((line) => line.beat !== anchor?.beat);
-    const jsLines = ctx.sceneJs.split('\n');
+    const jsLines = ctx.sceneJsFor(anchor?.scene ?? '').split('\n');
     const sceneLines = (film.sourceMap[anchor?.beat ?? '']?.lines ?? [])
       .map((n) => ({ n, text: jsLines[n - 1] ?? '' }))
       .filter((line) => line.text !== '');
@@ -2848,24 +3096,59 @@ function playPcm(pcm: Uint8Array, sampleRate: number): void {
   source.start();
 }
 
-async function buildThumbs(thumbs: HTMLElement, model: PlayerModel, film: CompiledFilm, fragments: { html: string; css: string; js: string }, kits: KitRegistry): Promise<void> {
+/** Combines per-scene probe reports: passing only when every scene passes. */
+function combineProbes(probes: readonly ProbeReport[]): ProbeReport {
+  const failures = probes.flatMap((probe) => [...probe.failures]);
+  const frames = probes.reduce((sum, probe) => sum + probe.stats.frames, 0);
+  const elements = probes.reduce((sum, probe) => sum + probe.stats.elements, 0);
+  const durationMs = probes.reduce((sum, probe) => sum + probe.stats.durationMs, 0);
+  const averageFrameMs = probes.length > 0 ? probes.reduce((sum, probe) => sum + probe.stats.averageFrameMs, 0) / probes.length : 0;
+  return {
+    ok: probes.every((probe) => probe.ok),
+    failures,
+    stats: { configurations: probes.reduce((sum, probe) => sum + probe.stats.configurations, 0), frames, averageFrameMs, elements, durationMs },
+  };
+}
+
+async function buildThumbs(
+  thumbs: HTMLElement,
+  model: PlayerModel,
+  film: CompiledFilm,
+  fragmentsFor: (sceneId: string) => { html: string; css: string; js: string },
+  kits: KitRegistry,
+  isolated: boolean,
+): Promise<void> {
   const box = document.createElement('div');
   box.hidden = true;
   document.body.append(box);
   try {
-    const figure = mountTrusted(box, fragments, { kits, film: true, autoplay: false, figureId: 'thumbs' });
-    figure.runtime.setReducedMotion(true);
+    // One hidden figure per scene in its own box; each thumbnail seeks its own
+    // scene to its film time, as the checks do. Single-scene films keep the
+    // same figure id and box as today.
+    const single = film.scenes.length === 1;
+    const mounted = new Map<string, { box: HTMLElement; figure: ReturnType<typeof mountTrusted> }>();
+    for (const scene of film.scenes) {
+      const sceneBox = single ? box : document.createElement('div');
+      if (!single) {
+        sceneBox.hidden = true;
+        box.append(sceneBox);
+      }
+      mounted.set(scene.id, { box: sceneBox, figure: mountTrusted(sceneBox, fragmentsFor(scene.id), { kits, film: true, autoplay: false, ...(isolated ? { isolate: true as const } : {}), figureId: single ? 'thumbs' : `thumbs-${scene.id}` }) });
+    }
+    for (const { figure } of mounted.values()) figure.runtime.setReducedMotion(true);
     for (const at of model.thumbTimes(5)) {
-      // Each thumbnail seeks the scene to its time and applies the beat there, as the checks do.
       let beat = film.beats[0]!;
       for (const candidate of film.beats) if (at + 1e-9 >= candidate.start) beat = candidate;
-      const update = figure.runtime.seek(at);
+      const scene = film.scenes.find((candidate) => candidate.id === beat.sceneId) ?? film.scenes[0]!;
+      const entry = mounted.get(scene.id) ?? [...mounted.values()][0]!;
+      const figure = entry.figure;
+      const update = figure.runtime.seek(Math.max(0, at - scene.start));
       figure.runtime.step('goto', beat.index);
       applyBeatCues(figure.runtime, beat.step, { sfx: false });
       figure.runtime.redraw();
       const extra = figure.runtime.flush();
       figure.renderer.apply({ ...update, commands: [...update.commands, ...extra.commands] });
-      const svg = box.querySelector('svg.inc-stage');
+      const svg = entry.figure.root.querySelector('svg.inc-stage');
       const thumb = document.createElement('button');
       thumb.type = 'button';
       thumb.className = 'inc-player-thumb';
@@ -2876,7 +3159,71 @@ async function buildThumbs(thumbs: HTMLElement, model: PlayerModel, film: Compil
       thumb.addEventListener('click', () => model.seek(at));
       thumbs.append(thumb);
     }
-    figure.destroy();
+    for (const entry of mounted.values()) entry.figure.destroy();
+  } finally {
+    box.remove();
+  }
+}
+
+async function buildSandboxedThumbs(
+  thumbs: HTMLElement,
+  model: PlayerModel,
+  film: CompiledFilm,
+  fragmentsFor: (sceneId: string) => { html: string; css: string; js: string },
+  snapshotFor: (sceneId: string) => SanitizedSceneSnapshot | null,
+): Promise<void> {
+  const box = document.createElement('div');
+  box.setAttribute('aria-hidden', 'true');
+  box.style.cssText = 'position:fixed;left:-100000px;top:0;width:760px;visibility:hidden;pointer-events:none;';
+  document.body.append(box);
+  try {
+    // One hidden sandboxed figure per scene; each thumbnail seeks its own
+    // scene to its film time on a stand-in, lands the absolute state, and
+    // pictures it — the stored scene never runs on the host.
+    const mounted = new Map<string, { handle: FigureHandle; stub: SceneRuntime; controller: FilmController }>();
+    for (const scene of film.scenes) {
+      const snapshot = snapshotFor(scene.id);
+      if (!snapshot) continue;
+      const sceneBox = document.createElement('div');
+      box.append(sceneBox);
+      const handle = sandboxAdapter.mount(sceneBox, fragmentsFor(scene.id), { title: `Thumbnail: ${scene.id}`, film: true, autoplay: false, reducedMotion: true });
+      if ((await handle.ready) !== 'live') {
+        handle.destroy();
+        sceneBox.remove();
+        continue;
+      }
+      const stub = mountStubRuntime(snapshot);
+      mounted.set(scene.id, { handle, stub, controller: new FilmController({ runtime: stub, film, sceneIndex: Math.max(0, film.scenes.findIndex((candidate) => candidate.id === scene.id)), now: () => 0 }) });
+    }
+    for (const at of model.thumbTimes(5)) {
+      let beat = film.beats[0]!;
+      for (const candidate of film.beats) if (at + 1e-9 >= candidate.start) beat = candidate;
+      const scene = film.scenes.find((candidate) => candidate.id === beat.sceneId) ?? film.scenes[0]!;
+      const entry = mounted.get(scene.id) ?? [...mounted.values()][0];
+      const thumb = document.createElement('button');
+      thumb.type = 'button';
+      thumb.className = 'inc-player-thumb';
+      thumb.title = formatTime(at);
+      thumb.setAttribute('aria-label', `Seek to ${formatTime(at)}`);
+      if (entry) {
+        entry.controller.seek(at);
+        pushAbsoluteState(entry.handle, entry.stub, entry.controller.currentBeat?.step.cam ?? null);
+        const svg = await entry.handle.exportSvg();
+        if (svg) {
+          const img = document.createElement('img');
+          img.src = svg;
+          img.alt = '';
+          thumb.append(img);
+        } else thumb.textContent = formatTime(at);
+      } else thumb.textContent = formatTime(at);
+      thumb.addEventListener('click', () => model.seek(at));
+      thumbs.append(thumb);
+    }
+    for (const entry of mounted.values()) {
+      entry.controller.destroy();
+      entry.stub.destroy();
+      entry.handle.destroy();
+    }
   } finally {
     box.remove();
   }

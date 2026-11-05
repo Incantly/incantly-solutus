@@ -11,6 +11,8 @@ import type { ProductSignal } from './telemetry';
 
 export { GenerationClient, ServiceError } from './service-client';
 export type { GenerationClientOptions } from './service-client';
+export { formatFilmTimings, generateFilmStream, resolveFilmSource, storedAsFixture } from './film-client';
+export type { FilmGenerateEvent, FilmGenerateRequest, StoredFilm } from './film-client';
 export { runChange, runGeneration } from './flow';
 export { liveProblemReport, repairFigure } from './repair';
 export type { FigureRepairRun, LiveProblem, StoredFigure } from './repair';

@@ -88,3 +88,40 @@ for (const card of ACCEPTANCE) {
     await page.waitForURL((url) => url.searchParams.get('page') === 'generate' && url.searchParams.get('prompt') === card.prompt);
   });
 }
+
+test('the generate-film box offers prompt, length presets and Generate', async ({ page }) => {
+  await openGallery(page);
+  await expect(page.locator('.film-generate__heading')).toHaveText('Generate a film');
+  await expect(page.getByLabel('Film prompt')).toBeVisible();
+  const length = page.getByLabel('Length');
+  await expect(length.locator('option')).toHaveCount(5);
+  await expect(length).toHaveValue('60');
+  await expect(page.locator('.film-generate__generate')).toHaveText('Generate film');
+});
+
+test('a film card links to the box instead of duplicating it', async ({ page }) => {
+  await openGallery(page);
+  await page.getByLabel('Search generations').fill('Film · 30 s');
+  await page.locator('.gallery-card:not([hidden])').click();
+  await expect(page.locator('.gallery-detail__film-generate')).toBeVisible();
+  await page.locator('.gallery-detail__film-generate').click();
+  await expect(page.getByLabel('Film prompt')).toHaveValue('Show me a 30-second film about how a pendulum keeps time.');
+});
+
+test('Generate film streams skeleton, scenes and timings through the reference model', async ({ page }) => {
+  await page.goto('/?page=generations&reference=1');
+  await page.waitForFunction(() => window.__playground?.ready === true);
+  await page.getByLabel('Film prompt').fill('How dots shift');
+  await page.getByLabel('Length').selectOption('30');
+  await page.locator('.film-generate__generate').click();
+  await page.waitForFunction(() => (window.__playground?.filmGenerate as () => { skeleton: unknown })().skeleton !== null, null, { timeout: 15_000 });
+  await expect(page.locator('.film-generate__timings')).toContainText('plan', { timeout: 60_000 });
+  await expect(page.locator('.film-generate__timings')).toContainText('first scene');
+  await expect(page.locator('.film-generate__open')).toHaveText('Open in player');
+  const href = await page.locator('.film-generate__open').getAttribute('href');
+  expect(href).toMatch(/page=player&film=/);
+  await page.locator('.film-generate__open').click();
+  await page.waitForURL((url) => url.searchParams.get('page') === 'player');
+  await page.waitForFunction(() => window.__playground?.ready === true);
+  await expect(page.locator('.inc-player h2')).toContainText('Film about');
+});

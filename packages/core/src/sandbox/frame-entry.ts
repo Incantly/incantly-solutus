@@ -17,6 +17,12 @@ import type { WorkerInbound, WorkerOutbound } from './worker-protocol';
 
 /** A Worker that has not answered for this long is terminated. */
 const WORKER_DEADLINE_MS = 2500;
+/**
+ * A snapshot waits this long for the Worker's answers before picturing
+ * whatever is drawn. Under the watchdog above and the host's own picture
+ * deadline, so a hung scene fails the capture instead of hanging it.
+ */
+const SNAPSHOT_SETTLE_MS = 2000;
 /** Values are reported to the host at most this often per figure (EN-8). */
 const VALUES_INTERVAL_MS = 100;
 
@@ -43,6 +49,7 @@ window.addEventListener('message', function connect(event: MessageEvent) {
 /** Talks to the scene's Worker and watches it. */
 class WorkerChannel implements RuntimeChannel {
   private readonly listeners = new Set<(update: RuntimeUpdate) => void>();
+  private readonly drained: Array<() => void> = [];
   private outstanding = 0;
   private waitingSince = 0;
   private readonly timer: ReturnType<typeof setInterval>;
@@ -78,6 +85,22 @@ class WorkerChannel implements RuntimeChannel {
     this.outstanding = Math.max(0, this.outstanding - 1);
     this.waitingSince = performance.now();
     for (const listener of this.listeners) listener(update);
+    // The renderer applies synchronously above, so when the last answer
+    // lands the drawing is current: snapshots gated on the drain catch it.
+    if (this.outstanding === 0) {
+      for (const waiter of this.drained.splice(0)) waiter();
+    }
+  }
+
+  /** Whether every message but destroy has been answered. */
+  isIdle(): boolean {
+    return this.dead || this.outstanding === 0;
+  }
+
+  /** Runs once the Worker has answered everything outstanding, or at once when idle. */
+  whenIdle(waiter: () => void): void {
+    if (this.isIdle()) waiter();
+    else this.drained.push(waiter);
   }
 
   onUpdate(listener: (update: RuntimeUpdate) => void): () => void {
@@ -135,15 +158,52 @@ function onHostMessage(message: HostMessage): void {
     case 'seek':
       renderer?.send({ type: 'seek', seconds: message.seconds });
       break;
+    case 'playing':
+      renderer?.send(message.value ? { type: 'play' } : { type: 'pause' });
+      break;
+    case 'speed':
+      renderer?.send({ type: 'speed', value: message.value });
+      break;
+    case 'focusPart':
+      renderer?.send({ type: 'focusPart', name: message.name });
+      break;
+    case 'partVisible':
+      renderer?.send({ type: 'partVisible', name: message.name, visible: message.visible });
+      break;
+    case 'note':
+      renderer?.send({ type: 'note', wave: message.wave, frequency: message.frequency, duration: message.duration, gain: message.gain });
+      break;
+    case 'frame':
+      renderer?.send({ type: 'framePart', part: message.part, zoom: message.zoom });
+      break;
     case 'snapshot': {
       // A snapshot usually comes before suspension: send the latest values first, in order.
       flushReport();
-      // A frame the browser kept off-screen may never have drawn: an empty picture is worse than none.
-      const drawn = (renderer?.stats.workFrames ?? 0) > 0;
-      // Every panel of the figure, where it sits (6.10a, 6.10c).
-      const stages = drawn ? stagesOf(root) : [];
-      if (message.format === 'svg') send({ type: 'snapshot', id: message.id, png: null, svg: exportStages(stages) });
-      else void snapshotStages(stages).then((png) => send({ type: 'snapshot', id: message.id, png }));
+      const take = (): void => {
+        // The renderer applies synchronously, so an applied update has
+        // drawn, tick or no tick: captures picture hidden figures that
+        // never run the frame loop. A figure that applied nothing — never
+        // mounted, or suspended first — still pictures nothing.
+        const drawn = (renderer?.stats.workFrames ?? 0) > 0 || (renderer?.stats.updates ?? 0) > 0;
+        // Every panel of the figure, where it sits (6.10a, 6.10c).
+        const stages = drawn ? stagesOf(root) : [];
+        if (message.format === 'svg') send({ type: 'snapshot', id: message.id, png: null, svg: exportStages(stages) });
+        else void snapshotStages(stages).then((png) => send({ type: 'snapshot', id: message.id, png }));
+      };
+      // Captures post a seek and its cues just ahead of the snapshot: the
+      // picture waits for the Worker's answers, so it shows the sought
+      // state, never the frame before. Idle figures take at once, as today.
+      if (!channel || channel.isIdle()) take();
+      else {
+        let taken = false;
+        const fire = (): void => {
+          if (taken) return;
+          taken = true;
+          take();
+        };
+        channel.whenIdle(fire);
+        setTimeout(fire, SNAPSHOT_SETTLE_MS);
+      }
       break;
     }
     case 'clip':

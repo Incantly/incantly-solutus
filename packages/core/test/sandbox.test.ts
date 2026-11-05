@@ -73,15 +73,21 @@ describe('bridge messages', () => {
       'clip',
       'destroy',
       'focus',
+      'focusPart',
+      'frame',
       'init',
+      'note',
       'number',
+      'partVisible',
       'pause',
       'ping',
+      'playing',
       'reducedMotion',
       'resume',
       'seek',
       'setValues',
       'snapshot',
+      'speed',
       'step',
       'style',
       'theme',
@@ -244,8 +250,8 @@ describe('content security policy', () => {
     expect(FRAME_SCRIPT).not.toMatch(/<\/script|<script|<!--/i);
     // The parser stays on the host: the frame and Worker never validate.
     expect(WORKER_SCRIPT).not.toContain('acorn');
-    // The base runtime with the small general helpers, fluids, the table of every handle, the film clock and the beat cues with seek transport; domain kits load on demand.
-    expect(WORKER_SCRIPT.length).toBeLessThan(156_000);
+    // The base runtime with the small general helpers, fluids, the table of every handle, the film clock and the beat cues with seek transport, and the probe snapshots films play from; domain kits load on demand.
+    expect(WORKER_SCRIPT.length).toBeLessThan(157_000);
     expect(WORKER_SCRIPT).not.toContain('phosphorus');
   });
 });

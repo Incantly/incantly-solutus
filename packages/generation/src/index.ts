@@ -90,7 +90,7 @@ export type { GalleryEntry, GalleryStore } from './gallery';
 export type { GalleryCard, GalleryFigure, GalleryReceipt, GalleryStatus, GallerySubmission } from './protocol';
 export { FileFilmLibraryStore, FilmLibrary, MemoryFilmLibraryStore, filmAskerOf, versionSummary } from './film-library';
 export type { FilmInsertEntry, FilmLibraryStore, FilmVersionEntry, FilmVersionSummary } from './film-library';
-export { FILM_REFERENCE_CONTEXT, filmReferenceModel, filmReferenceSceneJs, filmReferenceSceneReply } from './film-reference';
+export { FILM_REFERENCE_CONTEXT, filmReferenceModel, filmReferenceSceneJs, filmReferenceSceneReply, filmReferenceStoryboard, filmSaysOfJs, filmSliceOf } from './film-reference';
 export type { FilmReferenceOptions } from './film-reference';
 export { loadFilmEvalPrompts } from './film-eval-prompts';
 export type { FilmEvalConcept, FilmEvalPromptSet } from './film-eval-prompts';

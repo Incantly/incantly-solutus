@@ -1,5 +1,6 @@
-import type { ScenePlan } from '@incantly/core';
+import { filmPresetFor, type ScenePlan } from '@incantly/core';
 import { REFERENCE_SCENES, type ReferenceScene } from '@incantly/core/scenes';
+import { filmReferenceSceneReply, filmReferenceStoryboard, filmSaysOfJs, filmSliceOf } from './film-reference';
 import { parsePlanReply } from './fragments';
 import { ScriptedModel, type CallPurpose, type ModelCall } from './models';
 import { conceptScores } from './retrieve';
@@ -147,6 +148,10 @@ export function referenceModel(options: ReferenceModelOptions = {}): ScriptedMod
   let trial = -1;
   // A library build starts before its plan call, which only confirms it: the two are one trial.
   let confirming: string | null = null;
+  // Film trials answer through the film stand-in's storyboard and dot scenes,
+  // so /api/v1/films works without a model or key; figure faults never apply.
+  const filmTrials = new Set<number>();
+  let filmBeats: ReadonlyArray<{ readonly say: string }> = [{ say: 'A dot appears at the center of the stage.' }];
 
   const script = (call: ModelCall): string => {
     const user = call.prompt.user;
@@ -168,6 +173,26 @@ export function referenceModel(options: ReferenceModelOptions = {}): ScriptedMod
       const change = { beats: [{ beat: first?.[2] ?? 's1b1', scene: first?.[1] ?? 's1', say: 'Watch the same moment again, closely.' }] };
       return `Here is the patch.\n${fence('json', JSON.stringify(change))}\n`;
     }
+    const isFilmPlan = call.prompt.system.some((block) => block.text.startsWith('FILM PLAN format'));
+    const isFilmScene = call.prompt.system.some((block) => block.text.startsWith('FILM SCENE format'));
+    if (isFilmPlan && call.purpose === 'plan') {
+      const replan = user.includes('Your previous storyboard was rejected');
+      if (!replan) trial++;
+      filmTrials.add(trial);
+      const planned = /Plan one film of (\d+) seconds in (\d+) scenes?/.exec(user);
+      const lengthTarget = planned ? Number(planned[1]) : 60;
+      const preset = filmPresetFor(lengthTarget);
+      const request = /The learner asked: "([^"]*)"/.exec(user)?.[1] ?? 'dots shifting';
+      const title = `Film about ${request}`.replace(/\s+/g, ' ').trim().slice(0, 120);
+      return filmReferenceStoryboard(preset.seconds, preset.scenes, title, 3);
+    }
+    if (isFilmScene && call.purpose === 'scene') {
+      filmTrials.add(trial);
+      const slice = filmSliceOf(call);
+      const beats = slice?.beats ?? filmBeats;
+      filmBeats = beats;
+      return filmReferenceSceneReply(beats);
+    }
     const request = /The learner asked: "([^"]*)"/.exec(user)?.[1] ?? '';
     const library = call.purpose === 'scene' && call.prompt.system.some((block) => block.text.includes('LIBRARY format'));
     if (library) {
@@ -183,10 +208,25 @@ export function referenceModel(options: ReferenceModelOptions = {}): ScriptedMod
       const plan = faultFor(trial) === 'bad-plan' && !replan ? overfullPlan(scene.plan) : scene.plan;
       return `Here is the plan.\n${fence('json', JSON.stringify(plan, null, 2))}\n`;
     }
+    // A film trial's repair rebuilds the dot figure from its quoted lines, like the film stand-in.
+    if (filmTrials.has(trial) && call.purpose === 'repair') {
+      const quoted = /```js\n([\s\S]*?)\n```/.exec(user)?.[1] ?? '';
+      const says = filmSaysOfJs(quoted);
+      const beats = says.length > 0 ? says.map((say) => ({ say })) : filmBeats;
+      filmBeats = beats;
+      return `Fixed.\n${filmReferenceSceneReply(beats)}\n`;
+    }
     const planned = parsePlanReply(user).value as { concept?: string } | null;
     const scene = conceptFor(planned?.concept ?? user, scenes) ?? Object.values(scenes)[0]!;
     const fault = faultFor(trial);
     if (call.purpose === 'scene') {
+      // A film trial's scene without its marker still answers as a film scene.
+      if (filmTrials.has(trial)) {
+        const slice = filmSliceOf(call);
+        const beats = slice?.beats ?? filmBeats;
+        filmBeats = beats;
+        return filmReferenceSceneReply(beats);
+      }
       // Asked for edits to the reviewed scene of the same concept: reply with only the changes.
       const editing = call.prompt.system.some((block) => block.text.startsWith('EDIT format'));
       if (editing) {

@@ -20,6 +20,12 @@ import { defineConfig, loadEnv, type Plugin, type ViteDevServer } from 'vite';
  * latest for a prompt replacing the one before. The gallery draws a prompt
  * card from it in any browser, and it survives a restart of this server.
  *
+ * /api/dev/films keeps the films the generate-film box made, by id, in memory
+ * for this dev-server session only: POST saves { id, storyboard, scenes },
+ * GET /api/dev/films/:id fetches one. The player resolves ?film=<id> from
+ * this store first, fixtures second. A restart empties it;
+ * /api/dev/films/clear empties it and the shared film library together.
+ *
  * The interactive playground creates an ephemeral model session at
  * /api/dev/session, with Anthropic, Meta (Muse Spark and Muse Wonder),
  * Gemini or Amazon Bedrock (open-weight GLM, DeepSeek, Qwen, Kimi and MiniMax
@@ -73,6 +79,32 @@ function readFigure(input: unknown): KeptFigure | null {
   const { html, css, js } = fragments as { html?: unknown; css?: unknown; js?: unknown };
   if (typeof html !== 'string' || typeof css !== 'string' || typeof js !== 'string' || html.length + css.length + js.length > 200_000) return null;
   return { prompt: prompt.trim(), concept, fragments: { html, css, js }, approvedAt: new Date().toISOString() };
+}
+
+interface KeptFilm {
+  readonly id: string;
+  readonly storyboard: unknown;
+  readonly scenes: ReadonlyArray<{ readonly id: string; readonly html: string; readonly css: string; readonly js: string }>;
+  readonly savedAt: string;
+}
+
+/** A generated film as the box sends it, or null: an id, a storyboard object, and one to eight scenes of strings. */
+function readFilm(input: unknown): KeptFilm | null {
+  if (typeof input !== 'object' || input === null) return null;
+  const { id, storyboard, scenes } = input as { id?: unknown; storyboard?: unknown; scenes?: unknown };
+  if (typeof id !== 'string' || !/^[\w-]{1,80}$/.test(id)) return null;
+  if (typeof storyboard !== 'object' || storyboard === null || Array.isArray(storyboard)) return null;
+  if (!Array.isArray(scenes) || scenes.length === 0 || scenes.length > 32) return null;
+  const kept: Array<{ id: string; html: string; css: string; js: string }> = [];
+  for (const entry of scenes) {
+    if (typeof entry !== 'object' || entry === null) return null;
+    const { id: sceneId, html, css, js } = entry as { id?: unknown; html?: unknown; css?: unknown; js?: unknown };
+    if (typeof sceneId !== 'string' || sceneId === '' || sceneId.length > 80) return null;
+    if (typeof html !== 'string' || typeof css !== 'string' || typeof js !== 'string') return null;
+    if (html.length + css.length + js.length > 200_000) return null;
+    kept.push({ id: sceneId, html, css, js });
+  }
+  return { id, storyboard, scenes: kept, savedAt: new Date().toISOString() };
 }
 const DEV_TICKET_SECRET = 'playground-only-ticket-secret-never-used-in-production';
 
@@ -233,6 +265,8 @@ function generationService(): Plugin {
   // One film library for every service, kept in memory: shared versions and private inserts.
   let films: import('@incantly/generation').FilmLibrary | null = null;
   let filmStore: import('@incantly/generation').MemoryFilmLibraryStore | null = null;
+  // Generated films by id, kept in memory for this dev-server session only.
+  const generatedFilms = new Map<string, KeptFilm>();
   const services = new Map<
     string,
     { handle(req: IncomingMessage, res: ServerResponse): Promise<void>; close(): Promise<void>; records: { records: unknown[] } }
@@ -466,7 +500,21 @@ function generationService(): Plugin {
           }
           if (path === '/api/dev/films/clear') {
             filmStore?.clear();
+            generatedFilms.clear();
             return json(200, { cleared: true });
+          }
+          if (path === '/api/dev/films' && req.method === 'POST') {
+            const film = readFilm(await body(req, 2_000_000));
+            if (!film) return json(400, { kept: false });
+            generatedFilms.set(film.id, film);
+            while (generatedFilms.size > 50) generatedFilms.delete(generatedFilms.keys().next().value!);
+            return json(200, { kept: true, id: film.id });
+          }
+          const keptFilm = /^\/api\/dev\/films\/([\w-]{1,80})$/.exec(path);
+          if (keptFilm && req.method === 'GET' && keptFilm[1] !== 'clear') {
+            const film = generatedFilms.get(keptFilm[1]!);
+            if (!film) return json(404, { kept: false });
+            return json(200, film);
           }
           if (path === '/api/dev/gallery/review') {
             const params = new URL(req.url ?? '', 'http://x').searchParams;

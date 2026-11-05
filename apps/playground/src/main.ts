@@ -12,7 +12,7 @@ import { mountStylePage } from './style-page';
 const pages: Record<string, (root: HTMLElement, params: URLSearchParams) => void> = {
   editor: mountEditorPage,
   generate: mountGeneratePage,
-  generations: (root) => mountGenerationsPage(root),
+  generations: mountGenerationsPage,
   note: mountNotePage,
   player: mountPlayerPage,
   scene: mountScenePage,
