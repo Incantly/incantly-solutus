@@ -2,7 +2,9 @@ import {
   anchorFor,
   applyBeatCues,
   applyFilmPatch,
+  applySlotClasses,
   applyStyle,
+  bindPlayerFullscreen,
   AskReturnStack,
   askContextLine,
   attachAudio,
@@ -54,6 +56,7 @@ import {
   probeSandboxed,
   probeScene,
   pushAbsoluteState,
+  refreshPlayerFullscreenVisibility,
   renderSandboxedLivePixels,
   resolveFilmLink,
   resolveFilmPosition,
@@ -111,8 +114,9 @@ import { resolveFilmSource, storedAsFixture, type StoredFilm } from '@incantly/g
  * and probe path. `?film=thirty|sixty` picks the film, or a generated film's
  * id from the dev store; `?preset=` and `?theme=` style the figure as an
  * integrator would; `?hide=` (comma separated: captions, transcript,
- * chapters, timeline, deck) turns chrome off; `?deck=1` opens in deck mode,
- * where beats hold until clicked. A generic consumer: no scene-specific code.
+ * chapters, timeline, deck, playerFullscreen) turns chrome off; `?deck=1`
+ * opens in deck mode, where beats hold until clicked. A generic consumer:
+ * no scene-specific code.
  */
 export function mountPlayerPage(root: HTMLElement, params: URLSearchParams): void {
   const key = params.get('film') ?? 'thirty';
@@ -173,7 +177,18 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
   // the same resolveStyle/applyStyle helpers and dataset convention as figures.
   const player = document.createElement('div');
   player.className = 'inc-player';
-  applyStyle(player, resolveStyle({ ...(preset ? { preset } : {}), show: { captions: !hide.has('captions'), transcript: !hide.has('transcript'), chapters: !hide.has('chapters'), timeline: !hide.has('timeline'), deck: !hide.has('deck') } }));
+  const playerStyle = resolveStyle({
+    ...(preset ? { preset } : {}),
+    show: {
+      captions: !hide.has('captions'),
+      transcript: !hide.has('transcript'),
+      chapters: !hide.has('chapters'),
+      timeline: !hide.has('timeline'),
+      deck: !hide.has('deck'),
+      playerFullscreen: !hide.has('playerFullscreen'),
+    },
+  });
+  applyStyle(player, playerStyle);
   root.append(player);
 
   const heading = document.createElement('h2');
@@ -468,7 +483,15 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
   };
 
   let openAsk = (): void => undefined;
-  const transport = buildTransport(player, model, film, mixer, () => openAsk(), { toggleLoop, copyLink });
+  const transport = buildTransport(player, model, film, mixer, () => openAsk(), { toggleLoop, copyLink }, playerStyle.show.playerFullscreen);
+  // The player root goes fullscreen; figures mirror the same chrome-aware growth — trusted directly,
+  // sandboxed through the bridge — with playback untouched, so exiting restores layout and position.
+  bindPlayerFullscreen(player, transport.fullscreen, (on) => {
+    for (const mounted of figures) mounted.renderer.setFullscreenMirror(on);
+    for (const handle of session?.handles ?? []) handle.setFullscreen?.(on);
+  });
+  // Slot classes land on the built chrome too, so the fullscreen button styles like its siblings.
+  applySlotClasses(player, playerStyle);
   // Switching versions re-resolves the position by beat id — the same beat
   // and word on the new version, never carried seconds — and plays it.
   const showFilm = (next: CompiledFilm): void => {
@@ -1212,7 +1235,14 @@ function buildTransport(
   mixer: FilmMixer,
   onAsk: () => void,
   extra: { toggleLoop(): void; copyLink(): string },
-): { syncTime(time: number, playing: boolean): void; setDuration(seconds: number): void; toggleSound(): void; thumbs: HTMLElement } {
+  showFullscreen = true,
+): {
+  syncTime(time: number, playing: boolean): void;
+  setDuration(seconds: number): void;
+  toggleSound(): void;
+  thumbs: HTMLElement;
+  fullscreen: HTMLButtonElement;
+} {
   const bar = document.createElement('div');
   bar.className = 'inc-transport inc-player-transport';
   const play = document.createElement('button');
@@ -1325,10 +1355,19 @@ function buildTransport(
   });
   const thumbs = document.createElement('div');
   thumbs.className = 'inc-player-thumbs';
-  bar.append(play, ask, time, scrubWrap, speed, volume, sound, captions, size, loop, link, linkNote);
+  const fullscreen = document.createElement('button');
+  fullscreen.type = 'button';
+  fullscreen.className = 'inc-player-fullscreen';
+  fullscreen.textContent = '⛶';
+  fullscreen.setAttribute('aria-label', 'Full screen');
+  fullscreen.setAttribute('aria-pressed', 'false');
+  fullscreen.title = 'Full screen';
+  refreshPlayerFullscreenVisibility(fullscreen, showFullscreen);
+  bar.append(play, ask, time, scrubWrap, speed, volume, sound, captions, size, loop, link, linkNote, fullscreen);
   player.append(bar, thumbs);
   return {
     thumbs,
+    fullscreen,
     toggleSound(): void {
       sound.click();
     },

@@ -447,8 +447,26 @@ html.inc-frame, html.inc-frame body { margin: 0; padding: 0; background: transpa
   clip: rect(0 0 0 0);
   white-space: nowrap;
 }
-.inc-figure:fullscreen { overflow: auto; padding: max(var(--inc-pad), env(safe-area-inset-top)) max(var(--inc-pad), env(safe-area-inset-right)) max(var(--inc-pad), env(safe-area-inset-bottom)) max(var(--inc-pad), env(safe-area-inset-left)); }
-.inc-figure:fullscreen .inc-stage { max-height: 72vh; }
+.inc-figure:fullscreen { display: flex; flex-direction: column; width: 100%; height: 100%; max-width: none; margin: 0; overflow: auto; padding: max(var(--inc-pad), env(safe-area-inset-top)) max(var(--inc-pad), env(safe-area-inset-right)) max(var(--inc-pad), env(safe-area-inset-bottom)) max(var(--inc-pad), env(safe-area-inset-left)); }
+/*
+ * Fullscreen sizing is width-driven, never leftover-driven: the stage keeps its embedded aspect height (width 100%,
+ * height auto), and every flex link from the root to the stage grows but never shrinks below content, so no amount
+ * of chrome can squeeze the drawing to zero — the fullscreen root scrolls instead. Fullscreen reclaims the page's
+ * caps and padding, so the wider box always draws taller than the embedded one. The [data-fullscreen] mirror gives
+ * sandboxed figures and player-embedded figures (whose host, not the figure, is :fullscreen) the identical sizing
+ * through the bridge. No rule here touches embedded sizing.
+ */
+.inc-figure:fullscreen .inc-body { flex: 1 0 auto; width: 100%; }
+.inc-figure:fullscreen:is([data-layout='right'], [data-layout='left']) .inc-body { align-items: stretch; }
+.inc-figure:fullscreen .inc-scene:not([data-panels]) { display: flex; flex-direction: column; flex: 1 0 auto; }
+.inc-figure:fullscreen .inc-scene:not([data-panels]) > .inc-stage-host { flex: 1 0 auto; display: flex; flex-direction: column; width: 100%; }
+.inc-figure:fullscreen .inc-stage { width: 100%; max-height: none; flex: 0 0 auto; }
+.inc-figure[data-fullscreen] { display: flex; flex-direction: column; width: 100%; overflow: auto; }
+.inc-figure[data-fullscreen] .inc-body { flex: 1 0 auto; width: 100%; }
+.inc-figure[data-fullscreen]:is([data-layout='right'], [data-layout='left']) .inc-body { align-items: stretch; }
+.inc-figure[data-fullscreen] .inc-scene:not([data-panels]) { display: flex; flex-direction: column; flex: 1 0 auto; }
+.inc-figure[data-fullscreen] .inc-scene:not([data-panels]) > .inc-stage-host { flex: 1 0 auto; display: flex; flex-direction: column; width: 100%; }
+.inc-figure[data-fullscreen] .inc-stage { width: 100%; max-height: none; flex: 0 0 auto; }
 .inc-figure[data-hide-header] .inc-header, .inc-figure[data-hide-idea] .inc-idea, .inc-figure[data-hide-readouts] .inc-readouts,
 .inc-figure[data-hide-legend] .inc-legend, .inc-figure[data-hide-controls] .inc-controls, .inc-figure[data-hide-steps] .inc-steps,
 .inc-figure[data-hide-description] .inc-description, .inc-figure[data-hide-zoom] .inc-zoombar, .inc-figure[data-hide-part-info] .inc-part-info { display: none !important; }

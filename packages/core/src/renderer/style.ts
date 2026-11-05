@@ -171,6 +171,7 @@ export type ShowPart =
   | 'settings'
   | 'undo'
   | 'fullscreen'
+  | 'playerFullscreen'
   | 'steps'
   | 'description'
   | 'zoom'
@@ -228,6 +229,7 @@ const SHOW_DEFAULTS: Readonly<Record<ShowPart, boolean>> = {
   settings: true,
   undo: true,
   fullscreen: true,
+  playerFullscreen: true,
   steps: true,
   description: true,
   zoom: true,

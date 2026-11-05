@@ -75,6 +75,7 @@ describe('bridge messages', () => {
       'focus',
       'focusPart',
       'frame',
+      'fullscreen',
       'init',
       'note',
       'number',

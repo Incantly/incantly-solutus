@@ -227,6 +227,9 @@ function onHostMessage(message: HostMessage): void {
     case 'number':
       renderer?.setNumber(message.figureNumber);
       break;
+    case 'fullscreen':
+      renderer?.setFullscreenMirror(message.value);
+      break;
     case 'destroy':
       destroy();
       break;
@@ -362,6 +365,7 @@ function start(init: InitMessage): void {
       if (typeof update.ui.description === 'string') queueReport(null, update.ui.description);
     },
   });
+  if (init.live?.fullscreen === true) renderer.setFullscreenMirror(true);
   // The mount update answers the boot message.
   workerChannel.expectAnswer();
   workerChannel.post(boot);
