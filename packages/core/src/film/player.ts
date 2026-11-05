@@ -1,6 +1,6 @@
 import type { FilmController, FilmEvent } from '../runtime/film';
 import { markerSeconds, type AskAnchor, type AskMarker } from './ask';
-import { wordStarts, type CompiledBeat, type CompiledFilm, type FilmAnchor } from './storyboard';
+import { wordStarts, type CompiledBeat, type CompiledFilm, type FilmAdvance, type FilmAnchor } from './storyboard';
 
 /**
  * The player model: everything a film player shows, without the DOM. The
@@ -148,22 +148,34 @@ export class PlayerModel {
     return this.controller.seekAnchor(anchor);
   }
 
+  /** How beats advance now: the audio clock, or the learner's click. */
+  get advance(): FilmAdvance {
+    return this.controller.advance;
+  }
+
+  /** Switches advance modes on any film, with no narration required. */
+  setAdvance(mode: FilmAdvance): void {
+    this.controller.setAdvance(mode);
+    this.emit({ type: 'chrome' });
+  }
+
+  /**
+   * The beat on screen as a position in the film: its 0-based index and the
+   * beat count. Null before the first beat. The deck indicator reads this.
+   */
+  beatPosition(): { readonly index: number; readonly total: number } | null {
+    const beat = this.controller.currentBeat;
+    if (!beat) return null;
+    const index = this.film.beats.findIndex((candidate) => candidate.id === beat.id);
+    return index < 0 ? null : { index, total: this.film.beats.length };
+  }
+
   nextBeat(): boolean {
-    const beats = this.film.beats;
-    const at = beats.findIndex((beat) => beat.id === this.controller.currentBeat?.id);
-    const next = at >= 0 ? beats[at + 1] : beats[0];
-    if (!next) return false;
-    this.controller.seek(next.start);
-    return true;
+    return this.controller.nextBeat();
   }
 
   prevBeat(): boolean {
-    const beats = this.film.beats;
-    const at = beats.findIndex((beat) => beat.id === this.controller.currentBeat?.id);
-    const prev = at > 0 ? beats[at - 1] : beats[0];
-    if (!prev) return false;
-    this.controller.seek(prev.start);
-    return true;
+    return this.controller.prevBeat();
   }
 
   setSpeed(value: number): void {

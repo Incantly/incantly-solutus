@@ -139,6 +139,21 @@ describe('film storyboard: the plan call returns scenes plus a shared context', 
     expect(prompt.system[1]!.text).toBe(FILM_PLAN_FORMAT);
     expect(prompt.system[1]!.cache).toBe(true);
   });
+
+  it('carries a deck advance through, dropping anything but time or click', () => {
+    const deck = validateStoryboard({ film: { title: 'T', lengthTarget: 120, context: CONTEXT, advance: 'click' }, scenes: twoScenes() }, 120);
+    expect(deck.ok).toBe(true);
+    expect(deck.storyboard!.film.advance).toBe('click');
+    const timed = validateStoryboard({ film: { title: 'T', lengthTarget: 120, context: CONTEXT, advance: 'time' }, scenes: twoScenes() }, 120);
+    expect(timed.ok).toBe(true);
+    expect(timed.storyboard!.film.advance).toBe('time');
+    const missing = validateStoryboard({ film: { title: 'T', lengthTarget: 120, context: CONTEXT }, scenes: twoScenes() }, 120);
+    expect(missing.ok).toBe(true);
+    expect('advance' in missing.storyboard!.film).toBe(false);
+    const bogus = validateStoryboard({ film: { title: 'T', lengthTarget: 120, context: CONTEXT, advance: 'scroll' }, scenes: twoScenes() }, 120);
+    expect(bogus.ok).toBe(true);
+    expect('advance' in bogus.storyboard!.film).toBe(false);
+  });
 });
 
 describe('film scene calls: one slice plus the shared context each', () => {

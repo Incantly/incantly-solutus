@@ -4,7 +4,7 @@ import type { RendererMessage, RuntimeUpdate } from '../protocol/runtime-message
 import { stageBounds, type Box } from '../scene/bounds';
 import type { VNode } from '../scene/graph';
 import { askAnchorFor, resolveAskAnchor, type AskAnchor } from '../film/ask';
-import { attachAudio, resolveAnchor, type BeatAudio, type CompiledBeat, type CompiledFilm, type FilmAnchor } from '../film/storyboard';
+import { attachAudio, resolveAnchor, type BeatAudio, type CompiledBeat, type CompiledFilm, type FilmAdvance, type FilmAnchor } from '../film/storyboard';
 import { FILM_STEP_SECONDS, SceneRuntime } from './runtime';
 
 /**
@@ -205,6 +205,7 @@ export type FilmEvent =
   | { readonly type: 'play' }
   | { readonly type: 'pause' }
   | { readonly type: 'beat'; readonly beat: CompiledBeat }
+  | { readonly type: 'held'; readonly beat: CompiledBeat }
   | { readonly type: 'pausePoint'; readonly beat: CompiledBeat; readonly kind: 'hold' | 'explore' | 'predict' }
   | { readonly type: 'end' }
   | { readonly type: 'cut'; readonly from: string; readonly to: string }
@@ -312,6 +313,13 @@ export interface FilmTransport {
 export interface FilmControllerOptions {
   readonly runtime: SceneRuntime;
   readonly film: CompiledFilm;
+  /**
+   * How beats advance: the audio clock, or the learner's click. Defaults to
+   * the film's own advance, which defaults to time. Time mode is exactly
+   * today's behavior; click mode holds every beat until nextBeat, prevBeat,
+   * a seek, or play-then-boundary moves it.
+   */
+  readonly advance?: FilmAdvance;
   /** Scene to play; one-scene films play scene 0. */
   readonly sceneIndex?: number;
   /**
@@ -349,6 +357,7 @@ export class FilmController {
   private readonly reducedMotion: boolean;
   private readonly now: () => number;
   private readonly listeners = new Set<(event: FilmEvent) => void>();
+  private advanceMode: FilmAdvance;
   private playing = false;
   private beatIndex = -1;
   private frameHandle: number | null = null;
@@ -367,6 +376,7 @@ export class FilmController {
   constructor(options: FilmControllerOptions) {
     this.runtime = options.runtime;
     this.film = options.film;
+    this.advanceMode = options.advance ?? options.film.advance ?? 'time';
     this.scene = options.sceneIndex ?? 0;
     this.runtimes = options.runtimes && options.runtimes.length === options.film.scenes.length ? [...options.runtimes] : null;
     this.active = this.runtimes ? 0 : this.scene;
@@ -386,6 +396,29 @@ export class FilmController {
   /** The active scene's index in the film. */
   get sceneIndex(): number {
     return this.runtimes ? this.active : this.scene;
+  }
+
+  /** How beats advance now: the audio clock, or the learner's click. */
+  get advance(): FilmAdvance {
+    return this.advanceMode;
+  }
+
+  /**
+   * Switches advance modes on any film, with no narration required. Entering
+   * click pauses the clock and holds the beat on screen; entering time leaves
+   * the film paused for the learner to resume. Anything but time or click is
+   * ignored. Retime never touches the mode, so narration arriving later and
+   * version switches never flip the learner's toggle.
+   */
+  setAdvance(mode: FilmAdvance): void {
+    if (mode !== 'time' && mode !== 'click') return;
+    if (mode === this.advanceMode) return;
+    this.advanceMode = mode;
+    if (mode === 'click') {
+      if (this.playing) this.pauseAtPoint();
+      const beat = this.currentBeat;
+      if (beat) this.emit({ type: 'held', beat });
+    }
   }
 
   private get activeRuntime(): SceneRuntime {
@@ -460,6 +493,13 @@ export class FilmController {
     if (this.ended || this.time >= this.duration) {
       if (this.runtimes) this.seek(0);
       else this.seekBeat(this.sceneBeats[0]!.id);
+      if (this.advanceMode === 'click') {
+        // A restarted deck holds on its first beat instead of playing it
+        // through; the beat event starts its narration, as arrivals do.
+        const beat = this.currentBeat;
+        if (beat) this.emit({ type: 'beat', beat });
+        return;
+      }
     }
     this.ended = false;
     this.playing = true;
@@ -543,12 +583,20 @@ export class FilmController {
           const cues = this.applyBeat(next, true);
           this.emit({ type: 'beat', beat });
           if (beat.step.sfx !== undefined) this.emit({ type: 'sfx', beat, name: beat.step.sfx, played: cues.sfxPlayed });
+          if (this.advanceMode === 'click') {
+            // A click beat holds at its opening: the clock stops, the beat's
+            // narration (started by the beat event above) plays on, and only
+            // the learner's click moves the film. Pause points still report.
+            this.pauseAtPoint();
+            this.emit({ type: 'held', beat });
+          }
           if (isPausePoint(beat.step)) {
             const kind = beat.step.explore !== undefined ? 'explore' : beat.step.predict !== undefined ? 'predict' : 'hold';
             this.pauseAtPoint();
             this.emit({ type: 'pausePoint', beat, kind });
             return;
           }
+          if (this.advanceMode === 'click') return;
         }
         if (!(this.time + FILM_STEP_SECONDS / 2 >= end && this.beatIndex >= beats.length - 1)) return;
         if (!this.advanceScene()) {
@@ -723,7 +771,9 @@ export class FilmController {
     const resume = this.playing;
     const filmEnd = this.runtimes ? this.film.seconds : end;
     const atEnd = clamped + FILM_STEP_SECONDS / 2 >= filmEnd;
-    this.playing = resume && !isPausePoint(beat.step) && !atEnd;
+    // A seek in click mode always holds where it lands: the learner's next
+    // click moves the film, never the clock the seek interrupted.
+    this.playing = resume && !isPausePoint(beat.step) && !atEnd && this.advanceMode !== 'click';
     if (this.transport) this.transport.send(this.playing ? { type: 'play' } : { type: 'pause' });
     else if (this.playing) this.activeRuntime.play();
     else this.activeRuntime.pause();
@@ -768,6 +818,42 @@ export class FilmController {
     if (!scene || scene.beats.length === 0) return false;
     if (!this.runtimes && scene.id !== this.sceneData.id) return false;
     this.seek(scene.start);
+    return true;
+  }
+
+  /**
+   * Advances one beat in film order, crossing scenes and chapters through the
+   * same seek every jump reuses. Before the first beat it opens the film.
+   * False at the film's end, where a click deck finishes instead of wrapping.
+   * In click mode the arrival holds (paused) and emits its beat event, so the
+   * beat's narration starts as it does on a played boundary; in time mode this
+   * is exactly a seek to the next beat's start.
+   */
+  nextBeat(): boolean {
+    const beats = this.film.beats;
+    const at = beats.findIndex((beat) => beat.id === this.currentBeat?.id);
+    const next = at >= 0 ? beats[at + 1] : beats[0];
+    if (!next) {
+      if (this.advanceMode === 'click' && !this.ended && this.currentBeat) this.finish();
+      return false;
+    }
+    this.seek(next.start);
+    if (this.advanceMode === 'click' && this.currentBeat) this.emit({ type: 'beat', beat: this.currentBeat });
+    return true;
+  }
+
+  /**
+   * Steps one beat back in film order, through the same seek. On the first
+   * beat it re-opens it. In click mode the arrival holds and emits its beat
+   * event; in time mode this is exactly a seek to the previous beat's start.
+   */
+  prevBeat(): boolean {
+    const beats = this.film.beats;
+    const at = beats.findIndex((beat) => beat.id === this.currentBeat?.id);
+    const prev = at > 0 ? beats[at - 1] : beats[0];
+    if (!prev) return false;
+    this.seek(prev.start);
+    if (this.advanceMode === 'click' && this.currentBeat) this.emit({ type: 'beat', beat: this.currentBeat });
     return true;
   }
 

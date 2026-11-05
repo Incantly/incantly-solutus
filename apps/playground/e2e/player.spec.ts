@@ -742,3 +742,121 @@ test('without WebCodecs the export labels its realtime fallback', async ({ page 
   await page.locator('.inc-export-video-cancel').click();
   await expect(page.locator('.inc-export-video-status')).toContainText('Cancelled', { timeout: 30_000 });
 });
+
+async function openPlayerDeck(page: Page, film: string): Promise<void> {
+  await page.request.get('/api/dev/films/clear');
+  await page.goto(`/?page=player&film=${film}&deck=1&reduced-motion=0&export-debug=1`);
+  await page.waitForFunction(() => window.__playground?.ready === true);
+}
+
+interface DeckState {
+  readonly advance: string;
+  readonly beat: string | null;
+  readonly playing: boolean;
+  readonly index: number | null;
+  readonly total: number;
+}
+
+async function deckState(page: Page): Promise<DeckState> {
+  return page.evaluate(() => (window.__playground?.deck as () => DeckState)());
+}
+
+test('deck mode holds beats until clicked, with next, previous and keys', async ({ page }) => {
+  await openPlayerDeck(page, 'thirty');
+  await expect(page.locator('.inc-deck-toggle')).toHaveText('Deck: on');
+  await expect(page.locator('.inc-deck-position')).toHaveText('—');
+  expect((await deckState(page)).advance).toBe('click');
+  // Play holds on the first beat instead of running the clock.
+  await page.locator('.inc-player-transport button').first().click();
+  await expect.poll(async () => (await deckState(page)).beat).toBe('s1b1');
+  await page.waitForTimeout(1500);
+  expect((await deckState(page)).beat).toBe('s1b1');
+  expect((await deckState(page)).playing).toBe(false);
+  await expect(page.locator('.inc-deck-position')).toHaveText('Slide 1 of 6');
+  await expect(page.locator('.inc-caption')).toContainText('pendulum hangs');
+  // Next and previous step paused; the keyboard steps too.
+  await page.locator('.inc-deck-next').click();
+  await expect.poll(async () => (await deckState(page)).beat).toBe('s1b2');
+  await expect(page.locator('.inc-deck-position')).toHaveText('Slide 2 of 6');
+  await page.locator('.inc-deck-prev').click();
+  await expect.poll(async () => (await deckState(page)).beat).toBe('s1b1');
+  await page.locator('.inc-player h2').click();
+  await page.keyboard.press('.');
+  await expect.poll(async () => (await deckState(page)).beat).toBe('s1b2');
+  await page.keyboard.press(',');
+  await expect.poll(async () => (await deckState(page)).beat).toBe('s1b1');
+  // The toggle leaves deck mode; the film plays as before.
+  await page.locator('.inc-deck-toggle').click();
+  await expect(page.locator('.inc-deck-toggle')).toHaveText('Deck: off');
+  expect((await deckState(page)).advance).toBe('time');
+});
+
+test('deck questions anchor by beat and return to the deck position', async ({ page }) => {
+  await openPlayerDeck(page, 'thirty');
+  await page.locator('.inc-deck-next').click();
+  await page.locator('.inc-deck-next').click();
+  await page.locator('.inc-deck-next').click();
+  await expect.poll(async () => (await deckState(page)).beat).toBe('s1b3');
+  await page.getByRole('button', { name: 'Ask about this moment' }).click();
+  await expect(page.locator('.inc-ask-context')).toContainText('s1b3');
+  await page.locator('.inc-ask-input').fill('What hangs it?');
+  await page.locator('.inc-ask-chips button').first().click();
+  await expect(page.locator('.inc-ask-answer')).toContainText('fastest', { timeout: 15_000 });
+  expect((await askState(page)).markers).toBe(1);
+  // Show me replays the deck's beat on the live scene.
+  await page.locator('.inc-ask-chips button').nth(1).click();
+  await expect(page.locator('.inc-showme')).toContainText('Showing s1b3');
+  await page.locator('.inc-showme button').click();
+  // Explain deeper plays its insert, then returns to the deck position.
+  await page.getByRole('button', { name: 'Ask about this moment' }).click();
+  await expect(page.locator('.inc-ask-context')).toContainText('s1b3');
+  await page.locator('.inc-ask-input').fill('Tell me more.');
+  await page.locator('.inc-ask-chips button').nth(2).click();
+  await expect(page.locator('.inc-insert')).toContainText('Explaining deeper', { timeout: 15_000 });
+  await page.locator('.inc-insert button').click();
+  await expect.poll(async () => (await deckState(page)).beat).toBe('s1b3');
+  await expect.poll(async () => (await deckState(page)).playing).toBe(true);
+  // The Back-now click scrolled the banner into view; visibility gating
+  // freezes the off-screen figure, so scroll back to watch it resume.
+  await page.locator('.inc-player-figure').scrollIntoViewIfNeeded();
+  // The resumed film plays to the next boundary, then holds for the click.
+  await expect.poll(async () => (await deckState(page)).playing, { timeout: 20_000 }).toBe(false);
+  await expect.poll(async () => (await deckState(page)).beat).toBe('s1b4');
+});
+
+test('deck slide export downloads one still per beat', async ({ page }) => {
+  test.setTimeout(240_000);
+  await openPlayerDeck(page, 'thirty');
+  await page.locator('.inc-export > summary').click();
+  await page.locator('.inc-export-slides-selection').selectOption('film');
+  await page.locator('.inc-export-slides-resolution').selectOption('480');
+  const download = page.waitForEvent('download');
+  await page.locator('.inc-export-slides-go').click();
+  const file = await download;
+  expect(file.suggestedFilename()).toBe('pendulum-v1-slide-01-s1b1.png');
+  await expect(page.locator('.inc-export-slides-status')).toContainText('Done · 6 slides', { timeout: 180_000 });
+  const names = await page.evaluate(() => (window.__playground?.slideLast as () => string[] | null)());
+  expect(names).toEqual(['pendulum-v1-slide-01-s1b1.png', 'pendulum-v1-slide-02-s1b2.png', 'pendulum-v1-slide-03-s1b3.png', 'pendulum-v1-slide-04-s1b4.png', 'pendulum-v1-slide-05-s1b5.png', 'pendulum-v1-slide-06-s1b6.png']);
+  const path = await file.path();
+  expect(path).not.toBeNull();
+  const { size } = await stat(path!);
+  expect(size).toBeGreaterThan(1000);
+});
+
+test('deck video export plays the full timed deck', async ({ page }) => {
+  test.setTimeout(240_000);
+  await openPlayerDeck(page, 'thirty');
+  await runVideoExport(page, 'film', '480');
+  await expect(page.locator('.inc-export-video-status')).toContainText('Done', { timeout: 180_000 });
+  const last = await exportLast(page);
+  expect(last).not.toBeNull();
+  expect(last!.fallback).toBe(false);
+  const film = await page.evaluate(() => {
+    const playground = window.__playground as unknown as { film: { seconds: number; beats: Array<{ id: string }> } };
+    return { seconds: playground.film.seconds, beats: playground.film.beats.length };
+  });
+  expect(film.beats).toBe(6);
+  // Click advance resolved to timed holds: the MP4 covers the whole film.
+  expect(last!.seconds).toBeCloseTo(film.seconds, 1);
+  expect(last!.frames).toBe(Math.round(last!.seconds * last!.fps));
+});

@@ -179,7 +179,8 @@ export type ShowPart =
   | 'captions'
   | 'transcript'
   | 'chapters'
-  | 'timeline';
+  | 'timeline'
+  | 'deck';
 
 export interface FigureStyle {
   readonly preset?: StylePreset;
@@ -236,6 +237,7 @@ const SHOW_DEFAULTS: Readonly<Record<ShowPart, boolean>> = {
   transcript: true,
   chapters: true,
   timeline: true,
+  deck: true,
 };
 
 /** Token names: lower-case words joined by hyphens. */

@@ -121,6 +121,48 @@ export function exportVideoFilename(filmId: string, version: number, insertId: s
   return name;
 }
 
+/**
+ * One deck slide's download filename: the sanitized film, version, insert
+ * and beat with a zero-padded slide number and a fixed suffix, following the
+ * video filename's conventions. The extension is fixed by the caller
+ * (.png), never interpolated. Over-long names shave the longest segment
+ * until the whole name fits EXPORT_FILENAME_MAX_CHARS; names already short
+ * stay byte-identical.
+ */
+export function exportSlideFilename(
+  filmId: string,
+  version: number,
+  insertId: string | null,
+  slideIndex: number,
+  slideCount: number,
+  beatId: string,
+  extension: 'png' = 'png',
+): string {
+  let film = sanitizeExportFilenameSegment(filmId);
+  const digits = Number.isSafeInteger(version) && (version as number) > 0 ? String(version as number) : '1';
+  const v = /^[0-9]+$/.test(digits) ? digits : '1';
+  let insert = insertId === null ? '' : sanitizeExportFilenameSegment(insertId);
+  let beat = sanitizeExportFilenameSegment(beatId);
+  const total = Number.isSafeInteger(slideCount) && (slideCount as number) > 0 ? (slideCount as number) : 1;
+  const at = Number.isSafeInteger(slideIndex) && (slideIndex as number) > 0 ? Math.min(slideIndex as number, total) : 1;
+  const slide = `slide-${String(at).padStart(Math.max(2, String(total).length), '0')}`;
+  const ext = extension === 'png' ? 'png' : 'png';
+  const build = (): string => `${film}-v${v}${insertId === null ? '' : `-${insert}`}-${slide}-${beat}.${ext}`;
+  let name = build();
+  while (name.length > EXPORT_FILENAME_MAX_CHARS) {
+    const sizes = [film.length, insertId === null ? 0 : insert.length, beat.length];
+    const longest = sizes.indexOf(Math.max(...sizes));
+    if ((sizes[longest] ?? 0) <= 1) {
+      return `${film}-v${v}${insertId === null ? '' : `-${insert}`}-${slide}-${beat}`.slice(0, EXPORT_FILENAME_MAX_CHARS - ext.length - 1) + `.${ext}`;
+    }
+    if (longest === 0) film = film.slice(0, -1);
+    else if (longest === 1) insert = insert.slice(0, -1);
+    else beat = beat.slice(0, -1);
+    name = build();
+  }
+  return name;
+}
+
 export class ExportError extends Error {
   constructor(message: string) {
     super(message);
@@ -291,7 +333,9 @@ export function planExportFilm(
     chunks.push({
       chunk: chunks.length,
       sceneId,
-      film: { id: film.id, title: film.title, version: film.version, scenes: [{ id: sceneId, title: sceneId, cut: 'cut', start: 0, seconds: runSeconds, beats }], beats, seconds: runSeconds, sourceMap: {} },
+      // Exports resolve click advance to timed holds: every beat plays its
+      // seconds, so a deck's MP4 plays the full deck.
+      film: { id: film.id, title: film.title, version: film.version, advance: 'time', scenes: [{ id: sceneId, title: sceneId, cut: 'cut', start: 0, seconds: runSeconds, beats }], beats, seconds: runSeconds, sourceMap: {} },
       start,
       seconds,
       frames,
@@ -366,6 +410,79 @@ export function* renderExportChunk(chunk: ExportPlanChunk, scene: ExportSceneInp
     }
   } finally {
     runtime.destroy();
+  }
+}
+
+/**
+ * One deck slide: a beat's opening frame within its chunk's render. The frame
+ * carries the same update the video export encodes there, so a slide still is
+ * the video frame the deck shows — the identity check's live comparison holds
+ * for slides at `time` exactly as it does for video frames.
+ */
+export interface DeckSlideRef {
+  readonly beat: string;
+  readonly sceneId: string;
+  /** Position in the timeline's play order, 0-based. */
+  readonly index: number;
+  readonly chunk: number;
+  /** The beat's first frame within the chunk's render. */
+  readonly frame: number;
+  /** Export-timeline seconds of that frame: the live comparison seeks here. */
+  readonly time: number;
+}
+
+export interface DeckSlide extends DeckSlideRef {
+  readonly caption: string;
+  readonly frameUpdate: ExportFrame;
+}
+
+/**
+ * Plans a deck's slides: one still per timeline beat, each pointing at the
+ * beat's first frame in its chunk's render. Frame 0 opens the chunk's first
+ * beat; every later beat first shows in the frame whose lattice time crosses
+ * its start — the same frame whose pixels the capture session would encode.
+ */
+export function planDeckSlides(plan: ExportPlan): DeckSlideRef[] {
+  const slides: DeckSlideRef[] = [];
+  let index = 0;
+  for (const chunk of plan.chunks) {
+    const stepsPerFrame = exportStepsPerFrame(chunk.fps);
+    if (stepsPerFrame === null) throw new ExportError(`The export runs at ${chunk.fps} frames per second, but export rates divide 60`);
+    const frameDur = stepsPerFrame * FILM_STEP_SECONDS;
+    for (const beat of chunk.film.beats) {
+      const frame = Math.min(chunk.frames - 1, Math.max(0, Math.ceil(beat.start / frameDur - 1e-9)));
+      slides.push({ beat: beat.id, sceneId: chunk.sceneId, index, chunk: chunk.chunk, frame, time: chunk.start + frame / chunk.fps });
+      index++;
+    }
+  }
+  return slides;
+}
+
+/**
+ * Renders a deck's slides through the offline renderer: each chunk renders
+ * once, in order, and every beat's opening frame is yielded as its still. The
+ * frames are the video export's own frames, so capturing a slide through the
+ * same session the video uses rasterizes the same pixels.
+ */
+export function* renderDeckSlides(plan: ExportPlan, scenes: readonly ExportSceneInput[], cancel: ExportCancellation, hooks: RenderExportHooks = {}): Generator<DeckSlide, void, void> {
+  const byScene = new Map(scenes.map((scene) => [scene.id, scene]));
+  const refs = planDeckSlides(plan);
+  const byChunk = new Map<number, Map<number, DeckSlideRef>>();
+  for (const ref of refs) {
+    const frames = byChunk.get(ref.chunk) ?? new Map<number, DeckSlideRef>();
+    frames.set(ref.frame, ref);
+    byChunk.set(ref.chunk, frames);
+  }
+  for (const chunk of plan.chunks) {
+    const scene = byScene.get(chunk.sceneId);
+    if (!scene) throw new ExportError(`Scene "${chunk.sceneId}" has no source to export`);
+    const wanted = byChunk.get(chunk.chunk) ?? new Map<number, DeckSlideRef>();
+    if (wanted.size === 0) continue;
+    for (const frame of renderExportChunk(chunk, scene, cancel, hooks)) {
+      const ref = wanted.get(frame.frame);
+      if (!ref) continue;
+      yield { ...ref, caption: frame.caption, frameUpdate: frame };
+    }
   }
 }
 

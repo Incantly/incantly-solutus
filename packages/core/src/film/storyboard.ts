@@ -121,8 +121,16 @@ export interface StoryboardScene {
   readonly durationShare?: number;
 }
 
+/**
+ * How a film's beats advance: on the audio clock (`time`), or on the
+ * learner's click (`click`). A deck is a film whose advance is click — the
+ * same format, beats, narration and questions, with click as the advance
+ * signal instead of the clock.
+ */
+export type FilmAdvance = 'time' | 'click';
+
 export interface StoryboardSpec {
-  readonly film: { readonly id?: string; readonly title: string; readonly version?: number; readonly lengthTarget?: number; readonly context?: FilmContext };
+  readonly film: { readonly id?: string; readonly title: string; readonly version?: number; readonly lengthTarget?: number; readonly context?: FilmContext; readonly advance?: FilmAdvance };
   readonly scenes: readonly StoryboardScene[];
 }
 
@@ -158,6 +166,8 @@ export interface CompiledFilm {
   readonly id: string;
   readonly title: string;
   readonly version: number;
+  /** How beats advance: the audio clock, or the learner's click for a deck. Default 'time'. */
+  readonly advance: FilmAdvance;
   readonly scenes: readonly CompiledScene[];
   readonly beats: readonly CompiledBeat[];
   readonly seconds: number;
@@ -340,6 +350,11 @@ export function compileFilm(spec: unknown, sources: readonly FilmSceneSource[]):
   }
   const filmId = typeof spec.film.id === 'string' && spec.film.id.trim() !== '' ? spec.film.id : 'film';
   const version = typeof spec.film.version === 'number' && Number.isInteger(spec.film.version) && spec.film.version > 0 ? spec.film.version : 1;
+  const rawAdvance = (spec.film as { advance?: unknown }).advance;
+  const advance: FilmAdvance = rawAdvance === undefined ? 'time' : rawAdvance === 'time' || rawAdvance === 'click' ? rawAdvance : 'time';
+  if (rawAdvance !== undefined && rawAdvance !== 'time' && rawAdvance !== 'click') {
+    error(`The film advances on "${excerpt(String(rawAdvance))}", which is not time or click`);
+  }
   const context = readFilmContext(spec.film);
   if ((spec.film as Record<string, unknown>).context !== undefined && context === null) {
     error('The film context must be { palette, parts, notation, units, tone }');
@@ -446,6 +461,7 @@ export function compileFilm(spec: unknown, sources: readonly FilmSceneSource[]):
     id: filmId,
     title: (spec.film as { title: string }).title,
     version,
+    advance,
     scenes: compiledScenes,
     beats: compiledBeats,
     seconds: compiledBeats.reduce((total, beat) => total + beat.seconds, 0),

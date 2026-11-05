@@ -13,8 +13,10 @@ import {
   createBrowserFallbackRig,
   ExportCancellation,
   ExportCancelledError,
+  ExportError,
   exportAvSyncBound,
   exportFrameSize,
+  exportSlideFilename,
   exportTimelineFallback,
   exportTimelineMp4,
   exportVideoFilename,
@@ -31,11 +33,13 @@ import {
   openBrowserCapture,
   openWebCodecsAudio,
   openWebCodecsVideo,
+  planDeckSlides,
   planExportFilm,
   PrivateInsertStore,
   probeExportCodecs,
   promoteInsertClip,
   reanchorAskAnchor,
+  renderExportChunk,
   renderLiveExportPixels,
   loadKitModules,
   mountTrusted,
@@ -94,7 +98,8 @@ import {
  * The film player: a silent fixture film through the real controller, player
  * and probe path. `?film=thirty|sixty` picks the film; `?preset=` and
  * `?theme=` style the figure as an integrator would; `?hide=` (comma
- * separated: captions, transcript, chapters, timeline) turns chrome off.
+ * separated: captions, transcript, chapters, timeline, deck) turns chrome
+ * off; `?deck=1` opens in deck mode, where beats hold until clicked.
  * A generic consumer: no scene-specific code.
  */
 export function mountPlayerPage(root: HTMLElement, params: URLSearchParams): void {
@@ -132,7 +137,7 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
   // the same resolveStyle/applyStyle helpers and dataset convention as figures.
   const player = document.createElement('div');
   player.className = 'inc-player';
-  applyStyle(player, resolveStyle({ ...(preset ? { preset } : {}), show: { captions: !hide.has('captions'), transcript: !hide.has('transcript'), chapters: !hide.has('chapters'), timeline: !hide.has('timeline') } }));
+  applyStyle(player, resolveStyle({ ...(preset ? { preset } : {}), show: { captions: !hide.has('captions'), transcript: !hide.has('transcript'), chapters: !hide.has('chapters'), timeline: !hide.has('timeline'), deck: !hide.has('deck') } }));
   root.append(player);
 
   const heading = document.createElement('h2');
@@ -223,6 +228,9 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
     transport: { send: (message) => figure.renderer.send(message), apply: (update) => figure.renderer.apply(update) },
   });
   const model = new PlayerModel(controller, film);
+  // Deck mode: a click-authored film, or ?deck=1 on any film. The toggle
+  // below flips it at any time, with no narration required.
+  if (params.get('deck') === '1' || film.advance === 'click') model.setAdvance('click');
 
   // The mixer follows the film's events: beats play their line, seeks and
   // pauses stop it. Sound stays off until the viewer turns it on.
@@ -321,6 +329,7 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
   const bookmarkUi = buildBookmarks(player, model);
   const transcript = buildTranscript(player, model);
   buildChapters(player, model);
+  const deckUi = buildDeck(player, model);
   let timeline = buildTimeline(player, model, film);
   const inspector = buildInspector(player);
   const badges = buildBadges(player);
@@ -518,12 +527,16 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
       return meanPixelDifference(kept, live);
     },
   };
+  // The slide export keeps the last run's filenames, for the page's own
+  // confirmation and the e2e suite: one still per beat, as a set.
+  const slideDebug: { last: string[] | null } = { last: null };
   buildExport(
     player,
     {
       inserts: () => askerStore.list(askerId, film.id),
       film: () => film,
     },
+    slideDebug,
     {
       pause: () => model.pause(),
       fragments: (sceneId) => {
@@ -671,6 +684,7 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
       timeline.sync(state.beat, state.time, film.seconds);
       inspector.show(model.selectedBeat, film);
       transport.syncTime(state.time, state.playing);
+      deckUi.sync();
       lastBeat = state.beat;
       lastPlaying = state.playing;
     }
@@ -724,6 +738,11 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
       return { url: last.url, width: last.width, height: last.height, fps: last.fps, frames: last.frames, seconds: last.seconds, codec: last.codec, hasAudio: last.hasAudio, fallback: last.fallback, speed: last.speed };
     },
     exportCompare: (frame: number) => exportDebug.compare(frame),
+    deck: () => {
+      const at = model.beatPosition();
+      return { advance: model.advance, beat: controller.currentBeat?.id ?? null, playing: controller.isPlaying, index: at?.index ?? null, total: at?.total ?? film.beats.length };
+    },
+    slideLast: () => (slideDebug.last ? [...slideDebug.last] : null),
   };
 
   const runChecks = async (): Promise<void> => {
@@ -867,6 +886,54 @@ function formatTime(seconds: number): string {
   const minutes = Math.floor(total / 60);
   const rest = total - minutes * 60;
   return `${minutes}:${rest < 10 ? '0' : ''}${rest.toFixed(1)}`;
+}
+
+/**
+ * Deck mode: the toggle, click-advance controls, and the current-beat
+ * indicator. FigureStyle-slotted through the `deck` show flag, like the
+ * other chrome. Narration stays on the transport's Sound toggle: a deck
+ * plays with it on or off, and speech never advances a click beat.
+ */
+function buildDeck(player: HTMLElement, model: PlayerModel): { sync(): void } {
+  const wrap = document.createElement('div');
+  wrap.className = 'inc-deck';
+  const toggle = document.createElement('button');
+  toggle.type = 'button';
+  toggle.className = 'inc-deck-toggle';
+  toggle.setAttribute('aria-label', 'Deck mode');
+  toggle.addEventListener('click', () => model.setAdvance(model.advance === 'click' ? 'time' : 'click'));
+  const prev = document.createElement('button');
+  prev.type = 'button';
+  prev.className = 'inc-deck-prev';
+  prev.textContent = '‹ Prev';
+  prev.setAttribute('aria-label', 'Previous beat');
+  prev.addEventListener('click', () => model.prevBeat());
+  const next = document.createElement('button');
+  next.type = 'button';
+  next.className = 'inc-deck-next';
+  next.textContent = 'Next ›';
+  next.setAttribute('aria-label', 'Next beat');
+  next.addEventListener('click', () => model.nextBeat());
+  const position = document.createElement('span');
+  position.className = 'inc-deck-position';
+  position.setAttribute('role', 'status');
+  const hint = document.createElement('p');
+  hint.className = 'inc-deck-hint';
+  hint.textContent = 'Deck: beats hold until you click Next (or press , and .). Sound toggles narration; Ask and Show me work the same.';
+  const sync = (): void => {
+    const deck = model.advance === 'click';
+    toggle.textContent = deck ? 'Deck: on' : 'Deck: off';
+    toggle.setAttribute('aria-pressed', deck ? 'true' : 'false');
+    const at = model.beatPosition();
+    position.textContent = at ? `${deck ? 'Slide' : 'Beat'} ${at.index + 1} of ${at.total}` : '—';
+  };
+  model.on((event) => {
+    if (event.type === 'chrome') sync();
+  });
+  wrap.append(toggle, prev, position, next, hint);
+  player.append(wrap);
+  sync();
+  return { sync };
 }
 
 function buildTransport(
@@ -1135,8 +1202,13 @@ interface ExportVideoSources {
   readonly debugFrames: boolean;
 }
 
-/** Export: flattened timelines and transcripts as data, and the film as offline MP4 video. */
-function buildExport(player: HTMLElement, sources: { film(): CompiledFilm; inserts(): readonly StoredInsert[] }, video: ExportVideoSources): void {
+/** Export: flattened timelines and transcripts as data, the film as offline MP4 video, and a deck as slide stills. */
+function buildExport(
+  player: HTMLElement,
+  sources: { film(): CompiledFilm; inserts(): readonly StoredInsert[] },
+  slides: { last: string[] | null },
+  video: ExportVideoSources,
+): void {
   const wrap = document.createElement('details');
   wrap.className = 'inc-export';
   const summary = document.createElement('summary');
@@ -1204,6 +1276,7 @@ function buildExport(player: HTMLElement, sources: { film(): CompiledFilm; inser
   insertRow.append(select, oneButton);
   wrap.append(summary, hint, row, insertRow);
   buildExportVideo(wrap, sources, select, video);
+  buildExportSlides(wrap, sources, select, video, slides);
   player.append(wrap);
 }
 
@@ -1441,6 +1514,210 @@ function buildExportVideo(
       cancel = null;
     }
   }
+}
+
+/**
+ * Slides: one still per timeline beat, captured through the same offscreen
+ * session the video export encodes with, so a slide is the video frame the
+ * deck shows. Every frame renders in order (captures are deltas); the beats'
+ * opening frames download as PNGs, one per beat, as a set.
+ */
+function buildExportSlides(
+  wrap: HTMLElement,
+  sources: { film(): CompiledFilm; inserts(): readonly StoredInsert[] },
+  insertSelect: HTMLSelectElement,
+  video: Pick<ExportVideoSources, 'pause' | 'fragments' | 'inputs' | 'kits' | 'stageSize'>,
+  slides: { last: string[] | null },
+): void {
+  const doc = wrap.ownerDocument;
+  const title = doc.createElement('h4');
+  title.className = 'inc-export-slides-title';
+  title.textContent = 'Slides';
+  const hint = doc.createElement('p');
+  hint.className = 'inc-export-hint';
+  hint.textContent = 'One still per beat, through the same capture the video export uses.';
+  const selection = doc.createElement('select');
+  selection.className = 'inc-export-slides-selection';
+  selection.setAttribute('aria-label', 'What to export as slides');
+  for (const [value, text] of [
+    ['film', 'Film'],
+    ['plus', 'Film + my inserts'],
+    ['insert', 'Single insert'],
+  ] as const) {
+    const option = doc.createElement('option');
+    option.value = value;
+    option.textContent = text;
+    selection.append(option);
+  }
+  const resolution = doc.createElement('select');
+  resolution.className = 'inc-export-slides-resolution';
+  resolution.setAttribute('aria-label', 'Slide height');
+  for (const height of [480, 720, 1080]) {
+    const option = doc.createElement('option');
+    option.value = String(height);
+    option.textContent = `${height}p`;
+    if (height === 720) option.selected = true;
+    resolution.append(option);
+  }
+  const go = doc.createElement('button');
+  go.type = 'button';
+  go.className = 'inc-export-slides-go';
+  go.textContent = 'Export slides';
+  const cancelButton = doc.createElement('button');
+  cancelButton.type = 'button';
+  cancelButton.className = 'inc-export-slides-cancel';
+  cancelButton.textContent = 'Cancel';
+  cancelButton.hidden = true;
+  const progress = doc.createElement('progress');
+  progress.className = 'inc-export-slides-progress';
+  progress.max = 100;
+  progress.value = 0;
+  progress.hidden = true;
+  const status = doc.createElement('p');
+  status.className = 'inc-export-slides-status';
+  status.setAttribute('role', 'status');
+  const controls = doc.createElement('div');
+  controls.className = 'inc-ask-row';
+  controls.append(selection, resolution, go, cancelButton);
+  wrap.append(title, hint, controls, progress, status);
+
+  let running = false;
+  let cancel: ExportCancellation | null = null;
+  cancelButton.addEventListener('click', () => cancel?.cancel());
+
+  const clipOf = (entry: StoredInsert): InsertClip => ({ id: entry.id, anchor: entry.anchor, lines: entry.lines, seconds: entry.seconds });
+
+  go.addEventListener('click', () => {
+    if (running) return;
+    void run();
+  });
+
+  async function run(): Promise<void> {
+    const film = sources.film();
+    let timeline: FlattenedTimeline;
+    let insertId: string | null;
+    if (selection.value === 'insert') {
+      const entry = sources.inserts().find((candidate) => candidate.id === insertSelect.value);
+      if (!entry) {
+        status.textContent = 'Pick one of your inserts above first.';
+        return;
+      }
+      timeline = flattenInsert(film, clipOf(entry));
+      insertId = entry.id;
+    } else if (selection.value === 'plus') {
+      timeline = flattenFilm(film, sources.inserts().map(clipOf));
+      insertId = 'with-inserts';
+    } else {
+      timeline = flattenFilm(film);
+      insertId = null;
+    }
+    const stage = video.stageSize();
+    if (!stage) {
+      status.textContent = 'The figure draws no stage to export.';
+      return;
+    }
+    let size: ExportFrameSize;
+    try {
+      size = exportFrameSize(stage.width, stage.height, Number(resolution.value));
+    } catch (error) {
+      status.textContent = error instanceof Error ? error.message : 'The export size is out of range.';
+      return;
+    }
+    const inputs = video.inputs();
+    const planned = planExportFilm(film, timeline, inputs, {});
+    if (!planned.ok) {
+      status.textContent = planned.problems.join('; ');
+      return;
+    }
+    const plan = planned.plan;
+    const refs = planDeckSlides(plan);
+    const byScene = new Map(inputs.map((scene) => [scene.id, scene]));
+    const wanted = new Map<number, Map<number, (typeof refs)[number]>>();
+    for (const ref of refs) {
+      const frames = wanted.get(ref.chunk) ?? new Map<number, (typeof refs)[number]>();
+      frames.set(ref.frame, ref);
+      wanted.set(ref.chunk, frames);
+    }
+    running = true;
+    go.disabled = true;
+    cancelButton.hidden = false;
+    progress.hidden = false;
+    progress.value = 0;
+    video.pause();
+    try {
+      await fontsReady();
+    } catch {
+      // Measuring falls back deterministically without loaded fonts.
+    }
+    cancel = new ExportCancellation();
+    const fragments = (sceneId: string): { html: string; css: string; js: string } => {
+      const found = video.fragments(sceneId);
+      if (!found) throw new Error(`Scene "${sceneId}" has no source to export`);
+      return found;
+    };
+    const names: string[] = [];
+    try {
+      let done = 0;
+      for (const chunk of plan.chunks) {
+        cancel.throwIfCancelled();
+        const scene = byScene.get(chunk.sceneId);
+        if (!scene) throw new ExportError(`Scene "${chunk.sceneId}" has no source to export`);
+        const session = await openBrowserCapture(chunk, { document: doc, fragments, kits: video.kits(), size });
+        try {
+          for (const frame of renderExportChunk(chunk, scene, cancel)) {
+            const image = await session.capture(frame, frame.frame === 0);
+            const ref = wanted.get(chunk.chunk)?.get(frame.frame);
+            if (!ref) continue;
+            cancel.throwIfCancelled();
+            done++;
+            progress.value = refs.length === 0 ? 0 : Math.round((100 * done) / refs.length);
+            status.textContent = `Slide ${done} of ${refs.length}…`;
+            const name = exportSlideFilename(film.id, film.version, insertId, ref.index + 1, refs.length, ref.beat);
+            names.push(name);
+            await downloadCanvas(image as HTMLCanvasElement, name);
+          }
+        } finally {
+          session.destroy();
+        }
+      }
+      slides.last = names;
+      status.textContent = `Done · ${names.length} slide${names.length === 1 ? '' : 's'}`;
+    } catch (error) {
+      if (error instanceof ExportCancelledError || cancel?.cancelled) status.textContent = 'Cancelled.';
+      else status.textContent = `The export failed: ${error instanceof Error ? error.message : 'unknown error'}`;
+    } finally {
+      running = false;
+      go.disabled = false;
+      cancelButton.hidden = true;
+      progress.hidden = true;
+      cancel = null;
+    }
+  }
+}
+
+/** Downloads a canvas as a PNG through a blob link; the click is the gesture the browser needs. */
+function downloadCanvas(canvas: HTMLCanvasElement, name: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      try {
+        if (!blob) {
+          reject(new Error('The slide did not rasterize.'));
+          return;
+        }
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = name;
+        document.body.append(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        resolve();
+      } catch (error) {
+        reject(error instanceof Error ? error : new Error('The slide did not download.'));
+      }
+    }, 'image/png');
+  });
 }
 
 /** Downloads text through a blob link; the click is the gesture the browser needs. */
