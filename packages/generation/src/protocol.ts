@@ -132,3 +132,72 @@ export interface GalleryFigure extends GalleryCard {
   readonly fragments: SceneFragmentsMessage;
   readonly ticket?: string;
 }
+
+/** Where a question was asked: the film, its version, the scene, the beat and the word. */
+export interface AskAnchorMessage {
+  readonly film: string;
+  readonly version: number;
+  readonly scene: string;
+  readonly beat: string;
+  readonly wordIndex: number;
+}
+
+/**
+ * A tap-to-ask question with everything its Answer is assembled from: the
+ * anchor, the line being spoken and its neighbours, scene lines from the
+ * source map, the scene's state, and the thread so far. Sent to the model
+ * and never stored.
+ */
+export interface AskRequest {
+  readonly question: string;
+  readonly anchor: AskAnchorMessage;
+  readonly beat: { readonly beat: string; readonly say: string };
+  readonly neighbours?: ReadonlyArray<{ readonly beat: string; readonly say: string }>;
+  readonly sceneLines?: ReadonlyArray<{ readonly n: number; readonly text: string }>;
+  readonly sceneSummary?: string;
+  readonly values?: Readonly<Record<string, number>>;
+  readonly readouts?: ReadonlyArray<{ readonly label: string; readonly text: string }>;
+  readonly thread?: ReadonlyArray<{ readonly q: string; readonly a: string }>;
+  readonly noteContext?: string;
+}
+
+/** Events of POST /v1/ask, in order: accepted, delta..., then done or error. */
+export type AskEvent =
+  | { readonly type: 'accepted'; readonly askId: string }
+  | { readonly type: 'delta'; readonly text: string }
+  | { readonly type: 'done'; readonly text: string; readonly model: string; readonly ms: number; readonly firstChunkMs: number }
+  | { readonly type: 'error'; readonly code: string; readonly message: string };
+
+/** An Explain-deeper question: an ask request plus the scene's control names, the only set keys the insert may use. */
+export interface AskInsertRequest extends AskRequest {
+  readonly params: readonly string[];
+}
+
+export interface AskInsertLine {
+  readonly say: string;
+  readonly seconds: number;
+  readonly starts: readonly number[];
+  readonly set?: Readonly<Record<string, number>>;
+}
+
+/** The answer to an insert request: the clip to play pinned to its anchor, or why there is none. */
+export type AskInsertResponse =
+  | { readonly status: 'clip'; readonly clip: { readonly anchor: AskAnchorMessage; readonly lines: readonly AskInsertLine[]; readonly seconds: number } }
+  | { readonly status: 'failed'; readonly reason: 'model' | 'invalid' | 'limit' | 'off' };
+
+/** An answer the asker opts to hear: at most 2000 characters, spoken through the narration pipeline. */
+export interface AskSpeakRequest {
+  readonly text: string;
+  readonly voice?: string;
+}
+
+/** The answer to a speak request: its timing and audio, or silence with timings when speech degraded. */
+export interface AskSpeakResponse {
+  readonly seconds: number;
+  readonly starts: readonly number[];
+  readonly audioHash: string | null;
+  readonly audioBase64: string | null;
+  readonly sampleRate: number;
+  readonly estimated: boolean;
+  readonly error?: string;
+}

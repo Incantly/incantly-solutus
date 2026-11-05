@@ -1,5 +1,7 @@
+import { randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { SDK_VERSION, kitsFor, validateScene, type ProbeCheck, type ProbeFailure, type ProbeReport, type ScenePlan } from '@incantly/core';
+import { ASK_LIMITS, generateInsert, sanitizeAnswerAssembly, sanitizeInsertAssembly, speakAnswer, streamAnswer } from './ask';
 import type { Authenticator, Learner } from './auth';
 import { ConceptCache, planKey, requestKey } from './cache';
 import { REQUEST_LIMITS, type LearnerRequest } from './context';
@@ -7,7 +9,9 @@ import { DEFAULT_LIMITS, LimitKeeper, type Limits, type Refusal } from './limits
 import type { ModelClient } from './models';
 import { Generator, standardFigure, type GenerationState } from './pipeline';
 import { probeSpecFor } from './probe';
-import type { ChangeResponse, FallbackMessage, GalleryReceipt, RepairResponse, SceneMessage, Skeleton } from './protocol';
+import { speechRefusalHttp } from './narration';
+import type { AskInsertResponse, AskSpeakResponse, ChangeResponse, FallbackMessage, GalleryReceipt, RepairResponse, SceneMessage, Skeleton } from './protocol';
+import type { Narrator } from './tts';
 import { galleryCard, galleryFigure, galleryId, isListed, submitterOf, type GalleryStore } from './gallery';
 import { failureRecord, type RecordSink } from './records';
 import { issueTicket, readTicket } from './ticket';
@@ -28,6 +32,9 @@ import { issueTicket, readTicket } from './ticket';
  *   POST /v1/gallery                  { ticket, fragments, prompt, title? } -> { id, status }: published for review (GL-1)
  *   GET  /v1/gallery                  -> { figures }: the accepted figures, newest first
  *   GET  /v1/gallery/:id              -> one accepted figure with its fragments and a fresh ticket
+ *   POST /v1/ask                      { question, anchor, beat, ... } -> event stream of the Answer
+ *   POST /v1/ask/insert               { question, anchor, beat, params, ... } -> the insert clip, or failed
+ *   POST /v1/ask/speak                { text, voice? } -> the answer spoken, when the asker opts in
  */
 
 export interface ServiceOptions {
@@ -62,6 +69,8 @@ export interface ServiceOptions {
   readonly gallery?: GalleryStore | null;
   /** Figures one learner may have waiting for review at once. Default 20. */
   readonly galleryPendingLimit?: number;
+  /** Who speaks opted-in answers; the stub by default, so speech is silent until configured. */
+  readonly narrator?: Narrator;
   readonly now?: () => number;
 }
 
@@ -72,6 +81,7 @@ export const RETENTION = {
   records: 'Generation records keep the plan, the fragments, the check reports and the outcome, never the request or note text, and are deleted after the stated number of days.',
   sessions: 'A generation waiting for its device probe is kept in memory for the stated number of minutes.',
   gallery: 'A figure a learner publishes to the gallery is kept with the request they publish it with, its title, plan and fragments, and a one-way hash of the learner, until a reviewer removes it; only accepted figures are shown to others, without the hash.',
+  ask: 'A question asked of a film, with its anchor, scene lines, values and thread, is sent to the model provider for the answering call and is never logged, stored or recorded by this service; opted-in speech is narrated and returned, never kept.',
 } as const;
 
 interface Session {
@@ -245,6 +255,9 @@ export class GenerationService {
       if (req.method === 'GET' && path === `${this.prefix}/gallery`) return await this.galleryList(req, res);
       const listed = new RegExp(`^${this.prefix}/gallery/([\\w-]{8,40})$`).exec(path);
       if (req.method === 'GET' && listed) return await this.galleryEntry(req, res, listed[1]!);
+      if (req.method === 'POST' && path === `${this.prefix}/ask`) return await this.answer(req, res);
+      if (req.method === 'POST' && path === `${this.prefix}/ask/insert`) return await this.insert(req, res);
+      if (req.method === 'POST' && path === `${this.prefix}/ask/speak`) return await this.speak(req, res);
       throw new HttpError(404, 'not-found', 'No such endpoint');
     } catch (error) {
       if (res.headersSent) {
@@ -681,6 +694,127 @@ export class GenerationService {
     const entry = await store.get(id);
     if (!entry || !isListed(entry)) throw new HttpError(404, 'not-found', 'No such figure in the gallery');
     this.json(res, 200, galleryFigure(entry, issueTicket(secret, entry.plan, entry.fragments)));
+  }
+
+  /**
+   * A learner asks a paused film a question. The Answer streams on the small
+   * model path: accepted, delta..., then done with the whole text and its
+   * first-words timing. The question is sent to the model and never logged,
+   * stored or recorded.
+   */
+  private async answer(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const learner = this.learner(req);
+    if (!this.enabled) throw new HttpError(503, 'generation-off', 'Answering questions is switched off for now');
+    const assembly = sanitizeAnswerAssembly(await this.body(req, 32_768));
+    if (!assembly.ok) throw new HttpError(400, 'invalid-request', assembly.problems.join('; '));
+    const admitted = this.limits.admit(learner.id);
+    if (!admitted.ok) this.refuse(admitted.refusal);
+
+    res.writeHead(200, {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-store',
+      'x-content-type-options': 'nosniff',
+      'x-accel-buffering': 'no',
+    });
+    const open = () => !res.writableEnded && !res.destroyed;
+    const send = (event: string, data: unknown) => {
+      if (open()) res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    };
+    const askId = randomUUID();
+    send('accepted', { askId });
+    const cancel = new AbortController();
+    res.on('close', () => cancel.abort());
+    const timeout = AbortSignal.timeout(this.options.generationTimeoutMs ?? 45_000);
+    try {
+      const reply = await streamAnswer(this.options.model, assembly.assembly, {
+        onText: (text) => send('delta', { text }),
+        signal: AbortSignal.any([cancel.signal, timeout]),
+      });
+      this.limits.spend(learner.id, reply.usd);
+      send('done', { text: reply.text, model: reply.model, ms: reply.ms, firstChunkMs: reply.firstChunkMs });
+    } catch (error) {
+      send('error', { code: 'model', message: error instanceof Error ? error.message : 'The model failed' });
+    } finally {
+      admitted.release();
+      if (open()) res.end();
+    }
+  }
+
+  /**
+   * A learner asks for an Explain-deeper clip. The scene pipeline writes it,
+   * it is validated line by line, and the clip goes back pinned to its
+   * anchor for the player to time and play. Failures leave the film playing
+   * on: the player asks nothing more.
+   */
+  private async insert(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const learner = this.learner(req);
+    if (!this.enabled) {
+      this.json(res, 200, { status: 'failed', reason: 'off' } satisfies AskInsertResponse);
+      return;
+    }
+    const assembly = sanitizeInsertAssembly(await this.body(req, 32_768));
+    if (!assembly.ok) throw new HttpError(400, 'invalid-request', assembly.problems.join('; '));
+    const admitted = this.limits.admit(learner.id);
+    if (!admitted.ok) this.refuse(admitted.refusal);
+    if (this.limits.checkSpend(learner.id)) {
+      admitted.release();
+      this.json(res, 200, { status: 'failed', reason: 'limit' } satisfies AskInsertResponse);
+      return;
+    }
+
+    const timeout = AbortSignal.timeout(this.options.generationTimeoutMs ?? 45_000);
+    try {
+      const generated = await generateInsert(this.options.model, assembly.assembly, { signal: timeout });
+      if (!generated.ok) {
+        this.json(res, 200, { status: 'failed', reason: 'invalid' } satisfies AskInsertResponse);
+        return;
+      }
+      this.limits.spend(learner.id, generated.insert.usd);
+      this.json(res, 200, { status: 'clip', clip: { anchor: generated.insert.anchor, lines: generated.insert.lines, seconds: generated.insert.seconds } } satisfies AskInsertResponse);
+    } catch {
+      this.json(res, 200, { status: 'failed', reason: 'model' } satisfies AskInsertResponse);
+    } finally {
+      admitted.release();
+    }
+  }
+
+  /**
+   * A learner opts an answer in to speech: one line through the narration
+   * pipeline, with its speech caps, silent by default. Speech is narrated
+   * and returned, never kept.
+   */
+  private async speak(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const learner = this.learner(req);
+    const body = (await this.body(req, 16_384)) as { text?: unknown; voice?: unknown };
+    if (typeof body.text !== 'string' || body.text.trim() === '' || body.text.length > ASK_LIMITS.speakChars) {
+      throw new HttpError(400, 'invalid-request', `text must be a non-empty string of at most ${ASK_LIMITS.speakChars} characters`);
+    }
+    if (body.voice !== undefined && (typeof body.voice !== 'string' || body.voice.length > 200)) {
+      throw new HttpError(400, 'invalid-request', 'voice must be a string');
+    }
+    const timeout = AbortSignal.timeout(this.options.generationTimeoutMs ?? 45_000);
+    const spoken = await speakAnswer(body.text, {
+      ...(this.options.narrator ? { narrator: this.options.narrator } : {}),
+      learnerId: learner.id,
+      limits: this.limits,
+      ...(typeof body.voice === 'string' && body.voice !== '' ? { voice: body.voice } : {}),
+      signal: timeout,
+    });
+    if (!spoken.ok) {
+      const refusal = speechRefusalHttp(spoken.refused);
+      this.json(res, refusal.status, refusal.body, { ...refusal.headers });
+      return;
+    }
+    const beat = spoken.spoken.beat;
+    this.json(res, 200, {
+      seconds: beat.seconds,
+      starts: beat.starts,
+      audioHash: beat.audioHash,
+      audioBase64: spoken.spoken.audioBase64,
+      sampleRate: beat.sampleRate,
+      estimated: beat.estimated,
+      ...(beat.error ? { error: beat.error } : {}),
+    } satisfies AskSpeakResponse);
   }
 
   /** Records and forgets generations whose device never reported. */

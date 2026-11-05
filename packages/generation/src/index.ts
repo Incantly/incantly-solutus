@@ -38,7 +38,39 @@ export { DEFAULT_LIMITS, LimitKeeper } from './limits';
 export type { Limits, Refusal } from './limits';
 export { GenerationService, RETENTION, createService, sanitizeDeviceReport, skeletonOf } from './service';
 export type { ServiceOptions } from './service';
-export type { FallbackMessage, FallbackReason, ProbeResponse, ProbeResult, RepairRequest, RepairResponse, SceneMessage, ServiceEvent, Skeleton } from './protocol';
+export type {
+  AskAnchorMessage,
+  AskEvent,
+  AskInsertLine,
+  AskInsertRequest,
+  AskInsertResponse,
+  AskRequest,
+  AskSpeakRequest,
+  AskSpeakResponse,
+  FallbackMessage,
+  FallbackReason,
+  ProbeResponse,
+  ProbeResult,
+  RepairRequest,
+  RepairResponse,
+  SceneMessage,
+  ServiceEvent,
+  Skeleton,
+} from './protocol';
+export {
+  ANSWER_FORMAT,
+  ASK_LIMITS,
+  INSERT_FORMAT,
+  answerPrompt,
+  generateInsert,
+  insertPrompt,
+  parseInsertReply,
+  sanitizeAnswerAssembly,
+  sanitizeInsertAssembly,
+  speakAnswer,
+  streamAnswer,
+} from './ask';
+export type { AnswerAssembly, AnswerBeatLine, AnswerReadout, AnswerReply, AnswerSceneLine, AnswerThreadTurn, AskAnchorJson, GeneratedInsert, GeneratedInsertLine, InsertAssembly, SpokenAnswer } from './ask';
 export { MAX_TICKET_LENGTH, issueTicket, readTicket } from './ticket';
 export { FileGalleryStore, MemoryGalleryStore, galleryCard, galleryFigure, galleryId, isListed, matchFor, promote, promotionProblem, sceneFiles, sceneSlug, submitterOf } from './gallery';
 export type { GalleryEntry, GalleryStore } from './gallery';
