@@ -258,4 +258,27 @@ describe('trusted mount and renderer', () => {
     clock.advance();
     expect(figure.renderer.stats.ticksSent).toBe(1);
   });
+
+  it('isolates a generated scene in a shadow root so its CSS cannot reach the host', () => {
+    const { figure, container } = mount({ isolate: true, figureId: 'iso' }, { ...SCENE, css: 'div { visibility: hidden; }' });
+    const host = container.firstElementChild as HTMLElement;
+    expect(host.shadowRoot).not.toBeNull();
+    // No scene markup or CSS in the light DOM: the host page keeps its own styles.
+    expect(container.querySelector('.inc-scene')).toBeNull();
+    expect(container.querySelector('style')).toBeNull();
+    expect(host.shadowRoot!.querySelector('.inc-scene')).not.toBeNull();
+    expect(host.shadowRoot!.querySelector('style[data-incantly-theme]')).not.toBeNull();
+    // The figure itself still mounts and draws through its own root.
+    expect(figure.runtime.isMounted).toBe(true);
+    expect(figure.root.querySelector('.inc-scene')).not.toBeNull();
+    figure.destroy();
+    mounted.pop();
+    expect(container.firstElementChild).toBeNull();
+  });
+
+  it('mounts trusted fixtures directly in the page by default', () => {
+    const { container } = mount({ figureId: 'plain' });
+    expect(container.querySelector('.inc-scene')).not.toBeNull();
+    expect((container.firstElementChild as HTMLElement).shadowRoot).toBeNull();
+  });
 });

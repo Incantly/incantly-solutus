@@ -1,4 +1,4 @@
-import type { Ease } from '../api/types';
+import type { Ease, Waveform } from '../api/types';
 import type { SceneCommand } from './scene-commands';
 import type { UiState } from './ui';
 
@@ -34,6 +34,16 @@ export type RendererMessage =
   | { readonly type: 'reducedMotion'; readonly value: boolean }
   | { readonly type: 'step'; readonly action: 'enter' | 'next' | 'prev' | 'exit' | 'goto'; readonly index?: number }
   | { readonly type: 'focusPart'; readonly name: string | null }
+  /** Films only: a beat's show and hide lists, and its marks, as absolute part visibility. */
+  | { readonly type: 'partVisible'; readonly name: string; readonly visible: boolean }
+  /** Films only: one note of a beat's named sfx cue, as the cue resolves it. */
+  | { readonly type: 'note'; readonly wave: Waveform; readonly frequency: number; readonly duration: number; readonly gain: number }
+  /**
+   * Films only: a beat's camera. Frames the part on kit-owned stages, back to
+   * the wide view first so the move is absolute; null returns every kit-owned
+   * stage to the wide view, as beats without a camera do.
+   */
+  | { readonly type: 'framePart'; readonly part: string | null; readonly zoom: number }
   /** The learner drags an element: the pointer, or a keyboard nudge, in stage coordinates. */
   | { readonly type: 'drag'; readonly id: number; readonly phase: 'start' | 'move' | 'end'; readonly x: number; readonly y: number }
   /** The pointer moves over a stage that listens for hovering, or leaves it (null). */

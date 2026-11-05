@@ -1,4 +1,4 @@
-import type { ViewBox } from '../api/types';
+import type { Beat, ViewBox } from '../api/types';
 import type { ParamView, UiState } from '../protocol/ui';
 import { mulberry32 } from '../runtime/random';
 import { SceneRuntime, type RuntimeOptions, type SceneErrorRecord, type SceneFunction } from '../runtime/runtime';
@@ -90,12 +90,39 @@ export interface ProbeStats {
   readonly durationMs: number;
 }
 
+/** One scene parameter as mounted: its name, default and range. */
+export interface ProbedParam {
+  readonly name: string;
+  readonly value: number;
+  readonly min: number;
+  readonly max: number;
+  readonly step: number;
+}
+
+/**
+ * What a film needs of a scene without running it: its teaching steps, its
+ * parameters, which parts start hidden, and its first stage's size. Captured
+ * at mount, before the probe's own ticks move anything. Data only, so it
+ * crosses the Worker boundary; the host validates it again before use.
+ */
+export interface ProbedSnapshot {
+  readonly steps: readonly Beat[];
+  readonly params: readonly ProbedParam[];
+  /** Every part registered at mount. */
+  readonly parts: readonly string[];
+  /** The parts that start hidden; a subset of parts. */
+  readonly hidden: readonly string[];
+  readonly stage: { readonly width: number; readonly height: number } | null;
+}
+
 export interface ProbeReport {
   readonly ok: boolean;
   readonly failures: readonly ProbeFailure[];
   readonly stats: ProbeStats;
   /** What passed but is close to failing, such as a drawing near its element budget (SV-12). */
   readonly warnings?: readonly string[];
+  /** The scene as mounted, for films that play it without trusting its script. Absent when the mount failed. */
+  readonly snapshot?: ProbedSnapshot;
 }
 
 /** Share of the element budget above which the probe warns (SV-12). */
@@ -124,6 +151,7 @@ class Probe {
   private elements = 0;
   private params: readonly ParamView[] = [];
   private defaults: Record<string, number> = {};
+  private snapshot: ProbedSnapshot | null = null;
 
   constructor(
     private readonly scene: SceneFunction,
@@ -150,6 +178,7 @@ class Probe {
       ok: this.failures.length === 0,
       failures: this.failures,
       ...(this.warnings.length > 0 ? { warnings: this.warnings } : {}),
+      ...(this.snapshot ? { snapshot: this.snapshot } : {}),
       stats: {
         configurations: this.configurations,
         frames: this.frames,
@@ -250,6 +279,8 @@ class Probe {
     }
     this.params = ui.params;
     this.defaults = Object.fromEntries(ui.params.map((p) => [p.name, p.defaultValue]));
+    // The scene as mounted, before the probe's own ticks move anything.
+    this.snapshot = snapshotScene(runtime, ui);
 
     const frames = this.options.frames ?? 60;
     let threw = false;
@@ -528,6 +559,32 @@ function unique(values: number[]): number[] {
 function round(value: number, digits = 3): number {
   const k = 10 ** digits;
   return Math.round(value * k) / k;
+}
+
+/**
+ * The scene as mounted: its steps, parameters, hidden parts and stage size.
+ * Plain data only: a JSON round trip drops functions (a prediction's answer),
+ * prototypes and cycles, so whatever the scene registered, the snapshot
+ * crosses the Worker boundary. Null when the scene has no steps, or when
+ * anything about it refuses to serialize.
+ */
+function snapshotScene(runtime: SceneRuntime, ui: UiState): ProbedSnapshot | null {
+  try {
+    const steps = runtime.beats();
+    if (!steps) return null;
+    const box = runtime.graph.stages[0]?.viewBox;
+    const raw = {
+      steps,
+      params: ui.params.map((p) => ({ name: p.name, value: p.value, min: p.min, max: p.max, step: p.step })),
+      parts: [...runtime.parts.parts.keys()],
+      hidden: [...runtime.parts.parts.values()].filter((record) => record.node.hidden).map((record) => record.name),
+      stage:
+        box && Number.isFinite(box[2]) && Number.isFinite(box[3]) && box[2] > 0 && box[3] > 0 ? { width: box[2], height: box[3] } : null,
+    };
+    return JSON.parse(JSON.stringify(raw)) as ProbedSnapshot;
+  } catch {
+    return null;
+  }
 }
 
 /** The first non-finite number among a model's outputs, depth-limited. */

@@ -14,6 +14,8 @@ export interface Fragments {
 export interface TrustedMountOptions extends RuntimeOptions {
   readonly theme?: 'light' | 'dark' | 'auto';
   readonly clock?: FrameClock;
+  /** Scopes the figure's DOM and CSS in a shadow root, so generated scenes a validator passed cannot restyle the host page. */
+  readonly isolate?: boolean;
   readonly figureId?: string;
   readonly visibility?: RendererOptions['visibility'];
   readonly style?: FigureStyle;
@@ -94,7 +96,21 @@ export function mountTrusted(container: HTMLElement, fragments: Fragments, optio
   template.innerHTML = fragments.html;
   scene.append(template.content);
   root.append(scene);
-  container.append(root);
+  // Isolated figures live in a shadow root with their own theme copy: their
+  // markup and CSS cannot reach the host page, and the page's cannot reach in.
+  let shadowHost: HTMLElement | null = null;
+  if (options.isolate) {
+    shadowHost = doc.createElement('div');
+    shadowHost.dataset.figureId = scope;
+    container.append(shadowHost);
+    const shadow = shadowHost.attachShadow({ mode: 'open' });
+    const theme = doc.createElement('style');
+    theme.dataset.incantlyTheme = '';
+    theme.textContent = THEME_CSS;
+    shadow.append(theme, root);
+  } else {
+    container.append(root);
+  }
 
   const runtime = new SceneRuntime({
     ...options,
@@ -132,6 +148,7 @@ export function mountTrusted(container: HTMLElement, fragments: Fragments, optio
     destroy() {
       renderer.destroy();
       root.remove();
+      shadowHost?.remove();
     },
   };
 }

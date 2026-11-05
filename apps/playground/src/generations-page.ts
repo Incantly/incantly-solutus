@@ -1,5 +1,7 @@
-import { sandboxAdapter, type FigureHandle, type FigureStyle } from '@incantly/core';
+import { FILM_LENGTH_PRESETS, sandboxAdapter, type FigureHandle, type FigureStyle } from '@incantly/core';
 import { referenceScene, referenceSceneIds } from '@incantly/core/scenes';
+import { formatFilmTimings, GenerationClient, type FilmGenerateEvent } from '@incantly/generation/client';
+import { recordDebug, recordingFetch } from './debug-log';
 import { keptFigures, savedFigureFor, type SavedFigure } from './saved-chats';
 
 /** The gallery: every generation the agent can make, as searchable boxes. */
@@ -69,7 +71,7 @@ function reviewedCards(): GalleryCard[] {
   });
 }
 
-export function mountGenerationsPage(root: HTMLElement): void {
+export function mountGenerationsPage(root: HTMLElement, params: URLSearchParams = new URLSearchParams()): void {
   root.className = 'gallery-page';
 
   const header = document.createElement('header');
@@ -94,6 +96,9 @@ export function mountGenerationsPage(root: HTMLElement): void {
   search.placeholder = 'Search generations…';
   search.setAttribute('aria-label', 'Search generations');
   header.append(backBtn, heading, search);
+
+  const filmBox = buildFilmGenerateBox(params);
+  root.append(header, filmBox.element);
 
   const grid = document.createElement('section');
   grid.className = 'gallery-grid';
@@ -277,14 +282,284 @@ export function mountGenerationsPage(root: HTMLElement): void {
   empty.hidden = true;
   empty.textContent = 'Nothing matches that search.';
 
-  root.append(header, grid, empty, overlay, detail);
+  root.append(grid, empty, overlay, detail);
+  // Film cards link to the generate-film box instead of duplicating it: a
+  // secondary action prefills the box with the card's prompt.
+  const generateLink = document.createElement('button');
+  generateLink.type = 'button';
+  generateLink.className = 'gallery-detail__film-generate';
+  generateLink.textContent = 'Generate a film like this';
+  generateLink.hidden = true;
+  detail.append(generateLink);
+  generateLink.addEventListener('click', () => {
+    const prompt = detail.dataset.prompt ?? '';
+    closeDetail();
+    filmBox.prefill(prompt);
+    filmBox.element.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  });
+  const showGenerateLink = (): void => {
+    generateLink.hidden = !detail.dataset.film;
+  };
+  const observer = new MutationObserver(showGenerateLink);
+  observer.observe(detail, { attributes: true, attributeFilter: ['data-film'] });
+  showGenerateLink();
   window.__playground = {
     ready: true,
     page: 'generations',
     cards: catalog.map((card) => ({ title: card.title, tag: card.tag, prompt: card.prompt, sceneId: card.sceneId ?? null, playerFilm: card.playerFilm ?? null })),
+    filmGenerate: filmBox.state,
   };
   window.addEventListener('pagehide', () => {
     preview?.destroy();
     for (const handle of previews) handle.destroy();
+    filmBox.dispose();
+    observer.disconnect();
   }, { once: true });
+}
+
+interface FilmBoxState {
+  status: 'idle' | 'generating' | 'done' | 'fallback';
+  prompt: string;
+  lengthTarget: number;
+  skeleton: { lengthTarget: number; scenes: number } | null;
+  scenes: string[];
+  firstSceneMs: number | null;
+  timings: string | null;
+  reason: string | null;
+  filmId: string | null;
+}
+
+/** The generate-film prompt box: prompt text, length preset and Generate, streaming progress like figures. */
+function buildFilmGenerateBox(params: URLSearchParams): { element: HTMLElement; state: () => FilmBoxState; prefill(prompt: string): void; dispose(): void } {
+  const state: FilmBoxState = { status: 'idle', prompt: '', lengthTarget: 60, skeleton: null, scenes: [], firstSceneMs: null, timings: null, reason: null, filmId: null };
+  const section = document.createElement('section');
+  section.className = 'film-generate';
+  section.id = 'film-generate';
+  section.setAttribute('aria-label', 'Generate a film');
+  const heading = document.createElement('h2');
+  heading.className = 'film-generate__heading';
+  heading.textContent = 'Generate a film';
+  const sub = document.createElement('p');
+  sub.className = 'film-generate__sub';
+  sub.textContent = 'Type a prompt, pick a length, and play the film in the player.';
+  const promptLabel = document.createElement('label');
+  promptLabel.className = 'film-generate__label';
+  promptLabel.textContent = 'Film prompt';
+  const promptInput = document.createElement('textarea');
+  promptInput.className = 'film-generate__prompt';
+  promptInput.rows = 2;
+  promptInput.placeholder = 'Show me a 30-second film about how a pendulum keeps time.';
+  promptInput.setAttribute('aria-label', 'Film prompt');
+  promptLabel.append(promptInput);
+  const lengthLabel = document.createElement('label');
+  lengthLabel.className = 'film-generate__label';
+  lengthLabel.textContent = 'Length';
+  const lengthSelect = document.createElement('select');
+  lengthSelect.className = 'film-generate__length';
+  lengthSelect.setAttribute('aria-label', 'Length');
+  for (const seconds of FILM_LENGTH_PRESETS) {
+    const option = document.createElement('option');
+    option.value = String(seconds);
+    option.textContent = seconds >= 60 ? `${Math.round(seconds / 60)} min` : `${seconds} s`;
+    if (seconds === 60) option.selected = true;
+    lengthSelect.append(option);
+  }
+  lengthLabel.append(lengthSelect);
+  const generateBtn = document.createElement('button');
+  generateBtn.type = 'button';
+  generateBtn.className = 'film-generate__generate';
+  generateBtn.textContent = 'Generate film';
+  const progress = document.createElement('div');
+  progress.className = 'film-generate__progress';
+  progress.setAttribute('aria-live', 'polite');
+  const previewsBox = document.createElement('div');
+  previewsBox.className = 'film-generate__previews';
+  const previewHandles: FigureHandle[] = [];
+  section.append(heading, sub, promptLabel, lengthLabel, generateBtn, progress, previewsBox);
+
+  let sessionId: string | null = null;
+  let token: string | null = null;
+  let aborted = false;
+  const fetcher = recordingFetch();
+
+  const setProgress = (text: string): void => {
+    progress.textContent = text;
+  };
+
+  const clientFor = async (): Promise<GenerationClient> => {
+    const fault = params.get('fault');
+    if (params.get('reference') === '1') {
+      return new GenerationClient({ baseUrl: '/api/v1', token: async () => (token ??= ((await (await fetch('/api/dev/token')).json()) as { token: string }).token), fetch: fetcher });
+    }
+    if (fault && /^[a-z-]+$/.test(fault)) {
+      return new GenerationClient({ baseUrl: `/api/fault/${fault}/v1`, token: async () => (token ??= ((await (await fetch('/api/dev/token')).json()) as { token: string }).token), fetch: fetcher });
+    }
+    if (!sessionId) {
+      let saved: { provider?: string; planModel?: string; sceneModel?: string } | null;
+      try {
+        saved = JSON.parse(localStorage.getItem('incantly-playground-models') ?? 'null') as { provider?: string; planModel?: string; sceneModel?: string } | null;
+      } catch {
+        saved = null;
+      }
+      const answer = await fetch('/api/dev/session', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          provider: saved?.provider ?? 'anthropic',
+          planModel: saved?.planModel ?? 'claude-haiku-5-5',
+          sceneModel: saved?.sceneModel ?? 'claude-sonnet-5-5',
+        }),
+      });
+      const body = (await answer.json()) as { id?: string; baseUrl?: string; message?: string };
+      if (!answer.ok || !body.id || !body.baseUrl) throw new Error(body.message ?? 'The model session did not start. Pick a provider and key in chat Settings first.');
+      sessionId = body.id;
+      return new GenerationClient({ baseUrl: body.baseUrl, token: async () => (token ??= ((await (await fetch('/api/dev/token')).json()) as { token: string }).token), fetch: fetcher });
+    }
+    return new GenerationClient({ baseUrl: `/api/session/${sessionId}/v1`, token: async () => (token ??= ((await (await fetch('/api/dev/token')).json()) as { token: string }).token), fetch: fetcher });
+  };
+
+  const mountPreview = (sceneId: string, fragments: { html: string; css: string; js: string }): void => {
+    const box = document.createElement('div');
+    box.className = 'film-generate__preview';
+    box.dataset.scene = sceneId;
+    const label = document.createElement('p');
+    label.className = 'film-generate__preview-label';
+    label.textContent = `Scene ${sceneId} — playable`;
+    const visual = document.createElement('div');
+    visual.className = 'film-generate__preview-visual';
+    box.append(label, visual);
+    previewsBox.append(box);
+    try {
+      previewHandles.push(
+        sandboxAdapter.mount(visual, fragments, {
+          autoplay: false,
+          title: `Generated film scene ${sceneId}`,
+          style: { show: { header: false, idea: false, readouts: false, legend: false, controls: false, transport: false, speed: false, settings: false, undo: false, fullscreen: false, steps: false, description: false, zoom: false } },
+        }),
+      );
+    } catch {
+      label.textContent = `Scene ${sceneId} — preview failed`;
+    }
+  };
+
+  generateBtn.addEventListener('click', () => {
+    void (async () => {
+      const prompt = promptInput.value.trim();
+      if (!prompt || state.status === 'generating') return;
+      const lengthTarget = Number(lengthSelect.value);
+      state.status = 'generating';
+      state.prompt = prompt;
+      state.lengthTarget = lengthTarget;
+      state.skeleton = null;
+      state.scenes = [];
+      state.firstSceneMs = null;
+      state.timings = null;
+      state.reason = null;
+      state.filmId = null;
+      for (const handle of previewHandles.splice(0)) handle.destroy();
+      previewsBox.replaceChildren();
+      progress.replaceChildren();
+      generateBtn.disabled = true;
+      const started = performance.now();
+      recordDebug({ kind: 'prompt', label: 'film', body: { prompt, lengthTarget } });
+      setProgress('Starting… (skeleton within 1s)');
+      try {
+        const client = await clientFor();
+        let planScenes: ReadonlyArray<{ scene: string }> = [];
+        const kept: Array<{ sceneId: string; fragments: { html: string; css: string; js: string } }> = [];
+        let storyboard: FilmGenerateEvent & { type: 'film' } extends never ? never : unknown = null;
+        let fullStoryboard: { film: { title: string }; scenes: unknown } | null = null;
+        const stream: AsyncGenerator<FilmGenerateEvent> = client.generateFilm({ prompt, lengthTarget });
+        for await (const event of stream) {
+          if (aborted) break;
+          if (event.type === 'skeleton') {
+            state.skeleton = { lengthTarget: event.lengthTarget, scenes: event.scenes };
+            setProgress(`Skeleton: ${event.scenes} scene${event.scenes === 1 ? '' : 's'} for ${event.lengthTarget}s (deadline ${(event.deadlineMs / 1000).toFixed(0)}s)`);
+          } else if (event.type === 'plan') {
+            planScenes = event.scenes;
+            setProgress(`Plan: ${event.scenes.length} scene${event.scenes.length === 1 ? '' : 's'} (${event.scenes.map((s) => s.scene).join(', ')})`);
+          } else if (event.type === 'scene') {
+            if (event.fragments) {
+              state.scenes.push(event.scene);
+              kept.push({ sceneId: event.scene, fragments: event.fragments });
+              if (state.firstSceneMs === null) {
+                state.firstSceneMs = performance.now() - started;
+                setProgress(`Scene ${event.scene} playable in ${(state.firstSceneMs / 1000).toFixed(1)}s (budget 10s)${planScenes.length > 1 ? ` — ${planScenes.length - 1} more joining…` : ''}`);
+              } else {
+                setProgress(`Scene ${event.scene} joined (${state.scenes.length}/${planScenes.length || state.scenes.length})`);
+              }
+              mountPreview(event.scene, event.fragments);
+            } else {
+              setProgress(`Scene ${event.scene} failed (${event.failed ?? 'scene'}) — kept ${kept.length}`);
+            }
+          } else if (event.type === 'film') {
+            fullStoryboard = event.storyboard as unknown as { film: { title: string }; scenes: unknown };
+            storyboard = event.storyboard;
+            state.timings = formatFilmTimings(event.timings);
+            const scenes = event.scenes.map((s) => ({ id: s.sceneId, ...s.fragments }));
+            const saved = await fetch('/api/dev/films', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ id: event.generationId, storyboard: event.storyboard, scenes }),
+            });
+            if (saved.ok) state.filmId = event.generationId;
+            state.status = 'done';
+            void fullStoryboard;
+            void storyboard;
+            const timingsLine = document.createElement('p');
+            timingsLine.className = 'film-generate__timings';
+            timingsLine.textContent = `Done in ${(event.timings.totalMs / 1000).toFixed(1)}s: ${state.timings} · ${event.speechChars} speech chars${event.partial ? ' · partial' : ''}`;
+            const open = document.createElement('a');
+            open.className = 'film-generate__open';
+            open.href = `/?page=player&film=${encodeURIComponent(event.generationId)}`;
+            open.textContent = 'Open in player';
+            progress.replaceChildren(timingsLine, open);
+            recordDebug({ kind: 'done', label: 'film', body: { generationId: event.generationId, timings: event.timings } });
+          } else if (event.type === 'fallback') {
+            state.status = 'fallback';
+            state.reason = event.reason;
+            for (const scene of event.keptScenes) {
+              if (!state.scenes.includes(scene.sceneId)) {
+                state.scenes.push(scene.sceneId);
+                mountPreview(scene.sceneId, scene.fragments);
+              }
+            }
+            const reasonLine = document.createElement('p');
+            reasonLine.className = 'film-generate__reason';
+            reasonLine.textContent = `Fell back like a figure: ${event.reason} — kept ${event.keptScenes.length} scene${event.keptScenes.length === 1 ? '' : 's'}.`;
+            progress.replaceChildren(reasonLine);
+            if (event.standard) {
+              const standardLine = document.createElement('p');
+              standardLine.className = 'film-generate__standard';
+              standardLine.textContent = `Reviewed figure: ${event.standard.concept}`;
+              progress.append(standardLine);
+            }
+            recordDebug({ kind: 'failed', label: 'film', message: event.reason });
+          }
+        }
+      } catch (error) {
+        state.status = 'fallback';
+        state.reason = error instanceof Error ? error.message : String(error);
+        setProgress(`The film could not start: ${state.reason}`);
+        recordDebug({ kind: 'error', label: 'film', message: state.reason });
+      } finally {
+        generateBtn.disabled = false;
+      }
+    })();
+  });
+
+  return {
+    element: section,
+    state: () => ({ ...state, scenes: [...state.scenes] }),
+    prefill(prompt: string): void {
+      promptInput.value = prompt;
+      promptInput.focus();
+    },
+    dispose(): void {
+      aborted = true;
+      for (const handle of previewHandles.splice(0)) handle.destroy();
+      if (sessionId) void fetch(`/api/dev/session/${sessionId}`, { method: 'DELETE', keepalive: true });
+      sessionId = null;
+    },
+  };
 }

@@ -4,12 +4,15 @@ import { isSoundCommand } from '../renderer/sound';
 import { FilmController } from '../runtime/film';
 import { FILM_STEP_SECONDS } from '../runtime/runtime';
 import type { RuntimeUpdate } from '../protocol/runtime-messages';
+import { sandboxAdapter, type FigureHandle } from '../sandbox/adapter';
 import { backgroundOf, paintStages, placeStages, stackPictures, type PictureCache } from '../sandbox/snapshot';
 import type { Mp4VideoCodec } from './mp4';
+import { mountStubRuntime, pushAbsoluteState, type SanitizedSceneSnapshot } from './sandbox';
 import type { CompiledFilm } from './storyboard';
 import {
   EXPORT_AUDIO_FRAME_SAMPLES,
   EXPORT_SAMPLE_RATE,
+  EXPORT_SEED,
   ExportError,
   type ExportAudioSink,
   type ExportCaptureSession,
@@ -574,6 +577,277 @@ export function createBrowserFallbackRig(env: FallbackRigEnv): { readonly openSe
         figure.destroy();
         box.remove();
         if (current?.figure === figure) current = null;
+      },
+    };
+  };
+  const rig: { active: { readonly recorder: MediaRecorder; readonly stopped: Promise<Uint8Array> } | null } = { active: null };
+  const recorder: FallbackRecorder = {
+    mimeType: fallbackRecorderType() ?? 'video/webm',
+    start: () => {
+      const type = fallbackRecorderType();
+      if (!type) throw new ExportError('This browser records no video container');
+      const view = globalThis as unknown as { MediaRecorder: typeof MediaRecorder };
+      const stream = typeof canvas.captureStream === 'function' ? canvas.captureStream(env.fps) : null;
+      if (!stream) throw new ExportError('This browser cannot capture its canvas');
+      const active = new view.MediaRecorder(stream, { mimeType: type, videoBitsPerSecond: 4_000_000 });
+      const chunks: Blob[] = [];
+      const stopped = new Promise<Uint8Array>((resolve) => {
+        active.onstop = () => {
+          void (async () => {
+            stream.getTracks().forEach((track) => track.stop());
+            const blob = new Blob(chunks, { type: type.split(';')[0] });
+            resolve(new Uint8Array(await blob.arrayBuffer()));
+          })();
+        };
+      });
+      active.ondataavailable = (event: BlobEvent) => {
+        if (event.data.size > 0) chunks.push(event.data);
+      };
+      rig.active = { recorder: active, stopped };
+      timer = setInterval(() => void paint(), 1000 / env.fps);
+      active.start(250);
+    },
+    stop: async () => {
+      const active = rig.active;
+      rig.active = null;
+      if (timer !== null) {
+        clearInterval(timer);
+        timer = null;
+      }
+      if (!active) return new Uint8Array(0);
+      active.recorder.stop();
+      return active.stopped;
+    },
+  };
+  return { openSession, recorder, clock: { wait: (ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)) } };
+}
+
+// ---------------------------------------------------------------------------
+// Sandboxed capture: generated scenes export without ever running on the host
+// ---------------------------------------------------------------------------
+
+/** A checked snapshot per scene: the stand-in seeks it, the figure draws it. */
+export interface SandboxedCaptureEnv extends BrowserCaptureEnv {
+  readonly snapshots: (sceneId: string) => SanitizedSceneSnapshot | null;
+}
+
+export interface SandboxedLiveFrameEnv {
+  readonly document: Document;
+  readonly fragments: Fragments;
+  readonly snapshot: SanitizedSceneSnapshot;
+  readonly film: CompiledFilm;
+  readonly sceneIndex?: number;
+  readonly size: ExportFrameSize;
+}
+
+export interface SandboxedFallbackRigEnv extends FallbackRigEnv {
+  readonly snapshots: (sceneId: string) => SanitizedSceneSnapshot | null;
+}
+
+/** An offscreen box at the export width: laid out but invisible, so stages measure. */
+function hiddenSandboxBox(doc: Document, widthPx: number): HTMLElement {
+  const box = doc.createElement('div');
+  box.setAttribute('aria-hidden', 'true');
+  box.style.cssText = `position:fixed;left:-100000px;top:0;width:${widthPx}px;visibility:hidden;pointer-events:none;`;
+  doc.body.append(box);
+  return box;
+}
+
+function decodePicture(doc: Document, png: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = doc.createElement('img');
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new ExportError('The export picture did not decode'));
+    img.src = png;
+  });
+}
+
+/** Draws a capture picture into the export canvas at the drawing size, as the trusted capture paints its stages. */
+function drawPicture(context: CanvasRenderingContext2D, img: HTMLImageElement, size: ExportFrameSize): void {
+  context.clearRect(0, 0, size.frameWidth, size.frameHeight);
+  context.drawImage(img, 0, 0, size.width, size.height);
+}
+
+/**
+ * Opens one chunk's sandboxed capture session: the scene mounted offscreen in
+ * the sandbox at the export width, every frame sought fresh on a stand-in and
+ * landed on the figure, each rasterized from the figure's own snapshot with
+ * its caption. The offline frames carry the stand-in's timing; the pixels
+ * come from the real scene, which never runs on the host.
+ */
+export async function openSandboxedCapture(chunk: ExportPlanChunk, env: SandboxedCaptureEnv): Promise<ExportCaptureSession> {
+  const doc = env.document;
+  const snapshot = env.snapshots(chunk.sceneId);
+  if (!snapshot) throw new ExportError(`Scene "${chunk.sceneId}" has no checked scene to export`);
+  const box = hiddenSandboxBox(doc, env.size.width);
+  const handle = sandboxAdapter.mount(box, env.fragments(chunk.sceneId), {
+    title: `Export: ${chunk.sceneId}`,
+    film: true,
+    autoplay: false,
+    reducedMotion: false,
+    seed: EXPORT_SEED,
+  });
+  if ((await handle.ready) !== 'live' || handle.state !== 'live') {
+    handle.destroy();
+    box.remove();
+    throw new ExportError(`Scene "${chunk.sceneId}" did not start for export`);
+  }
+  const stub = mountStubRuntime(snapshot, { seed: EXPORT_SEED });
+  const controller = new FilmController({ runtime: stub, film: chunk.film, now: () => 0 });
+  const canvas = doc.createElement('canvas');
+  canvas.width = env.size.frameWidth;
+  canvas.height = env.size.frameHeight;
+  const context = canvas.getContext('2d');
+  if (!context) {
+    controller.destroy();
+    stub.destroy();
+    handle.destroy();
+    box.remove();
+    throw new ExportError('The export canvas has no 2D context');
+  }
+  const offset = env.globalOffset ?? 0;
+  let destroyed = false;
+  return {
+    capture: async (frame: ExportFrame) => {
+      if (destroyed) throw new ExportError('The capture session is destroyed');
+      // Seek-by-replay draws what playing there draws; the settled snapshot
+      // then pictures the sought state, never the frame before.
+      controller.seek(Math.max(0, Math.min(frame.time, chunk.film.seconds)));
+      pushAbsoluteState(handle, stub, controller.currentBeat?.step.cam ?? null);
+      const png = await handle.snapshot();
+      if (!png) throw new ExportError(`Scene "${chunk.sceneId}" gave no picture for frame ${frame.frame}`);
+      drawPicture(context, await decodePicture(doc, png), env.size);
+      paintExportCaption(context, frame.caption, 0, env.size.height, env.size.width, env.size.band);
+      const global = offset + frame.frame;
+      if (env.keepFrames?.has(global) && env.kept) {
+        env.kept.set(global, context.getImageData(0, 0, canvas.width, canvas.height));
+      }
+      return canvas;
+    },
+    destroy: () => {
+      destroyed = true;
+      controller.destroy();
+      stub.destroy();
+      handle.destroy();
+      box.remove();
+    },
+  };
+}
+
+/**
+ * Renders what sandboxed playback shows at a film time, through the same
+ * snapshot pipeline the sandboxed export captures with: a hidden figure, a
+ * seek, the beat's absolute state, the export frame size and the export
+ * caption painter. The identity check compares these pixels against exported
+ * frames at the same timestamps.
+ */
+export async function renderSandboxedLivePixels(env: SandboxedLiveFrameEnv, timeSeconds: number): Promise<ImageData> {
+  const doc = env.document;
+  const box = hiddenSandboxBox(doc, env.size.width);
+  const handle = sandboxAdapter.mount(box, env.fragments, { title: 'Export comparison', film: true, autoplay: false, reducedMotion: false, seed: EXPORT_SEED });
+  try {
+    if ((await handle.ready) !== 'live' || handle.state !== 'live') throw new ExportError('The live figure did not start to compare');
+    const stub = mountStubRuntime(env.snapshot, { seed: EXPORT_SEED });
+    try {
+      const controller = new FilmController({ runtime: stub, film: env.film, sceneIndex: env.sceneIndex ?? 0, now: () => 0 });
+      controller.seek(timeSeconds);
+      const beat = controller.currentBeat;
+      pushAbsoluteState(handle, stub, beat?.step.cam ?? null);
+      const caption = beat?.step.say ?? '';
+      controller.destroy();
+      const png = await handle.snapshot();
+      if (!png) throw new ExportError('The live figure gave no picture to compare');
+      const canvas = doc.createElement('canvas');
+      canvas.width = env.size.frameWidth;
+      canvas.height = env.size.frameHeight;
+      const context = canvas.getContext('2d');
+      if (!context) throw new ExportError('The comparison canvas has no 2D context');
+      drawPicture(context, await decodePicture(doc, png), env.size);
+      paintExportCaption(context, caption, 0, env.size.height, env.size.width, env.size.band);
+      return context.getImageData(0, 0, canvas.width, canvas.height);
+    } finally {
+      stub.destroy();
+    }
+  } finally {
+    handle.destroy();
+    box.remove();
+  }
+}
+
+/**
+ * The sandboxed fallback rig: as the browser rig, but each chunk plays
+ * through a stand-in on the host while its sandboxed figure draws, and the
+ * paint loop copies the figure's snapshots to the canvas the recorder
+ * captures. Video-only, labelled fallback, and silent: captures never sound
+ * sfx, so no notes reach the figure.
+ */
+export function createSandboxedFallbackRig(env: SandboxedFallbackRigEnv): {
+  readonly openSession: (chunk: ExportPlanChunk) => Promise<FallbackSession>;
+  readonly recorder: FallbackRecorder;
+  readonly clock: { wait(ms: number): Promise<void> };
+} {
+  const doc = env.document;
+  const canvas = doc.createElement('canvas');
+  canvas.width = env.size.frameWidth;
+  canvas.height = env.size.frameHeight;
+  const context = canvas.getContext('2d');
+  if (!context) throw new ExportError('The fallback canvas has no 2D context');
+  let current: { readonly handle: FigureHandle; readonly box: HTMLElement; readonly stub: ReturnType<typeof mountStubRuntime>; readonly controller: FilmController } | null = null;
+  let timer: ReturnType<typeof setInterval> | null = null;
+  let busy = false;
+  const paint = async (): Promise<void> => {
+    const live = current;
+    if (!live || busy) return;
+    busy = true;
+    try {
+      const png = await live.handle.snapshot();
+      if (!png) return;
+      drawPicture(context, await decodePicture(doc, png), env.size);
+      paintExportCaption(context, live.controller.currentBeat?.step.say ?? '', 0, env.size.height, env.size.width, env.size.band);
+    } catch {
+      // A frame that fails to copy keeps the last one, as in clip recording.
+    } finally {
+      busy = false;
+    }
+  };
+  const openSession = async (chunk: ExportPlanChunk): Promise<FallbackSession> => {
+    if (current) throw new ExportError('The fallback plays one chunk at a time');
+    const snapshot = env.snapshots(chunk.sceneId);
+    if (!snapshot) throw new ExportError(`Scene "${chunk.sceneId}" has no checked scene to export`);
+    const box = hiddenSandboxBox(doc, env.size.width);
+    const handle = sandboxAdapter.mount(box, env.fragments(chunk.sceneId), {
+      title: `Export: ${chunk.sceneId}`,
+      film: true,
+      autoplay: false,
+      reducedMotion: false,
+      seed: EXPORT_SEED,
+    });
+    if ((await handle.ready) !== 'live' || handle.state !== 'live') {
+      handle.destroy();
+      box.remove();
+      throw new ExportError(`Scene "${chunk.sceneId}" did not start for export`);
+    }
+    const stub = mountStubRuntime(snapshot, { seed: EXPORT_SEED });
+    const controller = new FilmController({ runtime: stub, film: chunk.film });
+    controller.play();
+    resumeFallbackPlayback(controller, chunk.film);
+    pushAbsoluteState(handle, stub, controller.currentBeat?.step.cam ?? null);
+    current = { handle, box, stub, controller };
+    await paint();
+    return {
+      applyAhead: (seconds) => {
+        if (!current) return;
+        // The tick's update stays inside the stand-in; its landed state is what the figure draws.
+        controller.tick(seconds);
+        resumeFallbackPlayback(controller, chunk.film);
+        pushAbsoluteState(handle, stub, controller.currentBeat?.step.cam ?? null);
+      },
+      destroy: () => {
+        controller.destroy();
+        stub.destroy();
+        handle.destroy();
+        box.remove();
+        if (current?.handle === handle) current = null;
       },
     };
   };

@@ -346,6 +346,61 @@ main:not([data-layout='chat']) {
   opacity: 0.6;
 }
 
+/* The generate-film box: prompt, length and Generate, next to the film cards. */
+.film-generate {
+  margin: 0 clamp(20px, 6vw, 56px) 16px;
+  padding: 16px;
+  border: 1px solid color-mix(in srgb, CanvasText 20%, transparent);
+  border-radius: 12px;
+  display: grid;
+  gap: 10px;
+  max-width: 720px;
+}
+.film-generate__heading { margin: 0; font-size: 1.1rem; }
+.film-generate__sub { margin: 0; opacity: 0.7; }
+.film-generate__label { display: grid; gap: 6px; font-weight: 600; }
+.film-generate__prompt {
+  font: inherit;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, CanvasText 30%, transparent);
+  resize: vertical;
+}
+.film-generate__length {
+  font: inherit;
+  padding: 6px 8px;
+  border-radius: 8px;
+  max-width: 160px;
+}
+.film-generate__generate {
+  font: inherit;
+  font-weight: 600;
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, CanvasText 30%, transparent);
+  background: color-mix(in srgb, Highlight 15%, transparent);
+  cursor: pointer;
+  justify-self: start;
+}
+.film-generate__generate:disabled { opacity: 0.5; cursor: default; }
+.film-generate__progress { min-height: 1.4em; display: grid; gap: 6px; }
+.film-generate__timings, .film-generate__reason { margin: 0; }
+.film-generate__open { font-weight: 600; }
+.film-generate__previews { display: grid; gap: 10px; }
+.film-generate__preview { border-top: 1px solid color-mix(in srgb, CanvasText 15%, transparent); padding-top: 8px; }
+.film-generate__preview-label { margin: 0 0 6px; font-weight: 600; }
+.film-generate__preview-visual { min-height: 120px; }
+.gallery-detail__film-generate {
+  margin: 12px 24px 24px;
+  font: inherit;
+  background: none;
+  border: none;
+  color: Highlight;
+  cursor: pointer;
+  text-align: left;
+  padding: 0;
+}
+
 /* The detail: the whole generation in full, over its own layer. */
 .gallery-overlay {
   position: fixed;
@@ -1387,6 +1442,13 @@ main.style-page {
 .inc-player[data-hideTimeline] .inc-timeline,
 .inc-player[data-hideDeck] .inc-deck { display: none; }
 .inc-player-figure { position: relative; }
+.inc-player-scene[hidden] { display: none; }
+.inc-player-figure[data-cut='fade'] .inc-player-scene:not([hidden]) { animation: inc-cut-fade 0.4s ease; }
+.inc-player-figure[data-cut='wipe'] .inc-player-scene:not([hidden]) { animation: inc-cut-wipe 0.4s ease; }
+.inc-player-figure[data-cut='push'] .inc-player-scene:not([hidden]) { animation: inc-cut-push 0.4s ease; }
+@keyframes inc-cut-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes inc-cut-wipe { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
+@keyframes inc-cut-push { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } }
 .inc-player-card {
   position: absolute; top: 5%; left: 10%; right: 10%; padding: 10px 14px;
   background: var(--inc-bg, Canvas); color: var(--inc-fg, CanvasText);

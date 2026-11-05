@@ -68,6 +68,12 @@ class FakeFigure implements FigureHandle {
   restore() {}
   setReducedMotion() {}
   seek() {}
+  setPlaying() {}
+  setSpeed() {}
+  focusPart() {}
+  setPartVisible() {}
+  note() {}
+  framePart() {}
   styles: unknown[] = [];
   numbers: Array<number | null> = [];
   setStyle(style: unknown) {

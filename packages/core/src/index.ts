@@ -60,8 +60,10 @@ export {
 export type { BeatAudio, CompiledBeat, CompiledFilm, CompiledFilmResult, CompiledScene, FilmAdvance, FilmAnchor, FilmContext, FilmDiagnostic, FilmSceneSource, SourceMapEntry, StoryboardBeat, StoryboardScene, StoryboardSpec } from './film/storyboard';
 export { fallbackWidth, fontsReady, measureFilmText, solveCallouts, solveCaption, titleCardRect, wrapText, CAPTION_MAX_LINES, CAPTION_MIN_PX, CAPTION_MIN_STAGE_SHARE, FILM_FONT_STACK, SAFE_MARGIN_SHARE } from './film/solver';
 export type { CalloutInput, CalloutPlacement, CalloutRequest, CaptionInput, CaptionLayout, MeasureText } from './film/solver';
-export { checkSceneContext, contrastRatio, luminance, probeFilm, probeFilmAsync, FILM_CONTRAST_MIN, FILM_PLAIN_TONE_MAX_WORDS, FILM_TOKENS } from './film/checks';
-export type { FilmCheck, FilmFailure, FilmPoint, FilmReport, FilmReportStats, FilmSceneInput, FilmTheme, FilmTokens, ProbeFilmOptions } from './film/checks';
+export { checkSceneContext, contrastRatio, luminance, probeFilm, probeFilmAsync, probeFilmStatic, FILM_CONTRAST_MIN, FILM_PLAIN_TONE_MAX_WORDS, FILM_TOKENS } from './film/checks';
+export type { FilmCheck, FilmFailure, FilmPoint, FilmReport, FilmReportStats, FilmSceneInput, FilmTheme, FilmTokens, ProbeFilmOptions, ProbeFilmStaticOptions } from './film/checks';
+export { applyCueState, beatCueState, buildStubScene, mountStubRuntime, pushAbsoluteState, sanitizeProbedSnapshot, SandboxFilmMirror } from './film/sandbox';
+export type { BeatCueState, SanitizedSceneSnapshot, SandboxFilmScene } from './film/sandbox';
 export { PlayerModel, CAPTION_SCALES, TIMELINE_WORD_TICKS_PER_BEAT } from './film/player';
 export type { CaptionSize, FilmBookmark, PlayerCaption, PlayerEvent, PlayerState } from './film/player';
 export { examplePinSeconds, exampleReturnSeconds, SideClipPlayer, validateExampleClip, EXAMPLE_MAX_CAPTION_CHARS } from './film/example';
@@ -156,21 +158,24 @@ export { listTopLevelBoxes, muxMp4, MP4_MVHD_TIMESCALE, MP4_VIDEO_TIMESCALE } fr
 export type { Mp4AudioTrack, Mp4Box, Mp4VideoCodec, Mp4VideoSample, Mp4VideoTrack } from './film/mp4';
 export {
   createBrowserFallbackRig,
+  createSandboxedFallbackRig,
   fallbackRecorderType,
   hashPixels,
   meanPixelDifference,
   openBrowserCapture,
+  openSandboxedCapture,
   openWebCodecsAudio,
   openWebCodecsVideo,
   paintExportCaption,
   probeExportCodecs,
   renderLiveExportPixels,
+  renderSandboxedLivePixels,
   resumeFallbackPlayback,
   exportBitrate,
   EXPORT_AUDIO_BITRATE,
   EXPORT_AUDIO_CODEC,
 } from './film/webcodecs';
-export type { BrowserCaptureEnv, ExportCodecSupport, FallbackRigEnv, LiveExportFrameEnv, PixelMap } from './film/webcodecs';
+export type { BrowserCaptureEnv, ExportCodecSupport, FallbackRigEnv, LiveExportFrameEnv, PixelMap, SandboxedCaptureEnv, SandboxedFallbackRigEnv, SandboxedLiveFrameEnv } from './film/webcodecs';
 export { KIT_NAMES, KIT_OF, kitsFor } from './runtime/kits';
 export type { KitCall, KitEntry, KitModule, KitName, KitRegistry } from './runtime/kits';
 export { availableKits, loadKitModules } from './kits/load';
@@ -196,7 +201,7 @@ export { fixScene, validateScene, validateSceneCss, validateSceneHtml, validateS
 export type { Diagnostic, FixedScene, SceneFragments, SceneLimits, SceneValidation, ValidatedScene } from './validation';
 
 export { compileIsolated, ISOLATED_SCRIPT_NAME, probeScene } from './probe';
-export type { IsolatedScene, ProbeCheck, ProbeError, ProbeFailure, ProbeOptions, ProbeReport, ProbeSpec, ProbeStats, ScriptEvaluator } from './probe';
+export type { IsolatedScene, ProbedParam, ProbedSnapshot, ProbeCheck, ProbeError, ProbeFailure, ProbeOptions, ProbeReport, ProbeSpec, ProbeStats, ScriptEvaluator } from './probe';
 export { AUDIT_TURNS, auditDepthOf, looseLineEnds, offlineChecks } from './probe';
 export type { DepthFinding, LooseEnd, OfflineOptions, OfflineReport } from './probe';
 export type { AuditTurn, DepthAudit, DepthViolation } from './runtime/kit';

