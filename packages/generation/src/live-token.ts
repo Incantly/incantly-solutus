@@ -68,9 +68,16 @@ const PREFERRED_LIVE_MODELS = ['gemini-3.8-live', 'gemini-3.1-flash-live-preview
 export function pickLiveModel(models: readonly ListedModel[], explicit?: string): string | null {
   if (explicit && explicit.trim() !== '') return explicit.trim();
   const id = (name: string): string => name.replace(/^models\//, '');
-  const usable = models.filter(
-    (m) => typeof m.name === 'string' && (m.supportedGenerationMethods ?? []).includes('bidiGenerateContent') && !UNSUITABLE_LIVE_MODELS.test(m.name),
-  );
+  const usable = models.filter((m) => {
+    if (typeof m !== 'object' || m === null) return false;
+    const entry = m as { name?: unknown; supportedGenerationMethods?: unknown };
+    return (
+      typeof entry.name === 'string' &&
+      Array.isArray(entry.supportedGenerationMethods) &&
+      (entry.supportedGenerationMethods as unknown[]).includes('bidiGenerateContent') &&
+      !UNSUITABLE_LIVE_MODELS.test(entry.name)
+    );
+  });
   if (usable.length === 0) return null;
   for (const preferred of PREFERRED_LIVE_MODELS) {
     if (usable.some((m) => id(m.name!) === preferred)) return preferred;
@@ -106,13 +113,17 @@ export function geminiLiveTokenMinter(options: GeminiLiveTokenOptions): LiveToke
       throw tokenError(null, 'could not reach the models list');
     }
     if (!answer.ok) throw tokenError(answer.status, 'the models list was refused');
-    let payload: { models?: ListedModel[] };
+    let payload: unknown;
     try {
-      payload = (await answer.json()) as { models?: ListedModel[] };
+      payload = (await answer.json()) as unknown;
     } catch {
       throw tokenError(answer.status, 'the models list was unreadable');
     }
-    const model = pickLiveModel(payload.models ?? [], explicit);
+    // The list is trustless input: a non-list payload must fail with the
+    // minter's clean error, never a raw TypeError from .filter.
+    const listed = typeof payload === 'object' && payload !== null ? (payload as { models?: unknown }).models : undefined;
+    if (!Array.isArray(listed)) throw new Error('No Live model is reachable with that key: the models list was unreadable.');
+    const model = pickLiveModel(listed as ListedModel[], explicit);
     if (!model) throw new Error('No Live model is reachable with that key: none lists bidiGenerateContent.');
     return model;
   }
@@ -138,16 +149,17 @@ export function geminiLiveTokenMinter(options: GeminiLiveTokenOptions): LiveToke
         throw tokenError(null, 'could not reach the token endpoint');
       }
       if (!answer.ok) throw tokenError(answer.status, 'the token was refused');
-      let payload: { name?: unknown };
+      let payload: unknown;
       try {
-        payload = (await answer.json()) as { name?: unknown };
+        payload = (await answer.json()) as unknown;
       } catch {
         throw tokenError(answer.status, 'the token reply was unreadable');
       }
-      if (typeof payload.name !== 'string' || payload.name === '') {
+      const name = typeof payload === 'object' && payload !== null ? (payload as { name?: unknown }).name : undefined;
+      if (typeof name !== 'string' || name === '') {
         throw new Error('Google minted no Live token: the reply carried no token.');
       }
-      return { token: payload.name, model, expiresAt: now + TOKEN_TTL_MINUTES * 60_000 };
+      return { token: name, model, expiresAt: now + TOKEN_TTL_MINUTES * 60_000 };
     },
   };
 }

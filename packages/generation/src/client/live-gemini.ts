@@ -199,6 +199,9 @@ export class GeminiLiveVoice implements LiveVoice {
 
   close(): void {
     this.closedByUs = true;
+    // A connect() still waiting for setupComplete must never hang: leaving
+    // it unsettled strands callers such as the live driver.
+    this.awaitSetup?.reject(new Error('Live voice was closed before setup completed.'));
     this.awaitSetup = null;
     this.closeSocket();
     this.emit({ type: 'closed' });
@@ -207,7 +210,9 @@ export class GeminiLiveVoice implements LiveVoice {
   // -------------------------------------------------------------------------
 
   private send(message: unknown): void {
-    if (!this.socket) throw new Error('Live voice is not connected: call connect() first.');
+    // Late calls after close (a tool answer, a queued beat) are routine
+    // timing, not programmer error: they drop, never throw.
+    if (!this.socket) return;
     this.socket.send(JSON.stringify(message));
   }
 
@@ -321,39 +326,49 @@ export class GeminiLiveVoice implements LiveVoice {
     }
   }
 
-  private onServerMessage(message: Record<string, unknown>): void {
-    if ('setupComplete' in message) {
+  private onServerMessage(message: unknown): void {
+    // Malformed frames are skipped: nothing the server sends may throw out
+    // of a socket handler.
+    if (typeof message !== 'object' || message === null) return;
+    const frame = message as Record<string, unknown>;
+    if ('setupComplete' in frame) {
       this.awaitSetup?.resolve();
       this.awaitSetup = null;
       return;
     }
-    if ('sessionResumptionUpdate' in message) {
-      const update = message.sessionResumptionUpdate as { newHandle?: unknown; resumable?: unknown };
+    if (typeof frame.sessionResumptionUpdate === 'object' && frame.sessionResumptionUpdate !== null) {
+      const update = frame.sessionResumptionUpdate as { newHandle?: unknown; resumable?: unknown };
       if (update.resumable === true && typeof update.newHandle === 'string' && update.newHandle !== '') {
         this.resumptionHandle = update.newHandle;
       }
       return;
     }
-    if ('goAway' in message) {
+    if ('goAway' in frame) {
       this.goAwaySeen = true;
       return;
     }
-    if ('toolCall' in message) {
-      const calls = (message.toolCall as { functionCalls?: Array<{ id?: unknown; name?: unknown; args?: unknown }> }).functionCalls ?? [];
-      for (const call of calls) {
-        if (typeof call.id !== 'string' || typeof call.name !== 'string') continue;
-        this.toolNames.set(call.id, call.name);
-        this.emit({ type: 'tool-call', callId: call.id, name: call.name, args: call.args ?? {} });
+    if (typeof frame.toolCall === 'object' && frame.toolCall !== null) {
+      const raw = (frame.toolCall as { functionCalls?: unknown }).functionCalls;
+      if (Array.isArray(raw)) {
+        for (const call of raw) {
+          if (typeof call !== 'object' || call === null) continue;
+          const { id, name, args } = call as { id?: unknown; name?: unknown; args?: unknown };
+          if (typeof id !== 'string' || typeof name !== 'string') continue;
+          this.toolNames.set(id, name);
+          this.emit({ type: 'tool-call', callId: id, name, args: args ?? {} });
+        }
       }
       return;
     }
-    if ('serverContent' in message) {
-      this.onServerContent(message.serverContent as Record<string, unknown>);
+    if (typeof frame.serverContent === 'object' && frame.serverContent !== null) {
+      this.onServerContent(frame.serverContent);
     }
   }
 
-  private onServerContent(content: Record<string, unknown>): void {
-    if (content.interrupted === true) {
+  private onServerContent(content: unknown): void {
+    if (typeof content !== 'object' || content === null) return;
+    const body = content as Record<string, unknown>;
+    if (body.interrupted === true) {
       // The beat never finished: the answer that follows is the model's
       // own, so it must not carry the interrupted beat's id.
       this.currentTurn = null;
@@ -361,32 +376,42 @@ export class GeminiLiveVoice implements LiveVoice {
       this.transcriptSoFar = '';
       this.emit({ type: 'interrupted' });
     }
-    const input = content.inputTranscription as { text?: unknown } | undefined;
-    if (input && typeof input.text === 'string' && input.text !== '') {
-      this.learnerTranscriptSoFar += input.text;
-      this.emit({ type: 'learner-transcript', text: this.learnerTranscriptSoFar });
+    if (typeof body.inputTranscription === 'object' && body.inputTranscription !== null) {
+      const input = body.inputTranscription as { text?: unknown };
+      if (typeof input.text === 'string' && input.text !== '') {
+        this.learnerTranscriptSoFar += input.text;
+        this.emit({ type: 'learner-transcript', text: this.learnerTranscriptSoFar });
+      }
     }
-    const modelTurn = content.modelTurn as { parts?: Array<{ inlineData?: { data?: unknown }; text?: unknown }> } | undefined;
-    for (const part of modelTurn?.parts ?? []) {
-      const data = part.inlineData?.data;
-      if (typeof data === 'string' && data !== '') {
+    const turn = typeof body.modelTurn === 'object' && body.modelTurn !== null ? (body.modelTurn as { parts?: unknown }).parts : undefined;
+    if (Array.isArray(turn)) {
+      for (const part of turn) {
+        if (typeof part !== 'object' || part === null) continue;
+        const inline = (part as { inlineData?: unknown }).inlineData;
+        const data = typeof inline === 'object' && inline !== null ? (inline as { data?: unknown }).data : undefined;
+        if (typeof data !== 'string' || data === '') continue;
+        let pcm: Uint8Array;
+        try {
+          pcm = decodeBase64(data);
+        } catch {
+          continue;
+        }
         if (!this.spokeThisTurn) {
           this.spokeThisTurn = true;
           // The learner's turn ended when the model started answering.
           this.learnerTranscriptSoFar = '';
           this.emit({ type: 'speaking', turnId: this.currentTurn });
         }
-        const pcm = decodeBase64(data);
         for (const listener of this.audioListeners) listener(pcm);
       }
     }
-    const output = content.outputTranscription as { text?: unknown } | undefined;
+    const output = body.outputTranscription as { text?: unknown } | undefined;
     if (output && typeof output.text === 'string' && output.text !== '') {
       // Transcriptions arrive as chunks; the contract wants the turn so far.
       this.transcriptSoFar += output.text;
       this.emit({ type: 'transcript', text: this.transcriptSoFar, turnId: this.currentTurn });
     }
-    if (content.turnComplete === true) {
+    if (body.turnComplete === true) {
       const turnId = this.currentTurn;
       this.currentTurn = null;
       this.spokeThisTurn = false;
