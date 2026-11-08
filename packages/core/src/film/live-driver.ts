@@ -7,14 +7,14 @@ import type { CompiledBeat, CompiledFilm, FilmAdvance } from './storyboard';
 
 /**
  * What the teacher is: read each beat line exactly as written, answer about
- * what is on screen briefly, use the tools to pause, resume, show and make
- * examples, and never invent visuals. Short by design: it ships on every
- * live session's connect.
+ * what is on screen briefly, and resume only when the learner asks to
+ * continue. Short by design: it ships on every live session's connect.
  */
 export const LIVE_TEACHER_INSTRUCTION =
   'Read each beat line you are given exactly as written. ' +
-  'Answer learner questions about what is on screen briefly. ' +
-  'Use your tools to pause, resume, show and make examples. ' +
+  'The film pauses itself when the learner speaks or types a question, so never call pause for a question. ' +
+  'Answer in one to three sentences using what is on screen. ' +
+  'Call resume only when the learner asks to continue; show_me to show different values; make_example for another example. ' +
   'Never invent visuals.';
 
 /** What the driver is doing: idle before start and after stop, live while the voice owns the film, done at the last beat. */
@@ -66,6 +66,10 @@ export class LiveDriver {
   private epoch = 0;
   /** True once the learner cut in or paused, until resume or a seek speaks again. Late turn-completes land here and are ignored. */
   private paused = false;
+  /** True while the model holds the floor answering: a null-turn speaking with no close yet. */
+  private answering = false;
+  /** Resume requests waiting for the model's turn to end; superseded by a new question or stop. */
+  private queuedResumes: Array<{ run: () => LiveToolResult; resolve?: (result: LiveToolResult) => void }> = [];
   /** Turns the voice finished reading, so resume knows a beat was fully read. */
   private readonly completedTurns = new Set<string>();
   /** Every utterance said, by its unique turn id, back to its beat. */
@@ -97,6 +101,7 @@ export class LiveDriver {
       isPaused: () => this.paused,
       sayBeat: (beat) => this.sayBeat(beat),
       sayBeatRemainder: (beat, wordIndex) => this.sayBeatRemainder(beat, wordIndex),
+      requestResume: () => this.requestResume(),
       wasCompleted: (beatId) => this.completedTurns.has(beatId),
       isDone: () => this.state === 'done',
       restartAfterDone: () => this.restartAfterDone(),
@@ -163,6 +168,8 @@ export class LiveDriver {
     const at = this.epoch;
     this.savedAdvance = this.controller.advance;
     this.paused = false;
+    this.answering = false;
+    this.queuedResumes.length = 0;
     this.completedTurns.clear();
     this.utteranceBeats.clear();
     this.utterances = 0;
@@ -216,12 +223,49 @@ export class LiveDriver {
     this.state = 'idle';
     this.currentTurn = null;
     this.paused = false;
+    this.answering = false;
+    this.dropQueuedResumes('Live voice is off.');
     this.emit({ type: 'stopped' });
   }
 
   /** The host's way back in after an insert: the resume rung, without the voice. */
   resume(): LiveToolResult {
     if (this.state === 'idle') return { ok: false, error: 'Live voice is not on.' };
+    // Never talk over the model: queue behind its answer like the tool does.
+    if (this.answering) {
+      const at = this.epoch;
+      this.queuedResumes.push({ run: () => this.runResume(at) });
+      return { ok: true, queued: true };
+    }
+    return this.tools.resumeNow();
+  }
+
+  /** Runs resume now, or queues it until the model's turn ends. */
+  private requestResume(): Promise<LiveToolResult> {
+    const at = this.epoch;
+    if (!this.answering) return Promise.resolve(this.runResume(at));
+    return new Promise<LiveToolResult>((resolve) => {
+      this.queuedResumes.push({ run: () => this.runResume(at), resolve });
+    });
+  }
+
+  /** Runs one queued resume per waiting request, in order. */
+  private flushQueuedResumes(): void {
+    for (const queued of this.queuedResumes.splice(0)) {
+      const result = queued.run();
+      queued.resolve?.(result);
+    }
+  }
+
+  /** Drops queued resumes without running them: a new question or stop supersedes them. */
+  private dropQueuedResumes(error: string): void {
+    for (const queued of this.queuedResumes.splice(0)) {
+      queued.resolve?.({ ok: false, error });
+    }
+  }
+
+  private runResume(at: number): LiveToolResult {
+    if (this.epoch !== at || this.state === 'idle') return { ok: false, error: 'Live voice is not on.' };
     return this.tools.resumeNow();
   }
 
@@ -316,7 +360,16 @@ export class LiveDriver {
         if (beat !== null) this.transcripts.set(beat, event.text);
         return;
       }
+      case 'speaking':
+        // A null-turn speaking is the model's own answer holding the floor.
+        if (event.turnId === null) this.answering = true;
+        return;
       case 'turn-complete':
+        if (event.turnId === null) {
+          // The answer ended: queued resumes may read again now.
+          this.answering = false;
+          this.flushQueuedResumes();
+        }
         this.onTurnComplete(event.turnId);
         return;
       case 'interrupted':
@@ -353,9 +406,10 @@ export class LiveDriver {
   }
 
   /**
-   * The learner cut in: pauses the film and pins the word the transcript had
-   * reached. Spoken interruptions arrive as voice events; typed questions
-   * call this directly before sending, so both pause the film the same way.
+   * Pins the learner's question: pauses the film at the spoken word and
+   * pushes the screen state to the voice before it answers, so the answer
+   * uses what is on screen. Spoken questions (the provider's interrupted
+   * event) and typed ones (the host calls this, then asks) share this path.
    */
   interrupt(): void {
     if (this.state !== 'live') return;
@@ -370,6 +424,16 @@ export class LiveDriver {
       return;
     }
     this.notePaused({ ...anchor, wordIndex: transcriptWordIndex(this.transcripts.get(beat.id), beat) });
+    // A new question supersedes resumes queued during the last answer.
+    this.dropQueuedResumes('A new question superseded the queued resume.');
+    const line = this.tools.contextLine();
+    if (line !== null) {
+      try {
+        this.voice.sendContext(line);
+      } catch {
+        // Context is advisory: the answer still carries the anchor.
+      }
+    }
   }
 
   private emit(event: LiveDriverEvent): void {
