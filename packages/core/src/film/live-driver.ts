@@ -21,6 +21,7 @@ export const LIVE_TEACHER_INSTRUCTION =
   'The film pauses itself when the learner speaks or types a question, so never call pause for a question. ' +
   'Answer in one to three sentences using what is on screen. ' +
   'Call resume only when the learner asks to continue; show_me to show different values; make_example for another example. ' +
+  'Describe only what a tool result says was made or shown; if a tool fails, say so in one short sentence, and never promise values outside the ranges in the show_me declaration. ' +
   'Never invent visuals.';
 
 /** What the driver is doing: idle before start and after stop, live while the voice owns the film, done at the last beat. */

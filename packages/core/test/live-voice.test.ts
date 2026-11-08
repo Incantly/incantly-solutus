@@ -157,6 +157,10 @@ describe('live voice: teacher prompt', () => {
     const tools = voice.setups[0]!.tools;
     expect(tools.find((tool) => tool.name === 'pause')!.description).toContain('pauses itself');
     expect(tools.find((tool) => tool.name === 'resume')!.description).toContain('carry on');
+    expect(tools.find((tool) => tool.name === 'make_example')!.description).toContain('only what its result says was made');
+    expect(tools.find((tool) => tool.name === 'show_me')!.description).toContain('outside the ranges');
+    expect(LIVE_TEACHER_INSTRUCTION).toContain('only what a tool result says');
+    expect(LIVE_TEACHER_INSTRUCTION).toContain('one short sentence');
     controller.destroy();
   });
 });
@@ -602,9 +606,26 @@ describe('live voice: tools', () => {
     voice.emit({ type: 'tool-call', callId: 'c1', name: 'make_example', args: { request: '  Another swing  ' } });
     await flush();
     await flush();
-    expect(answerFor(voice, 'c1')).toEqual({ ok: true, request: 'Another swing', result: { clipId: 'clip-1' } });
+    expect(answerFor(voice, 'c1')).toEqual({ ok: true, made: { clipId: 'clip-1' } });
     expect(seen).toHaveLength(1);
     expect(seen[0]!.anchor.beat).toBe('s1b2');
+    controller.destroy();
+  });
+
+  it('reports a rejected make_example as a failed tool, not a drawing', async () => {
+    const { controller, voice, driver } = await setup({
+      makeExample: (() => Promise.reject(new Error('Legs stay within 8.'))) as LiveMakeExample,
+    });
+    await driver.start();
+    voice.emit({ type: 'turn-complete', turnId: saidId(voice, 0) });
+    voice.emit({ type: 'interrupted' });
+    voice.emit({ type: 'tool-call', callId: 'c1', name: 'make_example', args: { request: 'Legs 5 and 12' } });
+    await flush();
+    await flush();
+    // The host's refusal passes through: no drawing happened, nothing was said.
+    expect(answerFor(voice, 'c1')).toEqual({ ok: false, error: 'Legs stay within 8.' });
+    expect(voice.said.map((line) => saidBeat(line.turnId))).toEqual(['s1b1', 's1b2']);
+    expect(controller.currentBeat?.id).toBe('s1b2');
     controller.destroy();
   });
 
@@ -628,7 +649,7 @@ describe('live voice: tools', () => {
     resolveHost({ clipId: 'clip-1' });
     await flush();
     await flush();
-    expect(answerFor(voice, 'c1')).toEqual({ ok: true, request: 'Another swing', result: { clipId: 'clip-1' } });
+    expect(answerFor(voice, 'c1')).toEqual({ ok: true, made: { clipId: 'clip-1' } });
     // Resume re-reads the unheard rest of the held beat once the reply ends.
     voice.emit({ type: 'tool-call', callId: 'c2', name: 'resume', args: {} });
     await flush();
