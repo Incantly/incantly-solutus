@@ -1,5 +1,5 @@
 import type { AskAnchor } from './ask';
-import { LIVE_TOOL_DECLARATIONS, LiveToolDispatcher, transcriptWordIndex, type LiveMakeExample, type LiveShowMe, type LiveToolResult } from './live-tools';
+import { liveToolDeclarations, LiveToolDispatcher, transcriptWordIndex, type LiveMakeExample, type LiveShowMe, type LiveToolResult } from './live-tools';
 import type { LiveEvent, LiveVoice } from './live-voice';
 import type { FilmController } from '../runtime/film';
 import type { SceneRuntime } from '../runtime/runtime';
@@ -22,7 +22,7 @@ export type LiveDriverState = 'idle' | 'live' | 'done';
 
 export type LiveDriverEvent =
   | { readonly type: 'started'; readonly beat: string }
-  | { readonly type: 'said'; readonly beat: string; readonly text: string }
+  | { readonly type: 'said'; readonly beat: string; readonly turnId: string; readonly text: string }
   | { readonly type: 'anchor'; readonly anchor: AskAnchor }
   | { readonly type: 'tool'; readonly callId: string; readonly name: string; readonly result: LiveToolResult }
   | { readonly type: 'done' }
@@ -41,16 +41,17 @@ export interface LiveDriverOptions {
 
 /**
  * Owns the film while live voice is on. Start switches the controller to
- * click advance so beats wait for the voice, not the clock; each beat is read
- * with say(beat.step.say, beat.id), and the voice's turn-complete moves to the
- * next beat through the controller's own deck path. Interrupt pauses the film
- * and pins the word the transcript had reached. Stop closes the voice and
- * puts the controller back where it was.
+ * click advance so beats wait for the voice, not the clock; each reading is
+ * said with its own utterance id (`beat#n`), and only that utterance's
+ * turn-complete moves to the next beat through the controller's own deck
+ * path. Interrupt pauses the film and pins the word the transcript had
+ * reached. Stop closes the voice and puts the controller back where it was.
  */
 export class LiveDriver {
   private readonly controller: FilmController;
   private readonly film: CompiledFilm;
   private readonly voice: LiveVoice;
+  private readonly runtime?: SceneRuntime;
   private readonly tools: LiveToolDispatcher;
   private readonly listeners = new Set<(event: LiveDriverEvent) => void>();
   private readonly transcripts = new Map<string, string>();
@@ -59,10 +60,18 @@ export class LiveDriver {
 
   private state: LiveDriverState = 'idle';
   private currentTurn: string | null = null;
+  /** A start() still connecting: concurrent starts join it, and stop() ends it. */
+  private starting: Promise<void> | null = null;
+  /** Bumped by stop(): in-flight connects and tool results from an older epoch are dropped. */
+  private epoch = 0;
   /** True once the learner cut in or paused, until resume or a seek speaks again. Late turn-completes land here and are ignored. */
   private paused = false;
   /** Turns the voice finished reading, so resume knows a beat was fully read. */
   private readonly completedTurns = new Set<string>();
+  /** Every utterance said, by its unique turn id, back to its beat. */
+  private readonly utteranceBeats = new Map<string, string>();
+  /** Suffix for the next utterance id; reset with each fresh session. */
+  private utterances = 0;
   private anchor: AskAnchor | null = null;
   private savedAdvance: FilmAdvance | null = null;
   private voiceOff: (() => void) | null = null;
@@ -71,6 +80,7 @@ export class LiveDriver {
     this.controller = options.controller;
     this.film = options.film;
     this.voice = options.voice;
+    if (options.runtime) this.runtime = options.runtime;
     if (options.onEvent) this.listeners.add(options.onEvent);
     this.tools = new LiveToolDispatcher({
       controller: options.controller,
@@ -88,6 +98,9 @@ export class LiveDriver {
       sayBeat: (beat) => this.sayBeat(beat),
       sayBeatRemainder: (beat, wordIndex) => this.sayBeatRemainder(beat, wordIndex),
       wasCompleted: (beatId) => this.completedTurns.has(beatId),
+      isDone: () => this.state === 'done',
+      restartAfterDone: () => this.restartAfterDone(),
+      sessionEpoch: () => this.epoch,
       finish: () => this.finishBeats(),
       onResult: (info) => this.emit({ type: 'tool', callId: info.callId, name: info.name, result: info.result }),
     });
@@ -120,11 +133,12 @@ export class LiveDriver {
   /**
    * What the player shows: the voice's own transcript for the current beat
    * when it has started saying it, else the beat text it was asked to read.
+   * Transcripts land keyed by beat, so re-reads keep following the beat.
    */
   caption(): string {
     const current = this.controller.currentBeat;
     if (!current) return '';
-    const said = this.currentTurn !== null ? this.transcripts.get(this.currentTurn) : undefined;
+    const said = this.transcripts.get(current.id);
     return said !== undefined && said !== '' ? said : current.step.say;
   }
 
@@ -134,11 +148,46 @@ export class LiveDriver {
    */
   async start(): Promise<void> {
     if (this.state !== 'idle') return;
+    // A second start while connecting joins the first: one setup, one reading.
+    if (this.starting) return this.starting;
+    const run = this.startNow();
+    this.starting = run;
+    try {
+      await run;
+    } finally {
+      this.starting = null;
+    }
+  }
+
+  private async startNow(): Promise<void> {
+    const at = this.epoch;
     this.savedAdvance = this.controller.advance;
     this.paused = false;
     this.completedTurns.clear();
+    this.utteranceBeats.clear();
+    this.utterances = 0;
+    this.transcripts.clear();
     this.controller.setAdvance('click');
-    await this.voice.connect({ instruction: LIVE_TEACHER_INSTRUCTION, tools: LIVE_TOOL_DECLARATIONS });
+    try {
+      await this.voice.connect({ instruction: LIVE_TEACHER_INSTRUCTION, tools: liveToolDeclarations(this.film, this.runtime) });
+    } catch (error) {
+      // A refused setup leaves no live session behind: the film plays on as before.
+      if (this.epoch === at) {
+        if (this.savedAdvance) this.controller.setAdvance(this.savedAdvance);
+        this.state = 'idle';
+      }
+      throw error;
+    }
+    if (this.epoch !== at) {
+      // Stopped while connecting: close the just-opened voice and stay stopped.
+      try {
+        this.voice.close();
+      } catch {
+        // The teardown already ran; the film still restores below.
+      }
+      if (this.savedAdvance) this.controller.setAdvance(this.savedAdvance);
+      return;
+    }
     this.voiceOff = this.voice.on((event) => this.onVoice(event));
     this.state = 'live';
     if (!this.controller.currentBeat) this.controller.nextBeat();
@@ -153,7 +202,9 @@ export class LiveDriver {
 
   /** Closes the voice where the learner stands and restores the advance mode. */
   stop(): void {
-    if (this.state === 'idle') return;
+    const wasStarting = this.starting !== null;
+    this.epoch++;
+    if (this.state === 'idle' && !wasStarting) return;
     this.voiceOff?.();
     this.voiceOff = null;
     try {
@@ -179,14 +230,15 @@ export class LiveDriver {
       this.saidIds.add(beat.id);
       this.said.push(beat);
     }
+    const turnId = this.nextUtterance(beat.id);
     // Speaking again ends the pause: the turn being read is current once more.
     this.paused = false;
-    this.currentTurn = beat.id;
-    this.voice.say(beat.step.say, beat.id);
-    this.emit({ type: 'said', beat: beat.id, text: beat.step.say });
+    this.currentTurn = turnId;
+    this.voice.say(beat.step.say, turnId);
+    this.emit({ type: 'said', beat: beat.id, turnId, text: beat.step.say });
   }
 
-  /** Re-reads a beat from its anchor word on, under the same turn id. */
+  /** Re-reads a beat from its anchor word on, as a new utterance of the beat. */
   private sayBeatRemainder(beat: CompiledBeat, wordIndex: number): void {
     if (!this.saidIds.has(beat.id)) {
       this.saidIds.add(beat.id);
@@ -194,10 +246,46 @@ export class LiveDriver {
     }
     const from = beat.words.length === 0 ? 0 : Math.min(Math.max(wordIndex, 0), beat.words.length - 1);
     const text = beat.words.slice(from).join(' ') || beat.step.say;
+    const turnId = this.nextUtterance(beat.id);
     this.paused = false;
-    this.currentTurn = beat.id;
-    this.voice.say(text, beat.id);
-    this.emit({ type: 'said', beat: beat.id, text });
+    this.currentTurn = turnId;
+    this.voice.say(text, turnId);
+    this.emit({ type: 'said', beat: beat.id, turnId, text });
+  }
+
+  /** Restarts a finished film from beat one: back to live with a fresh slate. */
+  private restartAfterDone(): CompiledBeat | null {
+    const first = this.film.beats[0] ?? null;
+    if (!first) return null;
+    this.controller.seek(first.start);
+    this.completedTurns.clear();
+    this.utteranceBeats.clear();
+    this.transcripts.clear();
+    const now = this.controller.anchorNow();
+    if (now) this.setAnchor({ ...now, wordIndex: 0 });
+    this.state = 'live';
+    this.sayBeat(first);
+    return first;
+  }
+
+  /**
+   * Tags another utterance of a beat with its own turn id. Turn ids are
+   * opaque to providers, but the real client clears its turn on interrupt,
+   * so the cut-off utterance may close as null or never: only the live
+   * utterance's id may advance the film.
+   */
+  private nextUtterance(beatId: string): string {
+    const turnId = `${beatId}#${this.utterances++}`;
+    this.utteranceBeats.set(turnId, beatId);
+    return turnId;
+  }
+
+  /** The beat an utterance id (or a bare beat id) names, or null. */
+  private beatOfTurn(turnId: string | null): string | null {
+    if (turnId === null) return null;
+    const mapped = this.utteranceBeats.get(turnId);
+    if (mapped !== undefined) return mapped;
+    return this.film.beats.some((beat) => beat.id === turnId) ? turnId : null;
   }
 
   /** Records an interrupt or pause anchor and drops the spoken turn, so its late turn-complete cannot advance the paused film. */
@@ -221,9 +309,13 @@ export class LiveDriver {
 
   private onVoice(event: LiveEvent): void {
     switch (event.type) {
-      case 'transcript':
-        if (event.turnId !== null) this.transcripts.set(event.turnId, event.text);
+      case 'transcript': {
+        // Transcripts land on the beat through the utterance id, so captions
+        // follow the reading even when a beat is read more than once.
+        const beat = this.beatOfTurn(event.turnId);
+        if (beat !== null) this.transcripts.set(beat, event.text);
         return;
+      }
       case 'turn-complete':
         this.onTurnComplete(event.turnId);
         return;
@@ -238,10 +330,16 @@ export class LiveDriver {
     }
   }
 
-  /** Advances only when the finished turn is the beat being read; stale turns and turns finishing while paused are ignored. */
+  /**
+   * Advances only when the completing turn id is exactly the live
+   * utterance's. Older utterances of the same beat, other beats, and the
+   * provider-cleared null turn are stale. While paused the live utterance
+   * is cleared, so every close is stale by the same rule.
+   */
   private onTurnComplete(turnId: string | null): void {
-    if (this.state !== 'live' || this.paused || turnId === null || turnId !== this.currentTurn) return;
-    this.completedTurns.add(turnId);
+    if (this.state !== 'live' || turnId === null || turnId !== this.currentTurn) return;
+    const finished = this.beatOfTurn(turnId);
+    if (finished !== null) this.completedTurns.add(finished);
     if (!this.controller.nextBeat()) {
       this.finishBeats();
       return;
