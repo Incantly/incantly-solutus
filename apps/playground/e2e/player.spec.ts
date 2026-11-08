@@ -100,6 +100,100 @@ test('caption toggles apply without waiting for the next beat', async ({ page })
     .toBe(beat);
 });
 
+/** How many hidden layer elements still cover the stage center: nonzero means a layer leaks over the figure. */
+async function layerCoverAtStageCenter(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    const stage =
+      document.querySelector('.inc-player-figure svg.inc-stage') ?? document.querySelector('.inc-player-figure iframe');
+    if (!stage) return -1;
+    const box = stage.getBoundingClientRect();
+    const x = box.x + box.width / 2;
+    const y = box.y + box.height / 2;
+    // Rect overlap, not hit testing: the layers are pointer-events none, so
+    // elementsFromPoint would miss them even while they cover the stage.
+    return [...document.querySelectorAll('.inc-player-xcard, .inc-player-write, .inc-player-notes')].filter((el) => {
+      const rect = el.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0 && x >= rect.x && x <= rect.x + rect.width && y >= rect.y && y <= rect.y + rect.height;
+    }).length;
+  });
+}
+
+test('explainer layers stay hidden on a film without layers', async ({ page }) => {
+  await openPlayer(page, 'thirty');
+  // A display regression on any layer class would paint over the pendulum here.
+  await expect(page.locator('.inc-player-xcard')).toBeHidden();
+  await expect(page.locator('.inc-player-write')).toBeHidden();
+  await expect(page.locator('.inc-player-notes')).toBeHidden();
+  expect(await layerCoverAtStageCenter(page)).toBe(0);
+});
+
+test('a layered film shows its section card only on its beat', async ({ page }) => {
+  await page.request.get('/api/dev/films/clear');
+  const js = [
+    "inc.idea('A ball rests beside step-by-step notes.');",
+    "inc.describe(() => 'A ball beside notes that arrive beat by beat, under a section card.');",
+    "const stage = inc.svg('#stage', { viewBox: [0, 0, 600, 400], title: 'Layers' });",
+    "const ball = stage.circle(150, 200, 25, { tone: 'hi' });",
+    "stage.part('Ball', ball, { label: 'Ball', info: 'A ball left of centre.' });",
+    'inc.steps([',
+    "  { say: 'First we open the section.', card: { kind: 'section', text: 'The ball' } },",
+    "  { say: 'The ball rests while we write its rule.', focus: 'Ball', write: { text: 'x = 3', math: true }, notes: ['The ball rests.'] },",
+    ']);',
+  ].join('\n');
+  const beats = [
+    { id: 's1b1', say: 'First we open the section.', card: { kind: 'section', text: 'The ball' } },
+    {
+      id: 's1b2',
+      say: 'The ball rests while we write its rule.',
+      focus: 'Ball',
+      write: { text: 'x = 3', math: true },
+      notes: ['The ball rests.'],
+    },
+  ];
+  const saved = await page.request.post('/api/dev/films', {
+    data: {
+      id: 'gen-layers-1',
+      storyboard: { film: { title: 'Layers', lengthTarget: 30 }, scenes: [{ id: 's1', idea: 'A ball with room for layers.', kit: 'svg', durationShare: 1, beats }] },
+      scenes: [{ id: 's1', html: "<div id='stage'></div>", css: '', js }],
+    },
+  });
+  expect(saved.ok()).toBe(true);
+  await page.goto('/?page=player&film=gen-layers-1');
+  await page.waitForFunction(() => window.__playground?.ready === true);
+  // Ready lands before any beat applies, so the caption is still null: seek
+  // onto beat 1 first. Notes arrive on beat 2, but the scene already reports
+  // split on beat 1 — one layout from the first frame.
+  await seekBeat(page, 0, 0);
+  await page.waitForFunction(() => (window.__playground?.stats as () => { beat: string | null })().beat === 's1b1');
+  const splitOnFirstBeat = await page.evaluate(
+    () => (window.__playground?.model as unknown as { state: { caption: { split: boolean } | null } }).state.caption?.split,
+  );
+  expect(splitOnFirstBeat).toBe(true);
+  // The card covers the stage on its beat and only there.
+  await expect(page.locator('.inc-player-xcard')).toContainText('The ball');
+  await expect(page.locator('.inc-player-xcard')).toBeVisible();
+  await seekBeat(page, 1, 1);
+  await expect(page.locator('.inc-player-xcard')).toBeHidden();
+  await expect(page.locator('.inc-player-write')).toContainText('x');
+  await expect(page.locator('.inc-player-write')).toBeVisible();
+  await expect(page.locator('.inc-player-notes')).toContainText('The ball rests.');
+  await expect(page.locator('.inc-player-notes')).toBeVisible();
+  // The notes panel lands beside the narrowed stage, or stacked under it on
+  // narrow players — never over the drawing.
+  const placed = await page.evaluate(() => {
+    const stage = document.querySelector('.inc-player-figure svg.inc-stage') ?? document.querySelector('.inc-player-figure iframe');
+    const notes = document.querySelector('.inc-player-notes');
+    if (!stage || !notes) return 'missing';
+    const s = stage.getBoundingClientRect();
+    const n = notes.getBoundingClientRect();
+    if (n.width === 0 || n.height === 0) return 'hidden';
+    if (n.left >= s.right - 2) return 'beside';
+    if (n.top >= s.bottom - 2) return 'stacked';
+    return 'overlapping';
+  });
+  expect(['beside', 'stacked']).toContain(placed);
+});
+
 test('the one-minute film reports seek=play and passing film checks', async ({ page }) => {
   await openPlayer(page, 'sixty');
   await expect(page.locator('.inc-timeline-clip')).toHaveCount(8);

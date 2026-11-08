@@ -1492,6 +1492,11 @@ main.style-page {
 .inc-player-notes[data-layout='stack'] { margin-top: 8px; }
 .inc-player-notes ul { margin: 0; padding-left: 1.2em; display: flex; flex-direction: column; gap: 4px; }
 .inc-player-notes li.is-new { font-weight: 600; }
+.inc-player-xcard[hidden],
+.inc-player-write[hidden],
+.inc-player-notes[hidden] {
+  display: none;
+}
 .inc-caption {
   margin: 0; padding: 10px 12px; min-height: 3.2em;
   background: var(--inc-card, var(--input-bg)); border: 1px solid var(--border-color);
