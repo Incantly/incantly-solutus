@@ -40,6 +40,7 @@ const PROMPT_CARDS: readonly GalleryCard[] = [
   // Films a learner can play, scrub, question and export in the player (PRD 28).
   { title: 'How a pendulum keeps time', tag: 'Film · 30 s', prompt: 'Show me a 30-second film about how a pendulum keeps time.', playerFilm: 'thirty' },
   { title: 'What a wave carries', tag: 'Film · 1 min', prompt: 'Show me a one-minute film about what a wave carries.', playerFilm: 'sixty' },
+  { title: 'Pythagoras: talk to the teacher', tag: 'Film · Live voice', prompt: 'Talk to the teacher in a one-minute film about Pythagoras theorem: a right triangle with squares on each side.', playerFilm: 'pythagoras' },
 ];
 
 /** Generated from packages/core/scenes by scripts/generate.mjs. */

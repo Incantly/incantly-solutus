@@ -237,6 +237,16 @@ describe('GeminiLiveVoice turns', () => {
       ...new Uint8Array(new Int16Array([1000, -1000, 0, 32767]).buffer),
     ]);
   });
+
+  it('sends a typed learner question as a user turn with turnComplete', async () => {
+    const { socket, voice } = await connected();
+    voice.ask('Why does it keep the same time?');
+    const sent = socket.sent.at(-1) as {
+      clientContent: { turns: Array<{ role: string; parts: Array<{ text: string }> }>; turnComplete: boolean };
+    };
+    expect(sent.clientContent.turnComplete).toBe(true);
+    expect(sent.clientContent.turns).toEqual([{ role: 'user', parts: [{ text: 'Why does it keep the same time?' }] }]);
+  });
 });
 
 describe('GeminiLiveVoice tools', () => {

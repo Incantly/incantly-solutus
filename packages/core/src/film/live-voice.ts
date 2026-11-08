@@ -40,6 +40,8 @@ export interface LiveVoice {
   say(text: string, turnId: string): void;
   /** A silent context update: no reply expected. */
   sendContext(text: string): void;
+  /** A typed learner question: a learner turn, answered exactly like speech. */
+  ask(text: string): void;
   respondTool(callId: string, result: unknown): void;
   close(): void;
   on(listener: (event: LiveEvent) => void): () => void;

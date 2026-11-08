@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { compileFilm, contrastRatio, luminance, probeFilm, probeScene, SIXTY_SECOND_FILM, THIRTY_SECOND_FILM, type Beat, type SceneFunction } from '../src/index';
+import { compileFilm, contrastRatio, luminance, probeFilm, probeScene, PYTHAGORAS_FILM, SIXTY_SECOND_FILM, THIRTY_SECOND_FILM, type Beat, type SceneFunction } from '../src/index';
 import { compileValidated } from './helpers/compile';
 import { compileFixture } from './helpers/film';
 
@@ -38,8 +38,17 @@ describe('film checks: fixtures pass', () => {
     120000,
   );
 
-  it('both fixture scenes pass the probe', async () => {
-    for (const fixture of [THIRTY_SECOND_FILM, SIXTY_SECOND_FILM]) {
+  it('the Pythagoras film passes every beat at every width, light and dark', async () => {
+    const { film, scenes, refuel } = await compileFixture(PYTHAGORAS_FILM);
+    const report = probeFilm({ film, scenes, beforeStep: refuel });
+    expect(report.failures).toEqual([]);
+    expect(report.ok).toBe(true);
+    expect(report.stats.beats).toBe(7);
+    console.log(`[film-bench] checks Pythagoras film: ${report.stats.msPerBeat.toFixed(1)} ms/beat (${report.stats.ms.toFixed(0)} ms total)`);
+  });
+
+  it('all fixture scenes pass the probe', async () => {
+    for (const fixture of [THIRTY_SECOND_FILM, SIXTY_SECOND_FILM, PYTHAGORAS_FILM]) {
       for (const scene of fixture.scenes) {
         const { scene: compiled, fuel } = compileValidated({ html: scene.html, css: scene.css, js: scene.js });
         const report = probeScene(compiled, { beforeStep: fuel.refuel, spec: { parts: [...scene.probe.parts], steps: scene.probe.steps } });

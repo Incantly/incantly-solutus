@@ -2,8 +2,9 @@ import type { LiveEvent, LiveSetup, LiveVoice } from './live-voice';
 
 /**
  * A scripted LiveVoice for tests and hosts: it records what it was asked to
- * say, the silent context it was sent and the tool answers it gave back, and
- * a test drives it by emitting any LiveEvent a provider could send.
+ * say, the silent context it was sent, the typed questions it was asked and
+ * the tool answers it gave back, and a test drives it by emitting any
+ * LiveEvent a provider could send.
  */
 export class FakeLiveVoice implements LiveVoice {
   private readonly listeners = new Set<(event: LiveEvent) => void>();
@@ -14,6 +15,8 @@ export class FakeLiveVoice implements LiveVoice {
   readonly said: Array<{ readonly text: string; readonly turnId: string }> = [];
   /** Every silent context update, in order. */
   readonly contexts: string[] = [];
+  /** Every typed learner question, in order. */
+  readonly questions: string[] = [];
   /** Every tool answer it gave back, in order. */
   readonly answers: Array<{ readonly callId: string; readonly result: unknown }> = [];
   /** True once close ran. */
@@ -34,6 +37,10 @@ export class FakeLiveVoice implements LiveVoice {
 
   sendContext(text: string): void {
     this.contexts.push(text);
+  }
+
+  ask(text: string): void {
+    this.questions.push(text);
   }
 
   respondTool(callId: string, result: unknown): void {

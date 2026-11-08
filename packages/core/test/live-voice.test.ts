@@ -90,6 +90,14 @@ describe('live voice: fake', () => {
     expect(seen).toEqual(['turn-complete', 'closed']);
     expect(voice.closed).toBe(true);
   });
+
+  it('records typed learner questions in order', async () => {
+    const voice = new FakeLiveVoice();
+    await voice.connect({ instruction: 'teach', tools: [] });
+    voice.ask('Why does it keep the same time?');
+    voice.ask('What if I push harder?');
+    expect(voice.questions).toEqual(['Why does it keep the same time?', 'What if I push harder?']);
+  });
 });
 
 describe('live voice: driver beats', () => {
@@ -180,6 +188,30 @@ describe('live voice: interrupt', () => {
     await driver.start();
     voice.emit({ type: 'interrupted' });
     expect(driver.lastAnchor).toMatchObject({ beat: 's1b1', wordIndex: 0 } satisfies Partial<AskAnchor>);
+    controller.destroy();
+  });
+
+  it('pauses and pins the anchor when the learner types mid-reading', async () => {
+    const { controller, voice, driver, events } = await setup();
+    await driver.start();
+    voice.emit({ type: 'turn-complete', turnId: saidId(voice, 0) });
+    controller.play();
+    expect(controller.isPlaying).toBe(true);
+    voice.emit({ type: 'transcript', text: 'Pull the bob aside', turnId: 's1b2' });
+    // A typed question cuts in the same way a spoken one does: the driver
+    // pauses first, then the host sends the text as a learner turn.
+    driver.interrupt();
+    expect(controller.isPlaying).toBe(false);
+    expect(driver.lastAnchor).toMatchObject({ beat: 's1b2', wordIndex: 3 });
+    expect(events.filter((event) => event.type === 'anchor')).toHaveLength(1);
+    controller.destroy();
+  });
+
+  it('ignores interrupt when the driver is not live', async () => {
+    const { controller, driver } = await setup();
+    driver.interrupt();
+    expect(driver.lastAnchor).toBeNull();
+    expect(controller.isPlaying).toBe(false);
     controller.destroy();
   });
 });

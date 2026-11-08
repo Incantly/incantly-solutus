@@ -320,7 +320,7 @@ export class LiveDriver {
         this.onTurnComplete(event.turnId);
         return;
       case 'interrupted':
-        this.onInterrupted();
+        this.interrupt();
         return;
       case 'tool-call':
         void this.tools.dispatch(event.callId, event.name, event.args);
@@ -352,8 +352,12 @@ export class LiveDriver {
     this.sayBeat(beat);
   }
 
-  /** Pauses the film and pins the word the transcript had reached. */
-  private onInterrupted(): void {
+  /**
+   * The learner cut in: pauses the film and pins the word the transcript had
+   * reached. Spoken interruptions arrive as voice events; typed questions
+   * call this directly before sending, so both pause the film the same way.
+   */
+  interrupt(): void {
     if (this.state !== 'live') return;
     const beat = this.controller.currentBeat;
     if (!beat) {

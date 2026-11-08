@@ -213,6 +213,13 @@ export class GeminiLiveVoice implements LiveVoice {
     });
   }
 
+  /** A typed learner question: a user turn with turnComplete, answered like speech. */
+  ask(text: string): void {
+    this.send({
+      clientContent: { turns: [{ role: 'user', parts: [{ text }] }], turnComplete: true },
+    });
+  }
+
   /** Learner microphone audio: 16 kHz 16-bit PCM, base64 in realtimeInput. */
   sendAudio(pcm16: Int16Array | ArrayBuffer): void {
     const bytes = pcm16 instanceof Int16Array ? new Uint8Array(pcm16.buffer, pcm16.byteOffset, pcm16.byteLength) : new Uint8Array(pcm16);

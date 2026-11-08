@@ -126,7 +126,7 @@ import {
 
 /**
  * The film player: a silent fixture film through the real controller, player
- * and probe path. `?film=thirty|sixty` picks the film, or a generated film's
+ * and probe path. `?film=thirty|sixty|pythagoras` picks the film, or a generated film's
  * id from the dev store; `?preset=` and `?theme=` style the figure as an
  * integrator would; `?hide=` (comma separated: captions, transcript,
  * chapters, timeline, deck, playerFullscreen) turns chrome off; `?deck=1`
@@ -3246,6 +3246,8 @@ export interface LiveVoiceControls {
 
 /** Shown when the server has no live voice: the operator never accepted retention or set no key. */
 export const LIVE_VOICE_OFF_MESSAGE = 'Live voice is off on this server (set GEMINI_LIVE_RETENTION_ACCEPTED=1 with a Gemini key)';
+/** The whole start sequence gets this long before the toggle gives up cleanly. */
+export const LIVE_START_TIMEOUT_MS = 15000;
 
 /** Mints one short-lived Live token through the dev server, like the ask calls. Throws plain words, never the key. */
 async function mintLiveToken(): Promise<{ token: string; model: string }> {
@@ -3339,15 +3341,34 @@ function buildLiveVoice(
   teacherLine.hidden = true;
   const toolList = document.createElement('ul');
   toolList.className = 'inc-live-tools';
+  // Listen-and-type mode: the mic never started, so the learner writes.
+  const micNote = document.createElement('p');
+  micNote.className = 'inc-live-mic';
+  micNote.textContent = 'Microphone is off: type your question below.';
+  micNote.hidden = true;
+  const askForm = document.createElement('form');
+  askForm.className = 'inc-live-ask';
+  const askInput = document.createElement('input');
+  askInput.type = 'text';
+  askInput.className = 'inc-live-input';
+  askInput.setAttribute('aria-label', 'Type a question for the teacher');
+  askInput.placeholder = 'Type a question…';
+  askInput.autocomplete = 'off';
+  const askButton = document.createElement('button');
+  askButton.type = 'submit';
+  askButton.className = 'inc-live-send';
+  askButton.textContent = 'Ask';
+  askForm.append(askInput, askButton);
   const errorLine = document.createElement('p');
   errorLine.className = 'inc-live-error';
   errorLine.setAttribute('role', 'alert');
   errorLine.hidden = true;
-  panel.append(status, learnerLine, teacherLine, toolList, errorLine);
+  panel.append(status, micNote, learnerLine, teacherLine, toolList, askForm, errorLine);
   if (bar && bar.parentElement) bar.after(panel);
   else page.append(panel);
 
   let driver: LiveDriver | null = null;
+  let voice: GeminiLiveVoice | null = null;
   let mic: MicrophoneHandle | null = null;
   let speaker: PcmPlayer | null = null;
   let offs: Array<() => void> = [];
@@ -3409,6 +3430,7 @@ function buildLiveVoice(
       // The film still restores its advance mode below.
     }
     driver = null;
+    voice = null;
     try {
       mic?.stop();
     } catch {
@@ -3425,6 +3447,7 @@ function buildLiveVoice(
     setStatus('Off');
     setLearner('');
     setTeacher('');
+    micNote.hidden = true;
     renderToggle();
     if (errorText === null) panel.hidden = true;
     if (resume && hadSession) ctx.model.play();
@@ -3511,9 +3534,30 @@ function buildLiveVoice(
     renderToggle();
     panel.hidden = false;
     setError(null);
+    micNote.hidden = true;
     setStatus('Starting…');
+    // A hung connect (or a mic prompt left open) must not strand the toggle:
+    // the whole sequence gets one budget, then stops cleanly with its message.
+    let cancel = false;
+    let timer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+      timer = null;
+      cancel = true;
+      stop(false);
+      setError('Live voice could not connect in time.');
+      panel.hidden = false;
+    }, LIVE_START_TIMEOUT_MS);
+    const done = (): void => {
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
+    };
     try {
       const minted = await mintLiveToken();
+      if (cancel) {
+        stop(false);
+        return;
+      }
       mixerWasOn = ctx.mixer.isOn;
       ctx.mixer.setEnabled(false);
       const live = new GeminiLiveVoice({
@@ -3521,6 +3565,30 @@ function buildLiveVoice(
         model: minted.model,
         refreshToken: async () => (await mintLiveToken()).token,
       });
+      voice = live;
+      // The mic comes before the paid session: a denied or missing mic drops
+      // into listen-and-type instead of failing the whole feature.
+      let micHandle: MicrophoneHandle | null = null;
+      try {
+        micHandle = await startMicrophone((chunk) => {
+          try {
+            live.sendAudio(chunk);
+          } catch {
+            // A dropped socket stops the session through its own close event.
+          }
+        });
+      } catch {
+        micHandle = null;
+      }
+      if (cancel) {
+        try {
+          micHandle?.stop();
+        } catch {
+          // A half-started capture still stops the tracks.
+        }
+        stop(false);
+        return;
+      }
       const useDriver = new LiveDriver({
         controller: ctx.controller,
         film: ctx.film(),
@@ -3544,19 +3612,20 @@ function buildLiveVoice(
       const player = createPcmPlayer({ volume: ctx.model.state.volume });
       speaker = player;
       offs.push(live.onAudio((chunk) => player.push(chunk)));
+      if (micHandle === null) micNote.hidden = false;
       await useDriver.start();
-      const micHandle = await startMicrophone((chunk) => {
-        try {
-          live.sendAudio(chunk);
-        } catch {
-          // A dropped socket stops the session through its own close event.
-        }
-      });
+      if (cancel) {
+        stop(false);
+        return;
+      }
       mic = micHandle;
       active = true;
       setStatus(`Live · ${useDriver.currentBeat?.id ?? ''}`);
       refreshCaption();
+      done();
     } catch (error) {
+      done();
+      if (cancel) return;
       const message = error instanceof Error ? error.message : 'Live voice did not start.';
       stop(false);
       setError(message);
@@ -3573,6 +3642,20 @@ function buildLiveVoice(
       return;
     }
     void start();
+  });
+
+  askForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const text = askInput.value.trim();
+    const session = voice;
+    const useDriver = driver;
+    if (text === '' || !active || !session || !useDriver) return;
+    askInput.value = '';
+    // A typed cut-in pauses the film exactly like a spoken interruption,
+    // then the text goes out as a learner turn for the teacher to answer.
+    setLearner(text);
+    useDriver.interrupt();
+    session.ask(text);
   });
 
   return {

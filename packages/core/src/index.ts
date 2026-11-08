@@ -99,7 +99,7 @@ export {
 export type { FilmVersionCard, FlattenedBeat, FlattenedTimeline, StoredInsert, VersionChoice } from './film/library';
 export { formatFilmLink, parseFilmLink, resolveFilmLink, resolveFilmPosition, resumeKey, ResumeStore, shortcutFor, SHORTCUTS } from './film/controls';
 export type { FilmLink, FilmPosition, PlayerShortcut, ResumeStorage, ShortcutAction } from './film/controls';
-export { FILM_FIXTURES, SIXTY_SECOND_FILM, THIRTY_SECOND_FILM } from './film/fixtures';
+export { FILM_FIXTURES, PYTHAGORAS_FILM, SIXTY_SECOND_FILM, THIRTY_SECOND_FILM } from './film/fixtures';
 export type { FilmFixture, FilmFixtureScene } from './film/fixtures';
 export { filmDeadlineMs, filmPlanTokens, filmPresetFor, filmScenesFor, FILM_GENERATION_CEILING_MS, FILM_LENGTH_PRESETS, FILM_PLAN_BASE_TOKENS, FILM_PLAN_TOKENS_PER_SCENE, FILM_PRESET_SCENE_MAX_SECONDS } from './film/presets';
 export type { FilmPreset } from './film/presets';

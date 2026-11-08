@@ -54,7 +54,7 @@ const FIRST_BEAT = 'A pendulum hangs from its pivot, pulled straight down by gra
  * message, answers setup immediately, and lets the test send transcripts,
  * interruptions and tool calls on demand.
  */
-async function installLiveServer(page: Page): Promise<{
+async function installLiveServer(page: Page, options: { setupComplete?: boolean } = {}): Promise<{
   setups: unknown[];
   clientMessages: unknown[];
   /** WebSocket URLs the guard blocked: any entry means the test leaked. */
@@ -89,7 +89,9 @@ async function installLiveServer(page: Page): Promise<{
         clientMessages.push(parsed);
         if (typeof parsed === 'object' && parsed !== null && 'setup' in parsed) {
           setups.push((parsed as { setup: unknown }).setup);
-          ws.send(JSON.stringify({ setupComplete: {} }));
+          // A silent server never answers setup: the start must time out
+          // instead of hanging on the toggle forever.
+          if (options.setupComplete !== false) ws.send(JSON.stringify({ setupComplete: {} }));
         }
       });
       return;
@@ -255,4 +257,89 @@ test('a server-side close shows its reason and keeps the panel open', async ({ p
   await expect(page.locator('.inc-live-panel')).toBeVisible();
   expect((await liveState(page)).active).toBe(false);
   expect((await liveState(page)).error).toContain('billing is disabled for this key');
+});
+
+test('live voice on the Pythagoras film declares the a and b controls with ranges', async ({ page }) => {
+  await mintToken(page);
+  const server = await installLiveServer(page);
+  await openPlayer(page, 'pythagoras');
+  await expect(page.locator('.inc-player h2')).toHaveText('Pythagoras: talk to the teacher');
+  await page.locator('.inc-live-toggle').click();
+
+  // The setup carries per-film tools: show_me names this film's leg controls
+  // with the ranges the scene declares.
+  await expect.poll(() => server.setups.length).toBe(1);
+  const setup = server.setups[0] as {
+    tools?: Array<{ functionDeclarations?: Array<{ name?: string; parameters?: { properties?: { set?: { properties?: Record<string, { minimum?: number; maximum?: number }> } } } }> }>;
+  };
+  const showMe = setup.tools?.[0]?.functionDeclarations?.find((tool) => tool.name === 'show_me');
+  expect(showMe?.parameters?.properties?.set?.properties?.a).toMatchObject({ minimum: 1, maximum: 8 });
+  expect(showMe?.parameters?.properties?.set?.properties?.b).toMatchObject({ minimum: 1, maximum: 8 });
+  expect(server.blocked).toEqual([]);
+
+  await page.locator('.inc-live-toggle').click();
+  await expect(page.locator('.inc-live-panel')).toBeHidden();
+  expect((await liveState(page)).active).toBe(false);
+});
+
+test('mic denied still starts in listen-and-type mode with a typed question box', async ({ page }) => {
+  await mintToken(page);
+  const server = await installLiveServer(page);
+  await page.addInitScript(() => {
+    Object.defineProperty(window.navigator, 'mediaDevices', {
+      value: { getUserMedia: () => Promise.reject(new DOMException('Permission denied', 'NotAllowedError')) },
+    });
+  });
+  await openPlayer(page, 'thirty');
+  await page.locator('.inc-live-toggle').click();
+
+  // No mic, no failure: the teacher still reads, and the panel says to type.
+  await expect.poll(() => server.says().length).toBeGreaterThan(0);
+  expect(server.blocked).toEqual([]);
+  expect((await liveState(page)).active).toBe(true);
+  await expect(page.locator('.inc-live-mic')).toHaveText('Microphone is off: type your question below.');
+
+  // A typed question pauses the film like a spoken interruption and goes out
+  // as a clientContent user turn with turnComplete.
+  await page.locator('.inc-player-transport button', { hasText: 'Play' }).click();
+  await expect.poll(async () => (await stats(page)).playing).toBe(true);
+  const question = 'Why does it keep the same time?';
+  await page.locator('.inc-live-input').fill(question);
+  await page.locator('.inc-live-input').press('Enter');
+  await expect.poll(async () => (await stats(page)).playing).toBe(false);
+  await expect(page.locator('.inc-live-learner')).toContainText(question);
+  const userTurns = server.clientMessages
+    .map(
+      (message) =>
+        message as {
+          clientContent?: { turns?: Array<{ role?: string; parts?: Array<{ text?: string }> }>; turnComplete?: boolean };
+        },
+    )
+    .filter((message) => message.clientContent?.turns?.[0]?.role === 'user');
+  expect(userTurns.length).toBeGreaterThan(0);
+  const asked = userTurns[userTurns.length - 1]!;
+  expect(asked.clientContent?.turns?.[0]?.parts?.[0]?.text).toBe(question);
+  expect(asked.clientContent?.turnComplete).toBe(true);
+
+  await page.locator('.inc-live-toggle').click();
+  await expect(page.locator('.inc-live-panel')).toBeHidden();
+  expect((await liveState(page)).active).toBe(false);
+});
+
+test('a server that never answers setup times out the start instead of hanging', async ({ page }) => {
+  test.setTimeout(60_000);
+  await mintToken(page);
+  const server = await installLiveServer(page, { setupComplete: false });
+  await openPlayer(page, 'thirty');
+  await page.locator('.inc-live-toggle').click();
+
+  // The socket opened and the setup went out; only setupComplete never comes.
+  await expect.poll(() => server.setups.length).toBe(1);
+  await expect(page.locator('.inc-live-error')).toContainText('Live voice could not connect in time.', { timeout: 25_000 });
+  await expect(page.locator('.inc-live-panel')).toBeVisible();
+  expect((await liveState(page)).active).toBe(false);
+  expect((await liveState(page)).error).toContain('Live voice could not connect in time');
+  // The toggle stays usable after the timeout.
+  await expect(page.locator('.inc-live-toggle')).toHaveText('Live voice');
+  await expect(page.locator('.inc-live-toggle')).toBeEnabled();
 });
