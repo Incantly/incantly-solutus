@@ -470,7 +470,8 @@ test('link-to-time deep links seek on load and copy from the transport', async (
 
 test('keyboard shortcuts play, move and ask without touching fields', async ({ page }) => {
   await openPlayer(page, 'thirty');
-  await expect(page.locator('.inc-shortcuts li')).toHaveCount(10);
+  await expect(page.locator('.inc-shortcuts li')).toHaveCount(11);
+  await expect(page.locator('.inc-shortcuts li', { hasText: 'Live voice on / off' })).toHaveCount(1);
   await page.locator('.inc-player h2').click();
   await page.keyboard.press('k');
   await expect.poll(async () => page.evaluate(() => (window.__playground?.stats as () => { playing: boolean })().playing)).toBe(true);

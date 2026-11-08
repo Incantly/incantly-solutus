@@ -15,6 +15,7 @@ import {
   compileTrusted,
   createBrowserFallbackRig,
   createSandboxedFallbackRig,
+  defaultShowMeBinding,
   ExportCancellation,
   ExportCancelledError,
   ExportError,
@@ -33,6 +34,7 @@ import {
   fontsReady,
   formatFilmLink,
   InsertPlayer,
+  LiveDriver,
   meanPixelDifference,
   mountStubRuntime,
   openBrowserCapture,
@@ -96,6 +98,8 @@ import {
   type MixerClip,
   type StoredInsert,
   type KitRegistry,
+  type LiveDriverEvent,
+  type LiveEvent,
   type PlayerState,
   type ProbeReport,
   type RendererMessage,
@@ -107,7 +111,16 @@ import {
   type ShowMeSession,
   type StylePreset,
 } from '@incantly/core';
-import { resolveFilmSource, storedAsFixture, type StoredFilm } from '@incantly/generation/client';
+import {
+  createPcmPlayer,
+  GeminiLiveVoice,
+  resolveFilmSource,
+  startMicrophone,
+  storedAsFixture,
+  type MicrophoneHandle,
+  type PcmPlayer,
+  type StoredFilm,
+} from '@incantly/generation/client';
 
 /**
  * The film player: a silent fixture film through the real controller, player
@@ -483,6 +496,7 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
   };
 
   let openAsk = (): void => undefined;
+  let toggleLive = (): void => undefined;
   const transport = buildTransport(player, model, film, mixer, () => openAsk(), { toggleLoop, copyLink }, playerStyle.show.playerFullscreen);
   // The player root goes fullscreen; figures mirror the same chrome-aware growth — trusted directly,
   // sandboxed through the bridge — with playback untouched, so exiting restores layout and position.
@@ -817,6 +831,7 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
     ask: () => openAsk(),
     loop: () => toggleLoop(),
     bookmark: () => bookmarkUi.add(),
+    live: () => toggleLive(),
   });
   buildShortcutHelp(player);
 
@@ -856,6 +871,9 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
   });
   // Karaoke captions: one span per word, the sounding one highlighted.
   let wordSpans: HTMLElement[] = [];
+  // While live voice owns the film, the caption band shows what the teacher
+  // actually said for the current beat, not the beat's script line.
+  let liveCaptionText: string | null = null;
   const highlightWord = (index: number): void => {
     wordSpans.forEach((span, i) => span.classList.toggle('is-active', i === index));
   };
@@ -865,6 +883,12 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
     if (insertText !== null) {
       card.hidden = true;
       caption.textContent = insertText;
+      wordSpans = [];
+      return;
+    }
+    if (liveCaptionText !== null && state.caption !== null) {
+      card.hidden = true;
+      caption.textContent = liveCaptionText;
       wordSpans = [];
       return;
     }
@@ -900,6 +924,24 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
   model.on((event) => {
     if (event.type === 'chrome') applyCaption(model.state);
   });
+  // Live voice: the transport toggle, the mic, the teacher's audio and the
+  // voice panel. Beside the film, generic over whatever film plays.
+  const live = buildLiveVoice(player, {
+    model,
+    controller,
+    film: () => film,
+    figure: askFigure,
+    ask: askUi,
+    mixer,
+    renderCaption: () => applyCaption(model.state),
+    liveCaption: (text) => {
+      liveCaptionText = text;
+    },
+  });
+  toggleLive = () => void live.toggle();
+  // Leaving the page stops the mic, the teacher and the socket, without
+  // resuming playback under a page that is going away.
+  window.addEventListener('pagehide', () => live.stop(false));
   let lastFrame = performance.now();
   let lastInsertCaption = '';
   let lastSaved = 0;
@@ -961,6 +1003,7 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
     mixer,
     scenes: () => ({ count: film.scenes.length, multi: controller.multiScene, active: controller.sceneIndex, cuts: [...cuts], chapters: model.chapters().map((chapter) => chapter.scene) }),
     ask: () => askUi.state(),
+    live: () => live.state(),
     full: () => ({
       version: film.version,
       history: versionStore.list().map((card) => card.summary),
@@ -2473,6 +2516,13 @@ interface AskSheet {
   caption(): string | null;
   /** Plays a clip over the paused film: a saved insert, or the deeper rung's. Null when it plays, else why not. */
   playClip(clip: InsertClip): string | null;
+  /**
+   * The live voice's make_example rung: the same insert flow as Explain
+   * deeper, pinned as a private insert and played as a detour. Resolves with
+   * the insert id when it starts playing; onDone runs when it resumes the
+   * film, so the driver can read on from the anchor.
+   */
+  makeExample(request: string, anchor: AskAnchor, onDone: () => void): Promise<unknown>;
   state(): {
     sheet: boolean;
     answer: string;
@@ -2701,25 +2751,27 @@ function buildAskSheet(
     void loadVoices();
   };
 
-  const assemblyBody = (question: string, depth?: 'simpler' | 'standard' | 'deeper'): Record<string, unknown> => {
+  // The Ask assembly for one anchor and beat: the sheet's own for typed
+  // questions, the caller's for live voice inserts that never open it.
+  const assemblyBody = (question: string, anchorAt: AskAnchor | null, beatAt: CompiledBeat | null, depth?: 'simpler' | 'standard' | 'deeper'): Record<string, unknown> => {
     const film = ctx.film();
     const lines = controller.transcript();
-    const at = lines.findIndex((line) => line.beat === anchor?.beat);
-    const neighbours = lines.slice(Math.max(0, at - 1), at + 2).filter((line) => line.beat !== anchor?.beat);
-    const jsLines = ctx.sceneJsFor(anchor?.scene ?? '').split('\n');
-    const sceneLines = (film.sourceMap[anchor?.beat ?? '']?.lines ?? [])
+    const at = lines.findIndex((line) => line.beat === anchorAt?.beat);
+    const neighbours = lines.slice(Math.max(0, at - 1), at + 2).filter((line) => line.beat !== anchorAt?.beat);
+    const jsLines = ctx.sceneJsFor(anchorAt?.scene ?? '').split('\n');
+    const sceneLines = (film.sourceMap[anchorAt?.beat ?? '']?.lines ?? [])
       .map((n) => ({ n, text: jsLines[n - 1] ?? '' }))
       .filter((line) => line.text !== '');
-    const scene = film.scenes.find((candidate) => candidate.id === anchor?.scene);
+    const scene = film.scenes.find((candidate) => candidate.id === anchorAt?.scene);
     return {
       question,
-      anchor: anchor ? { film: anchor.film, version: anchor.version, scene: anchor.scene, beat: anchor.beat, wordIndex: anchor.wordIndex } : null,
-      beat: beat ? { beat: beat.id, say: beat.step.say } : null,
+      anchor: anchorAt ? { film: anchorAt.film, version: anchorAt.version, scene: anchorAt.scene, beat: anchorAt.beat, wordIndex: anchorAt.wordIndex } : null,
+      beat: beatAt ? { beat: beatAt.id, say: beatAt.step.say } : null,
       neighbours: neighbours.map((line) => ({ beat: line.beat, say: line.say })),
       sceneLines,
       sceneSummary: scene?.title ?? '',
-      values: anchor?.controlValues ?? {},
-      readouts: anchor?.readouts ?? [],
+      values: anchorAt?.controlValues ?? {},
+      readouts: anchorAt?.readouts ?? [],
       thread: thread.map((turn) => ({ ...turn })),
       depth: depth ?? 'standard',
       language: language.value === '' ? 'en' : language.value,
@@ -2733,7 +2785,7 @@ function buildAskSheet(
     speakStatus.textContent = '';
     try {
       const token = await devToken();
-      const full = await streamAsk(token, assemblyBody(question, depth), (delta) => {
+      const full = await streamAsk(token, assemblyBody(question, anchor, beat, depth), (delta) => {
         answer.textContent += delta;
       });
       lastAnswer = full.text;
@@ -2764,44 +2816,69 @@ function buildAskSheet(
     showmeBanner.hidden = true;
   });
 
-  const askDeeper = async (question: string, depth: 'simpler' | 'standard' | 'deeper' = 'standard'): Promise<void> => {
+  // The insert flow for one anchor and beat: Explain deeper from the sheet,
+  // or live voice's make_example, which never opens it. Throws once the
+  // status line already says why, so live voice can show it in its panel.
+  const runInsert = async (
+    question: string,
+    anchorAt: AskAnchor,
+    beatAt: CompiledBeat,
+    depth: 'simpler' | 'standard' | 'deeper' = 'standard',
+    onDone?: () => void,
+  ): Promise<string> => {
     status.textContent = 'Writing the insert…';
+    const fail = (message: string): Error => {
+      status.textContent = message;
+      return new Error(message);
+    };
+    let clip: InsertClip;
     try {
       const token = await devToken();
       const params = Object.keys(figure.runtime.values());
       const posted = await fetch('/api/v1/ask/insert', {
         method: 'POST',
         headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-        body: JSON.stringify({ ...assemblyBody(question, depth), params }),
+        body: JSON.stringify({ ...assemblyBody(question, anchorAt, beatAt, depth), params }),
       });
       const result = (await posted.json()) as { status?: string; clip?: { anchor: AskAnchor; lines: Array<{ say: string; seconds: number; set?: Record<string, number> }> } };
-      if (!posted.ok || result.status !== 'clip' || !result.clip || !anchor || !beat) {
-        status.textContent = 'No insert came back — the film is still paused where you asked.';
-        return;
+      if (!posted.ok || result.status !== 'clip' || !result.clip) {
+        throw fail('No insert came back — the film is still paused where you asked.');
       }
       const validated = validateInsertClip({ anchor: result.clip.anchor, lines: result.clip.lines }, ctx.film(), new Set(params));
       if (!validated.ok) {
-        status.textContent = `The insert did not fit this scene: ${validated.problems[0] ?? 'invalid'}.`;
-        return;
+        throw fail(`The insert did not fit this scene: ${validated.problems[0] ?? 'invalid'}.`);
       }
-      const problem = startClip({ ...validated.clip, anchor });
-      if (problem) {
-        status.textContent = problem;
-        return;
-      }
-      ctx.keepInsert({ ...validated.clip, anchor });
+      clip = { ...validated.clip, anchor: anchorAt };
+    } catch (error) {
+      if (status.textContent === 'Writing the insert…') fail('No insert came back — the film is still paused where you asked.');
+      throw error;
+    }
+    const problem = startClip(clip, onDone);
+    if (problem) throw fail(problem);
+    ctx.keepInsert(clip);
+    status.textContent = '';
+    sheet.hidden = true;
+    return clip.id;
+  };
+
+  const askDeeper = async (question: string, depth: 'simpler' | 'standard' | 'deeper' = 'standard'): Promise<void> => {
+    if (!anchor || !beat) {
+      status.textContent = 'Play the film first, then ask.';
+      return;
+    }
+    try {
+      await runInsert(question, anchor, beat, depth);
       lastQuestion = question;
       lastDepthRung = 'deeper';
-      status.textContent = '';
-      sheet.hidden = true;
     } catch {
-      status.textContent = 'No insert came back — the film is still paused where you asked.';
+      // runInsert already said why on the status line.
     }
   };
 
   // One insert player for the deeper rung and saved inserts alike: lines in
   // order, the back-to-film beat, then an auto-resume at the anchor word.
-  const startClip = (clip: InsertClip): string | null => {
+  // onDone runs after that resume, for live voice's return to the anchor.
+  const startClip = (clip: InsertClip, onDone?: () => void): string | null => {
     if (!stack.push(clip.anchor)) return 'Finish this question first — questions nest two deep.';
     const nested = players.length > 0;
     const playing = new InsertPlayer(controller, ctx.film(), clip, {
@@ -2812,6 +2889,7 @@ function buildAskSheet(
         stack.pop();
         players.pop();
         if (players.length === 0) insertBanner.hidden = true;
+        onDone?.();
       },
     });
     players.push(playing);
@@ -2833,7 +2911,7 @@ function buildAskSheet(
       const posted = await fetch('/api/v1/ask/example', {
         method: 'POST',
         headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-        body: JSON.stringify(assemblyBody(question)),
+        body: JSON.stringify(assemblyBody(question, anchor, beat)),
       });
       const result = (await posted.json()) as { status?: string; clip?: { anchor: AskAnchor; html: string; css: string; js: string; caption: string } };
       if (!posted.ok || result.status !== 'clip' || !result.clip || !anchor || !beat) {
@@ -3040,6 +3118,12 @@ function buildAskSheet(
   return {
     open,
     playClip: (clip) => startClip(clip),
+    makeExample: async (request, anchorAt, onDone) => {
+      const beatAt = ctx.film().beats.find((candidate) => candidate.id === anchorAt.beat) ?? null;
+      if (!beatAt) throw new Error(`The pinned beat "${anchorAt.beat}" is no longer in this film.`);
+      model.addMarker(anchorAt, request);
+      return runInsert(request, anchorAt, beatAt, 'standard', onDone);
+    },
     tick(dt: number): void {
       sideClip?.player.tick(dt);
       const top = players[players.length - 1];
@@ -3071,6 +3155,373 @@ function buildAskSheet(
     },
   };
 }
+
+/** What the page shows while live voice owns the film, for the panel and e2e. */
+export interface LiveVoiceState {
+  readonly active: boolean;
+  readonly status: string;
+  readonly learner: string;
+  readonly teacher: string;
+  readonly tools: ReadonlyArray<{ readonly name: string; readonly phase: 'working' | 'done'; readonly detail: string }>;
+  readonly error: string | null;
+}
+
+/** The page's handle on live voice: toggling, leaving, and the panel state. */
+export interface LiveVoiceControls {
+  toggle(): Promise<void>;
+  /** Stops live voice; resumes normal playback unless the page is going away. */
+  stop(resume?: boolean): void;
+  state(): LiveVoiceState;
+}
+
+/** Shown when the server has no live voice: the operator never accepted retention or set no key. */
+export const LIVE_VOICE_OFF_MESSAGE = 'Live voice is off on this server (set GEMINI_LIVE_RETENTION_ACCEPTED=1 with a Gemini key)';
+
+/** Mints one short-lived Live token through the dev server, like the ask calls. Throws plain words, never the key. */
+async function mintLiveToken(): Promise<{ token: string; model: string }> {
+  const token = await devToken();
+  let answer: Response;
+  try {
+    answer = await fetch('/api/v1/live/token', { method: 'POST', headers: { authorization: `Bearer ${token}` } });
+  } catch {
+    throw new Error('Live voice did not answer — the dev server may be down.');
+  }
+  if (answer.status === 404) throw new Error(LIVE_VOICE_OFF_MESSAGE);
+  if (!answer.ok) throw new Error(`Live voice did not start (the server answered ${answer.status}).`);
+  const body = (await answer.json()) as { token?: unknown; model?: unknown };
+  if (typeof body.token !== 'string' || body.token === '' || typeof body.model !== 'string' || body.model === '') {
+    throw new Error('Live voice did not start (the token was missing).');
+  }
+  return { token: body.token, model: body.model };
+}
+
+/** One tool line for the voice panel, in the teacher's words. */
+function liveToolLabel(name: string, args: unknown): string {
+  if (name === 'show_me') {
+    const set = typeof args === 'object' && args !== null ? (args as Record<string, unknown>).set : undefined;
+    if (typeof set === 'object' && set !== null && !Array.isArray(set)) {
+      const parts = Object.entries(set as Record<string, unknown>)
+        .map(([key, value]) => `${key} = ${typeof value === 'number' ? String(value) : JSON.stringify(value) ?? '?'}`)
+        .filter((part) => part !== '');
+      if (parts.length > 0) return `Showing ${parts.join(', ')}`;
+    }
+    return 'Showing…';
+  }
+  switch (name) {
+    case 'make_example':
+      return 'Making another example…';
+    case 'pause':
+      return 'Pausing…';
+    case 'resume':
+      return 'Resuming…';
+    case 'seek_beat':
+      return 'Jumping to a beat…';
+    case 'get_context':
+      return 'Reading the scene…';
+    default:
+      return `${name}…`;
+  }
+}
+
+/**
+ * Live voice on the film page: the transport toggle, the mic, the teacher's
+ * audio, the driver and the voice panel. Generic: it works for any film the
+ * page plays, with no film-specific code. Leaving live mode returns the film
+ * to normal playback at the current position.
+ */
+function buildLiveVoice(
+  page: HTMLElement,
+  ctx: {
+    model: PlayerModel;
+    controller: FilmController;
+    film(): CompiledFilm;
+    figure: { runtime: SceneRuntime; renderer: { apply(update: RuntimeUpdate): void } };
+    ask: Pick<AskSheet, 'makeExample'>;
+    mixer: FilmMixer;
+    renderCaption(): void;
+    liveCaption(text: string | null): void;
+  },
+): LiveVoiceControls {
+  const bar = page.querySelector('.inc-player-transport');
+  const toggleButton = document.createElement('button');
+  toggleButton.type = 'button';
+  toggleButton.className = 'inc-live-toggle';
+  toggleButton.textContent = 'Live voice';
+  toggleButton.setAttribute('aria-label', 'Live voice on or off');
+  toggleButton.setAttribute('aria-pressed', 'false');
+  if (bar) bar.append(toggleButton);
+  else page.append(toggleButton);
+
+  const panel = document.createElement('section');
+  panel.className = 'inc-live-panel';
+  panel.hidden = true;
+  const status = document.createElement('p');
+  status.className = 'inc-live-status';
+  status.setAttribute('role', 'status');
+  status.textContent = 'Off';
+  const learnerLine = document.createElement('p');
+  learnerLine.className = 'inc-live-learner';
+  learnerLine.setAttribute('aria-live', 'polite');
+  learnerLine.hidden = true;
+  const teacherLine = document.createElement('p');
+  teacherLine.className = 'inc-live-teacher';
+  teacherLine.setAttribute('aria-live', 'polite');
+  teacherLine.hidden = true;
+  const toolList = document.createElement('ul');
+  toolList.className = 'inc-live-tools';
+  const errorLine = document.createElement('p');
+  errorLine.className = 'inc-live-error';
+  errorLine.setAttribute('role', 'alert');
+  errorLine.hidden = true;
+  panel.append(status, learnerLine, teacherLine, toolList, errorLine);
+  if (bar && bar.parentElement) bar.after(panel);
+  else page.append(panel);
+
+  let driver: LiveDriver | null = null;
+  let mic: MicrophoneHandle | null = null;
+  let speaker: PcmPlayer | null = null;
+  let offs: Array<() => void> = [];
+  let busy = false;
+  let active = false;
+  let mixerWasOn = false;
+  let statusText = 'Off';
+  let learnerText = '';
+  let teacherText = '';
+  let errorText: string | null = null;
+  const toolLines = new Map<string, { name: string; label: string; phase: 'working' | 'done'; item: HTMLLIElement }>();
+
+  const renderToggle = (): void => {
+    toggleButton.textContent = active ? 'Live voice: on' : 'Live voice';
+    toggleButton.setAttribute('aria-pressed', active ? 'true' : 'false');
+    toggleButton.disabled = busy;
+  };
+  const setStatus = (text: string): void => {
+    statusText = text;
+    status.textContent = text;
+  };
+  const setError = (text: string | null): void => {
+    errorText = text;
+    errorLine.hidden = text === null;
+    errorLine.textContent = text ?? '';
+  };
+  const setLearner = (text: string): void => {
+    learnerText = text;
+    learnerLine.hidden = text === '';
+    learnerLine.textContent = text === '' ? '' : `Learner: ${text}`;
+  };
+  const setTeacher = (text: string): void => {
+    teacherText = text;
+    teacherLine.hidden = text === '';
+    teacherLine.textContent = text === '' ? '' : `Teacher: ${text}`;
+  };
+  const refreshCaption = (): void => {
+    ctx.liveCaption(driver ? driver.caption() : null);
+    ctx.renderCaption();
+  };
+
+  const stop = (resume = true): void => {
+    // A failed start still mutes the mixer, so every stop restores it; only
+    // a session that owned the film resumes playback, and only clean stops
+    // hide the panel — an error keeps it up with its message.
+    const hadSession = active || driver !== null || mic !== null;
+    active = false;
+    for (const off of offs) {
+      try {
+        off();
+      } catch {
+        // Tearing down a half-started session still restores the film.
+      }
+    }
+    offs = [];
+    try {
+      driver?.stop();
+    } catch {
+      // The film still restores its advance mode below.
+    }
+    driver = null;
+    try {
+      mic?.stop();
+    } catch {
+      // The mic is already gone.
+    }
+    mic = null;
+    speaker?.close();
+    speaker = null;
+    toolLines.clear();
+    toolList.textContent = '';
+    ctx.liveCaption(null);
+    ctx.renderCaption();
+    ctx.mixer.setEnabled(mixerWasOn);
+    setStatus('Off');
+    setLearner('');
+    setTeacher('');
+    renderToggle();
+    if (errorText === null) panel.hidden = true;
+    if (resume && hadSession) ctx.model.play();
+  };
+
+  const onVoiceEvent = (event: LiveEvent): void => {
+    switch (event.type) {
+      case 'speaking':
+        if (event.turnId === null) setTeacher('');
+        return;
+      case 'transcript':
+        // The beat's own lines caption the film through the driver; the
+        // panel carries the teacher's own replies.
+        if (event.turnId === null) setTeacher(event.text);
+        refreshCaption();
+        return;
+      case 'learner-transcript':
+        setLearner(event.text);
+        setStatus('Listening…');
+        return;
+      case 'tool-call': {
+        const label = liveToolLabel(event.name, event.args);
+        const item = document.createElement('li');
+        item.dataset.tool = event.name;
+        item.textContent = label;
+        toolList.append(item);
+        while (toolList.children.length > 8) toolList.firstElementChild?.remove();
+        toolLines.set(event.callId, { name: event.name, label, phase: 'working', item });
+        setStatus(label);
+        return;
+      }
+      case 'interrupted':
+        // The teacher goes silent at once; the film holds where it was cut.
+        speaker?.flush();
+        refreshCaption();
+        setStatus('Interrupted — listening…');
+        return;
+      case 'error':
+        setError(event.message);
+        stop(true);
+        return;
+      case 'closed':
+        if (active) {
+          setError('The live session closed.');
+          stop(true);
+        }
+        return;
+      default:
+        return;
+    }
+  };
+
+  const onDriverEvent = (event: LiveDriverEvent): void => {
+    switch (event.type) {
+      case 'started':
+      case 'said':
+        refreshCaption();
+        setStatus(`Live · ${event.beat}`);
+        return;
+      case 'tool': {
+        const line = toolLines.get(event.callId);
+        if (line) {
+          line.phase = 'done';
+          line.item.textContent = event.result.ok ? `${line.label.replace(/…$/, '')} — done` : `${line.label.replace(/…$/, '')} — needs another try`;
+        }
+        return;
+      }
+      case 'anchor':
+        refreshCaption();
+        return;
+      case 'done':
+        setStatus('Live · the film is finished');
+        return;
+      case 'stopped':
+        return;
+      default:
+        return;
+    }
+  };
+
+  const start = async (): Promise<void> => {
+    if (busy || active) return;
+    busy = true;
+    renderToggle();
+    panel.hidden = false;
+    setError(null);
+    setStatus('Starting…');
+    try {
+      const minted = await mintLiveToken();
+      mixerWasOn = ctx.mixer.isOn;
+      ctx.mixer.setEnabled(false);
+      const live = new GeminiLiveVoice({
+        token: minted.token,
+        model: minted.model,
+        refreshToken: async () => (await mintLiveToken()).token,
+      });
+      const useDriver = new LiveDriver({
+        controller: ctx.controller,
+        film: ctx.film(),
+        voice: live,
+        runtime: ctx.figure.runtime,
+        // The active scene's runtime at call time, as the Ask sheet replays:
+        // cuts while live move the scene under the tools.
+        showMe: (set, beat) => {
+          const shown = defaultShowMeBinding(ctx.figure.runtime)(set, beat);
+          ctx.figure.renderer.apply(ctx.figure.runtime.flush());
+          return shown;
+        },
+        makeExample: (request, anchor) =>
+          ctx.ask.makeExample(request, anchor, () => {
+            driver?.resume();
+          }),
+      });
+      driver = useDriver;
+      offs.push(live.on(onVoiceEvent));
+      offs.push(useDriver.on(onDriverEvent));
+      const player = createPcmPlayer({ volume: ctx.model.state.volume });
+      speaker = player;
+      offs.push(live.onAudio((chunk) => player.push(chunk)));
+      await useDriver.start();
+      const micHandle = await startMicrophone((chunk) => {
+        try {
+          live.sendAudio(chunk);
+        } catch {
+          // A dropped socket stops the session through its own close event.
+        }
+      });
+      mic = micHandle;
+      active = true;
+      setStatus(`Live · ${useDriver.currentBeat?.id ?? ''}`);
+      refreshCaption();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Live voice did not start.';
+      stop(false);
+      setError(message);
+      panel.hidden = false;
+    } finally {
+      busy = false;
+      renderToggle();
+    }
+  };
+
+  toggleButton.addEventListener('click', () => {
+    if (active) {
+      stop(true);
+      return;
+    }
+    void start();
+  });
+
+  return {
+    toggle: async (): Promise<void> => {
+      // start() never rejects: its failures land in the panel instead.
+      if (active) stop(true);
+      else await start();
+    },
+    stop,
+    state: () => ({
+      active,
+      status: statusText,
+      learner: learnerText,
+      teacher: teacherText,
+      tools: [...toolLines.values()].map((line) => ({ name: line.name, phase: line.phase, detail: line.item.textContent ?? '' })),
+      error: errorText,
+    }),
+  };
+};
 
 /** The dev token, fetched once: the ask endpoints authenticate like generation. */
 let askToken: string | null = null;
