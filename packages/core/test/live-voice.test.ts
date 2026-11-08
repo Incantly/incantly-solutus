@@ -254,13 +254,13 @@ describe('live voice: interrupt', () => {
     voice.emit({ type: 'speaking', turnId: null });
     voice.emit({ type: 'tool-call', callId: 'c1', name: 'resume', args: {} });
     await flush();
-    // The answer is still going: nothing said, no tool answer yet.
-    expect(answerFor(voice, 'c1')).toBeUndefined();
+    // The tool answers at once, but nothing is said while the answer is going.
+    expect(answerFor(voice, 'c1')).toEqual({ ok: true, beat: 's1b2', fromWord: 3 });
     expect(voice.said.map((line) => saidBeat(line.turnId))).toEqual(['s1b1', 's1b2']);
     voice.emit({ type: 'turn-complete', turnId: null });
     await flush();
-    expect(answerFor(voice, 'c1')).toEqual({ ok: true, beat: 's1b2', fromWord: 3 });
     expect(voice.said[voice.said.length - 1]).toEqual({ text: 'aside, let go, and watch the swing begin.', turnId: saidId(voice, 2) });
+    expect(controller.currentBeat?.id).toBe('s1b2');
     controller.destroy();
   });
 
@@ -338,16 +338,20 @@ describe('live voice: tools', () => {
     });
     voice.emit({ type: 'tool-call', callId: 'c1', name: 'resume', args: {} });
     await flush();
+    // The tool response describes the plan, but nothing is said yet: the
+    // model's reply comes first.
     expect(answerFor(voice, 'c1')).toEqual({ ok: true, beat: 's1b2', fromWord: 3 });
-    expect(seeks[0]).toBeCloseTo(at, 9);
-    // The unheard rest of beat 2 is read as its own utterance.
+    expect(voice.said.map((line) => saidBeat(line.turnId))).toEqual(['s1b1', 's1b2']);
+    // The cut-off turn's close is stale: the film holds.
+    voice.emit({ type: 'turn-complete', turnId: cutOff });
+    expect(controller.currentBeat?.id).toBe('s1b2');
+    // The model's reply turn ends: the unheard rest is read as its own utterance.
+    voice.emit({ type: 'speaking', turnId: null });
+    voice.emit({ type: 'turn-complete', turnId: null });
     const reread = saidId(voice, 2);
     expect(reread).not.toBe(cutOff);
     expect(voice.said[voice.said.length - 1]).toEqual({ text: 'aside, let go, and watch the swing begin.', turnId: reread });
-    expect(controller.currentBeat?.id).toBe('s1b2');
-    // The cut-off turn's close arrives first and is stale: the film holds.
-    voice.emit({ type: 'turn-complete', turnId: cutOff });
-    expect(voice.said.map((line) => saidBeat(line.turnId))).toEqual(['s1b1', 's1b2', 's1b2']);
+    expect(seeks[0]).toBeCloseTo(at, 9);
     expect(controller.currentBeat?.id).toBe('s1b2');
     // The re-read's own close advances normally to the next beat.
     voice.emit({ type: 'turn-complete', turnId: reread });
@@ -367,6 +371,9 @@ describe('live voice: tools', () => {
     voice.emit({ type: 'tool-call', callId: 'c1', name: 'resume', args: {} });
     await flush();
     expect(answerFor(voice, 'c1')).toMatchObject({ ok: true, beat: 's1b2' });
+    expect(voice.said.map((line) => saidBeat(line.turnId))).toEqual(['s1b1', 's1b2']);
+    voice.emit({ type: 'speaking', turnId: null });
+    voice.emit({ type: 'turn-complete', turnId: null });
     const reread = saidId(voice, 2);
     voice.emit({ type: 'turn-complete', turnId: reread });
     expect(voice.said.map((line) => saidBeat(line.turnId))).toEqual(['s1b1', 's1b2', 's1b2', 's1b3']);
@@ -374,19 +381,19 @@ describe('live voice: tools', () => {
     controller.destroy();
   });
 
-  it('advances the re-read when the cut-off turn never closes', async () => {
+  it('reads the remainder on the fallback when the model says nothing', async () => {
     const { controller, voice, driver } = await setup();
     await driver.start();
     voice.emit({ type: 'turn-complete', turnId: saidId(voice, 0) });
     voice.emit({ type: 'transcript', text: 'Pull the bob aside', turnId: saidId(voice, 1) });
     voice.emit({ type: 'interrupted' });
-    // No close for the cut-off utterance ever arrives.
+    // No reply turn ever comes: the fallback reads anyway.
     voice.emit({ type: 'tool-call', callId: 'c1', name: 'resume', args: {} });
     await flush();
     expect(answerFor(voice, 'c1')).toMatchObject({ ok: true, beat: 's1b2' });
-    voice.emit({ type: 'turn-complete', turnId: saidId(voice, 2) });
-    expect(voice.said.map((line) => saidBeat(line.turnId))).toEqual(['s1b1', 's1b2', 's1b2', 's1b3']);
-    expect(controller.currentBeat?.id).toBe('s1b3');
+    await new Promise((resolve) => setTimeout(resolve, 1600));
+    expect(voice.said[voice.said.length - 1]).toEqual({ text: 'aside, let go, and watch the swing begin.', turnId: saidId(voice, 2) });
+    expect(controller.currentBeat?.id).toBe('s1b2');
     controller.destroy();
   });
 
@@ -405,8 +412,58 @@ describe('live voice: tools', () => {
     voice.emit({ type: 'tool-call', callId: 'c2', name: 'resume', args: {} });
     await flush();
     expect(answerFor(voice, 'c2')).toEqual({ ok: true, beat: 's1b1', fromWord: 0 });
+    expect(voice.said.map((line) => saidBeat(line.turnId))).toEqual(['s1b1', 's1b2', 's1b1']);
+    voice.emit({ type: 'turn-complete', turnId: null });
+    await flush();
     expect(voice.said[voice.said.length - 1]).toEqual({ text: film.beats[0]!.step.say, turnId: saidId(voice, 3) });
     expect(controller.currentBeat?.id).toBe('s1b1');
+    controller.destroy();
+  });
+
+  it('answers a second resume while one is waiting with already:true', async () => {
+    const { controller, voice, driver } = await setup();
+    await driver.start();
+    voice.emit({ type: 'turn-complete', turnId: saidId(voice, 0) });
+    voice.emit({ type: 'transcript', text: 'Pull the bob aside', turnId: saidId(voice, 1) });
+    voice.emit({ type: 'interrupted' });
+    voice.emit({ type: 'tool-call', callId: 'c1', name: 'resume', args: {} });
+    await flush();
+    expect(answerFor(voice, 'c1')).toEqual({ ok: true, beat: 's1b2', fromWord: 3 });
+    voice.emit({ type: 'tool-call', callId: 'c2', name: 'resume', args: {} });
+    await flush();
+    expect(answerFor(voice, 'c2')).toEqual({ ok: true, already: true });
+    voice.emit({ type: 'turn-complete', turnId: null });
+    await flush();
+    // One scheduled resume reads once.
+    expect(voice.said.map((line) => saidBeat(line.turnId))).toEqual(['s1b1', 's1b2', 's1b2']);
+    expect(voice.said[voice.said.length - 1]).toEqual({ text: 'aside, let go, and watch the swing begin.', turnId: saidId(voice, 2) });
+    controller.destroy();
+  });
+
+  it('ignores our own say echoing back as interrupted', async () => {
+    const { controller, voice, driver, events } = await setup();
+    await driver.start();
+    voice.emit({ type: 'turn-complete', turnId: saidId(voice, 0) });
+    voice.emit({ type: 'transcript', text: 'Pull the bob aside', turnId: saidId(voice, 1) });
+    voice.emit({ type: 'interrupted' });
+    const pinned = driver.lastAnchor;
+    const anchors = events.filter((event) => event.type === 'anchor').length;
+    voice.emit({ type: 'tool-call', callId: 'c1', name: 'resume', args: {} });
+    await flush();
+    voice.emit({ type: 'turn-complete', turnId: null });
+    await flush();
+    const reread = saidId(voice, 2);
+    // The model starts its own reply and our say echoes back as interrupted:
+    // that is our cutoff, not a barge-in, so the film holds steady.
+    voice.emit({ type: 'speaking', turnId: null });
+    voice.emit({ type: 'interrupted' });
+    expect(driver.lastAnchor).toBe(pinned);
+    expect(events.filter((event) => event.type === 'anchor')).toHaveLength(anchors);
+    expect(controller.currentBeat?.id).toBe('s1b2');
+    // The interrupted echo does not consume the re-read: its close advances.
+    voice.emit({ type: 'turn-complete', turnId: null });
+    voice.emit({ type: 'turn-complete', turnId: reread });
+    expect(controller.currentBeat?.id).toBe('s1b3');
     controller.destroy();
   });
 
@@ -419,6 +476,10 @@ describe('live voice: tools', () => {
     voice.emit({ type: 'tool-call', callId: 'c1', name: 'resume', args: {} });
     await flush();
     expect(answerFor(voice, 'c1')).toMatchObject({ ok: true, beat: 's1b2' });
+    // The model's reply ends first; only then is the remainder read.
+    voice.emit({ type: 'speaking', turnId: null });
+    voice.emit({ type: 'turn-complete', turnId: null });
+    await flush();
     const reread = saidId(voice, 2);
     // The cut-off close is stale; the re-read's own close moves the film on.
     voice.emit({ type: 'turn-complete', turnId: saidId(voice, 1) });
@@ -430,6 +491,8 @@ describe('live voice: tools', () => {
     voice.emit({ type: 'tool-call', callId: 'c2', name: 'resume', args: {} });
     await flush();
     expect(answerFor(voice, 'c2')).toEqual({ ok: true, beat: 's1b3' });
+    voice.emit({ type: 'turn-complete', turnId: null });
+    await flush();
     expect(voice.said[voice.said.length - 1]).toEqual({ text: film.beats[2]!.step.say, turnId: saidId(voice, 4) });
     expect(controller.currentBeat?.id).toBe('s1b3');
     expect(driver.lastAnchor?.beat).toBe(anchor.beat);
@@ -566,10 +629,14 @@ describe('live voice: tools', () => {
     await flush();
     await flush();
     expect(answerFor(voice, 'c1')).toEqual({ ok: true, request: 'Another swing', result: { clipId: 'clip-1' } });
-    // Resume re-reads the unheard rest of the held beat.
+    // Resume re-reads the unheard rest of the held beat once the reply ends.
     voice.emit({ type: 'tool-call', callId: 'c2', name: 'resume', args: {} });
     await flush();
     expect(answerFor(voice, 'c2')).toEqual({ ok: true, beat: 's1b2', fromWord: 3 });
+    expect(voice.said.map((line) => saidBeat(line.turnId))).toEqual(['s1b1', 's1b2']);
+    voice.emit({ type: 'speaking', turnId: null });
+    voice.emit({ type: 'turn-complete', turnId: null });
+    await flush();
     expect(voice.said[voice.said.length - 1]).toEqual({ text: 'aside, let go, and watch the swing begin.', turnId: saidId(voice, 2) });
     controller.destroy();
   });
@@ -590,6 +657,9 @@ describe('live voice: tools', () => {
     voice.emit({ type: 'tool-call', callId: 'c2', name: 'resume', args: {} });
     await flush();
     expect(answerFor(voice, 'c2')).toEqual({ ok: true, beat: 's1b2', fromWord: 3 });
+    expect(voice.said.map((line) => saidBeat(line.turnId))).toEqual(['s1b1', 's1b2']);
+    voice.emit({ type: 'turn-complete', turnId: null });
+    await flush();
     expect(voice.said[voice.said.length - 1]).toEqual({ text: 'aside, let go, and watch the swing begin.', turnId: saidId(voice, 2) });
     controller.destroy();
   });
