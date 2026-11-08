@@ -46,6 +46,12 @@ function server(socket: FakeSocket, message: unknown): void {
   socket.onmessage!({ data: JSON.stringify(message) });
 }
 
+/** Lets the socket's ordered frame chain drain before asserting on events. */
+async function flush(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 async function connected() {
   const h = harness();
   const promise = h.voice.connect({ instruction: 'Teach.', tools: [] });
@@ -72,6 +78,7 @@ describe('GeminiLiveVoice bugs: malformed server messages', () => {
     expect(() => server(socket, { toolCall: { functionCalls: [null] } }), 'null entry').not.toThrow();
     expect(() => server(socket, { toolCall: { functionCalls: [{ id: 1, name: null }] } }), 'bad id/name').not.toThrow();
     // Nothing well-formed arrived, so no tool call may have been emitted.
+    await flush();
     expect(events.slice(before).filter((event) => event.type === 'tool-call')).toEqual([]);
   });
 
@@ -85,6 +92,7 @@ describe('GeminiLiveVoice bugs: malformed server messages', () => {
       'bad base64',
     ).not.toThrow();
     // No usable audio or text arrived, so no speaking/transcript may follow.
+    await flush();
     expect(events.slice(before)).toEqual([]);
   });
 });
