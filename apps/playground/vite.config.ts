@@ -170,8 +170,8 @@ function readNarrationBeats(input: unknown): Array<{ beatId: string; text: strin
   return out;
 }
 
-/** Lists the Gemini models a key can reach that write text, newest names first. */
-async function geminiProbe(key: string): Promise<{ ok: boolean; message: string; models?: string[] }> {
+/** Lists the Gemini models a key can reach that write text, newest names first, with the methods each supports. */
+async function geminiProbe(key: string): Promise<{ ok: boolean; message: string; models?: string[]; entries?: Array<{ id: string; methods: string[] }> }> {
   try {
     const answer = await fetch('https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000', {
       headers: { 'x-goog-api-key': key.trim() },
@@ -181,13 +181,12 @@ async function geminiProbe(key: string): Promise<{ ok: boolean; message: string;
       return { ok: false, message: `Google answered ${answer.status} (${answer.statusText || 'request failed'}) for that key.` };
     }
     const payload = (await answer.json()) as { models?: Array<{ name?: string; supportedGenerationMethods?: string[] }> };
-    const models = (payload.models ?? [])
+    const entries = (payload.models ?? [])
       .filter((m) => (m.supportedGenerationMethods ?? []).includes('generateContent'))
-      .map((m) => (m.name ?? '').replace(/^models\//, ''))
-      .filter((name) => /^gemini-/.test(name) && !/(embedding|image|tts|audio|live|robotics|banana|transcribe|omni|computer-use|customtools)/.test(name))
-      .sort()
-      .reverse();
-    return { ok: true, message: `Key works: ${models.length} Gemini models visible.`, models };
+      .map((m) => ({ id: (m.name ?? '').replace(/^models\//, ''), methods: m.supportedGenerationMethods ?? [] }))
+      .filter(({ id }) => /^gemini-/.test(id) && !/(embedding|image|tts|audio|live|robotics|banana|transcribe|translate|thinking|omni|computer-use|customtools)/.test(id))
+      .sort((a, b) => (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
+    return { ok: true, message: `Key works: ${entries.length} Gemini models visible.`, models: entries.map(({ id }) => id), entries };
   } catch (error) {
     return { ok: false, message: `Could not reach Google: ${error instanceof Error ? error.message : String(error)}` };
   }
@@ -272,6 +271,23 @@ function generationService(): Plugin {
     { handle(req: IncomingMessage, res: ServerResponse): Promise<void>; close(): Promise<void>; records: { records: unknown[] } }
   >();
   const sessions = new Map<string, { provider: Provider; apiKey: string; planModel: string; sceneModel: string }>();
+  // The last model list each key check returned, with the methods each model
+  // supports: a session falls back to the next models on its key's list.
+  const listedModels = new Map<Provider, Array<{ id: string; methods: readonly string[] }>>();
+  // Listing a key's models for fallbacks: callers share one run, warmed when
+  // a session is created and awaited (bounded) on first use.
+  let geminiListRun: Promise<void> | null = null;
+  const warmGeminiList = (key: string): Promise<void> => {
+    if (listedModels.has('gemini')) return Promise.resolve();
+    return (geminiListRun ??= (async () => {
+      try {
+        const probe = await geminiProbe(key);
+        if (probe.ok && probe.entries && probe.entries.length > 0) listedModels.set('gemini', probe.entries);
+      } finally {
+        geminiListRun = null;
+      }
+    })());
+  };
   // One speech keeper for the dev narration endpoint, learner-scoped like the
   // service: narration past the daily speech caps degrades to estimates.
   let narrationLimits: import('@incantly/generation').LimitKeeper | null = null;
@@ -310,10 +326,20 @@ function generationService(): Plugin {
     const stubborn = fault?.endsWith('-stubborn') ?? false;
     const name = (fault ?? 'none').replace(/-stubborn$/, '') as import('@incantly/generation').Fault;
     const chosen = session ? { plan: session.planModel, scene: session.sceneModel, repair: session.sceneModel } : null;
+    // A Gemini session falls back to the next text flash models its key can
+    // reach. The first use lists them when no key check ran before, waiting
+    // no more than a few seconds; on failure it passes none, and the client
+    // retries the chosen model alone.
+    if (session?.provider === 'gemini' && !listedModels.has('gemini')) {
+      await Promise.race([warmGeminiList(session.apiKey), new Promise((resolve) => setTimeout(resolve, 3000))]);
+    }
+    const geminiListed = session?.provider === 'gemini' ? (listedModels.get('gemini') ?? []) : [];
+    const geminiFallbacks =
+      geminiListed.length === 0 || !session ? undefined : g.geminiFallbackModels(geminiListed, { plan: session.planModel, scene: session.sceneModel });
     const model =
       session && chosen
         ? session.provider === 'gemini'
-          ? new g.GeminiClient({ apiKey: session.apiKey, models: chosen })
+          ? new g.GeminiClient({ apiKey: session.apiKey, models: chosen, ...(geminiFallbacks ? { fallbacks: geminiFallbacks } : {}) })
           : session.provider === 'bedrock'
             ? new g.BedrockClient({ apiKey: session.apiKey, region: bedrockRegion(), models: chosen })
             : session.provider === 'spark'
@@ -381,6 +407,9 @@ function generationService(): Plugin {
             if (!supported(g, provider, input.sceneModel)) return json(400, { message: 'Choose a supported scene model.' });
             const id = randomUUID();
             sessions.set(id, { provider, apiKey: effective, planModel: input.planModel, sceneModel: input.sceneModel });
+            // A Gemini session created without a key check still gets
+            // fallbacks: listing starts now, without holding up creation.
+            if (provider === 'gemini') void warmGeminiList(effective);
             return json(201, { id, baseUrl: `/api/session/${id}/v1`, keySource: givenKey !== null ? 'entered' : 'env' });
           }
           if (path === '/api/dev/models' && req.method === 'POST') {
@@ -399,6 +428,10 @@ function generationService(): Plugin {
                   : provider === 'spark'
                     ? await sparkProbe(effective)
                     : await keyProbe(effective);
+            // A later session falls back to the next models on this list.
+            const entries: Array<{ id: string; methods: readonly string[] }> =
+              'entries' in probe && probe.entries ? probe.entries : (probe.models ?? []).map((id) => ({ id, methods: [] as const }));
+            if (probe.ok && entries.length > 0) listedModels.set(provider, entries);
             return json(probe.ok ? 200 : 401, { ...probe, provider, source: givenKey !== null ? 'entered' : providerEnv(provider).source });
           }
           if (path === '/api/dev/narration-key' && req.method === 'POST') {
