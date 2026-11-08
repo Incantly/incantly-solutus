@@ -921,7 +921,9 @@ test('without WebCodecs the export labels its realtime fallback', async ({ page 
 
 async function openPlayerDeck(page: Page, film: string): Promise<void> {
   await page.request.get('/api/dev/films/clear');
-  await page.goto(`/?page=player&film=${film}&deck=1&reduced-motion=0&export-debug=1`);
+  // The deck ask test asserts the reference model's words ('fastest'), so
+  // deck mode pins the reference path like the main opener does.
+  await page.goto(`/?page=player&film=${film}&deck=1&reduced-motion=0&export-debug=1&reference=1`);
   await page.waitForFunction(() => window.__playground?.ready === true);
 }
 

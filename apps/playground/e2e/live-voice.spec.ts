@@ -373,9 +373,8 @@ async function installSessionInsert(page: Page, lines: unknown[]): Promise<strin
 
 interface MadeExample {
   readonly ok?: boolean;
-  readonly request?: string;
   readonly error?: string;
-  readonly result?: unknown;
+  readonly made?: unknown;
 }
 
 function madeResult(server: { toolResponses(): unknown[] }, callId: string): MadeExample | undefined {
@@ -406,10 +405,9 @@ test('live make_example answers with what the insert actually made', async ({ pa
   await server.send({ toolCall: { functionCalls: [{ id: 'make-1', name: 'make_example', args: { request: 'another swing' } }] } });
   await expect.poll(() => madeResult(server, 'make-1'), { timeout: 20_000 }).toMatchObject({ ok: true });
   const made = madeResult(server, 'make-1')!;
-  expect(made.request).toBe('another swing');
   // The tool describes the real insert — its lines and the values it sets —
   // not the request that produced it.
-  expect(made.result).toMatchObject({
+  expect(made.made).toMatchObject({
     kind: 'insert',
     says: ['The swing keeps its period.'],
     sets: { angle: 0.5 },
@@ -439,7 +437,7 @@ test('an empty insert answers make_example with ok:false', async ({ page }) => {
 
   await server.send({ toolCall: { functionCalls: [{ id: 'make-2', name: 'make_example', args: { request: 'another swing' } }] } });
   await expect.poll(() => madeResult(server, 'make-2'), { timeout: 20_000 }).toMatchObject({ ok: false });
-  expect(String(madeResult(server, 'make-2')?.error ?? '')).toContain('empty');
+  expect(String(madeResult(server, 'make-2')?.error ?? '')).toMatch(/at least one line|empty/);
 
   // A refused tool records no error: stopping still hides a clean panel.
   await page.locator('.inc-live-toggle').click();
