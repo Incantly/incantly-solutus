@@ -39,6 +39,7 @@ import { issueTicket, readTicket } from './ticket';
  *   POST /v1/ask/example              { question, anchor, beat, ... } -> the side-clip scene, or failed
  *   POST /v1/ask/change               { prompt, film, version, beats } -> version N+1 as a patch, or failed
  *   POST /v1/ask/speak                { text, voice? } -> the answer spoken, when the asker opts in
+ *   POST /v1/live/token              -> the minted Live token { token, model, expiresAt }, when the live option supplies a minter
  *   GET  /v1/voices                   -> the stub voice list
  *   GET  /v1/films/:film/versions      -> the shared versions, oldest first
  *   GET  /v1/films/:film/versions/:n   -> one version's patch
@@ -89,6 +90,12 @@ export interface ServiceOptions {
   readonly films?: FilmLibrary | null;
   /** Who speaks opted-in answers; the stub by default, so speech is silent until configured. */
   readonly narrator?: Narrator;
+  /**
+   * Mints the short-lived Live token the browser opens its voice session
+   * with. Without it the live token route answers 404, like other disabled
+   * features. The key stays inside the minter; the page only sees tokens.
+   */
+  readonly live?: { mint(): Promise<{ token: string; model: string; expiresAt: number }> };
   readonly now?: () => number;
 }
 
@@ -296,6 +303,7 @@ export class GenerationService {
       if (req.method === 'POST' && path === `${this.prefix}/ask/example`) return await this.example(req, res);
       if (req.method === 'POST' && path === `${this.prefix}/ask/change`) return await this.changeFilm(req, res);
       if (req.method === 'POST' && path === `${this.prefix}/ask/speak`) return await this.speak(req, res);
+      if (req.method === 'POST' && path === `${this.prefix}/live/token`) return await this.liveToken(req, res);
       if (req.method === 'GET' && path === `${this.prefix}/voices`) return await this.voices(req, res);
       const filmVersions = new RegExp(`^${this.prefix}/films/([\\w-]{1,80})/versions$`).exec(path);
       if (req.method === 'GET' && filmVersions) return await this.filmVersions(req, res, filmVersions[1]!);
@@ -1006,6 +1014,25 @@ export class GenerationService {
       this.json(res, 200, { status: 'patch', patch: { ...generated.generated.patch, audio } } satisfies AskChangeResponse);
     } catch {
       this.json(res, 200, { status: 'failed', reason: 'model' } satisfies AskChangeResponse);
+    } finally {
+      admitted.release();
+    }
+  }
+
+  /**
+   * A learner opens a live voice session: one single-use token for the
+   * browser's Live socket, minted on demand. Authenticated and rate limited
+   * like ask; off (404) until a minter is supplied.
+   */
+  private async liveToken(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const learner = this.learner(req);
+    const live = this.options.live;
+    if (!live) throw new HttpError(404, 'not-found', 'Live voice is not enabled here');
+    const admitted = this.limits.admit(learner.id);
+    if (!admitted.ok) this.refuse(admitted.refusal);
+    try {
+      const minted = await live.mint();
+      this.json(res, 200, { token: minted.token, model: minted.model, expiresAt: minted.expiresAt });
     } finally {
       admitted.release();
     }
