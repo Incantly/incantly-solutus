@@ -5,6 +5,12 @@ import type { FilmController } from '../runtime/film';
 import type { SceneRuntime } from '../runtime/runtime';
 import type { CompiledBeat, CompiledFilm, FilmAdvance } from './storyboard';
 
+/** Late echo of our own say(): an interrupted inside this window while the model's reply is up is our cutoff, not a barge-in. */
+const SELF_INTERRUPT_WINDOW_MS = 1500;
+
+/** How long a scheduled resume waits for the model's reply turn before reading anyway. */
+const RESUME_FALLBACK_MS = 1500;
+
 /**
  * What the teacher is: read each beat line exactly as written, answer about
  * what is on screen briefly, and resume only when the learner asks to
@@ -68,8 +74,12 @@ export class LiveDriver {
   private paused = false;
   /** True while the model holds the floor answering: a null-turn speaking with no close yet. */
   private answering = false;
-  /** Resume requests waiting for the model's turn to end; superseded by a new question or stop. */
-  private queuedResumes: Array<{ run: () => LiveToolResult; resolve?: (result: LiveToolResult) => void }> = [];
+  /** A resume scheduled after the tool response, waiting for the model's reply turn or the fallback. */
+  private pendingResume: { readonly at: number } | null = null;
+  /** Fallback firing the pending resume when the model says nothing after the tool response. */
+  private resumeTimer: ReturnType<typeof setTimeout> | null = null;
+  /** When our last say() went out, to tell our own cutoff apart from a learner barge-in. */
+  private lastSayAt = 0;
   /** Turns the voice finished reading, so resume knows a beat was fully read. */
   private readonly completedTurns = new Set<string>();
   /** Every utterance said, by its unique turn id, back to its beat. */
@@ -101,7 +111,7 @@ export class LiveDriver {
       isPaused: () => this.paused,
       sayBeat: (beat) => this.sayBeat(beat),
       sayBeatRemainder: (beat, wordIndex) => this.sayBeatRemainder(beat, wordIndex),
-      requestResume: () => this.requestResume(),
+      scheduleResume: () => this.scheduleResume(),
       wasCompleted: (beatId) => this.completedTurns.has(beatId),
       isDone: () => this.state === 'done',
       restartAfterDone: () => this.restartAfterDone(),
@@ -169,7 +179,11 @@ export class LiveDriver {
     this.savedAdvance = this.controller.advance;
     this.paused = false;
     this.answering = false;
-    this.queuedResumes.length = 0;
+    this.pendingResume = null;
+    if (this.resumeTimer !== null) {
+      clearTimeout(this.resumeTimer);
+      this.resumeTimer = null;
+    }
     this.completedTurns.clear();
     this.utteranceBeats.clear();
     this.utterances = 0;
@@ -224,49 +238,48 @@ export class LiveDriver {
     this.currentTurn = null;
     this.paused = false;
     this.answering = false;
-    this.dropQueuedResumes('Live voice is off.');
+    this.pendingResume = null;
+    if (this.resumeTimer !== null) {
+      clearTimeout(this.resumeTimer);
+      this.resumeTimer = null;
+    }
     this.emit({ type: 'stopped' });
   }
 
   /** The host's way back in after an insert: the resume rung, without the voice. */
   resume(): LiveToolResult {
     if (this.state === 'idle') return { ok: false, error: 'Live voice is not on.' };
-    // Never talk over the model: queue behind its answer like the tool does.
+    if (this.pendingResume) return { ok: true, already: true };
+    // Never talk over the model: defer behind its answer like a tool call.
     if (this.answering) {
-      const at = this.epoch;
-      this.queuedResumes.push({ run: () => this.runResume(at) });
+      this.scheduleResume();
       return { ok: true, queued: true };
     }
     return this.tools.resumeNow();
   }
 
-  /** Runs resume now, or queues it until the model's turn ends. */
-  private requestResume(): Promise<LiveToolResult> {
-    const at = this.epoch;
-    if (!this.answering) return Promise.resolve(this.runResume(at));
-    return new Promise<LiveToolResult>((resolve) => {
-      this.queuedResumes.push({ run: () => this.runResume(at), resolve });
-    });
+  /**
+   * Schedules a resume after the tool response: it runs once the model's
+   * reply turn ends, or on the fallback when the model says nothing. A
+   * resume already waiting makes later ones idempotent no-ops.
+   */
+  private scheduleResume(): boolean {
+    if (this.pendingResume) return false;
+    this.pendingResume = { at: this.epoch };
+    this.resumeTimer = setTimeout(() => this.runPendingResume(), RESUME_FALLBACK_MS);
+    return true;
   }
 
-  /** Runs one queued resume per waiting request, in order. */
-  private flushQueuedResumes(): void {
-    for (const queued of this.queuedResumes.splice(0)) {
-      const result = queued.run();
-      queued.resolve?.(result);
+  /** Runs the scheduled resume once, re-evaluating the anchor at run time. */
+  private runPendingResume(): void {
+    const pending = this.pendingResume;
+    this.pendingResume = null;
+    if (this.resumeTimer !== null) {
+      clearTimeout(this.resumeTimer);
+      this.resumeTimer = null;
     }
-  }
-
-  /** Drops queued resumes without running them: a new question or stop supersedes them. */
-  private dropQueuedResumes(error: string): void {
-    for (const queued of this.queuedResumes.splice(0)) {
-      queued.resolve?.({ ok: false, error });
-    }
-  }
-
-  private runResume(at: number): LiveToolResult {
-    if (this.epoch !== at || this.state === 'idle') return { ok: false, error: 'Live voice is not on.' };
-    return this.tools.resumeNow();
+    if (!pending || this.epoch !== pending.at || this.state === 'idle') return;
+    this.tools.resumeNow();
   }
 
   private sayBeat(beat: CompiledBeat): void {
@@ -278,6 +291,7 @@ export class LiveDriver {
     // Speaking again ends the pause: the turn being read is current once more.
     this.paused = false;
     this.currentTurn = turnId;
+    this.lastSayAt = Date.now();
     this.voice.say(beat.step.say, turnId);
     this.emit({ type: 'said', beat: beat.id, turnId, text: beat.step.say });
   }
@@ -293,6 +307,7 @@ export class LiveDriver {
     const turnId = this.nextUtterance(beat.id);
     this.paused = false;
     this.currentTurn = turnId;
+    this.lastSayAt = Date.now();
     this.voice.say(text, turnId);
     this.emit({ type: 'said', beat: beat.id, turnId, text });
   }
@@ -366,9 +381,9 @@ export class LiveDriver {
         return;
       case 'turn-complete':
         if (event.turnId === null) {
-          // The answer ended: queued resumes may read again now.
+          // The model's reply ended: a scheduled resume may read again now.
           this.answering = false;
-          this.flushQueuedResumes();
+          this.runPendingResume();
         }
         this.onTurnComplete(event.turnId);
         return;
@@ -413,6 +428,12 @@ export class LiveDriver {
    */
   interrupt(): void {
     if (this.state !== 'live') return;
+    // Our own say() can echo back as interrupted while the model's reply is
+    // still up: that is our cutoff, not a barge-in, so the film holds steady.
+    if (this.answering && Date.now() - this.lastSayAt < SELF_INTERRUPT_WINDOW_MS) return;
+    // Already paused on a pin (a typed follow-up like "carry on"): keep the
+    // anchor and the context already pushed instead of re-pinning.
+    if (this.paused && this.anchor) return;
     const beat = this.controller.currentBeat;
     if (!beat) {
       this.controller.pause();
@@ -424,8 +445,6 @@ export class LiveDriver {
       return;
     }
     this.notePaused({ ...anchor, wordIndex: transcriptWordIndex(this.transcripts.get(beat.id), beat) });
-    // A new question supersedes resumes queued during the last answer.
-    this.dropQueuedResumes('A new question superseded the queued resume.');
     const line = this.tools.contextLine();
     if (line !== null) {
       try {

@@ -120,16 +120,20 @@ describe('live voice bugs: turn identity', () => {
     voice.emit({ type: 'transcript', text: 'Pull the bob aside', turnId: saidId(voice, 1) });
     voice.emit({ type: 'interrupted' });
     const cutOff = saidId(voice, 1);
-    // The provider still closes the cut-off turn; it was already ignored once.
+    // The resume is scheduled; the tool answers but nothing is said yet.
     voice.emit({ type: 'tool-call', callId: 'r', name: 'resume', args: {} });
+    await flush();
+    expect(voice.said.map((line) => saidBeat(line.turnId))).toEqual(['s1b1', 's1b2']);
+    // The cut-off turn's close arrives while paused: stale, the film holds.
+    voice.emit({ type: 'turn-complete', turnId: cutOff });
+    expect(controller.currentBeat?.id).toBe('s1b2');
+    // The model's reply turn ends: the re-read starts as its own utterance.
+    voice.emit({ type: 'speaking', turnId: null });
+    voice.emit({ type: 'turn-complete', turnId: null });
     await flush();
     const reread = saidId(voice, 2);
     expect(reread).not.toBe(cutOff);
     expect(saidBeat(voice.said[voice.said.length - 1]!.turnId)).toBe('s1b2');
-    // The cut-off turn's close arrives AFTER the resume re-read started: the
-    // resumed reading only just began, so this completion cannot be its own.
-    voice.emit({ type: 'turn-complete', turnId: cutOff });
-    expect(controller.currentBeat?.id).toBe('s1b2');
     expect(voice.said.map((line) => saidBeat(line.turnId))).toEqual(['s1b1', 's1b2', 's1b2']);
     controller.destroy();
   });

@@ -141,10 +141,11 @@ export interface LiveToolDeps {
   /** Reads a beat from its anchor word on and tracks it as the current turn. */
   sayBeatRemainder(beat: CompiledBeat, wordIndex: number): void;
   /**
-   * Runs resume now, or queues it until the model's turn ends when the voice
-   * is mid-answer, so resume never talks over the model.
+   * Schedules a resume after the tool response: it runs once the model's
+   * reply turn ends, or on the fallback when the model says nothing. False
+   * when a resume is already waiting, making repeats idempotent.
    */
-  requestResume(): Promise<LiveToolResult>;
+  scheduleResume(): boolean;
   /** True once a beat's turn completed, so resume knows it was fully read. */
   wasCompleted(beatId: string): boolean;
   /** True once the film has been read to the end. */
@@ -260,7 +261,7 @@ export class LiveToolDispatcher {
       case 'pause':
         return this.pause();
       case 'resume':
-        return this.deps.requestResume();
+        return this.requestResume();
       case 'seek_beat':
         return this.seekBeat(args);
       case 'get_context':
@@ -272,6 +273,38 @@ export class LiveToolDispatcher {
       default:
         return { ok: false, error: `Unknown tool "${name}".` };
     }
+  }
+
+  /**
+   * Validates resume and schedules it after the model's reply turn; the
+   * result describes the plan the scheduled run will carry out. The driver
+   * re-runs the same decision at run time, so a moved anchor still lands.
+   */
+  private requestResume(): LiveToolResult {
+    // A finished reading restarts at once: there is no paused beat whose
+    // re-read could talk over the model.
+    if (this.deps.isDone()) return this.resumeNow();
+    const planned = this.planResume();
+    if (!planned.ok) return planned;
+    if (!this.deps.scheduleResume()) return { ok: true, already: true };
+    return planned.result;
+  }
+
+  /** The resume plan without acting: validation shared with the scheduled run. */
+  private planResume(): { ok: true; result: LiveToolResult } | { ok: false; error: string } {
+    const anchor = this.deps.currentAnchor();
+    if (!anchor) return { ok: false, error: 'Nothing to resume: pause or interrupt the film first.' };
+    const beat = this.deps.film.beats.find((candidate) => candidate.id === anchor.beat) ?? null;
+    if (!beat) return { ok: false, error: 'The pinned beat is no longer in this film.' };
+    const at = resolveAskAnchor(this.deps.film, anchor);
+    if (at === null) return { ok: false, error: 'The pinned word no longer resolves in this film.' };
+    if (this.deps.controller.currentBeat?.id === anchor.beat || !this.deps.wasCompleted(anchor.beat)) {
+      return { ok: true, result: { ok: true, beat: beat.id, fromWord: anchor.wordIndex } };
+    }
+    const atIndex = this.deps.film.beats.findIndex((candidate) => candidate.id === anchor.beat);
+    const next = this.deps.film.beats[atIndex + 1] ?? null;
+    if (!next) return { ok: true, result: { ok: true, beat: null, done: true } };
+    return { ok: true, result: { ok: true, beat: next.id } };
   }
 
   private pause(): LiveToolResult {
