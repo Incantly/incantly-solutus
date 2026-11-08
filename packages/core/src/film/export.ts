@@ -1,9 +1,9 @@
 import type { Beat } from '../api/types';
-import { FilmController } from '../runtime/film';
+import { accumulatedNotes, beatCard, beatWrite, FilmController, writeShownAt } from '../runtime/film';
 import { FILM_STEP_SECONDS, SceneRuntime, type SceneFunction } from '../runtime/runtime';
 import type { KitRegistry } from '../runtime/kits';
 import type { RuntimeUpdate } from '../protocol/runtime-messages';
-import { splitWords, type CompiledBeat, type CompiledFilm } from './storyboard';
+import { sceneSplit, splitWords, type CompiledBeat, type CompiledFilm } from './storyboard';
 import type { FlattenedBeat, FlattenedTimeline } from './library';
 import type { MixerClip } from './mixer';
 import { muxMp4, type Mp4AudioTrack, type Mp4VideoCodec, type Mp4VideoTrack } from './mp4';
@@ -337,8 +337,9 @@ export function planExportFilm(
       chunk: chunks.length,
       sceneId,
       // Exports resolve click advance to timed holds: every beat plays its
-      // seconds, so a deck's MP4 plays the full deck.
-      film: { id: film.id, title: film.title, version: film.version, advance: 'time', scenes: [{ id: sceneId, title: sceneId, cut: 'cut', start: 0, seconds: runSeconds, beats }], beats, seconds: runSeconds, sourceMap: {} },
+      // seconds, so a deck's MP4 plays the full deck. The split travels with
+      // the scene, derived by the same rule the compiler uses.
+      film: { id: film.id, title: film.title, version: film.version, advance: 'time', scenes: [{ id: sceneId, title: sceneId, cut: 'cut', start: 0, seconds: runSeconds, beats, split: sceneSplit(beats) }], beats, seconds: runSeconds, sourceMap: {} },
       start,
       seconds,
       frames,
@@ -367,6 +368,44 @@ export interface ExportFrame {
 export interface RenderExportHooks {
   /** Observes each frame's runtime before it is destroyed, for tests. */
   readonly inspect?: (runtime: SceneRuntime, frame: ExportFrame) => void;
+}
+
+/** Everything one export frame draws over the drawing: the same layers the player shows at that film time. */
+export interface ExportFrameLayers {
+  /** True when the frame's scene renders split. */
+  readonly split: boolean;
+  /** The write-on text's reveal prefix at the frame's film time; empty when the beat writes nothing. */
+  readonly write: string;
+  /** Whether the write-on text renders as math. */
+  readonly writeMath: boolean;
+  /** Every note line showing on the frame's beat. */
+  readonly notes: readonly string[];
+  /** The frame's full-stage card, or null. A card covers write and notes while shown. */
+  readonly card: { readonly kind: 'section' | 'recap'; readonly text: string } | null;
+}
+
+/**
+ * One export frame's layers from the chunk film alone: the beat by id, its
+ * reveal prefix at the frame's film time, its accumulated notes, its card.
+ * Pure — the capture sessions paint this, and tests assert it per frame —
+ * and clock-driven, so the same frame always draws the same layers.
+ */
+export function exportFrameLayers(film: CompiledFilm, frame: { readonly beatId: string; readonly time: number }): ExportFrameLayers {
+  const none: ExportFrameLayers = { split: false, write: '', writeMath: false, notes: [], card: null };
+  const beat = film.beats.find((candidate) => candidate.id === frame.beatId);
+  if (!beat) return none;
+  const scene = film.scenes.find((candidate) => candidate.id === beat.sceneId);
+  if (!scene) return none;
+  // A card covers the stage's own layers while shown, as in the player.
+  const card = beatCard(beat.step);
+  const write = card === null ? beatWrite(beat.step) : null;
+  return {
+    split: scene.split,
+    write: write ? writeShownAt(beat, frame.time) : '',
+    writeMath: write?.math ?? false,
+    notes: card === null ? accumulatedNotes(scene.beats, beat.index) : [],
+    card,
+  };
 }
 
 /** Plays through pause points: holds and questions pause a live film for the learner, but the export plays on. */

@@ -37,6 +37,7 @@ import {
   LiveDriver,
   meanPixelDifference,
   mountStubRuntime,
+  NOTES_STACK_BELOW_PX,
   openBrowserCapture,
   openSandboxedCapture,
   openWebCodecsAudio,
@@ -72,6 +73,7 @@ import {
   SandboxFilmMirror,
   shortcutFor,
   SHORTCUTS,
+  renderMathText,
   SideClipPlayer,
   solveCaption,
   validateExampleClip,
@@ -453,6 +455,25 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
   card.className = 'inc-player-card';
   card.hidden = true;
   figureBox.append(card);
+
+  // Explainer layers: generic engine overlays any film can use. The write-on
+  // chip prefers the top-left corner, as the solver's first slot does; the
+  // notes panel sits beside the stage or under it; the section card covers
+  // the stage while the scene keeps playing behind it.
+  const xcard = document.createElement('div');
+  xcard.className = 'inc-player-xcard';
+  xcard.hidden = true;
+  figureBox.append(xcard);
+
+  const writeEl = document.createElement('div');
+  writeEl.className = 'inc-player-write';
+  writeEl.hidden = true;
+  figureBox.append(writeEl);
+
+  const notesEl = document.createElement('aside');
+  notesEl.className = 'inc-player-notes';
+  notesEl.hidden = true;
+  figureBox.append(notesEl);
 
   const caption = document.createElement('div');
   caption.className = 'inc-caption';
@@ -877,11 +898,26 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
   const highlightWord = (index: number): void => {
     wordSpans.forEach((span, i) => span.classList.toggle('is-active', i === index));
   };
+  /** Renders a write-on layer's shown prefix; math renders readably. */
+  const renderWrite = (write: { readonly text: string; readonly math: boolean; readonly shown: string } | null | undefined): void => {
+    if (!write || write.shown === '') {
+      writeEl.hidden = true;
+      return;
+    }
+    const shown = write.math ? renderMathText(write.shown) : write.shown;
+    if (writeEl.textContent !== shown) writeEl.textContent = shown;
+    writeEl.dataset.live = write.shown.length < write.text.length ? 'writing' : 'done';
+    writeEl.hidden = false;
+  };
   const applyCaption = (state: PlayerState): void => {
     // An insert captions its own line over the paused film.
     const insertText = askUi.caption();
     if (insertText !== null) {
       card.hidden = true;
+      xcard.hidden = true;
+      writeEl.hidden = true;
+      notesEl.hidden = true;
+      delete figureBox.dataset.split;
       caption.textContent = insertText;
       wordSpans = [];
       return;
@@ -900,6 +936,37 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
       card.textContent = title.text;
       card.hidden = false;
     } else card.hidden = true;
+    const layerCard = state.caption?.card ?? null;
+    if (layerCard) {
+      xcard.textContent = layerCard.text;
+      xcard.dataset.kind = layerCard.kind;
+      xcard.hidden = false;
+    } else xcard.hidden = true;
+    renderWrite(state.caption?.write);
+    // Split scenes lay out once from the first frame: the stage narrows
+    // beside the notes column (or stacks under it when narrow), and the
+    // notes reveal beat by beat inside that fixed column.
+    const split = state.caption?.split ?? false;
+    const widthPx = Math.max(280, Math.min(960, player.clientWidth || 640));
+    if (split && widthPx >= NOTES_STACK_BELOW_PX) figureBox.dataset.split = 'side';
+    else delete figureBox.dataset.split;
+    const notes = state.caption?.notes ?? [];
+    if (notes.length === 0 && figureBox.dataset.split !== 'side') {
+      notesEl.hidden = true;
+    } else {
+      notesEl.dataset.layout = figureBox.dataset.split === 'side' ? 'side' : 'stack';
+      notesEl.textContent = '';
+      const fresh = beat?.step.notes?.length ?? 0;
+      const list = document.createElement('ul');
+      notes.forEach((line, index) => {
+        const item = document.createElement('li');
+        item.textContent = line;
+        if (index >= notes.length - fresh) item.className = 'is-new';
+        list.append(item);
+      });
+      notesEl.append(list);
+      notesEl.hidden = false;
+    }
     caption.textContent = '';
     wordSpans = [];
     const say = state.caption?.say ?? '';
@@ -979,6 +1046,9 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
       transport.syncTime(state.time, state.playing);
       timeline.playhead(state.time, film.seconds);
       highlightWord(model.currentWordIndex);
+      // The write-on reveal follows the film clock, never a timer: seeking to
+      // t draws exactly what playing to t draws.
+      renderWrite(state.caption?.write);
       // Past the line's end (the beat holds after it), the bed comes back up.
       const beat = state.beat ? film.beats.find((candidate) => candidate.id === state.beat) : undefined;
       if (beat && state.time > beat.start + beat.seconds - FILM_BEAT_HOLD_SECONDS) mixer.onLineEnd();

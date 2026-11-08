@@ -14,9 +14,11 @@ import {
   EXPORT_SAMPLE_RATE,
   EXPORT_SEED,
   ExportError,
+  exportFrameLayers,
   type ExportAudioSink,
   type ExportCaptureSession,
   type ExportFrame,
+  type ExportFrameLayers,
   type ExportFrameSize,
   type ExportPlanChunk,
   type ExportVideoSample,
@@ -24,6 +26,7 @@ import {
   type FallbackRecorder,
   type FallbackSession,
 } from './export';
+import { layoutStageWidth, renderMathText, splitLayout, wrapText, CARD_MAX_LINES } from './solver';
 
 /**
  * The browser half of film export: capability detection, offscreen capture,
@@ -296,6 +299,105 @@ export function paintExportCaption(context: CanvasRenderingContext2D, caption: s
   context.restore();
 }
 
+/** Layer paint: the caption band's dark panel and light text, readable over either theme. */
+const LAYER_PANEL = '#101418';
+const LAYER_INK = '#f5f7fa';
+const LAYER_FONT_STACK = `system-ui, -apple-system, 'Segoe UI', sans-serif`;
+
+/** The caption scale, so painted layer text matches the sizes the checks enforce. */
+function layerFontPx(availablePx: number): number {
+  return Math.min(20, Math.max(13, availablePx * 0.03));
+}
+
+/**
+ * Paints one frame's explainer layers over the drawing area: the notes
+ * column beside a split stage (or the stacked strip along the bottom under
+ * narrow ones), the write-on chip's reveal prefix at the frame's film time,
+ * and the full-stage card. Same slots the player draws and the checks
+ * verify. Nothing paints when the beat carries no layers, so unlayered
+ * frames stay pixel-identical.
+ */
+export function paintExportLayers(context: CanvasRenderingContext2D, layers: ExportFrameLayers, width: number, height: number): void {
+  if (layers.write === '' && layers.notes.length === 0 && layers.card === null) return;
+  const layout = splitLayout(layers.split, width);
+  const stageW = layoutStageWidth(width, layout);
+  const measure = (text: string): number => context.measureText(text).width;
+  context.save();
+  context.textBaseline = 'middle';
+  // Notes first, then the chip, then the card over everything it covers.
+  if (layers.notes.length > 0 && layers.card === null) {
+    const fontPx = layerFontPx(width);
+    context.font = `${fontPx}px ${LAYER_FONT_STACK}`;
+    const lineHeight = fontPx * 1.4;
+    const pad = 10;
+    if (layout === 'side') {
+      context.fillStyle = LAYER_PANEL;
+      context.fillRect(stageW, 0, width - stageW, height);
+      context.fillStyle = LAYER_INK;
+      let y = pad + lineHeight / 2;
+      for (const note of layers.notes) {
+        for (const row of wrapText(note, Math.max(40, width - stageW - pad * 2), fontPx, measure)) {
+          if (y > height - fontPx) break;
+          context.fillText(row, stageW + pad, y);
+          y += lineHeight;
+        }
+        y += fontPx * 0.4;
+      }
+    } else {
+      const rows = layers.notes.flatMap((note) => wrapText(note, Math.max(40, width - pad * 2), fontPx, measure));
+      const stripH = rows.length * lineHeight + pad * 2;
+      context.fillStyle = LAYER_PANEL;
+      context.fillRect(0, height - stripH, width, stripH);
+      context.fillStyle = LAYER_INK;
+      let y = height - stripH + pad + lineHeight / 2;
+      for (const row of rows) {
+        context.fillText(row, pad, y);
+        y += lineHeight;
+      }
+    }
+  }
+  if (layers.write !== '' && layers.card === null) {
+    const text = layers.writeMath ? renderMathText(layers.write) : layers.write;
+    const fontPx = layerFontPx(stageW);
+    context.font = `${fontPx}px ${LAYER_FONT_STACK}`;
+    // The solver's chip convention: the safe area's top-left, half its width.
+    const rows = wrapText(text, Math.max(40, stageW * 0.45), fontPx, measure);
+    const pad = 8;
+    const widest = rows.reduce((max, row) => Math.max(max, measure(row)), 0);
+    const chipW = widest + pad * 2;
+    const chipH = rows.length * fontPx * 1.35 + pad * 2;
+    const x = stageW * 0.05;
+    const y = height * 0.05;
+    context.fillStyle = LAYER_PANEL;
+    context.fillRect(x, y, chipW, chipH);
+    context.fillStyle = LAYER_INK;
+    rows.forEach((row, i) => context.fillText(row, x + pad, y + pad + fontPx * 1.35 * (i + 0.5)));
+  }
+  if (layers.card !== null) {
+    context.fillStyle = LAYER_PANEL;
+    context.fillRect(0, 0, width, height);
+    // The card scale, mirroring the solver: a large font shrinking to a
+    // floor before it overflows past three lines.
+    const maxWidth = Math.max(40, width * 0.9 - 48);
+    // Measuring reads the canvas's live font, so it follows the loop down.
+    let fontPx = Math.min(30, Math.max(20, width * 0.045));
+    context.font = `${fontPx}px ${LAYER_FONT_STACK}`;
+    let rows = wrapText(layers.card.text, maxWidth, fontPx, measure);
+    while (rows.length > CARD_MAX_LINES && fontPx > 16 + 1e-9) {
+      fontPx = Math.max(16, fontPx - 1);
+      context.font = `${fontPx}px ${LAYER_FONT_STACK}`;
+      rows = wrapText(layers.card.text, maxWidth, fontPx, measure);
+    }
+    context.fillStyle = LAYER_INK;
+    context.textAlign = 'center';
+    const lineHeight = fontPx * 1.35;
+    const top = height / 2 - ((Math.min(rows.length, CARD_MAX_LINES) - 1) * lineHeight) / 2;
+    rows.slice(0, CARD_MAX_LINES).forEach((row, i) => context.fillText(row, width / 2, top + i * lineHeight));
+    context.textAlign = 'left';
+  }
+  context.restore();
+}
+
 export interface BrowserCaptureEnv {
   readonly document: Document;
   readonly fragments: (sceneId: string) => Fragments;
@@ -345,7 +447,8 @@ export async function openBrowserCapture(chunk: ExportPlanChunk, env: BrowserCap
       const svgs = [...box.querySelectorAll('svg.inc-stage')] as SVGSVGElement[];
       if (svgs.length === 0) throw new ExportError(`Scene "${chunk.sceneId}" draws no stage to export`);
       const { stages, width } = placeStages(svgs);
-      const scale = env.size.width / Math.max(1, width);
+      const layers = exportFrameLayers(chunk.film, frame);
+      const layout = splitLayout(layers.split, env.size.width);
       const pictures = await Promise.all(
         stages.map((stage) => {
           let cache = caches.get(stage.svg);
@@ -358,12 +461,21 @@ export async function openBrowserCapture(chunk: ExportPlanChunk, env: BrowserCap
       );
       context.clearRect(0, 0, canvas.width, canvas.height);
       const background = backgroundOf(svgs[0]!);
-      // Stages narrower than the frame centre; the drawing never exceeds the export height.
-      const dx = Math.round((env.size.width - Math.round(width * scale)) / 2);
-      context.save();
-      context.translate(dx, 0);
-      paintStages(context, stages, pictures, scale, background);
-      context.restore();
+      if (layout === 'side') {
+        // Split scenes paint their stage into the left share; the notes
+        // column paints beside it with the layers below.
+        const scale = layoutStageWidth(env.size.width, layout) / Math.max(1, width);
+        paintStages(context, stages, pictures, scale, background);
+      } else {
+        const scale = env.size.width / Math.max(1, width);
+        // Stages narrower than the frame centre; the drawing never exceeds the export height.
+        const dx = Math.round((env.size.width - Math.round(width * scale)) / 2);
+        context.save();
+        context.translate(dx, 0);
+        paintStages(context, stages, pictures, scale, background);
+        context.restore();
+      }
+      paintExportLayers(context, layers, env.size.width, env.size.height);
       paintExportCaption(context, frame.caption, 0, env.size.height, env.size.width, env.size.band);
       const global = offset + frame.frame;
       if (env.keepFrames?.has(global) && env.kept) {
@@ -443,6 +555,7 @@ export async function renderLiveExportPixels(env: LiveExportFrameEnv, timeSecond
     // The seek's updates are spent inside the replay; the full state rebuilds the figure from what it landed.
     figure.renderer.apply(visualUpdate(figure.runtime.fullState()));
     const caption = controller.currentBeat?.step.say ?? '';
+    const layers = exportFrameLayers(env.film, { beatId: controller.currentBeat?.id ?? '', time: timeSeconds });
     controller.destroy();
     const svgs = [...box.querySelectorAll('svg.inc-stage')] as SVGSVGElement[];
     if (svgs.length === 0) throw new ExportError('The live figure draws no stage to compare');
@@ -452,13 +565,20 @@ export async function renderLiveExportPixels(env: LiveExportFrameEnv, timeSecond
     const context = canvas.getContext('2d');
     if (!context) throw new ExportError('The comparison canvas has no 2D context');
     const { stages, width } = placeStages(svgs);
-    const scale = env.size.width / Math.max(1, width);
+    const layout = splitLayout(layers.split, env.size.width);
     const pictures = await Promise.all(stages.map((stage) => stackPictures(stage.svg, true)));
-    const dx = Math.round((env.size.width - Math.round(width * scale)) / 2);
-    context.save();
-    context.translate(dx, 0);
-    paintStages(context, stages, pictures, scale, backgroundOf(svgs[0]!));
-    context.restore();
+    if (layout === 'side') {
+      const scale = layoutStageWidth(env.size.width, layout) / Math.max(1, width);
+      paintStages(context, stages, pictures, scale, backgroundOf(svgs[0]!));
+    } else {
+      const scale = env.size.width / Math.max(1, width);
+      const dx = Math.round((env.size.width - Math.round(width * scale)) / 2);
+      context.save();
+      context.translate(dx, 0);
+      paintStages(context, stages, pictures, scale, backgroundOf(svgs[0]!));
+      context.restore();
+    }
+    paintExportLayers(context, layers, env.size.width, env.size.height);
     paintExportCaption(context, caption, 0, env.size.height, env.size.width, env.size.band);
     return context.getImageData(0, 0, canvas.width, canvas.height);
   } finally {
@@ -512,7 +632,7 @@ export function createBrowserFallbackRig(env: FallbackRigEnv): { readonly openSe
   canvas.height = env.size.frameHeight;
   const context = canvas.getContext('2d');
   if (!context) throw new ExportError('The fallback canvas has no 2D context');
-  let current: { readonly figure: MountedFigure; readonly box: HTMLElement; readonly controller: FilmController } | null = null;
+  let current: { readonly figure: MountedFigure; readonly box: HTMLElement; readonly controller: FilmController; readonly film: CompiledFilm } | null = null;
   let timer: ReturnType<typeof setInterval> | null = null;
   const caches = new Map<SVGSVGElement, PictureCache>();
   let busy = false;
@@ -525,7 +645,8 @@ export function createBrowserFallbackRig(env: FallbackRigEnv): { readonly openSe
       if (svgs.length === 0) return;
       const { stages, width } = placeStages(svgs);
       if (!(width > 1)) return;
-      const scale = env.size.width / width;
+      const layers = exportFrameLayers(live.film, { beatId: live.controller.currentBeat?.id ?? '', time: live.controller.time });
+      const layout = splitLayout(layers.split, env.size.width);
       const pictures = await Promise.all(
         stages.map((stage) => {
           let cache = caches.get(stage.svg);
@@ -536,12 +657,19 @@ export function createBrowserFallbackRig(env: FallbackRigEnv): { readonly openSe
           return stackPictures(stage.svg, true, cache);
         }),
       );
-      const dx = Math.round((env.size.width - Math.round(width * scale)) / 2);
       context.clearRect(0, 0, canvas.width, canvas.height);
-      context.save();
-      context.translate(dx, 0);
-      paintStages(context, stages, pictures, scale, backgroundOf(svgs[0]!));
-      context.restore();
+      if (layout === 'side') {
+        const scale = layoutStageWidth(env.size.width, layout) / width;
+        paintStages(context, stages, pictures, scale, backgroundOf(svgs[0]!));
+      } else {
+        const scale = env.size.width / width;
+        const dx = Math.round((env.size.width - Math.round(width * scale)) / 2);
+        context.save();
+        context.translate(dx, 0);
+        paintStages(context, stages, pictures, scale, backgroundOf(svgs[0]!));
+        context.restore();
+      }
+      paintExportLayers(context, layers, env.size.width, env.size.height);
       paintExportCaption(context, live.controller.currentBeat?.step.say ?? '', 0, env.size.height, env.size.width, env.size.band);
     } catch {
       // A frame that fails to copy keeps the last one, as in clip recording.
@@ -562,7 +690,7 @@ export function createBrowserFallbackRig(env: FallbackRigEnv): { readonly openSe
     controller.play();
     resumeFallbackPlayback(controller, chunk.film);
     figure.renderer.apply(visualUpdate(figure.runtime.flush()));
-    current = { figure, box, controller };
+    current = { figure, box, controller, film: chunk.film };
     await paint();
     return {
       applyAhead: (seconds) => {
@@ -679,7 +807,10 @@ export async function openSandboxedCapture(chunk: ExportPlanChunk, env: Sandboxe
   const doc = env.document;
   const snapshot = env.snapshots(chunk.sceneId);
   if (!snapshot) throw new ExportError(`Scene "${chunk.sceneId}" has no checked scene to export`);
-  const box = hiddenSandboxBox(doc, env.size.width);
+  // Split scenes lay their figure out narrow, as the player narrows its
+  // stage: one layout from the first frame, shared with every consumer.
+  const layout = splitLayout(chunk.film.scenes[0]?.split ?? false, env.size.width);
+  const box = hiddenSandboxBox(doc, layoutStageWidth(env.size.width, layout));
   const handle = sandboxAdapter.mount(box, env.fragments(chunk.sceneId), {
     title: `Export: ${chunk.sceneId}`,
     film: true,
@@ -716,7 +847,19 @@ export async function openSandboxedCapture(chunk: ExportPlanChunk, env: Sandboxe
       pushAbsoluteState(handle, stub, controller.currentBeat?.step.cam ?? null);
       const png = await handle.snapshot();
       if (!png) throw new ExportError(`Scene "${chunk.sceneId}" gave no picture for frame ${frame.frame}`);
-      drawPicture(context, await decodePicture(doc, png), env.size);
+      const layers = exportFrameLayers(chunk.film, frame);
+      if (layout === 'side') {
+        // The narrow figure's picture draws top-left at its aspect, over the
+        // dark surround it shares with the notes column beside it.
+        const img = await decodePicture(doc, png);
+        const stageW = layoutStageWidth(env.size.width, layout);
+        context.fillStyle = LAYER_PANEL;
+        context.fillRect(0, 0, env.size.width, env.size.height);
+        context.drawImage(img, 0, 0, stageW, (stageW * img.naturalHeight) / Math.max(1, img.naturalWidth));
+      } else {
+        drawPicture(context, await decodePicture(doc, png), env.size);
+      }
+      paintExportLayers(context, layers, env.size.width, env.size.height);
       paintExportCaption(context, frame.caption, 0, env.size.height, env.size.width, env.size.band);
       const global = offset + frame.frame;
       if (env.keepFrames?.has(global) && env.kept) {
@@ -743,7 +886,10 @@ export async function openSandboxedCapture(chunk: ExportPlanChunk, env: Sandboxe
  */
 export async function renderSandboxedLivePixels(env: SandboxedLiveFrameEnv, timeSeconds: number): Promise<ImageData> {
   const doc = env.document;
-  const box = hiddenSandboxBox(doc, env.size.width);
+  // The comparison lays its figure out as the export does: narrow for split
+  // scenes, so the identity check compares the same layout.
+  const layout = splitLayout(env.film.scenes[env.sceneIndex ?? 0]?.split ?? false, env.size.width);
+  const box = hiddenSandboxBox(doc, layoutStageWidth(env.size.width, layout));
   const handle = sandboxAdapter.mount(box, env.fragments, { title: 'Export comparison', film: true, autoplay: false, reducedMotion: false, seed: EXPORT_SEED });
   try {
     if ((await handle.ready) !== 'live' || handle.state !== 'live') throw new ExportError('The live figure did not start to compare');
@@ -754,6 +900,7 @@ export async function renderSandboxedLivePixels(env: SandboxedLiveFrameEnv, time
       const beat = controller.currentBeat;
       pushAbsoluteState(handle, stub, beat?.step.cam ?? null);
       const caption = beat?.step.say ?? '';
+      const layers = exportFrameLayers(env.film, { beatId: beat?.id ?? '', time: timeSeconds });
       controller.destroy();
       const png = await handle.snapshot();
       if (!png) throw new ExportError('The live figure gave no picture to compare');
@@ -762,7 +909,16 @@ export async function renderSandboxedLivePixels(env: SandboxedLiveFrameEnv, time
       canvas.height = env.size.frameHeight;
       const context = canvas.getContext('2d');
       if (!context) throw new ExportError('The comparison canvas has no 2D context');
-      drawPicture(context, await decodePicture(doc, png), env.size);
+      if (layout === 'side') {
+        const img = await decodePicture(doc, png);
+        const stageW = layoutStageWidth(env.size.width, layout);
+        context.fillStyle = LAYER_PANEL;
+        context.fillRect(0, 0, env.size.width, env.size.height);
+        context.drawImage(img, 0, 0, stageW, (stageW * img.naturalHeight) / Math.max(1, img.naturalWidth));
+      } else {
+        drawPicture(context, await decodePicture(doc, png), env.size);
+      }
+      paintExportLayers(context, layers, env.size.width, env.size.height);
       paintExportCaption(context, caption, 0, env.size.height, env.size.width, env.size.band);
       return context.getImageData(0, 0, canvas.width, canvas.height);
     } finally {
@@ -792,7 +948,7 @@ export function createSandboxedFallbackRig(env: SandboxedFallbackRigEnv): {
   canvas.height = env.size.frameHeight;
   const context = canvas.getContext('2d');
   if (!context) throw new ExportError('The fallback canvas has no 2D context');
-  let current: { readonly handle: FigureHandle; readonly box: HTMLElement; readonly stub: ReturnType<typeof mountStubRuntime>; readonly controller: FilmController } | null = null;
+  let current: { readonly handle: FigureHandle; readonly box: HTMLElement; readonly stub: ReturnType<typeof mountStubRuntime>; readonly controller: FilmController; readonly film: CompiledFilm; readonly layout: 'full' | 'side' | 'stack' } | null = null;
   let timer: ReturnType<typeof setInterval> | null = null;
   let busy = false;
   const paint = async (): Promise<void> => {
@@ -802,7 +958,17 @@ export function createSandboxedFallbackRig(env: SandboxedFallbackRigEnv): {
     try {
       const png = await live.handle.snapshot();
       if (!png) return;
-      drawPicture(context, await decodePicture(doc, png), env.size);
+      const layers = exportFrameLayers(live.film, { beatId: live.controller.currentBeat?.id ?? '', time: live.controller.time });
+      if (live.layout === 'side') {
+        const img = await decodePicture(doc, png);
+        const stageW = layoutStageWidth(env.size.width, live.layout);
+        context.fillStyle = LAYER_PANEL;
+        context.fillRect(0, 0, env.size.width, env.size.height);
+        context.drawImage(img, 0, 0, stageW, (stageW * img.naturalHeight) / Math.max(1, img.naturalWidth));
+      } else {
+        drawPicture(context, await decodePicture(doc, png), env.size);
+      }
+      paintExportLayers(context, layers, env.size.width, env.size.height);
       paintExportCaption(context, live.controller.currentBeat?.step.say ?? '', 0, env.size.height, env.size.width, env.size.band);
     } catch {
       // A frame that fails to copy keeps the last one, as in clip recording.
@@ -814,7 +980,8 @@ export function createSandboxedFallbackRig(env: SandboxedFallbackRigEnv): {
     if (current) throw new ExportError('The fallback plays one chunk at a time');
     const snapshot = env.snapshots(chunk.sceneId);
     if (!snapshot) throw new ExportError(`Scene "${chunk.sceneId}" has no checked scene to export`);
-    const box = hiddenSandboxBox(doc, env.size.width);
+    const layout = splitLayout(chunk.film.scenes[0]?.split ?? false, env.size.width);
+    const box = hiddenSandboxBox(doc, layoutStageWidth(env.size.width, layout));
     const handle = sandboxAdapter.mount(box, env.fragments(chunk.sceneId), {
       title: `Export: ${chunk.sceneId}`,
       film: true,
@@ -832,7 +999,7 @@ export function createSandboxedFallbackRig(env: SandboxedFallbackRigEnv): {
     controller.play();
     resumeFallbackPlayback(controller, chunk.film);
     pushAbsoluteState(handle, stub, controller.currentBeat?.step.cam ?? null);
-    current = { handle, box, stub, controller };
+    current = { handle, box, stub, controller, film: chunk.film, layout };
     await paint();
     return {
       applyAhead: (seconds) => {
