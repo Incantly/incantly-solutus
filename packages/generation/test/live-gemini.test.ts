@@ -9,6 +9,7 @@ import { GeminiLiveVoice, type LiveSocket } from '../src/client/live-gemini';
 
 class FakeSocket implements LiveSocket {
   readonly sent: unknown[] = [];
+  binaryType = '';
   onopen: ((event: unknown) => void) | null = null;
   onmessage: ((event: { data: unknown }) => void) | null = null;
   onerror: ((event: unknown) => void) | null = null;
@@ -51,8 +52,19 @@ const SETUP = {
   voice: 'Kore',
 } as const;
 
-function server(socket: FakeSocket, message: unknown): void {
-  socket.onmessage!({ data: JSON.stringify(message) });
+/** Lets the socket's ordered frame chain drain, including async Blob decodes. */
+async function flush(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function serverFrame(socket: FakeSocket, data: unknown): Promise<void> {
+  socket.onmessage!({ data });
+  return flush();
+}
+
+function server(socket: FakeSocket, message: unknown): Promise<void> {
+  return serverFrame(socket, JSON.stringify(message));
 }
 
 async function connected() {
@@ -60,7 +72,7 @@ async function connected() {
   const promise = h.voice.connect({ instruction: SETUP.instruction, tools: [...SETUP.tools], voice: SETUP.voice });
   const socket = h.sockets[0]!;
   socket.onopen!({});
-  server(socket, { setupComplete: {} });
+  await server(socket, { setupComplete: {} });
   await promise;
   return { ...h, socket };
 }
@@ -126,7 +138,7 @@ describe('GeminiLiveVoice setup', () => {
       ],
     });
     h.sockets[0]!.onopen!({});
-    server(h.sockets[0]!, { setupComplete: {} });
+    await server(h.sockets[0]!, { setupComplete: {} });
     await promise;
     const setup = (h.sockets[0]!.sent[0] as { setup: Record<string, unknown> }).setup;
     const declarations = (setup.tools as Array<{ functionDeclarations: Array<Record<string, unknown>> }>)[0]!.functionDeclarations;
@@ -172,15 +184,15 @@ describe('GeminiLiveVoice turns', () => {
     expect(said.clientContent.turns[0]!.parts[0]!.text).toContain('The square of the hypotenuse.');
 
     const pcm = Buffer.from([1, 2, 3, 4]).toString('base64');
-    server(socket, { serverContent: { modelTurn: { parts: [{ inlineData: { data: pcm, mimeType: 'audio/pcm;rate=24000' } }] } } });
+    await server(socket, { serverContent: { modelTurn: { parts: [{ inlineData: { data: pcm, mimeType: 'audio/pcm;rate=24000' } }] } } });
     // Transcriptions arrive as chunks; each event carries the turn so far.
-    server(socket, { serverContent: { outputTranscription: { text: 'The square ' } } });
-    server(socket, { serverContent: { outputTranscription: { text: 'of the hypotenuse.' } } });
-    server(socket, { serverContent: { turnComplete: true } });
+    await server(socket, { serverContent: { outputTranscription: { text: 'The square ' } } });
+    await server(socket, { serverContent: { outputTranscription: { text: 'of the hypotenuse.' } } });
+    await server(socket, { serverContent: { turnComplete: true } });
     // The model's own answer afterwards carries no beat id.
     const replyPcm = Buffer.from([5, 6]).toString('base64');
-    server(socket, { serverContent: { modelTurn: { parts: [{ inlineData: { data: replyPcm, mimeType: 'audio/pcm;rate=24000' } }] } } });
-    server(socket, { serverContent: { turnComplete: true } });
+    await server(socket, { serverContent: { modelTurn: { parts: [{ inlineData: { data: replyPcm, mimeType: 'audio/pcm;rate=24000' } }] } } });
+    await server(socket, { serverContent: { turnComplete: true } });
 
     expect(events).toContainEqual({ type: 'speaking', turnId: 's1b2' });
     expect(events).toContainEqual({ type: 'transcript', text: 'The square ', turnId: 's1b2' });
@@ -198,9 +210,9 @@ describe('GeminiLiveVoice turns', () => {
 
   it('maps interruption and learner transcription', async () => {
     const { socket, events } = await connected();
-    server(socket, { serverContent: { interrupted: true } });
-    server(socket, { serverContent: { inputTranscription: { text: 'wait, ' } } });
-    server(socket, { serverContent: { inputTranscription: { text: 'what angle?' } } });
+    await server(socket, { serverContent: { interrupted: true } });
+    await server(socket, { serverContent: { inputTranscription: { text: 'wait, ' } } });
+    await server(socket, { serverContent: { inputTranscription: { text: 'what angle?' } } });
     expect(events).toContainEqual({ type: 'interrupted' });
     expect(events).toContainEqual({ type: 'learner-transcript', text: 'wait, ' });
     expect(events).toContainEqual({ type: 'learner-transcript', text: 'wait, what angle?' });
@@ -209,13 +221,13 @@ describe('GeminiLiveVoice turns', () => {
   it('clears the beat tag on interrupted so the answer carries turnId null', async () => {
     const { socket, events, voice } = await connected();
     voice.say('The square of the hypotenuse.', 's1b2');
-    server(socket, { serverContent: { outputTranscription: { text: 'The square ' } } });
-    server(socket, { serverContent: { interrupted: true } });
+    await server(socket, { serverContent: { outputTranscription: { text: 'The square ' } } });
+    await server(socket, { serverContent: { interrupted: true } });
     // The learner's answer starts a turn of its own: no beat id rides it.
     const pcm = Buffer.from([7, 8]).toString('base64');
-    server(socket, { serverContent: { modelTurn: { parts: [{ inlineData: { data: pcm, mimeType: 'audio/pcm;rate=24000' } }] } } });
-    server(socket, { serverContent: { outputTranscription: { text: 'This angle ' } } });
-    server(socket, { serverContent: { turnComplete: true } });
+    await server(socket, { serverContent: { modelTurn: { parts: [{ inlineData: { data: pcm, mimeType: 'audio/pcm;rate=24000' } }] } } });
+    await server(socket, { serverContent: { outputTranscription: { text: 'This angle ' } } });
+    await server(socket, { serverContent: { turnComplete: true } });
     expect(events).toContainEqual({ type: 'speaking', turnId: null });
     expect(events).toContainEqual({ type: 'transcript', text: 'This angle ', turnId: null });
     expect(events).toContainEqual({ type: 'turn-complete', turnId: null });
@@ -242,7 +254,7 @@ describe('GeminiLiveVoice turns', () => {
 describe('GeminiLiveVoice tools', () => {
   it('emits one tool-call per function call and answers with the matching id', async () => {
     const { socket, events, voice } = await connected();
-    server(socket, {
+    await server(socket, {
       toolCall: {
         functionCalls: [
           { id: 'call-1', name: 'pause', args: {} },
@@ -276,10 +288,10 @@ describe('GeminiLiveVoice session lifetime', () => {
     const first = fresh.sockets[0]!;
     expect(first.url).toContain('access_token=short-lived-token');
     first.onopen!({});
-    server(first, { setupComplete: {} });
+    await server(first, { setupComplete: {} });
     await promise;
-    server(first, { sessionResumptionUpdate: { newHandle: 'handle-abc', resumable: true } });
-    server(first, { goAway: { timeLeft: '60s' } });
+    await server(first, { sessionResumptionUpdate: { newHandle: 'handle-abc', resumable: true } });
+    await server(first, { goAway: { timeLeft: '60s' } });
     first.onclose!({});
     await Promise.resolve();
 
@@ -291,7 +303,7 @@ describe('GeminiLiveVoice session lifetime', () => {
     const setup = (second.sent[0] as { setup: Record<string, unknown> }).setup;
     expect(setup.model).toBe('models/gemini-2.5-flash-native-audio');
     expect(setup.sessionResumption).toEqual({ handle: 'handle-abc' });
-    server(second, { setupComplete: {} });
+    await server(second, { setupComplete: {} });
     // No error or closed across a clean resume.
     expect(fresh.events.some((e) => e.type === 'error' || e.type === 'closed')).toBe(false);
     fresh.voice.close();
@@ -301,21 +313,21 @@ describe('GeminiLiveVoice session lifetime', () => {
     const fresh = harness(async () => 'fresh-token');
     const promise = fresh.voice.connect({ instruction: 'Hi.', tools: [] });
     fresh.sockets[0]!.onopen!({});
-    server(fresh.sockets[0]!, { setupComplete: {} });
+    await server(fresh.sockets[0]!, { setupComplete: {} });
     await promise;
     for (let i = 0; i < 5; i++) {
       const socket = fresh.sockets[i]!;
-      server(socket, { sessionResumptionUpdate: { newHandle: `handle-${i}`, resumable: true } });
-      server(socket, { goAway: { timeLeft: '60s' } });
+      await server(socket, { sessionResumptionUpdate: { newHandle: `handle-${i}`, resumable: true } });
+      await server(socket, { goAway: { timeLeft: '60s' } });
       socket.onclose!({});
       await Promise.resolve();
       fresh.sockets[i + 1]!.onopen!({});
-      server(fresh.sockets[i + 1]!, { setupComplete: {} });
+      await server(fresh.sockets[i + 1]!, { setupComplete: {} });
     }
     expect(fresh.sockets).toHaveLength(6);
     const last = fresh.sockets[5]!;
-    server(last, { sessionResumptionUpdate: { newHandle: 'handle-5', resumable: true } });
-    server(last, { goAway: { timeLeft: '5s' } });
+    await server(last, { sessionResumptionUpdate: { newHandle: 'handle-5', resumable: true } });
+    await server(last, { goAway: { timeLeft: '5s' } });
     last.onclose!({});
     await Promise.resolve();
     expect(fresh.sockets).toHaveLength(6);
@@ -326,8 +338,8 @@ describe('GeminiLiveVoice session lifetime', () => {
   it('ends with an error when resumption has no fresh token to use', async () => {
     const h = await connected();
     const first = h.sockets[0]!;
-    server(first, { sessionResumptionUpdate: { newHandle: 'handle-abc', resumable: true } });
-    server(first, { goAway: { timeLeft: '60s' } });
+    await server(first, { sessionResumptionUpdate: { newHandle: 'handle-abc', resumable: true } });
+    await server(first, { goAway: { timeLeft: '60s' } });
     first.onclose!({});
     await Promise.resolve();
     expect(h.sockets).toHaveLength(1);
@@ -362,5 +374,70 @@ describe('GeminiLiveVoice session lifetime', () => {
     voice.close();
     socket.onclose!({});
     expect(events.filter((e) => e.type === 'closed')).toHaveLength(1);
+  });
+});
+
+describe('GeminiLiveVoice binary frames', () => {
+  const enc = new TextEncoder();
+
+  it("resolves connect() when setupComplete arrives as an ArrayBuffer, a view, or a Blob", async () => {
+    const variants: Array<[string, (text: string) => unknown]> = [
+      ['ArrayBuffer', (text) => enc.encode(text).buffer],
+      // A view into a larger buffer, so byteOffset handling is exercised.
+      ['Uint8Array view', (text) => {
+        const padded = enc.encode(`xx${text}`);
+        return new Uint8Array(padded.buffer, 2, padded.length - 2);
+      }],
+      ['Blob', (text) => new Blob([text])],
+    ];
+    for (const [kind, wrap] of variants) {
+      const h = harness();
+      const promise = h.voice.connect({ instruction: 'Hi.', tools: [] });
+      const socket = h.sockets[0]!;
+      socket.onopen!({});
+      // Binary frames are requested as ArrayBuffer where supported.
+      expect(socket.binaryType, kind).toBe('arraybuffer');
+      await serverFrame(socket, wrap(JSON.stringify({ setupComplete: {} })));
+      await promise;
+      h.voice.close();
+    }
+  });
+
+  it('processes a Blob frame after an earlier string frame in order', async () => {
+    const { socket, events, voice } = await connected();
+    voice.say('Beat line.', 'b1');
+    await server(socket, { serverContent: { outputTranscription: { text: 'first ' } } });
+    await serverFrame(socket, new Blob([JSON.stringify({ serverContent: { outputTranscription: { text: 'second' } } })]));
+    const transcripts = events.filter((event) => event.type === 'transcript').map((event) => (event as { text: string }).text);
+    expect(transcripts).toEqual(['first ', 'first second']);
+    voice.close();
+  });
+
+  it('skips undecodable bytes without throwing', async () => {
+    const { socket, events, voice } = await connected();
+    const before = events.length;
+    await serverFrame(socket, new Uint8Array([0xff, 0xfe, 0xfd, 0x00]));
+    expect(events.length).toBe(before);
+    voice.close();
+  });
+
+  it('ignores frames from a socket that is no longer current', async () => {
+    const h = harness(async () => 'fresh-token');
+    const promise = h.voice.connect({ instruction: 'Hi.', tools: [] });
+    const first = h.sockets[0]!;
+    first.onopen!({});
+    await server(first, { setupComplete: {} });
+    await promise;
+    await server(first, { sessionResumptionUpdate: { newHandle: 'handle-1', resumable: true } });
+    await server(first, { goAway: { timeLeft: '1s' } });
+    first.onclose!({});
+    await flush();
+    const second = h.sockets[1]!;
+    second.onopen!({});
+    await server(second, { setupComplete: {} });
+    const before = h.events.length;
+    await serverFrame(first, JSON.stringify({ serverContent: { outputTranscription: { text: 'stale' } } }));
+    expect(h.events.length).toBe(before);
+    h.voice.close();
   });
 });

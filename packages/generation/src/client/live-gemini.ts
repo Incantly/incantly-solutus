@@ -18,6 +18,8 @@ import type { LiveEvent, LiveSetup, LiveVoice } from '@incantly/core';
 export interface LiveSocket {
   send(data: string): void;
   close(): void;
+  /** Ask for binary frames as ArrayBuffer where the socket supports it. */
+  binaryType?: string;
   onopen: ((event: unknown) => void) | null;
   onmessage: ((event: { data: unknown }) => void) | null;
   onerror: ((event: unknown) => void) | null;
@@ -58,6 +60,27 @@ function encodeBase64(bytes: Uint8Array): string {
     text += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
   }
   return btoa(text);
+}
+
+/**
+ * The Live API sends its JSON messages as binary frames (a Blob in browsers,
+ * an ArrayBuffer or Blob in Node, depending on binaryType). Decodes any
+ * frame shape to text, or null when the frame carries no usable text.
+ */
+async function decodeFrame(data: unknown): Promise<string | null> {
+  try {
+    if (typeof data === 'string') return data;
+    if (typeof ArrayBuffer !== 'undefined' && data instanceof ArrayBuffer) {
+      return new TextDecoder().decode(data);
+    }
+    if (ArrayBuffer.isView(data)) {
+      return new TextDecoder().decode(new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
+    }
+    if (typeof Blob !== 'undefined' && data instanceof Blob) return await data.text();
+  } catch {
+    return null;
+  }
+  return null;
 }
 
 function decodeBase64(data: string): Uint8Array {
@@ -312,15 +335,20 @@ export class GeminiLiveVoice implements LiveVoice {
     socket.onopen = () => {
       socket.send(JSON.stringify(this.setupMessage(handle)));
     };
-    socket.onmessage = (event) => {
-      if (typeof event.data !== 'string') return;
-      let message: Record<string, unknown>;
+    // Ask for binary frames as ArrayBuffer so most frames decode
+    // synchronously; Blobs still arrive and are decoded async below.
+    if ('binaryType' in socket) {
       try {
-        message = JSON.parse(event.data) as Record<string, unknown>;
+        socket.binaryType = 'arraybuffer';
       } catch {
-        return;
+        // Fixed fakes may not allow it; decoding handles every shape anyway.
       }
-      this.onServerMessage(message);
+    }
+    // One ordered chain per socket: a Blob frame decodes async, and later
+    // frames wait for it, so messages always land in arrival order.
+    let pending: Promise<void> = Promise.resolve();
+    socket.onmessage = (event) => {
+      pending = pending.then(() => this.handleFrame(socket, event.data)).catch(() => undefined);
     };
     socket.onerror = () => {
       this.emit({ type: 'error', message: 'The Live session hit a connection error.' });
@@ -368,6 +396,21 @@ export class GeminiLiveVoice implements LiveVoice {
       this.emit({ type: 'error', message: `The Live session closed${closeDetail(event)}.` });
       this.emit({ type: 'closed' });
     };
+  }
+
+  /** Decodes one frame and dispatches it, dropping stale sockets and undecodable bytes. */
+  private async handleFrame(socket: LiveSocket, data: unknown): Promise<void> {
+    if (this.socket !== socket) return;
+    const text = await decodeFrame(data);
+    if (text === null) return;
+    let message: unknown;
+    try {
+      message = JSON.parse(text) as unknown;
+    } catch {
+      return;
+    }
+    if (this.socket !== socket) return;
+    this.onServerMessage(message);
   }
 
   private closeSocket(): void {
