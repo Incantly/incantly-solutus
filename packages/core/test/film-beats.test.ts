@@ -53,6 +53,14 @@ describe('film compiler: fixtures', () => {
     expect(film.seconds).toBeLessThan(66);
   });
 
+  it('runs the storyboard layers from the scene steps, including the opening card', async () => {
+    // Cues come from inc.steps, not the storyboard copy: the opening card
+    // must live on the first scene step or the player never sees it.
+    const { film } = await compileFixture(PYTHAGORAS_FILM);
+    expect(film.beats[0]!.step.card).toEqual({ kind: 'section', text: 'Pythagoras and the right triangle' });
+    expect(film.beats[6]!.step.card).toEqual({ kind: 'recap', text: 'Legs squared add to the hypotenuse squared' });
+  });
+
   it('compiles the Pythagoras film near 60 s with contiguous beats', async () => {
     const { film } = await compileFixture(PYTHAGORAS_FILM);
     expect(film.beats.length).toBe(7);
