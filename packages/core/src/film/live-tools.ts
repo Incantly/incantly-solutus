@@ -64,13 +64,13 @@ export function liveToolDeclarations(film: CompiledFilm, runtime?: SceneRuntime)
   return [
     {
       name: 'pause',
-      description: 'Pause the film and pin the word where it stopped.',
+      description: 'Pause the film. Never call it for a question: the film pauses itself when the learner speaks or types.',
       parameters: { type: 'object', properties: {} },
       blocking: true,
     },
     {
       name: 'resume',
-      description: 'Return to the pinned word and continue with the next beat.',
+      description: 'Continue reading after the learner asks to carry on. Only call it when they say to continue.',
       parameters: { type: 'object', properties: {} },
       blocking: true,
     },
@@ -92,7 +92,7 @@ export function liveToolDeclarations(film: CompiledFilm, runtime?: SceneRuntime)
     },
     {
       name: 'show_me',
-      description: 'Change control values on the paused scene and talk through what changed.',
+      description: 'Change control values on the paused scene when the learner asks to see different values, and talk through what changed.',
       parameters: {
         type: 'object',
         properties: {
@@ -105,7 +105,7 @@ export function liveToolDeclarations(film: CompiledFilm, runtime?: SceneRuntime)
     },
     {
       name: 'make_example',
-      description: 'Draw another example as a detour, then return to the pinned word.',
+      description: 'Draw another example as a detour when the learner asks for one, then return to the pinned word.',
       parameters: {
         type: 'object',
         properties: { request: { description: 'What to draw.', type: 'string' } },
@@ -140,6 +140,11 @@ export interface LiveToolDeps {
   sayBeat(beat: CompiledBeat): void;
   /** Reads a beat from its anchor word on and tracks it as the current turn. */
   sayBeatRemainder(beat: CompiledBeat, wordIndex: number): void;
+  /**
+   * Runs resume now, or queues it until the model's turn ends when the voice
+   * is mid-answer, so resume never talks over the model.
+   */
+  requestResume(): Promise<LiveToolResult>;
   /** True once a beat's turn completed, so resume knows it was fully read. */
   wasCompleted(beatId: string): boolean;
   /** True once the film has been read to the end. */
@@ -255,7 +260,7 @@ export class LiveToolDispatcher {
       case 'pause':
         return this.pause();
       case 'resume':
-        return this.resumeNow();
+        return this.deps.requestResume();
       case 'seek_beat':
         return this.seekBeat(args);
       case 'get_context':
@@ -310,23 +315,59 @@ export class LiveToolDispatcher {
     return { ok: true, beat: current.id };
   }
 
+  /**
+   * Compact one-line screen state for the voice: the current beat's text,
+   * the beats said so far as ids, control values with units, and readouts.
+   * Null with no current beat.
+   */
+  contextLine(): string | null {
+    const screen = this.screen();
+    if (!screen) return null;
+    const parts = [`On screen: ${screen.current.step.say}`];
+    const said = this.deps.saidBeats().map((beat) => beat.id);
+    if (said.length > 0) parts.push(`Said: ${said.join(' ')}`);
+    const shown = Object.entries(screen.values).map(([name, value]) => {
+      const unit = screen.units[name];
+      return `${name}=${value}${unit ? ` ${unit}` : ''}`;
+    });
+    if (shown.length > 0) parts.push(shown.join(', '));
+    for (const readout of screen.readouts) parts.push(`${readout.label}: ${readout.text}`);
+    return parts.join(' | ');
+  }
+
   private context(): LiveToolResult {
-    const current = this.deps.controller.currentBeat;
-    if (!current) return { ok: false, error: 'The film has no current beat yet.' };
-    const anchor = this.deps.currentAnchor();
-    const runtime = this.deps.runtime;
-    const values = runtime ? runtime.values() : { ...(anchor?.controlValues ?? {}) };
-    const readouts = runtime
-      ? runtime.uiState().readouts.map((readout) => ({ label: readout.label, text: readout.text }))
-      : (anchor?.readouts ?? []).map((readout) => ({ label: readout.label, text: readout.text }));
+    const screen = this.screen();
+    if (!screen) return { ok: false, error: 'The film has no current beat yet.' };
     return {
       ok: true,
-      current: { id: current.id, text: current.step.say },
+      current: { id: screen.current.id, text: screen.current.step.say },
       said: this.deps.saidBeats().map((beat) => ({ id: beat.id, text: beat.step.say })),
-      sourceLines: [...(this.deps.film.sourceMap[current.id]?.lines ?? [])],
-      values,
-      readouts,
+      sourceLines: [...(this.deps.film.sourceMap[screen.current.id]?.lines ?? [])],
+      values: screen.values,
+      readouts: screen.readouts,
     };
+  }
+
+  /** The screen state both get_context and the interrupt push share. */
+  private screen(): {
+    readonly current: CompiledBeat;
+    readonly values: Record<string, number>;
+    readonly units: Readonly<Record<string, string>>;
+    readonly readouts: ReadonlyArray<{ readonly label: string; readonly text: string }>;
+  } | null {
+    const current = this.deps.controller.currentBeat;
+    if (!current) return null;
+    const anchor = this.deps.currentAnchor();
+    const runtime = this.deps.runtime;
+    const params = runtime?.uiState().params ?? [];
+    const units: Record<string, string> = {};
+    for (const param of params) {
+      if (param.unit !== '') units[param.name] = param.unit;
+    }
+    const values = { ...(runtime ? runtime.values() : (anchor?.controlValues ?? {})) };
+    const seen = runtime ? runtime.uiState().readouts : (anchor?.readouts ?? []);
+    const readouts = seen.map((readout) => ({ label: readout.label, text: readout.text }));
+    return { current, values, units, readouts };
   }
 
   private async showMe(args: unknown): Promise<LiveToolResult> {

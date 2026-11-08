@@ -103,7 +103,6 @@ describe('live voice: driver beats', () => {
     expect(voice.setups[0]!.tools.find((tool) => tool.name === 'make_example')!.blocking).toBe(false);
     // The session declares this film's own tools, not a static list.
     expect(voice.setups[0]!.tools).toEqual(liveToolDeclarations(film, runtime));
-    expect(LIVE_TEACHER_INSTRUCTION).toContain('exactly as written');
     for (let i = 0; i < 5; i++) {
       voice.emit({ type: 'turn-complete', turnId: saidId(voice, i) });
     }
@@ -136,6 +135,20 @@ describe('live voice: driver beats', () => {
     voice.emit({ type: 'turn-complete', turnId: null });
     expect(voice.said.map((line) => saidBeat(line.turnId))).toEqual(['s1b1']);
     expect(controller.currentBeat?.id).toBe('s1b1');
+    controller.destroy();
+  });
+});
+
+describe('live voice: teacher prompt', () => {
+  it('tells the model the film pauses itself and resume waits for the learner', async () => {
+    expect(LIVE_TEACHER_INSTRUCTION).toContain('pauses itself');
+    expect(LIVE_TEACHER_INSTRUCTION).toContain('only when the learner');
+    expect(LIVE_TEACHER_INSTRUCTION).toContain('Never invent visuals');
+    const { controller, voice, driver } = await setup();
+    await driver.start();
+    const tools = voice.setups[0]!.tools;
+    expect(tools.find((tool) => tool.name === 'pause')!.description).toContain('pauses itself');
+    expect(tools.find((tool) => tool.name === 'resume')!.description).toContain('carry on');
     controller.destroy();
   });
 });
@@ -180,6 +193,59 @@ describe('live voice: interrupt', () => {
     await driver.start();
     voice.emit({ type: 'interrupted' });
     expect(driver.lastAnchor).toMatchObject({ beat: 's1b1', wordIndex: 0 } satisfies Partial<AskAnchor>);
+    controller.destroy();
+  });
+
+  it('pushes the screen state to the voice on interrupt', async () => {
+    const { controller, runtime, voice, driver } = await setup();
+    await driver.start();
+    voice.emit({ type: 'turn-complete', turnId: saidId(voice, 0) });
+    voice.emit({ type: 'interrupted' });
+    // One context line, before any answer: beat text, said ids, values, readouts.
+    expect(voice.contexts).toHaveLength(1);
+    const line = voice.contexts[0]!;
+    expect(line).toContain('Pull the bob aside');
+    expect(line).toContain('s1b1');
+    expect(line).toContain('s1b2');
+    expect(line).toContain('angle=0.5 rad');
+    const readouts = runtime.uiState().readouts;
+    if (readouts.length > 0) expect(line).toContain(readouts[0]!.text);
+    controller.destroy();
+  });
+
+  it('holds a resume tool call until the model answer ends', async () => {
+    const { controller, voice, driver } = await setup();
+    await driver.start();
+    voice.emit({ type: 'turn-complete', turnId: saidId(voice, 0) });
+    voice.emit({ type: 'transcript', text: 'Pull the bob aside', turnId: saidId(voice, 1) });
+    voice.emit({ type: 'interrupted' });
+    voice.emit({ type: 'speaking', turnId: null });
+    voice.emit({ type: 'tool-call', callId: 'c1', name: 'resume', args: {} });
+    await flush();
+    // The answer is still going: nothing said, no tool answer yet.
+    expect(answerFor(voice, 'c1')).toBeUndefined();
+    expect(voice.said.map((line) => saidBeat(line.turnId))).toEqual(['s1b1', 's1b2']);
+    voice.emit({ type: 'turn-complete', turnId: null });
+    await flush();
+    expect(answerFor(voice, 'c1')).toEqual({ ok: true, beat: 's1b2', fromWord: 3 });
+    expect(voice.said[voice.said.length - 1]).toEqual({ text: 'aside, let go, and watch the swing begin.', turnId: saidId(voice, 2) });
+    controller.destroy();
+  });
+
+  it('queues a host resume while the model answers', async () => {
+    const { controller, voice, driver } = await setup();
+    await driver.start();
+    voice.emit({ type: 'turn-complete', turnId: saidId(voice, 0) });
+    voice.emit({ type: 'transcript', text: 'Pull the bob aside', turnId: saidId(voice, 1) });
+    voice.emit({ type: 'interrupted' });
+    voice.emit({ type: 'speaking', turnId: null });
+    expect(driver.resume()).toEqual({ ok: true, queued: true });
+    await flush();
+    expect(voice.said.map((line) => saidBeat(line.turnId))).toEqual(['s1b1', 's1b2']);
+    voice.emit({ type: 'turn-complete', turnId: null });
+    await flush();
+    expect(voice.said[voice.said.length - 1]).toEqual({ text: 'aside, let go, and watch the swing begin.', turnId: saidId(voice, 2) });
+    expect(controller.currentBeat?.id).toBe('s1b2');
     controller.destroy();
   });
 });
