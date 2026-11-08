@@ -71,6 +71,7 @@ export { examplePinSeconds, exampleReturnSeconds, SideClipPlayer, validateExampl
 export type { ExampleClip, SideClipEvent, SideClipPhase } from './film/example';
 export { applyFilmPatch, insertBeatId, patchAudioProblems, patchSummary, promoteInsertClip, sanitizeFilmPatch, FILM_PATCH_LIMITS } from './film/versions';
 export type { FilmPatchAudio, FilmPatchBeat, FilmPatchInsert, FilmPatchInsertLine, FilmVersionPatch } from './film/versions';
+export type { LiveEvent, LiveSetup, LiveToolDeclaration, LiveVoice } from './film/live-voice';
 export {
   askerHashOf,
   FilmVersionStore,
