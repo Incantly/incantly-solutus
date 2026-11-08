@@ -324,11 +324,19 @@ function generationService(): Plugin {
     gallery ??= new g.MemoryGalleryStore();
     filmStore ??= new g.MemoryFilmLibraryStore();
     films ??= new g.FilmLibrary(filmStore);
+    // Live voice tokens: minted only when the operator accepts the retention
+    // terms (GEMINI_LIVE_RETENTION_ACCEPTED=1) and a Gemini key is present,
+    // shell or .env, read the same way the Cartesia variables are read.
+    const geminiLiveKey = providerEnv('gemini').key;
+    const geminiLiveRetention = g.geminiLiveRetentionAccepted({ ...devEnv(), ...process.env });
     const service = new g.GenerationService({
       model,
       authenticate: g.hmacAuthenticator(DEV_SECRET),
       records,
       prefix,
+      ...(geminiLiveKey && geminiLiveRetention
+        ? { live: g.geminiLiveTokenMinter({ apiKey: geminiLiveKey, retentionAccepted: true }) }
+        : {}),
       enabled: () => enabled,
       // A real playground call plans (its own two-minute budget) and then
       // streams a scene for up to five minutes, and a repair may join it.

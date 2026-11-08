@@ -9,6 +9,8 @@ import { repairFigure } from './repair';
 import type { GenerationClient } from './service-client';
 import type { ProductSignal } from './telemetry';
 
+export { GeminiLiveVoice, LIVE_ENDPOINT } from './live-gemini';
+export type { GeminiLiveVoiceOptions, LiveAudioListener, LiveSocket, LiveSocketFactory } from './live-gemini';
 export { GenerationClient, ServiceError } from './service-client';
 export type { GenerationClientOptions } from './service-client';
 export { formatFilmTimings, generateFilmStream, resolveFilmSource, storedAsFixture } from './film-client';
