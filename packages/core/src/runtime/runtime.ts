@@ -1138,6 +1138,13 @@ export class SceneRuntime {
       // Intermediate steps move state forward without drawing; only the last step's update is sent.
       this.graph.flush();
     }
+    // Film seeks land the clock even when the scene is still: the loop
+    // breaks on an idle scene with nothing to draw, but the film clock still
+    // has to reach its target — otherwise the controller's forward steps
+    // play on from zero and land at the time within the beat instead of the
+    // target, breaking beats, captions and the write-on reveal. Figure seeks
+    // keep replay-until-idle: a paused figure stays where playing left it.
+    if (this.film && this.time < target) this.time = target;
     // A timeline that finished mid-replay stays finished, as after playing there.
     this.playing = resume && this.playing;
     const update = this.flush();

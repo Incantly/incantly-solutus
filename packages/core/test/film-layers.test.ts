@@ -254,6 +254,39 @@ describe('film layers: solver', () => {
 });
 
 describe('film layers: seek equals play', () => {
+  it('seeks a still scene to the absolute film time, not the time within the beat', () => {
+    // A scene whose onFrame never reads time idles the runtime; the seek
+    // replay loop breaks with nothing to draw, and the clock still has to
+    // land on its target — otherwise the reveal and the transport read the
+    // within-beat offset. This bit a layered film first, but it holds for
+    // any still scene.
+    const still: SceneFunction = (inc) => {
+      const stage = inc.svg('#stage', { viewBox: [0, 0, 600, 400], title: 'Still', description: 'A still scene.' });
+      const ball = stage.circle(150, 200, 25, { tone: 'hi' });
+      stage.part('Ball', ball, { label: 'Ball', info: 'A still ball.' });
+      inc.onFrame(() => {
+        ball.at(0, 0);
+      });
+      inc.steps([...LAYER_STEPS]);
+    };
+    const film = compiledWith(still);
+    const runtime = mounted(still);
+    const controller = new FilmController({ runtime, film });
+    const model = new PlayerModel(controller, film);
+    controller.play();
+    const beat = film.beats[1]!;
+    for (const target of [beat.start + 1, beat.start + beat.seconds / 2, film.beats[2]!.start + 1]) {
+      controller.seek(target);
+      expect(controller.time).toBeCloseTo(target, 9);
+    }
+    // Mid-beat the reveal prefix is non-empty and the caption carries it.
+    controller.seek(beat.start + beat.seconds / 2);
+    expect(writeShownAt(beat, controller.time).length).toBeGreaterThan(0);
+    expect(model.state.caption?.write?.shown).toBe(writeShownAt(beat, controller.time));
+    expect(model.state.caption?.split).toBe(true);
+    controller.destroy();
+  });
+
   it('lands the same layer state by seek as by play', () => {
     const film = compiledWith(layerScene());
     const target = film.beats[1]!.start + 1;
