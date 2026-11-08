@@ -3,7 +3,7 @@ import {
   FakeLiveVoice,
   FilmController,
   LIVE_TEACHER_INSTRUCTION,
-  LIVE_TOOL_DECLARATIONS,
+  liveToolDeclarations,
   LiveDriver,
   resolveAskAnchor,
   SceneRuntime,
@@ -94,14 +94,15 @@ describe('live voice: fake', () => {
 
 describe('live voice: driver beats', () => {
   it('connects with the teacher instruction and tools, and reads beats in order', async () => {
-    const { film, controller, voice, driver, events } = await setup();
+    const { film, controller, voice, driver, events, runtime } = await setup();
     await driver.start();
     expect(controller.advance).toBe('click');
     expect(voice.setups).toHaveLength(1);
     expect(voice.setups[0]!.instruction).toBe(LIVE_TEACHER_INSTRUCTION);
     expect(voice.setups[0]!.tools.map((tool) => tool.name)).toEqual(['pause', 'resume', 'seek_beat', 'get_context', 'show_me', 'make_example']);
     expect(voice.setups[0]!.tools.find((tool) => tool.name === 'make_example')!.blocking).toBe(false);
-    expect(LIVE_TOOL_DECLARATIONS).toHaveLength(6);
+    // The session declares this film's own tools, not a static list.
+    expect(voice.setups[0]!.tools).toEqual(liveToolDeclarations(film, runtime));
     expect(LIVE_TEACHER_INSTRUCTION).toContain('exactly as written');
     for (let i = 0; i < 5; i++) {
       voice.emit({ type: 'turn-complete', turnId: saidId(voice, i) });
@@ -492,6 +493,92 @@ describe('live voice: tools', () => {
     await flush();
     expect(answerFor(voice, 'c2')).toEqual({ ok: true, beat: 's1b2', fromWord: 3 });
     expect(voice.said[voice.said.length - 1]).toEqual({ text: 'aside, let go, and watch the swing begin.', turnId: saidId(voice, 2) });
+    controller.destroy();
+  });
+});
+
+describe('live voice: tool declarations', () => {
+  function setPropertiesOf(film: CompiledFilm, runtime?: SceneRuntime): Record<string, Record<string, unknown>> {
+    const declarations = liveToolDeclarations(film, runtime);
+    const show = declarations.find((tool) => tool.name === 'show_me')!;
+    const parameters = show.parameters as { properties: { set: { properties: Record<string, Record<string, unknown>> } } };
+    return parameters.properties.set.properties;
+  }
+
+  it('names this film beats and controls with their ranges', async () => {
+    const { film, runtime, controller } = await setup();
+    const declarations = liveToolDeclarations(film, runtime);
+    expect(declarations.map((tool) => tool.name)).toEqual(['pause', 'resume', 'seek_beat', 'get_context', 'show_me', 'make_example']);
+    const seek = declarations.find((tool) => tool.name === 'seek_beat')!;
+    const beat = (seek.parameters as { properties: { beat: unknown } }).properties.beat as { type: string; enum: string[] };
+    expect(beat.type).toBe('string');
+    expect(beat.enum).toEqual(film.beats.map((candidate) => candidate.id));
+    const set = setPropertiesOf(film, runtime);
+    expect(set.angle).toMatchObject({ type: 'number', minimum: 0.1, maximum: 1.1 });
+    expect(set.push).toMatchObject({ type: 'number', minimum: 0, maximum: 1 });
+    expect(set.angle!.description as string).toContain('Start angle');
+    controller.destroy();
+  });
+
+  it('uses only the provider OpenAPI subset, never additionalProperties', async () => {
+    // Schema keywords are fixed; property names (beat ids, control names) are data.
+    const checkSchema = (value: unknown, path: string): void => {
+      if (Array.isArray(value)) {
+        value.forEach((item, index) => checkSchema(item, `${path}[${index}]`));
+        return;
+      }
+      if (typeof value !== 'object' || value === null) return;
+      for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+        if (key === 'properties') {
+          for (const [prop, schema] of Object.entries(item as Record<string, unknown>)) checkSchema(schema, `${path}.${prop}`);
+        } else {
+          expect(['type', 'description', 'properties', 'required', 'enum', 'minimum', 'maximum'].includes(key), `${path}.${key}`).toBe(true);
+          checkSchema(item, `${path}.${key}`);
+        }
+      }
+    };
+    const { film, runtime, controller } = await setup();
+    for (const declarations of [liveToolDeclarations(film, runtime), liveToolDeclarations(film)]) {
+      expect(declarations.length).toBeGreaterThan(0);
+      for (const tool of declarations) {
+        expect(Object.keys(tool).sort()).toEqual(['blocking', 'description', 'name', 'parameters']);
+        checkSchema(tool.parameters, tool.name);
+      }
+    }
+    controller.destroy();
+  });
+
+  it('falls back to the film beat sets without a runtime, still validating names', async () => {
+    const { film, scenes } = await fixture();
+    const runtime = mounted(scenes[0]!);
+    const controller = new FilmController({ runtime, film });
+    const voice = new FakeLiveVoice();
+    const applied: Array<Readonly<Record<string, number>>> = [];
+    const driver = new LiveDriver({
+      controller,
+      film,
+      voice,
+      showMe: ((set: Readonly<Record<string, number>>) => {
+        applied.push(set);
+        return null;
+      }) as LiveShowMe,
+    });
+    const set = setPropertiesOf(film);
+    expect(Object.keys(set).sort()).toEqual(['angle', 'push']);
+    for (const prop of Object.values(set)) {
+      expect(prop.type).toBe('number');
+      expect(prop).not.toHaveProperty('minimum');
+      expect(prop).not.toHaveProperty('maximum');
+    }
+    await driver.start();
+    // Unknown controls fail; without known bounds any finite number lands.
+    voice.emit({ type: 'tool-call', callId: 'c1', name: 'show_me', args: { set: { nope: 1 } } });
+    await flush();
+    expect(answerFor(voice, 'c1')).toMatchObject({ ok: false });
+    voice.emit({ type: 'tool-call', callId: 'c2', name: 'show_me', args: { set: { angle: 5 } } });
+    await flush();
+    expect(answerFor(voice, 'c2')).toMatchObject({ ok: true, set: { angle: 5 } });
+    expect(applied).toEqual([{ angle: 5 }]);
     controller.destroy();
   });
 });

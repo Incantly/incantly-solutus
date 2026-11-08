@@ -1,5 +1,5 @@
 import type { AskAnchor } from './ask';
-import { LIVE_TOOL_DECLARATIONS, LiveToolDispatcher, transcriptWordIndex, type LiveMakeExample, type LiveShowMe, type LiveToolResult } from './live-tools';
+import { liveToolDeclarations, LiveToolDispatcher, transcriptWordIndex, type LiveMakeExample, type LiveShowMe, type LiveToolResult } from './live-tools';
 import type { LiveEvent, LiveVoice } from './live-voice';
 import type { FilmController } from '../runtime/film';
 import type { SceneRuntime } from '../runtime/runtime';
@@ -51,6 +51,7 @@ export class LiveDriver {
   private readonly controller: FilmController;
   private readonly film: CompiledFilm;
   private readonly voice: LiveVoice;
+  private readonly runtime?: SceneRuntime;
   private readonly tools: LiveToolDispatcher;
   private readonly listeners = new Set<(event: LiveDriverEvent) => void>();
   private readonly transcripts = new Map<string, string>();
@@ -79,6 +80,7 @@ export class LiveDriver {
     this.controller = options.controller;
     this.film = options.film;
     this.voice = options.voice;
+    if (options.runtime) this.runtime = options.runtime;
     if (options.onEvent) this.listeners.add(options.onEvent);
     this.tools = new LiveToolDispatcher({
       controller: options.controller,
@@ -167,7 +169,7 @@ export class LiveDriver {
     this.transcripts.clear();
     this.controller.setAdvance('click');
     try {
-      await this.voice.connect({ instruction: LIVE_TEACHER_INSTRUCTION, tools: LIVE_TOOL_DECLARATIONS });
+      await this.voice.connect({ instruction: LIVE_TEACHER_INSTRUCTION, tools: liveToolDeclarations(this.film, this.runtime) });
     } catch (error) {
       // A refused setup leaves no live session behind: the film plays on as before.
       if (this.epoch === at) {

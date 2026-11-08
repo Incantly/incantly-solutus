@@ -14,63 +14,107 @@ export type LiveShowMe = (set: Readonly<Record<string, number>>, beat: CompiledB
 /** Draws another example through the host pipeline, pinned at the anchor. */
 export type LiveMakeExample = (request: string, anchor: AskAnchor) => unknown | Promise<unknown>;
 
-/** The six tools of live-voice-films.md 5.3, declared for the voice as JSON Schema. */
-export const LIVE_TOOL_DECLARATIONS: readonly LiveToolDeclaration[] = [
-  {
-    name: 'pause',
-    description: 'Pause the film and pin the word where it stopped.',
-    parameters: { type: 'object', properties: {}, additionalProperties: false },
-    blocking: true,
-  },
-  {
-    name: 'resume',
-    description: 'Return to the pinned word and continue with the next beat.',
-    parameters: { type: 'object', properties: {}, additionalProperties: false },
-    blocking: true,
-  },
-  {
-    name: 'seek_beat',
-    description: 'Jump to a beat by id or index, then read it.',
-    parameters: {
-      type: 'object',
-      properties: { beat: { description: 'Beat id, or its index in the film.', type: ['string', 'integer'] } },
-      required: ['beat'],
-      additionalProperties: false,
+/** One control as the voice sees it: a number within its range, if known. */
+interface LiveControlSchema {
+  readonly name: string;
+  readonly label: string;
+  readonly unit: string;
+  readonly min: number | null;
+  readonly max: number | null;
+}
+
+/** The film's controls with their ranges: the runtime's params, or the beat sets' names when no runtime is given. */
+function liveControls(film: CompiledFilm, runtime?: SceneRuntime): readonly LiveControlSchema[] {
+  const params = runtime?.uiState().params;
+  if (params && params.length > 0) {
+    return params.map((param) => ({
+      name: param.name,
+      label: param.label !== '' ? param.label : param.name,
+      unit: param.unit,
+      min: Number.isFinite(param.min) ? param.min : null,
+      max: Number.isFinite(param.max) ? param.max : null,
+    }));
+  }
+  const names = new Set<string>();
+  for (const beat of film.beats) {
+    for (const key of Object.keys(beat.step.set ?? {})) names.add(key);
+  }
+  return [...names].map((name) => ({ name, label: name, unit: '', min: null, max: null }));
+}
+
+/**
+ * The six tools of live-voice-films.md 5.3, declared for this film. The
+ * voice only gets the OpenAPI subset providers accept (type, description,
+ * properties, required, enum, minimum, maximum): no additionalProperties,
+ * unions or minLength anywhere, so beat ids are an enum and every control is
+ * a named number property with its range. The dispatcher still accepts a beat
+ * index and still validates every value, whatever the declaration names.
+ */
+export function liveToolDeclarations(film: CompiledFilm, runtime?: SceneRuntime): readonly LiveToolDeclaration[] {
+  const beats = film.beats.map((beat) => beat.id);
+  const setProperties: Record<string, unknown> = {};
+  for (const control of liveControls(film, runtime)) {
+    setProperties[control.name] = {
+      description: control.unit !== '' ? `${control.label} (${control.unit})` : control.label,
+      type: 'number',
+      ...(control.min !== null ? { minimum: control.min } : {}),
+      ...(control.max !== null ? { maximum: control.max } : {}),
+    };
+  }
+  return [
+    {
+      name: 'pause',
+      description: 'Pause the film and pin the word where it stopped.',
+      parameters: { type: 'object', properties: {} },
+      blocking: true,
     },
-    blocking: true,
-  },
-  {
-    name: 'get_context',
-    description: 'Current beat, beats said so far, its source lines, control values and readouts.',
-    parameters: { type: 'object', properties: {}, additionalProperties: false },
-    blocking: true,
-  },
-  {
-    name: 'show_me',
-    description: 'Change control values on the paused scene and talk through what changed.',
-    parameters: {
-      type: 'object',
-      properties: {
-        set: { description: 'Control values to change to.', type: 'object', additionalProperties: { type: 'number' } },
-        beat: { description: 'Beat id to replay; the current beat when left out.', type: 'string' },
+    {
+      name: 'resume',
+      description: 'Return to the pinned word and continue with the next beat.',
+      parameters: { type: 'object', properties: {} },
+      blocking: true,
+    },
+    {
+      name: 'seek_beat',
+      description: 'Jump to a beat by id or index, then read it.',
+      parameters: {
+        type: 'object',
+        properties: { beat: { description: 'Beat id, or its index in the film.', type: 'string', enum: beats } },
+        required: ['beat'],
       },
-      required: ['set'],
-      additionalProperties: false,
+      blocking: true,
     },
-    blocking: true,
-  },
-  {
-    name: 'make_example',
-    description: 'Draw another example as a detour, then return to the pinned word.',
-    parameters: {
-      type: 'object',
-      properties: { request: { description: 'What to draw.', type: 'string', minLength: 1 } },
-      required: ['request'],
-      additionalProperties: false,
+    {
+      name: 'get_context',
+      description: 'Current beat, beats said so far, its source lines, control values and readouts.',
+      parameters: { type: 'object', properties: {} },
+      blocking: true,
     },
-    blocking: false,
-  },
-];
+    {
+      name: 'show_me',
+      description: 'Change control values on the paused scene and talk through what changed.',
+      parameters: {
+        type: 'object',
+        properties: {
+          set: { description: 'Control values to change to.', type: 'object', properties: setProperties },
+          beat: { description: 'Beat id to replay; the current beat when left out.', type: 'string', enum: beats },
+        },
+        required: ['set'],
+      },
+      blocking: true,
+    },
+    {
+      name: 'make_example',
+      description: 'Draw another example as a detour, then return to the pinned word.',
+      parameters: {
+        type: 'object',
+        properties: { request: { description: 'What to draw.', type: 'string' } },
+        required: ['request'],
+      },
+      blocking: false,
+    },
+  ];
+}
 
 /** What the tool dispatcher needs from the driver and the host. */
 export interface LiveToolDeps {
@@ -328,16 +372,14 @@ export class LiveToolDispatcher {
   }
 
   /** Control bounds from the runtime's params, or film set-keys with no bounds. */
+  /** Validation bounds from the same control list the declarations name. */
   private controlBounds(): ReadonlyMap<string, { readonly min: number; readonly max: number }> {
-    const params = this.deps.runtime?.uiState().params;
-    if (params && params.length > 0) {
-      return new Map(params.map((param) => [param.name, { min: param.min, max: param.max }]));
-    }
-    const names = new Set<string>();
-    for (const beat of this.deps.film.beats) {
-      for (const key of Object.keys(beat.step.set ?? {})) names.add(key);
-    }
-    return new Map([...names].map((name) => [name, { min: -Infinity, max: Infinity }]));
+    return new Map(
+      liveControls(this.deps.film, this.deps.runtime).map((control) => [
+        control.name,
+        { min: control.min ?? -Infinity, max: control.max ?? Infinity },
+      ]),
+    );
   }
 }
 
