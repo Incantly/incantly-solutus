@@ -72,6 +72,11 @@ export type { ExampleClip, SideClipEvent, SideClipPhase } from './film/example';
 export { applyFilmPatch, insertBeatId, patchAudioProblems, patchSummary, promoteInsertClip, sanitizeFilmPatch, FILM_PATCH_LIMITS } from './film/versions';
 export type { FilmPatchAudio, FilmPatchBeat, FilmPatchInsert, FilmPatchInsertLine, FilmVersionPatch } from './film/versions';
 export type { LiveEvent, LiveSetup, LiveToolDeclaration, LiveVoice } from './film/live-voice';
+export { FakeLiveVoice } from './film/live-fake';
+export { LIVE_TEACHER_INSTRUCTION, LiveDriver } from './film/live-driver';
+export type { LiveDriverEvent, LiveDriverOptions, LiveDriverState } from './film/live-driver';
+export { defaultShowMeBinding, LIVE_TOOL_DECLARATIONS, LiveToolDispatcher, resolveBeat } from './film/live-tools';
+export type { LiveMakeExample, LiveShowMe, LiveToolDeps, LiveToolResult } from './film/live-tools';
 export {
   askerHashOf,
   FilmVersionStore,
