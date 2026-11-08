@@ -81,6 +81,14 @@ export class LiveDriver {
   private resumeTimer: ReturnType<typeof setTimeout> | null = null;
   /** When our last say() went out, to tell our own cutoff apart from a learner barge-in. */
   private lastSayAt = 0;
+  /** When learner input last arrived: a learner-transcript event or a host interrupt() call. */
+  private lastLearnerInputAt = 0;
+  /** A re-read the provider may have dropped: re-said once if it never speaks. */
+  private resayWatch: { readonly turnId: string; readonly beat: CompiledBeat; readonly wordIndex: number | null } | null = null;
+  /** Fires the one-shot re-say when the watched utterance stays silent. */
+  private resayTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Set around the scheduled resume's run so only its reading arms the re-say watch. */
+  private armResayOnSay = false;
   /** Turns the voice finished reading, so resume knows a beat was fully read. */
   private readonly completedTurns = new Set<string>();
   /** Every utterance said, by its unique turn id, back to its beat. */
@@ -181,6 +189,8 @@ export class LiveDriver {
     this.paused = false;
     this.answering = false;
     this.pendingResume = null;
+    this.armResayOnSay = false;
+    this.clearResayWatch();
     if (this.resumeTimer !== null) {
       clearTimeout(this.resumeTimer);
       this.resumeTimer = null;
@@ -240,6 +250,8 @@ export class LiveDriver {
     this.paused = false;
     this.answering = false;
     this.pendingResume = null;
+    this.armResayOnSay = false;
+    this.clearResayWatch();
     if (this.resumeTimer !== null) {
       clearTimeout(this.resumeTimer);
       this.resumeTimer = null;
@@ -280,7 +292,42 @@ export class LiveDriver {
       this.resumeTimer = null;
     }
     if (!pending || this.epoch !== pending.at || this.state === 'idle') return;
-    this.tools.resumeNow();
+    // Only this reading arms the re-say watch: ordinary beat reads already work.
+    this.armResayOnSay = true;
+    try {
+      this.tools.resumeNow();
+    } finally {
+      this.armResayOnSay = false;
+    }
+  }
+
+  /**
+   * Watches a scheduled reading for a provider drop: any newer say, its
+   * speaking, or its close clears the watch.
+   */
+  private watchSay(beat: CompiledBeat, wordIndex: number | null, turnId: string): void {
+    this.clearResayWatch();
+    if (!this.armResayOnSay) return;
+    this.resayWatch = { turnId, beat, wordIndex };
+    this.resayTimer = setTimeout(() => this.resayLastSay(), SELF_INTERRUPT_WINDOW_MS);
+  }
+
+  private clearResayWatch(): void {
+    this.resayWatch = null;
+    if (this.resayTimer !== null) {
+      clearTimeout(this.resayTimer);
+      this.resayTimer = null;
+    }
+  }
+
+  /** Re-says the watched reading once when the provider never spoke it. */
+  private resayLastSay(): void {
+    const watched = this.resayWatch;
+    this.resayWatch = null;
+    this.resayTimer = null;
+    if (watched === null || this.state !== 'live' || this.paused) return;
+    if (watched.wordIndex === null) this.sayBeat(watched.beat);
+    else this.sayBeatRemainder(watched.beat, watched.wordIndex);
   }
 
   private sayBeat(beat: CompiledBeat): void {
@@ -293,6 +340,7 @@ export class LiveDriver {
     this.paused = false;
     this.currentTurn = turnId;
     this.lastSayAt = Date.now();
+    this.watchSay(beat, null, turnId);
     this.voice.say(beat.step.say, turnId);
     this.emit({ type: 'said', beat: beat.id, turnId, text: beat.step.say });
   }
@@ -309,6 +357,7 @@ export class LiveDriver {
     this.paused = false;
     this.currentTurn = turnId;
     this.lastSayAt = Date.now();
+    this.watchSay(beat, from, turnId);
     this.voice.say(text, turnId);
     this.emit({ type: 'said', beat: beat.id, turnId, text });
   }
@@ -352,6 +401,8 @@ export class LiveDriver {
   private notePaused(anchor: AskAnchor): void {
     this.paused = true;
     this.currentTurn = null;
+    // A new pin retires any watched reading: the re-say would speak stale words.
+    this.clearResayWatch();
     this.setAnchor(anchor);
   }
 
@@ -378,7 +429,19 @@ export class LiveDriver {
       }
       case 'speaking':
         // A null-turn speaking is the model's own answer holding the floor.
-        if (event.turnId === null) this.answering = true;
+        if (event.turnId === null) {
+          this.answering = true;
+          return;
+        }
+        // The provider picked up our own reading: no re-say needed.
+        if (event.turnId === this.resayWatch?.turnId) this.clearResayWatch();
+        return;
+      case 'learner-transcript':
+        // Spoken learner input pauses at that moment, even mid-reading.
+        if (this.state === 'live') {
+          this.lastLearnerInputAt = Date.now();
+          this.interruptNow();
+        }
         return;
       case 'turn-complete':
         if (event.turnId === null) {
@@ -389,7 +452,7 @@ export class LiveDriver {
         this.onTurnComplete(event.turnId);
         return;
       case 'interrupted':
-        this.interrupt();
+        this.onProviderInterrupted();
         return;
       case 'tool-call':
         void this.tools.dispatch(event.callId, event.name, event.args);
@@ -407,6 +470,8 @@ export class LiveDriver {
    */
   private onTurnComplete(turnId: string | null): void {
     if (this.state !== 'live' || turnId === null || turnId !== this.currentTurn) return;
+    // The live reading closed: no re-say needed for it.
+    this.clearResayWatch();
     const finished = this.beatOfTurn(turnId);
     if (finished !== null) this.completedTurns.add(finished);
     if (!this.controller.nextBeat()) {
@@ -422,16 +487,36 @@ export class LiveDriver {
   }
 
   /**
-   * Pins the learner's question: pauses the film at the spoken word and
-   * pushes the screen state to the voice before it answers, so the answer
-   * uses what is on screen. Spoken questions (the provider's interrupted
-   * event) and typed ones (the host calls this, then asks) share this path.
+   * Host entry for typed questions: marks the learner input, then shares the
+   * spoken path. Already paused keeps its anchor and context.
+
    */
   interrupt(): void {
     if (this.state !== 'live') return;
-    // Our own say() can echo back as interrupted while the model's reply is
-    // still up: that is our cutoff, not a barge-in, so the film holds steady.
-    if (this.answering && Date.now() - this.lastSayAt < SELF_INTERRUPT_WINDOW_MS) return;
+    this.lastLearnerInputAt = Date.now();
+    this.interruptNow();
+  }
+
+  /**
+   * The provider's interrupted event: our own say() echoes back the same way
+   * within a short window, so only an interrupted with learner input behind
+   * it — a transcript since our say, or a host call — pauses the film.
+   */
+  private onProviderInterrupted(): void {
+    if (this.state !== 'live') return;
+    const recentSay = this.lastSayAt > 0 && Date.now() - this.lastSayAt < SELF_INTERRUPT_WINDOW_MS;
+    const learnerSinceSay = this.lastLearnerInputAt >= this.lastSayAt;
+    if (recentSay && !learnerSinceSay) return;
+    this.interruptNow();
+  }
+
+  /**
+   * Pins the learner's question: pauses the film at the spoken word and
+   * pushes the screen state to the voice before it answers, so the answer
+   * uses what is on screen.
+   */
+  private interruptNow(): void {
+    if (this.state !== 'live') return;
     // Already paused on a pin (a typed follow-up like "carry on"): keep the
     // anchor and the context already pushed instead of re-pinning.
     if (this.paused && this.anchor) return;

@@ -34,6 +34,12 @@ function saidBeat(turnId: string): string {
   return turnId.split('#')[0]!;
 }
 
+/** A genuine spoken barge-in: learner speech, then the provider's cut-off. */
+function interruptAsLearner(voice: FakeLiveVoice, text = 'Wait, what does that mean?'): void {
+  voice.emit({ type: 'learner-transcript', text });
+  voice.emit({ type: 'interrupted' });
+}
+
 async function fixture(): Promise<{ readonly film: CompiledFilm; readonly scenes: readonly FilmSceneInput[] }> {
   return trustFixture(THIRTY_SECOND_FILM);
 }
@@ -118,7 +124,7 @@ describe('live voice bugs: turn identity', () => {
     await driver.start();
     voice.emit({ type: 'turn-complete', turnId: saidId(voice, 0) });
     voice.emit({ type: 'transcript', text: 'Pull the bob aside', turnId: saidId(voice, 1) });
-    voice.emit({ type: 'interrupted' });
+    interruptAsLearner(voice);
     const cutOff = saidId(voice, 1);
     // The resume is scheduled; the tool answers but nothing is said yet.
     voice.emit({ type: 'tool-call', callId: 'r', name: 'resume', args: {} });
@@ -223,7 +229,7 @@ describe('live voice bugs: late and stale results', () => {
     });
     await driver.start();
     voice.emit({ type: 'turn-complete', turnId: saidId(voice, 0) });
-    voice.emit({ type: 'interrupted' });
+    interruptAsLearner(voice);
     voice.emit({ type: 'tool-call', callId: 'c1', name: 'make_example', args: { request: 'Another swing' } });
     await flush();
     driver.stop();
@@ -269,7 +275,7 @@ describe('live voice bugs: late and stale results', () => {
     });
     await driver.start();
     voice.emit({ type: 'turn-complete', turnId: saidId(voice, 0) });
-    voice.emit({ type: 'interrupted' });
+    interruptAsLearner(voice);
     voice.emit({ type: 'tool-call', callId: 'dup', name: 'make_example', args: { request: 'Another swing' } });
     voice.emit({ type: 'tool-call', callId: 'dup', name: 'make_example', args: { request: 'Another swing' } });
     await flush();
@@ -287,7 +293,7 @@ describe('live voice bugs: resume anchors', () => {
     for (let i = 0; i < 6; i++) voice.emit({ type: 'turn-complete', turnId: saidId(voice, i) });
     expect(controller.currentBeat?.id).toBe('s2b1');
     voice.emit({ type: 'transcript', text: 'Second scene opens', turnId: 's2b1' });
-    voice.emit({ type: 'interrupted' });
+    interruptAsLearner(voice);
     expect(driver.lastAnchor?.beat).toBe('s2b1');
     voice.emit({ type: 'tool-call', callId: 'seek', name: 'seek_beat', args: { beat: 's1b2' } });
     await flush();
@@ -305,7 +311,7 @@ describe('live voice bugs: resume anchors', () => {
     const { controller, voice, driver } = await setup();
     await driver.start();
     voice.emit({ type: 'transcript', text: 'A pendulum', turnId: saidId(voice, 0) });
-    voice.emit({ type: 'interrupted' });
+    interruptAsLearner(voice);
     voice.emit({ type: 'tool-call', callId: 'seek', name: 'seek_beat', args: { beat: 's1b6' } });
     await flush();
     expect(controller.currentBeat?.id).toBe('s1b6');
