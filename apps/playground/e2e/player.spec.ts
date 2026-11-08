@@ -8,7 +8,10 @@ test.describe.configure({ mode: 'serial' });
 
 async function openPlayer(page: Page, film: string): Promise<void> {
   await page.request.get('/api/dev/films/clear');
-  await page.goto(`/?page=player&film=${film}`);
+  // The reference model answers here: these specs assert its exact words
+  // ('fastest'), so the player must not open a real model session even when
+  // the dev server carries keys.
+  await page.goto(`/?page=player&film=${film}&reference=1`);
   await page.waitForFunction(() => window.__playground?.ready === true);
 }
 

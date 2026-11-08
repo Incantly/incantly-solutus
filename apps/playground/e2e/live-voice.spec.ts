@@ -343,3 +343,136 @@ test('a server that never answers setup times out the start instead of hanging',
   await expect(page.locator('.inc-live-toggle')).toHaveText('Live voice');
   await expect(page.locator('.inc-live-toggle')).toBeEnabled();
 });
+
+/**
+ * The player asks through a model session: this stubs its creation, then
+ * serves a canned insert on the session's routes and records where it
+ * landed. The anchor echoes the request's own, so it always pins the beat
+ * the driver paused on.
+ */
+async function installSessionInsert(page: Page, lines: unknown[]): Promise<string[]> {
+  const askedUrls: string[] = [];
+  await page.route('/api/dev/session', (route) =>
+    route.fulfill({
+      status: 201,
+      contentType: 'application/json',
+      body: JSON.stringify({ id: 'e2e-session', baseUrl: '/api/session/e2e-session/v1', keySource: 'env' }),
+    }),
+  );
+  await page.route('**/ask/insert', async (route) => {
+    askedUrls.push(route.request().url());
+    const body = route.request().postDataJSON() as { anchor: unknown };
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ status: 'clip', clip: { anchor: body.anchor, lines } }),
+    });
+  });
+  return askedUrls;
+}
+
+interface MadeExample {
+  readonly ok?: boolean;
+  readonly request?: string;
+  readonly error?: string;
+  readonly result?: unknown;
+}
+
+function madeResult(server: { toolResponses(): unknown[] }, callId: string): MadeExample | undefined {
+  return server
+    .toolResponses()
+    .map(
+      (message) =>
+        message as {
+          toolResponse?: { functionResponses?: Array<{ id?: string; response?: { result?: MadeExample } }> };
+        },
+    )
+    .flatMap((message) => message.toolResponse?.functionResponses ?? [])
+    .find((response) => response.id === callId)?.response?.result;
+}
+
+test('live make_example answers with what the insert actually made', async ({ page }) => {
+  test.setTimeout(60_000);
+  await mintToken(page);
+  const server = await installLiveServer(page);
+  const askedUrls = await installSessionInsert(page, [
+    { say: 'The swing keeps its period.', seconds: 1, set: { angle: 0.5 } },
+  ]);
+  await openPlayer(page, 'thirty');
+  await page.evaluate(() => (window.__playground?.model as unknown as { seek(seconds: number): void }).seek(0));
+  await page.locator('.inc-live-toggle').click();
+  await expect.poll(() => server.says().length).toBeGreaterThan(0);
+
+  await server.send({ toolCall: { functionCalls: [{ id: 'make-1', name: 'make_example', args: { request: 'another swing' } }] } });
+  await expect.poll(() => madeResult(server, 'make-1'), { timeout: 20_000 }).toMatchObject({ ok: true });
+  const made = madeResult(server, 'make-1')!;
+  expect(made.request).toBe('another swing');
+  // The tool describes the real insert — its lines and the values it sets —
+  // not the request that produced it.
+  expect(made.result).toMatchObject({
+    kind: 'insert',
+    says: ['The swing keeps its period.'],
+    sets: { angle: 0.5 },
+  });
+  // The insert went to the session's routes, not the reference path...
+  expect(askedUrls.length).toBeGreaterThan(0);
+  expect(askedUrls[0]).toContain('/api/session/e2e-session/v1/ask/insert');
+  // ...and the panel names the answering model.
+  await expect(page.locator('.inc-live-model')).toContainText('claude-sonnet-5-5');
+  // The insert plays to its back-to-film beat, then live carries on from it.
+  await expect(page.locator('.inc-insert')).toContainText('Explaining deeper', { timeout: 15_000 });
+  await expect(page.locator('.inc-insert')).toBeHidden({ timeout: 20_000 });
+
+  await page.locator('.inc-live-toggle').click();
+  await expect(page.locator('.inc-live-panel')).toBeHidden();
+  expect((await liveState(page)).active).toBe(false);
+});
+
+test('an empty insert answers make_example with ok:false', async ({ page }) => {
+  await mintToken(page);
+  const server = await installLiveServer(page);
+  await installSessionInsert(page, []);
+  await openPlayer(page, 'thirty');
+  await page.evaluate(() => (window.__playground?.model as unknown as { seek(seconds: number): void }).seek(0));
+  await page.locator('.inc-live-toggle').click();
+  await expect.poll(() => server.says().length).toBeGreaterThan(0);
+
+  await server.send({ toolCall: { functionCalls: [{ id: 'make-2', name: 'make_example', args: { request: 'another swing' } }] } });
+  await expect.poll(() => madeResult(server, 'make-2'), { timeout: 20_000 }).toMatchObject({ ok: false });
+  expect(String(madeResult(server, 'make-2')?.error ?? '')).toContain('empty');
+
+  // A refused tool records no error: stopping still hides a clean panel.
+  await page.locator('.inc-live-toggle').click();
+  await expect(page.locator('.inc-live-panel')).toBeHidden();
+  expect((await liveState(page)).error).toBeNull();
+});
+
+test('show_me on a card beat hides the section card while paused', async ({ page }) => {
+  await mintToken(page);
+  const server = await installLiveServer(page);
+  await openPlayer(page, 'pythagoras');
+  await expect(page.locator('.inc-player h2')).toHaveText('Pythagoras: talk to the teacher');
+  await page.evaluate(() => (window.__playground?.model as unknown as { seek(seconds: number): void }).seek(0));
+  // Beat 1 carries a section card over the stage before live starts.
+  await expect(page.locator('.inc-player-xcard')).toContainText('Pythagoras and the right triangle');
+  await page.locator('.inc-live-toggle').click();
+  await expect.poll(() => server.says().length).toBeGreaterThan(0);
+
+  // show_me pauses for the demonstration: the card hides so the changed
+  // triangle is visible, while the caption keeps flowing.
+  await server.send({ toolCall: { functionCalls: [{ id: 'show-2', name: 'show_me', args: { set: { a: 6, b: 8 } } }] } });
+  await expect(page.locator('.inc-player-xcard')).toBeHidden();
+  await expect
+    .poll(() => server.toolResponses().length, { timeout: 15_000 })
+    .toBeGreaterThan(0);
+
+  // Resume reads on: the beat's own card comes back with it.
+  const saysBefore = server.says().length;
+  await server.send({ toolCall: { functionCalls: [{ id: 'resume-2', name: 'resume', args: {} }] } });
+  await expect.poll(() => server.says().length).toBeGreaterThan(saysBefore);
+  await expect(page.locator('.inc-player-xcard')).toContainText('Pythagoras and the right triangle');
+
+  await page.locator('.inc-live-toggle').click();
+  await expect(page.locator('.inc-live-panel')).toBeHidden();
+  expect((await liveState(page)).active).toBe(false);
+});

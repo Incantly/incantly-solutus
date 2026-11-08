@@ -676,6 +676,7 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
     reducedMotion,
     applyPatch,
     requestBeats: () => film.beats.map((beat) => ({ beat: beat.id, scene: beat.sceneId, say: beat.step.say })),
+    reference: params.get('reference') === '1',
     keepInsert: (clip) => {
       const stored = {
         id: clip.id,
@@ -895,8 +896,20 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
   // While live voice owns the film, the caption band shows what the teacher
   // actually said for the current beat, not the beat's script line.
   let liveCaptionText: string | null = null;
+  // While live voice is paused for a question (or a show_me or an insert is
+  // showing), the card overlays hide so the learner can see the demonstration;
+  // captions keep flowing. The sync loop re-applies this every frame.
+  let liveCardsHidden = false;
   const highlightWord = (index: number): void => {
     wordSpans.forEach((span, i) => span.classList.toggle('is-active', i === index));
+  };
+  /** Shows the beat's section card overlay, if it has one. */
+  const renderLayerCard = (layerCard: { readonly text: string; readonly kind: string } | null): void => {
+    if (layerCard) {
+      xcard.textContent = layerCard.text;
+      xcard.dataset.kind = layerCard.kind;
+      xcard.hidden = false;
+    } else xcard.hidden = true;
   };
   /** Renders a write-on layer's shown prefix; math renders readably. */
   const renderWrite = (write: { readonly text: string; readonly math: boolean; readonly shown: string } | null | undefined): void => {
@@ -924,6 +937,15 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
     }
     if (liveCaptionText !== null && state.caption !== null) {
       card.hidden = true;
+      if (liveCardsHidden) {
+        // A live pause owns the stage: the demonstrated figure must stay
+        // visible, so the section card hides while captions keep flowing.
+        xcard.hidden = true;
+      } else {
+        // Reading follows the film: the beat's own section card shows, so a
+        // resume brings it back and advancing drops a stale one.
+        renderLayerCard(state.caption?.card ?? null);
+      }
       caption.textContent = liveCaptionText;
       wordSpans = [];
       return;
@@ -936,12 +958,11 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
       card.textContent = title.text;
       card.hidden = false;
     } else card.hidden = true;
-    const layerCard = state.caption?.card ?? null;
-    if (layerCard) {
-      xcard.textContent = layerCard.text;
-      xcard.dataset.kind = layerCard.kind;
-      xcard.hidden = false;
-    } else xcard.hidden = true;
+    renderLayerCard(state.caption?.card ?? null);
+    if (liveCardsHidden) {
+      card.hidden = true;
+      xcard.hidden = true;
+    }
     renderWrite(state.caption?.write);
     // Split scenes lay out once from the first frame: the stage narrows
     // beside the notes column (or stacks under it when narrow), and the
@@ -1004,11 +1025,19 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
     liveCaption: (text) => {
       liveCaptionText = text;
     },
+    liveCards: (hidden) => {
+      liveCardsHidden = hidden;
+    },
   });
   toggleLive = () => void live.toggle();
   // Leaving the page stops the mic, the teacher and the socket, without
   // resuming playback under a page that is going away.
-  window.addEventListener('pagehide', () => live.stop(false));
+  window.addEventListener('pagehide', () => {
+    live.stop(false);
+    // A model session belongs to this page: dropping it here mirrors the
+    // generations page, so idle sessions never linger on the dev server.
+    if (askSession?.id) void fetch(`/api/dev/session/${askSession.id}`, { method: 'DELETE', keepalive: true });
+  });
   let lastFrame = performance.now();
   let lastInsertCaption = '';
   let lastSaved = 0;
@@ -2619,6 +2648,8 @@ function buildAskSheet(
     applyPatch(patch: FilmVersionPatch): Promise<{ ok: true } | { ok: false; problems: readonly string[] }>;
     requestBeats(): ReadonlyArray<{ beat: string; scene: string; say: string }>;
     keepInsert(clip: InsertClip): void;
+    /** Pins the reference model, skipping the model session, for tests. */
+    reference: boolean;
   },
 ): AskSheet {
   const { model, controller, figure } = ctx;
@@ -2707,6 +2738,13 @@ function buildAskSheet(
   }
   const status = document.createElement('p');
   status.className = 'inc-ask-status';
+  // Which model answers, once the first Ask use resolves the session (or the
+  // reference fallback): the same line the voice panel carries, kept in sync
+  // through the shared registry.
+  const modelLine = document.createElement('p');
+  modelLine.className = 'inc-ask-model';
+  modelLine.hidden = true;
+  askModelLines.add(modelLine);
   const row = document.createElement('div');
   row.className = 'inc-ask-row';
   row.append(input, send, close);
@@ -2735,7 +2773,7 @@ function buildAskSheet(
   changeSend.className = 'inc-change-send';
   changeSend.textContent = 'Make version';
   changeRow.append(changeInput, changeSend);
-  sheet.append(context, row, chips, answer, depthRow, speakRow, changeButton, changeRow, status);
+  sheet.append(context, row, chips, answer, depthRow, speakRow, changeButton, changeRow, status, modelLine);
 
   const showmeBanner = document.createElement('div');
   showmeBanner.className = 'inc-showme';
@@ -2855,7 +2893,8 @@ function buildAskSheet(
     speakStatus.textContent = '';
     try {
       const token = await devToken();
-      const full = await streamAsk(token, assemblyBody(question, anchor, beat, depth), (delta) => {
+      const session = await askSessionInfo(ctx.reference);
+      const full = await streamAsk(session.base, token, assemblyBody(question, anchor, beat, depth), (delta) => {
         answer.textContent += delta;
       });
       lastAnswer = full.text;
@@ -2889,13 +2928,15 @@ function buildAskSheet(
   // The insert flow for one anchor and beat: Explain deeper from the sheet,
   // or live voice's make_example, which never opens it. Throws once the
   // status line already says why, so live voice can show it in its panel.
+  // Resolves with what the insert actually says and sets, so the teacher
+  // describes the real result instead of the request; an empty flow rejects.
   const runInsert = async (
     question: string,
     anchorAt: AskAnchor,
     beatAt: CompiledBeat,
     depth: 'simpler' | 'standard' | 'deeper' = 'standard',
     onDone?: () => void,
-  ): Promise<string> => {
+  ): Promise<{ kind: 'insert'; says: readonly string[]; sets: Readonly<Record<string, number>> }> => {
     status.textContent = 'Writing the insert…';
     const fail = (message: string): Error => {
       status.textContent = message;
@@ -2904,8 +2945,9 @@ function buildAskSheet(
     let clip: InsertClip;
     try {
       const token = await devToken();
+      const session = await askSessionInfo(ctx.reference);
       const params = Object.keys(figure.runtime.values());
-      const posted = await fetch('/api/v1/ask/insert', {
+      const posted = await fetch(`${session.base}/ask/insert`, {
         method: 'POST',
         headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
         body: JSON.stringify({ ...assemblyBody(question, anchorAt, beatAt, depth), params }),
@@ -2923,12 +2965,15 @@ function buildAskSheet(
       if (status.textContent === 'Writing the insert…') fail('No insert came back — the film is still paused where you asked.');
       throw error;
     }
+    if (clip.lines.length === 0) throw fail('The example came back empty — the film is still paused where you asked.');
     const problem = startClip(clip, onDone);
     if (problem) throw fail(problem);
     ctx.keepInsert(clip);
     status.textContent = '';
     sheet.hidden = true;
-    return clip.id;
+    const sets: Record<string, number> = {};
+    for (const line of clip.lines) Object.assign(sets, line.set);
+    return { kind: 'insert', says: clip.lines.map((line) => line.say), sets };
   };
 
   const askDeeper = async (question: string, depth: 'simpler' | 'standard' | 'deeper' = 'standard'): Promise<void> => {
@@ -2978,7 +3023,8 @@ function buildAskSheet(
     status.textContent = 'Writing the side clip…';
     try {
       const token = await devToken();
-      const posted = await fetch('/api/v1/ask/example', {
+      const session = await askSessionInfo(ctx.reference);
+      const posted = await fetch(`${session.base}/ask/example`, {
         method: 'POST',
         headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
         body: JSON.stringify(assemblyBody(question, anchor, beat)),
@@ -3062,8 +3108,9 @@ function buildAskSheet(
     status.textContent = 'Writing the new version…';
     try {
       const token = await devToken();
+      const session = await askSessionInfo(ctx.reference);
       const film = ctx.film();
-      const posted = await fetch('/api/v1/ask/change', {
+      const posted = await fetch(`${session.base}/ask/change`, {
         method: 'POST',
         headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
         body: JSON.stringify({ prompt, film: film.id, version: film.version, beats: ctx.requestBeats() }),
@@ -3312,6 +3359,7 @@ function buildLiveVoice(
     mixer: FilmMixer;
     renderCaption(): void;
     liveCaption(text: string | null): void;
+    liveCards(hidden: boolean): void;
   },
 ): LiveVoiceControls {
   const bar = page.querySelector('.inc-player-transport');
@@ -3331,6 +3379,12 @@ function buildLiveVoice(
   status.className = 'inc-live-status';
   status.setAttribute('role', 'status');
   status.textContent = 'Off';
+  // Which model answers the live tools, once the first Ask use resolves the
+  // session (or the reference fallback): the same line the sheet carries.
+  const modelNote = document.createElement('p');
+  modelNote.className = 'inc-live-model';
+  modelNote.hidden = true;
+  askModelLines.add(modelNote);
   const learnerLine = document.createElement('p');
   learnerLine.className = 'inc-live-learner';
   learnerLine.setAttribute('aria-live', 'polite');
@@ -3363,7 +3417,7 @@ function buildLiveVoice(
   errorLine.className = 'inc-live-error';
   errorLine.setAttribute('role', 'alert');
   errorLine.hidden = true;
-  panel.append(status, micNote, learnerLine, teacherLine, toolList, askForm, errorLine);
+  panel.append(status, modelNote, micNote, learnerLine, teacherLine, toolList, askForm, errorLine);
   if (bar && bar.parentElement) bar.after(panel);
   else page.append(panel);
 
@@ -3442,6 +3496,7 @@ function buildLiveVoice(
     toolLines.clear();
     toolList.textContent = '';
     ctx.liveCaption(null);
+    ctx.liveCards(false);
     ctx.renderCaption();
     ctx.mixer.setEnabled(mixerWasOn);
     setStatus('Off');
@@ -3504,6 +3559,9 @@ function buildLiveVoice(
     switch (event.type) {
       case 'started':
       case 'said':
+        // Reading (or re-reading) owns the caption again: the beat's own
+        // card layers come back with it.
+        ctx.liveCards(false);
         refreshCaption();
         setStatus(`Live · ${event.beat}`);
         return;
@@ -3516,6 +3574,9 @@ function buildLiveVoice(
         return;
       }
       case 'anchor':
+        // A pause for a question or a tool hands the stage to the
+        // demonstration: card overlays hide until the film reads on.
+        ctx.liveCards(true);
         refreshCaption();
         return;
       case 'done':
@@ -3684,9 +3745,77 @@ async function devToken(): Promise<string> {
   return askToken;
 }
 
+/**
+ * The model session the player's Ask lanes use, created lazily on first
+ * need: the same POST the generations page makes, so a server env key
+ * connects without the learner entering one. Falls back to the reference
+ * path when no session can be created; `reference` pins that fallback for
+ * tests that assert the reference model's answers.
+ */
+interface AskSession {
+  readonly id: string | null;
+  readonly base: string;
+  readonly planModel: string | null;
+  readonly sceneModel: string | null;
+  readonly keySource: 'entered' | 'env' | null;
+}
+
+let askSession: AskSession | null = null;
+
+/** Small "which model answers" lines in the Ask sheet and the voice panel. */
+const askModelLines = new Set<HTMLElement>();
+
+function showAskModel(session: AskSession): void {
+  const text =
+    session.sceneModel === null
+      ? 'Models: reference (no model session)'
+      : `Models: ${session.planModel ?? 'unknown'} (answers) · ${session.sceneModel} (examples) · ${session.keySource === 'env' ? 'server key' : 'entered key'}`;
+  for (const line of askModelLines) {
+    line.textContent = text;
+    line.hidden = false;
+  }
+}
+
+async function askSessionInfo(reference: boolean): Promise<AskSession> {
+  if (askSession) return askSession;
+  if (!reference) {
+    try {
+      let saved: { provider?: string; planModel?: string; sceneModel?: string } | null;
+      try {
+        saved = JSON.parse(localStorage.getItem('incantly-playground-models') ?? 'null') as {
+          provider?: string;
+          planModel?: string;
+          sceneModel?: string;
+        } | null;
+      } catch {
+        saved = null;
+      }
+      const provider = saved?.provider ?? 'anthropic';
+      const planModel = saved?.planModel ?? 'claude-haiku-5-5';
+      const sceneModel = saved?.sceneModel ?? 'claude-sonnet-5-5';
+      const answer = await fetch('/api/dev/session', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ provider, planModel, sceneModel }),
+      });
+      const body = (await answer.json()) as { id?: string; baseUrl?: string; keySource?: 'entered' | 'env' };
+      if (!answer.ok || !body.id || !body.baseUrl) throw new Error('The model session did not start.');
+      askSession = { id: body.id, base: body.baseUrl, planModel, sceneModel, keySource: body.keySource ?? 'env' };
+    } catch {
+      // No key on the server, or no server at all: the reference model still
+      // answers on the dev path, and the label below says so.
+      askSession = { id: null, base: '/api/v1', planModel: null, sceneModel: null, keySource: null };
+    }
+  } else {
+    askSession = { id: null, base: '/api/v1', planModel: null, sceneModel: null, keySource: null };
+  }
+  showAskModel(askSession);
+  return askSession;
+}
+
 /** Streams an Answer, appending each delta as it arrives. */
-async function streamAsk(token: string, body: Record<string, unknown>, onDelta: (delta: string) => void): Promise<{ text: string; firstChunkMs: number }> {
-  const posted = await fetch('/api/v1/ask', {
+async function streamAsk(base: string, token: string, body: Record<string, unknown>, onDelta: (delta: string) => void): Promise<{ text: string; firstChunkMs: number }> {
+  const posted = await fetch(`${base}/ask`, {
     method: 'POST',
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
     body: JSON.stringify(body),
