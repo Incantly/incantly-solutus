@@ -98,6 +98,12 @@ export interface LiveToolDeps {
   sayBeatRemainder(beat: CompiledBeat, wordIndex: number): void;
   /** True once a beat's turn completed, so resume knows it was fully read. */
   wasCompleted(beatId: string): boolean;
+  /** True once the film has been read to the end. */
+  isDone(): boolean;
+  /** Restarts a finished film from beat one for resume-after-done. */
+  restartAfterDone(): CompiledBeat | null;
+  /** The live session's epoch: results from an older epoch are dropped. */
+  sessionEpoch(): number;
   /** Marks the film read to the end with nothing left to say. */
   finish(): void;
   onResult?(info: { readonly callId: string; readonly name: string; readonly result: LiveToolResult }): void;
@@ -122,35 +128,65 @@ export function defaultShowMeBinding(runtime: SceneRuntime): LiveShowMe {
  * answers { ok: false, error } and never throws.
  */
 export class LiveToolDispatcher {
+  /** Tool calls with a host round-trip still running, by call id. */
+  private readonly inflight = new Set<string>();
+
   constructor(private readonly deps: LiveToolDeps) {}
 
   /** Runs one tool call and answers the voice; never throws. */
   async dispatch(callId: string, name: string, args: unknown): Promise<void> {
-    let result: LiveToolResult;
+    const at = this.deps.sessionEpoch();
+    // One host call per id: a repeated tool call joins nothing and answers nothing.
+    if (this.inflight.has(callId)) return;
+    this.inflight.add(callId);
     try {
-      result = await this.run(name, args);
+      const result = await this.run(name, args);
+      // The session ended while the host ran: drop the late result entirely.
+      if (this.deps.sessionEpoch() !== at) return;
+      try {
+        this.deps.voice.respondTool(callId, result);
+      } catch {
+        // A broken voice must not break the film; the result is still reported.
+      }
+      this.deps.onResult?.({ callId, name, result });
     } catch (error) {
-      result = { ok: false, error: shortMessage(error) };
+      if (this.deps.sessionEpoch() !== at) return;
+      const result: LiveToolResult = { ok: false, error: shortMessage(error) };
+      try {
+        this.deps.voice.respondTool(callId, result);
+      } catch {
+        // A broken voice must not break the film; the result is still reported.
+      }
+      this.deps.onResult?.({ callId, name, result });
+    } finally {
+      this.inflight.delete(callId);
     }
-    try {
-      this.deps.voice.respondTool(callId, result);
-    } catch {
-      // A broken voice must not break the film; the result is still reported.
-    }
-    this.deps.onResult?.({ callId, name, result });
   }
 
   /** The resume rung on its own, so the host can resume after an insert. */
   resumeNow(): LiveToolResult {
+    // A finished reading has no anchor worth returning to: resume restarts
+    // the film instead of stranding the driver in done.
+    if (this.deps.isDone()) {
+      const first = this.deps.restartAfterDone();
+      if (!first) return { ok: false, error: 'The film has no beats to read.' };
+      return { ok: true, beat: first.id, restarted: true };
+    }
     const anchor = this.deps.currentAnchor();
     if (!anchor) return { ok: false, error: 'Nothing to resume: pause or interrupt the film first.' };
     const beat = this.deps.film.beats.find((candidate) => candidate.id === anchor.beat) ?? null;
     if (!beat) return { ok: false, error: 'The pinned beat is no longer in this film.' };
     const at = resolveAskAnchor(this.deps.film, anchor);
     if (at === null) return { ok: false, error: 'The pinned word no longer resolves in this film.' };
+    // The anchor is where the film stands (interrupt, pause, or a seek that
+    // re-pinned it): re-read it from the anchor word on, so nothing it said
+    // is lost. Only a film that drifted past a completed anchor moves on.
+    if (this.deps.controller.currentBeat?.id === anchor.beat) {
+      this.deps.controller.seek(at);
+      this.deps.sayBeatRemainder(beat, anchor.wordIndex);
+      return { ok: true, beat: beat.id, fromWord: anchor.wordIndex };
+    }
     this.deps.controller.seek(at);
-    // An interrupted beat is re-read from its anchor word on, so nothing it
-    // said is lost; only a beat whose turn already completed moves on.
     if (!this.deps.wasCompleted(anchor.beat)) {
       this.deps.sayBeatRemainder(beat, anchor.wordIndex);
       return { ok: true, beat: beat.id, fromWord: anchor.wordIndex };
@@ -222,6 +258,10 @@ export class LiveToolDispatcher {
     if (!beat) return { ok: false, error: `Unknown beat ${JSON.stringify(ref) ?? 'missing'}.` };
     if (!this.deps.controller.seekBeat(beat.id)) return { ok: false, error: `Cannot seek to beat "${beat.id}".` };
     const current = this.deps.controller.currentBeat ?? beat;
+    // A deliberate seek retires the old pin: resume must not drag the film
+    // back to where it stood before the jump.
+    const now = this.deps.controller.anchorNow();
+    if (now) this.deps.recordAnchor({ ...now, wordIndex: 0 });
     this.deps.sayBeat(current);
     return { ok: true, beat: current.id };
   }
@@ -252,11 +292,12 @@ export class LiveToolDispatcher {
     if (!isRecord(fields.set)) return { ok: false, error: 'show_me needs a set of control values.' };
     const checked = checkControls(this.controlBounds(), fields.set);
     if (!checked.ok) return checked;
+    // A refused tool has no side effects: the host is validated first.
+    const show = this.deps.showMe ?? (this.deps.runtime ? defaultShowMeBinding(this.deps.runtime) : undefined);
+    if (!show) return { ok: false, error: 'show_me has no host: pass a showMe callback or a runtime.' };
     // The paused scene must not move under the demonstration.
     const pinned = this.pauseForTool();
     if (!pinned.ok) return pinned;
-    const show = this.deps.showMe ?? (this.deps.runtime ? defaultShowMeBinding(this.deps.runtime) : undefined);
-    if (!show) return { ok: false, error: 'show_me has no host: pass a showMe callback or a runtime.' };
     let shown: unknown;
     try {
       shown = await show(checked.set, beat);
@@ -269,13 +310,14 @@ export class LiveToolDispatcher {
   private async makeExample(args: unknown): Promise<LiveToolResult> {
     const request = isRecord(args) ? args.request : undefined;
     if (typeof request !== 'string' || request.trim() === '') return { ok: false, error: 'make_example needs a request to draw.' };
+    // A refused tool has no side effects: the host is validated first.
+    const make = this.deps.makeExample;
+    if (!make) return { ok: false, error: 'make_example has no host: pass a makeExample callback.' };
     // The film stays paused until the example has played and the learner
     // resumes; the insert must never play over an advanced film.
     const pinned = this.pauseForTool();
     if (!pinned.ok) return pinned;
     const anchor = pinned.anchor;
-    const make = this.deps.makeExample;
-    if (!make) return { ok: false, error: 'make_example has no host: pass a makeExample callback.' };
     let made: unknown;
     try {
       made = await make(request.trim(), anchor);
