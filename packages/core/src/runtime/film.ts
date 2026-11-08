@@ -74,12 +74,57 @@ export interface AppliedCues {
   readonly framing: FramingIntent | null;
   readonly sfxPlayed: boolean;
   readonly title: { readonly text: string; readonly kind: 'card' | 'lower' } | null;
+  /** The beat's write-on layer, or null. The shown prefix comes from writeShownAt. */
+  readonly write: { readonly text: string; readonly math: boolean } | null;
+  /** The note lines this beat introduces; what shows is accumulatedNotes of the scene. */
+  readonly notes: readonly string[];
+  /** The beat's full-stage card, or null. A card covers write and notes while shown. */
+  readonly card: { readonly kind: 'section' | 'recap'; readonly text: string } | null;
 }
 
 /** A beat's title as text and kind. */
 export function beatTitle(beat: Beat): AppliedCues['title'] {
   if (beat.title === undefined) return null;
   return typeof beat.title === 'string' ? { text: beat.title, kind: 'lower' } : { text: beat.title.text, kind: beat.title.kind ?? 'lower' };
+}
+
+/** A beat's write-on layer, or null when the beat writes nothing. */
+export function beatWrite(beat: Beat): AppliedCues['write'] {
+  if (beat.write === undefined) return null;
+  return { text: beat.write.text, math: beat.write.math ?? false };
+}
+
+/** A beat's full-stage card, or null when the beat carries none. */
+export function beatCard(beat: Beat): AppliedCues['card'] {
+  if (beat.card === undefined) return null;
+  return { kind: beat.card.kind, text: beat.card.text };
+}
+
+/**
+ * The notes showing on a scene beat: every line introduced by its beat or
+ * an earlier one, in order. Beat-granular, so seeking to t shows what
+ * playing to t shows.
+ */
+export function accumulatedNotes(beats: readonly { readonly step: Beat }[], index: number): readonly string[] {
+  const out: string[] = [];
+  for (let i = 0; i <= index && i < beats.length; i++) {
+    for (const line of beats[i]!.step.notes ?? []) out.push(line);
+  }
+  return out;
+}
+
+/**
+ * How much of a beat's write-on text shows at a film time: a prefix growing
+ * with beat progress, full at the beat's end. A pure function of the fixed
+ * film clock, never wall time, so seeks draw what plays draw.
+ */
+export function writeShownAt(beat: CompiledBeat, time: number): string {
+  const write = beat.step.write;
+  if (write === undefined) return '';
+  const chars = [...write.text];
+  if (beat.seconds <= 0) return write.text;
+  const progress = Math.min(1, Math.max(0, (time - beat.start) / beat.seconds));
+  return chars.slice(0, Math.floor(progress * chars.length)).join('');
 }
 
 /** Beats that pause the film at their start until the learner resumes. */
@@ -160,7 +205,7 @@ export function applyBeatCues(runtime: SceneRuntime, beat: Beat, options: { read
   }
   let sfxPlayed = false;
   if (options.sfx !== false && beat.sfx !== undefined) sfxPlayed = cueSfx(runtime, beat.sfx);
-  return { focusing, framing, sfxPlayed, title: beatTitle(beat) };
+  return { focusing, framing, sfxPlayed, title: beatTitle(beat), write: beatWrite(beat), notes: [...(beat.notes ?? [])], card: beatCard(beat) };
 }
 
 /**

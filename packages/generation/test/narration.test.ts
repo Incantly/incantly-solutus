@@ -34,7 +34,7 @@ function filmOf(lines: ReadonlyArray<{ readonly id: string; readonly say: string
     start += seconds;
     return beat;
   });
-  const scenes = [{ id: 's1', title: 's1', cut: 'cut' as const, start: 0, seconds: start, beats }];
+  const scenes = [{ id: 's1', title: 's1', cut: 'cut' as const, start: 0, seconds: start, beats, split: false }];
   return { id: 'f', title: 'F', version: 1, advance: 'time' as const, scenes, beats, seconds: start, sourceMap: {} };
 }
 

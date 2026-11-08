@@ -1,4 +1,4 @@
-import type { FilmController, FilmEvent } from '../runtime/film';
+import { accumulatedNotes, beatCard, beatWrite, writeShownAt, type FilmController, type FilmEvent } from '../runtime/film';
 import { markerSeconds, type AskAnchor, type AskMarker } from './ask';
 import { wordStarts, type CompiledBeat, type CompiledFilm, type FilmAdvance, type FilmAnchor } from './storyboard';
 
@@ -36,6 +36,14 @@ export interface PlayerCaption {
   /** The beat's words with their starts in film seconds, for the karaoke highlight. */
   readonly words: readonly string[];
   readonly wordStarts: readonly number[];
+  /** The beat's write-on layer with its shown prefix at the caption's time, or null. */
+  readonly write: { readonly text: string; readonly math: boolean; readonly shown: string } | null;
+  /** Every note line showing on this beat: its scene's lines up to and including it. */
+  readonly notes: readonly string[];
+  /** The beat's full-stage card, or null. A card covers write and notes while shown. */
+  readonly card: { readonly kind: 'section' | 'recap'; readonly text: string } | null;
+  /** True when the beat's scene renders split: the stage narrows beside its notes column from the first frame. */
+  readonly split: boolean;
 }
 
 export interface PlayerState {
@@ -99,7 +107,7 @@ export class PlayerModel {
       time: this.controller.time,
       duration: this.controller.duration,
       beat: beat?.id ?? null,
-      caption: beat && this.captionsOn ? toCaption(beat) : null,
+      caption: beat && this.captionsOn ? toCaption(beat, this.film, this.controller.time) : null,
       captionsOn: this.captionsOn,
       captionSize: this.captionSize,
       speed: this.speed,
@@ -378,8 +386,12 @@ export class PlayerModel {
   }
 }
 
-function toCaption(beat: CompiledBeat): PlayerCaption {
+function toCaption(beat: CompiledBeat, film: CompiledFilm, time: number): PlayerCaption {
   const title = beat.step.title;
+  const card = beatCard(beat.step);
+  const write = beatWrite(beat.step);
+  const scene = film.scenes.find((scene) => scene.id === beat.sceneId);
+  const sceneBeats = scene?.beats ?? [];
   return {
     beat: beat.id,
     say: beat.step.say,
@@ -389,5 +401,10 @@ function toCaption(beat: CompiledBeat): PlayerCaption {
     seconds: beat.seconds,
     words: beat.words,
     wordStarts: wordStarts(beat),
+    // A card covers the stage's own layers while shown; the caption band stays.
+    write: card === null && write ? { ...write, shown: writeShownAt(beat, time) } : null,
+    notes: card === null ? accumulatedNotes(sceneBeats, beat.index) : [],
+    card,
+    split: scene?.split ?? false,
   };
 }

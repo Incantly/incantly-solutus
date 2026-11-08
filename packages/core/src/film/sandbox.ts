@@ -1,6 +1,6 @@
 import type { Beat, BeatMark, Waveform } from '../api/types';
 import type { ProbedParam } from '../probe/probe';
-import { SFX_CUES, type FilmController, type FilmEvent } from '../runtime/film';
+import { accumulatedNotes, beatCard, beatWrite, SFX_CUES, writeShownAt, type FilmController, type FilmEvent } from '../runtime/film';
 import { SceneRuntime, type SceneFunction } from '../runtime/runtime';
 import type { FigureHandle } from '../sandbox/adapter';
 import type { CompiledBeat, CompiledFilm } from './storyboard';
@@ -33,6 +33,10 @@ const MAX_NAME = 60;
 const MAX_SAY = 2000;
 const MAX_TEXT = 500;
 const MAX_SFX = 40;
+/** Bounds mirror the compiler's so a sanitized step always compiles. */
+const MAX_LAYER_TEXT = 200;
+const MAX_NOTES = 4;
+const MAX_NOTE_TEXT = 140;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -165,6 +169,30 @@ function sanitizedStep(value: unknown): Beat | null {
     const sfx = shortText(value.sfx, MAX_SFX);
     if (sfx === null) return null;
     step.sfx = sfx;
+  }
+  if (value.write !== undefined) {
+    if (!isRecord(value.write)) return null;
+    const text = shortText(value.write.text, MAX_LAYER_TEXT);
+    if (text === null || text.trim() === '') return null;
+    if (value.write.math !== undefined && typeof value.write.math !== 'boolean') return null;
+    step.write = value.write.math === undefined ? { text } : { text, math: value.write.math };
+  }
+  if (value.notes !== undefined) {
+    if (!Array.isArray(value.notes) || value.notes.length === 0 || value.notes.length > MAX_NOTES) return null;
+    const notes: string[] = [];
+    for (const entry of value.notes) {
+      const line = shortText(entry, MAX_NOTE_TEXT);
+      if (line === null || line.trim() === '') return null;
+      notes.push(line);
+    }
+    step.notes = notes;
+  }
+  if (value.card !== undefined) {
+    if (!isRecord(value.card)) return null;
+    if (value.card.kind !== 'section' && value.card.kind !== 'recap') return null;
+    const text = shortText(value.card.text, MAX_LAYER_TEXT);
+    if (text === null || text.trim() === '') return null;
+    step.card = { kind: value.card.kind, text };
   }
   if (value.explore !== undefined) {
     if (!isRecord(value.explore)) return null;
@@ -320,6 +348,14 @@ export interface BeatCueState {
   readonly focus: string | null;
   readonly visible: ReadonlyMap<string, boolean>;
   readonly frame: { readonly part: string; readonly zoom: number } | null;
+  /** The beat's write-on layer with its shown prefix at the captured time, or null. */
+  readonly write: { readonly text: string; readonly math: boolean; readonly shown: string } | null;
+  /** Every note line showing on this beat: its scene's lines up to and including it. */
+  readonly notes: readonly string[];
+  /** The beat's full-stage card, or null. */
+  readonly card: { readonly kind: 'section' | 'recap'; readonly text: string } | null;
+  /** True when the beat's scene renders split: the same compiled value the player, checks and export read. */
+  readonly split: boolean;
 }
 
 /**
@@ -333,10 +369,13 @@ export function beatCueState(
   sceneId: string,
   beatIndex: number,
   authoredHidden: ReadonlySet<string>,
+  /** Film seconds of the captured frame: the write-on reveal follows it. Default the beat's start. */
+  at?: number,
 ): BeatCueState | null {
   const scene = film.scenes.find((candidate) => candidate.id === sceneId);
   const beat = scene?.beats.find((candidate) => candidate.index === beatIndex);
   if (!scene || !beat) return null;
+  const write = beatWrite(beat.step);
   const visible = new Map<string, boolean>();
   const names = new Set<string>();
   for (const earlier of scene.beats) {
@@ -358,6 +397,12 @@ export function beatCueState(
     focus: beat.step.focus ?? beat.step.cam?.to ?? beat.step.mark?.[0]?.part ?? null,
     visible,
     frame: beat.step.cam?.to ? { part: beat.step.cam.to, zoom: beat.step.cam.zoom ?? 1.5 } : null,
+    // Layers ride the host's DOM as titles do — the figure has no drawing op
+    // for them — so the cue state carries what to show, not how to draw it.
+    write: write ? { ...write, shown: writeShownAt(beat, at ?? beat.start) } : null,
+    notes: accumulatedNotes(scene.beats, beatIndex),
+    card: beatCard(beat.step),
+    split: scene.split,
   };
 }
 

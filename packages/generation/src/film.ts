@@ -11,6 +11,7 @@ import {
   compileIsolated,
   filmDeadlineMs,
   filmPresetFor,
+  layerProblems,
   fixScene,
   loadKitModules,
   type Beat,
@@ -59,8 +60,8 @@ import { speechCostUsd, StubNarrator, type Narrator } from './tts';
  * block and its context, in play order.
  */
 export const FILM_PLAN_FORMAT = `FILM PLAN format. Reply with one compact JSON object in a \`\`\`json fence: the film with its title, length target and shared context, then its scenes in play order. Every word is time the learner waits before the first scene call can start, so write few: the title under 12 words, each idea under 25 words, each beat say one sentence under 30 words.
-{"film":{"title":"What moves and what that motion means","lengthTarget":120,"context":{"palette":"default","parts":["queue","ticket"],"notation":"si","units":{"angle":"rad"},"tone":"plain"}},"scenes":[{"id":"s1","idea":"One sentence: what this scene shows.","kit":"flow","durationShare":0.5,"cut":"fade","beats":[{"id":"s1b1","say":"One spoken line the scene shows."}]}]}
-Scenes: one per 30 to 60 s of film, each on one stage kit (${['graph2d', 'svg', 'space3d', 'physics2d', 'flow'].join(', ')}), each with at least one beat. Duration shares sum to 1. The context travels with every scene call: palette names the tones, parts lists every part name spelled exactly, notation names the maths, units maps names to units, tone is plain. Be concise and return only the fenced JSON, with no explanation before or after it.`;
+{"film":{"title":"What moves and what that motion means","lengthTarget":120,"context":{"palette":"default","parts":["queue","ticket"],"notation":"si","units":{"angle":"rad"},"tone":"plain"}},"scenes":[{"id":"s1","idea":"One sentence: what this scene shows.","kit":"flow","durationShare":0.5,"cut":"fade","beats":[{"id":"s1b1","say":"One spoken line the scene shows.","write":{"text":"a² + b² = c²","math":true}},{"id":"s1b2","say":"A second line that reasons it through.","notes":["First this."]},{"id":"s1b3","say":"A closing line for the section.","card":{"kind":"section","text":"Motion"}}]}]}
+Scenes: one per 30 to 60 s of film, each on one stage kit (${['graph2d', 'svg', 'space3d', 'physics2d', 'flow'].join(', ')}), each with at least one beat. Duration shares sum to 1. The context travels with every scene call: palette names the tones, parts lists every part name spelled exactly, notation names the maths, units maps names to units, tone is plain. Layers, sparingly: a section card to open a section and a recap card to close, write for the scene's key equation or rule, notes for step-by-step reasoning beside the simulation. At most one card and one write line per beat, four short note lines. Be concise and return only the fenced JSON, with no explanation before or after it.`;
 
 /** A film scene call writes one scene for its slice, keeping the shared context exactly. */
 export const FILM_SCENE_FORMAT = `FILM SCENE format. This is a scene call: the storyboard slice below is settled, and the shared film context with it. Reply with exactly three fenced blocks, html, css and js, in that order, and nothing else: no plan, no JSON, no prose.
@@ -225,6 +226,16 @@ export function validateStoryboard(input: unknown, lengthTarget?: number): Story
       if (typeof rawBeat.say !== 'string' || (rawBeat.say as string).trim() === '') {
         problems.push(`Beat "${beatId}" needs something to say`);
         return;
+      }
+      // The compiler bounds layers too; the plan is rejected here, with the
+      // line named, instead of failing scene calls downstream.
+      for (const problem of layerProblems({
+        say: (rawBeat.say as string).trim(),
+        write: rawBeat.write as Beat['write'],
+        notes: rawBeat.notes as Beat['notes'],
+        card: rawBeat.card as Beat['card'],
+      })) {
+        problems.push(`Beat "${beatId}" ${problem}`);
       }
       beats.push({ id: beatId, say: (rawBeat.say as string).trim().slice(0, 2000), ...(isRecord(rawBeat) ? sliceBeatFields(rawBeat) : {}) });
     });
@@ -616,6 +627,16 @@ function sliceBeatFields(raw: Record<string, unknown>): Partial<StoryboardScene[
   }
   if (typeof raw.title === 'string') out.title = raw.title.slice(0, 200);
   else if (isRecord(raw.title) && typeof raw.title.text === 'string') out.title = { text: (raw.title.text as string).slice(0, 200) };
+  if (isRecord(raw.write) && typeof raw.write.text === 'string') {
+    out.write = { text: raw.write.text.slice(0, 200), ...(typeof raw.write.math === 'boolean' ? { math: raw.write.math } : {}) };
+  }
+  if (Array.isArray(raw.notes)) {
+    const notes = (raw.notes as unknown[]).filter((line): line is string => typeof line === 'string').map((line) => line.slice(0, 140));
+    if (notes.length > 0) out.notes = notes.slice(0, 4);
+  }
+  if (isRecord(raw.card) && (raw.card.kind === 'section' || raw.card.kind === 'recap') && typeof raw.card.text === 'string') {
+    out.card = { kind: raw.card.kind, text: raw.card.text.slice(0, 200) };
+  }
   if (typeof raw.sfx === 'string') out.sfx = raw.sfx.slice(0, 40);
   if (isRecord(raw.explore) && typeof raw.explore.control === 'string') out.explore = { control: (raw.explore.control as string).slice(0, 80) };
   if (isRecord(raw.predict) && typeof raw.predict.question === 'string') {

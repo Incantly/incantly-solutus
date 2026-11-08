@@ -173,6 +173,22 @@ export interface BeatTitle {
   readonly kind?: 'card' | 'lower';
 }
 
+/** Text written onto the stage across the beat's spoken length, stroke by stroke. */
+export interface BeatWrite {
+  /** The line or equation to write; at most 200 characters. */
+  readonly text: string;
+  /** Renders simple notation readably (superscripts, operators); never a TeX engine. */
+  readonly math?: boolean;
+}
+
+/** A full-stage card over the scene for one beat; the scene stays mounted behind it. */
+export interface BeatCard {
+  /** 'section' opens a section, 'recap' closes one. */
+  readonly kind: 'section' | 'recap';
+  /** The card's line; at most 200 characters. */
+  readonly text: string;
+}
+
 /** Pause and invite the learner to try a control, then resume the film. */
 export interface BeatExplore {
   /** Control the learner is invited to change. */
@@ -210,6 +226,12 @@ export interface Beat extends Step {
   readonly explore?: BeatExplore;
   /** A prediction question that waits for the learner. */
   readonly predict?: PredictOptions;
+  /** A line or equation written onto the stage across this beat, in a solver-placed slot. */
+  readonly write?: BeatWrite;
+  /** Step-by-step lines shown beside the stage; each beat's lines join the earlier ones. At most 4. */
+  readonly notes?: readonly string[];
+  /** A full-stage section or recap card for this beat; it covers write and notes while shown. */
+  readonly card?: BeatCard;
 }
 
 /** Ask before revealing: the learner picks an answer, then the figure shows what happens. Never scored. */
