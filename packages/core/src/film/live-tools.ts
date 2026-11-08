@@ -92,7 +92,7 @@ export function liveToolDeclarations(film: CompiledFilm, runtime?: SceneRuntime)
     },
     {
       name: 'show_me',
-      description: 'Change control values on the paused scene when the learner asks to see different values, and talk through what changed.',
+      description: 'Change control values on the paused scene when the learner asks to see different values, and talk through what changed. Describe only what its result says was shown; never promise values outside the ranges in its declaration.',
       parameters: {
         type: 'object',
         properties: {
@@ -105,7 +105,7 @@ export function liveToolDeclarations(film: CompiledFilm, runtime?: SceneRuntime)
     },
     {
       name: 'make_example',
-      description: 'Draw another example as a detour when the learner asks for one, then return to the pinned word.',
+      description: 'Draw another example as a detour when the learner asks for one, then return to the pinned word. Report only what its result says was made; if it fails, say so in one short sentence.',
       parameters: {
         type: 'object',
         properties: { request: { description: 'What to draw.', type: 'string' } },
@@ -442,7 +442,9 @@ export class LiveToolDispatcher {
     } catch (error) {
       return { ok: false, error: shortMessage(error) };
     }
-    return { ok: true, request: request.trim(), result: made ?? null };
+    // The host's description passes through untouched: the model must repeat
+    // what was actually made, not what was asked for.
+    return { ok: true, made };
   }
 
   /** Control bounds from the runtime's params, or film set-keys with no bounds. */

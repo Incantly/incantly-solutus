@@ -70,6 +70,12 @@ function saidBeat(turnId: string): string {
   return turnId.split('#')[0]!;
 }
 
+/** A genuine spoken barge-in: learner speech, then the provider's cut-off. */
+function interruptAsLearner(voice: FakeLiveVoice, text = 'Wait, what does that mean?'): void {
+  voice.emit({ type: 'learner-transcript', text });
+  voice.emit({ type: 'interrupted' });
+}
+
 describe('live voice: fake', () => {
   it('records setups, lines, context and tool answers, and emits events', async () => {
     const { film } = await fixture();
@@ -157,6 +163,10 @@ describe('live voice: teacher prompt', () => {
     const tools = voice.setups[0]!.tools;
     expect(tools.find((tool) => tool.name === 'pause')!.description).toContain('pauses itself');
     expect(tools.find((tool) => tool.name === 'resume')!.description).toContain('carry on');
+    expect(tools.find((tool) => tool.name === 'make_example')!.description).toContain('only what its result says was made');
+    expect(tools.find((tool) => tool.name === 'show_me')!.description).toContain('outside the ranges');
+    expect(LIVE_TEACHER_INSTRUCTION).toContain('only what a tool result says');
+    expect(LIVE_TEACHER_INSTRUCTION).toContain('one short sentence');
     controller.destroy();
   });
 });
@@ -186,7 +196,7 @@ describe('live voice: interrupt', () => {
     controller.play();
     expect(controller.isPlaying).toBe(true);
     voice.emit({ type: 'transcript', text: 'Pull the bob aside', turnId: 's1b2' });
-    voice.emit({ type: 'interrupted' });
+    interruptAsLearner(voice);
     expect(controller.isPlaying).toBe(false);
     const anchor = driver.lastAnchor;
     expect(anchor).toMatchObject({ beat: 's1b2', wordIndex: 3 });
@@ -199,7 +209,7 @@ describe('live voice: interrupt', () => {
   it('pins the first word when the voice had said nothing yet', async () => {
     const { controller, voice, driver } = await setup();
     await driver.start();
-    voice.emit({ type: 'interrupted' });
+    interruptAsLearner(voice);
     expect(driver.lastAnchor).toMatchObject({ beat: 's1b1', wordIndex: 0 } satisfies Partial<AskAnchor>);
     controller.destroy();
   });
@@ -232,7 +242,7 @@ describe('live voice: interrupt', () => {
     const { controller, runtime, voice, driver } = await setup();
     await driver.start();
     voice.emit({ type: 'turn-complete', turnId: saidId(voice, 0) });
-    voice.emit({ type: 'interrupted' });
+    interruptAsLearner(voice);
     // One context line, before any answer: beat text, said ids, values, readouts.
     expect(voice.contexts).toHaveLength(1);
     const line = voice.contexts[0]!;
@@ -250,7 +260,7 @@ describe('live voice: interrupt', () => {
     await driver.start();
     voice.emit({ type: 'turn-complete', turnId: saidId(voice, 0) });
     voice.emit({ type: 'transcript', text: 'Pull the bob aside', turnId: saidId(voice, 1) });
-    voice.emit({ type: 'interrupted' });
+    interruptAsLearner(voice);
     voice.emit({ type: 'speaking', turnId: null });
     voice.emit({ type: 'tool-call', callId: 'c1', name: 'resume', args: {} });
     await flush();
@@ -269,7 +279,7 @@ describe('live voice: interrupt', () => {
     await driver.start();
     voice.emit({ type: 'turn-complete', turnId: saidId(voice, 0) });
     voice.emit({ type: 'transcript', text: 'Pull the bob aside', turnId: saidId(voice, 1) });
-    voice.emit({ type: 'interrupted' });
+    interruptAsLearner(voice);
     voice.emit({ type: 'speaking', turnId: null });
     expect(driver.resume()).toEqual({ ok: true, queued: true });
     await flush();
@@ -314,7 +324,7 @@ describe('live voice: tools', () => {
     await driver.start();
     voice.emit({ type: 'turn-complete', turnId: saidId(voice, 0) });
     voice.emit({ type: 'transcript', text: 'Pull the bob aside', turnId: saidId(voice, 1) });
-    voice.emit({ type: 'interrupted' });
+    interruptAsLearner(voice);
     // The provider still closes the cut-off turn; the paused film holds.
     voice.emit({ type: 'turn-complete', turnId: saidId(voice, 1) });
     expect(voice.said.map((line) => saidBeat(line.turnId))).toEqual(['s1b1', 's1b2']);
@@ -328,7 +338,7 @@ describe('live voice: tools', () => {
     await driver.start();
     voice.emit({ type: 'turn-complete', turnId: saidId(voice, 0) });
     voice.emit({ type: 'transcript', text: 'Pull the bob aside', turnId: saidId(voice, 1) });
-    voice.emit({ type: 'interrupted' });
+    interruptAsLearner(voice);
     const anchor = driver.lastAnchor!;
     const at = resolveAskAnchor(film, anchor)!;
     const cutOff = saidId(voice, 1);
@@ -365,7 +375,7 @@ describe('live voice: tools', () => {
     await driver.start();
     voice.emit({ type: 'turn-complete', turnId: saidId(voice, 0) });
     voice.emit({ type: 'transcript', text: 'Pull the bob aside', turnId: saidId(voice, 1) });
-    voice.emit({ type: 'interrupted' });
+    interruptAsLearner(voice);
     // The real client clears its turn on interrupt: the cut-off close is null.
     voice.emit({ type: 'turn-complete', turnId: null });
     voice.emit({ type: 'tool-call', callId: 'c1', name: 'resume', args: {} });
@@ -386,7 +396,7 @@ describe('live voice: tools', () => {
     await driver.start();
     voice.emit({ type: 'turn-complete', turnId: saidId(voice, 0) });
     voice.emit({ type: 'transcript', text: 'Pull the bob aside', turnId: saidId(voice, 1) });
-    voice.emit({ type: 'interrupted' });
+    interruptAsLearner(voice);
     // No reply turn ever comes: the fallback reads anyway.
     voice.emit({ type: 'tool-call', callId: 'c1', name: 'resume', args: {} });
     await flush();
@@ -402,7 +412,7 @@ describe('live voice: tools', () => {
     await driver.start();
     voice.emit({ type: 'turn-complete', turnId: saidId(voice, 0) });
     voice.emit({ type: 'transcript', text: 'Pull the bob aside', turnId: saidId(voice, 1) });
-    voice.emit({ type: 'interrupted' });
+    interruptAsLearner(voice);
     // Jumping back to beat 1 retires the interrupt pin and pins beat 1.
     voice.emit({ type: 'tool-call', callId: 'c1', name: 'seek_beat', args: { beat: 's1b1' } });
     await flush();
@@ -425,7 +435,7 @@ describe('live voice: tools', () => {
     await driver.start();
     voice.emit({ type: 'turn-complete', turnId: saidId(voice, 0) });
     voice.emit({ type: 'transcript', text: 'Pull the bob aside', turnId: saidId(voice, 1) });
-    voice.emit({ type: 'interrupted' });
+    interruptAsLearner(voice);
     voice.emit({ type: 'tool-call', callId: 'c1', name: 'resume', args: {} });
     await flush();
     expect(answerFor(voice, 'c1')).toEqual({ ok: true, beat: 's1b2', fromWord: 3 });
@@ -445,7 +455,7 @@ describe('live voice: tools', () => {
     await driver.start();
     voice.emit({ type: 'turn-complete', turnId: saidId(voice, 0) });
     voice.emit({ type: 'transcript', text: 'Pull the bob aside', turnId: saidId(voice, 1) });
-    voice.emit({ type: 'interrupted' });
+    interruptAsLearner(voice);
     const pinned = driver.lastAnchor;
     const anchors = events.filter((event) => event.type === 'anchor').length;
     voice.emit({ type: 'tool-call', callId: 'c1', name: 'resume', args: {} });
@@ -467,12 +477,87 @@ describe('live voice: tools', () => {
     controller.destroy();
   });
 
+  it('re-says a dropped re-read again once, then stays quiet', async () => {
+    const { controller, voice, driver } = await setup();
+    await driver.start();
+    voice.emit({ type: 'turn-complete', turnId: saidId(voice, 0) });
+    interruptAsLearner(voice);
+    voice.emit({ type: 'tool-call', callId: 'c1', name: 'resume', args: {} });
+    await flush();
+    voice.emit({ type: 'turn-complete', turnId: null });
+    await flush();
+    // The provider never speaks the re-read: one repeat, then silence.
+    const first = saidId(voice, 2);
+    await new Promise((resolve) => setTimeout(resolve, 1600));
+    expect(voice.said).toHaveLength(4);
+    const repeat = saidId(voice, 3);
+    expect(repeat).not.toBe(first);
+    expect(voice.said[3]!.text).toBe(voice.said[2]!.text);
+    await new Promise((resolve) => setTimeout(resolve, 1600));
+    expect(voice.said).toHaveLength(4);
+    controller.destroy();
+  });
+
+  it('ignores our say echoing back with no learner input, then finishes', async () => {
+    const { controller, voice, driver, events } = await setup();
+    await driver.start();
+    // Get to the last beat and pause it with a real question.
+    for (let i = 0; i < 5; i++) voice.emit({ type: 'turn-complete', turnId: saidId(voice, i) });
+    interruptAsLearner(voice);
+    voice.emit({ type: 'tool-call', callId: 'c1', name: 'resume', args: {} });
+    await flush();
+    expect(answerFor(voice, 'c1')).toMatchObject({ ok: true, beat: 's1b6' });
+    // No reply comes: the fallback reads the remainder.
+    await new Promise((resolve) => setTimeout(resolve, 1600));
+    const reread = saidId(voice, 6);
+    expect(saidBeat(reread)).toBe('s1b6');
+    const pinned = driver.lastAnchor;
+    const anchors = events.filter((event) => event.type === 'anchor').length;
+    const contexts = voice.contexts.length;
+    // Our say echoes back as interrupted with no learner input since:
+    // the film holds steady instead of pausing on itself.
+    voice.emit({ type: 'interrupted' });
+    expect(driver.lastAnchor).toBe(pinned);
+    expect(events.filter((event) => event.type === 'anchor')).toHaveLength(anchors);
+    expect(voice.contexts).toHaveLength(contexts);
+    expect(controller.currentBeat?.id).toBe('s1b6');
+    expect(driver.driverState).toBe('live');
+    // The re-read's own close finishes the film.
+    voice.emit({ type: 'turn-complete', turnId: reread });
+    expect(driver.driverState).toBe('done');
+    controller.destroy();
+  });
+
+  it('pauses on learner speech between our say and the interrupted', async () => {
+    const { controller, voice, driver, events } = await setup();
+    await driver.start();
+    voice.emit({ type: 'turn-complete', turnId: saidId(voice, 0) });
+    interruptAsLearner(voice);
+    voice.emit({ type: 'tool-call', callId: 'c1', name: 'resume', args: {} });
+    await flush();
+    voice.emit({ type: 'turn-complete', turnId: null });
+    await flush();
+    const reread = saidId(voice, 2);
+    const pinned = driver.lastAnchor;
+    const contexts = voice.contexts.length;
+    // The learner really barges in over the re-read: speech first, then cut-off.
+    voice.emit({ type: 'learner-transcript', text: 'Wait, slower please' });
+    voice.emit({ type: 'interrupted' });
+    expect(driver.lastAnchor).not.toBe(pinned);
+    expect(driver.lastAnchor?.beat).toBe('s1b2');
+    expect(voice.contexts).toHaveLength(contexts + 1);
+    expect(events.filter((event) => event.type === 'anchor').length).toBeGreaterThan(0);
+    expect(controller.currentBeat?.id).toBe('s1b2');
+    expect(voice.said[voice.said.length - 1]!.turnId).toBe(reread);
+    controller.destroy();
+  });
+
   it('resumes with the next beat when the film drifted past a completed anchor', async () => {
     const { film, controller, voice, driver } = await setup();
     await driver.start();
     voice.emit({ type: 'turn-complete', turnId: saidId(voice, 0) });
     voice.emit({ type: 'transcript', text: 'Pull the bob aside', turnId: saidId(voice, 1) });
-    voice.emit({ type: 'interrupted' });
+    interruptAsLearner(voice);
     voice.emit({ type: 'tool-call', callId: 'c1', name: 'resume', args: {} });
     await flush();
     expect(answerFor(voice, 'c1')).toMatchObject({ ok: true, beat: 's1b2' });
@@ -598,13 +683,30 @@ describe('live voice: tools', () => {
     });
     await driver.start();
     voice.emit({ type: 'turn-complete', turnId: saidId(voice, 0) });
-    voice.emit({ type: 'interrupted' });
+    interruptAsLearner(voice);
     voice.emit({ type: 'tool-call', callId: 'c1', name: 'make_example', args: { request: '  Another swing  ' } });
     await flush();
     await flush();
-    expect(answerFor(voice, 'c1')).toEqual({ ok: true, request: 'Another swing', result: { clipId: 'clip-1' } });
+    expect(answerFor(voice, 'c1')).toEqual({ ok: true, made: { clipId: 'clip-1' } });
     expect(seen).toHaveLength(1);
     expect(seen[0]!.anchor.beat).toBe('s1b2');
+    controller.destroy();
+  });
+
+  it('reports a rejected make_example as a failed tool, not a drawing', async () => {
+    const { controller, voice, driver } = await setup({
+      makeExample: (() => Promise.reject(new Error('Legs stay within 8.'))) as LiveMakeExample,
+    });
+    await driver.start();
+    voice.emit({ type: 'turn-complete', turnId: saidId(voice, 0) });
+    interruptAsLearner(voice);
+    voice.emit({ type: 'tool-call', callId: 'c1', name: 'make_example', args: { request: 'Legs 5 and 12' } });
+    await flush();
+    await flush();
+    // The host's refusal passes through: no drawing happened, nothing was said.
+    expect(answerFor(voice, 'c1')).toEqual({ ok: false, error: 'Legs stay within 8.' });
+    expect(voice.said.map((line) => saidBeat(line.turnId))).toEqual(['s1b1', 's1b2']);
+    expect(controller.currentBeat?.id).toBe('s1b2');
     controller.destroy();
   });
 
@@ -628,7 +730,7 @@ describe('live voice: tools', () => {
     resolveHost({ clipId: 'clip-1' });
     await flush();
     await flush();
-    expect(answerFor(voice, 'c1')).toEqual({ ok: true, request: 'Another swing', result: { clipId: 'clip-1' } });
+    expect(answerFor(voice, 'c1')).toEqual({ ok: true, made: { clipId: 'clip-1' } });
     // Resume re-reads the unheard rest of the held beat once the reply ends.
     voice.emit({ type: 'tool-call', callId: 'c2', name: 'resume', args: {} });
     await flush();
