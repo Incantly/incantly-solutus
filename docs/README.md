@@ -20,6 +20,7 @@ Incantly turns a concept in a learner's notes into a safe, interactive teaching 
 - [v0.1 scope](product/v1-scope.md): the deliberately narrow first release.
 - [Success metrics](product/success-metrics.md): what proves the product works.
 - [Video figures](product/video-figures.md): plan for narrated, interactive films of 30 seconds to 4 minutes (PRD 28).
+- [Live voice films](product/live-voice-films.md): a real-time voice teacher that narrates a film, takes spoken questions and calls tools, plus explainer layers (write-on text, notes, cards).
 
 ### Architecture
 
