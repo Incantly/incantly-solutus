@@ -71,6 +71,57 @@ function decodeBase64(data: string): Uint8Array {
 const MAX_RESUMES = 5;
 
 /**
+ * The Schema fields the Live API accepts on a function declaration. Anything
+ * else (additionalProperties, $schema, default, oneOf, …) closes the session
+ * with 1007, so declarations are converted, never passed through.
+ */
+const GEMINI_SCHEMA_KEYS: ReadonlySet<string> = new Set([
+  'type',
+  'description',
+  'properties',
+  'required',
+  'enum',
+  'items',
+  'minimum',
+  'maximum',
+  'nullable',
+  'format',
+]);
+
+/** Strips a JSON Schema to Gemini's supported subset, recursing into properties and items. */
+function geminiSchema(schema: unknown): Record<string, unknown> | null {
+  if (typeof schema !== 'object' || schema === null || Array.isArray(schema)) return null;
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(schema)) {
+    if (!GEMINI_SCHEMA_KEYS.has(key)) continue;
+    if (key === 'properties' && typeof value === 'object' && value !== null && !Array.isArray(value)) {
+      const properties: Record<string, unknown> = {};
+      for (const [name, sub] of Object.entries(value)) {
+        const cleaned = geminiSchema(sub);
+        if (cleaned) properties[name] = cleaned;
+      }
+      out.properties = properties;
+      continue;
+    }
+    if (key === 'items') {
+      const cleaned = geminiSchema(value);
+      if (cleaned) out.items = cleaned;
+      continue;
+    }
+    out[key] = value;
+  }
+  return out;
+}
+
+/** A declaration's parameters for the setup message, or null when the tool takes no arguments. */
+function geminiParameters(parameters: Readonly<Record<string, unknown>>): Record<string, unknown> | null {
+  const cleaned = geminiSchema(parameters);
+  const properties = cleaned?.properties as Record<string, unknown> | undefined;
+  if (!properties || Object.keys(properties).length === 0) return null;
+  return cleaned;
+}
+
+/**
  * The server's close reason for an error message, e.g. " (code 1011:
  * ...)". Empty when the event carries none; never carries the token,
  * which lives only in the socket URL that is never quoted.
@@ -232,12 +283,15 @@ export class GeminiLiveVoice implements LiveVoice {
           ? {
               tools: [
                 {
-                  functionDeclarations: setup.tools.map((tool) => ({
-                    name: tool.name,
-                    description: tool.description,
-                    parameters: tool.parameters,
-                    behavior: tool.blocking ? 'BLOCKING' : 'NON_BLOCKING',
-                  })),
+                  functionDeclarations: setup.tools.map((tool) => {
+                    const parameters = geminiParameters(tool.parameters);
+                    return {
+                      name: tool.name,
+                      description: tool.description,
+                      ...(parameters ? { parameters } : {}),
+                      behavior: tool.blocking ? 'BLOCKING' : 'NON_BLOCKING',
+                    };
+                  }),
                 },
               ],
             }

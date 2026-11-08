@@ -95,6 +95,63 @@ describe('GeminiLiveVoice setup', () => {
     expect(declarations.find((d) => d.name === 'make_example')!.behavior).toBe('NON_BLOCKING');
   });
 
+  it('strips parameters to the subset the Live API accepts, and omits them for no-argument tools', async () => {
+    const h = harness();
+    const promise = h.voice.connect({
+      instruction: 'Teach.',
+      tools: [
+        {
+          name: 'show_me',
+          description: 'Change controls.',
+          parameters: {
+            $schema: 'http://json-schema.org/draft-07/schema#',
+            type: 'object',
+            additionalProperties: false,
+            required: ['angle'],
+            properties: {
+              angle: {
+                type: 'number',
+                description: 'The angle.',
+                minimum: 0,
+                maximum: 180,
+                default: 40,
+                oneOf: [{ type: 'number' }],
+              },
+              tags: { type: 'array', items: { type: 'string', enum: ['a', 'b'], additionalProperties: false } },
+            },
+          },
+          blocking: true,
+        },
+        { name: 'pause', description: 'Pause.', parameters: { type: 'object', properties: {}, additionalProperties: false }, blocking: true },
+      ],
+    });
+    h.sockets[0]!.onopen!({});
+    server(h.sockets[0]!, { setupComplete: {} });
+    await promise;
+    const setup = (h.sockets[0]!.sent[0] as { setup: Record<string, unknown> }).setup;
+    const declarations = (setup.tools as Array<{ functionDeclarations: Array<Record<string, unknown>> }>)[0]!.functionDeclarations;
+    // Nested additionalProperties, $schema, default and oneOf are gone; the supported subset survives.
+    expect(JSON.stringify(declarations)).not.toContain('additionalProperties');
+    expect(JSON.stringify(declarations)).not.toContain('$schema');
+    expect(JSON.stringify(declarations)).not.toContain('oneOf');
+    expect(declarations.find((d) => d.name === 'show_me')).toEqual({
+      name: 'show_me',
+      description: 'Change controls.',
+      parameters: {
+        type: 'object',
+        required: ['angle'],
+        properties: {
+          angle: { type: 'number', description: 'The angle.', minimum: 0, maximum: 180 },
+          tags: { type: 'array', items: { type: 'string', enum: ['a', 'b'] } },
+        },
+      },
+      behavior: 'BLOCKING',
+    });
+    // A tool with no properties carries no parameters at all.
+    expect(declarations.find((d) => d.name === 'pause')).toEqual({ name: 'pause', description: 'Pause.', behavior: 'BLOCKING' });
+    h.voice.close();
+  });
+
   it('rejects connect when the socket closes before setupComplete', async () => {
     const h = harness();
     const promise = h.voice.connect({ instruction: 'Hi.', tools: [] });
