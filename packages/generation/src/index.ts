@@ -9,7 +9,7 @@ export type { LearnerRequest, Prompt, PromptBlock } from './context';
 export { FragmentStream, parseFragments, parsePlanReply } from './fragments';
 export type { FragmentName, FragmentSet } from './fragments';
 export { AnthropicClient, DEFAULT_MODELS, MODEL_PRICES, ModelError, ScriptedModel, costOf } from './models';
-export { DEFAULT_GEMINI_MODELS, GeminiClient, geminiFallbackModels } from './gemini';
+export { DEFAULT_GEMINI_MODELS, GEMINI_SCENE_FALLBACK_ORDER, GeminiClient, geminiFallbackModels } from './gemini';
 export { BEDROCK_MODEL, BedrockClient, DEFAULT_BEDROCK_MODELS, bedrockGeo } from './bedrock';
 export { DEFAULT_SPARK_MODELS, SPARK_MODEL, SparkClient } from './spark';
 export type { SparkEffort, SparkOptions } from './spark';

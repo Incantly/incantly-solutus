@@ -167,11 +167,14 @@ describe('Gemini resilience', () => {
     expect(requests).toHaveLength(1);
   });
 
-  it('derives fallbacks from a key check list: text flash models only, newest first', () => {
-    // What the key check lists for this key, newest names first; the retired
-    // gemini-2.5-flash stays in the chain and is skipped at call time.
+  it('derives fallbacks from a key check list: measured order first, then newest', () => {
+    // What the key check lists for this key, newest names first. The default
+    // scene model answers fastest, so it is chosen; the chain starts with the
+    // measured runners-up, then the remaining text flash models newest-first.
     const listed = [
       'gemini-3.8-flash',
+      'gemini-3.7-flash',
+      'gemini-3.6-flash',
       'gemini-3.1-flash-image-preview',
       'gemini-3.1-flash-image',
       'gemini-3.1-flash-lite-image',
@@ -183,17 +186,21 @@ describe('Gemini resilience', () => {
       'gemini-2.5-flash',
       'gemini-3.5-transcribe-live',
     ].map((id) => ({ id, methods: ['generateContent'] as readonly string[] }));
-    expect(geminiFallbackModels(listed, { plan: 'gemini-3.5-flash-lite', scene: 'gemini-3.8-flash' })).toEqual({
+    expect(geminiFallbackModels(listed, { plan: 'gemini-3.5-flash-lite', scene: 'gemini-3-flash-preview' })).toEqual({
       plan: [],
-      scene: ['gemini-3-flash-preview', 'gemini-2.5-flash'],
-      repair: ['gemini-3-flash-preview', 'gemini-2.5-flash'],
+      scene: ['gemini-3.6-flash', 'gemini-3.5-flash-lite', 'gemini-3.8-flash'],
+      repair: ['gemini-3.6-flash', 'gemini-3.5-flash-lite', 'gemini-3.8-flash'],
     });
     // An entry whose listed methods leave out generateContent is skipped, and
     // one with no methods listed is kept: the probe cannot always say.
     const methods = listed.map((entry) =>
-      entry.id === 'gemini-3-flash-preview' ? { ...entry, methods: ['embedContent'] as readonly string[] } : entry.id === 'gemini-2.5-flash' ? { id: entry.id } : entry,
+      entry.id === 'gemini-3.6-flash' ? { ...entry, methods: ['embedContent'] as readonly string[] } : entry.id === 'gemini-2.5-flash' ? { id: entry.id } : entry,
     );
-    expect(geminiFallbackModels(methods, { plan: 'gemini-3.5-flash-lite', scene: 'gemini-3.8-flash' }).scene).toEqual(['gemini-2.5-flash']);
+    expect(geminiFallbackModels(methods, { plan: 'gemini-3.5-flash-lite', scene: 'gemini-3-flash-preview' }).scene).toEqual([
+      'gemini-3.5-flash-lite',
+      'gemini-3.8-flash',
+      'gemini-3.7-flash',
+    ]);
   });
 
   it('skips a retired model with a 404 and tries the next fallback, without spending retries on it', async () => {

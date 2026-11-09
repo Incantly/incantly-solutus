@@ -10,12 +10,15 @@ import { CONTINUE_PROMPT, httpError, ModelError, type CallPurpose, type ModelCal
 /**
  * Defaults: a small fast model plans, a balanced one builds and repairs. Model
  * names change often: the playground lists the ones a key can reach and sends
- * its choice, and these are only used when nothing is chosen.
+ * its choice, and these are only used when nothing is chosen. The scene and
+ * repair default favours measured latency over the newest number (2026-11-09:
+ * gemini-3-flash-preview answered a scene call in under 4 s twice, while
+ * gemini-3.8-flash 503'd twice and gemini-3.7-flash went silent then 503'd).
  */
 export const DEFAULT_GEMINI_MODELS: Readonly<Record<CallPurpose, string>> = {
   plan: 'gemini-3.5-flash-lite',
-  scene: 'gemini-3.8-flash',
-  repair: 'gemini-3.8-flash',
+  scene: 'gemini-3-flash-preview',
+  repair: 'gemini-3-flash-preview',
 };
 
 /** How much a Gemini model thinks before it answers. Gemini 3 models cannot turn it off; low is the fast path. */
@@ -74,23 +77,35 @@ function geminiVersion(id: string): number {
 }
 
 /**
- * Fallback models from a key check's list, newest first: the next text flash
- * models for scenes and repairs (lite ones plan). Media, live,
- * transcription and thinking variants are skipped, as is any entry whose
- * listed methods leave out generateContent; the chosen models are never
- * repeated. A listed model the provider has since retired stays in the
- * chain: the client skips a 404 to the next fallback at call time.
+ * Scene fallback order from measured latency (2026-11-09): gemini-3.6-flash
+ * and gemini-3.5-flash-lite answered a scene call in under 6 s twice, while
+ * newer numbers went silent or 503'd. Overridable per call.
+ */
+export const GEMINI_SCENE_FALLBACK_ORDER: readonly string[] = ['gemini-3.6-flash', 'gemini-3.5-flash-lite'];
+
+/**
+ * Fallback models from a key check's list: scenes and repairs try the
+ * measured order first, then the remaining text flash models newest-first,
+ * with the flash-lite model in the chain so a busy day still answers; lite
+ * ones plan. Media, live, transcription and thinking variants are skipped,
+ * as is any entry whose listed methods leave out generateContent; the chosen
+ * models are never repeated. A listed model the provider has since retired
+ * stays in the chain: the client skips a 404 to the next fallback at call
+ * time.
  */
 export function geminiFallbackModels(
   listed: readonly ListedModel[],
   chosen: { readonly plan: string; readonly scene: string },
+  prefer: readonly string[] = GEMINI_SCENE_FALLBACK_ORDER,
 ): { readonly plan: readonly string[]; readonly scene: readonly string[]; readonly repair: readonly string[] } {
   const text = listed.filter(
     ({ id, methods }) =>
       /^gemini-/.test(id) && !NON_TEXT_GEMINI.test(id) && (!methods || methods.length === 0 || methods.includes('generateContent')),
   );
   const newest = [...text].sort((a, b) => geminiVersion(b.id) - geminiVersion(a.id)).map(({ id }) => id);
-  const scene = newest.filter((id) => /flash/.test(id) && !/flash-lite/.test(id) && id !== chosen.scene).slice(0, 2);
+  const flashes = newest.filter((id) => /flash/.test(id) && id !== chosen.scene);
+  const ordered = [...prefer.filter((id) => flashes.includes(id)), ...flashes.filter((id) => !prefer.includes(id))];
+  const scene = ordered.slice(0, 3);
   return {
     plan: newest.filter((id) => /flash-lite/.test(id) && id !== chosen.plan).slice(0, 1),
     scene,
