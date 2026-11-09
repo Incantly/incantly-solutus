@@ -352,7 +352,7 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
   ];
   // Each listing provider's models: defaults until a key check lists the ones it can reach.
   const listed: Record<'gemini' | 'bedrock', string[]> = {
-    gemini: ['gemini-3.5-flash-lite', 'gemini-3.8-flash'],
+    gemini: ['gemini-3.5-flash-lite', 'gemini-3-flash-preview', 'gemini-3.8-flash'],
     bedrock: ['zai.glm-4.7-flash', 'zai.glm-4.7', 'deepseek.v3.2'],
   };
   const listing = (provider: string): provider is 'gemini' | 'bedrock' => provider === 'gemini' || provider === 'bedrock';
@@ -361,10 +361,13 @@ export function mountGeneratePage(root: HTMLElement, params: URLSearchParams): v
     ids
       .filter((id) => kind.test(id))
       .sort((a, b) => Number(/^gemini-([\d.]+)/.exec(b)?.[1] ?? 0) - Number(/^gemini-([\d.]+)/.exec(a)?.[1] ?? 0))[0];
-  /** The provider's usual pick: a small fast model plans, a balanced one builds. */
+  /** The provider's usual pick: a small fast model plans, a balanced one builds. The Gemini scene default is the measured-fast gemini-3-flash-preview when listed. */
   const defaultsFor = (provider: string, ids: readonly string[]) =>
     provider === 'gemini'
-      ? { plan: newest(ids, /^gemini-[\d.]+-flash-lite$/) ?? ids[0]!, scene: newest(ids, /^gemini-[\d.]+-flash$/) ?? ids[0]! }
+      ? {
+          plan: newest(ids, /^gemini-[\d.]+-flash-lite$/) ?? ids[0]!,
+          scene: ids.includes('gemini-3-flash-preview') ? 'gemini-3-flash-preview' : (newest(ids, /^gemini-[\d.]+-flash$/) ?? ids[0]!),
+        }
       : provider === 'bedrock'
         ? { plan: ids.find((id) => id === 'zai.glm-4.7-flash') ?? ids[0]!, scene: ids.find((id) => id === 'zai.glm-4.7') ?? ids[0]! }
         : provider === 'spark'
