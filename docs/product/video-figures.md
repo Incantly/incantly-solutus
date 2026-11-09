@@ -139,7 +139,7 @@ Everything else depends on this, so it is built first.
 
 Stages
 1. **Plan.** One streamed call returns the storyboard and the shared film context (palette, part names, notation, units, tone). Its cap is larger than today's plan call (bench).
-2. **Scenes.** A scene call starts as soon as its slice of the storyboard has streamed in, with the film context in the cached prefix. Reviewed scenes and the concept cache answer per scene before any model call. A one-scene film makes exactly one scene call. A film of several scenes makes one call per scene, in parallel (ADR 009).
+2. **Scenes.** A scene call starts as soon as its slice of the storyboard has streamed in, with the film context in the cached prefix. Every slice makes its scene call: no stored scene ever answers one instead. A one-scene film makes exactly one scene call. A film of several scenes makes one call per scene, in parallel (ADR 009).
 3. **Narration.** Requested per beat as soon as its text exists, while scene code is still streaming.
 4. **Compile.** The engine turns beat fields into the timeline, camera moves, cues and captions. Until a beat's audio arrives its length is estimated from its words (2.5 words per second, bench), so the first scene is not held back by speech; the real audio length replaces the estimate when it arrives.
 5. **Check.** Validator, probe, seek-equals-play and the film checks (section 9) run per scene, offline. Failures take the existing repair path. Wording failures ("beat 4: 31 words for 6 s") are repaired in the storyboard text, with no scene code sent.
@@ -263,7 +263,7 @@ Measured on the bench (`npm run film-bench`): tokens and dollars per film by len
 - **Seeking too slow on long scenes:** bounded by the scene cap; measured in phase 1 before anything else is built on it.
 - **Scenes that keep state outside the SDK** break seek-equals-play: caught by the probe and repaired.
 - **Parallel scenes drift apart:** shared film context in the plan and per-scene checks.
-- **Long-film cost and wait:** stream, cache, reuse reviewed scenes, play the first scene early.
+- **Long-film cost and wait:** stream, write each scene once, play the first scene early.
 - **Speech latency and cost,** especially on demand: estimated lengths, text first, voice opt-in, cache.
 - **Fonts breaking determinism:** bundled fonts, measured after loading.
 - **Export speed on phones and tablets:** chunked rendering, quality tiers.

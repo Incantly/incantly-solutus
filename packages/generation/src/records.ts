@@ -49,7 +49,7 @@ export interface FailureRecord {
   /** Each model call: how long it took, how soon its text began, and what it wrote and read from the cache (PRD 25.7). */
   readonly calls: readonly CallTiming[];
   readonly failure: string | null;
-  /** How the scene was made: written whole, adapted by edits, or from the concept cache. */
+  /** How the scene was made: written whole, adapted from a reviewed scene by edits, brought from a note to be repaired, or changed as the learner asks. */
   readonly mode: GenerationState['mode'];
   /** A repair was due but skipped because it would have ended after the deadline. */
   readonly deadlineSkipped: boolean;

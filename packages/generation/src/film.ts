@@ -1,6 +1,5 @@
 import { createContext, Script } from 'node:vm';
 import {
-  FILM_FIXTURES,
   FILM_MAX_SCENES,
   KIT_OF,
   SCENE_LIMITS,
@@ -100,8 +99,9 @@ export interface FilmScenePrompt {
 
 /**
  * One scene's call: its storyboard slice plus the shared film context in the
- * cached prefix, the kit contract, and the nearest reviewed example to follow.
- * The slice is the only storyboard the call sees: never another scene.
+ * cached prefix and the kit contract. Every slice makes its scene call: no
+ * stored scene ever answers one. The slice is the only storyboard the call
+ * sees: never another scene.
  */
 export function filmScenePrompt(slice: StoryboardScene, context: FilmContext): FilmScenePrompt {
   const kit = slice.kit ?? 'svg';
@@ -472,72 +472,8 @@ export class StoryboardStream {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Cache and reviewed scenes first
-// ---------------------------------------------------------------------------
-
-/** A scene slice as a cache key: its kit, idea words and beat lines, with the kit version. */
-export function sceneCacheKey(slice: StoryboardScene): string | null {
-  const words = `${slice.idea ?? slice.id} ${slice.beats.map((beat) => beat.say).join(' ')}`
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .filter((word) => word.length > 2)
-    .sort()
-    .join(' ');
-  if (words === '') return null;
-  return `film-scene|${slice.kit ?? 'svg'}|${words}`.slice(0, 500);
-}
-
-export interface CachedFilmScene {
-  readonly fragments: { readonly html: string; readonly css: string; readonly js: string };
-}
-
-/** Approved film scenes by slice: a repeated slice costs no model call. */
-export class FilmSceneCache {
-  private readonly entries = new Map<string, CachedFilmScene>();
-
-  constructor(private readonly max = 200) {}
-
-  get(key: string | null): CachedFilmScene | null {
-    if (key === null) return null;
-    const entry = this.entries.get(key);
-    if (!entry) return null;
-    this.entries.delete(key);
-    this.entries.set(key, entry);
-    return entry;
-  }
-
-  put(key: string | null, scene: CachedFilmScene): void {
-    if (key === null) return;
-    this.entries.delete(key);
-    this.entries.set(key, scene);
-    while (this.entries.size > this.max) this.entries.delete(this.entries.keys().next().value!);
-  }
-
-  get size(): number {
-    return this.entries.size;
-  }
-}
-
+/** A beat's say text with its whitespace normalised, for comparing lines exactly. */
 const normalizeSay = (say: string): string => say.trim().replace(/\s+/g, ' ');
-
-/**
- * The reviewed film scene for a slice, when one matches it exactly: the same
- * kit and the same beat lines in order, so the compiler's say-match passes.
- * Anything else is a new scene, never an adaptation that would drift the beats.
- */
-export function reviewedFilmScene(slice: StoryboardScene): CachedFilmScene | null {
-  for (const fixture of Object.values(FILM_FIXTURES)) {
-    for (let i = 0; i < fixture.storyboard.scenes.length; i++) {
-      const candidate = fixture.storyboard.scenes[i]!;
-      if (candidate.kit !== slice.kit || candidate.beats.length !== slice.beats.length) continue;
-      if (!candidate.beats.every((beat, index) => normalizeSay(beat.say) === normalizeSay(slice.beats[index]!.say))) continue;
-      const scene = fixture.scenes[i]!;
-      return { fragments: { html: scene.html, css: scene.css, js: scene.js } };
-    }
-  }
-  return null;
-}
 
 // ---------------------------------------------------------------------------
 // A scene's probe and repair context (never a plan call)
@@ -649,8 +585,6 @@ export interface FilmSceneResult {
   readonly steps: readonly Beat[] | null;
   readonly attempts: readonly FilmSceneAttempt[];
   readonly repairsUsed: number;
-  readonly cached: boolean;
-  readonly reviewed: boolean;
   readonly usage: ModelUsage;
   readonly cost: number;
   readonly ms: number;
@@ -663,7 +597,6 @@ export interface FilmSceneOptions {
   readonly model: ModelClient;
   /** Probes each candidate; without one, candidates stop at static validation. Default the isolated probe. */
   readonly probe?: SceneProber | null;
-  readonly cache?: FilmSceneCache | null;
   /** Automatic repairs per scene, of any kind; default three, only while each makes progress. */
   readonly maxRepairs?: number;
   readonly signal?: AbortSignal;
@@ -753,10 +686,10 @@ function contextReport(problems: readonly string[], attempt: number, of: number)
 }
 
 /**
- * Generates one scene from its slice: cache and reviewed scenes first, then
- * one scene call capped by a normal size budget, then validation, probe and
- * the context check, repaired alone up to three times while each makes
- * progress. The call never sees another scene's output.
+ * Generates one scene from its slice: one scene call capped by a normal size
+ * budget, then validation, probe and the context check, repaired alone up to
+ * three times while each makes progress. Every slice makes its scene call:
+ * no stored scene ever answers one. The call never sees another scene's output.
  */
 export async function generateFilmScene(slice: StoryboardScene, context: FilmContext, options: FilmSceneOptions): Promise<FilmSceneResult> {
   const now = options.now ?? (() => Date.now());
@@ -770,8 +703,6 @@ export async function generateFilmScene(slice: StoryboardScene, context: FilmCon
   let repairsUsed = 0;
   let checkMs = 0;
   let probeMs = 0;
-  let cached = false;
-  let reviewed = false;
   const models: string[] = [];
 
   const check = async (fragments: FragmentSet, missing: readonly FragmentName[], problems: readonly string[], changed: readonly FragmentName[]): Promise<FilmSceneAttempt> => {
@@ -844,22 +775,13 @@ export async function generateFilmScene(slice: StoryboardScene, context: FilmCon
     return (last.changed.length > 0 || last.failed === 'reply') && sceneProgressed(before, last);
   };
 
-  // Reviewed scenes and the concept cache answer before any model call.
-  const starting = options.cache?.get(sceneCacheKey(slice)) ?? reviewedFilmScene(slice);
-  if (starting) {
-    if (options.cache?.get(sceneCacheKey(slice))) cached = true;
-    else reviewed = true;
-    const base: FragmentSet = { ...starting.fragments };
-    await check(base, missingFragments(base), [], []);
-  } else {
-    const { prompt } = filmScenePrompt(slice, context);
-    const reply = await options.model.complete({ purpose: 'scene', prompt, maxTokens: filmSceneTokens(slice), ...(options.signal ? { signal: options.signal } : {}), ...(options.onText ? { onText: options.onText } : {}) });
-    usage = addUsage(usage, reply.usage);
-    cost += costOf(reply.model, reply.usage);
-    models.push(reply.model);
-    const parsed = parseFragments(reply.text);
-    await check(parsed.fragments, [...missingFragments(parsed.fragments)], parsed.problems, Object.keys(parsed.fragments) as FragmentName[]);
-  }
+  const { prompt } = filmScenePrompt(slice, context);
+  const reply = await options.model.complete({ purpose: 'scene', prompt, maxTokens: filmSceneTokens(slice), ...(options.signal ? { signal: options.signal } : {}), ...(options.onText ? { onText: options.onText } : {}) });
+  usage = addUsage(usage, reply.usage);
+  cost += costOf(reply.model, reply.usage);
+  models.push(reply.model);
+  const parsed = parseFragments(reply.text);
+  await check(parsed.fragments, [...missingFragments(parsed.fragments)], parsed.problems, Object.keys(parsed.fragments) as FragmentName[]);
 
   while (canRepair()) {
     const current = attempts.at(-1)!;
@@ -887,10 +809,9 @@ export async function generateFilmScene(slice: StoryboardScene, context: FilmCon
   const ms = now() - started;
   if (last.passed && last.fragments.html !== undefined && last.fragments.css !== undefined && last.fragments.js !== undefined) {
     const fragments = { html: last.fragments.html, css: last.fragments.css, js: last.fragments.js };
-    options.cache?.put(sceneCacheKey(slice), { fragments });
-    return { sceneId: slice.id, ok: true, fragments, steps, attempts, repairsUsed, cached, reviewed, usage, cost, ms, checkMs, probeMs, failure: null };
+    return { sceneId: slice.id, ok: true, fragments, steps, attempts, repairsUsed, usage, cost, ms, checkMs, probeMs, failure: null };
   }
-  return { sceneId: slice.id, ok: false, fragments: null, steps: null, attempts, repairsUsed, cached, reviewed, usage, cost, ms, checkMs, probeMs, failure: last.report?.summary ?? 'scene' };
+  return { sceneId: slice.id, ok: false, fragments: null, steps: null, attempts, repairsUsed, usage, cost, ms, checkMs, probeMs, failure: last.report?.summary ?? 'scene' };
 }
 
 // ---------------------------------------------------------------------------
@@ -960,7 +881,6 @@ export interface FilmGenerationOptions {
   readonly learnerId?: string;
   /** Spend and speech caps; null runs uncapped (tests, the stub). */
   readonly limits?: LimitKeeper | null;
-  readonly cache?: FilmSceneCache | null;
   /** Probes each scene's candidates. Default the isolated probe; null skips probing. */
   readonly probe?: SceneProber | null;
   /** Automatic repairs per scene; default three. */
@@ -1087,7 +1007,6 @@ export async function generateFilm(request: FilmRequest, options: FilmGeneration
 
   const maxParallel = Math.max(1, options.maxParallel ?? limits?.concurrency ?? 4);
   const gate = filmGateFor(learnerId, maxParallel);
-  const cache = options.cache === undefined ? null : options.cache;
   const prober = options.probe === undefined ? isolatedProbe : options.probe;
   const narrator = options.narrator ?? new StubNarrator();
 
@@ -1169,8 +1088,6 @@ export async function generateFilm(request: FilmRequest, options: FilmGeneration
         steps: null,
         attempts: [],
         repairsUsed: 0,
-        cached: false,
-        reviewed: false,
         usage: NO_USAGE,
         cost: 0,
         ms: 0,
@@ -1192,7 +1109,6 @@ export async function generateFilm(request: FilmRequest, options: FilmGeneration
         return await generateFilmScene(slice, context, {
           model: options.model,
           probe: prober,
-          cache,
           ...(options.maxRepairs !== undefined ? { maxRepairs: options.maxRepairs } : {}),
           ...(signal ? { signal } : {}),
           ...(hooks.onText ? { onText: (delta) => hooks.onText!('scene', delta) } : {}),
@@ -1233,8 +1149,6 @@ export async function generateFilm(request: FilmRequest, options: FilmGeneration
           steps: null,
           attempts: [],
           repairsUsed: 0,
-          cached: false,
-          reviewed: false,
           usage: NO_USAGE,
           cost: 0,
           ms: 0,

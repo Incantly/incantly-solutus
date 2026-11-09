@@ -5,9 +5,9 @@ import type { FailureRecord, Outcome } from './records';
 /**
  * The generation dashboard (RP-13, PRD 25.7) from failure records: outcomes,
  * how often the first attempt passes and how often a repair was needed, how
- * often the cache and the reviewed starting scenes were used, stage timings
- * against the deadline, lines per figure (RM-4), cost, and the failures that
- * keep coming back, as candidates for new kit functions or rules (RP-12).
+ * often the reviewed starting scenes were used, stage timings against the
+ * deadline, lines per figure (RM-4), cost, and the failures that keep coming
+ * back, as candidates for new kit functions or rules (RP-12).
  */
 
 export interface Spread {
@@ -37,7 +37,6 @@ export interface Dashboard {
   readonly firstAttemptRate: number | null;
   readonly repairShare: number | null;
   readonly failureRate: number | null;
-  readonly cacheHitRate: number | null;
   readonly adaptRate: number | null;
   readonly deadlineSkips: number;
   readonly timings: { readonly planMs: Spread; readonly firstFragmentMs: Spread; readonly sceneMs: Spread; readonly totalMs: Spread };
@@ -95,8 +94,7 @@ export function dashboard(records: readonly FailureRecord[], deadlineMs = DEFAUL
     firstAttemptRate: share(outcomes['first-attempt'], settled.length),
     repairShare: share(records.filter((r) => r.repairs > 0).length, built.length),
     failureRate: share(failed, settled.length),
-    cacheHitRate: share(records.filter((r) => r.mode === 'cache').length, records.length),
-    adaptRate: share(records.filter((r) => r.mode === 'adapt').length, built.filter((r) => r.mode !== 'cache').length),
+    adaptRate: share(records.filter((r) => r.mode === 'adapt').length, built.length),
     deadlineSkips: records.filter((r) => r.deadlineSkipped).length,
     timings: {
       planMs: times((r) => r.timings.planMs),
@@ -121,7 +119,7 @@ export function dashboardText(d: Dashboard): string {
     `# Generation dashboard`,
     '',
     `${d.generations} generations. First attempt passed: ${percent(d.firstAttemptRate)}. Needed a repair: ${percent(d.repairShare)}. Failed: ${percent(d.failureRate)}.`,
-    `Cache hits: ${percent(d.cacheHitRate)}. Adapted from a reviewed scene: ${percent(d.adaptRate)}. Repairs skipped for the deadline: ${d.deadlineSkips}. Over the deadline: ${d.overDeadline}.`,
+    `Adapted from a reviewed scene: ${percent(d.adaptRate)}. Repairs skipped for the deadline: ${d.deadlineSkips}. Over the deadline: ${d.overDeadline}.`,
     '',
     '| Stage | Count | Median | 90th percentile | Slowest |',
     '| --- | --- | --- | --- | --- |',

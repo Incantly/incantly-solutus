@@ -152,7 +152,6 @@ export type { AudioStore, NarrateOptions, NarratedBeat, NarratedFilm, NarrationB
 export {
   FILM_PLAN_FORMAT,
   FILM_SCENE_FORMAT,
-  FilmSceneCache,
   StoryboardStream,
   filmBenchLines,
   filmPlanPrompt,
@@ -162,9 +161,7 @@ export {
   generateFilm,
   generateFilmScene,
   parseStoryboardReply,
-  reviewedFilmScene,
   sanitizeFilmContext,
-  sceneCacheKey,
   sceneProbePlan,
   sliceParts,
   summarizeFilm,
@@ -172,7 +169,6 @@ export {
   validateStoryboard,
 } from './film';
 export type {
-  CachedFilmScene,
   FilmFallback,
   FilmGenerationHooks,
   FilmGenerationOptions,

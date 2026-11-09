@@ -3,7 +3,6 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { FILM_LENGTH_PRESETS, SDK_VERSION, filmDeadlineMs, kitsFor, validateScene, type ProbeCheck, type ProbeFailure, type ProbeReport, type ScenePlan } from '@incantly/core';
 import { ASK_LIMITS, generateExample, generateFilmPatch, generateInsert, sanitizeAnswerAssembly, sanitizeChangeAssembly, sanitizeInsertAssembly, speakAnswer, streamAnswer } from './ask';
 import type { Authenticator, Learner } from './auth';
-import { ConceptCache, planKey, requestKey } from './cache';
 import { REQUEST_LIMITS, type LearnerRequest } from './context';
 import { DEFAULT_LIMITS, LimitKeeper, type Limits, type Refusal } from './limits';
 import type { ModelClient } from './models';
@@ -65,8 +64,6 @@ export interface ServiceOptions {
   /** Browser origins allowed to call the service directly. */
   readonly allowedOrigins?: readonly string[];
   readonly prefix?: string;
-  /** Approved figures reused for the same request or plan (PRD 25.6); null turns the cache off. */
-  readonly cache?: ConceptCache | null;
   /**
    * Signs every validated scene so figures can ask for a background repair
    * when they hit a problem while live (RP-7); at least 32 characters. Without
@@ -109,10 +106,6 @@ interface Session {
   readonly learner: Learner;
   expiresAt: number;
   busy: boolean;
-  /** The request's cache key, when the figure may be shared: it was asked for without note text. */
-  readonly requestKey: string | null;
-  /** The request itself on the same terms, for the words the cached figure can be said to answer. */
-  readonly request?: string;
 }
 
 class HttpError extends Error {
@@ -257,11 +250,9 @@ export class GenerationService {
   private readonly now: () => number;
   private readonly prefix: string;
   private readonly sweeper: ReturnType<typeof setInterval>;
-  readonly cache: ConceptCache | null;
 
   constructor(private readonly options: ServiceOptions) {
     this.now = options.now ?? (() => Date.now());
-    this.cache = options.cache === undefined ? new ConceptCache({ now: this.now }) : options.cache;
     this.limits = new LimitKeeper(options.limits ?? DEFAULT_LIMITS, this.now);
     this.prefix = options.prefix ?? '/v1';
     this.sweeper = setInterval(() => void this.sweep(), 60_000);
@@ -459,34 +450,19 @@ export class GenerationService {
     const generator = this.generator();
     const state = generator.begin();
     send('accepted', { generationId: state.id });
-    const key = requestKey(request.prompt);
     try {
-      // The same request was answered before: no model call at all.
-      const known = this.cache?.get(key) ?? null;
-      if (known && generator.fromCache(state, known, 'request')) {
-        send('plan', { generationId: state.id, skeleton: skeletonOf(state.plan!) });
-      } else {
-        // Figures that may answer it, for the plan call to choose from; each holds every word the learner asked with.
-        const reusable = this.cache?.candidates(request.prompt) ?? [];
-        await generator.run(
-          state,
-          reusable.length > 0 ? { ...request, reusable: reusable.map(({ id, figure }) => ({ id, concept: figure.plan.concept, idea: figure.plan.idea })) } : request,
-          {
-            onPlan: (plan) => send('plan', { generationId: state.id, skeleton: skeletonOf(plan) }),
-            // The model's text as it streams, for progress views and developer tools.
-            onText: (purpose, text) => send('delta', { purpose, text }),
-            onFragment: (name, ok) => send('fragment', { name, ok }),
-            // A figure the plan call chose for this request, or one made from this very plan: no scene call.
-            cached: (plan, reuse) => {
-              const chosen = reusable.find((c) => c.id === reuse)?.figure ?? null;
-              if (chosen && generator.fromCache(state, chosen, 'reuse')) return true;
-              const planned = this.cache?.get(planKey(plan)) ?? null;
-              return planned !== null && generator.fromCache(state, { ...planned, plan }, 'plan');
-            },
-          },
-          signal,
-        );
-      }
+      // Every request is generated fresh: no stored result ever answers one.
+      await generator.run(
+        state,
+        request,
+        {
+          onPlan: (plan) => send('plan', { generationId: state.id, skeleton: skeletonOf(plan) }),
+          // The model's text as it streams, for progress views and developer tools.
+          onText: (purpose, text) => send('delta', { purpose, text }),
+          onFragment: (name, ok) => send('fragment', { name, ok }),
+        },
+        signal,
+      );
       generator.finish(state);
     } finally {
       clearInterval(keepAlive);
@@ -501,8 +477,6 @@ export class GenerationService {
         learner,
         expiresAt: this.now() + (this.options.sessionMinutes ?? 15) * 60_000,
         busy: false,
-        requestKey: request.noteContext ? null : key,
-        ...(request.noteContext ? {} : { request: request.prompt }),
       });
       send('scene', this.sceneMessage(state));
     } else {
@@ -614,11 +588,6 @@ export class GenerationService {
       // The total runs to the approval, so it counts the repairs the device asked for after the first delivery.
       generator.finish(state);
       this.sessions.delete(id);
-      // Approved on a device: the next learner to ask the same can have it at once.
-      const scene = state.scene;
-      if (this.cache && scene && state.plan) {
-        this.cache.put([session.requestKey, planKey(state.plan)], { plan: state.plan, fragments: { html: scene.html, css: scene.css, js: scene.js }, sdkVersion: SDK_VERSION }, session.request);
-      }
       await this.record(state);
       this.json(res, 200, { status: 'approved', generationId: id });
       return;
@@ -696,7 +665,6 @@ export class GenerationService {
         learner,
         expiresAt: this.now() + (this.options.sessionMinutes ?? 15) * 60_000,
         busy: false,
-        requestKey: null,
       });
       this.json(res, 200, { status: 'scene', ...this.sceneMessage(state) } satisfies RepairResponse);
       return;
@@ -748,7 +716,6 @@ export class GenerationService {
         learner,
         expiresAt: this.now() + (this.options.sessionMinutes ?? 15) * 60_000,
         busy: false,
-        requestKey: null,
       });
       this.json(res, 200, { status: 'scene', ...this.sceneMessage(state) } satisfies ChangeResponse);
       return;

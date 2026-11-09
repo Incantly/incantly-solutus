@@ -5,7 +5,6 @@ import { THIRTY_SECOND_FILM } from '@incantly/core';
 import { hmacAuthenticator, mintToken } from '../src/auth';
 import {
   FILM_PLAN_FORMAT,
-  FilmSceneCache,
   StoryboardStream,
   filmBenchLines,
   filmPlanPrompt,
@@ -15,8 +14,6 @@ import {
   generateFilm,
   generateFilmScene,
   parseStoryboardReply,
-  reviewedFilmScene,
-  sceneCacheKey,
   sceneProbePlan,
   summarizeFilmBench,
   validateStoryboard,
@@ -213,36 +210,21 @@ describe('film streaming: slices arrive as the plan streams', () => {
   });
 });
 
-describe('film cache: reviewed scenes and the concept cache answer first', () => {
-  it('matches a reviewed scene only when the kit and lines match exactly', () => {
+describe('film scenes are always generated fresh', () => {
+  it('makes a scene call for every slice, even a reviewed one', async () => {
     const reviewed = THIRTY_SECOND_FILM.storyboard.scenes[0]!;
-    expect(reviewedFilmScene(reviewed)!.fragments.js).toContain('pendulum');
-    expect(reviewedFilmScene({ ...reviewed, kit: 'graph2d' })).toBeNull();
-    expect(reviewedFilmScene({ ...reviewed, beats: [{ id: 's1b1', say: 'Something else entirely.' }] })).toBeNull();
-    expect(reviewedFilmScene(twoScenes()[0]!)).toBeNull();
-  });
-
-  it('keys slices by their kit, idea and lines', () => {
-    const [first] = twoScenes();
-    expect(sceneCacheKey(first!)).toContain('svg');
-    const cache = new FilmSceneCache();
-    expect(cache.get(sceneCacheKey(first!))).toBeNull();
-    cache.put(sceneCacheKey(first!), { fragments: { html: 'h', css: 'c', js: 'j' } });
-    expect(cache.get(sceneCacheKey(first!))!.fragments.js).toBe('j');
-    expect(cache.size).toBe(1);
-  });
-
-  it('generates a reviewed slice with no model call', async () => {
-    const reviewed = THIRTY_SECOND_FILM.storyboard.scenes[0]!;
-    const model = new ScriptedModel(() => {
-      throw new Error('no model call for a reviewed slice');
+    const seen: string[] = [];
+    const model = new ScriptedModel((call) => {
+      seen.push(call.purpose);
+      // The scene call carries its slice; a repair only carries the fragments.
+      if (call.purpose === 'scene') return sceneReply(sliceOf(call).beats);
+      return sceneReply(reviewed.beats);
     });
     const context = { palette: '', parts: [] as string[], notation: '', units: {}, tone: '' };
     const result = await generateFilmScene(reviewed, context, { model });
-    expect(result.ok).toBe(true);
-    expect(result.reviewed).toBe(true);
-    expect(result.usage).toEqual({ inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 });
-    expect(model.calls).toHaveLength(0);
+    expect(seen[0]).toBe('scene');
+    expect(result).not.toHaveProperty('cached');
+    expect(result).not.toHaveProperty('reviewed');
   });
 });
 
