@@ -423,7 +423,7 @@ export class SceneRuntime {
     this.playing = false;
   }
 
-  /** True while there is drawing work to do: playing something that moves, dirty or animating a transition. */
+  /** True while there is drawing work to do: playing something that moves (or a playing film, whose clock advances every frame), dirty or animating a transition. */
   needsFrame(): boolean {
     if (this.lifecycle !== 'mounted' || !this.visible) return false;
     return this.needsWork();
@@ -431,7 +431,9 @@ export class SceneRuntime {
 
   /** The work check without the display's visibility, so an offline replay idles exactly as playing would. */
   private needsWork(): boolean {
-    const moving = this.playing && this.animated !== false;
+    // Film mode: a playing film keeps asking for frames so the film clock
+    // advances even when the scene never reads time (a still scene).
+    const moving = this.playing && (this.film || this.animated !== false);
     // A tween moves in scene time: it waits while paused (C3-7), and under reduced motion it lands at once.
     const tweening = this.tweens.length > 0 && (this.playing || this.reducedMotion);
     return moving || this.dirty || tweening || this.stepTransition !== null || !!this.moves[0] || this.touring();

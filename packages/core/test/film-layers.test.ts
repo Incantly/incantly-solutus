@@ -14,6 +14,7 @@ import {
   flattenFilm,
   layerProblems,
   layoutStageWidth,
+  ManualClock,
   planExportFilm,
   PlayerModel,
   probeFilm,
@@ -76,6 +77,19 @@ function wallScene(): SceneFunction {
     stage.part('Ball', ball, { label: 'Ball', info: 'A ball behind the wall.' });
     inc.onFrame(({ time }) => {
       ball.at(Math.sin(time * 2) * 3, 0);
+    });
+    inc.steps([...LAYER_STEPS]);
+  };
+}
+
+/** A scene whose onFrame never reads time, so the runtime counts it as still. */
+function stillScene(): SceneFunction {
+  return (inc) => {
+    const stage = inc.svg('#stage', { viewBox: [0, 0, 600, 400], title: 'Still', description: 'A still scene.' });
+    const ball = stage.circle(150, 200, 25, { tone: 'hi' });
+    stage.part('Ball', ball, { label: 'Ball', info: 'A still ball.' });
+    inc.onFrame(() => {
+      ball.at(0, 0);
     });
     inc.steps([...LAYER_STEPS]);
   };
@@ -260,15 +274,7 @@ describe('film layers: seek equals play', () => {
     // land on its target — otherwise the reveal and the transport read the
     // within-beat offset. This bit a layered film first, but it holds for
     // any still scene.
-    const still: SceneFunction = (inc) => {
-      const stage = inc.svg('#stage', { viewBox: [0, 0, 600, 400], title: 'Still', description: 'A still scene.' });
-      const ball = stage.circle(150, 200, 25, { tone: 'hi' });
-      stage.part('Ball', ball, { label: 'Ball', info: 'A still ball.' });
-      inc.onFrame(() => {
-        ball.at(0, 0);
-      });
-      inc.steps([...LAYER_STEPS]);
-    };
+    const still = stillScene();
     const film = compiledWith(still);
     const runtime = mounted(still);
     const controller = new FilmController({ runtime, film });
@@ -338,6 +344,58 @@ describe('film layers: seek equals play', () => {
     expect(caption.card).toBe(null);
     expect(caption.split).toBe(true);
     controller.destroy();
+  });
+});
+
+describe('film layers: a still scene still plays its film', () => {
+  it('advances the film clock and changes beats through the controller', () => {
+    const film = compiledWith(stillScene());
+    const runtime = mounted(stillScene());
+    const clock = new ManualClock();
+    const controller = new FilmController({ runtime, film, clock });
+    controller.play();
+    const first = controller.currentBeat?.id;
+    for (let i = 0; i < 180; i++) {
+      if (!controller.isPlaying) controller.play();
+      clock.advance(1000 / 60);
+    }
+    // Three seconds of frames move the film clock about three seconds.
+    expect(controller.time).toBeCloseTo(Math.min(3, controller.duration), 1);
+    // Beats keep changing past the opening beat.
+    for (let i = 0; i < 3000 && controller.currentBeat?.id === first; i++) {
+      if (!controller.isPlaying) controller.play();
+      clock.advance(1000 / 60);
+    }
+    expect(controller.currentBeat?.id).not.toBe(first);
+    controller.destroy();
+  });
+
+  it('advances the film clock through the player model', () => {
+    const film = compiledWith(stillScene());
+    const runtime = mounted(stillScene());
+    const clock = new ManualClock();
+    const controller = new FilmController({ runtime, film, clock });
+    const model = new PlayerModel(controller, film);
+    model.play();
+    for (let i = 0; i < 180; i++) {
+      if (!controller.isPlaying) model.play();
+      clock.advance(1000 / 60);
+    }
+    expect(controller.time).toBeCloseTo(Math.min(3, controller.duration), 1);
+    expect(model.state.playing).toBe(true);
+    controller.destroy();
+  });
+
+  it('leaves a still non-film figure idle', () => {
+    const runtime = new SceneRuntime({});
+    runtime.mount(stillScene());
+    runtime.play();
+    runtime.tick(1 / 60);
+    runtime.tick(1 / 60);
+    // The scene never reads time, so after a frame it counts as still and
+    // the figure stops asking for frames — film mode is the only exception.
+    expect(runtime.animated).toBe(false);
+    expect(runtime.needsFrame()).toBe(false);
   });
 });
 
