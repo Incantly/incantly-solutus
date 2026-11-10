@@ -206,3 +206,10 @@ The first LANG-SM-32 fix kept the reads of the defining line's styles in one set
 - Renamed in `Env` and `createEnv`/`resetEnv` (`runtime.ts`), and in `EvalResult`, `evaluate`, the cascade write (`input_undefined` fail path), the three sample/save-restore sites in `compile.ts` (`sampling` helper and the two function-value wrappers). No alias is kept. `rg -w via packages/kernel/src` finds nothing.
 - Function values carry `reason` only, not a link; `call`, `call1` and `batch` save and restore `env.cause` around the nested evaluation, as they did for `via`.
 - Spec tests that used `via`: none still do. The tester had already changed them to `cause` in commit 69c3289 before this change; the only remaining `via` mentions in `spec-review.test.ts` assert that the field is absent.
+
+### A3. `Function2` and `Function<Number>(2)` (fixed)
+
+- Decision: `Function2` is another spelling of `Function<Number>(2)`, as README decision 5 and functions-calculus design say. `parseTy` (`types.ts`) turns `Function2` into `fnOf('Number', 2)`, so `accepts` needs no special case and a user `g(x, y) = …` satisfies it. `Function<Number>(2)` now parses (also `Function<Number, 2>` as before); `Function<Number>(1)` is a one-parameter function. A suffix on any other base (`Number(2)`, `List<Number>(2)`) or on a bare `Function(2)` does not parse; so does a type argument on a plain name (`Number<Point>`).
+- `tyStr` still prints a two-parameter function as `Function<Number>(2)` (messages and the existing tests use that text). The doc editor should say that `Function2` is a table spelling only.
+- Empty expected type: `setLabel` returns the type text when a set has no members, and the "argument N should be …" builder (`check.ts`) says "another type" for an empty label. The article is also chosen without regard to case now ("an unknown …" instead of "a unknown …").
+- Unchanged: a `Function<Number>` parameter without a count still accepts a function of any count (memberAccepts).

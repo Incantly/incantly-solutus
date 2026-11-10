@@ -157,6 +157,8 @@ Shared error list (`docs/features/errors/design.md` section 4), each kind checke
 - **Harm:** the first calculus or 3D command table the kernel loads will reject every two-variable function. This is a type-registry decision the kernel owns, so it must be settled before the table is built.
 - **Fix:** make `accepts('Function2', Function<Number>(2))` true (and accept `Function<Number>(2)` in `parseTy`), and print an arity-2 function as `Function2` in `tyStr`; or drop `Function2` from the README. Pick one, then update `design.md` 3.10 (C7).
 
+- **Status:** fixed
+
 ### A4. The command table is not validated
 
 - **Doc:** `design.md` 4.6 and 3.11: one table drives typing, errors, catalogue, completion and signature help; "The table builder proves at load time" there are no ambiguous overloads. The kernel will load a table with several hundred forms written by about 20 areas.

@@ -1558,7 +1558,7 @@ class Checker {
       if (first) {
         const a = args[first.argIndex] as Arg | undefined;
         const txt = a ? this.textOf(a.value) : '';
-        message = `${name}: argument ${first.argIndex + 1}${first.param ? ` (${first.param})` : ''} should be ${/^[AEIOU]/.test(first.expected) ? 'an' : 'a'} ${first.expected}, but ${txt} is ${/^[aeiou]/i.test(first.got) ? 'an' : 'a'} ${first.got}.`;
+        message = `${name}: argument ${first.argIndex + 1}${first.param ? ` (${first.param})` : ''} should be ${first.expected.trim() === '' ? 'another type' : `${/^[AEIOU]/i.test(first.expected) ? 'an' : 'a'} ${first.expected}`}, but ${txt} is ${/^[aeiou]/i.test(first.got) ? 'an' : 'a'} ${first.got}.`;
         // one wrong argument is pointed at; several wrong arguments make the whole call the span
         if (a && problems.length === 1) {
           s = a.value.s;

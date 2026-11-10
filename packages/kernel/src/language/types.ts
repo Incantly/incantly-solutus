@@ -76,23 +76,34 @@ export const TYPE_ALIASES: Readonly<Record<string, readonly string[]>> = {
   Scalar: ['Number'],
 };
 
+/**
+ * Parse one type as written in a table: `Number`, `List<Point>`, `Function<Number>`, `Function<Number>(2)`,
+ * `Function<Number, 2>`. `Function2` is the name README decision 5 gives to `Function<Number>(2)`, a user function of
+ * two variables, and means the same type. The base name is not checked here; `typeProblem` does that.
+ */
 export function parseTy(text: string): Ty | undefined {
   const t = text.trim();
-  const m = /^(\w+)(?:<(.+)>)?$/.exec(t);
+  if (t === 'Function2') return fnOf('Number', 2);
+  const m = /^(\w+)(?:<(.+)>)?(?:\((\d)\))?$/.exec(t);
   if (!m) return undefined;
   const base = m[1] as string;
   const inner = m[2];
+  const count = m[3];
+  if (count !== undefined && base !== 'Function') return undefined;
   if (base === 'List') {
     if (inner === undefined) return { k: 'List' };
     const el = parseTy(inner);
     return el ? { k: 'List', of: el } : undefined;
   }
   if (base === 'Function') {
-    if (inner === undefined) return { k: 'Function' };
+    if (inner === undefined) return count === undefined ? { k: 'Function' } : undefined;
     const n = /^(\w+)(?:\s*,\s*(\d))?$/.exec(inner);
     if (!n) return undefined;
-    return n[2] ? { k: 'Function', ret: n[1] as TypeName, arity: Number(n[2]) } : { k: 'Function', ret: n[1] as TypeName };
+    const arity = n[2] ?? count;
+    if (n[2] !== undefined && count !== undefined) return undefined;
+    return arity ? { k: 'Function', ret: n[1] as TypeName, arity: Number(arity) } : { k: 'Function', ret: n[1] as TypeName };
   }
+  if (inner !== undefined) return undefined;
   return { k: base as TypeName };
 }
 
@@ -153,7 +164,7 @@ export function setLabel(set: TypeSet): string {
   const names: string[] = [];
   for (const m of set.members) names.push(m.k === 'List' || m.k === 'Function' ? tyStr(m) : m.k);
   const uniq = [...new Set(names)];
-  if (uniq.length > 6) return set.text;
+  if (uniq.length === 0 || uniq.length > 6) return set.text;
   if (uniq.length <= 1) return uniq.join('');
   return uniq.slice(0, -1).join(', ') + ' or ' + uniq[uniq.length - 1];
 }
