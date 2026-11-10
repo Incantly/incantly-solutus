@@ -1016,3 +1016,419 @@ describe('LANG-SM-21: tokenize colours a long script', () => {
     expect(errors.some((e) => e.kind === 'limit')).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------------------------
+// Round 2: LANG-SM-9 (reopened), LANG-SM-22, LANG-SM-23, LANG-SM-24
+// ---------------------------------------------------------------------------------------------
+
+describe('LANG-SM-9 (reopened): a command call in a range bound or a style value does not make an object dependent', () => {
+  /** The command table of the helpers holds `Distance(Point, Point) -> Number`. */
+  function figure(): ScratchFigure {
+    const fig = emptyFig();
+    applyOk(fig, 'A = (1, 1)');
+    applyOk(fig, 'B = (4, 5)');
+    return fig;
+  }
+
+  function checkedOk(src: string, fig: ScratchFigure) {
+    const r = analyseLine(src, fig);
+    if (!r.ok) throw new Error(`${src}: ${r.kind}: ${r.message}`);
+    return r.value;
+  }
+
+  it('LANG-SM-9: a style value that calls a command leaves the number free', () => {
+    const fig = figure();
+    expect(checkedOk('a = 3 with opacity = Distance(A, B) / 10', fig).free).toBe(true);
+    applyOk(fig, 'a = 3 with opacity = Distance(A, B) / 10');
+    expect(fig.lookup('a')?.free).toBe(true);
+  });
+
+  it('LANG-SM-9: a number with a command in its style value can be given a new range', () => {
+    const fig = figure();
+    applyOk(fig, 'a = 3 with opacity = Distance(A, B) / 10');
+    const r = checkedOk('a in 0..20', fig);
+    expect(r.op).toBe('rerange');
+  });
+
+  it('LANG-SM-9: a slider whose range bound calls a command is free and stays a slider', () => {
+    const fig = figure();
+    const r = checkedOk('k = 3 in 0..Distance(A, B)', fig);
+    expect(r.free).toBe(true);
+    expect(r.range).toBeDefined();
+    applyOk(fig, 'k = 3 in 0..Distance(A, B)');
+    expect(fig.lookup('k')?.free).toBe(true);
+    expect(fig.lookup('k')?.slider).toBe(true);
+  });
+
+  it('LANG-SM-9: a command in the lower bound behaves the same way', () => {
+    const fig = figure();
+    const r = checkedOk('k = 3 in -Distance(A, B)..20', fig);
+    expect(r.free).toBe(true);
+    applyOk(fig, 'k = 3 in -Distance(A, B)..20');
+    expect(fig.lookup('k')?.free).toBe(true);
+    expect(fig.lookup('k')?.slider).toBe(true);
+  });
+
+  it('LANG-SM-9: after such a slider is made, its range can be changed', () => {
+    const fig = figure();
+    applyOk(fig, 'k = 3 in 0..Distance(A, B)');
+    const r = checkedOk('k in 0..20', fig);
+    expect(r.op).toBe('rerange');
+  });
+
+  it('LANG-SM-9: a point with a showIf rule that calls a command is free and stays draggable', () => {
+    const fig = figure();
+    const r = checkedOk('P = (1, 2) with showIf = Distance(A, B) > 1', fig);
+    expect(r.free).toBe(true);
+    applyOk(fig, 'P = (1, 2) with showIf = Distance(A, B) > 1');
+    expect(fig.lookup('P')?.free).toBe(true);
+  });
+
+  it('LANG-SM-9: a command in the value itself still makes the object dependent', () => {
+    const fig = figure();
+    expect(checkedOk('d = Distance(A, B)', fig).free).toBe(false);
+    expect(checkedOk('d = Distance(A, B) with opacity = 0.5', fig).free).toBe(false);
+    expect(checkedOk('d = 3 + Distance(A, B) in 0..20', fig).free).toBe(false);
+  });
+
+  it('LANG-SM-9: a command in a style value does not add the command inputs to the value reads', () => {
+    const fig = figure();
+    const r = checkedOk('a = 3 with opacity = Distance(A, B) / 10', fig);
+    expect(r.reads).toEqual([]);
+  });
+});
+
+describe('LANG-SM-22: list and function arithmetic follow the overflow rule of ruling Q4', () => {
+  /** True when the list holds an infinity anywhere. */
+  const hasInfinity = (v: unknown): boolean =>
+    v !== null && typeof v === 'object' && Array.from(v as ArrayLike<number>).some((x) => x === Infinity || x === -Infinity);
+  const items = (v: unknown): number[] => Array.from(v as ArrayLike<number>);
+
+  it('LANG-SM-22: [1, 2] * 1e308 does not store an infinity made from finite numbers', () => {
+    const fig = emptyFig();
+    applyOk(fig, 'L = [1, 2]');
+    const r = applyOk(fig, 'L2 = L * 1e308');
+    if (r.defined) {
+      expect(hasInfinity(fig.valueOf('L2')), 'an overflowed item must not be stored as inf').toBe(false);
+    } else {
+      expect(r.reason).toBe('overflow');
+    }
+  });
+
+  it('LANG-SM-22: the list literal on the left gives the same answer', () => {
+    const fig = emptyFig();
+    const r = applyOk(fig, 'L2 = [1, 2] * 1e308');
+    if (r.defined) {
+      expect(hasInfinity(fig.valueOf('L2'))).toBe(false);
+    } else {
+      expect(r.reason).toBe('overflow');
+    }
+  });
+
+  it('LANG-SM-22: every list-with-number operator guards its result', () => {
+    const fig = emptyFig();
+    applyOk(fig, 'big = 1e308');
+    applyOk(fig, 'M = [1, 1e308]');
+    applyOk(fig, 'N = [1, -1e308]');
+    applyOk(fig, 'T = [1, 2]');
+    const cases: [string, string][] = [
+      ['plus', 'R = M + big'],
+      ['minus', 'R = N - big'],
+      ['times', 'R = M * 10'],
+      ['divide', 'R = T / 1e-320'],
+    ];
+    for (const [what, line] of cases) {
+      const r = applyOk(fig, line);
+      if (r.defined) {
+        expect(hasInfinity(fig.valueOf('R')), `${what}: ${line} stored an infinity`).toBe(false);
+      } else {
+        expect(r.reason, `${what}: ${line}`).toBe('overflow');
+      }
+    }
+  });
+
+  it('LANG-SM-22: the single-number line gives overflow, and the list agrees with it', () => {
+    const fig = emptyFig();
+    applyOk(fig, 'm = 1e308');
+    const single = applyOk(fig, 'q = m + m');
+    expect(single.defined).toBe(false);
+    expect(single.reason).toBe('overflow');
+    applyOk(fig, 'T = [m, 1]');
+    const list = applyOk(fig, 'T2 = T + m');
+    if (list.defined) {
+      expect(hasInfinity(fig.valueOf('T2'))).toBe(false);
+    } else {
+      expect(list.reason).toBe('overflow');
+    }
+  });
+
+  it('LANG-SM-22: an infinity that follows from an infinite input stays a value in a list', () => {
+    const fig = emptyFig();
+    applyOk(fig, 'big = inf');
+    applyOk(fig, 'L = [1, 2]');
+    const r = applyOk(fig, 'L3 = L * big');
+    expect(r.defined).toBe(true);
+    expect(items(fig.valueOf('L3'))).toEqual([Infinity, Infinity]);
+    const s = applyOk(fig, 'L4 = L + big');
+    expect(s.defined).toBe(true);
+    expect(items(fig.valueOf('L4'))).toEqual([Infinity, Infinity]);
+  });
+
+  it('LANG-SM-22: ordinary list arithmetic is unchanged', () => {
+    const fig = emptyFig();
+    applyOk(fig, 'L = [1, 2]');
+    expect(applyOk(fig, 'L5 = L * 3').defined).toBe(true);
+    expect(items(fig.valueOf('L5'))).toEqual([3, 6]);
+    expect(applyOk(fig, 'L6 = L + 1').defined).toBe(true);
+    expect(items(fig.valueOf('L6'))).toEqual([2, 3]);
+  });
+
+  it('LANG-SM-22: a product of two functions that overflows gives overflow, as the same product written by hand', () => {
+    const fig = emptyFig();
+    applyOk(fig, 'f(x) = x');
+    const byHand = applyOk(fig, 'byhand = f(1e200) * f(1e200)');
+    expect(byHand.defined).toBe(false);
+    expect(byHand.reason).toBe('overflow');
+    applyOk(fig, 'g = f * f');
+    const viaFunction = applyOk(fig, 'h = g(1e200)');
+    expect(viaFunction.defined).toBe(false);
+    expect(viaFunction.reason).toBe('overflow');
+  });
+
+  it('LANG-SM-22: a power of a function that overflows gives overflow', () => {
+    const fig = emptyFig();
+    applyOk(fig, 'f(x) = x');
+    applyOk(fig, 'g3 = f^2');
+    const r = applyOk(fig, 'h3 = g3(1e200)');
+    expect(r.defined).toBe(false);
+    expect(r.reason).toBe('overflow');
+  });
+
+  it('LANG-SM-22: the other function operators overflow the same way', () => {
+    const fig = emptyFig();
+    applyOk(fig, 'f(x) = x');
+    applyOk(fig, 'k(x) = 1e308');
+    applyOk(fig, 'gs = f + k');
+    const sum = applyOk(fig, 'hs = gs(1e308)');
+    expect(sum.defined).toBe(false);
+    expect(sum.reason).toBe('overflow');
+    applyOk(fig, 'gd = f - k');
+    const diff = applyOk(fig, 'hd = gd(-1e308)');
+    expect(diff.defined).toBe(false);
+    expect(diff.reason).toBe('overflow');
+  });
+
+  it('LANG-SM-22: a function of an infinite input still gives an infinite result', () => {
+    const fig = emptyFig();
+    applyOk(fig, 'f(x) = x');
+    applyOk(fig, 'big = inf');
+    applyOk(fig, 'g = f * f');
+    const r = applyOk(fig, 'h = g(big)');
+    expect(r.defined).toBe(true);
+    expect(fig.valueOf('h')).toBe(Infinity);
+    applyOk(fig, 'g3 = f^2');
+    const s = applyOk(fig, 'h3 = g3(big)');
+    expect(s.defined).toBe(true);
+    expect(fig.valueOf('h3')).toBe(Infinity);
+  });
+
+  it('LANG-SM-22: ordinary function arithmetic is unchanged', () => {
+    const fig = emptyFig();
+    applyOk(fig, 'f(x) = x');
+    applyOk(fig, 'g = f * f');
+    expect(applyOk(fig, 'h = g(3)').defined).toBe(true);
+    expect(fig.valueOf('h')).toBe(9);
+    applyOk(fig, 'g3 = f^2');
+    expect(applyOk(fig, 'h3 = g3(4)').defined).toBe(true);
+    expect(fig.valueOf('h3')).toBe(16);
+  });
+});
+
+describe('LANG-SM-23: a slider range may not read the slider or anything downstream of it (ruling SM-23)', () => {
+  function figure(): ScratchFigure {
+    const fig = emptyFig();
+    applyOk(fig, 'a = 3 in 0..20');
+    applyOk(fig, 'b = a + 1');
+    return fig;
+  }
+
+  function expectCycle(src: string, fig: ScratchFigure, through: readonly string[]): void {
+    const r = fig.apply(src);
+    expect(r.ok, `${src} must be refused`).toBe(false);
+    const e = errOf(r, `for "${src}"`);
+    expect(e.kind, `${src}`).toBe('cycle');
+    for (const name of through) expect(JSON.stringify([e.path, e.related, e.message]), `${src} path names ${name}`).toContain(name);
+    expect(e.path, `${src} gives a path`).toBeDefined();
+    expect((e.path ?? []).length).toBeGreaterThanOrEqual(2);
+  }
+
+  it('LANG-SM-23: a = 3 in 0..b is a cycle with a path', () => {
+    expectCycle('a = 3 in 0..b', figure(), ['a', 'b']);
+  });
+
+  it('LANG-SM-23: changing the range of a with a in 0..b is a cycle too', () => {
+    expectCycle('a in 0..b', figure(), ['a', 'b']);
+  });
+
+  it('LANG-SM-23: the lower bound counts as well', () => {
+    expectCycle('a in b..30', figure(), ['a', 'b']);
+  });
+
+  it('LANG-SM-23: a range that reads the slider itself is a cycle', () => {
+    expectCycle('a = 3 in 0..a', figure(), ['a']);
+    expectCycle('a in 0..a', figure(), ['a']);
+    expectCycle('a in 0..a + 1', figure(), ['a']);
+  });
+
+  it('LANG-SM-23: a longer chain of dependents is found, and the path shows the chain', () => {
+    const fig = figure();
+    applyOk(fig, 'c = b * 2');
+    applyOk(fig, 'd = c - 1');
+    expectCycle('a in 0..d', fig, ['a', 'b', 'c', 'd']);
+  });
+
+  it('LANG-SM-23: a refused range leaves the slider as it was', () => {
+    const fig = figure();
+    expect(fig.apply('a in 0..b').ok).toBe(false);
+    expect(fig.apply('a = 3 in 0..b').ok).toBe(false);
+    expect(fig.lookup('a')?.free).toBe(true);
+    expect(fig.lookup('a')?.slider).toBe(true);
+    expect(fig.valueOf('a')).toBe(3);
+    expect(fig.valueOf('b')).toBe(4);
+    expect(fig.apply('a in 0..30').ok).toBe(true);
+  });
+
+  it('LANG-SM-23: a style value that reads a dependent of the object is a cycle (range and style edges both count)', () => {
+    const fig = figure();
+    const r = fig.apply('a = 3 with opacity = b / 10');
+    expect(r.ok).toBe(false);
+    expect(errOf(r).kind).toBe('cycle');
+  });
+
+  it('LANG-SM-23: a range that reads something that does not depend on the slider is accepted', () => {
+    const fig = figure();
+    applyOk(fig, 'n = 10');
+    applyOk(fig, 'u = n + 1');
+    expect(fig.apply('a in 0..n').ok).toBe(true);
+    expect(fig.apply('a = 3 in 0..u').ok).toBe(true);
+    expect(fig.apply('a in n..30').ok).toBe(true);
+    expect(fig.lookup('a')?.free).toBe(true);
+    expect(fig.lookup('a')?.slider).toBe(true);
+  });
+
+  it('LANG-SM-23: a new slider whose range reads an existing object is accepted', () => {
+    const fig = figure();
+    expect(fig.apply('s2 = 1 in 0..b').ok).toBe(true);
+    expect(fig.lookup('s2')?.free).toBe(true);
+  });
+
+  it('LANG-SM-23: a new name that reads itself in its range is refused (cycle or unknown name)', () => {
+    const fig = emptyFig();
+    const r = fig.apply('zz = 3 in 0..zz');
+    expect(r.ok).toBe(false);
+    expect(['cycle', 'unknown_name']).toContain(errOf(r).kind);
+  });
+});
+
+describe('LANG-SM-24: a #rrggbb colour after = is a value for the normaliser, the splitter and the lexer', () => {
+  function figure(): ScratchFigure {
+    const fig = emptyFig();
+    applyOk(fig, 'P = (1, 2)');
+    return fig;
+  }
+
+  it('LANG-SM-24: a colour followed by a property with a Unicode minus is accepted', () => {
+    const fig = figure();
+    const r = analyseLine('P with color = #ff0000, opacity = 1 − 0.5', fig);
+    if (!r.ok) throw new Error(`${r.kind}: ${r.message}`);
+    expect(r.value.op).toBe('restyle');
+  });
+
+  it('LANG-SM-24: the colour last is accepted (control), and the colour first gives the same answer', () => {
+    const fig = figure();
+    expect(analyseLine('P with opacity = 1 − 0.5, color = #ff0000', fig).ok).toBe(true);
+    expect(analyseLine('P with color = #ff0000, opacity = 1 − 0.5', fig).ok).toBe(true);
+  });
+
+  it('LANG-SM-24: a definition with a colour and a later Unicode minus is accepted', () => {
+    const fig = figure();
+    const r = fig.apply('Q = (3, 4) with color = #ff0000, opacity = 1 − 0.5');
+    expect(r.ok, r.ok ? '' : `${r.kind}: ${r.message}`).toBe(true);
+  });
+
+  it('LANG-SM-24: a Unicode minus after the colour is not reported as bad_character, for every colour length', () => {
+    const fig = figure();
+    for (const colour of ['#f00', '#f00f', '#ff0000', '#ff000080']) {
+      const src = `P with color = ${colour}, opacity = 1 − 0.5`;
+      const r = analyseLine(src, fig);
+      expect(r.ok, `${src}: ${r.ok ? '' : `${r.kind}: ${r.message}`}`).toBe(true);
+    }
+  });
+
+  it('LANG-SM-24: a colour, then several properties with a Unicode minus', () => {
+    const fig = figure();
+    const r = analyseLine('P with color = #ff0000, opacity = 1 − 0.5, size = 3 − 1', fig);
+    expect(r.ok, r.ok ? '' : `${r.kind}: ${r.message}`).toBe(true);
+  });
+
+  it('LANG-SM-24: a continuation line after a colour joins the line', () => {
+    const lines = splitLogicalLines('P = (1, 2) with color = #ff0000, opacity = (1 +\n 2) / 4\nQ = (1, 1)');
+    expect(lines.length).toBe(2);
+    expect(lines[0]!.firstLine).toBe(1);
+    expect(lines[0]!.lineCount).toBe(2);
+    expect(lines[1]!.firstLine).toBe(3);
+    expect(lines[1]!.text).toBe('Q = (1, 1)');
+  });
+
+  it('LANG-SM-24: parseProgram gives two good entries for that script and no bracket error', () => {
+    const out = parseProgram('P = (1, 2) with color = #ff0000, opacity = (1 +\n 2) / 4\nQ = (1, 1)');
+    expect(out.map((o) => o.line)).toEqual([1, 3]);
+    for (const o of out) expect(o.result.ok, o.result.ok ? '' : `${errOf(o.result).kind}: ${errOf(o.result).message}`).toBe(true);
+  });
+
+  it('LANG-SM-24: a colour on a later physical line of a continued line also works', () => {
+    const out = parseProgram('P = (1,\n 2) with color = #00ff00, opacity = 1 − 0.5\nQ = (1, 1)');
+    for (const o of out) expect(o.result.ok, o.result.ok ? '' : `line ${o.line}: ${errOf(o.result).kind}`).toBe(true);
+    expect(out.map((o) => o.line)).toEqual([1, 3]);
+  });
+
+  it('LANG-SM-24: a # that does not follow = is still a comment', () => {
+    const fig = figure();
+    expect(analyseLine('a9 = 3 #ff0000 − (', fig).ok).toBe(true);
+    expect(analyseLine('a9 = 3 # note − (', fig).ok).toBe(true);
+    const lines = splitLogicalLines('a9 = 3 #ff0000 (\nB9 = (1, 2)');
+    expect(lines.length).toBe(2);
+  });
+
+  it('LANG-SM-24: a comment after a colour stays a comment', () => {
+    const fig = figure();
+    const r = analyseLine('P with color = #ff0000 # a red point (', fig);
+    expect(r.ok, r.ok ? '' : `${r.kind}: ${r.message}`).toBe(true);
+    const lines = splitLogicalLines('P with color = #ff0000 # a red point (\nQ = (1, 1)');
+    expect(lines.length).toBe(2);
+  });
+
+  it('LANG-SM-24: tokenize reports no error for a colour followed by a Unicode minus', () => {
+    const { errors } = tokenize('P with color = #ff0000, opacity = 1 − 0.5', figure());
+    expect(errors).toEqual([]);
+  });
+
+  it('LANG-SM-24: completion on a continuation line after a colour does not offer start-of-line snippets', () => {
+    const fig = figure();
+    const src = 'P with color = #ff0000, opacity = (1 +\n  ';
+    const got = complete(src, src.length, fig);
+    expect(got.length).toBeGreaterThan(0);
+    expect(got.filter((c) => c.kind === 'snippet')).toEqual([]);
+    expect(got.map((c) => c.label)).not.toContain('@');
+    expect(got.map((c) => c.label)).not.toContain('#');
+    expect(got.some((c) => c.kind === 'object' || c.kind === 'function' || c.kind === 'constant')).toBe(true);
+  });
+
+  it('LANG-SM-24: the offers after a colour match the offers without it (control)', () => {
+    const fig = figure();
+    const withColour = 'P with color = #ff0000, opacity = (1 +\n  ';
+    const without = 'P with opacity = (1 +\n  ';
+    const kinds = (s: string): string[] => [...new Set(complete(s, s.length, fig).map((c) => c.kind))].sort();
+    expect(kinds(withColour)).toEqual(kinds(without));
+  });
+});

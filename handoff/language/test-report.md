@@ -93,9 +93,9 @@ All other tests pass, including the tests for Q1, Q3, Q5 to Q14 and the depth ru
 
 ## Regression tests
 
-`packages/kernel/test/spec/language/regressions.test.ts` holds 86 tests for the checker's findings LANG-SM-1 to LANG-SM-21 (`handoff/language/findings.md`). They use the public API only. Each finding has at least one test that fails on commit `35067a3` (before the fixes; checked by running the file against that commit) and passes when the finding is fixed. Hang and memory tests assert a time or size bound.
+`packages/kernel/test/spec/language/regressions.test.ts` holds 128 tests: 86 for the checker's round 1 findings LANG-SM-1 to LANG-SM-21 and 42 added in round 2 for LANG-SM-9 (reopened), LANG-SM-22, LANG-SM-23 and LANG-SM-24 (`handoff/language/findings.md`). They use the public API only. Each finding has at least one test that fails before its fix and passes after it. Hang and memory tests assert a time or size bound.
 
-Run against the worktree while the fixer was still working: 58 pass, 28 fail. The tests marked `fail` below are the ones the current code still fails; the fixer has to make them pass.
+Round 1 tests (86): all pass on the current worktree (they were checked against commit `35067a3`, where 59 fail and every finding has a failing test). Round 2 tests (42): checked against commit `35e9177` (the last commit before the round 2 fixes), where 32 fail and every round 2 finding has at least one failing test. Run against the worktree while the fixer is still working: 23 of the 42 pass, 19 fail (table at the end of this section).
 
 Notes on two tests that fix a reading the findings leave open:
 
@@ -137,16 +137,16 @@ Notes on two tests that fix a reading the findings leave open:
 |  | `LANG-SM-8: a string never spans a newline in the splitter` | pass |
 |  | `LANG-SM-8: a text closed with a low double quote ends there for the splitter too` | pass |
 |  | `LANG-SM-8: a closed text with brackets in it still hides them from the splitter` | pass |
-| LANG-SM-9 | `LANG-SM-9: a slider whose range reads a variable is free` | fail |
-|  | `LANG-SM-9: after such a slider is made, its range can be changed` | fail |
-|  | `LANG-SM-9: a number whose style value reads a variable is free` | fail |
-|  | `LANG-SM-9: a point with a showIf rule is free and is stored as free` | fail |
+| LANG-SM-9 | `LANG-SM-9: a slider whose range reads a variable is free` | pass |
+|  | `LANG-SM-9: after such a slider is made, its range can be changed` | pass |
+|  | `LANG-SM-9: a number whose style value reads a variable is free` | pass |
+|  | `LANG-SM-9: a point with a showIf rule is free and is stored as free` | pass |
 |  | `LANG-SM-9: a value that reads another object is still not free` | pass |
-| LANG-SM-10 | `LANG-SM-10: functions sharing an Env keep their own parameters` | fail |
-|  | `LANG-SM-10: a relation value keeps x and y while it calls a function in the same Env` | fail |
+| LANG-SM-10 | `LANG-SM-10: functions sharing an Env keep their own parameters` | pass |
+|  | `LANG-SM-10: a relation value keeps x and y while it calls a function in the same Env` | pass |
 |  | `LANG-SM-10: the figure gives the same answers` | pass |
-| LANG-SM-11 | `LANG-SM-11: exp(1000) beside an unrelated inf in a condition stays undefined with reason overflow` | fail |
-|  | `LANG-SM-11: an earlier object holding inf does not make later overflow infinite` | fail |
+| LANG-SM-11 | `LANG-SM-11: exp(1000) beside an unrelated inf in a condition stays undefined with reason overflow` | pass |
+|  | `LANG-SM-11: an earlier object holding inf does not make later overflow infinite` | pass |
 |  | `LANG-SM-11: a function of an infinite input still gives an infinite result (ruling Q4)` | pass |
 |  | `LANG-SM-11: the stored value of inf itself is unchanged` | pass |
 |  | `LANG-SM-11: an inf in a style value does not change the overflow of the value` | pass |
@@ -154,10 +154,10 @@ Notes on two tests that fix a reading the findings leave open:
 |  | `LANG-SM-12: "x" + undefined is undefined with a reason` | pass |
 |  | `LANG-SM-12: two defined texts still join` | pass |
 | LANG-SM-13 | `LANG-SM-13: the platform library is installed at the start` | pass |
-|  | `LANG-SM-13: a folded constant call and a recompiled one agree after the library changes` | fail |
-|  | `LANG-SM-13: gamma, beta, erf and erfc use the installed library` | fail |
-|  | `LANG-SM-13: a power of a function uses the installed library` | fail |
-|  | `LANG-SM-13: folding a range bound uses the installed library` | fail |
+|  | `LANG-SM-13: a folded constant call and a recompiled one agree after the library changes` | pass |
+|  | `LANG-SM-13: gamma, beta, erf and erfc use the installed library` | pass |
+|  | `LANG-SM-13: a power of a function uses the installed library` | pass |
+|  | `LANG-SM-13: folding a range bound uses the installed library` | pass |
 |  | `LANG-SM-13: under the platform library the answers are the usual ones` | pass |
 | LANG-SM-14 | `LANG-SM-14: 1/2x is ambiguous (control)` | pass |
 |  | `LANG-SM-14: 1/-2x is ambiguous_implicit` | pass |
@@ -165,32 +165,91 @@ Notes on two tests that fix a reading the findings leave open:
 |  | `LANG-SM-14: a/-2x is ambiguous_implicit` | pass |
 |  | `LANG-SM-14: clear spellings are accepted` | pass |
 | LANG-SM-15 | `LANG-SM-15: Fz([], 1) fits the first form (control)` | pass |
-|  | `LANG-SM-15: Fz([], A) fits the second form` | fail |
-|  | `LANG-SM-15: the order of the forms does not decide` | fail |
+|  | `LANG-SM-15: Fz([], A) fits the second form` | pass |
+|  | `LANG-SM-15: the order of the forms does not decide` | pass |
 |  | `LANG-SM-15: a call that fits no form is still refused` | pass |
-| LANG-SM-16 | `LANG-SM-16: an unknown name in the body is reported as unknown_name` | fail |
-|  | `LANG-SM-16: the same mistake in a body with a point result is reported too` | fail |
+| LANG-SM-16 | `LANG-SM-16: an unknown name in the body is reported as unknown_name` | pass |
+|  | `LANG-SM-16: the same mistake in a body with a point result is reported too` | pass |
 |  | `LANG-SM-16: a good body picks its form` | pass |
-| LANG-SM-17 | `LANG-SM-17: an unknown input name is ignored or reported, not thrown` | fail |
-|  | `LANG-SM-17: known and unknown inputs together` | fail |
-|  | `LANG-SM-17: the figure stays usable after the call` | fail |
-| LANG-SM-18 | `LANG-SM-18: leading blank lines count in the line number` | fail |
-|  | `LANG-SM-18: an error on a second line points at that line` | fail |
-|  | `LANG-SM-18: an error at the end of an interpolation points at the closing brace` | fail |
-|  | `LANG-SM-18: preview of an unnamed line reports columns of the text typed` | fail |
-|  | `LANG-SM-18: preview of an unnamed line keeps the typed columns when it starts with spaces` | fail |
-|  | `LANG-SM-18: the temporary name of a preview never reaches the writer` | fail |
+| LANG-SM-17 | `LANG-SM-17: an unknown input name is ignored or reported, not thrown` | pass |
+|  | `LANG-SM-17: known and unknown inputs together` | pass |
+|  | `LANG-SM-17: the figure stays usable after the call` | pass |
+| LANG-SM-18 | `LANG-SM-18: leading blank lines count in the line number` | pass |
+|  | `LANG-SM-18: an error on a second line points at that line` | pass |
+|  | `LANG-SM-18: an error at the end of an interpolation points at the closing brace` | pass |
+|  | `LANG-SM-18: preview of an unnamed line reports columns of the text typed` | pass |
+|  | `LANG-SM-18: preview of an unnamed line keeps the typed columns when it starts with spaces` | pass |
+|  | `LANG-SM-18: the temporary name of a preview never reaches the writer` | pass |
 | LANG-SM-19 | `LANG-SM-19: lex reports one bad_character for an emoji` | pass |
 |  | `LANG-SM-19: tokenize reports one error and one error token covering the whole character` | pass |
 |  | `LANG-SM-19: parseLine gives one error for an emoji in a line` | pass |
 |  | `LANG-SM-19: two emoji give two errors` | pass |
-| LANG-SM-20 | `LANG-SM-20: a reader of P_1 is blocked by a failed P_{1} line` | fail |
+| LANG-SM-20 | `LANG-SM-20: a reader of P_1 is blocked by a failed P_{1} line` | pass |
 |  | `LANG-SM-20: a reader of P_{1} is blocked by a failed P_1 line` | pass |
 |  | `LANG-SM-20: plain subscripts keep working (control)` | pass |
-| LANG-SM-21 | `LANG-SM-21: tokens are returned for every line of a script over 2,000 characters` | fail |
-|  | `LANG-SM-21: columns restart on every line` | fail |
+| LANG-SM-21 | `LANG-SM-21: tokens are returned for every line of a script over 2,000 characters` | pass |
+|  | `LANG-SM-21: columns restart on every line` | pass |
 |  | `LANG-SM-21: a single line over 2,000 characters is still reported as a limit` | pass |
 
-Findings whose tests all pass now: LANG-SM-1, LANG-SM-2, LANG-SM-3, LANG-SM-4, LANG-SM-5, LANG-SM-6, LANG-SM-7, LANG-SM-8, LANG-SM-12, LANG-SM-14, LANG-SM-19.
+Round 1 findings, all tests pass now: LANG-SM-1 to LANG-SM-21.
 
-Findings with at least one failing test now: LANG-SM-9, LANG-SM-10, LANG-SM-11, LANG-SM-13, LANG-SM-15, LANG-SM-16, LANG-SM-17, LANG-SM-18, LANG-SM-20, LANG-SM-21.
+Round 1 findings with a failing test now: none.
+
+
+### Round 2 tests
+
+Notes on readings the findings leave open:
+
+- LANG-SM-22, a list item that overflows: the findings do not say whether the item or the whole list becomes undefined. The list tests accept an undefined list with reason `overflow`, or a defined list with no infinity in it. A defined list holding `inf` made from finite numbers fails the test.
+- LANG-SM-22, an infinity from an infinite input (`L * big` with `big = inf`, `g(big)` with `g = f * f`) must stay a defined `Infinity` (ruling Q4). Lists come back as `Float64Array`, so the list tests compare `Array.from(...)`.
+- LANG-SM-23, the style case (`a = 3 with opacity = b / 10` with `b = a + 1` is `cycle`) follows the last sentence of ruling SM-23, "Range and style edges are part of the cycle test".
+- LANG-SM-23, a new name read in its own range (`zz = 3 in 0..zz`) accepts `cycle` or `unknown_name`, because design 3.19 gives `unknown_name` for a self-reference before the object exists.
+- LANG-SM-24: the hex colour is not in the language docs; the tests take the syntax from the finding (`=` then `#` and 3, 4, 6 or 8 hex digits). A `#` that does not follow `=` stays a comment.
+- LANG-SM-9, command calls use the `Distance(Point, Point) -> Number` command of the test helpers.
+
+| Finding | Tests | Now |
+|---|---|---|
+| LANG-SM-9 (reopened) | `a style value that calls a command leaves the number free` | pass |
+|  | `a number with a command in its style value can be given a new range` | pass |
+|  | `a slider whose range bound calls a command is free and stays a slider` | pass |
+|  | `a command in the lower bound behaves the same way` | pass |
+|  | `after such a slider is made, its range can be changed` (command in the bound) | pass |
+|  | `a point with a showIf rule that calls a command is free and stays draggable` | pass |
+|  | `a command in the value itself still makes the object dependent` | pass |
+|  | `a command in a style value does not add the command inputs to the value reads` | pass |
+| LANG-SM-22 | `[1, 2] * 1e308 does not store an infinity made from finite numbers` | fail |
+|  | `the list literal on the left gives the same answer` | fail |
+|  | `every list-with-number operator guards its result` (`+ - * /`) | fail |
+|  | `the single-number line gives overflow, and the list agrees with it` | fail |
+|  | `an infinity that follows from an infinite input stays a value in a list` | pass |
+|  | `ordinary list arithmetic is unchanged` | pass |
+|  | `a product of two functions that overflows gives overflow, as the same product written by hand` | fail |
+|  | `a power of a function that overflows gives overflow` | fail |
+|  | `the other function operators overflow the same way` | fail |
+|  | `a function of an infinite input still gives an infinite result` | fail |
+|  | `ordinary function arithmetic is unchanged` | pass |
+| LANG-SM-23 | `a = 3 in 0..b is a cycle with a path` | pass |
+|  | `changing the range of a with a in 0..b is a cycle too` | pass |
+|  | `the lower bound counts as well` | pass |
+|  | `a range that reads the slider itself is a cycle` | pass |
+|  | `a longer chain of dependents is found, and the path shows the chain` | pass |
+|  | `a refused range leaves the slider as it was` | pass |
+|  | `a style value that reads a dependent of the object is a cycle (range and style edges both count)` | pass |
+|  | `a range that reads something that does not depend on the slider is accepted` | pass |
+|  | `a new slider whose range reads an existing object is accepted` | pass |
+|  | `a new name that reads itself in its range is refused (cycle or unknown name)` | pass |
+| LANG-SM-24 | `a colour followed by a property with a Unicode minus is accepted` | fail |
+|  | `the colour last is accepted (control), and the colour first gives the same answer` | fail |
+|  | `a definition with a colour and a later Unicode minus is accepted` | fail |
+|  | `a Unicode minus after the colour is not reported as bad_character, for every colour length` | fail |
+|  | `a colour, then several properties with a Unicode minus` | fail |
+|  | `a continuation line after a colour joins the line` | fail |
+|  | `parseProgram gives two good entries for that script and no bracket error` | fail |
+|  | `a colour on a later physical line of a continued line also works` | fail |
+|  | `a # that does not follow = is still a comment` | pass |
+|  | `a comment after a colour stays a comment` | pass |
+|  | `tokenize reports no error for a colour followed by a Unicode minus` | fail |
+|  | `completion on a continuation line after a colour does not offer start-of-line snippets` | fail |
+|  | `the offers after a colour match the offers without it (control)` | fail |
+
+Command: `npx vitest run packages/kernel/test/spec` gives 1198 tests, 1179 passed, 19 failed (all in `regressions.test.ts`: 8 for LANG-SM-22, 11 for LANG-SM-24). The fixer's uncommitted changes in `packages/kernel/src/language/` are in the worktree and already make the LANG-SM-9 and LANG-SM-23 tests pass. `npm run typecheck` and `eslint` on the test file are clean.
