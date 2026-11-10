@@ -2174,7 +2174,7 @@ describe('LANG-SM-29: relation coefficients and sampling follow the overflow rul
   //   as every other value kind (pipeline: "Fix every case of a rule").
   // - A coefficient that is infinite because an input was infinite (`big * x + y == 1`) stays a value.
   // - Sampling a relation at a point where the formula overflows gives NaN from `residual` and no
-  //   `true` from `test`. Either call leaves reason, via and detail on the caller's Env as they were.
+  //   `true` from `test`. Either call leaves reason, cause and detail on the caller's Env as they were.
   const SETUP = [
     'r = 1e200',
     'big = inf',
@@ -2309,7 +2309,7 @@ describe('LANG-SM-29: relation coefficients and sampling follow the overflow rul
     expect(r.reason).toBe('overflow');
   });
 
-  describe('sampling a relation leaves the caller reason, via and detail as they were', () => {
+  describe('sampling a relation leaves the caller reason, cause and detail as they were', () => {
     /** The relation, and the Env it was made in. */
     function made(text: string): { rel: RelationValue; env: ReturnType<typeof createEnv> } {
       const fig = emptyFig();
@@ -2342,19 +2342,19 @@ describe('LANG-SM-29: relation coefficients and sampling follow the overflow rul
         expect(Number.isNaN(res), `${text} at (${bx}, ${by}): ${res}`).toBe(true);
         expect(rel.test(bx, by), `${text} at (${bx}, ${by})`).not.toBe(true);
         expect(env.reason).toBeUndefined();
-        expect(env.via).toBeUndefined();
+        expect(env.cause).toBeUndefined();
         expect(env.detail).toBeUndefined();
       }, 10_000);
 
       it(`LANG-SM-29: "${text}" at an overflowing point keeps the reason the caller already had`, () => {
         const { rel, env } = made(text);
         env.reason = 'division_by_zero';
-        env.via = VIA;
+        env.cause = VIA;
         env.detail = 'caller detail';
         rel.residual(bx, by);
         rel.test(bx, by);
         expect(env.reason).toBe('division_by_zero');
-        expect(env.via).toBe(VIA);
+        expect(env.cause).toBe(VIA);
         expect(env.detail).toBe('caller detail');
       }, 10_000);
 
@@ -2386,15 +2386,15 @@ describe('LANG-SM-29: relation coefficients and sampling follow the overflow rul
       const rel = second.value as RelationValue;
       expect(rel.residual(2, 1)).toBe(5);
       env.reason = 'limit';
-      env.via = VIA;
+      env.cause = VIA;
       env.detail = 'before';
       expect(Number.isNaN(rel.residual(1e200, 0))).toBe(true);
       expect(rel.test(1e200, 0)).not.toBe(true);
       expect(env.reason).toBe('limit');
-      expect(env.via).toBe(VIA);
+      expect(env.cause).toBe(VIA);
       expect(env.detail).toBe('before');
       env.reason = undefined;
-      env.via = undefined;
+      env.cause = undefined;
       env.detail = undefined;
       expect(Number.isNaN(rel.residual(1e200, 0))).toBe(true);
       expect(env.reason).toBeUndefined();
@@ -2410,11 +2410,11 @@ describe('LANG-SM-29: relation coefficients and sampling follow the overflow rul
       if (!r.defined) throw new Error('f did not evaluate');
       const fn = r.value as FunctionValue;
       env.reason = 'limit';
-      env.via = VIA;
+      env.cause = VIA;
       env.detail = 'before';
       expect(Number.isNaN(fn.call(1e200))).toBe(true);
       expect(env.reason).toBe('limit');
-      expect(env.via).toBe(VIA);
+      expect(env.cause).toBe(VIA);
       expect(env.detail).toBe('before');
     });
   });

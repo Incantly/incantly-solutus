@@ -508,7 +508,7 @@ describe('language/design.md 3.14 undefined reasons', () => {
     expect(r).toEqual({ defined: true, value: 5 });
   });
 
-  it('errors.md 8: downstream of an undefined object is undefined input_undefined, with via naming the input', () => {
+  it('errors.md 8: downstream of an undefined object is undefined input_undefined, with cause naming the input', () => {
     const fig = newFig();
     okValue(fig.apply('pu = sqrt(-1)'));
     const pu = fig.lookup('pu');
@@ -519,7 +519,7 @@ describe('language/design.md 3.14 undefined reasons', () => {
     expect(r.defined).toBe(false);
     if (!r.defined) {
       expect(r.reason).toBe('input_undefined');
-      expect(r.via).toBe(pu?.id);
+      expect(r.cause).toBe(pu?.id);
     }
     // and through the figure
     const applied = okValue(fig.apply('out = pu + 1'));

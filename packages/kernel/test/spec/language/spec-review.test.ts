@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { ScratchFigure } from '@incantly/kernel';
-import type { CommandSpec, LanguageError } from '@incantly/kernel';
-import { COMMANDS, check, errOf, expectWellFormed, form, newFig, p } from './helpers';
+import { ScratchFigure, analyseLine, compileLine, createEnv, evaluate } from '@incantly/kernel';
+import type { CommandSpec, LanguageError, ObjId, Undefined } from '@incantly/kernel';
+import { COMMANDS, check, errOf, expectWellFormed, form, newFig, okValue, p } from './helpers';
 
 /**
  * Tests for the spec-review items A1 to A4 (handoff/language/review.md, step 8 of docs/process/pipeline.md).
@@ -134,5 +134,111 @@ describe('spec review A1: an action command used as a value is refused', () => {
     const e2 = errOf(check('P2 = Hide(A)', fig()));
     expect(e2.fingerprint).toBe(e1.fingerprint);
     expect(e2.message).toBe(e1.message);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// A2. The undefined cascade link is `cause`, never `via`
+// ---------------------------------------------------------------------------------------------
+
+describe('spec review A2: undefined values carry their cascade link as `cause`', () => {
+  /** Reads `cause` without needing the field to exist in the declared type, so this file compiles before and after the rename. */
+  const causeOf = (o: object): ObjId | undefined => (o as { cause?: ObjId }).cause;
+  const causePart = (o: object): { cause?: ObjId } => {
+    const c = causeOf(o);
+    return c === undefined ? {} : { cause: c };
+  };
+
+  function evalOut(fig: ScratchFigure, src: string) {
+    const line = okValue(analyseLine(src, fig));
+    const compiled = okValue(compileLine(line));
+    return evaluate(compiled, fig.env(line.slots));
+  }
+
+  it('contracts/values.ts and README decision 2: Undefined is { reason, detail?, cause? }', () => {
+    // A value-level check of the contract: a result built by the language can be assigned to the shared shape.
+    const fig = newFig();
+    okValue(fig.apply('pu = sqrt(-1)'));
+    const pu = fig.lookup('pu');
+    const r = evalOut(fig, 'out = pu + 1');
+    expect(r.defined).toBe(false);
+    if (r.defined) return;
+    const asShared: Undefined = { reason: r.reason, ...(r.detail !== undefined ? { detail: r.detail } : {}), ...causePart(r) };
+    expect(asShared.cause).toBe(pu?.id);
+  });
+
+  it('evaluate() of a line downstream of an undefined object gives input_undefined with `cause` naming the input', () => {
+    const fig = newFig();
+    okValue(fig.apply('pu = sqrt(-1)'));
+    const pu = fig.lookup('pu');
+    expect(pu).toBeDefined();
+    const r = evalOut(fig, 'out = pu + 1');
+    expect(r.defined).toBe(false);
+    if (r.defined) return;
+    expect(r.reason).toBe('input_undefined');
+    expect(causeOf(r)).toBe(pu?.id);
+  });
+
+  it('evaluate() results never carry a `via` field', () => {
+    const fig = newFig();
+    okValue(fig.apply('pu = sqrt(-1)'));
+    const r = evalOut(fig, 'out = pu + 1');
+    expect(Object.keys(r)).not.toContain('via');
+    expect('via' in r).toBe(false);
+  });
+
+  it('an undefined that starts here (no upstream object) has no cause', () => {
+    const fig = newFig();
+    const r = evalOut(fig, 'out = sqrt(-1)');
+    expect(r.defined).toBe(false);
+    if (r.defined) return;
+    expect(r.reason).toBe('out_of_domain');
+    expect(causeOf(r)).toBeUndefined();
+  });
+
+  it('through a chain the cause is an undefined object upstream: the nearest input or the root, never an unrelated one', () => {
+    // The docs differ on which: language/errors.md 8 says "nearest undefined input"; kernel/design.md section 5 says
+    // the input's own cause when inherited, so `cause` names a root. Both readings are accepted. The field must be
+    // `cause`, must name one of the undefined objects on the chain, and must not name a defined one.
+    const fig = newFig();
+    okValue(fig.apply('u1 = sqrt(-1)'));
+    okValue(fig.apply('u2 = u1 + 1'));
+    okValue(fig.apply('u3 = u2 * 2'));
+    const ids = ['u1', 'u2', 'u3'].map((n) => fig.lookup(n)?.id);
+    const r = evalOut(fig, 'out = u3 - 1');
+    expect(r.defined).toBe(false);
+    if (r.defined) return;
+    expect(r.reason).toBe('input_undefined');
+    expect(ids).toContain(causeOf(r));
+    expect(causeOf(r)).not.toBe(fig.lookup('a')?.id);
+  });
+
+  it('the env keeps the link in `cause`, not in `via`', () => {
+    const fig = newFig();
+    okValue(fig.apply('pu = sqrt(-1)'));
+    const pu = fig.lookup('pu');
+    const line = okValue(analyseLine('out = pu + 1', fig));
+    const compiled = okValue(compileLine(line));
+    const env = fig.env(line.slots);
+    evaluate(compiled, env);
+    expect(causeOf(env)).toBe(pu?.id);
+    expect('via' in env).toBe(false);
+  });
+
+  it('createEnv gives an Env with no cause and no via', () => {
+    const env = createEnv({ slots: 4 });
+    expect(causeOf(env)).toBeUndefined();
+    expect('via' in env).toBe(false);
+  });
+
+  it('a function value called with an undefined input reports the reason and the cause the same way', () => {
+    const fig = newFig();
+    okValue(fig.apply('pu = sqrt(-1)'));
+    const r = evalOut(fig, 'out = f(pu)');
+    expect(r.defined).toBe(false);
+    if (r.defined) return;
+    expect(r.reason).toBe('input_undefined');
+    expect(causeOf(r)).toBe(fig.lookup('pu')?.id);
+    expect('via' in r).toBe(false);
   });
 });
