@@ -162,6 +162,9 @@ export class OverlayFigure implements FigureView {
   dependentsOf(id: ObjId): readonly ObjectInfo[] {
     return this.base.dependentsOf(id);
   }
+  styleRulesReading(id: ObjId): readonly { readonly name: string; readonly source: string }[] {
+    return this.base.styleRulesReading?.(id) ?? [];
+  }
   read(id: ObjId): unknown {
     return this.base.read?.(id);
   }
@@ -193,7 +196,7 @@ class Checker {
   ctx: { name?: string | undefined; rhsStart?: number | undefined; rhsEnd?: number | undefined; defineLine?: boolean | undefined } = {};
 
   constructor(
-    readonly fig: FigureView,
+    public fig: FigureView,
     readonly parsed: ParsedLine,
     readonly opts: CheckOptions,
   ) {
@@ -232,6 +235,22 @@ class Checker {
       this.reads = savedReads;
       this.usesT = savedT;
       this.hasCommand = savedCommand;
+    }
+  }
+
+  /**
+   * Runs `fn` with the object a defining line is making visible under its own name (Q-R4-1), so a name in the line's
+   * `with` list resolves to it. `self` is undefined when the object already exists (its name resolves anyway) or its type
+   * is not known because the line already has an error.
+   */
+  withSelf<R>(self: ObjectInfo | undefined, fn: () => R): R {
+    if (!self) return fn();
+    const saved = this.fig;
+    this.fig = new OverlayFigure(saved, new Map([[self.name, self]]));
+    try {
+      return fn();
+    } finally {
+      this.fig = saved;
     }
   }
 

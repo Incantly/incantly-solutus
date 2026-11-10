@@ -13,6 +13,7 @@ import { children } from './relation';
 import { fail, formatNumber } from './runtime';
 import type { Env, FunctionValue, RelationValue } from './runtime';
 import type { Pt } from '../contracts/values';
+import { SELF_ID } from './table';
 import type { CommandForm, CommandSpec, ParamSpec } from './table';
 import type { RelTree, TNode } from './tnode';
 import { tyStr } from './types';
@@ -39,6 +40,8 @@ export interface CompiledArg {
 export interface CompileOptions {
   /** Runs a command form inside an expression. Provided by the kernel. */
   runCommand?: (spec: CommandSpec, form: CommandForm, args: readonly CompiledArg[], env: Env) => unknown;
+  /** The id the kernel gave the object this line defines: a style value that names that object (`SELF_ID`) reads it (Q-R4-1). */
+  selfId?: ObjId;
 }
 
 export interface CompiledLine extends Compiled<unknown> {
@@ -261,6 +264,11 @@ function fieldOf(type: string, field: string, v: unknown): unknown {
 class Compiler {
   constructor(readonly opts: CompileOptions) {}
 
+  /** The id to read: the object a defining line makes, when a style value names it before it exists, is `selfId`. */
+  objId(id: ObjId): ObjId {
+    return id === SELF_ID && this.opts.selfId !== undefined ? this.opts.selfId : id;
+  }
+
   isConstant(n: TNode): boolean {
     switch (n.n) {
       case 'ref':
@@ -329,7 +337,7 @@ class Compiler {
       case 'text':
         return this.compileText(n);
       case 'ref': {
-        const id = n.id;
+        const id = this.objId(n.id);
         const isN = isNum(n);
         return (env) => {
           const v = env.read(id);
@@ -750,7 +758,7 @@ class Compiler {
 
   compileCallObj(n: TNode & { n: 'callObj' }): Fn {
     const args = n.args.map((a) => this.compile(a));
-    const id = n.id;
+    const id = this.objId(n.id);
     const isN = isNum(n);
     return (env) => {
       const fv = env.read(id) as FunctionValue | undefined;
@@ -868,7 +876,7 @@ class Compiler {
 
   compileTick(n: TNode & { n: 'tick' }): Fn {
     const a = this.compile(n.arg);
-    const id = n.id;
+    const id = this.objId(n.id);
     const ticks = n.ticks;
     return (env) => {
       const x = a(env);

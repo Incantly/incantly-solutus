@@ -32,7 +32,7 @@ export type {
 } from './runtime';
 
 // Commands and functions as data
-export { createCommandTable, createFunctionTable, checkTable, formText, EMPTY_COMMANDS } from './table';
+export { createCommandTable, createFunctionTable, checkTable, formText, EMPTY_COMMANDS, SELF_ID } from './table';
 export type {
   CommandForm, CommandSpec, CommandTable, FigureView, FormLike, FunctionForm, FunctionSpec, FunctionTable, ObjectInfo, ParamKind, ParamSpec,
   BoundArg, RuleFactory, TableProblem, ConstValue,

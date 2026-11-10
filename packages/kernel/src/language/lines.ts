@@ -12,6 +12,7 @@ import type { ErrorExtra, LanguageError } from './errors';
 import { nameProblem, reservedGroup, reservedGroupText } from './names';
 import { printLineNode } from './printer';
 import { COLOR_WORDS, DIRECTIVES, PROPERTIES, own } from './props';
+import { SELF_ID } from './table';
 import type { ObjectInfo } from './table';
 import type { TNode } from './tnode';
 import { T, fnOf, tyEq, tyStr } from './types';
@@ -205,7 +206,8 @@ function checkRedefinition(c: Checker, target: NameRef, existing: ObjectInfo | u
   if (checkCycle(c, target, existing, lineSpan)) return;
   // dependents
   const deps = c.fig.dependentsOf(existing.id);
-  if (deps.length === 0) return;
+  const rules = c.fig.styleRulesReading?.(existing.id) ?? [];
+  if (deps.length === 0 && rules.length === 0) return;
   const info: ObjectInfo = { ...existing, type: newTy };
   const overlay = new OverlayFigure(c.fig, new Map([[target.name, info]]));
   const broken: string[] = [];
@@ -221,6 +223,16 @@ function checkRedefinition(c: Checker, target: NameRef, existing: ObjectInfo | u
     } else if (r.value.type && !tyEq(r.value.type, d.type) && !(r.value.type.k === 'Function' && d.type.k === 'Function' && r.value.type.ret === d.type.ret)) {
       broken.push(`${d.name}: ${d.source} would change from ${tyStr(d.type)} to ${tyStr(r.value.type)}`);
       names.push(d.name);
+    }
+  }
+  // separate property rules that read the object (`P with opacity = f(1)`) are re-checked the same way
+  for (const r of c.fig.styleRulesReading?.(existing.id) ?? []) {
+    const p = parseOne(r.source);
+    if (!p) continue;
+    const res = checkLine(p, overlay, { skipGraphChecks: true });
+    if (!res.ok) {
+      broken.push(`${r.name}: ${r.source} would be a ${res.kind} error`);
+      if (!names.includes(r.name)) names.push(r.name);
     }
   }
   if (broken.length > 0) {
@@ -446,11 +458,15 @@ function checkDefine(c: Checker, node: Extract<LineNode, { k: 'define' }>): Part
       range = c.apart('range', () => checkRange(c, rangeClause, tn ?? undefined));
     }
   }
-  const style = node.style ? c.apart('style', () => checkStyle(c, node.style as readonly StyleItem[])) : undefined;
+  const existing = c.fig.lookup(t.name);
+  // Q-R4-1: in the `with` list of a first definition the name being defined is the new object
+  const ownTy = tn ? (tn.n === 'relation' ? shapeType(tn.shape) : tn.ty) : undefined;
+  const self: ObjectInfo | undefined = ownTy && !existing ? { id: SELF_ID, name: t.name, type: ownTy, free: false, ...(tn?.unit ? { unit: tn.unit } : {}) } : undefined;
+  const style = node.style ? c.apart('style', () => c.withSelf(self, () => checkStyle(c, node.style as readonly StyleItem[]))) : undefined;
+  c.styleReads.delete(SELF_ID);
   if (!tn) return undefined;
 
   const type = tn.n === 'relation' ? shapeType(tn.shape) : tn.ty;
-  const existing = c.fig.lookup(t.name);
   if (c.errors.length === 0) {
     checkRedefinition(c, t, existing, type, lineSpan(c, node, expr.e));
     if (existing && existing.type.k === 'Number' && type.k === 'Number' && existing.slider && !node.range && !isFreeNode(c, tn)) {
@@ -600,7 +616,11 @@ function checkFunction(c: Checker, node: Extract<LineNode, { k: 'function' }>): 
   } finally {
     c.popFrame();
   }
-  const style = node.style ? c.apart('style', () => checkStyle(c, node.style as readonly StyleItem[])) : undefined;
+  const existing = c.fig.lookup(t.name);
+  const ownTy = body && ok && (body.ty.k === 'Number' || body.ty.k === 'Point') ? fnOf(body.ty.k, params.length) : undefined;
+  const self: ObjectInfo | undefined = ownTy && !existing ? { id: SELF_ID, name: t.name, type: ownTy, free: false } : undefined;
+  const style = node.style ? c.apart('style', () => c.withSelf(self, () => checkStyle(c, node.style as readonly StyleItem[]))) : undefined;
+  c.styleReads.delete(SELF_ID);
   if (!body || !ok) return undefined;
   if (body.ty.k !== 'Number' && body.ty.k !== 'Point') {
     c.err('type_mismatch', body.s, body.e, 'lang.type_mismatch_where', { why: `A function returns a Number or a Point, but this is a ${tyStr(body.ty)}` }, {
@@ -611,7 +631,6 @@ function checkFunction(c: Checker, node: Extract<LineNode, { k: 'function' }>): 
     return undefined;
   }
   const type = fnOf(body.ty.k, params.length);
-  const existing = c.fig.lookup(t.name);
   if (c.errors.length === 0) checkRedefinition(c, t, existing, type, { s: t.s, e: node.expr.e });
   if (c.errors.length > 0) return undefined;
   return {

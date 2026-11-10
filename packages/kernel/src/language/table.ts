@@ -162,16 +162,32 @@ export interface ObjectInfo {
   readonly source?: string;
 }
 
+/**
+ * The id a style value uses for the object its own line is defining, when that object does not exist yet (Q-R4-1: in the
+ * `with` list of a defining line the name being defined means the new object). It is never an input of anything: a style
+ * edge cannot form a cycle. Compile with `selfId` set to the id the kernel gives the new object.
+ */
+export const SELF_ID = -1 as ObjId;
+
 /** Read-only facts the language needs from the kernel. The kernel implements it. */
 export interface FigureView {
   lookup(name: string): ObjectInfo | undefined;
   byId(id: ObjId): ObjectInfo | undefined;
   /** All object names in creation order (the most recent last). */
   names(): readonly string[];
-  /** Direct inputs of an object, for the cycle test. */
+  /** Direct inputs of an object, for the cycle test: value and slider-bound reads, never style reads (kernel design 9.2). */
   inputsOf(id: ObjId): readonly ObjId[];
-  /** Objects that read `id` directly, with their definition source. */
+  /**
+   * Objects that read `id` directly, with their definition source: through their value, a slider bound or a style on
+   * their defining line. This is the list a redefinition re-checks (language design 3.12 step 4). Unlike `inputsOf`, it
+   * includes style readers, because a style edge cannot form a cycle but a redefined input can still break the style.
+   */
   dependentsOf(id: ObjId): readonly ObjectInfo[];
+  /**
+   * Separate property rules (`P with opacity = f(1)` written after `P`) whose values read `id`, each as the line's source,
+   * for the same re-check. Optional: a figure without separate rules leaves it out.
+   */
+  styleRulesReading?(id: ObjId): readonly { readonly name: string; readonly source: string }[];
   readonly commands: CommandTable;
   /** Built-in functions; defaults to the language's own table. */
   readonly functions?: FunctionTable | undefined;
