@@ -45,7 +45,7 @@ An object whose value cannot be computed stores `{ reason, detail?, cause? }`.
 | `index_out_of_range` | List index below 1 or above the length |
 | `empty_list` | `max([])`, `mean([])` and similar |
 | `not_integer` | A function needing a whole number (`fact(2.5)`, list index 1.5) |
-| `input_undefined` | Cascade: an input is undefined; `cause` names it |
+| `input_undefined` | Cascade: an input is undefined; `cause` names the nearest undefined input, and following the `cause` links reaches the root |
 | `no_value_yet` | A state read before its first frame (see core 7.2) |
 
 Other areas add reasons (`parallel`, `no_root`, `no_convergence`). This area owns the ones above.
@@ -349,7 +349,7 @@ These never raise errors. After each accepted line the `draw` result carries `un
 | `L[0]`, `L[5]` on a 3-element list | undefined `index_out_of_range` |
 | `max([])` | undefined `empty_list` |
 | `fact(2.5)`, `L[1.5]` | undefined `not_integer` |
-| Downstream of any undefined | undefined `input_undefined`, `cause` = nearest undefined input |
+| Downstream of any undefined | undefined `input_undefined`, `cause` = the nearest undefined input (following `cause` links reaches the root) |
 
 The `figure` tool reports `{ name, reason, cause }`. The Algebra view shows the reason beside a dash.
 

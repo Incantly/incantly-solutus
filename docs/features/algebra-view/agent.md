@@ -44,7 +44,7 @@ A redefinition returns `"redefined": true` and the old summary in `was`, so the 
   { "name": "A", "type": "Point", "def": "A = (1, 2)", "value": "(1, 2)", "visible": true, "aux": false },
   { "name": "s", "type": "Segment", "def": "Segment(A, B)", "value": "5", "visible": true, "aux": false },
   { "name": "h", "type": "Number", "def": "h = √(a² + b²)", "value": "—",
-    "undefined": { "reason": "input_undefined", "via": "b" }, "visible": true, "aux": false }
+    "undefined": { "reason": "input_undefined", "cause": "b" }, "visible": true, "aux": false }
 ] }
 ```
 

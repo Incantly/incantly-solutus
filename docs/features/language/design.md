@@ -507,7 +507,7 @@ interface Compiled<T> { eval: (env: Env) => T; reads: ReadonlySet<ObjectId>; use
 ```
 
 - `reads` is the set of object ids the expression reads. The rule's inputs and the downstream lists come from it directly; no separate dependency scan.
-- Undefined is carried as NaN with a side channel: a numeric closure that detects a domain problem writes the reason code into `env.reason` before returning NaN. The first reason set in an evaluation wins, so `ln(0) + sqrt(-1)` reports `out_of_domain` from `ln`. Each object stores `{ reason, detail?, cause? }` (the shared undefined value, README decision 2), where `cause` is the input object that was already undefined (a cascade).
+- Undefined is carried as NaN with a side channel: a numeric closure that detects a domain problem writes the reason code into `env.reason` before returning NaN. The first reason set in an evaluation wins, so `ln(0) + sqrt(-1)` reports `out_of_domain` from `ln`. Each object stores `{ reason, detail?, cause? }` (the shared undefined value, README decision 2), where `cause` is the nearest undefined input, a direct input of this object that was already undefined (a cascade). Following the `cause` links reaches the root.
 - Constant folding runs at build time on subtrees with no reads and no `t`.
 - A Function object compiles to `(x: number) => number` plus a batch form `(xs: Float64Array, out: Float64Array) => void` that the plotter uses; the batch form reuses the same closure tree with a loop in each node when profiling shows a gain.
 

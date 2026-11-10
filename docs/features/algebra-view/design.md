@@ -103,7 +103,7 @@ interface AlgebraRow {
   valueText: string | null;          // null when mode hides the value or the object has none
   descriptionText: string;           // "Midpoint of A and B"
   lines: [string, string | null];    // what the panel shows for the active mode: first row, optional second row
-  undefinedInfo: { reason: string; text: string; via?: string } | null;
+  undefinedInfo: { reason: string; text: string; cause?: string } | null;
   slider: SliderSpec | null;
   approx: boolean;                   // value text was rounded or is a platform-approximate result
   version: number;                   // changes when any text changes; the panel diffs on it
@@ -254,7 +254,7 @@ Each row has a disclosure triangle (when it has inputs or dependents). Expanded,
 
 Names are links: clicking selects the object, Alt+click scrolls the list to it. For the dependency sort the same data draws as an indented tree under free objects. Data comes from the kernel's input and downstream lists, no extra scan.
 
-For an undefined row the expansion adds the chain: `undefined because B is undefined because …`, following `via` links to the first cause, with the reason in words.
+For an undefined row the expansion adds the chain: `undefined because B is undefined because …`, following `cause` links to the first cause, with the reason in words.
 
 ### 3.8 Editing rows
 
@@ -423,7 +423,7 @@ All logic is in the language area. The bar's responsibilities: pass the text, cu
 The text form used by tools:
 
 ```ts
-interface Summary { name: string; type: TypeName; def: string; value: string | null; text: string; undef?: { reason: string; via?: string } }
+interface Summary { name: string; type: TypeName; def: string; value: string | null; text: string; undef?: { reason: string; cause?: string } }
 function summarize(obj: ObjectView, opts?: { maxChars?: number; format?: ValueFormat }): Summary;
 ```
 
