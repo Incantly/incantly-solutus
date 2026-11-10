@@ -16,7 +16,7 @@ export type { CompiledExpression } from './expr';
 
 export { SceneRuntime } from './runtime/runtime';
 export type { RuntimeOptions, RuntimeStats, SceneErrorRecord, SceneFunction, SeekOptions } from './runtime/runtime';
-export { FilmController, accumulatedNotes, applyBeatCues, applyShowHide, beatCard, beatTitle, beatWrite, beginShowMe, cueSfx, framePart, isPausePoint, partBox, partBoxes, sfxNames, writeShownAt, SFX_CUES } from './runtime/film';
+export { FilmController, accumulatedNotes, applyBeatCues, applyShowHide, beatTitle, beatWrite, beginShowMe, cueSfx, framePart, isPausePoint, partBox, partBoxes, sfxNames, writeShownAt, SFX_CUES } from './runtime/film';
 export type { AppliedCues, AskContext, FilmChapter, FilmControllerOptions, FilmEvent, FilmTransport, FramingIntent, ShowMeSession, TranscriptLine } from './runtime/film';
 export {
   anchorWords,
@@ -63,8 +63,8 @@ export {
   FILM_WORDS_PER_SECOND,
 } from './film/storyboard';
 export type { BeatAudio, CompiledBeat, CompiledFilm, CompiledFilmResult, CompiledScene, FilmAdvance, FilmAnchor, FilmContext, FilmDiagnostic, FilmSceneSource, SourceMapEntry, StoryboardBeat, StoryboardScene, StoryboardSpec } from './film/storyboard';
-export { explainerCardRect, fallbackWidth, fontsReady, layoutStageWidth, measureFilmText, notesColumnWidth, renderMathText, solveCallouts, solveCaption, solveCard, solveNotes, solveWrite, splitLayout, titleCardRect, wrapText, CAPTION_MAX_LINES, CAPTION_MIN_PX, CAPTION_MIN_STAGE_SHARE, CARD_MAX_LINES, FILM_FONT_STACK, NOTES_SPLIT_STAGE_SHARE, NOTES_STACK_BELOW_PX, SAFE_MARGIN_SHARE } from './film/solver';
-export type { CalloutInput, CalloutPlacement, CalloutRequest, CaptionInput, CaptionLayout, CardInput, CardLayout, MeasureText, NotesInput, NotesLayout, NotesLayoutKind, WriteInput, WritePlacement } from './film/solver';
+export { fallbackWidth, fontsReady, layoutStageWidth, measureFilmText, notesColumnWidth, pageCaptionWords, renderMathText, solveCallouts, solveCaption, solveNotes, solveWrite, splitLayout, titleCardRect, wrapText, CAPTION_MAX_LINES, CAPTION_MIN_PX, CAPTION_MIN_STAGE_SHARE, FILM_FONT_STACK, NOTES_SPLIT_STAGE_SHARE, NOTES_STACK_BELOW_PX, SAFE_MARGIN_SHARE } from './film/solver';
+export type { CalloutInput, CalloutPlacement, CalloutRequest, CaptionInput, CaptionLayout, MeasureText, NotesInput, NotesLayout, NotesLayoutKind, WriteInput, WritePlacement } from './film/solver';
 export { checkSceneContext, contrastRatio, luminance, probeFilm, probeFilmAsync, probeFilmStatic, FILM_CONTRAST_MIN, FILM_PLAIN_TONE_MAX_WORDS, FILM_TOKENS } from './film/checks';
 export type { FilmCheck, FilmFailure, FilmPoint, FilmReport, FilmReportStats, FilmSceneInput, FilmTheme, FilmTokens, ProbeFilmOptions, ProbeFilmStaticOptions } from './film/checks';
 export { applyCueState, beatCueState, buildStubScene, mountStubRuntime, pushAbsoluteState, sanitizeProbedSnapshot, SandboxFilmMirror } from './film/sandbox';

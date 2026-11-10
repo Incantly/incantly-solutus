@@ -1,5 +1,5 @@
 import type { Beat } from '../api/types';
-import { accumulatedNotes, beatCard, beatWrite, FilmController, writeShownAt } from '../runtime/film';
+import { accumulatedNotes, beatWrite, FilmController, writeShownAt } from '../runtime/film';
 import { FILM_STEP_SECONDS, SceneRuntime, type SceneFunction } from '../runtime/runtime';
 import type { KitRegistry } from '../runtime/kits';
 import type { RuntimeUpdate } from '../protocol/runtime-messages';
@@ -380,31 +380,26 @@ export interface ExportFrameLayers {
   readonly writeMath: boolean;
   /** Every note line showing on the frame's beat. */
   readonly notes: readonly string[];
-  /** The frame's full-stage card, or null. A card covers write and notes while shown. */
-  readonly card: { readonly kind: 'section' | 'recap'; readonly text: string } | null;
 }
 
 /**
  * One export frame's layers from the chunk film alone: the beat by id, its
- * reveal prefix at the frame's film time, its accumulated notes, its card.
+ * reveal prefix at the frame's film time, and its accumulated notes.
  * Pure — the capture sessions paint this, and tests assert it per frame —
  * and clock-driven, so the same frame always draws the same layers.
  */
 export function exportFrameLayers(film: CompiledFilm, frame: { readonly beatId: string; readonly time: number }): ExportFrameLayers {
-  const none: ExportFrameLayers = { split: false, write: '', writeMath: false, notes: [], card: null };
+  const none: ExportFrameLayers = { split: false, write: '', writeMath: false, notes: [] };
   const beat = film.beats.find((candidate) => candidate.id === frame.beatId);
   if (!beat) return none;
   const scene = film.scenes.find((candidate) => candidate.id === beat.sceneId);
   if (!scene) return none;
-  // A card covers the stage's own layers while shown, as in the player.
-  const card = beatCard(beat.step);
-  const write = card === null ? beatWrite(beat.step) : null;
+  const write = beatWrite(beat.step);
   return {
     split: scene.split,
     write: write ? writeShownAt(beat, frame.time) : '',
     writeMath: write?.math ?? false,
-    notes: card === null ? accumulatedNotes(scene.beats, beat.index) : [],
-    card,
+    notes: accumulatedNotes(scene.beats, beat.index),
   };
 }
 

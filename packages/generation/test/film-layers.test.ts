@@ -11,7 +11,7 @@ function layered() {
         idea: 'A ball with room for layers',
         kit: 'svg',
         beats: [
-          { id: 'b1', say: 'First we open the section.', card: { kind: 'section', text: 'The ball' } },
+          { id: 'b1', say: 'First we open the section.' },
           { id: 'b2', say: 'The ball sits still while we write its rule.', write: { text: 'x = 3', math: true }, notes: ['The ball rests.'] },
           { id: 'b3', say: 'And that is all the ball does today.', notes: ['Nothing else moves.'] },
         ],
@@ -26,7 +26,7 @@ describe('film layers: plan validation', () => {
     expect(validation.problems).toEqual([]);
     expect(validation.ok).toBe(true);
     const beats = validation.storyboard!.scenes[0]!.beats;
-    expect(beats[0]!.card).toEqual({ kind: 'section', text: 'The ball' });
+    expect(beats[0]).not.toHaveProperty('card');
     expect(beats[1]!.write).toEqual({ text: 'x = 3', math: true });
     expect(beats[1]!.notes).toEqual(['The ball rests.']);
     expect(beats[2]!.notes).toEqual(['Nothing else moves.']);
@@ -45,8 +45,7 @@ describe('film layers: plan validation', () => {
       { beat: { id: 'b1', say: 'Hi there.', write: 'x = 1' }, match: 'write must be' },
       { beat: { id: 'b1', say: 'Hi there.', notes: ['a', 'b', 'c', 'd', 'e'] }, match: 'at most 4' },
       { beat: { id: 'b1', say: 'Hi there.', notes: ['x'.repeat(141)] }, match: 'at most 140' },
-      { beat: { id: 'b1', say: 'Hi there.', card: { kind: 'title', text: 'Hi' } }, match: 'not section or recap' },
-      { beat: { id: 'b1', say: 'Hi there.', card: { kind: 'recap', text: '' } }, match: 'card needs text' },
+      { beat: { id: 'b1', say: 'Hi there.', card: { kind: 'section', text: 'The ball' } }, match: 'sends a card' },
     ];
     for (const { beat, match } of cases) {
       const spec = { film: { title: 'T', lengthTarget: 30 }, scenes: [{ id: 's1', idea: 'I', kit: 'svg', beats: [beat] }] };
@@ -76,12 +75,12 @@ describe('film layers: plan format', () => {
     const sliced = validation.storyboard!.scenes[0]!.beats;
     expect(sliced[0]!.write).toEqual({ text: 'a² + b² = c²', math: true });
     expect(sliced[1]!.notes).toEqual(['First this.']);
-    expect(sliced[2]!.card).toEqual({ kind: 'section', text: 'Motion' });
+    expect(sliced[2]).not.toHaveProperty('card');
   });
 
-  it('names the three fields and when to use them, briefly', () => {
-    expect(FILM_PLAN_FORMAT).toContain('section card');
-    expect(FILM_PLAN_FORMAT).toContain('recap card');
+  it('names the two fields and when to use them, briefly', () => {
+    expect(FILM_PLAN_FORMAT).not.toContain('section card');
+    expect(FILM_PLAN_FORMAT).not.toContain('recap card');
     expect(FILM_PLAN_FORMAT).toContain('write');
     expect(FILM_PLAN_FORMAT).toContain('notes');
     expect(FILM_PLAN_FORMAT).toContain('key equation or rule');

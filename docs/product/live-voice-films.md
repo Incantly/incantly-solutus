@@ -9,7 +9,7 @@ Today a film is a storyboard played on the figure engine: one simulation per sce
 This design adds two things:
 
 1. **One live voice.** A single real-time voice model (Gemini Live) reads the film's beats aloud, listens to the learner, and answers in the same voice. Because the same session narrated everything so far, it already knows what it has said when the learner cuts in.
-2. **Explainer layers.** Beats can write an equation or a line of text onto the stage as it is spoken, show the simulation beside step-by-step notes, and open or close a section with a card. The planner picks them per beat; the engine draws them.
+2. **Explainer layers.** Beats can write an equation or a line of text onto the stage as it is spoken and show the simulation beside step-by-step notes. The planner picks them per beat; the engine draws them.
 
 The voice model never draws. It talks, listens and calls tools. Every visual still comes from the engine and the existing generation pipeline, so figures stay exact, seekable and replayable.
 
@@ -29,7 +29,7 @@ The voice model never draws. It talks, listens and calls tools. Every visual sti
 | Click-advanced beats | Deck mode: `FilmAdvance = 'time' \| 'click'` (`film/storyboard.ts`) | A driver that advances on the voice's turn end. |
 | Ask: Answer, Show me, Another example, Change | `/v1/ask`, `/v1/ask/insert`, `/v1/ask/example`, `/v1/ask/change`; `beginShowMe`; `InsertPlayer` with resume at the anchor word | A way for a voice model to call them as tools. |
 | Narration | `Narrator` interface, Cartesia, stub; Narrate button | A live voice; generated films are silent by default. |
-| Visuals | One stage kit per scene; caption band; `title`, `mark`, callouts | Write-on text and equations, split notes, section cards. |
+| Visuals | One stage kit per scene; caption band; `title`, `mark`, callouts | Write-on text and equations, split notes. |
 
 ## 4. Decisions
 
@@ -114,7 +114,6 @@ New optional beat fields, compiled and drawn by the engine, placed by the layout
 | --- | --- | --- |
 | `write` | `{ text: string, math?: boolean }` | Writes the text or equation onto the stage over the beat's spoken length, stroke by stroke, in a solver-placed slot that does not cover parts. |
 | `notes` | `string[]` (≤ 4 short lines) | Split layout: simulation on one side, the notes on the other, revealed one per beat. Stacks under the stage below 640 px. |
-| `card` | `{ kind: 'section' \| 'recap', text: string }` | A full-stage card for a section start or a recap; the scene stays mounted behind it. |
 
 Seeking to t draws what playing to t draws for every layer. The planner's `FILM_PLAN_FORMAT` gains one short paragraph naming these fields; core.md stays under 1,500 tokens (AGENTS.md).
 
@@ -142,7 +141,7 @@ Each stage is its own branch cut from `main` and named for the work.
 | --- | --- | --- | --- |
 | A | `feat/live-voice-core` | `LiveVoice`, `FakeLiveVoice`, `LiveDriver`, `LiveTools` with validation, exported from core. | Unit tests drive a film end to end with the fake: beats spoken in order, interrupt pauses at the right word, each tool works and rejects bad arguments, resume returns to the anchor, leaving live mode restores state. |
 | B | `feat/live-voice-gemini` | `GeminiLiveVoice`, `/v1/live/token`, retention gate, dev-server wiring, model discovery. | Unit tests with a mocked socket cover setup, audio, transcripts, interruption, tool round trips and errors; the token route refuses without the flag. |
-| C | `feat/film-explainer-layers` | `write`, `notes`, `card` beat fields: types, compile, draw, layout, checks, seek-equals-play, plan format, docs. | Unit and film-check tests pass at 360/640/960 px, light and dark; existing film tests unchanged. |
+| C | `feat/film-explainer-layers` | `write`, `notes` beat fields: types, compile, draw, layout, checks, seek-equals-play, plan format, docs. (The `card` field from that stage is removed: full-stage cards no longer exist.) | Unit and film-check tests pass at 360/640/960 px, light and dark; existing film tests unchanged. |
 | D | `feat/live-voice-playground` | Player page: Live voice toggle, mic permission, voice panel with both transcripts, tool progress, fallback to pre-made narration. Merges A and B. | Real Playground run (section 9) passes. |
 | E | — | Bug hunt over A–D, and stage 5 measurements. | Bugs reported, fixed and re-checked. |
 

@@ -53,12 +53,14 @@ describe('film compiler: fixtures', () => {
     expect(film.seconds).toBeLessThan(66);
   });
 
-  it('runs the storyboard layers from the scene steps, including the opening card', async () => {
-    // Cues come from inc.steps, not the storyboard copy: the opening card
-    // must live on the first scene step or the player never sees it.
+  it('runs the storyboard layers from the scene steps, with no cards anywhere', async () => {
+    // Cues come from inc.steps, not the storyboard copy: assert on the
+    // steps the player actually reads, as the old card test did.
     const { film } = await compileFixture(PYTHAGORAS_FILM);
-    expect(film.beats[0]!.step.card).toEqual({ kind: 'section', text: 'Pythagoras and the right triangle' });
-    expect(film.beats[6]!.step.card).toEqual({ kind: 'recap', text: 'Legs squared add to the hypotenuse squared' });
+    expect(film.beats.length).toBeGreaterThan(0);
+    for (const beat of film.beats) {
+      expect(beat.step).not.toHaveProperty('card');
+    }
   });
 
   it('compiles the Pythagoras film near 60 s with contiguous beats', async () => {

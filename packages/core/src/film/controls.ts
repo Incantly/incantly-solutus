@@ -230,7 +230,7 @@ export const SHORTCUTS: readonly PlayerShortcut[] = [
   { key: 'a', action: 'ask', label: 'Ask about this moment' },
   { key: 'o', action: 'loop', label: 'Loop the beat on / off' },
   { key: 'b', action: 'bookmark', label: 'Bookmark this moment' },
-  { key: 'v', action: 'live', label: 'Live voice on / off' },
+  { key: 'v', action: 'live', label: 'Teacher voice on / off' },
 ];
 
 /** Matches a key press to its shortcut, or null. The page checks focus guards before calling. */

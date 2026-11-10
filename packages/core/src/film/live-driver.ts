@@ -149,6 +149,11 @@ export class LiveDriver {
     return this.anchor;
   }
 
+  /** True once the learner cut in or paused, until resume or a seek speaks again. */
+  isPaused(): boolean {
+    return this.paused;
+  }
+
   /** Beats the voice has said so far, in order. */
   get saidBeats(): readonly CompiledBeat[] {
     return [...this.said];
@@ -520,13 +525,31 @@ export class LiveDriver {
     // Already paused on a pin (a typed follow-up like "carry on"): keep the
     // anchor and the context already pushed instead of re-pinning.
     if (this.paused && this.anchor) return;
-    const beat = this.controller.currentBeat;
+    // The hold must land with the pause: fall back to the nearest known
+    // beat when the current one moved under the pin.
+    const beat = this.controller.currentBeat ?? this.said[this.said.length - 1] ?? null;
     if (!beat) {
       this.controller.pause();
       return;
     }
-    const anchor = this.controller.anchorNow();
+    let anchor: AskAnchor | null;
+    try {
+      anchor = this.controller.anchorNow();
+    } catch {
+      // anchorNow() pauses before it snapshots, so a snapshot failure would
+      // strand the film paused with no hold: pin at the beat's start instead.
+      anchor = null;
+    }
     if (!anchor) {
+      this.notePaused({
+        film: this.film.id,
+        version: this.film.version,
+        scene: beat.sceneId,
+        beat: beat.id,
+        wordIndex: 0,
+        controlValues: {},
+        readouts: [],
+      });
       this.controller.pause();
       return;
     }

@@ -1,6 +1,6 @@
 import type { Beat, BeatMark, Waveform } from '../api/types';
 import type { ProbedParam } from '../probe/probe';
-import { accumulatedNotes, beatCard, beatWrite, SFX_CUES, writeShownAt, type FilmController, type FilmEvent } from '../runtime/film';
+import { accumulatedNotes, beatWrite, SFX_CUES, writeShownAt, type FilmController, type FilmEvent } from '../runtime/film';
 import { SceneRuntime, type SceneFunction } from '../runtime/runtime';
 import type { FigureHandle } from '../sandbox/adapter';
 import type { CompiledBeat, CompiledFilm } from './storyboard';
@@ -187,13 +187,8 @@ function sanitizedStep(value: unknown): Beat | null {
     }
     step.notes = notes;
   }
-  if (value.card !== undefined) {
-    if (!isRecord(value.card)) return null;
-    if (value.card.kind !== 'section' && value.card.kind !== 'recap') return null;
-    const text = shortText(value.card.text, MAX_LAYER_TEXT);
-    if (text === null || text.trim() === '') return null;
-    step.card = { kind: value.card.kind, text };
-  }
+  // Full-stage cards are gone: a step still sending one is not a valid step.
+  if (value.card !== undefined) return null;
   if (value.explore !== undefined) {
     if (!isRecord(value.explore)) return null;
     const control = partName(value.explore.control);
@@ -352,8 +347,6 @@ export interface BeatCueState {
   readonly write: { readonly text: string; readonly math: boolean; readonly shown: string } | null;
   /** Every note line showing on this beat: its scene's lines up to and including it. */
   readonly notes: readonly string[];
-  /** The beat's full-stage card, or null. */
-  readonly card: { readonly kind: 'section' | 'recap'; readonly text: string } | null;
   /** True when the beat's scene renders split: the same compiled value the player, checks and export read. */
   readonly split: boolean;
 }
@@ -401,7 +394,6 @@ export function beatCueState(
     // for them — so the cue state carries what to show, not how to draw it.
     write: write ? { ...write, shown: writeShownAt(beat, at ?? beat.start) } : null,
     notes: accumulatedNotes(scene.beats, beatIndex),
-    card: beatCard(beat.step),
     split: scene.split,
   };
 }

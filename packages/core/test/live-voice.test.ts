@@ -230,11 +230,112 @@ describe('live voice: interrupt', () => {
     controller.destroy();
   });
 
+  it('holds the pause when the player pauses mid-reading on a later beat', async () => {
+    // The player's Pause path on a live beat: the speaker flushes, the host
+    // interrupts, then the film pauses. The hold must land and stay until
+    // resume, so Play can continue the same beat.
+    const { controller, voice, driver } = await setup();
+    await driver.start();
+    voice.emit({ type: 'turn-complete', turnId: saidId(voice, 0) });
+    expect(controller.currentBeat?.id).toBe('s1b2');
+    controller.play();
+    expect(controller.isPlaying).toBe(true);
+    // The browser clock runs while the teacher reads, and the voice's
+    // transcript lands keyed by its utterance before the learner pauses.
+    controller.tick(1);
+    controller.tick(1);
+    voice.emit({ type: 'transcript', text: 'Pull the bob aside', turnId: saidId(voice, 1) });
+    driver.interrupt();
+    controller.pause();
+    expect(controller.isPlaying).toBe(false);
+    expect(driver.isPaused()).toBe(true);
+    await flush();
+    expect(driver.isPaused()).toBe(true);
+    controller.destroy();
+  });
+
+  it('holds the pause across a mid-live version switch', async () => {
+    // A version switch retimes the controller while the live session keeps
+    // its film: the host interrupt must still land a hold on the beat on
+    // screen, so a Pause right after switching keeps the teacher resumable.
+    const { film, controller, driver } = await setup();
+    await driver.start();
+    expect(controller.currentBeat?.id).toBe('s1b1');
+    const drifted: CompiledFilm = {
+      ...film,
+      version: film.version + 1,
+      beats: film.beats.map((beat) => ({ ...beat, id: `${beat.id}-v2` })),
+      scenes: film.scenes.map((scene) => ({ ...scene, beats: scene.beats.map((beat) => ({ ...beat, id: `${beat.id}-v2` })) })),
+    };
+    controller.retime(drifted);
+    expect(controller.currentBeat?.id).toBe('s1b1-v2');
+    driver.interrupt();
+    controller.pause();
+    expect(controller.isPlaying).toBe(false);
+    expect(driver.isPaused()).toBe(true);
+    expect(driver.lastAnchor).toMatchObject({ beat: 's1b1-v2', wordIndex: 0 });
+    await flush();
+    expect(driver.isPaused()).toBe(true);
+    controller.destroy();
+  });
+
+  it('holds the pause when pinning the exact word throws', async () => {
+    // anchorNow() pauses the film before it snapshots the pin: if the
+    // snapshot throws, the host interrupt must still land a hold at the
+    // beat's start instead of stranding the film paused with no hold for
+    // Play to resume from.
+    const { film, voice } = await setup();
+    const beat = film.beats[0]!;
+    let paused = false;
+    const controller = {
+      advance: 'time' as const,
+      currentBeat: beat,
+      anchorNow: (): AskAnchor | null => {
+        throw new Error('snapshot exploded');
+      },
+      pause: (): void => {
+        paused = true;
+      },
+      setAdvance: (): void => {},
+    } as unknown as FilmController;
+    const driver = new LiveDriver({ controller, film, voice });
+    await driver.start();
+    expect(voice.said.length).toBeGreaterThan(0);
+    driver.interrupt();
+    expect(paused).toBe(true);
+    expect(driver.isPaused()).toBe(true);
+    expect(driver.lastAnchor).toMatchObject({ beat: beat.id, wordIndex: 0 });
+    await flush();
+    expect(driver.isPaused()).toBe(true);
+  });
+
   it('ignores interrupt when the driver is not live', async () => {
     const { controller, driver } = await setup();
     driver.interrupt();
     expect(driver.lastAnchor).toBeNull();
+    expect(driver.isPaused()).toBe(false);
     expect(controller.isPlaying).toBe(false);
+    controller.destroy();
+  });
+
+  it('reports the pause hold for transport Play and Pause', async () => {
+    // The player's Pause path calls the host interrupt (no question asked),
+    // and Play resumes through the driver's resume path: isPaused is the
+    // signal the transport reads between the two.
+    const { voice, driver, controller } = await setup();
+    await driver.start();
+    expect(driver.isPaused()).toBe(false);
+    driver.interrupt();
+    expect(driver.isPaused()).toBe(true);
+    voice.emit({ type: 'tool-call', callId: 'c1', name: 'resume', args: {} });
+    await flush();
+    expect(driver.isPaused()).toBe(true);
+    // The model's reply ends first; then the unheard rest is read, and the
+    // hold releases when that reading speaks.
+    voice.emit({ type: 'speaking', turnId: null });
+    voice.emit({ type: 'turn-complete', turnId: null });
+    voice.emit({ type: 'speaking', turnId: saidId(voice, 1) });
+    expect(driver.isPaused()).toBe(false);
     controller.destroy();
   });
 

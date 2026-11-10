@@ -1,4 +1,4 @@
-import { accumulatedNotes, beatCard, beatWrite, writeShownAt, type FilmController, type FilmEvent } from '../runtime/film';
+import { accumulatedNotes, beatWrite, writeShownAt, type FilmController, type FilmEvent } from '../runtime/film';
 import { markerSeconds, type AskAnchor, type AskMarker } from './ask';
 import { wordStarts, type CompiledBeat, type CompiledFilm, type FilmAdvance, type FilmAnchor } from './storyboard';
 
@@ -40,8 +40,6 @@ export interface PlayerCaption {
   readonly write: { readonly text: string; readonly math: boolean; readonly shown: string } | null;
   /** Every note line showing on this beat: its scene's lines up to and including it. */
   readonly notes: readonly string[];
-  /** The beat's full-stage card, or null. A card covers write and notes while shown. */
-  readonly card: { readonly kind: 'section' | 'recap'; readonly text: string } | null;
   /** True when the beat's scene renders split: the stage narrows beside its notes column from the first frame. */
   readonly split: boolean;
 }
@@ -388,7 +386,6 @@ export class PlayerModel {
 
 function toCaption(beat: CompiledBeat, film: CompiledFilm, time: number): PlayerCaption {
   const title = beat.step.title;
-  const card = beatCard(beat.step);
   const write = beatWrite(beat.step);
   const scene = film.scenes.find((scene) => scene.id === beat.sceneId);
   const sceneBeats = scene?.beats ?? [];
@@ -401,10 +398,8 @@ function toCaption(beat: CompiledBeat, film: CompiledFilm, time: number): Player
     seconds: beat.seconds,
     words: beat.words,
     wordStarts: wordStarts(beat),
-    // A card covers the stage's own layers while shown; the caption band stays.
-    write: card === null && write ? { ...write, shown: writeShownAt(beat, time) } : null,
-    notes: card === null ? accumulatedNotes(sceneBeats, beat.index) : [],
-    card,
+    write: write ? { ...write, shown: writeShownAt(beat, time) } : null,
+    notes: accumulatedNotes(sceneBeats, beat.index),
     split: scene?.split ?? false,
   };
 }

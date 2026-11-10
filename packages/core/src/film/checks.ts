@@ -3,7 +3,7 @@ import type { KitRegistry } from '../runtime/kits';
 import { accumulatedNotes, applyBeatCues, applyShowHide, partBox, partBoxes, sfxNames } from '../runtime/film';
 import { SceneRuntime, type SceneFunction } from '../runtime/runtime';
 import { FILM_READING_WPS_LIMIT, type CompiledBeat, type CompiledFilm, type FilmContext } from './storyboard';
-import { CAPTION_MIN_PX, CAPTION_MIN_STAGE_SHARE, SAFE_MARGIN_SHARE, explainerCardRect, layoutStageWidth, renderMathText, solveCallouts, solveCaption, solveCard, solveNotes, solveWrite, splitLayout, titleCardRect } from './solver';
+import { CAPTION_MIN_PX, CAPTION_MIN_STAGE_SHARE, SAFE_MARGIN_SHARE, layoutStageWidth, renderMathText, solveCallouts, solveCaption, solveNotes, solveWrite, splitLayout, titleCardRect } from './solver';
 import type { Box } from '../scene/bounds';
 
 /**
@@ -376,9 +376,6 @@ function checkPoint(
   const focusName = beat.step.focus ?? beat.step.cam?.to ?? beat.step.mark?.[0]?.part ?? null;
   const focus = focusName ? partBox(runtime, focusName) : null;
   const card = beat.step.title !== undefined && (typeof beat.step.title === 'string' ? false : (beat.step.title.kind ?? 'lower') === 'card') ? titleCardRect(viewBox) : null;
-  // A section or recap card covers the stage's own layers for its beat: only
-  // the card itself is checked, never what it covers by design.
-  const layerCard = beat.step.card !== undefined ? explainerCardRect(viewBox) : null;
 
   for (const width of widths) {
     const stageHeightPx = (width * viewBox[3]) / viewBox[2];
@@ -423,7 +420,7 @@ function checkPoint(
     const drawingHeightPx = (stageW * viewBox[3]) / viewBox[2];
     // Beside the stage the notes column covers nothing by construction; the
     // stacked strip overlays the bottom of the safe area and must clear it.
-    const notes = layerCard === null && showing.length > 0 ? solveNotes(showing, { viewBox, stageWidthPx: width }) : null;
+    const notes = showing.length > 0 ? solveNotes(showing, { viewBox, stageWidthPx: width }) : null;
     if (notes) {
       if (notes.fontPx < CAPTION_MIN_PX || notes.fontPx < drawingHeightPx * CAPTION_MIN_STAGE_SHARE - 1e-9) {
         fail({
@@ -471,7 +468,7 @@ function checkPoint(
         }
       }
     }
-    const callouts = layerCard === null ? (beat.step.mark ?? []).filter((mark) => mark.type === 'callout') : [];
+    const callouts = (beat.step.mark ?? []).filter((mark) => mark.type === 'callout');
     const chips = solveCallouts(
       callouts.map((mark) => ({ id: mark.part, at: calloutAnchor(boxes.get(mark.part)?.box ?? null), text: beat.step.short ?? firstWords(beat.step.say, 6) })),
       { viewBox, stageWidthPx: stageW, occupied: [...occupied, ...(card ? [card] : []), ...(notes?.panel ? [notes.panel] : [])] },
@@ -498,7 +495,7 @@ function checkPoint(
     }
     // Write-on text draws in the top-left slot on every surface, so the
     // checks require that slot — not just any clear corner.
-    const writeText = layerCard === null && typeof beat.step.write?.text === 'string' ? (beat.step.write.math === true ? renderMathText(beat.step.write.text) : beat.step.write.text) : null;
+    const writeText = typeof beat.step.write?.text === 'string' ? (beat.step.write.math === true ? renderMathText(beat.step.write.text) : beat.step.write.text) : null;
     if (writeText !== null) {
       const placed = solveWrite(writeText, {
         viewBox,
@@ -544,30 +541,6 @@ function checkPoint(
             message: `Beat "${beat.id}" write-on text leaves the safe area at ${width} px`,
           });
         }
-      }
-    }
-    // The full-stage card stays mounted over the scene: its line must fit it.
-    if (layerCard !== null && typeof beat.step.card?.text === 'string') {
-      const layout = solveCard(beat.step.card.text, { viewBox, stageWidthPx: width });
-      if (layout.overflow) {
-        fail({
-          check: 'caption-lines',
-          scene: beat.sceneId,
-          beat: beat.id,
-          point,
-          width,
-          message: `Beat "${beat.id}" card needs more than three lines at ${width} px; split it or shorten the line`,
-        });
-      }
-      if (layout.fontPx < CAPTION_MIN_PX) {
-        fail({
-          check: 'size',
-          scene: beat.sceneId,
-          beat: beat.id,
-          point,
-          width,
-          message: `Beat "${beat.id}" card at ${layout.fontPx.toFixed(1)} px at ${width} px, under the minimum`,
-        });
       }
     }
     for (const theme of themes) {

@@ -74,6 +74,32 @@ export function fontsReady(): Promise<void> {
   return Promise.resolve();
 }
 
+/**
+ * Splits a beat's words into caption pages, each wrapping to at most two
+ * lines at the given size: the player shows the page holding the sounding
+ * word, so long lines page instead of truncating. Always progresses, so
+ * every word lands on exactly one page.
+ */
+export function pageCaptionWords(
+  words: readonly string[],
+  input: { maxWidthPx: number; fontPx: number; measure?: MeasureText },
+): ReadonlyArray<{ readonly start: number; readonly end: number }> {
+  const pages: Array<{ start: number; end: number }> = [];
+  let start = 0;
+  while (start < words.length) {
+    let end = start + 1;
+    while (end <= words.length) {
+      const lines = wrapText(words.slice(start, end).join(' '), input.maxWidthPx, input.fontPx, input.measure);
+      if (lines.length > CAPTION_MAX_LINES) break;
+      end += 1;
+    }
+    end = Math.max(start + 1, end - 1);
+    pages.push({ start, end });
+    start = end;
+  }
+  return pages;
+}
+
 /** Greedy word wrap; a word longer than the line takes a line of its own. */
 export function wrapText(text: string, maxWidth: number, fontPx: number, measure?: MeasureText): string[] {
   const words = text.trim().split(/\s+/).filter((word) => word !== '');
@@ -253,9 +279,6 @@ export function notesColumnWidth(stageWidthPx: number): number {
   return stageWidthPx * (1 - NOTES_SPLIT_STAGE_SHARE);
 }
 
-/** Most lines a section or recap card wraps to before the solver overflows. */
-export const CARD_MAX_LINES = 3;
-
 /** Superscript forms the math renderer knows; anything else stays literal. */
 const SUPERSCRIPT: Readonly<Record<string, string>> = {
   '0': '⁰',
@@ -401,41 +424,3 @@ export function solveNotes(notes: readonly string[], input: NotesInput): NotesLa
   return { kind: 'side', panel: null, fontPx, lines };
 }
 
-/** A section or recap card's rect in stage units: the full safe area, over the scene. */
-export function explainerCardRect(viewBox: ViewBox): Box {
-  const [vx, vy, vw, vh] = viewBox;
-  const margin = Math.min(vw, vh) * SAFE_MARGIN_SHARE;
-  return { minX: vx + margin, minY: vy + margin, maxX: vx + vw - margin, maxY: vy + vh - margin };
-}
-
-export interface CardLayout {
-  readonly fontPx: number;
-  readonly lines: readonly string[];
-  /** True when the line does not fit even at the floor: split or shorten it. */
-  readonly overflow: boolean;
-}
-
-export interface CardInput {
-  readonly viewBox: ViewBox;
-  readonly stageWidthPx: number;
-  readonly measure?: MeasureText;
-}
-
-/**
- * Lays a section or recap card's line out across the full safe area: a large
- * font shrinking to a floor before it overflows past three lines.
- */
-export function solveCard(text: string, input: CardInput): CardLayout {
-  const card = explainerCardRect(input.viewBox);
-  const scale = input.stageWidthPx / input.viewBox[2];
-  const maxWidth = Math.max(40, (card.maxX - card.minX) * scale - 48);
-  const floor = 16;
-  let fontPx = Math.min(30, Math.max(20, input.stageWidthPx * 0.045));
-  let lines = wrapText(text, maxWidth, fontPx, input.measure);
-  while (lines.length > CARD_MAX_LINES && fontPx > floor + 1e-9) {
-    fontPx = Math.max(floor, fontPx - 1);
-    lines = wrapText(text, maxWidth, fontPx, input.measure);
-  }
-  const overflow = lines.length > CARD_MAX_LINES;
-  return { fontPx, lines: overflow ? lines.slice(0, CARD_MAX_LINES) : lines, overflow };
-}

@@ -26,7 +26,7 @@ import {
   type FallbackRecorder,
   type FallbackSession,
 } from './export';
-import { layoutStageWidth, renderMathText, splitLayout, wrapText, CARD_MAX_LINES } from './solver';
+import { layoutStageWidth, renderMathText, splitLayout, wrapText } from './solver';
 
 /**
  * The browser half of film export: capability detection, offscreen capture,
@@ -312,20 +312,18 @@ function layerFontPx(availablePx: number): number {
 /**
  * Paints one frame's explainer layers over the drawing area: the notes
  * column beside a split stage (or the stacked strip along the bottom under
- * narrow ones), the write-on chip's reveal prefix at the frame's film time,
- * and the full-stage card. Same slots the player draws and the checks
- * verify. Nothing paints when the beat carries no layers, so unlayered
- * frames stay pixel-identical.
+ * narrow ones) and the write-on chip's reveal prefix at the frame's film
+ * time. Same slots the player draws and the checks verify. Nothing paints
+ * when the beat carries no layers, so unlayered frames stay pixel-identical.
  */
 export function paintExportLayers(context: CanvasRenderingContext2D, layers: ExportFrameLayers, width: number, height: number): void {
-  if (layers.write === '' && layers.notes.length === 0 && layers.card === null) return;
+  if (layers.write === '' && layers.notes.length === 0) return;
   const layout = splitLayout(layers.split, width);
   const stageW = layoutStageWidth(width, layout);
   const measure = (text: string): number => context.measureText(text).width;
   context.save();
   context.textBaseline = 'middle';
-  // Notes first, then the chip, then the card over everything it covers.
-  if (layers.notes.length > 0 && layers.card === null) {
+  if (layers.notes.length > 0) {
     const fontPx = layerFontPx(width);
     context.font = `${fontPx}px ${LAYER_FONT_STACK}`;
     const lineHeight = fontPx * 1.4;
@@ -356,7 +354,7 @@ export function paintExportLayers(context: CanvasRenderingContext2D, layers: Exp
       }
     }
   }
-  if (layers.write !== '' && layers.card === null) {
+  if (layers.write !== '') {
     const text = layers.writeMath ? renderMathText(layers.write) : layers.write;
     const fontPx = layerFontPx(stageW);
     context.font = `${fontPx}px ${LAYER_FONT_STACK}`;
@@ -372,28 +370,6 @@ export function paintExportLayers(context: CanvasRenderingContext2D, layers: Exp
     context.fillRect(x, y, chipW, chipH);
     context.fillStyle = LAYER_INK;
     rows.forEach((row, i) => context.fillText(row, x + pad, y + pad + fontPx * 1.35 * (i + 0.5)));
-  }
-  if (layers.card !== null) {
-    context.fillStyle = LAYER_PANEL;
-    context.fillRect(0, 0, width, height);
-    // The card scale, mirroring the solver: a large font shrinking to a
-    // floor before it overflows past three lines.
-    const maxWidth = Math.max(40, width * 0.9 - 48);
-    // Measuring reads the canvas's live font, so it follows the loop down.
-    let fontPx = Math.min(30, Math.max(20, width * 0.045));
-    context.font = `${fontPx}px ${LAYER_FONT_STACK}`;
-    let rows = wrapText(layers.card.text, maxWidth, fontPx, measure);
-    while (rows.length > CARD_MAX_LINES && fontPx > 16 + 1e-9) {
-      fontPx = Math.max(16, fontPx - 1);
-      context.font = `${fontPx}px ${LAYER_FONT_STACK}`;
-      rows = wrapText(layers.card.text, maxWidth, fontPx, measure);
-    }
-    context.fillStyle = LAYER_INK;
-    context.textAlign = 'center';
-    const lineHeight = fontPx * 1.35;
-    const top = height / 2 - ((Math.min(rows.length, CARD_MAX_LINES) - 1) * lineHeight) / 2;
-    rows.slice(0, CARD_MAX_LINES).forEach((row, i) => context.fillText(row, width / 2, top + i * lineHeight));
-    context.textAlign = 'left';
   }
   context.restore();
 }

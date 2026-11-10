@@ -269,13 +269,13 @@ const PYTHAGORAS_JS = [
   '  return `A right triangle with legs ${a.value} and ${b.value} and hypotenuse ${h.toFixed(2)}, with squares of ${(a.value * a.value).toFixed(0)}, ${(b.value * b.value).toFixed(0)} and ${(h * h).toFixed(0)} on its sides.`;',
   '});',
   'inc.steps([',
-  "  { say: 'A right triangle hides a famous rule about its three sides: the squares drawn on them always balance.', card: { kind: 'section', text: 'Pythagoras and the right triangle' } },",
+  "  { say: 'A right triangle hides a famous rule about its three sides: the squares drawn on them always balance.' },",
   "  { say: 'The two short sides are called the legs. Side a stands upright, rising straight from the square corner below.', focus: 'Leg a' },",
   "  { say: 'Side b lies flat along the ground, meeting side a exactly at the right angle to fix the base.', focus: 'Leg b', mark: [{ type: 'pulse', part: 'Leg b' }] },",
   "  { say: 'Across the corner stretches the hypotenuse, c, always the longest of the three sides, growing whenever a leg grows.', focus: 'Hypotenuse', mark: [{ type: 'pulse', part: 'Hypotenuse' }], set: { a: 5, b: 3 }, ease: 1.2 },",
   "  { say: 'Square each leg and add the two areas. That total always exactly equals the square drawn on the hypotenuse.', write: { text: 'a^2 + b^2 = c^2', math: true }, notes: ['Square each leg', 'Add the areas'] },",
   "  { say: 'Back to three, four, five again: nine plus sixteen is twenty-five, the square on five.', mark: [{ type: 'pulse', part: 'Hypotenuse' }], set: { a: 3, b: 4 }, ease: 1.2, notes: ['That equals the square on c'] },",
-  "  { say: 'Now drag leg a yourself: whatever you try, the two small squares always add up to the big one.', card: { kind: 'recap', text: 'Legs squared add to the hypotenuse squared' }, explore: { control: 'a', hint: 'Drag Leg a and watch the squares and readouts follow.' } },",
+  "  { say: 'Now drag leg a yourself: whatever you try, the two small squares always add up to the big one.', explore: { control: 'a', hint: 'Drag Leg a and watch the squares and readouts follow.' } },",
   ']);',
 ].join('\n');
 
@@ -293,7 +293,6 @@ export const PYTHAGORAS_FILM: FilmFixture = {
           {
             id: 's1b1',
             say: 'A right triangle hides a famous rule about its three sides: the squares drawn on them always balance.',
-            card: { kind: 'section', text: 'Pythagoras and the right triangle' },
           },
           {
             id: 's1b2',
@@ -331,7 +330,6 @@ export const PYTHAGORAS_FILM: FilmFixture = {
           {
             id: 's1b7',
             say: 'Now drag leg a yourself: whatever you try, the two small squares always add up to the big one.',
-            card: { kind: 'recap', text: 'Legs squared add to the hypotenuse squared' },
             explore: { control: 'a', hint: 'Drag Leg a and watch the squares and readouts follow.' },
           },
         ],

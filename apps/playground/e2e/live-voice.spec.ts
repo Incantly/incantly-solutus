@@ -30,6 +30,8 @@ async function stats(page: Page): Promise<PlayerStats> {
 
 interface LiveState {
   readonly active: boolean;
+  /** The driver's hold: what the transport reads between Pause and Play. */
+  readonly paused: boolean;
   readonly status: string;
   readonly learner: string;
   readonly teacher: string;
@@ -38,6 +40,18 @@ interface LiveState {
 
 async function liveState(page: Page): Promise<LiveState> {
   return page.evaluate(() => (window.__playground?.live as () => LiveState)());
+}
+
+/** Opens the transport's "more" menu, which holds the Teacher voice switch. */
+async function openMenu(page: Page): Promise<void> {
+  await page.locator('.inc-menu > button').click();
+  await expect(page.locator('.inc-menu-pop')).toBeVisible();
+}
+
+/** Turns the Teacher voice switch off: the session closes, the film stays. */
+async function switchTeacherVoiceOff(page: Page): Promise<void> {
+  await openMenu(page);
+  await page.locator('.inc-teacher-voice').uncheck();
 }
 
 async function runtimeValues(page: Page): Promise<Record<string, number>> {
@@ -128,23 +142,40 @@ async function mintToken(page: Page): Promise<void> {
   );
 }
 
-test('token 404 shows live voice is off and starts nothing', async ({ page }) => {
+test('token 404 makes Play fall back to silent playback with a note', async ({ page }) => {
   await page.route('/api/v1/live/token', (route) =>
     route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({}) }),
   );
+  const server = await installLiveServer(page);
   await openPlayer(page, 'thirty');
-  await page.locator('.inc-live-toggle').click();
-  await expect(page.locator('.inc-live-error')).toContainText(
+
+  // Play falls back to normal playback with captions: no socket opens, and a
+  // one-line note under the transport says why. The Teacher tab stays where
+  // the learner was reading instead of opening on a session that failed.
+  await page.getByRole('button', { name: 'Play' }).click();
+  await expect.poll(async () => (await stats(page)).playing).toBe(true);
+  expect((await liveState(page)).active).toBe(false);
+  expect(server.setups.length).toBe(0);
+  expect(server.blocked).toEqual([]);
+  await expect(page.locator('.inc-player-livenote')).toContainText(
     'Live voice is off on this server (set GEMINI_LIVE_RETENTION_ACCEPTED=1 with a Gemini key)',
   );
+  await expect(page.locator('#inc-side-tab-teacher')).toHaveAttribute('aria-selected', 'false');
+
+  // One failed start per visit: pausing and pressing Play again still plays
+  // silently instead of retrying the dead route.
+  await page.getByRole('button', { name: 'Pause' }).click();
+  await expect.poll(async () => (await stats(page)).playing).toBe(false);
+  await page.getByRole('button', { name: 'Play' }).click();
+  await expect.poll(async () => (await stats(page)).playing).toBe(true);
   expect((await liveState(page)).active).toBe(false);
-  expect((await liveState(page)).error).toContain('Live voice is off');
+  expect(server.setups.length).toBe(0);
 });
 
-test('live start reads beats, captions follow the transcript, and stop resumes playback', async ({ page }) => {
+test('Play starts the teacher, Pause holds the beat, and Play resumes it', async ({ page }) => {
   // Both routes install before the player loads: the token mock was already
-  // awaited in mintToken, and the socket mock below, so the Live click can
-  // never race them and leak to the real server.
+  // awaited in mintToken, and the socket mock below, so Play can never race
+  // them and leak to the real server.
   await mintToken(page);
   const server = await installLiveServer(page);
   await openPlayer(page, 'thirty');
@@ -154,7 +185,8 @@ test('live start reads beats, captions follow the transcript, and stop resumes p
   await page.evaluate(() => (window.__playground?.model as unknown as { seek(seconds: number): void }).seek(0));
   await expect.poll(async () => (await stats(page)).beat).toBe('s1b1');
 
-  await page.locator('.inc-live-toggle').click();
+  // Play starts live voice and the film together.
+  await page.getByRole('button', { name: 'Play' }).click();
 
   // The setup declares audio responses and all six tools, make_example aside.
   await expect.poll(() => server.setups.length).toBe(1);
@@ -176,6 +208,10 @@ test('live start reads beats, captions follow the transcript, and stop resumes p
   // The page's socket went to the mock: a leak would have closed the session
   // with a 4000 and a panel error instead of saying anything.
   expect(server.blocked).toEqual([]);
+  expect((await liveState(page)).active).toBe(true);
+  await expect.poll(async () => (await stats(page)).playing).toBe(true);
+  // The Teacher tab opens once the live session actually starts.
+  await expect(page.locator('#inc-side-tab-teacher')).toHaveAttribute('aria-selected', 'true');
 
   // The teacher's transcript captions the film while it is the current beat.
   await server.send({ serverContent: { outputTranscription: { text: FIRST_BEAT } } });
@@ -187,26 +223,59 @@ test('live start reads beats, captions follow the transcript, and stop resumes p
   await expect.poll(() => server.says().length).toBeGreaterThanOrEqual(2);
   await expect(page.locator('.inc-caption')).toContainText('Pull the bob aside');
 
-  // The live toggle shows on, and switching to click advance paused the film.
-  await expect(page.locator('.inc-live-toggle')).toHaveText('Live voice: on');
-  expect((await liveState(page)).active).toBe(true);
-  expect((await stats(page)).playing).toBe(false);
-
-  // The learner's words stream into the panel.
-  await server.send({ serverContent: { inputTranscription: { text: 'what does this angle mean' } } });
-  await expect(page.locator('.inc-live-learner')).toContainText('what does this angle mean');
-
-  // Playing again, then an interruption pauses the film at once.
-  await page.locator('.inc-player-transport button', { hasText: 'Play' }).click();
-  await expect.poll(async () => (await stats(page)).playing).toBe(true);
-  await server.send({ serverContent: { interrupted: true } });
+  // The clock can hold while the teacher reads on: the film is paused but
+  // the button still reads Pause. Pressing it must hold the teacher, not
+  // restart the clock.
+  await page.evaluate(() => (window.__playground?.controller as unknown as { pause(): void }).pause());
   await expect.poll(async () => (await stats(page)).playing).toBe(false);
-  await expect(page.locator('.inc-live-status')).toContainText('Interrupted');
+  await expect(page.getByRole('button', { name: 'Pause' })).toBeVisible();
+
+  // Pause stops the teacher speaking and holds the beat: after the hold
+  // settles (the pause's own context push lands), no new reading goes out
+  // and the film stays where the teacher stood. This runs before any learner
+  // speech, which would already have paused the film as a barge-in.
+  await page.getByRole('button', { name: 'Pause' }).click();
+  await expect.poll(async () => (await stats(page)).playing).toBe(false);
+  expect((await liveState(page)).paused).toBe(true);
+  await expect.poll(async () => (await stats(page)).beat).toBe('s1b2');
+  await page.waitForTimeout(500);
+  const heldSays = server.says().length;
+  const heldTime = (await stats(page)).time;
+  await page.waitForTimeout(500);
+  expect(server.says().length).toBe(heldSays);
+  expect((await stats(page)).time).toBe(heldTime);
+
+  // Play resumes the same beat from the held word with a new reading.
+  await page.getByRole('button', { name: 'Play' }).click();
+  await expect.poll(() => server.says().length).toBeGreaterThan(heldSays);
+  await expect.poll(async () => (await stats(page)).beat).toBe('s1b2');
+  await expect.poll(async () => (await stats(page)).playing).toBe(true);
+  expect((await liveState(page)).paused).toBe(false);
+
+  // Learner speech barges in: the real server flags the model's turn
+  // interrupted, which clears the beat's utterance id so the reply lands in
+  // the teacher line instead of the caption. The film pauses at once (the
+  // button reads Play again) and the learner's words stream into the panel.
+  await server.send({
+    serverContent: { interrupted: true, inputTranscription: { text: 'what does this angle mean' } },
+  });
+  await expect(page.locator('.inc-live-learner')).toContainText('what does this angle mean');
+  await expect.poll(async () => (await stats(page)).playing).toBe(false);
+  await expect(page.getByRole('button', { name: 'Play' })).toBeVisible();
 
   // The teacher's own reply carries no beat turn, so it streams beside the
   // caption instead of replacing it.
   await server.send({ serverContent: { outputTranscription: { text: 'The angle sets how wide the swing starts.' } } });
   await expect(page.locator('.inc-live-teacher')).toContainText('how wide the swing starts');
+
+  // The other real ordering: after the reply's turn completes, the learner
+  // speaks between turns (no interrupted flag, no live turn open) and the
+  // following model reply still lands in the teacher line.
+  await server.send({ serverContent: { turnComplete: true } });
+  await server.send({ serverContent: { inputTranscription: { text: 'and what holds it up' } } });
+  await expect(page.locator('.inc-live-learner')).toContainText('and what holds it up');
+  await server.send({ serverContent: { outputTranscription: { text: 'Gravity pulls it straight down.' } } });
+  await expect(page.locator('.inc-live-teacher')).toContainText('Gravity pulls it straight down');
 
   // show_me changes the figure: the panel narrates it and the tool answers.
   await server.send({ toolCall: { functionCalls: [{ id: 'show-1', name: 'show_me', args: { set: { angle: 0.9 } } }] } });
@@ -228,16 +297,61 @@ test('live start reads beats, captions follow the transcript, and stop resumes p
   await expect.poll(() => server.says().length).toBeGreaterThan(saysBefore);
   await expect.poll(async () => (await liveState(page)).status).toContain('Live ·');
 
-  // Stopping live returns to normal playback at the current position.
+  // Switching the teacher off closes the session and hides the clean panel;
+  // the film plays on silently from the current position.
   const at = (await stats(page)).time;
-  await page.locator('.inc-live-toggle').click();
-  await expect(page.locator('.inc-live-toggle')).toHaveText('Live voice');
+  await switchTeacherVoiceOff(page);
   await expect(page.locator('.inc-live-panel')).toBeHidden();
   expect((await liveState(page)).active).toBe(false);
-  // A deliberate stop records no error: the panel hides because it is clean.
   expect((await liveState(page)).error).toBeNull();
   await expect.poll(async () => (await stats(page)).playing).toBe(true);
   expect((await stats(page)).time).toBeGreaterThanOrEqual(at);
+  expect(server.setups.length).toBe(1);
+});
+
+test('switching the teacher off while paused stays paused', async ({ page }) => {
+  await mintToken(page);
+  const server = await installLiveServer(page);
+  await openPlayer(page, 'thirty');
+  await page.evaluate(() => (window.__playground?.model as unknown as { seek(seconds: number): void }).seek(0));
+  await page.getByRole('button', { name: 'Play' }).click();
+  await expect.poll(() => server.says().length).toBeGreaterThan(0);
+  expect(server.blocked).toEqual([]);
+  // Pause holds the teacher mid-beat; switching off then closes the session
+  // without restarting playback.
+  await page.getByRole('button', { name: 'Pause' }).click();
+  await expect.poll(async () => (await liveState(page)).paused).toBe(true);
+  const at = (await stats(page)).time;
+  await switchTeacherVoiceOff(page);
+  await expect(page.locator('.inc-live-panel')).toBeHidden();
+  expect((await liveState(page)).active).toBe(false);
+  expect((await liveState(page)).error).toBeNull();
+  expect((await stats(page)).playing).toBe(false);
+  expect((await stats(page)).time).toBe(at);
+  expect(server.setups.length).toBe(1);
+});
+
+test('Play stays silent with Teacher voice off and opens no socket', async ({ page }) => {
+  await mintToken(page);
+  const server = await installLiveServer(page);
+  await openPlayer(page, 'thirty');
+  await openMenu(page);
+  // The switch is on by default; turning it off persists per browser.
+  await expect(page.locator('.inc-teacher-voice')).toBeChecked();
+  await page.locator('.inc-teacher-voice').uncheck();
+  await page.getByRole('button', { name: 'Play' }).click();
+  // One Play click both dismisses the ⋯ menu and starts silent playback.
+  await expect(page.locator('.inc-menu-pop')).toBeHidden();
+  await expect.poll(async () => (await stats(page)).playing).toBe(true);
+  expect((await liveState(page)).active).toBe(false);
+  expect(server.setups.length).toBe(0);
+  expect(server.blocked).toEqual([]);
+  // The choice survives a reload: Play stays silent.
+  await page.reload();
+  await page.waitForFunction(() => window.__playground?.ready === true);
+  await expect(page.locator('.inc-menu-pop')).toBeHidden();
+  await openMenu(page);
+  await expect(page.locator('.inc-teacher-voice')).not.toBeChecked();
 });
 
 test('a server-side close shows its reason and keeps the panel open', async ({ page }) => {
@@ -245,7 +359,7 @@ test('a server-side close shows its reason and keeps the panel open', async ({ p
   const server = await installLiveServer(page);
   await openPlayer(page, 'thirty');
   await page.evaluate(() => (window.__playground?.model as unknown as { seek(seconds: number): void }).seek(0));
-  await page.locator('.inc-live-toggle').click();
+  await page.getByRole('button', { name: 'Play' }).click();
   await expect.poll(() => server.says().length).toBeGreaterThan(0);
   expect(server.blocked).toEqual([]);
 
@@ -264,7 +378,7 @@ test('live voice on the Pythagoras film declares the a and b controls with range
   const server = await installLiveServer(page);
   await openPlayer(page, 'pythagoras');
   await expect(page.locator('.inc-player h2')).toHaveText('Pythagoras: talk to the teacher');
-  await page.locator('.inc-live-toggle').click();
+  await page.getByRole('button', { name: 'Play' }).click();
 
   // The setup carries per-film tools: show_me names this film's leg controls
   // with the ranges the scene declares.
@@ -277,7 +391,7 @@ test('live voice on the Pythagoras film declares the a and b controls with range
   expect(showMe?.parameters?.properties?.set?.properties?.b).toMatchObject({ minimum: 1, maximum: 8 });
   expect(server.blocked).toEqual([]);
 
-  await page.locator('.inc-live-toggle').click();
+  await switchTeacherVoiceOff(page);
   await expect(page.locator('.inc-live-panel')).toBeHidden();
   expect((await liveState(page)).active).toBe(false);
 });
@@ -291,7 +405,7 @@ test('mic denied still starts in listen-and-type mode with a typed question box'
     });
   });
   await openPlayer(page, 'thirty');
-  await page.locator('.inc-live-toggle').click();
+  await page.getByRole('button', { name: 'Play' }).click();
 
   // No mic, no failure: the teacher still reads, and the panel says to type.
   await expect.poll(() => server.says().length).toBeGreaterThan(0);
@@ -301,7 +415,6 @@ test('mic denied still starts in listen-and-type mode with a typed question box'
 
   // A typed question pauses the film like a spoken interruption and goes out
   // as a clientContent user turn with turnComplete.
-  await page.locator('.inc-player-transport button', { hasText: 'Play' }).click();
   await expect.poll(async () => (await stats(page)).playing).toBe(true);
   const question = 'Why does it keep the same time?';
   await page.locator('.inc-live-input').fill(question);
@@ -321,7 +434,7 @@ test('mic denied still starts in listen-and-type mode with a typed question box'
   expect(asked.clientContent?.turns?.[0]?.parts?.[0]?.text).toBe(question);
   expect(asked.clientContent?.turnComplete).toBe(true);
 
-  await page.locator('.inc-live-toggle').click();
+  await switchTeacherVoiceOff(page);
   await expect(page.locator('.inc-live-panel')).toBeHidden();
   expect((await liveState(page)).active).toBe(false);
 });
@@ -331,17 +444,23 @@ test('a server that never answers setup times out the start instead of hanging',
   await mintToken(page);
   const server = await installLiveServer(page, { setupComplete: false });
   await openPlayer(page, 'thirty');
-  await page.locator('.inc-live-toggle').click();
+  await page.getByRole('button', { name: 'Play' }).click();
 
   // The socket opened and the setup went out; only setupComplete never comes.
   await expect.poll(() => server.setups.length).toBe(1);
   await expect(page.locator('.inc-live-error')).toContainText('Live voice could not connect in time.', { timeout: 25_000 });
-  await expect(page.locator('.inc-live-panel')).toBeVisible();
+  // The failed start leaves the learner's tab alone: the reason shows in the
+  // status line under the transport, visible whatever tab is open.
+  await expect(page.locator('.inc-player-livenote')).toContainText('Live voice could not connect in time');
   expect((await liveState(page)).active).toBe(false);
   expect((await liveState(page)).error).toContain('Live voice could not connect in time');
-  // The toggle stays usable after the timeout.
-  await expect(page.locator('.inc-live-toggle')).toHaveText('Live voice');
-  await expect(page.locator('.inc-live-toggle')).toBeEnabled();
+  // Play stays usable after the timeout: pressing it again falls back to
+  // silent playback without reopening a socket.
+  await expect(page.getByRole('button', { name: 'Play' })).toBeEnabled();
+  await page.getByRole('button', { name: 'Play' }).click();
+  await expect.poll(async () => (await stats(page)).playing).toBe(true);
+  expect((await liveState(page)).active).toBe(false);
+  expect(server.setups.length).toBe(1);
 });
 
 /**
@@ -399,7 +518,7 @@ test('live make_example answers with what the insert actually made', async ({ pa
   ]);
   await openPlayer(page, 'thirty');
   await page.evaluate(() => (window.__playground?.model as unknown as { seek(seconds: number): void }).seek(0));
-  await page.locator('.inc-live-toggle').click();
+  await page.getByRole('button', { name: 'Play' }).click();
   await expect.poll(() => server.says().length).toBeGreaterThan(0);
 
   await server.send({ toolCall: { functionCalls: [{ id: 'make-1', name: 'make_example', args: { request: 'another swing' } }] } });
@@ -421,7 +540,7 @@ test('live make_example answers with what the insert actually made', async ({ pa
   await expect(page.locator('.inc-insert')).toContainText('Explaining deeper', { timeout: 15_000 });
   await expect(page.locator('.inc-insert')).toBeHidden({ timeout: 20_000 });
 
-  await page.locator('.inc-live-toggle').click();
+  await switchTeacherVoiceOff(page);
   await expect(page.locator('.inc-live-panel')).toBeHidden();
   expect((await liveState(page)).active).toBe(false);
 });
@@ -432,7 +551,7 @@ test('an empty insert answers make_example with ok:false', async ({ page }) => {
   await installSessionInsert(page, []);
   await openPlayer(page, 'thirty');
   await page.evaluate(() => (window.__playground?.model as unknown as { seek(seconds: number): void }).seek(0));
-  await page.locator('.inc-live-toggle').click();
+  await page.getByRole('button', { name: 'Play' }).click();
   await expect.poll(() => server.says().length).toBeGreaterThan(0);
 
   await server.send({ toolCall: { functionCalls: [{ id: 'make-2', name: 'make_example', args: { request: 'another swing' } }] } });
@@ -440,37 +559,9 @@ test('an empty insert answers make_example with ok:false', async ({ page }) => {
   expect(String(madeResult(server, 'make-2')?.error ?? '')).toMatch(/at least one line|empty/);
 
   // A refused tool records no error: stopping still hides a clean panel.
-  await page.locator('.inc-live-toggle').click();
+  await switchTeacherVoiceOff(page);
   await expect(page.locator('.inc-live-panel')).toBeHidden();
   expect((await liveState(page)).error).toBeNull();
 });
 
-test('show_me on a card beat hides the section card while paused', async ({ page }) => {
-  await mintToken(page);
-  const server = await installLiveServer(page);
-  await openPlayer(page, 'pythagoras');
-  await expect(page.locator('.inc-player h2')).toHaveText('Pythagoras: talk to the teacher');
-  await page.evaluate(() => (window.__playground?.model as unknown as { seek(seconds: number): void }).seek(0));
-  // Beat 1 carries a section card over the stage before live starts.
-  await expect(page.locator('.inc-player-xcard')).toContainText('Pythagoras and the right triangle');
-  await page.locator('.inc-live-toggle').click();
-  await expect.poll(() => server.says().length).toBeGreaterThan(0);
 
-  // show_me pauses for the demonstration: the card hides so the changed
-  // triangle is visible, while the caption keeps flowing.
-  await server.send({ toolCall: { functionCalls: [{ id: 'show-2', name: 'show_me', args: { set: { a: 6, b: 8 } } }] } });
-  await expect(page.locator('.inc-player-xcard')).toBeHidden();
-  await expect
-    .poll(() => server.toolResponses().length, { timeout: 15_000 })
-    .toBeGreaterThan(0);
-
-  // Resume reads on: the beat's own card comes back with it.
-  const saysBefore = server.says().length;
-  await server.send({ toolCall: { functionCalls: [{ id: 'resume-2', name: 'resume', args: {} }] } });
-  await expect.poll(() => server.says().length).toBeGreaterThan(saysBefore);
-  await expect(page.locator('.inc-player-xcard')).toContainText('Pythagoras and the right triangle');
-
-  await page.locator('.inc-live-toggle').click();
-  await expect(page.locator('.inc-live-panel')).toBeHidden();
-  expect((await liveState(page)).active).toBe(false);
-});

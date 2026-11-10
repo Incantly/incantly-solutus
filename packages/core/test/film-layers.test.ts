@@ -3,11 +3,9 @@ import {
   accumulatedNotes,
   applyBeatCues,
   applyCueState,
-  beatCard,
   beatCueState,
   beatWrite,
   compileFilm,
-  explainerCardRect,
   ExportCancellation,
   exportFrameLayers,
   FilmController,
@@ -23,7 +21,6 @@ import {
   sanitizeProbedSnapshot,
   sceneSplit,
   SceneRuntime,
-  solveCard,
   solveNotes,
   solveWrite,
   splitLayout,
@@ -35,7 +32,7 @@ import {
 } from '../src/index';
 
 /**
- * Explainer layers: write-on text, step-by-step notes and full-stage cards.
+ * Explainer layers: write-on text and step-by-step notes.
  * Every layer is a pure function of the fixed film clock and beat progress,
  * so seeking to t draws what playing to t draws.
  */
@@ -43,7 +40,7 @@ import {
 const fixed = (text: string, fontPx: number): number => text.length * fontPx * 0.5;
 
 const LAYER_STEPS: readonly Beat[] = [
-  { say: 'First we set the scene for the whole film.', card: { kind: 'section', text: 'The ball' } },
+  { say: 'First we set the scene for the whole film.' },
   {
     say: 'The ball sits still while we write its rule.',
     focus: 'Ball',
@@ -128,7 +125,7 @@ function driveTo(controller: FilmController, target: number): void {
 
 describe('film layers: validation', () => {
   it('accepts well-formed layers', () => {
-    expect(layerProblems({ say: 'Hi.', write: { text: 'E = m*c^2', math: true }, notes: ['One line.'], card: { kind: 'recap', text: 'Done.' } })).toEqual([]);
+    expect(layerProblems({ say: 'Hi.', write: { text: 'E = m*c^2', math: true }, notes: ['One line.'] })).toEqual([]);
     expect(layerProblems({ say: 'Hi.' })).toEqual([]);
   });
 
@@ -140,38 +137,33 @@ describe('film layers: validation', () => {
     expect(layerProblems({ say: 'Hi.', notes: ['a', 'b', 'c', 'd', 'e'] }).join(';')).toContain('at most 4');
     expect(layerProblems({ say: 'Hi.', notes: ['x'.repeat(141)] }).join(';')).toContain('at most 140');
     expect(layerProblems({ say: 'Hi.', notes: 'one' as unknown as Beat['notes'] }).join(';')).toContain('notes must be a list');
-    expect(layerProblems({ say: 'Hi.', card: { kind: 'title', text: 'Hi' } as unknown as Beat['card'] }).join(';')).toContain('not section or recap');
-    expect(layerProblems({ say: 'Hi.', card: { kind: 'recap', text: '' } }).join(';')).toContain('card needs text');
   });
 
   it('fails compilation on malformed layers, naming the beat', () => {
     const bad: Beat[] = [
-      { say: 'First we set the scene for the whole film.', card: { kind: 'section', text: 'The ball' } },
+      // Full-stage cards are gone: a step still sending one fails here.
+      { say: 'First we set the scene for the whole film.', card: { kind: 'section', text: 'The ball' } } as unknown as Beat,
       { say: 'The ball sits still while we write its rule.', notes: ['a', 'b', 'c', 'd', 'e'] },
       { say: 'And that is all the ball does today.', write: { text: '' } },
     ];
     const result = compileFilm(storyboard(), [{ id: 's1', js: '', steps: bad }]);
     expect(result.ok).toBe(false);
     expect(result.film).toBe(null);
+    expect(result.diagnostics.some((d) => d.severity === 'error' && d.beat === 'b1' && d.message.includes('sends a card'))).toBe(true);
     expect(result.diagnostics.some((d) => d.severity === 'error' && d.beat === 'b2' && d.message.includes('at most 4'))).toBe(true);
     expect(result.diagnostics.some((d) => d.severity === 'error' && d.beat === 'b3' && d.message.includes('write needs text'))).toBe(true);
   });
 });
 
 describe('film layers: cues', () => {
-  it('applies a beat write, notes and card through the same path as titles', () => {
+  it('applies a beat write and notes through the same path as titles', () => {
     const runtime = mounted(layerScene());
     const cues = applyBeatCues(runtime, LAYER_STEPS[1]!);
     expect(cues.title).toBe(null);
     expect(cues.write).toEqual({ text: 'x = 3', math: true });
     expect(cues.notes).toEqual(['The ball rests on the left.']);
-    expect(cues.card).toBe(null);
-    const carded = applyBeatCues(runtime, LAYER_STEPS[0]!);
-    expect(carded.card).toEqual({ kind: 'section', text: 'The ball' });
-    expect(carded.write).toBe(null);
     expect(beatWrite(LAYER_STEPS[1]!)).toEqual({ text: 'x = 3', math: true });
     expect(beatWrite(LAYER_STEPS[0]!)).toBe(null);
-    expect(beatCard(LAYER_STEPS[0]!)).toEqual({ kind: 'section', text: 'The ball' });
   });
 
   it('accumulates notes across the scene in order', () => {
@@ -182,15 +174,18 @@ describe('film layers: cues', () => {
     expect(accumulatedNotes(sceneBeats, 2)).toEqual(['The ball rests on the left.', 'Nothing else moves.']);
   });
 
-  it('reveals write-on text with beat progress, never wall time', () => {
+  it('reveals write-on text fast, never wall time: full within the first 40%', () => {
     const film = compiledWith(layerScene());
     const beat = film.beats[1]!;
     expect(writeShownAt(beat, beat.start)).toBe('');
     expect(writeShownAt(beat, beat.start + beat.seconds)).toBe('x = 3');
-    const mid = writeShownAt(beat, beat.start + beat.seconds / 2);
-    expect('x = 3'.startsWith(mid)).toBe(true);
-    expect(mid.length).toBeGreaterThan(0);
-    expect(mid.length).toBeLessThan('x = 3'.length);
+    // A fifth of the way in shows a proper prefix; past 40% the line is whole.
+    const early = writeShownAt(beat, beat.start + beat.seconds / 5);
+    expect('x = 3'.startsWith(early)).toBe(true);
+    expect(early.length).toBeGreaterThan(0);
+    expect(early.length).toBeLessThan('x = 3'.length);
+    expect(writeShownAt(beat, beat.start + beat.seconds / 2)).toBe('x = 3');
+    expect(writeShownAt(beat, beat.start + beat.seconds * 0.4)).toBe('x = 3');
     // Clamped past either end, and silent beats show nothing.
     expect(writeShownAt(beat, beat.start - 99)).toBe('');
     expect(writeShownAt(beat, beat.start + 99)).toBe('x = 3');
@@ -255,16 +250,6 @@ describe('film layers: solver', () => {
     expect(sceneSplit([{ step: { say: 'Hi.', notes: ['One line.'] } }])).toBe(true);
   });
 
-  it('cards the full safe area with a line that fits', () => {
-    const rect = explainerCardRect([...viewBox]);
-    expect(rect).toEqual({ minX: 20, minY: 20, maxX: 580, maxY: 380 });
-    const layout = solveCard('The ball', { viewBox: [...viewBox], stageWidthPx: 640, measure: fixed });
-    expect(layout.overflow).toBe(false);
-    expect(layout.lines).toEqual(['The ball']);
-    expect(layout.fontPx).toBeGreaterThanOrEqual(12);
-    const long = solveCard('w '.repeat(100).trim(), { viewBox: [...viewBox], stageWidthPx: 360, measure: fixed });
-    expect(long.overflow).toBe(true);
-  });
 });
 
 describe('film layers: seek equals play', () => {
@@ -319,7 +304,6 @@ describe('film layers: seek equals play', () => {
     expect(at(seekController)).toEqual(at(playController));
     expect(seekController.currentCues?.write).toEqual(playController.currentCues?.write);
     expect(seekController.currentCues?.notes).toEqual(playController.currentCues?.notes);
-    expect(seekController.currentCues?.card).toEqual(playController.currentCues?.card);
     playController.destroy();
     seekController.destroy();
   });
@@ -330,7 +314,6 @@ describe('film layers: seek equals play', () => {
     const controller = new FilmController({ runtime, film });
     const model = new PlayerModel(controller, film);
     controller.seek(film.beats[0]!.start);
-    expect(model.state.caption?.card).toEqual({ kind: 'section', text: 'The ball' });
     expect(model.state.caption?.write).toBe(null);
     expect(model.state.caption?.notes).toEqual([]);
     // Notes arrive on beat 2, but the scene splits from its first frame.
@@ -341,7 +324,6 @@ describe('film layers: seek equals play', () => {
     expect(caption.write?.text).toBe('x = 3');
     expect(caption.write?.shown).toBe(writeShownAt(film.beats[1]!, target));
     expect(caption.notes).toEqual(['The ball rests on the left.']);
-    expect(caption.card).toBe(null);
     expect(caption.split).toBe(true);
     controller.destroy();
   });
@@ -456,7 +438,6 @@ describe('film layers: export', () => {
     const byBeat = (id: string): ReturnType<typeof exportFrameLayers>[] => layers.filter((_, i) => frames[i]!.beatId === id);
     const first = byBeat('b1');
     expect(first.length).toBeGreaterThan(0);
-    expect(first.every((entry) => entry.card)).toBe(true);
     expect(first.every((entry) => entry.write === '' && entry.notes.length === 0)).toBe(true);
     // The write-on reveal grows across its beat: nothing, prefixes, and the
     // longest prefix on its last frame (the end instant itself belongs to
@@ -480,12 +461,12 @@ describe('film layers: export', () => {
   it('leaves unlayered beats and scenes empty', () => {
     const film = compiledWith(layerScene());
     // A beat id the film never carried draws nothing, never crashes.
-    expect(exportFrameLayers(film, { beatId: 'missing', time: 0 })).toEqual({ split: false, write: '', writeMath: false, notes: [], card: null });
+    expect(exportFrameLayers(film, { beatId: 'missing', time: 0 })).toEqual({ split: false, write: '', writeMath: false, notes: [] });
   });
 });
 
 describe('film layers: checks', () => {
-  it('passes a film using all three layers at every width, light and dark', () => {
+  it('passes a film using every layer at every width, light and dark', () => {
     const film = compiledWith(layerScene());
     const report = probeFilm({ film, scenes: [{ id: 's1', scene: layerScene() }] });
     expect(report.failures).toEqual([]);
@@ -551,7 +532,7 @@ describe('film layers: sandbox mirror', () => {
   it('sanitizes layered steps and rejects smuggled shapes', () => {
     const honest = {
       steps: [
-        { say: 'First we set the scene.', card: { kind: 'section', text: 'The ball' } },
+        { say: 'First we set the scene.' },
         { say: 'The ball sits still.', write: { text: 'x = 3', math: true }, notes: ['The ball rests.'] },
       ],
       params: [],
@@ -560,7 +541,7 @@ describe('film layers: sandbox mirror', () => {
       stage: null,
     };
     const sanitized = sanitizeProbedSnapshot(honest);
-    expect(sanitized?.steps[0]?.card).toEqual({ kind: 'section', text: 'The ball' });
+    expect(sanitized?.steps[0]).not.toHaveProperty('card');
     expect(sanitized?.steps[1]?.write).toEqual({ text: 'x = 3', math: true });
     expect(sanitized?.steps[1]?.notes).toEqual(['The ball rests.']);
     const mutate = (fn: (copy: { steps: Array<Record<string, unknown>> }) => void): unknown => {
@@ -574,18 +555,16 @@ describe('film layers: sandbox mirror', () => {
     expect(sanitizeProbedSnapshot(mutate((c) => (c.steps[1]!.notes = ['a', 'b', 'c', 'd', 'e'])))).toBeNull();
     expect(sanitizeProbedSnapshot(mutate((c) => (c.steps[1]!.notes = ['x'.repeat(141)])))).toBeNull();
     expect(sanitizeProbedSnapshot(mutate((c) => (c.steps[1]!.notes = [])))).toBeNull();
-    expect(sanitizeProbedSnapshot(mutate((c) => (c.steps[1]!.card = { kind: 'title', text: 'Hi' })))).toBeNull();
-    expect(sanitizeProbedSnapshot(mutate((c) => (c.steps[0]!.card = { kind: 'section', text: '' })))).toBeNull();
+    expect(sanitizeProbedSnapshot(mutate((c) => (c.steps[1]!.card = { kind: 'section', text: 'The ball' })))).toBeNull();
+    expect(sanitizeProbedSnapshot(mutate((c) => (c.steps[0]!.card = { kind: 'title', text: 'Hi' })))).toBeNull();
   });
 
   it('mirrors layers in the absolute cue state, revealed by film time', () => {
     const film = compiledWith(layerScene());
     const authored = new Set<string>();
     const at = (index: number, time?: number): NonNullable<ReturnType<typeof beatCueState>> => beatCueState(film, 's1', index, authored, time)!;
-    expect(at(0).card).toEqual({ kind: 'section', text: 'The ball' });
     expect(at(0).write).toBe(null);
     expect(at(0).notes).toEqual([]);
-    expect(at(1).card).toBe(null);
     expect(at(1).notes).toEqual(['The ball rests on the left.']);
     expect(at(2).notes).toEqual(['The ball rests on the left.', 'Nothing else moves.']);
     const beat = film.beats[1]!;

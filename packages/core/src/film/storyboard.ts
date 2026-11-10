@@ -35,7 +35,7 @@ export const FILM_READING_WPS_LIMIT = 3.5;
 /** Longest a scene may run in seconds (bench: seek-by-replay stays under ~150 ms on the slowest supported iPad). */
 export const FILM_SCENE_MAX_SECONDS = 60;
 
-/** Longest a beat's write-on text or card line may be, in characters. */
+/** Longest a beat's write-on text may be, in characters. */
 export const FILM_LAYER_TEXT_MAX = 200;
 
 /** Most note lines one beat may introduce. */
@@ -119,7 +119,6 @@ export interface StoryboardBeat {
   readonly predict?: Beat['predict'];
   readonly write?: Beat['write'];
   readonly notes?: Beat['notes'];
-  readonly card?: Beat['card'];
 }
 
 /**
@@ -145,14 +144,6 @@ export function layerProblems(step: Beat): string[] {
         if (typeof line !== 'string' || line.trim() === '') problems.push(`notes line ${i + 1} needs text`);
         else if (line.length > FILM_NOTE_TEXT_MAX) problems.push(`notes line ${i + 1} runs ${line.length} characters; at most ${FILM_NOTE_TEXT_MAX}`);
       });
-    }
-  }
-  if (step.card !== undefined) {
-    if (typeof step.card !== 'object' || step.card === null || Array.isArray(step.card)) problems.push('card must be { kind, text }');
-    else {
-      if (step.card.kind !== 'section' && step.card.kind !== 'recap') problems.push(`card kind "${String((step.card as { kind?: unknown }).kind)}" is not section or recap`);
-      if (typeof step.card.text !== 'string' || step.card.text.trim() === '') problems.push('card needs text');
-      else if (step.card.text.length > FILM_LAYER_TEXT_MAX) problems.push(`card runs ${step.card.text.length} characters; at most ${FILM_LAYER_TEXT_MAX}`);
     }
   }
   return problems;
@@ -466,6 +457,14 @@ export function compileFilm(spec: unknown, sources: readonly FilmSceneSource[]):
       }
       const beat = rawBeat as unknown as StoryboardBeat;
       if (seenBeats.has(beat.id)) error(`Beat "${excerpt(beat.id)}" is used twice`, scene.id, beat.id);
+      // Full-stage cards are gone: any beat still sending one — in the
+      // storyboard or the scene step — fails here with a clear diagnostic.
+      if (isRecord(rawBeat) && rawBeat.card !== undefined) {
+        error(`Beat "${excerpt(beat.id)}" sends a card, which films no longer show; remove the card field`, scene.id, beat.id);
+      }
+      if (isRecord(step) && step.card !== undefined) {
+        error(`Beat "${excerpt(beat.id)}" sends a card, which films no longer show; remove the card field`, scene.id, beat.id);
+      }
       seenBeats.add(beat.id);
       if (typeof beat.say !== 'string' || beat.say.trim() === '') {
         error(`Beat "${excerpt(beat.id)}" needs something to say`, scene.id, beat.id);
@@ -478,7 +477,7 @@ export function compileFilm(spec: unknown, sources: readonly FilmSceneSource[]):
         error(`Beat "${excerpt(beat.id)}" is step ${index + 1} but the scene calls it "${excerpt(step.id)}"`, scene.id, beat.id);
       }
       // The scene's step is what runs; where the storyboard drifted from it, the storyboard is stale.
-      for (const field of ['focus', 'set', 'ease', 'cam', 'show', 'hide', 'mark', 'title', 'short', 'sfx', 'explore', 'predict', 'write', 'notes', 'card'] as const) {
+      for (const field of ['focus', 'set', 'ease', 'cam', 'show', 'hide', 'mark', 'title', 'short', 'sfx', 'explore', 'predict', 'write', 'notes'] as const) {
         if (driftFingerprint(beat[field]) !== driftFingerprint(step[field])) {
           warn(`Beat "${excerpt(beat.id)}" ${field} drifted from the storyboard; the scene wins`, scene.id, beat.id);
         }

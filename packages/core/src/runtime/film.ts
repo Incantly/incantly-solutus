@@ -78,8 +78,6 @@ export interface AppliedCues {
   readonly write: { readonly text: string; readonly math: boolean } | null;
   /** The note lines this beat introduces; what shows is accumulatedNotes of the scene. */
   readonly notes: readonly string[];
-  /** The beat's full-stage card, or null. A card covers write and notes while shown. */
-  readonly card: { readonly kind: 'section' | 'recap'; readonly text: string } | null;
 }
 
 /** A beat's title as text and kind. */
@@ -92,12 +90,6 @@ export function beatTitle(beat: Beat): AppliedCues['title'] {
 export function beatWrite(beat: Beat): AppliedCues['write'] {
   if (beat.write === undefined) return null;
   return { text: beat.write.text, math: beat.write.math ?? false };
-}
-
-/** A beat's full-stage card, or null when the beat carries none. */
-export function beatCard(beat: Beat): AppliedCues['card'] {
-  if (beat.card === undefined) return null;
-  return { kind: beat.card.kind, text: beat.card.text };
 }
 
 /**
@@ -115,16 +107,19 @@ export function accumulatedNotes(beats: readonly { readonly step: Beat }[], inde
 
 /**
  * How much of a beat's write-on text shows at a film time: a prefix growing
- * with beat progress, full at the beat's end. A pure function of the fixed
- * film clock, never wall time, so seeks draw what plays draw.
+ * fast, full within the first 40% of the beat, so the learner reads the
+ * line while the teacher keeps talking. A pure function of the fixed film
+ * clock, never wall time, so seeks draw what plays draw.
  */
 export function writeShownAt(beat: CompiledBeat, time: number): string {
   const write = beat.step.write;
   if (write === undefined) return '';
   const chars = [...write.text];
   if (beat.seconds <= 0) return write.text;
-  const progress = Math.min(1, Math.max(0, (time - beat.start) / beat.seconds));
-  return chars.slice(0, Math.floor(progress * chars.length)).join('');
+  const progress = Math.min(1, Math.max(0, (time - beat.start) / (beat.seconds * 0.4)));
+  // A hair past each character's threshold still shows it: float time rarely
+  // lands exactly on a boundary.
+  return chars.slice(0, Math.min(chars.length, Math.floor(progress * chars.length + 1e-6))).join('');
 }
 
 /** Beats that pause the film at their start until the learner resumes. */
@@ -205,7 +200,7 @@ export function applyBeatCues(runtime: SceneRuntime, beat: Beat, options: { read
   }
   let sfxPlayed = false;
   if (options.sfx !== false && beat.sfx !== undefined) sfxPlayed = cueSfx(runtime, beat.sfx);
-  return { focusing, framing, sfxPlayed, title: beatTitle(beat), write: beatWrite(beat), notes: [...(beat.notes ?? [])], card: beatCard(beat) };
+  return { focusing, framing, sfxPlayed, title: beatTitle(beat), write: beatWrite(beat), notes: [...(beat.notes ?? [])] };
 }
 
 /**
