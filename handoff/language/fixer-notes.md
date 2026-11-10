@@ -102,3 +102,47 @@ The four findings are `fixed` in `handoff/language/findings.md`. `npm run lint` 
 ## Not updated
 
 `docs/state-machines.md` belongs to the checker; L1, L2, L3, L5, L7 and L8 still describe the open state of these four findings.
+
+# Round 4: checker findings LANG-SM-24, 25, 26, 27
+
+All four findings are `fixed` in `handoff/language/findings.md`.
+
+## Fixes
+
+| Finding | Fix | Where |
+|---|---|---|
+| SM-27 | Ruling SM-23 (narrowed): `checkCycle` follows value and range reads only. `checkRestyle` no longer runs it. `ScratchFigure` stores value and range reads as an object's inputs; style reads stay on `CheckedLine` for the kernel | `lines.ts`, `figure.ts` |
+| SM-24 | `hexColourLength` skips every character `normalise` rewrites to a space; the set is built from `REPLACE`, so the two cannot drift | `source.ts` |
+| SM-25, SM-26 | One arithmetic rule on every path (below) | `compile.ts`, `builtins.ts` |
+
+## The arithmetic rule
+
+Division by zero gives `division_by_zero`. Finite inputs that overflow give `overflow`. An infinity is a value only when an input was infinite. A result that is not a number from numeric inputs (`inf - inf`, `0 * inf`) gives `not_finite`. An undefined operand gives `input_undefined`. A list, point or vector with any undefined part is undefined as a whole; it is never stored as a defined value.
+
+## Paths checked
+
+- Number `+ - * / ^`: already followed the rule; `guardInf` now also sets `not_finite` for a NaN made from numeric inputs.
+- Number negation, `fact`, the Number built-ins (`fin`): unchanged, they already followed the rule.
+- `num*vec`, `vec*num`, `vec/num`, `vec+vec`, `pt+vec`, `vec-vec`, `pt-vec`, `pt-pt`: per coordinate `guardInf`; zero divisor is `division_by_zero`; an undefined operand is `input_undefined`.
+- Vector negation: an undefined operand is `input_undefined`.
+- `list-num` (`+ - * / ^`): zero divisor and any undefined or overflowing item make the whole list undefined with the matching reason.
+- `fn` (function with function or Number, `^`, `/`): `pointwise` now takes the operator; zero divisor and `0 ^ negative` are `division_by_zero`, negative base with fractional exponent is `out_of_domain`, overflow and `not_finite` as above; an undefined Number operand makes the function undefined.
+- Function negation: an undefined function operand is `input_undefined` (it used to throw inside `evaluate`).
+- Polar point `(r; a)`: infinite angle is `not_finite`; coordinates go through `guardInf`.
+- Point literal: undefined coordinate gives `input_undefined` unless a reason is set.
+- List literal (Number and other item types): any undefined item makes the list undefined.
+- Fields (`.length`, `.area`, `.perimeter`, `.point`, ...): an infinity or NaN from an object with only finite numbers is `overflow` or `not_finite`; `Line.point` of a line with no direction is `division_by_zero`.
+- Built-ins with a `call` that return a Number: the infinite-input test now looks inside points, vectors and lists (`norm`, `dot`, `cross`).
+- `unit`: infinite vector is `not_finite`; a length that overflows from finite parts is computed from the scaled vector instead of giving `(0, 0)`.
+- Text parts: no arithmetic of their own; the parts' expressions are compiled by the paths above.
+- Not changed: derivative ticks (`f'(x)`), ranges `[a..b]` (bounds and step must be finite, size limited), index, conditional, relation coefficients, commands (run by the kernel).
+
+## Behaviour changes worth knowing
+
+- `L / 0` and `[1, 1/0]` are undefined, not a list holding undefined items.
+- `-f` with `f` undefined is `input_undefined`.
+- `P with showIf = P.x > 0` and `a with opacity = a / 20` are accepted; `a in 0..a` and `a = 3 in 0..b` with `b = a + 1` are still `cycle`.
+
+## Checks
+
+`npm run lint` and `npm run typecheck` pass; `npx vitest run packages/kernel/test/spec`: 1,323 of 1,323 pass. No contested tests.

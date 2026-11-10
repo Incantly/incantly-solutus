@@ -205,7 +205,8 @@ Checker round 3 (pipeline step 7, final confirm round) at commit `94f9db0`. Each
   - `list-num` (`compile.ts:552`, `560`) sets each element to NaN and calls `fail(env, 'division_by_zero')`, but returns the list: `L = [1, 2]`, `L5 = L / 0` is stored as the defined value `[undefined, undefined]`. The overflow branch of the same loop makes the whole list undefined. One operation now has two rules for a bad element.
 - **Invariant broken:** L8 and L9: a Number operation that divides by exactly zero is undefined `division_by_zero` on every path; a value is undefined exactly when its reason is set.
 - **Suggested fix:** in `pointwise`, test the divisor (and the base-0, negative-exponent case of `^`) before classifying, and set `division_by_zero`, ideally by sharing the single-Number operator code instead of the local `f`. In `list-num`, return `undefined` after `fail(env, 'division_by_zero')`, as the overflow branch does, unless the product owner rules that a list may hold undefined elements from arithmetic (no doc says so).
-- **status:** open
+- **status:** fixed
+- **fix (round 4):** `pointwise` tests the divisor and the `0 ^ negative` and negative-base cases before classifying, so function arithmetic gives `division_by_zero` and `out_of_domain` like a single Number; `list-num` makes the whole list undefined on a zero divisor; one rule for every value kind (see fixer-notes, Round 4) (`compile.ts`).
 
 ### LANG-SM-26: Point and vector arithmetic stores an infinity made from finite numbers
 
@@ -213,7 +214,8 @@ Checker round 3 (pipeline step 7, final confirm round) at commit `94f9db0`. Each
 - **Evidence:** found in round 3; present before round 3 too (these variants never had a guard). `num*vec`, `vec*num`, `vec/num`, `vec+vec`, `pt+vec`, `vec-vec`, `pt-vec` and `pt-pt` (`compile.ts:469-505`) compute each coordinate with no `guardInf`. With `V = (1e308, 0) - (0, 0)`: `V * 10`, `10 * V`, `V / 1e-10`, `V + V` and `(1e308, 0) + V` are all stored as `(inf, 0)`, defined. The Number line `1e308 * 10` is `undefined (overflow)`. This is the gap LANG-SM-22 closed for lists and functions; the finding did not list these variants.
 - **Invariant broken:** L8 and L9: an infinity made from finite inputs is `overflow`; an infinity that follows from an `inf` input is a value.
 - **Suggested fix:** apply `guardInf` per coordinate (inputs: the scalar and that coordinate, or the two coordinates), and fail the whole point or vector with `overflow`, as `list-num` now does.
-- **status:** open
+- **status:** fixed
+- **fix (round 4):** every point and vector operator applies `guardInf` per coordinate and returns an undefined value when a coordinate is not a number; the same rule now covers polar points, list and point literals, fields and `unit` (`compile.ts`, `builtins.ts`).
 
 ## Wrong errors
 
@@ -228,7 +230,8 @@ Checker round 3 (pipeline step 7, final confirm round) at commit `94f9db0`. Each
   The ruling's question (rulings row SM-23) was about ranges only; for ranges the reason holds, since `slider_clamped` lets a bound move the value. A style value has no such path back.
 - **Invariant broken:** L7: a redefinition that keeps the value and range graph acyclic is never refused; style edges are not followed (kernel design 9.2).
 - **Suggested fix:** ask the product owner to narrow ruling SM-23 to range edges (or to amend kernel design 9.2). If ranges only: in `checkCycle` start from `reads` and `rangeReads` only, skip the test in `checkRestyle`, and keep style reads out of the inputs `ScratchFigure` follows for the cycle test (keep them for `dependentsOf` if the kernel needs the restyle list).
-- **status:** open
+- **status:** fixed
+- **fix (round 4):** `checkCycle` follows value and range reads only; `checkRestyle` no longer runs it and `ScratchFigure` stores value and range reads as inputs (`lines.ts`, `figure.ts`).
 
 ### LANG-SM-24: A `#rrggbb` colour after `=` is a comment to the normaliser and the splitter but a name to the lexer
 
@@ -239,7 +242,8 @@ Checker round 3 (pipeline step 7, final confirm round) at commit `94f9db0`. Each
   - Cursor context: `complete('P with color = #ff0000, opacity = (1 +\n  ', …)` treats the second line as a new logical line (`lastLogicalStart`) and offers the `#` and `@` snippets.
 - **Invariant broken:** L1, L2 and L13: the normaliser, the splitter and the cursor context see the same comment boundaries as the lexer.
 - **Suggested fix:** move the hex-colour test into one shared helper (the previous non-space character is `=`, then `#` and 3, 4, 6 or 8 hex digits not followed by a name character, as `lexer.ts:137` tests) and call it from `normalise`, `scanLineDepth` and the lexer.
-- **status:** reopened
+- **status:** fixed
+- **fix (round 4):** `hexColourLength` skips exactly the characters `normalise` rewrites to a space (set built from `REPLACE`), so the normaliser, the splitter and the lexer agree for U+2009, U+202F, U+2003, U+2002 (`source.ts`).
 - **fix (round 3):** One helper `hexColourLength` (`source.ts`) decides whether a `#` after `=` is a colour; `normalise`, `scanLineDepth` and the lexer all call it, so the rest of the line is rewritten and a bracket opened after the colour continues the line.
 - **check (round 3):** Reopened. The cases in the finding are fixed: `P with color = #ff0000, opacity = 1 − 0.5` is accepted, the continuation script splits into two good entries, and `#`, `==`, `<=`, `≠` before a `#` and comments after a colour behave the same in all three scanners. But the three call it on different texts. `normalise` calls it on the raw text (after NFC, `source.ts:158`), `scanLineDepth` on the raw text (`source.ts:334`, from `splitLogicalLines` and `lastLogicalStart`), and the lexer on the normalised text (`lexer.ts:135`). `hexColourLength` (`source.ts:39`) skips only space, tab and U+00A0 between `=` and `#`, while `normalise` rewrites four more blanks to a space (`REPLACE`, `source.ts:18`: U+2009 thin space, U+202F narrow no-break space, U+2003 em space, U+2002 en space). With one of those four between `=` and `#`, the normaliser and the splitter see a comment and the lexer sees a colour, as before the fix:
   - `P with color =\u202F#ff0000, opacity = 1 − 0.5` (narrow no-break space, which French typography and some editors insert before punctuation) is `bad_character` "The character − (U+2212) is not part of the language" at col 37; the normalised text keeps the `−`. Same for U+2009, U+2003 and U+2002; space, tab and U+00A0 are accepted.
