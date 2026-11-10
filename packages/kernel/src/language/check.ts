@@ -185,6 +185,11 @@ class Checker {
   reads = new Set<ObjId>();
   usesT = false;
   hasCommand = false;
+  /**
+   * The one call that may be an action: the whole of an action line. Any other call to a command whose forms return
+   * nothing is used as a value, and an action is not a value.
+   */
+  actionCall: CallExpr | null = null;
   /** Reads of range bounds and style values, kept apart from the reads of the value (see `apart`). */
   readonly rangeReads = new Set<ObjId>();
   readonly styleReads = new Set<ObjId>();
@@ -1093,6 +1098,12 @@ class Checker {
     if (!m) return null;
     const form = m.form;
     const ret = form.returns;
+    if (ret === null && this.actionCall !== e) {
+      return this.err('type_mismatch', e.s, e.e, 'lang.type_mismatch_where', { why: `${spec.name} is an action, not a value` }, {
+        hint: 'Write it on its own line.',
+        fingerprintKey: spec.name,
+      });
+    }
     let ty: Ty;
     let tuple: Ty[] | undefined;
     if (ret === null) ty = T.Bool;

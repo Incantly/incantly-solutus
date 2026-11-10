@@ -192,3 +192,11 @@ The first LANG-SM-32 fix kept the reads of the defining line's styles in one set
 - Removal: `ScratchFigure` has no delete; a removed target would take its rules with its entry. The real kernel must drop a target's rules when the target goes.
 - Style reads stay out of `inputsOf` and the cycle test (ruling SM-23).
 - Checked by hand: replace through `P with`, replace through a redefinition with `with`, replace twice, swap to another function, replace one of two properties (the other still counts), keep through a redefinition without `with`.
+
+## Spec review fixes
+
+### A1. An action used as a value (fixed)
+
+- `Checker.actionCall` (`check.ts`) holds the one call that may be an action: the whole of an action line. `checkAction` (`lines.ts`) sets it around its `infer` call. `inferCommand` refuses any other call whose form returns nothing with `type_mismatch`: "Hide is an action, not a value." Hint: "Write it on its own line." The error marks the call.
+- Every position goes through `inferCommand`, so definitions, list items, operands, `if` branches, function bodies, arguments of functions, object commands and other actions, binder bodies and bounds, range bounds, text interpolation and style values on `with` and restyle lines are all covered.
+- Extra place: a style property that takes a plain word (`visible`, enums) did not infer its value, so `A with visible = Hide(B)` said "visible must be true or false". `checkStyleItem` (`lines.ts`) now infers a call there first, so the action message wins.

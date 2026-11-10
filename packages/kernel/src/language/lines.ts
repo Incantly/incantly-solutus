@@ -360,6 +360,8 @@ function checkStyleItem(c: Checker, it: StyleItem, keys: readonly string[], out:
     if (suggest !== undefined) extra.suggest = [suggest];
     c.err('bad_property_value', v.s, v.e, 'lang.bad_property_value', { key: it.key, allowed: spec.allowed }, extra);
   };
+  // a call in a position that takes a plain word still gets checked, so an action there says it is an action
+  if ((spec.kind === 'bool' || spec.kind === 'enum') && v.k === 'call' && !c.infer(v)) return;
   const unboundWord = v.k === 'name' && !c.lookupLocal(v.name) && !c.fig.lookup(v.name) && !CONSTANT_LIKE.has(v.name);
   switch (spec.kind) {
     case 'bool':
@@ -770,7 +772,9 @@ function checkAction(c: Checker, node: Extract<LineNode, { k: 'action' }>): Part
     return undefined;
   }
   c.ctx = {};
+  c.actionCall = call;
   const tn = c.infer(call);
+  c.actionCall = null;
   if (!tn || tn.n !== 'command') return undefined;
   return { kind: 'action', op: 'action', names: [], free: false, isState: false, expr: tn };
 }

@@ -138,6 +138,8 @@ Shared error list (`docs/features/errors/design.md` section 4), each kind checke
 - **Harm:** the kernel would create an object whose rule runs an action each time an input changes (hide, delete, rename on recompute).
 - **Fix:** in `inferCommand`, when `ret === null` and the call is not the whole line, raise `type_mismatch` (or `bad_argument`) "Hide is an action, not a value", hint "Write it on its own line". Keep `checkAction` for the line case.
 
+- **Status:** fixed
+
 ### A2. `via` versus `cause`
 
 - **Doc:** README decision 2 and `contracts/values.ts:43` define an undefined value as `{ reason, detail?, cause? }`. `language/errors.md` and `design.md` 3.15 say `via`.
