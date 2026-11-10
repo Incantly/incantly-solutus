@@ -1326,11 +1326,11 @@ describe('LANG-SM-23: a slider range may not read the slider or anything downstr
     expect(fig.lookup('s2')?.free).toBe(true);
   });
 
-  it('LANG-SM-23: a new name that reads itself in its range is refused (cycle or unknown name)', () => {
+  it('LANG-SM-23: a new name that reads itself in its range is unknown_name (ruling Q-R4-1: the range still may not read the name)', () => {
     const fig = emptyFig();
     const r = fig.apply('zz = 3 in 0..zz');
     expect(r.ok).toBe(false);
-    expect(['cycle', 'unknown_name']).toContain(errOf(r).kind);
+    expect(errOf(r).kind).toBe('unknown_name');
   });
 });
 
@@ -2961,5 +2961,228 @@ describe('LANG-SM-32: a redefinition re-checks every style that reads the object
       expect(fig.apply('P = (3, 4)').ok).toBe(true);
       expect(fig.lookup('P')?.free).toBe(true);
     });
+  });
+});
+
+describe('Q-R4-1: a defining line may style itself (ruling option a); a range may not read the name', () => {
+  // Readings where the docs are silent:
+  // - The ruling names Points (P9, c1) and the slider range. Its rule is "in the with list of a defining
+  //   line, the name being defined resolves to the new object", so it is tested for every value kind
+  //   (Number, slider, Point, Vector, List, Text, Bool, Function). A defining line with a self-reading
+  //   style is also accepted for a function even though `h(1)` inside its own `with` list is a call
+  //   on the new function.
+  // - The value part of a defining line (`a = a + 1`, `P9 = (P9.x, 2)`) is not touched by the ruling:
+  //   it is `unknown_name` on a new name, as in design 3.19.
+  // - A style that reads some other unknown name is still `unknown_name`, for that name.
+  // - Only the first definition matters. On an existing name the line is accepted (SM-27, control below).
+
+  interface Own {
+    readonly kind: string;
+    readonly name: string;
+    readonly line: string;
+    readonly value: unknown;
+  }
+
+  const OWN: readonly Own[] = [
+    { kind: 'Point (showIf)', name: 'P9', line: 'P9 = (1, 2) with showIf = P9.x > 0', value: { x: 1, y: 2 } },
+    { kind: 'Point (opacity)', name: 'c1', line: 'c1 = (1, 2) with opacity = c1.x / 10', value: { x: 1, y: 2 } },
+    { kind: 'Point (if)', name: 'P8', line: 'P8 = (1, 2) with opacity = if(P8.x > 0, 1, 0.5)', value: { x: 1, y: 2 } },
+    { kind: 'Point (two keys)', name: 'P7', line: 'P7 = (1, 2) with width = 3, opacity = P7.y / 10', value: { x: 1, y: 2 } },
+    { kind: 'Number', name: 'q1', line: 'q1 = 3 with opacity = q1 / 10', value: 3 },
+    { kind: 'Number slider', name: 's1', line: 's1 = 3 in 0..20 with opacity = s1 / 20', value: 3 },
+    { kind: 'Vector', name: 'v1', line: 'v1 = (1, 2) - (0, 0) with opacity = v1.x / 10', value: { x: 1, y: 2 } },
+    { kind: 'List', name: 'l1', line: 'l1 = [1, 2] with opacity = l1[1] / 10', value: undefined },
+    { kind: 'Text', name: 'm1', line: 'm1 = "hi" with opacity = m1.length / 10', value: 'hi' },
+    { kind: 'Bool', name: 'b1', line: 'b1 = true with showIf = b1', value: true },
+    { kind: 'Function', name: 'h1', line: 'h1(x) = x with opacity = h1(1) / 10', value: undefined },
+  ];
+
+  it.each(OWN.map((o) => [o.kind, o] as const))('Q-R4-1: %s: the style reads the name being defined and the line is accepted on a fresh figure', (_k, own) => {
+    const fig = emptyFig();
+    const c = analyseLine(own.line, fig);
+    expect(c.ok, c.ok ? '' : `analyseLine ${own.line}: ${errOf(c).kind}: ${errOf(c).message}`).toBe(true);
+    const r = fig.apply(own.line);
+    expect(r.ok, r.ok ? '' : `${own.line}: ${errOf(r).kind}: ${errOf(r).message}`).toBe(true);
+    const info = fig.lookup(own.name);
+    expect(info, `${own.name} was made`).toBeDefined();
+    // A function is a rule, not a free object; every other kind here is free because a style edge decides nothing.
+    if (own.kind !== 'Function') expect(info?.free, `${own.name} is free: a style edge decides nothing`).toBe(true);
+    if (own.value !== undefined) expect(fig.valueOf(own.name)).toEqual(own.value);
+    else expect(fig.valueOf(own.name)).toBeDefined();
+  }, 10_000);
+
+  it('Q-R4-1: the two lines of the ruling', () => {
+    const fig = emptyFig();
+    applyOk(fig, 'P9 = (1, 2) with showIf = P9.x > 0');
+    applyOk(fig, 'c1 = (1, 2) with opacity = c1.x / 10');
+    expect(fig.lookup('P9')).toBeDefined();
+    expect(fig.lookup('c1')).toBeDefined();
+  });
+
+  it('Q-R4-1: no edge is added: the checked line reads nothing, and the object is free', () => {
+    const fig = emptyFig();
+    for (const o of OWN.filter((x) => x.kind !== 'Function')) {
+      const c = analyseLine(o.line, fig);
+      expect(c.ok, o.line).toBe(true);
+      if (c.ok) {
+        expect(c.value.reads, `${o.line}: no value reads`).toEqual([]);
+        expect(c.value.free, `${o.line}: free`).toBe(true);
+      }
+    }
+  });
+
+  it('Q-R4-1: no cycle follows: readers of the object and later redefinitions behave as for any free object', () => {
+    const fig = emptyFig();
+    applyOk(fig, 'P9 = (1, 2) with showIf = P9.x > 0');
+    applyOk(fig, 'Q = (P9.x + 1, P9.y)');
+    expect(fig.lookup('Q')?.free).toBe(false);
+    expect(fig.apply('P9 = (5, 6) with showIf = P9.x > 0').ok).toBe(true);
+    expect(fig.apply('P9 with opacity = P9.y / 10').ok).toBe(true);
+    expect(fig.apply('P9 with showIf = Q.x > 0').ok).toBe(true);
+    // A value cycle is still a cycle.
+    const r = fig.apply('P9 = (Q.x, 1)');
+    expect(r.ok).toBe(false);
+    expect(errOf(r).kind).toBe('cycle');
+  });
+
+  it('Q-R4-1: a style that reads another name that does not exist is unknown_name for that name', () => {
+    const fig = emptyFig();
+    for (const line of ['P9 = (1, 2) with showIf = zz.x > 0', 'P9 = (1, 2) with opacity = P9.x / zz', 'P9 = (1, 2) with showIf = P9.x > zz.x']) {
+      const r = fig.apply(line);
+      expect(r.ok, `${line} must be refused`).toBe(false);
+      const e = errOf(r, line);
+      expect(e.kind, line).toBe('unknown_name');
+      expect(e.token, line).toBe('zz');
+      expect(fig.lookup('P9'), `${line} makes no object`).toBeUndefined();
+    }
+  });
+
+  it('Q-R4-1: a style that reads a name defined later on the same line list is unknown_name (only the defined name resolves)', () => {
+    const fig = emptyFig();
+    const r = fig.apply('P9 = (1, 2) with showIf = Q9.x > 0');
+    expect(r.ok).toBe(false);
+    expect(errOf(r).kind).toBe('unknown_name');
+  });
+
+  it('Q-R4-1: the value part may not read the name being defined: unknown_name on a new name (design 3.19)', () => {
+    const fig = emptyFig();
+    for (const line of ['a = a + 1', 'a = a + 1 with opacity = 0.5', 'P9 = (P9.x, 2) with showIf = P9.x > 0', 'P9 = (1, P9.y)']) {
+      const r = fig.apply(line);
+      expect(r.ok, `${line} must be refused`).toBe(false);
+      expect(errOf(r, line).kind, line).toBe('unknown_name');
+    }
+  });
+
+  it('Q-R4-1: a failed first definition leaves the name free, and a later definition works', () => {
+    const fig = emptyFig();
+    expect(fig.apply('P9 = (1, 2) with showIf = zz.x > 0').ok).toBe(false);
+    expect(fig.lookup('P9')).toBeUndefined();
+    expect(fig.apply('P9 = (1, 2) with showIf = P9.x > 0').ok).toBe(true);
+    expect(fig.lookup('P9')).toBeDefined();
+  });
+
+  describe('a range bound on a defining line still may not read the name', () => {
+    it('Q-R4-1: k = 3 in 0..k is unknown_name on a fresh figure', () => {
+      const fig = emptyFig();
+      const r = fig.apply('k = 3 in 0..k');
+      expect(r.ok).toBe(false);
+      const e = errOf(r);
+      expect(e.kind).toBe('unknown_name');
+      expect(e.token).toBe('k');
+      expect(fig.lookup('k'), 'nothing was made').toBeUndefined();
+    });
+
+    it('Q-R4-1: the lower bound, an expression bound and both bounds are unknown_name too', () => {
+      for (const line of ['k = 3 in k..10', 'k = 3 in 0..k + 1', 'k = 3 in 0..2 * k', 'k = 3 in k..k', 'k = 3 in -k..k', 'k = 3 in 0..if(k > 1, 5, 10)']) {
+        const fig = emptyFig();
+        const r = fig.apply(line);
+        expect(r.ok, `${line} must be refused`).toBe(false);
+        expect(errOf(r, line).kind, line).toBe('unknown_name');
+        expect(fig.lookup('k'), line).toBeUndefined();
+      }
+    });
+
+    it('Q-R4-1: a style on the same line does not change the answer for the range', () => {
+      for (const line of ['k = 3 in 0..k with opacity = k / 10', 'k = 3 in 0..k with opacity = 0.5', 'k = 3 in 0..k with showIf = k > 1']) {
+        const fig = emptyFig();
+        const r = fig.apply(line);
+        expect(r.ok, `${line} must be refused`).toBe(false);
+        expect(errOf(r, line).kind, line).toBe('unknown_name');
+      }
+    });
+
+    it('Q-R4-1: the same slider with a legal range and a self-reading style is accepted', () => {
+      const fig = emptyFig();
+      expect(fig.apply('k = 3 in 0..20 with opacity = k / 20').ok).toBe(true);
+      expect(fig.lookup('k')?.slider).toBe(true);
+    });
+
+    it('Q-R4-1: once k exists, k = 3 in 0..k is a cycle', () => {
+      const fig = emptyFig();
+      applyOk(fig, 'k = 3');
+      const r = fig.apply('k = 3 in 0..k');
+      expect(r.ok).toBe(false);
+      const e = errOf(r);
+      expect(e.kind).toBe('cycle');
+      expect(JSON.stringify([e.path, e.related, e.message])).toContain('k');
+      expect(fig.valueOf('k')).toBe(3);
+    });
+
+    it('Q-R4-1: once k exists as a slider, the range cycles are still cycles (SM-23 control)', () => {
+      const fig = emptyFig();
+      applyOk(fig, 'k = 3 in 0..20');
+      for (const line of ['k = 3 in 0..k', 'k in 0..k', 'k in k..30', 'k = 3 in 0..k with opacity = k / 10']) {
+        const r = fig.apply(line);
+        expect(r.ok, `${line} must be refused`).toBe(false);
+        expect(errOf(r, line).kind, line).toBe('cycle');
+      }
+    });
+
+    it('Q-R4-1: unknown_name first, then cycle once the name exists: the same line in order', () => {
+      const fig = emptyFig();
+      expect(errOf(fig.apply('k = 3 in 0..k')).kind).toBe('unknown_name');
+      applyOk(fig, 'k = 3');
+      expect(errOf(fig.apply('k = 3 in 0..k')).kind).toBe('cycle');
+    });
+  });
+
+  describe('a saved figure keeps its self-reading styles on the defining line (kernel design 9.2: saved after the object, in with form)', () => {
+    const SCRIPT = [
+      'P9 = (1, 2) with showIf = P9.x > 0',
+      'c1 = (1, 2) with opacity = c1.x / 10',
+      'k = 3 in 0..20 with opacity = k / 20',
+      'Q = (P9.x + 1, c1.y)',
+      'P9 with color = red',
+    ];
+
+    it('Q-R4-1: every line loads into an empty figure, in order', () => {
+      const fig = emptyFig();
+      for (const line of SCRIPT) {
+        const r = fig.apply(line);
+        expect(r.ok, r.ok ? '' : `${line}: ${errOf(r).kind}: ${errOf(r).message}`).toBe(true);
+      }
+      for (const n of ['P9', 'c1', 'k', 'Q']) expect(fig.lookup(n), n).toBeDefined();
+    });
+
+    it('Q-R4-1: loading it twice gives the same figure (redefinition on existing names, SM-27)', () => {
+      const fig = emptyFig();
+      for (const line of SCRIPT) applyOk(fig, line);
+      for (const line of SCRIPT) {
+        const r = fig.apply(line);
+        expect(r.ok, r.ok ? '' : `${line}: ${errOf(r).kind}: ${errOf(r).message}`).toBe(true);
+      }
+    });
+
+    it('Q-R4-1: parseProgram splits it into one entry per line with no error', () => {
+      const entries = parseProgram(SCRIPT.join('\n'));
+      expect(entries.length).toBe(SCRIPT.length);
+    });
+  });
+
+  it('Q-R4-1: on an existing name the same line is still accepted (SM-27 control)', () => {
+    const fig = emptyFig();
+    applyOk(fig, 'P9 = (3, 4)');
+    expect(fig.apply('P9 = (1, 2) with showIf = P9.x > 0').ok).toBe(true);
+    expect(fig.apply('P9 with showIf = P9.x > 0').ok).toBe(true);
   });
 });
