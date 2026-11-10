@@ -60,7 +60,7 @@ Other areas add reasons (`parallel`, `no_root`, `no_convergence`). This area own
 | Kind | When | GeoGebra | Ours |
 |---|---|---|---|
 | `bad_char` | A character not allowed outside strings and comments: other-script letters or digits, emoji, control characters | Accepts letters from nearly every script in names, which allows look-alikes; unknown characters give a generic message | `token` is the character with its code point, `hint` names the ASCII or Greek equivalent when one exists (`Cyrillic а looks like Latin a`) |
-| `bad_number` | `1.2.3`, `1e`, `1e999`, `1__0`, `.`, `5.` followed by a name | Fails at evaluation time with a single number-format message | Reported at lex time with a reason in `message`: `two decimal points`, `exponent has no digits`, `out of range` |
+| `bad_number` | `1.2.3`, `1e+`, `1e999`, `1__0`, `.`, `5.` followed by a name | Fails at evaluation time with a single number-format message | Reported at lex time with a reason in `message`: `two decimal points`, `exponent has no digits`, `out of range` |
 | `unterminated_string` | Newline or end before the closing `"` | Generic input error | Points at the opening quote; `expected: ["\""]` |
 | `bad_escape` | `\q` in a string | Not detected | `expected` lists `\" \\ \n \{ \}` |
 | `bad_format` | `{x:q}` with an unknown format | Not applicable | `expected` lists formats |
@@ -342,7 +342,7 @@ The `figure` tool reports `{ name, reason, via }`. The Algebra view shows the re
 
 Float details:
 
-- Comparisons with NaN are false, except through `==` on undefined which is undefined (logic section of the design).
+- A comparison with an undefined operand is undefined (design 3.5), never false.
 - Integers above 2^53 lose exactness; the literal warning `precision_loss` appears once, at definition.
 - Display rounding never changes the stored value.
 - Underflow to 0 is silent.

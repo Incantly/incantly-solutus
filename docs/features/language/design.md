@@ -112,7 +112,7 @@ The input bar also accepts `<>` as `!=`, `=>` as a logic implication, and `**` a
 | Operator | `+ - * / ^ ! ' ° == != < <= > >= = ( ) [ ] , ; . .. :` and the words `and or not xor if in step with` | `:` only inside format specs |
 | Comment | `#` to end of line, outside strings | Allowed after a line too |
 | Directive start | `@` first on the line | |
-| Newline | `\n` | A line ends here; an open bracket does not continue it (a model must send complete lines) |
+| Newline | `\n` | A line ends here, unless a bracket is still open: then the next line continues it (README decision 17) |
 
 Maximum line length 2,000 characters. Maximum token count 800. Maximum nesting depth 64 (brackets and calls). These limits are `limit`-kind errors and keep the parser bounded for streamed input.
 
@@ -177,7 +177,7 @@ From tightest to loosest. Same row means same precedence.
 
 | Level | Operators | Associativity | Notes |
 |---|---|---|---|
-| 1 | call `f(…)`, index `L[i]`, field `.x`, factorial `!`, degree `°`, tick-call `f'(x)` | left to right | `n!` on a non-integer is undefined `out_of_domain` |
+| 1 | call `f(…)`, index `L[i]`, field `.x`, factorial `!`, degree `°`, tick-call `f'(x)` | left to right | `n!` on a non-integer is undefined `not_integer`; on a negative, `out_of_domain` |
 | 2 | `^` | right | `a^b^c` is `a^(b^c)`. A sign is allowed right after `^`: `2^-1` |
 | 3 | implicit multiplication (number literal then operand) | left | `2x^2` is `2*(x^2)`; `2sin(x)^2` is `2*(sin(x)^2)` |
 | 4 | unary `-`, `+` | right | below `^`: `-2^2` is `-4` |
@@ -459,7 +459,7 @@ All built-ins are lowercase, pure, and have signatures in the same table shape a
 | Rounding | `floor ceil round trunc fract` and `round(x, digits)` | never |
 | Sign and size | `abs(x)` `sign(x)` `min(a, b, …)` `max(a, b, …)` `clamp(x, lo, hi)` | `clamp` with `lo > hi`: `out_of_domain` |
 | Modular | `mod(a, b)` (result has the sign of `b`) `rem(a, b)` (sign of `a`) `gcd(a, b)` `lcm(a, b)` | `b == 0`: `division_by_zero`. `gcd`/`lcm` on non-integers: `out_of_domain` |
-| Counting | `fact(n)` and postfix `n!`; `ncr(n, r)`; `npr(n, r)` | negative or non-integer: `out_of_domain`. Result above 1.8e308: `overflow` |
+| Counting | `fact(n)` and postfix `n!`; `ncr(n, r)`; `npr(n, r)` | non-integer: `not_integer`; negative: `out_of_domain`. Result above 1.8e308: `overflow` |
 | Special | `gamma(x) beta(a, b) erf(x) erfc(x)` | `gamma` at 0 and negative integers: `out_of_domain`; `beta` with a non-positive argument: `out_of_domain` |
 | Interpolation | `lerp(a, b, s)` `smooth(e0, e1, x)` (smoothstep) `step(e, x)` | `smooth` with `e0 == e1`: `division_by_zero` |
 | Random | `rand(seed)` in [0, 1), `noise(x)` `noise(x, y)` `noise(x, y, z)` in [-1, 1] | never; `seed` must be finite |
@@ -558,7 +558,7 @@ Performance: objects and command names live in sorted arrays with a precomputed 
 - **Very large or small literals**: `1e400` is `bad_number` (`out_of_range`); `1e-400` is `0` with a `precision_loss` warning.
 - **Unicode digits** from other scripts are `bad_char` with a hint to use ASCII digits.
 - **Mixed `,` and decimal comma**: `1,5` is two arguments or a pair, never 1.5; there is no locale-specific decimal mode in v1.
-- **Line breaks inside brackets** do not continue a line. A line with unbalanced brackets at its newline is `unbalanced`, pointing at the unmatched opener.
+- **Line breaks inside brackets** continue the line (README decision 17). Input that ends with a bracket still open is `unbalanced`, pointing at the unmatched opener.
 - **Command names used as variables**: `Line = 3` is `reserved_name`.
 - **Redefining `t`** or any directive-owned name is `reserved_name`.
 - **Large ranges**: `[1..1000000]` is `limit` (cap 100,000 elements per list, 1,000,000 elements total per figure).

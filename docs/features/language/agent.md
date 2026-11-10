@@ -126,7 +126,7 @@ Readout("slope", m)
 
 ```text
 h = 2 in -3..8 step 0.5
-f(x) = m (x - A.x) + A.y
+f(x) = m * (x - A.x) + A.y
 ```
 
 Result of the last call: `f` is a `Function`; `h` is a Number with a range. The teacher then says: "Move h, and the line stays through A." (`h` is not used yet; the model notices from `figure` that nothing depends on `h` and fixes this by redefining `A = (1, h)`, which keeps `A`'s id and style, and says "Now h controls A's height.")
