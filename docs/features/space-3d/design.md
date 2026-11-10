@@ -726,4 +726,4 @@ GeoGebra web code, under `source/web/web/src/main/java/org/geogebra/web/geogebra
 
 Manual (read): https://geogebra.github.io/docs/manual/en/3D_Graphics_View/ and https://geogebra.github.io/docs/manual/en/tools/3D_Graphics_Tools/ (the commands index page was empty to our fetcher, so the command and tool coverage here is derived from the source's command table and tool lists, in our own words).
 
-Our own documents: `docs/research/geogebra-study.md`, `docs/design/formula-language-and-kernel.md`, `docs/features/kernel/design.md`, `docs/features/points-lines/design.md`.
+Our own documents: `docs/research/engine-study.md`, `docs/design/formula-language-and-kernel.md`, `docs/features/kernel/design.md`, `docs/features/points-lines/design.md`.
