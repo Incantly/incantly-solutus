@@ -415,3 +415,228 @@ describe('spec review A3: Function2 and Function<Number>(2) parameters', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------------------------
+// A4. The command table is validated
+// ---------------------------------------------------------------------------------------------
+
+describe('spec review A4: checkTable refuses a malformed table, naming the command and the problem', () => {
+  const obj = (name: string, ...forms: ReturnType<typeof form>[]): CommandSpec => ({ name, kind: 'object', group: 't', forms });
+
+  /** The problems for one bad command added to the good test table. Only that command may be named. */
+  function problemsFor(bad: CommandSpec | CommandSpec[]) {
+    return checkTable([...COMMANDS, ...(Array.isArray(bad) ? bad : [bad])]);
+  }
+
+  function expectProblem(bad: CommandSpec | CommandSpec[], command: string, mentions: RegExp, label: string): void {
+    const problems = problemsFor(bad);
+    expect(problems.length, `${label}: at least one problem`).toBeGreaterThanOrEqual(1);
+    const mine = problems.filter((x) => x.command === command);
+    expect(mine.length, `${label}: a problem names ${command}; got ${JSON.stringify(problems.map((x) => x.command))}`).toBeGreaterThanOrEqual(1);
+    expect(
+      mine.some((x) => mentions.test(x.message)),
+      `${label}: a message says what is wrong (${String(mentions)}); got ${JSON.stringify(mine.map((x) => x.message))}`,
+    ).toBe(true);
+    // the good commands are not blamed
+    for (const x of problems) expect(x.command, label).toBe(command);
+    for (const x of mine) expect(x.message.length, label).toBeGreaterThan(0);
+  }
+
+  it('control: the good test table has no problems, as a spec list and as a built table', () => {
+    expect(checkTable(COMMANDS)).toEqual([]);
+    expect(checkTable(createCommandTable(COMMANDS))).toEqual([]);
+  });
+
+  describe('unknown parameter types', () => {
+    it('a plain unknown type', () => {
+      expectProblem(obj('Bad1', form([p('a', 'Fnord')], 'Number')), 'Bad1', /Fnord/, 'parameter Fnord');
+    });
+
+    it('an unknown type inside List<>', () => {
+      expectProblem(obj('Bad2', form([p('a', 'List<Fnord>')], 'Number')), 'Bad2', /Fnord/, 'List<Fnord>');
+    });
+
+    it('an unknown type in a union', () => {
+      expectProblem(obj('Bad3', form([p('a', 'Number|Fnord')], 'Number')), 'Bad3', /Fnord/, 'Number|Fnord');
+    });
+
+    it('an unknown type in Function<>', () => {
+      expectProblem(obj('Bad4', form([p('a', 'Function<Fnord>')], 'Number')), 'Bad4', /Fnord/, 'Function<Fnord>');
+    });
+
+    it('an unknown type in the rest parameter', () => {
+      expectProblem(obj('Bad5', form([p('a', 'Number')], 'Number', 'rest', { rest: p('more', 'Fnord') })), 'Bad5', /Fnord/, 'rest Fnord');
+    });
+
+    it('an unknown type in a second form only', () => {
+      expectProblem(
+        obj('Bad6', form([p('a', 'Number')], 'Number'), form([p('a', 'Point'), p('b', 'Fnord')], 'Number')),
+        'Bad6',
+        /Fnord/,
+        'second form',
+      );
+    });
+
+    it('a type name with the wrong case is unknown (names are case-sensitive)', () => {
+      expectProblem(obj('Bad7', form([p('a', 'number')], 'Number')), 'Bad7', /number/, 'number');
+    });
+
+    it('an empty type text', () => {
+      const problems = problemsFor(obj('Bad8', form([p('a', '')], 'Number')));
+      expect(problems.map((x) => x.command)).toContain('Bad8');
+    });
+
+    it('control: every core type, alias, list, union and function type is accepted', () => {
+      const types = [
+        'Number', 'Bool', 'Text', 'Point', 'Vector', 'Segment', 'Ray', 'Line', 'Circle', 'Arc', 'Polygon', 'Curve', 'Region',
+        'Color', 'Any', 'Shape', 'Path', 'Curvelike', 'Scalar', 'Relation', 'Function<Number>', 'Function<Point>',
+        'List<Number>', 'List<Point>', 'List<List<Number>>', 'Number|Point', 'List<Shape>',
+      ];
+      for (const t of types) {
+        expect(checkTable([obj('Good', form([p('a', t)], 'Number'))]), t).toEqual([]);
+      }
+    });
+  });
+
+  describe('unknown return types', () => {
+    it('a plain unknown return type', () => {
+      expectProblem(obj('Bad9', form([p('a', 'Number')], 'Banana')), 'Bad9', /Banana/, 'returns Banana');
+    });
+
+    it('an unknown type inside a list return type', () => {
+      expectProblem(obj('Bad10', form([p('a', 'Number')], 'List<Banana>')), 'Bad10', /Banana/, 'returns List<Banana>');
+    });
+
+    it('an unknown type in a tuple return type', () => {
+      expectProblem(obj('Bad11', form([p('a', 'Point')], ['Point', 'Banana'])), 'Bad11', /Banana/, 'returns [Point, Banana]');
+    });
+
+    it('control: null (an action), a tuple and a list are fine as return types', () => {
+      expect(checkTable([{ name: 'Act', kind: 'action', group: 't', forms: [form([p('a', 'Point')], null)] }])).toEqual([]);
+      expect(checkTable([obj('Two', form([p('a', 'Circle'), p('b', 'Circle')], ['Point', 'Point']))])).toEqual([]);
+      expect(checkTable([obj('Lst', form([p('a', 'Number')], 'List<Point>'))])).toEqual([]);
+    });
+  });
+
+  describe('duplicate parameter names', () => {
+    it('two parameters with the same name in one form', () => {
+      expectProblem(obj('Bad12', form([p('f', 'Number'), p('f', 'Point')], 'Number')), 'Bad12', /\bf\b/, 'duplicate f');
+    });
+
+    it('the same name with the same type', () => {
+      expectProblem(obj('Bad13', form([p('a', 'Number'), p('a', 'Number')], 'Number')), 'Bad13', /\ba\b/, 'duplicate a');
+    });
+
+    it('a rest parameter with the name of a fixed parameter', () => {
+      expectProblem(
+        obj('Bad14', form([p('a', 'Number')], 'Number', 'rest', { rest: p('a', 'Number') })),
+        'Bad14',
+        /\ba\b/,
+        'rest repeats a',
+      );
+    });
+
+    it('control: the same names in different forms are fine', () => {
+      expect(checkTable([obj('Fine', form([p('a', 'Number')], 'Number'), form([p('a', 'Point')], 'Number'))])).toEqual([]);
+    });
+  });
+
+  describe('duplicate command names', () => {
+    it('two commands with the same name and different forms', () => {
+      expectProblem(
+        [obj('Twin', form([p('a', 'Number')], 'Number')), obj('Twin', form([p('a', 'Point')], 'Number'))],
+        'Twin',
+        /duplicate|twice|more than once|already|same name/i,
+        'Twin twice',
+      );
+    });
+
+    it('a command with the name of one already in the table', () => {
+      expectProblem(obj('Circle', form([p('a', 'Number')], 'Number')), 'Circle', /duplicate|twice|more than once|already|same name/i, 'Circle again');
+    });
+
+    it('createCommandTable does not throw on duplicate names', () => {
+      expect(() => createCommandTable([obj('Twin', form([p('a', 'Number')], 'Number')), obj('Twin', form([p('a', 'Point')], 'Number'))])).not.toThrow();
+    });
+  });
+
+  describe('lower-case command names', () => {
+    it('a command called lower', () => {
+      expectProblem(obj('lower', form([p('a', 'Number')], 'Number')), 'lower', /upper|capital|first letter|case/i, 'lower');
+    });
+
+    it('a command that starts with a digit, an underscore or a symbol', () => {
+      for (const name of ['9Lives', '_Hidden', 'élan']) {
+        const problems = problemsFor(obj(name, form([p('a', 'Number')], 'Number')));
+        expect(problems.map((x) => x.command), name).toContain(name);
+      }
+    });
+
+    it('a command with a space in its name', () => {
+      const problems = problemsFor(obj('Two Words', form([p('a', 'Number')], 'Number')));
+      expect(problems.map((x) => x.command)).toContain('Two Words');
+    });
+
+    it('an empty command name', () => {
+      expect(problemsFor(obj('', form([p('a', 'Number')], 'Number'))).length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('control: PascalCase names with digits are fine', () => {
+      expect(checkTable([obj('Round3', form([p('a', 'Number')], 'Number'))])).toEqual([]);
+    });
+  });
+
+  describe('commands with no forms', () => {
+    it('an object command with no forms', () => {
+      expectProblem(obj('Empty1'), 'Empty1', /form/i, 'no forms');
+    });
+
+    it('an action command with no forms', () => {
+      expectProblem({ name: 'Empty2', kind: 'action', group: 't', forms: [] }, 'Empty2', /form/i, 'action with no forms');
+    });
+  });
+
+  describe('binder parameters with no body', () => {
+    it('a binder and no body parameter', () => {
+      expectProblem(
+        obj('Bad15', form([p('k', 'Number', { kind: 'binder' }), p('from', 'Number'), p('to', 'Number')], 'List<Number>')),
+        'Bad15',
+        /body|binder/i,
+        'binder without body',
+      );
+    });
+
+    it('a binder only', () => {
+      expectProblem(obj('Bad16', form([p('k', 'Number', { kind: 'binder' })], 'Number')), 'Bad16', /body|binder/i, 'binder only');
+    });
+
+    it('the problem names the binder parameter', () => {
+      const problems = problemsFor(obj('Bad17', form([p('idx', 'Number', { kind: 'binder' }), p('n', 'Number')], 'Number')));
+      expect(problems.some((x) => x.command === 'Bad17' && /idx/.test(x.message))).toBe(true);
+    });
+
+    it('control: a binder with a body is fine (the Seq form in the test table)', () => {
+      expect(checkTable(COMMANDS.filter((c) => c.name === 'Seq'))).toEqual([]);
+    });
+  });
+
+  describe('all at once', () => {
+    it('several malformed commands each get their own problem, and checkTable does not throw', () => {
+      const bad: CommandSpec[] = [
+        obj('Bad1', form([p('a', 'Fnord')], 'Number')),
+        obj('Bad9', form([p('a', 'Number')], 'Banana')),
+        obj('Bad12', form([p('f', 'Number'), p('f', 'Point')], 'Number')),
+        obj('lower', form([p('a', 'Number')], 'Number')),
+        obj('Empty1'),
+        obj('Bad15', form([p('k', 'Number', { kind: 'binder' })], 'Number')),
+      ];
+      let problems: ReturnType<typeof checkTable> = [];
+      expect(() => {
+        problems = problemsFor(bad);
+      }).not.toThrow();
+      const named = new Set(problems.map((x) => x.command));
+      for (const b of bad) expect(named.has(b.name), `${b.name} is named`).toBe(true);
+      expect(named.size).toBe(bad.length);
+    });
+  });
+});
