@@ -1298,11 +1298,15 @@ describe('LANG-SM-23: a slider range may not read the slider or anything downstr
     expect(fig.apply('a in 0..30').ok).toBe(true);
   });
 
-  it('LANG-SM-23: a style value that reads a dependent of the object is a cycle (range and style edges both count)', () => {
+  it('LANG-SM-23: a style value that reads a dependent of the object is not a cycle (ruling SM-23: only range edges join the test)', () => {
     const fig = figure();
     const r = fig.apply('a = 3 with opacity = b / 10');
-    expect(r.ok).toBe(false);
-    expect(errOf(r).kind).toBe('cycle');
+    expect(r.ok, r.ok ? '' : `${errOf(r).kind}: ${errOf(r).message}`).toBe(true);
+    expect(fig.lookup('a')?.free).toBe(true);
+  });
+
+  it('LANG-SM-23: a range cycle is still a cycle when the same line also has a style', () => {
+    expectCycle('a = 3 in 0..b with opacity = 0.5', figure(), ['a', 'b']);
   });
 
   it('LANG-SM-23: a range that reads something that does not depend on the slider is accepted', () => {
@@ -1430,5 +1434,400 @@ describe('LANG-SM-24: a #rrggbb colour after = is a value for the normaliser, th
     const without = 'P with opacity = (1 +\n  ';
     const kinds = (s: string): string[] => [...new Set(complete(s, s.length, fig).map((c) => c.kind))].sort();
     expect(kinds(withColour)).toEqual(kinds(without));
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Round 3: LANG-SM-24 (reopened), LANG-SM-25, LANG-SM-26, LANG-SM-27
+// ---------------------------------------------------------------------------------------------
+
+describe('LANG-SM-27: style edges never form a cycle (ruling SM-23, kernel design 9.2)', () => {
+  function figure(): ScratchFigure {
+    const fig = emptyFig();
+    applyOk(fig, 'P = (1, 2)');
+    applyOk(fig, 'Q = (P.x + 1, P.y)');
+    applyOk(fig, 'a = 3 in 0..20');
+    applyOk(fig, 'b = a + 1');
+    return fig;
+  }
+
+  function accepted(src: string, fig: ScratchFigure): void {
+    const c = analyseLine(src, fig);
+    expect(c.ok, c.ok ? '' : `analyseLine ${src}: ${errOf(c).kind}: ${errOf(c).message}`).toBe(true);
+    const r = fig.apply(src);
+    expect(r.ok, r.ok ? '' : `${src}: ${errOf(r).kind}: ${errOf(r).message}`).toBe(true);
+  }
+
+  it('LANG-SM-27: P with showIf = P.x > 0 is accepted', () => {
+    accepted('P with showIf = P.x > 0', figure());
+  });
+
+  it('LANG-SM-27: P with opacity = if(P.x > 0, 1, 0.5) is accepted', () => {
+    accepted('P with opacity = if(P.x > 0, 1, 0.5)', figure());
+  });
+
+  it('LANG-SM-27: P = (1, 2) with showIf = P.x > 0 is accepted (a definition that styles itself)', () => {
+    accepted('P = (1, 2) with showIf = P.x > 0', figure());
+  });
+
+  it('LANG-SM-27: P with showIf = Q.x > 0, with Q reading P, is accepted', () => {
+    accepted('P with showIf = Q.x > 0', figure());
+  });
+
+  it('LANG-SM-27: P = (1, 2) with opacity = Q.x / 10, with Q reading P, is accepted', () => {
+    accepted('P = (1, 2) with opacity = Q.x / 10', figure());
+  });
+
+  it('LANG-SM-27: a = 3 in 0..20 with opacity = a / 20 is accepted (a slider that fades with its own value)', () => {
+    const fig = figure();
+    accepted('a = 3 in 0..20 with opacity = a / 20', fig);
+    expect(fig.lookup('a')?.slider).toBe(true);
+    expect(fig.lookup('a')?.free).toBe(true);
+  });
+
+  it('LANG-SM-27: a with opacity = a / 20 is accepted on an existing slider', () => {
+    accepted('a with opacity = a / 20', figure());
+  });
+
+  it('LANG-SM-27: a style that reads a dependent of its object is accepted (slider and value)', () => {
+    accepted('a with opacity = b / 20', figure());
+    accepted('a = 3 in 0..20 with opacity = b / 20', figure());
+  });
+
+  it('LANG-SM-27: a style that reads its own object leaves the object free (only value edges decide)', () => {
+    const fig = figure();
+    accepted('P with showIf = P.x > 0', fig);
+    expect(fig.lookup('P')?.free).toBe(true);
+    accepted('P with showIf = Q.x > 0', fig);
+    expect(fig.lookup('P')?.free).toBe(true);
+  });
+
+  it('LANG-SM-27: the checked line keeps style reads out of the value reads', () => {
+    const c = analyseLine('P = (1, 2) with showIf = Q.x > 0', figure());
+    expect(c.ok).toBe(true);
+    if (c.ok) expect(c.value.reads).toEqual([]);
+  });
+
+  it('LANG-SM-27: range cycles are still cycles (control)', () => {
+    const fig = figure();
+    for (const src of ['a = 3 in 0..a', 'a = 3 in 0..b', 'a in 0..b', 'a in b..30', 'a in 0..a + 1']) {
+      const r = fig.apply(src);
+      expect(r.ok, `${src} must be refused`).toBe(false);
+      expect(errOf(r, src).kind, src).toBe('cycle');
+    }
+  });
+
+  it('LANG-SM-27: value cycles are still cycles (control)', () => {
+    const fig = figure();
+    const r = fig.apply('P = (Q.x, 1)');
+    expect(r.ok).toBe(false);
+    expect(errOf(r).kind).toBe('cycle');
+    const s = fig.apply('a = b + 1');
+    expect(s.ok).toBe(false);
+    expect(errOf(s).kind).toBe('cycle');
+  });
+
+  it('LANG-SM-27: a style on the slider does not change the range cycle answer', () => {
+    const fig = figure();
+    expect(errOf(fig.apply('a in 0..b')).kind).toBe('cycle');
+    accepted('a with opacity = a / 20', fig);
+    expect(errOf(fig.apply('a in 0..b')).kind).toBe('cycle');
+  });
+});
+
+describe('LANG-SM-24 (reopened): a #rrggbb colour after = and any blank between them', () => {
+  const BLANKS: [string, string][] = [
+    ['plain space', ' '],
+    ['tab', '\t'],
+    ['U+00A0 no-break space', '\u00A0'],
+    ['U+2009 thin space', '\u2009'],
+    ['U+202F narrow no-break space', '\u202F'],
+    ['U+2003 em space', '\u2003'],
+    ['U+2002 en space', '\u2002'],
+  ];
+
+  function figure(): ScratchFigure {
+    const fig = emptyFig();
+    applyOk(fig, 'P = (1, 2)');
+    return fig;
+  }
+
+  function good(src: string, fig: ScratchFigure): void {
+    const r = analyseLine(src, fig);
+    expect(r.ok, r.ok ? '' : `${JSON.stringify(src)}: ${errOf(r).kind}: ${errOf(r).message}`).toBe(true);
+  }
+
+  describe.each(BLANKS)('%s between = and #', (what, blank) => {
+    it(`LANG-SM-24: ${what}: a property with a Unicode minus after the colour is accepted`, () => {
+      const fig = figure();
+      good(`P with color =${blank}#ff0000, opacity = 1 − 0.5`, fig);
+      good(`P with color =${blank}#f00, opacity = 1 − 0.5`, fig);
+      good(`P with color =${blank}#ff000080, opacity = 1 − 0.5, pointSize = 3 − 1`, fig);
+    });
+
+    it(`LANG-SM-24: ${what}: a definition with the colour first and a Unicode minus later is accepted`, () => {
+      const fig = figure();
+      const r = fig.apply(`Q = (3, 4) with color =${blank}#ff0000, opacity = 1 − 0.5`);
+      expect(r.ok, r.ok ? '' : `${errOf(r).kind}: ${errOf(r).message}`).toBe(true);
+    });
+
+    it(`LANG-SM-24: ${what}: the colour last is accepted as well`, () => {
+      good(`P with opacity = 1 − 0.5, color =${blank}#ff0000`, figure());
+    });
+
+    it(`LANG-SM-24: ${what}: a continuation line after the colour joins the line`, () => {
+      const lines = splitLogicalLines(`P = (1, 2) with color =${blank}#ff0000, opacity = (1 +\n 2) / 4\nQ = (1, 1)`);
+      expect(lines.length).toBe(2);
+      expect(lines[0]!.firstLine).toBe(1);
+      expect(lines[0]!.lineCount).toBe(2);
+      expect(lines[1]!.firstLine).toBe(3);
+      expect(lines[1]!.text).toBe('Q = (1, 1)');
+    });
+
+    it(`LANG-SM-24: ${what}: parseProgram gives two good entries and no bracket error`, () => {
+      const out = parseProgram(`P = (1, 2) with color =${blank}#ff0000, opacity = (1 +\n 2) / 4\nQ = (1, 1)`);
+      expect(out.map((o) => o.line)).toEqual([1, 3]);
+      for (const o of out) expect(o.result.ok, o.result.ok ? '' : `${errOf(o.result).kind}: ${errOf(o.result).message}`).toBe(true);
+    });
+
+    it(`LANG-SM-24: ${what}: tokenize reports no error and agrees with the plain-space line`, () => {
+      const fig = figure();
+      const plain = tokenize('P with color = #ff0000, opacity = 1 − 0.5', fig);
+      const got = tokenize(`P with color =${blank}#ff0000, opacity = 1 − 0.5`, fig);
+      expect(got.errors).toEqual([]);
+      expect(plain.errors).toEqual([]);
+      expect(got.tokens.map((t) => t.kind)).toEqual(plain.tokens.map((t) => t.kind));
+    });
+
+    it(`LANG-SM-24: ${what}: completion on the continuation line offers what it offers without the colour`, () => {
+      const fig = figure();
+      const src = `P with color =${blank}#ff0000, opacity = (1 +\n  `;
+      const got = complete(src, src.length, fig);
+      expect(got.length).toBeGreaterThan(0);
+      expect(got.filter((c) => c.kind === 'snippet')).toEqual([]);
+      expect(got.map((c) => c.label)).not.toContain('@');
+      expect(got.map((c) => c.label)).not.toContain('#');
+      const kinds = (s: string): string[] => [...new Set(complete(s, s.length, fig).map((c) => c.kind))].sort();
+      expect(kinds(src)).toEqual(kinds('P with opacity = (1 +\n  '));
+    });
+
+    it(`LANG-SM-24: ${what}: a comment after the colour stays a comment`, () => {
+      good(`P with color =${blank}#ff0000 # a red point (`, figure());
+      expect(splitLogicalLines(`P with color =${blank}#ff0000 # a red point (\nQ = (1, 1)`).length).toBe(2);
+    });
+  });
+
+  it('LANG-SM-24: a # that follows a blank after a value is still a comment', () => {
+    const fig = figure();
+    for (const [, blank] of BLANKS) {
+      good(`a9 =${blank}3 # note − (`, fig);
+      expect(splitLogicalLines(`a9 = 3${blank}# (\nB9 = (1, 2)`).length).toBe(2);
+    }
+  });
+
+  it('LANG-SM-24: normaliser, splitter, tokenize and completion agree for every blank and every colour length', () => {
+    const fig = figure();
+    for (const [what, blank] of BLANKS) {
+      for (const colour of ['#abc', '#abcd', '#aabbcc', '#aabbccdd']) {
+        const one = `P with color =${blank}${colour}, opacity = 1 − 0.5`;
+        good(one, fig);
+        expect(tokenize(one, fig).errors, `${what} ${colour}`).toEqual([]);
+        const two = `P with color =${blank}${colour}, opacity = (1 +\n  2) / 4\nQ = (1, 1)`;
+        expect(splitLogicalLines(two).length, `${what} ${colour}`).toBe(2);
+        const open = `P with color =${blank}${colour}, opacity = (1 +\n  `;
+        expect(complete(open, open.length, fig).filter((c) => c.kind === 'snippet'), `${what} ${colour}`).toEqual([]);
+      }
+    }
+  });
+});
+
+describe('LANG-SM-25 and LANG-SM-26: numeric failures are the same on every value kind', () => {
+  type Want = { readonly undef: string } | { readonly inf: true };
+
+  interface Row {
+    readonly id: 'LANG-SM-25' | 'LANG-SM-26';
+    readonly kind: 'Number' | 'List' | 'Function' | 'Point' | 'Vector';
+    readonly what: string;
+    /** Lines applied after the shared set-up; the last one is the one that is judged. */
+    readonly lines: readonly string[];
+    readonly want: Want;
+  }
+
+  const SETUP = [
+    'f(x) = x',
+    'k(x) = 1e308',
+    'w(x) = 0 * x',
+    'big = inf',
+    'un = undefined',
+    'L = [1, 2]',
+    'M = [1e308, 1]',
+    'V = (1, 1) - (0, 0)',
+    'VB = (1e308, 0) - (0, 0)',
+    'NVB = -VB',
+    'P = (1, 2)',
+    'PB = (1e308, 0)',
+  ];
+
+  const undef = (reason: string): Want => ({ undef: reason });
+  const INF: Want = { inf: true };
+  const DZ = undef('division_by_zero');
+  const OV = undef('overflow');
+  const NF = undef('not_finite');
+  const IU = undef('input_undefined');
+
+  const row = (id: Row['id'], kind: Row['kind'], what: string, lines: string[], want: Want): Row => ({ id, kind, what, lines, want });
+
+  const ROWS: readonly Row[] = [
+    // Division by zero
+    row('LANG-SM-25', 'Number', '1 / 0', ['out = 1 / 0'], DZ),
+    row('LANG-SM-25', 'Number', '0 / 0', ['out = 0 / 0'], DZ),
+    row('LANG-SM-25', 'Number', '0 ^ -1', ['out = 0 ^ -1'], DZ),
+    row('LANG-SM-25', 'List', 'L / 0', ['out = L / 0'], DZ),
+    row('LANG-SM-25', 'List', '[0, 5] / 0', ['out = [0, 5] / 0'], DZ),
+    row('LANG-SM-25', 'List', 'L / (1 - 1)', ['out = L / (1 - 1)'], DZ),
+    row('LANG-SM-25', 'Function', 'f / 0 at 1', ['q = f / 0', 'out = q(1)'], DZ),
+    row('LANG-SM-25', 'Function', 'f / w at 0', ['q = f / w', 'out = q(0)'], DZ),
+    row('LANG-SM-25', 'Function', 'f / w at 1', ['q = f / w', 'out = q(1)'], DZ),
+    row('LANG-SM-25', 'Function', 'f ^ -1 at 0', ['q = f ^ -1', 'out = q(0)'], DZ),
+    row('LANG-SM-25', 'Vector', 'V / 0', ['out = V / 0'], DZ),
+    row('LANG-SM-25', 'Vector', 'V / (1 - 1)', ['out = V / (1 - 1)'], DZ),
+    row('LANG-SM-25', 'Point', 'P + V / 0', ['out = P + V / 0'], DZ),
+    row('LANG-SM-25', 'Point', 'P - V / 0', ['out = P - V / 0'], DZ),
+
+    // Finite overflow (LANG-SM-22 for lists and functions, LANG-SM-26 for points and vectors)
+    row('LANG-SM-26', 'Number', '1e308 * 10', ['out = 1e308 * 10'], OV),
+    row('LANG-SM-26', 'Number', '10 ^ 400', ['out = 10 ^ 400'], OV),
+    row('LANG-SM-26', 'List', 'M * 10', ['out = M * 10'], OV),
+    row('LANG-SM-26', 'List', 'M + 1e308', ['out = M + 1e308'], OV),
+    row('LANG-SM-26', 'List', 'L / 1e-320', ['out = L / 1e-320'], OV),
+    row('LANG-SM-26', 'Function', 'f * f at 1e200', ['q = f * f', 'out = q(1e200)'], OV),
+    row('LANG-SM-26', 'Function', 'f ^ 2 at 1e200', ['q = f ^ 2', 'out = q(1e200)'], OV),
+    row('LANG-SM-26', 'Function', 'f + k at 1e308', ['q = f + k', 'out = q(1e308)'], OV),
+    row('LANG-SM-26', 'Vector', 'VB * 10', ['out = VB * 10'], OV),
+    row('LANG-SM-26', 'Vector', '10 * VB', ['out = 10 * VB'], OV),
+    row('LANG-SM-26', 'Vector', 'VB / 1e-10', ['out = VB / 1e-10'], OV),
+    row('LANG-SM-26', 'Vector', 'VB + VB', ['out = VB + VB'], OV),
+    row('LANG-SM-26', 'Vector', 'VB - NVB', ['out = VB - NVB'], OV),
+    row('LANG-SM-26', 'Vector', 'PB - (-1e308, 0)', ['out = PB - (-1e308, 0)'], OV),
+    row('LANG-SM-26', 'Point', 'PB + VB', ['out = PB + VB'], OV),
+    row('LANG-SM-26', 'Point', 'PB - NVB', ['out = PB - NVB'], OV),
+
+    // An infinite input may give an infinite result (ruling Q4)
+    row('LANG-SM-26', 'Number', 'big * 2', ['out = big * 2'], INF),
+    row('LANG-SM-26', 'List', 'L * big', ['out = L * big'], INF),
+    row('LANG-SM-26', 'Function', 'f * f at big', ['q = f * f', 'out = q(big)'], INF),
+    row('LANG-SM-26', 'Vector', 'V * big', ['out = V * big'], INF),
+    row('LANG-SM-26', 'Point', 'P + V * big', ['out = P + V * big'], INF),
+
+    // inf - inf
+    row('LANG-SM-26', 'Number', 'big - big', ['out = big - big'], NF),
+    row('LANG-SM-26', 'List', 'L * big - big', ['out = L * big - big'], NF),
+    row('LANG-SM-26', 'Function', 'f - f at big', ['q = f - f', 'out = q(big)'], NF),
+    row('LANG-SM-26', 'Vector', 'V * big - V * big', ['out = V * big - V * big'], NF),
+    row('LANG-SM-26', 'Point', 'P + V * big - V * big', ['out = P + V * big - V * big'], NF),
+
+    // An undefined input
+    row('LANG-SM-25', 'Number', 'un + 1', ['out = un + 1'], IU),
+    row('LANG-SM-25', 'List', 'L + un', ['out = L + un'], IU),
+    row('LANG-SM-25', 'List', 'an undefined list, plus 1', ['Lu = L * un', 'out = Lu + 1'], IU),
+    row('LANG-SM-25', 'Function', 'f * f at un', ['q = f * f', 'out = q(un)'], IU),
+    row('LANG-SM-25', 'Vector', 'V * un', ['out = V * un'], IU),
+    row('LANG-SM-25', 'Vector', 'an undefined vector, plus V', ['Vu = V * un', 'out = Vu + V'], IU),
+    row('LANG-SM-25', 'Point', 'P + V * un', ['out = P + V * un'], IU),
+    row('LANG-SM-25', 'Point', 'an undefined point, plus V', ['Pu = P + V * un', 'out = Pu + V'], IU),
+  ];
+
+  /** Every number held by a stored value (a Number, a list, a point or a vector). */
+  function parts(v: unknown): number[] {
+    if (typeof v === 'number') return [v];
+    if (v !== null && typeof v === 'object') {
+      if (typeof (v as ArrayLike<number>).length === 'number') return Array.from(v as ArrayLike<number>).flatMap((x) => parts(x));
+      const o = v as { x?: unknown; y?: unknown };
+      if ('x' in o && 'y' in o) return [...parts(o.x), ...parts(o.y)];
+    }
+    return [];
+  }
+
+  function run(r: Row) {
+    const fig = emptyFig();
+    for (const line of SETUP) applyOk(fig, line);
+    let last = applyOk(fig, r.lines[0]!);
+    for (const line of r.lines.slice(1)) last = applyOk(fig, line);
+    return { fig, last };
+  }
+
+  it.each(ROWS.map((r) => [`${r.id}: ${r.kind}: ${r.what}`, r] as const))('%s', (_title, r) => {
+    const { fig, last } = run(r);
+    // A value is undefined exactly when its reason is set.
+    expect(last.defined, `${r.what}: defined and reason must agree (${last.summary})`).toBe(last.reason === undefined);
+    if ('undef' in r.want) {
+      expect(last.defined, `${r.what} must be undefined, got ${last.summary}`).toBe(false);
+      expect(last.reason, `${r.what}: ${last.summary}`).toBe(r.want.undef);
+    } else if (last.defined) {
+      const ps = parts(fig.valueOf(last.name));
+      expect(ps.length, `${r.what}: the stored value has numbers`).toBeGreaterThan(0);
+      expect(ps.some((x) => Number.isNaN(x)), `${r.what}: a defined value has no undefined part`).toBe(false);
+      expect(ps.some((x) => x === Infinity || x === -Infinity), `${r.what}: ${last.summary}`).toBe(true);
+    } else {
+      expect(['overflow', 'division_by_zero'], `${r.what}: an infinite input must not give ${String(last.reason)}`).not.toContain(last.reason);
+    }
+    // A list, point or vector with an undefined part is never a defined value.
+    if (last.defined) {
+      expect(parts(fig.valueOf(last.name)).some((x) => Number.isNaN(x)), `${r.what}: defined value with an undefined part`).toBe(false);
+    }
+  });
+
+  it('LANG-SM-25: a list divided by zero is not stored as a defined list, and feeds nothing defined', () => {
+    const fig = emptyFig();
+    applyOk(fig, 'L = [1, 2]');
+    const r = applyOk(fig, 'L5 = L / 0');
+    expect(r.defined).toBe(false);
+    expect(r.reason).toBe('division_by_zero');
+    const s = applyOk(fig, 'L6 = L5 + 1');
+    expect(s.defined).toBe(false);
+    expect(s.reason).toBe('input_undefined');
+  });
+
+  it('LANG-SM-25: Number, List and Function agree on the reason for a division by zero', () => {
+    const fig = emptyFig();
+    applyOk(fig, 'f(x) = x');
+    applyOk(fig, 'L = [1, 2]');
+    applyOk(fig, 'q = f / 0');
+    const reasons = [applyOk(fig, 'n1 = 1 / 0').reason, applyOk(fig, 'l1 = L / 0').reason, applyOk(fig, 'fq = q(1)').reason];
+    expect(reasons).toEqual(['division_by_zero', 'division_by_zero', 'division_by_zero']);
+  });
+
+  it('LANG-SM-26: an overflowing point or vector is undefined overflow, never a defined (inf, 0)', () => {
+    const fig = emptyFig();
+    applyOk(fig, 'VB = (1e308, 0) - (0, 0)');
+    applyOk(fig, 'NVB = -VB');
+    for (const line of ['V1 = VB * 10', 'V2 = 10 * VB', 'V3 = VB / 1e-10', 'V4 = VB + VB', 'P1 = (1e308, 0) + VB', 'P2 = (1e308, 0) - NVB']) {
+      const r = applyOk(fig, line);
+      expect(r.defined, `${line}: ${r.summary}`).toBe(false);
+      expect(r.reason, line).toBe('overflow');
+    }
+  });
+
+  it('LANG-SM-26: the Number line and the vector line agree on overflow', () => {
+    const fig = emptyFig();
+    applyOk(fig, 'VB = (1e308, 0) - (0, 0)');
+    const n = applyOk(fig, 'n1 = 1e308 * 10');
+    const v = applyOk(fig, 'v1 = VB * 10');
+    expect(n.reason).toBe('overflow');
+    expect(v.reason).toBe(n.reason);
+  });
+
+  it('LANG-SM-26: ordinary list, function, point and vector arithmetic is unchanged', () => {
+    const fig = emptyFig();
+    for (const line of ['f(x) = x', 'L = [1, 2]', 'V = (1, 1) - (0, 0)', 'P = (1, 2)']) applyOk(fig, line);
+    expect(applyOk(fig, 'a1 = L / 2').defined).toBe(true);
+    expect(Array.from(fig.valueOf('a1') as ArrayLike<number>)).toEqual([0.5, 1]);
+    applyOk(fig, 'q = f * f');
+    expect(applyOk(fig, 'a2 = q(3)').defined).toBe(true);
+    expect(fig.valueOf('a2')).toBe(9);
+    expect(applyOk(fig, 'a3 = V * 3').defined).toBe(true);
+    expect(fig.valueOf('a3')).toEqual({ x: 3, y: 3 });
+    expect(applyOk(fig, 'a4 = P + V').defined).toBe(true);
+    expect(fig.valueOf('a4')).toEqual({ x: 2, y: 3 });
   });
 });
