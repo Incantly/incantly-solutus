@@ -304,7 +304,7 @@ The core design already reserves `=` for defining and `==` for equality. This se
 
 Types are the ones in core section 4, plus `Relation` (arguments only) and three refinements:
 
-- `Function` is `Function<R>` with `R` in `Number` or `Point`, and a parameter count `n` (1 to 4). `f(x) = (cos(x), sin(x))` is a `Function<Point>` of one parameter. `Curve` accepts one.
+- `Function` is `Function<R>` with `R` in `Number` or `Point`, and a parameter count `n` (1 to 4). `f(x) = (cos(x), sin(x))` is a `Function<Point>` of one parameter. `Curve` accepts one. `Function2` is a short name for `Function<Number>(2)`: a user function of exactly two parameters, such as `g(x, y) = x * y`, fits it, and a one-parameter function does not.
 - `Number` has an optional **unit tag** (`'angle'` or none) carried with the object, never with the type. `Angle` returns a tagged Number. Arithmetic keeps the tag only when it is preserved obviously (`angle + angle`, `angle * number`, `-angle`, `angle / number`); every other result is untagged. The tag only drives display and slider range.
 - `List<T>` where `T` is any non-list type. Nested lists are `List<List<T>>` (a matrix) with equal row lengths checked at build time when sizes are literals.
 

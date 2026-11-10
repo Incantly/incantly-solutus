@@ -31,7 +31,7 @@ Rules the model is told (about 70 tokens):
 ```text
 if(c, a, b)    cases(c1, v1, c2, v2, otherwise)       conditional value; also piecewise functions: f(x) = if(x < 0, -x, x)
 xor(a, b)  implies(a, b)  and  or  not  ==  !=
-CountIf(L, k, k > 2)    KeepIf(L, k, k mod 2 == 0)     k is a name you choose, local to the condition
+CountIf(L, k, k > 2)    KeepIf(L, k, mod(k, 2) == 0)     k is a name you choose, local to the condition
 IsInteger(x)   IsDefined(obj)   UndefinedReason(obj) -> Text   IsInRegion(P, region)
 Relation(a, b) -> Text sentence     Related(a, b, "parallel") -> Bool     Related(a, b, "parallel", always = true)
 relation kinds: equal distinct parallel perpendicular coincident intersecting on inside outside tangent secant disjoint concentric nested less greater

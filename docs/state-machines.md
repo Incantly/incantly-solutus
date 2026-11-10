@@ -241,18 +241,18 @@ Checked at commit `d2d9d9e` (pass 1), at `3220d23` (round 2, after the fixes for
 ### L9. Env and evaluation
 
 - **Where:** `runtime.ts` `Env`, `createEnv`, `resetEnv`, `fail` (lines 60 to 120); `compile.ts` `evaluate` (line 1328), function values (in `compileLine`, lines 1220 to 1278), relation values and `sample` (lines 983 to 1032), `pointwise` (line 1109).
-- **States:** `Env` fields `reason`, `via`, `detail` (first reason wins), `locals` (slot array), `t`/`bt`/`beat`, `read`. One `Env` may evaluate several compiled lines (design 3.15). A `FunctionValue` or `RelationValue` captures the `Env` it was made in; a call saves the slots it writes and the caller's `reason`, `via` and `detail`, writes the slots, evaluates, and puts all of them back. A `pointwise` function value keeps its own `reason`, cleared at the start of each call.
-- **Invariants:** an evaluation starts with `reason`, `via`, `detail` cleared; a call into a function or relation value leaves the caller's locals, reason and via as they were; a value is undefined exactly when its reason is set; texts stay within 10,000 characters; an undefined text in `+` gives an undefined text.
+- **States:** `Env` fields `reason`, `cause`, `detail` (first reason wins), `locals` (slot array), `t`/`bt`/`beat`, `read`. One `Env` may evaluate several compiled lines (design 3.15). A `FunctionValue` or `RelationValue` captures the `Env` it was made in; a call saves the slots it writes and the caller's `reason`, `cause` and `detail`, writes the slots, evaluates, and puts all of them back. A `pointwise` function value keeps its own `reason`, cleared at the start of each call.
+- **Invariants:** an evaluation starts with `reason`, `cause`, `detail` cleared; a call into a function or relation value leaves the caller's locals, reason and cause as they were; a value is undefined exactly when its reason is set; texts stay within 10,000 characters; an undefined text in `+` gives an undefined text.
 - **Transitions:**
 
 | From | Event | Guard | To | Side effects |
 |---|---|---|---|---|
 | any | `evaluate` | | clear | reset three fields |
 | evaluating | domain problem | `reason` unset | reason set | `fail` |
-| evaluating | `fv.call(xs)` | | callee running | save `env.locals[slot]` per parameter, write, evaluate, restore; save and restore `reason`, `via`, `detail` |
-| evaluating | `fv.call1(x)` / `fv.batch(xs)` | | callee running | save, write, restore the one slot; save and restore `reason`, `via`, `detail` |
+| evaluating | `fv.call(xs)` | | callee running | save `env.locals[slot]` per parameter, write, evaluate, restore; save and restore `reason`, `cause`, `detail` |
+| evaluating | `fv.call1(x)` / `fv.batch(xs)` | | callee running | save, write, restore the one slot; save and restore `reason`, `cause`, `detail` |
 | evaluating | `pointwise` call | | callee running | `self.reason` cleared, then set to the reason of this sample |
-| evaluating | `rel.residual(x, y)` / `rel.test(x, y)` | | | `sample`: save, write, restore the `x` and `y` slots and `reason`, `via`, `detail`; `residual` is NaN when two finite sides differ by a non-finite amount |
+| evaluating | `rel.residual(x, y)` / `rel.test(x, y)` | | | `sample`: save, write, restore the `x` and `y` slots and `reason`, `cause`, `detail`; `residual` is NaN when two finite sides differ by a non-finite amount |
 | evaluating | relation line, polynomial form | a coefficient NaN | undefined | its reason, else `not_finite` |
 | evaluating | relation line, no polynomial form | an input undefined | defined | no reason; every sample NaN (LANG-SM-34) |
 | evaluating | `text + text` | either side undefined | undefined | `input_undefined` |

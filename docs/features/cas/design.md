@@ -99,7 +99,7 @@ Shape rules for `Solve`, which a model needs to know:
 - One unknown, equation: a list of `v == value` entries, one per solution, in ascending real order (complex: by real part, then imaginary part). No solutions: the empty list `[]`. Every value works: `[v in R]`.
 - One unknown, inequality: a list of pieces, joined by "or". A piece is `v < a`, `v >= a`, or an interval `a < v and v < b`, printed as `a < v < b`. The empty list means no solutions.
 - Parameters stay symbolic. `Solve(a*x == b, x)` returns a piecewise answer: `[x == b/a]` when `a != 0`; if `a == 0` the cases are named in the result's `cases` (section 5.9).
-- Trig, exp and log families use a whole-number parameter: `Solve(sin(x) == 1/2, x)` returns `[x == pi/6 + 2 pi k1, x == 5 pi/6 + 2 pi k1]`, and `k1` is an integer Symbol created for the result. With `from` and `to` the list is concrete: the members inside the interval.
+- Trig, exp and log families use a whole-number parameter: `Solve(sin(x) == 1/2, x)` returns `[x == pi/6 + 2 * pi * k1, x == 5 pi/6 + 2 * pi * k1]`, and `k1` is an integer Symbol created for the result. With `from` and `to` the list is concrete: the members inside the interval.
 - Systems: one inner list per solution, one `v == value` per unknown. Linear systems with infinitely many solutions return parametric forms with one free unknown on the right.
 
 ### 2.4 Substitute and numeric
@@ -597,7 +597,7 @@ Recommendation: write the engine ourselves; use decimal.js for high-precision ou
 
 ## 11. Phase 2 detail: Steps
 
-`Steps(cmd)` where `cmd` is a symbolic command call returns `List<Text>`; each text is one line such as "Move 6 to the left: x^2 - 5x + 6 = 0", "Factor the left side: (x - 2)(x - 3) = 0", "A product is zero when a factor is zero". Each line is built from a `Step` (rule id, before, after) by a phrase table keyed by rule id, so phrases can be reviewed and localised. Not every rewrite is shown: the derivation is filtered to "teaching steps" (a flag on rules), and the number of lines is capped at 12 (the rest is merged into "simplify"). Steps only exist for the rules that have phrases; a command whose derivation has none returns a single line "(no steps available)" and the notice `no_steps`.
+`Steps(cmd)` where `cmd` is a symbolic command call returns `List<Text>`; each text is one line such as "Move 6 to the left: x^2 - 5x + 6 = 0", "Factor the left side: (x - 2) * (x - 3) = 0", "A product is zero when a factor is zero". Each line is built from a `Step` (rule id, before, after) by a phrase table keyed by rule id, so phrases can be reviewed and localised. Not every rewrite is shown: the derivation is filtered to "teaching steps" (a flag on rules), and the number of lines is capped at 12 (the rest is merged into "simplify"). Steps only exist for the rules that have phrases; a command whose derivation has none returns a single line "(no steps available)" and the notice `no_steps`.
 
 ---
 

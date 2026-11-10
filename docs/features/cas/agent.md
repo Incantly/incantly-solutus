@@ -91,7 +91,7 @@ m = Substitute(sol, s0, t)
 Per line, one object. Symbolic results are summarised in text the model can read aloud, and with the exact flag.
 
 ```json
-{ "line": 2, "ok": true, "name": "fp", "type": "Expr", "value": "(x - 2)(x - 3)", "exact": true }
+{ "line": 2, "ok": true, "name": "fp", "type": "Expr", "value": "(x - 2) * (x - 3)", "exact": true }
 { "line": 4, "ok": true, "name": "s", "type": "List<Cond>", "value": "[x == 2, x == 3]", "exact": true }
 { "line": 3, "ok": true, "name": "r", "type": "List<Expr>", "value": "[2, 3]", "exact": true }
 { "line": 5, "ok": true, "name": "A", "type": "Expr", "value": "-2", "exact": true }
@@ -139,7 +139,7 @@ q = Expr(x^2 - 5x + 6 == 0)
 fp = Factor(LeftSide(q))
 ```
 
-`draw` returns `fp = (x - 2)(x - 3)`.
+`draw` returns `fp = (x - 2) * (x - 3)`.
 
 > "A product is zero when one of the factors is zero, so x is two or three."
 

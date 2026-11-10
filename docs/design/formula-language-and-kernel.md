@@ -335,7 +335,7 @@ Inside the formulas of `Particles`, these names exist:
 |---|---|
 | `i` | Particle index, 0 to `count - 1` |
 | `u`, `v` | Two fixed random numbers in [0, 1) for this particle and this life |
-| `age` | Seconds since this particle's current life began; `(t + life * rand(i)) mod life` |
+| `age` | Seconds since this particle's current life began; `mod(t + life * rand(i), life)` |
 | `t` | Film time |
 
 The formulas may also read any number or point in the figure, so a slider can change the wind. A first version evaluates on the CPU; section 8 moves it to WebGL with the same formulas.
