@@ -23,7 +23,7 @@ import {
   splitLogicalLines,
   tokenize,
 } from '@incantly/kernel';
-import type { CommandSpec, FunctionValue, LanguageError, MathLib, RelationValue } from '@incantly/kernel';
+import type { CommandSpec, FunctionValue, LanguageError, MathLib, ObjId, RelationValue } from '@incantly/kernel';
 import { emptyFig, errOf, form, okValue, p } from './helpers';
 
 const now = (): number => performance.now();
@@ -2164,5 +2164,257 @@ describe('LANG-SM-28: comparisons with an infinity (design 3.5 tolerance is for 
       const rel = relation(rhs);
       expect(rel.test(x, y), `${rhs} at (${x}, ${y})`).toBe(want);
     }, 10_000);
+  });
+});
+
+describe('LANG-SM-29: relation coefficients and sampling follow the overflow rule (ruling Q4, L8, L9)', () => {
+  // Readings where the docs are silent:
+  // - A relation whose coefficient is not a number while its inputs were finite is an undefined value
+  //   with the reason the coefficient had (overflow, division_by_zero, out_of_domain). The same rule
+  //   as every other value kind (pipeline: "Fix every case of a rule").
+  // - A coefficient that is infinite because an input was infinite (`big * x + y == 1`) stays a value.
+  // - Sampling a relation at a point where the formula overflows gives NaN from `residual` and no
+  //   `true` from `test`. Either call leaves reason, via and detail on the caller's Env as they were.
+  const SETUP = [
+    'r = 1e200',
+    'big = inf',
+    'un = 1 / 0',
+    'f(x) = x^2',
+    'L = [1e200, 1]',
+    'P = (1e200, 0)',
+    'V = (1e200, 0) - (0, 0)',
+    'Q = (1, 2)',
+    'W = (1, 2) - (0, 0)',
+  ];
+
+  function figure(): ScratchFigure {
+    const fig = emptyFig();
+    for (const line of SETUP) applyOk(fig, line);
+    return fig;
+  }
+
+  type Want = 'overflow' | 'division_by_zero' | 'out_of_domain' | 'input_undefined';
+  /** [value kind, relation text, reason] */
+  const UNDEFINED_ROWS: [string, string, Want][] = [
+    ['Number', 'x^2 + y^2 == r^2', 'overflow'],
+    ['Number', '1e308 * 10 * x + y == 1', 'overflow'],
+    ['Number', 'r * r * x + y == 1', 'overflow'],
+    ['Number', 'x^2 + y == r * r', 'overflow'],
+    ['Number', 'y == r * r * x^2', 'overflow'],
+    ['Number', 'r * r * x * y == 1', 'overflow'],
+    ['Number', 'r * r * x + y <= 1', 'overflow'],
+    ['Number', 'r * r * x + y >= 1', 'overflow'],
+    ['Number', 'r * r * x + y < 1', 'overflow'],
+    ['Number', 'x * (1 / 0) + y == 1', 'division_by_zero'],
+    ['Number', 'sqrt(-1) * x + y == 1', 'out_of_domain'],
+    ['Number', 'un * x + y == 1', 'input_undefined'],
+    ['Function', 'f(r) * x + y == 1', 'overflow'],
+    ['Function', 'f(1e200) * x^2 + y == 1', 'overflow'],
+    ['Function', 'x^2 + y^2 == f(r)', 'overflow'],
+    ['List', 'L[1] * L[1] * x + y == 1', 'overflow'],
+    ['List', 'x^2 + y^2 == L[1]^2', 'overflow'],
+    ['Point', 'P.x * P.x * x + y == 1', 'overflow'],
+    ['Point', 'x^2 + y^2 == P.x^2', 'overflow'],
+    ['Vector', 'V.x * V.x * x + y == 1', 'overflow'],
+    ['Vector', 'x^2 + y^2 == V.x^2', 'overflow'],
+  ];
+
+  it.each(UNDEFINED_ROWS)('LANG-SM-29: %s: "%s" is undefined (%s), not stored as a fine relation', (_kind, text, reason) => {
+    const fig = figure();
+    const r = applyOk(fig, `rel = ${text}`);
+    expect(r.defined, `${text}: ${r.summary}`).toBe(false);
+    expect(r.reason, text).toBe(reason);
+    expect(fig.valueOf('rel'), 'an undefined relation stores no value').toBeUndefined();
+  }, 10_000);
+
+  it('LANG-SM-29: the cases of the finding', () => {
+    const fig = figure();
+    const c = applyOk(fig, 'c = x^2 + y^2 == r^2');
+    expect(c.defined).toBe(false);
+    expect(c.reason).toBe('overflow');
+    const l = applyOk(fig, 'ln2 = 1e308 * 10 * x + y == 1');
+    expect(l.defined).toBe(false);
+    expect(l.reason).toBe('overflow');
+    const ok = applyOk(fig, 'c3 = x^2 + y^2 == 4');
+    expect(ok.defined).toBe(true);
+    expect(ok.reason).toBeUndefined();
+    expect((fig.valueOf('c3') as RelationValue).poly).toBeDefined();
+  });
+
+  it('LANG-SM-29: defined and reason always agree, for every row', () => {
+    for (const [, text] of UNDEFINED_ROWS) {
+      const fig = figure();
+      const r = applyOk(fig, `rel = ${text}`);
+      expect(r.defined, `${text}: ${r.summary}`).toBe(r.reason === undefined);
+    }
+  });
+
+  it('LANG-SM-29: an undefined relation can be redefined to a defined one, and back', () => {
+    const fig = figure();
+    expect(applyOk(fig, 'c = x^2 + y^2 == r^2').defined).toBe(false);
+    expect(applyOk(fig, 'c = x^2 + y^2 == 4').defined).toBe(true);
+    expect((fig.valueOf('c') as RelationValue).poly).toBeDefined();
+    expect(applyOk(fig, 'c = x^2 + y^2 == r^2').defined).toBe(false);
+    expect(fig.valueOf('c')).toBeUndefined();
+  });
+
+  const FINITE_ROWS: [string, string][] = [
+    ['Number', 'r * x + y == 1'],
+    ['Number', 'x^2 + y^2 == 4'],
+    ['Number', 'x^2 + y^2 == r'],
+    ['Function', 'f(2) * x + y == 1'],
+    ['Function', 'f(1e100) * x + y == 1'],
+    ['List', 'L[2] * x + y == 1'],
+    ['List', 'L[1] * x + y == 1'],
+    ['Point', 'Q.y * x + y == 1'],
+    ['Point', 'P.y * x + y == 1'],
+    ['Vector', 'W.y * x + y == 1'],
+    ['Vector', 'V.y * x + y == 1'],
+  ];
+
+  it.each(FINITE_ROWS)('LANG-SM-29: %s: "%s" keeps its coefficients (control)', (_kind, text) => {
+    const fig = figure();
+    const r = applyOk(fig, `rel = ${text}`);
+    expect(r.defined, `${text}: ${r.summary}`).toBe(true);
+    expect(r.reason).toBeUndefined();
+    const rel = fig.valueOf('rel') as RelationValue;
+    expect(rel.poly, `${text} has polynomial coefficients`).toBeDefined();
+    for (const k of ['xx', 'xy', 'yy', 'x', 'y', 'c'] as const) expect(Number.isFinite(rel.poly?.[k]), `${text}: ${k}`).toBe(true);
+  }, 10_000);
+
+  const INFINITE_ROWS: [string, string][] = [
+    ['Number', 'big * x + y == 1'],
+    ['Number', 'x + y == big'],
+    ['Number', 'x^2 + y^2 == big'],
+    ['Number', 'x * (big * 2) + y == 1'],
+    ['Function', 'f(big) * x + y == 1'],
+    ['List', '([1, 2] * big)[1] * x + y == 1'],
+    ['Point', '(big, 0).x * x + y == 1'],
+    ['Vector', '((big, 0) - (0, 0)).x * x + y == 1'],
+  ];
+
+  it.each(INFINITE_ROWS)('LANG-SM-29: %s: "%s" has an infinite coefficient from an infinite input, so it stays a value (ruling Q4)', (_kind, text) => {
+    const fig = figure();
+    const r = applyOk(fig, `rel = ${text}`);
+    expect(r.defined, `${text}: ${r.summary} (${String(r.reason)})`).toBe(true);
+    expect(r.reason).toBeUndefined();
+    expect(fig.valueOf('rel')).toBeDefined();
+  }, 10_000);
+
+  it('LANG-SM-29: an infinity made from finite inputs is not hidden by an infinity elsewhere in the line', () => {
+    const fig = figure();
+    const r = applyOk(fig, 'rel = r * r * x + y == big');
+    expect(r.defined).toBe(false);
+    expect(r.reason).toBe('overflow');
+  });
+
+  describe('sampling a relation leaves the caller reason, via and detail as they were', () => {
+    /** The relation, and the Env it was made in. */
+    function made(text: string): { rel: RelationValue; env: ReturnType<typeof createEnv> } {
+      const fig = emptyFig();
+      const line = okValue(analyseLine(`rel = ${text}`, fig));
+      const compiled = okValue(compileLine(line));
+      const env = createEnv({ slots: 8 });
+      const r = evaluate(compiled, env);
+      if (!r.defined) throw new Error(`${text} did not evaluate: ${String(r.reason)}`);
+      return { rel: r.value as RelationValue, env };
+    }
+
+    const VIA = 7 as ObjId;
+
+    /** [relation, point that overflows the formula, a finite point] */
+    const SAMPLES: [string, number, number, number, number][] = [
+      ['x^2 + y^2 == 4', 1e200, 0, 1, 1],
+      ['x + y == 1', 1.7e308, 1.7e308, 0.5, 0.5],
+      ['y == x^2', 1e200, 0, 2, 4],
+      ['x^3 + y == 0', 1e200, 0, 1, -1],
+      ['1e300 * x + y == 1', 1e300, 0, 0, 1],
+      ['x^2 + y^2 <= 4', 1e200, 0, 1, 1],
+      ['x^2 + y^2 >= 4', 1e200, 1e200, 1, 1],
+    ];
+
+    for (const [text, bx, by, gx, gy] of SAMPLES) {
+      it(`LANG-SM-29: "${text}" at an overflowing point gives no value and no reason on a clean Env`, () => {
+        const { rel, env } = made(text);
+        expect(env.reason, 'making the relation set no reason').toBeUndefined();
+        const res = rel.residual(bx, by);
+        expect(Number.isNaN(res), `${text} at (${bx}, ${by}): ${res}`).toBe(true);
+        expect(rel.test(bx, by), `${text} at (${bx}, ${by})`).not.toBe(true);
+        expect(env.reason).toBeUndefined();
+        expect(env.via).toBeUndefined();
+        expect(env.detail).toBeUndefined();
+      }, 10_000);
+
+      it(`LANG-SM-29: "${text}" at an overflowing point keeps the reason the caller already had`, () => {
+        const { rel, env } = made(text);
+        env.reason = 'division_by_zero';
+        env.via = VIA;
+        env.detail = 'caller detail';
+        rel.residual(bx, by);
+        rel.test(bx, by);
+        expect(env.reason).toBe('division_by_zero');
+        expect(env.via).toBe(VIA);
+        expect(env.detail).toBe('caller detail');
+      }, 10_000);
+
+      it(`LANG-SM-29: "${text}" sampled at a finite point is right after an overflowing sample`, () => {
+        const { rel, env } = made(text);
+        const before = rel.residual(gx, gy);
+        rel.residual(bx, by);
+        rel.test(bx, by);
+        expect(rel.residual(gx, gy)).toBe(before);
+        expect(Number.isFinite(before)).toBe(true);
+        expect(env.reason).toBeUndefined();
+      }, 10_000);
+    }
+
+    it('LANG-SM-29: the same holds for a relation that reads a function value in the shared Env', () => {
+      const fig = emptyFig();
+      applyOk(fig, 'f(x) = x^2');
+      const fInfo = fig.lookup('f')!;
+      const lineF = okValue(analyseLine('f(x) = x^2', fig));
+      const lineK = okValue(analyseLine('k = f(x) + y == 0', fig));
+      const cf = okValue(compileLine(lineF));
+      const ck = okValue(compileLine(lineK));
+      const env = createEnv({ slots: 8, read: (id) => (id === fInfo.id ? fValue : undefined) });
+      const first = evaluate(cf, env);
+      if (!first.defined) throw new Error('f did not evaluate');
+      const fValue = first.value as FunctionValue;
+      const second = evaluate(ck, env);
+      if (!second.defined) throw new Error('k did not evaluate');
+      const rel = second.value as RelationValue;
+      expect(rel.residual(2, 1)).toBe(5);
+      env.reason = 'limit';
+      env.via = VIA;
+      env.detail = 'before';
+      expect(Number.isNaN(rel.residual(1e200, 0))).toBe(true);
+      expect(rel.test(1e200, 0)).not.toBe(true);
+      expect(env.reason).toBe('limit');
+      expect(env.via).toBe(VIA);
+      expect(env.detail).toBe('before');
+      env.reason = undefined;
+      env.via = undefined;
+      env.detail = undefined;
+      expect(Number.isNaN(rel.residual(1e200, 0))).toBe(true);
+      expect(env.reason).toBeUndefined();
+      expect(rel.residual(2, 1)).toBe(5);
+    });
+
+    it('LANG-SM-29: a function value called with an overflowing argument also leaves the caller reason alone (L9 for functions)', () => {
+      const fig = emptyFig();
+      applyOk(fig, 'f(x) = x^2');
+      const lineF = okValue(analyseLine('f(x) = x^2', fig));
+      const env = createEnv({ slots: 8 });
+      const r = evaluate(okValue(compileLine(lineF)), env);
+      if (!r.defined) throw new Error('f did not evaluate');
+      const fn = r.value as FunctionValue;
+      env.reason = 'limit';
+      env.via = VIA;
+      env.detail = 'before';
+      expect(Number.isNaN(fn.call(1e200))).toBe(true);
+      expect(env.reason).toBe('limit');
+      expect(env.via).toBe(VIA);
+      expect(env.detail).toBe('before');
+    });
   });
 });
