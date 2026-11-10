@@ -20,3 +20,4 @@ Answers to the contradictions the language tester found (Q1 to Q14 in `handoff/l
 | Q14 | `fix` and `suggest` | Every `fix` is also the first entry of `suggest`. |
 | Depth | Nesting limit | Depth 64 is allowed; 65 or more is `limit`. |
 | Sliders | `inf` as a slider bound | Slider bounds must be finite. `a = 3 in 0..inf` is `bad_range` with the hint to pick a finite bound. |
+| SM-23 | A slider range that reads the slider | A range bound may not read the slider itself or anything downstream of it. `a = 3 in 0..a` and `a = 3 in 0..b` with `b = a + 1` are `cycle`, with `path` showing the chain. Range and style edges are part of the cycle test; only value edges decide free versus dependent. |
