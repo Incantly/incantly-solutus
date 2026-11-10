@@ -28,7 +28,7 @@ const KEYS: readonly (readonly [string, string])[] = [
   ['Up / Down / Home / End in the list', 'Move between lines; Enter edits one'],
 ];
 
-function el<K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Record<string, string> = {}, ...kids: (Node | string)[]): HTMLElementTagNameMap[K] {
+function el(tag: string, attrs: Record<string, string> = {}, ...kids: (Node | string)[]): HTMLElement {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
   node.append(...kids);
