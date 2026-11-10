@@ -2772,3 +2772,194 @@ describe('LANG-SM-31: the :d and :% text formats print undefined when the scaled
     expect(text('"{-0.5:%}"')).toMatch(/^-50/);
   });
 });
+
+describe('LANG-SM-32: a redefinition re-checks every style that reads the object, and style edges still form no cycle', () => {
+  // Readings where the docs are silent:
+  // - Language design 3.12 step 4 re-checks "each object in A's downstream list". Kernel design 9.2
+  //   registers style edges as edges from the inputs to the owner, so an object whose style reads A is
+  //   downstream of A. A redefinition that such a style cannot take is `breaks_dependents`, the same
+  //   as for a value or range reader. Detaching the rule with a warning (as on delete) is not read
+  //   into step 4.
+  // - The dependent is named in the error (`JSON.stringify(e)` contains its name), as in the existing
+  //   step 4 test.
+  // - A style that is replaced so that it no longer reads A stops being a dependent.
+  // Function names are lower case: an upper-case name followed by ( is a command call.
+
+  interface Reader {
+    readonly kind: string;
+    readonly name: string;
+    readonly line: string;
+  }
+
+  /** One object of each kind whose style reads f(1). */
+  const READERS: readonly Reader[] = [
+    { kind: 'Number', name: 'n1', line: 'n1 = 3 with opacity = f(1)' },
+    { kind: 'Number slider', name: 's1', line: 's1 = 3 in 0..20 with opacity = f(1)' },
+    { kind: 'Point', name: 'P1', line: 'P1 = (1, 2) with opacity = f(1)' },
+    { kind: 'Vector', name: 'V1', line: 'V1 = (1, 2) - (0, 0) with opacity = f(1)' },
+    { kind: 'List', name: 'L1', line: 'L1 = [1, 2] with opacity = f(1)' },
+    { kind: 'Text', name: 'm1', line: 'm1 = "hi" with opacity = f(1)' },
+    { kind: 'Bool', name: 'b1', line: 'b1 = true with opacity = f(1)' },
+    { kind: 'Function', name: 'h1', line: 'h1(x) = x with opacity = f(1)' },
+    { kind: 'Point (showIf)', name: 'P2', line: 'P2 = (1, 2) with showIf = f(1) > 0' },
+    { kind: 'Point (two styles)', name: 'P3', line: 'P3 = (1, 2) with color = red, opacity = f(1)' },
+  ];
+
+  function figure(): ScratchFigure {
+    const fig = emptyFig();
+    applyOk(fig, 'f(x) = x');
+    return fig;
+  }
+
+  function arity(fig: ScratchFigure): unknown {
+    return (fig.valueOf('f') as FunctionValue).arity;
+  }
+
+  function expectBreaks(fig: ScratchFigure, line: string, names: readonly string[]): void {
+    const r = fig.apply(line);
+    expect(r.ok, `${line} must be refused`).toBe(false);
+    const e = errOf(r, line);
+    expect(e.kind, line).toBe('breaks_dependents');
+    expect(e.committed).toBe(false);
+    for (const n of names) expect(JSON.stringify(e), `${line} names ${n}`).toContain(n);
+  }
+
+  it.each(READERS.map((r) => [r.kind, r] as const))('LANG-SM-32: %s defined with a style that reads f, then f gets a second parameter: breaks_dependents', (_k, reader) => {
+    const fig = figure();
+    applyOk(fig, reader.line);
+    expectBreaks(fig, 'f(x, y) = x + y', [reader.name]);
+    expect(arity(fig), 'f is unchanged').toBe(1);
+    expect(fig.lookup(reader.name), 'the reader is still there').toBeDefined();
+  }, 10_000);
+
+  it.each(READERS.map((r) => [r.kind, r] as const))('LANG-SM-32: %s restyled with a rule that reads f, then f gets a second parameter: breaks_dependents', (_k, reader) => {
+    const fig = figure();
+    const plain = reader.line.replace(/ with .*$/, '');
+    applyOk(fig, plain);
+    const restyle = reader.line.slice(reader.line.indexOf(' with ') + 1);
+    applyOk(fig, `${reader.name} ${restyle}`);
+    expectBreaks(fig, 'f(x, y) = x + y', [reader.name]);
+    expect(arity(fig)).toBe(1);
+  }, 10_000);
+
+  it('LANG-SM-32: the cases of the finding', () => {
+    const fig = figure();
+    applyOk(fig, 'P = (1, 2) with opacity = f(1)');
+    expectBreaks(fig, 'f(x, y) = x + y', ['P']);
+    const fig2 = figure();
+    applyOk(fig2, 'P = (1, 2)');
+    applyOk(fig2, 'P with opacity = f(1)');
+    expectBreaks(fig2, 'f(x, y) = x + y', ['P']);
+  });
+
+  it('LANG-SM-32: a function that loses a parameter breaks a style that passes it two arguments', () => {
+    const fig = emptyFig();
+    applyOk(fig, 'f(x, y) = x + y');
+    applyOk(fig, 'P = (1, 2) with opacity = f(1, 2) / 10');
+    expectBreaks(fig, 'f(x) = x', ['P']);
+    expect((fig.valueOf('f') as FunctionValue).arity).toBe(2);
+  });
+
+  it('LANG-SM-32: every reader is named when several objects read f in different ways', () => {
+    const fig = figure();
+    applyOk(fig, 'k = f(1)');
+    applyOk(fig, 'a = 3 in 0..f(5)');
+    applyOk(fig, 'P = (1, 2) with opacity = f(1)');
+    applyOk(fig, 'Q = (3, 4)');
+    applyOk(fig, 'Q with showIf = f(2) > 0');
+    expectBreaks(fig, 'f(x, y) = x + y', ['k', 'a', 'P', 'Q']);
+  });
+
+  it('LANG-SM-32: a value reader and a range reader are refused as before (control)', () => {
+    const fig = figure();
+    applyOk(fig, 'k = f(1)');
+    expectBreaks(fig, 'f(x, y) = x + y', ['k']);
+    const fig2 = figure();
+    applyOk(fig2, 'a = 3 in 0..f(5)');
+    expectBreaks(fig2, 'f(x, y) = x + y', ['a']);
+  });
+
+  it('LANG-SM-32: a style that reads a function that reads f is refused through the function', () => {
+    const fig = figure();
+    applyOk(fig, 'g(x) = f(x) + 1');
+    applyOk(fig, 'P = (1, 2) with opacity = g(1)');
+    expectBreaks(fig, 'f(x, y) = x + y', ['g']);
+  });
+
+  it('LANG-SM-32: a style that reads a Number made from f is refused through that Number', () => {
+    const fig = figure();
+    applyOk(fig, 'k = f(1)');
+    applyOk(fig, 'P = (1, 2) with opacity = k / 10');
+    expectBreaks(fig, 'f(x, y) = x + y', ['k']);
+  });
+
+  it('LANG-SM-32: a redefinition that keeps the signature is accepted, and the style still reads the new f', () => {
+    const fig = figure();
+    applyOk(fig, 'P = (1, 2) with opacity = f(1)');
+    applyOk(fig, 'f(x) = x + 1');
+    expect(arity(fig)).toBe(1);
+    fig.recompute();
+    expect(fig.lookup('P')).toBeDefined();
+    // The edge is kept: a later change of signature is still refused.
+    expectBreaks(fig, 'f(x, y) = x + y', ['P']);
+  });
+
+  it('LANG-SM-32: a style that no longer reads f is no longer a dependent', () => {
+    const fig = figure();
+    applyOk(fig, 'P = (1, 2) with opacity = f(1)');
+    expectBreaks(fig, 'f(x, y) = x + y', ['P']);
+    applyOk(fig, 'P with opacity = 0.5');
+    const r = fig.apply('f(x, y) = x + y');
+    expect(r.ok, r.ok ? '' : `${errOf(r).kind}: ${errOf(r).message}`).toBe(true);
+    expect(arity(fig)).toBe(2);
+  });
+
+  it('LANG-SM-32: a restyle that starts to read f makes the object a dependent', () => {
+    const fig = figure();
+    applyOk(fig, 'P = (1, 2) with opacity = 0.5');
+    applyOk(fig, 'f(x, y) = x + y');
+    applyOk(fig, 'P with opacity = f(1, 2) / 10');
+    expectBreaks(fig, 'f(x) = x', ['P']);
+  });
+
+  describe('style edges still form no cycle (kernel design 9.2, ruling SM-23)', () => {
+    it('LANG-SM-32: f may read the object whose style reads f', () => {
+      const fig = figure();
+      applyOk(fig, 'P = (1, 2) with opacity = f(1)');
+      const r = fig.apply('f(x) = x + P.x');
+      expect(r.ok, r.ok ? '' : `${errOf(r).kind}: ${errOf(r).message}`).toBe(true);
+    });
+
+    it('LANG-SM-32: the same with a restyle line and with showIf', () => {
+      const fig = figure();
+      applyOk(fig, 'P = (1, 2)');
+      applyOk(fig, 'P with showIf = f(P.x) > 0');
+      expect(fig.apply('f(x) = x * P.y').ok).toBe(true);
+      expect(fig.apply('f(x) = x * P.x + P.y').ok).toBe(true);
+    });
+
+    it('LANG-SM-32: the dependents test does not add a value cycle (a value reader of f that f reads is still a cycle)', () => {
+      const fig = figure();
+      applyOk(fig, 'k = f(1)');
+      const r = fig.apply('f(x) = x + k');
+      expect(r.ok).toBe(false);
+      expect(errOf(r).kind).toBe('cycle');
+    });
+
+    it('LANG-SM-32: a refused signature change does not turn a style edge into a cycle error', () => {
+      const fig = figure();
+      applyOk(fig, 'P = (1, 2) with opacity = f(P.x)');
+      const r = fig.apply('f(x, y) = x + y + P.x');
+      expect(r.ok).toBe(false);
+      expect(errOf(r).kind).toBe('breaks_dependents');
+    });
+
+    it('LANG-SM-32: an object stays free when only its style reads f', () => {
+      const fig = figure();
+      applyOk(fig, 'P = (1, 2) with opacity = f(1)');
+      expect(fig.lookup('P')?.free).toBe(true);
+      expect(fig.apply('P = (3, 4)').ok).toBe(true);
+      expect(fig.lookup('P')?.free).toBe(true);
+    });
+  });
+});
