@@ -124,8 +124,11 @@ export function formatNumber(v: number, fmt?: string): string {
   if (Number.isNaN(v)) return 'undefined';
   if (!Number.isFinite(v)) return v > 0 ? 'inf' : '-inf';
   if (fmt === undefined) return trim(v.toPrecision(6));
-  if (fmt === 'd') return trim((v * 180 / Math.PI).toFixed(2)) + '°';
-  if (fmt === '%') return trim((v * 100).toFixed(2)) + '%';
+  // a finite number whose scaled value overflows is undefined, as in arithmetic (it never prints the word "Infinity")
+  if (fmt === 'd' || fmt === '%') {
+    const scaled = fmt === 'd' ? (v * 180) / Math.PI : v * 100;
+    return Number.isFinite(scaled) ? trim(scaled.toFixed(2)) + (fmt === 'd' ? '°' : '%') : 'undefined';
+  }
   if (fmt === 'f') return toFraction(v);
   if (fmt.startsWith('.')) {
     const n = Math.max(1, Math.min(21, Number(fmt.slice(1))));

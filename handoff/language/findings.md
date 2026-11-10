@@ -374,7 +374,8 @@ Checker round 4 (pipeline step 7, after the product owner's narrowed ruling SM-2
 - **Evidence:** found in round 4; present since pass 1. `formatNumber` (`runtime.ts:123-135`) tests for NaN and infinity on its input, then for `d` computes `v * 180 / Math.PI` and for `%` computes `v * 100` and prints with `toFixed`, without testing the product. With `n = 1e307`: `"{n:d}"` is `"Infinity°"` and `"{n:%}"` is `"Infinity%"`; `"{n * 100}"` is `"undefined"` (the arithmetic path), and `"{n:2}"` and `"{n:f}"` are `"1e+307"`. With `big = inf`, `"{big:d}"` is `"inf"`.
 - **Invariant broken:** L8: an infinity made from finite inputs is undefined `overflow`; a text part that is undefined shows as `undefined` (L9).
 - **Suggested fix:** in `formatNumber`, test the scaled value and print `undefined` when it is not finite while `v` was, or scale after formatting where possible.
-- **status:** open
+- **status:** fixed
+- **fix (round 5):** `formatNumber` prints `undefined` when the `:d` or `:%` scaled value is not finite while the number was; Point and Vector parts go through the same function (`runtime.ts`).
 
 ## Questions
 
