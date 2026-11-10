@@ -1831,3 +1831,338 @@ describe('LANG-SM-25 and LANG-SM-26: numeric failures are the same on every valu
     expect(fig.valueOf('a4')).toEqual({ x: 2, y: 3 });
   });
 });
+
+// =============================================================================================
+// Round 5: LANG-SM-28 to LANG-SM-32 and the ruling Q-R4-1 (option a)
+// =============================================================================================
+
+describe('LANG-SM-28: comparisons with an infinity (design 3.5 tolerance is for finite numbers)', () => {
+  // Readings where the docs are silent (also in handoff/language/test-report.md, "Round 5"):
+  // - An infinite side is compared exactly: inf equals inf, nothing else equals an infinity, and the
+  //   order operators follow the real order (-inf < every finite number < inf).
+  // - Design 3.10's operator table has `== !=` for Number, Bool, Text, Point and Vector, and
+  //   `< <= > >=` for Number only. Lists, functions and points with `<` have no row, so they stay
+  //   type_mismatch, which is also the answer for an infinite list.
+  const SETUP = [
+    'big = inf',
+    'L = [1, 2]',
+    'Lb = L * big',
+    'f(x) = x',
+    'P = (1, 2)',
+    'Pi = (big, 0)',
+    'Pn = (-big, 0)',
+    'V = (1, 1) - (0, 0)',
+    'Vi = (big, 0) - (0, 0)',
+    'Vn = (-big, 0) - (0, 0)',
+  ];
+
+  function figure(): ScratchFigure {
+    const fig = emptyFig();
+    for (const line of SETUP) applyOk(fig, line);
+    return fig;
+  }
+
+  /** Evaluate `out = <expr>` on a fresh figure; the value is a boolean (or the number for `if`). */
+  function value(expr: string): unknown {
+    const fig = figure();
+    const r = applyOk(fig, `out = ${expr}`);
+    expect(r.defined, `${expr}: ${r.summary}`).toBe(true);
+    return fig.valueOf('out');
+  }
+
+  const OPS = ['==', '!=', '<', '<=', '>', '>='] as const;
+  type Op = (typeof OPS)[number];
+  const compare = (a: number, op: Op, b: number): boolean => {
+    switch (op) {
+      case '==':
+        return a === b;
+      case '!=':
+        return a !== b;
+      case '<':
+        return a < b;
+      case '<=':
+        return a <= b;
+      case '>':
+        return a > b;
+      default:
+        return a >= b;
+    }
+  };
+
+  const NUMBERS: readonly (readonly [string, number])[] = [
+    ['5', 5],
+    ['-5', -5],
+    ['1e308', 1e308],
+    ['-1e308', -1e308],
+    ['big', Infinity],
+    ['-big', -Infinity],
+  ];
+
+  describe('Number against Number, every operator and every order', () => {
+    const rows: [string, string, boolean][] = [];
+    for (const [sa, a] of NUMBERS) {
+      for (const [sb, b] of NUMBERS) {
+        for (const op of OPS) rows.push([`${sa} ${op} ${sb}`, sa, compare(a, op, b)] as [string, string, boolean]);
+      }
+    }
+    it.each(rows.map((r) => [r[0], r[2]] as const))('LANG-SM-28: %s is %s', (expr, want) => {
+      expect(value(expr)).toBe(want);
+    }, 10_000);
+  });
+
+  it('LANG-SM-28: the cases named in the finding', () => {
+    expect(value('5 == big')).toBe(false);
+    expect(value('5 != big')).toBe(true);
+    expect(value('1e308 == big')).toBe(false);
+    expect(value('-big == big')).toBe(false);
+    expect(value('5 == -big')).toBe(false);
+    expect(value('5 >= big')).toBe(false);
+    expect(value('5 <= -big')).toBe(false);
+    expect(value('5 < big')).toBe(true);
+    expect(value('big > 5')).toBe(true);
+    expect(value('if(5 == big, 1, 2)')).toBe(2);
+    expect(value('if(5 >= big, 1, 2)')).toBe(2);
+    expect(value('if(5 != big, 1, 2)')).toBe(1);
+  });
+
+  it('LANG-SM-28: an infinity equals itself and nothing else', () => {
+    expect(value('big == big')).toBe(true);
+    expect(value('-big == -big')).toBe(true);
+    expect(value('big != big')).toBe(false);
+    expect(value('big == inf')).toBe(true);
+    expect(value('inf == inf')).toBe(true);
+    expect(value('big <= big')).toBe(true);
+    expect(value('big >= big')).toBe(true);
+    expect(value('big < big')).toBe(false);
+    expect(value('big > big')).toBe(false);
+  });
+
+  it('LANG-SM-28: the tolerance of 3.5 is unchanged for finite numbers (control)', () => {
+    expect(value('1 == 1 + 1e-13')).toBe(true);
+    expect(value('0.1 + 0.2 == 0.3')).toBe(true);
+    expect(value('1e308 == 1e308')).toBe(true);
+    expect(value('1 == 1.001')).toBe(false);
+    expect(value('1 != 1 + 1e-13')).toBe(false);
+    expect(value('1 <= 1 + 1e-13')).toBe(true);
+    expect(value('1 + 1e-13 >= 1')).toBe(true);
+    expect(value('1e300 == 1e300 * (1 + 1e-13)')).toBe(true);
+  });
+
+  describe('a Number that comes from a function, a list, a point or a vector', () => {
+    // Each source holds an infinity; the finite sources are on the other side.
+    const INFINITE = [
+      ['a Number object', 'big'],
+      ['a function call', 'f(big)'],
+      ['a list item', 'Lb[1]'],
+      ['a point coordinate', 'Pi.x'],
+      ['a vector coordinate', 'Vi.x'],
+      ['a product', 'big * 2'],
+    ] as const;
+    const FINITE = ['5', 'f(5)', 'L[2]', 'P.y', 'V.x', '1e308', 'f(1e308)'] as const;
+
+    it.each(INFINITE.map((s) => [...s] as [string, string]))('LANG-SM-28: %s', (_kind, inf) => {
+      const wrong: string[] = [];
+      for (const sign of ['', '-']) {
+        const infinite = `${sign}(${inf})`;
+        const iv = sign === '' ? Infinity : -Infinity;
+        for (const fin of FINITE) {
+          const fv = Number(value(`${fin} + 0`));
+          for (const op of OPS) {
+            for (const [lhs, rhs, want] of [
+              [fin, infinite, compare(fv, op, iv)],
+              [infinite, fin, compare(iv, op, fv)],
+            ] as const) {
+              const expr = `${lhs} ${op} ${rhs}`;
+              if (value(expr) !== want) wrong.push(`${expr} should be ${want}`);
+            }
+          }
+        }
+        // The infinity against itself, from a different source.
+        if (value(`${infinite} == ${sign}big`) !== true) wrong.push(`${infinite} == ${sign}big should be true`);
+        if (value(`${infinite} == ${sign === '' ? '-' : ''}big`) !== false) wrong.push(`${infinite} == the opposite infinity should be false`);
+      }
+      expect(wrong).toEqual([]);
+    }, 30_000);
+  });
+
+  describe('chained comparisons (3.5 rules: a chain of n operators is n comparisons joined by and)', () => {
+    const CHAINS: [string, boolean][] = [
+      ['0 < big <= big', true],
+      ['0 < big < big', false],
+      ['5 <= big <= big', true],
+      ['5 <= big <= 5', false],
+      ['0 <= 5 <= big', true],
+      ['0 <= 5 <= -big', false],
+      ['-big < 5 < big', true],
+      ['-big <= 5 <= -big', false],
+      ['big >= 5 >= 0', true],
+      ['big >= 5 >= big', false],
+      ['big >= big >= big', true],
+      ['big > big > 0', false],
+      ['-big < -big', false],
+      ['-big <= -big <= 5', true],
+      ['5 < big < big', false],
+      ['5 >= big >= 0', false],
+      ['1e308 < big <= big', true],
+      ['1e308 >= big >= -big', false],
+      ['f(5) <= f(big) <= Lb[1]', true],
+      ['f(big) >= f(5) >= Pi.x', false],
+    ];
+    it.each(CHAINS)('LANG-SM-28: %s is %s', (expr, want) => {
+      expect(value(expr)).toBe(want);
+    }, 10_000);
+  });
+
+  describe('points and vectors: equality is per coordinate, exact when a coordinate is infinite', () => {
+    const ROWS: [string, boolean][] = [
+      // Points
+      ['(5, 0) == (big, 0)', false],
+      ['(5, 0) != (big, 0)', true],
+      ['(big, 0) == (5, 0)', false],
+      ['(1e308, 0) == (big, 0)', false],
+      ['(big, 0) == (-big, 0)', false],
+      ['(big, 0) != (-big, 0)', true],
+      ['(big, 0) == (big, 0)', true],
+      ['(big, 0) != (big, 0)', false],
+      ['(1, big) == (1, big)', true],
+      ['(1, big) == (1, 5)', false],
+      ['(1, 5) == (1, big)', false],
+      ['(1, -big) == (1, big)', false],
+      ['(big, big) == (big, big)', true],
+      ['(big, big) == (big, 5)', false],
+      ['P == Pi', false],
+      ['Pi == P', false],
+      ['P != Pi', true],
+      ['Pi == Pi', true],
+      ['Pi == Pn', false],
+      ['Pi != Pn', true],
+      ['Pi == (big, 0)', true],
+      ['P == (1, 2)', true],
+      ['(1, 2 + 1e-13) == P', true],
+      ['(1, 2.001) == P', false],
+      ['Pi.x == big', true],
+      ['P.x == Pi.x', false],
+      // Vectors
+      ['(1, 0) - (0, 0) == (big, 0) - (0, 0)', false],
+      ['V == Vi', false],
+      ['Vi == V', false],
+      ['V != Vi', true],
+      ['Vi == Vi', true],
+      ['Vi != Vi', false],
+      ['Vi == Vn', false],
+      ['Vi != Vn', true],
+      ['Vi == -Vn', true],
+      ['Vi * 2 == Vi', true],
+      ['V * big == (big, big) - (0, 0)', true],
+      ['V * big == Vi', false],
+      ['V == (1, 1) - (0, 0)', true],
+      ['V * 2 == V', false],
+    ];
+    it.each(ROWS)('LANG-SM-28: %s is %s', (expr, want) => {
+      expect(value(expr)).toBe(want);
+    }, 10_000);
+
+    it('LANG-SM-28: a point or vector with an infinity is not equal to a point whose coordinate overflows to a finite number', () => {
+      expect(value('Pi == (1e308, 0)')).toBe(false);
+      expect(value('Vi == (1e308, 0) - (0, 0)')).toBe(false);
+    });
+  });
+
+  describe('Bool and Text compare exactly, also with text made from an infinity', () => {
+    it('LANG-SM-28: Bool and Text rows', () => {
+      expect(value('(5 == big) == false')).toBe(true);
+      expect(value('(5 != big) == true')).toBe(true);
+      expect(value('(5 >= big) != (5 < big)')).toBe(true);
+      expect(value('"{big}" == "inf"')).toBe(true);
+      expect(value('"{-big}" == "-inf"')).toBe(true);
+      expect(value('"{big}" == "{5}"')).toBe(false);
+      expect(value('"{big}" != "{5}"')).toBe(true);
+    });
+  });
+
+  describe('lists and functions have no comparison (design 3.10 operator table): type_mismatch, also with an infinity inside', () => {
+    const SIDES: [string, string][] = [
+      ['L', 'L'],
+      ['L', 'Lb'],
+      ['Lb', 'Lb'],
+      ['[big, 1]', 'L'],
+      ['f', 'f'],
+      ['f', 'g'],
+      ['L', 'big'],
+      ['Lb', 'big'],
+      ['f', 'big'],
+      ['f', 'L'],
+      ['P', 'big'],
+      ['Pi', 'big'],
+      ['Vi', 'Pi'],
+    ];
+    const cases: [string, string][] = [];
+    for (const [a, b] of SIDES) for (const op of OPS) cases.push([`${a} ${op} ${b}`, op]);
+    cases.push(['P < P', '<'], ['Pi <= Pi', '<='], ['Vi > Vi', '>'], ['"a" < "b"', '<'], ['true < false', '<']);
+
+    it.each(cases)('LANG-SM-28: %s is type_mismatch', (expr) => {
+      const fig = figure();
+      applyOk(fig, 'g(x) = x + 1');
+      const r = fig.apply(`out = ${expr}`);
+      expect(r.ok, `${expr} must be refused`).toBe(false);
+      expect(errOf(r, expr).kind, expr).toBe('type_mismatch');
+      expect(fig.lookup('out'), `${expr} must not make an object`).toBeUndefined();
+    }, 10_000);
+
+    it('LANG-SM-28: a chain over a list is type_mismatch, and the numbers beside it still compare', () => {
+      const fig = figure();
+      const r = fig.apply('out = 0 < L <= big');
+      expect(r.ok).toBe(false);
+      expect(errOf(r).kind).toBe('type_mismatch');
+      expect(value('0 < L[1] <= big')).toBe(true);
+    });
+  });
+
+  describe('a relation compares its two sides the same way (design 3.5 tolerance, relation test)', () => {
+    /** Compile a relation line on its own (no object reads) and return the relation value. */
+    function relation(rhs: string): RelationValue {
+      const fig = emptyFig();
+      const line = okValue(analyseLine(`rel = ${rhs}`, fig));
+      const compiled = okValue(compileLine(line));
+      const env = createEnv({ slots: 8 });
+      const r = evaluate(compiled, env);
+      if (!r.defined) throw new Error(`${rhs} did not evaluate: ${String(r.reason)}`);
+      return r.value as RelationValue;
+    }
+
+    const ROWS: [string, number, number, boolean][] = [
+      ['x == inf', 5, 0, false],
+      ['x == inf', 1e308, 0, false],
+      ['x == -inf', 5, 0, false],
+      ['inf == x', 5, 0, false],
+      ['y == inf', 0, 5, false],
+      ['x + y == inf', 1, 2, false],
+      ['x - y == -inf', 1, 2, false],
+      ['x <= inf', 5, 0, true],
+      ['x >= inf', 5, 0, false],
+      ['x < inf', 5, 0, true],
+      ['x > inf', 5, 0, false],
+      ['x >= -inf', 5, 0, true],
+      ['x <= -inf', 5, 0, false],
+      ['x > -inf', 5, 0, true],
+      ['x < -inf', 5, 0, false],
+      ['inf >= x', 5, 0, true],
+      ['inf <= x', 5, 0, false],
+      ['-inf <= x', 5, 0, true],
+      ['-inf >= x', 5, 0, false],
+      // Controls: a finite relation is unchanged
+      ['x + y == 1', 0.5, 0.5, true],
+      ['x + y == 1', 1, 1, false],
+      ['x + y == 1', 0.5, 0.5 + 1e-12, true],
+      ['x <= 1', 0.5, 0, true],
+      ['x <= 1', 2, 0, false],
+      ['x >= 1', 0.5, 0, false],
+      ['x^2 + y^2 == 4', 2, 0, true],
+      ['x^2 + y^2 == 4', 1, 1, false],
+    ];
+    it.each(ROWS)('LANG-SM-28: %s at (%s, %s) is %s', (rhs, x, y, want) => {
+      const rel = relation(rhs);
+      expect(rel.test(x, y), `${rhs} at (${x}, ${y})`).toBe(want);
+    }, 10_000);
+  });
+});
