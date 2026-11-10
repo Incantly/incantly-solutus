@@ -49,12 +49,13 @@ export function checkLine(parsed: ParsedLine, fig: import('./table').FigureView,
     ...(c.rangeReads.size > 0 ? { rangeReads: [...c.rangeReads] } : {}),
     ...(c.styleReads.size > 0 ? { styleReads: [...c.styleReads] } : {}),
     ...(c.styleUsesT ? { styleUsesT: true } : {}),
+    ...(c.rangeUsesT ? { rangeUsesT: true } : {}),
     slots: c.slotCount,
   };
   return { ok: true, value: checked, notices: c.notices };
 }
 
-type Partial0 = Omit<CheckedLine, 'line' | 'text' | 'source' | 'reads' | 'usesT' | 'rangeReads' | 'styleReads' | 'styleUsesT' | 'slots'>;
+type Partial0 = Omit<CheckedLine, 'line' | 'text' | 'source' | 'reads' | 'usesT' | 'rangeReads' | 'styleReads' | 'styleUsesT' | 'rangeUsesT' | 'slots'>;
 
 function run(c: Checker, node: LineNode): Partial0 | undefined {
   switch (node.k) {
@@ -155,6 +156,31 @@ function findPath(c: Checker, from: Iterable<ObjId>, target: ObjId): ObjId[] | u
   return undefined;
 }
 
+/**
+ * Cycle test (ruling SM-23): the value's reads, the range bounds' reads and the style values' reads all count as edges.
+ * Only the value's reads decide free versus dependent. Reports `cycle` and returns true when `target` is reachable.
+ */
+function checkCycle(c: Checker, target: NameRef, existing: ObjectInfo, lineSpan: SpanLike): boolean {
+  if (c.opts.skipGraphChecks) return false;
+  const path = findPath(c, [...c.reads, ...c.rangeReads, ...c.styleReads], existing.id);
+  if (!path) return false;
+  const names = [target.name, ...path.map((id) => c.fig.byId(id)?.name ?? String(id))];
+  if (names[names.length - 1] !== target.name) names.push(target.name);
+  const related = path
+    .slice(0, -1)
+    .map((id) => {
+      const o = c.fig.byId(id);
+      return `${o?.name ?? id}${o?.source ? ' is defined by ' + o.source : ''}`;
+    });
+  c.err('cycle', lineSpan.s, lineSpan.e, 'lang.cycle', { name: target.name, path: names.join(' -> ') }, {
+    path: names,
+    related,
+    hint: 'Break the loop by making one of them a plain number.',
+    fingerprintKey: names.join('>'),
+  });
+  return true;
+}
+
 function checkRedefinition(c: Checker, target: NameRef, existing: ObjectInfo | undefined, newTy: Ty, lineSpan: SpanLike): void {
   if (!existing) {
     if (c.fig.size !== undefined && c.fig.size >= MAX_OBJECTS) {
@@ -176,25 +202,7 @@ function checkRedefinition(c: Checker, target: NameRef, existing: ObjectInfo | u
     return;
   }
   if (c.opts.skipGraphChecks) return;
-  // cycle
-  const path = findPath(c, c.reads, existing.id);
-  if (path) {
-    const names = [target.name, ...path.map((id) => c.fig.byId(id)?.name ?? String(id))];
-    if (names[names.length - 1] !== target.name) names.push(target.name);
-    const related = path
-      .slice(0, -1)
-      .map((id) => {
-        const o = c.fig.byId(id);
-        return `${o?.name ?? id}${o?.source ? ' is defined by ' + o.source : ''}`;
-      });
-    c.err('cycle', lineSpan.s, lineSpan.e, 'lang.cycle', { name: target.name, path: names.join(' -> ') }, {
-      path: names,
-      related,
-      hint: 'Break the loop by making one of them a plain number.',
-      fingerprintKey: names.join('>'),
-    });
-    return;
-  }
+  if (checkCycle(c, target, existing, lineSpan)) return;
   // dependents
   const deps = c.fig.dependentsOf(existing.id);
   if (deps.length === 0) return;
@@ -682,6 +690,9 @@ function checkRestyle(c: Checker, node: Extract<LineNode, { k: 'restyle' }>): Pa
   }
   const style = c.apart('style', () => checkStyle(c, node.style));
   if (c.errors.length > 0) return undefined;
+  const lastStyle = node.style[node.style.length - 1];
+  checkCycle(c, t, obj, { s: t.s, e: Math.max(t.e, lastStyle ? lastStyle.e : t.e) });
+  if (c.errors.length > 0) return undefined;
   return { kind: 'restyle', op: 'restyle', names: [t.name], type: obj.type, free: false, isState: false, existing: obj.id, style };
 }
 
@@ -705,6 +716,8 @@ function checkRerange(c: Checker, node: Extract<LineNode, { k: 'rerange' }>): Pa
   }
   const range = c.apart('range', () => checkRange(c, node.range, undefined));
   if (!range) return undefined;
+  checkCycle(c, t, obj, { s: t.s, e: Math.max(t.e, node.range.e) });
+  if (c.errors.length > 0) return undefined;
   return { kind: 'rerange', op: 'rerange', names: [t.name], type: obj.type, free: true, isState: false, existing: obj.id, range };
 }
 

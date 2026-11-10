@@ -47,8 +47,10 @@ export interface CompiledLine extends Compiled<unknown> {
   readonly styleReads: ReadonlySet<ObjId>;
   /** Objects read by the bounds of a slider range; not inputs of the value. */
   readonly rangeReads: ReadonlySet<ObjId>;
-  /** True when a style value or a range bound reads the clock. */
+  /** True when a style value reads the clock (re-run the style rules on a tick). */
   readonly styleUsesT: boolean;
+  /** True when a range bound reads the clock (re-run the range rule on a tick). */
+  readonly rangeUsesT: boolean;
   /** Style values by key; each evaluates in the same environment. */
   readonly style: readonly { readonly key: string; readonly word?: string; readonly eval?: Fn }[];
   /** Slider range evaluators. */
@@ -547,7 +549,13 @@ class Compiler {
           const out = new Float64Array(list.length);
           for (let i = 0; i < list.length; i++) {
             const x = list[i] as number;
-            out[i] = op === '+' ? x + k : op === '-' ? x - k : op === '*' ? x * k : op === '/' ? (k === 0 ? NAN : x / k) : power(x, k, env);
+            const v = op === '+' ? x + k : op === '-' ? x - k : op === '*' ? x * k : op === '/' ? (k === 0 ? NAN : x / k) : power(x, k, env);
+            // an element follows the same rule as a single Number: an infinity made from finite inputs is overflow
+            if (v - v !== 0 && v === v && x - x === 0 && k - k === 0) {
+              fail(env, 'overflow', 'a result too large to store');
+              return undefined;
+            }
+            out[i] = v;
           }
           if (op === '/' && k === 0) fail(env, 'division_by_zero', 'division by zero');
           return out;
@@ -939,7 +947,12 @@ function pointwise(env: Env, operands: unknown[], f: (a: number, b: number) => n
       const b = operands.length > 1 ? evalAt(operands[1], xs) : 0;
       const v = f(a, operands.length > 1 ? b : a);
       if (v - v !== 0) {
-        self.reason = a !== a || b !== b ? 'input_undefined' : 'not_finite';
+        // same rule as a single Number: an infinity is a value only when an input was infinite; from finite inputs it is
+        // overflow; a result that is not a number at all (`inf - inf`) or follows an undefined input keeps its own reason
+        if (a !== a || b !== b) self.reason = 'input_undefined';
+        else if (v === v && a - a === 0 && b - b === 0) self.reason = 'overflow';
+        else if (v === v) return v;
+        else self.reason = 'not_finite';
         return NAN;
       }
       return v;
@@ -1066,6 +1079,7 @@ export function compileLine(line: CheckedLine, opts: CompileOptions = {}): Resul
       styleReads: new Set<ObjId>(line.styleReads ?? []),
       rangeReads: new Set<ObjId>(line.rangeReads ?? []),
       styleUsesT: line.styleUsesT ?? false,
+      rangeUsesT: line.rangeUsesT ?? false,
       eval: evalFn,
       style,
       ...(range ? { range } : {}),

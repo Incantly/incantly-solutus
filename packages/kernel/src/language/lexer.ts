@@ -5,7 +5,7 @@
 import type { Notice } from '../contracts/errors';
 import { Diag, notice } from './errors';
 import type { LanguageError } from './errors';
-import { MAX_LINE_LENGTH, SourceMap } from './source';
+import { MAX_LINE_LENGTH, SourceMap, hexColourLength } from './source';
 
 export type TokKind = 'num' | 'name' | 'kw' | 'str' | 'op' | 'sqrt' | 'at' | 'comment' | 'nl' | 'bad' | 'eof';
 
@@ -131,15 +131,12 @@ export function lex(sm: SourceMap, opts: { maxTokens?: number } = {}): LexResult
         continue;
       }
       if (c === '#') {
-        // a hex colour after `=` in a style list is a value, not a comment
-        const prevTok = out[out.length - 1];
-        if (prevTok && prevTok.kind === 'op' && prevTok.text === '=') {
-          const m = /^#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3,4})(?![0-9A-Za-z_])/.exec(text.slice(i, i + 10));
-          if (m) {
-            push({ kind: 'name', text: m[0], s: i, e: i + m[0].length, name: m[0] });
-            i += m[0].length;
-            continue;
-          }
+        // a hex colour after `=` in a style list is a value, not a comment (one test shared with `normalise` and the splitter)
+        const colour = hexColourLength(text, i);
+        if (colour > 0) {
+          push({ kind: 'name', text: text.slice(i, i + colour), s: i, e: i + colour, name: text.slice(i, i + colour) });
+          i += colour;
+          continue;
         }
         let j = i;
         while (j < to && text[j] !== '\n') j++;

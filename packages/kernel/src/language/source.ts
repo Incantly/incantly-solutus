@@ -30,6 +30,23 @@ export interface Normalised {
 
 const isWordChar = (c: string | undefined): boolean => c !== undefined && /[A-Za-z0-9_\u0370-\u03FF]/.test(c);
 
+/**
+ * Length of the hex colour that starts at `text[i]` (a `#`), or 0. A colour is a `#` and 3, 4, 6 or 8 hex digits not
+ * followed by a name character, directly after a single `=` (blanks may lie between). Anything else starting with `#`
+ * is a comment. The normaliser, the line splitter and the lexer all ask this one function, so they cut the line at
+ * the same place.
+ */
+export function hexColourLength(text: string, i: number): number {
+  if (text[i] !== '#') return 0;
+  let j = i - 1;
+  while (j >= 0 && (text[j] === ' ' || text[j] === '\t' || text[j] === '\u00A0')) j--;
+  if (j < 0 || text[j] !== '=') return 0;
+  const before = text[j - 1];
+  if (before === '=' || before === '<' || before === '>' || before === '!' || before === '\u2260' || before === '\u2264' || before === '\u2265') return 0;
+  const m = /^#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3,4})(?![0-9A-Za-z_])/.exec(text.slice(i, i + 10));
+  return m ? m[0].length : 0;
+}
+
 /** Rewrites typographic variants. Strings and comments are copied verbatim, except for smart quotes. */
 export function normalise(raw: string): Normalised {
   // NFC, chunked at combining marks so the map stays exact.
@@ -139,6 +156,13 @@ export function normalise(raw: string): Normalised {
       }
     }
     if (mode === 'code' && c === '#') {
+      const colour = hexColourLength(src, i);
+      if (colour > 0) {
+        // a hex colour after `=` is a value, copied as it is; the rest of the line stays code
+        for (let k = 0; k < colour; k++) push(src[i + k] as string, origIdx(i + k), origEnd(i + k));
+        i += colour;
+        continue;
+      }
       mode = 'comment';
       push(c, a, b);
       i++;
@@ -307,6 +331,11 @@ export function scanLineDepth(text: string, from: number, to: number, depth: num
       continue;
     }
     if (ch === '#') {
+      const colour = hexColourLength(text, i);
+      if (colour > 0) {
+        i += colour - 1;
+        continue;
+      }
       // a comment runs to the end of the line
       while (i + 1 < to && text.charCodeAt(i + 1) !== 13) i++;
     } else if (isQuote(ch)) {

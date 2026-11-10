@@ -77,8 +77,10 @@ export interface CheckedLine {
   readonly rangeReads?: readonly ObjId[];
   /** Object ids read by style values (`showIf`, `color`, `opacity`): the inputs of the property rules (style edges). */
   readonly styleReads?: readonly ObjId[];
-  /** True when a style value or a range bound reads the clock; the value itself does not. */
+  /** True when a style value reads the clock; the value and the range bounds may not. */
   readonly styleUsesT?: boolean;
+  /** True when a range bound reads the clock; the value and the style values may not. */
+  readonly rangeUsesT?: boolean;
   /** Number of local slots the compiled line needs. */
   readonly slots: number;
   /** Canonical source text of the line. */
@@ -182,6 +184,7 @@ class Checker {
   readonly rangeReads = new Set<ObjId>();
   readonly styleReads = new Set<ObjId>();
   styleUsesT = false;
+  rangeUsesT = false;
   scopes: Frame[] = [];
   slotCount = 0;
   nodes = 0;
@@ -206,12 +209,15 @@ class Checker {
   /* ------------------------------ error sink ------------------------------ */
 
   /**
-   * Runs `fn` with a fresh set of reads and records what it read in the range or style set instead of the value's reads,
-   * so a slider bound or a style value never makes a free object dependent.
+   * Runs `fn` with fresh checker state and records what it read in the range or style set instead of the value's reads,
+   * so a slider bound or a style value never makes a free object dependent. Every field that decides whether the value
+   * is free (`reads`, `usesT`, `hasCommand`) is saved and put back, so a command call or a clock read inside a bound or
+   * a style value leaves the value's facts as they were.
    */
   apart<R>(bucket: 'range' | 'style', fn: () => R): R {
     const savedReads = this.reads;
     const savedT = this.usesT;
+    const savedCommand = this.hasCommand;
     this.reads = new Set<ObjId>();
     this.usesT = false;
     try {
@@ -219,9 +225,13 @@ class Checker {
     } finally {
       const into = bucket === 'range' ? this.rangeReads : this.styleReads;
       for (const id of this.reads) into.add(id);
-      if (this.usesT) this.styleUsesT = true;
+      if (this.usesT) {
+        if (bucket === 'range') this.rangeUsesT = true;
+        else this.styleUsesT = true;
+      }
       this.reads = savedReads;
       this.usesT = savedT;
+      this.hasCommand = savedCommand;
     }
   }
 

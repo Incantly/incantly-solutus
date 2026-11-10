@@ -74,3 +74,31 @@ All 21 findings are `fixed` in `handoff/language/findings.md`, each with a one-l
 - `1/-2x` and `1/+2x` give `ambiguous_implicit`.
 - A text longer than 10,000 characters at run time is undefined with reason `limit`.
 - `ncr` and `npr` overflow earlier, with the same reason `overflow`.
+
+# Round 3: checker findings LANG-SM-9 (reopened), 22, 23, 24
+
+The four findings are `fixed` in `handoff/language/findings.md`. `npm run lint` and `npm run typecheck` pass. `npx vitest run packages/kernel/test/spec`: 1,197 of 1,198 pass; the one failure is contested below.
+
+## Fixes
+
+| Finding | Fix | Where |
+|---|---|---|
+| SM-9 | `apart` saves and restores `hasCommand` with `reads` and `usesT` | `check.ts` |
+| SM-22 | `list-num`: an element that overflows from finite inputs makes the list undefined with `overflow`. `pointwise`: an infinity from finite inputs is `overflow`; one that follows an infinite input is a value; `inf - inf` is `not_finite`; an undefined input is `input_undefined` | `compile.ts` |
+| SM-23 | Ruling SM-23. `checkCycle` runs `findPath` from the value, range and style reads together, in define, function, rerange and restyle lines. `ScratchFigure` records all three as inputs, so an object that a range or style reads is found when it is redefined | `lines.ts`, `figure.ts` |
+| SM-24 | `hexColourLength(text, i)` is the one test for a colour: `#` and 3, 4, 6 or 8 hex digits, not followed by a name character, after a single `=` (blanks between; not `==`, `<=`, `>=`, `!=`). `normalise` copies the colour and stays in code, `scanLineDepth` skips it, the lexer reads it as a name | `source.ts`, `lexer.ts` |
+| Split flag | `styleUsesT` is true only for a style value that reads the clock; new `rangeUsesT` is true only for a range bound that does. Both are on `CheckedLine` and `CompiledLine`; the kernel re-runs only the rule that reads `t` | `check.ts`, `lines.ts`, `compile.ts` |
+
+## Behaviour changes worth knowing
+
+- A hex colour on a new line directly after `=` (`=\n#ff0000`) is now a comment in the lexer too. Before, the lexer read it as a colour while the other two scanners did not.
+- In function arithmetic, `f / g` where `g(x) = 0` with finite inputs reports `overflow`, not `not_finite`.
+- Restyle (`P with …`) and rerange (`a in …`) lines now run the cycle test, so `a in 0..a` and `P with showIf = P.x > 0` are `cycle`.
+
+## Contested test
+
+`packages/kernel/test/spec/language/regressions.test.ts`, "LANG-SM-24: a colour, then several properties with a Unicode minus", uses `size = 3 − 1`. `size` is not a property (`props.ts` `PROPERTIES`; the property list in `docs/features/language/design.md`), so the line fails with `unknown_property` for a reason unrelated to the finding. The same line with `pointSize = 3 − 1` passes. The test should use `pointSize`.
+
+## Not updated
+
+`docs/state-machines.md` belongs to the checker; L1, L2, L3, L5, L7 and L8 still describe the open state of these four findings.

@@ -107,7 +107,8 @@ Checker round 2 (pipeline step 7) at commit `3220d23`. Each fix was read in the 
 - **Evidence:** `checkDefine` checks the range (`lines.ts:423`) and the style (`lines.ts:426`) with the same `Checker`, so their reads go into `c.reads`; then `free = isFreeNode(c, tn)` (`lines.ts:437`, `455-457`) tests `c.reads.size === 0`. With `n = 10` and `B = (1, 1)`: `a = 3 in 0..n` checks as `free: false` with `reads: [n]`; then `a in 0..20` is refused with `not_free` "a is computed from other objects"; `a = 3 with opacity = n / 20` and `P = (1, 2) with showIf = B.x > 0` are also `free: false`, and `ScratchFigure` stores `P` as not free.
 - **Invariant broken:** L5: `free` is true when the value holds its own value; style values are separate property rules (`props.ts` `expr: true`).
 - **Suggested fix:** record the reads of the value expression separately from the reads of the range bounds and style values; compute `free` from the value's reads only; return the other reads in their own fields so the kernel can build property rules.
-- **status:** reopened
+- **status:** fixed
+- **fix (round 3):** `Checker.apart` now saves and restores `hasCommand` as well as `reads` and `usesT` (`check.ts`), so a command call in a range bound or a style value no longer makes the object dependent.
 - **fix:** `Checker.apart('range' | 'style', …)` collects the reads of range bounds and style values separately (`check.ts`); `free` is computed from the value's reads. `CheckedLine` gains `rangeReads`, `styleReads` and `styleUsesT`, and `reads` now lists only the inputs of the value rule (the kernel design says the cycle check follows value edges only, section 9.2). `CompiledLine` carries the same three. `lines.ts` wraps the four range and style checks.
 - **check (round 2):** Reopened. Plain reads are fixed: `a = 3 in 0..n`, `a = 3 with opacity = n / 20` and `P = (1, 2) with showIf = B.x > 0` are free and `reads` is empty. But `Checker.apart` (`check.ts:212`) saves and restores `reads` and `usesT` only, not `hasCommand`, which `inferCommand` (`check.ts:1060`) sets and `isFreeNode` (`lines.ts:471`) tests. Any command in a range bound or a style value still makes the object dependent. With `A = (1, 1)`, `B = (4, 5)` and a `Distance(a: Point, b: Point) -> Number` command: `a = 3 with opacity = Distance(A, B) / 10` is stored `free: false` with `reads: []` and `styleReads: [A, B]`, and `a in 0..20` is then refused with `not_free` "a is computed from other objects"; `k = 3 in 0..Distance(A, B)` is stored `free: false, slider: true` (a slider that is not free, which design 7 does not allow); `P = (1, 2) with showIf = Distance(A, B) > 1` is stored `free: false`, so `P` cannot be dragged. The regression tests use plain names only, so they pass. Suggested fix: save and restore `hasCommand` in `apart` as `usesT` is; add a regression test with a command call in a range bound and in a style value.
 
@@ -179,7 +180,8 @@ Checker round 2 (pipeline step 7) at commit `3220d23`. Each fix was read in the 
   - `pointwise` (`compile.ts:927-950`) returns `NaN` with reason `not_finite` for any non-finite result. With `f(x) = x`, `g = f * f` and `h = g(1e200)`: `h = undefined (not_finite)`, where the same product written as `f(1e200) * f(1e200)` is `overflow`. With `g3 = f^2`, `g3(1e200)` is also `not_finite`. Through `pointwise`, an infinite input never gives `inf` either, while `h(big)` with `big = inf` is `inf`.
 - **Invariant broken:** L8 and L9: an infinity made from finite inputs is `overflow`; an infinity that follows from an `inf` input is a value.
 - **Suggested fix:** apply `guardInf` per element in `list-num` (and decide whether an overflowed element is an undefined element or makes the whole list undefined); in `pointwise`, use the same rule with `a` and `b` as the inputs.
-- **status:** open
+- **status:** fixed
+- **fix (round 3):** `list-num` arithmetic gives undefined `overflow` for the whole list when an element overflows from finite inputs; `pointwise` (function arithmetic) gives `overflow` from finite inputs, passes an infinity that follows an infinite input as a value, and keeps `input_undefined` and `not_finite` for the rest (`compile.ts`).
 
 ### LANG-SM-23: A slider's range may read the slider itself or its dependents
 
@@ -187,7 +189,8 @@ Checker round 2 (pipeline step 7) at commit `3220d23`. Each fix was read in the 
 - **Evidence:** new with the LANG-SM-9 fix. `checkRedefinition` (`lines.ts:158`) runs the cycle test on `c.reads`, which no longer holds the range reads, and `checkRerange` (`lines.ts:688`) has never run it. With `a = 3 in 0..20` and `b = a + 1`: `a = 3 in 0..b` was `cycle` "a -> b -> a" on `d2d9d9e` and is now accepted; `a in 0..b` and `a in 0..a` are accepted on both commits. The kernel design (section 9.2) proves that style edges cannot form a cycle because nothing reads a style. A range is different: `slider_clamped` (language design 3.13) clamps a free number to its range, so if the kernel clamps again when a bound changes, a change to `a` changes `b`, which moves `a`'s bound, which can move `a`.
 - **Invariant broken:** L7: the graph the kernel builds from a line has no cycle the update pass can loop on. Which edges count is not written down for ranges.
 - **Suggested fix:** ask the product owner for a ruling. Either (a) range bounds are read only when the slider is set and never re-clamp it (then the current behaviour is right; write that in the kernel design next to 9.2), or (b) range edges count in the cycle test: run `findPath` from `reads` and `rangeReads` together in `checkRedefinition`, and run it in `checkRerange` too.
-- **status:** open
+- **status:** fixed
+- **fix (round 3):** Ruling SM-23: the cycle test (`checkCycle` in `lines.ts`) follows the value, range and style reads together; it runs for define, function, rerange and restyle lines. `ScratchFigure` stores all three kinds of read as inputs of an object. Only the value reads decide free versus dependent.
 
 ## Wrong errors
 
@@ -200,7 +203,8 @@ Checker round 2 (pipeline step 7) at commit `3220d23`. Each fix was read in the 
   - Cursor context: `complete('P with color = #ff0000, opacity = (1 +\n  ', …)` treats the second line as a new logical line (`lastLogicalStart`) and offers the `#` and `@` snippets.
 - **Invariant broken:** L1, L2 and L13: the normaliser, the splitter and the cursor context see the same comment boundaries as the lexer.
 - **Suggested fix:** move the hex-colour test into one shared helper (the previous non-space character is `=`, then `#` and 3, 4, 6 or 8 hex digits not followed by a name character, as `lexer.ts:137` tests) and call it from `normalise`, `scanLineDepth` and the lexer.
-- **status:** open
+- **status:** fixed
+- **fix (round 3):** One helper `hexColourLength` (`source.ts`) decides whether a `#` after `=` is a colour; `normalise`, `scanLineDepth` and the lexer all call it, so the rest of the line is rewritten and a bracket opened after the colour continues the line.
 
 ### LANG-SM-16: Errors inside a body argument are dropped when several forms compete
 
