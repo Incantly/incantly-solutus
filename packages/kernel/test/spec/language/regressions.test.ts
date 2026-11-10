@@ -2418,3 +2418,206 @@ describe('LANG-SM-29: relation coefficients and sampling follow the overflow rul
     });
   });
 });
+
+describe('LANG-SM-30: hsl and hsv, and any built-in with a non-Number result, never store a NaN', () => {
+  // Readings where the docs are silent:
+  // - Design 3.14 says colour functions are "never" undefined and clamp their components. An infinite
+  //   hue has no clamp, so both answers are accepted: an undefined colour with reason not_finite or
+  //   out_of_domain, or a defined colour whose four channels are finite numbers in range. What is
+  //   never accepted is a defined colour holding NaN.
+  // - A hue that is finite but huge (1e308) is wrapped like any other and gives a defined colour.
+  // - An infinite saturation, lightness, value or alpha is clamped (those inputs have a clamp).
+  const SETUP = [
+    'big = inf',
+    'f(x) = x',
+    'L = [1, 2]',
+    'Lb = L * big',
+    'Pi = (big, 0)',
+    'Vi = (big, 0) - (0, 0)',
+    'V = (1, 1) - (0, 0)',
+    'un = 1e308 * 10',
+  ];
+
+  function figure(): ScratchFigure {
+    const fig = emptyFig();
+    for (const line of SETUP) applyOk(fig, line);
+    return fig;
+  }
+
+  /** Every number held by a value: a number, a list, a point, a vector or a colour. */
+  function numbers(v: unknown): number[] {
+    if (typeof v === 'number') return [v];
+    if (v !== null && typeof v === 'object') {
+      if (typeof (v as ArrayLike<number>).length === 'number') return Array.from(v as ArrayLike<number>).flatMap((x) => numbers(x));
+      return Object.values(v as Record<string, unknown>).flatMap((x) => numbers(x));
+    }
+    return [];
+  }
+
+  /** A line is judged by what the figure stored: undefined with a reason, or a value with no NaN. */
+  function judge(expr: string, fig: ScratchFigure = figure()): { defined: boolean; reason: string | undefined; value: unknown } {
+    const r = applyOk(fig, `out = ${expr}`);
+    expect(r.defined, `${expr}: defined and reason must agree (${r.summary})`).toBe(r.reason === undefined);
+    const value = fig.valueOf('out');
+    if (r.defined) {
+      expect(numbers(value).some((x) => Number.isNaN(x)), `${expr}: a defined value holds NaN (${JSON.stringify(value)})`).toBe(false);
+    }
+    return { defined: r.defined, reason: r.reason, value };
+  }
+
+  function expectColour(expr: string): void {
+    const r = judge(expr);
+    if (!r.defined) {
+      expect(['not_finite', 'out_of_domain'], `${expr}: undefined for an unexpected reason`).toContain(r.reason);
+      return;
+    }
+    const c = r.value as { r: number; g: number; b: number; a: number };
+    for (const k of ['r', 'g', 'b'] as const) {
+      expect(Number.isFinite(c[k]), `${expr}: channel ${k} = ${c[k]}`).toBe(true);
+      expect(c[k]).toBeGreaterThanOrEqual(0);
+      expect(c[k]).toBeLessThanOrEqual(255);
+    }
+    expect(Number.isFinite(c.a), `${expr}: alpha = ${c.a}`).toBe(true);
+    expect(c.a).toBeGreaterThanOrEqual(0);
+    expect(c.a).toBeLessThanOrEqual(1);
+  }
+
+  /** Where an infinite hue can come from: every value kind that holds a Number. */
+  const INFINITE_HUES: [string, string][] = [
+    ['a Number object', 'big'],
+    ['its negative', '-big'],
+    ['inf itself', 'inf'],
+    ['a product', 'big * 2'],
+    ['a function result', 'f(big)'],
+    ['a list item', 'Lb[1]'],
+    ['a point coordinate', 'Pi.x'],
+    ['a vector coordinate', 'Vi.x'],
+    ['a vector length', 'Vi.length'],
+    ['a sum', 'big + 1'],
+  ];
+
+  describe.each(['hsl', 'hsv'])('%s', (fn) => {
+    const third = fn === 'hsl' ? '0.5' : '1';
+
+    it.each(INFINITE_HUES)(`LANG-SM-30: ${fn} with an infinite hue from %s gives no NaN channel`, (_kind, hue) => {
+      expectColour(`${fn}(${hue}, 1, ${third})`);
+      expectColour(`${fn}(${hue}, 1, ${third}, 0.5)`);
+    }, 10_000);
+
+    it('LANG-SM-30: the case of the finding', () => {
+      const r = judge(`${fn}(big, 1, ${third})`);
+      expect(r.defined ? numbers(r.value).every((x) => Number.isFinite(x)) : true).toBe(true);
+    });
+
+    it('LANG-SM-30: an infinite hue gives the same kind of answer for hsl and hsv, and for the two signs', () => {
+      const a = judge(`${fn}(big, 1, ${third})`);
+      const b = judge(`${fn}(-big, 1, ${third})`);
+      expect(a.defined).toBe(b.defined);
+      if (!a.defined) expect(a.reason).toBe(b.reason);
+    });
+
+    it('LANG-SM-30: every argument infinite at once', () => {
+      expectColour(`${fn}(big, big, big, big)`);
+      expectColour(`${fn}(-big, -big, -big, -big)`);
+    });
+
+    it('LANG-SM-30: an infinite saturation, third argument or alpha is clamped or undefined, never NaN', () => {
+      for (const args of [
+        `0, big, ${third}`,
+        `0, -big, ${third}`,
+        `0, 1, big`,
+        `0, 1, -big`,
+        `120, big, big`,
+        `0, 1, ${third}, big`,
+        `0, 1, ${third}, -big`,
+        `0, f(big), ${third}`,
+        `0, 1, Lb[1]`,
+        `0, 1, ${third}, Pi.x`,
+      ]) {
+        expectColour(`${fn}(${args})`);
+      }
+    });
+
+    it('LANG-SM-30: an overflow in an argument is overflow, an undefined argument is input_undefined', () => {
+      expect(judge(`${fn}(1e308 * 10, 1, ${third})`)).toMatchObject({ defined: false, reason: 'overflow' });
+      expect(judge(`${fn}(un, 1, ${third})`)).toMatchObject({ defined: false, reason: 'input_undefined' });
+      expect(judge(`${fn}(0, 1e308 * 10, ${third})`)).toMatchObject({ defined: false, reason: 'overflow' });
+      expect(judge(`${fn}(0, 1, ${third}, un)`)).toMatchObject({ defined: false, reason: 'input_undefined' });
+      expect(judge(`${fn}(big - big, 1, ${third})`)).toMatchObject({ defined: false, reason: 'not_finite' });
+    });
+
+    it('LANG-SM-30: a huge finite hue is wrapped and gives a defined colour (control)', () => {
+      for (const h of ['1e300', '-1e300', '1e308', '-1e308', '1.7e308']) {
+        const r = judge(`${fn}(${h}, 1, ${third})`);
+        expect(r.defined, `${fn}(${h}, …) is defined`).toBe(true);
+        expectColour(`${fn}(${h}, 1, ${third})`);
+      }
+    });
+
+    it('LANG-SM-30: ordinary colours are unchanged (control)', () => {
+      expect(judge(`${fn}(120, 1, ${third})`).value).toEqual({ r: 0, g: 255, b: 0, a: 1 });
+      expect(judge(`${fn}(0, 1, ${third})`).value).toEqual({ r: 255, g: 0, b: 0, a: 1 });
+      expect(judge(`${fn}(360, 1, ${third})`).value).toEqual(judge(`${fn}(0, 1, ${third})`).value);
+      expect(judge(`${fn}(720, 1, ${third})`).value).toEqual(judge(`${fn}(0, 1, ${third})`).value);
+      expect((judge(`${fn}(120, 1, ${third}, 0.5)`).value as { a: number }).a).toBe(0.5);
+    });
+  });
+
+  it('LANG-SM-30: rgb with an infinite component is clamped and defined (control)', () => {
+    expect(judge('rgb(big, 0, 0)').value).toEqual({ r: 255, g: 0, b: 0, a: 1 });
+    expect(judge('rgb(0, -big, 0)').value).toEqual({ r: 0, g: 0, b: 0, a: 1 });
+    expect(judge('rgb(0, 0, 0, big)').value).toEqual({ r: 0, g: 0, b: 0, a: 1 });
+    expect(judge('rgb(big, -big, big, -big)').value).toEqual({ r: 255, g: 0, b: 255, a: 0 });
+    expect(judge('rgb(1e308 * 10, 0, 0)')).toMatchObject({ defined: false, reason: 'overflow' });
+  });
+
+  describe('the same rule on the other built-ins with a Point, Vector, List or Number result and an infinite input', () => {
+    const ROWS: [string, string][] = [
+      ['Vector', 'unit(Vi)'],
+      ['Vector', 'unit(Vi * 0)'],
+      ['Vector', 'perp(Vi)'],
+      ['Vector', 'unit(V * big)'],
+      ['Number', 'norm(Vi)'],
+      ['Number', 'max(Lb)'],
+      ['Number', 'min(Lb)'],
+      ['Number', 'lerp(0, big, 0.5)'],
+      ['Number', 'lerp(big, big, 0.5)'],
+      ['Number', 'lerp(big, -big, 0.5)'],
+      ['Number', 'clamp(big, 0, 1)'],
+      ['Number', 'dot(Vi, V)'],
+      ['Number', 'dot(Vi, Vi)'],
+      ['Number', 'cross(Vi, V)'],
+      ['Number', 'cross(Vi, Vi)'],
+      ['Number', 'hypot(big, 1)'],
+      ['Number', 'hypot(big, big)'],
+      ['Number', 'atan2(big, big)'],
+      ['Number', 'noise(big)'],
+      ['Number', 'rand(big)'],
+      ['Number', 'smooth(0, big, 5)'],
+      ['Number', 'step(big, 5)'],
+      ['Number', 'mod(big, 3)'],
+      ['Number', 'rem(5, big)'],
+      ['Number', 'sin(big)'],
+      ['Number', 'tan(big)'],
+      ['Number', 'exp(big)'],
+      ['Number', 'ln(big)'],
+      ['Number', 'sqrt(big)'],
+      ['Number', 'round(big)'],
+      ['Number', 'fract(big)'],
+      ['Number', 'floor(big)'],
+      ['Number', 'sign(big)'],
+      ['Number', 'abs(-big)'],
+      ['Number', 'big - big'],
+      ['List', 'Lb - big'],
+      ['List', 'Lb * 0'],
+      ['List', 'Lb / Lb[1]'],
+      ['Vector', 'Vi - Vi'],
+      ['Vector', 'Vi * 0'],
+      ['Point', 'Pi - Vi'],
+    ];
+    it.each(ROWS)('LANG-SM-30: %s: %s is undefined or holds no NaN', (_kind, expr) => {
+      const r = judge(expr);
+      if (!r.defined) expect(r.reason, expr).toBeDefined();
+    }, 10_000);
+  });
+});
