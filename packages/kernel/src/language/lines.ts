@@ -157,12 +157,12 @@ function findPath(c: Checker, from: Iterable<ObjId>, target: ObjId): ObjId[] | u
 }
 
 /**
- * Cycle test (ruling SM-23): the value's reads, the range bounds' reads and the style values' reads all count as edges.
- * Only the value's reads decide free versus dependent. Reports `cycle` and returns true when `target` is reachable.
+ * Cycle test (ruling SM-23): the value's reads and the range bounds' reads count as edges. Style edges never join the
+ * test (kernel design 9.2: nothing reads a style). Only the value's reads decide free versus dependent. Reports `cycle` and returns true when `target` is reachable.
  */
 function checkCycle(c: Checker, target: NameRef, existing: ObjectInfo, lineSpan: SpanLike): boolean {
   if (c.opts.skipGraphChecks) return false;
-  const path = findPath(c, [...c.reads, ...c.rangeReads, ...c.styleReads], existing.id);
+  const path = findPath(c, [...c.reads, ...c.rangeReads], existing.id);
   if (!path) return false;
   const names = [target.name, ...path.map((id) => c.fig.byId(id)?.name ?? String(id))];
   if (names[names.length - 1] !== target.name) names.push(target.name);
@@ -689,9 +689,6 @@ function checkRestyle(c: Checker, node: Extract<LineNode, { k: 'restyle' }>): Pa
     return undefined;
   }
   const style = c.apart('style', () => checkStyle(c, node.style));
-  if (c.errors.length > 0) return undefined;
-  const lastStyle = node.style[node.style.length - 1];
-  checkCycle(c, t, obj, { s: t.s, e: Math.max(t.e, lastStyle ? lastStyle.e : t.e) });
   if (c.errors.length > 0) return undefined;
   return { kind: 'restyle', op: 'restyle', names: [t.name], type: obj.type, free: false, isState: false, existing: obj.id, style };
 }

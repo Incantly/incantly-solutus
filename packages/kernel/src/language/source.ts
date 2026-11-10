@@ -28,6 +28,9 @@ export interface Normalised {
   readonly end: Int32Array;
 }
 
+/** Every character that `normalise` rewrites to a single space; `hexColourLength` skips exactly these (and the space itself). */
+const BLANKS: ReadonlySet<string> = new Set([' ', ...Object.keys(REPLACE).filter((k) => REPLACE[k] === ' ')]);
+
 const isWordChar = (c: string | undefined): boolean => c !== undefined && /[A-Za-z0-9_\u0370-\u03FF]/.test(c);
 
 /**
@@ -39,7 +42,7 @@ const isWordChar = (c: string | undefined): boolean => c !== undefined && /[A-Za
 export function hexColourLength(text: string, i: number): number {
   if (text[i] !== '#') return 0;
   let j = i - 1;
-  while (j >= 0 && (text[j] === ' ' || text[j] === '\t' || text[j] === '\u00A0')) j--;
+  while (j >= 0 && BLANKS.has(text[j] as string)) j--;
   if (j < 0 || text[j] !== '=') return 0;
   const before = text[j - 1];
   if (before === '=' || before === '<' || before === '>' || before === '!' || before === '\u2260' || before === '\u2264' || before === '\u2265') return 0;

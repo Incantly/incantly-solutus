@@ -83,12 +83,49 @@ function setNanReason(env: Env, v: number): number {
  * infinite. When it made one from finite inputs, that is overflow and the result is undefined (ruling Q4).
  */
 function guardInf(env: Env, v: number, a: number, b: number): number {
-  if (v - v === 0 || v !== v) return v;
+  if (v - v === 0) return v;
+  if (v !== v) {
+    // a result that is not a number although no input was undefined (`inf - inf`, `0 * inf`)
+    if (a === a && b === b) fail(env, 'not_finite');
+    return v;
+  }
   if (a - a === 0 && b - b === 0) {
     fail(env, 'overflow', 'a result too large to store');
     return NAN;
   }
   return v;
+}
+
+/** True when a point-like value holds a coordinate that is not a number. */
+function hasNaN(v: object): boolean {
+  return Object.values(v as Record<string, unknown>).some((x) => typeof x === 'number' && x !== x);
+}
+
+/** A Point or Vector from two coordinates; undefined when either is not a number (its reason is already on `env`). */
+function mkPt(env: Env, x: number, y: number): Pt | undefined {
+  if (x !== x || y !== y) {
+    if (env.reason === undefined) env.reason = 'not_finite';
+    return undefined;
+  }
+  return { x, y };
+}
+
+/** An operand of an arithmetic operation was undefined: the result is undefined with `input_undefined` unless a reason is already set. */
+function undefIn(env: Env): void {
+  if (env.reason === undefined) env.reason = 'input_undefined';
+}
+
+/** True when a value, or any number inside it (a point's coordinate, a list's item), is infinite or not a number. */
+function hasNonFinite(v: unknown): boolean {
+  if (typeof v === 'number') return v - v !== 0;
+  if (v === null || typeof v !== 'object') return false;
+  if (ArrayBuffer.isView(v) || Array.isArray(v)) {
+    const xs = v as unknown as ArrayLike<unknown>;
+    for (let i = 0; i < xs.length; i++) if (hasNonFinite(xs[i])) return true;
+    return false;
+  }
+  for (const k of Object.keys(v)) if (hasNonFinite((v as Record<string, unknown>)[k])) return true;
+  return false;
 }
 
 function failInput(env: Env, id: ObjId): void {
@@ -320,12 +357,25 @@ class Compiler {
         const type = n.target.ty.k;
         const field = n.field;
         const isN = isNum(n);
+        const undef = isN ? NAN : undefined;
         return (env) => {
           const v = t(env);
-          if (v === undefined || (typeof v === 'number' && v !== v)) return isN ? NAN : undefined;
+          if (v === undefined || (typeof v === 'number' && v !== v)) return undef;
+          if (type === 'Line' && field === 'point' && (v as { a: number; b: number }).a === 0 && (v as { a: number; b: number }).b === 0) {
+            fail(env, 'division_by_zero', 'a line with no direction has no foot point');
+            return undefined;
+          }
           const r = fieldOf(type, field, v);
+          // a field follows the rules of a Number operation: an infinity is a value only when the object held an infinite number
+          if (hasNonFinite(r) && !hasNonFinite(v)) {
+            fail(env, typeof r === 'number' && r !== r ? 'not_finite' : 'overflow', `${type}.${field}`);
+            return undef;
+          }
           if (typeof r === 'number' && r !== r) {
             fail(env, 'not_finite');
+          } else if (typeof r === 'object' && r !== null && hasNaN(r)) {
+            fail(env, 'not_finite');
+            return undefined;
           }
           return r;
         };
@@ -336,7 +386,11 @@ class Compiler {
         return (env) => {
           const a = x(env);
           const b = y(env);
-          return a !== a || b !== b ? undefined : { x: a, y: b };
+          if (a !== a || b !== b) {
+            undefIn(env);
+            return undefined;
+          }
+          return { x: a, y: b };
         };
       }
       case 'polar': {
@@ -345,21 +399,45 @@ class Compiler {
         return (env) => {
           const rr = r(env);
           const aa = a(env);
-          if (rr !== rr || aa !== aa) return undefined;
+          if (rr !== rr || aa !== aa) {
+            undefIn(env);
+            return undefined;
+          }
+          if (aa - aa !== 0) {
+            fail(env, 'not_finite', 'the angle of a polar point is infinite');
+            return undefined;
+          }
           const M = getMathLib();
-          return { x: rr * M.cos(aa), y: rr * M.sin(aa) };
+          const c = M.cos(aa);
+          const sn = M.sin(aa);
+          return mkPt(env, guardInf(env, rr * c, rr, c), guardInf(env, rr * sn, rr, sn));
         };
       }
       case 'list': {
         const items = n.items.map((i) => this.compile(i));
         const numeric = n.ty.of?.k === 'Number';
+        // a list with an undefined item is undefined as a whole
         return (env) => {
           if (numeric) {
             const out = new Float64Array(items.length);
-            for (let i = 0; i < items.length; i++) out[i] = (items[i] as Fn)(env);
+            let bad = false;
+            for (let i = 0; i < items.length; i++) {
+              const v = (items[i] as Fn)(env) as number;
+              if (v !== v) bad = true;
+              out[i] = v;
+            }
+            if (bad) {
+              undefIn(env);
+              return undefined;
+            }
             return out;
           }
-          return items.map((f) => f(env));
+          const out = items.map((f) => f(env));
+          if (out.some((v) => v === undefined || (typeof v === 'number' && v !== v))) {
+            undefIn(env);
+            return undefined;
+          }
+          return out;
         };
       }
       case 'range':
@@ -410,11 +488,24 @@ class Compiler {
       case 'Vector':
         return (env) => {
           const v = a(env) as Pt | undefined;
-          return v === undefined ? undefined : neg ? { x: -v.x, y: -v.y } : v;
+          if (v === undefined) {
+            undefIn(env);
+            return undefined;
+          }
+          return neg ? { x: -v.x, y: -v.y } : v;
         };
       default:
         // Function
-        return neg ? (env) => pointwise(env, [a(env)], (x) => -x, n.ty.arity ?? 1) : a;
+        return neg
+          ? (env) => {
+              const f = a(env);
+              if (f === undefined) {
+                undefIn(env);
+                return undefined;
+              }
+              return pointwise(env, [f], 'neg', n.ty.arity ?? 1);
+            }
+          : a;
     }
   }
 
@@ -470,13 +561,21 @@ class Compiler {
         return (env) => {
           const k = l(env);
           const v = r(env) as Pt | undefined;
-          return k !== k || v === undefined ? undefined : { x: k * v.x, y: k * v.y };
+          if (k !== k || v === undefined) {
+            undefIn(env);
+            return undefined;
+          }
+          return mkPt(env, guardInf(env, k * v.x, k, v.x), guardInf(env, k * v.y, k, v.y));
         };
       case 'vec*num':
         return (env) => {
           const v = l(env) as Pt | undefined;
           const k = r(env);
-          return k !== k || v === undefined ? undefined : { x: k * v.x, y: k * v.y };
+          if (k !== k || v === undefined) {
+            undefIn(env);
+            return undefined;
+          }
+          return mkPt(env, guardInf(env, v.x * k, v.x, k), guardInf(env, v.y * k, v.y, k));
         };
       case 'vec/num':
         return (env) => {
@@ -486,14 +585,22 @@ class Compiler {
             fail(env, 'division_by_zero', 'vector divided by zero');
             return undefined;
           }
-          return k !== k || v === undefined ? undefined : { x: v.x / k, y: v.y / k };
+          if (k !== k || v === undefined) {
+            undefIn(env);
+            return undefined;
+          }
+          return mkPt(env, guardInf(env, v.x / k, v.x, k), guardInf(env, v.y / k, v.y, k));
         };
       case 'vec+vec':
       case 'pt+vec':
         return (env) => {
           const a = l(env) as Pt | undefined;
           const b = r(env) as Pt | undefined;
-          return a === undefined || b === undefined ? undefined : { x: a.x + b.x, y: a.y + b.y };
+          if (a === undefined || b === undefined) {
+            undefIn(env);
+            return undefined;
+          }
+          return mkPt(env, guardInf(env, a.x + b.x, a.x, b.x), guardInf(env, a.y + b.y, a.y, b.y));
         };
       case 'vec-vec':
       case 'pt-vec':
@@ -501,7 +608,11 @@ class Compiler {
         return (env) => {
           const a = l(env) as Pt | undefined;
           const b = r(env) as Pt | undefined;
-          return a === undefined || b === undefined ? undefined : { x: a.x - b.x, y: a.y - b.y };
+          if (a === undefined || b === undefined) {
+            undefIn(env);
+            return undefined;
+          }
+          return mkPt(env, guardInf(env, a.x - b.x, a.x, b.x), guardInf(env, a.y - b.y, a.y, b.y));
         };
       case 'text+text':
         return (env) => {
@@ -545,19 +656,30 @@ class Compiler {
         return (env) => {
           const list = l(env) as ArrayLike<number> | undefined;
           const k = r(env);
-          if (list === undefined || k !== k) return undefined;
+          if (list === undefined || k !== k) {
+            undefIn(env);
+            return undefined;
+          }
+          // the same rules as a single Number, per item; an item that is undefined makes the whole list undefined
+          if (op === '/' && k === 0) {
+            fail(env, 'division_by_zero', 'division by zero');
+            return undefined;
+          }
           const out = new Float64Array(list.length);
           for (let i = 0; i < list.length; i++) {
             const x = list[i] as number;
-            const v = op === '+' ? x + k : op === '-' ? x - k : op === '*' ? x * k : op === '/' ? (k === 0 ? NAN : x / k) : power(x, k, env);
-            // an element follows the same rule as a single Number: an infinity made from finite inputs is overflow
-            if (v - v !== 0 && v === v && x - x === 0 && k - k === 0) {
-              fail(env, 'overflow', 'a result too large to store');
+            if (x !== x) {
+              undefIn(env);
               return undefined;
             }
-            out[i] = v;
+            const v = op === '+' ? x + k : op === '-' ? x - k : op === '*' ? x * k : op === '/' ? x / k : power(x, k, env);
+            const g = v - v === 0 ? v : guardInf(env, v, x, k);
+            if (g !== g) {
+              if (env.reason === undefined) env.reason = 'not_finite';
+              return undefined;
+            }
+            out[i] = g;
           }
-          if (op === '/' && k === 0) fail(env, 'division_by_zero', 'division by zero');
           return out;
         };
       case 'fn':
@@ -569,10 +691,12 @@ class Compiler {
             return undefined;
           }
           const arity = Math.max(typeof a === 'object' ? (a as FunctionValue).arity : 1, typeof b === 'object' ? (b as FunctionValue).arity : 1);
-          const M = getMathLib();
-          const f = (x: number, y: number): number =>
-            op === '+' ? x + y : op === '-' ? x - y : op === '*' ? x * y : op === '/' ? x / y : M.pow(x, y);
-          return pointwise(env, [a, b], f, arity);
+          // a Number operand that is undefined makes the whole function undefined
+          if ((typeof a === 'number' && a !== a) || (typeof b === 'number' && b !== b)) {
+            undefIn(env);
+            return undefined;
+          }
+          return pointwise(env, [a, b], op, arity);
         };
       default:
         return () => undefined;
@@ -685,7 +809,7 @@ class Compiler {
         vals.push(v);
       }
       const out = call(env, vals);
-      if (typeof out === 'number') return fin(env, out, vals.some((x) => typeof x === 'number' && !Number.isFinite(x)));
+      if (typeof out === 'number') return fin(env, out, vals.some(hasNonFinite));
       return out;
     };
   }
@@ -931,8 +1055,13 @@ function collectOps(t: RelTree): string[] {
   return [...collectOps(t.l), ...collectOps(t.r)];
 }
 
-/** A function whose value at x is `op` applied to the operands' values at x. */
-function pointwise(env: Env, operands: unknown[], f: (a: number, b: number) => number, arity: number): FunctionValue {
+/**
+ * A function whose value at x is `op` applied to the operands' values at x. It follows the same rules as a single Number:
+ * an undefined operand gives `input_undefined`, a zero divisor (or `0 ^ negative`) gives `division_by_zero`, a negative base
+ * with a fractional exponent gives `out_of_domain`, an infinity made from finite inputs gives `overflow`, an infinity that
+ * follows an infinite input is a value, and a result that is not a number (`inf - inf`) gives `not_finite`.
+ */
+function pointwise(env: Env, operands: unknown[], op: string, arity: number): FunctionValue {
   const evalAt = (o: unknown, xs: number[]): number => {
     if (typeof o === 'number') return o;
     const fv = o as FunctionValue;
@@ -943,17 +1072,54 @@ function pointwise(env: Env, operands: unknown[], f: (a: number, b: number) => n
     arity,
     ret: 'Number',
     call: (...xs: number[]) => {
+      self.reason = undefined;
       const a = evalAt(operands[0], xs);
-      const b = operands.length > 1 ? evalAt(operands[1], xs) : 0;
-      const v = f(a, operands.length > 1 ? b : a);
-      if (v - v !== 0) {
-        // same rule as a single Number: an infinity is a value only when an input was infinite; from finite inputs it is
-        // overflow; a result that is not a number at all (`inf - inf`) or follows an undefined input keeps its own reason
-        if (a !== a || b !== b) self.reason = 'input_undefined';
-        else if (v === v && a - a === 0 && b - b === 0) self.reason = 'overflow';
-        else if (v === v) return v;
-        else self.reason = 'not_finite';
+      const b = operands.length > 1 ? evalAt(operands[1], xs) : a;
+      if (a !== a || b !== b) {
+        self.reason = 'input_undefined';
         return NAN;
+      }
+      let v: number;
+      switch (op) {
+        case 'neg':
+          v = -a;
+          break;
+        case '+':
+          v = a + b;
+          break;
+        case '-':
+          v = a - b;
+          break;
+        case '*':
+          v = a * b;
+          break;
+        case '/':
+          if (b === 0) {
+            self.reason = 'division_by_zero';
+            return NAN;
+          }
+          v = a / b;
+          break;
+        default:
+          if (a === 0 && b < 0) {
+            self.reason = 'division_by_zero';
+            return NAN;
+          }
+          if (a < 0 && !Number.isInteger(b)) {
+            self.reason = 'out_of_domain';
+            return NAN;
+          }
+          v = getMathLib().pow(a, b);
+      }
+      if (v - v !== 0) {
+        if (v !== v) {
+          self.reason = 'not_finite';
+          return NAN;
+        }
+        if (a - a === 0 && b - b === 0) {
+          self.reason = 'overflow';
+          return NAN;
+        }
       }
       return v;
     },

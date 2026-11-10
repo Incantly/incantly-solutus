@@ -496,12 +496,26 @@ const specs: FunctionSpec[] = [
       returns: 'Vector',
       summary: 'the vector scaled to length 1',
       call: (env, a) => {
-        const l = M.hypot(vec(a[0]).x, vec(a[0]).y);
+        const u = vec(a[0]);
+        if (u.x - u.x !== 0 || u.y - u.y !== 0) {
+          fail(env, 'not_finite', 'unit of an infinite vector');
+          return undefined;
+        }
+        let l = M.hypot(u.x, u.y);
+        let sx = u.x;
+        let sy = u.y;
+        if (l - l !== 0) {
+          // the length overflows although the parts are finite: scale first, then measure
+          const m = Math.max(Math.abs(u.x), Math.abs(u.y));
+          sx = u.x / m;
+          sy = u.y / m;
+          l = M.hypot(sx, sy);
+        }
         if (l === 0) {
           fail(env, 'division_by_zero', 'unit of the zero vector');
           return undefined;
         }
-        return { x: vec(a[0]).x / l, y: vec(a[0]).y / l };
+        return { x: sx / l, y: sy / l };
       },
     }],
   },

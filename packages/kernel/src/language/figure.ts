@@ -181,8 +181,8 @@ export class ScratchFigure implements FigureView {
     const name = line.names[0] as string;
     const env = this.env(Math.max(line.slots, 4));
     const r = evaluate(compiled.value, env);
-    // the graph holds every edge (value, range bound, style value), so the cycle test of ruling SM-23 sees them all
-    const inputs = new Set<ObjId>([...line.reads, ...(line.rangeReads ?? []), ...(line.styleReads ?? [])]);
+    // the graph holds value and range edges (ruling SM-23); style edges are not part of it (kernel design 9.2)
+    const inputs = new Set<ObjId>([...line.reads, ...(line.rangeReads ?? [])]);
     const info = this.define(name, line.type as Ty, r.defined ? r.value : undefined, {
       source: line.text,
       inputs: [],
