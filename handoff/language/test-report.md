@@ -90,3 +90,107 @@ All other tests pass, including the tests for Q1, Q3, Q5 to Q14 and the depth ru
 - Redefinition, `type_change`, `cycle` with path, `breaks_dependents`, atomic failure, `blockedBy` and `fix_earlier` in batches.
 - Previews, signature help, completion (other than the items above), syntax colouring columns.
 - Robustness: random junk, mutated lines, huge and deep input never throw; analysis never changes the figure; results are deterministic. Performance: parse plus check of a typical line averages about 0.008 ms (target 0.2 ms).
+
+## Regression tests
+
+`packages/kernel/test/spec/language/regressions.test.ts` holds 86 tests for the checker's findings LANG-SM-1 to LANG-SM-21 (`handoff/language/findings.md`). They use the public API only. Each finding has at least one test that fails on commit `35067a3` (before the fixes; checked by running the file against that commit) and passes when the finding is fixed. Hang and memory tests assert a time or size bound.
+
+Run against the worktree while the fixer was still working: 58 pass, 28 fail. The tests marked `fail` below are the ones the current code still fails; the fixer has to make them pass.
+
+Notes on two tests that fix a reading the findings leave open:
+
+- LANG-SM-13, constant folding: the test requires a line compiled before `setMathLib` to give the same answer as the same line compiled after it (so folded constants must not outlive the library, whether the fix is not folding or recompiling). A fix that keeps stale compiled lines and only flags them through a new API would need the test changed.
+- LANG-SM-13, `gamma`, `beta`, `erf`, `erfc`, function power and range folding: the test installs a `MathLib` whose results are visibly shifted and requires every one of them to change.
+
+| Finding | Tests | Now |
+|---|---|---|
+| LANG-SM-1 | `LANG-SM-1: a field named like an Object.prototype member is refused` | pass |
+|  | `LANG-SM-1: a refused prototype field leaves the name free to be defined later` | pass |
+|  | `LANG-SM-1: real fields still work` | pass |
+|  | `LANG-SM-1: a property named like an Object.prototype member is unknown_property` | pass |
+|  | `LANG-SM-1: a property in a definition clause named like an Object.prototype member is refused` | pass |
+|  | `LANG-SM-1: a directive named like an Object.prototype member is unknown_directive` | pass |
+|  | `LANG-SM-1: completion after a dot, a `with` and an @ does not offer prototype members` | pass |
+| LANG-SM-2 | `LANG-SM-2: preview of ncr(1e8, 5e7) returns within 50 ms and shows overflow` | pass |
+|  | `LANG-SM-2: preview of npr(1e8, 1e8) returns within 50 ms and shows overflow` | pass |
+|  | `LANG-SM-2: applying ncr and npr with huge arguments is fast and undefined with reason overflow` | pass |
+|  | `LANG-SM-2: ordinary ncr and npr values are unchanged` | pass |
+| LANG-SM-3 | `LANG-SM-3: doubling a 1,000 character text stops at the 10,000 character limit with reason limit` | pass |
+|  | `LANG-SM-3: the same limit holds for text with interpolations` | pass |
+|  | `LANG-SM-3: a text of exactly 10,000 characters is allowed` | pass |
+| LANG-SM-4 | `LANG-SM-4: redefining the end of a 5,000 object chain without a cycle is accepted` | pass |
+|  | `LANG-SM-4: a real cycle through the whole chain is still found` | pass |
+|  | `LANG-SM-4: the middle of the chain can be redefined too` | pass |
+| LANG-SM-5 | `LANG-SM-5: a program with one never-closed bracket splits in linear time` | pass |
+|  | `LANG-SM-5: parseProgram on that text is bounded and reports the first line as an error` | pass |
+|  | `LANG-SM-5: splitting still joins a normal multi-line call into one logical line` | pass |
+|  | `LANG-SM-5: completion at the end of 10,000 lines under one open bracket stays fast` | pass |
+| LANG-SM-6 | `LANG-SM-6: a line with an open bracket and a trailing comment parses quickly` | pass |
+|  | `LANG-SM-6: the fix closes the bracket and keeps the comment as a comment` | pass |
+|  | `LANG-SM-6: a line without a comment still gets the closers at its end` | pass |
+| LANG-SM-7 | `LANG-SM-7: 1,801 tokens inside a text interpolation are over the token limit` | pass |
+|  | `LANG-SM-7: tokens in several interpolations add up` | pass |
+|  | `LANG-SM-7: a small interpolation is still fine` | pass |
+|  | `LANG-SM-7: brackets around a text and inside its interpolation add up to the depth limit` | pass |
+|  | `LANG-SM-7: nesting that stays within 64 levels across the text boundary is accepted` | pass |
+| LANG-SM-8 | `LANG-SM-8: an unfinished text inside a call does not swallow the lines after it` | pass |
+|  | `LANG-SM-8: a string never spans a newline in the splitter` | pass |
+|  | `LANG-SM-8: a text closed with a low double quote ends there for the splitter too` | pass |
+|  | `LANG-SM-8: a closed text with brackets in it still hides them from the splitter` | pass |
+| LANG-SM-9 | `LANG-SM-9: a slider whose range reads a variable is free` | fail |
+|  | `LANG-SM-9: after such a slider is made, its range can be changed` | fail |
+|  | `LANG-SM-9: a number whose style value reads a variable is free` | fail |
+|  | `LANG-SM-9: a point with a showIf rule is free and is stored as free` | fail |
+|  | `LANG-SM-9: a value that reads another object is still not free` | pass |
+| LANG-SM-10 | `LANG-SM-10: functions sharing an Env keep their own parameters` | fail |
+|  | `LANG-SM-10: a relation value keeps x and y while it calls a function in the same Env` | fail |
+|  | `LANG-SM-10: the figure gives the same answers` | pass |
+| LANG-SM-11 | `LANG-SM-11: exp(1000) beside an unrelated inf in a condition stays undefined with reason overflow` | fail |
+|  | `LANG-SM-11: an earlier object holding inf does not make later overflow infinite` | fail |
+|  | `LANG-SM-11: a function of an infinite input still gives an infinite result (ruling Q4)` | pass |
+|  | `LANG-SM-11: the stored value of inf itself is unchanged` | pass |
+|  | `LANG-SM-11: an inf in a style value does not change the overflow of the value` | pass |
+| LANG-SM-12 | `LANG-SM-12: undefined + "x" is undefined with a reason` | pass |
+|  | `LANG-SM-12: "x" + undefined is undefined with a reason` | pass |
+|  | `LANG-SM-12: two defined texts still join` | pass |
+| LANG-SM-13 | `LANG-SM-13: the platform library is installed at the start` | pass |
+|  | `LANG-SM-13: a folded constant call and a recompiled one agree after the library changes` | fail |
+|  | `LANG-SM-13: gamma, beta, erf and erfc use the installed library` | fail |
+|  | `LANG-SM-13: a power of a function uses the installed library` | fail |
+|  | `LANG-SM-13: folding a range bound uses the installed library` | fail |
+|  | `LANG-SM-13: under the platform library the answers are the usual ones` | pass |
+| LANG-SM-14 | `LANG-SM-14: 1/2x is ambiguous (control)` | pass |
+|  | `LANG-SM-14: 1/-2x is ambiguous_implicit` | pass |
+|  | `LANG-SM-14: 1/+2x is ambiguous_implicit` | pass |
+|  | `LANG-SM-14: a/-2x is ambiguous_implicit` | pass |
+|  | `LANG-SM-14: clear spellings are accepted` | pass |
+| LANG-SM-15 | `LANG-SM-15: Fz([], 1) fits the first form (control)` | pass |
+|  | `LANG-SM-15: Fz([], A) fits the second form` | fail |
+|  | `LANG-SM-15: the order of the forms does not decide` | fail |
+|  | `LANG-SM-15: a call that fits no form is still refused` | pass |
+| LANG-SM-16 | `LANG-SM-16: an unknown name in the body is reported as unknown_name` | fail |
+|  | `LANG-SM-16: the same mistake in a body with a point result is reported too` | fail |
+|  | `LANG-SM-16: a good body picks its form` | pass |
+| LANG-SM-17 | `LANG-SM-17: an unknown input name is ignored or reported, not thrown` | fail |
+|  | `LANG-SM-17: known and unknown inputs together` | fail |
+|  | `LANG-SM-17: the figure stays usable after the call` | fail |
+| LANG-SM-18 | `LANG-SM-18: leading blank lines count in the line number` | fail |
+|  | `LANG-SM-18: an error on a second line points at that line` | fail |
+|  | `LANG-SM-18: an error at the end of an interpolation points at the closing brace` | fail |
+|  | `LANG-SM-18: preview of an unnamed line reports columns of the text typed` | fail |
+|  | `LANG-SM-18: preview of an unnamed line keeps the typed columns when it starts with spaces` | fail |
+|  | `LANG-SM-18: the temporary name of a preview never reaches the writer` | fail |
+| LANG-SM-19 | `LANG-SM-19: lex reports one bad_character for an emoji` | pass |
+|  | `LANG-SM-19: tokenize reports one error and one error token covering the whole character` | pass |
+|  | `LANG-SM-19: parseLine gives one error for an emoji in a line` | pass |
+|  | `LANG-SM-19: two emoji give two errors` | pass |
+| LANG-SM-20 | `LANG-SM-20: a reader of P_1 is blocked by a failed P_{1} line` | fail |
+|  | `LANG-SM-20: a reader of P_{1} is blocked by a failed P_1 line` | pass |
+|  | `LANG-SM-20: plain subscripts keep working (control)` | pass |
+| LANG-SM-21 | `LANG-SM-21: tokens are returned for every line of a script over 2,000 characters` | fail |
+|  | `LANG-SM-21: columns restart on every line` | fail |
+|  | `LANG-SM-21: a single line over 2,000 characters is still reported as a limit` | pass |
+
+Findings whose tests all pass now: LANG-SM-1, LANG-SM-2, LANG-SM-3, LANG-SM-4, LANG-SM-5, LANG-SM-6, LANG-SM-7, LANG-SM-8, LANG-SM-12, LANG-SM-14, LANG-SM-19.
+
+Findings with at least one failing test now: LANG-SM-9, LANG-SM-10, LANG-SM-11, LANG-SM-13, LANG-SM-15, LANG-SM-16, LANG-SM-17, LANG-SM-18, LANG-SM-20, LANG-SM-21.

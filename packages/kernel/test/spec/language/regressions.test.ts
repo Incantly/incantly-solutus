@@ -1,0 +1,1018 @@
+/**
+ * Regression tests for the checker's findings LANG-SM-1 to LANG-SM-21 (handoff/language/findings.md).
+ * Every test goes through the public entry `@incantly/kernel` only. A test fails on the bug and
+ * passes when it is fixed. Tests that guard a hang or a memory blow-up assert a time or size bound
+ * and carry a test timeout.
+ */
+import { afterEach, describe, expect, it } from 'vitest';
+import {
+  PLATFORM_MATH,
+  ScratchFigure,
+  SourceMap,
+  analyseLine,
+  complete,
+  compileLine,
+  createEnv,
+  evaluate,
+  getMathLib,
+  lex,
+  parseLine,
+  parseProgram,
+  preview,
+  setMathLib,
+  splitLogicalLines,
+  tokenize,
+} from '@incantly/kernel';
+import type { CommandSpec, FunctionValue, LanguageError, MathLib, RelationValue } from '@incantly/kernel';
+import { emptyFig, errOf, form, okValue, p } from './helpers';
+
+const now = (): number => performance.now();
+
+/** Apply a line that must pass, and return what the figure made of it. */
+function applyOk(fig: ScratchFigure, src: string) {
+  return okValue(fig.apply(src));
+}
+
+/** The compact text of everything an error says to a writer, used to look for leaked internals. */
+function allText(e: LanguageError): string {
+  return JSON.stringify(e);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Security
+// ---------------------------------------------------------------------------------------------
+
+describe('LANG-SM-1: registry lookups answer only their own keys', () => {
+  const PROTO_KEYS = ['constructor', 'toString', 'hasOwnProperty', 'valueOf', 'isPrototypeOf', 'toLocaleString', 'propertyIsEnumerable'];
+
+  function figWithObjects(): ScratchFigure {
+    const fig = emptyFig();
+    for (const line of ['A = (1, 2)', 'm = "hi"', 'L = [1, 2, 3]', 'k = 4']) applyOk(fig, line);
+    return fig;
+  }
+
+  it('LANG-SM-1: a field named like an Object.prototype member is refused', () => {
+    const fig = figWithObjects();
+    for (const owner of ['A', 'm', 'L', 'k']) {
+      for (const key of PROTO_KEYS) {
+        const r = fig.apply(`out = ${owner}.${key}`);
+        expect(r.ok, `out = ${owner}.${key} must be refused`).toBe(false);
+        expect(fig.lookup('out'), `out = ${owner}.${key} must not create an object`).toBeUndefined();
+      }
+    }
+  });
+
+  it('LANG-SM-1: a refused prototype field leaves the name free to be defined later', () => {
+    const fig = figWithObjects();
+    expect(fig.apply('b = A.constructor').ok).toBe(false);
+    expect(fig.apply('b = A.toString').ok).toBe(false);
+    const later = fig.apply('b = 3');
+    expect(later.ok).toBe(true);
+    expect(fig.valueOf('b')).toBe(3);
+    expect(fig.apply('b = 5').ok).toBe(true);
+    expect(fig.valueOf('b')).toBe(5);
+  });
+
+  it('LANG-SM-1: real fields still work', () => {
+    const fig = figWithObjects();
+    expect(fig.apply('b = A.x').ok).toBe(true);
+    expect(fig.valueOf('b')).toBe(1);
+    expect(fig.apply('c = A.y').ok).toBe(true);
+    expect(fig.valueOf('c')).toBe(2);
+  });
+
+  it('LANG-SM-1: a property named like an Object.prototype member is unknown_property', () => {
+    const fig = figWithObjects();
+    for (const key of PROTO_KEYS) {
+      const r = analyseLine(`A with ${key} = 1`, fig);
+      expect(r.ok, `A with ${key} = 1`).toBe(false);
+      expect(errOf(r).kind).toBe('unknown_property');
+    }
+    const several = analyseLine('A with toString = red, hasOwnProperty = 3', fig);
+    expect(several.ok).toBe(false);
+    expect(errOf(several).kind).toBe('unknown_property');
+  });
+
+  it('LANG-SM-1: a property in a definition clause named like an Object.prototype member is refused', () => {
+    const fig = figWithObjects();
+    const r = analyseLine('B = (3, 4) with constructor = 1', fig);
+    expect(r.ok).toBe(false);
+    expect(errOf(r).kind).toBe('unknown_property');
+  });
+
+  it('LANG-SM-1: a directive named like an Object.prototype member is unknown_directive', () => {
+    const fig = figWithObjects();
+    for (const key of PROTO_KEYS) {
+      const r = analyseLine(`@${key} x`, fig);
+      expect(r.ok, `@${key} x`).toBe(false);
+      expect(errOf(r).kind).toBe('unknown_directive');
+    }
+    const bare = analyseLine('@toString', fig);
+    expect(bare.ok).toBe(false);
+    expect(errOf(bare).kind).toBe('unknown_directive');
+  });
+
+  it('LANG-SM-1: completion after a dot, a `with` and an @ does not offer prototype members', () => {
+    const fig = figWithObjects();
+    const labels = (src: string): string[] => complete(src, src.length, fig).map((c) => c.label);
+    for (const src of ['q = A.', 'A with ', '@']) {
+      const got = labels(src);
+      for (const key of PROTO_KEYS) expect(got, `${src} must not offer ${key}`).not.toContain(key);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Hangs and crashes
+// ---------------------------------------------------------------------------------------------
+
+describe('LANG-SM-2: ncr and npr stop early', () => {
+  it('LANG-SM-2: preview of ncr(1e8, 5e7) returns within 50 ms and shows overflow', { timeout: 10_000 }, () => {
+    const fig = emptyFig();
+    preview('k1 = ncr(10, 5)', fig); // warm up
+    const t0 = now();
+    const r = preview('k2 = ncr(100000000, 50000000)', fig);
+    const ms = now() - t0;
+    expect(ms).toBeLessThan(50);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.valueText).toBe('undefined (overflow)');
+  });
+
+  it('LANG-SM-2: preview of npr(1e8, 1e8) returns within 50 ms and shows overflow', { timeout: 10_000 }, () => {
+    const fig = emptyFig();
+    preview('k1 = npr(10, 5)', fig); // warm up
+    const t0 = now();
+    const r = preview('k3 = npr(100000000, 100000000)', fig);
+    const ms = now() - t0;
+    expect(ms).toBeLessThan(50);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.valueText).toBe('undefined (overflow)');
+  });
+
+  it('LANG-SM-2: applying ncr and npr with huge arguments is fast and undefined with reason overflow', { timeout: 10_000 }, () => {
+    const fig = emptyFig();
+    fig.apply('w = ncr(10, 5)'); // warm up
+    const t0 = now();
+    const a = applyOk(fig, 'k2 = ncr(100000000, 50000000)');
+    const b = applyOk(fig, 'k3 = npr(100000000, 100000000)');
+    const c = applyOk(fig, 'n = 100000000');
+    const d = applyOk(fig, 'k4 = ncr(n, 50000000)');
+    expect(now() - t0).toBeLessThan(100);
+    for (const r of [a, b, d]) {
+      expect(r.defined).toBe(false);
+      expect(r.reason).toBe('overflow');
+    }
+    expect(c.defined).toBe(true);
+  });
+
+  it('LANG-SM-2: ordinary ncr and npr values are unchanged', () => {
+    const fig = emptyFig();
+    expect(applyOk(fig, 'a = ncr(5, 2)').defined).toBe(true);
+    expect(fig.valueOf('a')).toBe(10);
+    applyOk(fig, 'b = npr(5, 2)');
+    expect(fig.valueOf('b')).toBe(20);
+    applyOk(fig, 'c = ncr(52, 5)');
+    expect(fig.valueOf('c')).toBe(2598960);
+    applyOk(fig, 'd = npr(10, 10)');
+    expect(fig.valueOf('d')).toBe(3628800);
+    applyOk(fig, 'q = ncr(1000, 500)');
+    // 1000 choose 500 is about 2.7e299: finite, below the 1.8e308 limit
+    const e = fig.valueOf('q') as number;
+    expect(Number.isFinite(e)).toBe(true);
+    expect(e / 2.7e299).toBeGreaterThan(0.99);
+    expect(e / 2.7e299).toBeLessThan(1.02);
+  });
+});
+
+describe('LANG-SM-3: text length is bounded at run time', () => {
+  it('LANG-SM-3: doubling a 1,000 character text stops at the 10,000 character limit with reason limit', { timeout: 20_000 }, () => {
+    const fig = emptyFig();
+    applyOk(fig, `t0 = "${'x'.repeat(1000)}"`);
+    expect(applyOk(fig, 't1 = t0 + t0').defined).toBe(true);
+    expect(applyOk(fig, 't2 = t1 + t1').defined).toBe(true);
+    const t3 = applyOk(fig, 't3 = t2 + t2');
+    expect(t3.defined).toBe(true);
+    expect((fig.valueOf('t3') as string).length).toBe(8000);
+    const t4 = applyOk(fig, 't4 = t3 + t3');
+    expect(t4.defined).toBe(false);
+    expect(t4.reason).toBe('limit');
+    expect(fig.valueOf('t4')).toBeUndefined();
+  });
+
+  it('LANG-SM-3: the same limit holds for text with interpolations', { timeout: 20_000 }, () => {
+    const fig = emptyFig();
+    applyOk(fig, `t0 = "${'x'.repeat(1000)}"`);
+    applyOk(fig, 't1 = t0 + t0');
+    applyOk(fig, 't2 = t1 + t1');
+    applyOk(fig, 't3 = t2 + t2');
+    const r = applyOk(fig, 'j = "{t3}{t3}"');
+    expect(r.defined).toBe(false);
+    expect(r.reason).toBe('limit');
+    const ok = applyOk(fig, 'j2 = "{t0}{t0}"');
+    expect(ok.defined).toBe(true);
+    expect((fig.valueOf('j2') as string).length).toBe(2000);
+  });
+
+  it('LANG-SM-3: a text of exactly 10,000 characters is allowed', () => {
+    const fig = emptyFig();
+    applyOk(fig, `t0 = "${'x'.repeat(1000)}"`);
+    applyOk(fig, 't1 = t0 + t0 + t0 + t0 + t0');
+    const r = applyOk(fig, 't2 = t1 + t1');
+    expect(r.defined).toBe(true);
+    expect((fig.valueOf('t2') as string).length).toBe(10000);
+    const over = applyOk(fig, 't3 = t2 + "y"');
+    expect(over.defined).toBe(false);
+    expect(over.reason).toBe('limit');
+  });
+});
+
+describe('LANG-SM-4: the cycle test runs in bounded stack on a long chain', () => {
+  const CHAIN = 5000;
+
+  function chain(): ScratchFigure {
+    const fig = emptyFig();
+    fig.define('a0', 'Number', 1, { source: 'a0 = 1' });
+    for (let i = 1; i < CHAIN; i++) {
+      fig.define(`a${i}`, 'Number', i + 1, { source: `a${i} = a${i - 1} + 1`, inputs: [`a${i - 1}`] });
+    }
+    return fig;
+  }
+
+  it('LANG-SM-4: redefining the end of a 5,000 object chain without a cycle is accepted', { timeout: 30_000 }, () => {
+    const fig = chain();
+    expect(fig.size).toBe(CHAIN);
+    const t0 = now();
+    const r = analyseLine(`a${CHAIN - 1} = a${CHAIN - 2} + 2`, fig);
+    const ms = now() - t0;
+    if (!r.ok) throw new Error(`acyclic redefinition refused: ${r.kind}: ${r.message}`);
+    expect(r.value.op).toBe('redefine');
+    expect(ms).toBeLessThan(2000);
+  });
+
+  it('LANG-SM-4: a real cycle through the whole chain is still found', { timeout: 30_000 }, () => {
+    const fig = chain();
+    const r = analyseLine(`a0 = a${CHAIN - 1} + 1`, fig);
+    expect(r.ok).toBe(false);
+    const e = errOf(r);
+    expect(e.kind).toBe('cycle');
+    expect(e.path?.length ?? 0).toBeGreaterThan(2);
+  });
+
+  it('LANG-SM-4: the middle of the chain can be redefined too', { timeout: 30_000 }, () => {
+    const fig = chain();
+    const r = analyseLine('a2500 = a2499 * 2', fig);
+    if (!r.ok) throw new Error(`refused: ${r.kind}: ${r.message}`);
+    expect(r.value.op).toBe('redefine');
+  });
+});
+
+describe('LANG-SM-5: splitting and cursor context are linear', () => {
+  it('LANG-SM-5: a program with one never-closed bracket splits in linear time', { timeout: 20_000 }, () => {
+    splitLogicalLines('a = max(1,\n2,\n3)\nb = 2'); // warm up
+    const src = 'a = max(1,\n' + '2,\n'.repeat(20000);
+    const t0 = now();
+    const lines = splitLogicalLines(src);
+    const ms = now() - t0;
+    expect(lines.length).toBeGreaterThanOrEqual(1);
+    expect(ms).toBeLessThan(500);
+  });
+
+  it('LANG-SM-5: parseProgram on that text is bounded and reports the first line as an error', { timeout: 20_000 }, () => {
+    parseProgram('a = max(1,\n2,\n3)\nb = 2'); // warm up
+    const src = 'a = max(1,\n' + '2,\n'.repeat(20000);
+    const t0 = now();
+    const out = parseProgram(src);
+    const ms = now() - t0;
+    expect(out.length).toBeGreaterThanOrEqual(1);
+    expect(out[0]!.result.ok).toBe(false);
+    expect(ms).toBeLessThan(500);
+  });
+
+  it('LANG-SM-5: splitting still joins a normal multi-line call into one logical line', () => {
+    const lines = splitLogicalLines('a = max(1,\n2,\n3)\nb = 2');
+    expect(lines.length).toBe(2);
+    expect(lines[1]!.text).toBe('b = 2');
+    expect(lines[0]!.firstLine).toBe(1);
+    expect(lines[0]!.lineCount).toBe(3);
+    expect(lines[1]!.firstLine).toBe(4);
+  });
+
+  it('LANG-SM-5: completion at the end of 10,000 lines under one open bracket stays fast', { timeout: 20_000 }, () => {
+    const fig = emptyFig();
+    const small = 'a = max(1,\n2,\n';
+    complete(small, small.length, fig); // warm up
+    const src = 'a = max(1,\n' + '2,\n'.repeat(10000);
+    const t0 = now();
+    const got = complete(src, src.length, fig);
+    const ms = now() - t0;
+    expect(Array.isArray(got)).toBe(true);
+    expect(ms).toBeLessThan(300);
+  });
+});
+
+describe('LANG-SM-6: the unbalanced-line suggestion is made once', () => {
+  it('LANG-SM-6: a line with an open bracket and a trailing comment parses quickly', () => {
+    parseLine('a = max(1, 2 # note'); // warm up
+    const t0 = now();
+    for (let i = 0; i < 5; i++) parseLine('a = max(1, 2 # note');
+    const per = (now() - t0) / 5;
+    expect(per).toBeLessThan(20);
+  });
+
+  it('LANG-SM-6: the fix closes the bracket and keeps the comment as a comment', () => {
+    const r = parseLine('a = max(1, 2 # note');
+    expect(r.ok).toBe(false);
+    const e = errOf(r);
+    expect(e.kind).toBe('unbalanced');
+    const fix = e.fix ?? e.suggest[0];
+    expect(fix).toBeDefined();
+    const reparsed = parseLine(fix!);
+    expect(reparsed.ok, `suggestion "${fix}" must parse`).toBe(true);
+    expect(fix!.indexOf(')')).toBeLessThan(fix!.indexOf('#'));
+  });
+
+  it('LANG-SM-6: a line without a comment still gets the closers at its end', () => {
+    const e = errOf(parseLine('A = (1, 2'));
+    expect(e.kind).toBe('unbalanced');
+    expect(e.fix).toBe('A = (1, 2)');
+    const e2 = errOf(parseLine('b = max(1, min(2, 3'));
+    expect(e2.fix).toBe('b = max(1, min(2, 3))');
+  });
+});
+
+describe('LANG-SM-7: token and nesting limits cover text interpolations', () => {
+  const ones = (n: number): string => '1' + '+1'.repeat(n - 1);
+
+  it('LANG-SM-7: 1,801 tokens inside a text interpolation are over the token limit', () => {
+    const body = ones(901); // 901 numbers and 900 plus signs
+    const control = parseLine(`s = ${body}`);
+    expect(control.ok).toBe(false);
+    expect(errOf(control).kind).toBe('limit');
+    const inText = parseLine(`s = "{${body}}"`);
+    expect(inText.ok).toBe(false);
+    expect(errOf(inText).kind).toBe('limit');
+  });
+
+  it('LANG-SM-7: tokens in several interpolations add up', () => {
+    const body = ones(250); // 499 tokens
+    const src = `s = "{${body}}{${body}}"`; // about 1,000 tokens in all
+    const r = parseLine(src);
+    expect(r.ok).toBe(false);
+    expect(errOf(r).kind).toBe('limit');
+  });
+
+  it('LANG-SM-7: a small interpolation is still fine', () => {
+    const r = parseLine('s = "a{1+2}b{3*4}c"');
+    expect(r.ok).toBe(true);
+  });
+
+  it('LANG-SM-7: brackets around a text and inside its interpolation add up to the depth limit', () => {
+    const control = parseLine(`s = ${'('.repeat(126)}1${')'.repeat(126)}`);
+    expect(control.ok).toBe(false);
+    expect(errOf(control).kind).toBe('limit');
+    const src = `s = ${'('.repeat(62)}"{${'('.repeat(64)}1${')'.repeat(64)}}"${')'.repeat(62)}`;
+    const r = parseLine(src);
+    expect(r.ok).toBe(false);
+    expect(errOf(r).kind).toBe('limit');
+  });
+
+  it('LANG-SM-7: nesting that stays within 64 levels across the text boundary is accepted', () => {
+    const src = `s = ${'('.repeat(20)}"{${'('.repeat(20)}1${')'.repeat(20)}}"${')'.repeat(20)}`;
+    expect(parseLine(src).ok).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Wrong results
+// ---------------------------------------------------------------------------------------------
+
+describe('LANG-SM-8: the splitter and the lexer agree where a text ends', () => {
+  it('LANG-SM-8: an unfinished text inside a call does not swallow the lines after it', () => {
+    const out = parseProgram('s = max(len("abc\n), 1)\nA = (1, 2)\nB = (3, 4)');
+    const first = out[0]!;
+    expect(first.line).toBe(1);
+    expect(first.result.ok).toBe(false);
+    expect(errOf(first.result).kind).toBe('unterminated_string');
+    const byLine = new Map(out.map((o) => [o.line, o.result]));
+    expect(byLine.get(3)?.ok, 'A = (1, 2) on line 3 must be parsed').toBe(true);
+    expect(byLine.get(4)?.ok, 'B = (3, 4) on line 4 must be parsed').toBe(true);
+  });
+
+  it('LANG-SM-8: a string never spans a newline in the splitter', () => {
+    const lines = splitLogicalLines('a = "abc\nB = (1, 2)\nC = (3, 4)');
+    expect(lines.length).toBe(3);
+    expect(lines.map((l) => l.firstLine)).toEqual([1, 2, 3]);
+  });
+
+  it('LANG-SM-8: a text closed with a low double quote ends there for the splitter too', () => {
+    const lines = splitLogicalLines('s = len("x„)\nB = (1, 2)');
+    expect(lines.length).toBe(2);
+    expect(lines[1]!.text).toBe('B = (1, 2)');
+    expect(lines[1]!.firstLine).toBe(2);
+  });
+
+  it('LANG-SM-8: a closed text with brackets in it still hides them from the splitter', () => {
+    const lines = splitLogicalLines('s = len("a(b")\nB = (1, 2)');
+    expect(lines.length).toBe(2);
+    const joined = splitLogicalLines('s = max(len("a)b"),\n1)\nB = (1, 2)');
+    expect(joined.length).toBe(2);
+    expect(joined[0]!.lineCount).toBe(2);
+  });
+});
+
+describe('LANG-SM-9: style and range reads do not make a free object dependent', () => {
+  function figure(): ScratchFigure {
+    const fig = emptyFig();
+    applyOk(fig, 'n = 10');
+    applyOk(fig, 'B = (1, 1)');
+    return fig;
+  }
+
+  it('LANG-SM-9: a slider whose range reads a variable is free', () => {
+    const fig = figure();
+    const r = analyseLine('a = 3 in 0..n', fig);
+    if (!r.ok) throw new Error(`${r.kind}: ${r.message}`);
+    expect(r.value.free).toBe(true);
+  });
+
+  it('LANG-SM-9: after such a slider is made, its range can be changed', () => {
+    const fig = figure();
+    applyOk(fig, 'a = 3 in 0..n');
+    expect(fig.lookup('a')?.free).toBe(true);
+    const r = analyseLine('a in 0..20', fig);
+    if (!r.ok) throw new Error(`${r.kind}: ${r.message}`);
+    expect(r.value.op).toBe('rerange');
+  });
+
+  it('LANG-SM-9: a number whose style value reads a variable is free', () => {
+    const fig = figure();
+    const r = analyseLine('a = 3 with opacity = n / 20', fig);
+    if (!r.ok) throw new Error(`${r.kind}: ${r.message}`);
+    expect(r.value.free).toBe(true);
+  });
+
+  it('LANG-SM-9: a point with a showIf rule is free and is stored as free', () => {
+    const fig = figure();
+    const r = analyseLine('P = (1, 2) with showIf = B.x > 0', fig);
+    if (!r.ok) throw new Error(`${r.kind}: ${r.message}`);
+    expect(r.value.free).toBe(true);
+    applyOk(fig, 'P = (1, 2) with showIf = B.x > 0');
+    expect(fig.lookup('P')?.free).toBe(true);
+  });
+
+  it('LANG-SM-9: a value that reads another object is still not free', () => {
+    const fig = figure();
+    const r = analyseLine('c = n + 1', fig);
+    if (!r.ok) throw new Error(`${r.kind}: ${r.message}`);
+    expect(r.value.free).toBe(false);
+    const withStyle = analyseLine('d = n + 1 with opacity = 0.5', fig);
+    if (!withStyle.ok) throw new Error(`${withStyle.kind}: ${withStyle.message}`);
+    expect(withStyle.value.free).toBe(false);
+  });
+});
+
+describe('LANG-SM-10: function and relation values keep their own locals in a shared Env', () => {
+  it('LANG-SM-10: functions sharing an Env keep their own parameters', () => {
+    const fig = emptyFig();
+    applyOk(fig, 'f(x) = 10 * x');
+    const fInfo = fig.lookup('f')!;
+    const lineF = okValue(analyseLine('f(x) = 10 * x', fig));
+    const lineG = okValue(analyseLine('g(x, y) = f(y) + x', fig));
+    const cf = okValue(compileLine(lineF));
+    const cg = okValue(compileLine(lineG));
+    const env = createEnv({ slots: 8, read: (id) => (id === fInfo.id ? fValue : undefined) });
+    const first = evaluate(cf, env);
+    if (!first.defined) throw new Error('f did not evaluate');
+    const fValue = first.value as FunctionValue;
+    const second = evaluate(cg, env);
+    if (!second.defined) throw new Error('g did not evaluate');
+    const g = second.value as FunctionValue;
+    expect(fValue.call(3)).toBe(30);
+    // g(1, 2) = f(2) + 1 = 21
+    expect(g.call(1, 2)).toBe(21);
+    expect(g.call(1, 2)).toBe(21);
+    expect(g.call(5, 7)).toBe(75);
+    // f is unchanged by being called from g
+    expect(fValue.call(4)).toBe(40);
+  });
+
+  it('LANG-SM-10: a relation value keeps x and y while it calls a function in the same Env', () => {
+    const fig = emptyFig();
+    applyOk(fig, 'f(x) = 10 * x');
+    const fInfo = fig.lookup('f')!;
+    const lineF = okValue(analyseLine('f(x) = 10 * x', fig));
+    const lineK = okValue(analyseLine('k = f(y) + x == 0', fig));
+    const cf = okValue(compileLine(lineF));
+    const ck = okValue(compileLine(lineK));
+    const env = createEnv({ slots: 8, read: (id) => (id === fInfo.id ? fValue : undefined) });
+    const first = evaluate(cf, env);
+    if (!first.defined) throw new Error('f did not evaluate');
+    const fValue = first.value as FunctionValue;
+    const second = evaluate(ck, env);
+    if (!second.defined) throw new Error('k did not evaluate');
+    const rel = second.value as RelationValue;
+    // residual = f(y) + x = 10 * 2 + 1
+    expect(rel.residual(1, 2)).toBe(21);
+    expect(rel.residual(1, 2)).toBe(21);
+    expect(rel.residual(3, -1)).toBe(-7);
+  });
+
+  it('LANG-SM-10: the figure gives the same answers', () => {
+    const fig = emptyFig();
+    applyOk(fig, 'f(x) = 10 * x');
+    applyOk(fig, 'g(x, y) = f(y) + x');
+    const g = fig.valueOf('g') as FunctionValue;
+    expect(g.call(1, 2)).toBe(21);
+  });
+});
+
+describe('LANG-SM-11: an infinity is allowed per value, not per line', () => {
+  it('LANG-SM-11: exp(1000) beside an unrelated inf in a condition stays undefined with reason overflow', () => {
+    const fig = emptyFig();
+    const w0 = applyOk(fig, 'w0 = if(1 < 2, exp(1000), 0)');
+    expect(w0.defined).toBe(false);
+    expect(w0.reason).toBe('overflow');
+    const w1 = applyOk(fig, 'w1 = if(1 < inf, exp(1000), 0)');
+    expect(w1.defined).toBe(false);
+    expect(w1.reason).toBe('overflow');
+  });
+
+  it('LANG-SM-11: an earlier object holding inf does not make later overflow infinite', () => {
+    const fig = emptyFig();
+    const big = applyOk(fig, 'big = inf');
+    expect(big.defined).toBe(true);
+    expect(fig.valueOf('big')).toBe(Infinity);
+    const w2 = applyOk(fig, 'w2 = if(big > 0, exp(1000), 0)');
+    expect(w2.defined).toBe(false);
+    expect(w2.reason).toBe('overflow');
+  });
+
+  it('LANG-SM-11: a function of an infinite input still gives an infinite result (ruling Q4)', () => {
+    const fig = emptyFig();
+    applyOk(fig, 'big = inf');
+    const a = applyOk(fig, 'a = exp(big)');
+    expect(a.defined).toBe(true);
+    expect(fig.valueOf('a')).toBe(Infinity);
+    const b = applyOk(fig, 'b = max(big, 3)');
+    expect(b.defined).toBe(true);
+    expect(fig.valueOf('b')).toBe(Infinity);
+    const c = applyOk(fig, 'c = exp(1000)');
+    expect(c.defined).toBe(false);
+    expect(c.reason).toBe('overflow');
+  });
+
+  it('LANG-SM-11: the stored value of inf itself is unchanged', () => {
+    const fig = emptyFig();
+    expect(applyOk(fig, 'hi = inf').defined).toBe(true);
+    expect(fig.valueOf('hi')).toBe(Infinity);
+    expect(applyOk(fig, 'lo = -inf').defined).toBe(true);
+    expect(fig.valueOf('lo')).toBe(-Infinity);
+  });
+
+  it('LANG-SM-11: an inf in a style value does not change the overflow of the value', () => {
+    const fig = emptyFig();
+    const r = fig.apply('w3 = exp(1000) with opacity = inf');
+    // The style value may be refused as out of range; when the line is accepted, the value is overflow.
+    if (r.ok) {
+      expect(r.value.defined).toBe(false);
+      expect(r.value.reason).toBe('overflow');
+    }
+    const q = fig.apply('big = inf');
+    expect(q.ok).toBe(true);
+    const s = fig.apply('w4 = exp(1000) with opacity = if(big > 0, 1, 0)');
+    if (s.ok) {
+      expect(s.value.defined).toBe(false);
+      expect(s.value.reason).toBe('overflow');
+    }
+  });
+});
+
+describe('LANG-SM-12: an undefined text stays undefined when added to a text', () => {
+  it('LANG-SM-12: undefined + "x" is undefined with a reason', () => {
+    const fig = emptyFig();
+    const u = applyOk(fig, 'u = if(1 > 2, "a")');
+    expect(u.defined).toBe(false);
+    const s = applyOk(fig, 's = u + "x"');
+    expect(s.defined).toBe(false);
+    expect(s.reason).toBeDefined();
+    expect(fig.valueOf('s')).toBeUndefined();
+  });
+
+  it('LANG-SM-12: "x" + undefined is undefined with a reason', () => {
+    const fig = emptyFig();
+    applyOk(fig, 'u = if(1 > 2, "a")');
+    const s = applyOk(fig, 's = "x" + u');
+    expect(s.defined).toBe(false);
+    expect(s.reason).toBeDefined();
+    expect(fig.valueOf('s')).toBeUndefined();
+  });
+
+  it('LANG-SM-12: two defined texts still join', () => {
+    const fig = emptyFig();
+    applyOk(fig, 'u = "a"');
+    const s = applyOk(fig, 's = u + "x"');
+    expect(s.defined).toBe(true);
+    expect(fig.valueOf('s')).toBe('ax');
+  });
+});
+
+describe('LANG-SM-13: one MathLib for every result', () => {
+  const original = getMathLib();
+  afterEach(() => {
+    setMathLib(PLATFORM_MATH);
+  });
+
+  /** A library whose results are visibly different from the platform's. */
+  const marked = (): MathLib => ({
+    ...PLATFORM_MATH,
+    sin: () => 42,
+    pow: (x: number, y: number) => PLATFORM_MATH.pow(x, y) + 1000,
+    exp: (x: number) => PLATFORM_MATH.exp(x) + 1000,
+    log: (x: number) => PLATFORM_MATH.log(x) + 1000,
+    sqrt: (x: number) => PLATFORM_MATH.sqrt(x) + 1000,
+  });
+
+  /** Result of one line applied in a fresh figure. */
+  function numberOf(src: string, name = 'out'): number | undefined {
+    const fig = emptyFig();
+    const r = fig.apply(src);
+    if (!r.ok) throw new Error(`${src}: ${r.kind}: ${r.message}`);
+    return r.value.defined ? (fig.valueOf(name) as number) : undefined;
+  }
+
+  it('LANG-SM-13: the platform library is installed at the start', () => {
+    expect(original).toBe(PLATFORM_MATH);
+  });
+
+  it('LANG-SM-13: a folded constant call and a recompiled one agree after the library changes', () => {
+    const fig = emptyFig();
+    const compile = (src: string) => okValue(compileLine(okValue(analyseLine(src, fig))));
+    const old = compile('m = sin(1)');
+    const oldFn = compile('m2(x) = sin(1) + 0 * x');
+    const env = createEnv({ slots: 4 });
+    const before = evaluate(old, env);
+    expect(before.defined && (before.value as number)).toBeCloseTo(0.841471, 5);
+
+    setMathLib(marked());
+    const fresh = compile('m = sin(1)');
+    const freshFn = compile('m2(x) = sin(1) + 0 * x');
+    const env2 = createEnv({ slots: 4 });
+    const f = evaluate(fresh, env2);
+    expect(f.defined && (f.value as number)).toBe(42);
+
+    // the line compiled earlier must give the answer of the library that is installed now
+    const after = evaluate(old, createEnv({ slots: 4 }));
+    expect(after.defined && (after.value as number)).toBe(42);
+    const oldFnValue = evaluate(oldFn, createEnv({ slots: 4 }));
+    const freshFnValue = evaluate(freshFn, createEnv({ slots: 4 }));
+    if (!oldFnValue.defined || !freshFnValue.defined) throw new Error('function lines did not evaluate');
+    expect((oldFnValue.value as FunctionValue).call(0)).toBe((freshFnValue.value as FunctionValue).call(0));
+    expect((oldFnValue.value as FunctionValue).call(0)).toBe(42);
+  });
+
+  it('LANG-SM-13: gamma, beta, erf and erfc use the installed library', () => {
+    const platform = {
+      gamma: numberOf('out = gamma(5.5)'),
+      beta: numberOf('out = beta(2.5, 3.5)'),
+      erf: numberOf('out = erf(0.5)'),
+      erfc: numberOf('out = erfc(0.5)'),
+    };
+    for (const v of Object.values(platform)) expect(Number.isFinite(v)).toBe(true);
+    expect(platform.gamma).toBeCloseTo(52.34277778, 5);
+    expect(platform.erf).toBeCloseTo(0.5204998778, 8);
+
+    setMathLib(marked());
+    expect(numberOf('out = gamma(5.5)'), 'gamma').not.toBe(platform.gamma);
+    expect(numberOf('out = beta(2.5, 3.5)'), 'beta').not.toBe(platform.beta);
+    expect(numberOf('out = erf(0.5)'), 'erf').not.toBe(platform.erf);
+    expect(numberOf('out = erfc(0.5)'), 'erfc').not.toBe(platform.erfc);
+  });
+
+  it('LANG-SM-13: a power of a function uses the installed library', () => {
+    setMathLib(marked());
+    const fig = emptyFig();
+    applyOk(fig, 'h(x) = x^2.5');
+    applyOk(fig, 'hh = h^1.5');
+    applyOk(fig, 'direct = h(3)^1.5');
+    const hh = fig.valueOf('hh') as FunctionValue;
+    const direct = fig.valueOf('direct') as number;
+    expect(Number.isFinite(direct)).toBe(true);
+    expect(hh.call(3)).toBe(direct);
+  });
+
+  it('LANG-SM-13: folding a range bound uses the installed library', () => {
+    setMathLib(marked());
+    const fig = emptyFig();
+    const expected = numberOf('out = 2^3.5');
+    const r = analyseLine('d = 3 in 0..2^3.5', fig);
+    if (!r.ok) throw new Error(`${r.kind}: ${r.message}`);
+    expect(r.value.range?.max).toBe(expected);
+  });
+
+  it('LANG-SM-13: under the platform library the answers are the usual ones', () => {
+    expect(numberOf('out = 2^3')).toBe(8);
+    expect(numberOf('out = sin(0)')).toBe(0);
+    expect(numberOf('out = gamma(5)')).toBeCloseTo(24, 8);
+  });
+});
+
+describe('LANG-SM-14: a division by a signed implicit product is ambiguous too', () => {
+  it('LANG-SM-14: 1/2x is ambiguous (control)', () => {
+    const e = errOf(parseLine('q(x) = 1/2x'));
+    expect(e.kind).toBe('ambiguous_implicit');
+  });
+
+  it('LANG-SM-14: 1/-2x is ambiguous_implicit', () => {
+    const r = parseLine('q(x) = 1/-2x');
+    expect(r.ok).toBe(false);
+    expect(errOf(r).kind).toBe('ambiguous_implicit');
+  });
+
+  it('LANG-SM-14: 1/+2x is ambiguous_implicit', () => {
+    const r = parseLine('q(x) = 1/+2x');
+    expect(r.ok).toBe(false);
+    expect(errOf(r).kind).toBe('ambiguous_implicit');
+  });
+
+  it('LANG-SM-14: a/-2x is ambiguous_implicit', () => {
+    const r = parseLine('q(x, a) = a/-2x');
+    expect(r.ok).toBe(false);
+    expect(errOf(r).kind).toBe('ambiguous_implicit');
+  });
+
+  it('LANG-SM-14: clear spellings are accepted', () => {
+    for (const src of ['q(x) = 1/(-2x)', 'q(x) = 1/-(2x)', 'q(x) = 1/-2*x', 'q(x) = 1/-2', 'q(x) = (1/-2)*x', 'q(x) = 1/-x']) {
+      const r = parseLine(src);
+      expect(r.ok, src).toBe(true);
+    }
+  });
+});
+
+describe('LANG-SM-15: a form is matched with its own typing of each argument', () => {
+  const commands: CommandSpec[] = [
+    {
+      name: 'Fz',
+      kind: 'object',
+      group: 'test',
+      forms: [
+        form([p('a', 'List<Point>'), p('b', 'Number')], 'Number', 'list of points and a number'),
+        form([p('a', 'List<Number>'), p('b', 'Point')], 'Number', 'list of numbers and a point'),
+      ],
+    },
+  ];
+
+  function figure(): ScratchFigure {
+    const fig = emptyFig(commands);
+    applyOk(fig, 'A = (1, 2)');
+    return fig;
+  }
+
+  it('LANG-SM-15: Fz([], 1) fits the first form (control)', () => {
+    const r = analyseLine('n = Fz([], 1)', figure());
+    if (!r.ok) throw new Error(`${r.kind}: ${r.message}`);
+  });
+
+  it('LANG-SM-15: Fz([], A) fits the second form', () => {
+    const r = analyseLine('n = Fz([], A)', figure());
+    if (!r.ok) throw new Error(`${r.kind}: ${r.message}`);
+    expect(r.value.type?.k).toBe('Number');
+  });
+
+  it('LANG-SM-15: the order of the forms does not decide', () => {
+    const swapped: CommandSpec[] = [{ ...commands[0]!, forms: [commands[0]!.forms[1]!, commands[0]!.forms[0]!] }];
+    const fig = emptyFig(swapped);
+    applyOk(fig, 'A = (1, 2)');
+    for (const src of ['n = Fz([], A)', 'n = Fz([], 1)']) {
+      const r = analyseLine(src, fig);
+      if (!r.ok) throw new Error(`${src}: ${r.kind}: ${r.message}`);
+    }
+  });
+
+  it('LANG-SM-15: a call that fits no form is still refused', () => {
+    const r = analyseLine('n = Fz([], "x")', figure());
+    expect(r.ok).toBe(false);
+    expect(errOf(r).kind).toBe('no_matching_form');
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Wrong errors
+// ---------------------------------------------------------------------------------------------
+
+describe('LANG-SM-16: errors inside a body argument are reported when several forms compete', () => {
+  const commands: CommandSpec[] = [
+    {
+      name: 'Sq',
+      kind: 'object',
+      group: 'test',
+      forms: [
+        form(
+          [p('body', 'Number', { kind: 'body' }), p('k', 'Number', { kind: 'binder' }), p('from', 'Number'), p('to', 'Number')],
+          'List<Number>',
+          'numbers',
+        ),
+        form(
+          [p('body', 'Point', { kind: 'body' }), p('k', 'Number', { kind: 'binder' }), p('from', 'Number'), p('to', 'Number')],
+          'List<Point>',
+          'points',
+        ),
+      ],
+    },
+  ];
+
+  it('LANG-SM-16: an unknown name in the body is reported as unknown_name', () => {
+    const fig = emptyFig(commands);
+    const r = analyseLine('L9 = Sq(k^2 + qq, k, 1, 5)', fig);
+    expect(r.ok).toBe(false);
+    const e = errOf(r);
+    const kinds = [e.kind, ...(e.more ?? []).map((m) => m.kind)];
+    expect(e.kind, `got ${kinds.join(', ')}: ${e.message}`).toBe('unknown_name');
+    expect(e.token).toBe('qq');
+    expect(e.col).toBe(15);
+  });
+
+  it('LANG-SM-16: the same mistake in a body with a point result is reported too', () => {
+    const fig = emptyFig(commands);
+    const e = errOf(analyseLine('L9 = Sq((k, qq), k, 1, 5)', fig));
+    expect(e.kind).toBe('unknown_name');
+    expect(e.token).toBe('qq');
+  });
+
+  it('LANG-SM-16: a good body picks its form', () => {
+    const fig = emptyFig(commands);
+    const numbers = analyseLine('L9 = Sq(k^2, k, 1, 5)', fig);
+    if (!numbers.ok) throw new Error(`${numbers.kind}: ${numbers.message}`);
+    expect(numbers.value.type?.k).toBe('List');
+    const points = analyseLine('L9 = Sq((k, k^2), k, 1, 5)', fig);
+    if (!points.ok) throw new Error(`${points.kind}: ${points.message}`);
+  });
+});
+
+describe('LANG-SM-17: ScratchFigure.define does not throw', () => {
+  it('LANG-SM-17: an unknown input name is ignored or reported, not thrown', () => {
+    const fig = emptyFig();
+    expect(() => fig.define('zz', 'Number', 1, { inputs: ['nope'] })).not.toThrow();
+    expect(fig.lookup('zz')).toBeDefined();
+    expect(fig.valueOf('zz')).toBe(1);
+  });
+
+  it('LANG-SM-17: known and unknown inputs together', () => {
+    const fig = emptyFig();
+    fig.define('a', 'Number', 1);
+    expect(() => fig.define('zz', 'Number', 1, { inputs: ['a', 'nope', 'also_missing'] })).not.toThrow();
+    const zz = fig.lookup('zz')!;
+    const a = fig.lookup('a')!;
+    expect(fig.inputsOf(zz.id)).toContain(a.id);
+    expect(fig.inputsOf(zz.id).every((id) => fig.byId(id) !== undefined)).toBe(true);
+  });
+
+  it('LANG-SM-17: the figure stays usable after the call', () => {
+    const fig = emptyFig();
+    fig.define('zz', 'Number', 1, { inputs: ['nope'] });
+    expect(fig.apply('q = zz + 1').ok).toBe(true);
+    expect(fig.valueOf('q')).toBe(2);
+    expect(() => fig.recompute()).not.toThrow();
+  });
+});
+
+describe('LANG-SM-18: errors point at the text the writer typed', () => {
+  it('LANG-SM-18: leading blank lines count in the line number', () => {
+    const e = errOf(parseLine('\n\nA = (1, 2'));
+    expect(e.kind).toBe('unbalanced');
+    expect(e.line).toBe(3);
+    expect(e.col).toBe(5);
+  });
+
+  it('LANG-SM-18: an error on a second line points at that line', () => {
+    const e = errOf(parseLine('A = (1, 2)\n2'));
+    expect(e.line).toBe(2);
+    expect(e.col).toBe(1);
+    expect(e.endCol).toBe(2);
+  });
+
+  it('LANG-SM-18: an error at the end of an interpolation points at the closing brace', () => {
+    const r = parseLine('s = "{1+}" + "abc"');
+    const e = errOf(r);
+    expect(e.line).toBe(1);
+    expect(e.col).toBe(9);
+  });
+
+  it('LANG-SM-18: preview of an unnamed line reports columns of the text typed', () => {
+    const fig = emptyFig();
+    const r = preview('(1, qq)', fig);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error.kind).toBe('unknown_name');
+    expect(r.error.token).toBe('qq');
+    expect(r.error.col).toBe(5);
+    expect(r.error.endCol).toBe(7);
+  });
+
+  it('LANG-SM-18: preview of an unnamed line keeps the typed columns when it starts with spaces', () => {
+    const fig = emptyFig();
+    const r = preview('   (1, qq)', fig);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error.token).toBe('qq');
+    expect(r.error.col).toBe(8);
+  });
+
+  it('LANG-SM-18: the temporary name of a preview never reaches the writer', () => {
+    const fig = emptyFig();
+    for (const src of ['(x, 1)', '(1, qq)', 'x + 1', '2 +']) {
+      const r = preview(src, fig);
+      if (r.ok) continue;
+      expect(allText(r.error), `preview(${JSON.stringify(src)})`).not.toMatch(/pvw/);
+    }
+  });
+});
+
+describe('LANG-SM-19: a character outside the Basic Multilingual Plane gives one error', () => {
+  it('LANG-SM-19: lex reports one bad_character for an emoji', () => {
+    const { errors } = lex(new SourceMap('a😀'));
+    expect(errors.length).toBe(1);
+    expect(errors[0]!.kind).toBe('bad_character');
+    expect(errors[0]!.col).toBe(2);
+    expect(errors[0]!.endCol).toBe(4);
+  });
+
+  it('LANG-SM-19: tokenize reports one error and one error token covering the whole character', () => {
+    const { tokens, errors } = tokenize('a😀');
+    expect(errors.length).toBe(1);
+    const bad = tokens.filter((t) => t.kind === 'error');
+    expect(bad.length).toBeLessThanOrEqual(1);
+    for (const t of bad) {
+      expect(t.col).toBe(2);
+      expect(t.endCol).toBe(4);
+    }
+  });
+
+  it('LANG-SM-19: parseLine gives one error for an emoji in a line', () => {
+    const r = parseLine('a = 1 😀 + 2');
+    expect(r.ok).toBe(false);
+    const e = errOf(r);
+    expect(e.kind).toBe('bad_character');
+    expect((e.more ?? []).length).toBe(0);
+  });
+
+  it('LANG-SM-19: two emoji give two errors', () => {
+    const { errors } = lex(new SourceMap('a😀😀'));
+    expect(errors.length).toBe(2);
+  });
+});
+
+describe('LANG-SM-20: blockedBy covers names written with braced subscripts', () => {
+  it('LANG-SM-20: a reader of P_1 is blocked by a failed P_{1} line', () => {
+    const fig = emptyFig();
+    const out = fig.applyAll(['P_{1} = (1, ', 'Q = P_1 + (1, 1)']);
+    expect(out[0]!.ok).toBe(false);
+    expect(out[1]!.ok).toBe(false);
+    const e = errOf(out[1]!);
+    expect(e.blockedBy).toEqual({ line: 1, kind: 'unbalanced' });
+  });
+
+  it('LANG-SM-20: a reader of P_{1} is blocked by a failed P_1 line', () => {
+    const fig = emptyFig();
+    const out = fig.applyAll(['P_1 = (1, ', 'Q = P_{1} + (1, 1)']);
+    const e = errOf(out[1]!);
+    expect(e.blockedBy).toEqual({ line: 1, kind: 'unbalanced' });
+  });
+
+  it('LANG-SM-20: plain subscripts keep working (control)', () => {
+    const fig = emptyFig();
+    const out = fig.applyAll(['R_1 = (1, ', 'S = R_1 + (1, 1)']);
+    const e = errOf(out[1]!);
+    expect(e.blockedBy).toEqual({ line: 1, kind: 'unbalanced' });
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Cosmetic
+// ---------------------------------------------------------------------------------------------
+
+describe('LANG-SM-21: tokenize colours a long script', () => {
+  const script = 'a = 1\n'.repeat(400); // 2,400 characters
+
+  it('LANG-SM-21: tokens are returned for every line of a script over 2,000 characters', () => {
+    const { tokens, errors } = tokenize(script);
+    expect(errors.filter((e) => e.kind === 'limit').length).toBe(0);
+    expect(tokens.filter((t) => t.kind === 'number').length).toBe(400);
+    expect(Math.max(...tokens.map((t) => t.line))).toBe(400);
+    expect(tokens.filter((t) => t.line === 400).length).toBeGreaterThan(0);
+  });
+
+  it('LANG-SM-21: columns restart on every line', () => {
+    const { tokens } = tokenize(script);
+    const second = tokens.filter((t) => t.line === 2);
+    expect(second.map((t) => [t.text, t.col, t.endCol])).toEqual([
+      ['a', 1, 2],
+      ['=', 3, 4],
+      ['1', 5, 6],
+    ]);
+  });
+
+  it('LANG-SM-21: a single line over 2,000 characters is still reported as a limit', () => {
+    const { errors } = tokenize('a = ' + '1+'.repeat(1100) + '1');
+    expect(errors.some((e) => e.kind === 'limit')).toBe(true);
+  });
+});
