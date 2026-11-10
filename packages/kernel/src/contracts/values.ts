@@ -27,8 +27,12 @@ export type CoreUndefReason =
   | 'no_convergence' | 'timeout' | 'input_undefined' | 'not_set' | 'limit' | 'condition_false';
 
 /** One registry of reason codes (README decision 2). Areas append theirs, one per line under their comment. */
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type
-export interface AreaUndefReasons {}
+export interface AreaUndefReasons {
+  // language
+  explicit: true;
+  not_integer: true;
+  no_value_yet: true;
+}
 
 export type UndefReason = CoreUndefReason | Extract<keyof AreaUndefReasons, string>;
 
