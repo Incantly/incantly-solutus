@@ -16,11 +16,11 @@ _Not yet checked._
 
 ## language
 
-Checked at commit `d2d9d9e` (pass 1), at `3220d23` (round 2, after the fixes for LANG-SM-1 to LANG-SM-21) and at `94f9db0` (round 3, after the fixes for LANG-SM-9, 22, 23 and 24) on `feat/language`. Paths are under `packages/kernel/src/language/`. Line numbers in L1, L2, L3, L5, L7, L8, L9 and L11 refer to `94f9db0`; the other machines did not change in round 3 and keep the numbers of `3220d23`. Findings are in `handoff/language/findings.md`. Open after round 3: LANG-SM-24 (reopened), LANG-SM-25, LANG-SM-26, LANG-SM-27.
+Checked at commit `d2d9d9e` (pass 1), at `3220d23` (round 2, after the fixes for LANG-SM-1 to LANG-SM-21) at `94f9db0` (round 3, after the fixes for LANG-SM-9, 22, 23 and 24) and at `03d9ae2` (round 4, after the narrowed ruling SM-23 and the fixes for LANG-SM-24 to 27) on `feat/language`. Paths are under `packages/kernel/src/language/`. Line numbers in L1, L2, L5, L7, L8, L9 and L11 refer to `03d9ae2`; L3 keeps the numbers of `94f9db0` and the other machines those of `3220d23` (no change since). Findings are in `handoff/language/findings.md`. Open after round 4: LANG-SM-28, LANG-SM-29, LANG-SM-30, LANG-SM-31, LANG-SM-32, and question Q-R4-1 for the product owner.
 
 ### L1. Normaliser modes
 
-- **Where:** `source.ts` `normalise` (lines 51 to 213), `hexColourLength` (lines 39 to 48, shared with L2 and L3).
+- **Where:** `source.ts` `normalise` (lines 54 to 216), `hexColourLength` (lines 42 to 51, shared with L2 and L3), `BLANKS` (line 32: the space and every `REPLACE` key rewritten to a space).
 - **States:**
 
 | State | Holds |
@@ -36,7 +36,7 @@ Checked at commit `d2d9d9e` (pass 1), at `3220d23` (round 2, after the fixes for
 | From | Event | Guard | To | Side effects |
 |---|---|---|---|---|
 | any | `\n` or `\r` | | `code` | braceDepth = 0; `\r\n` becomes one `\n` |
-| `code` | `#` | `hexColourLength(src, i)` > 0: previous non-blank (space, tab, U+00A0) is a single `=` (not `==` `<=` `>=` `!=` `≠` `≤` `≥`), then 3, 4, 6 or 8 hex digits not followed by a name character | `code` | colour copied as it is; the rest of the line keeps the code rules |
+| `code` | `#` | `hexColourLength(src, i)` > 0: previous character not in `BLANKS` (space, tab, U+00A0, U+2009, U+202F, U+2003, U+2002) is a single `=` (not `==` `<=` `>=` `!=` `≠` `≤` `≥`), then 3, 4, 6 or 8 hex digits not followed by a name character | `code` | colour copied as it is; the rest of the line keeps the code rules |
 | `code` | `#` | otherwise | `comment` | |
 | `code` | `"` `“` `”` `„` | | `string` | pushes `"` |
 | `string`/0 | `"` `“` `”` `„` | | `code` | pushes `"` |
@@ -45,11 +45,11 @@ Checked at commit `d2d9d9e` (pass 1), at `3220d23` (round 2, after the fixes for
 | `string`/>0 | `"` `“` `”` `„` | | `code` | depth = 0 (the lexer reports the open brace) |
 | `code` or `string`/>0 | superscript run, REPLACE char | | same | rewrite with offset map |
 
-- **Reachable invalid states or transitions:** `hexColourLength` runs here on the raw text, where U+2009, U+202F, U+2003 and U+2002 are not yet spaces, while the lexer runs it on the normalised text, where they are. With one of those between `=` and `#`, this machine goes to `comment` and the lexer reads a colour, so the rest of the line is not rewritten (`P with color =\u202F#ff0000, opacity = 1 − 0.5` is `bad_character`): LANG-SM-24 (reopened). Closed: LANG-SM-8.
+- **Reachable invalid states or transitions:** none open. `hexColourLength` runs here on the raw text and in the lexer on the normalised text; because it skips exactly the characters this machine rewrites to a space, both give the same answer for every blank (a blank this machine keeps, such as U+3000, is `bad_character` before the `#` in every scanner). Closed: LANG-SM-24 (round 4), LANG-SM-8.
 
 ### L2. Logical-line splitter (continuation lines)
 
-- **Where:** `source.ts` `scanLineDepth`, `splitLogicalLines`, `lastLogicalStart` (lines 308 to 392), on the raw text with only `\r\n` and `\r` turned into `\n`; used by `parser.ts` `parseLine` and `parseProgram`, `tooling.ts` `cursorContext` and `tokenize`.
+- **Where:** `source.ts` `scanLineDepth`, `splitLogicalLines`, `lastLogicalStart` (lines 311 to 395), on the raw text with only `\r\n` and `\r` turned into `\n`; used by `parser.ts` `parseLine` and `parseProgram`, `tooling.ts` `cursorContext` and `tokenize`.
 - **States:** per physical line: `open` (bracket depth > 0 at its end, the next line joins) or `closed`. Inside `scanLineDepth`, for one physical line: `depth` (carried in from the previous line), `inString`, `braces` (interpolation depth inside a text); a comment ends the scan of the line. Only `depth` crosses a newline.
 - **Invariants:** a line continues only while a round or square bracket is open (README decision 17); texts and comments are skipped exactly as the lexer skips them; a text never spans a newline; `splitLogicalLines` and `lastLogicalStart` make the same cut; one pass, each character scanned once. An over-long logical line is still joined (the lexer reports one `limit` for it).
 - **Transitions:**
@@ -68,7 +68,7 @@ Checked at commit `d2d9d9e` (pass 1), at `3220d23` (round 2, after the fixes for
 | scan | `#` | not in a text, otherwise | end of line | rest of the line is a comment |
 | scan | `(` `[` / `)` `]` | not in a text | | depth ±1, never below 0 |
 
-- **Reachable invalid states or transitions:** on the raw text a colour after `=` and one of U+2009, U+202F, U+2003, U+2002 is a comment here but a colour to the lexer, so a bracket opened after it is missed and the next physical line becomes its own logical line: LANG-SM-24 (reopened). Closed: LANG-SM-8 (text across a newline, `„`), LANG-SM-5 (quadratic rescans).
+- **Reachable invalid states or transitions:** none open. For each blank in `BLANKS` between `=` and a colour, a bracket opened after the colour continues the line, as in the lexer. Closed: LANG-SM-24 (round 4: one blank set with L1), LANG-SM-8 (text across a newline, `„`), LANG-SM-5 (quadratic rescans).
 
 ### L3. Lexer
 
@@ -92,7 +92,7 @@ Checked at commit `d2d9d9e` (pass 1), at `3220d23` (round 2, after the fixes for
 | end | | top and stack not empty | done | `unbalanced`; suggestion = text before a trailing comment + closers + the comment |
 | end | | `tokenTotal` > 800 and no earlier error | done | `limit` |
 
-- **Reachable invalid states or transitions:** none in the lexer itself. It shares `hexColourLength` with L1 and L2 but runs it on different text, so the three still disagree when U+2009, U+202F, U+2003 or U+2002 lies between `=` and `#` (LANG-SM-24, reopened). Closed: LANG-SM-7, LANG-SM-19, LANG-SM-6.
+- **Reachable invalid states or transitions:** none open. It runs `hexColourLength` on the normalised text and L1 and L2 on the raw text; the shared `BLANKS` set makes the answers equal. Closed: LANG-SM-24 (round 4), LANG-SM-7, LANG-SM-19, LANG-SM-6.
 
 ### L4. Parser and line-kind dispatch
 
@@ -125,7 +125,7 @@ Checked at commit `d2d9d9e` (pass 1), at `3220d23` (round 2, after the fixes for
 
 - **Where:** `check.ts` `Checker` (lines 175 to 1630), `lines.ts` `checkLine` (line 27) and the per-kind checks.
 - **States:** one `Checker` per line with `errors` (cap 8), `notices`, `reads`, `usesT`, `hasCommand`, `rangeReads`, `styleReads`, `rangeUsesT`, `styleUsesT`, `scopes` (a stack of frames), `slotCount`, `nodes` (cap 2,000), `ctx`, `simpleUnknown`. `apart('range' | 'style', fn)` (line 217) saves `reads`, `usesT` and `hasCommand`, runs `fn` with fresh `reads` and `usesT`, then moves what it read into `rangeReads` or `styleReads`, sets `rangeUsesT` or `styleUsesT` if `fn` read the clock, and restores all three saved fields, also when `fn` throws. Frames are pushed for function parameters, relation `x`/`y`, binders and body-scope names. Exit by result, by collected errors, or by `Bail` (node limit).
-- **Invariants:** a frame pushed is popped on every path; a local name resolves before constants, objects and commands; `reads` lists the inputs of the object's value rule only (kernel design 9.2: the cycle check follows value edges); `rangeReads` and `styleReads` are the inputs of the range and property rules; `free` is true exactly when the value expression reads no object, no clock and no command, whatever the range and style read (`isFreeNode`, `lines.ts:478`, reads only the value's facts); registries answer only their own keys, so every type in a typed node is a real `Ty`; slot numbers are unique within the line. `rangeUsesT` is true exactly when a range bound reads the clock and `styleUsesT` exactly when a style value does, so the kernel re-runs only the rule that reads `t`; `usesT` is the value's alone. All three reach `CompiledLine` unchanged (`compile.ts:1078-1082`).
+- **Invariants:** a frame pushed is popped on every path; a local name resolves before constants, objects and commands; `reads` lists the inputs of the object's value rule only (kernel design 9.2: the cycle check follows value edges); `rangeReads` and `styleReads` are the inputs of the range and property rules; `free` is true exactly when the value expression reads no object, no clock and no command, whatever the range and style read (`isFreeNode`, `lines.ts:478`, reads only the value's facts); registries answer only their own keys, so every type in a typed node is a real `Ty`; slot numbers are unique within the line. `rangeUsesT` is true exactly when a range bound reads the clock and `styleUsesT` exactly when a style value does, so the kernel re-runs only the rule that reads `t`; `usesT` is the value's alone. All three reach `CompiledLine` unchanged (`compile.ts:1243-1248`).
 - **Transitions:**
 
 | From | Event | Guard | To | Side effects |
@@ -143,12 +143,13 @@ Checked at commit `d2d9d9e` (pass 1), at `3220d23` (round 2, after the fixes for
 | define/rerange | range clause | | `apart('range')` | reads go to `rangeReads`; a clock read sets `rangeUsesT` |
 | define/function/restyle | style list | | `apart('style')` | reads go to `styleReads`; a clock read sets `styleUsesT`; a key `own(PROPERTIES, key)` misses is `unknown_property` |
 | directive | `@name` | not `own(DIRECTIVES, name)` and not a figure directive | error | `unknown_directive` |
-| define/function | done, no errors | | redefinition check (L7) | cycle test on `reads`, `rangeReads` and `styleReads` |
-| rerange/restyle | done, no errors | | cycle test (L7) | on `rangeReads` or `styleReads` |
+| define/function | done, no errors | | redefinition check (L7) | cycle test on `reads` and `rangeReads` (ruling SM-23, narrowed) |
+| rerange | done, no errors | | cycle test (L7) | on `rangeReads` |
+| restyle | done, no errors | | ok | no cycle test (style edges never form a cycle) |
 | done | errors > 0 | | error | first error, up to 7 in `more` |
 | done | non-`Bail` exception | | `internal` | |
 
-- **Reachable invalid states or transitions:** none open. Closed: LANG-SM-9 (round 3: `hasCommand` saved by `apart`), LANG-SM-1.
+- **Reachable invalid states or transitions:** none open. On a defining line, the style list resolves names against the figure, where the name being defined is not yet present, so `P9 = (1, 2) with showIf = P9.x > 0` is `unknown_name` on a figure without `P9` and accepted on one with it; the docs leave this open (question Q-R4-1 in `handoff/language/findings.md`). Closed: LANG-SM-9 (round 3: `hasCommand` saved by `apart`), LANG-SM-1.
 
 ### L6. Command and function form matcher
 
@@ -173,9 +174,9 @@ Checked at commit `d2d9d9e` (pass 1), at `3220d23` (round 2, after the fixes for
 
 ### L7. Redefinition, cycle and dependents check
 
-- **Where:** `lines.ts` `findPath`, `checkCycle`, `checkRedefinition`, `parseOne` (lines 133 to 240), `checkRestyle` (line 684), `checkRerange` (line 699); `check.ts` `OverlayFigure` (lines 129 to 171); `figure.ts` `ScratchFigure.apply` stores the inputs (line 195).
-- **States:** `new` (object limit test), `redefine` → `type test` → `cycle test` → `dependents test` (each direct dependent re-parsed and re-checked against an overlay with the new type) → `ok` or an error. Restyle and rerange lines run only the `cycle test`. The `cycle test` (`checkCycle`) is one iterative depth-first search over `inputsOf`, started from the line's `reads`, `rangeReads` and `styleReads` together, with an explicit stack of iterators and one `seen` set across all start points; the path is read off the stack only on a hit.
-- **Invariants:** a line whose value, range or style creates a cycle through value, range or style edges is refused with its path (ruling SM-23); one that keeps that graph acyclic is never refused; the test visits each object and edge at most once and runs in bounded stack for every figure the object limit allows (5,000); free versus dependent is decided by the value's facts only (L5). The figure's `inputsOf` holds all three kinds of edge (`ScratchFigure` stores the union; the kernel must do the same). Kernel design 9.2 says style edges are never followed and that a style may read its own object; ruling SM-23 says they are: the two disagree (LANG-SM-27).
+- **Where:** `lines.ts` `findPath`, `checkCycle`, `checkRedefinition`, `parseOne` (lines 133 to 240), `checkRestyle` (line 684), `checkRerange` (line 696); `check.ts` `OverlayFigure` (lines 129 to 171); `figure.ts` `ScratchFigure.apply` stores the inputs (line 185), `dependentsOf` (line 83).
+- **States:** `new` (object limit test), `redefine` → `type test` → `cycle test` → `dependents test` (each direct dependent re-parsed and re-checked against an overlay with the new type) → `ok` or an error. Rerange lines run only the `cycle test`; restyle lines run none. The `cycle test` (`checkCycle`) is one iterative depth-first search over `inputsOf`, started from the line's `reads` and `rangeReads` together, with an explicit stack of iterators and one `seen` set across all start points; the path is read off the stack only on a hit. The `dependents test` walks `dependentsOf`, which `ScratchFigure` builds from the same stored inputs.
+- **Invariants:** a line whose value or range creates a cycle through value or range edges is refused with its path (ruling SM-23, narrowed); style edges never join the cycle test, so a style may read its own object or its dependents (kernel design 9.2); a line that keeps the value and range graph acyclic is never refused; the test visits each object and edge at most once and runs in bounded stack for every figure the object limit allows (5,000); free versus dependent is decided by the value's facts only (L5); the dependents test re-checks every value, range and style reader of the redefined object (design 3.12 step 4; style owners are downstream through their style edges, kernel design 9.2). The cycle test and the dependents test therefore need different edge sets: `inputsOf` without style edges, `dependentsOf` with them; the kernel must keep the same split.
 - **Transitions:**
 
 | From | Event | Guard | To | Side effects |
@@ -183,45 +184,54 @@ Checked at commit `d2d9d9e` (pass 1), at `3220d23` (round 2, after the fixes for
 | start | no existing object | size ≥ 5,000 | error | `limit` |
 | start | no existing object | | ok | no cycle test (the name is not in the graph yet) |
 | start | existing | kind differs | error | `type_change` |
-| type ok | DFS from `reads` ∪ `rangeReads` ∪ `styleReads` | reaches the target | error | `cycle` with `path` and `related` |
+| type ok | DFS from `reads` ∪ `rangeReads` | reaches the target | error | `cycle` with `path` and `related` |
 | type ok | DFS | finishes | dependents | |
-| dependents | re-check each (value, range and style readers) | fails or changes type | error | `breaks_dependents` |
+| dependents | re-check each in `dependentsOf` | fails or changes type | error | `breaks_dependents` |
+| dependents | an object reads the target only in a style | | not re-checked | `dependentsOf` holds value and range readers only |
 | rerange | `a in lo..hi` | DFS from `rangeReads` reaches `a` | error | `cycle` (`a in 0..a`, `a in 0..b` with `b = a + 1`) |
-| restyle | `P with …` | DFS from `styleReads` reaches `P` | error | `cycle` (also `P with showIf = P.x > 0`) |
+| restyle | `P with …` | checks pass | ok | no cycle test (`P with showIf = P.x > 0` is accepted) |
 
-- **Reachable invalid states or transitions:** a style value that reads its own object, or an object downstream of it, is refused with `cycle` (`P with showIf = P.x > 0`, `a = 3 in 0..20 with opacity = a / 20`), which kernel design 9.2 calls legal: LANG-SM-27 (open, needs a ruling). `ScratchFigure` does not store restyle and rerange lines, so their new edges are missing from its graph (a known limit of the scratch figure, not of the check). Closed: LANG-SM-23 (round 3: range edges in the cycle test, also on rerange), LANG-SM-4. Measured at `94f9db0`: on 5,000-object chains built through range, style or value edges, the full-chain cycle is found in 3 to 4 ms and an acyclic change is accepted in at most 2 ms.
+- **Reachable invalid states or transitions:** with `f(x) = x` and `P = (1, 2) with opacity = f(1)`, `f(x, y) = x + y` is accepted, while a value reader (`k = f(1)`) or a range reader (`a = 3 in 0..f(5)`) makes it `breaks_dependents` (row "reads the target only in a style"): LANG-SM-32 (open, new with the LANG-SM-27 fix). `ScratchFigure` does not store restyle and rerange lines, so their new edges are missing from its graph (a known limit of the scratch figure, not of the check). Closed: LANG-SM-27 (round 4: style edges left the cycle test), LANG-SM-23 (round 3: range edges in the cycle test, also on rerange), LANG-SM-4. Measured at `94f9db0`: on 5,000-object chains built through range, style or value edges, the full-chain cycle is found in 3 to 4 ms and an acyclic change is accepted in at most 2 ms; round 4 only removed edges from the search.
 
 ### L8. Compiler and constant folding
 
-- **Where:** `compile.ts` `Compiler` (lines 205 to 921), `setNanReason`, `guardInf` (lines 74 to 93), `pointwise` (lines 935 to 963), `compileNode`, `compileLine` (lines 968 to 1093).
+- **Where:** `compile.ts` `Compiler` (lines 242 to 1045), `setNanReason`, `guardInf` (lines 74 to 97), `mkPt`, `undefIn`, `hasNonFinite` (lines 100 to 129), `numEq`, `valueEq`, `cmpNum` (lines 146 to 178), `pointwise` (lines 1064 to 1129), `compileNode`, `compileLine` (lines 1134 to 1259); `builtins.ts` `powChecked` (line 572), `hslToRgb`, `mkColor` (lines 237 to 260); `runtime.ts` `formatNumber` (line 123).
 - **States:** one `Compiler` per line, with no line-wide flags. Each node is compiled raw or folded: folded only when `isConstant` holds (no object, local, clock, command, relation, range, `undef`, builtin call, field read or `^` anywhere below) and evaluating it once in a scratch `Env` sets no reason and gives a defined, non-NaN value.
-- **Invariants:** folding gives the same value evaluation would give later and never calls the MathLib, so a later `setMathLib` reaches every result; folding never runs unbounded work; an infinity may be stored only when it follows from an `inf` input through operations that each had an infinite input (ruling Q4); an infinity made from finite inputs is undefined `overflow`, on every path that makes a Number (single Numbers, builtins, list elements, function arithmetic, point and vector coordinates); a division by exactly zero is undefined `division_by_zero` on every path (errors.md sections 1 and 8).
+- **Invariants (the arithmetic rule):** folding gives the same value evaluation would give later and never calls the MathLib, so a later `setMathLib` reaches every result; folding never runs unbounded work. On every path and for every value kind (Number, List, Function, Point, Vector, Color, the coefficients of a relation, a formatted number in a text): a division by exactly zero, or `0 ^ negative`, is undefined `division_by_zero` (errors.md sections 1 and 8); an infinity made from finite inputs is undefined `overflow`; an infinity is a value only when an input was infinite (ruling Q4); a result that is not a number from numeric inputs (`inf - inf`, `0 * inf`) is `not_finite`; an undefined operand gives `input_undefined`; a list, point or vector with any undefined part is undefined as a whole. A comparison treats an infinity as a value: it equals only an infinity of the same sign.
 - **Transitions:**
 
 | From | Event | Guard | To | Side effects |
 |---|---|---|---|---|
 | node | compile | `isConstant`, not a literal, constant or text | try fold | kept raw if the scratch run sets a reason or gives NaN or `undefined` |
-| Number `+ - * / ^` | evaluate | result not finite, both inputs finite | undefined | `overflow` (`guardInf`) |
+| Number `+ - * / ^` | evaluate | result not finite, both inputs finite | undefined | `overflow` (`guardInf`), or `not_finite` for NaN |
 | Number `+ - * / ^` | evaluate | result infinite, an input infinite | value | |
-| builtin | evaluate | result infinite, an argument infinite | value | |
-| builtin | evaluate | result not finite otherwise | undefined | `overflow` (finite inputs) or `not_finite` |
+| Number `/`, `^` | evaluate | divisor 0, or `0 ^ negative` | undefined | `division_by_zero` |
+| builtin returning a Number | evaluate | result infinite, an argument (or a number inside one) infinite | value | |
+| builtin returning a Number | evaluate | result not finite otherwise | undefined | `overflow` (finite inputs) or `not_finite` |
+| builtin returning a Color (`hsl`, `hsv`) | evaluate | hue infinite | defined Color with a NaN channel | no test of non-Number results |
 | line | final Number result | infinite | value | (every finite-input overflow already failed) |
 | line | final Number result | NaN, no reason | undefined | `not_finite` |
-| `list-num` | evaluate | an element infinite from a finite element and a finite scalar | undefined | `overflow` for the whole list |
-| `list-num` | evaluate | an element infinite, the element or the scalar infinite | list | the element stays `inf` |
-| `list-num` `/` | evaluate | scalar is 0 | list of NaN elements | `division_by_zero` set, but the list is returned as a defined value |
-| `pointwise` (function arithmetic) | call | an input NaN | `NaN` | `input_undefined` |
-| `pointwise` | call | result infinite, both inputs finite | `NaN` | `overflow`, also for `f / g` where `g(x) = 0`, `f / 0` and `(f^-1)(0)` |
-| `pointwise` | call | result infinite, an input infinite | value | |
-| `pointwise` | call | result NaN, inputs defined | `NaN` | `not_finite`, also for `0/0` |
-| `num*vec` `vec*num` `vec/num` `vec+vec` `pt+vec` `vec-vec` `pt-vec` `pt-pt` | evaluate | a coordinate infinite from finite inputs | point or vector with an `inf` coordinate | no guard |
+| `list-num` | evaluate | scalar 0 with `/`, an item undefined, or an item overflows from finite inputs | undefined | `division_by_zero`, `input_undefined` or `overflow` for the whole list |
+| `list-num` | evaluate | an item infinite, the item or the scalar infinite | list | the item stays `inf` |
+| list literal | evaluate | an item undefined | undefined | `input_undefined` unless a reason is set |
+| `pointwise` (function arithmetic, `-f`) | call | an input NaN | `NaN` | `input_undefined` |
+| `pointwise` | call | `/` by 0, `0 ^ negative` | `NaN` | `division_by_zero` |
+| `pointwise` | call | negative base, fractional exponent | `NaN` | `out_of_domain` |
+| `pointwise` | call | result infinite, both inputs finite / an input infinite | `NaN` / value | `overflow` / |
+| `pointwise` | call | result NaN, inputs defined | `NaN` | `not_finite` |
+| `num*vec` `vec*num` `vec/num` `vec+vec` `pt+vec` `vec-vec` `pt-vec` `pt-pt`, polar point | evaluate | a coordinate not finite | per coordinate `guardInf`, then `mkPt` | undefined `overflow` or `not_finite`, or the point with an `inf` coordinate when an input was infinite |
+| `vec/num` | evaluate | scalar 0 | undefined | `division_by_zero` |
+| field | evaluate | result not finite, the object holds only finite numbers | undefined | `overflow` or `not_finite`; `Line.point` of a line with no direction is `division_by_zero` |
+| `==` `!=` `<=` `>=` (`numEq`) | evaluate | one side infinite, the other finite or of the other sign | `==` true, `!=` false | `abs(a - b) <= 1e-12 * max(1, abs(a), abs(b))` is `inf <= inf` |
+| relation | evaluate | a coefficient overflows from finite inputs | defined relation, `poly` dropped | `overflow` left on the Env |
+| text part `{n:d}`, `{n:%}` | evaluate | `n` finite, scaled value overflows | text `Infinity°` / `Infinity%` | |
 
-- **Reachable invalid states or transitions:** division by zero in `pointwise` gives `overflow` or `not_finite`, and in `list-num` a defined list (rows `list-num` `/` and the two `pointwise` rows that name it): LANG-SM-25 (open). Point and vector arithmetic stores `(inf, 0)` for `V * 10` with `V = (1e308, 0) - (0, 0)` (last row): LANG-SM-26 (open). Closed: LANG-SM-22 (round 3: `list-num` and `pointwise` follow the overflow rule), LANG-SM-11, LANG-SM-13, LANG-SM-2.
+- **Reachable invalid states or transitions:** comparisons with an infinity (row `numEq`; `5 == big` is true with `big = inf`): LANG-SM-28 (open). Relation coefficients (row "relation"): LANG-SM-29 (open). `hsl` and `hsv` with an infinite hue (row "builtin returning a Color"): LANG-SM-30 (open). The `:d` and `:%` formats (last row): LANG-SM-31 (open). Closed: LANG-SM-25 and LANG-SM-26 (round 4: one rule for `pointwise`, `list-num`, points, vectors, literals, fields and `unit`), LANG-SM-22, LANG-SM-11, LANG-SM-13, LANG-SM-2. Checked and following the rule: derivative ticks, ranges, index, conditionals, `fact`, Number negation, user function calls, and command and `Particles` body arguments (compiled by the same `Compiler`).
 
 ### L9. Env and evaluation
 
-- **Where:** `runtime.ts` `Env`, `createEnv`, `resetEnv`, `fail` (lines 60 to 120); `compile.ts` `evaluate` (line 1107), function values (lines 1005 to 1058), relation values (lines 830 to 862), `pointwise` (lines 935 to 963).
-- **States:** `Env` fields `reason`, `via`, `detail` (first reason wins), `locals` (slot array), `t`/`bt`/`beat`, `read`. One `Env` may evaluate several compiled lines (design 3.15). A `FunctionValue` or `RelationValue` captures the `Env` it was made in; a call saves the slots it writes, writes them, evaluates, and puts the saved values back.
+- **Where:** `runtime.ts` `Env`, `createEnv`, `resetEnv`, `fail` (lines 60 to 120); `compile.ts` `evaluate` (line 1273), function values (lines 1175 to 1227), relation values (lines 947 to 987), `pointwise` (lines 1064 to 1129).
+- **States:** `Env` fields `reason`, `via`, `detail` (first reason wins), `locals` (slot array), `t`/`bt`/`beat`, `read`. One `Env` may evaluate several compiled lines (design 3.15). A `FunctionValue` or `RelationValue` captures the `Env` it was made in; a call saves the slots it writes, writes them, evaluates, and puts the saved values back. A `pointwise` function value keeps its own `reason`, cleared at the start of each call.
 - **Invariants:** an evaluation starts with `reason`, `via`, `detail` cleared; a call into a function or relation value leaves the caller's locals, reason and via as they were; a value is undefined exactly when its reason is set; texts stay within 10,000 characters; an undefined text in `+` gives an undefined text.
 - **Transitions:**
 
@@ -231,12 +241,14 @@ Checked at commit `d2d9d9e` (pass 1), at `3220d23` (round 2, after the fixes for
 | evaluating | domain problem | `reason` unset | reason set | `fail` |
 | evaluating | `fv.call(xs)` | | callee running | save `env.locals[slot]` per parameter, write, evaluate, restore; save and restore `reason`, `via` |
 | evaluating | `fv.call1(x)` / `fv.batch(xs)` | | callee running | save, write, restore the one slot; restore `reason` |
-| evaluating | `rel.residual(x, y)` / `rel.test(x, y)` | | | save, write, restore the `x` and `y` slots |
+| evaluating | `pointwise` call | | callee running | `self.reason` cleared, then set to the reason of this sample |
+| evaluating | `rel.residual(x, y)` / `rel.test(x, y)` | | | save, write, restore the `x` and `y` slots; `reason`, `via`, `detail` not saved, so an overflow while sampling stays on the Env |
+| evaluating | relation line | a coefficient overflows | defined | `reason` = `overflow` left set on a defined result |
 | evaluating | `text + text` | either side undefined | undefined | `input_undefined` |
 | evaluating | `text + text`, interpolation | result over 10,000 characters | undefined | `limit`, checked before the text is built |
 | evaluating | exception | | undefined `not_finite` | slots written by an interrupted call stay written; the next evaluation writes before it reads |
 
-- **Reachable invalid states or transitions:** `L / 0` sets `division_by_zero` on the Env yet is stored as the defined list `[undefined, undefined]`, against "a value is undefined exactly when its reason is set": LANG-SM-25 (open). Closed: LANG-SM-10, LANG-SM-11, LANG-SM-12, LANG-SM-3.
+- **Reachable invalid states or transitions:** `residual` and `test` write `reason` into the Env they were made in (with `c = x^2 + y^2 == 4`, `c.residual(1e200, 0)` leaves `overflow` on it), and a relation whose coefficients overflow is defined while its reason is set: LANG-SM-29 (open). Closed: LANG-SM-25 (round 4: `L / 0` is undefined), LANG-SM-10, LANG-SM-11, LANG-SM-12, LANG-SM-3.
 
 ### L10. Module-level mutable state
 
@@ -254,21 +266,21 @@ Checked at commit `d2d9d9e` (pass 1), at `3220d23` (round 2, after the fixes for
 
 ### L11. ScratchFigure
 
-- **Where:** `figure.ts` `ScratchFigure` (lines 51 to 219), `targetNamesOf` (lines 230 to 234).
-- **States:** entries by name and id, `order`, `nextId`, `clockState`; each entry has `value`, `inputs` (the union of the line's `reads`, `rangeReads` and `styleReads`, so the cycle test of L7 sees every edge), optional `compiled` and its own `env`. `applyAll` keeps a `failed` map of names a failed line would have made.
-- **Invariants:** public methods never throw; a name made by a failed line, braced subscripts included, marks later readers with `blockedBy`; `free` is what the checker said.
+- **Where:** `figure.ts` `ScratchFigure` (lines 51 to 219; `dependentsOf` line 83, inputs stored at line 185), `targetNamesOf` (lines 230 to 234).
+- **States:** entries by name and id, `order`, `nextId`, `clockState`; each entry has `value`, `inputs` (the union of the line's `reads` and `rangeReads`: the edges the cycle test of L7 follows; style reads are not stored), optional `compiled` and its own `env`. `applyAll` keeps a `failed` map of names a failed line would have made.
+- **Invariants:** public methods never throw; a name made by a failed line, braced subscripts included, marks later readers with `blockedBy`; `free` is what the checker said; `inputsOf` holds value and range edges (cycle test) and `dependentsOf` lists every value, range and style reader (dependents test, L7).
 - **Transitions:**
 
 | From | Event | Guard | To | Side effects |
 |---|---|---|---|---|
-| absent | `apply` define/function | checks pass | present | evaluated with a new Env kept on the entry; `inputs` = value, range and style reads |
+| absent | `apply` define/function | checks pass | present | evaluated with a new Env kept on the entry; `inputs` = value and range reads; style reads dropped |
 | any | `apply` restyle/rerange | checks pass | unchanged | returned as applied, nothing stored: the new style or range edges are not in `inputs` |
 | present | `apply` same name | | present | same id; order not moved |
 | any | `setValue`, `setClock` | | recomputed | creation order, each entry's own Env |
 | any | `define(name, type, value, {inputs})` | an input name unknown | present | that input skipped |
 | `applyAll` | line fails | | `failed` += `targetNamesOf(src)` | `P_{1}` stored as `P_1` |
 
-- **Reachable invalid states or transitions:** none open. Restyle and rerange lines are not stored, so a later cycle test on this figure misses their edges; that is a stated limit of the scratch figure (it is not the kernel and keeps no styles), noted in `handoff/language/findings.md`, not a finding. Closed: LANG-SM-9 (stored `free` now true for a command in a range or style), LANG-SM-17, LANG-SM-20.
+- **Reachable invalid states or transitions:** `dependentsOf` is built from `inputs`, so since round 4 it misses objects that read an entry only in a style, and the dependents test of L7 lets a breaking redefinition through: LANG-SM-32 (open). Restyle and rerange lines are not stored, so a later cycle test on this figure misses their edges; that is a stated limit of the scratch figure (it is not the kernel and keeps no styles), noted in `handoff/language/findings.md`, not a finding. Closed: LANG-SM-27 (round 4: style reads out of `inputs`), LANG-SM-9 (stored `free` now true for a command in a range or style), LANG-SM-17, LANG-SM-20.
 
 ### L12. Preview
 
@@ -300,7 +312,7 @@ Checked at commit `d2d9d9e` (pass 1), at `3220d23` (round 2, after the fixes for
 | frame | `typeArgs` | complete args | typed args | one fresh `Checker` per argument |
 | `tokenize(source)` | split into logical lines | | per line | lex and colour; errors collected from every line |
 
-- **Reachable invalid states or transitions:** after a hex colour preceded by U+2009, U+202F, U+2003 or U+2002, `lastLogicalStart` starts a new logical line too early (completion offers the `#` and `@` snippets on the continuation line) and `tokenize` reports `bad_character` for a later `−`: LANG-SM-24 (reopened). With a plain space, tab or U+00A0 both are right. Closed: LANG-SM-5, LANG-SM-21.
+- **Reachable invalid states or transitions:** none open. After a hex colour preceded by any blank in `BLANKS`, `lastLogicalStart` cuts where the splitter does and `tokenize` gives the tokens of the plain-space line. Closed: LANG-SM-24 (round 4), LANG-SM-5, LANG-SM-21.
 
 ### L14. Command and function tables
 
