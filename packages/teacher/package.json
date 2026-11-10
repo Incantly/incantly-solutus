@@ -1,0 +1,10 @@
+{
+  "name": "@incantly/teacher",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "The draw and figure tools, catalogue builder and streaming apply.",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

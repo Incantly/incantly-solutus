@@ -1,0 +1,10 @@
+{
+  "name": "@incantly/view",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Our own 2D and 3D renderer, GPU interface and back-ends, shared GPU context, figure scheduler, pointer and keyboard.",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

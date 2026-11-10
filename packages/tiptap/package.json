@@ -1,0 +1,10 @@
+{
+  "name": "@incantly/tiptap",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "The Tiptap extension: incantlyFigure and incantlyFormula nodes.",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

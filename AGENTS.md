@@ -1,0 +1,45 @@
+# Rules for every agent working in this repository
+
+## Read first
+
+1. `docs/design/formula-language-and-kernel.md`: the core design and its decisions (section 13).
+2. `docs/features/README.md`: the feature areas and the decisions that settle overlaps.
+3. `docs/design/performance.md`: performance rules and budgets that apply to every area.
+4. `docs/design/libraries.md`: the only third-party libraries allowed, with their licences.
+5. `docs/process/pipeline.md`: who does what, and the hand-off files.
+6. Your area's folder in `docs/features/`.
+
+Where a feature folder and the core design disagree, `docs/features/README.md` and section 13 of the core design decide.
+
+## Legal
+
+- GeoGebra's code is EUPL 1.2 and its apps and manual are non-commercial. We learned from it; we copy nothing.
+- Never put GeoGebra code, manual text, assets, or its class, method, file or package names into this repository. Do not read GeoGebra's source while building: build from our docs.
+- Add a dependency only if it is listed in `docs/design/libraries.md`. To add another, stop and report it; do not add it.
+
+## Code
+
+- TypeScript, strict, ES2022 modules. Node 22 or later.
+- Packages under `packages/`, the web app under `apps/studio`. Each package exports from `src/index.ts`.
+- `kernel`, `plot`, `symbolic`, `modes` and `view/src/core` have no DOM, timers, network or `Date`. They must run in Node, a worker and on mobile.
+- Nothing throws across a package boundary. Public functions return `Result<T>` from `packages/kernel/src/contracts/errors.ts`, and errors use the format in `docs/features/errors/design.md`.
+- Shared contracts live in `packages/kernel/src/contracts/`. Other areas may only append entries to their registries.
+- No `eval`, no `new Function`, no running code from figures or files.
+- No `console` in package code.
+- Determinism: no wall clock and no unseeded randomness in the kernel.
+
+## Tests
+
+- Builders write no tests. Testers write all tests, in `packages/<pkg>/test/spec/`, from the docs and the public API only.
+- Benchmarks go in `packages/<pkg>/bench/` and use the targets in `docs/design/performance.md`.
+- A change is done when `npm run lint`, `npm run typecheck` and `npm test` pass.
+
+## Branches
+
+- Each area builds on its own branch, `feat/<area>`, cut from `integration`.
+- A finished area merges into `integration`. `integration` merges into `main` once, with the product owner's go-ahead.
+- Never push to `main`. Never force-push. Commit only files in your area.
+
+## Attribution
+
+- Never credit Claude, Anthropic or any AI assistant anywhere: no co-author trailers, no "generated with" lines in commits, PRs, issues, packages or release notes.
