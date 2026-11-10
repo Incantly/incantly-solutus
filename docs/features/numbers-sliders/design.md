@@ -185,7 +185,7 @@ GeoGebra's timer-stepped animation is replaced by a pure function of `t` and an 
 |---|---|
 | `up` | `frac(p0 + s)`; one sweep takes `period` seconds; at the top it wraps to the bottom |
 | `down` | `1 − frac((1 − p0) + s)` |
-| `bounce` | let `m = (dir > 0 ? p0 : 2 − p0) + s`, `m' = m mod 2`; `f = m' ≤ 1 ? m' : 2 − m'`. `dir` is the direction at the anchor. |
+| `bounce` | let `m = (dir > 0 ? p0 : 2 − p0) + s`, `m' = mod(m, 2)`; `f = m' ≤ 1 ? m' : 2 − m'`. `dir` is the direction at the anchor. |
 | `once` | `f = min(1, p0 + s)` (moves up and stops at the top; `anim` becomes `null` at the instant `t0 + period·(1 − p0)`, which is a function of `t`, so seeking past it shows the stopped state) |
 | `random` | `f = rand(seed·1e6 + floor((t − t0) / period) + 1)`, a new value each period and the anchor value during the first period |
 

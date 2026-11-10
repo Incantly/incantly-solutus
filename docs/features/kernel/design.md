@@ -121,7 +121,7 @@ type Pt = { x: number; y: number };
 
 type Cell =
   | { defined: true; value: Value }
-  | { defined: false; reason: UndefReason; cause?: ObjId };   // cause = first undefined upstream object, if inherited
+  | { defined: false; reason: UndefReason; cause?: ObjId };   // cause = the nearest undefined input (a direct input), if inherited; following cause links reaches the root
 
 type UndefReason =
   | 'parallel' | 'coincident' | 'no_intersection' | 'out_of_domain' | 'division_by_zero'
@@ -129,7 +129,7 @@ type UndefReason =
   | 'no_convergence' | 'timeout' | 'input_undefined' | 'not_set' | 'limit';
 ```
 
-`input_undefined` is the reason on an object whose own maths is fine but one of its inputs is undefined; `cause` points at the first undefined input in rule order. A reader can follow `cause` links to the root. (GeoGebra just says "undefined" everywhere.) Details and the catalogue are in `errors.md`.
+`input_undefined` is the reason on an object whose own maths is fine but one of its inputs is undefined; `cause` names the nearest undefined input: a direct input of this object, the first undefined one in rule order. It is not the root. A reader follows `cause` links, object by object, to reach the root. (GeoGebra just says "undefined" everywhere.) Details and the catalogue are in `errors.md`.
 
 Equality (`sameValue(a, b)`) compares numbers bitwise-with-NaN-equal (so `NaN` equals `NaN`, `-0` differs from `0` only when a rule opts in), and compares composite values structurally. Functions and curves compare by their rule identity plus input cells, not by body, so a function whose parameters did not change counts as unchanged.
 
@@ -656,7 +656,7 @@ Method notes: all lookups are `Map` or typed-array indexed; the `downstream` arr
 1. **In-place redefinition.** No serialise-edit-rebuild; stable ids; cost proportional to the downstream.
 2. **Early cut-off.** Rules run only when an input actually changed value.
 3. **Exact undo.** Small inverse entries, stable ids, per-gesture and per-utterance grouping. No snapshots.
-4. **Undefined with a chain.** `cause` links to the root undefined object.
+4. **Undefined with a chain.** `cause` names the nearest undefined input; following the `cause` links reaches the root undefined object.
 5. **Change report on every line.** Added, removed, moved, redefined, now-undefined, now-defined, and warnings; the teacher can narrate correctly.
 6. **Dry run.** Preview that is guaranteed to match commit.
 7. **Style edges apart from value edges.** Colour and `showIf` never trigger a maths recompute.

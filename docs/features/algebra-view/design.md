@@ -103,7 +103,7 @@ interface AlgebraRow {
   valueText: string | null;          // null when mode hides the value or the object has none
   descriptionText: string;           // "Midpoint of A and B"
   lines: [string, string | null];    // what the panel shows for the active mode: first row, optional second row
-  undefinedInfo: { reason: string; text: string; via?: string } | null;
+  undefinedInfo: { reason: string; text: string; cause?: string } | null;
   slider: SliderSpec | null;
   approx: boolean;                   // value text was rounded or is a platform-approximate result
   version: number;                   // changes when any text changes; the panel diffs on it
@@ -254,7 +254,7 @@ Each row has a disclosure triangle (when it has inputs or dependents). Expanded,
 
 Names are links: clicking selects the object, Alt+click scrolls the list to it. For the dependency sort the same data draws as an indented tree under free objects. Data comes from the kernel's input and downstream lists, no extra scan.
 
-For an undefined row the expansion adds the chain: `undefined because B is undefined because …`, following `via` links to the first cause, with the reason in words.
+For an undefined row the expansion adds the chain: `undefined because B is undefined because …`, following `cause` links to the first cause, with the reason in words.
 
 ### 3.8 Editing rows
 
@@ -310,7 +310,7 @@ Slider interaction in the row:
 ```
 
 - Drag or arrow keys change the value; each step is a single `a = value` update, merged into one undo entry per drag.
-- Value snaps to `min + k × step`. Out-of-range values are clamped with the `slider_clamped` warning.
+- Value snaps to `min + k × step`. Out-of-range values are clamped with the `clamped` notice.
 - **Play** animates the slider in explore mode: the value moves at a speed set by the row's `speed` (default 1 unit of the range per 8 s), ping-ponging. It is a viewer-only effect, not recorded as a figure change and not part of the film's time (the film uses `t`). Stopping leaves the value at its current position; the figure records the final value as a normal update. A film that needs motion uses `t`.
 - The range edit is double-click on the min or max label, editing the number in place; it issues `a in lo..hi step s`.
 - Sliders for angle-tagged numbers show degrees in labels and use 1° steps.
@@ -423,7 +423,7 @@ All logic is in the language area. The bar's responsibilities: pass the text, cu
 The text form used by tools:
 
 ```ts
-interface Summary { name: string; type: TypeName; def: string; value: string | null; text: string; undef?: { reason: string; via?: string } }
+interface Summary { name: string; type: TypeName; def: string; value: string | null; text: string; undef?: { reason: string; cause?: string } }
 function summarize(obj: ObjectView, opts?: { maxChars?: number; format?: ValueFormat }): Summary;
 ```
 

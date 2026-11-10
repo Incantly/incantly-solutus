@@ -14,7 +14,7 @@ No GeoGebra code, text or names are used here. Command names that are ordinary m
 - Keep a worked solution as a list of lines. Each line uses the one above, so editing line 2 updates lines 3 to 6.
 - See exact answers (`sqrt(2)/2`, `3/7`, `pi/6`) and, on request, decimal answers to as many digits as they ask for.
 - See the answer on the graph: an expression in `x` plots as a curve, an equation in `x` and `y` as an implicit curve, the solutions of a system as points.
-- Use letters as unknowns: solve `a x^2 + b x + c == 0` for `x` and get the quadratic formula, with the special cases listed.
+- Use letters as unknowns: solve `a*x^2 + b*x + c == 0` for `x` and get the quadratic formula, with the special cases listed.
 
 ### For the teacher (the live AI voice)
 
@@ -98,8 +98,8 @@ Shape rules for `Solve`, which a model needs to know:
 
 - One unknown, equation: a list of `v == value` entries, one per solution, in ascending real order (complex: by real part, then imaginary part). No solutions: the empty list `[]`. Every value works: `[v in R]`.
 - One unknown, inequality: a list of pieces, joined by "or". A piece is `v < a`, `v >= a`, or an interval `a < v and v < b`, printed as `a < v < b`. The empty list means no solutions.
-- Parameters stay symbolic. `Solve(a x == b, x)` returns a piecewise answer: `[x == b/a]` when `a != 0`; if `a == 0` the cases are named in the result's `cases` (section 5.9).
-- Trig, exp and log families use a whole-number parameter: `Solve(sin(x) == 1/2, x)` returns `[x == pi/6 + 2 pi k1, x == 5 pi/6 + 2 pi k1]`, and `k1` is an integer Symbol created for the result. With `from` and `to` the list is concrete: the members inside the interval.
+- Parameters stay symbolic. `Solve(a*x == b, x)` returns a piecewise answer: `[x == b/a]` when `a != 0`; if `a == 0` the cases are named in the result's `cases` (section 5.9).
+- Trig, exp and log families use a whole-number parameter: `Solve(sin(x) == 1/2, x)` returns `[x == pi/6 + 2 * pi * k1, x == 5 pi/6 + 2 * pi * k1]`, and `k1` is an integer Symbol created for the result. With `from` and `to` the list is concrete: the members inside the interval.
 - Systems: one inner list per solution, one `v == value` per unknown. Linear systems with infinitely many solutions return parametric forms with one free unknown on the right.
 
 ### 2.4 Substitute and numeric
@@ -301,7 +301,7 @@ Entry rules for a Number object that appears in a symbolic argument:
 
 - **Free, defined by a literal or a slider**: its value is read as the shortest decimal that round-trips, and if that has at most 15 significant digits it enters as an exact rational (`0.3` is `3/10`; a slider at `0.30000000000000004` is not exactly representable and enters as `float`). A slider step grid is exact by construction (`min + k step` as rationals), so slider values enter exact.
 - **Dependent** (a formula, a command result): enters as `float`, so the result is flagged inexact and printed with `≈`.
-- **Left as a reference**: a command can ask for `ref` entry (`Solve(a x^2 + b x + c == 0, x, keep = [a, b, c])`) so the number stays a named parameter and the answer is a formula in `a, b, c`; the kernel substitutes current values for display. The reference makes the result re-evaluate cheaply when the number moves, with no new symbolic work. Default is not to keep, because most lessons want the exact number for the current value.
+- **Left as a reference**: a command can ask for `ref` entry (`Solve(a*x^2 + b*x + c == 0, x, keep = [a, b, c])`) so the number stays a named parameter and the answer is a formula in `a, b, c`; the kernel substitutes current values for display. The reference makes the result re-evaluate cheaply when the number moves, with no new symbolic work. Default is not to keep, because most lessons want the exact number for the current value.
 
 `Numeric(e, digits)` evaluates with `digits + 10` guard digits using decimal arithmetic (section 6) and rounds half-even at the end. Comparisons that must decide (`sign`, equality) use exact arithmetic where the operands are exact, and interval arithmetic with outward rounding otherwise; an undecidable comparison on inexact numbers returns `unknown` and the rule does not fire.
 
@@ -412,7 +412,7 @@ Input: a `Cond` or list of Conds, the unknowns, the domain (real by default), an
    - A substitution that turns the equation into a polynomial in a sub-expression (`e^(2x) - 3e^x + 2`).
    - Otherwise: undefined `unsupported`, with `detail` naming what the engine could not do ("both a polynomial and an exponential term contain x").
 4. Apply the domain filter (step 2); apply `from`/`to` (concrete list for periodic families, intersection for the rest); sort.
-5. If parameters (symbols other than the unknown) caused a branch (`a x == b`), return the generic answer and list the special cases in the result's `cases`: `[{ when: a == 0 and b == 0, all }, { when: a == 0 and b != 0, none }]`.
+5. If parameters (symbols other than the unknown) caused a branch (`a*x == b`), return the generic answer and list the special cases in the result's `cases`: `[{ when: a == 0 and b == 0, all }, { when: a == 0 and b != 0, none }]`.
 
 **Inequalities** follow the same pipeline up to the roots, then build a sign chart: the real roots and poles (exact, ordered by isolating intervals and exact comparison) cut the line into pieces; the sign of each piece comes from evaluating at an exact rational test point; the result is the union of pieces where the sign matches, with adjacent pieces merged and endpoints included or not according to the relation. Absolute values, square roots and rational inequalities are reduced to this form with case splits.
 
@@ -456,7 +456,7 @@ function signOf(n: SymNode, a: Assumptions): Sign;       // propagates through s
 function isInteger(n: SymNode, a: Assumptions): boolean | 'unknown';
 ```
 
-`signOf` rules: a number has its sign; a product multiplies signs; a sum of `nonneg` is `nonneg` (strictly positive if one term is positive); `exp` is positive; `abs` and even powers are `nonneg`; `sqrt` of `nonneg` is `nonneg`; a fact `a > 0` sets `a` positive; a fact `a > b` and `b >= 0` gives `a` positive; unknown otherwise. A rule that needs a sign and gets `unknown` does not fire; the result stays correct. For cases that depend on the sign (`Solve(a x == b, x)`) the engine returns the case split.
+`signOf` rules: a number has its sign; a product multiplies signs; a sum of `nonneg` is `nonneg` (strictly positive if one term is positive); `exp` is positive; `abs` and even powers are `nonneg`; `sqrt` of `nonneg` is `nonneg`; a fact `a > 0` sets `a` positive; a fact `a > b` and `b >= 0` gives `a` positive; unknown otherwise. A rule that needs a sign and gets `unknown` does not fire; the result stays correct. For cases that depend on the sign (`Solve(a*x == b, x)`) the engine returns the case split.
 
 Why this is better than a global switch: the same line always gives the same answer, results can be cached, and the teacher can see in the line which assumptions held.
 
@@ -549,7 +549,7 @@ Recommendation: write the engine ourselves; use decimal.js for high-precision ou
 8. **No twin objects.** A CAS row is an ordinary object; the plot switch is a view adapter.
 9. **Steps from day one.** The rule engine already names every rewrite; showing steps is a flag.
 10. **Cooperative budgets.** A slow call stops at a defined step count with a defined reason, on every platform, and never needs a thread kill.
-11. **Parametric answers with cases.** `Solve(a x == b, x)` names the special cases instead of silently assuming `a != 0`.
+11. **Parametric answers with cases.** `Solve(a*x == b, x)` names the special cases instead of silently assuming `a != 0`.
 12. **Small.** About 250 KB gzipped versus a multi-megabyte engine, loaded only when needed.
 
 ---
@@ -597,7 +597,7 @@ Recommendation: write the engine ourselves; use decimal.js for high-precision ou
 
 ## 11. Phase 2 detail: Steps
 
-`Steps(cmd)` where `cmd` is a symbolic command call returns `List<Text>`; each text is one line such as "Move 6 to the left: x^2 - 5x + 6 = 0", "Factor the left side: (x - 2)(x - 3) = 0", "A product is zero when a factor is zero". Each line is built from a `Step` (rule id, before, after) by a phrase table keyed by rule id, so phrases can be reviewed and localised. Not every rewrite is shown: the derivation is filtered to "teaching steps" (a flag on rules), and the number of lines is capped at 12 (the rest is merged into "simplify"). Steps only exist for the rules that have phrases; a command whose derivation has none returns a single line "(no steps available)" and the notice `no_steps`.
+`Steps(cmd)` where `cmd` is a symbolic command call returns `List<Text>`; each text is one line such as "Move 6 to the left: x^2 - 5x + 6 = 0", "Factor the left side: (x - 2) * (x - 3) = 0", "A product is zero when a factor is zero". Each line is built from a `Step` (rule id, before, after) by a phrase table keyed by rule id, so phrases can be reviewed and localised. Not every rewrite is shown: the derivation is filtered to "teaching steps" (a flag on rules), and the number of lines is capped at 12 (the rest is merged into "simplify"). Steps only exist for the rules that have phrases; a command whose derivation has none returns a single line "(no steps available)" and the notice `no_steps`.
 
 ---
 

@@ -58,7 +58,7 @@ The kernel defines the reason codes. Rules return one; the engine adds `input_un
 
 A rule must return a specific reason, never a generic one. A test iterates every rule's declared `reasons` list and checks each can be reached by an example.
 
-Shape of the cell: `{ defined: false, reason, cause?: ObjId }`. In the change report: `{ name, reason, cause?: name }`. In the `figure` tool: `"undefined": { "reason": "parallel" }` or `{ "reason": "input_undefined", "cause": "I", "root": "parallel" }` where `root` is the reason at the end of the chain.
+Shape of the cell: `{ defined: false, reason, cause?: ObjId }`. In the change report: `{ name, reason, cause?: name }`. In the `figure` tool: `"undefined": { "reason": "parallel" }` or `{ "reason": "input_undefined", "cause": "I", "root": "parallel" }` where `cause` is the nearest undefined input and `root` is the reason at the end of the `cause` chain.
 
 GeoGebra: a failed output is just "undefined"; the user must work backwards to see why.
 

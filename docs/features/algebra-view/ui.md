@@ -153,7 +153,7 @@ Dragging a free point on the canvas updates the row text live (throttled to the 
 
 1. The learner types `a = 3` and Enter: row appears as `a = 3` with a small slider button on its right.
 2. Clicking the button changes it to the slider with the range from `niceRange(3)` = 0..10, step 0.1, and issues `a in 0..10 step 0.1`.
-3. The learner types `g(x) = k x` without `k`: the strip shows an `unknown_name` error with a chip `Create slider k from −5 to 5`. Enter on the chip, or a click, creates `k` and then `g` in one undo step.
+3. The learner types `g(x) = k * x` without `k`: the strip shows an `unknown_name` error with a chip `Create slider k from −5 to 5`. Enter on the chip, or a click, creates `k` and then `g` in one undo step.
 
 ## 7. Dependency expansion
 

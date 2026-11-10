@@ -19,7 +19,7 @@ c(s) = (2 cos(s), sin(s)) in 0..tau
 heart(s) = (16 sin(s)^3, 13 cos(s) - 5 cos(2 s) - 2 cos(3 s) - cos(4 s)) in 0..tau
 rose = Polar(sin(3 θ), θ, 0, tau)
 e(x, y) = x^2 / 4 + y^2 == 1
-w(x, y) = sin(x) + sin(y) == sin(x y)
+w(x, y) = sin(x) + sin(y) == sin(x*y)
 k = Contour(g, 0.5)
 disc(x, y) = x^2 + y^2 <= 4
 band(x, y) = 1 < x^2 + y^2 < 4
@@ -261,7 +261,7 @@ env = Envelope(ladder, Pm)
 
 ```text
 k = 3 in 1..9 step 1
-rose = Polar(sin(k θ), θ, 0, tau)
+rose = Polar(sin(k * θ), θ, 0, tau)
 ```
 
 > "Change k and count the petals."

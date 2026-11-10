@@ -35,8 +35,21 @@ export type CoreErrorKind =
  * Area kinds, append-only. Each area adds its kinds under its own comment line, one per line,
  * for example `mixed_dimension: true;` under `// space-3d`. Never remove or rename an entry.
  */
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type
-export interface AreaErrorKinds {}
+export interface AreaErrorKinds {
+  // language
+  bad_escape: true;
+  bad_format: true;
+  missing_operator: true;
+  ambiguous_implicit: true;
+  chained_comparison: true;
+  assign_in_expr: true;
+  unknown_function: true;
+  free_variable: true;
+  breaks_dependents: true;
+  empty_list_type: true;
+  duplicate_arg: true;
+  not_a_binder: true;
+}
 
 export type ErrorKind = CoreErrorKind | Extract<keyof AreaErrorKinds, string>;
 
@@ -82,8 +95,11 @@ export interface ErrorObject {
 /** Notice kinds shared by every area. Area notice kinds are added to `AreaNoticeKinds`, append-only. */
 export type CoreNoticeKind = 'became_undefined' | 'dependents_removed' | 'property_detached' | 'clamped' | 'shadowed' | 'precision_loss';
 
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type
-export interface AreaNoticeKinds {}
+export interface AreaNoticeKinds {
+  // language
+  index_literal: true;
+  unused_binder: true;
+}
 
 export type NoticeKind = CoreNoticeKind | Extract<keyof AreaNoticeKinds, string>;
 

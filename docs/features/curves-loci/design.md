@@ -10,7 +10,7 @@ Not here: curve fitting by regression (statistics). The algebraic fit used by `L
 
 ### For a learner
 
-- Draw any curve you can write: a circle by its angle, a heart by its parametric formula, a rose by its polar formula, an ellipse by its equation, a bumpy equation like `sin(x) + sin(y) = sin(x y)`.
+- Draw any curve you can write: a circle by its angle, a heart by its parametric formula, a rose by its polar formula, an ellipse by its equation, a bumpy equation like `sin(x) + sin(y) == sin(x*y)`.
 - Shade any region you can write as inequalities: a half-plane, a disc, an intersection of conditions, a band between curves; see where the solution of a system of inequalities lives.
 - Explore how paths come from motion: pin a point on a circle, attach a construction to it, and ask for the path some other point traces (a locus). See the family of lines that a sliding ladder or a rolling wheel makes, and the curve they hug (an envelope).
 - Ask for the algebraic equation of a locus.
@@ -210,7 +210,7 @@ Goal: a faithful drawing of `F(x, y) = level` in the view, including small close
 6. **Linking.** Each crossing has an edge key. Segments that share a key are chained into polylines; closed chains are flagged closed; a chain that ends at the view border ends there. Chain output order is deterministic (sorted by first key).
 7. **Output.** Paths in pixel coordinates, markers, and a `complete` flag. The Newton-corrected crossings make a smooth polyline, no stair-stepping.
 
-Targets: unit circle, 1,000 x 700 view: 2 ms; a lemniscate: 3 ms; `sin(x) + sin(y) = sin(x y)` with many components: 15 ms; draft quality is 4x cheaper. Evaluations counted: about `10 × (curve length in px / cell size)` Interval evaluations.
+Targets: unit circle, 1,000 x 700 view: 2 ms; a lemniscate: 3 ms; `sin(x) + sin(y) == sin(x*y)` with many components: 15 ms; draft quality is 4x cheaper. Evaluations counted: about `10 × (curve length in px / cell size)` Interval evaluations.
 
 Determinism: the same `(F, level, view, pixel size, quality)` gives the same paths. Quality is chosen by the view from interaction state, never from a clock.
 

@@ -32,7 +32,7 @@ A = (1, 2)
 B = (4, 6)
 s = Segment(A, B)
 m = (B.y - A.y) / (B.x - A.x)
-f(x) = m (x - A.x) + A.y
+f(x) = m * (x - A.x) + A.y
 a = 3 in 0..10 step 0.5
 c: x^2 + y^2 = 4
 ```
@@ -66,13 +66,13 @@ Every entry point (draw tool, input bar, script load, preview) runs the same fiv
 
 | Step | Input | Output | Failure kinds |
 |---|---|---|---|
-| 1 Lex | text | tokens with source spans | `bad_char`, `bad_number`, `unterminated_string`, `bad_escape`, `too_long` |
-| 2 Parse | tokens | `Line` tree | `syntax`, `unbalanced`, `unnamed_object`, `missing_operator`, `ambiguous_implicit`, `chained_comparison`, `assign_in_expr`, `too_deep` |
+| 1 Lex | text | tokens with source spans | `bad_character`, `bad_number`, `unterminated_string`, `bad_escape`, `limit` (line length, token count) |
+| 2 Parse | tokens | `Line` tree | `syntax`, `unbalanced`, `unnamed_object`, `missing_operator`, `ambiguous_implicit`, `chained_comparison`, `assign_in_expr`, `limit` (nesting depth) |
 | 3 Resolve | tree, figure | tree with references, local scopes | `unknown_name`, `unknown_command`, `unknown_function`, `not_callable`, `free_variable`, `reserved_name`, `bad_name`, `duplicate_param` |
 | 4 Check | resolved tree | typed tree, result type, warnings | `type_mismatch`, `no_matching_form`, `type_change`, `cycle`, `breaks_dependents`, `bad_range`, `empty_list_type` |
 | 5 Build and compute | typed tree | rule, first value | none (runtime problems become undefined values) |
 
-Each step is a pure function of its input and the figure. Steps 1 and 2 never read the figure, so they can run in a worker and be reused for syntax highlighting.
+Each step is a pure function of its input and the figure. Steps 1 and 2 need no figure, so they can run in a worker and be reused for syntax highlighting. Two optional hooks look at the figure but only to name or colour things: `parseLine` takes callbacks (`isTaken`, `isObjectCommand`) that are used to name unnamed results, and `tokenize` takes the figure to colour names. Neither changes what a line means.
 
 Error recovery: the parser stops at the first syntax error in a line (a line is short; a second error is rarely independent). The resolver and checker, however, collect up to 8 errors in one line before returning, because name and type mistakes are independent. `draw` returns the first error as the main object and the rest in `more`.
 
@@ -97,7 +97,7 @@ The lexer first rewrites typographic variants, keeping an array `map[i]` from ea
 | NBSP, tabs | space | |
 | `\r\n` | `\n` | |
 
-Everything is NFC-normalised first. Names accept only Latin letters, Greek letters, digits and `_` (see 3.7): anything else outside strings and comments is `bad_char`. This blocks look-alike letters from other scripts.
+Everything is NFC-normalised first. Names accept only Latin letters, Greek letters, digits and `_` (see 3.7): anything else outside strings and comments is `bad_character`. This blocks look-alike letters from other scripts.
 
 The input bar also accepts `<>` as `!=`, `=>` as a logic implication, and `**` as `^`. The kernel does not: the draw tool teaches one spelling per thing.
 
@@ -112,9 +112,11 @@ The input bar also accepts `<>` as `!=`, `=>` as a logic implication, and `**` a
 | Operator | `+ - * / ^ ! ' ° == != < <= > >= = ( ) [ ] , ; . .. :` and the words `and or not xor if in step with` | `:` only inside format specs |
 | Comment | `#` to end of line, outside strings | Allowed after a line too |
 | Directive start | `@` first on the line | |
-| Newline | `\n` | A line ends here; an open bracket does not continue it (a model must send complete lines) |
+| Newline | `\n` | A line ends here, unless a bracket is still open: then the next line continues it (README decision 17) |
 
-Maximum line length 2,000 characters. Maximum token count 800. Maximum nesting depth 64 (brackets and calls). These limits are `limit`-kind errors and keep the parser bounded for streamed input.
+Maximum line length 2,000 characters. Maximum token count 800. Maximum nesting depth 64 (brackets and calls): depth 64 is allowed, 65 or more is an error. These limits are `limit`-kind errors, with the specific limit in `params`, and keep the parser bounded for streamed input.
+
+An exponent needs digits after `e`, `e+` or `e-`; otherwise the `e` is the constant. So `n = 1e+` is a `syntax` error (the `+` has no operand), not `bad_number`. A line that starts with a number directly followed by a name and then a top-level `=` (`1a = 1`) is `bad_name` ("A name cannot start with a digit") with the fix `a1 = 1`.
 
 ### 3.4 Full grammar
 
@@ -177,7 +179,7 @@ From tightest to loosest. Same row means same precedence.
 
 | Level | Operators | Associativity | Notes |
 |---|---|---|---|
-| 1 | call `f(…)`, index `L[i]`, field `.x`, factorial `!`, degree `°`, tick-call `f'(x)` | left to right | `n!` on a non-integer is undefined `out_of_domain` |
+| 1 | call `f(…)`, index `L[i]`, field `.x`, factorial `!`, degree `°`, tick-call `f'(x)` | left to right | `n!` on a non-integer is undefined `not_integer`; on a negative, `out_of_domain` |
 | 2 | `^` | right | `a^b^c` is `a^(b^c)`. A sign is allowed right after `^`: `2^-1` |
 | 3 | implicit multiplication (number literal then operand) | left | `2x^2` is `2*(x^2)`; `2sin(x)^2` is `2*(sin(x)^2)` |
 | 4 | unary `-`, `+` | right | below `^`: `-2^2` is `-4` |
@@ -194,9 +196,10 @@ Rules:
 - **Degree.** `30°` is postfix: it multiplies its operand by the constant `deg` (= pi/180). `(a + b)°` works. `30 deg` is the same through implicit multiplication. Angles are always radians internally; the degree sign is only a way to write them.
 - **Chains.** A chain may use only `<` and `<=`, or only `>` and `>=`. Mixed directions (`1 < x > 0`) and chained equality (`a == b == c`) are `chained_comparison`. `!=` is never chained. A chain of `n` operators compiles to `n` comparisons joined by `and`, with each middle operand evaluated once.
 - **Unary minus vs power.** `-x^2` is `-(x^2)`. `2^-x` is `2^(-x)`. `-x!` is `-(x!)`.
-- **Division and implicit multiplication.** `1/2x` is not read at all: it is the error `ambiguous_implicit` with the two readings in `fix`. Writing `1/(2x)` or `(1/2)x` is fine. Reason: GeoGebra and calculators disagree here, so the safe answer is to ask.
-- **Numeric equality.** `==` and `!=` on Numbers compare with a relative tolerance: `|a - b| <= 1e-12 * max(1, |a|, |b|)`. Points and vectors use the same tolerance per coordinate. Text and Bool compare exactly. Comparing different types is `type_mismatch`.
-- **Logic on undefined.** `undefined and false` is `false`; `undefined or true` is `true`; every other operation involving undefined is undefined. This keeps `if` conditions usable while a figure is partly undefined.
+- **Division and implicit multiplication.** `1/2x` is not read at all: it is the error `ambiguous_implicit` with the two readings in `fix`. Writing `1/(2x)` or `(1/2) * x` is fine. `(1/2)x` is not: a `)` followed by a name is `missing_operator` (3.6), and its quick fix is `(1/2) * x`. Reason: GeoGebra and calculators disagree here, so the safe answer is to ask.
+- **Numeric equality.** For finite numbers, `==` and `!=` on Numbers compare with a relative tolerance: `|a - b| <= 1e-12 * max(1, |a|, |b|)`. Points and vectors use the same tolerance per coordinate. Text and Bool compare exactly. Comparing different types is `type_mismatch`.
+- **Comparisons with an infinity.** The tolerance applies only when both sides are finite. If either side is `inf` or `-inf`, the comparison is exact: `5 == inf` and `-inf == inf` are `false`, `inf == inf` is `true`, `5 != inf` is `true`. The ordering operators follow from the infinity as a value: `5 < inf` is `true`, `5 >= inf` and `5 <= -inf` are `false`. Point and vector coordinates are compared the same way.
+- **Logic on undefined.** The literal `undefined` is a Number (3.10 rule 1), so `undefined and false` is `type_mismatch`. A Bool becomes undefined when an input is undefined: with `(1/0 > 1)` undefined, `(1/0 > 1) and false` is `false`, `(1/0 > 1) or true` is `true`, and every other operation involving undefined is undefined. This keeps `if` conditions usable while a figure is partly undefined.
 
 ### 3.6 Implicit multiplication, exactly
 
@@ -210,7 +213,8 @@ Implicit multiplication is inserted when the previous token is a **number litera
 It is not inserted:
 
 - between two names (`a b`, `ab` is one name): `missing_operator`, with `fix` inserting `*`;
-- between `)` and `(` or a name (`(a)(b)`, `(a) b`): `missing_operator`;
+- between a name and `(`: a name followed by `(` is a call, never a product. If the name is not callable (`m (x - A.x)` with `m` a Number), the error is `not_callable` and the `fix` is `m * (x - A.x)`;
+- between `)` and `(` or a name (`(a)(b)`, `(a) b`, `(1/2)x`): `missing_operator`, with `fix` inserting `*` (`(1/2) * x`);
 - between a number and a number (`2 3`): `missing_operator`;
 - between a number and a command call (`2 Distance(A, B)`): allowed, because it reads naturally. This is the only exception to rule 1, since commands return objects, and the product is Number times Number or Number times Vector;
 - after `/` without parentheses (see 3.5): `ambiguous_implicit`.
@@ -268,29 +272,30 @@ Core section 3 gave a table. It is extended here. "Free" variables in this table
 | Relation with free `x` or `y` (`==`, `<`, `<=`, `>`, `>=`) | By shape, see 3.9 |
 | `if(c, a, b)` | Type of `a` and `b` (they must agree) |
 | `f(x)` call or a field of a point | Number, as typed by the callee |
-| `f + g`, `2 f`, `f(g(x))` with `f`, `g` functions | Function |
+| `f + g`, `2 f`, and `h(x) = f(g(x))` with `f`, `g` functions | Function |
 | A bare function name (`h = f`) | Function (an alias is a new dependent object with its own style) |
 
-A free variable in any other place is `free_variable`: `a = x + 1` fails with a hint to write `a(x) = x + 1` or to use an existing number.
+A free variable in any other place is `free_variable`: `a = x + 1` fails with a hint to write `a(x) = x + 1` or to use an existing number. The same holds for a composition: `h = f(g(x))` has a free `x`, so it is `free_variable` with the fix `h(x) = f(g(x))`.
 
 ### 3.9 Equations versus assignments
 
 The core design already reserves `=` for defining and `==` for equality. This section settles the part that GeoGebra overloads.
 
-1. `=` never builds an equation. `3x + 4y = 12` is `syntax` with `expected: ["=="]` and a `fix`.
+1. `=` never builds an equation. `3x + 4y = 12` is `assign_in_expr` at the `=` (col 9, endCol 10), with `expected: ["=="]` and a `fix` that writes `==` and wraps it in the line kind it needs, for example `l = Line(3x + 4y == 12)`.
 2. A relation (`==`, `<` …) whose operands mention a free `x` or `y` becomes an implicit object. A relation with no free variables is a Bool.
 3. The relation is moved to the form `p(x, y) ⋈ 0` and classified, by symbolic expansion to a polynomial when possible (degree at most 2 in v1; otherwise treated as a general implicit curve):
 
 | After expansion | Object |
 |---|---|
-| `a x + b y == c` with `(a, b) ≠ 0` | Line |
+| `a*x + b*y == c` with `(a, b) ≠ 0` | Line |
 | `x == c` or `y == c` | Line (vertical or horizontal) |
-| `(x - h)^2 + (y - k)^2 == r2` with `r2 > 0` | Circle |
+| `(x - h)^2 + (y - k)^2 == r2` where `r2` works out to a number greater than 0 | Circle |
 | Other degree-2 equation | Curve (implicit), tagged `conic` for drawing and for `Tangent` |
 | Anything else with `==` | Curve (implicit) |
 | `<` `<=` `>` `>=` | Region (half-plane for linear, otherwise implicit region) |
 | `y == f-of-x` where x only: `y == x^2` | Curve (implicit), and a hint in the AV that `f(x) = x^2` is the function form |
 
+**A circle needs a radius known at check time.** The type of an object cannot change when a slider moves, so a value test such as `r2 > 0` cannot be made while `r2` depends on an object. The checker expands the relation and cancels the centre terms; the result is a Circle only when `r2` is then a plain number. `(x - 2)^2 + (y + 1)^2 == 9` is a Circle, and so is `(x - a)^2 + (y - b)^2 == 16` for any objects `a` and `b`, because the centre cancels. `x^2 + y^2 == a^2` with a slider `a` has an `r2` that depends on `a`, so it is a conic `Curve`. To get a circle that follows a slider, write `Circle(O, a)`.
 4. `y == x^2` is allowed but is not a Function. Teachers who want a function write `f(x) = x^2`. The reason: a Function value can be called, integrated and differentiated; an implicit curve cannot.
 5. The type `Relation` exists inside command arguments only. `Line(3x + 4y == 12)` and `Curve(x^2 - y == 0)` take a `Relation` and build the object.
 6. Redefining a Line as another Line is fine; redefining it as a Circle is `type_change`.
@@ -299,11 +304,13 @@ The core design already reserves `=` for defining and `==` for equality. This se
 
 Types are the ones in core section 4, plus `Relation` (arguments only) and three refinements:
 
-- `Function` is `Function<R>` with `R` in `Number` or `Point`, and a parameter count `n` (1 to 4). `f(x) = (cos(x), sin(x))` is a `Function<Point>` of one parameter. `Curve` accepts one.
+- `Function` is `Function<R>` with `R` in `Number` or `Point`, and a parameter count `n` (1 to 4). `f(x) = (cos(x), sin(x))` is a `Function<Point>` of one parameter. `Curve` accepts one. `Function2` is a short name for `Function<Number>(2)`: a user function of exactly two parameters, such as `g(x, y) = x * y`, fits it, and a one-parameter function does not.
 - `Number` has an optional **unit tag** (`'angle'` or none) carried with the object, never with the type. `Angle` returns a tagged Number. Arithmetic keeps the tag only when it is preserved obviously (`angle + angle`, `angle * number`, `-angle`, `angle / number`); every other result is untagged. The tag only drives display and slider range.
 - `List<T>` where `T` is any non-list type. Nested lists are `List<List<T>>` (a matrix) with equal row lengths checked at build time when sizes are literals.
 
-**Inference** is bottom-up with one top-down hint:
+**Type values.** A type in a result is a `Ty` object, not a bare `TypeName` string: `{ k: 'Number' }`, `{ k: 'List', of: … }`, `{ k: 'Function', ret: 'Number', arity: 2 }`. `tyStr(ty)` gives the text form used in messages and summaries, for example `Function<Number>(2)`.
+
+**Inference** is bottom-up with one top-down hint. The checker types below (`CheckCtx`, `infer`, and `matchForms` in 3.11) are internal and not exported; the public surface is `parseLine`, `parseProgram`, `checkLine`, `analyseLine`, `compileLine`, `preview`, `signatureHelp`, `complete`, `tokenize`, `suggestName` and the table builders (`createCommandTable`, `checkTable`).
 
 ```ts
 interface CheckCtx {
@@ -345,9 +352,9 @@ Rules, in order:
 | Bool | `and or xor` | Bool | Bool |
 | any T in {Number, Bool, Text, Point, Vector} | `== !=` | the same T | Bool |
 | Number | `< <= > >=` | Number | Bool |
-| List<Number> | `+ - * /` | Number | List<Number> (element-wise; scalar side only) |
+| List<Number> | `+ - * /` | Number | List<Number> (element-wise; the list is on the left) |
 
-No other pairs. `Point * Number`, `Point + Point` and `Vector * Vector` are `type_mismatch`, with a hint: `Vector(A)` makes a position vector from a point, `dot(u, v)` and `cross(u, v)` exist. This keeps core section 4's "nothing converts silently" and adds only `Point - Point = Vector`, `Vector(Point)`, element-wise list arithmetic with a scalar, and function arithmetic.
+No other pairs. The list row has the list on the left only: `L * 2` works, and `2 * L` is `type_mismatch` ("Number * works with: Number, Vector, Function"); write `L * 2`. `Point * Number`, `Point + Point` and `Vector * Vector` are `type_mismatch`, with a hint: `Vector(A)` makes a position vector from a point, `dot(u, v)` and `cross(u, v)` exist. This keeps core section 4's "nothing converts silently" and adds only `Point - Point = Vector`, `Vector(Point)`, element-wise list arithmetic with a scalar, and function arithmetic.
 
 Function arithmetic builds a new function object `(f + g)(x) = f(x) + g(x)` as a dependent rule. `2f` and `f + 1` are also allowed in definitions (`h = 2 f + 1`). They are always functions, so a Number expression can never hide a function value.
 
@@ -360,13 +367,11 @@ type ParamKind = 'value' | 'binder' | 'body';
 
 interface ParamSpec {
   readonly name: string;
-  readonly type: TypeSet;            // a single TypeName or an alias such as Shape, Path, Curvelike
+  readonly type: string;             // text: 'Number', 'List<Point>', 'Number|Point', 'Function<Number>', 'Relation', 'Any', or an alias such as 'Shape', 'Path', 'Curvelike'
   readonly optional?: boolean;
   readonly kind?: ParamKind;         // default 'value'
   readonly default?: ConstValue;     // used when optional and omitted
 }
-
-type TypeSet = TypeName | { alias: 'Shape' | 'Path' | 'Curvelike' | 'Scalar'; members: readonly TypeName[] };
 
 interface ArgProblem {
   argIndex: number;                  // -1 when an argument is missing; args.length when extra
@@ -383,6 +388,8 @@ type MatchResult =
 function matchForms(spec: CommandSpec, args: ParsedArg[], cx: CheckCtx): MatchResult;
 ```
 
+`matchForms` is internal: callers see its outcome as the typed `command` node in a `CheckedLine`, or as a `no_matching_form` error.
+
 Algorithm:
 
 1. **Split arguments.** Positional first, then named. A named argument after a positional one that is already bound to the same parameter is `duplicate_arg`. A named argument whose name is not a parameter in any form is reported with the nearest parameter names.
@@ -390,7 +397,13 @@ Algorithm:
 3. **Filter forms by arity.** Required count to total count, counting named arguments.
 4. **Test each remaining form.** For each parameter in order, the argument type must be a member of `ParamSpec.type`. Binder parameters introduce a local name of type `Number` (or `Point` for point binders) in a child scope. Body arguments are then inferred in that scope with `expected` set to the parameter type.
 5. **Select.** Collect the passing forms. If exactly one passes, use it. If more than one passes, choose the form whose parameter types are most specific (a concrete type beats an alias). The table builder proves at load time that this always leaves exactly one winner for every combination of concrete argument types (the "no ambiguous overloads" test, run in CI); at run time two winners is a bug and returns `internal`.
-6. **Fail with a diagnosis.** If no form passes: pick the *closest* form: the one with the fewest problems, ties broken by smaller arity difference, then table order. Produce `problems` for it, and `forms` listing every form with the closest first.
+6. **Fail with a diagnosis.** If no form passes: pick the *closest* form. First prefer the forms whose argument count fits; among them take the one with the fewest problems. Only if no form fits the count, take the fewest problems overall, ties broken by smaller arity difference, then table order. So for `Circle(A, 2, 3)` the three-point form comes first. Produce `problems` for it, and `forms` listing every form with the closest first.
+
+The error kind and span depend on what went wrong:
+
+- No form fits the argument count: `arg_count` (its own kind, not `bad_arity`), with the span of the whole call.
+- The count fits and one argument has the wrong type: `no_matching_form`, with the span and `token` of that argument. `Distance(A, 5)` points at the `5` (col 17).
+- The count fits and more than one argument is wrong: `no_matching_form`, with the span of the whole call.
 
 The message names the closest form and the first problem: `Circle: argument 2 should be a Number or Point, but B is a Line.` The full list is in `forms`.
 
@@ -405,9 +418,11 @@ The message names the closest form and the first problem: `Circle: argument 2 sh
 **Redefinition** (`A = …` on an existing `A`, or `f(x) = …` on an existing function):
 
 1. Parse and resolve with the new text. Names that appear later in the figure than `A` are allowed.
-2. **Cycle test.** Depth-first search from the new inputs through their inputs; reaching `A` is `cycle`, with the path in `related`.
+2. **Cycle test.** Depth-first search from the new inputs through their inputs; reaching `A` is `cycle`, with the chain of names in `path`. Only value edges and slider range edges join the test. A range bound may not read the slider itself or anything downstream of it: `a = 3 in 0..a`, and `a = 3 in 0..b` with `b = a + 1`, are `cycle`. Style edges never form a cycle (kernel design 9.2): a style may read its own object or its dependents, so `P with showIf = P.x > 0` and `a = 3 in 0..20 with opacity = a / 20` are accepted. Only value edges decide free versus dependent.
+
+   On a defining line, the name being defined resolves to the new object inside the `with` list, so `P9 = (1, 2) with showIf = P9.x > 0` and `c1 = (1, 2) with opacity = c1.x / 10` are accepted even when `P9` and `c1` do not yet exist, and no cycle edge is added. A range bound on a defining line may not read the name: `k = 3 in 0..k` is `unknown_name` while `k` is new and `cycle` once `k` exists.
 3. **Type test.** Result type equals old type (`Function<R>` must keep `R`; list element type must stay). Different is `type_change`. Parameter count of a function may change.
-4. **Dependents test.** Re-check each object in `A`'s downstream list against the new signature. Only the objects that read `A` through something that changed (a function's arity or codomain, a list's element type) can fail. Failures are collected into `breaks_dependents` with their names and the error each would give.
+4. **Dependents test.** Re-check the objects that read `A` directly against the new signature. Direct readers are enough: a changed type is already `type_change` (step 3), and a function's parameter count is the only signature that can change without one, so an object further down cannot break unless its direct reader breaks first. Failures are collected into `breaks_dependents` with their names and the error each would give.
 5. **Move.** If a new input is later in creation order, move `A` and its downstream objects after it, keeping their relative order. The move is an entry in the undo log.
 6. **Free to dependent and back.** `a = 3` on a dependent number turns it into a free number (its old rule is dropped). `a = b + 1` on a free number makes it dependent. Style, `id` and any slider range are kept only if still meaningful: dependent numbers lose their slider; a number that becomes free keeps no range.
 7. **Commit.** One undo entry holds the old definition.
@@ -421,19 +436,23 @@ The message names the closest form and the first problem: `Circle: argument 2 sh
 A successful line may carry warnings. They do not block the commit.
 
 ```ts
-interface Warning { kind: 'shadowed' | 'index_literal' | 'precision_loss' | 'slider_clamped' | 'unused_binder';
-                    line: number; col: number; endCol: number; message: string; hint?: string }
+interface Notice { severity: 'info' | 'warning';
+                   code: string;                                  // L201 to L205 for the kinds below
+                   kind: 'shadowed' | 'index_literal' | 'precision_loss' | 'clamped' | 'unused_binder';
+                   message: string; params: Record<string, string | number | boolean | string[]>; names?: string[] }
 ```
+
+This is the shared `Notice` of `docs/features/errors/design.md` 3.1. A successful result carries them in `notices`; there is no separate `Warning` type.
 
 - `shadowed`: a parameter or binder hides a figure object.
 - `index_literal`: a literal list index is `0`, negative, or not an integer.
 - `precision_loss`: an integer literal above 2^53 was rounded.
-- `slider_clamped`: a free number was set outside its range and clamped.
+- `clamped`: a free number was set outside its range and clamped.
 - `unused_binder`: `Seq(3, k, 1, 5)` ignores `k`.
 
 ### 3.14 Built-in functions and constants
 
-All built-ins are lowercase, pure, and have signatures in the same table shape as commands (`FunctionSpec` with `forms`). They are callable only with parentheses, with no space needed before `(`. A call with the wrong argument count or types is `no_matching_form` and lists the forms.
+All built-ins are lowercase, pure, and have signatures in the same table shape as commands (`FunctionSpec` with `forms`). They are callable only with parentheses, with no space needed before `(`. A call with the wrong argument count is `arg_count`, and a call with a fitting count but wrong types is `no_matching_form`; both list the forms (3.11).
 
 #### Constants
 
@@ -443,7 +462,7 @@ All built-ins are lowercase, pure, and have signatures in the same table shape a
 | `tau` | 2 pi |
 | `e` | 2.71828… |
 | `deg` | pi / 180, so `30 deg` is 30° in radians |
-| `inf` | positive infinity; allowed as a bound argument and in comparisons, never stored as a result (arithmetic that would produce it gives undefined `not_finite`) |
+| `inf` | positive infinity; allowed in any Number position, and `out = inf` stores positive infinity (`docs/features/README.md`, decision 7). Arithmetic on finite numbers that overflows (`10^400`, `fact(200)`) gives undefined `overflow`; a result that is not a number, such as `inf - inf` or `0 * inf`, gives undefined `not_finite`. A slider bound must be finite: `a = 3 in 0..inf` is `bad_range` |
 | `undefined` | the undefined Number, reason `explicit` |
 | `true`, `false` | Bool |
 
@@ -455,11 +474,11 @@ All built-ins are lowercase, pure, and have signatures in the same table shape a
 | Inverse trig | `asin(x) acos(x)`: `[-1, 1]`; `atan(x)`; `atan2(y, x)`; `acot(x)` | outside the domain: `out_of_domain`. `atan2(0, 0)`: `out_of_domain` |
 | Hyperbolic | `sinh cosh tanh sech csch coth asinh acosh atanh` | `acosh` below 1, `atanh` outside (-1, 1), `coth`/`csch` at 0: `out_of_domain` or `division_by_zero` |
 | Powers and roots | `sqrt(x)` `cbrt(x)` `nroot(x, n)` `hypot(a, b)` `pow(a, b)` | `sqrt` of negative: `out_of_domain`. `nroot` with even `n` and negative `x`: `out_of_domain`; odd `n` returns the real root |
-| Exp and log | `exp(x) ln(x) log10(x) log2(x) log(b, x)` | `ln` of 0 or negative: `out_of_domain`. `log(b, x)` with `b <= 0` or `b == 1`: `out_of_domain`. One-argument `log(x)` is refused: `no_matching_form` with hint "use ln, log10 or log2" |
+| Exp and log | `exp(x) ln(x) log10(x) log2(x) log(b, x)` | `ln` of 0 or negative: `out_of_domain`. `log(b, x)` with `b <= 0` or `b == 1`: `out_of_domain`. One-argument `log(x)` is refused: `arg_count` with hint "use ln, log10 or log2" |
 | Rounding | `floor ceil round trunc fract` and `round(x, digits)` | never |
 | Sign and size | `abs(x)` `sign(x)` `min(a, b, …)` `max(a, b, …)` `clamp(x, lo, hi)` | `clamp` with `lo > hi`: `out_of_domain` |
 | Modular | `mod(a, b)` (result has the sign of `b`) `rem(a, b)` (sign of `a`) `gcd(a, b)` `lcm(a, b)` | `b == 0`: `division_by_zero`. `gcd`/`lcm` on non-integers: `out_of_domain` |
-| Counting | `fact(n)` and postfix `n!`; `ncr(n, r)`; `npr(n, r)` | negative or non-integer: `out_of_domain`. Result above 1.8e308: `overflow` |
+| Counting | `fact(n)` and postfix `n!`; `ncr(n, r)`; `npr(n, r)` | non-integer: `not_integer`; negative: `out_of_domain`. Result above 1.8e308: `overflow` |
 | Special | `gamma(x) beta(a, b) erf(x) erfc(x)` | `gamma` at 0 and negative integers: `out_of_domain`; `beta` with a non-positive argument: `out_of_domain` |
 | Interpolation | `lerp(a, b, s)` `smooth(e0, e1, x)` (smoothstep) `step(e, x)` | `smooth` with `e0 == e1`: `division_by_zero` |
 | Random | `rand(seed)` in [0, 1), `noise(x)` `noise(x, y)` `noise(x, y, z)` in [-1, 1] | never; `seed` must be finite |
@@ -469,14 +488,14 @@ All built-ins are lowercase, pure, and have signatures in the same table shape a
 | Conversion | `Vector(Point)` (command), `number(Text)` parses a decimal | `number` of non-numeric text: `out_of_domain` |
 | Text | `len(Text)` | never |
 
-About 75 names counting hyperbolic and inverse families. `abs`, `min`, `max`, `sum`-style list forms take a list too: `max(L)` for `List<Number>`; an empty list gives undefined `empty_list`. Names intentionally absent in v1: complex-number functions (`arg`, `conjugate`, `real`, `imaginary`), polygamma and zeta, integral functions (`si`, `ci`, `ei`), Lambert W, regularised gamma and beta. They are reserved so users cannot take the names.
+About 75 names counting hyperbolic and inverse families. Only `min` and `max` also take a list: `max(L)` for `List<Number>`; an empty list gives undefined `empty_list`. `abs(L)` is `no_matching_form`. `sum` and `mean` are not built-in functions; they belong to the list commands. Names intentionally absent in v1: complex-number functions (`arg`, `conjugate`, `real`, `imaginary`), polygamma and zeta, integral functions (`si`, `ci`, `ei`), Lambert W, regularised gamma and beta. They are reserved so users cannot take the names.
 
 #### Numeric behaviour
 
-- All values are IEEE double precision. A result that is NaN or infinite is stored as undefined (`not_finite`, `overflow` or `out_of_domain` by cause).
+- All values are IEEE double precision. A NaN result, or an infinite result from finite inputs, is stored as undefined (`not_finite`, `overflow` or `out_of_domain` by cause). The constant `inf` itself is a valid stored value (see the constants table).
 - `sin`, `cos`, `tan` reduce their argument by an exact method, so `sin(pi)` is `1.2246e-16` as in IEEE but shown as `0` after display rounding; the language does not special-case multiples of pi, to stay predictable. `sin(180 deg)` shows `0`.
 - Accuracy: elementary functions within 1 ulp of the platform maths library in v1. Because platform libraries differ in the last bit between engines, film replay across browsers may drift in chaotic simulations. The function table is accessed through an interface (`MathLib`) so a bit-exact port can replace the platform one without changing callers; the acceptance test is two engines producing identical bytes for 1e6 samples of each function.
-- Speed target: a function body of 20 nodes evaluates at least 10 million node-evaluations per second in V8, enough for the plotter (about 2,000 samples per function per redraw) to stay under 1 ms for 10 functions.
+- Speed target, per function per redraw: a 2,000-sample batch of a 20-node function takes under 0.2 ms in V8 (about 200 million node-evaluations per second). Ten such functions then cost about 2 ms per redraw. Measured: 170 to 230 million node-evaluations per second; a 2,000-sample batch of a 30-node function with `sin`, `cos` and `sqrt` takes 0.26 ms.
 
 ### 3.15 Evaluation and compile target
 
@@ -488,7 +507,7 @@ interface Compiled<T> { eval: (env: Env) => T; reads: ReadonlySet<ObjectId>; use
 ```
 
 - `reads` is the set of object ids the expression reads. The rule's inputs and the downstream lists come from it directly; no separate dependency scan.
-- Undefined is carried as NaN with a side channel: a numeric closure that detects a domain problem writes the reason code into `env.reason` before returning NaN. The first reason set in an evaluation wins, so `ln(0) + sqrt(-1)` reports `out_of_domain` from `ln`. Each object stores `{ reason, via? }`, where `via` is the input object that was already undefined (a cascade).
+- Undefined is carried as NaN with a side channel: a numeric closure that detects a domain problem writes the reason code into `env.reason` before returning NaN. The first reason set in an evaluation wins, so `ln(0) + sqrt(-1)` reports `out_of_domain` from `ln`. Each object stores `{ reason, detail?, cause? }` (the shared undefined value, README decision 2), where `cause` is the nearest undefined input, a direct input of this object that was already undefined (a cascade). Following the `cause` links reaches the root.
 - Constant folding runs at build time on subtrees with no reads and no `t`.
 - A Function object compiles to `(x: number) => number` plus a batch form `(xs: Float64Array, out: Float64Array) => void` that the plotter uses; the batch form reuses the same closure tree with a loop in each node when profiling shows a gain.
 
@@ -498,9 +517,11 @@ interface Compiled<T> { eval: (env: Env) => T; reads: ReadonlySet<ObjectId>; use
 
 ```ts
 type PreviewResult =
-  | { ok: true; name: string; type: TypeName; valueText: string; warnings: Warning[]; ghost: GhostSpec | null }
+  | { ok: true; name: string; type: Ty | null; valueText: string; warnings: Notice[]; ghost: GhostSpec | null }
   | { ok: false; incomplete: boolean; error: KernelError };   // incomplete: the only problem is that input ends too soon
 ```
+
+`type` is a `Ty` object (3.10), or `null`. The `warnings` entries are `Notice` objects (3.13).
 
 ### 3.17 Syntax help
 
@@ -511,11 +532,11 @@ interface SignatureHelp {
   command: string;                   // "Circle"
   forms: { text: string; summary: string; matches: boolean; active: boolean }[];
   activeParam: number;               // index into the active form
-  argsSoFar: { type: TypeName | 'unknown'; span: Span }[];
+  argsSoFar: { type: string; span: Span }[];            // type text from tyStr, or 'unknown'
 }
 ```
 
-Algorithm: from the cursor, find the innermost open call with the tolerant parser (3.18); count commas at that depth to get the argument index; type the complete arguments to the left of the cursor; mark every form `matches` whose first `k` parameter types accept those types; mark the first matching form `active`. If no form matches, mark the closest one active and show the problem inline. Cost: one tolerant parse plus typing of at most the arguments to the left.
+Algorithm: from the cursor, find the innermost open call with the token scan (3.18); count commas at that depth to get the argument index; type the complete arguments to the left of the cursor; mark every form `matches` whose first `k` parameter types accept those types; mark the first matching form `active`. If no form matches, mark the closest one active and show the problem inline. Cost: one token scan plus typing of at most the arguments to the left.
 
 ### 3.18 Autocomplete
 
@@ -531,7 +552,7 @@ interface Completion {
 function complete(source: string, cursor: number, figure: FigureView, opts?: { limit?: number }): Completion[];
 ```
 
-The tolerant parser (an error-recovering variant of the same grammar, producing a tree with a hole at the cursor) classifies the position:
+Completion and signature help do not use a second, error-recovering grammar. They scan the tokens to the left of the cursor (bracket stack, commas, last token) and run the normal parser on the arguments that are already finished. The scan classifies the position:
 
 | Position | Offers |
 |---|---|
@@ -545,6 +566,8 @@ The tolerant parser (an error-recovering variant of the same grammar, producing 
 | Inside a string, in `{ }` | Object names and fields |
 | After `in` | `lo..hi` snippet |
 
+Because this is a scan and not a recovering parser, it cannot see every position. Known gaps: after `prop =` (for example `A with color = `) the legal values, such as colour words, are offered only once a letter is typed, and the fields after `.` inside the `{ }` of a text are not offered.
+
 Ranking (higher is better): prefix match on the word, 1000; case-insensitive prefix, 800; word-boundary subsequence (`mp` matches `Midpoint`), 500; typo match within edit distance 1 (2 for words of 6 or more letters), 200; then type fit bonus (accepted by active parameter) +300; recently used or most recently created object +100 decreasing by 10 per step back; commands with an exact form match for the arguments already typed +150. Limit defaults to 12. A completion for a command inserts `Name($1, $2)` with parameter names as placeholders, using the closest active form.
 
 Performance: objects and command names live in sorted arrays with a precomputed lower-case copy and a character-bigram index for the subsequence match. Target under 2 ms per keystroke for 5,000 objects and 200 names.
@@ -556,9 +579,9 @@ Performance: objects and command names live in sorted arrays with a precomputed 
 - **A name on its own** (`A`) defines nothing. It is `syntax` with `expected: ["=", "with", "in", "'"]`. The draw tool's `figure` call is how to read a value.
 - **Self-reference** `a = a + 1` is `cycle` (even when `a` does not yet exist it is `unknown_name`; after creation it is `cycle`). There is no mutable assignment.
 - **Very large or small literals**: `1e400` is `bad_number` (`out_of_range`); `1e-400` is `0` with a `precision_loss` warning.
-- **Unicode digits** from other scripts are `bad_char` with a hint to use ASCII digits.
+- **Unicode digits** from other scripts are `bad_character` with a hint to use ASCII digits.
 - **Mixed `,` and decimal comma**: `1,5` is two arguments or a pair, never 1.5; there is no locale-specific decimal mode in v1.
-- **Line breaks inside brackets** do not continue a line. A line with unbalanced brackets at its newline is `unbalanced`, pointing at the unmatched opener.
+- **Line breaks inside brackets** continue the line (README decision 17). Input that ends with a bracket still open is `unbalanced`, pointing at the unmatched opener.
 - **Command names used as variables**: `Line = 3` is `reserved_name`.
 - **Redefining `t`** or any directive-owned name is `reserved_name`.
 - **Large ranges**: `[1..1000000]` is `limit` (cap 100,000 elements per list, 1,000,000 elements total per figure).
@@ -574,7 +597,7 @@ Performance: objects and command names live in sorted arrays with a precomputed 
 7. **Dry-run previews** cost almost nothing because checking is pure and the figure is copy-on-write.
 8. **Redefinition is an in-place transaction** with a dependents check, not a rebuild from a serialised construction.
 9. **Ambiguity is named**: `1/2x`, `a b`, `f(x)` as a product are errors with both readings shown, not silent choices.
-10. **Undefined has reasons and a cascade link** (`via`), so a teacher hears "the line is undefined because B is undefined".
+10. **Undefined has reasons and a cascade link** (`cause`), so a teacher hears "the line is undefined because B is undefined".
 11. **Strong types for functions**: Function arithmetic is explicit and typed (`Function<Point>` for parametric curves) rather than a union of ad hoc cases.
 12. **Deterministic maths interface** from the start, so films can later be made bit-exact across browsers.
 

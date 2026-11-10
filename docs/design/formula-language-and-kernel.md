@@ -171,7 +171,7 @@ Free versus dependent follows the inputs: `A = (1, 2)` is free and draggable, `B
 | `Text` | string | May contain `{expr}` that updates, and `$…$` maths |
 | `Point` | (x, y) | Fields `.x`, `.y` |
 | `Vector` | (dx, dy) | Fields `.x`, `.y`, `.length` |
-| `Segment`, `Ray`, `Line` | two points or point and direction | `Line` also from `a x + b y == c` |
+| `Segment`, `Ray`, `Line` | two points or point and direction | `Line` also from `a*x + b*y == c` |
 | `Circle` | centre, radius | |
 | `Arc` | circle, start and end angle | |
 | `Polygon` | list of points | |
@@ -335,7 +335,7 @@ Inside the formulas of `Particles`, these names exist:
 |---|---|
 | `i` | Particle index, 0 to `count - 1` |
 | `u`, `v` | Two fixed random numbers in [0, 1) for this particle and this life |
-| `age` | Seconds since this particle's current life began; `(t + life * rand(i)) mod life` |
+| `age` | Seconds since this particle's current life began; `mod(t + life * rand(i), life)` |
 | `t` | Film time |
 
 The formulas may also read any number or point in the figure, so a slider can change the wind. A first version evaluates on the CPU; section 8 moves it to WebGL with the same formulas.

@@ -117,7 +117,7 @@ The teacher is not shown a chip; it handles the same situation in one extra line
 
 ```text
 a = 1 in -5..5
-g(x) = a x^2
+g(x) = a * x^2
 ```
 
 ### 6.4 Scientific mode

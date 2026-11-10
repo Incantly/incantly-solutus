@@ -374,7 +374,7 @@ y_next = y + h/6 (k1 + 2 k2 + 2 k3 + k4)
 
 ### 7.4 Which `t` do states see?
 
-Inside the cone `t` is the stage time `t_n + c h` (RK4 stage), so rates written as functions of `t` (driven oscillators: `ω' = ... + F cos(w t)`) are integrated correctly.
+Inside the cone `t` is the stage time `t_n + c h` (RK4 stage), so rates written as functions of `t` (driven oscillators: `ω' = ... + F * cos(w * t)`) are integrated correctly.
 
 ### 7.5 Initial values and restart
 
@@ -421,7 +421,7 @@ An optional diagnostic `Stiffness(s)` is not needed in v1.
 ### 7.9 Bodies and events (designed now, built later)
 
 - The state vector layout reserves slots for **events**: a rule `when` described as data `{ guard: Expr<Number>, direction: 'down' | 'up' | 'either', action: assignments }`. After each step the solver checks the guard for a sign change; on a change it finds the event time within the step by bisection on the dense output to `1e-9` s, applies the action (such as `v = -e * v`), and finishes the step to the next grid time with a shorter sub-step. Checkpoints are only taken on the grid, so seeking stays exact.
-- Commands that will use it (v1.5): `Bounce(y, v, floor, e)` (a ball: when `y` crosses `floor` downward, set `v` to `-e v`). A `Wall`, `Spring`, `Joint` and rigid `Body` come with the physics kit (core 7.4).
+- Commands that will use it (v1.5): `Bounce(y, v, floor, e)` (a ball: when `y` crosses `floor` downward, set `v` to `-e * v`). A `Wall`, `Spring`, `Joint` and rigid `Body` come with the physics kit (core 7.4).
 - Bodies in the kit are states owned by the solver; the same checkpoint scheme applies.
 
 ## 8. Changing inputs while playing
@@ -673,7 +673,7 @@ How GeoGebra does each (a time slider and formulas, or sequence lists, or an ODE
 g = 9.8
 v0 = 12 in 1..20
 α = 0.9 in 0.1..1.5
-ball = (v0 cos(α) t, v0 sin(α) t - 0.5 g t^2)
+ball = (v0 * cos(α) * t, v0 * sin(α) * t - 0.5 * g * t^2)
 Trace(ball)
 ```
 
@@ -687,7 +687,7 @@ L = 1 in 0.5..2
 θ = state(0.6, 0)
 θ'' = -g / L * sin(θ)
 pivot = (0, 0)
-bob = (L sin(θ), -L cos(θ))
+bob = (L * sin(θ), -L * cos(θ))
 rod = Segment(pivot, bob)
 ```
 
@@ -723,7 +723,7 @@ With `h = 1/240`, a 100-period run keeps the orbit closed within the accuracy ta
 ```text
 k = 3 in 1..8
 ω = 2 in 0.5..6
-f(x) = sin(k x - ω t)
+f(x) = sin(k * x - ω * t)
 ```
 
 A function that reads `t` re-plots every frame (the plotter caches by `(version, viewport)`; `t` changes the version each frame). Cost: 600 samples × the expression, about 50 µs. Standing waves, interference: sums of such functions.
@@ -742,7 +742,7 @@ Energy loss 20% per bounce, exact event time by bisection. GeoGebra: hand-writte
 
 ```text
 spray = Particles(count = 400, life = 1.5, loop = true,
-  pos = (v0 cos(α + 0.2 (u - 0.5)) age, v0 sin(α + 0.2 (u - 0.5)) age - 0.5 g age^2),
+  pos = (v0 * cos(α + 0.2 (u - 0.5)) * age, v0 * sin(α + 0.2 (u - 0.5)) * age - 0.5 * g * age^2),
   size = 0.04, alpha = 1 - ph)
 ```
 

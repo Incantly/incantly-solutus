@@ -27,6 +27,10 @@ All live in `handoff/<area>/` on the area's branch and are kept after merge as t
 - `review.md`: the spec reviewer's list of gaps against the docs, each with the doc section.
 - `builder-notes.md`: what the builder built, what it left out and why, and the public API.
 
+## Fix every case of a rule
+
+When a fix applies a rule (for example the overflow rule, a position rule or a security check), the fixer finds every place the same rule applies, not only the case named in the finding, and fixes them together. For number rules that means every value kind: numbers, lists, functions, points, vectors and any other numeric type.
+
 ## Disputes
 
 A tester's test may be wrong. The fixer may contest a test only by quoting the doc line that shows it. If the doc is unclear, the dispute goes to the product owner, and the doc is fixed.

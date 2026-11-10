@@ -12,7 +12,7 @@ Columns: **kind / code**, **when**, **GeoGebra**, **our message template**, **de
 |---|---|---|---|---|---|
 | `syntax` L001 | parser stops at a token that cannot continue the line | One generic "check your input", position lost | `Unexpected {token}. Expected {expected}.` | fix_line | `expected` (up to 8 tokens or classes like `a number`), `suggest` for known patterns |
 | `unbalanced` L002 | bracket opened and not closed, or closed and never opened | "unbalanced brackets" without position | `{open} on column {col} is never closed.` / `Unmatched {close}.` | use_suggestion | `col` points at the unmatched bracket; `suggest` adds the missing one at end of line |
-| `bad_number` L003 | `1.2.3`, `1e`, `.`, `0x` | generic | `{token} is not a valid number.` | fix_line | `suggest` tries trimming |
+| `bad_number` L003 | `1.2.3`, `.`, `1e999` | generic | `{token} is not a valid number.` | fix_line | `suggest` tries trimming |
 | `unterminated_string` L004 | quote never closed | generic | `The text starting at column {col} has no closing quote.` | use_suggestion | |
 | `bad_character` L005 | a character the language never uses (smart quotes, `;`, tab inside names) | generic | `Character {token} is not part of the language.` | use_suggestion | `suggest` replaces smart quotes, `×`, `÷`, `−`, `²` with `"`, `*`, `/`, `-`, `^2` |
 | `unknown_directive` L006 | `@foo` | n/a | `{token} is not a directive.` | fix_line | `expected` = directive names, closest in `hint` |

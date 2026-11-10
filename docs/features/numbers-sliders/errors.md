@@ -41,7 +41,7 @@ New `kind` values (the core kinds `syntax`, `unknown_name`, `type_mismatch`, `re
 | `a = 3 in 0 10` | `syntax` | "Expected '..' between the two ends." |
 | `a = 3 step 1` | `syntax` | "'step' only follows a range." Hint: write `in 0..10 step 1`. |
 | `a = 3 in 0..10 step` | `syntax` | "Expected a number after 'step'." |
-| `a b = 3` | `syntax` | "Unexpected 'b'." Hint: names have no spaces. |
+| `a b = 3` | `missing_operator` | "Expected an operator between 'a' and 'b'." Hint: names have no spaces. |
 | `a with colour = red` | `unknown_property` | Hint: "Did you mean color?" |
 
 ## 3. Runtime (values become undefined with a reason)
