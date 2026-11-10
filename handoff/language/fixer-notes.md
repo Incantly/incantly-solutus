@@ -146,3 +146,37 @@ Division by zero gives `division_by_zero`. Finite inputs that overflow give `ove
 ## Checks
 
 `npm run lint` and `npm run typecheck` pass; `npx vitest run packages/kernel/test/spec`: 1,323 of 1,323 pass. No contested tests.
+
+# Round 5: checker findings LANG-SM-28 to 32 and question Q-R4-1
+
+All paths are under `packages/kernel/src/language/`. Each finding has its own commit (SM-32 and Q-R4-1 share one, because both change `lines.ts`, `check.ts` and `figure.ts`).
+
+## Fixes
+
+- **LANG-SM-28 (equality with an infinity).** `numEq` (`compile.ts`) compares exactly when either side is infinite and takes the tolerance as a parameter (`1e-12` for the value path, `1e-9` for relations). Places fixed: `==` and `!=` on Numbers, Points and Vectors (`valueEq`, per coordinate), `<=` and `>=` (`cmpNum`), chained comparisons (they call the same functions per link), and the relation test in `compileTree`, which had its own copy of the formula without the `a === b` shortcut and now calls `numEq`. `relation.ts` (circle test `xx == yy`) had the same tolerance formula on constant coefficients and now requires both to be finite (`inf x^2 + 5 y^2 == 1` was a circle). Bool and Text compare exactly, and `<` and `>` were already right. The design 3.5 sentence still gives the tolerance formula without the finite precondition; I did not edit `docs/`, so the product owner should add "for finite numbers; an infinity equals only itself".
+- **LANG-SM-29 (relation coefficients and sampling).** `compileRelation` returns an undefined relation (reason from the coefficient, else `not_finite`) when a coefficient is not a number. An infinite coefficient from an `inf` input stays a value. `residual` and `test` now run through one `sample` helper that sets the `x` and `y` slots and puts back the slots, `reason`, `via` and `detail`. `residual` also gives NaN for a difference of finite sides that overflows (`1e308 - -1e308`), and keeps an infinity that follows an infinite side. Extra places: function values (`call`, `call1`, `batch`) restored only `reason` and `via` (`call`) or only `reason` (`call1`, `batch`); all three now restore `reason`, `via` and `detail`.
+- **LANG-SM-30 (`hsl`, `hsv`).** A built-in with a `call` that returns a Point, Vector, Color or list is checked number by number (`nonNumberIn`): a NaN inside gives `not_finite`, an infinity from finite arguments gives `overflow`, an infinity that follows an infinite argument stays. So `hsl(big, 1, 0.5)`, `hsv(big, 1, 1)` and `hsl(-big, 1, 0.5)` are undefined `not_finite`; `hsl(0, big, 0.5)`, `hsl(0, 1, 0.5, big)` and the like stay colours (the channels are clamped). This covers `perp`, `unit`, `rgb` and any later built-in with a non-Number result.
+- **LANG-SM-31 (`:d`, `:%`).** `formatNumber` (`runtime.ts`) prints `undefined` when the scaled value is not finite while the number was. Point and Vector parts in a text use the same function per coordinate, so `{P:d}` shows `undefined` for that coordinate. The other formats (`.n`, `n`, `f`) cannot overflow and are unchanged.
+- **LANG-SM-32 (style readers and the dependents test).** `ScratchFigure` keeps `inputs` (value and slider-bound reads, used by `inputsOf` and the cycle test) apart from `styleInputs` (reads of the styles on the defining line). `dependentsOf` returns an object when either set holds the id. Separate property rules (`P with opacity = f(1)`) were never stored by `ScratchFigure`, so the finding's second case could not work from the figure alone: `ScratchFigure` now records them per target (a later rule that sets all the same keys replaces the earlier one; a redefinition keeps them), and a new optional `FigureView.styleRulesReading(id)` lists them. `checkRedefinition` re-checks the defining sources and these rules against the overlay figure, and reports `breaks_dependents` with both in `related`. `OverlayFigure` forwards the new method. The real kernel's `FigureView` must keep the same split: `inputsOf` without style reads, `dependentsOf` with them, and `styleRulesReading` if it stores property rules apart from the object's line.
+- **Q-R4-1 (option a).** In the `with` list of a first definition, the name being defined resolves to the new object, for value lines and for function lines (`checkDefine`, `checkFunction` in `lines.ts`). The checker puts an `ObjectInfo` with the reserved id `SELF_ID` (exported, `table.ts`) in an `OverlayFigure` for the duration of the style check only (`Checker.withSelf`), so names, field reads, calls and ticks all resolve. `SELF_ID` is removed from `styleReads`, so it is never an edge. `compileLine` takes `selfId` (the id the kernel gives the object) and maps `SELF_ID` to it (`Compiler.objId`); `ScratchFigure` passes the id it is about to give. The range is checked outside the override, so `k = 3 in 0..k` is still `unknown_name` on a new name and `cycle` once `k` exists. When the line's own value has an error (its type is unknown), no override is made and the old `unknown_name` for the name stays, so no new error appears on a line that already fails. An existing object resolves by the figure as before.
+
+## Paths checked beyond the findings
+
+- All comparison sites: `compileCmp`, `compileTree`, `valueEq`, `cmpNum`, `relation.ts` circle test, `check.ts` range count (`+ 1e-9` on finite bounds only), range count in `compile.ts` (bounds already finite), `toFraction` (finite input only).
+- All sites that save `reason` around a nested evaluation: function `call`, `call1`, `batch`, relation `residual` and `test`. Derivative ticks and `pointwise` do not touch the caller's Env.
+- All non-Number built-in results go through the generic `call` branch in `compileBuiltin`; the n1, n2, n3 branches return Numbers only.
+
+## Behaviour changes worth knowing
+
+- `5 == inf` is false, `5 != inf` true, `5 >= inf` false, `inf == inf` true, `(5, 0) == (inf, 0)` false.
+- `c = x^2 + y^2 == r^2` with `r = 1e200` is an undefined relation (`overflow`); before it was defined with no coefficients. Its type is still `Curve`, because the checker cannot fold a named `r` (see the contested test).
+- `P9 = (1, 2) with showIf = P9.x > 0` and `c1 = (1, 2) with opacity = c1.x / 10` are accepted on a figure without `P9` or `c1`.
+- Redefining `f` so that a style on a defining line or a `P with …` rule no longer checks gives `breaks_dependents`.
+
+## Contested test
+
+`packages/kernel/test/spec/language/regressions.test.ts`, "LANG-SM-29: an undefined relation can be redefined to a defined one, and back". It applies `c = x^2 + y^2 == r^2` (with `r` a named number) and then `c = x^2 + y^2 == 4` and expects both to be accepted. The first line has type `Curve` (the checker only calls `(x - h)^2 + (y - k)^2 == r2` a Circle when it knows `r2 > 0`, and a named `r` is not folded; this classification did not change in round 5), the second is a `Circle`. `docs/features/language/design.md` 3.9 rule 6 (line 296): "Redefining a Line as another Line is fine; redefining it as a Circle is `type_change`." So the second line is `type_change` by the doc, and the test needs a first line that classifies as a Circle (for example `r = 2` with a literal) or a second line that stays a Curve. I did not change the test.
+
+## Checks
+
+`npx eslint .` and `npx tsc -p tsconfig.json` are clean. See the report for the vitest counts.
