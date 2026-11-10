@@ -452,10 +452,10 @@ describe('language/design.md 3.6 implicit multiplication, exactly', () => {
     expect(e.quickFixes?.length).toBe(2);
   });
 
-  it('errors.md 3 ambiguous_implicit: quickFixes offer (1/2) a and 1/(2a)', () => {
+  it('errors.md 3 ambiguous_implicit (rulings.md Q2): quickFixes offer (1/2) * a and 1/(2a)', () => {
     const e = failure('h = 1/2a');
     const lines = (e.quickFixes ?? []).flatMap((q) => q.lines);
-    expect(lines).toContain('h = (1/2) a');
+    expect(lines).toContain('h = (1/2) * a');
     expect(lines).toContain('h = 1/(2a)');
   });
 

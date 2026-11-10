@@ -105,7 +105,7 @@ describe('agent.md 5.4 disambiguation', () => {
     expect(bad.kind).toBe('ambiguous_implicit');
     expect(bad.fix).toBeUndefined();
     const lines = (bad.quickFixes ?? []).flatMap((q) => q.lines);
-    expect(lines).toContain('h(x) = (1/2) x');
+    expect(lines).toContain('h(x) = (1/2) * x');
     expect(lines).toContain('h(x) = 1/(2x)');
   });
 });
