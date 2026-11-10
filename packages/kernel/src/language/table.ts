@@ -5,7 +5,7 @@
  */
 import type { ObjId } from '../contracts/values';
 import type { Env } from './runtime';
-import { accepts, memberAccepts, setsIntersect, typeSet } from './types';
+import { CORE_TYPE_NAMES, accepts, memberAccepts, setsIntersect, typeSet, typeTextProblem } from './types';
 import type { Ty, TypeSet } from './types';
 
 export type ParamKind = 'value' | 'binder' | 'body';
@@ -125,12 +125,33 @@ export interface CommandTable {
   names(): readonly string[];
   /** Case-insensitive lookup, for "did you mean". */
   lookupFold(name: string): CommandSpec | undefined;
+  /**
+   * Commands the table left out because an earlier command has the same name, or the same name in other letter case.
+   * The earlier command stays. `checkTable` reports each of them. A table that cannot have any leaves this out.
+   */
+  duplicates?(): readonly DuplicateName[];
 }
 
+/** A later command (`name`) that collides with the earlier one kept in the table (`of`). */
+export interface DuplicateName {
+  readonly name: string;
+  readonly of: string;
+}
+
+/**
+ * Builds the table. Nothing throws: a command whose name repeats an earlier one (also in other letter case) is left
+ * out and listed by `duplicates()`, and `checkTable` turns the list into problems.
+ */
 export function createCommandTable(specs: readonly CommandSpec[]): CommandTable {
   const map = new Map<string, CommandSpec>();
   const fold = new Map<string, CommandSpec>();
+  const dups: DuplicateName[] = [];
   for (const s of specs) {
+    const earlier = map.get(s.name) ?? fold.get(s.name.toLowerCase());
+    if (earlier) {
+      dups.push({ name: s.name, of: earlier.name });
+      continue;
+    }
     map.set(s.name, s);
     fold.set(s.name.toLowerCase(), s);
   }
@@ -139,6 +160,7 @@ export function createCommandTable(specs: readonly CommandSpec[]): CommandTable 
     lookup: (n) => map.get(n),
     lookupFold: (n) => fold.get(n.toLowerCase()),
     names: () => names,
+    duplicates: () => dups,
   };
 }
 
@@ -204,69 +226,211 @@ export interface FigureView {
 export interface FunctionTable {
   lookup(name: string): FunctionSpec | undefined;
   names(): readonly string[];
+  /** Functions left out because an earlier function has the same name. `checkFunctionTable` reports them. */
+  duplicates?(): readonly DuplicateName[];
 }
 
 export function createFunctionTable(specs: readonly FunctionSpec[]): FunctionTable {
   const map = new Map<string, FunctionSpec>();
-  for (const s of specs) map.set(s.name, s);
+  const dups: DuplicateName[] = [];
+  for (const s of specs) {
+    if (map.has(s.name)) {
+      dups.push({ name: s.name, of: s.name });
+      continue;
+    }
+    map.set(s.name, s);
+  }
   const names = [...map.keys()].sort();
-  return { lookup: (n) => map.get(n), names: () => names };
+  return { lookup: (n) => map.get(n), names: () => names, duplicates: () => dups };
 }
 
 /* ----------------------- ambiguity test for a table ----------------------- */
 
+export type TableProblemKind =
+  | 'ambiguous'
+  | 'unknown_type'
+  | 'duplicate_param'
+  | 'duplicate_command'
+  | 'bad_name'
+  | 'no_forms'
+  | 'binder_without_body'
+  | 'bad_param';
+
 export interface TableProblem {
+  readonly kind: TableProblemKind;
   readonly command: string;
+  /** The form the problem is in, as `formText` prints it; empty when it is about the command as a whole. */
   readonly a: string;
+  /** The second form of an ambiguous pair; empty otherwise. */
   readonly b: string;
   readonly message: string;
 }
 
+export interface CheckTableOptions {
+  /** Type names beyond the language's own, such as `Point3` from the 3D area. */
+  readonly types?: readonly string[];
+}
+
+const COMMAND_NAME = /^[A-Z][A-Za-z0-9_]*$/;
+const FUNCTION_NAME = /^[a-z][a-z0-9_]*$/;
+
 /**
- * The "no ambiguous overloads" test: for every pair of forms that can both accept the same
- * arguments, one must be strictly more specific. Run in CI over the full command table.
+ * The load-time test for a command table. Every command has a capitalised name, appears once and has at least one
+ * form. Every form has parameters with distinct names and known types, a known result type, and a body for each
+ * binder. No two forms are ambiguous: for every pair of forms that can both accept the same arguments, one is
+ * strictly more specific. Run in CI over the full command table and by the kernel when it loads one. Each problem
+ * names the command.
  */
-export function checkTable(table: CommandTable | readonly CommandSpec[]): TableProblem[] {
+export function checkTable(table: CommandTable | readonly CommandSpec[], options: CheckTableOptions = {}): TableProblem[] {
   const specs = Array.isArray(table) ? (table as readonly CommandSpec[]) : (table as CommandTable).names().map((n) => (table as CommandTable).lookup(n) as CommandSpec);
   const problems: TableProblem[] = [];
+  const known = knownTypes(options);
+  if (Array.isArray(table)) {
+    const seen = new Set<string>();
+    const folded = new Map<string, string>();
+    for (const spec of specs) {
+      const earlier = seen.has(spec.name) ? spec.name : folded.get(spec.name.toLowerCase());
+      if (earlier !== undefined) problems.push(duplicateProblem(spec.name, earlier, 'command'));
+      else {
+        seen.add(spec.name);
+        folded.set(spec.name.toLowerCase(), spec.name);
+      }
+    }
+  } else {
+    for (const d of (table as CommandTable).duplicates?.() ?? []) problems.push(duplicateProblem(d.name, d.of, 'command'));
+  }
+  const visited = new Set<string>();
   for (const spec of specs) {
-    const forms = spec.forms;
-    for (let i = 0; i < forms.length; i++) {
-      for (let j = i + 1; j < forms.length; j++) {
-        const f = forms[i] as CommandForm;
-        const g = forms[j] as CommandForm;
-        const min = Math.max(requiredCount(f), requiredCount(g));
-        const max = Math.min(f.params.length, g.params.length);
-        for (let n = min; n <= max; n++) {
-          let overlap = true;
-          let fLeG = true;
-          let gLeF = true;
-          for (let k = 0; k < n; k++) {
-            const a = typeSet((f.params[k] as ParamSpec).type);
-            const b = typeSet((g.params[k] as ParamSpec).type);
-            if (!setsIntersect(a, b)) {
-              overlap = false;
-              break;
-            }
-            if (!setWithin(a, b)) fLeG = false;
-            if (!setWithin(b, a)) gLeF = false;
-          }
-          // f is strictly more specific than g when it fits inside g everywhere and g does not fit inside f
-          const ordered = (fLeG && !gLeF) || (gLeF && !fLeG);
-          if (overlap && !ordered) {
-            problems.push({
-              command: spec.name,
-              a: formText(spec.name, f),
-              b: formText(spec.name, g),
-              message: `${spec.name}: two forms accept the same ${n}-argument calls and neither is more specific.`,
-            });
+    if (visited.has(spec.name)) continue;
+    visited.add(spec.name);
+    if (!COMMAND_NAME.test(spec.name)) problems.push(badNameProblem(spec.name, 'command', 'starts with a capital letter and has only letters, digits and _ after it'));
+    if (spec.forms.length === 0) {
+      problems.push({ kind: 'no_forms', command: spec.name, a: '', b: '', message: `${spec.name} has no forms; a command needs at least one.` });
+      continue;
+    }
+    for (const f of spec.forms) checkForm(spec.name, f, known, problems);
+    checkAmbiguity(spec, problems);
+  }
+  return problems;
+}
+
+/** The same checks for a built-in function table, except that names are lower case and there are no binders. */
+export function checkFunctionTable(table: FunctionTable | readonly FunctionSpec[], options: CheckTableOptions = {}): TableProblem[] {
+  const specs = Array.isArray(table) ? (table as readonly FunctionSpec[]) : (table as FunctionTable).names().map((n) => (table as FunctionTable).lookup(n) as FunctionSpec);
+  const problems: TableProblem[] = [];
+  const known = knownTypes(options);
+  const seen = new Set<string>();
+  if (!Array.isArray(table)) for (const d of (table as FunctionTable).duplicates?.() ?? []) problems.push(duplicateProblem(d.name, d.of, 'function'));
+  for (const spec of specs) {
+    if (seen.has(spec.name)) {
+      problems.push(duplicateProblem(spec.name, spec.name, 'function'));
+      continue;
+    }
+    seen.add(spec.name);
+    if (!FUNCTION_NAME.test(spec.name)) problems.push(badNameProblem(spec.name, 'function', 'starts with a lower-case letter and has only lower-case letters, digits and _ after it'));
+    if (spec.forms.length === 0) {
+      problems.push({ kind: 'no_forms', command: spec.name, a: '', b: '', message: `${spec.name} has no forms; a function needs at least one.` });
+      continue;
+    }
+    for (const f of spec.forms) checkForm(spec.name, f, known, problems);
+  }
+  return problems;
+}
+
+function knownTypes(options: CheckTableOptions): ReadonlySet<string> {
+  return new Set([...CORE_TYPE_NAMES, ...(options.types ?? [])]);
+}
+
+function badNameProblem(name: string, what: string, rule: string): TableProblem {
+  const message = name === '' ? `A ${what} has an empty name.` : `${name}: a ${what} name ${rule}.`;
+  return { kind: 'bad_name', command: name, a: '', b: '', message };
+}
+
+function duplicateProblem(name: string, of: string, what: string): TableProblem {
+  const message =
+    name === of
+      ? `${name} is declared more than once; only the first ${what} of that name is used.`
+      : `${name} has the same name as ${of} in other letter case; only ${of} is used.`;
+  return { kind: 'duplicate_command', command: name, a: '', b: '', message };
+}
+
+/** Parameter names and types, binders and the result type of one form. */
+function checkForm(name: string, f: FormLike, known: ReadonlySet<string>, problems: TableProblem[]): void {
+  const text = formText(name, f);
+  const add = (kind: TableProblemKind, message: string): void => {
+    problems.push({ kind, command: name, a: text, b: '', message: `${name}: ${message}` });
+  };
+  const all: ParamSpec[] = [...f.params, ...(f.rest ? [f.rest] : [])];
+  const names = new Set<string>();
+  for (const q of all) {
+    if (names.has(q.name)) add('duplicate_param', `the parameter ${q.name} appears twice in ${text}.`);
+    names.add(q.name);
+    if (q.name === '') add('bad_param', `a parameter has an empty name in ${text}.`);
+    const kind: string = q.kind ?? 'value';
+    if (kind !== 'value' && kind !== 'binder' && kind !== 'body') add('bad_param', `the parameter ${q.name} has the unknown kind ${kind}.`);
+    const bad = typeTextProblem(q.type, known);
+    if (bad !== undefined) add('unknown_type', `the parameter ${q.name} has the type ${q.type === '' ? '(empty)' : q.type}, and ${bad} is not a type.`);
+    for (const sc of q.scope ?? []) {
+      const badScope = typeTextProblem(sc.type, known);
+      if (badScope !== undefined) add('unknown_type', `the name ${sc.name} in the scope of ${q.name} has the type ${sc.type}, and ${badScope} is not a type.`);
+    }
+  }
+  if (f.rest && (f.rest.kind === 'binder' || f.rest.kind === 'body')) add('bad_param', `the rest parameter ${f.rest.name} must take values, not a ${f.rest.kind}.`);
+  const hasBody = all.some((q) => q.kind === 'body');
+  for (const q of all) {
+    if (q.kind === 'binder' && !hasBody) add('binder_without_body', `the binder ${q.name} has no body parameter to use it in.`);
+  }
+  const returns: readonly string[] = f.returns === null ? [] : typeof f.returns === 'string' ? [f.returns] : f.returns;
+  if (typeof f.returns === 'object' && f.returns !== null && returns.length === 0) add('unknown_type', 'the result is an empty tuple.');
+  for (const r of returns) {
+    const ref = /^=(\w+)$/.exec(r) ?? /^List<=(\w+)>$/.exec(r);
+    if (ref) {
+      if (!names.has(ref[1] as string)) add('unknown_type', `the result type ${r} refers to ${ref[1]}, which is not a parameter.`);
+      continue;
+    }
+    const bad = typeTextProblem(r, known);
+    if (bad !== undefined) add('unknown_type', `the result type ${r === '' ? '(empty)' : r} is not a type: ${bad}.`);
+  }
+}
+
+/** The "no ambiguous overloads" test of one command. */
+function checkAmbiguity(spec: CommandSpec, problems: TableProblem[]): void {
+  const forms = spec.forms;
+  for (let i = 0; i < forms.length; i++) {
+    for (let j = i + 1; j < forms.length; j++) {
+      const f = forms[i] as CommandForm;
+      const g = forms[j] as CommandForm;
+      const min = Math.max(requiredCount(f), requiredCount(g));
+      const max = Math.min(f.params.length, g.params.length);
+      for (let n = min; n <= max; n++) {
+        let overlap = true;
+        let fLeG = true;
+        let gLeF = true;
+        for (let k = 0; k < n; k++) {
+          const a = typeSet((f.params[k] as ParamSpec).type);
+          const b = typeSet((g.params[k] as ParamSpec).type);
+          if (!setsIntersect(a, b)) {
+            overlap = false;
             break;
           }
+          if (!setWithin(a, b)) fLeG = false;
+          if (!setWithin(b, a)) gLeF = false;
+        }
+        // f is strictly more specific than g when it fits inside g everywhere and g does not fit inside f
+        const ordered = (fLeG && !gLeF) || (gLeF && !fLeG);
+        if (overlap && !ordered) {
+          problems.push({
+            kind: 'ambiguous',
+            command: spec.name,
+            a: formText(spec.name, f),
+            b: formText(spec.name, g),
+            message: `${spec.name}: two forms accept the same ${n}-argument calls and neither is more specific.`,
+          });
+          break;
         }
       }
     }
   }
-  return problems;
 }
 
 /** Does every type accepted by `a` also get accepted by `b`? */

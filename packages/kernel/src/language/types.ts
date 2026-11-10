@@ -107,6 +107,47 @@ export function parseTy(text: string): Ty | undefined {
   return { k: base as TypeName };
 }
 
+/** Type names the language itself knows. Areas that add a type pass it to `checkTable` as an extra name. */
+export const CORE_TYPE_NAMES: readonly string[] = [
+  'Number', 'Bool', 'Text', 'Point', 'Vector', 'Segment', 'Ray', 'Line', 'Circle', 'Arc', 'Polygon', 'Function', 'Curve',
+  'Region', 'List', 'Color', 'Particles', 'Relation',
+];
+
+/**
+ * What is wrong with a parameter or return type text, or `undefined` when it is fine: the piece that is not a type
+ * (`Fnord`, `List<Banana>`, an empty text). `known` is the set of base type names. Unions (`Number|Point`), aliases,
+ * `Any`, `List<T>`, `Function<R>`, `Function<R>(n)` with n from 1 to 4, and `Function2` are accepted.
+ */
+export function typeTextProblem(text: string, known: ReadonlySet<string>): string | undefined {
+  for (const part of text.split('|')) {
+    const bad = oneTypeProblem(part.trim(), known);
+    if (bad !== undefined) return bad;
+  }
+  return undefined;
+}
+
+function oneTypeProblem(t: string, known: ReadonlySet<string>): string | undefined {
+  if (t === '') return 'an empty type';
+  if (t === 'Any' || t === 'Function2' || Object.hasOwn(TYPE_ALIASES, t)) return undefined;
+  const m = /^(\w+)(?:<(.+)>)?(?:\((\d)\))?$/.exec(t);
+  if (!m) return t;
+  const base = m[1] as string;
+  const inner = m[2];
+  const count = m[3];
+  if (base === 'List') return count === undefined ? (inner === undefined ? undefined : oneTypeProblem(inner.trim(), known)) : t;
+  if (base === 'Function') {
+    if (inner === undefined) return count === undefined ? undefined : t;
+    const n = /^(\w+)(?:\s*,\s*(\d))?$/.exec(inner);
+    if (!n) return t;
+    if (!known.has(n[1] as string)) return n[1] as string;
+    if (n[2] !== undefined && count !== undefined) return t;
+    const arity = n[2] ?? count;
+    return arity === undefined || (Number(arity) >= 1 && Number(arity) <= 4) ? undefined : t;
+  }
+  if (inner !== undefined || count !== undefined) return t;
+  return known.has(base) ? undefined : base;
+}
+
 const setCache = new Map<string, TypeSet>();
 
 /** Parse a parameter type: `Number`, `List<Point>`, `Function<Number>`, `Shape`, `Number|Point`, `Any`. */

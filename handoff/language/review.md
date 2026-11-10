@@ -166,6 +166,8 @@ Shared error list (`docs/features/errors/design.md` section 4), each kind checke
 - **Evidence:** all of these return no problem and no throw: a parameter of type `Fnord`; a return type `Banana`; two parameters both named `f`; a command called `lower`; a binder parameter with no body; a command with no forms; two commands with the same name (`createCommandTable` keeps one of them and drops the other without a message). The first of these, an unparsable type, produced the empty "should be a ," message in A3.
 - **Fix:** extend `checkTable` to return a `TableProblem` for each of these, and have `createCommandTable` report duplicate names. The kernel then runs `checkTable` in its own load test.
 
+- **Status:** fixed
+
 ## B: can wait for the kernel area
 
 | # | Item | Why it can wait / who owns it |

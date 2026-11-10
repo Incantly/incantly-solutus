@@ -18,7 +18,7 @@ export { checkLine, } from './lines';
 export { OverlayFigure, FIELDS } from './check';
 export type { CheckOptions, CheckedLine, CheckedRange, CheckedStyle } from './check';
 export type { TNode, TArg, RelTree, RelationShape } from './tnode';
-export { T, listOf, fnOf, tyEq, tyStr, typeSet, parseTy, accepts, binaryOp, TYPE_ALIASES } from './types';
+export { T, listOf, fnOf, tyEq, tyStr, typeSet, parseTy, accepts, binaryOp, TYPE_ALIASES, CORE_TYPE_NAMES, typeTextProblem } from './types';
 export type { Ty, TypeSet, OpVariant } from './types';
 export { analyseLine, preview, signatureHelp, complete, tokenize } from './tooling';
 export type { PreviewResult, GhostSpec, SignatureHelp, Completion, CompletionKind, HighlightToken, HighlightKind } from './tooling';
@@ -32,10 +32,10 @@ export type {
 } from './runtime';
 
 // Commands and functions as data
-export { createCommandTable, createFunctionTable, checkTable, formText, EMPTY_COMMANDS, SELF_ID } from './table';
+export { createCommandTable, createFunctionTable, checkTable, checkFunctionTable, formText, EMPTY_COMMANDS, SELF_ID } from './table';
 export type {
   CommandForm, CommandSpec, CommandTable, FigureView, FormLike, FunctionForm, FunctionSpec, FunctionTable, ObjectInfo, ParamKind, ParamSpec,
-  BoundArg, RuleFactory, TableProblem, ConstValue,
+  BoundArg, RuleFactory, TableProblem, TableProblemKind, CheckTableOptions, DuplicateName, ConstValue,
 } from './table';
 export { BUILTIN_FUNCTIONS, BUILTIN_FUNCTION_SPECS, BUILTIN_CONSTANTS, setMathLib, getMathLib, PLATFORM_MATH } from './builtins';
 export type { MathLib, ConstantSpec } from './builtins';

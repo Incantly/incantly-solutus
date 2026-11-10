@@ -213,3 +213,19 @@ The first LANG-SM-32 fix kept the reads of the defining line's styles in one set
 - `tyStr` still prints a two-parameter function as `Function<Number>(2)` (messages and the existing tests use that text). The doc editor should say that `Function2` is a table spelling only.
 - Empty expected type: `setLabel` returns the type text when a set has no members, and the "argument N should be …" builder (`check.ts`) says "another type" for an empty label. The article is also chosen without regard to case now ("an unknown …" instead of "a unknown …").
 - Unchanged: a `Function<Number>` parameter without a count still accepts a function of any count (memberAccepts).
+
+### A4. The command table is validated (fixed)
+
+- `checkTable(table, { types? })` (`table.ts`) now returns a `TableProblem` with a new `kind` (`unknown_type`, `duplicate_param`, `duplicate_command`, `bad_name`, `no_forms`, `binder_without_body`, `bad_param`, `ambiguous`). Every message starts with the command name and says what is wrong, for example "Bad1: the parameter a has the type Fnord, and Fnord is not a type." The ambiguity test is unchanged and moved to `checkAmbiguity`.
+- Checked: command name (`^[A-Z][A-Za-z0-9_]*$`, so a lower-case, empty, digit-first or spaced name is refused); at least one form; parameter and rest types, also inside `List<>`, `Function<>` and unions, and the `scope` types of a body; result types, including tuples and the `=param` and `List<=param>` forms, whose parameter must exist; parameter names unique within a form (the rest parameter included); each `binder` has a `body` parameter in its form; the parameter `kind` is `value`, `binder` or `body`; a rest parameter takes values.
+- Type names: `CORE_TYPE_NAMES` (`types.ts`) plus `options.types`. An area that adds a type (`Point3`) must pass it, because the runtime has no registry of area type names. The kernel's load test should pass the registered names. `typeTextProblem` (`types.ts`) is the type check; it is exported.
+- Duplicates: `createCommandTable` no longer overwrites. The first command of a name stays; a later one with the same name, or the same name in other letter case, is left out and listed by the new `CommandTable.duplicates()`. `checkTable` reports each as `duplicate_command`, for a spec list and for a built table. Before, the later command won. `createCommandTable` still never throws.
+- Extra place (same rule): `createFunctionTable` also overwrote duplicates silently. It now keeps the first and lists the rest in `FunctionTable.duplicates()`, and the new `checkFunctionTable` applies the same checks to the built-in function table (lower-case names, types, duplicates, parameter names, no forms). `BUILTIN_FUNCTIONS` passes it. The tester should add a test for `checkFunctionTable`.
+
+## Spec tests broken by the `via` -> `cause` rename
+
+None. The tester changed the tests that read `via` (commit 69c3289) before the rename; no spec test fails now.
+
+## Contested tests
+
+None.
