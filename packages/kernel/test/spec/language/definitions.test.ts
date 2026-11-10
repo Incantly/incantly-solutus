@@ -156,11 +156,9 @@ describe('language/design.md 3.8 what a definition makes', () => {
     expect(failure('n1 = f(L)').kind).toBe('type_mismatch');
   });
 
-  it('3.10 rule 4: a call has Function arity arguments; a wrong count is no_matching_form with the single form', () => {
+  it('3.10 rule 4 and rulings.md Q7: a call with the wrong number of arguments is arg_count with the single form', () => {
     const e = failure('n1 = f(1, 2)');
-    // errors.md 5 calls this kind `bad_arity` ("same as no_matching_form with the single form"); the shared
-    // ErrorKind list has `arg_count` instead.
-    expect(['no_matching_form', 'arg_count', 'bad_arity']).toContain(e.kind);
+    expect(e.kind).toBe('arg_count');
     expect(e.forms.length).toBe(1);
     expect(e.forms[0]).toContain('f(');
   });

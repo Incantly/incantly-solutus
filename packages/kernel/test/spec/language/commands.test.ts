@@ -4,10 +4,9 @@ import type { CommandSpec, TNode } from '@incantly/kernel';
 import { COMMANDS, check, checked, errOf, expectAt, failure, form, newFig, p } from './helpers';
 
 /**
- * [doc-question] README decision 3 and errors/design.md list `arg_count` as its own kind, while language/errors.md 5
- * and core design 9 give "argument count or types fit no form" to `no_matching_form`. A count-only mistake may be either.
+ * rulings.md Q7: a wrong argument count is its own kind, `arg_count`. `no_matching_form` is for type problems
+ * when the count fits at least one form. `bad_arity` does not exist.
  */
-const COUNT_KINDS = ['no_matching_form', 'arg_count'];
 
 function commandNode(src: string): Extract<TNode, { n: 'command' }> {
   const c = checked(src);
@@ -105,7 +104,7 @@ describe('language/design.md 3.11 command argument matching: exact forms', () =>
   });
 
   it('3.11 rest parameters still need the fixed ones and the right type', () => {
-    expect(COUNT_KINDS).toContain(failure('pq = Polygon(A, B)').kind);
+    expect(failure('pq = Polygon(A, B)').kind).toBe('arg_count');
     const e = failure('pq = Polygon(A, B, C, 2)');
     expect(e.kind).toBe('no_matching_form');
     expect(e.problems?.[0]?.argIndex).toBe(3);
@@ -237,7 +236,7 @@ describe('language/design.md 3.11 binders and bodies', () => {
 });
 
 describe('language/design.md 3.11 step 6: failing with a diagnosis', () => {
-  it('core 9: Circle(A, B, 2) has no form; the closest is the 3-point form (tie broken by arity)', () => {
+  it('core 9: Circle(A, B, 2) has no form; the closest is the 3-point form (the only form whose count fits)', () => {
     const e = failure('c = Circle(A, B, 2)');
     expect(e.kind).toBe('no_matching_form');
     expect(e.message).toContain('Circle');
@@ -260,21 +259,43 @@ describe('language/design.md 3.11 step 6: failing with a diagnosis', () => {
     expect(pr?.endCol).toBe(19);
   });
 
-  it('[doc-question: contradicts errors.md 5 example, next test] 3.11 step 6: the closest form has the fewest problems', () => {
+  it('rulings.md Q5: Circle(A, 2, 3) lists the 3-point form first, because it is the only form whose count fits', () => {
     const e = failure('c = Circle(A, 2, 3)');
     expect(e.kind).toBe('no_matching_form');
-    expect(e.forms[0]).toBe('Circle(center: Point, radius: Number) -> Circle');
-    expect(e.problems?.length).toBe(1);
-    expect(e.problems?.[0]?.argIndex).toBe(2);
-    expect(e.problems?.[0]?.got).toBe('extra');
-  });
-
-  it('[doc-question: errors.md 5 example vs design.md 3.11 step 6] Circle(A, 2, 3) lists the 3-point form first', () => {
-    // errors.md 5 shows forms starting with the 3-point form and problems at argIndex 1 and 2.
-    // design.md 3.11 step 6 says the closest form has the FEWEST problems, which is the 2-argument radius form.
-    const e = failure('c = Circle(A, 2, 3)');
     expect(e.forms[0]).toBe('Circle(a: Point, b: Point, c: Point) -> Circle');
     expect(e.problems?.map((x) => x.argIndex)).toEqual([1, 2]);
+    expect(e.problems?.map((x) => x.got)).toEqual(['Number', 'Number']);
+    expect(e.problems?.map((x) => x.param)).toEqual(['b', 'c']);
+  });
+
+  it('rulings.md Q5: errors.md 5 example, forms are listed 3-point, radius, through; problems have the example columns', () => {
+    const e = failure('c9 = Circle(A, 2, 3)');
+    expect(e.forms.slice(0, 3)).toEqual([
+      'Circle(a: Point, b: Point, c: Point) -> Circle',
+      'Circle(center: Point, radius: Number) -> Circle',
+      'Circle(center: Point, through: Point) -> Circle',
+    ]);
+    expect(e.problems).toEqual([
+      expect.objectContaining({ argIndex: 1, param: 'b', expected: 'Point', got: 'Number', col: 16, endCol: 17 }),
+      expect.objectContaining({ argIndex: 2, param: 'c', expected: 'Point', got: 'Number', col: 19, endCol: 20 }),
+    ]);
+  });
+
+  it('rulings.md Q5: among forms whose count fits, the one with the fewest problems comes first', () => {
+    // Midpoint(A, 2): the count fits only the 2-point form (Midpoint(s) takes one argument).
+    const e = failure('M9 = Midpoint(A, 2)');
+    expect(e.kind).toBe('no_matching_form');
+    expect(e.forms[0]).toBe('Midpoint(a: Point, b: Point) -> Point');
+    expect(e.problems).toEqual([expect.objectContaining({ argIndex: 1, param: 'b', got: 'Number' })]);
+  });
+
+  it('rulings.md Q5: when no form fits the count, the form with the fewest problems overall comes first', () => {
+    // Midpoint(A, B, C): the 2-point form has one problem (extra); the segment form has two (a Point for a Segment, extra).
+    const e = failure('M9 = Midpoint(A, B, C)');
+    expect(e.kind).toBe('arg_count');
+    expect(e.forms[0]).toBe('Midpoint(a: Point, b: Point) -> Point');
+    expect(e.problems?.length).toBe(1);
+    expect(e.problems?.[0]?.got).toBe('extra');
   });
 
   it('3.11 a wrong argument type is named with the parameter, the expected type and what was given', () => {
@@ -292,9 +313,9 @@ describe('language/design.md 3.11 step 6: failing with a diagnosis', () => {
     expect(e.problems?.[0]?.got).toBe('Segment');
   });
 
-  it('3.11 too many arguments: the extra argument is reported at its span', () => {
+  it('rulings.md Q7: too many arguments for every form is arg_count; the extra argument is reported at its span', () => {
     const e = failure('m = Midpoint(A, B, C)');
-    expect(e.kind).toBe('no_matching_form');
+    expect(e.kind).toBe('arg_count');
     const pr = e.problems?.find((x) => x.got === 'extra');
     expect(pr).toBeDefined();
     expect(pr?.argIndex).toBe(2);
@@ -302,9 +323,9 @@ describe('language/design.md 3.11 step 6: failing with a diagnosis', () => {
     expect(pr?.endCol).toBe(21);
   });
 
-  it('3.11 too few arguments: argIndex -1 and got "missing"', () => {
+  it('rulings.md Q7: too few arguments is arg_count: argIndex -1 and got "missing"', () => {
     const e = failure('d = Distance(A)');
-    expect(COUNT_KINDS).toContain(e.kind);
+    expect(e.kind).toBe('arg_count');
     expect(e.problems).toHaveLength(1);
     expect(e.problems?.[0]?.argIndex).toBe(-1);
     expect(e.problems?.[0]?.got).toBe('missing');
@@ -319,17 +340,62 @@ describe('language/design.md 3.11 step 6: failing with a diagnosis', () => {
     expect(e.problems).toEqual([expect.objectContaining({ argIndex: 1, param: 'b', expected: 'Point', got: 'Number', col: 17, endCol: 18 })]);
   });
 
-  it('3.11 a command with no arguments at all', () => {
+  it('rulings.md Q7: a command with no arguments at all is arg_count', () => {
     const e = failure('c9 = Circle()');
-    expect(COUNT_KINDS).toContain(e.kind);
+    expect(e.kind).toBe('arg_count');
     expect(e.forms.length).toBe(3);
-    const e2 = failure('Hide()');
-    expect(COUNT_KINDS).toContain(e2.kind);
+    expect(failure('Hide()').kind).toBe('arg_count');
   });
 
-  it('[doc-question: core design 9 example points at the one argument (col 12, token "2")] errors.md 5 no_matching_form: the token spans the whole call', () => {
+  it('rulings.md Q7: arg_count and no_matching_form are never swapped, and bad_arity is never raised', () => {
+    const cases: [string, string][] = [
+      ['d = Distance(A)', 'arg_count'],
+      ['d = Distance(A, B, C)', 'arg_count'],
+      ['c9 = Circle(A)', 'arg_count'],
+      ['c9 = Circle(A, B, C, A)', 'arg_count'],
+      ['d = Distance(A, 5)', 'no_matching_form'],
+      ['d = Distance(5, A)', 'no_matching_form'],
+      ['c9 = Circle(A, B, 2)', 'no_matching_form'],
+      ['n1 = Pick(s)', 'no_matching_form'],
+    ];
+    for (const [src, kind] of cases) {
+      const e = failure(src);
+      expect(e.kind, src).toBe(kind);
+      expect(e.kind, src).not.toBe('bad_arity');
+    }
+  });
+
+  it('rulings.md Q7: a call of a Function object with the wrong number of arguments is arg_count with the single form', () => {
+    const e = failure('n1 = f(1, 2)');
+    expect(e.kind).toBe('arg_count');
+    expect(e.forms.length).toBe(1);
+  });
+
+  it('rulings.md Q6: Distance(A, 5), the count fits and one argument is wrong, so the span is that argument', () => {
     const e = failure('d = Distance(A, 5)');
-    expectAt(e, { col: 5, endCol: 19, token: 'Distance(A, 5)' });
+    expectAt(e, { col: 17, endCol: 18, token: '5' });
+  });
+
+  it('rulings.md Q6: Circle(A, B, 2) points at the one wrong argument', () => {
+    const e = failure('c = Circle(A, B, 2)');
+    expectAt(e, { col: 18, endCol: 19, token: '2' });
+  });
+
+  it('rulings.md Q6: Circle(s, 2) points at the wrong first argument', () => {
+    const e = failure('c = Circle(s, 2)');
+    expectAt(e, { col: 12, endCol: 13, token: 's' });
+  });
+
+  it('rulings.md Q6: when the count fits no form, the span is the whole call', () => {
+    expectAt(failure('d = Distance(A)'), { col: 5, endCol: 16, token: 'Distance(A)' });
+    expectAt(failure('d = Distance(A, B, C)'), { col: 5, endCol: 22, token: 'Distance(A, B, C)' });
+    expectAt(failure('c9 = Circle()'), { col: 6, endCol: 14, token: 'Circle()' });
+    expectAt(failure('Hide()'), { col: 1, endCol: 7, token: 'Hide()' });
+  });
+
+  it('errors.md 5 example: Circle(A, 2, 3) has two wrong arguments, so the span is the whole call', () => {
+    const e = failure('c9 = Circle(A, 2, 3)');
+    expectAt(e, { col: 6, endCol: 21, token: 'Circle(A, 2, 3)' });
   });
 
   it('3.11 the error names the closest form and the first problem; forms is the full list', () => {
@@ -342,7 +408,7 @@ describe('language/design.md 3.11 step 6: failing with a diagnosis', () => {
 
   it('errors/design.md 3: forms has at most 6 entries; formsOmitted counts the rest', () => {
     const e = failure('q9 = Many(A)');
-    expect(['no_matching_form', 'arg_count']).toContain(e.kind);
+    expect(e.kind).toBe('no_matching_form'); // one argument fits the 1-parameter form, but A is a Point
     expect(e.forms.length).toBeLessThanOrEqual(6);
     expect(e.forms.length + (e.formsOmitted ?? 0)).toBe(8);
   });
@@ -360,10 +426,20 @@ describe('language/design.md 3.11 step 6: failing with a diagnosis', () => {
     expect(e.more?.map((x) => x.token)).toEqual(['q2', 'q3']);
   });
 
-  it('[doc-question: errors/design.md 5.2 says one error per line] errors.md says up to 1 + 7 in more', () => {
+  it('rulings.md Q13: one main error per line, plus more errors in `more`, capped at 8 more', () => {
+    // errors.md 6 says "1 + 7 in more" and the ruling says "up to 8 more"; accept 7 or 8 and nothing beyond.
     const names = Array.from({ length: 20 }, (_, i) => `q${i + 1}`);
     const e = failure(`n1 = ${names.join(' + ')}`);
-    expect(e.more?.length).toBe(7);
+    expect(e.token).toBe('q1');
+    expect(e.more?.length).toBeGreaterThanOrEqual(7);
+    expect(e.more?.length).toBeLessThanOrEqual(8);
+    expect((e.more ?? []).map((x) => x.token).slice(0, 7)).toEqual(names.slice(1, 8));
+    for (const x of e.more ?? []) expect(x.more ?? []).toEqual([]);
+  });
+
+  it('rulings.md Q13: a line with a single mistake has no `more`', () => {
+    const e = failure('n1 = q1');
+    expect(e.more ?? []).toEqual([]);
   });
 
   it('3.1 an error inside a command argument in a defmany line', () => {

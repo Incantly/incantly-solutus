@@ -92,10 +92,39 @@ describe('language/design.md 3.14 constants', () => {
     expect(undefinedReason('0 * inf')).toBe('not_finite');
   });
 
-  it('[doc-question: 3.14 "never stored as a result" vs README 7 "Number may be ±inf"] out = inf', () => {
+  it('rulings.md Q4: out = inf stores positive infinity', () => {
     const e = ev('inf');
     expect(e.applied.defined).toBe(true);
     expect(e.value).toBe(Infinity);
+  });
+
+  it('rulings.md Q4: -inf is stored as negative infinity, and a stored inf is a defined Number', () => {
+    const fig = newFig();
+    expect(okValue(fig.apply('lo = -inf')).defined).toBe(true);
+    expect(fig.valueOf('lo')).toBe(-Infinity);
+    expect(okValue(fig.apply('hi = inf')).defined).toBe(true);
+    expect(fig.valueOf('hi')).toBe(Infinity);
+    expect(fig.lookup('hi')?.type.k).toBe('Number');
+  });
+
+  it('rulings.md Q4: inf may appear in any Number position', () => {
+    const fig = newFig();
+    expect(check('x1 = Round3(inf)', fig).ok).toBe(true);
+    expect(check('p9 = (inf, 0)', fig).ok).toBe(true);
+    expect(check('L9 = [inf, 1]', fig).ok).toBe(true);
+    expect(bool('min(inf, 3) == 3', fig)).toBe(true);
+    expect(bool('inf > a', fig)).toBe(true);
+  });
+
+  it('rulings.md Q4: arithmetic on finite numbers that overflows is undefined, never a stored inf', () => {
+    // The ruling names `not_finite`; errors.md 8 gives finite inputs above the largest double the reason `overflow`
+    // (`10^400`, `fact(200)`). Either reason is accepted here; the value must be undefined and not Infinity.
+    const fig = newFig();
+    const r = okValue(fig.apply('big = 1e308 * 10'));
+    expect(r.defined).toBe(false);
+    expect(['not_finite', 'overflow']).toContain(r.reason);
+    expect(fig.valueOf('big')).not.toBe(Infinity);
+    expect(undefinedReason('inf - inf')).toBe('not_finite');
   });
 
   it('undefined is the undefined Number with reason explicit', () => {
@@ -520,15 +549,24 @@ describe('language/design.md 3.14 undefined reasons', () => {
 describe('language/design.md 3.14 calls', () => {
   it('one-argument log(x) is refused with a hint to use ln, log10 or log2', () => {
     const e = failure('out = log(100)');
-    // design.md 3.14 says no_matching_form; README 3 / errors design also have `arg_count` for count-only mistakes.
-    expect(['no_matching_form', 'arg_count']).toContain(e.kind);
+    // rulings.md Q7: a wrong argument count is arg_count (log has no one-argument form).
+    expect(e.kind).toBe('arg_count');
     expect(e.hint).toMatch(/ln, log10 or log2/);
   });
 
-  it('a wrong argument count or type is no_matching_form and lists the forms', () => {
-    for (const src of ['out = sin(1, 2)', 'out = sin("a")', 'out = atan2(1)', 'out = hypot(1)', 'out = clamp(1, 2)', 'out = sqrt()', 'out = sin(A)']) {
+  it('rulings.md Q7: a wrong argument count is arg_count and a wrong type is no_matching_form; both list the forms', () => {
+    const cases: [string, string][] = [
+      ['out = sin(1, 2)', 'arg_count'],
+      ['out = sin("a")', 'no_matching_form'],
+      ['out = atan2(1)', 'arg_count'],
+      ['out = hypot(1)', 'arg_count'],
+      ['out = clamp(1, 2)', 'arg_count'],
+      ['out = sqrt()', 'arg_count'],
+      ['out = sin(A)', 'no_matching_form'],
+    ];
+    for (const [src, kind] of cases) {
       const e = failure(src);
-      expect(['no_matching_form', 'arg_count'], src).toContain(e.kind);
+      expect(e.kind, src).toBe(kind);
       expect(e.forms.length, src).toBeGreaterThan(0);
       expect(e.forms[0], src).toMatch(/^[a-z0-9]+\(/);
     }

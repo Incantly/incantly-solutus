@@ -339,7 +339,7 @@ describe('language/design.md 3.18 autocomplete', () => {
   });
 
   it('after @: directive names', () => {
-    const cs = complete('@', 1, fig, { limit: 20 });
+    const cs = complete('@', 1, fig, { limit: 100 });
     expect(labels(cs).map((l) => l.replace(/^@/, ''))).toEqual(expect.arrayContaining(['view', 'grid', 'axes', 'beat', 'clock']));
     expect(cs.every((c) => c.kind === 'directive')).toBe(true);
     expect(labels(complete('@vi', 3, fig)).map((l) => l.replace(/^@/, ''))).toContain('view');

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { COLOR_WORDS, DIRECTIVES, ERROR_KINDS, MESSAGE_TEMPLATES, PROPERTIES, analyseLine, parseLine, parseProgram, tokenize } from '@incantly/kernel';
+import type { LanguageError } from '@incantly/kernel';
 import { check, checked, compact, emptyFig, errOf, expectAt, expectFixPasses, expectWellFormed, failure, hasHint, newFig } from './helpers';
 
 // Every language error kind listed in docs/features/language/errors.md, with one input that raises it.
@@ -89,7 +90,7 @@ describe('language/errors.md: one input per kind, with phase, code, line, col, e
       'bad_character', 'bad_number', 'unterminated_string', 'bad_escape', 'bad_format', 'syntax', 'unbalanced', 'unnamed_object',
       'missing_operator', 'ambiguous_implicit', 'chained_comparison', 'assign_in_expr', 'bad_range', 'bad_directive',
       'unknown_name', 'unknown_command', 'unknown_function', 'not_callable', 'free_variable', 'reserved_name', 'bad_name',
-      'duplicate_param', 'duplicate_arg', 'not_a_binder', 'type_mismatch', 'no_matching_form', 'type_change', 'cycle',
+      'duplicate_param', 'duplicate_arg', 'not_a_binder', 'type_mismatch', 'no_matching_form', 'arg_count', 'type_change', 'cycle',
       'breaks_dependents', 'empty_list_type', 'limit',
     ];
     const codes = new Map<string, string>();
@@ -137,11 +138,23 @@ describe('language/errors.md: one input per kind, with phase, code, line, col, e
     }
   });
 
-  it('errors/design.md 3.3: a zero-width error (something is missing) has endCol === col and an empty token', () => {
+  it('rulings.md Q12: a zero-width error (something is missing) has endCol === col and token ""', () => {
     const e = failure('f9(x) =');
     expect(e.kind).toBe('syntax');
     expect(e.endCol).toBe(e.col);
+    expect(e.token).toBe('');
     expect(e.expected).toContain('expression');
+  });
+
+  it('rulings.md Q12: every zero-width error has token "" (the message may say end of line)', () => {
+    for (const src of ['n = 1 +', 'f9(x) =', 'n =', 'n = (1 +', 's1 = 3 in 0..']) {
+      const r = check(src);
+      expect(r.ok, src).toBe(false);
+      if (r.ok) continue;
+      const e = r as LanguageError;
+      if (e.endCol === e.col) expect(e.token, src).toBe('');
+      else expect(e.token, src).not.toBe('end of line');
+    }
   });
 
   it('errors/design.md 3: source holds the full line when it is short', () => {
@@ -152,11 +165,30 @@ describe('language/errors.md: one input per kind, with phase, code, line, col, e
     expect(failure(long).source).toBeUndefined();
   });
 
-  it('errors.md 1 / errors/design.md 3.1: an error with a fix also lists it in suggest [doc-question: relation not stated]', () => {
+  it('rulings.md Q14: an error with a fix lists it as the first entry of suggest', () => {
     const e = failure('n = a b');
     expect(e.fix).toBe('n = a * b');
-    expect(e.suggest).toContain('n = a * b');
+    expect(e.suggest[0]).toBe('n = a * b');
     expect(e.suggest.length).toBeLessThanOrEqual(3);
+  });
+
+  it('rulings.md Q14: for every input in this file that has a fix, suggest[0] is the fix', () => {
+    const fig = newFig();
+    const srcs = [
+      ...CASES.map((c) => c.src),
+      'n = 2 3', 'n = ab', 'x = A.x', 'n = x + 1', '3x + 4y = 12', 'Circle(A, 2)', 'c9 = Circle(A, 2', 'A9: (1, 2)',
+      's9 = 3 in 10..0', 'n = a(2)', 'out = (1/2) a', '1a = 1',
+    ];
+    let withFix = 0;
+    for (const src of srcs) {
+      const r = analyseLine(src, fig);
+      if (r.ok) continue;
+      const e = r as LanguageError;
+      if (e.fix === undefined) continue;
+      withFix++;
+      expect(e.suggest[0], src).toBe(e.fix);
+    }
+    expect(withFix).toBeGreaterThan(5);
   });
 
   it('errors/design.md 3.1: fingerprint is stable for the same error and differs between kinds', () => {
@@ -276,8 +308,25 @@ describe('errors.md 2: lexical errors', () => {
     expect(failure('n = .').kind).toBe('bad_number');
   });
 
-  it('[doc-question: 3.3 reads "1e+" as 1 times e then a dangling +] bad_number: an exponent with no digits', () => {
-    expect(failure('n = 1e+').kind).toBe('bad_number');
+  it('rulings.md Q10: "1e+" is syntax (missing operand after +), not bad_number', () => {
+    const e = failure('n = 1e+');
+    expect(e.kind).toBe('syntax');
+    expect(e.phase).toBe('parse');
+    expect(e.expected).toContain('expression');
+    expectAt(e, { col: 8, endCol: 8, token: '' });
+  });
+
+  it('rulings.md Q10: an exponent needs digits after e, e+ or e-; otherwise e is the constant', () => {
+    expect(failure('n = 1e-').kind).toBe('syntax');
+    const fig = newFig();
+    expect(fig.apply('n9 = 1e').ok).toBe(true);
+    expect(fig.valueOf('n9')).toBeCloseTo(Math.E, 12);
+    expect(fig.apply('n8 = 1e+2').ok).toBe(true);
+    expect(fig.valueOf('n8')).toBe(100);
+    expect(fig.apply('n7 = 1e-2').ok).toBe(true);
+    expect(fig.valueOf('n7')).toBeCloseTo(0.01, 15);
+    expect(fig.apply('n6 = 2e+a').ok).toBe(true); // 2 * e + a
+    expect(fig.valueOf('n6')).toBeCloseTo(2 * Math.E + 3, 12);
   });
 
   it('bad_number: 1.2.3 points inside the literal', () => {
@@ -340,7 +389,7 @@ describe('errors.md 2: lexical errors', () => {
     expect(check(`n = ${'1+'.repeat(300)}1`).ok).toBe(true);
   });
 
-  it('limit: nesting deeper than 64 is refused before recursion', () => {
+  it('rulings.md Depth: nesting of 64 is allowed, 65 or more is limit', () => {
     const nest = (d: number): string => `n = ${'('.repeat(d)}1${')'.repeat(d)}`;
     expect(check(nest(60)).ok).toBe(true);
     expect(check(nest(64)).ok).toBe(true);
@@ -352,9 +401,24 @@ describe('errors.md 2: lexical errors', () => {
     expect(failure(calls).kind).toBe('limit');
   });
 
-  it('[doc-question: design 3.1 names kinds too_long and too_deep; the shared ErrorKind list has only limit]', () => {
+  it('rulings.md Q8: a too-long line is kind limit, with the specific limit in params', () => {
     const e = failure(`n = 1 #${'x'.repeat(2100)}`);
-    expect(['limit', 'too_long']).toContain(e.kind);
+    expect(e.kind).toBe('limit');
+    expect(Object.keys(e.params).length).toBeGreaterThan(0);
+    expect(JSON.stringify(e.params)).toContain('2000');
+  });
+
+  it('rulings.md Q8: too-deep nesting is kind limit, with the depth limit in params', () => {
+    const e = failure(`n = ${'('.repeat(65)}1${')'.repeat(65)}`);
+    expect(e.kind).toBe('limit');
+    expect(JSON.stringify(e.params)).toContain('64');
+  });
+
+  it('rulings.md Q8: the kind names are bad_character and limit; bad_char, too_long and too_deep do not exist', () => {
+    expect(ERROR_KINDS['bad_character']).toBeDefined();
+    expect(ERROR_KINDS['limit']).toBeDefined();
+    for (const k of ['bad_char', 'too_long', 'too_deep', 'bad_arity']) expect(ERROR_KINDS[k], k).toBeUndefined();
+    expect(failure('n = 3 $ 4').kind).toBe('bad_character');
   });
 
   it('limit: 5,000 objects', () => {

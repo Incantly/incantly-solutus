@@ -125,13 +125,28 @@ describe('language/design.md 3.4 line kinds', () => {
   });
 });
 
-describe('language/design.md 1.2 (doc-question)', () => {
-  it('[doc-question: 1.2 vs 3.6/core 3] "f(x) = m (x - A.x) + A.y" is written as a good line in 1.2', () => {
-    // 1.2 shows this as a good line. core 3 says "A name followed by ( is a call ... never a product" and
-    // 3.6 allows implicit multiplication only after a number literal, so `m (` should be not_callable.
+describe('language/design.md 1.2 and rulings.md Q1', () => {
+  it('rulings.md Q1: "f(x) = m (x - A.x) + A.y" is not_callable, because implicit multiplication follows only a number literal', () => {
     const fig = emptyFig();
     for (const l of ['A = (1, 2)', 'B = (4, 6)', 'm = (B.y - A.y) / (B.x - A.x)']) expect(fig.apply(l).ok).toBe(true);
-    expect(fig.apply('f(x) = m (x - A.x) + A.y').ok).toBe(true);
+    const e = errOf(fig.apply('f(x) = m (x - A.x) + A.y'));
+    expect(e.kind).toBe('not_callable');
+    expectAt(e, { col: 8, endCol: 9, token: 'm' });
+    expect(e.fix).toContain('m * (x - A.x)');
+    expect(e.hint ?? '').toMatch(/\*/); // the hint says to write the product with *
+    expectFixPasses(e, fig);
+  });
+
+  it('rulings.md Q1: the same line with an explicit * is a good line', () => {
+    const fig = emptyFig();
+    for (const l of ['A = (1, 2)', 'B = (4, 6)', 'm = (B.y - A.y) / (B.x - A.x)']) expect(fig.apply(l).ok).toBe(true);
+    expect(fig.apply('f(x) = m * (x - A.x) + A.y').ok).toBe(true);
+  });
+
+  it('rulings.md Q1: a name followed by ( is a call; a Number name there is not_callable, with and without a space', () => {
+    expect(failure('out = a (2)').kind).toBe('not_callable');
+    expect(failure('out = a(2)').kind).toBe('not_callable');
+    expect(num('3 (a + 1)')).toBe(12); // after a number literal it stays a product
   });
 });
 
@@ -303,9 +318,17 @@ describe('language/design.md 3.5 operators, precedence, associativity', () => {
     expect(bool(`${ub} xor true`)).toBeUndefined();
   });
 
-  it('3.5 [doc-question: 3.10 rule 1 types the undefined literal as Number] "undefined and false" is false', () => {
-    expect(bool('undefined and false')).toBe(false);
-    expect(bool('undefined or true')).toBe(true);
+  it('rulings.md Q3: the literal undefined is a Number, so "undefined and false" is type_mismatch', () => {
+    const e = failure('out = undefined and false');
+    expect(e.kind).toBe('type_mismatch');
+    expect(e.left).toBe('Number');
+    expect(e.right).toBe('Bool');
+  });
+
+  it('rulings.md Q3: "undefined or true", "not undefined" and "true and undefined" are type_mismatch too', () => {
+    expect(failure('out = undefined or true').kind).toBe('type_mismatch');
+    expect(failure('out = true and undefined').kind).toBe('type_mismatch');
+    expect(failure('out = not undefined').kind).toBe('type_mismatch');
   });
 
   it('3.5 / 8 a comparison with an undefined operand is undefined, never false', () => {
@@ -374,16 +397,31 @@ describe('language/design.md 3.6 implicit multiplication, exactly', () => {
     expect(e.fix).toBe('out = 2 * 3');
   });
 
-  it('3.6 [doc-question: contradicts 3.5] between ")" and a name: missing_operator', () => {
-    // 3.6: "between `)` and `(` or a name (`(a)(b)`, `(a) b`): missing_operator".
-    // 3.5 and errors.md quickFixes call `(1/2)x` fine. Both cannot hold.
+  it('3.6 between ")" and a name or "(": missing_operator', () => {
     expect(failure('out = (a) b').kind).toBe('missing_operator');
     expect(failure('out = (a)(b)').kind).toBe('missing_operator');
   });
 
-  it('3.5 [doc-question: contradicts 3.6] (1/2)x is fine', () => {
-    expect(num('(1/2) a')).toBe(1.5);
-    expect(num('(1/2)a')).toBe(1.5);
+  it('rulings.md Q2: (1/2)x is not allowed; ")" followed by a name is missing_operator', () => {
+    for (const src of ['out = (1/2) a', 'out = (1/2)a']) {
+      const e = failure(src);
+      expect(e.kind, src).toBe('missing_operator');
+      expect(e.phase, src).toBe('parse');
+    }
+  });
+
+  it('rulings.md Q2: the quick fix for (1/2)x is (1/2) * x, never (1/2) x', () => {
+    const fig = newFig();
+    const e = failure('out = (1/2) a', fig);
+    expect(e.fix).toBe('out = (1/2) * a');
+    expectFixPasses(e, fig);
+    expect(num('(1/2) * a')).toBe(1.5);
+    const amb = failure('h = 1/2a', fig);
+    const lines = (amb.quickFixes ?? []).flatMap((q) => q.lines);
+    expect(lines).toContain('h = (1/2) * a');
+    expect(lines).toContain('h = 1/(2a)');
+    expect(lines).not.toContain('h = (1/2) a');
+    expect(lines.join('\n')).not.toMatch(/\) a\b/);
   });
 
   it('3.6 "ab" is one name, so an unknown "ab" with a and b known is unknown_name (not a product)', () => {
@@ -915,19 +953,26 @@ describe('language/design.md 3.19 edge cases', () => {
     expect(e.limit?.got).toBe(100001);
   });
 
-  it('3.9 = never builds an equation: 3x + 4y = 12 needs ==', () => {
+  it('rulings.md Q9: 3x + 4y = 12 is assign_in_expr at the =, expected ==, fix names the line', () => {
     const fig = emptyFig();
     const e = errOf(analyseLine('3x + 4y = 12', fig));
-    // errors.md 3 names assign_in_expr; design.md 3.9 says `syntax` with expected ["=="].
-    expect(['assign_in_expr', 'syntax']).toContain(e.kind);
-    expect(e.expected).toContain('==');
+    expect(e.kind).toBe('assign_in_expr');
+    expect(e.phase).toBe('parse');
     expectAt(e, { col: 9, endCol: 10, token: '=' });
-    expect(e.fix).toBe('l = 3x + 4y == 12');
+    expect(e.expected).toContain('==');
+    expect(e.fix).toBeDefined();
+    expect(e.fix).toContain('3x + 4y == 12');
+    expect(e.fix).not.toBe('3x + 4y == 12'); // wrapped as the line kind it needs
+    expect(e.fix).toMatch(/^[a-z]\w* = /);
+    expectFixPasses(e, fig);
   });
 
-  it('[doc-question: 3.9 says syntax, errors.md says assign_in_expr] kind of 3x + 4y = 12', () => {
-    const e = errOf(analyseLine('3x + 4y = 12', emptyFig()));
-    expect(e.kind).toBe('assign_in_expr');
+  it('rulings.md Q9: the fix of 3x + 4y = 12 makes a Line', () => {
+    const fig = emptyFig();
+    const e = errOf(analyseLine('3x + 4y = 12', fig));
+    const fixed = fig.apply(e.fix ?? '');
+    expect(fixed.ok).toBe(true);
+    expect(fig.lookup('l')?.type.k).toBe('Line');
   });
 
   it('errors.md 3 assign_in_expr: a second = in an expression', () => {

@@ -134,8 +134,24 @@ describe('language/design.md 3.7 valid names', () => {
     expect(e.hint ?? '').not.toBe('');
   });
 
-  it('[doc-question: errors.md 4 lists "leading digit" as bad_name, but 3.6 reads "1a" as 1 times a] 1a = 1', () => {
-    expect(failure('1a = 1').kind).toBe('bad_name');
+  it('rulings.md Q11: 1a = 1 is bad_name ("A name cannot start with a digit") with the fix a1 = 1', () => {
+    const fig = newFig();
+    const e = failure('1a = 1', fig);
+    expect(e.kind).toBe('bad_name');
+    expect(e.phase).toBe('resolve');
+    expect(e.col).toBe(1);
+    expect(`${e.message} ${e.hint ?? ''}`).toMatch(/start with a digit/i);
+    expect(e.fix).toBe('a1 = 1');
+    expect(e.suggest[0]).toBe('a1 = 1');
+    expectFixPasses(e, fig);
+  });
+
+  it('rulings.md Q11: only a line whose first token is a number directly followed by a name, then a top-level =, is bad_name', () => {
+    const fig = newFig();
+    expect(failure('2x = 3', fig).kind).toBe('bad_name');
+    expect(check('n9 = 1a', fig).ok).toBe(true); // 1 * a in an expression
+    expect(check('f9(x) = 2x', fig).ok).toBe(true);
+    expect(check('n9 = 2 * (1a)', fig).ok).toBe(true);
   });
 
   it('3.7 nameProblem returns the broken rule for invalid names', () => {
