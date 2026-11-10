@@ -14,8 +14,11 @@ Rule: our own code does the core maths (kernel, language, numeric methods, symbo
 | [Delaunator](https://github.com/mapbox/delaunator) | ISC | Triangulation for `DelaunayTriangulation`, Voronoi and meshes | `kernel` (discrete) |
 | [robust-predicates](https://github.com/mourner/robust-predicates) | Unlicense | Exact orientation and in-circle tests for geometry | `kernel` (geometry) |
 | [polygon-clipping](https://github.com/mfogel/polygon-clipping) | MIT | Union, intersection and difference of polygons, including holes | `kernel` (polygons) |
-| [three.js](https://github.com/mrdoob/three.js) | MIT | WebGL scene, cameras and materials for the 3D view | `view` (3D) |
 | [Manifold](https://github.com/elalish/manifold) | Apache-2.0 | Boolean operations on solids (cut, union, difference), as WebAssembly | `view` (3D), loaded on demand |
+| [Tone.js](https://github.com/Tonejs/Tone.js) | MIT | Sound: synths, noise, envelopes, scheduling on the audio clock | `audio`, loaded on demand |
+| [Tiptap](https://github.com/ueberdosis/tiptap) | MIT | The editor our figure extension plugs into (peer dependency, not bundled) | `tiptap` |
+
+The renderer, for 2D and 3D, is our own (`docs/design/performance.md`). We do not use three.js or any other scene library: the renderer must also run on mobile, so it is written against a small GPU interface we control.
 
 Apache-2.0 asks us to keep its licence and notice files and to mark changes we make to its code. We do not change Manifold's code.
 
@@ -33,6 +36,7 @@ Apache-2.0 asks us to keep its licence and notice files and to mark changes we m
 | Library | Licence | Why |
 |---|---|---|
 | Giac | GPL-3 | Would force our whole product under GPL |
+| three.js, d3 and other scene or chart libraries | MIT | We build the renderer ourselves so it runs the same on web and mobile |
 | Nerdamer (original, `jiggzson/nerdamer`) | Apache-2.0 | Superseded by the maintained Nerdamer Prime fork |
 | Any GeoGebra code or asset | EUPL 1.2, non-commercial terms | We learn from it only |
 

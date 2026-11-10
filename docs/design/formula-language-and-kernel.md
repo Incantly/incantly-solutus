@@ -440,7 +440,9 @@ The AI that writes lines, for the live teacher and for the studio's AI panel, is
 | `packages/kernel` | Tokenizer, parser, types, command table, rules, graph, clock, solver, particles maths, errors, `toScript` | Nothing; no DOM | Browser and Node |
 | `packages/plot` | Function and curve sampling, tracers, fills | `kernel` types; no DOM | Browser and Node |
 | `packages/symbolic` | The CAS layer, loaded on demand | `kernel` | Browser worker and Node |
-| `packages/view` | Drawables, canvas, SVG and WebGL back-ends, 3D, pointer and keyboard | `kernel`, `plot` | Browser |
+| `packages/view` | Our own renderer (2D and 3D) behind a GPU interface with WebGL 2 and WebGPU back-ends, SVG and PDF recorders, the shared GPU context, the figure scheduler, pointer and keyboard (`docs/design/performance.md`) | `kernel`, `plot` | Browser; core has no DOM so it can move to mobile |
+| `packages/audio` | Sound playback with Tone.js, loaded on demand (`docs/features/sound/`) | `kernel` | Browser |
+| `packages/tiptap` | The Tiptap extension: `incantlyFigure` and `incantlyFormula` nodes (`docs/features/tiptap/`) | `sdk` | Browser |
 | `packages/ui` | Algebra view, toolbars, input bar, sheet, style bar, maths keyboard, as Web Components | `kernel`, `view`, `modes` | Browser |
 | `packages/modes` | App mode records and exam profiles, as data | Nothing | Browser and Node |
 | `packages/sdk` | `createApp`, the embed API, iframe protocol, file format, export | All browser packages | Browser |
@@ -461,7 +463,9 @@ Each area is built on its own branch and goes through the same checks: build, in
 | 0 | Repository structure, shared build, lint and test setup |
 | 1 | `kernel`, `errors`, `language` |
 | 2 | `numbers-sliders`, `controls-scripting`, `points-lines`, `conics`, `polygons-transforms`, `functions-calculus`, `curves-loci`, `lists-matrices`, `statistics`, `probability`, `graphics-view`, `tools-2d`, `animation-time`, `algebra-view` |
-| 3 | `cas`, `optimisation-discrete`, `text-logic`, `space-3d`, `spreadsheet`, `embed-files-export`, `app-modes`, the teacher and the server with Muse Spark |
+| 3 | `cas`, `optimisation-discrete`, `text-logic`, `space-3d`, `spreadsheet`, `embed-files-export`, `app-modes`, `sound`, `tiptap`, the teacher and the server with Muse Spark |
+
+Performance (`docs/design/performance.md`) is part of every area, not a wave: each area meets its targets and budgets before it merges.
 | 4 | Bodies and collisions (section 7.4), from the legacy physics kit |
 
 Acceptance lessons for the teacher: a pendulum, the area under a curve, and a fire.
