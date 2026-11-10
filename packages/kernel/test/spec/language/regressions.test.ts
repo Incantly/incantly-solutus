@@ -1,5 +1,5 @@
 /**
- * Regression tests for the checker's findings LANG-SM-1 to LANG-SM-21 (handoff/language/findings.md).
+ * Regression tests for the checker's findings LANG-SM-1 to LANG-SM-32 and the ruling Q-R4-1 (handoff/language/findings.md).
  * Every test goes through the public entry `@incantly/kernel` only. A test fails on the bug and
  * passes when it is fixed. Tests that guard a hang or a memory blow-up assert a time or size bound
  * and carry a test timeout.
@@ -2251,8 +2251,9 @@ describe('LANG-SM-29: relation coefficients and sampling follow the overflow rul
 
   it('LANG-SM-29: an undefined relation can be redefined to a defined one, and back', () => {
     const fig = figure();
+    // Both sides read r, so the line has the same type (Curve) before and after.
     expect(applyOk(fig, 'c = x^2 + y^2 == r^2').defined).toBe(false);
-    expect(applyOk(fig, 'c = x^2 + y^2 == 4').defined).toBe(true);
+    expect(applyOk(fig, 'c = x^2 + y^2 == r').defined).toBe(true);
     expect((fig.valueOf('c') as RelationValue).poly).toBeDefined();
     expect(applyOk(fig, 'c = x^2 + y^2 == r^2').defined).toBe(false);
     expect(fig.valueOf('c')).toBeUndefined();
