@@ -1,6 +1,6 @@
 # Formula language and kernel: design
 
-Status: draft for review. Follows the handoff in `docs/research/geogebra-study.md`. No code yet.
+Status: draft for review. Follows the handoff in `docs/research/engine-study.md`. No code yet.
 
 This design learns from how GeoGebra is organised, as described in the study. It copies no GeoGebra code, text, grammar or command table. Where we keep a common maths word (`Midpoint`, `Circle`), it is because that is the word a teacher uses, not because GeoGebra uses it.
 
