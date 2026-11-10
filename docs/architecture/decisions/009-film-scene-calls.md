@@ -19,7 +19,7 @@ Films of one scene (30 s and 1 min) do not need this ADR. They are one plan call
 - **A film makes one plan call and one scene call per scene.** The plan call returns the storyboard and a shared film context (palette, part names, notation, units, tone). Each scene call receives its slice of the storyboard and the film context in its cached prefix, and is capped by a normal size budget.
 - **Scene calls run in parallel** and start as soon as their slice has streamed in. They never see each other's output and never call back to the plan.
 - **No other calls are added.** No critic, no reviewer, no film-level planning loop. Each scene has the same re-plan and repair limits as a figure. Narration, compiling, checking and rendering are code, not model calls.
-- **Cache and examples first.** Reviewed scenes and the concept cache answer per scene before any model call.
+- **No stored scene answers one instead.** Every slice makes its scene call; no stored scene ever replaces it.
 - **The latency target applies to the first scene.** The skeleton within 1 s and the first scene playable within 10 s of the tap, as PRD 16.1. Later scenes join as they pass their checks. The whole film has a deadline per length, set from the bench and within the three-minute generation ceiling.
 - **The number of scenes is capped** (bench; about one scene per 30 to 60 s of film), and with it the number of parallel calls and the cost per film.
 

@@ -200,7 +200,7 @@ export function resolveFilmPosition(film: CompiledFilm, position: FilmPosition):
 // Keyboard shortcuts
 // ---------------------------------------------------------------------------
 
-export type ShortcutAction = 'playPause' | 'back' | 'forward' | 'prevBeat' | 'nextBeat' | 'captions' | 'sound' | 'ask' | 'loop' | 'bookmark';
+export type ShortcutAction = 'playPause' | 'back' | 'forward' | 'prevBeat' | 'nextBeat' | 'captions' | 'sound' | 'ask' | 'loop' | 'bookmark' | 'live';
 
 export interface PlayerShortcut {
   /** The key as KeyboardEvent.key, matched case-insensitively for letters. */
@@ -230,6 +230,7 @@ export const SHORTCUTS: readonly PlayerShortcut[] = [
   { key: 'a', action: 'ask', label: 'Ask about this moment' },
   { key: 'o', action: 'loop', label: 'Loop the beat on / off' },
   { key: 'b', action: 'bookmark', label: 'Bookmark this moment' },
+  { key: 'v', action: 'live', label: 'Teacher voice on / off' },
 ];
 
 /** Matches a key press to its shortcut, or null. The page checks focus guards before calling. */

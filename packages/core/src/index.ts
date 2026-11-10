@@ -16,7 +16,7 @@ export type { CompiledExpression } from './expr';
 
 export { SceneRuntime } from './runtime/runtime';
 export type { RuntimeOptions, RuntimeStats, SceneErrorRecord, SceneFunction, SeekOptions } from './runtime/runtime';
-export { FilmController, applyBeatCues, applyShowHide, beatTitle, beginShowMe, cueSfx, framePart, isPausePoint, partBox, partBoxes, sfxNames, SFX_CUES } from './runtime/film';
+export { FilmController, accumulatedNotes, applyBeatCues, applyShowHide, beatTitle, beatWrite, beginShowMe, cueSfx, framePart, isPausePoint, partBox, partBoxes, sfxNames, writeShownAt, SFX_CUES } from './runtime/film';
 export type { AppliedCues, AskContext, FilmChapter, FilmControllerOptions, FilmEvent, FilmTransport, FramingIntent, ShowMeSession, TranscriptLine } from './runtime/film';
 export {
   anchorWords,
@@ -42,24 +42,29 @@ export {
   compileFilm,
   countWords,
   estimateBeatSeconds,
+  layerProblems,
   readFilmContext,
   resolveAnchor,
   sanitizeWordStarts,
+  sceneSplit,
   splitWords,
   wordStarts,
   EMPTY_FILM_CONTEXT,
   FILM_BEAT_HOLD_SECONDS,
   FILM_BEAT_MAX_SECONDS,
   FILM_BEAT_MIN_SECONDS,
+  FILM_LAYER_TEXT_MAX,
   FILM_MAX_DIAGNOSTICS,
+  FILM_NOTE_TEXT_MAX,
+  FILM_NOTES_MAX,
   FILM_MAX_SCENES,
   FILM_READING_WPS_LIMIT,
   FILM_SCENE_MAX_SECONDS,
   FILM_WORDS_PER_SECOND,
 } from './film/storyboard';
 export type { BeatAudio, CompiledBeat, CompiledFilm, CompiledFilmResult, CompiledScene, FilmAdvance, FilmAnchor, FilmContext, FilmDiagnostic, FilmSceneSource, SourceMapEntry, StoryboardBeat, StoryboardScene, StoryboardSpec } from './film/storyboard';
-export { fallbackWidth, fontsReady, measureFilmText, solveCallouts, solveCaption, titleCardRect, wrapText, CAPTION_MAX_LINES, CAPTION_MIN_PX, CAPTION_MIN_STAGE_SHARE, FILM_FONT_STACK, SAFE_MARGIN_SHARE } from './film/solver';
-export type { CalloutInput, CalloutPlacement, CalloutRequest, CaptionInput, CaptionLayout, MeasureText } from './film/solver';
+export { fallbackWidth, fontsReady, layoutStageWidth, measureFilmText, notesColumnWidth, pageCaptionWords, renderMathText, solveCallouts, solveCaption, solveNotes, solveWrite, splitLayout, titleCardRect, wrapText, CAPTION_MAX_LINES, CAPTION_MIN_PX, CAPTION_MIN_STAGE_SHARE, FILM_FONT_STACK, NOTES_SPLIT_STAGE_SHARE, NOTES_STACK_BELOW_PX, SAFE_MARGIN_SHARE } from './film/solver';
+export type { CalloutInput, CalloutPlacement, CalloutRequest, CaptionInput, CaptionLayout, MeasureText, NotesInput, NotesLayout, NotesLayoutKind, WriteInput, WritePlacement } from './film/solver';
 export { checkSceneContext, contrastRatio, luminance, probeFilm, probeFilmAsync, probeFilmStatic, FILM_CONTRAST_MIN, FILM_PLAIN_TONE_MAX_WORDS, FILM_TOKENS } from './film/checks';
 export type { FilmCheck, FilmFailure, FilmPoint, FilmReport, FilmReportStats, FilmSceneInput, FilmTheme, FilmTokens, ProbeFilmOptions, ProbeFilmStaticOptions } from './film/checks';
 export { applyCueState, beatCueState, buildStubScene, mountStubRuntime, pushAbsoluteState, sanitizeProbedSnapshot, SandboxFilmMirror } from './film/sandbox';
@@ -71,6 +76,12 @@ export { examplePinSeconds, exampleReturnSeconds, SideClipPlayer, validateExampl
 export type { ExampleClip, SideClipEvent, SideClipPhase } from './film/example';
 export { applyFilmPatch, insertBeatId, patchAudioProblems, patchSummary, promoteInsertClip, sanitizeFilmPatch, FILM_PATCH_LIMITS } from './film/versions';
 export type { FilmPatchAudio, FilmPatchBeat, FilmPatchInsert, FilmPatchInsertLine, FilmVersionPatch } from './film/versions';
+export type { LiveEvent, LiveSetup, LiveToolDeclaration, LiveVoice } from './film/live-voice';
+export { FakeLiveVoice } from './film/live-fake';
+export { LIVE_TEACHER_INSTRUCTION, LiveDriver } from './film/live-driver';
+export type { LiveDriverEvent, LiveDriverOptions, LiveDriverState } from './film/live-driver';
+export { defaultShowMeBinding, liveToolDeclarations, LiveToolDispatcher, resolveBeat } from './film/live-tools';
+export type { LiveMakeExample, LiveShowMe, LiveToolDeps, LiveToolResult } from './film/live-tools';
 export {
   askerHashOf,
   FilmVersionStore,
@@ -88,7 +99,7 @@ export {
 export type { FilmVersionCard, FlattenedBeat, FlattenedTimeline, StoredInsert, VersionChoice } from './film/library';
 export { formatFilmLink, parseFilmLink, resolveFilmLink, resolveFilmPosition, resumeKey, ResumeStore, shortcutFor, SHORTCUTS } from './film/controls';
 export type { FilmLink, FilmPosition, PlayerShortcut, ResumeStorage, ShortcutAction } from './film/controls';
-export { FILM_FIXTURES, SIXTY_SECOND_FILM, THIRTY_SECOND_FILM } from './film/fixtures';
+export { FILM_FIXTURES, PYTHAGORAS_FILM, SIXTY_SECOND_FILM, THIRTY_SECOND_FILM } from './film/fixtures';
 export type { FilmFixture, FilmFixtureScene } from './film/fixtures';
 export { filmDeadlineMs, filmPlanTokens, filmPresetFor, filmScenesFor, FILM_GENERATION_CEILING_MS, FILM_LENGTH_PRESETS, FILM_PLAN_BASE_TOKENS, FILM_PLAN_TOKENS_PER_SCENE, FILM_PRESET_SCENE_MAX_SECONDS } from './film/presets';
 export type { FilmPreset } from './film/presets';
@@ -100,6 +111,7 @@ export {
   ExportCancelledError,
   ExportError,
   exportAvSyncBound,
+  exportFrameLayers,
   exportFrameSize,
   exportStepsPerFrame,
   exportSyncReport,
@@ -137,6 +149,7 @@ export type {
   ExportFallbackOptions,
   ExportFallbackResult,
   ExportFrame,
+  ExportFrameLayers,
   ExportFrameSize,
   ExportPhase,
   ExportPlan,
@@ -168,6 +181,7 @@ export {
   openWebCodecsAudio,
   openWebCodecsVideo,
   paintExportCaption,
+  paintExportLayers,
   probeExportCodecs,
   renderLiveExportPixels,
   renderSandboxedLivePixels,

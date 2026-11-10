@@ -74,6 +74,32 @@ export function fontsReady(): Promise<void> {
   return Promise.resolve();
 }
 
+/**
+ * Splits a beat's words into caption pages, each wrapping to at most two
+ * lines at the given size: the player shows the page holding the sounding
+ * word, so long lines page instead of truncating. Always progresses, so
+ * every word lands on exactly one page.
+ */
+export function pageCaptionWords(
+  words: readonly string[],
+  input: { maxWidthPx: number; fontPx: number; measure?: MeasureText },
+): ReadonlyArray<{ readonly start: number; readonly end: number }> {
+  const pages: Array<{ start: number; end: number }> = [];
+  let start = 0;
+  while (start < words.length) {
+    let end = start + 1;
+    while (end <= words.length) {
+      const lines = wrapText(words.slice(start, end).join(' '), input.maxWidthPx, input.fontPx, input.measure);
+      if (lines.length > CAPTION_MAX_LINES) break;
+      end += 1;
+    }
+    end = Math.max(start + 1, end - 1);
+    pages.push({ start, end });
+    start = end;
+  }
+  return pages;
+}
+
 /** Greedy word wrap; a word longer than the line takes a line of its own. */
 export function wrapText(text: string, maxWidth: number, fontPx: number, measure?: MeasureText): string[] {
   const words = text.trim().split(/\s+/).filter((word) => word !== '');
@@ -224,3 +250,177 @@ export function titleCardRect(viewBox: ViewBox): Box {
 export function covers(rect: Box, box: Box): boolean {
   return overlaps(rect, box);
 }
+
+/** Stage width under which notes stack under the stage instead of splitting beside it. */
+export const NOTES_STACK_BELOW_PX = 640;
+
+/** Share of the frame width the stage keeps when a scene splits for notes; the notes column takes the rest. */
+export const NOTES_SPLIT_STAGE_SHARE = 0.62;
+
+/**
+ * A split scene's layout at a frame width: the full stage, the stage beside
+ * its notes column, or the full stage with notes stacked under it. Pure, so
+ * the player, the checks and the export all lay the same scene out the same
+ * way — and every beat of a split scene shares it, so seeking never
+ * re-lays the stage.
+ */
+export function splitLayout(split: boolean, stageWidthPx: number): 'full' | 'side' | 'stack' {
+  if (!split) return 'full';
+  return stageWidthPx < NOTES_STACK_BELOW_PX ? 'stack' : 'side';
+}
+
+/** The stage's pixel width in a layout: narrowed beside its notes column, full otherwise. */
+export function layoutStageWidth(stageWidthPx: number, layout: 'full' | 'side' | 'stack'): number {
+  return layout === 'side' ? stageWidthPx * NOTES_SPLIT_STAGE_SHARE : stageWidthPx;
+}
+
+/** The notes column's pixel width beside a split stage. */
+export function notesColumnWidth(stageWidthPx: number): number {
+  return stageWidthPx * (1 - NOTES_SPLIT_STAGE_SHARE);
+}
+
+/** Superscript forms the math renderer knows; anything else stays literal. */
+const SUPERSCRIPT: Readonly<Record<string, string>> = {
+  '0': '⁰',
+  '1': '¹',
+  '2': '²',
+  '3': '³',
+  '4': '⁴',
+  '5': '⁵',
+  '6': '⁶',
+  '7': '⁷',
+  '8': '⁸',
+  '9': '⁹',
+  '+': '⁺',
+  '-': '⁻',
+  n: 'ⁿ',
+};
+
+/**
+ * Renders simple math notation readably: `^2` rises, `*` becomes ×, and a
+ * few words become symbols. Never a TeX engine: anything unrecognized stays
+ * literal, so plain text passes through unchanged.
+ */
+export function renderMathText(text: string): string {
+  return text
+    .replace(/\^([0-9+\-n]+)/g, (_, run: string) => [...run].map((char) => SUPERSCRIPT[char] ?? char).join(''))
+    .replace(/<=/g, '≤')
+    .replace(/>=/g, '≥')
+    .replace(/!=/g, '≠')
+    .replace(/->/g, '→')
+    .replace(/\*/g, '×')
+    .replace(/\bsqrt\b/g, '√')
+    .replace(/\bpi\b/g, 'π')
+    .replace(/\btheta\b/g, 'θ')
+    .replace(/\b[Dd]elta\b/g, 'Δ');
+}
+
+export interface WriteInput {
+  readonly viewBox: ViewBox;
+  /** Rendered drawing width in pixels, mapping chip pixels to stage units. */
+  readonly stageWidthPx: number;
+  /** Part and chip boxes in stage units; the chip may cover none. */
+  readonly occupied: readonly Box[];
+  readonly fontPx?: number;
+  readonly measure?: MeasureText;
+}
+
+export interface WritePlacement {
+  /** Chip rect in stage units. */
+  readonly rect: Box;
+  readonly lines: readonly string[];
+  readonly fontPx: number;
+  /**
+   * Which corner slot placed: 0 is the top-left first preference, then the
+   * other corners in reading order. The player and the export always draw
+   * slot 0, so the checks require it.
+   */
+  readonly slot: number;
+}
+
+/**
+ * Places a write-on chip in a safe-area corner that covers no part. Corners
+ * in reading order, top-left first; what places nowhere is null, for the
+ * checks to fail.
+ */
+export function solveWrite(text: string, input: WriteInput): WritePlacement | null {
+  const [vx, vy, vw, vh] = input.viewBox;
+  const margin = Math.min(vw, vh) * SAFE_MARGIN_SHARE;
+  const safe: Box = { minX: vx + margin, minY: vy + margin, maxX: vx + vw - margin, maxY: vy + vh - margin };
+  const scale = input.stageWidthPx / vw;
+  // The caption scale, so layer text clears the same stage-share floor the checks enforce.
+  const fontPx = input.fontPx ?? Math.min(20, Math.max(13, input.stageWidthPx * 0.03));
+  const padPx = 8;
+  const maxWidthPx = Math.max(40, ((safe.maxX - safe.minX) * scale) / 2);
+  const lines = wrapText(text, maxWidthPx, fontPx, input.measure);
+  const widest = lines.reduce((max, line) => Math.max(max, measureFilmText(line, fontPx, input.measure)), 0);
+  const chipW = (widest + padPx * 2) / scale;
+  const chipH = (lines.length * fontPx * 1.35 + padPx * 2) / scale;
+  const corners: ReadonlyArray<readonly [number, number]> = [
+    [safe.minX, safe.minY],
+    [safe.maxX - chipW, safe.minY],
+    [safe.minX, safe.maxY - chipH],
+    [safe.maxX - chipW, safe.maxY - chipH],
+  ];
+  for (let slot = 0; slot < corners.length; slot++) {
+    const [x, y] = corners[slot]!;
+    const rect: Box = { minX: x, minY: y, maxX: x + chipW, maxY: y + chipH };
+    if (rect.minX < safe.minX || rect.minY < safe.minY || rect.maxX > safe.maxX || rect.maxY > safe.maxY) continue;
+    if (input.occupied.some((box) => overlaps(rect, box))) continue;
+    return { rect, lines, fontPx, slot };
+  }
+  return null;
+}
+
+export type NotesLayoutKind = 'side' | 'stack';
+
+export interface NotesInput {
+  readonly viewBox: ViewBox;
+  readonly stageWidthPx: number;
+  readonly measure?: MeasureText;
+}
+
+export interface NotesLayout {
+  readonly kind: NotesLayoutKind;
+  /**
+   * Stack only: the overlay strip along the bottom of the safe area, in
+   * stage units, where narrow frames paint the notes over the drawing. Null
+   * beside the stage, where the notes column stands outside the drawing and
+   * covers nothing by construction.
+   */
+  readonly panel: Box | null;
+  readonly fontPx: number;
+  /** One wrapped line list per note. */
+  readonly lines: readonly (readonly string[])[];
+}
+
+/**
+ * Lays notes out in the column beside a split stage on wide stages, and in
+ * a fixed strip along the bottom of the safe area on narrow ones. The strip
+ * is a fixed slot, so the film checks can verify it against the parts; the
+ * export paints it there, and scenes keep that slot clear.
+ */
+export function solveNotes(notes: readonly string[], input: NotesInput): NotesLayout {
+  const [vx, vy, vw, vh] = input.viewBox;
+  const margin = Math.min(vw, vh) * SAFE_MARGIN_SHARE;
+  const scale = input.stageWidthPx / vw;
+  // The caption scale, so note text clears the same stage-share floor the checks enforce.
+  const fontPx = Math.min(20, Math.max(13, input.stageWidthPx * 0.03));
+  const padPx = 10;
+  if (input.stageWidthPx < NOTES_STACK_BELOW_PX) {
+    const panelW = vw - margin * 2;
+    const maxWidthPx = Math.max(40, panelW * scale - padPx * 2);
+    const lines = notes.map((note) => wrapText(note, maxWidthPx, fontPx, input.measure));
+    const stripH = lines.reduce((sum, group) => sum + group.length * fontPx * 1.4, 0) + padPx * 2;
+    return {
+      kind: 'stack',
+      panel: { minX: vx + margin, minY: vy + vh - margin - stripH / scale, maxX: vx + vw - margin, maxY: vy + vh - margin },
+      fontPx,
+      lines,
+    };
+  }
+  const maxWidthPx = Math.max(40, notesColumnWidth(input.stageWidthPx) - padPx * 2);
+  const lines = notes.map((note) => wrapText(note, maxWidthPx, fontPx, input.measure));
+  return { kind: 'side', panel: null, fontPx, lines };
+}
+

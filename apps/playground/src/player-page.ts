@@ -1,6 +1,5 @@
 import {
   anchorFor,
-  applyBeatCues,
   applyFilmPatch,
   applySlotClasses,
   applyStyle,
@@ -15,6 +14,7 @@ import {
   compileTrusted,
   createBrowserFallbackRig,
   createSandboxedFallbackRig,
+  defaultShowMeBinding,
   ExportCancellation,
   ExportCancelledError,
   ExportError,
@@ -33,12 +33,15 @@ import {
   fontsReady,
   formatFilmLink,
   InsertPlayer,
+  LiveDriver,
   meanPixelDifference,
   mountStubRuntime,
+  NOTES_STACK_BELOW_PX,
   openBrowserCapture,
   openSandboxedCapture,
   openWebCodecsAudio,
   openWebCodecsVideo,
+  pageCaptionWords,
   planDeckSlides,
   planExportFilm,
   PrivateInsertStore,
@@ -55,7 +58,6 @@ import {
   probeFilmStatic,
   probeSandboxed,
   probeScene,
-  pushAbsoluteState,
   refreshPlayerFullscreenVisibility,
   renderSandboxedLivePixels,
   resolveFilmLink,
@@ -70,8 +72,8 @@ import {
   SandboxFilmMirror,
   shortcutFor,
   SHORTCUTS,
+  renderMathText,
   SideClipPlayer,
-  solveCaption,
   validateExampleClip,
   validateInsertClip,
   validateScene,
@@ -96,6 +98,8 @@ import {
   type MixerClip,
   type StoredInsert,
   type KitRegistry,
+  type LiveDriverEvent,
+  type LiveEvent,
   type PlayerState,
   type ProbeReport,
   type RendererMessage,
@@ -107,11 +111,20 @@ import {
   type ShowMeSession,
   type StylePreset,
 } from '@incantly/core';
-import { resolveFilmSource, storedAsFixture, type StoredFilm } from '@incantly/generation/client';
+import {
+  createPcmPlayer,
+  GeminiLiveVoice,
+  resolveFilmSource,
+  startMicrophone,
+  storedAsFixture,
+  type MicrophoneHandle,
+  type PcmPlayer,
+  type StoredFilm,
+} from '@incantly/generation/client';
 
 /**
  * The film player: a silent fixture film through the real controller, player
- * and probe path. `?film=thirty|sixty` picks the film, or a generated film's
+ * and probe path. `?film=thirty|sixty|pythagoras` picks the film, or a generated film's
  * id from the dev store; `?preset=` and `?theme=` style the figure as an
  * integrator would; `?hide=` (comma separated: captions, transcript,
  * chapters, timeline, deck, playerFullscreen) turns chrome off; `?deck=1`
@@ -164,7 +177,6 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
   const kits = await loadKitModules([...new Set(validations.flatMap((v) => v.scene!.kits))]);
   root.textContent = '';
 
-  const theme = params.get('theme');
   const preset = params.get('preset') as StylePreset | null;
   const hide = new Set((params.get('hide') ?? '').split(',').map((part) => part.trim()).filter(Boolean));
   // Reduced motion, the same convention as figures: the media query, unless
@@ -195,11 +207,30 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
   heading.textContent = fixture.storyboard.film.title;
   player.append(heading);
 
+  // The film title reads as a video heading, with the chapter and beat count
+  // as a small subtitle.
+  const subtitle = document.createElement('p');
+  subtitle.className = 'inc-player-sub';
+  player.append(subtitle);
+
+  // The screen is a 16:9 dark surface holding only the stage drawing; the
+  // side panel tabs Teacher, Transcript and Chapters beside it.
+  const main = document.createElement('div');
+  main.className = 'inc-player-main';
+  const screen = document.createElement('section');
+  screen.className = 'inc-screen';
+  screen.setAttribute('aria-label', `${fixture.storyboard.film.title} film`);
+  const side = document.createElement('aside');
+  side.className = 'inc-side';
+  side.setAttribute('aria-label', 'Film panel');
+  main.append(screen, side);
+  player.append(main);
+
   // The film owns play, pause, speed and steps; the figure keeps its controls,
-  // readouts, legend and description for exploring.
+  // readouts, legend and description for exploring in the Controls strip.
   const figureBox = document.createElement('div');
   figureBox.className = 'inc-player-figure';
-  player.append(figureBox);
+  screen.append(figureBox);
   // One figure per scene, in film order; single-scene films mount exactly as
   // today, multi-scene films stack theirs with only the active one shown.
   const sceneBoxes: HTMLElement[] = [];
@@ -214,8 +245,29 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
     }
   }
   const boxes: readonly HTMLElement[] = multi ? sceneBoxes : [figureBox];
-  const figureStyle = { ...(preset ? { preset } : {}), show: { transport: false, speed: false, steps: false, settings: false, undo: false, fullscreen: false } };
-  const figureTheme = theme === 'light' || theme === 'dark' ? theme : 'auto';
+  // In film mode the screen shows only the stage: the figure's own title,
+  // idea, zoom bar and part hint hide, and the panel moves to the Controls
+  // strip below the transport. Sandboxed frames get the same flags, so their
+  // in-frame chrome matches (their panel stays in the frame).
+  const figureStyle = {
+    ...(preset ? { preset } : {}),
+    show: {
+      transport: false,
+      speed: false,
+      steps: false,
+      settings: false,
+      undo: false,
+      fullscreen: false,
+      header: false,
+      idea: false,
+      zoom: false,
+      partInfo: false,
+    },
+  };
+  // The screen is always dark, in either page theme, so the film's figure
+  // always renders its dark theme: light strokes stay visible on the dark
+  // stage. (`theme` still selects the figure's own theme on other pages.)
+  const figureTheme = 'dark';
   // Generated scenes from the dev store never run on the host: each is
   // probed in a hidden sandbox, its beats compile from the checked
   // snapshot, a stand-in keeps the film clock, and the sandboxed figure
@@ -391,6 +443,11 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
       });
       figureBox.dataset.cut = cut;
       figureBox.dataset.scene = sceneId;
+      // The Controls strip follows the active scene: only its relocated
+      // panel shows.
+      for (const slot of player.querySelectorAll('.inc-controls-scene')) {
+        if (slot instanceof HTMLElement) slot.hidden = slot.dataset.scene !== sceneId;
+      }
     };
     controller.on((event) => {
       if (event.type === 'cut') {
@@ -438,13 +495,27 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
 
   const card = document.createElement('div');
   card.className = 'inc-player-card';
-  card.hidden = true;
   figureBox.append(card);
 
+  // Explainer layers: generic engine overlays any film can use. The write-on
+  // sits top-left, the notes list edges the screen's right side (or its
+  // bottom when narrow) only once the first note arrives, and the section
+  // card dims the stage while the scene keeps playing behind it.
+  // Layer overlays fade instead of popping: visibility flips with the
+  // fade (`.is-on`), so show/hide never shifts layout mid-playback.
+  const writeEl = document.createElement('div');
+  writeEl.className = 'inc-player-write';
+  figureBox.append(writeEl);
+
+  const notesEl = document.createElement('aside');
+  notesEl.className = 'inc-player-notes';
+  figureBox.append(notesEl);
+
+  // Subtitles overlay the bottom of the screen, not a box under the figure.
   const caption = document.createElement('div');
   caption.className = 'inc-caption';
   caption.setAttribute('role', 'status');
-  player.append(caption);
+  figureBox.append(caption);
 
   // Resume positions: per-film keys in localStorage, position/ids/numbers
   // only — never question or note text. Memory-backed where storage is gone.
@@ -483,7 +554,31 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
   };
 
   let openAsk = (): void => undefined;
-  const transport = buildTransport(player, model, film, mixer, () => openAsk(), { toggleLoop, copyLink }, playerStyle.show.playerFullscreen);
+  // Play owns the teacher: starting it live, holding it on pause, resuming
+  // it on play. Assigned once live voice exists, below.
+  let playPauseLive = (): void => {
+    model.toggle();
+  };
+  let flipTeacherVoice = (): void => undefined;
+  /** Remembered per browser: Play starts the teacher unless switched off. */
+  const TEACHER_VOICE_KEY = 'incantly-teacher-voice';
+  let teacherVoiceOn = true;
+  try {
+    teacherVoiceOn = localStorage.getItem(TEACHER_VOICE_KEY) !== 'off';
+  } catch {
+    teacherVoiceOn = true;
+  }
+  /** A failed live start falls back once per visit instead of retrying every Play. */
+  let liveFailedThisVisit = false;
+  const transport = buildTransport(
+    player,
+    model,
+    film,
+    mixer,
+    () => openAsk(),
+    { toggleLoop, copyLink, playPause: () => playPauseLive() },
+    playerStyle.show.playerFullscreen,
+  );
   // The player root goes fullscreen; figures mirror the same chrome-aware growth — trusted directly,
   // sandboxed through the bridge — with playback untouched, so exiting restores layout and position.
   bindPlayerFullscreen(player, transport.fullscreen, (on) => {
@@ -492,6 +587,25 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
   });
   // Slot classes land on the built chrome too, so the fullscreen button styles like its siblings.
   applySlotClasses(player, playerStyle);
+  // Below 640 px the notes leave the screen and sit under it, above the
+  // transport, instead of covering the picture. The move runs on resize and
+  // on every caption pass; only an actual mode change moves the node.
+  let notesBelow = false;
+  const transportBar = player.querySelector('.inc-player-transport');
+  const placeNotes = (): void => {
+    const narrow = player.clientWidth < NOTES_STACK_BELOW_PX;
+    if (narrow === notesBelow) return;
+    notesBelow = narrow;
+    if (narrow && transportBar) transportBar.before(notesEl);
+    else figureBox.append(notesEl);
+  };
+  if (typeof ResizeObserver !== 'undefined') {
+    new ResizeObserver(() => {
+      placeNotes();
+      applyCaption(model.state);
+    }).observe(player);
+  }
+  placeNotes();
   // Switching versions re-resolves the position by beat id — the same beat
   // and word on the new version, never carried seconds — and plays it.
   const showFilm = (next: CompiledFilm): void => {
@@ -500,7 +614,7 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
     model.retime(film);
     transport.setDuration(film.seconds);
     player.querySelector('.inc-timeline')?.remove();
-    timeline = buildTimeline(player, model, film);
+    if (debug) timeline = buildTimeline(player, model, film);
     versionUi.refresh();
     window.__playground!.film = film;
   };
@@ -518,15 +632,21 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
     void runChecks();
     return true;
   };
+  // Developer tools (timeline, inspector, badges, narration details) build
+  // only behind ?debug=1; the learner surface never shows them.
+  const debug = params.get('debug') === '1';
   const versionUi = buildVersionPicker(player, () => picker.choices(), (version) => void switchVersion(version));
   const bookmarkUi = buildBookmarks(player, model);
   const transcript = buildTranscript(player, model);
   buildChapters(player, model);
   const deckUi = buildDeck(player, model);
-  let timeline = buildTimeline(player, model, film);
-  const inspector = buildInspector(player);
-  const badges = buildBadges(player);
-  buildNarration(player, {
+  const NO_TIMELINE = { sync: (_beat: string | null, _time: number, _duration: number): void => {}, playhead: (_time: number, _duration: number): void => {}, checks: (_report: FilmReport | null): void => {} };
+  let timeline: ReturnType<typeof buildTimeline> | typeof NO_TIMELINE = debug ? buildTimeline(player, model, film) : NO_TIMELINE;
+  const NO_INSPECTOR = { show: (_beat: CompiledBeat | null, _film: CompiledFilm): void => {} };
+  const inspector: ReturnType<typeof buildInspector> | typeof NO_INSPECTOR = debug ? buildInspector(player) : NO_INSPECTOR;
+  const NO_BADGES = { probe: (_report: ProbeReport): void => {}, checks: (_report: FilmReport, _list: readonly FilmFailure[]): void => {}, progress: (_beat: number, _beats: number): void => {} };
+  const badges: ReturnType<typeof buildBadges> | typeof NO_BADGES = debug ? buildBadges(player) : NO_BADGES;
+  if (debug) buildNarration(player, {
     narrate: async (key, voice) => {
       const narrated = await narrateBeats(film.beats.map((beat) => ({ id: beat.id, text: beat.step.say })), {
         source: 'cartesia',
@@ -546,7 +666,7 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
       model.retime(film);
       transport.setDuration(film.seconds);
       player.querySelector('.inc-timeline')?.remove();
-      timeline = buildTimeline(player, model, film);
+      if (debug) timeline = buildTimeline(player, model, film);
       await runChecks();
       return narrated.beats.filter((beat) => !beat.estimated).length;
     },
@@ -641,6 +761,7 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
     reducedMotion,
     applyPatch,
     requestBeats: () => film.beats.map((beat) => ({ beat: beat.id, scene: beat.sceneId, say: beat.step.say })),
+    reference: params.get('reference') === '1',
     keepInsert: (clip) => {
       const stored = {
         id: clip.id,
@@ -807,7 +928,7 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
   syncExportInserts = exportUi.syncInserts;
 
   bindShortcuts({
-    playPause: () => model.toggle(),
+    playPause: () => playPauseLive(),
     back: () => model.seek(controller.time - 5),
     forward: () => model.seek(controller.time + 5),
     prevBeat: () => model.prevBeat(),
@@ -817,6 +938,7 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
     ask: () => openAsk(),
     loop: () => toggleLoop(),
     bookmark: () => bookmarkUi.add(),
+    live: () => flipTeacherVoice(),
   });
   buildShortcutHelp(player);
 
@@ -854,18 +976,83 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
     fontsLoaded = true;
     lastBeat = '__none__';
   });
-  // Karaoke captions: one span per word, the sounding one highlighted.
+  // Karaoke captions: one span per word, the sounding one highlighted. Long
+  // lines page instead of truncating: each page holds at most two lines, and
+  // the page follows the sounding word's timings — never an ellipsis.
   let wordSpans: HTMLElement[] = [];
+  let captionWords: readonly string[] = [];
+  let captionPrefix = '';
+  let captionPages: ReadonlyArray<{ readonly start: number; readonly end: number }> = [];
+  let captionPage = 0;
+  // Live and insert captions own the band outright: paging only runs for
+  // beat captions, which carry word timings.
+  let captionMode: 'beat' | 'other' = 'beat';
+  const renderCaptionPage = (page: number): void => {
+    captionPage = page;
+    const bounds = captionPages[page] ?? { start: 0, end: 0 };
+    caption.textContent = '';
+    if (captionPrefix !== '') caption.append(document.createTextNode(captionPrefix));
+    wordSpans = [];
+    for (let i = bounds.start; i < bounds.end; i++) {
+      const span = document.createElement('span');
+      span.className = 'inc-caption-word';
+      span.textContent = captionWords[i]!;
+      caption.append(span, ' ');
+      wordSpans.push(span);
+    }
+  };
+  const pageForWord = (index: number): number => {
+    let page = 0;
+    captionPages.forEach((bounds, i) => {
+      if (bounds.start <= index) page = i;
+    });
+    return page;
+  };
+  // While live voice owns the film, the caption band shows what the teacher
+  // actually said for the current beat, not the beat's script line.
+  let liveCaptionText: string | null = null;
   const highlightWord = (index: number): void => {
-    wordSpans.forEach((span, i) => span.classList.toggle('is-active', i === index));
+    const at = Math.max(0, index);
+    const page = pageForWord(at);
+    if (page !== captionPage) renderCaptionPage(page);
+    const start = captionPages[captionPage]?.start ?? 0;
+    wordSpans.forEach((span, i) => span.classList.toggle('is-active', start + i === at));
+  };
+  /** Fades a screen overlay in or out; visibility flips with the fade, so showing and hiding never shift layout. */
+  const showOverlay = (el: HTMLElement, on: boolean): void => {
+    el.classList.toggle('is-on', on);
+  };
+  /** Renders a write-on layer's shown prefix; math renders readably. */
+  const renderWrite = (write: { readonly text: string; readonly math: boolean; readonly shown: string } | null | undefined): void => {
+    if (!write || write.shown === '') {
+      showOverlay(writeEl, false);
+      return;
+    }
+    const shown = write.math ? renderMathText(write.shown) : write.shown;
+    if (writeEl.textContent !== shown) writeEl.textContent = shown;
+    writeEl.dataset.live = write.shown.length < write.text.length ? 'writing' : 'done';
+    showOverlay(writeEl, true);
   };
   const applyCaption = (state: PlayerState): void => {
     // An insert captions its own line over the paused film.
     const insertText = askUi.caption();
     if (insertText !== null) {
-      card.hidden = true;
+      showOverlay(card, false);
+      showOverlay(writeEl, false);
+      showOverlay(notesEl, false);
+      delete figureBox.dataset.split;
       caption.textContent = insertText;
       wordSpans = [];
+      captionWords = [];
+      captionMode = 'other';
+      return;
+    }
+    if (liveCaptionText !== null && state.caption !== null) {
+      showOverlay(card, false);
+      caption.textContent = liveCaptionText;
+      wordSpans = [];
+      captionWords = [];
+      captionMode = 'other';
       return;
     }
     const beat = film.beats.find((candidate) => candidate.id === state.beat);
@@ -873,32 +1060,292 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
     player.dataset.mark = marks.some((mark) => mark.type === 'pulse') ? 'pulse' : '';
     const title = state.caption?.title;
     if (title?.kind === 'card') {
-      card.textContent = title.text;
-      card.hidden = false;
-    } else card.hidden = true;
-    caption.textContent = '';
-    wordSpans = [];
+      if (card.textContent !== title.text) card.textContent = title.text;
+      showOverlay(card, true);
+    } else showOverlay(card, false);
+    renderWrite(state.caption?.write);
+    // Split scenes lay out once from the first frame: the notes column sits
+    // beside the stage or under it when narrow, and the notes reveal beat by
+    // beat inside it — but never as an empty box.
+    const split = state.caption?.split ?? false;
+    const widthPx = Math.max(280, Math.min(960, player.clientWidth || 640));
+    if (split && widthPx >= NOTES_STACK_BELOW_PX) figureBox.dataset.split = 'side';
+    else delete figureBox.dataset.split;
+    placeNotes();
+    const notes = state.caption?.notes ?? [];
+    if (notes.length === 0) {
+      showOverlay(notesEl, false);
+    } else {
+      notesEl.dataset.layout = notesBelow ? 'below' : figureBox.dataset.split === 'side' ? 'side' : 'stack';
+      notesEl.textContent = '';
+      const fresh = beat?.step.notes?.length ?? 0;
+      const list = document.createElement('ul');
+      notes.forEach((line, index) => {
+        const item = document.createElement('li');
+        item.textContent = line;
+        if (index >= notes.length - fresh) item.className = 'is-new';
+        list.append(item);
+      });
+      notesEl.append(list);
+      showOverlay(notesEl, true);
+    }
+    captionWords = state.caption?.words ?? [];
+    captionPrefix = title?.kind === 'lower' ? `${title.text} — ` : '';
+    captionMode = 'beat';
     const say = state.caption?.say ?? '';
-    if (say !== '') {
-      if (title?.kind === 'lower') caption.append(document.createTextNode(`${title.text} — `));
-      for (const word of state.caption?.words ?? []) {
-        const span = document.createElement('span');
-        span.className = 'inc-caption-word';
-        span.textContent = word;
-        caption.append(span, ' ');
-        wordSpans.push(span);
-      }
+    // Subtitle type scales with the screen (about 2.4%), clamped, times the
+    // learner's caption size. The box holds 90% of the screen minus its
+    // padding, with a little slack for the bold sounding word; longer lines
+    // page in word-timed chunks instead of truncating — never an ellipsis.
+    const screenPx = Math.max(280, figureBox.clientWidth || 640);
+    const fontPx = Math.min(26, Math.max(15, screenPx * 0.024)) * CAPTION_SCALES[state.captionSize];
+    if (say !== '' && captionWords.length > 0) {
+      // A split scene reads its pages in the stage column, not the screen.
+      const stagePx = figureBox.dataset.split === 'side' ? screenPx * 0.66 : screenPx;
+      const boxW = Math.max(40, (stagePx * 0.9 - 28) * 0.95);
+      captionPages = pageCaptionWords(captionWords, { maxWidthPx: boxW, fontPx });
+      captionPage = -1;
       highlightWord(model.currentWordIndex);
+    } else {
+      caption.textContent = '';
+      wordSpans = [];
+      captionPages = [];
+      captionPage = 0;
     }
-    if (fontsLoaded) {
-      const widthPx = Math.max(280, Math.min(960, player.clientWidth || 640));
-      const captionLayout = solveCaption(say, { widthPx, stageHeightPx: widthPx * 0.5 });
-      caption.style.fontSize = `${Math.round(captionLayout.fontPx * CAPTION_SCALES[state.captionSize])}px`;
-    }
+    if (fontsLoaded) caption.style.fontSize = `${Math.round(fontPx)}px`;
   };
   // Caption and size toggles apply at once, not on the next beat change.
   model.on((event) => {
     if (event.type === 'chrome') applyCaption(model.state);
+  });
+  // Live voice: the transport toggle, the mic, the teacher's audio and the
+  // voice panel. Beside the film, generic over whatever film plays.
+  const live = buildLiveVoice(player, {
+    model,
+    controller,
+    film: () => film,
+    figure: askFigure,
+    ask: askUi,
+    mixer,
+    renderCaption: () => applyCaption(model.state),
+    liveCaption: (text) => {
+      liveCaptionText = text;
+    },
+    onLiveActive: (active) => {
+      talkPrimary.textContent = active ? 'Stop' : 'Talk to the teacher';
+      talkPrimary.setAttribute('aria-pressed', active ? 'true' : 'false');
+      // The Teacher tab opens only once a live session actually starts — a
+      // failed start leaves the learner where they were reading.
+      if (active) activateSideTab(teacherTab);
+    },
+  });
+  // One reading of "playing" for the transport label and the Play press, so
+  // they can never disagree: the film clock, or the teacher reading while
+  // click-advance holds the clock. A Pause label must always pause and hold,
+  // never silently take the Play path.
+  const liveReading = (): boolean => live.state().active && !live.state().paused;
+  const isPlayingNow = (): boolean => model.state.playing || liveReading();
+  // Assigned with the Teacher voice switch below: Play consults the switch
+  // itself, so the visible control is the source of truth.
+  flipTeacherVoice = (): void => setTeacherVoice(!teacherVoiceOn);
+  // Side panel: Teacher (live voice), Transcript and Chapters as tabs. The
+  // transcript and chapters move in from the page flow; the live panel moves
+  // in from beside the transport. Tab order sets the reading order.
+  const sideTabs = document.createElement('div');
+  sideTabs.className = 'inc-side-tabs';
+  sideTabs.setAttribute('role', 'tablist');
+  sideTabs.setAttribute('aria-label', 'Film panel');
+  const teacherPanel = document.createElement('section');
+  teacherPanel.className = 'inc-side-panel';
+  teacherPanel.id = 'inc-side-teacher';
+  teacherPanel.setAttribute('role', 'tabpanel');
+  teacherPanel.setAttribute('aria-labelledby', 'inc-side-tab-teacher');
+  teacherPanel.setAttribute('tabindex', '0');
+  const transcriptPanel = document.createElement('section');
+  transcriptPanel.className = 'inc-side-panel';
+  transcriptPanel.id = 'inc-side-transcript';
+  transcriptPanel.setAttribute('role', 'tabpanel');
+  transcriptPanel.setAttribute('aria-labelledby', 'inc-side-tab-transcript');
+  transcriptPanel.setAttribute('tabindex', '0');
+  const chaptersPanel = document.createElement('section');
+  chaptersPanel.className = 'inc-side-panel';
+  chaptersPanel.id = 'inc-side-chapters';
+  chaptersPanel.setAttribute('role', 'tabpanel');
+  chaptersPanel.setAttribute('aria-labelledby', 'inc-side-tab-chapters');
+  chaptersPanel.setAttribute('tabindex', '0');
+  const makeTab = (id: string, panelId: string, label: string): HTMLButtonElement => {
+    const tab = document.createElement('button');
+    tab.type = 'button';
+    tab.id = id;
+    tab.className = 'inc-side-tab';
+    tab.setAttribute('role', 'tab');
+    tab.setAttribute('aria-selected', 'false');
+    tab.setAttribute('aria-controls', panelId);
+    tab.textContent = label;
+    tab.addEventListener('click', () => activateSideTab(tab));
+    return tab;
+  };
+  const teacherTab = makeTab('inc-side-tab-teacher', 'inc-side-teacher', 'Teacher');
+  const transcriptTab = makeTab('inc-side-tab-transcript', 'inc-side-transcript', 'Transcript');
+  const chaptersTab = makeTab('inc-side-tab-chapters', 'inc-side-chapters', 'Chapters');
+  const sidePanels: ReadonlyArray<{ tab: HTMLButtonElement; panel: HTMLElement }> = [
+    { tab: teacherTab, panel: teacherPanel },
+    { tab: transcriptTab, panel: transcriptPanel },
+    { tab: chaptersTab, panel: chaptersPanel },
+  ];
+  const activateSideTab = (tab: HTMLButtonElement): void => {
+    for (const entry of sidePanels) {
+      const on = entry.tab === tab;
+      entry.tab.setAttribute('aria-selected', on ? 'true' : 'false');
+      entry.panel.hidden = !on;
+    }
+  };
+  sideTabs.append(teacherTab, transcriptTab, chaptersTab);
+  side.append(sideTabs, teacherPanel, transcriptPanel, chaptersPanel);
+  const talkPrimary = document.createElement('button');
+  talkPrimary.type = 'button';
+  talkPrimary.className = 'inc-live-primary';
+  talkPrimary.textContent = 'Talk to the teacher';
+  talkPrimary.setAttribute('aria-pressed', 'false');
+  talkPrimary.addEventListener('click', () => playPauseLive());
+  teacherPanel.append(talkPrimary);
+  const livePanel = player.querySelector('.inc-live-panel');
+  if (livePanel) teacherPanel.append(livePanel);
+  // The Teacher voice switch lives in the ⋯ menu: on by default, remembered
+  // per browser. Off means silent playback: Play never opens a socket.
+  const voiceRow = document.createElement('label');
+  voiceRow.className = 'inc-menu-row';
+  const voiceBox = document.createElement('input');
+  voiceBox.type = 'checkbox';
+  voiceBox.className = 'inc-teacher-voice';
+  voiceBox.checked = teacherVoiceOn;
+  voiceBox.setAttribute('aria-label', 'Teacher voice');
+  const setTeacherVoice = (on: boolean): void => {
+    teacherVoiceOn = on;
+    voiceBox.checked = on;
+    try {
+      localStorage.setItem(TEACHER_VOICE_KEY, on ? 'on' : 'off');
+    } catch {
+      // A blocked store just forgets the choice next visit.
+    }
+    // An explicit choice to hear the teacher retries on the next Play.
+    if (on) liveFailedThisVisit = false;
+    // Switching off mid-film closes the session; the film keeps its place,
+    // playing on silently or staying paused.
+    if (!on && live.state().active) {
+      const wasPlaying = isPlayingNow();
+      live.stop(false);
+      if (wasPlaying) model.play();
+    }
+  };
+  voiceBox.addEventListener('change', () => setTeacherVoice(voiceBox.checked));
+  voiceRow.append(voiceBox, document.createTextNode(' Teacher voice'));
+  transport.menuPop.append(voiceRow);
+  playPauseLive = (): void => {
+    if (isPlayingNow()) {
+      // Pause holds the teacher where it stands, then the film. The button
+      // answers the press at once instead of waiting for the next frame.
+      live.pauseForPlayback();
+      transport.syncTime(model.state.time, false);
+      return;
+    }
+    // The switch itself is the source of truth: reconcile first, so Play
+    // honors what the learner sees even if a change event was ever missed.
+    if (voiceBox.checked !== teacherVoiceOn) setTeacherVoice(voiceBox.checked);
+    void (async () => {
+      if (teacherVoiceOn && !liveFailedThisVisit && !live.state().active) {
+        // One failed start per visit: the panel keeps the reason, and Play
+        // just plays silently from then on.
+        if (!(await live.startForPlayback())) liveFailedThisVisit = true;
+      } else if (live.state().active && live.state().paused) {
+        live.resumePlayback();
+      }
+      model.play();
+      // The button answers the press at once: the film is playing, or the
+      // teacher is reading while click-advance holds its clock.
+      transport.syncTime(model.state.time, isPlayingNow());
+    })();
+  };
+  const transcriptWrap = player.querySelector('.inc-transcript');
+  if (transcriptWrap) transcriptPanel.append(transcriptWrap);
+  const chaptersWrap = player.querySelector('.inc-chapters');
+  if (chaptersWrap) chaptersPanel.append(chaptersWrap);
+  activateSideTab(transcriptTab);
+
+  // Reduced motion as a styling hook as well as a playback one: no layer
+  // fades or transitions when still.
+  player.dataset.reducedMotion = reducedMotion ? 'still' : 'move';
+
+  // Video order: heading, screen and side panel, transport, the Controls
+  // strip, the deck strip, Ask and its banners, inserts, resume, shortcuts,
+  // then any debug sections.
+  subtitle.textContent = `${model.chapters().length} ${model.chapters().length === 1 ? 'chapter' : 'chapters'} · ${film.beats.length} beats`;
+  const menuPop = transport.menuPop;
+  for (const selector of ['.inc-bookmarks', '.inc-version-wrap', '.inc-export']) {
+    const wrap = player.querySelector(selector);
+    if (wrap) menuPop.append(wrap);
+  }
+  const deckToggle = player.querySelector('.inc-deck .inc-deck-toggle');
+  if (deckToggle) menuPop.append(deckToggle);
+  // The Controls strip: one collapsed line while playing, opened while
+  // paused, on an explore beat, or by the learner. Each scene's relocated
+  // figure panel (sliders, readouts, legend, description) gets a slot; only
+  // the active scene's shows. Sandboxed films keep their chrome in-frame, so
+  // the strip hides when nothing relocated.
+  const controlsStrip = document.createElement('details');
+  controlsStrip.className = 'inc-controls';
+  const controlsSummary = document.createElement('summary');
+  controlsSummary.className = 'inc-controls-summary';
+  controlsSummary.textContent = 'Controls';
+  const controlsBody = document.createElement('div');
+  controlsBody.className = 'inc-controls-body';
+  controlsStrip.append(controlsSummary, controlsBody);
+  const controlSlots: HTMLElement[] = [];
+  boxes.forEach((box, index) => {
+    const slot = document.createElement('div');
+    slot.className = 'inc-controls-scene';
+    slot.dataset.scene = fixture.scenes[index]?.id ?? '';
+    slot.hidden = multi ? index !== 0 : false;
+    controlsBody.append(slot);
+    controlSlots.push(slot);
+  });
+  // Theme tokens travel with the relocated panels, so sliders and readouts
+  // keep the figure's own styling outside the figure root.
+  applyStyle(controlsBody, resolveStyle(figureStyle));
+  let relocatedPanels = 0;
+  if (!session) {
+    boxes.forEach((box, index) => {
+      const slot = controlSlots[index];
+      if (!slot) return;
+      // One figure per box, so the first panel is its own; it lives inside
+      // .inc-body, not as a direct child of the box.
+      const panel = box.querySelector('.inc-panel');
+      if (panel) {
+        slot.append(panel);
+        relocatedPanels += 1;
+      }
+      const description = box.querySelector('.inc-description');
+      if (description) slot.append(description);
+    });
+  }
+  if (relocatedPanels === 0) controlsStrip.hidden = true;
+  const deckStrip = player.querySelector('.inc-deck');
+  const sheetNode = player.querySelector('.inc-ask');
+  const banners = ['.inc-showme', '.inc-insert', '.inc-example'].map((selector) => player.querySelector(selector));
+  const insertsWrap = player.querySelector('.inc-inserts');
+  const resumeNote = player.querySelector('.inc-resume');
+  const shortcutHelp = player.querySelector('.inc-shortcuts');
+  const debugNodes = ['.inc-timeline', '.inc-player-inspector', '.inc-player-badges', '.inc-narration'].map((selector) =>
+    player.querySelector(selector),
+  );
+  for (const node of [controlsStrip, deckStrip, sheetNode, ...banners, insertsWrap, resumeNote, shortcutHelp, ...debugNodes]) {
+    if (node) player.append(node);
+  }
+  window.addEventListener('pagehide', () => {
+    live.stop(false);
+    // A model session belongs to this page: dropping it here mirrors the
+    // generations page, so idle sessions never linger on the dev server.
+    if (askSession?.id) void fetch(`/api/dev/session/${askSession.id}`, { method: 'DELETE', keepalive: true });
   });
   let lastFrame = performance.now();
   let lastInsertCaption = '';
@@ -918,25 +1365,46 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
       saveResume();
     }
     const state = model.state;
+    // The transport answers presses, not just frames: while the teacher reads
+    // the film counts as playing even when click-advance holds its clock, and
+    // a held beat counts as paused. Same reading as the Play press, above.
+    const playing = isPlayingNow();
     const insertText = askUi.caption() ?? '';
     if (insertText !== lastInsertCaption) {
       lastInsertCaption = insertText;
       applyCaption(state);
     }
-    if (state.beat !== lastBeat || state.playing !== lastPlaying) {
+    if (state.beat !== lastBeat || playing !== lastPlaying) {
       applyCaption(state);
       transcript.sync(state.beat);
       timeline.sync(state.beat, state.time, film.seconds);
       inspector.show(model.selectedBeat, film);
-      transport.syncTime(state.time, state.playing);
+      transport.syncTime(state.time, playing);
       deckUi.sync();
+      // The Controls strip: a collapsed one-line summary while playing,
+      // opened while paused, on an explore beat, or by the learner — a manual
+      // toggle holds until the next beat or play-state change.
+      const exploreBeat = state.beat ? film.beats.some((candidate) => candidate.id === state.beat && candidate.step.explore) : false;
+      const wantOpen = !playing || exploreBeat;
+      if (controlsStrip.open !== wantOpen) controlsStrip.open = wantOpen;
       lastBeat = state.beat;
-      lastPlaying = state.playing;
+      lastPlaying = playing;
+    }
+    {
+      const values = askFigure.runtime.values();
+      const summary = Object.entries(values)
+        .map(([name, value]) => `${name} ${Math.round(value * 100) / 100}`)
+        .join(' · ');
+      const summaryText = summary ? `Controls: ${summary}` : 'Controls';
+      if (controlsSummary.textContent !== summaryText) controlsSummary.textContent = summaryText;
     }
     if (Math.abs(state.time - lastTime) > 0.05) {
-      transport.syncTime(state.time, state.playing);
+      transport.syncTime(state.time, playing);
       timeline.playhead(state.time, film.seconds);
-      highlightWord(model.currentWordIndex);
+      if (captionMode === 'beat') highlightWord(model.currentWordIndex);
+      // The write-on reveal follows the film clock, never a timer: seeking to
+      // t draws exactly what playing to t draws.
+      renderWrite(state.caption?.write);
       // Past the line's end (the beat holds after it), the bed comes back up.
       const beat = state.beat ? film.beats.find((candidate) => candidate.id === state.beat) : undefined;
       if (beat && state.time > beat.start + beat.seconds - FILM_BEAT_HOLD_SECONDS) mixer.onLineEnd();
@@ -961,6 +1429,7 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
     mixer,
     scenes: () => ({ count: film.scenes.length, multi: controller.multiScene, active: controller.sceneIndex, cuts: [...cuts], chapters: model.chapters().map((chapter) => chapter.scene) }),
     ask: () => askUi.state(),
+    live: () => live.state(),
     full: () => ({
       version: film.version,
       history: versionStore.list().map((card) => card.summary),
@@ -1008,12 +1477,8 @@ async function start(root: HTMLElement, params: URLSearchParams, fixture: FilmFi
     timeline.checks(report);
   };
 
-  // Thumbnails, the probe and the film checks run after the first paint, so the film is playable at once.
-  const fragmentsFor = (sceneId: string): { html: string; css: string; js: string } => {
-    const found = fixture.scenes.find((candidate) => candidate.id === sceneId);
-    return found ? { html: found.html, css: found.css, js: found.js } : { html: scene.html, css: scene.css, js: scene.js };
-  };
-  setTimeout(() => void (session ? buildSandboxedThumbs(transport.thumbs, model, film, fragmentsFor, snapshotFor) : buildThumbs(transport.thumbs, model, film, fragmentsFor, kits, isolated)), 50);
+  // The probe and the film checks run after the first paint, so the film is
+  // playable at once.
   setTimeout(() => {
     void (async () => {
       if (session) {
@@ -1216,6 +1681,9 @@ function buildDeck(player: HTMLElement, model: PlayerModel): { sync(): void } {
     const deck = model.advance === 'click';
     toggle.textContent = deck ? 'Deck: on' : 'Deck: off';
     toggle.setAttribute('aria-pressed', deck ? 'true' : 'false');
+    // The strip (previous/next buttons and position) shows only in deck mode;
+    // its toggle lives in the transport's "more" menu.
+    wrap.hidden = !deck;
     const at = model.beatPosition();
     position.textContent = at ? `${deck ? 'Slide' : 'Beat'} ${at.index + 1} of ${at.total}` : '—';
   };
@@ -1228,32 +1696,64 @@ function buildDeck(player: HTMLElement, model: PlayerModel): { sync(): void } {
   return { sync };
 }
 
+/**
+ * An inline icon: decorative SVG plus a visually-hidden label, so the button
+ * reads as an icon while its text content — and accessible name — stay words.
+ */
+function transportIcon(paths: string, label: string): { icon: SVGSVGElement; text: HTMLSpanElement } {
+  const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  icon.setAttribute('viewBox', '0 0 16 16');
+  icon.setAttribute('aria-hidden', 'true');
+  icon.innerHTML = paths;
+  const text = document.createElement('span');
+  text.className = 'inc-vh';
+  text.textContent = label;
+  return { icon, text };
+}
+
 function buildTransport(
   player: HTMLElement,
   model: PlayerModel,
   film: CompiledFilm,
   mixer: FilmMixer,
   onAsk: () => void,
-  extra: { toggleLoop(): void; copyLink(): string },
+  extra: { toggleLoop(): void; copyLink(): string; playPause(): void },
   showFullscreen = true,
 ): {
   syncTime(time: number, playing: boolean): void;
   setDuration(seconds: number): void;
   toggleSound(): void;
-  thumbs: HTMLElement;
   fullscreen: HTMLButtonElement;
+  menuPop: HTMLElement;
 } {
   const bar = document.createElement('div');
   bar.className = 'inc-transport inc-player-transport';
+  bar.setAttribute('role', 'toolbar');
+  bar.setAttribute('aria-label', 'Film transport');
   const play = document.createElement('button');
   play.type = 'button';
-  play.textContent = 'Play';
-  play.addEventListener('click', () => model.toggle());
+  play.className = 'inc-play';
+  const setPlaying = (playing: boolean): void => {
+    const label = playing ? 'Pause' : 'Play';
+    const paths = playing
+      ? '<rect x="3" y="2" width="4" height="12" fill="currentColor"/><rect x="9" y="2" width="4" height="12" fill="currentColor"/>'
+      : '<path d="M4 2l9 6-9 6z" fill="currentColor"/>';
+    play.textContent = '';
+    const { icon, text } = transportIcon(paths, label);
+    play.append(icon, text);
+    play.setAttribute('aria-label', label);
+    play.title = label;
+  };
+  let lastPlaying = false;
+  setPlaying(false);
+  // Play starts the live teacher (or falls back silently); Pause holds it.
+  play.addEventListener('click', () => extra.playPause());
   const ask = document.createElement('button');
   ask.type = 'button';
   ask.className = 'inc-player-ask';
   ask.textContent = 'Ask';
   ask.setAttribute('aria-label', 'Ask about this moment');
+  ask.title = 'Ask about this moment';
   ask.addEventListener('click', onAsk);
   const time = document.createElement('span');
   time.className = 'inc-player-time';
@@ -1267,6 +1767,20 @@ function buildTransport(
   scrub.value = '0';
   scrub.setAttribute('aria-label', 'Seek');
   scrub.addEventListener('input', () => model.seek(Number(scrub.value)));
+  scrub.addEventListener('mousemove', (event) => {
+    // Hovering the scrubber previews the beat under the pointer instead of a
+    // thumbnail strip: the caption text, which names the moment.
+    const duration = Number(scrub.max);
+    if (!(duration > 0)) {
+      scrub.removeAttribute('title');
+      return;
+    }
+    const rect = scrub.getBoundingClientRect();
+    const at = rect.width > 0 ? ((event.clientX - rect.left) / rect.width) * duration : 0;
+    const beat = film.beats.find((candidate) => at >= candidate.start && at < candidate.start + candidate.seconds);
+    if (beat) scrub.title = `${beat.id}: ${beat.step.say}`;
+    else scrub.removeAttribute('title');
+  });
   const scrubMarkers = document.createElement('div');
   scrubMarkers.className = 'inc-scrub-markers';
   scrubWrap.append(scrub, scrubMarkers);
@@ -1274,6 +1788,20 @@ function buildTransport(
     scrubMarkers.textContent = '';
     const duration = Number(scrub.max);
     if (!(duration > 0)) return;
+    for (const beat of film.beats) {
+      const tick = document.createElement('span');
+      tick.className = 'inc-tick-beat';
+      tick.style.left = `${Math.min(100, Math.max(0, (beat.start / duration) * 100))}%`;
+      tick.title = beat.id;
+      scrubMarkers.append(tick);
+    }
+    for (const chapter of model.chapters()) {
+      const tick = document.createElement('span');
+      tick.className = 'inc-tick-chapter';
+      tick.style.left = `${Math.min(100, Math.max(0, (chapter.start / duration) * 100))}%`;
+      tick.title = chapter.title;
+      scrubMarkers.append(tick);
+    }
     for (const at of model.markerTimes()) {
       const dot = document.createElement('span');
       dot.className = 'inc-marker';
@@ -1286,7 +1814,9 @@ function buildTransport(
     if (event.type === 'chrome') renderMarkers();
   });
   const speed = document.createElement('select');
+  speed.className = 'inc-speed';
   speed.setAttribute('aria-label', 'Speed');
+  speed.title = 'Speed';
   for (const value of [0.25, 0.5, 1, 2, 4]) {
     const option = document.createElement('option');
     option.value = String(value);
@@ -1295,6 +1825,22 @@ function buildTransport(
     speed.append(option);
   }
   speed.addEventListener('change', () => model.setSpeed(Number(speed.value)));
+  const captions = document.createElement('button');
+  captions.type = 'button';
+  captions.className = 'inc-cc';
+  captions.textContent = 'CC';
+  captions.setAttribute('aria-label', 'Captions');
+  captions.setAttribute('aria-pressed', 'true');
+  captions.title = 'Captions on / off';
+  const syncCaptions = (): void => {
+    captions.setAttribute('aria-pressed', model.state.captionsOn ? 'true' : 'false');
+  };
+  captions.addEventListener('click', () => {
+    model.setCaptions(!model.state.captionsOn);
+    syncCaptions();
+  });
+  const volumeWrap = document.createElement('div');
+  volumeWrap.className = 'inc-volume';
   const volume = document.createElement('input');
   volume.type = 'range';
   volume.min = '0';
@@ -1302,25 +1848,82 @@ function buildTransport(
   volume.step = '0.05';
   volume.value = '0.5';
   volume.setAttribute('aria-label', 'Volume');
+  volume.title = 'Volume';
   volume.addEventListener('input', () => {
     model.setVolume(Number(volume.value));
     mixer.setVolume(Number(volume.value));
   });
   const sound = document.createElement('button');
   sound.type = 'button';
-  sound.textContent = 'Sound: off';
-  sound.setAttribute('aria-label', 'Sound');
+  sound.className = 'inc-player-sound';
+  const syncSound = (): void => {
+    const label = mixer.isOn ? 'Sound: on' : 'Sound: off';
+    sound.textContent = '';
+    const { icon, text } = transportIcon(
+      '<path d="M2 6h3l4-3v10L5 10H2z" fill="currentColor"/><path d="M11 5c1.5 1.5 1.5 4.5 0 6M13 3c2.5 2.5 2.5 7.5 0 10" stroke="currentColor" fill="none"/>',
+      label,
+    );
+    sound.append(icon, text);
+    sound.setAttribute('aria-label', label);
+    sound.title = label;
+  };
+  syncSound();
   sound.addEventListener('click', () => {
     mixer.setEnabled(!mixer.isOn);
-    sound.textContent = mixer.isOn ? 'Sound: on' : 'Sound: off';
+    syncSound();
     if (mixer.isOn && model.state.playing && model.state.beat) mixer.onBeat(model.state.beat, Math.max(0, model.state.time - (model.state.caption?.start ?? 0)));
   });
-  const captions = document.createElement('label');
-  const captionsBox = document.createElement('input');
-  captionsBox.type = 'checkbox';
-  captionsBox.checked = true;
-  captionsBox.addEventListener('change', () => model.setCaptions(captionsBox.checked));
-  captions.append(captionsBox, ' Captions');
+  volumeWrap.append(sound, volume);
+  const fullscreen = document.createElement('button');
+  fullscreen.type = 'button';
+  fullscreen.className = 'inc-player-fullscreen';
+  const { icon: fullIcon, text: fullText } = transportIcon(
+    '<path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4" stroke="currentColor" stroke-width="2" fill="none"/>',
+    'Full screen',
+  );
+  fullscreen.append(fullIcon, fullText);
+  fullscreen.setAttribute('aria-label', 'Full screen');
+  fullscreen.setAttribute('aria-pressed', 'false');
+  fullscreen.title = 'Full screen';
+  refreshPlayerFullscreenVisibility(fullscreen, showFullscreen);
+  // Secondary controls live in the "more" menu: caption size, loop and link
+  // are built here; bookmarks, versions, export and the deck toggle move in
+  // after their builders run.
+  const menu = document.createElement('div');
+  menu.className = 'inc-menu';
+  const menuButton = document.createElement('button');
+  menuButton.type = 'button';
+  menuButton.className = 'inc-menu-button';
+  menuButton.textContent = '⋯';
+  menuButton.setAttribute('aria-label', 'More options');
+  menuButton.setAttribute('aria-expanded', 'false');
+  menuButton.setAttribute('aria-haspopup', 'true');
+  const menuPop = document.createElement('div');
+  menuPop.className = 'inc-menu-pop';
+  menuPop.hidden = true;
+  const setMenu = (open: boolean): void => {
+    menuPop.hidden = !open;
+    menuButton.setAttribute('aria-expanded', open ? 'true' : 'false');
+  };
+  menuButton.addEventListener('click', () => setMenu(menuPop.hidden === true));
+  document.addEventListener('keydown', (event) => {
+    // Escape closes the menu from anywhere — the switch, a row, the film.
+    if (event.key === 'Escape' && !menuPop.hidden) setMenu(false);
+  });
+  // An outside click closes the menu but never swallows the click: closing
+  // happens in the click's capture phase, before the target's own handler,
+  // with no gesture disturbed in between. (Closing on pointerdown used to
+  // eat the click that dismissed the menu, so Play never started.)
+  document.addEventListener(
+    'click',
+    (event) => {
+      if (!menuPop.hidden && event.target instanceof Node && !menu.contains(event.target)) setMenu(false);
+    },
+    { capture: true },
+  );
+  const sizeRow = document.createElement('label');
+  sizeRow.className = 'inc-menu-row';
+  sizeRow.textContent = 'Caption size ';
   const size = document.createElement('select');
   size.setAttribute('aria-label', 'Caption size');
   for (const value of ['sm', 'md', 'lg'] as const) {
@@ -1331,48 +1934,62 @@ function buildTransport(
     size.append(option);
   }
   size.addEventListener('change', () => model.setCaptionSize(size.value as 'sm' | 'md' | 'lg'));
+  sizeRow.append(size);
   const loop = document.createElement('button');
   loop.type = 'button';
   loop.className = 'inc-player-loop';
-  loop.textContent = 'Loop: off';
-  loop.setAttribute('aria-label', 'Loop the beat');
+  const syncLoop = (): void => {
+    const looped = model.loopedBeat;
+    const label = looped ? `Loop: ${looped}` : 'Loop: off';
+    loop.textContent = '';
+    const { icon, text } = transportIcon(
+      '<path d="M3 8a5 5 0 0 1 9-3M13 8a5 5 0 0 1-9 3M12 2v3H9M4 14v-3h3" stroke="currentColor" fill="none"/>',
+      label,
+    );
+    loop.append(icon, text);
+    loop.setAttribute('aria-label', label);
+    loop.title = label;
+    loop.setAttribute('aria-pressed', looped ? 'true' : 'false');
+  };
+  syncLoop();
   loop.addEventListener('click', () => extra.toggleLoop());
+  const linkRow = document.createElement('div');
+  linkRow.className = 'inc-menu-row';
   const link = document.createElement('button');
   link.type = 'button';
   link.className = 'inc-player-link';
-  link.textContent = 'Copy link';
+  const { icon: linkIcon, text: linkText } = transportIcon('<path d="M6 10l4-4M8 4l1-1a3 3 0 0 1 4 4l-1 1M8 12l-1 1a3 3 0 0 1-4-4l1-1" stroke="currentColor" fill="none"/>', 'Copy link');
+  link.append(linkIcon, linkText);
   link.setAttribute('aria-label', 'Copy a link to this moment');
+  link.title = 'Copy a link to this moment';
   const linkNote = document.createElement('span');
   linkNote.className = 'inc-player-link-note';
   link.addEventListener('click', () => {
     linkNote.textContent = extra.copyLink();
   });
+  linkRow.append(link, linkNote);
+  menuPop.append(sizeRow, loop, linkRow);
+  menu.append(menuButton, menuPop);
   model.on((event) => {
     if (event.type !== 'chrome') return;
-    const looped = model.loopedBeat;
-    loop.textContent = looped ? `Loop: ${looped}` : 'Loop: off';
-    loop.setAttribute('aria-pressed', looped ? 'true' : 'false');
+    syncLoop();
+    syncCaptions();
   });
-  const thumbs = document.createElement('div');
-  thumbs.className = 'inc-player-thumbs';
-  const fullscreen = document.createElement('button');
-  fullscreen.type = 'button';
-  fullscreen.className = 'inc-player-fullscreen';
-  fullscreen.textContent = '⛶';
-  fullscreen.setAttribute('aria-label', 'Full screen');
-  fullscreen.setAttribute('aria-pressed', 'false');
-  fullscreen.title = 'Full screen';
-  refreshPlayerFullscreenVisibility(fullscreen, showFullscreen);
-  bar.append(play, ask, time, scrubWrap, speed, volume, sound, captions, size, loop, link, linkNote, fullscreen);
-  player.append(bar, thumbs);
+  bar.append(play, ask, time, scrubWrap, speed, captions, volumeWrap, fullscreen, menu);
+  player.append(bar);
   return {
-    thumbs,
     fullscreen,
+    menuPop,
     toggleSound(): void {
       sound.click();
     },
     syncTime(current: number, playing: boolean): void {
-      play.textContent = playing ? 'Pause' : 'Play';
+      // Rebuilding the icon every frame would churn the button and cut off
+      // screen-reader announcements; only the state flip rebuilds it.
+      if (playing !== lastPlaying) {
+        setPlaying(playing);
+        lastPlaying = playing;
+      }
       time.textContent = `${formatTime(current)} / ${formatTime(scrub.max === '' ? film.seconds : Number(scrub.max))}`;
       if (document.activeElement !== scrub) scrub.value = current.toFixed(2);
     },
@@ -2225,11 +2842,22 @@ function buildTranscript(player: HTMLElement, model: PlayerModel): { sync(beat: 
   return {
     sync(beat: string | null): void {
       active = beat ?? '';
+      let current: HTMLElement | null = null;
       for (const item of list.querySelectorAll('li')) {
         const on = item instanceof HTMLElement && item.dataset.beat === beat;
         item.classList.toggle('is-active', on);
-        if (on) item.scrollIntoView({ block: 'nearest' });
+        if (on && item instanceof HTMLElement) current = item;
       }
+      // The list scrolls inside its own panel; the page itself never moves.
+      // Hidden tabs have no boxes, so there is nothing to scroll to. Only
+      // the list scrolls, and only when the sounding line is outside its
+      // scrollport, so the learner's (or a test's) own scroll is never fought
+      // and every line stays clickable.
+      if (!current || current.offsetHeight <= 0) return;
+      const listBox = list.getBoundingClientRect();
+      const itemBox = current.getBoundingClientRect();
+      if (itemBox.top < listBox.top) list.scrollTop += itemBox.top - listBox.top;
+      else if (itemBox.bottom > listBox.bottom) list.scrollTop += itemBox.bottom - listBox.bottom;
     },
   };
 }
@@ -2473,6 +3101,13 @@ interface AskSheet {
   caption(): string | null;
   /** Plays a clip over the paused film: a saved insert, or the deeper rung's. Null when it plays, else why not. */
   playClip(clip: InsertClip): string | null;
+  /**
+   * The live voice's make_example rung: the same insert flow as Explain
+   * deeper, pinned as a private insert and played as a detour. Resolves with
+   * the insert id when it starts playing; onDone runs when it resumes the
+   * film, so the driver can read on from the anchor.
+   */
+  makeExample(request: string, anchor: AskAnchor, onDone: () => void): Promise<unknown>;
   state(): {
     sheet: boolean;
     answer: string;
@@ -2499,6 +3134,8 @@ function buildAskSheet(
     applyPatch(patch: FilmVersionPatch): Promise<{ ok: true } | { ok: false; problems: readonly string[] }>;
     requestBeats(): ReadonlyArray<{ beat: string; scene: string; say: string }>;
     keepInsert(clip: InsertClip): void;
+    /** Pins the reference model, skipping the model session, for tests. */
+    reference: boolean;
   },
 ): AskSheet {
   const { model, controller, figure } = ctx;
@@ -2587,6 +3224,13 @@ function buildAskSheet(
   }
   const status = document.createElement('p');
   status.className = 'inc-ask-status';
+  // Which model answers, once the first Ask use resolves the session (or the
+  // reference fallback): the same line the voice panel carries, kept in sync
+  // through the shared registry.
+  const modelLine = document.createElement('p');
+  modelLine.className = 'inc-ask-model';
+  modelLine.hidden = true;
+  askModelLines.add(modelLine);
   const row = document.createElement('div');
   row.className = 'inc-ask-row';
   row.append(input, send, close);
@@ -2615,7 +3259,7 @@ function buildAskSheet(
   changeSend.className = 'inc-change-send';
   changeSend.textContent = 'Make version';
   changeRow.append(changeInput, changeSend);
-  sheet.append(context, row, chips, answer, depthRow, speakRow, changeButton, changeRow, status);
+  sheet.append(context, row, chips, answer, depthRow, speakRow, changeButton, changeRow, status, modelLine);
 
   const showmeBanner = document.createElement('div');
   showmeBanner.className = 'inc-showme';
@@ -2701,25 +3345,27 @@ function buildAskSheet(
     void loadVoices();
   };
 
-  const assemblyBody = (question: string, depth?: 'simpler' | 'standard' | 'deeper'): Record<string, unknown> => {
+  // The Ask assembly for one anchor and beat: the sheet's own for typed
+  // questions, the caller's for live voice inserts that never open it.
+  const assemblyBody = (question: string, anchorAt: AskAnchor | null, beatAt: CompiledBeat | null, depth?: 'simpler' | 'standard' | 'deeper'): Record<string, unknown> => {
     const film = ctx.film();
     const lines = controller.transcript();
-    const at = lines.findIndex((line) => line.beat === anchor?.beat);
-    const neighbours = lines.slice(Math.max(0, at - 1), at + 2).filter((line) => line.beat !== anchor?.beat);
-    const jsLines = ctx.sceneJsFor(anchor?.scene ?? '').split('\n');
-    const sceneLines = (film.sourceMap[anchor?.beat ?? '']?.lines ?? [])
+    const at = lines.findIndex((line) => line.beat === anchorAt?.beat);
+    const neighbours = lines.slice(Math.max(0, at - 1), at + 2).filter((line) => line.beat !== anchorAt?.beat);
+    const jsLines = ctx.sceneJsFor(anchorAt?.scene ?? '').split('\n');
+    const sceneLines = (film.sourceMap[anchorAt?.beat ?? '']?.lines ?? [])
       .map((n) => ({ n, text: jsLines[n - 1] ?? '' }))
       .filter((line) => line.text !== '');
-    const scene = film.scenes.find((candidate) => candidate.id === anchor?.scene);
+    const scene = film.scenes.find((candidate) => candidate.id === anchorAt?.scene);
     return {
       question,
-      anchor: anchor ? { film: anchor.film, version: anchor.version, scene: anchor.scene, beat: anchor.beat, wordIndex: anchor.wordIndex } : null,
-      beat: beat ? { beat: beat.id, say: beat.step.say } : null,
+      anchor: anchorAt ? { film: anchorAt.film, version: anchorAt.version, scene: anchorAt.scene, beat: anchorAt.beat, wordIndex: anchorAt.wordIndex } : null,
+      beat: beatAt ? { beat: beatAt.id, say: beatAt.step.say } : null,
       neighbours: neighbours.map((line) => ({ beat: line.beat, say: line.say })),
       sceneLines,
       sceneSummary: scene?.title ?? '',
-      values: anchor?.controlValues ?? {},
-      readouts: anchor?.readouts ?? [],
+      values: anchorAt?.controlValues ?? {},
+      readouts: anchorAt?.readouts ?? [],
       thread: thread.map((turn) => ({ ...turn })),
       depth: depth ?? 'standard',
       language: language.value === '' ? 'en' : language.value,
@@ -2733,7 +3379,8 @@ function buildAskSheet(
     speakStatus.textContent = '';
     try {
       const token = await devToken();
-      const full = await streamAsk(token, assemblyBody(question, depth), (delta) => {
+      const session = await askSessionInfo(ctx.reference);
+      const full = await streamAsk(session.base, token, assemblyBody(question, anchor, beat, depth), (delta) => {
         answer.textContent += delta;
       });
       lastAnswer = full.text;
@@ -2764,44 +3411,75 @@ function buildAskSheet(
     showmeBanner.hidden = true;
   });
 
-  const askDeeper = async (question: string, depth: 'simpler' | 'standard' | 'deeper' = 'standard'): Promise<void> => {
+  // The insert flow for one anchor and beat: Explain deeper from the sheet,
+  // or live voice's make_example, which never opens it. Throws once the
+  // status line already says why, so live voice can show it in its panel.
+  // Resolves with what the insert actually says and sets, so the teacher
+  // describes the real result instead of the request; an empty flow rejects.
+  const runInsert = async (
+    question: string,
+    anchorAt: AskAnchor,
+    beatAt: CompiledBeat,
+    depth: 'simpler' | 'standard' | 'deeper' = 'standard',
+    onDone?: () => void,
+  ): Promise<{ kind: 'insert'; says: readonly string[]; sets: Readonly<Record<string, number>> }> => {
     status.textContent = 'Writing the insert…';
+    const fail = (message: string): Error => {
+      status.textContent = message;
+      return new Error(message);
+    };
+    let clip: InsertClip;
     try {
       const token = await devToken();
+      const session = await askSessionInfo(ctx.reference);
       const params = Object.keys(figure.runtime.values());
-      const posted = await fetch('/api/v1/ask/insert', {
+      const posted = await fetch(`${session.base}/ask/insert`, {
         method: 'POST',
         headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-        body: JSON.stringify({ ...assemblyBody(question, depth), params }),
+        body: JSON.stringify({ ...assemblyBody(question, anchorAt, beatAt, depth), params }),
       });
       const result = (await posted.json()) as { status?: string; clip?: { anchor: AskAnchor; lines: Array<{ say: string; seconds: number; set?: Record<string, number> }> } };
-      if (!posted.ok || result.status !== 'clip' || !result.clip || !anchor || !beat) {
-        status.textContent = 'No insert came back — the film is still paused where you asked.';
-        return;
+      if (!posted.ok || result.status !== 'clip' || !result.clip) {
+        throw fail('No insert came back — the film is still paused where you asked.');
       }
       const validated = validateInsertClip({ anchor: result.clip.anchor, lines: result.clip.lines }, ctx.film(), new Set(params));
       if (!validated.ok) {
-        status.textContent = `The insert did not fit this scene: ${validated.problems[0] ?? 'invalid'}.`;
-        return;
+        throw fail(`The insert did not fit this scene: ${validated.problems[0] ?? 'invalid'}.`);
       }
-      const problem = startClip({ ...validated.clip, anchor });
-      if (problem) {
-        status.textContent = problem;
-        return;
-      }
-      ctx.keepInsert({ ...validated.clip, anchor });
+      clip = { ...validated.clip, anchor: anchorAt };
+    } catch (error) {
+      if (status.textContent === 'Writing the insert…') fail('No insert came back — the film is still paused where you asked.');
+      throw error;
+    }
+    if (clip.lines.length === 0) throw fail('The example came back empty — the film is still paused where you asked.');
+    const problem = startClip(clip, onDone);
+    if (problem) throw fail(problem);
+    ctx.keepInsert(clip);
+    status.textContent = '';
+    sheet.hidden = true;
+    const sets: Record<string, number> = {};
+    for (const line of clip.lines) Object.assign(sets, line.set);
+    return { kind: 'insert', says: clip.lines.map((line) => line.say), sets };
+  };
+
+  const askDeeper = async (question: string, depth: 'simpler' | 'standard' | 'deeper' = 'standard'): Promise<void> => {
+    if (!anchor || !beat) {
+      status.textContent = 'Play the film first, then ask.';
+      return;
+    }
+    try {
+      await runInsert(question, anchor, beat, depth);
       lastQuestion = question;
       lastDepthRung = 'deeper';
-      status.textContent = '';
-      sheet.hidden = true;
     } catch {
-      status.textContent = 'No insert came back — the film is still paused where you asked.';
+      // runInsert already said why on the status line.
     }
   };
 
   // One insert player for the deeper rung and saved inserts alike: lines in
   // order, the back-to-film beat, then an auto-resume at the anchor word.
-  const startClip = (clip: InsertClip): string | null => {
+  // onDone runs after that resume, for live voice's return to the anchor.
+  const startClip = (clip: InsertClip, onDone?: () => void): string | null => {
     if (!stack.push(clip.anchor)) return 'Finish this question first — questions nest two deep.';
     const nested = players.length > 0;
     const playing = new InsertPlayer(controller, ctx.film(), clip, {
@@ -2812,6 +3490,7 @@ function buildAskSheet(
         stack.pop();
         players.pop();
         if (players.length === 0) insertBanner.hidden = true;
+        onDone?.();
       },
     });
     players.push(playing);
@@ -2830,10 +3509,11 @@ function buildAskSheet(
     status.textContent = 'Writing the side clip…';
     try {
       const token = await devToken();
-      const posted = await fetch('/api/v1/ask/example', {
+      const session = await askSessionInfo(ctx.reference);
+      const posted = await fetch(`${session.base}/ask/example`, {
         method: 'POST',
         headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-        body: JSON.stringify(assemblyBody(question)),
+        body: JSON.stringify(assemblyBody(question, anchor, beat)),
       });
       const result = (await posted.json()) as { status?: string; clip?: { anchor: AskAnchor; html: string; css: string; js: string; caption: string } };
       if (!posted.ok || result.status !== 'clip' || !result.clip || !anchor || !beat) {
@@ -2914,8 +3594,9 @@ function buildAskSheet(
     status.textContent = 'Writing the new version…';
     try {
       const token = await devToken();
+      const session = await askSessionInfo(ctx.reference);
       const film = ctx.film();
-      const posted = await fetch('/api/v1/ask/change', {
+      const posted = await fetch(`${session.base}/ask/change`, {
         method: 'POST',
         headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
         body: JSON.stringify({ prompt, film: film.id, version: film.version, beats: ctx.requestBeats() }),
@@ -3040,6 +3721,12 @@ function buildAskSheet(
   return {
     open,
     playClip: (clip) => startClip(clip),
+    makeExample: async (request, anchorAt, onDone) => {
+      const beatAt = ctx.film().beats.find((candidate) => candidate.id === anchorAt.beat) ?? null;
+      if (!beatAt) throw new Error(`The pinned beat "${anchorAt.beat}" is no longer in this film.`);
+      model.addMarker(anchorAt, request);
+      return runInsert(request, anchorAt, beatAt, 'standard', onDone);
+    },
     tick(dt: number): void {
       sideClip?.player.tick(dt);
       const top = players[players.length - 1];
@@ -3072,6 +3759,510 @@ function buildAskSheet(
   };
 }
 
+/** What the page shows while live voice owns the film, for the panel and e2e. */
+export interface LiveVoiceState {
+  readonly active: boolean;
+  /** True while the driver holds the film paused (a pause or interruption), until resume. */
+  readonly paused: boolean;
+  readonly status: string;
+  readonly learner: string;
+  readonly teacher: string;
+  readonly tools: ReadonlyArray<{ readonly name: string; readonly phase: 'working' | 'done'; readonly detail: string }>;
+  readonly error: string | null;
+}
+
+/**
+ * The page's handle on live voice. Transport Play starts the teacher through
+ * startForPlayback (or falls back to silent playback); Pause holds it through
+ * pauseForPlayback and Play resumes it through resumePlayback.
+ */
+export interface LiveVoiceControls {
+  /** The full start path (mic first, token, connect, driver): true when the teacher is live, false on fallback. */
+  startForPlayback(): Promise<boolean>;
+  /** Holds the teacher where it stands and pauses the film; silent when live never started. */
+  pauseForPlayback(): void;
+  /** Reads on from the held word through the driver's resume path. */
+  resumePlayback(): void;
+  /** Stops live voice; resumes normal playback unless the page is going away. */
+  stop(resume?: boolean): void;
+  state(): LiveVoiceState;
+}
+
+/** Shown when the server has no live voice: the operator never accepted retention or set no key. */
+export const LIVE_VOICE_OFF_MESSAGE = 'Live voice is off on this server (set GEMINI_LIVE_RETENTION_ACCEPTED=1 with a Gemini key)';
+/** The whole start sequence gets this long before the toggle gives up cleanly. */
+export const LIVE_START_TIMEOUT_MS = 15000;
+
+/** Mints one short-lived Live token through the dev server, like the ask calls. Throws plain words, never the key. */
+async function mintLiveToken(): Promise<{ token: string; model: string }> {
+  const token = await devToken();
+  let answer: Response;
+  try {
+    answer = await fetch('/api/v1/live/token', { method: 'POST', headers: { authorization: `Bearer ${token}` } });
+  } catch {
+    throw new Error('Live voice did not answer — the dev server may be down.');
+  }
+  if (answer.status === 404) throw new Error(LIVE_VOICE_OFF_MESSAGE);
+  if (!answer.ok) throw new Error(`Live voice did not start (the server answered ${answer.status}).`);
+  const body = (await answer.json()) as { token?: unknown; model?: unknown };
+  if (typeof body.token !== 'string' || body.token === '' || typeof body.model !== 'string' || body.model === '') {
+    throw new Error('Live voice did not start (the token was missing).');
+  }
+  return { token: body.token, model: body.model };
+}
+
+/** One tool line for the voice panel, in the teacher's words. */
+function liveToolLabel(name: string, args: unknown): string {
+  if (name === 'show_me') {
+    const set = typeof args === 'object' && args !== null ? (args as Record<string, unknown>).set : undefined;
+    if (typeof set === 'object' && set !== null && !Array.isArray(set)) {
+      const parts = Object.entries(set as Record<string, unknown>)
+        .map(([key, value]) => `${key} = ${typeof value === 'number' ? String(value) : JSON.stringify(value) ?? '?'}`)
+        .filter((part) => part !== '');
+      if (parts.length > 0) return `Showing ${parts.join(', ')}`;
+    }
+    return 'Showing…';
+  }
+  switch (name) {
+    case 'make_example':
+      return 'Making another example…';
+    case 'pause':
+      return 'Pausing…';
+    case 'resume':
+      return 'Resuming…';
+    case 'seek_beat':
+      return 'Jumping to a beat…';
+    case 'get_context':
+      return 'Reading the scene…';
+    default:
+      return `${name}…`;
+  }
+}
+
+/**
+ * Live voice on the film page: the transport toggle, the mic, the teacher's
+ * audio, the driver and the voice panel. Generic: it works for any film the
+ * page plays, with no film-specific code. Leaving live mode returns the film
+ * to normal playback at the current position.
+ */
+function buildLiveVoice(
+  page: HTMLElement,
+  ctx: {
+    model: PlayerModel;
+    controller: FilmController;
+    film(): CompiledFilm;
+    figure: { runtime: SceneRuntime; renderer: { apply(update: RuntimeUpdate): void } };
+    ask: Pick<AskSheet, 'makeExample'>;
+    mixer: FilmMixer;
+    renderCaption(): void;
+    liveCaption(text: string | null): void;
+    /** Fires when live mode turns on or off, for the Teacher tab. */
+    onLiveActive?(active: boolean): void;
+  },
+): LiveVoiceControls {
+  // No transport button: the transport Play owns the teacher, and the ⋯
+  // menu's Teacher voice switch silences it. The panel below carries the
+  // status, transcripts, tool lines, typed questions and errors.
+  const bar = page.querySelector('.inc-player-transport');
+  const panel = document.createElement('section');
+  panel.className = 'inc-live-panel';
+  panel.hidden = true;
+  const status = document.createElement('p');
+  status.className = 'inc-live-status';
+  status.setAttribute('role', 'status');
+  status.textContent = 'Off';
+  // A one-line note under the transport, visible whatever side tab is open:
+  // why Play fell back to silent playback. The panel error says the same
+  // thing for whoever has the Teacher tab open.
+  const note = document.createElement('p');
+  note.className = 'inc-player-livenote';
+  note.setAttribute('role', 'status');
+  note.hidden = true;
+  if (bar) bar.after(note);
+  else page.append(note);
+  const setNote = (text: string | null): void => {
+    note.textContent = text ?? '';
+    note.hidden = text === null;
+  };
+  // Which model answers the live tools, once the first Ask use resolves the
+  // session (or the reference fallback): the same line the sheet carries.
+  const modelNote = document.createElement('p');
+  modelNote.className = 'inc-live-model';
+  modelNote.hidden = true;
+  askModelLines.add(modelNote);
+  const learnerLine = document.createElement('p');
+  learnerLine.className = 'inc-live-learner';
+  learnerLine.setAttribute('aria-live', 'polite');
+  learnerLine.hidden = true;
+  const teacherLine = document.createElement('p');
+  teacherLine.className = 'inc-live-teacher';
+  teacherLine.setAttribute('aria-live', 'polite');
+  teacherLine.hidden = true;
+  const toolList = document.createElement('ul');
+  toolList.className = 'inc-live-tools';
+  // Listen-and-type mode: the mic never started, so the learner writes.
+  const micNote = document.createElement('p');
+  micNote.className = 'inc-live-mic';
+  micNote.textContent = 'Microphone is off: type your question below.';
+  micNote.hidden = true;
+  const askForm = document.createElement('form');
+  askForm.className = 'inc-live-ask';
+  const askInput = document.createElement('input');
+  askInput.type = 'text';
+  askInput.className = 'inc-live-input';
+  askInput.setAttribute('aria-label', 'Type a question for the teacher');
+  askInput.placeholder = 'Type a question…';
+  askInput.autocomplete = 'off';
+  const askButton = document.createElement('button');
+  askButton.type = 'submit';
+  askButton.className = 'inc-live-send';
+  askButton.textContent = 'Ask';
+  askForm.append(askInput, askButton);
+  const errorLine = document.createElement('p');
+  errorLine.className = 'inc-live-error';
+  errorLine.setAttribute('role', 'alert');
+  errorLine.hidden = true;
+  panel.append(status, modelNote, micNote, learnerLine, teacherLine, toolList, askForm, errorLine);
+  if (bar && bar.parentElement) bar.after(panel);
+  else page.append(panel);
+
+  let driver: LiveDriver | null = null;
+  let voice: GeminiLiveVoice | null = null;
+  let mic: MicrophoneHandle | null = null;
+  let speaker: PcmPlayer | null = null;
+  let offs: Array<() => void> = [];
+  let busy = false;
+  let active = false;
+  let mixerWasOn = false;
+  let statusText = 'Off';
+  let learnerText = '';
+  let teacherText = '';
+  let errorText: string | null = null;
+  const toolLines = new Map<string, { name: string; label: string; phase: 'working' | 'done'; item: HTMLLIElement }>();
+
+  const setStatus = (text: string): void => {
+    statusText = text;
+    status.textContent = text;
+  };
+  const setError = (text: string | null): void => {
+    errorText = text;
+    errorLine.hidden = text === null;
+    errorLine.textContent = text ?? '';
+  };
+  const setLearner = (text: string): void => {
+    learnerText = text;
+    learnerLine.hidden = text === '';
+    learnerLine.textContent = text === '' ? '' : `Learner: ${text}`;
+  };
+  const setTeacher = (text: string): void => {
+    teacherText = text;
+    teacherLine.hidden = text === '';
+    teacherLine.textContent = text === '' ? '' : `Teacher: ${text}`;
+  };
+  const refreshCaption = (): void => {
+    ctx.liveCaption(driver ? driver.caption() : null);
+    ctx.renderCaption();
+  };
+
+  const stop = (resume = true): void => {
+    // A failed start still mutes the mixer, so every stop restores it; only
+    // a session that owned the film resumes playback, and only clean stops
+    // hide the panel — an error keeps it up with its message.
+    const hadSession = active || driver !== null || mic !== null;
+    active = false;
+    ctx.onLiveActive?.(false);
+    for (const off of offs) {
+      try {
+        off();
+      } catch {
+        // Tearing down a half-started session still restores the film.
+      }
+    }
+    offs = [];
+    try {
+      driver?.stop();
+    } catch {
+      // The film still restores its advance mode below.
+    }
+    driver = null;
+    voice = null;
+    try {
+      mic?.stop();
+    } catch {
+      // The mic is already gone.
+    }
+    mic = null;
+    speaker?.close();
+    speaker = null;
+    toolLines.clear();
+    toolList.textContent = '';
+    ctx.liveCaption(null);
+    ctx.renderCaption();
+    ctx.mixer.setEnabled(mixerWasOn);
+    setStatus('Off');
+    setLearner('');
+    setTeacher('');
+    micNote.hidden = true;
+    // A stop after a recorded failure keeps its note (a late cancel lands
+    // here after the timeout already explained itself); a clean stop clears.
+    if (errorText === null) setNote(null);
+    if (errorText === null) panel.hidden = true;
+    if (resume && hadSession) ctx.model.play();
+  };
+
+  const onVoiceEvent = (event: LiveEvent): void => {
+    switch (event.type) {
+      case 'speaking':
+        if (event.turnId === null) setTeacher('');
+        return;
+      case 'transcript':
+        // The beat's own lines caption the film through the driver; the
+        // panel carries the teacher's own replies.
+        if (event.turnId === null) setTeacher(event.text);
+        refreshCaption();
+        return;
+      case 'learner-transcript':
+        setLearner(event.text);
+        setStatus('Listening…');
+        return;
+      case 'tool-call': {
+        const label = liveToolLabel(event.name, event.args);
+        const item = document.createElement('li');
+        item.dataset.tool = event.name;
+        item.textContent = label;
+        toolList.append(item);
+        while (toolList.children.length > 8) toolList.firstElementChild?.remove();
+        toolLines.set(event.callId, { name: event.name, label, phase: 'working', item });
+        setStatus(label);
+        return;
+      }
+      case 'interrupted':
+        // The teacher goes silent at once; the film holds where it was cut.
+        speaker?.flush();
+        refreshCaption();
+        setStatus('Interrupted — listening…');
+        return;
+      case 'error':
+        setError(event.message);
+        stop(true);
+        return;
+      case 'closed':
+        if (active) {
+          setError('The live session closed.');
+          stop(true);
+        }
+        return;
+      default:
+        return;
+    }
+  };
+
+  const onDriverEvent = (event: LiveDriverEvent): void => {
+    switch (event.type) {
+      case 'started':
+      case 'said':
+        refreshCaption();
+        setStatus(`Live · ${event.beat}`);
+        return;
+      case 'tool': {
+        const line = toolLines.get(event.callId);
+        if (line) {
+          line.phase = 'done';
+          line.item.textContent = event.result.ok ? `${line.label.replace(/…$/, '')} — done` : `${line.label.replace(/…$/, '')} — needs another try`;
+        }
+        return;
+      }
+      case 'anchor':
+        refreshCaption();
+        return;
+      case 'done':
+        setStatus('Live · the film is finished');
+        return;
+      case 'stopped':
+        return;
+      default:
+        return;
+    }
+  };
+
+  const start = async (): Promise<void> => {
+    if (busy || active) return;
+    busy = true;
+    panel.hidden = false;
+    setError(null);
+    micNote.hidden = true;
+    setStatus('Starting…');
+    setNote('Starting live voice…');
+    // A hung connect (or a mic prompt left open) must not strand the toggle:
+    // the whole sequence gets one budget, then stops cleanly with its message.
+    let cancel = false;
+    let timer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+      timer = null;
+      cancel = true;
+      stop(false);
+      setError('Live voice could not connect in time.');
+      setNote('Live voice could not connect in time.');
+      panel.hidden = false;
+    }, LIVE_START_TIMEOUT_MS);
+    const done = (): void => {
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
+    };
+    try {
+      const minted = await mintLiveToken();
+      if (cancel) {
+        stop(false);
+        return;
+      }
+      mixerWasOn = ctx.mixer.isOn;
+      ctx.mixer.setEnabled(false);
+      const live = new GeminiLiveVoice({
+        token: minted.token,
+        model: minted.model,
+        refreshToken: async () => (await mintLiveToken()).token,
+      });
+      voice = live;
+      // The mic comes before the paid session: a denied or missing mic drops
+      // into listen-and-type instead of failing the whole feature.
+      let micHandle: MicrophoneHandle | null = null;
+      try {
+        micHandle = await startMicrophone((chunk) => {
+          try {
+            live.sendAudio(chunk);
+          } catch {
+            // A dropped socket stops the session through its own close event.
+          }
+        });
+      } catch {
+        micHandle = null;
+      }
+      if (cancel) {
+        try {
+          micHandle?.stop();
+        } catch {
+          // A half-started capture still stops the tracks.
+        }
+        stop(false);
+        return;
+      }
+      const useDriver = new LiveDriver({
+        controller: ctx.controller,
+        film: ctx.film(),
+        voice: live,
+        runtime: ctx.figure.runtime,
+        // The active scene's runtime at call time, as the Ask sheet replays:
+        // cuts while live move the scene under the tools.
+        showMe: (set, beat) => {
+          const shown = defaultShowMeBinding(ctx.figure.runtime)(set, beat);
+          ctx.figure.renderer.apply(ctx.figure.runtime.flush());
+          return shown;
+        },
+        makeExample: (request, anchor) =>
+          ctx.ask.makeExample(request, anchor, () => {
+            driver?.resume();
+          }),
+      });
+      driver = useDriver;
+      offs.push(live.on(onVoiceEvent));
+      offs.push(useDriver.on(onDriverEvent));
+      const player = createPcmPlayer({ volume: ctx.model.state.volume });
+      speaker = player;
+      offs.push(live.onAudio((chunk) => player.push(chunk)));
+      if (micHandle === null) micNote.hidden = false;
+      await useDriver.start();
+      if (cancel) {
+        stop(false);
+        return;
+      }
+      mic = micHandle;
+      active = true;
+      ctx.onLiveActive?.(true);
+      setStatus(`Live · ${useDriver.currentBeat?.id ?? ''}`);
+      setNote(null);
+      refreshCaption();
+      done();
+    } catch (error) {
+      done();
+      if (cancel) return;
+      const message = error instanceof Error ? error.message : 'Live voice did not start.';
+      stop(false);
+      setError(message);
+      setNote(message);
+      panel.hidden = false;
+    } finally {
+      busy = false;
+    }
+  };
+
+  askForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const text = askInput.value.trim();
+    const session = voice;
+    const useDriver = driver;
+    if (text === '' || !active || !session || !useDriver) return;
+    askInput.value = '';
+    // A typed cut-in pauses the film exactly like a spoken interruption,
+    // then the text goes out as a learner turn for the teacher to answer.
+    setLearner(text);
+    useDriver.interrupt();
+    session.ask(text);
+  });
+
+  // One Play owns one start: a second Play while the first connects waits
+  // for it instead of failing the visit's single fallback.
+  let startPromise: Promise<boolean> | null = null;
+  const startForPlayback = async (): Promise<boolean> => {
+    // start() never rejects: its failures land in the panel instead.
+    if (active) return true;
+    if (startPromise) return startPromise;
+    const run = (async (): Promise<boolean> => {
+      await start();
+      return active;
+    })();
+    startPromise = run;
+    try {
+      return await run;
+    } finally {
+      if (startPromise === run) startPromise = null;
+    }
+  };
+
+  return {
+    startForPlayback,
+    pauseForPlayback: (): void => {
+      // The teacher goes silent at once and the film holds where it stands;
+      // without a session this is a plain pause.
+      speaker?.flush();
+      try {
+        driver?.interrupt();
+      } catch {
+        // A half-started session still pauses the film below.
+      }
+      ctx.model.pause();
+    },
+    resumePlayback: (): void => {
+      if (!active) return;
+      try {
+        driver?.resume();
+      } catch {
+        // A closing session leaves the film paused where it held.
+      }
+    },
+    stop,
+    state: () => ({
+      active,
+      paused: driver?.isPaused() ?? false,
+      status: statusText,
+      learner: learnerText,
+      teacher: teacherText,
+      tools: [...toolLines.values()].map((line) => ({ name: line.name, phase: line.phase, detail: line.item.textContent ?? '' })),
+      error: errorText,
+    }),
+  };
+};
+
 /** The dev token, fetched once: the ask endpoints authenticate like generation. */
 let askToken: string | null = null;
 
@@ -3080,9 +4271,77 @@ async function devToken(): Promise<string> {
   return askToken;
 }
 
+/**
+ * The model session the player's Ask lanes use, created lazily on first
+ * need: the same POST the generations page makes, so a server env key
+ * connects without the learner entering one. Falls back to the reference
+ * path when no session can be created; `reference` pins that fallback for
+ * tests that assert the reference model's answers.
+ */
+interface AskSession {
+  readonly id: string | null;
+  readonly base: string;
+  readonly planModel: string | null;
+  readonly sceneModel: string | null;
+  readonly keySource: 'entered' | 'env' | null;
+}
+
+let askSession: AskSession | null = null;
+
+/** Small "which model answers" lines in the Ask sheet and the voice panel. */
+const askModelLines = new Set<HTMLElement>();
+
+function showAskModel(session: AskSession): void {
+  const text =
+    session.sceneModel === null
+      ? 'Models: reference (no model session)'
+      : `Models: ${session.planModel ?? 'unknown'} (answers) · ${session.sceneModel} (examples) · ${session.keySource === 'env' ? 'server key' : 'entered key'}`;
+  for (const line of askModelLines) {
+    line.textContent = text;
+    line.hidden = false;
+  }
+}
+
+async function askSessionInfo(reference: boolean): Promise<AskSession> {
+  if (askSession) return askSession;
+  if (!reference) {
+    try {
+      let saved: { provider?: string; planModel?: string; sceneModel?: string } | null;
+      try {
+        saved = JSON.parse(localStorage.getItem('incantly-playground-models') ?? 'null') as {
+          provider?: string;
+          planModel?: string;
+          sceneModel?: string;
+        } | null;
+      } catch {
+        saved = null;
+      }
+      const provider = saved?.provider ?? 'anthropic';
+      const planModel = saved?.planModel ?? 'claude-haiku-5-5';
+      const sceneModel = saved?.sceneModel ?? 'claude-sonnet-5-5';
+      const answer = await fetch('/api/dev/session', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ provider, planModel, sceneModel }),
+      });
+      const body = (await answer.json()) as { id?: string; baseUrl?: string; keySource?: 'entered' | 'env' };
+      if (!answer.ok || !body.id || !body.baseUrl) throw new Error('The model session did not start.');
+      askSession = { id: body.id, base: body.baseUrl, planModel, sceneModel, keySource: body.keySource ?? 'env' };
+    } catch {
+      // No key on the server, or no server at all: the reference model still
+      // answers on the dev path, and the label below says so.
+      askSession = { id: null, base: '/api/v1', planModel: null, sceneModel: null, keySource: null };
+    }
+  } else {
+    askSession = { id: null, base: '/api/v1', planModel: null, sceneModel: null, keySource: null };
+  }
+  showAskModel(askSession);
+  return askSession;
+}
+
 /** Streams an Answer, appending each delta as it arrives. */
-async function streamAsk(token: string, body: Record<string, unknown>, onDelta: (delta: string) => void): Promise<{ text: string; firstChunkMs: number }> {
-  const posted = await fetch('/api/v1/ask', {
+async function streamAsk(base: string, token: string, body: Record<string, unknown>, onDelta: (delta: string) => void): Promise<{ text: string; firstChunkMs: number }> {
+  const posted = await fetch(`${base}/ask`, {
     method: 'POST',
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
     body: JSON.stringify(body),
@@ -3149,121 +4408,4 @@ function combineProbes(probes: readonly ProbeReport[]): ProbeReport {
   };
 }
 
-async function buildThumbs(
-  thumbs: HTMLElement,
-  model: PlayerModel,
-  film: CompiledFilm,
-  fragmentsFor: (sceneId: string) => { html: string; css: string; js: string },
-  kits: KitRegistry,
-  isolated: boolean,
-): Promise<void> {
-  const box = document.createElement('div');
-  box.hidden = true;
-  document.body.append(box);
-  try {
-    // One hidden figure per scene in its own box; each thumbnail seeks its own
-    // scene to its film time, as the checks do. Single-scene films keep the
-    // same figure id and box as today.
-    const single = film.scenes.length === 1;
-    const mounted = new Map<string, { box: HTMLElement; figure: ReturnType<typeof mountTrusted> }>();
-    for (const scene of film.scenes) {
-      const sceneBox = single ? box : document.createElement('div');
-      if (!single) {
-        sceneBox.hidden = true;
-        box.append(sceneBox);
-      }
-      mounted.set(scene.id, { box: sceneBox, figure: mountTrusted(sceneBox, fragmentsFor(scene.id), { kits, film: true, autoplay: false, ...(isolated ? { isolate: true as const } : {}), figureId: single ? 'thumbs' : `thumbs-${scene.id}` }) });
-    }
-    for (const { figure } of mounted.values()) figure.runtime.setReducedMotion(true);
-    for (const at of model.thumbTimes(5)) {
-      let beat = film.beats[0]!;
-      for (const candidate of film.beats) if (at + 1e-9 >= candidate.start) beat = candidate;
-      const scene = film.scenes.find((candidate) => candidate.id === beat.sceneId) ?? film.scenes[0]!;
-      const entry = mounted.get(scene.id) ?? [...mounted.values()][0]!;
-      const figure = entry.figure;
-      const update = figure.runtime.seek(Math.max(0, at - scene.start));
-      figure.runtime.step('goto', beat.index);
-      applyBeatCues(figure.runtime, beat.step, { sfx: false });
-      figure.runtime.redraw();
-      const extra = figure.runtime.flush();
-      figure.renderer.apply({ ...update, commands: [...update.commands, ...extra.commands] });
-      const svg = entry.figure.root.querySelector('svg.inc-stage');
-      const thumb = document.createElement('button');
-      thumb.type = 'button';
-      thumb.className = 'inc-player-thumb';
-      thumb.title = formatTime(at);
-      thumb.setAttribute('aria-label', `Seek to ${formatTime(at)}`);
-      if (svg) thumb.innerHTML = svg.outerHTML;
-      else thumb.textContent = formatTime(at);
-      thumb.addEventListener('click', () => model.seek(at));
-      thumbs.append(thumb);
-    }
-    for (const entry of mounted.values()) entry.figure.destroy();
-  } finally {
-    box.remove();
-  }
-}
 
-async function buildSandboxedThumbs(
-  thumbs: HTMLElement,
-  model: PlayerModel,
-  film: CompiledFilm,
-  fragmentsFor: (sceneId: string) => { html: string; css: string; js: string },
-  snapshotFor: (sceneId: string) => SanitizedSceneSnapshot | null,
-): Promise<void> {
-  const box = document.createElement('div');
-  box.setAttribute('aria-hidden', 'true');
-  box.style.cssText = 'position:fixed;left:-100000px;top:0;width:760px;visibility:hidden;pointer-events:none;';
-  document.body.append(box);
-  try {
-    // One hidden sandboxed figure per scene; each thumbnail seeks its own
-    // scene to its film time on a stand-in, lands the absolute state, and
-    // pictures it — the stored scene never runs on the host.
-    const mounted = new Map<string, { handle: FigureHandle; stub: SceneRuntime; controller: FilmController }>();
-    for (const scene of film.scenes) {
-      const snapshot = snapshotFor(scene.id);
-      if (!snapshot) continue;
-      const sceneBox = document.createElement('div');
-      box.append(sceneBox);
-      const handle = sandboxAdapter.mount(sceneBox, fragmentsFor(scene.id), { title: `Thumbnail: ${scene.id}`, film: true, autoplay: false, reducedMotion: true });
-      if ((await handle.ready) !== 'live') {
-        handle.destroy();
-        sceneBox.remove();
-        continue;
-      }
-      const stub = mountStubRuntime(snapshot);
-      mounted.set(scene.id, { handle, stub, controller: new FilmController({ runtime: stub, film, sceneIndex: Math.max(0, film.scenes.findIndex((candidate) => candidate.id === scene.id)), now: () => 0 }) });
-    }
-    for (const at of model.thumbTimes(5)) {
-      let beat = film.beats[0]!;
-      for (const candidate of film.beats) if (at + 1e-9 >= candidate.start) beat = candidate;
-      const scene = film.scenes.find((candidate) => candidate.id === beat.sceneId) ?? film.scenes[0]!;
-      const entry = mounted.get(scene.id) ?? [...mounted.values()][0];
-      const thumb = document.createElement('button');
-      thumb.type = 'button';
-      thumb.className = 'inc-player-thumb';
-      thumb.title = formatTime(at);
-      thumb.setAttribute('aria-label', `Seek to ${formatTime(at)}`);
-      if (entry) {
-        entry.controller.seek(at);
-        pushAbsoluteState(entry.handle, entry.stub, entry.controller.currentBeat?.step.cam ?? null);
-        const svg = await entry.handle.exportSvg();
-        if (svg) {
-          const img = document.createElement('img');
-          img.src = svg;
-          img.alt = '';
-          thumb.append(img);
-        } else thumb.textContent = formatTime(at);
-      } else thumb.textContent = formatTime(at);
-      thumb.addEventListener('click', () => model.seek(at));
-      thumbs.append(thumb);
-    }
-    for (const entry of mounted.values()) {
-      entry.controller.destroy();
-      entry.stub.destroy();
-      entry.handle.destroy();
-    }
-  } finally {
-    box.remove();
-  }
-}

@@ -1431,10 +1431,23 @@ main.style-page {
   color: var(--text-muted, #6b7280);
 }
 
-/* The film player (?page=player): chrome over a figure, in FigureStyle slots. */
-.inc-player { display: flex; flex-direction: column; gap: 12px; max-width: 960px; margin: 0 auto; padding: 16px 16px 96px; }
-.inc-player h2 { margin: 0; font-size: 1.2rem; }
+/* The film player (?page=player): a video page — a dark 16:9 screen beside a
+   side panel, then transport, controls and the rest. Spacing follows the
+   4/8/12/16/24 scale; surfaces use the page tokens so light and dark both
+   hold. */
+.inc-vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+/* The player page breaks out of the playground's narrow reading column and
+   owns the full video width, up to 1200 px. */
+main:has(> .inc-player) { max-width: none; margin: 0; padding: 0; }
+.inc-player { display: flex; flex-direction: column; gap: 16px; max-width: min(1200px, 100vw - 48px); margin: 0 auto; padding: 24px 24px 96px; }
+.inc-player h2 { margin: 0; font-size: 1.4rem; letter-spacing: -0.01em; }
 .inc-player h3 { margin: 0 0 6px; font-size: 0.95rem; }
+.inc-player-sub { margin: 4px 0 0; font-size: 0.88rem; color: var(--text-muted, #6b7280); }
+.inc-player button:focus-visible,
+.inc-player select:focus-visible,
+.inc-player input:focus-visible,
+.inc-player summary:focus-visible,
+.inc-player [tabindex]:focus-visible { outline: 2px solid var(--inc-focus, #1971c2); outline-offset: 2px; }
 /* Show flags hide chrome parts, through the same dataset convention as figures. */
 .inc-player[data-hideCaptions] .inc-caption,
 .inc-player[data-hideTranscript] .inc-transcript,
@@ -1442,16 +1455,31 @@ main.style-page {
 .inc-player[data-hideTimeline] .inc-timeline,
 .inc-player[data-hideDeck] .inc-deck { display: none; }
 .inc-player[data-hidePlayerFullscreen] .inc-player-fullscreen { display: none; }
-/* Player fullscreen mirrors figures: the root fills the screen as a column, the stage keeps its width-driven
-   aspect height through links that grow but never shrink below content, and captions, transport, Ask/markers,
-   chapters, transcript and deck stay reachable by scrolling. Sandboxed frames stay content-sized — the guest
-   reports its taller box over the resize bridge as the wider frame reflows it — so the guest never overflows. */
-.inc-player:fullscreen { width: 100%; height: 100%; max-width: none; margin: 0; overflow: auto; padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); background: Canvas; }
-.inc-player:fullscreen .inc-player-figure { display: flex; flex-direction: column; flex: 1 0 auto; width: 100%; }
-.inc-player:fullscreen .inc-player-scene:not([hidden]) { display: flex; flex-direction: column; flex: 1 0 auto; }
-.inc-player:fullscreen .inc-player-figure iframe { flex: 0 0 auto; min-height: 40dvh; width: 100%; }
-.inc-player:fullscreen .inc-player-figure .inc-figure[data-fullscreen] { height: auto; flex: 1 0 auto; }
-.inc-player-figure { position: relative; }
+/* Player fullscreen: the root fills the screen as a column and the main grid
+   stacks, so the screen, panel, transport and controls stay reachable. */
+.inc-player:fullscreen { width: 100%; height: 100%; max-width: none; margin: 0; overflow: auto; padding: max(24px, env(safe-area-inset-top)) max(24px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(24px, env(safe-area-inset-left)); background: Canvas; }
+.inc-player:fullscreen .inc-player-main { grid-template-columns: minmax(0, 1fr); }
+.inc-player:fullscreen .inc-player-figure iframe { width: 100%; height: 100%; }
+/* The main grid: screen beside a 340 px side panel on desktop. */
+.inc-player-main { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 24px; align-items: start; }
+/* The screen: a dark 16:9 surface holding only the stage drawing. The figure
+   root fills it with no card padding; the stage scales to contain, centred. */
+.inc-screen { position: relative; aspect-ratio: 16 / 9; background: #101014; border-radius: 12px; overflow: hidden; }
+/* The figure box is the query container overlay type scales against, so
+   card and write-on text fit whether the mount is trusted or sandboxed. */
+.inc-player-figure { position: absolute; inset: 0; container-type: inline-size; }
+/* Sandboxed (generated) films draw in an iframe whose own panel stays below
+   its stage: the screen then sizes to that frame instead of cropping it. */
+.inc-screen:has(.inc-player-scene iframe) { aspect-ratio: auto; }
+.inc-screen:has(.inc-player-scene iframe) .inc-player-figure { position: relative; inset: auto; }
+.inc-screen .inc-figure { height: 100%; padding: 0; background: transparent; border-radius: 0; max-width: none; }
+.inc-screen .inc-body { display: block; height: 100%; }
+/* Every link in the stage chain is a definite height, so the svg viewport is
+   exactly the screen: with preserveAspectRatio="meet" the drawing contains,
+   centred, and never crops or overflows. */
+.inc-screen .inc-body > .inc-scene, .inc-screen .inc-stage-host { height: 100%; }
+.inc-screen .inc-stage { display: block; width: 100%; height: 100%; }
+.inc-player-scene { height: 100%; }
 .inc-player-scene[hidden] { display: none; }
 .inc-player-figure[data-cut='fade'] .inc-player-scene:not([hidden]) { animation: inc-cut-fade 0.4s ease; }
 .inc-player-figure[data-cut='wipe'] .inc-player-scene:not([hidden]) { animation: inc-cut-wipe 0.4s ease; }
@@ -1459,19 +1487,190 @@ main.style-page {
 @keyframes inc-cut-fade { from { opacity: 0; } to { opacity: 1; } }
 @keyframes inc-cut-wipe { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
 @keyframes inc-cut-push { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+/* Layer overlays fade instead of popping: opacity animates, visibility flips
+   with it, and the layout never shifts because every overlay is positioned. */
+.inc-player-card,
+.inc-player-write,
+.inc-player-notes { opacity: 0; visibility: hidden; transition: opacity 250ms ease, visibility 0s linear 250ms; pointer-events: none; }
+.inc-player-card.is-on,
+.inc-player-write.is-on,
+.inc-player-notes.is-on { opacity: 1; visibility: visible; transition: opacity 200ms ease; }
 .inc-player-card {
-  position: absolute; top: 5%; left: 10%; right: 10%; padding: 10px 14px;
-  background: var(--inc-bg, Canvas); color: var(--inc-fg, CanvasText);
-  border: 1px solid var(--border-color); border-radius: 10px;
-  font-weight: 600; text-align: center; pointer-events: none;
+  position: absolute; top: 8%; left: 12%; right: 12%; padding: 8px 14px;
+  background: rgba(8, 8, 12, 0.72); color: #fff;
+  border-radius: 10px; font-weight: 600; text-align: center;
+  font-size: clamp(0.85rem, 3cqi, 1.05rem);
 }
+/* The write-on equation: top-left, handwritten in feel, no heavy box. */
+.inc-player-write {
+  position: absolute; top: 5%; left: 5%; max-width: 60%;
+  color: #fff; font-style: italic; font-size: clamp(0.95rem, 3.2cqi, 1.25rem);
+  text-shadow: 0 1px 10px rgba(0, 0, 0, 0.85);
+}
+.inc-player-write[data-live='writing']::after { content: '▍'; opacity: 0.6; font-style: normal; }
+/* Notes: a compact translucent dark list on the screen's right edge, always
+   in the screen's dark styling in both themes. It fits its lines (up to
+   about 34% of the screen wide) and stops above the subtitle area; below
+   640 px it leaves the screen and sits under it instead. Present only once
+   the first note arrives. */
+.inc-player-notes {
+  position: absolute; top: 12px; right: 16px;
+  width: fit-content; max-width: 34%; max-height: calc(100% - 88px);
+  overflow: auto; background: rgba(8, 8, 12, 0.72); color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 10px;
+  padding: 8px 12px; font-size: 0.85rem;
+}
+.inc-player-figure[data-split]:not([data-split='side']) .inc-player-notes { top: auto; right: 16px; left: 16px; bottom: 64px; width: auto; max-width: none; max-height: 32%; }
+.inc-player-notes[data-layout='below'] {
+  position: static; width: auto; max-width: none; max-height: 180px; margin: 8px 0 0;
+  background: var(--inc-bg, Canvas); color: var(--inc-fg, CanvasText);
+  border: 1px solid var(--border-color);
+}
+/* Split scenes divide the screen once per scene: the stage keeps the left
+   ~66% (aspect kept, centred by the stage's own contain) and the notes take
+   the right ~34% inset 16 px, so they never sit on the drawing. The split
+   comes from the compiled scene, so the stage size never changes mid-scene;
+   narrow screens keep the notes-under-screen layout instead, and scenes
+   without notes keep the full screen. */
+.inc-player-figure[data-split='side'] {
+  display: grid;
+  grid-template-columns: minmax(0, 66%) minmax(0, 34%);
+  grid-template-rows: minmax(0, 1fr);
+}
+.inc-player-figure[data-split='side'] > :not(.inc-player-notes) {
+  grid-column: 1; grid-row: 1; min-width: 0; min-height: 0;
+}
+.inc-player-figure[data-split='side'] > .inc-player-notes {
+  position: static; grid-column: 2; grid-row: 1;
+  align-self: center; justify-self: stretch;
+  width: auto; max-width: none; max-height: calc(100% - 32px); margin: 16px;
+}
+.inc-player-figure[data-split='side'] > .inc-caption {
+  left: 33%; max-width: calc(66% - 32px);
+}
+.inc-player-figure[data-split='side'] > .inc-player-write {
+  max-width: calc(66% - 40px);
+}
+.inc-player-notes ul { margin: 0; padding-left: 1.2em; display: flex; flex-direction: column; gap: 4px; }
+.inc-player-notes li.is-new { font-weight: 600; }
+/* Subtitles overlaid at the bottom of the screen: centred, two lines at
+   most, on a translucent dark backdrop. The sounding word is underlined and
+   brightened — never a white block. The box hugs short lines and stretches
+   to 90% of the screen for long ones; paging (not ellipsis) handles overflow.
+   box-sizing keeps the padding inside the 90% so pages never spill out. */
 .inc-caption {
-  margin: 0; padding: 10px 12px; min-height: 3.2em;
-  background: var(--inc-card, var(--input-bg)); border: 1px solid var(--border-color);
-  border-radius: 10px; line-height: 1.35;
+  position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%);
+  width: max-content; max-width: 90%; box-sizing: border-box;
+  margin: 0; padding: 6px 14px;
+  background: rgba(8, 8, 12, 0.72); color: #fff;
+  border-radius: 10px; line-height: 1.35; font-size: 1rem; text-align: center;
+  display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
 .inc-caption-word { border-radius: 4px; padding: 0 1px; }
-.inc-caption-word.is-active { background: var(--inc-accent-soft, #dbeafe); font-weight: 600; }
+.inc-caption-word.is-active { font-weight: 700; text-decoration: underline; text-underline-offset: 3px; color: #fff; }
+/* The side panel and its tabs. Panels scroll inside; the page never moves. */
+.inc-side { display: flex; flex-direction: column; gap: 8px; min-width: 0; min-height: 0; }
+.inc-side-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border-color); }
+.inc-side-tab { border: none; background: none; color: inherit; font: inherit; padding: 8px 12px; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.inc-side-tab[aria-selected='true'] { border-bottom-color: var(--inc-focus, #1971c2); font-weight: 600; }
+.inc-side-panel { min-height: 240px; max-height: min(60vh, 560px); overflow: auto; padding-top: 8px; }
+.inc-side-panel[hidden] { display: none; }
+.inc-live-primary { width: 100%; padding: 10px 12px; margin-bottom: 8px; font: inherit; font-weight: 600; border-radius: 10px; border: 1px solid var(--inc-focus, #1971c2); background: var(--inc-focus, #1971c2); color: #fff; cursor: pointer; }
+.inc-live-primary[aria-pressed='true'] { background: transparent; color: var(--inc-focus, #1971c2); }
+/* The transport bar: one row of icon buttons, time, a full-width scrubber,
+   then the live pill, fullscreen and the "more" menu. */
+.inc-player-transport { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.inc-player-transport button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 36px; min-height: 36px; padding: 6px 8px; border-radius: 8px; border: 1px solid transparent; background: transparent; color: inherit; cursor: pointer; font-size: 0.88rem; }
+.inc-player-transport button:hover { background: var(--hover-bg); }
+.inc-player-transport button svg { width: 18px; height: 18px; flex: none; }
+/* A one-line live-voice note under the transport, visible whatever side tab
+   is open: why Play fell back to silent playback. Hidden otherwise. */
+.inc-player-livenote { margin: 0; font-size: 0.85rem; color: var(--text-muted, #6b7280); }
+.inc-player-livenote[hidden] { display: none; }
+.inc-player-transport select { font: inherit; font-size: 0.85rem; padding: 6px; border-radius: 8px; border: 1px solid var(--border-color); background: var(--input-bg); color: inherit; }
+.inc-play { font-weight: 700; }
+.inc-player-ask { font-weight: 600; }
+.inc-cc[aria-pressed='false'] { opacity: 0.45; }
+.inc-player-time { font-variant-numeric: tabular-nums; font-size: 0.85rem; white-space: nowrap; }
+.inc-scrub-wrap { position: relative; flex: 1 1 160px; min-width: 120px; display: flex; }
+.inc-scrub-wrap input[type='range'] { flex: 1 1 auto; min-width: 0; accent-color: var(--inc-focus, #1971c2); }
+.inc-scrub-markers { position: absolute; inset: 0; pointer-events: none; }
+.inc-scrub-markers .inc-marker { position: absolute; top: 2px; width: 6px; height: 6px; border-radius: 999px; background: #d9480f; transform: translateX(-3px); }
+.inc-scrub-markers .inc-tick-beat { position: absolute; top: 50%; width: 1px; height: 6px; transform: translate(-0.5px, -50%); background: CanvasText; opacity: 0.35; }
+.inc-scrub-markers .inc-tick-chapter { position: absolute; top: 50%; width: 3px; height: 10px; transform: translate(-1.5px, -50%); background: CanvasText; opacity: 0.7; border-radius: 2px; }
+/* Volume: the icon toggles sound; the slider reveals on hover or keyboard focus. */
+.inc-volume { display: inline-flex; align-items: center; gap: 0; }
+.inc-volume input[type='range'] { width: 0; opacity: 0; transition: width 150ms ease, opacity 150ms ease; accent-color: var(--inc-focus, #1971c2); }
+.inc-volume:hover input[type='range'], .inc-volume:focus-within input[type='range'] { width: 84px; opacity: 1; margin-left: 4px; }
+/* The "more" menu holds the secondary controls; bookmarks, versions, export
+   and the deck toggle move in after their builders run. */
+.inc-menu { position: relative; }
+.inc-menu-pop { position: absolute; right: 0; top: calc(100% + 4px); z-index: 30; display: flex; flex-direction: column; gap: 8px; min-width: 260px; max-height: min(70vh, 520px); overflow: auto; padding: 12px; background: var(--inc-bg, Canvas); color: var(--inc-fg, CanvasText); border: 1px solid var(--border-color); border-radius: 10px; box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18); }
+.inc-menu-pop[hidden] { display: none; }
+.inc-menu-row { display: flex; align-items: center; gap: 8px; font-size: 0.85rem; }
+.inc-menu .inc-player-loop { justify-content: flex-start; }
+/* The Controls strip: a collapsed one-line summary while playing, opened
+   while paused, on an explore beat, or by the learner. */
+.inc-controls { border: 1px solid var(--border-color); border-radius: 10px; padding: 4px 12px; background: var(--inc-bg, Canvas); }
+.inc-controls[hidden] { display: none; }
+.inc-controls-summary { cursor: pointer; font-weight: 600; font-size: 0.9rem; padding: 6px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.inc-controls-body { padding: 4px 0 8px; }
+.inc-controls-scene[hidden] { display: none; }
+/* Tokens for the relocated figure panels, which render outside .inc-figure:
+   the page's light values, and the figure's dark values under the OS dark
+   scheme to match the dark screen's chrome. */
+.inc-controls-body {
+  --inc-bg: #ffffff; --inc-fg: #1f1f24; --inc-muted: #64646c; --inc-line: #c9c9d1;
+  --inc-card: #f4f4f7; --inc-faint: #e3e3e8; --inc-lo: #d5d5dc; --inc-mid: #8a8a94;
+  --inc-hi: #2b2b33; --inc-lit: #d9480f; --inc-focus: #1971c2; --inc-danger: #c92a2a;
+  --inc-surface: #f4f4f7; --inc-button-bg: #f4f4f7;
+  --inc-font-size: 14px; --inc-radius: 10px; --inc-radius-sm: 8px; --inc-gap: 10px;
+  --inc-control-height: 36px; --inc-target: 36px;
+  color: var(--inc-fg); font-size: var(--inc-font-size);
+}
+@media (prefers-color-scheme: dark) {
+  .inc-controls-body {
+    --inc-bg: #17171b; --inc-fg: #ececf1; --inc-muted: #a2a2ad; --inc-line: #45454f;
+    --inc-card: #222228; --inc-faint: #303038; --inc-lo: #3a3a44; --inc-mid: #7c7c88;
+    --inc-hi: #e4e4ea; --inc-lit: #ff8a3d; --inc-focus: #74c0fc; --inc-danger: #ff8787;
+    --inc-surface: #222228; --inc-button-bg: #222228;
+  }
+}
+.inc-controls-body [hidden] { display: none; }
+/* The relocated panels hide behind the same show flags the screen figure
+   carries; the rules are scoped here because the panels left .inc-figure. */
+.inc-controls-body[data-hide-steps] .inc-steps,
+.inc-controls-body[data-hide-part-info] .inc-part-info,
+.inc-controls-body[data-hide-readouts] .inc-readouts,
+.inc-controls-body[data-hide-legend] .inc-legend,
+.inc-controls-body[data-hide-description] .inc-description,
+.inc-controls-body[data-hide-controls] .inc-controls { display: none; }
+.inc-controls-body .inc-legend__toggle { display: inline-flex; align-items: center; gap: 6px; min-height: var(--inc-target, 36px); padding: 2px 8px; }
+.inc-controls-body .inc-legend__toggle[aria-pressed='false'] { color: var(--inc-muted); text-decoration: line-through; }
+.inc-controls-body .inc-legend__toggle[aria-pressed='false'] .inc-legend__swatch { opacity: 0.35; }
+/* No layer motion when reduced motion is on, by media query or ?reduced-motion=1. */
+@media (prefers-reduced-motion: reduce) {
+  .inc-player-card, .inc-player-write, .inc-player-notes,
+  .inc-volume input[type='range'] { transition: none; }
+  .inc-player-figure[data-cut] .inc-player-scene:not([hidden]) { animation: none; }
+}
+.inc-player[data-reduced-motion='still'] .inc-player-card,
+.inc-player[data-reduced-motion='still'] .inc-player-write,
+.inc-player[data-reduced-motion='still'] .inc-player-notes,
+.inc-player[data-reduced-motion='still'] .inc-volume input[type='range'] { transition: none; }
+.inc-player[data-reduced-motion='still'] .inc-player-figure[data-cut] .inc-player-scene:not([hidden]) { animation: none; }
+/* Below 1024 px the side panel stacks under the transport; below 640 px the
+   whole page is one column and the transport wraps. */
+@media (max-width: 1023px) {
+  .inc-player-main { grid-template-columns: minmax(0, 1fr); }
+  .inc-side-panel { max-height: 320px; }
+}
+@media (max-width: 639px) {
+  .inc-player { padding: 16px 16px 96px; }
+  .inc-player-transport { gap: 4px; }
+  .inc-scrub-wrap { flex-basis: 100%; order: 10; }
+}
+
 .inc-narration { border: 1px solid var(--border-color); border-radius: 10px; padding: 8px 12px; display: flex; flex-direction: column; gap: 8px; }
 .inc-narration summary { cursor: pointer; font-weight: 600; }
 .inc-narration label { display: flex; flex-direction: column; gap: 4px; font-size: 0.85rem; }
@@ -1480,13 +1679,8 @@ main.style-page {
 .inc-narration-status { margin: 0; font-size: 0.85rem; }
 .inc-narration-connection { margin: 0; font-size: 0.85rem; }
 .inc-narration button { align-self: start; }
-.inc-player-transport { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.inc-player-transport input[type='range'] { flex: 1 1 120px; min-width: 80px; }
-.inc-player-time { font-variant-numeric: tabular-nums; font-size: 0.85rem; white-space: nowrap; }
-.inc-player-thumbs { display: flex; gap: 8px; }
-.inc-player-thumb { flex: 1 1 0; min-width: 0; padding: 2px; border: 1px solid var(--border-color); border-radius: 8px; background: Canvas; cursor: pointer; }
-.inc-player-thumb svg { display: block; width: 100%; height: auto; border-radius: 6px; }
-.inc-transcript ol, .inc-chapters ul { margin: 0; padding-left: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; max-height: 220px; overflow: auto; }
+.inc-transcript ol { margin: 0; padding-left: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; max-height: 300px; overflow-y: auto; }
+.inc-chapters ul { margin: 0; padding-left: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
 .inc-transcript li { padding: 4px 8px; border-radius: 8px; font-size: 0.9rem; }
 .inc-transcript li.is-active { background: var(--active-bg); font-weight: 600; }
 .inc-transcript input[type='search'] { width: 100%; margin-bottom: 6px; padding: 6px 8px; }
@@ -1527,8 +1721,18 @@ main.style-page {
 .inc-ask-answer { font-size: 0.92rem; min-height: 1.2em; }
 .inc-ask-answer:not(:empty) { border-left: 3px solid var(--inc-focus, #1971c2); padding-left: 8px; }
 .inc-ask-status { margin: 0; font-size: 0.82rem; color: var(--text-muted, #6b7280); }
+.inc-ask-model { margin: 0; font-size: 0.78rem; color: var(--text-muted, #6b7280); }
 .inc-ask-speak-status { font-size: 0.82rem; color: var(--text-muted, #6b7280); }
 .inc-showme, .inc-insert { display: flex; gap: 8px; align-items: center; font-size: 0.88rem; border: 1px solid var(--border-color); border-radius: 10px; padding: 6px 10px; }
+.inc-live-panel { border: 1px solid var(--border-color); border-radius: 10px; padding: 8px 12px; display: flex; flex-direction: column; gap: 4px; }
+.inc-live-status { margin: 0; font-size: 0.88rem; }
+.inc-live-learner, .inc-live-teacher { margin: 0; font-size: 0.85rem; }
+.inc-live-mic { margin: 0; font-size: 0.85rem; }
+.inc-live-model { margin: 0; font-size: 0.78rem; color: var(--text-muted, #6b7280); }
+.inc-live-ask { display: flex; gap: 8px; }
+.inc-live-input { flex: 1 1 auto; min-width: 0; }
+.inc-live-tools { margin: 4px 0 0; padding-left: 20px; font-size: 0.82rem; color: var(--text-muted, #6b7280); display: flex; flex-direction: column; gap: 2px; }
+.inc-live-error { margin: 0; font-size: 0.85rem; }
 .inc-example { border: 1px solid var(--border-color); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
 .inc-example-caption { margin: 0; font-size: 0.88rem; }
 .inc-example-figure { max-width: 560px; }
@@ -1552,7 +1756,7 @@ main.style-page {
 .inc-resume { font-size: 0.85rem; color: var(--text-muted, #6b7280); }
 .inc-player-link-note { font-size: 0.8rem; color: var(--text-muted, #6b7280); }
 /* Flex layouts override the hidden attribute's display:none; put it back. */
-.inc-ask[hidden], .inc-showme[hidden], .inc-insert[hidden], .inc-example[hidden] { display: none; }
+.inc-ask[hidden], .inc-showme[hidden], .inc-insert[hidden], .inc-example[hidden], .inc-live-panel[hidden] { display: none; }
 .inc-scrub-wrap { position: relative; flex: 1 1 120px; min-width: 80px; display: flex; }
 .inc-scrub-wrap input[type='range'] { flex: 1 1 auto; min-width: 0; }
 .inc-scrub-markers { position: absolute; inset: 0; pointer-events: none; }

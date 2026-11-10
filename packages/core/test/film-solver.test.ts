@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fallbackWidth, fontsReady, measureFilmText, solveCallouts, solveCaption, titleCardRect, wrapText } from '../src/index';
+import { fallbackWidth, fontsReady, measureFilmText, pageCaptionWords, solveCallouts, solveCaption, titleCardRect, wrapText } from '../src/index';
 
 const fixed: (text: string, fontPx: number) => number = (text, fontPx) => text.length * fontPx * 0.5;
 
@@ -46,6 +46,23 @@ describe('film solver: measuring', () => {
     expect(wrapText('one two three', 1000, 10, fixed)).toEqual(['one two three']);
     expect(wrapText('one two three', 40, 10, fixed)).toEqual(['one two', 'three']);
     expect(wrapText('supercalifragilistic', 10, 10, fixed)).toEqual(['supercalifragilistic']);
+  });
+
+  it('pages words so each page wraps to two lines', () => {
+    // Short lines stay on one page: nothing to page.
+    expect(pageCaptionWords(['one', 'two', 'three'], { maxWidthPx: 1000, fontPx: 10, measure: fixed })).toEqual([{ start: 0, end: 3 }]);
+    expect(pageCaptionWords([], { maxWidthPx: 100, fontPx: 10, measure: fixed })).toEqual([]);
+    // A long line splits into pages covering every word exactly once.
+    const words = 'one two three four five six seven eight'.split(' ');
+    const pages = pageCaptionWords(words, { maxWidthPx: 40, fontPx: 10, measure: fixed });
+    expect(pages.length).toBeGreaterThan(1);
+    expect(pages[0]).toEqual({ start: 0, end: expect.any(Number) });
+    const covered = pages.flatMap((page) => words.slice(page.start, page.end));
+    expect(covered).toEqual(words);
+    for (const page of pages) {
+      expect(page.end).toBeGreaterThan(page.start);
+      expect(wrapText(words.slice(page.start, page.end).join(' '), 40, 10, fixed).length).toBeLessThanOrEqual(2);
+    }
   });
 });
 

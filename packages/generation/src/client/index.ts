@@ -9,6 +9,21 @@ import { repairFigure } from './repair';
 import type { GenerationClient } from './service-client';
 import type { ProductSignal } from './telemetry';
 
+export { GeminiLiveVoice, LIVE_ENDPOINT } from './live-gemini';
+export type { GeminiLiveVoiceOptions, LiveAudioListener, LiveSocket, LiveSocketFactory } from './live-gemini';
+export {
+  createPcmPlayer,
+  downsampleTo16kMono,
+  floatToPcm16,
+  LIVE_INPUT_CHUNK_SAMPLES,
+  LIVE_INPUT_SAMPLE_RATE,
+  LIVE_OUTPUT_SAMPLE_RATE,
+  LiveCaptureResampler,
+  pcm16ToFloat32,
+  pipeVoiceAudio,
+  startMicrophone,
+} from './live-audio';
+export type { MicrophoneHandle, PcmPlayer } from './live-audio';
 export { GenerationClient, ServiceError } from './service-client';
 export type { GenerationClientOptions } from './service-client';
 export { formatFilmTimings, generateFilmStream, resolveFilmSource, storedAsFixture } from './film-client';

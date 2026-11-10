@@ -29,6 +29,7 @@ async function openGallery(page: Page): Promise<void> {
 const FILMS = [
   { title: 'How a pendulum keeps time', tag: 'Film · 30 s', prompt: 'Show me a 30-second film about how a pendulum keeps time.', film: 'thirty' },
   { title: 'What a wave carries', tag: 'Film · 1 min', prompt: 'Show me a one-minute film about what a wave carries.', film: 'sixty' },
+  { title: 'Pythagoras: talk to the teacher', tag: 'Film · Live voice', prompt: 'Talk to the teacher in a one-minute film about Pythagoras theorem: a right triangle with squares on each side.', film: 'pythagoras' },
 ] as const;
 
 const ACCEPTANCE = [
@@ -65,13 +66,30 @@ test('film cards are searchable and open their intended prompt in the player', a
   await expect(page.locator('.inc-player h2')).toHaveText('How a pendulum keeps time');
 });
 
-test('a film tag search keeps both films and hides the figures', async ({ page }) => {
+test('a film tag search keeps all three films and hides the figures', async ({ page }) => {
   await openGallery(page);
   await page.getByLabel('Search generations').fill('Film ·');
   const visible = page.locator('.gallery-card:not([hidden]) .gallery-card__title');
-  await expect(visible).toHaveCount(2);
+  await expect(visible).toHaveCount(3);
   await expect(visible.first()).toHaveText('How a pendulum keeps time');
   await expect(visible.nth(1)).toHaveText('What a wave carries');
+  await expect(visible.nth(2)).toHaveText('Pythagoras: talk to the teacher');
+});
+
+test('the Pythagoras card opens the player on the Pythagoras film', async ({ page }) => {
+  await openGallery(page);
+  await page.getByLabel('Search generations').fill('Pythagoras');
+  await expect(page.locator('.gallery-card:not([hidden])')).toHaveCount(1);
+  await page.locator('.gallery-card:not([hidden])').click();
+  await expect(page.locator('.gallery-detail__title')).toHaveText('Pythagoras: talk to the teacher');
+  await expect(page.locator('.gallery-detail__prompt')).toHaveText(
+    'Talk to the teacher in a one-minute film about Pythagoras theorem: a right triangle with squares on each side.',
+  );
+  await expect(page.locator('.gallery-detail__generate')).toHaveText('Open in player');
+  await page.locator('.gallery-detail__generate').click();
+  await page.waitForURL((url) => url.searchParams.get('page') === 'player' && url.searchParams.get('film') === 'pythagoras');
+  await page.waitForFunction(() => window.__playground?.ready === true);
+  await expect(page.locator('.inc-player h2')).toHaveText('Pythagoras: talk to the teacher');
 });
 
 for (const card of ACCEPTANCE) {

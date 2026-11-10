@@ -57,7 +57,6 @@ Measured on the [generation bench](../implementation/generation-bench.md) (24 la
 - A request for a reviewed concept is answered from that scene, adapted by edits beside the plan call. Many replies are one empty edit block, six output tokens, because the reviewed figure already answers the request; the rest are a few edits, at most about 340 tokens. All 24 were approved, half of them in 3.1 seconds or less, the slowest in 6.1.
 - A concept the library does not have is written whole, about 1,300 output tokens, following the nearest reviewed example: 23 of 24 approved, half in 15.6 seconds or less, the slowest in 19.2.
 - A repair is a few edits, 35 to 220 output tokens, and 1 to 3 seconds.
-- A figure the concept cache already holds costs no scene call at all.
 
 Against Anatomy's 30 minutes to 14 hours, the difference is not a faster model. It is that the SDK, not the model, owns the frame, the controls, the interaction, the theme and the checks, so the model writes only the concept: about 60 lines for a quick figure, 100 for a standard one and 150 for a rich one.
 

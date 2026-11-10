@@ -9,12 +9,14 @@ export type { LearnerRequest, Prompt, PromptBlock } from './context';
 export { FragmentStream, parseFragments, parsePlanReply } from './fragments';
 export type { FragmentName, FragmentSet } from './fragments';
 export { AnthropicClient, DEFAULT_MODELS, MODEL_PRICES, ModelError, ScriptedModel, costOf } from './models';
-export { DEFAULT_GEMINI_MODELS, GeminiClient } from './gemini';
+export { DEFAULT_GEMINI_MODELS, GEMINI_SCENE_FALLBACK_ORDER, GeminiClient, geminiFallbackModels } from './gemini';
 export { BEDROCK_MODEL, BedrockClient, DEFAULT_BEDROCK_MODELS, bedrockGeo } from './bedrock';
+export { geminiLiveRetentionAccepted, geminiLiveTokenMinter, pickLiveModel } from './live-token';
+export type { GeminiLiveTokenOptions, LiveToken, LiveTokenMinter } from './live-token';
 export { DEFAULT_SPARK_MODELS, SPARK_MODEL, SparkClient } from './spark';
 export type { SparkEffort, SparkOptions } from './spark';
 export type { BedrockEffort, BedrockOptions } from './bedrock';
-export type { GeminiOptions, GeminiThinking } from './gemini';
+export type { GeminiOptions, GeminiThinking, ListedModel } from './gemini';
 export type { CallPurpose, ModelCall, ModelClient, ModelReply, ModelUsage } from './models';
 export { likelyCause, parseReport, probeReport, repairPrompt, validationReport } from './report';
 export type { RepairReport } from './report';
@@ -152,7 +154,6 @@ export type { AudioStore, NarrateOptions, NarratedBeat, NarratedFilm, NarrationB
 export {
   FILM_PLAN_FORMAT,
   FILM_SCENE_FORMAT,
-  FilmSceneCache,
   StoryboardStream,
   filmBenchLines,
   filmPlanPrompt,
@@ -162,9 +163,7 @@ export {
   generateFilm,
   generateFilmScene,
   parseStoryboardReply,
-  reviewedFilmScene,
   sanitizeFilmContext,
-  sceneCacheKey,
   sceneProbePlan,
   sliceParts,
   summarizeFilm,
@@ -172,7 +171,6 @@ export {
   validateStoryboard,
 } from './film';
 export type {
-  CachedFilmScene,
   FilmFallback,
   FilmGenerationHooks,
   FilmGenerationOptions,

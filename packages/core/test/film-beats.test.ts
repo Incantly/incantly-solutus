@@ -9,6 +9,7 @@ import {
   FILM_BEAT_MAX_SECONDS,
   FILM_MAX_DIAGNOSTICS,
   FILM_MAX_SCENES,
+  PYTHAGORAS_FILM,
   resolveAnchor,
   SIXTY_SECOND_FILM,
   THIRTY_SECOND_FILM,
@@ -50,6 +51,28 @@ describe('film compiler: fixtures', () => {
     expect(film.beats.length).toBe(8);
     expect(film.seconds).toBeGreaterThan(54);
     expect(film.seconds).toBeLessThan(66);
+  });
+
+  it('runs the storyboard layers from the scene steps, with no cards anywhere', async () => {
+    // Cues come from inc.steps, not the storyboard copy: assert on the
+    // steps the player actually reads, as the old card test did.
+    const { film } = await compileFixture(PYTHAGORAS_FILM);
+    expect(film.beats.length).toBeGreaterThan(0);
+    for (const beat of film.beats) {
+      expect(beat.step).not.toHaveProperty('card');
+    }
+  });
+
+  it('compiles the Pythagoras film near 60 s with contiguous beats', async () => {
+    const { film } = await compileFixture(PYTHAGORAS_FILM);
+    expect(film.beats.length).toBe(7);
+    expect(film.seconds).toBeGreaterThan(54);
+    expect(film.seconds).toBeLessThan(66);
+    expect(film.beats.map((beat) => beat.id)).toEqual(['s1b1', 's1b2', 's1b3', 's1b4', 's1b5', 's1b6', 's1b7']);
+    // Seven beats of about eight seconds with no gaps or overlaps.
+    for (let i = 1; i < film.beats.length; i++) {
+      expect(film.beats[i]!.start).toBeCloseTo(film.beats[i - 1]!.start + film.beats[i - 1]!.seconds, 9);
+    }
   });
 
   it('keeps the scene cut per scene', async () => {

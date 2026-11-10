@@ -47,6 +47,10 @@ inc.steps([
 | `sfx` | Named cue from the sound kit, such as `arrive` or `chime`. |
 | `explore` | Pause and invite the learner to change a named control, then resume. |
 | `predict` | A prediction question that waits for the learner; never scored. |
+| `write` | `{ text, math? }` written onto the stage across the beat, stroke by stroke. It always draws in the top-left slot, so the checks require that corner clear of parts; `math` renders simple notation (`a^2` as a², `*` as ×). At most 200 characters. |
+| `notes` | Step-by-step lines that split the scene: any beat with notes narrows its whole scene's stage to 62% from the first frame, with the lines in the column beside it (stacked under the stage below 640 px). Each beat's lines join the earlier ones in the same scene. At most 4 lines of 140 characters. |
+
+Full-stage section and recap cards (`card`) no longer exist: a beat sending one fails the film checks with a clear diagnostic.
 
 `cut` (`cut`, `fade`, `wipe`, `push`) belongs to the scene, since it is how
 the scene ends.
@@ -108,5 +112,7 @@ The transport's ⛶ button fullscreens the player root (`show.playerFullscreen`,
 Layout, checks, player, questions, versions and export are the engine's,
 not the scene's: captions in a band outside the drawing, callouts in
 placed slots, film checks per beat at three widths in light and dark, and
-offline MP4 export on the fixed clock. The scene gives no coordinates for
+offline MP4 export on the fixed clock. Explainer layers ride the same path:
+the split scene, the write-on reveal at the frame's film time and the notes
+column all draw into exported frames. The scene gives no coordinates for
 captions or callouts and writes no timing, camera, caption or audio code.

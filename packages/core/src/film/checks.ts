@@ -1,9 +1,9 @@
 import type { ViewBox } from '../api/types';
 import type { KitRegistry } from '../runtime/kits';
-import { applyBeatCues, applyShowHide, partBox, partBoxes, sfxNames } from '../runtime/film';
+import { accumulatedNotes, applyBeatCues, applyShowHide, partBox, partBoxes, sfxNames } from '../runtime/film';
 import { SceneRuntime, type SceneFunction } from '../runtime/runtime';
 import { FILM_READING_WPS_LIMIT, type CompiledBeat, type CompiledFilm, type FilmContext } from './storyboard';
-import { CAPTION_MIN_PX, CAPTION_MIN_STAGE_SHARE, SAFE_MARGIN_SHARE, solveCallouts, solveCaption, titleCardRect } from './solver';
+import { CAPTION_MIN_PX, CAPTION_MIN_STAGE_SHARE, SAFE_MARGIN_SHARE, layoutStageWidth, renderMathText, solveCallouts, solveCaption, solveNotes, solveWrite, splitLayout, titleCardRect } from './solver';
 import type { Box } from '../scene/bounds';
 
 /**
@@ -289,7 +289,9 @@ function checkBeat(shared: SharedChecks, beatNumber: number): void {
   runtime.step('goto', beat.index);
   // Show and hide accumulate across the scene, as under the controller's
   // seek: earlier beats' lists are already landed when the beat starts.
-  const sceneBeats = options.film.scenes.find((scene) => scene.id === beat.sceneId)?.beats ?? [];
+  const compiled = options.film.scenes.find((scene) => scene.id === beat.sceneId);
+  const sceneBeats = compiled?.beats ?? [];
+  const split = compiled?.split ?? false;
   for (const earlier of sceneBeats) {
     if (earlier.index >= beat.index) break;
     applyShowHide(runtime, earlier.step);
@@ -311,7 +313,9 @@ function checkBeat(shared: SharedChecks, beatNumber: number): void {
       continue;
     }
     // The beat's own end is the next beat's start; the beat is measured with its own cues on.
-    checkPoint(beat, runtime, stage.viewBox, shared.widths, shared.themes, shared.tokens, point.name, fail);
+    // Notes persist: later beats are checked with every line shown so far.
+    // Split scenes are checked against the narrowed stage they render, from the first beat.
+    checkPoint(beat, runtime, stage.viewBox, shared.widths, shared.themes, shared.tokens, point.name, fail, accumulatedNotes(sceneBeats, beat.index), split);
   }
 }
 
@@ -362,6 +366,10 @@ function checkPoint(
   tokens: Readonly<Record<FilmTheme, FilmTokens>>,
   point: FilmPoint,
   fail: (failure: FilmFailure) => void,
+  /** Notes showing on this beat: its scene's lines up to and including it. */
+  showing: readonly string[] = [],
+  /** True when the scene renders split: the stage narrows beside its notes column from the first beat. */
+  split = false,
 ): void {
   const boxes = partBoxes(runtime);
   const occupied = [...boxes.values()].map((entry) => entry.box);
@@ -403,10 +411,67 @@ function checkPoint(
         message: `Beat "${beat.id}" caption band takes ${Math.round(caption.bandHeightPx)} px of a ${Math.round(stageHeightPx)} px drawing at ${width} px`,
       });
     }
+    // Split scenes render the narrowed stage beside their notes column from
+    // the first beat; every other solver reads the narrowed width with it.
+    const layout = splitLayout(split, width);
+    const stageW = layoutStageWidth(width, layout);
+    // The drawing stands no taller than the narrowed stage at its aspect; the
+    // caption band below keeps the full frame width either way.
+    const drawingHeightPx = (stageW * viewBox[3]) / viewBox[2];
+    // Beside the stage the notes column covers nothing by construction; the
+    // stacked strip overlays the bottom of the safe area and must clear it.
+    const notes = showing.length > 0 ? solveNotes(showing, { viewBox, stageWidthPx: width }) : null;
+    if (notes) {
+      if (notes.fontPx < CAPTION_MIN_PX || notes.fontPx < drawingHeightPx * CAPTION_MIN_STAGE_SHARE - 1e-9) {
+        fail({
+          check: 'size',
+          scene: beat.sceneId,
+          beat: beat.id,
+          point,
+          width,
+          message: `Beat "${beat.id}" notes at ${notes.fontPx.toFixed(1)} px at ${width} px, under the minimum`,
+        });
+      }
+      if (notes.panel !== null) {
+        if (!insideSafe(notes.panel, viewBox)) {
+          fail({
+            check: 'safe-margin',
+            scene: beat.sceneId,
+            beat: beat.id,
+            point,
+            width,
+            message: `Beat "${beat.id}" notes leave the safe area at ${width} px`,
+          });
+        }
+        for (const [name, entry] of boxes) {
+          if (covers(notes.panel, entry.box)) {
+            fail({
+              check: 'overlap',
+              scene: beat.sceneId,
+              beat: beat.id,
+              point,
+              width,
+              message: `Beat "${beat.id}" notes cover "${name}" at ${width} px; keep the notes strip clear`,
+            });
+            break;
+          }
+        }
+        if (card && covers(notes.panel, card)) {
+          fail({
+            check: 'overlap',
+            scene: beat.sceneId,
+            beat: beat.id,
+            point,
+            width,
+            message: `Beat "${beat.id}" notes cover the title card at ${width} px; keep the notes strip clear`,
+          });
+        }
+      }
+    }
     const callouts = (beat.step.mark ?? []).filter((mark) => mark.type === 'callout');
     const chips = solveCallouts(
       callouts.map((mark) => ({ id: mark.part, at: calloutAnchor(boxes.get(mark.part)?.box ?? null), text: beat.step.short ?? firstWords(beat.step.say, 6) })),
-      { viewBox, stageWidthPx: width, occupied: card ? [...occupied, card] : occupied },
+      { viewBox, stageWidthPx: stageW, occupied: [...occupied, ...(card ? [card] : []), ...(notes?.panel ? [notes.panel] : [])] },
     );
     for (const id of chips.failed) {
       fail({
@@ -427,6 +492,56 @@ function checkPoint(
         width,
         message: `Beat "${beat.id}" title card covers "${focusName}" at ${width} px; cards must leave the focus uncovered`,
       });
+    }
+    // Write-on text draws in the top-left slot on every surface, so the
+    // checks require that slot — not just any clear corner.
+    const writeText = typeof beat.step.write?.text === 'string' ? (beat.step.write.math === true ? renderMathText(beat.step.write.text) : beat.step.write.text) : null;
+    if (writeText !== null) {
+      const placed = solveWrite(writeText, {
+        viewBox,
+        stageWidthPx: stageW,
+        occupied: [...occupied, ...(card ? [card] : []), ...(notes?.panel ? [notes.panel] : []), ...chips.placed.map((chip) => chip.rect)],
+      });
+      if (!placed) {
+        fail({
+          check: 'overlap',
+          scene: beat.sceneId,
+          beat: beat.id,
+          point,
+          width,
+          message: `Beat "${beat.id}" write-on text places nowhere at ${width} px without covering a part; free a corner slot`,
+        });
+      } else if (placed.slot !== 0) {
+        fail({
+          check: 'overlap',
+          scene: beat.sceneId,
+          beat: beat.id,
+          point,
+          width,
+          message: `Beat "${beat.id}" write-on text misses its top-left slot at ${width} px; keep that corner clear`,
+        });
+      } else {
+        if (placed.fontPx < CAPTION_MIN_PX || placed.fontPx < drawingHeightPx * CAPTION_MIN_STAGE_SHARE - 1e-9) {
+          fail({
+            check: 'size',
+            scene: beat.sceneId,
+            beat: beat.id,
+            point,
+            width,
+            message: `Beat "${beat.id}" write-on text at ${placed.fontPx.toFixed(1)} px at ${width} px, under the minimum`,
+          });
+        }
+        if (!insideSafe(placed.rect, viewBox)) {
+          fail({
+            check: 'safe-margin',
+            scene: beat.sceneId,
+            beat: beat.id,
+            point,
+            width,
+            message: `Beat "${beat.id}" write-on text leaves the safe area at ${width} px`,
+          });
+        }
+      }
     }
     for (const theme of themes) {
       const ratio = contrastRatio(tokens[theme].fg, tokens[theme].bg);
@@ -466,6 +581,13 @@ function checkPoint(
       });
     }
   }
+}
+
+/** True when a layer rect stays inside the drawing's safe area. */
+function insideSafe(rect: Box, viewBox: ViewBox): boolean {
+  const [vx, vy, vw, vh] = viewBox;
+  const margin = Math.min(vw, vh) * SAFE_MARGIN_SHARE;
+  return rect.minX >= vx + margin - 1e-9 && rect.minY >= vy + margin - 1e-9 && rect.maxX <= vx + vw - margin + 1e-9 && rect.maxY <= vy + vh - margin + 1e-9;
 }
 
 function calloutAnchor(box: Box | null): readonly [number, number] {

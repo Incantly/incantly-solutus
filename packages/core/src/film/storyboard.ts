@@ -35,6 +35,15 @@ export const FILM_READING_WPS_LIMIT = 3.5;
 /** Longest a scene may run in seconds (bench: seek-by-replay stays under ~150 ms on the slowest supported iPad). */
 export const FILM_SCENE_MAX_SECONDS = 60;
 
+/** Longest a beat's write-on text may be, in characters. */
+export const FILM_LAYER_TEXT_MAX = 200;
+
+/** Most note lines one beat may introduce. */
+export const FILM_NOTES_MAX = 4;
+
+/** Longest one note line may be, in characters. */
+export const FILM_NOTE_TEXT_MAX = 140;
+
 /** Scene cuts the compiler accepts. */
 const CUTS: readonly SceneCut[] = ['cut', 'fade', 'wipe', 'push'];
 
@@ -108,6 +117,36 @@ export interface StoryboardBeat {
   readonly sfx?: string;
   readonly explore?: Beat['explore'];
   readonly predict?: Beat['predict'];
+  readonly write?: Beat['write'];
+  readonly notes?: Beat['notes'];
+}
+
+/**
+ * A beat's explainer layers as the engine runs them: well-formed, or a
+ * message saying why not. The scene's step is what runs, so the compiler
+ * checks the step; the storyboard's copy only warns on drift.
+ */
+export function layerProblems(step: Beat): string[] {
+  const problems: string[] = [];
+  if (step.write !== undefined) {
+    if (typeof step.write !== 'object' || step.write === null || Array.isArray(step.write)) problems.push('write must be { text, math? }');
+    else {
+      if (typeof step.write.text !== 'string' || step.write.text.trim() === '') problems.push('write needs text to write');
+      else if (step.write.text.length > FILM_LAYER_TEXT_MAX) problems.push(`write runs ${step.write.text.length} characters; at most ${FILM_LAYER_TEXT_MAX}`);
+      if (step.write.math !== undefined && typeof step.write.math !== 'boolean') problems.push('write math must be true or false');
+    }
+  }
+  if (step.notes !== undefined) {
+    if (!Array.isArray(step.notes)) problems.push('notes must be a list of lines');
+    else {
+      if (step.notes.length > FILM_NOTES_MAX) problems.push(`notes holds ${step.notes.length} lines; at most ${FILM_NOTES_MAX}`);
+      step.notes.forEach((line, i) => {
+        if (typeof line !== 'string' || line.trim() === '') problems.push(`notes line ${i + 1} needs text`);
+        else if (line.length > FILM_NOTE_TEXT_MAX) problems.push(`notes line ${i + 1} runs ${line.length} characters; at most ${FILM_NOTE_TEXT_MAX}`);
+      });
+    }
+  }
+  return problems;
 }
 
 export interface StoryboardScene {
@@ -119,6 +158,16 @@ export interface StoryboardScene {
   readonly cut?: SceneCut;
   /** Share of the film's lengthTarget this scene takes, 0 to 1; the shares sum to ~1 when present. */
   readonly durationShare?: number;
+}
+
+/**
+ * Whether a scene's beats render split: any beat introducing note lines
+ * splits its whole scene from the first frame, so seeking never re-lays the
+ * stage. One rule, read by the compiler, the checks, the player, the sandbox
+ * mirror and the export.
+ */
+export function sceneSplit(beats: readonly { readonly step: Beat }[]): boolean {
+  return beats.some((beat) => (beat.step.notes ?? []).length > 0);
 }
 
 /**
@@ -160,6 +209,8 @@ export interface CompiledScene {
   readonly start: number;
   readonly seconds: number;
   readonly beats: readonly CompiledBeat[];
+  /** True when any beat introduces notes: the scene renders split from its first frame. */
+  readonly split: boolean;
 }
 
 export interface CompiledFilm {
@@ -406,6 +457,14 @@ export function compileFilm(spec: unknown, sources: readonly FilmSceneSource[]):
       }
       const beat = rawBeat as unknown as StoryboardBeat;
       if (seenBeats.has(beat.id)) error(`Beat "${excerpt(beat.id)}" is used twice`, scene.id, beat.id);
+      // Full-stage cards are gone: any beat still sending one — in the
+      // storyboard or the scene step — fails here with a clear diagnostic.
+      if (isRecord(rawBeat) && rawBeat.card !== undefined) {
+        error(`Beat "${excerpt(beat.id)}" sends a card, which films no longer show; remove the card field`, scene.id, beat.id);
+      }
+      if (isRecord(step) && step.card !== undefined) {
+        error(`Beat "${excerpt(beat.id)}" sends a card, which films no longer show; remove the card field`, scene.id, beat.id);
+      }
       seenBeats.add(beat.id);
       if (typeof beat.say !== 'string' || beat.say.trim() === '') {
         error(`Beat "${excerpt(beat.id)}" needs something to say`, scene.id, beat.id);
@@ -418,10 +477,14 @@ export function compileFilm(spec: unknown, sources: readonly FilmSceneSource[]):
         error(`Beat "${excerpt(beat.id)}" is step ${index + 1} but the scene calls it "${excerpt(step.id)}"`, scene.id, beat.id);
       }
       // The scene's step is what runs; where the storyboard drifted from it, the storyboard is stale.
-      for (const field of ['focus', 'set', 'ease', 'cam', 'show', 'hide', 'mark', 'title', 'short', 'sfx', 'explore', 'predict'] as const) {
+      for (const field of ['focus', 'set', 'ease', 'cam', 'show', 'hide', 'mark', 'title', 'short', 'sfx', 'explore', 'predict', 'write', 'notes'] as const) {
         if (driftFingerprint(beat[field]) !== driftFingerprint(step[field])) {
           warn(`Beat "${excerpt(beat.id)}" ${field} drifted from the storyboard; the scene wins`, scene.id, beat.id);
         }
+      }
+      // The step is what the engine draws, so a malformed layer fails the film here, never at draw time.
+      for (const problem of layerProblems(step)) {
+        error(`Beat "${excerpt(beat.id)}" ${problem}`, scene.id, beat.id);
       }
       const seconds = estimateBeatSeconds(step.say);
       beats.push({ id: beat.id, sceneId: scene.id, index, step: Object.freeze({ ...step }), start: beatStart, seconds, words: splitWords(step.say), timed: false });
@@ -444,6 +507,7 @@ export function compileFilm(spec: unknown, sources: readonly FilmSceneSource[]):
       start: sceneStart,
       seconds: sceneSeconds,
       beats,
+      split: sceneSplit(beats),
     };
   });
   for (const compiled of compiledScenes) {

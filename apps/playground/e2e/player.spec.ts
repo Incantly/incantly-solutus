@@ -6,10 +6,25 @@ import { SCENE_FIXTURES } from '../src/scene-fixtures';
 // stored versions and writers never race readers.
 test.describe.configure({ mode: 'serial' });
 
-async function openPlayer(page: Page, film: string): Promise<void> {
+async function openPlayer(page: Page, film: string, extra = ''): Promise<void> {
   await page.request.get('/api/dev/films/clear');
-  await page.goto(`/?page=player&film=${film}`);
+  // Play starts the teacher by default: with a live token route the film
+  // would open a real session here, so these specs pin the route off and
+  // every Play falls back to silent playback.
+  await page.route('/api/v1/live/token', (route) =>
+    route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({}) }),
+  );
+  // The reference model answers here: these specs assert its exact words
+  // ('fastest'), so the player must not open a real model session even when
+  // the dev server carries keys. `extra` adds query flags such as debug=1.
+  await page.goto(`/?page=player&film=${film}&reference=1${extra ? `&${extra}` : ''}`);
   await page.waitForFunction(() => window.__playground?.ready === true);
+}
+
+/** Opens the transport's "more" menu, which holds the secondary controls. */
+async function openMenu(page: Page): Promise<void> {
+  await page.locator('.inc-menu > button').click();
+  await expect(page.locator('.inc-menu-pop')).toBeVisible();
 }
 
 /** Seeks to a beat's start plus an offset, through the player's own model. */
@@ -52,7 +67,7 @@ async function fullState(page: Page): Promise<FullState> {
 }
 
 test('the player plays a silent film with captions and a transcript', async ({ page }) => {
-  await openPlayer(page, 'thirty');
+  await openPlayer(page, 'thirty', 'debug=1');
   await expect(page.locator('.inc-player h2')).toHaveText('How a pendulum keeps time');
   await expect(page.locator('.inc-timeline-clip')).toHaveCount(6);
   await expect(page.locator('.inc-transcript li')).toHaveCount(6);
@@ -84,14 +99,15 @@ test('caption toggles apply without waiting for the next beat', async ({ page })
 
   const caption = page.locator('.inc-caption');
   const before = await caption.evaluate((el) => getComputedStyle(el).fontSize);
+  await openMenu(page);
   await page.locator('select[aria-label="Caption size"]').selectOption('lg');
   await expect
     .poll(async () => caption.evaluate((el) => getComputedStyle(el).fontSize))
     .not.toBe(before);
 
-  await page.getByLabel('Captions').uncheck();
+  await page.getByRole('button', { name: 'Captions' }).click();
   await expect(caption).toBeEmpty();
-  await page.getByLabel('Captions').check();
+  await page.getByRole('button', { name: 'Captions' }).click();
   await expect(caption).toContainText('pendulum hangs');
 
   // Nothing above changed the beat: the chrome applied on its own events.
@@ -100,8 +116,111 @@ test('caption toggles apply without waiting for the next beat', async ({ page })
     .toBe(beat);
 });
 
+/** How many shown layer elements cover the stage center: nonzero means a layer leaks over the figure. */
+async function layerCoverAtStageCenter(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    const stage =
+      document.querySelector('.inc-player-figure svg.inc-stage') ?? document.querySelector('.inc-player-figure iframe');
+    if (!stage) return -1;
+    const box = stage.getBoundingClientRect();
+    const x = box.x + box.width / 2;
+    const y = box.y + box.height / 2;
+    // Rect overlap, not hit testing: the layers are pointer-events none, so
+    // elementsFromPoint would miss them even while they cover the stage. The
+    // overlays fade instead of toggling display, so a faded-out layer keeps
+    // its box: only count layers that actually paint.
+    return [...document.querySelectorAll('.inc-player-write, .inc-player-notes')].filter((el) => {
+      const rect = el.getBoundingClientRect();
+      return (
+        getComputedStyle(el).visibility === 'visible' &&
+        rect.width > 0 &&
+        rect.height > 0 &&
+        x >= rect.x &&
+        x <= rect.x + rect.width &&
+        y >= rect.y &&
+        y <= rect.y + rect.height
+      );
+    }).length;
+  });
+}
+
+test('explainer layers stay hidden on a film without layers', async ({ page }) => {
+  await openPlayer(page, 'thirty');
+  // A display regression on any layer class would paint over the pendulum here.
+  await expect(page.locator('.inc-player-xcard')).toHaveCount(0);
+  await expect(page.locator('.inc-player-write')).toBeHidden();
+  await expect(page.locator('.inc-player-notes')).toBeHidden();
+  expect(await layerCoverAtStageCenter(page)).toBe(0);
+});
+
+test('a layered film shows write and notes on their beat only', async ({ page }) => {
+  await page.request.get('/api/dev/films/clear');
+  const js = [
+    "inc.idea('A ball rests beside step-by-step notes.');",
+    "inc.describe(() => 'A ball beside notes that arrive beat by beat.');",
+    "const stage = inc.svg('#stage', { viewBox: [0, 0, 600, 400], title: 'Layers' });",
+    "const ball = stage.circle(150, 200, 25, { tone: 'hi' });",
+    "stage.part('Ball', ball, { label: 'Ball', info: 'A ball left of centre.' });",
+    'inc.steps([',
+    "  { say: 'First we set the scene.' },",
+    "  { say: 'The ball rests while we write its rule.', focus: 'Ball', write: { text: 'x = 3', math: true }, notes: ['The ball rests.'] },",
+    ']);',
+  ].join('\n');
+  const beats = [
+    { id: 's1b1', say: 'First we set the scene.' },
+    {
+      id: 's1b2',
+      say: 'The ball rests while we write its rule.',
+      focus: 'Ball',
+      write: { text: 'x = 3', math: true },
+      notes: ['The ball rests.'],
+    },
+  ];
+  const saved = await page.request.post('/api/dev/films', {
+    data: {
+      id: 'gen-layers-1',
+      storyboard: { film: { title: 'Layers', lengthTarget: 30 }, scenes: [{ id: 's1', idea: 'A ball with room for layers.', kit: 'svg', durationShare: 1, beats }] },
+      scenes: [{ id: 's1', html: "<div id='stage'></div>", css: '', js }],
+    },
+  });
+  expect(saved.ok()).toBe(true);
+  await page.goto('/?page=player&film=gen-layers-1');
+  await page.waitForFunction(() => window.__playground?.ready === true);
+  // Ready lands before any beat applies, so the caption is still null: seek
+  // onto beat 1 first. Notes arrive on beat 2, but the scene already reports
+  // split on beat 1 — one layout from the first frame.
+  await seekBeat(page, 0, 0);
+  await page.waitForFunction(() => (window.__playground?.stats as () => { beat: string | null })().beat === 's1b1');
+  const splitOnFirstBeat = await page.evaluate(
+    () => (window.__playground?.model as unknown as { state: { caption: { split: boolean } | null } }).state.caption?.split,
+  );
+  expect(splitOnFirstBeat).toBe(true);
+  // No layers on the first beat: write and notes arrive with beat 2.
+  await expect(page.locator('.inc-player-write')).toBeHidden();
+  await expect(page.locator('.inc-player-notes')).toBeHidden();
+  await seekBeat(page, 1, 1);
+  await expect(page.locator('.inc-player-write')).toContainText('x');
+  await expect(page.locator('.inc-player-write')).toBeVisible();
+  await expect(page.locator('.inc-player-notes')).toContainText('The ball rests.');
+  await expect(page.locator('.inc-player-notes')).toBeVisible();
+  // The notes panel lands beside the narrowed stage, or stacked under it on
+  // narrow players — never over the drawing.
+  const placed = await page.evaluate(() => {
+    const stage = document.querySelector('.inc-player-figure svg.inc-stage') ?? document.querySelector('.inc-player-figure iframe');
+    const notes = document.querySelector('.inc-player-notes');
+    if (!stage || !notes) return 'missing';
+    const s = stage.getBoundingClientRect();
+    const n = notes.getBoundingClientRect();
+    if (n.width === 0 || n.height === 0) return 'hidden';
+    if (n.left >= s.right - 2) return 'beside';
+    if (n.top >= s.bottom - 2) return 'stacked';
+    return 'overlapping';
+  });
+  expect(['beside', 'stacked']).toContain(placed);
+});
+
 test('the one-minute film reports seek=play and passing film checks', async ({ page }) => {
-  await openPlayer(page, 'sixty');
+  await openPlayer(page, 'sixty', 'debug=1');
   await expect(page.locator('.inc-timeline-clip')).toHaveCount(8);
   await expect(page.locator('.inc-player-badge').nth(1)).toContainText('seek=play: pass', { timeout: 30_000 });
   await expect(page.locator('.inc-player-badge').nth(2)).toContainText('all 8 beats pass', { timeout: 60_000 });
@@ -214,7 +333,7 @@ test('an insert auto-resumes at the anchor word after a back-to-film beat', asyn
 });
 
 test('narration settings keep the key in memory and need none for the stub', async ({ page }) => {
-  await openPlayer(page, 'thirty');
+  await openPlayer(page, 'thirty', 'debug=1');
   const key = page.locator('.inc-narration-key');
   await expect(key).toHaveAttribute('type', 'password');
   await expect(key).toHaveAttribute('autocomplete', 'off');
@@ -224,7 +343,7 @@ test('narration settings keep the key in memory and need none for the stub', asy
 });
 
 test('the narration section shows the Cartesia connection state without a key check', async ({ page }) => {
-  await openPlayer(page, 'thirty');
+  await openPlayer(page, 'thirty', 'debug=1');
   await page.locator('.inc-narration > summary').click();
   const connection = page.locator('.inc-narration-connection');
   // At a glance, before Test connection is ever pressed: the state line names both sources.
@@ -235,7 +354,7 @@ test('the narration section shows the Cartesia connection state without a key ch
 });
 
 test('the key check reports the voice source and never the key', async ({ page }) => {
-  await openPlayer(page, 'thirty');
+  await openPlayer(page, 'thirty', 'debug=1');
   const empty = await page.request.post('/api/dev/narration-key', { data: {} });
   const shape = (await empty.json()) as Record<string, unknown>;
   test.skip(shape.source !== 'none' || shape.voiceSource !== 'none', 'needs a dev server without CARTESIA_API_KEY and CARTESIA_VOICE_ID');
@@ -252,7 +371,7 @@ test('the key check reports the voice source and never the key', async ({ page }
 });
 
 test('cartesia narration with both fields empty falls back to the server default', async ({ page }) => {
-  await openPlayer(page, 'thirty');
+  await openPlayer(page, 'thirty', 'debug=1');
   const status = (await (await page.request.post('/api/dev/narration-key', { data: {} })).json()) as { source?: string; voiceSource?: string };
   test.skip(status.source !== 'none' || status.voiceSource !== 'none', 'needs a dev server without CARTESIA_API_KEY and CARTESIA_VOICE_ID');
   const beats = [{ id: 's1b1', text: 'A pendulum hangs from its pivot.' }];
@@ -432,6 +551,7 @@ test('loop-a-beat replays the beat until it is switched off', async ({ page }) =
     const beat = playground.film.beats[2]!;
     playground.model.seek(beat.start + beat.seconds - 0.4);
   });
+  await openMenu(page);
   await page.locator('.inc-player-loop').click();
   await expect(page.locator('.inc-player-loop')).toContainText('Loop: s1b3');
   expect((await fullState(page)).loop).toBe('s1b3');
@@ -440,6 +560,7 @@ test('loop-a-beat replays the beat until it is switched off', async ({ page }) =
   const stats = await page.evaluate(() => (window.__playground?.stats as () => { playing: boolean; beat: string | null })());
   expect(stats.beat).toBe('s1b3');
   expect(stats.playing).toBe(true);
+  await openMenu(page);
   await page.locator('.inc-player-loop').click();
   await expect(page.locator('.inc-player-loop')).toContainText('Loop: off');
 });
@@ -447,6 +568,7 @@ test('loop-a-beat replays the beat until it is switched off', async ({ page }) =
 test('bookmarks add, jump and remove by beat and word', async ({ page }) => {
   await openPlayer(page, 'thirty');
   await seekBeat(page, 2, 0.6);
+  await openMenu(page);
   await page.locator('.inc-bookmark-add').click();
   await expect(page.locator('.inc-bookmarks li[data-bookmark]')).toHaveCount(1);
   expect((await fullState(page)).bookmarks).toHaveLength(1);
@@ -463,6 +585,7 @@ test('link-to-time deep links seek on load and copy from the transport', async (
   await page.waitForFunction(() => window.__playground?.ready === true);
   await expect.poll(async () => page.evaluate(() => (window.__playground?.stats as () => { beat: string | null })().beat)).toBe('s1b4');
 
+  await openMenu(page);
   await page.locator('.inc-player-link').click();
   await expect(page.locator('.inc-player-link-note')).toContainText('Link to s1b4 copied');
   expect((await fullState(page)).hash).toContain('beat=s1b4');
@@ -470,7 +593,12 @@ test('link-to-time deep links seek on load and copy from the transport', async (
 
 test('keyboard shortcuts play, move and ask without touching fields', async ({ page }) => {
   await openPlayer(page, 'thirty');
-  await expect(page.locator('.inc-shortcuts li')).toHaveCount(10);
+  await expect(page.locator('.inc-shortcuts li')).toHaveCount(11);
+  await expect(page.locator('.inc-shortcuts li', { hasText: 'Teacher voice on / off' })).toHaveCount(1);
+  // Play starts the teacher by default: silence it so this stays a pure
+  // keyboard test with no socket and no mic prompt.
+  await openMenu(page);
+  await page.locator('.inc-teacher-voice').uncheck();
   await page.locator('.inc-player h2').click();
   await page.keyboard.press('k');
   await expect.poll(async () => page.evaluate(() => (window.__playground?.stats as () => { playing: boolean })().playing)).toBe(true);
@@ -573,8 +701,11 @@ async function makeVersion2(page: Page): Promise<void> {
 test('the version picker lists versions and switches between them', async ({ page }) => {
   await page.route('**/api/v1/ask/change', (route) => route.fulfill({ json: VERSION_PATCH }));
   await openPlayer(page, 'thirty');
+  await openMenu(page);
   await expect(page.locator('.inc-version-picker option')).toHaveCount(1);
   await makeVersion2(page);
+  // The ask-sheet clicks close the menu, so reopen it before touching the picker.
+  await openMenu(page);
   await expect(page.locator('.inc-version-picker option')).toHaveCount(2);
   await expect(page.locator('.inc-version-picker option').nth(1)).toContainText('v2 (s1b1)');
   expect((await versionsState(page)).current).toBe(2);
@@ -634,6 +765,7 @@ test('an insert is kept privately and promotes to a shared version', async ({ pa
 
 test('an insert created while Export is open re-syncs the Export selector', async ({ page }) => {
   await openPlayer(page, 'thirty');
+  await openMenu(page);
   await page.locator('.inc-export > summary').click();
   await expect(page.locator('.inc-export-select option')).toHaveCount(0);
   await expect(page.locator('.inc-export-insert')).toBeDisabled();
@@ -665,6 +797,7 @@ test('a refused promotion explains that only the author promotes', async ({ page
 
 test('export downloads a transcript of beat text only', async ({ page }) => {
   await openPlayer(page, 'thirty');
+  await openMenu(page);
   expect((await versionsState(page)).flatten).toEqual({ film: 6, filmPlus: 6, transcript: 6 });
   await page.locator('.inc-export > summary').click();
   const download = page.waitForEvent('download');
@@ -684,6 +817,9 @@ test('export downloads a transcript of beat text only', async ({ page }) => {
 
 async function openPlayerExport(page: Page, film: string): Promise<void> {
   await page.request.get('/api/dev/films/clear');
+  await page.route('/api/v1/live/token', (route) =>
+    route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({}) }),
+  );
   await page.goto(`/?page=player&film=${film}&export-debug=1&reduced-motion=0`);
   await page.waitForFunction(() => window.__playground?.ready === true);
 }
@@ -710,6 +846,7 @@ async function exportCompare(page: Page, frame: number): Promise<number | null> 
 }
 
 async function runVideoExport(page: Page, selection: string, resolution: string): Promise<void> {
+  await openMenu(page);
   await page.locator('.inc-export > summary').click();
   await page.locator('.inc-export-video-selection').selectOption(selection);
   await page.locator('.inc-export-video-resolution').selectOption(resolution);
@@ -823,7 +960,12 @@ test('without WebCodecs the export labels its realtime fallback', async ({ page 
 
 async function openPlayerDeck(page: Page, film: string): Promise<void> {
   await page.request.get('/api/dev/films/clear');
-  await page.goto(`/?page=player&film=${film}&deck=1&reduced-motion=0&export-debug=1`);
+  await page.route('/api/v1/live/token', (route) =>
+    route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({}) }),
+  );
+  // The deck ask test asserts the reference model's words ('fastest'), so
+  // deck mode pins the reference path like the main opener does.
+  await page.goto(`/?page=player&film=${film}&deck=1&reduced-motion=0&export-debug=1&reference=1`);
   await page.waitForFunction(() => window.__playground?.ready === true);
 }
 
@@ -864,6 +1006,7 @@ test('deck mode holds beats until clicked, with next, previous and keys', async 
   await page.keyboard.press(',');
   await expect.poll(async () => (await deckState(page)).beat).toBe('s1b1');
   // The toggle leaves deck mode; the film plays as before.
+  await openMenu(page);
   await page.locator('.inc-deck-toggle').click();
   await expect(page.locator('.inc-deck-toggle')).toHaveText('Deck: off');
   expect((await deckState(page)).advance).toBe('time');
@@ -905,6 +1048,7 @@ test('deck questions anchor by beat and return to the deck position', async ({ p
 test('deck slide export downloads one still per beat', async ({ page }) => {
   test.setTimeout(240_000);
   await openPlayerDeck(page, 'thirty');
+  await openMenu(page);
   await page.locator('.inc-export > summary').click();
   await page.locator('.inc-export-slides-selection').selectOption('film');
   await page.locator('.inc-export-slides-resolution').selectOption('480');
@@ -1199,3 +1343,58 @@ for (const height of [537, 900]) {
     await expect.poll(async () => playerBox(frame), 'restored frame box').toEqual(before);
   });
 }
+
+test('the screen hides figure chrome and keeps captions inside it', async ({ page }) => {
+  await openPlayer(page, 'pythagoras');
+  // Figure chrome never shows inside the screen in film mode: no title, no
+  // idea, no zoom bar, no "change the values" hint.
+  await expect(page.locator('.inc-screen .inc-header')).toBeHidden();
+  await expect(page.locator('.inc-screen .inc-idea')).toBeHidden();
+  await expect(page.locator('.inc-screen .inc-zoombar')).toBeHidden();
+  await expect(page.locator('.inc-screen').getByText('Change the values below')).toBeHidden();
+  // The sliders live in the Controls strip under the transport, not in the screen.
+  await expect(page.locator('.inc-controls .inc-params input[type="range"]')).toHaveCount(2);
+  await expect(page.locator('.inc-controls-summary')).toContainText('Controls:');
+  // The caption overlays the screen, inside its bounds.
+  await page.evaluate(() => (window.__playground?.model as unknown as { seek(seconds: number): void }).seek(1));
+  const caption = page.locator('.inc-caption');
+  await expect(caption).toContainText('right triangle');
+  const screenBox = await page.locator('.inc-screen').boundingBox();
+  const captionBox = await caption.boundingBox();
+  expect(screenBox).not.toBeNull();
+  expect(captionBox).not.toBeNull();
+  expect(captionBox!.x, 'caption left').toBeGreaterThanOrEqual(screenBox!.x - 1);
+  expect(captionBox!.y, 'caption top').toBeGreaterThanOrEqual(screenBox!.y - 1);
+  expect(captionBox!.x + captionBox!.width, 'caption right').toBeLessThanOrEqual(screenBox!.x + screenBox!.width + 1);
+  expect(captionBox!.y + captionBox!.height, 'caption bottom').toBeLessThanOrEqual(screenBox!.y + screenBox!.height + 1);
+});
+
+test('developer tools stay behind ?debug=1', async ({ page }) => {
+  await openPlayer(page, 'thirty');
+  await expect(page.locator('.inc-timeline')).toHaveCount(0);
+  await expect(page.locator('.inc-player-inspector')).toHaveCount(0);
+  await expect(page.locator('.inc-player-badges')).toHaveCount(0);
+  await expect(page.locator('.inc-narration')).toHaveCount(0);
+});
+
+test('playing never scrolls the page itself', async ({ page }) => {
+  await openPlayer(page, 'thirty');
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.locator('.inc-player-transport button').first().click();
+  await expect
+    .poll(async () => page.evaluate(() => (window.__playground?.stats as () => { playing: boolean })().playing))
+    .toBe(true);
+  await page.waitForTimeout(3000);
+  expect(await page.evaluate(() => window.scrollY)).toBe(0);
+});
+
+test('a narrow phone viewport has no horizontal overflow', async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 800 });
+  await openPlayer(page, 'thirty');
+  await expect(page.locator('.inc-screen')).toBeVisible();
+  const overflow = await page.evaluate(() => {
+    const root = document.scrollingElement!;
+    return root.scrollWidth - root.clientWidth;
+  });
+  expect(overflow).toBeLessThanOrEqual(0);
+});
