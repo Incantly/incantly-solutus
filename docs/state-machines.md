@@ -16,7 +16,7 @@ _Not yet checked._
 
 ## language
 
-Checked at commit `d2d9d9e` on `feat/language`. Paths are under `packages/kernel/src/language/`. Findings are in `handoff/language/findings.md`.
+Checked at commit `d2d9d9e` (pass 1) and again at `3220d23` (round 2, after the fixes for LANG-SM-1 to LANG-SM-21) on `feat/language`. Paths are under `packages/kernel/src/language/`; line numbers refer to `3220d23`. Findings are in `handoff/language/findings.md`.
 
 ### L1. Normaliser modes
 
@@ -30,68 +30,73 @@ Checked at commit `d2d9d9e` on `feat/language`. Paths are under `packages/kernel
 | `string` (braceDepth > 0) | Code rules apply inside `{…}`; nested `{`/`}` counted |
 | `comment` | Characters copied to end of line |
 
-- **Invariants:** `start[i]`/`end[i]` map every normalised index to the raw text; a newline always returns to `code`; the lexer sees the same string boundaries as this machine.
+- **Invariants:** `start[i]`/`end[i]` map every normalised index to the raw text; a newline always returns to `code`; the lexer (L3) and the splitter (L2) see the same string and comment boundaries as this machine.
 - **Transitions:**
 
 | From | Event | Guard | To | Side effects |
 |---|---|---|---|---|
 | any | `\n` or `\r` | | `code` | braceDepth = 0; `\r\n` becomes one `\n` |
-| `code` | `#` | | `comment` | |
+| `code` | `#` | | `comment` | also when `#` starts a hex colour after `=` (the lexer reads that as a name) |
 | `code` | `"` `“` `”` `„` | | `string` | pushes `"` |
 | `string`/0 | `"` `“` `”` `„` | | `code` | pushes `"` |
 | `string`/0 | `{` | | `string`/1 | |
 | `string`/>0 | `{` / `}` | | depth ±1 | |
-| `string`/>0 | `"` `“` `”` (not `„`) | | `code` | depth = 0 |
+| `string`/>0 | `"` `“` `”` `„` | | `code` | depth = 0 (the lexer reports the open brace) |
 | `code` or `string`/>0 | superscript run, REPLACE char | | same | rewrite with offset map |
 
-- **Reachable invalid states or transitions:** the splitter (L2) does not share these boundaries: LANG-SM-8 (open).
+- **Reachable invalid states or transitions:** text after a hex colour is left out of the code rules: LANG-SM-24 (open). The splitter did not share the string boundaries: LANG-SM-8 (closed).
 
 ### L2. Logical-line splitter (continuation lines)
 
-- **Where:** `source.ts` `splitLogicalLines` and `bracketDepth` (lines 275 to 318); used by `parser.ts` `parseLine` and `parseProgram`. A second, separate copy of the rule is `tooling.ts` `logicalStart` (lines 196 to 235).
-- **States:** per physical line: `open` (bracket depth > 0 at its end, next line joins) or `closed`. Inside `bracketDepth`: `depth`, `inString`, `inComment`.
-- **Invariants:** a line continues only while a round or square bracket is open (README decision 17); strings and comments are skipped exactly as the lexer skips them; a string never spans a newline (the lexer ends it there); splitting is linear in the program length; every limit (2,000 characters per logical line) is checked before work that grows with the joined text.
+- **Where:** `source.ts` `scanLineDepth`, `splitLogicalLines`, `lastLogicalStart` (lines 275 to 363); used by `parser.ts` `parseLine` and `parseProgram`, `tooling.ts` `cursorContext` and `tokenize`.
+- **States:** per physical line: `open` (bracket depth > 0 at its end, the next line joins) or `closed`. Inside `scanLineDepth`, for one physical line: `depth` (carried in from the previous line), `inString`, `braces` (interpolation depth inside a text); a comment ends the scan of the line. Only `depth` crosses a newline.
+- **Invariants:** a line continues only while a round or square bracket is open (README decision 17); texts and comments are skipped exactly as the lexer skips them; a text never spans a newline; `splitLogicalLines` and `lastLogicalStart` make the same cut; one pass, each character scanned once. An over-long logical line is still joined (the lexer reports one `limit` for it).
 - **Transitions:**
 
 | From | Event | Guard | To | Side effects |
 |---|---|---|---|---|
-| start of line i | scan line | depth = 0 | `closed` | emit logical line |
-| start of line i | scan line | depth > 0 and a next line exists | `open` | append `\n` + next line, rescan the whole joined text |
+| start of line i | scan line with depth 0 | depth at end = 0 | `closed` | emit logical line |
+| start of line i | scan line | depth at end > 0 and a next line exists | `open` | scan the next line with the carried depth |
 | `open` | end of program | | `closed` | emit; the lexer reports `unbalanced` |
-| scan | `\n` | | | `inComment` = false (`inString` is kept) |
-| scan | `"` `“` `”` `„` | not in string | `inString` | |
-| scan | `"` `“` `”` | in string | not in string | (`„` does not close here, although L1 closes on it) |
+| scan | `\r` | | | `inString` = false, `braces` = 0 |
+| scan | `"` `“` `”` `„` | not in a text | `inString` | |
+| scan | `"` `“` `”` `„` | in a text, any `braces` | not in a text | `braces` = 0 |
+| scan, in a text, `braces` = 0 | `\` | | | skip the next character |
+| scan, in a text | `{` / `}` | | | `braces` ±1; brackets inside are ignored |
+| scan | `#` | not in a text | end of line | rest of the line is a comment (also a hex colour after `=`) |
+| scan | `(` `[` / `)` `]` | not in a text | | depth ±1, never below 0 |
 
-- **Reachable invalid states or transitions:** a string left open on one line keeps `inString` across the newline, so later lines are swallowed: LANG-SM-8 (open). The whole joined text is rescanned per added line: LANG-SM-5 (open). `logicalStart` rescans all earlier lines for each candidate start: LANG-SM-5 (open).
+- **Reachable invalid states or transitions:** a hex colour after `=` ends the scan of the line, so a bracket opened after it is missed: LANG-SM-24 (open). Closed: LANG-SM-8 (text across a newline, `„`), LANG-SM-5 (quadratic rescans).
 
 ### L3. Lexer
 
-- **Where:** `lexer.ts` `lex`, `lexRange`, `lexString`, `lexNumber`, `lexName` (lines 76 to 522).
-- **States:** `main` loop of `lexRange(from, to, top)` with a bracket `stack`; `string` scan (`lexString`) with an interpolation sub-scan (`depth`, `inner`, `colonAt`) that recurses into `lexRange(top = false)` with a fresh stack; `number` scan (`digits`, fraction, exponent, `bad`); `name` scan (with `_{…}` subscript); terminal `limit` (line too long: no tokens).
-- **Invariants:** every error carries columns of the raw text; the token count (800) and nesting depth (64) cover the whole line, including text interpolations; one bad character gives one error; tokens never overlap.
+- **Where:** `lexer.ts` `lex`, `lexRange`, `lexString`, `lexNumber`, `lexName` (lines 76 to 534).
+- **States:** `main` loop of `lexRange(from, to, top, base)` with a bracket `stack` (`base` is the number of brackets open around an interpolation); `string` scan (`lexString`) with an interpolation sub-scan that recurses into `lexRange(top = false, base)`; `number` scan; `name` scan (with `_{…}` subscript); terminal `limit` (line too long: no tokens). A running `tokenTotal` counts every token pushed, interpolations included.
+- **Invariants:** every error carries columns of the raw text; the token count (800) and nesting depth (64) cover the whole line, interpolations included; one bad character (one code point) gives one error; tokens never overlap; the `unbalanced` suggestion closes the brackets outside any trailing comment.
 - **Transitions:**
 
 | From | Event | Guard | To | Side effects |
 |---|---|---|---|---|
 | start | raw length > 2,000 | | `limit` | only an `eof` token |
-| main | `(` `[` | stack < 64 | main | push |
-| main | `(` `[` | stack = 64 | stop | `limit` error, rest of line unlexed |
+| main | `(` `[` | base + stack < 64 | main | push |
+| main | `(` `[` | base + stack = 64 | stop | `limit` error, rest of line unlexed |
 | main | `)` `]` | stack empty / wrong opener | main | `unbalanced` error (pop on mismatch) |
-| main | `"` | | string | |
-| string | `{` | matching `}` before `"` or `\n` | `lexRange(top=false)` | fresh stack, tokens kept in the part only |
+| main | `"` | | string | carries base + stack |
+| string | `{` | matching `}` before `"` or `\n` | `lexRange(top = false, base)` | tokens kept in the part, counted in `tokenTotal` |
 | string | `\n` or end | | main | `unterminated_string` |
-| main | `#` | previous token is `=` and a hex colour follows | main | a `name` token `#rrggbb` |
-| main | other character | | main | `bad` token + `bad_character` |
-| end | | top and stack not empty | done | `unbalanced` with a suggestion that appends closers |
-| end | | tokens > 800 and no earlier error | done | `limit` |
+| main | `#` | previous token is `=` and 3, 4, 6 or 8 hex digits follow | main | a `name` token `#rrggbb` |
+| main | `#` | otherwise | main | `comment` token to end of line |
+| main | other character | | main | one `bad` token over the whole code point + `bad_character` |
+| end | | top and stack not empty | done | `unbalanced`; suggestion = text before a trailing comment + closers + the comment |
+| end | | `tokenTotal` > 800 and no earlier error | done | `limit` |
 
-- **Reachable invalid states or transitions:** interpolation tokens and depth escape both limits: LANG-SM-7 (open). An astral character gives two errors: LANG-SM-19 (open). The "append closers" suggestion lands inside a trailing comment: LANG-SM-6 (open).
+- **Reachable invalid states or transitions:** none open in the lexer itself; its hex-colour rule is not shared by L1 and L2 (LANG-SM-24, open). Closed: LANG-SM-7, LANG-SM-19, LANG-SM-6.
 
 ### L4. Parser and line-kind dispatch
 
-- **Where:** `parser.ts` `Parser` (lines 34 to 1050), `parseLine`, `parseLineInner`, `parseLogical`, `parseProgram` (lines 1066 to 1138).
-- **States:** `Parser` fields `pos`, `depth`, `callStack` (innermost call or bracket), `lineHead` (`bare`, `define`, `other`), `relationLike`; exit by return or by a `Stop` exception carrying the first error. A sub-parser is created for each text interpolation. `parseLogical` may re-enter itself once per unbalanced suggestion.
-- **Invariants:** depth (calls, unary signs, `not`, power chains) never exceeds 64 counted together with the interpolation it sits in; one error per line from steps 1 and 2; error columns point at the token that caused them; the line number of an error is the physical line it is on; `1/2x`-style division by an implicit product is never read silently.
+- **Where:** `parser.ts` `Parser` (lines 34 to 1058), `parseLine`, `parseLineInner`, `parseLogical`, `parseProgram` (lines 1074 to 1153).
+- **States:** `Parser` fields `pos`, `depth`, `callStack`, `lineHead` (`bare`, `define`, `other`), `relationLike`; exit by return or by a `Stop` exception carrying the first error. A sub-parser is created for each text interpolation and starts at the outer `depth`. `parseLogical(text, opts, probe)` tries an `unbalanced` suggestion once, with `probe = true`, which never tries a further suggestion.
+- **Invariants:** depth (calls, unary signs, `not`, power chains) never exceeds 64, counted together with the interpolation it sits in; one error per line from steps 1 and 2; error columns point at the token that caused them (the end of an interpolation is its `}`); the line number of an error is the physical line it is on, leading blank lines included; division by an implicit product, signed or not, is never read silently.
 - **Transitions (line kind, first tokens):**
 
 | From | Event | Guard | To | Side effects |
@@ -105,19 +110,20 @@ Checked at commit `d2d9d9e` on `feat/language`. Paths are under `packages/kernel
 | start | name `with` / name `in` | | restyle / rerange | |
 | start | name `:` | | Stop | `syntax` (colon label) |
 | start | digits name `=` | touching | Stop | `bad_name` (ruling Q11) |
-| start | anything else | | bare expression | upper-case call → action; else `unnamed_object` |
+| start | anything else | | bare expression | upper-case call left to the checker; else `unnamed_object` with a free name |
 | expr | `enter()` | depth > 64 | Stop | `limit` |
-| term | `/` then implicit product | right operand is `bin` with `implicit` | Stop | `ambiguous_implicit` |
-| `parseLogical` | lexer error is `unbalanced` with a suggestion | | `parseLogical(suggestion)` | recursive; suggestion dropped if it fails |
-| `parseLine` | more than one non-empty logical line | | error | `syntax` "a second line" |
+| term | `/` then an operand | after stripping unparenthesised `+`/`-`, the operand is an unparenthesised implicit product | Stop | `ambiguous_implicit`; both quick fixes keep the signs |
+| `parseLogical` | first lexer error is `unbalanced` with a suggestion | not `probe` | `parseLogical(suggestion, probe = true)` | suggestion dropped if the candidate fails |
+| `parseLine` | more than one non-empty logical line | | error | `syntax` "a second line" at the first character of the second logical line |
+| `parseLine` | one logical line | | `parseLogical` | line = `opts.line` + `firstLine` − 1 |
 
-- **Reachable invalid states or transitions:** `1/-2x` is read silently: LANG-SM-14 (open). Wrong line and column for leading blank lines, the "second line" error and errors inside `{…}`: LANG-SM-18 (open). Recursive re-parse: LANG-SM-6 (open). Sub-parser depth starts at 0: LANG-SM-7 (open).
+- **Reachable invalid states or transitions:** none open. Closed: LANG-SM-14, LANG-SM-18 (positions), LANG-SM-6, LANG-SM-7.
 
 ### L5. Checker contexts and scopes
 
-- **Where:** `check.ts` `Checker` (lines 166 to 1559), `lines.ts` `checkLine` and the per-kind checks.
-- **States:** one `Checker` per line with `errors` (cap 8), `notices`, `reads`, `usesT`, `hasCommand`, `scopes` (a stack of frames), `slotCount`, `nodes` (cap 2,000), `ctx` (owner name and right-hand side span), `simpleUnknown`. Frames are pushed for function parameters (`checkFunction`), relation `x`/`y` (`buildRelation`), binders and body-scope names (`matchForms` pass 2). Exit by result, by collected errors, or by `Bail` (node limit).
-- **Invariants:** a frame pushed is popped on every path; a local name resolves before constants, objects and commands; `reads` lists the inputs of the object's value rule; `free` is true only when the value holds its own value (no reads of the value expression); every type in a typed node is a real `Ty` from the language's type list; slot numbers are unique within the line.
+- **Where:** `check.ts` `Checker` (lines 173 to 1620), `lines.ts` `checkLine` and the per-kind checks.
+- **States:** one `Checker` per line with `errors` (cap 8), `notices`, `reads`, `usesT`, `hasCommand`, `rangeReads`, `styleReads`, `styleUsesT`, `scopes` (a stack of frames), `slotCount`, `nodes` (cap 2,000), `ctx`, `simpleUnknown`. `apart('range' | 'style', fn)` (line 212) runs `fn` with fresh `reads` and `usesT`, then moves what it read into `rangeReads` or `styleReads` (and `usesT` into `styleUsesT`) and restores the value's `reads` and `usesT`. `hasCommand` is not saved by `apart`. Frames are pushed for function parameters, relation `x`/`y`, binders and body-scope names. Exit by result, by collected errors, or by `Bail` (node limit).
+- **Invariants:** a frame pushed is popped on every path; a local name resolves before constants, objects and commands; `reads` lists the inputs of the object's value rule only (kernel design 9.2: the cycle check follows value edges); `rangeReads` and `styleReads` are the inputs of the range and property rules; `free` is true exactly when the value expression reads no object, no clock and no command, whatever the range and style read; registries answer only their own keys, so every type in a typed node is a real `Ty`; slot numbers are unique within the line. `styleUsesT` is true when a range bound or a style value reads the clock; it does not say which, so a kernel that uses it re-runs both rules on a tick.
 - **Transitions:**
 
 | From | Event | Guard | To | Side effects |
@@ -125,105 +131,121 @@ Checked at commit `d2d9d9e` on `feat/language`. Paths are under `packages/kernel
 | idle | `infer(node)` | nodes ≤ 2,000 | typing | `nodes++` |
 | typing | `nodes` = 2,001 | | `Bail` | one `limit` error |
 | typing | name | local frame has it | `local` node | |
-| typing | name | object exists | `ref` node | `reads.add` |
-| typing | field `.f` | `FIELDS[type][f]` truthy | `field` node | type taken from that entry |
+| typing | name | object exists | `ref` node | `reads.add` (the current set: the value's, or the one `apart` installed) |
+| typing | `t`/`bt`/`beat` | | `clock` node | `usesT = true` (current set) |
+| typing | command call | | `command` node | `hasCommand = true` (always the line's flag, also inside `apart`) |
+| typing | field `.f` | `own(FIELDS, type)` and `own(table, f)` | `field` node | |
+| typing | field `.f` | not an own key | error | `type_mismatch` listing the fields |
 | typing | function line | | push frame | params bound to slots 0, 1, … |
 | typing | relation in `x`/`y` | | push frame | `x`, `y` bound to new slots |
-| typing | style item / range bound | | typed | reads added to the same `reads` set |
+| define/rerange | range clause | | `apart('range')` | reads go to `rangeReads` |
+| define/function/restyle | style list | | `apart('style')` | reads go to `styleReads`; a key `own(PROPERTIES, key)` misses is `unknown_property` |
+| directive | `@name` | not `own(DIRECTIVES, name)` and not a figure directive | error | `unknown_directive` |
+| define | done, no errors | | redefinition check (L7) | on `reads` only |
 | done | errors > 0 | | error | first error, up to 7 in `more` |
 | done | non-`Bail` exception | | `internal` | |
 
-- **Reachable invalid states or transitions:** prototype members accepted as fields, properties and directives: LANG-SM-1 (open). Style and range reads make free objects dependent: LANG-SM-9 (open).
+- **Reachable invalid states or transitions:** a command in a range bound or style value still sets `hasCommand`, so the object is stored as not free, including `free: false, slider: true`: LANG-SM-9 (reopened). Closed: LANG-SM-1.
 
 ### L6. Command and function form matcher
 
-- **Where:** `check.ts` `matchForms`, `diagnose`, `dropSuggestions` (lines 1070 to 1504).
-- **States:** `bindings` (one per form: bound, missing, extra, duplicate named); `candidates` (arity fits); `speculative` (more than one candidate); `typed` cache of value arguments by argument index (errors and notices stashed); per form `Test` (problems, invalid, score, binder problems); outcome `chosen`, `tie` (internal), `argument errors`, `binder errors` or `diagnosis`.
-- **Invariants:** a value argument is typed with the expected type of the form it is tested against; errors inside an argument are reported in preference to a form diagnosis; a speculative failure in one form never hides a real error that every form shares; exactly one passing form or the most specific one wins.
+- **Where:** `check.ts` `matchForms`, `diagnose`, `dropSuggestions` (lines 1101 to 1560).
+- **States:** `bindings` (one per form: bound, missing, extra, duplicate named); `candidates` (arity fits); `speculative` (more than one candidate); `typed` cache of value arguments keyed by argument index and expected type (errors and notices stashed), with `typedKeys` per index and `flushedArgs`; per form `Test` (problems, invalid, score, binder problems, `bodyErrors`); outcome `chosen`, `tie` (internal), `argument errors`, `body errors`, `binder errors` or `diagnosis`.
+- **Invariants:** a value argument is typed with the expected type of the form it is tested against; errors inside an argument, body arguments included, are reported in preference to a form diagnosis; notices of an argument are reported once; exactly one passing form or the most specific one wins.
 - **Transitions:**
 
 | From | Event | Guard | To | Side effects |
 |---|---|---|---|---|
 | start | named arg repeated / unknown name | | error | `duplicate_arg` / `bad_argument` |
 | start | no candidate and a duplicate named arg | | error | `duplicate_arg` |
-| candidates | test each form | | tested | value args typed once and cached with the first form's hint; bodies typed per form in a binder frame |
-| tested | ≥ 1 passing | one lowest score | chosen | flush cached errors and notices |
+| candidates | test each form | | tested | value args typed once per (index, expected type); bodies typed per form in a binder frame; with several candidates, body errors kept in that form's `bodyErrors` |
+| tested | ≥ 1 passing | one lowest score | chosen | flush the chosen form's typings; notices of other typings only for arguments not flushed |
 | tested | ≥ 1 passing | equal lowest scores | `internal` | |
-| tested | none passing, some invalid | errors flushed > 0 | argument errors | |
+| tested | none passing, some invalid | flushed value-argument errors > 0 | argument errors | |
+| tested | none passing, some invalid | no value-argument errors, some `bodyErrors` | body errors | those of the failing form with fewest problems |
 | tested | binder problems | | `not_a_binder` | |
-| tested | otherwise | | diagnosis | `arg_count` or `no_matching_form` with the closest form |
+| tested | otherwise | | diagnosis | `arg_count` or `no_matching_form`; argument types shown from an existing typing |
 
-- **Reachable invalid states or transitions:** the cache reuses another form's hint: LANG-SM-15 (open). Body errors are dropped when several forms compete: LANG-SM-16 (open).
+- **Reachable invalid states or transitions:** none open. Closed: LANG-SM-15, LANG-SM-16.
 
 ### L7. Redefinition, cycle and dependents check
 
-- **Where:** `lines.ts` `checkRedefinition`, `findPath`, `parseOne` (lines 119 to 218); `check.ts` `OverlayFigure` (lines 120 to 162).
-- **States:** `new` (object limit test), `redefine` → `type test` → `cycle test` (depth-first search over `inputsOf`) → `dependents test` (each direct dependent re-parsed and re-checked against an overlay with the new type) → `ok` or an error.
-- **Invariants:** a redefinition that creates a cycle is refused with its path; one that keeps the graph acyclic is never refused; the test runs in bounded stack for every figure the object limit allows (5,000).
+- **Where:** `lines.ts` `checkRedefinition`, `findPath`, `parseOne` (lines 132 to 232); `check.ts` `OverlayFigure` (lines 127 to 170).
+- **States:** `new` (object limit test), `redefine` → `type test` → `cycle test` (iterative depth-first search over `inputsOf` from the value's `reads`, with an explicit stack of iterators) → `dependents test` (each direct dependent re-parsed and re-checked against an overlay with the new type) → `ok` or an error. `checkRerange` and `checkRestyle` do not run this check.
+- **Invariants:** a redefinition whose value creates a cycle is refused with its path; one that keeps the value graph acyclic is never refused; the test runs in bounded stack for every figure the object limit allows (5,000). Style edges cannot form a cycle (kernel design 9.2). Whether range edges may is not written down (LANG-SM-23).
 - **Transitions:**
 
 | From | Event | Guard | To | Side effects |
 |---|---|---|---|---|
 | start | no existing object | size ≥ 5,000 | error | `limit` |
 | start | existing | kind differs | error | `type_change` |
-| type ok | DFS from new reads | reaches the target | error | `cycle` with path |
-| type ok | DFS | finishes | dependents | |
+| type ok | DFS from `reads` | reaches the target | error | `cycle` with path |
+| type ok | DFS | finishes | dependents | `rangeReads` and `styleReads` are not followed |
 | dependents | re-check each | fails or changes type | error | `breaks_dependents` |
+| rerange | `a in lo..hi` | | ok | no cycle test (bounds may read `a` or its dependents) |
 
-- **Reachable invalid states or transitions:** recursive DFS overflows the stack on a long chain: LANG-SM-4 (open).
+- **Reachable invalid states or transitions:** a slider's range may read the slider or its dependents (`a = 3 in 0..b` with `b = a + 1`, `a in 0..a`): LANG-SM-23 (open, needs a ruling). Closed: LANG-SM-4.
 
 ### L8. Compiler and constant folding
 
-- **Where:** `compile.ts` `Compiler` (lines 177 to 833), `compileNode`, `compileLine` (lines 875 to 990).
-- **States:** one `Compiler` per line with `usesInf` (set when an `inf` constant is compiled); each node compiled raw or folded (evaluated once in a scratch `Env` and replaced by its value).
-- **Invariants:** folding gives the same value evaluation would give later; whether an infinity may be stored depends only on whether that value came from `inf` (ruling Q4); folding never runs unbounded work.
+- **Where:** `compile.ts` `Compiler` (lines 203 to 913), `setNanReason`, `guardInf` (lines 61 to 92), `compileNode`, `compileLine` (lines 955 to 1085).
+- **States:** one `Compiler` per line, with no line-wide flags. Each node is compiled raw or folded: folded only when `isConstant` holds (no object, local, clock, command, relation, range, `undef`, builtin call, field read or `^` anywhere below) and evaluating it once in a scratch `Env` sets no reason and gives a defined, non-NaN value.
+- **Invariants:** folding gives the same value evaluation would give later and never calls the MathLib, so a later `setMathLib` reaches every result; folding never runs unbounded work; an infinity may be stored only when it follows from an `inf` input through operations that each had an infinite input (ruling Q4); an infinity made from finite inputs is undefined `overflow`.
 - **Transitions:**
 
 | From | Event | Guard | To | Side effects |
 |---|---|---|---|---|
-| node | compile | constant subtree, not literal or text | folded | runs builtins now with the current MathLib |
-| node | compile | `inf` constant | raw | `usesInf = true` for every later node of the line |
-| line | compile style items first, then value, state, range | | compiled | style `inf` sets `usesInf` for the value |
+| node | compile | `isConstant`, not a literal, constant or text | try fold | kept raw if the scratch run sets a reason or gives NaN or `undefined` |
+| Number `+ - * / ^` | evaluate | result not finite, both inputs finite | undefined | `overflow` (`guardInf`) |
+| Number `+ - * / ^` | evaluate | result infinite, an input infinite | value | |
+| builtin | evaluate | result infinite, an argument infinite | value | |
+| builtin | evaluate | result not finite otherwise | undefined | `overflow` (finite inputs) or `not_finite` |
+| line | final Number result | infinite | value | (every finite-input overflow already failed) |
+| line | final Number result | NaN, no reason | undefined | `not_finite` |
+| `list-num` | evaluate | element result infinite from finite inputs | element `inf` | no guard |
+| `pointwise` (function arithmetic) | call | result not finite | `NaN` | `not_finite`, also for overflow and for an infinite input |
 
-- **Reachable invalid states or transitions:** LANG-SM-11 (sticky `usesInf`), LANG-SM-13 (folded values keep the old MathLib), LANG-SM-2 (folding runs `ncr`/`npr` loops) (all open).
+- **Reachable invalid states or transitions:** the last two rows: LANG-SM-22 (open). Closed: LANG-SM-11, LANG-SM-13, LANG-SM-2.
 
 ### L9. Env and evaluation
 
-- **Where:** `runtime.ts` `Env`, `createEnv`, `resetEnv`, `fail` (lines 60 to 115); `compile.ts` `evaluate` (lines 1004 to 1024), function values (lines 918 to 958), relation values (lines 757 to 774), `pointwise` (lines 847 to 870).
-- **States:** `Env` fields `reason`, `via`, `detail` (first reason wins), `inf` (an infinite input was read), `locals` (slot array), `t`/`bt`/`beat`, `read`. A `FunctionValue` or `RelationValue` captures the `Env` it was made in and writes its parameter slots into that `env.locals` on every call.
-- **Invariants:** an evaluation starts with `reason`, `via`, `detail`, `inf` cleared; a call into a function value does not change the caller's locals, reason or via; a value is undefined exactly when its reason is set; `inf` provenance follows the value, not the evaluation.
+- **Where:** `runtime.ts` `Env`, `createEnv`, `resetEnv`, `fail` (lines 60 to 120); `compile.ts` `evaluate` (line 1093), function values (lines 995 to 1045), relation values (lines 820 to 850), `pointwise` (lines 927 to 950).
+- **States:** `Env` fields `reason`, `via`, `detail` (first reason wins), `locals` (slot array), `t`/`bt`/`beat`, `read`. One `Env` may evaluate several compiled lines (design 3.15). A `FunctionValue` or `RelationValue` captures the `Env` it was made in; a call saves the slots it writes, writes them, evaluates, and puts the saved values back.
+- **Invariants:** an evaluation starts with `reason`, `via`, `detail` cleared; a call into a function or relation value leaves the caller's locals, reason and via as they were; a value is undefined exactly when its reason is set; texts stay within 10,000 characters; an undefined text in `+` gives an undefined text.
 - **Transitions:**
 
 | From | Event | Guard | To | Side effects |
 |---|---|---|---|---|
-| any | `evaluate` | | clear | reset four fields |
+| any | `evaluate` | | clear | reset three fields |
 | evaluating | domain problem | `reason` unset | reason set | `fail` |
-| evaluating | read of an infinite input | | `inf = true` | later overflows are kept as infinity |
-| evaluating | `fv.call(xs)` | | callee running | writes `env_f.locals[slot]`; saves and restores `reason`, `via` (`call1`/`batch` restore `reason` only) |
-| evaluating | `rel.residual(x, y)` | | | writes `env.locals[sx]`, `env.locals[sy]` |
-| evaluating | exception | | undefined `not_finite` | |
+| evaluating | `fv.call(xs)` | | callee running | save `env.locals[slot]` per parameter, write, evaluate, restore; save and restore `reason`, `via` |
+| evaluating | `fv.call1(x)` / `fv.batch(xs)` | | callee running | save, write, restore the one slot; restore `reason` |
+| evaluating | `rel.residual(x, y)` / `rel.test(x, y)` | | | save, write, restore the `x` and `y` slots |
+| evaluating | `text + text` | either side undefined | undefined | `input_undefined` |
+| evaluating | `text + text`, interpolation | result over 10,000 characters | undefined | `limit`, checked before the text is built |
+| evaluating | exception | | undefined `not_finite` | slots written by an interrupted call stay written; the next evaluation writes before it reads |
 
-- **Reachable invalid states or transitions:** callers and callees share slot numbers in one Env: LANG-SM-10 (open). `inf` flag sticks for the evaluation: LANG-SM-11 (open). Undefined text becomes the word `undefined`: LANG-SM-12 (open). Unbounded text growth: LANG-SM-3 (open).
+- **Reachable invalid states or transitions:** none open. Closed: LANG-SM-10, LANG-SM-11, LANG-SM-12, LANG-SM-3.
 
 ### L10. Module-level mutable state
 
-- **Where:** `builtins.ts` `M` with `setMathLib`/`getMathLib` (lines 40 to 49), `dv` (line 221); `types.ts` `setCache` (line 99); `tooling.ts` `lowerCache` (line 398, cleared at 50,000); registries `check.ts` `FIELDS`, `props.ts` `PROPERTIES` and `DIRECTIVES` (plain objects other areas append to).
+- **Where:** `builtins.ts` `M` with `setMathLib`/`getMathLib` (lines 41 to 49), `dv` (line 221); `types.ts` `setCache` (line 99); `tooling.ts` `lowerCache` (line 385, cleared at 50,000); registries `check.ts` `FIELDS`, `props.ts` `PROPERTIES` and `DIRECTIVES`, `types.ts` `TYPE_ALIASES` (plain objects other areas append to), read through `own` (`props.ts` line 20).
 - **States:** MathLib `platform` or `replaced`; caches empty or filled.
-- **Invariants:** every evaluation of every figure uses one MathLib; results computed under one MathLib never mix with another; registries answer only their own keys.
+- **Invariants:** every evaluation of every figure uses one MathLib, read at evaluation time (no folded result holds an older one); registries answer only their own keys.
 - **Transitions:**
 
 | From | Event | Guard | To | Side effects |
 |---|---|---|---|---|
-| platform | `setMathLib(lib)` | | replaced | all figures, all later evaluations; already-folded constants unchanged |
-| registry | lookup `R[key]` | key is an `Object.prototype` member | hit | returns a prototype function |
+| platform | `setMathLib(lib)` | | replaced | all figures, all later evaluations, including lines compiled before |
+| registry | lookup `own(R, key)` | key not an own property | miss | an `Object.prototype` member is never returned |
 
-- **Reachable invalid states or transitions:** LANG-SM-1, LANG-SM-13 (open).
+- **Reachable invalid states or transitions:** none open. Closed: LANG-SM-1, LANG-SM-13.
 
 ### L11. ScratchFigure
 
-- **Where:** `figure.ts` `ScratchFigure` (lines 51 to 213), `targetNamesOf` (lines 219 to 223).
-- **States:** entries by name and id, `order`, `nextId`, `clockState`; each entry has `value`, `inputs`, optional `compiled` and its own `env`. `applyAll` keeps a `failed` map of names a failed line would have made.
-- **Invariants:** public methods never throw; a name made by a failed line marks later readers with `blockedBy`.
+- **Where:** `figure.ts` `ScratchFigure` (lines 51 to 218), `targetNamesOf` (lines 220 to 233).
+- **States:** entries by name and id, `order`, `nextId`, `clockState`; each entry has `value`, `inputs` (the value's `reads`), optional `compiled` and its own `env`. `applyAll` keeps a `failed` map of names a failed line would have made.
+- **Invariants:** public methods never throw; a name made by a failed line, braced subscripts included, marks later readers with `blockedBy`; `free` is what the checker said.
 - **Transitions:**
 
 | From | Event | Guard | To | Side effects |
@@ -231,41 +253,42 @@ Checked at commit `d2d9d9e` on `feat/language`. Paths are under `packages/kernel
 | absent | `apply` define/function | checks pass | present | evaluated with a new Env kept on the entry |
 | present | `apply` same name | | present | same id; order not moved |
 | any | `setValue`, `setClock` | | recomputed | creation order, each entry's own Env |
-| any | `define(name, type, value, {inputs})` | input name unknown | throws | |
-| `applyAll` | line fails | | `failed` += `targetNamesOf(src)` | |
+| any | `define(name, type, value, {inputs})` | an input name unknown | present | that input skipped |
+| `applyAll` | line fails | | `failed` += `targetNamesOf(src)` | `P_{1}` stored as `P_1` |
 
-- **Reachable invalid states or transitions:** LANG-SM-17 (throws), LANG-SM-20 (braced subscripts not recorded) (open).
+- **Reachable invalid states or transitions:** stores `free: false` for objects whose range or style calls a command: LANG-SM-9 (reopened). Closed: LANG-SM-17, LANG-SM-20.
 
 ### L12. Preview
 
-- **Where:** `tooling.ts` `preview`, `previewInner` (lines 70 to 115).
-- **States:** `analyse` → (`unnamed_object` → `retry` with `pvw<k> = …`) → `compiled` → `evaluated` in a fresh Env reading the figure → result; or error with `incomplete`.
-- **Invariants:** nothing in the figure changes; error columns refer to the text the user typed; temporary names never reach the user; a preview finishes within its 1 ms budget class (no unbounded work).
+- **Where:** `tooling.ts` `preview`, `shiftBack`, `previewInner` (lines 70 to 140).
+- **States:** `analyse` → (`unnamed_object` → `retry` under the name the line would get, from the error's `name` param, or `pvw<k>` only if none was offered) → `compiled` → `evaluated` in a fresh Env reading the figure → result; or error with `incomplete`. An error from `retry` goes through `shiftBack`.
+- **Invariants:** nothing in the figure changes; error columns and lines refer to the text the user typed (prefix removed, trimmed leading whitespace and blank lines added back); a temporary `pvw` name never reaches the user unless no name was offered; a preview runs no unbounded work.
 - **Transitions:**
 
 | From | Event | Guard | To | Side effects |
 |---|---|---|---|---|
-| analyse | `unnamed_object` | text not empty | retry | prefix `pvwN = ` and analyse again |
-| retry/analyse | error | | error | `incomplete` from kind and key |
-| ok | define, not state, not command | | evaluated | constant folding and evaluation run |
+| analyse | `unnamed_object` | text not empty | retry | prefix `name = ` and analyse again |
+| retry | error | | error | positions moved back; `source` set to the typed text |
+| analyse | error | | error | `incomplete` from kind and key |
+| ok | define, not state, not command | | evaluated | evaluation runs (builtins not folded) |
 
-- **Reachable invalid states or transitions:** LANG-SM-18 (shifted columns, `pvw1` in hints), LANG-SM-2 (hang) (open).
+- **Reachable invalid states or transitions:** none open. Closed: LANG-SM-18, LANG-SM-2.
 
 ### L13. Cursor context, signature help, completion, highlighting
 
-- **Where:** `tooling.ts` `cursorContext`, `logicalStart`, `typeArgs`, `signatureHelp`, `complete`, `tokenize`, `localNameTokens` (lines 138 to 801).
-- **States:** cursor in `comment`, `string`, `string expression`, after `.`, after `@`, after `in`, in a style list, after `prop =`, start of line, inside a call (frame stack of open brackets with comma positions), elsewhere. Completion keeps a sorted top list of `limit + 12`.
-- **Invariants:** the logical line found for the cursor is the one the splitter (L2) would make; cost per keystroke is bounded independent of the program length before the current logical line; `tokenize` colours any text it is given.
+- **Where:** `tooling.ts` `cursorContext`, `typeArgs`, `signatureHelp`, `complete`, `tokenize`, `colourLine`, `localNameTokens` (lines 167 to 804); `source.ts` `lastLogicalStart`.
+- **States:** cursor in `comment`, `string`, `string expression`, after `.`, after `@`, after `in`, in a style list, after `prop =`, start of line, inside a call (frame stack of open brackets with comma positions), elsewhere. Completion keeps a sorted top list of `limit + 12`. `tokenize` lexes each logical line on its own with its `firstLine`.
+- **Invariants:** the logical line found for the cursor is the one the splitter (L2) makes; cost per keystroke is linear in the text before the cursor; `tokenize` colours any text it is given, line by line (a single logical line over 2,000 characters gives `limit` only); registry lookups use `own`.
 - **Transitions:**
 
 | From | Event | Guard | To | Side effects |
 |---|---|---|---|---|
-| prefix | `logicalStart` | | logical prefix | backward scan over earlier lines |
+| prefix | `lastLogicalStart` | | logical prefix | one forward pass, same scanner as L2 |
 | prefix | lex | | frames | `(`/`[` push (callee if a name precedes), `)`/`]` pop, `,` records |
 | frame | `typeArgs` | complete args | typed args | one fresh `Checker` per argument |
-| `tokenize(source)` | lex whole source | length > 2,000 | no tokens | |
+| `tokenize(source)` | split into logical lines | | per line | lex and colour; errors collected from every line |
 
-- **Reachable invalid states or transitions:** LANG-SM-5 (quadratic `logicalStart`), LANG-SM-21 (`tokenize` over 2,000 characters) (open).
+- **Reachable invalid states or transitions:** after a hex colour the cursor context starts a new logical line too early: LANG-SM-24 (open). Closed: LANG-SM-5, LANG-SM-21.
 
 ### L14. Command and function tables
 
