@@ -2621,3 +2621,154 @@ describe('LANG-SM-30: hsl and hsv, and any built-in with a non-Number result, ne
     }, 10_000);
   });
 });
+
+describe('LANG-SM-31: the :d and :% text formats print undefined when the scaled number overflows', () => {
+  // Readings where the docs are silent:
+  // - Design 3.10 rule 10 only lists the formats. A text part whose number is undefined prints
+  //   `undefined` (LANG-SM-12 and the arithmetic path `"{n * 100}"`), so an overflow while scaling
+  //   prints the same word, and the text itself stays a defined Text.
+  // - The thresholds are not tested: 1e307 overflows under both scalings (57.3x and 100x), 1e300 and 1e306
+  //   do not. The window where `v * 180 / pi` overflows in one order and not in the other is left alone.
+  // - For a Point or a Vector the format applies per coordinate; the coordinate that overflows prints
+  //   `undefined`, the other coordinate is unchanged. The rule is "no `Infinity` in a text, and `undefined` where
+  //   the scaled number overflows".
+  const SETUP = [
+    'big = inf',
+    'n = 1e307',
+    'm = -1e307',
+    'f(x) = x',
+    'L = [1e307, 1]',
+    'Pb = (1e307, 0)',
+    'Vb = (1e307, 0) - (0, 0)',
+    'Pi = (big, 0)',
+    'un = 1 / 0',
+  ];
+
+  function figure(): ScratchFigure {
+    const fig = emptyFig();
+    for (const line of SETUP) applyOk(fig, line);
+    return fig;
+  }
+
+  function text(src: string): string {
+    const fig = figure();
+    const r = applyOk(fig, `tx = ${src}`);
+    expect(r.defined, `${src}: ${r.summary}`).toBe(true);
+    const v = fig.valueOf('tx');
+    expect(typeof v, src).toBe('string');
+    return v as string;
+  }
+
+  const SOURCES: [string, string][] = [
+    ['a Number object', 'n'],
+    ['a negative Number object', 'm'],
+    ['a literal', '1e307'],
+    ['a negative literal', '-1e307'],
+    ['the largest double', '1.7e308'],
+    ['an expression', 'n * 1'],
+    ['a function result', 'f(n)'],
+    ['a list item', 'L[1]'],
+    ['a point coordinate', 'Pb.x'],
+    ['a vector coordinate', 'Vb.x'],
+  ];
+
+  describe.each([
+    ['d', '°'],
+    ['%', '%'],
+  ])('format :%s', (fmt) => {
+    it.each(SOURCES)(`LANG-SM-31: %s prints undefined`, (_kind, expr) => {
+      expect(text(`"{${expr}:${fmt}}"`)).toBe('undefined');
+    }, 10_000);
+
+    it('LANG-SM-31: it is the same word the arithmetic path prints', () => {
+      const scaled = fmt === 'd' ? 'n * 180 / pi' : 'n * 100';
+      expect(text(`"{${scaled}}"`)).toBe('undefined');
+      expect(text(`"{n:${fmt}}"`)).toBe(text(`"{${scaled}}"`));
+    });
+
+    it('LANG-SM-31: no text ever contains the word Infinity', () => {
+      for (const [, expr] of SOURCES) expect(text(`"{${expr}:${fmt}}"`)).not.toMatch(/infinity/i);
+      expect(text(`"{Pb:${fmt}}"`)).not.toMatch(/infinity/i);
+      expect(text(`"{Vb:${fmt}}"`)).not.toMatch(/infinity/i);
+    });
+
+    it('LANG-SM-31: the rest of the text is kept around the undefined part', () => {
+      expect(text(`"x = {n:${fmt}} ok"`)).toBe('x = undefined ok');
+      expect(text(`"{n:${fmt}} and {n:${fmt}}"`)).toBe('undefined and undefined');
+      expect(text(`"{n:${fmt}} and {1:2}"`)).toBe('undefined and 1.00');
+      expect(text(`"a" + "{n:${fmt}}"`)).toBe('aundefined');
+    });
+
+    it('LANG-SM-31: a point or a vector prints undefined for the coordinate that overflows only', () => {
+      for (const src of ['Pb', 'Vb', '(1e307, 0)', '(1e307, 0) - (0, 0)']) {
+        const t = text(`"{${src}:${fmt}}"`);
+        expect(t, `${src}: ${t}`).toMatch(/^\(undefined, /);
+        expect(t, src).not.toMatch(/infinity/i);
+        expect(t.split(',').length, src).toBe(2);
+      }
+      const both = text(`"{(1e307, -1e307):${fmt}}"`);
+      expect(both).toBe('(undefined, undefined)');
+    });
+
+    it('LANG-SM-31: an infinite input still prints inf (ruling Q4)', () => {
+      expect(text(`"{big:${fmt}}"`)).toBe('inf');
+      expect(text(`"{-big:${fmt}}"`)).toBe('-inf');
+      expect(text(`"{inf:${fmt}}"`)).toBe('inf');
+      expect(text(`"{f(big):${fmt}}"`)).toBe('inf');
+      expect(text(`"{Pi.x:${fmt}}"`)).toBe('inf');
+      const point = text(`"{Pi:${fmt}}"`);
+      expect(point).toMatch(/^\(inf, /);
+      expect(point).not.toMatch(/undefined|infinity/i);
+    });
+
+    it('LANG-SM-31: an undefined input prints undefined (control)', () => {
+      expect(text(`"{un:${fmt}}"`)).toBe('undefined');
+      expect(text(`"{1e308 * 10:${fmt}}"`)).toBe('undefined');
+    });
+
+    it('LANG-SM-31: finite numbers are formatted as before (control)', () => {
+      const small = text(`"{1e-300:${fmt}}"`);
+      expect(small).not.toMatch(/undefined|infinity/i);
+      const big = text(`"{1e300:${fmt}}"`);
+      expect(big).not.toMatch(/undefined|infinity/i);
+      expect(big.length).toBeGreaterThan(0);
+      expect(text(`"{0:${fmt}}"`)).toMatch(/^0/);
+      expect(text(`"{(1, 2):${fmt}}"`)).not.toMatch(/undefined|infinity/i);
+    });
+
+    it('LANG-SM-31: a text that depends on the number follows it when it changes', () => {
+      const fig = figure();
+      applyOk(fig, `tx = "{n:${fmt}}"`);
+      expect(fig.valueOf('tx')).toBe('undefined');
+      applyOk(fig, 'n = 0.25');
+      fig.recompute();
+      expect(String(fig.valueOf('tx'))).toMatch(fmt === 'd' ? /^14\./ : /^25/);
+      applyOk(fig, 'n = 1e307');
+      fig.recompute();
+      expect(fig.valueOf('tx')).toBe('undefined');
+    });
+  });
+
+  it('LANG-SM-31: the cases of the finding', () => {
+    expect(text('"{n:d}"')).toBe('undefined');
+    expect(text('"{n:%}"')).toBe('undefined');
+    expect(text('"{n * 100}"')).toBe('undefined');
+    expect(text('"{big:d}"')).toBe('inf');
+  });
+
+  it('LANG-SM-31: the other formats on the same number are unchanged', () => {
+    expect(text('"{n:2}"')).toMatch(/^1(\.0+)?e\+307$/);
+    expect(text('"{n:f}"')).toMatch(/e\+307$/);
+    expect(text('"{n:.3}"')).toMatch(/e\+?307$/);
+    expect(text('"{n}"')).toMatch(/e\+?307$/);
+    for (const fmt of ['2', '.3', 'f']) expect(text(`"{n:${fmt}}"`)).not.toMatch(/undefined|infinity/i);
+  });
+
+  it('LANG-SM-31: ordinary degree and percent values are unchanged', () => {
+    expect(text('"{1.5707963267948966:d}"')).toMatch(/^90/);
+    expect(text('"{pi:d}"')).toMatch(/^180/);
+    expect(text('"{0.25:%}"')).toMatch(/^25/);
+    expect(text('"{1:%}"')).toMatch(/^100/);
+    expect(text('"{-0.5:%}"')).toMatch(/^-50/);
+  });
+});
