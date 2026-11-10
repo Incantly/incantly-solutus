@@ -80,7 +80,7 @@ The model is told once: *Use `aux = true` for helper objects the learner does no
 ```text
 m = 1 in -5..5 step 0.25
 b = 0 in -5..5 step 0.25
-f(x) = m x + b
+f(x) = m * x + b
 ```
 
 > "I need two helper points to show rise over run, but you do not need to read them."

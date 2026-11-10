@@ -171,7 +171,7 @@ Free versus dependent follows the inputs: `A = (1, 2)` is free and draggable, `B
 | `Text` | string | May contain `{expr}` that updates, and `$…$` maths |
 | `Point` | (x, y) | Fields `.x`, `.y` |
 | `Vector` | (dx, dy) | Fields `.x`, `.y`, `.length` |
-| `Segment`, `Ray`, `Line` | two points or point and direction | `Line` also from `a x + b y == c` |
+| `Segment`, `Ray`, `Line` | two points or point and direction | `Line` also from `a*x + b*y == c` |
 | `Circle` | centre, radius | |
 | `Arc` | circle, start and end angle | |
 | `Polygon` | list of points | |

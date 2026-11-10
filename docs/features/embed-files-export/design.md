@@ -323,7 +323,7 @@ Loading either replays the script through the kernel. A file never contains exec
 @view -6 6 -4 4
 @grid on
 a = 2 in 0..5 step 0.1
-f(x) = a x^2 - 1
+f(x) = a * x^2 - 1
 P = (1, 2) with color = blue
 r = Root(f, 0, 3)
 @sheet 26 100

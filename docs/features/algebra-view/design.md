@@ -310,7 +310,7 @@ Slider interaction in the row:
 ```
 
 - Drag or arrow keys change the value; each step is a single `a = value` update, merged into one undo entry per drag.
-- Value snaps to `min + k × step`. Out-of-range values are clamped with the `slider_clamped` warning.
+- Value snaps to `min + k × step`. Out-of-range values are clamped with the `clamped` notice.
 - **Play** animates the slider in explore mode: the value moves at a speed set by the row's `speed` (default 1 unit of the range per 8 s), ping-ponging. It is a viewer-only effect, not recorded as a figure change and not part of the film's time (the film uses `t`). Stopping leaves the value at its current position; the figure records the final value as a normal update. A film that needs motion uses `t`.
 - The range edit is double-click on the min or max label, editing the number in place; it issues `a in lo..hi step s`.
 - Sliders for angle-tagged numbers show degrees in labels and use 1° steps.

@@ -129,7 +129,7 @@ Reason codes come from the kernel's list (`out_of_domain`, `division_by_zero`, `
 
 ### 5.1 Unknown letter in a symbolic argument
 
-Line: `s = Solve(a x + b == 0, x)` when `a` and `b` are not defined.
+Line: `s = Solve(a*x + b == 0, x)` when `a` and `b` are not defined.
 
 ```json
 {
@@ -175,7 +175,7 @@ Line: `e = Expr(P + 1)` where `P` is a Point.
 
 ### 5.3 Heavy command on the clock
 
-Line: `r = Solve(a x == t, x)` where `a = Symbol()` and `t` is the film clock.
+Line: `r = Solve(a*x == t, x)` where `a = Symbol()` and `t` is the film clock.
 
 ```json
 {
@@ -189,8 +189,8 @@ Line: `r = Solve(a x == t, x)` where `a = Symbol()` and `t` is the film clock.
   "path": ["t", "Solve argument 1"],
   "expected": [],
   "forms": ["Solve(c: Cond, v: Symbol) -> List<Cond>"],
-  "hint": "Do the algebra with a Symbol, then put the clock in: r0 = Solve(a x == s, x) then r = Substitute(r0, s, t).",
-  "suggest": ["s = Symbol()", "r0 = Solve(a x == s, x)", "r = Substitute(r0, s, t)"],
+  "hint": "Do the algebra with a Symbol, then put the clock in: r0 = Solve(a*x == s, x) then r = Substitute(r0, s, t).",
+  "suggest": ["s = Symbol()", "r0 = Solve(a*x == s, x)", "r = Substitute(r0, s, t)"],
   "recovery": "rewrite",
   "fingerprint": "time_dependent_input:Solve"
 }

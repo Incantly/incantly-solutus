@@ -14,6 +14,12 @@ Status: accepted for building. Applies to every package that computes or draws. 
 | A document with 50 figures | scrolls at 60 fps; memory under 300 MB |
 | A figure scrolled into view | first drawing under 100 ms (2D) or 250 ms (3D) from a saved picture to live |
 | Still figure (no `t`, nothing dragged) | zero frames after its first drawing |
+| Input language: parse plus check of one line | under 0.2 ms |
+| Input language: preview of a line (input bar) | under 1 ms |
+| Input language: completion per keystroke, 5,000 objects and 200 command names | under 2 ms |
+| Compiled function: a 2,000-sample batch of a 20-node function | under 0.2 ms |
+
+The input-language rows come from `docs/features/language/` (`ui.md` 2, `design.md` 3.14, 3.16 and 3.18). Measured in Node, warm: parse plus check of a typical line 0.008 ms; preview 0.010 ms; completion 0.04 ms on the test figure and 0.2 to 1.6 ms at 5,000 objects (the worst case is a prefix that matches many names, so there is little slack); a 2,000-sample batch of a 30-node function with `sin`, `cos` and `sqrt` 0.26 ms, which is 170 to 230 million node evaluations per second.
 
 ## 2. Our own renderer
 

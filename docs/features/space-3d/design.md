@@ -121,7 +121,7 @@ Everything is a form on a command in the one table. Where the command already ex
 
 | Command | Forms |
 |---|---|
-| (definition) | `f(x, y) = sin(x y)`: a two-variable `Function`, drawn as a surface over the visible `x`, `y` |
+| (definition) | `f(x, y) = sin(x*y)`: a two-variable `Function`, drawn as a surface over the visible `x`, `y` |
 | `Surface` | `(x(u,v), y(u,v), z(u,v), u, u0, u1, v, v0, v1)` |
 | (definition) | `F = x^2 + y^2 - z^2 == 1`: an implicit surface when the equation is not quadratic; quadratic gives a `Quadric` |
 | `Revolve` | `(Function, a, b, axis: L)`; `(Curve3 \| Curve, from, to, axis: L, angle)` a surface |

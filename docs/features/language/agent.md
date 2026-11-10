@@ -12,7 +12,8 @@ LINES: one change per line. Send 1-5 lines per draw call.
   f(x) = x^2 - 2          function          g(x, y) = x*y     two variables
   a = 3 in 0..10 step 0.5 slider            a in 0..20        change range only
   M = Midpoint(A, B)      command result    A, B = Intersect(c, d)   two results
-  v' = -g                 rate of a state   A with color = red   restyle
+  th = state(0.5)         a state (start value)   th' = -g   its rate: make the state first
+  A with color = red      restyle
   Hide(A)                 action            # note   @view -5 5 -3 3
 RULES
   '=' defines, '==' compares. Every object has a name (the command is not enough).
@@ -21,6 +22,7 @@ RULES
   Use brackets after '/': 1/(2x). Powers: x^2, 2^-1. -2^2 is -4. 30° is 30*pi/180.
   Angles are radians. Unknown names are errors; make a number first.
   x and y exist only in f(x) = ... and in relations: l = y == 2x + 1, c = x^2 + y^2 == 4.
+  A circle from an equation needs a number radius. With a slider a, x^2 + y^2 == a^2 is a Curve; use Circle(O, a).
   Lists [1,2,3] [1..10] [0..1 step 0.1]; L[1] is the first item. Points (x, y).
   Text: "m = {m:2}" shows a live value. if(cond, a, b). 0 < x < 5 is allowed.
   Names: letters, digits, _ ; P_1 ; Greek ok. Not a command, function, or: t x y z e pi tau deg inf.
@@ -47,7 +49,7 @@ FIELDS: P.x P.y  v.length  s.length  c.center c.radius  poly.area poly.perimeter
 
 ```text
 Point-Point = Vector. Point+Vector = Point. Number*Vector = Vector. No Point*Number: use 2*Vector(A) or Dilate.
-Functions combine: h = f + g, k = 2 f + 1. Lists with a number work element-wise: L * 2.
+Functions combine: h = f + g, k = 2 f + 1. A list with a number on its right works element-wise: L * 2 (2 * L is an error).
 ```
 
 Token budget for this area's catalogue text: functions line about 150 tokens; operators and fields about 60 tokens. Total with the language card: about 500 tokens. Against the core budget (grammar 300, catalogue 1,200) the language area adds roughly 200 tokens over the old grammar summary, which is the price of the new forms.
@@ -59,7 +61,7 @@ Per line (core format, with the extra fields from `errors.md`):
 Success:
 
 ```json
-{ "ok": true, "line": 2, "name": "f", "type": "Function", "summary": "f(x) = x^2 - 2",
+{ "ok": true, "line": 2, "name": "f", "type": "Function<Number>", "summary": "f(x) = x^2 - 2",
   "warnings": [], "undefined": [] }
 ```
 
@@ -69,6 +71,8 @@ Success with a warning and an undefined consequence:
 { "ok": true, "line": 3, "name": "r", "type": "Number", "summary": "r = undefined (out_of_domain)",
   "warnings": [], "undefined": [{ "name": "r", "reason": "out_of_domain", "detail": "sqrt(-4)" }] }
 ```
+
+`type` is the text form of the type (`Number`, `List<Point>`, `Function<Number>`, and `Function<Number>(2)` for a function of two variables). Inside the language API a type is a `Ty` object; the text is what `tyStr` prints.
 
 No-op (comment, empty): `{ "ok": true, "line": 1, "noop": true }`.
 
@@ -191,7 +195,7 @@ The model recognises that the sentence asked for a number at 2, not a function, 
 
 ### 5.4 Disambiguation
 
-The model writes `h = 1/2x` meaning half of x for the function body. Result `ambiguous_implicit` with two `quickFixes`. The model picks `(1/2) x`, and says nothing about the correction, since the viewer has not seen the failed line.
+The model writes `h = 1/2x` meaning half of x for the function body. Result `ambiguous_implicit` with two `quickFixes`. The model picks `(1/2) * x`, and says nothing about the correction, since the viewer has not seen the failed line.
 
 ## 6. Style rules for the model
 

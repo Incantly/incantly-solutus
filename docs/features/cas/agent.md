@@ -75,7 +75,7 @@ Parameters:
 a = Symbol() with domain = nonzero
 b = Symbol()
 c = Symbol()
-gen = Solve(a x^2 + b x + c == 0, x)
+gen = Solve(a*x^2 + b*x + c == 0, x)
 ```
 
 A sequence with the clock:
@@ -157,7 +157,7 @@ R2 = (s[1], 0)
 > "Let me show that a squared plus two a b plus b squared is a plus b all squared."
 
 ```text
-lhs = Expr(a^2 + 2 a b + b^2)
+lhs = Expr(a^2 + 2*a*b + b^2)
 ```
 
 `draw` returns the error `unknown_name` for `a` with `suggest: ["a = Symbol()", "b = Symbol()"]`.
@@ -167,7 +167,7 @@ lhs = Expr(a^2 + 2 a b + b^2)
 ```text
 a = Symbol()
 b = Symbol()
-lhs = Expr(a^2 + 2 a b + b^2)
+lhs = Expr(a^2 + 2*a*b + b^2)
 rhs = Expr((a + b)^2)
 ok = Equivalent(lhs, rhs)
 ```
