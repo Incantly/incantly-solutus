@@ -204,7 +204,7 @@ export function classify(tree: RelTree, sx: number, sy: number): Classified {
   const xx = co(p, 2, 0);
   const yy = co(p, 0, 2);
   const xy = co(p, 1, 1);
-  if (isNum(xx) && isNum(yy) && isNum(xy) && xy.v === 0 && xx.v !== 0 && Math.abs(xx.v - yy.v) <= 1e-12 * Math.max(1, Math.abs(xx.v))) {
+  if (isNum(xx) && isNum(yy) && isNum(xy) && xy.v === 0 && xx.v !== 0 && Number.isFinite(xx.v) && Number.isFinite(yy.v) && Math.abs(xx.v - yy.v) <= 1e-12 * Math.max(1, Math.abs(xx.v))) {
     const r2 = radiusSquared(xx.v, co(p, 1, 0), co(p, 0, 1), co(p, 0, 0));
     if (r2 !== undefined && r2 > 0) return { shape: 'circle', poly: polyNodes };
   }

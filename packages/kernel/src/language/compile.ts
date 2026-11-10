@@ -143,9 +143,14 @@ function undefFor(t: TNode): unknown {
 
 /* ------------------------------ equality helpers ------------------------------ */
 
-function numEq(a: number, b: number): boolean {
+/**
+ * Equality with a relative tolerance. The tolerance is for finite numbers: when either side is infinite the two are equal
+ * only when they are the same value, so no number is equal to an infinity (design 3.5).
+ */
+function numEq(a: number, b: number, tol = 1e-12): boolean {
   if (a === b) return true;
-  return Math.abs(a - b) <= 1e-12 * Math.max(1, Math.abs(a), Math.abs(b));
+  if (a - a !== 0 || b - b !== 0) return false;
+  return Math.abs(a - b) <= tol * Math.max(1, Math.abs(a), Math.abs(b));
 }
 
 function valueEq(a: unknown, b: unknown): boolean | undefined {
@@ -1000,7 +1005,7 @@ class Compiler {
           if (op === '==' || op === '!=') {
             if (prev !== prev || next !== next) res = undefined;
             else {
-              const eq = Math.abs(prev - next) <= 1e-9 * Math.max(1, Math.abs(prev), Math.abs(next));
+              const eq = numEq(prev, next, 1e-9);
               res = op === '==' ? eq : !eq;
             }
           } else res = cmpNum(op, prev, next);

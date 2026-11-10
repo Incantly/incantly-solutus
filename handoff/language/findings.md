@@ -232,7 +232,8 @@ Checker round 4 (pipeline step 7, after the product owner's narrowed ruling SM-2
   `<` and `>` are right (`5 < big` is `true`, `big > 5` is `true`), so `5 < big` and `5 >= big` are both true. The relation test (`compileTree`, `compile.ts:1003`) uses the same formula with `1e-9` and no `a === b` shortcut, so there an infinity is not even equal to itself.
 - **Invariant broken:** L8: an operation on an infinity follows from the infinity as a value (ruling Q4). Design 3.5 (`design.md:198`) gives the tolerance formula without saying it is for finite numbers; read literally it has the same fault, so the doc needs the precondition too.
 - **Suggested fix:** in `numEq`, compare exactly when either side is not finite (`if (a - a !== 0 || b - b !== 0) return a === b`), and do the same in `compileTree`; add the precondition to design 3.5. Cover Number, Point and Vector equality and the four comparison operators together.
-- **status:** open
+- **status:** fixed
+- **fix (round 5):** `numEq` compares exactly when either side is infinite and takes the tolerance as a parameter; the relation test in `compileTree` uses it, and the circle test in `relation.ts` requires finite coefficients (`compile.ts`, `relation.ts`).
 
 ### LANG-SM-29: A relation whose coefficients overflow stays defined, and its residual writes a reason into the caller's Env
 
