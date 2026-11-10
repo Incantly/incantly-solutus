@@ -14,9 +14,9 @@ import { lex } from './lexer';
 import type { Token } from './lexer';
 import { CONSTANT_NAMES, KEYWORD_NAMES, suggestName } from './names';
 import { parseExprTokens, parseLine } from './parser';
-import { COLOR_WORDS, DIRECTIVES, PROPERTIES } from './props';
+import { COLOR_WORDS, DIRECTIVES, PROPERTIES, own } from './props';
 import { createEnv, valueText } from './runtime';
-import { SourceMap } from './source';
+import { SourceMap, lastLogicalStart, splitLogicalLines } from './source';
 import { formText } from './table';
 import type { CommandForm, FigureView, FormLike, FunctionTable, ParamSpec } from './table';
 import { T, accepts, parseTy, tyStr, typeSet } from './types';
@@ -75,17 +75,46 @@ export function preview(source: string, fig: FigureView): PreviewResult {
   }
 }
 
+/**
+ * Moves the positions of an error found in `prefix + text` back onto the text as typed: the first line loses the prefix
+ * and gains the whitespace that was trimmed, and every line gains the blank lines that were trimmed.
+ */
+function shiftBack(err: LanguageError, prefixLen: number, lead: string, source: string): LanguageError {
+  const leadLines = lead.split('\n').length - 1;
+  const leadCols = lead.length - (lead.lastIndexOf('\n') + 1);
+  const col = (line: number, c: number): number => (line === 1 ? Math.max(1, c - prefixLen + leadCols) : c);
+  const move = (e: LanguageError): LanguageError => ({
+    ...e,
+    line: e.line + leadLines,
+    col: col(e.line, e.col),
+    endCol: col(e.line, e.endCol),
+    ...(e.problems ? { problems: e.problems.map((p) => ({ ...p, col: col(e.line, p.col), endCol: col(e.line, p.endCol) })) } : {}),
+  });
+  const { source: _synthetic, ...rest } = move(err);
+  void _synthetic;
+  const more = err.more?.map(move);
+  return { ...rest, ...(source.length <= 200 ? { source } : {}), ...(more ? { more } : {}) } as LanguageError;
+}
+
 function previewInner(source: string, fig: FigureView): PreviewResult {
   const trimmed = source.trim();
   let r = analyseLine(source, fig);
   let tempName: string | undefined;
   if (!r.ok && r.kind === 'unnamed_object' && trimmed !== '') {
-    tempName = 'pvw';
-    let k = 1;
-    while (fig.lookup(tempName + k)) k++;
-    tempName = tempName + k;
-    r = analyseLine(`${tempName} = ${trimmed}`, fig);
-    if (!r.ok) return { ok: false, incomplete: isIncomplete(r), error: r };
+    // Check the line as if the writer had named it. The name is the one the line would get, so a message or suggestion
+    // that mentions it is one the writer can use; the positions are moved back onto the text as typed.
+    const given = r.params['name'];
+    tempName = typeof given === 'string' && given !== '' && !fig.lookup(given) ? given : undefined;
+    if (tempName === undefined) {
+      tempName = 'pvw';
+      let k = 1;
+      while (fig.lookup(tempName + k)) k++;
+      tempName = tempName + k;
+    }
+    const prefix = `${tempName} = `;
+    const lead = source.slice(0, source.length - source.trimStart().length);
+    r = analyseLine(prefix + trimmed, fig);
+    if (!r.ok) return { ok: false, incomplete: isIncomplete(r), error: shiftBack(r, prefix.length, lead, source) };
   }
   if (!r.ok) return { ok: false, incomplete: isIncomplete(r), error: r };
   const line = r.value;
@@ -137,10 +166,9 @@ interface CursorCtx {
 
 function cursorContext(source: string, cursor: number): CursorCtx {
   const upto = source.slice(0, Math.max(0, Math.min(cursor, source.length)));
-  const lastNl = upto.lastIndexOf('\n');
   // Only the logical line the cursor is on matters, but a call may continue over lines while brackets are open:
   // lex the whole prefix of the current logical line.
-  const startsAt = logicalStart(upto, lastNl);
+  const startsAt = lastLogicalStart(upto);
   const prefix = upto.slice(startsAt);
   const sm = new SourceMap(prefix);
   const lexed = lex(sm);
@@ -191,47 +219,6 @@ function cursorContext(source: string, cursor: number): CursorCtx {
     }
   });
   return { sm, toks, word, wordStart, frames, inString, strExpr, inComment };
-}
-
-function logicalStart(upto: string, lastNl: number): number {
-  if (lastNl < 0) return 0;
-  // walk back over physical lines while brackets stay open
-  const lines = upto.split('\n');
-  let start = lines.length - 1;
-  // find the first physical line such that joined text from there has a balanced prefix before the last line
-  for (let s = lines.length - 1; s >= 0; s--) {
-    let depth = 0;
-    let inStr = false;
-    for (let li = s; li < lines.length - 1; li++) {
-      const ln = lines[li] as string;
-      for (let i = 0; i < ln.length; i++) {
-        const c = ln[i] as string;
-        if (c === '#' && !inStr) break;
-        if (c === '"') inStr = !inStr;
-        else if (!inStr && (c === '(' || c === '[')) depth++;
-        else if (!inStr && (c === ')' || c === ']') && depth > 0) depth--;
-      }
-    }
-    if (s === lines.length - 1) continue;
-    // line s starts a logical line if the previous physical line is closed
-    const prevLine = lines.slice(0, s).join('\n');
-    let d = 0;
-    for (const c of prevLine) {
-      if (c === '(' || c === '[') d++;
-      else if ((c === ')' || c === ']') && d > 0) d--;
-    }
-    if (d === 0 && depth > 0) {
-      start = s;
-      break;
-    }
-    if (d === 0) {
-      start = depth > 0 ? s : lines.length - 1;
-      if (depth === 0) break;
-    }
-  }
-  let offset = 0;
-  for (let i = 0; i < start; i++) offset += (lines[i] as string).length + 1;
-  return offset;
 }
 
 function spanOf(ctx: CursorCtx, s: number, e: number): Span {
@@ -576,12 +563,12 @@ function completeInner(source: string, cursor: number, fig: FigureView, opts: { 
   if (ctx.strExpr) {
     addObjects();
   } else if (afterAt || (toks.length === 1 && toks[0]?.kind === 'at')) {
-    for (const d of [...Object.keys(DIRECTIVES), ...(fig.directives ?? [])]) cands.push({ label: d, insert: d, kind: 'directive', detail: (DIRECTIVES[d] ?? [])[0] ?? '@' + d });
+    for (const d of [...Object.keys(DIRECTIVES), ...(fig.directives ?? [])]) cands.push({ label: d, insert: d, kind: 'directive', detail: (own(DIRECTIVES, d) ?? [])[0] ?? '@' + d });
   } else if (afterDot) {
     const before = toks[toks.length - 2];
     let ty: Ty | undefined;
     if (before && before.kind === 'name') ty = fig.lookup(before.name ?? before.text)?.type;
-    const tables = ty ? [FIELDS[ty.k] ?? {}] : Object.values(FIELDS);
+    const tables = ty ? [own(FIELDS, ty.k) ?? {}] : Object.values(FIELDS);
     const seen = new Set<string>();
     for (const tb of tables) {
       for (const [f, fty] of Object.entries(tb)) {
@@ -596,7 +583,7 @@ function completeInner(source: string, cursor: number, fig: FigureView, opts: { 
     for (const [k, spec] of Object.entries(PROPERTIES)) cands.push({ label: k, insert: `${k} = `, kind: 'property', detail: spec.allowed });
   } else if (withIdx >= 0 && ctx.frames.length === 0 && last && last.kind === 'op' && last.text === '=' && toks[toks.length - 2]?.kind === 'name') {
     const key = toks[toks.length - 2]?.name ?? '';
-    const spec = PROPERTIES[key];
+    const spec = own(PROPERTIES, key);
     if (spec?.values) for (const v of spec.values) cands.push({ label: v, insert: v, kind: 'property', detail: key });
     if (spec?.kind === 'color') {
       for (const v of COLOR_WORDS) cands.push({ label: v, insert: v, kind: 'property', detail: 'colour' });
@@ -744,58 +731,74 @@ export interface HighlightToken {
  */
 export function tokenize(source: string, fig?: FigureView): { tokens: HighlightToken[]; errors: LanguageError[] } {
   try {
-    const sm = new SourceMap(source);
-    const r = lex(sm);
     const functions = fig?.functions ?? BUILTIN_FUNCTIONS;
     const consts = new Set([...CONSTANT_NAMES, 'true', 'false', 't', 'bt', 'beat', 'xaxis', 'yaxis', 'zaxis']);
     const out: HighlightToken[] = [];
-    const toks = r.tokens.filter((t) => t.kind !== 'eof' && t.kind !== 'nl');
-    const locals = fig ? localNameTokens(toks, fig) : new Set<number>();
-    toks.forEach((t, i) => {
-      const sp = sm.span(t.s, t.e);
-      let kind: HighlightKind;
-      switch (t.kind) {
-        case 'num':
-          kind = 'number';
-          break;
-        case 'str':
-          kind = 'string';
-          break;
-        case 'comment':
-          kind = 'comment';
-          break;
-        case 'kw':
-          kind = 'keyword';
-          break;
-        case 'at':
-          kind = 'directive';
-          break;
-        case 'bad':
-          kind = 'error';
-          break;
-        case 'sqrt':
-          kind = 'function';
-          break;
-        case 'name': {
-          const name = t.name ?? t.text;
-          const next = toks[i + 1];
-          const isCall = next !== undefined && next.kind === 'op' && next.text === '(';
-          const prev = toks[i - 1];
-          if (prev && prev.kind === 'at' && prev.e === t.s) kind = 'directive';
-          else if (isCall && /^[A-Z]/.test(name)) kind = 'command';
-          else if (isCall && functions.lookup(name)) kind = 'function';
-          else if (consts.has(name)) kind = 'constant';
-          else if (!fig || locals.has(i)) kind = 'name';
-          else kind = fig.lookup(name) ? 'object' : 'unknown';
-          break;
-        }
-        default:
-          kind = 'operator';
-      }
-      out.push({ kind, text: sp.token, line: sp.line, col: sp.col, endCol: sp.endCol });
-    });
-    return { tokens: out, errors: r.errors };
+    const errors: LanguageError[] = [];
+    // Each logical line is lexed on its own, so a long script is coloured line by line (the line limit applies to one logical line).
+    for (const logical of splitLogicalLines(source)) {
+      const sm = new SourceMap(logical.text, logical.firstLine);
+      const r = lex(sm);
+      errors.push(...r.errors);
+      colourLine(sm, r.tokens, fig, functions, consts, out);
+    }
+    return { tokens: out, errors };
   } catch {
     return { tokens: [], errors: [] };
   }
+}
+
+function colourLine(
+  sm: SourceMap,
+  all: readonly Token[],
+  fig: FigureView | undefined,
+  functions: { lookup(name: string): unknown },
+  consts: ReadonlySet<string>,
+  out: HighlightToken[],
+): void {
+  const toks = all.filter((t) => t.kind !== 'eof' && t.kind !== 'nl');
+  const locals = fig ? localNameTokens(toks, fig) : new Set<number>();
+  toks.forEach((t, i) => {
+    const sp = sm.span(t.s, t.e);
+    let kind: HighlightKind;
+    switch (t.kind) {
+      case 'num':
+        kind = 'number';
+        break;
+      case 'str':
+        kind = 'string';
+        break;
+      case 'comment':
+        kind = 'comment';
+        break;
+      case 'kw':
+        kind = 'keyword';
+        break;
+      case 'at':
+        kind = 'directive';
+        break;
+      case 'bad':
+        kind = 'error';
+        break;
+      case 'sqrt':
+        kind = 'function';
+        break;
+      case 'name': {
+        const name = t.name ?? t.text;
+        const next = toks[i + 1];
+        const isCall = next !== undefined && next.kind === 'op' && next.text === '(';
+        const prev = toks[i - 1];
+        if (prev && prev.kind === 'at' && prev.e === t.s) kind = 'directive';
+        else if (isCall && /^[A-Z]/.test(name)) kind = 'command';
+        else if (isCall && functions.lookup(name)) kind = 'function';
+        else if (consts.has(name)) kind = 'constant';
+        else if (!fig || locals.has(i)) kind = 'name';
+        else kind = fig.lookup(name) ? 'object' : 'unknown';
+        break;
+      }
+      default:
+        kind = 'operator';
+    }
+    out.push({ kind, text: sp.token, line: sp.line, col: sp.col, endCol: sp.endCol });
+  });
 }

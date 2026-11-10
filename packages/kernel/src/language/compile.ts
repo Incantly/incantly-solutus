@@ -43,6 +43,12 @@ export interface CompileOptions {
 
 export interface CompiledLine extends Compiled<unknown> {
   readonly line: CheckedLine;
+  /** Objects read by style values: the inputs of the property rules (style edges), not of the value. */
+  readonly styleReads: ReadonlySet<ObjId>;
+  /** Objects read by the bounds of a slider range; not inputs of the value. */
+  readonly rangeReads: ReadonlySet<ObjId>;
+  /** True when a style value or a range bound reads the clock. */
+  readonly styleUsesT: boolean;
   /** Style values by key; each evaluates in the same environment. */
   readonly style: readonly { readonly key: string; readonly word?: string; readonly eval?: Fn }[];
   /** Slider range evaluators. */
@@ -55,12 +61,32 @@ export interface CompiledLine extends Compiled<unknown> {
 
 const NAN = Number.NaN;
 
-function setNanReason(env: Env, v: number, usesInf: boolean): number {
+/** Longest text a value may have (errors.md section 7); literals are limited by the checker. */
+const MAX_TEXT_LENGTH = 10000;
+
+/**
+ * Final check of a Number result. An infinity that reaches here came from an `inf` (written or stored) through operations
+ * that each had an infinite input, because every operation that made one from finite inputs already failed with
+ * `overflow` (see `guardInf`). It is a value (README decision 7); anything else that is not finite is undefined.
+ */
+function setNanReason(env: Env, v: number): number {
   if (v - v === 0) return v;
-  // an infinity that comes from an `inf` input is a value (README decision 7); one made by overflow is not
-  if ((v === Infinity || v === -Infinity) && (usesInf || env.inf === true)) return v;
-  if (env.reason === undefined) env.reason = v !== v || usesInf ? 'not_finite' : 'overflow';
+  if (v === Infinity || v === -Infinity) return v;
+  if (env.reason === undefined) env.reason = 'not_finite';
   return NAN;
+}
+
+/**
+ * Infinity follows the value, not the line: an operation may return an infinity only when one of its own inputs was
+ * infinite. When it made one from finite inputs, that is overflow and the result is undefined (ruling Q4).
+ */
+function guardInf(env: Env, v: number, a: number, b: number): number {
+  if (v - v === 0 || v !== v) return v;
+  if (a - a === 0 && b - b === 0) {
+    fail(env, 'overflow', 'a result too large to store');
+    return NAN;
+  }
+  return v;
 }
 
 function failInput(env: Env, id: ObjId): void {
@@ -175,7 +201,6 @@ function fieldOf(type: string, field: string, v: unknown): unknown {
 /* --------------------------------- compiler --------------------------------- */
 
 class Compiler {
-  usesInf = false;
   constructor(readonly opts: CompileOptions) {}
 
   isConstant(n: TNode): boolean {
@@ -191,6 +216,12 @@ class Compiler {
         return false;
       case 'undef':
         return false;
+      // These call the MathLib, which the host may swap after compiling, so they are evaluated every time, never folded.
+      case 'builtin':
+      case 'field':
+        return false;
+      case 'bin':
+        return n.op !== '^' && children(n).every((c) => this.isConstant(c));
       default:
         return children(n).every((c) => this.isConstant(c));
     }
@@ -226,7 +257,6 @@ class Compiler {
       }
       case 'const': {
         const v = n.value;
-        if (n.name === 'inf') this.usesInf = true;
         return () => v;
       }
       case 'undef':
@@ -249,7 +279,6 @@ class Compiler {
             failInput(env, id);
             return isN ? NAN : undefined;
           }
-          if (v === Infinity || v === -Infinity) env.inf = true;
           return v;
         };
       }
@@ -355,6 +384,10 @@ class Compiler {
         else if (typeof v === 'boolean') out += v ? 'true' : 'false';
         else if (typeof v === 'string') out += v;
         else out += `(${formatNumber((v as Pt).x, p.fmt)}, ${formatNumber((v as Pt).y, p.fmt)})`;
+        if (out.length > MAX_TEXT_LENGTH) {
+          fail(env, 'limit', `a text of more than ${MAX_TEXT_LENGTH} characters`);
+          return undefined;
+        }
       }
       return out;
     };
@@ -391,11 +424,26 @@ class Compiler {
       case 'num':
         switch (op) {
           case '+':
-            return (env) => l(env) + r(env);
+            return (env) => {
+              const a = l(env);
+              const b = r(env);
+              const v = a + b;
+              return v - v === 0 ? v : guardInf(env, v, a, b);
+            };
           case '-':
-            return (env) => l(env) - r(env);
+            return (env) => {
+              const a = l(env);
+              const b = r(env);
+              const v = a - b;
+              return v - v === 0 ? v : guardInf(env, v, a, b);
+            };
           case '*':
-            return (env) => l(env) * r(env);
+            return (env) => {
+              const a = l(env);
+              const b = r(env);
+              const v = a * b;
+              return v - v === 0 ? v : guardInf(env, v, a, b);
+            };
           case '/':
             return (env) => {
               const a = l(env);
@@ -404,13 +452,16 @@ class Compiler {
                 fail(env, 'division_by_zero', 'division by zero');
                 return NAN;
               }
-              return a / b;
+              const v = a / b;
+              return v - v === 0 ? v : guardInf(env, v, a, b);
             };
           default:
             return (env) => {
               const a = l(env);
               const b = r(env);
-              return a !== a || b !== b ? NAN : power(a, b, env);
+              if (a !== a || b !== b) return NAN;
+              const v = power(a, b, env);
+              return v - v === 0 ? v : guardInf(env, v, a, b);
             };
         }
       case 'num*vec':
@@ -451,7 +502,19 @@ class Compiler {
           return a === undefined || b === undefined ? undefined : { x: a.x - b.x, y: a.y - b.y };
         };
       case 'text+text':
-        return (env) => (l(env) as string) + (r(env) as string);
+        return (env) => {
+          const a = l(env) as string | undefined;
+          const b = r(env) as string | undefined;
+          if (a === undefined || b === undefined) {
+            fail(env, 'input_undefined', 'a text that is undefined');
+            return undefined;
+          }
+          if (a.length + b.length > MAX_TEXT_LENGTH) {
+            fail(env, 'limit', `a text of ${a.length + b.length} characters`);
+            return undefined;
+          }
+          return a + b;
+        };
       case 'bool':
         if (op === 'and') {
           return (env) => {
@@ -498,8 +561,9 @@ class Compiler {
             return undefined;
           }
           const arity = Math.max(typeof a === 'object' ? (a as FunctionValue).arity : 1, typeof b === 'object' ? (b as FunctionValue).arity : 1);
+          const M = getMathLib();
           const f = (x: number, y: number): number =>
-            op === '+' ? x + y : op === '-' ? x - y : op === '*' ? x * y : op === '/' ? x / y : Math.pow(x, y);
+            op === '+' ? x + y : op === '-' ? x - y : op === '*' ? x * y : op === '/' ? x / y : M.pow(x, y);
           return pointwise(env, [a, b], f, arity);
         };
       default:
@@ -563,8 +627,13 @@ class Compiler {
     const args = n.args.map((a) => this.compile(a));
     const retNum = form.returns === 'Number';
     const undef = retNum ? NAN : undefined;
-    const usesInf = this.usesInf;
-    const fin = (env: Env, v: number, anyInf: boolean): number => (v - v === 0 ? v : setNanReason(env, v, anyInf || usesInf));
+    // an infinite result is allowed only when one of this call's own arguments was infinite
+    const fin = (env: Env, v: number, anyInf: boolean): number => {
+      if (v - v === 0) return v;
+      if (anyInf && (v === Infinity || v === -Infinity)) return v;
+      if (env.reason === undefined) env.reason = v !== v || anyInf ? 'not_finite' : 'overflow';
+      return NAN;
+    };
     if (form.n1 && args.length === 1) {
       const f = form.n1;
       const a = args[0] as Fn;
@@ -755,15 +824,26 @@ class Compiler {
       : undefined;
     const ops = collectOps(n.tree);
     return (env): RelationValue => {
+      // x and y are written into the shared locals for the call only, so another line sharing the Env keeps its own slots
       const residual = (x: number, y: number): number => {
+        const ox = env.locals[sx];
+        const oy = env.locals[sy];
         env.locals[sx] = x;
         env.locals[sy] = y;
-        return lhs(env) - rhs(env);
+        const v = lhs(env) - rhs(env);
+        env.locals[sx] = ox;
+        env.locals[sy] = oy;
+        return v;
       };
       const test = (x: number, y: number): boolean | undefined => {
+        const ox = env.locals[sx];
+        const oy = env.locals[sy];
         env.locals[sx] = x;
         env.locals[sy] = y;
-        return tree(env);
+        const v = tree(env);
+        env.locals[sx] = ox;
+        env.locals[sy] = oy;
+        return v;
       };
       let p: RelationValue['poly'];
       if (poly) {
@@ -884,13 +964,12 @@ export function compileNode(n: TNode, opts: CompileOptions = {}): Compiled<unkno
   };
   walk(n);
   const isN = isNum(n);
-  const usesInf = c.usesInf;
   return {
     reads,
     usesT,
     eval: (env) => {
       const v = f(env);
-      if (isN) return setNanReason(env, v as number, usesInf);
+      if (isN) return setNanReason(env, v as number);
       return v;
     },
   };
@@ -924,10 +1003,13 @@ export function compileLine(line: CheckedLine, opts: CompileOptions = {}): Resul
               const saved = env.reason;
               const savedVia = env.via;
               env.reason = undefined;
+              // the parameters live in the shared locals only for this call: put back what the caller had there
+              const before = params.map((p) => env.locals[p.slot]);
               for (let i = 0; i < params.length; i++) env.locals[(params[i] as { slot: number }).slot] = xs[i];
               const v = f(env);
               let out: unknown = v;
-              if (isN) out = setNanReason(env, v as number, c.usesInf);
+              if (isN) out = setNanReason(env, v as number);
+              for (let i = 0; i < params.length; i++) env.locals[(params[i] as { slot: number }).slot] = before[i];
               fv.reason = env.reason;
               env.reason = saved;
               env.via = savedVia;
@@ -939,19 +1021,23 @@ export function compileLine(line: CheckedLine, opts: CompileOptions = {}): Resul
             fv.call1 = (x: number): number => {
               const saved = env.reason;
               env.reason = undefined;
+              const before = env.locals[slot];
               env.locals[slot] = x;
-              const v = setNanReason(env, f(env) as number, c.usesInf);
+              const v = setNanReason(env, f(env) as number);
+              env.locals[slot] = before;
               fv.reason = env.reason;
               env.reason = saved;
               return v;
             };
             fv.batch = (xs: Float64Array, out: Float64Array): void => {
               const saved = env.reason;
+              const before = env.locals[slot];
               for (let i = 0; i < xs.length; i++) {
                 env.reason = undefined;
                 env.locals[slot] = xs[i];
-                out[i] = setNanReason(env, f(env) as number, c.usesInf);
+                out[i] = setNanReason(env, f(env) as number);
               }
+              env.locals[slot] = before;
               env.reason = saved;
             };
           }
@@ -960,7 +1046,7 @@ export function compileLine(line: CheckedLine, opts: CompileOptions = {}): Resul
       } else {
         evalFn = (env) => {
           const v = f(env);
-          return isN ? setNanReason(env, v as number, c.usesInf) : v;
+          return isN ? setNanReason(env, v as number) : v;
         };
         if (expr.n === 'command') {
           command = { spec: expr.spec, form: expr.form, args: c.compileArgs(expr) };
@@ -977,6 +1063,9 @@ export function compileLine(line: CheckedLine, opts: CompileOptions = {}): Resul
       line,
       reads,
       usesT: line.usesT,
+      styleReads: new Set<ObjId>(line.styleReads ?? []),
+      rangeReads: new Set<ObjId>(line.rangeReads ?? []),
+      styleUsesT: line.styleUsesT ?? false,
       eval: evalFn,
       style,
       ...(range ? { range } : {}),
@@ -1002,7 +1091,6 @@ export type EvalResult =
 
 /** Run a compiled line's right-hand side and report the value or why it is undefined. Never throws. */
 export function evaluate(compiled: Compiled<unknown>, env: Env): EvalResult {
-  env.inf = undefined;
   env.reason = undefined;
   env.via = undefined;
   env.detail = undefined;

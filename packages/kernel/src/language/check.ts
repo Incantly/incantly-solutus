@@ -6,10 +6,11 @@
 import type { ErrorKind, Notice } from '../contracts/errors';
 import type { ObjId } from '../contracts/values';
 import type { Arg, CmpOp, Expr, LineKind, ParsedLine } from './ast';
-import { BUILTIN_FUNCTIONS, constantByName } from './builtins';
+import { BUILTIN_FUNCTIONS, constantByName, getMathLib } from './builtins';
 import { Diag, closestNames, notice, typeList } from './errors';
 import type { ArgProblem, ErrorExtra, LanguageError, QuickFix } from './errors';
 import { CONSTANT_NAMES, nameProblem, reservedGroup } from './names';
+import { own } from './props';
 import { classify } from './relation';
 import type { FigureView, FormLike, FunctionTable, ObjectInfo, ParamSpec } from './table';
 import { formText } from './table';
@@ -69,9 +70,15 @@ export interface CheckedLine {
   /** For a rate line: the state and the derivative order. */
   readonly rate?: { readonly target: ObjId; readonly name: string; readonly order: number };
   readonly directive?: { readonly name: string; readonly words: readonly string[] };
-  /** Object ids the line reads. */
+  /** Object ids the value rule of the line reads (the inputs of the object's value, not of its range or style). */
   readonly reads: readonly ObjId[];
   readonly usesT: boolean;
+  /** Object ids read by the bounds of a slider range; they are not inputs of the value. */
+  readonly rangeReads?: readonly ObjId[];
+  /** Object ids read by style values (`showIf`, `color`, `opacity`): the inputs of the property rules (style edges). */
+  readonly styleReads?: readonly ObjId[];
+  /** True when a style value or a range bound reads the clock; the value itself does not. */
+  readonly styleUsesT?: boolean;
   /** Number of local slots the compiled line needs. */
   readonly slots: number;
   /** Canonical source text of the line. */
@@ -171,6 +178,10 @@ class Checker {
   reads = new Set<ObjId>();
   usesT = false;
   hasCommand = false;
+  /** Reads of range bounds and style values, kept apart from the reads of the value (see `apart`). */
+  readonly rangeReads = new Set<ObjId>();
+  readonly styleReads = new Set<ObjId>();
+  styleUsesT = false;
   scopes: Frame[] = [];
   slotCount = 0;
   nodes = 0;
@@ -193,6 +204,26 @@ class Checker {
   }
 
   /* ------------------------------ error sink ------------------------------ */
+
+  /**
+   * Runs `fn` with a fresh set of reads and records what it read in the range or style set instead of the value's reads,
+   * so a slider bound or a style value never makes a free object dependent.
+   */
+  apart<R>(bucket: 'range' | 'style', fn: () => R): R {
+    const savedReads = this.reads;
+    const savedT = this.usesT;
+    this.reads = new Set<ObjId>();
+    this.usesT = false;
+    try {
+      return fn();
+    } finally {
+      const into = bucket === 'range' ? this.rangeReads : this.styleReads;
+      for (const id of this.reads) into.add(id);
+      if (this.usesT) this.styleUsesT = true;
+      this.reads = savedReads;
+      this.usesT = savedT;
+    }
+  }
 
   err(kind: string, s: number, e: number, key: string, params: Record<string, string | number | boolean | readonly string[]>, extra: ErrorExtra = {}): null {
     if (this.errors.length < MAX_ERRORS_PER_LINE) this.errors.push(this.diag.at(kind, s, e, key, params, extra));
@@ -844,8 +875,8 @@ class Checker {
   inferField(e: Expr & { k: 'field' }): TNode | null {
     const t = this.infer(e.target);
     if (!t) return null;
-    const table = FIELDS[t.ty.k];
-    const f = table?.[e.field];
+    const table = own(FIELDS, t.ty.k);
+    const f = table ? own(table, e.field) : undefined;
     if (!f) {
       const avail = table ? Object.keys(table) : [];
       return this.err('type_mismatch', e.fs, e.fe, 'lang.type_mismatch_where', { why: `A ${tyStr(t.ty)} has no field ${e.field}` }, {
@@ -1149,10 +1180,14 @@ class Checker {
 
     // value typing, lazy and cached; speculative when several forms compete
     const speculative = candidates.length > 1;
-    const typed = new Map<number, { node: TNode | null; errors: LanguageError[]; notices: Notice[] }>();
+    // An argument is typed once per expected type: the same text can type differently under different forms (`[]`).
+    const typed = new Map<string, { ai: number; node: TNode | null; errors: LanguageError[]; notices: Notice[] }>();
+    const typedKeys = new Map<number, string[]>();
+    const typedKey = (i: number, hint?: Ty): string => `${i}|${hint ? tyStr(hint) : ''}`;
     const wantsValue = (b: Binding, k: number): boolean => (b.form.params[k] as ParamSpec).kind === undefined || (b.form.params[k] as ParamSpec).kind === 'value';
     const valueArg = (i: number, hint?: Ty): TNode | null => {
-      const hit = typed.get(i);
+      const key = typedKey(i, hint);
+      const hit = typed.get(key);
       if (hit) return hit.node;
       const saved = this.errors;
       const savedN = this.notices;
@@ -1165,13 +1200,26 @@ class Checker {
         const got = { node, errors: this.errors, notices: this.notices };
         this.errors = saved;
         this.notices = savedN;
-        typed.set(i, got);
+        typed.set(key, { ai: i, ...got });
+        const ks = typedKeys.get(i);
+        if (ks) ks.push(key);
+        else typedKeys.set(i, [key]);
       }
       return node;
     };
-    const flush = (i: number): void => {
-      const t = typed.get(i);
+    /** A typing of the argument for display (a diagnosis names its type): any form's will do, so none is typed again. */
+    const shownArg = (i: number): TNode | null => {
+      for (const k of typedKeys.get(i) ?? []) {
+        const t = typed.get(k);
+        if (t?.node) return t.node;
+      }
+      return valueArg(i);
+    };
+    const flushedArgs = new Set<number>();
+    const flush = (i: number, hint?: Ty): void => {
+      const t = typed.get(typedKey(i, hint));
       if (!t) return;
+      flushedArgs.add(i);
       for (const er of t.errors) if (this.errors.length < MAX_ERRORS_PER_LINE) this.errors.push(er);
       this.notices.push(...t.notices);
       t.errors = [];
@@ -1191,6 +1239,8 @@ class Checker {
       score: number;
       invalid: boolean;
       binderBad: { ai: number; arg: Arg }[];
+      /** Errors found inside body arguments while several forms compete; reported if no form passes. */
+      bodyErrors: LanguageError[];
     }
     const testForm = (b: Binding): Test => {
       const problems: ArgProblem[] = [];
@@ -1199,6 +1249,7 @@ class Checker {
       let invalid = false;
       let score = 0;
       const binderBad: { ai: number; arg: Arg }[] = [];
+      const bodyErrors: LanguageError[] = [];
       const frame: Frame = { vars: new Map() };
       // pass 1: values and binders
       b.form.params.forEach((p, k) => {
@@ -1263,8 +1314,13 @@ class Checker {
           const errs = this.errors;
           this.errors = saved;
           this.notices = savedN.concat(this.notices);
-          if (!speculative || errs.length === 0) for (const er of errs) if (this.errors.length < MAX_ERRORS_PER_LINE) this.errors.push(er);
-          else if (speculative && errs.length > 0) invalid = true;
+          if (!speculative) {
+            for (const er of errs) if (this.errors.length < MAX_ERRORS_PER_LINE) this.errors.push(er);
+          } else if (errs.length > 0) {
+            // keep them: if no form passes, the real mistake is reported instead of a form diagnosis
+            invalid = true;
+            bodyErrors.push(...errs);
+          }
           this.scopes.pop();
           this.scopes.pop();
         }
@@ -1294,7 +1350,7 @@ class Checker {
           if (!accepts(set, node.ty)) problems.push(this.problem(ai, rest, a, tyStr(node.ty), setLabel(set)));
         }
       }
-      return { b, problems, bound, tys, score, invalid, binderBad };
+      return { b, problems, bound, tys, score, invalid, binderBad, bodyErrors };
     };
 
     const tests = candidates.map(testForm);
@@ -1317,10 +1373,10 @@ class Checker {
       }
       // flush errors of value args used by the chosen form (none expected: they typed fine)
       best.b.form.params.forEach((p, k) => {
-        if (wantsValue(best.b, k) && best.b.bind[k] !== -1) flush(best.b.bind[k] as number);
+        if (wantsValue(best.b, k) && best.b.bind[k] !== -1) flush(best.b.bind[k] as number, elementHint(best.b, k));
       });
       for (const ai of best.b.restArgs) flush(ai);
-      for (const t of typed.values()) if (t.node) this.notices.push(...t.notices);
+      for (const t of typed.values()) if (t.node && !flushedArgs.has(t.ai)) this.notices.push(...t.notices);
       this.checkBinderUse(best.bound, best.b.form, args);
       return { form: best.b.form as F, bound: best.bound };
     }
@@ -1330,9 +1386,14 @@ class Checker {
     if (failedValueArgs.length > 0) {
       const first = failedValueArgs[0] as Test;
       first.b.form.params.forEach((p, k) => {
-        if (wantsValue(first.b, k) && first.b.bind[k] !== -1) flush(first.b.bind[k] as number);
+        if (wantsValue(first.b, k) && first.b.bind[k] !== -1) flush(first.b.bind[k] as number, elementHint(first.b, k));
       });
       for (const ai of first.b.restArgs) flush(ai);
+      if (this.errors.length === 0) {
+        // errors inside a body argument, from the form that came closest, come before any form diagnosis
+        const closest = failedValueArgs.filter((t) => t.bodyErrors.length > 0).sort((x, y) => x.problems.length - y.problems.length)[0];
+        if (closest) for (const er of closest.bodyErrors) if (this.errors.length < MAX_ERRORS_PER_LINE) this.errors.push(er);
+      }
       if (this.errors.length > 0) {
         this.reportBinders(first.binderBad);
         return null;
@@ -1343,7 +1404,7 @@ class Checker {
       this.reportBinders(badBinders.binderBad);
       return null;
     }
-    return this.diagnose(specName, forms, call, bindings, tests, valueArg);
+    return this.diagnose(specName, forms, call, bindings, tests, shownArg);
   }
 
   reportBinders(bad: readonly { ai: number; arg: Arg }[]): void {
@@ -1598,7 +1659,7 @@ export function foldNumber(n: TNode): number | undefined {
         case '/':
           return b === 0 ? undefined : a / b;
         case '^':
-          return Math.pow(a, b);
+          return getMathLib().pow(a, b);
       }
       return undefined;
     }

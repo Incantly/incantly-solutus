@@ -109,7 +109,12 @@ export class ScratchFigure implements FigureView {
     const ty = typeof type === 'string' ? (parseTy(type) as Ty) : type;
     const existing = this.byName.get(name);
     const id = existing ? existing.info.id : (this.nextId++ as ObjId);
-    const inputs = (opts.inputs ?? []).map((n) => (this.byName.get(n) as Entry).info.id);
+    // an input name the figure does not know is skipped: this method returns the object, it never throws
+    const inputs: ObjId[] = [];
+    for (const n of opts.inputs ?? []) {
+      const dep = this.byName.get(n);
+      if (dep) inputs.push(dep.info.id);
+    }
     const info: ObjectInfo = {
       id,
       name,
@@ -216,8 +221,13 @@ export class ScratchFigure implements FigureView {
  * The names a definition line would create, read from the text alone (so it works for lines that
  * fail to parse): `A = …`, `f(x) = …`, `A, B = …`, `v' = …` gives nothing.
  */
+// a name may carry a braced subscript, `P_{1}`, which is stored as the lexer reads it: `P_1`
+const TARGET_NAME = String.raw`[A-Za-z\u0370-\u03FF][A-Za-z0-9_\u0370-\u03FF]*(?:(?<=_)\{[A-Za-z0-9,]+\})?`;
+const TARGET_LINE = new RegExp(String.raw`^\s*(${TARGET_NAME}(?:\s*,\s*${TARGET_NAME})*)\s*(?:\([^)]*\))?\s*=(?!=)`);
+const TARGET_EACH = new RegExp(TARGET_NAME, 'g');
+
 export function targetNamesOf(source: string): string[] {
-  const m = /^\s*([A-Za-z\u0370-\u03FF][A-Za-z0-9_\u0370-\u03FF]*(?:\s*,\s*[A-Za-z\u0370-\u03FF][A-Za-z0-9_\u0370-\u03FF]*)*)\s*(?:\([^)]*\))?\s*=(?!=)/.exec(source);
+  const m = TARGET_LINE.exec(source);
   if (!m) return [];
-  return (m[1] as string).split(',').map((s) => s.trim());
+  return (m[1] as string).match(TARGET_EACH)?.map((n) => n.replace(/^(.*)_\{([A-Za-z0-9]+)\}$/, '$1_$2')) ?? [];
 }

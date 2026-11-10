@@ -103,8 +103,8 @@ class Parser {
       if (forms.length > 0) extra.forms = forms;
     }
     if (atEnd) {
-      const e = this.sm.text.length;
-      const s = t.kind === 'eof' ? e : t.s;
+      // the end token of a text interpolation sits on its closing brace, not at the end of the whole line
+      const s = t.s;
       throw new Stop(this.diag.at('syntax', s, s, 'lang.syntax_end', { token: '', expected: expected.join(', ') || 'more input' }, { ...extra, fingerprintKey: 'end' }));
     }
     if (inCall !== undefined && isUpper(inCall) && (t.text === ',' || t.text === ')')) {
@@ -669,7 +669,12 @@ class Parser {
       if (t.kind === 'op' && (t.text === '*' || t.text === '/')) {
         this.next();
         const r = this.parseUnary();
-        if (t.text === '/' && r.k === 'bin' && r.implicit && !r.paren) this.ambiguousDivision(l, r);
+        if (t.text === '/') {
+          // look through leading signs: 1/-2x divides by the implicit product 2x as much as 1/2x does
+          let q: Expr = r;
+          while (q.k === 'unary' && (q.op === '-' || q.op === '+') && !q.paren) q = q.arg;
+          if (q.k === 'bin' && q.implicit && !q.paren) this.ambiguousDivision(l, r, q);
+        }
         l = { k: 'bin', op: t.text as BinOp, l, r, s: l.s, e: r.e };
         continue;
       }
@@ -677,11 +682,13 @@ class Parser {
     }
   }
 
-  ambiguousDivision(l: Expr, r: Expr & { k: 'bin' }): never {
+  /** `r` is the right operand as written (it may start with signs); `imp` is the implicit product inside it. */
+  ambiguousDivision(l: Expr, r: Expr, imp: Expr & { k: 'bin' }): never {
     const text = this.sm.text;
     const lt = text.slice(l.s, l.e);
-    const num = text.slice(r.l.s, r.l.e);
-    const rest = text.slice(r.r.s, r.r.e);
+    const signs = text.slice(r.s, imp.s);
+    const num = signs + text.slice(imp.l.s, imp.l.e);
+    const rest = text.slice(imp.r.s, imp.r.e);
     const whole = text.slice(r.s, r.e);
     const before = text.slice(0, l.s);
     const after = text.slice(r.e);
@@ -952,6 +959,7 @@ class Parser {
       else {
         const sub = new Parser([...p.toks, { kind: 'eof', text: '', s: p.e - 1, e: p.e - 1 }], this.sm, this.opts);
         sub.lineHead = 'other';
+        sub.depth = this.depth;
         if (p.toks.length === 0) {
           throw new Stop(this.diag.at('syntax', p.s, p.e, 'lang.syntax', { token: '{}', expected: 'expression' }, { expected: ['expression'], hint: 'Put an expression inside { }.', fingerprintKey: '{}' }));
         }
@@ -1089,17 +1097,24 @@ function parseLineInner(source: string, opts: ParseOptions): Result<ParsedLine> 
     const sm = new SourceMap(source, opts.line ?? 1);
     const second = nonEmpty[1] as { text: string; firstLine: number };
     const diag = new Diag(sm);
-    const idx = source.indexOf(second.text);
-    return diag.at('syntax', Math.max(0, idx), Math.max(0, idx) + 1, 'lang.syntax', { token: 'a second line', expected: 'one line' }, {
+    // the first character of the second logical line, counted in the normalised text (physical lines match one to one)
+    let idx = 0;
+    for (let n = 1; n < second.firstLine; n++) idx = sm.text.indexOf('\n', idx) + 1;
+    while (idx < sm.text.length && (sm.text[idx] === ' ' || sm.text[idx] === '\t')) idx++;
+    return diag.at('syntax', idx, idx + 1, 'lang.syntax', { token: 'a second line', expected: 'one line' }, {
       expected: ['end of input'],
       hint: 'Send one line at a time (a call may continue on the next line only while a bracket is open).',
       fingerprintKey: 'second_line',
     });
   }
-  return parseLogical(first.text, { ...opts, line: (opts.line ?? 1) });
+  return parseLogical(first.text, { ...opts, line: (opts.line ?? 1) + first.firstLine - 1 });
 }
 
-function parseLogical(text: string, opts: ParseOptions): Result<ParsedLine> {
+/**
+ * `probe` is set when the text is itself a suggestion being tried: its own lexer errors are returned as they are, without
+ * trying a suggestion for it, so the check happens once.
+ */
+function parseLogical(text: string, opts: ParseOptions, probe = false): Result<ParsedLine> {
   const firstLine = opts.line ?? 1;
   const sm = new SourceMap(text, firstLine);
   const lexed = lex(sm);
@@ -1110,8 +1125,8 @@ function parseLogical(text: string, opts: ParseOptions): Result<ParsedLine> {
   if (errors.length > 0) {
     let first = errors[0] as LanguageError;
     // An unbalanced opener at end of line: the suggestion only stays if the completed line parses.
-    if (first.kind === 'unbalanced' && first.suggest.length > 0) {
-      const cand = parseLogical(first.suggest[0] as string, opts);
+    if (!probe && first.kind === 'unbalanced' && first.suggest.length > 0) {
+      const cand = parseLogical(first.suggest[0] as string, opts, true);
       if (!cand.ok) first = { ...first, suggest: [], recovery: 'fix_line' } as LanguageError;
     }
     return first;

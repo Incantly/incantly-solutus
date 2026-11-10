@@ -110,7 +110,7 @@ export function typeSet(text: string): TypeSet {
       any = true;
       continue;
     }
-    const alias = TYPE_ALIASES[p];
+    const alias = Object.hasOwn(TYPE_ALIASES, p) ? TYPE_ALIASES[p] : undefined;
     if (alias) {
       for (const a of alias) {
         const t = parseTy(a);

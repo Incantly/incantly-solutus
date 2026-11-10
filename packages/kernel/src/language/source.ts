@@ -129,7 +129,7 @@ export function normalise(raw: string): Normalised {
     if (mode === 'string' && braceDepth > 0) {
       if (c === '{') braceDepth++;
       else if (c === '}') braceDepth--;
-      else if (c === '"' || c === '”' || c === '“') {
+      else if (c === '"' || c === '”' || c === '“' || c === '„') {
         // closes the string (the lexer reports the unbalanced brace)
         push('"', a, b);
         mode = 'code';
@@ -272,47 +272,92 @@ export interface LogicalLine {
   readonly lineCount: number;
 }
 
-export function splitLogicalLines(program: string): LogicalLine[] {
-  const physical = program.replace(/\r\n?/g, '\n').split('\n');
-  const result: LogicalLine[] = [];
-  let i = 0;
-  while (i < physical.length) {
-    let text = physical[i] as string;
-    const first = i + 1;
-    let depth = bracketDepth(text, 0);
-    let count = 1;
-    while (depth > 0 && i + count < physical.length) {
-      text += '\n' + (physical[i + count] as string);
-      depth = bracketDepth(text, 0);
-      count++;
+/** The four characters that open or close a text; `normalise` turns each into a straight quote. */
+const isQuote = (c: string): boolean => c === '"' || c === '“' || c === '”' || c === '„';
+
+/**
+ * Scans `text[from, to)`, one physical line, and returns the round and square bracket depth at its end, starting from
+ * `depth`. A text never spans a newline and a comment ends at one, so only the depth crosses lines. Texts follow the same
+ * boundaries as `normalise` and the lexer: a backslash escapes the next character, `{` opens an interpolation (whose
+ * brackets belong to the text), and a closing quote ends the text even inside an interpolation. Never negative.
+ */
+export function scanLineDepth(text: string, from: number, to: number, depth: number): number {
+  let inString = false;
+  let braces = 0;
+  for (let i = from; i < to; i++) {
+    const c = text.charCodeAt(i);
+    // a lone carriage return ends a text and a comment, as in `normalise`
+    if (c === 13) {
+      inString = false;
+      braces = 0;
+      continue;
     }
-    result.push({ text, firstLine: first, lineCount: count });
-    i += count;
+    const ch = text[i] as string;
+    if (inString) {
+      if (braces === 0) {
+        if (ch === '\\') i++;
+        else if (ch === '{') braces = 1;
+        else if (isQuote(ch)) inString = false;
+      } else if (ch === '{') braces++;
+      else if (ch === '}') braces--;
+      else if (isQuote(ch)) {
+        inString = false;
+        braces = 0;
+      }
+      continue;
+    }
+    if (ch === '#') {
+      // a comment runs to the end of the line
+      while (i + 1 < to && text.charCodeAt(i + 1) !== 13) i++;
+    } else if (isQuote(ch)) {
+      inString = true;
+      braces = 0;
+    } else if (ch === '(' || ch === '[') depth++;
+    else if ((ch === ')' || ch === ']') && depth > 0) depth--;
+  }
+  return depth;
+}
+
+export function splitLogicalLines(program: string): LogicalLine[] {
+  const text = program.replace(/\r\n?/g, '\n');
+  const result: LogicalLine[] = [];
+  const n = text.length;
+  let pos = 0;
+  let lineNo = 1;
+  while (pos <= n) {
+    // One forward pass: the depth carries over from physical line to physical line, so each character is scanned once.
+    const first = lineNo;
+    const startPos = pos;
+    let depth = 0;
+    let count = 0;
+    let end: number;
+    for (;;) {
+      const nl = text.indexOf('\n', pos);
+      end = nl < 0 ? n : nl;
+      depth = scanLineDepth(text, pos, end, depth);
+      count++;
+      pos = end + 1;
+      if (depth === 0 || nl < 0) break;
+    }
+    result.push({ text: text.slice(startPos, end), firstLine: first, lineCount: count });
+    lineNo += count;
   }
   return result;
 }
 
-/** Open round and square brackets at the end of `text`, ignoring strings and comments. Never negative. */
-function bracketDepth(text: string, start: number): number {
+/**
+ * Offset of the start of the logical line that holds the end of `program` (used for the cursor context). One forward
+ * pass over the physical lines before the last one, with the same rule as `splitLogicalLines`.
+ */
+export function lastLogicalStart(program: string): number {
   let depth = 0;
-  let inString = false;
-  let inComment = false;
-  for (let i = start; i < text.length; i++) {
-    const c = text[i] as string;
-    if (c === '\n') {
-      inComment = false;
-      continue;
-    }
-    if (inComment) continue;
-    if (inString) {
-      if (c === '\\') i++;
-      else if (c === '"' || c === '”' || c === '“') inString = false;
-      continue;
-    }
-    if (c === '#') inComment = true;
-    else if (c === '"' || c === '“' || c === '”' || c === '„') inString = true;
-    else if (c === '(' || c === '[') depth++;
-    else if ((c === ')' || c === ']') && depth > 0) depth--;
+  let start = 0;
+  let pos = 0;
+  for (;;) {
+    const nl = program.indexOf('\n', pos);
+    if (nl < 0) return start;
+    depth = scanLineDepth(program, pos, nl, depth);
+    pos = nl + 1;
+    if (depth === 0) start = pos;
   }
-  return depth;
 }

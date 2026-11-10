@@ -57,6 +57,12 @@ export type RuntimeValue =
   | Float64Array
   | undefined;
 
+/**
+ * One `Env` may evaluate several compiled lines (the flat environment of design 3.15). Function and relation values write
+ * their parameters into `locals` only for the length of a call and put back what was there, so a call into one line never
+ * changes the locals another line is using. `reason`, `via` and `detail` describe the evaluation in progress: call
+ * `evaluate` (or `resetEnv`) between two top-level evaluations.
+ */
 export interface Env {
   /** Film time in seconds. */
   t: number;
@@ -70,8 +76,6 @@ export interface Env {
   via: ObjId | undefined;
   /** Short plain fact for the reason, such as `sqrt(-4)`. */
   detail: string | undefined;
-  /** True once an infinite value (an `inf` that was stored in an object) was read in this evaluation. */
-  inf?: boolean | undefined;
   /** Slot-addressed locals: function parameters, binders, particle names. */
   locals: unknown[];
   /** Current value of an object. `undefined` when the object is undefined. */
@@ -100,7 +104,6 @@ export function createEnv(init: EnvInit = {}): Env {
 }
 
 export function resetEnv(env: Env): void {
-  env.inf = undefined;
   env.reason = undefined;
   env.via = undefined;
   env.detail = undefined;

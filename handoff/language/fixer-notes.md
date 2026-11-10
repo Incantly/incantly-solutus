@@ -47,3 +47,30 @@ Both contradict `rulings.md` Q2 ("`)` followed by a name is `missing_operator`. 
 
 - Q1, Q3 behave as the rulings say already (`not_callable`, `type_mismatch`).
 - Q9, Q12, Q13, Q14 already held; the checker keeps `more` to 7 entries.
+
+# Round 2: checker findings LANG-SM-1 to LANG-SM-21
+
+All 21 findings are `fixed` in `handoff/language/findings.md`, each with a one-line account of what changed and where; none is `blocked`. `npm run lint`, `npm run typecheck` and `npx vitest run packages/kernel/test/spec` pass (1,156 of 1,156, including the tester's `regressions.test.ts`). No test contradicts the docs.
+
+## Where the fix differs from the suggestion
+
+- **SM-5:** over-long logical lines are still joined, not cut at 2,000 characters. The scan is now linear, and the lexer reports one `limit`. Cutting would turn each continuation line into its own error line.
+- **SM-9:** `CheckedLine.reads` now lists only the inputs of the value rule, as the invariant in `docs/state-machines.md` L5 and `docs/features/kernel/design.md` 9.2 say (the cycle check follows value edges only). New fields: `rangeReads`, `styleReads`, `styleUsesT` on `CheckedLine`; `styleReads`, `rangeReads`, `styleUsesT` on `CompiledLine`. The kernel builds property rules from these.
+- **SM-11:** the same per-value rule is applied to arithmetic (`+ - * / ^`), not only builtins, so `1e308 * 10` next to an `inf` is also `overflow`. `Env.inf` and `Compiler.usesInf` are deleted.
+- **SM-13:** builtin calls, field reads and `^` are not constant-folded, instead of versioning compiled lines against `setMathLib`.
+- **SM-18 (preview):** an unnamed line is checked under the name the line would get (taken from the `unnamed_object` error), and error positions are moved back onto the typed text. No `pvwN` appears unless no name was offered.
+- **SM-8:** `normalise` also closes a text on `„` inside `{…}`, so the normaliser, the splitter and the lexer agree.
+
+## Public surface changes
+
+- `props.ts`: new `own(table, key)`.
+- `source.ts`: new `scanLineDepth`, `lastLogicalStart` (not exported from `index.ts`).
+- `Env.inf` removed from `runtime.ts`.
+- `CheckedLine` and `CompiledLine` gain the optional or read-only fields named above.
+
+## Behaviour changes worth knowing
+
+- A line that starts with blank lines reports `ParsedLine.line` as the line of its first non-blank physical line.
+- `1/-2x` and `1/+2x` give `ambiguous_implicit`.
+- A text longer than 10,000 characters at run time is undefined with reason `limit`.
+- `ncr` and `npr` overflow earlier, with the same reason `overflow`.

@@ -91,25 +91,30 @@ export function lex(sm: SourceMap, opts: { maxTokens?: number } = {}): LexResult
     return { tokens: [{ kind: 'eof', text: '', s: 0, e: 0 }], errors, notices };
   }
 
-  const tokens = lexRange(0, text.length, true);
+  // Tokens inside text interpolations count towards the line's total, like the nesting depth.
+  let tokenTotal = 0;
+  const tokens = lexRange(0, text.length, true, 0);
   tokens.push({ kind: 'eof', text: '', s: text.length, e: text.length });
-  if (tokens.length > maxTokens && errors.length === 0) {
+  tokenTotal++;
+  if (tokenTotal > maxTokens && errors.length === 0) {
     errors.push(
-      diag.at('limit', 0, text.length, 'lang.limit', { limit: 'tokens', max: maxTokens, got: tokens.length, what: 'tokens in a line' }, {
+      diag.at('limit', 0, text.length, 'lang.limit', { limit: 'tokens', max: maxTokens, got: tokenTotal, what: 'tokens in a line' }, {
         hint: 'Split the line into shorter lines.',
-        limit: { name: 'tokens', max: maxTokens, got: tokens.length },
+        limit: { name: 'tokens', max: maxTokens, got: tokenTotal },
         fingerprintKey: 'tokens',
       }),
     );
   }
   return { tokens, errors, notices };
 
-  function lexRange(from: number, to: number, top: boolean): Token[] {
+  /** `base` is the number of brackets already open around this range (an interpolation sits inside its text's brackets). */
+  function lexRange(from: number, to: number, top: boolean, base: number): Token[] {
     const out: Token[] = [];
     const stack: { ch: string; at: number }[] = [];
     let i = from;
     const push = (t: Token): void => {
       out.push(t);
+      tokenTotal++;
     };
 
     while (i < to) {
@@ -143,7 +148,7 @@ export function lex(sm: SourceMap, opts: { maxTokens?: number } = {}): LexResult
         continue;
       }
       if (c === '"') {
-        const r = lexString(i, to);
+        const r = lexString(i, to, base + stack.length);
         push(r.tok);
         i = r.next;
         continue;
@@ -199,11 +204,11 @@ export function lex(sm: SourceMap, opts: { maxTokens?: number } = {}): LexResult
         continue;
       }
       if (c === '(' || c === '[') {
-        if (stack.length >= MAX_DEPTH) {
+        if (base + stack.length >= MAX_DEPTH) {
           errors.push(
-            diag.at('limit', i, i + 1, 'lang.limit', { limit: 'nesting_depth', max: MAX_DEPTH, got: stack.length + 1, what: 'levels of nesting' }, {
+            diag.at('limit', i, i + 1, 'lang.limit', { limit: 'nesting_depth', max: MAX_DEPTH, got: base + stack.length + 1, what: 'levels of nesting' }, {
               hint: 'Define the inner part as its own object first.',
-              limit: { name: 'nesting_depth', max: MAX_DEPTH, got: stack.length + 1 },
+              limit: { name: 'nesting_depth', max: MAX_DEPTH, got: base + stack.length + 1 },
               fingerprintKey: 'nesting_depth',
             }),
           );
@@ -244,9 +249,11 @@ export function lex(sm: SourceMap, opts: { maxTokens?: number } = {}): LexResult
         continue;
       }
       // anything else is not part of the language
-      push({ kind: 'bad', text: c, s: i, e: i + (c.length > 0 && c.codePointAt(0)! > 0xffff ? 2 : 1) });
+      // one character, which is two UTF-16 units outside the Basic Multilingual Plane
+      const width = (text.codePointAt(i) as number) > 0xffff ? 2 : 1;
+      push({ kind: 'bad', text: text.slice(i, i + width), s: i, e: i + width });
       errors.push(badChar(i));
-      i += c.codePointAt(0)! > 0xffff ? 2 : 1;
+      i += width;
     }
 
     if (top && stack.length > 0) {
@@ -258,7 +265,12 @@ export function lex(sm: SourceMap, opts: { maxTokens?: number } = {}): LexResult
         .map((x) => CLOSER_OF[x.ch] as string)
         .join('');
       const sp = sm.span(opener.at, opener.at + 1);
-      const sugg = sm.text.replace(/\s+$/, '') + closers;
+      // The closers go before a trailing comment, or they would be part of it.
+      const tail = out[out.length - 1];
+      const sugg =
+        tail !== undefined && tail.kind === 'comment'
+          ? sm.text.slice(0, tail.s).replace(/\s+$/, '') + closers + ' ' + sm.text.slice(tail.s)
+          : sm.text.replace(/\s+$/, '') + closers;
       errors.push(
         diag.at('unbalanced', opener.at, opener.at + 1, 'lang.unbalanced_open', { open: opener.ch, col: sp.col }, {
           expected: [CLOSER_OF[opener.ch] as string],
@@ -415,7 +427,7 @@ export function lex(sm: SourceMap, opts: { maxTokens?: number } = {}): LexResult
     return { tok: { kind: 'num', text: raw, s: i, e: j, num: value, int: isInt }, next: j };
   }
 
-  function lexString(i: number, to: number): { tok: Token; next: number } {
+  function lexString(i: number, to: number, base: number): { tok: Token; next: number } {
     const parts: StrPart[] = [];
     let lit = '';
     let litStart = i + 1;
@@ -481,7 +493,7 @@ export function lex(sm: SourceMap, opts: { maxTokens?: number } = {}): LexResult
           continue;
         }
         const exprEnd = colonAt >= 0 ? colonAt : k;
-        const toks = lexRange(j + 1, exprEnd, false);
+        const toks = lexRange(j + 1, exprEnd, false, base);
         const part: { toks: Token[]; fmt?: string; s: number; e: number } = { toks, s: j, e: k + 1 };
         if (colonAt >= 0) {
           const fmt = text.slice(colonAt + 1, k).trim();

@@ -16,6 +16,11 @@ export interface PropSpec {
   readonly expr?: boolean;
 }
 
+/** Looks a key up among a registry's own entries, never on `Object.prototype`. */
+export function own<T>(table: Readonly<Record<string, T>>, key: string): T | undefined {
+  return Object.hasOwn(table, key) ? table[key] : undefined;
+}
+
 export const PROPERTIES: Record<string, PropSpec> = {
   visible: { kind: 'bool', allowed: 'true or false' },
   label: { kind: 'enum', values: ['name', 'value', 'both', 'caption', 'none'], allowed: 'name, value, both, caption or none' },

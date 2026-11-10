@@ -11,7 +11,7 @@ import { buildError, closestNames, notice, withMore } from './errors';
 import type { ErrorExtra, LanguageError } from './errors';
 import { nameProblem, reservedGroup, reservedGroupText } from './names';
 import { printLineNode } from './printer';
-import { COLOR_WORDS, DIRECTIVES, PROPERTIES } from './props';
+import { COLOR_WORDS, DIRECTIVES, PROPERTIES, own } from './props';
 import type { ObjectInfo } from './table';
 import type { TNode } from './tnode';
 import { T, fnOf, tyEq, tyStr } from './types';
@@ -26,7 +26,7 @@ const shapeType = (shape: string): Ty => (shape === 'line' ? T.Line : shape === 
 /** Check one parsed line against the figure. Nothing is changed; the result is a typed description of the line. */
 export function checkLine(parsed: ParsedLine, fig: import('./table').FigureView, opts: CheckOptions = {}): Result<CheckedLine> {
   const c = new Checker(fig, parsed, opts);
-  let result: Omit<CheckedLine, 'line' | 'text' | 'source' | 'reads' | 'usesT' | 'slots'> | undefined;
+  let result: Partial0 | undefined;
   try {
     result = run(c, parsed.node);
   } catch (err) {
@@ -46,12 +46,15 @@ export function checkLine(parsed: ParsedLine, fig: import('./table').FigureView,
     source: parsed.source,
     reads: [...c.reads],
     usesT: c.usesT,
+    ...(c.rangeReads.size > 0 ? { rangeReads: [...c.rangeReads] } : {}),
+    ...(c.styleReads.size > 0 ? { styleReads: [...c.styleReads] } : {}),
+    ...(c.styleUsesT ? { styleUsesT: true } : {}),
     slots: c.slotCount,
   };
   return { ok: true, value: checked, notices: c.notices };
 }
 
-type Partial0 = Omit<CheckedLine, 'line' | 'text' | 'source' | 'reads' | 'usesT' | 'slots'>;
+type Partial0 = Omit<CheckedLine, 'line' | 'text' | 'source' | 'reads' | 'usesT' | 'rangeReads' | 'styleReads' | 'styleUsesT' | 'slots'>;
 
 function run(c: Checker, node: LineNode): Partial0 | undefined {
   switch (node.k) {
@@ -122,21 +125,32 @@ function sameKind(old: Ty, neu: Ty): boolean {
   return tyEq(old, neu);
 }
 
+/**
+ * Depth-first search from `from` along `inputsOf` for `target`. Iterative, so the stack depth does not grow with the
+ * chain length; the path is read off the explicit stack only when the target is found.
+ */
 function findPath(c: Checker, from: Iterable<ObjId>, target: ObjId): ObjId[] | undefined {
   const seen = new Set<ObjId>();
-  const dfs = (id: ObjId, path: ObjId[]): ObjId[] | undefined => {
-    if (id === target) return [...path, id];
-    if (seen.has(id)) return undefined;
-    seen.add(id);
-    for (const nx of c.fig.inputsOf(id)) {
-      const r = dfs(nx, [...path, id]);
-      if (r) return r;
+  for (const first of from) {
+    if (first === target) return [first];
+    if (seen.has(first)) continue;
+    seen.add(first);
+    const ids: ObjId[] = [first];
+    const iters: Iterator<ObjId>[] = [c.fig.inputsOf(first)[Symbol.iterator]()];
+    while (iters.length > 0) {
+      const step = (iters[iters.length - 1] as Iterator<ObjId>).next();
+      if (step.done) {
+        iters.pop();
+        ids.pop();
+        continue;
+      }
+      const nx = step.value;
+      if (nx === target) return [...ids, nx];
+      if (seen.has(nx)) continue;
+      seen.add(nx);
+      ids.push(nx);
+      iters.push(c.fig.inputsOf(nx)[Symbol.iterator]());
     }
-    return undefined;
-  };
-  for (const f of from) {
-    const r = dfs(f, []);
-    if (r) return r;
   }
   return undefined;
 }
@@ -290,7 +304,7 @@ function checkStyle(c: Checker, items: readonly StyleItem[]): CheckedStyle[] {
   const out: CheckedStyle[] = [];
   const keys = Object.keys(PROPERTIES);
   for (const it of items) {
-    const spec = PROPERTIES[it.key];
+    const spec = own(PROPERTIES, it.key);
     if (!spec) {
       const close = closestNames(it.key, keys, 3);
       c.err('unknown_property', it.ks, it.ke, 'lang.unknown_property', { key: it.key }, {
@@ -420,10 +434,11 @@ function checkDefine(c: Checker, node: Extract<LineNode, { k: 'define' }>): Part
         fingerprintKey: 'range_type',
       });
     } else {
-      range = checkRange(c, node.range, tn ?? undefined);
+      const rangeClause = node.range;
+      range = c.apart('range', () => checkRange(c, rangeClause, tn ?? undefined));
     }
   }
-  const style = node.style ? checkStyle(c, node.style) : undefined;
+  const style = node.style ? c.apart('style', () => checkStyle(c, node.style as readonly StyleItem[])) : undefined;
   if (!tn) return undefined;
 
   const type = tn.n === 'relation' ? shapeType(tn.shape) : tn.ty;
@@ -577,7 +592,7 @@ function checkFunction(c: Checker, node: Extract<LineNode, { k: 'function' }>): 
   } finally {
     c.popFrame();
   }
-  const style = node.style ? checkStyle(c, node.style) : undefined;
+  const style = node.style ? c.apart('style', () => checkStyle(c, node.style as readonly StyleItem[])) : undefined;
   if (!body || !ok) return undefined;
   if (body.ty.k !== 'Number' && body.ty.k !== 'Point') {
     c.err('type_mismatch', body.s, body.e, 'lang.type_mismatch_where', { why: `A function returns a Number or a Point, but this is a ${tyStr(body.ty)}` }, {
@@ -665,7 +680,7 @@ function checkRestyle(c: Checker, node: Extract<LineNode, { k: 'restyle' }>): Pa
     c.unknownNameAt(t);
     return undefined;
   }
-  const style = checkStyle(c, node.style);
+  const style = c.apart('style', () => checkStyle(c, node.style));
   if (c.errors.length > 0) return undefined;
   return { kind: 'restyle', op: 'restyle', names: [t.name], type: obj.type, free: false, isState: false, existing: obj.id, style };
 }
@@ -688,7 +703,7 @@ function checkRerange(c: Checker, node: Extract<LineNode, { k: 'rerange' }>): Pa
     });
     return undefined;
   }
-  const range = checkRange(c, node.range, undefined);
+  const range = c.apart('range', () => checkRange(c, node.range, undefined));
   if (!range) return undefined;
   return { kind: 'rerange', op: 'rerange', names: [t.name], type: obj.type, free: true, isState: false, existing: obj.id, range };
 }
@@ -724,7 +739,7 @@ function suggestNameFor(t: Ty, taken: Set<string>, c: Checker): string {
 
 function checkDirective(c: Checker, node: Extract<LineNode, { k: 'directive' }>): Partial0 | undefined {
   const known = [...Object.keys(DIRECTIVES), ...(c.fig.directives ?? [])];
-  const forms = DIRECTIVES[node.name];
+  const forms = own(DIRECTIVES, node.name);
   if (!forms && !(c.fig.directives ?? []).includes(node.name)) {
     const close = closestNames(node.name, known, 3);
     c.err('unknown_directive', node.ns - 1, node.ne, 'lang.unknown_directive', { token: '@' + node.name }, {

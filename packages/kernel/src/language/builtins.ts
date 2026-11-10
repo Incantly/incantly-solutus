@@ -105,7 +105,7 @@ function lgammaPos(x: number): number {
   let a = LANCZOS[0] as number;
   const t = xm + 7.5;
   for (let i = 1; i < 9; i++) a += (LANCZOS[i] as number) / (xm + i);
-  return 0.5 * Math.log(2 * Math.PI) + (xm + 0.5) * Math.log(t) - t + Math.log(a);
+  return 0.5 * M.log(2 * Math.PI) + (xm + 0.5) * M.log(t) - t + M.log(a);
 }
 
 function gamma(x: number, env: Env): number {
@@ -118,8 +118,8 @@ function gamma(x: number, env: Env): number {
     fail(env, 'overflow', `gamma(${x})`);
     return NaN;
   }
-  if (x < 0.5) return Math.PI / (Math.sin(Math.PI * x) * gamma(1 - x, env));
-  return Math.exp(lgammaPos(x));
+  if (x < 0.5) return Math.PI / (M.sin(Math.PI * x) * gamma(1 - x, env));
+  return M.exp(lgammaPos(x));
 }
 
 function erfSeries(x: number): number {
@@ -132,14 +132,14 @@ function erfSeries(x: number): number {
     sum += add;
     if (Math.abs(add) < 1e-17 * Math.abs(sum)) break;
   }
-  return (2 / Math.sqrt(Math.PI)) * sum;
+  return (2 / M.sqrt(Math.PI)) * sum;
 }
 
 function erfcLarge(x: number): number {
   // x >= 2.5, continued fraction evaluated backwards
   let f = x;
   for (let k = 60; k >= 1; k--) f = x + (k / 2) / f;
-  return Math.exp(-x * x) / (Math.sqrt(Math.PI) * f);
+  return M.exp(-x * x) / (M.sqrt(Math.PI) * f);
 }
 
 function erf(x: number): number {
@@ -428,7 +428,8 @@ const specs: FunctionSpec[] = [
     if (r > n) return 0;
     let v = 1;
     const k = Math.min(r, n - r);
-    for (let i = 1; i <= k; i++) v = (v * (n - k + i)) / i;
+    // The partial products never decrease, so the first infinity is final: stop there.
+    for (let i = 1; i <= k && Number.isFinite(v); i++) v = (v * (n - k + i)) / i;
     if (!Number.isFinite(v)) {
       fail(env, 'overflow', 'ncr');
       return NaN;
@@ -440,7 +441,12 @@ const specs: FunctionSpec[] = [
     if (n < 0 || r < 0) return domain(env, 'npr');
     if (r > n) return 0;
     let v = 1;
-    for (let i = 0; i < r; i++) v *= n - i;
+    // r values of at least 1 whose product passes 170! overflows, so refuse that up front; the loop is short.
+    if (r > 170) {
+      fail(env, 'overflow', 'npr');
+      return NaN;
+    }
+    for (let i = 0; i < r && Number.isFinite(v); i++) v *= n - i;
     if (!Number.isFinite(v)) {
       fail(env, 'overflow', 'npr');
       return NaN;
@@ -451,8 +457,8 @@ const specs: FunctionSpec[] = [
   f1('gamma', 'special', (x, env) => gamma(x, env), 'the gamma function'),
   f2('beta', 'special', (a, b, env) => {
     if (a <= 0 || b <= 0) return domain(env, 'beta');
-    const g = (z: number): number => (z < 0.5 ? lgammaPos(z + 1) - Math.log(z) : lgammaPos(z));
-    return Math.exp(g(a) + g(b) - g(a + b));
+    const g = (z: number): number => (z < 0.5 ? lgammaPos(z + 1) - M.log(z) : lgammaPos(z));
+    return M.exp(g(a) + g(b) - g(a + b));
   }, 'the beta function'),
   f1('erf', 'special', (x) => erf(x), 'the error function'),
   f1('erfc', 'special', (x) => erfc(x), 'the complementary error function'),
