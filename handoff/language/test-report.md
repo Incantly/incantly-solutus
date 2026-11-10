@@ -93,7 +93,7 @@ All other tests pass, including the tests for Q1, Q3, Q5 to Q14 and the depth ru
 
 ## Regression tests
 
-`packages/kernel/test/spec/language/regressions.test.ts` holds 128 tests: 86 for the checker's round 1 findings LANG-SM-1 to LANG-SM-21 and 42 added in round 2 for LANG-SM-9 (reopened), LANG-SM-22, LANG-SM-23 and LANG-SM-24 (`handoff/language/findings.md`). They use the public API only. Each finding has at least one test that fails before its fix and passes after it. Hang and memory tests assert a time or size bound.
+`packages/kernel/test/spec/language/regressions.test.ts` holds 253 tests (128 after round 2, see "Round 3 tests"): 86 for the checker's round 1 findings LANG-SM-1 to LANG-SM-21 and 42 added in round 2 for LANG-SM-9 (reopened), LANG-SM-22, LANG-SM-23 and LANG-SM-24 (`handoff/language/findings.md`). They use the public API only. Each finding has at least one test that fails before its fix and passes after it. Hang and memory tests assert a time or size bound.
 
 Round 1 tests (86): all pass on the current worktree (they were checked against commit `35067a3`, where 59 fail and every finding has a failing test). Round 2 tests (42): checked against commit `35e9177` (the last commit before the round 2 fixes), where 32 fail and every round 2 finding has at least one failing test. Run against the worktree while the fixer is still working: 23 of the 42 pass, 19 fail (table at the end of this section).
 
@@ -253,3 +253,37 @@ Notes on readings the findings leave open:
 |  | `the offers after a colour match the offers without it (control)` | fail |
 
 Command: `npx vitest run packages/kernel/test/spec` gives 1198 tests, 1179 passed, 19 failed (all in `regressions.test.ts`: 8 for LANG-SM-22, 11 for LANG-SM-24). The fixer's uncommitted changes in `packages/kernel/src/language/` are in the worktree and already make the LANG-SM-9 and LANG-SM-23 tests pass. `npm run typecheck` and `eslint` on the test file are clean.
+
+### Round 3 tests
+
+`regressions.test.ts` goes from 128 to 253 tests: one LANG-SM-23 test changed, one added, and 123 new tests for LANG-SM-24 (reopened), LANG-SM-25, LANG-SM-26 and LANG-SM-27. They use `@incantly/kernel` only. Checked against commit `3550111` with the `src` changes left out: 59 of the 253 fail, and every round 3 finding has failing tests. Run against the worktree with the fixer's uncommitted `src` changes: 253 of 253 pass, and `npx vitest run packages/kernel/test/spec` gives 1,323 of 1,323. `npm run typecheck` and `eslint` on the test file are clean.
+
+Notes on readings the findings leave open:
+
+- LANG-SM-23: ruling SM-23 now counts range edges only. The test that expected `a = 3 with opacity = b / 10` to be a `cycle` now expects it accepted with `a` still free. A new test keeps `a = 3 in 0..b with opacity = 0.5` a `cycle`.
+- LANG-SM-27: a new name that reads itself in its own style (`P9 = (1, 2) with showIf = P9.x > 0` on an empty figure) is `unknown_name` by design 3.19, so the self-reading cases use an object that already exists.
+- LANG-SM-24: the blanks tested between `=` and `#` are space, tab, U+00A0, U+2009, U+202F, U+2003 and U+2002. A `#` after a value (not after `=`) stays a comment for every blank. Tokenize agreement means the same token kinds as the plain-space line.
+- LANG-SM-25 and LANG-SM-26 are one table (`it.each`, 47 rows) over Number, List, Function, Point and Vector. Functions are judged at a point (`q = f / 0`, then `q(1)`). A point has no division, so its division-by-zero rows divide the vector in `P + V / 0`. An infinite input is accepted as a defined value holding an infinity and no NaN, or as an undefined value whose reason is neither `overflow` nor `division_by_zero`. Every row also checks that `defined` is false exactly when `reason` is set, and that a defined value has no NaN part.
+
+| Finding | Tests | At `3550111` | Now |
+|---|---|---|---|
+| LANG-SM-23 | style case now accepted (changed) | fail | pass |
+|  | range cycle with a style on the same line (new) | pass | pass |
+| LANG-SM-27 | `P with showIf = P.x > 0`, `P with opacity = if(...)`, `P = (1, 2) with showIf = P.x > 0` | fail | pass |
+|  | `P with showIf = Q.x > 0` and `P = (1, 2) with opacity = Q.x / 10` with `Q` reading `P` | fail | pass |
+|  | `a = 3 in 0..20 with opacity = a / 20`, `a with opacity = a / 20`, style reading a dependent | fail | pass |
+|  | object stays free; style reads stay out of the value reads | fail | pass |
+|  | range cycles and value cycles are still `cycle` (controls); a style on the slider does not change the range answer | pass, fail | pass |
+| LANG-SM-24 | for each of U+2009, U+202F, U+2003, U+2002: Unicode minus after the colour, definition, continuation line, `parseProgram`, `tokenize`, completion | fail (6 each) | pass |
+|  | same tests for space, tab and U+00A0; comment after a colour; colour last | pass | pass |
+|  | all blanks and all four colour lengths in the scanners together | fail | pass |
+| LANG-SM-25 | List `/ 0` (3 rows), Function `/ 0`, `/ w`, `^ -1` (4 rows) give `division_by_zero` | fail | pass |
+|  | Number `/ 0`, Vector `/ 0`, Point `P + V / 0` give `division_by_zero` | pass | pass |
+|  | `input_undefined` rows for all five kinds | pass | pass |
+|  | a list divided by zero is not a defined list; Number, List and Function agree on the reason | fail | pass |
+| LANG-SM-26 | Vector `VB * 10`, `10 * VB`, `VB / 1e-10`, `VB + VB`, `VB - NVB`, point minus point; Point `PB + VB`, `PB - NVB` give `overflow` | fail | pass |
+|  | `inf - inf` gives `not_finite` for List, Vector and Point | fail | pass |
+|  | Number and Function `inf - inf`; Number, List and Function overflow; infinite-input rows for all kinds | pass | pass |
+|  | overflowing point or vector is never a defined `(inf, 0)`; Number and vector agree | fail | pass |
+
+Round 3 findings with a failing test now: none.
