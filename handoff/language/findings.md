@@ -243,7 +243,8 @@ Checker round 4 (pipeline step 7, after the product owner's narrowed ruling SM-2
   - `residual` and `test` (`compile.ts:960-977`) save and restore the `x` and `y` slots but not `reason`, `via` or `detail`, unlike function values (`compile.ts:1181-1196`, which save and restore them). After `env.reason = undefined`, `c3.residual(1e200, 0)` returns `NaN` and leaves `env.reason` as `overflow`. When the kernel samples a relation inside another line's evaluation on the shared Env (design 3.15, for example a command that intersects a curve), that line gets `overflow` as its reason, or keeps it over its own reason since the first reason wins.
 - **Invariant broken:** L8 (an infinity made from finite inputs is undefined `overflow` on every path) and L9 (a call into a function or relation value leaves the caller's reason and via as they were; a value is undefined exactly when its reason is set).
 - **Suggested fix:** in `compileRelation`, return `undefined` (keeping the `overflow` or `not_finite` reason) when a coefficient is not a number while its inputs were finite; an infinite coefficient from an `inf` input stays a value. In `residual` and `test`, save and restore `reason`, `via` and `detail` as function values do.
-- **status:** open
+- **status:** fixed
+- **fix (round 5):** `compileRelation` returns an undefined relation (with the coefficient's reason, or `not_finite`) when a coefficient is not a number; `residual` and `test` save and restore `reason`, `via` and `detail` and give NaN for a difference of finite sides that overflows; function values (`call`, `call1`, `batch`) restore `via` and `detail` too (`compile.ts`).
 
 ### LANG-SM-30: `hsl` and `hsv` with an infinite hue give a defined colour with a NaN channel
 

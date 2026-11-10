@@ -960,32 +960,41 @@ class Compiler {
       ? { xx: this.compile(n.poly.xx), xy: this.compile(n.poly.xy), yy: this.compile(n.poly.yy), x: this.compile(n.poly.x), y: this.compile(n.poly.y), c: this.compile(n.poly.c) }
       : undefined;
     const ops = collectOps(n.tree);
-    return (env): RelationValue => {
-      // x and y are written into the shared locals for the call only, so another line sharing the Env keeps its own slots
-      const residual = (x: number, y: number): number => {
+    return (env): RelationValue | undefined => {
+      // Sampling runs inside whatever line shares this Env: x, y and the undefined reason are put back as the caller had them.
+      const sample = <T>(x: number, y: number, run: () => T): T => {
         const ox = env.locals[sx];
         const oy = env.locals[sy];
+        const reason = env.reason;
+        const via = env.via;
+        const detail = env.detail;
         env.locals[sx] = x;
         env.locals[sy] = y;
-        const v = lhs(env) - rhs(env);
+        const out = run();
         env.locals[sx] = ox;
         env.locals[sy] = oy;
-        return v;
+        env.reason = reason;
+        env.via = via;
+        env.detail = detail;
+        return out;
       };
-      const test = (x: number, y: number): boolean | undefined => {
-        const ox = env.locals[sx];
-        const oy = env.locals[sy];
-        env.locals[sx] = x;
-        env.locals[sy] = y;
-        const v = tree(env);
-        env.locals[sx] = ox;
-        env.locals[sy] = oy;
-        return v;
-      };
+      const residual = (x: number, y: number): number =>
+        sample(x, y, () => {
+          const a = lhs(env);
+          const b = rhs(env);
+          // a difference of finite sides that overflows is undefined; an infinity that follows an infinite side is a value
+          return a - b - (a - b) !== 0 && a - a === 0 && b - b === 0 ? NAN : a - b;
+        });
+      const test = (x: number, y: number): boolean | undefined => sample(x, y, () => tree(env));
       let p: RelationValue['poly'];
       if (poly) {
         const c = { xx: poly.xx(env), xy: poly.xy(env), yy: poly.yy(env), x: poly.x(env), y: poly.y(env), c: poly.c(env) };
-        p = Object.values(c).every((v) => v === v) ? c : undefined;
+        // a coefficient that is not a number (an overflow from finite inputs, `inf - inf`, an undefined input) leaves the relation undefined
+        if (!Object.values(c).every((v) => v === v)) {
+          if (env.reason === undefined) env.reason = 'not_finite';
+          return undefined;
+        }
+        p = c;
       }
       return { ops, residual, test, poly: p };
     };
@@ -1186,6 +1195,7 @@ export function compileLine(line: CheckedLine, opts: CompileOptions = {}): Resul
             call: (...xs: number[]) => {
               const saved = env.reason;
               const savedVia = env.via;
+              const savedDetail = env.detail;
               env.reason = undefined;
               // the parameters live in the shared locals only for this call: put back what the caller had there
               const before = params.map((p) => env.locals[p.slot]);
@@ -1197,6 +1207,7 @@ export function compileLine(line: CheckedLine, opts: CompileOptions = {}): Resul
               fv.reason = env.reason;
               env.reason = saved;
               env.via = savedVia;
+              env.detail = savedDetail;
               return out as number | Pt | undefined;
             },
           };
@@ -1204,6 +1215,8 @@ export function compileLine(line: CheckedLine, opts: CompileOptions = {}): Resul
             const slot = (params[0] as { slot: number }).slot;
             fv.call1 = (x: number): number => {
               const saved = env.reason;
+              const savedVia = env.via;
+              const savedDetail = env.detail;
               env.reason = undefined;
               const before = env.locals[slot];
               env.locals[slot] = x;
@@ -1211,10 +1224,14 @@ export function compileLine(line: CheckedLine, opts: CompileOptions = {}): Resul
               env.locals[slot] = before;
               fv.reason = env.reason;
               env.reason = saved;
+              env.via = savedVia;
+              env.detail = savedDetail;
               return v;
             };
             fv.batch = (xs: Float64Array, out: Float64Array): void => {
               const saved = env.reason;
+              const savedVia = env.via;
+              const savedDetail = env.detail;
               const before = env.locals[slot];
               for (let i = 0; i < xs.length; i++) {
                 env.reason = undefined;
@@ -1223,6 +1240,8 @@ export function compileLine(line: CheckedLine, opts: CompileOptions = {}): Resul
               }
               env.locals[slot] = before;
               env.reason = saved;
+              env.via = savedVia;
+              env.detail = savedDetail;
             };
           }
           return fv;
