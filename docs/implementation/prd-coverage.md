@@ -317,7 +317,7 @@ What remains are the section 10 targets that need a device: time to first render
 | FV-8 | Offline MP4 export on the device: fixed clock, WebCodecs, faster than real time; the real-time recorder as fallback | P1 | Missing | Done | `exportTimelineMp4` with the frame-identity proof, `exportTimelineFallback` where WebCodecs is missing (film-export.test.ts, player.spec.ts). |
 | FV-9 | Narration through a speech provider interface, made at generation time; beat length is audio length plus a hold; word-timed captions; beat lengths estimated from words until audio arrives | P1 | Missing | Done | `Narrator` with the Cartesia client and the stub; estimated lengths until audio lands (film-narration.test.ts, narration.test.ts, tts.test.ts). |
 | FV-10 | SDK-owned mixing of narration, cues and an optional bed ducked under speech; silent until the viewer turns sound on | P1 | Missing | Done | `FilmMixer` with narration, cues and a ducked bed; sound starts off (film-narration.test.ts, player.spec.ts). |
-| FV-11 | Storyboard plan with a shared film context; one scene call per scene, in parallel, each in a normal size budget; cache and reviewed scenes first | P1 | Missing | Done | `generateFilm` under ADR 009: one plan, parallel scene calls, cache and reviewed scenes first (film-multiscene.test.ts). |
+| FV-11 | Storyboard plan with a shared film context; one scene call per scene, in parallel, each in a normal size budget; no stored scene answers one instead | P1 | Missing | Done | `generateFilm` under ADR 009: one plan, parallel scene calls, every slice makes its scene call (film-multiscene.test.ts). |
 | FV-12 | Source map from beats to scene lines and parts; anchors by beat id, never by seconds | P1 | Missing | Done | `compileFilm` source maps; `FilmAnchor` by beat id (film-ask.test.ts). |
 | FV-13 | Questions: Answer (one small call, streamed) and Show me (beat fields on the existing scene, no new scene code) | P1 | Missing | Done | `streamAnswer` with first-words timing; Show me replays beat fields on the live scene (film-ask.test.ts, player.spec.ts). |
 | FV-14 | Versions as patches over an unchanged base film; learner inserts private and pinned by anchor | P2 | Missing | Done | `FilmVersionStore` patches; `PrivateInsertStore` by asker hash with author-only promotion (film-versions.test.ts, player.spec.ts). |
@@ -331,7 +331,7 @@ What remains are the section 10 targets that need a device: time to first render
 | Stream fragments in order | Done | Done | |
 | Pre-warmed frame | Missing | Done | The device probe runs in a frame booted while the scene is written, and kits preload from the skeleton (`warmProbe`); the live figure takes a frame booted while it was made, and gets its markup, styles and script by message (`prewarm`, prewarm.test.ts, sandbox.spec.ts, generate.spec.ts). |
 | Retrieve, ask only for differences | Partial | Done | A plan for a reviewed concept starts from its scene and asks for edits (context.ts, pipeline.test.ts); the plan call names the reviewed concepts. Matching is by words, not embeddings. |
-| Cache by concept | Missing | Done | `ConceptCache` by request and by plan (cache.ts, service.test.ts). |
+| Cache by concept | Missing | Removed | Removed by decision, 2026-11-09: every request is generated fresh, so `cache.ts` is deleted and no stored result ever answers one. |
 | Speed metrics | Partial | Done | Stage timings in every record, the dashboard and the subagent bench (metrics.test.ts, bench.test.ts). |
 
 ## Section 10: non-functional requirements

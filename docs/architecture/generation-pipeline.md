@@ -162,28 +162,17 @@ Every generation leaves a failure record (`records.ts`), written as daily JSON l
 
 Every generation has a hard deadline of three minutes from the request to a checked scene (`DEFAULT_DEADLINE_MS`), of which 1.5 s is kept for the checks and delivery (`DELIVERY_MS`). The product target remains a figure within 10 seconds; the longer hard ceiling prevents a healthy real-model stream from being cancelled merely because it missed that target. A model call is cut off when only the delivery reserve remains; a repair starts only when its estimate, 2 to 4 s, fits in what remains; and when no candidate passes in time, the device takes the next rung of the fallback ladder.
 
-A request takes one of four paths:
+A request takes one of three paths:
 
 | Path | When | Calls | Bench, run 6 (p50 / max) |
 | --- | --- | --- | --- |
 | Library build | The request plainly names a reviewed concept | The scene call adapts that scene by edits at once; the plan call runs beside it only to confirm the concept, from its first words | 2.3 / 5.5 s, 34 of 34 approved |
 | Plan, then edits | The plan names a reviewed concept the request did not | Plan, then edits to that scene | 13.1 s (run 4, one generation) |
 | Plan, then written whole | No reviewed scene for the concept | Plan, then the scene written whole after the nearest reviewed example drawn on the same kind of stage | 15.4 / 23.3 s, 30 of 34 approved |
-| Concept cache | The same request; the same plan as a figure approved before; or an approved figure the plan call chose for the request | No scene call | the plan call, or nothing |
 
 Run 6 covers all seventeen reviewed concepts; run 7, on a slower day for the scene model, approved every library generation on its first attempt and 27 of 34 written whole, two of them cut off at the deadline (see the [bench](../implementation/generation-bench.md)).
 
-### The concept cache, and why it never answers a similar request
-
-An approved figure serves the next learner who asks for the same thing (`cache.ts`, PRD 25.6). A figure that answers a similar request instead, such as a plain sine wave for "a sine wave from Euler's formula, using circles", is a wrong figure, not a stale one, and the learner should never have to ask again to get the right one. So every way in is strict, and the loose one is checked twice:
-
-- **The request.** The same meaningful words, whatever their order or case and however the learner asks ("I want", "show me", "could you"). No model call at all.
-- **The plan.** The same plan, whole: concept, idea, moves, parts, steps, parameters and outputs, with prose reduced to its meaningful words. The scene call sees only the plan, so the cached figure is exactly what a new scene call would have been asked for. A plan that teaches something else or moves differently is another figure, even with the same concept and controls.
-- **A figure the plan call chooses.** Before the plan call, the cache offers up to three approved figures, as one line each of concept and idea, in the request. A figure is offered only when its words, from the requests it answered and its plan, take in every meaningful word of this request, so a request that names anything more ("Euler", "circles", "damping") is never offered a figure without it. The plan call, which reads the whole request, adds `"reuse": "f1"` to its plan only when that figure answers the request fully; otherwise it plans the figure the request needs. This costs no extra call, and the request grows by about 80 tokens only when something is offered.
-
-Keys carry the SDK version, which is checked again on every read, so figures made by an older kit are never served. The cache keeps the 500 keys used most recently in the service's memory. Figures made with note text are never stored under their request.
-
-**Planned: a shared cache store.** The cache lives in each service process: servers behind a load balancer do not share it, and a restart or deploy empties it. A later release makes the store an interface (`get`, `put`, and `candidates` for the plan call's offer) with the in-memory store as the default and a Redis store beside it, so every server shares one cache that survives deploys, with its size and expiry set by the integrator.
+Every request is generated fresh: no stored result ever answers one instead of the plan and scene calls (removed by decision, 2026-11-09; PRD 25.6 no longer applies).
 
 What makes it fast, and what each saves:
 
