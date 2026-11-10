@@ -324,97 +324,113 @@ function checkStyle(c: Checker, items: readonly StyleItem[]): CheckedStyle[] {
   const out: CheckedStyle[] = [];
   const keys = Object.keys(PROPERTIES);
   for (const it of items) {
-    const spec = own(PROPERTIES, it.key);
-    if (!spec) {
-      const close = closestNames(it.key, keys, 3);
-      c.err('unknown_property', it.ks, it.ke, 'lang.unknown_property', { key: it.key }, {
-        expected: keys,
-        hint: close.length > 0 ? `Did you mean ${close.join(' or ')}? Properties: ${keys.join(', ')}.` : `Properties: ${keys.join(', ')}.`,
-        suggest: close.slice(0, 2).map((k) => c.replaceRange(it.ks, it.ke, k)),
-        fingerprintKey: it.key,
-      });
-      continue;
-    }
-    const v = it.value;
-    const bad = (suggest?: string): void => {
-      const extra: ErrorExtra = { hint: `${it.key} must be ${spec.allowed}.`, fingerprintKey: it.key };
-      if (spec.values) extra.expected = spec.values;
-      if (suggest !== undefined) extra.suggest = [suggest];
-      c.err('bad_property_value', v.s, v.e, 'lang.bad_property_value', { key: it.key, allowed: spec.allowed }, extra);
-    };
-    const unboundWord = v.k === 'name' && !c.lookupLocal(v.name) && !c.fig.lookup(v.name) && !CONSTANT_LIKE.has(v.name);
-    switch (spec.kind) {
-      case 'bool':
-        if (v.k !== 'bool') bad();
-        else out.push({ key: it.key, value: { n: 'bool', v: v.v, ty: T.Bool, s: v.s, e: v.e } });
-        break;
-      case 'enum':
-        if (v.k === 'name' && spec.values?.includes(v.name)) out.push({ key: it.key, value: { word: v.name } });
-        else bad(v.k === 'name' && spec.values ? closestNames(v.name, spec.values, 1).map((x) => c.replaceRange(v.s, v.e, x))[0] : undefined);
-        break;
-      case 'int':
-      case 'number': {
-        const n = c.infer(v);
-        if (!n) break;
-        if (n.ty.k !== 'Number') {
-          bad();
-          break;
-        }
-        const lit = foldNumber(n);
-        if (lit !== undefined) {
-          const lo = spec.min ?? -Infinity;
-          const hi = spec.max ?? Infinity;
-          if (lit < lo || lit > hi || (spec.kind === 'int' && !Number.isInteger(lit))) {
-            const near = Math.min(hi, Math.max(lo, spec.kind === 'int' ? Math.round(lit) : lit));
-            bad(c.replaceRange(v.s, v.e, String(near)));
-            break;
-          }
-        } else if (!spec.expr) {
-          bad();
-          break;
-        }
-        out.push({ key: it.key, value: n });
-        break;
-      }
-      case 'text': {
-        const n = c.infer(v);
-        if (!n) break;
-        if (n.ty.k !== 'Text') bad();
-        else out.push({ key: it.key, value: n });
-        break;
-      }
-      case 'boolexpr': {
-        const n = c.infer(v);
-        if (!n) break;
-        if (n.ty.k !== 'Bool') bad();
-        else out.push({ key: it.key, value: n });
-        break;
-      }
-      case 'color': {
-        if (v.k === 'name' && (COLOR_WORDS.includes(v.name) || hexWord(v.name) || unboundWord)) {
-          if (COLOR_WORDS.includes(v.name) || hexWord(v.name)) out.push({ key: it.key, value: { word: v.name } });
-          else {
-            const close = closestNames(v.name, COLOR_WORDS, 1);
-            bad(close[0] ? c.replaceRange(v.s, v.e, close[0]) : undefined);
-          }
-          break;
-        }
-        const n = c.infer(v);
-        if (!n) break;
-        if (n.ty.k !== 'Color' && n.ty.k !== 'Number') bad();
-        else out.push({ key: it.key, value: n });
-        break;
-      }
-      case 'textlist': {
-        const n = c.infer(v);
-        if (!n) break;
-        if (!(n.ty.k === 'List' && n.ty.of?.k === 'Text')) bad();
-        else out.push({ key: it.key, value: n });
-        break;
-      }
+    // each property rule keeps its own reads (kernel design 9.2: a property rule is an edge from its inputs), so a
+    // later rule for the same property can drop exactly the edges of the rule it replaces
+    const outer = c.reads;
+    c.reads = new Set<ObjId>();
+    const from = out.length;
+    try {
+      checkStyleItem(c, it, keys, out);
+      const reads = [...c.reads];
+      for (let i = from; i < out.length; i++) out[i] = { ...(out[i] as CheckedStyle), reads };
+    } finally {
+      for (const id of c.reads) outer.add(id);
+      c.reads = outer;
     }
   }
   return out;
+}
+
+function checkStyleItem(c: Checker, it: StyleItem, keys: readonly string[], out: CheckedStyle[]): void {
+  const spec = own(PROPERTIES, it.key);
+  if (!spec) {
+    const close = closestNames(it.key, keys, 3);
+    c.err('unknown_property', it.ks, it.ke, 'lang.unknown_property', { key: it.key }, {
+      expected: keys,
+      hint: close.length > 0 ? `Did you mean ${close.join(' or ')}? Properties: ${keys.join(', ')}.` : `Properties: ${keys.join(', ')}.`,
+      suggest: close.slice(0, 2).map((k) => c.replaceRange(it.ks, it.ke, k)),
+      fingerprintKey: it.key,
+    });
+    return;
+  }
+  const v = it.value;
+  const bad = (suggest?: string): void => {
+    const extra: ErrorExtra = { hint: `${it.key} must be ${spec.allowed}.`, fingerprintKey: it.key };
+    if (spec.values) extra.expected = spec.values;
+    if (suggest !== undefined) extra.suggest = [suggest];
+    c.err('bad_property_value', v.s, v.e, 'lang.bad_property_value', { key: it.key, allowed: spec.allowed }, extra);
+  };
+  const unboundWord = v.k === 'name' && !c.lookupLocal(v.name) && !c.fig.lookup(v.name) && !CONSTANT_LIKE.has(v.name);
+  switch (spec.kind) {
+    case 'bool':
+      if (v.k !== 'bool') bad();
+      else out.push({ key: it.key, value: { n: 'bool', v: v.v, ty: T.Bool, s: v.s, e: v.e } });
+      break;
+    case 'enum':
+      if (v.k === 'name' && spec.values?.includes(v.name)) out.push({ key: it.key, value: { word: v.name } });
+      else bad(v.k === 'name' && spec.values ? closestNames(v.name, spec.values, 1).map((x) => c.replaceRange(v.s, v.e, x))[0] : undefined);
+      break;
+    case 'int':
+    case 'number': {
+      const n = c.infer(v);
+      if (!n) break;
+      if (n.ty.k !== 'Number') {
+        bad();
+        break;
+      }
+      const lit = foldNumber(n);
+      if (lit !== undefined) {
+        const lo = spec.min ?? -Infinity;
+        const hi = spec.max ?? Infinity;
+        if (lit < lo || lit > hi || (spec.kind === 'int' && !Number.isInteger(lit))) {
+          const near = Math.min(hi, Math.max(lo, spec.kind === 'int' ? Math.round(lit) : lit));
+          bad(c.replaceRange(v.s, v.e, String(near)));
+          break;
+        }
+      } else if (!spec.expr) {
+        bad();
+        break;
+      }
+      out.push({ key: it.key, value: n });
+      break;
+    }
+    case 'text': {
+      const n = c.infer(v);
+      if (!n) break;
+      if (n.ty.k !== 'Text') bad();
+      else out.push({ key: it.key, value: n });
+      break;
+    }
+    case 'boolexpr': {
+      const n = c.infer(v);
+      if (!n) break;
+      if (n.ty.k !== 'Bool') bad();
+      else out.push({ key: it.key, value: n });
+      break;
+    }
+    case 'color': {
+      if (v.k === 'name' && (COLOR_WORDS.includes(v.name) || hexWord(v.name) || unboundWord)) {
+        if (COLOR_WORDS.includes(v.name) || hexWord(v.name)) out.push({ key: it.key, value: { word: v.name } });
+        else {
+          const close = closestNames(v.name, COLOR_WORDS, 1);
+          bad(close[0] ? c.replaceRange(v.s, v.e, close[0]) : undefined);
+        }
+        break;
+      }
+      const n = c.infer(v);
+      if (!n) break;
+      if (n.ty.k !== 'Color' && n.ty.k !== 'Number') bad();
+      else out.push({ key: it.key, value: n });
+      break;
+    }
+    case 'textlist': {
+      const n = c.infer(v);
+      if (!n) break;
+      if (!(n.ty.k === 'List' && n.ty.of?.k === 'Text')) bad();
+      else out.push({ key: it.key, value: n });
+      break;
+    }
+  }
 }
 
 const CONSTANT_LIKE: ReadonlySet<string> = new Set(['pi', 'tau', 'e', 'deg', 'inf', 't', 'bt', 'beat']);

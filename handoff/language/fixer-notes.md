@@ -180,3 +180,15 @@ All paths are under `packages/kernel/src/language/`. Each finding has its own co
 ## Checks
 
 `npx eslint .` and `npx tsc -p tsconfig.json` are clean. See the report for the vitest counts.
+
+## Round 5 finish: replacing a property rule drops its reads (LANG-SM-32)
+
+The first LANG-SM-32 fix kept the reads of the defining line's styles in one set (`styleInputs`) and the reads of `P with …` rules in a list that replaced a rule only when the new rule set all the same keys. So `P = (1, 2) with opacity = f(1)` then `P with opacity = 0.5` still listed `P` as a reader of `f`, and redefining `f` gave `breaks_dependents`. Kernel design 9.2 makes each property rule an edge from its own inputs, and a new rule for a property replaces the old one.
+
+- `checkStyle` (`lines.ts`) now collects the reads of each property apart (`CheckedStyle.reads`, `check.ts`); the line-wide `styleReads` set is unchanged.
+- `ScratchFigure` (`figure.ts`) keeps `styleRules` as a map by property, filled from every source: the `with` list of a defining line (value and function lines), a `P with …` line and a redefinition with a `with` list. A rule for a property replaces the earlier rule for that property, wherever it came from; a rule that reads nothing only removes the earlier one. `styleInputs` is gone; `dependentsOf` follows value and range inputs only, and `styleRulesReading` lists the stored rules, each with a one-property restyle line to re-check.
+- The object's `source` is its own rule without the `with` list (`printLineNode` of the node without `style`). The dependents test re-checked `source` as a whole, so a replaced style in it would have broken the redefinition as before.
+- A redefinition without a `with` list keeps the rules (language design 3.12 step 6, "style is kept"). Before, the defining line's styles were dropped and the separate rules were kept. `define()` on an existing name also keeps them.
+- Removal: `ScratchFigure` has no delete; a removed target would take its rules with its entry. The real kernel must drop a target's rules when the target goes.
+- Style reads stay out of `inputsOf` and the cycle test (ruling SM-23).
+- Checked by hand: replace through `P with`, replace through a redefinition with `with`, replace twice, swap to another function, replace one of two properties (the other still counts), keep through a redefinition without `with`.

@@ -10,9 +10,11 @@ import { checkLine } from './lines';
 import type { CheckedLine } from './check';
 import { compileLine, evaluate } from './compile';
 import type { CompiledLine } from './compile';
-import { EMPTY_COMMANDS, createCommandTable } from './table';
+import { EMPTY_COMMANDS, SELF_ID, createCommandTable } from './table';
 import type { CommandSpec, CommandTable, FigureView, FunctionTable, ObjectInfo } from './table';
 import { parseLine } from './parser';
+import { printLineNode, printStyle } from './printer';
+import type { LineNode, StyleItem } from './ast';
 import { createEnv, valueText } from './runtime';
 import type { Env } from './runtime';
 import { parseTy } from './types';
@@ -39,9 +41,13 @@ export interface Applied {
   readonly reason?: UndefReason;
 }
 
-/** A separate property rule (`P with opacity = f(1)`): the keys it sets, its source, and the objects its values read. */
+/**
+ * One property rule of an object (`opacity = f(1)`): kernel design 9.2 makes it an edge from the objects it reads.
+ * It is kept per property, whether it came from the defining line or from a later `P with ...` line, so the next
+ * rule for the same property replaces it and its reads stop being edges. `source` is a restyle line that re-checks
+ * only this rule.
+ */
 interface StyleRule {
-  readonly keys: readonly string[];
   readonly source: string;
   readonly reads: readonly ObjId[];
 }
@@ -51,10 +57,11 @@ interface Entry {
   value: unknown;
   /** Value and slider-bound reads: the edges of the cycle test (`inputsOf`). */
   inputs: ObjId[];
-  /** Reads of the styles on the defining line: not cycle edges (kernel design 9.2), but readers for the dependents test. */
-  styleInputs?: ObjId[];
-  /** Separate property rules written after the object's own line. */
-  styleRules?: StyleRule[];
+  /**
+   * The property rules that read objects, by property name. They are not cycle edges (kernel design 9.2, ruling SM-23),
+   * but they are readers for the dependents test. A rule that reads nothing is not stored.
+   */
+  styleRules?: Map<string, StyleRule>;
   compiled?: CompiledLine;
   env?: Env;
   reason?: UndefReason | undefined;
@@ -96,7 +103,7 @@ export class ScratchFigure implements FigureView {
     const out: ObjectInfo[] = [];
     for (const n of this.order) {
       const e = this.byName.get(n) as Entry;
-      if (e.inputs.includes(id) || e.styleInputs?.includes(id)) out.push(e.info);
+      if (e.inputs.includes(id)) out.push(e.info);
     }
     return out;
   }
@@ -104,7 +111,7 @@ export class ScratchFigure implements FigureView {
     const out: { name: string; source: string }[] = [];
     for (const n of this.order) {
       const e = this.byName.get(n) as Entry;
-      for (const r of e.styleRules ?? []) if (r.reads.includes(id)) out.push({ name: n, source: r.source });
+      for (const r of e.styleRules?.values() ?? []) if (r.reads.includes(id)) out.push({ name: n, source: r.source });
     }
     return out;
   }
@@ -146,6 +153,8 @@ export class ScratchFigure implements FigureView {
       ...(opts.source !== undefined ? { source: opts.source } : {}),
     };
     const entry: Entry = { info, value, inputs };
+    // a replaced object keeps its property rules (language design 3.12 step 6: style is kept)
+    if (existing?.styleRules) entry.styleRules = existing.styleRules;
     this.byName.set(name, entry);
     this.byIdMap.set(id, entry);
     if (!existing) this.order.push(name);
@@ -193,7 +202,7 @@ export class ScratchFigure implements FigureView {
     const line = checked.value;
     const notices: Notice[] = [...parsed.notices, ...checked.notices];
     const base = { names: line.names, type: line.type, kind: line.kind, op: line.op };
-    if (line.kind === 'restyle') this.recordStyleRule(line);
+    if (line.kind === 'restyle') this.recordStyleRules(line, parsed.value.node);
     if ((line.kind !== 'define' && line.kind !== 'function') || !line.expr) {
       return { ok: true, value: { name: line.names[0] ?? '', ...base, summary: line.text, defined: true }, notices };
     }
@@ -205,9 +214,9 @@ export class ScratchFigure implements FigureView {
     // the cycle graph holds value and range edges (ruling SM-23); style edges are not part of it (kernel design 9.2),
     // but they are kept apart so that a redefinition still re-checks the styles that read the object
     const inputs = new Set<ObjId>([...line.reads, ...(line.rangeReads ?? [])]);
-    const previousRules = this.byName.get(name)?.styleRules;
     const info = this.define(name, line.type as Ty, r.defined ? r.value : undefined, {
-      source: line.text,
+      // the object's own rule only: its property rules are stored per property and re-checked on their own
+      source: printLineNode(withoutStyle(parsed.value.node)),
       inputs: [],
       free: line.free,
       slider: line.range !== undefined,
@@ -216,8 +225,7 @@ export class ScratchFigure implements FigureView {
     });
     const entry = this.byName.get(name) as Entry;
     entry.inputs = [...inputs];
-    entry.styleInputs = [...(line.styleReads ?? [])];
-    if (previousRules) entry.styleRules = previousRules;
+    this.recordStyleRules(line, parsed.value.node);
     entry.compiled = compiled.value;
     entry.env = env;
     entry.reason = r.defined ? undefined : r.reason;
@@ -230,15 +238,24 @@ export class ScratchFigure implements FigureView {
     };
   }
 
-  /** Remember a separate property rule on its target; a later rule that sets the same keys replaces the earlier one. */
-  private recordStyleRule(line: CheckedLine): void {
+  /**
+   * Store the property rules a line sets on its target (the `with` list of a definition or of a `P with ...` line).
+   * A rule for a property replaces the earlier rule for that property, wherever the earlier one came from, so the
+   * reads of the replaced rule stop being edges. A rule that reads nothing only removes the earlier one.
+   */
+  private recordStyleRules(line: CheckedLine, node: LineNode): void {
     const e = this.byName.get(line.names[0] as string);
     if (!e) return;
-    const keys = (line.style ?? []).map((s) => s.key);
-    const kept = (e.styleRules ?? []).filter((r) => !r.keys.every((k) => keys.includes(k)));
-    const reads = line.styleReads ?? [];
-    if (reads.length > 0) kept.push({ keys, source: line.text, reads });
-    e.styleRules = kept;
+    const items = styleItemsOf(node);
+    for (const st of line.style ?? []) {
+      const rules = e.styleRules ?? new Map<string, StyleRule>();
+      rules.delete(st.key);
+      const reads = (st.reads ?? []).filter((id) => id !== SELF_ID);
+      const item = [...items].reverse().find((i) => i.key === st.key);
+      if (reads.length > 0 && item) rules.set(st.key, { source: `${line.names[0]} ${printStyle([item])}`, reads });
+      if (rules.size > 0) e.styleRules = rules;
+      else delete e.styleRules;
+    }
   }
 
   /** Apply several lines in order. A line that reads a name made by a failed line is marked `blockedBy`. */
@@ -252,6 +269,18 @@ export class ScratchFigure implements FigureView {
       return r;
     });
   }
+}
+
+function styleItemsOf(node: LineNode): readonly StyleItem[] {
+  return node.k === 'define' || node.k === 'function' || node.k === 'restyle' ? (node.style ?? []) : [];
+}
+
+/** The line without its `with` list: the object's own rule. */
+function withoutStyle(node: LineNode): LineNode {
+  if (node.k !== 'define' && node.k !== 'function') return node;
+  const { style, ...rest } = node;
+  void style;
+  return rest;
 }
 
 /**

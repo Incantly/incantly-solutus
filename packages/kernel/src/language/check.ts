@@ -41,6 +41,8 @@ export interface CheckedStyle {
   readonly key: string;
   /** A checked expression, or a bare word (`red`, `dashed`). */
   readonly value: TNode | { readonly word: string };
+  /** Object ids this property's value reads (its rule's inputs); a `SELF_ID` read may be among them. */
+  readonly reads?: readonly ObjId[];
 }
 
 export interface CheckedLine {
