@@ -200,3 +200,9 @@ The first LANG-SM-32 fix kept the reads of the defining line's styles in one set
 - `Checker.actionCall` (`check.ts`) holds the one call that may be an action: the whole of an action line. `checkAction` (`lines.ts`) sets it around its `infer` call. `inferCommand` refuses any other call whose form returns nothing with `type_mismatch`: "Hide is an action, not a value." Hint: "Write it on its own line." The error marks the call.
 - Every position goes through `inferCommand`, so definitions, list items, operands, `if` branches, function bodies, arguments of functions, object commands and other actions, binder bodies and bounds, range bounds, text interpolation and style values on `with` and restyle lines are all covered.
 - Extra place: a style property that takes a plain word (`visible`, enums) did not infer its value, so `A with visible = Hide(B)` said "visible must be true or false". `checkStyleItem` (`lines.ts`) now infers a call there first, so the action message wins.
+
+### A2. `via` is now `cause` (fixed)
+
+- Renamed in `Env` and `createEnv`/`resetEnv` (`runtime.ts`), and in `EvalResult`, `evaluate`, the cascade write (`input_undefined` fail path), the three sample/save-restore sites in `compile.ts` (`sampling` helper and the two function-value wrappers). No alias is kept. `rg -w via packages/kernel/src` finds nothing.
+- Function values carry `reason` only, not a link; `call`, `call1` and `batch` save and restore `env.cause` around the nested evaluation, as they did for `via`.
+- Spec tests that used `via`: none still do. The tester had already changed them to `cause` in commit 69c3289 before this change; the only remaining `via` mentions in `spec-review.test.ts` assert that the field is absent.

@@ -148,7 +148,7 @@ function nonNumberIn(v: unknown): 'nan' | 'inf' | undefined {
 function failInput(env: Env, id: ObjId): void {
   if (env.reason === undefined) {
     env.reason = 'input_undefined';
-    env.via = id;
+    env.cause = id;
   }
 }
 
@@ -296,7 +296,7 @@ class Compiler {
   compile(n: TNode): Fn {
     if (n.n !== 'num' && n.n !== 'const' && n.n !== 'bool' && this.isConstant(n) && n.n !== 'text') {
       const f = this.compileRaw(n);
-      const scratch: Env = { t: 0, bt: 0, beat: 0, reason: undefined, via: undefined, detail: undefined, locals: [], read: () => undefined };
+      const scratch: Env = { t: 0, bt: 0, beat: 0, reason: undefined, cause: undefined, detail: undefined, locals: [], read: () => undefined };
       let v: unknown;
       try {
         v = f(scratch);
@@ -997,7 +997,7 @@ class Compiler {
         const ox = env.locals[sx];
         const oy = env.locals[sy];
         const reason = env.reason;
-        const via = env.via;
+        const cause = env.cause;
         const detail = env.detail;
         env.locals[sx] = x;
         env.locals[sy] = y;
@@ -1005,7 +1005,7 @@ class Compiler {
         env.locals[sx] = ox;
         env.locals[sy] = oy;
         env.reason = reason;
-        env.via = via;
+        env.cause = cause;
         env.detail = detail;
         return out;
       };
@@ -1225,7 +1225,7 @@ export function compileLine(line: CheckedLine, opts: CompileOptions = {}): Resul
             reason: undefined,
             call: (...xs: number[]) => {
               const saved = env.reason;
-              const savedVia = env.via;
+              const savedCause = env.cause;
               const savedDetail = env.detail;
               env.reason = undefined;
               // the parameters live in the shared locals only for this call: put back what the caller had there
@@ -1237,7 +1237,7 @@ export function compileLine(line: CheckedLine, opts: CompileOptions = {}): Resul
               for (let i = 0; i < params.length; i++) env.locals[(params[i] as { slot: number }).slot] = before[i];
               fv.reason = env.reason;
               env.reason = saved;
-              env.via = savedVia;
+              env.cause = savedCause;
               env.detail = savedDetail;
               return out as number | Pt | undefined;
             },
@@ -1246,7 +1246,7 @@ export function compileLine(line: CheckedLine, opts: CompileOptions = {}): Resul
             const slot = (params[0] as { slot: number }).slot;
             fv.call1 = (x: number): number => {
               const saved = env.reason;
-              const savedVia = env.via;
+              const savedCause = env.cause;
               const savedDetail = env.detail;
               env.reason = undefined;
               const before = env.locals[slot];
@@ -1255,13 +1255,13 @@ export function compileLine(line: CheckedLine, opts: CompileOptions = {}): Resul
               env.locals[slot] = before;
               fv.reason = env.reason;
               env.reason = saved;
-              env.via = savedVia;
+              env.cause = savedCause;
               env.detail = savedDetail;
               return v;
             };
             fv.batch = (xs: Float64Array, out: Float64Array): void => {
               const saved = env.reason;
-              const savedVia = env.via;
+              const savedCause = env.cause;
               const savedDetail = env.detail;
               const before = env.locals[slot];
               for (let i = 0; i < xs.length; i++) {
@@ -1271,7 +1271,7 @@ export function compileLine(line: CheckedLine, opts: CompileOptions = {}): Resul
               }
               env.locals[slot] = before;
               env.reason = saved;
-              env.via = savedVia;
+              env.cause = savedCause;
               env.detail = savedDetail;
             };
           }
@@ -1322,12 +1322,12 @@ function internal(line: CheckedLine, err: unknown): LanguageError {
 
 export type EvalResult =
   | { readonly defined: true; readonly value: unknown }
-  | { readonly defined: false; readonly reason: UndefReason; readonly detail?: string; readonly via?: ObjId };
+  | { readonly defined: false; readonly reason: UndefReason; readonly detail?: string; readonly cause?: ObjId };
 
 /** Run a compiled line's right-hand side and report the value or why it is undefined. Never throws. */
 export function evaluate(compiled: Compiled<unknown>, env: Env): EvalResult {
   env.reason = undefined;
-  env.via = undefined;
+  env.cause = undefined;
   env.detail = undefined;
   let v: unknown;
   try {
@@ -1340,7 +1340,7 @@ export function evaluate(compiled: Compiled<unknown>, env: Env): EvalResult {
       defined: false,
       reason: env.reason ?? 'not_finite',
       ...(env.detail !== undefined ? { detail: env.detail } : {}),
-      ...(env.via !== undefined ? { via: env.via } : {}),
+      ...(env.cause !== undefined ? { cause: env.cause } : {}),
     };
   }
   return { defined: true, value: v };

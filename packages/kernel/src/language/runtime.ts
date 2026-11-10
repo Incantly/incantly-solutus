@@ -60,7 +60,7 @@ export type RuntimeValue =
 /**
  * One `Env` may evaluate several compiled lines (the flat environment of design 3.15). Function and relation values write
  * their parameters into `locals` only for the length of a call and put back what was there, so a call into one line never
- * changes the locals another line is using. `reason`, `via` and `detail` describe the evaluation in progress: call
+ * changes the locals another line is using. `reason`, `cause` and `detail` describe the evaluation in progress: call
  * `evaluate` (or `resetEnv`) between two top-level evaluations.
  */
 export interface Env {
@@ -73,7 +73,7 @@ export interface Env {
   /** The first undefined reason set during this evaluation. Reset with `resetEnv`. */
   reason: UndefReason | undefined;
   /** The input object that was already undefined, when the reason is `input_undefined`. */
-  via: ObjId | undefined;
+  cause: ObjId | undefined;
   /** Short plain fact for the reason, such as `sqrt(-4)`. */
   detail: string | undefined;
   /** Slot-addressed locals: function parameters, binders, particle names. */
@@ -96,7 +96,7 @@ export function createEnv(init: EnvInit = {}): Env {
     bt: init.bt ?? 0,
     beat: init.beat ?? 0,
     reason: undefined,
-    via: undefined,
+    cause: undefined,
     detail: undefined,
     locals: new Array<unknown>(init.slots ?? 8).fill(undefined),
     read: init.read ?? ((): unknown => undefined),
@@ -105,7 +105,7 @@ export function createEnv(init: EnvInit = {}): Env {
 
 export function resetEnv(env: Env): void {
   env.reason = undefined;
-  env.via = undefined;
+  env.cause = undefined;
   env.detail = undefined;
 }
 

@@ -147,6 +147,8 @@ Shared error list (`docs/features/errors/design.md` section 4), each kind checke
 - **Harm:** the kernel stores `Undefined` objects built from `evaluate()`; every call site needs a rename, and a missed one drops the cascade link silently (the field would be `undefined`, not an error).
 - **Fix:** rename to `cause` in `Env`, `EvalResult` and `resetEnv`; update the two language docs (C3). Behaviour is unchanged.
 
+- **Status:** fixed
+
 ### A3. `Function2`
 
 - **Doc:** README decision 5: "`Function2` is defined once, in `functions-calculus`. `language` and `space-3d` use it." `functions-calculus/design.md:34` makes `g(x, y) = …` a `Function2`; its `Integral`, `Derivative`, `SolveODE` forms and space-3d's `TangentPlane` and `Gradient` take `Function2` parameters.
