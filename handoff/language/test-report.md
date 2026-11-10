@@ -334,3 +334,42 @@ One test: `LANG-SM-32: a style that no longer reads f is no longer a dependent`.
 - **Text formats (SM-31).** An overflow while scaling prints `undefined`, and the text stays a defined Text. The window where `v * 180 / pi` overflows in one order and not in the other (between about `1e306` and `3e306`) is not tested; the thresholds used are `1e307` and `1.7e308` (overflow) and `1e300` (finite). Points and vectors are formatted per coordinate, and the test requires `(undefined, …)` and no `Infinity`.
 - **Dependents (SM-32).** An object whose style reads `f` is downstream of `f`, and a redefinition it cannot take is `breaks_dependents` with the reader named, as for value and range readers. Detaching the rule with a warning is not read into step 4. Function names in the tests are lower case because an upper-case name followed by `(` is a command call. After `n` changes, `ScratchFigure.recompute()` is called before the text is read.
 - **Q-R4-1.** The ruling gives the rule in general ("the name being defined resolves to the new object"), so it is tested for every value kind, including a function style that calls the new function. The value part of a defining line and every range bound keep `unknown_name` on a new name. A style that reads a different unknown name is `unknown_name` for that name, not for the defined one. Undefined relations of type Curve cannot be redefined to a Circle (`type_change`, design 3.12 step 3), so the redefinition test keeps both lines at the same type.
+
+## Spec review
+
+Tester: fresh agent. Tests for the four must-fix items A1 to A4 of `handoff/language/review.md`, in `packages/kernel/test/spec/language/spec-review.test.ts` (117 tests). Written from `docs/`, the behaviour descriptions in `review.md`, and the public API only. Every test imports `@incantly/kernel`. The existing tests `builtins.test.ts` and `regressions.test.ts` were changed to read `cause` instead of `via`.
+
+Command: `npx vitest run packages/kernel/test/spec/language/spec-review.test.ts`
+
+| Item | Tests | Failed on `f423972` (before any fix) | Failed at the time of writing (fixer's A1 and A2 commits in) |
+|---|---|---|---|
+| A1 action used as a value | 63 | 53 | 0 |
+| A2 `cause`, not `via` | 8 (plus 3 changed existing tests) | 7 (plus the existing `errors.md 8` test and the `Env` tests, which fail to type-check) | 0 |
+| A3 `Function2` | 13 | 8 | 8 |
+| A4 table validation | 33 | 26 | 26 |
+| Total | 117 | 94 | 34 |
+
+The whole spec suite at the time of writing: 2,083 tests, 2,049 passed, 34 failed, all 34 in `spec-review.test.ts`. `eslint packages/kernel/test` and `tsc -p tsconfig.json` are clean at that point. Before the fixer's A2 commit, `tsc` reported `cause` as missing on `Env` and `EvalResult` in the three files that read it; `spec-review.test.ts` itself compiles before and after (it reads `cause` through a cast).
+
+### Tests added per item
+
+- **A1.** 28 lines, each run through `analyseLine` and through `apply` (56 tests): the three lines of the review; arithmetic, unary, `and`, `not`, comparison and parenthesised operands; the condition and a branch of `if`; a function body, alone and in a sum; an argument of a built-in function, of an object command and of another action; a binder body and a binder bound; a range bound; text interpolation; a list in a list; a style value on a definition, on a restyle line and as a second key; a second action `Zap(n)` in a definition, a list, an argument and a function body. Each must fail, be well formed, change nothing, and say the command is an action. Seven more tests: the new name does not exist after a refused definition, a refused redefinition keeps the old object, the error marks the call and not column 1, determinism, and controls (`Hide(A)`, `Hide(A, B, s)`, `Zap(3)` on their own line; object commands still work as values anywhere).
+- **A2.** `evaluate()` downstream of an undefined object has `reason: input_undefined` and `cause` equal to the input's id; the result has no `via` key; an undefined that starts on the line has no `cause`; a chain of three names an object on the chain; `Env.cause` is set and `Env` has no `via`; `createEnv` starts with neither; a function call with an undefined argument; a result can be assigned to the shared `Undefined` shape. Existing tests changed: `builtins.test.ts` (`errors.md 8`) and `regressions.test.ts` (the SM-29 tests, `env.via` to `env.cause`, `VIA` to `CAUSE`).
+- **A3.** Tables with `Function2` and `Function<Number>(2)` parameters. `g2(x, y) = x * y` and another two-parameter function satisfy both; the result type is the form's return type; positional and named arguments; parameter names other than `x, y`; a one-parameter function, a Number, a Point, a list, a Text and a `Function<Point>` do not fit; the table has no problems; no message, hint, `expected` or `forms` entry reads "should be a , but" or has an empty entry, over 16 failing lines and 6 parameter types (`Function<Number>`, `Function<Point>`, `Function<Number>(2)`, `Function<Number>(3)`, `Function2`, `List<Function<Number>>`) against 8 arguments each.
+- **A4.** On `checkTable` (a spec list), each case added to the good table so that only the bad command may be named: unknown parameter types (plain, in `List<>`, in a union, in `Function<>`, in a rest parameter, in a second form, wrong case, empty text); unknown return types (plain, in a list, in a tuple); duplicate parameter names (two fixed, same type, a rest parameter repeating a fixed one); duplicate command names (two new ones, and one repeating `Circle`); lower-case command names (`lower`, a digit, an underscore, a non-ASCII letter, a space, empty); no forms (object and action); binder with no body (no body, binder only, the message names the binder); six bad commands together, each named once. Controls: every core type, alias, list, union and function type is accepted; null, tuple and list returns; the same parameter names in different forms; `Round3`; `Seq`; `createCommandTable` does not throw on duplicates.
+
+### Choices where the docs are silent
+
+- **A1 kind.** No doc names the kind. `type_mismatch`, `bad_argument` or `no_matching_form` are accepted, and `bad_property_value` for a style value (the message of that kind may speak of the property, not of the action). All others must say "action" in the message or hint.
+- **A2 chain.** `language/errors.md` 8 says `cause` is the nearest undefined input; `kernel/design.md` 5 says it is the input's own cause when inherited, so it names a root. The test accepts either, and requires an object on the chain. The two docs should agree.
+- **A3 arity.** `Function<Number>(2)` means exactly two parameters (design 3.10, "a parameter count"). A one-parameter function does not satisfy it or `Function2`.
+- **A4 shape.** A problem has `command` and `message`. The message must carry the unknown type, the parameter name, or a word for the fault (`duplicate`, `upper-case`, `form`, `body`). Duplicate command names are checked on `checkTable(specs)`, since `createCommandTable` returns a table. Type names are case-sensitive, so `number` is unknown. A command name must start with an upper-case ASCII letter (design 3.1 lexical table: a command is an upper-case letter followed by `(`).
+
+### Still failing
+
+- **A3 (8).** `Function2` and `Function<Number>(2)` parameters: the five positive tests (`Function2`, `Function<Number>(2)`, same functions, result type, named and positional), the two-parameter-names test, and the two "should be a , but" tests.
+- **A4 (26).** Every negative test; the controls pass.
+
+### Isolation
+
+Read: `AGENTS.md`, `docs/process/pipeline.md`, `docs/`, `handoff/language/review.md` (behaviour only), `handoff/language/test-report.md`, the existing spec tests, `packages/kernel/src/index.ts`, `packages/kernel/src/contracts/`. Also read by mistake, before the brief's limit was applied: the export list of `packages/kernel/src/language/index.ts` (the public entry re-exported by `src/index.ts`; names only) and `handoff/language/builder-notes.md` (the public API section; nothing from it is used as an expectation). No other file under `packages/kernel/src/` was opened, and `src/`, `fixer-notes.md` and `review.md` were not touched.
