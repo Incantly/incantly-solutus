@@ -1367,7 +1367,7 @@ describe('LANG-SM-24: a #rrggbb colour after = is a value for the normaliser, th
 
   it('LANG-SM-24: a colour, then several properties with a Unicode minus', () => {
     const fig = figure();
-    const r = analyseLine('P with color = #ff0000, opacity = 1 − 0.5, size = 3 − 1', fig);
+    const r = analyseLine('P with color = #ff0000, opacity = 1 − 0.5, pointSize = 3 − 1', fig);
     expect(r.ok, r.ok ? '' : `${r.kind}: ${r.message}`).toBe(true);
   });
 
