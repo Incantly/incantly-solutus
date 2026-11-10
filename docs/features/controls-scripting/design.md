@@ -55,7 +55,8 @@ GeoGebra's scripting group is about 70 commands, most of which set one property.
 | Repeat | `for k in a..b` on a step |
 | RunClickScript, RunUpdateScript | `Click(obj)`; there is no update script (3.4) |
 | GetTime | Dropped. Wall-clock reads break replay. Use `t`. |
-| PlaySound, ReadText | Not in v1 (the teacher speaks; an audio area may add `Sound(...)`) |
+| PlaySound | `Note`, `Sonify` and the `Sound` objects in `docs/features/sound/` |
+| ReadText | Not built: the live teacher speaks |
 | ParseToNumber, ParseToFunction | `number(text)` builtin (undefined with `bad_number`); function parsing is what `Input(f, ...)` does |
 | Pan, CenterView, ZoomIn, ZoomOut, SetAxesRatio, ShowAxes, ShowGrid, SetActiveView, SetPerspective | The view area: `@view` and `@axes`, `@grid` as directives, and actions `View(x0, x1, y0, y1)`, `Axes(on)`, `Grid(on)` allowed in handlers |
 | SelectObjects, AttachCopyToView, SetViewDirection, SetSpinSpeed | Not in v1 (selection state, extra views, 3D) |

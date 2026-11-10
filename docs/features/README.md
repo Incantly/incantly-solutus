@@ -41,6 +41,10 @@ Every folder has four files:
 | Apps | [spreadsheet](spreadsheet/) | Cells as objects, references, ranges |
 | Apps | [embed-files-export](embed-files-export/) | Embed API, script file format, export |
 | Apps | [app-modes](app-modes/) | Graphing, Geometry, 3D, CAS, Scientific, Probability, Notes, Classic, exam mode |
+| Media | [sound](sound/) | Tones, noise, notes, melodies and sonified functions, played with Tone.js |
+| Documents | [tiptap](tiptap/) | Live figures and formulas inside Tiptap documents |
+
+Performance rules for every area, and our own renderer, are in `docs/design/performance.md`.
 
 ## Decisions across areas
 
@@ -80,11 +84,22 @@ The areas were written in parallel. Where they overlap or disagree, these decisi
 
 ### Scope
 
-21. **Everything is in scope**, including CAS, 3D, the spreadsheet and every app mode. The core design's "not in v1" list sets the build order, not the scope. `app-modes` must add full configurations for the CAS and 3D apps, which it left as config records only.
-22. **Symbolic maths is our own TypeScript layer**, loaded on demand. Giac is GPL-3 and is not used. Permissive libraries the `cas` folder names (Nerdamer MIT, mathjs Apache-2.0, decimal.js MIT, Delaunator ISC, KaTeX MIT) need a licence review before we depend on any. The licences of Algebrite and Compute Engine were not verified.
+21. **Everything is in scope**, including CAS, 3D, the spreadsheet and every app mode. The core design's section 12 sets the build order, not the scope. `app-modes` now has full configurations for the CAS and 3D apps (sections 3.2.1 and 3.2.2).
+22. **Symbolic maths is our own TypeScript layer**, loaded on demand. Giac is GPL-3 and is not used. Every library we may use, with its checked licence, is in `docs/design/libraries.md`. All are MIT, ISC, Apache-2.0 or Unlicense.
+23. **Items the studies put off to later phases are in scope too**, each with the way we build it:
+
+| Item | How | Area |
+|---|---|---|
+| Boolean cuts of solids | Manifold (Apache-2.0, WebAssembly), loaded on demand | `space-3d` |
+| AR | WebXR `immersive-ar`, where the device supports it | `space-3d` |
+| WebGPU | A second 3D back-end behind the same drawing interface; WebGL 2 stays the default | `space-3d` |
+| Polygons with holes | A `Polygon` with `rings`, boolean operations by polygon-clipping (MIT) | `polygons-transforms` |
+| Regular-expression text commands | Run in a worker with a 50 ms budget per call; a timeout gives undefined with reason `timeout` | `text-logic` |
+| Update handlers (`on update`) | Same step budget as click handlers; a handler cannot set off itself or another update handler in the same pass | `controls-scripting` |
+| `Prove`, `LocusEquation`, `Envelope` | Built on the symbolic layer in wave 3 | `cas`, `curves-loci` |
+
+24. **Still out:** running JavaScript from figures or files. Our safe `on` handlers cover the same jobs without letting a shared file run code.
 
 ## Known gaps
 
-- Some manual index pages came back empty or not found: the scripting, 3D and CAS command indexes, exam mode, scientific calculator and settings. Those areas built their command lists from the source's command tables instead.
-- Deferred in the designs: boolean cuts of solids, AR, WebGPU, polygons with holes, regular-expression text commands, update scripts and JavaScript scripting (replaced by our safe `on` handlers).
-- Commands that need the symbolic layer (`Prove`, `LocusEquation`, `Envelope`) are designed in `cas` and `curves-loci` but depend on it being built.
+- Some manual index pages came back empty or not found: the scripting, 3D and CAS command indexes, exam mode, scientific calculator and settings. Those areas built their command lists from the source's command tables instead. Builders should check their command list against the manual's individual command pages, which did load.

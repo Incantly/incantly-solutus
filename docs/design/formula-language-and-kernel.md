@@ -1,6 +1,6 @@
 # Formula language and kernel: design
 
-Status: draft for review. Follows the handoff in `docs/research/engine-study.md`. No code yet.
+Status: accepted for building. Follows the handoff in `docs/research/engine-study.md`. Each feature area is designed in detail under `docs/features/`; where a feature folder and this document disagree, `docs/features/README.md` and section 13 here decide. No code yet.
 
 This design learns from how GeoGebra is organised, as described in the study. It copies no GeoGebra code, text, grammar or command table. Where we keep a common maths word (`Midpoint`, `Circle`), it is because that is the word a teacher uses, not because GeoGebra uses it.
 
@@ -19,9 +19,11 @@ The main user is the live teacher. It talks to the learner and builds the figure
 5. **Real-time.** Applying a line takes under 1 ms. A frame with 500 objects and 20,000 particles runs at 60 fps on a mid-range laptop.
 6. **The script is the file.** A figure is saved as its lines. Loading replays them.
 
-### Not in v1
+### Scope
 
-A symbolic algebra system, 3D, a spreadsheet, localised command names, units, and anything close to 500 commands. We start with the commands lessons need (section 6) and grow from real use.
+Every feature area in `docs/features/` is in scope: the symbolic layer (CAS), 3D, the spreadsheet, statistics and probability, every app mode, and the full command set those areas list. Section 6 is the first set the kernel ships with, not the limit. Section 12 sets the order we build in.
+
+Still out of scope: running JavaScript from figures or files (scripts use our own safe `on` handlers, see `docs/features/controls-scripting/`), and units of measure. Command names are English in every locale; localised aliases come later and never change the saved script.
 
 ## 2. Model: objects and rules
 
@@ -95,7 +97,7 @@ Rules that keep this unambiguous:
 - A name followed by `(` is a call. If the name is not a function or command, that is an error, never a product.
 - Implicit multiplication is allowed in one place only: right after a number literal, before a name or `(`, with or without a space, as in `2x`, `0.5 age` or `3(a + b)`. `ab` is the name `ab`. `a b` is an error: write `a * b`.
 - Objects must be named. A line that starts with an object command and no name, such as `Circle(A, 2)`, is the error `unnamed_object`. Only action commands (section 6.6) stand alone.
-- Commands are PascalCase. Built-in functions and constants are lowercase. User names may not reuse either, or `t`, `x`, `y`, `true`, `false`, `with`, `in`, `step`, `if`, `and`, `or`, `not`.
+- Commands are PascalCase. Built-in functions and constants are lowercase. User names may not reuse either, or `t`, `bt`, `beat`, `x`, `y`, `z`, `inf`, `deg`, `undefined`, `true`, `false`, `with`, `in`, `step`, `if`, `on`, `and`, `or`, `not`, `xor`, or the axis constants `xaxis`, `yaxis`, `zaxis`.
 
 ### Grammar
 
@@ -287,7 +289,7 @@ Actions return nothing and may stand alone on a line.
 
 ### 6.7 Built-in functions and constants
 
-Lowercase, pure: `sin cos tan asin acos atan atan2 sinh cosh tanh sqrt cbrt exp ln log10 log2 abs sign floor ceil round min max hypot clamp mod lerp step smooth rand noise rgb hsl`, constants `pi tau e`. `rand(seed)` returns a fixed number in [0, 1) for each seed.
+Lowercase, pure: `sin cos tan asin acos atan atan2 sinh cosh tanh sqrt cbrt exp ln log10 log2 abs sign floor ceil round min max hypot clamp mod lerp step smooth rand noise rgb hsl`, constants `pi tau e inf deg`. `rand(seed)` returns a fixed number in [0, 1) for each seed. Degrees are written `30°` or `30deg`; both mean `30 * pi / 180`.
 
 ## 7. Time, motion and physics
 
@@ -427,27 +429,46 @@ The teacher's instructions hold the grammar summary (about 300 tokens) and the f
 
 Prompt-to-figure and prompt-to-film use the same language: one plan call, then one script call whose output streams line by line. Each line is applied as it arrives, so the first object is on screen within about a second of the first line, and the figure fills in as the stream continues. A failed line is collected and sent back in one repair call at the end.
 
+### The model
+
+The AI that writes lines, for the live teacher and for the studio's AI panel, is Muse 1.3 Spark. The studio lets a learner or teacher ask for something ("show me the area under x² from 0 to 2"), and the model answers by writing lines through the `draw` tool, so every figure it makes is built from real formulas and commands. Model calls go only through `packages/server`, so API keys never reach the browser. The client follows the Muse Spark API documentation the product owner provides.
+
 ## 11. Packages
 
-| Package | Holds | May import |
-|---|---|---|
-| `packages/kernel` | Tokenizer, parser, types, command table, rules, graph, clock, solver, particles maths, errors, `toScript` | Nothing outside itself; no DOM |
-| `packages/view` | Drawables, plotter, canvas and SVG back-ends, WebGL particles, pointer and keyboard | `kernel` |
-| `packages/teacher` | `draw` and `figure` tools, catalogue builder, streaming apply | `kernel`, `view` |
+| Package | Holds | May import | Runs in |
+|---|---|---|---|
+| `packages/kernel` | Tokenizer, parser, types, command table, rules, graph, clock, solver, particles maths, errors, `toScript` | Nothing; no DOM | Browser and Node |
+| `packages/plot` | Function and curve sampling, tracers, fills | `kernel` types; no DOM | Browser and Node |
+| `packages/symbolic` | The CAS layer, loaded on demand | `kernel` | Browser worker and Node |
+| `packages/view` | Our own renderer (2D and 3D) behind a GPU interface with WebGL 2 and WebGPU back-ends, SVG and PDF recorders, the shared GPU context, the figure scheduler, pointer and keyboard (`docs/design/performance.md`) | `kernel`, `plot` | Browser; core has no DOM so it can move to mobile |
+| `packages/audio` | Sound playback with Tone.js, loaded on demand (`docs/features/sound/`) | `kernel` | Browser |
+| `packages/tiptap` | The Tiptap extension: `incantlyFigure` and `incantlyFormula` nodes (`docs/features/tiptap/`) | `sdk` | Browser |
+| `packages/ui` | Algebra view, toolbars, input bar, sheet, style bar, maths keyboard, as Web Components | `kernel`, `view`, `modes` | Browser |
+| `packages/modes` | App mode records and exam profiles, as data | Nothing | Browser and Node |
+| `packages/sdk` | `createApp`, the embed API, iframe protocol, file format, export | All browser packages | Browser |
+| `packages/teacher` | `draw` and `figure` tools, catalogue builder, streaming apply | `kernel` | Browser and Node |
+| `packages/server` | Model calls (Muse Spark), keys, rate limits, headless checks and SVG export | `kernel`, `teacher` | Node |
+| `apps/studio` | Our full web app, built only on `sdk` and `server`'s HTTP API | `sdk` | Browser |
+
+A project embeds Incantly with `@incantly/sdk` in its frontend. A backend that only needs to check lines, convert files or render SVG uses `@incantly/kernel` directly. Model calls belong in `@incantly/server` or the project's own backend, never in the browser.
 
 From `legacy/v1` we may reuse our own code where it fits: the formula compiler and `noise` in `packages/core/src/expr`, the physics kit in `packages/core/src/kits/physics2d` for section 7.4, and the live voice code in `packages/core/src/film/live-*.ts` and `packages/generation/src/client/live-gemini.ts` for section 10.
 
 ## 12. Build order
 
-Each step ends with tests and a demo page.
+Each area is built on its own branch and goes through the same checks: build, independent tests, state-machine and security check, fixes, spec review. It then merges into the `integration` branch, and its studio screens are built. `integration` merges into `main` once every area is in and all tests pass.
 
-1. **Language.** Tokenizer, parser, error objects with positions. Golden tests: valid lines give trees, broken lines give the exact error.
-2. **Kernel core.** Objects, rules, order, downstream lists, one pass per frame, undefined, transactions, undo, `toScript`. Types Number, Bool, Text, Point, Vector, Function. The clock `t`.
-3. **Commands v1.** Sections 6.1 to 6.6, the command table, and the catalogue printer.
-4. **View.** Canvas drawables, plotter, dragging, SVG export, and a playground page that takes typed lines and shows results and errors.
-5. **Motion.** States, rates, solver, checkpoints, seeking; traces and loci; particles on CPU, then WebGL.
-6. **Teacher.** `draw` and `figure` tools, streaming generation, and three acceptance lessons: a pendulum, the area under a curve, and a fire.
-7. **Bodies.** Collisions and joints from the physics kit.
+| Wave | Areas (folders in `docs/features/`) |
+|---|---|
+| 0 | Repository structure, shared build, lint and test setup |
+| 1 | `kernel`, `errors`, `language` |
+| 2 | `numbers-sliders`, `controls-scripting`, `points-lines`, `conics`, `polygons-transforms`, `functions-calculus`, `curves-loci`, `lists-matrices`, `statistics`, `probability`, `graphics-view`, `tools-2d`, `animation-time`, `algebra-view` |
+| 3 | `cas`, `optimisation-discrete`, `text-logic`, `space-3d`, `spreadsheet`, `embed-files-export`, `app-modes`, `sound`, `tiptap`, the teacher and the server with Muse Spark |
+
+Performance (`docs/design/performance.md`) is part of every area, not a wave: each area meets its targets and budgets before it merges.
+| 4 | Bodies and collisions (section 7.4), from the legacy physics kit |
+
+Acceptance lessons for the teacher: a pendulum, the area under a curve, and a fire.
 
 ### Acceptance measures
 
@@ -460,10 +481,28 @@ Each step ends with tests and a demo page.
 | First object visible after first streamed line | under 1 s from the tap |
 | Model fixes an error on its next line | 9 in 10 cases on the error test set |
 
-## 13. Open questions
+## 13. Decisions
 
-1. Should `t` restart at each beat for formulas that want "time since this beat started"? A built-in `bt` would cover it.
-2. Should dependent points be draggable by moving their free parents, as in the study, already in v1?
-3. Do we want LaTeX in texts from day one, or plain maths text first?
-4. Do we cap particles per figure at 20,000, or by device?
-5. When the teacher changes a slider that rates read, is restarting from `t = 0` and replaying (section 7.2) clear enough for learners, or should it continue from the current state?
+The open questions of the first draft, answered by the feature studies:
+
+| # | Question | Decision |
+|---|---|---|
+| 1 | Time since a beat began? | Yes: read-only `bt` (seconds since the current beat began) and `beat` (its index). `t` stays film time. |
+| 2 | Drag dependent points? | Yes: through drag plans that move free parents and `PointOn` parameters, and invertible rules (`docs/features/kernel/`, `docs/features/graphics-view/`). |
+| 3 | LaTeX in texts? | From day one, rendered with KaTeX (`docs/design/libraries.md`), with our own maths layout for live values. |
+| 4 | Particle cap? | 20,000 per system, 50,000 per figure. |
+| 5 | Slider change during a film with states? | Each figure picks `rerun = continue \| restart`; the default is `restart`, as in section 7.2. |
+
+Decisions that change sections above, from `docs/features/README.md`:
+
+- Lists, choices, matrices, ranges and intersection indexes are 1-based; negative indexes count from the end.
+- `Point - Point` is a `Vector`. `inf` is a constant and `Number` may be `±inf`.
+- `if(c1, v1, c2, v2, …, otherwise)` takes any number of arms. A missing `otherwise` gives undefined with reason `condition_false`, except in symbolic parameters, which require it.
+- Undefined values are `{ reason, detail?, cause? }`, from one registry of reason codes owned by the kernel.
+- Line results carry `notices: { severity: 'info' | 'warning', code, message }[]`.
+- Errors use the full format in `docs/features/errors/design.md`, which extends section 9.
+- The kernel offers `applyBatch` (all-or-nothing, one undo step), `slice` (rules between two objects, for loci and the CAS), `dryRun`, `drag` and `commitDrag`. `Rename` is a kernel action.
+- Images of a point under a transform are named `A_1`, `A_2`, never `A'`, since `'` marks a rate.
+- A call may run over several lines while a bracket is open.
+- `Function2` (two variables) is defined in `docs/features/functions-calculus/`.
+- Third-party libraries are limited to the list in `docs/design/libraries.md`.
