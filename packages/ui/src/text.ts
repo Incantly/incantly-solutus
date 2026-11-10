@@ -72,11 +72,12 @@ const SPOKEN_OPS: readonly (readonly [RegExp, string])[] = [
 /** Operators in words, for the accessible name of a preview or a row: `x^2 - 2` reads as `x squared minus 2`. */
 export function speak(text: string): string {
   let t = text.replace(/\bsqrt\s*\(/g, 'square root of (');
+  t = t.replace(/(^|[(,=<>+*/^[]\s*)[-−]\s*(?=[\w(.])/g, '$1 negative ');
   t = t.replace(/\^\s*2(?![\d.])/g, ' squared ').replace(/\^\s*3(?![\d.])/g, ' cubed ');
   t = t.replace(/\^\s*(-?[\w.]+)/g, ' to the power $1 ').replace(/\^/g, ' caret ');
   for (const [re, word] of SPOKEN_OPS) t = t.replace(re, word);
-  t = t.replace(/(^|[\s([,])-\s*(?=[\w(])/g, '$1negative ').replace(/-/g, ' minus ').replace(/−/g, ' minus ');
-  return t.replace(/\s+/g, ' ').trim();
+  t = t.replace(/[-−]/g, ' minus ');
+  return t.replace(/\s+/g, ' ').replace(/\s+([)\]])/g, '$1').replace(/([([])\s+/g, '$1').trim();
 }
 
 /* ------------------------------- typeset text ------------------------------- */

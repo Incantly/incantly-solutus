@@ -7,7 +7,7 @@
 import { accepts, complete, preview, signatureHelp, tokenize, tyStr, typeSet } from '@incantly/kernel';
 import type { Completion, FigureView, LanguageError, PreviewResult, SignatureHelp } from '@incantly/kernel';
 import { emit, h, styleEl, uid } from './dom';
-import { bracketInfo, buildRuns, placeTokens } from './highlight';
+import { bracketInfo, buildRuns, markDefinitionTargets, placeTokens } from './highlight';
 import type { Mark, Placed } from './highlight';
 import { EDITOR_CSS, THEME_CSS } from './styles';
 import {
@@ -186,7 +186,7 @@ export class LineEditorElement extends HTMLElement {
   private retokenize(): void {
     const text = this.input.value;
     const r = tokenize(text, this.fig);
-    this.tokens = placeTokens(text, r.tokens);
+    this.tokens = markDefinitionTargets(text, placeTokens(text, r.tokens));
     this.lexMarks = [];
     for (const e of r.errors) {
       if (e.kind !== 'bad_character') continue;

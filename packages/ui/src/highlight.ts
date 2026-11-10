@@ -32,6 +32,28 @@ export function placeTokens(text: string, tokens: readonly HighlightToken[]): Pl
     .sort((a, b) => a.start - b.start);
 }
 
+/**
+ * A name on the left of the first `=` of a line is being defined, not looked up, so it is not an "unknown name"
+ * (`c = Circle(A, 2)` where `c` does not exist yet). The language marks it unknown because the figure has no such object.
+ */
+export function markDefinitionTargets(text: string, tokens: readonly Placed[]): Placed[] {
+  const out = [...tokens];
+  let lineStart = 0;
+  for (const line of text.split('\n')) {
+    const lineEnd = lineStart + line.length;
+    const eq = out.findIndex((t) => t.kind === 'operator' && t.text === '=' && t.start >= lineStart && t.end <= lineEnd);
+    if (eq >= 0) {
+      const eqTok = out[eq] as Placed;
+      for (let i = 0; i < eq; i++) {
+        const t = out[i] as Placed;
+        if (t.kind === 'unknown' && t.start >= lineStart && t.end <= eqTok.start) out[i] = { ...t, kind: 'name' };
+      }
+    }
+    lineStart = lineEnd + 1;
+  }
+  return out;
+}
+
 /** Runs of text, each with the token class and the classes of every mark that covers it. */
 export function buildRuns(text: string, tokens: readonly Placed[], marks: readonly Mark[]): Run[] {
   if (text === '') return [];
