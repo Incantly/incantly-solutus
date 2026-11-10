@@ -161,10 +161,34 @@ Shown here as data summary. "Cmd groups" are groups from the command table; the 
 | `scientific` | results (single column) | none | numbers, `Mean`, `Sum`, basic stats only | degree (toggle) | n/a | n/a | n/a | n/a | No graphics. `Ans`. Fraction/decimal toggle. Scientific keyboard |
 | `probability` | distribution, results | none | probability, statistics | n/a | n/a | n/a | n/a | n/a | Distribution picker, parameter fields, interval shading, summary table |
 | `notes` | board | board tools (pen, shapes, text, image, mind-map) | none (embedded graphing widgets use `graphing`) | n/a | n/a | n/a | n/a | n/a | Pages, undo, sharing; the graph is an embedded object |
-| `cas` | cas (rows), graphics optional | few | all, with symbolic evaluation | radian | on / major | no | none | no | Symbolic output rows. Needs a CAS engine (not in our first versions) |
-| `graphing3d` | graphics3d, algebra | 3D tools | 3D, functions, geometry | radian | on (3 axes) / plane grid | yes | none | no | Rotate, surfaces, planes. Needs 3D (not in our first versions) |
+| `cas` | cas (rows), graphics on demand | `move`, `points`, `lines`, `curve tools` | all, with symbolic evaluation | radian | on / major | no | none | no | Symbolic rows, exact and numeric answers, see 3.2.1 |
+| `graphing3d` | graphics3d, algebra | full 3D tools | 3D, functions, geometry, transforms | radian | on (3 axes) / floor grid | yes | points | yes | Rotate, surfaces, planes, solids, see 3.2.2 |
 
-In the unavailable modes (`cas`, `graphing3d`, and `notes` at first), `setMode` returns `mode_unavailable`; the record exists so catalogues, tests and exam profiles can already refer to it.
+A mode whose packages have not loaded yet (the symbolic layer for `cas`, the 3D view for `graphing3d`) shows a loading state, then switches. If loading fails, `setMode` returns `mode_unavailable` with the reason and the app stays in the previous mode.
+
+#### 3.2.1 The `cas` mode
+
+- **Views:** the `cas` view (numbered rows) at start. The graphics view opens the first time a row is marked to plot, and stays open. The algebra and sheet views are available, not shown.
+- **Rows:** each row is a line in our language whose result is a symbolic `Expr`, shown exactly (fractions, roots, `pi`) with a toggle to numeric. A row refers to an earlier row as `$3` (its result) or by the name it defines. Editing a row recomputes the rows that use it, through the normal kernel update pass.
+- **Evaluation per row:** `exact` (default), `numeric`, `keep input` (no evaluation, only checks the line), and `check` (the row is a claim, answered true or false, as in `Simplify(a) == b`). These map to the `mode: 'symbolic'` parameter of the CAS commands (`docs/features/cas/design.md`).
+- **Tools:** `move`, `points`, `lines` (basic), and the curve tools, for the graphics view only. The `cas` view has its own row toolbar: evaluate, numeric, keep input, factor, expand, substitute, solve, derivative, integral, plot.
+- **Commands:** every group, symbolic first: Simplify, Factor, Expand, Solve, Solutions, NSolve, Substitute, Derivative, Integral, Limit, Sum, Product, Taylor polynomial, partial fractions, matrices exact. Free names are allowed as symbols inside symbolic parameters only; elsewhere unknown names stay errors.
+- **Defaults:** radians, exact output, 10 significant figures for numeric, no auto sliders, no labels in graphics, dependent objects not draggable.
+- **Features:** `cas: true`, `inputBar: false` (rows are the input), `suggestions: true` (factor, solve, plot chips under a row), `undoRedo: true`, `export: true` (rows as LaTeX or text), `clockBar: false`.
+- **Keyboard:** the maths keyboard with a symbolic tab (`√`, `∫`, `d/dx`, `lim`, `Σ`, matrix).
+- **Exam:** allowed. An exam profile can turn the whole mode off, or keep it with numeric only.
+- **Heavy work:** symbolic commands run in a worker with a time budget. A row waiting shows `pending`, then its result, or `unsupported` and the numeric answer when the symbolic layer cannot do it.
+
+#### 3.2.2 The `graphing3d` mode
+
+- **Views:** `graphics3d` and `algebra` at start, side by side. A 2D `graphics` view can be added; it shows the `floor` plane or any plane the learner picks.
+- **Tools:** the full 3D tool groups from `docs/features/space-3d/design.md`: move and rotate view, points (in space, on objects, intersection), lines and planes (through points, perpendicular, parallel), solids (prism, pyramid, cone, cylinder, sphere, cube, net), surfaces (extrude, revolve), measures (distance, angle, area, volume), transforms (reflect about plane, rotate about line, translate), and view tools (view in front of, change projection).
+- **Commands:** 3D, functions (including `Function2` surfaces), geometry, transforms, lists, numbers. Boolean operations on solids load on demand (`docs/design/libraries.md`).
+- **Defaults:** radians, three axes on, a floor grid, perspective camera, `keepRatio: true`, auto sliders yes (through the UI chip, as in 3.4), labels for points, dependent objects draggable through drag plans, `opacity` 0.6 for solids.
+- **Features:** `threeD: true`, `inputBar: true`, `suggestions: true`, `clockBar: true` (rotating views and animations), `export: true` (PNG, 3D model file such as glTF or STL).
+- **Keyboard:** the maths keyboard plus `x y z` and the 3D object keys.
+- **Exam:** allowed. An exam profile can turn 3D off.
+- **Devices:** on a device without WebGL 2 the mode is unavailable with reason `no_webgl`. AR placement is a view option where the device supports WebXR.
 
 ### 3.3 Deriving a mode
 
