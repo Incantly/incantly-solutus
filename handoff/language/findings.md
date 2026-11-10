@@ -252,7 +252,8 @@ Checker round 4 (pipeline step 7, after the product owner's narrowed ruling SM-2
 - **Evidence:** found in round 4; present since pass 1. `hslToRgb` (`builtins.ts:237-246`) starts with `h = ((h % 360) + 360) % 360`, which is NaN for an infinite `h`; `clamp` (`builtins.ts:235`) passes NaN through, and `mkColor` (`builtins.ts:255`) stores it. `compileBuiltin` (`compile.ts:757`) applies the Number rule (`fin`) only when the result is a Number, so a `Color` result is never tested. With `big = inf`: `hsl(big, 1, 0.5)` and `hsv(big, 1, 1)` are defined as `{r: 255, g: 0, b: NaN, a: 1}`. `rgb(big, 0, 0)` and `rgb(0, 0, 0, big)` are fine (clamped to 255 and 1). `hsl(1e308 * 10, 1, 0.5)` is `overflow` from its argument.
 - **Invariant broken:** L8: a result that is not a number from numeric inputs (here an infinite input) is undefined `not_finite`; the pipeline rule covers every numeric value kind, which includes `Color`.
 - **Suggested fix:** in `compileBuiltin`, apply the same test to a non-Number result that holds numbers (`hasNaN` / `hasNonFinite` on the result, as the field path does), or make `hsl` and `hsv` fail with `not_finite` (or `out_of_domain`) for an infinite hue.
-- **status:** open
+- **status:** fixed
+- **fix (round 5):** a built-in with a `call` that returns a Point, Vector, Color or list is checked number by number like a Number result: a NaN inside is undefined `not_finite`, an infinity from finite arguments is undefined `overflow`, an infinity that follows an infinite argument stays a value (`compile.ts` `nonNumberIn`).
 
 ## Wrong errors
 

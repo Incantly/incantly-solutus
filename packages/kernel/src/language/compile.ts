@@ -128,6 +128,20 @@ function hasNonFinite(v: unknown): boolean {
   return false;
 }
 
+/** The first number inside a value (a coordinate, a channel, a list item) that is not a number (`'nan'`) or is infinite (`'inf'`); a NaN wins over an infinity. */
+function nonNumberIn(v: unknown): 'nan' | 'inf' | undefined {
+  if (typeof v === 'number') return v !== v ? 'nan' : v - v !== 0 ? 'inf' : undefined;
+  if (v === null || typeof v !== 'object') return undefined;
+  let found: 'inf' | undefined;
+  const items: ArrayLike<unknown> | unknown[] = ArrayBuffer.isView(v) || Array.isArray(v) ? (v as unknown as ArrayLike<unknown>) : Object.values(v);
+  for (let i = 0; i < items.length; i++) {
+    const r = nonNumberIn(items[i]);
+    if (r === 'nan') return 'nan';
+    if (r === 'inf') found = 'inf';
+  }
+  return found;
+}
+
 function failInput(env: Env, id: ObjId): void {
   if (env.reason === undefined) {
     env.reason = 'input_undefined';
@@ -814,7 +828,16 @@ class Compiler {
         vals.push(v);
       }
       const out = call(env, vals);
-      if (typeof out === 'number') return fin(env, out, vals.some(hasNonFinite));
+      const anyInf = vals.some(hasNonFinite);
+      if (typeof out === 'number') return fin(env, out, anyInf);
+      // a Point, Vector, Color or list holds numbers: the same rule applies to each of them
+      if (out !== null && typeof out === 'object') {
+        const bad = nonNumberIn(out);
+        if (bad === 'nan' || (bad === 'inf' && !anyInf)) {
+          if (env.reason === undefined) env.reason = bad === 'nan' ? 'not_finite' : 'overflow';
+          return undef;
+        }
+      }
       return out;
     };
   }
