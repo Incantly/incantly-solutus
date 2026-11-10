@@ -37,7 +37,7 @@ export function analyseLine(source: string, fig: FigureView, opts: { line?: numb
 function analyseInner(source: string, fig: FigureView, opts: { line?: number }): import('../contracts/errors').Result<CheckedLine> {
   const parsed = parseLine(source, {
     ...(opts.line !== undefined ? { line: opts.line } : {}),
-    isObjectCommand: (n) => fig.commands.lookup(n)?.kind === 'object',
+    isTaken: (n) => fig.lookup(n) !== undefined,
   });
   if (!parsed.ok) return parsed;
   const checked = checkLine(parsed.value, fig);
@@ -418,13 +418,21 @@ function boundarySubsequence(lq: string, c: string, lc: string): boolean {
   return qi === lq.length;
 }
 
+/** The query's letters appear in order in the candidate, the first one at its start (`mp` in `Midpoint`, `sgm` in `Segment`). */
+function startsSubsequence(lq: string, lc: string): boolean {
+  if (lq.charCodeAt(0) !== lc.charCodeAt(0)) return false;
+  let qi = 1;
+  for (let i = 1; i < lc.length && qi < lq.length; i++) if (lc.charCodeAt(i) === lq.charCodeAt(qi)) qi++;
+  return qi === lq.length;
+}
+
 function textScore(q: string, c: string): number {
   if (q === '') return 0;
   if (c.startsWith(q)) return 1000;
   const lq = lower(q);
   const lc = lower(c);
   if (lc.startsWith(lq)) return 800;
-  if (q.length >= 2 && boundarySubsequence(lq, c, lc)) return 500;
+  if (q.length >= 2 && (boundarySubsequence(lq, c, lc) || startsSubsequence(lq, lc))) return 500;
   const maxD = c.length >= 6 ? 2 : 1;
   if (q.length >= 3 && Math.abs(c.length - q.length) <= maxD && editDistance(lq, lc, maxD) <= maxD) return 200;
   return -1;
@@ -652,6 +660,73 @@ function completeInner(source: string, cursor: number, fig: FigureView, opts: { 
 
 /* -------------------------------- highlighting -------------------------------- */
 
+/**
+ * Indexes of name tokens that are local to the line: the parameters of `f(x) = …` and the binders
+ * (and body-scope names) of a command call such as `Seq(k^2, k, 1, 5)`. They are not unknown names.
+ */
+function localNameTokens(toks: readonly Token[], fig: FigureView): Set<number> {
+  const out = new Set<number>();
+  const mark = (names: ReadonlySet<string>, from: number, to: number): void => {
+    for (let i = from; i < to; i++) {
+      const t = toks[i] as Token;
+      if (t.kind === 'name' && names.has(t.name ?? t.text)) out.add(i);
+    }
+  };
+  const isOp = (i: number, text: string): boolean => toks[i]?.kind === 'op' && toks[i]?.text === text;
+  // f(x, y) = …
+  if (toks[0]?.kind === 'name' && isOp(1, '(')) {
+    const params = new Set<string>();
+    let i = 2;
+    while (toks[i]?.kind === 'name') {
+      params.add(toks[i]?.name ?? (toks[i] as Token).text);
+      i++;
+      if (isOp(i, ',')) i++;
+      else break;
+    }
+    if (params.size > 0 && isOp(i, ')') && isOp(i + 1, '=')) mark(params, 2, toks.length);
+  }
+  // command calls with binders
+  for (let i = 0; i + 1 < toks.length; i++) {
+    const t = toks[i] as Token;
+    if (t.kind !== 'name' || !isOp(i + 1, '(')) continue;
+    const spec = fig.commands.lookup(t.name ?? t.text);
+    if (!spec) continue;
+    const args: { from: number; to: number }[] = [];
+    let depth = 0;
+    let from = i + 2;
+    let close = -1;
+    for (let j = i + 1; j < toks.length; j++) {
+      const u = toks[j] as Token;
+      if (u.kind !== 'op') continue;
+      if (u.text === '(' || u.text === '[') depth++;
+      else if (u.text === ')' || u.text === ']') {
+        depth--;
+        if (depth === 0) {
+          args.push({ from, to: j });
+          close = j;
+          break;
+        }
+      } else if (u.text === ',' && depth === 1) {
+        args.push({ from, to: j });
+        from = j + 1;
+      }
+    }
+    const end = close < 0 ? toks.length : close;
+    const names = new Set<string>();
+    for (const f of spec.forms) {
+      f.params.forEach((p, k) => {
+        if (p.kind === 'binder') {
+          const a = args[k];
+          if (a && a.to - a.from === 1 && toks[a.from]?.kind === 'name') names.add(toks[a.from]?.name ?? (toks[a.from] as Token).text);
+        }
+        for (const sc of p.scope ?? []) names.add(sc.name);
+      });
+    }
+    if (names.size > 0) mark(names, i + 2, end);
+  }
+  return out;
+}
+
 export type HighlightKind =
   | 'number' | 'string' | 'operator' | 'comment' | 'directive' | 'keyword' | 'command' | 'function' | 'constant' | 'object' | 'unknown' | 'name' | 'error';
 
@@ -675,6 +750,7 @@ export function tokenize(source: string, fig?: FigureView): { tokens: HighlightT
     const consts = new Set([...CONSTANT_NAMES, 'true', 'false', 't', 'bt', 'beat', 'xaxis', 'yaxis', 'zaxis']);
     const out: HighlightToken[] = [];
     const toks = r.tokens.filter((t) => t.kind !== 'eof' && t.kind !== 'nl');
+    const locals = fig ? localNameTokens(toks, fig) : new Set<number>();
     toks.forEach((t, i) => {
       const sp = sm.span(t.s, t.e);
       let kind: HighlightKind;
@@ -709,7 +785,7 @@ export function tokenize(source: string, fig?: FigureView): { tokens: HighlightT
           else if (isCall && /^[A-Z]/.test(name)) kind = 'command';
           else if (isCall && functions.lookup(name)) kind = 'function';
           else if (consts.has(name)) kind = 'constant';
-          else if (!fig) kind = 'name';
+          else if (!fig || locals.has(i)) kind = 'name';
           else kind = fig.lookup(name) ? 'object' : 'unknown';
           break;
         }

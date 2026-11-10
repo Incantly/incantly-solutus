@@ -167,6 +167,22 @@ export function lex(sm: SourceMap, opts: { maxTokens?: number } = {}): LexResult
         i += 2;
         continue;
       }
+      if (c === '.') {
+        // a '.' is a field access only right after a name or a closing bracket; elsewhere it is a malformed number
+        const prev = out[out.length - 1];
+        const afterOperand = prev !== undefined && prev.e === i && (prev.kind === 'name' || (prev.kind === 'op' && (prev.text === ')' || prev.text === ']')));
+        if (!afterOperand) {
+          errors.push(
+            diag.at('bad_number', i, i + 1, 'lang.bad_number', { token: '.', why: 'a decimal point needs digits after it' }, {
+              hint: 'Write numbers like 12, 0.5, .5 or 1e3.',
+              fingerprintKey: '.',
+            }),
+          );
+          push({ kind: 'bad', text: '.', s: i, e: i + 1 });
+          i++;
+          continue;
+        }
+      }
       if ('+-*/^!\'°=<>,;.:'.includes(c)) {
         push({ kind: 'op', text: c, s: i, e: i + 1 });
         i++;
@@ -382,7 +398,7 @@ export function lex(sm: SourceMap, opts: { maxTokens?: number } = {}): LexResult
       notices.push(
         notice('precision_loss', 'warning', `${raw} is too small to store and became 0.`, { token: raw, line: sp.line, col: sp.col, endCol: sp.endCol }),
       );
-    } else if (isInt && value > 9007199254740992) {
+    } else if (isInt && value >= 9007199254740992) {
       let exact: boolean;
       try {
         exact = BigInt(value).toString() === clean.replace(/^0+(?=\d)/, '');

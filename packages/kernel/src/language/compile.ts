@@ -57,6 +57,8 @@ const NAN = Number.NaN;
 
 function setNanReason(env: Env, v: number, usesInf: boolean): number {
   if (v - v === 0) return v;
+  // an infinity that comes from an `inf` input is a value (README decision 7); one made by overflow is not
+  if ((v === Infinity || v === -Infinity) && (usesInf || env.inf === true)) return v;
   if (env.reason === undefined) env.reason = v !== v || usesInf ? 'not_finite' : 'overflow';
   return NAN;
 }
@@ -247,6 +249,7 @@ class Compiler {
             failInput(env, id);
             return isN ? NAN : undefined;
           }
+          if (v === Infinity || v === -Infinity) env.inf = true;
           return v;
         };
       }
@@ -999,6 +1002,7 @@ export type EvalResult =
 
 /** Run a compiled line's right-hand side and report the value or why it is undefined. Never throws. */
 export function evaluate(compiled: Compiled<unknown>, env: Env): EvalResult {
+  env.inf = undefined;
   env.reason = undefined;
   env.via = undefined;
   env.detail = undefined;

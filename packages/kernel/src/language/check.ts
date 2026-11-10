@@ -534,7 +534,7 @@ class Checker {
     if (split) {
       suggest.push(this.replaceRange(e.s, e.e, split.join(' * ')));
       const uniq = [...new Set(split)];
-      extra.hint = uniq.length === split.length ? `${typeList(split)} ${split.length === 2 ? 'both' : 'all'} exist. Did you mean ${split.join(' * ')}?` : `Did you mean ${split.join(' * ')}?`;
+      extra.hint = uniq.length === split.length ? `${split.length === 2 ? split.join(' and ') : split.slice(0, -1).join(', ') + ' and ' + split[split.length - 1]} ${split.length === 2 ? 'both' : 'all'} exist. Did you mean ${split.join(' * ')}?` : `Did you mean ${split.join(' * ')}?`;
     } else if (close.length > 0) {
       extra.hint = `Did you mean ${close.join(' or ')}?`;
       for (const c of close.slice(0, 2)) suggest.push(this.replaceRange(e.s, e.e, c));
@@ -542,6 +542,7 @@ class Checker {
       extra.hint = 'Make it a number first, or pick an existing name.';
     }
     if (suggest.length > 0) extra.suggest = suggest;
+    if (split && suggest.length > 0) extra.fix = suggest[0] as string;
     // a slider that was never made
     if (!this.simpleUnknown && !nameProblem(name) && !reservedGroup(name, this.fig.commands, this.functions)) {
       const slider = `${name} = 1 in -5..5 step 0.1`;
@@ -1139,7 +1140,7 @@ class Checker {
       return { form, bind, restArgs, extra, missing, ...(dupNamed !== undefined ? { dupNamed } : {}) };
     });
 
-    const dup = bindings.find((b) => b.dupNamed !== undefined && b.extra.length === 0 && b.missing.length === 0);
+    const dup = bindings.find((b) => b.dupNamed !== undefined);
     const candidates = bindings.filter((b) => b.extra.length === 0 && b.missing.length === 0 && b.dupNamed === undefined);
     if (candidates.length === 0 && dup && dup.dupNamed !== undefined) {
       const a = args[dup.dupNamed] as Arg;
@@ -1189,6 +1190,7 @@ class Checker {
       tys: (Ty | undefined)[];
       score: number;
       invalid: boolean;
+      binderBad: { ai: number; arg: Arg }[];
     }
     const testForm = (b: Binding): Test => {
       const problems: ArgProblem[] = [];
@@ -1196,6 +1198,7 @@ class Checker {
       const tys: (Ty | undefined)[] = [];
       let invalid = false;
       let score = 0;
+      const binderBad: { ai: number; arg: Arg }[] = [];
       const frame: Frame = { vars: new Map() };
       // pass 1: values and binders
       b.form.params.forEach((p, k) => {
@@ -1223,6 +1226,7 @@ class Checker {
           const v = a.value;
           if (v.k !== 'name' || v.paren) {
             problems.push(this.problem(ai, p, a, 'an expression', 'a bare name'));
+            binderBad.push({ ai, arg: a });
             bound[k] = { param: p, omitted: false };
             return;
           }
@@ -1290,7 +1294,7 @@ class Checker {
           if (!accepts(set, node.ty)) problems.push(this.problem(ai, rest, a, tyStr(node.ty), setLabel(set)));
         }
       }
-      return { b, problems, bound, tys, score, invalid };
+      return { b, problems, bound, tys, score, invalid, binderBad };
     };
 
     const tests = candidates.map(testForm);
@@ -1329,9 +1333,27 @@ class Checker {
         if (wantsValue(first.b, k) && first.b.bind[k] !== -1) flush(first.b.bind[k] as number);
       });
       for (const ai of first.b.restArgs) flush(ai);
-      if (this.errors.length > 0) return null;
+      if (this.errors.length > 0) {
+        this.reportBinders(first.binderBad);
+        return null;
+      }
+    }
+    const badBinders = tests.filter((t) => t.binderBad.length > 0).sort((x, y) => x.problems.length - y.problems.length)[0];
+    if (badBinders) {
+      this.reportBinders(badBinders.binderBad);
+      return null;
     }
     return this.diagnose(specName, forms, call, bindings, tests, valueArg);
+  }
+
+  reportBinders(bad: readonly { ai: number; arg: Arg }[]): void {
+    for (const { arg } of bad) {
+      this.err('not_a_binder', arg.value.s, arg.value.e, 'lang.not_a_binder', {}, {
+        expected: ['name'],
+        hint: `This position names a variable that the expression uses. Write a plain name such as k, not ${this.textOf(arg.value)}.`,
+        fingerprintKey: this.textOf(arg.value),
+      });
+    }
   }
 
   checkBinderUse(_bound: readonly TArg[], _form: FormLike, _args: readonly Arg[]): void {
@@ -1420,36 +1442,26 @@ class Checker {
     extra.fingerprintKey = `${name}:${given.join(',')}`;
     const cnt = counts.length === 0 ? '0' : counts.length === 1 ? String(counts[0]) : typeList(counts.map(String));
     if (!arityOk) {
-      if (forms.length === 1) {
-        kind = 'arg_count';
-        key = 'lang.arg_count';
-        message = `${name} takes ${cnt} argument${counts.length === 1 && counts[0] === 1 ? '' : 's'}; got ${n}.`;
-      } else {
-        message = `${name} takes ${cnt} arguments; you gave ${n}.`;
-      }
-      if (closest.extra.length > 0) {
-        const first = closest.extra[0] as number;
-        const sp0 = args[first] as Arg;
-        s = sp0.value.s;
-        e = (args[args.length - 1] as Arg).value.e;
-      } else {
-        s = call.close;
-        e = call.close;
-      }
+      kind = 'arg_count';
+      key = 'lang.arg_count';
+      message = `${name} takes ${cnt} argument${counts.length === 1 && counts[0] === 1 ? '' : 's'}; got ${n}.`;
+      // the count fits no form: the span is the whole call
       extra.hint = closest.extra.length > 0
         ? `Remove ${closest.extra.length === 1 ? 'the extra argument' : 'the extra arguments'}, or use another form: ${formText(name, closest.form)}.`
         : `Add the missing ${closest.missing.map((k) => (closest.form.params[k] as ParamSpec).name).join(', ')}: ${formText(name, closest.form)}.`;
+      if (name === 'log' && n === 1) extra.hint = 'log needs a base: log(base, x). For one argument use ln, log10 or log2.';
     } else {
       const first = problems[0];
       if (first) {
         const a = args[first.argIndex] as Arg | undefined;
         const txt = a ? this.textOf(a.value) : '';
         message = `${name}: argument ${first.argIndex + 1}${first.param ? ` (${first.param})` : ''} should be ${/^[AEIOU]/.test(first.expected) ? 'an' : 'a'} ${first.expected}, but ${txt} is ${/^[aeiou]/i.test(first.got) ? 'an' : 'a'} ${first.got}.`;
-        if (a) {
+        // one wrong argument is pointed at; several wrong arguments make the whole call the span
+        if (a && problems.length === 1) {
           s = a.value.s;
           e = a.value.e;
         }
-        extra.hint = `Use ${formText(name, closest.form)}.`;
+        extra.hint = `Closest form: ${name}(${closest.form.params.map((p) => p.name).join(', ')}).`;
       } else {
         message = `${name} has no form (${given.join(', ')}).`;
       }
@@ -1458,7 +1470,7 @@ class Checker {
     const sugg = this.dropSuggestions(forms, args, valueArg);
     if (sugg.length > 0) extra.suggest = sugg;
     extra.message = message;
-    this.err(kind, s, e, key, kind === 'arg_count' ? { name, n: cnt, m: n } : { message, command: name, given: given.join(', ') }, extra);
+    this.err(kind, s, e, key, kind === 'arg_count' ? { name, n: cnt, m: n } : { command: name, given: given.join(', ') }, extra);
     return null;
   }
 

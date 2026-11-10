@@ -96,9 +96,12 @@ function validateTarget(c: Checker, t: NameRef, rhsFieldHint?: string): boolean 
       const cand = `${t.name}_${k++}`;
       if (!c.fig.lookup(cand)) alts.push(cand);
     }
+    const useField = rhsFieldHint !== undefined && alts[0] === rhsFieldHint;
+    const sugg = alts.map((a) => c.replaceRange(t.s, t.e, a));
     c.err('reserved_name', t.s, t.e, 'lang.reserved_name', { name: t.name, group: reservedGroupText(group) }, {
       hint: `Pick another name, such as ${alts[0]}.`,
-      suggest: alts.map((a) => c.replaceRange(t.s, t.e, a)),
+      suggest: sugg,
+      ...(useField ? { fix: sugg[0] as string } : {}),
       fingerprintKey: t.name,
     });
     return false;
@@ -237,7 +240,7 @@ function checkRange(c: Checker, r: RangeClause, initial: TNode | undefined): Che
   const forms = ['Name = value in min..max [step s]'];
   if (lo !== undefined && hi !== undefined) {
     if (!Number.isFinite(lo) || !Number.isFinite(hi)) {
-      c.err('bad_range', r.s, r.e, 'lang.bad_range', { why: 'A slider range needs finite bounds' }, { forms, hint: 'Use numbers, not inf.', fingerprintKey: 'infinite' });
+      c.err('bad_range', r.s, r.e, 'lang.bad_range', { why: 'A slider range needs finite bounds' }, { forms, hint: 'Pick a finite bound; a slider cannot reach inf.', fingerprintKey: 'infinite' });
       return undefined;
     }
     if (lo >= hi) {

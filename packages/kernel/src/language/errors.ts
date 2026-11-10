@@ -47,7 +47,7 @@ interface KindSpec {
 /** Codes follow docs/features/errors/errors.md; kinds the language adds take the next free L numbers. */
 export const ERROR_KINDS: Readonly<Record<string, KindSpec>> = {
   syntax: { code: 'L001', phase: 'parse', recovery: 'fix_line' },
-  unbalanced: { code: 'L002', phase: 'lex', recovery: 'use_suggestion' },
+  unbalanced: { code: 'L002', phase: 'parse', recovery: 'use_suggestion' },
   bad_number: { code: 'L003', phase: 'lex', recovery: 'fix_line' },
   unterminated_string: { code: 'L004', phase: 'lex', recovery: 'use_suggestion' },
   bad_character: { code: 'L005', phase: 'lex', recovery: 'use_suggestion' },
@@ -121,7 +121,7 @@ export const MESSAGE_TEMPLATES: Record<string, string> = {
   'lang.duplicate_param': 'The parameter {name} appears twice.',
   'lang.duplicate_arg': 'The argument {name} is given more than once.',
   'lang.not_a_binder': 'This position takes a bare name, not an expression.',
-  'lang.no_matching_form': '{message}',
+  'lang.no_matching_form': '{command} has no form for ({given}).',
   'lang.arg_count': '{name} takes {n} argument(s); got {m}.',
   'lang.type_mismatch': 'Cannot {op} a {left} and a {right}.',
   'lang.type_mismatch_unary': 'Cannot apply {op} to a {left}.',
@@ -222,7 +222,7 @@ export function buildError(
   };
   if (source !== undefined && source.length <= 200) o['source'] = source;
   if (forms.length > shownForms.length) o['formsOmitted'] = forms.length - shownForms.length;
-  if (extra.hint !== undefined) o['hint'] = extra.hint;
+  o['hint'] = extra.hint !== undefined && extra.hint.trim() !== '' ? extra.hint : defaultHint(kind, extra.expected ?? [], suggest);
   if (extra.related !== undefined) o['related'] = extra.related;
   if (extra.path !== undefined) o['path'] = extra.path;
   if (extra.blockedBy !== undefined) o['blockedBy'] = extra.blockedBy;
@@ -236,6 +236,20 @@ export function buildError(
   if (extra.limit !== undefined) o['limit'] = extra.limit;
   if (extra.after !== undefined) o['after'] = extra.after;
   return o as unknown as LanguageError;
+}
+
+/** A hint for the errors that did not get a specific one: the hint is always present and never empty. */
+function defaultHint(kind: string, expected: readonly string[], suggest: readonly string[]): string {
+  if (suggest.length > 0) return 'Try the suggested line.';
+  if (expected.length > 0) return `Expected ${typeList(expected.slice(0, 4).map((e) => (e.length > 0 ? e : 'more input')))} at this point.`;
+  switch (kind) {
+    case 'syntax':
+      return 'Check the line near the marked column; operators need a value on both sides.';
+    case 'internal':
+      return 'Report this; nothing was changed.';
+    default:
+      return 'Check the marked part of the line.';
+  }
 }
 
 /** Same error with `more` attached. */

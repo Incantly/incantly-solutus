@@ -8,6 +8,7 @@ import type { Arg, BinOp, CmpOp, DirectiveWord, Expr, LineNode, NameRef, ParsedL
 import { Diag, buildError, withMore } from './errors';
 import type { ErrorExtra, LanguageError } from './errors';
 import { MAX_DEPTH, lex } from './lexer';
+import { suggestName } from './names';
 import type { Token } from './lexer';
 import { SourceMap, splitLogicalLines } from './source';
 
@@ -16,6 +17,8 @@ export interface ParseOptions {
   line?: number;
   /** Lets the parser raise `unnamed_object` for object commands itself. Without it the checker does. */
   isObjectCommand?: (name: string) => boolean;
+  /** True for a name the figure already uses, so a suggested name for an unnamed line is free. */
+  isTaken?: (name: string) => boolean;
   /** Forms of a command, for `forms` on a syntax error inside its call. */
   commandForms?: (name: string) => readonly string[];
 }
@@ -105,8 +108,12 @@ class Parser {
       throw new Stop(this.diag.at('syntax', s, s, 'lang.syntax_end', { token: '', expected: expected.join(', ') || 'more input' }, { ...extra, fingerprintKey: 'end' }));
     }
     if (inCall !== undefined && isUpper(inCall) && (t.text === ',' || t.text === ')')) {
+      const withClose = expected.includes(')') ? expected : [...expected, ')'];
       throw new Stop(
-        this.diag.at('syntax', t.s, t.e, 'lang.syntax_call', { token: t.text, command: inCall, why: 'the argument before it is missing', expected: expected.join(', ') }, extra),
+        this.diag.at('syntax', t.s, t.e, 'lang.syntax_call', { token: t.text, command: inCall, why: 'the argument before it is missing', expected: withClose.join(', ') }, {
+          ...extra,
+          expected: withClose.slice(0, 8),
+        }),
       );
     }
     throw new Stop(this.diag.at('syntax', t.s, t.e, 'lang.syntax', { token: this.tokenLabel(t), expected: expected.join(', ') || 'something else' }, extra));
@@ -182,6 +189,25 @@ class Parser {
     if (t.kind === 'comment') return { k: 'noop', comment: t.text };
     if (t.kind === 'at') return this.parseDirective();
 
+    // a keyword on the left of '=' is a (reserved) name; the checker refuses it with reserved_name
+    if (t.kind === 'kw' && this.isOp('=', 1)) return this.parseDefine();
+
+    // `1a = 1`: a number directly followed by a name, then '=' (a name cannot start with a digit)
+    if (t.kind === 'num' && t.int === true && /^\d+$/.test(t.text)) {
+      const n1 = this.peek(1);
+      if (n1.kind === 'name' && n1.s === t.e && this.isOp('=', 2)) {
+        const text = this.sm.text;
+        const fixed = text.slice(0, t.s) + n1.text + t.text + text.slice(n1.e);
+        throw new Stop(
+          this.diag.at('bad_name', t.s, n1.e, 'lang.bad_name', { name: t.text + n1.text, why: 'A name cannot start with a digit' }, {
+            hint: `Names start with a letter. Write ${n1.text}${t.text} instead.`,
+            suggest: [fixed],
+            fingerprintKey: t.text + n1.text,
+          }),
+        );
+      }
+    }
+
     if (t.kind === 'name') {
       const n1 = this.peek(1);
       // Name = ...
@@ -234,28 +260,27 @@ class Parser {
   unnamed(expr: Expr, startTok: number): LanguageError {
     const first = this.toks[startTok] as Token;
     const text = this.sm.text.slice(first.s, expr.e).trim();
-    let name: string;
+    let type: string;
     switch (expr.k) {
       case 'tuple':
       case 'polar':
-        name = 'A';
+        type = 'Point';
         break;
       case 'str':
-        name = 'text1';
+        type = 'Text';
         break;
       case 'list':
       case 'range':
-        name = 'L';
+        type = 'List';
         break;
       case 'cmp':
-        name = 'cond1';
-        break;
-      case 'call':
-        name = 'a';
+        type = 'Bool';
         break;
       default:
-        name = 'a';
+        type = 'Number';
     }
+    const isTaken = this.opts.isTaken;
+    const name = suggestName(type, isTaken ? (n: string) => isTaken(n) : new Set<string>());
     return this.diag.at('unnamed_object', first.s, expr.e, 'lang.unnamed_object', { line: text, name }, {
       hint: `Give it a name, for example ${name} = ${text}.`,
       suggest: [`${name} = ${text}`],
@@ -529,12 +554,7 @@ class Parser {
   /* --------------------------- expressions --------------------------- */
 
   parseExpr(): Expr {
-    this.enter();
-    try {
-      return this.parseOr();
-    } finally {
-      this.leave();
-    }
+    return this.parseOr();
   }
 
   parseOr(): Expr {
@@ -665,7 +685,7 @@ class Parser {
     const whole = text.slice(r.s, r.e);
     const before = text.slice(0, l.s);
     const after = text.slice(r.e);
-    const a = `(${lt}/${num}) ${rest}`;
+    const a = `(${lt}/${num}) * ${rest}`;
     const b = `${lt}/(${whole})`;
     const lineA = before + a + after;
     const lineB = before + b + after;
@@ -772,6 +792,7 @@ class Parser {
       if (t.text === '[' && e.k !== 'num' && e.k !== 'str' && ((e.k !== 'bin' && e.k !== 'unary') || e.paren === true)) {
         this.next();
         const index = this.parseExpr();
+        if (this.isOp(',') && e.k === 'name' && isUpper(e.name)) throw new Stop(this.bracketCall(e, t));
         const close = this.expectCloser(t, ']');
         e = { k: 'index', target: e, index, s: e.s, e: close.e };
         continue;
@@ -799,6 +820,34 @@ class Parser {
       }
       return e;
     }
+  }
+
+  /** `Circle[A, 2]`: square brackets after a command name. The rewrite to round brackets is mechanical. */
+  bracketCall(callee: Expr & { k: 'name' }, open: Token): LanguageError {
+    let depth = 1;
+    let close: Token | undefined;
+    for (let j = this.pos; j < this.toks.length; j++) {
+      const k = this.toks[j] as Token;
+      if (k.kind !== 'op') continue;
+      if (k.text === '(' || k.text === '[') depth++;
+      else if (k.text === ')' || k.text === ']') {
+        depth--;
+        if (depth === 0) {
+          close = k;
+          break;
+        }
+      }
+    }
+    const extra: ErrorExtra = {
+      expected: ['('],
+      hint: `Commands take round brackets: write ${callee.name}(…), not ${callee.name}[…].`,
+      fingerprintKey: '[',
+    };
+    if (close !== undefined && close.text === ']') {
+      const text = this.sm.text;
+      extra.suggest = [text.slice(0, open.s) + '(' + text.slice(open.e, close.s) + ')' + text.slice(close.e)];
+    }
+    return this.diag.at('syntax', open.s, open.e, 'lang.syntax', { token: '[', expected: '(' }, extra);
   }
 
   tickCallAhead(): boolean {

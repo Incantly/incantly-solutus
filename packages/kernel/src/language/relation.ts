@@ -175,7 +175,6 @@ function degreeOf(p: Poly): number {
 }
 
 const co = (p: Poly, i: number, j: number): TNode => p.get(key(i, j)) ?? num(0);
-const allConst = (p: Poly): boolean => [...p.values()].every(isNum);
 
 export interface Classified {
   readonly shape: RelationShape;
@@ -201,19 +200,126 @@ export function classify(tree: RelTree, sx: number, sy: number): Classified {
     if (isNum(a) && isNum(b) && a.v === 0 && b.v === 0) return { shape: 'curve', poly: polyNodes };
     return { shape: 'line', poly: polyNodes };
   }
-  if (allConst(p)) {
-    const xx = (co(p, 2, 0) as { v: number }).v;
-    const yy = (co(p, 0, 2) as { v: number }).v;
-    const xy = (co(p, 1, 1) as { v: number }).v;
-    const bx = (co(p, 1, 0) as { v: number }).v;
-    const by = (co(p, 0, 1) as { v: number }).v;
-    const c0 = (co(p, 0, 0) as { v: number }).v;
-    if (xy === 0 && xx !== 0 && Math.abs(xx - yy) <= 1e-12 * Math.max(1, Math.abs(xx))) {
-      const cx = -bx / (2 * xx);
-      const cy = -by / (2 * xx);
-      const r2 = cx * cx + cy * cy - c0 / xx;
-      if (r2 > 0) return { shape: 'circle', poly: polyNodes };
-    }
+  // A circle needs xx == yy (non-zero numbers), no xy term, and a radius squared that is positive.
+  const xx = co(p, 2, 0);
+  const yy = co(p, 0, 2);
+  const xy = co(p, 1, 1);
+  if (isNum(xx) && isNum(yy) && isNum(xy) && xy.v === 0 && xx.v !== 0 && Math.abs(xx.v - yy.v) <= 1e-12 * Math.max(1, Math.abs(xx.v))) {
+    const r2 = radiusSquared(xx.v, co(p, 1, 0), co(p, 0, 1), co(p, 0, 0));
+    if (r2 !== undefined && r2 > 0) return { shape: 'circle', poly: polyNodes };
   }
   return { shape: 'conic', poly: polyNodes };
+}
+
+/* ------------------------- symbolic radius squared ------------------------- */
+
+/** A polynomial in opaque atoms (objects, parameters, fields): monomial key -> numeric coefficient. */
+type Sym = Map<string, number>;
+const MAX_SYM_TERMS = 64;
+
+function atomKey(n: TNode): string | undefined {
+  switch (n.n) {
+    case 'ref':
+      return `r${n.id}`;
+    case 'local':
+      return `l${n.slot}`;
+    case 'const':
+      return `c${n.name}`;
+    case 'clock':
+      return `k${n.which}`;
+    case 'field': {
+      const t = atomKey(n.target);
+      return t === undefined ? undefined : `${t}.${n.field}`;
+    }
+    default:
+      return undefined;
+  }
+}
+
+const monoMul = (a: string, b: string): string => {
+  const m = new Map<string, number>();
+  for (const part of [...(a === '' ? [] : a.split('*')), ...(b === '' ? [] : b.split('*'))]) {
+    const at = part.lastIndexOf('^');
+    const name = part.slice(0, at);
+    m.set(name, (m.get(name) ?? 0) + Number(part.slice(at + 1)));
+  }
+  return [...m]
+    .sort((x, y) => (x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0))
+    .map(([k, e]) => `${k}^${e}`)
+    .join('*');
+};
+
+function symAdd(a: Sym, b: Sym, sign: 1 | -1): Sym | undefined {
+  const out: Sym = new Map(a);
+  for (const [k, v] of b) out.set(k, (out.get(k) ?? 0) + sign * v);
+  for (const [k, v] of out) if (Math.abs(v) < 1e-12) out.delete(k);
+  return out.size > MAX_SYM_TERMS ? undefined : out;
+}
+
+function symMul(a: Sym, b: Sym): Sym | undefined {
+  const out: Sym = new Map();
+  for (const [ka, va] of a) for (const [kb, vb] of b) out.set(monoMul(ka, kb), (out.get(monoMul(ka, kb)) ?? 0) + va * vb);
+  for (const [k, v] of out) if (Math.abs(v) < 1e-12) out.delete(k);
+  return out.size > MAX_SYM_TERMS ? undefined : out;
+}
+
+function symOf(n: TNode): Sym | undefined {
+  switch (n.n) {
+    case 'num':
+      return n.v === 0 ? new Map() : new Map([['', n.v]]);
+    case 'unary': {
+      if (n.op === 'not') return undefined;
+      const a = symOf(n.arg);
+      return a && (n.op === '-' ? symAdd(new Map(), a, -1) : a);
+    }
+    case 'bin': {
+      if (n.variant !== 'num') return undefined;
+      const l = symOf(n.l);
+      const r = symOf(n.r);
+      if (!l || !r) return undefined;
+      if (n.op === '+') return symAdd(l, r, 1);
+      if (n.op === '-') return symAdd(l, r, -1);
+      if (n.op === '*') return symMul(l, r);
+      if (n.op === '/') {
+        if (r.size !== 1 || !r.has('')) return undefined;
+        const d = r.get('') as number;
+        return new Map([...l].map(([k, v]) => [k, v / d]));
+      }
+      if (n.op === '^') {
+        if (n.r.n !== 'num' || !Number.isInteger(n.r.v) || n.r.v < 0 || n.r.v > 4) return undefined;
+        let acc: Sym | undefined = new Map([['', 1]]);
+        for (let i = 0; i < n.r.v && acc; i++) acc = symMul(acc, l);
+        return acc;
+      }
+      return undefined;
+    }
+    default: {
+      const key = atomKey(n);
+      return key === undefined ? undefined : new Map([[`${key}^1`, 1]]);
+    }
+  }
+}
+
+/**
+ * r^2 = (bx^2 + by^2) / (4 xx^2) - c / xx for xx(x^2 + y^2) + bx x + by y + c = 0, worked out over opaque
+ * atoms so that `(x - a)^2 + (y + b)^2 == 16` gives exactly 16 whatever a and b are. Undefined when the
+ * result still depends on an object (the radius is then not known at check time).
+ */
+function radiusSquared(xx: number, bx: TNode, by: TNode, c: TNode): number | undefined {
+  const sx = symOf(bx);
+  const sy = symOf(by);
+  const sc = symOf(c);
+  if (!sx || !sy || !sc) return undefined;
+  const bx2 = symMul(sx, sx);
+  const by2 = symMul(sy, sy);
+  if (!bx2 || !by2) return undefined;
+  const sum = symAdd(bx2, by2, 1);
+  if (!sum) return undefined;
+  const scaled: Sym = new Map([...sum].map(([k, v]) => [k, v / (4 * xx * xx)]));
+  const cTerm: Sym = new Map([...sc].map(([k, v]) => [k, v / xx]));
+  const r2 = symAdd(scaled, cTerm, -1);
+  if (!r2) return undefined;
+  if (r2.size === 0) return 0;
+  if (r2.size === 1 && r2.has('')) return r2.get('') as number;
+  return undefined;
 }

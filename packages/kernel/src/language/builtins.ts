@@ -411,10 +411,10 @@ const specs: FunctionSpec[] = [
     }
     return a % b;
   }, 'remainder with the sign of a'),
-  f2('gcd', 'modular', (a, b, env) => (!isInt(a) || !isInt(b) ? (fail(env, 'not_integer', 'gcd'), NaN) : gcd(a, b)), 'greatest common divisor'),
+  f2('gcd', 'modular', (a, b, env) => (!isInt(a) || !isInt(b) ? (fail(env, 'out_of_domain', 'gcd'), NaN) : gcd(a, b)), 'greatest common divisor'),
   f2('lcm', 'modular', (a, b, env) => {
     if (!isInt(a) || !isInt(b)) {
-      fail(env, 'not_integer', 'lcm');
+      fail(env, 'out_of_domain', 'lcm');
       return NaN;
     }
     if (a === 0 || b === 0) return 0;

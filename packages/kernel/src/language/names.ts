@@ -91,10 +91,10 @@ export interface SuggestOptions {
  * Reserved and taken names are skipped.
  */
 export function suggestName(type: Ty | TypeName | string, taken: Taken, opts: SuggestOptions = {}): string {
-  const k = typeof type === 'string' ? type : type.k;
+  const k = typeof type === 'string' ? type.replace(/<.*$/s, '').trim() : type.k;
   const ok = (n: string): boolean => {
-    if (opts.commands && opts.functions) return reservedGroup(n, opts.commands, opts.functions) === undefined;
-    return !CONSTANT_NAMES.includes(n) && !VARIABLE_NAMES.includes(n) && !KEYWORD_NAMES.includes(n) && !AXIS_NAMES.includes(n);
+    if (opts.commands?.lookup(n) || opts.functions?.lookup(n)) return false;
+    return !CONSTANT_NAMES.includes(n) && !VARIABLE_NAMES.includes(n) && !KEYWORD_NAMES.includes(n) && !AXIS_NAMES.includes(n) && !HELD_BACK_NAMES.includes(n);
   };
   switch (k) {
     case 'Point':

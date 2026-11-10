@@ -5,8 +5,8 @@
  */
 import type { ObjId } from '../contracts/values';
 import type { Env } from './runtime';
-import { accepts, setsIntersect, typeSet } from './types';
-import type { Ty } from './types';
+import { accepts, memberAccepts, setsIntersect, typeSet } from './types';
+import type { Ty, TypeSet } from './types';
 
 export type ParamKind = 'value' | 'binder' | 'body';
 
@@ -223,8 +223,8 @@ export function checkTable(table: CommandTable | readonly CommandSpec[]): TableP
         const max = Math.min(f.params.length, g.params.length);
         for (let n = min; n <= max; n++) {
           let overlap = true;
-          let sf = 0;
-          let sg = 0;
+          let fLeG = true;
+          let gLeF = true;
           for (let k = 0; k < n; k++) {
             const a = typeSet((f.params[k] as ParamSpec).type);
             const b = typeSet((g.params[k] as ParamSpec).type);
@@ -232,10 +232,12 @@ export function checkTable(table: CommandTable | readonly CommandSpec[]): TableP
               overlap = false;
               break;
             }
-            sf += a.size;
-            sg += b.size;
+            if (!setWithin(a, b)) fLeG = false;
+            if (!setWithin(b, a)) gLeF = false;
           }
-          if (overlap && sf === sg) {
+          // f is strictly more specific than g when it fits inside g everywhere and g does not fit inside f
+          const ordered = (fLeG && !gLeF) || (gLeF && !fLeG);
+          if (overlap && !ordered) {
             problems.push({
               command: spec.name,
               a: formText(spec.name, f),
@@ -249,6 +251,13 @@ export function checkTable(table: CommandTable | readonly CommandSpec[]): TableP
     }
   }
   return problems;
+}
+
+/** Does every type accepted by `a` also get accepted by `b`? */
+function setWithin(a: TypeSet, b: TypeSet): boolean {
+  if (b.any) return true;
+  if (a.any) return false;
+  return a.members.every((m) => b.members.some((n) => memberAccepts(n, m)));
 }
 
 function requiredCount(f: CommandForm): number {

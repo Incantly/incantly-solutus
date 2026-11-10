@@ -160,7 +160,7 @@ export class ScratchFigure implements FigureView {
   apply(source: string, opts: { line?: number; failed?: ReadonlyMap<string, { line: number; kind: ErrorKind }> } = {}): Result<Applied> {
     const parsed = parseLine(source, {
       ...(opts.line !== undefined ? { line: opts.line } : {}),
-      isObjectCommand: (n) => this.commands.lookup(n)?.kind === 'object',
+      isTaken: (n) => this.lookup(n) !== undefined,
     });
     if (!parsed.ok) return parsed;
     const checked = checkLine(parsed.value, this, opts.failed ? { failed: opts.failed } : {});

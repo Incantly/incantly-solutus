@@ -70,6 +70,8 @@ export interface Env {
   via: ObjId | undefined;
   /** Short plain fact for the reason, such as `sqrt(-4)`. */
   detail: string | undefined;
+  /** True once an infinite value (an `inf` that was stored in an object) was read in this evaluation. */
+  inf?: boolean | undefined;
   /** Slot-addressed locals: function parameters, binders, particle names. */
   locals: unknown[];
   /** Current value of an object. `undefined` when the object is undefined. */
@@ -98,6 +100,7 @@ export function createEnv(init: EnvInit = {}): Env {
 }
 
 export function resetEnv(env: Env): void {
+  env.inf = undefined;
   env.reason = undefined;
   env.via = undefined;
   env.detail = undefined;
