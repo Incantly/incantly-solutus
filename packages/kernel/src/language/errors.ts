@@ -84,6 +84,14 @@ export const ERROR_KINDS: Readonly<Record<string, KindSpec>> = {
   type_mismatch: { code: 'C003', phase: 'typecheck', recovery: 'rewrite' },
   bad_argument: { code: 'C004', phase: 'typecheck', recovery: 'fix_line' },
   bad_range: { code: 'C005', phase: 'typecheck', recovery: 'fix_line' },
+  forward_reference: { code: 'K012', phase: 'plan', recovery: 'choose' },
+  not_free: { code: 'K013', phase: 'plan', recovery: 'choose' },
+  locked: { code: 'K014', phase: 'plan', recovery: 'choose' },
+  nothing_to_undo: { code: 'K030', phase: 'plan', recovery: 'skip' },
+  load_failed: { code: 'K041', phase: 'load', recovery: 'report' },
+  version: { code: 'K042', phase: 'load', recovery: 'report' },
+  tool_input: { code: 'T001', phase: 'tool', recovery: 'fix_line' },
+  tool_busy: { code: 'T002', phase: 'tool', recovery: 'skip' },
   internal: { code: 'K999', phase: 'commit', recovery: 'skip' },
 };
 
@@ -137,6 +145,15 @@ export const MESSAGE_TEMPLATES: Record<string, string> = {
   'lang.limit': 'That would exceed the limit of {max} {what}.',
   'lang.missing_rate': '{name} is a state but has no rate.',
   'lang.internal': 'Something went wrong inside {where}; nothing was changed.',
+  'kernel.forward_reference': '{name} needs {input}, which is defined later.',
+  'kernel.not_free': '{name} is computed from {inputs}; it has no value of its own to set.',
+  'kernel.locked': '{name} is fixed and cannot be changed by a line.',
+  'kernel.nothing_to_undo': 'There is nothing to {what}.',
+  'kernel.load_failed': 'The file could not be loaded: {n} line(s) failed.',
+  'kernel.version': 'This file is version {v}; supported: {list}.',
+  'kernel.tool_input': '{tool} needs {expected}.',
+  'kernel.tool_busy': 'The figure is busy; try again.',
+  'kernel.wrong_value': '{name} holds a {type}; {why}.',
 };
 
 export function render(key: string, params: Params): string {

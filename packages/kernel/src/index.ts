@@ -4,3 +4,6 @@ export type * from './contracts/values';
 
 // language
 export * from './language/index';
+
+// errors: registry, constructor, notices, phrases, limits
+export * from './errors/index';

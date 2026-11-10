@@ -9,7 +9,7 @@ import { factorial, getMathLib, power } from './builtins';
 import type { CheckedLine } from './check';
 import { buildError } from './errors';
 import type { LanguageError } from './errors';
-import { children } from './relation';
+import { children, usesSlot } from './relation';
 import { fail, formatNumber } from './runtime';
 import type { Env, FunctionValue, RelationValue } from './runtime';
 import type { Pt } from '../contracts/values';
@@ -991,7 +991,17 @@ class Compiler {
       ? { xx: this.compile(n.poly.xx), xy: this.compile(n.poly.xy), yy: this.compile(n.poly.yy), x: this.compile(n.poly.x), y: this.compile(n.poly.y), c: this.compile(n.poly.c) }
       : undefined;
     const ops = collectOps(n.tree);
+    // LANG-SM-34: with no polynomial form, the parts that use neither x nor y are evaluated once, here, so an undefined
+    // input or an overflowing constant makes the relation undefined (with its reason) instead of drawing nothing.
+    const parts: Fn[] = poly ? [] : this.freeParts(n.tree, [sx, sy]).map((p) => this.compile(p));
     return (env): RelationValue | undefined => {
+      for (const part of parts) {
+        const v = part(env);
+        if (v === undefined || (typeof v === 'number' && v !== v)) {
+          if (env.reason === undefined) env.reason = 'not_finite';
+          return undefined;
+        }
+      }
       // Sampling runs inside whatever line shares this Env: x, y and the undefined reason are put back as the caller had them.
       const sample = <T>(x: number, y: number, run: () => T): T => {
         const ox = env.locals[sx];
@@ -1029,6 +1039,33 @@ class Compiler {
       }
       return { ops, residual, test, poly: p };
     };
+  }
+
+  /**
+   * The largest sub-expressions of a relation that use neither slot, found through arithmetic only: the branches of an
+   * `if` are not entered, because a part that the branch never takes may be undefined without making the relation so.
+   */
+  freeParts(t: RelTree, slots: readonly number[]): TNode[] {
+    const out: TNode[] = [];
+    const visit = (n: TNode): void => {
+      if (n.n === 'num' || n.n === 'bool' || n.n === 'const' || n.n === 'text' || n.n === 'local') return;
+      if (!usesSlot(n, slots)) {
+        out.push(n);
+        return;
+      }
+      if (n.n === 'cond' || n.n === 'relation' || n.n === 'command') return;
+      for (const c of children(n)) visit(c);
+    };
+    const walk = (r: RelTree): void => {
+      if (r.t === 'cmp') r.operands.forEach(visit);
+      else if (r.t === 'not') walk(r.a);
+      else {
+        walk(r.l);
+        walk(r.r);
+      }
+    };
+    walk(t);
+    return out;
   }
 
   compileTree(t: RelTree): (env: Env) => boolean | undefined {
@@ -1297,7 +1334,11 @@ export function compileLine(line: CheckedLine, opts: CompileOptions = {}): Resul
       line,
       reads,
       usesT: line.usesT,
-      styleReads: new Set<ObjId>(line.styleReads ?? []),
+      // LANG-SM-33: a style that names the object its own line defines reads that object (SELF_ID maps to `selfId`)
+      styleReads: new Set<ObjId>([
+        ...(line.styleReads ?? []),
+        ...(opts.selfId !== undefined && (line.style ?? []).some((s) => s.reads?.includes(SELF_ID)) ? [opts.selfId] : []),
+      ]),
       rangeReads: new Set<ObjId>(line.rangeReads ?? []),
       styleUsesT: line.styleUsesT ?? false,
       rangeUsesT: line.rangeUsesT ?? false,
