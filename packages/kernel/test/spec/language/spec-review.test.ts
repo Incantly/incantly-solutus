@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ScratchFigure, analyseLine, compileLine, createEnv, evaluate } from '@incantly/kernel';
+import { ScratchFigure, analyseLine, checkTable, compileLine, createCommandTable, createEnv, evaluate } from '@incantly/kernel';
 import type { CommandSpec, LanguageError, ObjId, Undefined } from '@incantly/kernel';
 import { COMMANDS, check, errOf, expectWellFormed, form, newFig, okValue, p } from './helpers';
 
@@ -240,5 +240,178 @@ describe('spec review A2: undefined values carry their cascade link as `cause`',
     expect(r.reason).toBe('input_undefined');
     expect(causeOf(r)).toBe(fig.lookup('pu')?.id);
     expect('via' in r).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// A3. Function2
+// ---------------------------------------------------------------------------------------------
+
+/** Matches the broken sentence from the review: an empty expected type ("should be a , but ..."). */
+const EMPTY_EXPECTED = /should be an?\s*(,|but\b)/i;
+
+describe('spec review A3: Function2 and Function<Number>(2) parameters', () => {
+  const TWO: CommandSpec[] = [
+    ...COMMANDS,
+    { name: 'Integral2', kind: 'object', group: 'calculus', forms: [form([p('g', 'Function2')], 'Number', 'double integral')] },
+    { name: 'Slope2', kind: 'object', group: 'calculus', forms: [form([p('g', 'Function<Number>(2)')], 'Number', 'slope of a surface')] },
+    {
+      name: 'Plane2',
+      kind: 'object',
+      group: 'calculus',
+      forms: [form([p('g', 'Function2'), p('at', 'Point')], 'Number', 'tangent plane height')],
+    },
+    {
+      name: 'Area2',
+      kind: 'object',
+      group: 'calculus',
+      forms: [form([p('g', 'Function<Number>(2)'), p('x0', 'Number'), p('x1', 'Number')], 'Number', 'area')],
+    },
+  ];
+  const fig = (): ScratchFigure => {
+    const f = newFig(TWO);
+    okValue(f.apply('g2(x, y) = x * y'));
+    okValue(f.apply('g3(x, y) = x + y + 1'));
+    return f;
+  };
+
+  it('README decision 5: a user function g(x, y) = ... satisfies a Function2 parameter', () => {
+    const f = fig();
+    const r = f.apply('i1 = Integral2(g2)');
+    expect(r.ok, r.ok ? '' : r.message).toBe(true);
+    expect(check('i1 = Integral2(g3)', f).ok).toBe(true);
+  });
+
+  it('a Function<Number>(2) parameter type parses and is satisfied by g(x, y) = ...', () => {
+    const f = fig();
+    const r = f.apply('s1 = Slope2(g2)');
+    expect(r.ok, r.ok ? '' : r.message).toBe(true);
+    expect(check('s1 = Slope2(g3)', f).ok).toBe(true);
+  });
+
+  it('Function2 and Function<Number>(2) accept the same functions', () => {
+    const f = fig();
+    for (const fn of ['g2', 'g3']) {
+      expect(check(`i1 = Integral2(${fn})`, f).ok, fn).toBe(true);
+      expect(check(`s1 = Slope2(${fn})`, f).ok, fn).toBe(true);
+    }
+  });
+
+  it('the result type of a command with a Function2 parameter is the form return type', () => {
+    const f = fig();
+    const c = okValue(check('i1 = Integral2(g2)', f));
+    expect(c.type?.k).toBe('Number');
+  });
+
+  it('a Function2 parameter next to other parameters, positional and named', () => {
+    const f = fig();
+    expect(check('h1 = Plane2(g2, A)', f).ok).toBe(true);
+    expect(check('h1 = Plane2(at = A, g = g2)', f).ok).toBe(true);
+    expect(check('a1 = Area2(g3, 0, 1)', f).ok).toBe(true);
+  });
+
+  it('a function written with two parameters of other names also fits', () => {
+    const f = fig();
+    okValue(f.apply('q(m1, m2) = m1 - m2'));
+    expect(check('i1 = Integral2(q)', f).ok).toBe(true);
+    expect(check('s1 = Slope2(q)', f).ok).toBe(true);
+  });
+
+  it('a one-parameter function does not fit Function2 or Function<Number>(2)', () => {
+    const f = fig();
+    for (const src of ['i1 = Integral2(f)', 's1 = Slope2(f)']) {
+      const e = errOf(check(src, f), src);
+      expectWellFormed(e);
+      expect(['type_mismatch', 'no_matching_form', 'bad_argument'], src).toContain(e.kind);
+    }
+  });
+
+  it('a Number, a Point, a list or a Text does not fit Function2', () => {
+    const f = fig();
+    for (const arg of ['a', 'A', 'L', 'm', 'flag']) {
+      const src = `i1 = Integral2(${arg})`;
+      const e = errOf(check(src, f), src);
+      expect(['type_mismatch', 'no_matching_form', 'bad_argument'], src).toContain(e.kind);
+    }
+  });
+
+  it('a Function<Point> does not fit Function2', () => {
+    const f = fig();
+    okValue(f.apply('cp(t) = (cos(t), sin(t))'));
+    errOf(check('i1 = Integral2(cp)', f));
+  });
+
+  it('a two-parameter function is still a Function<Number> object of two parameters elsewhere', () => {
+    const f = fig();
+    expect(f.lookup('g2')?.type).toBeDefined();
+    expect(check('v1 = g2(2, 3)', f).ok).toBe(true);
+    expect(f.valueOf('g2')).toBeDefined();
+  });
+
+  it('the table with Function2 and Function<Number>(2) parameters has no problems', () => {
+    expect(checkTable(TWO)).toEqual([]);
+    expect(checkTable(createCommandTable(TWO))).toEqual([]);
+  });
+
+  it('no error message says "should be a , but" (an empty expected type)', () => {
+    const f = fig();
+    okValue(f.apply('cp(t) = (cos(t), sin(t))'));
+    const lines = [
+      'i1 = Integral2(f)',
+      'i1 = Integral2(a)',
+      'i1 = Integral2(A)',
+      'i1 = Integral2(cp)',
+      'i1 = Integral2(L)',
+      'i1 = Integral2(1, 2)',
+      'i1 = Integral2()',
+      's1 = Slope2(f)',
+      's1 = Slope2(a)',
+      's1 = Slope2(cp)',
+      's1 = Slope2(m)',
+      's1 = Slope2(g2, g3)',
+      'h1 = Plane2(f, A)',
+      'h1 = Plane2(g2, a)',
+      'a1 = Area2(f, 0, 1)',
+      'a1 = Area2(g2, 0)',
+    ];
+    for (const src of lines) {
+      const r = f.apply(src);
+      if (r.ok) continue;
+      expect(r.message, src).not.toMatch(EMPTY_EXPECTED);
+      expect(r.hint ?? '', src).not.toMatch(EMPTY_EXPECTED);
+      expect(r.message, src).not.toMatch(/should be an?\s*$/i);
+      for (const ex of r.expected) expect(ex.length, `${src}: an empty expected entry`).toBeGreaterThan(0);
+      for (const fm of r.forms) expect(fm.length, `${src}: an empty form`).toBeGreaterThan(0);
+      for (const pr of (r as LanguageError).problems ?? []) {
+        expect(JSON.stringify(pr), `${src}: a problem with an empty field`).not.toMatch(/:""/);
+      }
+    }
+  });
+
+  it('no error message says "should be a , but" for a table whose parameter type is a function type', () => {
+    const tables: CommandSpec[][] = [
+      [{ name: 'Fa', kind: 'object', group: 't', forms: [form([p('g', 'Function<Number>')], 'Number')] }],
+      [{ name: 'Fa', kind: 'object', group: 't', forms: [form([p('g', 'Function<Point>')], 'Number')] }],
+      [{ name: 'Fa', kind: 'object', group: 't', forms: [form([p('g', 'Function<Number>(2)')], 'Number')] }],
+      [{ name: 'Fa', kind: 'object', group: 't', forms: [form([p('g', 'Function<Number>(3)')], 'Number')] }],
+      [{ name: 'Fa', kind: 'object', group: 't', forms: [form([p('g', 'Function2')], 'Number')] }],
+      [{ name: 'Fa', kind: 'object', group: 't', forms: [form([p('g', 'List<Function<Number>>')], 'Number')] }],
+    ];
+    for (const specs of tables) {
+      const f = new ScratchFigure({ commands: createCommandTable(specs) });
+      okValue(f.apply('f(x) = x^2'));
+      okValue(f.apply('g2(x, y) = x * y'));
+      okValue(f.apply('cp(t) = (cos(t), sin(t))'));
+      okValue(f.apply('a = 3'));
+      for (const arg of ['f', 'g2', 'cp', 'a', '[f]', '[g2]', '"s"', '(1, 2)']) {
+        const src = `r9 = Fa(${arg})`;
+        const r = f.apply(src);
+        if (r.ok) continue;
+        const where = `${specs[0]?.forms[0]?.params[0]?.type}: ${src}`;
+        expect(r.message, where).not.toMatch(EMPTY_EXPECTED);
+        expect(r.hint ?? '', where).not.toMatch(EMPTY_EXPECTED);
+        for (const ex of r.expected) expect(ex.length, where).toBeGreaterThan(0);
+      }
+    }
   });
 });
