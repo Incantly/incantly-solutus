@@ -6,7 +6,7 @@
 import { okResult, viewError } from '../errors';
 import type { Result } from '@incantly/kernel';
 import {
-  fitAllRegion, maths, viewportFromRegion, type MathsRect, type Viewport,
+  maths, viewportFromRegion, type MathsRect, type Viewport,
 } from './coords';
 import type { Rgba } from './styles';
 
@@ -64,6 +64,8 @@ export interface ExportContext {
   readonly equalRatio: boolean;
   /** Pixels per unit of the source view, for the 12 px minimum pad. */
   readonly pxPerUnit: number;
+  /** Pixels per unit on y when it differs from x. */
+  readonly pxPerUnitY?: number;
 }
 
 function fail(option: string, got: string, expected: string): Result<NormalizedExport> {
@@ -87,19 +89,31 @@ export function normalizeExport(req: ExportRequest, ctx: ExportContext): Result<
   if (req.region === 'view') {
     region = ctx.viewBounds;
   } else if (req.region === 'objects') {
-    const fit = fitAllRegion(ctx.objectBounds.length > 0 ? ctx.objectBounds : [ctx.viewBounds]);
-    if (fit === null) return fail('region', 'objects', 'a non-empty figure');
-    // Minimum 12 px pad.
-    const minPad = 12 / Math.max(ctx.pxPerUnit, 1e-9);
-    const w = (fit.x1 as number) - (fit.x0 as number);
-    const h = (fit.y1 as number) - (fit.y0 as number);
-    const ex = Math.max(0, (minPad * 2 - w) / 2);
-    const ey = Math.max(0, (minPad * 2 - h) / 2);
+    const boxes = ctx.objectBounds.length > 0 ? ctx.objectBounds : [ctx.viewBounds];
+    let ux0 = Infinity;
+    let ux1 = -Infinity;
+    let uy0 = Infinity;
+    let uy1 = -Infinity;
+    for (const b of boxes) {
+      ux0 = Math.min(ux0, b.x0 as number);
+      ux1 = Math.max(ux1, b.x1 as number);
+      uy0 = Math.min(uy0, b.y0 as number);
+      uy1 = Math.max(uy1, b.y1 as number);
+    }
+    if (![ux0, ux1, uy0, uy1].every(Number.isFinite) || !(ux1 >= ux0) || !(uy1 >= uy0)) {
+      return fail('region', 'objects', 'a non-empty figure');
+    }
+    // The union of the bboxes, padded by 5% of its extent on each side,
+    // and by at least 12 px (design 14.2).
+    const minPadX = 12 / Math.max(ctx.pxPerUnit, 1e-9);
+    const minPadY = 12 / Math.max(ctx.pxPerUnitY ?? ctx.pxPerUnit, 1e-9);
+    const padX = Math.max(0.05 * (ux1 - ux0), minPadX);
+    const padY = Math.max(0.05 * (uy1 - uy0), minPadY);
     region = {
-      x0: maths((fit.x0 as number) - ex),
-      x1: maths((fit.x1 as number) + ex),
-      y0: maths((fit.y0 as number) - ey),
-      y1: maths((fit.y1 as number) + ey),
+      x0: maths(ux0 - padX),
+      x1: maths(ux1 + padX),
+      y0: maths(uy0 - padY),
+      y1: maths(uy1 + padY),
     };
   } else {
     const r = req.region;

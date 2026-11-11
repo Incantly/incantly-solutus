@@ -2366,6 +2366,7 @@ export class FigureView {
       nowT: this.filmT,
       equalRatio: this.ratioLock === 'equal',
       pxPerUnit: liveView.scaleX,
+      pxPerUnitY: liveView.scaleY,
     });
     if (!norm.ok) return norm;
     const exp = norm.value;
@@ -2475,6 +2476,7 @@ export class FigureView {
       nowT: this.filmT,
       equalRatio: this.ratioLock === 'equal',
       pxPerUnit: liveView.scaleX,
+      pxPerUnitY: liveView.scaleY,
     });
     if (!norm.ok) return Promise.resolve(norm);
     const exp = norm.value;
