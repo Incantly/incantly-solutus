@@ -15,7 +15,6 @@ import {
 import {
   asBool,
   asCond,
-  asExpr,
   asList,
   asNum,
   cd,

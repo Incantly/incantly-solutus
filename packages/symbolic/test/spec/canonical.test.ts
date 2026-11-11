@@ -28,7 +28,6 @@ import {
   notCond,
   orCond,
   piecewiseN,
-  pow,
   ratN,
   refN,
   rel,
