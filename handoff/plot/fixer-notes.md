@@ -34,3 +34,20 @@ Round 1 of the step-3 fixer. Input: `handoff/plot/test-report.md` (44 failing sp
 
 - Without an enclosure the implicit tracer and the region filler now evaluate every leaf corner (about 110,000 evaluations at 600 x 600 and 2 px leaves, 80 to 100 ms), so the doc time targets (2 ms circle, 0.3 ms half-plane) are only reachable with the kernel's enclosures. With an enclosure the quadtree cost still follows the curve length.
 - The `sin(1/x)` plot (no enclosure) still records a few hundred `jump`/`hole`/`openEnd` markers near 0; ink columns carry the oscillation, the markers are noise. Not asserted by any spec test.
+
+## Findings round, second part (PLOT-SM-6, 7, 10 to 14)
+
+Result: 15 of 16 findings fixed; the rest of PLOT-SM-13 is `to be implemented`. Lint and typecheck are clean and all 578 plot tests pass, with no test changed.
+
+### Fixes, by file
+
+- `region.ts`: leaf size by budget on the dense path; a crossing belongs to its grid edge and is corrected once and shared by both leaves; borders are linked from those crossings (`chainBorders`), with a second trace only for a margin the fill cannot see (an equality or `!=` curve, or a margin with no crossing in the fill); a margin that is exactly zero along one side of a leaf decides the leaf from its sign (`onGridLine`); the cap counts emitted output and is enforced once more on the finished output (`capOutput`).
+- `implicit.ts`: leaf size by budget on the dense path.
+- `param.ts`: the hole search has a budget share and stops at gap edges; maybe-defined boxes are split and touching boxes merged.
+- `function.ts`: `stepIsFlat` probes are not clamped to the span; markers in ink columns are dropped.
+
+### Choices where the docs are silent
+
+- When the finished region output is over the cap, borders may keep up to 40% of it, rectangles come next, then sub-cell rectangles and edge polygons while there is room.
+- A region corner where two margins cross leaves a gap of one leaf in the border.
+- `packages/plot/test/fixer-scratch.test.ts` is an earlier scratch file. It is not committed.

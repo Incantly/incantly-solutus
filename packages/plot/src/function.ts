@@ -798,9 +798,14 @@ function classifyDefined(st: FState, span: FSpan, l: FSample, r: FSample): void 
  */
 function stepIsFlat(st: FState, span: FSpan, at: Narrowed): boolean | null {
   const dx = (st.pv.box.x1 - st.pv.box.x0) / (st.pv.box.widthPx * st.pv.dpr) / 50;
-  const left = evalAt(st, Math.max(span.xl, at.a - dx));
+  // The probes sit a fixed distance from the jump, outside the span if the
+  // span is narrower than that. Clamping them to the span made them the
+  // span's own ends, which always agree with the narrowed sides, so every
+  // oscillation at the depth limit passed as a step (PLOT-SM-14).
+  void span;
+  const left = evalAt(st, at.a - dx);
   if (!left) return null;
-  const right = evalAt(st, Math.min(span.xr, at.b + dx));
+  const right = evalAt(st, at.b + dx);
   if (!right) return null;
   if (!left.defined || !right.defined) return false;
   return (
@@ -1308,10 +1313,31 @@ function edgeFallbackY(st: FState, x: number): number {
   return sample ? sample.y : (st.pv.box.y0 + st.pv.box.y1) / 2;
 }
 
+/** A hole, end or jump marker this close to an ink column (view pixels) is dropped. */
+const INK_MARKER_PX = 1.5;
+
 function sortMarkers(st: FState): PlotMarker[] {
   const order = (k: MarkerKind): number =>
     k === 'pole' ? 0 : k === 'hole' ? 1 : k === 'jump' ? 2 : k === 'closedEnd' ? 3 : k === 'openEnd' ? 4 : 5;
-  const ms = [...st.markers];
+  // A column of ink says "the function oscillates here faster than a pixel".
+  // A hole, end or jump mark in or beside that column is a verdict the
+  // samples cannot support, so it is dropped; poles stay (P3).
+  const inkXs = st.ink.map((c) => c.x).sort((a, b) => a - b);
+  const inInk = (m: PlotMarker): boolean => {
+    // In exact mode the ink is the curve itself (the enclosure band), not oscillation.
+    if (m.kind === 'pole' || inkXs.length === 0 || exactActive(st)) return false;
+    const at = st.pv.toPx(m.x);
+    let lo = 0;
+    let hi = inkXs.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if ((inkXs[mid] as number) < at) lo = mid + 1;
+      else hi = mid;
+    }
+    const near = (k: number): boolean => k >= 0 && k < inkXs.length && Math.abs((inkXs[k] as number) - at) <= INK_MARKER_PX;
+    return near(lo) || near(lo - 1);
+  };
+  const ms = st.markers.filter((m) => !inInk(m));
   ms.sort((a, b) => a.x - b.x || a.y - b.y || order(a.kind) - order(b.kind));
   // Verdicts redone after a suspend can record a marker twice; collapse those.
   const out: PlotMarker[] = [];

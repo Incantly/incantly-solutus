@@ -61,7 +61,12 @@ interface RState {
   rigorous: boolean;
   capped: boolean;
   dead: boolean;
+  /** Output floats and vertices emitted so far by boundary leaves (polygon vertices, 4 per sub-cell rectangle). */
   points: number;
+  /** Corrected crossing of one margin on one grid edge, shared by the two leaves that meet there. */
+  readonly edgePoints: Map<number, readonly [number, number]>;
+  /** Border segments per margin, as pairs of edge keys, taken from the fill's own boundary leaves. */
+  readonly borderSegs: number[][];
 }
 
 const CELL_PX = 32;
@@ -132,10 +137,6 @@ function runFill(st: RState): void {
     const node = queue[head] as RNode;
     head += 1;
     if (node.level > st.maxDepthSeen) st.maxDepthSeen = node.level;
-    if (st.capped) {
-      fillCoarse(st, node);
-      continue;
-    }
     const leaf = node.i1 - node.i0 <= 1 && node.j1 - node.j0 <= 1;
     const v = encloseAt(st, node);
     if (v === null) return;
@@ -145,7 +146,10 @@ function runFill(st: RState): void {
       continue;
     }
     if (leaf) {
-      boundaryLeaf(st, node.i0, node.j0);
+      // Past the cap a leaf is decided by one centre test and joins the grid:
+      // no more polygons, and nothing is filled that the test does not hold (P7).
+      if (st.capped) centreLeaf(st, node.i0, node.j0);
+      else boundaryLeaf(st, node.i0, node.j0);
       checkCap(st);
       continue;
     }
@@ -183,7 +187,9 @@ function runDense(st: RState): void {
         fillRect(st, { i0: i, i1: i + 1, j0: j, j1: j + 1, level: 0 });
         continue;
       }
-      boundaryLeaf(st, i, j);
+      if (st.capped) centreLeaf(st, i, j);
+      else boundaryLeaf(st, i, j);
+      checkCap(st);
     }
   }
 }
@@ -208,11 +214,10 @@ function fillRect(st: RState, node: RNode): void {
   }
 }
 
-/** Capped fallback: over-fills mixed nodes so coverage survives coarsely. */
-function fillCoarse(st: RState, node: RNode): void {
-  const v = encloseAt(st, node);
-  if (v === null || v === 'false') return;
-  fillRect(st, node);
+/** Capped fallback for one leaf: filled only when its centre holds. */
+function centreLeaf(st: RState, i: number, j: number): void {
+  const v = testAt(st, (gridX(st, i) + gridX(st, i + 1)) / 2, (gridY(st, j) + gridY(st, j + 1)) / 2);
+  if (v === true) fillRect(st, { i0: i, i1: i + 1, j0: j, j1: j + 1, level: 0 });
 }
 
 function checkCap(st: RState): void {
@@ -250,6 +255,7 @@ function boundaryLeaf(st: RState, i: number, j: number): void {
     const neg = vals.map((v) => v < 0);
     if (pos.some((p) => p) && neg.some((n) => n)) crossing.push(b);
   }
+  if (crossing.length === 0 && onGridLine(st, i, j, corners, margins)) return;
   if (crossing.length !== 1) {
     if (st.boundaries.length > 0 && !st.enclosure) st.rigorous = false;
     // Two or more primitive boundaries meeting here: a corner of the region (curves-loci 7, step 2).
@@ -280,32 +286,161 @@ function boundaryLeaf(st: RState, i: number, j: number): void {
   }
   const h = Math.abs((xs[1] as number) - (xs[0] as number)) / 4 || 1e-12;
   const pts: number[] = [];
+  const which = crossing[0] as number;
+  const crossedKeys: number[] = [];
   for (const v of poly.vertices) {
     if ('corner' in v) {
       const p = corners[v.corner] as readonly [number, number];
       pts.push(p[0], p[1]);
     } else {
-      const [ca, cb] = edgeEnds(v.edge);
-      const pa = corners[ca] as readonly [number, number];
-      const pb = corners[cb] as readonly [number, number];
-      const f = (x: number, y: number): number => {
-        if (st.evals + st.intervalEvals >= st.maxEvals) return Number.NaN;
-        st.evals += 1;
-        const r = residual(x, y);
-        return typeof r === 'number' ? r : Number.NaN;
-      };
-      const fixed = refineCrossing(f, pa[0] + (pb[0] - pa[0]) * v.t, pa[1] + (pb[1] - pa[1]) * v.t, h, h * 8, 1);
-      if (st.evals + st.intervalEvals >= st.maxEvals) {
-        st.dead = true;
-        return;
+      // A crossing belongs to its grid edge, not to this leaf: the neighbour
+      // across the edge reuses the same corrected point, so polygons and
+      // borders meet exactly and the correction is paid for once.
+      const key = edgeKey(st, i, j, v.edge, which);
+      let at = st.edgePoints.get(key);
+      if (at === undefined) {
+        const [ca, cb] = edgeEnds(v.edge);
+        const pa = corners[ca] as readonly [number, number];
+        const pb = corners[cb] as readonly [number, number];
+        const f = (x: number, y: number): number => {
+          if (st.evals + st.intervalEvals >= st.maxEvals) return Number.NaN;
+          st.evals += 1;
+          const r = residual(x, y);
+          return typeof r === 'number' ? r : Number.NaN;
+        };
+        const fixed = refineCrossing(f, pa[0] + (pb[0] - pa[0]) * v.t, pa[1] + (pb[1] - pa[1]) * v.t, h, h * 8, 1);
+        if (st.evals + st.intervalEvals >= st.maxEvals) {
+          st.dead = true;
+          return;
+        }
+        at = [fixed.x, fixed.y];
+        st.edgePoints.set(key, at);
       }
-      pts.push(fixed.x, fixed.y);
+      crossedKeys.push(key);
+      pts.push(at[0], at[1]);
     }
   }
+  // The margin's zero set inside this leaf is the region's boundary here: the
+  // leaf is mixed and no other margin crosses it (curves-loci 7, step 3).
+  if (crossedKeys.length === 2) (st.borderSegs[which] as number[]).push(crossedKeys[0] as number, crossedKeys[1] as number);
   if (pts.length >= 6) {
     st.polygons.push(new Float64Array(pts));
     st.points += pts.length / 2;
   }
+}
+
+/**
+ * A margin that is exactly zero along one side of the leaf and one-signed
+ * elsewhere (a boundary lying on a grid line, such as `x > 0` with the axis on
+ * a pixel column). The leaf is wholly inside or wholly outside, decided by the
+ * sign, and the zero side is a border segment. Applies when every other
+ * margin is positive on the whole leaf, so this margin alone decides.
+ * Returns false when the leaf is not of this kind.
+ */
+function onGridLine(
+  st: RState,
+  i: number,
+  j: number,
+  corners: readonly (readonly [number, number])[],
+  margins: readonly (readonly number[])[],
+): boolean {
+  let which = -1;
+  for (let b = 0; b < margins.length; b++) {
+    const m = margins[b] as readonly number[];
+    if (m.some((v) => !Number.isFinite(v))) return false;
+    if (m.every((v) => v > 0)) continue;
+    if (which >= 0) return false;
+    which = b;
+  }
+  if (which < 0) return false;
+  const vals = margins[which] as readonly number[];
+  const zeros: number[] = [];
+  for (let c = 0; c < 4; c++) if (vals[c] === 0) zeros.push(c);
+  if (zeros.length !== 2) return false;
+  const za = zeros[0] as number;
+  const zb = zeros[1] as number;
+  // The two zero corners must share a side (corner order SW, SE, NE, NW).
+  if (!(zb - za === 1 || (za === 0 && zb === 3))) return false;
+  const rest = vals.filter((v) => v !== 0);
+  const inside = rest.every((v) => v > 0);
+  if (!inside && !rest.every((v) => v < 0)) return false;
+  const w = st.cols + 1;
+  // Grid node of each corner: SW (i, j+1), SE (i+1, j+1), NE (i+1, j), NW (i, j).
+  const nodeOf = (c: number): number => (c === 0 ? (j + 1) * w + i : c === 1 ? (j + 1) * w + i + 1 : c === 2 ? j * w + i + 1 : j * w + i);
+  const cornerKey = (c: number): number => (w * (st.rows + 1) * 2 + nodeOf(c)) * 64 + which;
+  const ka = cornerKey(za);
+  const kb = cornerKey(zb);
+  if (!st.edgePoints.has(ka)) st.edgePoints.set(ka, corners[za] as readonly [number, number]);
+  if (!st.edgePoints.has(kb)) st.edgePoints.set(kb, corners[zb] as readonly [number, number]);
+  (st.borderSegs[which] as number[]).push(ka, kb);
+  if (inside) fillRect(st, { i0: i, i1: i + 1, j0: j, j1: j + 1, level: 0 });
+  return true;
+}
+
+/**
+ * Identity of one margin's crossing on one grid edge. Leaf `(i, j)` has its
+ * top edge on grid row `j` and its left edge on grid column `i`.
+ */
+function edgeKey(st: RState, i: number, j: number, edge: SquareEdge, boundary: number): number {
+  const w = st.cols + 1;
+  // Edge 0 bottom, 1 right, 2 top, 3 left.
+  const node = edge === 0 ? (j + 1) * w + i : edge === 1 ? j * w + i + 1 : j * w + i;
+  const vertical = edge === 1 || edge === 3 ? 1 : 0;
+  return (node * 2 + vertical) * 64 + boundary;
+}
+
+/** Links one margin's border segments from the fill into polylines, in pixels. */
+function chainBorders(st: RState, boundary: number, strict: boolean): RegionBorder[] {
+  const segs = st.borderSegs[boundary] as number[];
+  if (segs.length === 0) return [];
+  const next = new Map<number, number[]>();
+  // Both leaves beside a grid-line border report the same segment: link once.
+  const link = (a: number, b: number): void => {
+    const list = next.get(a);
+    if (list === undefined) next.set(a, [b]);
+    else if (!list.includes(b)) list.push(b);
+  };
+  for (let k = 0; k + 1 < segs.length; k += 2) {
+    const a = segs[k] as number;
+    const b = segs[k + 1] as number;
+    if (a === b) continue;
+    link(a, b);
+    link(b, a);
+  }
+  const used = new Set<number>();
+  const pairKey = (a: number, b: number): number => (a < b ? a * 4294967296 + b : b * 4294967296 + a);
+  const pv = st.pv;
+  const out: RegionBorder[] = [];
+  const walk = (start: number): void => {
+    const path: number[] = [];
+    let prev = -1;
+    let cur = start;
+    for (;;) {
+      const p = st.edgePoints.get(cur);
+      if (p !== undefined) path.push(pv.toPx(p[0]), pv.toPy(p[1]));
+      const options = next.get(cur) ?? [];
+      let step = -1;
+      for (const cand of options) {
+        if (cand === prev && options.length > 1) continue;
+        if (used.has(pairKey(cur, cand))) continue;
+        step = cand;
+        break;
+      }
+      if (step < 0) break;
+      used.add(pairKey(cur, step));
+      prev = cur;
+      cur = step;
+    }
+    if (path.length >= 4) out.push({ path: new Float64Array(path), strict });
+  };
+  // Open chains first, from their ends in key order; what is left is loops.
+  const keys = [...next.keys()].sort((a, b) => a - b);
+  for (const k of keys) if ((next.get(k) ?? []).length === 1) walk(k);
+  for (const k of keys) {
+    const options = next.get(k) ?? [];
+    if (options.some((cand) => !used.has(pairKey(k, cand)))) walk(k);
+  }
+  return out;
 }
 
 /** Fills covered sub-cells of a corner leaf; marks near-point regions. */
@@ -355,6 +490,7 @@ function supersample(st: RState, i: number, j: number, corner = false): void {
         const syT = yB + ((yT - yB) * e) / 4;
         const syB = yB + ((yT - yB) * b) / 4;
         st.extraRects.push(pv.toPx(sx0), pv.toPy(syT), pv.toPx(sx1), pv.toPy(syB));
+        st.points += 4;
         b = e;
       }
     }
@@ -377,7 +513,6 @@ function supersample(st: RState, i: number, j: number, corner = false): void {
     }
   }
   if (!st.enclosure && covered > 0) st.rigorous = false;
-  st.points += covered;
 }
 
 function addMarker(st: RState, kind: 'isolated', x: number, y: number): void {
@@ -407,26 +542,43 @@ const RING: readonly (readonly [number, number])[] = [
 
 /* ------------------------------- rect merge --------------------------------- */
 
-/** Merges filled leaf cells into maximal rectangles, row by row. */
-function mergeRects(st: RState): Float64Array {
+/**
+ * Merges filled leaf cells into maximal rectangles, row by row. With
+ * `factor > 1` the grid is read in blocks of `factor` leaves and a block
+ * counts only when every leaf in it is filled, so a coarser merge has fewer
+ * rectangles and never covers a leaf that was not filled.
+ */
+function mergeRects(st: RState, factor = 1): number[] {
   const out: number[] = [];
+  const pv = st.pv;
   const pushClipped = (x0: number, y0: number, x1: number, y1: number): void => {
-    const pv = st.pv;
     const cx0 = Math.max(0, pv.toPx(x0));
     const cy0 = Math.max(0, pv.toPy(y1));
     const cx1 = Math.min(pv.box.widthPx, pv.toPx(x1));
     const cy1 = Math.min(pv.box.heightPx, pv.toPy(y0));
     if (cx1 > cx0 && cy1 > cy0) out.push(cx0, cy0, cx1, cy1);
   };
+  const cCols = Math.ceil(st.cols / factor);
+  const cRows = Math.ceil(st.rows / factor);
+  const col = (I: number): number => Math.min(I * factor, st.cols);
+  const row = (J: number): number => Math.min(J * factor, st.rows);
+  const on = (I: number, J: number): boolean => {
+    for (let j = row(J); j < row(J + 1); j++) {
+      for (let i = col(I); i < col(I + 1); i++) {
+        if (st.filled[j * st.cols + i] !== 1) return false;
+      }
+    }
+    return true;
+  };
   let active: { x0: number; x1: number; y0row: number }[] = [];
-  for (let j = 0; j < st.rows; j++) {
+  for (let J = 0; J < cRows; J++) {
     const runs: { x0: number; x1: number }[] = [];
     let run: { x0: number; x1: number } | undefined;
-    for (let i = 0; i <= st.cols; i++) {
-      const on = i < st.cols && st.filled[j * st.cols + i] === 1;
-      if (on && !run) run = { x0: i, x1: i + 1 };
-      else if (on && run) run.x1 = i + 1;
-      else if (!on && run) {
+    for (let I = 0; I <= cCols; I++) {
+      const filled = I < cCols && on(I, J);
+      if (filled && !run) run = { x0: I, x1: I + 1 };
+      else if (filled && run) run.x1 = I + 1;
+      else if (!filled && run) {
         runs.push(run);
         run = undefined;
       }
@@ -435,23 +587,94 @@ function mergeRects(st: RState): Float64Array {
     for (const r of runs) {
       const cont = active.find((a) => a.x0 === r.x0 && a.x1 === r.x1);
       if (cont) next.push(cont);
-      else next.push({ x0: r.x0, x1: r.x1, y0row: j });
+      else next.push({ x0: r.x0, x1: r.x1, y0row: J });
     }
     for (const a of active) {
-      if (!next.includes(a)) pushClipped(gridX(st, a.x0), gridY(st, j), gridX(st, a.x1), gridY(st, a.y0row));
+      if (!next.includes(a)) pushClipped(gridX(st, col(a.x0)), gridY(st, row(J)), gridX(st, col(a.x1)), gridY(st, row(a.y0row)));
     }
     active = next;
   }
-  for (const a of active) pushClipped(gridX(st, a.x0), gridY(st, st.rows), gridX(st, a.x1), gridY(st, a.y0row));
+  for (const a of active) pushClipped(gridX(st, col(a.x0)), gridY(st, st.rows), gridX(st, col(a.x1)), gridY(st, row(a.y0row)));
+  return out;
+}
+
+/** Sub-cell rectangles of supersampled leaves, clipped to the view. */
+function clippedExtraRects(st: RState): number[] {
+  const out: number[] = [];
   const pv = st.pv;
-  for (let k = 0; k + 3 < st.extraRects.length + 1; k += 4) {
+  for (let k = 0; k + 3 < st.extraRects.length; k += 4) {
     const cx0 = Math.max(0, st.extraRects[k] as number);
     const cy0 = Math.max(0, st.extraRects[k + 1] as number);
     const cx1 = Math.min(pv.box.widthPx, st.extraRects[k + 2] as number);
     const cy1 = Math.min(pv.box.heightPx, st.extraRects[k + 3] as number);
     if (cx1 > cx0 && cy1 > cy0) out.push(cx0, cy0, cx1, cy1);
   }
-  return new Float64Array(out);
+  return out;
+}
+
+/**
+ * The output cap (P7): rectangle floats, polygon vertices and border vertices
+ * together stay within `maxSamples`. Borders keep up to 40% of the cap. The
+ * grid is merged more coarsely until its rectangles fit, which erodes the
+ * fill at its edge but never covers a leaf the predicate did not hold on;
+ * sub-cell rectangles and edge polygons are added while there is room.
+ */
+function capOutput(
+  st: RState,
+  fine: number[],
+  extra: number[],
+  polygons: Float64Array[],
+  borders: RegionBorder[],
+): { rects: number[]; polygons: Float64Array[]; borders: RegionBorder[] } {
+  const cap = st.maxSamples;
+  const count = (list: readonly { length: number }[]): number => list.reduce((a, q) => a + q.length / 2, 0);
+  const borderPaths = borders.map((b) => b.path);
+  if (fine.length + extra.length + count(polygons) + count(borderPaths) <= cap) {
+    return { rects: fine.concat(extra), polygons, borders };
+  }
+  st.capped = true;
+  let room = cap;
+  const keptBorders: RegionBorder[] = [];
+  let borderRoom = Math.floor(cap * 0.4);
+  for (const b of borders) {
+    const n = b.path.length / 2;
+    if (n <= borderRoom) {
+      keptBorders.push(b);
+      borderRoom -= n;
+      room -= n;
+    } else if (borderRoom >= 2) {
+      keptBorders.push({ path: b.path.slice(0, borderRoom * 2), strict: b.strict });
+      room -= borderRoom;
+      borderRoom = 0;
+    }
+  }
+  let rects = fine;
+  for (let factor = 2; rects.length > room && factor <= 64; factor *= 2) rects = mergeRects(st, factor);
+  if (rects.length > room) {
+    // Still too many: keep the largest, drop the rest.
+    const order: number[] = [];
+    for (let k = 0; k + 3 < rects.length; k += 4) order.push(k);
+    const area = (k: number): number => ((rects[k + 2] as number) - (rects[k] as number)) * ((rects[k + 3] as number) - (rects[k + 1] as number));
+    order.sort((a, b) => area(b) - area(a) || a - b);
+    const keep = order.slice(0, Math.max(0, Math.floor(room / 4))).sort((a, b) => a - b);
+    const cut: number[] = [];
+    for (const k of keep) cut.push(rects[k] as number, rects[k + 1] as number, rects[k + 2] as number, rects[k + 3] as number);
+    rects = cut;
+  }
+  room -= rects.length;
+  const keptPolygons: Float64Array[] = [];
+  for (const poly of polygons) {
+    const n = poly.length / 2;
+    if (n > room) continue;
+    keptPolygons.push(poly);
+    room -= n;
+  }
+  const out = rects.slice();
+  for (let k = 0; k + 3 < extra.length && room >= 4; k += 4) {
+    out.push(extra[k] as number, extra[k + 1] as number, extra[k + 2] as number, extra[k + 3] as number);
+    room -= 4;
+  }
+  return { rects: out, polygons: keptPolygons, borders: keptBorders };
 }
 
 /* --------------------------------- borders ---------------------------------- */
@@ -597,10 +820,28 @@ export function fillRegion(predicate: PredicateInput, view: ViewBox, options: Re
     const pvResult = createView(view);
     if (!pvResult.ok) return pvResult;
     const pv = pvResult.value;
-    const leafEff = quality === 'final' ? 2 : 6;
-    const padEff = Math.max(1, Math.round(32 / leafEff)) * leafEff;
-    const cols = Math.max(1, Math.ceil((pv.widthEff + 2 * padEff) / leafEff));
-    const rows = Math.max(1, Math.ceil((pv.heightEff + 2 * padEff) / leafEff));
+    const maxEvalsOpt = options.maxEvals === undefined ? DEFAULT_MAX_EVALS_REGION : Math.floor(options.maxEvals);
+    let leafEff = quality === 'final' ? 2 : 6;
+    const gridFor = (leaf: number): { padEff: number; cols: number; rows: number } => {
+      const pad = Math.max(1, Math.round(32 / leaf)) * leaf;
+      return {
+        padEff: pad,
+        cols: Math.max(1, Math.ceil((pv.widthEff + 2 * pad) / leaf)),
+        rows: Math.max(1, Math.ceil((pv.heightEff + 2 * pad) / leaf)),
+      };
+    };
+    if (predicate.enclosure === undefined) {
+      // Without an enclosure every leaf corner is tested, so the leaf size
+      // follows the budget: the corner grid may use a third of it, and the
+      // rest pays for the boundary leaves and the borders (P5). A budget too
+      // small for the coarsest grid still ends as `complete: false`.
+      for (;;) {
+        const g = gridFor(leafEff);
+        if ((g.cols + 1) * (g.rows + 1) <= maxEvalsOpt / 3 || leafEff >= 32) break;
+        leafEff += 2;
+      }
+    }
+    const { padEff, cols, rows } = gridFor(leafEff);
     if (cols * rows > MAX_BITMAP_CELLS) {
       return overLimit(caller, 'leaf cells', MAX_BITMAP_CELLS, cols * rows);
     }
@@ -619,7 +860,7 @@ export function fillRegion(predicate: PredicateInput, view: ViewBox, options: Re
       extraRects: [],
       markers: new MarkerSet(maxSamples),
       maxSamples,
-      maxEvals: options.maxEvals === undefined ? DEFAULT_MAX_EVALS_REGION : Math.floor(options.maxEvals),
+      maxEvals: maxEvalsOpt,
       evals: 0,
       intervalEvals: 0,
       maxDepthSeen: 0,
@@ -627,39 +868,56 @@ export function fillRegion(predicate: PredicateInput, view: ViewBox, options: Re
       capped: false,
       dead: false,
       points: 0,
+      edgePoints: new Map(),
+      borderSegs: (predicate.boundaries ?? []).map(() => []),
     };
     runFill(st);
     if (st.dead) return { ok: true, value: emptyRegion(st), notices: [] };
     const borders: RegionBorder[] = [];
     const bounds = st.boundaries;
     for (let i = 0; i < bounds.length; i++) {
+      const boundary = bounds[i] as BoundaryInput;
+      // The fill already holds this margin's crossings wherever it bounds the
+      // region; a second trace is needed only for margins the fill cannot
+      // see (an equality or `!=` curve has no area on either side).
+      const fromFill = boundary.equality === true ? [] : chainBorders(st, i, boundary.strict);
+      if (fromFill.length > 0) {
+        for (const b of fromFill) borders.push(b);
+        continue;
+      }
       const remaining = st.maxEvals - st.evals - st.intervalEvals;
       if (remaining < 64) {
         st.dead = true;
         break;
       }
       const share = Math.floor(remaining / (bounds.length - i));
-      const traced = traceBorder(st, bounds[i] as BoundaryInput, view, quality, share);
+      const traced = traceBorder(st, boundary, view, quality, share);
       if (st.dead) break;
       for (const b of traced) borders.push(b);
     }
     if (st.dead) return { ok: true, value: emptyRegion(st), notices: [] };
-    const rects = mergeRects(st);
-    const polygons: Float64Array[] = [];
-    let samples = (rects.length / 4) * 4;
+    const allPolygons: Float64Array[] = [];
     for (const poly of st.polygons) {
       const arr = new Float64Array(poly.length);
       for (let i = 0; i + 1 < poly.length; i += 2) {
         arr[i] = pv.toPx(poly[i] as number);
         arr[i + 1] = pv.toPy(poly[i + 1] as number);
       }
-      samples += poly.length / 2;
-      polygons.push(arr);
+      allPolygons.push(arr);
     }
-    for (const b of borders) samples += b.path.length / 2;
+    const kept = capOutput(st, mergeRects(st), clippedExtraRects(st), allPolygons, borders);
+    const rects = new Float64Array(kept.rects);
+    // Emitted points: 4 floats per rectangle, polygon vertices, border vertices.
+    let samples = rects.length;
+    for (const poly of kept.polygons) samples += poly.length / 2;
+    for (const b of kept.borders) samples += b.path.length / 2;
     if (st.markers.dropped) st.capped = true;
     const markers = st.markers.sorted();
-    return { ok: true, value: { rects, polygons, borders, markers, stats: makeStats(st, true, Math.round(samples)) }, notices: [] };
+    return {
+      ok: true,
+      value: { rects, polygons: kept.polygons, borders: kept.borders, markers, stats: makeStats(st, true, Math.round(samples)) },
+      notices: [],
+    };
   });
 }
 

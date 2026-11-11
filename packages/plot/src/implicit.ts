@@ -472,10 +472,24 @@ export function traceImplicit(field: ImplicitFieldInput, view: ViewBox, options:
     const pvResult = createView(view);
     if (!pvResult.ok) return pvResult;
     const pv = pvResult.value;
-    const leafEff = quality === 'final' ? 2 : 6;
-    const padEff = Math.max(1, Math.round(CELL_PX / leafEff)) * leafEff;
-    const cols = leafCount(pv.widthEff + 2 * padEff, leafEff);
-    const rows = leafCount(pv.heightEff + 2 * padEff, leafEff);
+    const maxEvalsOpt = options.maxEvals === undefined ? DEFAULT_MAX_EVALS_IMPLICIT : Math.floor(options.maxEvals);
+    let leafEff = quality === 'final' ? 2 : 6;
+    const gridFor = (leaf: number): { padEff: number; cols: number; rows: number } => {
+      const pad = Math.max(1, Math.round(CELL_PX / leaf)) * leaf;
+      return { padEff: pad, cols: leafCount(pv.widthEff + 2 * pad, leaf), rows: leafCount(pv.heightEff + 2 * pad, leaf) };
+    };
+    if (field.enclosure === undefined) {
+      // Without an enclosure every leaf corner is evaluated, so the leaf size
+      // follows the budget: the corner grid may use a third of it and the rest
+      // corrects the crossings (P5). Crossings are Newton-corrected, so a
+      // coarser grid still puts the curve within a fraction of a pixel.
+      for (;;) {
+        const g = gridFor(leafEff);
+        if ((g.cols + 1) * (g.rows + 1) <= maxEvalsOpt / 3 || leafEff >= 32) break;
+        leafEff += 2;
+      }
+    }
+    const { padEff, cols, rows } = gridFor(leafEff);
     if (cols * rows > MAX_LEAF_CELLS) return overLimit(caller, 'leaf cells', MAX_LEAF_CELLS, cols * rows);
     const maxSamples = options.maxSamples === undefined ? MAX_SAMPLES_PER_CURVE : Math.floor(options.maxSamples);
     const st: IState = {
@@ -493,7 +507,7 @@ export function traceImplicit(field: ImplicitFieldInput, view: ViewBox, options:
       segments: [],
       markers: new MarkerSet(maxSamples),
       maxSamples,
-      maxEvals: options.maxEvals === undefined ? DEFAULT_MAX_EVALS_IMPLICIT : Math.floor(options.maxEvals),
+      maxEvals: maxEvalsOpt,
       evals: 0,
       intervalEvals: 0,
       maxDepthSeen: 0,

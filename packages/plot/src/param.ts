@@ -191,7 +191,10 @@ function cullBoxes(st: PState, lo: number, hi: number): { s0: number; s1: number
     }
     const wPx = (box.x1 - box.x0) * pv.sx;
     const hPx = (box.y1 - box.y0) * pv.sy;
-    if ((wPx > CULL_SPLIT_PX || hPx > CULL_SPLIT_PX) && depth < CULL_DEPTH) {
+    // A box that is only maybe defined is split too: its defined stretches
+    // become boxes of their own, so the coarse grid lands on them however the
+    // undefined gaps are spaced (a uniform grid can step in time with them).
+    if ((wPx > CULL_SPLIT_PX || hPx > CULL_SPLIT_PX || box.def === 1) && depth < CULL_DEPTH) {
       const mid = (s0 + s1) / 2;
       if (mid > s0 && mid < s1) {
         stack.push({ s0, s1: mid, depth: depth + 1 });
@@ -202,10 +205,22 @@ function cullBoxes(st: PState, lo: number, hi: number): { s0: number; s1: number
     kept.push({ s0, s1 });
   }
   kept.sort((a, b) => a.s0 - b.s0);
-  return kept;
+  // Neighbours that touch are one stretch of curve: sample them as one box.
+  const merged: { s0: number; s1: number }[] = [];
+  for (const k of kept) {
+    const last = merged[merged.length - 1];
+    if (last !== undefined && last.s1 === k.s0) last.s1 = k.s1;
+    else merged.push({ s0: k.s0, s1: k.s1 });
+  }
+  return merged;
 }
 
 /* ---------------------------------- holes ----------------------------------- */
+
+/** Share of the evaluation budget the hole search may use. */
+const HOLE_BUDGET_SHARE = 0.1;
+/** Below this size on screen (device pixels) a maybe-defined box is checked for a gap edge. */
+const HOLE_NARROW_PX = 0.1;
 
 /**
  * With an enclosure, bounded boxes that are only maybe defined (`def = 1`) can
@@ -214,16 +229,35 @@ function cullBoxes(st: PState, lo: number, hi: number): { s0: number; s1: number
  * step 3): the curve joins across and a marker is added.
  */
 function findHoles(st: PState, boxes: readonly { s0: number; s1: number }[]): void {
+  // The search may spend a tenth of the budget and then stops quietly: holes
+  // it did not reach are found, less sharply, by the sampling that follows.
+  // An enclosure must never make a trace less likely to finish (P4).
+  const start = st.evals + st.intervalEvals;
+  const share = Math.floor(st.maxEvals * HOLE_BUDGET_SHARE);
+  const spent = (): boolean => st.evals + st.intervalEvals - start >= share;
+  const pv = st.pv;
   for (const b of boxes) {
-    const stack: { s0: number; s1: number; depth: number }[] = [{ s0: b.s0, s1: b.s1, depth: 0 }];
+    const stack: { s0: number; s1: number; depth: number; narrow: boolean }[] = [{ s0: b.s0, s1: b.s1, depth: 0, narrow: false }];
     const tiny = (b.s1 - b.s0) * 1e-9;
     let found = 0;
     while (stack.length > 0 && !st.dead) {
-      const { s0, s1, depth } = stack.pop() as { s0: number; s1: number; depth: number };
+      if (spent()) return;
+      const { s0, s1, depth, narrow } = stack.pop() as { s0: number; s1: number; depth: number; narrow: boolean };
       const box = boxAt(st, s0, s1);
       if (!box) return;
       if (box.def !== 1) continue;
       if (![box.x0, box.x1, box.y0, box.y1].every(Number.isFinite)) continue;
+      let isNarrow = narrow;
+      if (!isNarrow && (box.x1 - box.x0) * pv.sx < HOLE_NARROW_PX && (box.y1 - box.y0) * pv.sy < HOLE_NARROW_PX) {
+        // Under a tenth of a pixel on screen. A hole is one missing point with
+        // the curve defined on both sides; a box with an undefined end is the
+        // edge of a gap, which the sampler draws, so it is not searched further.
+        const a = evalAt(st, s0);
+        const z = evalAt(st, s1);
+        if (!a || !z) return;
+        if (!a.defined || !z.defined) continue;
+        isNarrow = true;
+      }
       const mid = (s0 + s1) / 2;
       if (depth >= 40 || s1 - s0 <= tiny || !(mid > s0 && mid < s1)) {
         if (found < 8) {
@@ -232,8 +266,8 @@ function findHoles(st: PState, boxes: readonly { s0: number; s1: number }[]): vo
         }
         continue;
       }
-      stack.push({ s0: mid, s1, depth: depth + 1 });
-      stack.push({ s0, s1: mid, depth: depth + 1 });
+      stack.push({ s0: mid, s1, depth: depth + 1, narrow: isNarrow });
+      stack.push({ s0, s1: mid, depth: depth + 1, narrow: isNarrow });
     }
   }
 }

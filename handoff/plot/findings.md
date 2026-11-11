@@ -66,7 +66,8 @@ Ranked by impact: security (unbounded time or memory), then wrong results, then 
 - **Evidence:** seed samples go into `st.samples` (`function.ts:1479-1484`, `param.ts:642-647`), and refinement stops when `st.samples.size >= maxSamples` (`function.ts:369`, `param.ts:268`). `seedForRange` (`cache.ts:63-77`) returns every overlapping sample of every entry with that version, so a seed easily exceeds 4,000. Repro: put 5,000 samples of `sin(3x)` over `[-6, 6]` and a 300-sample token of the same function in one cache, pan `V` to `x0 = -4.5, x1 = 5.5`, `plotFunction(f, pan, { seed: cache.seedForRange(1, -4.5, 5.5) })`: 200 evaluations, `maxDepth: 0`, `capped: true`, 200 output samples. Without the seed: 587 evaluations, `maxDepth: 1`, 294 samples, `capped: false`. Also, most seed samples are never used: spans are built from the new coarse grid, whose x values are recomputed from the new `x0` and only match old values by chance (a pan of exactly 10 coarse steps matches 155 of 200 grid points).
 - **Invariant broken:** P1 and P2: a seed only saves evaluations; the plot is the same with or without it.
 - **Suggested fix:** count only samples evaluated or used by this run for the cap (keep a separate counter), and trim the seed to the pan range and to the cap before use. Lay coarse grids on a lattice anchored at a multiple of the grid step (for example `k * step` for integer `k`), so a pan hits the cached x values exactly.
-- **status:** open
+- **status:** fixed
+- **fix:** Seed samples are trimmed to the range and to the cap before use and no longer count against the sample cap; coarse grids snap onto cached x values.
 
 ### PLOT-SM-7: Without enclosures, every region and the many-component implicit curve fail at the default budget
 
@@ -74,7 +75,8 @@ Ranked by impact: security (unbounded time or memory), then wrong results, then 
 - **Evidence:** `npm run bench` (`packages/plot/bench/plot.bench.ts`): region half-plane, disc and half-plane, and `sin(x) * y > 1` all report `complete=false samples=0` at 197,000 to 200,000 evaluations; implicit `sin(x) + sin(y) == sin(x*y)` reports `complete=false`. The dense paths (`region.ts:162-189`, `implicit.ts:370-379`) test every leaf corner of the padded view (about 176,000 at 2 px leaves) and then supersample each boundary leaf 16 times, which passes `DEFAULT_MAX_EVALS_REGION` (200,000) before the borders are traced. The doc says "the caller re-runs with a larger budget", but nothing tells the caller which budget would suffice.
 - **Invariant broken:** P5 and P7: the default budget completes an ordinary figure; `complete: false` is the exception.
 - **Suggested fix:** size the dense path to the budget (for example fall back to draft 6 px leaves, or to a corner grid of `maxEvals / 3` points, when the full grid does not fit), and reuse the corner grid values for border tracing instead of a second dense pass. Report the estimated budget in the stats when a run stops.
-- **status:** open
+- **status:** fixed
+- **fix:** Without an enclosure the leaf size follows the budget: the corner grid may use a third of it (region and implicit). Region borders come from the fill's own boundary leaves, so there is no second dense pass. A budget too small for the coarsest grid still ends as complete: false. The estimated budget is not reported in the stats.
 
 ## Medium
 
@@ -102,7 +104,8 @@ Ranked by impact: security (unbounded time or memory), then wrong results, then 
 - **Evidence:** `cache.ts:63-77` `seedForRange` merges every entry whose `version` matches. Versions are per-object stamps, so two functions (or the same function in two figures) can share a number. Repro: one cache, `f = sin(3x)` and `g = x^2` both at version 1, each stored from a 400-evaluation token, `f` first: the seed holds 800 samples with 247 duplicate x values, the later `g` value wins in `plotFunction`'s map, and 4 vertices of `f`'s plot lie on `g`. `cacheKey` is ignored by lookups (only by `put`). Eviction (`trim`, `cache.ts:49-55`) drops the first-inserted key, and `Map.set` on an existing key keeps its position: after `put('hot')`, `put('b')`, `put('hot')`, `put('c')` with capacity 2, `hot` is gone. The builder notes say a version change clears the cache; the code never clears on its own.
 - **Invariant broken:** P1: a seed for `(function, version)` holds only that function's samples, one value per x.
 - **Suggested fix:** key entries by a function identity plus version (or make `seedForRange` take the key prefix), clear older versions of the same identity on `put`, de-duplicate x values, and move a re-put key to the end (`delete` then `set`).
-- **status:** open
+- **status:** fixed
+- **fix:** Cache entries are keyed by function identity and version, hold one value per x, drop older versions of the same identity on put, and evict least recently used.
 
 ### PLOT-SM-11: The parametric hole search bisects every maybe-defined box to depth 40
 
@@ -110,7 +113,8 @@ Ranked by impact: security (unbounded time or memory), then wrong results, then 
 - **Evidence:** `param.ts:198-222` `findHoles` caps probes at 8 per box (`found`) but keeps bisecting every `def = 1` box down to depth 40, so each defined/undefined boundary costs about 80 interval evaluations before any sampling starts. Repro: `(s / 10, sqrt(sin(20 s)))` for `s` in `-40..40` with a sound enclosure (`def` 2, 0 or 1 by the sign range of `sin`): `complete: false`, 211 real and 19,789 interval evaluations, no output. Without the enclosure: `complete: true`. With `k = 2` and `k = 5` the enclosure run completes (2,940 and 6,867 interval evaluations). A loose but sound enclosure that answers `def = 1` over a whole undefined stretch never completes at any budget (2,000,000 tried).
 - **Invariant broken:** P4: the hole search costs a bounded share of the budget, and an enclosure never makes a trace less likely to finish.
 - **Suggested fix:** give `findHoles` a budget share (for example 10%), stop descending once a box is narrower than a tenth of a pixel on screen, and skip boxes whose ends are both undefined (gaps, not holes).
-- **status:** open
+- **status:** fixed
+- **fix:** findHoles may spend a tenth of the budget and then stops quietly; a maybe-defined box under a tenth of a pixel with an undefined end is a gap edge and is not searched further. cullBoxes splits maybe-defined boxes and merges touching ones, so the coarse grid lands on the defined stretches.
 
 ### PLOT-SM-12: The region sample cap counts the wrong thing, is skipped on the dense path, and over-fills when it trips
 
@@ -122,7 +126,8 @@ Ranked by impact: security (unbounded time or memory), then wrong results, then 
   - `samples` is computed as `(rects.length / 4) * 4` (`region.ts:624`), which is the number of floats, not rectangles or corners.
 - **Invariant broken:** P7: emitted points are at most `maxSamples`; `capped` is set exactly when output was limited; a capped fill never claims area the predicate does not hold.
 - **Suggested fix:** count emitted vertices (4 per rectangle after merging, polygon vertices, border vertices), check the cap on both paths, and when it trips stop splitting but resolve the remaining `maybe` leaves by one centre test instead of filling them whole.
-- **status:** open
+- **status:** fixed
+- **fix:** Points are counted as emitted output (4 floats per rectangle, polygon vertices, border vertices) on both paths. Past the cap a leaf is decided by one centre test. If the output is still over the cap, the grid is merged in coarser blocks that count only when every leaf in them is filled, so the fill erodes at its edge and never covers area the predicate does not hold.
 
 ### PLOT-SM-13: Speed targets are missed even with enclosures
 
@@ -130,7 +135,8 @@ Ranked by impact: security (unbounded time or memory), then wrong results, then 
 - **Evidence:** with sound enclosures on the bench view (`1000 x 600`, `[-5, 5] x [-3, 3]`), mean of repeated warm runs: implicit unit circle 2.35 ms (target 2), draft circle 0.67 ms (target 0.5), half-plane with its border 5.7 ms (target 0.3; 0.67 ms without the border), `tan(x)` over 12 poles 2.1 ms (target 1.5). Without enclosures (`npm run bench`): heart 0.51 ms (0.3), spiral 1.9 to 2.0 ms (1.5), `tan` 2.5 to 2.8 ms (1.5), `sin(1/x)` 44 ms (5, see PLOT-SM-3), implicit circle 124 ms (2). The largest gap with an enclosure is the region border: `traceBorder` (`region.ts:441-496`) runs a second quadtree through `traceImplicit` and then spends 5 more evaluations per border segment in `segmentOnBoundary` (15,873 evaluations for a straight line).
 - **Invariant broken:** performance.md section 1 and section 6 (benchmarks gate CI).
 - **Suggested fix:** after PLOT-SM-1, 3 and 7, profile again. For borders, emit the boundary segments from the fill's own boundary leaves (the crossings are already Newton-corrected there) instead of a second trace, and test "on the combined boundary" once per leaf, not per segment.
-- **status:** open
+- **status:** to be implemented
+- **note:** Partly fixed: region borders reuse the fill (the half-plane border now costs about 2,700 evaluations, from 15,873), and a boundary lying on a grid line is decided from its corner values. The other timings in the evidence were not measured again. Owner: plot.
 
 ## Low
 
@@ -140,7 +146,8 @@ Ranked by impact: security (unbounded time or memory), then wrong results, then 
 - **Evidence:** `plotFunction(fnOf(x => Math.sin(1 / x)), V)`: 81 `hole`, 646 `openEnd` and 363 `jump` markers, 110 ink columns, `rigorous: false`; on the bench view, 1,324 markers and 159 paths. The fixer notes report the same and that no spec test asserts it.
 - **Invariant broken:** P3: a marker is recorded only for a verdict the heuristics can support; spans that are oscillation become ink.
 - **Suggested fix:** apply the `stepIsFlat` oscillation test before the edge, hole and jump verdicts, and suppress marker verdicts inside or next to a span already turned into an ink column.
-- **status:** open
+- **status:** fixed
+- **fix:** stepIsFlat probes a fixed distance from the jump and is no longer clamped to the span, so oscillation at the depth limit becomes ink. Hole, end and jump markers within 1.5 px of an ink column are dropped (not in exact mode, where the ink is the curve).
 
 ### PLOT-SM-15: Resume tokens are trusted for their configuration fields
 
