@@ -7,6 +7,7 @@
 import { okResult, viewError } from '../errors';
 import type { Result } from '@incantly/kernel';
 import type { PaintKind } from './drawables';
+import { DEFAULT_FONT_FAMILY, isSafeFontFamily } from './surface';
 
 /** sRGB colour, alpha 0..1. */
 export interface Rgba {
@@ -455,15 +456,22 @@ function resolveNum(raw: StyleNumber | undefined, fallback: number, evalRef: Sty
   return { error: `the formula {${raw.expr}} has no number value right now` };
 }
 
+/** Channels forced to finite numbers in range, so no other value type reaches an output. */
+function cleanRgba(c: Rgba): Rgba {
+  const ch = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? Math.min(255, Math.max(0, v)) : 0);
+  const a = typeof c.a === 'number' && Number.isFinite(c.a) ? Math.min(1, Math.max(0, c.a)) : 1;
+  return rgba(ch(c.r), ch(c.g), ch(c.b), a);
+}
+
 function resolveColor(raw: StyleColorValue | undefined, fallback: Rgba, evalRef: StyleEvaluator): Rgba | { error: string } {
   if (raw === undefined) return fallback;
-  if (typeof raw === 'object' && !isStyleRef(raw)) return raw;
+  if (typeof raw === 'object' && !isStyleRef(raw)) return cleanRgba(raw);
   if (typeof raw === 'string') {
     const c = parseColor(raw);
     return c.ok ? c.value : { error: `colour ${raw} is not valid` };
   }
   const v = evalRef(raw.expr);
-  if (typeof v === 'object') return v;
+  if (typeof v === 'object') return cleanRgba(v);
   if (typeof v === 'string') {
     const c = parseColor(v);
     return c.ok ? c.value : { error: `the formula {${raw.expr}} is not a colour right now` };
@@ -568,6 +576,29 @@ export function resolveStyle(
   void dashName;
   const textSize = authored.textStyle?.size ?? 14;
   if (!numIn(textSize, 6, 96)) return fail('textStyle.size', 'a number from 6 to 96', String(textSize));
+  // Every authored string that reaches CSS, SVG or `ctx.font` is checked here
+  // (VIEW-SM-1): the family against a font-list grammar, the alignment against
+  // its three words, the background against a colour or 'none'.
+  const family = authored.textStyle?.family ?? DEFAULT_FONT_FAMILY;
+  if (!isSafeFontFamily(family)) {
+    return fail(
+      'textStyle.family',
+      'a font list of letters, digits, spaces, commas, quotes, dots and hyphens, up to 200 characters',
+      String(family).slice(0, 60),
+      'Write a font name such as "Georgia, serif".',
+    );
+  }
+  const align = authored.textStyle?.align ?? 'center';
+  if (align !== 'left' && align !== 'center' && align !== 'right') {
+    return fail('textStyle.align', 'left, center or right', String(align));
+  }
+  const bgRaw = authored.textStyle?.background ?? 'none';
+  let background: Rgba | 'none' = 'none';
+  if (bgRaw !== 'none') {
+    const bg = resolveColor(bgRaw, rgba(0, 0, 0, 1), evalRef);
+    if (isErrColor(bg)) return fail('textStyle.background', 'a colour or none', String(bgRaw));
+    background = bg;
+  }
 
   return okResult({
     color,
@@ -594,9 +625,9 @@ export function resolveStyle(
       size: textSize,
       bold: authored.textStyle?.bold ?? false,
       italic: authored.textStyle?.italic ?? false,
-      family: authored.textStyle?.family ?? 'system-ui, sans-serif',
-      align: authored.textStyle?.align ?? 'center',
-      background: authored.textStyle?.background ?? 'none',
+      family,
+      align,
+      background,
     },
     group: groupR,
     labelOpacity: labelOpacityR,

@@ -89,6 +89,25 @@ export interface TextStyle {
   readonly background: Rgba | 'none';
 }
 
+/** Font list used when an authored family is missing or fails the check. */
+export const DEFAULT_FONT_FAMILY = 'system-ui, sans-serif';
+
+const FONT_FAMILY_PATTERN = /^[\p{L}\p{N} ,'"_.-]{1,200}$/u;
+
+/**
+ * True when `family` is a plain font list: letters, digits, spaces, commas,
+ * quotes, dots, hyphens and underscores, at most 200 characters. Anything
+ * with `;`, `:`, `(`, `)`, `{`, `}`, `/` or `\` could carry CSS (VIEW-SM-1).
+ */
+export function isSafeFontFamily(family: unknown): family is string {
+  return typeof family === 'string' && FONT_FAMILY_PATTERN.test(family);
+}
+
+/** `family` when it passes `isSafeFontFamily`, else the default list. */
+export function safeFontFamily(family: string): string {
+  return isSafeFontFamily(family) ? family : DEFAULT_FONT_FAMILY;
+}
+
 export interface TextMetrics {
   readonly width: number;
   readonly height: number;

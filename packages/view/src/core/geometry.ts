@@ -325,12 +325,22 @@ export function buildGeometry(value: ViewValue, input: BuildInput, style: Resolv
     }
     case 'curve': {
       const strokes: Float32Array[] = [];
+      // The sample budget is per curve, not per run: every run gets its share
+      // of the cap, so a curve with many runs stays within it (performance 5).
+      const mappedRuns: Float32Array[] = [];
+      let totalPts = 0;
       for (const run of value.runs) {
         for (const mapped of mapPolyline(run, mapper)) {
-          const c = capSamples(input.detail === 0 ? mapped : capSamples(mapped, MAX_CURVE_SAMPLES >> input.detail));
-          const r = reduceRun(c);
-          if (r.length >= 4) strokes.push(r);
+          mappedRuns.push(mapped);
+          totalPts += mapped.length >> 1;
         }
+      }
+      const budget = input.detail === 0 ? MAX_CURVE_SAMPLES : MAX_CURVE_SAMPLES >> input.detail;
+      const share = totalPts > budget ? budget / totalPts : 1;
+      for (const mapped of mappedRuns) {
+        const c = capSamples(mapped, Math.max(2, Math.floor((mapped.length >> 1) * share)));
+        const r = reduceRun(c);
+        if (r.length >= 4) strokes.push(r);
       }
       const first = strokes[0];
       const anchor: PxPoint = first !== undefined ? { x: px(first[0] ?? 0), y: px(first[first.length - 2] ?? 0) } : { x: px(0), y: px(0) };

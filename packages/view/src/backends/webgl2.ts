@@ -23,6 +23,7 @@ interface GlArena extends Arena {
 interface GlTarget extends Target {
   readonly fbo: WebGLFramebuffer;
   readonly colorTex: WebGLTexture;
+  readonly depthRb: WebGLRenderbuffer | null;
   readonly msaaFbo: WebGLFramebuffer | null;
   readonly msaaColor: WebGLRenderbuffer | null;
   readonly msaaDepth: WebGLRenderbuffer | null;
@@ -55,7 +56,8 @@ function internalError(where: string, hint?: string): Result<never> {
 export class WebGL2Backend implements GpuBackend {
   readonly kind = 'webgl2' as const;
   readonly capabilities: GpuCapabilities;
-  private readonly owned: GlOwned[] = [];
+  /** Live handles only: each `dispose` closure removes its handles (VIEW-SM-4). */
+  private readonly owned = new Set<GlOwned>();
   private readonly gl: WebGL2RenderingContext;
 
   constructor(gl: WebGL2RenderingContext) {
@@ -72,7 +74,7 @@ export class WebGL2Backend implements GpuBackend {
 
   private track<T extends GlOwned>(o: T | null, what: string): Result<T> {
     if (o === null) return internalError(`WebGL2 ${what}`);
-    this.owned.push(o);
+    this.owned.add(o);
     return okResult(o);
   }
 
@@ -122,6 +124,8 @@ export class WebGL2Backend implements GpuBackend {
         dispose: (): void => {
           gl.deleteBuffer(arena.vbo);
           gl.deleteBuffer(arena.ibo);
+          this.owned.delete(arena.vbo);
+          this.owned.delete(arena.ibo);
         },
       };
       return okResult(arena);
@@ -149,9 +153,11 @@ export class WebGL2Backend implements GpuBackend {
       if (!fbo.ok) return fbo;
       gl.bindFramebuffer(gl.FRAMEBUFFER, fbo.value);
       gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, colorTex.value, 0);
+      let depthRb: WebGLRenderbuffer | null = null;
       if (spec.depth) {
         const depth = this.track(gl.createRenderbuffer(), 'depth buffer');
         if (!depth.ok) return depth;
+        depthRb = depth.value;
         gl.bindRenderbuffer(gl.RENDERBUFFER, depth.value);
         gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, w, h);
         gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, depth.value);
@@ -188,15 +194,20 @@ export class WebGL2Backend implements GpuBackend {
         spec,
         fbo: fbo.value,
         colorTex: colorTex.value,
+        depthRb,
         msaaFbo,
         msaaColor,
         msaaDepth,
         dispose: (): void => {
           gl.deleteFramebuffer(target.fbo);
           gl.deleteTexture(target.colorTex);
+          if (target.depthRb !== null) gl.deleteRenderbuffer(target.depthRb);
           if (target.msaaFbo !== null) gl.deleteFramebuffer(target.msaaFbo);
           if (target.msaaColor !== null) gl.deleteRenderbuffer(target.msaaColor);
           if (target.msaaDepth !== null) gl.deleteRenderbuffer(target.msaaDepth);
+          for (const h of [target.fbo, target.colorTex, target.depthRb, target.msaaFbo, target.msaaColor, target.msaaDepth]) {
+            if (h !== null) this.owned.delete(h);
+          }
         },
       };
       return okResult(target);
@@ -242,13 +253,14 @@ export class WebGL2Backend implements GpuBackend {
         gl.deleteProgram(program);
         return internalError('WebGL2 program link');
       }
-      this.owned.push(program);
+      this.owned.add(program);
       const wrapped: GlProgram = {
         program,
         uniformCache: new Map(),
         attribCache: new Map(),
         dispose: (): void => {
           gl.deleteProgram(wrapped.program);
+          this.owned.delete(wrapped.program);
         },
       };
       return okResult(wrapped);
@@ -439,7 +451,7 @@ export class WebGL2Backend implements GpuBackend {
         else if (o instanceof WebGLRenderbuffer) gl.deleteRenderbuffer(o);
         else if (o instanceof WebGLShader) gl.deleteShader(o);
       }
-      this.owned.length = 0;
+      this.owned.clear();
     } catch {
       // Disposal never reports; the context may already be gone.
     }

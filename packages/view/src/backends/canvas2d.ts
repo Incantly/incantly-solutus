@@ -8,11 +8,24 @@ import { renderHatchSpacing, type HatchSpec, type Rgba } from '../core/styles';
 import {
   isCommandPath, type FillStyle, type ImageSource, type PathCommand, type PathData,
   type StrokeStyle, type Surface, type TextMetrics, type TextRun, type TextStyle,
-  type Affine,
+  safeFontFamily, type Affine,
 } from '../core/surface';
 
 function css(c: Rgba, opacity: number): string {
   return `rgba(${Math.round(c.r)},${Math.round(c.g)},${Math.round(c.b)},${Math.min(1, Math.max(0, c.a * opacity))})`;
+}
+
+const HATCH_CACHE_MAX = 64;
+
+function quantiseColor(c: Rgba): Rgba {
+  const q = (v: number): number => Math.min(255, Math.round(v / 8) * 8);
+  return { r: q(c.r), g: q(c.g), b: q(c.b), a: Math.round(c.a * 20) / 20 };
+}
+
+/** `ctx.font` value; the family is checked again here as a second line of defence (VIEW-SM-1). */
+function fontString(st: TextStyle): string {
+  const size = Number.isFinite(st.size) ? Math.min(400, Math.max(1, st.size)) : 14;
+  return `${st.italic ? 'italic ' : ''}${st.bold ? 'bold ' : ''}${size}px ${safeFontFamily(st.family)}`;
 }
 
 export class CanvasSurface implements Surface {
@@ -59,23 +72,89 @@ export class CanvasSurface implements Surface {
     for (let i = 2; i + 1 < run.length; i += 2) c.lineTo(run[i] ?? 0, run[i + 1] ?? 0);
   }
 
+  /** Current point and subpath start while tracing, needed to turn SVG arcs into canvas ellipses. */
+  private curX = 0;
+  private curY = 0;
+  private startX = 0;
+  private startY = 0;
+
   private traceCommand(cmd: PathCommand): void {
     const c = this.ctx;
     switch (cmd.k) {
-      case 'M': c.moveTo(cmd.x, cmd.y); break;
-      case 'L': c.lineTo(cmd.x, cmd.y); break;
-      case 'Q': c.quadraticCurveTo(cmd.cx, cmd.cy, cmd.x, cmd.y); break;
-      case 'C': c.bezierCurveTo(cmd.c1x, cmd.c1y, cmd.c2x, cmd.c2y, cmd.x, cmd.y); break;
-      case 'A':
-        // Canvas has no arc-to with radii rotation; approximate with ellipses
-        // when the arc is axis-aligned, else a line to the endpoint.
-        if (cmd.rot === 0 && cmd.rx === cmd.ry) {
-          c.ellipse(cmd.x, cmd.y, 0, 0, 0, 0, 0);
-        }
-        c.lineTo(cmd.x, cmd.y);
+      case 'M':
+        c.moveTo(cmd.x, cmd.y);
+        this.curX = this.startX = cmd.x;
+        this.curY = this.startY = cmd.y;
         break;
-      case 'Z': c.closePath(); break;
+      case 'L':
+        c.lineTo(cmd.x, cmd.y);
+        this.curX = cmd.x;
+        this.curY = cmd.y;
+        break;
+      case 'Q':
+        c.quadraticCurveTo(cmd.cx, cmd.cy, cmd.x, cmd.y);
+        this.curX = cmd.x;
+        this.curY = cmd.y;
+        break;
+      case 'C':
+        c.bezierCurveTo(cmd.c1x, cmd.c1y, cmd.c2x, cmd.c2y, cmd.x, cmd.y);
+        this.curX = cmd.x;
+        this.curY = cmd.y;
+        break;
+      case 'A':
+        this.traceArc(cmd);
+        this.curX = cmd.x;
+        this.curY = cmd.y;
+        break;
+      case 'Z':
+        c.closePath();
+        this.curX = this.startX;
+        this.curY = this.startY;
+        break;
     }
+  }
+
+  /**
+   * An SVG arc (endpoint form) as a canvas ellipse (centre form), following
+   * the conversion in the SVG implementation notes (F.6.5). Radii too small
+   * for the chord are scaled up; a zero radius is a straight line.
+   */
+  private traceArc(cmd: Extract<PathCommand, { k: 'A' }>): void {
+    const c = this.ctx;
+    const x1 = this.curX;
+    const y1 = this.curY;
+    let rx = Math.abs(cmd.rx);
+    let ry = Math.abs(cmd.ry);
+    if (cmd.x === x1 && cmd.y === y1) return;
+    if (!(rx > 0) || !(ry > 0) || !Number.isFinite(rx + ry)) {
+      c.lineTo(cmd.x, cmd.y);
+      return;
+    }
+    const phi = (cmd.rot * Math.PI) / 180;
+    const cosP = Math.cos(phi);
+    const sinP = Math.sin(phi);
+    const dx2 = (x1 - cmd.x) / 2;
+    const dy2 = (y1 - cmd.y) / 2;
+    const x1p = cosP * dx2 + sinP * dy2;
+    const y1p = -sinP * dx2 + cosP * dy2;
+    const lambda = (x1p * x1p) / (rx * rx) + (y1p * y1p) / (ry * ry);
+    if (lambda > 1) {
+      const s = Math.sqrt(lambda);
+      rx *= s;
+      ry *= s;
+    }
+    const rx2 = rx * rx;
+    const ry2 = ry * ry;
+    const den = rx2 * y1p * y1p + ry2 * x1p * x1p;
+    const num = rx2 * ry2 - den;
+    const coef = (cmd.large === cmd.sweep ? -1 : 1) * Math.sqrt(Math.max(0, num / den));
+    const cxp = (coef * rx * y1p) / ry;
+    const cyp = (-coef * ry * x1p) / rx;
+    const cx = cosP * cxp - sinP * cyp + (x1 + cmd.x) / 2;
+    const cy = sinP * cxp + cosP * cyp + (y1 + cmd.y) / 2;
+    const a0 = Math.atan2((y1p - cyp) / ry, (x1p - cxp) / rx);
+    const a1 = Math.atan2((-y1p - cyp) / ry, (-x1p - cxp) / rx);
+    c.ellipse(cx, cy, rx, ry, phi, a0, a1, !cmd.sweep);
   }
 
   stroke(st: StrokeStyle): void {
@@ -111,12 +190,19 @@ export class CanvasSurface implements Surface {
     }
   }
 
-  private hatchPatternCache = new Map<string, CanvasPattern | null>();
+  /** Least-recently-used hatch tiles, at most `HATCH_CACHE_MAX` (VIEW-SM-4). */
+  private readonly hatchPatternCache = new Map<string, CanvasPattern | null>();
 
-  private hatchPattern(spec: HatchSpec, color: Rgba): CanvasPattern | null {
+  private hatchPattern(spec: HatchSpec, rawColor: Rgba): CanvasPattern | null {
+    // Quantised colour: an animated colour reuses tiles instead of making one per frame.
+    const color = quantiseColor(rawColor);
     const key = JSON.stringify({ spec, color });
     const hit = this.hatchPatternCache.get(key);
-    if (hit !== undefined) return hit;
+    if (hit !== undefined) {
+      this.hatchPatternCache.delete(key);
+      this.hatchPatternCache.set(key, hit);
+      return hit;
+    }
     let out: CanvasPattern | null = null;
     try {
       if (spec.kind !== 'image' && typeof document !== 'undefined') {
@@ -156,19 +242,29 @@ export class CanvasSurface implements Surface {
       out = null;
     }
     this.hatchPatternCache.set(key, out);
+    while (this.hatchPatternCache.size > HATCH_CACHE_MAX) {
+      const oldest = this.hatchPatternCache.keys().next();
+      if (oldest.done === true) break;
+      this.hatchPatternCache.delete(oldest.value);
+    }
     return out;
   }
 
   text(t: TextRun, at: PxPoint, st: TextStyle): void {
     const c = this.ctx;
     c.save();
-    c.font = `${st.italic ? 'italic ' : ''}${st.bold ? 'bold ' : ''}${st.size}px ${st.family}`;
+    c.font = fontString(st);
     c.textAlign = st.align;
     c.textBaseline = 'alphabetic';
     if (st.background !== 'none') {
       const w = c.measureText(t.text).width;
+      // The box follows the alignment: the text starts at `x` (left), ends at
+      // `x` (right) or is centred on it (VIEW-SM-27).
+      const left = st.align === 'left' ? (at.x as number) - 2
+        : st.align === 'right' ? (at.x as number) - w - 2
+          : (at.x as number) - w / 2 - 2;
       c.fillStyle = css(st.background, 1);
-      c.fillRect((at.x as number) - w / 2 - 2, (at.y as number) - st.size - 2, w + 4, st.size + 6);
+      c.fillRect(left, (at.y as number) - st.size - 2, w + 4, st.size + 6);
     }
     c.fillStyle = css(st.color, st.opacity);
     c.fillText(t.text, at.x as number, at.y as number);
@@ -193,7 +289,7 @@ export class CanvasSurface implements Surface {
     try {
       const c = this.ctx;
       c.save();
-      c.font = `${st.italic ? 'italic ' : ''}${st.bold ? 'bold ' : ''}${st.size}px ${st.family}`;
+      c.font = fontString(st);
       const m = c.measureText(t.text);
       c.restore();
       const ascent = m.actualBoundingBoxAscent > 0 ? m.actualBoundingBoxAscent : st.size * 0.9;

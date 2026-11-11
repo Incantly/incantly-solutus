@@ -276,13 +276,14 @@ export function isCulled(bbox: PxRect | null, viewRect: PxRect): boolean {
 /**
  * Paint phase with the per-layer text pass: for each layer, shapes first,
  * then that layer's labels, so a label is never hidden by a later line in
- * the same layer (design 8).
+ * the same layer (design 8). With `labelFilter`, only those ids paint a label.
  */
 export function paintDrawables(
   list: DrawList,
   s: Surface,
   ctx: PaintContext,
   viewRect: PxRect,
+  labelFilter?: ReadonlySet<ObjId>,
 ): { painted: number; labels: number } {
   let painted = 0;
   let labels = 0;
@@ -301,6 +302,7 @@ export function paintDrawables(
     for (let k = i; k < j; k++) {
       const d = sorted[k]?.drawable;
       if (d === undefined || isCulled(d.bbox, viewRect)) continue;
+      if (labelFilter !== undefined && !labelFilter.has(d.id)) continue;
       d.paintLabel(s, ctx);
       labels++;
     }

@@ -20,28 +20,32 @@ Ranked by impact: security, hangs and crashes, wrong results, wrong errors, spee
 - **Evidence:** `core/styles.ts` line 597 copies `authored.textStyle.family` without validation; `backends/svg.ts` line 212 builds `style="font-size:..;font-family:${svgEscape(family)};"`. `svgEscape` stops the attribute from closing but not `;`. Reproduced: a text object with `textStyle.family = 'x;fill:url(https://evil.example/beacon)'` exports `style="font-size:14px;font-family:x;fill:url(https://evil.example/beacon);"`. A shared figure file can make every exported SVG fetch a remote URL when opened (tracking) or restyle the text. The same string also goes into `ctx.font` in `backends/canvas2d.ts`.
 - **Invariant broken:** V14, untrusted text reaches SVG only as escaped text content or a quoted attribute value, never as raw CSS.
 - **Suggested fix:** validate `family` in `resolveStyle` against a font-list grammar (letters, digits, spaces, hyphens, commas, quotes; at most 200 characters) and fail with `bad_property_value` otherwise. In `SvgSurface.text`, emit `font-family="..."` as its own attribute instead of inside `style`. Apply the same check to every authored string that reaches CSS or `ctx.font`.
-- **status:** open
+- **status:** fixed
+- **fix:** textStyle.family, align and background are validated in resolveStyle (core/styles.ts); SvgSurface writes font-family as its own escaped attribute; canvas and SVG re-check the family; image hrefs and glyph paths are checked or escaped.
 
 ### VIEW-SM-2. The 300-label budget is not enforced
 
 - **Evidence:** `web/figure-view.ts` `layoutLabels` (line 741) places only the first 300 requests, but `paintEntries` and `paintDrawables` call `paintLabel` on every drawable, and `GeometryDrawable.paintLabel` paints with its last offset or the default `{6, -6}`. Reproduced: 400 labelled points export 400 `<text>` elements. `checkLabels`, `checkTriangles` and `capCurveSamples` in `core/budgets.ts` have no caller, so no notice is ever raised. The 300 are taken in draw-list order, including labels outside the viewport, so off-screen labels can push visible ones out. A curve with many runs is capped per run, not per curve (`core/geometry.ts` `buildGeometry` case `curve`).
 - **Invariant broken:** V10 and V11, at most 300 labels paint, lowest priority first, only labels in the viewport count, with a notice (performance.md 5).
 - **Suggested fix:** cull label requests to the viewport, sort by a priority (selected, focused, points, then the rest by order), keep the first 300, call `clearLabelOffset` on the rest and make `paintLabel` skip a drawable with no placement this frame. Raise `checkLabels` through a new `onNotice` option. Cap total samples per curve across runs.
-- **status:** open
+- **status:** fixed
+- **fix:** selectLabels (web/figure-view.ts) culls to the viewport, orders by priority, keeps 300 and raises checkLabels through onNotice; paintEntries, exportSvg and exportPng paint only the kept labels.
 
 ### VIEW-SM-3. The SVG element cap is checked only after the whole document is built
 
 - **Evidence:** `web/figure-view.ts` line 2431 tests `svg.elementCount > MAX_SVG_ELEMENTS` after every drawable, label and particle has been written. Reproduced: a 30,000-point figure builds the full document (127 ms) before returning `V001 limit`. The cap counts elements, not bytes: 5,000 curves of 4,000 samples stay under 50,000 elements and return a document of several hundred MB with no refusal (code path).
 - **Invariant broken:** V11, a cap stops the work before the work is done.
 - **Suggested fix:** check the element count inside `SvgSurface` as each element is pushed and stop painting once it is passed; add a byte budget (for example 64 MB) tracked the same way, refused with the same `limit` error.
-- **status:** open
+- **status:** fixed
+- **fix:** SvgSurface takes an element cap and a 64 MB byte budget and stops writing at the cap; exportSvg and the particle pass stop early and return the limit error.
 
 ### VIEW-SM-4. Caches that grow without bound
 
 - **Evidence:** `backends/canvas2d.ts` line 114, `hatchPatternCache` is keyed by `JSON.stringify({ spec, color })` and never evicted. Reproduced: 1,000 fills with animated hatch colours created 1,000 tile canvases; a colour driven by `t` adds about 60 per second for the life of the figure. `backends/webgl2.ts` lines 73 to 75 and 245 push every handle into `owned` and never remove disposed ones, so each `resizeBox` (every resize event of a 3D figure) keeps 5 to 7 more dead handles.
 - **Invariant broken:** V2 and V11, caches are bounded and `owned` holds only live handles.
 - **Suggested fix:** make the hatch cache a small LRU (for example 64 entries) keyed on quantised colour. Store handles in a `Set`, and remove them in each `dispose` closure (target, arena, program).
-- **status:** open
+- **status:** fixed
+- **fix:** Canvas hatch tiles are an LRU of 64 keyed on quantised colour; WebGL2Backend keeps live handles in a Set and each dispose closure removes its own (and now also frees the resolve depth buffer).
 
 ## Hangs and crashes
 
@@ -50,7 +54,8 @@ Ranked by impact: security, hangs and crashes, wrong results, wrong errors, spee
 - **Evidence:** `core/grid.ts` line 249 makes polar circles from `step` up to the view's distance from the origin, not the circles that cross the view. Reproduced: a view centred at x = 1e6 gives 707,112 circles; `paintGrid` strokes each with up to 256 segments on every background repaint (every pan frame), which freezes the tab. The iso loop in `web/figure-view.ts` line 821 runs `2 * diag / stepPx` iterations with a `@grid` step taken as given: a step of 1e-6 at 50 px per unit is about 1.2e8 strokes. The cartesian path is capped at 100,001 ticks per axis, but still makes 200,002 axis labels (37 ms to format, before measuring and painting them).
 - **Invariant broken:** grid drawing cost is bounded by the view size (design 5, "Drawing cost").
 - **Suggested fix:** for polar, generate only radii between the nearest and farthest view corner distances, and skip circles whose pixel radius exceeds `MAX_DRAW_PX`. For every grid kind, refuse or coarsen a fixed step whose pixel spacing is under 4 px, and cap lines per frame (for example 2,000).
-- **status:** open
+- **status:** fixed
+- **fix:** polarGrid returns only circles that cross the view; polar arcs are drawn for the visible angle range only; fixed steps under 4 px are coarsened; tickPositions refuses more than 4,000 lines; iso lines are capped.
 
 ### VIEW-SM-6. WebGL context loss is never handled
 
@@ -100,7 +105,8 @@ Ranked by impact: security, hangs and crashes, wrong results, wrong errors, spee
 - **Evidence:** `backends/canvas2d.ts` line 69: an `A` command becomes `ellipse(x, y, 0, 0, ...)` plus `lineTo(x, y)`. Reproduced: the circle path used by points traces `moveTo(14,10) ellipse(6,10,0,0,0,0,0) lineTo(6,10) ellipse(14,10,0,0,0,0,0) lineTo(14,10) closePath()`, a flat line with no area. Every `dot` and `ring` point marker, the point hover, selection and focus halos, and CPU particle sprites (`spritePath`) draw as horizontal lines on screen and in PNG export. SVG export is correct because it writes `A` directly.
 - **Invariant broken:** every surface draws the same path the same way (design 6, "One surface interface").
 - **Suggested fix:** convert SVG arc parameters to centre form and call `ctx.ellipse(cx, cy, rx, ry, rot, a0, a1, ccw)`, or have `circleCommands` and `spritePath` use a dedicated circle command that maps to `ctx.arc`.
-- **status:** open
+- **status:** fixed
+- **fix:** CanvasSurface converts SVG arcs to ctx.ellipse (centre form) and tracks the current point.
 
 ### VIEW-SM-12. Selection holds hidden, removed or unreachable objects
 
@@ -114,14 +120,16 @@ Ranked by impact: security, hangs and crashes, wrong results, wrong errors, spee
 - **Evidence:** `core/scheduler.ts` line 190 breaks only when the victim was touched strictly later. Reproduced: four untouched figures in view yield `pause(a) goLive(d)`, then `pause(b) goLive(a)`, `pause(a) goLive(b)` on every 500 ms tick forever, rebuilding and pausing figures. Step 5 (line 202) saves only `paused` figures. Reproduced: a figure built while near but not in view is still `ready` after 120 s far away, with no action, so its kernel and geometry are never freed. `SchedulerHost.tick` (`web/scheduler-host.ts` line 95) dispatches while a callback may tick again. Reproduced: an `onAction` that calls `touch` on `goLive` makes the outer loop dispatch `goLive(b)` twice and `goLive(c)` for a record already `paused`.
 - **Invariant broken:** V1, unchanged inputs produce no actions; every built figure off screen for 8 s is saved; actions match the state the tick produced.
 - **Suggested fix:** break unless the victim is strictly older than the candidate (`>=`) and never pick a figure promoted in this tick. Treat `ready` like `paused` for the leave and save rules (`ready` not in view goes `paused` with the off-screen timer). In the host, set a `ticking` flag; a nested `tick` request sets `again = true` and the outer tick runs once more after dispatching.
-- **status:** open
+- **status:** fixed
+- **fix:** Scheduler: equal touch times keep the live figure, a promoted figure is never a victim, ready figures follow the paused save rule when off screen and not near; SchedulerHost defers nested ticks and runs once more.
 
 ### VIEW-SM-14. Export leaves live drawables at the export viewport
 
 - **Evidence:** `exportSvg` and `exportPng` (`web/figure-view.ts` lines 2378 and 2491) rebuild every drawable at the export viewport and only request a frame. Until that frame runs, hit tests and drags use export pixels. Reproduced: a hit test at point A's live position finds 1 candidate before an export, 0 after it, and 1 again after the next frame.
 - **Invariant broken:** V4, live drawables hold live geometry whenever input can reach them.
 - **Suggested fix:** after painting the export, mark all drawables dirty and run `updateDrawables` with the live viewport and the hit-index callback before returning, or export through fresh drawables built for the export.
-- **status:** open
+- **status:** fixed
+- **fix:** restoreLive() rebuilds all drawables at the live viewport and refreshes the hit index right after every SVG or PNG export.
 
 ### VIEW-SM-15. A resize during a view tween is overwritten
 
@@ -135,7 +143,8 @@ Ranked by impact: security, hangs and crashes, wrong results, wrong errors, spee
 - **Evidence:** `fitAll` and `objectBoundsMaths` convert drawable pixel bboxes back to maths, but segments, lines, polygons and regions are clipped to the view, and fully off-screen ones have `bbox = null`. Reproduced: a point at the origin and a segment from x = 20 to 30; after `fitAll` the view is 0.309 units wide around the point and the segment is not in it. `region: 'objects'` uses the same bounds.
 - **Invariant broken:** fit-all covers every visible object (ui.md fit button, design 14.2 `objects`).
 - **Suggested fix:** compute bounds in maths units from kernel values (one small `mathsBounds(value)` per value kind) instead of from clipped pixels.
-- **status:** open
+- **status:** fixed
+- **fix:** New core/bounds.ts mathsBounds(value); fit-all and the objects export region use maths bounds of shown values.
 
 ### VIEW-SM-17. 3D: invisible lines without WebGL2, fixed points nudged, unchecked arena writes
 
@@ -209,7 +218,8 @@ Ranked by impact: security, hangs and crashes, wrong results, wrong errors, spee
 - **Evidence:** the observer tick runs when a figure becomes near, which is too early for the 150 ms settle rule, and nothing schedules a tick at `nearSinceMs + 150`. Reproduced: a figure seen at t = 0 gets no action by 160 ms and `build` and `goLive` at 500 ms (the interval). The target is under 100 ms from a saved picture to live (performance.md 1).
 - **Invariant broken:** V1, a figure builds as soon as the settle rule allows.
 - **Suggested fix:** when a figure becomes near, arm a one-shot timer for `settleMs` that runs `tick`, and run `tick` when the settle timer fires (it already does) with the near time compared at `>=` the timer moment.
-- **status:** open
+- **status:** fixed
+- **fix:** SchedulerHost arms a one-shot timer for the earliest settleMs build after every tick.
 
 ## Cosmetic
 

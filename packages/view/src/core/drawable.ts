@@ -4,7 +4,7 @@
  * kernel values, only this cache.
  */
 import type { ObjId } from '@incantly/kernel';
-import type { ValueOrUndef } from '../contracts';
+import type { ValueOrUndef, ViewValue } from '../contracts';
 import {
   px, type PxPoint, type PxRect, type Viewport,
 } from './coords';
@@ -126,6 +126,19 @@ export class GeometryDrawable implements Drawable {
     const m = this.opts.measure(text, style.textStyle.size);
     const mode = style.label === 'name' ? 'name' as const : style.label === 'value' ? 'value' as const : style.label === 'caption' ? 'caption' as const : 'name-value' as const;
     return { anchor: g.anchor, mode, text, widthPx: m.width, heightPx: m.height };
+  }
+
+  /** True when this drawable has geometry and a label mode other than `none` (no text measuring). */
+  hasLabel(): boolean {
+    return this.geom !== null && this.style !== null && this.style.label !== 'none';
+  }
+
+  /** The value to bound in maths units, or null when the object is undefined or hidden. */
+  shownValue(): ViewValue | null {
+    const v = this.value;
+    const style = this.style;
+    if (v === null || !v.defined || style === null || !style.show) return null;
+    return v.value;
   }
 
   /** Cached anchor for hit fallbacks and label leaders. */

@@ -7,18 +7,18 @@ import type { ObjId, TypeName } from '@incantly/kernel';
 import type { DragApplier, DragMove, KernelEvent, KernelView, SnapshotProvider } from '../contracts';
 import { CanvasSurface } from '../backends/canvas2d';
 import { SoftwareBackend } from '../backends/software';
-import { SvgSurface } from '../backends/svg';
+import { MAX_SVG_BYTES, SvgSurface } from '../backends/svg';
 import {
   createMapper, createViewport, defaultHome, fitAllRegion, isDegenerateView, maths, panBy, px, tweenViewport,
   viewportFromRegion, zoomAbout, type MathsRect, type PxPoint, type PxRect, type Viewport,
 } from '../core/coords';
 import { okResult, viewError } from '../errors';
-import type { Result } from '@incantly/kernel';
+import type { Notice, Result } from '@incantly/kernel';
 import {
   axisLabels, cartesianGrid, chooseStep, isoGrid, pinToEdge, polarGrid, thinLabels,
   type AxesSpec, type AxisUnit, type GridSpec,
 } from '../core/grid';
-import { DEFAULT_AXES, DEFAULT_GRID } from '../core/grid';
+import { DEFAULT_AXES, DEFAULT_GRID, GRID_MIN_FIXED_PX, visibleArc } from '../core/grid';
 import {
   clickSelect, emptySelection, rubberBandSelect, selectAll, type RubberBandShape, type SelectionState,
 } from '../core/selection';
@@ -45,7 +45,7 @@ import {
 } from '../core/snap';
 import { placeLabels, type LabelInput, type LabelPlacement } from '../core/labels';
 import {
-  DEFAULT_BUDGETS, type BudgetLimits,
+  DEFAULT_BUDGETS, checkLabels, type BudgetLimits,
 } from '../core/budgets';
 import {
   MAX_SVG_ELEMENTS, exportViewport, normalizeExport, type ExportRequest,
@@ -60,6 +60,7 @@ import {
 import { CLIP_OFF, itemBounds, type ClipBox, type DrawItem, type HiddenLineMode } from '../core/scene';
 import { buildBvh, pick, rayLineClosest, rayPlane, type Bvh, type Pickable } from '../core/pick3d';
 import { particleExportPlan } from '../core/particles';
+import { mathsBounds } from '../core/bounds';
 import { createDrawStats, type DrawStats, type Target } from '../core/gpu';
 import type { Surface } from '../core/surface';
 import { Figure3D, type MeshProvider } from './figure-3d';
@@ -88,6 +89,8 @@ export interface FigureViewOptions {
   /** Gesture feedback (toasts, tooltips): code + human text. */
   readonly onGesture?: (code: string, text: string) => void;
   readonly onStats?: (stats: FigureStats) => void;
+  /** Budget notices, such as hidden labels (performance design 5). */
+  readonly onNotice?: (notice: Notice) => void;
   readonly onInteract?: () => void;
   /** Frame scheduling; defaults to requestAnimationFrame. The player passes its own. */
   readonly scheduleFrame?: (cb: () => void) => void;
@@ -147,6 +150,8 @@ interface DragSession {
 }
 
 const HOVER_SLACK: PointerKind = 'mouse';
+/** Most isometric lines drawn on each side of the centre (VIEW-SM-5). */
+const MAX_ISO_LINES_PER_SIDE = 1500;
 
 export class FigureView {
   /** Counter for unique `aria-describedby` summary ids across figures on a page. */
@@ -169,6 +174,9 @@ export class FigureView {
   private snapMem: SnapMemory = createSnapMemory(12);
   private readonly resolution = new ResolutionController();
   private placements: LabelPlacement[] = [];
+  /** Labels allowed to paint this frame (at most the label budget, in view). */
+  private labelShown: ReadonlySet<ObjId> = new Set();
+  private lastLabelsHidden = 0;
   private prevLabelOffsets = new Map<ObjId, { dx: number; dy: number; score: number }>();
   private labelOverride = new Map<ObjId, { dx: number; dy: number }>();
   private gridStepX: number | null = null;
@@ -470,16 +478,9 @@ export class FigureView {
 
   fitAll(): void {
     if (this.view === null) return;
-    const mapper = createMapper(this.view);
-    const rects: MathsRect[] = [];
-    for (const e of this.list.sorted()) {
-      const b = e.drawable.bbox;
-      if (b === null) continue;
-      const a = mapper.toMaths({ x: b.x0, y: b.y1 });
-      const c = mapper.toMaths({ x: b.x1, y: b.y0 });
-      rects.push({ x0: a.x, x1: c.x, y0: a.y, y1: c.y });
-    }
-    const fit = fitAllRegion(rects);
+    // Bounds come from the values in maths units, so objects outside the
+    // current view (clipped away in pixels) still count (VIEW-SM-16).
+    const fit = fitAllRegion(this.objectBoundsMaths());
     if (fit === null) {
       this.goHome();
       return;
@@ -700,13 +701,72 @@ export class FigureView {
     }
   }
 
+  /**
+   * Which labels may paint (performance design 5): only labels whose anchor
+   * is inside `rect` count, the lowest priority hide first (selected, focused
+   * and dragged labels, then hovered, then points, then the rest in draw
+   * order), and at most `limit` stay. `total` is the count before the cut.
+   */
+  private selectLabels(
+    entries: readonly DrawListEntry[],
+    rect: PxRect,
+    limit: number,
+    interactive: boolean,
+  ): { shown: Set<ObjId>; total: number } {
+    const margin = 80;
+    const cands: Array<{ id: ObjId; prio: number; idx: number }> = [];
+    for (let i = 0; i < entries.length; i++) {
+      const d = entries[i]?.drawable;
+      if (!(d instanceof GeometryDrawable) || !d.hasLabel()) continue;
+      const a = d.anchor();
+      if (a === null) continue;
+      const ax = a.x as number;
+      const ay = a.y as number;
+      if (ax < (rect.x0 as number) - margin || ax > (rect.x1 as number) + margin ||
+        ay < (rect.y0 as number) - margin || ay > (rect.y1 as number) + margin) continue;
+      let prio = d.kind === 'point' ? 2 : 3;
+      if (interactive) {
+        if (this.selection.ids.has(d.id) || this.focused === d.id || this.labelOverride.has(d.id)) prio = 0;
+        else if (this.hovered === d.id) prio = 1;
+      }
+      cands.push({ id: d.id, prio, idx: i });
+    }
+    cands.sort((x, y) => x.prio - y.prio || x.idx - y.idx);
+    const shown = new Set<ObjId>();
+    for (let i = 0; i < cands.length && i < limit; i++) {
+      const c = cands[i];
+      if (c !== undefined) shown.add(c.id);
+    }
+    return { shown, total: cands.length };
+  }
+
   private layoutLabels(): void {
     if (this.view === null) return;
+    const w = this.view.width as number;
+    const h = this.view.height as number;
+    const viewRect: PxRect = { x0: px(0), x1: px(w), y0: px(0), y1: px(h) };
+    const { shown, total } = this.selectLabels(this.list.sorted(), viewRect, this.budgets.labelsShown, true);
+    this.labelShown = shown;
+    const check = checkLabels(total, this.budgets);
+    if (check.hidden !== this.lastLabelsHidden) {
+      this.lastLabelsHidden = check.hidden;
+      if (check.notice !== null) this.opts.onNotice?.(check.notice);
+    }
     const inputs: LabelInput[] = [];
     const markers: Array<{ x: number; y: number; r: number }> = [];
     for (const e of this.list.sorted()) {
       const d = e.drawable;
       if (!(d instanceof GeometryDrawable)) continue;
+      if (d.kind === 'point' && d.hasLabel()) {
+        const a = d.anchor();
+        if (a !== null && (a.x as number) > -80 && (a.x as number) < w + 80 && (a.y as number) > -80 && (a.y as number) < h + 80) {
+          markers.push({ x: a.x as number, y: a.y as number, r: 4 });
+        }
+      }
+      if (!shown.has(d.id)) {
+        d.clearLabelOffset();
+        continue;
+      }
       const req = d.labelRequest();
       if (req === null) {
         d.clearLabelOffset();
@@ -732,14 +792,8 @@ export class FigureView {
         prevDy: prev?.dy ?? null,
         prevScore: prev?.score ?? null,
       });
-      if (d.kind === 'point') {
-        const a = d.anchor();
-        if (a !== null) markers.push({ x: a.x as number, y: a.y as number, r: 4 });
-      }
     }
-    // Label budget: the lowest-priority labels hide (in list order here).
-    const shown = inputs.slice(0, this.budgets.labelsShown);
-    this.placements = placeLabels(shown, markers);
+    this.placements = placeLabels(inputs, markers);
     this.prevLabelOffsets.clear();
     for (const p of this.placements) {
       this.prevLabelOffsets.set(p.id, { dx: p.dx, dy: p.dy, score: p.score });
@@ -792,10 +846,15 @@ export class FigureView {
       const cy = c.y as number;
       for (const r of g.circles) {
         const rp = r * view.scaleX;
-        const segs = Math.min(256, Math.max(24, Math.ceil(rp / 2)));
+        // Only the arc that can show inside the view is stroked, so a circle
+        // far from the origin costs the same as a near one (VIEW-SM-5).
+        const arc = visibleArc(cx, cy, rp, view.width as number, view.height as number);
+        if (arc === null) continue;
+        const sweep = arc.a1 - arc.a0;
+        const segs = Math.min(256, Math.max(8, Math.ceil((sweep / (2 * Math.PI)) * Math.max(24, rp / 2))));
         const run = new Float32Array((segs + 1) * 2);
         for (let i = 0; i <= segs; i++) {
-          const a = (i / segs) * 2 * Math.PI;
+          const a = arc.a0 + (i / segs) * sweep;
           run[i * 2] = cx + rp * Math.cos(a);
           run[i * 2 + 1] = cy - rp * Math.sin(a);
         }
@@ -818,7 +877,10 @@ export class FigureView {
       const cy = c.y as number;
       const diag = Math.hypot(view.width as number, view.height as number);
       const step = stepX.step * view.scaleX;
-      for (let k = -Math.ceil(diag / step); k <= Math.ceil(diag / step); k++) {
+      // Lines closer than 4 px or more than 1,500 a side are not drawn (VIEW-SM-5).
+      if (!(step >= GRID_MIN_FIXED_PX) || !Number.isFinite(step)) return;
+      const kMax = Math.min(MAX_ISO_LINES_PER_SIDE, Math.ceil(diag / step));
+      for (let k = -kMax; k <= kMax; k++) {
         for (const deg of [0, 60, 120]) {
           const a = (deg * Math.PI) / 180;
           const nx = -Math.sin(a);
@@ -939,7 +1001,7 @@ export class FigureView {
       }
       for (let k = i; k < j; k++) {
         const d = entries[k]?.drawable;
-        if (d === undefined) continue;
+        if (d === undefined || !this.labelShown.has(d.id)) continue;
         d.paintLabel(s, ctx);
         labels++;
       }
@@ -2362,15 +2424,16 @@ export class FigureView {
 
   /* ---------------- export ---------------- */
 
-  /** Bounding boxes of the drawn objects in maths units, for the `objects` region. */
-  private objectBoundsMaths(mapper: ReturnType<typeof createMapper>): MathsRect[] {
+  /** Bounds of the shown objects in maths units, for fit-all and the `objects` region. */
+  private objectBoundsMaths(): MathsRect[] {
     const out: MathsRect[] = [];
     for (const e of this.list.sorted()) {
-      const b = e.drawable.bbox;
-      if (b === null) continue;
-      const a = mapper.toMaths({ x: b.x0, y: b.y1 });
-      const c = mapper.toMaths({ x: b.x1, y: b.y0 });
-      out.push({ x0: a.x, x1: c.x, y0: a.y, y1: c.y });
+      const d = e.drawable;
+      if (!(d instanceof GeometryDrawable)) continue;
+      const v = d.shownValue();
+      if (v === null) continue;
+      const b = mathsBounds(v);
+      if (b !== null) out.push(b);
     }
     return out;
   }
@@ -2386,7 +2449,7 @@ export class FigureView {
     }
     const liveView = this.view;
     const mapper = createMapper(liveView);
-    const objectBounds = this.objectBoundsMaths(mapper);
+    const objectBounds = this.objectBoundsMaths();
     const norm = normalizeExport(req, {
       viewBounds: mapper.bounds(),
       objectBounds,
@@ -2403,11 +2466,17 @@ export class FigureView {
     try {
       const vp = exportViewport(exp, this.ratioLock === 'equal', 1);
       if (!vp.ok) return vp;
-      const svg = new SvgSurface({ textAs: exp.textAs });
-      // Repaint every drawable with the export viewport, then restore.
+      // The caps stop the work as it grows, not after the whole document is
+      // built (VIEW-SM-3): the surface refuses elements past the count or byte cap.
+      const svg = new SvgSurface({ textAs: exp.textAs }, { maxElements: MAX_SVG_ELEMENTS, maxBytes: MAX_SVG_BYTES });
       // The drawables hold live-viewport pixels: rebuild them all for the export viewport.
-      this.list.markViewDirtyAll();
-      updateDrawables(this.list, { kernel: this.opts.kernel, styles: this.opts.styles }, vp.value, () => undefined);
+      this.rebuildForExport(vp.value);
+      const labelIds = this.selectLabels(
+        this.list.sorted(),
+        { x0: px(0), x1: vp.value.width, y0: px(0), y1: vp.value.height },
+        this.budgets.labelsShown,
+        false,
+      ).shown;
       if (exp.includeGrid && this.grid.on) {
         svg.setCurrentId('');
         this.paintGrid(svg, vp.value);
@@ -2421,19 +2490,25 @@ export class FigureView {
         focused: null, reducedMotion: true, t: exp.time ?? this.filmT,
       };
       for (const e of this.list.sorted()) {
+        if (svg.exceeded) break;
         if (exp.layers !== 'all' && !exp.layers.includes(e.drawable.sortKey.layer)) continue;
         const head = this.opts.kernel.head(e.drawable.id);
         svg.setCurrentId(head?.name ?? '');
         e.drawable.paint(svg, ctx);
-        e.drawable.paintLabel(svg, ctx);
+        if (labelIds.has(e.drawable.id)) e.drawable.paintLabel(svg, ctx);
       }
-      this.paintParticlesSvg(svg, exp.time ?? this.filmT, vp.value);
-      if (svg.elementCount > MAX_SVG_ELEMENTS) {
+      if (!svg.exceeded) this.paintParticlesSvg(svg, exp.time ?? this.filmT, vp.value);
+      if (svg.exceeded) {
         return viewError({
           kind: 'limit',
           messageKey: 'view.limit',
-          params: { what: 'SVG elements', max: MAX_SVG_ELEMENTS, got: svg.elementCount },
+          params: {
+            what: svg.byteCount >= MAX_SVG_BYTES ? 'SVG bytes' : 'SVG elements',
+            max: svg.byteCount >= MAX_SVG_BYTES ? MAX_SVG_BYTES : MAX_SVG_ELEMENTS,
+            got: svg.byteCount >= MAX_SVG_BYTES ? svg.byteCount : svg.elementCount,
+          },
           token: String(svg.elementCount),
+          hint: 'Export a smaller region or hide some objects.',
         });
       }
       const bg = exp.background === 'view'
@@ -2442,16 +2517,40 @@ export class FigureView {
       return okResult(svg.toString(exp.widthPx, exp.heightPx, bg));
     } finally {
       token?.release();
-      this.list.markViewDirtyAll();
-      this.markCacheInvalid();
-      this.requestFrame();
+      this.restoreLive();
     }
+  }
+
+  /** Rebuild every drawable at an export viewport (the live geometry is restored by `restoreLive`). */
+  private rebuildForExport(vp: Viewport): void {
+    this.list.markViewDirtyAll();
+    updateDrawables(this.list, { kernel: this.opts.kernel, styles: this.opts.styles }, vp, () => undefined);
+  }
+
+  /**
+   * Put live-viewport geometry and hit boxes back as soon as an export has
+   * painted, so input that arrives before the next frame hits the right
+   * places (VIEW-SM-14).
+   */
+  private restoreLive(): void {
+    if (this.view !== null) {
+      this.list.markViewDirtyAll();
+      updateDrawables(
+        this.list,
+        { kernel: this.opts.kernel, styles: this.opts.styles },
+        this.view,
+        (id, bbox) => this.hits.update(id, bbox),
+      );
+    }
+    this.markCacheInvalid();
+    this.requestFrame();
   }
 
   /** Particles export through the CPU path so frames are reproducible. */
   private paintParticlesSvg(svg: SvgSurface, t: number, view: Viewport): void {
     const mapper = createMapper(view);
     for (const e of this.list.sorted()) {
+      if (svg.exceeded) return;
       if (e.drawable.kind !== 'particles') continue;
       const program = this.opts.kernel.particlesOf(e.drawable.id);
       if (program === undefined) continue;
@@ -2472,7 +2571,7 @@ export class FigureView {
         continue;
       }
       svg.setCurrentId(this.opts.kernel.head(e.drawable.id)?.name ?? 'particles');
-      for (let i = 0; i < plan.drawn; i++) {
+      for (let i = 0; i < plan.drawn && !svg.exceeded; i++) {
         const p = mapper.toPx({ x: (batch.x[i] ?? 0) as never, y: (batch.y[i] ?? 0) as never });
         const r = Math.max(((batch.size[i] ?? 0) * (program.spec.sizeIsPx ? 1 : view.scaleX) * Math.sqrt(plan.densityMul)) / 2, 0.5);
         const u = batch.rgba[i] ?? 0;
@@ -2501,7 +2600,7 @@ export class FigureView {
     const mapper = createMapper(liveView);
     const norm = normalizeExport(req, {
       viewBounds: mapper.bounds(),
-      objectBounds: this.objectBoundsMaths(mapper),
+      objectBounds: this.objectBoundsMaths(),
       nowT: this.filmT,
       equalRatio: this.ratioLock === 'equal',
       pxPerUnit: liveView.scaleX,
@@ -2546,8 +2645,13 @@ export class FigureView {
       ctx2d.setTransform(exp.scale, 0, 0, exp.scale, 0, 0);
       const surface = new CanvasSurface(ctx2d);
       // The drawables hold live-viewport pixels: rebuild them all for the export viewport.
-      this.list.markViewDirtyAll();
-      updateDrawables(this.list, { kernel: this.opts.kernel, styles: this.opts.styles }, vp.value, () => undefined);
+      this.rebuildForExport(vp.value);
+      const labelIds = this.selectLabels(
+        this.list.sorted(),
+        { x0: px(0), x1: vp.value.width, y0: px(0), y1: vp.value.height },
+        this.budgets.labelsShown,
+        false,
+      ).shown;
       if (exp.background !== 'transparent') {
         const bg = exp.background === 'view'
           ? this.background === 'transparent' ? null : this.background
@@ -2565,13 +2669,13 @@ export class FigureView {
         view: vp.value, theme: this.theme, selected: new Set(), hovered: null,
         focused: null, reducedMotion: true, t: exp.time ?? this.filmT,
       };
-      const report = paintDrawables(this.list, surface, ctx, { x0: px(0), x1: vp.value.width, y0: px(0), y1: vp.value.height });
+      const report = paintDrawables(
+        this.list, surface, ctx, { x0: px(0), x1: vp.value.width, y0: px(0), y1: vp.value.height }, labelIds,
+      );
       void report;
-      this.list.markViewDirtyAll();
-      this.markCacheInvalid();
-      this.requestFrame();
+      this.restoreLive();
       token?.release();
-      if (canvas instanceof OffscreenCanvas) {
+      if (typeof OffscreenCanvas !== 'undefined' && canvas instanceof OffscreenCanvas) {
         return canvas.convertToBlob({ type: 'image/png' }).then(
           (blob) => okResult(blob),
           () => viewError({
@@ -2598,8 +2702,7 @@ export class FigureView {
       });
     } catch {
       token?.release();
-      this.list.markViewDirtyAll();
-      this.requestFrame();
+      this.restoreLive();
       return Promise.resolve(viewError({
         kind: 'internal',
         messageKey: 'view.internal',

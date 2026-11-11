@@ -10,7 +10,7 @@ import type { HatchSpec, Rgba } from '../core/styles';
 import { renderHatchSpacing } from '../core/styles';
 import {
   isCommandPath, type FillStyle, type ImageSource, type PathCommand, type PathData,
-  type StrokeStyle, type Surface, type TextMetrics, type TextRun, type TextStyle,
+  safeFontFamily, type StrokeStyle, type Surface, type TextMetrics, type TextRun, type TextStyle,
 } from '../core/surface';
 
 function css(c: Rgba): string {
@@ -49,8 +49,30 @@ export interface SvgOptions {
   readonly glyphPath?: (ch: string) => string | null;
 }
 
+/** Document byte budget for an SVG export (VIEW-SM-3). */
+export const MAX_SVG_BYTES = 64 * 1024 * 1024;
+
+/**
+ * An image `href` is kept only for data:image, http(s), blob: and relative
+ * references. Other schemes (`javascript:`, `data:text/html`) become empty.
+ */
+export function safeHref(href: string): string {
+  const t = href.trim();
+  if (t === '') return '';
+  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(t);
+  if (scheme === null) return [...t].some((ch) => ch.charCodeAt(0) < 32 || ch === '\\') ? '' : t;
+  const s = (scheme[1] ?? '').toLowerCase();
+  if (s === 'http' || s === 'https' || s === 'blob') return t;
+  if (s === 'data' && /^data:image\/(png|jpe?g|gif|webp|bmp|svg\+xml)[;,]/i.test(t)) return t;
+  return '';
+}
+
 export class SvgSurface implements Surface {
   private readonly bodies: string[] = [];
+  private bytes = 0;
+  private over = false;
+  private readonly maxElements: number;
+  private readonly maxBytes: number;
   private readonly defs: string[] = [];
   private readonly patternKeys = new Map<string, string>();
   private readonly clipKeys = new Map<string, string>();
@@ -63,11 +85,49 @@ export class SvgSurface implements Surface {
   private patternSeq = 0;
   private clipSeq = 0;
 
-  constructor(readonly options: SvgOptions = { textAs: 'text' }) {}
+  constructor(
+    readonly options: SvgOptions = { textAs: 'text' },
+    limits: { readonly maxElements?: number; readonly maxBytes?: number } = {},
+  ) {
+    this.maxElements = limits.maxElements ?? Number.POSITIVE_INFINITY;
+    this.maxBytes = limits.maxBytes ?? MAX_SVG_BYTES;
+  }
 
   /** Element count, for the 50,000-element cap. */
   get elementCount(): number {
     return this.bodies.length;
+  }
+
+  /** Bytes written to the body so far (UTF-16 code units). */
+  get byteCount(): number {
+    return this.bytes;
+  }
+
+  /** True once the element or byte cap was passed; later calls write nothing. */
+  get exceeded(): boolean {
+    return this.over;
+  }
+
+  /** Definitions (clips, patterns) count toward the byte budget and the element cap. */
+  private pushDef(s: string): void {
+    if (this.over) return;
+    if (this.bodies.length + this.defs.length >= this.maxElements || this.bytes + s.length > this.maxBytes) {
+      this.over = true;
+      return;
+    }
+    this.defs.push(s);
+    this.bytes += s.length;
+  }
+
+  /** The single write path: counts elements and bytes and stops at the cap. */
+  private push(s: string): void {
+    if (this.over) return;
+    if (this.bodies.length >= this.maxElements || this.bytes + s.length > this.maxBytes) {
+      this.over = true;
+      return;
+    }
+    this.bodies.push(s);
+    this.bytes += s.length;
   }
 
   /** Id for the next painted element (the object name). */
@@ -88,14 +148,14 @@ export class SvgSurface implements Surface {
   }
 
   setImageHref(key: string, href: string): void {
-    this.hrefs.set(key, href);
+    this.hrefs.set(key, safeHref(href));
   }
 
   save(): void {
-    this.bodies.push('<g>');
+    this.push('<g>');
   }
   restore(): void {
-    this.bodies.push('</g>');
+    this.push('</g>');
   }
   transform(): void {
     // Export repaints with an export viewport, so no live transforms remain.
@@ -106,11 +166,11 @@ export class SvgSurface implements Surface {
     if (id === undefined) {
       id = `clip${this.clipSeq++}`;
       this.clipKeys.set(key, id);
-      this.defs.push(
+      this.pushDef(
         `<clipPath id="${id}"><rect x="${svgRound(r.x0 as number)}" y="${svgRound(r.y0 as number)}" width="${svgRound((r.x1 as number) - (r.x0 as number))}" height="${svgRound((r.y1 as number) - (r.y0 as number))}"/></clipPath>`,
       );
     }
-    this.bodies.push(`<g clip-path="url(#${id})">`);
+    this.push(`<g clip-path="url(#${id})">`);
   }
   clipPath(p: PathData): void {
     const d = isCommandPath(p) ? commandsToD(p) : polylineToD(p);
@@ -119,9 +179,9 @@ export class SvgSurface implements Surface {
     if (id === undefined) {
       id = `clip${this.clipSeq++}`;
       this.clipKeys.set(key, id);
-      this.defs.push(`<clipPath id="${id}"><path d="${d}"/></clipPath>`);
+      this.pushDef(`<clipPath id="${id}"><path d="${d}"/></clipPath>`);
     }
-    this.bodies.push(`<g clip-path="url(#${id})">`);
+    this.push(`<g clip-path="url(#${id})">`);
   }
   path(p: PathData): void {
     if (isCommandPath(p)) {
@@ -147,7 +207,7 @@ export class SvgSurface implements Surface {
     if (d === '') return;
     const dash = st.dash.length > 0 ? ` stroke-dasharray="${st.dash.map(svgRound).join(',')}" stroke-dashoffset="${svgRound(-st.dashPhase)}"` : '';
     const id = this.nextIdAttr();
-    this.bodies.push(
+    this.push(
       `<path${id} d="${d}" fill="none" stroke="${css(st.color)}" stroke-width="${svgRound(st.width)}" stroke-opacity="${svgRound(st.opacity)}" stroke-linecap="${st.cap}" stroke-linejoin="${st.join}"${dash}/>`,
     );
   }
@@ -157,13 +217,13 @@ export class SvgSurface implements Surface {
     if (d === '') return;
     const id = this.nextIdAttr();
     if (f.kind === 'solid') {
-      this.bodies.push(
+      this.push(
         `<path${id} d="${d}" fill="${css(f.color)}" fill-opacity="${svgRound(f.opacity)}" stroke="none"/>`,
       );
       return;
     }
     const ref = this.patternFor(f.spec, f.color);
-    this.bodies.push(
+    this.push(
       `<path${id} d="${d}" fill="url(#${ref})" fill-opacity="${svgRound(f.opacity)}" stroke="none"/>`,
     );
   }
@@ -176,7 +236,7 @@ export class SvgSurface implements Surface {
     this.patternKeys.set(key, id);
     if (spec.kind === 'image') {
       const href = this.hrefs.get(spec.src) ?? '';
-      this.defs.push(
+      this.pushDef(
         `<pattern id="${id}" patternUnits="userSpaceOnUse" width="32" height="32"><image href="${svgEscape(href)}" x="0" y="0" width="32" height="32" preserveAspectRatio="${spec.mode === 'tile' ? 'none' : 'xMidYMid slice'}"/></pattern>`,
       );
       return id;
@@ -185,7 +245,7 @@ export class SvgSurface implements Surface {
     const col = css(color);
     if (spec.kind === 'dots') {
       const r = svgRound(spec.radius ?? 1);
-      this.defs.push(
+      this.pushDef(
         `<pattern id="${id}" patternUnits="userSpaceOnUse" width="${svgRound(spacing)}" height="${svgRound(spacing)}"><circle cx="${svgRound(spacing / 2)}" cy="${svgRound(spacing / 2)}" r="${r}" fill="${col}"/></pattern>`,
       );
       return id;
@@ -193,12 +253,12 @@ export class SvgSurface implements Surface {
     const w = svgRound(spec.kind === 'lines' || spec.kind === 'cross' || spec.kind === 'grid' ? (spec.width ?? 1) : 1);
     const angle = spec.kind === 'lines' || spec.kind === 'cross' ? spec.angle : 0;
     if (spec.kind === 'cross' || spec.kind === 'grid') {
-      this.defs.push(
+      this.pushDef(
         `<pattern id="${id}" patternUnits="userSpaceOnUse" width="${svgRound(spacing)}" height="${svgRound(spacing)}"><path d="M0,0H${svgRound(spacing)}M0,0V${svgRound(spacing)}" stroke="${col}" stroke-width="${w}"/></pattern>`,
       );
       return id;
     }
-    this.defs.push(
+    this.pushDef(
       `<pattern id="${id}" patternUnits="userSpaceOnUse" width="${svgRound(spacing)}" height="${svgRound(spacing)}" patternTransform="rotate(${svgRound(angle)})"><path d="M0,0V${svgRound(spacing)}" stroke="${col}" stroke-width="${w}"/></pattern>`,
     );
     return id;
@@ -209,28 +269,32 @@ export class SvgSurface implements Surface {
     const y = svgRound(at.y as number);
     const anchor = st.align === 'center' ? 'middle' : st.align === 'right' ? 'end' : 'start';
     const id = this.nextIdAttr();
-    const style = `font-size:${svgRound(st.size)}px;font-family:${svgEscape(st.family)};${st.bold ? 'font-weight:bold;' : ''}${st.italic ? 'font-style:italic;' : ''}`;
+    // The family is its own quoted attribute and never part of a `style`
+    // string, so no authored text can add CSS declarations (VIEW-SM-1).
+    const family = svgEscape(safeFontFamily(st.family));
+    const weight = st.bold ? ' font-weight="bold"' : '';
+    const slant = st.italic ? ' font-style="italic"' : '';
     if ((this.options.textAs === 'paths' || t.math) && this.options.glyphPath !== undefined) {
       // Maths text always becomes paths; plain text does when asked.
       let dx = 0;
       const glyphs: string[] = [];
       for (const ch of t.text) {
         const g = this.options.glyphPath(ch);
-        if (g !== null) glyphs.push(`<path d="${g}" transform="translate(${svgRound(x + dx)},${svgRound(y)}) scale(${svgRound(st.size)})"/>`);
+        if (g !== null) glyphs.push(`<path d="${svgEscape(g)}" transform="translate(${svgRound(x + dx)},${svgRound(y)}) scale(${svgRound(st.size)})"/>`);
         dx += st.size * 0.6;
       }
-      this.bodies.push(`<g${id} fill="${css(st.color)}" fill-opacity="${svgRound(st.opacity)}">${glyphs.join('')}</g>`);
+      this.push(`<g${id} fill="${css(st.color)}" fill-opacity="${svgRound(st.opacity)}">${glyphs.join('')}</g>`);
       return;
     }
-    this.bodies.push(
-      `<text${id} x="${x}" y="${y}" text-anchor="${anchor}" style="${style}" fill="${css(st.color)}" fill-opacity="${svgRound(st.opacity)}">${svgEscape(t.text)}</text>`,
+    this.push(
+      `<text${id} x="${x}" y="${y}" text-anchor="${anchor}" font-size="${svgRound(st.size)}" font-family="${family}"${weight}${slant} fill="${css(st.color)}" fill-opacity="${svgRound(st.opacity)}">${svgEscape(t.text)}</text>`,
     );
   }
 
   image(img: ImageSource, dest: PxRect, opacity: number): void {
     const href = this.hrefs.get(img.key) ?? '';
     const id = this.nextIdAttr();
-    this.bodies.push(
+    this.push(
       `<image${id} href="${svgEscape(href)}" x="${svgRound(dest.x0 as number)}" y="${svgRound(dest.y0 as number)}" width="${svgRound((dest.x1 as number) - (dest.x0 as number))}" height="${svgRound((dest.y1 as number) - (dest.y0 as number))}" opacity="${svgRound(opacity)}"/>`,
     );
   }

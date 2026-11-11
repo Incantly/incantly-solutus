@@ -74,6 +74,63 @@ export interface PlacedRect {
   readonly h: number;
 }
 
+const CELL_PX = 64;
+/** A rectangle covering more cells than this is kept on a short list checked by every query. */
+const MAX_CELLS_PER_ITEM = 256;
+
+/**
+ * Uniform grid over rectangles, so a candidate label tests only the placed
+ * labels and markers near it instead of all of them (VIEW-SM-21).
+ */
+class CellIndex {
+  private readonly cells = new Map<number, number[]>();
+  private readonly big: number[] = [];
+
+  private static key(cx: number, cy: number): number {
+    return (cx + 32768) * 65536 + (cy + 32768);
+  }
+
+  private static cell(v: number): number {
+    return Math.max(-32000, Math.min(32000, Math.floor(v / CELL_PX)));
+  }
+
+  insert(i: number, x0: number, y0: number, x1: number, y1: number): void {
+    const cx0 = CellIndex.cell(x0);
+    const cx1 = CellIndex.cell(x1);
+    const cy0 = CellIndex.cell(y0);
+    const cy1 = CellIndex.cell(y1);
+    if ((cx1 - cx0 + 1) * (cy1 - cy0 + 1) > MAX_CELLS_PER_ITEM) {
+      this.big.push(i);
+      return;
+    }
+    for (let cx = cx0; cx <= cx1; cx++) {
+      for (let cy = cy0; cy <= cy1; cy++) {
+        const k = CellIndex.key(cx, cy);
+        const list = this.cells.get(k);
+        if (list === undefined) this.cells.set(k, [i]);
+        else list.push(i);
+      }
+    }
+  }
+
+  /** Indices of items whose cells meet the rectangle, ascending and unique. */
+  query(x0: number, y0: number, x1: number, y1: number): number[] {
+    const seen = new Set<number>(this.big);
+    const cx0 = CellIndex.cell(x0);
+    const cx1 = CellIndex.cell(x1);
+    const cy0 = CellIndex.cell(y0);
+    const cy1 = CellIndex.cell(y1);
+    for (let cx = cx0; cx <= cx1; cx++) {
+      for (let cy = cy0; cy <= cy1; cy++) {
+        const list = this.cells.get(CellIndex.key(cx, cy));
+        if (list === undefined) continue;
+        for (const i of list) seen.add(i);
+      }
+    }
+    return [...seen].sort((a, b) => a - b);
+  }
+}
+
 /**
  * Place labels in order. Labels beyond the cost bound keep their previous
  * offset (or the default candidate when new).
@@ -84,20 +141,30 @@ export function placeLabels(
   maxAuto: number = MAX_AUTO_LABELS_PER_FRAME,
 ): LabelPlacement[] {
   const placed: PlacedRect[] = [];
+  const placedIndex = new CellIndex();
+  const markerIndex = new CellIndex();
+  markers.forEach((m, i) => {
+    const reach = 6 + m.r;
+    markerIndex.insert(i, m.x - reach, m.y - reach, m.x + reach, m.y + reach);
+  });
+  const place = (r: PlacedRect): void => {
+    placed.push(r);
+    placedIndex.insert(placed.length - 1, r.x, r.y, r.x + r.w, r.y + r.h);
+  };
   const out: LabelPlacement[] = [];
   let autoCount = 0;
   for (const label of labels) {
     if (label.userDx !== null && label.userDy !== null) {
       const dx = label.userDx;
       const dy = label.userDy;
-      placed.push({ x: label.anchorX + dx, y: label.anchorY + dy, w: label.widthPx, h: label.heightPx });
+      place({ x: label.anchorX + dx, y: label.anchorY + dy, w: label.widthPx, h: label.heightPx });
       out.push({ id: label.id, dx, dy, score: 0, leader: Math.hypot(dx, dy) > LEADER_LINE_PX });
       continue;
     }
     if (autoCount >= maxAuto) {
       const dx = label.prevDx ?? candidates(label.widthPx, label.heightPx)[0]?.[0] ?? 6;
       const dy = label.prevDy ?? candidates(label.widthPx, label.heightPx)[0]?.[1] ?? -6;
-      placed.push({ x: label.anchorX + dx, y: label.anchorY + dy, w: label.widthPx, h: label.heightPx });
+      place({ x: label.anchorX + dx, y: label.anchorY + dy, w: label.widthPx, h: label.heightPx });
       out.push({ id: label.id, dx, dy, score: label.prevScore ?? 0, leader: Math.hypot(dx, dy) > LEADER_LINE_PX });
       continue;
     }
@@ -109,8 +176,13 @@ export function placeLabels(
       const x = label.anchorX + dx;
       const y = label.anchorY + dy;
       let score = 0;
-      for (const p of placed) score += overlapArea(x, y, label.widthPx, label.heightPx, p.x, p.y, p.w, p.h);
-      for (const m of markers) {
+      for (const i of placedIndex.query(x, y, x + label.widthPx, y + label.heightPx)) {
+        const p = placed[i];
+        if (p !== undefined) score += overlapArea(x, y, label.widthPx, label.heightPx, p.x, p.y, p.w, p.h);
+      }
+      for (const i of markerIndex.query(x, y, x + label.widthPx, y + label.heightPx)) {
+        const m = markers[i];
+        if (m === undefined) continue;
         const cx = Math.min(Math.max(m.x, x), x + label.widthPx);
         const cy = Math.min(Math.max(m.y, y), y + label.heightPx);
         if (Math.hypot(m.x - cx, m.y - cy) < 6 + m.r) score += 500;
@@ -128,7 +200,7 @@ export function placeLabels(
       bestDy = label.prevDy;
       bestScore = label.prevScore;
     }
-    placed.push({ x: label.anchorX + bestDx, y: label.anchorY + bestDy, w: label.widthPx, h: label.heightPx });
+    place({ x: label.anchorX + bestDx, y: label.anchorY + bestDy, w: label.widthPx, h: label.heightPx });
     out.push({ id: label.id, dx: bestDx, dy: bestDy, score: bestScore, leader: Math.hypot(bestDx, bestDy) > LEADER_LINE_PX });
   }
   return out;

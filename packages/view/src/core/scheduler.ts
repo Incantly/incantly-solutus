@@ -177,30 +177,38 @@ export function schedulerTick(
     if (a.playing !== b.playing) return a.playing ? -1 : 1;
     return b.lastUsedMs - a.lastUsedMs;
   });
+  // A figure promoted in this tick is never the victim of a later promotion in
+  // the same tick, and a figure only replaces one that is strictly older, so
+  // unchanged inputs give no actions on the next tick (V1, no flapping).
+  const promoted = new Set<string>();
   for (const f of wantLive) {
     const liveCount = [...state.figures.values()].filter((g) => g.state === 'live').length;
     if (liveCount >= config.maxLive) {
       // Pause the least-recently-used live figure that is not pinned.
       const pausable = [...state.figures.values()]
-        .filter((g) => g.state === 'live' && !(g.playing && g.inView))
+        .filter((g) => g.state === 'live' && !(g.playing && g.inView) && !promoted.has(g.id))
         .sort((a, b) => a.lastUsedMs - b.lastUsedMs);
       const victim = pausable[0];
       if (victim === undefined) break;
-      // A figure the learner touched last is the last to be paused.
-      if (victim.lastUsedMs > f.lastUsedMs && !f.playing) break;
+      // A figure the learner touched last is the last to be paused; equal
+      // touch times keep the figure that is already live.
+      if (victim.lastUsedMs >= f.lastUsedMs && !f.playing) break;
       victim.state = 'paused';
       victim.pausedOffscreenSinceMs = !victim.inView ? input.nowMs : null;
       actions.push({ k: 'pause', id: victim.id });
     }
     f.state = 'live';
     f.pausedOffscreenSinceMs = null;
+    promoted.add(f.id);
     actions.push({ k: 'goLive', id: f.id });
   }
   void liveNow;
-  // 5. The 8 s picture rule, for every figure, 2D and 3D.
+  // 5. The 8 s picture rule, for every built figure (`ready` or `paused`),
+  // 2D and 3D. A figure that is still near is kept built: saving it would
+  // only restore it again at once.
   for (const f of state.figures.values()) {
-    if (f.state !== 'paused' || f.inView) {
-      if (f.inView) f.pausedOffscreenSinceMs = null;
+    if ((f.state !== 'paused' && f.state !== 'ready') || f.inView || f.near) {
+      if (f.inView || f.near) f.pausedOffscreenSinceMs = null;
       continue;
     }
     if (f.pausedOffscreenSinceMs === null) f.pausedOffscreenSinceMs = input.nowMs;

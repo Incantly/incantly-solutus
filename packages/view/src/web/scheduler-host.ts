@@ -22,6 +22,9 @@ export class SchedulerHost {
   private tabVisible = true;
   private timer: ReturnType<typeof setInterval> | null = null;
   private settleTimer: ReturnType<typeof setTimeout> | null = null;
+  private buildTimer: ReturnType<typeof setTimeout> | null = null;
+  private ticking = false;
+  private again = false;
   private viewObserver: IntersectionObserver | null = null;
   private nearObserver: IntersectionObserver | null = null;
 
@@ -85,18 +88,65 @@ export class SchedulerHost {
 
   /** Run one tick now; also called by the interval timer. */
   tick(): SchedulerAction[] {
-    const actions = schedulerTick(this.state, {
-      nowMs: Date.now(),
-      visible: this.visible,
-      near: this.near,
-      scrollSettled: this.scrollSettled,
-      tabVisible: this.tabVisible,
-    }, this.config);
-    for (const a of actions) {
-      const record = this.state.figures.get(a.id);
-      if (record !== undefined) this.callbacks.onAction(a, record);
+    // A tick requested from inside an action callback (a touch, a play toggle)
+    // does not run nested: the outer tick finishes dispatching the actions it
+    // produced, then runs once more (V1, actions match the state they came from).
+    if (this.ticking) {
+      this.again = true;
+      return [];
     }
-    return actions;
+    this.ticking = true;
+    const all: SchedulerAction[] = [];
+    try {
+      let rounds = 0;
+      do {
+        this.again = false;
+        const actions = schedulerTick(this.state, {
+          nowMs: Date.now(),
+          visible: this.visible,
+          near: this.near,
+          scrollSettled: this.scrollSettled,
+          tabVisible: this.tabVisible,
+        }, this.config);
+        for (const a of actions) {
+          const record = this.state.figures.get(a.id);
+          if (record !== undefined) this.callbacks.onAction(a, record);
+        }
+        all.push(...actions);
+        rounds++;
+      } while (this.again && rounds < 4);
+    } finally {
+      this.ticking = false;
+      this.again = false;
+    }
+    this.armBuildTimer();
+    return all;
+  }
+
+  /**
+   * A figure that became near is built `settleMs` later, not at the next
+   * 500 ms interval tick (VIEW-SM-26): arm one timer for the earliest
+   * pending build.
+   */
+  private armBuildTimer(): void {
+    if (this.buildTimer !== null) {
+      clearTimeout(this.buildTimer);
+      this.buildTimer = null;
+    }
+    if (!this.scrollSettled) return;
+    const now = Date.now();
+    let wait = Number.POSITIVE_INFINITY;
+    for (const f of this.state.figures.values()) {
+      if ((f.state === 'placeholder' || f.state === 'saved') && f.near && f.nearSinceMs !== null) {
+        const remaining = f.nearSinceMs + this.config.settleMs - now;
+        if (remaining > 0 && remaining < wait) wait = remaining;
+      }
+    }
+    if (!Number.isFinite(wait)) return;
+    this.buildTimer = setTimeout(() => {
+      this.buildTimer = null;
+      this.tick();
+    }, wait + 1);
   }
 
   stats(): SchedulerStats {
@@ -164,6 +214,10 @@ export class SchedulerHost {
     if (this.settleTimer !== null) {
       clearTimeout(this.settleTimer);
       this.settleTimer = null;
+    }
+    if (this.buildTimer !== null) {
+      clearTimeout(this.buildTimer);
+      this.buildTimer = null;
     }
     if (typeof document !== 'undefined') {
       document.removeEventListener('visibilitychange', this.onVisibility);
