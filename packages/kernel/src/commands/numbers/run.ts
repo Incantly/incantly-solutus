@@ -21,6 +21,7 @@ import { NUMBERS_LIMITS } from './types';
 import { numbersError } from './errors';
 import { checkProbeLine, evalTNode, numLiteral, printExpr, printLineNode, substituteLine, valueLiteralExpr, valueLiteralText } from './eval';
 import type { Binding } from './eval';
+import { changeEventOf } from './events';
 import { emitControlEvent, expansionProbeName, getStoredHandler, recordRun } from './handlers';
 import type { StoredStep } from './handlers';
 
@@ -611,8 +612,8 @@ export function runHandler(
   emitControlEvent(figure, { event, name: target, type: figure.get(target)?.type ?? 'figure', ...(payload.value !== undefined ? { value: valueText(payload.value) } : {}), by });
   for (const l of ex.lines) {
     for (const id of l.wrote) {
-      const info = figure.view.byId(id);
-      if (info) emitControlEvent(figure, { event: 'change', name: info.name, type: info.type.k, value: valueText(figure.value(id)), by });
+      const ev = changeEventOf(figure, id, by);
+      if (ev) emitControlEvent(figure, ev);
     }
   }
   emitControlEvent(figure, {

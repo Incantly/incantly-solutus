@@ -16,6 +16,7 @@ import { displayUnitOf } from './props';
 import { formatDisplayNumber } from './format';
 import { numbersError, numbersNotice } from './errors';
 import { emitControlEvent } from './handlers';
+import { changeEventOf } from './events';
 import { captureResetInitial, runChangeHandlers } from './run';
 
 export interface WriteOk {
@@ -43,18 +44,12 @@ function notFreeError(figure: Figure, id: ObjId): ErrorObject {
  * host and writes a handler makes raise no handler, which is why handlers cannot loop.
  */
 export function emitChange(figure: Figure, id: ObjId, by: 'learner' | 'host'): void {
-  const view = figure.get(id);
-  if (!view) return;
-  const raw = figure.value(id);
-  if (view.type === 'Choice') {
-    const state = choiceStateOf(figure, id);
-    const chosen = state ? (typeof state.value === 'string' ? state.value : valueText(state.value)) : valueText(raw);
-    emitControlEvent(figure, { event: 'change', name: view.name, type: view.type, value: chosen, ...(state ? { index: state.index } : {}), by });
-    if (by === 'learner') runChangeHandlers(figure, view.name, state?.value);
-    return;
-  }
-  emitControlEvent(figure, { event: 'change', name: view.name, type: view.type, value: valueText(raw), by });
-  if (by === 'learner') runChangeHandlers(figure, view.name, raw);
+  const ev = changeEventOf(figure, id, by);
+  if (!ev) return;
+  emitControlEvent(figure, ev);
+  if (by !== 'learner') return;
+  const choice = choiceStateOf(figure, id);
+  runChangeHandlers(figure, ev.name, ev.type === 'Choice' && choice ? choice.value : figure.value(id));
 }
 
 /**
