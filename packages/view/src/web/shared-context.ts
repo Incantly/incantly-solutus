@@ -11,6 +11,8 @@ import type { GpuBackend, Target } from '../core/gpu';
 
 export interface FigureBox {
   readonly id: string;
+  /** The figure that owns this box; another figure with the same id is refused. */
+  readonly owner: object | null;
   readonly canvas: HTMLCanvasElement;
   readonly ctx2d: CanvasRenderingContext2D | null;
   target: Target | null;
@@ -49,6 +51,9 @@ export const domCanvasFactory: CanvasFactory = {
   },
 };
 
+/** Straight (non-premultiplied) alpha, so the blit and the readback agree. */
+const GL_OPTIONS = { antialias: false, alpha: true, depth: true, premultipliedAlpha: false } as const;
+
 export interface SharedStats {
   boxes: number;
   presents: number;
@@ -64,16 +69,97 @@ export class SharedGpuContext {
   private readonly boxes = new Map<string, FigureBox>();
   private backendValue: GpuBackend | null = null;
   private readonly stats: SharedStats = { boxes: 0, presents: 0, lastPresentMs: 0 };
+  /** The offscreen canvas that owns the GL context. */
+  private glCanvas: HTMLCanvasElement | null = null;
+  private lostFlag = false;
+  private gen = 0;
+  private readonly restoreListeners = new Set<() => void>();
+  /** Reused readback buffers for the fallback present path, per box id. */
+  private readonly readback = new Map<string, { w: number; h: number; flipped: Uint8ClampedArray; image: ImageData }>();
 
   private constructor(readonly factory: CanvasFactory) {}
+
+  /** The context was lost and has not been restored yet; nothing can draw. */
+  isLost(): boolean {
+    return this.lostFlag;
+  }
+
+  /** Bumps on every restore; resources built under an older number are dead. */
+  generation(): number {
+    return this.gen;
+  }
+
+  /** Call `cb` after a lost context came back and every box target was rebuilt. */
+  onRestore(cb: () => void): () => void {
+    this.restoreListeners.add(cb);
+    return (): void => {
+      this.restoreListeners.delete(cb);
+    };
+  }
+
+  private readonly onContextLost = (e: Event): void => {
+    // preventDefault asks the browser to restore the context later.
+    e.preventDefault();
+    this.lostFlag = true;
+  };
+
+  private readonly onContextRestored = (): void => {
+    this.restore();
+  };
+
+  /**
+   * After a restore every GL handle is dead: build a fresh back-end, give each
+   * box a new target and bump the generation so each `Figure3D` rebuilds its
+   * programs and arenas (V2).
+   */
+  private restore(): void {
+    const canvas = this.glCanvas;
+    if (canvas === null) return;
+    let gl: unknown = null;
+    try {
+      gl = canvas.getContext('webgl2', GL_OPTIONS);
+    } catch {
+      gl = null;
+    }
+    // Old handles died with the context: drop them without deleting.
+    this.backendValue = null;
+    if (typeof WebGL2RenderingContext !== 'undefined' && gl instanceof WebGL2RenderingContext) {
+      this.backendValue = new WebGL2Backend(gl);
+    }
+    for (const box of this.boxes.values()) {
+      box.target = null;
+      this.readback.delete(box.id);
+      if (this.backendValue !== null) {
+        const made = this.backendValue.createTarget({
+          width: Math.max(1, box.canvas.width), height: Math.max(1, box.canvas.height),
+          samples: 4, depth: true, float: false,
+        });
+        if (made.ok) box.target = made.value;
+      }
+    }
+    this.lostFlag = false;
+    this.gen++;
+    for (const cb of [...this.restoreListeners]) {
+      try {
+        cb();
+      } catch {
+        // A listener that throws does not stop the others.
+      }
+    }
+  }
 
   static create(factory: CanvasFactory = domCanvasFactory): Result<SharedGpuContext> {
     const shared = new SharedGpuContext(factory);
     try {
       const off = factory.createOffscreen(16, 16);
-      const gl = off?.getContext('webgl2', { antialias: false, alpha: true, depth: true });
-      if (gl instanceof WebGL2RenderingContext) {
+      const gl = off?.getContext('webgl2', GL_OPTIONS);
+      if (off !== null && off !== undefined && gl instanceof WebGL2RenderingContext) {
         shared.backendValue = new WebGL2Backend(gl);
+        shared.glCanvas = off;
+        if (typeof off.addEventListener === 'function') {
+          off.addEventListener('webglcontextlost', shared.onContextLost);
+          off.addEventListener('webglcontextrestored', shared.onContextRestored);
+        }
       }
     } catch {
       shared.backendValue = null;
@@ -93,9 +179,19 @@ export class SharedGpuContext {
     return { ...this.stats, boxes: this.boxes.size };
   }
 
-  acquireBox(id: string, widthCss: number, heightCss: number, dpr: number): Result<FigureBox> {
+  acquireBox(id: string, widthCss: number, heightCss: number, dpr: number, owner: object | null = null): Result<FigureBox> {
     const old = this.boxes.get(id);
     if (old !== undefined) {
+      // A box belongs to one figure: a second figure with the same id is refused (V2).
+      if (old.owner !== null && owner !== null && old.owner !== owner) {
+        return viewError({
+          kind: 'internal',
+          messageKey: 'view.internal',
+          params: { where: 'figure box already in use' },
+          token: id,
+          hint: 'Two figures use the same id. Give each figure its own id.',
+        });
+      }
       const resized = this.resizeBox(id, widthCss, heightCss, dpr);
       if (!resized.ok) return resized;
       return okResult(old);
@@ -124,7 +220,7 @@ export class SharedGpuContext {
       const made = this.backendValue.createTarget({ width: pxW, height: pxH, samples: 4, depth: true, float: false });
       if (made.ok) target = made.value;
     }
-    const box: FigureBox = { id, canvas, ctx2d, target, width: widthCss, height: heightCss };
+    const box: FigureBox = { id, owner, canvas, ctx2d, target, width: widthCss, height: heightCss };
     this.boxes.set(id, box);
     return okResult(box);
   }
@@ -140,7 +236,8 @@ export class SharedGpuContext {
     box.canvas.height = pxH;
     box.canvas.style.width = `${widthCss}px`;
     box.canvas.style.height = `${heightCss}px`;
-    if (this.backendValue !== null) {
+    this.readback.delete(id);
+    if (this.backendValue !== null && !this.lostFlag) {
       box.target?.dispose();
       const made = this.backendValue.createTarget({ width: pxW, height: pxH, samples: 4, depth: true, float: false });
       box.target = made.ok ? made.value : null;
@@ -148,11 +245,14 @@ export class SharedGpuContext {
     return okResult(undefined);
   }
 
-  releaseBox(id: string): void {
+  /** Release a box; with `owner`, only the figure that acquired it can release it. */
+  releaseBox(id: string, owner: object | null = null): void {
     const box = this.boxes.get(id);
     if (box === undefined) return;
-    box.target?.dispose();
+    if (owner !== null && box.owner !== null && box.owner !== owner) return;
+    if (!this.lostFlag) box.target?.dispose();
     box.target = null;
+    this.readback.delete(id);
     this.boxes.delete(id);
   }
 
@@ -162,30 +262,55 @@ export class SharedGpuContext {
 
   /**
    * Copy a figure's box to its visible canvas. The shared context resolves
-   * the MSAA target, reads the pixels and paints them into the 2D canvas.
+   * the MSAA target and blits it to its own canvas; the visible
+   * canvas copies that with `drawImage`, so no pixels pass through the CPU.
+   * If the blit is not available the pixels are read back into buffers that
+   * are reused from frame to frame.
    */
   present(id: string): Result<void> {
     const box = this.boxes.get(id);
-    if (box === undefined || box.ctx2d === null) return okResult(undefined);
+    if (box === undefined || box.ctx2d === null || this.lostFlag) return okResult(undefined);
     const backend = this.backendValue;
     if (backend === null || box.target === null || backend.readPixels === undefined) return okResult(undefined);
-    if (backend instanceof WebGL2Backend && box.target !== null) {
-      // Resolve through a throwaway frame handle over the same size.
-      const size = { width: box.width, height: box.height, dpr: box.canvas.width / Math.max(box.width, 1) };
-      backend.resolveFrame({ target: box.target, size, dispose: (): void => undefined });
-    }
     const w = box.canvas.width;
     const h = box.canvas.height;
     const t0 = performance.now();
+    if (backend instanceof WebGL2Backend) {
+      // Resolve through a throwaway frame handle over the same size.
+      const size = { width: box.width, height: box.height, dpr: w / Math.max(box.width, 1) };
+      backend.resolveFrame({ target: box.target, size, dispose: (): void => undefined });
+      const gl = this.glCanvas;
+      if (gl !== null) {
+        if (gl.width < w) gl.width = w;
+        if (gl.height < h) gl.height = h;
+        const blitted = backend.blitToCanvas(box.target, w, h);
+        if (blitted.ok) {
+          try {
+            box.ctx2d.clearRect(0, 0, w, h);
+            box.ctx2d.drawImage(gl, 0, gl.height - h, w, h, 0, 0, w, h);
+            this.stats.presents++;
+            this.stats.lastPresentMs = performance.now() - t0;
+            return okResult(undefined);
+          } catch {
+            // Fall through to the readback path.
+          }
+        }
+      }
+    }
     const pixels = backend.readPixels(box.target, { x: 0, y: 0, w, h });
     if (!pixels.ok) return pixels;
     try {
-      const flipped = new Uint8ClampedArray(pixels.value.length);
+      let buf = this.readback.get(id);
+      if (buf === undefined || buf.w !== w || buf.h !== h) {
+        const flipped = new Uint8ClampedArray(w * h * 4);
+        buf = { w, h, flipped, image: new ImageData(flipped, w, h) };
+        this.readback.set(id, buf);
+      }
       const row = w * 4;
       for (let y = 0; y < h; y++) {
-        flipped.set(pixels.value.subarray(y * row, y * row + row), (h - 1 - y) * row);
+        buf.flipped.set(pixels.value.subarray(y * row, y * row + row), (h - 1 - y) * row);
       }
-      box.ctx2d.putImageData(new ImageData(flipped, w, h), 0, 0);
+      box.ctx2d.putImageData(buf.image, 0, 0);
     } catch {
       return viewError({
         kind: 'internal',
@@ -200,7 +325,15 @@ export class SharedGpuContext {
   }
 
   dispose(): void {
-    for (const box of this.boxes.values()) box.target?.dispose();
+    const gl = this.glCanvas;
+    if (gl !== null && typeof gl.removeEventListener === 'function') {
+      gl.removeEventListener('webglcontextlost', this.onContextLost);
+      gl.removeEventListener('webglcontextrestored', this.onContextRestored);
+    }
+    this.glCanvas = null;
+    this.restoreListeners.clear();
+    this.readback.clear();
+    if (!this.lostFlag) for (const box of this.boxes.values()) box.target?.dispose();
     this.boxes.clear();
     this.backendValue?.dispose();
     this.backendValue = null;

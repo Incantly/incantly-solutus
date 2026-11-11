@@ -86,16 +86,25 @@ export function mergeBounds(all: readonly Bounds[]): Bounds {
 
 /** The 3D draw list, fed by the same kernel events as the 2D list. */
 export class SceneIndex {
-  private readonly items: DrawItem[] = [];
+  /** Insertion-ordered set: removing an id is constant time, not an `indexOf` (VIEW-SM-24). */
+  private readonly items = new Set<DrawItem>();
+  private itemsCache: DrawItem[] | null = null;
+  private boundsCache: Bounds | null = null;
   private readonly byId = new Map<ObjId, DrawItem[]>();
   private readonly bounds = new Map<DrawItem, Bounds>();
 
   get size(): number {
-    return this.items.length;
+    return this.items.size;
   }
 
   all(): readonly DrawItem[] {
-    return this.items;
+    if (this.itemsCache === null) this.itemsCache = [...this.items];
+    return this.itemsCache;
+  }
+
+  /** The cached bounding sphere of one item, computed once when it was added. */
+  boundsOf(item: DrawItem): Bounds | undefined {
+    return this.bounds.get(item);
   }
 
   of(id: ObjId): readonly DrawItem[] {
@@ -113,15 +122,19 @@ export class SceneIndex {
           if (built !== null && built.length > 0) {
             this.byId.set(id, built);
             for (const item of built) {
-              this.items.push(item);
+              this.items.add(item);
               this.bounds.set(item, itemBounds(item));
             }
           }
         }
+        this.itemsCache = null;
+        this.boundsCache = null;
         return;
       }
       case 'remove': {
         for (const id of event.ids) this.dropId(id);
+        this.itemsCache = null;
+        this.boundsCache = null;
         return;
       }
     }
@@ -133,19 +146,19 @@ export class SceneIndex {
     this.byId.delete(id);
     for (const item of old) {
       this.bounds.delete(item);
-      const at = this.items.indexOf(item);
-      if (at >= 0) this.items.splice(at, 1);
+      this.items.delete(item);
     }
   }
 
   sceneBounds(): Bounds {
-    return mergeBounds([...this.bounds.values()]);
+    if (this.boundsCache === null) this.boundsCache = mergeBounds([...this.bounds.values()]);
+    return this.boundsCache;
   }
 
   /** Items surviving frustum and clip-box culling. */
   visibleItems(vp: Mat4, clip: ClipBox | null): DrawItem[] {
     const out: DrawItem[] = [];
-    for (const item of this.items) {
+    for (const item of this.all()) {
       const b = this.bounds.get(item);
       if (b === undefined) continue;
       if (!frustumContainsSphere(vp, b.c, b.r)) continue;
@@ -284,8 +297,8 @@ export function planBatches(items: readonly DrawItem[]): BatchPlan {
 }
 
 /** Depth key for back-to-front sorting (the no-float-target fallback). */
-export function depthKey(item: DrawItem, eye: V3): number {
-  const b = itemBounds(item);
+export function depthKey(item: DrawItem, eye: V3, bounds?: Bounds): number {
+  const b = bounds ?? itemBounds(item);
   return v3Len(v3Sub(b.c, eye)) - b.r;
 }
 

@@ -310,6 +310,30 @@ export class WebGL2Backend implements GpuBackend {
     }
   }
 
+  /**
+   * Copy a resolved target to the context's own canvas so a 2D
+   * context can `drawImage` it without a CPU readback (VIEW-SM-25). The
+   * target lands in the bottom `h` rows of the canvas.
+   */
+  blitToCanvas(target: Target, w: number, h: number): Result<void> {
+    const gl = this.gl;
+    if (gl.isContextLost()) return internalError('WebGL2 context lost');
+    try {
+      const t = target as GlTarget;
+      gl.disable(gl.SCISSOR_TEST);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.clearColor(0, 0, 0, 0);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.bindFramebuffer(gl.READ_FRAMEBUFFER, t.fbo);
+      gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
+      gl.blitFramebuffer(0, 0, w, h, 0, 0, w, h, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      return okResult(undefined);
+    } catch {
+      return internalError('WebGL2 blit');
+    }
+  }
+
   draw(frame: FrameCtx, batch: Batch, stats: DrawStats): Result<void> {
     const gl = this.gl;
     if (gl.isContextLost()) return internalError('WebGL2 context lost');
