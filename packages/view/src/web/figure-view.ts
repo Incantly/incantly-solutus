@@ -186,7 +186,8 @@ export class FigureView {
   private summaryEl: HTMLElement | null = null;
   private readonly readerItems = new Map<ObjId, HTMLElement>();
   private readonly readerText = new Map<ObjId, string>();
-  private lastAnnounceMs = 0;
+  private lastAnnounceMs = Number.NEGATIVE_INFINITY;
+  private announceTimer: ReturnType<typeof setTimeout> | null = null;
   private queuedAnnounce: string | null = null;
 
   private pending = false;
@@ -373,6 +374,9 @@ export class FigureView {
     this.readerList?.remove();
     this.liveRegion?.remove();
     this.summaryEl?.remove();
+    if (this.announceTimer !== null) clearTimeout(this.announceTimer);
+    this.announceTimer = null;
+    this.queuedAnnounce = null;
     this.readerItems.clear();
     this.root = null;
     this.bgCanvas = null;
@@ -1299,7 +1303,10 @@ export class FigureView {
     }
     const plan = computeDragPlan(top.id, this.dragFactsFor(top.id, top.part === 'label'));
     if (plan.kind === 'none' && top.part !== 'label') {
-      this.opts.onGesture?.('drag_blocked', `${this.opts.kernel.head(top.id)?.name ?? '?'} can't be moved: ${plan.reason ?? 'built from other objects'}.`);
+      const name = this.opts.kernel.head(top.id)?.name ?? '?';
+      if (plan.reason === 'fixed') this.opts.onGesture?.('drag_fixed', `${name} is fixed.`);
+      else if (plan.reason === 'path_undefined') this.opts.onGesture?.('drag_path_undefined', `${name} is on a path that has no value right now.`);
+      else this.opts.onGesture?.('drag_blocked', `${name} can't be moved: ${plan.reason ?? 'built from other objects'}.`);
       this.panning = { pointerId: e.pointerId, lastX: pos.x, lastY: pos.y, axis: 'both' };
       this.overlayCanvas.setPointerCapture(e.pointerId);
       return;
@@ -1979,7 +1986,7 @@ export class FigureView {
     this.requestFrame();
     const head = this.opts.kernel.head(top.objId);
     const value = this.opts.kernel.valueOf(top.objId);
-    if (head?.free === true && value.defined && value.value.k === 'point3') {
+    if (head?.free === true && this.opts.styles.authoredOf(top.objId)?.style.fixed !== true && value.defined && value.value.k === 'point3') {
       const at = { x: value.value.x, y: value.value.y, z: value.value.z };
       const base = { pointerId: e.pointerId, id: top.objId, last: at, lastX: pos.x, lastY: pos.y };
       if (gizmo !== null && 'axis' in gizmo) {
@@ -1995,6 +2002,8 @@ export class FigureView {
         this.point3Drag = { ...base, plane: this.defaultDragPlane(cam, at), axis: null, depth: false };
       }
       this.overlayCanvas.setPointerCapture(e.pointerId);
+    } else if (this.opts.styles.authoredOf(top.objId)?.style.fixed === true) {
+      this.opts.onGesture?.('drag_fixed', `${head?.name ?? '?'} is fixed.`);
     } else {
       this.opts.onGesture?.('drag_blocked', `${head?.name ?? '?'} can't be moved here.`);
     }
@@ -2353,6 +2362,19 @@ export class FigureView {
 
   /* ---------------- export ---------------- */
 
+  /** Bounding boxes of the drawn objects in maths units, for the `objects` region. */
+  private objectBoundsMaths(mapper: ReturnType<typeof createMapper>): MathsRect[] {
+    const out: MathsRect[] = [];
+    for (const e of this.list.sorted()) {
+      const b = e.drawable.bbox;
+      if (b === null) continue;
+      const a = mapper.toMaths({ x: b.x0, y: b.y1 });
+      const c = mapper.toMaths({ x: b.x1, y: b.y0 });
+      out.push({ x0: a.x, x1: c.x, y0: a.y, y1: c.y });
+    }
+    return out;
+  }
+
   exportSvg(req: ExportRequest): Result<string> {
     if (this.view === null) {
       return viewError({
@@ -2364,14 +2386,7 @@ export class FigureView {
     }
     const liveView = this.view;
     const mapper = createMapper(liveView);
-    const objectBounds = [];
-    for (const e of this.list.sorted()) {
-      const b = e.drawable.bbox;
-      if (b === null) continue;
-      const a = mapper.toMaths({ x: b.x0, y: b.y1 });
-      const c = mapper.toMaths({ x: b.x1, y: b.y0 });
-      objectBounds.push({ x0: a.x, x1: c.x, y0: a.y, y1: c.y });
-    }
+    const objectBounds = this.objectBoundsMaths(mapper);
     const norm = normalizeExport(req, {
       viewBounds: mapper.bounds(),
       objectBounds,
@@ -2390,6 +2405,8 @@ export class FigureView {
       if (!vp.ok) return vp;
       const svg = new SvgSurface({ textAs: exp.textAs });
       // Repaint every drawable with the export viewport, then restore.
+      // The drawables hold live-viewport pixels: rebuild them all for the export viewport.
+      this.list.markViewDirtyAll();
       updateDrawables(this.list, { kernel: this.opts.kernel, styles: this.opts.styles }, vp.value, () => undefined);
       if (exp.includeGrid && this.grid.on) {
         svg.setCurrentId('');
@@ -2484,7 +2501,7 @@ export class FigureView {
     const mapper = createMapper(liveView);
     const norm = normalizeExport(req, {
       viewBounds: mapper.bounds(),
-      objectBounds: [],
+      objectBounds: this.objectBoundsMaths(mapper),
       nowT: this.filmT,
       equalRatio: this.ratioLock === 'equal',
       pxPerUnit: liveView.scaleX,
@@ -2528,6 +2545,8 @@ export class FigureView {
       const ctx2d = g as CanvasRenderingContext2D;
       ctx2d.setTransform(exp.scale, 0, 0, exp.scale, 0, 0);
       const surface = new CanvasSurface(ctx2d);
+      // The drawables hold live-viewport pixels: rebuild them all for the export viewport.
+      this.list.markViewDirtyAll();
       updateDrawables(this.list, { kernel: this.opts.kernel, styles: this.opts.styles }, vp.value, () => undefined);
       if (exp.background !== 'transparent') {
         const bg = exp.background === 'view'
@@ -2687,13 +2706,25 @@ export class FigureView {
     }
   }
 
+  /**
+   * Polite live region, at most one message per 800 ms (design 15). A message
+   * inside the window is queued and the last one is spoken when it closes.
+   */
   private announce(text: string): void {
     const now = performance.now();
     if (now - this.lastAnnounceMs >= 800) {
       this.lastAnnounceMs = now;
+      this.queuedAnnounce = null;
       if (this.liveRegion !== null) this.liveRegion.textContent = text;
-    } else {
-      this.queuedAnnounce = text;
+      return;
+    }
+    this.queuedAnnounce = text;
+    if (this.announceTimer === null) {
+      const wait = Math.max(0, 800 - (now - this.lastAnnounceMs));
+      this.announceTimer = setTimeout(() => {
+        this.announceTimer = null;
+        this.flushAnnounce();
+      }, wait + 5);
     }
   }
 
