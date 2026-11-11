@@ -63,7 +63,12 @@ function termRank(t: SymNode): number {
   }
   if (t.k === 'mul') {
     let r = 0;
-    for (const f of t.factors) if (!isNumberNode(f)) r += Math.max(termRank(f), 0);
+    for (const f of t.factors) {
+      if (isNumberNode(f)) continue;
+      // An integer family parameter (k1, k2, ...) orders after the base value: pi/6 + 2*pi*k1.
+      if (f.k === 'sym' && /^k\d+$/.test(f.name)) r -= 0.5;
+      else r += Math.max(termRank(f), 0);
+    }
     return r;
   }
   return 0;
@@ -184,6 +189,11 @@ function textOf(n: SymNode, o: TextOptions, parentPrec: number): string {
       }
       const numStr = nums.length === 0 ? '1' : nums.map((f) => textOf(f, o, PREC_MUL)).join(' * ');
       if (den.length === 0) return wrap(`${sign}${numStr}`, sign === '' ? PREC_MUL : PREC_UNARY);
+      // A plain whole-number denominator (a rational coefficient) prints tight: `pi/6`.
+      const only = den.length === 1 ? (den[0] as SymNode) : null;
+      if (only !== null && only.k === 'int' && nums.length > 0) {
+        return wrap(`${sign}${numStr}/${only.v.toString()}`, sign === '' ? PREC_MUL : PREC_UNARY);
+      }
       const denStr = den.map((f) => textOf(f, o, PREC_MUL + 1)).join(' * ');
       const dd = den.length > 1 ? `(${denStr})` : denStr;
       if (nums.length === 0) return wrap(`${sign}1 / ${dd}`, PREC_MUL);
@@ -203,6 +213,8 @@ function textOf(n: SymNode, o: TextOptions, parentPrec: number): string {
       return `${n.name}(${args})`;
     }
     case 'rootof': {
+      // The CAS view shows the decimal; the exact form is the hover (design 5.4).
+      if (o.display === true) return wrap(String(Number(n.hint.toPrecision(5))), PREC_ATOM);
       const polyText = textOf(upolyToTree(n.poly, symN('x')), o, 0);
       return wrap(`rootof(${polyText}, ${n.index})`, PREC_ATOM);
     }
@@ -220,15 +232,18 @@ function textOf(n: SymNode, o: TextOptions, parentPrec: number): string {
 }
 
 export function condText(c: SymCond, o: TextOptions = {}): string {
-  if (o.display === true) {
-    const chain = intervalChain(c);
-    if (chain !== null) return chain;
-  }
+  // A bounded interval prints as a chain, `a < v < b`; the parser reads the chain back.
+  const chain = intervalChain(c, o);
+  if (chain !== null) return chain;
   const eq = (op: string): string => (o.display === true && op === '==' ? '=' : op);
   switch (c.c) {
     case 'true': return 'true';
     case 'false': return 'false';
-    case 'rel': return `${toText(c.l, o, 0)} ${eq(c.op)} ${toText(c.r, o, 0)}`;
+    case 'rel':
+      if (o.display === true && c.op === '==' && (c.r.k === 'rootof' || c.l.k === 'rootof')) {
+        return `${toText(c.l, o, 0)} ≈ ${toText(c.r, o, 0)}`;
+      }
+      return `${toText(c.l, o, 0)} ${eq(c.op)} ${toText(c.r, o, 0)}`;
     case 'in': return `${toText(c.l, o, 0)} in ${c.set}`;
     case 'not': return `not ${condText(c.of, o)}`;
     case 'and': return c.of.map((x) => condText(x, o)).join(' and ');
@@ -237,14 +252,14 @@ export function condText(c: SymCond, o: TextOptions = {}): string {
 }
 
 /** Display form of an interval piece `a < v and v < b` as `a < v < b`. */
-function intervalChain(c: SymCond): string | null {
+function intervalChain(c: SymCond, o: TextOptions): string | null {
   if (c.c !== 'and' || c.of.length !== 2) return null;
   const l = c.of[0] as SymCond;
   const r = c.of[1] as SymCond;
   if (l.c !== 'rel' || r.c !== 'rel') return null;
   if ((l.op !== '<' && l.op !== '<=') || (r.op !== '<' && r.op !== '<=')) return null;
   if (l.r.k !== 'sym' || r.l.k !== 'sym' || l.r.name !== r.l.name) return null;
-  return `${toText(l.l, { display: true }, 0)} ${l.op} ${l.r.name} ${r.op} ${toText(r.r, { display: true }, 0)}`;
+  return `${toText(l.l, o, 0)} ${l.op} ${l.r.name} ${r.op} ${toText(r.r, o, 0)}`;
 }
 
 /* ---------------------------------- LaTeX ----------------------------------- */

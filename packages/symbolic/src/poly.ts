@@ -653,21 +653,32 @@ export function refineRootFloat(p: UPoly, iv: RootInterval, digits = 15): number
     }
     return (lo + hi) / 2;
   }
+  // Bisect on one shared denominator: it only gains one bit per step.
+  let den = ad === bd ? ad : ad * bd;
+  let lo = ad === bd ? an : an * bd;
+  let hi = ad === bd ? bn : bn * ad;
+  if (sa === 0) return ratToFloat(lo, den);
+  if (sb === 0) return ratToFloat(hi, den);
   for (let i = 0; i < digits * 4 + 20; i++) {
-    const mn = an * bd + bn * ad;
-    const md = 2n * ad * bd;
-    const s = signOf(mn, md);
-    if (s === 0) return Number(mn) / Number(md);
-    if (s === sa) {
-      an = mn;
-      ad = md;
-    } else {
-      bn = mn;
-      bd = md;
-    }
-    if (md > 10n ** 400n) break;
+    const mid = lo + hi; // over 2 * den
+    den *= 2n;
+    lo *= 2n;
+    hi *= 2n;
+    const s = signOf(mid, den);
+    if (s === 0) return ratToFloat(mid, den);
+    if (s === sa) lo = mid;
+    else hi = mid;
   }
-  return (Number(an) / Number(ad) + Number(bn) / Number(bd)) / 2;
+  return (ratToFloat(lo, den) + ratToFloat(hi, den)) / 2;
+}
+
+/** `n / d` as a double, also when both are far beyond the double range. */
+export function ratToFloat(n: bigint, d: bigint): number {
+  const bits = (x: bigint): number => (x < 0n ? -x : x).toString(2).length;
+  const excess = Math.max(bits(n), bits(d)) - 1000;
+  if (excess <= 0) return Number(n) / Number(d);
+  const sh = BigInt(excess);
+  return Number(n >> sh) / Number(d >> sh);
 }
 
 /* --------------------- trees: univariate in a generator ---------------------- */

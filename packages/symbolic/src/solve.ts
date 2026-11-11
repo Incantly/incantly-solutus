@@ -519,6 +519,11 @@ function solveExact(f: SymNode, v: SymNode, ctx: RuleCtx, domain: 'real' | 'comp
   for (const c of coeffs) {
     for (const s of freeSymbols(c)) params.add(s);
   }
+  const allNumbers = coeffs.every((c) => asRational(c) !== null || c.k === 'float');
+  if (params.size === 0 && !allNumbers && deg === 1) {
+    // A linear equation whose coefficients are constants such as e or pi: x = -b/a.
+    return solveLinearParam(coeffs[1] as SymNode, coeffs[0] as SymNode);
+  }
   if (params.size > 0) {
     if (deg === 1) return solveLinearParam(coeffs[1] as SymNode, coeffs[0] as SymNode);
     if (deg === 2) {
@@ -705,9 +710,41 @@ function solveExpLog(f: SymNode, v: SymNode, ctx: RuleCtx, domain: 'real' | 'com
       }
     }
   }
+  const sub = solveExpSubstitution(f, v, ctx, domain);
+  if (sub !== null) return sub;
   const logged = isolateLog(f, v, ctx, domain);
   if (logged !== null) return logged;
   throw new Unsupported('exponential or logarithmic form', 'isolate');
+}
+
+/**
+ * Every exponential in `f` is `b^(c x + d)` with one base `b` and a whole `c`: write them
+ * with `u = b^x` (`exp(2x) - 3 exp(x) + 2` becomes `u^2 - 3u + 2`), solve for `u`, then
+ * `x = ln(u) / ln(b)` for each positive `u`.
+ */
+function solveExpSubstitution(f: SymNode, v: SymNode, ctx: RuleCtx, domain: 'real' | 'complex'): SolveResult | null {
+  let base: SymNode | null = null;
+  let ok = true;
+  const U = symN('u__exp');
+  const mapped = mapNodes(f, (t) => {
+    if (!ok || t.k !== 'pow' || containsGen(t.base, v) || !containsGen(t.exp, v)) return t;
+    const c = treeToUPolySym(t.exp, v);
+    if (c === null || c.length !== 2 || containsGen(c[0] as SymNode, v) || containsGen(c[1] as SymNode, v)) {
+      ok = false;
+      return t;
+    }
+    const k = asInteger(c[1] as SymNode);
+    if (k === null || k === 0n || (base !== null && base !== t.base)) {
+      ok = false;
+      return t;
+    }
+    base = t.base;
+    return mul(pow(t.base, c[0] as SymNode), pow(U, intN(k)));
+  });
+  if (!ok || base === null || containsGen(mapped, v)) return null;
+  const coeffs = treeToUPolySym(mapped, U, ctx.tick);
+  if (coeffs === null || coeffs.length < 3) return null;
+  return solveAtomPoly(pow(base, v), coeffs, v, ctx, domain);
 }
 
 function normalizeExpForms(f: SymNode, v: SymNode): SymNode {

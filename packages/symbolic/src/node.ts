@@ -663,6 +663,8 @@ function foldFn(name: SymFn, args: readonly SymNode[]): SymNode | null {
   if (name === 'tan' && isZeroNode(a0)) return ZERO;
   const trig = foldTrig(name, a0);
   if (trig !== null) return trig;
+  const inverse = foldInverseTrig(name, a0);
+  if (inverse !== null) return inverse;
   const parity = parityRule(name, a0);
   if (parity !== null) return parity;
   return null;
@@ -847,6 +849,41 @@ function reduceTrig10(nn: bigint, dd: bigint): SymNode | null {
   if (r === 5n) return ONE;
   if (r === 15n) return MINUS_ONE;
   return table[r.toString()] ?? null;
+}
+
+/** Exact inverse trig at the school values: asin(1/2) is pi/6, atan(1) is pi/4, and so on. */
+function foldInverseTrig(name: SymFn, a: SymNode): SymNode | null {
+  if (name !== 'asin' && name !== 'acos' && name !== 'atan') return null;
+  const neg = isNegated(a);
+  const x = neg ?? a;
+  const s2 = intern({ k: 'pow', base: TWO, exp: HALF });
+  const s3 = intern({ k: 'pow', base: intN(3), exp: HALF });
+  const piMul = (n: bigint, d: bigint): SymNode => mul(ratN(n, d), constN('pi'));
+  let value: SymNode | null = null;
+  if (name === 'atan') {
+    if (isZeroNode(x)) value = ZERO;
+    else if (x === ONE) value = piMul(1n, 4n);
+    else if (x === s3) value = piMul(1n, 3n);
+    else if (x === mul(ratN(1n, 3n), s3)) value = piMul(1n, 6n);
+    if (value === null) return null;
+    return neg === null ? value : negateNode(value);
+  }
+  // asin on [0, 1], then acos(x) = pi/2 - asin(x), acos(-x) = pi - acos(x).
+  let sinInv: [bigint, bigint] | null = null;
+  if (isZeroNode(x)) sinInv = [0n, 1n];
+  else if (x === HALF) sinInv = [1n, 6n];
+  else if (x === mul(HALF, s2)) sinInv = [1n, 4n];
+  else if (x === mul(HALF, s3)) sinInv = [1n, 3n];
+  else if (x === ONE) sinInv = [1n, 2n];
+  if (sinInv === null) return null;
+  const [n, d] = sinInv;
+  if (name === 'asin') {
+    const v = n === 0n ? ZERO : piMul(n, d);
+    return neg === null ? v : negateNode(v);
+  }
+  const accn = 1n * d - 2n * n; // pi/2 - n/d pi = (d - 2n) / (2d) pi
+  const base: SymNode = accn === 0n ? ZERO : piMul(accn, 2n * d);
+  return neg === null ? base : add(constN('pi'), negateNode(base));
 }
 
 function parityRule(name: SymFn, a: SymNode): SymNode | null {
