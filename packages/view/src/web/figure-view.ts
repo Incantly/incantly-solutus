@@ -9,8 +9,8 @@ import { CanvasSurface } from '../backends/canvas2d';
 import { SoftwareBackend } from '../backends/software';
 import { MAX_SVG_BYTES, SvgSurface } from '../backends/svg';
 import {
-  createMapper, createViewport, defaultHome, fitAllRegion, isDegenerateView, maths, panBy, px, tweenViewport,
-  viewportFromRegion, zoomAbout, type MathsRect, type PxPoint, type PxRect, type Viewport,
+  DEFAULT_LIMITS, RELATIVE_WIDTH_FLOOR, createMapper, createViewport, defaultHome, fitAllRegion, isDegenerateView, maths, panBy, px, tweenViewport,
+  viewportFromRegion, zoomAbout, type MathsPoint, type MathsRect, type PxPoint, type PxRect, type Viewport,
 } from '../core/coords';
 import { okResult, viewError } from '../errors';
 import type { Notice, Result } from '@incantly/kernel';
@@ -141,7 +141,17 @@ interface DragSession {
   readonly startY: number;
   started: boolean;
   readonly grabOffset: { dx: number; dy: number };
-  readonly hintS: number | null;
+  /** Last fraction sent along a sampled path, for continuity (design 12.4). */
+  hintS: number | null;
+  /** Each moved parent's value when the drag began (design 12.5). */
+  readonly parentStart: ReadonlyMap<ObjId, { x: number; y: number }>;
+  /** Points that must not be snap targets: the dragged ones and what they drive. */
+  readonly snapExclude: ReadonlySet<ObjId>;
+  /** True once a move was sent to the kernel, so the drag must be ended there. */
+  kernelOpen: boolean;
+  /** Pointer position of the previous path move, for the 60 px escape. */
+  prevX: number;
+  prevY: number;
   lastX: number;
   lastY: number;
   readonly kind: PointerKind;
@@ -199,6 +209,13 @@ export class FigureView {
   private queuedAnnounce: string | null = null;
 
   private pending = false;
+  private inFrame = false;
+  private syncScheduler = false;
+  /** Ids changed by events since the cached layers were painted. */
+  private readonly cacheDirtyIds = new Set<ObjId>();
+  /** An object was added or removed since the cached layers were painted. */
+  private cacheStructural = false;
+  private liveScratch: HTMLCanvasElement | null = null;
   private bgDirty = true;
   private cacheValid = false;
   private cacheKey = '';
@@ -239,6 +256,8 @@ export class FigureView {
     last: V3;
     lastX: number;
     lastY: number;
+    /** True once a move was sent to the kernel. */
+    sent: boolean;
   } | null = null;
   private readonly bvhCache = new Map<DrawItem, Bvh>();
   private softwareTarget: Target | null = null;
@@ -272,6 +291,8 @@ export class FigureView {
       this.bgDirty = true;
       this.lowerCache = null;
       this.upperCache = null;
+      this.liveScratch = null;
+      this.markCacheInvalid();
       this.lowerSurface = null;
       this.upperSurface = null;
       this.readerText.clear();
@@ -371,7 +392,7 @@ export class FigureView {
       this.overlayCanvas.addEventListener('pointerdown', this.onPointerDown);
       this.overlayCanvas.addEventListener('pointermove', this.onPointerMove);
       this.overlayCanvas.addEventListener('pointerup', this.onPointerUp);
-      this.overlayCanvas.addEventListener('pointercancel', this.onPointerUp);
+      this.overlayCanvas.addEventListener('pointercancel', this.onPointerCancel);
       this.overlayCanvas.addEventListener('wheel', this.onWheel, { passive: false });
       this.overlayCanvas.addEventListener('dblclick', this.onDoubleClick);
       el.addEventListener('keydown', this.onKeyDown);
@@ -394,12 +415,14 @@ export class FigureView {
 
   unmount(): void {
     this.destroyed = true;
+    // An open drag ends in the kernel before the view goes away (VIEW-SM-9).
+    this.endDrag('cancel');
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
     this.overlayCanvas?.removeEventListener('pointerdown', this.onPointerDown);
     this.overlayCanvas?.removeEventListener('pointermove', this.onPointerMove);
     this.overlayCanvas?.removeEventListener('pointerup', this.onPointerUp);
-    this.overlayCanvas?.removeEventListener('pointercancel', this.onPointerUp);
+    this.overlayCanvas?.removeEventListener('pointercancel', this.onPointerCancel);
     this.overlayCanvas?.removeEventListener('wheel', this.onWheel);
     this.overlayCanvas?.removeEventListener('dblclick', this.onDoubleClick);
     this.root?.removeEventListener('keydown', this.onKeyDown);
@@ -439,6 +462,17 @@ export class FigureView {
       dpr,
     });
     if (kept.ok) this.view = kept.value;
+    if (this.tween !== null) {
+      // A running tween keeps its centres and scales but takes the new size,
+      // or its last step would put the old size back (VIEW-SM-15).
+      const resized = (v: Viewport): Result<Viewport> => createViewport({
+        widthPx: w, heightPx: h, centreX: v.centreX as number, centreY: v.centreY as number,
+        scaleX: v.scaleX, scaleY: v.scaleY, dpr,
+      });
+      const from = resized(this.tween.from);
+      const to = resized(this.tween.to);
+      this.tween = from.ok && to.ok ? { ...this.tween, from: from.value, to: to.value } : null;
+    }
     this.paintVersion++;
     // Rebuild all canvases at the new size (DPR changes rebuild everything).
     for (const c of [this.bgCanvas, this.opts.mode === '2d' ? this.sceneCanvas : null, this.overlayCanvas]) {
@@ -567,25 +601,40 @@ export class FigureView {
     this.pendingEvents.push(...events);
     this.sceneEvents.push(...events);
     this.paintVersion++;
-    this.markCacheInvalid();
+    // The cached layers stay valid while only the active objects change
+    // (design 7.4): remember what changed and let the painter decide (VIEW-SM-22).
+    for (const e of events) {
+      if (e.kind === 'add' || e.kind === 'remove') this.cacheStructural = true;
+      for (const id of e.ids) this.cacheDirtyIds.add(id);
+    }
     this.requestFrame();
   }
 
   requestFrame(): void {
     if (this.pending || this.destroyed) return;
     this.pending = true;
+    let returned = false;
     const run = (): void => {
+      // A scheduler that runs the callback before returning is synchronous.
+      if (!returned) this.syncScheduler = true;
       this.pending = false;
       this.frame();
     };
-    if (this.opts.scheduleFrame !== undefined) this.opts.scheduleFrame(run);
+    // A frame that asks for the next one must not run it inside itself: with a
+    // synchronous scheduler that recurses for as long as a tween lives (VIEW-SM-23).
+    if (this.inFrame && this.syncScheduler && typeof setTimeout === 'function') {
+      setTimeout(run, 0);
+    } else if (this.opts.scheduleFrame !== undefined) this.opts.scheduleFrame(run);
     else if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
     else run();
+    returned = true;
   }
 
   private markCacheInvalid(): void {
     this.cacheValid = false;
     this.cacheKey = '';
+    this.cacheDirtyIds.clear();
+    this.cacheStructural = false;
   }
 
   private measure: TextMeasure = (text: string, sizePx: number): { width: number; height: number } => {
@@ -607,6 +656,16 @@ export class FigureView {
   private frame(): void {
     if (this.destroyed || this.view === null || this.root === null) return;
     if (isDegenerateView(this.view)) return;
+    this.inFrame = true;
+    try {
+      this.frameBody();
+    } finally {
+      this.inFrame = false;
+    }
+  }
+
+  private frameBody(): void {
+    if (this.view === null) return;
     const t0 = performance.now();
     // View tween first: it dirties the viewport each step.
     if (this.tween !== null) {
@@ -646,6 +705,7 @@ export class FigureView {
     // Consume kernel events: create drawables at their sort positions.
     for (const e of this.pendingEvents) {
       this.list.applyEvent(e, (id) => this.createDrawable(id));
+      if (e.kind === 'remove') this.forgetRemoved(e.ids);
     }
     this.pendingEvents = [];
     // Update phase.
@@ -690,6 +750,23 @@ export class FigureView {
     });
     // Keep framing while a tween, highlight or coast is alive.
     if (this.tween !== null || this.camTween !== null || this.highlights.size > 0) this.requestFrame();
+  }
+
+  /** Removed objects leave the selection, focus, hover and highlights (VIEW-SM-12). */
+  private forgetRemoved(ids: readonly ObjId[]): void {
+    let changed = false;
+    const next = new Set(this.selection.ids);
+    for (const id of ids) {
+      if (next.delete(id)) changed = true;
+      if (this.focused === id) this.focused = null;
+      if (this.hovered === id) this.hovered = null;
+      this.highlights.delete(id);
+      this.labelOverride.delete(id);
+    }
+    if (changed) {
+      const keep = (id: ObjId | null): ObjId | null => (id !== null && next.has(id) ? id : null);
+      this.selection = { ids: next, anchor: keep(this.selection.anchor), focus: keep(this.selection.focus) };
+    }
   }
 
   private createDrawable(id: ObjId): GeometryDrawable | null {
@@ -1062,12 +1139,27 @@ export class FigureView {
     }
     const split = active.size > 0 ? splitForActive(this.list, active) : null;
     if (split === null) {
+      this.markCacheInvalid();
       const r = this.paintEntries(this.list.sorted(), s, ctx, viewRect);
       this.paintWidgets(s, ctx);
       return r;
     }
     // Partial repaint (7.4): lower/upper paint once to bitmaps, middle live.
-    const key = `${this.paintVersion}:${[...active].sort((a, b) => a - b).join(',')}`;
+    // The key is the split membership only. A changed id outside the active
+    // set, or an added or removed object, makes the cached layers stale.
+    const key = [...active].sort((a, b) => a - b).join(',');
+    let stale = this.cacheStructural;
+    if (!stale) {
+      for (const id of this.cacheDirtyIds) {
+        if (!active.has(id)) {
+          stale = true;
+          break;
+        }
+      }
+    }
+    this.cacheDirtyIds.clear();
+    this.cacheStructural = false;
+    if (stale) this.cacheValid = false;
     this.ensureCacheCanvases();
     if (this.cacheValid && key === this.cacheKey && this.lowerCache !== null && this.upperCache !== null &&
       this.lowerSurface !== null && this.upperSurface !== null) {
@@ -1088,11 +1180,14 @@ export class FigureView {
       // Composite: lower under, upper over.
       const scene = this.sceneCanvas;
       if (scene !== null && this.lowerCache !== null && this.upperCache !== null) {
-        const live = document.createElement('canvas');
-        live.width = scene.width;
-        live.height = scene.height;
+        // One scratch canvas is kept for the composite, not one per frame.
+        if (this.liveScratch === null) this.liveScratch = document.createElement('canvas');
+        const live = this.liveScratch;
+        if (live.width !== scene.width) live.width = scene.width;
+        if (live.height !== scene.height) live.height = scene.height;
         const g = live.getContext('2d');
         if (g !== null) {
+          g.clearRect(0, 0, live.width, live.height);
           g.drawImage(scene, 0, 0);
           c2d.save();
           c2d.setTransform(1, 0, 0, 1, 0, 0);
@@ -1306,7 +1401,7 @@ export class FigureView {
     };
   }
 
-  private snapContext(exclude: ObjId | null): SnapContext {
+  private snapContext(exclude: ReadonlySet<ObjId>, pointer: { x: number; y: number } | null): SnapContext {
     const view = this.view;
     const scaleX = view?.scaleX ?? 80;
     const scaleY = view?.scaleY ?? 80;
@@ -1314,7 +1409,7 @@ export class FigureView {
     if (view !== null) {
       const mapper = createMapper(view);
       for (const e of this.list.sorted()) {
-        if (e.drawable.kind !== 'point' || e.drawable.id === exclude) continue;
+        if (e.drawable.kind !== 'point' || exclude.has(e.drawable.id)) continue;
         const b = e.drawable.bbox;
         if (b === null) continue;
         const cx = ((b.x0 as number) + (b.x1 as number)) / 2;
@@ -1331,9 +1426,129 @@ export class FigureView {
       metric: { scaleX, scaleY },
       snapRadiusPx: 12,
       points,
-      intersections: [],
+      intersections: this.snapIntersections(pointer),
     };
   }
+
+  /** Crossings under the pointer, asked only when the mode snaps to points (design 13.2). */
+  private snapIntersections(pointer: { x: number; y: number } | null): MathsPoint[] {
+    const read = this.opts.intersections;
+    if (pointer === null || read === undefined) return [];
+    const wantPoints = this.snap === 'points' || this.snap === 'grid+points' || (this.snap === 'auto' && !this.grid.on);
+    if (!wantPoints) return [];
+    try {
+      return read(pointer).map((q) => ({ x: maths(q.x), y: maths(q.y) }));
+    } catch {
+      return [];
+    }
+  }
+
+  /** The dragged ids plus every point they drive: none may be a snap target (design 13.2). */
+  private snapExcludeFor(moved: readonly ObjId[]): Set<ObjId> {
+    const out = new Set<ObjId>(moved);
+    if (moved.length === 0) return out;
+    for (const e of this.list.sorted()) {
+      if (e.drawable.kind !== 'point' || out.has(e.drawable.id)) continue;
+      let parents: readonly ObjId[];
+      try {
+        parents = this.opts.kernel.freeParentsOf(e.drawable.id);
+      } catch {
+        parents = [];
+      }
+      if (parents.some((pid) => out.has(pid) && pid !== e.drawable.id)) out.add(e.drawable.id);
+    }
+    return out;
+  }
+
+  /**
+   * The one way a pointer drag ends (design 12.6): exactly one commit or one
+   * cancel reaches the kernel, and only when a move was sent to it. Clears the
+   * 2D and 3D sessions, the label preview and the snap state.
+   */
+  private endDrag(how: 'commit' | 'cancel'): void {
+    const drag = this.drag;
+    const drag3 = this.point3Drag;
+    this.drag = null;
+    this.point3Drag = null;
+    this.snapIndicator = null;
+    this.snapMem = createSnapMemory(12);
+    if (drag === null && drag3 === null) return;
+    if (drag !== null && drag.plan.kind === 'label') {
+      if (drag.labelId !== null) {
+        const over = this.labelOverride.get(drag.labelId);
+        this.labelOverride.delete(drag.labelId);
+        if (how === 'commit' && drag.started && over !== undefined) {
+          this.opts.onRestyle?.(drag.labelId, { labelDx: over.dx, labelDy: over.dy });
+        }
+      }
+    } else if (drag !== null && drag.kernelOpen) {
+      if (how === 'commit' && this.view !== null) {
+        // Commit rounded values, then one batched script record (design 12.6).
+        const scale = this.view.scaleX;
+        const moves: DragMove[] = [];
+        for (const ref of drag.plan.moves) {
+          const v = this.opts.kernel.valueOf(ref.id);
+          if (v.defined && v.value.k === 'point') {
+            moves.push({
+              k: 'point', id: ref.id,
+              x: roundForCommit(v.value.x, scale),
+              y: roundForCommit(v.value.y, scale),
+            });
+          }
+        }
+        try {
+          if (moves.length > 0) this.opts.drag.drag(moves);
+          this.opts.drag.commitDrag();
+        } catch {
+          this.cancelKernelDrag();
+        }
+        const head = this.opts.kernel.head(drag.plan.moves[0]?.id ?? -1 as ObjId);
+        if (head !== undefined) {
+          this.announce(describeMove(head.name, this.opts.valueText?.(head.id) ?? ''));
+        }
+      } else {
+        this.cancelKernelDrag();
+      }
+    }
+    if (drag3 !== null && drag3.sent) {
+      if (how === 'commit') {
+        try {
+          this.opts.drag.commitDrag();
+        } catch {
+          this.cancelKernelDrag();
+        }
+        const head = this.opts.kernel.head(drag3.id);
+        if (head !== undefined) this.announce(describeMove(head.name, this.opts.valueText?.(head.id) ?? ''));
+      } else {
+        this.cancelKernelDrag();
+      }
+    }
+    this.requestFrame();
+  }
+
+  private cancelKernelDrag(): void {
+    try {
+      this.opts.drag.cancelDrag();
+    } catch {
+      // The kernel kept its pre-drag values.
+    }
+  }
+
+  /** A pointer session is open: keyboard nudges and deletes wait for it to end. */
+  private pointerSessionOpen(): boolean {
+    return this.drag !== null || this.point3Drag !== null;
+  }
+
+  /** The browser took the gesture away: nothing is committed (design 12.6). */
+  private readonly onPointerCancel = (e: PointerEvent): void => {
+    this.pointers.delete(e.pointerId);
+    if (this.pointers.size < 2) this.pinchStart = 0;
+    this.band = null;
+    this.panning = null;
+    this.camDrag = null;
+    this.endDrag('cancel');
+    this.requestFrame();
+  };
 
   private readonly onPointerDown = (e: PointerEvent): void => {
     if (this.view === null || this.overlayCanvas === null) return;
@@ -1347,8 +1562,10 @@ export class FigureView {
       if (a !== undefined && b !== undefined) {
         this.pinchStart = Math.hypot(a.x - b.x, a.y - b.y);
       }
-      this.drag = null;
+      // A second finger ends any drag without committing it (VIEW-SM-9).
+      this.endDrag('cancel');
       this.panning = null;
+      this.camDrag = null;
       return;
     }
     if (this.opts.mode === '3d') {
@@ -1405,13 +1622,24 @@ export class FigureView {
     const m = mapper.toMaths({ x: px(pos.x), y: px(pos.y) });
     const value = this.opts.kernel.valueOf(top.id);
     let grabOffset = { dx: 0, dy: 0 };
-    const hintS: number | null = null;
     if (value.defined && value.value.k === 'point') {
       grabOffset = { dx: (m.x as number) - value.value.x, dy: (m.y as number) - value.value.y };
     }
+    const parentStart = new Map<ObjId, { x: number; y: number }>();
+    const movedIds: ObjId[] = [];
+    if (plan.kind !== 'none' && plan.kind !== 'label') {
+      for (const ref of plan.moves) {
+        movedIds.push(ref.id);
+        const pv = this.opts.kernel.valueOf(ref.id);
+        if (pv.defined && pv.value.k === 'point') parentStart.set(ref.id, { x: pv.value.x, y: pv.value.y });
+      }
+    }
+    // Each drag starts with no snap held over from the last one (VIEW-SM-18).
+    this.snapMem = createSnapMemory(12);
     this.drag = {
       pointerId: e.pointerId, plan, startX: pos.x, startY: pos.y, started: false,
-      grabOffset, hintS, lastX: pos.x, lastY: pos.y, kind,
+      grabOffset, hintS: null, parentStart, snapExclude: this.snapExcludeFor(movedIds), kernelOpen: false,
+      prevX: pos.x, prevY: pos.y, lastX: pos.x, lastY: pos.y, kind,
       targetName: this.opts.kernel.head(top.id)?.name ?? '?',
       labelId: top.part === 'label' ? top.id : null,
     };
@@ -1525,6 +1753,15 @@ export class FigureView {
     const scaleY = axis === 'y' ? this.view.scaleY * factor : this.view.scaleY;
     const w = this.view.width as number;
     const h = this.view.height as number;
+    // The same limits and feedback as every other zoom input (design 4, VIEW-SM-20).
+    const units = axis === 'x' ? w / scaleX : h / scaleY;
+    const centre = Math.max(Math.abs(this.view.centreX as number), Math.abs(this.view.centreY as number), 1);
+    const refused = units < DEFAULT_LIMITS.minWidth || units > DEFAULT_LIMITS.maxWidth ? 'zoom_limit'
+      : units < RELATIVE_WIDTH_FLOOR * centre ? 'precision_limit' : null;
+    if (refused !== null) {
+      this.opts.onGesture?.(refused, refused === 'zoom_limit' ? "Can't zoom further." : 'Zoom is at the number precision limit here.');
+      return;
+    }
     const ncx = (m.x as number) - ((pos.x - w / 2) / scaleX);
     const ncy = (m.y as number) + ((pos.y - h / 2) / scaleY);
     const kept = createViewport({
@@ -1563,7 +1800,7 @@ export class FigureView {
       }
       let target = freePointTarget(m, drag.grabOffset);
       if (!noSnap) {
-        const snapped = snapWithHysteresis(target, this.snapContext(drag.plan.moves[0]?.id ?? null), this.snapMem);
+        const snapped = snapWithHysteresis(target, this.snapContext(drag.snapExclude, { x: target.x as number, y: target.y as number }), this.snapMem);
         target = snapped.position;
         const sp = mapper.toPx(target);
         this.snapIndicator = snapped.source.k === 'none' ? null : {
@@ -1583,13 +1820,14 @@ export class FigureView {
         const startM = mapper.toMaths({ x: px(drag.startX), y: px(drag.startY) });
         const dx = (target.x as number) - (startM.x as number);
         const dy = (target.y as number) - (startM.y as number);
+        // Each parent moves from where it was when the drag began; its live
+        // value already holds the earlier moves (VIEW-SM-8).
         for (const ref of drag.plan.moves) {
-          const v = this.opts.kernel.valueOf(ref.id);
-          if (v.defined && v.value.k === 'point') {
-            moves.push({ k: 'point', id: ref.id, x: v.value.x + dx, y: v.value.y + dy });
-          }
+          const at = drag.parentStart.get(ref.id);
+          if (at !== undefined) moves.push({ k: 'point', id: ref.id, x: at.x + dx, y: at.y + dy });
         }
       }
+      drag.kernelOpen = true;
       try {
         this.opts.drag.drag(moves);
       } catch {
@@ -1605,15 +1843,26 @@ export class FigureView {
       if (info === undefined) return;
       const m = mapper.toMaths({ x: px(x), y: px(y) });
       const metric = { scaleX: view.scaleX, scaleY: view.scaleY };
-      const proj = this.projectOnPath(info, m, metric, drag.hintS ?? null);
-      let s = proj.s;
-      if (!noSnap && (this.snap === 'grid' || this.snap === 'grid+points' || (this.snap === 'auto' && this.grid.on))) {
-        const along = info.kind === 'samples'
-          ? snapParamToGrid(info.pts, this.gridStepX ?? 1, this.gridStepY ?? 1, metric, 12)
-          : null;
-        if (along !== null) s = along.s;
+      let s: number;
+      if (info.kind === 'samples') {
+        // The projection gives a fraction along the samples; the kernel wants
+        // the parameter in the path's own units (design 12.4, VIEW-SM-10).
+        const travel = Math.hypot(x - drag.prevX, y - drag.prevY);
+        const proj = projectOnSamples(info.pts, { x: m.x, y: m.y }, metric, drag.hintS, info.closed, travel);
+        let f = proj.s;
+        if (!noSnap && (this.snap === 'grid' || this.snap === 'grid+points' || (this.snap === 'auto' && this.grid.on))) {
+          const along = snapParamToGrid(info.pts, this.gridStepX ?? 1, this.gridStepY ?? 1, metric, 12, proj.point);
+          if (along !== null) f = along.s;
+        }
+        drag.hintS = f;
+        s = info.domain.lo + f * (info.domain.hi - info.domain.lo);
+      } else {
+        s = this.projectOnPath(info, m, metric, null).s;
       }
+      drag.prevX = x;
+      drag.prevY = y;
       s = clampParam(s, info.domain, info.closed);
+      drag.kernelOpen = true;
       try {
         this.opts.drag.drag([{ k: 'param', id, s }]);
       } catch {
@@ -1630,6 +1879,7 @@ export class FigureView {
       const value = this.opts.kernel.valueOf(id);
       if (bbox === null || !value.defined || value.value.k !== 'slider') return;
       const v = sliderTarget(x, bbox.x0 as number, bbox.x1 as number, value.value.lo, value.value.hi, value.value.step);
+      drag.kernelOpen = true;
       try {
         this.opts.drag.drag([{ k: 'number', id, v }]);
       } catch {
@@ -1686,7 +1936,8 @@ export class FigureView {
         const d = entry.drawable;
         if (d instanceof GeometryDrawable) {
           const shape = d.rubberShape();
-          if (shape !== null) shapes.push({ id: d.id, strokes: shape.strokes, fills: shape.fills });
+          if (shape !== null) shapes.push({ id: d.id, strokes: shape.strokes, fills: shape.fills, bbox: d.bbox });
+          else if (d.bbox !== null) shapes.push({ id: d.id, strokes: [], fills: [], bbox: d.bbox });
         }
       }
       const found = rubberBandSelect(shapes, band,
@@ -1701,47 +1952,8 @@ export class FigureView {
       this.panning = null;
       return;
     }
-    const drag = this.drag;
-    if (drag !== null && drag.pointerId === e.pointerId) {
-      this.drag = null;
-      this.snapIndicator = null;
-      if (drag.plan.kind === 'label' && drag.labelId !== null && drag.started) {
-        const over = this.labelOverride.get(drag.labelId);
-        this.labelOverride.delete(drag.labelId);
-        if (over !== undefined) this.opts.onRestyle?.(drag.labelId, { labelDx: over.dx, labelDy: over.dy });
-        this.requestFrame();
-        return;
-      }
-      if (this.view !== null && drag.started && drag.plan.kind !== 'none' && drag.plan.kind !== 'label') {
-        // Commit rounded values, then one batched script record (design 12.6).
-        const scale = this.view.scaleX;
-        const moves: DragMove[] = [];
-        for (const ref of drag.plan.moves) {
-          const v = this.opts.kernel.valueOf(ref.id);
-          if (v.defined && v.value.k === 'point') {
-            moves.push({
-              k: 'point', id: ref.id,
-              x: roundForCommit(v.value.x, scale),
-              y: roundForCommit(v.value.y, scale),
-            });
-          }
-        }
-        try {
-          if (moves.length > 0) this.opts.drag.drag(moves);
-          this.opts.drag.commitDrag();
-        } catch {
-          try {
-            this.opts.drag.cancelDrag();
-          } catch {
-            // Nothing left to try; the kernel kept its pre-drag values.
-          }
-        }
-        const head = this.opts.kernel.head(drag.plan.moves[0]?.id ?? -1 as ObjId);
-        if (head !== undefined) {
-          this.announce(describeMove(head.name, this.opts.valueText?.(head.id) ?? ''));
-        }
-      }
-      this.requestFrame();
+    if (this.drag !== null && this.drag.pointerId === e.pointerId) {
+      this.endDrag('commit');
       return;
     }
     if (this.opts.mode === '3d') this.onPointerUp3D(e);
@@ -1804,15 +2016,9 @@ export class FigureView {
   private readonly onKeyDown = (e: KeyboardEvent): void => {
     if (this.view === null) return;
     if (e.key === 'Escape') {
-      if (this.drag !== null) {
-        try {
-          this.opts.drag.cancelDrag();
-        } catch {
-          // The kernel kept its pre-drag values.
-        }
-        this.drag = null;
-        this.snapIndicator = null;
-        this.requestFrame();
+      if (this.pointerSessionOpen()) {
+        // Esc ends a 2D, 3D or label drag the same way (VIEW-SM-9).
+        this.endDrag('cancel');
         e.preventDefault();
         return;
       }
@@ -1829,6 +2035,8 @@ export class FigureView {
       this.gridStepX, this.snap !== 'off',
       e.shiftKey ? 'shift' : e.altKey ? 'alt' : 'none') * mult;
     const moveSelected = (dx: number, dy: number): void => {
+      // A nudge never commits inside an open pointer drag (VIEW-SM-9).
+      if (this.pointerSessionOpen()) return;
       const moves: DragMove[] = [];
       for (const id of this.selection.ids) {
         const plan = computeDragPlan(id, this.dragFactsFor(id, false));
@@ -1913,7 +2121,7 @@ export class FigureView {
         return;
       case 'Delete':
       case 'Backspace': {
-        const ids = [...this.selection.ids];
+        const ids = this.pointerSessionOpen() ? [] : [...this.selection.ids];
         if (ids.length > 0) {
           this.opts.onDelete?.(ids);
           this.selection = emptySelection();
@@ -1933,7 +2141,8 @@ export class FigureView {
       }
       default:
         if ((e.ctrlKey || e.metaKey) && (e.key === 'a' || e.key === 'A')) {
-          const ids = this.opts.kernel.heads().map((h) => h.id);
+          // Only objects that are drawn can be selected (VIEW-SM-12).
+          const ids = this.list.sorted().filter((en) => en.drawable.bbox !== null).map((en) => en.drawable.id);
           this.selection = selectAll(ids, (id) => this.opts.styles.authoredOf(id)?.style.selectable !== false);
           this.requestFrame();
           e.preventDefault();
@@ -2078,7 +2287,7 @@ export class FigureView {
     const value = this.opts.kernel.valueOf(top.objId);
     if (head?.free === true && this.opts.styles.authoredOf(top.objId)?.style.fixed !== true && value.defined && value.value.k === 'point3') {
       const at = { x: value.value.x, y: value.value.y, z: value.value.z };
-      const base = { pointerId: e.pointerId, id: top.objId, last: at, lastX: pos.x, lastY: pos.y };
+      const base = { pointerId: e.pointerId, id: top.objId, last: at, lastX: pos.x, lastY: pos.y, sent: false };
       if (gizmo !== null && 'axis' in gizmo) {
         this.point3Drag = { ...base, plane: null, axis: { a: at, e: gizmo.axis }, depth: false };
       } else if (gizmo !== null && 'plane' in gizmo) {
@@ -2150,6 +2359,7 @@ export class FigureView {
       }
       if (next !== null) {
         drag.last = next;
+        drag.sent = true;
         try {
           this.opts.drag.drag([{ k: 'point3', id: drag.id, x: next.x, y: next.y, z: next.z }]);
         } catch {
@@ -2188,22 +2398,7 @@ export class FigureView {
 
   private readonly onPointerUp3D = (e: PointerEvent): void => {
     if (this.camDrag !== null && this.camDrag.pointerId === e.pointerId) this.camDrag = null;
-    const drag = this.point3Drag;
-    if (drag !== null && drag.pointerId === e.pointerId) {
-      this.point3Drag = null;
-      try {
-        this.opts.drag.commitDrag();
-      } catch {
-        try {
-          this.opts.drag.cancelDrag();
-        } catch {
-          // The kernel kept its pre-drag values.
-        }
-      }
-      const head = this.opts.kernel.head(drag.id);
-      if (head !== undefined) this.announce(describeMove(head.name, this.opts.valueText?.(head.id) ?? ''));
-      this.requestFrame();
-    }
+    if (this.point3Drag !== null && this.point3Drag.pointerId === e.pointerId) this.endDrag('commit');
   };
 
   private readonly onWheel3D = (e: WheelEvent): void => {
@@ -2256,11 +2451,14 @@ export class FigureView {
     const grid = this.gridStepX ?? 1;
     const step = e.shiftKey ? grid * 10 : e.altKey ? grid / 10 : grid;
     const moveSelected3 = (dx: number, dy: number, dz: number): void => {
+      if (this.pointerSessionOpen()) return;
       const moves: DragMove[] = [];
       for (const id of this.selection.ids) {
         const head = this.opts.kernel.head(id);
         const v = this.opts.kernel.valueOf(id);
         if (head?.free !== true || !v.defined || v.value.k !== 'point3') continue;
+        // `fixed` blocks every move, the keyboard included (VIEW-SM-17).
+        if (this.opts.styles.authoredOf(id)?.style.fixed === true) continue;
         moves.push({ k: 'point3', id, x: v.value.x + dx, y: v.value.y + dy, z: v.value.z + dz });
       }
       if (moves.length > 0) {
@@ -2282,12 +2480,12 @@ export class FigureView {
       case 'PageDown': moveSelected3(0, 0, -step); e.preventDefault(); return;
       case '+':
       case '=':
-        this.cameraProps = { ...this.cameraProps, zoom: this.cameraProps.zoom * 1.5 };
+        this.cameraProps = { ...this.cameraProps, zoom: Math.min(1e6, Math.max(1e-6, this.cameraProps.zoom * 1.5)) };
         this.requestFrame();
         return;
       case '-':
       case '_':
-        this.cameraProps = { ...this.cameraProps, zoom: this.cameraProps.zoom / 1.5 };
+        this.cameraProps = { ...this.cameraProps, zoom: Math.min(1e6, Math.max(1e-6, this.cameraProps.zoom / 1.5)) };
         this.requestFrame();
         return;
       case '0':
@@ -2297,7 +2495,7 @@ export class FigureView {
         return;
       case 'Delete':
       case 'Backspace': {
-        const ids = [...this.selection.ids];
+        const ids = this.pointerSessionOpen() ? [] : [...this.selection.ids];
         if (ids.length > 0) {
           this.opts.onDelete?.(ids);
           this.selection = emptySelection();
@@ -2317,7 +2515,8 @@ export class FigureView {
       }
       default:
         if ((e.ctrlKey || e.metaKey) && (e.key === 'a' || e.key === 'A')) {
-          const ids = this.opts.kernel.heads().map((h) => h.id);
+          const ids = this.opts.kernel.heads().map((h) => h.id)
+            .filter((id) => this.opts.styles.authoredOf(id)?.style.show !== false && this.opts.kernel.valueOf(id).defined);
           this.selection = selectAll(ids, (id) => this.opts.styles.authoredOf(id)?.style.selectable !== false);
           this.requestFrame();
           e.preventDefault();
@@ -2431,19 +2630,17 @@ export class FigureView {
         const at = { x: value.value.x, y: value.value.y, z: value.value.z };
         const o = projectPoint(cam, at);
         if (!o.behind) {
-          const axes: Array<{ e: V3; c: string }> = [
-            { e: { x: 1, y: 0, z: 0 }, c: '#d03a2a' },
-            { e: { x: 0, y: 1, z: 0 }, c: '#1f8a4c' },
-            { e: { x: 0, y: 0, z: 1 }, c: '#1a5fd1' },
+          // x red, y green, z blue (VIEW-SM-27).
+          const axes: Array<{ e: V3; c: Rgba }> = [
+            { e: { x: 1, y: 0, z: 0 }, c: { r: 208, g: 58, b: 42, a: 1 } },
+            { e: { x: 0, y: 1, z: 0 }, c: { r: 31, g: 138, b: 76, a: 1 } },
+            { e: { x: 0, y: 0, z: 1 }, c: { r: 26, g: 95, b: 209, a: 1 } },
           ];
           for (const { e, c } of axes) {
             const tip = projectPoint(cam, v3Add(at, v3Scale(e, 40 / Math.max(cam.scale, 1e-9))));
             if (tip.behind) continue;
-            const col = this.theme.axes;
-            void c;
-            void col;
             s.path(new Float32Array([o.x, o.y, tip.x, tip.y]));
-            s.stroke({ color: this.theme.stroke, width: 2, dash: [], dashPhase: 0, cap: 'round', join: 'round', miterLimit: 4, opacity: 1 });
+            s.stroke({ color: c, width: 2, dash: [], dashPhase: 0, cap: 'round', join: 'round', miterLimit: 4, opacity: 1 });
           }
         }
       }

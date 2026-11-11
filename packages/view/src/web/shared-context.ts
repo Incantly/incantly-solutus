@@ -115,7 +115,7 @@ export class SharedGpuContext {
   private restore(): void {
     const canvas = this.glCanvas;
     if (canvas === null) return;
-    let gl: unknown = null;
+    let gl: unknown;
     try {
       gl = canvas.getContext('webgl2', GL_OPTIONS);
     } catch {

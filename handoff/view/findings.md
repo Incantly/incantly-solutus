@@ -62,14 +62,16 @@ Ranked by impact: security, hangs and crashes, wrong results, wrong errors, spee
 - **Evidence:** no `webglcontextlost` or `webglcontextrestored` listener exists in `web/shared-context.ts` or anywhere else (code path). During loss every call returns `internal` and `paintScene3D` falls back to the software path for boxes whose target became null. After the browser restores the context, `isContextLost()` is false again but every target in `boxes`, and every program and arena cached in each `Figure3D` (`ensureResources` creates them once), is a dead handle, so 3D figures stay blank until reload. Chromium drops contexts under memory pressure and on GPU resets, so long documents reach this. Separately, two `FigureView`s with the same `id` share one box and canvas (`acquireBox` returns the existing box), and `releaseBox` from one blanks the other.
 - **Invariant broken:** V2 and V12, after a restore every box and every `Figure3D` gets fresh resources; a box belongs to one figure.
 - **Suggested fix:** listen on the shared canvas; on loss call `preventDefault()` and set a `lost` flag; on restore build a new `WebGL2Backend`, recreate every box target and bump a `generation` counter that `Figure3D.ensureResources` compares to drop and rebuild programs and arenas. Refuse `acquireBox` for an id held by another owner (return `internal`, or key boxes by an owner token).
-- **status:** open
+- **status:** fixed
+- **fix:** SharedGpuContext listens for context loss and restore on its canvas, prevents the default on loss, rebuilds the back-end and every box target on restore and bumps a generation that Figure3D checks; a box has one owner and a second figure with the same id gets an error from mount.
 
 ### VIEW-SM-7. A FigureView mounted again after `unmount` never draws
 
 - **Evidence:** `web/figure-view.ts` `unmount` (line 360) sets `destroyed = true`, and `mount` never resets it. `requestFrame` returns early while `destroyed` is true. Reproduced: `unmount()`, then `mount(el2)` returns `ok`, `applyEvents` queues 0 frames and the reader list stays empty. A host that unmounts on the scheduler's `save` and mounts again on `restore` gets a dead figure with no error.
 - **Invariant broken:** V3, a mounted figure draws when something is dirty.
 - **Suggested fix:** either support remount (reset `destroyed`, `pending` and the caches in `mount`, and recreate `figure3d` resources) or make `mount` after `unmount` return a `V999 internal` error that says to create a new view. Document which.
-- **status:** open
+- **status:** fixed
+- **fix:** Remount is supported: mount resets the destroyed and pending flags, the cached layers, the reader text and every interaction session, and marks all drawables view-dirty.
 
 ## Wrong results
 
@@ -78,7 +80,8 @@ Ranked by impact: security, hangs and crashes, wrong results, wrong errors, spee
 - **Evidence:** `web/figure-view.ts` line 1492: for plan `parents`, each move sends `valueOf(parent) + (pointer - startPointer)`. `valueOf` already includes the previous moves, so the offset is added again on every move. Reproduced: segment A(-2, 0) to B(2, 0), pointer dragged 2 units right in 10 moves: A ends at x = 9, expected 0.
 - **Invariant broken:** V6, a parents drag moves each parent by the pointer delta from its value at drag start (design 12.5).
 - **Suggested fix:** record each parent's value at drag start in the `DragSession` and send `start + delta`. Apply the same rule to every plan kind that moves by a delta (the 3D path does not have one yet).
-- **status:** open
+- **status:** fixed
+- **fix:** The drag session records each parent's value at drag start and sends start plus the pointer delta.
 
 ### VIEW-SM-9. Drag sessions that end without commit or cancel, or commit twice
 
@@ -91,14 +94,16 @@ Ranked by impact: security, hangs and crashes, wrong results, wrong errors, spee
   - `unmount` during any drag sends nothing (code path).
 - **Invariant broken:** V5 and V6, every kernel drag ends in exactly one commit or cancel; no nudge commits while a pointer drag is open; `cancelDrag` only for an open drag.
 - **Suggested fix:** one `endDrag(how: 'commit' | 'cancel')` that clears `drag`, `point3Drag`, `labelOverride`, `snapIndicator` and the snap memory, and calls the kernel only when a `kernel.drag` was sent. Call it with `cancel` from pinch start, Esc (2D, 3D, label), `pointercancel` and `unmount`; with `commit` from pointer up. Ignore arrow nudges and Delete while a pointer session is open.
-- **status:** open
+- **status:** fixed
+- **fix:** One endDrag(commit or cancel) ends 2D, 3D and label drags and calls the kernel only when a move was sent. A second pointer, Esc, pointercancel and unmount cancel; pointer up commits; arrow nudges and Delete wait while a pointer session is open.
 
 ### VIEW-SM-10. Point-on-path drags send the wrong parameter
 
 - **Evidence:** `core/drag.ts` line 265, `projectOnSamples` returns `s` as a fraction 0..1, and `applyDragMove` sends it after `clampParam(s, info.domain)`. Reproduced: a point on a sampled function with domain -5..5, pointer at x = 3, sends `s = 0.8`. Design 12.4 defines `s = x` for functions. With grid snap on, `snapParamToGrid` (`core/snap.ts` line 138) takes no pointer and returns the sample closest to any grid point over the whole path: pointers at x = 3 and x = -4 both send `s = 0.7`, so the point cannot be dragged. `hintS` is the constant `null` (`web/figure-view.ts` line 1318), so the 24 px continuity window and the closed-path wrap in `projectOnPath` never run.
 - **Invariant broken:** V6, a path drag sends `s` in the path's domain units, near the pointer, continuous with the previous `s` (design 12.4, 13.4).
 - **Suggested fix:** map the fraction to `domain.lo + f * (domain.hi - domain.lo)` (or have `PathInfo` carry the parameter per sample). Give `snapParamToGrid` the projected point and accept only grid intersections within 12 px of it. Keep the last sent `s` in the session as the hint, and pass the pointer travel so the 60 px escape works.
-- **status:** open
+- **status:** fixed
+- **fix:** Sampled paths send lo + fraction * (hi - lo); the last fraction is the continuity hint and the pointer travel feeds the 60 px escape; snapParamToGrid only takes crossings within 12 px of the projected pointer.
 
 ### VIEW-SM-11. The canvas surface draws arc commands as straight lines
 
@@ -113,7 +118,8 @@ Ranked by impact: security, hangs and crashes, wrong results, wrong errors, spee
 - **Evidence:** Ctrl+A (`web/figure-view.ts` lines 1847 and 2231) selects every `kernel.heads()` id. Reproduced: with H styled `show = false`, Ctrl+A then Delete calls `onDelete([1, 2])` and deletes the hidden object. The rubber band never selects points: `GeometryDrawable.rubberShape` for a point has no strokes and no fills. Reproduced: a band around a point with bbox 395..405 selects nothing (texts and widgets behave the same). Kernel `remove` events do not prune `selection`, `focused` or `hovered`. Reproduced: after A is removed, Delete still reports A.
 - **Invariant broken:** V7, Ctrl+A selects visible selectable objects; the band selects every object whose bbox meets it (design 11); selection holds only existing ids.
 - **Suggested fix:** build Ctrl+A from draw-list entries with a non-null bbox. In `rubberBandSelect`, include shapes with no runs by bbox overlap (pass the bbox in `RubberBandShape`). Prune `selection`, `focused`, `hovered` and `highlights` on `remove` events in `frame`.
-- **status:** open
+- **status:** fixed
+- **fix:** Ctrl+A selects drawn objects only; the rubber band selects shapes with no outline by their box; remove events prune selection, focus, hover, highlights and label previews.
 
 ### VIEW-SM-13. Scheduler flapping, `ready` figures that never free, and stale actions on re-entry
 
@@ -136,7 +142,8 @@ Ranked by impact: security, hangs and crashes, wrong results, wrong errors, spee
 - **Evidence:** `frame` (line 578 onwards) sets `view = tweenViewport(from, to, t)`, and both viewports keep the size from when the tween started. Reproduced: `setViewRegion(..., 0.02)`, then the element shrinks to 400 px and `resize()` runs; after the tween the viewport is still 800 px wide.
 - **Invariant broken:** V3, `view` size equals the element size after any resize.
 - **Suggested fix:** in `resize`, rebuild `tween.from` and `tween.to` at the new size (the same centre and scales), or let `tweenViewport` take the current size.
-- **status:** open
+- **status:** fixed
+- **fix:** resize rebuilds the tween's from and to viewports at the new size.
 
 ### VIEW-SM-16. Fit-all and the `objects` export region ignore shapes outside the view
 
@@ -151,21 +158,24 @@ Ranked by impact: security, hangs and crashes, wrong results, wrong errors, spee
 - **Evidence:** `Figure3D.drawLines` sends line quads in `LINE_LAYOUT` (end, other, side, colour) as `triangles`; `SoftwareBackend.draw` reads them as position plus colour and never applies `side`. Reproduced: a segment alone paints 2 triangles traced `moveTo(192,182) lineTo(208,118) lineTo(208,118)`, zero area, so every 3D segment and curve is invisible on the software fallback, with colours read from the wrong offsets. `moveSelected3` (`web/figure-view.ts` line 2168) checks only `head.free`. Reproduced: a `point3` styled `fixed`, Ctrl+A then ArrowRight logs `drag {x: 1}` and `commit`. `uploadAll` and `drawLines` write into fixed arenas (mesh 24 MB, points 2 MB, lines 8 MB) with no bound check; past about 58,000 line segments or 65,536 points the GL writes fail and items go missing (code path).
 - **Invariant broken:** V9 and V12, every back-end draws every item kind it receives; `fixed` blocks every move; arenas are never written past capacity.
 - **Suggested fix:** give the software back-end a `lines` path for `LINE_LAYOUT` (draw the segment from `end` to `other` with the colour at offset 5), or have `Figure3D` send software back-ends plain `lines` batches. Check `fixed` in `moveSelected3`. Size arenas from the scene or grow them, and refuse past capacity with the triangle and point budgets plus a notice.
-- **status:** open
+- **status:** fixed
+- **fix:** The software back-end draws line quads as stroked segments in their own colour; moveSelected3 skips fixed points; mesh, point and line arenas refuse writes past capacity and count what was dropped.
 
 ### VIEW-SM-18. Snapping ignores intersections and snaps to descendants
 
 - **Evidence:** `snapContext` (`web/figure-view.ts` line 1244) always passes `intersections: []`. Reproduced: with `intersections` returning (1, 0) and snap mode `points`, the option is called 0 times and the drag to x = 0.9 is not snapped. The point candidates exclude only the dragged id, not its descendants (design 13.2), so dragging A near B can snap A onto `Midpoint(A, B)`, which moves with A (code path). `snapMem` is never reset between drags, and a hold on a point reports `source: grid` (`core/snap.ts` line 126), so the indicator reads "grid" (code path).
 - **Invariant broken:** V8.
 - **Suggested fix:** call `opts.intersections(pointer)` in `snapContext` for `points`, `grid+points` and `auto` without a grid; exclude descendants (add a `descendantsOf` reader to `KernelView`, or let the kernel mark them); reset `snapMem` at drag start; keep the held source in the memory.
-- **status:** open
+- **status:** fixed
+- **fix:** snapContext asks opts.intersections for the points modes; points driven by the dragged ids are excluded; the snap memory resets at drag start and keeps the held source.
 
 ### VIEW-SM-19. Particles are never drawn in the live 2D view
 
 - **Evidence:** `GeometryDrawable.update` returns no geometry for `particles`, `paint` draws nothing for them, and nothing in `web/` calls `chooseParticleRenderer`, `spritePath`, `packUniforms` or `ParticleQuality` (code path). Only SVG export (`paintParticlesSvg`) draws particles. The builder notes list animation-time 10.5 to 10.8 as done.
 - **Invariant broken:** particle systems draw in their layer at rank 5 (design 8, animation-time 10.5).
 - **Suggested fix:** add the particle pass to `paintEntries`: the CPU path via `evalCpu` and `spritePath` on the scene surface, and the GPU path through the shared context when `chooseParticleRenderer` picks it, with `ParticleQuality` fed by frame time.
-- **status:** open
+- **status:** to be implemented
+- **note:** Not fixed in this round. Owner: animation-time, which builds the live particle pass with the clock.
 
 ## Wrong errors
 
@@ -174,7 +184,8 @@ Ranked by impact: security, hangs and crashes, wrong results, wrong errors, spee
 - **Evidence:** `rescaleAxis` (`web/figure-view.ts` line 1426) builds a viewport directly, skipping the 1e-9 to 1e9 width limits and the precision floor in `zoomAbout`, and never reports `zoom_limit` or `precision_limit`. The 3D `+` and `-` keys (line 2195) multiply `zoom` with no clamp, while the wheel clamps to 1e-6..1e6 (code path).
 - **Invariant broken:** V5 and V9, every zoom input respects the same limits and gives the same feedback (design 4).
 - **Suggested fix:** route the axis rescale through a per-axis variant of `zoomAbout` that applies the limits and returns `refused`, and emit the gesture. Clamp the keyboard zoom like the wheel.
-- **status:** open
+- **status:** fixed
+- **fix:** rescaleAxis applies the width limits and the precision floor and reports zoom_limit or precision_limit; the 3D keyboard zoom clamps like the wheel.
 
 ## Speed
 
@@ -183,35 +194,40 @@ Ranked by impact: security, hangs and crashes, wrong results, wrong errors, spee
 - **Evidence:** `layoutLabels` adds a marker for every labelled point, with no viewport cull, and `placeLabels` tests each candidate of each auto label against every placed rect and every marker. Reproduced: 300 labels with 5,000 markers take 128 ms per frame; with 300 markers, 6.1 ms (the builder's bench measured 0.6 ms with no markers). A drag in a 500-point figure takes 18.1 ms per frame and a 5,000-point figure 127 ms, before any painting (happy-dom, no canvas). Design 7.3 budgets 6 ms for update plus layout plus paint at 500 objects.
 - **Invariant broken:** V10, layout cost stays within the frame budget.
 - **Suggested fix:** cull labels and markers to the viewport; put placed rects and markers in a 64 px grid (like `HitIndex`) so each candidate tests only nearby items; during a drag re-place only labels near the active drawables.
-- **status:** open
+- **status:** fixed
+- **fix:** placeLabels keeps placed rects and markers in a 64 px cell index; markers and labels are culled to the viewport. No regression test: the bound is a timing.
 
 ### VIEW-SM-22. The partial-repaint cache misses on every drag frame
 
 - **Evidence:** the cache key at `web/figure-view.ts` line 980 includes `paintVersion`, which `applyEvents` increments on every kernel update, which a drag sends on every move. Every drag frame therefore repaints `lower` and `upper` and creates a full-size `live` canvas, which costs more than one full repaint (code path). Design 7.4 expects about 20 painted objects per frame for a 500-object drag.
 - **Invariant broken:** V4, cached layers stay valid across the frames of one interaction.
 - **Suggested fix:** invalidate the bitmaps through an explicit flag set by viewport changes, theme changes, and events whose ids fall in `lower` or `upper`; key only on the split membership. Keep one scratch canvas for the composite.
-- **status:** open
+- **status:** fixed
+- **fix:** The cached layers are keyed on the split membership only and go stale only when a changed id is outside the active set or an object is added or removed; one scratch canvas is reused for the composite.
 
 ### VIEW-SM-23. Per-frame work over every object
 
 - **Evidence:** each frame runs `refreshDrawableState` (calls `valueText` for every drawable), `updateReaderList` (calls `describe()` for every object and rewrites the figure's `aria-label`), and `paintWidgets` and `paintOverlay2D` (scan the whole list); each pointer move runs `hitTest` (a rank map over the whole list) and `snapContext` (every point). These are part of the 18 ms and 127 ms frames in VIEW-SM-21. With a synchronous `scheduleFrame`, the `requestFrame` at the end of `frame` recurses while a highlight or tween is alive (code path).
 - **Invariant broken:** design 15 and 7.1, work follows what changed.
 - **Suggested fix:** update value text and reader items only for ids in this frame's events; cache the rank map and the snap points per draw-list version; defer the end-of-frame request to the scheduler when the callback runs synchronously.
-- **status:** open
+- **status:** to be implemented
+- **note:** Partly fixed: a frame that asks for the next frame no longer runs it inside itself with a synchronous scheduler. Still to do: value text and reader items only for changed ids, and a cached rank map and snap point list per draw-list version. Owner: view.
 
 ### VIEW-SM-24. 3D re-uploads every mesh on any event, and id removal is quadratic
 
 - **Evidence:** `Figure3D.applyEvents` bumps `sceneVersion` for every event, and `paint` then rewrites every mesh and point (`uploadAll`). Reproduced: moving one point re-uploaded all 144,176 bytes of a 60 x 60 mesh; a 200,000-triangle mesh is about 24 MB per drag frame plus fresh `Float32Array`s. `SceneIndex.dropId` (`core/scene.ts` line 136) and `DrawList.remove` (`core/drawables.ts` line 140) call `indexOf` per id. Reproduced: updating 8,000 3D ids takes 10.6 ms against 1.1 ms for 2,000 (quadratic), and is per frame for a playing figure whose points depend on `t`. `paintOverlay3D` and `depthKey` recompute `itemBounds` over every vertex each frame.
 - **Invariant broken:** V12, an event re-uploads only what it touched (space-3d 9.2).
 - **Suggested fix:** track dirty items per event and rewrite only their arena ranges (the `ArenaAllocator` is already there); keep an index map (or a tombstone and compact) instead of `indexOf`; read bounds from `SceneIndex.bounds`.
-- **status:** open
+- **status:** fixed
+- **fix:** Figure3D writes only new items and frees only removed ones; scene id removal uses an insertion-ordered set; bounds are cached per item. No regression test: it needs a real WebGL2 context.
 
 ### VIEW-SM-25. `present` reads every 3D frame back through the CPU
 
 - **Evidence:** `SharedGpuContext.present` (`web/shared-context.ts` line 180) runs `readPixels` on the whole box (a GPU stall), allocates a `Uint8Array` and a `Uint8ClampedArray` of `w * h * 4` bytes, flips rows in JavaScript and calls `putImageData`, on every frame of every live 3D figure. For 800 x 600 at DPR 2 that is 7.7 MB read and two 7.7 MB allocations per frame (code path).
 - **Invariant broken:** performance.md 5.7, no garbage per frame; 30 fps on phones for 3D.
 - **Suggested fix:** size the shared GL canvas to the largest box, draw each figure into it with a viewport and scissor, and copy with `ctx2d.drawImage(glCanvas, sx, sy, w, h, 0, 0, w, h)`; otherwise reuse one pixel buffer per box.
-- **status:** open
+- **status:** fixed
+- **fix:** present blits the resolved target to the shared canvas and copies it with drawImage; the readback fallback reuses one buffer per box. No regression test: it needs a real WebGL2 context.
 
 ### VIEW-SM-26. Builds wait for the slow interval tick
 
@@ -228,7 +244,8 @@ Ranked by impact: security, hangs and crashes, wrong results, wrong errors, spee
 - **Evidence:** `CanvasSurface.text` always centres the background box on `at.x`, while the text is drawn left- or right-aligned, so label backgrounds sit off their text for `left` (the default for labels) and `right`. `paintOverlay3D` computes per-axis colours and discards them (`void c`), so the x, y and z handles look the same (code path).
 - **Invariant broken:** none of the machines; visual only.
 - **Suggested fix:** offset the background box by alignment (`left`: `at.x - 2`; `right`: `at.x - w - 2`). Stroke each gizmo arrow with its axis colour.
-- **status:** open
+- **status:** fixed
+- **fix:** Canvas text backgrounds follow the alignment; the 3D gizmo strokes each axis in its own colour.
 
 ## Categories with nothing found
 

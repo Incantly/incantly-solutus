@@ -167,6 +167,39 @@ export class SoftwareBackend implements GpuBackend {
         a: arena.verts[base + 6] ?? 1,
       };
     };
+    const lineWidth = batch.uniforms['uWidth'];
+    if (batch.mode === 'triangles' && typeof lineWidth === 'number' && strideFloats === 9) {
+      // Screen-space line quads (end, other, side, colour): four vertices per
+      // segment, already in view pixels. A 2D context needs only the two ends,
+      // so each quad draws as one stroked segment in its own colour (VIEW-SM-17).
+      const c2 = this.ctx;
+      const dashOn = batch.uniforms['uDashOn'];
+      const dashOff = batch.uniforms['uDashOff'];
+      c2.save();
+      c2.lineWidth = Math.max(1, lineWidth / Math.max(frame.size.dpr, 1e-9));
+      c2.lineCap = 'round';
+      c2.setLineDash(typeof dashOn === 'number' && typeof dashOff === 'number' && dashOn > 0 && dashOff > 0 ? [dashOn, dashOff] : []);
+      for (let q = 0; q + 3 < batch.vertexCount; q += 4) {
+        const base = (batch.firstVertex + q) * strideFloats;
+        const ex = arena.verts[base] ?? 0;
+        const ey = arena.verts[base + 1] ?? 0;
+        const ox = arena.verts[base + 2] ?? 0;
+        const oy = arena.verts[base + 3] ?? 0;
+        const r = Math.round((arena.verts[base + 5] ?? 0) * 255);
+        const g = Math.round((arena.verts[base + 6] ?? 0) * 255);
+        const bl = Math.round((arena.verts[base + 7] ?? 0) * 255);
+        const al = arena.verts[base + 8] ?? 1;
+        c2.strokeStyle = `rgba(${r},${g},${bl},${al})`;
+        c2.beginPath();
+        c2.moveTo(ex, ey);
+        c2.lineTo(ox, oy);
+        c2.stroke();
+        stats.lines++;
+      }
+      c2.restore();
+      stats.drawCalls++;
+      return okResult(undefined);
+    }
     if (batch.mode === 'triangles' || batch.mode === 'instancedTriangles') {
       const reps = batch.mode === 'instancedTriangles' ? Math.max(batch.instances, 1) : 1;
       for (let r = 0; r < reps; r++) {

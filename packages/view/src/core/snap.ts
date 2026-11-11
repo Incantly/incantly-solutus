@@ -98,10 +98,12 @@ export interface SnapMemory {
   /** Currently snapped target in maths units, or null. */
   target: MathsPoint | null;
   radiusPx: number;
+  /** What the held target is (a point, a crossing or the grid), for the indicator. */
+  source: SnapSource;
 }
 
 export function createSnapMemory(radiusPx: number): SnapMemory {
-  return { target: null, radiusPx };
+  return { target: null, radiusPx, source: { k: 'none' } };
 }
 
 /**
@@ -121,19 +123,24 @@ export function snapWithHysteresis(
       const fresh = snapPosition(p, ctx);
       if (fresh.source.k !== 'none') {
         memory.target = fresh.position;
+        memory.source = fresh.source;
         return fresh;
       }
-      return { position: t, source: { k: 'grid' } };
+      // Held: report what the target is, not always "grid" (VIEW-SM-18).
+      return { position: t, source: memory.source };
     }
   }
   const r = snapPosition(p, ctx);
   memory.target = r.source.k === 'none' ? null : r.position;
+  memory.source = r.source;
   return r;
 }
 
 /**
  * Snap along a path (13.4): the nearest grid intersection that lies on the
- * path within the radius, else null. The point never leaves the path.
+ * path within the radius, else null. The point never leaves the path. With
+ * `near` (the pointer projected on the path), only samples within the radius
+ * of it are candidates. `s` is the fraction 0..1 along the samples.
  */
 export function snapParamToGrid(
   samples: Float64Array,
@@ -141,6 +148,7 @@ export function snapParamToGrid(
   stepY: number,
   metric: PixelMetric,
   radiusPx: number,
+  near?: MathsPoint,
 ): { s: number; point: MathsPoint } | null {
   if (!(stepX > 0) || !(stepY > 0)) return null;
   const n = Math.floor(samples.length / 2);
@@ -149,6 +157,10 @@ export function snapParamToGrid(
   for (let i = 0; i < n; i++) {
     const x = samples[i * 2] ?? 0;
     const y = samples[i * 2 + 1] ?? 0;
+    // Only grid crossings near the projected pointer count (VIEW-SM-10):
+    // without this the best crossing of the whole path wins for every pointer.
+    if (near !== undefined &&
+      Math.hypot((x - (near.x as number)) * metric.scaleX, (y - (near.y as number)) * metric.scaleY) > radiusPx) continue;
     const gx = Math.round(x / stepX) * stepX;
     const gy = Math.round(y / stepY) * stepY;
     const d = Math.hypot((gx - x) * metric.scaleX, (gy - y) * metric.scaleY);

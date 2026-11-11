@@ -44,6 +44,8 @@ export interface RubberBandShape {
   readonly strokes: readonly Float32Array[];
   /** Filled rings in view pixels. */
   readonly fills: readonly Float32Array[];
+  /** Pixel box, used for shapes with no strokes and no fills (points, texts, widgets). */
+  readonly bbox?: PxRect | null;
 }
 
 function segmentIntersectsRect(ax: number, ay: number, bx: number, by: number, band: PxRect): boolean {
@@ -95,6 +97,13 @@ export function rubberBandSelect(shapes: readonly RubberBandShape[], band: PxRec
   for (const s of shapes) {
     if (!selectable(s.id)) continue;
     let hit = false;
+    if (s.strokes.length === 0 && s.fills.length === 0) {
+      // No outline to test (a point, a text, a widget): the box decides (VIEW-SM-12).
+      const b = s.bbox ?? null;
+      if (b !== null && (b.x0 as number) <= (band.x1 as number) && (b.x1 as number) >= (band.x0 as number) &&
+        (b.y0 as number) <= (band.y1 as number) && (b.y1 as number) >= (band.y0 as number)) out.push(s.id);
+      continue;
+    }
     for (const run of s.strokes) {
       if (runIntersectsBand(run, band)) {
         hit = true;

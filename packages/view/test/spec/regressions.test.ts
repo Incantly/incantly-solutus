@@ -12,57 +12,31 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   CanvasSurface,
-  DrawList,
   FigureView,
-  Figure3D,
-  CLIP_OFF,
-  SchedulerHost,
-  SchedulerState,
   SharedGpuContext,
-  SceneIndex,
   SoftwareBackend,
   SvgSurface,
   WebGL2Backend,
-  DEFAULT_SCHEDULER_CONFIG,
   MAX_SVG_ELEMENTS,
   axisLabels,
   buildGeometry,
   buildInput,
-  createViewport,
-  fitAllRegion,
   isoGrid,
-  placeLabels,
   polarGrid,
-  registerFigure,
   resolveStyle,
-  schedulerTick,
-  setPlaying,
-  spritePath,
-  touchFigure,
-  v3,
 } from '@incantly/view';
 import type {
   AuthoredStyle,
   DragApplier,
   DragMove,
   ExportRequest,
-  FigureRecord,
   FigureViewOptions,
-  KernelEvent,
   KernelView,
-  LabelInput,
-  LabelMarker,
-  PaintKind,
-  ParticleProgram,
-  PathCommand,
   PathInfo,
-  SchedulerAction,
   StyleStore,
-  TickInput,
   ViewObjectHead,
-  ViewValue,
 } from '@incantly/view';
-import { dragLog, fakeGl, head, oid, okValue, pumpQueue, recordingContext, stubDrawable, stubKernel, stubStyles, testStyle, testViewport } from './helpers';
+import { dragLog, fakeGl, head, oid, okValue, pumpQueue, stubKernel, stubStyles, testStyle, testViewport } from './helpers';
 import type { StubObject } from './helpers';
 
 /* ------------------------------------------------------------------------- */
@@ -274,11 +248,6 @@ function pointer(f: Fig, type: string, x: number, y: number, over: PointerEventI
   f.pump();
 }
 
-function wheelEv(f: Fig, deltaY: number, x: number, y: number, ctrlKey: boolean): void {
-  f.overlayCanvas().dispatchEvent(Object.assign(new Event('wheel', { bubbles: true, cancelable: true }), { deltaY, deltaX: 0, deltaMode: 0, clientX: x, clientY: y, ctrlKey }));
-  f.pump();
-}
-
 const SVG_REQ: ExportRequest = { format: 'svg', region: 'view', background: 'view', includeGrid: false, includeAxes: false };
 
 function exportOf(f: Fig, over: Partial<ExportRequest> = {}): string {
@@ -302,8 +271,6 @@ function protocolProblems(calls: unknown[][]): string[] {
   if (open) problems.push('drag left open');
   return problems;
 }
-
-const STUB_PARTS = (n: number): StubObject[] => Array.from({ length: n }, (_v, i) => pt(i + 1, `P${String(i + 1)}`, 0, 0));
 
 beforeEach(() => {
   noMotion();
@@ -1007,5 +974,485 @@ describe('VIEW-SM-7 a figure mounted again after unmount draws or says it cannot
     f.queue.length = 0;
     f.view.applyEvents([{ kind: 'update', ids: [oid(1)] }]);
     expect(f.queue).toHaveLength(0);
+  });
+});
+
+/* ------------------------------------------------------------------------- */
+/* Shared harness for the drag findings: a kernel whose values follow drags   */
+/* ------------------------------------------------------------------------- */
+
+interface Live {
+  readonly kernel: KernelView;
+  readonly applier: DragApplier;
+  readonly calls: unknown[][];
+  readonly pointAt: (id: number) => { x: number; y: number };
+}
+
+/** Kernel readers a test may replace. `valueOf` is left out: every object literal already has one. */
+type KernelExtra = Partial<Omit<KernelView, 'valueOf'>>;
+
+function liveKernel(objects: StubObject[], extra: KernelExtra = {}): Live {
+  const vals = new Map<number, unknown>(objects.map((o) => [o.head.id as number, o.value]));
+  const calls: unknown[][] = [];
+  const base = stubKernel(objects);
+  const kernel: KernelView = {
+    ...base,
+    valueOf: (id) => {
+      const v = vals.get(id as number);
+      if (v === undefined) return { defined: false, undef: { reason: 'not_set' } } as never;
+      return { defined: true, value: v } as never;
+    },
+    ...extra,
+  };
+  const applier: DragApplier = {
+    drag: (moves) => {
+      calls.push([...moves]);
+      for (const m of moves) if (m.k === 'point') vals.set(m.id as number, { k: 'point', x: m.x, y: m.y });
+    },
+    commitDrag: () => { calls.push(['commit']); },
+    cancelDrag: () => { calls.push(['cancel']); },
+  };
+  return {
+    kernel, applier, calls,
+    pointAt: (id) => {
+      const v = vals.get(id) as { x: number; y: number };
+      return { x: v.x, y: v.y };
+    },
+  };
+}
+
+function liveFig(objects: StubObject[], extra: KernelExtra = {}, over: Partial<FigureViewOptions> = {}): { f: Fig; live: Live } {
+  const live = liveKernel(objects, extra);
+  const f = mountFig({ objects, over: { kernel: live.kernel, drag: live.applier, ...over } });
+  return { f, live };
+}
+
+/** The last `drag` call's moves. */
+function lastMoves(calls: unknown[][]): DragMove[] {
+  for (let i = calls.length - 1; i >= 0; i -= 1) {
+    const c = calls[i];
+    if (c !== undefined && c[0] !== 'commit' && c[0] !== 'cancel') return c as DragMove[];
+  }
+  return [];
+}
+
+/** Drag the pointer from one view pixel to another in `steps` moves, without releasing. */
+function dragTo(f: Fig, x0: number, y0: number, x1: number, y1: number, steps = 10, over: PointerEventInit = {}): void {
+  pointer(f, 'pointerdown', x0, y0, over);
+  for (let i = 1; i <= steps; i += 1) {
+    pointer(f, 'pointermove', x0 + ((x1 - x0) * i) / steps, y0 + ((y1 - y0) * i) / steps, over);
+  }
+}
+
+/* ------------------------------------------------------------------------- */
+/* VIEW-SM-8: a parents drag moves each parent by the pointer delta          */
+/* ------------------------------------------------------------------------- */
+
+describe('VIEW-SM-8 dragging a shape by its body moves its parents by the pointer delta', () => {
+  const scene = (): StubObject[] => [
+    pt(1, 'A', -2, 0),
+    pt(2, 'B', 2, 0),
+    { head: head(3, 's', { free: false, type: 'Segment' as never }), value: { k: 'segment', ax: -2, ay: 0, bx: 2, by: 0 }, kind: 'segment' },
+  ];
+
+  it('a segment dragged 2 units right in 10 moves leaves A at 0 and B at 4', () => {
+    const { f, live } = liveFig(scene(), { freeParentsOf: (id) => ((id as number) === 3 ? [oid(1), oid(2)] : []) });
+    f.view.setSnap('off');
+    dragTo(f, 400, 300, 500, 300, 10);
+    pointer(f, 'pointerup', 500, 300);
+    expect(live.pointAt(1).x).toBeCloseTo(0, 6);
+    expect(live.pointAt(2).x).toBeCloseTo(4, 6);
+    expect(live.pointAt(1).y).toBeCloseTo(0, 6);
+  });
+
+  it('the number of moves does not change where the parents end', () => {
+    const ends: number[] = [];
+    for (const steps of [1, 4, 25]) {
+      const { f, live } = liveFig(scene(), { freeParentsOf: (id) => ((id as number) === 3 ? [oid(1), oid(2)] : []) });
+      f.view.setSnap('off');
+      dragTo(f, 400, 300, 450, 300, steps);
+      pointer(f, 'pointerup', 450, 300);
+      ends.push(live.pointAt(1).x);
+    }
+    expect(ends[0]).toBeCloseTo(-1, 6);
+    expect(ends[1]).toBeCloseTo(-1, 6);
+    expect(ends[2]).toBeCloseTo(-1, 6);
+  });
+});
+
+/* ------------------------------------------------------------------------- */
+/* VIEW-SM-9: every kernel drag ends in exactly one commit or cancel         */
+/* ------------------------------------------------------------------------- */
+
+describe('VIEW-SM-9 a drag ends in exactly one commit or cancel', () => {
+  it('a second pointer during a drag cancels it', () => {
+    const { f, live } = liveFig([pt(1, 'A', 1, 2)]);
+    dragTo(f, 450, 200, 480, 200, 3);
+    pointer(f, 'pointerdown', 100, 100, { pointerId: 2 });
+    expect(protocolProblems(live.calls)).toEqual([]);
+    expect(protocol(live.calls).at(-1)).toBe('cancel');
+  });
+
+  it('an arrow key during a drag does not commit inside it', () => {
+    const { f, live } = liveFig([pt(1, 'A', 1, 2)]);
+    dragTo(f, 450, 200, 480, 200, 3);
+    key(f, 'ArrowRight');
+    expect(protocol(live.calls)).not.toContain('commit');
+    pointer(f, 'pointerup', 480, 200);
+    expect(protocol(live.calls).filter((p) => p === 'commit')).toHaveLength(1);
+    expect(protocolProblems(live.calls)).toEqual([]);
+  });
+
+  it('Delete during a drag deletes nothing', () => {
+    const { f } = liveFig([pt(1, 'A', 1, 2)]);
+    dragTo(f, 450, 200, 480, 200, 3);
+    key(f, 'Delete');
+    expect(f.deleted).toHaveLength(0);
+  });
+
+  it('pointercancel cancels and never commits', () => {
+    const { f, live } = liveFig([pt(1, 'A', 1, 2)]);
+    dragTo(f, 450, 200, 480, 200, 3);
+    pointer(f, 'pointercancel', 480, 200);
+    expect(protocol(live.calls)).not.toContain('commit');
+    expect(protocol(live.calls).at(-1)).toBe('cancel');
+    expect(protocolProblems(live.calls)).toEqual([]);
+  });
+
+  it('unmount during a drag cancels it', () => {
+    const { f, live } = liveFig([pt(1, 'A', 1, 2)]);
+    dragTo(f, 450, 200, 480, 200, 3);
+    f.view.unmount();
+    expect(protocol(live.calls).at(-1)).toBe('cancel');
+    expect(protocolProblems(live.calls)).toEqual([]);
+  });
+
+  it('Esc with no drag open sends nothing to the kernel', () => {
+    const { f, live } = liveFig([pt(1, 'A', 1, 2)]);
+    key(f, 'Escape');
+    expect(live.calls).toHaveLength(0);
+  });
+
+  it('Esc during a drag cancels once, and the release after it sends nothing more', () => {
+    const { f, live } = liveFig([pt(1, 'A', 1, 2)]);
+    dragTo(f, 450, 200, 480, 200, 3);
+    key(f, 'Escape');
+    pointer(f, 'pointerup', 480, 200);
+    expect(protocol(live.calls).filter((p) => p !== 'drag')).toEqual(['cancel']);
+  });
+
+  it('a click without movement sends nothing to the kernel', () => {
+    const { f, live } = liveFig([pt(1, 'A', 1, 2)]);
+    pointer(f, 'pointerdown', 450, 200);
+    pointer(f, 'pointerup', 450, 200);
+    expect(live.calls).toHaveLength(0);
+  });
+});
+
+/* ------------------------------------------------------------------------- */
+/* VIEW-SM-10: a point on a sampled path gets the parameter in domain units  */
+/* ------------------------------------------------------------------------- */
+
+describe('VIEW-SM-10 a path drag sends the parameter in the path\'s own units, near the pointer', () => {
+  const samples = (): Float64Array => {
+    const out = new Float64Array(202);
+    for (let i = 0; i <= 100; i += 1) {
+      out[i * 2] = -5 + i * 0.1;
+      out[i * 2 + 1] = 0;
+    }
+    return out;
+  };
+  const path: PathInfo = { kind: 'samples', pts: samples(), closed: false, domain: { lo: -5, hi: 5 } };
+  const scene = (): StubObject[] => [pt(1, 'P', 0, 0, { free: false, onPath: true })];
+  const param = (calls: unknown[][]): number => {
+    const m = lastMoves(calls)[0];
+    return m !== undefined && m.k === 'param' ? m.s : Number.NaN;
+  };
+
+  it('with snapping off, a pointer at x = 3 sends s = 3', () => {
+    const { f, live } = liveFig(scene(), { pathOf: () => path });
+    f.view.setSnap('off');
+    dragTo(f, 400, 300, 550, 300, 6);
+    expect(param(live.calls)).toBeCloseTo(3, 1);
+  });
+
+  it('with grid snapping on, pointers at x = 3 and x = -4 send different parameters near each pointer', () => {
+    const a = liveFig(scene(), { pathOf: () => path });
+    a.f.view.setSnap('grid');
+    dragTo(a.f, 400, 300, 552, 300, 6);
+    const b = liveFig(scene(), { pathOf: () => path });
+    b.f.view.setSnap('grid');
+    dragTo(b.f, 400, 300, 198, 300, 6);
+    expect(param(a.live.calls)).toBeCloseTo(3, 1);
+    expect(param(b.live.calls)).toBeCloseTo(-4, 1);
+  });
+
+  it('the parameter never leaves the domain', () => {
+    const { f, live } = liveFig(scene(), { pathOf: () => path });
+    f.view.setSnap('off');
+    dragTo(f, 400, 300, 790, 300, 8);
+    const s = param(live.calls);
+    expect(s).toBeLessThanOrEqual(5);
+    expect(s).toBeGreaterThanOrEqual(-5);
+  });
+});
+
+/* ------------------------------------------------------------------------- */
+/* VIEW-SM-12: selection holds only drawn, existing objects                  */
+/* ------------------------------------------------------------------------- */
+
+describe('VIEW-SM-12 selection holds only drawn, existing objects', () => {
+  it('Ctrl+A then Delete leaves a hidden object alone', () => {
+    const f = mountFig({ objects: [pt(1, 'A', 1, 2), pt(2, 'H', -1, 0, {}, { show: false })] });
+    key(f, 'a', { ctrlKey: true });
+    key(f, 'Delete');
+    expect(f.deleted).toHaveLength(1);
+    expect(f.deleted[0]).toEqual([oid(1)]);
+  });
+
+  it('a rubber band around a point selects it', () => {
+    const f = mountFig({ objects: [pt(1, 'A', 1, 2)] });
+    pointer(f, 'pointerdown', 420, 170, { shiftKey: true });
+    pointer(f, 'pointermove', 480, 230, { shiftKey: true });
+    pointer(f, 'pointerup', 480, 230, { shiftKey: true });
+    key(f, 'Delete');
+    expect(f.deleted).toEqual([[oid(1)]]);
+  });
+
+  it('a rubber band that misses a point does not select it', () => {
+    const f = mountFig({ objects: [pt(1, 'A', 1, 2)] });
+    pointer(f, 'pointerdown', 100, 400, { shiftKey: true });
+    pointer(f, 'pointermove', 160, 460, { shiftKey: true });
+    pointer(f, 'pointerup', 160, 460, { shiftKey: true });
+    key(f, 'Delete');
+    expect(f.deleted).toHaveLength(0);
+  });
+
+  it('a removed object leaves the selection', () => {
+    const f = mountFig({ objects: [pt(1, 'A', 1, 2), pt(2, 'B', -1, 0)] });
+    pointer(f, 'pointerdown', 450, 200);
+    pointer(f, 'pointerup', 450, 200);
+    f.view.applyEvents([{ kind: 'remove', ids: [oid(1)] }]);
+    f.pump();
+    key(f, 'Delete');
+    expect(f.deleted).toHaveLength(0);
+  });
+});
+
+/* ------------------------------------------------------------------------- */
+/* VIEW-SM-15: a resize during a view tween keeps the new size               */
+/* ------------------------------------------------------------------------- */
+
+describe('VIEW-SM-15 a resize during a view tween is kept', () => {
+  it('after the tween ends the viewport has the resized width', async () => {
+    motion();
+    const f = mountFig({ objects: [pt(1, 'A', 1, 2)] });
+    f.view.setViewRegion({ x0: -4 as never, x1: 4 as never, y0: -3 as never, y1: 3 as never }, 'free', 0.02);
+    sizeEl(f.el, 400, 300);
+    f.view.resize();
+    await new Promise((r) => setTimeout(r, 60));
+    f.pump();
+    f.pump();
+    expect(f.view.viewport()?.width).toBe(400);
+    expect(f.view.viewport()?.height).toBe(300);
+  });
+});
+
+/* ------------------------------------------------------------------------- */
+/* VIEW-SM-17: every back-end draws lines; fixed blocks keyboard moves       */
+/* ------------------------------------------------------------------------- */
+
+describe('VIEW-SM-17 3D lines on the software back-end, and fixed points', () => {
+  it('the software back-end draws a screen-space line quad as a segment between its two ends', () => {
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d') as CanvasRenderingContext2D;
+    const be = new SoftwareBackend(ctx);
+    const arena = okValue(be.createArena({ attributes: [], strideBytes: 36 }, 36 * 64), 'arena');
+    const quad = new Float32Array(36);
+    const ends: Array<[number, number, number, number, number]> = [
+      [10, 20, 110, 70, -1], [10, 20, 110, 70, 1], [110, 70, 10, 20, -1], [110, 70, 10, 20, 1],
+    ];
+    ends.forEach(([ex, ey, ox, oy, side], i) => quad.set([ex, ey, ox, oy, side, 1, 0, 0, 1], i * 9));
+    arena.writeVertices(0, quad);
+    arena.writeIndices(0, new Uint32Array([0, 1, 2, 1, 3, 2]));
+    const target = okValue(be.createTarget({ width: 200, height: 100, samples: 1, depth: false, float: false }), 'target');
+    const frame = okValue(be.beginFrame(target, { width: 200, height: 100, dpr: 1 }), 'frame');
+    const stats = { drawCalls: 0, triangles: 0, lines: 0, points: 0 };
+    okValue(be.draw(frame, {
+      program: okValue(be.createProgram({ vertex: '', fragment: '' } as never), 'program'), arena,
+      firstVertex: 0, vertexCount: 4, firstIndex: 0, indexCount: 6, mode: 'triangles', instances: 1,
+      uniforms: { uWidth: 2, uDashOn: 0, uDashOff: 0 }, scissor: null, depthTest: false, depthFunc: 'less', depthWrite: false,
+      blend: 'alpha', cullBack: false,
+    } as never, stats), 'draw');
+    frame.dispose();
+    const log = logOf(canvas);
+    const moves = log.calls.filter((c) => c.name === 'moveTo').map((c) => c.args);
+    const lines = log.calls.filter((c) => c.name === 'lineTo').map((c) => c.args);
+    expect(stats.lines).toBe(1);
+    expect(stats.triangles).toBe(0);
+    expect(moves).toContainEqual([10, 20]);
+    expect(lines).toContainEqual([110, 70]);
+  });
+
+  it('a fixed 3D point is not moved by the arrow keys', () => {
+    const objects: StubObject[] = [{ head: head(1, 'P'), value: { k: 'point3', x: 0, y: 0, z: 0 }, kind: 'point', style: { fixed: true } }];
+    const f = mountFig({ objects, mode: '3d' });
+    key(f, 'a', { ctrlKey: true });
+    key(f, 'ArrowRight');
+    expect(f.drag.calls).toHaveLength(0);
+  });
+
+  it('a free 3D point still moves with the arrow keys', () => {
+    const objects: StubObject[] = [{ head: head(1, 'P'), value: { k: 'point3', x: 0, y: 0, z: 0 }, kind: 'point' }];
+    const f = mountFig({ objects, mode: '3d' });
+    key(f, 'a', { ctrlKey: true });
+    key(f, 'ArrowRight');
+    expect(protocol(f.drag.calls)).toEqual(['drag', 'commit']);
+  });
+});
+
+/* ------------------------------------------------------------------------- */
+/* VIEW-SM-18: snapping uses intersections and never a descendant            */
+/* ------------------------------------------------------------------------- */
+
+describe('VIEW-SM-18 snapping to crossings, and never to what the dragged point drives', () => {
+  it('in points mode a crossing near the pointer is asked for and used', () => {
+    let asked = 0;
+    const { f, live } = liveFig([pt(1, 'A', -2, 0)], {}, {
+      intersections: () => {
+        asked += 1;
+        return [{ x: 1, y: 0 }];
+      },
+    });
+    f.view.setSnap('points');
+    dragTo(f, 300, 300, 445, 300, 6);
+    expect(asked).toBeGreaterThan(0);
+    expect(live.pointAt(1).x).toBeCloseTo(1, 6);
+  });
+
+  it('in grid mode crossings are not asked for', () => {
+    let asked = 0;
+    const { f } = liveFig([pt(1, 'A', -2, 0)], {}, { intersections: () => { asked += 1; return []; } });
+    f.view.setSnap('grid');
+    dragTo(f, 300, 300, 445, 300, 6);
+    expect(asked).toBe(0);
+  });
+
+  it('a dragged point does not snap onto a point built from it', () => {
+    const objects = [pt(1, 'A', 0, 0), pt(2, 'M', 1, 0, { free: false })];
+    const { f, live } = liveFig(objects, { freeParentsOf: (id) => ((id as number) === 2 ? [oid(1)] : []) });
+    f.view.setSnap('points');
+    dragTo(f, 400, 300, 447, 300, 6);
+    expect(live.pointAt(1).x).toBeCloseTo(0.94, 2);
+  });
+
+  it('a dragged point still snaps onto an unrelated point', () => {
+    const objects = [pt(1, 'A', 0, 0), pt(2, 'B', 1, 0)];
+    const { f, live } = liveFig(objects);
+    f.view.setSnap('points');
+    dragTo(f, 400, 300, 447, 300, 6);
+    expect(live.pointAt(1).x).toBeCloseTo(1, 6);
+  });
+});
+
+/* ------------------------------------------------------------------------- */
+/* VIEW-SM-20: every zoom input respects the limits                          */
+/* ------------------------------------------------------------------------- */
+
+describe('VIEW-SM-20 axis rescale respects the zoom limits', () => {
+  it('dragging along the x axis for a long time never passes the width limit and says so', () => {
+    const f = mountFig({ objects: [pt(1, 'A', 1, 2)] });
+    pointer(f, 'pointerdown', 700, 300);
+    let x = 700;
+    // 44 moves of 1.75x pass the 1e-9 width limit; the count stays small so
+    // code without the limit still finishes.
+    for (let i = 0; i < 44; i += 1) {
+      x += 150;
+      pointer(f, 'pointermove', x, 300);
+    }
+    pointer(f, 'pointerup', x, 300);
+    const v = f.view.viewport();
+    expect(v).not.toBeNull();
+    if (v !== null) expect((v.width as number) / v.scaleX).toBeGreaterThanOrEqual(1e-9);
+    expect(f.gestures.some(([code]) => code === 'zoom_limit' || code === 'precision_limit')).toBe(true);
+  });
+});
+
+/* ------------------------------------------------------------------------- */
+/* VIEW-SM-22: the cached layers survive the frames of one drag              */
+/* ------------------------------------------------------------------------- */
+
+describe('VIEW-SM-22 a drag does not rebuild its cached layers on every frame', () => {
+  it('no new canvas is created per drag frame once the drag is under way', () => {
+    const objects: StubObject[] = [];
+    for (let i = 0; i < 40; i += 1) objects.push(pt(i + 1, `P${String(i + 1)}`, -7 + (i % 8) * 1.8, -4 + Math.floor(i / 8) * 1.8));
+    const { f } = liveFig(objects);
+    f.view.setSnap('off');
+    pointer(f, 'pointerdown', 50, 500);
+    for (let i = 1; i <= 3; i += 1) {
+      pointer(f, 'pointermove', 50 + i * 6, 500);
+      f.view.applyEvents([{ kind: 'update', ids: [oid(1)] }]);
+      f.pump();
+    }
+    const before = canvasesCreated;
+    for (let i = 4; i <= 12; i += 1) {
+      pointer(f, 'pointermove', 50 + i * 6, 500);
+      f.view.applyEvents([{ kind: 'update', ids: [oid(1)] }]);
+      f.pump();
+    }
+    expect(canvasesCreated).toBe(before);
+  });
+});
+
+/* ------------------------------------------------------------------------- */
+/* VIEW-SM-23: a synchronous frame scheduler does not recurse                */
+/* ------------------------------------------------------------------------- */
+
+describe('VIEW-SM-23 a frame that asks for the next frame does not run it inside itself', () => {
+  it('with a synchronous scheduler a view tween runs at most a few frames inside the call that starts it', () => {
+    motion();
+    let frames = 0;
+    const objects = [pt(1, 'A', 1, 2)];
+    const view = new FigureView({
+      id: 'sync', kernel: stubKernel(objects), styles: stubStyles(objects), drag: dragLog().applier, snapshots: null,
+      shared: okValue(SharedGpuContext.create(), 'shared'), meshes: { get: () => undefined }, toScript: () => '', mode: '2d',
+      scheduleFrame: (cb) => { cb(); },
+      onStats: () => { frames += 1; },
+    });
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    sizeEl(el, 800, 600);
+    okValue(view.mount(el), 'mount');
+    frames = 0;
+    view.setViewRegion({ x0: -4 as never, x1: 4 as never, y0: -3 as never, y1: 3 as never }, 'free', 0.2);
+    expect(frames).toBeLessThanOrEqual(2);
+    view.unmount();
+    el.remove();
+  });
+});
+
+/* ------------------------------------------------------------------------- */
+/* VIEW-SM-27: a text background sits behind its text                        */
+/* ------------------------------------------------------------------------- */
+
+describe('VIEW-SM-27 the canvas text background follows the alignment', () => {
+  const box = (align: 'left' | 'right' | 'center'): number => {
+    const canvas = document.createElement('canvas');
+    const s = new CanvasSurface(canvas.getContext('2d') as CanvasRenderingContext2D);
+    s.text({ text: 'abcd', math: false }, { x: 100, y: 50 } as never, { ...TEXT_STYLE, align, background: { r: 255, g: 255, b: 255, a: 1 } });
+    const rect = logOf(canvas).calls.find((c) => c.name === 'fillRect');
+    return Number(rect?.args[0]);
+  };
+
+  it('left-aligned text has its box starting just left of the anchor', () => {
+    expect(box('left')).toBeCloseTo(98, 6);
+  });
+
+  it('right-aligned text has its box ending just right of the anchor', () => {
+    expect(box('right')).toBeLessThan(98);
+  });
+
+  it('the three alignments give three different boxes', () => {
+    expect(new Set([box('left'), box('right'), box('center')]).size).toBe(3);
   });
 });

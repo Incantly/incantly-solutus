@@ -53,3 +53,24 @@ None.
 ### Needs the integrator
 
 - One shell command in this round was blocked by a host rule that matched a false positive (the command had no ssh in it). The edit was re-applied with the file tools. Nothing else needed.
+
+## Findings round (step 5) and regression tests (step 6)
+
+Input: `handoff/view/findings.md`, VIEW-SM-1 to 27. Result: 25 fixed, 2 marked `to be implemented` (VIEW-SM-19, and the rest of VIEW-SM-23). Lint and typecheck are clean and all 633 view tests pass.
+
+### Regression tests
+
+`packages/view/test/spec/regressions.test.ts` has a section per finding for VIEW-SM-1 to 10, 12, 15, 17, 18, 20, 22, 23 and 27. Each section for VIEW-SM-8 to 23 was run against the code without its fix and failed there. VIEW-SM-11, 13, 14, 16 and 26 are covered by the earlier spec tests. VIEW-SM-21, 24 and 25 have no regression test (a timing bound, and two that need a real WebGL2 context).
+
+### Test changes
+
+- VIEW-SM-1, reader list: the check on `innerHTML` matched a name inside an attribute value, which `innerHTML` serialises unescaped and which is safe. The test now checks that no element was created.
+- VIEW-SM-7, frames after remount: the test now runs the frame that `mount` asked for before it counts new requests.
+- VIEW-SM-20: 44 moves, so code without the limit still finishes; 120 moves ran the old code out of memory.
+
+### Choices where the docs are silent
+
+- A second figure with an id that is already mounted gets an error from `mount` and mounts nothing.
+- An SVG surface built with no limits uses the 50,000-element cap.
+- Exports keep the labels of selected and focused objects first, as the live view does.
+- A 3D click with no movement sends nothing to the kernel (it sent a commit before).
