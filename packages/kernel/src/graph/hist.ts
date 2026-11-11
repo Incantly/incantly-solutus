@@ -168,7 +168,7 @@ export class FigureHist extends FigureTx {
     this.txEntry = undefined;
     const res = this.inPass((pass) => this.doDelete(r as ObjRec, undefined, opts, pass));
     this.deliver();
-    return res;
+    return res.ok || this.vetting ? res : this.repaired(res);
   }
 
   protected doDelete(rec: ObjRec, parsed: ParsedLine | undefined, opts: ApplyOptions, pass: import('./core').Pass): TxResult {
@@ -246,7 +246,7 @@ export class FigureHist extends FigureTx {
     this.faults = [];
     const res = this.inPass((pass) => this.doRename(r as ObjRec, to, undefined, opts, pass));
     this.deliver();
-    return res;
+    return res.ok || this.vetting ? res : this.repaired(res);
   }
 
   protected doRename(rec: ObjRec, to: Name, parsed: ParsedLine | undefined, opts: ApplyOptions, pass: import('./core').Pass, s?: number, e?: number): TxResult {
@@ -357,7 +357,6 @@ export class FigureHist extends FigureTx {
     }
     for (const ch of changes) {
       this.applyPersist(ch.rec, ch.after);
-      this.queue({ ev: 'style', ids: [ch.rec.id] });
     }
     if (changes.length > 0) this.record({ k: 'sets', changes, label: c.checked.text });
     return { summary: `${visible ? 'showed' : 'hid'} ${names.join(', ')}`, op: 'restyle' };
@@ -372,7 +371,7 @@ export class FigureHist extends FigureTx {
 
   /** Takes back the last group (the learner's button) or the last line (the teacher's `Undo()`). */
   undo(opts: { unit?: UndoUnit } = {}): TxResult {
-    return this.stepHistory('undo', opts.unit ?? 'group');
+    return this.stepHistory('undo', typeof opts === 'object' && opts !== null && opts.unit === 'line' ? 'line' : 'group');
   }
 
   redo(): TxResult {
@@ -448,6 +447,11 @@ export class FigureHist extends FigureTx {
    * `blockedBy`. Events are delivered once at the end.
    */
   applyBatch(lines: readonly (string | ParsedLine)[], opts: BatchOptions): BatchResult {
+    if (typeof opts !== 'object' || opts === null) opts = { group: 'batch' };
+    if (!Array.isArray(lines)) {
+      const e = err('tool_input', { line: 0, col: 1, endCol: 1 }, { tool: 'applyBatch', expected: 'a list of lines' }, { recovery: 'fix_line', fingerprintKey: 'applyBatch' });
+      return { ok: false, results: [e], applied: 0, rolledBack: false, changed: emptyReport(), notices: [] };
+    }
     this.commitDrag();
     const mode = opts.mode ?? 'atomic';
     const failed = new Map<string, { line: number; kind: import('../contracts/errors').ErrorKind }>();
@@ -508,6 +512,11 @@ export class FigureHist extends FigureTx {
    * journalled at once; solver writes are not journalled.
    */
   setFree(x: Name | ObjId, value: unknown, why: WriteWhy = 'api', opts: SetFreeOptions = {}): WriteResult {
+    const res = this.writeFree(x, value, why, opts);
+    return res.ok || this.vetting ? res : this.repaired(res);
+  }
+
+  protected writeFree(x: Name | ObjId, value: unknown, why: WriteWhy, opts: SetFreeOptions): WriteResult {
     const r = this.need(x);
     if (r instanceof ObjRec === false) return r as ErrorObject;
     const rec = r as ObjRec;
@@ -608,7 +617,7 @@ export class FigureHist extends FigureTx {
     if (rec.p.kind === 'state') return { writes: [], reason: 'owned_by_solver' };
     if (rec.p.kind === 'free') {
       const k = rec.p.type.k;
-      if (k !== 'Point' && k !== 'Number') return { writes: [], reason: 'not_draggable' };
+      if (k !== 'Point' && k !== 'Number' && k !== 'Bool') return { writes: [], reason: 'not_draggable' };
       if (!fitsType(rec.p.type, target)) return { writes: [], reason: 'bad_target' };
       return { writes: [{ id: rec.id, name: rec.p.name, value: target }], kind: 'free' };
     }
@@ -627,7 +636,10 @@ export class FigureHist extends FigureTx {
     if (!rule?.invert) return { writes: [], reason: 'not_draggable' };
     if (!rec.cell.defined) return { writes: [], reason: 'undefined' };
     this.ensureSlots(rec.p.checked.slots);
-    const values = comp.args.map((a) => (a.eval && (a.param.kind ?? 'value') === 'value' ? a.eval(this.env) : a.value));
+    const values = comp.args.map((a) => {
+      const v = a.eval && (a.param.kind ?? 'value') === 'value' ? a.eval(this.env) : a.value;
+      return typeof v === 'number' && v !== v ? undefined : v;
+    });
     const call: InvertCall = { values, form: comp.form, spec: comp.spec };
     let out: ReturnType<NonNullable<typeof rule.invert>>;
     try {
@@ -650,6 +662,7 @@ export class FigureHist extends FigureTx {
 
   /** Applies the writes of a plan as part of a drag gesture, then runs one pass. Call `commitDrag` on release. */
   drag(plan: DragPlan): FrameDeltaResult {
+    if (typeof plan !== 'object' || plan === null || !Array.isArray(plan.writes)) return { ok: false, reason: 'not_draggable' };
     if (plan.writes.length === 0) return { ok: false, reason: plan.reason ?? 'not_draggable' };
     for (const w of plan.writes) {
       const r = this.setFree(w.id, w.value, 'drag');
@@ -715,7 +728,10 @@ export class FigureHist extends FigureTx {
 
   /** Adds a line at an order index: its inputs must come earlier, else `forward_reference`. */
   insertAt(index: number, line: string | ParsedLine, opts: ApplyOptions = {}): TxResult {
-    return this.apply(line, { ...opts, insertAt: Math.max(0, Math.min(index, this.list.length)) });
+    if (typeof index !== 'number' || !Number.isInteger(index) || index < 0 || index > this.list.length) {
+      return err('bad_argument', { line: 0, col: 1, endCol: 1 }, { command: 'insertAt', why: `the position must be a whole number from 0 to ${this.list.length}` }, { recovery: 'fix_line', fingerprintKey: 'insertAt' });
+    }
+    return this.apply(line, { ...(typeof opts === 'object' && opts !== null ? opts : {}), insertAt: index });
   }
 
   /* ------------------------------ Describe, DependsOn, Uses ------------------------------ */
@@ -741,6 +757,8 @@ export class FigureHist extends FigureTx {
 
   /** A free name for a new object of this type (points A, B, ... numbers a, b, ... functions f, g, h). */
   suggestName(type: TypeName | string, hint?: string): Name {
+    if (typeof type !== 'string') type = 'Number';
+    if (typeof hint !== 'string') hint = undefined;
     if (hint && !this.byNameMap.has(hint) && !nameProblem(hint) && !reservedGroup(hint, this.commands, this.functions ?? emptyFunctions())) return hint;
     return languageSuggestName(type, (n) => this.byNameMap.has(n), { commands: this.commands, ...(this.functions ? { functions: this.functions } : {}) });
   }

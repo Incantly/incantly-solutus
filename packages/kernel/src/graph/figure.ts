@@ -143,6 +143,7 @@ export class Figure extends FigureHist {
 
   /** Beat start times in seconds, from the film. With none, `bt` equals `t` and `beat` is 0. */
   setBeats(starts: readonly number[]): void {
+    if (!Array.isArray(starts)) return;
     this.beatStarts = [...starts].filter((x) => Number.isFinite(x)).sort((a, b) => a - b);
     this.setClock(this.clockState.t);
   }
@@ -155,14 +156,15 @@ export class Figure extends FigureHist {
     if (typeof t !== 'number' || t !== t) {
       return err('bad_argument', { line: 0, col: 1, endCol: 1 }, { command: 'setClock', why: 'the time must be a number' }, { recovery: 'fix_line', fingerprintKey: 'setClock' });
     }
+    if (typeof opts !== 'object' || opts === null) opts = {};
     const { from, to } = this.clockRange();
     const tt = Math.min(to, Math.max(from, t));
     let beat = 0;
     for (let i = 0; i < this.beatStarts.length; i++) if ((this.beatStarts[i] as number) <= tt) beat = i;
     const start = this.beatStarts.length > 0 ? (this.beatStarts[beat] as number) : 0;
     const c = this.clockState;
-    const nb = opts.beat ?? beat;
-    const nbt = opts.bt ?? tt - start;
+    const nb = typeof opts.beat === 'number' && opts.beat === opts.beat ? opts.beat : beat;
+    const nbt = typeof opts.bt === 'number' && opts.bt === opts.bt ? opts.bt : tt - start;
     if (c.t === tt && c.bt === nbt && c.beat === nb) return { valueIds: [], styleIds: [], undefinedChanges: [], ran: 0 };
     c.t = tt;
     c.bt = nbt;
@@ -357,6 +359,7 @@ export class Figure extends FigureHist {
    * views filter by the cursor. One `step` event.
    */
   stepTo(n: number): void {
+    if (typeof n !== 'number' || n !== n) return;
     const k = Math.max(0, Math.min(this.list.length, Math.floor(n)));
     this.stepCursor = k >= this.list.length ? undefined : k;
     this.queue({ ev: 'step', n: k });
@@ -398,6 +401,7 @@ export class Figure extends FigureHist {
    * comments and directives where they were written, rate rules after the objects. Dependent values are never stored.
    */
   toScript(opts: ScriptOpts = {}): string {
+    if (typeof opts !== 'object' || opts === null) opts = {};
     const lines: string[] = [];
     if (opts.header !== false) lines.push(`@fig ${SCRIPT_VERSION}`);
     const byAnchor = new Map<ObjId | null, string[]>();
@@ -430,6 +434,7 @@ export class Figure extends FigureHist {
    * build refuses with `version`.
    */
   static fromScript(text: string, opts: LoadOpts = {}): { figure: Figure; report: LoadReport } {
+    if (typeof opts !== 'object' || opts === null) opts = {};
     const figure = new Figure(opts);
     const report = figure.load(text, opts.mode ?? 'lenient', false);
     if (!report.ok && (opts.mode ?? 'lenient') === 'strict') return { figure: new Figure(opts), report };
@@ -439,11 +444,15 @@ export class Figure extends FigureHist {
 
   /** Loads a script into this figure as one undo group. */
   append(text: string, opts: { mode?: 'lenient' | 'strict' } = {}): LoadReport {
-    return this.load(text, opts.mode ?? 'lenient', true);
+    return this.load(text, (typeof opts === 'object' && opts !== null ? opts.mode : undefined) === 'strict' ? 'strict' : 'lenient', true);
   }
 
   protected load(text: string, mode: 'lenient' | 'strict', group: boolean): LoadReport {
     const at: Span = { line: 1, col: 1, endCol: 1 };
+    if (typeof text !== 'string') {
+      const e = err('tool_input', at, { tool: 'load', expected: 'the text of a script' }, { recovery: 'fix_line', fingerprintKey: 'load' });
+      return { ok: false, applied: 0, skipped: 0, errors: [e], warnings: [] };
+    }
     if (text.length > this.limits.fileSize) {
       const e = err('limit', at, { limit: 'file_size', max: this.limits.fileSize, got: text.length, what: 'characters in a file' }, { recovery: 'rewrite', fingerprintKey: 'file_size' });
       return { ok: false, applied: 0, skipped: 0, errors: [e], warnings: [] };

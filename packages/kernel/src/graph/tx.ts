@@ -111,6 +111,10 @@ export class FigureTx extends FigureBase {
    * Never throws.
    */
   apply(input: string | ParsedLine, opts: ApplyOptions = {}): TxResult {
+    if (typeof input !== 'string' && (typeof input !== 'object' || input === null || typeof (input as ParsedLine).sm !== 'object' || (input as ParsedLine).node === undefined)) {
+      return err('tool_input', { line: 0, col: 1, endCol: 1 }, { tool: 'apply', expected: 'a line of text' }, { recovery: 'fix_line', fingerprintKey: 'apply' });
+    }
+    if (typeof opts !== 'object' || opts === null) opts = {};
     this.faults = [];
     this.txEntry = undefined;
     const lineNo = opts.line ?? (typeof input === 'string' ? 1 : input.line);
@@ -638,7 +642,6 @@ export class FigureTx extends FigureBase {
     const after: Persist = { ...before, style: style as Map<string, StyleEntry> };
     this.applyPersist(rec, after);
     this.record({ k: 'sets', changes: [{ rec, before, after }], label: checked.text });
-    this.queue({ ev: 'style', ids: [rec.id] });
     this.pendingStyles.add(rec.id);
     this.diffReport(pass, rep);
     return this.okResult(parsed, 'restyle', printLineNode(parsed.node), rep, { name: rec.p.name, id: rec.id, type: rec.p.type.k as never });

@@ -149,6 +149,7 @@ export class FigureCore {
   protected stateDriver: (() => ObjRec[]) | undefined;
 
   constructor(opts: FigureOptions = {}) {
+    if (typeof opts !== 'object' || opts === null) opts = {};
     const c = opts.commands;
     this.registry = c instanceof CommandRegistry ? c : new CommandRegistry(Array.isArray(c) ? (c as readonly CommandSpec[]) : []);
     if (c && !(c instanceof CommandRegistry) && !Array.isArray(c)) {
@@ -548,7 +549,7 @@ export class FigureCore {
    * rest is marked stale and computed when read. `null` returns to eager mode.
    */
   setDemand(ids: Iterable<ObjId> | null): void {
-    this.demand = ids === null ? null : new Set(ids);
+    this.demand = ids === null || ids === undefined || typeof (ids as Iterable<ObjId>)[Symbol.iterator] !== 'function' ? null : new Set(ids);
     this.neededVersion = -1;
     if (this.demand !== null) return;
     for (const r of this.list) if (r.stale) this.pull(r);
@@ -737,6 +738,7 @@ export class FigureCore {
 
   /** Subscribe to figure events. Returns the function that unsubscribes. */
   on(listener: Listener): () => void {
+    if (typeof listener !== 'function') return () => false;
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
