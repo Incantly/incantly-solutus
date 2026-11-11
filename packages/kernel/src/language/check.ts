@@ -7,13 +7,13 @@ import type { ErrorKind, Notice } from '../contracts/errors';
 import type { ObjId } from '../contracts/values';
 import type { Arg, CmpOp, Expr, LineKind, ParsedLine } from './ast';
 import { BUILTIN_FUNCTIONS, constantByName, getMathLib } from './builtins';
-import { Diag, closestNames, notice, typeList } from './errors';
+import { Diag, ERROR_KINDS, closestNames, notice, typeList } from './errors';
 import type { ArgProblem, ErrorExtra, LanguageError, QuickFix } from './errors';
 import { CONSTANT_NAMES, nameProblem, reservedGroup } from './names';
 import { defineLine } from '../errors/suggest';
 import { own } from './props';
 import { classify } from './relation';
-import type { FigureView, FormLike, FunctionTable, ObjectInfo, ParamSpec } from './table';
+import type { ArgFacts, CallCheck, FigureView, FormCheck, FormLike, FunctionTable, ObjectInfo, ParamSpec, Refusal } from './table';
 import { formText } from './table';
 import type { RelTree, TArg, TNode } from './tnode';
 import { T, accepts, binaryOp, legalOpsFor, listOf, setLabel, tyEq, tyStr, typeSet } from './types';
@@ -1114,7 +1114,7 @@ class Checker {
 
   inferCommand(e: CallExpr, spec: import('./table').CommandSpec, expected?: Ty): TNode | null {
     this.hasCommand = true;
-    const m = this.matchForms(spec.name, spec.forms, e, expected);
+    const m = this.matchForms(spec.name, spec.forms, e, expected, spec.refuse);
     if (!m) return null;
     const form = m.form;
     const ret = form.returns;
@@ -1179,11 +1179,41 @@ class Checker {
 
   /* ------------------------------- matching ------------------------------- */
 
+  /** What a check-time hook may know about a typed argument. */
+  argFacts(node: TNode | null | undefined, a: Arg | undefined): ArgFacts {
+    if (!node || !a) return { type: '', literal: undefined, text: a ? this.textOf(a.value) : '', omitted: !a };
+    return { type: tyStr(node.ty), literal: literalOf(node), text: this.textOf(a.value), omitted: false };
+  }
+
+  /** Reports a refusal from a check-time hook as an error on the line. */
+  refuse(r: Refusal, command: string, call: CallExpr, argAt: (r: Refusal) => Arg | undefined): null {
+    const a = argAt(r);
+    const s = a ? a.value.s : call.cs;
+    const e = a ? a.value.e : call.e;
+    const known = Object.hasOwn(ERROR_KINDS, r.kind);
+    // A kind the table does not know would get another kind's code: say so instead of guessing.
+    if (!known) {
+      return this.err('internal', call.cs, call.ce, 'lang.internal', { where: `${command} check hook` }, {
+        hint: `The error kind ${r.kind} is not registered in the error table; report this.`,
+        recovery: 'report',
+        fingerprintKey: `${command}:${r.kind}`,
+      });
+    }
+    return this.err(r.kind, s, e, `lang.${r.kind}`, r.params ?? { command, why: r.message }, {
+      message: r.message,
+      ...(r.hint !== undefined ? { hint: r.hint } : {}),
+      ...(r.suggest !== undefined ? { suggest: r.suggest.slice(0, 3) } : {}),
+      phase: 'typecheck',
+      fingerprintKey: `${command}:${r.kind}`,
+    });
+  }
+
   matchForms<F extends FormLike>(
     specName: string,
     forms: readonly F[],
     call: CallExpr,
     _expected?: Ty,
+    refuseCall?: (c: CallCheck) => Refusal | undefined,
   ): { form: F; bound: TArg[] } | null {
     const args = call.args;
     // names and duplicates
@@ -1460,6 +1490,27 @@ class Checker {
       for (const ai of best.b.restArgs) flush(ai);
       for (const t of typed.values()) if (t.node && !flushedArgs.has(t.ai)) this.notices.push(...t.notices);
       this.checkBinderUse(best.bound, best.b.form, args);
+      // the form's own check-time hook: a literal or a type that can never work is an error on the line
+      const hook = (best.b.form as { check?: (c: FormCheck) => Refusal | undefined }).check;
+      if (hook) {
+        const nParams = best.b.form.params.length;
+        const paramArg = (k: number): Arg | undefined => {
+          const ai = best.b.bind[k];
+          return ai === undefined || ai === -1 ? undefined : (args[ai] as Arg);
+        };
+        const facts = best.b.form.params.map((_p, k) => this.argFacts(best.bound[k]?.expr, paramArg(k)));
+        const rest = best.b.restArgs.map((ai, j) => this.argFacts(best.bound[nParams + j]?.expr, args[ai] as Arg));
+        let refusal: Refusal | undefined;
+        try {
+          refusal = hook({ command: specName, args: facts, rest });
+        } catch {
+          return this.err('internal', call.cs, call.ce, 'lang.internal', { where: `${specName} check hook` }, { recovery: 'report', fingerprintKey: specName });
+        }
+        if (refusal) {
+          return this.refuse(refusal, specName, call, (r) =>
+            r.param === undefined ? undefined : r.inRest === true ? (args[best.b.restArgs[r.param] ?? -1] as Arg | undefined) : paramArg(r.param));
+        }
+      }
       return { form: best.b.form as F, bound: best.bound };
     }
 
@@ -1485,6 +1536,16 @@ class Checker {
     if (badBinders) {
       this.reportBinders(badBinders.binderBad);
       return null;
+    }
+    // the command's own diagnosis of arguments that fit no form comes before the general one
+    if (refuseCall) {
+      let refusal: Refusal | undefined;
+      try {
+        refusal = refuseCall({ command: specName, args: args.map((a, i) => (a.name !== undefined ? { type: '', literal: undefined, text: this.textOf(a.value), omitted: false } : this.argFacts(shownArg(i), a))) });
+      } catch {
+        refusal = undefined;
+      }
+      if (refusal) return this.refuse(refusal, specName, call, (r) => (r.param === undefined ? undefined : (args[r.param] as Arg | undefined)));
     }
     return this.diagnose(specName, forms, call, bindings, tests, shownArg);
   }
@@ -1751,3 +1812,31 @@ export function foldNumber(n: TNode): number | undefined {
 }
 
 export { Checker };
+
+/**
+ * The value of an argument written as a literal, for check-time hooks: a number (with a sign, or a named constant), a
+ * boolean, a text with no interpolation, a point of literal numbers, a list of literals. `undefined` for anything else.
+ */
+export function literalOf(node: TNode): unknown {
+  switch (node.n) {
+    case 'num': return node.v;
+    case 'bool': return node.v;
+    case 'const': return typeof node.value === 'number' ? node.value : undefined;
+    case 'unary': {
+      if (node.op === 'not') return undefined;
+      const v = literalOf(node.arg);
+      return typeof v === 'number' ? (node.op === '-' ? -v : v) : undefined;
+    }
+    case 'text': return node.parts.every((p) => typeof p === 'string') ? node.parts.join('') : undefined;
+    case 'point': {
+      const x = literalOf(node.x);
+      const y = literalOf(node.y);
+      return typeof x === 'number' && typeof y === 'number' ? { x, y } : undefined;
+    }
+    case 'list': {
+      const items = node.items.map(literalOf);
+      return items.every((v) => v !== undefined) ? items : undefined;
+    }
+    default: return undefined;
+  }
+}
