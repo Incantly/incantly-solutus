@@ -161,7 +161,8 @@ Optimisation, `Locus` and `Path` in the core design all need the same thing: "ev
 interface Slice {
   readonly sources: readonly ObjId[];            // free objects to vary
   readonly target: ObjId;                        // object read after each evaluation
-  eval(values: readonly number[]): Cell;         // sets the sources, runs only the rules between them and the target, returns the target's cell
+  readonly chain: readonly string[];             // names of the objects that run, in order; empty when the target does not depend on the source
+  run(values: Iterable<unknown>): Cell[];        // for each value: sets the source, runs only the rules between it and the target, returns the target's cell
 }
 
 interface KernelSlices {
@@ -172,7 +173,7 @@ interface KernelSlices {
 Rules:
 
 - A slice runs on a scratch overlay: a map from object id to a temporary cell, over the committed cells. The figure, drawables and undo log never see it. Rules are pure (core section 2), so this is safe.
-- The rules to run are the intersection of the sources' downstream lists and the target's upstream list, in `order`. Both are cached per (sources, target) pair and rebuilt only when the structure changes.
+- The rules to run are the intersection of the sources' downstream lists and the target's upstream list, in `order`. The kernel works this out when `slice` is called and does not cache it; the area keeps the `Slice` it gets for as long as it needs it.
 - A source must be free (`not_free` error otherwise). A target that does not depend on any source gives the error `no_dependency`.
 - Cost target: under 2 microseconds per rule for number rules. A slice of 12 rules evaluates in under 30 microseconds, so 500 evaluations take about 15 ms in the worst case and about 3 ms for a typical short chain.
 - A slice is valid only while the figure's structure is unchanged; the optimiser rule rebuilds it when its inputs change.

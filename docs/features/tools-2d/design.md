@@ -248,13 +248,20 @@ A single allocator, shared with the language (core section 3 says a name must be
 | Object kind | Sequence |
 |---|---|
 | Points | `A`, `B`, ..., `Z`, then `A_1`, `B_1`, ... |
-| Lines, rays, segments, vectors, circles, conics, polygons, arcs, sectors, functions | `a`, `b`, ..., skipping `e`, `i`, `t`, `x`, `y`, `u`, `v` (reserved or used inside particle formulas); then `a_1`, ... Functions use `f`, `g`, `h`, `p`, `q` first. |
-| Numbers | `a`, `b`, `c` ... shares the lowercase sequence |
-| Angles | `α`, `β`, `γ`, `δ`, `ε`, `ζ`, `η`, `θ`, ... (skipping any already used) |
-| Measurements | `d` (distance), `s` (area), `m` (slope) first, then the next free lowercase name; e.g. `d`, `d_1`, ... |
-| Images of a point under a transformation | `A_1`, `A_2` (suffix numbers), because `'` is reserved for rate rules in the grammar |
+| Vectors | `u`, `v`, `w`, then `u_1`, ... |
+| Lines, rays, segments | `l`, `m`, `n`, then `l_1`, ... |
+| Numbers (including measurements) | `a`, `b`, `c`, `d`, then `a_1`, ..., skipping reserved names |
+| Angles | `α`, `β`, `γ`, `δ`, then `α_1`, ... |
+| Functions | `f`, `g`, `h`, `p`, `q`, `r`, then `f_1`, ... |
+| Circles, arcs, curves | `c`, `d`, `k`, then `c_1`, ... |
+| Polygons, regions | `poly1`, `poly2`, ...; `reg1`, `reg2`, ... |
 | Texts | `text1`, `text2`, ... |
-| Helper objects (hidden by a tool) | the next lowercase name, hidden by `Hide(...)` in the same batch |
+| Lists | `L`, `M`, `N`, then `L_1`, ... |
+| Booleans | `cond1`, `cond2`, ... |
+| Images of a point under a transformation | `A_1`, `A_2` (suffix numbers), because `'` is reserved for rate rules in the grammar |
+| Helper objects (hidden by a tool) | the next name for their type, hidden by `Hide(...)` in the same batch |
+
+This is the table in the language design (3.7). The first free name in a sequence wins, and names that are reserved or already used are skipped.
 
 Rules: a name is never reused while an object has it; deleted names are not reused within a session for the sake of undo; the allocator skips names the figure already uses.
 

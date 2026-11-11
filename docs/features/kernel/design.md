@@ -620,7 +620,7 @@ These return data in the `TxResult` (they do not create objects). `DependsOn` an
 
 ### Naming helper for tools
 
-`suggestName(type, hint?)`: points `A, B, ... Z, A1, B1 ...`; numbers `a, b, c ...`; functions `f, g, h`; lines and circles `l1, l2` / `c1, c2`; polygons `poly1`; texts `text1`; booleans `flag1`. Skips taken and reserved names. This is for pointer tools and the playground; the teacher always names its own objects.
+`suggestName(type, hint?)` uses the one name table in the language design (3.7): points `A, B, ... Z, A_1, B_1 ...`; vectors `u v w`; lines, rays and segments `l m n`; numbers `a b c d` (angles `α β γ δ`); functions `f g h p q r`; circles, arcs and curves `c d k`; lists `L M N`; polygons `poly1`; regions `reg1`; texts `text1`; booleans `cond1`. After the letters, a sequence continues with `_1`, `_2` (`l_1`). Skips taken and reserved names. This is for pointer tools and the playground; the teacher always names its own objects.
 
 ---
 
