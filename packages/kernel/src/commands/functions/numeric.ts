@@ -317,7 +317,7 @@ export function findRoots(f: Fn1, a: number, b: number, tol: number, work: RuleW
     let bestV = Infinity;
     while (cj < sorted.length && (sorted[cj] as number) - (sorted[ci] as number) <= 2.5 * spacing) {
       const v = Math.abs(f(sorted[cj] as number));
-      if (!work.spend(1)) return { roots: dedup(out, tol), sawUndefined: scan.sawUndefined, spent: true };
+      if (!work.spend(1)) return { roots: dedup(out, tol), sawUndefined: scan.sawUndefined, spent: true, identicalZero: false };
       if (v === v && v < bestV) {
         bestV = v;
         best = sorted[cj] as number;

@@ -13,7 +13,7 @@ import { sample1, sample2, sampleN, numArg, isFin } from './sample';
 import type { Fn1, Sampled1 } from './sample';
 import {
   brent, cauchyBound, detectPolynomial, diff1, diff2, findRoots, goldenMin, kappaStraight,
-  newton, polyDeriv, polyEval, quad, scanBrackets, taylorCoeffs, wynn,
+  newton, polyDeriv, polyEval, quad, taylorCoeffs, wynn,
 } from './numeric';
 import { odeDomain, odeEval, solveOde } from './ode';
 import type { OdeSolution } from './ode';
@@ -968,24 +968,35 @@ function runHole(call: RuleCall): unknown {
   const ab = intervalAB(call, 1);
   if (!ab) return undefined;
   const tol = call.tol;
-  // Scan for undefined samples; each run is localised and checked by one-sided limits.
+  // Scan an even grid plus a lattice of simple fractions (an isolated hole sits on a nice
+  // number far more often than on a grid point); each undefined run is localised and
+  // checked by one-sided limits.
   const N = 2048;
+  const xsSet = new Set<number>();
+  for (let i = 0; i <= N; i++) xsSet.add(ab.a + ((ab.b - ab.a) * i) / N);
+  const lo = Math.min(ab.a, ab.b);
+  const hi = Math.max(ab.a, ab.b);
+  let step = 1 / 120;
+  while ((hi - lo) / step > 4096) step *= 2;
+  for (let k = Math.ceil(lo / step); k * step <= hi; k++) xsSet.add(k * step);
+  const xs = [...xsSet].sort((u, v) => u - v);
   const nan: boolean[] = [];
-  for (let i = 0; i <= N; i++) {
+  for (const x of xs) {
     if (!call.work.spend(1)) return call.fail('timeout', 'The work budget ran out.');
-    const v = f.f(ab.a + ((ab.b - ab.a) * i) / N);
+    const v = f.f(x);
     nan.push(v !== v);
   }
   const out: Pt[] = [];
+  const last = xs.length - 1;
   let i = 1;
-  while (i < N) {
+  while (i < last) {
     if (!nan[i]) {
       i++;
       continue;
     }
     let j = i;
-    while (j + 1 < N && nan[j + 1]) j++;
-    const c = ab.a + ((ab.b - ab.a) * (i + j)) / (2 * N);
+    while (j + 1 < last && nan[j + 1]) j++;
+    const c = ((xs[i] as number) + (xs[j] as number)) / 2;
     const left = limitOneSided(f.f, c, -1, tol, call.work);
     const right = limitOneSided(f.f, c, 1, tol, call.work);
     if (left.spent || right.spent) return call.fail('timeout', 'The work budget ran out.');
@@ -1240,6 +1251,13 @@ function poleRefine(rec: Fn1, bx: number, a: number, b: number, tol: number, wor
   return x;
 }
 
+/** Snaps a located point to the nearest simple fraction (k / 120) when it is within `tol` of it. */
+function snapNice(x: number, tol: number): number {
+  if (!Number.isFinite(x)) return x;
+  const k = Math.round(x * 120) / 120;
+  return Math.abs(x - k) <= tol * Math.max(1, Math.abs(x)) ? k : x;
+}
+
 function runAsymptoteFn(call: RuleCall, withRange: boolean): unknown {
   const f = reqFn1(call, 0);
   if (!f) return undefined;
@@ -1307,7 +1325,7 @@ function runAsymptoteFn(call: RuleCall, withRange: boolean): unknown {
       const v = f.f(x);
       return v === v && v !== 0 ? 1 / v : Number.NaN;
     };
-    const pole = poleRefine(rec, bx, a, b, tol, call.work);
+    const pole = snapNice(poleRefine(rec, bx, a, b, tol, call.work), 1e-9);
     const left = limitOneSided(f.f, pole, -1, tol, call.work);
     const right = limitOneSided(f.f, pole, 1, tol, call.work);
     if (left.spent || right.spent) return call.fail('timeout', 'The work budget ran out.');
