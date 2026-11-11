@@ -124,7 +124,8 @@ export function intersectLineLine(l1: LineLike, l2: LineLike, tol: number): Line
   const s = det2(l1.a, l1.b, l2.a, l2.b);
   const sine = Math.abs(s.value);
   const cond = sine > 0 ? 1 / sine : Infinity;
-  if (sine <= tol) {
+  // Parallel at a sine of 1e-12 for the default tolerance (points-lines 4.2 step 4, 10.1): the tolerance is 1e-3 of the figure's.
+  if (sine <= tol * 1e-3) {
     // Parallel or identical: distance of l1's reference point to l2.
     const d = Math.abs(l2.a * l1.ox + l2.b * l1.oy - l2.c);
     const scale = Math.max(1, Math.abs(l1.c), Math.abs(l2.c), norm2p({ x: l1.ox, y: l1.oy }));
@@ -521,7 +522,13 @@ function orderConicSlots(pts: V2[], m1v: ConicValue, _m2v: ConicValue, tol: numb
   cy /= ded.length;
   const cp = centralParams(m1v);
   const ref = cp && m1v.kind !== 'circle' ? Math.atan2(cp.uy, cp.ux) : 0;
-  const withAng = ded.map((p) => ({ p, a: Math.atan2(p.y - cy, p.x - cx) - ref }));
+  // Counter-clockwise from the reference direction, in [0, 2 pi) (a rounding hair below 0 counts as 0).
+  const rel = (a: number): number => {
+    let r = (a - ref) % TAU;
+    if (r < 0) r += TAU;
+    return r > TAU - 1e-12 ? 0 : r;
+  };
+  const withAng = ded.map((p) => ({ p, a: rel(Math.atan2(p.y - cy, p.x - cx)) }));
   withAng.sort((a, b) => a.a - b.a);
   const out: Slot[] = withAng.map((w) => ({ p: w.p }));
   while (out.length < 4) out.push({ reason: 'no_intersection' });

@@ -388,57 +388,54 @@ function doubleLineOf(qq: Quad): HLine {
  */
 export function splitPair(m: Mat3): readonly [HLine, HLine?] {
   const pt = pairPointH(m);
-  const cands: Array<[number, number, number]> = [
-    [1, 0, 0],
-    [0, 1, 0],
-    [0, 0, 1],
-  ];
-  let L = cands[2] as [number, number, number];
-  for (const c of cands) {
-    const d = Math.abs(c[0] * pt[0] + c[1] * pt[1] + c[2] * pt[2]);
-    const n = Math.hypot(pt[0], pt[1], pt[2]) || 1;
-    if (d > 0.2 * n) {
-      L = c;
-      break;
-    }
-  }
-  // Parametrize L: origin o with L.o = 0... use axis points.
-  let o: [number, number, number];
-  let d: [number, number, number];
-  if (L[2] === 1) {
-    o = [0, 0, 1];
-    d = [1, 0, 0];
-  } else if (L[0] === 1) {
-    o = [0, 0, 1];
-    d = [0, 1, 0];
-  } else {
-    o = [0, 0, 1];
-    d = [1, 0, 0];
-  }
-  // Restrict the form to o + t d: At^2 + Bt + C.
+  // A coordinate line X_k = 0 that misses the singular point: the larger |pt_k|, the better.
+  let k = 0;
+  for (let i = 1; i < 3; i++) if (Math.abs(pt[i] as number) > Math.abs(pt[k] as number)) k = i;
+  // Two points o and d that span that line.
+  const o: [number, number, number] = [0, 0, 0];
+  const d: [number, number, number] = [0, 0, 0];
+  const axes = [0, 1, 2].filter((i) => i !== k);
+  o[axes[0] as number] = 1;
+  d[axes[1] as number] = 1;
+  // Q(lambda o + mu d) = lambda^2 Qo + 2 lambda mu Bod + mu^2 Qd; its roots (lambda : mu) are where the two lines cross X_k = 0.
   const mo = matVec3(m, o[0], o[1], o[2]);
   const md = matVec3(m, d[0], d[1], d[2]);
-  const Aq = d[0] * md[0] + d[1] * md[1] + d[2] * md[2];
-  const Bq = o[0] * md[0] + o[1] * md[1] + o[2] * md[2] + (d[0] * mo[0] + d[1] * mo[1] + d[2] * mo[2]);
-  const Cq = o[0] * mo[0] + o[1] * mo[1] + o[2] * mo[2];
-  const roots = solveQuad(Aq, Bq / 2, Cq);
-  const hits: Array<[number, number, number]> = [];
-  if (roots.kind === 'two') {
-    hits.push([o[0] + roots.s1 * d[0], o[1] + roots.s1 * d[1], o[2] + roots.s1 * d[2]]);
-    if (roots.s2 !== roots.s1) hits.push([o[0] + roots.s2 * d[0], o[1] + roots.s2 * d[1], o[2] + roots.s2 * d[2]]);
-  } else if (roots.kind === 'one') {
-    hits.push([o[0] + roots.s * d[0], o[1] + roots.s * d[1], o[2] + roots.s * d[2]]);
+  const Qo = o[0] * mo[0] + o[1] * mo[1] + o[2] * mo[2];
+  const Qd = d[0] * md[0] + d[1] * md[1] + d[2] * md[2];
+  const Bod = o[0] * md[0] + o[1] * md[1] + o[2] * md[2];
+  const disc = Bod * Bod - Qo * Qd;
+  const hits: Array<[number, number]> = [];
+  if (disc >= 0) {
+    const sq = Math.sqrt(disc);
+    const q = -(Bod + (Bod >= 0 ? sq : -sq));
+    if (q !== 0) {
+      hits.push([q, Qo]);
+      hits.push([Qd, q]);
+    } else {
+      // Bod = 0 and disc = 0: Qo = 0 or Qd = 0.
+      hits.push(Math.abs(Qo) <= Math.abs(Qd) ? [1, 0] : [0, 1]);
+    }
   }
   const lines: HLine[] = [];
-  for (const h of hits) {
+  for (const [lam, mu] of hits) {
+    const h: [number, number, number] = [lam * o[0] + mu * d[0], lam * o[1] + mu * d[1], lam * o[2] + mu * d[2]];
     const lx = pt[1] * h[2] - pt[2] * h[1];
     const ly = pt[2] * h[0] - pt[0] * h[2];
     const lz = pt[0] * h[1] - pt[1] * h[0];
-    if (Math.hypot(lx, ly) > 0) lines.push(normLine(lx, ly, -lz));
+    if (Math.hypot(lx, ly) > 1e-12 * Math.hypot(lx, ly, lz)) lines.push(normLine(lx, ly, -lz));
   }
-  if (lines.length === 0) lines.push({ a: 1, b: 0, c: 0 });
-  if (lines.length === 1) return [lines[0] as HLine];
-  return [lines[0] as HLine, lines[1] as HLine];
+  // A double root gives the same line twice.
+  const uniq: HLine[] = [];
+  for (const l of lines) {
+    const same = uniq.some((u) => {
+      const sg = u.a * l.a + u.b * l.b >= 0 ? 1 : -1;
+      return Math.abs(u.a - sg * l.a) <= 1e-9 && Math.abs(u.b - sg * l.b) <= 1e-9 && Math.abs(u.c - sg * l.c) <= 1e-9 * Math.max(1, Math.abs(l.c));
+    });
+    if (!same) uniq.push(l);
+  }
+  if (uniq.length === 0) return [{ a: 1, b: 0, c: 0 }];
+  if (uniq.length === 1) return [uniq[0] as HLine];
+  return [uniq[0] as HLine, uniq[1] as HLine];
 }
 
 /** Singular (homogeneous) point of a rank-2 matrix: the null vector. */
