@@ -459,6 +459,8 @@ export interface QuadResult {
   readonly divergesAt?: number;
   /** True when the work budget ran out: `value` is the best estimate so far. */
   readonly spent: boolean;
+  /** True when `f` was undefined at every sample, so there is no integral to report. */
+  readonly noData?: boolean;
 }
 
 interface Panel {
@@ -493,6 +495,7 @@ export function quadFinite(f: Fn1, a: number, b: number, o: QuadOptions): QuadRe
   const stack: Panel[] = [{ a, fa, m: m0, fm: fm0, b, fb, whole: whole0, tol: tol0, depth: 0 }];
   let value = 0;
   let error = 0;
+  let defined = (fa === fa ? 1 : 0) + (fm0 === fm0 ? 1 : 0) + (fb === fb ? 1 : 0);
   const singular: number[] = [];
   while (stack.length > 0) {
     const p = stack.pop() as Panel;
@@ -505,6 +508,8 @@ export function quadFinite(f: Fn1, a: number, b: number, o: QuadOptions): QuadRe
     const rm = 0.5 * (p.m + p.b);
     const flm = f(lm);
     const frm = f(rm);
+    if (flm === flm) defined++;
+    if (frm === frm) defined++;
     if (!o.work.spend(2)) return { value: value + p.whole, error: Number.NaN, ok: false, spent: true };
     const w = p.b - p.a;
     const left = (w / 12) * (numOr0(p.fa) + 4 * numOr0(flm) + numOr0(p.fm));
@@ -514,6 +519,14 @@ export function quadFinite(f: Fn1, a: number, b: number, o: QuadOptions): QuadRe
     if (hasBad || err > p.tol) {
       if (p.depth >= o.maxDepth) {
         if (hasBad) singular.push(badNum(flm) ? lm : badNum(frm) ? rm : p.m);
+        else {
+          const jump = jumpPanel(f, p.a, p.b, p.fa, p.fb, p.fm, o.work);
+          if (jump === 'spent') return { value: value + p.whole, error: Number.NaN, ok: false, spent: true };
+          if (jump !== null) {
+            value += jump;
+            continue;
+          }
+        }
         value += refined;
         error += err;
         continue;
@@ -525,19 +538,108 @@ export function quadFinite(f: Fn1, a: number, b: number, o: QuadOptions): QuadRe
     }
     value += refined + (refined - p.whole) / 15;
   }
+  if (defined === 0) return { value: Number.NaN, error: Number.NaN, ok: false, spent: false, noData: true };
   if (singular.length === 0) {
     const ok = error <= Math.max(o.tolAbs, o.tolRel * Math.abs(value)) || error !== error;
     return { value, error, ok, spent: false };
   }
   // Decide each singularity by a power fit; collect endpoint corrections.
   let correction = 0;
-  for (const x0 of dedup(singular, 1e-9)) {
+  const sing = dedup(singular, 1e-9);
+  for (const x0 of sing) {
     const fit = powerFit(f, x0, a, b, o.work);
     if (fit.spent) return { value, error: Number.NaN, ok: false, spent: true };
     if (fit.diverges) return { value: Number.NaN, error: Number.NaN, ok: false, divergesAt: x0, spent: false };
     correction += fit.correction;
   }
+  // Integrable singularities sit at the ends of the pieces: redo the integral with tanh-sinh on each piece, which
+  // resolves algebraic and logarithmic end-point singularities to rounding. The adaptive value is the fallback.
+  const cuts = [a, ...sing.filter((x) => x > a && x < b), b];
+  let total = 0;
+  let tsOk = true;
+  for (let i = 0; i + 1 < cuts.length; i++) {
+    const piece = tanhSinh(f, cuts[i] as number, cuts[i + 1] as number, o.work);
+    if (piece === 'spent') return { value, error: Number.NaN, ok: false, spent: true };
+    if (piece === null) {
+      tsOk = false;
+      break;
+    }
+    total += piece;
+  }
+  if (tsOk) return { value: total, error: 0, ok: true, spent: false };
   return { value: value + correction, error, ok: true, spent: false };
+}
+
+/**
+ * Integral over a panel that holds a jump of `f`: the jump is located by bisecting on the larger difference, then each
+ * side is integrated as a trapezoid. Null when the panel holds no jump (the failure is rough, not a step).
+ */
+function jumpPanel(f: Fn1, a: number, b: number, fa: number, fb: number, fm0: number, work: RuleWork): number | 'spent' | null {
+  // cheap test first: at a jump the middle value sits on one side of it
+  const gap = Math.abs(fb - fa);
+  if (!(gap > 1e-8) || !(gap > 1e-3 * Math.max(Math.abs(fa), Math.abs(fb)))) return null;
+  if (!(Math.abs(fm0 - fa) <= 0.05 * gap || Math.abs(fm0 - fb) <= 0.05 * gap)) return null;
+  let l = a;
+  let r = b;
+  let fl = fa;
+  let fr = fb;
+  for (let i = 0; i < 64; i++) {
+    if (!work.spend(1)) return 'spent';
+    const m = 0.5 * (l + r);
+    if (m <= l || m >= r) break;
+    const fm = f(m);
+    if (badNum(fm)) return null;
+    if (Math.abs(fm - fl) > Math.abs(fr - fm)) {
+      r = m;
+      fr = fm;
+    } else {
+      l = m;
+      fl = fm;
+    }
+  }
+  const step = Math.abs(fr - fl);
+  // a real jump is a visible fraction of the values on either side; a steep smooth part changes by a sliver of 1e-15 width
+  if (!(step > 1e-8) || !(step > 1e-3 * Math.max(Math.abs(fl), Math.abs(fr)))) return null;
+  const c = 0.5 * (l + r);
+  return 0.5 * (fa + fl) * (c - a) + 0.5 * (fr + fb) * (b - c);
+}
+
+/**
+ * Tanh-sinh quadrature on `[lo, hi]`, which never samples the end points and so integrates end-point singularities
+ * `x^-p` (p < 1) and `ln x` to rounding. Points near an end are built from the distance to it, so they keep their
+ * precision. Levels double until two agree. Null when it does not settle or a sample inside is undefined; 'spent' when
+ * the budget runs out.
+ */
+function tanhSinh(f: Fn1, lo: number, hi: number, work: RuleWork): number | 'spent' | null {
+  const w = hi - lo;
+  if (!(w > 0)) return 0;
+  const T = 3.6;
+  let prev = Number.NaN;
+  let sum = 0;
+  let h = 1;
+  const point = (t: number): number => {
+    const u = (Math.PI / 2) * Math.sinh(t);
+    const e = Math.exp(-2 * Math.abs(u));
+    const near = (w * e) / (1 + e);
+    const weight = (w * (Math.PI / 4) * Math.cosh(t) * 4 * e) / ((1 + e) * (1 + e));
+    const x = t <= 0 ? lo + near : hi - near;
+    if (!(x > lo && x < hi) || !(weight > 0)) return 0;
+    const v = f(x);
+    return v === v && v !== Infinity && v !== -Infinity ? v * weight : 0;
+  };
+  sum = point(0);
+  for (let k = 0; k <= 7; k++) {
+    for (let t = h; t <= T; t += k === 0 ? h : 2 * h) {
+      if (!work.spend(2)) return 'spent';
+      sum += point(t) + point(-t);
+    }
+    const cur = sum * h;
+    if (k >= 3 && Math.abs(cur - prev) <= 1e-13 * Math.max(1, Math.abs(cur))) return cur;
+    if (k === 7 && Math.abs(cur - prev) <= 1e-9 * Math.max(1, Math.abs(cur))) return cur;
+    prev = cur;
+    h /= 2;
+  }
+  return null;
 }
 
 function numOr0(v: number): number {

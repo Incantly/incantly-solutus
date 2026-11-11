@@ -282,6 +282,7 @@ function runIntegralDef(call: RuleCall): unknown {
   const b = numArg(call, 2);
   if (!f || a === undefined || b === undefined) return call.fail('bad_argument', 'Integral needs a function and bounds.');
   const r = quad(f.f, a, b, quadOpts(call));
+  if (r.noData) return call.fail(f.lastReason ?? 'out_of_domain', `f is not defined anywhere on [${fmt(Math.min(a, b))}, ${fmt(Math.max(a, b))}].`);
   if (r.divergesAt !== undefined) {
     const at = r.divergesAt === Infinity || r.divergesAt === -Infinity ? 'near infinity' : `near x = ${fmt(r.divergesAt)}`;
     return call.fail('diverges', `f is not integrable ${at}.`);
@@ -526,6 +527,7 @@ function runAreaUnder(call: RuleCall, withG: boolean): unknown {
     return u === u && v === v ? u - v : Number.NaN;
   };
   const val = quad(h, a, b, quadOpts(call));
+  if (val.noData) return call.fail(f.lastReason ?? 'out_of_domain', 'f is not defined anywhere on the interval.');
   if (val.divergesAt !== undefined) return call.fail('diverges', 'The signed integral does not converge.');
   const abs = quad((x) => {
     const v = h(x);
