@@ -1208,12 +1208,17 @@ function newton2(
 ): Pt | null {
   let x = x0;
   let y = y0;
+  let polished = 0;
   for (let i = 0; i < 30; i++) {
     if (!work.spend(5)) return null;
     const [f1, f2] = f(x, y);
     if (f1 !== f1 || f2 !== f2) return null;
     const sc = Math.max(1, Math.abs(x), Math.abs(y));
-    if (Math.hypot(f1, f2) <= tol * sc) return { x, y };
+    const res = Math.hypot(f1, f2);
+    // within tolerance: a few more steps polish the point to rounding, so repeated finds of one point merge
+    if (res <= tol * sc && (res <= 1e-14 * sc || polished >= 4)) return { x, y };
+    const near = res <= tol * sc;
+    if (near) polished++;
     const h = 6e-6 * sc;
     const [a1, a2] = f(x + h, y);
     const [b1, b2] = f(x - h, y);
@@ -1227,7 +1232,7 @@ function newton2(
     const j22 = (c2 - d2) / (2 * h);
     const det = j11 * j22 - j12 * j21;
     const js = Math.max(Math.abs(j11 * j22), Math.abs(j12 * j21), 1e-300);
-    if (!(Math.abs(det) > tol * js)) return null;
+    if (!(Math.abs(det) > tol * js)) return near ? { x, y } : null;
     let dx = (f1 * j22 - f2 * j12) / det;
     let dy = (j11 * f2 - j21 * f1) / det;
     const here = Math.hypot(f1, f2);
@@ -1242,7 +1247,7 @@ function newton2(
       dx /= 2;
       dy /= 2;
     }
-    if (!ok) return null;
+    if (!ok) return near ? { x, y } : null;
     x -= dx;
     y -= dy;
   }
@@ -1545,7 +1550,35 @@ function runIntersectMixed(call: RuleCall, flip: boolean): unknown {
   return call.fail('bad_argument', 'These two values have no intersection method.');
 }
 
+/** The windowed forms `Intersect(a, b, x0, x1, y0, y1)`: the plain intersections that lie inside the rectangle. */
+function runIntersectWindow(call: RuleCall, base: (call: RuleCall) => unknown): unknown {
+  const x0 = numArg(call, 2);
+  const x1 = numArg(call, 3);
+  const y0 = numArg(call, 4);
+  const y1 = numArg(call, 5);
+  if (x0 === undefined || x1 === undefined || y0 === undefined || y1 === undefined) return call.fail('bad_argument', 'Intersect needs a rectangle x0, x1, y0, y1.');
+  if (!isFin(x0) || !isFin(x1) || !isFin(y0) || !isFin(y1) || !(x0 < x1) || !(y0 < y1)) {
+    return call.fail('bad_argument', 'The rectangle runs low to high: x0 < x1 and y0 < y1.');
+  }
+  const all = base(call);
+  if (!Array.isArray(all)) return all;
+  const e = 1e-9 * Math.max(1, Math.abs(x0), Math.abs(x1), Math.abs(y0), Math.abs(y1));
+  return (all as Pt[]).filter((q) => q.x >= x0 - e && q.x <= x1 + e && q.y >= y0 - e && q.y <= y1 + e);
+}
+
 export const intersectCurveForms: CommandForm[] = [
+  form(
+    [p('c1', IC), p('c2', IC), p('x0', 'Number'), p('x1', 'Number'), p('y0', 'Number'), p('y1', 'Number')], 'List<Point>',
+    (call) => runIntersectWindow(call, runIntersectCurves), 'intersections of two curves inside a rectangle',
+  ),
+  form(
+    [p('f', F1), p('c', IC), p('x0', 'Number'), p('x1', 'Number'), p('y0', 'Number'), p('y1', 'Number')], 'List<Point>',
+    (call) => runIntersectWindow(call, (c) => runIntersectMixed(c, false)), 'intersections of a function with a curve inside a rectangle',
+  ),
+  form(
+    [p('c', IC), p('f', F1), p('x0', 'Number'), p('x1', 'Number'), p('y0', 'Number'), p('y1', 'Number')], 'List<Point>',
+    (call) => runIntersectWindow(call, (c) => runIntersectMixed(c, true)), 'intersections of a curve with a function inside a rectangle',
+  ),
   form([p('c1', IC), p('c2', IC)], 'List<Point>', runIntersectCurves, 'intersections of two curves, lines or circles'),
   form([p('f', F1), p('c', IC)], 'List<Point>', (call) => runIntersectMixed(call, false), 'intersections of a function with a curve'),
   form([p('c', IC), p('f', F1)], 'List<Point>', (call) => runIntersectMixed(call, true), 'intersections of a curve with a function'),
@@ -1576,6 +1609,20 @@ function runImplicitDerivative(call: RuleCall): unknown {
     if (Math.abs(gy) <= tol * gm) return -gx / 0;
     return -gx / gy;
   };
+  // F_y identically zero (a vertical line x^2 == 4): dy/dx has no value anywhere
+  let anyY = false;
+  let seen = 0;
+  for (let i = 0; i <= 8 && !anyY; i++) {
+    for (let j = 0; j <= 8 && !anyY; j++) {
+      const x = -5 + 1.25 * i + 0.1234;
+      const y = -5 + 1.25 * j + 0.0777;
+      const h = 6e-6;
+      const gy = (c.f(x, y + h) - c.f(x, y - h)) / (2 * h);
+      if (gy === gy) seen++;
+      if (gy === gy && Math.abs(gy) > 1e-9) anyY = true;
+    }
+  }
+  if (seen > 0 && !anyY) return call.fail('identically_zero', 'The equation has no y in it, so dy/dx has no value; its graph is vertical lines.');
   return fn2Value(f, () => why);
 }
 
@@ -1594,13 +1641,25 @@ function runClosest(call: RuleCall): unknown {
 
 /* ------------------------------ inequalities ------------------------------ */
 
-function reqPredicate(call: RuleCall, i: number): RelationValue | undefined {
+interface Predicate {
+  test(x: number, y: number): boolean | undefined;
+}
+
+/** An inequality: the language's relation value, or a predicate function (one or two numbers in, a Bool out). */
+function reqPredicate(call: RuleCall, i: number): Predicate | undefined {
   const v = call.values[i];
-  if (!isRelationValue(v)) {
-    call.fail('bad_argument', 'This command needs an inequality in x and y.');
-    return undefined;
+  if (isRelationValue(v)) return v;
+  if (typeof v === 'object' && v !== null && typeof (v as FunctionValue).call === 'function' && ((v as FunctionValue).arity === 1 || (v as FunctionValue).arity === 2)) {
+    const fv = v as FunctionValue;
+    return {
+      test: (x: number, y: number): boolean | undefined => {
+        const r: unknown = fv.arity === 1 ? fv.call(x) : fv.call(x, y);
+        return typeof r === 'boolean' ? r : undefined;
+      },
+    };
   }
-  return v;
+  call.fail('bad_argument', 'This command needs an inequality in x and y.');
+  return undefined;
 }
 
 function runBoundary(call: RuleCall): unknown {
@@ -1679,21 +1738,66 @@ function runPointIn(call: RuleCall): unknown {
     }
   }
   if (!best) return call.fail('empty_region', 'No point near P0 satisfies the inequality.');
-  // Walk back towards P0 to the boundary, then step inside.
-  let lo = 0;
-  let hi = 1;
-  for (let k = 0; k < 40; k++) {
-    if (!call.work.spend(1)) return call.fail('timeout', 'The work budget ran out.');
-    const m = 0.5 * (lo + hi);
-    const x = p0.x + m * (best.x - p0.x);
-    const y = p0.y + m * (best.y - p0.y);
-    if (test(x, y) === true) hi = m;
-    else lo = m;
-    if (hi - lo <= 1e-9) break;
+  // The grid point is only near the nearest one. Along each ray from P0 the first inside distance d(theta) is found by a
+  // march and bisection; golden search on theta around the grid point's direction gives the nearest boundary point.
+  const reach = Math.hypot(best.x - p0.x, best.y - p0.y) * 1.5 + 1e-9;
+  const ray = (theta: number): number => {
+    const cx = Math.cos(theta);
+    const cy = Math.sin(theta);
+    const K = 96;
+    let prev = 0;
+    for (let k = 1; k <= K; k++) {
+      const d = (reach * k) / K;
+      if (test(p0.x + d * cx, p0.y + d * cy) === true) {
+        let lo = prev;
+        let hi = d;
+        for (let it = 0; it < 50 && hi - lo > 1e-13 * Math.max(1, reach); it++) {
+          const m = 0.5 * (lo + hi);
+          if (test(p0.x + m * cx, p0.y + m * cy) === true) hi = m;
+          else lo = m;
+        }
+        return hi;
+      }
+      prev = d;
+    }
+    return Infinity;
+  };
+  const th0 = Math.atan2(best.y - p0.y, best.x - p0.x);
+  const spread = Math.min(Math.PI / 2, (1.5 * ((2 * R) / G)) / Math.max(bd, 1e-9) + 0.05);
+  const gr = 0.6180339887498949;
+  let lo = th0 - spread;
+  let hi = th0 + spread;
+  let c = hi - gr * (hi - lo);
+  let d = lo + gr * (hi - lo);
+  let fc = ray(c);
+  let fd = ray(d);
+  for (let it = 0; it < 60; it++) {
+    if (!call.work.spend(110)) return call.fail('timeout', 'The work budget ran out.');
+    if (fc < fd) {
+      hi = d;
+      d = c;
+      fd = fc;
+      c = hi - gr * (hi - lo);
+      fc = ray(c);
+    } else {
+      lo = c;
+      c = d;
+      fc = fd;
+      d = lo + gr * (hi - lo);
+      fd = ray(d);
+    }
+    if (hi - lo < 1e-13) break;
   }
-  const m = hi + 1e-9;
-  const x = p0.x + m * (best.x - p0.x);
-  const y = p0.y + m * (best.y - p0.y);
+  const thBest = 0.5 * (lo + hi);
+  const dGold = ray(thBest);
+  const dGrid = ray(th0);
+  const dBest = Math.min(dGold, dGrid);
+  const useTh = dGold <= dGrid ? thBest : th0;
+  if (dBest === Infinity) return best;
+  // step just inside (1e-9 along the ray)
+  const dd = dBest + 1e-9 * Math.max(1, dBest);
+  const x = p0.x + dd * Math.cos(useTh);
+  const y = p0.y + dd * Math.sin(useTh);
   return test(x, y) === true ? { x, y } : best;
 }
 
@@ -1725,11 +1829,13 @@ function runPredicateArea(call: RuleCall): unknown {
   }
   const stack: Cell[] = [{ ax: x0, bx: x1, ay: y0, by: y1, depth: 0 }];
   let area = 0;
+  let anyTrue = false;
   while (stack.length > 0) {
     const c = stack.pop() as Cell;
     if (!call.work.spend(5)) return call.fail('timeout', 'The work budget ran out.');
     const corners = [test(c.ax, c.ay), test(c.bx, c.ay), test(c.bx, c.by), test(c.ax, c.by)];
     const centre = test((c.ax + c.bx) / 2, (c.ay + c.by) / 2);
+    if (centre === true || corners.includes(true)) anyTrue = true;
     const trues = corners.filter((v) => v === true).length;
     const falses = corners.filter((v) => v === false).length;
     const w = (c.bx - c.ax) * (c.by - c.ay);
@@ -1757,6 +1863,7 @@ function runPredicateArea(call: RuleCall): unknown {
       { ax: mx, bx: c.bx, ay: my, by: c.by, depth: c.depth + 1 },
     );
   }
+  if (!anyTrue && area === 0) return call.fail('empty_region', 'No point of the rectangle satisfies the inequality.');
   return area;
 }
 
