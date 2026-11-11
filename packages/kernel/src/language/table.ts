@@ -43,6 +43,54 @@ export interface BoundArg {
 /** Builds the rule from checked inputs. Opaque to the language; the kernel defines it. */
 export type RuleFactory = (args: readonly BoundArg[]) => unknown;
 
+/**
+ * What a check-time hook sees of one argument (errors design, "Check time"). The hook runs while the line is being
+ * checked, before anything is committed, so it reads only what the text of the line fixes.
+ */
+export interface ArgFacts {
+  /** The type as text: `Number`, `Line`, `List<Point>`, `Function<Number>(1)`. Empty for an omitted argument. */
+  readonly type: string;
+  /**
+   * The value when the argument is written as a literal: a number (also `-2`, a named constant), a boolean, a text with
+   * no interpolation, a point of literal numbers as `{ x, y }`, or a list of literals as an array. Otherwise `undefined`.
+   */
+  readonly literal: unknown;
+  /** The argument as written. */
+  readonly text: string;
+  /** True when the argument was left out. */
+  readonly omitted: boolean;
+}
+
+/** The arguments of the chosen form, in parameter order, then the rest arguments. */
+export interface FormCheck {
+  readonly command: string;
+  readonly args: readonly ArgFacts[];
+  readonly rest: readonly ArgFacts[];
+}
+
+/** The arguments as written, when no form of the command fits them. */
+export interface CallCheck {
+  readonly command: string;
+  readonly args: readonly ArgFacts[];
+}
+
+/**
+ * A line refused at check time. The kind must be registered in the error table. `param` (an index into `args`, or into
+ * `rest` when `inRest` is true) is the argument the error points at; without it the whole call is the span.
+ */
+export interface Refusal {
+  readonly kind: string;
+  /** One plain sentence. */
+  readonly message: string;
+  readonly hint?: string;
+  readonly param?: number;
+  readonly inRest?: boolean;
+  /** Up to 3 complete replacement lines. */
+  readonly suggest?: readonly string[];
+  /** Params for the kind's message template, when it has one. */
+  readonly params?: Readonly<Record<string, string | number | boolean | readonly string[]>>;
+}
+
 export interface CommandForm {
   readonly params: readonly ParamSpec[];
   /** Extra arguments of one type after `params`, such as the objects in `Hide(obj, …)`. */
@@ -58,6 +106,11 @@ export interface CommandForm {
   readonly explain?: string;
   /** True when the rule wants to run with undefined arguments (kernel design 6.4); the rule's own flag also counts. */
   readonly acceptsUndefined?: boolean;
+  /**
+   * Check-time hook: called once the arguments fit this form. A returned refusal fails the line with that error, so a
+   * literal that can never work (`Circle(O, -2)`) is an error on the line instead of an undefined object. Must be pure.
+   */
+  readonly check?: (c: FormCheck) => Refusal | undefined;
 }
 
 export interface CommandSpec {
@@ -65,6 +118,11 @@ export interface CommandSpec {
   readonly kind: 'object' | 'action';
   readonly group: string;
   readonly forms: readonly CommandForm[];
+  /**
+   * Check-time hook for arguments that fit no form: a returned refusal replaces the general `no_matching_form` or
+   * `arg_count` error with a specific one (`PointOn(3)` is `not_a_path`). Must be pure.
+   */
+  readonly refuse?: (c: CallCheck) => Refusal | undefined;
   /** Template for the Algebra view. */
   readonly describe?: string;
 }

@@ -166,6 +166,15 @@ function err(kind: ErrorKind, at: Span, params: Params, extra?: Partial<ErrorObj
 - Rules (area code) never format messages. They return `bad_argument` with params or return an undefined value with a reason.
 - **Internal faults** are caught at the transaction boundary (kernel), the tool boundary (teacher) and the frame boundary (view). They become `internal` errors, with a stack kept in the log, not in the object.
 
+### 5.0 Check-time hooks on commands
+
+A rule runs only after a line is accepted, so on its own a command can only make its object undefined. Two hooks let a command fail the line instead, while it is still being checked:
+
+- `CommandForm.check(c)` is called once the arguments fit that form. It is told, per argument, the type as text, the text as written, and the value when the argument is a literal (a number with or without a sign, a named constant, a boolean, a plain text, a point or list of literals). A value that is not a literal has no `literal`, so the hook leaves it to the rule: `Circle(O, -2)` is a `bad_argument` on the line, and `Circle(O, r)` with `r = -2` is an object that is undefined with `negative_radius`.
+- `CommandSpec.refuse(c)` is called when the arguments fit no form, with the same facts for the arguments as written. A refusal replaces the general `no_matching_form` or `arg_count` with a specific error: `PointOn(3)` is `not_a_path`. When it returns nothing, the general error stands. A real error inside an argument (an unknown name) still comes first.
+
+Both return a `Refusal`: a kind, one sentence, and optionally a hint, up to 3 suggested lines and the argument to point at. Both must be pure. The kind must be in the error table; a hook that names an unknown kind, or that throws, gives an `internal` error. A refused line changes nothing, like any other failing line.
+
 ### 5.1 Nested expressions
 
 When the fault is deep inside a larger line, the outermost span is the line, but `col/endCol/token` point at the innermost token that is wrong. `cause` is used only when the outer problem is a different kind (e.g. the line is `no_matching_form` because the third argument failed to type; `cause` is the `type_mismatch` inside it). One level only; deeper chains are flattened to the innermost.
