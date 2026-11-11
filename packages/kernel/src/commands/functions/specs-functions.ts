@@ -12,7 +12,7 @@ import { toSampledCurve } from './locus';
 import { sample1, sample2, sampleN, numArg, isFin } from './sample';
 import type { Fn1, Sampled1 } from './sample';
 import {
-  brent, cauchyBound, detectPolynomial, diff1, diff2, findRoots, goldenMin, kappaStraight,
+  brent, cauchyBound, derivativeAt, detectPolynomial, diff1, diff2, findRoots, goldenMin, kappaStraight,
   newton, polyDeriv, polyEval, quad, taylorCoeffs, wynn,
 } from './numeric';
 import { odeDomain, odeEval, solveOde } from './ode';
@@ -67,7 +67,32 @@ type SlopeOut = { readonly d: number } | { readonly corner: true } | { readonly 
 function slopeAt(f: Sampled1, x0: number, tol: number): SlopeOut {
   const c = f.f(x0);
   if (c !== c) return { undef: true };
-  const h = 6e-6 * Math.max(1, Math.abs(x0));
+  // One-sided third-order stencils: exact for cubic pieces, so a smooth junction of two pieces reads the same slope
+  // from both sides, and a corner reads two different ones.
+  const hs = 5e-4 * Math.max(1, Math.abs(x0));
+  const side = (sgn: 1 | -1): number => {
+    const a = f.f(x0 + sgn * hs);
+    const b = f.f(x0 + sgn * 2 * hs);
+    const d = f.f(x0 + sgn * 3 * hs);
+    return a === a && b === b && d === d ? (sgn * (-11 * c + 18 * a - 9 * b + 2 * d)) / (6 * hs) : Number.NaN;
+  };
+  const sr = side(1);
+  const sl = side(-1);
+  const sides = sr === sr && sl === sl;
+  const sidesAgree = sides && Math.abs(sr - sl) <= 1e-7 * Math.max(1, Math.abs(sr), Math.abs(sl));
+  // Smooth point: two central differences at h and h/2 agree. At a junction of pieces they differ by O(h).
+  const hc = 6e-6 * Math.max(1, Math.abs(x0));
+  const c1a = f.f(x0 + hc);
+  const c1b = f.f(x0 - hc);
+  const c2a = f.f(x0 + hc / 2);
+  const c2b = f.f(x0 - hc / 2);
+  if (c1a === c1a && c1b === c1b && c2a === c2a && c2b === c2b && (!sides || sidesAgree)) {
+    const d1 = (c1a - c1b) / (2 * hc);
+    const d2 = (c2a - c2b) / hc;
+    if (Math.abs(d1 - d2) <= 1e-8 * Math.max(1, Math.abs(d1), Math.abs(c))) return { d: (4 * d2 - d1) / 3 };
+  }
+  if (sidesAgree) return { d: (sr + sl) / 2 };
+  const h = hc;
   const right = f.f(x0 + h);
   const left = f.f(x0 - h);
   const dr = right === right ? (right - c) / h : Number.NaN;
@@ -115,20 +140,16 @@ function derivSampler(f: Sampled1, n: number, tol: number): { readonly f: Fn1; l
       lastReason: () => why,
     };
   }
-  const inner = derivSampler(f, n - 1, tol);
-  const g: Sampled1 = { f: inner.f, lastReason: undefined };
-  void g;
   return {
     f: (x: number): number => {
-      const h = 6e-6 * Math.max(1, Math.abs(x));
-      const a = inner.f(x + h);
-      const b = inner.f(x - h);
-      if (a !== a || b !== b) {
-        why = inner.lastReason() ?? 'not_finite';
+      let spent = 0;
+      const v = derivativeAt(f.f, x, n, (c) => (spent += c) <= 4096);
+      if (v !== v) {
+        why = f.lastReason ?? 'not_finite';
         return Number.NaN;
       }
       why = undefined;
-      return (a - b) / (2 * h);
+      return v;
     },
     lastReason: () => why,
   };

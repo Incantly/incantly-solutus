@@ -880,40 +880,107 @@ function trimDegree(c: Float64Array, tol: number): number {
   return d;
 }
 
-/** Taylor coefficients `c[k] = f^(k)(a)/k!` by interpolation on `[a - r, a + r]`. Null when the fit is poor. */
-export function taylorCoeffs(f: Fn1, a: number, n: number, tol: number, work: RuleWork): { readonly coeffs: Float64Array; readonly residual: number } | null {
-  const r = Math.max(0.5, Math.min(2, Math.max(1, Math.abs(a)) / 2));
-  const m = 2 * n + 1;
-  const nodes = chebyshevNodes(m, a - r, a + r);
-  const vam = new Float64Array(m * (n + 1));
-  const ys = new Float64Array(m);
-  let scale = 0;
-  for (let i = 0; i < m; i++) {
-    if (!work.spend(1)) return null;
-    const x = nodes[i] as number;
-    const v = f(x);
-    if (v !== v) return null;
-    ys[i] = v;
-    if (Math.abs(v) > scale) scale = Math.abs(v);
-    const t = (x - a) / r;
-    let p = 1;
-    for (let k = 0; k <= n; k++) {
-      vam[i * (n + 1) + k] = p;
-      p *= t;
+const COS_TABLES = new Map<number, Float64Array>();
+
+/** `cos(pi k (j + 1/2) / n)` for k, j in 0..n-1, row-major by k. Cached per size. */
+function cosTable(n: number): Float64Array {
+  let t = COS_TABLES.get(n);
+  if (!t) {
+    t = new Float64Array(n * n);
+    for (let k = 0; k < n; k++) for (let j = 0; j < n; j++) t[k * n + j] = Math.cos((Math.PI * k * (j + 0.5)) / n);
+    COS_TABLES.set(n, t);
+  }
+  return t;
+}
+
+export interface LocalSeries {
+  /** `c[k] = f^(k)(a) / k!` for k = 0..nmax. */
+  readonly coeffs: Float64Array;
+  /** The radius that converged. */
+  readonly radius: number;
+  /** Size of the discarded Chebyshev tail relative to the largest coefficient. */
+  readonly tail: number;
+}
+
+const SERIES_RADII = [2, 1, 0.5, 0.25, 0.125, 0.0625, 0.03125] as const;
+
+/**
+ * Taylor coefficients of `f` at `a` up to order `nmax`, from a Chebyshev interpolant on `[a - r, a + r]`.
+ * Tries radii from `SERIES_RADII[first]` downwards until the interpolant has converged (its last coefficients
+ * vanish), so a nearby pole, branch point or kink only shrinks the interval. Null when no radius converges
+ * or `spend` refuses. Deterministic; no tolerance depends on the machine.
+ */
+export function localSeries(f: Fn1, a: number, nmax: number, spend?: (n: number) => boolean, first = 0): LocalSeries | null {
+  let N = Math.min(64, Math.max(24, nmax + 16));
+  if (N % 2 === 1) N++;
+  const cos = cosTable(N);
+  const ys = new Float64Array(N);
+  const cheb = new Float64Array(N);
+  let best: LocalSeries | null = null;
+  for (let ri = first; ri < SERIES_RADII.length; ri++) {
+    const r = SERIES_RADII[ri] as number;
+    if (spend && !spend(N)) return null;
+    let defined = true;
+    let scale = 0;
+    for (let j = 0; j < N; j++) {
+      const v = f(a + r * (cos[N + j] as number));
+      if (v !== v || v === Infinity || v === -Infinity) {
+        defined = false;
+        break;
+      }
+      ys[j] = v;
+      if (Math.abs(v) > scale) scale = Math.abs(v);
     }
+    if (!defined) continue;
+    for (let k = 0; k < N; k++) {
+      let sum = 0;
+      for (let j = 0; j < N; j++) sum += (ys[j] as number) * (cos[k * N + j] as number);
+      cheb[k] = (2 * sum) / N;
+    }
+    cheb[0] = (cheb[0] as number) / 2;
+    let tailMax = 0;
+    for (let k = N - 4; k < N; k++) tailMax = Math.max(tailMax, Math.abs(cheb[k] as number));
+    const tail = scale > 0 ? tailMax / scale : tailMax;
+    if (best !== null && tail >= best.tail && tail > 1e-13) continue;
+    // power coefficients in t = (x - a) / r, truncated at degree nmax
+    const m = nmax + 1;
+    const pw = new Float64Array(m);
+    let t0 = new Float64Array(m);
+    let t1 = new Float64Array(m);
+    t0[0] = 1;
+    if (m > 1) t1[1] = 1;
+    pw[0] = cheb[0] as number;
+    if (m > 1) pw[1] = cheb[1] as number;
+    for (let k = 2; k < N; k++) {
+      const t2 = new Float64Array(m);
+      for (let d = 0; d < m; d++) t2[d] = (d > 0 ? 2 * (t1[d - 1] as number) : 0) - (t0[d] as number);
+      const ck = cheb[k] as number;
+      for (let d = 0; d < m; d++) pw[d] = (pw[d] as number) + ck * (t2[d] as number);
+      t0 = t1;
+      t1 = t2;
+    }
+    const out = new Float64Array(m);
+    for (let k = 0; k < m; k++) out[k] = (pw[k] as number) / Math.pow(r, k);
+    const cand: LocalSeries = { coeffs: out, radius: r, tail };
+    if (tail <= 1e-13) return cand;
+    best = cand;
   }
-  const c = leastSquares(vam, ys, m, n + 1, tol);
-  if (!c) return null;
-  let worst = 0;
-  for (let i = 0; i < m; i++) {
-    const t = ((nodes[i] as number) - a) / r;
-    const rsd = Math.abs((ys[i] as number) - polyEval(c, t));
-    if (rsd > worst) worst = rsd;
-  }
-  if (worst > Math.sqrt(tol) * Math.max(1, scale)) return null;
-  const out = new Float64Array(n + 1);
-  for (let k = 0; k <= n; k++) out[k] = (c[k] as number) / Math.pow(r, k);
-  return { coeffs: out, residual: worst };
+  return best !== null && best.tail <= 1e-8 ? best : null;
+}
+
+/** The n-th derivative of `f` at `x` from a local interpolant; NaN when `f` is too rough or undefined near `x`. */
+export function derivativeAt(f: Fn1, x: number, n: number, spend?: (n: number) => boolean): number {
+  const s = localSeries(f, x, n, spend, 1);
+  if (!s) return Number.NaN;
+  let fact = 1;
+  for (let k = 2; k <= n; k++) fact *= k;
+  return fact * (s.coeffs[n] as number);
+}
+
+/** Taylor coefficients `c[k] = f^(k)(a)/k!` (see `localSeries`). Null when no interval converges. */
+export function taylorCoeffs(f: Fn1, a: number, n: number, _tol: number, work: RuleWork): { readonly coeffs: Float64Array; readonly residual: number } | null {
+  const s = localSeries(f, a, n, (c) => work.spend(c));
+  return s ? { coeffs: s.coeffs, residual: s.tail } : null;
 }
 
 /**
