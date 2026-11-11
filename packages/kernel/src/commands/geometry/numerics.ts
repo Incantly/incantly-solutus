@@ -127,14 +127,15 @@ export type QuadRoots =
  * Stable pair form for a*s^2 + 2*b*s + c = 0 (points-lines 4.3).
  * Roots ascend. Near-zero discriminant (relative 64*EPS) counts as tangent.
  */
-export function solveStable(a: number, b: number, c: number): QuadRoots {
+export function solveStable(a: number, b: number, c: number, cScale = 0): QuadRoots {
   if (!(a === a && b === b && c === c)) return { kind: 'none' };
   if (a === 0) {
     if (b === 0) return { kind: 'none' };
     return { kind: 'one', s: -c / (2 * b) };
   }
   const disc = b * b - a * c;
-  const tol = 64 * EPS * (b * b + Math.abs(a * c));
+  // `cScale` is the size of the terms that add up to c: a point that sits on the conic has c near 0 yet carries their rounding error.
+  const tol = 64 * EPS * (b * b + Math.abs(a) * Math.max(Math.abs(c), cScale));
   if (disc < -tol) return { kind: 'none' };
   if (Math.abs(disc) <= tol) return { kind: 'two', s1: -b / a, s2: -b / a, tangent: true };
   const q = -(b + (b >= 0 ? Math.sqrt(disc) : -Math.sqrt(disc)));

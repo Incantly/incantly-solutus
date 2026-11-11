@@ -213,7 +213,11 @@ export function lineConicSlots(
   const alpha = Sxx * d.x * d.x + 2 * Sxy * d.x * d.y + Syy * d.y * d.y;
   const beta = (Sxx * o.x + Sxy * o.y) * d.x + (Sxy * o.x + Syy * o.y) * d.y + lx * d.x + ly * d.y;
   const gamma = conicAt(q, o.x, o.y);
-  const roots = solveStable(alpha, beta, gamma);
+  // The size of the terms of gamma (its rounding error), for the tangency test.
+  const gScale =
+    Math.abs(Sxx) * o.x * o.x + 2 * Math.abs(Sxy) * Math.abs(o.x * o.y) + Math.abs(Syy) * o.y * o.y +
+    Math.abs(q.D * o.x) + Math.abs(q.E * o.y) + Math.abs(q.F);
+  const roots = solveStable(alpha, beta, gamma, gScale);
   const at = (s: number): V2 => ({ x: o.x + s * d.x, y: o.y + s * d.y });
   const polish = (s: number): number => {
     const p = at(s);
@@ -229,7 +233,8 @@ export function lineConicSlots(
     const s = polish(roots.s);
     out = [{ p: at(s) }, { reason: 'no_intersection' }];
   } else {
-    out = [{ p: at(polish(roots.s1)) }, { p: at(polish(roots.s2)) }];
+    // A double root has a zero derivative: a Newton step would divide by rounding noise.
+    out = roots.tangent ? [{ p: at(roots.s1) }, { p: at(roots.s2) }] : [{ p: at(polish(roots.s1)) }, { p: at(polish(roots.s2)) }];
   }
   if (limits) {
     out = out.map((sl) => ('p' in sl ? (withinLimits(limits, sl.p, tol) ? sl : { reason: 'outside_path' as UndefReason }) : sl));
@@ -980,8 +985,10 @@ export function tangentsFromPoint(p: V2, c: ConicValue, tol: number): LineSlot[]
     return [{ l: polarLineOf(polar) }, { reason: 'on_conic' }];
   }
   // Inside test: sign of s equals the sign at the centre (central conics).
+  // A hyperbola has tangents from points on both sides of the curve (and one finite tangent from an asymptote point):
+  // the polar test below decides, as for step 5 of conics 6.2.
   const cp = centralParams(c);
-  if (cp) {
+  if (cp && c.kind !== 'hyperbola') {
     const sc = conicAt(c.q, cp.cx, cp.cy);
     if (s * sc > 0 && Math.abs(sc) > tol * scale) return [{ reason: 'inside' }, { reason: 'inside' }];
   } else if (c.kind === 'parabola' && c.frame && 'vx' in c.frame) {
