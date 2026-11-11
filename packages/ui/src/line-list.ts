@@ -275,7 +275,7 @@ export class LineListElement extends HTMLElement {
     const input = entry.control.input;
     input.setAttribute('aria-label', c.kind === 'slider' ? `${row.name}, slider` : c.kind === 'bool' ? `${row.name}, on or off` : `Value of ${row.name}`);
     input.disabled = row.locked === true;
-    const editing = this.shadowRoot?.activeElement === input;
+    const editing = input.isConnected && this.shadowRoot?.activeElement === input;
     if (c.kind === 'text') {
       if (!editing) input.value = c.text;
     } else if (c.kind === 'bool') {
