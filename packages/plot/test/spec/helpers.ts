@@ -112,7 +112,7 @@ export const expectOk = <T>(r: Result<T>): T => {
   return r.value;
 };
 
-export const expectErr = <T>(r: Result<T>): Extract<Result<T>, { ok: false }> => {
+export const expectErr = (r: Result<unknown>): Extract<Result<unknown>, { ok: false }> => {
   if (r.ok) throw new Error('expected an error but the call passed');
   return r;
 };

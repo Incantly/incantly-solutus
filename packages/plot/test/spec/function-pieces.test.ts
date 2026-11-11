@@ -8,7 +8,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { cacheKey, createSampleCache, plotFunction } from '@incantly/plot';
-import type { DomainSpan, SampleSeed, ViewBox } from '@incantly/plot';
+import type { DomainSpan, SampleSeed } from '@incantly/plot';
 import {
   TIMEOUT,
   VIEW,
@@ -268,12 +268,12 @@ describe('FC9 cache and incremental update: pans reuse samples, versions discard
   }, TIMEOUT);
 
   it.each([
-    ['version', [8, -5, 5, 800] as const],
-    ['x0', [7, -4, 5, 800] as const],
-    ['x1', [7, -5, 6, 800] as const],
-    ['widthPx', [7, -5, 5, 801] as const],
-  ])('FC9§2: cacheKey changes when %s changes', (_label, args) => {
-    expect(cacheKey(...args)).not.toBe(cacheKey(7, -5, 5, 800));
+    ['version', 8, -5, 5, 800],
+    ['x0', 7, -4, 5, 800],
+    ['x1', 7, -5, 6, 800],
+    ['widthPx', 7, -5, 5, 801],
+  ] as [string, number, number, number, number][])('FC9§2: cacheKey changes when %s changes', (_label, v, a, b, w) => {
+    expect(cacheKey(v, a, b, w)).not.toBe(cacheKey(7, -5, 5, 800));
   }, TIMEOUT);
 
   it('FC9 cache: overlapping samples come back as a seed for a pan', () => {

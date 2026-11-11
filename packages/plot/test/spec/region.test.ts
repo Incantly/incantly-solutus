@@ -11,7 +11,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { fillPredicate1D, fillRegion, predicateFromRelation } from '@incantly/plot';
-import type { BoundaryInput, FieldEnclosure, PredicateEnclosure, PredicateInput } from '@incantly/plot';
+import type { FieldEnclosure, PredicateEnclosure, PredicateInput } from '@incantly/plot';
 import {
   HEAVY_TIMEOUT,
   TIMEOUT,
