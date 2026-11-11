@@ -432,7 +432,8 @@ export function add(...terms: SymNode[]): SymNode {
       continue;
     }
     // `inf - inf` is indeterminate: opposite-sign infinities are kept apart, never cancelled.
-    const key = rest.k === 'const' && rest.name === 'inf' && isNegativeNumber(coeff) ? -rest.id : rest.id;
+    const infinite = (rest.k === 'const' && rest.name === 'inf') || (rest.k === 'pow' && isZeroNode(rest.base) && isNegativeNumber(rest.exp));
+    const key = infinite && isNegativeNumber(coeff) ? -rest.id : rest.id;
     const hit = byRest.get(key);
     if (hit === undefined) {
       byRest.set(key, { rest, coeff });

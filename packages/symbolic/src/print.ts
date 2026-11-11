@@ -190,9 +190,10 @@ function textOf(n: SymNode, o: TextOptions, parentPrec: number): string {
       const numStr = nums.length === 0 ? '1' : nums.map((f) => textOf(f, o, PREC_MUL)).join(' * ');
       if (den.length === 0) return wrap(`${sign}${numStr}`, sign === '' ? PREC_MUL : PREC_UNARY);
       // A plain whole-number denominator (a rational coefficient) prints tight: `pi/6`.
+      // A single plain token as the denominator (a number, a symbol, a constant) prints tight too.
       const only = den.length === 1 ? (den[0] as SymNode) : null;
-      if (only !== null && only.k === 'int' && nums.length > 0) {
-        return wrap(`${sign}${numStr}/${only.v.toString()}`, sign === '' ? PREC_MUL : PREC_UNARY);
+      if (only !== null && nums.length > 0 && ((only.k === 'int' && only.v > 0n) || only.k === 'sym' || only.k === 'const')) {
+        return wrap(`${sign}${numStr}/${textOf(only, o, PREC_ATOM)}`, sign === '' ? PREC_MUL : PREC_UNARY);
       }
       const denStr = den.map((f) => textOf(f, o, PREC_MUL + 1)).join(' * ');
       const dd = den.length > 1 ? `(${denStr})` : denStr;

@@ -25,8 +25,8 @@ import {
 } from './num';
 import type { Ticker } from './poly';
 import {
-  treeToUPoly, treeToUPolySym, upolyDivMod,
-  upolyGcd, upolyIsZero, upolyMul, upolyToTree,
+  refineRootRational, treeToUPoly, treeToUPolySym, upolyDivMod,
+  upolyGcd, upolyIsolate, upolyIsZero, upolyMul, upolyToTree,
 } from './poly';
 import { parseExprOrCond, ParseFailure } from './parse';
 import { condText, toText } from './print';
@@ -585,6 +585,8 @@ function opSimplify(args: readonly SymArg[], _named: ReadonlyMap<string, SymArg>
   if (a.k === 'cond') return simplifyCond(a.c, a.exact, ctx);
   const e = asExpr(a, 'Simplify');
   checkInputSize(e, ctx, 'Simplify');
+  const bad = undefinedness(e);
+  if (bad !== null) return undefinedOut(bad);
   const { node, excluded } = simplifyNode(e, ruleCtxOf(ctx));
   const notices = excluded.length > 0 ? [noticeOf('excluded_values', `Cancelled a factor; excluded: ${excluded.map((c) => condText(c)).join(', ')}.`, 'info', excluded.map((c) => condText(c)))] : [];
   return okOut(defined(exprArg(node, outExact(args, node), { excluded })), notices);
@@ -622,6 +624,8 @@ function opExpand(args: readonly SymArg[], _named: ReadonlyMap<string, SymArg>, 
   noExtras(args, 2, 'Expand');
   const e = asExpr(need(args, 0, 'Expand'), 'Expand');
   checkInputSize(e, ctx, 'Expand');
+  const bad = undefinedness(e);
+  if (bad !== null) return undefinedOut(bad);
   if (args.length > 1) {
     const v = asSym(args[1] as SymArg, 'Expand');
     const coeffs = treeToUPolySym(e, v, ctx.tick);
@@ -1302,6 +1306,8 @@ function opSubstitute(args: readonly SymArg[], _named: ReadonlyMap<string, SymAr
       return [p.c.l, p.c.r] as const;
     });
     const out = substituteList(e, pairs);
+    const bad = undefinedness(out);
+    if (bad !== null) return undefinedOut(bad);
     return okOut(defined(exprArg(out, outExact(args, out))));
   }
   const nw = need(args, 2, 'Substitute');
@@ -1311,6 +1317,8 @@ function opSubstitute(args: readonly SymArg[], _named: ReadonlyMap<string, SymAr
     throw new OpError('no_matching_form', 'Substitute(e, old, new) needs expressions or symbols.', { recovery: 'choose_form' });
   }
   const out = substituteNode(e, oldNode, newNode);
+  const bad = undefinedness(out);
+  if (bad !== null) return undefinedOut(bad);
   return okOut(defined(exprArg(out, outExact(args, out))));
 }
 
@@ -1331,6 +1339,8 @@ function opNumeric(args: readonly SymArg[], _named: ReadonlyMap<string, SymArg>,
     }
     digits = d;
   }
+  const bad = undefinedness(e);
+  if (bad !== null) return undefinedOut(bad);
   const odd = hasRealOddRoot(e) ? [oddRootNotice()] : [];
   const dec = toDecimal(e, digits, ctx.tick);
   if (dec !== null) return okOut(defined({ k: 'expr', e: dec, exact: false, display: { digits } }), odd);
@@ -1458,6 +1468,15 @@ function decEval(e: SymNode, Dec: typeof Decimal, tick: Ticker): Decimal | null 
       if (e.name === 'pi') return piDec(Dec, tick);
       if (e.name === 'e') return new Dec(1).exp();
       return null;
+    }
+    case 'rootof': {
+      // Refine the isolating interval by exact bisection to the working precision.
+      const ivs = upolyIsolate(e.poly, tick);
+      const iv = ivs[e.index - 1];
+      if (iv === undefined) return null;
+      const bits = Math.ceil((Dec.precision + 6) * 3.33);
+      const r = refineRootRational(e.poly, iv, bits);
+      return new Dec(r.n).div(new Dec(r.d));
     }
     case 'add': {
       let s = new Dec(0);
@@ -1824,6 +1843,14 @@ function opImproper(e: SymNode, v: SymNode, a: number, b: number, ctx: OpCtx, in
     });
   }
   const val = simplifyNode(add(fb, negateNode(fa)), rctx).node;
+  const numeric = freeSymbols(val).size === 0 ? evalAt(val, new Map()) : 0;
+  if (numeric === null || !Number.isFinite(numeric)) {
+    return okOut({
+      defined: false,
+      reason: 'divergent',
+      detail: { code: 'Y204', text: 'The integral does not converge; it grows without bound toward an infinite bound.' },
+    });
+  }
   if (containsInexact(val) && !containsInexact(F)) {
     return okOut(defined(exprArg(val, false)), [noticeOf('numeric_fallback', 'A bound was taken as a limit.', 'info')]);
   }
@@ -1845,7 +1872,19 @@ function opLimit(args: readonly SymArg[], _named: ReadonlyMap<string, SymArg>, c
     return okOut(defined(exprArg(r.node, r.exact && outExact(args, r.node))));
   } catch (err) {
     if (err instanceof NoLimit) {
-      return okOut({ defined: false, reason: 'no_limit', detail: { code: 'Y203', text: err.detail } });
+      const call = `${toText(e)}, ${toText(v)}, ${toText(a)}`;
+      return okOut({
+        defined: false,
+        reason: 'no_limit',
+        detail: {
+          code: 'Y203',
+          text: err.detail,
+          ...(err.left !== undefined && side === 'both'
+            ? { suggest: [`Lr = LimitAbove(${call})`, `Ll = LimitBelow(${call})`] }
+            : {}),
+          stage: 'limit',
+        },
+      });
     }
     throw err;
   }

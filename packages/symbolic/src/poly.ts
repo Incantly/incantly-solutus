@@ -672,6 +672,34 @@ export function refineRootFloat(p: UPoly, iv: RootInterval, digits = 15): number
   return (ratToFloat(lo, den) + ratToFloat(hi, den)) / 2;
 }
 
+/**
+ * The root held by an isolating interval as an exact rational, within `2^-bits` (bisection
+ * on one shared denominator, so the work grows with the digits asked for).
+ */
+export function refineRootRational(p: UPoly, iv: RootInterval, bits: number): { n: bigint; d: bigint } {
+  const signOf = (n: bigint, d: bigint): number => {
+    const v = upolyEvalRat(p, n, d);
+    return v.n === 0n ? 0 : v.n * v.d > 0n ? 1 : -1;
+  };
+  let den = iv.lo.d === iv.hi.d ? iv.lo.d : iv.lo.d * iv.hi.d;
+  let lo = iv.lo.d === iv.hi.d ? iv.lo.n : iv.lo.n * iv.hi.d;
+  let hi = iv.lo.d === iv.hi.d ? iv.hi.n : iv.hi.n * iv.lo.d;
+  const sa = signOf(lo, den);
+  if (sa === 0) return { n: lo, d: den };
+  if (signOf(hi, den) === 0) return { n: hi, d: den };
+  for (let i = 0; i < bits + 4; i++) {
+    const mid = lo + hi;
+    den *= 2n;
+    lo *= 2n;
+    hi *= 2n;
+    const s = signOf(mid, den);
+    if (s === 0) return { n: mid, d: den };
+    if (s === sa) lo = mid;
+    else hi = mid;
+  }
+  return { n: lo + hi, d: den * 2n };
+}
+
 /** `n / d` as a double, also when both are far beyond the double range. */
 export function ratToFloat(n: bigint, d: bigint): number {
   const bits = (x: bigint): number => (x < 0n ? -x : x).toString(2).length;

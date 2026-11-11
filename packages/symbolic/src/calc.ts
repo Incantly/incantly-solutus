@@ -276,6 +276,14 @@ function tryTable(e: SymNode, v: SymNode, ctx: RuleCtx): SymNode | null {
       default: break;
     }
   }
+  if (e.k === 'pow' && asInteger(e.exp) === -2n && e.base.k === 'fn' && e.base.args.length === 1 &&
+    (e.base.name === 'cos' || e.base.name === 'sin')) {
+    // 1/cos(u)^2 = sec^2: tan(u)/a;  1/sin(u)^2 = csc^2: -cos(u)/(a sin(u))
+    const name = e.base.name;
+    return unlinear(e.base.args[0] as SymNode, (w) => (name === 'cos'
+      ? fn('tan', w)
+      : negateNode(divideNodes(fn('cos', w), fn('sin', w)))));
+  }
   if (e.k === 'pow' && asInteger(e.exp) === -1n) {
     const b = e.base;
     if (b.k === 'add') {
@@ -333,7 +341,10 @@ function tryTabular(e: SymNode, v: SymNode, ctx: RuleCtx, depth: number): SymNod
   if (n < 1 || n > 12) return null;
   let deriv: SymNode = mul(...rest);
   let acc: SymNode = ZERO;
-  let g: SymNode = trig;
+  // P*G1 - P'*G2 + P''*G3 - ...: G1 is the first antiderivative of the exp/sin/cos factor.
+  const first = integrateNode(trig, v, ctx, depth + 1);
+  if (first === null) return null;
+  let g: SymNode = first;
   for (let k = 0; k <= n; k++) {
     const term = mul(deriv, g);
     acc = k % 2 === 0 ? add(acc, term) : add(acc, negateNode(term));
@@ -473,9 +484,9 @@ function substitutionCandidates(e: SymNode, v: SymNode): SymNode[] {
   const out: SymNode[] = [];
   const seen = new Set<number>();
   const walk = (t: SymNode): void => {
-    if (seen.has(t.id) || !containsGen(t, v) || t === v || t === e) return;
+    if (seen.has(t.id) || !containsGen(t, v) || t === v) return;
     seen.add(t.id);
-    if (t.k === 'fn' || (t.k === 'pow' && containsGen(t.base, v))) {
+    if (t !== e && (t.k === 'fn' || (t.k === 'pow' && containsGen(t.base, v)))) {
       out.push(t);
     }
     switch (t.k) {
@@ -693,12 +704,30 @@ export function definiteIntegral(
   if (F !== null) {
     const poles = interiorPoles(e, v, lo, hi, ctx);
     if (poles.length === 0) {
-      const val = add(
-        substituteList(F, [[v, numNode(hi)]]),
-        negateNode(substituteList(F, [[v, numNode(lo)]])),
-      );
-      const s = simplifyNode(val, ctx).node;
-      return { node: swap ? negateNode(s) : s, exact: true };
+      // An endpoint where the antiderivative is not finite is an improper integral: the
+      // one-sided limit there decides it, and an infinite one diverges.
+      const endValue = (x: number, side: LimitSide): SymNode | { divergent: true; at: number } | null => {
+        const direct = simplifyNode(substituteList(F, [[v, numNode(x)]]), ctx).node;
+        const dv = freeSymbols(direct).size === 0 ? evalAt(direct, new Map()) : 0;
+        if (dv !== null && Number.isFinite(dv) && !containsInf(direct)) return direct;
+        try {
+          const L = limitNode(F, v, numNode(x), side, ctx);
+          const lv = evalAt(L.node, new Map());
+          if (lv !== null && Number.isFinite(lv) && !containsInf(L.node)) return L.node;
+          return { divergent: true, at: x };
+        } catch (err) {
+          if (err instanceof Unsupported || err instanceof NoLimit) return null;
+          throw err;
+        }
+      };
+      const top = endValue(hi, 'below');
+      const bottom = endValue(lo, 'above');
+      if (top !== null && bottom !== null) {
+        if ('divergent' in top) return top;
+        if ('divergent' in bottom) return bottom;
+        const s = simplifyNode(add(top, negateNode(bottom)), ctx).node;
+        return { node: swap ? negateNode(s) : s, exact: true };
+      }
     }
   }
   const num = quadSplit(e, v, lo, hi, ctx);
@@ -872,6 +901,10 @@ export function limitNode(e: SymNode, v: SymNode, a: SymNode, side: LimitSide, c
   if (isNegativeInf(a)) return limitInfinity(e, v, -1, ctx);
   const av = evalAt(a, new Map());
   if (av === null || !Number.isFinite(av)) throw new Unsupported('the limit point is not a number', 'limit');
+  if (side === 'both' && hasJump(e)) {
+    // abs, sign, floor, ceil, round, min, max and piecewise forms can jump: compare both sides.
+    return limitBothSides(e, v, av, ctx);
+  }
   if (side === 'both') {
     const direct = tryDirect(e, v, av, ctx);
     if (direct !== null) return direct;
@@ -886,6 +919,22 @@ export function limitNode(e: SymNode, v: SymNode, a: SymNode, side: LimitSide, c
   return limitOneSided(e, v, av, side === 'above' ? 1 : -1, ctx);
 }
 
+/** True when the tree holds a function that can jump or has a corner. */
+function hasJump(t: SymNode): boolean {
+  switch (t.k) {
+    case 'fn':
+      if (t.name === 'abs' || t.name === 'sign' || t.name === 'floor' || t.name === 'ceil' || t.name === 'round' ||
+        t.name === 'min' || t.name === 'max') return true;
+      return t.args.some(hasJump);
+    case 'piecewise': return true;
+    case 'add': return t.terms.some(hasJump);
+    case 'mul': return t.factors.some(hasJump);
+    case 'pow': return hasJump(t.base) || hasJump(t.exp);
+    case 'list': return t.items.some(hasJump);
+    default: return false;
+  }
+}
+
 function isNegativeInf(a: SymNode): boolean {
   if (a.k === 'float') return a.v === -Infinity;
   if (a.k === 'mul' && a.factors.length === 2) {
@@ -897,7 +946,7 @@ function isNegativeInf(a: SymNode): boolean {
 }
 
 /** Dominant terms at ±infinity for rational functions, else `v = ±1/u`. */
-function limitInfinity(e: SymNode, v: SymNode, sign: 1 | -1, ctx: RuleCtx): LimitResult {
+function limitInfinity(e: SymNode, v: SymNode, sign: 1 | -1, ctx: RuleCtx, depth = 0): LimitResult {
   const p = treeToUPoly(e, v, ctx.tick);
   if (p !== null) {
     const d = upolyDegree(p);
@@ -923,9 +972,100 @@ function limitInfinity(e: SymNode, v: SymNode, sign: 1 | -1, ctx: RuleCtx): Limi
       return { node: s > 0 ? constN('inf') : negateNode(constN('inf')), exact: true };
     }
   }
+  const lh = tryLHopitalInfinity(e, v, sign, ctx, depth);
+  if (lh !== null) return lh;
   const u = symN('u__lim');
   const sub = substituteList(e, [[v, divideNodes(intN(sign), u)]]);
-  return limitOneSided(sub, u, 0, 1, ctx);
+  try {
+    return limitOneSided(sub, u, 0, 1, ctx);
+  } catch (err) {
+    if (err instanceof Unsupported && looksOscillatingAtInfinity(e, v, sign)) {
+      throw new NoLimit('The function oscillates and has no limit.');
+    }
+    throw err;
+  }
+}
+
+/**
+ * Numerator and denominator of a product, also reading `b^(-k x)` as `1 / b^(k x)` so that
+ * `x^2 * exp(-x)` is the quotient `x^2 / exp(x)`.
+ */
+function splitQuotient(t: SymNode): { num: SymNode; den: SymNode | null } {
+  const flat = splitNumDenFlat(t);
+  const factors = flat.num.k === 'mul' ? [...flat.num.factors] : [flat.num];
+  const num: SymNode[] = [];
+  const den: SymNode[] = flat.den === null ? [] : [flat.den];
+  for (const f of factors) {
+    if (f.k === 'pow' && f.exp.k === 'mul') {
+      const lead = f.exp.factors[0];
+      if (lead !== undefined && ((lead.k === 'int' && lead.v < 0n) || (lead.k === 'rat' && lead.n < 0n))) {
+        den.push(pow(f.base, negateNode(f.exp)));
+        continue;
+      }
+    }
+    num.push(f);
+  }
+  if (den.length === 0) return { num: t, den: null };
+  return { num: num.length === 0 ? ONE : mul(...num), den: mul(...den) };
+}
+
+/** `inf/inf` and `0/0` at infinity by L'Hopital on the original variable. */
+function tryLHopitalInfinity(e: SymNode, v: SymNode, sign: 1 | -1, ctx: RuleCtx, depth: number): LimitResult | null {
+  if (depth > 6) return null;
+  let tg: SymNode;
+  try {
+    tg = togetherNode(e, ctx).node;
+  } catch {
+    return null;
+  }
+  const { num, den } = splitQuotient(tg);
+  if (den === null) return null;
+  const at = constN('inf');
+  const point = sign > 0 ? at : mul(negateNode(ONE), at);
+  const valueAt = (t: SymNode): number | null => {
+    const folded = foldExtended(substituteList(t, [[v, point]]));
+    if (folded === null) return null;
+    if (folded.k === 'const' && folded.name === 'inf') return Infinity;
+    if (isNegativeInf(folded)) return -Infinity;
+    const x = evalAt(folded, new Map());
+    return x === null || Number.isNaN(x) ? null : x;
+  };
+  const nv = valueAt(num);
+  const dv = valueAt(den);
+  if (nv === null || dv === null) return null;
+  const infInf = !Number.isFinite(nv) && !Number.isFinite(dv);
+  const zeroZero = Math.abs(nv) < 1e-12 && Math.abs(dv) < 1e-12;
+  if (!infInf && !zeroZero) return null;
+  try {
+    const dn = diffNode(num, v, ctx);
+    const dd = diffNode(den, v, ctx);
+    if (isZeroNode(dd)) return null;
+    return limitInfinity(divideNodes(dn, dd), v, sign, ctx, depth + 1);
+  } catch (err) {
+    if (err instanceof Unsupported) return null;
+    throw err;
+  }
+}
+
+/** Sampled far out, the values keep swinging instead of settling. */
+function looksOscillatingAtInfinity(e: SymNode, v: SymNode, sign: 1 | -1): boolean {
+  const ys: number[] = [];
+  for (let j = 0; j < 80; j++) {
+    const x = sign * (1000 + j * 0.37);
+    const y = evalAt(e, new Map([[varName(v), x]]));
+    if (y !== null && Number.isFinite(y)) ys.push(y);
+  }
+  if (ys.length < 40) return false;
+  const min = Math.min(...ys);
+  const max = Math.max(...ys);
+  if (max - min < 0.2 * Math.max(1, Math.abs(max), Math.abs(min))) return false;
+  let changes = 0;
+  for (let i = 2; i < ys.length; i++) {
+    const d1 = (ys[i - 1] as number) - (ys[i - 2] as number);
+    const d2 = (ys[i] as number) - (ys[i - 1] as number);
+    if (d1 * d2 < 0) changes++;
+  }
+  return changes >= 4;
 }
 
 /** Exact node for a limit point or bound: an integer when whole, else a float. */
@@ -1170,17 +1310,86 @@ function looksOscillating(e: SymNode, v: SymNode, a: number): boolean {
 function limitOneSided(e: SymNode, v: SymNode, a: number, s: 1 | -1, ctx: RuleCtx): LimitResult {
   const u = symN('u__side');
   const sub = substituteList(e, [[v, add(floatN(a), mul(intN(s), u))]]);
-  const decided = simplifyZeroPlus(sub, u, ctx);
-  const direct = tryDirectZeroPlus(decided, u, ctx);
+  const decided = splitRootsZeroPlus(simplifyZeroPlus(sub, u, ctx), u, ctx);
+  const r = zeroPlusCore(decided, u, ctx, 0);
+  if (r !== null) return r;
+  throw new Unsupported('this one-sided limit', 'limit');
+}
+
+/** The routes for `u → 0+`, in order: substitute, powers, cancel, standard, L'Hopital. */
+function zeroPlusCore(e: SymNode, u: SymNode, ctx: RuleCtx, depth: number): LimitResult | null {
+  if (depth > 6) return null;
+  // Powers first: substituting u = 0 into 1^(1/u) would fold it to 1 before it is seen.
+  const viaPow = tryPowIndeterminateZeroPlus(e, u, ctx, depth);
+  if (viaPow !== null) return viaPow;
+  const direct = tryDirectZeroPlus(e, u, ctx);
   if (direct !== null) return direct;
-  const tg = togetherNode(decided, ctx);
+  const tg = togetherNode(e, ctx);
   const d2 = tryDirectZeroPlus(tg.node, u, ctx);
   if (d2 !== null) return d2;
   const std = tryStandardZeroPlus(tg.node, u, ctx);
   if (std !== null) return std;
-  const lhop = tryLHopitalZeroPlus(tg.node, u, ctx, 0);
-  if (lhop !== null) return lhop;
-  throw new Unsupported('this one-sided limit', 'limit');
+  return tryLHopitalZeroPlus(tg.node, u, ctx, depth);
+}
+
+/** Value of `t` as `u → 0+` when it is a number or +-inf, else null. */
+function zeroPlusValue(t: SymNode, u: SymNode, ctx: RuleCtx): number | null {
+  void ctx;
+  const sub = substituteList(t, [[u, ZERO]]);
+  if (freeSymbols(sub).size > 0) return null;
+  const folded = foldExtended(sub);
+  if (folded === null) return null;
+  if (folded.k === 'const' && folded.name === 'inf') return Infinity;
+  if (isNegativeInf(folded)) return -Infinity;
+  const val = evalAt(folded, new Map());
+  return val === null || Number.isNaN(val) ? null : val;
+}
+
+/**
+ * Near `u = 0+` every factor that is a power of `u` is positive, so a root of a product
+ * splits: `sqrt((1 + u)/u^2)` is `sqrt(1 + u)/u`.
+ */
+function splitRootsZeroPlus(e: SymNode, u: SymNode, ctx: RuleCtx): SymNode {
+  return mapNodes(e, (x) => {
+    if (x.k !== 'pow') return x;
+    const r = asRational(x.exp);
+    if (r === null || r.d === 1n || !containsGen(x.base, u)) return x;
+    let base = x.base;
+    if (base.k !== 'mul') {
+      try {
+        base = togetherNode(base, ctx).node;
+      } catch {
+        return x;
+      }
+    }
+    if (base.k !== 'mul') return x;
+    const parts: SymNode[] = [];
+    for (const f of base.factors) {
+      if (f === u) parts.push(pow(u, x.exp));
+      else if (f.k === 'pow' && f.base === u && f.exp.k === 'int') parts.push(pow(u, mul(f.exp, x.exp)));
+      else if (!containsGen(f, u) || (subZero(f, u, ctx) ?? 0) > 0) parts.push(pow(f, x.exp));
+      else return x;
+    }
+    return mul(...parts);
+  });
+}
+
+/** `1^inf`, `0^0` and `inf^0` through `exp(exponent * ln(base))`. */
+function tryPowIndeterminateZeroPlus(e: SymNode, u: SymNode, ctx: RuleCtx, depth: number): LimitResult | null {
+  if (e.k !== 'pow' || !containsGen(e.exp, u)) return null;
+  const b0 = zeroPlusValue(e.base, u, ctx);
+  const x0 = zeroPlusValue(e.exp, u, ctx);
+  if (b0 === null || x0 === null) return null;
+  const one = Math.abs(b0 - 1) < 1e-12 && !Number.isFinite(x0);
+  const zeroZero = Math.abs(b0) < 1e-12 && Math.abs(x0) < 1e-12;
+  const infZero = !Number.isFinite(b0) && Math.abs(x0) < 1e-12;
+  if (!one && !zeroZero && !infZero) return null;
+  const expo = mul(e.exp, fn('ln', e.base));
+  const inner = zeroPlusCore(expo, u, ctx, depth + 1);
+  if (inner === null) return null;
+  const folded = foldExtended(pow(constN('e'), inner.node));
+  if (folded !== null && (isNumberNode(folded) || folded.k === 'const')) return { node: floatClean(folded), exact: inner.exact };
+  return { node: pow(constN('e'), inner.node), exact: inner.exact };
 }
 
 /** Rewrite `abs`/`sign`/`floor`/`ceil`/`piecewise` using `u > 0` infinitesimal. */
@@ -1330,7 +1539,8 @@ function approachSign(d: SymNode, u: SymNode, ctx: RuleCtx): number | null {
 
 /** Direct substitution `u = 0` with extended-real arithmetic. */
 function tryDirectZeroPlus(e: SymNode, u: SymNode, ctx: RuleCtx): LimitResult | null {
-  const sub = simplifyNode(substituteList(e, [[u, ZERO]]), ctx).node;
+  void ctx;
+  const sub = substituteList(e, [[u, ZERO]]);
   if (freeSymbols(sub).size > 0) return null;
   const folded = foldExtended(sub);
   if (folded === null) return null;
@@ -1346,10 +1556,19 @@ function tryDirectZeroPlus(e: SymNode, u: SymNode, ctx: RuleCtx): LimitResult | 
 /** Fold `inf` arithmetic; null on indeterminate forms. */
 function foldExtended(t: SymNode): SymNode | null {
   const INF = constN('inf');
+  const NEG_INF = mul(negateNode(ONE), INF);
   const isInf = (x: SymNode): boolean => x.k === 'const' && x.name === 'inf';
   const isNegInf = (x: SymNode): boolean =>
     x.k === 'mul' && x.factors.length === 2 && x.factors[0] === negateNode(ONE) && x.factors[1] === INF;
+  const numVal = (x: SymNode): number | null => (isNumberNode(x) ? evalAt(x, new Map()) : null);
+  const fromFloat = (v: number): SymNode | null => {
+    if (Number.isFinite(v)) return floatN(v);
+    if (v === Infinity) return INF;
+    if (v === -Infinity) return NEG_INF;
+    return null;
+  };
   if (isInf(t) || isNegInf(t) || isNumberNode(t)) return t;
+  if (t.k === 'const' && (t.name === 'e' || t.name === 'pi')) return t;
   if (t.k === 'add') {
     let hasInf = false;
     let hasNegInf = false;
@@ -1363,12 +1582,14 @@ function foldExtended(t: SymNode): SymNode | null {
     }
     if (hasInf && hasNegInf) return null;
     if (hasInf) return INF;
-    if (hasNegInf) return mul(negateNode(ONE), INF);
+    if (hasNegInf) return NEG_INF;
     return sum;
   }
   if (t.k === 'mul') {
+    // Fold every factor first: a zero next to an infinite factor is indeterminate whatever the order.
     let sign = 1;
     let hasInf = false;
+    let hasZero = false;
     let prod: SymNode = ONE;
     for (const f of t.factors) {
       const folded = foldExtended(f);
@@ -1380,27 +1601,36 @@ function foldExtended(t: SymNode): SymNode | null {
       } else {
         const val = evalAt(folded, new Map());
         if (val === null) return null;
-        if (val === 0) {
-          if (hasInf) return null;
-          return ZERO;
-        }
-        if (val < 0) sign = -sign;
+        if (val === 0) hasZero = true;
+        else if (val < 0) sign = -sign;
         prod = mul(prod, folded);
       }
     }
-    if (hasInf) return sign > 0 ? INF : mul(negateNode(ONE), INF);
+    if (hasZero && hasInf) return null;
+    if (hasZero) return ZERO;
+    if (hasInf) return sign > 0 ? INF : NEG_INF;
     return prod;
   }
   if (t.k === 'pow') {
     const b = foldExtended(t.base);
     const ex = foldExtended(t.exp);
     if (b === null || ex === null) return null;
-    if (isNumberNode(b) && isNumberNode(ex)) {
-      const val = Math.pow(evalAt(b, new Map()) as number, evalAt(ex, new Map()) as number);
-      if (Number.isFinite(val)) return floatN(val);
-      if (val === Infinity) return INF;
-      if (val === -Infinity) return mul(negateNode(ONE), INF);
+    const bv = b.k === 'const' && b.name === 'e' ? Math.E : b.k === 'const' && b.name === 'pi' ? Math.PI : numVal(b);
+    const ev = numVal(ex);
+    if (bv !== null && ev !== null) {
+      const val = Math.pow(bv, ev);
+      return Number.isNaN(val) ? null : fromFloat(val);
+    }
+    if (isInf(b) && ev !== null) {
+      if (ev > 0) return INF;
+      if (ev < 0) return ZERO;
       return null;
+    }
+    if (bv !== null && (isInf(ex) || isNegInf(ex))) {
+      const up = isInf(ex);
+      if (bv === 1 || bv < 0) return null;
+      if (bv === 0) return up ? ZERO : INF;
+      return (bv > 1) === up ? INF : ZERO;
     }
     return t;
   }
@@ -1414,16 +1644,27 @@ function foldExtended(t: SymNode): SymNode | null {
     if (args.every(isNumberNode)) {
       const vals = args.map((a) => evalAt(a, new Map()) as number);
       const v = evalFnLimit(t.name, vals);
-      if (v === null) return null;
-      if (Number.isFinite(v)) return floatN(v);
-      if (v === Infinity) return INF;
-      if (v === -Infinity) return mul(negateNode(ONE), INF);
-      return null;
+      return v === null ? null : fromFloat(v);
+    }
+    const a0 = args[0];
+    if (args.length === 1 && a0 !== undefined && (isInf(a0) || isNegInf(a0))) {
+      const up = isInf(a0);
+      switch (t.name) {
+        case 'exp': return up ? INF : ZERO;
+        case 'ln': case 'log10': case 'log2': case 'sqrt': return up ? INF : null;
+        case 'abs': case 'cosh': return INF;
+        case 'sinh': return up ? INF : NEG_INF;
+        case 'atan': return up ? mul(HALF_PI_COEFF, constN('pi')) : mul(negateNode(HALF_PI_COEFF), constN('pi'));
+        case 'tanh': return up ? ONE : negateNode(ONE);
+        default: return null;
+      }
     }
     return t;
   }
   return t;
 }
+
+const HALF_PI_COEFF = ratN(1n, 2n);
 
 function evalFnLimit(name: SymFn, args: readonly number[]): number | null {
   const a = args[0] as number;
@@ -1445,12 +1686,24 @@ function tryStandardZeroPlus(e: SymNode, u: SymNode, ctx: RuleCtx): LimitResult 
 
 function tryLHopitalZeroPlus(e: SymNode, u: SymNode, ctx: RuleCtx, depth: number): LimitResult | null {
   if (depth > 6) return null;
-  const { num, den } = splitNumDenFlat(e);
-  if (den === null) return null;
-  const nv = subZero(num, u, ctx);
-  const dv = subZero(den, u, ctx);
+  let { num, den } = splitNumDenFlat(e);
+  if (den === null) {
+    // 0 * inf becomes inf / (1/zero).
+    if (e.k !== 'mul') return null;
+    const vals = e.factors.map((f) => zeroPlusValue(f, u, ctx));
+    const zi = vals.findIndex((x) => x !== null && Math.abs(x) < 1e-12);
+    const ii = vals.findIndex((x) => x !== null && !Number.isFinite(x));
+    if (zi < 0 || ii < 0) return null;
+    const rest = e.factors.filter((_f, i) => i !== zi && i !== ii);
+    num = mul(e.factors[ii] as SymNode, ...rest);
+    den = pow(e.factors[zi] as SymNode, intN(-1));
+  }
+  const nv = zeroPlusValue(num, u, ctx);
+  const dv = zeroPlusValue(den, u, ctx);
   if (nv === null || dv === null) return null;
-  if (!(Math.abs(nv) < 1e-12 && Math.abs(dv) < 1e-12)) return null;
+  const zeroZero = Math.abs(nv) < 1e-12 && Math.abs(dv) < 1e-12;
+  const infInf = !Number.isFinite(nv) && !Number.isFinite(dv);
+  if (!zeroZero && !infInf) return null;
   let dn: SymNode;
   let dd: SymNode;
   try {
@@ -1459,8 +1712,12 @@ function tryLHopitalZeroPlus(e: SymNode, u: SymNode, ctx: RuleCtx, depth: number
   } catch {
     return null;
   }
-  const next = divideNodes(dn, dd);
-  const direct = tryDirectZeroPlus(next, u, ctx);
-  if (direct !== null) return direct;
-  return tryLHopitalZeroPlus(next, u, ctx, depth + 1);
+  if (isZeroNode(dd)) return null;
+  let next = divideNodes(dn, dd);
+  try {
+    next = togetherNode(next, ctx).node;
+  } catch {
+    void 0;
+  }
+  return zeroPlusCore(next, u, ctx, depth + 1);
 }

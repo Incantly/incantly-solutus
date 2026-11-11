@@ -350,7 +350,44 @@ const rootsRationalize: Rule = {
   },
 };
 
-const SIMPLIFY_RULES: readonly Rule[] = [powPower, rootsSquare, rootsPull, rootsRationalize, logRules, logExpPow, absRules, complexPow, trigPythagoras, trigDouble];
+/** Positive whole number to a fractional power: pull out whole parts, `4^(3/2) → 8`, `2^(3/2) → 2 sqrt(2)`. */
+const rootsExact: Rule = {
+  id: 'roots.exact',
+  on: 'pow',
+  teaching: true,
+  apply(n) {
+    const pe = asBaseExpPow(n);
+    if (pe === null) return null;
+    const er = asRational(pe.exp);
+    if (er === null || er.d === 1n || er.n <= 0n) return null;
+    if (er.n === 1n && er.d === 2n) return null; // sqrt: roots.pull
+    if (pe.base.k !== 'int' || pe.base.v < 2n) return null;
+    let rest = pe.base.v;
+    const parts: { p: bigint; e: bigint }[] = [];
+    for (let f = 2n; f * f <= rest && f < 100000n; f += f === 2n ? 1n : 2n) {
+      let count = 0n;
+      while (rest % f === 0n) {
+        rest /= f;
+        count++;
+      }
+      if (count > 0n) parts.push({ p: f, e: count });
+    }
+    if (rest > 1n) parts.push({ p: rest, e: 1n });
+    let outside = 1n;
+    let inside = 1n;
+    for (const { p, e } of parts) {
+      const t = e * er.n;
+      const whole = t / er.d;
+      const rem = t % er.d;
+      outside *= p ** whole;
+      inside *= p ** rem;
+    }
+    if (outside === 1n) return null;
+    return inside === 1n ? intN(outside) : mul(intN(outside), pow(intN(inside), ratN(1n, er.d)));
+  },
+};
+
+const SIMPLIFY_RULES: readonly Rule[] = [powPower, rootsSquare, rootsPull, rootsRationalize, rootsExact, logRules, logExpPow, absRules, complexPow, trigPythagoras, trigDouble];
 
 /* ---------------------------------- expand ----------------------------------- */
 
