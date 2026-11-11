@@ -7,7 +7,7 @@
  * error returns the hard-coded `internal` object of errors.md section 6.
  */
 import type { ErrorKind, ErrorObject, Params, Phase, Recovery, Span } from '../contracts/errors';
-import { ERROR_KINDS, MESSAGE_TEMPLATES, buildError, render } from '../language/errors';
+import { ERROR_KINDS, MESSAGE_TEMPLATES, buildError, messageKeyFor, render } from '../language/errors';
 import type { ErrorExtra } from '../language/errors';
 
 export interface ErrorSpec {
@@ -42,7 +42,7 @@ const META: Record<ErrorKind, Meta> = {
   bad_directive: { key: 'lang.bad_directive', params: ['directive', 'need'], forms: true, description: 'A directive with the wrong arguments.' },
   unknown_name: { key: 'lang.unknown_name', params: ['name'], description: 'A name that does not exist.' },
   unknown_command: { key: 'lang.unknown_command', params: ['name'], description: 'A capitalised word that is not a command.' },
-  unknown_property: { key: 'lang.unknown_property', params: ['key'], description: 'A `with` key the object type does not have.' },
+  unknown_property: { key: 'lang.unknown_property', params: ['type', 'key'], description: 'A `with` key the object type does not have.' },
   reserved_name: { key: 'lang.reserved_name', params: ['name', 'group'], description: 'A command, function, constant or keyword used as an object name.' },
   bad_name: { key: 'lang.bad_name', params: ['name', 'why'], description: 'A name with invalid characters, a leading digit, or a bad length.' },
   name_taken: { key: 'lang.name_taken', params: ['name', 'type'], description: 'A rename to a name another object holds.' },
@@ -53,7 +53,7 @@ const META: Record<ErrorKind, Meta> = {
   arg_count: { key: 'lang.arg_count', params: ['name', 'n', 'm'], forms: true, description: 'A function or single-form command called with the wrong number of arguments.' },
   type_mismatch: { key: 'lang.type_mismatch', params: ['op', 'left', 'right'], description: 'An operator applied to types it does not accept.' },
   type_change: { key: 'lang.type_change', params: ['name', 'from', 'to'], description: 'A redefinition that would change the type of an object.' },
-  bad_property_value: { key: 'lang.bad_property_value', params: ['key', 'allowed'], description: 'A property value of the wrong type or outside its range.' },
+  bad_property_value: { key: 'lang.bad_property_value', params: ['key', 'allowed', 'token'], description: 'A property value of the wrong type or outside its range.' },
   bad_range: { key: 'lang.bad_range', params: ['why'], description: 'A slider range that is empty or has a bad step.' },
   bad_argument: { key: 'lang.bad_argument', params: ['command', 'why'], description: 'A well-typed argument with a value known to be impossible at plan time.' },
   cycle: { key: 'lang.cycle', params: ['name', 'path'], description: 'A redefinition that would make an object depend on itself.' },
@@ -65,8 +65,8 @@ const META: Record<ErrorKind, Meta> = {
   limit: { key: 'lang.limit', params: ['max', 'what'], description: 'A size budget exceeded.' },
   load_failed: { key: 'kernel.load_failed', params: ['n'], description: 'A strict load found a failing line, or the file is unreadable.' },
   version: { key: 'kernel.version', params: ['v', 'list'], description: 'A file newer than the loader supports.' },
-  tool_input: { key: 'kernel.tool_input', params: ['tool', 'expected'], forms: true, description: 'A tool called with a malformed or empty request.' },
-  tool_busy: { key: 'kernel.tool_busy', params: [], description: 'A tool call that arrived while the previous one still runs on the same figure.' },
+  tool_input: { key: 'tool.input', params: ['tool', 'expected'], forms: true, description: 'A tool called with a malformed or empty request.' },
+  tool_busy: { key: 'tool.busy', params: [], description: 'A tool call that arrived while the previous one still runs on the same figure.' },
   internal: { key: 'lang.internal', params: ['where'], description: 'A bug: an exception inside a rule, tool or listener.' },
   bad_escape: { key: 'lang.bad_escape', params: ['ch'], description: 'An escape the text syntax does not have.' },
   bad_format: { key: 'lang.bad_format', params: ['fmt'], description: 'A text format the language does not have.' },
@@ -90,9 +90,10 @@ function buildTable(): Record<ErrorKind, ErrorSpec> {
     out[kind] = {
       kind,
       code: base?.code ?? 'K999',
-      phase: base?.phase ?? 'commit',
+      // bracket counting happens while lexing (errors.md 2 and example 5.2)
+      phase: kind === 'unbalanced' ? 'lex' : (base?.phase ?? 'commit'),
       recovery: base?.recovery ?? 'skip',
-      messageKey: m.key,
+      messageKey: messageKeyFor(kind, m.key),
       params: m.params,
       forms: m.forms === true,
       description: m.description,
@@ -178,6 +179,8 @@ export function err(kind: ErrorKind, at: Span, params: Params = {}, extra: ErrAr
       ...(extra.path ? { path: extra.path } : {}),
       ...(extra.blockedBy ? { blockedBy: extra.blockedBy } : {}),
       ...(extra.cause ? { cause: extra.cause } : {}),
+      uncapped: true,
+      phase: spec.phase,
       ...(extra.fingerprintKey !== undefined ? { fingerprintKey: extra.fingerprintKey } : {}),
     };
     const key = extra.messageKey ?? spec.messageKey;

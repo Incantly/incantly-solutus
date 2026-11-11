@@ -321,9 +321,10 @@ function hexWord(w: string): boolean {
   return /^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(w);
 }
 
-function checkStyle(c: Checker, items: readonly StyleItem[]): CheckedStyle[] {
+function checkStyle(c: Checker, items: readonly StyleItem[], ty?: Ty): CheckedStyle[] {
   const out: CheckedStyle[] = [];
-  const keys = Object.keys(PROPERTIES);
+  const perType = ty !== undefined && c.opts.propertyKeys !== undefined ? c.opts.propertyKeys(ty.k) : undefined;
+  const keys = perType ?? Object.keys(PROPERTIES);
   for (const it of items) {
     // each property rule keeps its own reads (kernel design 9.2: a property rule is an edge from its inputs), so a
     // later rule for the same property can drop exactly the edges of the rule it replaces
@@ -331,7 +332,7 @@ function checkStyle(c: Checker, items: readonly StyleItem[]): CheckedStyle[] {
     c.reads = new Set<ObjId>();
     const from = out.length;
     try {
-      checkStyleItem(c, it, keys, out);
+      checkStyleItem(c, it, keys, out, ty, perType !== undefined);
       const reads = [...c.reads];
       for (let i = from; i < out.length; i++) out[i] = { ...(out[i] as CheckedStyle), reads };
     } finally {
@@ -342,12 +343,13 @@ function checkStyle(c: Checker, items: readonly StyleItem[]): CheckedStyle[] {
   return out;
 }
 
-function checkStyleItem(c: Checker, it: StyleItem, keys: readonly string[], out: CheckedStyle[]): void {
+function checkStyleItem(c: Checker, it: StyleItem, keys: readonly string[], out: CheckedStyle[], ty: Ty | undefined, perType: boolean): void {
   const spec = own(PROPERTIES, it.key);
-  if (!spec) {
+  if (!spec || (perType && !keys.includes(it.key))) {
     const close = closestNames(it.key, keys, 3);
-    c.err('unknown_property', it.ks, it.ke, 'lang.unknown_property', { key: it.key }, {
+    c.err('unknown_property', it.ks, it.ke, 'lang.unknown_property', { type: ty?.k ?? 'An object', key: it.key }, {
       expected: keys,
+      ...(perType ? { uncapped: true } : {}),
       hint: close.length > 0 ? `Did you mean ${close.join(' or ')}? Properties: ${keys.join(', ')}.` : `Properties: ${keys.join(', ')}.`,
       suggest: close.slice(0, 2).map((k) => c.replaceRange(it.ks, it.ke, k)),
       fingerprintKey: it.key,
@@ -359,7 +361,7 @@ function checkStyleItem(c: Checker, it: StyleItem, keys: readonly string[], out:
     const extra: ErrorExtra = { hint: `${it.key} must be ${spec.allowed}.`, fingerprintKey: it.key };
     if (spec.values) extra.expected = spec.values;
     if (suggest !== undefined) extra.suggest = [suggest];
-    c.err('bad_property_value', v.s, v.e, 'lang.bad_property_value', { key: it.key, allowed: spec.allowed }, extra);
+    c.err('bad_property_value', v.s, v.e, 'lang.bad_property_value', { key: it.key, allowed: spec.allowed, token: c.textOf(v) }, extra);
   };
   // a call in a position that takes a plain word still gets checked, so an action there says it is an action
   if ((spec.kind === 'bool' || spec.kind === 'enum') && v.k === 'call' && !c.infer(v)) return;
@@ -481,7 +483,7 @@ function checkDefine(c: Checker, node: Extract<LineNode, { k: 'define' }>): Part
   // Q-R4-1: in the `with` list of a first definition the name being defined is the new object
   const ownTy = tn ? (tn.n === 'relation' ? shapeType(tn.shape) : tn.ty) : undefined;
   const self: ObjectInfo | undefined = ownTy && !existing ? { id: SELF_ID, name: t.name, type: ownTy, free: false, ...(tn?.unit ? { unit: tn.unit } : {}) } : undefined;
-  const style = node.style ? c.apart('style', () => c.withSelf(self, () => checkStyle(c, node.style as readonly StyleItem[]))) : undefined;
+  const style = node.style ? c.apart('style', () => c.withSelf(self, () => checkStyle(c, node.style as readonly StyleItem[], ownTy ?? existing?.type))) : undefined;
   c.styleReads.delete(SELF_ID);
   if (!tn) return undefined;
 
@@ -640,7 +642,7 @@ function checkFunction(c: Checker, node: Extract<LineNode, { k: 'function' }>): 
   const existing = c.fig.lookup(t.name);
   const ownTy = body && ok && (body.ty.k === 'Number' || body.ty.k === 'Point') ? fnOf(body.ty.k, params.length) : undefined;
   const self: ObjectInfo | undefined = ownTy && !existing ? { id: SELF_ID, name: t.name, type: ownTy, free: false } : undefined;
-  const style = node.style ? c.apart('style', () => c.withSelf(self, () => checkStyle(c, node.style as readonly StyleItem[]))) : undefined;
+  const style = node.style ? c.apart('style', () => c.withSelf(self, () => checkStyle(c, node.style as readonly StyleItem[], ownTy ?? existing?.type))) : undefined;
   c.styleReads.delete(SELF_ID);
   if (!body || !ok) return undefined;
   if (body.ty.k !== 'Number' && body.ty.k !== 'Point') {
@@ -728,7 +730,7 @@ function checkRestyle(c: Checker, node: Extract<LineNode, { k: 'restyle' }>): Pa
     c.unknownNameAt(t);
     return undefined;
   }
-  const style = c.apart('style', () => checkStyle(c, node.style));
+  const style = c.apart('style', () => checkStyle(c, node.style, obj.type));
   if (c.errors.length > 0) return undefined;
   return { kind: 'restyle', op: 'restyle', names: [t.name], type: obj.type, free: false, isState: false, existing: obj.id, style };
 }

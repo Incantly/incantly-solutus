@@ -131,7 +131,7 @@ export function registerPropertyTypes(key: string, types: readonly string[] | '*
 
 /** The keys an object of this type accepts in `with`. */
 export function validKeysFor(type: string): string[] {
-  const out = [...EVERY, ...(BY_TYPE[type] ?? [])];
+  const out = ['color', ...(BY_TYPE[type] ?? []), ...EVERY.filter((k) => k !== 'color')];
   for (const [k, types] of extraKeys) if (types === '*' || types.includes(type)) out.push(k);
   // keys an area appended to the language table without saying which types take them are accepted by every type
   for (const k of Object.keys(PROPERTIES)) if (!EVERY.includes(k) && !ALL_CORE.has(k) && !extraKeys.has(k)) out.push(k);
@@ -139,6 +139,8 @@ export function validKeysFor(type: string): string[] {
 }
 
 const ALL_CORE: ReadonlySet<string> = new Set([...EVERY, ...LINEAR, ...FILLED, 'pointSize', 'pointStyle', 'trace']);
+
+// `animate` is a property of every drawable type (ruling K11); the motion area gives its values a meaning
 
 export function isValidKey(type: string, key: string): boolean {
   return validKeysFor(type).includes(key);

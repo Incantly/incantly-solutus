@@ -152,7 +152,7 @@ export class FigureTx extends FigureBase {
     } else parsed = input;
     parsed = this.rewriteRename(parsed);
 
-    const copts = { limits: this.langLimits, ...(opts.failed ? { failed: opts.failed } : {}) };
+    const copts = { limits: this.langLimits, propertyKeys: validKeysFor, ...(opts.failed ? { failed: opts.failed } : {}) };
     let cr = checkLine(parsed, this.view, copts);
     let assign = false;
     if (!cr.ok && cr.kind === 'cycle' && this.isSelfAssignment(parsed, cr)) {
@@ -388,7 +388,7 @@ export class FigureTx extends FigureBase {
       const withRange: LineNode = { ...node, range: old0.p.node.range };
       const again = parseLine(printLineNode(withRange), { line: parsed.line, isTaken: (n) => this.byNameMap.has(n), limits: this.langLimits });
       if (again.ok) {
-        const c2 = checkLine(again.value, this.view, assign ? { skipGraphChecks: true, limits: this.langLimits } : { limits: this.langLimits });
+        const c2 = checkLine(again.value, this.view, assign ? { skipGraphChecks: true, limits: this.langLimits, propertyKeys: validKeysFor } : { limits: this.langLimits, propertyKeys: validKeysFor });
         if (c2.ok) {
           parsed = again.value;
           checked = c2.value;
@@ -450,7 +450,7 @@ export class FigureTx extends FigureBase {
       const range = (node as { range?: unknown }).range ? ` ${printRange((node as Extract<LineNode, { k: 'define' }>).range as never)}` : '';
       const flat = lit !== undefined ? parseLine(`${old.p.name} = ${lit}${range}`, { line: parsed.line }) : undefined;
       if (flat?.ok) {
-        const fc = checkLine(flat.value, this.view, { skipGraphChecks: true });
+        const fc = checkLine(flat.value, this.view, { skipGraphChecks: true, limits: this.langLimits });
         if (fc.ok) {
           const fcomp = compileLine(fc.value, this.compileOptions(old.id));
           if (fcomp.ok) {

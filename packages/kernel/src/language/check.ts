@@ -28,6 +28,8 @@ export interface CheckOptions {
   skipGraphChecks?: boolean;
   /** Host limits (objects, expression nodes, list size); the language's own values apply to what is left out. */
   limits?: LangLimits;
+  /** The `with` keys an object of this type accepts. Without it every key of the property table is accepted for every type. */
+  propertyKeys?: (type: string) => readonly string[];
 }
 
 export interface CheckedRange {

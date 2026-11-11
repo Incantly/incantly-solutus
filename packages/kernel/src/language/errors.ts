@@ -129,7 +129,7 @@ export const MESSAGE_TEMPLATES: Record<string, string> = {
   'lang.duplicate_param': 'The parameter {name} appears twice.',
   'lang.duplicate_arg': 'The argument {name} is given more than once.',
   'lang.not_a_binder': 'This position takes a bare name, not an expression.',
-  'lang.no_matching_form': '{command} has no form for ({given}).',
+  'lang.no_matching_form': '{command} has no form ({given}).',
   'lang.arg_count': '{name} takes {n} argument(s); got {m}.',
   'lang.type_mismatch': 'Cannot {op} a {left} and a {right}.',
   'lang.type_mismatch_unary': 'Cannot apply {op} to a {left}.',
@@ -151,14 +151,40 @@ export const MESSAGE_TEMPLATES: Record<string, string> = {
   'kernel.nothing_to_undo': 'There is nothing to {what}.',
   'kernel.load_failed': 'The file could not be loaded: {n} line(s) failed.',
   'kernel.version': 'This file is version {v}; supported: {list}.',
-  'kernel.tool_input': '{tool} needs {expected}.',
-  'kernel.tool_busy': 'The figure is busy; try again.',
+  'tool.input': '{tool} needs {expected}.',
+  'tool.busy': 'The figure is busy; try again.',
   'kernel.unknown_property': '{type} has no property {key}.',
   'kernel.bad_property_value': '{key} must be {allowed}; got {token}.',
   'kernel.state_owned': '{name} is a state; the solver owns its value.',
   'kernel.bad_value': '{name} holds a {type}; {why}.',
   'kernel.wrong_value': '{name} holds a {type}; {why}.',
 };
+
+/**
+ * The message key of a kind (errors design 3): the area that owns the kind names the key, so `cycle` is `kernel.cycle`,
+ * `type_mismatch` is `cmd.type_mismatch` and `tool_input` is `tool.input`. A key that does not belong to the kind
+ * (`lang.syntax_end` on `syntax`) stays as it is.
+ */
+export function messageKeyFor(kind: string, key: string): string {
+  const code = ERROR_KINDS[kind]?.code;
+  if (code === undefined || !key.startsWith('lang.') || code.startsWith('L')) return key;
+  const name = key.slice(5);
+  const area = code.startsWith('K') ? 'kernel' : code.startsWith('C') ? 'cmd' : 'tool';
+  if (area === 'tool') {
+    const bare = kind.slice(5);
+    return name === kind ? `tool.${bare}` : key;
+  }
+  return name === kind || name.startsWith(`${kind}_`) ? `${area}.${name}` : key;
+}
+
+// every `lang.<kind>...` template also exists under the key its kind is reported with
+for (const kind of Object.keys(ERROR_KINDS)) {
+  for (const key of Object.keys(MESSAGE_TEMPLATES)) {
+    if (!key.startsWith('lang.')) continue;
+    const mapped = messageKeyFor(kind, key);
+    if (mapped !== key && MESSAGE_TEMPLATES[mapped] === undefined) (MESSAGE_TEMPLATES as Record<string, string>)[mapped] = MESSAGE_TEMPLATES[key] as string;
+  }
+}
 
 export function render(key: string, params: Params): string {
   const tpl = MESSAGE_TEMPLATES[key];
@@ -188,6 +214,10 @@ export interface ErrorExtra {
   left?: string;
   right?: string;
   limit?: { name: string; max: number; got: number };
+  /** Keep every entry of `expected` (the kernel's full form; only the compact form caps it). */
+  uncapped?: boolean;
+  /** The phase when it is not the kind's own. */
+  phase?: Phase;
   after?: number;
   message?: string;
   fingerprintKey?: string;
@@ -216,6 +246,7 @@ export function buildError(
   extra: ErrorExtra = {},
 ): LanguageError {
   const spec = ERROR_KINDS[kind] ?? ERROR_KINDS['internal'] as KindSpec;
+  key = messageKeyFor(kind, key);
   const suggest = (extra.suggest ?? []).slice(0, 3);
   const message = extra.message ?? render(key, params);
   const fix = extra.fix ?? (suggest.length === 1 && !extra.quickFixes ? suggest[0] : undefined);
@@ -226,7 +257,7 @@ export function buildError(
     committed: false,
     kind: kind as ErrorKind,
     code: spec.code,
-    phase: spec.phase,
+    phase: extra.phase ?? spec.phase,
     message,
     messageKey: key,
     params,
@@ -234,7 +265,7 @@ export function buildError(
     col,
     endCol,
     token,
-    expected: (extra.expected ?? []).slice(0, 8),
+    expected: extra.uncapped === true ? [...(extra.expected ?? [])] : (extra.expected ?? []).slice(0, 8),
     forms: shownForms,
     suggest,
     recovery: extra.recovery ?? (suggest.length > 0 && spec.recovery === 'fix_line' ? 'use_suggestion' : spec.recovery),
