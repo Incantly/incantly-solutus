@@ -660,20 +660,7 @@ function classifyDefined(st: FState, span: FSpan, l: FSample, r: FSample): void 
     return;
   }
   if (flips >= 2) {
-    // Oscillation inside one column: a hairline instead of a sawtooth.
-    let loY = Math.min(...ys);
-    let hiY = Math.max(...ys);
-    if (st.enclosure) {
-      const enc = intervalAt(st, span.xl, span.xr);
-      if (!enc) return;
-      if (enc.def !== 0) {
-        loY = Math.min(loY, enc.lo);
-        hiY = Math.max(hiY, enc.hi);
-      }
-    } else {
-      st.rigorous = false;
-    }
-    pushInk(st, (span.xl + span.xr) / 2, loY, hiY);
+    inkForSpan(st, span, ys);
     return;
   }
   const dy = Math.abs((pys[4] as number) - (pys[0] as number));
@@ -700,11 +687,51 @@ function classifyDefined(st: FState, span: FSpan, l: FSample, r: FSample): void 
   if (!at) return;
   const finalDy = Math.abs(toEffY(st.pv, at.ya) - toEffY(st.pv, at.yb));
   if (finalDy > 2 && finalDy >= 0.5 * dy) {
+    const flat = stepIsFlat(st, span, at);
+    if (flat === null) return;
+    if (!flat) {
+      // The sides are not steady: oscillation at the resolution limit, not a step.
+      inkForSpan(st, span, ys);
+      return;
+    }
     if (!markJump(st, at.a, at.ya, at.b, at.yb)) return;
     splitAt(st, span, at);
     return;
   }
   st.accepted.push(span);
+}
+
+/**
+ * A real step keeps its level on both sides. Probes a few hundredths of a
+ * pixel away from the located jump; null when the budget ran out.
+ */
+function stepIsFlat(st: FState, span: FSpan, at: Narrowed): boolean | null {
+  const dx = (st.pv.box.x1 - st.pv.box.x0) / (st.pv.box.widthPx * st.pv.dpr) / 50;
+  const left = evalAt(st, Math.max(span.xl, at.a - dx));
+  if (!left) return null;
+  const right = evalAt(st, Math.min(span.xr, at.b + dx));
+  if (!right) return null;
+  if (!left.defined || !right.defined) return false;
+  return (
+    Math.abs(toEffY(st.pv, left.y) - toEffY(st.pv, at.ya)) <= 2 && Math.abs(toEffY(st.pv, right.y) - toEffY(st.pv, at.yb)) <= 2
+  );
+}
+
+/** Oscillation inside one column: a hairline instead of a sawtooth. */
+function inkForSpan(st: FState, span: FSpan, ys: readonly number[]): void {
+  let loY = Math.min(...ys);
+  let hiY = Math.max(...ys);
+  if (st.enclosure) {
+    const enc = intervalAt(st, span.xl, span.xr);
+    if (!enc) return;
+    if (enc.def !== 0) {
+      loY = Math.min(loY, enc.lo);
+      hiY = Math.max(hiY, enc.hi);
+    }
+  } else {
+    st.rigorous = false;
+  }
+  pushInk(st, (span.xl + span.xr) / 2, loY, hiY);
 }
 
 /** Records an enclosure column, clipped to the view; drops columns outside it. */
@@ -888,6 +915,17 @@ function finishEdge(st: FState, span: FSpan, side: 'left' | 'right', edge: numbe
     }
     if (gapPx < PARTNER_PX) {
       const c = (edge + partner.x) / 2;
+      const lo = Math.min(edge, partner.x);
+      const hi = Math.max(edge, partner.x);
+      const yLo = edge < partner.x ? edgeY : partner.y;
+      const yHi = edge < partner.x ? partner.y : edgeY;
+      const flat = stepIsFlat(st, { xl: Number.NEGATIVE_INFINITY, xr: Number.POSITIVE_INFINITY, depth: 0 }, { a: lo, b: hi, ya: yLo, yb: yHi, x: c });
+      if (flat === null) return;
+      if (!flat) {
+        // Not a steady step: oscillation at the resolution limit, drawn as a hairline.
+        pushInk(st, c, Math.min(yLo, yHi), Math.max(yLo, yHi));
+        return;
+      }
       const at = evalAt(st, c);
       if (!at) return;
       // Near a known break the break verdict below owns the end markers.
