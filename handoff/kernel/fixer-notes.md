@@ -102,3 +102,37 @@ Two other tests were first contested (a `z` object name, which `docs/features/la
 ### Commits
 
 `cfbc6ec` budgets, error text, registry, setFree, directives (1, 2, 3, 4, 7); `d8929e7` and `af92cc8` seek budget, lazy pull, rule re-entry, solver signature, linear adds, Text round trip (5, 6, 8, 12, 16, 17); `41d446f` history in a group, line rollback, gestures, load rollback, delivery, listener failures (9, 10, 11, 15, 18); `a1a7795` step titles, dry run, own-key lookups, clamped notice (13, 14, 19, 20).
+
+## Spec review fixes
+
+Branch `feat/kernel`. Fixer for `handoff/kernel/review.md`, items A1 to A6, one round. All six are done; each has a status line in `review.md`. B and C items were not touched, except the `registerNotice` gap the review attached to A2.
+
+### Fixes
+
+| # | What changed | Files under `packages/kernel/src/` |
+|---|---|---|
+| A1 | `WriteWhy` has a sixth value, `'anim'`. `setFree(x, v, 'anim')` clamps and snaps like a slider, may write a fixed object, marks the value and its readers, and is never journalled and never joins a gesture. | `graph/hist.ts` |
+| A2 | `registerTypeStyle(type, { defaults, freeDefaults, keys, drawable })`; repeated calls merge. `registerPropertyTypes` now merges the types of earlier calls. A type the core does not know takes the base drawable keys (`width lineStyle fill fillAngle fillGap`) unless `drawable: false`; `Bool`, `Text`, `Color`, `Particles` stay as they were. `registerNotice(kind, spec)` lets an area add a notice code. | `graph/props.ts`, `errors/notices.ts`, `errors/index.ts`, `index.ts` |
+| A3 | `RuleCall` gained `ids`, `tol`, `work`, `limits`, `slice`; `InvertCall` gained `ids` and `tol`. `CompiledArg.ref` carries the object an argument names. Tolerance comes from `@tol N` (alias `@tolerance N`, checked as a positive number), then `FigureOptions.tolerance`, then `1e-9`; a change re-runs every rule, also on undo and redo. `Limits.ruleWork` (100,000) caps the steps of one run. `Figure.slice` and `RuleCall.slice` share one implementation that saves and restores the environment (reason, clock, locals) as well as the cells, so it is safe inside a running rule. | `graph/core.ts`, `graph/registry.ts`, `graph/tx.ts`, `graph/types.ts`, `graph/figure.ts`, `errors/limits.ts`, `language/compile.ts`, `language/lines.ts`, `language/props.ts` |
+| A4 | `stepTo(n)` counts the steps `steps()` lists. The stored cursor is the list position of the first hidden object. The `cursor` getter returns the number of listed steps shown. | `graph/figure.ts` |
+| A5 | The checker records the type each bare-name argument needs (`params.type` on `unknown_name`). The repair lists rewrites with an existing name first and sets `recovery: 'use_suggestion'`, then a define line of the needed type. The `Create slider` quick fix follows the same type. Single-letter constants are never near names. A one-letter name is near only to a case variant. `defineLine` for a Vector is `u = Vector(1, 0)`. | `language/check.ts`, `language/errors.ts`, `graph/tx.ts`, `errors/suggest.ts` |
+| A6 | `applyBatch(lines, { group, mode?, dryRun: true })` runs the lines in a unit and takes the unit back. Later lines see earlier ones. Ids, redo stack, reveal cursor and an open gesture are put back; no event is sent. `BatchResult.dryRun` and `dryRun: true` on each success. | `graph/hist.ts`, `graph/types.ts` |
+
+### Extra places fixed (same rule, other cases)
+
+- A1: the `bad_argument` text for a wrong `why` lists all six reasons; the fixed-object check and the snap check treat `anim` like `slider`.
+- A2: `registerNotice` (the review's closing note); keys from `registerTypeStyle` also reach `unknown_property` suggestions through `validKeysFor`.
+- A3: `invert` rules get `ids` and `tol` too. `Figure.slice` no longer has its own copy of the evaluator. The `depth` limit also bounds nested `slice` calls.
+- A4: the `cursor` getter changed with `stepTo`, so the two use one unit.
+- A5: the one-letter and constant rules sit in `closestNames` and the checker's candidate list, so every caller gets them (`need`, property keys, directives, commands). The `Create slider` quick fix of the checker follows the needed type.
+- A6: a dry batch works in both modes (`atomic`, `independent`) and with `force`.
+
+### Names the tester assumed
+
+The tests in `test/spec/kernel/spec-review.test.ts` use `'anim'`, `registerTypeStyle`, `RuleCall.ids/.tol/.work/.limits/.slice`, `work.limit`, `FigureOptions.tolerance`, `Limits.ruleWork` and `BatchOptions.dryRun`. The code uses exactly these names. The directive is `@tol N` (the name in the language table and in the points-lines and conics docs); `@tolerance N` is accepted as an alias.
+
+### Not done
+
+- Nothing in A1 to A6 is left. B1 to B16 and C1 to C11 are untouched (B16 is the one that still matters for rules that throw inside `delete`, `rename`, `move`, `setFree`).
+- Animation-time still has to append `unstable` and `owned_by_solver` to `AreaUndefReasons` (B15).
+- `docs/` was not edited (a doc editor owns it). The docs should say: `'anim'` in kernel design 10 and 11.2; the rule context fields in README 9 and curves-loci 3.8; `@tol` and `Limits.ruleWork` in kernel errors 6; `dryRun` on `applyBatch` in README 10.
