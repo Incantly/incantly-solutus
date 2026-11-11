@@ -22,6 +22,8 @@ import { numbersError } from './errors';
 import { checkProbeLine, evalTNode, numLiteral, printExpr, printLineNode, substituteLine, valueLiteralExpr, valueLiteralText } from './eval';
 import type { Binding } from './eval';
 import { changeEventOf } from './events';
+import { parseRangeRestyle, rangeLine } from './rangestep';
+import type { RangeRestyle } from './rangestep';
 import { emitControlEvent, expansionProbeName, getStoredHandler, recordRun } from './handlers';
 import type { StoredStep } from './handlers';
 
@@ -170,6 +172,8 @@ interface Expansion {
   /** The object the handler is on (named in a limit error). */
   readonly target: string;
   lines: ExpandedLine[];
+  /** Ranges set by earlier steps of this run (a later step edits the range its predecessor made). */
+  readonly ranges: Map<ObjId, { min: number; max: number; step: number | 'auto' }>;
   results: StepResult[];
   overlay: Map<ObjId, unknown>;
   stepsUsed: number;
@@ -262,6 +266,11 @@ function expandOnce(
       skip('guard_false');
       return;
     }
+  }
+  const rangeStep = parseRangeRestyle(stored.source);
+  if (rangeStep) {
+    expandRangeStep(figure, rangeStep, stepNo, bindings, ex, skip);
+    return;
   }
   const parsed = parseLine(stored.source, { line: 1 });
   if (!parsed.ok) {
@@ -427,6 +436,57 @@ function expandOnce(
   if (ex.stepsUsed > NUMBERS_LIMITS.stepsPerRun) abortSteps(figure, ex);
 }
 
+/** `a with min = 0, max = 20, step = auto` as a step: one `rerange` line with the new bounds (numbers-sliders 3.2). */
+function expandRangeStep(
+  figure: Figure,
+  rr: RangeRestyle,
+  stepNo: number,
+  bindings: ReadonlyMap<string, Binding>,
+  ex: Expansion,
+  skip: (reason: SkipReason) => void,
+): void {
+  const named = bindings.get(rr.target);
+  const name = named && 'ref' in named ? named.ref : rr.target;
+  const view = figure.get(name);
+  if (!view || view.type !== 'Number' || !view.free) {
+    skip('broken');
+    return;
+  }
+  const current = ex.ranges.get(view.id) ?? (view.range ? { min: view.range.min, max: view.range.max, step: view.range.step ?? ('auto' as const) } : undefined);
+  const next = { min: current?.min, max: current?.max, step: current?.step ?? ('auto' as number | 'auto') };
+  for (const item of rr.items) {
+    if (item.value === 'auto' && item.key === 'step') {
+      next.step = 'auto';
+      continue;
+    }
+    const probe = checkExprProbe(figure, item.value, bindings);
+    if (!('checked' in probe) || probe.checked.expr?.ty.k !== 'Number') {
+      skip('broken');
+      return;
+    }
+    const v = evalTNode(figure, probe.checked.expr as TNode, { overlay: ex.overlay });
+    if (!v.defined || typeof v.value !== 'number') {
+      skip('undefined_argument');
+      return;
+    }
+    if (item.key === 'min') next.min = v.value;
+    else if (item.key === 'max') next.max = v.value;
+    else next.step = v.value;
+  }
+  if (next.min === undefined || next.max === undefined) {
+    // a number with no range needs both ends
+    skip('broken');
+    return;
+  }
+  const range = { min: next.min, max: next.max, step: next.step };
+  ex.ranges.set(view.id, range);
+  ex.lines.push({ text: rangeLine(view.name, range.min, range.max, range.step), stepNo, ours: false, wrote: [view.id] });
+  if (!ex.discarded.includes(view.name)) ex.discarded.push(view.name);
+  ex.results.push({ step: stepNo, status: 'done' });
+  ex.stepsUsed += 1;
+  if (ex.stepsUsed > NUMBERS_LIMITS.stepsPerRun) abortSteps(figure, ex);
+}
+
 function expandRestyle(
   figure: Figure,
   node: Extract<import('../../language/ast').LineNode, { k: 'restyle' }>,
@@ -532,7 +592,7 @@ export function runHandler(
   ensureResetTracking(figure);
   const selfName = target === 'figure' ? (payload.changedName as string) : target;
   const bindings = runtimeBindings(figure, target, event, payload, selfName);
-  const ex: Expansion = { target, lines: [], results: [], overlay: new Map(), stepsUsed: 0, discarded: [] };
+  const ex: Expansion = { target, ranges: new Map(), lines: [], results: [], overlay: new Map(), stepsUsed: 0, discarded: [] };
   expandSteps(figure, stored.steps, bindings, selfName, 0, ex);
   if (ex.aborted) {
     const run: HandlerRun = { handler: { target, event }, trigger, ok: false, stepsUsed: ex.stepsUsed, results: ex.results, error: ex.aborted, dropped: 0 };

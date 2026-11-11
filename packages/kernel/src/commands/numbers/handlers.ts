@@ -21,6 +21,8 @@ import type { HandlerEvent, HandlerRun } from './types';
 import { NUMBERS_LIMITS } from './types';
 import { numbersError } from './errors';
 import { checkProbeLine, printLineNode, substituteLine, valueLiteralExpr } from './eval';
+import { parseRangeRestyle } from './rangestep';
+import type { RangeRestyle } from './rangestep';
 import type { Binding } from './eval';
 import { parseLine } from '../../language/parser';
 import type { TNode } from '../../language/tnode';
@@ -376,6 +378,71 @@ function remap(error: ErrorObject, line: number, colOffset: number): ErrorObject
   return { ...error, line, col: error.col + colOffset, endCol: error.endCol + colOffset };
 }
 
+/**
+ * Definition-time check of a step that sets min, max or step. A constant is a valid step; a formula would make
+ * the range follow other objects, which a handler may not do (`handler_graph_change`).
+ */
+function checkRangeStep(
+  figure: Figure,
+  target: string,
+  event: HandlerEvent,
+  rr: RangeRestyle,
+  stepSource: string,
+  loopVar: string | undefined,
+  line: number,
+  stepCol: number,
+): StepCheck | ErrorObject {
+  const span = { line, col: stepCol, endCol: stepCol + stepSource.length };
+  const bindings = definitionBindings(figure, target, event);
+  if (loopVar) bindings.set(loopVar, { literal: { k: 'num', v: 1, text: '1', int: true, s: 0, e: 0 } });
+  const bound = bindings.get(rr.target);
+  const name = bound && 'ref' in bound ? bound.ref : rr.target;
+  const view = figure.get(name);
+  if (!view) {
+    return numbersError('unknown_name', span, { name: rr.target }, { token: rr.target, hint: 'Create the object first.' });
+  }
+  if (rr.others.length > 0) {
+    return numbersError('bad_argument', span, { command: 'on', why: 'min, max and step change the range; put other properties in their own step' }, {
+      token: stepSource,
+      hint: `Write ${rr.target} with ${rr.items.map((i) => `${i.key} = ${i.value}`).join(', ')} as one step and the rest as another.`,
+    });
+  }
+  if (view.type !== 'Number') {
+    return numbersError('type_mismatch', span, { op: 'give a range to', left: view.type, right: 'Number' }, { token: rr.target, hint: 'Only a Number can have a range.' });
+  }
+  if (!view.free) {
+    const deps = objectNames(figure, view.inputs);
+    return numbersError('not_free', span, { name: view.name, inputs: deps.join(', ') }, { token: view.name, hint: `Set ${deps.join(', ')} instead.` });
+  }
+  for (const item of rr.items) {
+    if (item.value === 'none' || (item.value === 'auto' && item.key !== 'step')) {
+      return numbersError('bad_argument', span, { command: 'on', why: item.value === 'none' ? 'a handler cannot remove a slider range' : `${item.key} = auto is not a value; only step can be auto` }, {
+        token: item.value,
+        hint: item.value === 'none' ? `Remove the range on its own line: ${rr.target} with ${item.key} = none.` : `Write a number for ${item.key}.`,
+      });
+    }
+    if (item.value === 'auto') continue;
+    const parsed = parseLine(`${freshProbeName(figure)} = ${item.value}`, { line: 1 });
+    if (!parsed.ok) return remap(parsed, line, stepCol - 1);
+    const probe = checkProbeLine(figure, printLineNode(substituteLine(parsed.value.node, bindings)), { line: 1 });
+    if ('error' in probe) return remap(probe.error, line, stepCol - 1);
+    const checked = probe.checked;
+    if (checked.expr?.ty.k !== 'Number') {
+      return numbersError('bad_argument', span, { command: 'on', why: `${item.key} must be a Number` }, { token: item.value, hint: `Write a number, for example: ${rr.target} with ${item.key} = 5.` });
+    }
+    if (checked.usesT) {
+      return numbersError('handler_structure', span, { what: 'read the clock', step_kind: 'clock' }, { token: stepSource, hint: 'Handlers are replay-safe: they cannot read t, bt or beat.' });
+    }
+    if (checked.reads.length > 0) {
+      return numbersError('handler_graph_change', span, { property: item.key }, {
+        token: `${item.key} = ${item.value}`,
+        hint: `Put the rule in its own line: ${rr.target} with ${item.key} = .... Then use SetValue in the handler.`,
+      });
+    }
+  }
+  return { source: stepSource };
+}
+
 interface StepCheck {
   /** The checked line, with locals substituted. */
   readonly source: string;
@@ -403,6 +470,9 @@ function checkStepSource(
       hint: `A step is one action. Add the other handler as its own line: ${stepSource.trim()}`,
     });
   }
+  // min, max and step are range edits, not kernel properties: the step is read and checked here
+  const rangeStep = parseRangeRestyle(stepSource);
+  if (rangeStep) return checkRangeStep(figure, target, event, rangeStep, stepSource, loopVar, line, stepCol);
   const parsed = parseLine(stepSource, { line: 1 });
   if (!parsed.ok) return remap(parsed, line, stepCol - 1);
   const node = parsed.value.node;
@@ -874,6 +944,12 @@ export function brokenSteps(figure: Figure, target: string, event: HandlerEvent)
   h.steps.forEach((s, i) => {
     const bindings = definitionBindings(figure, target, event);
     if (s.loop) bindings.set(s.loop.variable, { literal: { k: 'num', v: 1, text: '1', int: true, s: 0, e: 0 } });
+    const range = parseRangeRestyle(s.source);
+    if (range) {
+      const named = bindings.get(range.target);
+      if (!figure.get(named && 'ref' in named ? named.ref : range.target)) out.push(i + 1);
+      return;
+    }
     const parsed = parseLine(s.source, { line: 1 });
     if (!parsed.ok) {
       out.push(i + 1);
