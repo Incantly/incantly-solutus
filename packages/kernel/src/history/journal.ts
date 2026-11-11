@@ -14,6 +14,8 @@ export interface Reorder {
   readonly after: readonly ObjRec[];
   /** The objects that moved earlier, in their new order. */
   readonly moved: readonly ObjRec[];
+  /** `@step` titles that were anchored again so they stay in front of the object they mark (set once the reorder is done). */
+  reanchored?: readonly Reanchor[];
 }
 
 export interface Change {
@@ -38,7 +40,7 @@ export interface ScriptItem {
 }
 
 export type JournalEntry =
-  | { readonly k: 'add'; readonly items: readonly { readonly rec: ObjRec; readonly pos: number }[]; readonly label: string }
+  | { readonly k: 'add'; readonly items: readonly { readonly rec: ObjRec; readonly pos: number }[]; readonly label: string; readonly reanchored?: readonly Reanchor[] }
   | {
       readonly k: 'remove';
       readonly items: readonly { readonly rec: ObjRec; readonly pos: number; readonly persist: Persist }[];
@@ -175,6 +177,20 @@ export class Journal {
     this.redoStack.length = 0;
     this.redoStack.push(...snap.redo);
     this.bytes = this.stack.reduce((n, e) => n + this.measure(e), 0);
+  }
+
+  /** What a dry run has to put back: a recorded entry clears the redo stacks, and discarding the entry does not bring them back. */
+  saveRedo(): { redo: JournalEntry[]; open: JournalEntry[] | undefined } {
+    return { redo: [...this.redoStack], open: this.open ? [...this.open.redo] : undefined };
+  }
+
+  restoreRedo(s: { redo: JournalEntry[]; open: JournalEntry[] | undefined }): void {
+    this.redoStack.length = 0;
+    this.redoStack.push(...s.redo);
+    if (this.open && s.open) {
+      this.open.redo.length = 0;
+      this.open.redo.push(...s.open);
+    }
   }
 
   /** True when `takeUndo` (or `takeRedo`) would find an entry: inside an open group only the group's own entries count. */

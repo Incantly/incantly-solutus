@@ -147,6 +147,9 @@ export class FigureTx extends FigureBase {
     this.log = [];
     this.applyDepth++;
     const evMark = this.pendingEvents.length;
+    // a dry run commits and then takes everything back; what the commit could touch outside the journal is saved first
+    const dry = opts.dryRun === true;
+    const save = dry ? { values: new Set(this.pendingValues), styles: new Set(this.pendingStyles), nextId: this.nextId, stepCursor: this.stepCursor, redo: this.journal.saveRedo() } : undefined;
     const lineNo = opts.line ?? (typeof input === 'string' ? 1 : input.line);
     let result: TxResult;
     try {
@@ -159,7 +162,7 @@ export class FigureTx extends FigureBase {
         }
         if (this.faults.length > 0) {
           const bad = this.faults[0] as string;
-          if (!opts.dryRun) this.rollbackTx();
+          this.rollbackTx();
           return internalError(bad, { line: lineNo, col: 1, endCol: 1 }, '', bad);
         }
         return r;
@@ -167,6 +170,15 @@ export class FigureTx extends FigureBase {
     } catch {
       this.rollbackTx();
       result = internalError('the figure', { line: lineNo, col: 1, endCol: 1 }, '', 'apply');
+    }
+    if (save) {
+      if (this.log.length > 0) this.rollbackTx();
+      this.nextId = save.nextId;
+      this.stepCursor = save.stepCursor;
+      this.pendingValues = save.values;
+      this.pendingStyles = save.styles;
+      this.journal.restoreRedo(save.redo);
+      this.pendingEvents.length = Math.min(this.pendingEvents.length, evMark);
     }
     this.applyDepth--;
     if (result.ok) outerLog.push(...this.log);
@@ -406,6 +418,44 @@ export class FigureTx extends FigureBase {
     // the motion hooks read the directive items when they need them
   }
 
+  /**
+   * One `clamped` notice per slider (KERN-SM-20). The checker says "outside the range" for a literal it can see; the kernel
+   * says what the value became, for any way the value got there, so its notice replaces the checker's.
+   */
+  protected noteClamped(notices: Notice[], name: string, now: number, want: number): void {
+    for (let i = notices.length - 1; i >= 0; i--) {
+      const n = notices[i] as Notice;
+      if (n.kind === 'clamped' && (n.params as Record<string, unknown>)['name'] === undefined) notices.splice(i, 1);
+    }
+    notices.push(makeNotice('clamped', { name, value: valueText(now), end: now > want ? 'low end' : 'high end' }));
+  }
+
+  /** The object a `@step` title marks: the one right after its anchor. */
+  protected markedObject(item: ScriptItem): ObjRec | undefined {
+    return item.after === null ? this.list[0] : this.list[(this.byIdMap.get(item.after)?.order ?? -1) + 1];
+  }
+
+  /**
+   * Reorders a stretch of the list and anchors each `@step` title again so it stays in front of the object it marked. Returns
+   * the re-anchors, which the journal entry keeps for undo and redo.
+   */
+  protected reorderKeepingSteps(lo: number, after: readonly ObjRec[]): Reanchor[] {
+    const steps = this.items.filter((i) => i.name === 'step');
+    const marked = steps.map((it) => this.markedObject(it));
+    this.applyReorder(lo, after);
+    const out: Reanchor[] = [];
+    steps.forEach((it, i) => {
+      const m = marked[i];
+      if (!m) return;
+      const prev = m.order > 0 ? (this.list[m.order - 1] as ObjRec).id : null;
+      if (prev !== it.after) {
+        out.push({ item: it, from: it.after, to: prev });
+        it.after = prev;
+      }
+    });
+    return out;
+  }
+
   /* ------------------------------ styles ------------------------------ */
 
   /**
@@ -637,17 +687,10 @@ export class FigureTx extends FigureBase {
     // plan the order
     const reorder = redefine ? this.planReorder(existing, inputs) : undefined;
     const label = checked.text;
+    // a dry run does everything a commit does and `apply` takes it all back afterwards, so its summary, report and notices are exactly the commit's
     const dry = opts.dryRun === true;
-    if (dry) {
-      const aff = new Set<string>();
-      for (const e of existing) for (const o of this.downOf(e)) aff.add((this.list[o] as ObjRec).p.name);
-      if (redefine) rep.redefined.push(...names);
-      else rep.added.push(...names);
-      if (reorder) rep.moved.push(...reorder.moved.map((r) => r.p.name));
-      const c0 = cells[0] as Cell;
-      const sum = c0.defined ? `${names[0]} = ${valueText(c0.value)}` : `${names[0]} is undefined (${c0.reason})`;
-      return this.okResult(parsed, redefine ? 'redefine' : 'add', sum, rep, { name: names[0] as string, type: (tys[0] as Ty).k as never, dryRun: true, affected: [...aff] });
-    }
+    const aff = new Set<string>();
+    if (dry) for (const e of existing) for (const o of this.downOf(e)) aff.add((this.list[o] as ObjRec).p.name);
 
     // commit
     let recs: ObjRec[];
@@ -660,6 +703,14 @@ export class FigureTx extends FigureBase {
         else notices.push(makeNotice('step_hidden', { name: names[0] as string }));
       }
       const pos = insertAt ?? this.list.length;
+      // an object put in front of a `@step` title takes the place before it: the title stays in front of the object it marked
+      const reanchored: Reanchor[] = [];
+      if (pos < this.list.length) {
+        const prev = pos > 0 ? (this.list[pos - 1] as ObjRec).id : null;
+        const last = ids[names.length - 1] as ObjId;
+        for (const item of this.items) if (item.name === 'step' && item.after === prev) reanchored.push({ item, from: prev, to: last });
+        for (const a of reanchored) a.item.after = a.to;
+      }
       this.insertRecs(recs.map((rec, i) => ({ rec, pos: pos + i })));
       for (const r of recs) pass.added.add(r);
       rep.added.push(...names);
@@ -668,13 +719,13 @@ export class FigureTx extends FigureBase {
       }
       const pre = new Map<ObjRec, Cell>();
       recs.forEach((r, i) => pre.set(r, cells[i] as Cell));
-      this.record({ k: 'add', items: recs.map((rec) => ({ rec, pos: rec.order })), label });
+      this.record({ k: 'add', items: recs.map((rec) => ({ rec, pos: rec.order })), label, ...(reanchored.length > 0 ? { reanchored } : {}) });
       this.settle(recs, pre);
     } else {
       recs = existing;
       const changes = recs.map((rec, i) => ({ rec, before: rec.p, after: persists[i] as Persist }));
       if (reorder) {
-        this.applyReorder(reorder.lo, reorder.after);
+        reorder.reanchored = this.reorderKeepingSteps(reorder.lo, reorder.after);
         rep.moved.push(...reorder.moved.map((r) => r.p.name));
         const mv = makeNotice('moved_for_order', {}, rep.moved);
         notices.push(mv);
@@ -690,7 +741,7 @@ export class FigureTx extends FigureBase {
     for (const [i, r] of recs.entries()) {
       const want = persists[i]?.value;
       if (r.p.kind === 'free' && typeof want === 'number' && typeof r.p.value === 'number' && want === want && r.p.value !== want) {
-        notices.push(makeNotice('clamped', { name: r.p.name, value: valueText(r.p.value), end: r.p.value > want ? 'low end' : 'high end' }));
+        this.noteClamped(notices, r.p.name, r.p.value, want);
       }
     }
     this.diffReport(pass, rep);
@@ -700,6 +751,7 @@ export class FigureTx extends FigureBase {
       ...(names.length > 1 ? { names } : {}),
       id: first.id,
       type: first.p.type.k as never,
+      ...(dry ? { dryRun: true as const, affected: [...aff] } : {}),
     });
   }
 
@@ -713,14 +765,13 @@ export class FigureTx extends FigureBase {
     if (!cr.ok) return cr;
     const style = this.buildStyle(parsed, checked, cr.value, rec.p.type, rec.id, rec.p.kind === 'free', rec.p.style, notices, rec.p.name);
     if (style instanceof Map === false) return style as ErrorObject;
-    if (opts.dryRun) return this.okResult(parsed, 'restyle', printLineNode(parsed.node), rep, { name: rec.p.name, dryRun: true });
     const before = rec.p;
     const after: Persist = { ...before, style: style as Map<string, StyleEntry> };
     this.applyPersist(rec, after);
     this.record({ k: 'sets', changes: [{ rec, before, after }], label: checked.text });
     this.pendingStyles.add(rec.id);
     this.diffReport(pass, rep);
-    return this.okResult(parsed, 'restyle', printLineNode(parsed.node), rep, { name: rec.p.name, id: rec.id, type: rec.p.type.k as never });
+    return this.okResult(parsed, 'restyle', printLineNode(parsed.node), rep, { name: rec.p.name, id: rec.id, type: rec.p.type.k as never, ...(opts.dryRun ? { dryRun: true as const } : {}) });
   }
 
   protected applyRerange(parsed: ParsedLine, checked: CheckedLine, notices: Notice[], opts: ApplyOptions, pass: import('./core').Pass): TxResult {
@@ -742,14 +793,13 @@ export class FigureTx extends FigureBase {
       ...(checked.rangeUsesT ? { rangeUsesT: true } : {}),
     };
     const after: Persist = { ...before, node: { ...before.node, range: n.range }, checked: mchecked, compiled: merged };
-    if (opts.dryRun) return this.okResult(parsed, 'rerange', printLineNode(parsed.node), rep, { name: rec.p.name, dryRun: true });
     this.applyPersist(rec, after);
     this.record({ k: 'sets', changes: [{ rec, before, after }], label: checked.text });
     const was = rec.p.value;
     this.settle([rec]);
-    if (typeof was === 'number' && typeof rec.p.value === 'number' && was !== rec.p.value) notices.push(makeNotice('clamped', { name: rec.p.name, value: valueText(rec.p.value), end: rec.p.value > was ? 'low end' : 'high end' }));
+    if (typeof was === 'number' && typeof rec.p.value === 'number' && was !== rec.p.value) this.noteClamped(notices, rec.p.name, rec.p.value, was);
     this.diffReport(pass, rep);
-    return this.okResult(parsed, 'rerange', printLineNode(parsed.node), rep, { name: rec.p.name, id: rec.id, type: rec.p.type.k as never });
+    return this.okResult(parsed, 'rerange', printLineNode(parsed.node), rep, { name: rec.p.name, id: rec.id, type: rec.p.type.k as never, ...(opts.dryRun ? { dryRun: true as const } : {}) });
   }
 
   protected applyRate(parsed: ParsedLine, checked: CheckedLine, notices: Notice[], opts: ApplyOptions, pass: import('./core').Pass): TxResult {
@@ -763,14 +813,13 @@ export class FigureTx extends FigureBase {
     const rates = new Map(rec.p.rates ?? []);
     rates.set(info.order, rule);
     const after: Persist = { ...rec.p, rates };
-    if (opts.dryRun) return this.okResult(parsed, 'rate', printLineNode(parsed.node), rep, { name: rec.p.name, dryRun: true });
     const before = rec.p;
     this.applyPersist(rec, after);
     this.record({ k: 'sets', changes: [{ rec, before, after }], label: checked.text });
     this.onStatesChanged();
     this.settle([rec]);
     this.diffReport(pass, rep);
-    return this.okResult(parsed, 'rate', printLineNode(parsed.node), rep, { name: rec.p.name, id: rec.id, type: rec.p.type.k as never });
+    return this.okResult(parsed, 'rate', printLineNode(parsed.node), rep, { name: rec.p.name, id: rec.id, type: rec.p.type.k as never, ...(opts.dryRun ? { dryRun: true as const } : {}) });
   }
 
   /** The solver restarts when a state or a rate changes. */
@@ -815,10 +864,8 @@ export class FigureTx extends FigureBase {
     switch (e.k) {
       case 'add': {
         const recs = e.items.map((i) => i.rec);
-        const inputs = new Set<ObjRec>();
-        for (const r of recs) for (const i of r.inputs) if (!recs.includes(i)) inputs.add(i);
         this.removeRecs(recs);
-        void inputs;
+        for (const a of e.reanchored ?? []) a.item.after = a.from;
         return;
       }
       case 'remove': {
@@ -831,7 +878,10 @@ export class FigureTx extends FigureBase {
         return;
       }
       case 'sets': {
-        if (e.reorder) this.applyReorder(e.reorder.lo, e.reorder.before);
+        if (e.reorder) {
+          this.applyReorder(e.reorder.lo, e.reorder.before);
+          for (const a of e.reorder.reanchored ?? []) a.item.after = a.from;
+        }
         for (const c of e.changes) this.applyPersist(c.rec, c.before);
         this.settle(e.changes.map((c) => c.rec));
         if (e.changes.some((c) => c.after.rates !== c.before.rates)) this.onStatesChanged();
@@ -854,6 +904,7 @@ export class FigureTx extends FigureBase {
   protected replayEntry(e: JournalEntry): void {
     switch (e.k) {
       case 'add': {
+        for (const a of e.reanchored ?? []) a.item.after = a.to;
         this.insertRecs(e.items.map((i) => ({ rec: i.rec, pos: i.pos })));
         this.settle(e.items.map((i) => i.rec));
         return;
@@ -863,7 +914,10 @@ export class FigureTx extends FigureBase {
         return;
       }
       case 'sets': {
-        if (e.reorder) this.applyReorder(e.reorder.lo, e.reorder.after);
+        if (e.reorder) {
+          this.applyReorder(e.reorder.lo, e.reorder.after);
+          for (const a of e.reorder.reanchored ?? []) a.item.after = a.to;
+        }
         for (const c of e.changes) this.applyPersist(c.rec, c.after);
         this.settle(e.changes.map((c) => c.rec));
         if (e.changes.some((c) => c.after.rates !== c.before.rates)) this.onStatesChanged();

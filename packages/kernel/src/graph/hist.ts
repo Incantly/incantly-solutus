@@ -802,7 +802,7 @@ export class FigureHist extends FigureTx {
     this.faults = [];
     this.commitDrag();
     const res = this.inPass((pass) => {
-      this.applyReorder(lo, after);
+      reorder.reanchored = this.reorderKeepingSteps(lo, after);
       this.record({ k: 'sets', changes: [], reorder, label: `move ${rec.p.name}` });
       rep.moved.push(...group.map((g) => g.p.name));
       this.diffReport(pass, rep);

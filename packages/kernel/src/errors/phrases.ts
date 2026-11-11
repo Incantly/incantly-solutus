@@ -36,12 +36,13 @@ const PHRASES: Record<string, ReasonPhrase> = {
 
 /** Adds or replaces the phrase of a reason an area registered. */
 export function registerReasonPhrase(reason: string, phrase: ReasonPhrase): void {
+  if (reason === '__proto__') return;
   PHRASES[reason] = phrase;
 }
 
 /** The phrases of a reason. An unknown reason gets its own code as a noun. */
 export function reasonPhrase(reason: UndefReason | string): ReasonPhrase {
-  return PHRASES[reason] ?? { noun: String(reason).replace(/_/g, ' '), sentence: `It is undefined (${String(reason).replace(/_/g, ' ')}).` };
+  return (typeof reason === 'string' && Object.hasOwn(PHRASES, reason) ? PHRASES[reason] : undefined) ?? { noun: String(reason).replace(/_/g, ' '), sentence: `It is undefined (${String(reason).replace(/_/g, ' ')}).` };
 }
 
 /** Every reason with a phrase, for the registry test. */

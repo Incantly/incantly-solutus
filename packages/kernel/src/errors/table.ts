@@ -168,7 +168,7 @@ export interface ErrArgs {
  */
 export function err(kind: ErrorKind, at: Span, params: Params = {}, extra: ErrArgs = {}): ErrorObject {
   try {
-    const spec = errorTable[kind];
+    const spec = Object.hasOwn(errorTable, kind) ? errorTable[kind] : errorTable.internal;
     params = clipParams(params);
     extra = clipExtra(extra);
     const e: ErrorExtra = {

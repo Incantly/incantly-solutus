@@ -78,7 +78,7 @@ const FALLBACK: Default = { color: '#111827', width: 2, pointSize: 4, opacity: 1
 
 /** The default properties of an object of this type. `dependent` and `onPath` only matter for a Point. */
 export function defaultsFor(type: string, free: boolean, onPath = false): Props {
-  const d = type === 'Point' ? (onPath ? DEFAULTS['Point:path'] : free ? DEFAULTS['Point:free'] : DEFAULTS['Point:dependent']) : DEFAULTS[type];
+  const d = type === 'Point' ? (onPath ? DEFAULTS['Point:path'] : free ? DEFAULTS['Point:free'] : DEFAULTS['Point:dependent']) : typeof type === 'string' && Object.hasOwn(DEFAULTS, type) ? DEFAULTS[type] : undefined;
   const x = d ?? FALLBACK;
   return {
     visible: true,
@@ -131,7 +131,7 @@ export function registerPropertyTypes(key: string, types: readonly string[] | '*
 
 /** The keys an object of this type accepts in `with`. */
 export function validKeysFor(type: string): string[] {
-  const out = ['color', ...(BY_TYPE[type] ?? []), ...EVERY.filter((k) => k !== 'color')];
+  const out = ['color', ...(typeof type === 'string' && Object.hasOwn(BY_TYPE, type) ? (BY_TYPE[type] as readonly string[]) : []), ...EVERY.filter((k) => k !== 'color')];
   for (const [k, types] of extraKeys) if (types === '*' || types.includes(type)) out.push(k);
   // keys an area appended to the language table without saying which types take them are accepted by every type
   for (const k of Object.keys(PROPERTIES)) if (!EVERY.includes(k) && !ALL_CORE.has(k) && !extraKeys.has(k)) out.push(k);

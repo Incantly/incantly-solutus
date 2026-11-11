@@ -43,7 +43,7 @@ export function joinNames(names: readonly string[]): string {
 
 /** Builds a notice of a registered kind. An unregistered kind gets code K100 and the kind as its message. */
 export function makeNotice(kind: NoticeKind, params: Params = {}, names?: readonly string[]): Notice {
-  const spec = NOTICE_TABLE[kind];
+  const spec = typeof kind === 'string' && Object.hasOwn(NOTICE_TABLE, kind) ? NOTICE_TABLE[kind] : undefined;
   const message = spec ? fill(spec.template, names ? { ...params, names } : params) : String(kind);
   const out: Record<string, unknown> = {
     severity: spec?.severity ?? 'info',

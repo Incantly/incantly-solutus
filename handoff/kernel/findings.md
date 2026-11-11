@@ -169,14 +169,16 @@ Related findings that one change should fix together (pipeline.md: fix every cas
 
 ### KERN-SM-13. `insertAt` moves a `@step` breakpoint onto the inserted object
 
-- **Impact:** wrong results (the build list's stops). Status: open.
+- **Impact:** wrong results (the build list's stops). Status: fixed.
+- **fix:** a title is kept in front of the object it marked: insertAt moves the @step items that sat after the previous object onto the new object, and move or a reorder for a redefinition anchors each @step again in front of its marked object; both are journalled for undo and redo.
 - **Evidence:** `figure(['a = 1', '@step "two"', 'b = 2']).insertAt(1, 'w = a + 1')`: `steps()` gives `[a, —], [w, "two"], [b, —]`; before, `b` carried the title. `toScript()` writes `@step "two"` before `w`. Items are anchored after an object id (`ScriptItem.after`), and `steps()` gives the title to whatever object follows the anchor (`graph/figure.ts:313`); the inserted object becomes that object.
 - **Invariant broken:** K12: a `@step` title stays with the object it marked after `insertAt` and `move`.
 - **Suggested fix:** anchor `@step` items to the object they mark (store `before: ObjId`), or re-anchor items in `applyDefine` when `insertAt` puts an object directly after an anchor; check `move` with the same test.
 
 ### KERN-SM-14. A dry run does not match the commit
 
-- **Impact:** wrong results (kernel design 8 and 16.6: "a preview that is guaranteed to match what Enter will do"). Status: open.
+- **Impact:** wrong results (kernel design 8 and 16.6: "a preview that is guaranteed to match what Enter will do"). Status: fixed.
+- **fix:** a dry run of a definition, restyle, rerange or rate now runs the whole commit and apply takes it back (journal, redo stack, next id, reveal cursor, pending events and values are restored), so its summary, report and notices are the commit.
 - **Evidence:** on an empty figure:
 
 | Line | Dry run | Commit |
@@ -245,7 +247,8 @@ Measured in Node 22, warm, on the scratch probe (median of three where shown). T
 
 ### KERN-SM-19. Exported table helpers throw on names of `Object.prototype` members
 
-- **Impact:** wrong errors (throws across the boundary). Status: open.
+- **Impact:** wrong errors (throws across the boundary). Status: fixed.
+- **fix:** the exported lookups (defaultsFor, validKeysFor, makeNotice, reasonPhrase, err) read their tables through Object.hasOwn and fall back to the default entry.
 - **Evidence:** `validKeysFor('constructor')` throws `TypeError: (BY_TYPE[type] ?? []) is not iterable`; `defaultsFor('constructor', true)` throws reading `slice`; `makeNotice('constructor')` throws reading `replace`. `BY_TYPE`, `DEFAULTS` (`graph/props.ts`) and `NOTICE_TABLE` (`errors/notices.ts`) are plain objects read with `[key]`; `reasonPhrase('constructor')` returns `Object` itself. The kernel calls them only with internal type names, but they are public exports. `Object.prototype` itself is never polluted (checked below).
 - **Invariant broken:** K15: exported helpers never throw.
 - **Suggested fix (group F):** read every exported table through `Object.hasOwn` (as `colorFromWord` and `own` already do), and fall back to the default entry.
@@ -254,7 +257,8 @@ Measured in Node 22, warm, on the scratch probe (median of three where shown). T
 
 ### KERN-SM-20. A clamped slider gets two `clamped` notices
 
-- **Impact:** cosmetic. Status: open.
+- **Impact:** cosmetic. Status: fixed.
+- **fix:** noteClamped removes the checker clamped notice (no name) when the kernel adds its own, so a clamped slider gets one notice, also on a dry run and in a batch.
 - **Evidence:** `apply('a = 20 in 0..10')` returns two notices: "The value 20 is outside 0..10 and will be clamped to 10." (from the checker) and "a was moved to 10, the high end of its range." (`graph/tx.ts:617`).
 - **Invariant broken:** one notice per fact.
 - **Suggested fix:** drop the kernel's notice when the checker already gave one for the same name, or drop the checker's on lines the kernel commits.
