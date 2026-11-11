@@ -165,7 +165,8 @@ frame(now):
   solver.advanceTo(t)                      # states, section 7; may use dense output
   sources = {t, bt, beat if changed} ∪ animated sliders (computed from t) ∪ states that moved
              ∪ free values the user dragged this frame ∪ view tweens
-  kernel.update(sources)                   # one pass: merged downstream lists, once each
+  kernel.setClock(t); kernel.setFree(id, value, why) for each other source
+  kernel.flush()                           # one pass: merged downstream lists, once each
   view.update(changed objects)             # dirty drawables, layout
   particles.upload(uniforms)               # CPU values read for GPU programs
   view.paint()

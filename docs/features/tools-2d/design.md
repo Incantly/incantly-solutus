@@ -54,7 +54,7 @@ The manual's tool pages for the 2D Graphics view (about 110 pages including 3D a
 2. **One engine runs every tool.** A single `ToolSession` state machine consumes pointer, key and number-entry events.
 3. **Tools only write lines.** Everything a tool creates is a script line produced from the command table of the core design (section 5). A tool that needs a command that does not exist is a signal to add the command, not to add special code.
 4. **Nothing is committed until the tool completes.** While picking, points that would be created exist only in the session. Cancelling leaves no trace. On completion, one batch of lines is applied as one transaction and one undo step.
-5. **Previews use a dry run.** The same lines are applied to a scratch copy of the values by `kernel.dryRun`, so the preview is exactly what will be created.
+5. **Previews use a dry run.** The same lines are applied to a scratch copy of the values by a kernel dry run (`kernel.apply(line, { dryRun: true })`, or `kernel.applyBatch(lines, { group, dryRun: true })` for several lines), so the preview is exactly what will be created.
 6. **The catalogue comes from the data.** The toolbar, the hints, the docs and the list of tools in the model's prompt are all printed from the table.
 
 ## 4. Types
@@ -214,7 +214,7 @@ For a **PointSlot** (what GeoGebra calls auto point creation, but explicit and b
 
 The point is held as a **pending point** in the session. Pending points get placeholder names `{P1}`, `{P2}`. They are drawn on the overlay as hollow rings and become real objects only at commit.
 
-For **NumberSlot / TextSlot**: after the last needed click the engine opens an inline field at the pointer (not a modal dialog). Enter commits, Esc cancels the slot but keeps earlier picks. The text is parsed as a Number expression and run through the checker with `kernel.dryRun`; an error shows under the field with the core error's `message` and `hint`.
+For **NumberSlot / TextSlot**: after the last needed click the engine opens an inline field at the pointer (not a modal dialog). Enter commits, Esc cancels the slot but keeps earlier picks. The text is parsed as a Number expression and run through the checker with a kernel dry run (`kernel.apply(line, { dryRun: true })`); an error shows under the field with the core error's `message` and `hint`.
 
 For **PositionSlot**: the click position (snapped) becomes the pick; `Shift` selects a view-anchored position (a pixel anchor) instead of a maths one.
 
@@ -224,7 +224,7 @@ If, at activation, the view's selection contains objects, the engine tries to re
 
 ### 5.5 Previews
 
-After each hover with enough picks to compute something, the engine builds the lines for the shortest completion that uses the pointer position for the missing point slot, and runs `kernel.dryRun`. The result (type + value) is drawn on the overlay in the object's default style at 60% opacity, dashed for strokes. The preview obeys:
+After each hover with enough picks to compute something, the engine builds the lines for the shortest completion that uses the pointer position for the missing point slot, and runs a kernel dry run (`kernel.applyBatch(lines, { group, dryRun: true })`). The result (type + value) is drawn on the overlay in the object's default style at 60% opacity, dashed for strokes. The preview obeys:
 
 - Run at most once per animation frame (coalesce pointer moves).
 - Cost per dry run under 0.5 ms for the v1 tool set; over that, the preview is skipped for the frame (and no error is shown).
@@ -235,7 +235,7 @@ After each hover with enough picks to compute something, the engine builds the l
 
 1. Allocate names for the placeholders (5.7).
 2. Substitute, producing `string[]`.
-3. `kernel.applyBatch(lines)`: each line passes the five-step transaction; if one fails, the whole batch is rejected, the session stays at its last pick, and a refusal with the error is shown. This should only happen if a tool spec is wrong or a command changed; the build tests exercise every tool.
+3. `kernel.applyBatch(lines, { group })` (the default `mode: 'atomic'`): each line passes the five-step transaction; if one fails, the whole batch is rejected, the session stays at its last pick, and a refusal with the error is shown. This should only happen if a tool spec is wrong or a command changed; the build tests exercise every tool.
 4. All lines form one undo group (core change C7 in graphics-view).
 5. Select the new result objects (`selectAfter`).
 6. Send `learner_lines` to the teacher's inbox (agent.md).
@@ -481,7 +481,7 @@ Mouse: hover previews. Touch: no hover; the preview appears at the finger while 
 
 | # | Change | Why |
 |---|---|---|
-| T1 | `kernel.dryRun(lines)` (graphics-view C6) and `kernel.applyBatch(lines)` with one undo group (C7). | Previews and atomic tools. |
+| T1 | A kernel dry run, `apply(line, { dryRun: true })` or `applyBatch(lines, { group, dryRun: true })` (graphics-view C6), and `kernel.applyBatch(lines, { group })` with one undo group (C7). | Previews and atomic tools. |
 | T2 | A name allocator service owned by the kernel, with the sequences of section 5.7. | Tools and the teacher both need fresh names; they must not collide. |
 | T3 | Image names use `A_1`, not `A'`, because `'` is reserved for rate rules. | Grammar. |
 | T4 | `Hide` and `Show` accept several objects (already in core 6.6) and return the list of names changed. | `show-hide-object` batch. |

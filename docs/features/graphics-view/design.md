@@ -614,7 +614,7 @@ The plan is computed from the kernel's dependency graph when the object is added
 
 1. `pointerdown`: hit test; choose the top candidate that has a drag plan other than `none`; if only non-draggable hits exist, start a **pan** (not a drag) and show a hint on the first attempt.
 2. After `3 px` movement (mouse) or `8 px` (touch), the drag begins: the view captures the pointer.
-3. On each `pointermove`, compute the target and call `kernel.drag(plan, target)`. This updates only the free values and marks the downstream list; the next frame processes it. Moves coalesce: only the latest pointer position per frame is applied (`getCoalescedEvents` is used to read the rest for smoothness of traces).
+3. On each `pointermove`, compute the target, ask `kernel.dragPlan(id, target)` for the plan and call `kernel.drag(plan)`. This updates only the free values and marks the downstream list; the next frame processes it. Moves coalesce: only the latest pointer position per frame is applied (`getCoalescedEvents` is used to read the rest for smoothness of traces).
 4. `pointerup`: commit. A single batched script record is made: for a free point `A = (x, y)` with rounded display digits (see 12.6); for several points, one line each, one undo step.
 5. `Esc` during a drag cancels and restores the values at drag start.
 
@@ -800,8 +800,8 @@ Same script, same `t`, same export request gives the same bytes (SVG) and the sa
 | C2 | Add directives `@snap`, `@axes` options, `@grid` kinds, `@background`, `@alt`, and the `equal` / `free` / `over` / `home` options of `@view`. | Section 4 and 5. Still one line each, still unambiguous from the first token. |
 | C3 | Define `s` for `PointOn` per path type (section 12.4). | The core design says 0..1, which is meaningless for a line or a function. |
 | C4 | Answer Open Question 2: dependent shapes are draggable via drag plans (12.1); other dependents are not. | Matches how learners expect shapes to behave, with a clear rule for the rest. |
-| C5 | Add `kernel.drag(plan, target)` and `kernel.commitDrag()`: a drag changes free values without parsing a line, then records one batched `A = (x, y)` line at the end. | Mouse moves at 60 Hz must not go through the line pipeline. |
-| C6 | Add `kernel.dryRun(lines)` returning the value and type of the last line without committing. Used by tool previews and the playground. | `../tools-2d/design.md` section 5. |
+| C5 | Add `kernel.dragPlan(id, target)`, `kernel.drag(plan)` and `kernel.commitDrag()`: a drag changes free values without parsing a line, then records one batched `A = (x, y)` line at the end. | Mouse moves at 60 Hz must not go through the line pipeline. |
+| C6 | Add a dry run: `kernel.apply(line, { dryRun: true })` for one line and `kernel.applyBatch(lines, { group, dryRun: true })` for several, returning the value and type of the last line without committing. Used by tool previews and the playground. | `../tools-2d/design.md` section 5. |
 | C7 | Grouped undo: a batch of lines is one undo step. | A tool or a drag that adds several objects is one action to the learner. |
 | C8 | Results of a line may carry `warnings: Warning[]` beside `ok: true`. | Non-fatal issues (a style on a hidden object, conflicting show-if). See errors.md. |
 | C9 | New error kinds `unknown_property`, `bad_property_value`, `conflicting_style`. | The `with` form needs its own failures. See errors.md. |

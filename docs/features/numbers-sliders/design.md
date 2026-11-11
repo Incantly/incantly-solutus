@@ -236,7 +236,7 @@ Rounding is a display concern. Maths never reads it (consistent with the core ru
 - **Objects.** `Number` and `Bool` are core types. The additions above are fields on those objects; no new object type is needed in this area.
 - **Rules.** A slider with dynamic bounds has one extra rule per dynamic bound (`min`, `max`, `step`) feeding a `clampRule` on the slider's value. An animating slider has a `sliderAnimRule` that reads `t`. Both are ordinary rules with declared inputs; the downstream-list machinery needs no change.
 - **Command table.** `Animate` and the placement helpers are in the table (controls-scripting). `Angle`, `round`, `sig`, `snap`, `wrap` are functions or commands in the existing table.
-- **Free value write path.** Pointer, keyboard, typed input and `SetValue` all call `kernel.setFree(id, raw)`, which calls `commit` and marks sources. One undo entry is made per gesture (a drag from pointer down to up is one entry whose inverse is the value before the drag).
+- **Free value write path.** Pointer, keyboard, typed input and `SetValue` all call `kernel.setFree(id, value, why)` (for example `why = 'slider'`), which marks the source; `kernel.flush()` then runs the update pass. One undo entry is made per gesture (a drag from pointer down to up is one entry whose inverse is the value before the drag).
 
 ### 3.8 Interfaces for the view and teacher
 
