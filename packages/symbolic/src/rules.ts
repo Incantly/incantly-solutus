@@ -376,7 +376,7 @@ export function expandNode(t: SymNode, tick: Ticker, maxTerms = 5000): SymNode {
         if (e !== null && e >= 0n && b.k === 'add') {
           if (e === 0n) return ONE;
           let acc: SymNode = ONE;
-          let base = b;
+          let base: SymNode = b;
           let k = e;
           while (k > 0n) {
             if ((k & 1n) === 1n) acc = go(mul(acc, base));

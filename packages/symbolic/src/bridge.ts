@@ -24,8 +24,8 @@ export class BridgeError extends Error {
     super(message);
     this.name = 'BridgeError';
     this.kind = kind;
-    this.objName = extra.name;
-    this.objType = extra.type;
+    if (extra.name !== undefined) this.objName = extra.name;
+    if (extra.type !== undefined) this.objType = extra.type;
   }
 }
 

@@ -148,7 +148,7 @@ export function signOf(n: SymNode, a: Assumptions): Sign {
       if (e !== null) {
         if (e === 0n) return 'pos';
         if (bs === 'zero') return e > 0n ? 'zero' : 'unknown';
-        if ((e & 1n) === 0n) return bs === 'zero' ? 'zero' : 'nonneg';
+        if ((e & 1n) === 0n) return 'nonneg';
         return bs;
       }
       const er = asRational(n.exp);

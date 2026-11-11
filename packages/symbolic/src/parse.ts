@@ -6,7 +6,7 @@
  * `a < v < b`, which becomes `a < v and v < b`.
  */
 import type { SymCond, SymFn, SymNode, SymRelOp } from './node';
-import { add, andCond, constN, divideNodes, fn, intN, listN, mul, negateNode, notCond, orCond, piecewiseN, pow, ratN, refN, rel, rootofN, symN } from './node';
+import { add, andCond, constN, divideNodes, floatN, fn, intN, listN, mul, negateNode, notCond, orCond, piecewiseN, pow, ratN, refN, rel, rootofN, symN } from './node';
 import { shortestDecimalRational } from './num';
 import { treeToUPoly, upolyIsolate } from './poly';
 
@@ -420,12 +420,16 @@ class Parser {
       }
     }
     const r = this.next();
-    if (r.k !== 'rparen') throw new ParseFailure(`Expected )`, col, col + 1, name);
+    if (r.k !== 'rparen') throw new ParseFailure(`Expected )`, col, col + 1, 'if');
     if (parts.length < 2) throw new ParseFailure('if needs at least a condition and a value', col, col + 1, 'if');
     const cases: { when: SymCond; then: SymNode }[] = [];
     let i = 0;
-    while (i + 1 < parts.length && isCondPart(parts[i])) {
-      cases.push({ when: parts[i] as SymCond, then: parts[i + 1] as SymNode });
+    while (i + 1 < parts.length) {
+      const head = parts[i];
+      const next = parts[i + 1];
+      if (head === undefined || next === undefined || !isCondPart(head)) break;
+      if (isCondPart(next)) throw new ParseFailure('if needs a value after each condition', col, col + 1, 'if');
+      cases.push({ when: head, then: next });
       i += 2;
     }
     if (cases.length === 0) throw new ParseFailure('if needs a condition first', col, col + 1, 'if');

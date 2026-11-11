@@ -420,7 +420,7 @@ function allDivisorsBoth(n: bigint, tick: Ticker): bigint[] {
 /** Lagrange interpolation through (xs[i], ys[i]) over the rationals; null unless integral. */
 function interpolate(xs: readonly number[], ys: readonly bigint[]): UPoly | null {
   const n = xs.length;
-  let num: { n: bigint; d: bigint }[] = new Array(n).fill({ n: 0n, d: 1n }) as { n: bigint; d: bigint }[];
+  const num: { n: bigint; d: bigint }[] = new Array(n).fill({ n: 0n, d: 1n }) as { n: bigint; d: bigint }[];
   for (let j = 0; j < n; j++) {
     let den = 1n;
     let basis: bigint[] = [1n];

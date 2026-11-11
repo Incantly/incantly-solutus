@@ -74,6 +74,12 @@ function ctxWith(assume: Assumptions, tick: Ticker, note?: RuleCtx['note']): Rul
   return ruleCtx(assume, tick, note);
 }
 
+/** The variable name for numeric sampling; the numeric paths need a real symbol. */
+function varName(v: SymNode): string {
+  if (v.k !== 'sym') throw new Unsupported('an equation in one symbol', 'classify');
+  return v.name;
+}
+
 /** Move everything to one side: `f(v) == 0` form. Returns the difference (l - r). */
 export function toDifference(c: SymCond): SymNode | null {
   if (c.c !== 'rel') return null;
@@ -151,7 +157,7 @@ function verifyRoot(f: SymNode, v: SymNode, root: SymNode, ctx: RuleCtx, domain:
 }
 
 /** Filter roots by domain restrictions; undecidable inexact denominators keep the root. */
-function applyDomainFilter(roots: SymNode[], restrictions: readonly SymNode[], v: SymNode, ctx: RuleCtx): { kept: SymNode[]; unchecked: boolean } {
+function applyDomainFilter(roots: readonly SymNode[], restrictions: readonly SymNode[], v: SymNode, ctx: RuleCtx): { kept: SymNode[]; unchecked: boolean } {
   const kept: SymNode[] = [];
   let unchecked = false;
   for (const r of roots) {
@@ -403,7 +409,7 @@ function foldOddRoot(m: SymNode, g: number, ctx: RuleCtx): SymNode | null {
 
 /* ------------------------- parametric linear/quadratic ----------------------- */
 
-function solveLinearParam(a: SymNode, b: SymNode, v: SymNode): SolveResult {
+function solveLinearParam(a: SymNode, b: SymNode): SolveResult {
   const generic = divideNodes(negateNode(b), a);
   return {
     solutions: [generic],
@@ -423,7 +429,7 @@ function solveQuadraticParam(a: SymNode, b: SymNode, c: SymNode, v: SymNode, ctx
   const twoA = mul(TWO, a);
   const r1 = divideNodes(add(negateNode(b), sq), twoA);
   const r2 = divideNodes(add(negateNode(b), negateNode(sq)), twoA);
-  const linear = solveLinearParam(b, c, v);
+  const linear = solveLinearParam(b, c);
   return {
     solutions: [r1, r2],
     all: false,
@@ -514,7 +520,7 @@ function solveExact(f: SymNode, v: SymNode, ctx: RuleCtx, domain: 'real' | 'comp
     for (const s of freeSymbols(c)) params.add(s);
   }
   if (params.size > 0) {
-    if (deg === 1) return solveLinearParam(coeffs[1] as SymNode, coeffs[0] as SymNode, v);
+    if (deg === 1) return solveLinearParam(coeffs[1] as SymNode, coeffs[0] as SymNode);
     if (deg === 2) {
       return solveQuadraticParam(coeffs[2] as SymNode, coeffs[1] as SymNode, coeffs[0] as SymNode, v, ctx);
     }
@@ -1102,7 +1108,6 @@ function unsupportedFor(f: SymNode, v: SymNode): Unsupported {
       case 'add': for (const c of t.terms) walk(c); break;
       case 'mul': for (const c of t.factors) walk(c); break;
       case 'pow': walk(t.base); walk(t.exp); break;
-      case 'fn': for (const c of t.args) walk(c); break;
       default: break;
     }
   };
@@ -1684,7 +1689,7 @@ function nsolveScan(f: SymNode, v: SymNode, from: number, to: number, tick: Tick
   for (let i = 0; i <= N; i++) {
     const x = from + ((to - from) * i) / N;
     xs.push(x);
-    const y = evalAt(f, new Map([[v.name, x]]));
+    const y = evalAt(f, new Map([[varName(v), x]]));
     ys.push(y === null || !Number.isFinite(y) ? null : y);
     tick.tick(2);
   }
@@ -1716,7 +1721,7 @@ function nsolveScan(f: SymNode, v: SymNode, from: number, to: number, tick: Tick
       continue;
     }
     const m = (a + b) / 2;
-    const fm = evalAt(f, new Map([[v.name, m]]));
+    const fm = evalAt(f, new Map([[varName(v), m]]));
     tick.tick(1);
     if (fm !== null && Math.abs(fm) < Math.abs(fa) / 4 && Math.abs(fm) < Math.abs(fb) / 4 && Math.abs(fm) < 1e-6) {
       const r = refineTouch(f, v, a, b, tick);
@@ -1743,22 +1748,22 @@ function pushRoot(roots: number[], r: number): void {
 
 /** A sign change whose magnitude grows as the bracket shrinks is a pole, not a root. */
 function isPoleBracket(f: SymNode, v: SymNode, a: number, b: number): boolean {
-  const fa = Math.abs(evalAt(f, new Map([[v.name, a]])) ?? 0);
-  const fb = Math.abs(evalAt(f, new Map([[v.name, b]])) ?? 0);
+  const fa = Math.abs(evalAt(f, new Map([[varName(v), a]])) ?? 0);
+  const fb = Math.abs(evalAt(f, new Map([[varName(v), b]])) ?? 0);
   const m = (a + b) / 2;
-  const fm = Math.abs(evalAt(f, new Map([[v.name, m]])) ?? 0);
+  const fm = Math.abs(evalAt(f, new Map([[varName(v), m]])) ?? 0);
   return fm > 4 * Math.min(fa, fb) && fm > 1e6;
 }
 
 function bisect(f: SymNode, v: SymNode, a: number, b: number, tick: Ticker): number | null {
-  let fa = evalAt(f, new Map([[v.name, a]]));
+  let fa = evalAt(f, new Map([[varName(v), a]]));
   let lo = a;
   let hi = b;
   if (fa === null) return null;
   for (let i = 0; i < 100; i++) {
     tick.tick(1);
     const m = (lo + hi) / 2;
-    const fm = evalAt(f, new Map([[v.name, m]]));
+    const fm = evalAt(f, new Map([[varName(v), m]]));
     if (fm === null) return null;
     if (fm === 0) return m;
     if (fa * fm < 0) hi = m;
@@ -1778,14 +1783,14 @@ function refineTouch(f: SymNode, v: SymNode, a: number, b: number, tick: Ticker)
     tick.tick(1);
     const m1 = lo + (hi - lo) / 3;
     const m2 = hi - (hi - lo) / 3;
-    const f1 = Math.abs(evalAt(f, new Map([[v.name, m1]])) ?? Infinity);
-    const f2 = Math.abs(evalAt(f, new Map([[v.name, m2]])) ?? Infinity);
+    const f1 = Math.abs(evalAt(f, new Map([[varName(v), m1]])) ?? Infinity);
+    const f2 = Math.abs(evalAt(f, new Map([[varName(v), m2]])) ?? Infinity);
     if (f1 < f2) hi = m2;
     else lo = m1;
     if (hi - lo < 1e-7 * Math.max(1, Math.abs(lo))) break;
   }
   const m = (lo + hi) / 2;
-  const fm = evalAt(f, new Map([[v.name, m]]));
+  const fm = evalAt(f, new Map([[varName(v), m]]));
   if (fm === null || Math.abs(fm) > 1e-6) return null;
   return m;
 }
@@ -1794,13 +1799,13 @@ function bracketFromStart(f: SymNode, v: SymNode, start: number, from: number, t
   const out: [number, number][] = [];
   let step = Math.max(1e-6, Math.abs(start) * 1e-3);
   let prev = start;
-  let fp = evalAt(f, new Map([[v.name, prev]]));
+  let fp = evalAt(f, new Map([[varName(v), prev]]));
   for (let i = 0; i < 60; i++) {
     tick.tick(1);
     const x = prev + step;
     if (x > to && prev > start) break;
     if (x < from) break;
-    const fx = evalAt(f, new Map([[v.name, x]]));
+    const fx = evalAt(f, new Map([[varName(v), x]]));
     if (fp !== null && fx !== null && fp * fx < 0) {
       out.push([prev, x]);
       if (out.length >= 4) break;
@@ -1813,13 +1818,13 @@ function bracketFromStart(f: SymNode, v: SymNode, start: number, from: number, t
   }
   step = Math.max(1e-6, Math.abs(start) * 1e-3);
   prev = start;
-  fp = evalAt(f, new Map([[v.name, prev]]));
+  fp = evalAt(f, new Map([[varName(v), prev]]));
   for (let i = 0; i < 60; i++) {
     tick.tick(1);
     const x = prev - step;
     if (x < from && prev < start) break;
     if (x > to) break;
-    const fx = evalAt(f, new Map([[v.name, x]]));
+    const fx = evalAt(f, new Map([[varName(v), x]]));
     if (fp !== null && fx !== null && fp * fx < 0) {
       out.push([x, prev]);
       if (out.length >= 8) break;
@@ -1873,7 +1878,7 @@ function dampedNewton(eqs: readonly SymNode[], vars: readonly SymNode[], start: 
   const n = vars.length;
   let x = [...start];
   const evalSys = (xx: readonly number[]): number[] | null => {
-    const m = new Map(vars.map((v, i) => [v.name, xx[i] as number] as [string, number]));
+    const m = new Map(vars.map((v, i) => [varName(v), xx[i] as number] as [string, number]));
     const out: number[] = [];
     for (const e of eqs) {
       const y = evalAt(e, m);

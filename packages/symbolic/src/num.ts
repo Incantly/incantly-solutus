@@ -115,7 +115,7 @@ function pollardBrent(n: bigint, budget: { steps: number }): bigint | null {
   let r = 1n;
   let q = 1n;
   const f = (x: bigint): bigint => (modMul(x, x, n) + c) % n;
-  let x = y;
+  let x: bigint;
   for (;;) {
     if (budget.steps <= 0) return null;
     x = y;
@@ -144,7 +144,6 @@ function pollardBrent(n: bigint, budget: { steps: number }): bigint | null {
         c = 1n;
       }
       y = 2n;
-      x = y;
       r = 1n;
       q = 1n;
       g = 1n;

@@ -16,6 +16,12 @@ import { Unsupported } from './solve';
 
 /* --------------------------------- derivative --------------------------------- */
 
+/** The variable name for numeric sampling; the numeric paths need a real symbol. */
+function varName(v: SymNode): string {
+  if (v.k !== 'sym') throw new Unsupported('a limit or integral in one symbol', 'classify');
+  return v.name;
+}
+
 /** Exact derivative of `e` with respect to `v`, then a light simplify pass. */
 export function diffNode(e: SymNode, v: SymNode, ctx: RuleCtx): SymNode {
   const d = diffRaw(e, v, ctx);
@@ -738,7 +744,7 @@ function splitNumDenFlat(t: SymNode): { num: SymNode; den: SymNode | null } {
 
 /** Adaptive Simpson with a Kahan-compensated stack, split at breakpoints. */
 function quadSplit(e: SymNode, v: SymNode, lo: number, hi: number, ctx: RuleCtx): number | null {
-  const breaks = quadBreaks(e, v, lo, hi);
+  const breaks = quadBreaks(e, v);
   const pts = [lo, ...breaks.filter((x) => x > lo && x < hi), hi].sort((x, y) => x - y);
   let total = 0;
   for (let i = 0; i + 1 < pts.length; i++) {
@@ -786,7 +792,7 @@ function quadBreaks(e: SymNode, v: SymNode): number[] {
 
 function adaptiveSimpson(e: SymNode, v: SymNode, a: number, b: number, ctx: RuleCtx): number | null {
   const f = (x: number): number | null => {
-    const y = evalAt(e, new Map([[v.name, x]]));
+    const y = evalAt(e, new Map([[varName(v), x]]));
     return y === null || !Number.isFinite(y) ? null : y;
   };
   const fa = f(a);
@@ -955,7 +961,7 @@ function denominatorVanishes(e: SymNode, v: SymNode, a: number): boolean {
   };
   walk(e);
   return dens.some((d) => {
-    const val = evalAt(d, new Map([[v.name, a]]));
+    const val = evalAt(d, new Map([[varName(v), a]]));
     return val !== null && Math.abs(val) < 1e-15;
   });
 }
@@ -977,7 +983,7 @@ function tryCancelled(e: SymNode, v: SymNode, a: number, ctx: RuleCtx): LimitRes
 /** Known standard limits with `g(v) → 0` or `g → ±inf`. */
 function tryStandard(e: SymNode, v: SymNode, a: number, ctx: RuleCtx): LimitResult | null {
   const g0 = (g: SymNode): boolean => {
-    const val = evalAt(g, new Map([[v.name, a]]));
+    const val = evalAt(g, new Map([[varName(v), a]]));
     return val !== null && Math.abs(val) < 1e-12;
   };
   const { num, den } = splitNumDenFlat(e);
@@ -1008,8 +1014,8 @@ function tryStandard(e: SymNode, v: SymNode, a: number, ctx: RuleCtx): LimitResu
     const g = e.base.terms.find((t) => containsGen(t, v));
     const one = e.base.terms.find((t) => isOneNode(t));
     if (g !== undefined && one !== undefined && e.base.terms.length === 2) {
-      const gv = evalAt(g, new Map([[v.name, a]]));
-      const ev = evalAt(e.exp, new Map([[v.name, a]]));
+      const gv = evalAt(g, new Map([[varName(v), a]]));
+      const ev = evalAt(e.exp, new Map([[varName(v), a]]));
       if (gv !== null && Math.abs(gv) < 1e-12 && ev !== null && !Number.isFinite(ev)) {
         const prod = simplifyNode(mul(e.exp, g), ctx).node;
         try {
@@ -1032,8 +1038,8 @@ function tryLHopital(e: SymNode, v: SymNode, a: number, ctx: RuleCtx, depth: num
   const rewritten = rewriteExotic(e, v, a, ctx);
   const { num, den } = splitNumDenFlat(rewritten ?? e);
   if (den === null) return null;
-  const nv = evalAt(num, new Map([[v.name, a]]));
-  const dv = evalAt(den, new Map([[v.name, a]]));
+  const nv = evalAt(num, new Map([[varName(v), a]]));
+  const dv = evalAt(den, new Map([[varName(v), a]]));
   if (nv === null || dv === null) return null;
   const zeroZero = Math.abs(nv) < 1e-12 && Math.abs(dv) < 1e-12;
   const infInf = !Number.isFinite(nv) && !Number.isFinite(dv);
@@ -1055,8 +1061,8 @@ function tryLHopital(e: SymNode, v: SymNode, a: number, ctx: RuleCtx, depth: num
 /** `b^e` indeterminate forms through `exp(e·ln b)`; the exponent limit recurses. */
 function tryPowIndeterminate(e: SymNode, v: SymNode, a: number, ctx: RuleCtx, depth: number): LimitResult | null {
   if (e.k !== 'pow') return null;
-  const bv = evalAt(e.base, new Map([[v.name, a]]));
-  const ev = evalAt(e.exp, new Map([[v.name, a]]));
+  const bv = evalAt(e.base, new Map([[varName(v), a]]));
+  const ev = evalAt(e.exp, new Map([[varName(v), a]]));
   if (bv === null || ev === null) return null;
   const is1 = Math.abs(bv - 1) < 1e-12;
   const is0b = Math.abs(bv) < 1e-12;
@@ -1076,7 +1082,7 @@ function tryPowIndeterminate(e: SymNode, v: SymNode, a: number, ctx: RuleCtx, de
 function rewriteExotic(e: SymNode, v: SymNode, a: number, ctx: RuleCtx): SymNode | null {
   void ctx;
   if (e.k === 'mul') {
-    const vals = e.factors.map((f) => evalAt(f, new Map([[v.name, a]])));
+    const vals = e.factors.map((f) => evalAt(f, new Map([[varName(v), a]])));
     const zero = vals.findIndex((x) => x !== null && Math.abs(x) < 1e-12);
     const inf = vals.findIndex((x) => x !== null && !Number.isFinite(x));
     if (zero >= 0 && inf >= 0) {
@@ -1097,13 +1103,11 @@ function limitBothSides(e: SymNode, v: SymNode, a: number, ctx: RuleCtx): LimitR
     left = limitOneSided(e, v, a, -1, ctx);
   } catch (err) {
     if (!(err instanceof Unsupported)) throw err;
-    left = null;
   }
   try {
     right = limitOneSided(e, v, a, 1, ctx);
   } catch (err) {
     if (!(err instanceof Unsupported)) throw err;
-    right = null;
   }
   if (left !== null && right !== null) {
     if (limitEqual(left.node, right.node)) return left;
@@ -1142,7 +1146,7 @@ function looksOscillating(e: SymNode, v: SymNode, a: number): boolean {
   for (let k = 2; k <= 10; k++) {
     for (const s of [1, -1]) {
       const x = a + s * Math.pow(10, -k);
-      const y = evalAt(e, new Map([[v.name, x]]));
+      const y = evalAt(e, new Map([[varName(v), x]]));
       if (y !== null && Number.isFinite(y)) vals.push(y);
     }
   }

@@ -321,8 +321,8 @@ export function constN(name: 'pi' | 'e' | 'i' | 'inf'): SymNode {
   return intern({ k: 'const', name });
 }
 
-export function symN(name: string): SymNode {
-  return intern({ k: 'sym', name });
+export function symN(name: string): SymNode & { k: 'sym' } {
+  return intern({ k: 'sym', name }) as SymNode & { k: 'sym' };
 }
 
 export function refN(obj: ObjId | number): SymNode {
@@ -570,12 +570,10 @@ function intPowNumber(base: SymNode, e: bigint): SymNode | null {
     let r = 1n;
     let b = base.v;
     let k = ae;
-    let digits = 0;
     while (k > 0n) {
       if ((k & 1n) === 1n) {
         r *= b;
-        digits = r.toString().length;
-        if (digits > 100000) return null;
+        if (r.toString().length > 100000) return null;
       }
       k >>= 1n;
       if (k > 0n) b *= b;

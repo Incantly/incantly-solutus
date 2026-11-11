@@ -136,7 +136,6 @@ function charVar(m: Matrix): SymNode {
 
 /** `det(M − v·I)` with the characteristic variable chosen by `charVar`. */
 export function characteristicPolynomial(m: Matrix, ctx: RuleCtx): { poly: SymNode; v: SymNode } {
-  const n = m.length;
   const v = charVar(m);
   const shifted = m.map((row, i) => row.map((x, j) => (i === j ? add(x, negateNode(v)) : x)));
   return { poly: simplifyNode(determinant(shifted, ctx.tick), ctx).node, v };
@@ -276,8 +275,9 @@ function nullspaceNumeric(m: Matrix, ctx: RuleCtx): SymNode[] | null {
   const vec: Complex[] = Array.from({ length: n }, () => ({ re: 0, im: 0 }));
   vec[f0] = { re: 1, im: 0 };
   for (let c = 0; c < n; c++) {
-    if (where[c] >= 0) {
-      const cell = (a[where[c] as number] as Complex[])[f0] as Complex;
+    const w = where[c];
+    if (w !== undefined && w >= 0) {
+      const cell = (a[w] as Complex[])[f0] as Complex;
       vec[c] = { re: -cell.re, im: -cell.im };
     }
   }

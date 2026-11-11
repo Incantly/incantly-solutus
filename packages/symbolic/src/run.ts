@@ -4,7 +4,7 @@
  * Heavy ops run in the worker with the full budget; the fast lane answers from the cache
  * or reports `pending`.
  */
-import type { ErrorObject, Notice, ObjId } from '@incantly/kernel';
+import type { ErrorObject, Notice, ObjId, Phase } from '@incantly/kernel';
 import type { Result } from '@incantly/kernel';
 import type { ErrorKind } from '@incantly/kernel';
 import type { Assumptions } from './assume';
@@ -12,7 +12,7 @@ import { assumptions as makeAssumptions } from './assume';
 import type { Cell, OpName, RunContext, Step, SymArg, SymbolicLimits } from './contracts';
 import { DEFAULT_LIMITS, HEAVY_OPS, SYMBOLIC_ERROR_CODES, undefinedCell } from './contracts';
 import type { SymCond, SymNode } from './node';
-import { floatN, intN, LimitExceeded, mapNodes, mapCondNodes, ratN } from './node';
+import { floatN, LimitExceeded, mapNodes, mapCondNodes, ratN } from './node';
 import { shortestDecimalRational } from './num';
 import type { Ticker } from './poly';
 import { condText } from './print';
@@ -135,7 +135,7 @@ export function clearCache(): void {
 
 /* ---------------------------------- errors ----------------------------------- */
 
-const OP_PHASES: Readonly<Record<string, 'typecheck' | 'plan' | 'resolve'>> = {
+const OP_PHASES: Readonly<Record<string, Phase>> = {
   not_symbolic: 'resolve',
   bad_variable: 'typecheck',
   time_dependent_input: 'plan',

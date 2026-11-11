@@ -9,16 +9,16 @@ import type { Notice, NoticeKind } from '@incantly/kernel';
 import type { Assumptions } from './assume';
 import { assumptions as makeAssumptions, findContradiction } from './assume';
 import type { Domain, OpName, SymArg, SymbolicLimits, SymbolicNoticeKind } from './contracts';
-import { defined, SYMBOLIC_NOTICE_CODES, undefinedCell } from './contracts';
+import { defined, SYMBOLIC_NOTICE_CODES } from './contracts';
 import type { Cell } from './contracts';
 import type { SymCond, SymNode } from './node';
 import {
-  add, asInteger, asRational, constN, decN, floatN, freeSymbols, intN,
+  add, asInteger, asRational, bigGcd, constN, decN, floatN, freeSymbols, intN,
   isZeroNode, LimitExceeded, mul, negateNode, nodeCount, pow, ratN, rel, symN,
 } from './node';
 import { freeSymbolsCond } from './node';
 import {
-  bigGcd, binomialBig, divisorsFromFactors, extendedGcdBig, factorMultiplicity,
+  binomialBig, divisorsFromFactors, extendedGcdBig, factorMultiplicity,
   fromBaseText, isPrimeBig, isqrtBig, modPowBigInt, nearestFraction, nextPrimeBig,
   previousPrimeBig, primeFactorsBig, shortestDecimalRational, toBaseBig,
 } from './num';
@@ -135,7 +135,7 @@ function asCond(a: SymArg, op: string): SymCond {
   return a.c;
 }
 
-function asSym(a: SymArg, op: string): SymNode {
+function asSym(a: SymArg, op: string): SymNode & { k: 'sym' } {
   if (a.k === 'sym') return symN(a.name);
   if (a.k === 'expr' && a.e.k === 'sym') return a.e;
   throw new OpError('bad_variable', `${op} needs a Symbol or x, y or z here.`, {
@@ -149,13 +149,6 @@ function asNum(a: SymArg, op: string): number {
   if (a.k === 'num') return a.v;
   if (a.k === 'int') return Number(a.v);
   throw new OpError('no_matching_form', `${op} needs a number here.`, { recovery: 'choose_form' });
-}
-
-function asInt(a: SymArg, op: string): bigint {
-  if (a.k === 'int') return a.v;
-  if (a.k === 'num' && Number.isInteger(a.v)) return BigInt(a.v);
-  if (a.k === 'expr' && a.e.k === 'int') return a.e.v;
-  throw new OpError('bad_argument', `${op} needs a whole number here.`, { recovery: 'rewrite' });
 }
 
 function asText(a: SymArg, op: string): string {
@@ -844,7 +837,7 @@ function solveBounds(
   return { ...(from === undefined ? {} : { from }), ...(to === undefined ? {} : { to }), domain };
 }
 
-function inferVar(c: SymCond, op: string): SymNode {
+function inferVar(c: SymCond, op: string): SymNode & { k: 'sym' } {
   const free = [...freeSymbolsCond(c)];
   if (free.length !== 1) {
     throw new OpError('bad_variable', `${op} needs exactly one free symbol, or pass the variable.`, {
@@ -963,7 +956,7 @@ function opSolve(args: readonly SymArg[], named: ReadonlyMap<string, SymArg>, ct
     return opSystem(a.items, (args[1] as SymArg & { k: 'list' }).items, named, ctx, op);
   }
   const c = asCond(a, op);
-  let v: SymNode;
+  let v: SymNode & { k: 'sym' };
   let bounds: SolveBounds;
   if (args.length > 1 && (args[1] as SymArg).k !== 'named') {
     const second = args[1] as SymArg;
