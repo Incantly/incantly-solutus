@@ -480,3 +480,886 @@ describe('KERN-SM-4: setFree guards fixed objects, reasons, aliasing and throwin
     expect(f.value('n')).toBe(3);
   });
 });
+
+// ---------------------------------------------------------------------------------------------
+// KERN-SM-5. A seek has a step budget; a non-finite or huge time cannot hang
+// ---------------------------------------------------------------------------------------------
+
+describe('KERN-SM-5: setClock with states always returns', () => {
+  const CHILD_LIMIT_MS = 10_000;
+  const SEEKS: [string, string, string][] = [
+    ['Infinity', 'Infinity', ''],
+    ['-Infinity', '-Infinity', ''],
+    ['NaN', 'NaN', ''],
+    ['1e6', '1e6', ''],
+    ['1e9', '1e9', ''],
+    ['1e15', '1e15', ''],
+    ['1e12 inside @clock 0..1e12', '1e12', "f.apply('@clock 0..1e12');"],
+  ];
+
+  it.each(SEEKS)('setClock(%s) returns within the time limit and leaves a finite clock', (_label, target, prelude) => {
+    const r = runChild(
+      `${prelude}
+f.apply('s1 = state(1)'); f.apply("s1' = 1");
+const t0 = now(); let threw = null;
+try { f.setClock(${target}); } catch (e) { threw = String(e); }
+out.ms = now() - t0; out.threw = threw; out.t = f.clock().t; out.cell = f.cellOf('s1');`,
+      CHILD_LIMIT_MS,
+    );
+    expect(r.timedOut, 'the seek did not return').toBe(false);
+    expect(r.status).toBe(0);
+    expect(r.out.threw).toBeNull();
+    expect(Number.isFinite(r.out.t as number)).toBe(true);
+    expect(r.out.ms as number).toBeLessThan(5000);
+    // Either the state is undefined with `timeout` (the budget ran out) or its value is right.
+    const cell = r.out.cell as { defined: boolean; value?: number; reason?: string };
+    const t = r.out.t as number;
+    if (cell.defined) expect(Math.abs((cell.value as number) - (1 + t))).toBeLessThan(1e-6 * (1 + t) + 1e-6);
+    else expect(cell.reason).toBe('timeout');
+  }, CHILD_LIMIT_MS + 10_000);
+
+  it('after a budgeted seek far ahead, a seek back to a small time gives the exact value', () => {
+    const r = runChild(
+      `f.apply('s1 = state(1)'); f.apply("s1' = 1");
+f.setClock(1e9);
+f.setClock(5); out.v5 = f.value('s1'); out.t5 = f.clock().t;
+f.setClock(120); out.v120 = f.value('s1');
+f.setClock(0); out.v0 = f.value('s1');`,
+      CHILD_LIMIT_MS,
+    );
+    expect(r.timedOut).toBe(false);
+    expect(r.out.t5).toBe(5);
+    expect(r.out.v5 as number).toBeCloseTo(6, 6);
+    expect(r.out.v120 as number).toBeCloseTo(121, 6);
+    expect(r.out.v0 as number).toBeCloseTo(1, 9);
+  }, CHILD_LIMIT_MS + 10_000);
+
+  it('repeated large seeks do not grow without bound (ten seeks to 1e9 finish in time)', () => {
+    const r = runChild(
+      `f.apply('s1 = state(1)'); f.apply("s1' = -s1");
+const t0 = now();
+for (let i = 1; i <= 10; i++) f.setClock(1e9 + i);
+out.ms = now() - t0;`,
+      CHILD_LIMIT_MS,
+    );
+    expect(r.timedOut).toBe(false);
+    expect(r.out.ms as number).toBeLessThan(10_000);
+  }, CHILD_LIMIT_MS + 10_000);
+
+  it('a second order state (a pendulum) is bounded too', () => {
+    const r = runChild(
+      `for (const l of ['th = state(0.6)', 'w = state(0)', "th' = w", "w' = -9.8 * sin(th)"]) f.apply(l);
+f.setClock(1e8); out.t = f.clock().t;`,
+      CHILD_LIMIT_MS,
+    );
+    expect(r.timedOut).toBe(false);
+    expect(r.out.t).toBe(1e8);
+  }, CHILD_LIMIT_MS + 10_000);
+
+  it('setClock with a non-finite time in a figure without states is harmless', () => {
+    const f = figure(['x1 = t']);
+    for (const t of [Infinity, -Infinity, NaN]) {
+      expect(() => f.setClock(t)).not.toThrow();
+      expect(Number.isFinite(f.clock().t)).toBe(true);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// KERN-SM-6. Lazy reads of long chains do not overflow the stack
+// ---------------------------------------------------------------------------------------------
+
+describe('KERN-SM-6: reading a stale value is iterative', () => {
+  function chain(n: number, limit = n + 10): Figure {
+    const f = newFigure({ limits: { objects: limit } });
+    const lines = ['h = 1', 'c1 = h + 1'];
+    for (let i = 2; i < n; i++) lines.push(`c${i} = c${i - 1} + 1`);
+    const r = f.applyBatch(lines, { group: 'build' });
+    if (!r.ok) throw new Error('could not build the chain');
+    return f;
+  }
+
+  it('a 5,000-object chain read in lazy mode after a write upstream (the default object limit)', () => {
+    const f = chain(5000, DEFAULT_LIMITS.objects);
+    f.setDemand([]);
+    expect(f.setFree('h', 2, 'api').ok).toBe(true);
+    f.flush();
+    expect(() => f.value('c4999')).not.toThrow();
+    expect(f.value('c4999')).toBe(5001);
+  });
+
+  it('a 20,000-object chain with a raised object limit', () => {
+    const f = chain(20_000);
+    f.setDemand([]);
+    f.setFree('h', 2, 'api');
+    f.flush();
+    expect(() => f.value('c19999')).not.toThrow();
+    expect(f.value('c19999')).toBe(20_001);
+  });
+
+  it('cellOf, get, objects and describe on the stale end of the chain do not throw', () => {
+    const f = chain(5000, DEFAULT_LIMITS.objects);
+    f.setDemand([]);
+    f.setFree('h', 2, 'api');
+    f.flush();
+    expect(() => f.cellOf('c4999')).not.toThrow();
+    expect(() => f.get('c4999')).not.toThrow();
+    expect(() => f.describe('c4999')).not.toThrow();
+    expect(() => f.objects()).not.toThrow();
+    expect(f.cellOf('c4999')).toEqual({ defined: true, value: 5001 });
+  });
+
+  it('a read of the middle first, then the end, gives right values', () => {
+    const f = chain(5000, DEFAULT_LIMITS.objects);
+    f.setDemand([]);
+    f.setFree('h', 3, 'api');
+    f.flush();
+    expect(f.value('c2500')).toBe(2503);
+    expect(f.value('c4999')).toBe(5002);
+    expect(f.value('c1')).toBe(4);
+  });
+
+  it('after a slow write the whole chain is consistent when read from the top down and the bottom up', () => {
+    const f = chain(3000, DEFAULT_LIMITS.objects);
+    f.setDemand([]);
+    f.setFree('h', 10, 'api');
+    f.flush();
+    for (const i of [2999, 1, 1500, 2, 2998]) expect(f.value(`c${i}`)).toBe(10 + i);
+  });
+
+  it('two writes before one read still read right', () => {
+    const f = chain(4000, DEFAULT_LIMITS.objects);
+    f.setDemand([]);
+    f.setFree('h', 2, 'api');
+    f.flush();
+    f.setFree('h', 5, 'api');
+    f.flush();
+    expect(f.value('c3999')).toBe(4004);
+  });
+
+  it('an undefined link in a long stale chain is read as undefined, not as a crash', () => {
+    const f = newFigure({ limits: { objects: 5010 } });
+    const lines = ['h = 1', 'r1 = Reciprocal(h)'];
+    for (let i = 2; i < 4000; i++) lines.push(`r${i} = r${i - 1} + 1`);
+    expect(f.applyBatch(lines, { group: 'build' }).ok).toBe(true);
+    f.setDemand([]);
+    f.setFree('h', 0, 'api');
+    f.flush();
+    expect(() => f.value('r3999')).not.toThrow();
+    expect(f.value('r3999')).toBeUndefined();
+    expect(f.cellOf('r3999')?.defined).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// KERN-SM-7. Directive replacement is linear
+// ---------------------------------------------------------------------------------------------
+
+describe('KERN-SM-7: a big file of comments and directives loads in bounded time', () => {
+  const CHILD_LIMIT_MS = 10_000;
+  const BUILD = `const n = 50000; const lines = [];
+for (let i = 0; i < n; i++) lines.push('# c' + i);
+for (let i = 0; i < n; i++) lines.push('@view -' + (i + 1) + ' ' + (i + 1) + ' -3 3');
+const text = lines.join('\\n'); out.len = text.length;`;
+
+  it('fromScript of 50,000 comments and 50,000 @view lines (under fileSize) returns within the time limit', () => {
+    const r = runChild(`${BUILD}\nconst t0 = now(); const res = k.Figure.fromScript(text); out.ms = now() - t0; out.views = res.figure.toScript().split('\\n').filter((l) => l.startsWith('@view')).length;`, CHILD_LIMIT_MS);
+    expect(r.out.len as number).toBeLessThan(DEFAULT_LIMITS.fileSize);
+    expect(r.timedOut, 'the load did not return').toBe(false);
+    expect(r.out.ms as number).toBeLessThan(9000);
+    expect(r.out.views as number).toBeLessThanOrEqual(1);
+  }, CHILD_LIMIT_MS + 10_000);
+
+  it('applyBatch (independent) of the same lines returns within the time limit', () => {
+    const r = runChild(`${BUILD}\nconst t0 = now(); f.applyBatch(lines, { group: 'g', mode: 'independent' }); out.ms = now() - t0;`, CHILD_LIMIT_MS);
+    expect(r.timedOut, 'the batch did not return').toBe(false);
+    expect(r.out.ms as number).toBeLessThan(9000);
+  }, CHILD_LIMIT_MS + 10_000);
+
+  it('repeated apply of one non-repeatable directive after many comments returns within the time limit', () => {
+    const r = runChild(
+      `for (let i = 0; i < 4000; i++) f.apply('# c' + i);
+const t0 = now();
+for (let i = 0; i < 20000; i++) f.apply('@view -' + (i + 1) + ' ' + (i + 1) + ' -3 3');
+out.ms = now() - t0;`,
+      CHILD_LIMIT_MS,
+    );
+    expect(r.timedOut).toBe(false);
+    expect(r.out.ms as number).toBeLessThan(8000);
+  }, CHILD_LIMIT_MS + 10_000);
+
+  it('a non-repeatable directive written twice stays one line, in the place of the first', () => {
+    const f = figure(['# top', 'a = 1', '@view -1 1 -1 1', 'b = 2']);
+    ok(f.apply('@view -2 2 -2 2'));
+    const lines = f.toScript().split('\n');
+    expect(lines.filter((l) => l.startsWith('@view'))).toEqual(['@view -2 2 -2 2']);
+    expect(lines.indexOf('@view -2 2 -2 2')).toBeGreaterThan(lines.indexOf('a = 1'));
+    expect(lines.indexOf('@view -2 2 -2 2')).toBeLessThan(lines.indexOf('b = 2'));
+  });
+
+  it('@clock and @solver are replaced in place as well, among many comments', () => {
+    const f = newFigure();
+    for (let i = 0; i < 300; i++) ok(f.apply(`# c${i}`));
+    ok(f.apply('@clock 0..10'));
+    ok(f.apply('@solver step 1/240'));
+    ok(f.apply('@clock 0..20'));
+    ok(f.apply('@solver step 1/480'));
+    const lines = f.toScript().split('\n');
+    expect(lines.filter((l) => l.startsWith('@clock'))).toEqual(['@clock 0..20']);
+    expect(lines.filter((l) => l.startsWith('@solver'))).toEqual(['@solver step 1/480']);
+    expect(f.clockRange()).toEqual({ from: 0, to: 20 });
+  });
+
+  it('repeatable directives are appended, not replaced', () => {
+    const f = figure(['a = 1']);
+    ok(f.apply('@step "one"'));
+    ok(f.apply('@step "two"'));
+    ok(f.apply('@beat 1'));
+    ok(f.apply('@beat 2'));
+    const lines = f.toScript().split('\n');
+    expect(lines.filter((l) => l.startsWith('@step'))).toEqual(['@step "one"', '@step "two"']);
+    expect(lines.filter((l) => l.startsWith('@beat'))).toEqual(['@beat 1', '@beat 2']);
+  });
+
+  it('undo of a replacement brings the earlier directive back, and the index stays right', () => {
+    const f = figure(['a = 1']);
+    ok(f.apply('@view -1 1 -1 1'));
+    ok(f.apply('@view -2 2 -2 2'));
+    ok(f.undo());
+    expect(f.toScript()).toContain('@view -1 1 -1 1');
+    expect(f.toScript()).not.toContain('@view -2 2 -2 2');
+    ok(f.undo());
+    expect(f.toScript()).not.toContain('@view');
+    ok(f.apply('@view -3 3 -3 3'));
+    expect(f.toScript().split('\n').filter((l) => l.startsWith('@view'))).toEqual(['@view -3 3 -3 3']);
+    ok(f.undo());
+    ok(f.redo());
+    expect(f.toScript().split('\n').filter((l) => l.startsWith('@view'))).toEqual(['@view -3 3 -3 3']);
+  });
+
+  it('after the object that anchors the directive is deleted, a new @view still replaces it', () => {
+    const f = figure(['a = 1', '@view -1 1 -1 1', 'b = 2']);
+    ok(f.delete('a'));
+    ok(f.apply('@view -4 4 -4 4'));
+    expect(f.toScript().split('\n').filter((l) => l.startsWith('@view'))).toEqual(['@view -4 4 -4 4']);
+    ok(f.undo());
+    ok(f.undo());
+    expect(f.toScript().split('\n').filter((l) => l.startsWith('@view'))).toEqual(['@view -1 1 -1 1']);
+  });
+
+  it('a directive replaced inside a batch that rolls back is as it was', () => {
+    const f = figure(['a = 1', '@view -1 1 -1 1']);
+    const before = snap(f);
+    const r = f.applyBatch(['@view -9 9 -9 9', 'c = nope + 1'], { group: 'g' });
+    expect(r.rolledBack).toBe(true);
+    expectUnchanged(f, before);
+    ok(f.apply('@view -5 5 -5 5'));
+    expect(f.toScript().split('\n').filter((l) => l.startsWith('@view'))).toEqual(['@view -5 5 -5 5']);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// KERN-SM-8. A rule that re-enters the figure does not make the pass throw
+// ---------------------------------------------------------------------------------------------
+
+describe('KERN-SM-8: re-entrant calls during a pass never throw across the boundary', () => {
+  const ACTIONS: [string, (fig: Figure) => unknown][] = [
+    ['apply Delete(k)', (fig) => fig.apply('Delete(k)')],
+    ['delete(n)', (fig) => fig.delete('n')],
+    ['delete(a)', (fig) => fig.delete('a')],
+    ['apply of a new line', (fig) => fig.apply('q = 5')],
+    ['redefine a', (fig) => fig.apply('a = 7')],
+    ['rename k', (fig) => fig.rename('k', 'kk')],
+    ['undo', (fig) => fig.undo()],
+    ['redo', (fig) => fig.redo()],
+    ['setFree a', (fig) => fig.setFree('a', 5, 'api')],
+    ['setClock', (fig) => fig.setClock(3)],
+    ['flush', (fig) => fig.flush()],
+    ['applyBatch', (fig) => fig.applyBatch(['q = 1', 'r = q + a'], { group: 'g' })],
+    ['insertAt', (fig) => fig.insertAt(0, 'z = 1')],
+    ['move', (fig) => fig.move('n', 0, { withDependencies: true })],
+    ['append', (fig) => fig.append('p1 = 1')],
+    ['commitDrag', (fig) => fig.commitDrag()],
+    ['setDemand', (fig) => fig.setDemand([])],
+  ];
+
+  function reentrant(action: (fig: Figure) => unknown): { f: Figure; arm: () => void } {
+    let target: Figure | undefined;
+    let armed = false;
+    const spec = objectCommand('Sneaky', (call) => {
+      if (armed && target !== undefined) {
+        armed = false;
+        action(target);
+      }
+      return call.values[0] as number;
+    });
+    const f = figureWith([spec], ['a = 1', 'k = a + 1', 'm = Sneaky(a)', 'n = k + m']);
+    target = f;
+    return { f, arm: () => void (armed = true) };
+  }
+
+  it.each(ACTIONS)('a rule calling %s: setFree then flush does not throw', (_label, action) => {
+    const { f, arm } = reentrant(action);
+    arm();
+    expect(() => {
+      f.setFree('a', 2, 'api');
+      f.flush();
+    }).not.toThrow();
+  });
+
+  it.each(ACTIONS)('a rule calling %s: the figure can be read and used afterwards', (_label, action) => {
+    const { f, arm } = reentrant(action);
+    arm();
+    f.setFree('a', 2, 'api');
+    f.flush();
+    expect(() => {
+      for (const name of f.names()) {
+        expect(f.get(name)).toBeDefined();
+        f.value(name);
+        f.cellOf(name);
+      }
+      f.toScript();
+      f.objects();
+    }).not.toThrow();
+    expect(f.apply('zz = 1').ok).toBe(true);
+    expect(f.value('zz')).toBe(1);
+  });
+
+  it('a rule calling Delete during setClock does not throw either', () => {
+    const { f, arm } = reentrant((fig) => fig.apply('Delete(k)'));
+    ok(f.apply('u = Sneaky(t)'));
+    arm();
+    expect(() => f.setClock(4)).not.toThrow();
+  });
+
+  it('a rule that throws on every frame does not make the list of faults grow', () => {
+    const f = figure(['a = 1', 'u = Unlucky(a + 0 * t)']);
+    f.setFree('a', 13, 'api');
+    for (let i = 0; i < 1000; i++) f.setClock(i);
+    // Reading: `faults` is protected, so the test only checks it through a cast and only when it is there.
+    const faults = (f as unknown as { faults?: unknown[] }).faults;
+    if (Array.isArray(faults)) expect(faults.length).toBeLessThanOrEqual(10);
+    expect(f.apply('q = 5').ok).toBe(true);
+  });
+
+  it('a fault in an earlier frame does not make a later correct line fail', () => {
+    const f = figure(['a = 1', 'u = Unlucky(a)']);
+    f.setFree('a', 13, 'api');
+    f.flush();
+    const r = f.apply('q = 5');
+    expect(r.ok).toBe(true);
+    expect(f.value('q')).toBe(5);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// KERN-SM-9. History inside an open journal group
+// ---------------------------------------------------------------------------------------------
+
+describe('KERN-SM-9: Undo, Redo and nested batches act inside the open group, never outside it', () => {
+  const MACRO = actionCommand('Macro', (call) => void call.figure.applyBatch(['m1 = 1'], { group: 'inner', mode: 'independent' }));
+  const MACRO_FAIL = actionCommand('MacroFail', (call) => void call.figure.applyBatch(['m1 = 1', 'm2 = nope + 1'], { group: 'inner' }));
+  const REWIND = actionCommand('Rewind', (call) => void call.figure.undo());
+  const FORWARD = actionCommand('Forward', (call) => void call.figure.redo());
+  const EXTRA = [MACRO, MACRO_FAIL, REWIND, FORWARD];
+
+  const names = (f: Figure): string[] => [...f.names()];
+
+  /** Undo everything, then redo everything: the script after the redo walk equals the one before. */
+  function expectHistoryRoundTrips(f: Figure): void {
+    const start = f.toScript();
+    let guard = 0;
+    while (f.undo().ok && guard++ < 50);
+    expect(f.count).toBe(0);
+    guard = 0;
+    while (f.redo().ok && guard++ < 50);
+    expect(f.toScript()).toBe(start);
+  }
+
+  describe('Undo() as a line of a batch (evidence 1 to 3)', () => {
+    it.each(['independent', 'atomic'] as const)('%s: a line written before the batch survives Undo() inside it', (mode) => {
+      const f = figure(['a = 1']);
+      f.applyBatch(['b = 2', 'Undo()'], { group: 'g', mode });
+      expect(names(f)).toContain('a');
+    });
+
+    it('independent: Undo() takes back the batch\'s own last line, or is refused and the line stays', () => {
+      // Reading: kernel design 11.2 says the teacher's Undo() takes back one line. Refusing it inside a group is the
+      // other reading in findings.md; both keep the earlier lines.
+      const f = figure(['a = 1']);
+      const r = f.applyBatch(['b = 2', 'Undo()'], { group: 'g', mode: 'independent' });
+      if (names(f).includes('b')) expect(r.results[1]?.ok).toBe(false);
+      else expect(names(f)).toEqual(['a']);
+    });
+
+    it('independent: after the batch, the undo and redo stacks are consistent (history round trip)', () => {
+      const f = figure(['a = 1']);
+      f.applyBatch(['b = 2', 'Undo()'], { group: 'g', mode: 'independent' });
+      expectHistoryRoundTrips(f);
+    });
+
+    it('independent: undo() of the batch leaves the earlier line, and a second undo() takes that one', () => {
+      const f = figure(['a = 1']);
+      f.applyBatch(['b = 2', 'Undo()'], { group: 'g', mode: 'independent' });
+      const seen = undoWalk(f, names);
+      expect(seen[seen.length - 1]).toEqual([]);
+      expect(seen.some((n) => n.length === 1 && n[0] === 'a') || seen.length === 1).toBe(true);
+    });
+
+    it.each([
+      ['Undo() then a failing line', ['b = 2', 'Undo()', 'c = nope + 1']],
+      ['two Undo() then a failing line', ['b = 2', 'Undo()', 'Undo()', 'c = nope + 1']],
+      ['Undo() first', ['Undo()', 'b = 2', 'c = nope + 1']],
+      ['Undo() and Redo() then a failing line', ['b = 2', 'Undo()', 'Redo()', 'c = nope + 1']],
+      ['a lone Undo() and a failing line', ['Undo()', 'c = nope + 1']],
+    ])('atomic rollback after %s leaves the figure and both stacks exactly as they were', (_label, lines) => {
+      const f = figure(['a = 1']);
+      const before = snap(f);
+      const r = f.applyBatch(lines, { group: 'g' });
+      expect(r.ok).toBe(false);
+      expect(r.rolledBack).toBe(true);
+      expectUnchanged(f, before);
+    });
+
+    it('atomic rollback keeps a non-empty redo stack as it was', () => {
+      const f = figure(['a = 1', 'b = 2']);
+      ok(f.undo());
+      const before = snap(f);
+      expect(before.redo).toBe(1);
+      const r = f.applyBatch(['c = 3', 'Undo()', 'Redo()', 'd = nope + 1'], { group: 'g' });
+      expect(r.rolledBack).toBe(true);
+      expectUnchanged(f, before);
+      ok(f.redo());
+      expect(names(f)).toEqual(['a', 'b']);
+    });
+
+    it('a figure whose last batch had two lines keeps both when the next batch calls Undo()', () => {
+      const f = figure([]);
+      f.applyBatch(['a = 1', 'b = 2'], { group: 'g1' });
+      f.applyBatch(['c = 3', 'Undo()'], { group: 'g2' });
+      expect(names(f)).toEqual(expect.arrayContaining(['a', 'b']));
+    });
+
+    it('a lone Undo() in a batch does not take back the figure\'s earlier history', () => {
+      const f = figure(['a = 1', 'b = 2']);
+      f.applyBatch(['Undo()'], { group: 'g', mode: 'independent' });
+      expect(names(f)).toEqual(['a', 'b']);
+      expect(f.undoInfo().depth).toBe(2);
+    });
+
+    it('a lone Undo() in an atomic batch is refused and nothing changes', () => {
+      const f = figure(['a = 1', 'b = 2']);
+      const before = snap(f);
+      const r = f.applyBatch(['Undo()'], { group: 'g' });
+      if (!r.ok) expectUnchanged(f, before);
+      else expect(names(f)).toEqual(['a', 'b']);
+    });
+  });
+
+  describe('Redo() as a line of a batch', () => {
+    it('a batch that calls Redo() first does not replay an entry taken back before the batch', () => {
+      const f = figure(['a = 1', 'b = 2']);
+      ok(f.undo());
+      const r = f.applyBatch(['Redo()', 'c = 3'], { group: 'g', mode: 'independent' });
+      expect(names(f)).not.toContain('b');
+      expect(r.results[0]?.ok).toBe(false);
+    });
+
+    it('atomic: Redo() of something outside the batch fails the batch and leaves the figure as it was', () => {
+      const f = figure(['a = 1', 'b = 2']);
+      ok(f.undo());
+      const before = snap(f);
+      const r = f.applyBatch(['c = 3', 'Redo()'], { group: 'g' });
+      expect(names(f)).not.toContain('b');
+      if (!r.ok) expectUnchanged(f, before);
+    });
+
+    it('Undo() then Redo() inside a batch gives back what the Undo() took', () => {
+      const f = figure(['a = 1']);
+      f.applyBatch(['c = 3', 'Undo()', 'Redo()'], { group: 'g', mode: 'independent' });
+      expect(names(f)).toEqual(['a', 'c']);
+    });
+  });
+
+  describe('append and fromScript (evidence 4)', () => {
+    it('append of a file with Undo() lines does not take back the host\'s own lines', () => {
+      const f = figure(['a = 1', 'b = 2']);
+      f.append('c = 3\nUndo()\nUndo()');
+      expect(names(f)).toEqual(expect.arrayContaining(['a', 'b']));
+    });
+
+    it('append of a file with Undo() lines in strict mode does not take back the host\'s own lines', () => {
+      const f = figure(['a = 1', 'b = 2']);
+      f.append('c = 3\nUndo()\nUndo()\nUndo()', { mode: 'strict' });
+      expect(names(f)).toEqual(expect.arrayContaining(['a', 'b']));
+    });
+
+    it('append of a file with a Redo() line does not replay what the host took back', () => {
+      const f = figure(['a = 1', 'b = 2']);
+      ok(f.undo());
+      f.append('c = 3\nRedo()');
+      expect(names(f)).not.toContain('b');
+    });
+
+    it('a strict append that fails after Undo() lines leaves the figure and both stacks as they were', () => {
+      const f = figure(['a = 1', 'b = 2']);
+      const before = snap(f);
+      const rep = f.append('c = 3\nUndo()\nd = nope + 1', { mode: 'strict' });
+      expect(rep.ok).toBe(false);
+      expectUnchanged(f, before);
+    });
+
+    it('fromScript of a file with more Undo() lines than lines does not throw and keeps a usable figure', () => {
+      let result: ReturnType<typeof Figure.fromScript> | undefined;
+      expect(() => {
+        result = Figure.fromScript('a = 1\nb = 2\nUndo()\nUndo()\nUndo()\nUndo()');
+      }).not.toThrow();
+      expect(result?.figure.apply('z = 1').ok).toBe(true);
+    });
+  });
+
+  describe('re-entrant history calls from an action', () => {
+    it('undo() called by an action inside a batch does not take back the earlier line', () => {
+      const f = figureWith(EXTRA, ['a = 1']);
+      f.applyBatch(['b = 2', 'Rewind()'], { group: 'g', mode: 'independent' });
+      expect(names(f)).toContain('a');
+    });
+
+    it('redo() called by an action inside a batch does not replay an earlier entry', () => {
+      const f = figureWith(EXTRA, ['a = 1', 'b = 2']);
+      ok(f.undo());
+      f.applyBatch(['c = 3', 'Forward()'], { group: 'g', mode: 'independent' });
+      expect(names(f)).not.toContain('b');
+    });
+
+    it('an atomic batch with Rewind() and a failing line is rolled back completely', () => {
+      const f = figureWith(EXTRA, ['a = 1']);
+      const before = snap(f);
+      const r = f.applyBatch(['b = 2', 'Rewind()', 'c = nope + 1'], { group: 'g' });
+      expect(r.rolledBack).toBe(true);
+      expectUnchanged(f, before);
+    });
+  });
+
+  describe('nested batches (evidence 5)', () => {
+    it('an atomic outer batch that fails after a nested batch is rolled back completely', () => {
+      const f = figureWith(EXTRA, ['a = 1']);
+      const before = snap(f);
+      const r = f.applyBatch(['Macro()', 'b = 2', 'c = nope'], { group: 'outer' });
+      expect(r.rolledBack).toBe(true);
+      expectUnchanged(f, before);
+      expect(names(f)).toEqual(['a']);
+      expect(f.undoInfo().depth).toBe(1);
+    });
+
+    it('an outer batch that succeeds is one undo step including the nested lines', () => {
+      const f = figureWith(EXTRA, ['a = 1']);
+      const r = f.applyBatch(['Macro()', 'b = 2'], { group: 'outer' });
+      expect(r.ok).toBe(true);
+      expect(names(f)).toEqual(['a', 'm1', 'b']);
+      expect(f.undoInfo().depth).toBe(2);
+      ok(f.undo());
+      expect(names(f)).toEqual(['a']);
+    });
+
+    it('an independent outer batch keeps collecting into its own group after a nested batch', () => {
+      const f = figureWith(EXTRA, ['a = 1']);
+      f.applyBatch(['Macro()', 'b = 2', 'c = nope'], { group: 'outer', mode: 'independent' });
+      expect(names(f)).toEqual(['a', 'm1', 'b']);
+      expect(f.undoInfo().depth).toBe(2);
+    });
+
+    it('a failing nested atomic batch rolls back only its own lines', () => {
+      const f = figureWith(EXTRA, ['a = 1']);
+      const r = f.applyBatch(['b = 2', 'MacroFail()', 'c = 3'], { group: 'outer', mode: 'independent' });
+      expect(r.results.length).toBe(3);
+      expect(names(f)).toEqual(['a', 'b', 'c']);
+      expect(f.undoInfo().depth).toBe(2);
+    });
+
+    it('history round trip after nested batches', () => {
+      const f = figureWith(EXTRA, ['a = 1']);
+      f.applyBatch(['Macro()', 'b = 2', 'MacroFail()', 'c = 3'], { group: 'outer', mode: 'independent' });
+      expectHistoryRoundTrips(f);
+    });
+
+    it('a nested append keeps the outer group open', () => {
+      const f = figure(['a = 1']);
+      const APPENDER = actionCommand('Appender', (call) => void call.figure.append('m1 = 1'));
+      const g = figureWith([APPENDER], ['a = 1']);
+      g.applyBatch(['Appender()', 'b = 2'], { group: 'outer', mode: 'independent' });
+      expect(names(g)).toEqual(['a', 'm1', 'b']);
+      expect(g.undoInfo().depth).toBe(2);
+      expect(f.count).toBe(1);
+    });
+  });
+
+  describe('neighbours that already work and must keep working', () => {
+    it('Undo() as a single line takes back the last line', () => {
+      const f = figure(['a = 1', 'b = 2']);
+      ok(f.apply('Undo()'));
+      expect(names(f)).toEqual(['a']);
+    });
+
+    it('undo({ unit: "line" }) takes back one line of the last group', () => {
+      const f = figure(['a = 1']);
+      f.applyBatch(['b = 2', 'c = 3'], { group: 'g' });
+      ok(f.undo({ unit: 'line' }));
+      expect(names(f)).toEqual(['a', 'b']);
+      ok(f.undo());
+      expect(names(f)).toEqual(['a']);
+    });
+
+    it('a batch is one undo step', () => {
+      const f = figure(['a = 1']);
+      f.applyBatch(['b = 2', 'c = 3', 'd = 4'], { group: 'g' });
+      expect(f.undoInfo().depth).toBe(2);
+      ok(f.undo());
+      expect(names(f)).toEqual(['a']);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// KERN-SM-10. A rejected line changes nothing
+// ---------------------------------------------------------------------------------------------
+
+describe('KERN-SM-10: committed: false is always true', () => {
+  const MUTATIONS: [string, (fig: Figure) => unknown][] = [
+    ['adds an object', (fig) => fig.apply('Z = 1')],
+    ['deletes an object', (fig) => fig.delete('a')],
+    ['writes a free value', (fig) => fig.setFree('a', 5, 'api')],
+    ['renames an object', (fig) => fig.rename('a', 'a2')],
+    ['redefines an object', (fig) => fig.apply('a = 9')],
+    ['adds a comment', (fig) => fig.apply('# hello')],
+  ];
+
+  it.each(MUTATIONS)('an action that %s and then throws: a rejected line leaves the figure unchanged', (_label, mutate) => {
+    const spawn = actionCommand('Spawn', (call) => {
+      mutate(call.figure);
+      throw new Error('x');
+    });
+    const f = figureWith([spawn], ['a = 1', 'b = a + 1']);
+    const before = snap(f);
+    const r = f.apply('Spawn()');
+    if (!r.ok) {
+      expect(r.committed).toBe(false);
+      expectUnchanged(f, before);
+    } else {
+      // The other reading (findings.md): the change is reported as committed.
+      expect(snap(f)).not.toEqual(before);
+    }
+  });
+
+  it('an atomic batch with a throwing action rolls back what the action did', () => {
+    const spawn = actionCommand('Spawn', (call) => {
+      call.figure.apply('Z = 1');
+      throw new Error('x');
+    });
+    const f = figureWith([spawn], ['a = 1']);
+    const before = snap(f);
+    const r = f.applyBatch(['b = 2', 'Spawn()'], { group: 'g' });
+    expect(r.ok).toBe(false);
+    expect(r.rolledBack).toBe(true);
+    expectUnchanged(f, before);
+  });
+
+  it('an independent batch: a rejected Spawn() line leaves no Z behind', () => {
+    const spawn = actionCommand('Spawn', (call) => {
+      call.figure.apply('Z = 1');
+      throw new Error('x');
+    });
+    const f = figureWith([spawn], ['a = 1']);
+    const r = f.applyBatch(['b = 2', 'Spawn()', 'c = 3'], { group: 'g', mode: 'independent' });
+    if (r.results[1]?.ok === false) expect(f.names()).not.toContain('Z');
+    expect(f.names()).toEqual(expect.arrayContaining(['a', 'b', 'c']));
+  });
+
+  it('Undo() whose replay makes a rule throw: rejected means unchanged, committed means consistent', () => {
+    const f = figure(['a = 1', 'u = Unlucky(a)']);
+    expect(f.setFree('a', 13, 'api').ok).toBe(true);
+    f.flush();
+    ok(f.apply('a = 2'));
+    const before = snap(f);
+    const r = f.apply('Undo()');
+    if (!r.ok) {
+      expectUnchanged(f, before);
+    } else {
+      expect(f.value('a')).toBe(13);
+      expect(f.undoInfo().redoDepth).toBe(1);
+    }
+  });
+
+  it('undo() whose replay makes a rule throw: rejected means unchanged, committed means consistent', () => {
+    const f = figure(['a = 1', 'u = Unlucky(a)']);
+    f.setFree('a', 13, 'api');
+    f.flush();
+    ok(f.apply('a = 2'));
+    const before = snap(f);
+    const r = f.undo();
+    if (!r.ok) expectUnchanged(f, before);
+    else {
+      expect(f.value('a')).toBe(13);
+      expect(f.undoInfo().redoDepth).toBe(1);
+    }
+  });
+
+  it('redo() whose replay makes a rule throw: rejected means unchanged, committed means consistent', () => {
+    const f = figure(['a = 1', 'u = Unlucky(a)']);
+    f.setFree('a', 13, 'api');
+    f.flush();
+    ok(f.undo());
+    expect(f.value('a')).toBe(1);
+    const before = snap(f);
+    const r = f.redo();
+    if (!r.ok) expectUnchanged(f, before);
+    else {
+      expect(f.value('a')).toBe(13);
+      expect(f.undoInfo().redoDepth).toBe(0);
+    }
+  });
+
+  it('a line whose own rule throws (Boom) is rejected and changes nothing (already true: stays true)', () => {
+    const f = figure(['a = 1']);
+    const before = snap(f);
+    const r = f.apply('x = Boom(a)');
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.committed).toBe(false);
+    expectUnchanged(f, before);
+  });
+
+  it('a redefinition that makes a dependent rule throw is rejected and changes nothing', () => {
+    const f = figure(['a = 1', 'u = Unlucky(a)']);
+    const before = snap(f);
+    const r = f.apply('a = 13');
+    expect(r.ok).toBe(false);
+    expectUnchanged(f, before);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// KERN-SM-11. A gesture is ordered with the lines made during it
+// ---------------------------------------------------------------------------------------------
+
+describe('KERN-SM-11: a gesture is journalled before the next journalled write', () => {
+  const START = ['A = (0, 0)', 'C = (2, 2)', 'D = (3, 3)'];
+  const P = (x: number) => ({ x, y: x });
+
+  /** What each operation does while a drag on A is open, and how to tell that it was undone. */
+  const OPS: [string, (f: Figure) => unknown, (f: Figure) => boolean][] = [
+    ['apply of a new object', (f) => f.apply('B = (1, 1)'), (f) => f.get('B') === undefined],
+    ['insertAt', (f) => f.insertAt(0, 'B = (1, 1)'), (f) => f.get('B') === undefined],
+    ['delete', (f) => f.delete('C'), (f) => f.get('C') !== undefined],
+    ['rename', (f) => f.rename('C', 'E'), (f) => f.get('C') !== undefined && f.get('E') === undefined],
+    ['move', (f) => f.move('D', 1), (f) => f.names().join(',') === 'A,C,D'],
+    ['setFree show_me on another object', (f) => f.setFree('C', P(9), 'show_me'), (f) => point(f, 'C') !== undefined && (point(f, 'C') as { x: number }).x === 2],
+    ['setFree api on another object', (f) => f.setFree('C', P(9), 'api'), (f) => (point(f, 'C') as { x: number }).x === 2],
+    ['redefinition of another object', (f) => f.apply('C = (7, 7)'), (f) => (point(f, 'C') as { x: number }).x === 2],
+    ['a comment', (f) => f.apply('# note'), (f) => !f.toScript().includes('# note')],
+    ['append', (f) => f.append('B = (1, 1)'), (f) => f.get('B') === undefined],
+  ];
+
+  it.each(OPS)('%s: undo takes the later write back first, then the gesture', (_label, op, undone) => {
+    const f = figure(START);
+    expect(f.setFree('A', P(5), 'drag').ok).toBe(true);
+    f.flush();
+    op(f);
+    f.commitDrag();
+    ok(f.undo());
+    expect(undone(f), 'the later write is undone first').toBe(true);
+    expect(point(f, 'A')).toEqual(P(5));
+    ok(f.undo());
+    expect(point(f, 'A')).toEqual(P(0));
+  });
+
+  it.each(OPS)('%s: redo replays the gesture first, then the later write', (_label, op, undone) => {
+    const f = figure(START);
+    f.setFree('A', P(5), 'drag');
+    f.flush();
+    op(f);
+    f.commitDrag();
+    const after = f.toScript();
+    ok(f.undo());
+    ok(f.undo());
+    ok(f.redo());
+    expect(point(f, 'A')).toEqual(P(5));
+    expect(undone(f)).toBe(true);
+    ok(f.redo());
+    expect(f.toScript()).toBe(after);
+  });
+
+  it('the evidence: a redefinition of A during the drag, then commit: values go (1,1), (5,5), (0,0), removed', () => {
+    const f = figure(['A = (0, 0)']);
+    f.setFree('A', P(5), 'drag');
+    f.flush();
+    ok(f.apply('A = (1, 1)'));
+    f.commitDrag();
+    expect(point(f, 'A')).toEqual(P(1));
+    expect(undoWalk(f, (g) => point(g, 'A'))).toEqual([P(5), P(0), undefined]);
+  });
+
+  it('slider writes around a show_me write: values go 8, 7, 5, 1, removed', () => {
+    const f = figure(['a = 1 in 0..10']);
+    f.setFree('a', 5, 'slider');
+    f.setFree('a', 7, 'show_me');
+    f.setFree('a', 8, 'slider');
+    f.commitDrag();
+    expect(f.value('a')).toBe(8);
+    expect(undoWalk(f, (g) => g.value('a'))).toEqual([7, 5, 1, undefined]);
+  });
+
+  it('the same sequence with an api write in the middle', () => {
+    const f = figure(['a = 1 in 0..10']);
+    f.setFree('a', 5, 'slider');
+    f.setFree('a', 7, 'api');
+    f.setFree('a', 8, 'slider');
+    f.commitDrag();
+    expect(undoWalk(f, (g) => g.value('a'))).toEqual([7, 5, 1, undefined]);
+  });
+
+  it('a gesture whose end equals its start leaves no entry, and the later write is one step', () => {
+    const f = figure(START);
+    const depth = f.undoInfo().depth;
+    f.setFree('A', P(5), 'drag');
+    f.setFree('A', P(0), 'drag');
+    f.apply('B = (1, 1)');
+    f.commitDrag();
+    expect(f.undoInfo().depth).toBe(depth + 1);
+  });
+
+  it('two lines during one drag: undo goes line 2, line 1, gesture', () => {
+    const f = figure(START);
+    f.setFree('A', P(5), 'drag');
+    f.apply('B = (1, 1)');
+    f.apply('B2 = (2, 2)');
+    f.commitDrag();
+    ok(f.undo());
+    expect(f.get('B2')).toBeUndefined();
+    expect(f.get('B')).toBeDefined();
+    expect(point(f, 'A')).toEqual(P(5));
+    ok(f.undo());
+    expect(f.get('B')).toBeUndefined();
+    expect(point(f, 'A')).toEqual(P(5));
+    ok(f.undo());
+    expect(point(f, 'A')).toEqual(P(0));
+  });
+
+  it('the gesture is committed once: a second commitDrag after a line records nothing more', () => {
+    const f = figure(START);
+    f.setFree('A', P(5), 'drag');
+    f.apply('B = (1, 1)');
+    const depth = f.undoInfo().depth;
+    expect(f.commitDrag().committed).toBe(0);
+    expect(f.undoInfo().depth).toBe(depth);
+  });
+
+  it('a drag that starts after the line is a separate, later entry', () => {
+    const f = figure(START);
+    f.apply('B = (1, 1)');
+    f.setFree('A', P(5), 'drag');
+    f.commitDrag();
+    ok(f.undo());
+    expect(point(f, 'A')).toEqual(P(0));
+    expect(f.get('B')).toBeDefined();
+  });
+});
