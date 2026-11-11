@@ -73,20 +73,22 @@ Error: the object from `errors.md` section 4. The model sees `kind`, `token`, `h
 `figure` returns, per object:
 
 ```json
-{ "name": "M", "type": "Point", "def": "Midpoint(A, B)", "value": "(2, 1)", "visible": true, "shown": true, "free": false,
-  "undefined": null, "layer": 0, "fixed": false, "aux": false }
+{ "name": "M", "id": 3, "type": "Point", "definition": "Midpoint(A, B)", "value": "(2, 1)", "defined": true, "free": false,
+  "visible": true, "shown": true, "fixed": false, "aux": false, "layer": 0, "inputs": ["A", "B"], "dependents": [] }
 ```
+
+`value` is the value as text. `undefined` appears only when the object is undefined, and `why` only when `shown` is false.
 
 Hidden because of a condition:
 
 ```json
-{ "name": "P", "type": "Point", "def": "(1, 1)", "value": "(1, 1)", "visible": true, "shown": false, "why": "showIf (a < 3) is false" }
+{ "name": "P", "type": "Point", "definition": "(1, 1)", "value": "(1, 1)", "defined": true, "visible": true, "shown": false, "why": "showIf a < 3 is false" }
 ```
 
 Undefined with a chain:
 
 ```json
-{ "name": "T", "type": "Point", "def": "Midpoint(I, B)", "value": null,
+{ "name": "T", "type": "Point", "definition": "Midpoint(I, B)", "value": "undefined", "defined": false,
   "undefined": { "reason": "input_undefined", "cause": "I", "root": "parallel" } }
 ```
 
