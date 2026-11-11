@@ -13,6 +13,7 @@ import { fail } from '../../language/runtime';
 import type { Env } from '../../language/runtime';
 import { createFunctionTable } from '../../language/table';
 import type { FunctionSpec, FunctionTable, ParamSpec } from '../../language/table';
+import { numberSource } from '../../graph/values';
 import { decimals } from './commit';
 
 /** τ: one turn in radians. Same value as the tau constant. */
@@ -216,9 +217,31 @@ const approxSpec: FunctionSpec = {
   ],
 };
 
-/** The function specs this area adds: sig, snap, wrap, approx. */
+/** `screen(x, y)` and `at(x, y)`: the value of `place` (numbers-sliders 3.2), as the text `placementOf` reads. */
+const placeSpec = (name: 'screen' | 'at', summary: string): FunctionSpec => ({
+  name,
+  group: 'controls',
+  forms: [
+    {
+      params: [P('x'), P('y')],
+      returns: 'Text',
+      summary,
+      call: (env, args) => {
+        const x = args[0] as number;
+        const y = args[1] as number;
+        if (typeof x !== 'number' || typeof y !== 'number' || !Number.isFinite(x) || !Number.isFinite(y)) {
+          fail(env, 'not_finite', `${name}(x, y) needs finite numbers`);
+          return undefined;
+        }
+        return `${name}(${numberSource(x)}, ${numberSource(y)})`;
+      },
+    },
+  ],
+});
+
+/** The function specs this area adds: sig, snap, wrap, approx, screen, at. */
 export function numbersFunctionSpecs(): readonly FunctionSpec[] {
-  return [sigSpec, snapSpec, wrapSpec, approxSpec];
+  return [sigSpec, snapSpec, wrapSpec, approxSpec, placeSpec('screen', 'a place in screen pixels, from a corner'), placeSpec('at', 'a place at a point of the maths plane')];
 }
 
 /**

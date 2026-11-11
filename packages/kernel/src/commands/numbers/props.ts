@@ -35,11 +35,10 @@ const PROPS: Readonly<Record<string, { spec: PropSpec; types: readonly string[] 
   // slider geometry
   vertical: { spec: { kind: 'bool', allowed: 'true or false' }, types: ['Number'] },
   length: { spec: { kind: 'number', min: 1, max: 4000, allowed: 'a number of pixels from 1 to 4000' }, types: ['Number'] },
-  // placement in the control layer (the design's place = screen(x, y) call form
-  // needs a kernel prop-value hook; the interim spelling is place/placeX/placeY/anchor)
-  place: { spec: { kind: 'enum', values: ['dock', 'screen', 'at'], allowed: 'dock, screen or at' }, types: ['Number', 'Bool', 'Button', 'Choice', 'Input'] },
-  placeX: { spec: { kind: 'number', allowed: 'a number' }, types: ['Number', 'Bool', 'Button', 'Choice', 'Input'] },
-  placeY: { spec: { kind: 'number', allowed: 'a number' }, types: ['Number', 'Bool', 'Button', 'Choice', 'Input'] },
+  // placement in the control layer: dock, screen(x, y) or at(x, y). The value is a text made by the screen() and
+  // at() functions of this area; a bare `dock` word cannot be a value of a text property (kernel prop-value hook).
+  place: { spec: { kind: 'text', allowed: 'dock, screen(x, y) or at(x, y)' }, types: ['Number', 'Bool', 'Button', 'Choice', 'Input'] },
+  // which corner a screen placement counts from
   anchor: { spec: { kind: 'enum', values: ['tl', 'tr', 'bl', 'br'], allowed: 'tl, tr, bl or br' }, types: ['Number', 'Bool', 'Button', 'Choice', 'Input'] },
   // dropdown captions
   captions: { spec: { kind: 'textlist', allowed: 'a list of texts' }, types: ['Choice'] },
@@ -88,25 +87,25 @@ export function placementOf(figure: Figure, x: Name | ObjId): Placement {
   if (id === undefined) return { kind: 'dock' };
   const ext = extOf(figure, id);
   const place = ext['place'];
-  if (place === 'screen') {
-    const x = num(ext['placeX']) ?? 0;
-    const y = num(ext['placeY']) ?? 0;
+  const parsed = typeof place === 'string' ? parsePlacement(place) : undefined;
+  if (parsed?.kind === 'screen') {
     const anchor = ext['anchor'];
-    return { kind: 'screen', x, y, anchor: anchor === 'tr' || anchor === 'bl' || anchor === 'br' ? anchor : 'tl' };
+    return { ...parsed, anchor: anchor === 'tr' || anchor === 'bl' || anchor === 'br' ? anchor : 'tl' };
   }
-  if (place === 'at') {
-    return { kind: 'at', x: num(ext['placeX']) ?? 0, y: num(ext['placeY']) ?? 0 };
-  }
-  return { kind: 'dock' };
+  return parsed ?? { kind: 'dock' };
 }
+
+const NUM = String.raw`[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?`;
+const SCREEN_RE = new RegExp(String.raw`^screen\(\s*(${NUM})\s*,\s*(${NUM})\s*\)$`);
+const AT_RE = new RegExp(String.raw`^at\(\s*(${NUM})\s*,\s*(${NUM})\s*\)$`);
 
 /** Parse the design's `screen(x, y)` / `at(x, y)` / `dock` placement text. */
 export function parsePlacement(text: string): Placement | undefined {
   const t = text.trim();
   if (t === 'dock') return { kind: 'dock' };
-  let m = /^screen\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)$/.exec(t);
+  let m = SCREEN_RE.exec(t);
   if (m) return { kind: 'screen', x: Number(m[1]), y: Number(m[2]), anchor: 'tl' };
-  m = /^at\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)$/.exec(t);
+  m = AT_RE.exec(t);
   if (m) return { kind: 'at', x: Number(m[1]), y: Number(m[2]) };
   return undefined;
 }
