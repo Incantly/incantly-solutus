@@ -159,7 +159,7 @@ export interface FunctionResume {
   readonly maxDepthSeen: number;
   readonly rigorous: boolean;
   readonly capped: boolean;
-  readonly phase: 'setup' | 'refine' | 'classify';
+  readonly phase: 'setup' | 'refine' | 'classify' | 'band';
   readonly pieces: readonly ResumePiece[];
   readonly breaks: readonly number[];
   readonly coarseXs: readonly number[];

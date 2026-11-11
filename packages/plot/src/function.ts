@@ -77,7 +77,7 @@ interface FState {
   breaks: readonly number[];
   coarseXs: readonly number[];
   coarseDone: number;
-  phase: 'setup' | 'refine' | 'classify';
+  phase: 'setup' | 'refine' | 'classify' | 'band';
   evals: number;
   intervalEvals: number;
   maxDepthSeen: number;
@@ -220,14 +220,43 @@ function makePieces(view: ViewBox, domain: readonly DomainSpan[] | undefined, br
   return pieces;
 }
 
-/** Coarse x values per piece, proportional to width, ends included. */
-function makeCoarseXs(pieces: readonly ResumePiece[], coarse: number): number[] {
+/**
+ * Distance a sample keeps from a break, in maths units: the one-sided limit of
+ * the function is read at `b - eps` and `b + eps`, and the value at the break
+ * itself at `b` (functions-calculus 9, step 1: both sides of a break are
+ * sampled exactly). Far below a pixel at any zoom the figure can show.
+ */
+function breakEps(view: ViewBox): number {
+  return Math.max((view.x1 - view.x0) * 1e-13, Math.max(Math.abs(view.x0), Math.abs(view.x1)) * 1e-15);
+}
+
+/** The x range a piece is sampled over: break ends sit `eps` inside the piece. */
+function sampleRange(p: ResumePiece, eps: number): readonly [number, number] {
+  // The right edge of the view is read just inside: the value exactly there
+  // may belong to the next piece of the function (steps are right-continuous).
+  // The left edge stays exact, so cached samples on the view grid still match.
+  return [p.loKind === 'break' ? p.lo + eps : p.lo, p.hiKind === 'break' || p.hiKind === 'view' ? p.hi - eps : p.hi];
+}
+
+/**
+ * Coarse x values per piece, proportional to width, ends included. A piece
+ * ending at a break gets its end at `eps` inside, and the break itself is
+ * sampled once on its own (it belongs to no span).
+ */
+function makeCoarseXs(pieces: readonly ResumePiece[], coarse: number, eps: number): number[] {
   const total = pieces.reduce((s, p) => s + (p.hi - p.lo), 0);
   const xs: number[] = [];
   for (const p of pieces) {
+    const [ra, rb] = sampleRange(p, eps);
     const w = p.hi - p.lo;
+    if (!(ra < rb)) {
+      if (p.hiKind === 'break') xs.push(p.hi);
+      continue;
+    }
     const n = total > 0 ? Math.max(2, Math.round((coarse * w) / total)) : 2;
-    for (let i = 0; i < n; i++) xs.push(p.lo + ((p.hi - p.lo) * i) / (n - 1));
+    // The grid is laid over the whole piece; only the ends move inside it.
+    for (let i = 0; i < n; i++) xs.push(i === 0 ? ra : i === n - 1 ? rb : p.lo + ((p.hi - p.lo) * i) / (n - 1));
+    if (p.hiKind === 'break') xs.push(p.hi);
   }
   return xs;
 }
@@ -304,19 +333,20 @@ function runSetup(st: FState): void {
     // A span ends here when the previous coarse x belongs to the same piece.
     if (st.coarseDone > 0) {
       const prev = xs[st.coarseDone - 1] as number;
-      if (samePiece(st.pieces, prev, x)) st.pending.push({ xl: prev, xr: x, depth: 0 });
+      if (samePiece(st.pieces, breakEps(st.pv.box), prev, x)) st.pending.push({ xl: prev, xr: x, depth: 0 });
     }
     st.coarseDone += 1;
   }
   st.phase = 'refine';
 }
 
-function samePiece(pieces: readonly ResumePiece[], a: number, b: number): boolean {
-  // Consecutive coarse xs of one piece. The duplicated break point shared by two
-  // pieces forms a zero-width pair and matches nothing, so pieces never join here.
+function samePiece(pieces: readonly ResumePiece[], eps: number, a: number, b: number): boolean {
+  // Consecutive coarse xs of one piece. The break sample and the ends of the two
+  // pieces around a break sit in no common sampling range, so pieces never join here.
   if (!(a < b)) return false;
   for (const p of pieces) {
-    if (a >= p.lo && b <= p.hi) return true;
+    const [ra, rb] = sampleRange(p, eps);
+    if (a >= ra && b <= rb) return true;
   }
   return false;
 }
@@ -472,7 +502,89 @@ function runClassify(st: FState): void {
   }
 }
 
-/** Both ends defined but the span still fails: a sharp corner or oscillation. */
+/** True when y lies more than one view height above or below the view. */
+function isTall(st: FState, y: number): boolean {
+  const py = toEffY(st.pv, y);
+  return py < -st.heightEff || py > 2 * st.heightEff;
+}
+
+/** Two values that land within a quarter pixel of each other on screen. */
+function sameY(st: FState, a: number, b: number): boolean {
+  return Math.abs(toEffY(st.pv, a) - toEffY(st.pv, b)) < st.cfg.bendPx;
+}
+
+/** Where a pole or jump sits inside a suspicious span, narrowed by bisection. */
+interface Narrowed {
+  readonly a: number;
+  readonly b: number;
+  readonly ya: number;
+  readonly yb: number;
+  /** Best estimate of the location (the midpoint of a..b, or the undefined x). */
+  readonly x: number;
+}
+
+/**
+ * Bisects a span with defined ends towards the half that carries the larger
+ * screen-space change, until the stretch is vanishingly narrow. A pole keeps
+ * growing towards its location; a jump keeps its full height; a steep rise
+ * spreads out. Null when the budget ran out (the verdict is redone later).
+ */
+function narrowSpan(st: FState, span: FSpan, l: FSample, r: FSample): Narrowed | null {
+  let lo = span.xl;
+  let hi = span.xr;
+  let ylo = l.y;
+  let yhi = r.y;
+  const minWidth = (st.pv.box.x1 - st.pv.box.x0) * 1e-12;
+  for (let i = 0; i < 80 && hi - lo > minWidth; i++) {
+    const mid = (lo + hi) / 2;
+    if (!(mid > lo && mid < hi)) break;
+    const m = evalAt(st, mid);
+    if (!m) return null;
+    if (!m.defined) return { a: lo, b: hi, ya: ylo, yb: yhi, x: mid };
+    const d1 = Math.abs(toEffY(st.pv, m.y) - toEffY(st.pv, ylo));
+    const d2 = Math.abs(toEffY(st.pv, yhi) - toEffY(st.pv, m.y));
+    if (d1 >= d2) {
+      hi = mid;
+      yhi = m.y;
+    } else {
+      lo = mid;
+      ylo = m.y;
+    }
+  }
+  return { a: lo, b: hi, ya: ylo, yb: yhi, x: (lo + hi) / 2 };
+}
+
+/** Breaks the path at a located feature: both sides are drawn up to it. */
+function splitAt(st: FState, span: FSpan, at: Narrowed): void {
+  if (at.a > span.xl) st.accepted.push({ xl: span.xl, xr: at.a, depth: span.depth });
+  if (span.xr > at.b) st.accepted.push({ xl: at.b, xr: span.xr, depth: span.depth });
+}
+
+/** Records a pole at x; the renderer draws the dashed vertical from the view centre. */
+function markPole(st: FState, x: number): void {
+  addMarker(st, 'pole', x, (st.pv.box.y0 + st.pv.box.y1) / 2);
+}
+
+/**
+ * Records a jump between the sides a and b: the side the function's value at
+ * the jump belongs to gets a closed end, the other an open one.
+ */
+function markJump(st: FState, a: number, ya: number, b: number, yb: number): boolean {
+  const c = (a + b) / 2;
+  const at = evalAt(st, c);
+  if (!at) return false;
+  const nearBreak = st.breaks.some((k) => Math.abs(toEffX(st.pv, k) - toEffX(st.pv, c)) < 1);
+  if (!nearBreak) {
+    const closedLeft = at.defined && sameY(st, at.y, ya);
+    const closedRight = at.defined && sameY(st, at.y, yb);
+    addMarker(st, closedLeft ? 'closedEnd' : 'openEnd', a, ya);
+    addMarker(st, closedRight ? 'closedEnd' : 'openEnd', b, yb);
+  }
+  addMarker(st, 'jump', c, (ya + yb) / 2);
+  return true;
+}
+
+/** Both ends defined but the span still fails: a pole, jump, steep rise, corner or oscillation. */
 function classifyDefined(st: FState, span: FSpan, l: FSample, r: FSample): void {
   const q1x = (3 * span.xl + span.xr) / 4;
   const q3x = (span.xl + 3 * span.xr) / 4;
@@ -496,6 +608,7 @@ function classifyDefined(st: FState, span: FSpan, l: FSample, r: FSample): void 
     return;
   }
   const ys = [l.y, q1.y, m.y, q3.y, r.y];
+  const pys = ys.map((y) => toEffY(st.pv, y));
   let flips = 0;
   let prev = 0;
   for (let i = 1; i < ys.length; i++) {
@@ -506,25 +619,92 @@ function classifyDefined(st: FState, span: FSpan, l: FSample, r: FSample): void 
       prev = sign;
     }
   }
-  if (flips < 2) {
-    // One extremum at most: a sharp corner, drawn joined.
+  const up = pys.map((p) => p < -st.heightEff);
+  const down = pys.map((p) => p > 2 * st.heightEff);
+  let straddle = false;
+  for (let i = 1; i < pys.length; i++) {
+    if ((up[i - 1] && down[i]) || (down[i - 1] && up[i])) straddle = true;
+  }
+  const peak = flips >= 1 && (up.every(Boolean) || down.every(Boolean));
+  let box: ScalarBox | null = null;
+  if (straddle || peak) {
+    // A pole candidate: values leave the view on both sides of one place.
+    if (st.enclosure) {
+      box = intervalAt(st, span.xl, span.xr);
+      if (!box) return;
+      if (box.def === 0) return; // Undefined throughout: a gap.
+    } else {
+      st.rigorous = false;
+    }
+    const unbounded = box !== null && (!Number.isFinite(box.lo) || !Number.isFinite(box.hi));
+    if (unbounded || box === null) {
+      const at = narrowSpan(st, span, l, r);
+      if (!at) return;
+      const tallBoth = isTall(st, at.ya) && isTall(st, at.yb);
+      if (unbounded || tallBoth) {
+        markPole(st, at.x);
+        splitAt(st, span, at);
+        return;
+      }
+      // Not a pole after all (a finite step): judge it as a jump.
+      if (Math.abs(toEffY(st.pv, at.ya) - toEffY(st.pv, at.yb)) > 1) {
+        if (!markJump(st, at.a, at.ya, at.b, at.yb)) return;
+        splitAt(st, span, at);
+        return;
+      }
+    }
+  }
+  // Entirely off the view on one side: nothing visible depends on the detail.
+  if (pys.every((p) => p < 0) || pys.every((p) => p > st.heightEff)) {
     st.accepted.push(span);
     return;
   }
-  // Oscillation inside one column: a hairline instead of a sawtooth.
-  let loY = Math.min(l.y, q1.y, m.y, q3.y, r.y);
-  let hiY = Math.max(l.y, q1.y, m.y, q3.y, r.y);
-  if (st.enclosure) {
-    const box = intervalAt(st, span.xl, span.xr);
-    if (!box) return;
-    if (box.def !== 0) {
-      loY = Math.min(loY, box.lo);
-      hiY = Math.max(hiY, box.hi);
+  if (flips >= 2) {
+    // Oscillation inside one column: a hairline instead of a sawtooth.
+    let loY = Math.min(...ys);
+    let hiY = Math.max(...ys);
+    if (st.enclosure) {
+      const enc = intervalAt(st, span.xl, span.xr);
+      if (!enc) return;
+      if (enc.def !== 0) {
+        loY = Math.min(loY, enc.lo);
+        hiY = Math.max(hiY, enc.hi);
+      }
+    } else {
+      st.rigorous = false;
     }
+    pushInk(st, (span.xl + span.xr) / 2, loY, hiY);
+    return;
+  }
+  const dy = Math.abs((pys[4] as number) - (pys[0] as number));
+  let biggest = 0;
+  for (let i = 1; i < pys.length; i++) biggest = Math.max(biggest, Math.abs((pys[i] as number) - (pys[i - 1] as number)));
+  if (dy <= st.cfg.chordPx || biggest < 0.8 * dy) {
+    // A sharp corner, or a rise spread over the whole stretch: drawn joined.
+    st.accepted.push(span);
+    return;
+  }
+  // The change sits in one place at a width far below a pixel: a steep rise or a jump.
+  if (st.enclosure) {
+    const enc = box ?? intervalAt(st, span.xl, span.xr);
+    if (!enc) return;
+    if (enc.def === 2 && Number.isFinite(enc.lo) && Number.isFinite(enc.hi)) {
+      st.accepted.push(span); // Continuous: the steep slope is real.
+      return;
+    }
+    if (enc.def === 0) return;
   } else {
     st.rigorous = false;
   }
-  pushInk(st, (span.xl + span.xr) / 2, loY, hiY);
+  const at = narrowSpan(st, span, l, r);
+  if (!at) return;
+  const finalDy = Math.abs(toEffY(st.pv, at.ya) - toEffY(st.pv, at.yb));
+  if (finalDy > 2 && finalDy >= 0.5 * dy) {
+    if (!markJump(st, at.a, at.ya, at.b, at.yb)) return;
+    splitAt(st, span, at);
+    return;
+  }
+  st.accepted.push(span);
 }
 
 /** Records an enclosure column, clipped to the view; drops columns outside it. */
@@ -670,6 +850,30 @@ function finishEdge(st: FState, span: FSpan, side: 'left' | 'right', edge: numbe
   const nearLo = side === 'left' ? span.xl : edge;
   const nearHi = side === 'left' ? edge : span.xr;
   if (nearHi > nearLo) st.pending.push({ xl: nearLo, xr: nearHi, depth: span.depth });
+  if (tall) {
+    // Unbounded growth towards the gap: a pole between the edge and the bound.
+    let d = edge;
+    let u = bound;
+    const minWidth = (pv.box.x1 - pv.box.x0) * 1e-12;
+    for (let i = 0; i < 80 && Math.abs(u - d) > minWidth; i++) {
+      const mid = (d + u) / 2;
+      if (!(mid > Math.min(d, u) && mid < Math.max(d, u))) break;
+      const m = evalAt(st, mid);
+      if (!m) return;
+      if (m.defined) d = mid;
+      else u = mid;
+    }
+    if (st.enclosure) {
+      // The verdict is checked with intervals over the narrowed stretch.
+      const box = intervalAt(st, Math.min(d, u), Math.max(d, u));
+      if (!box) return;
+      if (box.def === 0) return;
+    }
+    markPole(st, (d + u) / 2);
+    return;
+  }
+  // A single undefined point: look just beyond it for the matching value (a hole).
+  if (!probeHole(st, edge, edgeY, bound, side)) return;
   // Look for a partner edge just across the gap: a hole or a jump.
   const partner = findPartner(st, edge, side);
   if (partner !== undefined) {
@@ -698,10 +902,24 @@ function finishEdge(st: FState, span: FSpan, side: 'left' | 'right', edge: numbe
       return;
     }
   }
-  if (tall) {
-    // Unbounded growth towards the gap: a pole between the edge and the bound.
-    addMarker(st, 'pole', (edge + bound) / 2, (pv.box.y0 + pv.box.y1) / 2);
-  }
+}
+
+/**
+ * Probes the mirror image of the edge across the undefined point. A defined,
+ * matching value there means one missing point: join across and mark a hole.
+ * Returns false when the verdict is settled (or the budget ran out).
+ */
+function probeHole(st: FState, edge: number, edgeY: number, bound: number, side: 'left' | 'right'): boolean {
+  const beyond = bound + (bound - edge);
+  if (!(beyond !== bound) || !Number.isFinite(beyond)) return true;
+  const p = evalAt(st, beyond);
+  if (!p) return false;
+  if (!p.defined || !sameY(st, p.y, edgeY)) return true;
+  const a = side === 'left' ? edge : beyond;
+  const b = side === 'left' ? beyond : edge;
+  st.accepted.push({ xl: Math.min(a, b), xr: Math.max(a, b), depth: 0 });
+  addMarker(st, 'hole', bound, (edgeY + p.y) / 2);
+  return false;
 }
 
 /** Nearest defined sample across the gap, if any. */
@@ -727,6 +945,8 @@ function closeY(a: number, b: number): boolean {
 
 function addMarker(st: FState, kind: MarkerKind, x: number, y: number): void {
   const pv = st.pv;
+  // A marker that cannot be drawn (non-finite coordinates) is never recorded.
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(pv.toPx(x)) || !Number.isFinite(pv.toPy(y))) return;
   st.markers.push({ kind, x, y, px: pv.toPx(x), py: pv.toPy(y) });
 }
 
@@ -738,7 +958,7 @@ function addMarker(st: FState, kind: MarkerKind, x: number, y: number): void {
  */
 function runExact(st: FState): void {
   const pv = st.pv;
-  st.phase = 'refine';
+  st.phase = 'band';
   while (st.pending.length > 0) {
     if (st.steps++ > STEP_CAP) {
       forceCap(st);
@@ -764,14 +984,19 @@ function exactActive(st: FState): boolean {
 
 /** Drains setup, refinement and classification until suspended or done. */
 function runLoop(st: FState): void {
-  if (exactActive(st)) {
-    if (st.phase === 'setup') {
-      setupExactColumns(st);
-      st.phase = 'refine';
-    }
-    runExact(st);
-    return;
+  if (st.phase !== 'band') {
+    runCurve(st);
+    if (st.suspended || !exactActive(st)) return;
+    // The band is drawn on top of the same verdicts: markers come from the curve pass.
+    st.ink.length = 0;
+    setupExactColumns(st);
+    st.phase = 'band';
   }
+  runExact(st);
+}
+
+/** The curve pass: setup, refinement and classification until suspended or drained. */
+function runCurve(st: FState): void {
   for (;;) {
     if (st.phase === 'setup') {
       runSetup(st);
@@ -904,17 +1129,26 @@ function resolveBreaks(st: FState, chains: number[][][]): number[][][] {
     const loS = limitBelow(b);
     const hiS = limitAbove(b);
     if (!loS || !hiS) continue;
-    const agree =
-      Math.abs(loS.y - hiS.y) <= 1e-9 * Math.max(1, Math.abs(loS.y), Math.abs(hiS.y)) ||
-      Math.abs(toEffY(pv, loS.y) - toEffY(pv, hiS.y)) < COLUMN_PX;
-    if (at && at.defined && agree && closeY(at.y, loS.y) && closeY(at.y, hiS.y)) {
+    const agree = sameY(st, loS.y, hiS.y);
+    if (at && at.defined && agree && sameY(st, at.y, loS.y)) {
       mergeAcross(pv, chains, merged, b); // Continuous corner: join, no marker.
     } else if ((!at || !at.defined) && agree) {
+      if (!st.enclosure) st.rigorous = false;
+      mergeAcross(pv, chains, merged, b);
+      addMarker(st, 'hole', b, (loS.y + hiS.y) / 2);
+    } else if (!agree && (isTall(st, loS.y) || isTall(st, hiS.y))) {
+      // Values leave the view at the break: a pole, no ends to mark.
+      if (!st.enclosure) st.rigorous = false;
+      markPole(st, b);
+    } else if (agree) {
+      // Defined at the break but off the limits: a removable point shown as a hole.
+      if (!st.enclosure) st.rigorous = false;
       mergeAcross(pv, chains, merged, b);
       addMarker(st, 'hole', b, (loS.y + hiS.y) / 2);
     } else {
-      const closedLo = at !== undefined && at.defined && closeY(at.y, loS.y);
-      const closedHi = at !== undefined && at.defined && closeY(at.y, hiS.y);
+      if (!st.enclosure) st.rigorous = false;
+      const closedLo = at !== undefined && at.defined && sameY(st, at.y, loS.y);
+      const closedHi = at !== undefined && at.defined && sameY(st, at.y, hiS.y);
       addMarker(st, closedLo ? 'closedEnd' : 'openEnd', b, loS.y);
       addMarker(st, closedHi ? 'closedEnd' : 'openEnd', b, hiS.y);
       addMarker(st, 'jump', b, (loS.y + hiS.y) / 2);
@@ -1114,7 +1348,7 @@ function checkToken(caller: string, token: FunctionResume): ErrorObject | undefi
     !isFiniteNumber(token.coarseDone) ||
     typeof token.rigorous !== 'boolean' ||
     typeof token.capped !== 'boolean' ||
-    (token.phase !== 'setup' && token.phase !== 'refine' && token.phase !== 'classify')
+    (token.phase !== 'setup' && token.phase !== 'refine' && token.phase !== 'classify' && token.phase !== 'band')
   ) {
     return badArgument(caller, 'the resume token is malformed', 'Resume with the token from a suspended plotFunction result.');
   }
@@ -1128,10 +1362,6 @@ function finishSuspended(st: FState): FunctionPlot {
 }
 
 function finishComplete(st: FState): FunctionPlot {
-  if (exactActive(st)) {
-    // The band replaces the curve; there are no paths or curve markers.
-    return { paths: [], markers: [], inkColumns: sortInk(st), stats: makeStats(st, true, 0) };
-  }
   let chains = chainSpans(st);
   chains = resolveBreaks(st, chains);
   const thin = thinChains(chains, st.cfg.maxSamples);
@@ -1141,6 +1371,10 @@ function finishComplete(st: FState): FunctionPlot {
   }
   markDomainEnds(st);
   const { paths, samples } = toPaths(st, chains);
+  if (exactActive(st)) {
+    // The band replaces the curve; the verdict markers stay (same code path).
+    return { paths: [], markers: sortMarkers(st), inkColumns: sortInk(st), stats: makeStats(st, true, 0) };
+  }
   const plot: FunctionPlot = {
     paths,
     markers: sortMarkers(st),
@@ -1198,7 +1432,7 @@ export function plotFunction(fn: FunctionValue, view: ViewBox, options: Function
       base: 0,
       pieces,
       breaks,
-      coarseXs: makeCoarseXs(pieces, coarse),
+      coarseXs: makeCoarseXs(pieces, coarse, breakEps(view)),
       coarseDone: 0,
       phase: 'setup',
       evals: 0,
