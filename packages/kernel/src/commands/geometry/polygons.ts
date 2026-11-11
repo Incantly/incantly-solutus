@@ -855,9 +855,9 @@ function runGH(a: readonly V2[], b: readonly V2[], crosses: Crossing[], op: Bool
         idx = fwd ? (idx + 1) % stream.length : (idx - 1 + stream.length) % stream.length;
         const nx = stream[idx] as StreamItem;
         if (nx.cross >= 0) {
-          // Switch or continue by the op's rule.
-          const isEntry = fwd ? nx.entry : !nx.entry;
-          const switchNow = op === 'intersection' ? !isEntry : isEntry;
+          // Switch or continue by the op's rule. Difference walks B backward,
+          // where backward-exit is forward-entry, so it switches on entry too.
+          const switchNow = op === 'intersection' ? !nx.entry : nx.entry;
           ci = nx.cross;
           if (switchNow) poly = poly === 0 ? 1 : 0;
           break;

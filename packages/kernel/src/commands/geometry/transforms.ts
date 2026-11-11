@@ -1270,18 +1270,19 @@ function parseMatrix(v: unknown): StoredTransform | { fail: 'out_of_domain' | 'n
     if (!arr || !arr.every((e) => typeof e === 'number')) return undefined;
     return arr as number[];
   };
-  if (Array.isArray(v) && v.every(Array.isArray)) {
-    const rows = v as unknown[][];
-    if (rows.length === 2 && rows.every((r) => r.length === 2)) {
-      const flat = rows.flat() as number[];
-      if (!flat.every((x) => typeof x === 'number')) return { fail: 'out_of_domain', detail: 'matrix entries must be numbers' };
+  const isRow = (x: unknown): boolean => Array.isArray(x) || ArrayBuffer.isView(x);
+  if (Array.isArray(v) && v.length > 0 && v.every(isRow)) {
+    const rows = (v as unknown[]).map((r) => nums(r));
+    if (rows.some((r) => r === undefined)) return { fail: 'out_of_domain', detail: 'matrix entries must be numbers' };
+    const nn = rows as number[][];
+    if (nn.length === 2 && nn.every((r) => r.length === 2)) {
+      const flat = nn.flat();
       if (!flat.every((x) => Number.isFinite(x) && Math.abs(x) < 1e150)) return { fail: 'not_finite' };
       const [p, q, r, s] = flat as [number, number, number, number];
       return { tag: 'transform', kind: 'linear', m: [p, r, q, s, 0, 0] };
     }
-    if (rows.length === 3 && rows.every((r) => r.length === 3)) {
-      const flat = rows.flat() as number[];
-      if (!flat.every((x) => typeof x === 'number')) return { fail: 'out_of_domain', detail: 'matrix entries must be numbers' };
+    if (nn.length === 3 && nn.every((r) => r.length === 3)) {
+      const flat = nn.flat();
       if (!flat.every((x) => Number.isFinite(x) && Math.abs(x) < 1e150)) return { fail: 'not_finite' };
       return matrix3(flat as [number, number, number, number, number, number, number, number, number]);
     }
