@@ -22,6 +22,7 @@ import type {
 import { badArgument, checkBudgets, checkView, guard, isFiniteNumber } from './errors';
 import { caseIndex, crossingT, edgeEnds, linkSegments, segmentsForCase } from './squares';
 import type { RawSegment, SquareEdge } from './squares';
+import { clipPolyline } from './clip';
 import { thinChains } from './thin';
 import { createView } from './view';
 import type { PlotView } from './view';
@@ -43,7 +44,11 @@ interface IState {
   readonly cols: number;
   readonly rows: number;
   readonly padEff: number;
-  readonly corners: Map<string, number>;
+  readonly corners: Map<number, number>;
+  /** Crossing per grid-edge key: both leaves sharing an edge use one point. */
+  readonly crossings: Map<string, { x: number; y: number }>;
+  /** Every residual call by exact input, so nothing is evaluated twice. */
+  readonly memo: Map<string, number>;
   readonly segments: RawSegment[];
   readonly markers: PlotMarker[];
   readonly maxSamples: number;
@@ -54,14 +59,10 @@ interface IState {
   rigorous: boolean;
   capped: boolean;
   dead: boolean;
-  /** Output points accepted so far (for the sample cap). */
-  points: number;
 }
 
 /** Coarse cell size in effective pixels (curves-loci 6). */
 const CELL_PX = 32;
-/** Heuristic drop size: uniform nodes at or below this size are dropped without an enclosure. */
-const DECIDE_PX = 8;
 
 /* --------------------------------- helpers ---------------------------------- */
 
@@ -79,21 +80,25 @@ function gridY(st: IState, j: number): number {
   return st.pv.toY((-st.padEff + j * st.leafEff) / st.pv.dpr);
 }
 
-/** Field minus level; NaN where undefined. Null when the budget is spent. */
+/** Field minus level; NaN where undefined. Null when the budget is spent. Each input is evaluated once. */
 function gEval(st: IState, x: number, y: number): number | null {
+  const key = `${x},${y}`;
+  const hit = st.memo.get(key);
+  if (hit !== undefined) return hit;
   if (st.evals + st.intervalEvals >= st.maxEvals) {
     st.dead = true;
     return null;
   }
   st.evals += 1;
   const v = st.residual(x, y);
-  if (typeof v !== 'number' || Number.isNaN(v)) return Number.NaN;
-  return v - st.level;
+  const out = typeof v !== 'number' || Number.isNaN(v) ? Number.NaN : v - st.level;
+  st.memo.set(key, out);
+  return out;
 }
 
 /** Corner value, cached by grid indices so shared corners evaluate once. */
 function cornerAt(st: IState, i: number, j: number): number | null {
-  const key = `${i},${j}`;
+  const key = (i + 2) * (st.rows + 6) + (j + 2);
   const hit = st.corners.get(key);
   if (hit !== undefined) return hit;
   const v = gEval(st, gridX(st, i), gridY(st, j));
@@ -157,6 +162,13 @@ function correctCrossing(st: IState, x: number, y: number): { x: number; y: numb
     if (!Number.isFinite(cx) || !Number.isFinite(cy)) return { x, y, singular: false };
     if (Math.abs(f) < 1e-12 * scale) break;
   }
+  // Keep the correction only when it moved the point closer to the level set.
+  const before = gEval(st, x, y);
+  const after = gEval(st, cx, cy);
+  if (before === null || after === null) return { x, y, singular: false };
+  if (!Number.isFinite(after) || (Number.isFinite(before) && !(Math.abs(after) < Math.abs(before)))) {
+    return { x, y, singular: false };
+  }
   return { x: cx, y: cy, singular: false };
 }
 
@@ -215,6 +227,28 @@ function emitLeaf(st: IState, i: number, j: number): void {
   const idx = caseIndex(pos[0] as boolean, pos[1] as boolean, pos[2] as boolean, pos[3] as boolean);
   if (idx === 0 || idx === 15) {
     probeSmallFeature(st, i, j);
+    // A corner exactly on the level with every neighbour strictly on one side:
+    // a touching point (a tangency, or an isolated solution).
+    for (let k = 0; k < 4; k++) {
+      if (vals[k] !== 0) continue;
+      const ci = i + (k === 1 || k === 2 ? 1 : 0);
+      const cj = j + (k === 0 || k === 1 ? 1 : 0);
+      let pos = 0;
+      let neg = 0;
+      for (let di = -1; di <= 1; di++) {
+        for (let dj = -1; dj <= 1; dj++) {
+          if (di === 0 && dj === 0) continue;
+          const v = cornerAt(st, ci + di, cj + dj);
+          if (v === null) return;
+          if (v > 0) pos += 1;
+          else if (v < 0) neg += 1;
+        }
+      }
+      if (pos === 8 || neg === 8) {
+        const pt = cornerPoint(st, i, j, k);
+        addMarker(st, 'isolated', pt[0], pt[1]);
+      }
+    }
     return;
   }
   let centerInside = false;
@@ -227,6 +261,10 @@ function emitLeaf(st: IState, i: number, j: number): void {
   }
   const segs = segmentsForCase(idx, centerInside);
   const crossing = (edge: SquareEdge): readonly [number, number] | null => {
+    // Both leaves sharing an edge use the same crossing point, computed once.
+    const key = edgeKey(i, j, edge);
+    const cached = st.crossings.get(key);
+    if (cached) return [cached.x, cached.y];
     const [ca, cb] = edgeEnds(edge);
     const va = vals[ca] as number;
     const vb = vals[cb] as number;
@@ -236,6 +274,7 @@ function emitLeaf(st: IState, i: number, j: number): void {
     const fixed = correctCrossing(st, pa[0] + (pb[0] - pa[0]) * t, pa[1] + (pb[1] - pa[1]) * t);
     if (st.dead) return null;
     if (fixed.singular) addMarker(st, 'singular', fixed.x, fixed.y);
+    st.crossings.set(key, { x: fixed.x, y: fixed.y });
     return [fixed.x, fixed.y];
   };
   for (const [ea, eb] of segs) {
@@ -244,9 +283,7 @@ function emitLeaf(st: IState, i: number, j: number): void {
     const pb = crossing(eb);
     if (!pb) return;
     if (!Number.isFinite(pa[0]) || !Number.isFinite(pa[1]) || !Number.isFinite(pb[0]) || !Number.isFinite(pb[1])) continue;
-    if (Math.abs(pa[0] - pb[0]) < 1e-12 && Math.abs(pa[1] - pb[1]) < 1e-12) continue;
     st.segments.push({ keyA: edgeKey(i, j, ea), keyB: edgeKey(i, j, eb), ax: pa[0], ay: pa[1], bx: pb[0], by: pb[1] });
-    st.points += 2;
   }
 }
 
@@ -324,16 +361,32 @@ function addMarker(st: IState, kind: 'singular' | 'isolated', x: number, y: numb
 
 /* -------------------------------- quadtree ---------------------------------- */
 
-function nodeSizeEff(st: IState, node: INode): number {
-  return Math.max(node.i1 - node.i0, node.j1 - node.j0) * st.leafEff;
+/**
+ * Without an interval enclosure nothing proves a cell empty, so every leaf is
+ * looked at: corners are evaluated once each, mixed leaves are traced. The
+ * trace is honest but not certain (`rigorous` is false), and the cost follows
+ * the area instead of the curve length.
+ */
+function runDense(st: IState): void {
+  st.rigorous = false;
+  for (let j = 0; j < st.rows; j++) {
+    for (let i = 0; i < st.cols; i++) {
+      if (st.dead) return;
+      emitLeaf(st, i, j);
+    }
+  }
 }
 
 /**
- * Decides a node: drop it, emit it, or split it. Level-order traversal keeps
- * the sample cap spatially uniform: when the cap hits, every node still queued
- * is emitted at its current size.
+ * Quadtree with certainty (curves-loci 6, step 1): a node whose enclosure
+ * excludes the level (or is undefined) is dropped with all its children;
+ * the rest split down to leaves, which are traced.
  */
 function runQuadtree(st: IState): void {
+  if (!st.enclosure) {
+    runDense(st);
+    return;
+  }
   const per = Math.max(1, Math.round(CELL_PX / st.leafEff));
   const queue: INode[] = [];
   for (let j = 0; j < st.rows; j += per) {
@@ -347,37 +400,12 @@ function runQuadtree(st: IState): void {
     const node = queue[head] as INode;
     head += 1;
     if (node.level > st.maxDepthSeen) st.maxDepthSeen = node.level;
-    if (st.capped) {
-      emitCoarse(st, node);
-      continue;
-    }
     const leaf = node.i1 - node.i0 <= 1 && node.j1 - node.j0 <= 1;
-    if (st.enclosure) {
-      const box = boxAt(st, node);
-      if (!box) return;
-      if (box.def === 0 || box.lo > 0 || box.hi < 0) continue;
-      if (leaf) {
-        emitLeaf(st, node.i0, node.j0);
-        checkCap(st);
-        continue;
-      }
-      splitNode(queue, node);
-      continue;
-    }
-    // Sampling mode: subdivide big nodes blind, decide small ones by corners.
-    if (!leaf && nodeSizeEff(st, node) > DECIDE_PX) {
-      splitNode(queue, node);
-      continue;
-    }
-    const verdict = sampleVerdict(st, node);
-    if (verdict === null) return;
-    if (verdict === 'drop') {
-      st.rigorous = false;
-      continue;
-    }
-    if (leaf || verdict === 'emit') {
+    const box = boxAt(st, node);
+    if (!box) return;
+    if (box.def === 0 || box.lo > 0 || box.hi < 0) continue;
+    if (leaf) {
       emitLeaf(st, node.i0, node.j0);
-      checkCap(st);
       continue;
     }
     splitNode(queue, node);
@@ -397,86 +425,6 @@ function splitNode(queue: INode[], node: INode): void {
       if (i1 > i0 && j1 > j0) queue.push({ i0, i1, j0, j1, level: node.level + 1 });
     }
   }
-}
-
-/** Corner-and-centre sign test: 'drop' (uniform), 'emit' (mixed), 'split' (big). */
-function sampleVerdict(st: IState, node: INode): 'drop' | 'emit' | 'split' | null {
-  const c00 = cornerAt(st, node.i0, node.j0);
-  const c10 = cornerAt(st, node.i1, node.j0);
-  const c01 = cornerAt(st, node.i0, node.j1);
-  const c11 = cornerAt(st, node.i1, node.j1);
-  if (c00 === null || c10 === null || c11 === null || c01 === null) return null;
-  const cx = (gridX(st, node.i0) + gridX(st, node.i1)) / 2;
-  const cy = (gridY(st, node.j0) + gridY(st, node.j1)) / 2;
-  const cc = gEval(st, cx, cy);
-  if (cc === null) return null;
-  const vals = [c00, c10, c11, c01, cc];
-  if (vals.some((v) => Number.isNaN(v))) return 'split';
-  const pos = vals.map((v) => !(v < 0));
-  const all = pos.every((p) => p) || pos.every((p) => !p);
-  if (all) return 'drop';
-  const leaf = node.i1 - node.i0 <= 1 && node.j1 - node.j0 <= 1;
-  return leaf ? 'emit' : 'split';
-}
-
-/** Emits one coarse cell for a node that the sample cap stopped from splitting. */
-function emitCoarse(st: IState, node: INode): void {
-  const vNW = cornerAt(st, node.i0, node.j0);
-  const vNE = cornerAt(st, node.i1, node.j0);
-  const vSW = cornerAt(st, node.i0, node.j1);
-  const vSE = cornerAt(st, node.i1, node.j1);
-  if (vNW === null || vNE === null || vSW === null || vSE === null) return;
-  const vals = [vSW, vSE, vNE, vNW];
-  if (vals.some((v) => Number.isNaN(v))) return;
-  const idx = caseIndex(!(vals[0] as number < 0), !(vals[1] as number < 0), !(vals[2] as number < 0), !(vals[3] as number < 0));
-  if (idx === 0 || idx === 15) return;
-  const x0 = gridX(st, node.i0);
-  const x1 = gridX(st, node.i1);
-  const yT = gridY(st, node.j0);
-  const yB = gridY(st, node.j1);
-  const pts = [
-    [x0, yB],
-    [x1, yB],
-    [x1, yT],
-    [x0, yT],
-  ];
-  const crossing = (edge: SquareEdge): readonly [number, number] | null => {
-    const [ca, cb] = edgeEnds(edge);
-    const va = vals[ca] as number;
-    const vb = vals[cb] as number;
-    const t = crossingT(va, vb);
-    const pa = pts[ca] as number[];
-    const pb = pts[cb] as number[];
-    const fixed = correctCrossing(st, (pa[0] as number) + ((pb[0] as number) - (pa[0] as number)) * t, (pa[1] as number) + ((pb[1] as number) - (pa[1] as number)) * t);
-    if (st.dead) return null;
-    return [fixed.x, fixed.y];
-  };
-  const segs = segmentsForCase(idx, false);
-  for (const [ea, eb] of segs) {
-    const pa = crossing(ea);
-    if (!pa) return;
-    const pb = crossing(eb);
-    if (!pb) return;
-    // Coarse keys on node corners; neighbours at the same level share them.
-    const key = (edge: SquareEdge): string => {
-      switch (edge) {
-        case 0:
-          return `H:${node.i0}:${node.j1}:c`;
-        case 1:
-          return `V:${node.i1}:${node.j0}:c`;
-        case 2:
-          return `H:${node.i0}:${node.j0}:c`;
-        default:
-          return `V:${node.i0}:${node.j0}:c`;
-      }
-    };
-    st.segments.push({ keyA: key(ea), keyB: key(eb), ax: pa[0], ay: pa[1], bx: pb[0], by: pb[1] });
-    st.points += 2;
-  }
-}
-
-function checkCap(st: IState): void {
-  if (!st.capped && st.points > st.maxSamples) st.capped = true;
 }
 
 /* --------------------------------- public ---------------------------------- */
@@ -531,6 +479,8 @@ export function traceImplicit(field: ImplicitFieldInput, view: ViewBox, options:
       rows: leafCount(pv.heightEff + 2 * padEff, leafEff),
       padEff,
       corners: new Map(),
+      crossings: new Map(),
+      memo: new Map(),
       segments: [],
       markers: [],
       maxSamples: options.maxSamples === undefined ? MAX_SAMPLES_PER_CURVE : Math.floor(options.maxSamples),
@@ -541,39 +491,103 @@ export function traceImplicit(field: ImplicitFieldInput, view: ViewBox, options:
       rigorous: true,
       capped: false,
       dead: false,
-      points: 0,
     };
     runQuadtree(st);
     if (st.dead) {
       return { ok: true, value: { paths: [], closed: [], markers: [], stats: makeStats(st, false, 0) }, notices: [] };
     }
-    const linked = linkSegments(st.segments);
-    // The sample cap bounds the emitted points too (performance.md 5).
-    const thin = thinChains(
-      linked.map((c) => c.points),
-      st.maxSamples,
-    );
-    if (thin.thinned) st.capped = true;
-    const chains = linked
-      .slice(0, thin.chains.length)
-      .map((c, i) => ({ points: thin.chains[i] as readonly (readonly [number, number])[], closed: c.closed }));
-    const paths: Float64Array[] = [];
-    const closed: boolean[] = [];
-    let samples = 0;
-    for (const chain of chains) {
-      const arr = new Float64Array(chain.points.length * 2);
-      for (let i = 0; i < chain.points.length; i++) {
-        const p = chain.points[i] as readonly [number, number];
-        arr[2 * i] = pv.toPx(p[0]);
-        arr[2 * i + 1] = pv.toPy(p[1]);
-      }
-      samples += chain.points.length;
-      paths.push(arr);
-      closed.push(chain.closed);
-    }
-    const markers = [...st.markers].sort((a, b) => a.x - b.x || a.y - b.y);
+    const { paths, closed, samples } = finishChains(st, linkSegments(st.segments));
+    const markers = uniqueMarkers(st);
     return { ok: true, value: { paths, closed, markers, stats: makeStats(st, true, samples) }, notices: [] };
   });
+}
+
+/** Markers sorted by position, with repeats of one kind within a pixel collapsed. */
+function uniqueMarkers(st: IState): PlotMarker[] {
+  const ms = [...st.markers].sort((a, b) => a.x - b.x || a.y - b.y);
+  const out: PlotMarker[] = [];
+  for (const m of ms) {
+    if (out.some((o) => o.kind === m.kind && Math.hypot(o.px - m.px, o.py - m.py) < 1)) continue;
+    out.push(m);
+  }
+  return out;
+}
+
+/**
+ * Turns linked chains into output paths: loops smaller than a quarter pixel
+ * collapse to an `isolated` marker (curves-loci 6, step 4), polylines are
+ * clipped to the view, open chains run from their smaller end, chains are
+ * sorted by their first point, and the sample cap thins what remains.
+ */
+function finishChains(
+  st: IState,
+  linked: readonly { readonly points: readonly (readonly [number, number])[]; readonly closed: boolean }[],
+): { paths: Float64Array[]; closed: boolean[]; samples: number } {
+  const pv = st.pv;
+  const pieces: { pts: (readonly [number, number])[]; closed: boolean }[] = [];
+  for (const chain of linked) {
+    const px: (readonly [number, number])[] = [];
+    for (const p of chain.points) {
+      const q: readonly [number, number] = [pv.toPx(p[0]), pv.toPy(p[1])];
+      const prev = px[px.length - 1];
+      // Crossings that coincide (a curve through a grid corner) are one vertex.
+      if (prev === undefined || Math.abs(prev[0] - q[0]) > 1e-9 || Math.abs(prev[1] - q[1]) > 1e-9) px.push(q);
+    }
+    if (px.length < 2) continue;
+    if (chain.closed) {
+      let minX = Number.POSITIVE_INFINITY;
+      let maxX = Number.NEGATIVE_INFINITY;
+      let minY = Number.POSITIVE_INFINITY;
+      let maxY = Number.NEGATIVE_INFINITY;
+      for (const p of px) {
+        minX = Math.min(minX, p[0]);
+        maxX = Math.max(maxX, p[0]);
+        minY = Math.min(minY, p[1]);
+        maxY = Math.max(maxY, p[1]);
+      }
+      if (Math.max(maxX - minX, maxY - minY) * pv.dpr < 0.25) {
+        addMarker(st, 'isolated', pv.toX((minX + maxX) / 2), pv.toY((minY + maxY) / 2));
+        continue;
+      }
+    }
+    const clipped = clipPolyline(px, chain.closed, pv.box.widthPx, pv.box.heightPx);
+    for (const piece of clipped.pieces) {
+      const isClosed = chain.closed && !clipped.cut;
+      let pts = piece;
+      if (!isClosed) {
+        const f = pts[0] as readonly [number, number];
+        const l = pts[pts.length - 1] as readonly [number, number];
+        if (l[0] < f[0] || (l[0] === f[0] && l[1] < f[1])) pts = [...pts].reverse();
+      }
+      pieces.push({ pts, closed: isClosed });
+    }
+  }
+  pieces.sort((a, b) => {
+    const fa = a.pts[0] as readonly [number, number];
+    const fb = b.pts[0] as readonly [number, number];
+    return fa[0] - fb[0] || fa[1] - fb[1];
+  });
+  // The sample cap bounds the emitted points too (performance.md 5).
+  const thin = thinChains(
+    pieces.map((p) => p.pts),
+    st.maxSamples,
+  );
+  if (thin.thinned) st.capped = true;
+  const paths: Float64Array[] = [];
+  const closed: boolean[] = [];
+  let samples = 0;
+  for (let k = 0; k < thin.chains.length; k++) {
+    const pts = thin.chains[k] as readonly (readonly [number, number])[];
+    const arr = new Float64Array(pts.length * 2);
+    for (let i = 0; i < pts.length; i++) {
+      arr[2 * i] = (pts[i] as readonly [number, number])[0];
+      arr[2 * i + 1] = (pts[i] as readonly [number, number])[1];
+    }
+    samples += pts.length;
+    paths.push(arr);
+    closed.push((pieces[k] as { closed: boolean }).closed);
+  }
+  return { paths, closed, samples };
 }
 
 /** Adapts a language relation (`lhs == rhs`, `lhs < rhs`, ...) to a traced field. */
