@@ -269,7 +269,6 @@ describe('junk and hostile input never throws or hangs', () => {
       throw 'a string';
     });
     f.on(() => {
-      // eslint-disable-next-line no-throw-literal
       throw undefined;
     });
     expect(() => f.apply('B2 = (1, 1)')).not.toThrow();
