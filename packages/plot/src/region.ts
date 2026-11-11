@@ -10,6 +10,7 @@ import type { RelationValue, Result } from '@incantly/kernel';
 import { DEFAULT_MAX_EVALS_REGION, MAX_SAMPLES_PER_CURVE } from './contracts';
 import type {
   BoundaryInput,
+  ImplicitFieldInput,
   PlotMarker,
   PlotStats,
   Predicate1DInput,
