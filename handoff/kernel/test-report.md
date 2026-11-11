@@ -154,7 +154,7 @@ Step 6 of the pipeline. One file: `packages/kernel/test/spec/kernel/regressions.
 
 ### Result
 
-"Bug" is the checked commit `a6ac891` (a clean worktree of it). "Now" is `feat/kernel` with the fixer's commits up to `41d446f` and the fixer's uncommitted `src/` edits at the time of the last run.
+"Bug" is the checked commit `a6ac891` (a clean worktree of it). "Now" is `feat/kernel` with the fixer's commits up to `a1a7795` (clean tree, 199 of 199 pass).
 
 | Finding | Tests | Fail on the bug | Fail now |
 |---|---|---|---|
