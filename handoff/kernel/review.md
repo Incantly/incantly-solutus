@@ -90,6 +90,8 @@ Legend: done, partial, missing, different. "Probe" means I ran it.
 
 ### A1. Free-value writes from the clock or an animation enter the undo history
 
+**Status:** fixed in `graph/hist.ts`. New write reason `'animation'` for `setFree(x, v, 'animation')`: not journalled, joins no gesture, clamps and snaps like a slider, may write a fixed object, still marks the value for events.
+
 - Docs: kernel design 10 and 11.2 ("Slider animation, the clock and solver writes are never journalled"); animation-time 5.3 (a slider's value is a function of `t`, written each frame); numbers-sliders 3.7.
 - Code: `WriteWhy` has five values (`graph/hist.ts:28,30`). `solver` is refused for anything but a state (`hist.ts:570`, KERN-SM-4). `slider` and `drag` join a gesture that `commitDrag` journals (`hist.ts:624`, `:671`); `apply` and `undo` commit an open gesture first. `show_me` and `api` journal at once.
 - Probe: five `setFree('a', i + 0.5, 'slider')` calls, then `apply('b = a + 1')`: undo depth 3, `next: "b = a + 1"`, and a `moved a` entry sits between. One animated slider therefore adds an undo step the next time any line is applied.

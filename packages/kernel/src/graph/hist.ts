@@ -25,9 +25,14 @@ import { fitsType, sameValue, valueSource } from './values';
 import type { InvertCall } from './registry';
 import { toEffective } from './props';
 
-export type WriteWhy = 'drag' | 'slider' | 'show_me' | 'api' | 'solver';
+/**
+ * Why a free value is written. `drag` and `slider` join a gesture (one undo entry on `commitDrag`); `show_me` and `api` are
+ * journalled at once; `solver` (states only) and `animation` (the clock or a player writing a free value each frame) are
+ * never journalled and never join a gesture.
+ */
+export type WriteWhy = 'drag' | 'slider' | 'show_me' | 'api' | 'solver' | 'animation';
 
-const WRITE_WHYS: readonly string[] = ['drag', 'slider', 'show_me', 'api', 'solver'];
+const WRITE_WHYS: readonly string[] = ['drag', 'slider', 'show_me', 'api', 'solver', 'animation'];
 
 export interface SetFreeOptions {
   /** Change a fixed object (the teacher's tool passes this only when it says so). */
@@ -553,7 +558,7 @@ export class FigureHist extends FigureTx {
   /**
    * Writes the value of a free object. Many writes may come between two flushes; the last one wins. Writes with `why`
    * `drag` and `slider` belong to a gesture and are journalled as one entry by `commitDrag`; `show_me` and `api` writes are
-   * journalled at once; solver writes are not journalled.
+   * journalled at once; `solver` and `animation` writes are not journalled and join no gesture (the clock does not touch undo).
    */
   setFree(x: Name | ObjId, value: unknown, why: WriteWhy = 'api', opts: SetFreeOptions = {}): WriteResult {
     const res = this.writeFree(x, value, why, opts);
@@ -566,9 +571,9 @@ export class FigureHist extends FigureTx {
     if (r instanceof ObjRec === false) return r as ErrorObject;
     const rec = r as ObjRec;
     const at = { line: 0, col: 1, endCol: 1 };
-    // `why` decides authorisation and history: only the five reasons exist, and `solver` belongs to the states it drives
+    // `why` decides authorisation and history: only the six reasons exist, and `solver` belongs to the states it drives
     if (typeof why !== 'string' || !WRITE_WHYS.includes(why) || (why === 'solver' && rec.p.kind !== 'state')) {
-      return err('bad_argument', at, { command: 'setFree', why: why === 'solver' ? 'the solver writes only states' : 'the reason must be drag, slider, show_me or api' }, { recovery: 'fix_line', fingerprintKey: 'why' });
+      return err('bad_argument', at, { command: 'setFree', why: why === 'solver' ? 'the solver writes only states' : 'the reason must be drag, slider, show_me, api or animation' }, { recovery: 'fix_line', fingerprintKey: 'why' });
     }
     // a stored value is the figure's own: copy it once, inside a try, so a getter that throws or a later change by the caller cannot reach it
     let v: unknown;
@@ -586,7 +591,8 @@ export class FigureHist extends FigureTx {
       const line = lit !== undefined && lit !== 'undefined' && lit.length <= 200 ? `${rec.p.name} = ${lit}` : undefined;
       return err('not_free', at, { name: rec.p.name, inputs: joinNames(ins) }, { hint: `Redefine it as a plain value${line ? ` (${line})` : ''} or change ${ins.join(', ')}.`, ...(line ? { suggest: [line] } : {}), recovery: 'choose', related: ins, fingerprintKey: rec.p.name });
     }
-    if (this.isFixed(rec) && why !== 'solver' && !opts.force) {
+    // the player of an animation is not the learner: a fixed slider still plays
+    if (this.isFixed(rec) && why !== 'solver' && why !== 'animation' && !opts.force) {
       return err('locked', at, { name: rec.p.name }, { hint: `Unfix it first: ${rec.p.name} with fixed = false`, suggest: [`${rec.p.name} with fixed = false`], recovery: 'choose', fingerprintKey: rec.p.name });
     }
     if (rec.p.type.k === 'Number' && (v === undefined || (typeof v === 'number' && v !== v))) v = undefined;
