@@ -20,6 +20,7 @@ import { odeDomain, odeEval, solveOde } from './ode';
 import type { OdeSolution } from './ode';
 import { fn1Value, fn2Value, form, fmt, intIn, lineFromPointSlope, objSpec, p } from './rules';
 import type { FieldData, RegionData } from './types';
+import { withChecks } from './checks';
 import {
   asymptoteCurveForms, curvatureCurveForms, curvatureVectorCurveForms, derivativeCurveForms, intersectCurveForms,
   lengthCurveForms, normalCurveForms, osculatingCurveForms, slopeCurveForms, tangentCurveForms,
@@ -1922,7 +1923,7 @@ function runLimitSide(call: RuleCall, side: 'left' | 'right'): unknown {
 const F2 = 'Function2';
 const BINDER = { kind: 'binder' } as const;
 
-export const FUNCTIONS_SPECS: CommandSpec[] = [
+export const FUNCTIONS_SPECS: CommandSpec[] = withChecks([
   objSpec('Derivative', [
     form([p('f', F1)], F1RET, runDerivative, 'derivative as a function'),
     form([p('f', F1), p('n', 'Number')], F1RET, runDerivative, 'n-th derivative as a function'),
@@ -2075,4 +2076,4 @@ export const FUNCTIONS_SPECS: CommandSpec[] = [
   objSpec('RemovableDiscontinuity', [form([p('f', F1), p('a', 'Number'), p('b', 'Number')], 'List<Point>', runHole, 'removable discontinuities in [a, b]')]),
   objSpec('RootList', [form([p('f', F1), p('guesses', 'List<Number>')], 'List<Point>', runRootsGuesses, 'one root near each guess')]),
   objSpec('ParametricDerivative', [...slopeCurveForms]),
-];
+]);

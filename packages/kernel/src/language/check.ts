@@ -1182,11 +1182,21 @@ class Checker {
   /** What a check-time hook may know about a typed argument. */
   argFacts(node: TNode | null | undefined, a: Arg | undefined): ArgFacts {
     if (!node || !a) return { type: '', literal: undefined, text: a ? this.textOf(a.value) : '', omitted: !a };
-    return { type: tyStr(node.ty), literal: literalOf(node), text: this.textOf(a.value), omitted: false };
+    const base = { type: tyStr(node.ty), literal: literalOf(node), text: this.textOf(a.value), omitted: false };
+    if (node.n !== 'ref') return base;
+    // a bare object name: the hook may read what the object is now
+    const info = this.fig.byId(node.id);
+    let value: unknown;
+    try {
+      value = this.fig.read?.(node.id);
+    } catch {
+      value = undefined;
+    }
+    return { ...base, ...(value !== undefined ? { value } : {}), ...(info?.source !== undefined ? { source: info.source } : {}) };
   }
 
   /** Reports a refusal from a check-time hook as an error on the line. */
-  refuse(r: Refusal, command: string, call: CallExpr, argAt: (r: Refusal) => Arg | undefined): null {
+  refuse(r: Refusal, command: string, call: CallExpr, argAt: (r: Refusal) => Arg | undefined, forms: readonly FormLike[] = []): null {
     const a = argAt(r);
     const s = a ? a.value.s : call.cs;
     const e = a ? a.value.e : call.e;
@@ -1203,6 +1213,8 @@ class Checker {
       message: r.message,
       ...(r.hint !== undefined ? { hint: r.hint } : {}),
       ...(r.suggest !== undefined ? { suggest: r.suggest.slice(0, 3) } : {}),
+      ...(r.limit !== undefined ? { limit: { ...r.limit } } : {}),
+      ...(forms.length > 0 ? { forms: forms.map((f) => formText(command, f)) } : {}),
       phase: 'typecheck',
       fingerprintKey: `${command}:${r.kind}`,
     });
@@ -1508,7 +1520,7 @@ class Checker {
         }
         if (refusal) {
           return this.refuse(refusal, specName, call, (r) =>
-            r.param === undefined ? undefined : r.inRest === true ? (args[best.b.restArgs[r.param] ?? -1] as Arg | undefined) : paramArg(r.param));
+            r.param === undefined ? undefined : r.inRest === true ? (args[best.b.restArgs[r.param] ?? -1] as Arg | undefined) : paramArg(r.param), forms);
         }
       }
       return { form: best.b.form as F, bound: best.bound };
@@ -1545,7 +1557,7 @@ class Checker {
       } catch {
         refusal = undefined;
       }
-      if (refusal) return this.refuse(refusal, specName, call, (r) => (r.param === undefined ? undefined : (args[r.param] as Arg | undefined)));
+      if (refusal) return this.refuse(refusal, specName, call, (r) => (r.param === undefined ? undefined : (args[r.param] as Arg | undefined)), forms);
     }
     return this.diagnose(specName, forms, call, bindings, tests, shownArg);
   }

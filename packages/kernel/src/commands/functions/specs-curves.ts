@@ -18,6 +18,7 @@ import {
   asCurve, closestOnCurve, curveAcc, curveBbox, curvePoint, curveRange, curveVel, isEquation, projectImplicit,
 } from './curves';
 import type { AnyCurve } from './curves';
+import { withChecks } from './checks';
 
 const CURVE = 'Curve|Relation';
 
@@ -503,7 +504,7 @@ function runCurvePts(call: RuleCall): unknown {
   return data;
 }
 
-export const CURVE_COMMANDS: CommandSpec[] = [
+export const CURVE_COMMANDS: CommandSpec[] = withChecks([
   objSpec('Polar', [
     form(
       [p('r', 'Number', { kind: 'body' }), p('theta', 'Number', { kind: 'binder' }), p('a', 'Number'), p('b', 'Number')],
@@ -527,7 +528,7 @@ export const CURVE_COMMANDS: CommandSpec[] = [
     form([p('equation', 'Relation')], 'Curve', runCurveRelation, 'implicit curve from an equation in x and y'),
     form([p('pts', 'List<Point>')], 'Curve', runCurvePts, 'lowest-degree curve through n(n+3)/2 points'),
   ]),
-];
+]);
 
 function runCurveRelation(call: RuleCall): unknown {
   const v = call.values[0];

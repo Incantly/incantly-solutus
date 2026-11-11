@@ -80,6 +80,9 @@ const META: Record<ErrorKind, Meta> = {
   empty_list_type: { key: 'lang.empty_list_type', params: [], description: 'An empty list whose element type nothing fixes.' },
   duplicate_arg: { key: 'lang.duplicate_arg', params: ['name'], description: 'A named argument given twice.' },
   not_a_binder: { key: 'lang.not_a_binder', params: [], description: 'An expression where a bare binder name is required.' },
+  needs_interval: { key: 'lang.needs_interval', params: ['command', 'why'], description: 'A command that needs an interval unless its function is a polynomial.' },
+  not_differentiable: { key: 'lang.not_differentiable', params: ['command', 'why'], description: 'A function whose body has no derivative rule.' },
+  missing_range: { key: 'lang.missing_range', params: ['command', 'why'], description: 'A parametric curve written without a finite range.' },
 };
 
 function buildTable(): Record<ErrorKind, ErrorSpec> {
