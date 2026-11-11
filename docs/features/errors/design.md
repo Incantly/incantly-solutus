@@ -96,7 +96,7 @@ interface Notice {
 }
 ```
 
-They live in `changed.warnings` (kernel report) and are never confused with errors: errors have `ok: false`.
+They live in `notices` on the result (the kernel also keeps the same array in `changed.warnings` so older readers work) and are never confused with errors: errors have `ok: false`.
 
 ### 3.2 Undefined reasons
 

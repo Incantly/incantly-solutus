@@ -114,6 +114,9 @@ The numeric reasons carry optional `detail` (`achieved`, `wanted`, `iterations`)
 | `redefined_to_same` K107 | no structural change | `{name} was already defined that way.` | |
 | `listener_failed` K108 | a listener threw (view, film) | `A view failed to update; the figure is fine.` | where |
 | `step_hidden` K109 | new object added while step cursor is before the end | `{name} is added after the step you are viewing.` | |
+| `clamped` K110 | a free write was moved to the end of the slider's range | `{name} was moved to {value}, the {end} of its range.` | |
+| `shadowed_default` K111 | a style was set to what the default already is | `{name}: {key} is already {value}.` | |
+| `unstable_state` K112 | a state became unstable (the solver blew up) | `The state {names} became unstable at t = {t}.` | |
 
 ## 5. Examples
 
