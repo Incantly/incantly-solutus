@@ -207,13 +207,16 @@ export class FigureTx extends FigureBase {
       let define: string | undefined;
       if (e.kind === 'unknown_name' && e.blockedBy === undefined && e.token !== '') {
         const name = e.token;
-        if (!nameProblem(name) && !reservedGroup(name, this.commands, this.functions ?? BUILTIN_FUNCTIONS)) define = defineLine(name, 'Number');
+        // the line that defines the name as the type its argument needs (a Point for Midpoint); a Number when the language did not say
+        const want = typeof e.params['type'] === 'string' ? e.params['type'] : 'Number';
+        if (!nameProblem(name) && !reservedGroup(name, this.commands, this.functions ?? BUILTIN_FUNCTIONS)) define = defineLine(name, want);
       }
       if (suggest.length === 0 && define === undefined) return e;
       const kept: string[] = [];
       this.vetting = true;
       try {
-        for (const s of define !== undefined ? [define, ...suggest] : suggest) {
+        // a rewrite with a name that exists comes first; the define line is the fallback
+        for (const s of define !== undefined ? [...suggest, define] : suggest) {
           if (kept.includes(s)) continue;
           const r = this.apply(s, { dryRun: true });
           if (r.ok) kept.push(s);
@@ -222,12 +225,14 @@ export class FigureTx extends FigureBase {
         this.vetting = false;
       }
       suggest = kept.slice(0, 3);
+      let recovery = e.recovery;
       if (e.kind === 'unknown_name' && define !== undefined) {
         const near = suggest.some((s) => s !== define);
         if (!near) hint = `Define it first, or use a name that exists: ${this.names().slice(0, 8).join(', ')}.`;
+        else recovery = 'use_suggestion';
       }
       const { fix, ...rest } = e as ErrorObject & { fix?: string };
-      const out: Record<string, unknown> = { ...rest, suggest, ...(hint !== undefined ? { hint } : {}) };
+      const out: Record<string, unknown> = { ...rest, suggest, recovery, ...(hint !== undefined ? { hint } : {}) };
       if (fix !== undefined && suggest.includes(fix)) out['fix'] = fix;
       return out as unknown as ErrorObject;
     } catch {

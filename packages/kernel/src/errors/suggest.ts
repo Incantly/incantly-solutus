@@ -18,7 +18,7 @@ export function nearestNames(name: string, candidates: Iterable<string>, k = 3):
 
 /**
  * The line that would define `name` as a value of `type`, for an unknown name used there: `k = 1 in 0..10` for a
- * Number, `P = (0, 0)` for a Point, `flag = true` for a Bool. Types without a plain literal give no line.
+ * Number, `P = (0, 0)` for a Point, `u = Vector(1, 0)` for a Vector, `flag = true` for a Bool. Types without a plain literal give no line.
  */
 export function defineLine(name: string, type: TypeName | string): string | undefined {
   switch (type) {
@@ -27,7 +27,7 @@ export function defineLine(name: string, type: TypeName | string): string | unde
     case 'Point':
       return `${name} = (0, 0)`;
     case 'Vector':
-      return `${name} = Vector((1, 0))`;
+      return `${name} = Vector(1, 0)`;
     case 'Bool':
       return `${name} = true`;
     case 'Text':

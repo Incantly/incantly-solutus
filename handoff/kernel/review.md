@@ -127,6 +127,8 @@ Legend: done, partial, missing, different. "Probe" means I ran it.
 
 ### A5. `unknown_name` repair puts a wrong slider line first and suggests constants
 
+**Status:** fixed in `language/check.ts`, `language/errors.ts`, `graph/tx.ts`, `errors/suggest.ts`. The checker notes the type each bare-name argument needs (error param `type`); the repair puts rewrites with an existing name first with `recovery: use_suggestion`, then a define line of that type (Point, Vector, Bool, Text, Number; none for types with no literal); constants of one letter (`e`) are never near names; a one-letter name is near only to a case variant (applies to every `closestNames` use); the `Create slider` quick fix follows the same type; `defineLine` for a Vector is now `u = Vector(1, 0)`.
+
 - Docs: kernel agent.md 4 ("prefer a `suggest` line"), 5.3; errors.md 1.2 (`suggest` = closest names; a define line when used as a number), 2 ("edit-distance suggestions use object names and command names only"); errors/design 6 rule 4.
 - Code: `repaired()` always prepends `defineLine(name, 'Number')` (`graph/tx.ts:203-214`), whatever type the argument position needs, and the language adds a "Create slider" quick fix (`language/check.ts:620-624`). Near names are searched in `fig.names()` plus `CONSTANT_NAMES` (`language/check.ts:604`).
 - Probes: `M = Midpoint(A, Bb)`: `suggest[0] = "Bb = 1 in 0..10"` (a slider, but `Midpoint` wants a Point), `recovery: create_first`. `C = Midpoint(A, Q)`: hint `Did you mean A or B or e?`. `l = Vector(1, m)`: hint `Did you mean e?`, `suggest` includes `l = Vector(1, e)`. A model that sends `suggest[0]` creates a junk object and then gets `type_mismatch`.

@@ -359,7 +359,8 @@ export function editDistance(a: string, b: string, cap = 8): number {
  */
 export function closestNames(name: string, candidates: Iterable<string>, k = 3): string[] {
   const lower = name.toLowerCase();
-  const limit = Math.max(1, Math.floor(name.length / 3));
+  // a one-letter name is within one edit of every other one-letter name, so only a different case counts as near
+  const limit = name.length <= 1 ? 0 : Math.max(1, Math.floor(name.length / 3));
   const scored: { c: string; d: number }[] = [];
   for (const c of candidates) {
     if (c === name) continue;

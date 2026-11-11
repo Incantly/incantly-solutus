@@ -10,6 +10,7 @@ import { BUILTIN_FUNCTIONS, constantByName, getMathLib } from './builtins';
 import { Diag, closestNames, notice, typeList } from './errors';
 import type { ArgProblem, ErrorExtra, LanguageError, QuickFix } from './errors';
 import { CONSTANT_NAMES, nameProblem, reservedGroup } from './names';
+import { defineLine } from '../errors/suggest';
 import { own } from './props';
 import { classify } from './relation';
 import type { FigureView, FormLike, FunctionTable, ObjectInfo, ParamSpec } from './table';
@@ -602,7 +603,9 @@ class Checker {
       return this.err('unknown_name', e.s, e.e, 'lang.unknown_name', { name }, { hint: 'zaxis belongs to 3D figures.', fingerprintKey: name });
     }
     const split = this.simpleUnknown ? undefined : this.splitProduct(name);
-    const close = closestNames(name, [...this.fig.names(), ...CONSTANT_NAMES, ...this.scopeNames()], 3);
+    // a constant is never a near name for a typo (`e` would match every short name), and only a word of its own length can be
+    const close = closestNames(name, [...this.fig.names(), ...CONSTANT_NAMES.filter((c) => c.length > 1), ...this.scopeNames()], 3);
+    const want = this.wants.get(e);
     const suggest: string[] = [];
     if (split) {
       suggest.push(this.replaceRange(e.s, e.e, split.join(' * ')));
@@ -618,12 +621,18 @@ class Checker {
     if (split && suggest.length > 0) extra.fix = suggest[0] as string;
     // a slider that was never made
     if (!this.simpleUnknown && !nameProblem(name) && !reservedGroup(name, this.fig.commands, this.functions)) {
-      const slider = `${name} = 1 in -5..5 step 0.1`;
       const original = this.parsed.sm.text;
-      const qf: QuickFix[] = [{ label: `Create slider ${name} from -5 to 5`, lines: [slider, original] }];
-      extra.quickFixes = qf;
+      // the line that makes the name what the argument needs: a slider for a number, a point for a point, nothing for a type with no plain literal
+      if (want === undefined || want === 'Number') {
+        const slider = `${name} = 1 in -5..5 step 0.1`;
+        const qf: QuickFix[] = [{ label: `Create slider ${name} from -5 to 5`, lines: [slider, original] }];
+        extra.quickFixes = qf;
+      } else {
+        const def = defineLine(name, want);
+        if (def !== undefined) extra.quickFixes = [{ label: `Create ${want} ${name}`, lines: [def, original] }];
+      }
     }
-    return this.err('unknown_name', e.s, e.e, 'lang.unknown_name', { name }, extra);
+    return this.err('unknown_name', e.s, e.e, 'lang.unknown_name', want !== undefined ? { name, type: want } : { name }, extra);
   }
 
   unknownNameAt(t: { name: string; s: number; e: number }): null {
@@ -635,6 +644,8 @@ class Checker {
     }
   }
   simpleUnknown = false;
+  /** The type a bare name needs in its argument position, when the forms that fit agree; `Any` when it has no plain literal. */
+  readonly wants = new Map<Expr, string>();
 
   scopeNames(): string[] {
     const out: string[] = [];
@@ -1147,6 +1158,25 @@ class Checker {
     return set.members[0] ?? T.Number;
   }
 
+  /** Notes, for each argument that is a bare name, the type the forms that fit want there (for an `unknown_name` repair). */
+  noteWants(args: readonly Arg[], candidates: readonly { form: FormLike; bind: number[] }[]): void {
+    const per = new Map<Expr, string[]>();
+    for (const c of candidates) {
+      c.form.params.forEach((p, k) => {
+        const ai = c.bind[k] as number;
+        if (ai === -1 || (p.kind !== undefined && p.kind !== 'value')) return;
+        const v = (args[ai] as Arg).value;
+        if (v.k !== 'name' || v.paren) return;
+        const set = typeSet(p.type);
+        const names = set.any || set.members.length === 0 ? ['Any'] : set.members.map((m) => m.k);
+        const have = per.get(v) ?? [];
+        for (const n of names) if (!have.includes(n)) have.push(n);
+        per.set(v, have);
+      });
+    }
+    for (const [v, names] of per) this.wants.set(v, names.includes('Number') ? 'Number' : (names[0] as string));
+  }
+
   /* ------------------------------- matching ------------------------------- */
 
   matchForms<F extends FormLike>(
@@ -1229,6 +1259,7 @@ class Checker {
       return this.err('duplicate_arg', a.ns as number, a.ne as number, 'lang.duplicate_arg', { name: a.name ?? '' }, { hint: `${a.name ?? 'This parameter'} is already given by position.`, fingerprintKey: a.name ?? '' });
     }
 
+    this.noteWants(args, candidates);
     // value typing, lazy and cached; speculative when several forms compete
     const speculative = candidates.length > 1;
     // An argument is typed once per expected type: the same text can type differently under different forms (`[]`).
