@@ -208,7 +208,7 @@ printed digits).
   verified used, `exactOptionalPropertyTypes`/`noUncheckedIndexedAccess` patterns
   checked, switch exhaustiveness checked, no `console`/`eval`/`Date`, no DOM in
   package code. The tester/integrator must run the three gates first.
-- No tests written (per brief). No GeoGebra material touched. No new dependencies.
+- No tests written (per brief). No reference-app material touched. No new dependencies.
 
 ## Gate fixes (fixer)
 
