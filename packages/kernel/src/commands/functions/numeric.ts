@@ -206,7 +206,9 @@ export function scanBrackets(f: Fn1, a: number, b: number, samples: number, tol:
   if (identicalZero) return { brackets, touches, scale, sawUndefined, identicalZero, spent: false };
   // Adaptive subdivision: isolate sign changes and follow oscillation.
   const minW = (b - a) / 16384;
-  const stack: [number, number, number][] = [[a, b, 0]];
+  // Start from the coarse panels, so no oscillation is aliased away by one wide first panel.
+  const stack: [number, number, number][] = [];
+  for (let i = n - 1; i >= 0; i--) stack.push([a + i * h, i === n - 1 ? b : a + (i + 1) * h, 0]);
   const seen = new Set<string>();
   while (stack.length > 0) {
     const [lo, hi, depth] = stack.pop() as [number, number, number];
@@ -222,6 +224,14 @@ export function scanBrackets(f: Fn1, a: number, b: number, samples: number, tol:
       if (v === v && Math.abs(v) > scale) scale = Math.abs(v);
     }
     const w = hi - lo;
+    // A root exactly at the closed right end of the interval belongs to the last panel only.
+    if (hi === b && vs[m] === 0) {
+      const key = `${hi},${hi}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        brackets.push([hi, hi]);
+      }
+    }
     for (let i = 0; i < m; i++) {
       const u = vs[i] as number;
       const v = vs[i + 1] as number;
@@ -871,6 +881,102 @@ export function detectPolynomial(f: Fn1, center: number, tol: number, work: Rule
     return { degree: trimDegree(c, tol), coeffs: [...c], spent: false };
   }
   return { degree: null, coeffs: null, spent: false };
+}
+
+export interface RationalFit {
+  /** Numerator coefficients in x (index k is x^k). */
+  readonly num: readonly number[];
+  /** Denominator coefficients in x, monic. */
+  readonly den: readonly number[];
+}
+
+/** Highest total degree of numerator plus denominator that `detectRational` tries. */
+export const MAX_RATIONAL_DEGREE = 12;
+
+/**
+ * Detects a rational function `P / Q` in lowest terms (total degree up to 12) from samples: for each pair of degrees,
+ * the vector `(P, -Q)` is the nullspace of the linear system `P(x) - f(x) Q(x) = 0` at sample points, then the fit is
+ * checked on fresh points out to two and a half times the fitting radius. The first pair with a one-dimensional
+ * nullspace is the reduced form. `Q` is made monic. Null when no such pair exists. Deterministic.
+ */
+export function detectRational(f: Fn1, work: RuleWork): RationalFit | null {
+  const R = 2;
+  const M = 48;
+  const xs = new Float64Array(M);
+  const ys = new Float64Array(M);
+  for (let i = 0; i < M; i++) {
+    if (!work.spend(1)) return null;
+    // Chebyshev-spaced points nudged off simple values, so a pole or hole at a nice number is not sampled.
+    const x = R * Math.cos((Math.PI * (i + 0.5)) / M) * (1 + 1e-3 * Math.sin(7 * i + 1));
+    xs[i] = x;
+    ys[i] = f(x);
+  }
+  const ok: number[] = [];
+  for (let i = 0; i < M; i++) if ((ys[i] as number) === (ys[i] as number) && Math.abs(ys[i] as number) < 1e150) ok.push(i);
+  if (ok.length < 20) return null;
+  const checks: number[] = [];
+  for (let i = 0; i < 16; i++) checks.push(2.5 * R * Math.cos((Math.PI * (i + 0.5)) / 16) * (1 + 3e-3 * Math.cos(5 * i + 2)));
+  for (let total = 1; total <= MAX_RATIONAL_DEGREE; total++) {
+    for (let dd = 0; dd <= total; dd++) {
+      const dn = total - dd;
+      const cols = dn + dd + 2;
+      const want = Math.min(ok.length, cols + 8);
+      const rowIdx: number[] = [];
+      for (let r = 0; r < want; r++) rowIdx.push(ok[Math.floor((r * ok.length) / want)] as number);
+      if (rowIdx.length < cols + 2) continue;
+      const a = new Float64Array(rowIdx.length * cols);
+      rowIdx.forEach((i, r) => {
+        const t = (xs[i] as number) / R;
+        const y = ys[i] as number;
+        const scale = 1 / Math.max(1, Math.abs(y));
+        let pw = 1;
+        for (let k = 0; k <= Math.max(dn, dd); k++) {
+          if (k <= dn) a[r * cols + k] = pw * scale;
+          if (k <= dd) a[r * cols + dn + 1 + k] = -y * pw * scale;
+          pw *= t;
+        }
+      });
+      const ns = nullspaceRect(a, rowIdx.length, cols, 1e-9);
+      if (!ns.vec) continue;
+      const v = ns.vec;
+      const pT = Array.from(v.slice(0, dn + 1));
+      const qT = Array.from(v.slice(dn + 1));
+      // degree of Q (top non-negligible coefficient)
+      let qd = dd;
+      const qmax = Math.max(...qT.map(Math.abs));
+      while (qd > 0 && Math.abs(qT[qd] as number) <= 1e-9 * qmax) qd--;
+      if (qd < 1) continue;
+      const evalT = (c: readonly number[], x: number): number => polyEval(c, x / R);
+      let good = true;
+      for (const x of checks) {
+        if (!work.spend(1)) return null;
+        const y = f(x);
+        if (y !== y) continue;
+        const q = evalT(qT, x);
+        const pv = evalT(pT, x);
+        if (Math.abs(pv - y * q) > 1e-7 * Math.max(1, Math.abs(y)) * Math.max(Math.abs(q), 1e-3)) {
+          good = false;
+          break;
+        }
+      }
+      if (!good) continue;
+      const lead = (qT[qd] as number) / Math.pow(R, qd);
+      const toX = (c: readonly number[], d: number): number[] => {
+        const out: number[] = [];
+        for (let k = 0; k <= d; k++) out.push((c[k] as number) / Math.pow(R, k) / lead);
+        return out;
+      };
+      return { num: trimZerosRel(toX(pT, dn)), den: toX(qT, qd) };
+    }
+  }
+  return null;
+}
+
+function trimZerosRel(c: number[]): number[] {
+  const scale = Math.max(...c.map(Math.abs), 1e-300);
+  let d = c.length - 1;
+  while (d > 0 && Math.abs(c[d] as number) <= 1e-10 * scale) d--;
+  return c.slice(0, d + 1);
 }
 
 function trimDegree(c: Float64Array, tol: number): number {

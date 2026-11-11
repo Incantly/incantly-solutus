@@ -11,8 +11,9 @@ import type { CommandSpec } from '../../language/table';
 import { toSampledCurve } from './locus';
 import { sample1, sample2, sampleN, numArg, isFin } from './sample';
 import type { Fn1, Sampled1 } from './sample';
+import type { RationalFit } from './numeric';
 import {
-  brent, cauchyBound, derivativeAt, detectPolynomial, diff1, diff2, findRoots, goldenMin, kappaStraight,
+  brent, cauchyBound, derivativeAt, detectPolynomial, detectRational, diff1, diff2, findRoots, goldenMin, kappaStraight,
   newton, polyDeriv, polyEval, quad, taylorCoeffs, wynn,
 } from './numeric';
 import { odeDomain, odeEval, solveOde } from './ode';
@@ -791,8 +792,22 @@ function runRootsPoly(call: RuleCall): unknown {
   const tol = call.tol;
   const det = detectPolynomial(f.f, 0, tol, call.work);
   if (det.spent) return call.fail('timeout', 'The work budget ran out.');
-  if (det.degree === null || !det.coeffs) return call.fail('needs_interval', 'f is not a polynomial of degree 20 or less, so Roots needs an interval.');
-  const coeffs = det.coeffs.slice(0, det.degree + 1);
+  let rational: RationalFit | null = null;
+  if (det.degree === null || !det.coeffs) {
+    rational = detectRational(f.f, call.work);
+    if (!rational) return call.fail('needs_interval', 'f is not a polynomial of degree 20 or less or a rational function, so Roots needs an interval.');
+  }
+  if (rational) {
+    const iso = interpRoots(rational.num, tol, call.work);
+    if (iso.spent) return call.fail('timeout', 'The work budget ran out.');
+    const polish: number[] = [];
+    for (const r of iso.roots) {
+      const nr = newton(f.f, r, call.work, tol);
+      polish.push(nr === nr && Math.abs(nr - r) <= 1e-6 * Math.max(1, Math.abs(r)) ? nr : r);
+    }
+    return polish.map((x) => ({ x, y: 0 }));
+  }
+  const coeffs = (det.coeffs as readonly number[]).slice(0, (det.degree as number) + 1);
   if (det.degree === 0) {
     return Math.abs(coeffs[0] as number) <= tol ? call.fail('identically_zero', 'Every x is a root.') : [];
   }
@@ -857,15 +872,90 @@ function runRootsGuesses(call: RuleCall): unknown {
   return dd.map((x) => ({ x, y: 0 }));
 }
 
-/** Critical points of `f` on `[a, b]` (zeros of the numeric first derivative). */
-function criticals(call: RuleCall, f: Sampled1, a: number, b: number): { readonly pts: number[] } | undefined {
-  const dp = (x: number): number => diff1(f.f, x);
-  const rr = findRoots(dp, a, b, call.tol, call.work, 512);
-  if (rr.spent) {
-    call.fail('timeout', 'The work budget ran out.');
-    return undefined;
+/**
+ * Positions of the local extrema of `f` strictly inside `(a, b)`, smooth or at a corner. A uniform grid finds where the
+ * slope changes sign; each bracket is refined by golden search on `f` itself. A smooth extremum is then polished by
+ * Brent on the derivative; a corner (the one-sided slopes stay put as the step shrinks) by a second tight golden
+ * search, which is exact to rounding for a V-shaped point. Undefined stretches end a run and are never extrema.
+ */
+function extremaOn(call: RuleCall, f: Sampled1, a: number, b: number): number[] | undefined {
+  const N = 4096;
+  const xs = new Float64Array(N + 1);
+  const ys = new Float64Array(N + 1);
+  let scale = 0;
+  for (let i = 0; i <= N; i++) {
+    if (!call.work.spend(1)) {
+      call.fail('timeout', 'The work budget ran out.');
+      return undefined;
+    }
+    const x = i === N ? b : a + ((b - a) * i) / N;
+    xs[i] = x;
+    const v = f.f(x);
+    ys[i] = v;
+    if (v === v && Math.abs(v) > scale) scale = Math.abs(v);
   }
-  return { pts: [...rr.roots] };
+  const zero = 8 * 2.220446049250313e-16 * Math.max(scale, 1e-300);
+  const out: number[] = [];
+  let prevSign = 0;
+  let prevFrom = 0;
+  for (let i = 1; i <= N; i++) {
+    const u = ys[i - 1] as number;
+    const v = ys[i] as number;
+    if (u !== u || v !== v) {
+      prevSign = 0;
+      continue;
+    }
+    const d = v - u;
+    if (Math.abs(d) <= zero) continue;
+    const sg = d > 0 ? 1 : -1;
+    if (prevSign !== 0 && sg !== prevSign) {
+      const r = refineExtremum(call, f, xs[prevFrom] as number, xs[i] as number, prevSign > 0);
+      if (r === undefined) return undefined;
+      if (r === r) out.push(r);
+    }
+    prevSign = sg;
+    prevFrom = i - 1;
+  }
+  return out;
+}
+
+function refineExtremum(call: RuleCall, f: Sampled1, lo: number, hi: number, isMax: boolean): number | undefined {
+  const sgn = isMax ? -1 : 1;
+  const g = (x: number): number => {
+    const v = f.f(x);
+    return v === v ? sgn * v : Number.NaN;
+  };
+  const c0 = goldenMin(g, lo, hi, call.work, 1e-9);
+  if (c0 !== c0) {
+    if (call.work.left <= 0) {
+      call.fail('timeout', 'The work budget ran out.');
+      return undefined;
+    }
+    return Number.NaN;
+  }
+  const s0 = Math.max(1, Math.abs(c0));
+  const y0 = f.f(c0);
+  const q = (h: number): number => (f.f(c0 + h * s0) - y0) / (h * s0);
+  const ql = (h: number): number => (y0 - f.f(c0 - h * s0)) / (h * s0);
+  const big = Math.max(Math.abs(q(1e-3)), Math.abs(ql(1e-3)));
+  const small = Math.max(Math.abs(q(1e-5)), Math.abs(ql(1e-5)));
+  if (small > 1e-6 && small > 0.5 * big) {
+    // corner: tight golden search in a narrow bracket
+    const w = 4e-3 * s0;
+    const c1 = goldenMin(g, Math.max(lo, c0 - w), Math.min(hi, c0 + w), call.work, 1e-15);
+    return c1 === c1 ? c1 : c0;
+  }
+  const dp = (x: number): number => diff1(f.f, x);
+  const w = 1e-5 * s0;
+  const l = Math.max(lo, c0 - w);
+  const r = Math.min(hi, c0 + w);
+  const dl = dp(l);
+  const dr = dp(r);
+  if (dl === dl && dr === dr && ((dl < 0 && dr > 0) || (dl > 0 && dr < 0))) {
+    const root = brent(dp, l, r, call.work);
+    if (root === root) return root;
+  }
+  return c0;
 }
 
 function runExtremumInterval(call: RuleCall): unknown {
@@ -874,23 +964,13 @@ function runExtremumInterval(call: RuleCall): unknown {
   const ab = intervalAB(call, 1);
   if (!ab) return undefined;
   if (ab.b - ab.a > 1e6) return call.fail('limit', 'Extremum takes a search interval up to 1e6 wide.');
-  const cr = criticals(call, f, ab.a, ab.b);
-  if (!cr) return undefined;
-  const dp = (x: number): number => diff1(f.f, x);
+  const cs = extremaOn(call, f, ab.a, ab.b);
+  if (!cs) return undefined;
   const out: Pt[] = [];
-  const bounds = [ab.a, ...cr.pts, ab.b];
-  cr.pts.forEach((c, i) => {
-    const l = 0.5 * ((bounds[i] as number) + c);
-    const r = 0.5 * (c + (bounds[i + 2] as number));
-    const dl = dp(l);
-    const dr = dp(r);
-    if (!call.work.spend(2)) return;
-    if (dl !== dl || dr !== dr) return;
-    if ((dl < 0 && dr > 0) || (dl > 0 && dr < 0)) {
-      const y = f.f(c);
-      if (y === y) out.push({ x: c, y });
-    }
-  });
+  for (const c of cs) {
+    const y = f.f(c);
+    if (y === y) out.push({ x: c, y });
+  }
   return out;
 }
 
@@ -926,8 +1006,8 @@ function runMinMax(call: RuleCall, wantMax: boolean): unknown {
   if (!f) return undefined;
   const ab = intervalAB(call, 1);
   if (!ab) return undefined;
-  const cr = criticals(call, f, ab.a, ab.b);
-  if (!cr) return undefined;
+  const cs = extremaOn(call, f, ab.a, ab.b);
+  if (!cs) return undefined;
   let bx = ab.a;
   let bv = f.f(ab.a);
   const consider = (x: number): void => {
@@ -940,7 +1020,7 @@ function runMinMax(call: RuleCall, wantMax: boolean): unknown {
     }
   };
   consider(ab.b);
-  for (const c of cr.pts) consider(c);
+  for (const c of cs) consider(c);
   if (bv !== bv) return call.fail('no_extremum', 'f is undefined everywhere on the interval.');
   return { x: bx, y: bv };
 }
@@ -1724,6 +1804,23 @@ function runCoefficients(call: RuleCall): unknown {
   return new Float64Array(det.coeffs.slice(0, det.degree + 1));
 }
 
+/** `Numerator` or `Denominator` of a polynomial (denominator 1) or a rational function in lowest terms (monic denominator). */
+function runNumDen(call: RuleCall, wantNum: boolean): unknown {
+  const f = reqFn1(call, 0);
+  if (!f) return undefined;
+  const det = detectPolynomial(f.f, 0, call.tol, call.work);
+  if (det.spent) return call.fail('timeout', 'The work budget ran out.');
+  let c: readonly number[];
+  if (det.degree !== null && det.coeffs) c = wantNum ? det.coeffs.slice(0, det.degree + 1) : [1];
+  else {
+    const r = detectRational(f.f, call.work);
+    if (!r) return call.fail('bad_argument', 'f is not a rational function of total degree 12 or less.');
+    c = wantNum ? r.num : r.den;
+  }
+  const co = c;
+  return fn1Value((x) => polyEval(co, x), () => 'out_of_domain');
+}
+
 function runPolynomial(call: RuleCall): unknown {
   const v = call.values[0];
   if (!Array.isArray(v)) return call.fail('bad_argument', 'Polynomial needs a list of points.');
@@ -1897,6 +1994,8 @@ export const FUNCTIONS_SPECS: CommandSpec[] = [
     ),
   ]),
   objSpec('Degree', [form([p('f', F1)], 'Number', runDegree, 'degree of a polynomial')]),
+  objSpec('Numerator', [form([p('f', F1)], F1RET, (call) => runNumDen(call, true), 'numerator of a rational function')]),
+  objSpec('Denominator', [form([p('f', F1)], F1RET, (call) => runNumDen(call, false), 'denominator of a rational function')]),
   objSpec('Coefficients', [form([p('f', F1)], 'List<Number>', runCoefficients, 'coefficients, index k is x^k')]),
   objSpec('Polynomial', [form([p('pts', 'List<Point>')], F1RET, runPolynomial, 'interpolating polynomial through points')]),
   // Accepted aliases (docs: "accepted but not printed"; without a core aliases field they are thin specs).
