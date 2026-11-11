@@ -4,10 +4,12 @@
  * scheduler tick trivial; label placement for 200 labels under 2 ms.
  *
  * Plain script on purpose: Vitest 5 has no `bench` export, and this package
- * must not add a bench runner. Run it with `npx tsx` or plain `node`
- * (the imports below are type-strippable, so no flags are needed):
+ * must not add a bench runner. Each case warms up, then times a loop with
+ * `performance.now()` and prints ms/op. Run it with `npx tsx` (plain `node`
+ * cannot resolve this repo's extensionless imports), or execute it in place
+ * with the repo's own runner, which prints the same output:
  *
- *   node packages/view/bench/view.bench.ts
+ *   npx vitest bench --run packages/view/bench/view.bench.ts
  */
 import type { ObjId } from '@incantly/kernel';
 import { px } from '../src/core/coords';
