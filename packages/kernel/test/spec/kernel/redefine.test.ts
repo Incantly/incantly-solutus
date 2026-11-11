@@ -276,13 +276,12 @@ describe('self reference on a free Number, Point or Bool is an assignment (rulin
     expect(must(f.get('a')).range).toEqual({ min: 0, max: 10, step: 0.5 });
   });
 
-  // Design 8 and ruling K2 name `A = A + (1, 1)` as the example. A Point plus a pair literal is a Point plus a Point,
-  // which the language does not define (README decision 6 makes Point - Point a Vector). Doc conflict, kept as written.
-  it('works on a free Point: the doc example A = A + (1, 1)', () => {
+  // Ruling K2 (updated): a point moves by a vector. `A + (1, 1)` is Point + Point, which is type_mismatch
+  // (language design 3.10), and the figure is unchanged.
+  it('refuses A = A + (1, 1) on a free Point: Point + Point is type_mismatch', () => {
     const f = figure(['A = (1, 2)', 'M = Midpoint(A, A)']);
-    ok(f.apply('A = A + (1, 1)'));
-    expect(f.value('A')).toEqual({ x: 2, y: 3 });
-    expect(f.value('M')).toEqual({ x: 2, y: 3 });
+    bad(f.apply('A = A + (1, 1)'), 'type_mismatch');
+    expect(f.value('A')).toEqual({ x: 1, y: 2 });
   });
 
   it('works on a free Point with a Vector', () => {
