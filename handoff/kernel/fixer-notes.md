@@ -54,3 +54,51 @@ None.
 ### Commits
 
 `c9685a4` limits (causes 1, 2); `5e3da16` solver (3a, 3b); `17a4649` `acceptsUndefined` (4); `a98b6ba` message keys, per-type property keys, `animate`, wording, phase (6, 7, 10); `0ec0aab` and `fe65662` suggestions, locked, rename, confusable (5, 6, 9a to 9c); `c684813` compact error (8); `b8b694e` junk arguments, Bool drag, style event, insertAt, API vetting (9d to 9f).
+
+## Round 2 (checker findings)
+
+Branch `feat/kernel`. Fixer, step 5, the only fix round. All 20 findings of `handoff/kernel/findings.md` (KERN-SM-1 to 20) are `status: fixed`, each with a one-line `fix:` note there. `npx eslint .` and `npx tsc -p tsconfig.json` are clean. `npx vitest run` gives 3,370 tests; 3,369 pass and 1 is contested (below). Nothing under `packages/kernel/test/spec/` was edited.
+
+### Fixes by group
+
+| Group | Findings | What changed |
+|---|---|---|
+| D. Budgets and bounded text | 1, 2, 7 | `Limits` gained `items` (5,000), `lines` (20,000) and `textLength` (10,000). `applyBatch` and `load` refuse over `lines` or `fileSize`; comments and directives count against `items` (also in dry runs). `err()` clips caller text in params, token, key, related and hint; `compactError` shortens hint, token and message last so it always fits 800 characters. Directives are found by a `Map<name, index>` (`insertItem`/`removeItem`), also used by `clockRange` and the solver step. The journal measures an entry by the texts it holds, cached per entry. |
+| Registry | 3 | A `CommandRegistry` given to `Figure` is copied; the kernel actions are added only to the figure's own copy. |
+| F. No throw, no re-entry | 4 (getter), 6, 8, 19 | `setFree` copies Points and Vectors inside a `try`. `pull` is iterative. A figure operation called while a rule runs returns `tool_busy`; `faults` is capped at 100 and cleared per frame; a frame that throws returns an empty delta. Exported table lookups use `Object.hasOwn`. |
+| 4 | 4 | `setFree` rejects a `why` outside the five, `solver` on a non-state, and a Text over `textLength`. |
+| E. Clock and solver | 5, 16 | `setClock` rejects a non-finite time. One `sync` takes at most 400,000 grid steps; a farther seek leaves the states undefined (`timeout`) and later flushes catch up. Checkpoints are capped at 2,000 by doubling the spacing. After a structure change the solver compares a signature (states, rates, everything they read, step, film start) and keeps its checkpoints when it is unchanged. |
+| A. History in a group | 9, 15 | `Journal` counts `begin`/`end` depth (only the opener closes the group), `Undo()` and `Redo()` inside an open group act on the group's own entries (a group-local redo list), `snapshot`/`restore` bring both stacks back. `beginUnit`/`rollbackUnit` are shared by `applyBatch` and `load`. `deliver` is re-entrant safe. |
+| B. Rejected means unchanged | 10 | `apply` keeps a log of the entries it recorded and the undo or redo steps it took; any failure after a change unwinds the log newest first (`Journal.putBack` returns a taken entry to where it came from) and drops the events the line queued. |
+| C. Gestures | 11 | `apply`, `delete`, `rename`, `move`, `load` and `setFree` with `show_me` or `api` commit an open gesture first. |
+| G. Save format | 12 | `setFree` on a Text parses the saved line and refuses (`bad_argument`, or `limit` for the line length) a text that does not read back. |
+| Steps | 13 | `insertAt` moves the `@step` items after the previous object onto the new object; `move` and a redefinition's reorder anchor each `@step` again in front of its marked object. Journalled for undo and redo. |
+| Dry run | 14, 20 | A dry run of a definition, restyle, rerange or rate runs the whole commit and `apply` takes it back (journal, redo stack, next id, reveal cursor, pending events and values restored). One `clamped` notice: the kernel's replaces the checker's. |
+| Speed | 17 | Case-insensitive names come from a map, `renumber` starts at the insert or remove position, and the solver reads a maintained set of state objects (a 20,000-object chain builds in 0.3 s). |
+| Events | 18 | The listener-failure count resets at the start of each operation; `flush` and `setClock` return it as `FrameDelta.listenerFailures`. |
+
+### Extra places fixed (same rule, other cases)
+
+- Budgets: `load`, `append`, `fromScript`, `applyBatch` and `insertAt` all go through one `lines`/`fileSize`/`items` check; every directive and comment path counts, dry runs included.
+- Error text: all `err()` callers (`need`, `doRename`, `fail`, `setFree`, `move`, `slice`, `describe`) are covered at the one constructor.
+- `busy` guards: `apply`, `delete`, `rename`, `move`, `undo`/`redo`, `applyBatch`, `setFree`, `commitDrag`, `setClock`, `stepTo`, `flush`, `load`.
+- Atomic rollback of a line applies to actions another area registered (an action that changes the figure and then throws) as well as to `Undo()`.
+- Own-key lookups: `defaultsFor`, `validKeysFor`, `makeNotice`, `reasonPhrase`, `err`, and `registerReasonPhrase('__proto__')`.
+- Dry run: rerange, rate and restyle follow the commit path too, not only definitions.
+
+### Decisions and what is not done
+
+- KERN-SM-12: the language has no escape for `“`, `”`, `„` or a carriage return in a Text, so those texts are refused by `setFree` instead of written. Adding `\u{...}` is the language area's change; once it exists, the refusal in `FigureHist.textReadsBack` can go. A free Text is also limited to what fits one saved line (`lineLength`, 2,000), though `textLength` is 10,000 (a rule can build a longer text).
+- KERN-SM-1: one group can still hold up to `lines` (20,000) entries, so the byte cap can be exceeded by one large batch; the line, item and object budgets bound it.
+- `delete`, `rename`, `move`, `setFree` and the public `undo`/`redo` still report a change as made when a rule throws during their pass (the cell is `not_finite`); only `apply` rolls back, as K5 says.
+- The `limits` doc table (`docs/features/kernel/errors.md` section 6) does not list `items`, `lines` and `textLength`; the product owner should add the rows.
+
+### Contested regression test
+
+- `packages/kernel/test/spec/kernel/regressions.test.ts`, "KERN-SM-18 ... a failure during an undo is not reported on the next line". The listener throws once on a `value` event. `figure(['a = 1', 'b = 2'])` then `f.undo()` takes back an `add`: the events are `remove` and `undo`, and no `value` event (`docs/features/kernel/design.md` line 206: `{ ev: 'value'; ids }  // batched per pass`; a removed object changes no value). The listener is still armed, so it throws on the `value` event of `apply('c = 5')`, and the failure is correctly reported on that line. The test needs an undo that changes a value (for example undo of `setFree(..., 'api')`) to test what it means to test.
+
+Two other tests were first contested (a `z` object name, which `docs/features/language/design.md` line 235 reserves; a 10 s seek that needs 9,600 rule runs at 4 per RK4 step, `docs/features/animation-time/design.md` 7.3); the tester has already corrected both.
+
+### Commits
+
+`cfbc6ec` budgets, error text, registry, setFree, directives (1, 2, 3, 4, 7); `d8929e7` and `af92cc8` seek budget, lazy pull, rule re-entry, solver signature, linear adds, Text round trip (5, 6, 8, 12, 16, 17); `41d446f` history in a group, line rollback, gestures, load rollback, delivery, listener failures (9, 10, 11, 15, 18); `a1a7795` step titles, dry run, own-key lookups, clamped notice (13, 14, 19, 20).
