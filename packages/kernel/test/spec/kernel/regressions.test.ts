@@ -24,7 +24,7 @@ import {
   validKeysFor,
 } from '@incantly/kernel';
 import type { ActionCall, CommandSpec, ErrorObject, FigureEvent, RuleCall, TxResult } from '@incantly/kernel';
-import { TEST_COMMANDS, bad, expectUnchanged, figure, isErr, newFigure, ok, runs, snap } from './helpers';
+import { TEST_COMMANDS, bad, expectUnchanged, figure, isErr, newFigure, ok, snap } from './helpers';
 
 // ---------------------------------------------------------------------------------------------
 // Local helpers
@@ -114,6 +114,22 @@ function undoWalk<T>(f: Figure, observe: (f: Figure) => T, max = 40): T[] {
 }
 
 const point = (f: Figure, name: string): unknown => f.value(name);
+
+/**
+ * Runs `run` on every case and fails once at the end, listing each case that failed with its first message line.
+ * Keeps the file to a sharp set of tests while every case in a rule is still checked.
+ */
+function eachCase<C extends readonly [string, ...unknown[]]>(cases: readonly C[], run: (c: C) => void): void {
+  const failures: string[] = [];
+  for (const c of cases) {
+    try {
+      run(c);
+    } catch (e) {
+      failures.push(`${c[0]}: ${e instanceof Error ? (e.message.split('\n')[0] ?? '') : String(e)}`);
+    }
+  }
+  expect(failures).toEqual([]);
+}
 
 // ---------------------------------------------------------------------------------------------
 // KERN-SM-1. Size limits on every path
@@ -210,18 +226,16 @@ describe('KERN-SM-1: size budgets hold on every path into the figure', () => {
     expect(scriptLines(f)).toBeLessThanOrEqual(MAX_SCRIPT_LINES + 10);
   });
 
-  const OVER = [10_001, 20_000, 1_000_000];
-  const WHYS = ['api', 'show_me'] as const;
-  for (const why of WHYS) {
-    it.each(OVER)(`setFree (${why}) refuses a Text of %i characters and keeps the old value`, (n) => {
+  const TEXT_CASES = (['api', 'show_me'] as const).flatMap((why) => [10_001, 20_000, 1_000_000].map((n) => [`${why} ${n}`, why, n] as const));
+  it('setFree refuses a Text over 10,000 characters (api and show_me writes) and keeps the old value', () => {
+    eachCase(TEXT_CASES, ([, why, n]) => {
       const f = figure(['s = "hi"']);
       const before = snap(f);
-      const r = f.setFree('s', 'y'.repeat(n), why);
-      expect(r.ok).toBe(false);
+      expect(f.setFree('s', 'y'.repeat(n), why).ok).toBe(false);
       expectUnchanged(f, before);
       expect(f.value('s')).toBe('hi');
     });
-  }
+  });
 
   it('setFree with a Text of 10,000 characters is refused or can be read back', () => {
     const f = figure(['s = "hi"']);
@@ -284,16 +298,16 @@ describe('KERN-SM-2: error text stays short whatever the caller sends', () => {
     expect(JSON.stringify(compactError(e, { limit: 400 })).length).toBeLessThanOrEqual(400);
   }
 
-  for (const [sizeLabel, s] of SIZES) {
-    it.each(CALLS)(`${sizeLabel}: %s gives a bounded error`, (_label, call) => {
+  it.each(CALLS)('%s gives a bounded error for 5,000 and 100,000 characters', (_label, call) => {
+    eachCase(SIZES, ([sizeLabel, s]) => {
       const f = figure(['A = (0, 0)', 'B = (1, 1)']);
       const before = snap(f);
       const e = call(f, s);
-      expect(isErr(e)).toBe(true);
+      expect(isErr(e), sizeLabel).toBe(true);
       expectBounded(e as ErrorObject);
       expectUnchanged(f, before);
     });
-  }
+  });
 
   it('compactError fits the budget for an error built directly with a huge token, name and hint', () => {
     const big = 'k'.repeat(100_000);
@@ -413,12 +427,13 @@ describe('KERN-SM-4: setFree guards fixed objects, reasons, aliasing and throwin
   });
 
   const JUNK_WHYS: unknown[] = ['bogus', '', 'API', 'solver ', 'Drag', 42, {}, null, ['api']];
-  it.each(JUNK_WHYS.map((w) => [JSON.stringify(w) ?? String(w), w] as const))('a reason outside the five (%s) is refused with bad_argument', (_label, why) => {
-    const f = figure(['A = (1, 1)']);
-    const before = snap(f);
-    const r = f.setFree('A', { x: 7, y: 7 }, why as never);
-    bad(r as TxResult, 'bad_argument');
-    expectUnchanged(f, before);
+  it('a reason outside the five is refused with bad_argument', () => {
+    eachCase(JUNK_WHYS.map((w) => [JSON.stringify(w) ?? String(w), w] as const), ([, why]) => {
+      const f = figure(['A = (1, 1)']);
+      const before = snap(f);
+      bad(f.setFree('A', { x: 7, y: 7 }, why as never) as TxResult, 'bad_argument');
+      expectUnchanged(f, before);
+    });
   });
 
   it.each(['api', 'show_me', 'drag'] as const)("a write with reason '%s' is not changed afterwards by the caller", (why) => {
@@ -460,16 +475,18 @@ describe('KERN-SM-4: setFree guards fixed objects, reasons, aliasing and throwin
     ['a proxy that throws on every read', () => new Proxy({}, { get() { throw new Error('p'); }, has() { throw new Error('p'); }, ownKeys() { throw new Error('p'); }, getOwnPropertyDescriptor() { throw new Error('p'); } })],
   ];
   for (const why of ['api', 'show_me', 'drag'] as const) {
-    it.each(THROWING)(`setFree (${why}) with %s does not throw and changes nothing`, (_label, make) => {
-      const f = figure(['A = (1, 1)']);
-      const before = snap(f);
-      let r: unknown;
-      expect(() => {
-        r = f.setFree('A', make(), why);
-      }).not.toThrow();
-      expect((r as { ok: boolean }).ok).toBe(false);
-      f.commitDrag();
-      expectUnchanged(f, before);
+    it(`setFree (${why}) with a throwing getter or proxy does not throw and changes nothing`, () => {
+      eachCase(THROWING, ([, make]) => {
+        const f = figure(['A = (1, 1)']);
+        const before = snap(f);
+        let r: unknown;
+        expect(() => {
+          r = f.setFree('A', make(), why);
+        }).not.toThrow();
+        expect((r as { ok: boolean }).ok).toBe(false);
+        f.commitDrag();
+        expectUnchanged(f, before);
+      });
     });
   }
 
@@ -784,45 +801,49 @@ describe('KERN-SM-8: re-entrant calls during a pass never throw across the bound
   ];
 
   function reentrant(action: (fig: Figure) => unknown): { f: Figure; arm: () => void } {
-    let target: Figure | undefined;
+    const holder: { fig?: Figure } = {};
     let armed = false;
     const spec = objectCommand('Sneaky', (call) => {
-      if (armed && target !== undefined) {
+      if (armed && holder.fig !== undefined) {
         armed = false;
-        action(target);
+        action(holder.fig);
       }
       return call.values[0] as number;
     });
     const f = figureWith([spec], ['a = 1', 'k = a + 1', 'm = Sneaky(a)', 'n = k + m']);
-    target = f;
+    holder.fig = f;
     return { f, arm: () => void (armed = true) };
   }
 
-  it.each(ACTIONS)('a rule calling %s: setFree then flush does not throw', (_label, action) => {
-    const { f, arm } = reentrant(action);
-    arm();
-    expect(() => {
-      f.setFree('a', 2, 'api');
-      f.flush();
-    }).not.toThrow();
+  it('a rule that calls back into the figure (any operation) does not make setFree and flush throw', () => {
+    eachCase(ACTIONS, ([, action]) => {
+      const { f, arm } = reentrant(action);
+      arm();
+      expect(() => {
+        f.setFree('a', 2, 'api');
+        f.flush();
+      }).not.toThrow();
+    });
   });
 
-  it.each(ACTIONS)('a rule calling %s: the figure can be read and used afterwards', (_label, action) => {
-    const { f, arm } = reentrant(action);
-    arm();
-    f.setFree('a', 2, 'api');
-    f.flush();
-    expect(() => {
-      for (const name of f.names()) {
-        expect(f.get(name)).toBeDefined();
-        f.value(name);
-        f.cellOf(name);
-      }
-      f.toScript();
-      f.objects();
-    }).not.toThrow();
-    expect(f.apply('zz = 1').ok).toBe(true);
-    expect(f.value('zz')).toBe(1);
+  it('after such a pass the figure can be read and used', () => {
+    eachCase(ACTIONS, ([, action]) => {
+      const { f, arm } = reentrant(action);
+      arm();
+      f.setFree('a', 2, 'api');
+      f.flush();
+      expect(() => {
+        for (const name of f.names()) {
+          expect(f.get(name)).toBeDefined();
+          f.value(name);
+          f.cellOf(name);
+        }
+        f.toScript();
+        f.objects();
+      }).not.toThrow();
+      expect(f.apply('zz = 1').ok).toBe(true);
+      expect(f.value('zz')).toBe(1);
+    });
   });
 
   it('a rule calling Delete during setClock does not throw either', () => {
@@ -1259,33 +1280,37 @@ describe('KERN-SM-11: a gesture is journalled before the next journalled write',
     ['append', (f) => f.append('B = (1, 1)'), (f) => f.get('B') === undefined],
   ];
 
-  it.each(OPS)('%s: undo takes the later write back first, then the gesture', (_label, op, undone) => {
-    const f = figure(START);
-    expect(f.setFree('A', P(5), 'drag').ok).toBe(true);
-    f.flush();
-    op(f);
-    f.commitDrag();
-    ok(f.undo());
-    expect(undone(f), 'the later write is undone first').toBe(true);
-    expect(point(f, 'A')).toEqual(P(5));
-    ok(f.undo());
-    expect(point(f, 'A')).toEqual(P(0));
+  it('during an open drag, every journalled write is undone before the gesture', () => {
+    eachCase(OPS, ([, op, undone]) => {
+      const f = figure(START);
+      expect(f.setFree('A', P(5), 'drag').ok).toBe(true);
+      f.flush();
+      op(f);
+      f.commitDrag();
+      ok(f.undo());
+      expect(undone(f), 'the later write is undone first').toBe(true);
+      expect(point(f, 'A')).toEqual(P(5));
+      ok(f.undo());
+      expect(point(f, 'A')).toEqual(P(0));
+    });
   });
 
-  it.each(OPS)('%s: redo replays the gesture first, then the later write', (_label, op, undone) => {
-    const f = figure(START);
-    f.setFree('A', P(5), 'drag');
-    f.flush();
-    op(f);
-    f.commitDrag();
-    const after = f.toScript();
-    ok(f.undo());
-    ok(f.undo());
-    ok(f.redo());
-    expect(point(f, 'A')).toEqual(P(5));
-    expect(undone(f)).toBe(true);
-    ok(f.redo());
-    expect(f.toScript()).toBe(after);
+  it('redo replays the gesture first, then the later write', () => {
+    eachCase(OPS, ([, op, undone]) => {
+      const f = figure(START);
+      f.setFree('A', P(5), 'drag');
+      f.flush();
+      op(f);
+      f.commitDrag();
+      const after = f.toScript();
+      ok(f.undo());
+      ok(f.undo());
+      ok(f.redo());
+      expect(point(f, 'A')).toEqual(P(5));
+      expect(undone(f)).toBe(true);
+      ok(f.redo());
+      expect(f.toScript()).toBe(after);
+    });
   });
 
   it('the evidence: a redefinition of A during the drag, then commit: values go (1,1), (5,5), (0,0), removed', () => {
@@ -1361,5 +1386,780 @@ describe('KERN-SM-11: a gesture is journalled before the next journalled write',
     ok(f.undo());
     expect(point(f, 'A')).toEqual(P(0));
     expect(f.get('B')).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// KERN-SM-12. Every free Text is saved in a form that loads back
+// ---------------------------------------------------------------------------------------------
+
+describe('KERN-SM-12: fromScript(toScript(f)) gives the same free Texts', () => {
+  // Reading: kernel design 13.3 asks for the same free values after a round trip. A Text that cannot be written so that it
+  // loads back may be refused by setFree instead; a Text that setFree accepts must round-trip.
+  /** True when the Text was accepted (and then checked to round-trip); false when setFree refused it. */
+  function roundTrips(text: string): boolean {
+    const f = figure(['s = "hi"']);
+    const r = f.setFree('s', text, 'api');
+    if (!r.ok) {
+      expect(f.value('s')).toBe('hi');
+      return false;
+    }
+    const saved = f.toScript();
+    for (const mode of ['strict', 'lenient'] as const) {
+      const { figure: g, report } = Figure.fromScript(saved, { mode });
+      expect(report.errors.map((e) => `${e.kind}: ${e.message}`)).toEqual([]);
+      expect(report.ok).toBe(true);
+      expect(g.value('s')).toBe(f.value('s'));
+      expect(g.toScript()).toBe(saved);
+    }
+    return true;
+  }
+
+  const SPECIAL: [string, string][] = [
+    ['carriage return', 'a\rb'],
+    ['CRLF', 'a\r\nb'],
+    ['carriage return at the end', 'abc\r'],
+    ['left double quote', 'say “hi” now'],
+    ['right double quote', 'x”y'],
+    ['low double quote', 'x„y'],
+    ['left single quote', 'x‘y'],
+    ['right single quote', 'x’y'],
+    ['low single quote', 'x‚y'],
+    ['high reversed double quote', 'x‟y'],
+    ['guillemets', '«x»'],
+    ['next line (U+0085)', 'a\u0085b'],
+    ['vertical tab', 'a\vb'],
+    ['form feed', 'a\fb'],
+    ['no-break space', 'a\u00a0b'],
+    ['multiplication sign', '2 × 3'],
+    ['division sign', '6 ÷ 3'],
+    ['minus sign', 'a − b'],
+    ['en dash', 'a – b'],
+    ['pi', 'π and τ'],
+    ['degree sign', '90°'],
+    ['superscript', 'x²'],
+    ['square root', '√x'],
+    ['decomposed accent', 'e\u0301'],
+    ['emoji', '😀 ok'],
+    ['zero width joiner', 'a\u200db'],
+    ['byte order mark', '\ufeffa'],
+    ['NUL', 'a\u0000b'],
+    ['empty text', ''],
+    ['leading and trailing spaces', '  a  '],
+    ['every special at once', '“\r„”\u2028\\"{}#\t‘’'],
+  ];
+
+  it('every special character: an accepted Text round-trips, a refused Text leaves the value alone', () => {
+    eachCase(SPECIAL, ([, text]) => void roundTrips(text));
+  });
+
+  it('typographic quotes and line ends, the characters the finding names, are not left unescaped', () => {
+    // Reading: the language normaliser turns “ ” „ into " and \r into a line end, so a saved Text must not hold them raw.
+    for (const text of ['a\rb', 'say “hi” now', 'x„y']) {
+      const f = figure(['s = "hi"']);
+      if (!f.setFree('s', text, 'api').ok) continue;
+      const saved = f.toScript();
+      expect(saved).not.toMatch(/[\r“”„]/);
+    }
+  });
+
+  // These loaded back before and must keep loading back (and be accepted).
+  const KEEP: [string, string][] = [
+    ['tab', 'a\tb'],
+    ['newline', 'a\nb'],
+    ['backslash', 'a\\b'],
+    ['double quote', 'say "hi"'],
+    ['open brace', '{'],
+    ['close brace', '}'],
+    ['interpolation look-alike', '{a} and {1 + 1}'],
+    ['hash', 'a # b'],
+    ['line separator (U+2028)', 'a\u2028b'],
+    ['paragraph separator (U+2029)', 'a\u2029b'],
+    ['plain text', 'hello world'],
+  ];
+  it('tab, newline, backslash, quote, braces, hash, U+2028 and U+2029 are accepted and round-trip unchanged', () => {
+    eachCase(KEEP, ([, text]) => {
+      expect(roundTrips(text)).toBe(true);
+      const f = figure(['s = "hi"']);
+      f.setFree('s', text, 'api');
+      expect(f.value('s')).toBe(text);
+    });
+  });
+
+  const LONG: [string, number][] = [
+    ['x', 1999],
+    ['x', 2000],
+    ['x', 2001],
+    ['x', 5000],
+    ['x', 9999],
+    ['"', 1500],
+    ['\n', 1500],
+    ['\\', 1500],
+    ['{', 1500],
+    ['“', 1500],
+  ];
+  it('long Texts (around the 2,000-character line limit, also when escaping doubles them) are refused or round-trip', () => {
+    eachCase(LONG.map(([ch, n]) => [`${JSON.stringify(ch)} x ${n}`, ch, n] as const), ([, ch, n]) => void roundTrips(ch.repeat(n)));
+  });
+
+  it('several special Texts in one figure all load back, in a strict load', () => {
+    const f = figure(['s1 = "a"', 'A = (1, 2)', 's2 = "b"', 'n = 3 in 0..10', 's3 = "c"']);
+    const wanted: [string, string][] = [['s1', 'a\rb'], ['s2', 'say “hi”'], ['s3', 'x„y']];
+    const accepted = wanted.filter(([name, text]) => f.setFree(name, text, 'api').ok);
+    const { figure: g, report } = Figure.fromScript(f.toScript(), { mode: 'strict' });
+    expect(report.ok).toBe(true);
+    for (const [name] of accepted) expect(g.value(name)).toBe(f.value(name));
+    expect(g.value('A')).toEqual({ x: 1, y: 2 });
+    expect(g.value('n')).toBe(3);
+  });
+
+  it('a Text written with show_me and undone is still saved in a loadable form', () => {
+    const f = figure(['s = "hi"']);
+    f.setFree('s', 'a\rb“', 'show_me');
+    ok(f.undo());
+    ok(f.redo());
+    const { report } = Figure.fromScript(f.toScript(), { mode: 'strict' });
+    expect(report.ok).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// KERN-SM-13. @step breakpoints stay with the object they mark
+// ---------------------------------------------------------------------------------------------
+
+describe('KERN-SM-13: insertAt and move keep a @step title on its object', () => {
+  const titles = (f: Figure): string[] => f.steps().map((s) => `${s.name}:${s.group?.title ?? '-'}`);
+  const BASE = ['a = 1', '@step "two"', 'b = 2'];
+
+  it('insertAt right after the object before the @step keeps the title on the marked object', () => {
+    const f = figure(BASE);
+    ok(f.insertAt(1, 'w = a + 1'));
+    expect(titles(f)).toEqual(['a:-', 'w:-', 'b:two']);
+  });
+
+  it('the script still writes the @step directly before the marked object', () => {
+    const f = figure(BASE);
+    ok(f.insertAt(1, 'w = a + 1'));
+    const s = f.toScript();
+    expect(s.indexOf('w = a + 1')).toBeLessThan(s.indexOf('@step "two"'));
+    expect(s.indexOf('@step "two"')).toBeLessThan(s.indexOf('b = 2'));
+  });
+
+  it('apply with the insertAt option does the same', () => {
+    const f = figure(BASE);
+    ok(f.apply('w = a + 1', { insertAt: 1 }));
+    expect(titles(f)).toEqual(['a:-', 'w:-', 'b:two']);
+  });
+
+  it('insertAt at the top keeps a title that marks the first object', () => {
+    const f = figure(['@step "one"', 'a = 1', 'b = 2']);
+    ok(f.insertAt(0, 'w = 5'));
+    expect(titles(f)).toEqual(['w:-', 'a:one', 'b:-']);
+  });
+
+  it('insertAt at the end and in the middle of an untitled stretch leave titles alone', () => {
+    const f = figure(['a = 1', '@step "two"', 'b = 2', 'c = 3']);
+    ok(f.insertAt(3, 'w = 5'));
+    ok(f.insertAt(4, 'v = 6'));
+    expect(titles(f)).toEqual(['a:-', 'b:two', 'c:-', 'w:-', 'v:-']);
+  });
+
+  it('insertAt between two titled objects keeps both titles', () => {
+    const f = figure(['@step "one"', 'a = 1', '@step "two"', 'b = 2']);
+    ok(f.insertAt(1, 'w = a + 1'));
+    expect(titles(f)).toEqual(['a:one', 'w:-', 'b:two']);
+  });
+
+  it('undo of insertAt gives back the same steps and the same script', () => {
+    const f = figure(BASE);
+    const before = f.toScript();
+    ok(f.insertAt(1, 'w = a + 1'));
+    ok(f.undo());
+    expect(titles(f)).toEqual(['a:-', 'b:two']);
+    expect(f.toScript()).toBe(before);
+    ok(f.redo());
+    expect(titles(f)).toEqual(['a:-', 'w:-', 'b:two']);
+  });
+
+  it('moving another object into the place before the marked one keeps the title on the marked one', () => {
+    const f = figure(['a = 1', '@step "two"', 'b = 2', 'c = 3']);
+    ok(f.move('c', 1));
+    expect(f.names().join(',')).toBe('a,c,b');
+    expect(titles(f)).toEqual(['a:-', 'c:-', 'b:two']);
+  });
+
+  it('moving the marked object takes its title with it', () => {
+    // Reading: state-machines.md K12: "a @step title stays next to the object it was written after", also after move.
+    const f = figure(['a = 1', 'c = 3', '@step "two"', 'b = 2']);
+    ok(f.move('b', 0));
+    expect(titles(f)).toEqual(['b:two', 'a:-', 'c:-']);
+  });
+
+  it('deleting the object before the marked one leaves the title on the marked one', () => {
+    const f = figure(BASE);
+    ok(f.delete('a'));
+    expect(titles(f)).toEqual(['b:two']);
+  });
+
+  it('a save and load after insertAt gives the same steps', () => {
+    const f = figure(BASE);
+    ok(f.insertAt(1, 'w = a + 1'));
+    const { figure: g, report } = Figure.fromScript(f.toScript(), { mode: 'strict' });
+    expect(report.ok).toBe(true);
+    expect(titles(g)).toEqual(titles(f));
+  });
+
+  it('a comment before the marked object stays with it too', () => {
+    const f = figure(['a = 1', '# about b', '@step "two"', 'b = 2']);
+    ok(f.insertAt(1, 'w = a + 1'));
+    expect(titles(f)).toEqual(['a:-', 'w:-', 'b:two']);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// KERN-SM-14. A dry run matches the commit
+// ---------------------------------------------------------------------------------------------
+
+describe('KERN-SM-14: a dry run returns the summary, report and notices of the commit', () => {
+  const view = (r: TxResult): unknown => {
+    const t = ok(r);
+    const { warnings: _w, ...changed } = t.changed;
+    return { summary: t.summary, notices: t.notices.map((n) => `${n.kind}: ${n.message}`), changed };
+  };
+
+  const CASES: [string, string[], string, ((f: Figure) => void)?][] = [
+    ['a slider value above its range', [], 'a = 20 in 0..10'],
+    ['a slider value below its range', [], 'a = -5 in 0..10'],
+    ['a slider value inside its range', [], 'a = 3.3 in 0..10 step 0.5'],
+    ['a new object that is undefined from the start', [], 'r = Reciprocal(0)'],
+    ['a new object undefined because of an input', ['p = 1'], 'q = Reciprocal(p - 1)'],
+    ['a name that differs by one letter case', ['r = 1'], 'R = 1'],
+    ['a longer name that differs only by case', ['abc = 1'], 'ABC = 2'],
+    ['a redefinition that makes a dependent undefined', ['p = 1', 'q = Reciprocal(p)'], 'p = 0'],
+    ['a redefinition that makes a dependent defined again', ['p = 0', 'q = Reciprocal(p)'], 'p = 2'],
+    ['a redefinition that narrows a slider range', ['a = 8 in 0..10'], 'a = 8 in 0..3'],
+    ['a new object added after the step being viewed', ['A = (0, 0)', 'B = (1, 1)'], 'C = (2, 2)', (f) => f.stepTo(1)],
+    ['a plain new object', ['A = (0, 0)'], 'B = (1, 1)'],
+  ];
+
+  it('on twelve lines (clamps, undefined objects, confusable names, redefinitions, a hidden step) the dry run equals the commit', () => {
+    eachCase(CASES, ([, setup, line, prep]) => {
+      const a = figure(setup);
+      const b = figure(setup);
+      prep?.(a);
+      prep?.(b);
+      const before = snap(a);
+      const dry = a.apply(line, { dryRun: true });
+      expectUnchanged(a, before, 'a dry run changes nothing');
+      expect(view(dry)).toEqual(view(b.apply(line)));
+    });
+  });
+
+  it('the three lines of the finding', () => {
+    expect(ok(figure([]).apply('a = 20 in 0..10', { dryRun: true })).summary).toBe('a = 10');
+    expect(ok(figure([]).apply('r = Reciprocal(0)', { dryRun: true })).changed.becameUndefined).toEqual([{ name: 'r', reason: 'division_by_zero' }]);
+    expect(ok(figure(['r = 1']).apply('R = 1', { dryRun: true })).notices.map((n) => n.kind)).toEqual(['confusable_name']);
+  });
+
+  it('a dry run of a line that fails gives the same error as the commit', () => {
+    const a = figure(['p = 1']);
+    const b = figure(['p = 1']);
+    const dry = a.apply('q = nope + 1', { dryRun: true });
+    const real = b.apply('q = nope + 1');
+    expect(dry.ok).toBe(false);
+    expect(real.ok).toBe(false);
+    if (!dry.ok && !real.ok) expect([dry.kind, dry.code, dry.message]).toEqual([real.kind, real.code, real.message]);
+  });
+
+  it('a dry run of a comment and of a directive matches the commit', () => {
+    for (const line of ['# note', '@view -5 5 -3 3']) {
+      const dry = figure(['A = (0, 0)']).apply(line, { dryRun: true });
+      const real = figure(['A = (0, 0)']).apply(line);
+      expect(view(dry)).toEqual(view(real));
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// KERN-SM-15. Rollbacks restore both stacks and the listeners' view; events keep their order
+// ---------------------------------------------------------------------------------------------
+
+describe('KERN-SM-15: a rejected strict load is invisible, and listeners see one order', () => {
+  function listen(f: Figure): { seq: string[]; stop: () => void } {
+    const seq: string[] = [];
+    const stop = f.on((ev: FigureEvent) => {
+      seq.push('id' in ev ? `${ev.ev}:${ev.id}` : 'ids' in ev ? `${ev.ev}:${ev.ids.join('+')}` : ev.ev);
+    });
+    return { seq, stop };
+  }
+
+  it('a rejected strict append keeps the redo stack', () => {
+    const f = figure(['a = 1', 'b = 2']);
+    ok(f.undo());
+    const before = snap(f);
+    expect(before.redo).toBe(1);
+    const rep = f.append('c = 3\nd = nope + 1', { mode: 'strict' });
+    expect(rep.ok).toBe(false);
+    expectUnchanged(f, before);
+    ok(f.redo());
+    expect(f.names()).toEqual(['a', 'b']);
+  });
+
+  it('a rejected strict append sends listeners no events at all', () => {
+    const f = figure(['a = 1', 'b = 2']);
+    ok(f.undo());
+    const { seq } = listen(f);
+    f.append('c = 3\nd = nope + 1', { mode: 'strict' });
+    expect(seq).toEqual([]);
+  });
+
+  it('a rejected strict append in a figure with nothing to redo sends no events either', () => {
+    const f = figure(['a = 1']);
+    const { seq } = listen(f);
+    f.append('c = 3\nd = nope + 1', { mode: 'strict' });
+    expect(seq).toEqual([]);
+  });
+
+  it('a strict append refused for its size leaves the figure, the stacks and the listeners alone', () => {
+    const f = newFigure({ limits: { fileSize: 50 } });
+    ok(f.apply('a = 1'));
+    ok(f.apply('b = 2'));
+    ok(f.undo());
+    const before = snap(f);
+    const { seq } = listen(f);
+    const rep = f.append(listOf(30, (i) => `n${i} = ${i}`).join('\n'), { mode: 'strict' });
+    expect(rep.ok).toBe(false);
+    expectUnchanged(f, before);
+    expect(seq).toEqual([]);
+  });
+
+  it('an atomic batch that fails keeps the redo stack and sends no events (already true: stays true)', () => {
+    const f = figure(['a = 1', 'b = 2']);
+    ok(f.undo());
+    const before = snap(f);
+    const { seq } = listen(f);
+    const r = f.applyBatch(['c = 3', 'd = nope + 1'], { group: 'g' });
+    expect(r.rolledBack).toBe(true);
+    expectUnchanged(f, before);
+    expect(seq).toEqual([]);
+  });
+
+  it('a lenient append that succeeds still clears the redo stack and sends events', () => {
+    const f = figure(['a = 1', 'b = 2']);
+    ok(f.undo());
+    const { seq } = listen(f);
+    expect(f.append('c = 3').ok).toBe(true);
+    expect(f.undoInfo().redoDepth).toBe(0);
+    expect(seq.some((s) => s.startsWith('add'))).toBe(true);
+  });
+
+  it('listeners see the same events in the same order when the first one changes the figure', () => {
+    const f = newFigure();
+    const first = listen(f);
+    f.on((ev) => {
+      if (ev.ev === 'add' && f.get('X') !== undefined && ev.id === f.get('X')?.id) f.apply('Delete(X)');
+    });
+    const second = listen(f);
+    ok(f.apply('X = 1'));
+    expect(second.seq).toEqual(first.seq);
+    const addAt = second.seq.findIndex((s) => s.startsWith('add:'));
+    const removeAt = second.seq.findIndex((s) => s.startsWith('remove:'));
+    expect(addAt).toBeGreaterThanOrEqual(0);
+    expect(removeAt).toBeGreaterThan(addAt);
+  });
+
+  it('an event raised inside a listener is delivered after the current one, to every listener', () => {
+    const f = figure(['a = 1 in 0..10', 'b = a + 1']);
+    const first = listen(f);
+    let acted = false;
+    f.on((ev) => {
+      if (ev.ev === 'value' && !acted) {
+        acted = true;
+        f.setFree('a', 7, 'api');
+        f.flush();
+      }
+    });
+    const second = listen(f);
+    f.setFree('a', 2, 'slider');
+    f.flush();
+    expect(second.seq).toEqual(first.seq);
+    expect(f.value('b')).toBe(8);
+  });
+
+  it('three listeners that all re-enter see one sequence', () => {
+    const f = newFigure();
+    const seqs = [0, 1, 2].map(() => listen(f).seq);
+    let n = 0;
+    f.on((ev) => {
+      if (ev.ev === 'add' && n++ < 2) f.apply(`Y${n} = ${n}`);
+    });
+    const tail = listen(f);
+    ok(f.apply('X = 1'));
+    for (const s of seqs) expect(s).toEqual(tail.seq);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// KERN-SM-16. A change that does not touch a state does not restart the integration
+// ---------------------------------------------------------------------------------------------
+
+describe('KERN-SM-16: the solver keeps its checkpoints when the states are not affected', () => {
+  const RUN_LIMIT = 2000; // a restart at t = 100 costs 96,000 rule runs; one line should cost about none
+
+  function ticking(): { f: Figure; counter: { n: number } } {
+    const counter = { n: 0 };
+    const tick = objectCommand('Tick', (call) => {
+      counter.n++;
+      return (call.values[0] as number) + 0 * call.t;
+    });
+    const f = figureWith([tick], ['k = 1', 's1 = state(1)', "s1' = Tick(k)"]);
+    f.setClock(100);
+    expect(f.value('s1')).toBeCloseTo(101, 6);
+    return { f, counter };
+  }
+
+  const UNRELATED: [string, (f: Figure) => unknown][] = [
+    ['a new number', (f) => f.apply('q = 5')],
+    ['a new point', (f) => f.apply('P = (1, 2)')],
+    ['a comment', (f) => f.apply('# note')],
+    ['a directive', (f) => f.apply('@view -5 5 -3 3')],
+    ['a new object that reads the state', (f) => f.apply('r = s1 + 1')],
+    ['a free write', (f) => f.setFree('k', 1, 'api')],
+    ['insertAt at the top', (f) => f.insertAt(0, 'z = 2')],
+    ['a batch of five lines', (f) => f.applyBatch(listOf(5, (i) => `bb${i} = ${i}`), { group: 'g' })],
+    ['an appended file of ten lines', (f) => f.append(listOf(10, (i) => `ap${i} = ${i}`).join('\n'))],
+  ];
+
+  it('an unrelated line, batch, append, free write or insertAt does not re-integrate from the start', () => {
+    eachCase(UNRELATED, ([, op]) => {
+      const { f, counter } = ticking();
+      counter.n = 0;
+      op(f);
+      f.flush();
+      expect(counter.n).toBeLessThan(RUN_LIMIT);
+      expect(f.value('s1')).toBeCloseTo(101, 6);
+    });
+  });
+
+  it('deleting, renaming and undoing unrelated objects does not re-integrate either', () => {
+    const { f, counter } = ticking();
+    ok(f.apply('q = 5'));
+    ok(f.apply('P = (1, 2)'));
+    counter.n = 0;
+    ok(f.rename('q', 'q2'));
+    ok(f.delete('P'));
+    ok(f.undo());
+    ok(f.redo());
+    ok(f.undo());
+    f.flush();
+    expect(counter.n).toBeLessThan(RUN_LIMIT);
+    expect(f.value('s1')).toBeCloseTo(101, 6);
+  });
+
+  it('twenty unrelated lines in a row cost less than one restart in total', () => {
+    const { f, counter } = ticking();
+    counter.n = 0;
+    for (let i = 0; i < 20; i++) ok(f.apply(`u${i} = ${i}`));
+    expect(counter.n).toBeLessThan(RUN_LIMIT);
+  });
+
+  it('a seek forward after unrelated lines continues from the checkpoints and is right', () => {
+    const { f, counter } = ticking();
+    ok(f.apply('q = 5'));
+    counter.n = 0;
+    f.setClock(110);
+    expect(counter.n).toBeLessThan(RUN_LIMIT);
+    expect(f.value('s1')).toBeCloseTo(111, 6);
+    f.setClock(50);
+    expect(f.value('s1')).toBeCloseTo(51, 6);
+  });
+
+  it('a change that does reach the rate still re-integrates, and the value is right', () => {
+    const { f, counter } = ticking();
+    counter.n = 0;
+    ok(f.apply('k = 3'));
+    f.flush();
+    expect(counter.n).toBeGreaterThan(RUN_LIMIT);
+    expect(f.value('s1')).toBeCloseTo(301, 6);
+    ok(f.undo());
+    expect(f.value('s1')).toBeCloseTo(101, 6);
+  });
+
+  it('redefining the rate gives the new answer at once', () => {
+    const { f } = ticking();
+    ok(f.apply("s1' = Tick(2)"));
+    f.flush();
+    expect(f.value('s1')).toBeCloseTo(201, 6);
+  });
+
+  it('a new state added later is integrated correctly and the old one is kept', () => {
+    const { f } = ticking();
+    ok(f.apply('s2 = state(0)'));
+    ok(f.apply("s2' = 2"));
+    f.flush();
+    expect(f.value('s1')).toBeCloseTo(101, 6);
+    expect(f.value('s2')).toBeCloseTo(200, 6);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// KERN-SM-17. The cost of adding an object does not grow with the figure
+// ---------------------------------------------------------------------------------------------
+
+describe('KERN-SM-17: loading is linear', () => {
+  const loadMs = (n: number): number => {
+    const text = listOf(n, (i) => `v${i} = ${i}`).join('\n');
+    const t0 = performance.now();
+    const { figure: f } = Figure.fromScript(text);
+    const ms = performance.now() - t0;
+    expect(f.count).toBe(n);
+    return ms;
+  };
+  const best = (n: number, times = 4): number => Math.min(...Array.from({ length: times }, () => loadMs(n)));
+
+  it('the cost per line at 4,500 lines is under 2.2 times the cost per line at 500 lines', () => {
+    loadMs(500);
+    loadMs(4500);
+    const small = best(500) / 500;
+    const large = best(4500) / 4500;
+    expect(large / small).toBeLessThan(2.2);
+  });
+
+  it('appending 200 objects to a 4,000-object figure costs about what it costs on a 500-object one', () => {
+    const grow = (base: number): number => {
+      const f = Figure.fromScript(listOf(base, (i) => `v${i} = ${i}`).join('\n')).figure;
+      const t0 = performance.now();
+      for (let i = 0; i < 200; i++) f.apply(`w${i} = ${i}`);
+      return performance.now() - t0;
+    };
+    grow(500);
+    grow(4000);
+    const small = Math.min(grow(500), grow(500), grow(500));
+    const large = Math.min(grow(4000), grow(4000), grow(4000));
+    expect(large / Math.max(small, 0.05)).toBeLessThan(2.5);
+  });
+
+  it('adding an object still reports a name that differs only by case, and keeps the order right', () => {
+    const f = figure(['abc = 1', 'Q1 = 2']);
+    const r = ok(f.apply('ABC = 3'));
+    expect(r.notices.map((n) => n.kind)).toContain('confusable_name');
+    expect(ok(f.apply('q1 = 4')).notices.map((n) => n.kind)).toContain('confusable_name');
+    expect(f.objects().map((o) => o.order)).toEqual([0, 1, 2, 3]);
+    ok(f.insertAt(1, 'mid = 9'));
+    expect(f.objects().map((o) => `${o.name}:${o.order}`)).toEqual(['abc:0', 'mid:1', 'Q1:2', 'ABC:3', 'q1:4']);
+  });
+
+  it('the case-insensitive name index follows rename, delete and undo', () => {
+    const f = figure(['abc = 1']);
+    ok(f.rename('abc', 'xyz'));
+    expect(ok(f.apply('ABC = 2')).notices.map((n) => n.kind)).not.toContain('confusable_name');
+    ok(f.rename('ABC', 'Xyz'));
+    ok(f.delete('Xyz'));
+    expect(ok(f.apply('XYZ = 3')).notices.map((n) => n.kind)).toContain('confusable_name');
+    ok(f.undo());
+    ok(f.undo());
+    expect(ok(f.apply('qqq = 3')).notices.map((n) => n.kind)).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// KERN-SM-18. A listener failure is reported on the operation it happened in
+// ---------------------------------------------------------------------------------------------
+
+describe('KERN-SM-18: listener_failed does not leak to the next line', () => {
+  const kinds = (r: TxResult): string[] => ok(r).notices.map((n) => n.kind);
+
+  function failingOnce(f: Figure): { arm: () => void } {
+    let armed = false;
+    f.on((ev) => {
+      if (armed && ev.ev === 'value') {
+        armed = false;
+        throw new Error('listener bug');
+      }
+    });
+    return { arm: () => void (armed = true) };
+  }
+
+  it('a failure during a slider frame is not reported on the next apply', () => {
+    const f = figure(['a = 1 in 0..10', 'b = a + 1']);
+    const l = failingOnce(f);
+    l.arm();
+    f.setFree('a', 2, 'slider');
+    expect(() => f.flush()).not.toThrow();
+    expect(kinds(f.apply('c = 5'))).not.toContain('listener_failed');
+  });
+
+  it('a failure during a seek is not reported on the next apply', () => {
+    const f = figure(['x1 = t', 'x2 = x1 + 1']);
+    const l = failingOnce(f);
+    l.arm();
+    f.setClock(3);
+    expect(kinds(f.apply('c = 5'))).not.toContain('listener_failed');
+  });
+
+  it('a failure during a frame is not reported on the next batch either', () => {
+    const f = figure(['a = 1 in 0..10', 'b = a + 1']);
+    const l = failingOnce(f);
+    l.arm();
+    f.setFree('a', 2, 'slider');
+    f.flush();
+    const r = f.applyBatch(['c = 5', 'd = 6'], { group: 'g' });
+    expect(r.notices.map((n) => n.kind)).not.toContain('listener_failed');
+  });
+
+  it('a failure during one apply is reported on that apply and not on the next one', () => {
+    const f = figure(['a = 1']);
+    const l = failingOnce(f);
+    l.arm();
+    expect(kinds(f.apply('c = 5'))).toContain('listener_failed');
+    expect(kinds(f.apply('d = 6'))).not.toContain('listener_failed');
+  });
+
+  it('a failure during an undo is not reported on the next line', () => {
+    const f = figure(['a = 1', 'b = 2']);
+    const l = failingOnce(f);
+    l.arm();
+    f.undo();
+    expect(kinds(f.apply('c = 5'))).not.toContain('listener_failed');
+  });
+
+  it('a failure in a frame does not make the frame throw', () => {
+    const f = figure(['a = 1 in 0..10']);
+    f.on(() => {
+      throw new Error('always');
+    });
+    f.setFree('a', 3, 'slider');
+    expect(() => f.flush()).not.toThrow();
+    expect(() => f.setClock(1)).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// KERN-SM-19. Exported tables ignore names that Object.prototype owns
+// ---------------------------------------------------------------------------------------------
+
+describe('KERN-SM-19: exported helpers never throw on Object.prototype member names', () => {
+  const PROTO_NAMES = [...Object.getOwnPropertyNames(Object.prototype), 'prototype', 'length', 'name'];
+
+  const NAMES = PROTO_NAMES.map((n) => [n] as const);
+
+  it('validKeysFor returns a list', () => {
+    eachCase(NAMES, ([n]) => {
+      let keys: unknown;
+      expect(() => {
+        keys = validKeysFor(n);
+      }).not.toThrow();
+      expect(Array.isArray(keys)).toBe(true);
+    });
+  });
+
+  it('defaultsFor returns the default properties', () => {
+    eachCase(NAMES, ([n]) => {
+      for (const free of [true, false]) {
+        let props: unknown;
+        expect(() => {
+          props = defaultsFor(n, free);
+        }).not.toThrow();
+        expect(typeof (props as { visible?: unknown }).visible).toBe('boolean');
+      }
+    });
+  });
+
+  it('makeNotice returns a notice with a message', () => {
+    eachCase(NAMES, ([n]) => {
+      let notice: { message?: unknown } | undefined;
+      expect(() => {
+        notice = makeNotice(n as never);
+      }).not.toThrow();
+      expect(typeof notice?.message).toBe('string');
+    });
+  });
+
+  it('reasonPhrase gives a phrase with text, not a function', () => {
+    eachCase(NAMES, ([n]) => {
+      const p = reasonPhrase(n);
+      expect(typeof p).toBe('object');
+      expect(typeof p.noun).toBe('string');
+      expect(typeof p.sentence).toBe('string');
+    });
+  });
+
+  it('err with such a kind falls back to an error object', () => {
+    eachCase(NAMES, ([n]) => {
+      let e: ErrorObject | undefined;
+      expect(() => {
+        e = err(n as never, { line: 1, col: 1, endCol: 1 });
+      }).not.toThrow();
+      expect(e?.ok).toBe(false);
+      expect(e?.committed).toBe(false);
+      expect(typeof e?.message).toBe('string');
+    });
+  });
+
+  it('the figure treats these names as ordinary missing names', () => {
+    const f = figure(['A = (0, 0)']);
+    for (const n of PROTO_NAMES) {
+      expect(f.get(n)).toBeUndefined();
+      expect(f.value(n)).toBeUndefined();
+      expect(f.cellOf(n)).toBeUndefined();
+      expect(isErr(f.describe(n))).toBe(true);
+      expect(isErr(f.delete(n))).toBe(true);
+    }
+  });
+
+  it('Object.prototype is not changed by any of these calls', () => {
+    for (const n of PROTO_NAMES) {
+      validKeysFor(n);
+      defaultsFor(n, true);
+      makeNotice(n as never);
+      reasonPhrase(n);
+    }
+    expect(Object.keys(Object.prototype)).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// KERN-SM-20. One notice per fact
+// ---------------------------------------------------------------------------------------------
+
+describe('KERN-SM-20: a clamped slider gets one clamped notice', () => {
+  const clamped = (r: TxResult): number => ok(r).notices.filter((n) => n.kind === 'clamped').length;
+
+  it('a new slider above, below, far outside or on a stepped range gets one', () => {
+    eachCase(
+      [
+        ['above the range', 'a = 20 in 0..10'],
+        ['below the range', 'a = -5 in 0..10'],
+        ['above a stepped range', 'a = 99 in 0..10 step 0.5'],
+        ['far outside', 'a = 1e9 in 0..10'],
+      ] as const,
+      ([, line]) => expect(clamped(newFigure().apply(line))).toBe(1),
+    );
+  });
+
+  it('a dry run of the same line gives one too', () => {
+    expect(clamped(newFigure().apply('a = 20 in 0..10', { dryRun: true }))).toBe(1);
+  });
+
+  it('a redefinition that narrows the range around the value', () => {
+    const f = figure(['a = 8 in 0..10']);
+    expect(clamped(f.apply('a = 8 in 0..3'))).toBe(1);
+  });
+
+  it('two clamped sliders in one batch give one notice each', () => {
+    const f = newFigure();
+    const r = f.applyBatch(['a = 20 in 0..10', 'b = 30 in 0..10'], { group: 'g' });
+    expect(r.notices.filter((n) => n.kind === 'clamped').length).toBe(2);
+  });
+
+  it('a slider inside its range gets none', () => {
+    expect(clamped(newFigure().apply('a = 5 in 0..10'))).toBe(0);
+  });
+
+  it('the notice is still there and says the final value', () => {
+    const r = ok(newFigure().apply('a = 20 in 0..10'));
+    const n = r.notices.find((x) => x.kind === 'clamped');
+    expect(n?.message).toMatch(/10/);
+    expect(r.summary).toBe('a = 10');
   });
 });
