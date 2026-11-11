@@ -8,7 +8,7 @@ import { EMPTY_ASSUMPTIONS, isNonneg, isPositive, signOf } from './assume';
 import type { SymCond, SymFn, SymNode } from './node';
 import {
   ONE, TWO, ZERO, add, andCond, asInteger, asRational, bigGcd, compareNodes, constN, divideNodes,
-  floatN, fn, freeSymbols, intN, isExactNumber, isNumberNode, isOneNode, isZeroNode,
+  factoredIntegerNode, floatN, fn, freeSymbols, intN, isExactNumber, isNumberNode, isOneNode, isZeroNode,
   LimitExceeded, mapNodes, mul, negateNode, nodeCount, pow, ratN, rel, symN, toFloat,
 } from './node';
 import { nearestFraction, primeFactorsBig } from './num';
@@ -19,7 +19,7 @@ import {
   upolyIsZero, upolyMul, upolyToTree, upolyFromInts,
 } from './poly';
 import type { UPoly } from './poly';
-import { toText } from './print';
+import { condText, toText } from './print';
 
 /* ------------------------------- rule engine --------------------------------- */
 
@@ -340,6 +340,22 @@ const SIMPLIFY_RULES: readonly Rule[] = [powPower, rootsSquare, rootsPull, logRu
  * recurse into function arguments. Throws `LimitExceeded` past `maxTerms` terms.
  */
 export function expandNode(t: SymNode, tick: Ticker, maxTerms = 5000): SymNode {
+  /** Distribute the product of two already-expanded sums term by term. */
+  const mulExpanded = (a: SymNode, b: SymNode): SymNode => {
+    const pa = a.k === 'add' ? a.terms : [a];
+    const pb = b.k === 'add' ? b.terms : [b];
+    if (pa.length * pb.length > maxTerms * 4) throw new LimitExceeded('terms');
+    const out: SymNode[] = [];
+    for (const ta of pa) {
+      for (const tb of pb) {
+        out.push(mul(ta, tb));
+        tick.tick(1);
+      }
+    }
+    const r = add(...out);
+    if (r.k === 'add' && r.terms.length > maxTerms) throw new LimitExceeded('terms');
+    return r;
+  };
   const go = (x: SymNode): SymNode => {
     tick.tick(1);
     switch (x.k) {
@@ -379,9 +395,9 @@ export function expandNode(t: SymNode, tick: Ticker, maxTerms = 5000): SymNode {
           let base: SymNode = b;
           let k = e;
           while (k > 0n) {
-            if ((k & 1n) === 1n) acc = go(mul(acc, base));
+            if ((k & 1n) === 1n) acc = mulExpanded(acc, base);
             k >>= 1n;
-            if (k > 0n) base = go(mul(base, base));
+            if (k > 0n) base = mulExpanded(base, base);
           }
           return acc;
         }
@@ -412,7 +428,7 @@ function collectAtoms(t: SymNode): SymNode[] {
       case 'mul': for (const c of x.factors) walk(c); return;
       case 'pow': {
         const e = asInteger(x.exp);
-        if (e !== null && e >= 0n) {
+        if (e !== null) {
           walk(x.base);
           return;
         }
@@ -458,6 +474,8 @@ export function togetherNode(t: SymNode, ctx: RuleCtx): { node: SymNode; exclude
     if (mpolyIsZero(qn.r) && mpolyIsZero(qd.r)) {
       num = qn.q;
       den = qd.q;
+      const key = [...g.terms.keys()][0] as string;
+      if (key.split(',').some((x) => x !== '0')) excluded.push(...excludedFromFactor(g, gens, ctx));
     }
   }
   const node = mpolyIsOne(den) ? mpolyToTree(num) : divideNodes(mpolyToTree(num), mpolyToTree(den));
@@ -1042,8 +1060,7 @@ export function factorNode(t: SymNode, ctx: RuleCtx, over: 'rational' | 'complex
     const factors = primeFactorsBig(neg ? -t.v : t.v);
     if (factors === null) return { node: t, irreducible: true };
     if (factors.length <= 1) return { node: t, irreducible: true };
-    const parts = factors.map((f) => intN(f));
-    const node = neg ? mul(intN(-1), ...parts) : mul(...parts);
+    const node = factoredIntegerNode([...factors].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)), neg);
     ctx.note('factor.int', t, node);
     return { node, irreducible: false };
   }
@@ -1093,6 +1110,16 @@ export function factorNode(t: SymNode, ctx: RuleCtx, over: 'rational' | 'complex
  * would recurse back into factoring).
  */
 function verifyFactor(t: SymNode, built: SymNode, ctx: RuleCtx): SymNode | null {
+  if (hasImaginaryUnit(built)) {
+    // Complex factors: multiply out, reduce powers of i, compare with the input.
+    try {
+      const back = runPasses(expandNode(built, ctx.tick), [complexPow], ctx);
+      const flat = runPasses(expandNode(t, ctx.tick), [complexPow], ctx);
+      return back === flat ? built : null;
+    } catch {
+      return null;
+    }
+  }
   const ratio = togetherNode(divideNodes(t, built), ctx).node;
   if (isOneNode(ratio)) return built;
   if (ratio.k === 'int' && ratio.v === -1n) return negateNode(built);
@@ -1100,6 +1127,20 @@ function verifyFactor(t: SymNode, built: SymNode, ctx: RuleCtx): SymNode | null 
   if (r !== null) return mul(divideNodes(intN(r.n), intN(r.d)), built);
   if (ratio.k === 'float' && Number.isFinite(ratio.v) && ratio.v !== 0) return mul(ratio, built);
   return null;
+}
+
+/** Multiply out and reduce powers of `i` (`i^2 -> -1`). */
+export function reduceImaginary(t: SymNode, ctx: RuleCtx): SymNode {
+  return runPasses(expandNode(t, ctx.tick), [complexPow], ctx);
+}
+
+export function hasImaginaryUnit(t: SymNode): boolean {
+  let found = false;
+  mapNodes(t, (x) => {
+    if (x.k === 'const' && x.name === 'i') found = true;
+    return x;
+  });
+  return found;
 }
 
 function mergeFactorTrees(factors: readonly { tree: SymNode; m: number }[]): { tree: SymNode; m: number }[] {
@@ -1279,11 +1320,21 @@ export interface SimplifyResult {
  */
 export function simplifyNode(t: SymNode, ctx: RuleCtx): SimplifyResult {
   let cur = runPasses(t, SIMPLIFY_RULES, ctx);
-  let excluded: SymCond[] = [];
+  const excluded: SymCond[] = [];
+  const addExcluded = (cs: readonly SymCond[]): void => {
+    for (const c of cs) {
+      if (!excluded.some((e) => condText(e) === condText(c))) excluded.push(c);
+    }
+  };
   for (let round = 0; round < 3; round++) {
     const cands: SymNode[] = [cur];
+    const cancelled = new Map<SymNode, SymCond[]>();
     tryCandidate(() => expandNode(cur, ctx.tick), cands);
-    tryCandidate(() => togetherNode(cur, ctx).node, cands);
+    tryCandidate(() => {
+      const tg = togetherNode(cur, ctx);
+      if (tg.excluded.length > 0) cancelled.set(tg.node, tg.excluded);
+      return tg.node;
+    }, cands);
     tryCandidate(() => factorNode(cur, ctx).node, cands);
     tryCandidate(() => trigSimplifyNode(cur, ctx), cands);
     tryCandidate(() => runPasses(cur, [logRules, powPower], ctx), cands);
@@ -1293,13 +1344,15 @@ export function simplifyNode(t: SymNode, ctx: RuleCtx): SimplifyResult {
     const best = (scored[0] as { c: SymNode }).c;
     if (best === cur) break;
     ctx.note('simplify.choose', cur, best);
+    const gone = cancelled.get(best);
+    if (gone !== undefined) addExcluded(gone);
     cur = best;
   }
   try {
     const tg = togetherNode(cur, ctx);
     if (tg.excluded.length > 0 && costOf(tg.node) <= costOf(cur) + 1) {
       cur = tg.node;
-      excluded = tg.excluded;
+      addExcluded(tg.excluded);
     }
   } catch {
     void 0;

@@ -69,14 +69,44 @@ function numberSign(n: SymNode): Sign {
 }
 
 /** Sign of a relation fact about a symbol, e.g. `a > 0`. */
-function factSign(name: string, facts: readonly SymCond[]): Sign {
+function factSign(name: string, a: Assumptions): Sign {
   let out: Sign = 'unknown';
-  for (const f of facts) {
+  for (let i = 0; i < a.facts.length; i++) {
+    const f = a.facts[i] as SymCond;
     if (f.c !== 'rel') continue;
-    const s = factSignOne(name, f.op, f.l, f.r);
+    let s = factSignOne(name, f.op, f.l, f.r);
+    if (s === 'unknown') s = factSignBound(name, f.op, f.l, f.r, a, i);
     out = strengthen(out, s);
   }
   return out;
+}
+
+/**
+ * A fact `v > b` (or `v >= b`, `b < v`, ...) against another expression `b` whose sign is
+ * known from the remaining facts. The fact itself is dropped while `b` is analysed, so
+ * circular facts (`a > b`, `b > a`) end.
+ */
+function factSignBound(name: string, op: string, l: SymNode, r: SymNode, a: Assumptions, skip: number): Sign {
+  const isSym = (t: SymNode): boolean => t.k === 'sym' && t.name === name;
+  let other: SymNode;
+  let rel: string;
+  if (isSym(l) && !isSym(r)) {
+    other = r;
+    rel = op;
+  } else if (isSym(r) && !isSym(l)) {
+    other = l;
+    rel = ({ '<': '>', '<=': '>=', '>': '<', '>=': '<=', '==': '==', '!=': '!=' } as Record<string, string>)[op] ?? op;
+  } else {
+    return 'unknown';
+  }
+  if (rel === '!=' || rel === '==') return 'unknown';
+  const rest: Assumptions = { domains: a.domains, facts: a.facts.filter((_f, i) => i !== skip) };
+  const os = signOf(other, rest);
+  if (rel === '>') return os === 'pos' || os === 'nonneg' || os === 'zero' ? 'pos' : 'unknown';
+  if (rel === '>=') return os === 'pos' ? 'pos' : os === 'nonneg' || os === 'zero' ? 'nonneg' : 'unknown';
+  if (rel === '<') return os === 'neg' || os === 'nonpos' || os === 'zero' ? 'neg' : 'unknown';
+  if (rel === '<=') return os === 'neg' ? 'neg' : os === 'nonpos' || os === 'zero' ? 'nonpos' : 'unknown';
+  return 'unknown';
 }
 
 function strengthen(a: Sign, b: Sign): Sign {
@@ -129,7 +159,7 @@ export function signOf(n: SymNode, a: Assumptions): Sign {
     case 'sym': {
       const d = a.domains.get(n.name);
       const ds: Sign = d === undefined ? 'unknown' : domainSign(d);
-      return strengthen(ds, factSign(n.name, a.facts));
+      return strengthen(ds, factSign(n.name, a));
     }
     case 'ref': return 'unknown';
     case 'add': {
@@ -148,7 +178,7 @@ export function signOf(n: SymNode, a: Assumptions): Sign {
       if (e !== null) {
         if (e === 0n) return 'pos';
         if (bs === 'zero') return e > 0n ? 'zero' : 'unknown';
-        if ((e & 1n) === 0n) return 'nonneg';
+        if ((e & 1n) === 0n) return bs === 'pos' || bs === 'neg' || bs === 'nonzero' ? 'pos' : 'nonneg';
         return bs;
       }
       const er = asRational(n.exp);

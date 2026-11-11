@@ -81,7 +81,7 @@ function displayFactors(factors: readonly SymNode[]): SymNode[] {
   const head = factors.filter((f) => f.k !== 'add');
   const sums = factors
     .filter((f) => f.k === 'add')
-    .map((f) => ({ f, s: textOf(f, {}, 0) }))
+    .map((f) => ({ f, s: textOf(f, {}, 0).replace(/[+-]/g, (c) => (c === '-' ? '+' : '-')) }))
     .sort((a, b) => (a.s < b.s ? -1 : a.s > b.s ? 1 : 0))
     .map((x) => x.f);
   return [...head, ...sums];
@@ -187,8 +187,7 @@ function textOf(n: SymNode, o: TextOptions, parentPrec: number): string {
       const denStr = den.map((f) => textOf(f, o, PREC_MUL + 1)).join(' * ');
       const dd = den.length > 1 ? `(${denStr})` : denStr;
       if (nums.length === 0) return wrap(`${sign}1 / ${dd}`, PREC_MUL);
-      const nn = nums.length === 1 && (nums[0] as SymNode).k === 'add' ? `(${numStr})` : numStr;
-      return wrap(`${sign}${nn} / ${dd}`, PREC_MUL);
+      return wrap(`${sign}${numStr} / ${dd}`, PREC_MUL);
     }
     case 'pow': {
       if (n.base.k === 'const' && n.base.name === 'e') return wrap(`exp(${textOf(n.exp, o, 0)})`, PREC_ATOM);

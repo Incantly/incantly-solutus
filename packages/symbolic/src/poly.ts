@@ -1115,12 +1115,12 @@ function mpolyContent(p: MPoly): bigint {
  * Kronecker substitution: x_i -> t^(D^i) with D > total degree. Returns the univariate
  * image and D. At most 4 variables, total degree 12 (design limit).
  */
-function kroneckerToUni(p: MPoly): { u: UPoly; d: number } | null {
+function kroneckerToUni(p: MPoly, minBase = 0): { u: UPoly; d: number } | null {
   const n = p.gens.length;
   if (n > 4) return null;
   const deg = mpolyTotalDegree(p);
   if (deg > 12) return null;
-  const D = deg + 1;
+  const D = Math.max(deg + 1, minBase);
   const coeffs = new Map<number, bigint>();
   for (const [k, v] of p.terms) {
     const exps = mExps(k, n);
@@ -1179,21 +1179,45 @@ export function mpolyFactor(p: MPoly, tick: Ticker = NO_TICK): { content: bigint
   }
   let rest = prim;
   const factors: MFactor[] = [];
-  for (const { f, m } of all) {
-    for (let k = 0; k < m; k++) {
-      const cand = kroneckerFromUni(f, p.gens, ku.d);
-      if (cand === null) {
-        rest = mpolyMul(rest, mpolyNormalize(p.gens, new Map([[mkey(new Array<number>(p.gens.length).fill(0)), 1n]]), 1n), tick);
-        break;
-      }
-      const { q, r } = mpolyDivMod(rest, cand, tick);
-      if (mpolyIsZero(r)) {
-        factors.push({ f: cand, m: 1 });
-        rest = q;
-      } else {
-        break;
-      }
+  // Univariate factors of the Kronecker image, with repeats listed one by one. A true
+  // factor of the polynomial is a product of some of them, so subsets are tried by size.
+  let pool: UPoly[] = [];
+  for (const { f, m } of all) for (let k = 0; k < m; k++) pool.push(f);
+  const zeroKey = mkey(new Array<number>(p.gens.length).fill(0));
+  const tryPool = (): boolean => {
+    const n = pool.length;
+    if (n === 0 || n > 14) return false;
+    for (let size = 1; size <= n; size++) {
+      const idx: number[] = [];
+      const walk = (start: number): boolean => {
+        if (idx.length === size) {
+          tick.tick(1);
+          let prod = pool[idx[0] as number] as UPoly;
+          for (let j = 1; j < idx.length; j++) prod = upolyMul(prod, pool[idx[j] as number] as UPoly, tick);
+          const cand = kroneckerFromUni(prod, p.gens, ku.d);
+          if (cand === null || cand.terms.size === 0) return false;
+          if (cand.terms.size === 1 && cand.terms.has(zeroKey)) return false;
+          const { q, r } = mpolyDivMod(rest, cand, tick);
+          if (!mpolyIsZero(r)) return false;
+          factors.push({ f: cand, m: 1 });
+          rest = q;
+          const used = new Set(idx);
+          pool = pool.filter((_u, i) => !used.has(i));
+          return true;
+        }
+        for (let i = start; i < n; i++) {
+          idx.push(i);
+          if (walk(i + 1)) return true;
+          idx.pop();
+        }
+        return false;
+      };
+      if (walk(0)) return true;
     }
+    return false;
+  };
+  while (tryPool()) {
+    /* each pass removes one true factor from the pool */
   }
   const merged: MFactor[] = [];
   for (const f of factors) {
@@ -1220,8 +1244,10 @@ export function mpolyGcd(a: MPoly, b: MPoly, tick: Ticker = NO_TICK): MPoly {
   if (mpolyIsZero(a)) return b;
   if (mpolyIsZero(b)) return a;
   const gens = a.gens;
-  const ka = kroneckerToUni(a);
-  const kb = kroneckerToUni(b);
+  // Both images must use one base, so exponents line up whatever each degree is.
+  const base = Math.max(mpolyTotalDegree(a), mpolyTotalDegree(b)) + 1;
+  const ka = kroneckerToUni(a, base);
+  const kb = kroneckerToUni(b, base);
   if (ka === null || kb === null || ka.d !== kb.d) {
     const g = bigGcd(mpolyContent(a), mpolyContent(b));
     return mpolyNormalize(gens, new Map([[mkey(new Array<number>(gens.length).fill(0)), g]]), 1n);

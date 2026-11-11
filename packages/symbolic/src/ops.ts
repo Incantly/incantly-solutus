@@ -603,8 +603,10 @@ function opCompleteSquare(args: readonly SymArg[], _named: ReadonlyMap<string, S
   if (coeffs === null) throw notPolyErr('CompleteSquare', e, v);
   const out = completeSquareNode(e, v, ruleCtxOf(ctx));
   if (out === null) {
-    throw new OpError('bad_argument', `CompleteSquare needs a quadratic in ${toText(v)}.`, {
+    throw new OpError('not_polynomial', `CompleteSquare needs a quadratic in ${toText(v)}.`, {
       token: toText(e),
+      forms: ['CompleteSquare(e: Expr, v: Symbol) -> Expr'],
+      hint: `${toText(e)} is not a quadratic in ${toText(v)}.`,
       recovery: 'rewrite',
     });
   }
@@ -751,19 +753,67 @@ function opEquivalent(args: readonly SymArg[], _named: ReadonlyMap<string, SymAr
   const b = need(args, 1, 'Equivalent');
   const rctx = ruleCtxOf(ctx);
   if (a.k === 'cond' && b.k === 'cond') {
-    const v = equivalentCond(a.c, b.c, rctx);
+    let v = equivalentCond(a.c, b.c, rctx);
+    if (v !== 'true') v = equivalentBySolutions(a.c, b.c, ctx);
     return boolOrUnproven(v, 'Equivalent');
   }
   if (a.k === 'expr' && b.k === 'expr') {
     checkInputSize(a.e, ctx, 'Equivalent');
     checkInputSize(b.e, ctx, 'Equivalent');
     const v = equivalent(a.e, b.e, rctx);
-    if (v === 'true' && excludedDiffer(a, b)) {
-      return okOut(defined({ k: 'bool', v: true }), [noticeOf('differ_at', 'The forms differ at the excluded values.', 'info')]);
+    if (v === 'true') {
+      const ea = a.excluded ?? excludedOf(a.e, rctx);
+      const eb = b.excluded ?? excludedOf(b.e, rctx);
+      if (excludedDiffer({ ...a, excluded: ea }, { ...b, excluded: eb })) {
+        const names = [...ea, ...eb].map((c) => condText(c));
+        return okOut(defined({ k: 'bool', v: true }), [
+          noticeOf('differ_at', `The forms differ where ${[...new Set(names)].join(', ')}.`, 'info', [...new Set(names)]),
+        ]);
+      }
     }
     return boolOrUnproven(v, 'Equivalent');
   }
   throw new OpError('no_matching_form', 'Equivalent needs two expressions or two conditions.', { recovery: 'choose_form' });
+}
+
+/**
+ * Two conditions in one unknown are equivalent when their solution sets agree. Only exact
+ * lists of solutions are compared (`true` when equal, `false` when they differ); anything
+ * the solver cannot list exactly stays undecided.
+ */
+function equivalentBySolutions(c1: SymCond, c2: SymCond, ctx: OpCtx): 'true' | 'false' | 'unknown' {
+  const free = new Set([...freeSymbolsCond(c1), ...freeSymbolsCond(c2)]);
+  if (free.size !== 1) return 'unknown';
+  const v = symN([...free][0] as string);
+  const bounds: SolveBounds = { domain: 'real' };
+  try {
+    const s1 = solveOneCond(c1, v, true, ctx, bounds, 'Equivalent').items;
+    const s2 = solveOneCond(c2, v, true, ctx, bounds, 'Equivalent').items;
+    const key = (items: readonly SymArg[]): string[] | null => {
+      const out: string[] = [];
+      for (const it of items) {
+        if (it.k !== 'cond') return null;
+        out.push(condText(it.c));
+      }
+      return out.sort();
+    };
+    const k1 = key(s1);
+    const k2 = key(s2);
+    if (k1 === null || k2 === null) return 'unknown';
+    return k1.join(';') === k2.join(';') ? 'true' : 'false';
+  } catch (err) {
+    if (err instanceof Unsupported || err instanceof OpError) return 'unknown';
+    throw err;
+  }
+}
+
+/** Values a cancelled factor removes from an expression, found by simplifying it. */
+function excludedOf(e: SymNode, rctx: RuleCtx): readonly SymCond[] {
+  try {
+    return simplifyNode(e, rctx).excluded;
+  } catch {
+    return [];
+  }
 }
 
 function excludedDiffer(a: SymArg & { k: 'expr' }, b: SymArg & { k: 'expr' }): boolean {
@@ -1480,6 +1530,16 @@ function opMixedNumber(args: readonly SymArg[], _named: ReadonlyMap<string, SymA
   return okOut(defined({ k: 'expr', e: node, exact: true, display: { mixed: true } }));
 }
 
+/** True when a condition mentions at least one symbol in every relation it contains. */
+function condAboutSymbols(c: SymCond): boolean {
+  switch (c.c) {
+    case 'rel': case 'in': return freeSymbolsCond(c).size > 0;
+    case 'not': return condAboutSymbols(c.of);
+    case 'and': case 'or': return c.of.every(condAboutSymbols);
+    default: return false;
+  }
+}
+
 function opAssume(args: readonly SymArg[], _named: ReadonlyMap<string, SymArg>, ctx: OpCtx): OpOut {
   noExtras(args, 2, 'Assume');
   const c = asCond(need(args, 0, 'Assume'), 'Assume');
@@ -1487,14 +1547,18 @@ function opAssume(args: readonly SymArg[], _named: ReadonlyMap<string, SymArg>, 
   checkInputSize(e, ctx, 'Assume');
   const facts = c.c === 'and' ? c.of : [c];
   for (const f of facts) {
-    if (f.c !== 'rel' && f.c !== 'in' && f.c !== 'not' && f.c !== 'and' && f.c !== 'or') {
-      throw new OpError('bad_assumption', 'Assume needs a condition about symbols.', { recovery: 'rewrite' });
+    if (!condAboutSymbols(f)) {
+      throw new OpError('bad_assumption', 'Assume needs a condition about symbols.', {
+        token: condText(f),
+        recovery: 'rewrite',
+      });
     }
   }
-  const contra = findContradiction(facts);
+  const contra = findContradiction([...ctx.assume.facts, ...facts]);
   if (contra !== null) {
     throw new OpError('bad_assumption', 'The assumptions contradict each other.', {
       hint: 'Change one of the two facts.',
+      related: [condText(contra.a), condText(contra.b)],
       recovery: 'rewrite',
     });
   }

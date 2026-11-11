@@ -455,6 +455,22 @@ export function add(...terms: SymNode[]): SymNode {
   return intern({ k: 'add', terms: numFirst });
 }
 
+/** True when the base may evaluate to zero (anything but a nonzero number or constant). */
+function canVanish(base: SymNode): boolean {
+  if (isNumberNode(base)) return isZeroNode(base);
+  return !(base.k === 'const' && (base.name === 'pi' || base.name === 'e'));
+}
+
+/** True for a negative exponent: a negative number or a product led by one. */
+function isReciprocalExp(exp: SymNode): boolean {
+  if (isNegativeNumber(exp)) return true;
+  if (exp.k === 'mul') {
+    const first = exp.factors[0];
+    return first !== undefined && isNegativeNumber(first);
+  }
+  return false;
+}
+
 /** Split a factor into base and exponent. */
 function splitPow(f: SymNode): { base: SymNode; exp: SymNode } {
   if (f.k === 'pow') return { base: f.base, exp: f.exp };
@@ -492,10 +508,13 @@ export function mul(...factors: SymNode[]): SymNode {
       continue;
     }
     const { base, exp } = splitPow(f);
-    const hit = byBase.get(base.id);
+    // A factor and its reciprocal power are not merged while the base may be zero:
+    // `x * x^-1` keeps its denominator so Simplify can record the excluded value x != 0.
+    const key = canVanish(base) && isReciprocalExp(exp) ? -base.id : base.id;
+    const hit = byBase.get(key);
     if (hit === undefined) {
-      byBase.set(base.id, { base, exp });
-      order.push(base.id);
+      byBase.set(key, { base, exp });
+      order.push(key);
     } else {
       hit.exp = add(hit.exp, exp);
     }
@@ -850,6 +869,27 @@ function isNegated(a: SymNode): SymNode | null {
 
 export function divideNodes(a: SymNode, b: SymNode): SymNode {
   return mul(a, pow(b, MINUS_ONE));
+}
+
+/**
+ * The product of primes that `Factor(n)` returns for a whole number. It is a display
+ * product: the canonical constructors would fold it straight back into `n`, so the node
+ * is built directly (`2^2 * 3`). Parsing its text gives the number again.
+ */
+export function factoredIntegerNode(primes: readonly bigint[], negative: boolean): SymNode {
+  const parts: SymNode[] = negative ? [MINUS_ONE] : [];
+  let i = 0;
+  while (i < primes.length) {
+    const p = primes[i] as bigint;
+    let k = 0;
+    while (i < primes.length && primes[i] === p) {
+      k++;
+      i++;
+    }
+    parts.push(k === 1 ? intN(p) : intern({ k: 'pow', base: intN(p), exp: intN(k) }));
+  }
+  if (parts.length === 1) return parts[0] as SymNode;
+  return intern({ k: 'mul', factors: parts });
 }
 
 /** Canonical function application with folding. */

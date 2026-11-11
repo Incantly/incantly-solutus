@@ -5,8 +5,8 @@
  * so runs are reproducible on every machine).
  */
 import type { SymCond, SymNode } from './node';
-import { add, freeSymbols, isZeroNode, negateNode } from './node';
-import { evalAt, ruleCtx, simplifyNode, togetherNode } from './rules';
+import { add, asRational, divideNodes, freeSymbols, isZeroNode, negateNode } from './node';
+import { evalAt, hasImaginaryUnit, reduceImaginary, ruleCtx, simplifyNode, togetherNode } from './rules';
 import type { RuleCtx } from './rules';
 
 export type EquivVerdict = 'true' | 'false' | 'unknown';
@@ -49,6 +49,13 @@ export function zeroVerdict(d: SymNode, ctx: RuleCtx): EquivVerdict {
     if (val !== null) return Math.abs(val) < 1e-12 ? 'true' : 'false';
     return 'unknown';
   }
+  if (hasImaginaryUnit(d)) {
+    try {
+      if (isZeroNode(reduceImaginary(d, ctx))) return 'true';
+    } catch {
+      void 0;
+    }
+  }
   const s = simplifyNode(d, ctx).node;
   if (isZeroNode(s)) return 'true';
   try {
@@ -81,13 +88,28 @@ export function isZeroVerdict(e: SymNode, ctx: RuleCtx): EquivVerdict {
   return zeroVerdict(e, ctx);
 }
 
-/** `Equivalent(c1, c2)` for conditions: both sides pairwise, both directions. */
+/**
+ * `Equivalent(c1, c2)` for conditions, structural part: the same relation up to a nonzero
+ * constant factor of both sides (`2x == 4` and `x == 2`). It only ever proves `true`; a
+ * different shape says nothing about the solution sets, so the caller compares those.
+ */
 export function equivalentCond(c1: SymCond, c2: SymCond, ctx: RuleCtx): EquivVerdict {
   if (c1.c === 'rel' && c2.c === 'rel' && c1.op === c2.op) {
     const l = equivalent(c1.l, c2.l, ctx);
     const r = equivalent(c1.r, c2.r, ctx);
-    if (l === 'false' || r === 'false') return 'false';
     if (l === 'true' && r === 'true') return 'true';
+    const d1 = add(c1.l, negateNode(c1.r));
+    const d2 = add(c2.l, negateNode(c2.r));
+    if (isZeroNode(d2)) return isZeroNode(d1) ? 'true' : 'unknown';
+    try {
+      const ratio = asRational(togetherNode(divideNodes(d1, d2), ctx).node);
+      if (ratio !== null && ratio.n !== 0n) {
+        if (c1.op === '==' || c1.op === '!=') return 'true';
+        if (ratio.n > 0n) return 'true';
+      }
+    } catch {
+      void 0;
+    }
     return 'unknown';
   }
   if (c1.c === 'true' && c2.c === 'true') return 'true';
@@ -95,13 +117,10 @@ export function equivalentCond(c1: SymCond, c2: SymCond, ctx: RuleCtx): EquivVer
   if ((c1.c === 'true' && c2.c === 'false') || (c1.c === 'false' && c2.c === 'true')) return 'false';
   if (c1.c === 'not' && c2.c === 'not') return equivalentCond(c1.of, c2.of, ctx);
   if ((c1.c === 'and' || c1.c === 'or') && c2.c === c1.c && c1.of.length === c2.of.length) {
-    let anyUnknown = false;
     for (let i = 0; i < c1.of.length; i++) {
-      const v = equivalentCond(c1.of[i] as SymCond, c2.of[i] as SymCond, ctx);
-      if (v === 'false') return 'false';
-      if (v === 'unknown') anyUnknown = true;
+      if (equivalentCond(c1.of[i] as SymCond, c2.of[i] as SymCond, ctx) !== 'true') return 'unknown';
     }
-    return anyUnknown ? 'unknown' : 'true';
+    return 'true';
   }
   return 'unknown';
 }
