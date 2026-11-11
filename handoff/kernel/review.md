@@ -100,6 +100,8 @@ Legend: done, partial, missing, different. "Probe" means I ran it.
 
 ### A2. Area types cannot declare default styles or valid `with` keys; a second registration overwrites the first
 
+**Status:** fixed in `graph/props.ts`, `errors/notices.ts`. `registerTypeStyle(type, { defaults, freeDefaults, keys, drawable })` merges across calls; `registerPropertyTypes` now merges too; an unknown type takes the base drawable keys (`width lineStyle fill fillAngle fillGap`) unless `drawable: false`; `registerNotice(kind, spec)` added for area notice codes.
+
 - Docs: kernel design 9.3 ("data in a `defaultsFor(type, free)` table"), 9.1 ("`unknown_property` lists the keys valid for that object's type"); every wave 2 area adds types (Conic, Matrix, Distribution, Sector, ...).
 - Code: `DEFAULTS` (`graph/props.ts:60`) and `BY_TYPE` (`:109`) are closed constants; an unknown type falls back to black, width 2, no `width` or `fill` key. `registerPropertyTypes(key, types)` does `extraKeys.set(key, types)` (`:128-129`), which replaces the list from an earlier call.
 - Probe: `registerPropertyTypes('k', ['ConicA'])` then `registerPropertyTypes('k', ['PolyB'])`: `validKeysFor('ConicA')` no longer has `k`. `validKeysFor('Conic')` is `color visible label caption aux fixed selectable layer showIf opacity tags tip animate` (no `width`, `lineStyle`, `fill`).

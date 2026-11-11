@@ -25,6 +25,7 @@ export type {
 } from './graph/types';
 export type { WriteWhy, WriteResult, SetFreeOptions, DragPlan, DragWrite, MovePlan, UndoUnit, FrameDeltaResult } from './graph/hist';
 export type { UndoInfo } from './history/journal';
-export { defaultsFor, colorFromWord, colorHex, toColor, validKeysFor, registerPropertyTypes } from './graph/props';
+export { defaultsFor, colorFromWord, colorHex, toColor, validKeysFor, registerPropertyTypes, registerTypeStyle } from './graph/props';
+export type { TypeStyle } from './graph/props';
 export { sameValue, valueSource, numberSource } from './graph/values';
 export { StateSolver } from './clock/solver';

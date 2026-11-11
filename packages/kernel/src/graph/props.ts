@@ -76,24 +76,63 @@ const DEFAULTS: Readonly<Record<string, Default>> = {
 };
 const FALLBACK: Default = { color: '#111827', width: 2, pointSize: 4, opacity: 1, label: 'none' };
 
+/** What an area says about the style of a type it adds (kernel design 9.3). Every field is optional. */
+export interface TypeStyle {
+  /** Defaults for an object of the type; a colour is a word or `#rrggbb`. Fields left out keep the fallback. */
+  readonly defaults?: Partial<{ color: string; width: number; pointSize: number; opacity: number; label: Props['label']; lineStyle: Props['lineStyle']; pointStyle: Props['pointStyle']; fill: Props['fill'] }>;
+  /** Defaults that replace `defaults` for a free object of the type. */
+  readonly freeDefaults?: TypeStyle['defaults'];
+  /** `with` keys the type accepts besides the base keys. */
+  readonly keys?: readonly string[];
+  /** False for a type that is not drawn (a matrix, a distribution): it then takes only the keys every object takes. Default true. */
+  readonly drawable?: boolean;
+}
+
+interface TypeStyleRec {
+  defaults: Partial<NonNullable<TypeStyle['defaults']>>;
+  freeDefaults: Partial<NonNullable<TypeStyle['defaults']>>;
+  keys: Set<string>;
+  drawable: boolean | undefined;
+}
+const typeStyles = new Map<string, TypeStyleRec>();
+
+/**
+ * An area adds default styles and valid `with` keys for a type it owns. Calls for the same type merge: defaults are
+ * overlaid field by field (later wins), keys are added, and `drawable` keeps the last value given. Core types accept it too.
+ */
+export function registerTypeStyle(type: string, style: TypeStyle): void {
+  if (typeof type !== 'string' || type === '' || type === '__proto__' || typeof style !== 'object' || style === null) return;
+  let r = typeStyles.get(type);
+  if (!r) {
+    r = { defaults: {}, freeDefaults: {}, keys: new Set(), drawable: undefined };
+    typeStyles.set(type, r);
+  }
+  if (style.defaults) Object.assign(r.defaults, style.defaults);
+  if (style.freeDefaults) Object.assign(r.freeDefaults, style.freeDefaults);
+  for (const k of style.keys ?? []) r.keys.add(k);
+  if (style.drawable !== undefined) r.drawable = style.drawable;
+}
+
 /** The default properties of an object of this type. `dependent` and `onPath` only matter for a Point. */
 export function defaultsFor(type: string, free: boolean, onPath = false): Props {
   const d = type === 'Point' ? (onPath ? DEFAULTS['Point:path'] : free ? DEFAULTS['Point:free'] : DEFAULTS['Point:dependent']) : typeof type === 'string' && Object.hasOwn(DEFAULTS, type) ? DEFAULTS[type] : undefined;
   const x = d ?? FALLBACK;
+  const a = typeof type === 'string' ? typeStyles.get(type) : undefined;
+  const o = a ? { ...a.defaults, ...(free ? a.freeDefaults : {}) } : undefined;
   return {
     visible: true,
-    label: x.label,
+    label: o?.label ?? x.label,
     aux: false,
     fixed: false,
     selectable: true,
     layer: 0,
-    color: hex(x.color),
-    opacity: x.opacity,
-    width: x.width,
-    lineStyle: 'solid',
-    pointSize: x.pointSize,
-    pointStyle: 'dot',
-    fill: 'solid',
+    color: o?.color !== undefined ? (colorFromWord(o.color) ?? hex(x.color)) : hex(x.color),
+    opacity: o?.opacity ?? x.opacity,
+    width: o?.width ?? x.width,
+    lineStyle: o?.lineStyle ?? 'solid',
+    pointSize: o?.pointSize ?? x.pointSize,
+    pointStyle: o?.pointStyle ?? 'dot',
+    fill: o?.fill ?? 'solid',
     trace: false,
     tip: 'auto',
     ext: {},
@@ -122,20 +161,36 @@ const BY_TYPE: Readonly<Record<string, readonly string[]>> = {
   Number: ['width'],
 };
 
-const extraKeys = new Map<string, readonly string[] | '*'>();
+/** Core types that are not drawn as a line or a shape: they take only the keys every object takes. */
+const NOT_DRAWN: ReadonlySet<string> = new Set(['Bool', 'Text', 'Color', 'Particles']);
 
-/** An area that adds a property to the language table says which object types accept it (`'*'` for all). */
+const extraKeys = new Map<string, ReadonlySet<string> | '*'>();
+
+/**
+ * An area that adds a property to the language table says which object types accept it (`'*'` for all). Several calls for
+ * one key add up: the types of an earlier call stay valid.
+ */
 export function registerPropertyTypes(key: string, types: readonly string[] | '*'): void {
-  extraKeys.set(key, types);
+  if (typeof key !== 'string' || key === '__proto__') return;
+  const old = extraKeys.get(key);
+  if (types === '*' || old === '*') extraKeys.set(key, '*');
+  else extraKeys.set(key, new Set([...(old ?? []), ...types]));
 }
 
-/** The keys an object of this type accepts in `with`. */
+/**
+ * The keys an object of this type accepts in `with`. A type the core does not know and the area did not mark as not drawn
+ * takes the base drawable keys (`width`, `lineStyle`, `fill`, ...) like any shape does.
+ */
 export function validKeysFor(type: string): string[] {
-  const out = ['color', ...(typeof type === 'string' && Object.hasOwn(BY_TYPE, type) ? (BY_TYPE[type] as readonly string[]) : []), ...EVERY.filter((k) => k !== 'color')];
-  for (const [k, types] of extraKeys) if (types === '*' || types.includes(type)) out.push(k);
+  const reg = typeof type === 'string' ? typeStyles.get(type) : undefined;
+  const known = typeof type === 'string' && Object.hasOwn(BY_TYPE, type);
+  const drawn = reg?.drawable !== false && !NOT_DRAWN.has(type);
+  const own = known ? (BY_TYPE[type] as readonly string[]) : drawn ? [...LINEAR, ...FILLED] : [];
+  const out = ['color', ...own, ...(reg ? [...reg.keys] : []), ...EVERY.filter((k) => k !== 'color')];
+  for (const [k, types] of extraKeys) if (types === '*' || types.has(type)) out.push(k);
   // keys an area appended to the language table without saying which types take them are accepted by every type
   for (const k of Object.keys(PROPERTIES)) if (!EVERY.includes(k) && !ALL_CORE.has(k) && !extraKeys.has(k)) out.push(k);
-  return out;
+  return [...new Set(out)];
 }
 
 const ALL_CORE: ReadonlySet<string> = new Set([...EVERY, ...LINEAR, ...FILLED, 'pointSize', 'pointStyle', 'trace']);
