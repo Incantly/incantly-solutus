@@ -1,0 +1,12 @@
+{
+  "extends": "../../../../tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["node"],
+    "noEmit": false,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "outDir": "/tmp/plotdts-40097a5d",
+    "rootDir": "../../../.."
+  },
+  "include": ["../../../../packages/plot/src"]
+}
