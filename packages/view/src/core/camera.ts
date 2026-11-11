@@ -169,14 +169,14 @@ function worldUp(zUp: boolean): V3 {
 
 /**
  * Orientation from azimuth/elevation/roll by composing quaternions.
- * Azimuth 0 looks along +y; elevation is the tilt above the floor.
+ * Azimuth 0 looks along +y (z-up: the camera sits at -y); elevation is the tilt above the floor.
  */
 export function orientationFromAzEl(azimuth: number, elevation: number, roll: number, zUp: boolean, upHint?: V3): Quat {
   const up = worldUp(zUp);
   // Camera offset direction from the target (unit), in world axes.
   const ce = Math.cos(elevation);
   const off = zUp
-    ? v3Norm({ x: ce * Math.sin(azimuth), y: ce * Math.cos(azimuth), z: Math.sin(elevation) })
+    ? v3Norm({ x: ce * Math.sin(azimuth), y: -ce * Math.cos(azimuth), z: Math.sin(elevation) })
     : v3Norm({ x: ce * Math.sin(azimuth), y: Math.sin(elevation), z: ce * Math.cos(azimuth) });
   const forward = v3Scale(off, -1);
   // Stable screen-up: continue the previous up near the poles (design 8.1).
@@ -234,7 +234,7 @@ export function readAzEl(q: Quat, zUp: boolean): { azimuth: number; elevation: n
   const off = v3Scale(fwd, -1);
   if (zUp) {
     const elevation = Math.asin(Math.min(1, Math.max(-1, off.z)));
-    const azimuth = Math.atan2(off.x, off.y);
+    const azimuth = Math.atan2(off.x, -off.y);
     return { azimuth, elevation };
   }
   const elevation = Math.asin(Math.min(1, Math.max(-1, off.y)));
@@ -274,6 +274,27 @@ function viewMatrixFromPose(q: Quat, eye: V3): Mat4 {
   m[13] = -(m[1]! * eye.x + m[5]! * eye.y + m[9]! * eye.z);
   m[14] = -(m[2]! * eye.x + m[6]! * eye.y + m[10]! * eye.z);
   return m;
+}
+
+/** Axis scale ratios guarded against zero, negative and non-finite values. */
+function aspectScale(a: V3): V3 {
+  const ok = (n: number): number => (Number.isFinite(n) && n > 0 ? n : 1);
+  return { x: ok(a.x), y: ok(a.y), z: ok(a.z) };
+}
+
+/** Scale the model-space columns of a view matrix by the axis ratios (design 8.1 `aspect`). */
+function applyAspect(view: Mat4, a: V3): void {
+  for (let i = 0; i < 3; i++) {
+    view[i] = (view[i] ?? 0) * a.x;
+    view[4 + i] = (view[4 + i] ?? 0) * a.y;
+    view[8 + i] = (view[8 + i] ?? 0) * a.z;
+  }
+}
+
+/** A direction in drawn (aspect-scaled) space expressed in world axes. */
+export function drawnToWorldVec(cam: Pick<Camera, 'aspectAxes'>, v: V3): V3 {
+  const a = aspectScale(cam.aspectAxes);
+  return { x: v.x / a.x, y: v.y / a.y, z: v.z / a.z };
 }
 
 function orthoMatrix(left: number, right: number, bottom: number, top: number, near: number, far: number): Mat4 {
@@ -326,9 +347,15 @@ export function buildCamera(input: BuildCameraInput): Camera {
   const forward = quatRotate(qc, { x: 0, y: 0, z: -1 });
   const right = quatRotate(qc, { x: 1, y: 0, z: 0 });
   const up = quatRotate(qc, { x: 0, y: 1, z: 0 });
-  const eye = v3Sub(props.target, v3Scale(forward, dist));
-  const { near, far } = fitNearFar(dist, Math.max(input.fitRadius, 1e-9));
-  const view = viewMatrixFromPose(q, eye);
+  // `aspect` scales the drawn axes: the camera works in drawn space
+  // (aspect * world), so target and eye are scaled and the view matrix carries it.
+  const ax = aspectScale(props.aspect);
+  const drawnTarget = { x: props.target.x * ax.x, y: props.target.y * ax.y, z: props.target.z * ax.z };
+  const eyeDrawn = v3Sub(drawnTarget, v3Scale(forward, dist));
+  const eye = { x: eyeDrawn.x / ax.x, y: eyeDrawn.y / ax.y, z: eyeDrawn.z / ax.z };
+  const { near, far } = fitNearFar(dist, Math.max(input.fitRadius * Math.max(ax.x, ax.y, ax.z), 1e-9));
+  const view = viewMatrixFromPose(q, eyeDrawn);
+  applyAspect(view, ax);
   const aspect = viewport.w / Math.max(viewport.h, 1);
   let proj: Mat4;
   let scale: number;
@@ -409,14 +436,19 @@ export interface Ray {
 export function pointerRay(cam: Camera, pxX: number, pxY: number): Ray {
   const dx = pxX - cam.viewport.w / 2;
   const dy = cam.viewport.h / 2 - pxY;
+  const a = aspectScale(cam.aspectAxes);
+  const toWorldDir = (d: V3): V3 => v3Norm({ x: d.x / a.x, y: d.y / a.y, z: d.z / a.z });
   if (cam.projection === 'persp') {
     const f = cam.viewport.h / 2 / Math.tan(cam.fovY / 2);
     const d = v3Norm(v3Add(v3Add(v3Scale(cam.forward, f), v3Scale(cam.right, dx)), v3Scale(cam.up, dy)));
-    return { o: cam.eye, d };
+    return { o: cam.eye, d: toWorldDir(d) };
   }
-  const o = v3Add(v3Add(cam.target, v3Scale(cam.right, dx / cam.scale)), v3Scale(cam.up, dy / cam.scale));
+  // Orthographic: work in drawn space (aspect * world), then map back to world axes.
+  const drawnTarget = { x: cam.target.x * a.x, y: cam.target.y * a.y, z: cam.target.z * a.z };
+  const o = v3Add(v3Add(drawnTarget, v3Scale(cam.right, dx / cam.scale)), v3Scale(cam.up, dy / cam.scale));
   // Pull the origin back along -forward so ray hits sort from the eye side.
-  return { o: v3Sub(o, v3Scale(cam.forward, cam.dist)), d: cam.forward };
+  const back = v3Sub(o, v3Scale(cam.forward, cam.dist));
+  return { o: { x: back.x / a.x, y: back.y / a.y, z: back.z / a.z }, d: toWorldDir(cam.forward) };
 }
 
 /** Sphere-vs-frustum test from the vp matrix, for culling (performance 5). */
@@ -449,7 +481,7 @@ export function viewFacingAzEl(normal: V3, current: { azimuth: number; elevation
   const use = v3Dot(curFwd, v3Scale(n, -1)) >= v3Dot(curFwd, n) ? v3Scale(n, -1) : n;
   const off = v3Scale(use, -1);
   if (zUp) {
-    return { azimuth: Math.atan2(off.x, off.y), elevation: Math.asin(Math.min(1, Math.max(-1, off.z))) };
+    return { azimuth: Math.atan2(off.x, -off.y), elevation: Math.asin(Math.min(1, Math.max(-1, off.z))) };
   }
   return { azimuth: Math.atan2(off.x, off.z), elevation: Math.asin(Math.min(1, Math.max(-1, off.y))) };
 }

@@ -53,7 +53,7 @@ import {
 import { describeAdded, describeFigure, describeMove } from '../core/describe';
 import { LIGHT_THEME, type Rgba, type Theme } from '../core/styles';
 import {
-  buildCamera, pointerRay, projectPoint, readAzEl, userRotate,
+  buildCamera, drawnToWorldVec, pointerRay, projectPoint, readAzEl, userRotate,
   v3Add, v3Dot, v3Scale, v3Sub,
   DEFAULT_SPACE_CAMERA, type Camera, type SpaceCameraProps, type V3,
 } from '../core/camera';
@@ -2001,8 +2001,8 @@ export class FigureView {
         this.cameraProps = { ...this.cameraProps, azimuth, elevation };
       } else {
         const target = v3Add(
-          v3Add(this.cameraProps.target, v3Scale(cam.right, -dx / Math.max(cam.scale, 1e-9))),
-          v3Scale(cam.up, dy / Math.max(cam.scale, 1e-9)),
+          v3Add(this.cameraProps.target, drawnToWorldVec(cam, v3Scale(cam.right, -dx / Math.max(cam.scale, 1e-9)))),
+          drawnToWorldVec(cam, v3Scale(cam.up, dy / Math.max(cam.scale, 1e-9))),
         );
         this.cameraProps = { ...this.cameraProps, target };
       }
@@ -2018,7 +2018,7 @@ export class FigureView {
         const dy = pos.y - drag.lastY;
         drag.lastX = pos.x;
         drag.lastY = pos.y;
-        next = this.snap3D(v3Add(drag.last, v3Scale(cam.forward, -dy / Math.max(cam.scale, 1e-9))));
+        next = this.snap3D(v3Add(drag.last, drawnToWorldVec(cam, v3Scale(cam.forward, -dy / Math.max(cam.scale, 1e-9)))));
       } else if (drag.axis !== null) {
         const r = rayLineClosest(ray.o, ray.d, drag.axis.a, drag.axis.e);
         if (r !== null) {

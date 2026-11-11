@@ -52,23 +52,32 @@ function decimalStep(raw: number): StepChoice {
   return { step: mag * base, minor: base === 2 ? 4 : 5 };
 }
 
+/** Documented pi steps (design 5 step 5): pi/6, pi/4, pi/3, pi/2, pi, 2pi, then doubling. */
 const PI_FRACTIONS = [1 / 6, 1 / 4, 1 / 3, 1 / 2, 1, 2];
 
 function piStep(raw: number): StepChoice {
-  const mag = 10 ** Math.floor(Math.log10(raw / Math.PI));
-  let best = PI_FRACTIONS[0] ?? 1;
+  const lowest = (PI_FRACTIONS[0] ?? 1 / 6) * Math.PI;
+  if (raw < lowest * 0.75) {
+    // Finer than pi/6 is outside the documented list: use decimal fractions of pi.
+    const d = decimalStep(raw / Math.PI);
+    return { step: d.step * Math.PI, minor: d.minor };
+  }
+  const candidates = PI_FRACTIONS.map((f) => f * Math.PI);
+  let top = (PI_FRACTIONS[PI_FRACTIONS.length - 1] ?? 2) * Math.PI;
+  while (top < raw) {
+    top *= 2;
+    candidates.push(top);
+  }
+  let best = candidates[0] ?? Math.PI;
   let bestErr = Infinity;
-  for (const f of PI_FRACTIONS) {
-    const err = Math.abs(raw - mag * Math.PI * f);
+  for (const c of candidates) {
+    const err = Math.abs(Math.log(raw / c));
     if (err < bestErr) {
       bestErr = err;
-      best = f;
+      best = c;
     }
   }
-  // Also try the next magnitude's smallest fraction (covers 5pi, 10pi gaps).
-  const up = mag * 10 * (PI_FRACTIONS[0] ?? 1) * Math.PI;
-  if (Math.abs(raw - up) < bestErr) return { step: up, minor: 5 };
-  return { step: mag * Math.PI * best, minor: 4 };
+  return { step: best, minor: 4 };
 }
 
 /**
