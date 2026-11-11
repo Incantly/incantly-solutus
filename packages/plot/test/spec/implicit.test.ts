@@ -308,7 +308,8 @@ describe('CL6 step 5: singular points join with sharp corners', () => {
     expect(nearTip).toBe(true);
     let maxX = -Infinity;
     for (const path of p.paths) for (const pt of pairs(path)) maxX = Math.max(maxX, xOfPx(VIEW_SQ, pt.x));
-    expect(maxX > 3).toBe(true);
+    // The branches leave the [-5, 5] view at |y| = 5, i.e. x = 25^(1/3) ≈ 2.924, so they reach close to that.
+    expect(maxX > 2.9).toBe(true);
   }, TIMEOUT);
 });
 
