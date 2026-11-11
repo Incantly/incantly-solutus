@@ -5,13 +5,14 @@
  * error) and the engine's `Unsupported`/`NonElementary`/`LimitExceeded`, all caught by
  * `run` and turned into data.
  */
+import Decimal from 'decimal.js';
 import type { Notice, NoticeKind } from '@incantly/kernel';
 import type { Assumptions } from './assume';
 import { assumptions as makeAssumptions, findContradiction } from './assume';
 import type { Domain, OpName, SymArg, SymbolicLimits, SymbolicNoticeKind } from './contracts';
 import { defined, SYMBOLIC_NOTICE_CODES } from './contracts';
 import type { Cell } from './contracts';
-import type { SymCond, SymNode } from './node';
+import type { SymCond, SymFn, SymNode } from './node';
 import {
   add, asInteger, asRational, bigGcd, constN, decN, floatN, freeSymbols, intN,
   isZeroNode, LimitExceeded, mul, negateNode, nodeCount, pow, ratN, rel, symN,
@@ -1190,17 +1191,147 @@ function decFromFloat(val: number, digits: number): SymNode {
 
 /**
  * Exact decimal evaluation with guard digits: rationals by long division, square roots
- * by integer Newton iteration, pi by Machin's formula and e by its series. Null when
- * the tree needs other transcendental functions (the documented decimal.js job) — the
- * caller falls back to floats.
+ * by integer Newton iteration, pi by Machin's formula and e by its series, and every
+ * other closed real tree (trig, exp, log, …) by decimal.js at `digits + 10` guard
+ * digits. Null when the tree is not a closed real number (free symbols, complex
+ * values, poles) — the caller falls back to floats.
  */
 function toDecimal(e: SymNode, digits: number, tick: Ticker): SymNode | null {
   const guard = digits + 10;
   const scale = 10n ** BigInt(guard);
   const val = scaledInt(e, scale, tick);
-  if (val === null) return null;
-  const rounded = roundHalfEven(val, 10n ** 10n);
-  return decN(rounded, -digits, digits);
+  if (val !== null) {
+    const rounded = roundHalfEven(val, 10n ** 10n);
+    return decN(rounded, -digits, digits);
+  }
+  return decimalTree(e, digits, tick);
+}
+
+/**
+ * Arbitrary-precision evaluation behind `toDecimal` (the documented decimal.js job):
+ * closed real trees that need transcendental functions are evaluated on an isolated
+ * Decimal constructor (so the global config is untouched) and rounded half-even to
+ * `digits`. Null keeps the caller's float fallback.
+ */
+function decimalTree(e: SymNode, digits: number, tick: Ticker): SymNode | null {
+  const Dec = Decimal.clone({ precision: digits + 10, rounding: Decimal.ROUND_HALF_EVEN });
+  let v: Decimal | null;
+  try {
+    v = decEval(e, Dec, tick);
+  } catch {
+    return null;
+  }
+  if (v === null || !v.isFinite()) return null;
+  const scaled = v.mul(new Dec(10).pow(digits)).toDecimalPlaces(0, Decimal.ROUND_HALF_EVEN);
+  let text = scaled.toFixed(0);
+  const neg = text.startsWith('-');
+  if (neg) text = text.slice(1);
+  if (!/^\d+$/.test(text)) return null;
+  const mant = BigInt(text);
+  return decN(neg ? -mant : mant, -digits, digits);
+}
+
+function decEval(e: SymNode, Dec: typeof Decimal, tick: Ticker): Decimal | null {
+  tick.tick(1);
+  switch (e.k) {
+    case 'int': return new Dec(e.v);
+    case 'rat': return new Dec(e.n).div(new Dec(e.d));
+    case 'dec': return new Dec(`${e.mant.toString()}e${e.exp}`);
+    case 'float': {
+      if (!Number.isFinite(e.v)) return null;
+      const r = shortestDecimalRational(e.v);
+      if (r !== null) return new Dec(r.n).div(new Dec(r.d));
+      return new Dec(e.v);
+    }
+    case 'const': {
+      if (e.name === 'pi') return piDec(Dec, tick);
+      if (e.name === 'e') return new Dec(1).exp();
+      return null;
+    }
+    case 'add': {
+      let s = new Dec(0);
+      for (const t of e.terms) {
+        const v = decEval(t, Dec, tick);
+        if (v === null) return null;
+        s = s.add(v);
+      }
+      return s;
+    }
+    case 'mul': {
+      let p = new Dec(1);
+      for (const f of e.factors) {
+        const v = decEval(f, Dec, tick);
+        if (v === null) return null;
+        p = p.mul(v);
+      }
+      return p;
+    }
+    case 'pow': {
+      const b = decEval(e.base, Dec, tick);
+      const x = decEval(e.exp, Dec, tick);
+      if (b === null || x === null) return null;
+      const r = b.pow(x);
+      return r.isFinite() ? r : null;
+    }
+    case 'fn': {
+      const args: Decimal[] = [];
+      for (const a of e.args) {
+        const v = decEval(a, Dec, tick);
+        if (v === null) return null;
+        args.push(v);
+      }
+      tick.tick(64);
+      const r = decFn(e.name, args, Dec);
+      return r === null || !r.isFinite() ? null : r;
+    }
+    default: return null;
+  }
+}
+
+/** One built-in function on Decimal values; mirrors `evalFnFloat` (`round` is half-up). */
+function decFn(name: SymFn, args: readonly Decimal[], Dec: typeof Decimal): Decimal | null {
+  const a = args[0];
+  if (a === undefined) return null;
+  switch (name) {
+    case 'sin': return a.sin();
+    case 'cos': return a.cos();
+    case 'tan': return a.tan();
+    case 'asin': return a.asin();
+    case 'acos': return a.acos();
+    case 'atan': return a.atan();
+    case 'atan2': {
+      const b = args[1];
+      return b === undefined ? null : Dec.atan2(a, b);
+    }
+    case 'sinh': return a.sinh();
+    case 'cosh': return a.cosh();
+    case 'tanh': return a.tanh();
+    case 'asinh': return a.asinh();
+    case 'acosh': return a.acosh();
+    case 'atanh': return a.atanh();
+    case 'exp': return a.exp();
+    case 'ln': return a.ln();
+    case 'log10': return Dec.log10(a);
+    case 'log2': return Dec.log2(a);
+    case 'abs': return a.abs();
+    case 'sign': return new Dec(Dec.sign(a));
+    case 'floor': return a.floor();
+    case 'ceil': return a.ceil();
+    case 'round': return a.isNegative()
+      ? a.toDecimalPlaces(0, Dec.ROUND_HALF_DOWN)
+      : a.toDecimalPlaces(0, Dec.ROUND_HALF_UP);
+    case 'min': return Dec.min(...args);
+    case 'max': return Dec.max(...args);
+    case 'sqrt': return a.sqrt();
+    case 'cbrt': return a.cbrt();
+  }
+}
+
+/** pi at the constructor's precision: Machin's formula with Decimal atan. */
+function piDec(Dec: typeof Decimal, tick: Ticker): Decimal {
+  tick.tick(64);
+  const one = new Dec(1);
+  return one.div(5).atan().mul(16).sub(one.div(239).atan().mul(4));
 }
 
 function roundHalfEven(v: bigint, unit: bigint): bigint {
