@@ -4,7 +4,7 @@ Format: core `KernelError` for line-level problems; `ApiError` (embed doc) for t
 
 ## 1. Line-level errors (through `draw` and `run`)
 
-| Kind | When | GeoGebra | Ours |
+| Kind | When | The reference app | Ours |
 |---|---|---|---|
 | `mode_forbids` | A command, function, operator, tool-made object or equation form is switched off by the mode or the exam | A general "illegal input" or a silent no-op; the learner is not told it is the mode | Names the thing, the mode (or exam profile), and a hint. Fields: `mode`, `command` or `function` or `operator`, `reason: 'mode' \| 'exam' \| 'restriction'` |
 | `bad_directive` | `@mode`, `@restrict` or `@exam` written by the model or a learner line; bad value of `@angleunit`, `@rounding`, `@coords`, `@title`, `@view` | Not applicable | `expected` lists the legal values; hint says who owns the directive |

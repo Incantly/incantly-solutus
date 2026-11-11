@@ -4,9 +4,9 @@ Companion to `design.md`. Numbers and rules for gestures and dragging are in des
 
 ---
 
-## 1. How GeoGebra presents 3D, and what we change
+## 1. How the reference app presents 3D, and what we change
 
-GeoGebra shows a 3D view next to the algebra list, with its own toolbar of tool boxes (each box holds related tools, the first shows), a style bar (axes, floor, grid, default view, point capture, spin, view direction, projection, settings), a cursor that previews a point before you click, and tool tips that tell you the next click. To create a point in space you press, drag up or down, and release. To move a point you click it to switch between “floor” mode and “vertical” mode. Right-drag turns the view; the wheel zooms; Shift-drag pans; Page Up/Down moves the selected object up/down.
+The reference app shows a 3D view next to the algebra list, with its own toolbar of tool boxes (each box holds related tools, the first shows), a style bar (axes, floor, grid, default view, point capture, spin, view direction, projection, settings), a cursor that previews a point before you click, and tool tips that tell you the next click. To create a point in space you press, drag up or down, and release. To move a point you click it to switch between “floor” mode and “vertical” mode. Right-drag turns the view; the wheel zooms; Shift-drag pans; Page Up/Down moves the selected object up/down.
 
 What we keep: tool boxes, the tool tips, the preview cursor, the style bar items, right-drag to turn.
 
@@ -64,7 +64,7 @@ Tool boxes (the first listed in each box is the one shown). Names in the second 
 
 **Flow of a tool.** Pick the tool; the status line says what to click; hovering shows a **preview cursor** (see 5.2) and highlights the object that would be used; each click writes a line only when the final object is complete. Escape cancels. A tool that makes a point where there is none (for example Segment's first click in empty space) makes a free point in the plane facing the camera, at floor height if the floor is the most facing plane.
 
-**Two-step creation of a point in empty space.** Click once: a point appears on the floor. Drag up from it (or press PageUp): a vertical guide extends and the point rises. The status line says “Drag up to set height” for 2 seconds. Single click in empty space places the point on the floor (z = 0), like GeoGebra; the improvement is that the point is immediately selected with its handles, so raising it is one drag on the blue arrow.
+**Two-step creation of a point in empty space.** Click once: a point appears on the floor. Drag up from it (or press PageUp): a vertical guide extends and the point rises. The status line says “Drag up to set height” for 2 seconds. Single click in empty space places the point on the floor (z = 0), like the reference app; the improvement is that the point is immediately selected with its handles, so raising it is one drag on the blue arrow.
 
 ---
 
@@ -102,7 +102,7 @@ Tool boxes (the first listed in each box is the one shown). Names in the second 
 
 ### 5.2 The preview cursor
 
-Before a point is created, a small ghost shows what would be made, with a different look for each case (matching GeoGebra's idea of free, on path, on surface, dependent, existing):
+Before a point is created, a small ghost shows what would be made, with a different look for each case (matching the reference app's idea of free, on path, on surface, dependent, existing):
 
 | Look | Meaning |
 |---|---|
@@ -334,9 +334,9 @@ Groups: **Camera** (azimuth, elevation, roll, target, zoom, projection, field of
 
 ---
 
-## 17. Differences from GeoGebra, at a glance
+## 17. Differences from the reference app, at a glance
 
-| Topic | GeoGebra | Ours |
+| Topic | The reference app | Ours |
 |---|---|---|
 | Moving a point in z | Click the point to switch modes | Arrows, squares, Shift, Page keys, camera-facing default |
 | Camera | Two angles, z up | Quaternion, any orientation; part of the figure |

@@ -24,9 +24,9 @@ Left out here, with the owner:
 - Percentile of the position in a distribution (`Quantile(Distribution, p)`) and all distributions: `probability`.
 - The Probability Calculator view and its Statistics tab as a window: `probability/ui.md` (it calls the tests defined here).
 
-Command names are ours and follow ordinary statistics words. Many of GeoGebra's twenty-odd `X`/`Y`/`Sigma`/`Sample` variants collapse into composition: the mean of the x values is `Mean(Xs(P))`, the sample standard deviation of the y values is `SampleStdDev(Ys(P))`.
+Command names are ours and follow ordinary statistics words. Many of the reference app's twenty-odd `X`/`Y`/`Sigma`/`Sample` variants collapse into composition: the mean of the x values is `Mean(Xs(P))`, the sample standard deviation of the y values is `SampleStdDev(Ys(P))`.
 
-## 2. How GeoGebra does it (summary)
+## 2. How the reference app does it (summary)
 
 - **Statistics are many separate commands**, each a small calculation object over a list. Mean, median, mode, quartiles, variance and deviation exist in population and sample forms; for lists of points there are separate `X` and `Y` variants of mean, deviation and sum-of-squares, about forty names in all. Each reads the list again.
 - **Quartiles** use one convention (median of halves); percentile uses a library routine with its own interpolation rule. The two do not agree in general, and the manual does not make the difference prominent.
@@ -404,7 +404,7 @@ Lists up to 1,000,000 values for descriptive commands and charts; fits up to 100
 - **Clock.** Charts are pure functions of their data. A data list that reads `t` makes an animated histogram; the cost is one recomputation per frame (under 15 ms at a million values, so films should use lists under 100,000 values).
 - **Randomness.** None here. Simulated data comes from `probability`'s seeded sampling.
 
-## 12. Better than GeoGebra
+## 12. Better than the reference app
 
 - One `Describe` record instead of forty commands; weights supported everywhere with no expansion.
 - Choice of quantile method as data, shown in the output.
@@ -437,17 +437,4 @@ Lists up to 1,000,000 values for descriptive commands and charts; fits up to 100
 
 ## Sources studied
 
-GeoGebra source, read-only, commit 3608374, under `/Users/iteoluwakisibello/.kiro/crew/scratch/runtime-7c51f956/geogebra-src/source/shared/common/src/main/java/org/geogebra/common/`:
-
-- `kernel/statistics/` (descriptive statistics, regression and fit algorithms and command processors, chart algorithms, tests and intervals, frequency and classes, ranking, regression enumeration, regression maths helpers)
-- `kernel/algos/` (box plot, bar chart algorithms, list statistics helpers)
-- `gui/view/data/` (data analysis model and controller, plot types, statistics table models, regression and inference models, panel settings)
-- `main/settings/` (data analysis settings)
-
-GeoGebra manual (read for command lists and behaviour, not copied):
-
-- https://geogebra.github.io/docs/manual/en/commands/Statistics_Commands/
-- https://geogebra.github.io/docs/manual/en/commands/Chart_Commands/
-- https://geogebra.github.io/docs/manual/en/commands/List_Commands/
-- https://geogebra.github.io/docs/manual/en/tools/Spreadsheet_Tools/ (navigation to the data analysis tools)
-- https://geogebra.github.io/docs/manual/en/Probability_Calculator/ (the Statistics tab)
+Removed before the repository was made public. The study notes above are in our own words.

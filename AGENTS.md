@@ -13,8 +13,8 @@ Where a feature folder and the core design disagree, `docs/features/README.md` a
 
 ## Legal
 
-- GeoGebra's code is EUPL 1.2 and its apps and manual are non-commercial. We learned from it; we copy nothing.
-- Never put GeoGebra code, manual text, assets, or its class, method, file or package names into this repository. Do not read GeoGebra's source while building: build from our docs.
+- The reference app's code is EUPL 1.2 and its apps and manual are non-commercial. We learned from it; we copy nothing.
+- Never put the reference app's code, manual text, assets, or its class, method, file or package names into this repository. Do not read the reference app's source while building: build from our docs.
 - Add a dependency only if it is listed in `docs/design/libraries.md`. To add another, stop and report it; do not add it.
 
 ## Code
@@ -42,4 +42,9 @@ Where a feature folder and the core design disagree, `docs/features/README.md` a
 
 ## Attribution
 
-- Never credit Claude, Anthropic or any AI assistant anywhere: no co-author trailers, no "generated with" lines in commits, PRs, issues, packages or release notes.
+- Never credit Claude, Anthropic or any AI assistant in commits, PRs, issues, code, packages or release notes: no co-author trailers, no "generated with" lines.
+- Two exceptions, for the hackathon submission: `.kiro/steering/kiro-usage-log.md` records how Kiro was used, and the README may say the project was built with Kiro.
+
+## Hackathon rules
+
+`.kiro/steering/hackathon-rules.md` applies to every task. In short: `.kiro/` stays at the repository root and is never ignored; every feature starts as a spec in `.kiro/specs/<feature>/` (`requirements.md`, `design.md`, `tasks.md`) before code; no third-party trademarks or copyrighted material without permission; only SDKs, APIs and data we are licensed to use.

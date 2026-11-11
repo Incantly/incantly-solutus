@@ -24,7 +24,7 @@ interface UndefinedDetail {
 
 ### 1.1 Reused from the core, with symbolic specifics
 
-| Kind | Raised when | GeoGebra | Ours |
+| Kind | Raised when | The reference app | Ours |
 |---|---|---|---|
 | `unknown_name` | A name in a symbolic argument does not exist | Offers sliders or reads `ab` as `a*b`; in the CAS view an unknown letter is silently a symbol | Always an error. `suggest` includes `k = Symbol()` when the name is one letter, and the nearest existing names |
 | `no_matching_form` | Argument count or types fit no form | Generic "illegal argument" with forms appended | `forms` lists every form of the command (max 4 plus `formsOmitted`), `hint` names the mismatching argument position |
@@ -33,7 +33,7 @@ interface UndefinedDetail {
 
 ### 1.2 New kinds
 
-| Kind | Code | Phase | Raised when | GeoGebra | Ours |
+| Kind | Code | Phase | Raised when | The reference app | Ours |
 |---|---|---|---|---|---|
 | `not_symbolic` | Y001 | resolve | A symbolic argument names or contains an object that is not a number, symbol, expression or function (a Point, List, Text, Polygon, …) | The object is passed to the engine as text and comes back as a question mark or an engine error string | Error naming the object and its type; `related` has the name; hint suggests a field (`P.x`) or `ToExpr` |
 | `bad_variable` | Y002 | typecheck | The "with respect to" argument is not a Symbol, `x`, `y` or `z` (a Number, an Expr that is more than a symbol, a Function) | The engine treats whatever it gets as a variable name, so `Solve(…, 2)` gives odd results | Error; hint shows which names are valid variables in the current figure |
@@ -72,7 +72,7 @@ All other parse-level errors (`syntax`, `unbalanced`, `bad_number`, …) belong 
 
 Reason codes come from the kernel's list (`out_of_domain`, `division_by_zero`, `no_root`, `not_finite`, `overflow`, `no_convergence`, `timeout`, `input_undefined`, `limit`). This area adds reasons (kernel change 4) and fills `detail`.
 
-| Reason | Detail code | Meaning | Typical command | GeoGebra | Ours |
+| Reason | Detail code | Meaning | Typical command | The reference app | Ours |
 |---|---|---|---|---|---|
 | `pending` | Y200 | The job is running in the worker | any heavy command | The UI blocks until done | The previous value stays visible, dimmed; the object settles when done |
 | `unsupported` | Y201 | The engine has no method for this form | `Solve`, `Integral`, `SolveODE`, `Limit` | A question mark, or the engine returns the command unevaluated | `detail.text` says what part could not be handled; `suggest` offers `NSolve` or a substitution when one applies |
@@ -95,7 +95,7 @@ Reason codes come from the kernel's list (`out_of_domain`, `division_by_zero`, `
 
 ## 3. Numeric failures
 
-| Situation | GeoGebra | Ours |
+| Situation | The reference app | Ours |
 |---|---|---|
 | `NSolve` finds no root in the window | Question mark | Returns `[]` and notice `window_searched` with the window; widen with `from`/`to` |
 | `NSolve` with a start value that diverges | Question mark or a far-away root | Starts a bracketing search from the start value outward; reports `no_convergence` only if the search window is exhausted |

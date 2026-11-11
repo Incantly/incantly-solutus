@@ -116,9 +116,9 @@ The "describe" panel (key `A`) shows the same text for a selected function and c
 
 `AreaUnder` draws signed area: positive parts with the base fill, negative parts with the same hue lightly hatched, so a learner can see that the "integral" can be less than the "area". The readout shows both values (`integral = −0.5`, `area = 0.5`) on request.
 
-## 7. How GeoGebra presents this and what we change
+## 7. How the reference app presents this and what we change
 
-GeoGebra shows calculus objects as items in an algebra list plus a graphics view with toolbars; most calculus results show up as separate objects with separate dialogs for style. A function's tangent and integral come from tools whose dialogs write commands. Interval-mode plotting is a hidden option for functions. Bars, slope fields and areas have different default look depending on the tool.
+The reference app shows calculus objects as items in an algebra list plus a graphics view with toolbars; most calculus results show up as separate objects with separate dialogs for style. A function's tangent and integral come from tools whose dialogs write commands. Interval-mode plotting is a hidden option for functions. Bars, slope fields and areas have different default look depending on the tool.
 
 What we change:
 
@@ -166,4 +166,4 @@ What we change:
 
 ## Sources studied
 
-See `design.md`. Interaction ideas informed by the behaviours of function, area and slope-field tools described in the manual pages `Functions`, `SlopeField`, `Integral`, `RectangleSum` and by the way those commands draw in `euclidian/draw/` (function area, slope, inequality drawables) and `euclidian/plot/`.
+Removed before the repository was made public. The study notes above are in our own words.
