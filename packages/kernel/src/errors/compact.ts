@@ -1,6 +1,6 @@
 /**
  * The compact form of an error for a model (docs/features/errors/design.md section 3.5): at most about 800 characters
- * of JSON, with `forms` capped at 4 and `formsOmitted` counting the rest, `expected` at 8 and `suggest` at 3.
+ * of JSON (no `params`, `messageKey`, `fingerprint`, `committed` or `phase`: errors/agent.md 1), with `forms` capped at 4 and `formsOmitted` counting the rest, `expected` at 8 and `suggest` at 3.
  */
 import type { ErrorObject } from '../contracts/errors';
 
@@ -23,7 +23,6 @@ export function compactError(e: ErrorObject, opts: { sentSource?: boolean; limit
     endCol: e.endCol,
     token: e.token,
     recovery: e.recovery,
-    committed: false,
   };
   if (e.expected.length > 0) out['expected'] = e.expected.slice(0, 8);
   if (forms.length > 0) out['forms'] = forms;
@@ -34,7 +33,6 @@ export function compactError(e: ErrorObject, opts: { sentSource?: boolean; limit
   if (e.related && e.related.length > 0) out['related'] = e.related.slice(0, 4);
   if (e.blockedBy) out['blockedBy'] = e.blockedBy;
   if (e.source !== undefined && !opts.sentSource) out['source'] = e.source;
-  out['fingerprint'] = e.fingerprint;
   if (e.cause) out['cause'] = { kind: e.cause.kind, code: e.cause.code, message: e.cause.message, token: e.cause.token };
   // trim the least useful parts until the size fits
   const size = (): number => JSON.stringify(out).length;
