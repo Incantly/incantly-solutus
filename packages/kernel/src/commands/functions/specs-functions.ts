@@ -1380,46 +1380,111 @@ function runTaylor(call: RuleCall): unknown {
 
 /* ------------------------------ Asymptote of a function ------------------------------ */
 
-/**
- * Polishes a coarse pole location by Newton on the reciprocal, tolerating the NaN
- * at the pole itself: a step landing on NaN is halved back until defined. Falls
- * back to the coarse location. Deterministic.
- */
-function poleRefine(rec: Fn1, bx: number, a: number, b: number, tol: number, work: RuleWork): number {
-  let x = bx;
-  let fx = rec(x);
-  if (fx !== fx) return bx;
-  for (let i = 0; i < 40; i++) {
-    if (Math.abs(fx) <= tol) return x;
-    if (!work.spend(3)) return x;
-    const h = 6e-6 * Math.max(1, Math.abs(x));
-    const d = (rec(x + h) - rec(x - h)) / (2 * h);
-    if (d !== d || d === 0) return x;
-    let step = fx / d;
-    const maxStep = 4 * Math.max(1, Math.abs(x));
-    if (Math.abs(step) > maxStep) step = step > 0 ? maxStep : -maxStep;
-    let nx = x - step;
-    let nfx = rec(nx);
-    if (!work.spend(1)) return x;
-    for (let k = 0; k < 10 && nfx !== nfx; k++) {
-      step /= 2;
-      nx = x - step;
-      nfx = rec(nx);
-      if (!work.spend(1)) return x;
-    }
-    if (nfx !== nfx) return x;
-    if (nx < a || nx > b) return x;
-    x = nx;
-    fx = nfx;
-  }
-  return x;
-}
-
 /** Snaps a located point to the nearest simple fraction (k / 120) when it is within `tol` of it. */
 function snapNice(x: number, tol: number): number {
   if (!Number.isFinite(x)) return x;
   const k = Math.round(x * 120) / 120;
   return Math.abs(x - k) <= tol * Math.max(1, Math.abs(x)) ? k : x;
+}
+
+/** Does `|f|` grow without bound as x approaches `c` from `dir`? Returns the sign it grows to, or 0. */
+function blowsUp(f: Fn1, c: number, dir: 1 | -1): 1 | -1 | 0 {
+  const m: number[] = [];
+  let last = 0;
+  for (const d of [1e-2, 1e-4, 1e-6, 1e-8]) {
+    const y = f(c + dir * d);
+    if (!(y === y) || y === Infinity || y === -Infinity) return 0;
+    m.push(Math.abs(y));
+    last = y;
+  }
+  const [m0, m1, m2, m3] = m as [number, number, number, number];
+  if (!(m0 < m1 && m1 < m2 && m2 < m3) || !(m3 > 10)) return 0;
+  // algebraic growth multiplies |f| by a large factor; logarithmic growth adds about the same amount at every step
+  if (m3 > 100 * m0 || m3 - m2 >= 0.9 * (m1 - m0)) return last > 0 ? 1 : -1;
+  return 0;
+}
+
+/** Vertical asymptotes of `f` inside `[a, b]`, sorted. Undefined (after `call.fail`) when the budget runs out. */
+function verticalAsymptotes(call: RuleCall, f: Fn1, a: number, b: number): number[] | undefined {
+  const tol = call.tol;
+  const rat = detectRational(f, call.work);
+  if (rat) {
+    const iso = interpRoots(rat.den, tol, call.work);
+    if (iso.spent) {
+      call.fail('timeout', 'The work budget ran out.');
+      return undefined;
+    }
+    return iso.roots.filter((x) => x >= a && x <= b).map((x) => snapNice(x, 1e-9));
+  }
+  const N = 2048;
+  const xs = new Float64Array(N + 1);
+  const vs = new Float64Array(N + 1);
+  for (let i = 0; i <= N; i++) {
+    if (!call.work.spend(1)) {
+      call.fail('timeout', 'The work budget ran out.');
+      return undefined;
+    }
+    xs[i] = i === N ? b : a + ((b - a) * i) / N;
+    vs[i] = f(xs[i] as number);
+  }
+  const cand: number[] = [];
+  const bisect = (l0: number, r0: number, towardsUndefined: boolean): number => {
+    let l = l0;
+    let r = r0;
+    const fl = f(l);
+    for (let k = 0; k < 60; k++) {
+      const m = 0.5 * (l + r);
+      if (m <= l || m >= r) break;
+      const fm = f(m);
+      const same = towardsUndefined ? (fm === fm) === (fl === fl) : fm === fm && fl === fl && Math.sign(fm) === Math.sign(fl);
+      if (fm === fm && !towardsUndefined && fm === 0) return m;
+      if (!towardsUndefined && fm !== fm) return m;
+      if (same) l = m;
+      else r = m;
+    }
+    return 0.5 * (l + r);
+  };
+  for (let i = 0; i < N; i++) {
+    const u = vs[i] as number;
+    const v = vs[i + 1] as number;
+    const x0 = xs[i] as number;
+    const x1 = xs[i + 1] as number;
+    if ((u === u) !== (v === v)) {
+      cand.push(bisect(x0, x1, true));
+      continue;
+    }
+    if (u === u && ((u < 0 && v > 0) || (u > 0 && v < 0))) cand.push(bisect(x0, x1, false));
+  }
+  // poles without a sign change (1/x^2): local maxima of |f| that tower over both neighbours
+  let towers = 0;
+  for (let i = 1; i < N && towers < 200; i++) {
+    const m = Math.abs(vs[i] as number);
+    const l = Math.abs(vs[i - 1] as number);
+    const r = Math.abs(vs[i + 1] as number);
+    if (!(m > 2 * l && m > 2 * r && m > 1)) continue;
+    towers++;
+    const g = (x: number): number => {
+      const y = f(x);
+      return y === y ? -Math.min(Math.abs(y), 1e300) : -1e300;
+    };
+    const c = goldenMin(g, xs[i - 1] as number, xs[i + 1] as number, call.work, 1e-12);
+    if (c === c) cand.push(c);
+  }
+  const found: number[] = [];
+  for (const c of cand) {
+    if (!call.work.spend(8)) {
+      call.fail('timeout', 'The work budget ran out.');
+      return undefined;
+    }
+    if (blowsUp(f, c, -1) !== 0 || blowsUp(f, c, 1) !== 0) found.push(snapNice(c, 1e-9));
+  }
+  const sorted = [...found].sort((p, q) => p - q);
+  const out: number[] = [];
+  for (const x of sorted) {
+    const last = out[out.length - 1];
+    if (last === undefined || Math.abs(x - last) > 1e-7 * Math.max(1, Math.abs(x))) out.push(x);
+  }
+  return out;
 }
 
 function runAsymptoteFn(call: RuleCall, withRange: boolean): unknown {
@@ -1435,72 +1500,8 @@ function runAsymptoteFn(call: RuleCall, withRange: boolean): unknown {
   }
   const tol = call.tol;
   if (b - a > 1e6) return call.fail('limit', 'Asymptote takes a search interval up to 1e6 wide.');
-  // Vertical candidates: undefined runs and sign changes with a large or undefined middle.
-  const N = 1024;
-  const xs: number[] = [];
-  const vs: number[] = [];
-  for (let i = 0; i <= N; i++) {
-    if (!call.work.spend(1)) return call.fail('timeout', 'The work budget ran out.');
-    const x = a + ((b - a) * i) / N;
-    xs.push(x);
-    vs.push(f.f(x));
-  }
-  const cand: number[] = [];
-  let i = 0;
-  while (i <= N) {
-    if ((vs[i] as number) === (vs[i] as number)) {
-      if (i < N && (vs[i + 1] as number) === (vs[i + 1] as number)) {
-        const u = vs[i] as number;
-        const v = vs[i + 1] as number;
-        if ((u < 0 && v > 0) || (u > 0 && v < 0)) {
-          const m = f.f(((xs[i] as number) + (xs[i + 1] as number)) / 2);
-          if (!call.work.spend(1)) return call.fail('timeout', 'The work budget ran out.');
-          if (m !== m || Math.abs(m) > 2 * Math.max(Math.abs(u), Math.abs(v), 1e-300)) {
-            cand.push(((xs[i] as number) + (xs[i + 1] as number)) / 2);
-          }
-        }
-      }
-      i++;
-      continue;
-    }
-    let j = i;
-    while (j + 1 <= N && (vs[j + 1] as number) !== (vs[j + 1] as number)) j++;
-    cand.push(((xs[i] as number) + (xs[j] as number)) / 2);
-    i = j + 1;
-  }
-  const verts: number[] = [];
-  for (const c of cand) {
-    // Localise by maximising |f| over the neighbourhood, then polish with Newton on 1/f.
-    const w = ((b - a) / N) * 4;
-    const l = Math.max(a, c - w);
-    const r = Math.min(b, c + w);
-    let bx = c;
-    let bv = -1;
-    for (let k = 0; k <= 64; k++) {
-      if (!call.work.spend(1)) return call.fail('timeout', 'The work budget ran out.');
-      const x = l + ((r - l) * k) / 64;
-      const v = Math.abs(f.f(x));
-      if (v === v && v > bv) {
-        bv = v;
-        bx = x;
-      }
-    }
-    const rec = (x: number): number => {
-      const v = f.f(x);
-      return v === v && v !== 0 ? 1 / v : Number.NaN;
-    };
-    const pole = snapNice(poleRefine(rec, bx, a, b, tol, call.work), 1e-9);
-    const left = limitOneSided(f.f, pole, -1, tol, call.work);
-    const right = limitOneSided(f.f, pole, 1, tol, call.work);
-    if (left.spent || right.spent) return call.fail('timeout', 'The work budget ran out.');
-    if (left.t === 'inf' || right.t === 'inf') verts.push(pole);
-  }
-  verts.sort((p, q) => p - q);
-  const dv: number[] = [];
-  for (const x of verts) {
-    const last = dv[dv.length - 1];
-    if (last === undefined || Math.abs(x - last) > tol * Math.max(1, Math.abs(x))) dv.push(x);
-  }
+  const dv = verticalAsymptotes(call, f.f, a, b);
+  if (dv === undefined) return undefined;
   // Horizontal and oblique, each end.
   interface Ob { readonly m: number; readonly c: number }
   const obs: Ob[] = [];
@@ -1528,7 +1529,8 @@ function runAsymptoteFn(call: RuleCall, withRange: boolean): unknown {
   const lines: { readonly a: number; readonly b: number; readonly c: number }[] = dv.map((x) => ({ a: 1, b: 0, c: x }));
   const seen: Ob[] = [];
   for (const o of obs) {
-    if (seen.some((s) => Math.abs(s.m - o.m) <= tol * Math.max(1, Math.abs(o.m)) && Math.abs(s.c - o.c) <= tol * Math.max(1, Math.abs(o.c)))) {
+    // the two ends give the same line up to the limit's own error (about 1e-9)
+    if (seen.some((s) => Math.abs(s.m - o.m) <= 1e-6 * Math.max(1, Math.abs(o.m)) && Math.abs(s.c - o.c) <= 1e-6 * Math.max(1, Math.abs(o.c)))) {
       continue;
     }
     seen.push(o);
