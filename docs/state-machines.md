@@ -334,3 +334,194 @@ Checked at commit `d2d9d9e` (pass 1), at `3220d23` (round 2, after the fixes for
 - **Invariants:** a table never changes under a compiled line; `checkTable` reports every pair of forms that accept the same arguments with neither more specific.
 - **Transitions:** none after creation; a new table is a new value. A figure's `commands` and `functions` may be swapped by the host between checking and compiling, but compiled lines hold the spec and form objects they were checked against.
 - **Reachable invalid states or transitions:** none found.
+
+## symbolic
+
+Checked at commit `3266a74` on `feat/symbolic` (pass 1, pipeline step 4). Paths are under `packages/symbolic/src/`; line numbers refer to `3266a74`. Findings are in `handoff/symbolic/findings.md` (SYM-SM-1 to SYM-SM-27, all open). Every reachable invalid state below was reproduced through the public entry (`src/index.ts`: `run`, `parseExpression`, `parseCondition`, `toText`, `toLatex`, `handleWorkerRequest`, `arena`, `clearCache`).
+
+### S1. `run`: one call from arguments to a cell
+
+- **Where:** `run.ts` `run` (lines 318 to 384), `runInner` (lines 386 to 470), `cacheKey`/`argKey` (lines 88 to 108), `cacheGet`/`cachePut` (lines 110 to 130), `runSteps` (lines 533 to 572); `ops.ts` `OPS` (line 2108).
+- **States:**
+
+| State | Holds |
+|---|---|
+| `validate` | positional and named arguments split; named names checked against the command's forms |
+| `resolve` | `ref` nodes replaced by live values (`ctx.resolveRef`) |
+| `plan` | heavy op with a clock read refused (`time_dependent_input`) |
+| `keyed` | cache key built from engine version, op, argument keys, domains and facts |
+| `fast-lane` | heavy op with `opts.fastLaneMs`: cache hit or `pending` |
+| `cached` | cache hit (not when `opts.steps`) |
+| `computing` | `OPS[op]` running under a fresh `Budget` and a `note` closure |
+| `done` | cell (defined or undefined) and notices; cell put in the cache unless `steps` or `pending` |
+| `failed` | an exception mapped by `run`'s `catch`: `OpError` to an error object; `Unsupported`, `NonElementary`, `LimitExceeded`, `BudgetExceeded` to undefined cells; `ParseFailure` to `syntax`/`limit`; anything else to `internal` |
+
+- **Invariants:** `run` never throws; the cache key covers every input that can change the output (arguments with their `exact`, `excluded` and `display` fields, assumptions, limits, engine version) and two different inputs never share a key; a budget stop never becomes a defined cell; `pending` is never cached; the same call gives the same cell whatever ran before (design 5.12, 5.13, acceptance 9); `op` names only an entry of the command table.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `validate` | named argument | name not in any form (op is not `Steps`) | `failed` | `bad_option` |
+| `validate` | done | | `resolve` | |
+| `resolve` | done | heavy op and an argument tree holds `t` | `failed` | `time_dependent_input` |
+| `resolve` | done | otherwise | `keyed` | |
+| `keyed` | | heavy and `fastLaneMs` set | `fast-lane` | |
+| `fast-lane` | cache lookup | hit | `done` | LRU touch |
+| `fast-lane` | cache lookup | miss | `done` (pending) | no computation at all, even for trivial input |
+| `keyed` | cache lookup | not `steps`, hit | `cached` → `done` | |
+| `keyed` | | op is `Steps` | `runSteps` | parses the call text, re-enters `run` with `{ steps: true }` and `ctx` only (`opts.limits` dropped) |
+| `keyed` | | otherwise | `computing` | `new Budget(limits, fastLaneMs)` |
+| `computing` | op returns | | `done` | `cachePut` unless `steps` |
+| `computing` | `BudgetExceeded('ms')` | `fastLaneMs` set | `done` (pending) | not cached |
+| `computing` | any exception | | `failed` | not cached |
+
+- **Reachable invalid states or transitions:**
+  - Two inputs share a key: `argKey` keys a Cond by `condText`, which prints `and`/`or`/`not` without brackets, and keys an Expr by node id only (no `excluded`, no `display`); `limits` are not in the key at all. `Assume((a < 0 or b > 0) and a > 0, sqrt(a^2))` is `a`; after it, `Assume(a < 0 or (b > 0 and a > 0), sqrt(a^2))` returns the cached `a` (fresh: `abs(a)`). An `Equivalent` whose first argument carries `excluded` leaves a `differ_at` notice in the cache for the same call without `excluded`. A `Simplify` run with a small `maxSteps` caches the unsimplified input, and the default call then gets it. SYM-SM-9 (open).
+  - `OPS[call.op]` in `runSteps` reads `Object.prototype`: `Steps("constructor(x)")`, `Steps("toString(x)")` and `Steps("valueOf()")` call those functions as ops, reach `computing` with no cell, put `{ cell: undefined }` in the cache and end in `internal`. SYM-SM-5 (open).
+  - `runSteps` parses untrusted text (and `Expr` with a text argument parses it) before any `Budget` exists, so S9's exponential parse is not in any state of this machine. SYM-SM-1 (open).
+  - The heavy fast lane never computes, so a heavy cell can never update in the same frame after a fast finish (design 5.13); with the worker in another realm its results never reach this cache (S7). SYM-SM-26 (open).
+
+### S2. Budget
+
+- **Where:** `run.ts` `Budget` (lines 52 to 72), `BudgetExceeded` (lines 32 to 41); `poly.ts` `Ticker`, `NO_TICK` (line 16); every `tick.tick(n)` call; `contracts.ts` `DEFAULT_LIMITS` (lines 207 to 218).
+- **States:** `counting` (steps ≤ `maxSteps`, wall time not yet checked or under `maxMs`); `exceeded-steps` (sticky: every later `tick` throws again); `exceeded-ms` (thrown once, then re-armed: the next 1,023 ticks pass before the next check).
+- **Invariants:** every loop whose length depends on the input ticks, or is bounded by a documented size limit checked before it starts; a `BudgetExceeded` always reaches `run` (S1 `failed`) and becomes `timeout` or `limit`; `maxNodes` (200,000) and `maxDigits` (100,000) are enforced; the number of steps and the result do not depend on the wall clock.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `counting` | `tick(n)` | steps + n > `maxSteps` | `exceeded-steps` | throw `BudgetExceeded('steps')` |
+| `counting` | `tick(n)` | 1,024 ticks since the last check and elapsed > `maxMs` | `exceeded-ms` | throw `BudgetExceeded('ms')` |
+| `exceeded-ms` | 1,024 more ticks | still over | `exceeded-ms` | throw again |
+| any | code path with `NO_TICK` or no ticker | | unchanged | no bound |
+
+- **Reachable invalid states or transitions:**
+  - Never-ticking paths: the `rootof` branch of the parser (`parse.ts` line 516, `upolyIsolate(p)` with `NO_TICK`; `Expr("rootof((x+1)^1000 - 2, 1)")` takes 215 s with `fastLaneMs: 2`), trial division in `roots.pull` and `roots.exact` (`rules.ts` lines 139, 367), all whole-number ops (`num.ts` `isPrimeBig`, `nextPrimeBig`, `divisorsFromFactors`, `primeFactorsBig` with its own 2,000,000-step budget, `binomialBig`). SYM-SM-2, SYM-SM-4 (open).
+  - `maxNodes` and `maxDigits` are never read: `Budget` never throws `'nodes'` or `'digits'`; `intPowNumber` squares the base before its digit check (`node.ts` line 605); `roots.exact` raises to `whole` with no check (`rules.ts` line 382); `ratPow` in `treeToUPoly` and `intDivisors` have none. `Factor(x^2 - (10^1000)^99)` with `maxMs: 50` kills the process with an out-of-memory abort. SYM-SM-3 (open).
+  - `Simplify` catches `BudgetExceeded` per candidate (S3), so a budget stop becomes a defined cell. SYM-SM-10 (open).
+
+### S3. Rewrite engine and the Simplify search
+
+- **Where:** `rules.ts` `runPasses` (lines 56 to 79), `SIMPLIFY_RULES` (line 390), `tryCandidate` (line 1392), `simplifyNode` (lines 1410 to 1452), `togetherNode` (line 507), `factorNode` (line 1145), `verifyFactor` (line 1201).
+- **States:** `canonical` (input after the constructors); `passes` (bottom-up rule application, repeated while a rule fired, at most 10,000 rule tries in total); per round (at most 3): `candidates` (input, expansion, together with cancelled factors, factored, trig-reduced, log/power, radicals), `scored` (cost, then fewer `add` nodes, then printed text), `chosen`; `final-together` (cancel once more if not dearer); `done` with `excluded`.
+- **Invariants:** each candidate is equal to the input wherever both are defined; `excluded` lists exactly the values a chosen cancellation removed; a candidate that fails is dropped, but a budget stop ends the whole call as `timeout` (design 5.13: a budget stop "becomes undefined `timeout`"); the result does not depend on wall time.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `canonical` | `runPasses(SIMPLIFY_RULES)` | | `candidates` | `note` per rule fired |
+| `candidates` | build each | builder throws anything | candidate dropped | exception swallowed (`tryCandidate`) |
+| `scored` | best is the current form | | `final-together` | |
+| `scored` | best differs | round < 3 | `candidates` | `simplify.choose` noted; excluded of a together winner added |
+| `final-together` | together result | has excluded and cost ≤ current + 1 | `done` | excluded added |
+
+- **Reachable invalid states or transitions:** `tryCandidate` swallows `BudgetExceeded`, `LimitExceeded` and internal errors, so `Simplify((x^2 - 1)/(x - 1))` with `maxSteps: 40` is the defined value `(x^2 - 1)/(x - 1)` (not `timeout`), and with the `ms` budget the result depends on machine speed; S1 then caches it. SYM-SM-10 (open). `roots.pull` and `roots.exact` loop without ticking (S2). `factorNode` builds multivariate results whose content is a junk constant (`x^2 - y^2` → `-36 * (x/36 + y/36) * (y - x)`) and stops early on `x^12 - 1`. SYM-SM-17 (open).
+
+### S4. Interning arena
+
+- **Where:** `node.ts` `createArena`, `arena` (lines 154 to 187), `ZERO`/`ONE`/`MINUS_ONE`/`TWO`/`HALF` (lines 332 to 336), `keyOf` (line 122), the id-keyed memo maps (`mapNodes`, `freeSymbols`, `nodeCount`, `substituteList`).
+- **States:** `live(n)` (a map from structural key to node; the next id is `n`); `cleared` (map empty, next id 1).
+- **Invariants:** one object per structure in a realm, so `===` is structural equality; the module constants are members of the arena; node ids are unique for the life of every cache entry and memo that holds them; the arena is rebuilt from live nodes past 1,000,000 nodes (design 5.13).
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `live(n)` | `intern(body)` | key present | `live(n)` | returns the existing node |
+| `live(n)` | `intern(body)` | key absent | `live(n + 1)` | new node with id `n` |
+| `live(n)` | `arena.clear()` | | `cleared` | constants and cached ids now point outside the arena |
+| any | size passes 1,000,000 | | (no transition) | nothing is ever rebuilt |
+
+- **Reachable invalid states or transitions:** after `arena.clear()`, `0` built by the parser is a different object from `ZERO`, so `Solve(x^2 - 4 == 0, x)` returns `[]`; ids restart at 1 while the run cache still holds entries keyed by old ids. The arena only grows: 3,000 calls of `Expand((x + i)^12)` with `clearCache()` between them leave 525,628 nodes and 169 MB of heap. SYM-SM-7 (open).
+
+### S5. Assumptions
+
+- **Where:** `assume.ts` (`assumptions`, `signOf`, `factSign`, `factSignBound`, `findContradiction`); `ops.ts` `opAssume` (lines 1723 to 1750); `run.ts` `makeAssumptions(ctx.domains, ctx.facts)` and the cache key (line 104).
+- **States:** an immutable `Assumptions` value per call: `domains` (symbol to domain) and `facts` (conditions). `Assume(c, e)` makes a new value with `facts ∪ c` (split on top-level `and`) for the inner `simplifyNode` only.
+- **Invariants:** no assumption outlives the call that made it; the cache key holds every domain and fact; a fact that contradicts another is `bad_assumption`; `factSignBound` drops the fact it is reading, so circular facts end.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| none | `run(op, args, opts, ctx)` | | `A0 = (ctx.domains, ctx.facts)` | part of the cache key (facts by `condText`) |
+| `A0` | `Assume(c, e)` | a fact names no symbol | error | `bad_assumption` |
+| `A0` | `Assume(c, e)` | a direct contradiction (`a > 0`, `a < 0`) | error | `bad_assumption` with `related` |
+| `A0` | `Assume(c, e)` | otherwise | `A1 = A0 + facts(c)` | `simplifyNode(e)` under `A1`; `A1` dropped on return |
+
+- **Reachable invalid states or transitions:** the store itself does not leak between calls (checked: no module state; the Assume facts live in a local value). The cache leaks them: facts and Cond arguments are keyed by bracket-free `condText`, so two different fact sets share a key (S1). SYM-SM-9 (open).
+
+### S6. Steps recorder
+
+- **Where:** `run.ts` `note` closure and `stage` (lines 437 to 441), `runSteps` (lines 533 to 572); `steps.ts` `TEACHING_RULES`, `PHRASES`, `stepsToText`, `parseCommandCall`.
+- **States:** `off` (`opts.steps` not set: `note` only updates `stage` and forwards to `ctx.note`); `recording` (each `note` appends `{ rule, before, after, teaching }` to `logged`); `formatted` (teaching steps with a phrase, at most 12 lines; none gives one line and notice `no_steps`).
+- **Invariants:** recording never reads or writes the cache; the inner command runs with the caller's budget and limits; a `Steps` call is a heavy op and never nests (`Steps(Steps(…))` is refused).
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `off` | `run(op, …, { steps: true })` | | `recording` | cache read and write skipped |
+| `recording` | rule fires | | `recording` | step appended; `stage` = `op: rule` |
+| `recording` | op returns | | `formatted` | |
+| `runSteps` | call text parsed | `OPS[op]` is undefined or op is `Steps` | error | `unknown_command` |
+| `runSteps` | inner `run` | | `recording` | inner call gets `ctx` only, never `opts.limits` |
+
+- **Reachable invalid states or transitions:** `OPS[op]` finds `Object.prototype` members (S1); the inner call drops `opts.limits`, so `Steps` always uses the default budget whatever the caller asked. SYM-SM-5, SYM-SM-4 (open). Step texts are built with `toText`, so they inherit S9's round-trip faults. SYM-SM-19 (open).
+
+### S7. Worker protocol
+
+- **Where:** `worker.ts` `WorkerRequest`, `WorkerResponse`, `handleWorkerRequest`, `WorkerHost` (lines 1 to 74).
+- **States (host side, per request id):** `posted` → `running` (the worker's synchronous `run`) → `answered`. Worker side: one module instance with its own arena (S4), run cache (S1) and family counter (S8).
+- **Invariants:** a job's arguments mean the same in the worker as on the main thread; an answer belongs to exactly one request id; a superseded job can be stopped or its answer recognised as stale; the worker's result is usable by the main thread's fast lane.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| none | `post(req)` | | `posted` | arguments cross by structured clone |
+| `posted` | `handleWorkerRequest` | | `running` | `ctx` from `domains`/`facts`; no `resolveRef` (the `needRef` round trip named in the comment does not exist) |
+| `running` | `run` returns | | `answered` | `{ id, result }` posted |
+| `running` | host wants to cancel | | (no transition) | there is no cancel message; the job runs to its budget (1,000 ms) |
+
+- **Reachable invalid states or transitions:** structured clone gives new objects that are not the worker arena's nodes, and in a real worker their ids name other nodes. In one process, `handleWorkerRequest(structuredClone({ id: 1, op: 'Solve', args: [x^2 - 1 == 0, x] }), run)` returns `[]`; the same call on the original objects returns `[x == -1, x == 1]`. SYM-SM-8 (open). No cancel, no stale-answer rule and no way to feed the main-thread cache. SYM-SM-26 (open).
+
+### S8. Family parameter counter
+
+- **Where:** `solve.ts` `trigParamNext` (line 882), `resetTrigParams`, uses at lines 817, 945, 988 and 2269.
+- **States:** a module-wide integer `n`; each trig, complex-exponential or enumerated family takes `k{n}` and moves to `n + 1`.
+- **Invariants:** a result does not depend on calls made before it (design 5.12, acceptance 9); the parameter is an integer symbol for the result (design 2.3).
+- **Transitions:** `n` → `n + 1` on every family built, including families later dropped and calls that end `unsupported`; `resetTrigParams()` → 1.
+- **Reachable invalid states or transitions:** `Solve(sin(x) == 1/2, x)` gives `k1`, then `Solve(tan(x) == 1, x)` gives `k2`, and after `clearCache()` the first call gives `k3`; `Steps` (which skips the cache) moves it on every call. The symbol carries no `integer` domain. SYM-SM-21 (open).
+
+### S9. Text parser
+
+- **Where:** `parse.ts` `lex` (lines 43 to 121), `Parser` (lines 123 to 455), `numNode`, `nameNode`, `callNode` (lines 460 to 532); printer counterpart `print.ts` `textOf`, `condText`.
+- **States:** `cond-attempt` (`parseNot` at `(`, and `parseCondOrExpr` in `if` arguments: try a condition, on failure rewind `pos` and parse an expression); `expr` (sum, product with implicit multiplication after a number literal, unary, power, postfix degree, primary); `depth` (at most 500 nested primaries, then a `limit` failure).
+- **Invariants:** every text `toText`/`condText` prints parses back to the same node (design 5.11, acceptance 1); parse time is linear in the text (each token read a bounded number of times); keywords `and`, `or`, `not`, `in` are never operands; a number literal is a finite number; `rootof(p, k)` names an existing real root.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `if` argument | `parseCondOrExpr` | | `cond-attempt` | the whole argument is parsed as a condition first |
+| `cond-attempt` | no comparison follows | | rewind, `expr` | the argument is parsed a second time |
+| `expr` | number literal then a name or `(` | | product | implicit multiplication, also for the names `and`, `or`, `in` |
+| `lex` | digits and dots | | number token | `1.2.3` is one token, `Number` gives NaN |
+| `callNode` | `rootof(p, k)` | `p` a polynomial in `x` | node | `upolyIsolate(p)` with no ticker; `k` not checked against the root count |
+
+- **Reachable invalid states or transitions:** nested `if` arguments are parsed twice per level, so time doubles per level (16 levels 957 ms, 18 levels 3.8 s, through `run('Expr', [text])` with `fastLaneMs: 2`). SYM-SM-1 (open). `x > 0 and y < 1`, `x < 1 or x > 2` and the `cases` that `Solve(a*x == b, x)` prints (`a == 0 and -b == 0`) do not parse, because `0 and` is read as `0 * and`; `condText` drops the brackets of `and(or(…))` and `not(and(…))`; a float prints as a decimal that parses back as an exact rational (`0.5` → `1/2`), and NaN/Infinity print as names. SYM-SM-19 (open). `rootof(x^2 + 1, 1)` is accepted and `Numeric` gives `0`. SYM-SM-18 (open).
+
+### S10. Solve dispatch for one equation
+
+- **Where:** `solve.ts` `solveEquation` (lines 448 to 506), strategies `solveExact`, `solveRational`, `solveRadical`, `solveExpLog`, `solveTrig`, `solveAbs`, `solveBySubstitution`; `ops.ts` `solveOneCond` (lines 1054 to 1116); root isolation `poly.ts` `upolyIsolate`, `cauchyBound` (lines 531 to 591).
+- **States:** `absent` (unknown not in `f`: all or none); `classify` (strategies in order; `Unsupported` moves to the next); `family` (an integer parameter, enumerated when both `from` and `to` are finite); `filter` (interval, domain restrictions, `verifyRoot`); `sorted`; for `and`: solve the first equation, then keep solutions that satisfy the other relations.
+- **Invariants:** every solution satisfies the equation and every side condition; no real solution is missed; a case split lists only possible parameter values, and every value where the generic answer fails; "all" or "none" for a constant equation is decided exactly.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| start | `f` free of `v` | simplifies to 0 | all | |
+| start | `f` free of `v` | numeric value | all if \|value\| < 1e-12, else none | float test |
+| `classify` | a strategy returns | | `family` or `filter` | |
+| `classify` | all throw `Unsupported` | | `unsupported` | `detail` names the forms |
+| `and` | each solution of the equation | substituted difference is exactly 0 | kept | for every relation, including `<`, `>` and `!=` |
+| `and` | otherwise | float value | kept if the relation holds within 1e-9 | |
+| isolation | Cauchy bound | a coefficient above 1.8e308 | `BigInt(±Infinity)` | `RangeError` |
+
+- **Reachable invalid states or transitions:** `Solve(x^2 == 4 and x < 2, x)` and `Solve(x^2 == 4 and x != 2, x)` keep `x == 2`. SYM-SM-13. `Solve(exp(-30) == 0, x)` is "all". SYM-SM-12. `Solve(x^2 == a, x)` has no `a >= 0` condition and lists the impossible cases `1 == 0 and …`. SYM-SM-16. `Solve(x^3 - x - 10^400 == 0, x)` is `[]` after 992 ms and `NSolve` of it is `internal`. SYM-SM-6. `Solve(ln(x) == 0, x)` is `unsupported` while `ln(x) == 1` solves. SYM-SM-24. All open.
