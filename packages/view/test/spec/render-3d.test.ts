@@ -245,8 +245,9 @@ describe('space-3d 9.4/10.1 ray primitives', () => {
   it('10.1 ray-line closest approach; null when parallel (holds value)', () => {
     const hit = rayLineClosest(v3(0, 0, 0), v3(1, 0, 0), v3(5, 0, 1), v3(0, 0, 1));
     expect(hit).not.toBeNull();
+    // The ray meets height 0 at x = 5; the line point (5, 0, 1 + s) is closest at s = -1.
     expect(hit?.t).toBe(5);
-    expect(hit?.s).toBe(0);
+    expect(hit?.s).toBe(-1);
     expect(rayLineClosest(v3(0, 0, 0), v3(1, 0, 0), v3(0, 1, 0), v3(1, 0, 0))).toBeNull();
   });
 

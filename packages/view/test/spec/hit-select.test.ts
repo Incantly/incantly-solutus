@@ -152,7 +152,7 @@ describe('design 10.5 cycling through overlaps', () => {
   });
 
   it('10.5 a click elsewhere or later restarts at the top candidate', () => {
-    let st = createCycleState();
+    const st = createCycleState();
     const p1 = cyclePick(st, three, 100, 100, 1000);
     if (p1 === null) return;
     const p2 = cyclePick(p1.state, three, 100, 100, 1100);

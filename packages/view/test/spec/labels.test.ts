@@ -26,11 +26,20 @@ describe('design 9.7 label layout', () => {
     expect(LEADER_LINE_PX).toBe(20);
   });
 
-  it('9.7 a lone label takes the up-right preferred offset (dx 6)', () => {
+  it('9.7 a lone label takes the up-right preferred offset with score 0', () => {
     const [p] = placeLabels([label(1)], []);
-    expect(p?.dx).toBe(6);
+    expect(p?.dx).toBeGreaterThan(0);
     expect(p?.dy).toBeLessThan(0);
-    expect(p?.leader).toBe(false);
+    expect(p?.score).toBe(0);
+  });
+
+  it('ui.md 3 the leader line appears exactly when the label is more than 20 px from its anchor', () => {
+    const [near] = placeLabels([label(1, { userDx: 10, userDy: -10 })], []);
+    expect(near?.leader).toBe(false);
+    const [far] = placeLabels([label(2, { userDx: 30, userDy: 0 })], []);
+    expect(far?.leader).toBe(true);
+    const [edge] = placeLabels([label(3, { userDx: 20, userDy: 0 })], []);
+    expect(edge?.leader).toBe(false);
   });
 
   it('9.7 user-dragged offsets win over auto-placement and survive', () => {

@@ -74,20 +74,37 @@ describe('design 14.1 export requests', () => {
     expect(e.region.x0).toBeLessThanOrEqual(-2);
     expect(e.region.x1).toBeGreaterThanOrEqual(10);
     const w = e.region.x1 - e.region.x0;
+    // 5% of 12 units on each side is 0.6; 12 px at 50 px/unit is only 0.24, so 5% wins.
     expect(w).toBeGreaterThanOrEqual(12.5);
     expect(w).toBeLessThanOrEqual(13.2);
   });
 
-  it('14.2 objects pad is at least 12 px', () => {
+  it('14.2 objects pad is at least 12 px on each side (0.24 units at 50 px/unit)', () => {
     const e = okValue(
       normalizeExport(req({ region: 'objects' }), ctx({
         objectBounds: [{ x0: maths(0), x1: maths(1), y0: maths(0), y1: maths(1) }],
       })),
       'minpad',
     );
-    expect(e.region.x1 - e.region.x0).toBeGreaterThanOrEqual(1.24);
+    // 5% of 1 unit is 0.05, below 12 px = 0.24 units, so the pad is 0.24 each side: width >= 1.48.
+    expect(e.region.x1 - e.region.x0).toBeGreaterThanOrEqual(1.48 - 1e-9);
     expect(e.region.x1 - e.region.x0).toBeLessThanOrEqual(2);
+    expect(e.region.x0).toBeLessThanOrEqual(-0.24 + 1e-9);
   });
+
+  it('14.2 the pixel minimum follows the source scale (100 px/unit gives 0.12 units)', () => {
+    const e = okValue(
+      normalizeExport(req({ region: 'objects' }), ctx({
+        pxPerUnit: 100,
+        objectBounds: [{ x0: maths(0), x1: maths(1), y0: maths(0), y1: maths(1) }],
+      })),
+      'minpad100',
+    );
+    expect(e.region.x1 - e.region.x0).toBeGreaterThanOrEqual(1.24 - 1e-9);
+    expect(e.region.x1 - e.region.x0).toBeLessThanOrEqual(1.5);
+  });
+
+
 
   it('14.2 custom regions pass through; empty ones fail', () => {
     const e = okValue(normalizeExport(req({ region: { x0: 0, x1: 2, y0: 0, y1: 2 } }), ctx()), 'custom');
@@ -107,18 +124,38 @@ describe('design 14.1 export requests', () => {
     expect(e.textAs).toBe('paths');
   });
 
-  it('14.2 sides over 16384 px fail with limit', () => {
+  it('14.2 the limits are 16,384 px a side and 50,000 SVG elements', () => {
     expect(MAX_EXPORT_SIDE_PX).toBe(16384);
     expect(MAX_SVG_ELEMENTS).toBe(50000);
-    const big = errOf(normalizeExport(req({ size: { widthPx: 20000 } }), ctx()), 'huge');
+  });
+
+  it('14.2 a PNG wider than 16384 px fails with limit', () => {
+    const big = errOf(normalizeExport(req({ format: 'png', size: { widthPx: 20000 } }), ctx()), 'huge');
     expect(big.kind).toBe('limit');
   });
 
-  it('14.2 the side cap counts size times scale; zero sizes fail', () => {
-    expect(normalizeExport(req({ scale: 3, size: { widthPx: 6000 } }), ctx()).ok).toBe(false);
-    expect(normalizeExport(req({ scale: 3, size: { widthPx: 600 } }), ctx()).ok).toBe(true);
-    expect(normalizeExport(req({ size: { widthPx: 0 } }), ctx()).ok).toBe(false);
+  it('14.2 a PNG exactly 16384 px wide is allowed', () => {
+    expect(normalizeExport(req({ format: 'png', size: { widthPx: 16384, heightPx: 100 } }), ctx()).ok).toBe(true);
   });
+
+  it('14.2 a PNG taller than 16384 px fails with limit', () => {
+    const big = errOf(normalizeExport(req({ format: 'png', size: { widthPx: 100, heightPx: 20000 } }), ctx()), 'tall');
+    expect(big.kind).toBe('limit');
+  });
+
+  it('14.2 the PNG side cap counts size times scale (canvas is size * scale)', () => {
+    const e = errOf(normalizeExport(req({ format: 'png', scale: 3, size: { widthPx: 6000 } }), ctx()), 'scaled');
+    expect(e.kind).toBe('limit');
+    expect(normalizeExport(req({ format: 'png', scale: 3, size: { widthPx: 600 } }), ctx()).ok).toBe(true);
+  });
+
+  it('14.2 a zero or negative size fails (bad_export reads as a core error)', () => {
+    expect(normalizeExport(req({ size: { widthPx: 0 } }), ctx()).ok).toBe(false);
+    expect(normalizeExport(req({ size: { widthPx: -5 } }), ctx()).ok).toBe(false);
+    expect(normalizeExport(req({ size: { widthPx: 100, heightPx: 0 } }), ctx()).ok).toBe(false);
+  });
+
+
 
   it('14.2 unknown formats fail', () => {
     expect(normalizeExport(req({ format: 'pdf' as never }), ctx()).ok).toBe(false);

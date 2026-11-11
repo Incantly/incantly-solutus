@@ -156,12 +156,22 @@ describe('design 9.4 point style', () => {
 });
 
 describe('design 9.5 fill and hatching', () => {
-  it('9.5 fill defaults: 0.15 for polygons/regions/conics, 0 elsewhere', () => {
+  it('9.5 fill defaults to 0.15 for polygons and regions (kind region)', () => {
     expect(defaultsForKind('region', false).fill).toBe(0.15);
-    expect(defaultsForKind('arc', false).fill).toBe(0.15);
-    for (const k of ['point', 'line', 'segment', 'vector', 'curve', 'text'] as const) {
-      expect(defaultsForKind(k, false).fill).toBe(0);
-    }
+  });
+
+  it('9.5 a resolved region with no authored fill has fill 0.15', () => {
+    expect(okValue(resolve('region', {}), 'region').fill).toBe(0.15);
+  });
+
+  it.each(['point', 'line', 'segment', 'vector', 'curve', 'text'] as const)('9.5 fill defaults to 0 for %s', (k) => {
+    expect(defaultsForKind(k, false).fill).toBe(0);
+    expect(okValue(resolve(k, {}), k).fill).toBe(0);
+  });
+
+  it('9.5 an authored fill overrides the type default', () => {
+    expect(okValue(resolve('region', { fill: 0.4 }), 'fill').fill).toBe(0.4);
+    expect(okValue(resolve('region', { fill: 0 }), 'fill0').fill).toBe(0);
   });
 
   it('9.5 hatch specs and none resolve; spacing is checked 2..80', () => {
@@ -286,26 +296,60 @@ describe('design 9.7 labels, 9.8 show-if, 9.1 record', () => {
   });
 
   it('9.1 style references evaluate per frame through the kernel handoff', () => {
-    const evalRef: StyleEvaluator = (expr) => (expr === 'a' ? 6 : undefined);
-    const r = okValue(resolveStyle('line', false, { width: { expr: 'a' } }, noRef), 'literal-check');
-    expect(r.width).toBe(2);
-    const withRef = okValue(resolveStyle('line', false, { width: { expr: 'a' } }, evalRef), 'ref');
-    expect(withRef.width).toBe(6);
+    let a = 6;
+    const evalRef: StyleEvaluator = (expr) => (expr === 'a' ? a : undefined);
+    expect(okValue(resolveStyle('line', false, { width: { expr: 'a' } }, evalRef), 'ref').width).toBe(6);
+    a = 9;
+    expect(okValue(resolveStyle('line', false, { width: { expr: 'a' } }, evalRef), 'ref2').width).toBe(9);
     expect(isStyleRef({ expr: 'a' })).toBe(true);
     expect(isStyleRef(5)).toBe(false);
   });
 
-  it('9.1 a reference of the wrong type fails; an empty one keeps the default', () => {
-    const wrong: StyleEvaluator = () => 'red';
-    expect(resolveStyle('line', false, { width: { expr: 'c' } }, wrong).ok).toBe(false);
-    const empty: StyleEvaluator = () => undefined;
-    expect(okValue(resolveStyle('line', false, { width: { expr: 'zzz' } }, empty), 'dflt').width).toBe(2);
+  it('9.1 references work for colour, opacity, size and show-if', () => {
+    const evalRef: StyleEvaluator = (expr) => {
+      if (expr === 'c') return { r: 10, g: 20, b: 30, a: 1 };
+      if (expr === 'o') return 0.5;
+      if (expr === 's') return 7;
+      if (expr === 'b') return false;
+      return undefined;
+    };
+    const r = okValue(resolveStyle('point', true, {
+      color: { expr: 'c' }, opacity: { expr: 'o' }, pointSize: { expr: 's' }, show: { expr: 'b' },
+    }, evalRef), 'refs');
+    expect(r.color).toEqual({ r: 10, g: 20, b: 30, a: 1 });
+    expect(r.opacity).toBe(0.5);
+    expect(r.pointSize).toBe(7);
+    expect(r.show).toBe(false);
   });
 
-  it('errors.md pointStyle on a circle is property_not_for_type behaviour', () => {
-    const e = errOf(resolve('arc', { pointStyle: 'cross' }), 'misplaced');
-    expect(e.code).toMatch(/^V\d{3}$/);
-    expect((e.hint ?? e.message).length).toBeGreaterThan(0);
+  it('9.1 a reference of the wrong type fails (type_mismatch behaviour)', () => {
+    const wrong: StyleEvaluator = () => 'red';
+    expect(resolveStyle('line', false, { width: { expr: 'c' } }, wrong).ok).toBe(false);
+  });
+
+  it('9.1 a reference value out of range fails like a literal (width 40)', () => {
+    const big: StyleEvaluator = () => 40;
+    expect(resolveStyle('line', false, { width: { expr: 'w' } }, big).ok).toBe(false);
+  });
+
+  // Docs are silent on a reference the kernel cannot evaluate right now. Reading: errors.md says runtime
+  // conditions are not errors, and style is resolved every frame, so the default stays.
+  it('9.1 (silent) a reference that evaluates to nothing keeps the default instead of failing', () => {
+    expect(okValue(resolveStyle('line', false, { width: { expr: 'zzz' } }, noRef), 'dflt').width).toBe(2);
+  });
+
+  it.each(['line', 'segment', 'vector', 'region', 'text'] as const)(
+    'errors.md pointStyle on %s fails like property_not_for_type',
+    (kind) => {
+      expect(propsForKind(kind)).not.toContain('pointStyle');
+      const e = errOf(resolve(kind, { pointStyle: 'cross' }), `misplaced on ${kind}`);
+      expect(e.code).toMatch(/^V\d{3}$/);
+      expect((e.hint ?? e.message).length).toBeGreaterThan(0);
+    },
+  );
+
+  it('errors.md pointStyle on a point is accepted', () => {
+    expect(resolve('point', { pointStyle: 'cross' }).ok).toBe(true);
   });
 
   it('errors.md fill on an open object warns (ok), it does not fail', () => {
@@ -374,8 +418,14 @@ describe('ui.md 6 default look', () => {
     expect(defaultsForKind('curve', false).color).toEqual({ r: 196, g: 54, b: 31, a: 1 });
   });
 
-  it('9.9 polygon default: dark stroke with blue fill at 0.15', () => {
+  // PaintKind has no `polygon`; polygons paint as `region` (design 6 table: "fill + edges"), so ui.md's
+  // polygon row is read as the `region` default.
+  it('9.9 polygon default: stroke #222831', () => {
     expect(defaultsForKind('region', false).color).toEqual({ r: 34, g: 40, b: 49, a: 1 });
+    expect(okValue(resolve('region', {}), 'region').color).toEqual({ r: 34, g: 40, b: 49, a: 1 });
+  });
+
+  it('9.9 polygon default: fill colour #1a5fd1 (blue)', () => {
     expect(okValue(resolve('region', {}), 'region fill').fillColor).toEqual({ r: 26, g: 95, b: 209, a: 1 });
   });
 

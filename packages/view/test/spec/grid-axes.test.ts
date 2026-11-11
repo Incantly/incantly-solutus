@@ -89,12 +89,23 @@ describe('design 5 grid and axes', () => {
     expect(chooseStep(800, unit, null, null).step).toBe(0.1);
   });
 
-  it('5 pi-axis steps are multiples of pi/12 inside the pixel target', () => {
+  const PI_STEPS = [Math.PI / 6, Math.PI / 4, Math.PI / 3, Math.PI / 2, Math.PI, 2 * Math.PI, 4 * Math.PI, 8 * Math.PI];
+
+  // Steps below pi/6 are not listed in the docs, so only the documented range (up to 200 px/unit) is checked.
+  it.each([30, 50, 80, 120, 200])('5 pi-axis step at %d px/unit comes from pi/6, pi/4, pi/3, pi/2, pi, 2pi, ...', (scale) => {
+    const s = chooseStep(scale, piUnit, null, null).step;
+    expect(PI_STEPS.some((v) => Math.abs(v - s) < 1e-9)).toBe(true);
+  });
+
+  it('5 pi-axis step stays inside the 45..160 px band at 80 px/unit', () => {
     const s = chooseStep(80, piUnit, null, null).step;
     expect(s * 80).toBeGreaterThanOrEqual(45);
     expect(s * 80).toBeLessThanOrEqual(160);
-    const k = s / (Math.PI / 12);
-    expect(Math.abs(k - Math.round(k))).toBeLessThan(1e-9);
+  });
+
+  it('5 pi-axis step closest to the 80 px target at 80 px/unit is pi/4 or pi/3', () => {
+    const s = chooseStep(80, piUnit, null, null).step;
+    expect([Math.PI / 4, Math.PI / 3].some((v) => Math.abs(v - s) < 1e-9)).toBe(true);
   });
 
   it('5 tickPositions lists the multiples of the step in range', () => {

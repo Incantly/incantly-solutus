@@ -276,7 +276,23 @@ describe('space-3d 8.2 near/far, zoom, build', () => {
     const b = cam({ aspect: v3(1, 1, 1) });
     const pa = projectPoint(a, v3(1, 0, 0));
     const pb = projectPoint(b, v3(1, 0, 0));
-    closeTo(Math.abs(pa.x - 400), 2 * Math.abs(pb.x - 400), 6);
+    closeTo(Math.hypot(pa.x - 400, pa.y - 300), 2 * Math.hypot(pb.x - 400, pb.y - 300), 6);
+  });
+
+  it('8.2 aspect (1,1,2) draws z twice as tall ("z drawn twice as tall")', () => {
+    const a = cam({ aspect: v3(1, 1, 2) });
+    const b = cam({ aspect: v3(1, 1, 1) });
+    const pa = projectPoint(a, v3(0, 0, 1));
+    const pb = projectPoint(b, v3(0, 0, 1));
+    closeTo(Math.abs(pa.y - 300), 2 * Math.abs(pb.y - 300), 6);
+  });
+
+  it('8.2 aspect also applies to the perspective camera', () => {
+    const a = cam({ aspect: v3(1, 1, 2), projection: 'persp' });
+    const b = cam({ aspect: v3(1, 1, 1), projection: 'persp' });
+    const pa = projectPoint(a, v3(0, 0, 1));
+    const pb = projectPoint(b, v3(0, 0, 1));
+    expect(Math.abs(pa.y - 300)).toBeGreaterThan(1.5 * Math.abs(pb.y - 300));
   });
 
   it('8.2 zUp false builds a valid y-up camera', () => {

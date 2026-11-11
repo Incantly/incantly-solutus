@@ -30,7 +30,7 @@ import {
   zoomClass,
 } from '@incantly/view';
 import type { PaintContext, SortKey } from '@incantly/view';
-import { head, oid, stubDrawable, stubKernel, stubStyles, testStyle, testViewport } from './helpers';
+import { closeTo, head, oid, stubDrawable, stubKernel, stubStyles, testStyle, testViewport } from './helpers';
 
 function paintContext(): PaintContext {
   return {
@@ -196,22 +196,55 @@ describe('design 7.1 draw list and kernel events', () => {
     expect(list.size).toBe(0);
   });
 
-  it('7.2 markViewDirtyAll flags every drawable; pan shifts shiftable ones', () => {
+  it('7.2 markViewDirtyAll flags every drawable (a zoom marks all)', () => {
     const list = new DrawList();
-    const plain = stubDrawable({ id: 1, kind: 'point', rank: 5 });
-    const shiftable = stubDrawable({ id: 2, kind: 'point', rank: 5 });
-    (shiftable as unknown as Record<string, unknown>)['shiftPixels'] = () => true;
-    list.add(plain);
-    list.add(shiftable);
+    list.add(stubDrawable({ id: 1, kind: 'point', rank: 5 }));
+    list.add(stubDrawable({ id: 2, kind: 'line', rank: 3 }));
     list.markViewDirtyAll();
     expect(list.get(oid(1))?.viewDirty).toBe(true);
     expect(list.get(oid(2))?.viewDirty).toBe(true);
-    const l2 = new DrawList();
-    l2.add(plain);
-    l2.add(shiftable);
-    l2.markPanDirty(10, 0);
-    expect(l2.get(oid(1))?.viewDirty).toBe(true);
-    expect(l2.get(oid(2))?.viewDirty).toBe(false);
+  });
+
+  function realDrawable(id: number, kind: 'point' | 'line' | 'curve', value: unknown): GeometryDrawable {
+    const d = new GeometryDrawable({ id: oid(id), name: `n${String(id)}`, kind, order: id, layer: 0, free: false, onPath: false, measure });
+    d.update({ head: head(id, `n${String(id)}`), value: { defined: true, value } } as never, testViewport(), testStyle(kind));
+    return d;
+  }
+
+  it('7.2 pan only: a maths-anchored point shifts its cached pixels and stays clean', () => {
+    const list = new DrawList();
+    list.add(realDrawable(1, 'point', { k: 'point', x: 1, y: 2 }));
+    list.markPanDirty(10, 0);
+    expect(list.get(oid(1))?.viewDirty).toBe(false);
+  });
+
+  it('7.2 pan only: lines (clip-dependent) are marked dirty', () => {
+    const list = new DrawList();
+    list.add(realDrawable(1, 'line', { k: 'line', ox: 0, oy: 0, dx: 1, dy: 1 }));
+    list.markPanDirty(10, 0);
+    expect(list.get(oid(1))?.viewDirty).toBe(true);
+  });
+
+  it('7.2 pan only: curves (sample range depends on the view) are marked dirty', () => {
+    const list = new DrawList();
+    list.add(realDrawable(1, 'curve', { k: 'curve', runs: [new Float64Array([0, 0, 1, 1, 2, 0])] }));
+    list.markPanDirty(10, 0);
+    expect(list.get(oid(1))?.viewDirty).toBe(true);
+  });
+
+  it('7.2 pan shifts the cached pixels by (dx, dy)', () => {
+    const d = realDrawable(1, 'point', { k: 'point', x: 1, y: 2 });
+    const before = d.bbox;
+    const list = new DrawList();
+    list.add(d);
+    list.markPanDirty(10, 5);
+    const after = d.bbox;
+    expect(before).not.toBeNull();
+    expect(after).not.toBeNull();
+    if (before !== null && after !== null) {
+      closeTo(after.x0 - before.x0, 10);
+      closeTo(after.y0 - before.y0, 5);
+    }
   });
 
   it('7.1 activeIds lists the drawables dirty this frame', () => {

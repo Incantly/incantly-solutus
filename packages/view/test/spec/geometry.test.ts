@@ -297,11 +297,17 @@ describe('design 10.7 exactness', () => {
       testViewport(),
       testStyle('text'),
     );
-    // 'hi' at 14px centres 16.8 x 16.8 on the (450, 200) anchor.
-    const h = d.hit({ x: px(450), y: px(200) }, 0);
+    // The docs fix the rule (measured rectangle + 2 px), not the anchor alignment: use the drawable's bbox.
+    const b = d.bbox;
+    expect(b).not.toBeNull();
+    if (b === null) return;
+    const cx = (b.x0 + b.x1) / 2;
+    const cy = (b.y0 + b.y1) / 2;
+    const h = d.hit({ x: px(cx), y: px(cy) }, 0);
     expect(h).not.toBeNull();
     expect(h?.priority).toBe(2);
-    expect(d.hit({ x: px(444), y: px(196) }, 0)).not.toBeNull();
+    expect(d.hit({ x: px(b.x1 + 1.5), y: px(cy) }, 0)).not.toBeNull();
+    expect(d.hit({ x: px(b.x1 + 40), y: px(cy) }, 0)).toBeNull();
     expect(d.hit({ x: px(600), y: px(500) }, 0)).toBeNull();
   });
 
