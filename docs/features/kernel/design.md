@@ -335,7 +335,7 @@ Key points:
 | New inputs contain the object or a descendant | `cycle`, with `path` listing the chain `X -> ... -> X`. |
 | Different type | `type_change` (hint: `Delete(X)` first, or pick another name). |
 | Free object becomes rule, or the reverse | Allowed, same type. Style and id kept. Descendants recompute. |
-| Self-reference on a free `Number`, `Point` or `Bool` (`a = a + 1`, `A = A + (1, 1)`) | **Allowed**: evaluated once with the old value, stored as the new free value. It is an assignment, not a rule. Any other self-reference is `cycle`. |
+| Self-reference on a free `Number`, `Point` or `Bool` (`a = a + 1`, `A = A + Vector((1, 1))`) | **Allowed**: evaluated once with the old value, stored as the new free value. It is an assignment, not a rule. Any other self-reference is `cycle`. |
 | Fixed object | `locked` error. Hint: `X with fixed = false`. |
 | Redefine to the same text | Runs a plain update (matters for `rand`-like or clock-dependent rules); no structural change. |
 | Descendants become ill-typed | Not possible: types cannot change. A descendant that stops finding a valid argument shape becomes undefined, not an error (a rule's form was chosen when it was made). |

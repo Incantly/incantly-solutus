@@ -5,7 +5,7 @@ Rulings on places where the docs disagree. They win over the other kernel docs w
 | # | Topic | Ruling |
 |---|---|---|
 | K1 | `Rename` form | Both `Rename(M, N)` and `Rename(M, "N")` are accepted and do the same thing. |
-| K2 | `a = a + 1` | On an existing free `Number`, `Point` or `Bool` it is an assignment, run once with the old value (design section 8). On a new name it is `unknown_name`. Any other self-reference is `cycle`. Language design 3.17 now says the same. |
+| K2 | `a = a + 1` | On an existing free `Number`, `Point` or `Bool` it is an assignment, run once with the old value (design section 8). On a new name it is `unknown_name`. Any other self-reference is `cycle`. Language design 3.17 now says the same. A point moves by a vector, so the point example is `A = A + Vector((1, 1))`; `A + (1, 1)` is Point + Point, which is `type_mismatch` (language design 3.10). |
 | K3 | Warnings and notices | A result's notices live in `notices` (README decision 4). `changed.warnings` is the same array, kept only so older readers work. |
 | K4 | Summary text | `summary` is `"M = (2, 1)"`, with the type in a separate `type` field (agent.md form). |
 | K5 | Value shape | Values are the language's raw runtime values (numbers, points, lists, function values), not a `{ t, v }` tagged union. The type comes from the object's `type` field. |
@@ -14,3 +14,4 @@ Rulings on places where the docs disagree. They win over the other kernel docs w
 | K8 | `dragPlan` result | Returns `{ writes, reason?, kind? }`. `writes` is the list of `{ id, value }` free writes; when the drag is refused, `writes` is empty and `reason` says why (for example `locked`). |
 | K9 | Memory per object | The 600-byte target is not met: each object keeps its checked and compiled line. Known gap, revisit after the first areas plug in. |
 | K10 | Rate evaluation | Rates run as compiled closures. The flat `RateProgram` form in animation-time 7.2 is the motion area's job. |
+| K11 | `animate` property | `with animate = ...` is a real property, as design 10 and the 13.1 example use it. It belongs in the property table (9.1) for every drawable type. The kernel accepts and stores it; what each value does is the motion area's job. |
