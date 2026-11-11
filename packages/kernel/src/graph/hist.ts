@@ -474,7 +474,12 @@ export class FigureHist extends FigureTx {
     const over = this.batchBudget(lines);
     if (over) return { ok: false, results: [over], applied: 0, rolledBack: false, changed: emptyReport(), notices: [] };
     if (this.busy) return { ok: false, results: [this.busyError('applyBatch')], applied: 0, rolledBack: false, changed: emptyReport(), notices: [] };
-    this.commitDrag();
+    const dry = opts.dryRun === true;
+    // a dry run leaves an open gesture as it is: the lines see its values, and it is put back afterwards
+    const held = dry ? [...this.gesture] : [];
+    if (dry) this.gesture.clear();
+    else this.commitDrag();
+    const mark = dry ? { nextId: this.nextId, stepCursor: this.stepCursor } : undefined;
     const mode = opts.mode ?? 'atomic';
     const failed = new Map<string, { line: number; kind: import('../contracts/errors').ErrorKind }>();
     const results: TxResult[] = [];
@@ -501,12 +506,27 @@ export class FigureHist extends FigureTx {
         }
         if (typeof input === 'string') for (const n of targetNamesOf(input)) failed.set(n, { line: i + 1, kind: r.kind });
       }
+      if (dry) {
+        // the report is read while the lines are in, then everything is taken back
+        this.diffReport(pass, rep);
+        this.rollbackUnit(unit, pass);
+        return;
+      }
       this.journal.end();
       this.diffReport(pass, rep);
     });
+    if (mark) {
+      this.nextId = mark.nextId;
+      this.stepCursor = mark.stepCursor;
+      for (const [rec, before] of held) this.gesture.set(rec, before);
+    }
     this.deliver();
-    const failures = this.takeListenerFailures();
+    const failures = dry ? 0 : this.takeListenerFailures();
     if (failures > 0) rep.warnings.push(makeNotice('listener_failed', { where: 'a listener' }));
+    if (dry) {
+      const marked = results.map((r) => (r.ok ? ({ ...r, dryRun: true } as const) : r));
+      return { ok: marked.every((r) => r.ok), results: marked, applied, rolledBack, changed: rep, notices: rep.warnings, dryRun: true };
+    }
     return { ok: results.every((r) => r.ok), results, applied, rolledBack, changed: rep, notices: rep.warnings };
   }
 

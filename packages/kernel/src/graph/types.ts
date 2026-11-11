@@ -252,6 +252,11 @@ export interface BatchOptions {
   force?: boolean;
   /** The line number of each entry in the file it came from (default: its position, from 1). */
   lines?: readonly number[];
+  /**
+   * Runs the whole batch (later lines see earlier ones) and takes it all back: nothing is committed, no event is sent, ids and
+   * the undo history are as they were. The result has the shape of a real batch, with `dryRun: true` on it and on each success.
+   */
+  dryRun?: boolean;
 }
 
 export interface BatchResult {
@@ -265,6 +270,8 @@ export interface BatchResult {
   /** The merged change of the batch. */
   readonly changed: ChangeReport;
   readonly notices: readonly Notice[];
+  /** Present (true) when the batch was a dry run: it is what a commit would do, and nothing was committed. */
+  readonly dryRun?: true;
 }
 
 /* ------------------------------ descriptions ------------------------------ */

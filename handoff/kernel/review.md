@@ -136,6 +136,8 @@ Legend: done, partial, missing, different. "Probe" means I ran it.
 
 ### A6. No dry run for a batch
 
+**Status:** fixed in `graph/hist.ts`, `graph/types.ts`. `applyBatch(lines, { group, mode?, dryRun: true })` runs the lines in a unit and takes it all back: later lines see earlier ones; nothing is committed; no events; ids, redo stack, step cursor and an open gesture are as they were. It returns a `BatchResult` with `dryRun: true`, and `dryRun: true` on each success.
+
 - Docs: README 10, graphics-view C6 (`kernel.dryRun(lines)` returns the value and type of the last line), tools-2d T1 and 5.5 (previews from "the lines for the shortest completion"), errors/design 6 rule 9.
 - Code: `apply(line, { dryRun: true })` works for one line and leaves figure, journal and script unchanged (probe). `BatchOptions` (`graph/types.ts:236`) has no `dryRun`; passing one is ignored and the lines are committed (probe: `P` and `Q` were added).
 - Workaround to avoid: `applyBatch` then `undo` clears the redo stack and fires events.
