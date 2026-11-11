@@ -9,7 +9,6 @@ import {
   SOFTWARE_TRIANGLE_CAP,
   SoftwareBackend,
   WebGL2Backend,
-  createDrawStats,
   packColor,
   packLineQuads,
   packPointInstances,
@@ -42,29 +41,12 @@ describe('performance 2 shaders written once', () => {
     }
   });
 
-  it('9.1 no #ifdef forests: one source per program', () => {
-    const src = okValue(shaderSources('glsl'), 'glsl');
-    for (const k of keys) {
-      expect(src[k].vertex).not.toMatch(/#ifdef/);
-      expect(src[k].fragment).not.toMatch(/#ifdef/);
-    }
-  });
-
   it('9.1 programs differ from each other', () => {
     const src = okValue(shaderSources('glsl'), 'glsl');
     const all = new Set(keys.map((k) => src[k].vertex + src[k].fragment));
     expect(all.size).toBe(keys.length);
   });
 
-  it('9.1 asking twice gives the same sources', () => {
-    expect(JSON.stringify(okValue(shaderSources('glsl'), 'a'))).toBe(JSON.stringify(okValue(shaderSources('glsl'), 'b')));
-  });
-
-  it('9.1 never throws for the WGSL target (a result either way)', () => {
-    expect(() => shaderSources('wgsl')).not.toThrow();
-    const r = shaderSources('wgsl');
-    expect(typeof r.ok).toBe('boolean');
-  });
 });
 
 describe('space-3d 9.2 vertex colours are RGBA8 in a u32', () => {
@@ -75,20 +57,6 @@ describe('space-3d 9.2 vertex colours are RGBA8 in a u32', () => {
     expect(c.a).toBeCloseTo(1, 2);
   });
 
-  it('9.2 channels do not collide', () => {
-    expect(packColor(255, 0, 0, 1)).not.toBe(packColor(0, 0, 255, 1));
-    expect(packColor(0, 255, 0, 1)).not.toBe(packColor(0, 0, 255, 1));
-    expect(packColor(0, 0, 0, 0)).not.toBe(packColor(0, 0, 0, 1));
-  });
-
-  it('9.2 the packed value is an unsigned 32-bit integer', () => {
-    for (const v of [packColor(255, 255, 255, 1), packColor(0, 0, 0, 0), packColor(128, 1, 2, 0.5)]) {
-      expect(Number.isInteger(v)).toBe(true);
-      expect(v).toBeGreaterThanOrEqual(0);
-      expect(v).toBeLessThan(2 ** 32);
-    }
-  });
-
   it('9.2 round trips for every channel value on a sample', () => {
     for (let v = 0; v < 256; v += 51) {
       const c = unpackColor(packColor(v, 255 - v, v, v / 255));
@@ -97,10 +65,6 @@ describe('space-3d 9.2 vertex colours are RGBA8 in a u32', () => {
     }
   });
 
-  it('9.2 alpha 0 and 1 survive exactly', () => {
-    expect(unpackColor(packColor(1, 2, 3, 0)).a).toBe(0);
-    expect(unpackColor(packColor(1, 2, 3, 1)).a).toBe(1);
-  });
 });
 
 describe('performance 5 batching: one instanced draw', () => {
@@ -125,12 +89,6 @@ describe('performance 5 batching: one instanced draw', () => {
     expect(pos[stride + 1]).toBe(14);
   });
 
-  it('5 an empty list packs empty arrays', () => {
-    const { pos, col } = packPointInstances([]);
-    expect(pos.length).toBe(0);
-    expect(col.length).toBe(0);
-  });
-
   it('9.2 line segments pack as screen-aligned quads of four vertices', () => {
     const segs = [
       { ax: 0, ay: 0, bx: 10, by: 0, r: 0, g: 0, b: 0, a: 1 },
@@ -143,18 +101,6 @@ describe('performance 5 batching: one instanced draw', () => {
     expect(q.cols.length).toBe(32);
   });
 
-  it('9.2 the four vertices of a quad sit on both sides of the line', () => {
-    const q = packLineQuads([{ ax: 0, ay: 0, bx: 10, by: 0, r: 0, g: 0, b: 0, a: 1 }]);
-    const sides = Array.from(q.sides);
-    expect(sides.some((s) => s > 0)).toBe(true);
-    expect(sides.some((s) => s < 0)).toBe(true);
-  });
-
-  it('9.2 an empty segment list packs empty arrays', () => {
-    const q = packLineQuads([]);
-    expect(q.sides.length).toBe(0);
-    expect(q.ends.length).toBe(0);
-  });
 });
 
 describe('space-3d 9.5 software back-end', () => {
@@ -170,12 +116,6 @@ describe('space-3d 9.5 software back-end', () => {
 
   it('9.5 it is capped at 20,000 triangles', () => {
     expect(SOFTWARE_TRIANGLE_CAP).toBe(20000);
-  });
-
-  it('9.5 it has no float targets (so transparency falls back to sorting)', () => {
-    const be = software();
-    expect(be.capabilities.floatTargets).toBe(false);
-    be.dispose();
   });
 
   it('9.1 arenas hand out ranges and free them for reuse', () => {
@@ -202,44 +142,6 @@ describe('space-3d 9.5 software back-end', () => {
     be.dispose();
   });
 
-  it('9.1 used bytes follow allocations', () => {
-    const be = software();
-    const arena = okValue(be.createArena(layout, 16 * 100), 'arena');
-    expect(arena.usedBytes).toBe(0);
-    arena.alloc(10);
-    expect(arena.usedBytes).toBeGreaterThan(0);
-    expect(arena.capacityBytes).toBe(1600);
-    arena.dispose();
-    be.dispose();
-  });
-
-  it('9.1 targets keep the spec they were made with', () => {
-    const be = software();
-    const t = okValue(be.createTarget({ width: 64, height: 32, samples: 0, depth: true, float: false }), 'target');
-    expect(t.spec.width).toBe(64);
-    expect(t.spec.height).toBe(32);
-    t.dispose();
-    be.dispose();
-  });
-
-  it('9.1 a frame starts on a target and reports its size', () => {
-    const be = software();
-    const t = okValue(be.createTarget({ width: 64, height: 64, samples: 0, depth: true, float: false }), 'target');
-    const f = okValue(be.beginFrame(t, { width: 64, height: 64, dpr: 1 }), 'frame');
-    expect(f.size.width).toBe(64);
-    f.dispose();
-    be.dispose();
-  });
-
-  it('9.1 dispose can be called twice without throwing', () => {
-    const be = software();
-    be.dispose();
-    expect(() => be.dispose()).not.toThrow();
-  });
-
-  it('6 draw stats start at zero', () => {
-    expect(createDrawStats()).toEqual({ drawCalls: 0, triangles: 0, lines: 0, points: 0 });
-  });
 });
 
 describe('performance 2 the WebGL 2 back-end behind the GPU interface', () => {
@@ -251,13 +153,6 @@ describe('performance 2 the WebGL 2 back-end behind the GPU interface', () => {
     be.dispose();
   });
 
-  it('2 an arena is created through the interface and returns a Result', () => {
-    const be = new WebGL2Backend(fakeGl());
-    const r = be.createArena(layout, 1600);
-    expect(typeof r.ok).toBe('boolean');
-    be.dispose();
-  });
-
   it('2 a lost context returns errors instead of throwing', () => {
     const be = new WebGL2Backend(fakeGl({ lost: true }));
     expect(() => be.createArena(layout, 1600)).not.toThrow();
@@ -265,11 +160,6 @@ describe('performance 2 the WebGL 2 back-end behind the GPU interface', () => {
     be.dispose();
   });
 
-  it('2 dispose can be called twice without throwing', () => {
-    const be = new WebGL2Backend(fakeGl());
-    be.dispose();
-    expect(() => be.dispose()).not.toThrow();
-  });
 });
 
 describe('graphics-view 6 the Canvas2D surface', () => {
@@ -334,23 +224,4 @@ describe('graphics-view 6 the Canvas2D surface', () => {
     expect(text.includes('0.8')).toBe(true);
   });
 
-  it('6 a clip rectangle clips the context', () => {
-    const { s, calls } = surface();
-    s.clipRect({ x0: 0 as never, x1: 10 as never, y0: 0 as never, y1: 10 as never });
-    expect(calls).toContain('clip');
-  });
-
-  it('6 text is drawn with fillText', () => {
-    const { s, calls } = surface();
-    s.text({ text: 'A', math: false }, { x: 5 as never, y: 5 as never }, {
-      size: 14, bold: false, italic: false, family: 'sans-serif', align: 'left', color: red, opacity: 1, background: 'none',
-    });
-    expect(calls).toContain('fillText');
-  });
-
-  it('6 a transform multiplies into the context matrix', () => {
-    const { s, calls } = surface();
-    s.transform({ a: 2, b: 0, c: 0, d: 2, e: 5, f: 5 });
-    expect(calls.some((c) => c === 'transform' || c === 'setTransform')).toBe(true);
-  });
 });

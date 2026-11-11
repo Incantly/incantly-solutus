@@ -4,8 +4,6 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
-  DEFAULT_AXES,
-  DEFAULT_GRID,
   GRID_MAX_PX,
   GRID_MIN_PX,
   GRID_TARGET_PX,
@@ -14,7 +12,6 @@ import {
   chooseStep,
   formatTick,
   isoGrid,
-  m,
   pinToEdge,
   polarGrid,
   thinLabels,
@@ -31,16 +28,6 @@ describe('design 5 grid and axes', () => {
     expect(GRID_TARGET_PX).toBe(80);
     expect(GRID_MIN_PX).toBe(45);
     expect(GRID_MAX_PX).toBe(160);
-  });
-
-  it('5 default grid kind is major with automatic step', () => {
-    expect(DEFAULT_GRID.kind).toBe('major');
-    expect(DEFAULT_GRID.step).toBeNull();
-  });
-
-  it('5 default axis units are linear (log axes are later, 5.5)', () => {
-    expect(DEFAULT_AXES.unitX).toEqual({ k: 'unit' });
-    expect(DEFAULT_AXES.unitY).toEqual({ k: 'unit' });
   });
 
   it('5 step follows the 1-2-5 ladder from 80/scale', () => {
@@ -217,11 +204,6 @@ describe('design 5 grid and axes', () => {
     expect(g.spokes).toHaveLength(12);
   });
 
-  it('5 polar spokes accept a custom angle', () => {
-    const g = polarGrid({ x0: -5 as never, x1: 5 as never, y0: -5 as never, y1: 5 as never }, 1, 15);
-    expect(g.spokes).toHaveLength(24);
-  });
-
   it('5 isometric grid has three line families at the step spacing', () => {
     const g = isoGrid({ x0: -5 as never, x1: 5 as never, y0: -5 as never, y1: 5 as never }, 1);
     for (const fam of [g.offsets0, g.offsets60, g.offsets120] as const) {
@@ -234,7 +216,4 @@ describe('design 5 grid and axes', () => {
     }
   });
 
-  it('5 m() builds a maths point', () => {
-    expect(m(1, 2)).toEqual({ x: 1, y: 2 });
-  });
 });

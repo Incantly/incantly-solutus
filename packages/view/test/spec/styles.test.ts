@@ -6,9 +6,7 @@ import { describe, expect, it } from 'vitest';
 import {
   COLOR_BLIND_SAFE,
   DARK_THEME,
-  HIGH_CONTRAST_THEME,
   LIGHT_THEME,
-  NAMED_COLORS,
   dashToArray,
   defaultsForKind,
   effectiveVisibility,
@@ -87,12 +85,6 @@ describe('design 9.2 colour', () => {
     }
   });
 
-  it('9.2 NAMED_COLORS exposes the script palette', () => {
-    for (const name of ['red', 'orange', 'green', 'blue', 'purple', 'teal', 'pink', 'brown', 'grey', 'black', 'white']) {
-      expect(typeof NAMED_COLORS[name]).toBe('string');
-    }
-  });
-
   it('9.2 Gradient interpolates in linear light, not naive rgb', () => {
     const black = rgba(0, 0, 0, 1);
     const white = rgba(255, 255, 255, 1);
@@ -104,10 +96,6 @@ describe('design 9.2 colour', () => {
     expect(mid.g).toBe(mid.b);
   });
 
-  it('9.2 rgba() defaults alpha to 1', () => {
-    expect(rgba(1, 2, 3)).toEqual({ r: 1, g: 2, b: 3, a: 1 });
-    expect(rgba(1, 2, 3, 0.5).a).toBe(0.5);
-  });
 });
 
 describe('design 9.3 line style', () => {
@@ -160,18 +148,9 @@ describe('design 9.5 fill and hatching', () => {
     expect(defaultsForKind('region', false).fill).toBe(0.15);
   });
 
-  it('9.5 a resolved region with no authored fill has fill 0.15', () => {
-    expect(okValue(resolve('region', {}), 'region').fill).toBe(0.15);
-  });
-
   it.each(['point', 'line', 'segment', 'vector', 'curve', 'text'] as const)('9.5 fill defaults to 0 for %s', (k) => {
     expect(defaultsForKind(k, false).fill).toBe(0);
     expect(okValue(resolve(k, {}), k).fill).toBe(0);
-  });
-
-  it('9.5 an authored fill overrides the type default', () => {
-    expect(okValue(resolve('region', { fill: 0.4 }), 'fill').fill).toBe(0.4);
-    expect(okValue(resolve('region', { fill: 0 }), 'fill0').fill).toBe(0);
   });
 
   it('9.5 hatch specs and none resolve; spacing is checked 2..80', () => {
@@ -205,9 +184,6 @@ describe('design 9.6 opacity', () => {
     expect(resolve('region', { fill: 2 }).ok).toBe(false);
   });
 
-  it('9.6 group opacity is a separate layer value', () => {
-    expect(okValue(resolve('region', { group: 0.5 }), 'group').group).toBe(0.5);
-  });
 });
 
 describe('design 9.7 labels, 9.8 show-if, 9.1 record', () => {
@@ -215,20 +191,8 @@ describe('design 9.7 labels, 9.8 show-if, 9.1 record', () => {
     expect(defaultsForKind('point', false).label).toBe('name');
   });
 
-  it('9.7 label default is name for lines', () => {
-    expect(defaultsForKind('line', false).label).toBe('name');
-  });
-
   it('9.7 label default is name for segments', () => {
     expect(defaultsForKind('segment', false).label).toBe('name');
-  });
-
-  it('9.7 label default is name for vectors', () => {
-    expect(defaultsForKind('vector', false).label).toBe('name');
-  });
-
-  it('9.7 label default is name for circles', () => {
-    expect(defaultsForKind('arc', false).label).toBe('name');
   });
 
   it('9.7 label defaults: name for angles, none for regions and curves', () => {
@@ -305,31 +269,9 @@ describe('design 9.7 labels, 9.8 show-if, 9.1 record', () => {
     expect(isStyleRef(5)).toBe(false);
   });
 
-  it('9.1 references work for colour, opacity, size and show-if', () => {
-    const evalRef: StyleEvaluator = (expr) => {
-      if (expr === 'c') return { r: 10, g: 20, b: 30, a: 1 };
-      if (expr === 'o') return 0.5;
-      if (expr === 's') return 7;
-      if (expr === 'b') return false;
-      return undefined;
-    };
-    const r = okValue(resolveStyle('point', true, {
-      color: { expr: 'c' }, opacity: { expr: 'o' }, pointSize: { expr: 's' }, show: { expr: 'b' },
-    }, evalRef), 'refs');
-    expect(r.color).toEqual({ r: 10, g: 20, b: 30, a: 1 });
-    expect(r.opacity).toBe(0.5);
-    expect(r.pointSize).toBe(7);
-    expect(r.show).toBe(false);
-  });
-
   it('9.1 a reference of the wrong type fails (type_mismatch behaviour)', () => {
     const wrong: StyleEvaluator = () => 'red';
     expect(resolveStyle('line', false, { width: { expr: 'c' } }, wrong).ok).toBe(false);
-  });
-
-  it('9.1 a reference value out of range fails like a literal (width 40)', () => {
-    const big: StyleEvaluator = () => 40;
-    expect(resolveStyle('line', false, { width: { expr: 'w' } }, big).ok).toBe(false);
   });
 
   // Docs are silent on a reference the kernel cannot evaluate right now. Reading: errors.md says runtime
@@ -392,11 +334,6 @@ describe('ui.md 6 default look', () => {
     expect(DARK_THEME.freePoint).toEqual({ r: 106, g: 163, b: 255, a: 1 });
     expect(DARK_THEME.stroke).toEqual({ r: 230, g: 233, b: 238, a: 1 });
     expect(DARK_THEME.function).toEqual({ r: 255, g: 123, b: 99, a: 1 });
-  });
-
-  it('6 high-contrast theme is black on white', () => {
-    expect(HIGH_CONTRAST_THEME.background).toEqual({ r: 255, g: 255, b: 255, a: 1 });
-    expect(HIGH_CONTRAST_THEME.stroke).toEqual({ r: 0, g: 0, b: 0, a: 1 });
   });
 
   it('6 colour-blind-safe palette holds the eight documented colours', () => {

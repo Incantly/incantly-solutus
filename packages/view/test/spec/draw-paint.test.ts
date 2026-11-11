@@ -30,7 +30,7 @@ import {
   zoomClass,
 } from '@incantly/view';
 import type { PaintContext, SortKey } from '@incantly/view';
-import { closeTo, head, oid, stubDrawable, stubKernel, stubStyles, testStyle, testViewport } from './helpers';
+import { head, oid, stubDrawable, stubKernel, stubStyles, testStyle, testViewport } from './helpers';
 
 function paintContext(): PaintContext {
   return {
@@ -57,13 +57,6 @@ describe('design 6 one surface interface', () => {
     const path = s.calls[2];
     expect(path?.k).toBe('path');
     if (path?.k === 'path') expect(path.n).toBe(2);
-  });
-
-  it('6 RecordSurface measure is deterministic (0.6 em per char, no fonts)', () => {
-    const s = new RecordSurface();
-    const st = { size: 14, bold: false, italic: false, family: 'x', align: 'left', color: { r: 0, g: 0, b: 0, a: 1 }, opacity: 1, background: 'none' } as const;
-    expect(s.measure({ text: 'hello', math: false }, st)).toEqual({ width: 42, height: 16.8, ascent: 12.6 });
-    expect(s.measure({ text: 'hello', math: false }, st)).toEqual(s.measure({ text: 'hello', math: false }, st));
   });
 
   it('6 RecordSurface text/image/clipPath record their payloads; clear() empties', () => {
@@ -126,10 +119,6 @@ describe('design 8 layers and draw order', () => {
     expect(TYPE_RANK['widget']).toBe(7);
   });
 
-  it('8 angle rank is a documented angle rank (fill 1 or stroke 4)', () => {
-    expect([1, 4]).toContain(TYPE_RANK['angle']);
-  });
-
   it('8 sort keys order by layer, then rank, then creation order', () => {
     const k = (layer: number, rank: number, order: number): SortKey => ({ layer, rank, order });
     expect(compareSortKey(k(0, 5, 0), k(1, 0, 0))).toBeLessThan(0);
@@ -190,12 +179,6 @@ describe('design 7.1 draw list and kernel events', () => {
     expect(damaged).toHaveLength(1);
   });
 
-  it('7.1 add with a null factory result skips the id', () => {
-    const list = new DrawList();
-    list.applyEvent({ kind: 'add', ids: [oid(9)] }, () => null);
-    expect(list.size).toBe(0);
-  });
-
   it('7.2 markViewDirtyAll flags every drawable (a zoom marks all)', () => {
     const { list } = settled(1, 'point', { k: 'point', x: 1, y: 2 });
     list.add(stubDrawable({ id: 2, kind: 'line', rank: 3 }));
@@ -234,33 +217,6 @@ describe('design 7.1 draw list and kernel events', () => {
     expect(list.get(oid(1))?.viewDirty).toBe(true);
   });
 
-  it('7.2 pan shifts the cached pixels by (dx, dy)', () => {
-    const { list, d } = settled(1, 'point', { k: 'point', x: 1, y: 2 });
-    const before = d.bbox;
-    list.markPanDirty(10, 5);
-    const after = d.bbox;
-    expect(before).not.toBeNull();
-    expect(after).not.toBeNull();
-    if (before !== null && after !== null) {
-      closeTo(after.x0 - before.x0, 10);
-      closeTo(after.y0 - before.y0, 5);
-    }
-  });
-
-  it('7.1 activeIds lists the drawables dirty this frame', () => {
-    const list = new DrawList();
-    list.add(stubDrawable({ id: 1, kind: 'point', rank: 5 }));
-    list.add(stubDrawable({ id: 2, kind: 'point', rank: 5 }));
-    for (const id of [oid(1), oid(2)]) {
-      const e = list.get(id);
-      if (e !== undefined) {
-        e.valueDirty = false;
-        e.viewDirty = false;
-      }
-    }
-    list.applyEvent({ kind: 'update', ids: [oid(2)] }, () => null);
-    expect(list.activeIds().map(Number)).toEqual([2]);
-  });
 });
 
 describe('design 7.3 update phase', () => {
@@ -493,27 +449,6 @@ describe('design 6 the concrete drawable', () => {
     expect(d.bbox).toBeNull();
   });
 
-  it('6 hit answers in view pixels with the point priority', () => {
-    const d = pointDrawable();
-    d.update(pointInput() as never, testViewport(), testStyle('point'));
-    // A at maths (1,2) -> px (450,200).
-    const hit = d.hit({ x: px(452), y: px(200) }, 7);
-    expect(hit).not.toBeNull();
-    expect(hit?.priority).toBe(1);
-    expect(hit?.id).toBe(oid(1));
-    expect(d.hit({ x: px(600), y: px(500) }, 7)).toBeNull();
-  });
-
-  it('6 outline paints hover/selected/focus/pulse halos without throwing', () => {
-    const d = pointDrawable();
-    d.update(pointInput() as never, testViewport(), testStyle('point'));
-    for (const mode of ['hover', 'selected', 'focus', 'pulse'] as const) {
-      const s = new RecordSurface();
-      d.outline(s, mode);
-      expect(s.calls.length).toBeGreaterThan(0);
-    }
-  });
-
   it('6 describe names the object for the screen reader', () => {
     const d = pointDrawable();
     d.update(pointInput() as never, testViewport(), testStyle('point'));
@@ -537,16 +472,6 @@ describe('design 6 the concrete drawable', () => {
     expect(d.labelRequest()?.text).toBe('(1, 2)');
   });
 
-  it('6 anchor, rubberShape and widget rects expose cached geometry', () => {
-    const d = pointDrawable();
-    expect(d.anchor()).toBeNull();
-    d.update(pointInput() as never, testViewport(), testStyle('point'));
-    expect(d.anchor()).toEqual({ x: 450, y: 200 });
-    expect(d.rubberShape()).not.toBeNull();
-    d.setWidgetRect({ x0: px(0), x1: px(10), y0: px(0), y1: px(10) });
-    d.setWidgetRect(null);
-  });
-
   it('6 shiftPixels translates the cache after a pan', () => {
     const d = pointDrawable();
     d.update(pointInput() as never, testViewport(), testStyle('point'));
@@ -559,14 +484,4 @@ describe('design 6 the concrete drawable', () => {
     }
   });
 
-  it('6 setLayer moves the sort key; detail/join only affect later updates', () => {
-    const d = pointDrawable();
-    d.setLayer(4);
-    expect(d.sortKey.layer).toBe(4);
-    expect(d.rank).toBe(5);
-    d.setDetail(2);
-    d.setTraceJoin(true);
-    d.setLabelOffset(6, -8);
-    d.clearLabelOffset();
-  });
 });

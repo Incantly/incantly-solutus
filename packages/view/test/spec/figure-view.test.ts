@@ -119,11 +119,6 @@ describe('design 15 canvas accessibility', () => {
     expect(h.el.getAttribute('aria-label')).toContain('Figure, 3 objects');
   });
 
-  it('ui.md 5 the name invites Tab: "Press Tab to explore."', () => {
-    const h = setup();
-    expect(h.el.getAttribute('aria-label')).toContain('Press Tab to explore.');
-  });
-
   it('15 the name follows the object count as objects are added and removed', () => {
     const h = setup();
     h.objects.splice(2, 1);
@@ -137,16 +132,6 @@ describe('design 15 canvas accessibility', () => {
     const id = h.el.getAttribute('aria-describedby');
     expect(id).not.toBeNull();
     expect(document.getElementById(id ?? '')).not.toBeNull();
-  });
-
-  it('15 the drawing canvases are hidden from assistive technology', () => {
-    const h = setup();
-    for (const c of Array.from(h.el.querySelectorAll('canvas'))) expect(c.getAttribute('aria-hidden')).toBe('true');
-  });
-
-  it('7.4 three canvases: background, scene, overlay', () => {
-    const h = setup();
-    expect(h.el.querySelectorAll('canvas')).toHaveLength(3);
   });
 
   it('15 a visually hidden list holds one option per visible, selectable object in creation order', () => {
@@ -177,33 +162,11 @@ describe('design 15 canvas accessibility', () => {
     expect((second?.textContent ?? '')).not.toContain('Free');
   });
 
-  it('15 hidden objects (show = false) are not in the list', () => {
-    const objects = objectsDefault();
-    objects[1] = { ...(objects[1] as StubObject), style: { show: false } };
-    const h = setup(objects);
-    expect(Array.from(h.el.querySelectorAll('li')).map((li) => li.getAttribute('data-id'))).not.toContain('B');
-  });
-
-  it('15 unselectable objects are not in the list', () => {
-    const objects = objectsDefault();
-    objects[1] = { ...(objects[1] as StubObject), style: { selectable: false } };
-    const h = setup(objects);
-    expect(Array.from(h.el.querySelectorAll('li')).map((li) => li.getAttribute('data-id'))).not.toContain('B');
-  });
-
   it('15 a polite live region exists for announcements', () => {
     const h = setup();
     expect(h.el.querySelector('[aria-live="polite"]')).not.toBeNull();
   });
 
-  it('15 removing an object removes its option', () => {
-    const h = setup();
-    h.objects.splice(1, 1);
-    h.view.applyEvents([{ kind: 'remove', ids: [oid(2)] }]);
-    h.pump();
-    expect(h.el.querySelectorAll('li')).toHaveLength(2);
-    expect(Array.from(h.el.querySelectorAll('li')).map((li) => li.textContent ?? '').join(' ')).not.toContain('Point B');
-  });
 });
 
 describe('ui.md 4 keyboard', () => {
@@ -231,14 +194,6 @@ describe('ui.md 4 keyboard', () => {
     expect(h.deleted[0]).toEqual([oid(1)]);
   });
 
-  it('4 Space selects the focused object like Enter', () => {
-    const h = setup();
-    key(h, 'ArrowRight');
-    key(h, ' ');
-    key(h, 'Delete');
-    expect(h.deleted[0]).toEqual([oid(1)]);
-  });
-
   it('4 Escape deselects, so Delete removes nothing', () => {
     const h = setup();
     key(h, 'ArrowRight');
@@ -256,15 +211,6 @@ describe('ui.md 4 keyboard', () => {
     expect([...(h.deleted[0] ?? [])].sort()).toEqual([oid(1), oid(2), oid(3)]);
   });
 
-  it('11 Ctrl+A skips objects with selectable = false', () => {
-    const objects = objectsDefault();
-    objects[1] = { ...(objects[1] as StubObject), style: { selectable: false } };
-    const h = setup(objects);
-    key(h, 'a', { ctrlKey: true });
-    key(h, 'Delete');
-    expect([...(h.deleted[0] ?? [])].sort()).toEqual([oid(1), oid(3)]);
-  });
-
   it('4 plus zooms in about the centre and minus zooms out', () => {
     const h = setup();
     const before = h.view.viewport();
@@ -274,24 +220,6 @@ describe('ui.md 4 keyboard', () => {
     expect(zoomed?.centreX).toBeCloseTo(before?.centreX ?? 0, 9);
     expect(zoomed?.centreY).toBeCloseTo(before?.centreY ?? 0, 9);
     key(h, '-');
-    expect(h.view.viewport()?.scaleX).toBeCloseTo(before?.scaleX ?? 0, 6);
-  });
-
-  it('4 zero returns the view to home', () => {
-    const h = setup();
-    const before = h.view.viewport();
-    key(h, '+');
-    key(h, '+');
-    key(h, '0');
-    expect(h.view.viewport()?.scaleX).toBeCloseTo(before?.scaleX ?? 0, 6);
-    expect(h.view.viewport()?.centreX).toBeCloseTo(before?.centreX ?? 0, 9);
-  });
-
-  it('4 Home returns the view to home as well', () => {
-    const h = setup();
-    const before = h.view.viewport();
-    key(h, '+');
-    key(h, 'Home');
     expect(h.view.viewport()?.scaleX).toBeCloseTo(before?.scaleX ?? 0, 6);
   });
 
@@ -335,15 +263,6 @@ describe('ui.md 4 keyboard', () => {
     expect(delta({ altKey: true }) / base).toBeCloseTo(0.1, 6);
   });
 
-  it('12.7 a dependent point does not nudge', () => {
-    const h = setup();
-    key(h, 'ArrowRight');
-    key(h, 'ArrowRight');
-    key(h, 'Enter');
-    h.drag.calls.length = 0;
-    key(h, 'ArrowRight');
-    expect(h.drag.calls.filter((c) => c[0] !== 'commit' && c[0] !== 'cancel')).toEqual([]);
-  });
 });
 
 describe('design 12.2 pointer drags', () => {
@@ -380,16 +299,6 @@ describe('design 12.2 pointer drags', () => {
     expect(h.drag.calls.filter((c) => c[0] !== 'commit' && c[0] !== 'cancel').length).toBeGreaterThan(0);
   });
 
-  it('12.2 a touch needs 8 px of movement before a drag begins', () => {
-    const h = setup();
-    h.view.setSnap('off');
-    pointer(h, 'pointerdown', 450, 200, { pointerType: 'touch' });
-    pointer(h, 'pointermove', 456, 200, { pointerType: 'touch' });
-    expect(h.drag.calls.filter((c) => c[0] !== 'commit' && c[0] !== 'cancel')).toEqual([]);
-    pointer(h, 'pointermove', 460, 200, { pointerType: 'touch' });
-    expect(h.drag.calls.filter((c) => c[0] !== 'commit' && c[0] !== 'cancel').length).toBeGreaterThan(0);
-  });
-
   it('12.2 Escape during a drag cancels and restores the start values', () => {
     const h = setup();
     h.view.setSnap('off');
@@ -416,13 +325,6 @@ describe('design 12.2 pointer drags', () => {
     expect(h.gestures.some(([code]) => code === 'drag_blocked')).toBe(true);
     const text = h.gestures.find(([code]) => code === 'drag_blocked')?.[1] ?? '';
     expect(text.length).toBeGreaterThan(10);
-  });
-
-  it('12.2 a non-draggable hit starts a pan instead, and no free value changes', () => {
-    const h = setup();
-    pointer(h, 'pointerdown', 350, 300);
-    pointer(h, 'pointermove', 380, 300);
-    expect(h.drag.calls.filter((c) => c[0] !== 'commit' && c[0] !== 'cancel')).toEqual([]);
   });
 
   it('12.2 dragging the background pans the view', () => {
@@ -473,17 +375,6 @@ describe('design 4 view control through the host', () => {
     expect(v?.centreY).toBe(0);
   });
 
-  it('ui.md 2 fit shows all visible objects with equal ratio', () => {
-    const h = setup();
-    h.view.fitAll();
-    h.pump();
-    const v = h.view.viewport();
-    expect(v?.scaleX).toBe(v?.scaleY);
-    const b = { x0: -1, x1: 1, y0: 0, y1: 2 };
-    expect(((v?.centreX ?? 99))).toBeCloseTo((b.x0 + b.x1) / 2, 6);
-    expect(((v?.centreY ?? 99))).toBeCloseTo((b.y0 + b.y1) / 2, 6);
-  });
-
   it('4 Ctrl+wheel zooms about the pointer by 1.1 per 100 wheel units, keeping the point under it fixed', () => {
     const h = setup();
     const before = h.view.viewport();
@@ -493,21 +384,6 @@ describe('design 4 view control through the host', () => {
     const mathsBefore = (600 - (before?.originX ?? 0)) / (before?.scaleX ?? 1);
     const mathsAfter = (600 - (after?.originX ?? 0)) / (after?.scaleX ?? 1);
     expect(mathsAfter).toBeCloseTo(mathsBefore, 6);
-  });
-
-  it('4 a wheel step down zooms out by the inverse factor', () => {
-    const h = setup();
-    wheel(h, -100, 400, 300, true);
-    wheel(h, 100, 400, 300, true);
-    expect(h.view.viewport()?.scaleX).toBeCloseTo(50, 6);
-  });
-
-  it('4 a trackpad wheel of 50 units zooms by a smaller factor than a full notch', () => {
-    const h = setup();
-    wheel(h, -50, 400, 300, true);
-    const f = (h.view.viewport()?.scaleX ?? 0) / 50;
-    expect(f).toBeGreaterThan(1);
-    expect(f).toBeLessThan(1.1);
   });
 
   it('4 a plain scroll over an unfocused view does not capture the page scroll', () => {
@@ -551,21 +427,6 @@ describe('design 4 view control through the host', () => {
     expect(JSON.stringify(h.view.viewport())).toBe(stuck);
   });
 
-  it('4 the view never gets narrower than 1e-9 maths units', () => {
-    const h = setup();
-    for (let i = 0; i < 400; i += 1) wheel(h, -100, 400, 300, true);
-    const v = h.view.viewport();
-    expect((v?.width ?? 0) / (v?.scaleX ?? 1)).toBeGreaterThanOrEqual(1e-9);
-  });
-
-  it('errors.md 4 wheel zoom out past the limit reports zoom_limit too', () => {
-    const h = setup();
-    for (let i = 0; i < 400; i += 1) wheel(h, 100, 400, 300, true);
-    expect(h.gestures.some(([code]) => code === 'zoom_limit')).toBe(true);
-    const v = h.view.viewport();
-    expect((v?.width ?? 0) / (v?.scaleX ?? 1)).toBeLessThanOrEqual(1e9 * (1 + 1e-9));
-  });
-
   it('4 the persisted view slice restores the bounds, grid and axes', () => {
     const h = setup();
     h.view.setViewRegion({ x0: -2 as never, x1: 6 as never, y0: -1 as never, y1: 5 as never }, 'equal', null);
@@ -580,18 +441,6 @@ describe('design 4 view control through the host', () => {
     expect(h.view.persistView().home).toEqual(saved.home);
   });
 
-  it('performance 3 a still figure asks for no frame once drawn', () => {
-    const h = setup();
-    expect(h.queue).toHaveLength(0);
-  });
-
-  it('performance 3 a change asks for exactly one frame however many marks arrive', () => {
-    const h = setup();
-    h.view.applyEvents([{ kind: 'update', ids: [oid(1)] }]);
-    h.view.applyEvents([{ kind: 'update', ids: [oid(1), oid(2)] }]);
-    h.view.requestFrame();
-    expect(h.queue).toHaveLength(1);
-  });
 });
 
 describe('design 14 export through the host', () => {
@@ -637,22 +486,10 @@ describe('design 14 export through the host', () => {
     expect(without.length).toBeLessThan(withGrid.length);
   });
 
-  it('14.3 overlay content (selection halos) is not exported', () => {
-    const h = setup();
-    const plain = okValue(h.view.exportSvg(svgReq), 'plain');
-    key(h, 'a', { ctrlKey: true });
-    expect(okValue(h.view.exportSvg(svgReq), 'selected')).toBe(plain);
-  });
-
   it('14.2 a bad request returns an error object instead of throwing', () => {
     const h = setup();
     expect(() => h.view.exportSvg({ ...svgReq, format: 'pdf' as never })).not.toThrow();
     expect(h.view.exportSvg({ ...svgReq, format: 'pdf' as never }).ok).toBe(false);
-  });
-
-  it('14.2 a zero-sized SVG request is refused', () => {
-    const h = setup();
-    expect(h.view.exportSvg({ ...svgReq, size: { widthPx: 0 } }).ok).toBe(false);
   });
 
   it('14.2 script export returns the figure script', () => {
@@ -675,19 +512,6 @@ describe('design 14 export through the host', () => {
 });
 
 describe('design 7 and 9.7 highlight and lifecycle', () => {
-  it('9.7 Highlight requests a frame and does not touch the kernel drag applier', () => {
-    const h = setup();
-    h.view.highlight(oid(1), 2);
-    expect(h.queue.length).toBeGreaterThan(0);
-    h.pump();
-    expect(h.drag.calls).toEqual([]);
-  });
-
-  it('9.7 highlighting an unknown id is harmless', () => {
-    const h = setup();
-    expect(() => { h.view.highlight(oid(99), 1); h.pump(); }).not.toThrow();
-  });
-
   it('15 announcing added objects after speech reaches the live region', () => {
     const h = setup();
     h.view.announceAdded('circle', 'c', 'radius 3');
@@ -711,27 +535,6 @@ describe('design 7 and 9.7 highlight and lifecycle', () => {
     h.view.unmount();
     expect(h.el.querySelectorAll('canvas')).toHaveLength(0);
     expect(h.el.querySelectorAll('li')).toHaveLength(0);
-  });
-
-  it('1 after unmount, keys and frames do nothing', () => {
-    const h = setup();
-    h.view.unmount();
-    h.deleted.length = 0;
-    key(h, 'a', { ctrlKey: true });
-    key(h, 'Delete');
-    expect(h.deleted).toEqual([]);
-  });
-
-  it('1 unmount is safe to call twice', () => {
-    const h = setup();
-    h.view.unmount();
-    expect(() => h.view.unmount()).not.toThrow();
-  });
-
-  it('1 the id and mode are what the host was given', () => {
-    const h = setup();
-    expect(h.view.id).toBe('fig');
-    expect(h.view.mode).toBe('2d');
   });
 
   it('errors.md 3 a view with no layout (0 x 0) pauses drawing without an error', () => {

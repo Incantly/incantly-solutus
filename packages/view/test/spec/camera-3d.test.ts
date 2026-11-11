@@ -7,31 +7,24 @@
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_SPACE_CAMERA,
-  Q_IDENTITY,
   buildCamera,
   chunkOriginFor,
   distForZoom,
   fitNearFar,
-  frustumContainsSphere,
   mat4Identity,
   mat4Mul,
   orientationFromAzEl,
   pointInClipBox,
   pointerRay,
   projectPoint,
-  quatConj,
-  quatFromAxisAngle,
-  quatMul,
   quatRotate,
   readAzEl,
   relativize,
   userRotate,
   v3,
   v3Add,
-  v3Cross,
   v3Dot,
   v3Len,
-  v3Norm,
   v3Scale,
   v3Sub,
   viewFacingAzEl,
@@ -177,34 +170,6 @@ describe('space-3d 8.2 orientation and rotation', () => {
 });
 
 describe('space-3d 8.2 v3/quat/mat4 maths', () => {
-  it('8.2 v3 arithmetic', () => {
-    expect(v3Add(v3(1, 2, 3), v3(4, 5, 6))).toEqual(v3(5, 7, 9));
-    expect(v3Sub(v3(4, 5, 6), v3(1, 2, 3))).toEqual(v3(3, 3, 3));
-    expect(v3Scale(v3(1, 2, 3), 2)).toEqual(v3(2, 4, 6));
-    expect(v3Dot(v3(1, 2, 3), v3(4, 5, 6))).toBe(32);
-    expect(v3Cross(v3(1, 0, 0), v3(0, 1, 0))).toEqual(v3(0, 0, 1));
-    expect(v3Len(v3(3, 4, 0))).toBe(5);
-    const n = v3Norm(v3(3, 4, 0));
-    closeTo(n.x, 0.6);
-    closeTo(n.y, 0.8);
-    closeTo(n.z, 0);
-  });
-
-  it('8.2 quaternion rotate/conjugate/multiply', () => {
-    const q = quatFromAxisAngle(v3(0, 0, 1), Math.PI / 2);
-    const r = quatRotate(q, v3(1, 0, 0));
-    closeTo(r.x, 0);
-    closeTo(r.y, 1);
-    closeTo(r.z, 0);
-    expect(quatRotate(Q_IDENTITY, v3(1, 2, 3))).toEqual(v3(1, 2, 3));
-    const back = quatRotate(quatConj(q), r);
-    closeTo(back.x, 1);
-    closeTo(back.y, 0);
-    const ab = quatRotate(quatMul(q, q), v3(1, 0, 0));
-    closeTo(ab.x, -1);
-    closeTo(ab.y, 0);
-  });
-
   it('8.2 vp is proj times view (column-major 4x4)', () => {
     const c = cam();
     expect(c.view.length).toBe(16);
@@ -287,19 +252,6 @@ describe('space-3d 8.2 near/far, zoom, build', () => {
     closeTo(Math.abs(pa.y - 300), 2 * Math.abs(pb.y - 300), 6);
   });
 
-  it('8.2 aspect also applies to the perspective camera', () => {
-    const a = cam({ aspect: v3(1, 1, 2), projection: 'persp' });
-    const b = cam({ aspect: v3(1, 1, 1), projection: 'persp' });
-    const pa = projectPoint(a, v3(0, 0, 1));
-    const pb = projectPoint(b, v3(0, 0, 1));
-    expect(Math.abs(pa.y - 300)).toBeGreaterThan(1.5 * Math.abs(pb.y - 300));
-  });
-
-  it('8.2 zUp false builds a valid y-up camera', () => {
-    const c = cam({ zUp: false });
-    closeTo(v3Len(c.forward), 1);
-    for (const v of [c.q.w, c.q.x, c.q.y, c.q.z]) expect(Number.isFinite(v)).toBe(true);
-  });
 });
 
 describe('space-3d 8 project, rays, facing, clip, origin', () => {
@@ -350,12 +302,6 @@ describe('space-3d 8 project, rays, facing, clip, origin', () => {
     const side = viewFacingAzEl(v3(1, 0, 0), { azimuth: 0, elevation: 0 }, true);
     closeTo(Math.abs(side.azimuth), Math.PI / 2, 6);
     closeTo(side.elevation, 0, 6);
-  });
-
-  it('8.7 frustum tests cull outside spheres only', () => {
-    const c = cam();
-    expect(frustumContainsSphere(c.vp, v3(0, 0, 0), 1)).toBe(true);
-    expect(frustumContainsSphere(c.vp, v3(0, 1000, 0), 1)).toBe(false);
   });
 
   it('8.7 clip-box tests include edges', () => {

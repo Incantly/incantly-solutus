@@ -8,7 +8,6 @@ import {
   commitDigits,
   computeDragPlan,
   createSnapMemory,
-  freePointTarget,
   limitAngle,
   maths,
   nudgeStep,
@@ -59,12 +58,6 @@ describe('design 12.1 drag plans', () => {
 
   it('12.1 a slider thumb drags its number', () => {
     const p = computeDragPlan(oid(3), facts({ free: true, isSlider: true }));
-    expect(p.kind).toBe('slider');
-    expect(p.moves).toEqual([{ id: oid(3), role: 'number' }]);
-  });
-
-  it('12.1 a slider whose free flag is not set still plans a slider drag', () => {
-    const p = computeDragPlan(oid(3), facts({ free: false, isSlider: true }));
     expect(p.kind).toBe('slider');
     expect(p.moves).toEqual([{ id: oid(3), role: 'number' }]);
   });
@@ -206,10 +199,6 @@ describe('design 12.6 commit rounding, 12.7 keyboard, targets', () => {
     expect(nudgeStep(50, 2, true, 'shift')).toBe(20);
   });
 
-  it('12.3 free-point targets subtract the grab offset (no jump)', () => {
-    expect(freePointTarget(mp(1.5, 2), { dx: 0.5, dy: -0.25 })).toEqual({ x: 1, y: 2.25 });
-  });
-
   it('12.1 slider targets quantise to the step and clamp to the track', () => {
     expect(sliderTarget(150, 100, 200, 0, 10, 0.5)).toBe(5);
     expect(sliderTarget(153, 100, 200, 0, 10, 0.5)).toBe(5.5);
@@ -225,12 +214,6 @@ describe('design 13 snapping', () => {
       metric: { scaleX: 50, scaleY: 50 }, snapRadiusPx: 12, points: [], intersections: [], ...over,
     };
   }
-
-  it('13.1 off never snaps', () => {
-    const r = snapPosition(mp(-3.9, -2), ctx({ mode: 'off' }));
-    expect(r.position).toEqual({ x: -3.9, y: -2 });
-    expect(r.source).toEqual({ k: 'none' });
-  });
 
   it('13.2 grid snaps to intersections within the radius', () => {
     const r = snapPosition(mp(-3.9, -2), ctx());

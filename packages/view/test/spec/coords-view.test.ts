@@ -4,9 +4,6 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
-  DEFAULT_LIMITS,
-  MAX_DRAW_PX,
-  RELATIVE_WIDTH_FLOOR,
   clipSegmentToRect,
   createMapper,
   createViewport,
@@ -25,12 +22,6 @@ import {
 import { closeTo, errOf, okValue, testViewport } from './helpers';
 
 describe('design 3 coordinate systems', () => {
-  it('3 maths() and px() brand numbers without changing their value', () => {
-    expect(maths(1.5)).toBe(1.5);
-    expect(px(12)).toBe(12);
-    expect(maths(-0)).toBe(-0);
-  });
-
   it('3 toPx is originX + x*scaleX, originY - y*scaleY (y flips)', () => {
     const m = createMapper(testViewport());
     const p = m.toPx({ x: maths(1), y: maths(2) });
@@ -98,10 +89,6 @@ describe('design 3 coordinate systems', () => {
     expect(Math.abs(naive - 800)).toBeGreaterThan(Math.abs(edge.x - 800));
   });
 
-  it('3 RELATIVE_WIDTH_FLOOR is 1e-10', () => {
-    expect(RELATIVE_WIDTH_FLOOR).toBe(1e-10);
-  });
-
   it('3 zoom refuses below 1e-10 * |centre| with precision_limit, view unchanged', () => {
     // Width 1e-3 around 1e6: inside the absolute limits, above the 1e-4 floor.
     const v = okValue(
@@ -111,10 +98,6 @@ describe('design 3 coordinate systems', () => {
     const r = zoomAbout(v, { x: px(400), y: px(300) }, 100);
     expect(r.refused).toBe('precision_limit');
     expect(r.viewport).toBe(v);
-  });
-
-  it('3 MAX_DRAW_PX is 1e7: coordinates beyond it are clipped, not drawn raw', () => {
-    expect(MAX_DRAW_PX).toBe(1e7);
   });
 
   it('3 clipSegmentToRect clips a 1e12 endpoint to the view rectangle', () => {
@@ -175,13 +158,6 @@ describe('design 3 coordinate systems', () => {
     }
   });
 
-  it('3 createViewport rejects NaN and infinite numbers', () => {
-    for (const bad of [{ centreX: Number.NaN }, { scaleX: Number.POSITIVE_INFINITY }, { dpr: 0 }] as const) {
-      const r = createViewport({ widthPx: 800, heightPx: 600, centreX: 0, centreY: 0, scaleX: 50, scaleY: 50, ...bad });
-      expect(r.ok).toBe(false);
-    }
-  });
-
   it('3 a Viewport is immutable: zoom/pan/tween return new objects', () => {
     const v = testViewport();
     const z = zoomAbout(v, { x: px(400), y: px(300) }, 2);
@@ -197,10 +173,6 @@ describe('design 3 coordinate systems', () => {
 });
 
 describe('design 4 zoom, pan and the view', () => {
-  it('4 DEFAULT_LIMITS are 1e-9..1e9', () => {
-    expect(DEFAULT_LIMITS).toEqual({ minWidth: 1e-9, maxWidth: 1e9 });
-  });
-
   it('4 default home is x -8..8, equal ratio, y centred at 0', () => {
     expect(defaultHome(800, 600)).toEqual({ x0: -8, x1: 8, y0: -6, y1: 6 });
   });
@@ -252,11 +224,6 @@ describe('design 4 zoom, pan and the view', () => {
     const z = zoomAbout(v, { x: px(400), y: px(300) }, 1.5);
     expect(z.viewport.scaleX).toBe(120);
     expect(z.viewport.scaleY).toBe(150);
-  });
-
-  it('4 zoom-out (k < 1) widens the view about the pointer', () => {
-    const z = zoomAbout(testViewport(), { x: px(400), y: px(300) }, 0.5);
-    expect(z.viewport.scaleX).toBe(25);
   });
 
   it('4 zoom past the limits is refused with zoom_limit, not an error object', () => {

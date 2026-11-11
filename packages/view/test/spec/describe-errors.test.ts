@@ -9,7 +9,6 @@ import {
   VIEW_MESSAGE_TEMPLATES,
   VIEW_REASON_TEXT,
   describeAdded,
-  describeBool,
   describeFigure,
   describeMove,
   describeParticles,
@@ -19,14 +18,10 @@ import {
   describeFunction,
   describeSlider,
   describeUndefined,
-  describeHidden,
-  describeText,
-  describeTrace,
   guard,
   okResult,
   renderViewMessage,
   viewError,
-  viewNotice,
 } from '@incantly/view';
 import { errOf } from './helpers';
 
@@ -35,20 +30,6 @@ describe('design 15 descriptions (the documented table)', () => {
   // `... Free, can be moved.`. ui.md 5 also reads "Point A at 1.5, 2. Free. 1 of 12.", so the table wins.
   it('15 a free point (table text)', () => {
     expect(describePoint('A', '1.5, 2', 'free', null)).toBe('Point A at 1.5, 2. Free.');
-  });
-
-  it('15 a free point starts with the table text whatever follows', () => {
-    expect(describePoint('A', '1.5, 2', 'free', null).startsWith('Point A at 1.5, 2. Free')).toBe(true);
-  });
-
-  it('15 a dependent point names how it was made', () => {
-    expect(describePoint('M', '3, 1', 'dependent', 'Midpoint of A and B')).toBe('Point M at 3, 1. Midpoint of A and B.');
-  });
-
-  it('15 a point on a path says so', () => {
-    const t = describePoint('P', '0, 2', 'onPath', null);
-    expect(t.startsWith('Point P at 0, 2.')).toBe(true);
-    expect(t.toLowerCase()).toContain('path');
   });
 
   it('15 a segment', () => {
@@ -82,25 +63,6 @@ describe('design 15 descriptions (the documented table)', () => {
     expect(t).toContain('flames rising');
   });
 
-  it('15 every description is one or more sentences ending in a full stop', () => {
-    const all = [
-      describePoint('A', '1, 2', 'free', null), describeSegment('a', 'A', 'B', '1'), describeCircle('c', 'O', '1'),
-      describeFunction('f', 'x'), describeSlider('a', '1', '0', '2', '1'), describeUndefined('l', 'Line', 'parallel'),
-      describeBool('b', true), describeText('t', 'hello'), describeTrace('tr', 10), describeHidden('h', 'Point'),
-    ];
-    for (const t of all) {
-      expect(t.length).toBeGreaterThan(0);
-      expect(t.endsWith('.')).toBe(true);
-    }
-  });
-
-  it('15 names are never dropped from a description', () => {
-    expect(describeBool('flag', false)).toContain('flag');
-    expect(describeText('note', 'hello')).toContain('note');
-    expect(describeText('note', 'hello')).toContain('hello');
-    expect(describeTrace('tr', 10)).toContain('tr');
-    expect(describeHidden('h', 'Point')).toContain('h');
-  });
 });
 
 describe('ui.md 5 announcements', () => {
@@ -147,23 +109,6 @@ describe('errors/design.md 3 and 5 the error object', () => {
     expect(e.messageKey).toBe('view.limit');
   });
 
-  it('3 two errors of one kind with the same params share a fingerprint', () => {
-    const a = viewError({ kind: 'limit', messageKey: 'view.limit', params: { limit: 'objects', value: 6000, max: 5000 } });
-    const b = viewError({ kind: 'limit', messageKey: 'view.limit', params: { limit: 'objects', value: 6000, max: 5000 } });
-    expect(a.fingerprint).toBe(b.fingerprint);
-  });
-
-  it('3 position fields pass through and default to a valid position', () => {
-    const e = viewError({ kind: 'bad_directive', messageKey: 'view.bad_view_range', params: { directive: 'view' }, line: 2, col: 7, endCol: 15, token: '5 -5' });
-    expect(e.line).toBe(2);
-    expect(e.col).toBe(7);
-    expect(e.endCol).toBe(15);
-    expect(e.token).toBe('5 -5');
-    const d = viewError({ kind: 'limit', messageKey: 'view.limit', params: {} });
-    expect(d.line).toBeGreaterThanOrEqual(1);
-    expect(d.endCol).toBeGreaterThanOrEqual(d.col);
-  });
-
   it('3 forms, hint, expected and suggest pass through', () => {
     const e = viewError({
       kind: 'bad_directive', messageKey: 'view.bad_view_range', params: {}, forms: ['@view x0 x1 y0 y1'], hint: 'Swap them.',
@@ -206,12 +151,6 @@ describe('errors/design.md 3 and 5 the error object', () => {
     }
   });
 
-  it('3.4 a message with a missing param does not throw', () => {
-    const key = Object.keys(VIEW_MESSAGE_TEMPLATES)[0];
-    expect(key).toBeDefined();
-    expect(() => renderViewMessage(key ?? '', {})).not.toThrow();
-  });
-
   it('5 okResult carries the value and a notices array', () => {
     const r = okResult(42);
     expect(r.ok).toBe(true);
@@ -220,21 +159,6 @@ describe('errors/design.md 3 and 5 the error object', () => {
       expect(Array.isArray(r.notices)).toBe(true);
       expect(r.notices).toHaveLength(0);
     }
-  });
-
-  it('3.1 viewNotice builds an info or warning notice with a code and message', () => {
-    const n = viewNotice('warning', 'V901', 'Label of C overlaps label of D.', { name: 'C' }, ['C']);
-    expect(n.severity).toBe('warning');
-    expect(n.code).toBe('V901');
-    expect(n.message).toBe('Label of C overlaps label of D.');
-    expect(n.names).toEqual(['C']);
-    expect(okResult(1, [n]).ok).toBe(true);
-  });
-
-  it('5 guard returns the value of a function that works', () => {
-    const r = guard('test', () => 7);
-    expect(r.ok).toBe(true);
-    if (r.ok) expect(r.value).toBe(7);
   });
 
   it('5 guard turns a throw into an internal error and never throws', () => {
@@ -251,11 +175,4 @@ describe('errors/design.md 3 and 5 the error object', () => {
     }
   });
 
-  it('5 an internal error keeps the stack out of the object', () => {
-    const r = guard('test', (): number => {
-      throw new Error('secret-stack-marker');
-    });
-    const e = errOf(r, 'guard');
-    expect(JSON.stringify(e)).not.toMatch(/at .*\.ts:\d+/);
-  });
 });

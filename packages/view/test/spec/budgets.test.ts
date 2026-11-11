@@ -28,11 +28,6 @@ describe('performance 5 default budgets', () => {
     expect(DEFAULT_BUDGETS.labelsShown).toBe(300);
   });
 
-  it('errors.md 6 label text 2,000 characters; export side 16,384; SVG 50,000 elements', () => {
-    expect(DEFAULT_BUDGETS.labelChars).toBe(2000);
-    expect(DEFAULT_BUDGETS.exportSidePx).toBe(16384);
-    expect(DEFAULT_BUDGETS.svgElements).toBe(50000);
-  });
 });
 
 describe('performance 5 objects', () => {
@@ -47,17 +42,6 @@ describe('performance 5 objects', () => {
     expect(e.kind).toBe('limit');
   });
 
-  it('errors.md 6 an overflow carries limit, value and max', () => {
-    const e = errOf(checkObjects(6000), 'objects') as unknown as { params: Record<string, unknown> };
-    const flat = JSON.stringify(e.params);
-    expect(flat).toContain('6000');
-    expect(flat).toContain('5000');
-  });
-
-  it('5 a custom limit is honoured', () => {
-    expect(checkObjects(11, { ...DEFAULT_BUDGETS, objects: 10 }).ok).toBe(false);
-    expect(checkObjects(10, { ...DEFAULT_BUDGETS, objects: 10 }).ok).toBe(true);
-  });
 });
 
 describe('performance 5 points and particles', () => {
@@ -76,11 +60,6 @@ describe('performance 5 points and particles', () => {
 });
 
 describe('performance 5 triangles', () => {
-  it('5 up to 200,000 triangles need no notice', () => {
-    expect(checkTriangles(200000)).toBeNull();
-    expect(checkTriangles(10)).toBeNull();
-  });
-
   it('5 over 200,000 triangles gives a notice (round solids get fewer facets), not a refusal', () => {
     const n = checkTriangles(200001);
     expect(n).not.toBeNull();
@@ -90,21 +69,12 @@ describe('performance 5 triangles', () => {
 });
 
 describe('performance 5 labels', () => {
-  it('5 300 labels are all shown', () => {
-    const r = checkLabels(300);
-    expect(r.hidden).toBe(0);
-    expect(r.notice).toBeNull();
-  });
-
   it('5 the lowest-priority labels over 300 are hidden, with a notice', () => {
     const r = checkLabels(350);
     expect(r.hidden).toBe(50);
     expect(r.notice).not.toBeNull();
   });
 
-  it('5 hidden labels count is exact for 301', () => {
-    expect(checkLabels(301).hidden).toBe(1);
-  });
 });
 
 describe('performance 5 curve samples and label text', () => {

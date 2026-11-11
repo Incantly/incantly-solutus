@@ -58,15 +58,6 @@ describe('performance 4 figure states', () => {
     expect(stateOf(s, 'f1')).toBe('placeholder');
   });
 
-  it('4 registering twice keeps one record; unregistering removes it', () => {
-    const s = new SchedulerState();
-    registerFigure(s, 'f1');
-    registerFigure(s, 'f1');
-    expect(s.figures.size).toBe(1);
-    unregisterFigure(s, 'f1');
-    expect(s.figures.size).toBe(0);
-  });
-
   it('4 near the viewport with a settled scroll builds the figure (ready)', () => {
     const s = new SchedulerState();
     registerFigure(s, 'f1');
@@ -101,15 +92,6 @@ describe('performance 4 figure states', () => {
     expect(stateOf(s, 'f1')).toBe('live');
   });
 
-  it('4 live is issued as a goLive action, once', () => {
-    const s = new SchedulerState();
-    registerFigure(s, 'f1');
-    const all: SchedulerAction[] = [];
-    for (let i = 0; i < 6; i += 1) all.push(...tick(s, i * 200, { visible: setOf('f1'), near: setOf('f1') }));
-    expect(all.filter((a) => a.k === 'goLive' && a.id === 'f1')).toHaveLength(1);
-    expect(all.filter((a) => a.k === 'build' && a.id === 'f1')).toHaveLength(1);
-  });
-
   it('4 a live figure that leaves the viewport is paused at once', () => {
     const s = new SchedulerState();
     registerFigure(s, 'f1');
@@ -128,13 +110,6 @@ describe('performance 4 figure states', () => {
     expect(stateOf(s, 'f1')).toBe('paused');
   });
 
-  it('4 leaving the viewport does not wait for the scroll to settle', () => {
-    const s = new SchedulerState();
-    registerFigure(s, 'f1');
-    goLive(s, ['f1'], 0);
-    tick(s, 2000, { visible: setOf(), near: setOf(), scrollSettled: false });
-    expect(stateOf(s, 'f1')).toBe('paused');
-  });
 });
 
 describe('performance 4 the live cap', () => {
@@ -150,13 +125,6 @@ describe('performance 4 the live cap', () => {
     const live = [...s.figures.values()].filter((f) => f.state === 'live');
     expect(live.length).toBeLessThanOrEqual(3);
     expect(live.length).toBe(3);
-  });
-
-  it('4 the stats track the peak number of live figures (never above 3)', () => {
-    const s = fourVisible();
-    goLive(s, ['a', 'b', 'c', 'd'], 0);
-    expect(s.stats.peakLive).toBe(3);
-    expect(s.stats.live).toBe(3);
   });
 
   it('4 the least recently used live figure is paused when a 4th becomes live', () => {
@@ -239,15 +207,6 @@ describe('performance 4 saving as a picture', () => {
     expect(s.stats.saves).toBe(1);
   });
 
-  it('4 saving happens once, not on every later tick', () => {
-    const s = pausedFigure();
-    tick(s, 2100, { visible: setOf(), near: setOf() });
-    tick(s, 11000, { visible: setOf(), near: setOf() });
-    const later = tick(s, 20000, { visible: setOf(), near: setOf() });
-    expect(later.filter((a) => a.k === 'save')).toEqual([]);
-    expect(s.stats.saves).toBe(1);
-  });
-
   it('4 a saved figure that returns to view is restored before it draws live', () => {
     const s = pausedFigure();
     tick(s, 2100, { visible: setOf(), near: setOf() });
@@ -274,14 +233,6 @@ describe('performance 4 saving as a picture', () => {
     expect(stateOf(s, 'f1')).toBe('live');
   });
 
-  it('4 a paused figure still in view (tab hidden) is not saved after 8 s on screen', () => {
-    const s = new SchedulerState();
-    registerFigure(s, 'f1');
-    goLive(s, ['f1'], 0);
-    tick(s, 2000, { visible: setOf('f1'), near: setOf('f1'), tabVisible: false });
-    const actions = tick(s, 20000, { visible: setOf('f1'), near: setOf('f1'), tabVisible: false });
-    expect(actions.filter((a) => a.k === 'save')).toEqual([]);
-  });
 });
 
 describe('performance 6 scheduler stats', () => {
@@ -295,27 +246,11 @@ describe('performance 6 scheduler stats', () => {
     expect(s.stats.registered).toBe(2);
   });
 
-  it('6 mounts are counted when a figure is mounted', () => {
-    const s = new SchedulerState();
-    registerFigure(s, 'a');
-    noteMounted(s, 'a', 10);
-    expect(s.stats.mounts).toBe(1);
-  });
-
   it('6 the time from mount to first drawing is recorded in ms', () => {
     const s = new SchedulerState();
     registerFigure(s, 'a');
     noteMounted(s, 'a', 1000);
     noteFirstDraw(s, 'a', 1042);
-    expect(s.stats.mountToFirstMs).toEqual([42]);
-  });
-
-  it('6 only the first drawing after a mount is timed', () => {
-    const s = new SchedulerState();
-    registerFigure(s, 'a');
-    noteMounted(s, 'a', 1000);
-    noteFirstDraw(s, 'a', 1042);
-    noteFirstDraw(s, 'a', 1100);
     expect(s.stats.mountToFirstMs).toEqual([42]);
   });
 

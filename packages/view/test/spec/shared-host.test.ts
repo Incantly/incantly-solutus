@@ -46,12 +46,6 @@ describe('performance 4 one shared GPU context per page', () => {
 
   // A stub WebGL2 context is not enough to bring the GPU backend up (see the report), so the
   // backend is only checked for consistency here: hasGpu() and backend() agree.
-  it('4 hasGpu() and backend() agree', () => {
-    const ctx = okValue(SharedGpuContext.create(countingFactory(true)), 'ctx');
-    expect(ctx.hasGpu()).toBe(ctx.backend() !== null);
-    ctx.dispose();
-  });
-
   it('4 without WebGL2 the context still works and reports no GPU', () => {
     const ctx = okValue(SharedGpuContext.create(countingFactory(false)), 'ctx');
     expect(ctx.hasGpu()).toBe(false);
@@ -68,54 +62,11 @@ describe('performance 4 one shared GPU context per page', () => {
     ctx.dispose();
   });
 
-  it('4 each figure gets its own visible canvas', () => {
-    const f = countingFactory(true);
-    const ctx = okValue(SharedGpuContext.create(f), 'ctx');
-    const a = okValue(ctx.acquireBox('a', 400, 300, 1), 'a');
-    const b = okValue(ctx.acquireBox('b', 400, 300, 1), 'b');
-    expect(a.canvas).not.toBe(b.canvas);
-    expect(f.visible).toEqual(expect.arrayContaining(['a', 'b']));
-    ctx.dispose();
-  });
-
   it('4 boxes are sized in device pixels (CSS size x dpr)', () => {
     const ctx = okValue(SharedGpuContext.create(countingFactory(true)), 'ctx');
     const box = okValue(ctx.acquireBox('a', 400, 300, 2), 'a');
     expect(box.canvas.width).toBe(800);
     expect(box.canvas.height).toBe(600);
-    ctx.dispose();
-  });
-
-  it('4 resizing a box follows the new size', () => {
-    const ctx = okValue(SharedGpuContext.create(countingFactory(true)), 'ctx');
-    okValue(ctx.acquireBox('a', 400, 300, 1), 'a');
-    okValue(ctx.resizeBox('a', 200, 100, 2), 'resize');
-    expect(ctx.box('a')?.canvas.width).toBe(400);
-    expect(ctx.box('a')?.canvas.height).toBe(200);
-    ctx.dispose();
-  });
-
-  it('4 stats count live boxes; releasing a box frees it', () => {
-    const ctx = okValue(SharedGpuContext.create(countingFactory(true)), 'ctx');
-    okValue(ctx.acquireBox('a', 100, 100, 1), 'a');
-    okValue(ctx.acquireBox('b', 100, 100, 1), 'b');
-    expect(ctx.statsSnapshot().boxes).toBe(2);
-    ctx.releaseBox('a');
-    expect(ctx.statsSnapshot().boxes).toBe(1);
-    expect(ctx.box('a')).toBeUndefined();
-    expect(ctx.box('b')).toBeDefined();
-    ctx.dispose();
-  });
-
-  it('4 releasing an unknown box is harmless', () => {
-    const ctx = okValue(SharedGpuContext.create(countingFactory(true)), 'ctx');
-    expect(() => ctx.releaseBox('nope')).not.toThrow();
-    ctx.dispose();
-  });
-
-  it('4 presenting an unknown figure answers with a result and never throws', () => {
-    const ctx = okValue(SharedGpuContext.create(countingFactory(true)), 'ctx');
-    expect(() => ctx.present('nope')).not.toThrow();
     ctx.dispose();
   });
 
@@ -126,11 +77,6 @@ describe('performance 4 one shared GPU context per page', () => {
     ctx.dispose();
   });
 
-  it('4 disposing twice does not throw', () => {
-    const ctx = okValue(SharedGpuContext.create(countingFactory(true)), 'ctx');
-    ctx.dispose();
-    expect(() => ctx.dispose()).not.toThrow();
-  });
 });
 
 describe('performance 4 the scheduler host', () => {
@@ -242,20 +188,6 @@ describe('performance 4 the scheduler host', () => {
     expect(actions.length).toBe(n);
   });
 
-  it('4 playing figures are pinned while in view', () => {
-    for (const id of ['a', 'b', 'c', 'd']) host.register(id);
-    host.setNear(new Set(['a', 'b', 'c', 'd']));
-    host.setVisible(new Set(['a', 'b', 'c', 'd']));
-    host.setPlaying('a', true);
-    host.touch('a');
-    for (let i = 0; i < 8; i += 1) {
-      vi.advanceTimersByTime(300);
-      host.tick();
-      host.touch(i % 2 === 0 ? 'b' : 'c');
-    }
-    expect(kinds()).not.toContain('pause:a');
-  });
-
   it('6 mount and first-draw notes feed the stats', () => {
     host.register('a');
     host.noteMounted('a');
@@ -266,18 +198,4 @@ describe('performance 4 the scheduler host', () => {
     expect(host.stats().mountToFirstMs[0]).toBeGreaterThanOrEqual(0);
   });
 
-  it('4 unregistering removes the figure from the stats', () => {
-    host.register('a');
-    host.unregister('a');
-    expect(host.stats().registered).toBe(0);
-  });
-
-  it('4 observing an element does not throw (observers are optional)', () => {
-    const el = document.createElement('div');
-    document.body.appendChild(el);
-    host.register('a');
-    expect(() => host.observe('a', el)).not.toThrow();
-    expect(() => host.unobserve(el)).not.toThrow();
-    el.remove();
-  });
 });

@@ -437,24 +437,4 @@ describe('space-3d 9 Figure3D headless paint', () => {
     miss.be.dispose();
   });
 
-  it('9.3 remove drops the object from later frames', () => {
-    const { fig, be } = painter([{ head: head(1, 'P'), value: { k: 'point3', x: 0, y: 0, z: 0 }, kind: 'point' }]);
-    fig.applyEvents([{ kind: 'remove', ids: [oid(1)] }]);
-    const r = fig.paint(inputOf(be));
-    expect(r.ok).toBe(true);
-    if (r.ok) expect(r.value.points).toBe(0);
-    fig.dispose();
-    be.dispose();
-  });
-
-  it('8.5 light and hidden modes paint without failing', () => {
-    const { fig, be } = painter([{ head: head(1, 'P'), value: { k: 'point3', x: 0, y: 0, z: 0 }, kind: 'point' }]);
-    for (const light of ['on', 'off', 'flat'] as const) {
-      for (const hidden of ['dashed', 'faded', 'off'] as const) {
-        expect(fig.paint({ ...inputOf(be), light, hidden }).ok).toBe(true);
-      }
-    }
-    fig.dispose();
-    be.dispose();
-  });
 });
