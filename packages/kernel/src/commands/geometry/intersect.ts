@@ -795,14 +795,40 @@ export function scanRoots(g: Fn1, lo: number, hi: number): number[] {
       const r = brent(gg, xs[i] as number, xs[i + 1] as number);
       if (Number.isFinite(r)) push(r);
     } else if (i + 2 <= N) {
-      // Tangential root: derivative sign change with a small |g| minimum.
+      // Tangential root (4.6): a local minimum of |g| on the grid that does not cross zero. Refine it by golden-section
+      // search on |g| and accept it when the minimum is below 1e-10 of the scale.
       const c = ys[i + 2];
       if (c === undefined) continue;
-      const d1 = b - a;
-      const d2 = c - b;
-      if (d1 * d2 < 0) {
+      if (Math.abs(b) <= Math.abs(a) && Math.abs(b) <= Math.abs(c) && (Math.abs(b) < Math.abs(a) || Math.abs(b) < Math.abs(c)) && a * b > 0 && b * c > 0) {
         const scale = Math.max(1, Math.abs(a), Math.abs(b), Math.abs(c));
-        if (Math.abs(b) < 1e-10 * scale) push(xs[i + 1] as number);
+        let lo2 = xs[i] as number;
+        let hi2 = xs[i + 2] as number;
+        const mag = (x: number): number => {
+          const v = g(x);
+          return v === undefined ? Infinity : Math.abs(v);
+        };
+        const gr = (Math.sqrt(5) - 1) / 2;
+        let x1 = hi2 - gr * (hi2 - lo2);
+        let x2 = lo2 + gr * (hi2 - lo2);
+        let f1 = mag(x1);
+        let f2 = mag(x2);
+        for (let k = 0; k < 80 && hi2 - lo2 > 1e-15 * Math.max(1, Math.abs(lo2)); k++) {
+          if (f1 <= f2) {
+            hi2 = x2;
+            x2 = x1;
+            f2 = f1;
+            x1 = hi2 - gr * (hi2 - lo2);
+            f1 = mag(x1);
+          } else {
+            lo2 = x1;
+            x1 = x2;
+            f1 = f2;
+            x2 = lo2 + gr * (hi2 - lo2);
+            f2 = mag(x2);
+          }
+        }
+        const xm = (lo2 + hi2) / 2;
+        if (mag(xm) < 1e-10 * scale) push(xm);
       }
     }
   }
