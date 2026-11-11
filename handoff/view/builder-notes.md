@@ -287,22 +287,31 @@ not the view.
 
 ## Speed numbers
 
-Honest status: the shell sandbox in this session was broken
-(`sandbox-exec … Operation not permitted`, see last section), so no
-benchmark, test, lint or typecheck process could be executed here.
-The numbers below are analytical expectations from the algorithms and
-budgets, NOT measurements. Run `npm run bench --workspace
-@incantly/view` (suite in `bench/view.bench.ts`) to replace them:
+MEASURED by the fixer (2026-11-11, macOS arm64, Node v26.0.0) with
+`bench/view.bench.ts`, a plain `performance.now()` script (10 warmup
+iterations, then a timed loop printing mean ms/op). Executed in place
+with the repo's own runner, which prints the script's output:
 
-- Hit query at 5,000 objects: O(1) cells + a few `hit` calls; expect
-  < 0.05ms (target 0.2ms).
-- Grid spacing choice: O(1) arithmetic; expect < 0.001ms.
-- Label placement, 200 labels: O(n²) worst-case overlap checks
-  (~20k rect tests); expect < 2ms.
-- RDP simplify, 1,000 points: O(n log n) average; expect < 0.5ms.
-- Scheduler tick, 50 figures: O(figures); expect < 0.05ms.
-- Frame composition follows the budgets (update+layout+paint < 6ms at
-  500 objects via partial repaint; kernel pass separate).
+`npx vitest bench --run packages/view/bench/view.bench.ts`
+
+(Plain `node` cannot run the script directly: this repo's imports are
+extensionless, which only a bundler-style resolver such as tsx or
+vitest resolves. `npx tsx` was not installed here, so vitest ran it.)
+
+- Hit query at 5,000 objects: 0.0014 ms/op over 2,000 iterations
+  (target 0.2ms). O(1) cells + a few `hit` calls.
+- Grid spacing choice: 0.0001 ms/op over 20,000 iterations. O(1)
+  arithmetic on the hysteresis-hit path (`chooseStep(80, unit, 1, null)`).
+- Label placement, 200 labels: ~0.6 ms/op over 50 iterations
+  (0.61 / 0.65 on two back-to-back runs; target under 2ms). O(n²)
+  worst-case overlap checks (~20k rect tests).
+- RDP simplify, 1,000 points: ~0.18 ms/op over 200 iterations
+  (0.176 / 0.175 on two back-to-back runs; expectation < 0.5ms).
+- Scheduler tick, 50 figures: 0.0045 ms/op over 2,000 iterations
+  (steady state after the first ticks build the near figures).
+- Frame composition (update+layout+paint < 6ms at 500 objects via
+  partial repaint; kernel pass separate) is NOT measured: it needs
+  live DOM figures and is not covered by this script.
 
 ## Environment failure (verification + commits blocked)
 
@@ -332,3 +341,52 @@ not retry or fabricate output. Consequences:
   builder notes`.
 - No push was attempted (nothing to push without commits); `main`
   untouched.
+
+## Gate fixes
+
+Fixer session, 2026-11-11. The shell works in this session, so the
+blockers in the previous section are cleared: `npx tsc -p
+tsconfig.json`, `npx eslint .` and `npx vitest run` all pass from the
+repo root (27 type errors and 7 lint errors in `packages/view/`,
+fixed with no disable comments and no `any`), and the work below is
+committed on `feat/view`. Nothing was pushed; `main` untouched. No
+tests were written (testers own them); the full existing suite passes
+(17 files, 2,118 tests).
+
+What was fixed and why:
+
+- `core/drawable.ts`: the `describe*` helpers and `VIEW_REASON_TEXT`
+  live in `core/describe.ts`, not `core/styles.ts` (17 import
+  errors); the import source was wrong, so it now points at
+  `./describe`. The `describeFunction` import was dropped: no
+  `ViewValue` variant is a bare function (functions arrive as
+  `curve`), so nothing calls it. The unused `fillOf` result in
+  `paintMarker` was removed, and the text background now defaults
+  with `?? 'none'` because `TextStyleSpec.background` is optional
+  while `TextStyle.background` is required.
+- `core/styles.ts` (`dashToArray`): `Array.isArray` does not narrow
+  `readonly number[]`, so the `{ on, off }` access never typechecked;
+  the code now discriminates with `'on' in pattern`. The `let h = 0`
+  in `rgbToHsl` assigned a value every branch overwrites, so the
+  initializer was removed.
+- `core/surface.ts`: dropped the unused `Px` import.
+- `backends/canvas2d.ts`: the hatch fallback compared `spec.kind`
+  (already narrowed to `lines | honeycomb | weave | bricks` by the
+  earlier branches) against `'cross'`; only `lines` carries an angle
+  there, so the check is now `spec.kind === 'lines'`.
+- `backends/webgl2.ts`: `WebGLObject` does not exist in the TS DOM
+  types; the owned-handle list and `track` now use a `GlOwned` union
+  of the six real handle types.
+- `web/scheduler-host.ts`: the `nearObserver` could be null at
+  `observe` time because only `viewObserver` was null-checked; both
+  observers are now (re)created when either is missing.
+- `web/figure-view.ts` (`painted`, `drawCalls`) and
+  `web/shared-context.ts` (`ctx2d`): initializers that every path
+  overwrote were removed in favour of declared-then-assigned.
+- `bench/view.bench.ts`: rewritten as a plain `performance.now()`
+  script that prints timings (Vitest 5 has no `bench` export). No
+  bench runner was added. Fixtures are now fully typed (`LabelInput[]`,
+  `px()` constructors) instead of `as never` casts. See Speed numbers
+  for the measured results and how they were taken.
+
+Needs the integrator: nothing. The branch is ready for the gates.
