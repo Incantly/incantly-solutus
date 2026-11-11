@@ -95,33 +95,12 @@ An `ObjId` is issued once. Redefinition, undo of a delete and loading a saved sc
 
 ### 4.2 Values
 
-A value is an immutable, structurally comparable record. Immutability makes cut-off cheap and undo exact.
+A value is immutable. Values are the language's raw runtime values (numbers, booleans, strings, points, lists, function values), not a `{ t, v }` tagged union (ruling K5). The type of a value is the `type` of the object that holds it. Immutability makes cut-off cheap and undo exact.
 
 ```ts
-type Value =
-  | { t: 'Number'; v: number }
-  | { t: 'Bool'; v: boolean }
-  | { t: 'Text'; v: string; parts?: TextPart[] }
-  | { t: 'Point'; x: number; y: number }
-  | { t: 'Vector'; x: number; y: number }
-  | { t: 'Segment'; a: Pt; b: Pt }
-  | { t: 'Ray'; from: Pt; dir: Pt }
-  | { t: 'Line'; a: number; b: number; c: number }       // a x + b y = c, normalised
-  | { t: 'Circle'; cx: number; cy: number; r: number }
-  | { t: 'Arc'; cx: number; cy: number; r: number; from: number; to: number }
-  | { t: 'Polygon'; pts: readonly Pt[] }
-  | { t: 'Function'; fn: CompiledFn }
-  | { t: 'Curve'; curve: CompiledCurve }
-  | { t: 'Region'; region: CompiledRegion }
-  | { t: 'List'; of: TypeName; items: readonly Value[] }
-  | { t: 'Color'; r: number; g: number; b: number; a: number }
-  | { t: 'Particles'; spec: ParticleSpec };
-
-type Pt = { x: number; y: number };
-
 type Cell =
-  | { defined: true; value: Value }
-  | { defined: false; reason: UndefReason; cause?: ObjId };   // cause = the nearest undefined input (a direct input), if inherited; following cause links reaches the root
+  | { defined: true; value: unknown }                                          // raw runtime value; its type is the object's `type`
+  | { defined: false; reason: UndefReason; detail?: string; cause?: ObjId };   // detail = one short text; cause = the nearest undefined input (a direct input), if inherited; following cause links reaches the root
 
 type UndefReason =
   | 'parallel' | 'coincident' | 'no_intersection' | 'out_of_domain' | 'division_by_zero'
@@ -157,9 +136,9 @@ The value `cell` and the `props` are kept apart on purpose. A change to colour n
 
 ```ts
 type Definition =
-  | { kind: 'free'; value: Value; range?: { min: number; max: number; step?: number } }
+  | { kind: 'free'; value: unknown; range?: { min: number; max: number; step?: number } }
   | { kind: 'rule'; text: string; ast: Node; rule: RuleInstance }   // command or formula
-  | { kind: 'state'; initial: Value }                               // see core design 7.2
+  | { kind: 'state'; initial: unknown }                               // see core design 7.2
   | { kind: 'rate'; of: ObjId; expr: Node }                         // name' = expr
 
 interface RuleInstance {
@@ -185,8 +164,8 @@ class Figure {
   on(listener: (ev: FigureEvent) => void): () => void;
 
   apply(line: ParsedLine, ctx?: TxContext): TxResult;      // one transaction, section 5
-  applyBatch(lines: ParsedLine[], opts: { group: string }): TxResult[];
-  setFree(id: ObjId, v: Value, why: 'drag' | 'slider' | 'show_me' | 'api'): FrameDelta;
+  applyBatch(lines: ParsedLine[], opts: BatchOptions): BatchResult;   // mode 'atomic' (default) or 'independent', section 5
+  setFree(id: ObjId, v: unknown, why: 'drag' | 'slider' | 'show_me' | 'api'): FrameDelta;
   setClock(t: number): FrameDelta;
   flush(): FrameDelta;               // run one update pass over everything marked
 
@@ -238,8 +217,9 @@ interface TxResult {
   // when ok:
   name?: Name; id?: ObjId; type?: TypeName;
   op?: 'add' | 'redefine' | 'restyle' | 'delete' | 'action' | 'undo' | 'redo' | 'directive' | 'comment';
-  summary?: string;                    // "M = (2, 3) : Point"
+  summary?: string;                    // "M = (2, 3)"; the type is in `type`
   changed: ChangeReport;
+  notices: Notice[];                   // facts worth saying, ../errors/design.md section 3.1 (ruling K3)
 }
 
 interface ChangeReport {
@@ -249,9 +229,20 @@ interface ChangeReport {
   moved: Name[];                       // reorder moves caused by redefinition
   becameUndefined: { name: Name; reason: UndefReason; cause?: Name }[];
   becameDefined: Name[];
-  warnings: Warning[];
+  warnings: Notice[];                  // the same array as TxResult.notices, kept so older readers work (ruling K3)
+}
+
+interface BatchResult {
+  ok: boolean;                         // true when no line failed
+  results: TxResult[];
+  applied: number;                     // lines committed (0 after a rollback)
+  rolledBack: boolean;                 // an atomic batch failed and was undone
+  changed: ChangeReport;               // the merged change of the batch
+  notices: Notice[];
 }
 ```
+
+`applyBatch` has two modes (ruling K6). `mode: 'atomic'` is the default: all lines or none, one undo step. `mode: 'independent'` runs every line on its own, as `errors.md` section 5 rule 2 describes.
 
 The change report is what the teacher reads. It is also the data behind the learner's toast ("M is now undefined: the lines are parallel").
 
@@ -319,9 +310,9 @@ Key points:
 ## 7. Free versus dependent, and dragging
 
 - `free` objects: `kind: 'free'`. Draggable if they are Points, sliders (Numbers with a range), Booleans (checkbox), Text positions in v1 excluded.
-- **Dependent points are not draggable in v1.** The core design's open question 2 asks whether dragging a dependent point should move its free parents. Our answer for the kernel: expose `dragPlan(id, target)` that returns either `null` or a list of `{id, value}` free writes; v1 returns writes only for a free point, a point on a path (projected parameter), and a point whose rule declares itself invertible (`Midpoint`, `Translate`, and `PointOn`). The kernel does the plumbing so tools can add invertible rules later without touching the view.
+- **Dependent points are not draggable in v1.** The core design's open question 2 asks whether dragging a dependent point should move its free parents. Our answer for the kernel: expose `dragPlan(id, target)` that returns `{ writes, reason?, kind? }` (ruling K8): `writes` is the list of `{id, value}` free writes, and when the drag is refused it is empty and `reason` says why. `kind` is `free`, `path` or `inverted`. v1 returns writes only for a free point, a point on a path (projected parameter), and a point whose rule declares itself invertible (`Midpoint`, `Translate`, and `PointOn`). The kernel does the plumbing so tools can add invertible rules later without touching the view.
 - A drag gesture is a sequence of `setFree(..., 'drag')` then `flush`. On release the gesture commits as **one** journal entry with the first and last value (section 11).
-- Dragging a fixed object is refused by the kernel (`dragPlan` returns `null` with reason `locked`), so no view has to remember to check.
+- Dragging a fixed object is refused by the kernel (`dragPlan` returns no writes, with reason `locked`), so no view has to remember to check.
 - `show_me` (the teacher changing a slider) uses `setFree(..., 'show_me')` and is journalled as a value change that undo can reverse.
 
 ---
@@ -335,7 +326,7 @@ Key points:
 | New inputs contain the object or a descendant | `cycle`, with `path` listing the chain `X -> ... -> X`. |
 | Different type | `type_change` (hint: `Delete(X)` first, or pick another name). |
 | Free object becomes rule, or the reverse | Allowed, same type. Style and id kept. Descendants recompute. |
-| Self-reference on a free `Number`, `Point` or `Bool` (`a = a + 1`, `A = A + (1, 1)`) | **Allowed**: evaluated once with the old value, stored as the new free value. It is an assignment, not a rule. Any other self-reference is `cycle`. |
+| Self-reference on a free `Number`, `Point` or `Bool` (`a = a + 1`, `A = A + Vector((1, 1))`) | **Allowed**: evaluated once with the old value, stored as the new free value. It is an assignment, not a rule. Any other self-reference is `cycle`. |
 | Fixed object | `locked` error. Hint: `X with fixed = false`. |
 | Redefine to the same text | Runs a plain update (matters for `rand`-like or clock-dependent rules); no structural change. |
 | Descendants become ill-typed | Not possible: types cannot change. A descendant that stops finding a valid argument shape becomes undefined, not an error (a rule's form was chosen when it was made). |
@@ -402,6 +393,7 @@ interface PropRule<R> {
 | `trace` | Bool | |
 | `tip` | enum | |
 | `tags` | text list | |
+| `animate` | plain word | Every drawable type. The kernel accepts and stores it; the values and what they do are animation-time 5.2 (ruling K11) |
 
 Unknown key: `unknown_property`, hint lists the keys valid for that object's type.
 
@@ -411,7 +403,7 @@ Unknown key: `unknown_property`, hint lists the keys valid for that object's typ
 
 - A change to `a` marks the owner for restyle, not for a value recompute. The owner's `cell` is untouched, and no maths rule downstream runs because of a style edge.
 - Style edges can never form a cycle, because a property rule reads other objects' *values* and nothing reads a style. A point whose colour reads its own `x`, or an object whose `showIf` reads its own value, is therefore legal. The cycle check on lines only follows value edges.
-- When an input is deleted, the owner is not deleted (GeoGebra deletes dependents). The property rule is **detached** and the property reverts to its default, with a warning in the change report. Rationale: deleting a point because the slider that coloured it went away is a surprising cascade.
+- When an input is deleted, the owner is not deleted (GeoGebra deletes dependents). The property rule is **detached** and the property reverts to its default, with a `property_detached` notice. Rationale: deleting a point because the slider that coloured it went away is a surprising cascade.
 - Property rules are saved after the object's own line, in `with` form.
 
 ### 9.3 Defaults
@@ -436,7 +428,7 @@ These are data in a `defaultsFor(type, free)` table, not code branches, and a fi
 - `color = hsl(h, s, l)` with h in degrees, s and l in 0..1. Hue wraps. (GeoGebra offers HSV too; we offer HSL and `hsv(h, s, v)` both, converting to RGB at read time.)
 - `color = Gradient(u, c1, c2, ...)` is the colour map from the core design's particles section, usable for any object.
 - `opacity = expression` in 0..1; out of range clamps; `NaN` falls back.
-- If the rule is undefined (an input is undefined) the property reverts to its static value while undefined and no warning is raised. Rationale: a colour that depends on a missing thing should not make the object vanish.
+- If the rule is undefined (an input is undefined) the property reverts to its static value while undefined and no notice is raised. Rationale: a colour that depends on a missing thing should not make the object vanish.
 - Evaluating a property rule never allocates: it writes into a preallocated `Float32Array(4)` slot owned by the drawable.
 
 ### 9.5 Layers
@@ -466,8 +458,8 @@ These are data in a `defaultsFor(type, free)` table, not code branches, and a fi
 The clock, states and ODE solver are owned by the motion area. The kernel provides:
 
 - `t` as a built-in free source, set only by `setClock`.
-- A `state` definition kind (4.4) whose value the solver writes through `setFree(..., 'solver')`; this write is **not journalled** (it is derived, not authored).
-- Sliders: a free Number with `range`. `animate: { speed, mode: 'oscillate' | 'forward' | 'backward', running }` is a property that the player reads; it is *not* part of the maths and does not use wall time (it is a function of `t` and speed, so it replays and seeks).
+- A `state` definition kind (4.4) whose value the solver writes through `setFree(..., 'solver')`; this write is **not journalled** (it is derived, not authored). Rates run as compiled closures (ruling K10); the flat `RateProgram` form in animation-time 7.2 is the motion area's job.
+- Sliders: a free Number with `range`. `with animate = ...` is a property (ruling K11) that the player reads. The kernel accepts and stores any plain word; the values (`off`, `bounce`, `loop`, `loop-down`, `once`, `once-down`) and what each one does are defined in animation-time 5.2. It is *not* part of the maths and does not use wall time (it is a function of `t` and its settings, so it replays and seeks).
 
 ---
 
@@ -481,7 +473,7 @@ type JournalEntry =
   | { k: 'remove'; objs: { snap: ObjSnapshot; pos: number }[] }          // cascade list, in removal order
   | { k: 'redefine'; id: ObjId; before: DefSnapshot; after: DefSnapshot; moves: Move[] }
   | { k: 'props'; id: ObjId; before: Partial<Props>; after: Partial<Props> }
-  | { k: 'value'; id: ObjId; before: Value; after: Value }               // free write (coalesced)
+  | { k: 'value'; id: ObjId; before: unknown; after: unknown }               // free write (coalesced)
   | { k: 'rename'; id: ObjId; from: Name; to: Name }
   | { k: 'reorder'; moves: Move[] }
   | { k: 'group'; label: string; entries: JournalEntry[] };              // one undo step
@@ -567,13 +559,13 @@ Every command form in the command table carries an `explain` template with slots
 A = (0, 0)
 B = (4, 0)
 C = (1, 3) with color = red
-a = 2 in 0..5 step 0.5 with animate = oscillate
+a = 2 in 0..5 step 0.5 with animate = bounce
 M = Midpoint(A, B)
 @step "Bisect AC"
 N = Midpoint(A, C) with showIf = (a < 3), layer = 2
 ```
 
-- First line `@fig <version>` (integer). A loader that sees a larger version refuses with `load_failed` kind `version`, listing the supported ones.
+- First line `@fig <version>` (integer). A loader that sees a larger version refuses with its own error kind `version` (code K042, ruling K7), not `load_failed`, listing the supported ones.
 - One object per line in order, then `with` only for properties that differ from the type default.
 - Free objects store their **current value** in the line (`A = (1, 2)`), dependent store their rule text. Slider ranges in `in a..b step s`.
 - Numbers print as the shortest string that round-trips (`0.1`, not `0.1000000000000000055`); `NaN`/`Infinity` print as `undefined` for free values.
@@ -620,7 +612,7 @@ These return data in the `TxResult` (they do not create objects). `DependsOn` an
 
 ### Naming helper for tools
 
-`suggestName(type, hint?)`: points `A, B, ... Z, A1, B1 ...`; numbers `a, b, c ...`; functions `f, g, h`; lines and circles `l1, l2` / `c1, c2`; polygons `poly1`; texts `text1`; booleans `flag1`. Skips taken and reserved names. This is for pointer tools and the playground; the teacher always names its own objects.
+`suggestName(type, hint?)` uses the one name table in the language design (3.7): points `A, B, ... Z, A_1, B_1 ...`; vectors `u v w`; lines, rays and segments `l m n`; numbers `a b c d` (angles `α β γ δ`); functions `f g h p q r`; circles, arcs and curves `c d k`; lists `L M N`; polygons `poly1`; regions `reg1`; texts `text1`; booleans `cond1`. After the letters, a sequence continues with `_1`, `_2` (`l_1`). Skips taken and reserved names. This is for pointer tools and the playground; the teacher always names its own objects.
 
 ---
 
@@ -636,7 +628,7 @@ These return data in the `TxResult` (they do not create objects). `DependsOn` an
 | Undo of one line in 500 objects | < 1 ms | |
 | Load 1,000-line script | < 100 ms | bulk mode |
 | `toScript` for 1,000 objects | < 20 ms | |
-| Memory per object | < 600 bytes plus value | |
+| Memory per object | < 600 bytes plus value | Not met in v1: each object keeps its checked and compiled line (ruling K9). Revisit after the first areas plug in. |
 
 Method notes: all lookups are `Map` or typed-array indexed; the `downstream` arrays are `Int32Array`; no per-frame allocation in the pass except new immutable values for changed cells (which are short-lived and small).
 
@@ -645,7 +637,7 @@ Method notes: all lookups are `Map` or typed-array indexed; the `downstream` arr
 - Two references to the same input (`Midpoint(A, A)`) are one edge.
 - A rule that reads `t` and `a` is a source-dependent rule on both; seeking and slider moves both mark it.
 - Deleting `t`-dependent objects never touches `t`.
-- Names that differ only by case are distinct (`a` and `A`); the error `name_taken` hint points out the near-collision with a warning (`confusable_name`), since a model can mistake them.
+- Names that differ only by case are distinct (`a` and `A`); the error `name_taken` hint points out the near-collision with a notice (`confusable_name`), since a model can mistake them.
 - A figure with zero objects still has `t`, axes settings and the view; `toScript()` yields the header and directives.
 - Maximum limits (defaults, all overridable by the host): objects 5,000; expression nodes 400 per line; line length 2,000 chars; list size 100,000; journal 500 entries; rule nesting depth 64.
 
@@ -657,7 +649,7 @@ Method notes: all lookups are `Map` or typed-array indexed; the `downstream` arr
 2. **Early cut-off.** Rules run only when an input actually changed value.
 3. **Exact undo.** Small inverse entries, stable ids, per-gesture and per-utterance grouping. No snapshots.
 4. **Undefined with a chain.** `cause` names the nearest undefined input; following the `cause` links reaches the root undefined object.
-5. **Change report on every line.** Added, removed, moved, redefined, now-undefined, now-defined, and warnings; the teacher can narrate correctly.
+5. **Change report on every line.** Added, removed, moved, redefined, now-undefined, now-defined, and notices; the teacher can narrate correctly.
 6. **Dry run.** Preview that is guaranteed to match commit.
 7. **Style edges apart from value edges.** Colour and `showIf` never trigger a maths recompute.
 8. **Detach, not cascade, for property rules.** Deleting a slider does not delete what it coloured.

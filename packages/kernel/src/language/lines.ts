@@ -182,20 +182,38 @@ function checkCycle(c: Checker, target: NameRef, existing: ObjectInfo, lineSpan:
   return true;
 }
 
-function checkRedefinition(c: Checker, target: NameRef, existing: ObjectInfo | undefined, newTy: Ty, lineSpan: SpanLike): void {
+function checkRedefinition(c: Checker, target: NameRef, existing: ObjectInfo | undefined, newTy: Ty, lineSpan: SpanLike, pending = 0): void {
   if (!existing) {
-    if (c.fig.size !== undefined && c.fig.size >= MAX_OBJECTS) {
-      c.err('limit', target.s, target.e, 'lang.limit', { limit: 'objects', max: MAX_OBJECTS, got: c.fig.size + 1, what: 'objects in a figure' }, {
+    const maxObjects = c.opts.limits?.objects ?? MAX_OBJECTS;
+    if (c.fig.size !== undefined && c.fig.size + pending >= maxObjects) {
+      c.err('limit', target.s, target.e, 'lang.limit', { limit: 'objects', max: maxObjects, got: c.fig.size + pending + 1, what: 'objects in a figure' }, {
         hint: 'Delete objects you no longer need, or build the shape from fewer objects.',
-        limit: { name: 'objects', max: MAX_OBJECTS, got: c.fig.size + 1 },
+        limit: { name: 'objects', max: maxObjects, got: c.fig.size + pending + 1 },
         fingerprintKey: 'objects',
       });
     }
     return;
   }
   if (!sameKind(existing.type, newTy)) {
+    // what Delete would take with it: every object that reads this one, directly or not
+    const takes: string[] = [];
+    const seen = new Set<ObjId>([existing.id]);
+    for (let i = -1; i < takes.length && takes.length < 50; i++) {
+      for (const d of c.fig.dependentsOf(i < 0 ? existing.id : (c.fig.lookup(takes[i] as string)?.id as ObjId))) {
+        if (seen.has(d.id)) continue;
+        seen.add(d.id);
+        takes.push(d.name);
+      }
+    }
+    let fresh = target.name;
+    for (let n = 2; n < 1000; n++) {
+      fresh = `${target.name}${n}`;
+      if (!c.fig.lookup(fresh)) break;
+    }
+    const removes = takes.length > 0 ? ` (this removes ${takes.length} object${takes.length === 1 ? '' : 's'} that use${takes.length === 1 ? 's' : ''} ${target.name}: ${takes.slice(0, 8).join(', ')}${takes.length > 8 ? ', …' : ''})` : '';
     c.err('type_change', lineSpan.s, lineSpan.e, 'lang.type_change', { name: target.name, from: tyStr(existing.type), to: tyStr(newTy) }, {
-      hint: `Delete(${target.name}) first to change its type, or use a different name.`,
+      hint: `Pick a new name, or Delete(${target.name}) first${removes}.`,
+      suggest: [c.replaceRange(target.s, target.e, fresh)],
       left: tyStr(existing.type),
       right: tyStr(newTy),
       fingerprintKey: `${target.name}:${tyStr(existing.type)}:${tyStr(newTy)}`,
@@ -320,9 +338,10 @@ function hexWord(w: string): boolean {
   return /^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(w);
 }
 
-function checkStyle(c: Checker, items: readonly StyleItem[]): CheckedStyle[] {
+function checkStyle(c: Checker, items: readonly StyleItem[], ty?: Ty): CheckedStyle[] {
   const out: CheckedStyle[] = [];
-  const keys = Object.keys(PROPERTIES);
+  const perType = ty !== undefined && c.opts.propertyKeys !== undefined ? c.opts.propertyKeys(ty.k) : undefined;
+  const keys = perType ?? Object.keys(PROPERTIES);
   for (const it of items) {
     // each property rule keeps its own reads (kernel design 9.2: a property rule is an edge from its inputs), so a
     // later rule for the same property can drop exactly the edges of the rule it replaces
@@ -330,7 +349,7 @@ function checkStyle(c: Checker, items: readonly StyleItem[]): CheckedStyle[] {
     c.reads = new Set<ObjId>();
     const from = out.length;
     try {
-      checkStyleItem(c, it, keys, out);
+      checkStyleItem(c, it, keys, out, ty, perType !== undefined);
       const reads = [...c.reads];
       for (let i = from; i < out.length; i++) out[i] = { ...(out[i] as CheckedStyle), reads };
     } finally {
@@ -341,13 +360,14 @@ function checkStyle(c: Checker, items: readonly StyleItem[]): CheckedStyle[] {
   return out;
 }
 
-function checkStyleItem(c: Checker, it: StyleItem, keys: readonly string[], out: CheckedStyle[]): void {
+function checkStyleItem(c: Checker, it: StyleItem, keys: readonly string[], out: CheckedStyle[], ty: Ty | undefined, perType: boolean): void {
   const spec = own(PROPERTIES, it.key);
-  if (!spec) {
-    const close = closestNames(it.key, keys, 3);
-    c.err('unknown_property', it.ks, it.ke, 'lang.unknown_property', { key: it.key }, {
+  if (!spec || (perType && !keys.includes(it.key))) {
+    const close = closestNames(it.key, keys, perType ? 1 : 3);
+    c.err('unknown_property', it.ks, it.ke, 'lang.unknown_property', { type: ty?.k ?? 'An object', key: it.key }, {
       expected: keys,
-      hint: close.length > 0 ? `Did you mean ${close.join(' or ')}? Properties: ${keys.join(', ')}.` : `Properties: ${keys.join(', ')}.`,
+      ...(perType ? { uncapped: true } : {}),
+      hint: close.length > 0 ? (perType ? `Did you mean ${close.join(' or ')}?` : `Did you mean ${close.join(' or ')}? Properties: ${keys.join(', ')}.`) : `Properties: ${keys.join(', ')}.`,
       suggest: close.slice(0, 2).map((k) => c.replaceRange(it.ks, it.ke, k)),
       fingerprintKey: it.key,
     });
@@ -355,10 +375,10 @@ function checkStyleItem(c: Checker, it: StyleItem, keys: readonly string[], out:
   }
   const v = it.value;
   const bad = (suggest?: string): void => {
-    const extra: ErrorExtra = { hint: `${it.key} must be ${spec.allowed}.`, fingerprintKey: it.key };
+    const extra: ErrorExtra = { hint: `${it.key} must be ${spec.allowed}.`, fingerprintKey: it.key, recovery: 'fix_line' };
     if (spec.values) extra.expected = spec.values;
     if (suggest !== undefined) extra.suggest = [suggest];
-    c.err('bad_property_value', v.s, v.e, 'lang.bad_property_value', { key: it.key, allowed: spec.allowed }, extra);
+    c.err('bad_property_value', v.s, v.e, 'lang.bad_property_value', { key: it.key, allowed: spec.allowed, token: c.textOf(v) }, extra);
   };
   // a call in a position that takes a plain word still gets checked, so an action there says it is an action
   if ((spec.kind === 'bool' || spec.kind === 'enum') && v.k === 'call' && !c.infer(v)) return;
@@ -480,7 +500,7 @@ function checkDefine(c: Checker, node: Extract<LineNode, { k: 'define' }>): Part
   // Q-R4-1: in the `with` list of a first definition the name being defined is the new object
   const ownTy = tn ? (tn.n === 'relation' ? shapeType(tn.shape) : tn.ty) : undefined;
   const self: ObjectInfo | undefined = ownTy && !existing ? { id: SELF_ID, name: t.name, type: ownTy, free: false, ...(tn?.unit ? { unit: tn.unit } : {}) } : undefined;
-  const style = node.style ? c.apart('style', () => c.withSelf(self, () => checkStyle(c, node.style as readonly StyleItem[]))) : undefined;
+  const style = node.style ? c.apart('style', () => c.withSelf(self, () => checkStyle(c, node.style as readonly StyleItem[], ownTy ?? existing?.type))) : undefined;
   c.styleReads.delete(SELF_ID);
   if (!tn) return undefined;
 
@@ -569,10 +589,12 @@ function checkDefMany(c: Checker, node: Extract<LineNode, { k: 'defmany' }>): Pa
   }
   if (c.errors.length > 0) return undefined;
   let existingId: ObjId | undefined;
+  let pending = 0;
   node.targets.forEach((t, i) => {
     const ex = c.fig.lookup(t.name);
     if (ex && existingId === undefined) existingId = ex.id;
-    checkRedefinition(c, t, ex, tuple[i] as Ty, { s: node.targets[0]!.s, e: node.expr.e });
+    checkRedefinition(c, t, ex, tuple[i] as Ty, { s: node.targets[0]!.s, e: node.expr.e }, pending);
+    if (!ex) pending++;
   });
   return {
     kind: 'defmany',
@@ -637,7 +659,7 @@ function checkFunction(c: Checker, node: Extract<LineNode, { k: 'function' }>): 
   const existing = c.fig.lookup(t.name);
   const ownTy = body && ok && (body.ty.k === 'Number' || body.ty.k === 'Point') ? fnOf(body.ty.k, params.length) : undefined;
   const self: ObjectInfo | undefined = ownTy && !existing ? { id: SELF_ID, name: t.name, type: ownTy, free: false } : undefined;
-  const style = node.style ? c.apart('style', () => c.withSelf(self, () => checkStyle(c, node.style as readonly StyleItem[]))) : undefined;
+  const style = node.style ? c.apart('style', () => c.withSelf(self, () => checkStyle(c, node.style as readonly StyleItem[], ownTy ?? existing?.type))) : undefined;
   c.styleReads.delete(SELF_ID);
   if (!body || !ok) return undefined;
   if (body.ty.k !== 'Number' && body.ty.k !== 'Point') {
@@ -725,7 +747,7 @@ function checkRestyle(c: Checker, node: Extract<LineNode, { k: 'restyle' }>): Pa
     c.unknownNameAt(t);
     return undefined;
   }
-  const style = c.apart('style', () => checkStyle(c, node.style));
+  const style = c.apart('style', () => checkStyle(c, node.style, obj.type));
   if (c.errors.length > 0) return undefined;
   return { kind: 'restyle', op: 'restyle', names: [t.name], type: obj.type, free: false, isState: false, existing: obj.id, style };
 }
@@ -824,6 +846,10 @@ function checkDirective(c: Checker, node: Extract<LineNode, { k: 'directive' }>)
       break;
     case 'beat':
       if (words.length < 1) return bad('an id and an optional "title"');
+      break;
+    case 'tol':
+    case 'tolerance':
+      if (words.length !== 1 || words[0]?.num === undefined || !(words[0].num > 0) || !Number.isFinite(words[0].num)) return bad('a positive number like 1e-9');
       break;
     case 'clock':
       if (words.length !== 1 || !/^\d+(?:\.\d+)?\.\.\d+(?:\.\d+)?$/.test(words[0]?.text ?? '')) return bad('a range like 0..30');

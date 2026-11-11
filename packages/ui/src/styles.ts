@@ -165,5 +165,37 @@ export const LIST_CSS = `
 .cause button:focus-visible { outline: 2px solid var(--inc-accent); outline-offset: 1px; }
 .warn { padding-left: 1.2em; font-size: 13px; color: var(--inc-secondary); }
 .warn::before { content: "⚠ "; }
-@media (pointer: coarse) { .row { min-height: 44px; } .cause button { min-height: 44px; min-width: 44px; } }
+.row.marked { border-left-color: var(--inc-error); background: rgba(180, 35, 44, 0.08); }
+.chip { flex: none; padding: 0 6px; border-radius: 10px; font-size: 12px; border: 1px solid var(--inc-border); color: var(--inc-secondary); }
+.chip.rel { color: var(--inc-error); border-color: var(--inc-error); }
+.chip[hidden] { display: none; }
+.acts { flex: none; display: inline-flex; gap: 4px; }
+.act { padding: 0 6px; min-height: 24px; border: 1px solid var(--inc-border); border-radius: 6px; background: transparent; color: var(--inc-ink); font: inherit; font-size: 13px; cursor: pointer; }
+.act:focus-visible, .control:focus-visible { outline: 2px solid var(--inc-accent); outline-offset: 1px; }
+.ctl { padding: 2px 0 2px 1.2em; }
+.ctl[hidden] { display: none; }
+.ctl label { display: flex; align-items: center; gap: 8px; }
+.ctl .lbl { flex: none; min-width: 4.5em; font-family: ui-monospace, Menlo, monospace; font-size: 13px; color: var(--inc-secondary); }
+.ctl input[type="text"] { flex: 1 1 auto; min-width: 0; max-width: 14em; padding: 2px 6px; font: 14px ui-monospace, Menlo, monospace; color: var(--inc-ink); background: var(--inc-bg); border: 1px solid var(--inc-border); border-radius: 4px; }
+.ctl input[type="range"] { flex: 1 1 auto; min-width: 0; }
+@media (pointer: coarse) { .row { min-height: 44px; } .cause button, .act { min-height: 44px; min-width: 44px; } .ctl input { min-height: 44px; } }
+`;
+
+export const CARD_CSS = `
+:host { display: block; font: 14px/1.5 ui-sans-serif, system-ui, sans-serif; color: var(--inc-ink); }
+* { box-sizing: border-box; }
+.card { display: flex; gap: 8px; padding: 8px 12px; border: 1px solid var(--inc-error); border-radius: 6px; background: var(--inc-bg); }
+.bang { flex: none; font-weight: 700; color: var(--inc-error); }
+.main { flex: 1 1 auto; min-width: 0; }
+.msg { margin: 0; }
+.hint { margin: 2px 0 0; color: var(--inc-secondary); }
+.why { margin: 2px 0 0; padding-left: 1.2em; color: var(--inc-secondary); font-size: 13px; }
+.row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; align-items: center; }
+.row .lbl { color: var(--inc-secondary); font-size: 13px; }
+button { padding: 2px 8px; min-height: 28px; border: 1px solid var(--inc-border); border-radius: 6px; background: transparent; color: var(--inc-ink); font: 13px ui-monospace, Menlo, monospace; cursor: pointer; }
+button.close { flex: none; align-self: flex-start; font: 14px ui-sans-serif, system-ui, sans-serif; }
+button:focus-visible { outline: 2px solid var(--inc-accent); outline-offset: 1px; }
+.tech { color: var(--inc-secondary); font-size: 12px; }
+:host([hidden]), [hidden] { display: none; }
+@media (pointer: coarse) { button { min-height: 44px; min-width: 44px; } }
 `;

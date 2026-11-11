@@ -99,7 +99,7 @@ Same list as `kernel/errors.md` section 2, with plain-language phrases. The phra
 | `not_set` | "not set" | "This has no value yet." |
 | `limit` | "too big" | "That would be too large." |
 
-The numeric reasons carry optional `detail` (`achieved`, `wanted`, `iterations`) used by authors, not spoken.
+The numeric reasons carry an optional `detail`, a short plain-text fact such as `reached 3e-4, wanted 1e-9 after 50 iterations`, used by authors, not spoken. `detail` is one string, as in the cell (`Cell.detail`).
 
 ## 4. Notices (success with facts)
 
@@ -114,6 +114,9 @@ The numeric reasons carry optional `detail` (`achieved`, `wanted`, `iterations`)
 | `redefined_to_same` K107 | no structural change | `{name} was already defined that way.` | |
 | `listener_failed` K108 | a listener threw (view, film) | `A view failed to update; the figure is fine.` | where |
 | `step_hidden` K109 | new object added while step cursor is before the end | `{name} is added after the step you are viewing.` | |
+| `clamped` K110 | a free write was moved to the end of the slider's range | `{name} was moved to {value}, the {end} of its range.` | |
+| `shadowed_default` K111 | a style was set to what the default already is | `{name}: {key} is already {value}.` | |
+| `unstable_state` K112 | a state became unstable (the solver blew up) | `The state {names} became unstable at t = {t}.` | |
 
 ## 5. Examples
 
