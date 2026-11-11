@@ -138,7 +138,8 @@ function keyOf(b: SymNodeBody): string {
   }
 }
 
-function condKey(c: SymCond): string {
+/** A structural key for a condition: the ids of its nodes and its exact shape. */
+export function condKey(c: SymCond): string {
   switch (c.c) {
     case 'true': return 'T';
     case 'false': return 'F';
@@ -150,31 +151,82 @@ function condKey(c: SymCond): string {
   }
 }
 
-/** The arena: every node of one engine instance. Rebuild drops unreachable nodes. */
+/**
+ * The arena: every node of one engine instance. Node ids are never reused, so an id that a
+ * cache or memo holds names one structure for the life of the process. `rebuild` drops every
+ * node except the base set (the module constants, marked by `markBase`) and tells the
+ * listeners (the run cache) to forget what they held.
+ */
 export interface Arena {
   intern(b: SymNodeBody): SymNode;
+  /** The canonical node for this body, or undefined when there is none. */
+  lookup(b: SymNodeBody): SymNode | undefined;
   size(): number;
+  /** Nodes created since the arena was made (never decreases). */
+  created(): number;
+  /** Pin every node that exists now as part of the base set. Ignored after `sealBase`. */
+  markBase(): void;
+  sealBase(): void;
+  /** Drop every node outside the base set and call the listeners. */
+  rebuild(): void;
+  /** Same as `rebuild`: constants stay interned, ids stay unique. */
   clear(): void;
+  onRebuild(listener: () => void): void;
+  /** Stop creating nodes after `max` more; the returned function restores the previous guard. */
+  guard(max: number): () => void;
 }
+
+/** Nodes held before the arena is rebuilt at the start of a top-level run (design 5.13). */
+export const ARENA_REBUILD_AT = 1_000_000;
 
 export function createArena(): Arena {
   const map = new Map<string, SymNode>();
+  let base = new Map<string, SymNode>();
+  let sealed = false;
+  const listeners: (() => void)[] = [];
   let next = 1;
+  let capAt = Infinity;
+  const rebuild = (): void => {
+    map.clear();
+    for (const [k, v] of base) map.set(k, v);
+    for (const l of listeners) l();
+  };
   return {
     intern(b: SymNodeBody): SymNode {
       const key = keyOf(b);
       const hit = map.get(key);
       if (hit !== undefined) return hit;
+      if (next > capAt) throw new LimitExceeded('nodes');
       const n = { ...b, id: next++, hash: hashBody(b) } as SymNode;
       map.set(key, n);
       return n;
     },
+    lookup(b: SymNodeBody): SymNode | undefined {
+      return map.get(keyOf(b));
+    },
     size(): number {
       return map.size;
     },
-    clear(): void {
-      map.clear();
-      next = 1;
+    created(): number {
+      return next - 1;
+    },
+    markBase(): void {
+      if (!sealed) base = new Map(map);
+    },
+    sealBase(): void {
+      sealed = true;
+    },
+    rebuild,
+    clear: rebuild,
+    onRebuild(listener: () => void): void {
+      listeners.push(listener);
+    },
+    guard(max: number): () => void {
+      const before = capAt;
+      capAt = Math.min(before, next - 1 + max);
+      return (): void => {
+        capAt = before;
+      };
     },
   };
 }
@@ -182,8 +234,123 @@ export function createArena(): Arena {
 /** The shared arena. Engines that need isolation create their own. */
 export const arena: Arena = createArena();
 
+/* --------------------------- size limits (digits) ----------------------------- */
+
+/** The digit limit in force for the current run (set by `run`; design 5.5, 5.13). */
+let digitCap = 100_000;
+
+/** Run `f` with the given digit limit, then restore the previous one. */
+export function withDigitLimit<T>(maxDigits: number, f: () => T): T {
+  const before = digitCap;
+  digitCap = maxDigits;
+  try {
+    return f();
+  } finally {
+    digitCap = before;
+  }
+}
+
+export function digitLimit(): number {
+  return digitCap;
+}
+
+const LOG10_2 = 0.30102999566398120;
+
+/** Number of bits of |v| (0 for 0). */
+export function bitLength(v: bigint): number {
+  if (v === 0n) return 0;
+  const a = v < 0n ? -v : v;
+  if (a < 4294967296n) return Number(a).toString(2).length;
+  const hex = a.toString(16);
+  return (hex.length - 1) * 4 + (parseInt(hex[0] as string, 16)).toString(2).length;
+}
+
+/** Throw `LimitExceeded('digits')` when |v| has more decimal digits than the limit. */
+export function checkBigDigits(v: bigint): void {
+  if (v < 1_000_000_000_000_000n && v > -1_000_000_000_000_000n) return;
+  const a = v < 0n ? -v : v;
+  // Cheap upper bound first: 4 bits per hex digit, then exact enough via the bit length.
+  if (bitLength(a) * LOG10_2 > digitCap + 1) throw new LimitExceeded('digits');
+}
+
+/** Throw before computing `base ^ exp` when it would have more digits than the limit. */
+export function guardPowDigits(base: bigint, exp: bigint | number): void {
+  const e = typeof exp === 'bigint' ? exp : BigInt(Math.trunc(exp));
+  if (e <= 1n) return;
+  const bits = bitLength(base) - 1;
+  if (bits <= 0) return;
+  if (e > BigInt(Number.MAX_SAFE_INTEGER) || bits * Number(e) * LOG10_2 > digitCap + 1) throw new LimitExceeded('digits');
+}
+
+/** Throw before multiplying two integers whose product would pass the digit limit. */
+export function guardMulDigits(a: bigint, b: bigint): void {
+  if ((a < 1_000_000_000_000n && a > -1_000_000_000_000n) && (b < 1_000_000_000_000n && b > -1_000_000_000_000n)) return;
+  if ((bitLength(a) + bitLength(b) - 1) * LOG10_2 > digitCap + 1) throw new LimitExceeded('digits');
+}
+
+function guardBody(b: SymNodeBody): void {
+  switch (b.k) {
+    case 'int': checkBigDigits(b.v); return;
+    case 'rat': checkBigDigits(b.n); checkBigDigits(b.d); return;
+    case 'dec': checkBigDigits(b.mant); return;
+    default: return;
+  }
+}
+
 function intern(b: SymNodeBody): SymNode {
+  guardBody(b);
   return arena.intern(b);
+}
+
+/** True when `n` is the arena's own node (not a stale one or a structured clone). */
+export function isInterned(n: SymNode): boolean {
+  return arena.lookup(n) === n;
+}
+
+/**
+ * Rebuild a tree from foreign nodes (a structured clone, a node from before an arena
+ * rebuild) into this arena's nodes, bottom-up, keeping the exact shape. Never trusts `id`.
+ */
+export function internTree(n: SymNode, memo: Map<SymNode, SymNode> = new Map()): SymNode {
+  if (isInterned(n)) return n;
+  const hit = memo.get(n);
+  if (hit !== undefined) return hit;
+  const go = (t: SymNode): SymNode => internTree(t, memo);
+  let out: SymNode;
+  switch (n.k) {
+    case 'int': out = intern({ k: 'int', v: n.v }); break;
+    case 'rat': out = intern({ k: 'rat', n: n.n, d: n.d }); break;
+    case 'dec': out = intern({ k: 'dec', mant: n.mant, exp: n.exp, prec: n.prec }); break;
+    case 'float': out = intern({ k: 'float', v: n.v }); break;
+    case 'const': out = intern({ k: 'const', name: n.name }); break;
+    case 'sym': out = intern({ k: 'sym', name: n.name }); break;
+    case 'ref': out = intern({ k: 'ref', obj: n.obj }); break;
+    case 'add': out = intern({ k: 'add', terms: n.terms.map(go) }); break;
+    case 'mul': out = intern({ k: 'mul', factors: n.factors.map(go) }); break;
+    case 'pow': out = intern({ k: 'pow', base: go(n.base), exp: go(n.exp) }); break;
+    case 'fn': out = intern({ k: 'fn', name: n.name, args: n.args.map(go) }); break;
+    case 'rootof': out = intern({ k: 'rootof', poly: { c: [...n.poly.c], den: n.poly.den }, index: n.index, hint: n.hint }); break;
+    case 'list': out = intern({ k: 'list', items: n.items.map(go) }); break;
+    case 'piecewise': {
+      const cases = n.cases.map((cs) => ({ when: internCondTree(cs.when, memo), then: go(cs.then) }));
+      out = n.other === undefined ? intern({ k: 'piecewise', cases }) : intern({ k: 'piecewise', cases, other: go(n.other) });
+      break;
+    }
+  }
+  memo.set(n, out);
+  return out;
+}
+
+export function internCondTree(c: SymCond, memo: Map<SymNode, SymNode> = new Map()): SymCond {
+  switch (c.c) {
+    case 'rel': return { c: 'rel', op: c.op, l: internTree(c.l, memo), r: internTree(c.r, memo) };
+    case 'in': return { c: 'in', l: internTree(c.l, memo), set: c.set };
+    case 'not': return { c: 'not', of: internCondTree(c.of, memo) };
+    case 'and': return { c: 'and', of: c.of.map((o) => internCondTree(o, memo)) };
+    case 'or': return { c: 'or', of: c.of.map((o) => internCondTree(o, memo)) };
+    case 'true': return { c: 'true' };
+    case 'false': return { c: 'false' };
+  }
 }
 
 /* ------------------------------ total ordering ------------------------------ */
@@ -344,6 +511,18 @@ export function bigGcd(a: bigint, b: bigint): bigint {
     b = t;
   }
   return a === 0n ? 1n : a;
+}
+
+/** Greatest common divisor of two whole numbers: gcd(0, 0) is 0. */
+export function gcdWhole(a: bigint, b: bigint): bigint {
+  a = a < 0n ? -a : a;
+  b = b < 0n ? -b : b;
+  while (b !== 0n) {
+    const t = a % b;
+    a = b;
+    b = t;
+  }
+  return a;
 }
 
 export function isZeroNode(n: SymNode): boolean {
@@ -586,24 +765,21 @@ function isNegativeNumber(n: SymNode): boolean {
   return false;
 }
 
-/** Exact number^integer with a size guard (100,000 digits). Null when it must stay folded later. */
+/**
+ * Exact number^integer with a size guard: a result with more digits than the digit limit
+ * stays unfolded (null). The size is predicted from the bit length before any power is
+ * computed, so the base is never squared past the limit.
+ */
 function intPowNumber(base: SymNode, e: bigint): SymNode | null {
   const neg = e < 0n;
   const ae = neg ? -e : e;
   if (ae > 1000000n) return null;
   if (base.k === 'int') {
     if (ae === 0n) return ONE;
-    let r = 1n;
-    let b = base.v;
-    let k = ae;
-    while (k > 0n) {
-      if ((k & 1n) === 1n) {
-        r *= b;
-        if (r.toString().length > 100000) return null;
-      }
-      k >>= 1n;
-      if (k > 0n) b *= b;
-    }
+    const bits = bitLength(base.v) - 1;
+    if (bits > 0 && bits * Number(ae) * LOG10_2 > digitCap) return null;
+    const r = base.v ** ae;
+    if (bitLength(r) * LOG10_2 > digitCap + 1) return null;
     return neg ? ratN(1n, r) : intN(r);
   }
   if (base.k === 'rat') {
@@ -638,6 +814,17 @@ function foldFn(name: SymFn, args: readonly SymNode[]): SymNode | null {
   if (name === 'sign' && isNumberNode(a0)) {
     if (isZeroNode(a0)) return ZERO;
     return isNegativeNumber(a0) ? MINUS_ONE : ONE;
+  }
+  if ((name === 'floor' || name === 'ceil' || name === 'round') && (a0.k === 'int' || a0.k === 'rat')) {
+    if (a0.k === 'int') return a0;
+    // Exact: BigInt floor division (the denominator is positive); round is floor(x + 1/2).
+    const fl = (n: bigint, d: bigint): bigint => {
+      const q = n / d;
+      return n < 0n && n % d !== 0n ? q - 1n : q;
+    };
+    if (name === 'floor') return intN(fl(a0.n, a0.d));
+    if (name === 'ceil') return intN(-fl(-a0.n, a0.d));
+    return intN(fl(2n * a0.n + a0.d, 2n * a0.d));
   }
   if ((name === 'floor' || name === 'ceil' || name === 'round') && isNumberNode(a0)) {
     const v = toFloat(a0);
@@ -769,8 +956,12 @@ function exactTrigValue(name: SymFn, n: bigint, d: bigint): SymNode | null {
       case '11/6': return neg(HALF);
       default: break;
     }
-    if (dd === 12n || dd === 24n) {
+    if (dd === 12n) {
       const reduced = reduceTrig12(nn, dd);
+      if (reduced !== null) return reduced;
+    }
+    if (dd === 24n) {
+      const reduced = reduceTrig24(nn);
       if (reduced !== null) return reduced;
     }
     if (dd === 10n || dd === 5n) {
@@ -825,6 +1016,37 @@ function reduceTrig12(nn: bigint, dd: bigint): SymNode | null {
   if (r === 6n) return ONE;
   if (r === 18n) return MINUS_ONE;
   return table[r.toString()] ?? null;
+}
+
+/**
+ * sin(n pi/24) for n coprime to 24 (the odd multiples of 7.5 degrees), from the half-angle
+ * formula sin(t) = sqrt((1 - cos(2t))/2) with cos 15 = (sqrt6 + sqrt2)/4 and
+ * cos 75 = (sqrt6 - sqrt2)/4. Null for every other n (they are reduced before they get here).
+ */
+function reduceTrig24(nn: bigint): SymNode | null {
+  let r = ((nn % 48n) + 48n) % 48n;
+  let sign = 1;
+  if (r > 24n) {
+    r -= 24n;
+    sign = -1;
+  }
+  if (r > 12n) r = 24n - r;
+  if (r % 2n === 0n) return null;
+  const s6 = intern({ k: 'pow', base: intN(6), exp: HALF });
+  const s2 = intern({ k: 'pow', base: TWO, exp: HALF });
+  const cos15 = mul(ratN(1n, 4n), add(s6, s2));
+  const cos75 = mul(ratN(1n, 4n), add(s6, negateNode(s2)));
+  const root = (c: SymNode, plus: boolean): SymNode =>
+    intern({ k: 'pow', base: mul(HALF, add(ONE, plus ? c : negateNode(c))), exp: HALF });
+  let v: SymNode;
+  switch (r) {
+    case 1n: v = root(cos15, false); break;
+    case 5n: v = root(cos75, false); break;
+    case 7n: v = root(cos75, true); break;
+    case 11n: v = root(cos15, true); break;
+    default: return null;
+  }
+  return sign === 1 ? v : negateNode(v);
 }
 
 function negOf(v: SymNode): SymNode {

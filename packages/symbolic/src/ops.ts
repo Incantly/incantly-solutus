@@ -14,7 +14,7 @@ import { defined, SYMBOLIC_NOTICE_CODES } from './contracts';
 import type { Cell } from './contracts';
 import type { SymCond, SymFn, SymNode } from './node';
 import {
-  add, asInteger, asRational, bigGcd, constN, decN, floatN, fn, freeSymbols, intN,
+  add, asInteger, asRational, bigGcd, gcdWhole, constN, decN, floatN, fn, freeSymbols, intN,
   isZeroNode, LimitExceeded, listN, mul, negateNode, nodeCount, pow, ratN, rel, symN,
 } from './node';
 import { freeSymbolsCond } from './node';
@@ -256,7 +256,6 @@ function notPolyErr(op: string, t: SymNode, v: SymNode): OpError {
 /* ------------------------------- making values ------------------------------- */
 
 function opExpr(args: readonly SymArg[], _named: ReadonlyMap<string, SymArg>, ctx: OpCtx): OpOut {
-  void ctx;
   noExtras(args, 1, 'Expr');
   const a = need(args, 0, 'Expr');
   if (a.k === 'expr') {
@@ -266,7 +265,7 @@ function opExpr(args: readonly SymArg[], _named: ReadonlyMap<string, SymArg>, ct
   if (a.k === 'cond') return okOut(defined(a));
   if (a.k === 'text') {
     try {
-      const parsed = parseExprOrCond(a.v);
+      const parsed = parseExprOrCond(a.v, ctx.tick);
       if ('cond' in parsed) return okOut(defined(condArg(parsed.cond)));
       if (hasZeroDenominator(parsed.expr)) throw literalZeroError(parsed.expr);
       return okOut(defined(exprArg(parsed.expr)));
@@ -872,7 +871,7 @@ function opGcdLcm(args: readonly SymArg[], _named: ReadonlyMap<string, SymArg>, 
 }
 
 function gcdBig(a: bigint, b: bigint): bigint {
-  return bigGcd(a, b);
+  return gcdWhole(a, b);
 }
 
 function lcmBig(a: bigint, b: bigint): bigint {

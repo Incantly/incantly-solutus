@@ -23,3 +23,8 @@ export * from './bridge';
 export * from './ops';
 
 export type { ErrorObject, Notice, ObjId, Result } from '@incantly/kernel';
+
+import { arena as symbolicArena } from './node';
+
+// Constants made by any module while loading are part of the arena's base set.
+symbolicArena.markBase();

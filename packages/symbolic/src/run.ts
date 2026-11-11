@@ -12,11 +12,13 @@ import { assumptions as makeAssumptions } from './assume';
 import type { Cell, OpName, RunContext, Step, SymArg, SymbolicLimits } from './contracts';
 import { DEFAULT_LIMITS, HEAVY_OPS, SYMBOLIC_COMMANDS, SYMBOLIC_ERROR_CODES, undefinedCell } from './contracts';
 import type { SymCond, SymNode } from './node';
-import { floatN, LimitExceeded, mapNodes, mapCondNodes, ratN } from './node';
+import {
+  ARENA_REBUILD_AT, arena, condKey, floatN, internCondTree, internTree, LimitExceeded, mapNodes, mapCondNodes,
+  ratN, withDigitLimit,
+} from './node';
 import { shortestDecimalRational } from './num';
 import type { Ticker } from './poly';
-import { condText } from './print';
-import { parseCondition, parseExprOrCond, ParseFailure } from './parse';
+import { parseExprOrCond, ParseFailure } from './parse';
 import { NonElementary, integrateNode } from './calc';
 import { registerIntegrator, Unsupported } from './solve';
 import { OPS, OpError } from './ops';
@@ -85,26 +87,43 @@ let cacheBytes = 0;
 const CACHE_MAX_ENTRIES = 4000;
 const CACHE_MAX_BYTES = 32 * 1024 * 1024;
 
+/**
+ * Key an argument by everything that can change an answer: node ids (one per structure),
+ * the exact shape of a condition, the flags and the holes carried with a value. Text and
+ * names are quoted, so no two different arguments print the same key.
+ */
 function argKey(a: SymArg): string {
   switch (a.k) {
-    case 'expr': return `e${a.e.id}${a.exact ? '' : '~'}`;
-    case 'cond': return `c${condText(a.c)}`;
-    case 'sym': return `s${a.name}:${a.domain}`;
-    case 'num': return `n${a.v}`;
+    case 'expr': {
+      const ex = a.excluded === undefined ? '' : `x[${a.excluded.map(condKey).join(',')}]`;
+      const ty = a.typed === undefined ? '' : `y${a.typed.id}`;
+      const di = a.display === undefined ? '' : `d${JSON.stringify(a.display)}`;
+      return `e${a.e.id}${a.exact ? '' : '~'}${ex}${ty}${di}`;
+    }
+    case 'cond': return `c${condKey(a.c)}${a.exact ? '' : '~'}`;
+    case 'sym': return `s${JSON.stringify(a.name)}:${a.domain}`;
+    case 'num': return `n${Object.is(a.v, -0) ? '-0' : String(a.v)}`;
     case 'int': return `i${a.v}`;
-    case 'text': return `t${a.v}`;
+    case 'text': return `t${JSON.stringify(a.v)}`;
     case 'bool': return `b${a.v}`;
-    case 'list': return `l[${a.items.map(argKey).join(',')}]`;
+    case 'list': {
+      const cs = a.cases === undefined ? '' : `k[${a.cases.map((c) => `${condKey(c.when)}=${c.solutions === 'all' || c.solutions === 'none' ? c.solutions : c.solutions.map((x) => x.id).join('.')}`).join(',')}]`;
+      return `l[${a.items.map(argKey).join(',')}]${cs}`;
+    }
     case 'matrix': return `m[${a.rows.map((r) => r.map((x) => x.id).join(',')).join(';')}]`;
-    case 'function': return `f${a.param}=${a.body.id}`;
-    case 'named': return `${a.name}=${argKey(a.v)}`;
+    case 'function': return `f${JSON.stringify(a.param)}=${a.body.id}${a.exact ? '' : '~'}`;
+    case 'named': return `${JSON.stringify(a.name)}=${argKey(a.v)}`;
   }
 }
 
-function cacheKey(op: OpName, args: readonly SymArg[], assume: Assumptions): string {
-  const doms = [...assume.domains.entries()].sort((x, y) => (x[0] < y[0] ? -1 : 1)).map(([k, v]) => `${k}:${v}`).join(',');
-  const facts = assume.facts.map((f) => condText(f)).join(';');
-  return `${ENGINE_VERSION}|${op}|${args.map(argKey).join('|')}|${doms}|${facts}`;
+function limitsKey(l: SymbolicLimits): string {
+  return (Object.keys(DEFAULT_LIMITS) as (keyof SymbolicLimits)[]).map((k) => `${l[k]}`).join('/');
+}
+
+function cacheKey(op: OpName, args: readonly SymArg[], assume: Assumptions, limits: SymbolicLimits): string {
+  const doms = [...assume.domains.entries()].sort((x, y) => (x[0] < y[0] ? -1 : 1)).map(([k, v]) => `${JSON.stringify(k)}:${v}`).join(',');
+  const facts = assume.facts.map(condKey).join(';');
+  return `${ENGINE_VERSION}|${op}|${args.map(argKey).join('|')}|${doms}|${facts}|${limitsKey(limits)}`;
 }
 
 function cacheGet(key: string): CacheEntry | undefined {
@@ -133,6 +152,23 @@ function cachePut(key: string, cell: Cell<SymArg>, notices: readonly Notice[]): 
 export function clearCache(): void {
   cache.clear();
   cacheBytes = 0;
+}
+
+// A cache entry holds nodes of the arena; when the arena is rebuilt they are no longer its nodes.
+arena.onRebuild(clearCache);
+
+/** A registry answers only its own keys: `constructor` or `toString` is not an entry. */
+function ownValue<T>(table: Readonly<Record<string, T>>, key: string): T | undefined {
+  return Object.hasOwn(table, key) ? table[key] : undefined;
+}
+
+/**
+ * Put a worker's answer in this realm's cache (design 5.13: the fast lane answers from
+ * the cache the worker filled). `key` comes from `runCacheKey` on the worker side; the
+ * cell and notices must already be interned here (see `acceptWorkerResponse`).
+ */
+export function seedCache(key: string, result: Result<RunSuccess>): void {
+  if (result.ok) cachePut(key, result.value.cell, result.notices);
 }
 
 /* ---------------------------------- errors ----------------------------------- */
@@ -189,8 +225,8 @@ function optionNamesOf(op: string): string[] {
 
 function opErrorToObject(e: OpError, op?: string): ErrorObject {
   const forms = e.forms.length > 0 || op === undefined || (e.kind !== 'no_matching_form' && e.kind !== 'arg_count') ? e.forms : formsOf(op);
-  const code = (SYMBOLIC_ERROR_CODES as Readonly<Record<string, string>>)[e.kind] ?? CORE_ERROR_CODES[e.kind] ?? 'Y000';
-  const phase = (OP_PHASES[e.kind] ?? 'typecheck') as ErrorObject['phase'];
+  const code = ownValue(SYMBOLIC_ERROR_CODES as Readonly<Record<string, string>>, e.kind) ?? ownValue(CORE_ERROR_CODES, e.kind) ?? 'Y000';
+  const phase = (ownValue(OP_PHASES, e.kind) ?? 'typecheck') as ErrorObject['phase'];
   return {
     ok: false,
     committed: false,
@@ -315,7 +351,51 @@ function readsClockArg(a: SymArg): boolean {
 
 /* ----------------------------------- run -------------------------------------- */
 
+/** Rebuild the arena at the start of a top-level run, never in the middle of one. */
+let runDepth = 0;
+
+/** Rebuild every argument tree as this arena's nodes (a no-op for nodes it already owns). */
+function internArg(a: SymArg, memo: Map<SymNode, SymNode>): SymArg {
+  switch (a.k) {
+    case 'expr': {
+      const out: { -readonly [K in keyof typeof a]: (typeof a)[K] } = { ...a, e: internTree(a.e, memo) };
+      if (a.typed !== undefined) out.typed = internTree(a.typed, memo);
+      if (a.excluded !== undefined) out.excluded = a.excluded.map((c) => internCondTree(c, memo));
+      return out;
+    }
+    case 'cond': return { ...a, c: internCondTree(a.c, memo) };
+    case 'list': {
+      const out: { -readonly [K in keyof typeof a]: (typeof a)[K] } = { ...a, items: a.items.map((x) => internArg(x, memo)) };
+      if (a.cases !== undefined) {
+        out.cases = a.cases.map((c) => ({
+          when: internCondTree(c.when, memo),
+          solutions: c.solutions === 'all' || c.solutions === 'none' ? c.solutions : c.solutions.map((s) => internTree(s, memo)),
+        }));
+      }
+      return out;
+    }
+    case 'matrix': return { ...a, rows: a.rows.map((r) => r.map((x) => internTree(x, memo))) };
+    case 'function': return { ...a, body: internTree(a.body, memo) };
+    case 'named': return { ...a, v: internArg(a.v, memo) };
+    default: return a;
+  }
+}
+
 export function run(op: OpName, args: readonly SymArg[], opts: RunOptions = {}, ctx: RunContext = {}): Result<RunSuccess> {
+  const top = runDepth === 0;
+  runDepth++;
+  try {
+    if (top) {
+      arena.sealBase();
+      if (arena.size() > ARENA_REBUILD_AT) arena.rebuild();
+    }
+    return runMapped(op, args, opts, ctx);
+  } finally {
+    runDepth--;
+  }
+}
+
+function runMapped(op: OpName, args: readonly SymArg[], opts: RunOptions, ctx: RunContext): Result<RunSuccess> {
   try {
     return runInner(op, args, opts, ctx);
   } catch (err) {
@@ -384,7 +464,23 @@ export function run(op: OpName, args: readonly SymArg[], opts: RunOptions = {}, 
 }
 
 function runInner(op: OpName, args: readonly SymArg[], opts: RunOptions, ctx: RunContext): Result<RunSuccess> {
+  // `op` names an entry of the command table and nothing else (not `constructor`, not `toString`).
+  if (typeof op !== 'string' || !Object.hasOwn(OPS, op)) {
+    throw new OpError('unknown_command', `${String(op).slice(0, 40)} is not a command.`, { token: String(op).slice(0, 40), recovery: 'fix_line' });
+  }
   const limits: SymbolicLimits = { ...DEFAULT_LIMITS, ...ctx.limits, ...opts.limits };
+  const memo = new Map<SymNode, SymNode>();
+  const internedArgs = args.map((a) => internArg(a, memo));
+  const internedFacts = ctx.facts === undefined ? undefined : ctx.facts.map((c) => internCondTree(c, memo));
+  const restoreNodes = arena.guard(limits.maxNodes);
+  try {
+    return withDigitLimit(limits.maxDigits, () => runLimited(op, internedArgs, opts, { ...ctx, ...(internedFacts === undefined ? {} : { facts: internedFacts }) }, limits));
+  } finally {
+    restoreNodes();
+  }
+}
+
+function runLimited(op: OpName, args: readonly SymArg[], opts: RunOptions, ctx: RunContext, limits: SymbolicLimits): Result<RunSuccess> {
   const assume = makeAssumptions(ctx.domains, ctx.facts);
   const positional: SymArg[] = [];
   const named = new Map<string, SymArg>();
@@ -416,20 +512,13 @@ function runInner(op: OpName, args: readonly SymArg[], opts: RunOptions, ctx: Ru
     });
   }
   const wantSteps = opts.steps === true;
-  const key = cacheKey(op, [...resolved, ...[...namedResolved.entries()].map(([k, v]) => ({ k: 'named' as const, name: k, v }))], assume);
-  if (heavy && opts.fastLaneMs !== undefined) {
-    const hit = cacheGet(key);
-    if (hit !== undefined) return { ok: true, value: { cell: hit.cell }, notices: [...hit.notices] };
-    return {
-      ok: true,
-      value: { cell: undefinedCell<SymArg>('pending', { code: 'Y200', text: 'The job is running in the worker.' }) },
-      notices: [],
-    };
-  }
+  const key = cacheKey(op, [...resolved, ...[...namedResolved.entries()].map(([k, v]) => ({ k: 'named' as const, name: k, v }))], assume, limits);
   if (!wantSteps) {
     const hit = cacheGet(key);
     if (hit !== undefined) return { ok: true, value: { cell: hit.cell }, notices: [...hit.notices] };
   }
+  // A heavy op with a fast-lane budget gets that budget as its wall time: a cache hit or a
+  // fast finish updates the cell now, and a miss that runs past it is `pending` (below).
   if (op === 'Steps') return runSteps(resolved, namedResolved, limits, assume, opts, ctx);
   const budget = new Budget(limits, opts.fastLaneMs);
   const logged: Step[] = [];
@@ -472,7 +561,7 @@ function runInner(op: OpName, args: readonly SymArg[], opts: RunOptions, ctx: Ru
 const NUMERIC_ARG_NAMES = new Set(['from', 'to', 'digits', 'start', 'n']);
 const TEXT_ARG_NAMES = new Set(['over', 'domain']);
 
-function argTextToSym(text: string, force?: 'num' | 'text'): SymArg {
+function argTextToSym(text: string, force: 'num' | 'text' | undefined, tick: Ticker): SymArg {
   const t = text.trim();
   if (force === 'num' || (force === undefined && /^-?\d+(\.\d+)?$/.test(t))) {
     const v = Number(t);
@@ -484,13 +573,13 @@ function argTextToSym(text: string, force?: 'num' | 'text'): SymArg {
     if (t === 'true' || t === 'false') return { k: 'bool', v: t === 'true' };
     return { k: 'sym', name: t, domain: 'real' };
   }
-  if (t.startsWith('[') && t.endsWith(']')) return parseListText(t);
-  const parsed = parseExprOrCond(t);
+  if (t.startsWith('[') && t.endsWith(']')) return parseListText(t, tick);
+  const parsed = parseExprOrCond(t, tick);
   if ('cond' in parsed) return { k: 'cond', c: parsed.cond, exact: true };
   return { k: 'expr', e: parsed.expr, exact: true };
 }
 
-function parseListText(t: string): SymArg {
+function parseListText(t: string, tick: Ticker): SymArg {
   const body = t.slice(1, -1).trim();
   if (body === '') return { k: 'list', items: [] };
   const parts = splitTop(body);
@@ -501,14 +590,9 @@ function parseListText(t: string): SymArg {
       const v = Number(pt);
       return Number.isInteger(v) ? { k: 'int', v: BigInt(v) } as SymArg : { k: 'num', v } as SymArg;
     }
-    try {
-      const c = parseCondition(pt);
-      return { k: 'cond', c, exact: true } as SymArg;
-    } catch {
-      const parsed = parseExprOrCond(pt);
-      if ('cond' in parsed) return { k: 'cond', c: parsed.cond, exact: true } as SymArg;
-      return { k: 'expr', e: parsed.expr, exact: true } as SymArg;
-    }
+    const parsed = parseExprOrCond(pt, tick);
+    if ('cond' in parsed) return { k: 'cond', c: parsed.cond, exact: true } as SymArg;
+    return { k: 'expr', e: parsed.expr, exact: true } as SymArg;
   });
   return { k: 'list', items };
 }
@@ -531,8 +615,8 @@ function splitTop(body: string): string[] {
 }
 
 function runSteps(
-  args: readonly SymArg[], _named: ReadonlyMap<string, SymArg>, _limits: SymbolicLimits, _assume: Assumptions,
-  _opts: RunOptions, ctx: RunContext,
+  args: readonly SymArg[], _named: ReadonlyMap<string, SymArg>, limits: SymbolicLimits, _assume: Assumptions,
+  opts: RunOptions, ctx: RunContext,
 ): Result<RunSuccess> {
   const a = args[0];
   if (a === undefined || a.k !== 'text') {
@@ -546,17 +630,27 @@ function runSteps(
   } catch (err) {
     throw new OpError('syntax', err instanceof Error ? err.message : 'Steps needs a command call.', { recovery: 'fix_line' });
   }
-  const inner = OPS[call.op as OpName];
-  if (inner === undefined || call.op === 'Steps') {
-    throw new OpError('unknown_command', `Steps cannot run ${call.op}.`, { token: call.op, recovery: 'fix_line' });
+  if (!Object.hasOwn(OPS, call.op) || call.op === 'Steps') {
+    throw new OpError('unknown_command', `Steps cannot run ${call.op.slice(0, 40)}.`, { token: call.op.slice(0, 40), recovery: 'fix_line' });
   }
-  const symArgs = call.args.map((t) => argTextToSym(t));
+  // The text of the call is read under the same budget as the command it names.
+  const parseBudget = new Budget(limits);
+  const symArgs = call.args.map((t) => argTextToSym(t, undefined, parseBudget));
   const symNamed = new Map<string, SymArg>();
   for (const [k, v] of call.named) {
-    symNamed.set(k, argTextToSym(v, NUMERIC_ARG_NAMES.has(k) ? 'num' : TEXT_ARG_NAMES.has(k) ? 'text' : undefined));
+    symNamed.set(k, argTextToSym(v, NUMERIC_ARG_NAMES.has(k) ? 'num' : TEXT_ARG_NAMES.has(k) ? 'text' : undefined, parseBudget));
   }
-  const innerRes = run(call.op as OpName, [...symArgs, ...[...symNamed.entries()].map(([k, v]) => ({ k: 'named' as const, name: k, v }))], { steps: true }, ctx);
+  const innerRes = run(
+    call.op as OpName,
+    [...symArgs, ...[...symNamed.entries()].map(([k, v]) => ({ k: 'named' as const, name: k, v }))],
+    { steps: true, limits, ...(opts.fastLaneMs === undefined ? {} : { fastLaneMs: opts.fastLaneMs }) },
+    ctx,
+  );
   if (!innerRes.ok) return innerRes;
+  const innerCell = innerRes.value.cell;
+  if (!innerCell.defined && (innerCell.reason === 'pending' || innerCell.reason === 'timeout' || innerCell.reason === 'limit')) {
+    return { ok: true, value: { cell: innerCell }, notices: innerRes.notices };
+  }
   const { lines, noSteps } = stepsToText(innerRes.value.steps ?? []);
   const items: SymArg[] = lines.map((line) => ({ k: 'text', v: line }));
   const notices: Notice[] = noSteps
@@ -570,3 +664,27 @@ function runSteps(
     : [];
   return { ok: true, value: { cell: { defined: true, value: { k: 'list', items } } }, notices };
 }
+
+/* ------------------------------ cache key export ------------------------------ */
+
+/**
+ * The key `run` would cache this call under, or null when the call is not a command.
+ * A worker returns it with its answer so the host can `seedCache` its own cache.
+ */
+export function runCacheKey(op: OpName, args: readonly SymArg[], opts: RunOptions = {}, ctx: RunContext = {}): string | null {
+  if (!Object.hasOwn(OPS, op)) return null;
+  const limits: SymbolicLimits = { ...DEFAULT_LIMITS, ...ctx.limits, ...opts.limits };
+  const memo = new Map<SymNode, SymNode>();
+  const assume = makeAssumptions(ctx.domains, ctx.facts === undefined ? undefined : ctx.facts.map((c) => internCondTree(c, memo)));
+  const positional: SymArg[] = [];
+  const named: SymArg[] = [];
+  for (const a of args) {
+    const i = internArg(a, memo);
+    if (i.k === 'named') named.push({ k: 'named', name: i.name, v: resolveRefs(i.v, ctx.resolveRef) });
+    else positional.push(resolveRefs(i, ctx.resolveRef));
+  }
+  return cacheKey(op, [...positional, ...named], assume, limits);
+}
+
+// Every node made while the modules loaded (their constants) survives an arena rebuild.
+arena.markBase();
