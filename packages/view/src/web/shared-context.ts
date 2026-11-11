@@ -113,7 +113,7 @@ export class SharedGpuContext {
     const pxH = Math.max(1, Math.floor(heightCss * dpr));
     canvas.width = pxW;
     canvas.height = pxH;
-    let ctx2d: CanvasRenderingContext2D | null = null;
+    let ctx2d: CanvasRenderingContext2D | null;
     try {
       ctx2d = canvas.getContext('2d');
     } catch {

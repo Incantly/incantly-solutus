@@ -191,7 +191,7 @@ function rgbToHsl(r: number, g: number, b: number): [number, number, number] {
   if (mx === mn) return [0, 0, l];
   const d = mx - mn;
   const s = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn);
-  let h = 0;
+  let h: number;
   if (mx === rr) h = ((gg - bb) / d + (gg < bb ? 6 : 0)) * 60;
   else if (mx === gg) h = ((bb - rr) / d + 2) * 60;
   else h = ((rr - gg) / d + 4) * 60;
@@ -288,8 +288,10 @@ export function dashToArray(pattern: DashPattern, width: number): readonly numbe
   if (pattern === 'dashed') return [floor(4 * w), floor(3 * w)];
   if (pattern === 'dotted') return [floor(w), floor(2 * w)];
   if (pattern === 'dashdot') return [floor(4 * w), floor(2 * w), floor(w), floor(2 * w)];
-  if (Array.isArray(pattern)) return pattern.map((v) => Math.max(0, v));
-  return [Math.max(0, pattern.on), Math.max(0, pattern.off)];
+  // `Array.isArray` does not narrow `readonly number[]`, so discriminate on
+  // the `{ on, off }` shape instead (it is the only object variant with `on`).
+  if ('on' in pattern) return [Math.max(0, pattern.on), Math.max(0, pattern.off)];
+  return pattern.map((v) => Math.max(0, v));
 }
 
 export interface Theme {

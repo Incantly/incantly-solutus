@@ -112,7 +112,7 @@ export class SchedulerHost {
       this.tick();
       return;
     }
-    if (this.viewObserver === null) {
+    if (this.viewObserver === null || this.nearObserver === null) {
       this.viewObserver = new IntersectionObserver((entries) => {
         for (const e of entries) {
           const key = (e.target as HTMLElement).dataset['figureId'];

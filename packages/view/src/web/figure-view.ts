@@ -619,9 +619,9 @@ export class FigureView {
     // Layout phase: labels.
     this.layoutLabels();
     // Paint.
-    let painted = 0;
+    let painted: number;
     let labels = 0;
-    let drawCalls = 0;
+    let drawCalls: number;
     let triangles = 0;
     if (this.opts.mode === '2d') {
       this.paintBackground();

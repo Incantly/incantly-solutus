@@ -39,6 +39,9 @@ interface GlFrame extends FrameCtx {
   readonly frameSize: FrameSize;
 }
 
+/** Every GL handle this back-end creates and later disposes. */
+type GlOwned = WebGLBuffer | WebGLFramebuffer | WebGLProgram | WebGLRenderbuffer | WebGLShader | WebGLTexture;
+
 function internalError(where: string, hint?: string): Result<never> {
   return viewError({
     kind: 'internal',
@@ -52,7 +55,7 @@ function internalError(where: string, hint?: string): Result<never> {
 export class WebGL2Backend implements GpuBackend {
   readonly kind = 'webgl2' as const;
   readonly capabilities: GpuCapabilities;
-  private readonly owned: WebGLObject[] = [];
+  private readonly owned: GlOwned[] = [];
   private readonly gl: WebGL2RenderingContext;
 
   constructor(gl: WebGL2RenderingContext) {
@@ -67,7 +70,7 @@ export class WebGL2Backend implements GpuBackend {
     };
   }
 
-  private track<T extends WebGLObject>(o: T | null, what: string): Result<T> {
+  private track<T extends GlOwned>(o: T | null, what: string): Result<T> {
     if (o === null) return internalError(`WebGL2 ${what}`);
     this.owned.push(o);
     return okResult(o);

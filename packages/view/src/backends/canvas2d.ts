@@ -141,7 +141,9 @@ export class CanvasSurface implements Surface {
             g.lineTo(0, spacing);
             g.stroke();
           } else {
-            const angle = (spec.kind === 'lines' || spec.kind === 'cross' ? spec.angle : 45) * (Math.PI / 180);
+            // Here `spec` is `lines | honeycomb | weave | bricks` (`dots`,
+            // `cross` and `grid` returned above), so only `lines` carries an angle.
+            const angle = (spec.kind === 'lines' ? spec.angle : 45) * (Math.PI / 180);
             g.beginPath();
             g.moveTo(spacing / 2 - Math.cos(angle) * spacing, spacing / 2 - Math.sin(angle) * spacing);
             g.lineTo(spacing / 2 + Math.cos(angle) * spacing, spacing / 2 + Math.sin(angle) * spacing);

@@ -3,7 +3,7 @@
  * screen and offscreen canvas, SVG export and a recording surface for tests.
  * This file is pure; the Canvas2D, SVG and software back-ends implement it.
  */
-import type { Px, PxPoint, PxRect } from './coords';
+import type { PxPoint, PxRect } from './coords';
 import { px } from './coords';
 import type { HatchSpec, Rgba } from './styles';
 

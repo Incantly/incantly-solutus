@@ -18,11 +18,12 @@ import {
 } from './geometry';
 import type { HitCandidate } from './hit';
 import {
-  describeAngle, describeArc, describeBool, describeCircle, describeCurve, describeFunction,
+  describeAngle, describeArc, describeBool, describeCircle, describeCurve,
   describeLine, describeParticles, describePoint, describePolygon, describeRegion,
   describeSegment, describeSlider, describeText, describeUndefined, describeVector,
-  VIEW_REASON_TEXT, type ResolvedStyle,
-} from './styles';
+  VIEW_REASON_TEXT,
+} from './describe';
+import type { ResolvedStyle } from './styles';
 import {
   expandRect, unionRect, type FillStyle, type PathCommand, type StrokeStyle, type Surface, type TextRun,
 } from './surface';
@@ -224,7 +225,6 @@ export class GeometryDrawable implements Drawable {
     const y = at.y as number;
     const r = style.pointSize;
     const st = strokeOf(style);
-    const fl = fillOf(style);
     const shape = style.pointStyle;
     if (shape === 'dot' || shape === 'ring') {
       s.path(circleCommands(x, y, r));
@@ -258,7 +258,7 @@ export class GeometryDrawable implements Drawable {
       align: style.textStyle.align,
       color: style.color,
       opacity: style.labelOpacity,
-      background: style.textStyle.background,
+      background: style.textStyle.background ?? 'none',
     });
   }
 
