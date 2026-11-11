@@ -1,0 +1,447 @@
+/**
+ * Printers (cas/design.md 5.11): plain text, LaTeX and speech, all from the tree, never
+ * from each other. Plain text is re-enterable as a line, so products print with `*`
+ * (language/rulings.md Q-R4-1 docs round, item 3). Equations print `==` in text (the input
+ * syntax); the display form prints `=` for the CAS view.
+ */
+import type { SymCond, SymNode } from './node';
+import { asInteger, isOneNode, symN, toFloat } from './node';
+import { ONE, ZERO, intN } from './node';
+import { upolyToTree } from './poly';
+
+/* ---------------------------------- text ------------------------------------ */
+
+export interface TextOptions {
+  /** Display form for the CAS view: `=` instead of `==`. Still prints `*`. */
+  readonly display?: boolean;
+  /** Show a mixed number as `2 3/4` (from `MixedNumber`). */
+  readonly mixed?: boolean;
+}
+
+const PREC_ADD = 1;
+const PREC_MUL = 2;
+const PREC_POW = 3;
+const PREC_UNARY = 4;
+const PREC_ATOM = 5;
+
+function precedence(n: SymNode): number {
+  switch (n.k) {
+    case 'add': return PREC_ADD;
+    case 'mul': case 'rat': return PREC_MUL;
+    case 'pow': return PREC_POW;
+    case 'fn': case 'list': return PREC_ATOM;
+    default: break;
+  }
+  if (isNegative(n)) return PREC_UNARY;
+  return PREC_ATOM;
+}
+
+function isNegative(n: SymNode): boolean {
+  if (n.k === 'int') return n.v < 0n;
+  if (n.k === 'rat') return n.n < 0n;
+  if (n.k === 'float') return n.v < 0;
+  if (n.k === 'dec') return n.mant < 0n;
+  if (n.k === 'mul' && n.factors.length > 0) return isNegative(n.factors[0] as SymNode);
+  return false;
+}
+
+function negateText(n: SymNode, o: TextOptions): string {
+  if (n.k === 'int') return (-n.v).toString();
+  if (n.k === 'rat') return ratText(-n.n, n.d, o);
+  if (n.k === 'float') return String(-n.v);
+  if (n.k === 'dec') return decText(-n.mant, n.exp);
+  if (n.k === 'mul' && n.factors.length > 1) {
+    const f0 = n.factors[0] as SymNode;
+    if (f0.k === 'int' && f0.v === -1n) {
+      const rest = n.factors.slice(1);
+      if (rest.length === 1) return textOf(rest[0] as SymNode, o, PREC_UNARY);
+      return rest.map((f) => textOf(f, o, PREC_MUL)).join(' * ');
+    }
+  }
+  return `(${textOf(n, o, 0)})`;
+}
+
+function ratText(n: bigint, d: bigint, o: TextOptions): string {
+  if (o.mixed && (n < 0n ? -n : n) > d) {
+    const neg = n < 0n;
+    const a = neg ? -n : n;
+    const whole = a / d;
+    const rem = a % d;
+    if (rem === 0n) return (neg ? '-' : '') + whole.toString();
+    return `${neg ? '-' : ''}${whole.toString()} ${rem.toString()}/${d.toString()}`;
+  }
+  if (n < 0n) return `-${(-n).toString()}/${d.toString()}`;
+  return `${n.toString()}/${d.toString()}`;
+}
+
+function decText(mant: bigint, exp: number): string {
+  const neg = mant < 0n;
+  const digits = (neg ? -mant : mant).toString();
+  if (exp >= 0) return (neg ? '-' : '') + digits + '0'.repeat(exp);
+  const point = digits.length + exp;
+  if (point > 0) return (neg ? '-' : '') + digits.slice(0, point) + '.' + digits.slice(point);
+  return (neg ? '-' : '') + '0.' + '0'.repeat(-point) + digits;
+}
+
+/** Split a product into numerator and denominator factors (negative powers go down). */
+function splitDiv(factors: readonly SymNode[]): { num: SymNode[]; den: SymNode[] } {
+  const num: SymNode[] = [];
+  const den: SymNode[] = [];
+  for (const f of factors) {
+    if (f.k === 'pow') {
+      const e = asInteger(f.exp);
+      if (e !== null && e < 0n) {
+        den.push(e === -1n ? f.base : { ...f, k: 'pow', base: f.base, exp: intN(-e) } as SymNode);
+        continue;
+      }
+    }
+    num.push(f);
+  }
+  return { num, den };
+}
+
+function needsParensAsBase(b: SymNode): boolean {
+  if (b.k === 'pow') return true;
+  if (isNegative(b) && (b.k === 'int' || b.k === 'rat' || b.k === 'float' || b.k === 'dec')) return true;
+  return precedence(b) < PREC_POW;
+}
+
+function needsParensAsExp(e: SymNode): boolean {
+  if (e.k === 'int' || e.k === 'sym' || e.k === 'const' || e.k === 'fn') return false;
+  return true;
+}
+
+export function toText(n: SymNode, o: TextOptions = {}, parentPrec = 0): string {
+  return textOf(n, o, parentPrec);
+}
+
+function textOf(n: SymNode, o: TextOptions, parentPrec: number): string {
+  const wrap = (s: string, prec: number): string => (prec < parentPrec ? `(${s})` : s);
+  switch (n.k) {
+    case 'int': return wrap(n.v.toString(), n.v < 0n ? PREC_UNARY : PREC_ATOM);
+    case 'rat': return wrap(ratText(n.n, n.d, o), PREC_MUL);
+    case 'dec': return wrap(decText(n.mant, n.exp), n.mant < 0n ? PREC_UNARY : PREC_ATOM);
+    case 'float': return wrap(String(n.v), n.v < 0 ? PREC_UNARY : PREC_ATOM);
+    case 'const':
+      if (n.name === 'pi') return 'pi';
+      if (n.name === 'e') return 'e';
+      if (n.name === 'i') return 'i';
+      return 'inf';
+    case 'sym': return n.name;
+    case 'ref': return `ref(${n.obj})`;
+    case 'add': {
+      let s = '';
+      n.terms.forEach((t, i) => {
+        if (i === 0) {
+          s += textOf(t, o, 0);
+          return;
+        }
+        if (isNegative(t)) s += ` - ${negateText(t, o)}`;
+        else s += ` + ${textOf(t, o, PREC_ADD)}`;
+      });
+      return wrap(s, PREC_ADD);
+    }
+    case 'mul': {
+      const { num, den } = splitDiv(n.factors);
+      let sign = '';
+      let nums = num;
+      const first = num[0] as SymNode | undefined;
+      if (first !== undefined && first.k === 'int' && first.v === -1n) {
+        sign = '-';
+        nums = num.slice(1);
+      }
+      const numStr = nums.length === 0 ? '1' : nums.map((f) => textOf(f, o, PREC_MUL)).join(' * ');
+      if (den.length === 0) return wrap(`${sign}${numStr}`, sign === '' ? PREC_MUL : PREC_UNARY);
+      const denStr = den.map((f) => textOf(f, o, PREC_MUL + 1)).join(' * ');
+      const dd = den.length > 1 ? `(${denStr})` : denStr;
+      if (nums.length === 0) return wrap(`${sign}1 / ${dd}`, PREC_MUL);
+      const nn = nums.length === 1 && (nums[0] as SymNode).k === 'add' ? `(${numStr})` : numStr;
+      return wrap(`${sign}${nn} / ${dd}`, PREC_MUL);
+    }
+    case 'pow': {
+      if (n.base.k === 'const' && n.base.name === 'e') return wrap(`exp(${textOf(n.exp, o, 0)})`, PREC_ATOM);
+      if (n.exp.k === 'rat' && n.exp.n === 1n && n.exp.d === 2n) {
+        return wrap(`sqrt(${textOf(n.base, o, 0)})`, PREC_ATOM);
+      }
+      const b = needsParensAsBase(n.base) ? `(${textOf(n.base, o, 0)})` : textOf(n.base, o, PREC_POW);
+      const e = needsParensAsExp(n.exp) ? `(${textOf(n.exp, o, 0)})` : textOf(n.exp, o, PREC_POW);
+      return wrap(`${b}^${e}`, PREC_POW);
+    }
+    case 'fn': {
+      const args = n.args.map((a) => textOf(a, o, 0)).join(', ');
+      return `${n.name}(${args})`;
+    }
+    case 'rootof': {
+      const polyText = textOf(upolyToTree(n.poly, symN('x')), o, 0);
+      return wrap(`rootof(${polyText}, ${n.index})`, PREC_ATOM);
+    }
+    case 'list': return `[${n.items.map((i) => textOf(i, o, 0)).join(', ')}]`;
+    case 'piecewise': {
+      const parts: string[] = [];
+      for (const cs of n.cases) {
+        parts.push(condText(cs.when, o));
+        parts.push(textOf(cs.then, o, 0));
+      }
+      if (n.other !== undefined) parts.push(textOf(n.other, o, 0));
+      return `if(${parts.join(', ')})`;
+    }
+  }
+}
+
+export function condText(c: SymCond, o: TextOptions = {}): string {
+  if (o.display === true) {
+    const chain = intervalChain(c);
+    if (chain !== null) return chain;
+  }
+  const eq = (op: string): string => (o.display === true && op === '==' ? '=' : op);
+  switch (c.c) {
+    case 'true': return 'true';
+    case 'false': return 'false';
+    case 'rel': return `${toText(c.l, o, 0)} ${eq(c.op)} ${toText(c.r, o, 0)}`;
+    case 'in': return `${toText(c.l, o, 0)} in ${c.set}`;
+    case 'not': return `not ${condText(c.of, o)}`;
+    case 'and': return c.of.map((x) => condText(x, o)).join(' and ');
+    case 'or': return c.of.map((x) => condText(x, o)).join(' or ');
+  }
+}
+
+/** Display form of an interval piece `a < v and v < b` as `a < v < b`. */
+function intervalChain(c: SymCond): string | null {
+  if (c.c !== 'and' || c.of.length !== 2) return null;
+  const l = c.of[0] as SymCond;
+  const r = c.of[1] as SymCond;
+  if (l.c !== 'rel' || r.c !== 'rel') return null;
+  if ((l.op !== '<' && l.op !== '<=') || (r.op !== '<' && r.op !== '<=')) return null;
+  if (l.r.k !== 'sym' || r.l.k !== 'sym' || l.r.name !== r.l.name) return null;
+  return `${toText(l.l, { display: true }, 0)} ${l.op} ${l.r.name} ${r.op} ${toText(r.r, { display: true }, 0)}`;
+}
+
+/* ---------------------------------- LaTeX ----------------------------------- */
+
+function latexOf(n: SymNode): string {
+  switch (n.k) {
+    case 'int': return n.v.toString();
+    case 'rat': return `\\frac{${n.n.toString()}}{${n.d.toString()}}`;
+    case 'dec': return decText(n.mant, n.exp);
+    case 'float': return String(n.v);
+    case 'const':
+      if (n.name === 'pi') return '\\pi ';
+      if (n.name === 'e') return 'e';
+      if (n.name === 'i') return 'i';
+      return '\\infty ';
+    case 'sym': return latexName(n.name);
+    case 'ref': return `\\mathrm{ref}_{${n.obj}}`;
+    case 'add': {
+      let s = '';
+      n.terms.forEach((t, i) => {
+        if (i === 0) {
+          s += latexOf(t);
+          return;
+        }
+        if (isNegative(t)) s += ` - ${latexNeg(t)}`;
+        else s += ` + ${latexOf(t)}`;
+      });
+      return s;
+    }
+    case 'mul': {
+      const { num, den } = splitDiv(n.factors);
+      const numStr = num.length === 0 ? '1' : num.map(latexFactor).join(' \\cdot ');
+      if (den.length === 0) return numStr;
+      const denStr = den.map(latexFactor).join(' \\cdot ');
+      return `\\frac{${numStr}}{${denStr}}`;
+    }
+    case 'pow': {
+      if (n.base.k === 'const' && n.base.name === 'e') return `\\exp\\left(${latexOf(n.exp)}\\right)`;
+      if (n.exp.k === 'rat' && n.exp.n === 1n && n.exp.d === 2n) return `\\sqrt{${latexOf(n.base)}}`;
+      return `{${latexBase(n.base)}}^{${latexOf(n.exp)}}`;
+    }
+    case 'fn': return `\\${n.name}\\left(${n.args.map(latexOf).join(', ')}\\right)`;
+    case 'rootof': return `\\mathrm{root}_{${n.index}}`;
+    case 'list': return `\\left[${n.items.map(latexOf).join(', ')}\\right]`;
+    case 'piecewise': return '\\mathrm{if}';
+  }
+}
+
+function latexName(name: string): string {
+  const greek: Record<string, string> = {
+    theta: '\\theta ', omega: '\\omega ', alpha: '\\alpha ', beta: '\\beta ', gamma: '\\gamma ',
+    delta: '\\delta ', lambda: '\\lambda ', mu: '\\mu ', phi: '\\phi ', psi: '\\psi ',
+  };
+  return greek[name] ?? name;
+}
+
+function latexFactor(f: SymNode): string {
+  if (f.k === 'add') return `\\left(${latexOf(f)}\\right)`;
+  return latexOf(f);
+}
+
+function latexBase(b: SymNode): string {
+  if (b.k === 'add' || b.k === 'mul' || b.k === 'pow') return `\\left(${latexOf(b)}\\right)`;
+  return latexOf(b);
+}
+
+function latexNeg(t: SymNode): string {
+  if (t.k === 'int') return (-t.v).toString();
+  if (t.k === 'rat') return `\\frac{${(-t.n).toString()}}{${t.d.toString()}}`;
+  if (t.k === 'float') return String(-t.v);
+  return latexOf(t);
+}
+
+export function toLatex(n: SymNode): string {
+  return latexOf(n);
+}
+
+export function condLatex(c: SymCond): string {
+  switch (c.c) {
+    case 'true': return '\\mathrm{true}';
+    case 'false': return '\\mathrm{false}';
+    case 'rel': {
+      const op = c.op === '==' ? '=' : c.op === '!=' ? '\\ne ' : c.op === '<=' ? '\\le ' : c.op === '>=' ? '\\ge ' : c.op;
+      return `${latexOf(c.l)} ${op} ${latexOf(c.r)}`;
+    }
+    case 'in': return `${latexOf(c.l)} \\in \\mathbb{${c.set}}`;
+    case 'not': return `\\lnot ${condLatex(c.of)}`;
+    case 'and': return c.of.map(condLatex).join(' \\land ');
+    case 'or': return c.of.map(condLatex).join(' \\lor ');
+  }
+}
+
+/* ---------------------------------- speech ----------------------------------- */
+
+const SMALL_NUMBERS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten',
+  'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen', 'twenty'];
+
+function speechInt(v: bigint): string {
+  if (v < 0n) return `minus ${speechInt(-v)}`;
+  if (v <= 20n) return SMALL_NUMBERS[Number(v)] as string;
+  return v.toString();
+}
+
+function speechPower(e: SymNode): string {
+  if (e.k === 'int') {
+    if (e.v === 2n) return 'squared';
+    if (e.v === 3n) return 'cubed';
+    return `to the power ${speechInt(e.v)}`;
+  }
+  return `to the power ${speechOf(e)}`;
+}
+
+function speechOf(n: SymNode): string {
+  switch (n.k) {
+    case 'int': return speechInt(n.v);
+    case 'rat': return `${speechInt(n.n)} over ${speechInt(n.d)}`;
+    case 'dec': return decText(n.mant, n.exp);
+    case 'float': return String(n.v);
+    case 'const':
+      if (n.name === 'pi') return 'pi';
+      if (n.name === 'e') return 'e';
+      if (n.name === 'i') return 'i';
+      return 'infinity';
+    case 'sym': return n.name;
+    case 'ref': return 'a value';
+    case 'add': {
+      let s = '';
+      n.terms.forEach((t, i) => {
+        if (i === 0) {
+          s += speechOf(t);
+          return;
+        }
+        if (isNegative(t)) s += ` minus ${speechNeg(t)}`;
+        else s += ` plus ${speechOf(t)}`;
+      });
+      return s;
+    }
+    case 'mul': {
+      const { num, den } = splitDiv(n.factors);
+      const numStr = num.length === 0 ? 'one' : num.map(speechFactor).join(' times ');
+      if (den.length === 0) return numStr;
+      return `${numStr} over ${den.map(speechFactor).join(' times ')}`;
+    }
+    case 'pow': {
+      if (n.base.k === 'const' && n.base.name === 'e') return `e to the power ${speechGroup(n.exp)}`;
+      if (n.exp.k === 'rat' && n.exp.n === 1n && n.exp.d === 2n) return `the square root of ${speechGroup(n.base)}`;
+      return `${speechGroup(n.base)} ${speechPower(n.exp)}`;
+    }
+    case 'fn': return `${n.name} of ${speechGroup(n.args[0] ?? ZERO)}`;
+    case 'rootof': return `a root, about ${n.hint}`;
+    case 'list': return n.items.map(speechOf).join(', ');
+    case 'piecewise': return 'a piecewise expression';
+  }
+}
+
+function speechFactor(f: SymNode): string {
+  if (f.k === 'add') return `the quantity ${speechOf(f)}`;
+  return speechOf(f);
+}
+
+function speechGroup(g: SymNode): string {
+  if (g.k === 'add' || g.k === 'mul') return `the quantity ${speechOf(g)}`;
+  return speechOf(g);
+}
+
+function speechNeg(t: SymNode): string {
+  if (t.k === 'int') return speechInt(-t.v);
+  if (t.k === 'rat') return speechInt(-t.n) + ` over ${speechInt(t.d)}`;
+  return speechOf(t);
+}
+
+/**
+ * Plain-English reading for screen readers and the teacher. Long expressions (over 30
+ * tokens) are shortened: "a long expression with N terms, starting …".
+ */
+export function toSpeech(n: SymNode): string {
+  const full = speechOf(n);
+  const tokens = full.split(' ');
+  if (tokens.length <= 30) return full;
+  const terms = n.k === 'add' ? n.terms.length : n.k === 'mul' ? n.factors.length : 1;
+  return `a long expression with ${terms} terms, starting ${tokens.slice(0, 12).join(' ')}`;
+}
+
+export function condSpeech(c: SymCond): string {
+  switch (c.c) {
+    case 'true': return 'true';
+    case 'false': return 'false';
+    case 'rel': {
+      const op = c.op === '==' ? 'equals' : c.op === '!=' ? 'is not' : c.op === '<' ? 'is less than' : c.op === '<=' ? 'is at most' : c.op === '>' ? 'is greater than' : 'is at least';
+      return `${speechOf(c.l)} ${op} ${speechOf(c.r)}`;
+    }
+    case 'in': return `${speechOf(c.l)} in ${c.set}`;
+    case 'not': return `not ${condSpeech(c.of)}`;
+    case 'and': return c.of.map(condSpeech).join(' and ');
+    case 'or': return c.of.map(condSpeech).join(' or ');
+  }
+}
+
+/* ------------------------------ small helpers -------------------------------- */
+
+export function isExactTree(n: SymNode): boolean {
+  switch (n.k) {
+    case 'float': case 'dec': return false;
+    case 'add': return n.terms.every(isExactTree);
+    case 'mul': return n.factors.every(isExactTree);
+    case 'pow': return isExactTree(n.base) && isExactTree(n.exp);
+    case 'fn': return n.args.every(isExactTree);
+    case 'list': return n.items.every(isExactTree);
+    case 'piecewise': return n.cases.every((cs) => isExactTree(cs.then)) && (n.other === undefined || isExactTree(n.other));
+    default: return true;
+  }
+}
+
+export function approxOf(n: SymNode): number {
+  return toFloat(n);
+}
+
+export function nodeSummary(n: SymNode, maxChars = 120): string {
+  const s = toText(n);
+  if (s.length <= maxChars) return s;
+  const terms = n.k === 'add' ? n.terms.length : n.k === 'mul' ? n.factors.length : 0;
+  return `${s.slice(0, maxChars)}… (${terms} terms)`;
+}
+
+export function isOneOrMinusOne(n: SymNode): boolean {
+  return isOneNode(n) || (n.k === 'int' && n.v === -1n);
+}
+
+export function oneNode(): SymNode {
+  return ONE;
+}
