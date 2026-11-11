@@ -51,7 +51,7 @@ GeoGebra's scripting group is about 70 commands, most of which set one property.
 | Rename | Kernel action `Rename(old, new)`, allowed in `draw`, **not** in handlers (it rewrites other lines) |
 | Delete | `Delete(obj)` in `draw`; **not** in handlers |
 | Slider, Checkbox, Textfield, Button | Definition lines: `in a..b`, free Bool, `Input(...)`, `Button(...)` |
-| Execute | Not provided to handlers. The teacher uses `draw`. A host may call `kernel.apply(lines)`. |
+| Execute | Not provided to handlers. The teacher uses `draw`. A host may call `kernel.apply(line)` or `kernel.applyBatch(lines, { group })`. |
 | Repeat | `for k in a..b` on a step |
 | RunClickScript, RunUpdateScript | `Click(obj)`; there is no update script (3.4) |
 | GetTime | Dropped. Wall-clock reads break replay. Use `t`. |

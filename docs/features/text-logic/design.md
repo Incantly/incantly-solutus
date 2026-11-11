@@ -57,6 +57,8 @@ No GeoGebra code, text or names are used here. Command names that are ordinary w
 
 ### 2.1 Types
 
+Ruling K5 (`../kernel/rulings.md`): the kernel does not wrap values in a `{ t, ... }` union; it stores the language's raw runtime values, and the type comes from the object's `type`. The union below lists the shapes this area adds, with `t` standing for that `type`.
+
 ```ts
 type Value =
   | /* … existing … */

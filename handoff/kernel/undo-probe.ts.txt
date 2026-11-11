@@ -1,0 +1,69 @@
+import { describe, expect, it } from 'vitest';
+import { Figure } from '../../src/graph/figure';
+
+describe('exact undo', () => {
+  it('every operation undoes to the same script and values', () => {
+    const f = new Figure();
+    const lines = ['A = (0, 0)', 'B = (4, 0)', 'a = 2 in 0..5 step 0.5', 'C = (a, 1)', 'D = (C.x + 1, 2)', 'k = 3', 'E = (k, 0) with color = hsl(60 * a, 1, 0.5), showIf = a < 3'];
+    expect(f.applyBatch(lines, { group: 'g' }).ok).toBe(true);
+    const snap = (): string => f.toScript() + JSON.stringify(f.objects().map((o) => [o.name, o.cell]));
+    const steps: [string, string][] = [
+      ['redefine to later input', 'C = (k, 1)'],
+      ['redefine with reorder', 'A = (k, a)'],
+      ['self assign', 'k = k + 1'],
+      ['rename', 'Rename(k, "kk")'],
+      ['rename bare', 'Rename(kk, m)'],
+      ['restyle', 'D with color = red, layer = 3'],
+      ['hide', 'Hide(D, C)'],
+      ['rerange', 'a in 0..1'],
+      ['delete cascade', 'Delete(m)'],
+      ['directive', '@view -5 5 -3 3'],
+      ['comment', '# hello'],
+    ];
+    for (const [label, line] of steps) {
+      const before = snap();
+      const r = f.apply(line);
+      expect(r.ok, label + ' ' + JSON.stringify(r).slice(0, 300)).toBe(true);
+      const after = snap();
+      const u = f.undo({ unit: 'line' });
+      expect(u.ok, label + ' undo').toBe(true);
+      expect(snap(), label + ' after undo').toBe(before);
+      const re = f.redo();
+      expect(re.ok, label + ' redo').toBe(true);
+      expect(snap(), label + ' after redo').toBe(after);
+    }
+  });
+
+  it('failed lines change nothing; atomic batch rolls back', () => {
+    const f = new Figure();
+    f.applyBatch(['A = (0, 0)', 'B = (1, 1)', 'c = 1'], { group: 'g' });
+    const before = f.toScript();
+    const depth = f.undoInfo().depth;
+    for (const bad of ['A = Foo(1)', 'B = c +', 'c = (1, 2)', 'x = y + 1']) expect(f.apply(bad).ok).toBe(false);
+    const r = f.applyBatch(['D = (2, 2)', 'E = D + 1 +', 'F = 3'], { group: 'h' });
+    expect(r.ok).toBe(false);
+    expect(r.rolledBack).toBe(true);
+    expect(f.toScript()).toBe(before);
+    expect(f.undoInfo().depth).toBe(depth);
+    const g = f.applyBatch(['D = (2, 2)', 'E = D + 1 +', 'F = 3'], { group: 'h', mode: 'independent' });
+    expect(g.results.map((x) => x.ok)).toEqual([true, false, true]);
+    expect(f.undo().ok).toBe(true);
+    expect(f.toScript()).toBe(before);
+  });
+
+  it('cause chain and lock', () => {
+    const f = new Figure();
+    f.applyBatch(['a = 0', 'b = 1 / a', 'c = b + 1', 'd = c * 2'], { group: 'g' });
+    expect(f.cellOf('d')).toMatchObject({ defined: false, reason: 'input_undefined' });
+    expect(f.rootCause('d')).toEqual({ name: 'b', reason: 'division_by_zero' });
+    const r = f.apply('a = 2');
+    expect(r.ok && r.changed.becameDefined.sort()).toEqual(['b', 'c', 'd']);
+    f.apply('a with fixed = true');
+    expect(f.apply('a = 5').ok).toBe(false);
+    expect(f.delete('a').ok).toBe(false);
+    const w = f.setFree('a', 9);
+    expect(w.ok).toBe(false);
+    expect(f.dragPlan('a', 3).reason).toBe('locked');
+    expect(f.dragPlan('d', 3).reason).toBe('not_draggable');
+  });
+});

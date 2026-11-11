@@ -1,0 +1,30 @@
+# Kernel doc edits (review category C)
+
+Branch `feat/kernel`. Docs only. Source of the items: `handoff/kernel/review.md` category C. Rulings K1 to K11 in `docs/features/kernel/rulings.md` were not changed.
+
+## Done
+
+| Item | What changed | Files |
+|---|---|---|
+| C1 | One name table, the language's (3.7). Kernel design 14 and tools-2d 5.7 now list `A..Z` then `A_1`, `u v w`, `l m n`, `a b c d`, `α β γ δ`, `f g h p q r`, `c d k`, `L M N`, `poly1`, `reg1`, `text1`, `cond1`. Tools-2d T2 kept. Tools-2d's `d s m` measurement row and its separate lowercase row for shapes are gone; measurements are Numbers, helpers use the sequence of their type | `docs/features/kernel/design.md`, `docs/features/tools-2d/design.md` |
+| C2 | `figure` entry uses the `Description` field names: `definition`, `value` as text, `defined`, `inputs`, `dependents`; `undefined` only when undefined, `why` only when not shown; `why` reads `showIf a < 3 is false` | `docs/features/kernel/agent.md` |
+| C3 | `slice` returns a `Slice` with `chain` and `run(values)`, built on each call and not cached. An empty `chain` is what the area turns into `no_dependency` | `docs/features/README.md` (9), `docs/features/curves-loci/design.md`, `docs/features/optimisation-discrete/design.md` |
+| C4 | Real call names: `dragPlan(id, target)` then `drag(plan)` then `commitDrag()`; `apply(line, { dryRun: true })` and `applyBatch(lines, { group, dryRun: true })`; `setFree(id, value, why)` then `flush()`; `applyBatch(lines, { group, mode })`; `setClock(t)` | `docs/features/README.md` (8, 10), `graphics-view/design.md` (12.2, C5, C6), `animation-time/design.md`, `numbers-sliders/design.md`, `tools-2d/design.md`, `controls-scripting/design.md` |
+| C5 | Limits table lists every `Limits` field and the `limit` names `objects expr_nodes line_length list_size range_elements depth items lines text_length file_size`. Expression nodes: 2,000 is the language's own cap, 400 applies inside a figure because the kernel passes its value (checked in `language/check.ts` line 318) | `docs/features/kernel/errors.md` (6), `docs/features/language/errors.md` (7) |
+| C6 | `animate` values defer to animation-time 5.2; the kernel stores any plain word. Example in 13.1 now uses `bounce` | `docs/features/kernel/design.md` (10, 13.1) |
+| C7 | Notices K110 `clamped`, K111 `shadowed_default`, K112 `unstable_state` added. Kernel errors 3 is now "Notices", says `notices` (K3), lists K101 to K112 with codes. `changed.warnings` is described as the same array. Batch mode wording added where "later lines run" was stated for every batch | `docs/features/errors/errors.md` (4), `docs/features/errors/design.md` (3.1, 6), `docs/features/kernel/errors.md` (3, 5) |
+| C8 | Kernel design matches K3 to K10: raw values and `Cell` with `value: unknown` (4.2, also in 4.4, 4.5, 11.1); `summary` without the type (5); `notices` on `TxResult`; `applyBatch` returns `BatchResult` with `mode` (4.5, 5); `dragPlan` returns `{ writes, reason?, kind? }` (7); `version` is its own kind K042 (13.1, kernel errors 1); memory target marked not met (15); rates are compiled closures (10). `animate` added to the property table 9.1 and the model's key list (K11). "warning" became "notice" in 9.2, 9.4, 14, 16 | `docs/features/kernel/design.md`, `docs/features/kernel/errors.md`, `docs/features/kernel/agent.md` |
+| C8 (copies) | The `Value` unions in cas, optimisation-discrete, space-3d and text-logic carry a one-line pointer to ruling K5 | `docs/features/cas/design.md`, `docs/features/optimisation-discrete/design.md`, `docs/features/space-3d/design.md`, `docs/features/text-logic/design.md` |
+| C9 | The kernel does not stop a rule on wall-clock time. `ruleBudgetMs` only fills `slowRules` when the host passes a clock. A rule that can run long counts iterations against a work budget and returns `no_convergence` or `timeout`. `timeout` row in the reasons table reworded | `docs/features/kernel/errors.md` (2, 6) |
+| C11 | `detail` is one short text (`Cell.detail`); `achieved`, `wanted`, `iterations` fields removed from the numeric-failure wording | `docs/features/errors/errors.md`, `docs/features/errors/design.md` (8), `docs/features/kernel/errors.md`, `docs/features/kernel/design.md` (4.2) |
+
+## Left for a decision
+
+1. **C10, `rerun` default.** Core design 13 #5 says `restart`, animation-time 8.3 says `continue`, README 19 says each figure picks. The kernel restarts today. Not edited. The product owner picks the default; then the loser changes.
+2. **Several sources in a slice.** `optimisation-discrete/design.md` section 4 still declares `slice(sources[], target)`. The kernel's `slice` takes one source. Either the kernel takes a list, or optimisation varies one source at a time. Only the `run`/`chain` shape and the caching sentence were changed there.
+3. **Deleted names (C1 follow-up, review B6).** Tools-2d 5.7 says deleted names are never reused in a session; the language table says "first free name wins", and the code reuses them. The tools-2d rule is unchanged. Decide which one stands.
+4. **Names the table does not cover (C1 follow-up).** Conics, sectors and measures have no sequence in the language table (the code falls back to `obj1`). Tools-2d's `d s m` for measures was dropped. Decide whether to add sequences.
+5. **`detail` as an object (C11 follow-up).** cas, optimisation-discrete, embed-files-export and functions-calculus docs use `detail.text`, `detail.stage`, `detail.maxScale`, `at`. The cell has `detail: string`. Either those areas switch to a string, or the cell type becomes an object. Only the numeric wording was changed.
+6. **Batch dry run.** The docs now name `applyBatch(lines, { group, dryRun: true })` (graphics-view C6, tools-2d, README 10). It does not exist yet (review A6); the docs describe the intended call.
+7. **Function equality (review B12).** Kernel design 4.2 still says functions compare by rule identity plus input cells; the code compares by identity of the value. Not a C item, not edited.
+8. **Rate kind (review 4.3, 4.4).** Design 4.4 still lists `{ kind: 'rate' }`; the code keeps rate rules on the state. Not a C item, not edited.

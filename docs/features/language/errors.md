@@ -306,7 +306,7 @@ The command table's `describe` and `forms` give the data for all commands. Domai
 | Line length | 2,000 characters | `limit` |
 | Tokens per line | 800 | `limit` |
 | Nesting depth | 64 (64 is allowed, 65 is refused) | `limit` |
-| Expression nodes per line | 2,000 | `limit` (backstop, see below) |
+| Expression nodes per line | 2,000 (400 inside a figure, where the kernel passes its own limit; see `../kernel/errors.md` section 6) | `limit` (backstop, see below) |
 | Name length | 32 | `bad_name` |
 | List literal elements | 10,000 | `limit` (backstop, see below) |
 | Range size `[a..b]` | 100,000 elements | `limit` |

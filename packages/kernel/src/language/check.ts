@@ -10,6 +10,7 @@ import { BUILTIN_FUNCTIONS, constantByName, getMathLib } from './builtins';
 import { Diag, closestNames, notice, typeList } from './errors';
 import type { ArgProblem, ErrorExtra, LanguageError, QuickFix } from './errors';
 import { CONSTANT_NAMES, nameProblem, reservedGroup } from './names';
+import { defineLine } from '../errors/suggest';
 import { own } from './props';
 import { classify } from './relation';
 import type { FigureView, FormLike, FunctionTable, ObjectInfo, ParamSpec } from './table';
@@ -17,6 +18,7 @@ import { formText } from './table';
 import type { RelTree, TArg, TNode } from './tnode';
 import { T, accepts, binaryOp, legalOpsFor, listOf, setLabel, tyEq, tyStr, typeSet } from './types';
 import type { Ty } from './types';
+import type { LangLimits } from './source';
 
 /* ------------------------------ public shapes ------------------------------ */
 
@@ -25,6 +27,10 @@ export interface CheckOptions {
   failed?: ReadonlyMap<string, { line: number; kind: ErrorKind }>;
   /** Skip the cycle and dependents tests (used when re-checking dependents). */
   skipGraphChecks?: boolean;
+  /** Host limits (objects, expression nodes, list size); the language's own values apply to what is left out. */
+  limits?: LangLimits;
+  /** The `with` keys an object of this type accepts. Without it every key of the property table is accepted for every type. */
+  propertyKeys?: (type: string) => readonly string[];
 }
 
 export interface CheckedRange {
@@ -310,11 +316,12 @@ class Checker {
   /* -------------------------------- helpers -------------------------------- */
 
   node(): void {
-    if (++this.nodes === MAX_NODES + 1) {
-      this.err('limit', 0, this.text.length, 'lang.limit', { limit: 'expression_nodes', max: MAX_NODES, got: this.nodes, what: 'expression nodes in a line' }, {
+    const max = this.opts.limits?.exprNodes ?? MAX_NODES;
+    if (++this.nodes === max + 1) {
+      this.err('limit', 0, this.text.length, 'lang.limit', { limit: 'expr_nodes', max, got: this.nodes, what: 'expression nodes in a line' }, {
         hint: 'Split the line into several objects.',
-        limit: { name: 'expression_nodes', max: MAX_NODES, got: this.nodes },
-        fingerprintKey: 'expression_nodes',
+        limit: { name: 'expr_nodes', max, got: this.nodes },
+        fingerprintKey: 'expr_nodes',
       });
       throw new Bail();
     }
@@ -596,7 +603,9 @@ class Checker {
       return this.err('unknown_name', e.s, e.e, 'lang.unknown_name', { name }, { hint: 'zaxis belongs to 3D figures.', fingerprintKey: name });
     }
     const split = this.simpleUnknown ? undefined : this.splitProduct(name);
-    const close = closestNames(name, [...this.fig.names(), ...CONSTANT_NAMES, ...this.scopeNames()], 3);
+    // a constant is never a near name for a typo (`e` would match every short name), and only a word of its own length can be
+    const close = closestNames(name, [...this.fig.names(), ...CONSTANT_NAMES.filter((c) => c.length > 1), ...this.scopeNames()], 3);
+    const want = this.wants.get(e);
     const suggest: string[] = [];
     if (split) {
       suggest.push(this.replaceRange(e.s, e.e, split.join(' * ')));
@@ -612,12 +621,18 @@ class Checker {
     if (split && suggest.length > 0) extra.fix = suggest[0] as string;
     // a slider that was never made
     if (!this.simpleUnknown && !nameProblem(name) && !reservedGroup(name, this.fig.commands, this.functions)) {
-      const slider = `${name} = 1 in -5..5 step 0.1`;
       const original = this.parsed.sm.text;
-      const qf: QuickFix[] = [{ label: `Create slider ${name} from -5 to 5`, lines: [slider, original] }];
-      extra.quickFixes = qf;
+      // the line that makes the name what the argument needs: a slider for a number, a point for a point, nothing for a type with no plain literal
+      if (want === undefined || want === 'Number') {
+        const slider = `${name} = 1 in -5..5 step 0.1`;
+        const qf: QuickFix[] = [{ label: `Create slider ${name} from -5 to 5`, lines: [slider, original] }];
+        extra.quickFixes = qf;
+      } else {
+        const def = defineLine(name, want);
+        if (def !== undefined) extra.quickFixes = [{ label: `Create ${want} ${name}`, lines: [def, original] }];
+      }
     }
-    return this.err('unknown_name', e.s, e.e, 'lang.unknown_name', { name }, extra);
+    return this.err('unknown_name', e.s, e.e, 'lang.unknown_name', want !== undefined ? { name, type: want } : { name }, extra);
   }
 
   unknownNameAt(t: { name: string; s: number; e: number }): null {
@@ -629,6 +644,8 @@ class Checker {
     }
   }
   simpleUnknown = false;
+  /** The type a bare name needs in its argument position, when the forms that fit agree; `Any` when it has no plain literal. */
+  readonly wants = new Map<Expr, string>();
 
   scopeNames(): string[] {
     const out: string[] = [];
@@ -772,10 +789,12 @@ class Checker {
   }
 
   inferList(e: Expr & { k: 'list' }, expected?: Ty): TNode | null {
-    if (e.items.length > 10000) {
-      return this.err('limit', e.s, e.e, 'lang.limit', { limit: 'list_literal', max: 10000, got: e.items.length, what: 'items in a list literal' }, {
-        limit: { name: 'list_literal', max: 10000, got: e.items.length },
-        fingerprintKey: 'list_literal',
+    const maxItems = this.opts.limits?.listSize ?? 10000;
+    if (e.items.length > maxItems) {
+      return this.err('limit', e.s, e.e, 'lang.limit', { limit: 'list_size', max: maxItems, got: e.items.length, what: 'items in a list literal' }, {
+        hint: 'Split the list, or build it with a range or Seq.',
+        limit: { name: 'list_size', max: maxItems, got: e.items.length },
+        fingerprintKey: 'list_size',
       });
     }
     if (e.items.length === 0) {
@@ -823,10 +842,11 @@ class Checker {
     const st = step ? foldNumber(step) : 1;
     if (a !== undefined && z !== undefined && st !== undefined && Number.isFinite(a) && Number.isFinite(z) && st !== 0) {
       const count = Math.floor((z - a) / st + 1e-9) + 1;
-      if (count > MAX_RANGE_ELEMENTS) {
-        return this.err('limit', e.s, e.e, 'lang.limit', { limit: 'range_elements', max: MAX_RANGE_ELEMENTS, got: count, what: 'list items' }, {
+      const maxRange = this.opts.limits?.listSize ?? MAX_RANGE_ELEMENTS;
+      if (count > maxRange) {
+        return this.err('limit', e.s, e.e, 'lang.limit', { limit: 'range_elements', max: maxRange, got: count, what: 'list items' }, {
           hint: 'Use a smaller range, or Seq with a step, or compute the value with a formula instead of a list.',
-          limit: { name: 'range_elements', max: MAX_RANGE_ELEMENTS, got: count },
+          limit: { name: 'range_elements', max: maxRange, got: count },
           fingerprintKey: 'range_elements',
         });
       }
@@ -1138,6 +1158,25 @@ class Checker {
     return set.members[0] ?? T.Number;
   }
 
+  /** Notes, for each argument that is a bare name, the type the forms that fit want there (for an `unknown_name` repair). */
+  noteWants(args: readonly Arg[], candidates: readonly { form: FormLike; bind: number[] }[]): void {
+    const per = new Map<Expr, string[]>();
+    for (const c of candidates) {
+      c.form.params.forEach((p, k) => {
+        const ai = c.bind[k] as number;
+        if (ai === -1 || (p.kind !== undefined && p.kind !== 'value')) return;
+        const v = (args[ai] as Arg).value;
+        if (v.k !== 'name' || v.paren) return;
+        const set = typeSet(p.type);
+        const names = set.any || set.members.length === 0 ? ['Any'] : set.members.map((m) => m.k);
+        const have = per.get(v) ?? [];
+        for (const n of names) if (!have.includes(n)) have.push(n);
+        per.set(v, have);
+      });
+    }
+    for (const [v, names] of per) this.wants.set(v, names.includes('Number') ? 'Number' : (names[0] as string));
+  }
+
   /* ------------------------------- matching ------------------------------- */
 
   matchForms<F extends FormLike>(
@@ -1220,6 +1259,7 @@ class Checker {
       return this.err('duplicate_arg', a.ns as number, a.ne as number, 'lang.duplicate_arg', { name: a.name ?? '' }, { hint: `${a.name ?? 'This parameter'} is already given by position.`, fingerprintKey: a.name ?? '' });
     }
 
+    this.noteWants(args, candidates);
     // value typing, lazy and cached; speculative when several forms compete
     const speculative = candidates.length > 1;
     // An argument is typed once per expected type: the same text can type differently under different forms (`[]`).

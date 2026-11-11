@@ -54,6 +54,10 @@ export interface CommandForm {
   readonly summary: string;
   /** `'angle'` when the Number result is an angle. */
   readonly unit?: 'angle';
+  /** Sentence template for the step list: `{name} is the midpoint of {0} and {1}` (kernel design 12.3). */
+  readonly explain?: string;
+  /** True when the rule wants to run with undefined arguments (kernel design 6.4); the rule's own flag also counts. */
+  readonly acceptsUndefined?: boolean;
 }
 
 export interface CommandSpec {

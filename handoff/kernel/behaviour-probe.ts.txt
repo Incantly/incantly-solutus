@@ -1,0 +1,50 @@
+import { describe, expect, it } from 'vitest';
+import { Figure } from '../../src/index';
+import type { CommandSpec, FigureEvent } from '../../src/index';
+
+const boom: CommandSpec = {
+  name: 'Boom', kind: 'object', group: 'x',
+  forms: [{ params: [{ name: 'a', type: 'Number' }], returns: 'Number', summary: 'throws', rule: () => ({ run: () => { throw new Error('bug'); } }) }],
+};
+
+describe('more', () => {
+  it('clock, events, lazy, gesture, fault', () => {
+    const f = new Figure({ commands: [boom] });
+    const evs: FigureEvent[] = [];
+    f.on((e) => evs.push(e));
+    f.applyBatch(['P = (cos(t), sin(t))', 'Q = (bt, beat)', 'a = 1', 'b = a + 1', 'A = (0, 0)'], { group: 'g' });
+    f.setBeats([0, 5]);
+    f.setClock(6);
+    expect(f.value('Q')).toEqual({ x: 1, y: 1 });
+    expect((f.value('P') as { x: number }).x).toBeCloseTo(Math.cos(6));
+    evs.length = 0;
+    f.setClock(7);
+    expect(evs.filter((e) => e.ev === 'value').length).toBe(1);
+    // gesture: one entry
+    const depth = f.undoInfo().depth;
+    for (let i = 0; i < 10; i++) f.setFree('A', { x: i, y: i }, 'drag');
+    f.flush();
+    expect(f.undoInfo().depth).toBe(depth);
+    f.commitDrag();
+    expect(f.undoInfo().depth).toBe(depth + 1);
+    f.undo();
+    expect(f.value('A')).toEqual({ x: 0, y: 0 });
+    // lazy values
+    f.setDemand([f.recOf('a')!.id]);
+    f.setFree('a', 5);
+    f.flush();
+    expect(f.value('b')).toBe(6);
+    f.setDemand(null);
+    // a throwing rule rolls back
+    const n = f.count;
+    const r = f.apply('z = Boom(1)');
+    expect(r.ok).toBe(false);
+    expect(f.count).toBe(n);
+    expect(f.toScript()).not.toContain('Boom');
+    // sliders clamp
+    f.apply('s = 30 in 0..10');
+    expect(f.value('s')).toBe(10);
+    expect(f.setFree('s', 99, 'slider').ok).toBe(true);
+    expect(f.value('s')).toBe(10);
+  });
+});

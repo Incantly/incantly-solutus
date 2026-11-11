@@ -1,0 +1,26 @@
+import { describe, it } from 'vitest';
+import { Figure } from '../../src/graph/figure';
+
+describe('perf2', () => {
+  it('delete and undo', () => {
+    const f = new Figure();
+    f.apply('a = 1 in 0..100');
+    const lines: string[] = [];
+    for (let i = 0; i < 2499; i++) lines.push(i < 50 ? `p${i} = a + ${i}` : `p${i} = p${i - 50} * 1.0001`);
+    for (let i = 0; i < 2500; i++) lines.push(`q${i} = ${i}`);
+    f.applyBatch(lines, { group: 'load', mode: 'independent' });
+    const t = performance.now();
+    const d = f.delete('a');
+    console.log('delete', JSON.stringify(d).slice(0, 150), f.count, (performance.now() - t).toFixed(2));
+    const t2 = performance.now();
+    const u = f.undo();
+    console.log('undo', u.ok, f.count, (performance.now() - t2).toFixed(2));
+    console.log(f.value('p2498'), f.toScript().length, f.journal.info());
+    const t3 = performance.now();
+    const s = f.toScript();
+    console.log('toScript ms', (performance.now() - t3).toFixed(2), s.split('\n').length);
+    const t4 = performance.now();
+    const g = Figure.fromScript(s);
+    console.log('fromScript ms', (performance.now() - t4).toFixed(1), g.report.ok, g.figure.count, JSON.stringify(g.report.errors).slice(0, 200));
+  });
+});

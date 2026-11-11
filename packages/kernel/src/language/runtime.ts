@@ -76,6 +76,8 @@ export interface Env {
   cause: ObjId | undefined;
   /** Short plain fact for the reason, such as `sqrt(-4)`. */
   detail: string | undefined;
+  /** Longest list a rule may build (the host's `listSize`); 100,000 when not set. */
+  maxList?: number;
   /** Slot-addressed locals: function parameters, binders, particle names. */
   locals: unknown[];
   /** Current value of an object. `undefined` when the object is undefined. */

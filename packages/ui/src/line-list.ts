@@ -19,6 +19,12 @@ export type RowState =
   /** `cause` lists the nearest undefined input first and ends at the root. */
   | { readonly defined: false; readonly reason: string; readonly detail?: string; readonly cause: readonly CauseLink[] };
 
+/** A control shown inside a row for a free object: a text field, a checkbox or a slider. */
+export type RowControl =
+  | { readonly kind: 'text'; readonly text: string }
+  | { readonly kind: 'bool'; readonly checked: boolean }
+  | { readonly kind: 'slider'; readonly min: number; readonly max: number; readonly step?: number; readonly value: number; readonly text: string };
+
 export interface LineRow {
   readonly id: number;
   readonly name: string;
@@ -28,6 +34,29 @@ export interface LineRow {
   readonly source: string;
   readonly state: RowState;
   readonly warnings?: readonly string[];
+  /** A free object (it has a value of its own). */
+  readonly free?: boolean;
+  /** A pinned (`fixed`) object: its controls are shown but cannot be used. */
+  readonly locked?: boolean;
+  readonly control?: RowControl;
+}
+
+/** `incantly-row-rename` and `incantly-row-delete`. */
+export interface RowActionDetail {
+  readonly name: string;
+}
+
+/** `incantly-row-set`: the text typed into a free object's field, or the checkbox state as `true` or `false`. */
+export interface RowSetDetail {
+  readonly name: string;
+  readonly text: string;
+}
+
+/** `incantly-row-slide`: a slider moved. `done` is true on release or when a key press ends. */
+export interface RowSlideDetail {
+  readonly name: string;
+  readonly value: number;
+  readonly done: boolean;
 }
 
 export interface RowEditDetail {
@@ -64,11 +93,30 @@ export function rowLabel(row: LineRow): string {
   return rhs === row.state.value ? `${head}, ${words}` : `${head}, defined as ${words}, value ${speak(row.state.value)}`;
 }
 
+interface Entry {
+  readonly li: HTMLLIElement;
+  readonly def: HTMLElement;
+  readonly type: HTMLElement;
+  readonly free: HTMLElement;
+  readonly pinned: HTMLElement;
+  readonly rel: HTMLElement;
+  readonly rename: HTMLButtonElement;
+  readonly del: HTMLButtonElement;
+  readonly ctl: HTMLElement;
+  readonly body: HTMLElement;
+  /** The control in `ctl`, kept across updates so a drag or an edit in progress keeps its focus. */
+  control: { kind: RowControl['kind']; input: HTMLInputElement; name: string } | undefined;
+  sig: string;
+}
+
+const SLIDE_KEYS = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'];
+
 export class LineListElement extends HTMLElement {
   private rowData: readonly LineRow[] = [];
+  private marked: ReadonlySet<string> = new Set();
   private readonly ul = h('ul', { class: 'lines', role: 'list', 'aria-label': 'Lines' });
   private readonly empty = h('p', { class: 'empty' }, 'No lines yet. Type one below, for example A = (1, 2).');
-  private readonly nodes = new Map<number, { li: HTMLLIElement; sig: string }>();
+  private readonly nodes = new Map<number, Entry>();
   private focusId: number | undefined;
 
   constructor() {
@@ -78,6 +126,7 @@ export class LineListElement extends HTMLElement {
     this.ul.addEventListener('keydown', (e) => this.onKey(e));
     this.ul.addEventListener('click', (e) => this.onClick(e));
     this.ul.addEventListener('dblclick', (e) => {
+      if (e.target instanceof Element && e.target.closest('button, input')) return;
       const row = this.rowOf(e.target);
       if (row) this.edit(row);
     });
@@ -95,6 +144,15 @@ export class LineListElement extends HTMLElement {
     this.render();
   }
 
+  /** Names to mark as related to an error (a text marker as well as a colour). */
+  get highlighted(): readonly string[] {
+    return [...this.marked];
+  }
+  set highlighted(names: readonly string[]) {
+    this.marked = new Set(names);
+    this.render();
+  }
+
   /** Moves focus to a row by name. Returns false when there is none. */
   focusRow(name: string): boolean {
     const row = this.rowData.find((r) => r.name === name);
@@ -102,6 +160,21 @@ export class LineListElement extends HTMLElement {
     if (!row || !entry) return false;
     entry.li.focus();
     return true;
+  }
+
+  private build(): Entry {
+    const def = h('span', { class: 'def' });
+    const type = h('span', { class: 'type' });
+    const free = h('span', { class: 'chip free' }, 'free');
+    const pinned = h('span', { class: 'chip pinned' }, 'pinned');
+    const rel = h('span', { class: 'chip rel' }, 'related');
+    const rename = h('button', { type: 'button', class: 'act', 'data-act': 'rename' }, 'Rename');
+    const del = h('button', { type: 'button', class: 'act', 'data-act': 'delete' }, 'Delete');
+    const acts = h('span', { class: 'acts' }, rename, del);
+    const ctl = h('div', { class: 'ctl' });
+    const body = h('div', { class: 'body' });
+    const li = h('li', { class: 'row', role: 'listitem' }, h('div', { class: 'top' }, def, free, pinned, rel, type, acts), ctl, body);
+    return { li, def, type, free, pinned, rel, rename, del, ctl, body, control: undefined, sig: '' };
   }
 
   private render(): void {
@@ -112,17 +185,18 @@ export class LineListElement extends HTMLElement {
     const tabStop = this.rowData.find((r) => r.id === this.focusId)?.id ?? this.rowData[0]?.id;
     for (const row of this.rowData) {
       keep.add(row.id);
-      const sig = JSON.stringify(row);
+      const marked = this.marked.has(row.name);
+      const sig = JSON.stringify(row) + (marked ? '!' : '');
       let entry = this.nodes.get(row.id);
       if (!entry) {
-        entry = { li: h('li', { class: 'row', role: 'listitem' }), sig: '' };
+        entry = this.build();
         this.nodes.set(row.id, entry);
       }
       if (entry.sig !== sig) {
-        this.fill(entry.li, row);
+        this.fill(entry, row, marked);
         entry.sig = sig;
       }
-      entry.li.tabIndex = row.id === tabStop ? 0 : -1;
+      this.setStop(entry, row.id === tabStop);
       ordered.push(entry.li);
     }
     for (const [id, entry] of this.nodes) {
@@ -134,14 +208,32 @@ export class LineListElement extends HTMLElement {
     this.ul.replaceChildren(...ordered);
   }
 
-  private fill(li: HTMLLIElement, row: LineRow): void {
+  /** The row is the one tab stop of the list; its own buttons and fields join it only while it is. */
+  private setStop(entry: Entry, on: boolean): void {
+    entry.li.tabIndex = on ? 0 : -1;
+    for (const c of entry.li.querySelectorAll<HTMLElement>('button.act, input.control')) c.tabIndex = on ? 0 : -1;
+  }
+
+  private fill(entry: Entry, row: LineRow, marked: boolean): void {
+    const li = entry.li;
     li.dataset['id'] = String(row.id);
     li.dataset['name'] = row.name;
-    li.setAttribute('aria-label', rowLabel(row));
-    const kids: Node[] = [h('div', { class: 'top' }, h('span', { class: 'def' }, typeset(row.source)), h('span', { class: 'type' }, row.type))];
+    li.classList.toggle('marked', marked);
+    li.setAttribute('aria-label', rowLabel(row) + (row.free ? ', free' : '') + (row.locked ? ', pinned' : '') + (marked ? ', related to the error' : ''));
+    entry.def.textContent = typeset(row.source);
+    entry.type.textContent = row.type;
+    entry.free.hidden = !row.free;
+    entry.pinned.hidden = !row.locked;
+    entry.rel.hidden = !marked;
+    entry.rename.setAttribute('aria-label', `Rename ${row.name}`);
+    entry.del.setAttribute('aria-label', `Delete ${row.name}`);
+    entry.rename.title = 'Rename (F2)';
+    entry.del.title = 'Delete (Delete key)';
+    this.fillControl(entry, row);
+    const kids: Node[] = [];
     const st = row.state;
     if (st.defined) {
-      if (rightSide(row.source) !== st.value && st.value !== '') kids.push(h('div', { class: 'value' }, `= ${typeset(st.value)}`));
+      if (rightSide(row.source) !== st.value && st.value !== '' && row.control === undefined) kids.push(h('div', { class: 'value' }, `= ${typeset(st.value)}`));
     } else {
       const why = st.cause.length > 0 ? reasonText('input_undefined') : st.detail ?? reasonText(st.reason);
       kids.push(h('div', { class: 'undef' }, h('span', { class: 'dash' }, '—  '), h('span', { class: 'why' }, `undefined: ${why}`)));
@@ -155,7 +247,89 @@ export class LineListElement extends HTMLElement {
       }
     }
     for (const w of row.warnings ?? []) kids.push(h('div', { class: 'warn' }, w));
-    li.replaceChildren(...kids);
+    entry.body.replaceChildren(...kids);
+  }
+
+  /** Updates the row's field, checkbox or slider in place; a control that has focus keeps what the person is typing. */
+  private fillControl(entry: Entry, row: LineRow): void {
+    const c = row.control;
+    if (c === undefined) {
+      entry.control = undefined;
+      entry.ctl.replaceChildren();
+      entry.ctl.hidden = true;
+      return;
+    }
+    entry.ctl.hidden = false;
+    if (entry.control === undefined || entry.control.kind !== c.kind || entry.control.name !== row.name) {
+      const input =
+        c.kind === 'text'
+          ? h('input', { type: 'text', class: 'control', spellcheck: 'false', autocomplete: 'off', inputmode: 'text' })
+          : c.kind === 'bool'
+            ? h('input', { type: 'checkbox', class: 'control' })
+            : h('input', { type: 'range', class: 'control' });
+      entry.control = { kind: c.kind, input, name: row.name };
+      const label = h('label', {}, h('span', { class: 'lbl' }, c.kind === 'slider' ? 'slider' : 'value'), input);
+      entry.ctl.replaceChildren(label);
+      this.wire(input, row.name, c.kind);
+    }
+    const input = entry.control.input;
+    input.setAttribute('aria-label', c.kind === 'slider' ? `${row.name}, slider` : c.kind === 'bool' ? `${row.name}, on or off` : `Value of ${row.name}`);
+    input.disabled = row.locked === true;
+    const editing = input.isConnected && this.shadowRoot?.activeElement === input;
+    if (c.kind === 'text') {
+      if (!editing) input.value = c.text;
+    } else if (c.kind === 'bool') {
+      input.checked = c.checked;
+    } else {
+      input.min = String(c.min);
+      input.max = String(c.max);
+      input.step = c.step === undefined ? 'any' : String(c.step);
+      input.value = String(c.value);
+      input.setAttribute('aria-valuetext', c.text);
+      const lbl = entry.ctl.querySelector('.lbl');
+      if (lbl) lbl.textContent = c.text;
+    }
+  }
+
+  private wire(input: HTMLInputElement, name: string, kind: RowControl['kind']): void {
+    if (kind === 'text') {
+      let original = '';
+      input.addEventListener('focus', () => (original = input.value));
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          e.stopPropagation();
+          original = input.value;
+          emit<RowSetDetail>(this, 'incantly-row-set', { name, text: input.value });
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          e.stopPropagation();
+          input.value = original;
+          input.closest('li')?.focus();
+        }
+      });
+      input.addEventListener('blur', () => {
+        if (input.value !== original) {
+          original = input.value;
+          emit<RowSetDetail>(this, 'incantly-row-set', { name, text: input.value });
+        }
+      });
+    } else if (kind === 'bool') {
+      input.addEventListener('change', () => emit<RowSetDetail>(this, 'incantly-row-set', { name, text: input.checked ? 'true' : 'false' }));
+    } else {
+      input.addEventListener('input', () => emit<RowSlideDetail>(this, 'incantly-row-slide', { name, value: Number(input.value), done: false }));
+      input.addEventListener('change', () => emit<RowSlideDetail>(this, 'incantly-row-slide', { name, value: Number(input.value), done: true }));
+      input.addEventListener('keydown', (e) => {
+        // Shift with an arrow key moves ten steps (the browser moves one)
+        if (!e.shiftKey || !SLIDE_KEYS.includes(e.key)) return;
+        e.preventDefault();
+        const step = Number(input.step) > 0 ? Number(input.step) : (Number(input.max) - Number(input.min)) / 100;
+        const dir = e.key === 'ArrowLeft' || e.key === 'ArrowDown' ? -1 : 1;
+        const next = Math.min(Number(input.max), Math.max(Number(input.min), Number(input.value) + dir * 10 * step));
+        input.value = String(next);
+        emit<RowSlideDetail>(this, 'incantly-row-slide', { name, value: Number(input.value), done: true });
+      });
+    }
   }
 
   private rowOf(target: EventTarget | null): LineRow | undefined {
@@ -175,6 +349,13 @@ export class LineListElement extends HTMLElement {
       this.focusRow(goto.getAttribute('data-goto') ?? '');
       return;
     }
+    const act = target?.closest('button[data-act]');
+    if (act) {
+      const row = this.rowOf(act);
+      if (row) emit<RowActionDetail>(this, act.getAttribute('data-act') === 'rename' ? 'incantly-row-rename' : 'incantly-row-delete', { name: row.name });
+      return;
+    }
+    if (target?.closest('input')) return;
     const row = this.rowOf(e.target);
     const me = e as MouseEvent;
     if (row && me.altKey) {
@@ -185,7 +366,7 @@ export class LineListElement extends HTMLElement {
 
   private onKey(e: KeyboardEvent): void {
     const target = e.target instanceof Element ? e.target : null;
-    if (target?.closest('button')) return;
+    if (target?.closest('button, input')) return;
     const li = target?.closest('li.row');
     if (!(li instanceof HTMLElement)) return;
     const items = [...this.ul.querySelectorAll<HTMLElement>('li.row')];
@@ -194,10 +375,14 @@ export class LineListElement extends HTMLElement {
       e.preventDefault();
       const dest = items[Math.max(0, Math.min(items.length - 1, to))];
       if (!dest) return;
-      for (const it of items) it.tabIndex = -1;
-      dest.tabIndex = 0;
+      for (const it of items) {
+        const on = it === dest;
+        it.tabIndex = on ? 0 : -1;
+        for (const c of it.querySelectorAll<HTMLElement>('button.act, input.control')) c.tabIndex = on ? 0 : -1;
+      }
       dest.focus();
     };
+    const row = this.rowOf(li);
     switch (e.key) {
       case 'ArrowDown':
         return move(i + 1);
@@ -207,14 +392,24 @@ export class LineListElement extends HTMLElement {
         return move(0);
       case 'End':
         return move(items.length - 1);
-      case 'Enter': {
-        const row = this.rowOf(li);
+      case 'Enter':
         if (row) {
           e.preventDefault();
           this.edit(row);
         }
         return;
-      }
+      case 'F2':
+        if (row) {
+          e.preventDefault();
+          emit<RowActionDetail>(this, 'incantly-row-rename', { name: row.name });
+        }
+        return;
+      case 'Delete':
+        if (row) {
+          e.preventDefault();
+          emit<RowActionDetail>(this, 'incantly-row-delete', { name: row.name });
+        }
+        return;
       default:
     }
   }
