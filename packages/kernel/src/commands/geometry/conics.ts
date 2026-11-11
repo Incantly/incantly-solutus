@@ -702,9 +702,9 @@ export function fivePointConic(
   for (let i = 1; i < 6; i++) if ((svd.sigma[i] as number) < (svd.sigma[bi] as number)) bi = i;
   const col = (r: number): number => ((svd.V[r] as number[])[bi] as number);
   const nv = [col(0), col(1), col(2), col(3), col(4), col(5)];
-  // De-normalise: M_x = E^T M_y E with E mapping x_h to s*y_h.
+  // De-normalise: M_x = E^T M_y E with E mapping (x, y, 1) to the normalised (s(x - cx), s(y - cy), 1).
   const my: Mat3 = [nv[0] as number, (nv[1] as number) / 2, (nv[3] as number) / 2, (nv[1] as number) / 2, nv[2] as number, (nv[4] as number) / 2, (nv[3] as number) / 2, (nv[4] as number) / 2, nv[5] as number];
-  const E: Mat3 = [1, 0, -cx, 0, 1, -cy, 0, 0, s];
+  const E: Mat3 = [s, 0, -s * cx, 0, s, -s * cy, 0, 0, 1];
   const Et = transpose3(E);
   const mx = matMul3(matMul3(Et, my), E);
   const r = classifyQuad(quadOf(mx), tol);
