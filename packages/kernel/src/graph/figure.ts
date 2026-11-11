@@ -113,8 +113,9 @@ export class Figure extends FigureHist {
   override flush(force = false): FrameDelta {
     if (this.busy) return { valueIds: [], styleIds: [], undefinedChanges: [], ran: 0 };
     // a frame outside any operation starts with no faults, so a rule that throws every frame cannot grow the list
-    if (this.opDepth === 0) this.faults = [];
     if (this.opDepth > 0) return this.flushNow(force);
+    this.faults = [];
+    this.listenerFailures = 0;
     let d: FrameDelta;
     try {
       d = this.flushNow(force);
@@ -124,7 +125,8 @@ export class Figure extends FigureHist {
       d = { valueIds: [], styleIds: [], undefinedChanges: [], ran: 0 };
     }
     this.deliver();
-    return d;
+    const failed = this.takeListenerFailures();
+    return failed > 0 ? { ...d, listenerFailures: failed } : d;
   }
 
   private flushNow(force: boolean): FrameDelta {
@@ -380,7 +382,9 @@ export class Figure extends FigureHist {
     const k = Math.max(0, Math.min(this.list.length, Math.floor(n)));
     this.stepCursor = k >= this.list.length ? undefined : k;
     this.queue({ ev: 'step', n: k });
+    this.listenerFailures = 0;
     this.deliver();
+    this.takeListenerFailures();
   }
 
   /** The reveal cursor: the number of steps shown. */
@@ -453,7 +457,7 @@ export class Figure extends FigureHist {
   static fromScript(text: string, opts: LoadOpts = {}): { figure: Figure; report: LoadReport } {
     if (typeof opts !== 'object' || opts === null) opts = {};
     const figure = new Figure(opts);
-    const report = figure.load(text, opts.mode ?? 'lenient', false);
+    const report = figure.load(text, opts.mode ?? 'lenient');
     if (!report.ok && (opts.mode ?? 'lenient') === 'strict') return { figure: new Figure(opts), report };
     figure.journal.clear();
     return { figure, report };
@@ -461,10 +465,10 @@ export class Figure extends FigureHist {
 
   /** Loads a script into this figure as one undo group. */
   append(text: string, opts: { mode?: 'lenient' | 'strict' } = {}): LoadReport {
-    return this.load(text, (typeof opts === 'object' && opts !== null ? opts.mode : undefined) === 'strict' ? 'strict' : 'lenient', true);
+    return this.load(text, (typeof opts === 'object' && opts !== null ? opts.mode : undefined) === 'strict' ? 'strict' : 'lenient');
   }
 
-  protected load(text: string, mode: 'lenient' | 'strict', group: boolean): LoadReport {
+  protected load(text: string, mode: 'lenient' | 'strict'): LoadReport {
     const at: Span = { line: 1, col: 1, endCol: 1 };
     if (this.busy) return { ok: false, applied: 0, skipped: 0, errors: [this.busyError('load')], warnings: [] };
     if (typeof text !== 'string') {
@@ -502,20 +506,12 @@ export class Figure extends FigureHist {
         }
       }
     };
-    if (group) this.journal.begin('load');
-    else this.journal.begin('load');
+    this.commitDrag();
+    const unit = this.beginUnit('load');
     this.inPass(() => run());
     if (mode === 'strict' && errors.length > 0) {
-      // all or nothing: take back what was applied
-      const entries = this.journal.abandon();
-      this.replaying = true;
-      try {
-        this.inPass(() => {
-          for (let k = entries.length - 1; k >= 0; k--) this.revertEntry(entries[k] as import('../history/journal').JournalEntry);
-        });
-      } finally {
-        this.replaying = false;
-      }
+      // all or nothing: take back what was applied, restore both stacks and the events not yet delivered
+      this.inPass((pass) => this.rollbackUnit(unit, pass));
       applied = 0;
     } else this.journal.end();
     this.deliver();

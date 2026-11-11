@@ -93,7 +93,13 @@ export function entryLabel(e: JournalEntry): string {
 export class Journal {
   readonly stack: JournalEntry[] = [];
   readonly redoStack: JournalEntry[] = [];
-  private open: { label: string; entries: JournalEntry[] } | null = null;
+  /**
+   * The group being collected. `depth` counts nested `begin` calls, so only the opener closes it. `redo` holds what an
+   * `Undo()` inside the group took back, so a `Redo()` inside it replays only that; it is dropped when the group closes.
+   */
+  private open: { label: string; entries: JournalEntry[]; redo: JournalEntry[]; depth: number } | null = null;
+  /** Where the entry the last `takeUndo` or `takeRedo` came from, so a faulty step can be put back. */
+  private taken: { e: JournalEntry; dir: 'undo' | 'redo'; from: 'stack' | 'group' | 'open'; group?: JournalEntry & { k: 'group' } } | undefined;
   private dropped = 0;
   private bytes = 0;
   /** The size of each entry when it was first measured: a record can change later, the bytes must still add up. */
@@ -110,30 +116,71 @@ export class Journal {
     this.trim();
   }
 
-  /** Starts collecting the entries of several lines as one undo step. Nested groups join the outer one. */
-  begin(label: string): void {
-    if (!this.open) this.open = { label, entries: [] };
+  /**
+   * Starts collecting the entries of several lines as one undo step. A nested call joins the open group and does not close
+   * it. Returns the mark to give `abandon`: how many entries the group held before this call.
+   */
+  begin(label: string): number {
+    if (!this.open) {
+      this.open = { label, entries: [], redo: [], depth: 1 };
+      return 0;
+    }
+    this.open.depth++;
+    return this.open.entries.length;
   }
 
   get isOpen(): boolean {
     return this.open !== null;
   }
 
-  /** Closes the group. An empty group leaves no step. Returns the group entry when one was made. */
+  /** Closes one level of the group. The outermost call closes it; an empty group leaves no step. Returns the entry made. */
   end(): JournalEntry | undefined {
     const g = this.open;
+    if (!g) return undefined;
+    g.depth--;
+    if (g.depth > 0) return undefined;
     this.open = null;
-    if (!g || g.entries.length === 0) return undefined;
+    this.taken = undefined;
+    if (g.entries.length === 0) return undefined;
     const entry: JournalEntry = g.entries.length === 1 && g.label === (g.entries[0] as JournalEntry).label ? (g.entries[0] as JournalEntry) : { k: 'group', label: g.label, entries: g.entries };
     this.push(entry);
     return entry;
   }
 
-  /** Throws the open group away and returns its entries, newest last (the caller undoes them). */
-  abandon(): JournalEntry[] {
+  /**
+   * Gives up one level of the open group and returns the entries recorded since `mark`, newest last (the caller undoes
+   * them). The group closes when its opener gives up.
+   */
+  abandon(mark = 0): JournalEntry[] {
     const g = this.open;
-    this.open = null;
-    return g ? g.entries : [];
+    if (!g) return [];
+    const gone = g.entries.splice(mark);
+    g.depth--;
+    if (g.depth <= 0) {
+      this.open = null;
+      this.taken = undefined;
+    }
+    return gone;
+  }
+
+  /** A copy of both stacks, to restore after a rollback. */
+  snapshot(): { stack: JournalEntry[]; redo: JournalEntry[] } {
+    return { stack: [...this.stack], redo: [...this.redoStack] };
+  }
+
+  /** Puts both stacks back as `snapshot` saw them. */
+  restore(snap: { stack: JournalEntry[]; redo: JournalEntry[] }): void {
+    this.stack.length = 0;
+    this.stack.push(...snap.stack);
+    this.redoStack.length = 0;
+    this.redoStack.push(...snap.redo);
+    this.bytes = this.stack.reduce((n, e) => n + this.measure(e), 0);
+  }
+
+  /** True when `takeUndo` (or `takeRedo`) would find an entry: inside an open group only the group's own entries count. */
+  canTake(dir: 'undo' | 'redo'): boolean {
+    if (this.open) return (dir === 'undo' ? this.open.entries : this.open.redo).length > 0;
+    return (dir === 'undo' ? this.stack : this.redoStack).length > 0;
   }
 
   /** Removes an entry that was just recorded (a rollback). Returns true when it was found at the end. */
@@ -163,8 +210,10 @@ export class Journal {
   /** Records one accepted line. A new entry clears the redo stack. */
   record(e: JournalEntry): void {
     this.redoStack.length = 0;
-    if (this.open) this.open.entries.push(e);
-    else this.push(e);
+    if (this.open) {
+      this.open.redo.length = 0;
+      this.open.entries.push(e);
+    } else this.push(e);
   }
 
   private measure(e: JournalEntry): number {
@@ -191,10 +240,16 @@ export class Journal {
   }
 
   /**
-   * Takes the entry to undo: the whole top entry (`group`), or only the last line of it (`line`).
-   * The caller reverts it and then calls `pushRedo` with what it took.
+   * Takes the entry to undo: the whole top entry (`group`), or only the last line of it (`line`). Inside an open group it
+   * is the group's last entry and nothing outside the group is touched (KERN-SM-9). The caller reverts it and then calls
+   * `pushRedo` with what it took.
    */
   takeUndo(unit: 'group' | 'line'): JournalEntry | undefined {
+    if (this.open) {
+      const last = this.open.entries.pop();
+      if (last) this.taken = { e: last, dir: 'undo', from: 'open' };
+      return last;
+    }
     const top = this.stack[this.stack.length - 1];
     if (!top) return undefined;
     if (unit === 'line' && top.k === 'group' && top.entries.length > 1) {
@@ -202,24 +257,72 @@ export class Journal {
       const n = this.measure(last);
       this.bytes -= n;
       this.sizes.set(top, this.measure(top) - n);
+      this.taken = { e: last, dir: 'undo', from: 'group', group: top };
       return last;
     }
     this.stack.pop();
     this.bytes -= this.measure(top);
+    this.taken = { e: top, dir: 'undo', from: 'stack' };
     return top;
   }
 
   pushRedo(e: JournalEntry): void {
-    this.redoStack.push(e);
+    if (this.open) this.open.redo.push(e);
+    else this.redoStack.push(e);
   }
 
   takeRedo(): JournalEntry | undefined {
-    return this.redoStack.pop();
+    if (this.open) {
+      const e = this.open.redo.pop();
+      if (e) this.taken = { e, dir: 'redo', from: 'open' };
+      return e;
+    }
+    const e = this.redoStack.pop();
+    if (e) this.taken = { e, dir: 'redo', from: 'stack' };
+    return e;
   }
 
   /** Puts a redone entry back on the undo stack without clearing the redo stack. */
   pushUndo(e: JournalEntry): void {
-    this.push(e);
+    if (this.open) this.open.entries.push(e);
+    else this.push(e);
+  }
+
+  /**
+   * Undoes `takeUndo` or `takeRedo` of `e` after its replay failed: the entry goes back where it came from (a line taken
+   * out of a group goes back into the group).
+   */
+  putBack(e: JournalEntry): void {
+    const t = this.taken;
+    if (!t || t.e !== e) return;
+    this.taken = undefined;
+    if (t.dir === 'undo') {
+      const redo = this.open ? this.open.redo : this.redoStack;
+      if (redo[redo.length - 1] === e) redo.pop();
+      if (t.from === 'open') (this.open as NonNullable<typeof this.open>).entries.push(e);
+      else if (t.from === 'group') {
+        const g = t.group as JournalEntry & { k: 'group' };
+        g.entries.push(e);
+        const n = this.measure(e);
+        this.bytes += n;
+        this.sizes.set(g, this.measure(g) + n);
+      } else {
+        this.stack.push(e);
+        this.bytes += this.measure(e);
+      }
+    } else {
+      if (t.from === 'open') {
+        const g = this.open as NonNullable<typeof this.open>;
+        if (g.entries[g.entries.length - 1] === e) g.entries.pop();
+        g.redo.push(e);
+      } else {
+        if (this.stack[this.stack.length - 1] === e) {
+          this.stack.pop();
+          this.bytes -= this.measure(e);
+        }
+        this.redoStack.push(e);
+      }
+    }
   }
 
   info(): UndoInfo {
@@ -228,6 +331,7 @@ export class Journal {
   }
 
   clear(): void {
+    this.taken = undefined;
     this.stack.length = 0;
     this.redoStack.length = 0;
     this.open = null;

@@ -42,6 +42,11 @@ export class FigureBase extends FigureCore {
     this.journal = new Journal(this.limits.journalEntries, this.limits.journalBytes);
   }
 
+  /** Journals the gesture writes since the last commit as one entry (see `FigureHist`). */
+  commitDrag(): { committed: number } {
+    return { committed: 0 };
+  }
+
   /* ------------------------------ small helpers ------------------------------ */
 
   protected whole(parsed: ParsedLine): Span & { token: string } {

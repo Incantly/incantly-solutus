@@ -791,24 +791,38 @@ export class FigureCore {
     this.pendingEvents.push(ev);
   }
 
-  /** Delivers the queued events once, batched: one `value` and one `style` event per pass. Listener faults are counted, never thrown. */
+  /** True while listeners are being called: an operation a listener makes queues its events for the running delivery. */
+  protected delivering = false;
+
+  /**
+   * Delivers the queued events once, batched: one `value` and one `style` event per round. Listener faults are counted,
+   * never thrown. A listener may call the figure: the events that causes are queued and delivered after the current ones,
+   * so every listener sees the events in the order the figure changed (KERN-SM-15).
+   */
   protected deliver(): void {
-    if (this.opDepth > 0) return;
-    const evs = this.pendingEvents;
-    this.pendingEvents = [];
-    if (this.pendingValues.size > 0) evs.push({ ev: 'value', ids: [...this.pendingValues] });
-    if (this.pendingStyles.size > 0) evs.push({ ev: 'style', ids: [...this.pendingStyles] });
-    this.pendingValues = new Set();
-    this.pendingStyles = new Set();
-    if (this.listeners.size === 0) return;
-    for (const ev of evs) {
-      for (const l of [...this.listeners]) {
-        try {
-          l(ev);
-        } catch {
-          this.listenerFailures++;
+    if (this.opDepth > 0 || this.delivering) return;
+    this.delivering = true;
+    try {
+      for (let round = 0; round < 1000; round++) {
+        const evs = this.pendingEvents;
+        this.pendingEvents = [];
+        if (this.pendingValues.size > 0) evs.push({ ev: 'value', ids: [...this.pendingValues] });
+        if (this.pendingStyles.size > 0) evs.push({ ev: 'style', ids: [...this.pendingStyles] });
+        this.pendingValues = new Set();
+        this.pendingStyles = new Set();
+        if (evs.length === 0 || this.listeners.size === 0) return;
+        for (const ev of evs) {
+          for (const l of [...this.listeners]) {
+            try {
+              l(ev);
+            } catch {
+              this.listenerFailures++;
+            }
+          }
         }
       }
+    } finally {
+      this.delivering = false;
     }
   }
 

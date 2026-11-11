@@ -60,6 +60,15 @@ export interface MovePlan {
 
 export type UndoUnit = 'group' | 'line';
 
+/** What `beginUnit` notes for `rollbackUnit`. */
+export interface Unit {
+  readonly mark: number;
+  readonly snap: { stack: JournalEntry[]; redo: JournalEntry[] };
+  readonly evMark: number;
+  readonly valMark: Set<ObjId>;
+  readonly styMark: Set<ObjId>;
+}
+
 export class FigureHist extends FigureTx {
   constructor(opts: import('./core').FigureOptions = {}) {
     super(opts);
@@ -168,7 +177,7 @@ export class FigureHist extends FigureTx {
     const r = this.need(x);
     if (r instanceof ObjRec === false) return r as ErrorObject;
     this.faults = [];
-    this.txEntry = undefined;
+    if (!opts.dryRun) this.commitDrag();
     const res = this.inPass((pass) => this.doDelete(r as ObjRec, undefined, opts, pass));
     this.deliver();
     return res.ok || this.vetting ? res : this.repaired(res);
@@ -248,6 +257,7 @@ export class FigureHist extends FigureTx {
     const r = this.need(x);
     if (r instanceof ObjRec === false) return r as ErrorObject;
     this.faults = [];
+    if (!opts.dryRun) this.commitDrag();
     const res = this.inPass((pass) => this.doRename(r as ObjRec, to, undefined, opts, pass));
     this.deliver();
     return res.ok || this.vetting ? res : this.repaired(res);
@@ -386,7 +396,7 @@ export class FigureHist extends FigureTx {
     this.commitDrag();
     const e = dir === 'undo' ? this.journal.takeUndo(unit) : this.journal.takeRedo();
     if (!e) return this.fail(parsed, 'nothing_to_undo', { what: dir }, { recovery: 'skip', hint: dir === 'undo' ? 'Nothing has been done yet.' : 'Nothing has been undone.', fingerprintKey: dir });
-    this.faults = [];
+    if (this.opDepth === 0) this.faults = [];
     const rep = emptyReport();
     this.inPass((pass) => {
       this.replaying = true;
@@ -401,6 +411,7 @@ export class FigureHist extends FigureTx {
       } finally {
         this.replaying = false;
       }
+      this.logHistory(dir, e);
       this.effectOf(e, dir, rep);
       this.diffReport(pass, rep);
       this.queue({ ev: dir, group: e.label });
@@ -433,8 +444,7 @@ export class FigureHist extends FigureTx {
 
   protected actionHistory(c: ActionContext, dir: 'undo' | 'redo'): ActionResult {
     if (c.opts.dryRun) {
-      const info = this.journal.info();
-      return (dir === 'undo' ? info.depth : info.redoDepth) > 0 ? { summary: dir } : this.fail(c.parsed, 'nothing_to_undo', { what: dir }, { recovery: 'skip', fingerprintKey: dir });
+      return this.journal.canTake(dir) ? { summary: dir } : this.fail(c.parsed, 'nothing_to_undo', { what: dir }, { recovery: 'skip', fingerprintKey: dir });
     }
     const r = this.stepHistory(dir, 'line', c.parsed);
     if (!r.ok) return r;
@@ -464,13 +474,10 @@ export class FigureHist extends FigureTx {
     const failed = new Map<string, { line: number; kind: import('../contracts/errors').ErrorKind }>();
     const results: TxResult[] = [];
     const rep = emptyReport();
-    const redoBefore = [...this.journal.redoStack];
-    const evMark = this.pendingEvents.length;
-    const valMark = new Set(this.pendingValues);
-    const styMark = new Set(this.pendingStyles);
+    if (this.opDepth === 0) this.listenerFailures = 0;
+    const unit = this.beginUnit(opts.group);
     let rolledBack = false;
     let applied = 0;
-    this.journal.begin(opts.group);
     this.inPass((pass) => {
       for (let i = 0; i < lines.length; i++) {
         const input = lines[i] as string | ParsedLine;
@@ -482,20 +489,7 @@ export class FigureHist extends FigureTx {
           continue;
         }
         if (mode === 'atomic') {
-          const entries = this.journal.abandon();
-          this.replaying = true;
-          try {
-            for (let k = entries.length - 1; k >= 0; k--) this.revertEntry(entries[k] as JournalEntry);
-          } finally {
-            this.replaying = false;
-          }
-          this.journal.redoStack.length = 0;
-          this.journal.redoStack.push(...redoBefore);
-          this.pendingEvents.length = evMark;
-          this.pendingValues = valMark;
-          this.pendingStyles = styMark;
-          pass.before.clear();
-          pass.added.clear();
+          this.rollbackUnit(unit, pass);
           rolledBack = true;
           applied = 0;
           return;
@@ -509,6 +503,33 @@ export class FigureHist extends FigureTx {
     const failures = this.takeListenerFailures();
     if (failures > 0) rep.warnings.push(makeNotice('listener_failed', { where: 'a listener' }));
     return { ok: results.every((r) => r.ok), results, applied, rolledBack, changed: rep, notices: rep.warnings };
+  }
+
+  /**
+   * Opens a journal group and notes what a rollback has to restore: the group mark, both stacks and the event queues. Shared
+   * by `applyBatch` and `load`, so every atomic failure puts back the same things (KERN-SM-15).
+   */
+  protected beginUnit(label: string): Unit {
+    return { mark: this.journal.begin(label), snap: this.journal.snapshot(), evMark: this.pendingEvents.length, valMark: new Set(this.pendingValues), styMark: new Set(this.pendingStyles) };
+  }
+
+  /** Gives up the group and takes back every entry it holds, newest first; both stacks and the pending events are as `beginUnit` saw them. */
+  protected rollbackUnit(u: Unit, pass?: import('./core').Pass): void {
+    const entries = this.journal.abandon(u.mark);
+    this.replaying = true;
+    try {
+      for (let k = entries.length - 1; k >= 0; k--) this.revertEntry(entries[k] as JournalEntry);
+    } finally {
+      this.replaying = false;
+    }
+    this.journal.restore(u.snap);
+    this.pendingEvents.length = Math.min(this.pendingEvents.length, u.evMark);
+    this.pendingValues = u.valMark;
+    this.pendingStyles = u.styMark;
+    if (pass) {
+      pass.before.clear();
+      pass.added.clear();
+    }
   }
 
   /** The `limit` error when a batch has too many lines or too much text (the same budgets a loaded file has, KERN-SM-1). */
@@ -596,6 +617,8 @@ export class FigureHist extends FigureTx {
     if (rec.cell.defined === cell.defined && (!cell.defined || sameValue((rec.cell as { value: unknown }).value, v)) && (cell.defined || !rec.cell.defined)) {
       return { ok: true, changed: false };
     }
+    // a write that is journalled now comes after the gesture that was still open (KERN-SM-11)
+    if (why === 'show_me' || why === 'api') this.commitDrag();
     const before = rec.p;
     const after: Persist = { ...before, ...(v === undefined ? { freeReason: 'explicit' as const } : {}), value: v };
     if (why === 'drag' || why === 'slider') {
@@ -645,7 +668,7 @@ export class FigureHist extends FigureTx {
   }
 
   /** Journals the gesture writes since the last commit as one entry (first value to last). */
-  commitDrag(): { committed: number } {
+  override commitDrag(): { committed: number } {
     if (this.busy || this.gesture.size === 0) return { committed: 0 };
     const changes: Change[] = [];
     for (const [rec, before] of this.gesture) {
@@ -777,6 +800,7 @@ export class FigureHist extends FigureTx {
     const after = to > rec.order ? [...rest, ...sortedGroup] : [...sortedGroup, ...rest];
     const reorder: Reorder = { lo, before, after, moved: group };
     this.faults = [];
+    this.commitDrag();
     const res = this.inPass((pass) => {
       this.applyReorder(lo, after);
       this.record({ k: 'sets', changes: [], reorder, label: `move ${rec.p.name}` });

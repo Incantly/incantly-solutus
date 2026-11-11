@@ -116,7 +116,8 @@ Related findings that one change should fix together (pipeline.md: fix every cas
 
 ### KERN-SM-9. `Undo()`, `Redo()` and nested batches inside an open journal group act outside it; atomic rollback then loses data
 
-- **Impact:** wrong results with data loss. Status: open.
+- **Impact:** wrong results with data loss. Status: fixed.
+- **fix:** inside an open journal group Undo() and Redo() act on the group own entries only (Redo replays only what that Undo took), nested begin/end count depth so only the opener closes the group, and a rollback restores both stacks through one shared helper.
 - **Evidence:**
   1. `figure(['a = 1']).applyBatch(['b = 2', 'Undo()'], { group: 'g', mode: 'independent' })`: names `['b']`, redo depth 1. `Undo()` removed `a`, written before the batch, instead of `b` (kernel design 11.2: the teacher's `Undo()` takes back its last line).
   2. `figure(['a = 1']).applyBatch(['b = 2', 'Undo()', 'c = nope + 1'], { group: 'g' })` (atomic): `rolledBack: true`, names `[]`, undo depth 1 → 0, redo depth 0. `a` is gone and no undo or redo can bring it back.
@@ -129,7 +130,8 @@ Related findings that one change should fix together (pipeline.md: fix every cas
 
 ### KERN-SM-10. A fault after a change is reported as rejected (`committed: false`) while the change stays
 
-- **Impact:** wrong results (the caller is told nothing changed). Status: open.
+- **Impact:** wrong results (the caller is told nothing changed). Status: fixed.
+- **fix:** apply keeps a log of the entries it recorded and the undo/redo steps it took; any failure after a change (a fault, an action that throws) unwinds the whole log newest first, puts a taken entry back where it came from, and drops the events it queued.
 - **Evidence:**
   - An action `Spawn()` whose rule does `call.figure.apply('Z = 1'); throw new Error('x')`: `apply('Spawn()')` returns `internal`, `committed: false`; names `['Z']`, undo depth 1. `applyAction` (`graph/tx.ts:731`) catches and returns `internalError` without reverting what the action did.
   - `figure(['a = 1', 'u = Unlucky(a)'])`, `setFree('a', 13, 'api')`, `flush()`, `apply('a = 2')`, `apply('Undo()')`: the result is `internal`, `committed: false`, but `a` is 13 and redo depth is 1. The undo ran; its `settle` made `Unlucky` throw; `apply` saw `faults` and called `rollbackTx`, which had no `txEntry` (undo does not record), so nothing was reverted. `stepHistory` also clears the outer `faults` (`graph/hist.ts:385`).
@@ -138,7 +140,8 @@ Related findings that one change should fix together (pipeline.md: fix every cas
 
 ### KERN-SM-11. A gesture is journalled after the edits made during it: undo goes back past them and then forward
 
-- **Impact:** wrong results (undo order). Status: open.
+- **Impact:** wrong results (undo order). Status: fixed.
+- **fix:** apply, delete, rename, move, load and setFree with show_me or api commit an open gesture before they write to the journal.
 - **Evidence:**
   - `figure(['A = (0, 0)'])`, `setFree('A', (5, 5), 'drag')`, `flush()`, `apply('A = (1, 1)')`, `commitDrag()`, then undo until empty: values `(1, 1)` → `(0, 0)` → `(5, 5)` → removed. Undo goes to the start of the gesture, then forward to its middle.
   - `figure(['a = 1 in 0..10'])`, `setFree('a', 5, 'slider')`, `setFree('a', 7, 'show_me')`, `setFree('a', 8, 'slider')`, `commitDrag()`: undo gives 8 → 1 → 5 → removed.
@@ -188,7 +191,8 @@ Related findings that one change should fix together (pipeline.md: fix every cas
 
 ### KERN-SM-15. Events and rollbacks: a rejected strict append is visible, and re-entrant listeners see events out of order
 
-- **Impact:** wrong results (history and the view's picture of the figure). Status: open.
+- **Impact:** wrong results (history and the view's picture of the figure). Status: fixed.
+- **fix:** load rolls back through the same helper as applyBatch (both stacks and pending events restored); deliver is re-entrant safe: a listener operation queues its events behind the running delivery.
 - **Evidence:**
   - a. `figure(['a = 1', 'b = 2'])`, `undo()` (redo depth 1), then `append('c = 3\nd = nope + 1', { mode: 'strict' })`: the report fails and the objects are as before, but redo depth is 0. A listener sees `add`, `remove`, `value` for `c`, which never existed. `load` (`graph/figure.ts:488`) reverts the entries but restores neither `redoStack` nor the pending queues, which `applyBatch` does.
   - b. Two listeners on `newFigure()`: the first, on `add` of `X`, calls `f.apply('Delete(X)')`; after `f.apply('X = 1')` the second sees `remove:1`, `add:1`, `value`. `deliver` (`graph/core.ts:751`) runs the nested operation's delivery to every listener inside the outer loop.
@@ -233,7 +237,8 @@ Measured in Node 22, warm, on the scratch probe (median of three where shown). T
 
 ### KERN-SM-18. A listener failure in a frame is reported on the next line
 
-- **Impact:** wrong notices. Status: open.
+- **Impact:** wrong notices. Status: fixed.
+- **fix:** the failure count is reset at the start of each operation, apply/applyBatch read it, and flush/setClock return it in FrameDelta.listenerFailures.
 - **Evidence:** `figure(['a = 1 in 0..10', 'b = a + 1'])` with a listener that throws on `value` once; `setFree('a', 2, 'slider')`, `flush()`; after disarming, `apply('c = 5')` returns notices `['listener_failed']`. `deliver` counts failures from `flush` and `setClock` (`graph/core.ts:765`), and only `apply` and `applyBatch` read and reset the counter.
 - **Invariant broken:** K4: a listener failure becomes a notice on the result of the operation it happened in.
 - **Suggested fix:** return the count from `flush` and `setClock` in the `FrameDelta` (for example `listenerFailures`), and reset the counter at the start of each operation.

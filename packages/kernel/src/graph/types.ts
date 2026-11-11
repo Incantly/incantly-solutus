@@ -155,6 +155,8 @@ export interface FrameDelta {
   readonly undefinedChanges: UndefChange[];
   /** Number of rules that ran. */
   readonly ran: number;
+  /** Listeners that threw while the events of this frame were delivered (absent when none did). */
+  readonly listenerFailures?: number;
 }
 
 /* ------------------------------ events ------------------------------ */

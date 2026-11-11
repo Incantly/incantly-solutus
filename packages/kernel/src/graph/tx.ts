@@ -63,12 +63,19 @@ export interface ActionContext {
 export type ActionResult = { readonly summary: string; readonly data?: unknown; readonly op?: TxOp } | ErrorObject;
 export type ActionHandler = (ctx: ActionContext) => ActionResult;
 
+export type LogItem = { readonly k: 'rec'; readonly e: JournalEntry } | { readonly k: 'hist'; readonly dir: 'undo' | 'redo'; readonly e: JournalEntry };
+
 type DefLine = Extract<LineNode, { k: 'define' | 'function' | 'defmany' }>;
 
 export class FigureTx extends FigureBase {
   protected readonly actionHandlers = new Map<string, ActionHandler>();
-  /** The journal entry the current line recorded, so a fault can take it back. */
-  protected txEntry: JournalEntry | undefined;
+  /**
+   * What the current line did to the journal and the history, in order, so a failure can take all of it back
+   * (KERN-SM-10): the entries it recorded and the undo or redo steps it took.
+   */
+  protected log: LogItem[] = [];
+  /** How many `apply` calls are running; the log is kept only inside one. */
+  protected applyDepth = 0;
 
   /* ------------------------------ errors ------------------------------ */
 
@@ -90,17 +97,33 @@ export class FigureTx extends FigureBase {
   /* ------------------------------ record ------------------------------ */
 
   protected record(e: JournalEntry): void {
-    this.txEntry = e;
-    if (!this.replaying) this.journal.record(e);
+    if (this.replaying) return;
+    this.journal.record(e);
+    if (this.applyDepth > 0) this.log.push({ k: 'rec', e });
   }
 
-  /** Takes back the entry the current line recorded (a fault after the commit). */
+  /** Notes that the line took an undo or redo step, so a failure can put it back. */
+  protected logHistory(dir: 'undo' | 'redo', e: JournalEntry): void {
+    if (this.applyDepth > 0) this.log.push({ k: 'hist', dir, e });
+  }
+
+  /**
+   * Takes back everything the current line did, newest first: the entries it recorded leave the journal and are reverted, an
+   * undo or redo step it took is reversed and its entry goes back where it came from. Used when the line fails after a change.
+   */
   protected rollbackTx(): void {
-    const e = this.txEntry;
-    this.txEntry = undefined;
-    if (!e) return;
-    this.journal.discard(e);
-    this.inPass(() => this.revertEntry(e));
+    const items = this.log;
+    this.log = [];
+    for (let i = items.length - 1; i >= 0; i--) {
+      const it = items[i] as LogItem;
+      if (it.k === 'rec') {
+        this.journal.discard(it.e);
+        this.inPass(() => this.revertEntry(it.e));
+      } else {
+        this.inPass(() => (it.dir === 'undo' ? this.replayEntry(it.e) : this.revertEntry(it.e)));
+        this.journal.putBack(it.e);
+      }
+    }
   }
 
   /* ------------------------------ apply ------------------------------ */
@@ -116,14 +139,24 @@ export class FigureTx extends FigureBase {
     }
     if (typeof opts !== 'object' || opts === null) opts = {};
     if (this.busy) return this.busyError('apply');
+    // a gesture still open is one step that happened before this line: it goes into the journal first (KERN-SM-11)
+    if (!opts.dryRun) this.commitDrag();
+    if (this.opDepth === 0) this.listenerFailures = 0;
     this.faults = [];
-    this.txEntry = undefined;
+    const outerLog = this.log;
+    this.log = [];
+    this.applyDepth++;
+    const evMark = this.pendingEvents.length;
     const lineNo = opts.line ?? (typeof input === 'string' ? 1 : input.line);
     let result: TxResult;
     try {
       result = this.inPass((pass) => {
         const r = this.applyInner(input, opts, pass);
-        if (r.ok === false) return r;
+        if (r.ok === false) {
+          // a rejected line changes nothing, also when an action changed things before it failed
+          if (this.log.length > 0) this.rollbackTx();
+          return r;
+        }
         if (this.faults.length > 0) {
           const bad = this.faults[0] as string;
           if (!opts.dryRun) this.rollbackTx();
@@ -135,6 +168,10 @@ export class FigureTx extends FigureBase {
       this.rollbackTx();
       result = internalError('the figure', { line: lineNo, col: 1, endCol: 1 }, '', 'apply');
     }
+    this.applyDepth--;
+    if (result.ok) outerLog.push(...this.log);
+    else if (this.pendingEvents.length > evMark) this.pendingEvents.length = evMark;
+    this.log = outerLog;
     if (!result.ok && !this.vetting && !opts.dryRun) result = this.repaired(result);
     this.deliver();
     if (result.ok) {
