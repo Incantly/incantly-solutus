@@ -121,7 +121,7 @@ Everything is a form on a command in the one table. Where the command already ex
 
 | Command | Forms |
 |---|---|
-| (definition) | `f(x, y) = sin(x y)`: a two-variable `Function`, drawn as a surface over the visible `x`, `y` |
+| (definition) | `f(x, y) = sin(x*y)`: a two-variable `Function`, drawn as a surface over the visible `x`, `y` |
 | `Surface` | `(x(u,v), y(u,v), z(u,v), u, u0, u1, v, v0, v1)` |
 | (definition) | `F = x^2 + y^2 - z^2 == 1`: an implicit surface when the equation is not quadratic; quadratic gives a `Quadric` |
 | `Revolve` | `(Function, a, b, axis: L)`; `(Curve3 \| Curve, from, to, axis: L, angle)` a surface |
@@ -205,6 +205,8 @@ Full detail and sketches are in `ui.md`. The groups, in toolbar order: Move; Poi
 ## 5. Types
 
 All 3D values are immutable records like the 2D ones (core design: `Value`). `V3` is `{ x, y, z }` (a readonly tuple-like object; same shape rules as `V2` in the points-lines design section 3.1).
+
+Ruling K5 (`../kernel/rulings.md`): the kernel does not wrap values in a `{ t, ... }` union; it stores the language's raw runtime values, and the type comes from the object's `type`. The union below lists the shapes this area adds, with `t` standing for that `type`.
 
 ```ts
 export interface V3 { readonly x: number; readonly y: number; readonly z: number }

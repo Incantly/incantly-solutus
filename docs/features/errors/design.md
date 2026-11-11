@@ -96,7 +96,7 @@ interface Notice {
 }
 ```
 
-They live in `changed.warnings` (kernel report) and are never confused with errors: errors have `ok: false`.
+They live in `notices` on the result (the kernel also keeps the same array in `changed.warnings` so older readers work) and are never confused with errors: errors have `ok: false`.
 
 ### 3.2 Undefined reasons
 
@@ -181,7 +181,7 @@ The first error in reading order wins and is returned. We do not return a list f
 These are the rules every caller follows. They are part of the contract, tested in the golden suite.
 
 1. **Atomic line.** A failed line changes nothing. Always (`committed: false`).
-2. **Independent lines.** In a batch, lines run in order; a failure does not stop later lines. A later line that reads an object an earlier line failed to make gets `blockedBy`, and `recovery: 'fix_earlier'`.
+2. **Independent lines.** In a batch run with `mode: 'independent'`, lines run in order; a failure does not stop later lines (the default `atomic` mode rolls the whole batch back instead). A later line that reads an object an earlier line failed to make gets `blockedBy`, and `recovery: 'fix_earlier'`.
 3. **Retry budget.** The teacher retries a line at most twice. The `fingerprint` of the second retry's error equal to the first means stop. After the budget, `skip`.
 4. **Prefer `suggest`.** If `suggest` is non-empty and `recovery` is `use_suggestion`, send the first suggestion unchanged.
 5. **No silent repair by the engine.** The engine never fixes a line itself. (A UI may apply a suggestion only on the learner's click.)
@@ -214,7 +214,7 @@ Numbers live in rules, which return undefined with a reason; they do not raise e
 
 - **Non-finite results** (`NaN`, `±Infinity`) from a formula are never stored as a Number value. The rule wrapper converts them: `0/0`, `sqrt(-1)`, `asin(2)` become `out_of_domain` or `not_finite`, `1/0` becomes `division_by_zero`. The reason is chosen by the built-in that produced it (each built-in declares its domain check) and falls back to `not_finite`.
 - **Overflow:** results with `|x| > 1e300` become `overflow`, to avoid `Infinity` creeping in through products.
-- **Convergence:** iterative methods (root finding, extremum, integral to tolerance, ODE steps) return `no_convergence` when they hit their iteration cap or error estimate cannot be reached, with the achieved estimate in the object's detail (`detail.achieved`, `detail.wanted`). They never return a half-converged number silently.
+- **Convergence:** iterative methods (root finding, extremum, integral to tolerance, ODE steps) return `no_convergence` when they hit their iteration cap or error estimate cannot be reached, with the achieved estimate and the wanted one in the object's `detail`, a short text. They never return a half-converged number silently.
 - **Tolerance:** equality tests in geometry (parallel, coincident, collinear) use a scale-relative tolerance (default `1e-9 * max(1, |scale|)`) set once in the figure; reasons `parallel`/`coincident`/`degenerate` use it.
 - **Determinism:** the same inputs give the same reason; no wall-clock timeouts decide numerical outcomes (a per-rule *work* budget, counted in iterations, replaces time where results must be reproducible; the wall-clock budget exists only as a fallback and yields `timeout`).
 

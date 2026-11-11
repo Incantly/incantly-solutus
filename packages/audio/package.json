@@ -1,0 +1,10 @@
+{
+  "name": "@incantly/audio",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Sound playback with Tone.js, loaded on demand.",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

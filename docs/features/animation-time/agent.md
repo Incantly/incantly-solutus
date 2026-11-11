@@ -100,7 +100,7 @@ Teacher: "Gravity pulls the weight back toward the middle. The angle changes fas
 ```text
 θ = state(0.6, 0)
 θ'' = -g / L * sin(θ)
-bob = (L sin(θ), -L cos(θ))
+bob = (L * sin(θ), -L * cos(θ))
 rod = Segment(pivot, bob)
 ```
 
@@ -150,12 +150,12 @@ Result: `ok`, "1000 particles, gpu". The teacher adds wind from a slider:
 ```text
 wind = 0 in -1..1 step 0.05
 fire = Particles(count = 1000, life = 1.2,
-  pos = (0.3 (u - 0.5) + 0.12 noise(i, 3 age) + wind age^2, 2 age - 0.5 age^2),
+  pos = (0.3 (u - 0.5) + 0.12 noise(i, 3 age) + wind * age^2, 2 age - 0.5 age^2),
   color = Gradient(ph, rgb(255, 230, 120), rgb(255, 120, 30), rgb(90, 90, 90)),
   size = 0.07 (1 - ph), alpha = 1 - ph, blend = add)
 ```
 
-Redefinition keeps the id. If the model had written `windd age^2` the result would be `unknown_name` with `closest: ["wind"]`.
+Redefinition keeps the id. If the model had written `windd * age^2` the result would be `unknown_name` with `closest: ["wind"]`.
 
 ### 5.4 Animated slider for a locus lesson
 

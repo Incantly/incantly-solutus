@@ -1,0 +1,10 @@
+{
+  "name": "@incantly/symbolic",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "The CAS layer, loaded on demand. No DOM.",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

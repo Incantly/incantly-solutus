@@ -105,7 +105,7 @@ Example, `not_a_slider`:
 
 | Situation | Display | Detail |
 |---|---|---|
-| Undefined | Dash `—` and the reason in words in the second row; hover adds the cause chain | `reason`, `via` from the kernel |
+| Undefined | Dash `—` and the reason in words in the second row; hover adds the cause chain | `reason`, `cause` from the kernel |
 | Very large | `1.23 × 10⁹`; beyond 1e308 is undefined `overflow` | |
 | Very small | `1.2 × 10⁻⁸`; below 1e-320 prints `0` with `approx` | |
 | Rounded to zero but not zero | `0` and the `approx` marker (≈) on hover: `≈ 0 (1.2e-7)` | So a learner can see the value is not exactly zero |
@@ -126,7 +126,7 @@ Reason texts used in the second row (built from templates, English v1):
 | `index_out_of_range` | `list index 5 is outside 1..3` |
 | `empty_list` | `list is empty` |
 | `not_integer` | `needs a whole number` |
-| `input_undefined` | `undefined because {via} is undefined` |
+| `input_undefined` | `undefined because {cause} is undefined` |
 | `explicit` | `set to undefined` |
 | `condition_false` | `the condition is false` |
 | `parallel` (geometry) | `the lines are parallel` |
@@ -140,7 +140,7 @@ Reason texts used in the second row (built from templates, English v1):
 | Step larger than the range | `slider_range` |
 | Step produces a non-terminating decimal (0.1 steps over -5..5) | Values are `min + k × step` computed in integer steps, then rounded to the step's decimal places, so there is no drift (4.6 does not become 4.6000000000000005) |
 | Range with 1e6 or more steps | Allowed (a slider is continuous); UI snaps by pixel, not by step, when steps exceed pixels |
-| Slider value set by a script outside the range | Clamped, `slider_clamped` warning |
+| Slider value set by a script outside the range | Clamped, `clamped` notice |
 | Redefine a slider's value to an expression | Becomes dependent; the range is dropped; toast |
 | Delete a slider that others use | `Delete` lists everything removed; the toast offers Undo |
 | Angle-tagged slider with a degree range typed as radians | The UI does not guess; labels show degrees, ranges are radians |

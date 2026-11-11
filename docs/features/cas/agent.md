@@ -75,7 +75,7 @@ Parameters:
 a = Symbol() with domain = nonzero
 b = Symbol()
 c = Symbol()
-gen = Solve(a x^2 + b x + c == 0, x)
+gen = Solve(a*x^2 + b*x + c == 0, x)
 ```
 
 A sequence with the clock:
@@ -91,7 +91,7 @@ m = Substitute(sol, s0, t)
 Per line, one object. Symbolic results are summarised in text the model can read aloud, and with the exact flag.
 
 ```json
-{ "line": 2, "ok": true, "name": "fp", "type": "Expr", "value": "(x - 2)(x - 3)", "exact": true }
+{ "line": 2, "ok": true, "name": "fp", "type": "Expr", "value": "(x - 2) * (x - 3)", "exact": true }
 { "line": 4, "ok": true, "name": "s", "type": "List<Cond>", "value": "[x == 2, x == 3]", "exact": true }
 { "line": 3, "ok": true, "name": "r", "type": "List<Expr>", "value": "[2, 3]", "exact": true }
 { "line": 5, "ok": true, "name": "A", "type": "Expr", "value": "-2", "exact": true }
@@ -139,7 +139,7 @@ q = Expr(x^2 - 5x + 6 == 0)
 fp = Factor(LeftSide(q))
 ```
 
-`draw` returns `fp = (x - 2)(x - 3)`.
+`draw` returns `fp = (x - 2) * (x - 3)`.
 
 > "A product is zero when one of the factors is zero, so x is two or three."
 
@@ -157,7 +157,7 @@ R2 = (s[1], 0)
 > "Let me show that a squared plus two a b plus b squared is a plus b all squared."
 
 ```text
-lhs = Expr(a^2 + 2 a b + b^2)
+lhs = Expr(a^2 + 2*a*b + b^2)
 ```
 
 `draw` returns the error `unknown_name` for `a` with `suggest: ["a = Symbol()", "b = Symbol()"]`.
@@ -167,7 +167,7 @@ lhs = Expr(a^2 + 2 a b + b^2)
 ```text
 a = Symbol()
 b = Symbol()
-lhs = Expr(a^2 + 2 a b + b^2)
+lhs = Expr(a^2 + 2*a*b + b^2)
 rhs = Expr((a + b)^2)
 ok = Equivalent(lhs, rhs)
 ```

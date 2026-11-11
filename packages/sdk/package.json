@@ -1,0 +1,10 @@
+{
+  "name": "@incantly/sdk",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "createApp, the embed API, iframe protocol, file format and export.",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

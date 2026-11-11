@@ -1,0 +1,12 @@
+{
+  "name": "@incantly/studio",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "The full Incantly web app, built only on @incantly/sdk and the server's HTTP API.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  }
+}

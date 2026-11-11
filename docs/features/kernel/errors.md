@@ -28,7 +28,8 @@ Parse errors (`syntax`, `unbalanced`, `bad_number`, `unterminated_string`) belon
 | `bad_property_value` | value of the wrong type or range (`layer = 12`, `opacity = 3`) | clamps silently | Error with allowed range; no silent clamping for literals. Dynamic expressions that evaluate out of range clamp at read time (documented, section 9.4 of design). |
 | `nothing_to_undo` | `Undo()` with empty history (also `Redo()`) | button disabled | Error, `recovery: 'skip'`. |
 | `limit` | any size budget exceeded | out-of-memory or hang | Error with `limit` field naming which and the allowed value. |
-| `load_failed` | `fromScript` finds a bad version or a strict failure | "opening file failed" | Error plus the per-line list. |
+| `load_failed` | `fromScript` in strict mode finds a failing line, or the file is unreadable | "opening file failed" | Error plus the per-line list. |
+| `version` | `fromScript` finds a file version newer than supported (K042; not `load_failed`, ruling K7) | "opening file failed" | Error naming the version found and the supported ones. |
 | `internal` | a rule threw (a bug) | stack trace in console, figure may be half updated | Rolled back; `committed: false`; `code` and a `fingerprint` for logs. |
 
 ---
@@ -51,32 +52,37 @@ The kernel defines the reason codes. Rules return one; the engine adds `input_un
 | `index_out_of_range` | list or intersection index too big | list access |
 | `empty_list` | list has no elements | `Mean([])` |
 | `no_convergence` | a numeric method gave up | `Root`, `Extremum`, solver |
-| `timeout` | rule exceeded its time budget and stopped itself | heavy numerics |
+| `timeout` | a rule used up its work budget and stopped itself (the wall-clock budget is only a fallback, see `../errors/design.md` section 8) | heavy numerics, solver |
 | `input_undefined` | an input is undefined; see `cause` | inherited |
 | `not_set` | the free value is the literal `undefined` | free Number |
 | `limit` | result would exceed a size limit | huge `Seq` |
 
 A rule must return a specific reason, never a generic one. A test iterates every rule's declared `reasons` list and checks each can be reached by an example.
 
-Shape of the cell: `{ defined: false, reason, cause?: ObjId }`. In the change report: `{ name, reason, cause?: name }`. In the `figure` tool: `"undefined": { "reason": "parallel" }` or `{ "reason": "input_undefined", "cause": "I", "root": "parallel" }` where `root` is the reason at the end of the chain.
+Shape of the cell: `{ defined: false, reason, detail?: string, cause?: ObjId }`. `detail` is one short text (for numeric reasons, for example what was reached and what was wanted). In the change report: `{ name, reason, cause?: name }`. In the `figure` tool: `"undefined": { "reason": "parallel" }` or `{ "reason": "input_undefined", "cause": "I", "root": "parallel" }` where `cause` is the nearest undefined input and `root` is the reason at the end of the `cause` chain.
 
 GeoGebra: a failed output is just "undefined"; the user must work backwards to see why.
 
 ---
 
-## 3. Warnings (accepted, but worth saying)
+## 3. Notices (accepted, but worth saying)
 
-Returned in `changed.warnings`. They never block.
+Returned in `notices` on the result (ruling K3; `changed.warnings` holds the same array, kept so older readers work). They never block. The full table, with templates, is in `../errors/errors.md` section 4.
 
-| Code | When |
-|---|---|
-| `property_detached` | a property rule lost an input (the slider that coloured it was deleted); property reverted to static |
-| `dependents_removed` | `Delete` cascaded to other objects (lists them) |
-| `moved_for_order` | redefinition moved objects earlier |
-| `became_undefined` | the line made existing objects undefined (lists them) |
-| `confusable_name` | new name differs from an existing one only by case |
-| `shadowed_default` | style set to what the default already is (no change) |
-| `redefined_to_same` | no structural change (value refreshed only) |
+| Kind | Code | When |
+|---|---|---|
+| `became_undefined` | K101 | the line made existing objects undefined (lists them) |
+| `became_defined` | K102 | objects are defined again |
+| `dependents_removed` | K103 | `Delete` cascaded to other objects (lists them) |
+| `moved_for_order` | K104 | redefinition moved objects earlier |
+| `property_detached` | K105 | a property rule lost an input (the slider that coloured it was deleted); property reverted to static |
+| `confusable_name` | K106 | new name differs from an existing one only by case |
+| `redefined_to_same` | K107 | no structural change (value refreshed only) |
+| `listener_failed` | K108 | a listener threw; the figure is fine |
+| `step_hidden` | K109 | an object was added after the step the learner is viewing |
+| `clamped` | K110 | a free write was moved to the end of the slider's range |
+| `shadowed_default` | K111 | style set to what the default already is (no change) |
+| `unstable_state` | K112 | a state became unstable |
 
 ---
 
@@ -215,9 +221,9 @@ Internal:
 ## 5. Recovery rules (kernel side)
 
 1. **Atomic.** A rejected line leaves figure, journal and clock exactly as they were. Tests snapshot `toScript()` and the journal depth before and after every failing line in the golden suite and assert equality.
-2. **Independent lines.** In a batch, later lines run even if earlier ones failed. Lines that read a failed line's name get `blockedBy`.
+2. **Independent lines.** In a batch run with `mode: 'independent'`, later lines run even if earlier ones failed (the default `atomic` mode rolls the whole batch back instead, ruling K6). Lines that read a failed line's name get `blockedBy`.
 3. **Dry run first when unsure.** `apply(line, { dryRun: true })` returns the same error without side effects.
-4. **Rollback on throw.** The commit step records the minimum to undo itself before the first mutation; an exception inside a rule or a listener (listeners run after commit and cannot undo it, but their errors are caught and logged as `listener_failed` warnings, never allowed to break the figure) rolls back and returns `internal`.
+4. **Rollback on throw.** The commit step records the minimum to undo itself before the first mutation; an exception inside a rule or a listener (listeners run after commit and cannot undo it, but their errors are caught and reported as `listener_failed` notices, never allowed to break the figure) rolls back and returns `internal`.
 5. **No silent repair.** The kernel never guesses a name, creates sliders or splits a name into a product. It offers a `suggest` line; the caller decides.
 6. **Cascade is explicit.** Delete returns the list of removed names, always. `deletePlan` returns the list before the delete.
 7. **Undefined never throws.** Only a bug throws; a bug is `internal`.
@@ -230,9 +236,17 @@ Internal:
 | expression nodes per line | 400 | `expr_nodes` |
 | line length | 2,000 | `line_length` |
 | list size | 100,000 | `list_size` |
+| elements in a range `[a..b]` | 100,000 | `range_elements` |
 | rule nesting depth | 64 | `depth` |
-| journal entries | 500 | none (oldest dropped; reported by `undoInfo`) |
-| rule time budget | 2 ms (per-rule override) | undefined with `timeout` |
+| comments and directives per figure | 5,000 | `items` |
+| lines in one batch or loaded file | 20,000 | `lines` |
+| characters in a free Text value | 10,000 | `text_length` |
 | load file size | 2 MB | `file_size` |
+| journal entries | 500 | none (oldest dropped; reported by `undoInfo`) |
+| journal bytes | 4 MB | none (oldest dropped; reported by `undoInfo`) |
 
-Limits are values in a `Limits` object passed to the figure; hosts can lower them (a classroom tablet) or raise them (an author tool).
+Limits are values in a `Limits` object passed to the figure (`objects`, `exprNodes`, `lineLength`, `listSize`, `depth`, `journalEntries`, `journalBytes`, `ruleBudgetMs`, `fileSize`, `items`, `lines`, `textLength`, and `extra` for the entries areas add); hosts can lower them (a classroom tablet) or raise them (an author tool). `range_elements` and the other limits only the language checks are in `../language/errors.md` section 7.
+
+Expression nodes: the language's own cap is 2,000 (language errors 7). Inside a figure the kernel passes its `exprNodes` value (400) to the language, so 400 applies there.
+
+**Rule cost.** The kernel never stops a rule because of wall-clock time. `ruleBudgetMs` (default 2 ms) is a profiling aid: when the host passes a clock, a rule that runs longer is listed in `slowRules`. A rule whose cost can grow counts its own iterations against a work budget and returns `no_convergence` or `timeout` when it is spent, so the same inputs give the same result on every machine (`../errors/design.md` section 8).

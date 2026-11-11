@@ -1,0 +1,10 @@
+{
+  "name": "@incantly/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Node service: model calls (Muse Spark), keys, rate limits, headless checks and SVG export.",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

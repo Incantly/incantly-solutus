@@ -12,7 +12,7 @@ Columns: **kind / code**, **when**, **GeoGebra**, **our message template**, **de
 |---|---|---|---|---|---|
 | `syntax` L001 | parser stops at a token that cannot continue the line | One generic "check your input", position lost | `Unexpected {token}. Expected {expected}.` | fix_line | `expected` (up to 8 tokens or classes like `a number`), `suggest` for known patterns |
 | `unbalanced` L002 | bracket opened and not closed, or closed and never opened | "unbalanced brackets" without position | `{open} on column {col} is never closed.` / `Unmatched {close}.` | use_suggestion | `col` points at the unmatched bracket; `suggest` adds the missing one at end of line |
-| `bad_number` L003 | `1.2.3`, `1e`, `.`, `0x` | generic | `{token} is not a valid number.` | fix_line | `suggest` tries trimming |
+| `bad_number` L003 | `1.2.3`, `.`, `1e999` | generic | `{token} is not a valid number.` | fix_line | `suggest` tries trimming |
 | `unterminated_string` L004 | quote never closed | generic | `The text starting at column {col} has no closing quote.` | use_suggestion | |
 | `bad_character` L005 | a character the language never uses (smart quotes, `;`, tab inside names) | generic | `Character {token} is not part of the language.` | use_suggestion | `suggest` replaces smart quotes, `×`, `÷`, `−`, `²` with `"`, `*`, `/`, `-`, `^2` |
 | `unknown_directive` L006 | `@foo` | n/a | `{token} is not a directive.` | fix_line | `expected` = directive names, closest in `hint` |
@@ -99,7 +99,7 @@ Same list as `kernel/errors.md` section 2, with plain-language phrases. The phra
 | `not_set` | "not set" | "This has no value yet." |
 | `limit` | "too big" | "That would be too large." |
 
-The numeric reasons carry optional `detail` (`achieved`, `wanted`, `iterations`) used by authors, not spoken.
+The numeric reasons carry an optional `detail`, a short plain-text fact such as `reached 3e-4, wanted 1e-9 after 50 iterations`, used by authors, not spoken. `detail` is one string, as in the cell (`Cell.detail`).
 
 ## 4. Notices (success with facts)
 
@@ -114,6 +114,9 @@ The numeric reasons carry optional `detail` (`achieved`, `wanted`, `iterations`)
 | `redefined_to_same` K107 | no structural change | `{name} was already defined that way.` | |
 | `listener_failed` K108 | a listener threw (view, film) | `A view failed to update; the figure is fine.` | where |
 | `step_hidden` K109 | new object added while step cursor is before the end | `{name} is added after the step you are viewing.` | |
+| `clamped` K110 | a free write was moved to the end of the slider's range | `{name} was moved to {value}, the {end} of its range.` | |
+| `shadowed_default` K111 | a style was set to what the default already is | `{name}: {key} is already {value}.` | |
+| `unstable_state` K112 | a state became unstable (the solver blew up) | `The state {names} became unstable at t = {t}.` | |
 
 ## 5. Examples
 

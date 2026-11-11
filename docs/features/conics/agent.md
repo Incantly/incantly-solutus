@@ -142,7 +142,7 @@ Readout("QB", Distance(Q, B))
 
 ```text
 k = 1 in -2..2 step 0.1
-c = Conic(x^2 + k y^2 == 4)
+c = Conic(x^2 + k * y^2 == 4)
 ```
 
 The result: for `k = 1` "circle"; for `k = 0.25` "ellipse"; `k = 0` "two parallel lines"; `k = -1` "hyperbola". After a `show_me` setting `k = 0` the teacher reads `value: "parallel lines"` and says what that is.

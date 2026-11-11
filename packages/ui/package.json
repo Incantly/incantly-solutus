@@ -1,0 +1,10 @@
+{
+  "name": "@incantly/ui",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Algebra view, toolbars, input bar, sheet, style bar and maths keyboard, as Web Components.",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

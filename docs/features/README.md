@@ -53,7 +53,7 @@ The areas were written in parallel. Where they overlap or disagree, these decisi
 ### Shared model
 
 1. **Lists are 1-based.** `L[1]` is the first item and `L[-1]` the last. This applies to lists, choices, matrices, spreadsheet ranges and intersection indexes.
-2. **One undefined-reason registry**, owned by `kernel` and `errors`. Every area registers its codes there (for example `parallel`, `singular`, `pending`, `skew`). An undefined value is `{ reason, detail?, cause? }`: `detail` is a short plain fact, and `cause` points at the first undefined object upstream.
+2. **One undefined-reason registry**, owned by `kernel` and `errors`. Every area registers its codes there (for example `parallel`, `singular`, `pending`, `skew`). An undefined value is `{ reason, detail?, cause? }`: `detail` is a short plain fact, and `cause` names the nearest undefined input (a direct input); following `cause` links reaches the root.
 3. **One `bad_argument` kind** for a literal argument that is wrong at check time. `wrong_arity` and `no_matching_form` stay separate. Area-specific kinds (`mixed_dimension`, `mode_forbids`, `bad_option` and the rest) are registered in `errors`.
 4. **Line results carry `notices`**, a list of `{ severity: 'info' | 'warning', code, message }`. This one field replaces the `warnings` and `notices` that different areas proposed.
 5. **`Function2`** (a function of two variables) is defined once, in `functions-calculus`. `language` and `space-3d` use it.
@@ -62,9 +62,9 @@ The areas were written in parallel. Where they overlap or disagree, these decisi
 
 ### Kernel services
 
-8. **`kernel.applyBatch(lines)`** is all-or-nothing, makes one update pass and one undo step. It is owned by `kernel`. `graphics-view` (tools) and `embed-files-export` (API) use it.
-9. **`kernel.slice(source, target)`** evaluates the rules between two objects on a scratch copy. It is owned by `kernel`, and used by `Locus`, `Path`, `Envelope` and the CAS.
-10. **`kernel.dryRun`, `kernel.drag` and `commitDrag`** are owned by `kernel`. They answer core open question 2: dependent points can be dragged through drag plans, in v1.
+8. **`kernel.applyBatch(lines, { group })`** is all-or-nothing by default (`mode: 'atomic'`; `mode: 'independent'` runs every line on its own), makes one update pass and one undo step. It is owned by `kernel`. `graphics-view` (tools) and `embed-files-export` (API) use it.
+9. **`kernel.slice(source, target)`** evaluates the rules between two objects on a scratch copy. It returns a `Slice` with `chain` (the objects that run, in order) and `run(values)` (the target's cell for each value of the source). The figure is left as it was. A slice is built on each call and not cached. If the target does not depend on the source, `chain` is empty, and the area that asked turns that into its own `no_dependency` error. It is owned by `kernel`, and used by `Locus`, `Path`, `Envelope` and the CAS.
+10. **Dry runs and drags** are owned by `kernel`: `apply(line, { dryRun: true })` and `applyBatch(lines, { group, dryRun: true })` for dry runs, and `dragPlan(id, target)`, `drag(plan)` and `commitDrag()` for drags. A free value from a slider or a pointer is written with `setFree(id, value, why)` and the pass is run by `flush()`. They answer core open question 2: dependent points can be dragged through drag plans, in v1.
 11. **`Rename(obj, Text)`** is a kernel action. `kernel` and `language` described the same behaviour.
 
 ### Language

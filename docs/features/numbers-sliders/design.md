@@ -185,7 +185,7 @@ GeoGebra's timer-stepped animation is replaced by a pure function of `t` and an 
 |---|---|
 | `up` | `frac(p0 + s)`; one sweep takes `period` seconds; at the top it wraps to the bottom |
 | `down` | `1 − frac((1 − p0) + s)` |
-| `bounce` | let `m = (dir > 0 ? p0 : 2 − p0) + s`, `m' = m mod 2`; `f = m' ≤ 1 ? m' : 2 − m'`. `dir` is the direction at the anchor. |
+| `bounce` | let `m = (dir > 0 ? p0 : 2 − p0) + s`, `m' = mod(m, 2)`; `f = m' ≤ 1 ? m' : 2 − m'`. `dir` is the direction at the anchor. |
 | `once` | `f = min(1, p0 + s)` (moves up and stops at the top; `anim` becomes `null` at the instant `t0 + period·(1 − p0)`, which is a function of `t`, so seeking past it shows the stopped state) |
 | `random` | `f = rand(seed·1e6 + floor((t − t0) / period) + 1)`, a new value each period and the anchor value during the first period |
 
@@ -236,7 +236,7 @@ Rounding is a display concern. Maths never reads it (consistent with the core ru
 - **Objects.** `Number` and `Bool` are core types. The additions above are fields on those objects; no new object type is needed in this area.
 - **Rules.** A slider with dynamic bounds has one extra rule per dynamic bound (`min`, `max`, `step`) feeding a `clampRule` on the slider's value. An animating slider has a `sliderAnimRule` that reads `t`. Both are ordinary rules with declared inputs; the downstream-list machinery needs no change.
 - **Command table.** `Animate` and the placement helpers are in the table (controls-scripting). `Angle`, `round`, `sig`, `snap`, `wrap` are functions or commands in the existing table.
-- **Free value write path.** Pointer, keyboard, typed input and `SetValue` all call `kernel.setFree(id, raw)`, which calls `commit` and marks sources. One undo entry is made per gesture (a drag from pointer down to up is one entry whose inverse is the value before the drag).
+- **Free value write path.** Pointer, keyboard, typed input and `SetValue` all call `kernel.setFree(id, value, why)` (for example `why = 'slider'`), which marks the source; `kernel.flush()` then runs the update pass. One undo entry is made per gesture (a drag from pointer down to up is one entry whose inverse is the value before the drag).
 
 ### 3.8 Interfaces for the view and teacher
 

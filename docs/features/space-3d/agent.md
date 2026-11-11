@@ -34,7 +34,7 @@ Vector(x, y, z) | Vector(P, Q) -> Vector3
 Midpoint(P, Q) | Midpoint(Segment3) -> Point3
 Segment(P, Q) -> Segment3          Ray(P, Q|v) -> Ray3          Line(P, Q|v) -> Line3
 PointOn(path3, t) | PointOn(surface, u, v) -> Point3        PointIn(Polygon3|Plane|solid) -> Point3
-Plane(P, Q, R) | Plane(P, Line3) | Plane(Line3, Line3) | Plane(P, normal: v) | Plane(Polygon3) | Plane(a x + b y + c z == d) -> Plane
+Plane(P, Q, R) | Plane(P, Line3) | Plane(Line3, Line3) | Plane(P, normal: v) | Plane(Polygon3) | Plane(a*x + b*y + c*z == d) -> Plane
 OrthogonalPlane(P, Line3|v) -> Plane       Parallel(P, Line3) -> Line3       Parallel(P, Plane) -> Plane
 Perpendicular(P, Plane|Line3) -> Line3     Bisector(P, Q) -> Plane           Bisector(P, V, Q) -> Line3
 Polygon(P, Q, R, ...) | Polygon(P, Q, n, normal: v) -> Polygon3         Polyline(P, Q, ...) -> PolyLine3
@@ -69,7 +69,7 @@ TangentPlane(surface|Quadric, P) -> Plane
 ### 2.3 `space-surfaces` (functions of two variables, parametric, implicit, revolution) — target 240 tokens
 
 ```text
-f(x, y) = sin(x y)                          -> surface z = f(x, y)
+f(x, y) = sin(x*y)                          -> surface z = f(x, y)
 Surface(x(u,v), y(u,v), z(u,v), u, u0, u1, v, v0, v1) -> Surface
 F = x^2 + y^2 - z^2 == 1                   -> implicit surface (non-quadratic) or Quadric
 Revolve(f, a, b, axis: Line3) | Revolve(Curve3, from, to, axis: Line3, angle) -> Surface

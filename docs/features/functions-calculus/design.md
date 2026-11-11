@@ -15,7 +15,7 @@ All syntax below is ours, written to the core grammar. Command names are ordinar
 ### For a teacher (and the live teacher model)
 
 - Every result is an object in the figure. A root is a point you can name, label, highlight or move a tangent to. An area is a region you can shade and read a number from.
-- Everything is dynamic. `f(x) = a x^2 + b` followed by `r = Roots(f, -5, 5)` keeps `r` right as `a` and `b` change, including when the number of roots changes.
+- Everything is dynamic. `f(x) = a * x^2 + b` followed by `r = Roots(f, -5, 5)` keeps `r` right as `a` and `b` change, including when the number of roots changes.
 - Answers are honest. When a limit does not exist, an integral diverges, or there is no root in the interval, the object is `undefined` with a reason the teacher can say out loud (see `errors.md`).
 
 ### Sub-features and commands (full list, our syntax)
@@ -366,7 +366,7 @@ Targets: 95% of limits in a standard calculus text handled by routes 1 and 2 (ex
 `Asymptote(f, a, b)` (default `a, b = -100, 100`; stated in the catalogue entry):
 
 - **Vertical.** Candidates: roots of every denominator of a `/`, of cosine inside `tan`, of the argument of `ln` and `log` (boundaries where the argument reaches 0), and of any interval-detected pole: bisect the Interval algebra for boxes where `F(X)` has an unbounded piece (an `IvSet` piece reaching ±inf). Confirm each candidate `c` with `Limit(f, c, "left")` and `Limit(f, c, "right")`; keep it when at least one side is `±inf`. (A candidate with finite equal limits is a `Hole`.)
-- **Horizontal and oblique, each end.** `m = Limit(f(x) / x, ±inf)`; when finite and non-zero, `c = Limit(f(x) - m x, ±inf)`; when `m` is 0, `c = Limit(f, ±inf)`. Finite results produce `Line`s `y = m x + c`; when both ends give the same line it is reported once.
+- **Horizontal and oblique, each end.** `m = Limit(f(x) / x, ±inf)`; when finite and non-zero, `c = Limit(f(x) - m * x, ±inf)`; when `m` is 0, `c = Limit(f, ±inf)`. Finite results produce `Line`s `y = m x + c`; when both ends give the same line it is reported once.
 - Result sorted: vertical by `x`, then horizontal, then oblique. Each line has `meta.side` (`"left"`, `"right"`, `"both"`) so the plotter can draw it dashed over only the relevant ranges if the UI wants that.
 
 For the rational function `(x^3 - 2 x^2 - x + 4) / (2 x^2 - 2)` this returns the two vertical lines `x = ±1` and the oblique `y = x/2 - 1`.

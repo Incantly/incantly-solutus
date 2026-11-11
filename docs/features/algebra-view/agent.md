@@ -44,7 +44,7 @@ A redefinition returns `"redefined": true` and the old summary in `was`, so the 
   { "name": "A", "type": "Point", "def": "A = (1, 2)", "value": "(1, 2)", "visible": true, "aux": false },
   { "name": "s", "type": "Segment", "def": "Segment(A, B)", "value": "5", "visible": true, "aux": false },
   { "name": "h", "type": "Number", "def": "h = √(a² + b²)", "value": "—",
-    "undefined": { "reason": "input_undefined", "via": "b" }, "visible": true, "aux": false }
+    "undefined": { "reason": "input_undefined", "cause": "b" }, "visible": true, "aux": false }
 ] }
 ```
 
@@ -80,7 +80,7 @@ The model is told once: *Use `aux = true` for helper objects the learner does no
 ```text
 m = 1 in -5..5 step 0.25
 b = 0 in -5..5 step 0.25
-f(x) = m x + b
+f(x) = m * x + b
 ```
 
 > "I need two helper points to show rise over run, but you do not need to read them."
