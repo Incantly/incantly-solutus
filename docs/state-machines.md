@@ -334,3 +334,236 @@ Checked at commit `d2d9d9e` (pass 1), at `3220d23` (round 2, after the fixes for
 - **Invariants:** a table never changes under a compiled line; `checkTable` reports every pair of forms that accept the same arguments with neither more specific.
 - **Transitions:** none after creation; a new table is a new value. A figure's `commands` and `functions` may be swapped by the host between checking and compiling, but compiled lines hold the spec and form objects they were checked against.
 - **Reachable invalid states or transitions:** none found.
+
+## plot
+
+Checked at commit `8f3a4c8` (pass 1) on `feat/plot`. Paths are under `packages/plot/src/`. Line numbers refer to `8f3a4c8`. Findings are in `handoff/plot/findings.md`; all are `open` after pass 1.
+
+### P1. Sample cache
+
+- **Where:** `cache.ts` `createSampleCache`, `cacheKey`, `seedForRange`, `paramSeedForRange` (lines 11 to 106). Used by callers to build `seed` for `plotFunction` and `traceParamCurve`.
+- **States:** per cache: two insertion-ordered maps (scalar, parametric), each `key -> { version, samples }`, at most `capacity` keys each (default 8). No notion of function identity or current version.
+
+| State | Holds |
+|---|---|
+| `empty` | No entries |
+| `holding` | 1 to `capacity` entries per map, any mix of versions |
+
+- **Invariants:** a seed for `(function, version)` holds only that function's samples at that version, one value per x; a seed only saves evaluations, so a plot is the same with or without it; a version change discards the older samples (functions-calculus 9, "Cache and incremental update").
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| any | `put(key, version, xs, ys)` | | `holding` | copies the arrays; an existing key keeps its insertion position |
+| `holding` | `put` | size > capacity | `holding` | drops the first-inserted key (`trim`) |
+| any | `seedForRange(version, lo, hi)` | | same | merges samples in `[lo, hi]` from every entry whose version matches, regardless of key |
+| any | `clear()` | | `empty` | |
+
+- **Reachable invalid states or transitions:**
+  - Entries of other functions or views with the same version number are merged into one seed, with duplicate x values; the most recently re-put key can be evicted first; nothing clears older versions. [PLOT-SM-10](../handoff/plot/findings.md), open.
+  - Seed samples count against `maxSamples` in the tracers, so a large seed stops refinement before it starts. [PLOT-SM-6](../handoff/plot/findings.md), open.
+
+### P2. Function plot run (setup, refine, classify, band; suspend and resume)
+
+- **Where:** `function.ts` `plotFunction` (1427), `resumeFunctionPlot` (1499), `runLoop` (1019), `runCurve` (1032), `runSetup` (314), `runRefine` (362), `runClassify` (461), `runExact` (992), `toToken` (1313), `checkToken` (1353), `finishSuspended`/`finishComplete` (1393, 1397); budgets in `evalAt` (277) and `intervalAt` (291).
+- **States:** `phase` in `setup | refine | classify | band`, plus `suspended` (budget for this call spent) and `done`. A suspended run is serialised as a `FunctionResume` token: samples, the three span lists, markers, ink, counters, flags, phase, pieces, breaks, coarse grid and configuration.
+
+| State | Holds |
+|---|---|
+| `setup` | Coarse grid `coarseXs`, `coarseDone` evaluated so far; each new coarse point pushes one pending span |
+| `refine` | `pending` spans being split by the screen tests |
+| `classify` | `suspicious` spans getting verdicts; verdicts may push back to `pending` |
+| `band` | Exact mode only: one pending span per device-pixel column, one enclosure each |
+| `suspended` | Any of the above with the budget spent; output empty, `resume` present |
+| `done` | Paths, markers, ink and stats; no `resume` |
+
+- **Invariants:**
+  1. `stats.complete` is false exactly when `resume` is present, and then output is empty.
+  2. The finished plot is the same however the work was sliced (functions-calculus 9, "Budgets").
+  3. A suspension leaves `pending`, `suspicious`, `accepted`, markers, ink and the flags as they were before the interrupted step; a classify verdict is atomic (rolled back and redone whole).
+  4. Every call with a positive budget makes progress.
+  5. All samples in a run belong to one `(function version, view, pixel size)`.
+  6. `band` is entered only with an enclosure; `complete: true` means every phase drained.
+  7. A resumed run has the same limits as a fresh one.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| (start) | `plotFunction` | inputs valid | `setup` | pieces, coarse grid; seed samples loaded into `samples` |
+| `setup` | coarse grid evaluated | | `refine` | batch form first when it fits the budget |
+| `refine` | `pending` empty | `suspicious` empty | `done` (or `band`) | |
+| `refine` | `pending` empty | `suspicious` not empty | `classify` | |
+| `refine` | `samples.size >= maxSamples` | | `classify` or `done` | pending spans accepted as they are, `capped` |
+| `classify` | verdict pushes to `pending` | `suspicious` drained | `refine` | |
+| `classify` | `suspicious` empty, `pending` empty | | `done` (or `band`) | |
+| `refine`/`classify` | `steps > STEP_CAP` | | same | `forceCap`: accept pending, drop suspicious, `capped`, `rigorous = false` |
+| curve done | | `exact` and enclosure | `band` | ink cleared, one span per column |
+| any | `evalAt`/`intervalAt` over budget | | `suspended` | classify rolls back the current verdict |
+| `suspended` | `resumeFunctionPlot(token, fn, opts)` | token passes `checkToken` | token's phase | fresh per-call budget, totals carried |
+| `done` | | | | chain spans, resolve breaks, thin to `maxSamples`, domain end markers, sort |
+
+- **Reachable invalid states or transitions:**
+  - A budget stop inside `refineUndefined` is not propagated: the loop spins to `STEP_CAP`, `forceCap` discards pending and suspicious spans, and the token carries the damage (breaks 2, 3). [PLOT-SM-4](../handoff/plot/findings.md), open.
+  - A token has no function version; resuming with another function stitches two functions into one plot (breaks 5). [PLOT-SM-5](../handoff/plot/findings.md), open.
+  - Interval evaluations are not cached, so a verdict costing more than one call's budget is rolled back forever (breaks 4). [PLOT-SM-8](../handoff/plot/findings.md), open.
+  - `band` resumed without the enclosure returns `complete: true` with a partial band and the curve (breaks 1, 6). [PLOT-SM-9](../handoff/plot/findings.md), open.
+  - `checkToken` does not check `depth`, `bendPx`, `chordPx`, `maxSamples`, `coarseXs` or `pieces` (breaks 7). [PLOT-SM-15](../handoff/plot/findings.md), open.
+  - Seeds count against the cap (see P1). [PLOT-SM-6](../handoff/plot/findings.md), open.
+  - Forked tokens (one token resumed twice) and interleaved runs of different functions stay independent and equal to the direct plot: checked, nothing found.
+
+### P3. Function span lifecycle and verdicts
+
+- **Where:** `function.ts` `runRefine` (362), `refineUndefined` (430), `classifyDefined` (588), `classifyUndefined` (748), `classifyEdge` (780), `classifyEdgeEnclosed` (818), `finishEdge` (867), `probeHole` (945), `findPartner` (959), `markJump` (572), `inkForSpan` (721), `resolveBreaks` (1126).
+- **States:** each x-span `[xl, xr]` at a depth is in exactly one list.
+
+| State | Meaning |
+|---|---|
+| `pending` | To be tested by the screen tests |
+| `accepted` | Drawn as a chord |
+| `suspicious` | Needs a verdict |
+| dropped | A gap (undefined), or replaced by its halves, an ink column or a feature split |
+
+- **Invariants:** a span is in one list at a time; a marker is recorded only for a verdict (pole, hole, jump, open or closed end) that the enclosure or the heuristics support; oscillation becomes ink, not markers; the cost of one verdict is a bounded number of evaluations and lookups.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `pending` | both ends defined, midpoint defined | fails bend or chord test, depth < limit, wider than 0.5 px | two `pending` halves | |
+| `pending` | same | fails, at the depth limit or narrower than 0.5 px | `suspicious` | |
+| `pending` | same | passes | `accepted` | |
+| `pending` | one end or midpoint undefined | depth < limit | `pending` halves touching a defined end | |
+| `pending` | same | at the depth limit | `suspicious` | |
+| `suspicious` | both defined, values leave the view on both sides | enclosure unbounded, or both sides tall | two `accepted` sides | `pole` marker |
+| `suspicious` | both defined, change in one place | enclosure bounded and `def = 2` | `accepted` | steep rise |
+| `suspicious` | same | step flat on both sides | two `accepted` sides | `jump`, `openEnd`/`closedEnd` |
+| `suspicious` | same | not flat, or two or more sign flips | dropped | ink column |
+| `suspicious` | neither end defined | enclosure `def = 1` or a defined midpoint, wider than 0.1 px | two `suspicious` halves | |
+| `suspicious` | one end defined | edge bisected; tall | `pending` approach | `pole` |
+| `suspicious` | same | matching value across | `accepted` across | `hole` |
+| `suspicious` | same | partner across with a different value | `pending` approach | `jump` and ends, or ink |
+| chains at a break | `resolveBreaks` | limits and value agree / limits agree / tall / otherwise | merged / merged / cut / cut | none / `hole` / `pole` / `jump` and ends |
+
+- **Reachable invalid states or transitions:**
+  - `findPartner` (and `edgeFallbackY`) scan every sample per verdict, so cost per verdict grows with the sample count. [PLOT-SM-3](../handoff/plot/findings.md), open.
+  - `sin(1/x)` without an enclosure still records about 1,000 `hole`/`openEnd`/`jump` markers. [PLOT-SM-14](../handoff/plot/findings.md), open.
+
+### P4. Parametric tracer
+
+- **Where:** `param.ts` `traceParamCurve` (583), `cullBoxes` (160), `findHoles` (198), `runRefine` (257), `runClassify` (355), `classifyEdge` (435), `joinPartner` (479), `markJoins` (702), `finishParam` (760).
+- **States:** `cull -> holes -> coarse -> refine <-> classify -> done`, or `dead` (budget spent: `complete: false`, empty output). No suspend and resume. Spans use the same `pending`/`accepted`/`suspicious` lists as P3.
+
+| State | Holds |
+|---|---|
+| `cull` | Parameter boxes from the enclosure; off-view and `def = 0` boxes dropped; boxes over 128 px split to depth 10 |
+| `holes` | `def = 1` bounded boxes bisected to depth 40; up to 8 hole probes per box |
+| `coarse` | `max(64, widthPx / 6)` samples spread over kept boxes |
+| `refine`/`classify` | As P3, with a turning-angle test, cusp and stall markers, pole and hole-like verdicts |
+| `dead` | Budget spent in any state |
+| `done` | Chains, joins marked, thinned, clipped, closed flags |
+
+- **Invariants:** the hole search costs a bounded share of the budget; an enclosure never makes a trace less likely to finish; markers carry drawable pixel coordinates; output points at most `maxSamples`.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| (start) | valid input | enclosure | `cull` | else one box over the range |
+| `cull` | boxes kept | enclosure | `holes` | |
+| `holes`/`cull` | done | | `coarse` | |
+| `coarse` | grid evaluated | | `refine` | |
+| `refine` | pending empty | suspicious not empty | `classify` | |
+| `classify` | pending refilled | | `refine` | |
+| any | over budget | | `dead` | |
+| `refine` | `samples.size >= maxSamples` | | `done` | pending accepted, `capped` |
+| `refine`/`classify` | drained | | `done` | `end` markers unless the curve is closed |
+
+- **Reachable invalid states or transitions:**
+  - `findHoles` descends every `def = 1` box to depth 40, so a curve with many defined/undefined boundaries fails with a sound enclosure and succeeds without one. [PLOT-SM-11](../handoff/plot/findings.md), open.
+  - `joinPartner` scans every sample per edge. [PLOT-SM-3](../handoff/plot/findings.md), open.
+  - `addMarker` records any coordinates (pole markers at `py = ±7.1e19`). [PLOT-SM-16](../handoff/plot/findings.md), open.
+  - Seeds count against the cap (see P1). [PLOT-SM-6](../handoff/plot/findings.md), open.
+
+### P5. Implicit quadtree
+
+- **Where:** `implicit.ts` `traceImplicit` (449), `runQuadtree` (385), `runDense` (370), `splitNode` (415), `boxAt` (110), `gEval` (84), `cornerAt` (100).
+- **States:** per node of the leaf grid (padded view, 2 px leaves for `final`, 6 px for `draft`, roots of 32 px): `queued`, `dropped`, `split`, `leaf` (traced by P6). Per run: `running`, `dead` (budget spent: `complete: false`, empty), `done`. Without an enclosure the run is `dense`: every leaf is traced, `rigorous: false`.
+- **Invariants:** a node is dropped only when its enclosure excludes the level or `def = 0`; every residual input is evaluated once (`memo`); memory per call is bounded by a figure-sized budget; the view limits count the device pixels actually sampled; the default budget completes an ordinary figure.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `queued` | `boxAt` | `def = 0`, or `lo > 0`, or `hi < 0` | `dropped` | |
+| `queued` | `boxAt` | contains the level, wider than one leaf | `split` | 2 or 4 children queued |
+| `queued` | `boxAt` | contains the level, one leaf | `leaf` | `emitLeaf` (P6) |
+| `running` | over budget | | `dead` | |
+| `dense` | every leaf visited | | `done` | |
+| `running` | queue drained | | `done` | link, clip, thin, markers |
+
+- **Reachable invalid states or transitions:**
+  - `memo` and `corners` grow with string keys up to the evaluation cap; with `devicePixelRatio: 4` a view inside `checkView`'s limits held 1.9 GB; no leaf-cell limit as in `fillRegion`. [PLOT-SM-2](../handoff/plot/findings.md), open.
+  - Without an enclosure, `sin(x) + sin(y) == sin(x*y)` on a 1,000 x 600 view returns `complete: false` at the default budget. [PLOT-SM-7](../handoff/plot/findings.md), open.
+
+### P6. Implicit leaf classification and linking
+
+- **Where:** `implicit.ts` `emitLeaf` (221), `correctCrossing` (130), `probeSmallFeature` (295), `uniqueMarkers` (506), `finishChains` (522); `squares.ts` `segmentsForCase` (37), `linkSegments` (202); `clip.ts` `clipPolyline`.
+- **States:** per leaf, the marching-squares case (0 to 15). Per grid edge, one crossing (`crossings`, shared by both leaves). Per chain: `open` or `closed`; after clipping, a closed chain that was cut becomes open pieces; a closed chain under 0.25 px becomes an `isolated` marker.
+- **Invariants:** neighbouring leaves use the same crossing on a shared edge; a Newton correction is kept only when it lowers `|F|`; chains are deterministic (sorted); work and output follow the curve length and the sample cap.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| leaf | corners | any NaN | skipped | |
+| leaf | case 0 or 15 | enclosure | probed | 5 x 5 subgrid and Newton; `isolated` marker when found |
+| leaf | case 0 or 15 | a corner exactly on the level, all 8 neighbours on one side | marked | `isolated` |
+| leaf | case 5 or 10 | | segments | centre value decides the pairing |
+| leaf | other cases | | segments | crossings interpolated and corrected; `singular` when the gradient vanishes |
+| segments | `linkSegments` | shared keys | chains | `closed` when the ends share a key |
+| chains | `finishChains` | | paths | clip to view, open chains from the smaller end, sort, thin |
+
+- **Reachable invalid states or transitions:**
+  - `uniqueMarkers` is quadratic and markers are uncapped: `x - x == 0` with an exact enclosure on a 400 px view gives 53,824 markers in 64 s. [PLOT-SM-1](../handoff/plot/findings.md), open.
+  - `linkSegments` stayed linear for long chains: checked, nothing found.
+
+### P7. Region filler
+
+- **Where:** `region.ts` `fillRegion` (549), `runFill` (117), `runDense` (162), `fillCoarse` (212), `checkCap` (218), `boundaryLeaf` (228), `supersample` (312), `addMarker` (378), `mergeRects` (387), `traceBorder` (441), `segmentOnBoundary` (498).
+- **States:** per node: `queued`, `false` (skipped), `true` (filled in the leaf bitmap), `split`, boundary `leaf` (polygon or supersampled). Per run: `running`, `capped` (remaining nodes filled coarsely), `dead`, `borders` (one implicit trace per primitive, sharing the budget), `done`. Without an enclosure the run is `dense`: every leaf corner tested once.
+- **Invariants:** a `true` cell is wholly inside, a `false` cell wholly outside; emitted points are at most `maxSamples`; `capped` is set exactly when output was limited; a capped fill never claims area the predicate does not hold; work follows the boundary length; the default budget completes an ordinary figure.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `queued` | enclosure | `false` | skipped | |
+| `queued` | enclosure | `true` | filled | bitmap cells set |
+| `queued` | enclosure | `maybe`, wider than one leaf | `split` | |
+| `queued` | enclosure | `maybe`, one leaf | boundary leaf | polygon if exactly one primitive crosses and the case is not a saddle; else 4 x 4 supersample |
+| `running` | `points > maxSamples` | enclosure path only | `capped` | |
+| `capped` | next node | not `false` | filled | whole node filled |
+| `dense` | 4 true corners / 0 / mixed | | filled / skipped / boundary leaf | |
+| supersample | 16 covered | not a corner leaf | filled | joins the bitmap |
+| supersample | 1 or 2 covered | | rects | `isolated` marker |
+| fill done | | margins given | `borders` | `traceImplicit` per margin, segments kept where a point just inside satisfies the body |
+| `borders` | done | | `done` | merge rows into rectangles, polygons to pixels |
+| any | over budget or a border trace incomplete | | `dead` | |
+
+- **Reachable invalid states or transitions:**
+  - `addMarker` scans every marker per insert; touching checkerboard cells produce 18,321 `isolated` markers and 5.4 s at 500 x 400 px. [PLOT-SM-1](../handoff/plot/findings.md), open.
+  - `points` counts covered sub-cells, the dense path never checks the cap, and a tripped cap fills every non-`false` node (a checkerboard becomes one rectangle). [PLOT-SM-12](../handoff/plot/findings.md), open.
+  - Without an enclosure, a half-plane on a 1,000 x 600 view returns `complete: false` at the default budget. [PLOT-SM-7](../handoff/plot/findings.md), open.
+  - Borders with an enclosure cost about 4 times the fill (half-plane 5.7 ms against 0.3 ms). [PLOT-SM-13](../handoff/plot/findings.md), open.
+
+### P8. One-variable predicate filler
+
+- **Where:** `region.ts` `fillPredicate1D` (658 to 816).
+- **States:** a stack of x-spans; each popped span becomes `true` (in `spans`), `false` (in `falses`) or splits; sub-half-pixel `maybe` spans are decided by one centre test. Then true spans merge, and each edge that abuts a false span is bisected to 0.1 px. Run: `running`, `dead`, `done`.
+- **Invariants:** spans tile the view; every true edge inside the view abuts a false span; the budget bounds the work.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| span | three-valued state | `true` / `false` | `spans` / `falses` | |
+| span | `maybe` | wider than 0.5 px and splittable | two spans | |
+| span | `maybe` | narrower than 0.5 px | `spans` or `falses` | one centre test |
+| merged span | edge | abutting false span | sharpened edge | bisection to 0.1 px |
+| any | over budget | | `dead` | empty output |
+
+- **Reachable invalid states or transitions:** none found. `falses.find` per merged span is linear per lookup; 200 to 625 bands stayed fast.
