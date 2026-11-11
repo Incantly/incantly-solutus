@@ -15,7 +15,7 @@ import type { SkipReason } from './types';
 import type { Figure } from '../../graph/figure';
 import type { CommandRegistry } from '../../graph/registry';
 import type { ActionCall, CommandRule } from '../../graph/registry';
-import { numberSource } from '../../graph/values';
+import { numberSource, sameValue } from '../../graph/values';
 import type { BoundArg, CommandForm, CommandSpec, ParamSpec } from '../../language/table';
 import type { TArg } from '../../language/tnode';
 import { valueText } from '../../language/runtime';
@@ -27,7 +27,7 @@ import { clearHandler, emitControlEvent } from './handlers';
 import { clickButton as runClickButton, ensureResetTracking, initialOf, pushActionOutcome } from './run';
 import { commitInputText, inputTextOf } from './input';
 import { clearInputState } from './input';
-import { choiceStateOf, defaultCaption, setChoiceCaption, setChoiceIndex, setListElement, toggleValue, writeNumberValue, writeSimpleValue } from './valuewrite';
+import { choiceStateOf, defaultCaption, setChoiceCaption, setChoiceIndex, restoreList, setListElement, toggleValue, writeNumberValue, writeSimpleValue } from './valuewrite';
 import { animatingIds, animationValueAt, clearAnchor, getAnchor, lastTickT, onceFinished, setAnchor, startDir } from './animate';
 import { buttonLabelOf, displayUnitOf, loopOf, periodOf, seedOf } from './props';
 
@@ -735,10 +735,18 @@ export function resetObjects(figure: Figure, names?: readonly string[], opts: { 
       continue;
     }
     const initial = initialOf(figure, id);
-    if (!initial.found) continue;
-    const r = figure.setFree(id, initial.value, 'api');
+    // an object that still holds its initial value has nothing to restore (and a list has no free write)
+    if (!initial.found || sameValue(figure.value(id), initial.value)) continue;
+    if (view.typeText.startsWith('List')) {
+      const r = restoreList(figure, id, initial.value);
+      if (!r.ok) return r;
+      continue;
+    }
+    // 'slider' joins the open gesture, so every restored value lands in one undo entry
+    const r = figure.setFree(id, initial.value, 'slider');
     if (!r.ok) return r;
   }
+  figure.commitDrag();
   figure.flush();
   return { ok: true, value: { summary: names ? `reset ${names.join(', ')}` : 'reset all' }, notices: [] };
 }

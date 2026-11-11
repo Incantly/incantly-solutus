@@ -299,6 +299,26 @@ function elementKind(v: unknown): string {
 }
 
 /**
+ * Put a whole value back into a free list by redefining its literal (the kernel writes no list through `setFree`).
+ * Only lists of Number, Text, Bool or Point have literals.
+ */
+export function restoreList(figure: Figure, id: ObjId, value: unknown): Result<WriteOk> {
+  const view = figure.get(id);
+  if (!view || !view.typeText.startsWith('List')) {
+    return numbersError('bad_argument', { line: 0, col: 1, endCol: 1 }, { command: 'Reset', why: 'the target is not a list' }, { token: view?.name ?? '' });
+  }
+  const list = Array.isArray(value) ? value : value instanceof Float64Array ? Array.from(value) : undefined;
+  const items = list?.map(elementLiteral);
+  if (!list || !items || items.some((x) => x === undefined)) {
+    return numbersError('bad_argument', { line: 0, col: 1, endCol: 1 }, { command: 'Reset', why: `${view.name} holds values that cannot be written back` }, { token: view.name });
+  }
+  const from = valueText(figure.value(id));
+  const r = figure.apply(`${view.name} = [${items.join(', ')}]`);
+  if (!r.ok) return r;
+  return { ok: true, value: { notices: [], wrote: { name: view.name, from, to: valueText(figure.value(id)) } }, notices: [] };
+}
+
+/**
  * Write one element of a free list by redefining its literal. Only lists of
  * Number, Text, Bool or Point have literals; anything else needs the lists area.
  */
