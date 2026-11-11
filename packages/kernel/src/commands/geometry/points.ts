@@ -140,7 +140,7 @@ export function pathOf(v: unknown): Path | undefined {
   if (isLineV(v)) {
     const l = Math.hypot(v.a, v.b);
     if (!(l > 0)) return undefined;
-    return linePath(v.a / l, v.b / l, v.c / l);
+    return linePath(v.a / l, v.b / l, v.c / l, v.p, v.len);
   }
   if (isSegmentV(v)) {
     if (!isSanePt(v.a) || !isSanePt(v.b)) return undefined;
@@ -149,7 +149,8 @@ export function pathOf(v: unknown): Path | undefined {
   if (isRayV(v)) {
     const l = norm2(v.dir);
     if (!(l > 0) || !isSanePt(v.from)) return undefined;
-    return rayPath(v.from, { x: v.dir.x / l, y: v.dir.y / l });
+    const rl = (v as { len?: unknown }).len;
+    return rayPath(v.from, { x: v.dir.x / l, y: v.dir.y / l }, typeof rl === 'number' ? rl : l);
   }
   if (isCircleV(v)) {
     if (!(v.r >= 0)) return undefined;
@@ -313,7 +314,8 @@ function pointOnPath(path: Path, u: number, call: RuleCall): unknown {
 export const pointOnDefaultRule: CommandRule = rule((call) => {
   const path = pathOf(call.values[0]);
   if (!path) return call.fail('out_of_domain', 'not a path');
-  return pointOnPath(path, 0.5, call);
+  // conics 3.5: the default parameter of a hyperbola is its first vertex
+  return pointOnPath(path, path.kind === 'hyperbola' ? 0.25 : 0.5, call);
 });
 
 export const pointOnRule: CommandRule = rule(
@@ -949,7 +951,7 @@ export const linePPRule: CommandRule = rule((call) => {
   if (len <= call.tol * scale) return call.fail('coincident_points');
   const ux = dx / len;
   const uy = dy / len;
-  return { a: -uy, b: ux, c: -uy * a.x + ux * a.y };
+  return { a: -uy, b: ux, c: -uy * a.x + ux * a.y, p: { ...a }, len };
 });
 
 export const linePVRule: CommandRule = rule((call) => {
@@ -960,7 +962,7 @@ export const linePVRule: CommandRule = rule((call) => {
   if (len <= call.tol * Math.max(1, Math.abs(p.x), Math.abs(p.y))) return call.fail('zero_length');
   const ux = v.x / len;
   const uy = v.y / len;
-  return { a: -uy, b: ux, c: -uy * p.x + ux * p.y };
+  return { a: -uy, b: ux, c: -uy * p.x + ux * p.y, p: { ...p }, len };
 });
 
 export const lineParallelRule: CommandRule = rule((call) => {
@@ -982,7 +984,16 @@ export const lineEqRule: CommandRule = rule((call) => {
   const l = Math.hypot(poly.x, poly.y);
   if (!(l > 0)) return call.fail('out_of_domain', '0 == 0 is not a line');
   // poly: x*X + y*Y + c = 0  ->  ax + by = c' form.
-  return { a: poly.x / l, b: poly.y / l, c: -poly.c / l };
+  // Direction (b, -a) has its first non-zero component positive (points-lines 5.2).
+  let a = poly.x / l;
+  let b = poly.y / l;
+  let c = -poly.c / l;
+  if (b < -1e-15 || (Math.abs(b) <= 1e-15 && -a < 0)) {
+    a = -a;
+    b = -b;
+    c = -c;
+  }
+  return { a, b, c };
 });
 
 export const segmentPPRule: CommandRule = rule((call) => {
@@ -1008,7 +1019,7 @@ export const rayPPRule: CommandRule = rule((call) => {
   const len = Math.hypot(dx, dy);
   const scale = Math.max(1, Math.abs(a.x), Math.abs(a.y));
   if (len <= call.tol * scale) return call.fail('coincident_points');
-  return { from: { ...a }, dir: { x: dx / len, y: dy / len } };
+  return { from: { ...a }, dir: { x: dx / len, y: dy / len }, len };
 });
 
 export const rayPVRule: CommandRule = rule((call) => {
@@ -1017,7 +1028,7 @@ export const rayPVRule: CommandRule = rule((call) => {
   if (!sanePt(call, a) || !sanePt(call, v)) return undefined;
   const len = norm2(v);
   if (len <= call.tol * Math.max(1, Math.abs(a.x), Math.abs(a.y))) return call.fail('zero_length');
-  return { from: { ...a }, dir: { x: v.x / len, y: v.y / len } };
+  return { from: { ...a }, dir: { x: v.x / len, y: v.y / len }, len };
 });
 
 export const vectorNNRule: CommandRule = rule((call) => {
@@ -1192,7 +1203,12 @@ export const unitVectorRule: CommandRule = rule((call) => {
 export const perpVectorRule: CommandRule = rule((call) => {
   const v = call.values[0];
   const ll = lineLikeOf(v);
-  if (ll) return { x: ll.a, y: ll.b };
+  if (ll) {
+    // Same length as the defining vector, turned 90 degrees counter-clockwise (points-lines 1.1).
+    const raw = (v as { len?: unknown }).len;
+    const len = ll.kind === 'segment' ? ll.hi : typeof raw === 'number' && raw > 0 ? raw : 1;
+    return { x: ll.a * len, y: ll.b * len };
+  }
   if (isPt(v)) {
     if (!sanePt(call, v)) return undefined;
     return { x: -v.y, y: v.x };
@@ -1373,18 +1389,18 @@ export const triangleCenterRule: CommandRule = rule((call) => {
     case 10:
       return bary(b + c, c + a, a + b);
     case 11: {
-      // Internal homothety center of the incircle and nine-point circle.
+      // The incircle touches the nine-point circle from inside: the point on the line N-I beyond I (external homothety centre).
       if (Math.abs(R / 2 - rIn) <= 1e-12 * R) return call.fail('degenerate', 'equilateral: the circles are concentric');
       const I = bary(a, b, c);
-      const t = rIn + R / 2;
-      return { x: ((R / 2) * I.x + rIn * Np.x) / t, y: ((R / 2) * I.y + rIn * Np.y) / t };
+      const t = R / 2 - rIn;
+      return { x: ((R / 2) * I.x - rIn * Np.x) / t, y: ((R / 2) * I.y - rIn * Np.y) / t };
     }
     case 12: {
       // Reflection of the Feuerbach point across the nine-point center.
       if (Math.abs(R / 2 - rIn) <= 1e-12 * R) return call.fail('degenerate', 'equilateral: the circles are concentric');
       const I = bary(a, b, c);
-      const t = rIn + R / 2;
-      const F = { x: ((R / 2) * I.x + rIn * Np.x) / t, y: ((R / 2) * I.y + rIn * Np.y) / t };
+      const t = R / 2 - rIn;
+      const F = { x: ((R / 2) * I.x - rIn * Np.x) / t, y: ((R / 2) * I.y - rIn * Np.y) / t };
       return { x: 2 * Np.x - F.x, y: 2 * Np.y - F.y };
     }
     default: {
@@ -1486,10 +1502,13 @@ export const anglePPPRule: CommandRule = rule((call) => {
 export const angleLLRule: CommandRule = rule((call) => {
   const a = lineLikeOf(call.values[0]) as LineLike;
   const b = lineLikeOf(call.values[1]) as LineLike;
+  // Counter-clockwise from the first line to the second, wrapped to [0, pi) (points-lines 7).
   const cross = a.dx * b.dy - a.dy * b.dx;
   const dotp = a.dx * b.dx + a.dy * b.dy;
-  const t = Math.atan2(Math.abs(cross), dotp);
-  return t >= Math.PI ? 0 : t;
+  let t = Math.atan2(cross, dotp);
+  if (t < 0) t += Math.PI;
+  // A turn within rounding of a half turn is no turn.
+  return t >= Math.PI - 1e-15 ? 0 : t;
 });
 
 export const angleVVRule: CommandRule = rule((call) => {
@@ -1571,9 +1590,10 @@ export const relationRule: CommandRule = rule((call) => {
     }
   }
   // Parallel / perpendicular (line-likes and vectors).
+  // A point (or vector) against a line is never compared by direction: it is tested for incidence below.
   const da = la ? { x: la.dx, y: la.dy } : isPt(a) ? dirOf(a) : undefined;
   const db = lb ? { x: lb.dx, y: lb.dy } : isPt(b) ? dirOf(b) : undefined;
-  if (da && db) {
+  if (da && db && !!la === !!lb) {
     const cross = Math.abs(da.x * db.y - da.y * db.x);
     const dotp = Math.abs(da.x * db.x + da.y * db.y);
     if (cross <= tol) return 'parallel';

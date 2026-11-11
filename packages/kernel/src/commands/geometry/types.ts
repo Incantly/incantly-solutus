@@ -78,6 +78,10 @@ export interface HLine {
   readonly a: number;
   readonly b: number;
   readonly c: number;
+  /** First defining point, when the line was built from points or a point and a vector (the origin of `PointOn`). */
+  readonly p?: V2;
+  /** Length of the defining vector (the unit of the `PointOn` parameter). */
+  readonly len?: number;
 }
 
 export type PathKind =

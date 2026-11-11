@@ -9,31 +9,38 @@ import { EPS, TAU, cubicRealRoots, wrapPi } from './numerics';
 
 /* ------------------------------ line-likes ------------------------------ */
 
-/** Line a*x + b*y = c with a^2 + b^2 = 1. s in maths units along (b, -a). */
-export function linePath(a: number, b: number, c: number): Path {
+/**
+ * Line a*x + b*y = c with a^2 + b^2 = 1. s in maths units along (b, -a), measured from `origin` (a point on the line;
+ * the foot of the origin when absent). The normalised parameter counts in units of `len`, the defining vector length
+ * (points-lines 3.2); `len` is 1 for a line given by an equation.
+ */
+export function linePath(a: number, b: number, c: number, origin?: V2, len = 1): Path {
   const dx = b;
   const dy = -a;
-  const fx = a * c;
-  const fy = b * c;
+  const foot = { x: a * c, y: b * c };
+  // s0: where `origin` sits along the direction from the foot.
+  const s0 = origin ? (origin.x - foot.x) * dx + (origin.y - foot.y) * dy : 0;
+  const unit = len > 0 && Number.isFinite(len) ? len : 1;
   return {
     kind: 'line',
     closed: false,
     domain: [-Infinity, Infinity],
-    at: (s) => ({ x: fx + s * dx, y: fy + s * dy }),
+    at: (s) => ({ x: foot.x + (s + s0) * dx, y: foot.y + (s + s0) * dy }),
     tangent: () => ({ x: dx, y: dy }),
     project: (p) => {
-      const s = (p.x - fx) * dx + (p.y - fy) * dy;
-      const qx = fx + s * dx;
-      const qy = fy + s * dy;
-      return { s, dist: Math.hypot(p.x - qx, p.y - qy) };
+      const t = (p.x - foot.x) * dx + (p.y - foot.y) * dy;
+      const qx = foot.x + t * dx;
+      const qy = foot.y + t * dy;
+      return { s: t - s0, dist: Math.hypot(p.x - qx, p.y - qy) };
     },
-    norm: (s) => 0.5 + Math.atan(s) / Math.PI,
-    unnorm: (u) => Math.tan(Math.PI * (u - 0.5)),
+    norm: (s) => 0.5 + Math.atan(s / unit) / Math.PI,
+    unnorm: (u) => unit * Math.tan(Math.PI * (u - 0.5)),
   };
 }
 
-/** Ray from `from` along unit `dir`. s >= 0 in maths units. */
-export function rayPath(from: V2, dir: V2): Path {
+/** Ray from `from` along unit `dir`. s >= 0 in maths units; the normalised parameter counts in units of `len`. */
+export function rayPath(from: V2, dir: V2, len = 1): Path {
+  const unit = len > 0 && Number.isFinite(len) ? len : 1;
   return {
     kind: 'ray',
     closed: false,
@@ -44,8 +51,8 @@ export function rayPath(from: V2, dir: V2): Path {
       const s = Math.max(0, (p.x - from.x) * dir.x + (p.y - from.y) * dir.y);
       return { s, dist: Math.hypot(p.x - from.x - s * dir.x, p.y - from.y - s * dir.y) };
     },
-    norm: (s) => (2 / Math.PI) * Math.atan(Math.max(0, s)),
-    unnorm: (u) => Math.tan((Math.PI / 2) * Math.min(1, Math.max(0, u))),
+    norm: (s) => (2 / Math.PI) * Math.atan(Math.max(0, s) / unit),
+    unnorm: (u) => unit * Math.tan((Math.PI / 2) * Math.min(1, Math.max(0, u))),
   };
 }
 
