@@ -22,6 +22,12 @@ export interface Limits {
   readonly ruleBudgetMs: number;
   /** Bytes of a script file to load. */
   readonly fileSize: number;
+  /** Comments and directives per figure. */
+  readonly items: number;
+  /** Lines in one batch or one loaded file. */
+  readonly lines: number;
+  /** Characters in a free Text value (the language's own cap for a text). */
+  readonly textLength: number;
   /** Areas append their own limits here, by name. */
   readonly extra: Readonly<Record<string, number>>;
 }
@@ -36,6 +42,9 @@ export const DEFAULT_LIMITS: Limits = Object.freeze({
   journalBytes: 4 * 1024 * 1024,
   ruleBudgetMs: 2,
   fileSize: 2 * 1024 * 1024,
+  items: 5000,
+  lines: 20000,
+  textLength: 10000,
   extra: Object.freeze({}),
 });
 

@@ -130,13 +130,13 @@ export class Figure extends FigureHist {
 
   /** The film range from `@clock a..b`: `0..Infinity` without the directive. */
   clockRange(): { from: number; to: number } {
-    const d = this.items.find((i) => i.name === 'clock');
+    const d = this.directiveItem('clock');
     const m = d ? /^(-?\d+(?:\.\d+)?)\.\.(-?\d+(?:\.\d+)?)$/.exec(d.words[0] ?? '') : null;
     return m ? { from: Number(m[1]), to: Number(m[2]) } : { from: 0, to: Infinity };
   }
 
   protected directiveStepRate(): number {
-    const d = this.items.find((i) => i.name === 'solver');
+    const d = this.directiveItem('solver');
     const m = d ? /^1\/(\d+)$/.exec(d.words[1] ?? '') : null;
     return m ? Number(m[1]) : 240;
   }
@@ -458,6 +458,10 @@ export class Figure extends FigureHist {
       return { ok: false, applied: 0, skipped: 0, errors: [e], warnings: [] };
     }
     const lines = splitLogicalLines(text).filter((l) => l.text.trim() !== '');
+    if (lines.length > this.limits.lines) {
+      const e = err('limit', at, { limit: 'lines', max: this.limits.lines, got: lines.length, what: 'lines in a file' }, { recovery: 'rewrite', fingerprintKey: 'lines' });
+      return { ok: false, applied: 0, skipped: 0, errors: [e], warnings: [] };
+    }
     const head = /^\s*@fig\s+(\d+)/.exec(lines[0]?.text ?? '');
     if (head && Number(head[1]) > SCRIPT_VERSION) {
       const e = err('version', { line: lines[0]?.firstLine ?? 1, col: 1, endCol: 1 }, { v: String(head[1]), list: String(SCRIPT_VERSION) }, { hint: `Supported versions: ${SCRIPT_VERSION}.`, recovery: 'report', fingerprintKey: String(head[1]) });

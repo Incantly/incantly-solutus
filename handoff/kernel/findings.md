@@ -35,7 +35,8 @@ Related findings that one change should fix together (pipeline.md: fix every cas
 
 ### KERN-SM-1. Size limits can be bypassed: batches, comments and directives, one big undo group, free Texts
 
-- **Impact:** security (unbounded memory and work). Status: open.
+- **Impact:** security (unbounded memory and work). Status: fixed.
+- **fix:** every path into the figure is budgeted: Limits gained items (5,000), lines (20,000) and textLength (10,000); applyBatch and load refuse over lines or fileSize, comments and directives count against items, setFree caps a Text, and the journal measures an entry by the texts it holds (size cached per entry).
 - **Evidence:**
   1. `applyBatch` has no size check. `new Figure({ limits: { fileSize: 1000 } }).applyBatch(2,000 lines 'n<i> = <i>', { group: 'g' })` is accepted; the figure's script is 23,787 characters. `load` (`graph/figure.ts:456`) is the only place that reads `fileSize`.
   2. Comments and directives are counted by no limit. `new Figure().applyBatch(100,000 × '# comment <i>', { group: 'g', mode: 'independent' })` succeeds in 268 ms; `toScript()` is 1,588,897 characters; `items` has 100,000 entries. The `objects` limit counts only objects. The same works with repeated `apply('# c')` and with repeatable directives (`@step`, `@beat`, `@cell`, `@colwidth`, `@limit`).
@@ -46,7 +47,8 @@ Related findings that one change should fix together (pipeline.md: fix every cas
 
 ### KERN-SM-2. Errors echo unbounded caller text; the compact error is not bounded
 
-- **Impact:** security (a model's context and the logs can be flooded; errors design 3.5 caps the compact form at about 800 characters). Status: open.
+- **Impact:** security (a model's context and the logs can be flooded; errors design 3.5 caps the compact form at about 800 characters). Status: fixed.
+- **fix:** err() cuts caller text in params, token, key, related and hint to fixed lengths; compactError shortens hint, token and message last so the form always fits 800 characters.
 - **Evidence:**
   - `figure(['A = (0, 0)']).delete('x'.repeat(5000))`: `message` is 5,016 characters; `JSON.stringify(compactError(e)).length` is 10,133.
   - `f.rename('A', 'Q'.repeat(100000))`: `bad_name` `message` is 100,051 characters; the compact form is 100,157.
@@ -56,14 +58,16 @@ Related findings that one change should fix together (pipeline.md: fix every cas
 
 ### KERN-SM-3. A `CommandRegistry` shared by several figures is mutated by each one
 
-- **Impact:** security (leak between figures; unbounded growth). Status: open.
+- **Impact:** security (leak between figures; unbounded growth). Status: fixed.
+- **fix:** a CommandRegistry passed to a Figure is copied, never written to; the kernel actions are added to the figure own copy.
 - **Evidence:** `const reg = new CommandRegistry(TEST_COMMANDS)` (20 specs); after `new Figure({ commands: reg })` three times, `reg.all().length` is 47 and `reg.problems().length` is 18 (the nine kernel actions are registered once per figure, `graph/base.ts:37`). `figures[0].registry.register(spec)` makes the command available in `figures[1]` (`figures[1].apply('k = Leak()')` succeeds). Every figure made from a host's registry adds nine more specs, forever.
 - **Invariant broken:** K15: the registry is not changed by building a figure; figures do not share state the host did not share on purpose.
 - **Suggested fix:** when `opts.commands` is a `CommandRegistry`, build the figure's own registry from its specs (or a layered view: the host's specs plus the kernel actions) instead of registering into the caller's object; add the kernel actions only to a registry the figure owns.
 
 ### KERN-SM-4. `setFree` trusts its caller: the `solver` reason bypasses `fixed` and history, unknown reasons are not journalled, values are kept by reference
 
-- **Impact:** security (authorisation of `fixed`, integrity of history and values). Status: open.
+- **Impact:** security (authorisation of `fixed`, integrity of history and values). Status: fixed.
+- **fix:** setFree rejects a why outside the five and solver on a non-state; the value is copied (Points as fresh numbers) inside a try, so a getter that throws or a later change by the caller cannot reach the figure; a Text over textLength is a limit error.
 - **Evidence:**
   - `figure(['A = (1, 1) with fixed = true']).setFree('A', { x: 5, y: 5 }, 'solver')` returns `{ ok: true, changed: true }`; `A` is `(5, 5)` and the undo depth stays 1. `writeFree` (`graph/hist.ts:533`) skips the `locked` check for `why === 'solver'` on any free object, and `solver` writes are never journalled.
   - `setFree('A', { x: 7, y: 7 }, 'bogus')` is accepted and not journalled (only `show_me` and `api` record, `graph/hist.ts:573`; `drag`/`slider` join a gesture). The junk-argument fix did not cover `why`.
@@ -90,7 +94,8 @@ Related findings that one change should fix together (pipeline.md: fix every cas
 
 ### KERN-SM-7. Directive replacement is quadratic: a 2 MB file of comments and directives takes tens of seconds
 
-- **Impact:** hang (from a file the loader accepts). Status: open.
+- **Impact:** hang (from a file the loader accepts). Status: fixed.
+- **fix:** directives are found by a Map<name, index> kept by insertItem/removeItem (also used for clockRange and the solver step); the items budget bounds the file.
 - **Evidence:** `n` comment lines then `n` `@view -<i> <i> -3 3` lines through `applyBatch(..., { mode: 'independent' })`: n = 2,000 takes 61 ms, 4,000 161 ms, 8,000 566 ms (×3.5 per doubling). A non-repeatable directive is replaced through `this.items.findIndex(...)` (`graph/tx.ts:311`), which scans every comment before it. A 2 MB file holds about 130,000 such lines; at this rate that is well over 20 s inside one `fromScript`.
 - **Invariant broken:** K12 and K13: loading is linear (1,000 lines under 100 ms, kernel design 15); a file under `fileSize` loads in bounded time.
 - **Suggested fix (group D):** keep a `Map<name, index>` of non-repeatable directives (updated on insert, replace, undo and re-anchor), and apply the `items` budget of KERN-SM-1.

@@ -22,6 +22,7 @@ import { PROPERTIES, own } from '../language/props';
 import { NOT_SET } from './types';
 import type { Cell, EffectiveStyle, FigureEvent, FrameDelta, Persist, Props, StyleEntry, UndefChange } from './types';
 import { sameValue } from './values';
+import { KERNEL_ACTIONS } from './actions';
 import { CommandRegistry, RuleUndefined } from './registry';
 import type { CommandRule, RuleCall } from './registry';
 import { coerceDynamic, defaultsFor, setProp, toEffective } from './props';
@@ -151,7 +152,12 @@ export class FigureCore {
   constructor(opts: FigureOptions = {}) {
     if (typeof opts !== 'object' || opts === null) opts = {};
     const c = opts.commands;
-    this.registry = c instanceof CommandRegistry ? c : new CommandRegistry(Array.isArray(c) ? (c as readonly CommandSpec[]) : []);
+    // The figure owns its registry: a registry the host passes is copied, never written to (KERN-SM-3). The kernel's own
+    // actions are added once per figure by `FigureBase`, so a copy leaves out any the host's registry already holds.
+    this.registry =
+      c instanceof CommandRegistry
+        ? new CommandRegistry(c.all().filter((s) => !KERNEL_ACTIONS.includes(s.name) || s.kind !== 'action'))
+        : new CommandRegistry(Array.isArray(c) ? (c as readonly CommandSpec[]) : []);
     if (c && !(c instanceof CommandRegistry) && !Array.isArray(c)) {
       const t = c as CommandTable;
       for (const n of t.names()) this.registry.register(t.lookup(n) as CommandSpec);

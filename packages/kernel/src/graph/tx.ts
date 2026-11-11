@@ -281,6 +281,8 @@ export class FigureTx extends FigureBase {
     rep.warnings = notices;
     const text = parsed.source.trim();
     if (!text.startsWith('#')) return this.okResult(parsed, 'noop', '', rep);
+    const over = this.itemBudget(parsed);
+    if (over) return over;
     if (!opts.dryRun) {
       const item: ScriptItem = { text, after: this.lastObjectId(), name: '', words: [] };
       this.insertItem(item, null, this.items.length);
@@ -289,9 +291,42 @@ export class FigureTx extends FigureBase {
     return this.okResult(parsed, 'comment', text, rep, opts.dryRun ? { dryRun: true } : {});
   }
 
+  /** The `limit` error when one more comment or directive would pass the `items` budget (KERN-SM-1). */
+  protected itemBudget(parsed: ParsedLine): ErrorObject | undefined {
+    const max = this.limits.items;
+    if (this.items.length < max) return undefined;
+    return this.fail(parsed, 'limit', { limit: 'items', max, got: this.items.length + 1, what: 'comments and directives in a figure' }, { recovery: 'rewrite', hint: 'Remove comments or directives you do not need.', fingerprintKey: 'items' });
+  }
+
   protected insertItem(item: ScriptItem, was: ScriptItem | null, index: number): void {
-    if (was) this.items[index] = item;
-    else this.items.splice(index, 0, item);
+    if (was) {
+      this.items[index] = item;
+      return;
+    }
+    this.items.splice(index, 0, item);
+    if (index !== this.items.length - 1) this.reindexItems();
+    else if (item.name !== '' && !REPEATABLE.has(item.name) && !this.directiveAt.has(item.name)) this.directiveAt.set(item.name, index);
+  }
+
+  /** Takes the item at `index` out of the script (undo of an insertion). */
+  protected removeItem(index: number): void {
+    const last = index === this.items.length - 1;
+    const gone = this.items.splice(index, 1)[0];
+    if (!last) this.reindexItems();
+    else if (gone && this.directiveAt.get(gone.name) === index) this.directiveAt.delete(gone.name);
+  }
+
+  /** The first item of a non-repeatable directive, by name (a map lookup, not a scan). */
+  protected directiveItem(name: string): ScriptItem | undefined {
+    const i = this.directiveAt.get(name);
+    return i === undefined ? undefined : this.items[i];
+  }
+
+  private reindexItems(): void {
+    this.directiveAt.clear();
+    this.items.forEach((it, i) => {
+      if (it.name !== '' && !REPEATABLE.has(it.name) && !this.directiveAt.has(it.name)) this.directiveAt.set(it.name, i);
+    });
   }
 
   protected applyDirective(parsed: ParsedLine, checked: CheckedLine, notices: Notice[], opts: ApplyOptions): TxResult {
@@ -306,9 +341,13 @@ export class FigureTx extends FigureBase {
       return this.okResult(parsed, 'noop', '@fig', rep);
     }
     const text = printLineNode(parsed.node);
+    const at = REPEATABLE.has(d.name) ? -1 : (this.directiveAt.get(d.name) ?? -1);
+    if (at < 0) {
+      const over = this.itemBudget(parsed);
+      if (over) return over;
+    }
     if (opts.dryRun) return this.okResult(parsed, 'directive', text, rep, { dryRun: true });
     const item: ScriptItem = { text, after: this.lastObjectId(), name: d.name, words: d.words };
-    const at = REPEATABLE.has(d.name) ? -1 : this.items.findIndex((x) => x.name === d.name);
     if (at >= 0) {
       const was = this.items[at] as ScriptItem;
       // a replaced directive keeps its place
@@ -763,7 +802,7 @@ export class FigureTx extends FigureBase {
       }
       case 'item': {
         if (e.was) this.items[e.index] = e.was;
-        else this.items.splice(e.index, 1);
+        else this.removeItem(e.index);
         this.queue({ ev: 'directive', name: e.item.name });
         return;
       }

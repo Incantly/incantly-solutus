@@ -27,6 +27,8 @@ import { toEffective } from './props';
 
 export type WriteWhy = 'drag' | 'slider' | 'show_me' | 'api' | 'solver';
 
+const WRITE_WHYS: readonly string[] = ['drag', 'slider', 'show_me', 'api', 'solver'];
+
 export interface SetFreeOptions {
   /** Change a fixed object (the teacher's tool passes this only when it says so). */
   force?: boolean;
@@ -452,6 +454,8 @@ export class FigureHist extends FigureTx {
       const e = err('tool_input', { line: 0, col: 1, endCol: 1 }, { tool: 'applyBatch', expected: 'a list of lines' }, { recovery: 'fix_line', fingerprintKey: 'applyBatch' });
       return { ok: false, results: [e], applied: 0, rolledBack: false, changed: emptyReport(), notices: [] };
     }
+    const over = this.batchBudget(lines);
+    if (over) return { ok: false, results: [over], applied: 0, rolledBack: false, changed: emptyReport(), notices: [] };
     this.commitDrag();
     const mode = opts.mode ?? 'atomic';
     const failed = new Map<string, { line: number; kind: import('../contracts/errors').ErrorKind }>();
@@ -504,6 +508,22 @@ export class FigureHist extends FigureTx {
     return { ok: results.every((r) => r.ok), results, applied, rolledBack, changed: rep, notices: rep.warnings };
   }
 
+  /** The `limit` error when a batch has too many lines or too much text (the same budgets a loaded file has, KERN-SM-1). */
+  protected batchBudget(lines: readonly (string | ParsedLine)[]): ErrorObject | undefined {
+    const at = { line: 0, col: 1, endCol: 1 };
+    if (lines.length > this.limits.lines) {
+      return err('limit', at, { limit: 'lines', max: this.limits.lines, got: lines.length, what: 'lines in one batch' }, { recovery: 'rewrite', fingerprintKey: 'lines' });
+    }
+    let chars = 0;
+    for (const l of lines) {
+      if (typeof l === 'string') chars += l.length + 1;
+      if (chars > this.limits.fileSize) {
+        return err('limit', at, { limit: 'file_size', max: this.limits.fileSize, got: chars, what: 'characters in a batch' }, { recovery: 'rewrite', fingerprintKey: 'file_size' });
+      }
+    }
+    return undefined;
+  }
+
   /* ------------------------------ free values ------------------------------ */
 
   /**
@@ -521,22 +541,35 @@ export class FigureHist extends FigureTx {
     if (r instanceof ObjRec === false) return r as ErrorObject;
     const rec = r as ObjRec;
     const at = { line: 0, col: 1, endCol: 1 };
+    // `why` decides authorisation and history: only the five reasons exist, and `solver` belongs to the states it drives
+    if (typeof why !== 'string' || !WRITE_WHYS.includes(why) || (why === 'solver' && rec.p.kind !== 'state')) {
+      return err('bad_argument', at, { command: 'setFree', why: why === 'solver' ? 'the solver writes only states' : 'the reason must be drag, slider, show_me or api' }, { recovery: 'fix_line', fingerprintKey: 'why' });
+    }
+    // a stored value is the figure's own: copy it once, inside a try, so a getter that throws or a later change by the caller cannot reach it
+    let v: unknown;
+    try {
+      v = ownValue(rec.p.type.k, value);
+    } catch {
+      return err('bad_argument', at, { command: 'setFree', why: `the value of ${rec.p.name} could not be read` }, { hint: `Give a ${rec.p.type.k}.`, recovery: 'fix_line', fingerprintKey: rec.p.name });
+    }
     if (rec.p.kind === 'state' && why !== 'solver') {
       return err('not_free', at, { name: rec.p.name, inputs: 'the solver' }, { messageKey: 'kernel.state_owned', hint: 'The solver owns the value of a state.', recovery: 'choose', related: [rec.p.name], fingerprintKey: 'state:' + rec.p.name });
     }
     if (rec.p.kind !== 'free' && rec.p.kind !== 'state') {
       const ins = rec.valueIn.map((i) => i.p.name);
-      const lit = valueSource(rec.p.type, value) ?? (rec.cell.defined ? valueSource(rec.p.type, rec.cell.value) : undefined);
-      const line = lit !== undefined && lit !== 'undefined' ? `${rec.p.name} = ${lit}` : undefined;
+      const lit = valueSource(rec.p.type, v) ?? (rec.cell.defined ? valueSource(rec.p.type, rec.cell.value) : undefined);
+      const line = lit !== undefined && lit !== 'undefined' && lit.length <= 200 ? `${rec.p.name} = ${lit}` : undefined;
       return err('not_free', at, { name: rec.p.name, inputs: joinNames(ins) }, { hint: `Redefine it as a plain value${line ? ` (${line})` : ''} or change ${ins.join(', ')}.`, ...(line ? { suggest: [line] } : {}), recovery: 'choose', related: ins, fingerprintKey: rec.p.name });
     }
     if (this.isFixed(rec) && why !== 'solver' && !opts.force) {
       return err('locked', at, { name: rec.p.name }, { hint: `Unfix it first: ${rec.p.name} with fixed = false`, suggest: [`${rec.p.name} with fixed = false`], recovery: 'choose', fingerprintKey: rec.p.name });
     }
-    let v = value;
     if (rec.p.type.k === 'Number' && (v === undefined || (typeof v === 'number' && v !== v))) v = undefined;
     else if (!fitsType(rec.p.type, v)) {
       return err('bad_argument', at, { command: 'setFree', why: `${rec.p.name} holds a ${rec.p.type.k}` }, { hint: `Give a ${rec.p.type.k}.`, recovery: 'fix_line', fingerprintKey: rec.p.name });
+    }
+    if (typeof v === 'string' && v.length > this.limits.textLength) {
+      return err('limit', at, { limit: 'text_length', max: this.limits.textLength, got: v.length, what: 'characters in a text' }, { recovery: 'rewrite', fingerprintKey: 'text_length' });
     }
     if (typeof v === 'number') {
       const rg = rec.range;
@@ -768,6 +801,17 @@ export interface FrameDeltaResult {
   readonly ok: boolean;
   readonly reason?: string;
   readonly delta?: import('./types').FrameDelta;
+}
+
+/** A copy of a point or vector value with plain numbers; every other value is returned as it is. Reading may throw. */
+function ownValue(type: string, v: unknown): unknown {
+  if ((type === 'Point' || type === 'Vector') && typeof v === 'object' && v !== null) {
+    const o = v as { x?: unknown; y?: unknown };
+    const x = o.x;
+    const y = o.y;
+    return typeof x === 'number' && typeof y === 'number' ? { x, y } : v;
+  }
+  return v;
 }
 
 function decimals(x: number): number {

@@ -24,6 +24,8 @@ export class FigureBase extends FigureCore {
   readonly journal: Journal;
   /** Comments and directives, kept in place. */
   items: ScriptItem[] = [];
+  /** Index in `items` of each non-repeatable directive, by name (kept by `insertItem` and `removeItem`). */
+  protected readonly directiveAt = new Map<string, number>();
   /** The reveal cursor of the step list; `undefined` means every step is shown. */
   stepCursor: number | undefined;
   /** Gesture writes waiting for `commitDrag`: the persisted state each object had when the gesture began. */

@@ -40,11 +40,22 @@ export function compactError(e: ErrorObject, opts: { sentSource?: boolean; limit
     if (size() <= limit) break;
     delete out[drop];
   }
-  if (size() > limit && typeof out['hint'] === 'string') {
-    const over = size() - limit;
-    const hint = out['hint'];
-    out['hint'] = hint.length > over + 1 ? hint.slice(0, hint.length - over - 1) + '…' : '';
-    if (out['hint'] === '') delete out['hint'];
+  // then shorten the free text, the least useful first, so the result always fits (KERN-SM-2)
+  for (const key of ['hint', 'token', 'message']) {
+    const v = out[key];
+    if (size() <= limit || typeof v !== 'string') continue;
+    // JSON escaping can grow a character to six; cut by the measured excess until it fits or the text is a stub
+    let keep = v.length;
+    while (size() > limit && keep > 0) {
+      const over = size() - limit;
+      keep = Math.max(0, keep - Math.max(1, Math.ceil(over / 6)));
+      out[key] = keep > 0 ? v.slice(0, keep) + '…' : '';
+    }
+    if (out[key] === '' && key === 'hint') delete out[key];
+  }
+  for (const drop of ['suggest', 'path', 'blockedBy']) {
+    if (size() <= limit) break;
+    delete out[drop];
   }
   return out as unknown as CompactError;
 }

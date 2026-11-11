@@ -169,6 +169,8 @@ export interface ErrArgs {
 export function err(kind: ErrorKind, at: Span, params: Params = {}, extra: ErrArgs = {}): ErrorObject {
   try {
     const spec = errorTable[kind];
+    params = clipParams(params);
+    extra = clipExtra(extra);
     const e: ErrorExtra = {
       ...(extra.expected ? { expected: extra.expected } : {}),
       ...(extra.forms ? { forms: extra.forms } : {}),
@@ -188,6 +190,34 @@ export function err(kind: ErrorKind, at: Span, params: Params = {}, extra: ErrAr
   } catch {
     return fallbackInternal(at.line);
   }
+}
+
+/** The longest caller text an error repeats in its params, token, key or related names (KERN-SM-2). */
+export const ERROR_TEXT_MAX = 100;
+/** The longest hint an error carries. */
+export const ERROR_HINT_MAX = 300;
+
+/** Cuts `s` to `max` characters, ending in an ellipsis when something was cut. */
+export function clipText(s: string, max = ERROR_TEXT_MAX): string {
+  return s.length <= max ? s : s.slice(0, Math.max(0, max - 1)) + '\u2026';
+}
+
+function clipParams(params: Params): Params {
+  const out: Record<string, string | number | boolean | readonly string[]> = {};
+  for (const k of Object.keys(params)) {
+    const v = params[k] as string | number | boolean | readonly string[];
+    out[k] = typeof v === 'string' ? clipText(v) : Array.isArray(v) ? (v as readonly string[]).map((x) => (typeof x === 'string' ? clipText(x) : x)) : v;
+  }
+  return out;
+}
+
+function clipExtra(extra: ErrArgs): ErrArgs {
+  const out: { -readonly [K in keyof ErrArgs]: ErrArgs[K] } = { ...extra };
+  if (typeof out.token === 'string') out.token = clipText(out.token);
+  if (typeof out.fingerprintKey === 'string') out.fingerprintKey = clipText(out.fingerprintKey);
+  if (typeof out.hint === 'string') out.hint = clipText(out.hint, ERROR_HINT_MAX);
+  if (out.related) out.related = out.related.map((x) => clipText(x));
+  return out;
 }
 
 /** The error that stands in when building an error fails. */

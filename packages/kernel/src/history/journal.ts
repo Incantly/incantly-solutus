@@ -63,18 +63,26 @@ export interface UndoInfo {
   readonly next: string | undefined;
 }
 
-function sizeOf(e: JournalEntry): number {
+/** An estimate of what a stored state holds: a fixed part, the definition text, and the free value. */
+function persistSize(p: Persist): number {
+  const v = p.value;
+  const value = typeof v === 'string' ? v.length * 2 : Array.isArray(v) ? v.length * 16 : ArrayBuffer.isView(v) ? (v as unknown as { byteLength: number }).byteLength : 16;
+  return 100 + p.checked.text.length * 2 + value;
+}
+
+/** The size of an entry from what it holds (its texts and values), not a flat guess, so the byte cap means something. */
+function sizeOf(e: JournalEntry, measure: (x: JournalEntry) => number): number {
   switch (e.k) {
     case 'add':
-      return 80 + e.items.length * 120;
+      return 80 + e.label.length * 2 + e.items.reduce((n, i) => n + 40 + persistSize(i.rec.p), 0);
     case 'remove':
-      return 80 + e.items.length * 200 + e.detached.length * 100;
+      return 80 + e.label.length * 2 + e.items.reduce((n, i) => n + 40 + persistSize(i.persist), 0) + e.detached.length * 100;
     case 'sets':
-      return 80 + e.changes.length * 200 + (e.reorder ? e.reorder.after.length * 8 : 0);
+      return 80 + e.label.length * 2 + e.changes.reduce((n, c) => n + persistSize(c.before) + persistSize(c.after), 0) + (e.reorder ? e.reorder.after.length * 8 : 0);
     case 'item':
-      return 80 + e.item.text.length * 2;
+      return 80 + e.item.text.length * 2 + (e.was ? e.was.text.length * 2 : 0);
     case 'group':
-      return 40 + e.entries.reduce((n, x) => n + sizeOf(x), 0);
+      return 40 + e.entries.reduce((n, x) => n + measure(x), 0);
   }
 }
 
@@ -88,6 +96,8 @@ export class Journal {
   private open: { label: string; entries: JournalEntry[] } | null = null;
   private dropped = 0;
   private bytes = 0;
+  /** The size of each entry when it was first measured: a record can change later, the bytes must still add up. */
+  private readonly sizes = new WeakMap<JournalEntry, number>();
 
   constructor(
     private capacity: number,
@@ -139,7 +149,7 @@ export class Journal {
     const top = this.stack[this.stack.length - 1];
     if (top === e) {
       this.stack.pop();
-      this.bytes -= sizeOf(e);
+      this.bytes -= this.measure(e);
       return true;
     }
     return false;
@@ -157,16 +167,25 @@ export class Journal {
     else this.push(e);
   }
 
+  private measure(e: JournalEntry): number {
+    let n = this.sizes.get(e);
+    if (n === undefined) {
+      n = sizeOf(e, (x) => this.measure(x));
+      this.sizes.set(e, n);
+    }
+    return n;
+  }
+
   private push(e: JournalEntry): void {
     this.stack.push(e);
-    this.bytes += sizeOf(e);
+    this.bytes += this.measure(e);
     this.trim();
   }
 
   private trim(): void {
     while (this.stack.length > this.capacity || (this.bytes > this.maxBytes && this.stack.length > 1)) {
       const old = this.stack.shift() as JournalEntry;
-      this.bytes -= sizeOf(old);
+      this.bytes -= this.measure(old);
       this.dropped++;
     }
   }
@@ -180,11 +199,13 @@ export class Journal {
     if (!top) return undefined;
     if (unit === 'line' && top.k === 'group' && top.entries.length > 1) {
       const last = top.entries.pop() as JournalEntry;
-      this.bytes -= sizeOf(last);
+      const n = this.measure(last);
+      this.bytes -= n;
+      this.sizes.set(top, this.measure(top) - n);
       return last;
     }
     this.stack.pop();
-    this.bytes -= sizeOf(top);
+    this.bytes -= this.measure(top);
     return top;
   }
 
