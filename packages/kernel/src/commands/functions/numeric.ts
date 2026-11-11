@@ -174,6 +174,8 @@ export interface ScanResult {
   readonly identicalZero: boolean;
   /** True when the budget ran out before the scan finished. */
   readonly spent: boolean;
+  /** True when no sample was defined. */
+  readonly noData?: boolean;
 }
 
 /**
@@ -191,6 +193,7 @@ export function scanBrackets(f: Fn1, a: number, b: number, samples: number, tol:
   let sawUndefined = false;
   let scale = 0;
   let allZero = true;
+  let definedCount = 0;
   for (let i = 0; i <= n; i++) {
     if (!work.spend(1)) return { brackets, touches, scale, sawUndefined, identicalZero: false, spent: true };
     const v = f(i === n ? b : a + i * h);
@@ -199,9 +202,11 @@ export function scanBrackets(f: Fn1, a: number, b: number, samples: number, tol:
       allZero = false;
       continue;
     }
+    definedCount++;
     if (Math.abs(v) > scale) scale = Math.abs(v);
     if (v !== 0) allZero = false;
   }
+  if (definedCount === 0) return { brackets, touches, scale, sawUndefined, identicalZero: false, spent: false, noData: true };
   const identicalZero = allZero || (scale <= tol && !sawUndefined);
   if (identicalZero) return { brackets, touches, scale, sawUndefined, identicalZero, spent: false };
   // Adaptive subdivision: isolate sign changes and follow oscillation.
@@ -295,6 +300,8 @@ export interface RootsResult {
   readonly spent: boolean;
   /** True when the function looks identically zero on the interval. */
   readonly identicalZero: boolean;
+  /** True when the function was undefined at every sample. */
+  readonly noData?: boolean;
 }
 
 /**
@@ -305,6 +312,7 @@ export interface RootsResult {
 export function findRoots(f: Fn1, a: number, b: number, tol: number, work: RuleWork, samples = 512): RootsResult {
   const scan = scanBrackets(f, a, b, samples, tol, work);
   if (scan.spent) return { roots: [], sawUndefined: scan.sawUndefined, spent: true, identicalZero: false };
+  if (scan.noData) return { roots: [], sawUndefined: true, spent: false, identicalZero: false, noData: true };
   if (scan.identicalZero) return { roots: [], sawUndefined: scan.sawUndefined, spent: false, identicalZero: true };
   const scale = Math.max(1, scan.scale);
   const out: number[] = [];

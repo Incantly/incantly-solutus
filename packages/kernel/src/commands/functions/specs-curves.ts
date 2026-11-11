@@ -9,7 +9,7 @@ import type { RuleCall } from '../../graph/registry';
 import type { FunctionValue, RelationValue } from '../../language/runtime';
 import type { CommandForm, CommandSpec } from '../../language/table';
 import { sample2, sampleBody, numArg, isFin } from './sample';
-import { chebyshevNodes, findRoots, hessian2, kappaStraight, nullspaceRect, quad } from './numeric';
+import { chebyshevNodes, derivativeAt, findRoots, hessian2, kappaStraight, nullspaceRect, quad } from './numeric';
 import { fn2Value, form, lineFromPointDir, objSpec, p, fmt } from './rules';
 import { fitAlgebraic, openSlice, sweepEnvelope, sweepLocus, toSampledCurve } from './locus';
 import type { Coef2, CurveData, ImplicitCurveData, ParamCurveData, PiecewiseCurveData, PolyPiece } from './types';
@@ -71,6 +71,7 @@ function runCurve(call: RuleCall): unknown {
   const fx = sampleBody(call, 0, slot);
   const fy = sampleBody(call, 1, slot);
   if (!fx || !fy) return call.fail('bad_argument', 'Curve needs two formulas in the parameter.');
+  if (noCurveData(call, fx, fy, a, b)) return undefined;
   const closed = curveClosed(fx, fy, a, b);
   const data: ParamCurveData = { kind: 'curve', curve: 'param', fx, fy, lo: a, hi: b, closed };
   return data;
@@ -104,8 +105,19 @@ function runPolar(call: RuleCall): unknown {
     const r = rr(s);
     return r === r ? r * Math.sin(s) : Number.NaN;
   };
+  if (noCurveData(call, fx, fy, a, b)) return undefined;
   const data: ParamCurveData = { kind: 'curve', curve: 'param', fx, fy, lo: a, hi: b, closed: curveClosed(fx, fy, a, b) };
   return data;
+}
+
+/** When a parametric formula is undefined at every one of 33 samples, the curve is undefined; its reason is the formula's. */
+function noCurveData(call: RuleCall, fx: (s: number) => number, fy: (s: number) => number, lo: number, hi: number): boolean {
+  for (let i = 0; i <= 32; i++) {
+    const s = lo + ((hi - lo) * i) / 32;
+    if (fx(s) === fx(s) && fy(s) === fy(s)) return false;
+  }
+  call.fail(call.env.reason ?? 'input_undefined', 'The formulas are not defined anywhere in the range.');
+  return true;
 }
 
 function runBezier(call: RuleCall): unknown {
@@ -121,8 +133,9 @@ function runBezier(call: RuleCall): unknown {
   for (let j = 0; j <= n; j++) {
     let sx = 0;
     let sy = 0;
-    for (let i = j; i <= n; i++) {
-      const c = binom(n, i) * binom(i, j) * (((i - j) % 2 === 0) ? 1 : -1);
+    // coefficient of s^j in sum_i P_i C(n, i) s^i (1 - s)^(n - i): only i <= j contributes
+    for (let i = 0; i <= j; i++) {
+      const c = binom(n, i) * binom(n - i, j - i) * (((j - i) % 2 === 0) ? 1 : -1);
       const q = pts[i] as Pt;
       sx += c * q.x;
       sy += c * q.y;
@@ -641,6 +654,14 @@ function runDerivativeCurve(call: RuleCall): unknown {
   // Parametric and sampled curves: differentiate the components numerically.
   const h = (s: number): number => 6e-6 * Math.max(1, Math.abs(s));
   const comp = (get: (s: number) => number): ((s: number) => number) => {
+    if (n >= 2) {
+      // higher orders from a local interpolant: repeated differences lose a digit and more at every order
+      return (s: number): number => {
+        if (c.t === 'param' && (s < r[0] || s > r[1])) return Number.NaN;
+        if (c.t === 'sampled' && (s < 0 || s > 1)) return Number.NaN;
+        return derivativeAt(get, s, n);
+      };
+    }
     let f = get;
     for (let k = 0; k < n; k++) {
       const g = f;
@@ -665,6 +686,25 @@ function runDerivativeCurve(call: RuleCall): unknown {
   const fx = comp(px);
   const fy = comp(py);
   const data: ParamCurveData = { kind: 'curve', curve: 'param', fx, fy, lo: r[0], hi: r[1], closed: curveClosed(fx, fy, r[0], r[1]) };
+  return data;
+}
+
+/** `Slope(c)`: the curve `(x(s), dy/dx)` of a parametric or sampled curve. */
+function runSlopeCurve0(call: RuleCall): unknown {
+  const c = reqCurve(call, 0);
+  if (!c) return undefined;
+  if (c.t === 'implicit') return call.fail('bad_argument', 'Slope of an implicit curve needs a point; ImplicitDerivative(c) gives dy/dx as a function of x and y.');
+  const r = curveRange(c);
+  if (!r) return call.fail('bad_argument', 'This curve has no parameter range.');
+  const px = (s: number): number => curvePoint(c, s)?.x ?? Number.NaN;
+  const py = (s: number): number => curvePoint(c, s)?.y ?? Number.NaN;
+  const fy = (s: number): number => {
+    const h = 6e-6 * Math.max(1, Math.abs(s));
+    const dx = (px(s + h) - px(s - h)) / (2 * h);
+    const dy = (py(s + h) - py(s - h)) / (2 * h);
+    return dx === dx && dy === dy && dx !== 0 ? dy / dx : Number.NaN;
+  };
+  const data: ParamCurveData = { kind: 'curve', curve: 'param', fx: px, fy, lo: r[0], hi: r[1], closed: false };
   return data;
 }
 
@@ -783,6 +823,7 @@ export const derivativeCurveForms: CommandForm[] = [
 ];
 
 export const slopeCurveForms: CommandForm[] = [
+  form([p('c', CURVE)], 'Curve', runSlopeCurve0, 'the curve (x(s), dy/dx) of a parametric curve'),
   form([p('c', CURVE), p('s', 'Number')], 'Number', runSlopeCurveS, 'dy/dx of a parametric curve at s'),
   form([p('c', CURVE), p('P', 'Point')], 'Number', runSlopeCurveP, 'dy/dx of an implicit curve at P'),
 ];

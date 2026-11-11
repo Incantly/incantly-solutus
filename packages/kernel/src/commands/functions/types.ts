@@ -47,6 +47,7 @@ declare module '../../contracts/values' {
     needs_interval: true;
     not_differentiable: true;
     missing_range: true;
+    sample_cap: true;
   }
 }
 
@@ -59,7 +60,7 @@ export const FUNCTIONS_REASONS: readonly UndefReason[] = [
   'corner', 'identically_zero', 'bad_argument', 'unbounded_search', 'curve_undefined_at_param',
   'out_of_range', 'singular_point', 'infinite_radius', 'not_on_curve', 'degenerate_points',
   'no_algebraic_equation', 'no_dependency', 'empty_region', 'unbounded', 'identically_true',
-  'unsupported_family', 'not_a_mover', 'needs_interval', 'not_differentiable', 'missing_range',
+  'unsupported_family', 'not_a_mover', 'needs_interval', 'not_differentiable', 'missing_range', 'sample_cap',
 ];
 
 /* ------------------------------ curve values ------------------------------ */

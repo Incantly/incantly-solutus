@@ -668,6 +668,10 @@ function intervalAB(call: RuleCall, ai: number): { readonly a: number; readonly 
 /** Leftmost-first root search result shared by `Root` and `Roots`. */
 function rootsOn(call: RuleCall, f: Sampled1, a: number, b: number): { readonly roots: readonly number[]; readonly identicalZero: boolean } | undefined {
   const rr = findRoots(f.f, a, b, call.tol, call.work, 512);
+  if (rr.noData) {
+    call.fail(f.lastReason ?? 'out_of_domain', `f is not defined anywhere on [${fmt(a)}, ${fmt(b)}].`);
+    return undefined;
+  }
   if (rr.spent) {
     call.fail('timeout', 'The work budget ran out.');
     return undefined;

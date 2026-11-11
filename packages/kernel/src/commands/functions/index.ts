@@ -56,6 +56,7 @@ const PHRASES: Readonly<Record<string, ReasonPhrase>> = {
   not_a_mover: { noun: 'not a mover', sentence: 'The point is not on a path, so it cannot move along one.' },
   needs_interval: { noun: 'needs an interval', sentence: 'This needs an interval unless the function is a polynomial.' },
   not_differentiable: { noun: 'not differentiable', sentence: 'The function has no derivative rule here.' },
+  sample_cap: { noun: 'sample cap', sentence: 'The path needed more samples than the cap allows, so it stops where the cap was reached.' },
   missing_range: { noun: 'missing range', sentence: 'A parametric curve needs a finite range.' },
 };
 
