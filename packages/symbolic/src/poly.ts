@@ -626,10 +626,10 @@ function refineIntervalsDyadic(p: UPoly, seq: readonly UPoly[], ivs: RootInterva
  * minimization of |f| when both ends share a sign (an even-multiplicity root).
  */
 export function refineRootFloat(p: UPoly, iv: RootInterval, digits = 15): number {
-  let an = iv.lo.n;
-  let ad = iv.lo.d;
-  let bn = iv.hi.n;
-  let bd = iv.hi.d;
+  const an = iv.lo.n;
+  const ad = iv.lo.d;
+  const bn = iv.hi.n;
+  const bd = iv.hi.d;
   const signOf = (n: bigint, d: bigint): number => {
     const v = upolyEvalRat(p, n, d);
     return v.n === 0n ? 0 : v.n * v.d > 0n ? 1 : -1;

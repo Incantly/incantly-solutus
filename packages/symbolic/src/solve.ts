@@ -1194,6 +1194,17 @@ export function solveInequality(
   note?: RuleCtx['note'],
 ): SymCond[] {
   const ctx = ctxWith(assume, tick, note);
+  const absForm = splitAbsInequality(f, op, v);
+  if (absForm !== null) {
+    // |g| op k: k < 0 decides at once; otherwise square both sides (k >= 0): g^2 - k^2 op 0.
+    const { g, k, op: aop } = absForm;
+    const kv = evalAt(k, new Map());
+    if (kv !== null && kv < 0) {
+      return aop === '<' || aop === '<=' ? [] : [{ c: 'in', l: v, set: 'R' }];
+    }
+    ctx.note('solve.abs', f, g);
+    return solveInequality(add(pow(g, TWO), negateNode(pow(k, TWO))), aop, v, assume, tick, opts, note);
+  }
   const { num, den } = rationalParts(f, v, ctx);
   if (num === null || den === null) throw new Unsupported('inequality is not polynomial or rational in x', 'classify');
   const numRoots = realRootsSorted(num, ctx);
@@ -1236,6 +1247,29 @@ export function solveInequality(
     }
   }
   return mergePieces(pieces, v);
+}
+
+/** `a*abs(g) + b op 0` with `a`, `b` free of v: the argument `g`, the bound `k = -b/a` and the relation. */
+function splitAbsInequality(
+  f: SymNode, op: '!=' | '<' | '<=' | '>' | '>=', v: SymNode,
+): { g: SymNode; k: SymNode; op: '!=' | '<' | '<=' | '>' | '>=' } | null {
+  const terms = f.k === 'add' ? f.terms : [f];
+  const withV = terms.filter((t) => containsGen(t, v));
+  if (withV.length !== 1) return null;
+  const rest = terms.filter((t) => !containsGen(t, v));
+  const t = withV[0] as SymNode;
+  let coeff: SymNode = ONE;
+  let body: SymNode = t;
+  if (t.k === 'mul' && t.factors.length === 2 && !containsGen(t.factors[0] as SymNode, v)) {
+    coeff = t.factors[0] as SymNode;
+    body = t.factors[1] as SymNode;
+  }
+  if (body.k !== 'fn' || body.name !== 'abs' || body.args.length !== 1) return null;
+  const a = evalAt(coeff, new Map());
+  if (a === null || a === 0 || freeSymbols(coeff).size > 0 || rest.some((r) => freeSymbols(r).size > 0)) return null;
+  const k = divideNodes(negateNode(add(...rest)), coeff);
+  const flip: Record<string, '!=' | '<' | '<=' | '>' | '>='> = { '<': '>', '<=': '>=', '>': '<', '>=': '<=', '!=': '!=' };
+  return { g: body.args[0] as SymNode, k, op: a < 0 ? (flip[op] as '!=' | '<' | '<=' | '>' | '>=') : op };
 }
 
 function rationalParts(f: SymNode, v: SymNode, ctx: RuleCtx): { num: UPoly | null; den: UPoly | null } {
