@@ -35,6 +35,7 @@ import type {
 } from './contracts';
 import { badArgument, checkBudgets, checkView, guard, isFiniteNumber } from './errors';
 import { makeMarker } from './markers';
+import { SNAP_FRACTION, snapGrid, trimSeedKeys } from './seed';
 import { SortedSet } from './sortedset';
 import { thinChains } from './thin';
 import { createView, pointToChordPx } from './view';
@@ -65,6 +66,11 @@ interface FCfg {
 interface FState {
   readonly pv: PlotView;
   readonly samples: Map<number, FSample>;
+  /**
+   * Cached samples from an earlier view, by x. They are not in `samples` until
+   * the run asks for that x, so they never count against the sample cap.
+   */
+  readonly seed: Map<number, FSample>;
   /** Every defined sample x, ordered, for neighbour lookups in O(log n). */
   readonly definedXs: SortedSet;
   readonly pending: FSpan[];
@@ -261,7 +267,7 @@ function sampleRange(p: ResumePiece, eps: number): readonly [number, number] {
  * ending at a break gets its end at `eps` inside, and the break itself is
  * sampled once on its own (it belongs to no span).
  */
-function makeCoarseXs(pieces: readonly ResumePiece[], coarse: number, eps: number): number[] {
+function makeCoarseXs(pieces: readonly ResumePiece[], coarse: number, eps: number, seedKeys: readonly number[] = []): number[] {
   const total = pieces.reduce((s, p) => s + (p.hi - p.lo), 0);
   const xs: number[] = [];
   for (const p of pieces) {
@@ -273,7 +279,10 @@ function makeCoarseXs(pieces: readonly ResumePiece[], coarse: number, eps: numbe
     }
     const n = total > 0 ? Math.max(2, Math.round((coarse * w) / total)) : 2;
     // The grid is laid over the whole piece; only the ends move inside it.
-    for (let i = 0; i < n; i++) xs.push(i === 0 ? ra : i === n - 1 ? rb : p.lo + ((p.hi - p.lo) * i) / (n - 1));
+    const grid: number[] = [];
+    for (let i = 0; i < n; i++) grid.push(i === 0 ? ra : i === n - 1 ? rb : p.lo + ((p.hi - p.lo) * i) / (n - 1));
+    // A pan reuses cached samples: grid points snap onto a cached x within a third of a step.
+    for (const x of snapGrid(grid, seedKeys, (SNAP_FRACTION * (p.hi - p.lo)) / (n - 1))) xs.push(x);
     if (p.hiKind === 'break') xs.push(p.hi);
   }
   return xs;
@@ -301,6 +310,11 @@ function putSample(st: FState, x: number, s: FSample): void {
 function evalAt(st: FState, x: number): FSample | null {
   const hit = st.samples.get(x);
   if (hit) return hit;
+  const cached = st.seed.get(x);
+  if (cached) {
+    putSample(st, x, cached);
+    return cached;
+  }
   if (spentThisCall(st) >= st.cfg.maxEvals) {
     st.suspended = true;
     return null;
@@ -346,6 +360,12 @@ function intervalAt(st: FState, lo: number, hi: number): ScalarBox | null {
  */
 function runSetup(st: FState): void {
   const xs = st.coarseXs;
+  if (st.coarseDone === 0 && st.seed.size > 0) {
+    for (const x of xs) {
+      const cached = st.seed.get(x);
+      if (cached && !st.samples.has(x)) putSample(st, x, cached);
+    }
+  }
   if (st.coarseDone === 0 && st.batch && xs.length > 0) {
     const missing = xs.filter((x) => !st.samples.has(x));
     if (missing.length > 0 && missing.length <= st.cfg.maxEvals - spentThisCall(st)) {
@@ -1611,11 +1631,22 @@ export function plotFunction(fn: FunctionValue, view: ViewBox, options: Function
     const coarse = Math.min(wantCoarse, cfg.maxSamples);
     const breaks = [...(options.breaks ?? [])].sort((a, b) => a - b).filter((b, i, arr) => i === 0 || b !== arr[i - 1]);
     const pieces = makePieces(view, options.domain, breaks);
+    // The seed is trimmed to the view and to the sample cap before use (PLOT-SM-6).
+    const seedSamples = new Map<number, FSample>();
+    if (options.seed) {
+      const seed = options.seed;
+      const at = new Map<number, number>();
+      for (let i = 0; i < seed.xs.length; i++) at.set(seed.xs[i] as number, i);
+      for (const x of trimSeedKeys(at.keys(), view.x0, view.x1, cfg.maxSamples)) {
+        seedSamples.set(x, toSample(x, seed.ys[at.get(x) as number] as number));
+      }
+    }
     const fast = fn.call1;
     const call1 = fast ? (x: number): number => fast(x) : (x: number): number => fn.call(x) as number;
     const st: FState = {
       pv,
       samples: new Map(),
+      seed: seedSamples,
       definedXs: new SortedSet(),
       pending: [],
       accepted: [],
@@ -1634,7 +1665,7 @@ export function plotFunction(fn: FunctionValue, view: ViewBox, options: Function
       base: 0,
       pieces,
       breaks,
-      coarseXs: makeCoarseXs(pieces, coarse, breakEps(view)),
+      coarseXs: makeCoarseXs(pieces, coarse, breakEps(view), [...seedSamples.keys()].sort((a, b) => a - b)),
       coarseDone: 0,
       phase: 'setup',
       evals: 0,
@@ -1645,13 +1676,6 @@ export function plotFunction(fn: FunctionValue, view: ViewBox, options: Function
       suspended: false,
       steps: 0,
     };
-    if (options.seed) {
-      for (let i = 0; i < options.seed.xs.length; i++) {
-        const x = options.seed.xs[i] as number;
-        if (!Number.isFinite(x)) continue;
-        putSample(st, x, toSample(x, options.seed.ys[i] as number));
-      }
-    }
     if (options.exact === true && !options.enclosure) st.rigorous = false;
     runLoop(st);
     return { ok: true, value: st.suspended ? finishSuspended(st) : finishComplete(st), notices: [] };
@@ -1731,6 +1755,7 @@ export function resumeFunctionPlot(token: FunctionResume, fn: FunctionValue, opt
     const st: FState = {
       pv,
       samples,
+      seed: new Map(),
       definedXs,
       pending: spans(token.pending),
       accepted: spans(token.accepted),

@@ -32,6 +32,7 @@ import type {
 } from './contracts';
 import { badArgument, checkBudgets, checkView, guard, isFiniteNumber } from './errors';
 import { makeMarker } from './markers';
+import { SNAP_FRACTION, snapGrid, trimSeedKeys } from './seed';
 import { SortedSet } from './sortedset';
 import { thinChains } from './thin';
 import { createView, pointToChordPx, turnDegrees } from './view';
@@ -53,6 +54,8 @@ interface PSpan {
 interface PState {
   readonly pv: PlotView;
   readonly samples: Map<number, PSample>;
+  /** Cached samples from an earlier view; they join `samples` (and the cap) only when the run asks for them. */
+  readonly seed: Map<number, PSample>;
   /** Every defined sample parameter, ordered, for neighbour lookups in O(log n). */
   readonly definedSs: SortedSet;
   readonly pending: PSpan[];
@@ -129,6 +132,11 @@ function putSample(st: PState, s: number, sample: PSample): void {
 function evalAt(st: PState, s: number): PSample | null {
   const hit = st.samples.get(s);
   if (hit) return hit;
+  const cached = st.seed.get(s);
+  if (cached) {
+    putSample(st, s, cached);
+    return cached;
+  }
   if (st.evals + st.intervalEvals >= st.maxEvals) {
     st.dead = true;
     return null;
@@ -646,6 +654,7 @@ export function traceParamCurve(curve: ParamCurveInput, view: ViewBox, options: 
     const st: PState = {
       pv,
       samples: new Map(),
+      seed: new Map(),
       definedSs: new SortedSet(),
       pending: [],
       accepted: [],
@@ -667,12 +676,17 @@ export function traceParamCurve(curve: ParamCurveInput, view: ViewBox, options: 
       dead: false,
       steps: 0,
     };
+    // The seed is trimmed to the parameter range and to the sample cap before use (PLOT-SM-6).
     if (curve.seed) {
-      for (let i = 0; i < curve.seed.ss.length; i++) {
-        const s = curve.seed.ss[i] as number;
-        putSample(st, s, toPSample(s, { x: curve.seed.xys[2 * i] as number, y: curve.seed.xys[2 * i + 1] as number }));
+      const seed = curve.seed;
+      const at = new Map<number, number>();
+      for (let i = 0; i < seed.ss.length; i++) at.set(seed.ss[i] as number, i);
+      for (const s of trimSeedKeys(at.keys(), curve.lo, curve.hi, maxSamples)) {
+        const i = at.get(s) as number;
+        st.seed.set(s, toPSample(s, { x: seed.xys[2 * i] as number, y: seed.xys[2 * i + 1] as number }));
       }
     }
+    const seedKeys = [...st.seed.keys()].sort((a, b) => a - b);
     const boxes = cullBoxes(st, curve.lo, curve.hi);
     if (st.dead) return { ok: true, value: emptyParam(st), notices: [] };
     if (st.enclosure) {
@@ -687,8 +701,12 @@ export function traceParamCurve(curve: ParamCurveInput, view: ViewBox, options: 
     for (const b of boxes) {
       const n = width > 0 ? Math.max(2, Math.round((total * (b.s1 - b.s0)) / width)) : 2;
       let prev: number | undefined;
+      const grid: number[] = [];
+      for (let i = 0; i < n; i++) grid.push(b.s0 + ((b.s1 - b.s0) * i) / (n - 1));
+      // A repeat trace reuses cached samples: grid points snap onto a cached s within a third of a step.
+      const snapped = snapGrid(grid, seedKeys, (SNAP_FRACTION * (b.s1 - b.s0)) / (n - 1));
       for (let i = 0; i < n; i++) {
-        const s = b.s0 + ((b.s1 - b.s0) * i) / (n - 1);
+        const s = snapped[i] as number;
         const sample = evalAt(st, s);
         if (!sample) return { ok: true, value: emptyParam(st), notices: [] };
         if (prev !== undefined) st.pending.push({ sl: prev, sr: s, depth: 0 });
