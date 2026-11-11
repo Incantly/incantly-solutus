@@ -149,6 +149,8 @@ interface DragSession {
 const HOVER_SLACK: PointerKind = 'mouse';
 
 export class FigureView {
+  /** Counter for unique `aria-describedby` summary ids across figures on a page. */
+  private static nextSummaryId = 1;
   private readonly opts: FigureViewOptions;
   private readonly list = new DrawList();
   private readonly hits = new HitIndex();
@@ -181,6 +183,8 @@ export class FigureView {
   private overlaySurface: CanvasSurface | null = null;
   private readerList: HTMLElement | null = null;
   private liveRegion: HTMLElement | null = null;
+  private summaryEl: HTMLElement | null = null;
+  private readonly readerItems = new Map<ObjId, HTMLElement>();
   private readonly readerText = new Map<ObjId, string>();
   private lastAnnounceMs = 0;
   private queuedAnnounce: string | null = null;
@@ -320,7 +324,11 @@ export class FigureView {
       this.liveRegion = document.createElement('div');
       this.liveRegion.className = 'incantly-sr-only';
       this.liveRegion.setAttribute('aria-live', 'polite');
-      el.append(this.readerList, this.liveRegion);
+      this.summaryEl = document.createElement('div');
+      this.summaryEl.className = 'incantly-sr-only';
+      this.summaryEl.id = `incantly-figure-${FigureView.nextSummaryId++}-summary`;
+      el.setAttribute('aria-describedby', this.summaryEl.id);
+      el.append(this.summaryEl, this.readerList, this.liveRegion);
       this.updateAriaName();
 
       this.overlayCanvas.addEventListener('pointerdown', this.onPointerDown);
@@ -364,6 +372,8 @@ export class FigureView {
     this.overlayCanvas?.remove();
     this.readerList?.remove();
     this.liveRegion?.remove();
+    this.summaryEl?.remove();
+    this.readerItems.clear();
     this.root = null;
     this.bgCanvas = null;
     this.sceneCanvas = null;
@@ -1835,12 +1845,14 @@ export class FigureView {
   };
 
   private stepFocus(dir: -1 | 1): void {
-    const ids = this.opts.kernel.heads().map((h) => h.id);
+    // Focus walks the hidden list: visible, selectable objects in creation order.
+    const ids = this.opts.kernel.heads().map((h) => h.id).filter((id) => this.readerItems.has(id));
     if (ids.length === 0) return;
     const at = this.focused === null ? -1 : ids.indexOf(this.focused);
     const next = ids[(at + dir + ids.length) % ids.length] ?? ids[0];
     if (next === undefined) return;
     this.focused = next;
+    this.readerItems.get(next)?.focus();
     this.announce(this.list.get(next)?.drawable.describe() ?? '');
     this.requestFrame();
   }
@@ -2632,6 +2644,7 @@ export class FigureView {
     if (this.root === null) return;
     const count = this.opts.kernel.heads().length;
     this.root.setAttribute('aria-label', `${describeFigure(count)} Press Tab to explore.`);
+    if (this.summaryEl !== null) this.summaryEl.textContent = describeFigure(count);
   }
 
   private updateReaderList(): void {
@@ -2639,34 +2652,38 @@ export class FigureView {
     if (ul === null) return;
     this.updateAriaName();
     const seen = new Set<ObjId>();
+    const drop = (id: ObjId): void => {
+      this.readerText.delete(id);
+      this.readerItems.get(id)?.remove();
+      this.readerItems.delete(id);
+    };
     for (const head of this.opts.kernel.heads()) {
       const authored = this.opts.styles.authoredOf(head.id);
       if (authored?.style.selectable === false) continue;
       const drawable = this.list.get(head.id)?.drawable;
       if (drawable === undefined || drawable.bbox === null) {
-        this.readerText.delete(head.id);
-        ul.querySelector(`[data-id="${head.id}"]`)?.remove();
+        drop(head.id);
         continue;
       }
       seen.add(head.id);
       const text = drawable.describe();
-      if (this.readerText.get(head.id) === text) continue;
-      this.readerText.set(head.id, text);
-      let li = ul.querySelector(`[data-id="${head.id}"]`);
-      if (li === null) {
+      let li = this.readerItems.get(head.id);
+      if (li === undefined) {
         li = document.createElement('li');
         li.setAttribute('role', 'option');
         li.setAttribute('tabindex', '-1');
-        li.setAttribute('data-id', String(head.id));
         ul.append(li);
+        this.readerItems.set(head.id, li);
+      } else if (this.readerText.get(head.id) === text && li.getAttribute('data-id') === head.name) {
+        continue;
       }
+      // `data-id` is the object name (design 15), which is what the learner hears.
+      li.setAttribute('data-id', head.name);
+      this.readerText.set(head.id, text);
       li.textContent = text;
     }
-    for (const [id] of this.readerText) {
-      if (!seen.has(id)) {
-        this.readerText.delete(id);
-        ul.querySelector(`[data-id="${id}"]`)?.remove();
-      }
+    for (const id of [...this.readerItems.keys()]) {
+      if (!seen.has(id)) drop(id);
     }
   }
 
