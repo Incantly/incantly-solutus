@@ -123,6 +123,7 @@ export const FIELDS: Record<string, Record<string, Ty>> = {
   Polygon: { vertices: listOf(T.Point), area: T.Number, perimeter: T.Number },
   Line: { point: T.Point, direction: T.Vector },
   Text: { length: T.Number },
+  Region: { value: T.Number, area: T.Number },
 };
 
 interface Frame {
@@ -616,6 +617,10 @@ class Checker {
     } else if (close.length > 0) {
       extra.hint = `Did you mean ${close.join(' or ')}?`;
       for (const c of close.slice(0, 2)) suggest.push(this.replaceRange(e.s, e.e, c));
+    } else if (this.scopeNames().length > 0) {
+      // inside a command's own expression the variable is the one the command names (`θ` in Polar, `s` in Curve)
+      const vars = this.scopeNames();
+      extra.hint = `The variable here is ${vars.join(' or ')}. Write the expression with ${vars.length === 1 ? 'it' : 'those'}, or make ${name} a number first.`;
     } else {
       extra.hint = 'Make it a number first, or pick an existing name.';
     }
@@ -1036,6 +1041,8 @@ class Checker {
     const close = closestNames(e.callee, names, 3);
     const extra: ErrorExtra = { fingerprintKey: e.callee };
     const obj = this.fig.lookup(e.callee);
+    // a function object may have a capital name (`W = Taylor(f, 0, 5)`): with no command of that name, the call is to it
+    if (obj && isCallableTy(obj.type)) return this.inferCallObj(e, obj);
     if (obj) {
       extra.hint = `${e.callee} is a ${tyStr(obj.type)} object, not a command. Names followed by ( are looked up as commands when they start with a capital letter.`;
     } else if (close.length > 0) {
@@ -1320,8 +1327,37 @@ class Checker {
       this.errors = [];
       this.notices = [];
       let node: TNode | null = null;
+      // a parameter that takes a function of x (or of x and y) also takes an expression written in them
+      const fnHint = hint && hint.k === 'Function' && hint.ret === 'Number' && (hint.arity === 1 || hint.arity === 2) ? hint : undefined;
       try {
-        node = this.inferArg((args[i] as Arg).value, hint);
+        const value = (args[i] as Arg).value;
+        node = this.inferArg(value, fnHint ? undefined : hint);
+        if (fnHint && node === null && value.k !== 'name') {
+          const first = this.errors;
+          const firstN = this.notices;
+          this.errors = [];
+          this.notices = [];
+          const frame: Frame = { vars: new Map() };
+          const params = (fnHint.arity === 2 ? ['x', 'y'] : ['x']).map((name) => {
+            const slot = this.slotCount++;
+            frame.vars.set(name, { slot, ty: T.Number });
+            return { name, slot };
+          });
+          this.scopes.push(frame);
+          let body: TNode | null = null;
+          try {
+            body = this.inferArg(value);
+          } finally {
+            this.scopes.pop();
+          }
+          if (body && body.ty.k === 'Number' && this.errors.length === 0) {
+            node = { n: 'lambda', params, body, ty: fnHint, s: value.s, e: value.e };
+          } else {
+            // not an expression in x either: report what the plain reading found
+            this.errors = first;
+            this.notices = firstN;
+          }
+        }
       } finally {
         const got = { node, errors: this.errors, notices: this.notices };
         this.errors = saved;
@@ -1354,7 +1390,9 @@ class Checker {
 
     const elementHint = (b: Binding, k: number): Ty | undefined => {
       const set = typeSet((b.form.params[k] as ParamSpec).type);
-      return set.members.length === 1 && set.members[0]?.k === 'List' && set.members[0].of ? set.members[0] : undefined;
+      const only = set.members.length === 1 ? set.members[0] : undefined;
+      if (only?.k === 'Function' && only.ret === 'Number' && (only.arity === 1 || only.arity === 2)) return only;
+      return only?.k === 'List' && only.of ? only : undefined;
     };
 
     interface Test {
@@ -1399,6 +1437,28 @@ class Checker {
           tys[k] = node.ty;
           bound[k] = { param: p, expr: node, omitted: false, ty: node.ty };
           if (!accepts(set, node.ty)) problems.push(this.problem(ai, p, a, tyStr(node.ty), setLabel(set)));
+        } else if (kind === 'binder' && set.members[0]?.k === 'List') {
+          // a list of bare names, each a local of the bodies: `[y, v]`
+          const v = a.value;
+          const names = v.k === 'list' ? v.items : [];
+          if (v.k !== 'list' || names.length === 0 || names.some((it) => it.k !== 'name' || it.paren === true)) {
+            problems.push(this.problem(ai, p, a, v.k === 'list' ? 'a list of expressions' : 'an expression', 'a list of bare names such as [y, v]'));
+            binderBad.push({ ai, arg: a });
+            bound[k] = { param: p, omitted: false };
+            return;
+          }
+          const ety = set.members[0].of ?? T.Number;
+          const slots: number[] = [];
+          const binders: string[] = [];
+          for (const it of names as readonly (Expr & { k: 'name' })[]) {
+            const slot = this.slotCount++;
+            frame.vars.set(it.name, { slot, ty: ety });
+            this.warnShadow(it.name, it.s, it.e);
+            slots.push(slot);
+            binders.push(it.name);
+          }
+          bound[k] = { param: p, binders, slots, omitted: false, ty: listOf(ety) };
+          tys[k] = listOf(ety);
         } else if (kind === 'binder') {
           const v = a.value;
           if (v.k !== 'name' || v.paren) {

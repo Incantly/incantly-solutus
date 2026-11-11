@@ -8,7 +8,7 @@
  */
 import type { RuleWork } from '../../graph/registry';
 import type { FunctionValue } from '../../language/runtime';
-import type { ArgFacts, CommandForm, CommandSpec, FormCheck, Refusal } from '../../language/table';
+import type { ArgFacts, CallCheck, CommandForm, CommandSpec, FormCheck, Refusal } from '../../language/table';
 import { detectPolynomial, detectRational } from './numeric';
 import { sample1 } from './sample';
 
@@ -305,13 +305,33 @@ function hookFor(command: string, form: CommandForm, checks: readonly Check[]): 
   };
 }
 
+/** A two-variable function where a one-variable one belongs: name the variable to integrate out. */
+function integralOfTwo(c: CallCheck): Refusal | undefined {
+  const g = c.args[0];
+  if (!g || !/^Function<Number>\(2\)$/.test(g.type) || c.args.length < 3) return undefined;
+  const rest = c.args.slice(1).map((a) => a.text).join(', ');
+  return {
+    kind: 'no_matching_form',
+    message: `${g.text} has two variables, so Integral needs to know which one to integrate.`,
+    hint: `Integrate one variable out: Integral(${g.text}, y, ${rest}) or Integral(${g.text}, x, ${rest}).`,
+    params: { command: c.command, given: c.args.map((a) => a.type).join(', ') },
+    param: 0,
+  };
+}
+
+const REFUSALS: Readonly<Record<string, (c: CallCheck) => Refusal | undefined>> = {
+  Integral: integralOfTwo,
+};
+
 /** Attaches the area's check-time hooks to the forms of its commands. */
 export function withChecks(specs: readonly CommandSpec[]): CommandSpec[] {
   return specs.map((s) => {
     const checks = CHECKS[s.name];
-    if (!checks) return s;
+    const refuse = REFUSALS[s.name];
+    if (!checks) return refuse ? { ...s, refuse } : s;
     return {
       ...s,
+      ...(refuse ? { refuse } : {}),
       forms: s.forms.map((f) => (ONE_ARG_ONLY.has(s.name) && f.params.length !== 1 ? f : { ...f, check: hookFor(s.name, f, checks) })),
     };
   });

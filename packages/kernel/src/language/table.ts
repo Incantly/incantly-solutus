@@ -20,7 +20,10 @@ export interface ParamSpec {
    */
   readonly type: string;
   readonly optional?: boolean;
-  /** Default `value`. A `binder` is a bare name that becomes a local; a `body` is checked in the binders' scope. */
+  /**
+   * Default `value`. A `binder` is a bare name that becomes a local; with a list type (`List<Number>`) it is a list of
+   * bare names, each a local. A `body` is checked in the binders' scope.
+   */
   readonly kind?: ParamKind;
   /** Used when optional and omitted. */
   readonly default?: ConstValue;
@@ -35,6 +38,8 @@ export interface BoundArg {
   readonly expr?: unknown;
   /** The binder's local name. */
   readonly binder?: string;
+  /** For a binder parameter of a list type (`[y, v]` in `NSolveODE`): the local names, in order. */
+  readonly binders?: readonly string[];
   /** The default value when the argument was omitted. */
   readonly value?: ConstValue;
   readonly omitted: boolean;

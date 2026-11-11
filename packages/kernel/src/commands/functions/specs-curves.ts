@@ -1772,7 +1772,7 @@ function runPointIn(call: RuleCall): unknown {
   let d = lo + gr * (hi - lo);
   let fc = ray(c);
   let fd = ray(d);
-  for (let it = 0; it < 60; it++) {
+  for (let it = 0; it < 90; it++) {
     if (!call.work.spend(110)) return call.fail('timeout', 'The work budget ran out.');
     if (fc < fd) {
       hi = d;
@@ -1787,7 +1787,7 @@ function runPointIn(call: RuleCall): unknown {
       d = lo + gr * (hi - lo);
       fd = ray(d);
     }
-    if (hi - lo < 1e-13) break;
+    if (hi - lo < 1e-15) break;
   }
   const thBest = 0.5 * (lo + hi);
   const dGold = ray(thBest);

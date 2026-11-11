@@ -186,6 +186,9 @@ export function solveOde(p: OdeProblem): OdeSolution {
             eventS = ev.s;
             mesh[steps] = ev.s;
             for (let i = 0; i < n; i++) vals[steps * n + i] = ev.y[i] as number;
+            // the step now ends at the event, so its end slope is the slope there, not at the old end
+            const kEv = new Float64Array(n);
+            if (p.rhs(ev.s, ev.y, kEv)) for (let i = 0; i < n; i++) slopes[steps * n + i] = kEv[i] as number;
             end = 'stop';
             break;
           }

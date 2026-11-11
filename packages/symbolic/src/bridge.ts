@@ -88,6 +88,8 @@ export function nodeFromTNode(t: TNode, scope: BridgeScope): BridgeResult {
     case 'const': return { node: constFromName(t.name), readsClock: false };
     case 'clock': return { node: symN('t'), readsClock: true };
     case 'ref': return refFromTNode(t.id, t.name, scope);
+    case 'lambda':
+      throw new BridgeError('not_symbolic', 'An expression written in place of a function is not supported here; define the function on its own line.', {});
     case 'local': {
       const name = scope.locals?.get(t.slot);
       if (name === undefined) throw new BridgeError('not_symbolic', `The name ${t.name} is not in scope here.`, { name: t.name });

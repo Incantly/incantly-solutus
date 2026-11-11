@@ -1760,24 +1760,19 @@ function runSolveODEParam(call: RuleCall): unknown {
 }
 
 function runNSolveODE(call: RuleCall): unknown {
-  const rhsV = call.values[0];
-  const initV = call.values[1];
-  const s0 = numArg(call, 2);
-  const s1 = numArg(call, 3);
-  if (!Array.isArray(rhsV) || s0 === undefined || s1 === undefined) {
-    return call.fail('bad_argument', 'NSolveODE needs a list of right-hand sides, initial values and a range.');
+  // NSolveODE([rhs…], s, [vars…], [init…], s0, s1, stop = expr, rtol, atol): the bodies read s and the variables by name
+  const body = call.args[0]?.eval;
+  const sSlot = call.args[1]?.slot;
+  const slots = call.args[2]?.slots;
+  const initV = call.values[3];
+  const s0 = numArg(call, 4);
+  const s1 = numArg(call, 5);
+  if (!body || sSlot === undefined || !slots || s0 === undefined || s1 === undefined) {
+    return call.fail('bad_argument', 'NSolveODE needs a list of right-hand sides, the variable names, initial values and a range.');
   }
-  const n = rhsV.length;
+  const n = slots.length;
   if (n < 1) return call.fail('bad_argument', 'NSolveODE needs at least one equation.');
   if (n > 16) return call.fail('limit', 'NSolveODE takes at most 16 variables.');
-  const fns: { readonly f: (xs: readonly number[]) => number }[] = [];
-  for (let i = 0; i < n; i++) {
-    const e = rhsV[i] as FunctionValue | undefined;
-    if (!e || typeof e.call !== 'function' || e.arity !== n + 1) {
-      return call.fail('bad_argument', `Right-hand side ${i + 1} must be a function of s and the ${n} variables.`);
-    }
-    fns.push(sampleN(e));
-  }
   const init: number[] = [];
   if (initV instanceof Float64Array) {
     for (let i = 0; i < initV.length; i++) init.push(initV[i] as number);
@@ -1791,27 +1786,52 @@ function runNSolveODE(call: RuleCall): unknown {
   for (const v of init) if (!isFin(v)) return call.fail('bad_argument', 'Initial values must be finite.');
   if (!isFin(s0) || !isFin(s1)) return call.fail('bad_argument', 'NSolveODE needs a finite range.');
   if (s0 === s1) return call.fail('empty_interval', 'The range is empty.');
-  const stopV = call.values[4] as FunctionValue | undefined;
-  let stop: ((s: number, y: Float64Array) => number) | undefined;
-  if (stopV !== undefined) {
-    if (typeof stopV.call !== 'function' || stopV.arity !== n + 1) {
-      return call.fail('bad_argument', `stop must be a function of s and the ${n} variables.`);
+  const env = call.env;
+  /** Evaluates a body with s and the variables put in their local slots; the caller's locals and reason are put back. */
+  const at = (ev: (e: typeof env) => unknown, s: number, y: ArrayLike<number>): unknown => {
+    const keepS: unknown = env.locals[sSlot];
+    const keep = slots.map((sl) => env.locals[sl] as unknown);
+    const reason = env.reason;
+    const cause = env.cause;
+    const detail = env.detail;
+    env.locals[sSlot] = s;
+    for (let i = 0; i < n; i++) env.locals[slots[i] as number] = y[i];
+    env.reason = undefined;
+    let v: unknown;
+    try {
+      v = ev(env);
+    } catch {
+      v = undefined;
     }
-    const ss = sampleN(stopV);
-    stop = (s, y) => ss.f([s, ...Array.from(y.slice(0, n))]);
+    env.locals[sSlot] = keepS;
+    for (let i = 0; i < n; i++) env.locals[slots[i] as number] = keep[i];
+    env.reason = reason;
+    env.cause = cause;
+    env.detail = detail;
+    return v;
+  };
+  const first = at(body, s0, init);
+  const len = first instanceof Float64Array || Array.isArray(first) ? first.length : -1;
+  if (len !== -1 && len !== n) return call.fail('bad_argument', `NSolveODE needs ${n} right-hand sides, one per variable; the list has ${len}.`);
+  const stopEv = call.args[6]?.omitted === false ? call.args[6].eval : undefined;
+  let stop: ((s: number, y: Float64Array) => number) | undefined;
+  if (stopEv) {
+    // the solver looks for the place where this goes from negative to positive: a condition is -1 while false and 1 once true
+    stop = (s, y) => {
+      const v = at(stopEv, s, y);
+      return typeof v === 'boolean' ? (v ? 1 : -1) : typeof v === 'number' ? v : Number.NaN;
+    };
   }
-  const rtol = numArg(call, 5) ?? 1e-8;
-  const atol = numArg(call, 6) ?? 1e-10;
+  const rtol = numArg(call, 7) ?? 1e-8;
+  const atol = numArg(call, 8) ?? 1e-10;
   if (!isFin(rtol) || !(rtol > 0) || !isFin(atol) || !(atol > 0)) return call.fail('bad_argument', 'rtol and atol must be positive.');
-  const args = new Float64Array(n + 1);
   const rhs = (s: number, y: Float64Array, out: Float64Array): boolean => {
-    args[0] = s;
-    for (let i = 0; i < n; i++) args[i + 1] = y[i] as number;
-    const xs = Array.from(args);
+    const v = at(body, s, y);
+    if (!(v instanceof Float64Array) && !Array.isArray(v)) return false;
     for (let i = 0; i < n; i++) {
-      const v = (fns[i] as { f: (xs: readonly number[]) => number }).f(xs);
-      if (v !== v) return false;
-      out[i] = v;
+      const x = v[i] as unknown;
+      if (typeof x !== 'number' || x !== x) return false;
+      out[i] = x;
     }
     return true;
   };
@@ -2036,8 +2056,9 @@ export const FUNCTIONS_SPECS: CommandSpec[] = withChecks([
   objSpec('NSolveODE', [
     form(
       [
-        p('rhs', 'List<Function<Number>>'), p('init', 'List<Number>'), p('s0', 'Number'), p('s1', 'Number'),
-        p('stop', 'Function<Number>', { optional: true }), p('rtol', 'Number', { optional: true, default: 1e-8 }), p('atol', 'Number', { optional: true, default: 1e-10 }),
+        p('rhs', 'List<Number>', { kind: 'body' }), p('s', 'Number', { kind: 'binder' }), p('vars', 'List<Number>', { kind: 'binder' }),
+        p('init', 'List<Number>'), p('s0', 'Number'), p('s1', 'Number'),
+        p('stop', 'Bool|Number', { optional: true, kind: 'body' }), p('rtol', 'Number', { optional: true, default: 1e-8 }), p('atol', 'Number', { optional: true, default: 1e-10 }),
       ],
       'List<Function<Number, 1>>', runNSolveODE, 'system solution, one function per variable',
     ),
