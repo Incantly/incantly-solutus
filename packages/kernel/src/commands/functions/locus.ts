@@ -184,9 +184,10 @@ function refineSegment(
     const edge = findEdge(sample, a, b, st);
     if (!edge.at) return [];
     grow(edge.at.p);
+    // the defined stretch runs from the defined end to the edge just found
     return a.p
-      ? refineSegment(sample, edge.at, b, depth + 1, diag, grow, st)
-      : refineSegment(sample, a, edge.at, depth + 1, diag, grow, st);
+      ? refineSegment(sample, a, edge.at, depth + 1, diag, grow, st)
+      : refineSegment(sample, edge.at, b, depth + 1, diag, grow, st);
   }
   const pa = a.p;
   const pb = b.p;

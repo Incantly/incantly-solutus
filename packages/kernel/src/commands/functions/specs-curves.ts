@@ -6,7 +6,7 @@
  */
 import type { ObjId, Pt } from '../../contracts/values';
 import type { RuleCall } from '../../graph/registry';
-import type { FunctionValue, RelationValue } from '../../language/runtime';
+import type { FunctionValue } from '../../language/runtime';
 import type { CommandForm, CommandSpec } from '../../language/table';
 import { sample2, sampleBody, numArg, isFin } from './sample';
 import { chebyshevNodes, derivativeAt, findRoots, hessian2, kappaStraight, nullspaceRect, quad } from './numeric';
@@ -1954,6 +1954,7 @@ function runLocusPP(call: RuleCall, withRange: boolean): unknown {
     const to = numArg(call, 3);
     if (from === undefined || to === undefined || !isFin(from) || !isFin(to)) return call.fail('bad_argument', 'Locus needs a finite range.');
     if (from === to) return call.fail('empty_interval', 'The range is empty.');
+    if (Math.abs(to - from) > 1e6) return call.fail('limit', 'A locus range is at most 1e6 wide.');
   }
   const ids = moverTarget(call);
   if (!ids) return undefined;
@@ -1968,6 +1969,7 @@ function runLocusFree(call: RuleCall): unknown {
   const to = numArg(call, 3);
   if (from === undefined || to === undefined || !isFin(from) || !isFin(to)) return call.fail('bad_argument', 'Locus needs a finite range.');
   if (from === to) return call.fail('empty_interval', 'The range is empty.');
+  if (Math.abs(to - from) > 1e6) return call.fail('limit', 'A locus range is at most 1e6 wide.');
   const ids = moverTarget(call);
   if (!ids) return undefined;
   const setup = openSlice(call, ids.mover, ids.target);
@@ -1982,6 +1984,7 @@ function runPath(call: RuleCall): unknown {
   const to = numArg(call, 2);
   if (from === undefined || to === undefined || !isFin(from) || !isFin(to)) return call.fail('bad_argument', 'Path needs a finite clock range.');
   if (from === to) return call.fail('empty_interval', 'The range is empty.');
+  if (Math.abs(to - from) > 1e6) return call.fail('limit', 'A locus range is at most 1e6 wide.');
   const target = call.ids[0];
   if (target === undefined) return call.fail('bad_argument', 'Path needs the name of the point.');
   const setup = openSlice(call, 't', target);
@@ -2004,6 +2007,7 @@ function runLocusEquationFree(call: RuleCall): unknown {
   const to = numArg(call, 3);
   if (from === undefined || to === undefined || !isFin(from) || !isFin(to)) return call.fail('bad_argument', 'LocusEquation needs a finite range.');
   if (from === to) return call.fail('empty_interval', 'The range is empty.');
+  if (Math.abs(to - from) > 1e6) return call.fail('limit', 'A locus range is at most 1e6 wide.');
   const ids = moverTarget(call);
   if (!ids) return undefined;
   const setup = openSlice(call, ids.mover, ids.target);
@@ -2050,6 +2054,7 @@ function runEnvelopeFree(call: RuleCall): unknown {
   const to = numArg(call, 3);
   if (from === undefined || to === undefined || !isFin(from) || !isFin(to)) return call.fail('bad_argument', 'Envelope needs a finite range.');
   if (from === to) return call.fail('empty_interval', 'The range is empty.');
+  if (Math.abs(to - from) > 1e6) return call.fail('limit', 'A locus range is at most 1e6 wide.');
   const family = call.ids[0];
   const mover = call.ids[1];
   if (family === undefined || mover === undefined) return call.fail('bad_argument', 'Envelope needs object names for the family and the mover.');
@@ -2063,7 +2068,34 @@ function runEnvelopeFree(call: RuleCall): unknown {
 
 const FAMILY = 'Line|Segment|Ray|Circle';
 
-export const LOCUS_COMMANDS: CommandSpec[] = [
+/** The commands that sweep a target which may be undefined at the mover's current value (a gap is part of the locus). */
+const SWEEPERS: ReadonlySet<string> = new Set(['Locus', 'Path', 'LocusEquation', 'Envelope']);
+const sweeps = (specs: CommandSpec[]): CommandSpec[] =>
+  specs.map((s) =>
+    SWEEPERS.has(s.name)
+      ? {
+          ...s,
+          forms: s.forms.map((f) => ({
+            ...f,
+            acceptsUndefined: true,
+            // reading an undefined target set input_undefined first; the sweep decides the reason itself
+            rule: (args: Parameters<typeof f.rule>[0]) => {
+              const r = f.rule(args) as { run(call: RuleCall): unknown };
+              return {
+                run: (call: RuleCall): unknown => {
+                  call.env.reason = undefined;
+                  call.env.cause = undefined;
+                  call.env.detail = undefined;
+                  return r.run(call);
+                },
+              };
+            },
+          })),
+        }
+      : s,
+  );
+
+export const LOCUS_COMMANDS: CommandSpec[] = sweeps([
   objSpec('Locus', [
     form([p('Q', 'Point'), p('P', 'Point')], 'Curve', (call) => runLocusPP(call, false), 'path of Q as the mover P goes along its path'),
     form([p('Q', 'Point'), p('P', 'Point'), p('from', 'Number'), p('to', 'Number')], 'Curve', (call) => runLocusPP(call, true), 'locus over a natural-unit range'),
@@ -2078,6 +2110,13 @@ export const LOCUS_COMMANDS: CommandSpec[] = [
     form([p('family', FAMILY), p('P', 'Point')], 'Curve', runEnvelopeP, 'curve tangent to every member of the family'),
     form([p('family', FAMILY), p('a', 'Number'), p('from', 'Number'), p('to', 'Number')], 'Curve', runEnvelopeFree, 'envelope driven by a free number'),
   ]),
+  objSpec('PathParam', [
+    form(
+      [p('P', 'Point')], 'Number',
+      (call) => call.fail('not_a_mover', 'PathParam reads the path parameter of a point made with PointOn; a plain point value carries none.'),
+      'the 0..1 parameter of a point on a path',
+    ),
+  ]),
   objSpec('ImplicitDerivative', [form([p('c', CURVE)], 'Function2', runImplicitDerivative, 'dy/dx of an implicit curve as a function of x and y')]),
   objSpec('Closest', [form([p('c', CURVE), p('P', 'Point')], 'Point', runClosest, 'nearest point on the curve to P')]),
   objSpec('Boundary', [form([p('p', 'Relation|Region'), p('a', 'Number'), p('b', 'Number')], 'List<Number>', runBoundary, 'where a one-variable predicate changes truth')]),
@@ -2088,4 +2127,4 @@ export const LOCUS_COMMANDS: CommandSpec[] = [
       'Number', runPredicateArea, 'measure of the region inside a rectangle',
     ),
   ]),
-];
+]);
