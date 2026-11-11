@@ -325,22 +325,33 @@ export class Figure extends FigureHist {
   }
 
   /**
-   * Reveals the first `n` steps (kernel design 12.2). Objects at or after the cursor still exist, hold values and update;
-   * views filter by the cursor. One `step` event.
+   * Reveals the first `n` steps (kernel design 12.2). `n` counts the steps as `steps()` lists them, so a helper (`aux`) object
+   * does not use one up. Objects at or after the cursor still exist, hold values and update; views filter by the cursor.
+   * One `step` event.
    */
   stepTo(n: number): void {
     if (typeof n !== 'number' || n !== n || this.busy) return;
-    const k = Math.max(0, Math.min(this.list.length, Math.floor(n)));
-    this.stepCursor = k >= this.list.length ? undefined : k;
+    const rows = this.listedRecs();
+    const k = Math.max(0, Math.min(rows.length, Math.floor(n)));
+    // inside, the cursor is the list position of the first hidden object; at the end every object is shown
+    const first = rows[k];
+    this.stepCursor = first === undefined ? undefined : first.order;
     this.queue({ ev: 'step', n: k });
     this.listenerFailures = 0;
     this.deliver();
     this.takeListenerFailures();
   }
 
-  /** The reveal cursor: the number of steps shown. */
+  /** The objects the build list shows (helpers left out), in order. */
+  protected listedRecs(): ObjRec[] {
+    return this.list.filter((r) => !(this.styleOf(r.id) as EffectiveStyle).aux);
+  }
+
+  /** The reveal cursor: the number of steps shown, counted as `steps()` lists them. */
   get cursor(): number {
-    return this.stepCursor ?? this.list.length;
+    const c = this.stepCursor;
+    const rows = this.listedRecs();
+    return c === undefined ? rows.length : rows.filter((r) => r.order < c).length;
   }
 
   /* ------------------------------ saving ------------------------------ */

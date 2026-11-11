@@ -118,6 +118,8 @@ Legend: done, partial, missing, different. "Probe" means I ran it.
 
 ### A4. `stepTo(n)` and `Step.index` use different counts when a helper object exists
 
+**Status:** fixed in `graph/figure.ts`. `stepTo(n)` counts steps as `steps()` lists them (helpers do not use one up); the stored cursor is the list position of the first hidden object; the `cursor` getter now returns the number of listed steps shown.
+
 - Docs: kernel design 12.1 (`index` is the position in the list shown; helpers hidden unless asked), 12.2 (`stepTo(n)` reveals the first `n` steps).
 - Code: `steps()` numbers only the rows it emits (`graph/figure.ts:345`, `index: out.length`) but marks a row visible with `r.order < cursor` (`:353`), where `cursor` is a list position including `aux` objects (`:338`, `:380`).
 - Probe: objects `A`, `h` (aux), `B`, `C`; `stepTo(2)`: `steps()` shows `A` visible, `B` and `C` hidden. Two steps were asked for. With `helpers: true` the same call shows `A`, `h` visible (index 1 is `h`), so the count is right only for that listing.
