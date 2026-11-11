@@ -1,6 +1,6 @@
 # Probability: what the learner sees and does
 
-## 1. How GeoGebra presents it
+## 1. How the reference app presents it
 
 - A separate **Probability Calculator** window or perspective with two tabs, Distribution and Statistics.
 - Distribution tab: a drop-down of distributions, text boxes for each parameter, a plot of the density, buttons for density versus cumulative curve, four buttons for the probability mode (interval, left, right, two-tailed), text boxes for the lower and upper bounds, a result box, draggable markers on the x axis, a table of values for discrete distributions, and a style bar with a normal-curve overlay and export (picture, clipboard, or drag into the graphics view).
@@ -178,7 +178,7 @@ Colours are never the only cue: shaded regions carry labels (`P = 0.6827`), mark
 - Simulation: new draws appear with a 150 ms fade/scale-in; the tally bars rise with the same easing.
 - Reduce-motion: all of the above become instant or crossfades.
 
-## 11. What we change from GeoGebra
+## 11. What we change from the reference app
 
 - The calculator is built from figure objects and can be adopted by the main view.
 - Interval brackets (open and closed ends) for discrete distributions.

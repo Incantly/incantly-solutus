@@ -153,9 +153,9 @@ Colour-blind-safe palette (used when the theme asks): blue `#0072b2`, orange `#e
 - `Highlight(obj, s)` pulses a halo at 2 Hz for `s` seconds. Reduced motion: a steady halo.
 - Dragging has no easing: the point is at the pointer.
 
-## 8. How GeoGebra presents it, and what we change
+## 8. How the reference app presents it, and what we change
 
-| GeoGebra | Ours |
+| The reference app | Ours |
 |---|---|
 | Style bar at the top of the view with a handful of icons; most style options in a properties dialog with many tabs | One style bar that follows the selection, plus a short properties panel; every control is also a script line |
 | Algebra view shows definitions beside the canvas | Script/lines panel (shown on request) shows the lines written, including by tools and drags |

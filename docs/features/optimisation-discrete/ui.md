@@ -38,9 +38,9 @@ Toolbar group "Optimise": **Best** tool. Click a measure (a number object), then
 
 While the learner drags a slider the best value follows if the target depends on other things the slider also controls; the diamond may jump if a different optimum becomes better. The warm-start rule keeps it from jumping between near-equal optima. While the search is `refining`, the diamond is drawn hollow, and fills when settled.
 
-### 1.5 How GeoGebra presents it and what we change
+### 1.5 How the reference app presents it and what we change
 
-GeoGebra creates a copy of the free object (a slider or a point) placed at the optimum, which looks like a second slider or a second point. Ours is a marker on the same slider, with status; there is no extra draggable object to confuse.
+The reference app creates a copy of the free object (a slider or a point) placed at the optimum, which looks like a second slider or a second point. Ours is a marker on the same slider, with status; there is no extra draggable object to confuse.
 
 ## 2. Discrete maths
 
@@ -133,9 +133,9 @@ A small panel template, opened from the Insert menu, "Loan calculator": four lab
 - **Statistics keys** (Mean, SD) open a small list editor (comma-separated numbers) that inserts `Mean([2, 4, 4, 5])`.
 - Hidden commands: the key pad shows only the profile's commands. Typing a hidden command gives the inline message "not available in the calculator; the Graphing profile has it".
 
-### 4.2 How GeoGebra presents it and what we change
+### 4.2 How the reference app presents it and what we change
 
-GeoGebra's Scientific app hides everything except the nine commands via filters and a forced perspective. Ours does the same but as an explicit profile and with the saved lines being honest about angle mode; the history is a script, not a hidden list.
+The reference app's Scientific app hides everything except the nine commands via filters and a forced perspective. Ours does the same but as an explicit profile and with the saved lines being honest about angle mode; the history is a script, not a hidden list.
 
 ### 4.3 Accessibility
 

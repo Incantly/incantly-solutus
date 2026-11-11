@@ -17,7 +17,7 @@ Programming errors (wrong argument types to the API) throw `TypeError` in develo
 
 ## 1. API errors
 
-| Kind | When | GeoGebra | Ours |
+| Kind | When | The reference app | Ours |
 |---|---|---|---|
 | `unknown_name` | `get`, `set`, `remove` on a missing object | Returns empty or default values; no signal | Error data with closest names in `hint` |
 | `not_free` | `set` on a dependent object | Often overridden silently or ignored | Says which inputs it depends on, hint to set those or redefine with `run` |
@@ -59,7 +59,7 @@ Programming errors (wrong argument types to the API) throw `TypeError` in develo
 | `mode_unavailable` | The file's mode is not in this build | Loads in the nearest mode, `modeAdjusted` |
 | `migration_failed` | A migration step threw | File untouched; report the step |
 
-How GeoGebra handles them: a failed load usually shows a generic dialog, or loads as much as it can without telling you what was lost. Ours: the same partial-load policy (it is helpful), but the loss is itemised in `LoadResult.failed`.
+How the reference app handles them: a failed load usually shows a generic dialog, or loads as much as it can without telling you what was lost. Ours: the same partial-load policy (it is helpful), but the loss is itemised in `LoadResult.failed`.
 
 ## 4. Export errors
 

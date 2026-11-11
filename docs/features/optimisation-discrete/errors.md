@@ -10,7 +10,7 @@ Two classes, as in the kernel: **errors** (line rejected, figure unchanged) and 
 
 ### 1.1 Reused kinds
 
-| Kind | When | GeoGebra | Ours |
+| Kind | When | The reference app | Ours |
 |---|---|---|---|
 | `no_matching_form` | Argument count or types fit no form | "Illegal argument" with forms | `forms` lists all forms (4 plus `formsOmitted`); `hint` names the mismatching position |
 | `not_free` | `over` in `Maximize` / `Minimize` is a dependent object | The command runs and returns undefined | Error; `suggest` offers the free parents (as the kernel's drag plan finds them) |
@@ -19,7 +19,7 @@ Two classes, as in the kernel: **errors** (line rejected, figure unchanged) and 
 
 ### 1.2 New kinds
 
-| Kind | Code | Phase | When | GeoGebra | Ours |
+| Kind | Code | Phase | When | The reference app | Ours |
 |---|---|---|---|---|---|
 | `no_dependency` | O001 | plan | The target does not depend on any `over` object | The result is the starting value, silently | Error; `related` has both names; hint "Maximize needs a target that changes when `a` changes" |
 | `missing_range` | O002 | commit | A free Number in `over` has no slider range and no `from`/`to` | Result undefined | Error at commit; `suggest` has `a with min = 0, max = 10` and the `from=`/`to=` form |
@@ -43,7 +43,7 @@ New and reused reasons. Each carries `detail` (`code`, `text`, `suggest?`).
 
 ### 2.1 Optimisation
 
-| Reason | Detail | Meaning | GeoGebra | Ours |
+| Reason | Detail | Meaning | The reference app | Ours |
 |---|---|---|---|---|
 | `unbounded` | O101 | The range is missing at run time (the slider's range was removed) | Undefined | `detail.text` "a has no range"; `suggest` the range line |
 | `infeasible` | O102 | No sample satisfied `where` or all samples were undefined | n/a | `detail` says how many samples were tried and the nearest feasible one |
@@ -56,7 +56,7 @@ Notices: `multiple_optima` (O201), `at_boundary` (O202), `not_attained` (O203), 
 
 ### 2.2 Discrete
 
-| Reason | Detail | Meaning | GeoGebra | Ours |
+| Reason | Detail | Meaning | The reference app | Ours |
 |---|---|---|---|---|
 | `degenerate` | G101 | Too few distinct points, or all collinear | Undefined | `detail` says which; `suggest` offers `Segment(P, Q)` for a degenerate hull of two extremes |
 | `no_path` | G102 | `from` and `to` are in different components | Undefined | `detail` gives the two component sizes |
@@ -71,7 +71,7 @@ Notices: `duplicates_removed` (G201), `cocircular` (G202), `disconnected` (G203,
 
 ### 2.3 Financial
 
-| Reason | Detail | Meaning | GeoGebra | Ours |
+| Reason | Detail | Meaning | The reference app | Ours |
 |---|---|---|---|---|
 | `out_of_domain` | F101 | `rate <= -1`, `nper < 0` for `Payment`, negative `nper` where not allowed | Undefined | `detail.text` names the argument |
 | `no_root` | F102 | `Rate` has no solution (all cash flows the same sign, or target unreachable) | Undefined | `detail` says which: "all cash flows have the same sign" or "the payments cannot reach the target" |
@@ -84,7 +84,7 @@ Notices: `multiple_rates` (F201, other roots listed), `rate_looks_like_percent` 
 
 ### 2.4 Calculator group
 
-| Reason | Detail | Meaning | GeoGebra | Ours |
+| Reason | Detail | Meaning | The reference app | Ours |
 |---|---|---|---|---|
 | `out_of_domain` | S101 | `nCr`/`nPr`/`Binomial` with `k < 0`, `k > n`, or non-integers; `p` outside `[0, 1]`; `sd <= 0` | Undefined | `detail.text` names the argument and the allowed range |
 | `empty_list` | S102 | `Mean`, `SD`, `MAD` of `[]` | Undefined | Standard |
@@ -96,7 +96,7 @@ Notices: `multiple_rates` (F201, other roots listed), `rate_looks_like_percent` 
 
 ## 3. Numeric failures
 
-| Situation | GeoGebra | Ours |
+| Situation | The reference app | Ours |
 |---|---|---|
 | Optimiser meets NaN in the target | Search continues with NaN, may report an arbitrary point | NaN samples are skipped; share reported by `holes_in_target` |
 | Target is constant | Returns the start | Returns the first sample, notice `flat_target` |

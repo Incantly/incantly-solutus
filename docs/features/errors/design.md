@@ -19,7 +19,7 @@ Area owner: the app-wide error system. Every other area (language, kernel, geome
 
 ---
 
-## 2. What GeoGebra does (in plain words)
+## 2. What the reference app does (in plain words)
 
 - **Two worlds.** Text that fails to parse is one generic "please check your input"; the line and column the parser knew are discarded. Text that parses but is wrong raises a named error carrying a localisation key and a few string parts. There are about fifty named errors (undefined variable, illegal argument, wrong number of arguments, unknown command, circular definition, redefinition failed, fixed or dependent object may not change, name in use, unbalanced brackets, illegal addition/subtraction/multiplication/division/exponent/comparison/boolean/list operation, number expected, function expected, invalid equation, invalid function, incomplete equation, file open/save failed, delete failed, rename failed, plus symbolic-engine ones such as timeout).
 - **Command errors** add the command's accepted syntax lines to the message and open a help popup for that command. Argument errors name the offending argument as text; argument-count errors say how many were given.
@@ -166,6 +166,15 @@ function err(kind: ErrorKind, at: Span, params: Params, extra?: Partial<ErrorObj
 - Rules (area code) never format messages. They return `bad_argument` with params or return an undefined value with a reason.
 - **Internal faults** are caught at the transaction boundary (kernel), the tool boundary (teacher) and the frame boundary (view). They become `internal` errors, with a stack kept in the log, not in the object.
 
+### 5.0 Check-time hooks on commands
+
+A rule runs only after a line is accepted, so on its own a command can only make its object undefined. Two hooks let a command fail the line instead, while it is still being checked:
+
+- `CommandForm.check(c)` is called once the arguments fit that form. It is told, per argument, the type as text, the text as written, and the value when the argument is a literal (a number with or without a sign, a named constant, a boolean, a plain text, a point or list of literals). A value that is not a literal has no `literal`, so the hook leaves it to the rule: `Circle(O, -2)` is a `bad_argument` on the line, and `Circle(O, r)` with `r = -2` is an object that is undefined with `negative_radius`.
+- `CommandSpec.refuse(c)` is called when the arguments fit no form, with the same facts for the arguments as written. A refusal replaces the general `no_matching_form` or `arg_count` with a specific error: `PointOn(3)` is `not_a_path`. When it returns nothing, the general error stands. A real error inside an argument (an unknown name) still comes first.
+
+Both return a `Refusal`: a kind, one sentence, and optionally a hint, up to 3 suggested lines and the argument to point at. Both must be pure. The kind must be in the error table; a hook that names an unknown kind, or that throws, gives an `internal` error. A refused line changes nothing, like any other failing line.
+
 ### 5.1 Nested expressions
 
 When the fault is deep inside a larger line, the outermost span is the line, but `col/endCol/token` point at the innermost token that is wrong. `cause` is used only when the outer problem is a different kind (e.g. the line is `no_matching_form` because the third argument failed to type; `cause` is the `type_mismatch` inside it). One level only; deeper chains are flattened to the innermost.
@@ -218,7 +227,7 @@ Numbers live in rules, which return undefined with a reason; they do not raise e
 - **Tolerance:** equality tests in geometry (parallel, coincident, collinear) use a scale-relative tolerance (default `1e-9 * max(1, |scale|)`) set once in the figure; reasons `parallel`/`coincident`/`degenerate` use it.
 - **Determinism:** the same inputs give the same reason; no wall-clock timeouts decide numerical outcomes (a per-rule *work* budget, counted in iterations, replaces time where results must be reproducible; the wall-clock budget exists only as a fallback and yields `timeout`).
 
-GeoGebra: NaN flows as "undefined"; no reason; the symbolic engine has a timeout error.
+The reference app: NaN flows as "undefined"; no reason; the symbolic engine has a timeout error.
 
 ---
 
@@ -228,7 +237,7 @@ Limits are errors at line time (`limit`) and undefined at run time (`limit` reas
 
 ---
 
-## 10. Better than GeoGebra
+## 10. Better than the reference app
 
 1. Positions kept from lexer to the user (line, column, token, expected).
 2. A structured result in every channel, not a string.
@@ -259,17 +268,4 @@ Limits are errors at line time (`limit`) and undefined at run time (`limit` reas
 
 ## 12. Sources studied
 
-GeoGebra source (read-only, commit 3608374), under `source/shared/common/src/main/java/org/geogebra/common/`:
-
-- `main/MyError.java` (error type and the enum of named errors with default texts)
-- `main/MyParseError.java`
-- `main/error/ErrorHelper.java`, `main/error/ErrorHandler.java`, `main/error/ErrorLogger.java`, `main/error/AnalyticsErrorLogger.java`
-- `kernel/CircularDefinitionException.java`
-- `kernel/commands/CommandProcessor.java` (argument and argument-number errors)
-- `kernel/commands/AlgebraProcessor.java` (where errors are caught, redefinition and assignment errors, undefined variable collection)
-- `kernel/commands/CommandNotFoundError.java`, `CommandNotLoadedError.java`
-- `kernel/parser/GParser.java`, `kernel/parser/FunctionParser.java`
-- `kernel/Construction.java` (replace and the reasons it fails)
-- `kernel/geos/GeoElement.java` (protected/fixed checks)
-
-GeoGebra manual: https://geogebra.github.io/docs/manual/en/Redefine_Dialog/ and https://geogebra.github.io/docs/manual/en/Object_Properties/ (fixed objects, redefinition limits); command error behaviour was read from source rather than from a dedicated manual page (the manual has no error catalogue page).
+Removed before the repository was made public. The study notes above are in our own words.

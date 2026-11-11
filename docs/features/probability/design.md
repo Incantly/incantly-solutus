@@ -26,7 +26,7 @@ Command coverage mapped to ours:
 - Random points in a region (`RandomPointIn`) belong to geometry; it uses this area's seeded streams (section 6.5).
 - Chi-squared test and the other tests in the Probability group of the manual are in `statistics`.
 
-## 2. How GeoGebra does it (summary)
+## 2. How the reference app does it (summary)
 
 - **Distributions are commands, not values.** A distribution command takes the parameters and a point, plus a Boolean saying "density or cumulative", and returns a number or a function; a second command (named "Inverse…") gives the quantile. Each distribution therefore has up to four commands, and the manual lists them separately. Discrete ones have extra forms returning a list of all values.
 - **Maths come from a numerical library** (Apache Commons Math style distribution classes), with a few special cases (Zipf, Erlang, Triangular, Pascal counted differently from the textbook). Accuracy in the far tails and non-integer parameters follows the library.
@@ -404,7 +404,7 @@ The tab runs the tests and intervals from `statistics/design.md` section 8: mean
 - **Drawables.** `Region` for the continuous shade (clipped to the visible range, fill under the curve), `Chart` with highlight for the discrete shade. Function plotter for `Pdf(d)`/`Cdf(d)` as the core. No special drawable for the calculator.
 - **Determinism and film seeking.** Pure functions; seeking is free.
 
-## 9. Better than GeoGebra
+## 9. Better than the reference app
 
 - **One value, many views.** A distribution is a value; density, cdf, quantile, moments, sampling, shading, tables hang off it. No per-distribution command sets and no density-or-cumulative Boolean.
 - **Data-driven specs.** The calculator and the commands read the same table, so the view cannot disagree with the commands, and adding a distribution is one entry.
@@ -436,15 +436,4 @@ The tab runs the tests and intervals from `statistics/design.md` section 8: mean
 
 ## Sources studied
 
-GeoGebra source, read-only, commit 3608374, under `/Users/iteoluwakisibello/.kiro/crew/scratch/runtime-7c51f956/geogebra-src/source/shared/common/src/main/java/org/geogebra/common/`:
-
-- `kernel/statistics/` (distribution algorithms and their commands, inverse algorithms, random-number algorithms, the random generator use, binomial/Poisson/hypergeometric list algorithms, Zipf, triangular)
-- `gui/view/probcalculator/` (the calculator view, the manager that switches on distribution kind, discrete distribution helpers and tables, probability modes, style bar, statistics calculator and its processor)
-- `main/settings/` (probability calculator settings)
-- `kernel/algos/` (the random value algorithms)
-
-GeoGebra manual (read for command lists and behaviour, not copied):
-
-- https://geogebra.github.io/docs/manual/en/commands/Probability_Commands/
-- https://geogebra.github.io/docs/manual/en/commands/Statistics_Commands/
-- https://geogebra.github.io/docs/manual/en/Probability_Calculator/
+Removed before the repository was made public. The study notes above are in our own words.

@@ -255,9 +255,9 @@ Default object colours for new objects (by type, cycling, picked for contrast wi
 - Reduced motion: no growth or flash; changes are instant, new rows are announced.
 - Slider play: described in section 6.
 
-## 15. How GeoGebra presents it and what we change
+## 15. How the reference app presents it and what we change
 
-| Aspect | GeoGebra | Ours |
+| Aspect | The reference app | Ours |
 |---|---|---|
 | Default order | By object type with groups | Creation order, no groups; type and dependency one click away |
 | Rows | One or two rows, mode per object by special cases | Four clear modes, one rule, per-object override |

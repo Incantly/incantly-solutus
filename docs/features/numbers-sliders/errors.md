@@ -2,9 +2,9 @@
 
 Error format: core design section 9 (`ok`, `line`, `col`, `endCol`, `kind`, `token`, `message`, `expected`, `forms`, `hint`). Runtime problems are not errors; they make values undefined with a reason code. Everything here is data returned to the caller. Nothing opens a dialog.
 
-## 1. How GeoGebra handles these cases
+## 1. How the reference app handles these cases
 
-| Case | GeoGebra | Problem |
+| Case | The reference app | Problem |
 |---|---|---|
 | Unparsable input | One generic "check your input" message | Position and token lost |
 | Range min above max | The slider quietly becomes undefined/hidden or the ends are swapped by the dialog | No message at definition time |

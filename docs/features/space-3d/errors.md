@@ -12,7 +12,7 @@ A fourth, outside the language, is **host faults** of the renderer (no WebGL, co
 
 ---
 
-## 1. How GeoGebra handles 3D failures
+## 1. How the reference app handles 3D failures
 
 - **Wrong inputs** to a command give the same generic “illegal argument” or “wrong number of arguments” dialog with the command's syntax lines; there is no hint that the mistake was mixing flat and spatial inputs. Spatial and flat objects are simply different classes, so the command table says “no form” and nothing more.
 - **Maths that cannot work** (a plane through three points on a line, a pyramid whose apex lies in the base, a polygon that is not flat, parallel lines that never meet) sets the object to undefined with no reason. The object disappears. Users find out by seeing nothing.

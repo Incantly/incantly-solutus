@@ -1,0 +1,27 @@
+# Numbers, sliders and controls: tasks
+
+Pipeline: `docs/process/pipeline.md`. Branch: `feat/numbers`.
+
+- [ ] 1. Build the area from the design docs (builder, writes no tests)
+  - [ ] 1.1 What this area does (R1, `docs/features/numbers-sliders/design.md` section 1)
+  - [ ] 1.2 Our design (R2, `docs/features/numbers-sliders/design.md` section 3)
+  - [ ] 1.3 Edge cases (R3, `docs/features/numbers-sliders/design.md` section 4)
+  - [ ] 1.4 Notices (R4, `docs/features/numbers-sliders/design.md` section 5)
+  - [ ] 1.5 Performance targets (R5, `docs/features/numbers-sliders/design.md` section 7)
+  - [ ] 1.6 Test plan (what builders write first) (R6, `docs/features/numbers-sliders/design.md` section 8)
+  - [ ] 1.7 Changes to the core design (R7, `docs/features/numbers-sliders/design.md` section 9)
+  - [ ] 1.8 What this area does (R8, `docs/features/controls-scripting/design.md` section 1)
+  - [ ] 1.9 Our design (R9, `docs/features/controls-scripting/design.md` section 3)
+  - [ ] 1.10 Edge cases (R10, `docs/features/controls-scripting/design.md` section 5)
+  - [ ] 1.11 Numerical and performance notes (R11, `docs/features/controls-scripting/design.md` section 6)
+  - [ ] 1.12 Test plan (R12, `docs/features/controls-scripting/design.md` section 7)
+  - [ ] 1.13 Changes to the core design (R13, `docs/features/controls-scripting/design.md` section 8)
+  - [ ] 1.14 Open questions (R14, `docs/features/controls-scripting/design.md` section 9)
+- [ ] 2. Write blind spec tests from the docs and the public API only (tester)
+- [ ] 3. Fix code until the spec tests pass (fixer)
+- [ ] 4. Check state machines, security and speed; write findings (Opus checker, reports only)
+- [ ] 5. Fix the checker's findings in one round; mark anything left `to be implemented` (fixer)
+- [ ] 6. Add regression tests for each finding (tester)
+- [ ] 7. Review the code against the docs; fix the must-fix items in one round (spec reviewer, fixer)
+- [ ] 8. Build the area's studio screens (studio builder)
+- [ ] 9. Merge into `integration` once lint, typecheck and tests pass (integrator)

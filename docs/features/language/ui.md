@@ -16,7 +16,7 @@ A single-line text field (it grows to multiple lines when the learner pastes sev
 
 ### Why not a 2D maths editor
 
-GeoGebra's web app offers a structured editor. We start with text because: the teacher and the model write text, so the learner sees the same form; the saved script stays readable; and a text field works on every device and with screen readers. The preview strip typesets the line (superscripts, fractions) so the learner still sees the maths shape. A structured editor can be added later without changing the language, since it would emit the same text.
+The reference app's web app offers a structured editor. We start with text because: the teacher and the model write text, so the learner sees the same form; the saved script stays readable; and a text field works on every device and with screen readers. The preview strip typesets the line (superscripts, fractions) so the learner still sees the maths shape. A structured editor can be added later without changing the language, since it would emit the same text.
 
 ## 2. Syntax colouring
 
@@ -139,7 +139,7 @@ Typing helpers:
 - Pasting multiple lines: each non-blank line is applied in order as its own transaction, with a progress count. A failing line stops the run and leaves that line and the rest in the field with the error shown on the first; the learner fixes and presses Enter to continue. Lines already applied can be undone as one group (Ctrl+Z once).
 - Pasting text with smart quotes, `×`, `−`, and so on works through normalisation (section 3.2 of the design).
 - Pasting rich text pastes plain text only.
-- Pasting a GeoGebra-style line such as `A:(1,2)` or `Circle[A, 2]` gives a `syntax` error with a `fix` in our form when the rewrite is mechanical (colon label, square-bracket call). The rewrite is offered; it is never applied silently.
+- Pasting a the reference app-style line such as `A:(1,2)` or `Circle[A, 2]` gives a `syntax` error with a `fix` in our form when the rewrite is mechanical (colon label, square-bracket call). The rewrite is offered; it is never applied silently.
 
 ## 10. Keyboard summary
 
@@ -173,9 +173,9 @@ Typing helpers:
 - Completion rows are 44 px tall; swipe left on a row to see the full form.
 - Fix chips are large buttons under the field.
 
-## 13. What GeoGebra does and what we change
+## 13. What the reference app does and what we change
 
-| Aspect | GeoGebra | Ours |
+| Aspect | The reference app | Ours |
 |---|---|---|
 | Editor | A structure (2D maths) editor in the web app and a plain bar in the desktop program | Plain text everywhere with a typeset preview; same text as the script |
 | Error display | A dialog after Enter with a generic message | Inline underline, message, forms and fix buttons; no dialog |

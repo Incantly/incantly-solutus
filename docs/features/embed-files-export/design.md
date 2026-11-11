@@ -34,7 +34,7 @@ Status: draft. The embed API and file format are v1 (the product needs them to h
 | 12 | Sharing: copy link, read-only embed code, short link service | link and embed: 2; service: 3 |
 | 13 | Settings, languages and keyboard through options | see app-modes |
 
-## 2. How GeoGebra does it
+## 2. How the reference app does it
 
 From the source (the JavaScript-facing API class, event types, io package) and the manual:
 
@@ -305,7 +305,7 @@ Drag streams over frames are coalesced to at most one message per frame.
 
 The film host uses this same API in the same page. It sets the clock (`clock.seek`) from the film timeline, so the figure and film agree. A beat's lines are run by `runBatch`. `app.on('changed')` feeds the film's recorder when a learner explores.
 
-Note: GeoGebra has options to randomise or seed random numbers on load. We need neither: `rand(seed)` is a pure function of its seed (core design), so a file always loads to the same figure.
+Note: The reference app has options to randomise or seed random numbers on load. We need neither: `rand(seed)` is a pure function of its seed (core design), so a file always loads to the same figure.
 
 ## 4. Our design: the file format
 
@@ -477,7 +477,7 @@ interface ShareResult { readonly url: string; readonly html?: string; readonly b
 - File with the same name defined twice: the later line is a redefinition (normal rules); a type change is reported in `failed`.
 - Floating-point output in `toScript`: `-0` is written as `0`; `NaN` and infinities are never stored (the object is undefined; the script writes its definition, or if free, `undefined` is not a legal value so the line is omitted with a warning).
 
-## 8. Better than GeoGebra
+## 8. Better than the reference app
 
 - Typed, promise-or-sync API; errors as data; no silent failures.
 - One writer door (lines), one reader door (`get`/`list`), not hundreds of getters and setters.
@@ -514,17 +514,4 @@ interface ShareResult { readonly url: string; readonly html?: string; readonly b
 
 ## Sources studied
 
-GeoGebra source (read-only clone, commit 3608374), under `source/shared/common/src/main/java/org/geogebra/common/`:
-
-- `plugin/` (the JavaScript-facing API class, event types, event dispatcher, listener plumbing, script types)
-- `io/` (XML handlers, file container classes, layout)
-- `io/file/` (zip containers, base64 containers)
-- `export/` (text-format exporters), `export/pstricks/`
-- `main/settings/` (what is saved with a file)
-
-Manual:
-
-- https://geogebra.github.io/docs/reference/en/GeoGebra_Apps_API/
-- https://geogebra.github.io/docs/reference/en/GeoGebra_Apps_Embedding/
-- https://geogebra.github.io/docs/reference/en/GeoGebra_App_Parameters/
-- https://geogebra.github.io/docs/manual/en/Scripting/ (scripts attached to objects; why we keep code out of files)
+Removed before the repository was made public. The study notes above are in our own words.

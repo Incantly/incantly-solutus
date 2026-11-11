@@ -2,7 +2,7 @@
 
 Format: section 9 of the core design. Static errors stop the line. Runtime problems give undefined with a reason code and a detail. Shared kinds from `lists-matrices/errors.md` (`unknown_binder`, `bad_argument`, `unknown_field`, `limit`, warnings) apply here too.
 
-## 1. How GeoGebra handles failures here
+## 1. How the reference app handles failures here
 
 - Wrong arguments: "illegal argument" or "wrong number of arguments" plus the accepted forms. Good, kept.
 - A statistic of an empty list, a list with one value (sample deviation), or a list with a non-number: undefined, no reason.
@@ -29,7 +29,7 @@ Format: section 9 of the core design. Static errors stop the line. Runtime probl
 
 ## 3. Runtime undefined reasons
 
-| Reason | Commands | Detail example | GeoGebra | Recovery |
+| Reason | Commands | Detail example | The reference app | Recovery |
 |---|---|---|---|---|
 | `empty_list` | all statistics | "xs has no values" | undefined | Fill the list; check upstream `Filter` |
 | `too_few_values` | `SampleVariance` (needs 2), `Correlation` (2), `FitLine` (2), `FitPoly(d)` (d+1 distinct x), `FitSin` (4), `TTest` (2), `CorrTest` (3) | "FitPoly degree 3 needs 4 distinct x values, got 3" | undefined | Add points or lower the degree |
@@ -151,7 +151,7 @@ A non-convergent fit and the follow-up:
 }
 ```
 
-## 6. Better than GeoGebra
+## 6. Better than the reference app
 
 - Reasons on every undefined; `too_few_values` says how many are needed.
 - Closed text options with the allowed list; tail signs accepted as aliases.

@@ -19,7 +19,7 @@ No error opens a dialog. Errors are shown where the learner is looking, in plain
 - The error clears as soon as the text changes; the preview ghost reappears when the line is valid.
 - Live check runs through `dryRun` after 150 ms of typing quiet. Errors that only occur when the line ends (`unbalanced` at end of line) are shown softly (grey) until Enter or blur.
 
-GeoGebra: a dialog or message box saying "Please check your input", with the text and no position. Command errors open a help panel.
+The reference app: a dialog or message box saying "Please check your input", with the text and no position. Command errors open a help panel.
 
 ## 2. Property and rule fields
 
