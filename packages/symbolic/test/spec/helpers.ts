@@ -98,6 +98,28 @@ export function val(op: OpName, args: readonly SymArg[], opts?: RunOptions, ctx?
   return cell.value;
 }
 
+/** A short readable form of a value, safe for bigint contents. */
+export function showArg(v: SymArg): string {
+  switch (v.k) {
+    case 'expr':
+      return toText(v.e);
+    case 'cond':
+      return condText(v.c);
+    case 'list':
+      return `[${v.items.map(showArg).join(', ')}]`;
+    case 'num':
+    case 'int':
+    case 'bool':
+      return String(v.v);
+    case 'text':
+      return JSON.stringify(v.v);
+    case 'sym':
+      return v.name;
+    default:
+      return v.k;
+  }
+}
+
 /** Run an op expected to be undefined: returns reason + detail. */
 export function undef(
   op: OpName,
@@ -106,7 +128,7 @@ export function undef(
   ctx?: RunContext,
 ): { reason: string; detail: UndefinedDetail | undefined } {
   const { cell } = ran(op, args, opts, ctx);
-  if (cell.defined) throw new Error(`run(${op}) unexpectedly defined: ${JSON.stringify(cell.value)}`);
+  if (cell.defined) throw new Error(`run(${op}) unexpectedly defined: ${showArg(cell.value)}`);
   return { reason: cell.reason, detail: cell.detail };
 }
 
