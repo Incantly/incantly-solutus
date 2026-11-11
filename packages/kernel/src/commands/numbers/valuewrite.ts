@@ -16,7 +16,7 @@ import { displayUnitOf } from './props';
 import { formatDisplayNumber } from './format';
 import { numbersError, numbersNotice } from './errors';
 import { emitControlEvent } from './handlers';
-import { captureResetInitial } from './run';
+import { captureResetInitial, runChangeHandlers } from './run';
 
 export interface WriteOk {
   readonly notices: readonly Notice[];
@@ -37,10 +37,24 @@ function notFreeError(figure: Figure, id: ObjId): ErrorObject {
   });
 }
 
-function emitChange(figure: Figure, id: ObjId, by: 'learner' | 'host'): void {
+/**
+ * A write happened: tell the host listeners. A learner write is a learner gesture, so it also raises `change`
+ * for the handlers (controls-scripting 3.3): the handler of the object, then `on figure change`. Writes by the
+ * host and writes a handler makes raise no handler, which is why handlers cannot loop.
+ */
+export function emitChange(figure: Figure, id: ObjId, by: 'learner' | 'host'): void {
   const view = figure.get(id);
   if (!view) return;
-  emitControlEvent(figure, { event: 'change', name: view.name, type: view.type, value: valueText(figure.value(id)), by });
+  const raw = figure.value(id);
+  if (view.type === 'Choice') {
+    const state = choiceStateOf(figure, id);
+    const chosen = state ? (typeof state.value === 'string' ? state.value : valueText(state.value)) : valueText(raw);
+    emitControlEvent(figure, { event: 'change', name: view.name, type: view.type, value: chosen, ...(state ? { index: state.index } : {}), by });
+    if (by === 'learner') runChangeHandlers(figure, view.name, state?.value);
+    return;
+  }
+  emitControlEvent(figure, { event: 'change', name: view.name, type: view.type, value: valueText(raw), by });
+  if (by === 'learner') runChangeHandlers(figure, view.name, raw);
 }
 
 /**

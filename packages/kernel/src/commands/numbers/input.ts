@@ -21,7 +21,7 @@ import type { Expr } from '../../language/ast';
 import { expansionProbeName, emitControlEvent } from './handlers';
 import { formatDisplayNumber } from './format';
 import { resolveDisplay } from './format';
-import { writeNumberValue, writeSimpleValue } from './valuewrite';
+import { emitChange, writeNumberValue, writeSimpleValue } from './valuewrite';
 
 /* ------------------------------ typing state ------------------------------ */
 
@@ -492,6 +492,7 @@ export function commitInputText(
     }
     setState(figure, view.id, { text: targetTextOf(figure, target), valid: true, error: null, notice: null });
     emitControlEvent(figure, { event: 'change', name, type: 'Input', value: text, by });
+    emitChange(figure, target, by);
     return { ok: true, value: { summary: `input for ${targetView.name}, shows ${text}`, notices: [] }, notices: [] };
   }
   // Number, Bool, Point, Vector: re-validate to get the checked tree, then write once.

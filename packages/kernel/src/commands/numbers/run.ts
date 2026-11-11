@@ -166,6 +166,8 @@ function isConstNode(t: TNode): boolean {
 }
 
 interface Expansion {
+  /** The object the handler is on (named in a limit error). */
+  readonly target: string;
   lines: ExpandedLine[];
   results: StepResult[];
   overlay: Map<ObjId, unknown>;
@@ -452,18 +454,19 @@ function abortSteps(figure: Figure, ex: Expansion): void {
   if (ex.aborted) return;
   const discarded = ex.discarded.slice(0, 10);
   if (ex.discarded.length > 10) discarded.push('...');
-  ex.aborted = numbersError('handler_limit', { line: 0, col: 1, endCol: 1 }, { name: '', limit: NUMBERS_LIMITS.stepsPerRun, actual: ex.stepsUsed, what: 'steps' }, {
-    token: '',
+  ex.aborted = numbersError('handler_limit', { line: 0, col: 1, endCol: 1 }, { name: ex.target, limit: NUMBERS_LIMITS.stepsPerRun, actual: ex.stepsUsed, what: 'steps', discarded }, {
+    token: ex.target,
     hint: 'Reduce the loop range, or split the work across buttons.',
   });
-  void discarded;
 }
 
 function abortDepth(figure: Figure, ex: Expansion): void {
   void figure;
   if (ex.aborted) return;
-  ex.aborted = numbersError('handler_limit', { line: 0, col: 1, endCol: 1 }, { name: '', limit: NUMBERS_LIMITS.clickDepth, actual: NUMBERS_LIMITS.clickDepth + 1, what: 'Click nesting' }, {
-    token: '',
+  const discarded = ex.discarded.slice(0, 10);
+  if (ex.discarded.length > 10) discarded.push('...');
+  ex.aborted = numbersError('handler_limit', { line: 0, col: 1, endCol: 1 }, { name: ex.target, limit: NUMBERS_LIMITS.clickDepth, actual: NUMBERS_LIMITS.clickDepth + 1, what: 'Click nesting', discarded }, {
+    token: ex.target,
     hint: 'Remove a Click: handlers press each other at most 8 deep.',
   });
 }
@@ -498,7 +501,7 @@ export function runHandler(
   ensureResetTracking(figure);
   const selfName = target === 'figure' ? (payload.changedName as string) : target;
   const bindings = runtimeBindings(figure, target, event, payload, selfName);
-  const ex: Expansion = { lines: [], results: [], overlay: new Map(), stepsUsed: 0, discarded: [] };
+  const ex: Expansion = { target, lines: [], results: [], overlay: new Map(), stepsUsed: 0, discarded: [] };
   expandSteps(figure, stored.steps, bindings, selfName, 0, ex);
   if (ex.aborted) {
     const run: HandlerRun = { handler: { target, event }, trigger, ok: false, stepsUsed: ex.stepsUsed, results: ex.results, error: ex.aborted, dropped: 0 };
@@ -592,6 +595,15 @@ export function runHandler(
   return run;
 }
 
+/**
+ * A learner changed `name`: run the `change` handler of the object (with its new value), then `on figure change`
+ * (with the object as `self`). The writes these runs make raise no further handler.
+ */
+export function runChangeHandlers(figure: Figure, name: string, value: unknown): void {
+  runHandler(figure, name, 'change', { value, by: 'learner' }, 'learner');
+  runHandler(figure, 'figure', 'change', { changedName: name, by: 'learner' }, 'learner');
+}
+
 /** Run `on figure load` once, unless the host passes autorun: false. */
 export function runLoadHandlers(figure: Figure, opts: { autorun?: boolean; by?: 'learner' | 'host' } = {}): HandlerRun | undefined {
   if (opts.autorun === false) return undefined;
@@ -600,7 +612,7 @@ export function runLoadHandlers(figure: Figure, opts: { autorun?: boolean; by?: 
 }
 
 /** Press a button (or clickable object) by code. */
-export function clickButton(figure: Figure, name: string, opts: { by?: 'learner' | 'host' } = {}): Result<HandlerRun> {
+export function clickButton(figure: Figure, name: string, opts: { by?: 'learner' | 'host'; trigger?: RunTrigger } = {}): Result<HandlerRun> {
   const view = figure.get(name);
   if (!view) {
     return numbersError('unknown_name', { line: 0, col: 1, endCol: 1 }, { name }, { token: name, hint: 'Create the button first.' });
@@ -612,5 +624,8 @@ export function clickButton(figure: Figure, name: string, opts: { by?: 'learner'
       hint: `Make it clickable first: ${name} with clickable = true. Or press a button.`,
     });
   }
-  return { ok: true, value: runHandler(figure, name, 'click', { by: opts.by ?? 'host' }, 'click_call'), notices: [] };
+  const by = opts.by ?? 'host';
+  // A press with no handler still tells the host (3.6); with a handler the run emits the event itself.
+  if (!getStoredHandler(figure, name, 'click')) emitControlEvent(figure, { event: 'click', name, type: view.type, by });
+  return { ok: true, value: runHandler(figure, name, 'click', { by }, opts.trigger ?? by), notices: [] };
 }

@@ -471,7 +471,7 @@ function clickRule(args: readonly BoundArg[]): unknown {
       if (targetId === undefined || name === undefined) {
         return failed(figure, numbersError('bad_argument', { line: 0, col: 1, endCol: 1 }, { command: 'Click', why: 'the target must be a button' }, { token: 'Click' }), 'Click needs a button');
       }
-      const r = runClickButton(figure, name, { by: 'host' });
+      const r = runClickButton(figure, name, { by: 'host', trigger: 'click_call' });
       if (!r.ok) return failed(figure, r, `Click(${name}) failed`);
       const run = r.value;
       if (!run.ok) return failed(figure, run.error ?? numbersError('handler_limit', { line: 0, col: 1, endCol: 1 }, { name, limit: 0, actual: 0, what: 'steps' }, { token: name }), `Click(${name}) was aborted`);
@@ -749,7 +749,8 @@ export function summarizeControl(figure: Figure, name: string): string | undefin
     const override = ext['captions'];
     const captions = Array.isArray(override) && override.every((x) => typeof x === 'string') ? (override as readonly string[]) : state.options.map(defaultCaption);
     const current = captions[state.index - 1] ?? '';
-    return `${current} (${state.index} of ${state.count}: ${captions.join(', ')})`;
+    // agent.md 3: the shown caption, then the position and the option values
+    return `${current} (${state.index} of ${state.count}: ${state.options.map(defaultCaption).join(', ')})`;
   }
   if (view.type === 'Input') {
     const target = figure.value(view.id) as { target?: number } | undefined;
