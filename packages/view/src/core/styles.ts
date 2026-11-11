@@ -364,6 +364,8 @@ export interface TypeDefaults {
   readonly color: Rgba;
   readonly width: number;
   readonly fill: number;
+  /** Fill colour when the author sets no colour (ui.md 6: polygon fill differs from its stroke). */
+  readonly fillColor: Rgba;
   readonly label: LabelMode;
   readonly pointSize: number;
 }
@@ -371,21 +373,33 @@ export interface TypeDefaults {
 /** Per-type defaults (design 9.9, ui.md 6); free points differ by colour. */
 export function defaultsForKind(kind: PaintKind, free: boolean): TypeDefaults {
   const stroke = LIGHT_THEME.stroke;
+  const base = { width: 2, fill: 0, label: 'none' as LabelMode, pointSize: 4 };
   switch (kind) {
-    case 'point':
-      return { color: free ? LIGHT_THEME.freePoint : LIGHT_THEME.dependentPoint, width: 2, fill: 0, label: 'name', pointSize: 4 };
+    case 'point': {
+      const color = free ? LIGHT_THEME.freePoint : LIGHT_THEME.dependentPoint;
+      return { ...base, color, fillColor: color, label: 'name' };
+    }
     case 'curve':
-      return { color: LIGHT_THEME.function, width: 2.5, fill: 0, label: 'none', pointSize: 4 };
+      return { ...base, color: LIGHT_THEME.function, fillColor: LIGHT_THEME.function, width: 2.5 };
     case 'region':
-      return { color: LIGHT_THEME.freePoint, width: 2, fill: 0.15, label: 'none', pointSize: 4 };
-    case 'angle':
-      return { color: hx('#2e8b57'), width: 2, fill: 0.25, label: 'name', pointSize: 4 };
-    case 'text':
-      return { color: stroke, width: 2, fill: 0, label: 'none', pointSize: 4 };
-    case 'particles':
-      return { color: hx('#111111'), width: 2, fill: 0, label: 'none', pointSize: 4 };
+      // ui.md 6 polygon row: stroke #222831, fill #1a5fd1 at 0.15.
+      return { ...base, color: stroke, fillColor: LIGHT_THEME.freePoint, fill: 0.15 };
+    case 'angle': {
+      const color = hx('#2e8b57');
+      return { ...base, color, fillColor: color, fill: 0.25, label: 'name' };
+    }
+    case 'particles': {
+      const color = hx('#111111');
+      return { ...base, color, fillColor: color };
+    }
+    case 'segment':
+    case 'vector':
+    case 'line':
+    case 'arc':
+      // Segments, rays and lines share the line row of design 9.7: label `name`.
+      return { ...base, color: stroke, fillColor: stroke, label: 'name' };
     default:
-      return { color: stroke, width: 2, fill: 0, label: kind === 'vector' || kind === 'line' || kind === 'arc' ? 'name' : 'none', pointSize: 4 };
+      return { ...base, color: stroke, fillColor: stroke };
   }
 }
 
@@ -408,6 +422,13 @@ export function propsForKind(kind: PaintKind): readonly string[] {
   }
 }
 
+/** Properties that only some drawable kinds use; elsewhere they are `property_not_for_type` (errors.md 2). */
+const KIND_ONLY_PROPS = ['pointStyle', 'pointSize'] as const;
+const KIND_ONLY_HINT: Readonly<Record<string, string>> = {
+  pointStyle: 'pointStyle is for points. Use width for lines and curves.',
+  pointSize: 'pointSize is for points. Use width for lines and curves.',
+};
+
 function numIn(v: unknown, lo: number, hi: number): v is number {
   return typeof v === 'number' && Number.isFinite(v) && v >= lo && v <= hi;
 }
@@ -417,6 +438,9 @@ function resolveNum(raw: StyleNumber | undefined, fallback: number, evalRef: Sty
   if (typeof raw === 'number') return raw;
   const v = evalRef(raw.expr);
   if (typeof v === 'number' && Number.isFinite(v)) return v;
+  // A reference with no value right now is a runtime condition, not an error: the default stays.
+  // A value of the wrong type is a type mismatch and fails the line.
+  if (v === undefined) return fallback;
   return { error: `the formula {${raw.expr}} has no number value right now` };
 }
 
@@ -433,6 +457,8 @@ function resolveColor(raw: StyleColorValue | undefined, fallback: Rgba, evalRef:
     const c = parseColor(v);
     return c.ok ? c.value : { error: `the formula {${raw.expr}} is not a colour right now` };
   }
+  // No value right now: the default stays. Any other type is a mismatch.
+  if (v === undefined) return fallback;
   return { error: `the formula {${raw.expr}} has no colour value right now` };
 }
 
@@ -470,6 +496,17 @@ export function resolveStyle(
       ...(hint === undefined ? {} : { hint }),
     });
 
+  for (const key of KIND_ONLY_PROPS) {
+    if (authored[key] !== undefined && !propsForKind(kind).includes(key)) {
+      return viewError({
+        kind: 'bad_property_value',
+        messageKey: 'view.property_not_for_type',
+        params: { key, objectType: kind },
+        token: key,
+        hint: KIND_ONLY_HINT[key] ?? `${key} does not apply to ${kind}.`,
+      });
+    }
+  }
   const color = resolveColor(authored.color, def.color, evalRef);
   if (isErrColor(color)) return fail('color', 'a colour', authored.color === undefined ? '' : String(authored.color));
   const widthR = resolveNum(authored.width, def.width, evalRef);
@@ -481,7 +518,7 @@ export function resolveStyle(
   const fillR = resolveNum(authored.fill, def.fill, evalRef);
   if (isErrNum(fillR)) return fail('fill', 'a number', fillR.error);
   if (!numIn(fillR, 0, 1)) return fail('fill', 'a number from 0 to 1', String(fillR));
-  const fillColor = resolveColor(authored.fillColor, color, evalRef);
+  const fillColor = resolveColor(authored.fillColor, authored.color === undefined ? def.fillColor : color, evalRef);
   if (isErrColor(fillColor)) return fail('fillColor', 'a colour', String(authored.fillColor));
   const pointSizeR = resolveNum(authored.pointSize, def.pointSize, evalRef);
   if (isErrNum(pointSizeR)) return fail('pointSize', 'a number', pointSizeR.error);
@@ -512,7 +549,7 @@ export function resolveStyle(
   const dashName = typeof dashRaw === 'string' ? dashRaw : Array.isArray(dashRaw) ? 'custom' : 'custom';
   if (typeof dashRaw === 'object' && !Array.isArray(dashRaw) && !('on' in dashRaw)) {
     const v = evalRef((dashRaw as StyleRef).expr);
-    if (typeof v !== 'string') return fail('dash', 'a dash name', String(v));
+    if (v !== undefined && typeof v !== 'string') return fail('dash', 'a dash name', String(v));
   }
   const dash: readonly number[] = isStyleRef(dashRaw)
     ? dashToArray('solid', widthR)

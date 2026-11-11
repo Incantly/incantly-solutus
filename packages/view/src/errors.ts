@@ -30,6 +30,7 @@ export const VIEW_MESSAGE_TEMPLATES: Readonly<Record<string, string>> = {
   'view.limit': 'That would exceed the limit of {max} {what}.',
   'view.bad_directive': '{directive} needs {need}.',
   'view.bad_property_value': '{key} must be {allowed}.',
+  'view.property_not_for_type': '{key} does not apply to a {objectType}.',
   'view.unknown_property': '{key} is not a property.',
   'view.bad_argument': '{what}: {why}.',
   'view.internal': 'Something went wrong inside {where}; nothing was changed.',
