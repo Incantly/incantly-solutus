@@ -41,12 +41,12 @@ A grid of cells next to the figure. Each cell holds one value or formula. A cell
 | 15 | Locked cells and input cells (teacher authoring) | 2, ours |
 | 16 | Undo and redo per fill, paste, import | 2 |
 
-## 2. How GeoGebra does it
+## 2. How the reference app does it
 
 In plain words, from the source (`gui/view/spreadsheet`, `main/settings`) and the manual:
 
 - **A cell is an ordinary object whose name is its address.** Typing in cell B2 creates the object `B2`. There is no separate cell store: the table asks the construction for the object with that name. That keeps one model, and the figure and the sheet agree for free.
-- **Copy is textual rewriting.** To copy `B1` to `B2`, GeoGebra takes the definition of the source, finds every spreadsheet-style name in its expression tree, shifts the relative parts by the offset, and defines the result in the target. A `$` before the column or row pins that part. Targets that fall off the grid are not shifted.
+- **Copy is textual rewriting.** To copy `B1` to `B2`, the reference app takes the definition of the source, finds every spreadsheet-style name in its expression tree, shifts the relative parts by the offset, and defines the result in the target. A `$` before the column or row pins that part. Targets that fall off the grid are not shifted.
 - **Fill by drag** looks at the source selection. If the selected cells are numbers, it works out a linear step and continues the series in the dragged direction (there are four direction variants of the same procedure: up, down, left, right). Otherwise it repeats the source cells, shifting references.
 - **Tools** (create list, matrix, and so on) read the selected rectangle and issue ordinary commands (a list of cells, a matrix of cells), so results stay live.
 - **Commands** are thin: one gives a cell by numbers, one gives a range, one gives the column or row number or letters of a cell, three copy lists into cells.
@@ -306,7 +306,7 @@ interface SheetSettings {
   showScrollbars: { v: boolean; h: boolean };  // true, true
   allowTooltips: boolean;       // true
   requireEquals: boolean;       // false: typing `3` makes 3; true: only `=3` is accepted as content
-  autocomplete: boolean;        // true (ours; GeoGebra's default is off)
+  autocomplete: boolean;        // true (ours; the reference app's default is off)
   size: SheetSpec;              // 26 x 100
   columnWidth: number; rowHeight: number;   // 70, 25
   decimalSeparator: '.' | ',';
@@ -346,7 +346,7 @@ A teacher can mark cells `locked` (the learner cannot edit) or `input` (highligh
 - Very long text in a cell: the cell shows the first line with an ellipsis; the formula bar shows it all.
 - Large numbers: displayed with the cell's decimals; scientific notation beyond 1e15 or below 1e-6.
 
-## 6. Better than GeoGebra
+## 6. Better than the reference app
 
 - **All-or-nothing batches** with one undo for fills, pastes and imports, and an update pass once per batch.
 - **Tree rewriting** instead of text rewriting, so names that look like cells never confuse it, and errors name the exact reference.
@@ -380,14 +380,4 @@ To avoid rework: batches (point 4), the `RuleInput` union (point 3), and the `ce
 
 ## Sources studied
 
-GeoGebra source (read-only clone at commit 3608374), under `source/shared/common/src/main/java/org/geogebra/common/`:
-
-- `gui/view/spreadsheet/` (table model, relative copy, copy and paste, cell range handling, tool processing, data import)
-- `main/settings/SpreadsheetSettings.java`
-- `main/settings/config/` (sheet availability per app)
-- `kernel/commands/CommandsConstants.java` (spreadsheet command group)
-
-Manual:
-
-- https://geogebra.github.io/docs/manual/en/Spreadsheet_View/
-- https://geogebra.github.io/docs/manual/en/commands/Spreadsheet_Commands/
+Removed before the repository was made public. The study notes above are in our own words.

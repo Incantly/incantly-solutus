@@ -20,7 +20,7 @@ A **tool** lets a learner build an object by clicking instead of typing. Every t
 
 The manual's tool pages for the 2D Graphics view (about 110 pages including 3D and variants) reduce to **75 distinct 2D tools** here (about 95 behaviours once multi-variant tools are counted), in 12 groups. Section 6 lists each with its click sequence and what it writes. A few are deferred and are marked with the reason.
 
-## 2. How GeoGebra does it (plain words)
+## 2. How the reference app does it (plain words)
 
 - A toolbar of about 110 tools in toolboxes. Each tool is a number (a mode). A single controller of about 12,600 lines switches on the mode for every pointer event. Each tool has its own handler method plus hand-written preview code.
 - A tool collects **picks**: it asks the hit list for the objects of the right types (points, lines, circles, ...), or creates a point where the user clicks in empty space. When it has enough picks it calls the matching command, so the tool is the command with a mouse.
@@ -204,7 +204,7 @@ For an **ObjectSlot**:
 1. Take the first candidate whose object type is in `accept` and whose part is allowed. Exclude objects already picked when `distinct`.
 2. If there is none, refuse with `no_target` (hint: "Select a line, segment, ray, or vector.").
 
-For a **PointSlot** (what GeoGebra calls auto point creation, but explicit and bounded by `create`):
+For a **PointSlot** (what the reference app calls auto point creation, but explicit and bounded by `create`):
 
 1. `existing`: an existing Point within slack (not an object on the excluded list). Take it.
 2. `intersection`: two or more path-like candidates within slack of the click that have an intersection near `at` (within 12 px): take the intersection, choosing the index whose point is nearest to `at`. Emit as an `Intersect` point.
@@ -463,7 +463,7 @@ Mouse: hover previews. Touch: no hover; the preview appears at the finger while 
 | Tool switch | under 1 frame |
 | Build-time check of all specs against the command table | under 100 ms, fails the build on a mismatch |
 
-## 9. Better than GeoGebra
+## 9. Better than the reference app
 
 - **Tools as data**: listable, testable, translatable, and printable for the model (it learns which constructions a learner can do and speaks about them with the same words).
 - **No orphan objects**: nothing exists until the last click.
@@ -495,19 +495,4 @@ Mouse: hover previews. Touch: no hover; the preview appears at the finger while 
 
 ## 11. Sources studied
 
-GeoGebra source (read-only, commit 3608374), under `source/shared/common/src/main/java/org/geogebra/common/`:
-
-- `euclidian/EuclidianConstants.java` (list of tool modes)
-- `euclidian/EuclidianController.java` (structure and size; how modes read picks)
-- `euclidian/modes/`
-- `euclidian/Hits.java`, `euclidian/HitDetector.java`
-- `euclidian/EuclidianView.java` (selection and hit loops)
-- `euclidian/PathTracker.java`
-- `euclidian/SnapController.java`
-
-Manual pages (https://geogebra.github.io/docs/manual/en/):
-
-- `Tools/`, `Tools_Menu/`
-- `tools/Angle/`, `tools/Tangents/`, `tools/Attach_Detach_Point/`
-- `Graphics_View/`
-- Tool groups checked from the manual's tool listing and from the mode list above: Movement, Point, Line, Special Line, Polygon, Circle and Arc, Conic, Measurement, Transformation, Special Object, Action Object, General.
+Removed before the repository was made public. The study notes above are in our own words.

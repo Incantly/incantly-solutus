@@ -76,7 +76,7 @@ Status is one of Done, Partial, Different, Missing. "Different" means the code d
 | 6 Command-specific errors | Done | Only type, count and name errors are raised; value-dependent failures are undefined |
 | 7 Limits | Partial | Raised and probed: line 2,000, tokens 800, depth 64/65, range 100,000, objects 5,000 (via `FigureView.size`), parameters 4, command arguments 16/17, ticks 3, rate order 2. Not enforceable: total list elements 1,000,000 (B3). Implemented but unreachable: nodes 2,000 (`check.ts:308`), list literal 10,000 (`check.ts:770`), text 10,000 at line time (`check.ts:490`) because the token and line caps trigger first (C11) |
 | 8 Runtime and numeric failures | Done | Every row of the table probed (`sqrt(-1)`, `1/0`, `10^400`, `fact(200)`, `inf - inf`, `0 * inf`, `L[0]`, `max([])`, `fact(2.5)`, cascade) |
-| 9 GeoGebra comparison | Done | Informational |
+| 9 the reference app comparison | Done | Informational |
 
 Shared error list (`docs/features/errors/design.md` section 4), each kind checked for "raisable":
 

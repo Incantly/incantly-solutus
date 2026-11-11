@@ -1,13 +1,13 @@
-# GeoGebra study: how it works, and what it means for our engine
+# The reference app study: how it works, and what it means for our engine
 
-Studied 2026-11-10 from GeoGebra's public website, manual and source (`github.com/geogebra/geogebra`, commit 3608374). This is a study to understand, not to copy: no GeoGebra code, text or assets go into Incantly. Everything below is in our own words.
+Studied 2026-11-10 from the reference app's public website, manual and source (a reference source file, commit 3608374). This is a study to understand, not to copy: no the reference app's code, text or assets go into Incantly. Everything below is in our own words.
 
 ## Licence: why we only learn from it
 
-- Source code: EUPL 1.2. Apps, installers and web services: non-commercial only, attribution required. Docs, language files, icons: CC BY-NC-SA 4.0. Commercial use needs a paid agreement with GeoGebra GmbH. Their CAS (Giac) is GPL3.
-- So we do not embed GeoGebra, ship its assets, or port its code. We design our own engine from the ideas below.
+- Source code: EUPL 1.2. Apps, installers and web services: non-commercial only, attribution required. Docs, language files, icons: CC BY-NC-SA 4.0. Commercial use needs a paid agreement with the reference app GmbH. Their CAS (Giac) is GPL3.
+- So we do not embed the reference app, ship its assets, or port its code. We design our own engine from the ideas below.
 
-## What GeoGebra offers
+## What the reference app offers
 
 - **Apps:** Graphing, Geometry, 3D, CAS, Scientific, Probability, Notes, and Classic (the authoring app with every view). One codebase; each app is a configuration that switches tools, commands and defaults.
 - **Objects:** points, vectors, lines, segments, rays, polygons, circles and conics, arcs, functions, parametric and implicit curves, inequalities, numbers and angles (sliders), booleans (checkboxes), texts with LaTeX, lists, matrices, images, buttons and input boxes, and 3D solids and surfaces.
@@ -68,13 +68,13 @@ Studied 2026-11-10 from GeoGebra's public website, manual and source (`github.co
 4. **Errors a model can fix.** Every error says the line, column, offending token, what was expected, and the command's accepted forms.
 5. **Commands declared as data.** Each command is a name plus a list of signatures (argument types to handler). That gives type-checking, error messages, documentation and the catalogue we hand the model, all from one table.
 6. **Time is a first-class variable.** A global clock `t` that formulas can use, instead of sliders stepping on a timer. Trace and locus are sampled data, computed by evaluating the graph along a parameter.
-7. **Physics where GeoGebra stops.** Formulas of `t` and an ODE solver cover kinematics, pendulums, waves and orbits. Collisions, contacts and joints come from our own physics kit, exposed as commands in the same language.
+7. **Physics where the reference app stops.** Formulas of `t` and an ODE solver cover kinematics, pendulums, waves and orbits. Collisions, contacts and joints come from our own physics kit, exposed as commands in the same language.
 8. **Drawing.** Per-object cached drawables, one repaint per frame, one graphics interface for canvas and SVG, and an adaptive function plotter with jump detection from day one.
 9. **Leave out at first:** a full CAS, 3D, spreadsheet, exam mode, localised command names and the 500-command breadth. Start with the commands lessons need and grow from real use.
 
 ## Where this stands (handoff)
 
 - **Branches:** `next` is the fresh start (this study and a README only). `legacy/v1` holds the previous Incantly implementation; copy pieces from it when useful (for example `packages/core/src/kits/physics2d`, the live voice code in `packages/core/src/film/live-*.ts` and `packages/generation/src/client/live-gemini.ts`). `main` stays as it is until new work lands on `next`, then `next` becomes main with the product owner's go-ahead.
-- **Reference source:** read GeoGebra at https://github.com/geogebra/geogebra (a shallow clone is enough: `git clone --depth 1`). Keep any clone outside this repository, and never paste its code into ours.
+- **Reference source:** read the reference app at the reference app's manual (a shallow clone is enough: `git clone --depth 1`). Keep any clone outside this repository, and never paste its code into ours.
 - **Why the rewrite:** the live teacher should talk at once and build the figure while it talks. Scenes written as JavaScript programs were too slow and fragile for that; short formula commands, streamed one line at a time and validated per line, are the goal.
 - **Next step:** write the design for our command language and kernel from the nine points above: object and algorithm model, the line grammar, the command signature table and first command set, the error format, time `t`, drawing, and how the live teacher streams commands. No code has been written for it yet.

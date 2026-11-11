@@ -1,6 +1,6 @@
 # Kernel: failures
 
-Every failure the kernel can produce, how GeoGebra handles it, and how we do it. The format, the full catalogue of kinds and the recovery rules shared by all areas live in `../errors/`; this file lists the kernel's own cases and shows the objects. Error objects follow `../errors/design.md` section 3.
+Every failure the kernel can produce, how the reference app handles it, and how we do it. The format, the full catalogue of kinds and the recovery rules shared by all areas live in `../errors/`; this file lists the kernel's own cases and shows the objects. Error objects follow `../errors/design.md` section 3.
 
 Two classes, never mixed:
 
@@ -13,7 +13,7 @@ Two classes, never mixed:
 
 Parse errors (`syntax`, `unbalanced`, `bad_number`, `unterminated_string`) belong to the language area and are catalogued in `../errors/errors.md`. The kernel owns the cases below.
 
-| Kind | Raised when | GeoGebra | Ours |
+| Kind | Raised when | The reference app | Ours |
 |---|---|---|---|
 | `unknown_name` | a name does not exist | Offers to create sliders, or splits the name into a product (`ab` becomes `a*b`), or reports "undefined variable" | Always an error. `suggest` includes a line that would define it (`a = 1 in 0..10`) and the nearest existing names. |
 | `name_taken` | `Rename` to an existing name | "label already in use" | Error with the object that holds it in `related`. |
@@ -61,7 +61,7 @@ A rule must return a specific reason, never a generic one. A test iterates every
 
 Shape of the cell: `{ defined: false, reason, detail?: string, cause?: ObjId }`. `detail` is one short text (for numeric reasons, for example what was reached and what was wanted). In the change report: `{ name, reason, cause?: name }`. In the `figure` tool: `"undefined": { "reason": "parallel" }` or `{ "reason": "input_undefined", "cause": "I", "root": "parallel" }` where `cause` is the nearest undefined input and `root` is the reason at the end of the `cause` chain.
 
-GeoGebra: a failed output is just "undefined"; the user must work backwards to see why.
+The reference app: a failed output is just "undefined"; the user must work backwards to see why.
 
 ---
 

@@ -11,7 +11,7 @@ This folder covers:
 
 The symbolic layer (`../cas/`) supplies `toLatex` and `toText` for expressions; this area draws what it produces.
 
-No GeoGebra code, text or names are used here. Command names that are ordinary words (Text, Split, Ordinal) are listed because a teacher says them.
+No the reference app's code, text or names are used here. Command names that are ordinary words (Text, Split, Ordinal) are listed because a teacher says them.
 
 ---
 
@@ -127,7 +127,7 @@ One formatter is used everywhere (texts, readouts, CAS output, tooltips):
 
 ---
 
-## 3. How GeoGebra does it (plain words)
+## 3. How the reference app does it (plain words)
 
 ### Text objects
 
@@ -445,7 +445,7 @@ Phase 3: a `Locale` object supplies number separators, ordinal rules, and the wo
 
 ---
 
-## 9. Better than GeoGebra
+## 9. Better than the reference app
 
 1. **Words and maths in one text.** `Text("The area is $\frac{1}{2} b h$ = {A:2}", …)` mixes plain words, a typeset formula and a live number; no all-or-nothing LaTeX switch.
 2. **Number format per use.** `{x:3sf}`, `{θ:deg}`, `{p:%}`, not a single global rounding; formatting rule matches what learners expect (`1.005` → `1.01`).
@@ -520,15 +520,4 @@ Phase 3: a `Locale` object supplies number separators, ordinal rules, and the wo
 
 ## Sources studied
 
-GeoGebra source (read only, commit 3608374), under `source/shared/common/src/main/java/org/geogebra/common/`:
-
-- `kernel/geos/` (text object, its properties, inline text; text style interfaces)
-- `kernel/algos/` (dependent text, text, table text, fraction text, text-to-unicode and back, text length, text corner, list and logic algorithms)
-- `kernel/cas/` (surd text, simplify text)
-- `kernel/commands/` (command groups: text, logical; command filters)
-- `euclidian/draw/` (text and LaTeX rendering classes, alignment helpers)
-- `kernel/arithmetic/` (text expressions; skimmed)
-
-Manual pages (not readable in the fetch tool; behaviour taken from the source and command tables): https://geogebra.github.io/docs/manual/en/commands/ groups "Text Commands" and "Logic Commands", and the Text tool page.
-
-Licence checks: https://github.com/KaTeX/KaTeX (MIT, licence file read); https://github.com/mathjax/MathJax-src (Apache-2.0, licence file read).
+Removed before the repository was made public. The study notes above are in our own words.

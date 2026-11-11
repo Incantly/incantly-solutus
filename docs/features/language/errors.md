@@ -52,7 +52,7 @@ Other areas add reasons (`parallel`, `no_root`, `no_convergence`). This area own
 
 ## 2. Lexical errors (step 1)
 
-| Kind | When | GeoGebra | Ours |
+| Kind | When | The reference app | Ours |
 |---|---|---|---|
 | `bad_character` | A character not allowed outside strings and comments: other-script letters or digits, emoji, control characters | Accepts letters from nearly every script in names, which allows look-alikes; unknown characters give a generic message | `token` is the character with its code point, `hint` names the ASCII or Greek equivalent when one exists (`Cyrillic а looks like Latin a`) |
 | `bad_number` | `1.2.3`, `1e999`, `1__0`, `.`, `5.` followed by a name | Fails at evaluation time with a single number-format message | Reported at lex time with a reason in `message`: `two decimal points`, `out of range`. An exponent needs digits, so `1e`, `2e` and `1e+` are not `bad_number`: `2e` is `2 * e`, and `n = 1e+` is a `syntax` error (the `+` has no operand). `0x10` is `0 * x10` |
@@ -80,7 +80,7 @@ Example, a smart-quote paste:
 
 The parser reports the position of the first token that cannot continue the line and the set of tokens that could.
 
-| Kind | When | GeoGebra | Ours |
+| Kind | When | The reference app | Ours |
 |---|---|---|---|
 | `syntax` | Any token that no rule accepts | One message, "please check your input", position lost | `expected` has the token classes (`")"`, `"expression"`, `"name"`, `"=="`), sorted by usefulness, at most 8; `token` is the offender, or `end of line` |
 | `unbalanced` | A bracket opened and not closed, or a closer with no opener, or `(` closed by `]` | A dedicated unbalanced-brackets error without position | `related` points at the matching opener or the nearest mismatch; `fix` appends the missing closers when the line otherwise parses |
@@ -146,7 +146,7 @@ Example, ambiguous division:
 
 ## 4. Name errors (step 3)
 
-| Kind | When | GeoGebra | Ours |
+| Kind | When | The reference app | Ours |
 |---|---|---|---|
 | `unknown_name` | A name that is not an object, constant, binder or parameter | Offers to create sliders, or splits into a product, or errors "undefined variable" depending on context | Always an error. `hint` names the closest existing name (edit distance, and "all parts known" for products) |
 | `unknown_command` | PascalCase name not in the command table, or a command used without arguments | "Unknown command" | `hint` lists up to 3 closest commands, case-insensitive. A lower-case `circle(` is `unknown_function` with the PascalCase hint |
@@ -206,7 +206,7 @@ Example, a free variable:
 
 ## 5. Type and argument errors (step 4)
 
-| Kind | When | GeoGebra | Ours |
+| Kind | When | The reference app | Ours |
 |---|---|---|---|
 | `type_mismatch` | An operator, field, index, `if` branch, list element or call argument of the wrong type | "Illegal addition / multiplication / comparison", no types named | `message` names both types and the operator; extra fields `left`, `right` (type names); `hint` offers the legal neighbours (`Vector(A)`, `Dilate`, `dot`) |
 | `no_matching_form` | A command or built-in whose argument count fits some form but whose argument types match none | Command's "illegal argument" then the syntax list | `forms` lists all forms, closest first (forms whose count fits come first); `problems` array (below) names each wrong argument. With one wrong argument the span and `token` are that argument (`Distance(A, 5)`: col 17, token `5`); with several wrong arguments the span is the whole call |
@@ -361,9 +361,9 @@ Float details:
 - Underflow to 0 is silent.
 - Trigonometric arguments larger than 1e15 give accuracy warnings from the platform library: results are returned, and the AV marks the value `approx`. (Reduction is exact for arguments up to 2^52 on common platforms.)
 
-## 9. How GeoGebra handles failures, and what we change
+## 9. How the reference app handles failures, and what we change
 
-| Concern | GeoGebra | Ours |
+| Concern | The reference app | Ours |
 |---|---|---|
 | Parse failures | One generic message; position, token, expectations dropped | Full position and expectations |
 | Errors reach the caller as | A dialog or an exception to the UI handler; the scripting call returns true or false | Returned as data to every caller |

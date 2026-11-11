@@ -76,14 +76,14 @@ error that names the later back-end).
   (800ms), `@alt`/object `alt`, free-point ring halo, reduced-motion
   honours, 24px touch targets. Full WCAG validation still needs manual
   testing (as the doc says).
-- 16 Better than GeoGebra: the listed items are the ones built above.
+- 16 Better than the reference app: the listed items are the ones built above.
 - 17 Changes C1..C11: view-side owned changes are built (extended `with`
   list with formula values tracked by `styleVersion`; `s` per path type;
   drag plans; `Highlight` as an overlay effect; `Show`/`Hide` literal
   rule via `effectiveVisibility`). Directives, `kernel.drag` batching,
   grouped undo, `dryRun` and error kinds are kernel/language work; the
   view consumes them through the handoff.
-- 18 Sources: not code. Nothing from GeoGebra was read or copied while
+- 18 Sources: not code. Nothing from the reference app was read or copied while
   building; all names below are our docs' names.
 
 ### docs/design/performance.md (renderer parts)

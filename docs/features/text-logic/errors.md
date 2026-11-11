@@ -10,7 +10,7 @@ Two classes, as in the kernel: **errors** (the line was rejected, figure unchang
 
 ### 1.1 Reused kinds
 
-| Kind | When | GeoGebra | Ours |
+| Kind | When | The reference app | Ours |
 |---|---|---|---|
 | `syntax`, `unbalanced`, `unterminated_string`, `bad_escape` | The line or a `{expr}` inside a string does not parse | One generic "check your input" message for the line | Position inside the string: `col` points at the character in the whole line; `expected` lists what was legal there |
 | `unknown_name` | A `{name}` part names an object that does not exist | The name is kept as literal text, or an error dialog | Error; `suggest` offers the nearest name, `hint` shows the escape `\{` if a literal brace was meant |
@@ -20,7 +20,7 @@ Two classes, as in the kernel: **errors** (the line was rejected, figure unchang
 
 ### 1.2 New kinds
 
-| Kind | Code | Phase | When | GeoGebra | Ours |
+| Kind | Code | Phase | When | The reference app | Ours |
 |---|---|---|---|---|---|
 | `bad_format` | X001 | resolve | A `{x:fmt}` format is not in the list (`2`, `.3`, `3sf`, `deg`, `deg2`, `f`, `%`, `sci`, `tex`, `ord`) or does not apply to the part's type (`{flag:2}` on a Bool) | Silently uses a default | Error at the format token; `expected` lists formats valid for that type |
 | `unbalanced_math` | X002 | parse | A `$` opens a math part with no closing `$` | The text shows raw dollar signs or the formula fails to draw | Error at the opening `$`; `hint` offers `\$` or `latex = off` |
@@ -52,7 +52,7 @@ Two classes, as in the kernel: **errors** (the line was rejected, figure unchang
 
 ## 2. Undefined values (not errors)
 
-| Reason | Detail | Meaning | Typical command | GeoGebra | Ours |
+| Reason | Detail | Meaning | Typical command | The reference app | Ours |
 |---|---|---|---|---|---|
 | `out_of_domain` | X201 | A code point outside the valid range; an `Ordinal` of a negative or non-integer; a number outside the domain of a format | `UnicodeToLetter(1114112)`, `Ordinal(-2)` | Question mark or odd text | `detail.text` names the argument and range |
 | `not_finite` | X202 | NaN or infinity given to a number-format command | `ScientificText`, `FractionText` | Prints `NaN` or `?` | Undefined with the argument's value |
@@ -72,7 +72,7 @@ Two classes, as in the kernel: **errors** (the line was rejected, figure unchang
 
 ## 3. Numeric failures
 
-| Situation | GeoGebra | Ours |
+| Situation | The reference app | Ours |
 |---|---|---|
 | Rounding ties (`0.5`, `1.005`, `2.675`) | Binary value decides, surprising | Shortest-decimal rule: half away from zero; tested |
 | `-0` formatting | Can print `-0` | Prints `0` |
