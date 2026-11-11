@@ -1,0 +1,616 @@
+/**
+ * Handler runs (controls-scripting/design.md 3.4): expansion against a staging
+ * overlay, then one atomic batch.
+ *
+ * Runs are synchronous: guards, loop bounds and restyle values evaluate against
+ * the overlay (later steps see earlier steps' writes), Click steps expand inline
+ * (no nested runs, no queues), and the batch commits everything as one undo
+ * entry. A limit abort happens before anything is applied, so either all writes
+ * apply or none do. Also holds the action-outcome side table (area actions have
+ * no error channel in the kernel) and Reset's initial-value tracking.
+ */
+
+import type { ErrorObject, Result } from '../../contracts/errors';
+import type { ObjId } from '../../contracts/values';
+import type { Figure } from '../../graph/figure';
+import { valueText } from '../../language/runtime';
+import { parseLine } from '../../language/parser';
+import type { TNode } from '../../language/tnode';
+import type { HandlerEvent, HandlerRun, SkipReason, StepResult } from './types';
+import { NUMBERS_LIMITS } from './types';
+import { numbersError } from './errors';
+import { checkProbeLine, evalTNode, numLiteral, printExpr, printLineNode, substituteLine, valueLiteralExpr, valueLiteralText } from './eval';
+import type { Binding } from './eval';
+import { emitControlEvent, expansionProbeName, getStoredHandler, recordRun } from './handlers';
+import type { StoredStep } from './handlers';
+
+/* ------------------------------ action outcomes ------------------------------ */
+
+export type ActionOutcomeRecord =
+  | { readonly status: 'done'; readonly wrote?: readonly ObjId[] }
+  | { readonly status: 'skipped'; readonly reason: SkipReason }
+  | { readonly status: 'error'; readonly error: ErrorObject };
+
+const outcomes = new WeakMap<Figure, ActionOutcomeRecord[]>();
+
+/** Record what an area action did (the kernel gives actions no error channel). */
+export function pushActionOutcome(figure: Figure, outcome: ActionOutcomeRecord): void {
+  const list = outcomes.get(figure) ?? [];
+  list.push(outcome);
+  while (list.length > 40) list.shift();
+  outcomes.set(figure, list);
+}
+
+/** Drain outcomes recorded since the last call, in order. */
+export function drainActionOutcomes(figure: Figure): ActionOutcomeRecord[] {
+  const list = outcomes.get(figure) ?? [];
+  outcomes.set(figure, []);
+  return list;
+}
+
+/* ------------------------------ reset initials ------------------------------ */
+
+interface ResetState {
+  readonly initials: Map<ObjId, unknown>;
+  tracked: boolean;
+}
+
+const resets = new WeakMap<Figure, ResetState>();
+
+function resetStateFor(figure: Figure): ResetState {
+  let s = resets.get(figure);
+  if (!s) {
+    s = { initials: new Map(), tracked: false };
+    resets.set(figure, s);
+  }
+  return s;
+}
+
+function captureInitial(figure: Figure, id: ObjId): void {
+  const s = resetStateFor(figure);
+  if (s.initials.has(id)) return;
+  const view = figure.get(id);
+  if (!view) return;
+  if (view.type === 'Choice') {
+    const v = figure.value(id) as { index?: number } | undefined;
+    if (typeof v?.index === 'number') s.initials.set(id, v.index);
+    return;
+  }
+  if (view.free) s.initials.set(id, figure.value(id));
+}
+
+/**
+ * Track initial free values for Reset: sweep the figure now and capture every
+ * object added later. Author redefines should refresh initials too, but the
+ * events do not distinguish a redefine from a write (kernel gap).
+ */
+export function ensureResetTracking(figure: Figure): void {
+  const s = resetStateFor(figure);
+  for (const o of figure.objects()) captureInitial(figure, o.id);
+  if (s.tracked) return;
+  s.tracked = true;
+  figure.on((ev) => {
+    if (ev.ev === 'add') captureInitial(figure, ev.id);
+  });
+}
+
+export function initialOf(figure: Figure, id: ObjId): { readonly found: boolean; readonly value?: unknown } {
+  const s = resetStateFor(figure);
+  if (!s.initials.has(id)) return { found: false };
+  return { found: true, value: s.initials.get(id) };
+}
+
+/**
+ * Capture the current value as the initial unless one is already held. Write
+ * paths call this before their first write, so the pre-write value (the true
+ * initial when nothing wrote before) is kept even when tracking started late.
+ */
+export function captureResetInitial(figure: Figure, id: ObjId): void {
+  captureInitial(figure, id);
+}
+
+/* ------------------------------ runs ------------------------------ */
+
+export interface RunPayload {
+  /** The new value (change events) or choice value. */
+  readonly value?: unknown;
+  /** The committed text (input events). */
+  readonly text?: string;
+  /** The object that changed (figure change events). */
+  readonly changedName?: string;
+  readonly by?: 'learner' | 'host';
+}
+
+export type RunTrigger = 'learner' | 'host' | 'click_call';
+
+interface ExpandedLine {
+  readonly text: string;
+  readonly stepNo: number;
+  /** True for our own action specs (SetValue, Toggle, Animate, Reset): outcomes zip to these. */
+  readonly ours: boolean;
+  readonly wrote: readonly ObjId[];
+}
+
+const OUR_ACTIONS: ReadonlySet<string> = new Set(['SetValue', 'Toggle', 'Animate', 'Reset']);
+
+function runtimeBindings(
+  figure: Figure,
+  target: string,
+  event: HandlerEvent,
+  payload: RunPayload,
+  selfName: string,
+): Map<string, Binding> {
+  const bindings = new Map<string, Binding>();
+  bindings.set('self', { ref: selfName });
+  const raw = payload.text ?? payload.value ?? figure.value(target === 'figure' ? selfName : target);
+  const lit = valueLiteralExpr(raw);
+  if (lit) bindings.set('value', { literal: lit });
+  else bindings.set('value', { ref: target === 'figure' ? selfName : target });
+  bindings.set('event', { literal: { k: 'str', parts: [event], s: 0, e: 0 } });
+  void figure;
+  return bindings;
+}
+
+function isConstNode(t: TNode): boolean {
+  switch (t.n) {
+    case 'num':
+    case 'bool':
+    case 'const':
+    case 'undef':
+      return true;
+    case 'text':
+      return t.parts.every((p) => typeof p === 'string');
+    default:
+      return false;
+  }
+}
+
+interface Expansion {
+  lines: ExpandedLine[];
+  results: StepResult[];
+  overlay: Map<ObjId, unknown>;
+  stepsUsed: number;
+  discarded: string[];
+  aborted?: ErrorObject;
+}
+
+function checkExprProbe(
+  figure: Figure,
+  text: string,
+  bindings: ReadonlyMap<string, Binding>,
+): { checked: import('../../language/check').CheckedLine } | { error: ErrorObject } {
+  const name = expansionProbeName(figure);
+  const parsed = parseLine(`${name} = ${text}`, { line: 1 });
+  if (!parsed.ok) return { error: parsed };
+  const substituted = printLineNode(substituteLine(parsed.value.node, bindings));
+  const probe = checkProbeLine(figure, substituted, {});
+  if ('error' in probe) return { error: probe.error };
+  return { checked: probe.checked };
+}
+
+function expandSteps(
+  figure: Figure,
+  steps: readonly StoredStep[],
+  bindings: ReadonlyMap<string, Binding>,
+  selfName: string,
+  clickDepth: number,
+  ex: Expansion,
+): void {
+  steps.forEach((stored, index) => {
+    if (ex.aborted) return;
+    const stepNo = index + 1;
+    if (stored.loop) {
+      const from = checkExprProbe(figure, stored.loop.from, bindings);
+      const to = checkExprProbe(figure, stored.loop.to, bindings);
+      const fromOk = 'checked' in from && from.checked.expr?.ty.k === 'Number';
+      const toOk = 'checked' in to && to.checked.expr?.ty.k === 'Number';
+      if (!fromOk || !toOk) {
+        ex.results.push({ step: stepNo, status: 'skipped', reason: 'loop_range' });
+        ex.stepsUsed += 1;
+        return;
+      }
+      const fromNode = (from as { checked: { expr?: TNode } }).checked.expr as TNode;
+      const toNode = (to as { checked: { expr?: TNode } }).checked.expr as TNode;
+      const a = evalTNode(figure, fromNode, { overlay: ex.overlay });
+      const b = evalTNode(figure, toNode, { overlay: ex.overlay });
+      const ai = a.defined && typeof a.value === 'number' ? a.value : NaN;
+      const bi = b.defined && typeof b.value === 'number' ? b.value : NaN;
+      const count = Number.isInteger(ai) && Number.isInteger(bi) ? bi - ai + 1 : 0;
+      if (!Number.isInteger(ai) || !Number.isInteger(bi) || count < 1 || count > NUMBERS_LIMITS.loopIterations) {
+        ex.results.push({ step: stepNo, status: 'skipped', reason: 'loop_range' });
+        ex.stepsUsed += 1;
+        return;
+      }
+      for (let i = ai; i <= bi; i++) {
+        if (ex.aborted) return;
+        const inner = new Map(bindings);
+        inner.set(stored.loop.variable, { literal: numLiteral(i) });
+        expandOnce(figure, stored, stepNo, inner, selfName, clickDepth, ex);
+      }
+      return;
+    }
+    expandOnce(figure, stored, stepNo, bindings, selfName, clickDepth, ex);
+  });
+}
+
+function expandOnce(
+  figure: Figure,
+  stored: StoredStep,
+  stepNo: number,
+  bindings: ReadonlyMap<string, Binding>,
+  selfName: string,
+  clickDepth: number,
+  ex: Expansion,
+): void {
+  void selfName;
+  const skip = (reason: SkipReason): void => {
+    ex.results.push({ step: stepNo, status: 'skipped', reason });
+    ex.stepsUsed += 1;
+    if (ex.stepsUsed > NUMBERS_LIMITS.stepsPerRun) abortSteps(figure, ex);
+  };
+  if (stored.guard !== undefined) {
+    const probe = checkExprProbe(figure, stored.guard, bindings);
+    if (!('checked' in probe) || probe.checked.expr?.ty.k !== 'Bool') {
+      skip('broken');
+      return;
+    }
+    const v = evalTNode(figure, probe.checked.expr as TNode, { overlay: ex.overlay });
+    if (!v.defined || v.value !== true) {
+      skip('guard_false');
+      return;
+    }
+  }
+  const parsed = parseLine(stored.source, { line: 1 });
+  if (!parsed.ok) {
+    skip('broken');
+    return;
+  }
+  const node = parsed.value.node;
+  if (node.k !== 'action' && node.k !== 'restyle') {
+    skip('broken');
+    return;
+  }
+  // A restyle target of `self` resolves to the raising object.
+  if (node.k === 'restyle' && bindings.has(node.target.name)) {
+    const b = bindings.get(node.target.name) as Binding;
+    if (!('ref' in b)) {
+      skip('broken');
+      return;
+    }
+    const renamed = { ...node, target: { ...node.target, name: b.ref } };
+    expandRestyle(figure, renamed, stored, stepNo, bindings, ex, skip);
+    return;
+  }
+  if (node.k === 'restyle') {
+    expandRestyle(figure, node, stored, stepNo, bindings, ex, skip);
+    return;
+  }
+  const callee = node.expr.callee;
+  const substituted = printLineNode(substituteLine(node, bindings));
+  const probe = checkProbeLine(figure, substituted, {});
+  if ('error' in probe) {
+    skip('broken');
+    return;
+  }
+  const checked = probe.checked;
+  if (callee === 'Click') {
+    const arg = checked.expr?.n === 'command' ? checked.expr.args[0]?.expr : undefined;
+    const clickedId = arg?.n === 'ref' ? arg.id : undefined;
+    const clickedName = clickedId !== undefined ? figure.view.byId(clickedId)?.name : undefined;
+    if (clickedName === undefined) {
+      skip('broken');
+      return;
+    }
+    if (clickDepth + 1 > NUMBERS_LIMITS.clickDepth) {
+      abortDepth(figure, ex);
+      return;
+    }
+    const nested = getStoredHandler(figure, clickedName, 'click');
+    ex.stepsUsed += 1;
+    if (ex.stepsUsed > NUMBERS_LIMITS.stepsPerRun) {
+      abortSteps(figure, ex);
+      return;
+    }
+    if (!nested) {
+      ex.results.push({ step: stepNo, status: 'done' });
+      return;
+    }
+    const nestedBindings = new Map<string, Binding>();
+    nestedBindings.set('self', { ref: clickedName });
+    const cv = figure.value(clickedName);
+    const lit = valueLiteralExpr(cv);
+    if (lit) nestedBindings.set('value', { literal: lit });
+    else nestedBindings.set('value', { ref: clickedName });
+    nestedBindings.set('event', { literal: { k: 'str', parts: ['click'], s: 0, e: 0 } });
+    const before = ex.results.length;
+    expandSteps(figure, nested.steps, nestedBindings, clickedName, clickDepth + 1, ex);
+    // Nested results belong to the Click step that raised them.
+    for (let i = before; i < ex.results.length; i++) {
+      const r = ex.results[i] as StepResult;
+      ex.results[i] = r.status === 'done' ? { ...r, step: stepNo } : { ...r, step: stepNo };
+    }
+    if (!ex.aborted) ex.results.push({ step: stepNo, status: 'done' });
+    return;
+  }
+  // Pre-evaluate value arguments against the overlay: an undefined argument skips now.
+  if (callee === 'SetValue' || callee === 'Toggle' || callee === 'Animate') {
+    const args = checked.expr?.n === 'command' ? checked.expr.args : [];
+    const from = callee === 'SetValue' ? 1 : 0;
+    for (let i = from; i < args.length; i++) {
+      const expr = args[i]?.expr;
+      if (!expr || args[i]?.omitted) continue;
+      const v = evalTNode(figure, expr, { overlay: ex.overlay });
+      if (!v.defined) {
+        skip('undefined_argument');
+        return;
+      }
+    }
+  }
+  const wrote: ObjId[] = [];
+  if (callee === 'SetValue' && checked.expr?.n === 'command') {
+    const targetArg = checked.expr.args[0]?.expr;
+    const valueArg = checked.expr.args[1]?.expr;
+    if (targetArg?.n === 'ref' && valueArg && !checked.expr.args[1]?.omitted) {
+      const v = evalTNode(figure, valueArg, { overlay: ex.overlay });
+      if (v.defined) ex.overlay.set(targetArg.id, v.value);
+      wrote.push(targetArg.id);
+      const info = figure.view.byId(targetArg.id);
+      if (info && !ex.discarded.includes(info.name)) ex.discarded.push(info.name);
+    }
+    const listIndex = checked.expr.args.length > 2 ? checked.expr.args[1]?.expr : undefined;
+    void listIndex;
+  } else if (callee === 'Toggle' && checked.expr?.n === 'command') {
+    const targetArg = checked.expr.args[0]?.expr;
+    if (targetArg?.n === 'ref') {
+      const cur = ex.overlay.has(targetArg.id) ? ex.overlay.get(targetArg.id) : figure.value(targetArg.id);
+      if (typeof cur === 'boolean') ex.overlay.set(targetArg.id, !cur);
+      wrote.push(targetArg.id);
+      const info = figure.view.byId(targetArg.id);
+      if (info && !ex.discarded.includes(info.name)) ex.discarded.push(info.name);
+    }
+  } else if (callee === 'Reset' && checked.expr?.n === 'command') {
+    for (const a of checked.expr.args) {
+      if (a.expr?.n === 'ref') {
+        const initial = initialOf(figure, a.expr.id);
+        if (initial.found) ex.overlay.set(a.expr.id, initial.value);
+        wrote.push(a.expr.id);
+        const info = figure.view.byId(a.expr.id);
+        if (info && !ex.discarded.includes(info.name)) ex.discarded.push(info.name);
+      }
+    }
+    if (checked.expr.args.length === 0) {
+      for (const o of figure.objects()) {
+        if (!o.free) continue;
+        const initial = initialOf(figure, o.id);
+        if (initial.found) ex.overlay.set(o.id, initial.value);
+        wrote.push(o.id);
+      }
+      ex.discarded.push('all free objects');
+    }
+  }
+  ex.lines.push({ text: substituted, stepNo, ours: OUR_ACTIONS.has(callee), wrote });
+  ex.results.push({ step: stepNo, status: 'done' });
+  ex.stepsUsed += 1;
+  if (ex.stepsUsed > NUMBERS_LIMITS.stepsPerRun) abortSteps(figure, ex);
+}
+
+function expandRestyle(
+  figure: Figure,
+  node: Extract<import('../../language/ast').LineNode, { k: 'restyle' }>,
+  _stored: StoredStep,
+  stepNo: number,
+  bindings: ReadonlyMap<string, Binding>,
+  ex: Expansion,
+  skip: (reason: SkipReason) => void,
+): void {
+  void _stored;
+  const substitutedNode = substituteLine(node, bindings);
+  const substituted = printLineNode(substitutedNode);
+  const probe = checkProbeLine(figure, substituted, {});
+  if ('error' in probe) {
+    skip('broken');
+    return;
+  }
+  // Freeze dynamic values: a handler restyle evaluates once, it never adds a rule.
+  const checked = probe.checked;
+  const items = substitutedNode.k === 'restyle' ? substitutedNode.style : [];
+  const frozen: string[] = [];
+  const styles = checked.style ?? [];
+  for (let i = 0; i < styles.length; i++) {
+    const s = styles[i] as { key: string; value: TNode | { word: string } };
+    const item = items[i];
+    if (!item) continue;
+    if ('word' in s.value) {
+      frozen.push(`${s.key} = ${s.value.word}`);
+      continue;
+    }
+    if (isConstNode(s.value)) {
+      frozen.push(`${s.key} = ${printExpr(item.value)}`);
+      continue;
+    }
+    const v = evalTNode(figure, s.value, { overlay: ex.overlay });
+    if (!v.defined) {
+      skip('undefined_argument');
+      return;
+    }
+    const lit = valueLiteralText(v.value);
+    if (lit === undefined) {
+      skip('broken');
+      return;
+    }
+    frozen.push(`${s.key} = ${lit}`);
+  }
+  const target = substitutedNode.k === 'restyle' ? substitutedNode.target.name : node.target.name;
+  ex.lines.push({ text: `${target} with ${frozen.join(', ')}`, stepNo, ours: false, wrote: [] });
+  ex.results.push({ step: stepNo, status: 'done' });
+  ex.stepsUsed += 1;
+  if (ex.stepsUsed > NUMBERS_LIMITS.stepsPerRun) abortSteps(figure, ex);
+}
+
+function abortSteps(figure: Figure, ex: Expansion): void {
+  void figure;
+  if (ex.aborted) return;
+  const discarded = ex.discarded.slice(0, 10);
+  if (ex.discarded.length > 10) discarded.push('...');
+  ex.aborted = numbersError('handler_limit', { line: 0, col: 1, endCol: 1 }, { name: '', limit: NUMBERS_LIMITS.stepsPerRun, actual: ex.stepsUsed, what: 'steps' }, {
+    token: '',
+    hint: 'Reduce the loop range, or split the work across buttons.',
+  });
+  void discarded;
+}
+
+function abortDepth(figure: Figure, ex: Expansion): void {
+  void figure;
+  if (ex.aborted) return;
+  ex.aborted = numbersError('handler_limit', { line: 0, col: 1, endCol: 1 }, { name: '', limit: NUMBERS_LIMITS.clickDepth, actual: NUMBERS_LIMITS.clickDepth + 1, what: 'Click nesting' }, {
+    token: '',
+    hint: 'Remove a Click: handlers press each other at most 8 deep.',
+  });
+}
+
+/**
+ * Run a handler: expand against the overlay, then commit one atomic batch.
+ * Nothing is applied when the handler is missing, every step is skipped, or a
+ * limit aborts the run.
+ */
+export function runHandler(
+  figure: Figure,
+  target: string,
+  event: HandlerEvent,
+  payload: RunPayload = {},
+  trigger: RunTrigger = 'host',
+): HandlerRun {
+  const by = payload.by ?? 'host';
+  const empty: HandlerRun = { handler: { target, event }, trigger, ok: true, stepsUsed: 0, results: [], dropped: 0 };
+  const stored = getStoredHandler(figure, target, event);
+  if (!stored) return empty;
+  if (target === 'figure' && event === 'change' && !payload.changedName) {
+    return {
+      handler: { target, event },
+      trigger,
+      ok: false,
+      stepsUsed: 0,
+      results: [],
+      error: numbersError('bad_argument', { line: 0, col: 1, endCol: 1 }, { command: 'on figure change', why: 'the changed object is not named' }, { token: target }),
+      dropped: 0,
+    };
+  }
+  ensureResetTracking(figure);
+  const selfName = target === 'figure' ? (payload.changedName as string) : target;
+  const bindings = runtimeBindings(figure, target, event, payload, selfName);
+  const ex: Expansion = { lines: [], results: [], overlay: new Map(), stepsUsed: 0, discarded: [] };
+  expandSteps(figure, stored.steps, bindings, selfName, 0, ex);
+  if (ex.aborted) {
+    const run: HandlerRun = { handler: { target, event }, trigger, ok: false, stepsUsed: ex.stepsUsed, results: ex.results, error: ex.aborted, dropped: 0 };
+    recordRun(figure, run);
+    emitControlEvent(figure, { event: trigger === 'click_call' ? 'click' : event, name: target, type: 'Handler', by });
+    emitControlEvent(figure, { event: 'handlerRun', name: `${target} ${event}`, type: 'Handler', value: `aborted after ${ex.stepsUsed} steps`, by });
+    return run;
+  }
+  if (ex.lines.length === 0) {
+    const run: HandlerRun = { handler: { target, event }, trigger, ok: true, stepsUsed: ex.stepsUsed, results: ex.results, dropped: 0 };
+    recordRun(figure, run);
+    return run;
+  }
+  const from = new Map<ObjId, string>();
+  for (const l of ex.lines) for (const id of l.wrote) {
+    if (!from.has(id)) from.set(id, valueText(figure.value(id)));
+  }
+  drainActionOutcomes(figure);
+  const batch = figure.applyBatch(
+    ex.lines.map((l) => l.text),
+    { group: `${event} ${target}`, mode: 'atomic' },
+  );
+  if (!batch.ok) {
+    const first = batch.results.find((r) => !r.ok) as ErrorObject | undefined;
+    const run: HandlerRun = {
+      handler: { target, event },
+      trigger,
+      ok: false,
+      stepsUsed: ex.stepsUsed,
+      results: ex.results,
+      ...(first ? { error: first } : {}),
+      dropped: 0,
+    };
+    recordRun(figure, run);
+    emitControlEvent(figure, { event: 'handlerRun', name: `${target} ${event}`, type: 'Handler', value: 'aborted; nothing was changed', by });
+    return run;
+  }
+  // Zip action outcomes onto our steps: a residual skip/error flips the record.
+  const outcomesList = drainActionOutcomes(figure);
+  const finalResults: StepResult[] = [];
+  const oursLines = ex.lines.filter((l) => l.ours);
+  const outcomeByStep = new Map<number, ActionOutcomeRecord>();
+  oursLines.forEach((l, i) => {
+    const o = outcomesList[i];
+    if (o) outcomeByStep.set(l.stepNo, o);
+  });
+  for (const r of ex.results) {
+    if (r.status !== 'done') {
+      finalResults.push(r);
+      continue;
+    }
+    const o = outcomeByStep.get(r.step);
+    if (o && o.status === 'skipped') {
+      finalResults.push({ step: r.step, status: 'skipped', reason: o.reason });
+      continue;
+    }
+    if (o && o.status === 'error') {
+      finalResults.push({ step: r.step, status: 'skipped', reason: 'broken' });
+      continue;
+    }
+    const wrote = ex.lines.filter((l) => l.stepNo === r.step).flatMap((l) => l.wrote);
+    if (wrote.length === 0) {
+      finalResults.push(r);
+      continue;
+    }
+    finalResults.push({
+      step: r.step,
+      status: 'done',
+      wrote: wrote.map((id) => {
+        const info = figure.view.byId(id);
+        return { name: info?.name ?? String(id), from: from.get(id) ?? '?', to: valueText(figure.value(id)) };
+      }),
+    });
+  }
+  const run: HandlerRun = { handler: { target, event }, trigger, ok: true, stepsUsed: ex.stepsUsed, results: finalResults, dropped: 0 };
+  recordRun(figure, run);
+  emitControlEvent(figure, { event, name: target, type: figure.get(target)?.type ?? 'figure', ...(payload.value !== undefined ? { value: valueText(payload.value) } : {}), by });
+  for (const l of ex.lines) {
+    for (const id of l.wrote) {
+      const info = figure.view.byId(id);
+      if (info) emitControlEvent(figure, { event: 'change', name: info.name, type: info.type.k, value: valueText(figure.value(id)), by });
+    }
+  }
+  emitControlEvent(figure, {
+    event: 'handlerRun',
+    name: `${target} ${event}`,
+    type: 'Handler',
+    value: `${ex.stepsUsed} steps`,
+    by,
+  });
+  return run;
+}
+
+/** Run `on figure load` once, unless the host passes autorun: false. */
+export function runLoadHandlers(figure: Figure, opts: { autorun?: boolean; by?: 'learner' | 'host' } = {}): HandlerRun | undefined {
+  if (opts.autorun === false) return undefined;
+  if (!getStoredHandler(figure, 'figure', 'load')) return undefined;
+  return runHandler(figure, 'figure', 'load', { by: opts.by ?? 'host' }, 'host');
+}
+
+/** Press a button (or clickable object) by code. */
+export function clickButton(figure: Figure, name: string, opts: { by?: 'learner' | 'host' } = {}): Result<HandlerRun> {
+  const view = figure.get(name);
+  if (!view) {
+    return numbersError('unknown_name', { line: 0, col: 1, endCol: 1 }, { name }, { token: name, hint: 'Create the button first.' });
+  }
+  const clickable = view.type === 'Button' || (view.style.ext as Record<string, unknown>)['clickable'] === true;
+  if (!clickable) {
+    return numbersError('bad_event', { line: 0, col: 1, endCol: 1 }, { name, what: `a ${view.type}`, event: 'click' }, {
+      token: name,
+      hint: `Make it clickable first: ${name} with clickable = true. Or press a button.`,
+    });
+  }
+  return { ok: true, value: runHandler(figure, name, 'click', { by: opts.by ?? 'host' }, 'click_call'), notices: [] };
+}
