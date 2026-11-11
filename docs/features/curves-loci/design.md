@@ -286,8 +286,8 @@ Given `Q` (a point that depends on a mover `P`), the locus is the set of positio
 ### The slice
 
 1. **Slice selection.** `U = upstream(Q)` (every object `Q` depends on, found by walking inputs) and `D = downstream(P)` (the cached downstream list from FC / core §2). The slice is `U ∩ D` in object order. These are the only rules that react to the mover and affect `Q`.
-2. **Slice program.** The kernel compiles the slice to a list of `(rule, inputSlots, outputSlot)` over a scratch `Float64Array` copy of just the values the slice reads or writes. Rules never mutate the real figure: they are pure (core §2).
-3. **Run.** For a mover value `s`: write `s` into the mover's parameter slot in the scratch, run the rules in order, read `Q`. A run costs the number of rules in the slice times about 0.2 to 2 µs.
+2. **Slice.** `kernel.slice(mover, Q)` returns a `Slice` with `chain` (the names of the objects that run, in order) and `run(values)`. It is built on each call, not kept as a cached compiled program. Rules never mutate the real figure: they are pure (core §2). If `chain` is empty, `Q` does not depend on the mover, and `Locus` reports `no_dependency`.
+3. **Run.** `run(values)` gives the cell of `Q` for each mover value `s`: it writes `s` into the mover on a scratch copy, runs the rules of the chain in order and reads `Q`. A run costs the number of rules in the slice times about 0.2 to 2 µs.
 4. **Mover parameter.** For a `PointOn` point the parameter is its `u` in `[0, 1]`; for a free number `a`, it is `a`. For a path that is unbounded (line or ray), `u` is not suitable; `Locus(Q, P, from, to)` takes a range in natural units along the path (signed distance from the path's first defining point) and, if none is given, the range `±50 × construction scale`, where the construction scale is the bounding-box diagonal of all free points (or 1).
 
 ### Sampling (view independent)
@@ -359,8 +359,8 @@ Limits: if the locus has several components (reducible algebraic curve), the fit
 
 - **Types.** `Curve` (with `CurveValue`), `Predicate`, `Predicate2` are added with FC's type changes; `List<Curve>` is allowed.
 - **Lines.** The define-line rule `Name(params) = expr` decides the type from the right-hand side and parameter count: `Point` pair with one parameter and a range → `Curve`; top-level `==` with two parameters → implicit `Curve`; top-level comparison or logic with one or two parameters → `Predicate`/`Predicate2`.
-- **Rules.** Each command is a `CommandSpec`. Locus-type commands get the slice from the kernel's graph API: `kernel.slice(moverId, targetId)` returns the compiled slice program (cached per figure shape). It is invalidated whenever lines add, redefine or delete objects.
-- **Undefined.** `Locus` is undefined with reason `no_dependency` if `Q` does not depend on `P` (then the locus is a point; the reason says so).
+- **Rules.** Each command is a `CommandSpec`. Locus-type commands get the slice from the kernel's graph API: `kernel.slice(moverId, targetId)` returns a `Slice` (`chain` and `run(values)`), built on each call and not cached. A slice is valid only until the next line changes the figure's structure.
+- **Undefined.** `Locus` is undefined with reason `no_dependency` if `Q` does not depend on `P`, that is, when the slice's `chain` is empty (then the locus is a point; the reason says so). The kernel does not raise `no_dependency`; the area does.
 - **Dragging.** `PointOn` on curves uses `closest` with the previous parameter as the hint; on loci it uses the sampled polyline; on inequalities `PointIn`.
 - **Package split.** Maths in `packages/kernel/src/curves` (values, queries, intersections, locus, envelope, fit). Tracers and filler in `packages/plot`.
 
@@ -398,7 +398,7 @@ Limits: if the locus has several components (reducible algebraic curve), the fit
 2. **Define-line typing**: a pair-valued right-hand side with a parameter and `in a..b` is a `Curve`; a top-level `==` over two parameters is an implicit `Curve`; a top-level comparison/logic over one or two parameters is a `Predicate`/`Predicate2`. Reason: no new keywords.
 3. **`Intersect` index order** is part of the specification: along the line direction for conics, side of the centre line for two circles. Reason: loci need continuity.
 4. **`Locus` forms**: `Locus(Q, P)` with `P` a `PointOn` point and `Locus(Q, P, from, to)` added beside the core `Locus(P, a, from, to)`. The core's first argument order (`Locus(P, a, ...)`) stays: the point is first, then the mover.
-5. **Kernel API**: `kernel.slice(moverId, targetId)` returns a compiled slice program that runs on a scratch value array. Reason: loci, envelopes, `Path`.
+5. **Kernel API**: `kernel.slice(moverId, targetId)` returns a `Slice` (`chain`, `run(values)`) that runs on a scratch copy of the figure, built on each call. An empty `chain` means no dependency. Reason: loci, envelopes, `Path`.
 6. **`PointIn`** and **`Closest`** as commands; `PointOn(implicit, P0)`.
 7. **Quality flag** for tracing and loci passed explicitly (`draft` | `final`), never derived from time.
 8. **`Length(c, a, b)`** and **`PathParam`** added.

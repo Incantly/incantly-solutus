@@ -84,6 +84,14 @@ export const ERROR_KINDS: Readonly<Record<string, KindSpec>> = {
   type_mismatch: { code: 'C003', phase: 'typecheck', recovery: 'rewrite' },
   bad_argument: { code: 'C004', phase: 'typecheck', recovery: 'fix_line' },
   bad_range: { code: 'C005', phase: 'typecheck', recovery: 'fix_line' },
+  forward_reference: { code: 'K012', phase: 'plan', recovery: 'choose' },
+  not_free: { code: 'K013', phase: 'plan', recovery: 'choose' },
+  locked: { code: 'K014', phase: 'plan', recovery: 'choose' },
+  nothing_to_undo: { code: 'K030', phase: 'plan', recovery: 'skip' },
+  load_failed: { code: 'K041', phase: 'load', recovery: 'report' },
+  version: { code: 'K042', phase: 'load', recovery: 'report' },
+  tool_input: { code: 'T001', phase: 'tool', recovery: 'fix_line' },
+  tool_busy: { code: 'T002', phase: 'tool', recovery: 'skip' },
   internal: { code: 'K999', phase: 'commit', recovery: 'skip' },
 };
 
@@ -121,7 +129,7 @@ export const MESSAGE_TEMPLATES: Record<string, string> = {
   'lang.duplicate_param': 'The parameter {name} appears twice.',
   'lang.duplicate_arg': 'The argument {name} is given more than once.',
   'lang.not_a_binder': 'This position takes a bare name, not an expression.',
-  'lang.no_matching_form': '{command} has no form for ({given}).',
+  'lang.no_matching_form': '{command} has no form ({given}).',
   'lang.arg_count': '{name} takes {n} argument(s); got {m}.',
   'lang.type_mismatch': 'Cannot {op} a {left} and a {right}.',
   'lang.type_mismatch_unary': 'Cannot apply {op} to a {left}.',
@@ -137,7 +145,46 @@ export const MESSAGE_TEMPLATES: Record<string, string> = {
   'lang.limit': 'That would exceed the limit of {max} {what}.',
   'lang.missing_rate': '{name} is a state but has no rate.',
   'lang.internal': 'Something went wrong inside {where}; nothing was changed.',
+  'kernel.forward_reference': '{name} needs {input}, which is defined later.',
+  'kernel.not_free': '{name} is computed from {inputs}; it has no value of its own to set.',
+  'kernel.locked': '{name} is fixed and cannot be changed by a line.',
+  'kernel.nothing_to_undo': 'There is nothing to {what}.',
+  'kernel.load_failed': 'The file could not be loaded: {n} line(s) failed.',
+  'kernel.version': 'This file is version {v}; supported: {list}.',
+  'tool.input': '{tool} needs {expected}.',
+  'tool.busy': 'The figure is busy; try again.',
+  'kernel.unknown_property': '{type} has no property {key}.',
+  'kernel.bad_property_value': '{key} must be {allowed}; got {token}.',
+  'kernel.state_owned': '{name} is a state; the solver owns its value.',
+  'kernel.bad_value': '{name} holds a {type}; {why}.',
+  'kernel.wrong_value': '{name} holds a {type}; {why}.',
 };
+
+/**
+ * The message key of a kind (errors design 3): the area that owns the kind names the key, so `cycle` is `kernel.cycle`,
+ * `type_mismatch` is `cmd.type_mismatch` and `tool_input` is `tool.input`. A key that does not belong to the kind
+ * (`lang.syntax_end` on `syntax`) stays as it is.
+ */
+export function messageKeyFor(kind: string, key: string): string {
+  const code = ERROR_KINDS[kind]?.code;
+  if (code === undefined || !key.startsWith('lang.') || code.startsWith('L')) return key;
+  const name = key.slice(5);
+  const area = code.startsWith('K') ? 'kernel' : code.startsWith('C') ? 'cmd' : 'tool';
+  if (area === 'tool') {
+    const bare = kind.slice(5);
+    return name === kind ? `tool.${bare}` : key;
+  }
+  return name === kind || name.startsWith(`${kind}_`) ? `${area}.${name}` : key;
+}
+
+// every `lang.<kind>...` template also exists under the key its kind is reported with
+for (const kind of Object.keys(ERROR_KINDS)) {
+  for (const key of Object.keys(MESSAGE_TEMPLATES)) {
+    if (!key.startsWith('lang.')) continue;
+    const mapped = messageKeyFor(kind, key);
+    if (mapped !== key && MESSAGE_TEMPLATES[mapped] === undefined) (MESSAGE_TEMPLATES as Record<string, string>)[mapped] = MESSAGE_TEMPLATES[key] as string;
+  }
+}
 
 export function render(key: string, params: Params): string {
   const tpl = MESSAGE_TEMPLATES[key];
@@ -167,6 +214,10 @@ export interface ErrorExtra {
   left?: string;
   right?: string;
   limit?: { name: string; max: number; got: number };
+  /** Keep every entry of `expected` (the kernel's full form; only the compact form caps it). */
+  uncapped?: boolean;
+  /** The phase when it is not the kind's own. */
+  phase?: Phase;
   after?: number;
   message?: string;
   fingerprintKey?: string;
@@ -195,6 +246,7 @@ export function buildError(
   extra: ErrorExtra = {},
 ): LanguageError {
   const spec = ERROR_KINDS[kind] ?? ERROR_KINDS['internal'] as KindSpec;
+  key = messageKeyFor(kind, key);
   const suggest = (extra.suggest ?? []).slice(0, 3);
   const message = extra.message ?? render(key, params);
   const fix = extra.fix ?? (suggest.length === 1 && !extra.quickFixes ? suggest[0] : undefined);
@@ -205,7 +257,7 @@ export function buildError(
     committed: false,
     kind: kind as ErrorKind,
     code: spec.code,
-    phase: spec.phase,
+    phase: extra.phase ?? spec.phase,
     message,
     messageKey: key,
     params,
@@ -213,7 +265,7 @@ export function buildError(
     col,
     endCol,
     token,
-    expected: (extra.expected ?? []).slice(0, 8),
+    expected: extra.uncapped === true ? [...(extra.expected ?? [])] : (extra.expected ?? []).slice(0, 8),
     forms: shownForms,
     suggest,
     recovery: extra.recovery ?? (suggest.length > 0 && spec.recovery === 'fix_line' ? 'use_suggestion' : spec.recovery),
@@ -307,7 +359,8 @@ export function editDistance(a: string, b: string, cap = 8): number {
  */
 export function closestNames(name: string, candidates: Iterable<string>, k = 3): string[] {
   const lower = name.toLowerCase();
-  const limit = Math.max(1, Math.floor(name.length / 3));
+  // a one-letter name is within one edit of every other one-letter name, so only a different case counts as near
+  const limit = name.length <= 1 ? 0 : Math.max(1, Math.floor(name.length / 3));
   const scored: { c: string; d: number }[] = [];
   for (const c of candidates) {
     if (c === name) continue;

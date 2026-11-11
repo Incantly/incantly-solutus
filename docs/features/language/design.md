@@ -577,7 +577,7 @@ Performance: objects and command names live in sorted arrays with a precomputed 
 - **Empty and comment-only lines** are no-ops: `ok: true, noop: true`.
 - **Trailing commas** `Circle(A, 2,)` are `syntax` with `expected: ["expression"]`.
 - **A name on its own** (`A`) defines nothing. It is `syntax` with `expected: ["=", "with", "in", "'"]`. The draw tool's `figure` call is how to read a value.
-- **Self-reference** `a = a + 1` is `cycle` (even when `a` does not yet exist it is `unknown_name`; after creation it is `cycle`). There is no mutable assignment.
+- **Self-reference** `a = a + 1` is `unknown_name` when `a` does not yet exist. On an existing free `Number`, `Point` or `Bool` it is an assignment, run once with the old value (kernel design section 8); the language checker reports `cycle` and the kernel turns that into the assignment. Any other self-reference is `cycle`.
 - **Very large or small literals**: `1e400` is `bad_number` (`out_of_range`); `1e-400` is `0` with a `precision_loss` warning.
 - **Unicode digits** from other scripts are `bad_character` with a hint to use ASCII digits.
 - **Mixed `,` and decimal comma**: `1,5` is two arguments or a pair, never 1.5; there is no locale-specific decimal mode in v1.
