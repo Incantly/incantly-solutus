@@ -195,8 +195,25 @@ function checkRedefinition(c: Checker, target: NameRef, existing: ObjectInfo | u
     return;
   }
   if (!sameKind(existing.type, newTy)) {
+    // what Delete would take with it: every object that reads this one, directly or not
+    const takes: string[] = [];
+    const seen = new Set<ObjId>([existing.id]);
+    for (let i = -1; i < takes.length && takes.length < 50; i++) {
+      for (const d of c.fig.dependentsOf(i < 0 ? existing.id : (c.fig.lookup(takes[i] as string)?.id as ObjId))) {
+        if (seen.has(d.id)) continue;
+        seen.add(d.id);
+        takes.push(d.name);
+      }
+    }
+    let fresh = target.name;
+    for (let n = 2; n < 1000; n++) {
+      fresh = `${target.name}${n}`;
+      if (!c.fig.lookup(fresh)) break;
+    }
+    const removes = takes.length > 0 ? ` (this removes ${takes.length} object${takes.length === 1 ? '' : 's'} that use${takes.length === 1 ? 's' : ''} ${target.name}: ${takes.slice(0, 8).join(', ')}${takes.length > 8 ? ', …' : ''})` : '';
     c.err('type_change', lineSpan.s, lineSpan.e, 'lang.type_change', { name: target.name, from: tyStr(existing.type), to: tyStr(newTy) }, {
-      hint: `Delete(${target.name}) first to change its type, or use a different name.`,
+      hint: `Pick a new name, or Delete(${target.name}) first${removes}.`,
+      suggest: [c.replaceRange(target.s, target.e, fresh)],
       left: tyStr(existing.type),
       right: tyStr(newTy),
       fingerprintKey: `${target.name}:${tyStr(existing.type)}:${tyStr(newTy)}`,
@@ -346,11 +363,11 @@ function checkStyle(c: Checker, items: readonly StyleItem[], ty?: Ty): CheckedSt
 function checkStyleItem(c: Checker, it: StyleItem, keys: readonly string[], out: CheckedStyle[], ty: Ty | undefined, perType: boolean): void {
   const spec = own(PROPERTIES, it.key);
   if (!spec || (perType && !keys.includes(it.key))) {
-    const close = closestNames(it.key, keys, 3);
+    const close = closestNames(it.key, keys, perType ? 1 : 3);
     c.err('unknown_property', it.ks, it.ke, 'lang.unknown_property', { type: ty?.k ?? 'An object', key: it.key }, {
       expected: keys,
       ...(perType ? { uncapped: true } : {}),
-      hint: close.length > 0 ? `Did you mean ${close.join(' or ')}? Properties: ${keys.join(', ')}.` : `Properties: ${keys.join(', ')}.`,
+      hint: close.length > 0 ? (perType ? `Did you mean ${close.join(' or ')}?` : `Did you mean ${close.join(' or ')}? Properties: ${keys.join(', ')}.`) : `Properties: ${keys.join(', ')}.`,
       suggest: close.slice(0, 2).map((k) => c.replaceRange(it.ks, it.ke, k)),
       fingerprintKey: it.key,
     });
@@ -358,7 +375,7 @@ function checkStyleItem(c: Checker, it: StyleItem, keys: readonly string[], out:
   }
   const v = it.value;
   const bad = (suggest?: string): void => {
-    const extra: ErrorExtra = { hint: `${it.key} must be ${spec.allowed}.`, fingerprintKey: it.key };
+    const extra: ErrorExtra = { hint: `${it.key} must be ${spec.allowed}.`, fingerprintKey: it.key, recovery: 'fix_line' };
     if (spec.values) extra.expected = spec.values;
     if (suggest !== undefined) extra.suggest = [suggest];
     c.err('bad_property_value', v.s, v.e, 'lang.bad_property_value', { key: it.key, allowed: spec.allowed, token: c.textOf(v) }, extra);

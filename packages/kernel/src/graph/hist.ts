@@ -263,7 +263,6 @@ export class FigureHist extends FigureTx {
       return this.fail(parsed, 'name_taken', { name: to, type: holder.p.type.k }, { related: [holder.p.name], hint: `${to} is already a ${holder.p.type.k}. Choose another name.`, recovery: 'rewrite', fingerprintKey: to }, s, e);
     }
     if (holder === rec) return this.okResult(parsed, 'rename', `${from} already has that name`, rep, { name: from, id: rec.id });
-    if (this.isFixed(rec) && !opts.force) return this.lockedError(parsed, rec, s, e);
     const lower = to.toLowerCase();
     for (const o of this.list) if (o !== rec && o.p.name.toLowerCase() === lower) rep.warnings.push(makeNotice('confusable_name', { name: to, other: o.p.name }));
     if (opts.dryRun) return this.okResult(parsed, 'rename', `${from} -> ${to}`, rep, { name: from, dryRun: true, affected: rec.kids.map((k) => k.p.name) });
@@ -518,7 +517,9 @@ export class FigureHist extends FigureTx {
     }
     if (rec.p.kind !== 'free' && rec.p.kind !== 'state') {
       const ins = rec.valueIn.map((i) => i.p.name);
-      return err('not_free', at, { name: rec.p.name, inputs: joinNames(ins) }, { hint: `Redefine it as a plain value (${rec.p.name} = ...) or change ${ins.join(', ')}.`, suggest: rec.valueIn.filter((i) => i.p.kind === 'free').slice(0, 3).map((i) => `${i.p.name} = ...`), recovery: 'choose', related: ins, fingerprintKey: rec.p.name });
+      const lit = valueSource(rec.p.type, value) ?? (rec.cell.defined ? valueSource(rec.p.type, rec.cell.value) : undefined);
+      const line = lit !== undefined && lit !== 'undefined' ? `${rec.p.name} = ${lit}` : undefined;
+      return err('not_free', at, { name: rec.p.name, inputs: joinNames(ins) }, { hint: `Redefine it as a plain value${line ? ` (${line})` : ''} or change ${ins.join(', ')}.`, ...(line ? { suggest: [line] } : {}), recovery: 'choose', related: ins, fingerprintKey: rec.p.name });
     }
     if (this.isFixed(rec) && why !== 'solver' && !opts.force) {
       return err('locked', at, { name: rec.p.name }, { hint: `Unfix it first: ${rec.p.name} with fixed = false`, suggest: [`${rec.p.name} with fixed = false`], recovery: 'choose', fingerprintKey: rec.p.name });

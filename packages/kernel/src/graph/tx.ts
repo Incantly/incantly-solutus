@@ -10,9 +10,12 @@ import { makeNotice } from '../errors/notices';
 import type { JournalEntry, Reanchor, ScriptItem } from '../history/journal';
 import type { Expr, LineNode, ParsedLine, StyleItem } from '../language/ast';
 import type { CheckedLine } from '../language/check';
+import { BUILTIN_FUNCTIONS } from '../language/builtins';
 import { compileLine, evaluate } from '../language/compile';
 import type { CompiledLine } from '../language/compile';
 import { closestNames } from '../language/errors';
+import { nameProblem, reservedGroup } from '../language/names';
+import { defineLine } from '../errors/suggest';
 import { checkLine } from '../language/lines';
 import { parseLine } from '../language/parser';
 import { printExpr, printLineNode, printRange } from '../language/printer';
@@ -127,12 +130,56 @@ export class FigureTx extends FigureBase {
       this.rollbackTx();
       result = internalError('the figure', { line: lineNo, col: 1, endCol: 1 }, '', 'apply');
     }
+    if (!result.ok && !this.vetting && !opts.dryRun) result = this.repaired(result);
     this.deliver();
     if (result.ok) {
       const failed = this.takeListenerFailures();
       if (failed > 0) (result.notices as Notice[]).push(makeNotice('listener_failed', { where: 'a listener' }));
     }
     return result;
+  }
+
+  /** True while suggested lines are being tried, so a failed try is not repaired in turn. */
+  protected vetting = false;
+
+  /**
+   * The repairs every error gets before it leaves the kernel (errors design 7): an unknown name offers the line that
+   * defines it, and every suggested line is tried with a dry run, so a suggestion that would fail is not offered.
+   */
+  protected repaired(e: ErrorObject): ErrorObject {
+    try {
+      let suggest = [...e.suggest];
+      let hint = e.hint;
+      let define: string | undefined;
+      if (e.kind === 'unknown_name' && e.blockedBy === undefined && e.token !== '') {
+        const name = e.token;
+        if (!nameProblem(name) && !reservedGroup(name, this.commands, this.functions ?? BUILTIN_FUNCTIONS)) define = defineLine(name, 'Number');
+      }
+      if (suggest.length === 0 && define === undefined) return e;
+      const kept: string[] = [];
+      this.vetting = true;
+      try {
+        for (const s of define !== undefined ? [define, ...suggest] : suggest) {
+          if (kept.includes(s)) continue;
+          const r = this.apply(s, { dryRun: true });
+          if (r.ok) kept.push(s);
+        }
+      } finally {
+        this.vetting = false;
+      }
+      suggest = kept.slice(0, 3);
+      if (e.kind === 'unknown_name' && define !== undefined) {
+        const near = suggest.some((s) => s !== define);
+        if (!near) hint = `Define it first, or use a name that exists: ${this.names().slice(0, 8).join(', ')}.`;
+      }
+      const { fix, ...rest } = e as ErrorObject & { fix?: string };
+      const out: Record<string, unknown> = { ...rest, suggest, ...(hint !== undefined ? { hint } : {}) };
+      if (fix !== undefined && suggest.includes(fix)) out['fix'] = fix;
+      return out as unknown as ErrorObject;
+    } catch {
+      this.vetting = false;
+      return e;
+    }
   }
 
   protected applyInner(input: string | ParsedLine, opts: ApplyOptions, pass: import('./core').Pass): TxResult {
@@ -190,7 +237,9 @@ export class FigureTx extends FigureBase {
     const n = parsed.node;
     if (n.k !== 'action' || n.expr.callee !== 'Rename' || n.expr.args.length !== 2) return parsed;
     const second = (n.expr.args[1] as { value: Expr }).value;
-    if (second.k !== 'name' || this.byNameMap.has(second.name)) return parsed;
+    if (second.k !== 'name') return parsed;
+    // an object that holds a Text is an expression (the checked form); any other name is the new name
+    if (this.byNameMap.get(second.name)?.p.type.k === 'Text') return parsed;
     const str: Expr = { k: 'str', parts: [second.name], s: second.s, e: second.e };
     const args = [n.expr.args[0] as (typeof n.expr.args)[number], { ...(n.expr.args[1] as (typeof n.expr.args)[number]), value: str }];
     return { ...parsed, node: { ...n, expr: { ...n.expr, args } } };
@@ -379,7 +428,7 @@ export class FigureTx extends FigureBase {
     }
     const redefine = nExist > 0;
     const existing = exist.filter((r): r is ObjRec => r !== undefined);
-    for (const r of existing) if (this.isFixed(r) && !opts.force) return this.lockedError(parsed, r, (parsed.node as { target?: { s: number; e: number } }).target?.s, (parsed.node as { target?: { s: number; e: number } }).target?.e);
+    for (const r of existing) if (this.isFixed(r) && !opts.force) return this.lockedError(parsed, r);
 
     // a free Number redefined to a plain value keeps its slider range (kernel design B2)
     let node = parsed.node as DefLine;
@@ -419,7 +468,7 @@ export class FigureTx extends FigureBase {
     if (!redefine && insertAt !== undefined) {
       for (const x of inputs) {
         if (x.order >= insertAt) {
-          return this.fail(parsed, 'forward_reference', { name: names[0] as string, input: x.p.name }, { hint: `${x.p.name} is defined later; move it first.`, recovery: 'choose', related: [x.p.name] });
+          return this.fail(parsed, 'forward_reference', { name: names[0] as string, input: x.p.name }, { hint: `${x.p.name} is defined later; move it first, or add this line after it.`, suggest: [printLineNode(parsed.node)], recovery: 'choose', related: [x.p.name] });
         }
       }
     }
@@ -533,6 +582,10 @@ export class FigureTx extends FigureBase {
       this.insertRecs(recs.map((rec, i) => ({ rec, pos: pos + i })));
       for (const r of recs) pass.added.add(r);
       rep.added.push(...names);
+      for (const n of names) {
+        const lower = n.toLowerCase();
+        for (const o of this.list) if (o.p.name !== n && o.p.name.toLowerCase() === lower && !recs.includes(o)) notices.push(makeNotice('confusable_name', { name: n, other: o.p.name }));
+      }
       const pre = new Map<ObjRec, Cell>();
       recs.forEach((r, i) => pre.set(r, cells[i] as Cell));
       this.record({ k: 'add', items: recs.map((rec) => ({ rec, pos: rec.order })), label });
