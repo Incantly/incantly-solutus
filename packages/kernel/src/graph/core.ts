@@ -21,11 +21,11 @@ import { SELF_ID } from '../language/table';
 import type { CommandForm, CommandSpec, CommandTable, FigureView, FunctionTable, ObjectInfo } from '../language/table';
 import { PROPERTIES, own } from '../language/props';
 import { NOT_SET } from './types';
-import type { Cell, EffectiveStyle, FigureEvent, FrameDelta, Persist, Props, StyleEntry, UndefChange } from './types';
+import type { Cell, EffectiveStyle, FigureEvent, FrameDelta, Persist, Props, Slice, StyleEntry, UndefChange } from './types';
 import { sameValue } from './values';
 import { KERNEL_ACTIONS } from './actions';
 import { CommandRegistry, RuleUndefined } from './registry';
-import type { CommandRule, RuleCall } from './registry';
+import type { CommandRule, RuleCall, RuleWork } from './registry';
 import { coerceDynamic, defaultsFor, setProp, toEffective } from './props';
 
 /* ------------------------------ the object record ------------------------------ */
@@ -85,7 +85,12 @@ export interface FigureOptions {
   limits?: Partial<Limits>;
   /** A monotonic clock in milliseconds, for the profiler only (`slowRules`). The kernel never reads the wall clock. */
   now?: () => number;
+  /** The tolerance rules see (`RuleCall.tol`) when the figure has no `@tol` directive. Default `1e-9`. */
+  tolerance?: number;
 }
+
+/** The tolerance for equality tests when nothing says otherwise (errors design 8). */
+export const DEFAULT_TOLERANCE = 1e-9;
 
 export interface SlowRule {
   readonly id: ObjId;
@@ -154,6 +159,7 @@ export class FigureCore {
   protected listenerFailures = 0;
   readonly slowRules: SlowRule[] = [];
   protected readonly now: (() => number) | undefined;
+  protected readonly tolOption: number;
   /** Set by the state solver: advances the states to the clock and returns the state objects whose value changed. */
   protected stateDriver: (() => ObjRec[]) | undefined;
 
@@ -174,6 +180,7 @@ export class FigureCore {
     this.directives = opts.directives;
     this.limits = resolveLimits(opts.limits);
     this.now = opts.now;
+    this.tolOption = typeof opts.tolerance === 'number' && Number.isFinite(opts.tolerance) && opts.tolerance > 0 ? opts.tolerance : DEFAULT_TOLERANCE;
     this.env = createEnv({ read: (id) => this.readValue(id), slots: 16 });
     this.env.maxList = this.limits.listSize;
     this.langLimits = Object.freeze({ objects: this.limits.objects, exprNodes: this.limits.exprNodes, lineLength: this.limits.lineLength, listSize: this.limits.listSize, depth: this.limits.depth });
@@ -391,6 +398,22 @@ export class FigureCore {
         if (env.reason === undefined) env.reason = 'input_undefined';
         return undefined;
       }
+      let used = 0;
+      const cap = this.limits.ruleWork;
+      const work: RuleWork = {
+        limit: cap,
+        get used() {
+          return used;
+        },
+        get left() {
+          return Math.max(0, cap - used);
+        },
+        spend: (n = 1) => {
+          if (used > cap) return false;
+          used += typeof n === 'number' && n > 0 ? n : 1;
+          return used <= cap;
+        },
+      };
       const call: RuleCall = {
         env,
         spec,
@@ -398,6 +421,17 @@ export class FigureCore {
         args,
         values,
         t: env.t,
+        ids: args.map((a) => a.ref),
+        tol: this.tolerance(),
+        work,
+        limits: this.limits,
+        slice: (source, target) => {
+          const tgt = this.byIdMap.get(target);
+          if (!tgt) return err('unknown_name', { line: 0, col: 1, endCol: 1 }, { name: String(target) }, { recovery: 'fix_line', fingerprintKey: 'slice' });
+          const src = source === 't' ? undefined : this.byIdMap.get(source);
+          if (source !== 't' && !src) return err('unknown_name', { line: 0, col: 1, endCol: 1 }, { name: String(source) }, { recovery: 'fix_line', fingerprintKey: 'slice' });
+          return this.sliceRecs(src, tgt, work);
+        },
         fail: (reason, detail) => {
           if (env.reason === undefined) {
             env.reason = reason;
@@ -423,6 +457,77 @@ export class FigureCore {
       this.ruleDepth--;
     }
   };
+
+  /** The tolerance rules see. `FigureTx` reads `@tol` first. */
+  protected tolerance(): number {
+    return this.tolOption;
+  }
+
+  /**
+   * The scratch evaluation behind `Figure.slice` and `RuleCall.slice`. `source` is a free object, or undefined for the clock.
+   * Safe inside a running rule: it saves and restores the environment (reason, clock, locals) as well as the cells.
+   * With `work`, each value costs one step plus one per rule run, and a spent budget leaves `timeout` cells.
+   */
+  protected sliceRecs(src: ObjRec | undefined, t: ObjRec, work?: RuleWork): Slice | ErrorObject {
+    if (src && src.p.kind !== 'free') {
+      return err('not_free', { line: 0, col: 1, endCol: 1 }, { name: src.p.name, inputs: src.valueIn.map((i) => i.p.name).join(', ') }, { recovery: 'choose', fingerprintKey: src.p.name });
+    }
+    if (this.ruleDepth > this.limits.depth) {
+      return err('limit', { line: 0, col: 1, endCol: 1 }, { limit: 'depth', max: this.limits.depth, got: this.ruleDepth, what: 'nested rule runs' }, { recovery: 'rewrite', fingerprintKey: 'depth' });
+    }
+    const downIdx = new Set<number>();
+    if (src) for (const o of this.downOf(src)) downIdx.add(o);
+    else for (const o of this.clockDown()) downIdx.add(o);
+    const anc = this.ancestorRecs([t]);
+    const chain = anc.filter((r) => downIdx.has(r.order) && r.p.kind === 'rule');
+    const touched = src ? [src, ...chain] : chain;
+    const env = this.env;
+    return {
+      chain: chain.map((r) => r.p.name),
+      run: (values) => {
+        const saved = touched.map((r) => r.cell);
+        const stale = touched.map((r) => r.stale);
+        const savedClock = { ...this.clockState };
+        const savedEnv = { t: env.t, bt: env.bt, beat: env.beat, reason: env.reason, cause: env.cause, detail: env.detail };
+        const savedLocals = env.locals.slice();
+        const out: Cell[] = [];
+        const spent: Cell = { defined: false, reason: 'timeout' };
+        try {
+          for (const r of touched) r.stale = false;
+          for (const v of values) {
+            if (work && !work.spend(1 + chain.length)) {
+              out.push(spent);
+              continue;
+            }
+            if (src) src.cell = v === undefined || (typeof v === 'number' && v !== v) ? { defined: false, reason: 'explicit' } : { defined: true, value: v };
+            else {
+              env.t = v as number;
+              env.bt = v as number;
+              this.clockState.t = v as number;
+            }
+            for (const r of chain) r.cell = this.compute(r);
+            out.push(t.cell);
+          }
+        } finally {
+          touched.forEach((r, i) => {
+            r.cell = saved[i] as Cell;
+            r.stale = stale[i] as boolean;
+          });
+          this.clockState.t = savedClock.t;
+          this.clockState.bt = savedClock.bt;
+          this.clockState.beat = savedClock.beat;
+          env.t = savedEnv.t;
+          env.bt = savedEnv.bt;
+          env.beat = savedEnv.beat;
+          env.reason = savedEnv.reason;
+          env.cause = savedEnv.cause;
+          env.detail = savedEnv.detail;
+          for (let i = 0; i < savedLocals.length; i++) env.locals[i] = savedLocals[i];
+        }
+        return out;
+      },
+    };
+  }
 
   /** True while a rule runs: the figure is mid-update, so an operation called now would change what the update walks. */
   protected get busy(): boolean {

@@ -20,6 +20,8 @@ export interface Limits {
   readonly journalBytes: number;
   /** Time budget of one rule in milliseconds (a rule that overruns is recorded, never aborted). */
   readonly ruleBudgetMs: number;
+  /** Steps one run of a rule may take (`RuleCall.work`): the same cap on every machine, unlike a time budget. */
+  readonly ruleWork: number;
   /** Bytes of a script file to load. */
   readonly fileSize: number;
   /** Comments and directives per figure. */
@@ -41,6 +43,7 @@ export const DEFAULT_LIMITS: Limits = Object.freeze({
   journalEntries: 500,
   journalBytes: 4 * 1024 * 1024,
   ruleBudgetMs: 2,
+  ruleWork: 100000,
   fileSize: 2 * 1024 * 1024,
   items: 5000,
   lines: 20000,

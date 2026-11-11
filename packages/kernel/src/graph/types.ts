@@ -19,6 +19,17 @@ export type Cell =
   | { readonly defined: true; readonly value: unknown }
   | { readonly defined: false; readonly reason: UndefReason; readonly detail?: string; readonly cause?: ObjId };
 
+/** A scratch evaluation of the rules between two objects (README decision 9). */
+export interface Slice {
+  /** The objects that run, in order: the dependents of the source that the target reads, and the target. */
+  readonly chain: readonly Name[];
+  /**
+   * For each value: the cell of the target when the source holds it. The figure is left as it was. A slice made inside a
+   * rule (`RuleCall.slice`) charges the rule's work budget; once it is spent, the remaining cells are undefined with `timeout`.
+   */
+  run(values: Iterable<unknown>): Cell[];
+}
+
 /** Cell of an object that has not been computed yet. */
 export const NOT_SET: Cell = Object.freeze({ defined: false, reason: 'not_set' as UndefReason });
 

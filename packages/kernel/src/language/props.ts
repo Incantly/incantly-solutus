@@ -70,6 +70,7 @@ export const DIRECTIVES: Record<string, readonly string[]> = {
   angleunit: ['@angleunit degree'],
   rounding: ['@rounding 4s'],
   tol: ['@tol N'],
+  tolerance: ['@tolerance N'],
   cell: ['@cell ref value'],
   limit: ['@limit name N'],
   exam: ['@exam profile'],

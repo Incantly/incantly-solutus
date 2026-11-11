@@ -35,6 +35,8 @@ export interface CompiledArg {
   readonly slot?: number;
   readonly omitted: boolean;
   readonly value?: number | boolean | string;
+  /** The object this argument names when it is a plain object name (`Midpoint(A, B)`), else absent. */
+  readonly ref?: ObjId;
 }
 
 export interface CompileOptions {
@@ -871,6 +873,7 @@ class Compiler {
       ...(a.binder !== undefined ? { binder: a.binder } : {}),
       ...(a.slot !== undefined ? { slot: a.slot } : {}),
       ...(a.value !== undefined ? { value: a.value } : {}),
+      ...(a.expr && a.expr.n === 'ref' ? { ref: this.objId(a.expr.id) } : {}),
     }));
   }
 

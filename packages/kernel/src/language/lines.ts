@@ -847,6 +847,10 @@ function checkDirective(c: Checker, node: Extract<LineNode, { k: 'directive' }>)
     case 'beat':
       if (words.length < 1) return bad('an id and an optional "title"');
       break;
+    case 'tol':
+    case 'tolerance':
+      if (words.length !== 1 || words[0]?.num === undefined || !(words[0].num > 0) || !Number.isFinite(words[0].num)) return bad('a positive number like 1e-9');
+      break;
     case 'clock':
       if (words.length !== 1 || !/^\d+(?:\.\d+)?\.\.\d+(?:\.\d+)?$/.test(words[0]?.text ?? '')) return bad('a range like 0..30');
       {

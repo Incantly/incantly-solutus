@@ -5,7 +5,10 @@
  * A command form's `rule` factory receives the bound arguments and returns a `CommandRule` (an object command) or an
  * `ActionRule` (an action). The kernel calls `run` whenever the object has to be computed.
  */
+import type { ErrorObject } from '../contracts/errors';
 import type { UndefReason, ObjId } from '../contracts/values';
+import type { Limits } from '../errors/limits';
+import type { Slice } from './types';
 import type { CompiledArg } from '../language/compile';
 import type { Env } from '../language/runtime';
 import { checkTable, createCommandTable } from '../language/table';
@@ -39,6 +42,37 @@ export interface RuleCall {
   fail(reason: UndefReason, detail?: string): undefined;
   /** Evaluates argument `i` now (for a body argument, in the scope of its binders). */
   evalArg(i: number): unknown;
+  /** For each argument, the object it names when it is a plain object name (`Locus(P, M)`), else `undefined`. */
+  readonly ids: readonly (ObjId | undefined)[];
+  /**
+   * The figure's tolerance for equality tests (parallel, coincident, collinear, root and integral checks): `1e-9` unless the
+   * figure says otherwise (`@tol N` or the `tolerance` option). Rules scale it themselves: `tol * max(1, |scale|)`.
+   */
+  readonly tol: number;
+  /** The work budget of this run of the rule. */
+  readonly work: RuleWork;
+  /** The figure's size limits, `extra` included. */
+  readonly limits: Limits;
+  /**
+   * Evaluates the rules between a free object (or `'t'`, the clock) and a target object on a scratch copy, leaving the figure
+   * as it was; safe to call inside a rule. Both are ids from `ids`. An error when an id is unknown or the source is not free.
+   */
+  slice(source: ObjId | 't', target: ObjId): Slice | ErrorObject;
+}
+
+/**
+ * A count of the steps a rule run may take, so that an iteration cap is the same on every machine (errors design 8).
+ * The limit is `Limits.ruleWork`. A rule that loops calls `spend` each time round and, when it returns false, ends with
+ * `call.fail('no_convergence')` or `call.fail('timeout')`.
+ */
+export interface RuleWork {
+  readonly limit: number;
+  /** Steps spent so far in this run. */
+  readonly used: number;
+  /** Steps left, never below 0. */
+  readonly left: number;
+  /** Spends `n` steps (default 1). False when the budget is spent; once false it stays false. */
+  spend(n?: number): boolean;
 }
 
 export interface CommandRule {
@@ -61,6 +95,10 @@ export interface CommandRule {
 
 export interface InvertCall {
   readonly values: readonly unknown[];
+  /** As `RuleCall.ids`. */
+  readonly ids: readonly (ObjId | undefined)[];
+  /** As `RuleCall.tol`. */
+  readonly tol: number;
   readonly form: CommandForm;
   readonly spec: CommandSpec;
 }

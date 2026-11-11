@@ -18,9 +18,9 @@ import type { FigureOptions } from './core';
 import { FigureHist, merge } from './hist';
 import { SCRIPT_VERSION, emptyReport } from './tx';
 import { defaultsFor } from './props';
-import type { Cell, ChangeReport, EffectiveStyle, FrameDelta, StyleEntry, TxResult } from './types';
+import type { Cell, ChangeReport, EffectiveStyle, FrameDelta, Slice, StyleEntry, TxResult } from './types';
 
-export type { FigureOptions };
+export type { FigureOptions, Slice };
 export { SCRIPT_VERSION };
 
 /** One row of the build list (kernel design 12.1). */
@@ -69,14 +69,6 @@ export interface ObjectView {
   readonly definition: string;
   readonly inputs: readonly ObjId[];
   readonly style: EffectiveStyle;
-}
-
-/** A scratch evaluation of the rules between two objects (README decision 9). */
-export interface Slice {
-  /** The objects that run, in order: the dependents of the source that the target reads, and the target. */
-  readonly chain: readonly Name[];
-  /** For each value: the cell of the target when the source holds it. The figure is left as it was. */
-  run(values: Iterable<unknown>): Cell[];
 }
 
 export class Figure extends FigureHist {
@@ -138,6 +130,7 @@ export class Figure extends FigureHist {
   }
 
   protected override onDirective(name: string): void {
+    super.onDirective(name);
     if (name === 'clock' || name === 'solver') {
       this.structureVersion++;
       this.markClockDirty();
@@ -276,52 +269,10 @@ export class Figure extends FigureHist {
   slice(source: Name | ObjId | 't', target: Name | ObjId): Slice | ErrorObject {
     const tgt = this.need(target);
     if (tgt instanceof ObjRec === false) return tgt as ErrorObject;
-    const t = tgt as ObjRec;
-    const clockSource = source === 't';
-    let src: ObjRec | undefined;
-    if (!clockSource) {
-      const s = this.need(source as Name | ObjId);
-      if (s instanceof ObjRec === false) return s as ErrorObject;
-      src = s as ObjRec;
-      if (src.p.kind !== 'free') return err('not_free', { line: 0, col: 1, endCol: 1 }, { name: src.p.name, inputs: src.valueIn.map((i) => i.p.name).join(', ') }, { recovery: 'choose', fingerprintKey: src.p.name });
-    }
-    const downIdx = new Set<number>();
-    if (src) for (const o of this.downOf(src)) downIdx.add(o);
-    else for (const o of this.clockDown()) downIdx.add(o);
-    const anc = this.ancestorRecs([t]);
-    const chain = anc.filter((r) => downIdx.has(r.order) && r.p.kind === 'rule');
-    const touched = src ? [src, ...chain] : chain;
-    return {
-      chain: chain.map((r) => r.p.name),
-      run: (values) => {
-        const saved = touched.map((r) => r.cell);
-        const stale = touched.map((r) => r.stale);
-        const savedT = { ...this.clockState };
-        const out: Cell[] = [];
-        try {
-          for (const r of touched) r.stale = false;
-          for (const v of values) {
-            if (src) src.cell = v === undefined || (typeof v === 'number' && v !== v) ? { defined: false, reason: 'explicit' } : { defined: true, value: v };
-            else {
-              this.env.t = v as number;
-              this.env.bt = v as number;
-              this.clockState.t = v as number;
-            }
-            for (const r of chain) r.cell = this.compute(r);
-            out.push(t.cell);
-          }
-        } finally {
-          touched.forEach((r, i) => {
-            r.cell = saved[i] as Cell;
-            r.stale = stale[i] as boolean;
-          });
-          this.env.t = savedT.t;
-          this.env.bt = savedT.bt;
-          this.clockState.t = savedT.t;
-        }
-        return out;
-      },
-    };
+    if (source === 't') return this.sliceRecs(undefined, tgt as ObjRec);
+    const s = this.need(source);
+    if (s instanceof ObjRec === false) return s as ErrorObject;
+    return this.sliceRecs(s as ObjRec, tgt as ObjRec);
   }
 
   /* ------------------------------ steps ------------------------------ */

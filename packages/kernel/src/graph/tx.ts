@@ -366,6 +366,13 @@ export class FigureTx extends FigureBase {
     else if (gone && this.directiveAt.get(gone.name) === index) this.directiveAt.delete(gone.name);
   }
 
+  /** `@tol N` (or `@tolerance N`) when the figure has one, else the option or `1e-9`. */
+  protected override tolerance(): number {
+    const w = (this.directiveItem('tol') ?? this.directiveItem('tolerance'))?.words[0];
+    const n = w === undefined ? NaN : Number(w);
+    return Number.isFinite(n) && n > 0 ? n : this.tolOption;
+  }
+
   /** The first item of a non-repeatable directive, by name (a map lookup, not a scan). */
   protected directiveItem(name: string): ScriptItem | undefined {
     const i = this.directiveAt.get(name);
@@ -414,8 +421,15 @@ export class FigureTx extends FigureBase {
   }
 
   /** Hook for the clock and solver when a directive changes. */
-  protected onDirective(_name: string): void {
+  protected onDirective(name: string): void {
     // the motion hooks read the directive items when they need them
+    this.tolDirectiveChanged(name);
+  }
+
+  /** The rules read the tolerance when they run, so a new `@tol` runs them all again (also on undo and redo). */
+  protected tolDirectiveChanged(name: string): void {
+    if (name !== 'tol' && name !== 'tolerance') return;
+    this.settle(this.list.filter((r) => r.p.kind === 'rule'));
   }
 
   /**
@@ -891,6 +905,7 @@ export class FigureTx extends FigureBase {
         if (e.was) this.items[e.index] = e.was;
         else this.removeItem(e.index);
         this.queue({ ev: 'directive', name: e.item.name });
+        this.tolDirectiveChanged(e.item.name);
         return;
       }
       case 'group': {
@@ -926,6 +941,7 @@ export class FigureTx extends FigureBase {
       case 'item': {
         this.insertItem(e.item, e.was, e.index);
         this.queue({ ev: 'directive', name: e.item.name });
+        this.tolDirectiveChanged(e.item.name);
         return;
       }
       case 'group': {
