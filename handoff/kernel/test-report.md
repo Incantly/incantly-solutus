@@ -217,3 +217,51 @@ A test that a slider whose range moves under it gets one `clamped` notice was dr
 - The file imports `@incantly/kernel` only. The child-process tests import `packages/kernel/src/index.ts`, the same entry, through Vite.
 - Throw-away probe tests were used to see result shapes through the public API; they were deleted and never committed. A clean worktree of `a6ac891` in the scratch directory was used to see which tests fail on the bug; it holds a copy of the test file and no commits.
 - Committed and staged: only `packages/kernel/test/spec/kernel/regressions.test.ts` and this report.
+
+## Spec review
+
+Tester round for the six must-fix items of `handoff/kernel/review.md` (A1 to A6). File: `packages/kernel/test/spec/kernel/spec-review.test.ts`, 80 tests. Built from the docs, the behaviour described in `review.md`, the existing specs and the public entry.
+
+### Tests per item and state at the time of writing
+
+The working tree already held part of the fixer's work when the last run was made (A1 to A3 landed during the round). A4 to A6 were not fixed yet.
+
+| Item | Tests | Pass | Fail | What they check |
+|---|---|---|---|---|
+| A1 | 10 | 10 | 0 | An `anim` write moves the value and its dependents; 20 writes add no undo entry and keep the redo stack; the next applied line adds exactly one entry and undo takes back that line, not a slider move; an `anim` write does not join an open drag (the gesture commits 1 entry, undo leaves the animated value); `commitDrag` after animation alone commits 0; clamp to range and snap to step; a fixed slider may be animated; one `value` event lists the object and its dependents |
+| A2 | 16 | 16 | 0 | Base keys (visible, label, caption, aux, fixed, selectable, layer, showIf, color, opacity, tags, tip, animate) on 13 drawable types; Conic gets `width`, `lineStyle`, `fill` and takes them in a `with`; `registerTypeStyle` gives defaults (width, opacity, colour, free and dependent) and keys; a figure object takes the registered style; `with` takes a registered key on that type only; `unknown_property` lists registered keys; other types untouched; two registrations of one type merge keys and defaults; `registerPropertyTypes` keeps the types of an earlier call for the same key, and earlier keys, with no duplicate keys |
+| A3 | 22 | 22 | 0 | `ids`: id of a named argument, `undefined` for a literal or expression, stable across rename, current after redefine, present on re-runs. `tol`: default 1e-9, figure option, `@tolerance` directive. `work`: default cap positive and finite, cap from the limit option, within budget answers, over budget gives `no_convergence`, fresh counter per run and per rule, same outcome in two figures. `limits`: the rule sees the figure's limits. `slice`: from a mover and from `t` inside a rule, real cells untouched (also under `dryRun`), correct again inside a `flush` after a drag, bad ids return an error object without a throw |
+| A4 | 8 | 2 | 6 | `A, h(aux), B, C`: `stepTo(2)` shows A and B; `stepTo(3)` shows all three listed; `stepTo(i + 1)` reveals exactly rows 0..i; a helper first or two helpers before the cursor use no step; the helpers listing shows A and B visible and C hidden; one `step` event with the n asked for |
+| A5 | 11 | 2 | 9 | `Midpoint(A, Bb)`: `suggest[0]` is `M2 = Midpoint(A, B)`, recovery is `use_suggestion` or `rewrite`, a define line for `Bb` makes a Point and none makes a Number slider, `suggest[0]` repairs in one move. A far name in a Point slot gets a Point define line, in a Vector slot a Vector, in a Number slot a Number slider (passes today). Never the constant `e` in a suggestion or the hint. One-letter names do not get a rewrite to every other letter. Every suggestion is accepted by a dry run (passes today) |
+| A6 | 13 | 1 | 12 | `applyBatch(lines, { group, dryRun: true })`: names, ids, script, values, journal, redo stack and clock unchanged; no events; result has every key a real batch has, with the same `ok`, `rolledBack`, `applied`, and per line `op`, `type`, `summary`, `line`, `name`; results marked `dryRun`; last result gives type and value text; later lines see earlier ones; a failing line gives the real batch's error and rolls back; redefine and `Delete` in a dry batch change nothing; independent mode also commits nothing; ids are not used up; a dry run followed by the real batch gives the same results and one undo step |
+
+Totals: 80 tests, 53 pass, 27 fail. The one A6 test that passes today (a failing line gives the real batch's error) passes because an atomic batch already rolls back.
+
+### Names assumed (the integrator aligns them)
+
+| Item | Assumed name | Note |
+|---|---|---|
+| A1 | `setFree(name, value, 'anim')` | a sixth `WriteWhy`; the test casts it. A fixed slider is assumed writable by `anim`, as the review proposes |
+| A2 | `registerTypeStyle(type, { defaults, keys })` | exported from the entry; `defaults.color` is given as a hex string, `defaults` also takes `width` and `opacity`. The second registration of one type merges (assumption: the docs only say "append-only") |
+| A2 | `registerPropertyTypes(key, types)` | existing name; the tests assume merge and no duplicate keys |
+| A3 | `RuleCall.ids`, `.tol`, `.work`, `.limits`, `.slice` | `ids[i]` is a number or `undefined`; `work = { limit, spend(n?) => boolean }` where `spend` returns false once the cap is passed |
+| A3 | `FigureOptions.tolerance` | number, default 1e-9 |
+| A3 | `@tolerance <number>` | directive syntax assumed; checked by a re-run of a rule after the directive |
+| A3 | `Limits.ruleWork` | the rule work cap, through `FigureOptions.limits` |
+| A3 | `call.slice(source, target)` | the tests try ids first and fall back to names, and read the result as the existing `Slice` (`chain`, `run(values)`) |
+| A4 | none | existing `stepTo`, `steps({ helpers })` |
+| A5 | none | existing `apply`, `suggest`, `recovery`; types come from a dry run of each suggestion (`TxOk.type`, `TxOk.name`) |
+| A6 | `BatchOptions.dryRun` | results are assumed to carry `dryRun: true`, as a single-line dry run does |
+
+### Readings where the docs are silent
+
+- A5: the review says to put rewrite lines first. The doc example (agent.md 5.3) shows only `M = Midpoint(A, B)`, so `suggest[0]` is the rewrite and a Point define line may follow. The tests do not fix the position of the define line.
+- A5: a name such as `ee` is split by the language into `e * e`; that case is not tested, because the split suggestion contains the constant legitimately.
+- A4: the unit of the cursor is the step list without helpers. With helpers listed, only the visibility of A, B and C is checked, not of the helper.
+
+### Isolation
+
+- Read: `docs/`, `handoff/kernel/review.md`, `handoff/kernel/test-report.md`, the existing tests in `packages/kernel/test/spec/` (`helpers.ts` in full), `packages/kernel/src/index.ts`, `packages/kernel/src/contracts/values.ts`. `fixer-notes.md` was not read.
+- One slip: a throw-away probe printed `String(registerTypeStyle)`, which showed the body of that one function in `src/`. It was used only to learn that `defaults.color` takes a hex string; the probe was deleted. No other file under `packages/kernel/src/` was opened, and no diff of `src/` was shown. `git status` showed the names of the files the fixer changed.
+- The file imports only `@incantly/kernel` and `./helpers`.
+- Committed and staged: only `spec-review.test.ts` and this report.
