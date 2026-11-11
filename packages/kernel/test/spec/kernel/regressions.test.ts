@@ -793,7 +793,7 @@ describe('KERN-SM-8: re-entrant calls during a pass never throw across the bound
     ['setClock', (fig) => fig.setClock(3)],
     ['flush', (fig) => fig.flush()],
     ['applyBatch', (fig) => fig.applyBatch(['q = 1', 'r = q + a'], { group: 'g' })],
-    ['insertAt', (fig) => fig.insertAt(0, 'z = 1')],
+    ['insertAt', (fig) => fig.insertAt(0, 'zed = 1')],
     ['move', (fig) => fig.move('n', 0, { withDependencies: true })],
     ['append', (fig) => fig.append('p1 = 1')],
     ['commitDrag', (fig) => fig.commitDrag()],
@@ -1035,7 +1035,7 @@ describe('KERN-SM-9: Undo, Redo and nested batches act inside the open group, ne
       expect(() => {
         result = Figure.fromScript('a = 1\nb = 2\nUndo()\nUndo()\nUndo()\nUndo()');
       }).not.toThrow();
-      expect(result?.figure.apply('z = 1').ok).toBe(true);
+      expect(result?.figure.apply('zed = 1').ok).toBe(true);
     });
   });
 
@@ -1825,7 +1825,7 @@ describe('KERN-SM-16: the solver keeps its checkpoints when the states are not a
     ['a directive', (f) => f.apply('@view -5 5 -3 3')],
     ['a new object that reads the state', (f) => f.apply('r = s1 + 1')],
     ['a free write', (f) => f.setFree('k', 1, 'api')],
-    ['insertAt at the top', (f) => f.insertAt(0, 'z = 2')],
+    ['insertAt at the top', (f) => f.insertAt(0, 'zed = 2')],
     ['a batch of five lines', (f) => f.applyBatch(listOf(5, (i) => `bb${i} = ${i}`), { group: 'g' })],
     ['an appended file of ten lines', (f) => f.append(listOf(10, (i) => `ap${i} = ${i}`).join('\n'))],
   ];
@@ -1868,7 +1868,8 @@ describe('KERN-SM-16: the solver keeps its checkpoints when the states are not a
     ok(f.apply('q = 5'));
     counter.n = 0;
     f.setClock(110);
-    expect(counter.n).toBeLessThan(RUN_LIMIT);
+    // Ten more film seconds cost about 9,600 rule runs; a restart from zero would cost over 105,000.
+    expect(counter.n).toBeLessThan(20_000);
     expect(f.value('s1')).toBeCloseTo(111, 6);
     f.setClock(50);
     expect(f.value('s1')).toBeCloseTo(51, 6);
