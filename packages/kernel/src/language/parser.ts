@@ -11,6 +11,7 @@ import { MAX_DEPTH, lex } from './lexer';
 import { suggestName } from './names';
 import type { Token } from './lexer';
 import { SourceMap, splitLogicalLines } from './source';
+import type { LangLimits } from './source';
 
 export interface ParseOptions {
   /** 1-based number of the first physical line (default 1). */
@@ -21,6 +22,8 @@ export interface ParseOptions {
   isTaken?: (name: string) => boolean;
   /** Forms of a command, for `forms` on a syntax error inside its call. */
   commandForms?: (name: string) => readonly string[];
+  /** Host limits for line length and nesting depth. */
+  limits?: LangLimits;
 }
 
 const isUpper = (s: string): boolean => s.length > 0 && s[0] !== undefined && s[0] >= 'A' && s[0] <= 'Z';
@@ -166,13 +169,14 @@ class Parser {
   }
 
   enter(): void {
-    if (++this.depth > MAX_DEPTH) {
+    const maxDepth = this.opts.limits?.depth ?? MAX_DEPTH;
+    if (++this.depth > maxDepth) {
       const t = this.peek();
       throw new Stop(
-        this.diag.at('limit', t.s, t.e, 'lang.limit', { limit: 'nesting_depth', max: MAX_DEPTH, got: this.depth, what: 'levels of nesting' }, {
+        this.diag.at('limit', t.s, t.e, 'lang.limit', { limit: 'depth', max: maxDepth, got: this.depth, what: 'levels of nesting' }, {
           hint: 'Define the inner part as its own object first.',
-          limit: { name: 'nesting_depth', max: MAX_DEPTH, got: this.depth },
-          fingerprintKey: 'nesting_depth',
+          limit: { name: 'depth', max: maxDepth, got: this.depth },
+          fingerprintKey: 'depth',
         }),
       );
     }
@@ -1117,7 +1121,7 @@ function parseLineInner(source: string, opts: ParseOptions): Result<ParsedLine> 
 function parseLogical(text: string, opts: ParseOptions, probe = false): Result<ParsedLine> {
   const firstLine = opts.line ?? 1;
   const sm = new SourceMap(text, firstLine);
-  const lexed = lex(sm);
+  const lexed = lex(sm, opts.limits ? { limits: opts.limits } : {});
   const errors = lexed.errors;
   const notices: Notice[] = [...lexed.notices];
   const toks = lexed.tokens;

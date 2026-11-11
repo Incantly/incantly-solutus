@@ -951,7 +951,7 @@ class Compiler {
         return undefined;
       }
       const count = Math.floor((b - a) / s + 1e-9) + 1;
-      if (count > 100000) {
+      if (count > (env.maxList ?? 100000)) {
         fail(env, 'limit', `${count} items`);
         return undefined;
       }

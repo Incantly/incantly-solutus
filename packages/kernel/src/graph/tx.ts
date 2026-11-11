@@ -144,6 +144,7 @@ export class FigureTx extends FigureBase {
         line: lineNo,
         isTaken: (n) => this.byNameMap.has(n),
         isObjectCommand: (n) => this.commands.lookup(n)?.kind === 'object',
+        limits: this.langLimits,
       });
       if (!pr.ok) return pr;
       parsed = pr.value;
@@ -151,7 +152,7 @@ export class FigureTx extends FigureBase {
     } else parsed = input;
     parsed = this.rewriteRename(parsed);
 
-    const copts = opts.failed ? { failed: opts.failed } : {};
+    const copts = { limits: this.langLimits, ...(opts.failed ? { failed: opts.failed } : {}) };
     let cr = checkLine(parsed, this.view, copts);
     let assign = false;
     if (!cr.ok && cr.kind === 'cycle' && this.isSelfAssignment(parsed, cr)) {
@@ -385,9 +386,9 @@ export class FigureTx extends FigureBase {
     const old0 = existing[0];
     if (old0 && node.k === 'define' && !node.range && (checked.free || assign) && checked.type?.k === 'Number' && old0.p.node.k === 'define' && old0.p.node.range) {
       const withRange: LineNode = { ...node, range: old0.p.node.range };
-      const again = parseLine(printLineNode(withRange), { line: parsed.line, isTaken: (n) => this.byNameMap.has(n) });
+      const again = parseLine(printLineNode(withRange), { line: parsed.line, isTaken: (n) => this.byNameMap.has(n), limits: this.langLimits });
       if (again.ok) {
-        const c2 = checkLine(again.value, this.view, assign ? { skipGraphChecks: true } : {});
+        const c2 = checkLine(again.value, this.view, assign ? { skipGraphChecks: true, limits: this.langLimits } : { limits: this.langLimits });
         if (c2.ok) {
           parsed = again.value;
           checked = c2.value;

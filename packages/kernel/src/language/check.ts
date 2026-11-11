@@ -17,6 +17,7 @@ import { formText } from './table';
 import type { RelTree, TArg, TNode } from './tnode';
 import { T, accepts, binaryOp, legalOpsFor, listOf, setLabel, tyEq, tyStr, typeSet } from './types';
 import type { Ty } from './types';
+import type { LangLimits } from './source';
 
 /* ------------------------------ public shapes ------------------------------ */
 
@@ -25,6 +26,8 @@ export interface CheckOptions {
   failed?: ReadonlyMap<string, { line: number; kind: ErrorKind }>;
   /** Skip the cycle and dependents tests (used when re-checking dependents). */
   skipGraphChecks?: boolean;
+  /** Host limits (objects, expression nodes, list size); the language's own values apply to what is left out. */
+  limits?: LangLimits;
 }
 
 export interface CheckedRange {
@@ -310,11 +313,12 @@ class Checker {
   /* -------------------------------- helpers -------------------------------- */
 
   node(): void {
-    if (++this.nodes === MAX_NODES + 1) {
-      this.err('limit', 0, this.text.length, 'lang.limit', { limit: 'expression_nodes', max: MAX_NODES, got: this.nodes, what: 'expression nodes in a line' }, {
+    const max = this.opts.limits?.exprNodes ?? MAX_NODES;
+    if (++this.nodes === max + 1) {
+      this.err('limit', 0, this.text.length, 'lang.limit', { limit: 'expr_nodes', max, got: this.nodes, what: 'expression nodes in a line' }, {
         hint: 'Split the line into several objects.',
-        limit: { name: 'expression_nodes', max: MAX_NODES, got: this.nodes },
-        fingerprintKey: 'expression_nodes',
+        limit: { name: 'expr_nodes', max, got: this.nodes },
+        fingerprintKey: 'expr_nodes',
       });
       throw new Bail();
     }
@@ -772,10 +776,12 @@ class Checker {
   }
 
   inferList(e: Expr & { k: 'list' }, expected?: Ty): TNode | null {
-    if (e.items.length > 10000) {
-      return this.err('limit', e.s, e.e, 'lang.limit', { limit: 'list_literal', max: 10000, got: e.items.length, what: 'items in a list literal' }, {
-        limit: { name: 'list_literal', max: 10000, got: e.items.length },
-        fingerprintKey: 'list_literal',
+    const maxItems = this.opts.limits?.listSize ?? 10000;
+    if (e.items.length > maxItems) {
+      return this.err('limit', e.s, e.e, 'lang.limit', { limit: 'list_size', max: maxItems, got: e.items.length, what: 'items in a list literal' }, {
+        hint: 'Split the list, or build it with a range or Seq.',
+        limit: { name: 'list_size', max: maxItems, got: e.items.length },
+        fingerprintKey: 'list_size',
       });
     }
     if (e.items.length === 0) {
@@ -823,10 +829,11 @@ class Checker {
     const st = step ? foldNumber(step) : 1;
     if (a !== undefined && z !== undefined && st !== undefined && Number.isFinite(a) && Number.isFinite(z) && st !== 0) {
       const count = Math.floor((z - a) / st + 1e-9) + 1;
-      if (count > MAX_RANGE_ELEMENTS) {
-        return this.err('limit', e.s, e.e, 'lang.limit', { limit: 'range_elements', max: MAX_RANGE_ELEMENTS, got: count, what: 'list items' }, {
+      const maxRange = this.opts.limits?.listSize ?? MAX_RANGE_ELEMENTS;
+      if (count > maxRange) {
+        return this.err('limit', e.s, e.e, 'lang.limit', { limit: 'range_elements', max: maxRange, got: count, what: 'list items' }, {
           hint: 'Use a smaller range, or Seq with a step, or compute the value with a formula instead of a list.',
-          limit: { name: 'range_elements', max: MAX_RANGE_ELEMENTS, got: count },
+          limit: { name: 'range_elements', max: maxRange, got: count },
           fingerprintKey: 'range_elements',
         });
       }

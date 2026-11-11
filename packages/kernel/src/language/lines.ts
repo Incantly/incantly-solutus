@@ -182,12 +182,13 @@ function checkCycle(c: Checker, target: NameRef, existing: ObjectInfo, lineSpan:
   return true;
 }
 
-function checkRedefinition(c: Checker, target: NameRef, existing: ObjectInfo | undefined, newTy: Ty, lineSpan: SpanLike): void {
+function checkRedefinition(c: Checker, target: NameRef, existing: ObjectInfo | undefined, newTy: Ty, lineSpan: SpanLike, pending = 0): void {
   if (!existing) {
-    if (c.fig.size !== undefined && c.fig.size >= MAX_OBJECTS) {
-      c.err('limit', target.s, target.e, 'lang.limit', { limit: 'objects', max: MAX_OBJECTS, got: c.fig.size + 1, what: 'objects in a figure' }, {
+    const maxObjects = c.opts.limits?.objects ?? MAX_OBJECTS;
+    if (c.fig.size !== undefined && c.fig.size + pending >= maxObjects) {
+      c.err('limit', target.s, target.e, 'lang.limit', { limit: 'objects', max: maxObjects, got: c.fig.size + pending + 1, what: 'objects in a figure' }, {
         hint: 'Delete objects you no longer need, or build the shape from fewer objects.',
-        limit: { name: 'objects', max: MAX_OBJECTS, got: c.fig.size + 1 },
+        limit: { name: 'objects', max: maxObjects, got: c.fig.size + pending + 1 },
         fingerprintKey: 'objects',
       });
     }
@@ -569,10 +570,12 @@ function checkDefMany(c: Checker, node: Extract<LineNode, { k: 'defmany' }>): Pa
   }
   if (c.errors.length > 0) return undefined;
   let existingId: ObjId | undefined;
+  let pending = 0;
   node.targets.forEach((t, i) => {
     const ex = c.fig.lookup(t.name);
     if (ex && existingId === undefined) existingId = ex.id;
-    checkRedefinition(c, t, ex, tuple[i] as Ty, { s: node.targets[0]!.s, e: node.expr.e });
+    checkRedefinition(c, t, ex, tuple[i] as Ty, { s: node.targets[0]!.s, e: node.expr.e }, pending);
+    if (!ex) pending++;
   });
   return {
     kind: 'defmany',

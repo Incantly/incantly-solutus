@@ -6,6 +6,7 @@ import type { Notice } from '../contracts/errors';
 import { Diag, notice } from './errors';
 import type { LanguageError } from './errors';
 import { MAX_LINE_LENGTH, SourceMap, hexColourLength } from './source';
+import type { LangLimits } from './source';
 
 export type TokKind = 'num' | 'name' | 'kw' | 'str' | 'op' | 'sqrt' | 'at' | 'comment' | 'nl' | 'bad' | 'eof';
 
@@ -73,18 +74,20 @@ function scriptOf(c: string): string {
 
 const CLOSER_OF: Readonly<Record<string, string>> = { '(': ')', '[': ']' };
 
-export function lex(sm: SourceMap, opts: { maxTokens?: number } = {}): LexResult {
+export function lex(sm: SourceMap, opts: { maxTokens?: number; limits?: LangLimits } = {}): LexResult {
   const text = sm.text;
   const diag = new Diag(sm);
   const errors: LanguageError[] = [];
   const notices: Notice[] = [];
   const maxTokens = opts.maxTokens ?? MAX_TOKENS;
+  const maxLine = opts.limits?.lineLength ?? MAX_LINE_LENGTH;
+  const maxDepth = opts.limits?.depth ?? MAX_DEPTH;
 
-  if (sm.raw.length > MAX_LINE_LENGTH) {
+  if (sm.raw.length > maxLine) {
     errors.push(
-      diag.at('limit', 0, 0, 'lang.limit', { limit: 'line_length', max: MAX_LINE_LENGTH, got: sm.raw.length, what: 'characters in a line' }, {
+      diag.at('limit', 0, 0, 'lang.limit', { limit: 'line_length', max: maxLine, got: sm.raw.length, what: 'characters in a line' }, {
         hint: 'Split the line into shorter lines.',
-        limit: { name: 'line_length', max: MAX_LINE_LENGTH, got: sm.raw.length },
+        limit: { name: 'line_length', max: maxLine, got: sm.raw.length },
         fingerprintKey: 'line_length',
       }),
     );
@@ -201,12 +204,12 @@ export function lex(sm: SourceMap, opts: { maxTokens?: number } = {}): LexResult
         continue;
       }
       if (c === '(' || c === '[') {
-        if (base + stack.length >= MAX_DEPTH) {
+        if (base + stack.length >= maxDepth) {
           errors.push(
-            diag.at('limit', i, i + 1, 'lang.limit', { limit: 'nesting_depth', max: MAX_DEPTH, got: base + stack.length + 1, what: 'levels of nesting' }, {
+            diag.at('limit', i, i + 1, 'lang.limit', { limit: 'depth', max: maxDepth, got: base + stack.length + 1, what: 'levels of nesting' }, {
               hint: 'Define the inner part as its own object first.',
-              limit: { name: 'nesting_depth', max: MAX_DEPTH, got: base + stack.length + 1 },
-              fingerprintKey: 'nesting_depth',
+              limit: { name: 'depth', max: maxDepth, got: base + stack.length + 1 },
+              fingerprintKey: 'depth',
             }),
           );
           break;

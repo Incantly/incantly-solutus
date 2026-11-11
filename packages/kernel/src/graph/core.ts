@@ -10,6 +10,7 @@ import type { ErrorKind } from '../contracts/errors';
 import type { Name, ObjId, UndefReason } from '../contracts/values';
 import { resolveLimits } from '../errors/limits';
 import type { Limits } from '../errors/limits';
+import type { LangLimits } from '../language/source';
 import { evaluate, compileLine } from '../language/compile';
 import type { CompileOptions, CompiledArg, CompiledLine } from '../language/compile';
 import { createEnv } from '../language/runtime';
@@ -107,6 +108,8 @@ export class FigureCore {
   readonly functions: FunctionTable | undefined;
   readonly directives: readonly string[] | undefined;
   readonly limits: Limits;
+  /** The limits the line parser and checker honour. */
+  readonly langLimits: LangLimits;
 
   readonly byIdMap = new Map<ObjId, ObjRec>();
   readonly byNameMap = new Map<Name, ObjRec>();
@@ -157,6 +160,8 @@ export class FigureCore {
     this.limits = resolveLimits(opts.limits);
     this.now = opts.now;
     this.env = createEnv({ read: (id) => this.readValue(id), slots: 16 });
+    this.env.maxList = this.limits.listSize;
+    this.langLimits = Object.freeze({ objects: this.limits.objects, exprNodes: this.limits.exprNodes, lineLength: this.limits.lineLength, listSize: this.limits.listSize, depth: this.limits.depth });
     const me = (): FigureCore => this;
     this.view = {
       lookup: (n) => this.lookup(n),
@@ -310,11 +315,18 @@ export class FigureCore {
     if (!res.defined) {
       return { defined: false, reason: res.reason, ...(res.detail !== undefined ? { detail: res.detail } : {}), ...(res.cause !== undefined ? { cause: res.cause } : {}) };
     }
-    if (tupleIndex === undefined) return { defined: true, value: res.value };
+    if (tupleIndex === undefined) return this.sizeChecked(res.value);
     const arr = res.value as readonly unknown[];
     const v = Array.isArray(arr) ? arr[tupleIndex] : undefined;
     if (v instanceof RuleUndefined) return { defined: false, reason: v.reason, ...(v.detail !== undefined ? { detail: v.detail } : {}) };
     if (v === undefined || (typeof v === 'number' && v !== v)) return { defined: false, reason: 'not_finite' };
+    return this.sizeChecked(v);
+  }
+
+  /** A defined cell, or undefined with reason `limit` when the value is a list longer than `listSize` (errors design 9). */
+  protected sizeChecked(v: unknown): Cell {
+    const n = ArrayBuffer.isView(v) ? (v as unknown as { length: number }).length : Array.isArray(v) ? v.length : 0;
+    if (n > this.limits.listSize) return { defined: false, reason: 'limit', detail: `${n} items` };
     return { defined: true, value: v };
   }
 
