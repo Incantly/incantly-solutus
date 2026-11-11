@@ -2,32 +2,48 @@
  * Renderer micro-benchmarks (performance design 6: every package has a suite).
  * Targets: hit query under 0.2 ms at 5,000 objects; grid spacing trivial;
  * scheduler tick trivial; label placement for 200 labels under 2 ms.
+ *
+ * Plain script on purpose: Vitest 5 has no `bench` export, and this package
+ * must not add a bench runner. Run it with `npx tsx` or plain `node`
+ * (the imports below are type-strippable, so no flags are needed):
+ *
+ *   node packages/view/bench/view.bench.ts
  */
-import { bench } from 'vitest';
 import type { ObjId } from '@incantly/kernel';
+import { px } from '../src/core/coords';
 import { HitIndex } from '../src/core/hit';
 import { chooseStep } from '../src/core/grid';
-import { placeLabels } from '../src/core/labels';
+import { placeLabels, type LabelInput } from '../src/core/labels';
 import { rdpSimplify } from '../src/core/geometry';
 import { SchedulerState, registerFigure, schedulerTick } from '../src/core/scheduler';
+
+function measure(name: string, iterations: number, fn: () => void): void {
+  for (let w = 0; w < 10; w++) fn();
+  const t0 = performance.now();
+  for (let i = 0; i < iterations; i++) fn();
+  const totalMs = performance.now() - t0;
+  const meanMs = totalMs / iterations;
+  console.log(`${name}: ${meanMs.toFixed(4)} ms/op over ${iterations} iterations (${totalMs.toFixed(1)} ms total)`);
+}
 
 const N = 5000;
 const index = new HitIndex();
 for (let i = 0; i < N; i++) {
+  const id = i as ObjId;
   const x = (i % 80) * 64;
   const y = Math.floor(i / 80) * 64;
-  index.insert(i as ObjId, { x0: x as never, x1: (x + 60) as never, y0: y as never, y1: (y + 60) as never });
+  index.insert(id, { x0: px(x), x1: px(x + 60), y0: px(y), y1: px(y + 60) });
 }
 
-bench('hit query over 5,000 objects', () => {
-  index.query({ x: 500 as never, y: 500 as never }, 16);
+measure('hit query over 5,000 objects', 2000, () => {
+  index.query({ x: px(500), y: px(500) }, 16);
 });
 
-bench('grid spacing choice', () => {
+measure('grid spacing choice', 20000, () => {
   chooseStep(80, { k: 'unit' }, 1, null);
 });
 
-const labels = [];
+const labels: LabelInput[] = [];
 for (let i = 0; i < 200; i++) {
   labels.push({
     id: i as ObjId,
@@ -43,7 +59,7 @@ for (let i = 0; i < 200; i++) {
   });
 }
 
-bench('label placement, 200 labels', () => {
+measure('label placement, 200 labels', 50, () => {
   placeLabels(labels, []);
 });
 
@@ -53,7 +69,7 @@ for (let i = 0; i < 1000; i++) {
   run[i * 2 + 1] = Math.sin(i / 20) * 10;
 }
 
-bench('RDP simplify, 1,000 points', () => {
+measure('RDP simplify, 1,000 points', 200, () => {
   rdpSimplify(run, 0.3);
 });
 
@@ -62,6 +78,6 @@ for (let i = 0; i < 50; i++) registerFigure(sched, `fig${i}`);
 const visible = new Set(['fig1', 'fig2']);
 const near = new Set(['fig1', 'fig2', 'fig3', 'fig4']);
 
-bench('scheduler tick, 50 figures', () => {
+measure('scheduler tick, 50 figures', 2000, () => {
   schedulerTick(sched, { nowMs: 100000, visible, near, scrollSettled: true, tabVisible: true });
 });
