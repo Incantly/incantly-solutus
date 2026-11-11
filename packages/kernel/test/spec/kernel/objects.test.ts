@@ -225,6 +225,53 @@ describe('suggestName (kernel design 14)', () => {
   });
 });
 
+describe('Describe(obj) and describe() (kernel design 14)', () => {
+  it('returns name, type, definition, value, free, visibility, inputs and dependents as data on the result', () => {
+    const f = figure(WORLD);
+    const r = ok(f.apply('Describe(M)'));
+    expect(r.op).toBe('action');
+    expect(r.data).toEqual(
+      expect.objectContaining({
+        name: 'M',
+        type: 'Point',
+        definition: 'M = Midpoint(A, B)',
+        value: '(2.5, 4)',
+        defined: true,
+        free: false,
+        visible: true,
+        shown: true,
+        fixed: false,
+        aux: false,
+        layer: 0,
+        inputs: ['A', 'B'],
+        dependents: [],
+      }),
+    );
+    expect(f.count).toBe(WORLD.length); // read only: no object was added
+  });
+
+  it('lists dependents in order, and the same data comes from the method', () => {
+    const f = figure(WORLD);
+    const d = f.describe('A');
+    expect('name' in d && d.dependents).toEqual(['M', 'seg', 'l', 'c']);
+    expect(ok(f.apply('Describe(A)')).data).toEqual(d);
+  });
+
+  it('describes a free slider as free, with its value text', () => {
+    const f = figure(WORLD);
+    const d = f.describe('k');
+    expect('name' in d && d.free).toBe(true);
+    expect('name' in d && d.value).toBe('2');
+  });
+
+  it('an unknown object is an unknown_name error, not a throw', () => {
+    const f = figure(WORLD);
+    bad(f.apply('Describe(Zed)'), 'unknown_name');
+    const d = f.describe('Zed');
+    expect('kind' in d && d.kind).toBe('unknown_name');
+  });
+});
+
 describe('Figure construction', () => {
   it('can be created with no options', () => {
     const f = new Figure();
