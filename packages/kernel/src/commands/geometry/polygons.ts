@@ -105,7 +105,14 @@ export function isSimplePoly(pts: readonly V2[]): boolean {
 }
 
 /** Convex: all turns share a sign and the total turning is one full turn. */
-export function isConvexPoly(pts: readonly V2[]): boolean {
+export function isConvexPoly(all: readonly V2[]): boolean {
+  // Repeated consecutive vertices make zero-length sides and zero turns: leave them out (polygons-transforms 10).
+  const pts: V2[] = [];
+  for (const p of all) {
+    const q = pts[pts.length - 1];
+    if (!q || q.x !== p.x || q.y !== p.y) pts.push(p);
+  }
+  while (pts.length > 1 && (pts[0] as V2).x === (pts[pts.length - 1] as V2).x && (pts[0] as V2).y === (pts[pts.length - 1] as V2).y) pts.pop();
   const n = pts.length;
   if (n < 3) return false;
   let pos = false;
@@ -362,7 +369,8 @@ export const vertexPolyRule: CommandRule = rule((call) => {
   const pts = isPolygonV(v) ? v.pts : isPolylineV(v) ? (v.pts as V2[]) : undefined;
   if (!pts) return call.fail('wrong_kind', 'needs a polygon or polyline');
   const k = N(call, 1);
-  if (!isWhole(k) || k < 1 || k > pts.length) return call.fail('index_out_of_range', `index ${k} of ${pts.length}`);
+  if (!isWhole(k)) return call.fail('not_whole', `index = ${k}; a vertex index needs a whole number`);
+  if (k < 1 || k > pts.length) return call.fail('index_out_of_range', `index ${k} of ${pts.length}`);
   return { ...(pts[k - 1] as V2) };
 });
 
@@ -377,7 +385,8 @@ export const sideRule: CommandRule = rule((call) => {
   const v = call.values[0];
   if (!isPolygonV(v)) return call.fail('wrong_kind', 'Side needs a polygon');
   const k = N(call, 1);
-  if (!isWhole(k) || k < 1 || k > v.pts.length) return call.fail('index_out_of_range', `index ${k} of ${v.pts.length}`);
+  if (!isWhole(k)) return call.fail('not_whole', `index = ${k}; a side index needs a whole number`);
+  if (k < 1 || k > v.pts.length) return call.fail('index_out_of_range', `index ${k} of ${v.pts.length}`);
   const a = v.pts[k - 1] as V2;
   const b = v.pts[k % v.pts.length] as V2;
   return { a: { ...a }, b: { ...b } };
@@ -605,11 +614,31 @@ export const intersectPathLineRule: CommandRule = rule((call) => {
     const s1 = Math.min(bounds[i + 1] as number, hi);
     if (!(s1 > s0)) continue;
     const mid = { x: o.x + ((s0 + s1) / 2) * d.x, y: o.y + ((s0 + s1) / 2) * d.y };
-    if (!pointInPolygon(mid, pts, tol)) continue;
+    if (!chordMid(mid, d, pts, tol)) continue;
     out.push({ a: { x: o.x + s0 * d.x, y: o.y + s0 * d.y }, b: { x: o.x + s1 * d.x, y: o.y + s1 * d.y } });
   }
   return out;
 });
+
+/**
+ * True when the midpoint of a piece of the line is strictly inside the polygon, or on an edge that runs along the line
+ * (a line along an edge returns that edge; a line that only touches a corner returns nothing; polygons-transforms 4.1).
+ */
+function chordMid(mid: V2, d: V2, pts: readonly V2[], tol: number): boolean {
+  const slack = tol * Math.max(1, Math.hypot(mid.x, mid.y));
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[i] as V2;
+    const b = pts[(i + 1) % pts.length] as V2;
+    const ex = b.x - a.x;
+    const ey = b.y - a.y;
+    const el = Math.hypot(ex, ey);
+    if (!(el > 0)) continue;
+    const t = Math.min(1, Math.max(0, ((mid.x - a.x) * ex + (mid.y - a.y) * ey) / (el * el)));
+    const dd = Math.hypot(mid.x - a.x - t * ex, mid.y - a.y - t * ey);
+    if (dd <= slack) return Math.abs(ex * d.y - ey * d.x) <= 1e-9 * el;
+  }
+  return pointInPolygon(mid, pts, tol);
+}
 
 export const intersectPathPolyRule: CommandRule = rule((call) => polyBoolean(call, 'intersection'));
 export const unionRule: CommandRule = rule((call) => polyBoolean(call, 'union'));
@@ -651,16 +680,31 @@ function booleanOp(aa: readonly V2[], bb: readonly V2[], op: BoolOp, tol: number
     const pts = clipConvex(aa, bb, tol);
     return { polys: pts.length >= 3 ? [pts] : [] };
   }
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const scale = polyScale(aa, bb);
-    const bShift: readonly V2[] =
-      attempt === 0 ? bb : bb.map((p) => ({ x: p.x + 1e-9 * scale * 0.37, y: p.y + 1e-9 * scale * 0.71 }));
-    const found = findCrossings(aa, bShift, tol);
-    if (found.degenerate) continue; // perturb and retry
+  // Attempt 0 is the exact input. A degenerate contact is resolved by the fixed shift (polygons-transforms 4.2); when
+  // that shift only separates two polygons that shared an edge, the opposite shift (which overlaps them) is tried
+  // before settling for "no crossing".
+  const scale = polyScale(aa, bb);
+  const shifted = (k: number): readonly V2[] => bb.map((p) => ({ x: p.x + k * 1e-9 * scale * 0.37, y: p.y + k * 1e-9 * scale * 0.71 }));
+  let contact = false;
+  let fallback: BoolResult | undefined;
+  for (const k of [0, 1, -1]) {
+    const bShift = k === 0 ? bb : shifted(k);
+    // The shift is below the tolerance on purpose, so a shifted copy is tested for contact exactly.
+    const found = findCrossings(aa, bShift, k === 0 ? tol : 1e-14);
+    if (found.degenerate) {
+      contact = true;
+      continue; // perturb and retry
+    }
+    if (k === 1 && contact && found.list.length === 0) {
+      const r0 = runGH(aa, bShift, found.list, op, tol);
+      if (r0 !== 'retry') fallback = r0;
+      continue;
+    }
     const r = runGH(aa, bShift, found.list, op, tol);
     if (r === 'retry') continue;
     return r;
   }
+  if (fallback) return fallback;
   return { fail: 'no_convergence', detail: 'degenerate contacts did not resolve' };
 }
 
@@ -825,8 +869,9 @@ function runGH(a: readonly V2[], b: readonly V2[], crosses: Crossing[], op: Bool
       const mid = { x: (it.p.x + nx.p.x) / 2, y: (it.p.y + nx.p.y) / 2 };
       const pv = stream[(i - 1 + stream.length) % stream.length] as StreamItem;
       const pmid = { x: (it.p.x + pv.p.x) / 2, y: (it.p.y + pv.p.y) / 2 };
-      const after = pointInPolygon(mid, other, tol);
-      const before = pointInPolygon(pmid, other, tol);
+      // Exact inside test: after a shift below the tolerance a tolerant test would call both sides inside.
+      const after = pointInPolygon(mid, other, 0);
+      const before = pointInPolygon(pmid, other, 0);
       if (after === before) return false; // tangent touch: needs perturbation
       it.entry = after && !before;
     }
