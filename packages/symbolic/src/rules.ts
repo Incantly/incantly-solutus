@@ -331,7 +331,26 @@ const trigDouble: Rule = {
   },
 };
 
-const SIMPLIFY_RULES: readonly Rule[] = [powPower, rootsSquare, rootsPull, logRules, logExpPow, absRules, complexPow, trigPythagoras, trigDouble];
+/** No root in a denominator: `2^(-1/2) → sqrt(2)/2` (whole negative part pulled out). */
+const rootsRationalize: Rule = {
+  id: 'roots.rationalize',
+  on: 'pow',
+  teaching: true,
+  apply(n) {
+    const pe = asBaseExpPow(n);
+    if (pe === null) return null;
+    const er = asRational(pe.exp);
+    if (er === null || er.d === 1n || er.n >= 0n) return null;
+    if (pe.base.k !== 'int' || pe.base.v < 2n) return null;
+    // exp = -m/q  ->  base^(-k) * base^((k q - m)/q) with k = ceil(m/q)
+    const m = -er.n;
+    const q = er.d;
+    const k = (m + q - 1n) / q;
+    return mul(pow(pe.base, intN(-k)), pow(pe.base, ratN(k * q - m, q)));
+  },
+};
+
+const SIMPLIFY_RULES: readonly Rule[] = [powPower, rootsSquare, rootsPull, rootsRationalize, logRules, logExpPow, absRules, complexPow, trigPythagoras, trigDouble];
 
 /* ---------------------------------- expand ----------------------------------- */
 
@@ -834,24 +853,57 @@ export function completeSquareNode(t: SymNode, v: SymNode, ctx: RuleCtx): SymNod
 export function trigExpandNode(t: SymNode, ctx: RuleCtx): SymNode {
   return mapNodes(t, (x) => {
     if (x.k !== 'fn' || x.args.length !== 1) return x;
-    const a = x.args[0] as SymNode;
-    if (a.k !== 'add') return x;
     if (x.name !== 'sin' && x.name !== 'cos' && x.name !== 'tan') return x;
-    if (a.terms.length < 2) return x;
-    const u = a.terms[0] as SymNode;
-    const w = a.terms.length === 2 ? (a.terms[1] as SymNode) : add(...a.terms.slice(1));
-    ctx.tick.tick(2);
-    let out: SymNode;
-    if (x.name === 'sin') out = add(mul(fn('sin', u), fn('cos', w)), mul(fn('cos', u), fn('sin', w)));
-    else if (x.name === 'cos') out = add(mul(fn('cos', u), fn('cos', w)), negateNode(mul(fn('sin', u), fn('sin', w))));
-    else {
-      const tu = fn('tan', u);
-      const tw = fn('tan', w);
-      out = divideNodes(add(tu, tw), add(ONE, negateNode(mul(tu, tw))));
-    }
+    const out = trigExpandOne(x.name, x.args[0] as SymNode, ctx, 0);
+    if (out === x) return x;
     ctx.note('trig.expand', x, out);
     return out;
   });
+}
+
+/** `sin`, `cos` or `tan` of a sum or of a whole-number multiple (`cos(2x)`), expanded. */
+function trigExpandOne(name: 'sin' | 'cos' | 'tan', a: SymNode, ctx: RuleCtx, depth: number): SymNode {
+  const plain = fn(name, a);
+  if (depth > 24) return plain;
+  ctx.tick.tick(2);
+  if (a.k === 'add' && a.terms.length >= 2) {
+    const u = a.terms[0] as SymNode;
+    const w = a.terms.length === 2 ? (a.terms[1] as SymNode) : add(...a.terms.slice(1));
+    if (name === 'tan') {
+      const tu = trigExpandOne('tan', u, ctx, depth + 1);
+      const tw = trigExpandOne('tan', w, ctx, depth + 1);
+      return divideNodes(add(tu, tw), add(ONE, negateNode(mul(tu, tw))));
+    }
+    const su = trigExpandOne('sin', u, ctx, depth + 1);
+    const cu = trigExpandOne('cos', u, ctx, depth + 1);
+    const sw = trigExpandOne('sin', w, ctx, depth + 1);
+    const cw = trigExpandOne('cos', w, ctx, depth + 1);
+    if (name === 'sin') return add(mul(su, cw), mul(cu, sw));
+    return add(mul(cu, cw), negateNode(mul(su, sw)));
+  }
+  if (a.k === 'mul') {
+    const first = a.factors[0];
+    if (first !== undefined && first.k === 'int' && (first.v >= 2n || first.v <= -2n) && (first.v <= 12n && first.v >= -12n)) {
+      const n = Number(first.v < 0n ? -first.v : first.v);
+      const rest = a.factors.slice(1);
+      const u = rest.length === 1 ? (rest[0] as SymNode) : mul(...rest);
+      const s1 = fn('sin', u);
+      const c1 = fn('cos', u);
+      let sn: SymNode = s1;
+      let cn: SymNode = c1;
+      for (let k = 2; k <= n; k++) {
+        const s = add(mul(s1, cn), mul(c1, sn));
+        const c = add(mul(c1, cn), negateNode(mul(s1, sn)));
+        sn = s;
+        cn = c;
+      }
+      const neg = first.v < 0n;
+      if (name === 'sin') return neg ? negateNode(sn) : sn;
+      if (name === 'cos') return cn;
+      return divideNodes(neg ? negateNode(sn) : sn, cn);
+    }
+  }
+  return plain;
 }
 
 /** Combine trig products into sums; `a sin(v) + b cos(v)` becomes one sine. */

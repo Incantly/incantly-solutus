@@ -431,10 +431,12 @@ export function add(...terms: SymNode[]): SymNode {
       num = num === null ? coeff : addNumbers(num, coeff);
       continue;
     }
-    const hit = byRest.get(rest.id);
+    // `inf - inf` is indeterminate: opposite-sign infinities are kept apart, never cancelled.
+    const key = rest.k === 'const' && rest.name === 'inf' && isNegativeNumber(coeff) ? -rest.id : rest.id;
+    const hit = byRest.get(key);
     if (hit === undefined) {
-      byRest.set(rest.id, { rest, coeff });
-      order.push(rest.id);
+      byRest.set(key, { rest, coeff });
+      order.push(key);
     } else {
       hit.coeff = addNumbers(hit.coeff, coeff);
     }
@@ -490,7 +492,9 @@ export function mul(...factors: SymNode[]): SymNode {
   let hasInf = false;
   let hasZero = false;
   for (const f of flat) {
+    // `0 * inf` and `0 * 0^-1` are indeterminate: a zero never annihilates them.
     if (f.k === 'const' && f.name === 'inf') hasInf = true;
+    if (f.k === 'pow' && isZeroNode(f.base) && isNegativeNumber(f.exp)) hasInf = true;
     if (isZeroNode(f)) hasZero = true;
   }
   if (hasZero && !hasInf) return ZERO;

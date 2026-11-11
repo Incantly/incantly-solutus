@@ -35,7 +35,7 @@ function millerRabinWitness(n: bigint, a: bigint, d: bigint, s: number): boolean
 
 /**
  * Deterministic Miller-Rabin: exact below 3.3e24 with bases 2,3,5,7,11,13,17, and a
- * proven-bound base set beyond (first 13 prime bases, exact below 3e41).
+ * wider base set beyond (first 20 prime bases).
  */
 export function isPrimeBig(n: bigint): boolean {
   if (n < 2n) return false;
@@ -50,9 +50,13 @@ export function isPrimeBig(n: bigint): boolean {
     d >>= 1n;
     s++;
   }
+  // Exact below 3.3e24 with the first 13 primes; the smallest strong pseudoprime to all 13
+  // is 3317044064679887385961981, so from there on the set grows to the first 20 primes.
   const bases = n < 341550071728321n
     ? [2n, 3n, 5n, 7n, 11n, 13n, 17n]
-    : [2n, 3n, 5n, 7n, 11n, 13n, 17n, 19n, 23n, 29n, 31n, 37n, 41n];
+    : n < 3317044064679887385961981n
+      ? [2n, 3n, 5n, 7n, 11n, 13n, 17n, 19n, 23n, 29n, 31n, 37n, 41n]
+      : [2n, 3n, 5n, 7n, 11n, 13n, 17n, 19n, 23n, 29n, 31n, 37n, 41n, 43n, 47n, 53n, 59n, 61n, 67n, 71n];
   for (const a of bases) {
     if (a >= n) continue;
     if (millerRabinWitness(n, a, d, s)) return false;

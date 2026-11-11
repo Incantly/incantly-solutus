@@ -9,13 +9,13 @@ import Decimal from 'decimal.js';
 import type { Notice, NoticeKind } from '@incantly/kernel';
 import type { Assumptions } from './assume';
 import { assumptions as makeAssumptions, findContradiction } from './assume';
-import type { Domain, OpName, SymArg, SymbolicLimits, SymbolicNoticeKind } from './contracts';
+import type { Domain, DisplayHints, OpName, SymArg, SymbolicLimits, SymbolicNoticeKind } from './contracts';
 import { defined, SYMBOLIC_NOTICE_CODES } from './contracts';
 import type { Cell } from './contracts';
 import type { SymCond, SymFn, SymNode } from './node';
 import {
-  add, asInteger, asRational, bigGcd, constN, decN, floatN, freeSymbols, intN,
-  isZeroNode, LimitExceeded, mul, negateNode, nodeCount, pow, ratN, rel, symN,
+  add, asInteger, asRational, bigGcd, constN, decN, floatN, fn, freeSymbols, intN,
+  isZeroNode, LimitExceeded, listN, mul, negateNode, nodeCount, pow, ratN, rel, symN,
 } from './node';
 import { freeSymbolsCond } from './node';
 import {
@@ -177,8 +177,13 @@ export function numOrExpr(v: bigint): SymArg {
   return { k: 'expr', e: intN(v), exact: true };
 }
 
-function exprArg(e: SymNode, exact = true, extra?: { typed?: SymNode; excluded?: readonly SymCond[] }): SymArg {
-  return { k: 'expr', e, exact, ...(extra?.typed === undefined ? {} : { typed: extra.typed }), ...(extra?.excluded === undefined ? {} : { excluded: extra.excluded }) };
+function exprArg(e: SymNode, exact = true, extra?: { typed?: SymNode; excluded?: readonly SymCond[]; display?: DisplayHints }): SymArg {
+  return {
+    k: 'expr', e, exact,
+    ...(extra?.typed === undefined ? {} : { typed: extra.typed }),
+    ...(extra?.excluded === undefined ? {} : { excluded: extra.excluded }),
+    ...(extra?.display === undefined ? {} : { display: extra.display }),
+  };
 }
 
 /** Exactness in (once inexact, always inexact) ANDed with exactness out. */
@@ -254,11 +259,16 @@ function opExpr(args: readonly SymArg[], _named: ReadonlyMap<string, SymArg>, ct
   void ctx;
   noExtras(args, 1, 'Expr');
   const a = need(args, 0, 'Expr');
-  if (a.k === 'expr' || a.k === 'cond') return okOut(defined(a));
+  if (a.k === 'expr') {
+    if (hasZeroDenominator(a.e)) throw literalZeroError(a.e);
+    return okOut(defined(a));
+  }
+  if (a.k === 'cond') return okOut(defined(a));
   if (a.k === 'text') {
     try {
       const parsed = parseExprOrCond(a.v);
       if ('cond' in parsed) return okOut(defined(condArg(parsed.cond)));
+      if (hasZeroDenominator(parsed.expr)) throw literalZeroError(parsed.expr);
       return okOut(defined(exprArg(parsed.expr)));
     } catch (e) {
       if (e instanceof ParseFailure) {
@@ -269,6 +279,14 @@ function opExpr(args: readonly SymArg[], _named: ReadonlyMap<string, SymArg>, ct
     }
   }
   throw new OpError('not_symbolic', 'Expr needs an expression, an equation or text.', { recovery: 'rewrite' });
+}
+
+function literalZeroError(e: SymNode): OpError {
+  return new OpError('division_by_zero_literal', 'The expression divides by a literal zero.', {
+    token: toText(e),
+    hint: 'Change the denominator, or remove the division.',
+    recovery: 'fix_line',
+  });
 }
 
 function opSymbol(args: readonly SymArg[], named: ReadonlyMap<string, SymArg>, ctx: OpCtx): OpOut {
@@ -300,14 +318,127 @@ function opHold(args: readonly SymArg[], _named: ReadonlyMap<string, SymArg>, ct
   noExtras(args, 1, 'Hold');
   const a = need(args, 0, 'Hold');
   const e = asExpr(a, 'Hold');
-  return okOut(defined(exprArg(e, a.k === 'expr' ? a.exact : true, { typed: e })));
+  return okOut(defined(exprArg(e, a.k === 'expr' ? a.exact : true, { typed: e, display: { asTyped: true } })));
+}
+
+/** What makes an exact expression undefined in real arithmetic (design 8, errors.md 2). */
+interface Undefinedness {
+  readonly reason: 'indeterminate' | 'division_by_zero' | 'out_of_domain' | 'limit';
+  readonly code: string;
+  readonly text: string;
+  readonly suggest?: readonly string[];
+}
+
+function numberValue(t: SymNode): number | null {
+  switch (t.k) {
+    case 'int': return Number(t.v);
+    case 'rat': return Number(t.n) / Number(t.d);
+    case 'float': return t.v;
+    case 'dec': return Number(t.mant) * Math.pow(10, t.exp);
+    default: return null;
+  }
+}
+
+/** The first sub-expression that is undefined whatever the symbols are, or null. */
+function undefinedness(root: SymNode): Undefinedness | null {
+  const seen = new Set<number>();
+  const complexHint = ['Run the same line with domain = complex.'];
+  const walk = (x: SymNode): Undefinedness | null => {
+    if (seen.has(x.id)) return null;
+    seen.add(x.id);
+    switch (x.k) {
+      case 'add': {
+        const infs = x.terms.filter((t) => (t.k === 'const' && t.name === 'inf') || (t.k === 'mul' && t.factors.some((f) => f.k === 'const' && f.name === 'inf')));
+        if (infs.length > 1) {
+          const plus = infs.some((t) => !(t.k === 'mul' && isNegativeLead(t)));
+          const minus = infs.some((t) => t.k === 'mul' && isNegativeLead(t));
+          if (plus && minus) return { reason: 'indeterminate', code: 'Y205', text: 'inf - inf is indeterminate.' };
+        }
+        for (const t of x.terms) {
+          const r = walk(t);
+          if (r !== null) return r;
+        }
+        return null;
+      }
+      case 'mul': {
+        const zero = x.factors.some((f) => isZeroNode(f));
+        const infinite = x.factors.some((f) => (f.k === 'const' && f.name === 'inf') || (f.k === 'pow' && isZeroNode(f.base) && isNegativeExp(f.exp)));
+        if (zero && infinite) return { reason: 'indeterminate', code: 'Y205', text: 'Zero times an infinite factor (or 0/0) is indeterminate.' };
+        for (const f of x.factors) {
+          const r = walk(f);
+          if (r !== null) return r;
+        }
+        return null;
+      }
+      case 'pow': {
+        if (isZeroNode(x.base)) {
+          if (isZeroNode(x.exp)) return { reason: 'indeterminate', code: 'Y205', text: '0^0 is indeterminate.' };
+          if (isNegativeExp(x.exp)) return { reason: 'division_by_zero', code: 'Y211', text: `${toText(x)} divides by zero.` };
+        }
+        const bv = numberValue(x.base);
+        const ev = asRational(x.exp);
+        if (bv !== null && bv < 0 && ev !== null && ev.d % 2n === 0n) {
+          return { reason: 'out_of_domain', code: 'Y210', text: `${toText(x)} has no real value.`, suggest: complexHint };
+        }
+        if (bv !== null && x.exp.k === 'int' && Math.abs(bv) > 1) {
+          const digits = Number(x.exp.v < 0n ? -x.exp.v : x.exp.v) * Math.log10(Math.abs(bv));
+          if (digits > 100000) return { reason: 'limit', code: 'Y209', text: `${toText(x)} has more than 100000 digits (limit: digits 100000).` };
+        }
+        return walk(x.base) ?? walk(x.exp);
+      }
+      case 'fn': {
+        const a0 = x.args[0];
+        const v = a0 === undefined ? null : numberValue(a0);
+        if (v !== null && (((x.name === 'ln' || x.name === 'log10' || x.name === 'log2') && v <= 0) ||
+          ((x.name === 'asin' || x.name === 'acos') && Math.abs(v) > 1) || (x.name === 'sqrt' && v < 0))) {
+          return { reason: 'out_of_domain', code: 'Y210', text: `${toText(x)} has no real value.`, suggest: complexHint };
+        }
+        for (const a of x.args) {
+          const r = walk(a);
+          if (r !== null) return r;
+        }
+        return null;
+      }
+      case 'list':
+        for (const i of x.items) {
+          const r = walk(i);
+          if (r !== null) return r;
+        }
+        return null;
+      default: return null;
+    }
+  };
+  return walk(root);
+}
+
+function isNegativeLead(t: SymNode): boolean {
+  if (t.k !== 'mul') return false;
+  const f = t.factors[0];
+  return f !== undefined && ((f.k === 'int' && f.v < 0n) || (f.k === 'rat' && f.n < 0n));
+}
+
+function isNegativeExp(t: SymNode): boolean {
+  const v = numberValue(t);
+  return v !== null && v < 0;
+}
+
+function undefinedOut(u: Undefinedness): OpOut {
+  return okOut({
+    defined: false,
+    reason: u.reason,
+    detail: { code: u.code, text: u.text, ...(u.suggest === undefined ? {} : { suggest: u.suggest }) },
+  });
 }
 
 function opEvaluate(args: readonly SymArg[], _named: ReadonlyMap<string, SymArg>, ctx: OpCtx): OpOut {
   noExtras(args, 1, 'Evaluate');
   const e = asExpr(need(args, 0, 'Evaluate'), 'Evaluate');
   checkInputSize(e, ctx, 'Evaluate');
+  const bad = undefinedness(e);
+  if (bad !== null) return undefinedOut(bad);
   const out = evaluateNode(e, ruleCtxOf(ctx));
+  const after = undefinedness(out);
+  if (after !== null) return undefinedOut(after);
   const odd = hasRealOddRoot(e) || hasRealOddRoot(out);
   return okOut(defined(exprArg(out, outExact(args, out))), odd ? [oddRootNotice()] : []);
 }
@@ -1011,13 +1142,8 @@ function opSolve(args: readonly SymArg[], named: ReadonlyMap<string, SymArg>, ct
   let bounds: SolveBounds;
   if (args.length > 1 && (args[1] as SymArg).k !== 'named') {
     const second = args[1] as SymArg;
-    if (second.k === 'sym' || (second.k === 'expr' && second.e.k === 'sym')) {
-      v = asSym(second, op);
-      bounds = solveBounds(args, named, 2, op);
-    } else {
-      v = inferVar(c, op);
-      bounds = solveBounds(args, named, 1, op);
-    }
+    v = asSym(second, op);
+    bounds = solveBounds(args, named, 2, op);
   } else {
     v = inferVar(c, op);
     bounds = solveBounds(args, named, 1, op);
@@ -1211,7 +1337,10 @@ function opNumeric(args: readonly SymArg[], _named: ReadonlyMap<string, SymArg>,
   const val = evalAt(e, new Map());
   if (val === null || !Number.isFinite(val)) {
     if (freeSymbols(e).size > 0) {
-      return okOut({ defined: false, reason: 'out_of_domain', detail: { code: 'Y210', text: 'Numeric needs a value for every symbol.' } });
+      // Symbols stay; every closed part becomes a decimal.
+      const kept = numericKeepSymbols(e, digits, ctx);
+      if (kept !== null) return okOut(defined({ k: 'expr', e: kept, exact: false, display: { digits } }), odd);
+      return okOut({ defined: false, reason: 'out_of_domain', detail: { code: 'Y210', text: 'Numeric could not evaluate a part of the expression.' } });
     }
     if (hasZeroDenominator(e)) {
       return okOut({ defined: false, reason: 'division_by_zero', detail: { code: 'Y211', text: 'The expression divides by zero.' } });
@@ -1220,6 +1349,38 @@ function opNumeric(args: readonly SymArg[], _named: ReadonlyMap<string, SymArg>,
   }
   const node = decFromFloat(val, digits);
   return okOut(defined({ k: 'expr', e: node, exact: false, display: { digits: Math.min(digits, 17) } }), odd);
+}
+
+/** Numbers inside an expression with free symbols: each symbol-free part turns decimal. */
+function numericKeepSymbols(t: SymNode, digits: number, ctx: OpCtx): SymNode | null {
+  if (freeSymbols(t).size === 0) {
+    if (t.k === 'dec' || t.k === 'float') return t;
+    const dec = toDecimal(t, digits, ctx.tick);
+    if (dec !== null) return dec;
+    const val = evalAt(t, new Map());
+    return val === null || !Number.isFinite(val) ? null : decFromFloat(val, digits);
+  }
+  const each = (items: readonly SymNode[]): SymNode[] | null => {
+    const out: SymNode[] = [];
+    for (const i of items) {
+      const r = numericKeepSymbols(i, digits, ctx);
+      if (r === null) return null;
+      out.push(r);
+    }
+    return out;
+  };
+  switch (t.k) {
+    case 'add': { const r = each(t.terms); return r === null ? null : add(...r); }
+    case 'mul': { const r = each(t.factors); return r === null ? null : mul(...r); }
+    case 'pow': {
+      const b = numericKeepSymbols(t.base, digits, ctx);
+      const x = asInteger(t.exp) !== null ? t.exp : numericKeepSymbols(t.exp, digits, ctx);
+      return b === null || x === null ? null : pow(b, x);
+    }
+    case 'fn': { const r = each(t.args); return r === null ? null : fn(t.name, ...r); }
+    case 'list': { const r = each(t.items); return r === null ? null : listN(r); }
+    default: return t;
+  }
 }
 
 /** A float as a decimal node with up to 17 significant digits. */
@@ -1730,7 +1891,7 @@ function opIsPrime(args: readonly SymArg[], _named: ReadonlyMap<string, SymArg>,
   noExtras(args, 1, 'IsPrime');
   const n = wholeArg(need(args, 0, 'IsPrime'), 'IsPrime');
   checkPrimeDigits(n);
-  return okOut(defined({ k: 'bool', v: isPrimeBig(n < 0n ? -n : n) }));
+  return okOut(defined({ k: 'bool', v: n > 0n && isPrimeBig(n) }));
 }
 
 function opNextPrime(args: readonly SymArg[], _named: ReadonlyMap<string, SymArg>, _ctx: OpCtx): OpOut {
@@ -1851,7 +2012,7 @@ function checkMatrix(a: SymArg, ctx: OpCtx, op: string): Matrix {
   const m = asMatrix(a, op);
   if (!isSquare(m)) throw new OpError('bad_argument', `${op} needs a square matrix.`, { recovery: 'rewrite' });
   if (m.length > ctx.limits.maxMatrixSize) {
-    throw new OpError('limit', `${op} takes matrices up to ${ctx.limits.maxMatrixSize} by ${ctx.limits.maxMatrixSize}.`, { recovery: 'rewrite' });
+    throw new LimitExceeded(`matrix size ${ctx.limits.maxMatrixSize} by ${ctx.limits.maxMatrixSize}`);
   }
   return m;
 }

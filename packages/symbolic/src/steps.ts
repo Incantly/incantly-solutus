@@ -10,7 +10,7 @@ import { toText } from './print';
 
 /** Which rule ids are worth showing to a learner. */
 export const TEACHING_RULES: ReadonlySet<string> = new Set([
-  'pow.power', 'roots.square', 'roots.pull', 'log.split', 'abs.split',
+  'pow.power', 'roots.square', 'roots.pull', 'roots.rationalize', 'log.split', 'abs.split',
   'trig.pythagoras', 'trig.double', 'simplify.choose',
   'factor.int', 'factor.poly', 'factor.complex',
   'rationalize.numeric', 'rationalize.conj', 'square.complete',
@@ -27,6 +27,7 @@ const t = (n: SymNode): string => toText(n);
 export const PHRASES: Readonly<Record<string, Phrase>> = {
   'pow.power': (b, a) => `Combine the powers in ${t(b)}: ${t(a)}`,
   'roots.square': (_b, a) => `A square under a root gives an absolute value: ${t(a)}`,
+  'roots.rationalize': (_b, a) => `Move the root out of the denominator: ${t(a)}`,
   'roots.pull': (_b, a) => `Take the perfect square out of the root: ${t(a)}`,
   'log.split': (_b, a) => `Split the logarithm: ${t(a)}`,
   'abs.split': (_b, a) => `Drop the absolute value: ${t(a)}`,

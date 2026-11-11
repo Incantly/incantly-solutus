@@ -10,7 +10,7 @@ import type { ErrorKind } from '@incantly/kernel';
 import type { Assumptions } from './assume';
 import { assumptions as makeAssumptions } from './assume';
 import type { Cell, OpName, RunContext, Step, SymArg, SymbolicLimits } from './contracts';
-import { DEFAULT_LIMITS, HEAVY_OPS, SYMBOLIC_ERROR_CODES, undefinedCell } from './contracts';
+import { DEFAULT_LIMITS, HEAVY_OPS, SYMBOLIC_COMMANDS, SYMBOLIC_ERROR_CODES, undefinedCell } from './contracts';
 import type { SymCond, SymNode } from './node';
 import { floatN, LimitExceeded, mapNodes, mapCondNodes, ratN } from './node';
 import { shortestDecimalRational } from './num';
@@ -31,6 +31,8 @@ registerIntegrator((e, v, ctx) => integrateNode(e, v, ctx));
 
 export class BudgetExceeded extends Error {
   readonly kind: 'steps' | 'ms' | 'nodes' | 'digits';
+  /** Where the budget ran out: the command, and the last rule it applied. */
+  stage = '';
   constructor(kind: 'steps' | 'ms' | 'nodes' | 'digits') {
     super(`budget exceeded: ${kind}`);
     this.name = 'BudgetExceeded';
@@ -162,7 +164,31 @@ const CORE_ERROR_CODES: Readonly<Record<string, string>> = {
   internal: 'K999',
 };
 
-function opErrorToObject(e: OpError): ErrorObject {
+/** The forms of a command as readable signatures, at most four (errors.md 1.1). */
+function formsOf(op: string): string[] {
+  const cmd = SYMBOLIC_COMMANDS.find((c) => c.name === op);
+  if (cmd === undefined) return [];
+  return cmd.forms.slice(0, 4).map((f) => `${op}(${f.params.map((q) => `${q.name}${q.optional === true ? '?' : ''}: ${q.type}`).join(', ')}) -> ${f.returns}`);
+}
+
+/** Parameters that are not options (the first, required ones): never listed as named arguments. */
+function positionalOnly(op: string, name: string): boolean {
+  const cmd = SYMBOLIC_COMMANDS.find((c) => c.name === op);
+  if (cmd === undefined) return false;
+  return cmd.forms.every((f) => f.params.some((q) => q.name === name && q.optional !== true));
+}
+
+/** Names a command accepts as named arguments: every parameter name of every form. */
+function optionNamesOf(op: string): string[] {
+  const cmd = SYMBOLIC_COMMANDS.find((c) => c.name === op);
+  if (cmd === undefined) return [];
+  const names = new Set<string>();
+  for (const f of cmd.forms) for (const q of f.params) names.add(q.name);
+  return [...names];
+}
+
+function opErrorToObject(e: OpError, op?: string): ErrorObject {
+  const forms = e.forms.length > 0 || op === undefined || (e.kind !== 'no_matching_form' && e.kind !== 'arg_count') ? e.forms : formsOf(op);
   const code = (SYMBOLIC_ERROR_CODES as Readonly<Record<string, string>>)[e.kind] ?? CORE_ERROR_CODES[e.kind] ?? 'Y000';
   const phase = (OP_PHASES[e.kind] ?? 'typecheck') as ErrorObject['phase'];
   return {
@@ -179,7 +205,7 @@ function opErrorToObject(e: OpError): ErrorObject {
     endCol: 1,
     token: e.token,
     expected: e.expected,
-    forms: e.forms,
+    forms,
     ...(e.hint === undefined ? {} : { hint: e.hint }),
     suggest: e.suggest,
     recovery: e.recovery,
@@ -293,7 +319,7 @@ export function run(op: OpName, args: readonly SymArg[], opts: RunOptions = {}, 
   try {
     return runInner(op, args, opts, ctx);
   } catch (err) {
-    if (err instanceof OpError) return opErrorToObject(err);
+    if (err instanceof OpError) return opErrorToObject(err, op);
     if (err instanceof Unsupported) {
       return {
         ok: true,
@@ -343,6 +369,7 @@ export function run(op: OpName, args: readonly SymArg[], opts: RunOptions = {}, 
           cell: undefinedCell<SymArg>(reason, {
             code: reason === 'timeout' ? 'Y208' : 'Y209',
             text: reason === 'timeout' ? 'The step budget ran out.' : 'A size limit stopped the computation.',
+            stage: err.stage === '' ? op : err.stage,
           }),
         },
         notices: [],
@@ -364,6 +391,17 @@ function runInner(op: OpName, args: readonly SymArg[], opts: RunOptions, ctx: Ru
   for (const a of args) {
     if (a.k === 'named') named.set(a.name, a.v);
     else positional.push(a);
+  }
+  const allowedNames = optionNamesOf(op);
+  for (const name of named.keys()) {
+    if (op !== 'Steps' && allowedNames.length > 0 && !allowedNames.includes(name)) {
+      throw new OpError('bad_option', `${op} has no named argument ${name}.`, {
+        token: name,
+        expected: allowedNames.filter((n) => !positionalOnly(op, n)),
+        hint: `${op} accepts: ${allowedNames.join(', ')}.`,
+        recovery: 'fix_line',
+      });
+    }
   }
   const resolved = positional.map((a) => resolveRefs(a, ctx.resolveRef));
   const namedResolved = new Map<string, SymArg>();
@@ -395,16 +433,16 @@ function runInner(op: OpName, args: readonly SymArg[], opts: RunOptions, ctx: Ru
   if (op === 'Steps') return runSteps(resolved, namedResolved, limits, assume, opts, ctx);
   const budget = new Budget(limits, opts.fastLaneMs);
   const logged: Step[] = [];
-  const note = wantSteps || ctx.note !== undefined
-    ? (rule: string, before: SymNode, after: SymNode): void => {
-      if (wantSteps) logged.push({ rule, before, after, teaching: TEACHING_RULES.has(rule) });
-      ctx.note?.(rule, before, after);
-    }
-    : undefined;
+  let stage: string = op;
+  const note = (rule: string, before: SymNode, after: SymNode): void => {
+    stage = `${op}: ${rule}`;
+    if (wantSteps) logged.push({ rule, before, after, teaching: TEACHING_RULES.has(rule) });
+    ctx.note?.(rule, before, after);
+  };
   const opCtx: OpCtx = {
     assume,
     tick: budget,
-    note: note ?? ((): void => {}),
+    note,
     limits,
     ...(opts.name === undefined ? {} : { name: opts.name }),
   };
@@ -417,6 +455,7 @@ function runInner(op: OpName, args: readonly SymArg[], opts: RunOptions, ctx: Ru
       notices: [...out.notices],
     };
   } catch (err) {
+    if (err instanceof BudgetExceeded && err.stage === '') err.stage = stage;
     if (err instanceof BudgetExceeded && err.kind === 'ms' && opts.fastLaneMs !== undefined) {
       return {
         ok: true,

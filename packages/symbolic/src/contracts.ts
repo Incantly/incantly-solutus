@@ -174,6 +174,7 @@ export const SYMBOLIC_UNDEF_CODES: Readonly<Record<string, string>> = {
   limit: 'Y209',
   out_of_domain: 'Y210',
   division_by_zero: 'Y211',
+  no_solution: 'Y212',
   index_out_of_range: 'Y212',
   not_finite: 'Y213',
 };
@@ -237,7 +238,7 @@ export type OpName =
 export const HEAVY_OPS: ReadonlySet<OpName> = new Set<OpName>([
   'Simplify', 'Factor', 'Solve', 'Solutions', 'NSolve', 'NSolutions', 'CSolve', 'CSolutions',
   'Integral', 'Limit', 'LimitAbove', 'LimitBelow', 'SolveODE', 'PartialFractions',
-  'Eigenvalues', 'Eigenvectors', 'Steps',
+  'Eigenvalues', 'Eigenvectors', 'CharacteristicPolynomial', 'Inverse', 'Determinant', 'Steps',
 ]);
 
 /** A parameter case split: special values where the generic answer does not apply. */
