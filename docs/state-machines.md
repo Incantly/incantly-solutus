@@ -334,3 +334,306 @@ Checked at commit `d2d9d9e` (pass 1), at `3220d23` (round 2, after the fixes for
 - **Invariants:** a table never changes under a compiled line; `checkTable` reports every pair of forms that accept the same arguments with neither more specific.
 - **Transitions:** none after creation; a new table is a new value. A figure's `commands` and `functions` may be swapped by the host between checking and compiling, but compiled lines hold the spec and form objects they were checked against.
 - **Reachable invalid states or transitions:** none found.
+
+## view
+
+Checked at commit `1525786` (pass 1) on `feat/view`. Paths are under `packages/view/src/`; line numbers refer to `1525786`. Findings are in `handoff/view/findings.md` (VIEW-SM-1 to VIEW-SM-27, all open). Every reachable invalid state below was reproduced through the public API in happy-dom unless marked "code path".
+
+### V1. Figure scheduler
+
+- **Where:** `core/scheduler.ts` `schedulerTick` (lines 136 to 220), `registerFigure`, `touchFigure`, `setPlaying`; `web/scheduler-host.ts` `SchedulerHost.tick` (lines 87 to 100), `observe`, `noteScroll`, `start`.
+- **States (per figure):**
+
+| State | Holds |
+|---|---|
+| `placeholder` | Script and saved picture; nothing built |
+| `ready` | Built, one frame drawn |
+| `live` | Drawing frames while dirty or playing |
+| `paused` | Built, drawing nothing; `pausedOffscreenSinceMs` set when off screen |
+| `saved` | Picture plus kernel/view state; resources freed |
+
+Per-figure flags: `inView`, `near`, `nearSinceMs`, `lastUsedMs`, `playing`. Host flags: `scrollSettled`, `tabVisible`, the visible and near sets, the 500 ms interval and the settle timer.
+
+- **Invariants:** at most `maxLive` (3) figures are `live`; a figure is `live` only while in view and the tab is visible; a build or restore happens only after the scroll settled and the figure was near for `settleMs`; every built figure (`ready` or `paused`) that stays off screen for `saveMs` becomes `saved`; one tick's actions are dispatched in order against the state the tick produced; a tick with unchanged inputs produces no actions (no flapping).
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| any | register | id new | `placeholder` | stats.registered |
+| `live` | tick | not in view or tab hidden | `paused` | `pause`; off-screen timer starts when not in view |
+| `placeholder` | tick | settled, near for >= 150 ms | `ready` | `build` |
+| `saved` | tick | settled, near for >= 150 ms | `ready` | `restore` |
+| `ready`, `paused` | tick | in view, tab visible, live count < 3 | `live` | `goLive` |
+| `ready`, `paused` | tick | in view, live count = 3, LRU unpinned live victim not touched later than this one | `live` | victim to `paused` (`pause`), then `goLive` |
+| `paused` | tick | off screen for >= 8 s | `saved` | `save`, stats.saves |
+| any | unregister | | (gone) | no action emitted; the host releases resources |
+
+- **Reachable invalid states or transitions:**
+  - Flapping: four untouched in-view figures (equal `lastUsedMs`) swap one `pause` and one `goLive` on every tick forever, because the victim check at line 190 breaks only when the victim is strictly newer. VIEW-SM-13, open.
+  - `ready` figures that leave the near zone never pause or save (step 5 at line 202 handles `paused` only); after 120 s far away a figure is still `ready` with no action. VIEW-SM-13, open.
+  - Re-entrant tick: an `onAction` callback that calls `touch` or `setPlaying` runs a nested tick inside the dispatch loop (line 95); the outer loop then dispatches stale actions (`goLive(b)` twice, `goLive(c)` for a record already `paused`). VIEW-SM-13, open.
+  - Builds wait for the next 500 ms interval tick, because the observer tick at `nearSinceMs` is too early and no tick is scheduled at `nearSinceMs + 150`: a figure seen at t = 0 builds at 500 ms. VIEW-SM-26, open.
+
+### V2. Shared GPU context, figure boxes and the WebGL2 back-end
+
+- **Where:** `web/shared-context.ts` `SharedGpuContext` (`create`, `acquireBox`, `resizeBox`, `releaseBox`, `present`, `dispose`); `backends/webgl2.ts` `WebGL2Backend` (`track`, `owned`, every `create*`, `readPixels`, `dispose`).
+- **States:**
+
+| State | Holds |
+|---|---|
+| `noGpu` | `backendValue = null`; boxes have a visible canvas and `target = null` |
+| `gpu` | One `WebGL2Backend`; each box has an MSAA `Target` |
+| `lost` | The GL context is lost: every `create*`, `draw`, `readPixels` returns `internal` |
+| `restored` | Browser restored the context; every old handle is dead |
+| `disposed` | Boxes cleared, back-end disposed |
+
+Per box: `absent` → `acquired` (canvas, `ctx2d`, target) → `resized` (target recreated) → `released`.
+
+- **Invariants:** figures never create their own GPU context; a box's target matches its canvas size in device pixels; every handle in `owned` is alive; after a restore every live box and every `Figure3D` gets fresh resources; a box id belongs to one figure.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| (none) | `create` | WebGL2 available | `gpu` | 16 x 16 offscreen canvas |
+| (none) | `create` | otherwise | `noGpu` | |
+| `gpu` | `acquireBox(id)` | id new | box `acquired` | visible canvas, target |
+| `gpu` | `acquireBox(id)` | id exists | box `resized` | returns the same box (and canvas) |
+| `gpu` | `resizeBox` | | box `resized` | old target disposed, new target; handles pushed to `owned` |
+| `gpu` | `present(id)` | box and target | `gpu` | resolve, `readPixels`, flip, `putImageData` |
+| `gpu` | context lost | | `lost` | none (no listener) |
+| `lost` | context restored | | `restored` | none (no listener) |
+| any | `dispose` | | `disposed` | |
+
+- **Reachable invalid states or transitions:**
+  - `restored` is never handled: no `webglcontextlost` or `webglcontextrestored` listener exists, so targets, programs and arenas cached in boxes and `Figure3D` stay dead and 3D figures stay blank until reload (code path). VIEW-SM-6, open.
+  - `owned` only grows: disposed targets and arenas are never removed, so every resize keeps 5 to 7 dead handles. VIEW-SM-4, open.
+  - `present` reads the whole box back to the CPU and allocates two full-size buffers every frame. VIEW-SM-25, open.
+  - Two figures with the same id share one box and one canvas; releasing one blanks the other (code path; depends on the host reusing ids). Noted under VIEW-SM-6.
+
+### V3. FigureView lifecycle and frame request
+
+- **Where:** `web/figure-view.ts` `mount` (257), `unmount` (359), `resize` (389), `requestFrame` (545), `frame` (578), `setViewRegion`/`goHome` tweens (441, 466).
+- **States:** `created` (no root) → `mounted` (root, canvases, listeners) → `destroyed` (`destroyed = true`, root null). Frame request flag `pending`. View tween `tween` (`null` or `{from, to, startMs, durMs}`); camera tween `camTween`.
+- **Invariants:** a mounted figure draws when something is dirty; `pending` is true only while one frame callback is queued; `view.width/height` equal the root's CSS size after any resize; a tween never overrides a newer size.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `created` | `mount(el)` | | `mounted` | canvases, a11y nodes, listeners, first frame |
+| `mounted` | `unmount` | | `destroyed` | listeners removed, box released, `Figure3D` disposed |
+| `destroyed` | `mount(el)` | root null | `mounted` but `destroyed` still true | returns ok; `requestFrame` refuses forever |
+| `mounted` | dirty mark | not `pending` | `pending` | schedule `frame` |
+| `pending` | frame | | not `pending` | events, update, layout, paint, reader list |
+| `mounted` | `resize` | | `mounted` | viewport rebuilt at the new size |
+| tween active | frame | | tween active or null | `view = tweenViewport(from, to, t)` at `from`'s size |
+
+- **Reachable invalid states or transitions:**
+  - `destroyed` then `mount`: returns `ok`, queues no frame and builds no reader list. VIEW-SM-7, open.
+  - Resize during a tween: the next tween frame restores `from.width`; after the tween ends the viewport is still 800 px wide in a 400 px element. VIEW-SM-15, open.
+  - With a synchronous `scheduleFrame` (or no `requestAnimationFrame`), the end-of-frame `requestFrame` recurses while a highlight or tween lives (code path). Noted under VIEW-SM-23.
+
+### V4. Draw list, dirty flags and cached layers
+
+- **Where:** `core/drawables.ts` `DrawList` (`add`, `remove`, `resort`, `applyEvent`, `markViewDirtyAll`, `markPanDirty`, `activeIds`), `updateDrawables`, `splitForActive`; `web/figure-view.ts` `paintScene2D` (cache key at 980), `markCacheInvalid`, `paintVersion`, `bgDirty`.
+- **States:** per entry `clean`, `valueDirty`, `viewDirty` (both may be set); figure-wide `paintVersion` (counter), `cacheValid` + `cacheKey` (lower and upper bitmaps), `bgDirty`.
+- **Invariants:** an entry is rebuilt exactly when its value, style or the viewport changed; a pan shifts cached pixels of non-viewport-dependent kinds; the lower and upper bitmaps stay valid across the frames of one interaction and are invalidated only by a viewport change, a restyle, or an add or remove in `lower` or `upper` (design 7.4); live drawables hold live-viewport geometry whenever input can reach them.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| absent | `add` event | `create` returns a drawable | `valueDirty`+`viewDirty` | binary-search insert |
+| any | `update` / `restyle` | | `valueDirty`+`viewDirty` | `paintVersion++`, cache invalid |
+| any | `remove` | | absent | `indexOf` + `splice` |
+| any | zoom, resize, theme | | `viewDirty` | all entries |
+| any | pan | `shiftPixels` true | unchanged | pixels shifted |
+| dirty | update phase | | `clean` | geometry rebuilt, hit index updated |
+| `cacheValid` | frame | key equal | `cacheValid` | composite cached bitmaps |
+| any | frame | key differs | `cacheValid` with new key | repaint lower and upper, new full-size canvas |
+| live geometry | `exportSvg`/`exportPng` | | export geometry | rebuilt at the export viewport until the next frame |
+
+- **Reachable invalid states or transitions:**
+  - The cache key contains `paintVersion`, which every drag move bumps (via `applyEvents`), so during a drag the bitmaps are rebuilt every frame and a full-size canvas is allocated per frame (code path). VIEW-SM-22, open.
+  - After an export the drawables hold export-viewport geometry until the next frame; a hit test at a point's live position finds nothing in that window. VIEW-SM-14, open.
+  - `remove` and the 3D `SceneIndex` use `indexOf` per id, so removing or updating many ids is quadratic. VIEW-SM-24, open.
+
+### V5. 2D pointer interaction modes
+
+- **Where:** `web/figure-view.ts` `onPointerDown` (1248), `onPointerMove` (1342), `onPointerUp` (1584), `onWheel`, `onDoubleClick`, `rescaleAxis` (1426); fields `pointers`, `pinchStart`, `band`, `panning`, `drag`.
+- **States:**
+
+| State | Holds |
+|---|---|
+| `idle` | No pointer down; hover updates `hovered` |
+| `band` | Shift-drag rubber band rectangle |
+| `panning` | Background pan (`axis = both`) |
+| `axisRescale` | Pan record with `axis = x` or `y` |
+| `dragPending` | `drag` set, `started = false` (below 3 px mouse / 8 px touch) |
+| `dragging` | `drag.started = true`; `kernel.drag` called per move |
+| `labelDrag` | `drag.plan.kind = label`; `labelOverride` holds the preview |
+| `pinch` | Two pointers; zoom about the midpoint |
+
+- **Invariants:** exactly one mode at a time; leaving `dragging` always ends the kernel drag (V6); the axis-rescale path respects the same zoom limits as wheel zoom.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `idle` | down | no hit, shift | `band` | capture |
+| `idle` | down | no hit, near an axis | `axisRescale` | capture |
+| `idle` | down | no hit | `panning` | capture; selection cleared |
+| `idle` | down | hit, plan `none` | `panning` | `drag_fixed` / `drag_path_undefined` / `drag_blocked` gesture |
+| `idle` | down | hit, plan set | `dragPending` | selection set, grab offset |
+| `dragPending` | move | >= threshold | `dragging` or `labelDrag` | first `kernel.drag` or override |
+| any one-pointer mode | second pointer down | | `pinch` | `drag = null`, `panning = null` |
+| `band` | up | | `idle` | rubber-band select |
+| `dragging` | up or `pointercancel` | | `idle` | rounded `drag`, `commitDrag`, announcement |
+| `labelDrag` | up | | `idle` | `onRestyle` |
+| `dragging`, `labelDrag` | Esc | | `idle` | `cancelDrag`, `drag = null` |
+| `axisRescale` | move | factor > 0.2 | `axisRescale` | scale changed with no zoom limit check |
+
+- **Reachable invalid states or transitions:**
+  - `dragging` → `pinch` drops the session without `commitDrag` or `cancelDrag`; the kernel log shows one `drag` and nothing else. VIEW-SM-9, open.
+  - `pointercancel` (the browser took the gesture) commits instead of cancelling (code path). VIEW-SM-9, open.
+  - `labelDrag` → Esc sends `cancelDrag` to a kernel that never started a drag and leaves `labelOverride` set, so the label stays at the preview position. VIEW-SM-9, open.
+  - `axisRescale` skips the 1e-9 / 1e9 width limits and the precision floor and gives no `zoom_limit` feedback (code path). VIEW-SM-20, open.
+
+### V6. Drag session protocol with the kernel
+
+- **Where:** `web/figure-view.ts` `applyDragMove`, `onPointerUp`, `onKeyDown` (Esc at 1716, `moveSelected` at 1741), `onPointerMove3D`, `onPointerUp3D` (2099), `onKeyDown3D` (`moveSelected3` at 2168), `unmount`; `core/drag.ts` `computeDragPlan`, `projectOnSamples`, `clampParam`; `contracts.ts` `DragApplier`.
+- **States:** kernel side `closed` / `open` (after the first `drag`). View side: 2D `drag` session, 3D `point3Drag` session, keyboard nudge (a one-shot `drag` + `commitDrag`).
+- **Invariants:** every `open` ends in exactly one `commitDrag` or `cancelDrag`; no nudge commits while a pointer session is open; `cancelDrag` is sent only for an open drag; a `parents` drag moves each parent by the pointer delta from its value at drag start; a path drag sends `s` in the path's domain units, continuous with the previous `s`; `fixed` objects never move (2D and 3D, pointer and keyboard).
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `closed` | move in `dragging` | | `open` | `drag(moves)` |
+| `open` | move | | `open` | `drag(moves)` |
+| `open` | pointer up | | `closed` | `drag(rounded)`, `commitDrag` |
+| `open` | Esc (2D) | | `closed` | `cancelDrag` |
+| `closed` | arrow key with selection | plan `free` | `closed` | `drag` + `commitDrag` |
+| `open` (3D) | pointer up | | `closed` | `commitDrag` |
+
+- **Reachable invalid states or transitions:**
+  - Parents drag adds the start-to-pointer delta to the parents' current values on every move: moving the pointer 2 units in 10 moves takes A from -2 to 9 (expected 0). VIEW-SM-8, open.
+  - Arrow key during an open pointer drag: log `drag, drag, commit, drag, drag, commit` (two commits, one mid-drag). VIEW-SM-9, open.
+  - Esc does not end a 3D `point3Drag`; unmount does not end any drag (code path). VIEW-SM-9, open.
+  - Path drag sends a fraction: the pointer at x = 3 on a function with domain -5..5 sends `s = 0.8`. With grid snap on, `snapParamToGrid` searches the whole path regardless of the pointer and sends `s = 0.7` for pointers at x = 3 and x = -4. `hintS` is a constant `null` (line 1318), so the 24 px continuity window never runs. VIEW-SM-10, open.
+  - 3D arrow keys move a point styled `fixed` (`drag` + `commit` logged). VIEW-SM-17, open.
+
+### V7. Selection, focus, hover and pick cycling
+
+- **Where:** `core/selection.ts` (`clickSelect`, `selectAll`, `rubberBandSelect`); `core/hit.ts` (`HitIndex`, `cyclePick`); `web/figure-view.ts` fields `selection`, `focused`, `hovered`, `cycle`, `stepFocus`, Ctrl+A at 1847 and 2231, Delete.
+- **States:** `selection.ids` (set), `anchor`, `focus`; `focused` id; `hovered` id; cycle state (`lastX`, `lastY`, `lastTimeMs`, `index`).
+- **Invariants:** selected, focused and hovered ids are objects that exist and are visible; Ctrl+A selects visible selectable objects only (design 11); the rubber band selects every object whose bbox meets the band, points included; Delete reports only existing ids.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| any | click hit | selectable | `{hit}` or toggled | |
+| any | click background | not additive | empty | |
+| any | band release | | union with band hits | |
+| any | Ctrl+A | | every head that is selectable | |
+| any | Esc | no drag | empty | |
+| non-empty | Delete | | empty | `onDelete(ids)` |
+| any | kernel `remove` | | unchanged | nothing pruned |
+
+- **Reachable invalid states or transitions:**
+  - Ctrl+A selects an object with `show = false`; Delete then reports `[1, 2]` including the hidden one. VIEW-SM-12, open.
+  - A band around a point selects nothing: a point drawable's `rubberShape` has no strokes and no fills. VIEW-SM-12, open.
+  - After a kernel `remove` of A, Delete still reports A. VIEW-SM-12, open.
+
+### V8. Snap memory
+
+- **Where:** `core/snap.ts` `snapPosition`, `snapWithHysteresis`, `snapParamToGrid` (138); `web/figure-view.ts` `snapContext` (1219), `snapMem`.
+- **States:** `free` (`target = null`), `held` (target and radius).
+- **Invariants:** `held` releases beyond 1.5 x radius; candidates exclude the dragged object and its descendants; host intersections are candidates in `points` mode; the indicator names the real source; memory starts empty for each drag.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `free` | move | a candidate within 12 px | `held` | position snapped |
+| `held` | move | within 18 px, fresh candidate | `held` | new target |
+| `held` | move | within 18 px, none | `held` | old target, source reported as `grid` |
+| `held` | move | beyond 18 px | `free` or `held` | |
+
+- **Reachable invalid states or transitions:** the `intersections` option is never called (`intersections: []` at line 1244); descendants are not excluded; the memory survives between drags; a hold on a point is reported as `grid`. VIEW-SM-18, open.
+
+### V9. 3D camera and gestures
+
+- **Where:** `web/figure-view.ts` `onPointerDown3D` (1958), `onPointerMove3D` (2012), `onPointerUp3D`, `onWheel3D`, `onDoubleClick3D`, `onKeyDown3D` (2163); fields `camDrag`, `point3Drag`, `camTween`, `cameraProps`; `core/camera.ts`.
+- **States:** `idle`, `orbit`, `pan` (`camDrag`), `pointDrag` (plane, axis or depth), `camTween` (400 ms ease).
+- **Invariants:** zoom stays in 1e-6..1e6 on every input; a point drag ends in commit or cancel; `fixed` blocks pointer and keyboard moves.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `idle` | down | no hit, or shift, or middle button | `orbit` / `pan` | capture |
+| `idle` | down | free, not fixed `point3` | `pointDrag` | gizmo axis/plane, alt depth, shift z axis |
+| `orbit` / `pan` | move | | same | camera props updated |
+| `pointDrag` | move | | same | `drag([point3])` |
+| `pointDrag` | up | | `idle` | `commitDrag` |
+| `idle` | double-click | | `camTween` | reset or retarget |
+| any | `+` / `-` key | | same | zoom x 1.5 or / 1.5 with no clamp |
+
+- **Reachable invalid states or transitions:** Esc leaves `pointDrag` open (VIEW-SM-9); arrow keys move `fixed` points (VIEW-SM-17); keyboard zoom has no clamp (VIEW-SM-20). All open.
+
+### V10. Label layout cache
+
+- **Where:** `web/figure-view.ts` `layoutLabels` (703, budget slice at 741), `paintOverlay3D` (2299), `prevLabelOffsets`, `labelOverride`, `placements`; `core/labels.ts` `placeLabels`; `core/drawable.ts` `paintLabel`, `setLabelOffset`, `clearLabelOffset`.
+- **States:** per label `none` (no request), `auto` (offset from `placeLabels` with hysteresis), `user` (style `labelDx`/`labelDy`), `preview` (`labelOverride` during a drag), `overBudget` (beyond the first 300 requests).
+- **Invariants:** at most 300 labels paint, lowest priority hidden first, with a notice (performance 5); only labels in the viewport count; at most 200 auto-place per frame; `preview` exists only during a label drag; layout cost stays within the frame budget.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `none` | frame | label mode not `none` | `auto` or `user` | offset set |
+| `auto` | frame | score worse by > 25% | `auto` (moved) | |
+| any | label drag move | | `preview` | override set |
+| `preview` | pointer up | | `user` (after the sdk writes the line) | `onRestyle` |
+| `preview` | Esc | | `preview` (stuck) | `cancelDrag` |
+| request 301+ | frame | | `overBudget` | keeps the last offset or the default and still paints |
+
+- **Reachable invalid states or transitions:** 400 labelled points export 400 `<text>` elements and the live paint loop calls `paintLabel` for all of them; `checkLabels` is never called, so no notice; the budget is taken in list order including off-screen labels (VIEW-SM-2). Markers are not culled: 300 labels with 5,000 labelled points cost 128 ms per frame (VIEW-SM-21). Esc leaves `preview` set (VIEW-SM-9). All open.
+
+### V11. Budgets and level of detail
+
+- **Where:** `core/budgets.ts` (`DEFAULT_BUDGETS`, `checkObjects`, `checkParticles`, `checkTriangles`, `checkLabels`, `capCurveSamples`); `core/drawables.ts` `ResolutionController`; `core/particles.ts` `ParticleQuality`; `core/geometry.ts` `capSamples`, `reduceRun`, `conicSegmentCount`; `core/export.ts` `MAX_SVG_ELEMENTS`; `backends/software.ts` `SOFTWARE_TRIANGLE_CAP`; `web/figure-3d.ts` arena sizes.
+- **States:** `ResolutionController.level` 0..2 (3 overruns down, 30 good up); `ParticleQuality.q` 1 to 0.25 in 0.25 steps (5 bad down, 60 good up); export `under cap` / `refused`.
+- **Invariants:** every budget in performance.md 5 is enforced where the view owns it (labels shown, SVG elements, curve samples per curve on screen); a cap stops work before the work is done; GPU arenas are never written past their capacity; caches are bounded.
+- **Transitions:** level and quality counters move as in the design. The SVG cap is checked once, after the whole document is built (line 2431).
+- **Reachable invalid states or transitions:**
+  - A 30,000-point export builds every element (127 ms) before refusing; 5,000 curves of 4,000 samples stay under 50,000 elements, so a document of hundreds of MB is returned with no refusal (code path). VIEW-SM-3, open.
+  - The canvas hatch-pattern cache keeps one tile canvas per distinct colour forever: 1,000 animated colours made 1,000 canvases. VIEW-SM-4, open.
+  - `Figure3D` writes fixed arenas (lines 8 MB, about 58,000 segments; points 2 MB, 65,536 points; mesh 24 MB, about 629,000 vertices) with no bound check (code path). VIEW-SM-17, open.
+  - `checkTriangles`, `checkLabels` and `capCurveSamples` have no caller in the view; a curve with many runs caps each run, not the curve (code path). VIEW-SM-2, open.
+
+### V12. 3D scene and `Figure3D` resources
+
+- **Where:** `core/scene.ts` `SceneIndex` (`applyEvent`, `dropId` at 136); `web/figure-3d.ts` `applyEvents` (`sceneVersion++` at 84), `ensureResources`, `uploadAll`, `paint` (upload check at 262), `drawLines`, `dispose`.
+- **States:** resources `none` → `ready` (programs, three arenas) → `disposed`; upload `current` (`uploadedVersion = sceneVersion`) / `stale`.
+- **Invariants:** an event re-uploads only the items it touched; resources are recreated after a context restore; every back-end draws every item kind it receives.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `none` | first paint | | `ready` | programs and arenas created |
+| `current` | any kernel event | | `stale` | `sceneVersion++` |
+| `stale` | paint | | `current` | every mesh and point rewritten |
+| `ready` | `dispose` | | `disposed` | |
+
+- **Reachable invalid states or transitions:** moving one point re-uploaded all 144 KB of a 60 x 60 mesh (VIEW-SM-24); the software back-end turns line quads into zero-area triangles from the wrong attribute layout, so 3D segments are invisible without WebGL2 (VIEW-SM-17); no path back from `ready` after a context restore (VIEW-SM-6). All open.
+
+### V13. Live-region announcer
+
+- **Where:** `web/figure-view.ts` `announce`, `flushAnnounce`, `announceTimer`, `queuedAnnounce`, `lastAnnounceMs`.
+- **States:** `idle`, `spoken` (inside the 800 ms window), `queued` (timer armed, last message kept).
+- **Invariants:** at most one message per 800 ms; the last queued message is spoken when the window closes; no timer survives `unmount`.
+- **Transitions:** `idle` → speak → `spoken`; `spoken` + message → `queued` (timer); timer or frame → speak → `spoken`; `unmount` clears the timer.
+- **Reachable invalid states or transitions:** none found.
+
+### V14. Export
+
+- **Where:** `web/figure-view.ts` `exportSvg` (2378), `exportPng` (2491); `core/export.ts` `normalizeExport`, `exportViewport`, `svgEscape`, `svgId`; `backends/svg.ts` `SvgSurface`.
+- **States:** `validate` → `snapshot` (token held when `time` is set) → `rebuild at export viewport` → `paint` → `encode` → `restore live` (mark dirty, request frame) → result. PNG: `encode` is async after the token is released.
+- **Invariants:** the snapshot token is always released; live drawables are back at live geometry before any input can reach them; untrusted text reaches SVG only escaped, in text content or quoted attributes, never as raw CSS; the element cap stops work early.
+- **Transitions:** as listed; every error path releases the token (checked).
+- **Reachable invalid states or transitions:** live geometry is left at the export viewport until the next frame (VIEW-SM-14); `textStyle.family` from the figure is written raw into the `style` attribute, so `x;fill:url(https://evil.example/beacon)` becomes a CSS declaration (VIEW-SM-1); the cap is checked after building (VIEW-SM-3); `region: 'objects'` uses view-clipped pixel bboxes (VIEW-SM-16). All open.
