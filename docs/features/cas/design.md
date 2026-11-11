@@ -226,6 +226,8 @@ The command table entries (`Factor`, `Solve`, …) call `run`. No rule is ever c
 
 New kernel value types, added to the core union:
 
+Ruling K5 (`../kernel/rulings.md`): the kernel does not wrap values in a `{ t, ... }` union; it stores the language's raw runtime values, and the type comes from the object's `type`. The union below lists the shapes this area adds, with `t` standing for that `type`.
+
 ```ts
 type Value =
   | /* … existing … */

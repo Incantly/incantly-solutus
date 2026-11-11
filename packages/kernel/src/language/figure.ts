@@ -250,7 +250,9 @@ export class ScratchFigure implements FigureView {
     for (const st of line.style ?? []) {
       const rules = e.styleRules ?? new Map<string, StyleRule>();
       rules.delete(st.key);
-      const reads = (st.reads ?? []).filter((id) => id !== SELF_ID);
+      // LANG-SM-33: the object's own id replaces SELF_ID, so a style that reads the object keeps its self link
+      const own = this.byName.get(line.names[0] as string)?.info.id;
+      const reads = (st.reads ?? []).map((id) => (id === SELF_ID && own !== undefined ? own : id)).filter((id) => id !== SELF_ID);
       const item = [...items].reverse().find((i) => i.key === st.key);
       if (reads.length > 0 && item) rules.set(st.key, { source: `${line.names[0]} ${printStyle([item])}`, reads });
       if (rules.size > 0) e.styleRules = rules;

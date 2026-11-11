@@ -206,6 +206,8 @@ Full detail and sketches are in `ui.md`. The groups, in toolbar order: Move; Poi
 
 All 3D values are immutable records like the 2D ones (core design: `Value`). `V3` is `{ x, y, z }` (a readonly tuple-like object; same shape rules as `V2` in the points-lines design section 3.1).
 
+Ruling K5 (`../kernel/rulings.md`): the kernel does not wrap values in a `{ t, ... }` union; it stores the language's raw runtime values, and the type comes from the object's `type`. The union below lists the shapes this area adds, with `t` standing for that `type`.
+
 ```ts
 export interface V3 { readonly x: number; readonly y: number; readonly z: number }
 

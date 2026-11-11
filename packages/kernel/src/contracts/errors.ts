@@ -99,6 +99,15 @@ export interface AreaNoticeKinds {
   // language
   index_literal: true;
   unused_binder: true;
+  // kernel
+  became_defined: true;
+  moved_for_order: true;
+  confusable_name: true;
+  redefined_to_same: true;
+  listener_failed: true;
+  step_hidden: true;
+  shadowed_default: true;
+  unstable_state: true;
 }
 
 export type NoticeKind = CoreNoticeKind | Extract<keyof AreaNoticeKinds, string>;

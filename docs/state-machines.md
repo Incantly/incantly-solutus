@@ -12,7 +12,352 @@ Format for each machine:
 
 ## kernel
 
-_Not yet checked._
+Checked at commit `00a69c4` on `feat/kernel` (pass 1, after the step-3 fixer round). Paths are under `packages/kernel/src/`; line numbers refer to `00a69c4`. Findings are in `handoff/kernel/findings.md` (KERN-SM-1 to KERN-SM-20, all open). Every reproduction there goes through the public API (`src/index.ts`) with the test commands of `test/spec/kernel/helpers.ts`. JavaScript is single-threaded, so "concurrency" below means re-entrancy (a listener, a rule or an action calling back into the figure), operations interleaved by the host, and the order of events.
+
+The machines are layered. K1 to K4 are the store, the graph, the pass and the operation bracket every public call runs inside. K5 is one line; K6 and K7 are the history; K8 is a batch; K9 is free writes and drags; K10 and K11 are the clock and the states; K12 is the step list and script items; K13 is save and load; K14 is `slice`; K15 is the error and limit layer.
+
+### K1. Object store and object record
+
+- **Where:** `graph/core.ts` `ObjRec` (lines 31 to 70), `byIdMap`, `byNameMap`, `list`, `nextId`; `graph/base.ts` `applyPersist` (126), `insertRecs` (142), `removeRecs` (158), `applyReorder` (177); `graph/types.ts` `Persist`.
+- **States:** an `ObjRec` is `absent` (not yet made), `live` (in `list`, `byIdMap` and `byNameMap`), or `detached` (removed from the three tables but still held by a journal entry, so undo can put the same record back). A live record's `Persist` has `kind` `free`, `rule` or `state`; a free record holds `value` (and `freeReason` when undefined). `Persist` is immutable and replaced as a whole.
+
+| State | Holds |
+|---|---|
+| `absent` | nothing; the id is not issued |
+| `live/free` | `p.value`, cell from the value, no value inputs (`valueIn` empty), maybe range inputs |
+| `live/rule` | compiled line, value and range inputs, cell from `compute` |
+| `live/state` | initial value and rates, cell written by the solver (K11) |
+| `detached` | the record and its last `Persist`, in a `remove` or `add` journal entry |
+
+- **Invariants:** `list[i].order === i`; `list` is a valid dependency order (every value or range input has a smaller order); `byIdMap` and `byNameMap` hold exactly the records in `list`; names are unique; an id is issued once and never reused (`nextId` only grows, also after a rollback); a free value is immutable once stored; the record a journal entry holds is the one undo puts back (ids stay stable).
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| absent | `applyDefine` commit, new name | checks pass, objects < limit | live | `insertRecs` at `insertAt ?? end`, `renumber(0)`, `wire`, `add` event, `add` entry |
+| live | redefine | same type, not fixed (or `force`) | live | `applyPersist` (unwire, swap `Persist`, rewire), optional reorder |
+| live/free | `setFree` / gesture | K9 guards | live/free | `p` and `cell` replaced in place, no rewire |
+| live | `Delete` cascade | nothing fixed in the cascade (or `force`) | detached | readers' property rules and rates detached, items re-anchored, `remove` entry |
+| detached | undo of `remove` / redo of `add` | | live | same record, saved `Persist`, saved position |
+| live | undo of `add` / redo of `remove` | | detached | |
+| live | `move` | no order crossing, or `withDependencies` | live | `applyReorder`, `sets` entry with a reorder |
+
+- **Reachable invalid states or transitions:** a free value stored by `setFree` is the caller's object, so the caller can change it later without a write, a pass or a journal entry (KERN-SM-4, open). Undo or redo run inside an open batch can leave a record `detached` with no journal entry that holds it (KERN-SM-9, open).
+
+### K2. Dependency graph and closure caches
+
+- **Where:** `graph/core.ts` `wire` (435), `unwire` (459), `renumber` (469), `downOf` (475), `clockDown` (495), `reaches` (517), `ancestorRecs` (533), `neededArray` (558); `structureVersion`.
+- **States:** per record: `kids` (value and range readers), `styleKids` (owners of property rules that read it), `inputs`, `valueIn`, `rangeIn`, `styleIn`; cached `down` closure with `downVersion`; figure-wide `clockDown_` and `clockStyleCache` with `clockDownVersion`; lazy `needed` with `neededVersion`. A cache is `valid` when its version equals `structureVersion`, else `stale`.
+- **Invariants:** `x ∈ y.kids ⇔ y ∈ x.inputs`; `x ∈ y.styleKids ⇔ y ∈ x.styleIn`; style edges are never followed by the cycle test or `downOf`; a valid `down` is the ascending order list of every value or range descendant; every structural change (wire, unwire, renumber, the `@clock` and `@solver` directives) bumps `structureVersion` before the next read; the walks are iterative (no recursion).
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| valid | `wire`, `unwire`, `renumber`, `onDirective('clock'|'solver')` | | stale | `structureVersion++` |
+| stale | `downOf(r)` | | valid for `r` | DFS over `kids`, sorted `Int32Array` |
+| stale | `clockDown()` | | valid | union of the closures of every reader of `t`, `bt`, `beat` |
+| any | `reaches(from, to)` | | | binary search in `downOf(from)` |
+| stale | `neededArray()` in lazy mode | | valid | ancestors of the demanded ids |
+
+- **Reachable invalid states or transitions:** none found in the graph itself. Two costs ride on `structureVersion`: every structural change also restarts the state solver (KERN-SM-16, K11), and the per-add cost of a load grows with the figure (KERN-SM-17).
+
+### K3. Update pass, cells and lazy values
+
+- **Where:** `graph/core.ts` `flush` (588), `setCell` (284), `compute` (301), `cellFromResult` (315), `sizeChecked` (328), `runCommand` (339 to 393), `updateRange` (407), `setDemand` (551), `readValue` (263), `pull` (276); `graph/base.ts` `settle` (202); `graph/figure.ts` `flush` (112).
+- **States:** per record, a cell (`defined` with a value, or undefined with `reason`, `cause`, `detail`), `changedAt` (the epoch of its last change), `stale` (lazy mode: an input changed and the value is not computed). Figure-wide: `dirty` (sources written since the last pass), `clockDirty`, `epoch`, `demand` (`null` = eager), `forceAll` (true inside an operation), `faults` (commands whose rule threw).
+- **Invariants:** one pass runs each rule at most once, in ascending order, and only when an input changed in this pass or is stale, or the rule reads the clock and the clock moved (cut-off); a rule never runs with an undefined input unless it accepts undefined (`input_undefined` instead); a list longer than `listSize` is undefined with reason `limit`; in eager mode no record is stale after a pass; in lazy mode a stale record is computed when read; a rule that throws makes its cell `not_finite` and is recorded in `faults`; no public read throws.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| idle | `setFree`, `markDirty`, `setClock` | | marked | `dirty` / `clockDirty` |
+| marked | `flush()` | nothing marked and not forced | idle | empty delta |
+| marked | `flush()` | | walking | solver `sync` first (K11), `epoch++`, candidates = union of `downOf(dirty)` (+ `clockDown()`) |
+| walking | candidate | no changed or stale input, clock rule not hit | skip | |
+| walking | candidate | lazy, not needed, not `forceAll` | stale | `r.stale = true` |
+| walking | candidate rule | | computed | `compute`; `setCell` stores and adds to `pendingValues` only when the cell differs |
+| walking | rule throws inside `runCommand` | | computed | cell `not_finite`, `faults.push(name)` |
+| walking | done | | idle | style owners of changed values marked for one `style` event; `deliver()` (K4) |
+| stale | `readValue`, `cellOf`, `value` | | fresh | `pull`: recursively pulls stale inputs, then computes |
+| eager | `setDemand(ids)` | | lazy | |
+| lazy | `setDemand(null)` | | eager | every stale record pulled |
+
+- **Reachable invalid states or transitions:** `pull` recurses once per stale ancestor, so reading the tail of a 5,000-object chain in lazy mode throws `RangeError` out of `value()` (KERN-SM-6, open). A rule that calls back into the figure during a pass can remove records the walk still holds, and `flush()` throws a `TypeError` (KERN-SM-8, open). `faults` is cleared only by line operations, so a rule that throws on every frame adds one entry per frame for as long as the clock plays (KERN-SM-8).
+
+### K4. Operation bracket and events
+
+- **Where:** `graph/base.ts` `inPass` (75), `diffReport` (99); `graph/core.ts` `on` (740), `queue` (746), `deliver` (751), `takeListenerFailures` (772); `graph/figure.ts` `stepTo` (361).
+- **States:** `opDepth` and `passDepth` (0 = no operation running), `pass` (the change tracker of the innermost operation: first cell of each record, records added), `pendingEvents`, `pendingValues`, `pendingStyles`, `listeners`, `listenerFailures`.
+- **Invariants:** events are delivered only when no operation runs (`opDepth === 0`); one `value` and one `style` event per delivery; a nested operation reports its own changes and hands them to the outer one; a listener's exception never escapes and becomes one `listener_failed` notice on the result of the operation it happened in; a listener sees events in the order the figure changed.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| outside | `apply`, `delete`, `rename`, `move`, `undo`, `applyBatch`, `load` | | inside (depth+1) | fresh `pass`, `forceAll = true` |
+| inside | nested operation | | inside (depth+1) | inner `pass`; merged into the outer when it ends |
+| inside | end | depth > 1 | inside | |
+| inside | end | depth = 1 | outside | caller calls `deliver()` |
+| outside | `deliver()` | | delivering | swap out the queues, build `value`/`style` events, call each listener in order |
+| delivering | listener calls a figure operation | | delivering (nested) | the nested operation delivers its own events to every listener before the outer loop goes on |
+| delivering | listener throws | | delivering | `listenerFailures++` |
+| outside | `flush`, `setClock`, `stepTo` (no bracket) | | delivering | |
+
+- **Reachable invalid states or transitions:** a listener that changes the figure on an event makes the later listeners see the newer events first (`remove` before `add` of the same object; KERN-SM-15 part b, open). A listener failure during a frame (`flush`, `setClock`) is reported on the next line's result instead (KERN-SM-18, open).
+
+### K5. Line transaction (apply, dry run, redefinition)
+
+- **Where:** `graph/tx.ts` `apply` (113), `repaired` (153), `applyInner` (189), `applyDefine` (422 to 630), `applyRestyle` (632), `applyRerange` (650), `applyRate` (679), `applyAction` (707), `rollbackTx` (98), `record` (92); `graph/hist.ts` `insertAt` (730).
+- **States:**
+
+| State | Holds |
+|---|---|
+| `idle` | |
+| `parsing` | `parseLine` with the host's `langLimits` |
+| `checking` | `checkLine` against `figure.view`; a self-reference on a free Number, Point or Bool re-checks without graph checks (`assign`) |
+| `planning` | partial redefinition refused, `locked`, cycle (`reaches`), `forward_reference` (`insertAt`), compile, compute once, styles built |
+| `dry` | `opts.dryRun`: the plan summary is returned, nothing committed |
+| `committed` | records inserted or `Persist` swapped, one journal entry (`txEntry`), `settle` pass |
+| `faulted` | `faults` not empty after the commit: `rollbackTx` reverts `txEntry` |
+| `rejected` | an error object; `repaired` vets each suggestion with a dry run (`vetting = true`) |
+
+- **Invariants:** a rejected line leaves the figure, the journal (both stacks) and the clock unchanged and says `committed: false`; an accepted line is exactly one journal entry; a dry run returns the same result (summary, report, notices) that the commit would return and changes nothing; `a = a + 1` on a free Number, Point or Bool is stored as a free value; a fixed object is not redefined or reranged without `force`; nothing throws.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| idle | `apply(text)` | junk input | rejected | `tool_input` |
+| idle | `apply(text)` | | parsing | `faults = []`, `txEntry = undefined` |
+| parsing | parse error | | rejected | |
+| checking | `cycle` with path `[a, a]` on a free Number, Point or Bool | | checking (assign) | graph checks skipped; the kernel tests the other inputs with `reaches` |
+| checking | other error | | rejected | |
+| planning | some names of a defmany exist | | rejected | `bad_argument` |
+| planning | existing fixed object | not `force` | rejected | `locked` |
+| planning | an input reaches the object | | rejected | `cycle` |
+| planning | `insertAt` and an input at or after the index | | rejected | `forward_reference` |
+| planning | rule throws while computing once | | rejected | `internal` |
+| planning | `dryRun` | | dry | summary from the computed cell |
+| planning | same text, no `with` | | committed | `redefined_to_same`, value refresh only |
+| planning | | | committed | `add` or `sets` entry, reorder (`moved_for_order`), `settle`, `clamped`, `diffReport` |
+| committed | a downstream rule threw in `settle` | | faulted | `rollbackTx`: revert `txEntry`, `journal.discard` |
+| faulted | | | rejected | `internal` |
+| committed | action line | | committed | the handler's own operation (K6, K7, K8, Delete, Rename, Show, Hide) |
+| rejected | not `vetting`, not `dryRun` | | rejected | `repaired`: suggestions tried with `apply(s, { dryRun: true })` |
+
+- **Reachable invalid states or transitions:** an action rule that changes the figure and then throws, and an `Undo()` line whose replay makes a rule throw, both return `internal` with `committed: false` while the change stays (`faulted` with no `txEntry`; KERN-SM-10, open). The `dry` row skips the slider clamp, the `becameUndefined` diff and the `confusable_name` notice, so a dry run does not match the commit (KERN-SM-14, open). The commit of an out-of-range slider gives two `clamped` notices (KERN-SM-20, open).
+
+### K6. Journal (undo and redo stacks, groups)
+
+- **Where:** `history/journal.ts` `Journal` (lines 85 to 214): `begin` (104), `end` (113), `abandon` (123), `discard` (130), `record` (154), `trim` (166), `takeUndo` (178), `pushRedo`, `takeRedo`, `pushUndo`.
+- **States:** `stack` (undo), `redoStack`, `open` (`null` or one group being collected), `bytes` (an estimate), `dropped`. Entries: `add`, `remove`, `sets`, `item`, `group` (one level).
+
+| State | Holds |
+|---|---|
+| `closed` | `open === null`; records go straight to `stack` |
+| `collecting` | `open` group; records go into it; `begin` again joins it |
+
+- **Invariants:** a new record clears the redo stack; `stack` holds at most `journalEntries` entries and about `journalBytes` bytes, oldest dropped and counted; entries are undone in reverse order of recording; while a group is collecting, nothing outside it is taken back or replayed; a group is closed only by the operation that opened it.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| closed | `begin(label)` | | collecting | |
+| collecting | `begin(label)` | | collecting | joins the open group (label ignored) |
+| any | `record(e)` | | same | `redoStack` cleared; into `open` or onto `stack` (+ `trim`) |
+| collecting | `end()` | group empty | closed | no entry |
+| collecting | `end()` | one entry with the group's label | closed | the entry itself |
+| collecting | `end()` | | closed | one `group` entry pushed |
+| collecting | `abandon()` | | closed | entries returned for the caller to revert |
+| any | `discard(e)` | `e` is the newest | same | removed |
+| any | `takeUndo('group')` | `stack` not empty | same | top popped |
+| any | `takeUndo('line')` | top is a group of more than one | same | last entry popped out of the group in place |
+| any | `takeRedo()` / `pushUndo` / `pushRedo` | | same | |
+
+- **Reachable invalid states or transitions:** `takeUndo` and `takeRedo` are allowed while a group is collecting, and they act on `stack`, which holds entries recorded before the group opened (KERN-SM-9, open). A nested `begin` joins the open group, but the nested `end` closes the outer one (KERN-SM-9). One group can hold any number of entries and counts as one against `journalEntries`; `trim` never drops the last entry, so a single large batch bypasses both caps (KERN-SM-1, open).
+
+### K7. Undo and redo
+
+- **Where:** `graph/hist.ts` `undo` (373), `redo` (377), `stepHistory` (381), `effectOf` (409), `actionHistory` (430); `graph/tx.ts` `revertEntry` (738), `replayEntry` (778), `performRemove` (809).
+- **States:** `idle`, `replaying` (`this.replaying = true`: `record` does not write the journal), and the journal states of K6.
+- **Invariants:** an undo reverses exactly one entry (or one line of the top group for the line unit), with the same records and ids; undo followed by redo is the identity; undo and redo commit an open gesture first; `Undo()` in a batch takes back the batch's own last line (kernel design 11.2: the teacher's `Undo()` takes back one line); a faulting rule during a replay is reported without hiding that the replay happened.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| idle | `undo({unit})` / `Undo()` | | idle | `commitDrag()` first |
+| idle | `undo` | `takeUndo` gives nothing | idle | `nothing_to_undo` |
+| idle | `undo` | entry | replaying | `revertEntry(e)`, `pushRedo(e)`, `effectOf`, `diffReport`, `undo` event |
+| idle | `redo` | entry | replaying | `replayEntry(e)`, `pushUndo(e)` |
+| replaying | done | | idle | `deliver()` when outermost |
+| replaying | `add` reverted | | | `removeRecs` |
+| replaying | `remove` reverted | | | `insertRecs` at saved positions, detached rules and item anchors restored, `settle` |
+| replaying | `sets` reverted / replayed | | | reorder, `applyPersist` per change, `settle`, solver restart when rates changed |
+
+- **Reachable invalid states or transitions:** `Undo()` and `Redo()` inside `applyBatch` or `append` act on entries from before the batch, and an atomic rollback after them loses both the object and its history entry (KERN-SM-9, open). An `Undo()` whose replay faults is reported as rejected (KERN-SM-10, open). Undo after a drag that was not committed before a redefinition replays the states out of order (KERN-SM-11, open).
+
+### K8. applyBatch (atomic and independent)
+
+- **Where:** `graph/hist.ts` `applyBatch` (449 to 505).
+- **States:** `atomic` or `independent` mode; `running` (journal collecting, one outer bracket, each line its own nested `apply`), `rolled back`, `done`. Saved at entry: `redoBefore`, `evMark`, `valMark`, `styMark`.
+- **Invariants:** atomic: either every line commits and the batch is one undo step, or the figure, both journal stacks and the pending events are exactly what they were; independent: each line commits or fails alone, a line reading a failed name gets `blockedBy`; events are delivered once at the end; an open gesture is committed first.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| idle | `applyBatch(lines)` | `lines` not an array | done | `tool_input` |
+| idle | `applyBatch` | | running | `commitDrag()`, `journal.begin(group)` |
+| running | line ok | | running | `merge` the report |
+| running | line fails | independent | running | `failed` += the line's target names |
+| running | line fails | atomic | rolled back | `abandon()`, revert entries newest first, restore `redoStack`, pending queues, clear `pass` |
+| running | last line | | done | `journal.end()`, `diffReport` |
+| done / rolled back | | | idle | `deliver()`, `listener_failed` notice |
+
+- **Reachable invalid states or transitions:** a `Undo()`, `Redo()`, nested `applyBatch` or `append` inside the batch breaks both modes: atomic rollback reports `rolledBack: true` with objects left in place, or removes an object that existed before the batch (KERN-SM-9, open). The batch has no size limit of its own: the `fileSize` limit of `fromScript` and `append` does not apply, and comment and directive lines are not counted by any limit (KERN-SM-1, open). A drag during a batch can only come from re-entrancy (a listener runs after the batch; a rule or an action calling `setFree`), and is covered by KERN-SM-8 and KERN-SM-11.
+
+### K9. Free writes, gestures and drags
+
+- **Where:** `graph/hist.ts` `setFree` (514), `writeFree` (519 to 580), `commitDrag` (587), `dragPlan` (609), `planDrag` (615 to 661), `drag` (664); `gesture` map in `graph/base.ts`.
+- **States:** per figure, `no gesture` (`gesture` empty) or `gesture open` (a map from record to the `Persist` it had when the gesture began). A write has a `why`: `drag` and `slider` join the gesture; `show_me` and `api` are journalled at once; `solver` is never journalled.
+- **Invariants:** only free (or, for the solver, state) records are written; a fixed object is not written without `force`; a value of the wrong type is refused; a gesture is one journal entry from its first to its last value, ordered with the other entries by when it ended; every user write is undoable; a stored value is never changed afterwards; drag plans write only free parents and never a fixed one.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| any | `setFree(x, v, why)` | unknown name | same | `unknown_name` |
+| any | `setFree` | a state and `why` is not `solver` | same | `not_free` (state owned) |
+| any | `setFree` | a rule | same | `not_free` with a suggested `X = value` |
+| any | `setFree` | fixed, `why` not `solver`, no `force` | same | `locked` |
+| any | `setFree` | value does not fit the type | same | `bad_argument` |
+| any | `setFree` | same value | same | `{ changed: false }` |
+| no gesture | `setFree` `drag`/`slider` | | gesture open | `gesture.set(rec, before)`, value clamped and snapped to the range |
+| gesture open | `setFree` `drag`/`slider` | | gesture open | last write wins |
+| any | `setFree` `show_me`/`api` | | same | `sets` entry now |
+| any | `setFree` `solver` or any other `why` | | same | no entry |
+| gesture open | `commitDrag()`, `undo`, `redo`, `applyBatch` | | no gesture | one `sets` entry when a value changed |
+| gesture open | `apply`, `delete`, `rename`, `move`, `setFree('show_me')` | | gesture open | their own entries are recorded before the gesture's |
+| any | `dragPlan(x, target)` | fixed / state / not draggable / undefined / bad target | same | `{ writes: [], reason }` |
+| any | `dragPlan` | free Point, Number or Bool | same | one write |
+| any | `dragPlan` | rule with `invert`, depth ≤ 8 | same | the parents' writes |
+| any | `drag(plan)` | writes | gesture open | `setFree(..., 'drag')` each, one `flush` |
+
+- **Reachable invalid states or transitions:** a line or a `show_me` write during an open gesture is journalled before the gesture, so undo goes back to the start of the gesture and then forward to the middle of it (KERN-SM-11, open). `why: 'solver'` writes a fixed free object with no journal entry, any `why` outside the five is accepted and not journalled, the stored value is the caller's object, and a value with a throwing getter throws out of `setFree` (KERN-SM-4, open).
+
+### K10. Clock
+
+- **Where:** `graph/figure.ts` `setClock` (155), `setBeats` (145), `clockRange` (132); `clockState` and `env.t`, `env.bt`, `env.beat` in `graph/core.ts`.
+- **States:** `clockState` `{ t, bt, beat }`, `beatStarts`, the `@clock a..b` item (film range; `0..Infinity` without it).
+- **Invariants:** `t` is a number inside the film range; `bt = t - start of the current beat` and `beat` is the index of the last beat start at or before `t`, unless given; the clock changes only through `setClock` and `setBeats`, never through undo; a seek is one pass; `clockState` and `env` agree.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| any | `setClock(t)` | `t` not a number or NaN | same | `bad_argument` |
+| any | `setClock(t)` | the clamped `t`, `bt` and `beat` are unchanged | same | empty delta |
+| any | `setClock(t)` | | moved | clamp to the range, compute `beat` and `bt`, `markClockDirty`, `clock` event, `flush` (unless `flush: false`) |
+| any | `setBeats(starts)` | an array | moved | finite starts sorted, then `setClock(t)` |
+| any | `@clock` directive | | same | `structureVersion++`, `markClockDirty` (the next pass recomputes; `t` is not re-clamped until the next `setClock`) |
+
+- **Reachable invalid states or transitions:** the default range ends at `Infinity` and `setClock(Infinity)` is accepted, so with a state in the figure the seek never returns (KERN-SM-5, open; K11).
+
+### K11. State solver
+
+- **Where:** `clock/solver.ts` `StateSolver` (lines 54 to 437): `rebuild` (87), `formGroups` (133), `initial` (181), `deriv` (239), `step` (297), `at` (343), `sync` (371); hooked in `graph/figure.ts` (constructor, `stateDriver`) and called at the start of every `flush`.
+- **States:** `version` (the figure structure it was built for), `dirtyInputs`, `layout` (one slot per state), `cone` (rules between states and rates), `groups` with `failedAt` (grid step at which a group blew up, or `Infinity`), `y0`, `checkpoints` (every 120 steps), `curN`/`curY` (last grid point reached).
+
+| State | Holds |
+|---|---|
+| `inactive` | no state objects |
+| `stale` | structure version changed, or an input of a rate or initial value was written: checkpoints cleared |
+| `ready` | `y0` and checkpoints valid up to the frontier |
+| `group failed` | a group's `failedAt` ≤ the current step: its states are `not_finite`, other groups keep stepping |
+
+- **Invariants:** results do not depend on frame rate or seek path; the cone's and the states' cells are put back after integrating; a seek costs at most the steps from the nearest checkpoint; work and memory per seek are bounded; a change that does not touch a state, a rate or their inputs does not restart the integration.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| any | `flush` → `active` | version changed | stale (rebuilt) | layout, cone, inputs, groups rebuilt; `missing` rates |
+| any | `noteFree(rec)` | `rec` is an input | stale | checkpoints cleared on the next `sync` |
+| stale/ready | `sync()` | | ready | `at(n)` from the nearest checkpoint ≤ n (or `y0`) up to `n = floor((t - t0) / h)`; Hermite between grid points |
+| ready | step | a group's value not finite or > 1e9, or its rate undefined | group failed | `failedAt = n + 1`, one `unstable_state` notice |
+| ready | `sync` | | ready | states written with `setCell`; changed states become pass sources |
+
+- **Reachable invalid states or transitions:** `at(n)` has no step budget: `setClock(1000)` takes 70 ms, `setClock(1e6)` about 70 s and `setClock(Infinity)` never returns, and `checkpoints` keeps two arrays per film second (KERN-SM-5, open). The `stale` row fires on every structural change (`structureVersion` is bumped by any `wire`), so a line that touches no state re-integrates from `t0` to the clock: 6.6 ms at `t = 100` (KERN-SM-16, open).
+
+### K12. Step list, reveal cursor and script items
+
+- **Where:** `graph/figure.ts` `steps` (311), `sentence` (341), `stepTo` (361), `cursor` (370); `graph/tx.ts` `applyNoop` (279), `applyDirective` (297), `insertItem` (292); `graph/hist.ts` `doDelete` re-anchoring, `move` (697), `movePlan` (677), `insertAt` (730); `history/journal.ts` `ScriptItem`.
+- **States:** `stepCursor` (`undefined` = every step shown, or `0..count-1`); `items` (comments and directives, each anchored `after` an object id or at the top); a `@step "title"` item marks the object right after its anchor as a breakpoint.
+- **Invariants:** the step list is a view over `list` (no second structure); the cursor is not part of undo; the cursor is in `0..count`; a comment, a directive and a `@step` title stay next to the object they were written after, also after `insertAt`, `move` and `Delete` (re-anchored to the nearest surviving object); a non-repeatable directive replaces the earlier one in place.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| any | `stepTo(n)` | NaN or not a number | same | |
+| any | `stepTo(n)` | `n ≥ count` | all shown (`undefined`) | `step` event |
+| any | `stepTo(n)` | | cursor `n` | `step` event |
+| all shown | new object | | all shown | |
+| cursor `k` | new object | | cursor `k` | `step_hidden` notice |
+| any | comment line | | | item after the last object, `item` entry |
+| any | directive | repeatable (`step`, `beat`, `cell`, `colwidth`, `limit`) | | appended |
+| any | directive | other, already present | | replaced in place (`findIndex` over all items), keeps its anchor |
+| any | `Delete` | an item's anchor removed | | anchor moves to the nearest earlier survivor (journalled) |
+| any | `insertAt(i, line)` / `move` | | | items keep their anchor id |
+
+- **Reachable invalid states or transitions:** `insertAt(i, ...)` after an object that anchors a `@step` title moves the breakpoint from the object it marked to the inserted one (KERN-SM-13, open). Directive replacement scans every item, so a file of many comments and directives is quadratic (KERN-SM-7, open). Items are counted by no limit (KERN-SM-1, open).
+
+### K13. Save and load
+
+- **Where:** `graph/figure.ts` `objectLine` (377), `toScript` (403), `fromScript` (436), `append` (446), `load` (450 to 506); `graph/values.ts` `valueSource`, `numberSource`, `textSource`.
+- **States:** `load` runs `checking` (type, `fileSize`, `@fig` version) → `applying` (journal collecting, one bracket, each logical line through `apply` with `failed` for `blockedBy`) → `done` (`end()`) or, in strict mode with an error, `rolled back` (`abandon()`, revert). `fromScript` builds a new figure and clears its journal; `append` keeps the history and adds one `load` group.
+- **Invariants:** `fromScript(toScript(f))` gives the same names, definitions, free values, properties and cells (kernel design 13.3); a rejected strict load or append leaves the figure, both journal stacks and the listeners' view unchanged; every file line that fails is in the report with its file line; a file larger than `fileSize` is refused before parsing; a file cannot reach history from before it was loaded.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| idle | `load(text)` | not a string | done | `tool_input` |
+| idle | `load` | `text.length > fileSize` | done | `limit` `file_size` |
+| idle | `load` | first line `@fig n`, `n > SCRIPT_VERSION` | done | `version` |
+| idle | `load` | | applying | `journal.begin('load')` |
+| applying | line ok | | applying | |
+| applying | line fails | lenient | applying | error recorded, `failed` += target names |
+| applying | line fails | strict | rolled back | revert entries; `load_failed` with the first error as `cause` |
+| applying | end | | done | `journal.end()`, `deliver()` |
+| any | `toScript()` | | | header, items by anchor, each object's line (free values as literals), rate lines last |
+
+- **Reachable invalid states or transitions:** a free Text with `\r`, `“`, `”` or `„` is written unescaped and the file fails to load (`unterminated_string`, `missing_operator`); a free Text longer than about 2,000 characters is written on one line and fails with `limit` (KERN-SM-12, open). A rejected strict `append` clears the redo stack and sends `add` and `remove` events for an object that never existed (KERN-SM-15 part a, open). `Undo()` and `Redo()` lines in an appended file take back the host's earlier lines (KERN-SM-9, open).
+
+### K14. Slice
+
+- **Where:** `graph/figure.ts` `slice` (257 to 307).
+- **States:** a `Slice` value holding `chain` (rule records between the source and the target, in order) and `touched`; during `run(values)`: `swapped` (cells, stale flags and the clock overwritten) then `restored` in `finally`.
+- **Invariants:** nothing is journalled or emitted; every cell, stale flag and clock field is put back after `run`, also when a rule throws; the source is free or the clock.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| idle | `slice(source, target)` | unknown name | idle | `unknown_name` |
+| idle | `slice` | source not free | idle | `not_free` |
+| idle | `slice` | | built | chain from `downOf(source)` (or `clockDown`) ∩ ancestors of the target |
+| built | `run(values)` | | swapped | for each value: write the source cell (or `env.t`, `env.bt`, `clockState.t`), compute the chain, read the target |
+| swapped | end or throw | | restored | cells, stale flags, `t` and `bt` put back |
+
+- **Reachable invalid states or transitions:** none found. The chain is computed when the slice is made, so a slice used after a structural change computes the records it held then; that is the documented scratch behaviour, not a state the figure keeps.
+
+### K15. Errors, suggestions and limits
+
+- **Where:** `errors/table.ts` `err` (169), `fallbackInternal`, `internalError`, `checkErrorTable`; `errors/compact.ts` `compactError`; `errors/notices.ts` `makeNotice`; `errors/limits.ts` `resolveLimits`; `graph/tx.ts` `repaired` (153, `vetting`); `graph/props.ts` `validKeysFor`, `defaultsFor`.
+- **States:** the error registry is immutable after load; `vetting` is `true` while `repaired` dry-runs suggestions (a failing try is not repaired in turn); `Limits` is frozen per figure.
+- **Invariants:** `err` never throws and falls back to the hard-coded `internal` object; every error has `committed: false` and is true about it; at most 3 suggestions, each one passes a dry run; the compact form is at most about 800 characters; messages name the thing without echoing unbounded user text; every size budget in kernel errors.md 6 is enforced on every path into the figure; exported helpers never throw.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| | `err(kind, at, params)` | kind known | error | code, phase, recovery, message from the registry |
+| | `err` | building throws | error | `fallbackInternal` |
+| error | leaves `apply`, `delete`, `rename`, `setFree` | not `vetting`, not a dry run | error | `repaired`: `unknown_name` gets a define line; each suggestion dry-run; kept ≤ 3 |
+| error | `compactError(e)` | | compact | drops `params`, `messageKey`, `fingerprint`, `committed`, `phase`; caps lists; drops `source`, `cause`, `related`, `forms`, `expected`, `endCol` and trims `hint` until it fits |
+
+- **Reachable invalid states or transitions:** `compactError` never shortens `message` or `token`, and API errors echo the caller's text, so a 5,000-character unknown name gives a 10,133-character compact error and a 100,000-character rename a 100,157-character one (KERN-SM-2, open). `validKeysFor`, `defaultsFor` and `makeNotice` throw on names of `Object.prototype` members (KERN-SM-19, open). Limits that can be bypassed: KERN-SM-1. A shared `CommandRegistry` gains the nine kernel actions again for every figure built on it (KERN-SM-3, open).
 
 ## language
 

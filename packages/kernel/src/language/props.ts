@@ -42,6 +42,7 @@ export const PROPERTIES: Record<string, PropSpec> = {
   trace: { kind: 'bool', allowed: 'true or false' },
   tip: { kind: 'enum', values: ['auto', 'name', 'value', 'caption', 'off'], allowed: 'auto, name, value, caption or off' },
   tags: { kind: 'textlist', allowed: 'a list of texts' },
+  animate: { kind: 'enum', values: ['off', 'oscillate', 'forward', 'backward', 'bounce', 'loop', 'once'], allowed: 'off, oscillate, forward, backward, bounce, loop or once' },
 };
 
 /** Colour words accepted as bare names in `color = …`. */
@@ -69,6 +70,7 @@ export const DIRECTIVES: Record<string, readonly string[]> = {
   angleunit: ['@angleunit degree'],
   rounding: ['@rounding 4s'],
   tol: ['@tol N'],
+  tolerance: ['@tolerance N'],
   cell: ['@cell ref value'],
   limit: ['@limit name N'],
   exam: ['@exam profile'],
