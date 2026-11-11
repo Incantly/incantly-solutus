@@ -124,6 +124,12 @@ export interface FunctionPlotOptions {
   readonly enclosure?: ScalarEnclosure;
   /** Samples kept from an earlier view (a pan); reused without re-evaluation. */
   readonly seed?: SampleSeed;
+  /**
+   * The function's version stamp (functions-calculus 10). A resume token carries
+   * it and `resumeFunctionPlot` refuses a different one: a new version discards
+   * the suspended run, as it discards the sample cache.
+   */
+  readonly version?: number;
   /** Output sample cap, default 4000 (`docs/design/performance.md` 5). */
   readonly maxSamples?: number;
   /** Evaluation budget for this call, default 20000 (functions-calculus 9). */
@@ -170,6 +176,26 @@ export interface FunctionResume {
   readonly chordPx: number;
   readonly maxSamples: number;
   readonly exact: boolean;
+  /** The function version the run was started for, when the caller gave one. */
+  readonly version?: number;
+  /** True when the run used an enclosure; a resume must supply one again. */
+  readonly enclosed?: boolean;
+  /**
+   * Interval results of the verdict that was interrupted, so its redo does not
+   * evaluate them again (every call then makes progress, whatever the budget).
+   */
+  readonly replay?: readonly ReplayBox[];
+  /** Key of the span the `replay` entries belong to. */
+  readonly replayFor?: string;
+}
+
+/** One cached interval evaluation: the span `[lo, hi]` and its enclosure. */
+export interface ReplayBox {
+  readonly lo: number;
+  readonly hi: number;
+  readonly boxLo: number;
+  readonly boxHi: number;
+  readonly def: Definedness;
 }
 
 /** One plotted piece: a domain span clipped to the view and split at breaks. */

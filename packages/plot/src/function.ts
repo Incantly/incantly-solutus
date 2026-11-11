@@ -10,6 +10,7 @@
 import type { ErrorObject, FunctionValue, Result } from '@incantly/kernel';
 import {
   DEFAULT_MAX_EVALS_FUNCTION,
+  HARD_MAX_SAMPLES,
   MAX_SAMPLES_PER_CURVE,
   REFINE_BEND_PX,
   REFINE_CHORD_PX,
@@ -25,6 +26,7 @@ import type {
   MarkerKind,
   PlotMarker,
   PlotStats,
+  ReplayBox,
   ResumePiece,
   SampleSeed,
   ScalarBox,
@@ -74,6 +76,18 @@ interface FState {
   readonly batch: ((xs: Float64Array, out: Float64Array) => void) | undefined;
   readonly enclosure: ScalarEnclosure | undefined;
   readonly cfg: FCfg;
+  /** The function version the run belongs to (undefined when the caller gave none). */
+  readonly version: number | undefined;
+  /**
+   * Interval results of the verdict in progress, by span. A verdict that is
+   * interrupted is redone whole next call; these make the redo free, so every
+   * call progresses however small its budget.
+   */
+  readonly replay: Map<string, ScalarBox>;
+  /** Span key the replay entries belong to. */
+  replayFor: string;
+  /** True while a classification verdict runs (interval results are kept for its redo). */
+  inVerdict: boolean;
   readonly heightEff: number;
   /** Evaluations spent before this call (a resume continues the totals; the budget is per call). */
   readonly base: number;
@@ -301,6 +315,11 @@ function evalAt(st: FState, x: number): FSample | null {
 function intervalAt(st: FState, lo: number, hi: number): ScalarBox | null {
   const enc = st.enclosure;
   if (!enc) return null;
+  const key = st.inVerdict ? `${lo},${hi}` : '';
+  if (st.inVerdict) {
+    const kept = st.replay.get(key);
+    if (kept) return kept;
+  }
   if (spentThisCall(st) >= st.cfg.maxEvals) {
     st.suspended = true;
     return null;
@@ -310,8 +329,12 @@ function intervalAt(st: FState, lo: number, hi: number): ScalarBox | null {
   const loV = typeof box.lo === 'number' ? box.lo : Number.NaN;
   const hiV = typeof box.hi === 'number' ? box.hi : Number.NaN;
   const def = box.def === 0 || box.def === 1 || box.def === 2 ? box.def : 1;
-  if (Number.isNaN(loV) || Number.isNaN(hiV)) return { lo: Number.NEGATIVE_INFINITY, hi: Number.POSITIVE_INFINITY, def: 0 };
-  return { lo: Math.min(loV, hiV), hi: Math.max(loV, hiV), def };
+  const out: ScalarBox =
+    Number.isNaN(loV) || Number.isNaN(hiV)
+      ? { lo: Number.NEGATIVE_INFINITY, hi: Number.POSITIVE_INFINITY, def: 0 }
+      : { lo: Math.min(loV, hiV), hi: Math.max(loV, hiV), def };
+  if (st.inVerdict) st.replay.set(key, out);
+  return out;
 }
 
 /* ------------------------------- setup + refine ------------------------------ */
@@ -372,6 +395,7 @@ function toEffY(pv: PlotView, y: number): number {
 function runRefine(st: FState): void {
   const { pv, cfg } = st;
   while (st.pending.length > 0) {
+    if (st.suspended) return;
     if (st.steps++ > STEP_CAP) {
       forceCap(st);
       return;
@@ -402,7 +426,9 @@ function runRefine(st: FState): void {
       continue;
     }
     if (!l.defined || !r.defined) {
-      refineUndefined(st, span, l, r, mid);
+      // A budget stop inside the helper must end the run now: the span is
+      // back in `pending` and looping would only find it again (PLOT-SM-4).
+      if (!refineUndefined(st, span, l, r, mid)) return;
       continue;
     }
     const m = evalAt(st, mid);
@@ -436,24 +462,33 @@ function runRefine(st: FState): void {
   }
 }
 
-/** A span with a non-finite end: shrink towards defined sub-intervals. */
-function refineUndefined(st: FState, span: FSpan, l: FSample, r: FSample, mid: number): void {
+/**
+ * A span with a non-finite end: shrink towards defined sub-intervals. Returns
+ * false when the budget ran out (the span is back in `pending`, untouched).
+ */
+function refineUndefined(st: FState, span: FSpan, l: FSample, r: FSample, mid: number): boolean {
   if (span.depth >= st.cfg.depth) {
     st.suspicious.push(span);
-    return;
+    return true;
   }
   const m = evalAt(st, mid);
   if (!m) {
     st.pending.push(span);
-    return;
+    return false;
   }
   // Keep only halves that touch a defined end; a fully undefined span is a gap.
   if (l.defined || m.defined) st.pending.push({ xl: span.xl, xr: mid, depth: span.depth + 1 });
   if (m.defined || r.defined) st.pending.push({ xl: mid, xr: span.xr, depth: span.depth + 1 });
+  return true;
 }
 
-/** Step cap reached: accept everything pending and stop (unreachable in practice). */
+/**
+ * Step cap reached: accept everything pending and stop (unreachable in
+ * practice). Never while suspended: a suspension must leave the lists as they
+ * were, so it is not a reason to give up work.
+ */
 function forceCap(st: FState): void {
+  if (st.suspended) return;
   for (const s of st.pending) st.accepted.push(s);
   st.pending.length = 0;
   st.suspicious.length = 0;
@@ -471,6 +506,7 @@ function forceCap(st: FState): void {
 function runClassify(st: FState): void {
   st.phase = 'classify';
   while (st.suspicious.length > 0) {
+    if (st.suspended) return;
     if (st.steps++ > STEP_CAP) {
       forceCap(st);
       return;
@@ -497,9 +533,17 @@ function runClassify(st: FState): void {
       markers: st.markers.length,
       ink: st.ink.length,
     };
+    // Interval results are kept for the redo of an interrupted verdict only.
+    const spanKey = `${span.xl},${span.xr},${span.depth}`;
+    if (st.replayFor !== spanKey) {
+      st.replay.clear();
+      st.replayFor = spanKey;
+    }
+    st.inVerdict = true;
     if (l.defined && r.defined) classifyDefined(st, span, l, r);
     else if (!l.defined && !r.defined) classifyUndefined(st, span);
     else classifyEdge(st, span, l.defined ? 'left' : 'right');
+    st.inVerdict = false;
     if (st.suspended) {
       st.pending.length = mark.pending;
       st.accepted.length = mark.accepted;
@@ -570,6 +614,23 @@ function splitAt(st: FState, span: FSpan, at: Narrowed): void {
   if (span.xr > at.b) st.accepted.push({ xl: at.b, xr: span.xr, depth: span.depth });
 }
 
+/** True when a known break sits within a device pixel of x (breaks are sorted: binary search). */
+function isNearBreak(st: FState, x: number): boolean {
+  const bs = st.breaks;
+  let lo = 0;
+  let hi = bs.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if ((bs[mid] as number) < x) lo = mid + 1;
+    else hi = mid;
+  }
+  const cx = toEffX(st.pv, x);
+  for (const k of [lo - 1, lo]) {
+    if (k >= 0 && k < bs.length && Math.abs(toEffX(st.pv, bs[k] as number) - cx) < 1) return true;
+  }
+  return false;
+}
+
 /** Records a pole at x; the renderer draws the dashed vertical from the view centre. */
 function markPole(st: FState, x: number): void {
   addMarker(st, 'pole', x, (st.pv.box.y0 + st.pv.box.y1) / 2);
@@ -583,7 +644,7 @@ function markJump(st: FState, a: number, ya: number, b: number, yb: number): boo
   const c = (a + b) / 2;
   const at = evalAt(st, c);
   if (!at) return false;
-  const nearBreak = st.breaks.some((k) => Math.abs(toEffX(st.pv, k) - toEffX(st.pv, c)) < 1);
+  const nearBreak = isNearBreak(st, c);
   if (!nearBreak) {
     const closedLeft = at.defined && sameY(st, at.y, ya);
     const closedRight = at.defined && sameY(st, at.y, yb);
@@ -934,7 +995,7 @@ function finishEdge(st: FState, span: FSpan, side: 'left' | 'right', edge: numbe
       const at = evalAt(st, c);
       if (!at) return;
       // Near a known break the break verdict below owns the end markers.
-      const nearBreak = st.breaks.some((b) => Math.abs(toEffX(pv, b) - toEffX(pv, c)) < 1);
+      const nearBreak = isNearBreak(st, c);
       if (!nearBreak) {
         const closedLeft = at.defined && closeY(at.y, side === 'left' ? edgeY : partner.y);
         const closedRight = at.defined && closeY(at.y, side === 'left' ? partner.y : edgeY);
@@ -996,7 +1057,10 @@ function addMarker(st: FState, kind: MarkerKind, x: number, y: number): void {
 function runExact(st: FState): void {
   const pv = st.pv;
   st.phase = 'band';
+  // The band is only entered with an enclosure (resume refuses one without).
+  if (!st.enclosure) throw new Error('the band phase needs an enclosure');
   while (st.pending.length > 0) {
+    if (st.suspended) return;
     if (st.steps++ > STEP_CAP) {
       forceCap(st);
       return;
@@ -1326,45 +1390,163 @@ function toToken(st: FState): FunctionResume {
     chordPx: st.cfg.chordPx,
     maxSamples: st.cfg.maxSamples,
     exact: st.cfg.exact,
+    ...(st.version === undefined ? {} : { version: st.version }),
+    enclosed: st.enclosure !== undefined,
+    replayFor: st.replayFor,
+    replay: [...st.replay].map(([key, box]): ReplayBox => {
+      const [lo, hi] = key.split(',');
+      return { lo: Number(lo), hi: Number(hi), boxLo: box.lo, boxHi: box.hi, def: box.def };
+    }),
   };
+}
+
+/** Tokens cross a worker boundary as plain data, so every field is checked like a fresh call's options. */
+const TOKEN_MAX_ITEMS = 1 << 22;
+const TOKEN_MAX_COARSE = 1 << 18;
+const TOKEN_MAX_PIECES = 1 << 14;
+const MARKER_KINDS: ReadonlySet<string> = new Set([
+  'hole', 'openEnd', 'closedEnd', 'pole', 'jump', 'cusp', 'singular', 'isolated', 'end',
+]);
+const PIECE_KINDS: ReadonlySet<string> = new Set(['view', 'closed', 'open', 'break']);
+
+function isCount(v: unknown): v is number {
+  return typeof v === 'number' && Number.isInteger(v) && v >= 0;
 }
 
 function checkToken(caller: string, token: FunctionResume): ErrorObject | undefined {
   if (typeof token !== 'object' || token === null || token.kind !== 'function-plot') {
     return badArgument(caller, 'the resume token is not a function-plot token', 'Resume with the token from a suspended plotFunction result.');
   }
+  const malformed = (what: string): ErrorObject =>
+    badArgument(caller, `the resume token has ${what}`, 'Resume with the token from a suspended plotFunction result.');
+  const depthLimit = isFiniteNumber(token.depth) ? token.depth : -1;
   const spansOk = (ss: readonly FunctionResumeSpan[]): boolean =>
     Array.isArray(ss) &&
-    ss.every((s) => s && isFiniteNumber(s.xl) && isFiniteNumber(s.xr) && isFiniteNumber(s.depth) && s.xl <= s.xr);
-  if (!spansOk(token.pending) || !spansOk(token.accepted) || !spansOk(token.suspicious)) {
-    return badArgument(caller, 'the resume token has malformed spans', 'Resume with the token from a suspended plotFunction result.');
-  }
+    ss.length <= TOKEN_MAX_ITEMS &&
+    ss.every(
+      (s) =>
+        s &&
+        isFiniteNumber(s.xl) &&
+        isFiniteNumber(s.xr) &&
+        s.xl <= s.xr &&
+        Number.isInteger(s.depth) &&
+        s.depth >= 0 &&
+        s.depth <= depthLimit,
+    );
+  if (!spansOk(token.pending) || !spansOk(token.accepted) || !spansOk(token.suspicious)) return malformed('malformed spans');
   if (
     !(token.samples?.xs instanceof Float64Array) ||
     !(token.samples?.ys instanceof Float64Array) ||
     token.samples.xs.length !== token.samples.ys.length ||
+    token.samples.xs.length > TOKEN_MAX_ITEMS ||
     !Array.isArray(token.defined) ||
     token.defined.length !== token.samples.xs.length
   ) {
-    return badArgument(caller, 'the resume token has malformed samples', 'Resume with the token from a suspended plotFunction result.');
+    return malformed('malformed samples');
+  }
+  for (let i = 0; i < token.samples.xs.length; i++) {
+    if (!Number.isFinite(token.samples.xs[i] as number)) return malformed('malformed samples');
   }
   if (!Array.isArray(token.markers) || !Array.isArray(token.inkColumns) || !Array.isArray(token.pieces) || !Array.isArray(token.breaks)) {
-    return badArgument(caller, 'the resume token is malformed', 'Resume with the token from a suspended plotFunction result.');
+    return malformed('a malformed shape');
   }
   const badView = checkView(caller, token.view);
   if (badView) return badView;
   if (
-    !isFiniteNumber(token.evals) ||
-    !isFiniteNumber(token.intervalEvals) ||
-    !isFiniteNumber(token.maxDepthSeen) ||
-    !isFiniteNumber(token.coarseDone) ||
+    !isCount(token.evals) ||
+    !isCount(token.intervalEvals) ||
+    !isCount(token.maxDepthSeen) ||
+    !isCount(token.coarseDone) ||
     typeof token.rigorous !== 'boolean' ||
     typeof token.capped !== 'boolean' ||
     (token.phase !== 'setup' && token.phase !== 'refine' && token.phase !== 'classify' && token.phase !== 'band')
   ) {
-    return badArgument(caller, 'the resume token is malformed', 'Resume with the token from a suspended plotFunction result.');
+    return malformed('a malformed shape');
+  }
+  // The configuration is held to the limits of a fresh call (checkScalarOptions, checkBudgets).
+  if (!Number.isInteger(token.depth) || token.depth < 1 || token.depth > 24) return malformed('a depth outside 1..24');
+  if (!isFiniteNumber(token.bendPx) || token.bendPx <= 0 || !isFiniteNumber(token.chordPx) || token.chordPx <= 0) {
+    return malformed('non-positive bendPx or chordPx');
+  }
+  if (!Number.isInteger(token.maxSamples) || token.maxSamples < 16 || token.maxSamples > HARD_MAX_SAMPLES) {
+    return malformed('a maxSamples outside 16..65536');
+  }
+  if (typeof token.exact !== 'boolean') return malformed('a malformed exact flag');
+  if (token.version !== undefined && !isFiniteNumber(token.version)) return malformed('a malformed version');
+  if (token.replayFor !== undefined && typeof token.replayFor !== 'string') return malformed('a malformed replay key');
+  if (token.enclosed !== undefined && typeof token.enclosed !== 'boolean') return malformed('a malformed enclosure flag');
+  if (token.phase === 'band' && !token.exact) return malformed('a band phase without exact mode');
+  if (!Array.isArray(token.coarseXs) || token.coarseXs.length > TOKEN_MAX_COARSE || !token.coarseXs.every((x) => isFiniteNumber(x))) {
+    return malformed('malformed coarse samples');
+  }
+  if (token.coarseDone > token.coarseXs.length) return malformed('a coarse count past its grid');
+  if (
+    token.pieces.length > TOKEN_MAX_PIECES ||
+    !token.pieces.every(
+      (p) =>
+        p &&
+        isFiniteNumber(p.lo) &&
+        isFiniteNumber(p.hi) &&
+        p.lo <= p.hi &&
+        PIECE_KINDS.has(p.loKind) &&
+        PIECE_KINDS.has(p.hiKind),
+    )
+  ) {
+    return malformed('malformed pieces');
+  }
+  if (
+    token.breaks.length > 4096 ||
+    !token.breaks.every((b, i, all) => isFiniteNumber(b) && (i === 0 || b > (all[i - 1] as number)))
+  ) {
+    return malformed('breaks that are not sorted finite numbers');
+  }
+  if (
+    token.markers.length > token.maxSamples ||
+    !token.markers.every(
+      (m) => m && MARKER_KINDS.has(m.kind) && isFiniteNumber(m.x) && isFiniteNumber(m.y) && isFiniteNumber(m.px) && isFiniteNumber(m.py),
+    )
+  ) {
+    return malformed('malformed markers');
+  }
+  if (
+    token.inkColumns.length > TOKEN_MAX_ITEMS ||
+    !token.inkColumns.every((c) => c && isFiniteNumber(c.x) && isFiniteNumber(c.y0) && isFiniteNumber(c.y1))
+  ) {
+    return malformed('malformed ink columns');
+  }
+  if (
+    token.replay !== undefined &&
+    (!Array.isArray(token.replay) ||
+      token.replay.length > 4096 ||
+      !token.replay.every(
+        (r) =>
+          r &&
+          typeof r.lo === 'number' &&
+          typeof r.hi === 'number' &&
+          typeof r.boxLo === 'number' &&
+          typeof r.boxHi === 'number' &&
+          !Number.isNaN(r.lo + r.hi + r.boxLo + r.boxHi) &&
+          (r.def === 0 || r.def === 1 || r.def === 2),
+      ))
+  ) {
+    return malformed('malformed interval results');
   }
   return undefined;
+}
+
+/** Up to three sample positions (first, middle, last) the resume spot-checks. */
+function probeIndices(token: FunctionResume): number[] {
+  const n = token.samples.xs.length;
+  const found: number[] = [];
+  for (const at of [0, Math.floor(n / 2), n - 1]) {
+    for (let i = at; i < n && i <= at + 8; i++) {
+      if (!found.includes(i)) {
+        found.push(i);
+        break;
+      }
+    }
+  }
+  return found;
 }
 
 /* --------------------------------- public ---------------------------------- */
@@ -1417,6 +1599,9 @@ export function plotFunction(fn: FunctionValue, view: ViewBox, options: Function
     if (domainProblem) return domainProblem;
     const seedProblem = checkSeed('plotFunction', options.seed);
     if (seedProblem) return seedProblem;
+    if (options.version !== undefined && !isFiniteNumber(options.version)) {
+      return badArgument('plotFunction', `version must be a finite number (got ${String(options.version)})`, 'Pass the version stamp of the function.');
+    }
     const pvResult = createView(view);
     if (!pvResult.ok) return pvResult;
     const pv = pvResult.value;
@@ -1441,6 +1626,10 @@ export function plotFunction(fn: FunctionValue, view: ViewBox, options: Function
       batch: typeof fn.batch === 'function' ? fn.batch : undefined,
       enclosure: options.enclosure,
       cfg: { ...cfg, coarse },
+      version: options.version,
+      replay: new Map(),
+      replayFor: '',
+      inVerdict: false,
       heightEff: pv.heightEff,
       base: 0,
       pieces,
@@ -1459,6 +1648,7 @@ export function plotFunction(fn: FunctionValue, view: ViewBox, options: Function
     if (options.seed) {
       for (let i = 0; i < options.seed.xs.length; i++) {
         const x = options.seed.xs[i] as number;
+        if (!Number.isFinite(x)) continue;
         putSample(st, x, toSample(x, options.seed.ys[i] as number));
       }
     }
@@ -1473,6 +1663,12 @@ export interface ResumeFunctionOptions {
   readonly enclosure?: ScalarEnclosure;
   /** Fresh evaluation budget for this call. */
   readonly maxEvals?: number;
+  /**
+   * The function's current version stamp. It must equal the `version` the run
+   * was started with (both absent counts as equal); a different version means
+   * a different function, and the suspended run is refused.
+   */
+  readonly version?: number;
 }
 
 /** Continues a suspended `plotFunction` run with the same function. */
@@ -1484,11 +1680,45 @@ export function resumeFunctionPlot(token: FunctionResume, fn: FunctionValue, opt
     if (fnProblem) return fnProblem;
     const budgetProblem = checkBudgets('resumeFunctionPlot', undefined, options.maxEvals);
     if (budgetProblem) return budgetProblem;
+    if (options.version !== undefined && !isFiniteNumber(options.version)) {
+      return badArgument('resumeFunctionPlot', `version must be a finite number (got ${String(options.version)})`, 'Pass the version stamp of the function.');
+    }
+    if ((token.version ?? null) !== (options.version ?? null)) {
+      return badArgument(
+        'resumeFunctionPlot',
+        `the token belongs to function version ${String(token.version)}, not ${String(options.version)}`,
+        'A new function version discards the suspended plot; start again with plotFunction.',
+      );
+    }
+    // A run that used an enclosure needs it again: its verdicts and the exact band depend on it.
+    if ((token.enclosed ?? token.intervalEvals > 0) && !options.enclosure) {
+      return badArgument(
+        'resumeFunctionPlot',
+        'the suspended plot used an enclosure and none was given',
+        'Resume with the same enclosure, or start again with plotFunction.',
+      );
+    }
     const pvResult = createView(token.view);
     if (!pvResult.ok) return pvResult;
     const pv = pvResult.value;
     const fast = fn.call1;
     const call1 = fast ? (x: number): number => fast(x) : (x: number): number => fn.call(x) as number;
+    // Without a version stamp a different function would be stitched in silently,
+    // so the token's own samples are spot-checked against this function.
+    const probes = probeIndices(token);
+    for (const i of probes) {
+      const x = token.samples.xs[i] as number;
+      const stored = token.samples.ys[i] as number;
+      const now = toSample(x, call1(x));
+      const same = now.defined ? Math.abs(now.y - stored) <= 1e-9 * Math.max(1, Math.abs(stored)) : Number.isNaN(stored);
+      if (!same) {
+        return badArgument(
+          'resumeFunctionPlot',
+          `the function gives ${String(now.y)} at x = ${String(x)}, the token holds ${String(stored)}`,
+          'The token belongs to another function; start again with plotFunction.',
+        );
+      }
+    }
     const samples = new Map<number, FSample>();
     const definedXs = new SortedSet();
     for (let i = 0; i < token.samples.xs.length; i++) {
@@ -1519,14 +1749,18 @@ export function resumeFunctionPlot(token: FunctionResume, fn: FunctionValue, opt
         maxEvals: options.maxEvals === undefined ? DEFAULT_MAX_EVALS_FUNCTION : Math.floor(options.maxEvals),
         exact: token.exact,
       },
+      version: token.version,
+      replay: new Map((token.replay ?? []).map((r): [string, ScalarBox] => [`${r.lo},${r.hi}`, { lo: r.boxLo, hi: r.boxHi, def: r.def }])),
+      replayFor: token.replayFor ?? '',
+      inVerdict: false,
       heightEff: pv.heightEff,
-      base: token.evals + token.intervalEvals,
+      base: token.evals + token.intervalEvals + probes.length,
       pieces: [...token.pieces],
       breaks: [...token.breaks],
       coarseXs: [...token.coarseXs],
       coarseDone: token.coarseDone,
       phase: token.phase,
-      evals: token.evals,
+      evals: token.evals + probes.length,
       intervalEvals: token.intervalEvals,
       maxDepthSeen: token.maxDepthSeen,
       rigorous: token.rigorous,

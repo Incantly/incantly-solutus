@@ -58,6 +58,7 @@ export type {
   RegionBorder,
   RegionPlot,
   RegionPlotOptions,
+  ReplayBox,
   ResumePiece,
   SampleSeed,
   ScalarBox,

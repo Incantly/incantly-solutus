@@ -48,7 +48,8 @@ Ranked by impact: security (unbounded time or memory), then wrong results, then 
 - **Evidence:** `function.ts:430-444` `refineUndefined` pushes the span back and returns when `evalAt` runs out of budget, but its caller (`function.ts:394-396`) does `continue`. The loop pops the same span, finds `l` and `r` cached, calls `refineUndefined` again, and repeats until `STEP_CAP` (`function.ts:365-367`). `forceCap` (`function.ts:446-452`) then moves every pending span to `accepted`, empties `suspicious`, and sets `capped = true` and `rigorous = false`. The run is still `suspended`, so the token carries the damage. Repro: `f(x) = sqrt(-x) + sin(4x)` on `V`. Direct: 177 output samples, `capped: false`. Sliced with `maxEvals` 16, 17, 20, 50, 100, 150, 200, 233 or 300 per call: 100 or 101 samples, `capped: true`, different paths; each slice that stops inside `refineUndefined` takes about 80 ms. The parametric tracer has the same `push; return` in `runRefine` (`param.ts:290-293`), but there `dead` ends the run, so no spin.
 - **Invariant broken:** P2: a suspension leaves `pending`, `suspicious` and the flags exactly as they were before the interrupted step; P3: a span is in exactly one list.
 - **Suggested fix:** have `refineUndefined` return a status, and have `runRefine` `return` when `st.suspended` is set. Also make `runRefine` and `runClassify` return at once on `st.suspended` before any `forceCap`, and make `forceCap` unreachable while suspended. Check every other caller of `evalAt` for the same pattern.
-- **status:** open
+- **status:** fixed
+- **fix:** `refineUndefined` returns false when its `evalAt` ran out of budget, and `runRefine` returns at once (the span is back in `pending`, nothing else touched). The loops in `runRefine`, `runClassify` and `runExact` also return first thing when `suspended`, and `forceCap` does nothing while suspended. Every other caller of `evalAt`/`intervalAt` already returns or is rolled back by `runClassify`. Repro: `sqrt(-x) + sin(4x)` sliced at 16 to 300 evaluations per call now equals the direct plot (177 samples, `capped: false`) in under 6 ms.
 
 ### PLOT-SM-5: A resume token is not tied to a function version
 
@@ -56,7 +57,8 @@ Ranked by impact: security (unbounded time or memory), then wrong results, then 
 - **Evidence:** `FunctionResume` (`contracts.ts`) has no version, and `resumeFunctionPlot` (`function.ts:1499`) accepts any `FunctionValue`. Repro: `first = plotFunction(fnOf(x => x), V, { maxEvals: 100 })`, then `resumeFunctionPlot(first.resume, fnOf(x => x + 3), { maxEvals: 1e6 })` returns `complete: true` with 100 paths and 498 markers (the direct plot of `x + 3` is 1 path), stitched from the old coarse samples of `x` and new samples of `x + 3`.
 - **Invariant broken:** P2: every sample in a run belongs to one `(function version, view, pixel size)`.
 - **Suggested fix:** add `version` to `FunctionPlotOptions` and to the token, require it in `ResumeFunctionOptions`, and refuse a mismatch with `bad_argument` (or restart). Document that a version change discards the token, as it discards the cache.
-- **status:** open
+- **status:** fixed
+- **fix:** `FunctionPlotOptions.version`, `FunctionResume.version` and `ResumeFunctionOptions.version`. `resumeFunctionPlot` refuses (`bad_argument`) when the token's version differs from the one passed (both absent counts as equal). Because a caller may give no version, the resume also re-evaluates up to three stored samples (first, middle, last) with the new function and refuses when one differs by more than 1e-9 relative; those 3 evaluations count in `stats.evals` but not against the call's budget. The repro (`x` resumed with `x + 3`) now returns `bad_argument`. A new version discards the suspended plot, as it discards the cache.
 
 ### PLOT-SM-6: Seed samples count against the sample cap, so a pan with a cached seed skips refinement
 
@@ -82,7 +84,8 @@ Ranked by impact: security (unbounded time or memory), then wrong results, then 
 - **Evidence:** `runClassify` (`function.ts:487-499`) rolls back a verdict when it suspends and redoes it whole on the next call. Real samples are cached, so a redo gets further each time, but interval evaluations are not cached. `classifyEdgeEnclosed` (`function.ts:818-853`) needs 2 interval evaluations per bisection step, up to 80. When that exceeds `maxEvals`, every call spends its budget on the same verdict and rolls it back. Repro: `plotFunction(fnOf(Math.sqrt), V, { enclosure: sqrtEnc, depth: 1, coarse: 2, maxEvals: 16 })`, then 500 calls of `resumeFunctionPlot(token, f, { enclosure: sqrtEnc, maxEvals: 16 })`: still `complete: false`, 3 real and 7,997 interval evaluations. (`maxEvals: 16` is the smallest allowed budget; with the default `depth` and `coarse` the same budget completes in 21 calls.)
 - **Invariant broken:** P2: every call with a positive budget makes progress.
 - **Suggested fix:** cache interval results by `(lo, hi)` in the state and the token, or let a verdict that has already been rolled back once run to completion in the next call, or require `maxEvals` at least the largest verdict cost (about 100).
-- **status:** open
+- **status:** fixed
+- **fix:** The interval results of the verdict in progress are kept (`replay`, keyed by span, in the state and in the token, at most one verdict's worth). A rolled-back verdict redoes its interval work for free, so each call adds at least its budget of new evaluations to the verdict and the verdict completes whatever `maxEvals` is (16 is the smallest allowed). The sliced and the direct run also spend the same number of interval evaluations now.
 
 ### PLOT-SM-9: An exact-mode run resumed without its enclosure reports `complete: true` with a partial band
 
@@ -90,7 +93,8 @@ Ranked by impact: security (unbounded time or memory), then wrong results, then 
 - **Evidence:** in the band phase, `runExact` (`function.ts:1001-1004`) treats a null `intervalAt` as a budget stop (`pending.push; return`), but `intervalAt` (`function.ts:291-293`) returns null without setting `suspended` when there is no enclosure. `finishComplete` then sees `exactActive` false and returns the curve paths plus the band columns drawn so far. Repro: `plotFunction(fnOf(Math.sin), V, { exact: true, enclosure: sinEnc, maxEvals: 300 })`, resume with the enclosure until `resume.phase === 'band'` (599 columns pending), then `resumeFunctionPlot(token, f, { maxEvals: 1e6 })` without the enclosure: `complete: true`, 201 of 800 ink columns, 1 path. The direct run gives 800 columns and no path.
 - **Invariant broken:** P2: `complete: true` means every phase drained; `band` is entered only with an enclosure.
 - **Suggested fix:** refuse a resume without an enclosure when the token says it used one (`token.exact` or `token.intervalEvals > 0`) with `bad_argument`, or restart the band from the curve verdicts. In `runExact`, distinguish "no enclosure" from "budget spent".
-- **status:** open
+- **status:** fixed
+- **fix:** The token records `enclosed`; `resumeFunctionPlot` refuses (`bad_argument`) a resume without an enclosure when the run used one (`enclosed`, or `intervalEvals > 0` for older tokens). `runExact` can only run with an enclosure and fails loudly (`internal`) otherwise, so a missing enclosure is never read as a spent budget. The repro now returns `bad_argument`.
 
 ### PLOT-SM-10: The sample cache has no function or view identity, and evicts by insertion order
 
@@ -144,7 +148,8 @@ Ranked by impact: security (unbounded time or memory), then wrong results, then 
 - **Evidence:** `checkToken` (`function.ts:1353-1391`) checks spans, samples, view and counters, but not `depth`, `bendPx`, `chordPx`, `maxSamples`, `exact`, `coarseXs` or the contents of `pieces`. `resumeFunctionPlot({ ...token, maxSamples: 1e9, bendPx: 1e-9, depth: 60 }, f, { maxEvals: 1e7 })` and a span with `depth: -1e9` both run with `ok: true`. The per-call `maxEvals` still bounds each call.
 - **Invariant broken:** P2: a resumed run has the same limits as a fresh one (`checkScalarOptions`).
 - **Suggested fix:** run the token's configuration through `checkScalarOptions` and `checkBudgets`, check `coarseXs` and `pieces` like the other arrays, and require span depths in `0..depth`.
-- **status:** open
+- **status:** fixed
+- **fix:** `checkToken` holds the token to the limits of a fresh call: `depth` 1..24, positive finite `bendPx` and `chordPx`, `maxSamples` 16..65536, boolean `exact`, `version`, `enclosed` and `replayFor` types, span depths integers in 0..depth, non-negative integer counters, `coarseXs` finite and at most 262144 with `coarseDone` inside it, `pieces` finite, ordered, with known end kinds (at most 16384), `breaks` strictly increasing and finite (at most 4096), `markers` known kinds and finite coordinates (at most `maxSamples`), ink columns finite, sample xs finite, `band` only with `exact`, and `replay` entries well formed. The two repros return `bad_argument`.
 
 ### PLOT-SM-16: Parametric markers are not filtered or clipped
 
