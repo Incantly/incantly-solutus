@@ -197,46 +197,46 @@ describe('design 7.1 draw list and kernel events', () => {
   });
 
   it('7.2 markViewDirtyAll flags every drawable (a zoom marks all)', () => {
-    const list = new DrawList();
-    list.add(stubDrawable({ id: 1, kind: 'point', rank: 5 }));
+    const { list } = settled(1, 'point', { k: 'point', x: 1, y: 2 });
     list.add(stubDrawable({ id: 2, kind: 'line', rank: 3 }));
     list.markViewDirtyAll();
     expect(list.get(oid(1))?.viewDirty).toBe(true);
     expect(list.get(oid(2))?.viewDirty).toBe(true);
   });
 
-  function realDrawable(id: number, kind: 'point' | 'line' | 'curve', value: unknown): GeometryDrawable {
+  /** A draw list with one real drawable, rebuilt once so its dirty flags are clear. */
+  function settled(id: number, kind: 'point' | 'line' | 'curve', value: unknown): { list: DrawList; d: GeometryDrawable } {
     const d = new GeometryDrawable({ id: oid(id), name: `n${String(id)}`, kind, order: id, layer: 0, free: false, onPath: false, measure });
-    d.update({ head: head(id, `n${String(id)}`), value: { defined: true, value } } as never, testViewport(), testStyle(kind));
-    return d;
+    const list = new DrawList();
+    list.add(d);
+    const objs = [{ head: head(id, `n${String(id)}`), value, kind }];
+    list.applyEvent({ kind: 'update', ids: [oid(id)] }, () => null);
+    updateDrawables(list, { kernel: stubKernel(objs), styles: stubStyles(objs) }, testViewport(), () => undefined);
+    expect(list.get(oid(id))?.viewDirty).toBe(false);
+    return { list, d };
   }
 
   it('7.2 pan only: a maths-anchored point shifts its cached pixels and stays clean', () => {
-    const list = new DrawList();
-    list.add(realDrawable(1, 'point', { k: 'point', x: 1, y: 2 }));
+    const { list } = settled(1, 'point', { k: 'point', x: 1, y: 2 });
     list.markPanDirty(10, 0);
     expect(list.get(oid(1))?.viewDirty).toBe(false);
   });
 
   it('7.2 pan only: lines (clip-dependent) are marked dirty', () => {
-    const list = new DrawList();
-    list.add(realDrawable(1, 'line', { k: 'line', ox: 0, oy: 0, dx: 1, dy: 1 }));
+    const { list } = settled(1, 'line', { k: 'line', ox: 0, oy: 0, dx: 1, dy: 1 });
     list.markPanDirty(10, 0);
     expect(list.get(oid(1))?.viewDirty).toBe(true);
   });
 
   it('7.2 pan only: curves (sample range depends on the view) are marked dirty', () => {
-    const list = new DrawList();
-    list.add(realDrawable(1, 'curve', { k: 'curve', runs: [new Float64Array([0, 0, 1, 1, 2, 0])] }));
+    const { list } = settled(1, 'curve', { k: 'curve', runs: [new Float64Array([0, 0, 1, 1, 2, 0])] });
     list.markPanDirty(10, 0);
     expect(list.get(oid(1))?.viewDirty).toBe(true);
   });
 
   it('7.2 pan shifts the cached pixels by (dx, dy)', () => {
-    const d = realDrawable(1, 'point', { k: 'point', x: 1, y: 2 });
+    const { list, d } = settled(1, 'point', { k: 'point', x: 1, y: 2 });
     const before = d.bbox;
-    const list = new DrawList();
-    list.add(d);
     list.markPanDirty(10, 5);
     const after = d.bbox;
     expect(before).not.toBeNull();
@@ -307,9 +307,16 @@ describe('design 7.3 update phase', () => {
 });
 
 describe('design 7.4/7.5 paint, split, culling, quality', () => {
-  it('7.5 culled drawables are the ones missing the viewport (or null)', () => {
+  // animation-time 10.8: a particle drawable "reports no bounding box (never culled)", so a null bbox
+  // is not culled (this overrides the reading that null means culled; design 6 only says the drawable
+  // then has no geometry).
+  it('7.5 a null bbox is never culled (particles have no bbox, animation-time 10.8)', () => {
     const view = { x0: px(0), x1: px(800), y0: px(0), y1: px(600) };
-    expect(isCulled(null, view)).toBe(true);
+    expect(isCulled(null, view)).toBe(false);
+  });
+
+  it('7.5 culled drawables are the ones whose bbox misses the viewport', () => {
+    const view = { x0: px(0), x1: px(800), y0: px(0), y1: px(600) };
     expect(isCulled({ x0: px(10), x1: px(20), y0: px(10), y1: px(20) }, view)).toBe(false);
     expect(isCulled({ x0: px(900), x1: px(910), y0: px(10), y1: px(20) }, view)).toBe(true);
     expect(isCulled({ x0: px(790), x1: px(810), y0: px(10), y1: px(20) }, view)).toBe(false);
@@ -347,13 +354,44 @@ describe('design 7.4/7.5 paint, split, culling, quality', () => {
     expect(d.calls).not.toContain('paint');
   });
 
-  it('6 drawables with no geometry are not painted', () => {
+  it('6 an object with an undefined value has no geometry and paints nothing', () => {
     const list = new DrawList();
-    const d = stubDrawable({ id: 1, kind: 'point', rank: 5, bbox: null });
+    const d = new GeometryDrawable({ id: oid(1), name: 'A', kind: 'point', order: 0, layer: 0, free: true, onPath: false, measure });
     list.add(d);
+    list.applyEvent({ kind: 'update', ids: [oid(1)] }, () => null);
+    updateDrawables(list, { kernel: stubKernel([]), styles: stubStyles([]) }, testViewport(), () => undefined);
+    expect(d.bbox).toBeNull();
     const s = new RecordSurface();
     paintDrawables(list, s, paintContext(), { x0: px(0), x1: px(800), y0: px(0), y1: px(600) });
-    expect(d.calls).not.toContain('paint');
+    expect(s.calls.filter((c) => c.k === 'fill' || c.k === 'stroke' || c.k === 'text')).toHaveLength(0);
+  });
+
+  it('6 a show-if of false hides the geometry; the drawable keeps its slot', () => {
+    const list = new DrawList();
+    const d = new GeometryDrawable({ id: oid(1), name: 'A', kind: 'point', order: 0, layer: 0, free: true, onPath: false, measure });
+    list.add(d);
+    const objs = [{ head: head(1, 'A'), value: { k: 'point', x: 1, y: 1 }, kind: 'point' as const, style: { show: false } }];
+    list.applyEvent({ kind: 'update', ids: [oid(1)] }, () => null);
+    updateDrawables(list, { kernel: stubKernel(objs), styles: stubStyles(objs) }, testViewport(), () => undefined);
+    expect(list.size).toBe(1);
+    expect(d.bbox).toBeNull();
+    const s = new RecordSurface();
+    paintDrawables(list, s, paintContext(), { x0: px(0), x1: px(800), y0: px(0), y1: px(600) });
+    expect(s.calls.filter((c) => c.k === 'fill' || c.k === 'stroke')).toHaveLength(0);
+  });
+
+  it('6 becoming defined again is instant: the slot is reused and geometry returns', () => {
+    const list = new DrawList();
+    const d = new GeometryDrawable({ id: oid(1), name: 'A', kind: 'point', order: 0, layer: 0, free: true, onPath: false, measure });
+    list.add(d);
+    const hidden = [{ head: head(1, 'A'), value: { k: 'point', x: 1, y: 1 }, kind: 'point' as const, style: { show: false } }];
+    list.applyEvent({ kind: 'update', ids: [oid(1)] }, () => null);
+    updateDrawables(list, { kernel: stubKernel(hidden), styles: stubStyles(hidden) }, testViewport(), () => undefined);
+    expect(d.bbox).toBeNull();
+    const shown = [{ head: head(1, 'A', { version: 2, styleVersion: 2 }), value: { k: 'point', x: 1, y: 1 }, kind: 'point' as const }];
+    list.applyEvent({ kind: 'update', ids: [oid(1)] }, () => null);
+    updateDrawables(list, { kernel: stubKernel(shown), styles: stubStyles(shown) }, testViewport(), () => undefined);
+    expect(d.bbox).not.toBeNull();
   });
 
   it('7.4 partial split caches lower/upper and paints middle live', () => {

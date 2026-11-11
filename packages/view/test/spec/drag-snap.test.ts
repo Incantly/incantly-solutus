@@ -63,6 +63,12 @@ describe('design 12.1 drag plans', () => {
     expect(p.moves).toEqual([{ id: oid(3), role: 'number' }]);
   });
 
+  it('12.1 a slider whose free flag is not set still plans a slider drag', () => {
+    const p = computeDragPlan(oid(3), facts({ free: false, isSlider: true }));
+    expect(p.kind).toBe('slider');
+    expect(p.moves).toEqual([{ id: oid(3), role: 'number' }]);
+  });
+
   it('12.1 a label drags its offset', () => {
     expect(computeDragPlan(oid(4), facts({ isLabel: true })).kind).toBe('label');
   });
