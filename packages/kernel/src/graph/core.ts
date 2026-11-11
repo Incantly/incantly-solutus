@@ -350,8 +350,10 @@ export class FigureCore {
           continue;
         }
         const v = a.eval(env);
-        values[i] = v;
-        if (v === undefined || (typeof v === 'number' && v !== v)) undefinedInput = true;
+        // a Number that is undefined is computed as NaN; rules that accept undefined see `undefined`
+        const gone = v === undefined || (typeof v === 'number' && v !== v);
+        values[i] = gone ? undefined : v;
+        if (gone) undefinedInput = true;
       }
       if (undefinedInput && !rule.acceptsUndefined && !form.acceptsUndefined) {
         if (env.reason === undefined) env.reason = 'input_undefined';
@@ -371,7 +373,12 @@ export class FigureCore {
           }
           return undefined;
         },
-        evalArg: (i) => (args[i]?.eval ? (args[i] as CompiledArg & { eval: (e: Env) => unknown }).eval(env) : undefined),
+        evalArg: (i) => {
+          const f = args[i]?.eval;
+          if (!f) return undefined;
+          const v = f(env);
+          return typeof v === 'number' && v !== v ? undefined : v;
+        },
       };
       const out = rule.run(call);
       if ((out === undefined || (typeof out === 'number' && out !== out)) && env.reason === undefined) env.reason = 'not_finite';
