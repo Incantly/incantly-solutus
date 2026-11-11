@@ -29,3 +29,4 @@ export { defaultsFor, colorFromWord, colorHex, toColor, validKeysFor, registerPr
 export type { TypeStyle } from './graph/props';
 export { sameValue, valueSource, numberSource } from './graph/values';
 export { StateSolver } from './clock/solver';
+export * from './commands/functions/index';
