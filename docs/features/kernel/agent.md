@@ -33,7 +33,7 @@ One line each, in the same format as the command catalogue.
 ```text
 Name = expr                      define or redefine (same type only)
 Name = expr in a..b [step s]     Number slider
-Name with key = value, ...       restyle. keys: color width lineStyle pointSize pointStyle opacity fill label caption visible showIf layer(0-9) fixed selectable aux trace tip tags
+Name with key = value, ...       restyle. keys: color width lineStyle pointSize pointStyle opacity fill label caption visible showIf layer(0-9) fixed selectable aux trace tip tags animate
 Show(obj, ...)  Hide(obj, ...)   visibility
 Delete(obj)                      remove obj and everything built from it
 Rename(obj, "NewName")           change the name

@@ -28,7 +28,8 @@ Parse errors (`syntax`, `unbalanced`, `bad_number`, `unterminated_string`) belon
 | `bad_property_value` | value of the wrong type or range (`layer = 12`, `opacity = 3`) | clamps silently | Error with allowed range; no silent clamping for literals. Dynamic expressions that evaluate out of range clamp at read time (documented, section 9.4 of design). |
 | `nothing_to_undo` | `Undo()` with empty history (also `Redo()`) | button disabled | Error, `recovery: 'skip'`. |
 | `limit` | any size budget exceeded | out-of-memory or hang | Error with `limit` field naming which and the allowed value. |
-| `load_failed` | `fromScript` finds a bad version or a strict failure | "opening file failed" | Error plus the per-line list. |
+| `load_failed` | `fromScript` in strict mode finds a failing line, or the file is unreadable | "opening file failed" | Error plus the per-line list. |
+| `version` | `fromScript` finds a file version newer than supported (K042; not `load_failed`, ruling K7) | "opening file failed" | Error naming the version found and the supported ones. |
 | `internal` | a rule threw (a bug) | stack trace in console, figure may be half updated | Rolled back; `committed: false`; `code` and a `fingerprint` for logs. |
 
 ---
@@ -58,7 +59,7 @@ The kernel defines the reason codes. Rules return one; the engine adds `input_un
 
 A rule must return a specific reason, never a generic one. A test iterates every rule's declared `reasons` list and checks each can be reached by an example.
 
-Shape of the cell: `{ defined: false, reason, cause?: ObjId }`. In the change report: `{ name, reason, cause?: name }`. In the `figure` tool: `"undefined": { "reason": "parallel" }` or `{ "reason": "input_undefined", "cause": "I", "root": "parallel" }` where `cause` is the nearest undefined input and `root` is the reason at the end of the `cause` chain.
+Shape of the cell: `{ defined: false, reason, detail?: string, cause?: ObjId }`. `detail` is one short text (for numeric reasons, for example what was reached and what was wanted). In the change report: `{ name, reason, cause?: name }`. In the `figure` tool: `"undefined": { "reason": "parallel" }` or `{ "reason": "input_undefined", "cause": "I", "root": "parallel" }` where `cause` is the nearest undefined input and `root` is the reason at the end of the `cause` chain.
 
 GeoGebra: a failed output is just "undefined"; the user must work backwards to see why.
 
@@ -220,7 +221,7 @@ Internal:
 ## 5. Recovery rules (kernel side)
 
 1. **Atomic.** A rejected line leaves figure, journal and clock exactly as they were. Tests snapshot `toScript()` and the journal depth before and after every failing line in the golden suite and assert equality.
-2. **Independent lines.** In a batch, later lines run even if earlier ones failed. Lines that read a failed line's name get `blockedBy`.
+2. **Independent lines.** In a batch run with `mode: 'independent'`, later lines run even if earlier ones failed (the default `atomic` mode rolls the whole batch back instead, ruling K6). Lines that read a failed line's name get `blockedBy`.
 3. **Dry run first when unsure.** `apply(line, { dryRun: true })` returns the same error without side effects.
 4. **Rollback on throw.** The commit step records the minimum to undo itself before the first mutation; an exception inside a rule or a listener (listeners run after commit and cannot undo it, but their errors are caught and reported as `listener_failed` notices, never allowed to break the figure) rolls back and returns `internal`.
 5. **No silent repair.** The kernel never guesses a name, creates sliders or splits a name into a product. It offers a `suggest` line; the caller decides.

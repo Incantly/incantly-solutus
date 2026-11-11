@@ -99,7 +99,7 @@ Same list as `kernel/errors.md` section 2, with plain-language phrases. The phra
 | `not_set` | "not set" | "This has no value yet." |
 | `limit` | "too big" | "That would be too large." |
 
-The numeric reasons carry optional `detail` (`achieved`, `wanted`, `iterations`) used by authors, not spoken.
+The numeric reasons carry an optional `detail`, a short plain-text fact such as `reached 3e-4, wanted 1e-9 after 50 iterations`, used by authors, not spoken. `detail` is one string, as in the cell (`Cell.detail`).
 
 ## 4. Notices (success with facts)
 
