@@ -436,7 +436,7 @@ export class StateSolver {
     const frac = pos - n;
     const between = frac > 1e-9;
     let result: Float64Array;
-    let behind = false;
+    let behind: boolean;
     try {
       const yn = this.at(n);
       behind = this.short;
