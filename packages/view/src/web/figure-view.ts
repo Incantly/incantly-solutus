@@ -265,6 +265,27 @@ export class FigureView {
   mount(el: HTMLElement): Result<void> {
     if (this.root !== null) return okResult(undefined);
     try {
+      // A view can be mounted again after `unmount` (VIEW-SM-7): every piece
+      // of state that `unmount` or a dead frame request left behind starts over.
+      this.destroyed = false;
+      this.pending = false;
+      this.bgDirty = true;
+      this.lowerCache = null;
+      this.upperCache = null;
+      this.lowerSurface = null;
+      this.upperSurface = null;
+      this.readerText.clear();
+      this.drag = null;
+      this.panning = null;
+      this.band = null;
+      this.pointers.clear();
+      this.camDrag = null;
+      this.point3Drag = null;
+      this.hovered = null;
+      this.snapIndicator = null;
+      this.softwareTarget = null;
+      this.softwareSize = '';
+      this.list.markViewDirtyAll();
       this.root = el;
       el.classList.add('incantly-figure');
       el.setAttribute('role', 'application');
@@ -292,13 +313,20 @@ export class FigureView {
       this.overlayCanvas.setAttribute('aria-hidden', 'true');
       el.append(this.bgCanvas);
       if (this.opts.mode === '3d') {
-        const box = this.opts.shared.acquireBox(this.opts.id, w, h, this.dpr);
-        if (box.ok) {
-          this.sceneCanvas = box.value.canvas;
-          this.sceneCanvas.style.position = 'absolute';
-          this.sceneCanvas.style.inset = '0';
-          el.append(this.sceneCanvas);
+        const box = this.opts.shared.acquireBox(this.opts.id, w, h, this.dpr, this);
+        if (!box.ok) {
+          // The id is held by another figure (VIEW-SM-6): say so, mount nothing.
+          this.bgCanvas.remove();
+          this.bgCanvas = null;
+          this.overlayCanvas = null;
+          this.root = null;
+          this.view = null;
+          return box;
         }
+        this.sceneCanvas = box.value.canvas;
+        this.sceneCanvas.style.position = 'absolute';
+        this.sceneCanvas.style.inset = '0';
+        el.append(this.sceneCanvas);
       } else {
         this.sceneCanvas = document.createElement('canvas');
         this.sceneCanvas.style.position = 'absolute';
@@ -377,7 +405,7 @@ export class FigureView {
     this.root?.removeEventListener('keydown', this.onKeyDown);
     this.bgCanvas?.remove();
     if (this.opts.mode === '2d') this.sceneCanvas?.remove();
-    else this.opts.shared.releaseBox(this.opts.id);
+    else this.opts.shared.releaseBox(this.opts.id, this);
     this.overlayCanvas?.remove();
     this.readerList?.remove();
     this.liveRegion?.remove();
@@ -2475,7 +2503,8 @@ export class FigureView {
         this.list.sorted(),
         { x0: px(0), x1: vp.value.width, y0: px(0), y1: vp.value.height },
         this.budgets.labelsShown,
-        false,
+        // Selected and focused labels keep their place in an export too (VIEW-SM-2).
+        true,
       ).shown;
       if (exp.includeGrid && this.grid.on) {
         svg.setCurrentId('');
@@ -2650,7 +2679,8 @@ export class FigureView {
         this.list.sorted(),
         { x0: px(0), x1: vp.value.width, y0: px(0), y1: vp.value.height },
         this.budgets.labelsShown,
-        false,
+        // Selected and focused labels keep their place in an export too (VIEW-SM-2).
+        true,
       ).shown;
       if (exp.background !== 'transparent') {
         const bg = exp.background === 'view'

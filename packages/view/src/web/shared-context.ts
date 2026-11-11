@@ -153,12 +153,16 @@ export class SharedGpuContext {
     try {
       const off = factory.createOffscreen(16, 16);
       const gl = off?.getContext('webgl2', GL_OPTIONS);
-      if (off !== null && off !== undefined && gl instanceof WebGL2RenderingContext) {
-        shared.backendValue = new WebGL2Backend(gl);
+      if (off !== null && off !== undefined && gl !== null && gl !== undefined) {
+        // Any canvas that gave a context can lose it: listen before deciding
+        // whether the context is one this back-end can use (VIEW-SM-6).
         shared.glCanvas = off;
         if (typeof off.addEventListener === 'function') {
           off.addEventListener('webglcontextlost', shared.onContextLost);
           off.addEventListener('webglcontextrestored', shared.onContextRestored);
+        }
+        if (typeof WebGL2RenderingContext !== 'undefined' && gl instanceof WebGL2RenderingContext) {
+          shared.backendValue = new WebGL2Backend(gl);
         }
       }
     } catch {
@@ -182,8 +186,9 @@ export class SharedGpuContext {
   acquireBox(id: string, widthCss: number, heightCss: number, dpr: number, owner: object | null = null): Result<FigureBox> {
     const old = this.boxes.get(id);
     if (old !== undefined) {
-      // A box belongs to one figure: a second figure with the same id is refused (V2).
-      if (old.owner !== null && owner !== null && old.owner !== owner) {
+      // A box belongs to one figure (V2). Only the owner that holds it may
+      // acquire it again; any other caller, named or not, is refused.
+      if (owner === null || old.owner !== owner) {
         return viewError({
           kind: 'internal',
           messageKey: 'view.internal',

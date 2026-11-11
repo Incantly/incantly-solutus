@@ -5,7 +5,7 @@
  * from object names. Deterministic: same calls give the same bytes.
  */
 import type { PxPoint, PxRect } from '../core/coords';
-import { svgEscape, svgId, svgRound } from '../core/export';
+import { MAX_SVG_ELEMENTS, svgEscape, svgId, svgRound } from '../core/export';
 import type { HatchSpec, Rgba } from '../core/styles';
 import { renderHatchSpacing } from '../core/styles';
 import {
@@ -89,7 +89,8 @@ export class SvgSurface implements Surface {
     readonly options: SvgOptions = { textAs: 'text' },
     limits: { readonly maxElements?: number; readonly maxBytes?: number } = {},
   ) {
-    this.maxElements = limits.maxElements ?? Number.POSITIVE_INFINITY;
+    // The cap applies even when the caller names none (VIEW-SM-3).
+    this.maxElements = limits.maxElements ?? MAX_SVG_ELEMENTS;
     this.maxBytes = limits.maxBytes ?? MAX_SVG_BYTES;
   }
 

@@ -466,7 +466,9 @@ describe('VIEW-SM-1 untrusted strings never become raw CSS or markup', () => {
   it('the reader list shows names and descriptions only as text', () => {
     const f = mountFig({ objects: [pt(1, '<img src=x onerror=1>', 1, 2)] });
     expect(f.el.querySelector('img')).toBeNull();
-    expect(f.el.innerHTML).not.toMatch(/<img/i);
+    // A name inside an attribute value is serialised unescaped by innerHTML, so
+    // the check is on elements: nothing the name could have created exists.
+    expect(f.el.querySelectorAll('[onerror], script, iframe')).toHaveLength(0);
   });
 
   it('announced text goes into the live region as text', () => {
@@ -950,6 +952,8 @@ describe('VIEW-SM-7 a figure mounted again after unmount draws or says it cannot
   it('after unmount and mount, applying events queues frames (or mount returned an error)', () => {
     const { f, result } = remount();
     if (!result.ok) return;
+    // Run the frame that mount itself asked for, so the next request is new.
+    f.pump();
     f.queue.length = 0;
     f.view.applyEvents([{ kind: 'add', ids: f.objects.map((o) => o.head.id) }]);
     expect(f.queue.length).toBeGreaterThan(0);
