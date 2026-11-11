@@ -80,6 +80,9 @@ export function isFiniteNumber(v: unknown): v is number {
 
 /** Checks the shared view shape; every tracer calls this first. */
 export function checkView(caller: string, view: ViewBox): ErrorObject | undefined {
+  if (typeof view !== 'object' || view === null) {
+    return badArgument(caller, 'the view is missing', 'Pass a view with x0, x1, y0, y1, widthPx and heightPx.');
+  }
   if (!isFiniteNumber(view.x0) || !isFiniteNumber(view.x1) || !(view.x0 < view.x1)) {
     return badArgument(caller, `the view needs finite x0 < x1 (got ${String(view.x0)}..${String(view.x1)})`, 'Pass a view with x0 < x1, both finite.');
   }

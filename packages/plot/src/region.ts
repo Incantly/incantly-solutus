@@ -65,7 +65,6 @@ interface RState {
 }
 
 const CELL_PX = 32;
-const DECIDE_PX = 8;
 /** Largest leaf bitmap (cells); larger views are refused with `limit`. */
 const MAX_BITMAP_CELLS = 32000000;
 
@@ -116,6 +115,10 @@ function encloseAt(st: RState, node: RNode): TriState | null {
 /* -------------------------------- quadtree ---------------------------------- */
 
 function runFill(st: RState): void {
+  if (!st.enclosure) {
+    runDense(st);
+    return;
+  }
   const per = Math.max(1, Math.round(CELL_PX / st.leafEff));
   const queue: RNode[] = [];
   for (let j = 0; j < st.rows; j += per) {
@@ -134,35 +137,10 @@ function runFill(st: RState): void {
       continue;
     }
     const leaf = node.i1 - node.i0 <= 1 && node.j1 - node.j0 <= 1;
-    if (st.enclosure) {
-      const v = encloseAt(st, node);
-      if (v === null) return;
-      if (v === 'false') continue;
-      if (v === 'true') {
-        fillRect(st, node);
-        continue;
-      }
-      if (leaf) {
-        boundaryLeaf(st, node.i0, node.j0);
-        checkCap(st);
-        continue;
-      }
-      splitNode(queue, node);
-      continue;
-    }
-    const sizeEff = Math.max(node.i1 - node.i0, node.j1 - node.j0) * st.leafEff;
-    if (!leaf && sizeEff > DECIDE_PX) {
-      splitNode(queue, node);
-      continue;
-    }
-    const verdict = sampleVerdict(st, node);
-    if (verdict === null) return;
-    if (verdict === 'false') {
-      st.rigorous = false;
-      continue;
-    }
-    if (verdict === 'true') {
-      st.rigorous = false;
+    const v = encloseAt(st, node);
+    if (v === null) return;
+    if (v === 'false') continue;
+    if (v === 'true') {
       fillRect(st, node);
       continue;
     }
@@ -172,6 +150,41 @@ function runFill(st: RState): void {
       continue;
     }
     splitNode(queue, node);
+  }
+}
+
+/**
+ * Without a three-valued enclosure nothing proves a cell empty, so every leaf
+ * corner is tested once: leaves with four true corners fill, leaves with four
+ * false corners are skipped, mixed leaves are resolved. The result is honest
+ * but not certain (`rigorous` is false), and the cost follows the area.
+ */
+function runDense(st: RState): void {
+  st.rigorous = false;
+  const w = st.cols + 1;
+  const grid = new Int8Array(w * (st.rows + 1)).fill(-1);
+  const at = (i: number, j: number): boolean | null => {
+    const k = j * w + i;
+    const cached = grid[k] as number;
+    if (cached >= 0) return cached === 1;
+    const v = testAt(st, gridX(st, i), gridY(st, j));
+    if (v === null) return null;
+    grid[k] = v === true ? 1 : 0;
+    return v === true;
+  };
+  for (let j = 0; j < st.rows; j++) {
+    for (let i = 0; i < st.cols; i++) {
+      if (st.dead) return;
+      const c = [at(i, j), at(i + 1, j), at(i, j + 1), at(i + 1, j + 1)];
+      if (c.some((v) => v === null)) return;
+      const trues = c.filter((v) => v === true).length;
+      if (trues === 0) continue;
+      if (trues === 4) {
+        fillRect(st, { i0: i, i1: i + 1, j0: j, j1: j + 1, level: 0 });
+        continue;
+      }
+      boundaryLeaf(st, i, j);
+    }
   }
 }
 
@@ -189,30 +202,6 @@ function splitNode(queue: RNode[], node: RNode): void {
   }
 }
 
-/** Corner-and-centre test: 'true'/'false' when unanimous, else 'maybe'. */
-function sampleVerdict(st: RState, node: RNode): 'true' | 'false' | 'maybe' | null {
-  const vals: (boolean | undefined)[] = [];
-  const corners: (readonly [number, number])[] = [
-    [node.i0, node.j0],
-    [node.i1, node.j0],
-    [node.i0, node.j1],
-    [node.i1, node.j1],
-  ];
-  for (const [i, j] of corners) {
-    const v = testAt(st, gridX(st, i), gridY(st, j));
-    if (v === null) return null;
-    vals.push(v);
-  }
-  const cx = (gridX(st, node.i0) + gridX(st, node.i1)) / 2;
-  const cy = (gridY(st, node.j0) + gridY(st, node.j1)) / 2;
-  const cc = testAt(st, cx, cy);
-  if (cc === null) return null;
-  vals.push(cc);
-  if (vals.every((v) => v === true)) return 'true';
-  if (vals.every((v) => v === false)) return 'false';
-  return 'maybe';
-}
-
 function fillRect(st: RState, node: RNode): void {
   for (let j = node.j0; j < node.j1; j++) {
     for (let i = node.i0; i < node.i1; i++) st.filled[j * st.cols + i] = 1;
@@ -221,13 +210,7 @@ function fillRect(st: RState, node: RNode): void {
 
 /** Capped fallback: over-fills mixed nodes so coverage survives coarsely. */
 function fillCoarse(st: RState, node: RNode): void {
-  if (st.enclosure) {
-    const v = encloseAt(st, node);
-    if (v === null || v === 'false') return;
-    fillRect(st, node);
-    return;
-  }
-  const v = sampleVerdict(st, node);
+  const v = encloseAt(st, node);
   if (v === null || v === 'false') return;
   fillRect(st, node);
 }
@@ -269,7 +252,9 @@ function boundaryLeaf(st: RState, i: number, j: number): void {
   }
   if (crossing.length !== 1) {
     if (st.boundaries.length > 0 && !st.enclosure) st.rigorous = false;
-    supersample(st, i, j);
+    // Two or more primitive boundaries meeting here: a corner of the region (curves-loci 7, step 2).
+    const meeting = margins.filter((m) => Math.min(...m) <= 0 && Math.max(...m) >= 0).length;
+    supersample(st, i, j, meeting >= 2);
     return;
   }
   const vals = margins[crossing[0] as number] as number[];
@@ -324,39 +309,76 @@ function boundaryLeaf(st: RState, i: number, j: number): void {
 }
 
 /** Fills covered sub-cells of a corner leaf; marks near-point regions. */
-function supersample(st: RState, i: number, j: number): void {
+function supersample(st: RState, i: number, j: number, corner = false): void {
   const pv = st.pv;
   const x0 = gridX(st, i);
   const x1 = gridX(st, i + 1);
   const yT = gridY(st, j);
   const yB = gridY(st, j + 1);
+  const hit: boolean[][] = [];
   let covered = 0;
   let mx = 0;
   let my = 0;
   for (let a = 0; a < 4; a++) {
+    const col: boolean[] = [];
     for (let b = 0; b < 4; b++) {
       const x = x0 + ((x1 - x0) * (a + 0.5)) / 4;
       const y = yB + ((yT - yB) * (b + 0.5)) / 4;
       const v = testAt(st, x, y);
       if (v === null) return;
+      col.push(v === true);
       if (v === true) {
         covered += 1;
         mx = x;
         my = y;
+      }
+    }
+    hit.push(col);
+  }
+  if (covered === 16 && !corner) {
+    // Wholly covered: the leaf joins the grid, so neighbours merge into maximal rectangles.
+    fillRect(st, { i0: i, i1: i + 1, j0: j, j1: j + 1, level: 0 });
+  } else {
+    // One rectangle per run of covered sub-cells in a column (b = 0 is the bottom row).
+    for (let a = 0; a < 4; a++) {
+      const col = hit[a] as boolean[];
+      let b = 0;
+      while (b < 4) {
+        if (!col[b]) {
+          b += 1;
+          continue;
+        }
+        let e = b;
+        while (e < 4 && col[e]) e += 1;
         const sx0 = x0 + ((x1 - x0) * a) / 4;
         const sx1 = x0 + ((x1 - x0) * (a + 1)) / 4;
-        const syT = yT - ((yT - yB) * b) / 4;
-        const syB = yT - ((yT - yB) * (b + 1)) / 4;
+        const syT = yB + ((yT - yB) * e) / 4;
+        const syB = yB + ((yT - yB) * b) / 4;
         st.extraRects.push(pv.toPx(sx0), pv.toPy(syT), pv.toPx(sx1), pv.toPy(syB));
+        b = e;
       }
     }
   }
   // A near-point island (x^2 + y^2 <= 0): sub-pixel rects plus a marker.
   if (covered > 0 && covered <= 2) {
-    st.markers.push({ kind: 'isolated', x: mx, y: my, px: pv.toPx(mx), py: pv.toPy(my) });
+    addMarker(st, 'isolated', mx, my);
+  }
+  if (covered === 0) {
+    // A true point on a leaf corner that no sub-cell centre sees.
+    for (const [x, y] of [[x0, yB], [x1, yB], [x1, yT], [x0, yT]] as const) {
+      const v = testAt(st, x, y);
+      if (v === null) return;
+      if (v === true) addMarker(st, 'isolated', x, y);
+    }
   }
   if (!st.enclosure && covered > 0) st.rigorous = false;
   st.points += covered;
+}
+
+function addMarker(st: RState, kind: 'isolated', x: number, y: number): void {
+  const pv = st.pv;
+  if (st.markers.some((m) => m.kind === kind && Math.hypot(m.px - pv.toPx(x), m.py - pv.toPy(y)) < 1)) return;
+  st.markers.push({ kind, x, y, px: pv.toPx(x), py: pv.toPy(y) });
 }
 
 /* ------------------------------- rect merge --------------------------------- */
@@ -420,7 +442,10 @@ function traceBorder(st: RState, boundary: BoundaryInput, view: ViewBox, quality
   const field: ImplicitFieldInput = boundary.enclosure === undefined
     ? { residual: boundary.residual }
     : { residual: boundary.residual, enclosure: boundary.enclosure };
-  const traced = traceImplicit(field, view, { quality, maxEvals: Math.max(64, Math.floor(budget)), maxSamples: st.maxSamples });
+  // Without an enclosure the trace visits every leaf, so it runs on the coarse
+  // grid; Newton-corrected crossings keep the polyline within a fraction of a pixel.
+  const traceQuality: TraceQuality = boundary.enclosure === undefined ? 'draft' : quality;
+  const traced = traceImplicit(field, view, { quality: traceQuality, maxEvals: Math.max(64, Math.floor(budget)), maxSamples: st.maxSamples });
   if (!traced.ok) {
     st.dead = true;
     return [];
