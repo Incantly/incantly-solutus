@@ -615,7 +615,6 @@ function tanhSinh(f: Fn1, lo: number, hi: number, work: RuleWork): number | 'spe
   if (!(w > 0)) return 0;
   const T = 3.6;
   let prev = Number.NaN;
-  let sum = 0;
   let h = 1;
   const point = (t: number): number => {
     const u = (Math.PI / 2) * Math.sinh(t);
@@ -627,7 +626,7 @@ function tanhSinh(f: Fn1, lo: number, hi: number, work: RuleWork): number | 'spe
     const v = f(x);
     return v === v && v !== Infinity && v !== -Infinity ? v * weight : 0;
   };
-  sum = point(0);
+  let sum = point(0);
   for (let k = 0; k <= 7; k++) {
     for (let t = h; t <= T; t += k === 0 ? h : 2 * h) {
       if (!work.spend(2)) return 'spent';

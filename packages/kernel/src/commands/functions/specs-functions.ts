@@ -556,8 +556,13 @@ function runRiemann(call: RuleCall, fixedRule?: string): unknown {
   if (!isFin(a) || !isFin(b)) return call.fail('bad_argument', 'Riemann needs finite bounds.');
   if (!Number.isInteger(n0) || n0 < 1) return call.fail('bad_argument', 'The slice count must be a whole number of 1 or more.');
   if (n0 > 100000) return call.fail('limit', 'Riemann takes at most 100000 slices.');
-  let rule = fixedRule ?? 'left';
+  let rule = fixedRule === 'offset' ? 'offset' : (fixedRule ?? 'left');
   let offset = 0;
+  if (fixedRule === 'offset') {
+    const v = call.values[4];
+    if (typeof v !== 'number' || !(v >= 0 && v <= 1)) return call.fail('bad_argument', 'The offset is a fraction from 0 to 1.');
+    offset = v;
+  }
   if (fixedRule === undefined && call.args.length > 4 && !call.args[4]?.omitted) {
     const v = call.values[4];
     if (typeof v === 'string') {
@@ -1203,6 +1208,14 @@ function limitOneSided(f: Fn1, a: number, dir: 1 | -1, tol: number, work: RuleWo
     if (up && last > 1e6) return { t: 'inf', sign: 1, spent: false };
     if (down && last < -1e6) return { t: 'inf', sign: -1, spent: false };
   }
+  // Decay to zero followed by overflow of an intermediate (x / exp(x) at inf): the head already shrank to nothing.
+  if (ni < raw.length && ni >= 2) {
+    const h1 = Math.abs(head[ni - 1] as number);
+    const h0 = Math.abs(head[ni - 2] as number);
+    if (head.every((v) => v === v && v !== Infinity && v !== -Infinity) && h1 < h0 && h1 <= 1e-12 * Math.max(1, Math.abs(head[0] as number))) {
+      return { t: 'value', v: 0, spent: false };
+    }
+  }
   const clean = raw.filter((v) => v === v);
   const finite = clean.filter((v) => v !== Infinity && v !== -Infinity);
   if (clean.some((v) => v === Infinity) && !clean.some((v) => v === -Infinity) && finite.every((v) => v > 0)) {
@@ -1248,6 +1261,21 @@ function limitOneSided(f: Fn1, a: number, dir: 1 | -1, tol: number, work: RuleWo
       hv.push(f(a + dir * 0.05 * Math.pow(2, -k)));
     }
     if (hv.every((v) => v === v && v !== Infinity && v !== -Infinity)) {
+      // Richardson on the halving steps: exact for a function with a power series in h, and it stays clear of the
+      // rounding noise that Wynn's algorithm amplifies when the values are already nearly converged.
+      let row = hv.slice(0, 7);
+      let prevBest = Number.NaN;
+      for (let j = 1; j <= 5 && row.length >= 2; j++) {
+        const f2 = Math.pow(2, j);
+        const next: number[] = [];
+        for (let i = 0; i + 1 < row.length; i++) next.push((f2 * (row[i + 1] as number) - (row[i] as number)) / (f2 - 1));
+        const best = next[next.length - 1] as number;
+        if (prevBest === prevBest && Math.abs(best - prevBest) <= tol * Math.max(1, Math.abs(best))) {
+          return { t: 'value', v: Math.abs(best) < tol * 1e-6 ? 0 : best, spent: false };
+        }
+        prevBest = best;
+        row = next;
+      }
       for (let m = 5; m <= hv.length; m++) {
         const exh = wynn(hv.slice(0, m), tol);
         if (exh !== null) return { t: 'value', v: Math.abs(exh) < tol * 1e-6 ? 0 : exh, spent: false };
@@ -1295,6 +1323,18 @@ function runLimit(call: RuleCall, withSide: boolean): unknown {
   const left = limitOneSided(f.f, a, -1, tol, call.work);
   const right = limitOneSided(f.f, a, 1, tol, call.work);
   if (left.spent || right.spent) return call.fail('timeout', 'The work budget ran out.');
+  // At the edge of the domain only one side exists, and the limit is that side's (x * ln(x) at 0).
+  if (a === a && Math.abs(a) !== Infinity) {
+    const gone = (dir: 1 | -1): boolean => {
+      for (let k = 2; k <= 8; k++) if (f.f(a + dir * Math.pow(10, -k)) === f.f(a + dir * Math.pow(10, -k))) return false;
+      return true;
+    };
+    const only = gone(-1) ? right : gone(1) ? left : undefined;
+    if (only !== undefined) {
+      if (only.t === 'value') return only.v;
+      if (only.t === 'inf') return only.sign === 1 ? Infinity : -Infinity;
+    }
+  }
   if (left.t === 'value' && right.t === 'value' && Math.abs(left.v - right.v) <= tol * Math.max(1, Math.abs(left.v), Math.abs(right.v))) {
     return (left.v + right.v) / 2;
   }
@@ -2005,7 +2045,13 @@ export const FUNCTIONS_SPECS: CommandSpec[] = [
   objSpec('RightSum', [form([p('f', F1), p('a', 'Number'), p('b', 'Number'), p('n', 'Number')], 'Region', (call) => runRiemann(call, 'right'), 'right sum')]),
   objSpec('UpperSum', [form([p('f', F1), p('a', 'Number'), p('b', 'Number'), p('n', 'Number')], 'Region', (call) => runRiemann(call, 'upper'), 'upper sum')]),
   objSpec('LowerSum', [form([p('f', F1), p('a', 'Number'), p('b', 'Number'), p('n', 'Number')], 'Region', (call) => runRiemann(call, 'lower'), 'lower sum')]),
-  objSpec('RectangleSum', [form([p('f', F1), p('a', 'Number'), p('b', 'Number'), p('n', 'Number')], 'Region', (call) => runRiemann(call, 'left'), 'rectangle sum')]),
+  objSpec('RectangleSum', [
+    form([p('f', F1), p('a', 'Number'), p('b', 'Number'), p('n', 'Number')], 'Region', (call) => runRiemann(call, 'left'), 'rectangle sum'),
+    form(
+      [p('f', F1), p('a', 'Number'), p('b', 'Number'), p('n', 'Number'), p('d', 'Number')], 'Region',
+      (call) => runRiemann(call, 'offset'), 'rectangle sum with heights read at a fraction d of each slice',
+    ),
+  ]),
   objSpec('TrapezoidalSum', [form([p('f', F1), p('a', 'Number'), p('b', 'Number'), p('n', 'Number')], 'Region', (call) => runRiemann(call, 'trapezoid'), 'trapezoid sum')]),
   objSpec('IntegralBetween', [form([p('f', F1), p('g', F1), p('a', 'Number'), p('b', 'Number')], 'Number', runIntegralBetween, 'integral of f - g')]),
   objSpec('NIntegral', [
