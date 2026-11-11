@@ -153,6 +153,10 @@ export const MESSAGE_TEMPLATES: Record<string, string> = {
   'kernel.version': 'This file is version {v}; supported: {list}.',
   'kernel.tool_input': '{tool} needs {expected}.',
   'kernel.tool_busy': 'The figure is busy; try again.',
+  'kernel.unknown_property': '{type} has no property {key}.',
+  'kernel.bad_property_value': '{key} must be {allowed}; got {token}.',
+  'kernel.state_owned': '{name} is a state; the solver owns its value.',
+  'kernel.bad_value': '{name} holds a {type}; {why}.',
   'kernel.wrong_value': '{name} holds a {type}; {why}.',
 };
 
