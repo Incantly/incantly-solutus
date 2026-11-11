@@ -25,7 +25,7 @@ The kernel has no screen of its own. This file defines the panels and behaviours
 - Delete key on a selected row opens a small inline confirm if the delete cascades ("also removes M, c"), listing names; no confirm for a leaf.
 - Keyboard: ↑/↓ move, Space toggles visible, F2 rename, Enter edit, Delete remove, Ctrl/Cmd+Z undo.
 
-GeoGebra shows the algebra list similarly but allows the "create slider?" prompt for unknown names and shows an opaque "?" for undefined. We replace both.
+The reference app shows the algebra list similarly but allows the "create slider?" prompt for unknown names and shows an opaque "?" for undefined. We replace both.
 
 ## 2. Input line
 
@@ -61,7 +61,7 @@ The `[use B]` button inserts the first `suggest`. Enter commits. Up/Down recalls
 - Keyboard: ←/→ previous/next stop, Home/End, Enter select, P play/pause.
 - Export: "copy as lesson notes" copies the sentences as an ordered list.
 
-GeoGebra's table has the same intent (name, definition, value, breakpoint, navigation bar) and an export-as-web-page tool. We keep the table and the navigation, drop the separate dialog, add the sentence column and cursor-based hiding.
+The reference app's table has the same intent (name, definition, value, breakpoint, navigation bar) and an export-as-web-page tool. We keep the table and the navigation, drop the separate dialog, add the sentence column and cursor-based hiding.
 
 ## 4. Properties panel
 
@@ -85,7 +85,7 @@ Opens beside the figure for the selected object(s). Sections, in order; every co
 - Colour picker: the 12 default palette swatches plus custom; contrast with the background is checked; swatches have names for screen readers.
 - No separate Apply button: each control applies on change (sliders on release), debounced by 60 ms while dragging a slider; the value shown follows the pointer immediately.
 
-GeoGebra spreads these over tabs (Basic, Colour, Style, Advanced, Algebra, Scripting) in a dialog. We keep one scrolling panel so the common controls are always visible, and leave scripting out.
+The reference app spreads these over tabs (Basic, Colour, Style, Advanced, Algebra, Scripting) in a dialog. We keep one scrolling panel so the common controls are always visible, and leave scripting out.
 
 ## 5. Undo and redo
 

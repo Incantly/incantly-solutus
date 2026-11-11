@@ -1,14 +1,14 @@
 # Errors: the catalogue
 
-Every kind of failure across Incantly, the way GeoGebra treats it, and ours in the format of `design.md` section 3. Codes: `L` language (lex/parse), `K` kernel (names, graph, properties, history, limits), `C` command table (forms and arguments), `T` tools. Codes never change once released.
+Every kind of failure across Incantly, the way the reference app treats it, and ours in the format of `design.md` section 3. Codes: `L` language (lex/parse), `K` kernel (names, graph, properties, history, limits), `C` command table (forms and arguments), `T` tools. Codes never change once released.
 
 ## 1. Catalogue of error kinds
 
-Columns: **kind / code**, **when**, **GeoGebra**, **our message template**, **default recovery**, **extras carried**.
+Columns: **kind / code**, **when**, **The reference app**, **our message template**, **default recovery**, **extras carried**.
 
 ### 1.1 Lex and parse (language area raises, phase `lex` or `parse`)
 
-| Kind / code | When | GeoGebra | Template | Recovery | Extras |
+| Kind / code | When | The reference app | Template | Recovery | Extras |
 |---|---|---|---|---|---|
 | `syntax` L001 | parser stops at a token that cannot continue the line | One generic "check your input", position lost | `Unexpected {token}. Expected {expected}.` | fix_line | `expected` (up to 8 tokens or classes like `a number`), `suggest` for known patterns |
 | `unbalanced` L002 | bracket opened and not closed, or closed and never opened | "unbalanced brackets" without position | `{open} on column {col} is never closed.` / `Unmatched {close}.` | use_suggestion | `col` points at the unmatched bracket; `suggest` adds the missing one at end of line |
@@ -20,7 +20,7 @@ Columns: **kind / code**, **when**, **GeoGebra**, **our message template**, **de
 
 ### 1.2 Names and structure (kernel, phase `resolve`/`plan`)
 
-| Kind / code | When | GeoGebra | Template | Recovery | Extras |
+| Kind / code | When | The reference app | Template | Recovery | Extras |
 |---|---|---|---|---|---|
 | `unknown_name` K001 | a name that does not exist | Offers sliders, or splits to a product, or "undefined variable" | `{name} is not defined.` | create_first or use_suggestion | `suggest` (closest names; a define line when used as a number), `blockedBy` |
 | `unknown_command` K002 | PascalCase word that is not a command | "unknown command" | `{name} is not a command.` | use_suggestion | `suggest` (closest 3 commands as complete lines when args fit), `hint` lists the group |
@@ -35,7 +35,7 @@ Columns: **kind / code**, **when**, **GeoGebra**, **our message template**, **de
 
 ### 1.3 Graph and history (kernel, phase `plan`)
 
-| Kind / code | When | GeoGebra | Template | Recovery | Extras |
+| Kind / code | When | The reference app | Template | Recovery | Extras |
 |---|---|---|---|---|---|
 | `cycle` K010 | redefinition makes an object depend on itself | "circular definition" | `{name} would depend on itself: {path}.` | rewrite | `path` |
 | `type_change` K011 | redefine changes type | "redefinition failed" | `{name} is a {from}; this line would make it a {to}.` | rewrite | `params.from/to`, dependents count |
@@ -47,7 +47,7 @@ Columns: **kind / code**, **when**, **GeoGebra**, **our message template**, **de
 
 ### 1.4 Command table (phase `typecheck`)
 
-| Kind / code | When | GeoGebra | Template | Recovery | Extras |
+| Kind / code | When | The reference app | Template | Recovery | Extras |
 |---|---|---|---|---|---|
 | `no_matching_form` C001 | argument count and types fit no form | "illegal argument" plus syntax lines | `{command} has no form ({given}).` | choose_form | `forms` (all, up to 4 shown), `suggest` (when exactly one form is one edit away, the edited line) |
 | `arg_count` C002 | a user function or a single-form command with wrong count | "illegal number of arguments" | `{name} takes {n} argument(s); got {m}.` | fix_line | `forms` |
@@ -57,7 +57,7 @@ Columns: **kind / code**, **when**, **GeoGebra**, **our message template**, **de
 
 ### 1.5 Limits, load and faults
 
-| Kind / code | When | GeoGebra | Template | Recovery | Extras |
+| Kind / code | When | The reference app | Template | Recovery | Extras |
 |---|---|---|---|---|---|
 | `limit` K040 | any budget exceeded | hang or crash | `That would exceed the limit of {max} {what}.` | rewrite | `params.limit/max/got` |
 | `load_failed` K041 | strict load failed, or file unreadable | "opening file failed" | `The file could not be loaded: {n} line(s) failed.` | report | list in the load report |

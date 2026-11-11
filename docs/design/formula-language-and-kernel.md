@@ -2,7 +2,7 @@
 
 Status: accepted for building. Follows the handoff in `docs/research/engine-study.md`. Each feature area is designed in detail under `docs/features/`; where a feature folder and this document disagree, `docs/features/README.md` and section 13 here decide. No code yet.
 
-This design learns from how GeoGebra is organised, as described in the study. It copies no GeoGebra code, text, grammar or command table. Where we keep a common maths word (`Midpoint`, `Circle`), it is because that is the word a teacher uses, not because GeoGebra uses it.
+This design learns from how the reference app is organised, as described in the study. It copies no the reference app's code, text, grammar or command table. Where we keep a common maths word (`Midpoint`, `Circle`), it is because that is the word a teacher uses, not because the reference app uses it.
 
 ## 1. What we are building
 

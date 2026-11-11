@@ -1,6 +1,6 @@
 # Points, lines, vectors, intersections and measures: what the learner sees and does
 
-## 1. How GeoGebra presents it
+## 1. How the reference app presents it
 
 - A toolbar of grouped tools (point, line, special line, measure). Each tool needs a mode switch, then clicks on the canvas and on existing objects. Selecting an object while a tool is active either uses it as an input or creates a new free point under the cursor.
 - A new point is created when you click empty space during a line tool; clicking an existing line or circle creates a point attached to it; clicking where two objects cross creates the intersection. This is useful but invisible: learners do not know which of the three happened.
@@ -146,7 +146,7 @@ Opened by double click or the properties key (`P`):
 
 Changes in the panel emit `Name with prop = value` lines (core design restyle lines), so styles are saved with the script.
 
-## 7. Differences from GeoGebra in one list
+## 7. Differences from the reference app in one list
 
 1. A ghost preview says what the next click will create.
 2. Undefined objects show a reason tag.

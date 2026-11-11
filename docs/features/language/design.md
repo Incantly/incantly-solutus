@@ -1,6 +1,6 @@
 # Input language: design
 
-Status: draft for review. Extends section 3 (line grammar), section 4 (types) and section 5 (commands as data) of `docs/design/formula-language-and-kernel.md` ("the core design"). Everything here is our own design; GeoGebra was studied for ideas only.
+Status: draft for review. Extends section 3 (line grammar), section 4 (types) and section 5 (commands as data) of `docs/design/formula-language-and-kernel.md` ("the core design"). Everything here is our own design; the reference app was studied for ideas only.
 
 ## 1. What the language does
 
@@ -39,7 +39,7 @@ c: x^2 + y^2 = 4
 
 Only the last line is wrong. It fails with `syntax` at the colon (there is no colon form), and the earlier lines stay.
 
-## 2. How GeoGebra does it
+## 2. How the reference app does it
 
 Summarised in plain words from the grammar, the lexer rules, the expression evaluator, the command dispatcher and the manual.
 
@@ -196,7 +196,7 @@ Rules:
 - **Degree.** `30°` is postfix: it multiplies its operand by the constant `deg` (= pi/180). `(a + b)°` works. `30 deg` is the same through implicit multiplication. Angles are always radians internally; the degree sign is only a way to write them.
 - **Chains.** A chain may use only `<` and `<=`, or only `>` and `>=`. Mixed directions (`1 < x > 0`) and chained equality (`a == b == c`) are `chained_comparison`. `!=` is never chained. A chain of `n` operators compiles to `n` comparisons joined by `and`, with each middle operand evaluated once.
 - **Unary minus vs power.** `-x^2` is `-(x^2)`. `2^-x` is `2^(-x)`. `-x!` is `-(x!)`.
-- **Division and implicit multiplication.** `1/2x` is not read at all: it is the error `ambiguous_implicit` with the two readings in `fix`. Writing `1/(2x)` or `(1/2) * x` is fine. `(1/2)x` is not: a `)` followed by a name is `missing_operator` (3.6), and its quick fix is `(1/2) * x`. Reason: GeoGebra and calculators disagree here, so the safe answer is to ask.
+- **Division and implicit multiplication.** `1/2x` is not read at all: it is the error `ambiguous_implicit` with the two readings in `fix`. Writing `1/(2x)` or `(1/2) * x` is fine. `(1/2)x` is not: a `)` followed by a name is `missing_operator` (3.6), and its quick fix is `(1/2) * x`. Reason: The reference app and calculators disagree here, so the safe answer is to ask.
 - **Numeric equality.** For finite numbers, `==` and `!=` on Numbers compare with a relative tolerance: `|a - b| <= 1e-12 * max(1, |a|, |b|)`. Points and vectors use the same tolerance per coordinate. Text and Bool compare exactly. Comparing different types is `type_mismatch`.
 - **Comparisons with an infinity.** The tolerance applies only when both sides are finite. If either side is `inf` or `-inf`, the comparison is exact: `5 == inf` and `-inf == inf` are `false`, `inf == inf` is `true`, `5 != inf` is `true`. The ordering operators follow from the infinity as a value: `5 < inf` is `true`, `5 >= inf` and `5 <= -inf` are `false`. Point and vector coordinates are compared the same way.
 - **Logic on undefined.** The literal `undefined` is a Number (3.10 rule 1), so `undefined and false` is `type_mismatch`. A Bool becomes undefined when an input is undefined: with `(1/0 > 1)` undefined, `(1/0 > 1) and false` is `false`, `(1/0 > 1) or true` is `true`, and every other operation involving undefined is undefined. This keeps `if` conditions usable while a figure is partly undefined.
@@ -279,7 +279,7 @@ A free variable in any other place is `free_variable`: `a = x + 1` fails with a 
 
 ### 3.9 Equations versus assignments
 
-The core design already reserves `=` for defining and `==` for equality. This section settles the part that GeoGebra overloads.
+The core design already reserves `=` for defining and `==` for equality. This section settles the part that the reference app overloads.
 
 1. `=` never builds an equation. `3x + 4y = 12` is `assign_in_expr` at the `=` (col 9, endCol 10), with `expected: ["=="]` and a `fix` that writes `==` and wraps it in the line kind it needs, for example `l = Line(3x + 4y == 12)`.
 2. A relation (`==`, `<` …) whose operands mention a free `x` or `y` becomes an implicit object. A relation with no free variables is a Bool.
@@ -586,14 +586,14 @@ Performance: objects and command names live in sorted arrays with a precomputed 
 - **Redefining `t`** or any directive-owned name is `reserved_name`.
 - **Large ranges**: `[1..1000000]` is `limit` (cap 100,000 elements per list, 1,000,000 elements total per figure).
 
-## 4. Better than GeoGebra
+## 4. Better than the reference app
 
 1. **One lexer and one grammar for everything**, with no CAS flags and no spreadsheet-cell names. Highlighting, completion, preview and the draw tool share the lexer and the parser.
-2. **No guessing.** Unknown names, name-before-parenthesis, adjacent names and `=` as an equation are all errors with a precise fix. GeoGebra's implicit product and function-or-product ambiguity are gone.
+2. **No guessing.** Unknown names, name-before-parenthesis, adjacent names and `=` as an equation are all errors with a precise fix. The reference app's implicit product and function-or-product ambiguity are gone.
 3. **Positions survive.** The offset map makes every error column right, even after normalisation.
 4. **Error data a model can use**: `expected`, `forms`, `fix` (a full replacement line), `quickFixes`, and `related` spans.
 5. **Order-independent forms**, proven by a table test, and a closest-form diagnosis with per-argument problems, instead of "illegal argument".
-6. **Typing is separate from algorithm creation**: one table gives type checking, errors, catalogue, autocomplete, signature help and docs. GeoGebra keeps these in separate places.
+6. **Typing is separate from algorithm creation**: one table gives type checking, errors, catalogue, autocomplete, signature help and docs. The reference app keeps these in separate places.
 7. **Dry-run previews** cost almost nothing because checking is pure and the figure is copy-on-write.
 8. **Redefinition is an in-place transaction** with a dependents check, not a rebuild from a serialised construction.
 9. **Ambiguity is named**: `1/2x`, `a b`, `f(x)` as a product are errors with both readings shown, not silent choices.
@@ -618,21 +618,4 @@ Performance: objects and command names live in sorted arrays with a precomputed 
 
 ## 6. Sources studied
 
-GeoGebra source (commit 3608374, read-only):
-
-- `source/shared/common/src/main/javacc/org/geogebra/common/kernel/parser/` (the grammar file)
-- `source/shared/common/src/main/java/org/geogebra/common/kernel/parser/`
-- `source/shared/common/src/main/java/org/geogebra/common/kernel/arithmetic/`
-- `source/shared/common/src/main/java/org/geogebra/common/plugin/` (the operation list)
-- `source/shared/common/src/main/java/org/geogebra/common/kernel/commands/` (dispatcher, command processors, the algebra processor)
-- `source/shared/common/src/main/java/org/geogebra/common/kernel/geos/` (label handling)
-- `source/shared/common/src/main/java/org/geogebra/common/main/MyError.java` and `main/localization/` (error kinds, autocomplete provider)
-- `source/shared/common/src/main/java/org/geogebra/common/kernel/ScheduledPreviewFromInputBar.java`
-- `source/shared/common/src/main/java/org/geogebra/common/util/AutoCompleteDictionary.java`
-
-Manual pages:
-
-- https://geogebra.github.io/docs/manual/en/Predefined_Functions_and_Operators/
-- https://geogebra.github.io/docs/manual/en/Naming_Objects/
-- https://geogebra.github.io/docs/manual/en/Input_Bar/
-- https://geogebra.github.io/docs/manual/en/Algebra_View/
+Removed before the repository was made public. The study notes above are in our own words.

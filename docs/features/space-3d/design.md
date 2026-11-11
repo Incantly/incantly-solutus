@@ -2,9 +2,9 @@
 
 Status: draft for review. Area: everything 3D. Companion files: `errors.md`, `agent.md`, `ui.md` in this folder.
 
-This document learns from how GeoGebra builds its 3D layer. It copies no GeoGebra code, names or manual text. Names below are ours. Where we keep a plain maths word (`Sphere`, `Pyramid`, `Volume`) it is because that is the word a teacher uses.
+This document learns from how the reference app builds its 3D layer. It copies no the reference app's code, names or manual text. Names below are ours. Where we keep a plain maths word (`Sphere`, `Pyramid`, `Volume`) it is because that is the word a teacher uses.
 
-Reading order: section 1 (what it gives people), 2 (the full feature list in our syntax), 3 (what GeoGebra does), 4 to 12 (our design), 13 (what we build first), 14 (better than GeoGebra), 15 (changes to the core design), 16 (sources).
+Reading order: section 1 (what it gives people), 2 (the full feature list in our syntax), 3 (what the reference app does), 4 to 12 (our design), 13 (what we build first), 14 (better than the reference app), 15 (changes to the core design), 16 (sources).
 
 ---
 
@@ -169,7 +169,7 @@ Full detail and sketches are in `ui.md`. The groups, in toolbar order: Move; Poi
 
 ---
 
-## 3. How GeoGebra does it, in plain words
+## 3. How the reference app does it, in plain words
 
 **One kernel, two dimensions.** Every 3D object is an ordinary kernel object with extra data; every 3D construction step is an ordinary kernel step with a 3D result. The kernel files that make 3D are a thin layer: new object types (point, vector, line, segment, ray, plane, polygon, polyhedron, quadric, surface, implicit surface), new construction steps (about 200: one per command form), and command processors that choose a step by the types of the arguments. Shared "dimension-neutral" interfaces let one command (say `Midpoint`) accept 2D or 3D inputs and make the right step. Flat shapes in space (circles, conics, polygons) are a 2D shape plus a "coordinate system of a plane": the same 2D conic maths runs in plane coordinates. This sharing works well and is the right idea.
 
@@ -333,7 +333,7 @@ export type SurfaceSpec =
 
 **Meshing.** Surfaces are tessellated off the main thread into `MeshChunk`s (positions, normals, indices; Float32/Uint32). Three algorithms:
 
-1. **Explicit and parametric** (adaptive quadtree in parameter space). Start with a coarse grid (16 × 16). A cell splits when any of these hold: (a) the screen-space distance between two adjacent corners exceeds `maxEdgePx` (default 8); (b) the normals at adjacent corners differ by more than `maxBend` (default 12°); (c) a sample is undefined or non-finite next to a defined one (to find the boundary of the domain, up to depth `maxDepth` = 9); (d) the cell crosses a face of the clip box. A cell wholly outside the clip box or the camera frustum is not split and not emitted. The quadtree is **2:1 balanced** (neighbours differ by at most one level) and **T-junctions are fixed** by inserting the neighbour's midpoint into the coarser cell's edge, so there are no cracks (GeoGebra's weak point). Poles (for example `v = 0` on a sphere parametrisation) are detected from zero-length edges and collapsed to a fan.
+1. **Explicit and parametric** (adaptive quadtree in parameter space). Start with a coarse grid (16 × 16). A cell splits when any of these hold: (a) the screen-space distance between two adjacent corners exceeds `maxEdgePx` (default 8); (b) the normals at adjacent corners differ by more than `maxBend` (default 12°); (c) a sample is undefined or non-finite next to a defined one (to find the boundary of the domain, up to depth `maxDepth` = 9); (d) the cell crosses a face of the clip box. A cell wholly outside the clip box or the camera frustum is not split and not emitted. The quadtree is **2:1 balanced** (neighbours differ by at most one level) and **T-junctions are fixed** by inserting the neighbour's midpoint into the coarser cell's edge, so there are no cracks (The reference app's weak point). Poles (for example `v = 0` on a sphere parametrisation) are detected from zero-length edges and collapsed to a fan.
 2. **Implicit** (marching cubes on an adaptive octree with edge refinement). A coarse 24³ grid over the clip box (or the view bounds); cubes whose corner signs differ are subdivided by the same screen-size test, to depth 7. Each surface vertex is refined with 3 secant steps along the cube edge, then its normal is the normalised gradient of `F` (analytic if `F` is differentiable by the kernel's derivative; else central difference with step 1e-4 × box size). Thin sheets where no corner flips are caught by sampling `F` and `|∇F|` at cube centres (cheap Lipschitz test): cubes where `|F| < L · size` are refined even if signs agree.
 3. **Revolution**: sweep the profile polyline (adaptive in `s` as for a curve) by rotation about the axis in `angle` steps chosen by the screen-size test on the largest radius (minimum 24 steps per full turn). A profile that touches the axis makes a pole (fan).
 
@@ -454,7 +454,7 @@ export interface Camera {
 ```
 
 - **Orientation** from azimuth, elevation, roll by composing quaternions; user rotation (drag) multiplies the quaternion directly (rotate about the screen's vertical axis for horizontal drags, about the screen's horizontal axis for vertical drags), then azimuth/elevation properties are read back for the file (`space with azimuth = …`). Two paths, one result.
-- **Near/far fit every frame** from the bounding sphere of what is visible (and the clip box if on), with a margin. Depth precision target: 24-bit depth buffer resolves two surfaces separated by 1e-4 of the scene size at the fit distance. (GeoGebra's fixed ranges cause z-fighting at extremes.)
+- **Near/far fit every frame** from the bounding sphere of what is visible (and the clip box if on), with a margin. Depth precision target: 24-bit depth buffer resolves two surfaces separated by 1e-4 of the scene size at the fit distance. (The reference app's fixed ranges cause z-fighting at extremes.)
 - **Rendering matrices** are built in Float64 on the CPU and the model-view is applied relative to the camera target (floating origin): vertex positions in GPU buffers are stored relative to a chunk origin, so a scene centred 1e6 away still shows without jitter.
 
 ### 8.3 Projections
@@ -484,7 +484,7 @@ export interface Camera {
 
 - `clip = on` cuts all objects to the axis-aligned box `[clipMin, clipMax]`. The box outline is drawn (thin gray), with its corner handles in edit mode.
 - In shaders: every fragment compares its world position against the box and is discarded outside. Lines and points are clipped in their vertex stage using the quad's world position. This is fast and exact at pixel level.
-- **Caps** (optional `clipCaps = on`, phase 3): for closed solids the cut face is filled using the stencil-count technique (increment on back faces, decrement on front faces inside the box; where the count is odd the cut plane is inside the solid; fill with the solid's colour). Gives solid-looking cross-sections without computing geometry. GeoGebra shows hollow cuts.
+- **Caps** (optional `clipCaps = on`, phase 3): for closed solids the cut face is filled using the stencil-count technique (increment on back faces, decrement on front faces inside the box; where the count is odd the cut plane is inside the solid; fill with the solid's colour). Gives solid-looking cross-sections without computing geometry. The reference app shows hollow cuts.
 - Meshing uses the box: surfaces are meshed only inside it (section 6.3), which is also why clip is the standard way to show a bounded piece of an infinite quadric.
 
 ---
@@ -520,7 +520,7 @@ export type DrawItem =
   | { k: 'label';   anchor: V3; text: LabelSpec; objId: ObjId };
 ```
 
-- **Arena batching.** All meshes share one vertex buffer and one index buffer (per vertex layout) with an offset allocator; each object owns a range. Updating an object rewrites its range (`bufferSubData`) or re-allocates (free list). The draw loop issues one call per material class, not per object (GeoGebra does similar). Vertex colour (RGBA8) carries object colour/alpha, so restyle rewrites only the colour bytes.
+- **Arena batching.** All meshes share one vertex buffer and one index buffer (per vertex layout) with an offset allocator; each object owns a range. Updating an object rewrites its range (`bufferSubData`) or re-allocates (free list). The draw loop issues one call per material class, not per object (The reference app does similar). Vertex colour (RGBA8) carries object colour/alpha, so restyle rewrites only the colour bytes.
 - **Floating origin.** Each chunk stores positions relative to a chunk origin (Float32) and a per-chunk offset uniform (Float64 split into two Float32). Precision is steady for far-from-origin scenes.
 - **Lines** are drawn as screen-aligned quads (instanced segments), with round joins by overlapping caps and analytic antialiasing; the line width is in CSS pixels × dpr. WebGL's 1 px line primitive is not used.
 - **Points** are instanced quads with a fragment shader that fakes a lit sphere (impostor): correct depth written from the sphere surface.
@@ -613,9 +613,9 @@ Orbit sensitivity: 0.4° per CSS px by default.
 1. **Same object model.** A 3D object is an object with `type` in the 3D set, `def`, `value`, `style`, `order`. Rules are pure functions from input values to an output value, same as 2D. Nothing about the graph, undo, journal, redefinition, free versus dependent, sliders, clock or `with` changes.
 2. **Same command table.** 3D forms are rows added to existing and new commands; the form checker is exact-type, in table order. A command's group (`space`) decides which catalogue chunk a model loads.
 3. **Same numeric core.** `Tol`, `det2`, `orient` (extended to `orient3` with a 3×3 error-bounded determinant for point-versus-plane tests), ordinal slots, `Path`.
-4. **Plane-coordinate reuse.** Anything flat in space (circle, conic, polygon) is a 2D value plus a `Frame`. Operations that are intrinsically 2D run in the frame: conic classification, polygon area and winding, 2D polygon intersection (for coplanar polygon overlap), conic–line intersection. Results map back with `o + x u + y v`. This is the pattern GeoGebra uses, kept deliberately.
+4. **Plane-coordinate reuse.** Anything flat in space (circle, conic, polygon) is a 2D value plus a `Frame`. Operations that are intrinsically 2D run in the frame: conic classification, polygon area and winding, 2D polygon intersection (for coplanar polygon overlap), conic–line intersection. Results map back with `o + x u + y v`. This is the pattern the reference app uses, kept deliberately.
 5. **2D objects in the Space view.** A 2D object's value is drawn lying on the floor. It is not a 3D object and cannot be used in a 3D rule until lifted: `Lift(shape2d, frame)` (a small command; default frame = floor) makes a `Polygon3` / `Circle3` / `Conic3` / `Segment3` etc. from a 2D shape.
-6. **Plane view.** `PlaneView(plane)` (an `@view2on` directive form) is a 2D Graphics view whose coordinates are the plane's frame. Objects of the 3D scene intersect the plane live and the 2D view shows the cross-section with exact 2D tools (area, measure). This is GeoGebra's best idea in the area; we keep it and extend it with a “cut view” for solids (cross-section polygon + its area readout).
+6. **Plane view.** `PlaneView(plane)` (an `@view2on` directive form) is a 2D Graphics view whose coordinates are the plane's frame. Objects of the 3D scene intersect the plane live and the 2D view shows the cross-section with exact 2D tools (area, measure). This is the reference app's best idea in the area; we keep it and extend it with a “cut view” for solids (cross-section polygon + its area readout).
 7. **Dimension-agnostic user functions.** `f(x) = …` stays 1-variable; `f(x, y) = …` is a `Function2`. A function of two variables is a normal function value that the 2D calculus area owns; the Space view draws it. Partial derivative commands live in the calculus area (`Derivative(f, x)`).
 8. **Same errors.** Section 9 of the core design applies; kinds are added (section 15).
 
@@ -674,7 +674,7 @@ Acceptance measures (Phase 1): a 200-line 3D figure applies in under 200 ms tota
 
 ---
 
-## 14. Better than GeoGebra
+## 14. Better than the reference app
 
 1. **Quaternion camera** with free orientation, roll, trackball orbit; `zUp` is a setting, not a limit.
 2. **Camera as a normal object.** Formulas of `t`, sliders and films drive it, and it replays and seeks exactly.
@@ -714,18 +714,4 @@ Acceptance measures (Phase 1): a 200-line 3D figure applies in under 200 ms tota
 
 ## 16. Sources studied
 
-GeoGebra source (read-only, commit 3608374), under `source/shared/common/src/main/java/org/geogebra/common/`:
-
-- `geogebra3D/kernel3D/` (objects: `geos/`; construction steps: `algos/`; command processors: `commands/`; implicit surfaces: `implicit3D/`; solids: `solid/`; transformations: `transform/`)
-- `geogebra3D/euclidian3D/` (view, controller, hit testing, target types), `euclidian3D/draw/` (drawables, surface mesher, curve and quadric drawing), `euclidian3D/openGL/` (renderer, buffer managers, brush and surface plotters), `euclidian3D/animator/` (view animations), `euclidian3D/xr/` (XR hook)
-- `geogebra3D/euclidianFor3D/`, `geogebra3D/euclidianForPlane/` (2D views of a plane), `geogebra3D/input3D/` (3D input devices), `geogebra3D/main/` (shaders, companion)
-- `main/settings/EuclidianSettings3D.java` (view settings and defaults)
-- `kernel/kernelND/` (dimension-neutral interfaces, quadric constants)
-- `euclidian/EuclidianConstants.java`, `gui/toolbar/ToolBar.java`, `gui/toolcategorization/impl/` (3D tool set and grouping)
-- `kernel/commands/Commands.java` (the 3D command group)
-
-GeoGebra web code, under `source/web/web/src/main/java/org/geogebra/web/geogebra3D/web/`: `euclidian3D/` and `euclidian3DnoWebGL/` (web view, controller, software fallback).
-
-Manual (read): https://geogebra.github.io/docs/manual/en/3D_Graphics_View/ and https://geogebra.github.io/docs/manual/en/tools/3D_Graphics_Tools/ (the commands index page was empty to our fetcher, so the command and tool coverage here is derived from the source's command table and tool lists, in our own words).
-
-Our own documents: `docs/research/engine-study.md`, `docs/design/formula-language-and-kernel.md`, `docs/features/kernel/design.md`, `docs/features/points-lines/design.md`.
+Removed before the repository was made public. The study notes above are in our own words.

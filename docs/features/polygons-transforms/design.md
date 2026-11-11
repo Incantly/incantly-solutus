@@ -1,6 +1,6 @@
 # Polygons and transformations: design
 
-Status: draft for review. Plane-geometry area, third folder. Uses the shared model in `docs/features/points-lines/design.md` (sections 3.1 to 3.5: `V2`, `HLine`, `Tol`, `det2`, `orient`, `Path`, notes, ordering) and the conic values in `docs/features/conics/design.md` (section 3). Fits `docs/design/formula-language-and-kernel.md`. Nothing is copied from GeoGebra; section 14 lists what was read.
+Status: draft for review. Plane-geometry area, third folder. Uses the shared model in `docs/features/points-lines/design.md` (sections 3.1 to 3.5: `V2`, `HLine`, `Tol`, `det2`, `orient`, `Path`, notes, ordering) and the conic values in `docs/features/conics/design.md` (section 3). Fits `docs/design/formula-language-and-kernel.md`. Nothing is copied from the reference app; section 14 lists what was read.
 
 ## 1. What the learner and the teacher get
 
@@ -81,7 +81,7 @@ All forms of `Translate`, `Rotate`, `Reflect`, `Dilate`, `Shear` and `Stretch` a
 
 Polygon; Regular Polygon; Rigid Polygon; Vector Polygon; Translate by Vector; Rotate around Point; Reflect about Line; Reflect about Point; Reflect about Circle; Dilate from Point by Factor; plus the measurement tools Area and Angle. Details in `ui.md`.
 
-## 2. How GeoGebra does it (in plain words)
+## 2. How the reference app does it (in plain words)
 
 **Polygons.** A polygon is a list of vertex points and a set of segment objects, one per side, plus an area value. Creating a polygon from clicked points creates the vertices (named), the segments (named) and the polygon. Regular polygons create the missing vertices as dependent points rotated around the computed centre, one at a time. The area is the shoelace sum, using the absolute value; a self-crossing polygon gives an unexpected number. A "rigid polygon" is a copy whose shape is fixed and whose first vertex is dragged to move it and whose second vertex is dragged to turn it. There is a "vector polygon" tool that builds a closed shape from a start and vectors. Boolean operations (intersection, union, difference) exist for polygons; the union only works if the result is one polygon.
 
@@ -134,7 +134,7 @@ Type table additions: `Polygon`, `Polyline` (already named in the core design fo
 
 ### 3.3 No automatic vertex and side objects
 
-GeoGebra makes named vertex and segment objects for every polygon. We do not. Reasons: one line, one change; no floods of labels; a polygon that moves with a vertex slider has no hidden children. If the learner wants named corners, the tools do it by writing normal lines: `A = (0, 0)`, `B = (4, 0)`, `C = (1, 3)`, `tri = Polygon(A, B, C)`. For images, the figure shows the corner labels of the image (`A′`, `B′`, `C′`) as a **style**: `tri2 = Rotate(tri, 40°, O) with vertexlabels = prime`. These labels belong to the polygon and are not objects; they update with it and are saved as a style property.
+The reference app makes named vertex and segment objects for every polygon. We do not. Reasons: one line, one change; no floods of labels; a polygon that moves with a vertex slider has no hidden children. If the learner wants named corners, the tools do it by writing normal lines: `A = (0, 0)`, `B = (4, 0)`, `C = (1, 3)`, `tri = Polygon(A, B, C)`. For images, the figure shows the corner labels of the image (`A′`, `B′`, `C′`) as a **style**: `tri2 = Rotate(tri, 40°, O) with vertexlabels = prime`. These labels belong to the polygon and are not objects; they update with it and are saved as a style property.
 
 Tools that create several free points do so as separate lines before the polygon line (3.5).
 
@@ -197,7 +197,7 @@ Behaviour:
 - The script saves it as `R = Rigid(poly) with anchor = (3, 1), turn = 0.4` (a restyle-like line for params), so replay is exact.
 - `Reflect(R, line)` is the way to flip it; rigid polygons are never mirrored.
 
-This replaces GeoGebra's special-case dragging code with two ordinary free values and a pure rule.
+This replaces the reference app's special-case dragging code with two ordinary free values and a pure rule.
 
 ## 6. Transformations: model
 
@@ -307,7 +307,7 @@ The checker decides function versus curve at check time from the literal form of
 - **Composition.** `Rotate(Translate(tri, v), a, C)` is two rules. The kernel does not fuse them; each stage's numerical error is below `4ε` of the coordinates' magnitude.
 - **Cost.** `Rotate` of a 100-vertex polygon: 0.5 µs. A frame with 100 images of 20-gons: 0.1 ms.
 
-## 8. Better than GeoGebra, in detail
+## 8. Better than the reference app, in detail
 
 ### 8.1 One command, one object
 
@@ -417,7 +417,7 @@ Speed targets: area 0.01 µs per vertex, simple test 0.2 ms at 256 vertices (on 
 2. Should boolean polygon operations accept polygons with holes in v2, or switch to a ring-based `Region` type shared with the calculus area?
 3. Should the `Transform` values land in v1 rather than v1.1? They need only the existing `Tf`, so cost is small; the risk is catalogue size.
 
-## 13. Better than GeoGebra, in a list
+## 13. Better than the reference app, in a list
 
 1. One object per command; vertex labels as a style.
 2. Honest result types for sheared and inverted shapes.
@@ -432,15 +432,4 @@ Speed targets: area 0.01 µs per vertex, simple test 0.2 ms at 256 vertices (on 
 
 ## 14. Sources studied
 
-GeoGebra source (commit 3608374), `source/shared/common/src/main/java/org/geogebra/common/`:
-- `kernel/Transform.java`, `TransformTranslate.java`, `TransformRotate.java`, `TransformMirror.java`, `TransformDilate.java`, `TransformShearOrStretch.java`, `MatrixTransformable.java`
-- `kernel/algos/`: translate, rotate, mirror, dilate, shear/stretch and generic-transformation algorithms; polygon, regular polygon, polygon boolean (intersection, union, difference), vertex, centroid and area algorithms; angle algorithms for polygons
-- `kernel/geos/`: polygon, poly-line, poly types and their transformable interfaces (`Transformable`, `Mirrorable`, `Rotatable`, `Translateable`, `Dilateable`)
-- `kernel/advanced/AlgoApplyMatrix.java`, `TransformApplyMatrix.java`
-- `kernel/commands/`: argument handling for transformation and polygon commands (to learn forms)
-
-GeoGebra manual:
-- https://geogebra.github.io/docs/manual/en/commands/Transformation_Commands/ and pages Translate, Rotate, Reflect, Dilate, Shear, Stretch
-- https://geogebra.github.io/docs/manual/en/commands/Vector_and_Matrix_Commands/ page ApplyMatrix
-- https://geogebra.github.io/docs/manual/en/commands/Geometry_Commands/ pages Polygon, Polyline, RigidPolygon, Area, Perimeter, Centroid, Vertex, InteriorAngles, IntersectPath, Union, IsInRegion
-- https://geogebra.github.io/docs/manual/en/tools/Polygon_Tools/, https://geogebra.github.io/docs/manual/en/tools/Transformation_Tools/, https://geogebra.github.io/docs/manual/en/tools/Measurement_Tools/
+Removed before the repository was made public. The study notes above are in our own words.

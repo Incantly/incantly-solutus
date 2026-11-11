@@ -29,7 +29,7 @@ Opening the program in a mode gives a tidy tool for one job: a graphing calculat
 | 9 | On-screen maths keyboard: layouts as data, per mode; physical shortcuts | 2 |
 | 10 | Accessibility settings: reduced motion, high contrast, text size, screen-reader mode | 1 |
 
-## 2. How GeoGebra does it
+## 2. How the reference app does it
 
 From the source (`main/settings/config/`, `main/AppConfig.java`, `exam/`, `kernel/commands/filter/`) and manual:
 
@@ -211,7 +211,7 @@ Rules: `deriveMode` is pure; it can only remove capabilities (allow lists inters
 
 ### 3.4 How "no guessing" meets "auto sliders"
 
-GeoGebra's graphing mode turns an unknown name in a function into a slider. Our core rule: unknown names are errors, never guessed. We keep the rule in the language and move the convenience to the **UI layer**:
+The reference app's graphing mode turns an unknown name in a function into a slider. Our core rule: unknown names are errors, never guessed. We keep the rule in the language and move the convenience to the **UI layer**:
 
 - The kernel always returns `unknown_name` with `hint` and `suggest: { create: "a = 1 in -5..5" }`.
 - In modes with `autoSliders: true` and a human typing in the algebra input, the UI shows a chip under the error: "Create slider a". One tap applies the suggested line then re-applies the original. Nothing is guessed silently; the learner sees what is happening.
@@ -432,7 +432,7 @@ Physical keyboard: all of `0-9 + - * / ^ ( ) , . = < >` type directly; `/` makes
 
 Policy sets are compiled at mode load into `ReadonlySet<string>` for commands and tools; checking is a lookup.
 
-## 6. Better than GeoGebra
+## 6. Better than the reference app
 
 - A mode is a readable data table, not 70 overridden methods; adding a mode adds a record.
 - Command and tool policies are data: the catalogue given to the model is generated from the same table, so the model only sees what the mode permits.
@@ -458,20 +458,4 @@ Uses: the tool groups of tools-2d, the command groups of every command area, the
 
 ## Sources studied
 
-GeoGebra source (read-only clone, commit 3608374), under `source/shared/common/src/main/java/org/geogebra/common/`:
-
-- `main/AppConfig.java` and `main/settings/config/` (per-app configuration, all apps)
-- `main/settings/` (settings tree, defaults, spreadsheet, algebra, graphics, layout, probability, CAS settings)
-- `exam/` and `exam/restrictions/` (exam controller, states, types, restriction bundles, filters, visibility restrictions)
-- `kernel/commands/filter/` (command and argument filters)
-- `kernel/commands/CommandsConstants.java` (command groups)
-
-Also read, at the repository level: `source/shared/` module list (keyboard and editor modules, names only).
-
-Manual and reference:
-
-- https://geogebra.github.io/docs/manual/en/ (index)
-- https://geogebra.github.io/docs/manual/en/ToolsEN/ (tool list, search snippet only)
-- https://help.geogebra.org/hc/en-us/articles/10469645779229-Exam-Mode (exam mode overview, search snippet only)
-- https://geogebra.github.io/docs/reference/en/GeoGebra_App_Parameters/
-- https://geogebra.github.io/docs/manual/en/Spreadsheet_View/
+Removed before the repository was made public. The study notes above are in our own words.

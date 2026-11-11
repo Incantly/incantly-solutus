@@ -2,7 +2,7 @@
 
 Error object format: core design section 9 (`ok`, `line`, `col`, `endCol`, `kind`, `token`, `message`, `expected`, `forms`, `hint`). Generic kinds (`syntax`, `unknown_name`, `no_matching_form`, `type_mismatch`, `cycle`, `unnamed_object`) are shared with `points-lines/errors.md`; the shared `bad_argument` kind (with `param`) and the shared undefined reasons and notes are defined there. This file lists what conics add.
 
-## 1. How GeoGebra handles these
+## 1. How the reference app handles these
 
 - A typed equation that is not a conic (degree 3) becomes a different object (an implicit curve) or fails with a generic message. Equation input is parsed by a guessing step: an equation can become a line, a conic, a function or an implicit curve, depending on its shape.
 - Impossible constructors (ellipse whose major axis is too short) silently become the other type (a hyperbola), which is surprising in a lesson.

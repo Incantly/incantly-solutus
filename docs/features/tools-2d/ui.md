@@ -107,9 +107,9 @@ Editing a line in this panel runs it as a redefinition with all the checks. This
 - `Suggest(tool)` pulses a tool.
 - Tools the teacher or lesson has disabled show as disabled with a tooltip "Not used in this lesson".
 
-## 6. How GeoGebra presents it, and what we change
+## 6. How the reference app presents it, and what we change
 
-| GeoGebra | Ours |
+| The reference app | Ours |
 |---|---|
 | Toolbox arrow in a corner of a tool icon (desktop) or tap to open (web) | Group button plus drawer; long-press and Down key also open it |
 | Tooltip with a one-line how-to and a link to help | Hint line that changes at each step and shows refusals |

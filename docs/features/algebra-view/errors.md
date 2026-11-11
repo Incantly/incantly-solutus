@@ -4,7 +4,7 @@ Language errors (lexing, parsing, names, types, arguments, redefinition, limits)
 
 ## 1. Kinds owned by this area
 
-| Kind | When | GeoGebra | Ours |
+| Kind | When | The reference app | Ours |
 |---|---|---|---|
 | `restricted` | The input bar or a row edit uses a command not on the lesson's allowed list, or input is switched off | Exam mode and app configs hide commands; the user sees "unknown command" | A named restriction: message says the lesson allows only these commands; `forms` lists the allowed commands' first forms |
 | `name_taken` | Rename to a name that exists | "Label already used" | Names the existing object and offers a free name in `fix` |
@@ -161,9 +161,9 @@ Reason texts used in the second row (built from templates, English v1):
 | Completion list size | 12 |
 | Suggestion cards per object | 1 |
 
-## 7. GeoGebra comparison
+## 7. The reference app comparison
 
-| Concern | GeoGebra | Ours |
+| Concern | The reference app | Ours |
 |---|---|---|
 | Missing names while typing | A dialog interrupts evaluation | Error with a quick-fix chip |
 | Unknown cause for a blank value | Shows `?` | Dash with the reason and the cause chain |

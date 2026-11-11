@@ -2,7 +2,7 @@
 
 Follows section 9 of the core design: every error is data with `line`, `col`, `endCol`, `kind`, `token`, `message`, `expected`, `forms`, `hint`. Runtime problems are not errors; they make a value undefined with a reason code.
 
-## 1. How GeoGebra handles failures here
+## 1. How the reference app handles failures here
 
 - A line that does not parse gives one generic message. Brackets in a list literal that do not match give "unbalanced brackets" without a position.
 - A command with wrong arguments gives "illegal argument" or "wrong number of arguments" and appends the accepted forms. This is good and we keep it.
@@ -36,7 +36,7 @@ Static errors (found when the line is checked; nothing is applied).
 
 A rule that cannot compute sets its output to undefined with a reason code and a short human `detail`. The kernel reports the list of undefined objects after each line.
 
-| Reason | Where | Detail example | GeoGebra | Recovery for the teacher |
+| Reason | Where | Detail example | The reference app | Recovery for the teacher |
 |---|---|---|---|---|
 | `empty_list` | `Min`, `Max`, `First`, `Last`, `ArgMin`, `ArgMax` | "xs has no elements" | Undefined, no reason | Give the list an element, or check the filter that made it |
 | `index_out_of_range` | `xs[i]`, `Slice` from-bound beyond end for `First/Last` forms | "xs has 5 elements, asked for 7" | Undefined | Clamp the index, or change the slider's range |
@@ -187,12 +187,12 @@ A limit:
 }
 ```
 
-## 7. Better than GeoGebra
+## 7. Better than the reference app
 
 - Every undefined carries a reason and the offending input, so "why is there no inverse" has an answer.
 - Shape errors in literals are caught when the line is checked, not when a downstream object turns undefined.
 - Binder mistakes are named, with the binder list as `expected`.
 - Tolerance is explicit in the detail text (`pivot 3e-17 below 2e-14`).
-- Near-singular but defined results come with a warning and a condition number; GeoGebra hides this by rounding.
+- Near-singular but defined results come with a warning and a condition number; the reference app hides this by rounding.
 - Record field errors list the real field names.
 - Size limits are published and consistent, and a slider that pushes a size over the limit gives `too_large`, not a freeze.

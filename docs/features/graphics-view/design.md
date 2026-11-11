@@ -40,7 +40,7 @@ Status: draft for review. Fits `docs/design/formula-language-and-kernel.md` (sec
 | 12 | Accessibility of the canvas | 15 |
 | 13 | Style bar and view options (the UI side is in `ui.md`) | ui.md |
 
-## 2. How GeoGebra does it (plain words)
+## 2. How the reference app does it (plain words)
 
 What we learned from `euclidian/` and the manual pages on the Graphics view, its style bar and customising it.
 
@@ -777,7 +777,7 @@ Same script, same `t`, same export request gives the same bytes (SVG) and the sa
 - **Touch targets**: hit area at least 24x24 CSS px for handles and points.
 - **Honesty**: a canvas cannot be made fully accessible with this alone. Full WCAG validation needs manual testing with assistive technologies and expert review.
 
-## 16. Better than GeoGebra
+## 16. Better than the reference app
 
 - **Scripts can do everything the dialogs do**: layers, hatching, captions, show-if, dash phase, view tweens are all text, so a model can set them one line at a time.
 - **Partial repaint** by splitting the draw list around the active set, so a drag in a 500-object figure paints about 20 objects.
@@ -810,24 +810,4 @@ Same script, same `t`, same export request gives the same bytes (SVG) and the sa
 
 ## 18. Sources studied
 
-GeoGebra source (read-only, commit 3608374), under `source/shared/common/src/main/java/org/geogebra/common/`:
-
-- `euclidian/` (overview of the view, controller, drawable list, constants)
-- `euclidian/EuclidianView.java` (draw list, zoom factors, capturing modes)
-- `euclidian/EuclidianConstants.java` (tool mode list)
-- `euclidian/Drawable.java`
-- `euclidian/draw/` (list of drawable kinds)
-- `euclidian/HitDetector.java`, `euclidian/Hits.java`
-- `euclidian/SnapController.java`
-- `euclidian/LayerManager.java`
-- `euclidian/HatchingHandler.java`
-- `euclidian/PathTracker.java`
-- `euclidian/plot/` (list of plotting helpers)
-- `main/App.java` (capturing threshold constants)
-- `plugin/EuclidianStyleConstants.java` (layer limit)
-
-Manual pages (https://geogebra.github.io/docs/manual/en/):
-
-- `Graphics_View/`
-- `Animation/` (for the style bar and view controls context)
-- `Tools/` and `Tools_Menu/`
+Removed before the repository was made public. The study notes above are in our own words.
