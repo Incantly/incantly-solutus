@@ -125,14 +125,48 @@ The plotter works fully without every handoff item (sampling heuristics +
 
 ## Speed numbers
 
-Not measured: the shell is unavailable in this session (every command fails
-before starting; see "Verification"), so neither the benchmarks nor any
-timing probe could run. `packages/plot/bench/plot.bench.ts` covers every
-target in functions-calculus 9 and curves-loci 5-7; run `npm run bench` where
-a shell exists. By construction: smooth-function plots spend ~1 coarse
-evaluation per 4 px plus refinement only where the screen test fails;
-implicit/region cost follows boundary length (interval culling) rather than
-area; the sample cap bounds output size.
+Measured by the fixer; the builder's session had no shell, so the paragraph
+below replaces its estimates. By construction: smooth-function plots spend
+~1 coarse evaluation per 4 px plus refinement only where the screen test
+fails; implicit/region cost follows boundary length (interval culling)
+rather than area; the sample cap bounds output size.
+
+Method: `packages/plot/bench/plot.bench.ts` is a plain `performance.now()`
+script (see "Gate fixes"): 2 warmup runs, then repeated runs until at least
+25 ms total (min 5, max 500 runs), reporting the mean ms per run; one extra
+run supplies the eval counts. Executed 3 times via `npm run bench`
+(`vitest bench --run` collects the file and runs its top-level code) on
+Node v26.0.0, darwin arm64. Evaluation counts were identical across all runs
+(deterministic output, as designed); timings reproduced within ~10% except
+the spiral case, which sits on its target. All cases ran WITHOUT kernel
+enclosures (sampling heuristics, `rigorous: false` where verdicts were
+needed); the doc targets assume interval culling, so part of the
+implicit/region gap should close when the handoff items land.
+
+| Case | Mean ms (3 runs) | Doc target | Evals | Meets target |
+|---|---|---|---|---|
+| function: smooth sin(x)+x^2/10 | 0.19 | 0.3 | 499 | yes |
+| function: tan(x) over 12 poles | 2.4 | 1.5 | 5704 | no (capped) |
+| function: sin(1/x) | 12.1 | 5 | 5247 | no |
+| function: floor(x) | 0.21 | 0.5 | 590 | yes |
+| param: heart | 0.42 | 0.3 | 993 | no (close) |
+| param: Lissajous 6 loops | 0.51 | 0.8 | 1425 | yes |
+| param: spiral s in 0..1000 | 1.45 | 1.5 | 4000 | borderline (1.38/1.42/1.55) |
+| implicit: unit circle | 7.8 | 2 | 32965 | no |
+| implicit: lemniscate | 6.0 | 3 | 31417 | no |
+| implicit: sin(x)+sin(y)==sin(x*y) | 21.3 | 15 | 105332 | no (capped) |
+| implicit: unit circle (draft) | 10.9 | 0.5 (4x cheaper) | 41778 | no, and slower than final |
+| region: half-plane | 10.7 | 0.3 | 111689 | no (capped) |
+| region: disc and half-plane | 18.6 | 1.5 | 166484 | no |
+| region: sin(x)*y>1 band | 14.6 | 8 | 148519 | no (capped) |
+
+Observations for the integrator (not fixed: performance work is outside the
+fixer brief): draft quality is SLOWER than final on the same input (10.9 vs
+7.8 ms with more evaluations), which contradicts the "draft 4x cheaper"
+target and looks like a real bug rather than a missing enclosure; the region
+filler's biggest miss is the half-plane (10.7 ms vs 0.3 ms at 111k evals,
+also capped), suggesting the no-enclosure path splits far more than the
+design's quadtree intends.
 
 ## Verification
 
@@ -155,3 +189,38 @@ area; the sample cap bounds output size.
 - Nothing was committed (no shell). All work is in `packages/plot/` and
   `handoff/plot/` only; `packages/kernel/`, `docs/` and other packages are
   untouched.
+
+## Gate fixes
+
+The fixer session had a shell. Two type errors, no lint errors, no test
+failures; no source behaviour was changed except through the missing import.
+
+1. `packages/plot/src/region.ts`: added `ImplicitFieldInput` to the type
+   imports from `./contracts`. Real cause: `traceBorder` annotates its local
+   `field` with that type (it calls `traceImplicit`, whose first parameter
+   has exactly that type) but the import list never included it. One line;
+   no `any`, no disable comments.
+2. `packages/plot/bench/plot.bench.ts`: rewrote from `bench` from `vitest`
+   (which Vitest 5.0.5 does not export: `TS2724`) to a plain script that
+   times each case with `performance.now()` and prints a one-line result
+   with eval counts and a PASS/FAIL verdict against the doc target. No bench
+   runner was added. The rewrite keeps the 11 old cases and adds the 3 doc
+   targets the old file missed: the `s in 0..1000` spiral (curves-loci 5),
+   draft-quality circle (curves-loci 6, "4x cheaper") and the
+   `sin(x)*y > 1` band (curves-loci 7). Run with
+   `npx tsx packages/plot/bench/plot.bench.ts`; `npm run bench` also
+   executes it (verified: exit 0, timings print).
+3. Measured every speed number (see "Speed numbers" above, which replaces
+   the builder's estimates) and committed in two parts: the code fixes,
+   then these notes.
+
+Gates from the repo root, all green: `npx tsc -p tsconfig.json` clean,
+`npx eslint .` clean, `npx vitest run` 2,118 passed / 0 failed (the same
+2,118 the builder counted). No tests written or touched; the temporary
+vitest config used to execute the bench script was deleted before
+committing.
+
+Needs the integrator: the measured numbers miss 10 of 14 doc targets on
+this machine (see "Speed numbers"); the draft-slower-than-final result in
+particular looks like a tracer bug. Performance work is outside the fixer
+brief, so all of it is left for the area owner.
