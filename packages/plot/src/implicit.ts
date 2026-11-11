@@ -13,16 +13,17 @@ import type {
   ImplicitFieldInput,
   ImplicitPlot,
   ImplicitPlotOptions,
-  PlotMarker,
   PlotStats,
   ScalarBox,
   TraceQuality,
   ViewBox,
 } from './contracts';
-import { badArgument, checkBudgets, checkView, guard, isFiniteNumber } from './errors';
+import { badArgument, checkBudgets, checkView, guard, isFiniteNumber, overLimit } from './errors';
 import { caseIndex, crossingT, edgeEnds, linkSegments, segmentsForCase } from './squares';
 import type { RawSegment, SquareEdge } from './squares';
 import { clipPolyline } from './clip';
+import { MarkerSet, makeMarker } from './markers';
+import { PointMemo } from './memo';
 import { thinChains } from './thin';
 import { createView } from './view';
 import type { PlotView } from './view';
@@ -48,9 +49,9 @@ interface IState {
   /** Crossing per grid-edge key: both leaves sharing an edge use one point. */
   readonly crossings: Map<string, { x: number; y: number }>;
   /** Every residual call by exact input, so nothing is evaluated twice. */
-  readonly memo: Map<string, number>;
+  readonly memo: PointMemo;
   readonly segments: RawSegment[];
-  readonly markers: PlotMarker[];
+  readonly markers: MarkerSet;
   readonly maxSamples: number;
   readonly maxEvals: number;
   evals: number;
@@ -63,6 +64,10 @@ interface IState {
 
 /** Coarse cell size in effective pixels (curves-loci 6). */
 const CELL_PX = 32;
+/** Largest leaf grid (cells); larger views are refused with `limit`, as in the region filler. */
+export const MAX_LEAF_CELLS = 32000000;
+/** Most corner values and memoised inputs kept at once; older ones are re-evaluated if needed. */
+const MAX_KEPT_VALUES = 1 << 20;
 
 /* --------------------------------- helpers ---------------------------------- */
 
@@ -82,8 +87,7 @@ function gridY(st: IState, j: number): number {
 
 /** Field minus level; NaN where undefined. Null when the budget is spent. Each input is evaluated once. */
 function gEval(st: IState, x: number, y: number): number | null {
-  const key = `${x},${y}`;
-  const hit = st.memo.get(key);
+  const hit = st.memo.get(x, y);
   if (hit !== undefined) return hit;
   if (st.evals + st.intervalEvals >= st.maxEvals) {
     st.dead = true;
@@ -92,7 +96,7 @@ function gEval(st: IState, x: number, y: number): number | null {
   st.evals += 1;
   const v = st.residual(x, y);
   const out = typeof v !== 'number' || Number.isNaN(v) ? Number.NaN : v - st.level;
-  st.memo.set(key, out);
+  st.memo.set(x, y, out);
   return out;
 }
 
@@ -103,6 +107,7 @@ function cornerAt(st: IState, i: number, j: number): number | null {
   if (hit !== undefined) return hit;
   const v = gEval(st, gridX(st, i), gridY(st, j));
   if (v === null) return null;
+  if (st.corners.size >= MAX_KEPT_VALUES) st.corners.clear();
   st.corners.set(key, v);
   return v;
 }
@@ -355,8 +360,8 @@ function probeSmallFeature(st: IState, i: number, j: number): void {
 }
 
 function addMarker(st: IState, kind: 'singular' | 'isolated', x: number, y: number): void {
-  const pv = st.pv;
-  st.markers.push({ kind, x, y, px: pv.toPx(x), py: pv.toPy(y) });
+  const marker = makeMarker(st.pv, kind, x, y);
+  if (marker !== undefined) st.markers.add(marker);
 }
 
 /* -------------------------------- quadtree ---------------------------------- */
@@ -469,21 +474,25 @@ export function traceImplicit(field: ImplicitFieldInput, view: ViewBox, options:
     const pv = pvResult.value;
     const leafEff = quality === 'final' ? 2 : 6;
     const padEff = Math.max(1, Math.round(CELL_PX / leafEff)) * leafEff;
+    const cols = leafCount(pv.widthEff + 2 * padEff, leafEff);
+    const rows = leafCount(pv.heightEff + 2 * padEff, leafEff);
+    if (cols * rows > MAX_LEAF_CELLS) return overLimit(caller, 'leaf cells', MAX_LEAF_CELLS, cols * rows);
+    const maxSamples = options.maxSamples === undefined ? MAX_SAMPLES_PER_CURVE : Math.floor(options.maxSamples);
     const st: IState = {
       pv,
       residual: field.residual,
       level,
       enclosure: field.enclosure,
       leafEff,
-      cols: leafCount(pv.widthEff + 2 * padEff, leafEff),
-      rows: leafCount(pv.heightEff + 2 * padEff, leafEff),
+      cols,
+      rows,
       padEff,
       corners: new Map(),
       crossings: new Map(),
-      memo: new Map(),
+      memo: new PointMemo(MAX_KEPT_VALUES),
       segments: [],
-      markers: [],
-      maxSamples: options.maxSamples === undefined ? MAX_SAMPLES_PER_CURVE : Math.floor(options.maxSamples),
+      markers: new MarkerSet(maxSamples),
+      maxSamples,
       maxEvals: options.maxEvals === undefined ? DEFAULT_MAX_EVALS_IMPLICIT : Math.floor(options.maxEvals),
       evals: 0,
       intervalEvals: 0,
@@ -497,20 +506,10 @@ export function traceImplicit(field: ImplicitFieldInput, view: ViewBox, options:
       return { ok: true, value: { paths: [], closed: [], markers: [], stats: makeStats(st, false, 0) }, notices: [] };
     }
     const { paths, closed, samples } = finishChains(st, linkSegments(st.segments));
-    const markers = uniqueMarkers(st);
+    if (st.markers.dropped) st.capped = true;
+    const markers = st.markers.sorted();
     return { ok: true, value: { paths, closed, markers, stats: makeStats(st, true, samples) }, notices: [] };
   });
-}
-
-/** Markers sorted by position, with repeats of one kind within a pixel collapsed. */
-function uniqueMarkers(st: IState): PlotMarker[] {
-  const ms = [...st.markers].sort((a, b) => a.x - b.x || a.y - b.y);
-  const out: PlotMarker[] = [];
-  for (const m of ms) {
-    if (out.some((o) => o.kind === m.kind && Math.hypot(o.px - m.px, o.py - m.py) < 1)) continue;
-    out.push(m);
-  }
-  return out;
 }
 
 /**

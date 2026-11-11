@@ -31,6 +31,8 @@ import type {
   ViewBox,
 } from './contracts';
 import { badArgument, checkBudgets, checkView, guard, isFiniteNumber } from './errors';
+import { makeMarker } from './markers';
+import { SortedSet } from './sortedset';
 import { thinChains } from './thin';
 import { createView, pointToChordPx, turnDegrees } from './view';
 import type { PlotView } from './view';
@@ -51,6 +53,8 @@ interface PSpan {
 interface PState {
   readonly pv: PlotView;
   readonly samples: Map<number, PSample>;
+  /** Every defined sample parameter, ordered, for neighbour lookups in O(log n). */
+  readonly definedSs: SortedSet;
   readonly pending: PSpan[];
   readonly accepted: PSpan[];
   readonly suspicious: PSpan[];
@@ -115,6 +119,12 @@ function toPSample(s: number, v: unknown): PSample {
   return { s, x: Number.NaN, y: Number.NaN, defined: false };
 }
 
+/** Stores a sample; defined ones also join the ordered index. */
+function putSample(st: PState, s: number, sample: PSample): void {
+  st.samples.set(s, sample);
+  if (sample.defined) st.definedSs.add(s);
+}
+
 /** Evaluates at s, cached; sets dead when the budget is spent. */
 function evalAt(st: PState, s: number): PSample | null {
   const hit = st.samples.get(s);
@@ -125,7 +135,7 @@ function evalAt(st: PState, s: number): PSample | null {
   }
   const sample = toPSample(s, st.fn.call(s));
   st.evals += 1;
-  st.samples.set(s, sample);
+  putSample(st, s, sample);
   return sample;
 }
 
@@ -475,14 +485,25 @@ function classifyEdge(st: PState, span: PSpan, side: 'left' | 'right'): void {
   joinPartner(st, edge, edgeS, side);
 }
 
-/** Joins across a tiny gap when a partner edge sits within half a pixel. */
+/** Defined neighbours examined on the far side of an edge when looking for a partner. */
+const PARTNER_PROBES = 8;
+
+/**
+ * Joins across a tiny gap when a partner edge sits within half a pixel. The
+ * candidates are the nearest few defined samples on the far side in parameter
+ * order, found by binary search, so the cost of a verdict does not grow with
+ * the number of samples.
+ */
 function joinPartner(st: PState, edge: number, edgeS: PSample, side: 'left' | 'right'): boolean {
   let best: PSample | undefined;
   let bestD = Number.POSITIVE_INFINITY;
-  for (const s of st.samples.values()) {
-    if (!s.defined || s.s === edge) continue;
-    if (side === 'left' && !(s.s > edge)) continue;
-    if (side === 'right' && !(s.s < edge)) continue;
+  let at = edge;
+  for (let k = 0; k < PARTNER_PROBES; k++) {
+    const next = side === 'left' ? st.definedSs.successor(at) : st.definedSs.predecessor(at);
+    if (next === undefined) break;
+    at = next;
+    const s = st.samples.get(next);
+    if (!s || !s.defined) continue;
     const d = Math.hypot(toEffX(st.pv, s.x) - toEffX(st.pv, edgeS.x), toEffY(st.pv, s.y) - toEffY(st.pv, edgeS.y));
     if (d < bestD) {
       bestD = d;
@@ -498,8 +519,14 @@ function joinPartner(st: PState, edge: number, edgeS: PSample, side: 'left' | 'r
 }
 
 function addMarker(st: PState, kind: MarkerKind, x: number, y: number): void {
-  const pv = st.pv;
-  st.markers.push({ kind, x, y, px: pv.toPx(x), py: pv.toPy(y) });
+  const marker = makeMarker(st.pv, kind, x, y);
+  if (marker === undefined) return;
+  // Markers obey the sample cap too (performance.md 5).
+  if (st.markers.length >= st.maxSamples) {
+    st.capped = true;
+    return;
+  }
+  st.markers.push(marker);
 }
 
 /* ---------------------------------- emit ----------------------------------- */
@@ -619,6 +646,7 @@ export function traceParamCurve(curve: ParamCurveInput, view: ViewBox, options: 
     const st: PState = {
       pv,
       samples: new Map(),
+      definedSs: new SortedSet(),
       pending: [],
       accepted: [],
       suspicious: [],
@@ -642,7 +670,7 @@ export function traceParamCurve(curve: ParamCurveInput, view: ViewBox, options: 
     if (curve.seed) {
       for (let i = 0; i < curve.seed.ss.length; i++) {
         const s = curve.seed.ss[i] as number;
-        st.samples.set(s, toPSample(s, { x: curve.seed.xys[2 * i] as number, y: curve.seed.xys[2 * i + 1] as number }));
+        putSample(st, s, toPSample(s, { x: curve.seed.xys[2 * i] as number, y: curve.seed.xys[2 * i + 1] as number }));
       }
     }
     const boxes = cullBoxes(st, curve.lo, curve.hi);

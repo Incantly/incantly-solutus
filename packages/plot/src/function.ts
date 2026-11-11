@@ -32,6 +32,8 @@ import type {
   ViewBox,
 } from './contracts';
 import { badArgument, checkBudgets, checkView, guard, isFiniteNumber } from './errors';
+import { makeMarker } from './markers';
+import { SortedSet } from './sortedset';
 import { thinChains } from './thin';
 import { createView, pointToChordPx } from './view';
 import type { PlotView } from './view';
@@ -61,6 +63,8 @@ interface FCfg {
 interface FState {
   readonly pv: PlotView;
   readonly samples: Map<number, FSample>;
+  /** Every defined sample x, ordered, for neighbour lookups in O(log n). */
+  readonly definedXs: SortedSet;
   readonly pending: FSpan[];
   readonly accepted: FSpan[];
   readonly suspicious: FSpan[];
@@ -273,6 +277,12 @@ function spentThisCall(st: FState): number {
   return st.evals + st.intervalEvals - st.base;
 }
 
+/** Stores a sample; defined ones also join the ordered index. */
+function putSample(st: FState, x: number, s: FSample): void {
+  st.samples.set(x, s);
+  if (s.defined) st.definedXs.add(x);
+}
+
 /** Evaluates at x, cached; returns null and suspends when the budget is spent. */
 function evalAt(st: FState, x: number): FSample | null {
   const hit = st.samples.get(x);
@@ -283,7 +293,7 @@ function evalAt(st: FState, x: number): FSample | null {
   }
   const s = toSample(x, st.call1(x));
   st.evals += 1;
-  st.samples.set(x, s);
+  putSample(st, x, s);
   return s;
 }
 
@@ -322,7 +332,7 @@ function runSetup(st: FState): void {
       st.evals += missing.length;
       for (let i = 0; i < missing.length; i++) {
         const x = missing[i] as number;
-        st.samples.set(x, toSample(x, out[i] as number));
+        putSample(st, x, toSample(x, out[i] as number));
       }
     }
   }
@@ -957,19 +967,8 @@ function probeHole(st: FState, edge: number, edgeY: number, bound: number, side:
 
 /** Nearest defined sample across the gap, if any. */
 function findPartner(st: FState, edge: number, side: 'left' | 'right'): FSample | undefined {
-  let best: FSample | undefined;
-  let bestDx = Number.POSITIVE_INFINITY;
-  for (const s of st.samples.values()) {
-    if (!s.defined || s.x === edge) continue;
-    if (side === 'left' && !(s.x > edge)) continue;
-    if (side === 'right' && !(s.x < edge)) continue;
-    const dx = Math.abs(s.x - edge);
-    if (dx < bestDx) {
-      bestDx = dx;
-      best = s;
-    }
-  }
-  return best;
+  const x = side === 'left' ? st.definedXs.successor(edge) : st.definedXs.predecessor(edge);
+  return x === undefined ? undefined : st.samples.get(x);
 }
 
 function closeY(a: number, b: number): boolean {
@@ -977,10 +976,15 @@ function closeY(a: number, b: number): boolean {
 }
 
 function addMarker(st: FState, kind: MarkerKind, x: number, y: number): void {
-  const pv = st.pv;
   // A marker that cannot be drawn (non-finite coordinates) is never recorded.
-  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(pv.toPx(x)) || !Number.isFinite(pv.toPy(y))) return;
-  st.markers.push({ kind, x, y, px: pv.toPx(x), py: pv.toPy(y) });
+  const marker = makeMarker(st.pv, kind, x, y);
+  if (marker === undefined) return;
+  // Markers obey the sample cap too (performance.md 5).
+  if (st.markers.length >= st.cfg.maxSamples) {
+    st.capped = true;
+    return;
+  }
+  st.markers.push(marker);
 }
 
 /* ------------------------------- exact + loop ------------------------------ */
@@ -1125,34 +1129,14 @@ function chainSpans(st: FState): number[][][] {
 /** Merges chains across continuous breaks and hole breaks; marks jumps. */
 function resolveBreaks(st: FState, chains: number[][][]): number[][][] {
   const pv = st.pv;
-  const keys = [...st.samples.keys()].sort((a, b) => a - b);
   const sampleAt = (x: number): FSample | undefined => st.samples.get(x);
-  const slot = (b: number): number => {
-    let lo = 0;
-    let hi = keys.length;
-    while (lo < hi) {
-      const mid = (lo + hi) >> 1;
-      if ((keys[mid] as number) < b) lo = mid + 1;
-      else hi = mid;
-    }
-    return lo;
-  };
   const limitBelow = (b: number): FSample | undefined => {
-    for (let i = slot(b) - 1; i >= 0; i--) {
-      const s = sampleAt(keys[i] as number);
-      if (s && s.defined) return s;
-    }
-    return undefined;
+    const x = st.definedXs.predecessor(b);
+    return x === undefined ? undefined : sampleAt(x);
   };
   const limitAbove = (b: number): FSample | undefined => {
-    for (let i = slot(b); i < keys.length; i++) {
-      const k = keys[i] as number;
-      if (k > b) {
-        const s = sampleAt(k);
-        if (s && s.defined) return s;
-      }
-    }
-    return undefined;
+    const x = st.definedXs.successor(b);
+    return x === undefined ? undefined : sampleAt(x);
   };
   const merged: boolean[] = chains.map(() => false);
   for (const b of st.breaks) {
@@ -1232,17 +1216,12 @@ function markDomainEnds(st: FState): void {
 
 /** Fallback y for an undefined domain end: the nearest defined sample's y. */
 function edgeFallbackY(st: FState, x: number): number {
-  let best: FSample | undefined;
-  let bestDx = Number.POSITIVE_INFINITY;
-  for (const s of st.samples.values()) {
-    if (!s.defined) continue;
-    const dx = Math.abs(s.x - x);
-    if (dx < bestDx) {
-      bestDx = dx;
-      best = s;
-    }
-  }
-  return best ? best.y : (st.pv.box.y0 + st.pv.box.y1) / 2;
+  const below = st.definedXs.predecessor(x);
+  const above = st.definedXs.successor(x);
+  let best: number | undefined = below;
+  if (above !== undefined && (below === undefined || above - x < x - below)) best = above;
+  const sample = best === undefined ? undefined : st.samples.get(best);
+  return sample ? sample.y : (st.pv.box.y0 + st.pv.box.y1) / 2;
 }
 
 function sortMarkers(st: FState): PlotMarker[] {
@@ -1452,6 +1431,7 @@ export function plotFunction(fn: FunctionValue, view: ViewBox, options: Function
     const st: FState = {
       pv,
       samples: new Map(),
+      definedXs: new SortedSet(),
       pending: [],
       accepted: [],
       suspicious: [],
@@ -1479,7 +1459,7 @@ export function plotFunction(fn: FunctionValue, view: ViewBox, options: Function
     if (options.seed) {
       for (let i = 0; i < options.seed.xs.length; i++) {
         const x = options.seed.xs[i] as number;
-        st.samples.set(x, toSample(x, options.seed.ys[i] as number));
+        putSample(st, x, toSample(x, options.seed.ys[i] as number));
       }
     }
     if (options.exact === true && !options.enclosure) st.rigorous = false;
@@ -1510,14 +1490,18 @@ export function resumeFunctionPlot(token: FunctionResume, fn: FunctionValue, opt
     const fast = fn.call1;
     const call1 = fast ? (x: number): number => fast(x) : (x: number): number => fn.call(x) as number;
     const samples = new Map<number, FSample>();
+    const definedXs = new SortedSet();
     for (let i = 0; i < token.samples.xs.length; i++) {
       const x = token.samples.xs[i] as number;
-      samples.set(x, toSample(x, token.samples.ys[i] as number));
+      const sample = toSample(x, token.samples.ys[i] as number);
+      samples.set(x, sample);
+      if (sample.defined) definedXs.add(x);
     }
     const spans = (ss: readonly FunctionResumeSpan[]): FSpan[] => ss.map((s) => ({ xl: s.xl, xr: s.xr, depth: s.depth }));
     const st: FState = {
       pv,
       samples,
+      definedXs,
       pending: spans(token.pending),
       accepted: spans(token.accepted),
       suspicious: spans(token.suspicious),

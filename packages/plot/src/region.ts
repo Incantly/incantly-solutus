@@ -11,7 +11,6 @@ import { DEFAULT_MAX_EVALS_REGION, MAX_SAMPLES_PER_CURVE } from './contracts';
 import type {
   BoundaryInput,
   ImplicitFieldInput,
-  PlotMarker,
   PlotStats,
   Predicate1DInput,
   Predicate1DOptions,
@@ -27,6 +26,7 @@ import type {
 } from './contracts';
 import { badArgument, checkBudgets, checkView, guard, isFiniteNumber, overLimit } from './errors';
 import { traceImplicit } from './implicit';
+import { MarkerSet, makeMarker } from './markers';
 import { caseIndex, crossingT, edgeEnds, numericGradient, polygonForCase, refineCrossing } from './squares';
 import type { SquareEdge } from './squares';
 import { createView } from './view';
@@ -52,7 +52,7 @@ interface RState {
   readonly filled: Uint8Array;
   readonly polygons: Float64Array[];
   readonly extraRects: number[];
-  readonly markers: PlotMarker[];
+  readonly markers: MarkerSet;
   readonly maxSamples: number;
   readonly maxEvals: number;
   evals: number;
@@ -361,14 +361,19 @@ function supersample(st: RState, i: number, j: number, corner = false): void {
   }
   // A near-point island (x^2 + y^2 <= 0): sub-pixel rects plus a marker.
   if (covered > 0 && covered <= 2) {
-    addMarker(st, 'isolated', mx, my);
+    const island = isIsland(st, mx, my, x1 - x0, yT - yB);
+    if (island === null) return;
+    if (island) addMarker(st, 'isolated', mx, my);
   }
   if (covered === 0) {
     // A true point on a leaf corner that no sub-cell centre sees.
     for (const [x, y] of [[x0, yB], [x1, yB], [x1, yT], [x0, yT]] as const) {
       const v = testAt(st, x, y);
       if (v === null) return;
-      if (v === true) addMarker(st, 'isolated', x, y);
+      if (v !== true) continue;
+      const island = isIsland(st, x, y, x1 - x0, yT - yB);
+      if (island === null) return;
+      if (island) addMarker(st, 'isolated', x, y);
     }
   }
   if (!st.enclosure && covered > 0) st.rigorous = false;
@@ -376,10 +381,29 @@ function supersample(st: RState, i: number, j: number, corner = false): void {
 }
 
 function addMarker(st: RState, kind: 'isolated', x: number, y: number): void {
-  const pv = st.pv;
-  if (st.markers.some((m) => m.kind === kind && Math.hypot(m.px - pv.toPx(x), m.py - pv.toPy(y)) < 1)) return;
-  st.markers.push({ kind, x, y, px: pv.toPx(x), py: pv.toPy(y) });
+  const marker = makeMarker(st.pv, kind, x, y);
+  if (marker !== undefined) st.markers.add(marker);
 }
+
+/**
+ * A covered spot is an island only when nothing one leaf away in any of the 8
+ * directions is covered; a spot that touches covered area (cells meeting at a
+ * corner, the end of a thin band) is part of the fill, not a point of its own.
+ * Null when the budget ran out.
+ */
+function isIsland(st: RState, x: number, y: number, dx: number, dy: number): boolean | null {
+  for (const [kx, ky] of RING) {
+    const v = testAt(st, x + kx * dx, y + ky * dy);
+    if (v === null) return null;
+    if (v === true) return false;
+  }
+  return true;
+}
+
+/** Diagonals first: cells that meet at a corner are found by the first probes. */
+const RING: readonly (readonly [number, number])[] = [
+  [1, 1], [-1, -1], [1, -1], [-1, 1], [1, 0], [-1, 0], [0, 1], [0, -1],
+];
 
 /* ------------------------------- rect merge --------------------------------- */
 
@@ -580,6 +604,7 @@ export function fillRegion(predicate: PredicateInput, view: ViewBox, options: Re
     if (cols * rows > MAX_BITMAP_CELLS) {
       return overLimit(caller, 'leaf cells', MAX_BITMAP_CELLS, cols * rows);
     }
+    const maxSamples = options.maxSamples === undefined ? MAX_SAMPLES_PER_CURVE : Math.floor(options.maxSamples);
     const st: RState = {
       pv,
       test: predicate.test,
@@ -592,8 +617,8 @@ export function fillRegion(predicate: PredicateInput, view: ViewBox, options: Re
       filled: new Uint8Array(cols * rows),
       polygons: [],
       extraRects: [],
-      markers: [],
-      maxSamples: options.maxSamples === undefined ? MAX_SAMPLES_PER_CURVE : Math.floor(options.maxSamples),
+      markers: new MarkerSet(maxSamples),
+      maxSamples,
       maxEvals: options.maxEvals === undefined ? DEFAULT_MAX_EVALS_REGION : Math.floor(options.maxEvals),
       evals: 0,
       intervalEvals: 0,
@@ -632,7 +657,8 @@ export function fillRegion(predicate: PredicateInput, view: ViewBox, options: Re
       polygons.push(arr);
     }
     for (const b of borders) samples += b.path.length / 2;
-    const markers = [...st.markers].sort((a, b) => a.x - b.x || a.y - b.y);
+    if (st.markers.dropped) st.capped = true;
+    const markers = st.markers.sorted();
     return { ok: true, value: { rects, polygons, borders, markers, stats: makeStats(st, true, Math.round(samples)) }, notices: [] };
   });
 }

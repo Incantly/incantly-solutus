@@ -103,6 +103,11 @@ export function checkView(caller: string, view: ViewBox): ErrorObject | undefine
   if (!isFiniteNumber(dpr) || dpr <= 0 || dpr > 4) {
     return badArgument(caller, `devicePixelRatio must be in (0, 4] (got ${String(view.devicePixelRatio)})`, 'Pass a devicePixelRatio between 0 (exclusive) and 4.');
   }
+  // The tracers sample device pixels, so the area limit counts those.
+  const devicePx = view.widthPx * view.heightPx * dpr * dpr;
+  if (devicePx > MAX_VIEW_AREA_PX) {
+    return overLimit(caller, 'view pixels', MAX_VIEW_AREA_PX, Math.round(devicePx));
+  }
   return undefined;
 }
 

@@ -18,7 +18,8 @@ Ranked by impact: security (unbounded time or memory), then wrong results, then 
   - Both runs are within the allowed budgets (`HARD_MAX_EVALS` is 10,000,000).
 - **Invariant broken:** P6 and P7: work and output follow the curve length and the sample cap, not the leaf count squared.
 - **Suggested fix:** de-duplicate with a hash keyed by the rounded pixel cell (and kind), checking the 3 x 3 neighbouring cells, in `uniqueMarkers`, region `addMarker`, and the same pattern in `function.ts` `sortMarkers` and `param.ts` `sortMarkers` (sorted, so already linear, but keep one helper). Count markers against `maxSamples` and set `capped` when markers are dropped. Separately, a leaf whose covered sub-cells touch a covered neighbour is not an isolated point; only mark islands.
-- **status:** open
+- **status:** fixed
+- **fix:** A new `markers.ts` `MarkerSet` de-duplicates by a hash of 1 px cells per kind (9 cells checked per insert) and caps the kept markers at `maxSamples` (`capped` set when one is dropped). Used by the implicit tracer (replaces `uniqueMarkers`) and the region filler (replaces the scan in `addMarker`). The function and parametric plotters cap their marker lists the same way (their final de-duplication already runs on sorted markers, linear). The region filler marks `isolated` only for an island: a covered spot with covered area within one leaf in any of 8 directions is part of the fill, so the checkerboard corners no longer produce markers. Repros: implicit `x - x == 0` at 400 px 64 s to 0.2 s; checkerboard 1,000 px 27 s to 0.05 s, no markers.
 
 ### PLOT-SM-2: The implicit tracer can hold about 2 GB at the hard caps
 
@@ -26,7 +27,8 @@ Ranked by impact: security (unbounded time or memory), then wrong results, then 
 - **Evidence:** `implicit.ts:84-97` `gEval` memoises every call in `memo` under a string key `` `${x},${y}` ``, and `cornerAt` keeps a second map. Nothing bounds the grid: `checkView` (`errors.ts:99`) caps `widthPx * heightPx` in CSS pixels at 16,777,216, but the tracer works in device pixels (`devicePixelRatio` up to 4), so the grid can hold 16 times that. `fillRegion` refuses the same view (`MAX_BITMAP_CELLS`, `region.ts:69`); `traceImplicit` has no such check. Repro: `traceImplicit({ residual: (x, y) => Math.sin(10 * x) + Math.sin(10 * y) }, { x0: -5, x1: 5, y0: -5, y1: 5, widthPx: 4096, heightPx: 4096, devicePixelRatio: 4 }, { maxEvals: 1e7 })` grows the heap by **1,901 MB**, runs 16.6 s, and returns `complete: false` with no output. `fillRegion` on the same view returns `limit` ("67634176 leaf cells").
 - **Invariant broken:** P5: memory per call is bounded by a figure-sized budget, and the view limits count the pixels the tracer actually samples.
 - **Suggested fix:** check the view area in device pixels (`widthPx * heightPx * dpr^2`) in `checkView`, give `traceImplicit` the same leaf-cell limit as `fillRegion`, key `memo` and `corners` by number (grid indices, or a `Float64Array` hash) instead of strings, and drop `memo` entries for rows the dense scan has passed. Consider a lower hard cap for evaluations whose results are kept.
-- **status:** open
+- **status:** fixed
+- **fix:** `checkView` counts device pixels (`widthPx * heightPx * dpr^2` against 16,777,216), so the repro view is refused with `limit`. `traceImplicit` has the leaf-cell limit of `fillRegion` (`MAX_LEAF_CELLS`, `limit`). The string-keyed memo is a typed-array open-addressing table (`memo.ts` `PointMemo`, no strings, no per-entry objects) holding at most 2^20 inputs, emptied when full; the corner map is emptied at 2^20 entries too. A repeat of an old input after a reset is evaluated (and counted) again. A 2,000 x 2,000 px view at `devicePixelRatio` 2 with 5.5 million evaluations now grows the heap by 168 MB.
 
 ### PLOT-SM-3: Partner and fallback searches scan every sample, so edge-heavy functions are quadratic
 
@@ -37,7 +39,8 @@ Ranked by impact: security (unbounded time or memory), then wrong results, then 
   - `sqrt(sin(k x))` with `{ maxEvals: 1e7, maxSamples: 65536 }`: k = 20, 80, 320 take 15, 70 and 324 ms.
 - **Invariant broken:** P2: cost per verdict is bounded by a constant number of evaluations and lookups.
 - **Suggested fix:** keep the samples in a sorted array (or sort the keys once per classify phase, as `resolveBreaks` already does) and find the nearest defined neighbour on the far side by binary search, then step outward. Use the same helper in `edgeFallbackY` and `param.ts` `joinPartner` (sorted by `s`, then compare the screen distance of the nearest few).
-- **status:** open
+- **status:** fixed
+- **fix:** Defined samples are indexed in an ordered set (`sortedset.ts`, chunked sorted arrays, insert and predecessor/successor in O(log n + 512)). `findPartner`, `edgeFallbackY` and the break limits in `resolveBreaks` use it instead of scanning every sample; `param.ts` `joinPartner` looks at the nearest 8 defined samples on the far side in parameter order. Repros: NaN storm at `maxEvals: 1e7` 189 s to 0.37 s; `sqrt(sin(320 x))` 324 ms to 15 ms; `sin(1/x)` 44 ms to 6.5 ms per call (the remaining gap to 5 ms is PLOT-SM-14's marker noise).
 
 ### PLOT-SM-4: A budget stop inside `refineUndefined` spins 2,000,000 steps and then throws work away
 
@@ -149,7 +152,8 @@ Ranked by impact: security (unbounded time or memory), then wrong results, then 
 - **Evidence:** `param.ts:500-503` `addMarker` records any coordinates, while `function.ts:979-984` drops non-finite ones. `traceParamCurve({ fn: s => (1e300 s, 1/s), lo: -1, hi: 1 }, V)` returns `pole` markers at `py = ±7.1e19` and `end` markers at `px = ±8e301`.
 - **Invariant broken:** P4: markers carry drawable pixel coordinates.
 - **Suggested fix:** share the function plotter's `addMarker` guard, and drop or clamp markers outside the clip box `[-4w, 5w] x [-4h, 5h]` the paths already use.
-- **status:** open
+- **status:** fixed
+- **fix:** `makeMarker` (`markers.ts`) is the one constructor for markers in all four tracers: it drops non-finite coordinates and markers outside the clip box `[-4w, 5w] x [-4h, 5h]`; a `pole` outside the box is moved onto its edge (its maths x and y are recomputed from the clamped pixel, so the mapping still holds). The repro now gives two `pole` markers at the clip box corners.
 
 ## Fix groups
 
