@@ -87,6 +87,7 @@ export class Figure extends FigureHist {
     super(opts);
     this.solver = new StateSolver({
       list: this.list,
+      states: () => this.stateRecs,
       env: this.env,
       byId: (id) => this.byIdMap.get(id),
       version: () => this.structureVersion,
@@ -110,9 +111,24 @@ export class Figure extends FigureHist {
 
   /** Runs one pass over everything marked since the last flush, then delivers the batched events. */
   override flush(force = false): FrameDelta {
-    const d = super.flush(force);
+    if (this.busy) return { valueIds: [], styleIds: [], undefinedChanges: [], ran: 0 };
+    // a frame outside any operation starts with no faults, so a rule that throws every frame cannot grow the list
+    if (this.opDepth === 0) this.faults = [];
+    if (this.opDepth > 0) return this.flushNow(force);
+    let d: FrameDelta;
+    try {
+      d = this.flushNow(force);
+    } catch {
+      // a frame that fails halfway must not take the host down; the next pass recomputes everything the clock reads
+      this.markClockDirty();
+      d = { valueIds: [], styleIds: [], undefinedChanges: [], ran: 0 };
+    }
     this.deliver();
     return d;
+  }
+
+  private flushNow(force: boolean): FrameDelta {
+    return super.flush(force);
   }
 
   protected override onFreeWritten(rec: ObjRec): void {
@@ -153,8 +169,9 @@ export class Figure extends FigureHist {
    * from the beat starts unless given. Only `t`, `bt` and `beat` change; the view, the selection and history are untouched.
    */
   setClock(t: number, opts: { bt?: number; beat?: number; flush?: boolean } = {}): FrameDelta | ErrorObject {
-    if (typeof t !== 'number' || t !== t) {
-      return err('bad_argument', { line: 0, col: 1, endCol: 1 }, { command: 'setClock', why: 'the time must be a number' }, { recovery: 'fix_line', fingerprintKey: 'setClock' });
+    if (this.busy) return this.busyError('setClock');
+    if (typeof t !== 'number' || !Number.isFinite(t)) {
+      return err('bad_argument', { line: 0, col: 1, endCol: 1 }, { command: 'setClock', why: 'the time must be a finite number' }, { recovery: 'fix_line', fingerprintKey: 'setClock' });
     }
     if (typeof opts !== 'object' || opts === null) opts = {};
     const { from, to } = this.clockRange();
@@ -359,7 +376,7 @@ export class Figure extends FigureHist {
    * views filter by the cursor. One `step` event.
    */
   stepTo(n: number): void {
-    if (typeof n !== 'number' || n !== n) return;
+    if (typeof n !== 'number' || n !== n || this.busy) return;
     const k = Math.max(0, Math.min(this.list.length, Math.floor(n)));
     this.stepCursor = k >= this.list.length ? undefined : k;
     this.queue({ ev: 'step', n: k });
@@ -449,6 +466,7 @@ export class Figure extends FigureHist {
 
   protected load(text: string, mode: 'lenient' | 'strict', group: boolean): LoadReport {
     const at: Span = { line: 1, col: 1, endCol: 1 };
+    if (this.busy) return { ok: false, applied: 0, skipped: 0, errors: [this.busyError('load')], warnings: [] };
     if (typeof text !== 'string') {
       const e = err('tool_input', at, { tool: 'load', expected: 'the text of a script' }, { recovery: 'fix_line', fingerprintKey: 'load' });
       return { ok: false, applied: 0, skipped: 0, errors: [e], warnings: [] };

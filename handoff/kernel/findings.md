@@ -80,14 +80,16 @@ Related findings that one change should fix together (pipeline.md: fix every cas
 
 ### KERN-SM-5. A seek with states has no step budget: `setClock(Infinity)` never returns
 
-- **Impact:** hang. Status: open.
+- **Impact:** hang. Status: fixed.
+- **fix:** a seek takes at most 400,000 grid steps per call and setClock rejects a non-finite t; a seek further than that leaves the states undefined (timeout) and later flushes catch up; checkpoints are capped at 2,000 by doubling the spacing.
 - **Evidence:** `figure(['s1 = state(1)', "s1' = -s1"])`: `setClock(100)` takes 9.9 ms, `setClock(1000)` 70 ms with 2,000 checkpoints kept; time grows linearly, so `setClock(1e6)` is about 70 s and keeps about 2 million `Float64Array` checkpoints. Without `@clock`, `clockRange()` is `{ from: 0, to: Infinity }` (`graph/figure.ts:132`), `setClock` accepts `Infinity` (it rejects only NaN, line 156), and `StateSolver.at(n)` (`clock/solver.ts:343`) loops `for (let i = from; i < n; i++)` with `n = Infinity`: the call never returns. The fixer notes list `1e9` as not done; it is a hang reachable from one host call or one film value.
 - **Invariant broken:** K11: work and memory per seek are bounded; K10: `t` is a finite number inside the film range.
 - **Suggested fix (group E):** reject a non-finite `t` in `setClock` (`bad_argument`); give `at()` a step budget per call (for example 240 × 60 steps), stop at the frontier and report `timeout` on the states (undefined with reason `timeout`, design errors.md 2) until later calls catch up; thin checkpoints beyond a cap (keep every k-th).
 
 ### KERN-SM-6. Reading a value in lazy mode recurses once per stale ancestor: `RangeError` at the default limits
 
-- **Impact:** crash (throws across the boundary). Status: open.
+- **Impact:** crash (throws across the boundary). Status: fixed.
+- **fix:** pull collects the stale ancestors with a stack and computes them in ascending order, so no recursion.
 - **Evidence:** a 5,000-object chain `h = 1`, `c1 = h + 1`, `c<i> = c<i-1> + 1` (the default `objects` limit); `f.setDemand([])`; `f.setFree('h', 2, 'api')`; `f.flush()`; `f.value('c4999')` throws `RangeError: Maximum call stack size exceeded`. The same with `limits: { objects: 20000 }`. Path: `readValue` → `pull` (`graph/core.ts:276`), which calls `pull` on each stale input before computing; one frame per link.
 - **Invariant broken:** K3: no public read throws; the walks are iterative (K2 says so for the graph, `pull` breaks it).
 - **Suggested fix (group F):** make `pull` iterative: collect the stale ancestors with `ancestorRecs` (or an explicit stack), sort by `order`, compute each once.
@@ -102,7 +104,8 @@ Related findings that one change should fix together (pipeline.md: fix every cas
 
 ### KERN-SM-8. A rule that re-enters the figure during a pass makes `flush` throw; `faults` grows every frame
 
-- **Impact:** crash (throws across the boundary); unbounded memory. Status: open.
+- **Impact:** crash (throws across the boundary); unbounded memory. Status: fixed.
+- **fix:** a figure operation called while a rule runs (runCommand depth) returns tool_busy; faults are capped at 100 and cleared at the start of each frame outside an operation; a frame that throws returns an empty delta.
 - **Evidence:**
   - A command `Sneaky(x)` whose rule calls `fig.apply('Delete(k)')` once, on a figure `a = 1`, `k = a + 1`, `m = Sneaky(a)`, `n = k + m`: `setFree('a', 2, 'api')` then `flush()` throws `TypeError: Cannot read properties of undefined (reading 'inputs')`. The nested delete removes records while `FigureCore.flush` (`graph/core.ts:623`) walks order indices computed before it.
   - `figure(['a = 1', 'u = Unlucky(a + 0 * t)'])`, `setFree('a', 13, 'api')`, then 1,000 × `setClock(i)`: `faults` holds 999 entries. `runCommand` pushes on every throw (`graph/core.ts:388`) and only line operations clear the list.
@@ -145,7 +148,8 @@ Related findings that one change should fix together (pipeline.md: fix every cas
 
 ### KERN-SM-12. Some free Texts are saved in a form that does not load
 
-- **Impact:** wrong results (a saved figure does not reopen; data loss). Status: open.
+- **Impact:** wrong results (a saved figure does not reopen; data loss). Status: fixed.
+- **fix:** setFree on a Text parses the saved line and refuses (bad_argument, or limit for line length) any text that does not read back as the same text; the language has no escape for typographic quotes or carriage returns, so those are refused, not escaped.
 - **Evidence:** `figure(['s = "hi"'])`, `setFree('s', v, 'api')`, `Figure.fromScript(f.toScript())`:
 
 | `v` | Load |
@@ -211,14 +215,16 @@ Measured in Node 22, warm, on the scratch probe (median of three where shown). T
 
 ### KERN-SM-16. Any structural change restarts the state solver from the film start
 
-- **Impact:** speed (misses the 0.3 ms line target; grows with `t`). Status: open.
+- **Impact:** speed (misses the 0.3 ms line target; grows with `t`). Status: fixed.
+- **fix:** the solver compares a signature of the states, their rates and everything they read (identities and free values) after a structure change and keeps its checkpoints when it is unchanged.
 - **Evidence:** `figure(['s1 = state(1)', "s1' = -s1"])`, `setClock(100)`, then `apply('q = 5')` takes 6.6 ms, and at `t = 1000` about 70 ms (K11 timings: 0.07 ms per film second). `StateSolver.rebuild` (`clock/solver.ts:87`) clears every checkpoint when `structureVersion` changes, and `wire`, `unwire` and `renumber` bump it for any object. The next `flush` (the line's own `settle`) re-integrates from `t0`. During a load into a figure whose clock is not at 0 this happens on every line.
 - **Invariant broken:** K11: a change that does not touch a state, a rate or their inputs does not restart the integration.
 - **Suggested fix (group E):** keep a separate solver version that changes only when the layout, the cone or the inputs change (compare the set of state ids, rate rules and cone ids after a rebuild, and keep checkpoints when equal).
 
 ### KERN-SM-17. The cost of adding an object grows with the figure, so a load is quadratic
 
-- **Impact:** speed (targets met today; 5,000 lines take 441 ms). Status: open.
+- **Impact:** speed (targets met today; 5,000 lines take 441 ms). Status: fixed.
+- **fix:** names differing by case come from a lower-case map, renumber starts at the insert or remove position, and the solver reads a maintained set of state objects instead of scanning the list (20,000-object chain builds in 0.3 s).
 - **Evidence:** `fromScript` of `n` lines `v<i> = <i>`: 1,000 lines 27 ms, 2,000 84 ms, 4,000 288 ms. 200 more adds cost 14 ms on a 2,000-object figure and 24 ms on a 4,000-object one. Each add runs the `confusable_name` scan over every name with `toLowerCase` (`graph/tx.ts:591`) and `renumber(0)` over the whole list (`graph/base.ts:148`), even when appending at the end.
 - **Invariant broken:** kernel design 13.2: about 100 µs per line whatever the figure size (bulk load).
 - **Suggested fix:** keep a `Map<lowercase name, names>` updated on add, rename and remove; renumber only from the insert position (`renumber(pos)`).

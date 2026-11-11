@@ -6,7 +6,8 @@
  * cut-off); one pass per flush, in ascending order, so inputs are final when a rule runs; values of objects nobody
  * looks at can be left stale and are computed when read (`setDemand`). No DOM, no timers, no wall clock.
  */
-import type { ErrorKind } from '../contracts/errors';
+import type { ErrorKind, ErrorObject } from '../contracts/errors';
+import { err } from '../errors/table';
 import type { Name, ObjId, UndefReason } from '../contracts/values';
 import { resolveLimits } from '../errors/limits';
 import type { Limits } from '../errors/limits';
@@ -72,6 +73,9 @@ export class ObjRec {
 
 export type Listener = (ev: FigureEvent) => void;
 
+/** The most rule faults kept for one operation. */
+const MAX_FAULTS = 100;
+
 export interface FigureOptions {
   /** Commands from the areas; the kernel's own actions are always added. */
   commands?: CommandRegistry | readonly CommandSpec[] | CommandTable;
@@ -114,6 +118,8 @@ export class FigureCore {
 
   readonly byIdMap = new Map<ObjId, ObjRec>();
   readonly byNameMap = new Map<Name, ObjRec>();
+  /** The same records by lower-case name, to find names that differ only by case without scanning the figure (KERN-SM-17). */
+  protected readonly byLowerMap = new Map<string, Set<ObjRec>>();
   readonly list: ObjRec[] = [];
   protected nextId = 1;
   /** Bumped by every change of structure; cached closures older than this are rebuilt. */
@@ -135,6 +141,8 @@ export class FigureCore {
 
   /** Commands whose rules threw during the current operation. */
   protected faults: string[] = [];
+  /** How many rules are running now. A figure operation called from inside a rule is refused with `tool_busy` (KERN-SM-8). */
+  protected ruleDepth = 0;
   protected readonly ruleCache = new WeakMap<readonly CompiledArg[], CommandRule>();
   protected pass: Pass | null = null;
   protected readonly listeners = new Set<Listener>();
@@ -279,12 +287,28 @@ export class FigureCore {
     return r.cell;
   }
 
+  /**
+   * Computes a stale object and the stale objects it reads. Iterative: the stale ancestors are collected with a stack and
+   * computed in ascending order (inputs first), so a chain of any length is safe (KERN-SM-6).
+   */
   protected pull(r: ObjRec): void {
     if (!r.stale) return;
-    r.stale = false;
-    for (const i of r.inputs) if (i.stale) this.pull(i);
-    if (r.p.kind === 'rule') this.setCell(r, this.compute(r));
-    if (r.range !== undefined || r.rangeIn.length > 0) this.updateRange(r);
+    const todo: ObjRec[] = [];
+    const seen = new Set<ObjRec>();
+    const stack: ObjRec[] = [r];
+    while (stack.length > 0) {
+      const x = stack.pop() as ObjRec;
+      if (seen.has(x) || !x.stale) continue;
+      seen.add(x);
+      todo.push(x);
+      for (const i of x.inputs) if (i.stale && !seen.has(i)) stack.push(i);
+    }
+    if (todo.length > 1) todo.sort((a, b) => a.order - b.order);
+    for (const x of todo) {
+      x.stale = false;
+      if (x.p.kind === 'rule') this.setCell(x, this.compute(x));
+      if (x.range !== undefined || x.rangeIn.length > 0) this.updateRange(x);
+    }
   }
 
   protected setCell(r: ObjRec, cell: Cell): boolean {
@@ -339,6 +363,7 @@ export class FigureCore {
 
   /** The `runCommand` hook given to the compiler: evaluates arguments, finds the rule and runs it. */
   readonly runCommand = (spec: CommandSpec, form: CommandForm, args: readonly CompiledArg[], env: Env): unknown => {
+    this.ruleDepth++;
     try {
       let rule = this.ruleCache.get(args);
       if (!rule) {
@@ -391,11 +416,23 @@ export class FigureCore {
       if ((out === undefined || (typeof out === 'number' && out !== out)) && env.reason === undefined) env.reason = 'not_finite';
       return out;
     } catch {
-      this.faults.push(spec.name);
+      if (this.faults.length < MAX_FAULTS) this.faults.push(spec.name);
       if (env.reason === undefined) env.reason = 'not_finite';
       return undefined;
+    } finally {
+      this.ruleDepth--;
     }
   };
+
+  /** True while a rule runs: the figure is mid-update, so an operation called now would change what the update walks. */
+  protected get busy(): boolean {
+    return this.ruleDepth > 0;
+  }
+
+  /** The error an operation returns when called from inside a rule. */
+  protected busyError(tool: string): ErrorObject {
+    return err('tool_busy', { line: 0, col: 1, endCol: 1 }, {}, { hint: `${tool} cannot run while a rule is running; a rule must not change the figure.`, fingerprintKey: tool });
+  }
 
   /** Compile options every line is compiled with. */
   compileOptions(selfId: ObjId): CompileOptions {
@@ -592,6 +629,7 @@ export class FigureCore {
    * order, each rule once, and only when an input actually changed value.
    */
   flush(force = false): FrameDelta {
+    if (this.busy) return { valueIds: [], styleIds: [], undefinedChanges: [], ran: 0 };
     const drivers = this.stateDriver ? this.stateDriver() : [];
     for (const s of drivers) this.dirty.add(s);
     if (this.dirty.size === 0 && !this.clockDirty && !force) return { valueIds: [], styleIds: [], undefinedChanges: [], ran: 0 };

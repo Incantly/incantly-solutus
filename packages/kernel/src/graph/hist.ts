@@ -164,6 +164,7 @@ export class FigureHist extends FigureTx {
 
   /** Removes an object and everything built from it. */
   delete(x: Name | ObjId, opts: ApplyOptions = {}): TxResult {
+    if (this.busy) return this.busyError('delete');
     const r = this.need(x);
     if (r instanceof ObjRec === false) return r as ErrorObject;
     this.faults = [];
@@ -243,6 +244,7 @@ export class FigureHist extends FigureTx {
 
   /** Changes the name of an object. Definition texts that mention it are regenerated from their trees. */
   rename(x: Name | ObjId, to: Name, opts: ApplyOptions = {}): TxResult {
+    if (this.busy) return this.busyError('rename');
     const r = this.need(x);
     if (r instanceof ObjRec === false) return r as ErrorObject;
     this.faults = [];
@@ -265,8 +267,7 @@ export class FigureHist extends FigureTx {
       return this.fail(parsed, 'name_taken', { name: to, type: holder.p.type.k }, { related: [holder.p.name], hint: `${to} is already a ${holder.p.type.k}. Choose another name.`, recovery: 'rewrite', fingerprintKey: to }, s, e);
     }
     if (holder === rec) return this.okResult(parsed, 'rename', `${from} already has that name`, rep, { name: from, id: rec.id });
-    const lower = to.toLowerCase();
-    for (const o of this.list) if (o !== rec && o.p.name.toLowerCase() === lower) rep.warnings.push(makeNotice('confusable_name', { name: to, other: o.p.name }));
+    for (const o of this.confusablesOf(to, [rec])) rep.warnings.push(makeNotice('confusable_name', { name: to, other: o.p.name }));
     if (opts.dryRun) return this.okResult(parsed, 'rename', `${from} -> ${to}`, rep, { name: from, dryRun: true, affected: rec.kids.map((k) => k.p.name) });
 
     // who has to be rewritten: the object, the readers of its value, the owners of rules that read it, states whose rates read it
@@ -381,6 +382,7 @@ export class FigureHist extends FigureTx {
   }
 
   protected stepHistory(dir: 'undo' | 'redo', unit: UndoUnit, parsed?: ParsedLine): TxResult {
+    if (this.busy) return this.busyError(dir);
     this.commitDrag();
     const e = dir === 'undo' ? this.journal.takeUndo(unit) : this.journal.takeRedo();
     if (!e) return this.fail(parsed, 'nothing_to_undo', { what: dir }, { recovery: 'skip', hint: dir === 'undo' ? 'Nothing has been done yet.' : 'Nothing has been undone.', fingerprintKey: dir });
@@ -456,6 +458,7 @@ export class FigureHist extends FigureTx {
     }
     const over = this.batchBudget(lines);
     if (over) return { ok: false, results: [over], applied: 0, rolledBack: false, changed: emptyReport(), notices: [] };
+    if (this.busy) return { ok: false, results: [this.busyError('applyBatch')], applied: 0, rolledBack: false, changed: emptyReport(), notices: [] };
     this.commitDrag();
     const mode = opts.mode ?? 'atomic';
     const failed = new Map<string, { line: number; kind: import('../contracts/errors').ErrorKind }>();
@@ -537,6 +540,7 @@ export class FigureHist extends FigureTx {
   }
 
   protected writeFree(x: Name | ObjId, value: unknown, why: WriteWhy, opts: SetFreeOptions): WriteResult {
+    if (this.busy) return this.busyError('setFree');
     const r = this.need(x);
     if (r instanceof ObjRec === false) return r as ErrorObject;
     const rec = r as ObjRec;
@@ -570,6 +574,11 @@ export class FigureHist extends FigureTx {
     }
     if (typeof v === 'string' && v.length > this.limits.textLength) {
       return err('limit', at, { limit: 'text_length', max: this.limits.textLength, got: v.length, what: 'characters in a text' }, { recovery: 'rewrite', fingerprintKey: 'text_length' });
+    }
+    if (typeof v === 'string') {
+      // a free Text is saved as `name = "..."` on one line; it must read back as the same text (KERN-SM-12)
+      const back = this.textReadsBack(rec.p.name, v);
+      if (back !== true) return back;
     }
     if (typeof v === 'number') {
       const rg = rec.range;
@@ -611,6 +620,25 @@ export class FigureHist extends FigureTx {
     return { ok: true, changed: true };
   }
 
+  /**
+   * True when the saved line of a free Text reads back as the same text; else the error to return. The language has no escape
+   * for a typographic quote or a carriage return, and a line is capped at `lineLength`, so such a Text could be saved but not loaded.
+   */
+  protected textReadsBack(name: string, v: string): true | ErrorObject {
+    const at = { line: 0, col: 1, endCol: 1 };
+    const pr = parseLine(`${name} = ${valueSource({ k: 'Text' } as never, v) as string}`, { line: 1, limits: this.langLimits });
+    if (!pr.ok) {
+      if (pr.kind === 'limit') {
+        return err('limit', at, { limit: 'line_length', max: this.limits.lineLength, got: v.length, what: 'characters in the saved line of a text' }, { recovery: 'rewrite', fingerprintKey: 'line_length' });
+      }
+      return err('bad_argument', at, { command: 'setFree', why: `${name} cannot hold this text: a script cannot store one of its characters` }, { hint: 'Leave out typographic quotes and line breaks other than \n.', recovery: 'fix_line', fingerprintKey: name });
+    }
+    const n = pr.value.node;
+    const e = n.k === 'define' ? n.expr : undefined;
+    if (e && e.k === 'str' && (v === '' ? e.parts.length === 0 : e.parts.length === 1 && e.parts[0] === v)) return true;
+    return err('bad_argument', at, { command: 'setFree', why: `${name} cannot hold this text: a script cannot store one of its characters` }, { hint: 'Leave out typographic quotes and line breaks other than \n.', recovery: 'fix_line', fingerprintKey: name });
+  }
+
   /** Hook for the solver: a free value that a rate may read changed. */
   protected onFreeWritten(_rec: ObjRec): void {
     // the solver checks its inputs when it syncs
@@ -618,7 +646,7 @@ export class FigureHist extends FigureTx {
 
   /** Journals the gesture writes since the last commit as one entry (first value to last). */
   commitDrag(): { committed: number } {
-    if (this.gesture.size === 0) return { committed: 0 };
+    if (this.busy || this.gesture.size === 0) return { committed: 0 };
     const changes: Change[] = [];
     for (const [rec, before] of this.gesture) {
       if (this.byIdMap.get(rec.id) !== rec) continue;
@@ -728,6 +756,7 @@ export class FigureHist extends FigureTx {
 
   /** Moves an object to an order index. Without `withInputs` a move that would break an order is `forward_reference`. */
   move(x: Name | ObjId, to: number, opts: { withDependencies?: boolean } = {}): TxResult {
+    if (this.busy) return this.busyError('move');
     const r = this.need(x);
     if (r instanceof ObjRec === false) return r as ErrorObject;
     const rec = r as ObjRec;

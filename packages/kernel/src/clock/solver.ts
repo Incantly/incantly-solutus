@@ -12,12 +12,15 @@ import type { ObjId } from '../contracts/values';
 import { makeNotice } from '../errors/notices';
 import type { ObjRec } from '../graph/core';
 import type { Cell } from '../graph/types';
+import { sameValue } from '../graph/values';
 import { evaluate } from '../language/compile';
 import type { Env } from '../language/runtime';
 
 /** What the solver needs from the figure. */
 export interface SolverAccess {
   readonly list: readonly ObjRec[];
+  /** The state objects (any order). */
+  readonly states: () => ReadonlySet<ObjRec>;
   readonly env: Env;
   readonly byId: (id: ObjId) => ObjRec | undefined;
   readonly version: () => number;
@@ -45,6 +48,17 @@ interface Layout {
 
 const CHECKPOINT_STEPS = 120;
 const BLOW_UP = 1e9;
+/** The most grid steps one `sync` takes. A seek further than this finishes over the next calls (KERN-SM-5). */
+export const MAX_SEEK_STEPS = 400000;
+/** The most checkpoints kept; beyond it every second one is dropped and the spacing doubles. */
+const MAX_CHECKPOINTS = 2000;
+
+/** What the integration depends on, to tell whether a structure change leaves it valid (KERN-SM-16). */
+interface Signature {
+  readonly h: number;
+  readonly t0: number;
+  readonly deps: readonly { readonly rec: ObjRec; readonly free: boolean; readonly value: unknown; readonly rates: unknown }[];
+}
 
 export class StateSolver {
   private version = -1;
@@ -54,6 +68,11 @@ export class StateSolver {
   private inputs = new Set<ObjId>();
   private y0: Float64Array | undefined;
   private checkpoints = new Map<number, Float64Array>();
+  /** Grid steps between checkpoints; doubles each time the cap is reached. */
+  private cpStride = CHECKPOINT_STEPS;
+  /** True when the last `at` stopped at the step budget before reaching its target. */
+  private short = false;
+  private sig: Signature | undefined;
   private curN = -1;
   private curY: Float64Array | undefined;
   /** For each group, the grid step at which it became undefined; `Infinity` while it is healthy. */
@@ -87,15 +106,19 @@ export class StateSolver {
   private rebuild(): void {
     if (this.version === this.fig.version() && !this.dirtyInputs) return;
     const rebuilt = this.version !== this.fig.version();
+    const restart = this.dirtyInputs;
     this.version = this.fig.version();
     this.dirtyInputs = false;
-    this.checkpoints.clear();
+    const keep = rebuilt && !restart && this.sig !== undefined ? { checkpoints: this.checkpoints, stride: this.cpStride, curN: this.curN, curY: this.curY, y0: this.y0, failedAt: this.failedAt } : undefined;
+    this.checkpoints = new Map();
+    this.cpStride = CHECKPOINT_STEPS;
     this.curN = -1;
     this.curY = undefined;
+    this.short = false;
     this.failedAt = this.failedAt.map(() => Infinity);
     this.y0 = undefined;
     if (!rebuilt) return;
-    const states = this.fig.list.filter((r) => r.p.kind === 'state');
+    const states = [...this.fig.states()].sort((a, b) => a.order - b.order);
     this.layout = [];
     this.missing = [];
     let off = 0;
@@ -125,8 +148,29 @@ export class StateSolver {
     for (const l of this.layout) for (const o of this.fig.downOf(l.rec)) downOfStates.add(o);
     this.cone = anc.filter((r) => r.p.kind === 'rule' && downOfStates.has(r.order));
     for (const r of anc) if (r.p.kind === 'free') this.inputs.add(r.id);
-    for (const r of this.fig.ancestorRecs(this.layout.map((l) => l.rec))) if (r.p.kind === 'free') this.inputs.add(r.id);
+    const ancStates = this.fig.ancestorRecs(this.layout.map((l) => l.rec));
+    for (const r of ancStates) if (r.p.kind === 'free') this.inputs.add(r.id);
     this.formGroups();
+    // the integration depends on the states, their rates, and everything those read: when none of it changed (a line about
+    // some other object), the checkpoints stay and the next seek does not start over
+    const sig = this.signatureOf([...new Set([...anc, ...ancStates])]);
+    if (keep && this.layout.length > 0 && sameSignature(this.sig as Signature, sig) && keep.failedAt.length === this.failedAt.length) {
+      this.checkpoints = keep.checkpoints;
+      this.cpStride = keep.stride;
+      this.curN = keep.curN;
+      this.curY = keep.curY;
+      this.y0 = keep.y0;
+      this.failedAt = keep.failedAt;
+    }
+    this.sig = sig;
+  }
+
+  private signatureOf(recs: readonly ObjRec[]): Signature {
+    return {
+      h: this.h,
+      t0: this.t0,
+      deps: recs.map((rec) => ({ rec, free: rec.p.kind === 'free', value: rec.p.kind === 'free' ? rec.p.value : rec.p.compiled, rates: rec.p.rates })),
+    };
   }
 
   /** Connected groups: two states are in one group when the rates of one read the other, directly or through objects. */
@@ -341,6 +385,7 @@ export class StateSolver {
    * holds its last values here; `sync` reports it as undefined.
    */
   private at(n: number): Float64Array {
+    this.short = false;
     if (this.y0 === undefined) this.y0 = this.initial();
     let from: number;
     let y: Float64Array;
@@ -353,14 +398,26 @@ export class StateSolver {
       from = best;
       y = Float64Array.from(best === 0 ? this.y0 : (this.checkpoints.get(best) as Float64Array));
     }
-    for (let i = from; i < n; i++) {
+    // a budget per call: a far seek (or an open-ended film) cannot hang the host; the rest follows on the next calls
+    let i = from;
+    for (let steps = 0; i < n && steps < MAX_SEEK_STEPS; i++, steps++) {
       this.step(y, i);
       const m = i + 1;
-      if (m % CHECKPOINT_STEPS === 0 && !this.checkpoints.has(m)) this.checkpoints.set(m, Float64Array.from(y));
+      if (m % this.cpStride === 0 && !this.checkpoints.has(m)) {
+        this.checkpoints.set(m, Float64Array.from(y));
+        if (this.checkpoints.size > MAX_CHECKPOINTS) this.thin();
+      }
     }
-    this.curN = n;
+    this.short = i < n;
+    this.curN = i;
     this.curY = Float64Array.from(y);
     return y;
+  }
+
+  /** Keeps every second checkpoint and doubles the spacing, so memory stays bounded however long the film runs. */
+  private thin(): void {
+    this.cpStride *= 2;
+    for (const k of [...this.checkpoints.keys()]) if (k % this.cpStride !== 0) this.checkpoints.delete(k);
   }
 
   /**
@@ -379,9 +436,12 @@ export class StateSolver {
     const frac = pos - n;
     const between = frac > 1e-9;
     let result: Float64Array;
+    let behind = false;
     try {
       const yn = this.at(n);
-      if (between) {
+      behind = this.short;
+      if (behind) result = yn;
+      else if (between) {
         // cubic Hermite between grid points n and n+1
         const d0 = new Float64Array(this.dim);
         const d1 = new Float64Array(this.dim);
@@ -409,6 +469,11 @@ export class StateSolver {
       });
     }
     const changed: ObjRec[] = [];
+    if (behind) {
+      // the target is further than one call goes: the states are undefined (timeout) until later calls catch up
+      for (const l of this.layout) if (this.fig.write(l.rec, { defined: false, reason: 'timeout' })) changed.push(l.rec);
+      return changed;
+    }
     const out = new Set<number>();
     this.groupNames.forEach((names, g) => {
       const at = this.failedAt[g] as number;
@@ -434,4 +499,14 @@ export class StateSolver {
   }
 
   private readonly warnedAt = new Set<string>();
+}
+
+function sameSignature(a: Signature, b: Signature): boolean {
+  if (a.h !== b.h || a.t0 !== b.t0 || a.deps.length !== b.deps.length) return false;
+  for (let i = 0; i < a.deps.length; i++) {
+    const x = a.deps[i] as Signature['deps'][number];
+    const y = b.deps[i] as Signature['deps'][number];
+    if (x.rec !== y.rec || x.free !== y.free || x.rates !== y.rates || (x.free ? !sameValue(x.value, y.value) : x.value !== y.value)) return false;
+  }
+  return true;
 }

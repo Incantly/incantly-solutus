@@ -25,6 +25,8 @@ export class FigureBase extends FigureCore {
   /** Comments and directives, kept in place. */
   items: ScriptItem[] = [];
   /** Index in `items` of each non-repeatable directive, by name (kept by `insertItem` and `removeItem`). */
+  /** The state objects, so the solver does not scan the figure when it checks its structure (KERN-SM-17). */
+  readonly stateRecs = new Set<ObjRec>();
   protected readonly directiveAt = new Map<string, number>();
   /** The reveal cursor of the step list; `undefined` means every step is shown. */
   stepCursor: number | undefined;
@@ -129,10 +131,12 @@ export class FigureBase extends FigureCore {
     const old = r.p;
     this.unwire(r);
     if (old.name !== p.name) {
-      if (this.byNameMap.get(old.name) === r) this.byNameMap.delete(old.name);
-      this.byNameMap.set(p.name, r);
+      this.nameDrop(old.name, r);
+      this.nameSet(p.name, r);
     }
     r.p = p;
+    if (p.kind === 'state') this.stateRecs.add(r);
+    else this.stateRecs.delete(r);
     r.infoCache = undefined;
     r.styleCache = undefined;
     r.down = undefined;
@@ -142,12 +146,16 @@ export class FigureBase extends FigureCore {
 
   /** Puts objects into the list at their positions (ascending), registers them and wires their edges. */
   protected insertRecs(items: readonly { rec: ObjRec; pos: number }[]): void {
+    let from = this.list.length;
     for (const { rec, pos } of items) {
-      this.list.splice(Math.min(pos, this.list.length), 0, rec);
+      const at = Math.min(pos, this.list.length);
+      if (at < from) from = at;
+      this.list.splice(at, 0, rec);
       this.byIdMap.set(rec.id, rec);
-      this.byNameMap.set(rec.p.name, rec);
+      this.nameSet(rec.p.name, rec);
+      if (rec.p.kind === 'state') this.stateRecs.add(rec);
     }
-    this.renumber(0);
+    this.renumber(from);
     for (const { rec } of items) {
       rec.infoCache = undefined;
       rec.styleCache = undefined;
@@ -158,10 +166,13 @@ export class FigureBase extends FigureCore {
 
   /** Takes objects out of the list, unwires them and frees their names. */
   protected removeRecs(recs: readonly ObjRec[]): void {
+    let from = this.list.length;
     for (const r of recs) {
+      if (r.order < from) from = r.order;
       this.unwire(r);
       this.byIdMap.delete(r.id);
-      if (this.byNameMap.get(r.p.name) === r) this.byNameMap.delete(r.p.name);
+      this.nameDrop(r.p.name, r);
+      this.stateRecs.delete(r);
       this.dirty.delete(r);
       this.gesture.delete(r);
       this.queue({ ev: 'remove', id: r.id, name: r.p.name });
@@ -173,7 +184,32 @@ export class FigureBase extends FigureCore {
       if (!gone.has(x)) this.list[w++] = x;
     }
     this.list.length = w;
-    this.renumber(0);
+    this.renumber(Math.min(from, w));
+  }
+
+  protected nameSet(name: Name, rec: ObjRec): void {
+    this.byNameMap.set(name, rec);
+    const lower = name.toLowerCase();
+    let set = this.byLowerMap.get(lower);
+    if (!set) this.byLowerMap.set(lower, (set = new Set()));
+    set.add(rec);
+  }
+
+  protected nameDrop(name: Name, rec: ObjRec): void {
+    if (this.byNameMap.get(name) === rec) this.byNameMap.delete(name);
+    const lower = name.toLowerCase();
+    const set = this.byLowerMap.get(lower);
+    if (set) {
+      set.delete(rec);
+      if (set.size === 0) this.byLowerMap.delete(lower);
+    }
+  }
+
+  /** The objects whose name differs from `name` only by case, other than those in `except`. */
+  protected confusablesOf(name: Name, except: readonly ObjRec[] = []): ObjRec[] {
+    const set = this.byLowerMap.get(name.toLowerCase());
+    if (!set) return [];
+    return [...set].filter((o) => o.p.name !== name && !except.includes(o)).sort((a, b) => a.order - b.order);
   }
 
   protected applyReorder(lo: number, recs: readonly ObjRec[]): void {

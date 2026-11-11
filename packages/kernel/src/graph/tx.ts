@@ -115,6 +115,7 @@ export class FigureTx extends FigureBase {
       return err('tool_input', { line: 0, col: 1, endCol: 1 }, { tool: 'apply', expected: 'a line of text' }, { recovery: 'fix_line', fingerprintKey: 'apply' });
     }
     if (typeof opts !== 'object' || opts === null) opts = {};
+    if (this.busy) return this.busyError('apply');
     this.faults = [];
     this.txEntry = undefined;
     const lineNo = opts.line ?? (typeof input === 'string' ? 1 : input.line);
@@ -626,8 +627,7 @@ export class FigureTx extends FigureBase {
       for (const r of recs) pass.added.add(r);
       rep.added.push(...names);
       for (const n of names) {
-        const lower = n.toLowerCase();
-        for (const o of this.list) if (o.p.name !== n && o.p.name.toLowerCase() === lower && !recs.includes(o)) notices.push(makeNotice('confusable_name', { name: n, other: o.p.name }));
+        for (const o of this.confusablesOf(n, recs)) notices.push(makeNotice('confusable_name', { name: n, other: o.p.name }));
       }
       const pre = new Map<ObjRec, Cell>();
       recs.forEach((r, i) => pre.set(r, cells[i] as Cell));
