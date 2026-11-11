@@ -11,6 +11,8 @@ import type { Figure } from '../../graph/figure';
 import type { AngleUnit, AnimAnchor, LoopMode } from './types';
 import { commit, unitScale } from './commit';
 import type { CommitResult } from './commit';
+import { displayUnitOf, loopOf, periodOf, seedOf } from './props';
+import { captureResetInitial } from './run';
 
 const frac = (x: number): number => x - Math.floor(x);
 const mod2 = (x: number): number => ((x % 2) + 2) % 2;
@@ -188,31 +190,6 @@ export interface TickReport {
   readonly skipped: readonly { readonly name: string; readonly reason: string }[];
 }
 
-function extOf(figure: Figure, id: ObjId, key: string): unknown {
-  const view = figure.get(id);
-  return view ? (view.style.ext as Record<string, unknown>)[key] : undefined;
-}
-
-function loopOf(figure: Figure, id: ObjId): LoopMode {
-  const v = extOf(figure, id, 'loop');
-  return v === 'up' || v === 'down' || v === 'once' || v === 'random' || v === 'bounce' ? v : 'bounce';
-}
-
-function periodOf(figure: Figure, id: ObjId): number {
-  const v = extOf(figure, id, 'period');
-  return typeof v === 'number' && v > 0 && Number.isFinite(v) ? v : 10;
-}
-
-function seedOf(figure: Figure, id: ObjId): number {
-  const v = extOf(figure, id, 'seed');
-  return typeof v === 'number' && Number.isInteger(v) ? v : 1;
-}
-
-function unitOf(figure: Figure, id: ObjId): AngleUnit | 'none' {
-  const v = extOf(figure, id, 'unit');
-  return v === 'rad' || v === 'deg' || v === 'turn' || v === 'grad' || v === 'none' ? v : 'none';
-}
-
 /**
  * One player tick: writes animationValueAt(t) for every anchored slider with the
  * animation write kind and runs one pass. Finished `once` sliders are written to
@@ -237,9 +214,10 @@ export function tickAnimations(figure: Figure, t: number): TickReport {
       skipped.push({ name: view.name, reason: 'range_undefined' });
       continue;
     }
+    captureResetInitial(figure, id);
     const loop = loopOf(figure, id);
     const period = periodOf(figure, id);
-    const unit = unitOf(figure, id);
+    const unit = displayUnitOf(figure, id);
     const scale = unitScale(unit);
     const w = range.max / scale - range.min / scale;
     const p0 = w > 0 ? (anchor.v0 / scale - range.min / scale) / w : 0;

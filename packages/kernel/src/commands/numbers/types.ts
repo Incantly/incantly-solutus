@@ -141,13 +141,6 @@ export interface BoolView {
 
 /* ------------------------------ controls (3.1) ------------------------------ */
 
-export interface ButtonObject {
-  readonly type: 'Button';
-  readonly label: string;
-  readonly place: Placement;
-  readonly enabled: boolean;
-}
-
 /** Runtime value of a Choice object, computed by its rule from options and index. */
 export interface ChoiceValue {
   /** The live options (a reference to the evaluated list, never copied). */
@@ -178,9 +171,11 @@ export interface ButtonValue {
 
 export type HandlerEvent = 'click' | 'change' | 'input' | 'dragend' | 'load';
 
+export type SkipReason = 'guard_false' | 'undefined_argument' | 'out_of_range' | 'loop_range' | 'broken';
+
 export type StepResult =
   | { readonly step: number; readonly status: 'done'; readonly wrote?: readonly { readonly name: string; readonly from: string; readonly to: string }[] }
-  | { readonly step: number; readonly status: 'skipped'; readonly reason: 'guard_false' | 'undefined_argument' | 'out_of_range' | 'loop_range' | 'broken' };
+  | { readonly step: number; readonly status: 'skipped'; readonly reason: SkipReason };
 
 export interface HandlerRun {
   readonly handler: { readonly target: string; readonly event: string };

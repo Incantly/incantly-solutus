@@ -7,9 +7,10 @@
  */
 
 import type { Figure } from '../../graph/figure';
-import type { ObjId } from '../../contracts/values';
+import type { Name, ObjId } from '../../contracts/values';
 import type { AngleUnit, NumberDisplay } from './types';
 import { unitScale } from './commit';
+import { inferUnitFromDefinition } from './props';
 
 export const DASH = '–';
 export const DEGREE = '°';
@@ -294,11 +295,16 @@ function intIn(v: unknown, lo: number, hi: number): number | undefined {
 }
 
 /** Resolve the effective display of a Number object: own props, then figure defaults, then auto. */
-export function resolveDisplay(figure: Figure, id: ObjId): NumberDisplay {
-  const ext = (figure.get(id)?.style.ext ?? {}) as Record<string, unknown>;
+export function resolveDisplay(figure: Figure, x: Name | ObjId): NumberDisplay {
+  const view = figure.get(x);
+  const ext = (view?.style.ext ?? {}) as Record<string, unknown>;
   const unitRaw = ext['unit'];
+  // An explicit unit always wins; otherwise the definition text is scanned for an
+  // angle constant or Angle(...) (the kernel's angle tag is not publicly readable).
   const unit: AngleUnit | 'none' =
-    unitRaw === 'rad' || unitRaw === 'deg' || unitRaw === 'turn' || unitRaw === 'grad' || unitRaw === 'none' ? unitRaw : 'none';
+    unitRaw === 'rad' || unitRaw === 'deg' || unitRaw === 'turn' || unitRaw === 'grad' || unitRaw === 'none'
+      ? unitRaw
+      : (inferUnitFromDefinition(view?.definition ?? '') ?? 'none');
   const digits = intIn(ext['digits'], 0, 15);
   const sig = intIn(ext['sig'], 1, 15);
   const trimRaw = ext['trim'];
@@ -317,8 +323,8 @@ export function resolveDisplay(figure: Figure, id: ObjId): NumberDisplay {
 }
 
 /** Format the current value of a Number object for the readout. */
-export function formatObjectNumber(figure: Figure, id: ObjId): string {
-  const v = figure.value(id);
+export function formatObjectNumber(figure: Figure, x: Name | ObjId): string {
+  const v = figure.value(x);
   if (typeof v !== 'number') return DASH;
-  return formatDisplayNumber(v, resolveDisplay(figure, id));
+  return formatDisplayNumber(v, resolveDisplay(figure, x));
 }

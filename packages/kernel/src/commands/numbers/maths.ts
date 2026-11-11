@@ -22,12 +22,6 @@ export const GRAD = Math.PI / 200;
 
 const roundHalfAway = (x: number): number => (x < 0 ? -Math.floor(-x + 0.5) : Math.floor(x + 0.5));
 
-function divRound(num: bigint, den: bigint): bigint {
-  const q = num / den;
-  const r = num % den;
-  return r * 2n >= den ? q + 1n : q;
-}
-
 /**
  * Round to n significant figures (half away from zero on the decimal expansion).
  * Returns NaN for a bad n (non-integer or < 1); the spec wrapper records the reason.
