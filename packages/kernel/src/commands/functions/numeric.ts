@@ -177,54 +177,103 @@ export interface ScanResult {
 }
 
 /**
- * Scans `[a, b]` with `samples + 1` points for sign changes and near-zero minima of
- * |f|. Deterministic: fixed sample count, no view, no clock.
+ * Scans `[a, b]` for sign changes and near-zero minima of |f|: a coarse uniform
+ * pass (scale, undefined samples, identical zero) plus adaptive subdivision that
+ * follows oscillation (dense roots like sin(1/x) near 0) down to a minimum width.
+ * Deterministic: fixed counts and depths, every evaluation counted against `work`.
  */
 export function scanBrackets(f: Fn1, a: number, b: number, samples: number, tol: number, work: RuleWork): ScanResult {
   const brackets: [number, number][] = [];
   const touches: number[] = [];
+  // Coarse pass for scale, undefined samples and the identical-zero test.
   const n = Math.max(8, Math.min(8192, Math.floor(samples)));
   const h = (b - a) / n;
-  let prevX = a;
-  let prevV = f(a);
-  if (!work.spend(1)) return { brackets, touches, scale: 0, sawUndefined: false, identicalZero: false, spent: true };
-  let sawUndefined = prevV !== prevV;
-  let scale = prevV === prevV ? Math.abs(prevV) : 0;
-  let prevPrevV = Number.NaN;
-  let prevPrevX = Number.NaN;
-  let allZero = prevV === prevV && prevV === 0;
-  for (let i = 1; i <= n; i++) {
+  let sawUndefined = false;
+  let scale = 0;
+  let allZero = true;
+  for (let i = 0; i <= n; i++) {
     if (!work.spend(1)) return { brackets, touches, scale, sawUndefined, identicalZero: false, spent: true };
-    const x = i === n ? b : a + i * h;
-    const v = f(x);
+    const v = f(i === n ? b : a + i * h);
     if (v !== v) {
       sawUndefined = true;
-      prevPrevV = prevV;
-      prevPrevX = prevX;
-      prevX = x;
-      prevV = v;
+      allZero = false;
       continue;
     }
     if (Math.abs(v) > scale) scale = Math.abs(v);
     if (v !== 0) allZero = false;
-    if (prevV === prevV) {
-      if ((prevV < 0 && v > 0) || (prevV > 0 && v < 0)) brackets.push([prevX, x]);
-      else if (prevV === 0 && v !== 0) brackets.push([prevX, prevX]);
-      // interior local minimum of |f|: a possible touching root
-      if (prevPrevV === prevPrevV) {
-        const a0 = Math.abs(prevPrevV);
-        const a1 = Math.abs(prevV);
-        const a2 = Math.abs(v);
-        if (a1 <= a0 && a1 <= a2 && a1 <= tol * Math.max(1, scale)) touches.push(prevX);
+  }
+  const identicalZero = allZero || (scale <= tol && !sawUndefined);
+  if (identicalZero) return { brackets, touches, scale, sawUndefined, identicalZero, spent: false };
+  // Adaptive subdivision: isolate sign changes and follow oscillation.
+  const minW = (b - a) / 16384;
+  const stack: [number, number, number][] = [[a, b, 0]];
+  const seen = new Set<string>();
+  while (stack.length > 0) {
+    const [lo, hi, depth] = stack.pop() as [number, number, number];
+    const m = 8;
+    const xs: number[] = [];
+    const vs: number[] = [];
+    for (let i = 0; i <= m; i++) {
+      if (!work.spend(1)) return { brackets, touches, scale, sawUndefined, identicalZero, spent: true };
+      const x = i === m ? hi : lo + ((hi - lo) * i) / m;
+      xs.push(x);
+      const v = f(x);
+      vs.push(v);
+      if (v === v && Math.abs(v) > scale) scale = Math.abs(v);
+    }
+    const w = hi - lo;
+    for (let i = 0; i < m; i++) {
+      const u = vs[i] as number;
+      const v = vs[i + 1] as number;
+      const x0 = xs[i] as number;
+      const x1 = xs[i + 1] as number;
+      if (u !== u || v !== v) {
+        if (w / m > minW && depth < 16) stack.push([x0, x1, depth + 1]);
+        continue;
+      }
+      if ((u < 0 && v > 0) || (u > 0 && v < 0)) {
+        if (w / m <= minW || depth >= 16) {
+          const key = `${x0},${x1}`;
+          if (!seen.has(key)) {
+            seen.add(key);
+            brackets.push([x0, x1]);
+          }
+        } else stack.push([x0, x1, depth + 1]);
+        continue;
+      }
+      if (u === 0) {
+        const key = `${x0},${x0}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          brackets.push([x0, x0]);
+        }
+      }
+      // Oscillation without a sign change here: subdivide while the midpoint
+      // deviates strongly (a hidden wiggle) and width allows.
+      if (w / m > minW && depth < 16) {
+        const mid = f(0.5 * (x0 + x1));
+        if (!work.spend(1)) return { brackets, touches, scale, sawUndefined, identicalZero, spent: true };
+        if (mid === mid) {
+          const dev = Math.abs(mid - 0.5 * (u + v));
+          const local = Math.max(Math.abs(u), Math.abs(v), Math.abs(mid), 1e-300);
+          if (dev > 0.25 * local) {
+            stack.push([x0, x1, depth + 1]);
+            continue;
+          }
+        }
+      }
+      // Interior local minimum of |f| among the samples: a possible touching root.
+      if (i > 0) {
+        const p = vs[i - 1] as number;
+        if (p === p) {
+          const a0 = Math.abs(p);
+          const a1 = Math.abs(u);
+          const a2 = Math.abs(v);
+          if (a1 <= a0 && a1 <= a2 && a1 <= tol * Math.max(1, scale)) touches.push(x0);
+        }
       }
     }
-    prevPrevV = prevV;
-    prevPrevX = prevX;
-    prevX = x;
-    prevV = v;
   }
-  void prevPrevX;
-  const identicalZero = allZero || (scale <= tol && !sawUndefined);
   return { brackets, touches, scale, sawUndefined, identicalZero, spent: false };
 }
 
@@ -234,6 +283,8 @@ export interface RootsResult {
   readonly sawUndefined: boolean;
   /** True when the budget ran out: the list may miss roots. */
   readonly spent: boolean;
+  /** True when the function looks identically zero on the interval. */
+  readonly identicalZero: boolean;
 }
 
 /**
@@ -243,15 +294,16 @@ export interface RootsResult {
  */
 export function findRoots(f: Fn1, a: number, b: number, tol: number, work: RuleWork, samples = 512): RootsResult {
   const scan = scanBrackets(f, a, b, samples, tol, work);
-  if (scan.spent) return { roots: [], sawUndefined: scan.sawUndefined, spent: true };
+  if (scan.spent) return { roots: [], sawUndefined: scan.sawUndefined, spent: true, identicalZero: false };
+  if (scan.identicalZero) return { roots: [], sawUndefined: scan.sawUndefined, spent: false, identicalZero: true };
   const scale = Math.max(1, scan.scale);
   const out: number[] = [];
   for (const [lo, hi] of scan.brackets) {
-    if (!work.spend(2)) return { roots: dedup(out, tol), sawUndefined: scan.sawUndefined, spent: true };
+    if (!work.spend(2)) return { roots: dedup(out, tol), sawUndefined: scan.sawUndefined, spent: true, identicalZero: false };
     const r = lo === hi ? lo : brent(f, lo, hi, work);
     if (r !== r || r < Math.min(a, b) - tol * scale || r > Math.max(a, b) + tol * scale) continue;
     const v = f(r);
-    if (!work.spend(1)) return { roots: dedup(out, tol), sawUndefined: scan.sawUndefined, spent: true };
+    if (!work.spend(1)) return { roots: dedup(out, tol), sawUndefined: scan.sawUndefined, spent: true, identicalZero: false };
     if (v === v && Math.abs(v) <= Math.sqrt(tol) * scale) out.push(r);
   }
   // Cluster touches closer than a few scan spacings (one touch, several samples); keep the deepest.
@@ -284,10 +336,10 @@ export function findRoots(f: Fn1, a: number, b: number, tol: number, work: RuleW
     const r = newton(f, m, work, tol);
     const at = r === r ? r : m;
     const v = f(at);
-    if (!work.spend(1)) return { roots: dedup(out, tol), sawUndefined: scan.sawUndefined, spent: true };
+    if (!work.spend(1)) return { roots: dedup(out, tol), sawUndefined: scan.sawUndefined, spent: true, identicalZero: false };
     if (v === v && Math.abs(v) <= Math.sqrt(tol) * scale) out.push(at);
   }
-  return { roots: dedup(out, tol), sawUndefined: scan.sawUndefined, spent: false };
+  return { roots: dedup(out, tol), sawUndefined: scan.sawUndefined, spent: false, identicalZero: false };
 }
 
 /** Sorts and merges values closer than `tol * max(1, |x|)`. */

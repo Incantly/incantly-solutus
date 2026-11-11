@@ -637,13 +637,13 @@ function intervalAB(call: RuleCall, ai: number): { readonly a: number; readonly 
 }
 
 /** Leftmost-first root search result shared by `Root` and `Roots`. */
-function rootsOn(call: RuleCall, f: Sampled1, a: number, b: number): { readonly roots: readonly number[] } | undefined {
+function rootsOn(call: RuleCall, f: Sampled1, a: number, b: number): { readonly roots: readonly number[]; readonly identicalZero: boolean } | undefined {
   const rr = findRoots(f.f, a, b, call.tol, call.work, 512);
   if (rr.spent) {
     call.fail('timeout', 'The work budget ran out.');
     return undefined;
   }
-  return { roots: rr.roots };
+  return { roots: rr.roots, identicalZero: rr.identicalZero };
 }
 
 function runRootInterval(call: RuleCall): unknown {
@@ -651,11 +651,9 @@ function runRootInterval(call: RuleCall): unknown {
   if (!f) return undefined;
   const ab = intervalAB(call, 1);
   if (!ab) return undefined;
-  const scan = scanBrackets(f.f, ab.a, ab.b, 512, call.tol, call.work);
-  if (scan.spent) return call.fail('timeout', 'The work budget ran out.');
-  if (scan.identicalZero) return { x: ab.a, y: 0 };
   const r = rootsOn(call, f, ab.a, ab.b);
   if (!r) return undefined;
+  if (r.identicalZero) return { x: ab.a, y: 0 };
   if (r.roots.length > 0) {
     const x = r.roots[0] as number;
     return { x, y: 0 };
@@ -710,11 +708,9 @@ function runRootsInterval(call: RuleCall): unknown {
   if (!f) return undefined;
   const ab = intervalAB(call, 1);
   if (!ab) return undefined;
-  const scan = scanBrackets(f.f, ab.a, ab.b, 512, call.tol, call.work);
-  if (scan.spent) return call.fail('timeout', 'The work budget ran out.');
-  if (scan.identicalZero) return call.fail('identically_zero', 'Every x is a root.');
   const r = rootsOn(call, f, ab.a, ab.b);
   if (!r) return undefined;
+  if (r.identicalZero) return call.fail('identically_zero', 'Every x is a root.');
   return r.roots.map((x) => ({ x, y: 0 }));
 }
 
@@ -1012,11 +1008,9 @@ function runIntersectFn(call: RuleCall): unknown {
     const v = g.f(x);
     return u === u && v === v ? u - v : Number.NaN;
   };
-  const scan = scanBrackets(h, ab.a, ab.b, 512, call.tol, call.work);
-  if (scan.spent) return call.fail('timeout', 'The work budget ran out.');
-  if (scan.identicalZero) return call.fail('identically_zero', 'f and g agree everywhere on the interval.');
   const rr = findRoots(h, ab.a, ab.b, call.tol, call.work, 512);
   if (rr.spent) return call.fail('timeout', 'The work budget ran out.');
+  if (rr.identicalZero) return call.fail('identically_zero', 'f and g agree everywhere on the interval.');
   const out: Pt[] = [];
   for (const x of rr.roots) {
     const y = f.f(x);

@@ -9,9 +9,9 @@ import type { RuleCall } from '../../graph/registry';
 import type { FunctionValue, RelationValue } from '../../language/runtime';
 import type { CommandForm, CommandSpec } from '../../language/table';
 import { sample2, sampleBody, numArg, isFin } from './sample';
-import { findRoots, hessian2, kappaStraight, nullspaceRect, quad } from './numeric';
+import { chebyshevNodes, findRoots, hessian2, kappaStraight, nullspaceRect, quad } from './numeric';
 import { fn2Value, form, lineFromPointDir, objSpec, p, fmt } from './rules';
-import { arcEven, fitAlgebraic, openSlice, sweepEnvelope, sweepLocus, toSampledCurve } from './locus';
+import { fitAlgebraic, openSlice, sweepEnvelope, sweepLocus, toSampledCurve } from './locus';
 import type { Coef2, CurveData, ImplicitCurveData, ParamCurveData, PiecewiseCurveData, PolyPiece } from './types';
 import { isCircle3, isLine3, isRelationValue } from './types';
 import {
@@ -557,14 +557,25 @@ function resolveParam(call: RuleCall, c: AnyCurve, s: number): { readonly p: Pt;
   return { p, v };
 }
 
-/** True when the speed at `s` vanishes next to its neighbours (a cusp or stop). */
+/**
+ * True when the speed at `s` vanishes next to its neighbours (a cusp or stop): an
+ * exact zero, or a tiny speed whose neighbours point in opposite directions (a
+ * finite-difference artifact at a cusp has truncation size but a meaningless
+ * direction, while a smooth slow curve keeps its direction).
+ */
 function isStill(c: AnyCurve, s: number, v: Pt, tol: number): boolean {
   const r = curveRange(c);
   const h = r ? Math.max((r[1] - r[0]) * 1e-4, 1e-9 * Math.max(1, Math.abs(s))) : 1e-6;
   const a = curveVel(c, s - h);
   const b = curveVel(c, s + h);
   const m = Math.max(a ? Math.hypot(a.x, a.y) : 0, b ? Math.hypot(b.x, b.y) : 0, 1e-300);
-  return Math.hypot(v.x, v.y) <= tol * m;
+  const sp = Math.hypot(v.x, v.y);
+  if (sp <= tol * m) return true;
+  if (!a || !b || sp > 1e-3 * m) return false;
+  const na = Math.hypot(a.x, a.y);
+  const nb = Math.hypot(b.x, b.y);
+  if (!(na > 0) || !(nb > 0)) return true;
+  return (a.x * b.x + a.y * b.y) / (na * nb) < 0;
 }
 
 /** First non-zero higher direction (acceleration, then 3rd/4th differences) for a cusp tangent. */
@@ -1849,23 +1860,32 @@ function runLocusEquationFree(call: RuleCall): unknown {
   if (!ids) return undefined;
   const setup = openSlice(call, ids.mover, ids.target);
   if (!setup.ok) return call.fail(setup.reason, setup.detail);
-  const sw = sweepLocus(setup.value, from, to);
-  if (sw.spent) return call.fail('timeout', 'The work budget ran out.');
-  const pts = arcEven(sw.pieces, 600);
+  // Fit and held-out points come straight from the slice (exact): polyline
+  // interpolation noise would break the nullspace detection. Chebyshev nodes
+  // for the fit, offset uniform nodes for the held-out set.
   const lo = Math.min(from, to);
   const hi = Math.max(from, to);
+  const fitS = chebyshevNodes(600, lo, hi);
+  const fitCells = setup.value.run(Array.from(fitS));
+  const pts = cellsToPts(fitCells);
+  if (pts.length < 60) return call.fail('degenerate_points', 'The locus covers too little of the curve to fit an equation.');
   const heldCells = setup.value.run(Array.from({ length: 200 }, (_, j) => lo + ((hi - lo) * (j + 0.5)) / 200));
-  const held: Pt[] = [];
-  for (const cell of heldCells) {
-    if (cell.defined && typeof cell.value === 'object' && cell.value !== null) {
-      const v = cell.value as Pt;
-      if (typeof v.x === 'number' && typeof v.y === 'number') held.push(v);
-    }
-  }
+  const held = cellsToPts(heldCells);
   const fit = fitAlgebraic(pts, held, call.tol);
   if (!fit.ok) return call.fail(fit.reason, fit.detail);
   const data: ImplicitCurveData = { kind: 'curve', curve: 'implicit', f: fit.value.f, level: 0, poly: fit.value.poly, text: fit.value.text };
   return data;
+}
+
+function cellsToPts(cells: readonly import('../../graph/types').Cell[]): Pt[] {
+  const out: Pt[] = [];
+  for (const cell of cells) {
+    if (cell.defined && typeof cell.value === 'object' && cell.value !== null) {
+      const v = cell.value as Pt;
+      if (typeof v.x === 'number' && typeof v.y === 'number' && v.x === v.x && v.y === v.y) out.push({ x: v.x, y: v.y });
+    }
+  }
+  return out;
 }
 
 function runEnvelopeP(call: RuleCall): unknown {

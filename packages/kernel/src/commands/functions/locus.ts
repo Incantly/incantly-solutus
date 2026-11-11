@@ -599,45 +599,6 @@ function sweepEnvelopeKind(
 
 /* ------------------------------ algebraic fit ------------------------------ */
 
-/** Selects `m` points evenly by arc length over all pieces (deterministic). */
-export function arcEven(pieces: readonly (readonly Pt[])[], m: number): Pt[] {
-  let total = 0;
-  for (const piece of pieces) {
-    for (let i = 1; i < piece.length; i++) total += Math.hypot((piece[i] as Pt).x - (piece[i - 1] as Pt).x, (piece[i] as Pt).y - (piece[i - 1] as Pt).y);
-  }
-  if (!(total > 0) || m < 1) return [];
-  const out: Pt[] = [];
-  let pi = 0;
-  let segStart = 0;
-  let acc = 0;
-  for (let k = 0; k < m; k++) {
-    const target = (total * (k + 0.5)) / m;
-    while (pi < pieces.length) {
-      const piece = pieces[pi] as readonly Pt[];
-      while (segStart < piece.length - 1) {
-        const a = piece[segStart] as Pt;
-        const b = piece[segStart + 1] as Pt;
-        const seg = Math.hypot(b.x - a.x, b.y - a.y);
-        if (acc + seg >= target) {
-          const t = seg === 0 ? 0 : (target - acc) / seg;
-          out.push({ x: a.x + t * (b.x - a.x), y: a.y + t * (b.y - a.y) });
-          break;
-        }
-        acc += seg;
-        segStart++;
-      }
-      if (out.length > k) break;
-      pi++;
-      segStart = 0;
-    }
-    if (out.length <= k) {
-      const last = pieces[pieces.length - 1] as readonly Pt[];
-      out.push(last[last.length - 1] as Pt);
-    }
-  }
-  return out;
-}
-
 function chebRow(x: number, d: number, out: Float64Array): void {
   out[0] = 1;
   if (d >= 1) out[1] = x;
