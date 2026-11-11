@@ -6,6 +6,7 @@
  */
 import type { CommandForm, CommandSpec, ParamSpec } from '../../language/table';
 import type { CommandRule } from '../../graph/registry';
+import { formCheckFor, refuseFor } from './checks';
 import { T_CONIC_LIKE, T_LINE_LIKE, T_LINE_LIKE_VEC, T_PATH, T_REGION, T_SHAPEN, T_SHAPEN_NCF, T_SHAPEN_NF } from './types';
 
 const T_LL = T_LINE_LIKE;
@@ -25,22 +26,28 @@ interface FormDef {
   readonly explain?: string;
 }
 
-const cmd = (name: string, group: string, forms: readonly FormDef[]): CommandSpec => ({
-  name,
-  kind: 'object',
-  group,
-  forms: forms.map(
-    (f): CommandForm => ({
-      params: f.params,
-      ...(f.rest ? { rest: f.rest } : {}),
-      returns: f.returns,
-      rule: () => f.rule,
-      summary: f.summary,
-      ...(f.unit ? { unit: f.unit } : {}),
-      ...(f.explain ? { explain: f.explain } : {}),
+const cmd = (name: string, group: string, forms: readonly FormDef[]): CommandSpec => {
+  const refuse = refuseFor(name);
+  return {
+    name,
+    kind: 'object',
+    group,
+    forms: forms.map((f): CommandForm => {
+      const check = formCheckFor(name, f.params);
+      return {
+        params: f.params,
+        ...(f.rest ? { rest: f.rest } : {}),
+        returns: f.returns,
+        rule: () => f.rule,
+        summary: f.summary,
+        ...(f.unit ? { unit: f.unit } : {}),
+        ...(f.explain ? { explain: f.explain } : {}),
+        ...(check ? { check } : {}),
+      };
     }),
-  ),
-});
+    ...(refuse ? { refuse } : {}),
+  };
+};
 
 import * as P from './points';
 import * as C from './conicrules';

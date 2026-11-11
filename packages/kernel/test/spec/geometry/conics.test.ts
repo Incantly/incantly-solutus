@@ -154,7 +154,7 @@ describe('Conic from numbers, lists, points and equations', () => {
     const P5 = [[3, 0], [0, 2], [-3, 0], [0, -2], [1.5, 1.7320508075688772]];
     const base = [...P5.map((q, i) => `p${i + 1} = (${q[0]}, ${q[1]})`), 'k = Conic(p1, p2, p3, p4, p5)'];
     const [A, B, C, D, E, F] = evalIn<number[]>(base, 'Coefficients(k)') as [number, number, number, number, number, number];
-    for (const [x, y] of P5) expect(Math.abs(A * x * x + B * x * y + C * y * y + D * x + E * y + F)).toBeLessThan(1e-12 * 10);
+    for (const [x, y] of P5 as [number, number][]) expect(Math.abs(A * x * x + B * x * y + C * y * y + D * x + E * y + F)).toBeLessThan(1e-12 * 10);
   });
   it('five points with four collinear are undefined: collinear', () => {
     expect(undefIn([], 'Conic((0, 0), (1, 0), (2, 0), (3, 0), (0, 1))')).toBe('collinear');

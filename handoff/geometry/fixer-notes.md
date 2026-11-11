@@ -124,3 +124,23 @@ Note on the tester's report, item 21 (`Dot`/`Cross` hint): correct, but owned by
 - `not_whole` for `Vertex`/`Side`; `Vertex` of a segment or ray and the `Intersect` index forms keep
   `index_out_of_range` (the points-lines doc has no `not_whole` row).
 - Line and ray `len`: `PointOn`, `Along`, `ParamOf`, `PerpVector`.
+
+## Check-time round (after the kernel hook)
+
+The kernel now has check-time hooks on commands (`CommandForm.check`, `CommandSpec.refuse`; errors design 5.0), merged in from `feat/kernel-check`. Spec tests failing: 19, from 36. Lint and typecheck are clean.
+
+### Done
+
+- `packages/kernel/src/commands/geometry/checks.ts` holds every geometry hook; `commands.ts` attaches them by command and parameter name.
+- Literal checks (`bad_argument`, or `limit` for more than 1,000 sides): `Vertex(segment, k)`, `Vertex(polygon, k)`, `Side(polygon, k)` below 1, `Intersect(line, line, k)`, `TriangleCenter(..., n)`, `Circle(O, r)` with a negative radius, `Conic([...])` with a list that is not 6 long, `Polygon(..., sides)`.
+- Arguments that fit no form: `PointOn` (`not_a_path`), `PointIn` (`not_a_region`), `Polygon(A, B)` (`too_few_points`, hint names `Segment`), `Reflect(shape, circle)` (`not_supported`), `Move(shape, not a transform)` (`not_a_transform`).
+- Nine geometry error kinds are in the error table with codes C010 to C018. C010 to C029 are kept for geometry.
+- The `Vector * Vector` hint names `Dot` and `Cross` when the figure has those commands.
+
+### Still failing, and what each needs
+
+- `Side(tri, 7)` (1 test): the hook is told the type of `tri`, not how many corners it has. Needs the hook to see facts about a named object.
+- `Conic(x^3 + y == 1)`, `Conic(sin(x) + y == 0)`, `Conic(x^2 + y^2)` (3 tests): the hook is not told the degree of an equation or whether it is a polynomial, and the last one is refused earlier by the language as `free_variable`.
+- `Locus` (4 tests) and `PointOn` dragging and `ParamOf` (4 tests), `Rigid` (1 test): a command needs a value of its own that a drag writes. This is the "free parameters owned by a command" item above.
+- `Asymptote(f)`, `Curvature(P, f)`, `OsculatingCircle(P, f)`, `Reflect(f, vertical line)` (5 tests): forms that belong to the functions area.
+- `Intersect(sin, cos)` with no interval (1 test): needs a check on whether a function argument is a polynomial.

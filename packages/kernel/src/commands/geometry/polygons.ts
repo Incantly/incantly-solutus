@@ -12,6 +12,9 @@ import { arcLengthEllipse, centralParams, ellipseCircumference, sectorAreaEllips
 import { lineLikeOf, linePolyPoints } from './intersect';
 import { pointInPolygon, rule } from './points';
 
+/** Most sides a regular polygon may have (polygons-transforms design, limits). */
+export const MAX_POLYGON_SIDES = 1000;
+
 const P = (call: RuleCall, i: number): V2 => call.values[i] as V2;
 const N = (call: RuleCall, i: number): number => call.values[i] as number;
 
@@ -191,8 +194,8 @@ function checkSides(call: RuleCall, n: number): number | undefined {
     call.fail('too_few_sides', `a regular polygon needs at least 3 sides, found ${k}`);
     return undefined;
   }
-  if (k > 1000) {
-    call.fail('limit', 'at most 1000 sides');
+  if (k > MAX_POLYGON_SIDES) {
+    call.fail('limit', `at most ${MAX_POLYGON_SIDES} sides`);
     return undefined;
   }
   return k;

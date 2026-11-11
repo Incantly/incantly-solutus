@@ -80,6 +80,15 @@ const META: Record<ErrorKind, Meta> = {
   empty_list_type: { key: 'lang.empty_list_type', params: [], description: 'An empty list whose element type nothing fixes.' },
   duplicate_arg: { key: 'lang.duplicate_arg', params: ['name'], description: 'A named argument given twice.' },
   not_a_binder: { key: 'lang.not_a_binder', params: [], description: 'An expression where a bare binder name is required.' },
+  not_a_path: { key: 'lang.not_a_path', params: ['command', 'why'], description: 'A value that is not a path where a command needs one.' },
+  not_a_region: { key: 'lang.not_a_region', params: ['command', 'why'], description: 'A value that is not a region where a command needs one.' },
+  too_few_points: { key: 'lang.too_few_points', params: ['command', 'why'], description: 'A shape written with fewer points than it needs.' },
+  not_supported: { key: 'lang.not_supported', params: ['command', 'why'], description: 'A combination of arguments the command has no result for.' },
+  not_a_transform: { key: 'lang.not_a_transform', params: ['command', 'why'], description: 'A value that is not a transform where a command needs one.' },
+  not_quadratic: { key: 'lang.not_quadratic', params: ['command', 'why'], description: 'An equation of degree above 2 where a conic is needed.' },
+  not_polynomial: { key: 'lang.not_polynomial', params: ['command', 'why'], description: 'An equation that is not a polynomial in x and y where a conic is needed.' },
+  bad_equation: { key: 'lang.bad_equation', params: ['command', 'why'], description: 'An expression with no == where an equation is needed.' },
+  no_dependency: { key: 'lang.no_dependency', params: ['command', 'why'], description: 'A locus whose traced point does not depend on the mover.' },
 };
 
 function buildTable(): Record<ErrorKind, ErrorSpec> {
