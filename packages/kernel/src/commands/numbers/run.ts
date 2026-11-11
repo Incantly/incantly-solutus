@@ -86,9 +86,9 @@ function captureInitial(figure: Figure, id: ObjId): void {
  */
 export function ensureResetTracking(figure: Figure): void {
   const s = resetStateFor(figure);
-  for (const o of figure.objects()) captureInitial(figure, o.id);
   if (s.tracked) return;
   s.tracked = true;
+  for (const o of figure.objects()) captureInitial(figure, o.id);
   figure.on((ev) => {
     if (ev.ev === 'add') captureInitial(figure, ev.id);
   });

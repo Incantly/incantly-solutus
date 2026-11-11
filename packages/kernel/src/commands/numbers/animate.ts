@@ -11,7 +11,7 @@ import type { Figure } from '../../graph/figure';
 import type { AngleUnit, AnimAnchor, LoopMode } from './types';
 import { commit, unitScale } from './commit';
 import type { CommitResult } from './commit';
-import { displayUnitOf, loopOf, periodOf, seedOf } from './props';
+import { inferUnitFromDefinition } from './props';
 import { captureResetInitial } from './run';
 
 const frac = (x: number): number => x - Math.floor(x);
@@ -215,9 +215,19 @@ export function tickAnimations(figure: Figure, t: number): TickReport {
       continue;
     }
     captureResetInitial(figure, id);
-    const loop = loopOf(figure, id);
-    const period = periodOf(figure, id);
-    const unit = displayUnitOf(figure, id);
+    // One view read per slider per tick: loop/period/seed/unit all come from its ext.
+    const ext = view.style.ext as Record<string, unknown>;
+    const loopRaw = ext['loop'];
+    const loop: LoopMode = loopRaw === 'up' || loopRaw === 'down' || loopRaw === 'once' || loopRaw === 'random' || loopRaw === 'bounce' ? loopRaw : 'bounce';
+    const periodRaw = ext['period'];
+    const period = typeof periodRaw === 'number' && periodRaw > 0 && Number.isFinite(periodRaw) ? periodRaw : 10;
+    const seedRaw = ext['seed'];
+    const seed = typeof seedRaw === 'number' && Number.isInteger(seedRaw) ? seedRaw : 1;
+    const unitRaw = ext['unit'];
+    const unit: AngleUnit | 'none' =
+      unitRaw === 'rad' || unitRaw === 'deg' || unitRaw === 'turn' || unitRaw === 'grad' || unitRaw === 'none'
+        ? unitRaw
+        : (inferUnitFromDefinition(view.definition) ?? 'none');
     const scale = unitScale(unit);
     const w = range.max / scale - range.min / scale;
     const p0 = w > 0 ? (anchor.v0 / scale - range.min / scale) / w : 0;
@@ -237,7 +247,7 @@ export function tickAnimations(figure: Figure, t: number): TickReport {
       hi: range.max,
       period,
       anchor,
-      seed: seedOf(figure, id),
+      seed,
       step: range.step ?? 'auto',
       unit,
       t,

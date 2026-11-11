@@ -81,29 +81,33 @@ function buttonSpec(): CommandSpec {
   };
 }
 
-const CHOICE_ELEMENTS: readonly string[] = ['Number', 'Text', 'Color', 'Point', 'Function', 'Bool'];
+const CHOICE_ELEMENTS = 'List<Number>|List<Text>|List<Color>|List<Point>|List<Function>|List<Bool>';
 
 function choiceSpec(): CommandSpec {
-  const forms: CommandForm[] = CHOICE_ELEMENTS.map((el) => ({
-    params: [P('options', `List<${el}>`), P('index', 'Number', { optional: true, default: 1 })],
-    returns: 'Choice',
-    rule: () =>
-      ({
-        run: (call) => {
-          const rawValue = call.values[0] as readonly unknown[] | undefined;
-          const index = (call.values[1] as number | undefined) ?? 1;
-          const raw = Array.isArray(rawValue) ? rawValue : rawValue instanceof Float64Array ? Array.from(rawValue) : undefined;
-          if (!raw) return call.fail('input_undefined');
-          const count = raw.length;
-          if (count === 0) return call.fail('empty_choice');
-          if (count > NUMBERS_LIMITS.choiceOptions) return call.fail('limit', `more than ${NUMBERS_LIMITS.choiceOptions} options`);
-          if (typeof index !== 'number' || !Number.isInteger(index)) return call.fail('not_integer', `Choice index ${String(index)}`);
-          const idx = Math.min(count, Math.max(1, index));
-          return { options: raw, index: idx, value: raw[idx - 1], count };
-        },
-      }) as CommandRule,
-    summary: `a dropdown of ${el} options`,
-  }));
+  // One form with a union: one form per element type would tie on an empty list
+  // (each adopts its hint) and the matcher reports ties as internal.
+  const forms: CommandForm[] = [
+    {
+      params: [P('options', CHOICE_ELEMENTS), P('index', 'Number', { optional: true, default: 1 })],
+      returns: 'Choice',
+      rule: () =>
+        ({
+          run: (call) => {
+            const rawValue = call.values[0] as readonly unknown[] | undefined;
+            const index = (call.values[1] as number | undefined) ?? 1;
+            const raw = Array.isArray(rawValue) ? rawValue : rawValue instanceof Float64Array ? Array.from(rawValue) : undefined;
+            if (!raw) return call.fail('input_undefined');
+            const count = raw.length;
+            if (count === 0) return call.fail('empty_choice');
+            if (count > NUMBERS_LIMITS.choiceOptions) return call.fail('limit', `more than ${NUMBERS_LIMITS.choiceOptions} options`);
+            if (typeof index !== 'number' || !Number.isInteger(index)) return call.fail('not_integer', `Choice index ${String(index)}`);
+            const idx = Math.min(count, Math.max(1, index));
+            return { options: raw, index: idx, value: raw[idx - 1], count };
+          },
+        }) as CommandRule,
+      summary: 'a dropdown of options',
+    },
+  ];
   return { name: 'Choice', kind: 'object', group: 'controls', forms };
 }
 
@@ -171,10 +175,9 @@ function setValueSpec(): CommandSpec {
     { params: [P('obj', 'Choice'), P('index', 'Number')], returns: null, rule: setValueRule, summary: 'select a dropdown option by index' },
     { params: [P('obj', 'Choice'), P('caption', 'Text')], returns: null, rule: setValueRule, summary: 'select a dropdown option by caption' },
     { params: [P('obj', 'Input'), P('text', 'Text')], returns: null, rule: setValueRule, summary: 'type into an input box' },
-    { params: [P('obj', 'List<Number>'), P('index', 'Number'), P('value', 'Number')], returns: null, rule: setValueRule, summary: 'set an element of a number list' },
-    { params: [P('obj', 'List<Text>'), P('index', 'Number'), P('value', 'Text')], returns: null, rule: setValueRule, summary: 'set an element of a text list' },
-    { params: [P('obj', 'List<Bool>'), P('index', 'Number'), P('value', 'Bool')], returns: null, rule: setValueRule, summary: 'set an element of a bool list' },
-    { params: [P('obj', 'List<Point>'), P('index', 'Number'), P('value', 'Point')], returns: null, rule: setValueRule, summary: 'set an element of a point list' },
+    // One union form: one form per element type would tie on an empty list target.
+    // The element type is validated at run time (an outcome error, not a check error).
+    { params: [P('obj', 'List<Number>|List<Text>|List<Bool>|List<Point>'), P('index', 'Number'), P('value', 'Number|Text|Bool|Point')], returns: null, rule: setValueRule, summary: 'set an element of a list' },
   ];
   return { name: 'SetValue', kind: 'action', group: 'controls', forms };
 }
