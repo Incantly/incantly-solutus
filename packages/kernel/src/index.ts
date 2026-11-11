@@ -9,5 +9,6 @@ export * from './language/index';
 export * from './errors/index';
 
 // the figure: store, graph, transactions, history
-export { Figure } from './graph/figure';
+export { Figure, SCRIPT_VERSION } from './graph/figure';
+export type { Step, LoadOpts, LoadReport, ScriptOpts, ObjectView, Slice } from './graph/figure';
 export type { FigureOptions } from './graph/core';

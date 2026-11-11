@@ -237,6 +237,8 @@ export interface BatchOptions {
   /** `atomic` (default): all lines or none. `independent`: every line applies or fails on its own. */
   mode?: 'atomic' | 'independent';
   force?: boolean;
+  /** The line number of each entry in the file it came from (default: its position, from 1). */
+  lines?: readonly number[];
 }
 
 export interface BatchResult {

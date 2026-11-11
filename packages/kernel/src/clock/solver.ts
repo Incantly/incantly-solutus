@@ -1,0 +1,334 @@
+/**
+ * States and rates (core design 7.2, docs/features/animation-time/design.md section 7): the solver advances every
+ * `state(...)` object with fixed-step fourth-order Runge-Kutta, so results do not depend on frame rate or seek path.
+ *
+ * Step 1/240 s (or `@solver step 1/n`), checkpoints every 120 steps (0.5 s), cubic Hermite dense output between grid
+ * points. A seek restores the latest checkpoint at or before the target and integrates forward. A value or a line that
+ * changes what a rate reads restarts the states from their initial values and replays to the current time.
+ * Deterministic: no wall clock, no random source.
+ */
+import type { Notice } from '../contracts/errors';
+import type { ObjId } from '../contracts/values';
+import { makeNotice } from '../errors/notices';
+import type { ObjRec } from '../graph/core';
+import type { Cell } from '../graph/types';
+import { evaluate } from '../language/compile';
+import type { Env } from '../language/runtime';
+
+/** What the solver needs from the figure. */
+export interface SolverAccess {
+  readonly list: readonly ObjRec[];
+  readonly env: Env;
+  readonly byId: (id: ObjId) => ObjRec | undefined;
+  readonly version: () => number;
+  readonly clockT: () => number;
+  /** The film start (`@clock a..b`), default 0. */
+  readonly t0: () => number;
+  /** The step as `1/n` (`@solver step 1/480`), default 240. */
+  readonly stepsPerSecond: () => number;
+  readonly ancestorRecs: (seeds: readonly ObjRec[]) => ObjRec[];
+  readonly downOf: (r: ObjRec) => Int32Array;
+  readonly compute: (r: ObjRec) => Cell;
+  readonly ensureSlots: (n: number) => void;
+  /** Writes a cell without events or change tracking beyond what a normal write does. */
+  readonly write: (r: ObjRec, c: Cell) => boolean;
+}
+
+interface Layout {
+  readonly rec: ObjRec;
+  readonly offset: number;
+  readonly point: boolean;
+  readonly order: number;
+}
+
+const CHECKPOINT_STEPS = 120;
+const BLOW_UP = 1e9;
+
+export class StateSolver {
+  private version = -1;
+  private layout: Layout[] = [];
+  private dim = 0;
+  private cone: ObjRec[] = [];
+  private inputs = new Set<ObjId>();
+  private y0: Float64Array | undefined;
+  private checkpoints = new Map<number, Float64Array>();
+  private curN = -1;
+  private curY: Float64Array | undefined;
+  private failedAt: number | undefined;
+  private h = 1 / 240;
+  private t0 = 0;
+  private dirtyInputs = false;
+  readonly warnings: Notice[] = [];
+  /** States without a rate rule, by name. */
+  missing: string[] = [];
+
+  constructor(private readonly fig: SolverAccess) {}
+
+  /** A free value that a rate or an initial value may read changed: restart. */
+  noteFree(rec: ObjRec): void {
+    if (this.inputs.has(rec.id)) this.dirtyInputs = true;
+  }
+
+  /** True when the figure has states at all (a cheap check for the frame loop). */
+  get active(): boolean {
+    this.rebuild();
+    return this.layout.length > 0;
+  }
+
+  /** Reads the figure's states and rates when the structure changed. */
+  private rebuild(): void {
+    if (this.version === this.fig.version() && !this.dirtyInputs) return;
+    const rebuilt = this.version !== this.fig.version();
+    this.version = this.fig.version();
+    this.dirtyInputs = false;
+    this.checkpoints.clear();
+    this.curN = -1;
+    this.curY = undefined;
+    this.failedAt = undefined;
+    this.y0 = undefined;
+    if (!rebuilt) return;
+    const states = this.fig.list.filter((r) => r.p.kind === 'state');
+    this.layout = [];
+    this.missing = [];
+    let off = 0;
+    for (const s of states) {
+      const point = s.p.type.k === 'Point';
+      const second = s.p.rates?.has(2) === true || s.p.checked.state?.velocity !== undefined;
+      const order = second ? 2 : 1;
+      this.layout.push({ rec: s, offset: off, point, order });
+      off += (point ? 2 : 1) * order;
+      if (!s.p.rates?.has(order)) this.missing.push(s.p.name);
+    }
+    this.dim = off;
+    this.h = 1 / Math.max(60, Math.min(4800, this.fig.stepsPerSecond()));
+    this.t0 = this.fig.t0();
+    // the rate cone: objects between the states and the rate expressions
+    const reads: ObjRec[] = [];
+    this.inputs = new Set();
+    for (const l of this.layout) {
+      for (const rr of l.rec.p.rates?.values() ?? []) for (const id of rr.checked.reads) {
+        const r = this.fig.byId(id);
+        if (r) reads.push(r);
+      }
+      for (const id of l.rec.p.checked.reads) this.inputs.add(id);
+    }
+    const anc = this.fig.ancestorRecs(reads);
+    const downOfStates = new Set<number>();
+    for (const l of this.layout) for (const o of this.fig.downOf(l.rec)) downOfStates.add(o);
+    this.cone = anc.filter((r) => r.p.kind === 'rule' && downOfStates.has(r.order));
+    for (const r of anc) if (r.p.kind === 'free') this.inputs.add(r.id);
+    for (const r of this.fig.ancestorRecs(this.layout.map((l) => l.rec))) if (r.p.kind === 'free') this.inputs.add(r.id);
+  }
+
+  private num(v: unknown): number {
+    return typeof v === 'number' ? v : Number.NaN;
+  }
+
+  /** Initial state vector at the film start, or undefined when an initial value is undefined. */
+  private initial(): Float64Array | undefined {
+    const env = this.fig.env;
+    const y = new Float64Array(this.dim);
+    const saved = env.t;
+    env.t = this.t0;
+    try {
+      for (const l of this.layout) {
+        const c = l.rec.p.compiled?.state;
+        if (!c) return undefined;
+        this.fig.ensureSlots(l.rec.p.checked.slots);
+        const v = c.initial(env);
+        const w = c.velocity ? c.velocity(env) : l.point ? { x: 0, y: 0 } : 0;
+        const comps = l.point ? 2 : 1;
+        if (l.point) {
+          const p = v as { x: number; y: number } | undefined;
+          const q = w as { x: number; y: number } | undefined;
+          if (!p || !q) return undefined;
+          y[l.offset] = p.x;
+          y[l.offset + 1] = p.y;
+          if (l.order === 2) {
+            y[l.offset + comps] = q.x;
+            y[l.offset + comps + 1] = q.y;
+          }
+        } else {
+          y[l.offset] = this.num(v);
+          if (l.order === 2) y[l.offset + comps] = this.num(w);
+        }
+      }
+    } finally {
+      env.t = saved;
+    }
+    for (let i = 0; i < y.length; i++) if (!Number.isFinite(y[i])) return undefined;
+    return y;
+  }
+
+  /** Puts a state vector into the state objects' cells (used while integrating, and for the final result). */
+  private load(y: Float64Array): void {
+    for (const l of this.layout) {
+      const v = l.point ? { x: y[l.offset] as number, y: y[l.offset + 1] as number } : (y[l.offset] as number);
+      l.rec.cell = { defined: true, value: v };
+    }
+  }
+
+  /** The derivative of the whole vector at `y` and time `t`. */
+  private deriv(y: Float64Array, t: number, out: Float64Array): boolean {
+    const env = this.fig.env;
+    this.load(y);
+    const savedT = env.t;
+    env.t = t;
+    try {
+      for (const r of this.cone) r.cell = this.fig.compute(r);
+      for (const l of this.layout) {
+        const comps = l.point ? 2 : 1;
+        const rate = l.rec.p.rates?.get(l.order);
+        if (l.order === 2) {
+          for (let k = 0; k < comps; k++) out[l.offset + k] = y[l.offset + comps + k] as number;
+        }
+        const base = l.offset + (l.order === 2 ? comps : 0);
+        if (!rate) {
+          for (let k = 0; k < comps; k++) out[base + k] = 0;
+          continue;
+        }
+        this.fig.ensureSlots(rate.checked.slots);
+        const res = evaluate(rate.compiled, env);
+        if (!res.defined) return false;
+        const v = res.value as unknown;
+        if (l.point) {
+          const p = v as { x?: number; y?: number };
+          if (typeof p?.x !== 'number' || typeof p.y !== 'number') return false;
+          out[base] = p.x;
+          out[base + 1] = p.y;
+        } else {
+          if (typeof v !== 'number') return false;
+          out[base] = v;
+        }
+      }
+    } finally {
+      env.t = savedT;
+    }
+    return true;
+  }
+
+  private k1 = new Float64Array(0);
+  private k2 = new Float64Array(0);
+  private k3 = new Float64Array(0);
+  private k4 = new Float64Array(0);
+  private tmp = new Float64Array(0);
+
+  /** One RK4 step from grid index n. Returns false when the state blows up or a rate is undefined. */
+  private step(y: Float64Array, n: number): boolean {
+    const d = this.dim;
+    if (this.k1.length !== d) {
+      this.k1 = new Float64Array(d);
+      this.k2 = new Float64Array(d);
+      this.k3 = new Float64Array(d);
+      this.k4 = new Float64Array(d);
+      this.tmp = new Float64Array(d);
+    }
+    const h = this.h;
+    const t = this.t0 + n * h;
+    const { k1, k2, k3, k4, tmp } = this;
+    if (!this.deriv(y, t, k1)) return false;
+    for (let i = 0; i < d; i++) tmp[i] = (y[i] as number) + (h / 2) * (k1[i] as number);
+    if (!this.deriv(tmp, t + h / 2, k2)) return false;
+    for (let i = 0; i < d; i++) tmp[i] = (y[i] as number) + (h / 2) * (k2[i] as number);
+    if (!this.deriv(tmp, t + h / 2, k3)) return false;
+    for (let i = 0; i < d; i++) tmp[i] = (y[i] as number) + h * (k3[i] as number);
+    if (!this.deriv(tmp, t + h, k4)) return false;
+    for (let i = 0; i < d; i++) {
+      const v = (y[i] as number) + (h / 6) * ((k1[i] as number) + 2 * (k2[i] as number) + 2 * (k3[i] as number) + (k4[i] as number));
+      if (!Number.isFinite(v) || Math.abs(v) > BLOW_UP) return false;
+      y[i] = v;
+    }
+    return true;
+  }
+
+  /** The state vector at grid index n (an integer step count from the film start). */
+  private at(n: number): Float64Array | undefined {
+    if (this.y0 === undefined) this.y0 = this.initial();
+    if (this.y0 === undefined) return undefined;
+    if (this.failedAt !== undefined && n >= this.failedAt) return undefined;
+    let from: number;
+    let y: Float64Array;
+    if (this.curY !== undefined && this.curN >= 0 && this.curN <= n) {
+      from = this.curN;
+      y = Float64Array.from(this.curY);
+    } else {
+      let best = 0;
+      for (const k of this.checkpoints.keys()) if (k <= n && k > best) best = k;
+      from = best;
+      y = Float64Array.from(best === 0 ? this.y0 : (this.checkpoints.get(best) as Float64Array));
+    }
+    for (let i = from; i < n; i++) {
+      if (!this.step(y, i)) {
+        this.failedAt = i + 1;
+        return undefined;
+      }
+      const m = i + 1;
+      if (m % CHECKPOINT_STEPS === 0 && !this.checkpoints.has(m)) this.checkpoints.set(m, Float64Array.from(y));
+    }
+    this.curN = n;
+    this.curY = Float64Array.from(y);
+    return y;
+  }
+
+  /**
+   * Advances the states to the clock and returns the state objects whose cell changed. Called by the update pass.
+   * Cone cells that the integration used are put back before it returns.
+   */
+  sync(): ObjRec[] {
+    this.rebuild();
+    if (this.layout.length === 0) return [];
+    const saved = this.cone.map((r) => r.cell);
+    const stateCells = this.layout.map((l) => l.rec.cell);
+    const t = Math.max(this.t0, this.fig.clockT());
+    const pos = (t - this.t0) / this.h;
+    const n = Math.floor(pos + 1e-9);
+    const frac = pos - n;
+    let result: Float64Array | undefined;
+    let failure = false;
+    try {
+      const yn = this.at(n);
+      if (yn === undefined) failure = true;
+      else if (frac > 1e-9) {
+        // cubic Hermite between grid points n and n+1
+        const d0 = new Float64Array(this.dim);
+        const d1 = new Float64Array(this.dim);
+        const y1 = Float64Array.from(yn);
+        const ok = this.deriv(yn, this.t0 + n * this.h, d0) && this.step(y1, n) && this.deriv(y1, this.t0 + (n + 1) * this.h, d1);
+        if (!ok) failure = true;
+        else {
+          const h = this.h;
+          const s = frac;
+          const h00 = 2 * s ** 3 - 3 * s ** 2 + 1;
+          const h10 = s ** 3 - 2 * s ** 2 + s;
+          const h01 = -2 * s ** 3 + 3 * s ** 2;
+          const h11 = s ** 3 - s ** 2;
+          result = new Float64Array(this.dim);
+          for (let i = 0; i < this.dim; i++) result[i] = h00 * (yn[i] as number) + h10 * h * (d0[i] as number) + h01 * (y1[i] as number) + h11 * h * (d1[i] as number);
+        }
+      } else result = yn;
+    } finally {
+      this.cone.forEach((r, i) => {
+        r.cell = saved[i] as Cell;
+      });
+      this.layout.forEach((l, i) => {
+        l.rec.cell = stateCells[i] as Cell;
+      });
+    }
+    const changed: ObjRec[] = [];
+    if (failure || result === undefined) {
+      if (this.failedAt !== undefined && !this.warnedAt.has(this.failedAt)) {
+        this.warnedAt.add(this.failedAt);
+        this.warnings.push(makeNotice('unstable_state', { t: Number((this.t0 + this.failedAt * this.h).toFixed(4)), hint: 'lower the stiffness, add damping, or use @solver step 1/960' }, this.layout.map((l) => l.rec.p.name)));
+      }
+      for (const l of this.layout) if (this.fig.write(l.rec, { defined: false, reason: 'not_finite' })) changed.push(l.rec);
+      return changed;
+    }
+    for (const l of this.layout) {
+      const v = l.point ? { x: result[l.offset] as number, y: result[l.offset + 1] as number } : (result[l.offset] as number);
+      if (this.fig.write(l.rec, { defined: true, value: v })) changed.push(l.rec);
+    }
+    return changed;
+  }
+
+  private readonly warnedAt = new Set<number>();
+}

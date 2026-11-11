@@ -523,6 +523,11 @@ export class FigureTx extends FigureBase {
     if (!redefine) {
       recs = persists.map((p, i) => new ObjRec(ids[i] as ObjId, p));
       this.nextId += names.length;
+      // the reveal cursor: at the end it follows the new object, elsewhere the object is added after the step being viewed
+      if (this.stepCursor !== undefined) {
+        if (this.stepCursor >= this.list.length) this.stepCursor = undefined;
+        else notices.push(makeNotice('step_hidden', { name: names[0] as string }));
+      }
       const pos = insertAt ?? this.list.length;
       this.insertRecs(recs.map((rec, i) => ({ rec, pos: pos + i })));
       for (const r of recs) pass.added.add(r);

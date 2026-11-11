@@ -464,7 +464,7 @@ export class FigureHist extends FigureTx {
     this.inPass((pass) => {
       for (let i = 0; i < lines.length; i++) {
         const input = lines[i] as string | ParsedLine;
-        const r = this.apply(input, { line: i + 1, failed, ...(opts.force ? { force: true } : {}) });
+        const r = this.apply(input, { line: opts.lines?.[i] ?? i + 1, failed, ...(opts.force ? { force: true } : {}) });
         results.push(r);
         if (r.ok) {
           applied++;
@@ -556,6 +556,10 @@ export class FigureHist extends FigureTx {
     rec.cell = cell;
     rec.changedAt = this.epoch;
     this.pendingValues.add(rec.id);
+    for (const k of rec.styleKids) {
+      k.styleCache = undefined;
+      this.pendingStyles.add(k.id);
+    }
     this.markDirty(rec);
     this.onFreeWritten(rec);
     if (why === 'show_me' || why === 'api') {
@@ -611,7 +615,14 @@ export class FigureHist extends FigureTx {
     const expr = rec.p.checked.expr;
     const comp = rec.p.compiled?.command;
     if (!expr || expr.n !== 'command' || !comp) return { writes: [], reason: 'not_draggable' };
-    const rule = this.ruleCache.get(comp.args);
+    let rule = this.ruleCache.get(comp.args);
+    if (!rule) {
+      try {
+        rule = comp.form.rule(comp.args.map((a) => ({ param: a.param, omitted: a.omitted, ...(a.binder !== undefined ? { binder: a.binder } : {}), ...(a.value !== undefined ? { value: a.value } : {}) }))) as import('./registry').CommandRule;
+      } catch {
+        return { writes: [], reason: 'not_draggable' };
+      }
+    }
     if (!rule?.invert) return { writes: [], reason: 'not_draggable' };
     if (!rec.cell.defined) return { writes: [], reason: 'undefined' };
     this.ensureSlots(rec.p.checked.slots);

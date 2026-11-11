@@ -341,7 +341,7 @@ export class FigureCore {
         values[i] = v;
         if (v === undefined || (typeof v === 'number' && v !== v)) undefinedInput = true;
       }
-      if (undefinedInput && !rule.acceptsUndefined) {
+      if (undefinedInput && !rule.acceptsUndefined && !form.acceptsUndefined) {
         if (env.reason === undefined) env.reason = 'input_undefined';
         return undefined;
       }
