@@ -679,3 +679,732 @@ Checked at commit `d2d9d9e` (pass 1), at `3220d23` (round 2, after the fixes for
 - **Invariants:** a table never changes under a compiled line; `checkTable` reports every pair of forms that accept the same arguments with neither more specific.
 - **Transitions:** none after creation; a new table is a new value. A figure's `commands` and `functions` may be swapped by the host between checking and compiling, but compiled lines hold the spec and form objects they were checked against.
 - **Reachable invalid states or transitions:** none found.
+
+## view
+
+Checked at commit `1525786` (pass 1) on `feat/view`. Paths are under `packages/view/src/`; line numbers refer to `1525786`. Findings are in `handoff/view/findings.md` (VIEW-SM-1 to VIEW-SM-27, all open). Every reachable invalid state below was reproduced through the public API in happy-dom unless marked "code path".
+
+### V1. Figure scheduler
+
+- **Where:** `core/scheduler.ts` `schedulerTick` (lines 136 to 220), `registerFigure`, `touchFigure`, `setPlaying`; `web/scheduler-host.ts` `SchedulerHost.tick` (lines 87 to 100), `observe`, `noteScroll`, `start`.
+- **States (per figure):**
+
+| State | Holds |
+|---|---|
+| `placeholder` | Script and saved picture; nothing built |
+| `ready` | Built, one frame drawn |
+| `live` | Drawing frames while dirty or playing |
+| `paused` | Built, drawing nothing; `pausedOffscreenSinceMs` set when off screen |
+| `saved` | Picture plus kernel/view state; resources freed |
+
+Per-figure flags: `inView`, `near`, `nearSinceMs`, `lastUsedMs`, `playing`. Host flags: `scrollSettled`, `tabVisible`, the visible and near sets, the 500 ms interval and the settle timer.
+
+- **Invariants:** at most `maxLive` (3) figures are `live`; a figure is `live` only while in view and the tab is visible; a build or restore happens only after the scroll settled and the figure was near for `settleMs`; every built figure (`ready` or `paused`) that stays off screen for `saveMs` becomes `saved`; one tick's actions are dispatched in order against the state the tick produced; a tick with unchanged inputs produces no actions (no flapping).
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| any | register | id new | `placeholder` | stats.registered |
+| `live` | tick | not in view or tab hidden | `paused` | `pause`; off-screen timer starts when not in view |
+| `placeholder` | tick | settled, near for >= 150 ms | `ready` | `build` |
+| `saved` | tick | settled, near for >= 150 ms | `ready` | `restore` |
+| `ready`, `paused` | tick | in view, tab visible, live count < 3 | `live` | `goLive` |
+| `ready`, `paused` | tick | in view, live count = 3, LRU unpinned live victim not touched later than this one | `live` | victim to `paused` (`pause`), then `goLive` |
+| `paused` | tick | off screen for >= 8 s | `saved` | `save`, stats.saves |
+| any | unregister | | (gone) | no action emitted; the host releases resources |
+
+- **Reachable invalid states or transitions:**
+  - Flapping: four untouched in-view figures (equal `lastUsedMs`) swap one `pause` and one `goLive` on every tick forever, because the victim check at line 190 breaks only when the victim is strictly newer. VIEW-SM-13, open.
+  - `ready` figures that leave the near zone never pause or save (step 5 at line 202 handles `paused` only); after 120 s far away a figure is still `ready` with no action. VIEW-SM-13, open.
+  - Re-entrant tick: an `onAction` callback that calls `touch` or `setPlaying` runs a nested tick inside the dispatch loop (line 95); the outer loop then dispatches stale actions (`goLive(b)` twice, `goLive(c)` for a record already `paused`). VIEW-SM-13, open.
+  - Builds wait for the next 500 ms interval tick, because the observer tick at `nearSinceMs` is too early and no tick is scheduled at `nearSinceMs + 150`: a figure seen at t = 0 builds at 500 ms. VIEW-SM-26, open.
+
+### V2. Shared GPU context, figure boxes and the WebGL2 back-end
+
+- **Where:** `web/shared-context.ts` `SharedGpuContext` (`create`, `acquireBox`, `resizeBox`, `releaseBox`, `present`, `dispose`); `backends/webgl2.ts` `WebGL2Backend` (`track`, `owned`, every `create*`, `readPixels`, `dispose`).
+- **States:**
+
+| State | Holds |
+|---|---|
+| `noGpu` | `backendValue = null`; boxes have a visible canvas and `target = null` |
+| `gpu` | One `WebGL2Backend`; each box has an MSAA `Target` |
+| `lost` | The GL context is lost: every `create*`, `draw`, `readPixels` returns `internal` |
+| `restored` | Browser restored the context; every old handle is dead |
+| `disposed` | Boxes cleared, back-end disposed |
+
+Per box: `absent` → `acquired` (canvas, `ctx2d`, target) → `resized` (target recreated) → `released`.
+
+- **Invariants:** figures never create their own GPU context; a box's target matches its canvas size in device pixels; every handle in `owned` is alive; after a restore every live box and every `Figure3D` gets fresh resources; a box id belongs to one figure.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| (none) | `create` | WebGL2 available | `gpu` | 16 x 16 offscreen canvas |
+| (none) | `create` | otherwise | `noGpu` | |
+| `gpu` | `acquireBox(id)` | id new | box `acquired` | visible canvas, target |
+| `gpu` | `acquireBox(id)` | id exists | box `resized` | returns the same box (and canvas) |
+| `gpu` | `resizeBox` | | box `resized` | old target disposed, new target; handles pushed to `owned` |
+| `gpu` | `present(id)` | box and target | `gpu` | resolve, `readPixels`, flip, `putImageData` |
+| `gpu` | context lost | | `lost` | none (no listener) |
+| `lost` | context restored | | `restored` | none (no listener) |
+| any | `dispose` | | `disposed` | |
+
+- **Reachable invalid states or transitions:**
+  - `restored` is never handled: no `webglcontextlost` or `webglcontextrestored` listener exists, so targets, programs and arenas cached in boxes and `Figure3D` stay dead and 3D figures stay blank until reload (code path). VIEW-SM-6, open.
+  - `owned` only grows: disposed targets and arenas are never removed, so every resize keeps 5 to 7 dead handles. VIEW-SM-4, open.
+  - `present` reads the whole box back to the CPU and allocates two full-size buffers every frame. VIEW-SM-25, open.
+  - Two figures with the same id share one box and one canvas; releasing one blanks the other (code path; depends on the host reusing ids). Noted under VIEW-SM-6.
+
+### V3. FigureView lifecycle and frame request
+
+- **Where:** `web/figure-view.ts` `mount` (257), `unmount` (359), `resize` (389), `requestFrame` (545), `frame` (578), `setViewRegion`/`goHome` tweens (441, 466).
+- **States:** `created` (no root) → `mounted` (root, canvases, listeners) → `destroyed` (`destroyed = true`, root null). Frame request flag `pending`. View tween `tween` (`null` or `{from, to, startMs, durMs}`); camera tween `camTween`.
+- **Invariants:** a mounted figure draws when something is dirty; `pending` is true only while one frame callback is queued; `view.width/height` equal the root's CSS size after any resize; a tween never overrides a newer size.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `created` | `mount(el)` | | `mounted` | canvases, a11y nodes, listeners, first frame |
+| `mounted` | `unmount` | | `destroyed` | listeners removed, box released, `Figure3D` disposed |
+| `destroyed` | `mount(el)` | root null | `mounted` but `destroyed` still true | returns ok; `requestFrame` refuses forever |
+| `mounted` | dirty mark | not `pending` | `pending` | schedule `frame` |
+| `pending` | frame | | not `pending` | events, update, layout, paint, reader list |
+| `mounted` | `resize` | | `mounted` | viewport rebuilt at the new size |
+| tween active | frame | | tween active or null | `view = tweenViewport(from, to, t)` at `from`'s size |
+
+- **Reachable invalid states or transitions:**
+  - `destroyed` then `mount`: returns `ok`, queues no frame and builds no reader list. VIEW-SM-7, open.
+  - Resize during a tween: the next tween frame restores `from.width`; after the tween ends the viewport is still 800 px wide in a 400 px element. VIEW-SM-15, open.
+  - With a synchronous `scheduleFrame` (or no `requestAnimationFrame`), the end-of-frame `requestFrame` recurses while a highlight or tween lives (code path). Noted under VIEW-SM-23.
+
+### V4. Draw list, dirty flags and cached layers
+
+- **Where:** `core/drawables.ts` `DrawList` (`add`, `remove`, `resort`, `applyEvent`, `markViewDirtyAll`, `markPanDirty`, `activeIds`), `updateDrawables`, `splitForActive`; `web/figure-view.ts` `paintScene2D` (cache key at 980), `markCacheInvalid`, `paintVersion`, `bgDirty`.
+- **States:** per entry `clean`, `valueDirty`, `viewDirty` (both may be set); figure-wide `paintVersion` (counter), `cacheValid` + `cacheKey` (lower and upper bitmaps), `bgDirty`.
+- **Invariants:** an entry is rebuilt exactly when its value, style or the viewport changed; a pan shifts cached pixels of non-viewport-dependent kinds; the lower and upper bitmaps stay valid across the frames of one interaction and are invalidated only by a viewport change, a restyle, or an add or remove in `lower` or `upper` (design 7.4); live drawables hold live-viewport geometry whenever input can reach them.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| absent | `add` event | `create` returns a drawable | `valueDirty`+`viewDirty` | binary-search insert |
+| any | `update` / `restyle` | | `valueDirty`+`viewDirty` | `paintVersion++`, cache invalid |
+| any | `remove` | | absent | `indexOf` + `splice` |
+| any | zoom, resize, theme | | `viewDirty` | all entries |
+| any | pan | `shiftPixels` true | unchanged | pixels shifted |
+| dirty | update phase | | `clean` | geometry rebuilt, hit index updated |
+| `cacheValid` | frame | key equal | `cacheValid` | composite cached bitmaps |
+| any | frame | key differs | `cacheValid` with new key | repaint lower and upper, new full-size canvas |
+| live geometry | `exportSvg`/`exportPng` | | export geometry | rebuilt at the export viewport until the next frame |
+
+- **Reachable invalid states or transitions:**
+  - The cache key contains `paintVersion`, which every drag move bumps (via `applyEvents`), so during a drag the bitmaps are rebuilt every frame and a full-size canvas is allocated per frame (code path). VIEW-SM-22, open.
+  - After an export the drawables hold export-viewport geometry until the next frame; a hit test at a point's live position finds nothing in that window. VIEW-SM-14, open.
+  - `remove` and the 3D `SceneIndex` use `indexOf` per id, so removing or updating many ids is quadratic. VIEW-SM-24, open.
+
+### V5. 2D pointer interaction modes
+
+- **Where:** `web/figure-view.ts` `onPointerDown` (1248), `onPointerMove` (1342), `onPointerUp` (1584), `onWheel`, `onDoubleClick`, `rescaleAxis` (1426); fields `pointers`, `pinchStart`, `band`, `panning`, `drag`.
+- **States:**
+
+| State | Holds |
+|---|---|
+| `idle` | No pointer down; hover updates `hovered` |
+| `band` | Shift-drag rubber band rectangle |
+| `panning` | Background pan (`axis = both`) |
+| `axisRescale` | Pan record with `axis = x` or `y` |
+| `dragPending` | `drag` set, `started = false` (below 3 px mouse / 8 px touch) |
+| `dragging` | `drag.started = true`; `kernel.drag` called per move |
+| `labelDrag` | `drag.plan.kind = label`; `labelOverride` holds the preview |
+| `pinch` | Two pointers; zoom about the midpoint |
+
+- **Invariants:** exactly one mode at a time; leaving `dragging` always ends the kernel drag (V6); the axis-rescale path respects the same zoom limits as wheel zoom.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `idle` | down | no hit, shift | `band` | capture |
+| `idle` | down | no hit, near an axis | `axisRescale` | capture |
+| `idle` | down | no hit | `panning` | capture; selection cleared |
+| `idle` | down | hit, plan `none` | `panning` | `drag_fixed` / `drag_path_undefined` / `drag_blocked` gesture |
+| `idle` | down | hit, plan set | `dragPending` | selection set, grab offset |
+| `dragPending` | move | >= threshold | `dragging` or `labelDrag` | first `kernel.drag` or override |
+| any one-pointer mode | second pointer down | | `pinch` | `drag = null`, `panning = null` |
+| `band` | up | | `idle` | rubber-band select |
+| `dragging` | up or `pointercancel` | | `idle` | rounded `drag`, `commitDrag`, announcement |
+| `labelDrag` | up | | `idle` | `onRestyle` |
+| `dragging`, `labelDrag` | Esc | | `idle` | `cancelDrag`, `drag = null` |
+| `axisRescale` | move | factor > 0.2 | `axisRescale` | scale changed with no zoom limit check |
+
+- **Reachable invalid states or transitions:**
+  - `dragging` → `pinch` drops the session without `commitDrag` or `cancelDrag`; the kernel log shows one `drag` and nothing else. VIEW-SM-9, open.
+  - `pointercancel` (the browser took the gesture) commits instead of cancelling (code path). VIEW-SM-9, open.
+  - `labelDrag` → Esc sends `cancelDrag` to a kernel that never started a drag and leaves `labelOverride` set, so the label stays at the preview position. VIEW-SM-9, open.
+  - `axisRescale` skips the 1e-9 / 1e9 width limits and the precision floor and gives no `zoom_limit` feedback (code path). VIEW-SM-20, open.
+
+### V6. Drag session protocol with the kernel
+
+- **Where:** `web/figure-view.ts` `applyDragMove`, `onPointerUp`, `onKeyDown` (Esc at 1716, `moveSelected` at 1741), `onPointerMove3D`, `onPointerUp3D` (2099), `onKeyDown3D` (`moveSelected3` at 2168), `unmount`; `core/drag.ts` `computeDragPlan`, `projectOnSamples`, `clampParam`; `contracts.ts` `DragApplier`.
+- **States:** kernel side `closed` / `open` (after the first `drag`). View side: 2D `drag` session, 3D `point3Drag` session, keyboard nudge (a one-shot `drag` + `commitDrag`).
+- **Invariants:** every `open` ends in exactly one `commitDrag` or `cancelDrag`; no nudge commits while a pointer session is open; `cancelDrag` is sent only for an open drag; a `parents` drag moves each parent by the pointer delta from its value at drag start; a path drag sends `s` in the path's domain units, continuous with the previous `s`; `fixed` objects never move (2D and 3D, pointer and keyboard).
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `closed` | move in `dragging` | | `open` | `drag(moves)` |
+| `open` | move | | `open` | `drag(moves)` |
+| `open` | pointer up | | `closed` | `drag(rounded)`, `commitDrag` |
+| `open` | Esc (2D) | | `closed` | `cancelDrag` |
+| `closed` | arrow key with selection | plan `free` | `closed` | `drag` + `commitDrag` |
+| `open` (3D) | pointer up | | `closed` | `commitDrag` |
+
+- **Reachable invalid states or transitions:**
+  - Parents drag adds the start-to-pointer delta to the parents' current values on every move: moving the pointer 2 units in 10 moves takes A from -2 to 9 (expected 0). VIEW-SM-8, open.
+  - Arrow key during an open pointer drag: log `drag, drag, commit, drag, drag, commit` (two commits, one mid-drag). VIEW-SM-9, open.
+  - Esc does not end a 3D `point3Drag`; unmount does not end any drag (code path). VIEW-SM-9, open.
+  - Path drag sends a fraction: the pointer at x = 3 on a function with domain -5..5 sends `s = 0.8`. With grid snap on, `snapParamToGrid` searches the whole path regardless of the pointer and sends `s = 0.7` for pointers at x = 3 and x = -4. `hintS` is a constant `null` (line 1318), so the 24 px continuity window never runs. VIEW-SM-10, open.
+  - 3D arrow keys move a point styled `fixed` (`drag` + `commit` logged). VIEW-SM-17, open.
+
+### V7. Selection, focus, hover and pick cycling
+
+- **Where:** `core/selection.ts` (`clickSelect`, `selectAll`, `rubberBandSelect`); `core/hit.ts` (`HitIndex`, `cyclePick`); `web/figure-view.ts` fields `selection`, `focused`, `hovered`, `cycle`, `stepFocus`, Ctrl+A at 1847 and 2231, Delete.
+- **States:** `selection.ids` (set), `anchor`, `focus`; `focused` id; `hovered` id; cycle state (`lastX`, `lastY`, `lastTimeMs`, `index`).
+- **Invariants:** selected, focused and hovered ids are objects that exist and are visible; Ctrl+A selects visible selectable objects only (design 11); the rubber band selects every object whose bbox meets the band, points included; Delete reports only existing ids.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| any | click hit | selectable | `{hit}` or toggled | |
+| any | click background | not additive | empty | |
+| any | band release | | union with band hits | |
+| any | Ctrl+A | | every head that is selectable | |
+| any | Esc | no drag | empty | |
+| non-empty | Delete | | empty | `onDelete(ids)` |
+| any | kernel `remove` | | unchanged | nothing pruned |
+
+- **Reachable invalid states or transitions:**
+  - Ctrl+A selects an object with `show = false`; Delete then reports `[1, 2]` including the hidden one. VIEW-SM-12, open.
+  - A band around a point selects nothing: a point drawable's `rubberShape` has no strokes and no fills. VIEW-SM-12, open.
+  - After a kernel `remove` of A, Delete still reports A. VIEW-SM-12, open.
+
+### V8. Snap memory
+
+- **Where:** `core/snap.ts` `snapPosition`, `snapWithHysteresis`, `snapParamToGrid` (138); `web/figure-view.ts` `snapContext` (1219), `snapMem`.
+- **States:** `free` (`target = null`), `held` (target and radius).
+- **Invariants:** `held` releases beyond 1.5 x radius; candidates exclude the dragged object and its descendants; host intersections are candidates in `points` mode; the indicator names the real source; memory starts empty for each drag.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `free` | move | a candidate within 12 px | `held` | position snapped |
+| `held` | move | within 18 px, fresh candidate | `held` | new target |
+| `held` | move | within 18 px, none | `held` | old target, source reported as `grid` |
+| `held` | move | beyond 18 px | `free` or `held` | |
+
+- **Reachable invalid states or transitions:** the `intersections` option is never called (`intersections: []` at line 1244); descendants are not excluded; the memory survives between drags; a hold on a point is reported as `grid`. VIEW-SM-18, open.
+
+### V9. 3D camera and gestures
+
+- **Where:** `web/figure-view.ts` `onPointerDown3D` (1958), `onPointerMove3D` (2012), `onPointerUp3D`, `onWheel3D`, `onDoubleClick3D`, `onKeyDown3D` (2163); fields `camDrag`, `point3Drag`, `camTween`, `cameraProps`; `core/camera.ts`.
+- **States:** `idle`, `orbit`, `pan` (`camDrag`), `pointDrag` (plane, axis or depth), `camTween` (400 ms ease).
+- **Invariants:** zoom stays in 1e-6..1e6 on every input; a point drag ends in commit or cancel; `fixed` blocks pointer and keyboard moves.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `idle` | down | no hit, or shift, or middle button | `orbit` / `pan` | capture |
+| `idle` | down | free, not fixed `point3` | `pointDrag` | gizmo axis/plane, alt depth, shift z axis |
+| `orbit` / `pan` | move | | same | camera props updated |
+| `pointDrag` | move | | same | `drag([point3])` |
+| `pointDrag` | up | | `idle` | `commitDrag` |
+| `idle` | double-click | | `camTween` | reset or retarget |
+| any | `+` / `-` key | | same | zoom x 1.5 or / 1.5 with no clamp |
+
+- **Reachable invalid states or transitions:** Esc leaves `pointDrag` open (VIEW-SM-9); arrow keys move `fixed` points (VIEW-SM-17); keyboard zoom has no clamp (VIEW-SM-20). All open.
+
+### V10. Label layout cache
+
+- **Where:** `web/figure-view.ts` `layoutLabels` (703, budget slice at 741), `paintOverlay3D` (2299), `prevLabelOffsets`, `labelOverride`, `placements`; `core/labels.ts` `placeLabels`; `core/drawable.ts` `paintLabel`, `setLabelOffset`, `clearLabelOffset`.
+- **States:** per label `none` (no request), `auto` (offset from `placeLabels` with hysteresis), `user` (style `labelDx`/`labelDy`), `preview` (`labelOverride` during a drag), `overBudget` (beyond the first 300 requests).
+- **Invariants:** at most 300 labels paint, lowest priority hidden first, with a notice (performance 5); only labels in the viewport count; at most 200 auto-place per frame; `preview` exists only during a label drag; layout cost stays within the frame budget.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `none` | frame | label mode not `none` | `auto` or `user` | offset set |
+| `auto` | frame | score worse by > 25% | `auto` (moved) | |
+| any | label drag move | | `preview` | override set |
+| `preview` | pointer up | | `user` (after the sdk writes the line) | `onRestyle` |
+| `preview` | Esc | | `preview` (stuck) | `cancelDrag` |
+| request 301+ | frame | | `overBudget` | keeps the last offset or the default and still paints |
+
+- **Reachable invalid states or transitions:** 400 labelled points export 400 `<text>` elements and the live paint loop calls `paintLabel` for all of them; `checkLabels` is never called, so no notice; the budget is taken in list order including off-screen labels (VIEW-SM-2). Markers are not culled: 300 labels with 5,000 labelled points cost 128 ms per frame (VIEW-SM-21). Esc leaves `preview` set (VIEW-SM-9). All open.
+
+### V11. Budgets and level of detail
+
+- **Where:** `core/budgets.ts` (`DEFAULT_BUDGETS`, `checkObjects`, `checkParticles`, `checkTriangles`, `checkLabels`, `capCurveSamples`); `core/drawables.ts` `ResolutionController`; `core/particles.ts` `ParticleQuality`; `core/geometry.ts` `capSamples`, `reduceRun`, `conicSegmentCount`; `core/export.ts` `MAX_SVG_ELEMENTS`; `backends/software.ts` `SOFTWARE_TRIANGLE_CAP`; `web/figure-3d.ts` arena sizes.
+- **States:** `ResolutionController.level` 0..2 (3 overruns down, 30 good up); `ParticleQuality.q` 1 to 0.25 in 0.25 steps (5 bad down, 60 good up); export `under cap` / `refused`.
+- **Invariants:** every budget in performance.md 5 is enforced where the view owns it (labels shown, SVG elements, curve samples per curve on screen); a cap stops work before the work is done; GPU arenas are never written past their capacity; caches are bounded.
+- **Transitions:** level and quality counters move as in the design. The SVG cap is checked once, after the whole document is built (line 2431).
+- **Reachable invalid states or transitions:**
+  - A 30,000-point export builds every element (127 ms) before refusing; 5,000 curves of 4,000 samples stay under 50,000 elements, so a document of hundreds of MB is returned with no refusal (code path). VIEW-SM-3, open.
+  - The canvas hatch-pattern cache keeps one tile canvas per distinct colour forever: 1,000 animated colours made 1,000 canvases. VIEW-SM-4, open.
+  - `Figure3D` writes fixed arenas (lines 8 MB, about 58,000 segments; points 2 MB, 65,536 points; mesh 24 MB, about 629,000 vertices) with no bound check (code path). VIEW-SM-17, open.
+  - `checkTriangles`, `checkLabels` and `capCurveSamples` have no caller in the view; a curve with many runs caps each run, not the curve (code path). VIEW-SM-2, open.
+
+### V12. 3D scene and `Figure3D` resources
+
+- **Where:** `core/scene.ts` `SceneIndex` (`applyEvent`, `dropId` at 136); `web/figure-3d.ts` `applyEvents` (`sceneVersion++` at 84), `ensureResources`, `uploadAll`, `paint` (upload check at 262), `drawLines`, `dispose`.
+- **States:** resources `none` → `ready` (programs, three arenas) → `disposed`; upload `current` (`uploadedVersion = sceneVersion`) / `stale`.
+- **Invariants:** an event re-uploads only the items it touched; resources are recreated after a context restore; every back-end draws every item kind it receives.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `none` | first paint | | `ready` | programs and arenas created |
+| `current` | any kernel event | | `stale` | `sceneVersion++` |
+| `stale` | paint | | `current` | every mesh and point rewritten |
+| `ready` | `dispose` | | `disposed` | |
+
+- **Reachable invalid states or transitions:** moving one point re-uploaded all 144 KB of a 60 x 60 mesh (VIEW-SM-24); the software back-end turns line quads into zero-area triangles from the wrong attribute layout, so 3D segments are invisible without WebGL2 (VIEW-SM-17); no path back from `ready` after a context restore (VIEW-SM-6). All open.
+
+### V13. Live-region announcer
+
+- **Where:** `web/figure-view.ts` `announce`, `flushAnnounce`, `announceTimer`, `queuedAnnounce`, `lastAnnounceMs`.
+- **States:** `idle`, `spoken` (inside the 800 ms window), `queued` (timer armed, last message kept).
+- **Invariants:** at most one message per 800 ms; the last queued message is spoken when the window closes; no timer survives `unmount`.
+- **Transitions:** `idle` → speak → `spoken`; `spoken` + message → `queued` (timer); timer or frame → speak → `spoken`; `unmount` clears the timer.
+- **Reachable invalid states or transitions:** none found.
+
+### V14. Export
+
+- **Where:** `web/figure-view.ts` `exportSvg` (2378), `exportPng` (2491); `core/export.ts` `normalizeExport`, `exportViewport`, `svgEscape`, `svgId`; `backends/svg.ts` `SvgSurface`.
+- **States:** `validate` → `snapshot` (token held when `time` is set) → `rebuild at export viewport` → `paint` → `encode` → `restore live` (mark dirty, request frame) → result. PNG: `encode` is async after the token is released.
+- **Invariants:** the snapshot token is always released; live drawables are back at live geometry before any input can reach them; untrusted text reaches SVG only escaped, in text content or quoted attributes, never as raw CSS; the element cap stops work early.
+- **Transitions:** as listed; every error path releases the token (checked).
+- **Reachable invalid states or transitions:** live geometry is left at the export viewport until the next frame (VIEW-SM-14); `textStyle.family` from the figure is written raw into the `style` attribute, so `x;fill:url(https://evil.example/beacon)` becomes a CSS declaration (VIEW-SM-1); the cap is checked after building (VIEW-SM-3); `region: 'objects'` uses view-clipped pixel bboxes (VIEW-SM-16). All open.
+
+
+## plot
+
+Checked at commit `8f3a4c8` (pass 1) on `feat/plot`. Paths are under `packages/plot/src/`. Line numbers refer to `8f3a4c8`. Findings are in `handoff/plot/findings.md`; all are `open` after pass 1.
+
+### P1. Sample cache
+
+- **Where:** `cache.ts` `createSampleCache`, `cacheKey`, `seedForRange`, `paramSeedForRange` (lines 11 to 106). Used by callers to build `seed` for `plotFunction` and `traceParamCurve`.
+- **States:** per cache: two insertion-ordered maps (scalar, parametric), each `key -> { version, samples }`, at most `capacity` keys each (default 8). No notion of function identity or current version.
+
+| State | Holds |
+|---|---|
+| `empty` | No entries |
+| `holding` | 1 to `capacity` entries per map, any mix of versions |
+
+- **Invariants:** a seed for `(function, version)` holds only that function's samples at that version, one value per x; a seed only saves evaluations, so a plot is the same with or without it; a version change discards the older samples (functions-calculus 9, "Cache and incremental update").
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| any | `put(key, version, xs, ys)` | | `holding` | copies the arrays; an existing key keeps its insertion position |
+| `holding` | `put` | size > capacity | `holding` | drops the first-inserted key (`trim`) |
+| any | `seedForRange(version, lo, hi)` | | same | merges samples in `[lo, hi]` from every entry whose version matches, regardless of key |
+| any | `clear()` | | `empty` | |
+
+- **Reachable invalid states or transitions:**
+  - Entries of other functions or views with the same version number are merged into one seed, with duplicate x values; the most recently re-put key can be evicted first; nothing clears older versions. [PLOT-SM-10](../handoff/plot/findings.md), open.
+  - Seed samples count against `maxSamples` in the tracers, so a large seed stops refinement before it starts. [PLOT-SM-6](../handoff/plot/findings.md), open.
+
+### P2. Function plot run (setup, refine, classify, band; suspend and resume)
+
+- **Where:** `function.ts` `plotFunction` (1427), `resumeFunctionPlot` (1499), `runLoop` (1019), `runCurve` (1032), `runSetup` (314), `runRefine` (362), `runClassify` (461), `runExact` (992), `toToken` (1313), `checkToken` (1353), `finishSuspended`/`finishComplete` (1393, 1397); budgets in `evalAt` (277) and `intervalAt` (291).
+- **States:** `phase` in `setup | refine | classify | band`, plus `suspended` (budget for this call spent) and `done`. A suspended run is serialised as a `FunctionResume` token: samples, the three span lists, markers, ink, counters, flags, phase, pieces, breaks, coarse grid and configuration.
+
+| State | Holds |
+|---|---|
+| `setup` | Coarse grid `coarseXs`, `coarseDone` evaluated so far; each new coarse point pushes one pending span |
+| `refine` | `pending` spans being split by the screen tests |
+| `classify` | `suspicious` spans getting verdicts; verdicts may push back to `pending` |
+| `band` | Exact mode only: one pending span per device-pixel column, one enclosure each |
+| `suspended` | Any of the above with the budget spent; output empty, `resume` present |
+| `done` | Paths, markers, ink and stats; no `resume` |
+
+- **Invariants:**
+  1. `stats.complete` is false exactly when `resume` is present, and then output is empty.
+  2. The finished plot is the same however the work was sliced (functions-calculus 9, "Budgets").
+  3. A suspension leaves `pending`, `suspicious`, `accepted`, markers, ink and the flags as they were before the interrupted step; a classify verdict is atomic (rolled back and redone whole).
+  4. Every call with a positive budget makes progress.
+  5. All samples in a run belong to one `(function version, view, pixel size)`.
+  6. `band` is entered only with an enclosure; `complete: true` means every phase drained.
+  7. A resumed run has the same limits as a fresh one.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| (start) | `plotFunction` | inputs valid | `setup` | pieces, coarse grid; seed samples loaded into `samples` |
+| `setup` | coarse grid evaluated | | `refine` | batch form first when it fits the budget |
+| `refine` | `pending` empty | `suspicious` empty | `done` (or `band`) | |
+| `refine` | `pending` empty | `suspicious` not empty | `classify` | |
+| `refine` | `samples.size >= maxSamples` | | `classify` or `done` | pending spans accepted as they are, `capped` |
+| `classify` | verdict pushes to `pending` | `suspicious` drained | `refine` | |
+| `classify` | `suspicious` empty, `pending` empty | | `done` (or `band`) | |
+| `refine`/`classify` | `steps > STEP_CAP` | | same | `forceCap`: accept pending, drop suspicious, `capped`, `rigorous = false` |
+| curve done | | `exact` and enclosure | `band` | ink cleared, one span per column |
+| any | `evalAt`/`intervalAt` over budget | | `suspended` | classify rolls back the current verdict |
+| `suspended` | `resumeFunctionPlot(token, fn, opts)` | token passes `checkToken` | token's phase | fresh per-call budget, totals carried |
+| `done` | | | | chain spans, resolve breaks, thin to `maxSamples`, domain end markers, sort |
+
+- **Reachable invalid states or transitions:**
+  - A budget stop inside `refineUndefined` is not propagated: the loop spins to `STEP_CAP`, `forceCap` discards pending and suspicious spans, and the token carries the damage (breaks 2, 3). [PLOT-SM-4](../handoff/plot/findings.md), open.
+  - A token has no function version; resuming with another function stitches two functions into one plot (breaks 5). [PLOT-SM-5](../handoff/plot/findings.md), open.
+  - Interval evaluations are not cached, so a verdict costing more than one call's budget is rolled back forever (breaks 4). [PLOT-SM-8](../handoff/plot/findings.md), open.
+  - `band` resumed without the enclosure returns `complete: true` with a partial band and the curve (breaks 1, 6). [PLOT-SM-9](../handoff/plot/findings.md), open.
+  - `checkToken` does not check `depth`, `bendPx`, `chordPx`, `maxSamples`, `coarseXs` or `pieces` (breaks 7). [PLOT-SM-15](../handoff/plot/findings.md), open.
+  - Seeds count against the cap (see P1). [PLOT-SM-6](../handoff/plot/findings.md), open.
+  - Forked tokens (one token resumed twice) and interleaved runs of different functions stay independent and equal to the direct plot: checked, nothing found.
+
+### P3. Function span lifecycle and verdicts
+
+- **Where:** `function.ts` `runRefine` (362), `refineUndefined` (430), `classifyDefined` (588), `classifyUndefined` (748), `classifyEdge` (780), `classifyEdgeEnclosed` (818), `finishEdge` (867), `probeHole` (945), `findPartner` (959), `markJump` (572), `inkForSpan` (721), `resolveBreaks` (1126).
+- **States:** each x-span `[xl, xr]` at a depth is in exactly one list.
+
+| State | Meaning |
+|---|---|
+| `pending` | To be tested by the screen tests |
+| `accepted` | Drawn as a chord |
+| `suspicious` | Needs a verdict |
+| dropped | A gap (undefined), or replaced by its halves, an ink column or a feature split |
+
+- **Invariants:** a span is in one list at a time; a marker is recorded only for a verdict (pole, hole, jump, open or closed end) that the enclosure or the heuristics support; oscillation becomes ink, not markers; the cost of one verdict is a bounded number of evaluations and lookups.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `pending` | both ends defined, midpoint defined | fails bend or chord test, depth < limit, wider than 0.5 px | two `pending` halves | |
+| `pending` | same | fails, at the depth limit or narrower than 0.5 px | `suspicious` | |
+| `pending` | same | passes | `accepted` | |
+| `pending` | one end or midpoint undefined | depth < limit | `pending` halves touching a defined end | |
+| `pending` | same | at the depth limit | `suspicious` | |
+| `suspicious` | both defined, values leave the view on both sides | enclosure unbounded, or both sides tall | two `accepted` sides | `pole` marker |
+| `suspicious` | both defined, change in one place | enclosure bounded and `def = 2` | `accepted` | steep rise |
+| `suspicious` | same | step flat on both sides | two `accepted` sides | `jump`, `openEnd`/`closedEnd` |
+| `suspicious` | same | not flat, or two or more sign flips | dropped | ink column |
+| `suspicious` | neither end defined | enclosure `def = 1` or a defined midpoint, wider than 0.1 px | two `suspicious` halves | |
+| `suspicious` | one end defined | edge bisected; tall | `pending` approach | `pole` |
+| `suspicious` | same | matching value across | `accepted` across | `hole` |
+| `suspicious` | same | partner across with a different value | `pending` approach | `jump` and ends, or ink |
+| chains at a break | `resolveBreaks` | limits and value agree / limits agree / tall / otherwise | merged / merged / cut / cut | none / `hole` / `pole` / `jump` and ends |
+
+- **Reachable invalid states or transitions:**
+  - `findPartner` (and `edgeFallbackY`) scan every sample per verdict, so cost per verdict grows with the sample count. [PLOT-SM-3](../handoff/plot/findings.md), open.
+  - `sin(1/x)` without an enclosure still records about 1,000 `hole`/`openEnd`/`jump` markers. [PLOT-SM-14](../handoff/plot/findings.md), open.
+
+### P4. Parametric tracer
+
+- **Where:** `param.ts` `traceParamCurve` (583), `cullBoxes` (160), `findHoles` (198), `runRefine` (257), `runClassify` (355), `classifyEdge` (435), `joinPartner` (479), `markJoins` (702), `finishParam` (760).
+- **States:** `cull -> holes -> coarse -> refine <-> classify -> done`, or `dead` (budget spent: `complete: false`, empty output). No suspend and resume. Spans use the same `pending`/`accepted`/`suspicious` lists as P3.
+
+| State | Holds |
+|---|---|
+| `cull` | Parameter boxes from the enclosure; off-view and `def = 0` boxes dropped; boxes over 128 px split to depth 10 |
+| `holes` | `def = 1` bounded boxes bisected to depth 40; up to 8 hole probes per box |
+| `coarse` | `max(64, widthPx / 6)` samples spread over kept boxes |
+| `refine`/`classify` | As P3, with a turning-angle test, cusp and stall markers, pole and hole-like verdicts |
+| `dead` | Budget spent in any state |
+| `done` | Chains, joins marked, thinned, clipped, closed flags |
+
+- **Invariants:** the hole search costs a bounded share of the budget; an enclosure never makes a trace less likely to finish; markers carry drawable pixel coordinates; output points at most `maxSamples`.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| (start) | valid input | enclosure | `cull` | else one box over the range |
+| `cull` | boxes kept | enclosure | `holes` | |
+| `holes`/`cull` | done | | `coarse` | |
+| `coarse` | grid evaluated | | `refine` | |
+| `refine` | pending empty | suspicious not empty | `classify` | |
+| `classify` | pending refilled | | `refine` | |
+| any | over budget | | `dead` | |
+| `refine` | `samples.size >= maxSamples` | | `done` | pending accepted, `capped` |
+| `refine`/`classify` | drained | | `done` | `end` markers unless the curve is closed |
+
+- **Reachable invalid states or transitions:**
+  - `findHoles` descends every `def = 1` box to depth 40, so a curve with many defined/undefined boundaries fails with a sound enclosure and succeeds without one. [PLOT-SM-11](../handoff/plot/findings.md), open.
+  - `joinPartner` scans every sample per edge. [PLOT-SM-3](../handoff/plot/findings.md), open.
+  - `addMarker` records any coordinates (pole markers at `py = ±7.1e19`). [PLOT-SM-16](../handoff/plot/findings.md), open.
+  - Seeds count against the cap (see P1). [PLOT-SM-6](../handoff/plot/findings.md), open.
+
+### P5. Implicit quadtree
+
+- **Where:** `implicit.ts` `traceImplicit` (449), `runQuadtree` (385), `runDense` (370), `splitNode` (415), `boxAt` (110), `gEval` (84), `cornerAt` (100).
+- **States:** per node of the leaf grid (padded view, 2 px leaves for `final`, 6 px for `draft`, roots of 32 px): `queued`, `dropped`, `split`, `leaf` (traced by P6). Per run: `running`, `dead` (budget spent: `complete: false`, empty), `done`. Without an enclosure the run is `dense`: every leaf is traced, `rigorous: false`.
+- **Invariants:** a node is dropped only when its enclosure excludes the level or `def = 0`; every residual input is evaluated once (`memo`); memory per call is bounded by a figure-sized budget; the view limits count the device pixels actually sampled; the default budget completes an ordinary figure.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `queued` | `boxAt` | `def = 0`, or `lo > 0`, or `hi < 0` | `dropped` | |
+| `queued` | `boxAt` | contains the level, wider than one leaf | `split` | 2 or 4 children queued |
+| `queued` | `boxAt` | contains the level, one leaf | `leaf` | `emitLeaf` (P6) |
+| `running` | over budget | | `dead` | |
+| `dense` | every leaf visited | | `done` | |
+| `running` | queue drained | | `done` | link, clip, thin, markers |
+
+- **Reachable invalid states or transitions:**
+  - `memo` and `corners` grow with string keys up to the evaluation cap; with `devicePixelRatio: 4` a view inside `checkView`'s limits held 1.9 GB; no leaf-cell limit as in `fillRegion`. [PLOT-SM-2](../handoff/plot/findings.md), open.
+  - Without an enclosure, `sin(x) + sin(y) == sin(x*y)` on a 1,000 x 600 view returns `complete: false` at the default budget. [PLOT-SM-7](../handoff/plot/findings.md), open.
+
+### P6. Implicit leaf classification and linking
+
+- **Where:** `implicit.ts` `emitLeaf` (221), `correctCrossing` (130), `probeSmallFeature` (295), `uniqueMarkers` (506), `finishChains` (522); `squares.ts` `segmentsForCase` (37), `linkSegments` (202); `clip.ts` `clipPolyline`.
+- **States:** per leaf, the marching-squares case (0 to 15). Per grid edge, one crossing (`crossings`, shared by both leaves). Per chain: `open` or `closed`; after clipping, a closed chain that was cut becomes open pieces; a closed chain under 0.25 px becomes an `isolated` marker.
+- **Invariants:** neighbouring leaves use the same crossing on a shared edge; a Newton correction is kept only when it lowers `|F|`; chains are deterministic (sorted); work and output follow the curve length and the sample cap.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| leaf | corners | any NaN | skipped | |
+| leaf | case 0 or 15 | enclosure | probed | 5 x 5 subgrid and Newton; `isolated` marker when found |
+| leaf | case 0 or 15 | a corner exactly on the level, all 8 neighbours on one side | marked | `isolated` |
+| leaf | case 5 or 10 | | segments | centre value decides the pairing |
+| leaf | other cases | | segments | crossings interpolated and corrected; `singular` when the gradient vanishes |
+| segments | `linkSegments` | shared keys | chains | `closed` when the ends share a key |
+| chains | `finishChains` | | paths | clip to view, open chains from the smaller end, sort, thin |
+
+- **Reachable invalid states or transitions:**
+  - `uniqueMarkers` is quadratic and markers are uncapped: `x - x == 0` with an exact enclosure on a 400 px view gives 53,824 markers in 64 s. [PLOT-SM-1](../handoff/plot/findings.md), open.
+  - `linkSegments` stayed linear for long chains: checked, nothing found.
+
+### P7. Region filler
+
+- **Where:** `region.ts` `fillRegion` (549), `runFill` (117), `runDense` (162), `fillCoarse` (212), `checkCap` (218), `boundaryLeaf` (228), `supersample` (312), `addMarker` (378), `mergeRects` (387), `traceBorder` (441), `segmentOnBoundary` (498).
+- **States:** per node: `queued`, `false` (skipped), `true` (filled in the leaf bitmap), `split`, boundary `leaf` (polygon or supersampled). Per run: `running`, `capped` (remaining nodes filled coarsely), `dead`, `borders` (one implicit trace per primitive, sharing the budget), `done`. Without an enclosure the run is `dense`: every leaf corner tested once.
+- **Invariants:** a `true` cell is wholly inside, a `false` cell wholly outside; emitted points are at most `maxSamples`; `capped` is set exactly when output was limited; a capped fill never claims area the predicate does not hold; work follows the boundary length; the default budget completes an ordinary figure.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `queued` | enclosure | `false` | skipped | |
+| `queued` | enclosure | `true` | filled | bitmap cells set |
+| `queued` | enclosure | `maybe`, wider than one leaf | `split` | |
+| `queued` | enclosure | `maybe`, one leaf | boundary leaf | polygon if exactly one primitive crosses and the case is not a saddle; else 4 x 4 supersample |
+| `running` | `points > maxSamples` | enclosure path only | `capped` | |
+| `capped` | next node | not `false` | filled | whole node filled |
+| `dense` | 4 true corners / 0 / mixed | | filled / skipped / boundary leaf | |
+| supersample | 16 covered | not a corner leaf | filled | joins the bitmap |
+| supersample | 1 or 2 covered | | rects | `isolated` marker |
+| fill done | | margins given | `borders` | `traceImplicit` per margin, segments kept where a point just inside satisfies the body |
+| `borders` | done | | `done` | merge rows into rectangles, polygons to pixels |
+| any | over budget or a border trace incomplete | | `dead` | |
+
+- **Reachable invalid states or transitions:**
+  - `addMarker` scans every marker per insert; touching checkerboard cells produce 18,321 `isolated` markers and 5.4 s at 500 x 400 px. [PLOT-SM-1](../handoff/plot/findings.md), open.
+  - `points` counts covered sub-cells, the dense path never checks the cap, and a tripped cap fills every non-`false` node (a checkerboard becomes one rectangle). [PLOT-SM-12](../handoff/plot/findings.md), open.
+  - Without an enclosure, a half-plane on a 1,000 x 600 view returns `complete: false` at the default budget. [PLOT-SM-7](../handoff/plot/findings.md), open.
+  - Borders with an enclosure cost about 4 times the fill (half-plane 5.7 ms against 0.3 ms). [PLOT-SM-13](../handoff/plot/findings.md), open.
+
+### P8. One-variable predicate filler
+
+- **Where:** `region.ts` `fillPredicate1D` (658 to 816).
+- **States:** a stack of x-spans; each popped span becomes `true` (in `spans`), `false` (in `falses`) or splits; sub-half-pixel `maybe` spans are decided by one centre test. Then true spans merge, and each edge that abuts a false span is bisected to 0.1 px. Run: `running`, `dead`, `done`.
+- **Invariants:** spans tile the view; every true edge inside the view abuts a false span; the budget bounds the work.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| span | three-valued state | `true` / `false` | `spans` / `falses` | |
+| span | `maybe` | wider than 0.5 px and splittable | two spans | |
+| span | `maybe` | narrower than 0.5 px | `spans` or `falses` | one centre test |
+| merged span | edge | abutting false span | sharpened edge | bisection to 0.1 px |
+| any | over budget | | `dead` | empty output |
+
+- **Reachable invalid states or transitions:** none found. `falses.find` per merged span is linear per lookup; 200 to 625 bands stayed fast.
+
+
+## symbolic
+
+Checked at commit `3266a74` on `feat/symbolic` (pass 1, pipeline step 4). Paths are under `packages/symbolic/src/`; line numbers refer to `3266a74`. Findings are in `handoff/symbolic/findings.md` (SYM-SM-1 to SYM-SM-27, all open). Every reachable invalid state below was reproduced through the public entry (`src/index.ts`: `run`, `parseExpression`, `parseCondition`, `toText`, `toLatex`, `handleWorkerRequest`, `arena`, `clearCache`).
+
+### S1. `run`: one call from arguments to a cell
+
+- **Where:** `run.ts` `run` (lines 318 to 384), `runInner` (lines 386 to 470), `cacheKey`/`argKey` (lines 88 to 108), `cacheGet`/`cachePut` (lines 110 to 130), `runSteps` (lines 533 to 572); `ops.ts` `OPS` (line 2108).
+- **States:**
+
+| State | Holds |
+|---|---|
+| `validate` | positional and named arguments split; named names checked against the command's forms |
+| `resolve` | `ref` nodes replaced by live values (`ctx.resolveRef`) |
+| `plan` | heavy op with a clock read refused (`time_dependent_input`) |
+| `keyed` | cache key built from engine version, op, argument keys, domains and facts |
+| `fast-lane` | heavy op with `opts.fastLaneMs`: cache hit or `pending` |
+| `cached` | cache hit (not when `opts.steps`) |
+| `computing` | `OPS[op]` running under a fresh `Budget` and a `note` closure |
+| `done` | cell (defined or undefined) and notices; cell put in the cache unless `steps` or `pending` |
+| `failed` | an exception mapped by `run`'s `catch`: `OpError` to an error object; `Unsupported`, `NonElementary`, `LimitExceeded`, `BudgetExceeded` to undefined cells; `ParseFailure` to `syntax`/`limit`; anything else to `internal` |
+
+- **Invariants:** `run` never throws; the cache key covers every input that can change the output (arguments with their `exact`, `excluded` and `display` fields, assumptions, limits, engine version) and two different inputs never share a key; a budget stop never becomes a defined cell; `pending` is never cached; the same call gives the same cell whatever ran before (design 5.12, 5.13, acceptance 9); `op` names only an entry of the command table.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `validate` | named argument | name not in any form (op is not `Steps`) | `failed` | `bad_option` |
+| `validate` | done | | `resolve` | |
+| `resolve` | done | heavy op and an argument tree holds `t` | `failed` | `time_dependent_input` |
+| `resolve` | done | otherwise | `keyed` | |
+| `keyed` | | heavy and `fastLaneMs` set | `fast-lane` | |
+| `fast-lane` | cache lookup | hit | `done` | LRU touch |
+| `fast-lane` | cache lookup | miss | `done` (pending) | no computation at all, even for trivial input |
+| `keyed` | cache lookup | not `steps`, hit | `cached` → `done` | |
+| `keyed` | | op is `Steps` | `runSteps` | parses the call text, re-enters `run` with `{ steps: true }` and `ctx` only (`opts.limits` dropped) |
+| `keyed` | | otherwise | `computing` | `new Budget(limits, fastLaneMs)` |
+| `computing` | op returns | | `done` | `cachePut` unless `steps` |
+| `computing` | `BudgetExceeded('ms')` | `fastLaneMs` set | `done` (pending) | not cached |
+| `computing` | any exception | | `failed` | not cached |
+
+- **Reachable invalid states or transitions:**
+  - Two inputs share a key: `argKey` keys a Cond by `condText`, which prints `and`/`or`/`not` without brackets, and keys an Expr by node id only (no `excluded`, no `display`); `limits` are not in the key at all. `Assume((a < 0 or b > 0) and a > 0, sqrt(a^2))` is `a`; after it, `Assume(a < 0 or (b > 0 and a > 0), sqrt(a^2))` returns the cached `a` (fresh: `abs(a)`). An `Equivalent` whose first argument carries `excluded` leaves a `differ_at` notice in the cache for the same call without `excluded`. A `Simplify` run with a small `maxSteps` caches the unsimplified input, and the default call then gets it. SYM-SM-9 (open).
+  - `OPS[call.op]` in `runSteps` reads `Object.prototype`: `Steps("constructor(x)")`, `Steps("toString(x)")` and `Steps("valueOf()")` call those functions as ops, reach `computing` with no cell, put `{ cell: undefined }` in the cache and end in `internal`. SYM-SM-5 (open).
+  - `runSteps` parses untrusted text (and `Expr` with a text argument parses it) before any `Budget` exists, so S9's exponential parse is not in any state of this machine. SYM-SM-1 (open).
+  - The heavy fast lane never computes, so a heavy cell can never update in the same frame after a fast finish (design 5.13); with the worker in another realm its results never reach this cache (S7). SYM-SM-26 (open).
+
+### S2. Budget
+
+- **Where:** `run.ts` `Budget` (lines 52 to 72), `BudgetExceeded` (lines 32 to 41); `poly.ts` `Ticker`, `NO_TICK` (line 16); every `tick.tick(n)` call; `contracts.ts` `DEFAULT_LIMITS` (lines 207 to 218).
+- **States:** `counting` (steps ≤ `maxSteps`, wall time not yet checked or under `maxMs`); `exceeded-steps` (sticky: every later `tick` throws again); `exceeded-ms` (thrown once, then re-armed: the next 1,023 ticks pass before the next check).
+- **Invariants:** every loop whose length depends on the input ticks, or is bounded by a documented size limit checked before it starts; a `BudgetExceeded` always reaches `run` (S1 `failed`) and becomes `timeout` or `limit`; `maxNodes` (200,000) and `maxDigits` (100,000) are enforced; the number of steps and the result do not depend on the wall clock.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `counting` | `tick(n)` | steps + n > `maxSteps` | `exceeded-steps` | throw `BudgetExceeded('steps')` |
+| `counting` | `tick(n)` | 1,024 ticks since the last check and elapsed > `maxMs` | `exceeded-ms` | throw `BudgetExceeded('ms')` |
+| `exceeded-ms` | 1,024 more ticks | still over | `exceeded-ms` | throw again |
+| any | code path with `NO_TICK` or no ticker | | unchanged | no bound |
+
+- **Reachable invalid states or transitions:**
+  - Never-ticking paths: the `rootof` branch of the parser (`parse.ts` line 516, `upolyIsolate(p)` with `NO_TICK`; `Expr("rootof((x+1)^1000 - 2, 1)")` takes 215 s with `fastLaneMs: 2`), trial division in `roots.pull` and `roots.exact` (`rules.ts` lines 139, 367), all whole-number ops (`num.ts` `isPrimeBig`, `nextPrimeBig`, `divisorsFromFactors`, `primeFactorsBig` with its own 2,000,000-step budget, `binomialBig`). SYM-SM-2, SYM-SM-4 (open).
+  - `maxNodes` and `maxDigits` are never read: `Budget` never throws `'nodes'` or `'digits'`; `intPowNumber` squares the base before its digit check (`node.ts` line 605); `roots.exact` raises to `whole` with no check (`rules.ts` line 382); `ratPow` in `treeToUPoly` and `intDivisors` have none. `Factor(x^2 - (10^1000)^99)` with `maxMs: 50` kills the process with an out-of-memory abort. SYM-SM-3 (open).
+  - `Simplify` catches `BudgetExceeded` per candidate (S3), so a budget stop becomes a defined cell. SYM-SM-10 (open).
+
+### S3. Rewrite engine and the Simplify search
+
+- **Where:** `rules.ts` `runPasses` (lines 56 to 79), `SIMPLIFY_RULES` (line 390), `tryCandidate` (line 1392), `simplifyNode` (lines 1410 to 1452), `togetherNode` (line 507), `factorNode` (line 1145), `verifyFactor` (line 1201).
+- **States:** `canonical` (input after the constructors); `passes` (bottom-up rule application, repeated while a rule fired, at most 10,000 rule tries in total); per round (at most 3): `candidates` (input, expansion, together with cancelled factors, factored, trig-reduced, log/power, radicals), `scored` (cost, then fewer `add` nodes, then printed text), `chosen`; `final-together` (cancel once more if not dearer); `done` with `excluded`.
+- **Invariants:** each candidate is equal to the input wherever both are defined; `excluded` lists exactly the values a chosen cancellation removed; a candidate that fails is dropped, but a budget stop ends the whole call as `timeout` (design 5.13: a budget stop "becomes undefined `timeout`"); the result does not depend on wall time.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `canonical` | `runPasses(SIMPLIFY_RULES)` | | `candidates` | `note` per rule fired |
+| `candidates` | build each | builder throws anything | candidate dropped | exception swallowed (`tryCandidate`) |
+| `scored` | best is the current form | | `final-together` | |
+| `scored` | best differs | round < 3 | `candidates` | `simplify.choose` noted; excluded of a together winner added |
+| `final-together` | together result | has excluded and cost ≤ current + 1 | `done` | excluded added |
+
+- **Reachable invalid states or transitions:** `tryCandidate` swallows `BudgetExceeded`, `LimitExceeded` and internal errors, so `Simplify((x^2 - 1)/(x - 1))` with `maxSteps: 40` is the defined value `(x^2 - 1)/(x - 1)` (not `timeout`), and with the `ms` budget the result depends on machine speed; S1 then caches it. SYM-SM-10 (open). `roots.pull` and `roots.exact` loop without ticking (S2). `factorNode` builds multivariate results whose content is a junk constant (`x^2 - y^2` → `-36 * (x/36 + y/36) * (y - x)`) and stops early on `x^12 - 1`. SYM-SM-17 (open).
+
+### S4. Interning arena
+
+- **Where:** `node.ts` `createArena`, `arena` (lines 154 to 187), `ZERO`/`ONE`/`MINUS_ONE`/`TWO`/`HALF` (lines 332 to 336), `keyOf` (line 122), the id-keyed memo maps (`mapNodes`, `freeSymbols`, `nodeCount`, `substituteList`).
+- **States:** `live(n)` (a map from structural key to node; the next id is `n`); `cleared` (map empty, next id 1).
+- **Invariants:** one object per structure in a realm, so `===` is structural equality; the module constants are members of the arena; node ids are unique for the life of every cache entry and memo that holds them; the arena is rebuilt from live nodes past 1,000,000 nodes (design 5.13).
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `live(n)` | `intern(body)` | key present | `live(n)` | returns the existing node |
+| `live(n)` | `intern(body)` | key absent | `live(n + 1)` | new node with id `n` |
+| `live(n)` | `arena.clear()` | | `cleared` | constants and cached ids now point outside the arena |
+| any | size passes 1,000,000 | | (no transition) | nothing is ever rebuilt |
+
+- **Reachable invalid states or transitions:** after `arena.clear()`, `0` built by the parser is a different object from `ZERO`, so `Solve(x^2 - 4 == 0, x)` returns `[]`; ids restart at 1 while the run cache still holds entries keyed by old ids. The arena only grows: 3,000 calls of `Expand((x + i)^12)` with `clearCache()` between them leave 525,628 nodes and 169 MB of heap. SYM-SM-7 (open).
+
+### S5. Assumptions
+
+- **Where:** `assume.ts` (`assumptions`, `signOf`, `factSign`, `factSignBound`, `findContradiction`); `ops.ts` `opAssume` (lines 1723 to 1750); `run.ts` `makeAssumptions(ctx.domains, ctx.facts)` and the cache key (line 104).
+- **States:** an immutable `Assumptions` value per call: `domains` (symbol to domain) and `facts` (conditions). `Assume(c, e)` makes a new value with `facts ∪ c` (split on top-level `and`) for the inner `simplifyNode` only.
+- **Invariants:** no assumption outlives the call that made it; the cache key holds every domain and fact; a fact that contradicts another is `bad_assumption`; `factSignBound` drops the fact it is reading, so circular facts end.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| none | `run(op, args, opts, ctx)` | | `A0 = (ctx.domains, ctx.facts)` | part of the cache key (facts by `condText`) |
+| `A0` | `Assume(c, e)` | a fact names no symbol | error | `bad_assumption` |
+| `A0` | `Assume(c, e)` | a direct contradiction (`a > 0`, `a < 0`) | error | `bad_assumption` with `related` |
+| `A0` | `Assume(c, e)` | otherwise | `A1 = A0 + facts(c)` | `simplifyNode(e)` under `A1`; `A1` dropped on return |
+
+- **Reachable invalid states or transitions:** the store itself does not leak between calls (checked: no module state; the Assume facts live in a local value). The cache leaks them: facts and Cond arguments are keyed by bracket-free `condText`, so two different fact sets share a key (S1). SYM-SM-9 (open).
+
+### S6. Steps recorder
+
+- **Where:** `run.ts` `note` closure and `stage` (lines 437 to 441), `runSteps` (lines 533 to 572); `steps.ts` `TEACHING_RULES`, `PHRASES`, `stepsToText`, `parseCommandCall`.
+- **States:** `off` (`opts.steps` not set: `note` only updates `stage` and forwards to `ctx.note`); `recording` (each `note` appends `{ rule, before, after, teaching }` to `logged`); `formatted` (teaching steps with a phrase, at most 12 lines; none gives one line and notice `no_steps`).
+- **Invariants:** recording never reads or writes the cache; the inner command runs with the caller's budget and limits; a `Steps` call is a heavy op and never nests (`Steps(Steps(…))` is refused).
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `off` | `run(op, …, { steps: true })` | | `recording` | cache read and write skipped |
+| `recording` | rule fires | | `recording` | step appended; `stage` = `op: rule` |
+| `recording` | op returns | | `formatted` | |
+| `runSteps` | call text parsed | `OPS[op]` is undefined or op is `Steps` | error | `unknown_command` |
+| `runSteps` | inner `run` | | `recording` | inner call gets `ctx` only, never `opts.limits` |
+
+- **Reachable invalid states or transitions:** `OPS[op]` finds `Object.prototype` members (S1); the inner call drops `opts.limits`, so `Steps` always uses the default budget whatever the caller asked. SYM-SM-5, SYM-SM-4 (open). Step texts are built with `toText`, so they inherit S9's round-trip faults. SYM-SM-19 (open).
+
+### S7. Worker protocol
+
+- **Where:** `worker.ts` `WorkerRequest`, `WorkerResponse`, `handleWorkerRequest`, `WorkerHost` (lines 1 to 74).
+- **States (host side, per request id):** `posted` → `running` (the worker's synchronous `run`) → `answered`. Worker side: one module instance with its own arena (S4), run cache (S1) and family counter (S8).
+- **Invariants:** a job's arguments mean the same in the worker as on the main thread; an answer belongs to exactly one request id; a superseded job can be stopped or its answer recognised as stale; the worker's result is usable by the main thread's fast lane.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| none | `post(req)` | | `posted` | arguments cross by structured clone |
+| `posted` | `handleWorkerRequest` | | `running` | `ctx` from `domains`/`facts`; no `resolveRef` (the `needRef` round trip named in the comment does not exist) |
+| `running` | `run` returns | | `answered` | `{ id, result }` posted |
+| `running` | host wants to cancel | | (no transition) | there is no cancel message; the job runs to its budget (1,000 ms) |
+
+- **Reachable invalid states or transitions:** structured clone gives new objects that are not the worker arena's nodes, and in a real worker their ids name other nodes. In one process, `handleWorkerRequest(structuredClone({ id: 1, op: 'Solve', args: [x^2 - 1 == 0, x] }), run)` returns `[]`; the same call on the original objects returns `[x == -1, x == 1]`. SYM-SM-8 (open). No cancel, no stale-answer rule and no way to feed the main-thread cache. SYM-SM-26 (open).
+
+### S8. Family parameter counter
+
+- **Where:** `solve.ts` `trigParamNext` (line 882), `resetTrigParams`, uses at lines 817, 945, 988 and 2269.
+- **States:** a module-wide integer `n`; each trig, complex-exponential or enumerated family takes `k{n}` and moves to `n + 1`.
+- **Invariants:** a result does not depend on calls made before it (design 5.12, acceptance 9); the parameter is an integer symbol for the result (design 2.3).
+- **Transitions:** `n` → `n + 1` on every family built, including families later dropped and calls that end `unsupported`; `resetTrigParams()` → 1.
+- **Reachable invalid states or transitions:** `Solve(sin(x) == 1/2, x)` gives `k1`, then `Solve(tan(x) == 1, x)` gives `k2`, and after `clearCache()` the first call gives `k3`; `Steps` (which skips the cache) moves it on every call. The symbol carries no `integer` domain. SYM-SM-21 (open).
+
+### S9. Text parser
+
+- **Where:** `parse.ts` `lex` (lines 43 to 121), `Parser` (lines 123 to 455), `numNode`, `nameNode`, `callNode` (lines 460 to 532); printer counterpart `print.ts` `textOf`, `condText`.
+- **States:** `cond-attempt` (`parseNot` at `(`, and `parseCondOrExpr` in `if` arguments: try a condition, on failure rewind `pos` and parse an expression); `expr` (sum, product with implicit multiplication after a number literal, unary, power, postfix degree, primary); `depth` (at most 500 nested primaries, then a `limit` failure).
+- **Invariants:** every text `toText`/`condText` prints parses back to the same node (design 5.11, acceptance 1); parse time is linear in the text (each token read a bounded number of times); keywords `and`, `or`, `not`, `in` are never operands; a number literal is a finite number; `rootof(p, k)` names an existing real root.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `if` argument | `parseCondOrExpr` | | `cond-attempt` | the whole argument is parsed as a condition first |
+| `cond-attempt` | no comparison follows | | rewind, `expr` | the argument is parsed a second time |
+| `expr` | number literal then a name or `(` | | product | implicit multiplication, also for the names `and`, `or`, `in` |
+| `lex` | digits and dots | | number token | `1.2.3` is one token, `Number` gives NaN |
+| `callNode` | `rootof(p, k)` | `p` a polynomial in `x` | node | `upolyIsolate(p)` with no ticker; `k` not checked against the root count |
+
+- **Reachable invalid states or transitions:** nested `if` arguments are parsed twice per level, so time doubles per level (16 levels 957 ms, 18 levels 3.8 s, through `run('Expr', [text])` with `fastLaneMs: 2`). SYM-SM-1 (open). `x > 0 and y < 1`, `x < 1 or x > 2` and the `cases` that `Solve(a*x == b, x)` prints (`a == 0 and -b == 0`) do not parse, because `0 and` is read as `0 * and`; `condText` drops the brackets of `and(or(…))` and `not(and(…))`; a float prints as a decimal that parses back as an exact rational (`0.5` → `1/2`), and NaN/Infinity print as names. SYM-SM-19 (open). `rootof(x^2 + 1, 1)` is accepted and `Numeric` gives `0`. SYM-SM-18 (open).
+
+### S10. Solve dispatch for one equation
+
+- **Where:** `solve.ts` `solveEquation` (lines 448 to 506), strategies `solveExact`, `solveRational`, `solveRadical`, `solveExpLog`, `solveTrig`, `solveAbs`, `solveBySubstitution`; `ops.ts` `solveOneCond` (lines 1054 to 1116); root isolation `poly.ts` `upolyIsolate`, `cauchyBound` (lines 531 to 591).
+- **States:** `absent` (unknown not in `f`: all or none); `classify` (strategies in order; `Unsupported` moves to the next); `family` (an integer parameter, enumerated when both `from` and `to` are finite); `filter` (interval, domain restrictions, `verifyRoot`); `sorted`; for `and`: solve the first equation, then keep solutions that satisfy the other relations.
+- **Invariants:** every solution satisfies the equation and every side condition; no real solution is missed; a case split lists only possible parameter values, and every value where the generic answer fails; "all" or "none" for a constant equation is decided exactly.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| start | `f` free of `v` | simplifies to 0 | all | |
+| start | `f` free of `v` | numeric value | all if \|value\| < 1e-12, else none | float test |
+| `classify` | a strategy returns | | `family` or `filter` | |
+| `classify` | all throw `Unsupported` | | `unsupported` | `detail` names the forms |
+| `and` | each solution of the equation | substituted difference is exactly 0 | kept | for every relation, including `<`, `>` and `!=` |
+| `and` | otherwise | float value | kept if the relation holds within 1e-9 | |
+| isolation | Cauchy bound | a coefficient above 1.8e308 | `BigInt(±Infinity)` | `RangeError` |
+
+- **Reachable invalid states or transitions:** `Solve(x^2 == 4 and x < 2, x)` and `Solve(x^2 == 4 and x != 2, x)` keep `x == 2`. SYM-SM-13. `Solve(exp(-30) == 0, x)` is "all". SYM-SM-12. `Solve(x^2 == a, x)` has no `a >= 0` condition and lists the impossible cases `1 == 0 and …`. SYM-SM-16. `Solve(x^3 - x - 10^400 == 0, x)` is `[]` after 992 ms and `NSolve` of it is `internal`. SYM-SM-6. `Solve(ln(x) == 0, x)` is `unsupported` while `ln(x) == 1` solves. SYM-SM-24. All open.

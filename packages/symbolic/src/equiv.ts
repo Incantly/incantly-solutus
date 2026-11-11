@@ -1,0 +1,197 @@
+/**
+ * Equivalence and zero tests (cas/design.md 2.2, sub-feature 12): `true` only when proved,
+ * `false` only when a counter-example exists, otherwise undefined `unproven`. Proof by
+ * exact normal forms; counter-examples by deterministic random-point testing (fixed seed,
+ * so runs are reproducible on every machine).
+ */
+import type { SymCond, SymNode } from './node';
+import { add, asRational, bitLength, divideNodes, fn, freeSymbols, intN, isZeroNode, mapNodes, mul, negateNode, pow } from './node';
+import { evalAt, hasImaginaryUnit, reduceImaginary, ruleCtx, simplifyNode, togetherNode } from './rules';
+import type { RuleCtx } from './rules';
+
+export type EquivVerdict = 'true' | 'false' | 'unknown';
+
+/** Deterministic PRNG (mulberry32) with a fixed seed: reproducible counter-examples. */
+function rng(seed: number): () => number {
+  let s = seed >>> 0;
+  return () => {
+    s = (s + 0x6d2b79f5) >>> 0;
+    let t = s;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function testPoints(syms: readonly string[], count: number): Map<string, number>[] {
+  const rand = rng(0xC0FFEE);
+  const pts: Map<string, number>[] = [];
+  const fixed = [-2, -1, -0.5, 0.5, 1, 2, 3];
+  for (let i = 0; i < count; i++) {
+    const m = new Map<string, number>();
+    for (const s of syms) {
+      if (i < fixed.length) m.set(s, fixed[i] as number);
+      else m.set(s, (rand() * 20 - 10) * (rand() < 0.3 ? 0.1 : 1));
+    }
+    pts.push(m);
+  }
+  return pts;
+}
+
+/** Sign of a closed real constant, decided with more digits than a float has; null when undecided. */
+export type ClosedSign = (e: SymNode, ctx: RuleCtx) => -1 | 0 | 1 | null;
+
+let closedSign: ClosedSign | null = null;
+
+/** The decimal evaluator lives with the commands; it registers itself here. */
+export function registerClosedSign(f: ClosedSign): void {
+  closedSign = f;
+}
+
+/** The whole `k`-th root of `n`, or null when `n` is not a perfect `k`-th power. */
+function wholeRoot(n: bigint, k: number): bigint | null {
+  let lo = 1n;
+  let hi = 1n << BigInt(Math.ceil(bitLength(n) / k) + 1);
+  while (lo < hi) {
+    const mid = (lo + hi + 1n) >> 1n;
+    if (mid ** BigInt(k) <= n) lo = mid;
+    else hi = mid - 1n;
+  }
+  return lo ** BigInt(k) === n ? lo : null;
+}
+
+/** Rewrites `ln(b^k)` for a whole perfect power as `k * ln(b)`, with the smallest base. */
+function splitLogPowers(t: SymNode): SymNode {
+  return mapNodes(t, (n) => {
+    if (n.k !== 'fn' || n.name !== 'ln' || n.args.length !== 1) return n;
+    const a = n.args[0] as SymNode;
+    if (a.k !== 'int' || a.v < 4n || bitLength(a.v) > 2048) return n;
+    for (let k = bitLength(a.v); k >= 2; k--) {
+      const root = wholeRoot(a.v, k);
+      if (root !== null && root > 1n) return mul(intN(k), fn('ln', intN(root)));
+    }
+    return n;
+  });
+}
+
+/**
+ * Zero test for a constant with no symbols. `true` only when zero is proved
+ * exactly; `false` when the value is certainly not zero; never an answer from
+ * a float tolerance (SYM-SM-12): a tiny float can be a real small number
+ * (`exp(-50)`) or the rounding of a real zero.
+ */
+export function closedZeroVerdict(d: SymNode, ctx: RuleCtx): EquivVerdict {
+  const s = simplifyNode(d, ctx).node;
+  if (isZeroNode(s)) return 'true';
+  const exact = asRational(s);
+  if (exact !== null) return exact.n === 0n ? 'true' : 'false';
+  const val = evalAt(s, new Map());
+  if (val !== null && Number.isFinite(val) && Math.abs(val) >= 1e-9) return 'false';
+  // One more exact form: logarithms of perfect powers share a base
+  // (`ln(8)` is `3 ln(2)`), which settles `2^(ln(8)/ln(2)) - 8`.
+  const split = splitLogPowers(s);
+  if (split !== s) {
+    // Exponents are put over a common denominator so `3 ln(2) / ln(2)` cancels.
+    const tidy = mapNodes(split, (n) => {
+      if (n.k !== 'pow' || n.exp.k === 'int' || n.exp.k === 'rat') return n;
+      try {
+        return pow(n.base, togetherNode(n.exp, ctx).node);
+      } catch (err) {
+        if (err instanceof Error && err.name === 'BudgetExceeded') throw err;
+        return n;
+      }
+    });
+    if (isZeroNode(simplifyNode(tidy, ctx).node)) return 'true';
+  }
+  const sign = closedSign === null ? null : closedSign(s, ctx);
+  if (sign === 1 || sign === -1) return 'false';
+  return 'unknown';
+}
+
+/**
+ * Try to prove `d` is zero, or find a counter-example. Exact normal forms first
+ * (difference simplifies to zero, or both sides share a cancelled form), then points.
+ */
+export function zeroVerdict(d: SymNode, ctx: RuleCtx): EquivVerdict {
+  if (isZeroNode(d)) return 'true';
+  if (freeSymbols(d).size === 0) return closedZeroVerdict(d, ctx);
+  if (hasImaginaryUnit(d)) {
+    try {
+      if (isZeroNode(reduceImaginary(d, ctx))) return 'true';
+    } catch {
+      void 0;
+    }
+  }
+  const s = simplifyNode(d, ctx).node;
+  if (isZeroNode(s)) return 'true';
+  try {
+    const tg = togetherNode(s, ctx).node;
+    if (isZeroNode(tg)) return 'true';
+  } catch {
+    void 0;
+  }
+  const syms = [...freeSymbols(s)];
+  let tested = 0;
+  for (const pt of testPoints(syms, 24)) {
+    const val = evalAt(s, pt);
+    if (val === null || !Number.isFinite(val)) continue;
+    tested++;
+    const scale = 1 + Math.abs(val);
+    if (Math.abs(val) > 1e-9 * scale) return 'false';
+  }
+  if (tested < 4) return 'unknown';
+  return 'unknown';
+}
+
+/** `Equivalent(e1, e2)`: prove equal, find a counter-example, or give up honestly. */
+export function equivalent(e1: SymNode, e2: SymNode, ctx: RuleCtx): EquivVerdict {
+  if (e1 === e2) return 'true';
+  return zeroVerdict(add(e1, negateNode(e2)), ctx);
+}
+
+/** `IsZero(e)`. */
+export function isZeroVerdict(e: SymNode, ctx: RuleCtx): EquivVerdict {
+  return zeroVerdict(e, ctx);
+}
+
+/**
+ * `Equivalent(c1, c2)` for conditions, structural part: the same relation up to a nonzero
+ * constant factor of both sides (`2x == 4` and `x == 2`). It only ever proves `true`; a
+ * different shape says nothing about the solution sets, so the caller compares those.
+ */
+export function equivalentCond(c1: SymCond, c2: SymCond, ctx: RuleCtx): EquivVerdict {
+  if (c1.c === 'rel' && c2.c === 'rel' && c1.op === c2.op) {
+    const l = equivalent(c1.l, c2.l, ctx);
+    const r = equivalent(c1.r, c2.r, ctx);
+    if (l === 'true' && r === 'true') return 'true';
+    const d1 = add(c1.l, negateNode(c1.r));
+    const d2 = add(c2.l, negateNode(c2.r));
+    if (isZeroNode(d2)) return isZeroNode(d1) ? 'true' : 'unknown';
+    try {
+      const ratio = asRational(togetherNode(divideNodes(d1, d2), ctx).node);
+      if (ratio !== null && ratio.n !== 0n) {
+        if (c1.op === '==' || c1.op === '!=') return 'true';
+        if (ratio.n > 0n) return 'true';
+      }
+    } catch {
+      void 0;
+    }
+    return 'unknown';
+  }
+  if (c1.c === 'true' && c2.c === 'true') return 'true';
+  if (c1.c === 'false' && c2.c === 'false') return 'true';
+  if ((c1.c === 'true' && c2.c === 'false') || (c1.c === 'false' && c2.c === 'true')) return 'false';
+  if (c1.c === 'not' && c2.c === 'not') return equivalentCond(c1.of, c2.of, ctx);
+  if ((c1.c === 'and' || c1.c === 'or') && c2.c === c1.c && c1.of.length === c2.of.length) {
+    for (let i = 0; i < c1.of.length; i++) {
+      if (equivalentCond(c1.of[i] as SymCond, c2.of[i] as SymCond, ctx) !== 'true') return 'unknown';
+    }
+    return 'true';
+  }
+  return 'unknown';
+}
+
+/** Convenience entry with a fresh context. */
+export function equivalentWith(e1: SymNode, e2: SymNode): EquivVerdict {
+  return equivalent(e1, e2, ruleCtx());
+}
