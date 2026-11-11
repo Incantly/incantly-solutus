@@ -498,6 +498,15 @@ export function quadFinite(f: Fn1, a: number, b: number, o: QuadOptions): QuadRe
   const m0 = 0.5 * (a + b);
   const fm0 = f(m0);
   if (!o.work.spend(3)) return { value: Number.NaN, error: Number.NaN, ok: false, spent: true };
+  if (fa !== fa && fb !== fb && fm0 !== fm0) {
+    // nothing defined at the first three points: look at 61 more before halving panels without end
+    let any = false;
+    for (let i = 1; i < 62 && !any; i++) {
+      if (!o.work.spend(1)) return { value: Number.NaN, error: Number.NaN, ok: false, spent: true };
+      any = f(a + ((b - a) * i) / 62) === f(a + ((b - a) * i) / 62);
+    }
+    if (!any) return { value: Number.NaN, error: Number.NaN, ok: false, spent: false, noData: true };
+  }
   const whole0 = ((b - a) / 6) * (numOr0(fa) + 4 * numOr0(fm0) + numOr0(fb));
   const tol0 = Math.max(o.tolAbs, o.tolRel * Math.abs(whole0));
   const stack: Panel[] = [{ a, fa, m: m0, fm: fm0, b, fb, whole: whole0, tol: tol0, depth: 0 }];

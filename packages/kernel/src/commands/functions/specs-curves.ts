@@ -2066,7 +2066,7 @@ function runEnvelopeFree(call: RuleCall): unknown {
   return toSampledCurve(sw.value.pieces, 'envelope');
 }
 
-const FAMILY = 'Line|Segment|Ray|Circle';
+const FAMILY = 'Line|Segment|Ray|Circle|Curve';
 
 /** The commands that sweep a target which may be undefined at the mover's current value (a gap is part of the locus). */
 const SWEEPERS: ReadonlySet<string> = new Set(['Locus', 'Path', 'LocusEquation', 'Envelope']);
