@@ -204,6 +204,17 @@ function shiftLightness(c: Rgba, delta: number): Rgba {
   return rgba(r, g, b, c.a);
 }
 
+/**
+ * Fill colour of a `dot` marker (design 9.4): the stroke colour with its
+ * lightness moved 60% of the way to white (dark colours) or black (light ones).
+ */
+export function dotFillColor(c: Rgba): Rgba {
+  const [h, s, l] = rgbToHsl(c.r, c.g, c.b);
+  const target = l <= 0.5 ? 1 : 0;
+  const [r, g, b] = hslToRgb(h, s, l + (target - l) * 0.6);
+  return rgba(r, g, b, c.a);
+}
+
 /** Parse a colour literal: name (with light/dark forms), rgb/hsl, hex. */
 export function parseColor(text: string): Result<Rgba> {
   const t = text.trim().toLowerCase();

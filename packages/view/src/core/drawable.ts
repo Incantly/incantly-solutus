@@ -23,7 +23,7 @@ import {
   describeSegment, describeSlider, describeText, describeUndefined, describeVector,
   VIEW_REASON_TEXT,
 } from './describe';
-import type { ResolvedStyle } from './styles';
+import { dotFillColor, type ResolvedStyle } from './styles';
 import {
   expandRect, unionRect, type FillStyle, type PathCommand, type StrokeStyle, type Surface, type TextRun,
 } from './surface';
@@ -229,7 +229,8 @@ export class GeometryDrawable implements Drawable {
     if (shape === 'dot' || shape === 'ring') {
       s.path(circleCommands(x, y, r));
       if (shape === 'dot') {
-        s.fill({ kind: 'solid', color: style.color, opacity: style.opacity });
+        // 1 px outline in the stroke colour, fill shifted 60% in lightness (design 9.4).
+        s.fill({ kind: 'solid', color: dotFillColor(style.color), opacity: style.opacity });
         s.path(circleCommands(x, y, r));
         s.stroke({ ...st, width: 1 });
       } else {
@@ -286,8 +287,10 @@ export class GeometryDrawable implements Drawable {
   hit(p: PxPoint, slack: number): HitCandidate | null {
     const g = this.geom;
     if (g === null) return null;
-    if ((this.kind === 'widget' || this.kind === 'text') && this.widgetRect !== null) {
-      const r = this.widgetRect;
+    // Text and widgets hit their measured rectangle expanded by 2 px (design 10.7).
+    const measured = this.widgetRect ?? (this.kind === 'text' ? this.bbox : null);
+    if ((this.kind === 'widget' || this.kind === 'text') && measured !== null) {
+      const r = measured;
       const inside = (p.x as number) >= (r.x0 as number) - 2 && (p.x as number) <= (r.x1 as number) + 2 &&
         (p.y as number) >= (r.y0 as number) - 2 && (p.y as number) <= (r.y1 as number) + 2;
       return inside ? { id: this.id, part: 'body', distance: 0, priority: 2 } : null;

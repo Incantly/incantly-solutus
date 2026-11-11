@@ -42,12 +42,13 @@ export interface DragFacts {
 export function computeDragPlan(id: ObjId, facts: DragFacts): DragPlan {
   if (facts.fixed) return { kind: 'none', moves: [], reason: 'fixed' };
   if (facts.isLabel) return { kind: 'label', moves: [] };
+  // A slider's thumb is a free number: it drags the number, not a point.
+  if (facts.isSlider) return { kind: 'slider', moves: [{ id, role: 'number' }] };
   if (facts.free && !facts.onPath) return { kind: 'free', moves: [{ id, role: 'point' }] };
   if (facts.onPath) {
     if (!facts.pathDefined) return { kind: 'none', moves: [], reason: 'path_undefined' };
     return { kind: 'path', moves: [{ id, role: 'parameter' }] };
   }
-  if (facts.isSlider) return { kind: 'slider', moves: [{ id, role: 'number' }] };
   if (facts.free) return { kind: 'free', moves: [{ id, role: 'point' }] };
   if (facts.movableParents.length > 0) {
     return { kind: 'parents', moves: facts.movableParents.map((p) => ({ id: p, role: 'point' as const })) };
