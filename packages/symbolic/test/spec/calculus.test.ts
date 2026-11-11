@@ -240,12 +240,15 @@ describe('Integral (definite)', () => {
       ['sin(x)^2', (x) => Math.sin(x) ** 2, 0, 2],
       ['x*sin(x)', (x) => x * Math.sin(x), 0, 3],
       ['ln(x)', (x) => Math.log(x), 1, 4],
-      ['sqrt(x)', (x) => Math.sqrt(x), 0, 4],
     ];
     for (const [f, g, a, b] of table) {
       const got = numResult('Integral', [ex(f), sy('x'), nm(a), nm(b)]);
       expect(Math.abs(got - simpson(g, a, b, 4000)), f).toBeLessThan(1e-10);
     }
+    // sqrt(x) has an unbounded slope at 0, where fixed-step Simpson is only good to about 3e-6,
+    // so check it against its exact value 16/3 instead.
+    const root = numResult('Integral', [ex('sqrt(x)'), sy('x'), nm(0), nm(4)]);
+    expect(Math.abs(root - 16 / 3), 'sqrt(x)').toBeLessThan(1e-10);
   });
   test('a non-integrable pole inside the interval is undefined divergent (Y204)', () => {
     const u = undef('Integral', [ex('1/x'), sy('x'), nm(-1), nm(1)]);

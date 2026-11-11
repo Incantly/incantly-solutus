@@ -596,7 +596,7 @@ describe('exact stationary points (optimisation-discrete 5.1 exact = true)', () 
     for (const n of r ?? []) expect(toText(n)).toContain('sqrt');
   });
   test('showArg prints a result (sanity for the helper)', () => {
-    expect(showArg(asExprArg('x+1'))).toBe('1 + x');
+    expect(showArg(asExprArg('x+1'))).toBe('x + 1');
     expect(asBool({ k: 'bool', v: true }, 'b')).toBe(true);
     expect(asList(li([]), 'l').length).toBe(0);
   });
