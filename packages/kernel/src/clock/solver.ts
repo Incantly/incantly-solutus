@@ -39,6 +39,8 @@ interface Layout {
   readonly offset: number;
   readonly point: boolean;
   readonly order: number;
+  /** The connected group of states this one belongs to (states whose rates read each other, directly or not). */
+  group: number;
 }
 
 const CHECKPOINT_STEPS = 120;
@@ -54,7 +56,13 @@ export class StateSolver {
   private checkpoints = new Map<number, Float64Array>();
   private curN = -1;
   private curY: Float64Array | undefined;
-  private failedAt: number | undefined;
+  /** For each group, the grid step at which it became undefined; `Infinity` while it is healthy. */
+  private failedAt: number[] = [];
+  private groupNames: string[][] = [];
+  /** Groups that failed during the stage or step being computed. */
+  private stageBad: boolean[] = [];
+  /** The grid step the derivative is being computed for: a group that failed at or before it is frozen. */
+  private stepIdx = 0;
   private h = 1 / 240;
   private t0 = 0;
   private dirtyInputs = false;
@@ -84,7 +92,7 @@ export class StateSolver {
     this.checkpoints.clear();
     this.curN = -1;
     this.curY = undefined;
-    this.failedAt = undefined;
+    this.failedAt = this.failedAt.map(() => Infinity);
     this.y0 = undefined;
     if (!rebuilt) return;
     const states = this.fig.list.filter((r) => r.p.kind === 'state');
@@ -95,7 +103,7 @@ export class StateSolver {
       const point = s.p.type.k === 'Point';
       const second = s.p.rates?.has(2) === true || s.p.checked.state?.velocity !== undefined;
       const order = second ? 2 : 1;
-      this.layout.push({ rec: s, offset: off, point, order });
+      this.layout.push({ rec: s, offset: off, point, order, group: 0 });
       off += (point ? 2 : 1) * order;
       if (!s.p.rates?.has(order)) this.missing.push(s.p.name);
     }
@@ -118,14 +126,59 @@ export class StateSolver {
     this.cone = anc.filter((r) => r.p.kind === 'rule' && downOfStates.has(r.order));
     for (const r of anc) if (r.p.kind === 'free') this.inputs.add(r.id);
     for (const r of this.fig.ancestorRecs(this.layout.map((l) => l.rec))) if (r.p.kind === 'free') this.inputs.add(r.id);
+    this.formGroups();
+  }
+
+  /** Connected groups: two states are in one group when the rates of one read the other, directly or through objects. */
+  private formGroups(): void {
+    const n = this.layout.length;
+    const parent = Array.from({ length: n }, (_, i) => i);
+    const find = (i: number): number => {
+      let r = i;
+      while (parent[r] !== r) r = parent[r] as number;
+      while (parent[i] !== r) {
+        const nx = parent[i] as number;
+        parent[i] = r;
+        i = nx;
+      }
+      return r;
+    };
+    const indexOf = new Map<ObjRec, number>();
+    this.layout.forEach((l, i) => indexOf.set(l.rec, i));
+    this.layout.forEach((l, i) => {
+      const seeds: ObjRec[] = [];
+      for (const rr of l.rec.p.rates?.values() ?? []) for (const id of rr.checked.reads) {
+        const r = this.fig.byId(id);
+        if (r) seeds.push(r);
+      }
+      for (const a of this.fig.ancestorRecs(seeds)) {
+        const j = indexOf.get(a);
+        if (j !== undefined) parent[find(j)] = find(i);
+      }
+    });
+    const ids = new Map<number, number>();
+    this.groupNames = [];
+    this.layout.forEach((l, i) => {
+      const root = find(i);
+      let g = ids.get(root);
+      if (g === undefined) {
+        g = this.groupNames.length;
+        ids.set(root, g);
+        this.groupNames.push([]);
+      }
+      l.group = g;
+      (this.groupNames[g] as string[]).push(l.rec.p.name);
+    });
+    this.failedAt = this.groupNames.map(() => Infinity);
+    this.stageBad = this.groupNames.map(() => false);
   }
 
   private num(v: unknown): number {
     return typeof v === 'number' ? v : Number.NaN;
   }
 
-  /** Initial state vector at the film start, or undefined when an initial value is undefined. */
-  private initial(): Float64Array | undefined {
+  /** Initial state vector at the film start. A state whose initial value is undefined puts its group out at step 0. */
+  private initial(): Float64Array {
     const env = this.fig.env;
     const y = new Float64Array(this.dim);
     const saved = env.t;
@@ -133,7 +186,10 @@ export class StateSolver {
     try {
       for (const l of this.layout) {
         const c = l.rec.p.compiled?.state;
-        if (!c) return undefined;
+        if (!c) {
+          this.failedAt[l.group] = 0;
+          continue;
+        }
         this.fig.ensureSlots(l.rec.p.checked.slots);
         const v = c.initial(env);
         const w = c.velocity ? c.velocity(env) : l.point ? { x: 0, y: 0 } : 0;
@@ -141,7 +197,10 @@ export class StateSolver {
         if (l.point) {
           const p = v as { x: number; y: number } | undefined;
           const q = w as { x: number; y: number } | undefined;
-          if (!p || !q) return undefined;
+          if (!p || !q) {
+            this.failedAt[l.group] = 0;
+            continue;
+          }
           y[l.offset] = p.x;
           y[l.offset + 1] = p.y;
           if (l.order === 2) {
@@ -156,7 +215,15 @@ export class StateSolver {
     } finally {
       env.t = saved;
     }
-    for (let i = 0; i < y.length; i++) if (!Number.isFinite(y[i])) return undefined;
+    for (const l of this.layout) {
+      const width = (l.point ? 2 : 1) * l.order;
+      for (let k = 0; k < width; k++) {
+        if (!Number.isFinite(y[l.offset + k])) {
+          y[l.offset + k] = 0;
+          this.failedAt[l.group] = 0;
+        }
+      }
+    }
     return y;
   }
 
@@ -169,7 +236,7 @@ export class StateSolver {
   }
 
   /** The derivative of the whole vector at `y` and time `t`. */
-  private deriv(y: Float64Array, t: number, out: Float64Array): boolean {
+  private deriv(y: Float64Array, t: number, out: Float64Array): void {
     const env = this.fig.env;
     this.load(y);
     const savedT = env.t;
@@ -183,28 +250,38 @@ export class StateSolver {
           for (let k = 0; k < comps; k++) out[l.offset + k] = y[l.offset + comps + k] as number;
         }
         const base = l.offset + (l.order === 2 ? comps : 0);
+        if ((this.failedAt[l.group] as number) <= this.stepIdx) {
+          for (let k = 0; k < comps; k++) out[base + k] = 0;
+          continue;
+        }
         if (!rate) {
           for (let k = 0; k < comps; k++) out[base + k] = 0;
           continue;
         }
         this.fig.ensureSlots(rate.checked.slots);
         const res = evaluate(rate.compiled, env);
-        if (!res.defined) return false;
-        const v = res.value as unknown;
+        const v = res.defined ? (res.value as unknown) : undefined;
         if (l.point) {
-          const p = v as { x?: number; y?: number };
-          if (typeof p?.x !== 'number' || typeof p.y !== 'number') return false;
+          const p = v as { x?: number; y?: number } | undefined;
+          if (typeof p?.x !== 'number' || typeof p.y !== 'number') {
+            this.stageBad[l.group] = true;
+            for (let k = 0; k < comps; k++) out[base + k] = 0;
+            continue;
+          }
           out[base] = p.x;
           out[base + 1] = p.y;
         } else {
-          if (typeof v !== 'number') return false;
+          if (typeof v !== 'number') {
+            this.stageBad[l.group] = true;
+            out[base] = 0;
+            continue;
+          }
           out[base] = v;
         }
       }
     } finally {
       env.t = savedT;
     }
-    return true;
   }
 
   private k1 = new Float64Array(0);
@@ -213,8 +290,11 @@ export class StateSolver {
   private k4 = new Float64Array(0);
   private tmp = new Float64Array(0);
 
-  /** One RK4 step from grid index n. Returns false when the state blows up or a rate is undefined. */
-  private step(y: Float64Array, n: number): boolean {
+  /**
+   * One RK4 step from grid index n. A group whose state blows up or whose rate is undefined is put out at step n + 1 and
+   * keeps its last values; every other group steps on.
+   */
+  private step(y: Float64Array, n: number): void {
     const d = this.dim;
     if (this.k1.length !== d) {
       this.k1 = new Float64Array(d);
@@ -226,26 +306,42 @@ export class StateSolver {
     const h = this.h;
     const t = this.t0 + n * h;
     const { k1, k2, k3, k4, tmp } = this;
-    if (!this.deriv(y, t, k1)) return false;
+    this.stageBad.fill(false);
+    this.stepIdx = n;
+    this.deriv(y, t, k1);
     for (let i = 0; i < d; i++) tmp[i] = (y[i] as number) + (h / 2) * (k1[i] as number);
-    if (!this.deriv(tmp, t + h / 2, k2)) return false;
+    this.deriv(tmp, t + h / 2, k2);
     for (let i = 0; i < d; i++) tmp[i] = (y[i] as number) + (h / 2) * (k2[i] as number);
-    if (!this.deriv(tmp, t + h / 2, k3)) return false;
+    this.deriv(tmp, t + h / 2, k3);
     for (let i = 0; i < d; i++) tmp[i] = (y[i] as number) + h * (k3[i] as number);
-    if (!this.deriv(tmp, t + h, k4)) return false;
-    for (let i = 0; i < d; i++) {
-      const v = (y[i] as number) + (h / 6) * ((k1[i] as number) + 2 * (k2[i] as number) + 2 * (k3[i] as number) + (k4[i] as number));
-      if (!Number.isFinite(v) || Math.abs(v) > BLOW_UP) return false;
-      y[i] = v;
+    this.deriv(tmp, t + h, k4);
+    for (const l of this.layout) {
+      const g = l.group;
+      if ((this.failedAt[g] as number) <= n) continue;
+      const width = (l.point ? 2 : 1) * l.order;
+      const next: number[] = [];
+      let bad = this.stageBad[g] === true;
+      for (let k = 0; k < width && !bad; k++) {
+        const i = l.offset + k;
+        const v = (y[i] as number) + (h / 6) * ((k1[i] as number) + 2 * (k2[i] as number) + 2 * (k3[i] as number) + (k4[i] as number));
+        if (!Number.isFinite(v) || Math.abs(v) > BLOW_UP) bad = true;
+        next.push(v);
+      }
+      if (bad) {
+        this.stageBad[g] = true;
+        this.failedAt[g] = Math.min(this.failedAt[g] as number, n + 1);
+        continue;
+      }
+      for (let k = 0; k < width; k++) y[l.offset + k] = next[k] as number;
     }
-    return true;
   }
 
-  /** The state vector at grid index n (an integer step count from the film start). */
-  private at(n: number): Float64Array | undefined {
+  /**
+   * The state vector at grid index n (an integer step count from the film start). A group that failed at or before n
+   * holds its last values here; `sync` reports it as undefined.
+   */
+  private at(n: number): Float64Array {
     if (this.y0 === undefined) this.y0 = this.initial();
-    if (this.y0 === undefined) return undefined;
-    if (this.failedAt !== undefined && n >= this.failedAt) return undefined;
     let from: number;
     let y: Float64Array;
     if (this.curY !== undefined && this.curN >= 0 && this.curN <= n) {
@@ -258,10 +354,7 @@ export class StateSolver {
       y = Float64Array.from(best === 0 ? this.y0 : (this.checkpoints.get(best) as Float64Array));
     }
     for (let i = from; i < n; i++) {
-      if (!this.step(y, i)) {
-        this.failedAt = i + 1;
-        return undefined;
-      }
+      this.step(y, i);
       const m = i + 1;
       if (m % CHECKPOINT_STEPS === 0 && !this.checkpoints.has(m)) this.checkpoints.set(m, Float64Array.from(y));
     }
@@ -272,7 +365,8 @@ export class StateSolver {
 
   /**
    * Advances the states to the clock and returns the state objects whose cell changed. Called by the update pass.
-   * Cone cells that the integration used are put back before it returns.
+   * Cone cells that the integration used are put back before it returns. A group of connected states that blew up is
+   * undefined; the other groups keep stepping.
    */
   sync(): ObjRec[] {
     this.rebuild();
@@ -283,28 +377,28 @@ export class StateSolver {
     const pos = (t - this.t0) / this.h;
     const n = Math.floor(pos + 1e-9);
     const frac = pos - n;
-    let result: Float64Array | undefined;
-    let failure = false;
+    const between = frac > 1e-9;
+    let result: Float64Array;
     try {
       const yn = this.at(n);
-      if (yn === undefined) failure = true;
-      else if (frac > 1e-9) {
+      if (between) {
         // cubic Hermite between grid points n and n+1
         const d0 = new Float64Array(this.dim);
         const d1 = new Float64Array(this.dim);
         const y1 = Float64Array.from(yn);
-        const ok = this.deriv(yn, this.t0 + n * this.h, d0) && this.step(y1, n) && this.deriv(y1, this.t0 + (n + 1) * this.h, d1);
-        if (!ok) failure = true;
-        else {
-          const h = this.h;
-          const s = frac;
-          const h00 = 2 * s ** 3 - 3 * s ** 2 + 1;
-          const h10 = s ** 3 - 2 * s ** 2 + s;
-          const h01 = -2 * s ** 3 + 3 * s ** 2;
-          const h11 = s ** 3 - s ** 2;
-          result = new Float64Array(this.dim);
-          for (let i = 0; i < this.dim; i++) result[i] = h00 * (yn[i] as number) + h10 * h * (d0[i] as number) + h01 * (y1[i] as number) + h11 * h * (d1[i] as number);
-        }
+        this.stepIdx = n;
+        this.deriv(yn, this.t0 + n * this.h, d0);
+        this.step(y1, n);
+        this.stepIdx = n + 1;
+        this.deriv(y1, this.t0 + (n + 1) * this.h, d1);
+        const h = this.h;
+        const s = frac;
+        const h00 = 2 * s ** 3 - 3 * s ** 2 + 1;
+        const h10 = s ** 3 - 2 * s ** 2 + s;
+        const h01 = -2 * s ** 3 + 3 * s ** 2;
+        const h11 = s ** 3 - s ** 2;
+        result = new Float64Array(this.dim);
+        for (let i = 0; i < this.dim; i++) result[i] = h00 * (yn[i] as number) + h10 * h * (d0[i] as number) + h01 * (y1[i] as number) + h11 * h * (d1[i] as number);
       } else result = yn;
     } finally {
       this.cone.forEach((r, i) => {
@@ -315,20 +409,29 @@ export class StateSolver {
       });
     }
     const changed: ObjRec[] = [];
-    if (failure || result === undefined) {
-      if (this.failedAt !== undefined && !this.warnedAt.has(this.failedAt)) {
-        this.warnedAt.add(this.failedAt);
-        this.warnings.push(makeNotice('unstable_state', { t: Number((this.t0 + this.failedAt * this.h).toFixed(4)), hint: 'lower the stiffness, add damping, or use @solver step 1/960' }, this.layout.map((l) => l.rec.p.name)));
+    const out = new Set<number>();
+    this.groupNames.forEach((names, g) => {
+      const at = this.failedAt[g] as number;
+      if (at > n + (between ? 1 : 0)) return;
+      out.add(g);
+      if (at > 0) {
+        const key = `${names.join(',')}@${at}`;
+        if (!this.warnedAt.has(key)) {
+          this.warnedAt.add(key);
+          this.warnings.push(makeNotice('unstable_state', { t: Number((this.t0 + at * this.h).toFixed(4)), hint: 'lower the stiffness, add damping, or use @solver step 1/960' }, names));
+        }
       }
-      for (const l of this.layout) if (this.fig.write(l.rec, { defined: false, reason: 'not_finite' })) changed.push(l.rec);
-      return changed;
-    }
+    });
     for (const l of this.layout) {
+      if (out.has(l.group)) {
+        if (this.fig.write(l.rec, { defined: false, reason: 'not_finite' })) changed.push(l.rec);
+        continue;
+      }
       const v = l.point ? { x: result[l.offset] as number, y: result[l.offset + 1] as number } : (result[l.offset] as number);
       if (this.fig.write(l.rec, { defined: true, value: v })) changed.push(l.rec);
     }
     return changed;
   }
 
-  private readonly warnedAt = new Set<number>();
+  private readonly warnedAt = new Set<string>();
 }

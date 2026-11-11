@@ -636,6 +636,7 @@ export class FigureTx extends FigureBase {
     this.applyPersist(rec, after);
     this.record({ k: 'sets', changes: [{ rec, before, after }], label: checked.text });
     this.onStatesChanged();
+    this.settle([rec]);
     this.diffReport(pass, rep);
     return this.okResult(parsed, 'rate', printLineNode(parsed.node), rep, { name: rec.p.name, id: rec.id, type: rec.p.type.k as never });
   }
