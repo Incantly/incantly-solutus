@@ -126,6 +126,10 @@ function inputSpec(): CommandSpec {
               const target = call.ids[0];
               if (target === undefined) return call.fail('target_not_free', 'the target must be a free object');
               const v = call.values[0];
+              // A target that stops being free (it was redefined as a formula) disables the box. The slice of a
+              // source that is not free is an error, which is the kernel's own answer to "is this free?".
+              const isFunction = typeof v === 'object' && v !== null && typeof (v as { arity?: unknown }).arity === 'number';
+              if (!isFunction && 'ok' in call.slice(target, target)) return call.fail('target_not_free', 'the target is computed');
               if (typeof v === 'number') {
                 if (!Number.isFinite(v)) return call.fail('not_finite');
                 return { text: String(v), valid: true, target };

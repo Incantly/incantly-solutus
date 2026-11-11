@@ -107,6 +107,12 @@ export function targetTextOf(figure: Figure, target: Name | ObjId): string {
       const auto = { unit: 'none' as const, format: { mode: 'auto' as const }, trim: true };
       return `(${formatDisplayNumber(p.x, auto)}, ${formatDisplayNumber(p.y, auto)})`;
     }
+    case 'Function': {
+      // the body, as the author or the learner wrote it: `f(x) = x^2 - 3` shows `x^2 - 3`
+      const def = view.definition;
+      const eq = def.indexOf('=');
+      return eq < 0 ? valueText(v) : def.slice(eq + 1).trim();
+    }
     default:
       return valueText(v);
   }
@@ -253,6 +259,25 @@ function findSyntaxCommand(e: Expr): { callee: string; s: number } | undefined {
   }
 }
 
+/** The deepest nesting of ( [ { in the text, outside text literals: the typed tree drops plain parentheses. */
+function bracketDepth(text: string): number {
+  let depth = 0;
+  let deepest = 0;
+  let inString = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i] as string;
+    if (inString) {
+      if (c === '\\') i++;
+      else if (c === '"') inString = false;
+      continue;
+    }
+    if (c === '"') inString = true;
+    else if (c === '(' || c === '[' || c === '{') deepest = Math.max(deepest, ++depth);
+    else if (c === ')' || c === ']' || c === '}') depth = Math.max(0, depth - 1);
+  }
+  return deepest;
+}
+
 function treeDepth(t: TNode): number {
   let deep = 0;
   for (const c of children(t)) deep = Math.max(deep, treeDepth(c));
@@ -318,9 +343,10 @@ function validateText(
       }),
     };
   }
-  if (treeDepth(expr) > NUMBERS_LIMITS.inputDepth) {
+  const depth = Math.max(treeDepth(expr), bracketDepth(text));
+  if (depth > NUMBERS_LIMITS.inputDepth) {
     return {
-      error: numbersError('input_too_deep', { line: 1, col: 1, endCol: text.length + 1 }, { got: treeDepth(expr), max: NUMBERS_LIMITS.inputDepth }, {
+      error: numbersError('input_too_deep', { line: 1, col: 1, endCol: text.length + 1 }, { got: depth, max: NUMBERS_LIMITS.inputDepth }, {
         token: text.slice(0, 20),
         hint: `Keep nesting under ${NUMBERS_LIMITS.inputDepth} levels.`,
       }),

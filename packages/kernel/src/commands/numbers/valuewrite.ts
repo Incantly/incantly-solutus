@@ -97,7 +97,7 @@ export function writeNumberValue(
   const notices: Notice[] = [];
   if (c.clamped) {
     const end = c.clamped.to > c.clamped.from ? 'low end' : 'high end';
-    notices.push(makeNotice('clamped', { name: view.name, value: valueText(c.value), end }));
+    notices.push(makeNotice('clamped', { name: view.name, value: valueText(c.value), end, from: c.clamped.from, to: c.clamped.to }));
   }
   if (c.snapped) notices.push(numbersNotice('snapped', { name: view.name, value: valueText(c.value) }));
   if (c.stepFallback) notices.push(numbersNotice('step_fallback', { name: view.name }));

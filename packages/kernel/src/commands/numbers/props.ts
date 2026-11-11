@@ -182,14 +182,22 @@ export function seedOf(figure: Figure, x: Name | ObjId): number {
 }
 
 /**
- * Display unit from the definition text: a literal ending in an angle constant
- * or an Angle(...) right-hand side. The kernel tags angle arithmetic too, but the
- * tag is not publicly readable, so only the textual cases are inferred.
+ * A unit constant in the text: `deg`, `turn` or `grad`, alone (`x = deg`) or glued to a number (`30deg`, `0.5turn`),
+ * but never the end of a longer name (`v2deg`).
+ */
+const UNIT_TOKEN = /(?<![A-Za-z0-9_.\u0370-\u03FF])(?:\d+\.?\d*|\.\d+)?(?:[eE][-+]?\d+)?(deg|turn|grad)(?![A-Za-z0-9_\u0370-\u03FF])/;
+
+/**
+ * Display unit from the definition text: a literal ending in an angle constant (`30deg`), `°`, or an Angle(...)
+ * right-hand side. Only the text after the first `=` is read, so the name never decides (numbers-sliders 3.2).
+ * The kernel tags angle arithmetic too, but the tag is not publicly readable, so only the textual cases are inferred.
  */
 export function inferUnitFromDefinition(definition: string): AngleUnit | undefined {
-  if (/\bturn\b/.test(definition)) return 'turn';
-  if (/\bgrad\b/.test(definition)) return 'grad';
-  if (/\bdeg\b|°|\bAngle\s*\(/.test(definition)) return 'deg';
+  const eq = definition.indexOf('=');
+  const rhs = eq < 0 ? definition : definition.slice(eq + 1);
+  const m = UNIT_TOKEN.exec(rhs);
+  if (m) return m[1] as AngleUnit;
+  if (/°|(?<![A-Za-z0-9_])Angle\s*\(/.test(rhs)) return 'deg';
   return undefined;
 }
 
