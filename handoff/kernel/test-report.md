@@ -147,3 +147,73 @@ Doc: `errors/errors.md` 7 "a check that `suggest` lines parse and apply cleanly"
 - The exported type declarations were read from a `.d.ts` emit that `tsc --declaration --emitDeclarationOnly` wrote to a scratch directory. They hold signatures and doc comments only, no function bodies. No other file under `packages/kernel/src/` was opened. No file under `handoff/kernel/` other than the Public API section was read.
 - Tests import only `@incantly/kernel` (the package entry).
 - Two throw-away probe test files were used to see the shape of results through the public API; they were deleted and never committed.
+
+## Regression round 1
+
+Step 6 of the pipeline. One file: `packages/kernel/test/spec/kernel/regressions.test.ts`, 199 tests, written from `handoff/kernel/findings.md` (the behaviour in each finding's evidence), the docs and the public API.
+
+### Result
+
+"Bug" is the checked commit `a6ac891` (a clean worktree of it). "Now" is `feat/kernel` with the fixer's commits up to `41d446f` and the fixer's uncommitted `src/` edits at the time of the last run.
+
+| Finding | Tests | Fail on the bug | Fail now |
+|---|---|---|---|
+| KERN-SM-1 | 17 | 15 | 0 |
+| KERN-SM-2 | 13 | 9 | 0 |
+| KERN-SM-3 | 7 | 5 | 0 |
+| KERN-SM-4 | 13 | 11 | 0 |
+| KERN-SM-5 | 11 | 9 | 0 |
+| KERN-SM-6 | 7 | 3 | 0 |
+| KERN-SM-7 | 9 | 2 | 0 |
+| KERN-SM-8 | 5 | 3 | 0 |
+| KERN-SM-9 | 34 | 22 | 0 |
+| KERN-SM-10 | 13 | 8 | 0 |
+| KERN-SM-11 | 9 | 7 | 0 |
+| KERN-SM-12 | 6 | 5 | 0 |
+| KERN-SM-13 | 12 | 9 | 0 |
+| KERN-SM-14 | 4 | 2 | 0 |
+| KERN-SM-15 | 9 | 5 | 0 |
+| KERN-SM-16 | 7 | 3 | 0 |
+| KERN-SM-17 | 4 | 2 | 0 |
+| KERN-SM-18 | 6 | 4 | 0 |
+| KERN-SM-19 | 7 | 6 | 0 |
+| KERN-SM-20 | 6 | 3 | 0 |
+| Total | 199 | 133 | 0 |
+
+The tests that pass on the bug are neighbours that must keep working (a batch under `fileSize` is accepted, `Undo()` as a single line takes back the last line, `-Infinity` and `NaN` clocks, and so on) and cases that were already right.
+
+Several tests loop over a list of cases (`eachCase`) and fail once with the name of each case that failed, so one test can stand for a whole rule: every limit and entry of KERN-SM-1, every API call of KERN-SM-2, every re-entrant operation of KERN-SM-8, every journalled write of KERN-SM-11, every special character and long Text of KERN-SM-12, every `Object.prototype` name of KERN-SM-19.
+
+### How the hang cases are bounded
+
+A synchronous hang cannot be stopped by a Vitest timeout. The tests for KERN-SM-5 (seeks to `Infinity`, `1e6`, `1e9`, `1e12`, `1e15`, a pendulum, ten seeks in a row) and KERN-SM-7 (50,000 comments plus 50,000 `@view` lines through `fromScript`, through `applyBatch`, and 20,000 `apply` calls after 4,000 comments) run in a child Node process with a 10 s kill timer (`runChild`). The child loads `packages/kernel/src/index.ts` through Vite's `runnerImport`, the same public entry the other tests use. A hang shows up as `timedOut` and fails in about 10 s. On the bug the eleven child tests that hang took about two minutes in total. KERN-SM-6 (stack overflow) and KERN-SM-17 (cost per line) run in the test process; they cannot hang.
+
+### Readings where the docs are silent
+
+- KERN-SM-1: no doc gives a budget for comments and directives. The tests accept any budget that keeps the script at or under 20,000 lines (four times the object limit) and require the refusal to be a `limit` error. A Text over 10,000 characters (the language's cap, as the finding says) must be refused; a Text of exactly 10,000 may be refused or must round-trip. A batch over `fileSize` must come back not ok, with a `limit` result, and an atomic batch must leave the figure unchanged.
+- KERN-SM-2: bounds chosen from errors design 3.5: `message` at most 400 characters, `token` and each string param at most 200, the whole error at most 4,000, the compact form at most `COMPACT_LIMIT` (800) and at most a smaller `limit` when one is passed.
+- KERN-SM-3: the figure's own registry may be a copy or a layered view; the tests check only that the host's registry is unchanged and that nothing leaks between figures.
+- KERN-SM-4: `solver` writes are refused for any free object, fixed or not (state-machines.md K9: the solver writes states). A reason outside the five is `bad_argument`.
+- KERN-SM-5: the result of `setClock(Infinity)` is not fixed (error or clamped seek). The tests require that it returns, does not throw, leaves a finite `t`, and that a far state is either undefined with reason `timeout` or has the right value.
+- KERN-SM-9: kernel design 11.2 says `Undo()` takes back one line. Inside a group the tests accept either reading in findings.md (it takes back the batch's own last line, or it is refused), and require that nothing from before the group is touched, that atomic rollbacks restore both stacks, and that undo-all then redo-all gives the same script.
+- KERN-SM-10: a rejected line must leave the figure unchanged. If the fix instead reports the change as committed, the tests accept that when the figure and both stacks agree with a committed line.
+- KERN-SM-12: a Text that `setFree` accepts must load back to the same value (strict and lenient) and re-save to the same script. A Text it refuses must leave the old value. This allows either escaping or refusing the characters the language has no escape for. Tab, newline, backslash, quote, braces, `#`, U+2028 and U+2029 must stay accepted. A decomposed accent (`e` plus U+0301) is included because the loader normalises to NFC; the held value must equal the loaded value.
+- KERN-SM-13: moving the marked object takes its `@step` title with it (state-machines.md K12).
+- KERN-SM-14: the dry run and the commit must agree on `summary`, the notices (kind and message) and every field of `changed`. Besides the three lines of the finding, the same rule is tested on `became_undefined` and `became_defined` after a redefinition, a narrowed slider range, and `step_hidden`.
+- KERN-SM-16: counted in rule runs of a `Tick` rate (a restart at `t = 100` costs 96,000 runs; the limit is 2,000, or 20,000 for a forward seek of 10 film seconds that must really integrate about 9,600 steps). No wall clock.
+- KERN-SM-17: the cost per line of `fromScript` at 4,500 lines must stay under 2.2 times the cost at 500 lines (best of four runs after a warm-up; the bug gives about 4), and the cost of adding 200 objects to a 4,000-object figure under 2.5 times that on a 500-object figure.
+- KERN-SM-18: only that `listener_failed` is not on the next line after a failure in a frame, a seek, an undo or a batch.
+- KERN-SM-8 reads `faults` through a cast, only when the field exists, because it is protected; the other checks use the public API only.
+- Names `x`, `y`, `z` and `e` are reserved in the language, so the tests use other names.
+
+### Tests dropped or changed after a first run
+
+A test that a slider whose range moves under it gets one `clamped` notice was dropped: the kernel gives none today, and the finding is about the duplicate notice, not a missing one. A test that deleting an object a rate reads removes the state was dropped: the docs do not say that.
+
+### Isolation
+
+- Read: `docs/`, `handoff/kernel/findings.md`, `handoff/kernel/test-report.md`, the existing tests in `packages/kernel/test/spec/kernel/` (`helpers.ts` and the file list), `packages/kernel/src/index.ts`, `packages/kernel/src/contracts/`.
+- Signatures came from a `.d.ts` emit (`tsc --declaration --emitDeclarationOnly`, written to the scratch directory). No other file under `packages/kernel/src/` was opened, and `fixer-notes.md` was not read. `git status` and `git log` showed the names of the files the fixer changed and its commit subjects; no diff of `src/` was shown.
+- The file imports `@incantly/kernel` only. The child-process tests import `packages/kernel/src/index.ts`, the same entry, through Vite.
+- Throw-away probe tests were used to see result shapes through the public API; they were deleted and never committed. A clean worktree of `a6ac891` in the scratch directory was used to see which tests fail on the bug; it holds a copy of the test file and no commits.
+- Committed and staged: only `packages/kernel/test/spec/kernel/regressions.test.ts` and this report.

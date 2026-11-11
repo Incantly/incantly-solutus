@@ -1970,10 +1970,10 @@ describe('KERN-SM-17: loading is linear', () => {
 describe('KERN-SM-18: listener_failed does not leak to the next line', () => {
   const kinds = (r: TxResult): string[] => ok(r).notices.map((n) => n.kind);
 
-  function failingOnce(f: Figure): { arm: () => void } {
+  function failingOnce(f: Figure, kind: FigureEvent['ev'] = 'value'): { arm: () => void } {
     let armed = false;
     f.on((ev) => {
-      if (armed && ev.ev === 'value') {
+      if (armed && ev.ev === kind) {
         armed = false;
         throw new Error('listener bug');
       }
@@ -2018,7 +2018,7 @@ describe('KERN-SM-18: listener_failed does not leak to the next line', () => {
 
   it('a failure during an undo is not reported on the next line', () => {
     const f = figure(['a = 1', 'b = 2']);
-    const l = failingOnce(f);
+    const l = failingOnce(f, 'undo');
     l.arm();
     f.undo();
     expect(kinds(f.apply('c = 5'))).not.toContain('listener_failed');
