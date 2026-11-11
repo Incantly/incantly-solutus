@@ -15,3 +15,8 @@ Rulings on places where the docs disagree. They win over the other kernel docs w
 | K9 | Memory per object | The 600-byte target is not met: each object keeps its checked and compiled line. Known gap, revisit after the first areas plug in. |
 | K10 | Rate evaluation | Rates run as compiled closures. The flat `RateProgram` form in animation-time 7.2 is the motion area's job. |
 | K11 | `animate` property | `with animate = ...` is a real property, as design 10 and the 13.1 example use it. It belongs in the property table (9.1) for every drawable type. The kernel accepts and stores it; what each value does is the motion area's job. |
+| K12 | `rerun` default | `restart` is the default, as the core design and the kernel do. A figure may set `continue` (README Q5); animation-time follows this default. |
+| K13 | `slice` with several sources | The kernel's `slice(source, target)` takes one source. A command that needs several sources (optimisation-discrete) takes one slice per source and joins them in its own code. |
+| K14 | Reusing deleted names | A deleted object's name may be used again, as the language table and the code do. Tools-2d follows this. |
+| K15 | Name sequences for new types | An area registers the name sequence for each type it adds (for example conics `c`, sectors `s`, measures `m`). A type with no registered sequence gets `o1`, `o2`, ... `to be implemented` in the kernel if the registry has no hook yet. |
+| K16 | `detail` in an undefined value | `detail` stays a short string. Structured data (stages, text pieces) goes in the error or notice `params`, never in `detail`. Area docs that use `detail.text` or `detail.stage` read `params` instead. |
