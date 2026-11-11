@@ -7,7 +7,7 @@ Tools sit on top of the line pipeline, so there are two layers:
 
 Runtime conditions (collinear points, no intersection) are not errors. They are undefined values with reasons, and the tool explains them.
 
-## 1. How GeoGebra handles these
+## 1. How the reference app handles these
 
 - A click on the wrong kind of object is ignored; nothing says why. A tooltip shows the tool's generic instruction only.
 - Degenerate constructions (three collinear points for a circle) create an object that shows as undefined in the algebra list. The object stays in the construction.
@@ -96,7 +96,7 @@ When a dry run or a committed object is undefined, the tool names the reason in 
 | `degenerate` | conics | "These points don't make a conic." |
 | `point_inside` | tangents from an interior point | "A point inside the circle has no tangents." |
 
-## 5. Better than GeoGebra
+## 5. Better than the reference app
 
 - Wrong clicks say why and what to click.
 - Degenerate constructions are caught in the preview, before an undefined object exists.

@@ -2,7 +2,7 @@
 
 Error objects follow core design section 9. Definition-time problems are **errors** (the line changes nothing). Runtime problems are **undefined values with a reason** (the line commits). This file lists both, and the new reasons this area adds. Reasons and notes are shared by `conics` and `polygons-transforms`; those folders list their own additions.
 
-## 1. How GeoGebra handles these
+## 1. How the reference app handles these
 
 - Parse failures of a geometry line collapse to one generic message with no position.
 - Wrong operand types on a command give "illegal argument" plus the list of that command's syntaxes, but no position and the dialog appears in the UI.

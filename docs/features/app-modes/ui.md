@@ -222,7 +222,7 @@ Scientific:
 - Keyboard slide 180 ms.
 - No animation tied to correctness (nothing flashes right or wrong).
 
-## 11. Differences from GeoGebra
+## 11. Differences from the reference app
 
 - The start screen hides apps that don't exist yet.
 - A switch dialog that lists what would be lost, with undo.

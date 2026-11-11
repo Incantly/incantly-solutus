@@ -1,14 +1,14 @@
 # Feature studies
 
-One folder per feature area of the new Incantly engine. Each was written by studying how GeoGebra builds the feature (source at commit 3608374 and the public manual), then designing our own version in TypeScript on top of `docs/design/formula-language-and-kernel.md`.
+One folder per feature area of the new Incantly engine. Each was written by studying how the reference app builds the feature (source at commit 3608374 and the public manual), then designing our own version in TypeScript on top of `docs/design/formula-language-and-kernel.md`.
 
-Nothing here is GeoGebra code or manual text. Each `design.md` ends with a "Sources studied" list, which records what was read.
+Nothing here is the reference app's code or manual text. Each `design.md` ends with a "Sources studied" list, which records what was read.
 
 Every folder has four files:
 
 | File | Contents |
 |---|---|
-| `design.md` | What the feature does, every command and tool in the area, how GeoGebra does it, our TypeScript design, improvements, changes to the core design, sources |
+| `design.md` | What the feature does, every command and tool in the area, how the reference app does it, our TypeScript design, improvements, changes to the core design, sources |
 | `errors.md` | Every failure, and the error objects and recovery we use |
 | `agent.md` | How a model writes it: lines, catalogue entries, `draw` and `figure` results, teacher lesson snippets, token budget |
 | `ui.md` | What the learner sees and does |

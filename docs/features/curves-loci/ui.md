@@ -116,9 +116,9 @@ Arrow keys move the focus along the curve in steps of 5% of its range and speak 
 - Tool prompts (see §4) use large buttons; two-step tools (Locus) show which step is next in the prompt line.
 - Handles are 44 px hit targets even if the visible dot is 7 px.
 
-## 8. How GeoGebra presents this and what we change
+## 8. How the reference app presents this and what we change
 
-GeoGebra shows curves as items in an algebra list with a style dialog for each; a locus is a drawn curve with no visible link to its mover except in the algebra list; envelope and locus equation produce curves or an equation in the list; inequalities are shaded regions with a boundary that is dashed or solid, with a few shape classes drawn and the rest silent. A locus is recomputed on every change of the construction, with a wall-clock allowance.
+The reference app shows curves as items in an algebra list with a style dialog for each; a locus is a drawn curve with no visible link to its mover except in the algebra list; envelope and locus equation produce curves or an equation in the list; inequalities are shaded regions with a boundary that is dashed or solid, with a few shape classes drawn and the rest silent. A locus is recomputed on every change of the construction, with a wall-clock allowance.
 
 We change:
 
@@ -173,4 +173,4 @@ We change:
 
 ## Sources studied
 
-See `design.md`. Interaction ideas informed by how GeoGebra's drawables handle curves, inequalities and loci in `euclidian/draw/` and `euclidian/plot/` and by the manual pages `Inequalities`, `Locus`, `Envelope`, `Curves`.
+Removed before the repository was made public. The study notes above are in our own words.

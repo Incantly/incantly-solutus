@@ -35,7 +35,7 @@ Status: draft for review. Details the clock `t`, slider animation, states and ra
 | 9 | Building physics: recipes | 11 |
 | 10 | Performance and budgets | 12 |
 
-## 2. How GeoGebra does it (plain words)
+## 2. How the reference app does it (plain words)
 
 What we learned from the animation code in the kernel, the slider code, the trace code in the view, and the manual's pages on animation, trace and the graphics view.
 
@@ -214,7 +214,7 @@ Mode meanings:
 | `once` | Up, stop at the high end |
 | `once-down` | Down, stop at the low end |
 
-The word `seconds` replaces the idea of a "speed" number: the author says what they mean. (A speed of 1 meant 10 seconds in GeoGebra; ours is just `seconds = 10`.)
+The word `seconds` replaces the idea of a "speed" number: the author says what they mean. (A speed of 1 meant 10 seconds in the reference app; ours is just `seconds = 10`.)
 
 ### 5.3 The track is a function of time
 
@@ -265,7 +265,7 @@ Each runs from its own track, all evaluated from the same `t` in one pass. The p
 
 ### 5.6 Random sliders
 
-A random slider is `a = rand(seed + floor(t / period))`-style: a pure function of `t` (`a = lerp(lo, hi, rand(floor(t * rate)))`) written by the author. No special slider type. (GeoGebra has a random-number slider that re-rolls on a timer.)
+A random slider is `a = rand(seed + floor(t / period))`-style: a pure function of `t` (`a = lerp(lo, hi, rand(floor(t * rate)))`) written by the author. No special slider type. (The reference app has a random-number slider that re-rolls on a timer.)
 
 ## 6. Time in formulas
 
@@ -493,10 +493,7 @@ Path(P, 0, 10)              # an object: the curve P draws for t in 0..10
 
 ### 9.3 Sources
 
-The trace source is decided by the object's ancestors:
-
-- **time** if P depends on `t`, `bt`, a state or an animated slider (directly or through objects). The trace is a pure function of `t`.
-- **drag** otherwise (it depends only on user-moved free objects). The trace records the positions during drags.
+Removed before the repository was made public. The study notes above are in our own words.
 
 ### 9.4 Time traces
 
@@ -666,7 +663,7 @@ interface ParticleBatch {
 
 ## 11. Building physics: recipes
 
-How GeoGebra does each (a time slider and formulas, or sequence lists, or an ODE command returning a curve) and how we do it. All run on `t`, states and the tools above.
+How the reference app does each (a time slider and formulas, or sequence lists, or an ODE command returning a curve) and how we do it. All run on `t`, states and the tools above.
 
 ### 11.1 Projectile (closed form)
 
@@ -678,7 +675,7 @@ ball = (v0 * cos(α) * t, v0 * sin(α) * t - 0.5 * g * t^2)
 Trace(ball)
 ```
 
-Pure function of `t`; seeks free. GeoGebra: same idea, with a time slider.
+Pure function of `t`; seeks free. The reference app: same idea, with a time slider.
 
 ### 11.2 Pendulum (state)
 
@@ -692,7 +689,7 @@ bob = (L * sin(θ), -L * cos(θ))
 rod = Segment(pivot, bob)
 ```
 
-GeoGebra: an ODE command solved for a curve, then a slider to pick a point on it; changing `L` re-solves but the "time" is a separate slider. Ours: live state, `rerun` policy, seekable, any rate formula (including damping and driving).
+The reference app: an ODE command solved for a curve, then a slider to pick a point on it; changing `L` re-solves but the "time" is a separate slider. Ours: live state, `rerun` policy, seekable, any rate formula (including damping and driving).
 
 ### 11.3 Damped spring and driven oscillator
 
@@ -717,7 +714,7 @@ v' = -GM * r / hypot(r.x, r.y)^3
 planet = r
 ```
 
-With `h = 1/240`, a 100-period run keeps the orbit closed within the accuracy table. GeoGebra: iterate a list of Euler steps, with visible drift.
+With `h = 1/240`, a 100-period run keeps the orbit closed within the accuracy table. The reference app: iterate a list of Euler steps, with visible drift.
 
 ### 11.5 Waves
 
@@ -737,7 +734,7 @@ y'' = -9.8
 Bounce(y, y', 0, 0.8)
 ```
 
-Energy loss 20% per bounce, exact event time by bisection. GeoGebra: hand-written reflection with `if` and piecewise time formulas.
+Energy loss 20% per bounce, exact event time by bisection. The reference app: hand-written reflection with `if` and piecewise time formulas.
 
 ### 11.7 Simple particles for a lesson on projectile spread
 
@@ -767,7 +764,7 @@ Collisions between bodies, contacts, friction on surfaces, joints, rigid rotatio
 | Seek in a 60 s film with states, warm | under 5 ms; cold under 50 ms (after pre-computing checkpoints) |
 | Memory | checkpoints 120 × 64 B; traces 5,000 × 16 B each; particle batch 20,000 × 28 B |
 
-## 13. Better than GeoGebra
+## 13. Better than the reference app
 
 - **Time is a function, not an accumulator.** Seeking, reverse play, loops and replay are exact. Sliders, paths and particles all follow the same clock.
 - **One timer** shared by the film, the view tweens and slider animation.
@@ -798,19 +795,4 @@ Collisions between bodies, contacts, friction on surfaces, joints, rigid rotatio
 
 ## 15. Sources studied
 
-GeoGebra source (read-only, commit 3608374), under `source/shared/common/src/main/java/org/geogebra/common/`:
-
-- `kernel/AnimationManager.java` (the timer, step, frame rate adaptation)
-- `kernel/geos/GeoNumeric.java` (animation step for sliders, repeat modes, increments, random sliders)
-- `kernel/Kernel.java` (where the manager is held)
-- `kernel/algos/` (locus, iteration, ODE-related algorithm names)
-- `euclidian/EuclidianView.java` (trace flag and background bitmap drawing)
-- `euclidian/Drawable.java` (trace support in drawables)
-- `euclidian/PathTracker.java`
-
-Manual pages (https://geogebra.github.io/docs/manual/en/):
-
-- `Animation/`
-- `Graphics_View/`
-- `commands/SolveODE/`
-- `Tools/`
+Removed before the repository was made public. The study notes above are in our own words.

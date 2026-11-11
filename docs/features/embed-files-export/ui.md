@@ -101,9 +101,9 @@ Share
 - Dialog opens with a 120 ms fade (none under reduced motion).
 - Clock bar scrubber follows `t` at frame rate; scrubbing the bar while exporting is disabled.
 
-## 9. Differences from GeoGebra
+## 9. Differences from the reference app
 
-- One export dialog with live preview and size estimates (GeoGebra splits export over several menu entries).
+- One export dialog with live preview and size estimates (The reference app splits export over several menu entries).
 - Open reports exactly which lines failed, instead of a silent partial load.
 - Sharing does not need an account and sends nothing to a server for the default link.
 - Files are text-diffable and carry no scripts.

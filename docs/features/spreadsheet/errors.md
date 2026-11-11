@@ -4,7 +4,7 @@ All errors use the core format (section 9 of the core design): `ok: false`, `lin
 
 ## 1. Parse errors
 
-| Kind | When | GeoGebra | Ours |
+| Kind | When | The reference app | Ours |
 |---|---|---|---|
 | `syntax` | A bad reference such as `A` + `$` alone, `A1:` with no end, `A1:B` | One generic "check your input" message | Position, token, and `expected: ["row number"]` etc. |
 | `bad_reference` | `$` not followed by letters or digits; a column beyond `ZZ`; row 0; row above 9999 | Often silently becomes a different name | Names the part that is out of range, e.g. column `AAA` |
@@ -47,12 +47,12 @@ All errors use the core format (section 9 of the core design): `ok: false`, `lin
 
 The kernel's per-line report lists the undefined cells and their reasons. For a batch, it lists at most 20, then a count.
 
-## 5. How GeoGebra handles them, and how we are better
+## 5. How the reference app handles them, and how we are better
 
-- GeoGebra shows a dialog for a failed cell entry, or silently turns it into text. Ours: the cell shows a red border and the error text under it; the cell is not changed.
-- GeoGebra's paste can fail half way. Ours: all or nothing.
-- GeoGebra gives no reason for an undefined cell. Ours: reason codes, short display text, tooltip.
-- GeoGebra's circular reference message does not say the chain. Ours does.
+- The reference app shows a dialog for a failed cell entry, or silently turns it into text. Ours: the cell shows a red border and the error text under it; the cell is not changed.
+- The reference app's paste can fail half way. Ours: all or nothing.
+- The reference app gives no reason for an undefined cell. Ours: reason codes, short display text, tooltip.
+- The reference app's circular reference message does not say the chain. Ours does.
 
 ## 6. Example error objects
 

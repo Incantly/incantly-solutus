@@ -1,6 +1,6 @@
 # Circles, arcs, sectors and conics: what the learner sees and does
 
-## 1. How GeoGebra presents it
+## 1. How the reference app presents it
 
 - Circle, arc and conic tools sit in two toolbar groups. Each needs several clicks on points; a preview shows the shape under the cursor.
 - A circle shows as a thin outline; its centre is a point, and dragging the circle drags the free defining points. Arcs and sectors have a filled light region; the sector's area shows as its value.
@@ -130,7 +130,7 @@ As in `points-lines`, plus:
 
 Changes emit `with` lines (core design), for example `c with color = blue, width = 3`.
 
-## 7. Differences from GeoGebra in one list
+## 7. Differences from the reference app in one list
 
 1. A definition overlay that shows the string or focus-directrix construction.
 2. A visible badge when a conic changes kind and a halo near boundaries.

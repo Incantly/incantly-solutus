@@ -17,7 +17,7 @@ Controls are real DOM elements in the control layer above the canvas, shared wit
 - A button whose handler is running shows nothing special; runs take under a millisecond. If a run is aborted (limit), a small "!" badge appears on the button for 3 seconds with the tooltip "Something went wrong; nothing was changed."
 - Long labels wrap to two lines then truncate with an ellipsis and a tooltip.
 
-GeoGebra's button is freely placed with size set in pixels; ours sits in the dock by default and can be pinned with `place`.
+The reference app's button is freely placed with size set in pixels; ours sits in the dock by default and can be pinned with `place`.
 
 ## 2. Dropdown (choice)
 
@@ -45,7 +45,7 @@ Open:
 - Empty choice: disabled, shows a dash, tooltip "No options".
 - Screen reader: native `select` role; label = the object's label or name.
 
-GeoGebra draws the dropdown inside the canvas, with its own hit testing and no native behaviour. Ours uses native controls.
+The reference app draws the dropdown inside the canvas, with its own hit testing and no native behaviour. Ours uses native controls.
 
 ## 3. Input box
 
@@ -77,7 +77,7 @@ With a notice:
 - Autocomplete is off. Spellcheck off.
 - Pasted text longer than 500 characters is cut with a notice.
 
-GeoGebra's input box turns the target undefined on an error. Ours leaves the target alone and shows the error.
+The reference app's input box turns the target undefined on an error. Ours leaves the target alone and shows the error.
 
 ## 4. Clickable objects
 
@@ -125,9 +125,9 @@ Hit areas at least 44 px. Dropdowns open the native picker. Input boxes raise th
 
 Dark mode and high-contrast follow the page theme; no colours are hard-coded.
 
-## 9. What changes from GeoGebra
+## 9. What changes from the reference app
 
-| GeoGebra | Ours |
+| The reference app | Ours |
 |---|---|
 | Button, dropdown and input drawn on the canvas | Real DOM controls |
 | Scripts edited in a dialog in the object properties | Controls panel with lines and inline checks |

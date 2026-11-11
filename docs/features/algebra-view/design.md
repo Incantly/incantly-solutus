@@ -47,7 +47,7 @@ The Algebra view's text projection is what `draw` returns in `summary` and what 
 | 15 | Performance and update flow | 3.16 |
 | 16 | Read-only projection for the teacher tools (`summarize`) | 3.17 |
 
-## 2. How GeoGebra does it
+## 2. How the reference app does it
 
 Summarised from the source and the manual pages, in plain words.
 
@@ -190,7 +190,7 @@ function formatExpr(tree: Expr, style: PrintStyle): string;
 
 Both `pretty` and `speech` come from the same bracket-minimisation pass: precedence from the language table decides brackets, so printing then re-parsing yields the same tree (a round-trip test).
 
-An operation that GeoGebra shows differently: command definitions print as the command call with arguments by name (`Midpoint(A, B)`), never expanded.
+An operation that the reference app shows differently: command definitions print as the command call with arguments by name (`Midpoint(A, B)`), never expanded.
 
 ### 3.5 Descriptions
 
@@ -429,7 +429,7 @@ function summarize(obj: ObjectView, opts?: { maxChars?: number; format?: ValueFo
 
 `text` is what `draw` returns in `summary`: `A = (1, 2)`, `f(x) = x² − 2`, `h = √(a² + b²) = 5`, `r = undefined (out_of_domain)`. Rules: free values print as `name = value`; functions print the formula; dependent values print `definition = value`; commands print `name = Command(args) → value`. Truncated to `maxChars` (default 80) with `…`.
 
-## 4. Better than GeoGebra
+## 4. Better than the reference app
 
 1. **One text pipeline for learner and model.** `summarize` feeds both the list and the tools.
 2. **The script is the file, and the list edits the script.** Every UI mutation is a line; undo is uniform; there is no separate property path.
@@ -457,20 +457,4 @@ function summarize(obj: ObjectView, opts?: { maxChars?: number; format?: ValueFo
 
 ## 6. Sources studied
 
-GeoGebra source (commit 3608374, read-only):
-
-- `source/shared/common/src/main/java/org/geogebra/common/gui/view/algebra/` (row logic, output formats, sort modes, suggestions, filters, context menu)
-- `source/shared/common/src/main/java/org/geogebra/common/main/settings/` (algebra settings, display styles)
-- `source/shared/common/src/main/java/org/geogebra/common/gui/inputbar/`
-- `source/shared/common/src/main/java/org/geogebra/common/gui/inputfield/`
-- `source/shared/common/src/main/java/org/geogebra/common/kernel/ScheduledPreviewFromInputBar.java`
-- `source/shared/common/src/main/java/org/geogebra/common/kernel/commands/AlgebraProcessor.java` (how undefined names lead to slider creation)
-- `source/shared/common/src/main/java/org/geogebra/common/kernel/geos/GeoNumeric.java` (slider properties)
-- `source/shared/common/src/main/java/org/geogebra/common/main/localization/` (autocomplete)
-
-Manual pages:
-
-- https://geogebra.github.io/docs/manual/en/Algebra_View/
-- https://geogebra.github.io/docs/manual/en/Input_Bar/
-- https://geogebra.github.io/docs/manual/en/Predefined_Functions_and_Operators/
-- https://geogebra.github.io/docs/manual/en/Naming_Objects/
+Removed before the repository was made public. The study notes above are in our own words.

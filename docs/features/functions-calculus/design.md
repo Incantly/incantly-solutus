@@ -2,7 +2,7 @@
 
 Status: draft for review. Fits `docs/design/formula-language-and-kernel.md` (the "core design"). Companion folder: `docs/features/curves-loci` (parametric and implicit curves, inequalities, loci, envelopes). Files in this folder: `design.md` (this), `errors.md`, `agent.md`, `ui.md`.
 
-All syntax below is ours, written to the core grammar. Command names are ordinary maths words. Nothing here copies GeoGebra code, names or manual text.
+All syntax below is ours, written to the core grammar. Command names are ordinary maths words. Nothing here copies the reference app's code, names or manual text.
 
 ## 1. What the feature does
 
@@ -95,7 +95,7 @@ Forms are written as the command table will print them. `f` is a one-variable fu
 - Exact `SolveODE` (closed-form solutions with an arbitrary constant): same reason. We solve numerically and say so. A later release can add a small pattern table (separable, linear first order).
 - 3D graphs of two-variable functions: core design says no 3D. Two-variable functions are shown in 2D as heat maps and contours (`ui.md`, `curves-loci`).
 
-## 2. How GeoGebra does it (plain words)
+## 2. How the reference app does it (plain words)
 
 Read from `kernel/arithmetic`, `kernel/algos`, `kernel/cas`, `kernel/optimization`, `kernel/roots`, `kernel/interval`, `euclidian/plot` and the manual pages for these commands.
 
@@ -140,7 +140,7 @@ Read from `kernel/arithmetic`, `kernel/algos`, `kernel/cas`, `kernel/optimizatio
                                                                 └────────────────┘
 ```
 
-One expression tree, evaluated by several small "algebras" that all share the same walker. That one decision replaces GeoGebra's separate tree walkers for numbers, intervals and derivatives, and makes every numeric method below work on every function without special cases.
+One expression tree, evaluated by several small "algebras" that all share the same walker. That one decision replaces the reference app's separate tree walkers for numbers, intervals and derivatives, and makes every numeric method below work on every function without special cases.
 
 ## 4. Types and data structures
 
@@ -234,7 +234,7 @@ Two pieces are enough for every built-in. More than two merge into their hull, w
 
 **Break points.** `breaks(expr)` walks the tree and returns the x-values where the function may change form: for each `cmp` whose one side is the variable and the other side does not contain it, the other side's value. Also the kinks of `abs`, `floor`, `ceil`, `round`, `sign`, `min`, `max`, `clamp`, `step`, `mod` (found by solving the argument `= 0`, `= k` over the visible or requested interval; for linear arguments exact, otherwise by `Roots`). Breaks serve three consumers: the integrator splits there; the plotter inserts exact samples on both sides and draws the open/closed circles; `Extremum` tests them as candidates.
 
-**Derivative of a piecewise function** is the piecewise of derivatives. At a break `c` where the two one-sided derivatives differ by more than `1e-9` (relative), evaluating the derivative exactly at `c` gives `undefined(corner)`, not a value from whichever branch the condition happened to select. (GeoGebra's version silently picks a branch.)
+**Derivative of a piecewise function** is the piecewise of derivatives. At a break `c` where the two one-sided derivatives differ by more than `1e-9` (relative), evaluating the derivative exactly at `c` gives `undefined(corner)`, not a value from whichever branch the condition happened to select. (The reference app's version silently picks a branch.)
 
 ### Restricted domains
 
@@ -359,7 +359,7 @@ Targets: a degree-8 polynomial on `[-10, 10]`: all roots to `1e-13` in under 1 m
 
 Targets: 95% of limits in a standard calculus text handled by routes 1 and 2 (exact); 1 ms typical, 10 ms worst.
 
-**One-sided limits and piecewise functions.** `side = "right"` evaluates `h > 0`; branches decided by `cmp` against the break value are chosen by the side. This is what GeoGebra's manual tells users to use `LimitAbove/Below` for; we do it automatically when `Limit` hits a break (two-sided: compute both sides, agree or `no_limit`).
+**One-sided limits and piecewise functions.** `side = "right"` evaluates `h > 0`; branches decided by `cmp` against the break value are chosen by the side. This is what the reference app's manual tells users to use `LimitAbove/Below` for; we do it automatically when `Limit` hits a break (two-sided: compute both sides, agree or `no_limit`).
 
 ### 8.6 Asymptotes
 
@@ -492,10 +492,10 @@ An option `with exact = true` on a function draws its enclosure instead: the thi
 - Functions of `t` in `SlopeField`: the field is drawn for the current `t`.
 - Interval `IvSet` with NaN input: output `n = 0`.
 
-## 12. Better than GeoGebra
+## 12. Better than the reference app
 
 1. **No CAS, but fewer silent failures.** Limits, Taylor, asymptotes and indefinite integrals have a deterministic engine (series algebra, rule table, panel cache) that works in the browser and in Node, and every failure says why.
-2. **Screen-independent roots.** Interval branch-and-bound finds every simple root and flags touching roots, regardless of window size. GeoGebra's depend on the view size and miss tangential roots.
+2. **Screen-independent roots.** Interval branch-and-bound finds every simple root and flags touching roots, regardless of window size. The reference app's depend on the view size and miss tangential roots.
 3. **Derivatives that never print a wrong value at a corner**, and a numeric fallback (automatic differentiation) for any body.
 4. **One expression tree, many algebras.** A new built-in costs one entry per algebra, not a new walker per feature.
 5. **Exact upper/lower sums** by critical points, not by sampling.
@@ -535,24 +535,4 @@ Each step ends with golden tests (known values), property tests (derivative agai
 
 ## Sources studied
 
-GeoGebra source at commit 3608374, under `source/shared/common/src/main/java/org/geogebra/common/`:
-
-- `kernel/arithmetic/` (function, expression tree, derivative and integral rewriting, conditional nodes, polynomial functions)
-- `kernel/algos/` (function sums, roots, extrema, ODE solvers, intersections of functions, conditional/interval functions)
-- `kernel/advanced/` (slope field, Taylor, asymptote, curvature, interval integral)
-- `kernel/cas/` (derivative, integral, limit algorithm wrappers; read only to see what is delegated to the CAS)
-- `kernel/roots/`, `kernel/optimization/`
-- `kernel/interval/` (interval type, set type, operators, function sampler)
-- `euclidian/plot/` (curve plotter, segment plotter, interval plotter and path)
-- `euclidian/draw/` (function and curve drawables, slope field, inequality drawables)
-- `kernel/commands/` (command registry groups)
-
-Manual pages (https://geogebra.github.io/docs/manual/en/):
-
-- `commands/Derivative/`, `commands/Integral/`, `commands/IntegralBetween/`, `commands/NIntegral/`
-- `commands/Root/`, `commands/Roots/`, `commands/Extremum/`, `commands/TurningPoint/`, `commands/Asymptote/`
-- `commands/TaylorPolynomial/`, `commands/Limit/`, `commands/LimitAbove/`
-- `commands/LeftSum/`, `commands/RectangleSum/`, `commands/UpperSum/`, `commands/LowerSum/`, `commands/TrapezoidalSum/`
-- `commands/SlopeField/`, `commands/SolveODE/`, `commands/NSolveODE/`
-- `commands/If/`, `commands/Function/`, `commands/RemovableDiscontinuity/`, `commands/NDerivative/`, `commands/ImplicitDerivative/`, `commands/CurvatureVector/`, `commands/PathParameter/`
-- `Functions/`
+Removed before the repository was made public. The study notes above are in our own words.

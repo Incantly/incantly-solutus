@@ -1,0 +1,13 @@
+{
+  "enabled": true,
+  "name": "Log completed spec tasks",
+  "description": "After a spec task finishes, append an entry to the Kiro usage log for the hackathon write-up.",
+  "version": "1",
+  "when": {
+    "type": "postTaskExecution"
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "A spec task has just completed. Append one entry to the end of .kiro/steering/kiro-usage-log.md, under the 'Entries' heading, in the same table format as the rows already there: today's date (YYYY-MM-DD), the Kiro feature used ('Spec task'), the spec folder name under .kiro/specs/, the task number and title from its tasks.md, and one short line on what was done. Do not change any other file and do not edit earlier rows."
+  }
+}

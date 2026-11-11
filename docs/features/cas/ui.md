@@ -29,9 +29,9 @@ A panel next to the figure (right side on wide screens, a bottom sheet on phones
 - **Reference chips**: names of other rows inside an input are shown as chips; hovering one highlights its row. Click moves focus to that row.
 - **Text rows**: a line starting with `#` is shown as a note with a lighter background, used for headings like "Step 1: factor".
 
-### How GeoGebra presents it, and what we change
+### How the reference app presents it, and what we change
 
-| GeoGebra | Ours | Why |
+| The reference app | Ours | Why |
 |---|---|---|
 | Row has input and output in one cell; toolbar edits the row in place | Toolbar buttons add a **new row** that uses the selected row (`c2 = Factor(c1)`) | The worked solution stays visible; the lines are the derivation; teacher and learner see the same list |
 | Two reference styles (live and frozen) with different symbols | Names are always live; a "freeze" button on a row (`Freeze`) makes a free copy | One concept; freezing is an explicit action |
@@ -66,7 +66,7 @@ Selecting part of an output (drag across `x − 2`) offers "Use selection": the 
 - **Tab** accepts an autocomplete; **Ctrl+Space** lists commands that accept the current selection's type.
 - **Typing `/`** after a complete term turns it into a stacked fraction in the preview (the stored text remains `a/b`).
 - **Greek and operators** follow the figure's input bar: `pi`, `theta`, `<=` become `π`, `θ`, `≤` in the preview.
-- **Unknown letters**: when a line uses an unknown one-letter name, a small bar offers "Create unknown `k`" which adds `k = Symbol()` above the row. This is our answer to GeoGebra's silent guessing: the creation is visible and takes one tap.
+- **Unknown letters**: when a line uses an unknown one-letter name, a small bar offers "Create unknown `k`" which adds `k = Symbol()` above the row. This is our answer to the reference app's silent guessing: the creation is visible and takes one tap.
 - **Errors**: red underline on the token, message under the field, the first `suggest` line as a button.
 
 ## 4. Showing an answer on the graph
