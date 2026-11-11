@@ -187,6 +187,63 @@ function cullBoxes(st: PState, lo: number, hi: number): { s0: number; s1: number
   return kept;
 }
 
+/* ---------------------------------- holes ----------------------------------- */
+
+/**
+ * With an enclosure, bounded boxes that are only maybe defined (`def = 1`) can
+ * hide a removable point. Bisect them to a vanishing width, then test the
+ * centre: undefined there with matching neighbours is a hole (curves-loci 5,
+ * step 3): the curve joins across and a marker is added.
+ */
+function findHoles(st: PState, boxes: readonly { s0: number; s1: number }[]): void {
+  for (const b of boxes) {
+    const stack: { s0: number; s1: number; depth: number }[] = [{ s0: b.s0, s1: b.s1, depth: 0 }];
+    const tiny = (b.s1 - b.s0) * 1e-9;
+    let found = 0;
+    while (stack.length > 0 && !st.dead) {
+      const { s0, s1, depth } = stack.pop() as { s0: number; s1: number; depth: number };
+      const box = boxAt(st, s0, s1);
+      if (!box) return;
+      if (box.def !== 1) continue;
+      if (![box.x0, box.x1, box.y0, box.y1].every(Number.isFinite)) continue;
+      const mid = (s0 + s1) / 2;
+      if (depth >= 40 || s1 - s0 <= tiny || !(mid > s0 && mid < s1)) {
+        if (found < 8) {
+          found += 1;
+          probeHole(st, s0, s1, (b.s1 - b.s0) * 1e-6);
+        }
+        continue;
+      }
+      stack.push({ s0: mid, s1, depth: depth + 1 });
+      stack.push({ s0, s1: mid, depth: depth + 1 });
+    }
+  }
+}
+
+/** A hole: undefined at the centre, defined and matching a tiny step either side. */
+function probeHole(st: PState, s0: number, s1: number, step: number): void {
+  // The undefined point is a "nice" value inside the tiny box: try the ends, the
+  // centre and the centre rounded to 9 significant digits.
+  const c = (s0 + s1) / 2;
+  const rounded = Number(c.toPrecision(9));
+  let hit = false;
+  for (const t of [c, rounded, s0, s1]) {
+    if (!(t >= s0 && t <= s1)) continue;
+    const m = evalAt(st, t);
+    if (!m) return;
+    if (!m.defined) {
+      hit = true;
+      break;
+    }
+  }
+  if (!hit) return;
+  const a = evalAt(st, s0 - step);
+  const z = evalAt(st, s1 + step);
+  if (!a || !z || !a.defined || !z.defined) return;
+  const d = Math.hypot(toEffX(st.pv, a.x) - toEffX(st.pv, z.x), toEffY(st.pv, a.y) - toEffY(st.pv, z.y));
+  if (d < 1) addMarker(st, 'hole', (a.x + z.x) / 2, (a.y + z.y) / 2);
+}
+
 /* --------------------------------- refine ----------------------------------- */
 
 function toEffX(pv: PlotView, x: number): number {
@@ -252,6 +309,17 @@ function runRefine(st: PState): void {
       }
       continue;
     }
+    // Entirely off the view on one side: nothing visible depends on the detail.
+    const b = pv.box;
+    if (
+      (l.x < b.x0 && m.x < b.x0 && r.x < b.x0) ||
+      (l.x > b.x1 && m.x > b.x1 && r.x > b.x1) ||
+      (l.y < b.y0 && m.y < b.y0 && r.y < b.y0) ||
+      (l.y > b.y1 && m.y > b.y1 && r.y > b.y1)
+    ) {
+      st.accepted.push(span);
+      continue;
+    }
     const ax = toEffX(pv, l.x);
     const ay = toEffY(pv, l.y);
     const bx = toEffX(pv, m.x);
@@ -273,6 +341,9 @@ function runRefine(st: PState): void {
       const stall = Math.hypot(bx - ax, by - ay) < COLUMN_PX && Math.hypot(cx - bx, cy - by) < COLUMN_PX;
       addMarker(st, stall ? 'singular' : 'cusp', m.x, m.y);
       st.accepted.push(span);
+    } else if (chord > st.chordPx) {
+      // Still long at the depth limit: a jump to infinity (pole) or a very steep stretch.
+      st.suspicious.push(span);
     } else {
       st.accepted.push(span);
     }
@@ -298,7 +369,7 @@ function runClassify(st: PState): void {
     const r = evalAt(st, span.sr);
     if (!r) return;
     if (l.defined && r.defined) {
-      st.accepted.push(span);
+      classifyDefined(st, span, l, r);
       continue;
     }
     if (!l.defined && !r.defined) {
@@ -307,6 +378,34 @@ function runClassify(st: PState): void {
     }
     classifyEdge(st, span, l.defined ? 'left' : 'right');
   }
+}
+
+/**
+ * Both ends defined but the span still fails at the depth limit: a jump to
+ * infinity (a branch of 1/s) breaks the curve and marks a pole; anything
+ * shorter is a steep stretch and is drawn through.
+ */
+function classifyDefined(st: PState, span: PSpan, l: PSample, r: PSample): void {
+  const pv = st.pv;
+  const chord = Math.hypot(toEffX(pv, r.x) - toEffX(pv, l.x), toEffY(pv, r.y) - toEffY(pv, l.y));
+  const huge = chord > 2 * Math.max(pv.widthEff, pv.heightEff);
+  if (!huge) {
+    st.accepted.push(span);
+    return;
+  }
+  if (st.enclosure) {
+    const box = boxAt(st, span.sl, span.sr);
+    if (!box) return;
+    if (box.def === 0) return; // Undefined throughout: a gap.
+    const bounded = Number.isFinite(box.x0) && Number.isFinite(box.x1) && Number.isFinite(box.y0) && Number.isFinite(box.y1);
+    if (bounded) {
+      st.accepted.push(span); // Continuous: the steep slope is real.
+      return;
+    }
+  } else {
+    st.rigorous = false;
+  }
+  addMarker(st, 'pole', l.x, l.y);
 }
 
 /** Neither end defined: subdivide while an enclosure allows certainty, else gap. */
@@ -335,20 +434,18 @@ function classifyUndefined(st: PState, span: PSpan): void {
 /** One end defined: bisect to the edge, then pole, hole-like join or gap. */
 function classifyEdge(st: PState, span: PSpan, side: 'left' | 'right'): void {
   const pv = st.pv;
-  let lo = side === 'left' ? span.sl : span.sr;
-  let hi = side === 'left' ? span.sr : span.sl;
-  for (let i = 0; i < 30; i++) {
-    const mid = (lo + hi) / 2;
-    if (!(mid > Math.min(lo, hi) && mid < Math.max(lo, hi))) break;
+  // Bisect between a defined parameter d and an undefined one u until they meet.
+  let d = side === 'left' ? span.sl : span.sr;
+  let u = side === 'left' ? span.sr : span.sl;
+  for (let i = 0; i < 40; i++) {
+    const mid = (d + u) / 2;
+    if (!(mid > Math.min(d, u) && mid < Math.max(d, u))) break;
     const m = evalAt(st, mid);
     if (!m) return;
-    if (side === 'left') {
-      if (m.defined) lo = mid;
-      else hi = mid;
-    } else if (m.defined) hi = mid;
-    else lo = mid;
+    if (m.defined) d = mid;
+    else u = mid;
   }
-  const edge = side === 'left' ? lo : hi;
+  const edge = d;
   const edgeS = evalAt(st, edge);
   if (!edgeS || !edgeS.defined || st.dead) return;
   const nearLo = side === 'left' ? span.sl : edge;
@@ -365,7 +462,7 @@ function classifyEdge(st: PState, span: PSpan, side: 'left' | 'right'): void {
     }
     if (box.def === 0) return;
     // Bounded and maybe defined: a hole-like join when the partner is close.
-    if (joinPartner(st, edge, edgeS, side)) return;
+    joinPartner(st, edge, edgeS, side);
     return;
   }
   st.rigorous = false;
@@ -419,11 +516,11 @@ function makeStats(st: PState, complete: boolean, samples: number): PlotStats {
   };
 }
 
-function chainSpans(st: PState): { x: number; y: number }[][] {
+function chainSpans(st: PState): ChainPoint[][] {
   const spans = [...st.accepted];
   spans.sort((a, b) => a.sl - b.sl || a.sr - b.sr);
-  const chains: { x: number; y: number }[][] = [];
-  let current: { x: number; y: number }[] = [];
+  const chains: ChainPoint[][] = [];
+  let current: ChainPoint[] = [];
   let prevSr = Number.NaN;
   const flush = (): void => {
     if (current.length > 1) chains.push(current);
@@ -442,14 +539,14 @@ function chainSpans(st: PState): { x: number; y: number }[][] {
       continue;
     }
     if (current.length === 0) {
-      current.push({ x: l.x, y: l.y });
-      current.push({ x: r.x, y: r.y });
+      current.push({ x: l.x, y: l.y, s: s.sl });
+      current.push({ x: r.x, y: r.y, s: s.sr });
     } else if (s.sl === prevSr) {
-      current.push({ x: r.x, y: r.y });
+      current.push({ x: r.x, y: r.y, s: s.sr });
     } else {
       flush();
-      current.push({ x: l.x, y: l.y });
-      current.push({ x: r.x, y: r.y });
+      current.push({ x: l.x, y: l.y, s: s.sl });
+      current.push({ x: r.x, y: r.y, s: s.sr });
     }
     prevSr = s.sr;
   }
@@ -550,6 +647,10 @@ export function traceParamCurve(curve: ParamCurveInput, view: ViewBox, options: 
     }
     const boxes = cullBoxes(st, curve.lo, curve.hi);
     if (st.dead) return { ok: true, value: emptyParam(st), notices: [] };
+    if (st.enclosure) {
+      findHoles(st, boxes);
+      if (st.dead) return { ok: true, value: emptyParam(st), notices: [] };
+    }
     const wantTotal = coarse > 0 ? coarse : Math.max(64, Math.round(pv.widthEff / 6));
     // The sample cap bounds the coarse grid too (performance.md 5).
     const total = Math.min(wantTotal, maxSamples);
@@ -586,13 +687,91 @@ function emptyParam(st: PState): ParamPlot {
   return { paths: [], closed: [], markers: [], stats: makeStats(st, false, 0) };
 }
 
+interface ChainPoint {
+  readonly x: number;
+  readonly y: number;
+  readonly s: number;
+}
+
+/**
+ * Marks cusps and stalls at the joins between neighbouring chords
+ * (curves-loci 5, step 4): a turn of more than 120 degrees is a `cusp`; a
+ * stretch where the curve crawls (a speed far below the fastest on the chain)
+ * is a `singular` point, one marker at its slowest vertex.
+ */
+function markJoins(st: PState, chains: readonly (readonly ChainPoint[])[]): void {
+  const pv = st.pv;
+  for (const c of chains) {
+    if (c.length < 3) continue;
+    const px = c.map((p) => toEffX(pv, p.x));
+    const py = c.map((p) => toEffY(pv, p.y));
+    const speed = new Array<number>(c.length).fill(Number.NaN);
+    let vmax = 0;
+    for (let i = 0; i + 1 < c.length; i++) {
+      const ds = Math.abs((c[i + 1] as ChainPoint).s - (c[i] as ChainPoint).s);
+      const d = Math.hypot((px[i + 1] as number) - (px[i] as number), (py[i + 1] as number) - (py[i] as number));
+      // Off-screen rushes towards infinity say nothing about the visible speed.
+      if (ds > 0 && d <= 2 * Math.max(pv.widthEff, pv.heightEff)) vmax = Math.max(vmax, d / ds);
+    }
+    const cuspAt = new Array<boolean>(c.length).fill(false);
+    for (let i = 1; i + 1 < c.length; i++) {
+      const ax = (px[i] as number) - (px[i - 1] as number);
+      const ay = (py[i] as number) - (py[i - 1] as number);
+      const bx = (px[i + 1] as number) - (px[i] as number);
+      const by = (py[i + 1] as number) - (py[i] as number);
+      const la = Math.hypot(ax, ay);
+      const lb = Math.hypot(bx, by);
+      if (!(la > 0) || !(lb > 0)) continue;
+      const cos = Math.max(-1, Math.min(1, (ax * bx + ay * by) / (la * lb)));
+      if ((Math.acos(cos) * 180) / Math.PI > CUSP_DEGREES) {
+        cuspAt[i] = true;
+        const p = c[i] as ChainPoint;
+        addMarker(st, 'cusp', p.x, p.y);
+      }
+      const dsA = Math.abs((c[i] as ChainPoint).s - (c[i - 1] as ChainPoint).s);
+      const dsB = Math.abs((c[i + 1] as ChainPoint).s - (c[i] as ChainPoint).s);
+      if (dsA > 0 && dsB > 0) speed[i] = (la + lb) / (dsA + dsB);
+    }
+    // Runs of crawling vertices: one marker at the slowest, unless a cusp already marks the run.
+    const slow = (i: number): boolean => speed[i] !== undefined && (speed[i] as number) < 0.02 * vmax;
+    let i = 1;
+    while (i + 1 < c.length) {
+      if (!slow(i)) {
+        i += 1;
+        continue;
+      }
+      let best = i;
+      let marked = false;
+      let j = i;
+      while (j + 1 < c.length && slow(j)) {
+        if ((speed[j] as number) < (speed[best] as number)) best = j;
+        if (cuspAt[j]) marked = true;
+        j += 1;
+      }
+      if (!marked) {
+        const p = c[best] as ChainPoint;
+        addMarker(st, 'singular', p.x, p.y);
+      }
+      i = j;
+    }
+  }
+}
+
 function finishParam(st: PState, curve: ParamCurveInput): ParamPlot {
   const pv = st.pv;
   const loS = st.samples.get(curve.lo);
   const hiS = st.samples.get(curve.hi);
-  if (loS && loS.defined) addMarker(st, 'end', loS.x, loS.y);
-  if (hiS && hiS.defined) addMarker(st, 'end', hiS.x, hiS.y);
-  const thin = thinChains(chainSpans(st), st.maxSamples);
+  // A closed curve has no ends (ui §1): its two end points coincide.
+  const scale = Math.max(1, Math.abs(loS?.x ?? 0), Math.abs(loS?.y ?? 0));
+  const wholeClosed =
+    loS !== undefined && hiS !== undefined && loS.defined && hiS.defined && Math.hypot(hiS.x - loS.x, hiS.y - loS.y) <= 1e-9 * scale;
+  if (!wholeClosed) {
+    if (loS && loS.defined) addMarker(st, 'end', loS.x, loS.y);
+    if (hiS && hiS.defined) addMarker(st, 'end', hiS.x, hiS.y);
+  }
+  const linked = chainSpans(st);
+  markJoins(st, linked);
+  const thin = thinChains(linked, st.maxSamples);
   if (thin.thinned) st.capped = true;
   const chains = thin.chains;
   const w = pv.box.widthPx;
@@ -600,24 +779,28 @@ function finishParam(st: PState, curve: ParamCurveInput): ParamPlot {
   const paths: Float64Array[] = [];
   const closed: boolean[] = [];
   let samples = 0;
-  // Closed when the ends meet within 1e-9 of the scale (curves-loci 5).
-  let diag = 0;
-  for (const c of chains) {
-    for (const p of c) diag = Math.max(diag, Math.abs(p.x), Math.abs(p.y));
-  }
-  const tol = 1e-9 * Math.max(1, diag);
   for (const c of chains) {
     const arr = new Float64Array(c.length * 2);
+    let minX = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
     for (let i = 0; i < c.length; i++) {
-      const p = c[i] as { x: number; y: number };
+      const p = c[i] as ChainPoint;
+      minX = Math.min(minX, p.x);
+      maxX = Math.max(maxX, p.x);
+      minY = Math.min(minY, p.y);
+      maxY = Math.max(maxY, p.y);
       const px = pv.toPx(p.x);
       const py = pv.toPy(p.y);
       arr[2 * i] = px < -4 * w ? -4 * w : px > 5 * w ? 5 * w : px;
       arr[2 * i + 1] = py < -4 * h ? -4 * h : py > 5 * h ? 5 * h : py;
     }
     samples += c.length;
-    const first = c[0] as { x: number; y: number };
-    const last = c[c.length - 1] as { x: number; y: number };
+    const first = c[0] as ChainPoint;
+    const last = c[c.length - 1] as ChainPoint;
+    // Closed when the ends meet within 1e-9 of the chain's scale (curves-loci 5).
+    const tol = 1e-9 * Math.max(1, maxX - minX, maxY - minY);
     closed.push(Math.hypot(last.x - first.x, last.y - first.y) <= tol && c.length > 2);
     paths.push(arr);
   }

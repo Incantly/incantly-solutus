@@ -784,24 +784,21 @@ function classifyEdge(st: FState, span: FSpan, side: 'left' | 'right'): void {
     return;
   }
   st.rigorous = false;
-  // Binary search for the last defined x from the defined side.
-  let lo = side === 'left' ? span.xl : span.xr;
-  let hi = side === 'left' ? span.xr : span.xl;
+  // Bisect between a defined point d and an undefined point u until they meet.
+  let d = side === 'left' ? span.xl : span.xr;
+  let u = side === 'left' ? span.xr : span.xl;
   for (let i = 0; i < 40; i++) {
-    const widthPx = Math.abs(toEffX(pv, hi) - toEffX(pv, lo));
+    const widthPx = Math.abs(toEffX(pv, u) - toEffX(pv, d));
     if (widthPx < EDGE_PX) break;
-    const mid = (lo + hi) / 2;
-    if (!(mid > Math.min(lo, hi) && mid < Math.max(lo, hi))) break;
+    const mid = (d + u) / 2;
+    if (!(mid > Math.min(d, u) && mid < Math.max(d, u))) break;
     const m = evalAt(st, mid);
     if (!m) return;
-    if (side === 'left') {
-      if (m.defined) lo = mid;
-      else hi = mid;
-    } else if (m.defined) hi = mid;
-    else lo = mid;
+    if (m.defined) d = mid;
+    else u = mid;
   }
-  const edge = side === 'left' ? lo : hi;
-  const bound = side === 'left' ? hi : lo;
+  const edge = d;
+  const bound = u;
   const edgeS = evalAt(st, edge);
   if (!edgeS || !edgeS.defined) return;
   // Bands of defined values past the edge (sqrt(sin(1/x))): recurse when found.
@@ -820,37 +817,35 @@ function classifyEdge(st: FState, span: FSpan, side: 'left' | 'right'): void {
 /** One defined end with an enclosure: interval bisection for the edge. */
 function classifyEdgeEnclosed(st: FState, span: FSpan, side: 'left' | 'right'): void {
   const pv = st.pv;
-  let lo = side === 'left' ? span.xl : span.xr;
-  let hi = side === 'left' ? span.xr : span.xl;
+  // d is the defined end of the shrinking stretch, u the undefined one.
+  let d = side === 'left' ? span.xl : span.xr;
+  let u = side === 'left' ? span.xr : span.xl;
+  const between = (a: number, b: number): [number, number] => (a < b ? [a, b] : [b, a]);
   for (let i = 0; i < 40; i++) {
-    const widthPx = Math.abs(toEffX(pv, hi) - toEffX(pv, lo));
+    const widthPx = Math.abs(toEffX(pv, u) - toEffX(pv, d));
     if (widthPx < EDGE_PX) break;
-    const mid = (lo + hi) / 2;
-    if (!(mid > Math.min(lo, hi) && mid < Math.max(lo, hi))) break;
-    const near = side === 'left' ? intervalAt(st, lo, mid) : intervalAt(st, mid, hi);
+    const mid = (d + u) / 2;
+    if (!(mid > Math.min(d, u) && mid < Math.max(d, u))) break;
+    const [n0, n1] = between(d, mid);
+    const near = intervalAt(st, n0, n1);
     if (!near) return;
-    const far = side === 'left' ? intervalAt(st, mid, hi) : intervalAt(st, lo, mid);
+    const [f0, f1] = between(mid, u);
+    const far = intervalAt(st, f0, f1);
     if (!far) return;
     // A sound enclosure agrees with the sampled ends; on contradiction drop the span.
     if (near.def === 0 || far.def === 2) return;
     if (near.def === 2) {
       // The defined side is clean: the edge sits in the far half.
-      if (side === 'left') lo = mid;
-      else hi = mid;
+      d = mid;
     } else {
       // The edge may sit in the near half; the far half's bands are verdicts of their own.
       // One push covers every later iteration (later far halves sit inside it).
-      if (side === 'left') {
-        hi = mid;
-        if (i === 0 && far.def === 1) st.suspicious.push({ xl: mid, xr: span.xr, depth: span.depth });
-      } else {
-        lo = mid;
-        if (i === 0 && far.def === 1) st.suspicious.push({ xl: span.xl, xr: mid, depth: span.depth });
-      }
+      if (i === 0 && far.def === 1) st.suspicious.push({ xl: f0, xr: f1, depth: span.depth });
+      u = mid;
     }
   }
-  const edge = side === 'left' ? lo : hi;
-  const bound = side === 'left' ? hi : lo;
+  const edge = d;
+  const bound = u;
   const edgeS = evalAt(st, edge);
   if (!edgeS || !edgeS.defined) return;
   finishEdge(st, span, side, edge, edgeS.y, bound);
