@@ -310,13 +310,31 @@ export function pick(
       case 'path': {
         const n = Math.floor(item.pts.length / 3);
         let best: { dist: number; s: number; world: V3 } | null = null;
-        for (let i = 0; i < n; i++) {
-          const p = { x: item.pts[i * 3] ?? 0, y: item.pts[i * 3 + 1] ?? 0, z: item.pts[i * 3 + 2] ?? 0 };
+        const ptAt = (i: number): V3 => ({ x: item.pts[i * 3] ?? 0, y: item.pts[i * 3 + 1] ?? 0, z: item.pts[i * 3 + 2] ?? 0 });
+        const segs = n < 2 ? 0 : item.closed ? n : n - 1;
+        const span = item.closed ? n : Math.max(n - 1, 1);
+        if (n === 1) {
+          const p = ptAt(0);
           const s = project(p);
-          if (s === null) continue;
-          const dist = Math.hypot(s.x - pointerX, s.y - pointerY);
+          if (s !== null) {
+            const dist = Math.hypot(s.x - pointerX, s.y - pointerY);
+            if (dist <= opts.tolerancePx) best = { dist, s: 0, world: p };
+          }
+        }
+        // Test every segment in screen space, not only the vertices (design 9.4).
+        for (let i = 0; i < segs; i++) {
+          const p0 = ptAt(i);
+          const p1 = ptAt((i + 1) % n);
+          const s0 = project(p0);
+          const s1 = project(p1);
+          if (s0 === null || s1 === null) continue;
+          const dx = s1.x - s0.x;
+          const dy = s1.y - s0.y;
+          const len2 = dx * dx + dy * dy;
+          const tt = len2 > 0 ? Math.min(1, Math.max(0, ((pointerX - s0.x) * dx + (pointerY - s0.y) * dy) / len2)) : 0;
+          const dist = Math.hypot(pointerX - (s0.x + tt * dx), pointerY - (s0.y + tt * dy));
           if (dist <= opts.tolerancePx && (best === null || dist < best.dist)) {
-            best = { dist, s: n > 1 ? i / (n - 1) : 0, world: p };
+            best = { dist, s: (i + tt) / span, world: v3Add(p0, v3Scale(v3Sub(p1, p0), tt)) };
           }
         }
         if (best !== null) {

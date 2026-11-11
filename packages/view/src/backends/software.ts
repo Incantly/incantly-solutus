@@ -182,9 +182,10 @@ export class SoftwareBackend implements GpuBackend {
           const pb = project(b.x, b.y, b.z);
           const pc = project(cc.x, cc.y, cc.z);
           if (pa === null || pb === null || pc === null) continue;
-          // Back-face culling in screen space.
+          // Back-face culling in screen space. Screen y points down, so a
+          // counter-clockwise (front) triangle has a negative signed area here.
           const area = (pb.x - pa.x) * (pc.y - pa.y) - (pc.x - pa.x) * (pb.y - pa.y);
-          if (batch.cullBack && area <= 0) continue;
+          if (batch.cullBack && area >= 0) continue;
           const shade = 0.75 + 0.25 * Math.abs(area) / (Math.abs(area) + 500);
           const rr = Math.round(a.r * 255 * shade);
           const gg = Math.round(a.g * 255 * shade);
