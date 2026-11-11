@@ -44,6 +44,10 @@ interface FigureHandlers {
   readonly handlers: Map<string, StoredHandler>;
   readonly runs: HandlerRun[];
   readonly listeners: Set<ControlListener>;
+  /** Names of the objects at the last sync, by id: a rename (or its undo) is a difference against this. */
+  readonly names: Map<ObjId, string>;
+  /** Handlers of deleted targets, by the id the target had: an undo that brings the object back restores them. */
+  readonly parked: Map<ObjId, StoredHandler[]>;
 }
 
 export interface StoredStep {
@@ -63,10 +67,98 @@ const stores = new WeakMap<Figure, FigureHandlers>();
 function handlersFor(figure: Figure): FigureHandlers {
   let s = stores.get(figure);
   if (!s) {
-    s = { handlers: new Map(), runs: [], listeners: new Set() };
-    stores.set(figure, s);
+    const fresh: FigureHandlers = { handlers: new Map(), runs: [], listeners: new Set(), names: new Map(), parked: new Map() };
+    s = fresh;
+    stores.set(figure, fresh);
+    for (const o of figure.objects()) fresh.names.set(o.id, o.name);
+    figure.on((ev) => followFigure(figure, fresh, ev));
   }
   return s;
+}
+
+/**
+ * Keeps handlers with their objects (controls-scripting 3.7): a rename rewrites the steps that name the object,
+ * deleting a target takes its handlers (an undo of the delete brings them back), and an undo or redo of a rename
+ * rewrites the steps again. The kernel tells the area only through its events, so the area reads names from the figure.
+ */
+function followFigure(figure: Figure, s: FigureHandlers, ev: import('../../graph/types').FigureEvent): void {
+  switch (ev.ev) {
+    case 'add': {
+      const o = figure.get(ev.id);
+      if (!o) return;
+      s.names.set(o.id, o.name);
+      const back = s.parked.get(o.id);
+      if (back) {
+        s.parked.delete(o.id);
+        for (const h of back) s.handlers.set(handlerKey(o.name, h.event), { target: o.name, event: h.event, steps: h.steps });
+      }
+      return;
+    }
+    case 'remove': {
+      s.names.delete(ev.id);
+      const gone: StoredHandler[] = [];
+      for (const [key, h] of [...s.handlers]) {
+        if (h.target !== ev.name) continue;
+        gone.push(h);
+        s.handlers.delete(key);
+      }
+      if (gone.length > 0) s.parked.set(ev.id, gone);
+      return;
+    }
+    case 'rename':
+    case 'undo':
+    case 'redo': {
+      const moved: [string, string][] = [];
+      for (const o of figure.objects()) {
+        const was = s.names.get(o.id);
+        if (was !== undefined && was !== o.name) moved.push([was, o.name]);
+        s.names.set(o.id, o.name);
+      }
+      for (const [from, to] of moved) renameInSteps(s, from, to);
+      return;
+    }
+    default:
+      return;
+  }
+}
+
+const NAME_CHARS = 'A-Za-z0-9_\\u0370-\\u03FF';
+
+function nameRe(name: string): RegExp {
+  return new RegExp(`(?<![${NAME_CHARS}])${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![${NAME_CHARS}])`, 'g');
+}
+
+const TEXT_LITERAL = /("(?:[^"\\]|\\.)*")/;
+
+/** Replaces a name in step text, leaving the inside of text literals alone. */
+function replaceName(text: string, re: RegExp, to: string): string {
+  return text
+    .split(TEXT_LITERAL)
+    .map((part, i) => (i % 2 === 1 ? part : part.replace(re, () => to)))
+    .join('');
+}
+
+function renameInSteps(store: FigureHandlers, from: string, to: string): number {
+  const re = nameRe(from);
+  let rewritten = 0;
+  for (const [key, h] of [...store.handlers]) {
+    let changed = false;
+    const steps = h.steps.map((s) => {
+      const source = replaceName(s.source, re, to);
+      const guard = s.guard === undefined ? undefined : replaceName(s.guard, re, to);
+      const loop = s.loop ? { variable: s.loop.variable, from: replaceName(s.loop.from, re, to), to: replaceName(s.loop.to, re, to) } : undefined;
+      if (source !== s.source || guard !== s.guard || loop?.from !== s.loop?.from || loop?.to !== s.loop?.to) changed = true;
+      return { source, ...(guard !== undefined ? { guard } : {}), ...(loop ? { loop } : {}) };
+    });
+    const target = h.target === from ? to : h.target;
+    if (target !== h.target) changed = true;
+    if (changed) {
+      rewritten++;
+      store.handlers.delete(key);
+      store.handlers.set(handlerKey(target, h.event), { target, event: h.event, steps });
+    }
+  }
+  return rewritten;
 }
 
 const handlerKey = (target: string, event: string): string => `${target}\n${event}`;
@@ -304,6 +396,13 @@ function checkStepSource(
   line: number,
   stepCol: number,
 ): StepCheck | ErrorObject {
+  // Another `on` line as a step: the kernel parser does not know the `on` line kind, so name it here.
+  if (/^on\s+\S+\s+(?:click|change|input|dragend|load)\b/.test(stepSource.trim())) {
+    return numbersError('handler_structure', { line, col: stepCol, endCol: stepCol + stepSource.length }, { what: 'add another handler', step_kind: 'on' }, {
+      token: stepSource.trim(),
+      hint: `A step is one action. Add the other handler as its own line: ${stepSource.trim()}`,
+    });
+  }
   const parsed = parseLine(stepSource, { line: 1 });
   if (!parsed.ok) return remap(parsed, line, stepCol - 1);
   const node = parsed.value.node;
@@ -381,24 +480,22 @@ function checkStepSource(
   const callee = node.expr.callee;
   const firstRef = call.args[0]?.expr?.n === 'ref' ? call.args[0].expr.id : undefined;
   if (callee === 'SetValue') {
-    if (firstRef === undefined) {
+    // SetValue(L[k], v) names a list element: the object is the list.
+    const firstExpr = call.args[0]?.expr;
+    const elementOf = firstExpr?.n === 'index' && firstExpr.target.n === 'ref' ? firstExpr.target.id : undefined;
+    const targetId = firstRef ?? elementOf;
+    if (targetId === undefined) {
       return numbersError('bad_argument', { line, col: stepCol, endCol: stepCol + stepSource.length }, { command: 'SetValue', why: 'the target must be an object' }, {
         token: stepSource,
         hint: 'Write SetValue(obj, value) with the object first.',
       });
     }
-    const info = figure.view.byId(firstRef);
-    if (info && info.free !== true) {
-      const deps = objectNames(figure, figure.view.inputsOf(firstRef));
-      return numbersError('not_free', { line, col: stepCol, endCol: stepCol + stepSource.length }, { name: info.name, inputs: deps.join(', ') }, {
-        token: info.name,
-        hint: `Set ${deps.join(', ')} instead: SetValue(${deps[0] ?? info.name}, ...).`,
-      });
-    }
-    if (info && (info.type.k === 'Choice' || (info.type as { k: string }).k === 'Choice')) {
-      const indexArg = call.args[1]?.expr;
+    const info = figure.view.byId(targetId);
+    // A dropdown and an input box are set by a value of their own kind, not by being free.
+    if (info && (info.type.k === 'Choice' || info.type.k === 'Input')) {
+      const indexArg = info.type.k === 'Choice' ? call.args[1]?.expr : undefined;
       if (indexArg?.n === 'num') {
-        const choice = figure.value(firstRef) as { count?: number } | undefined;
+        const choice = figure.value(targetId) as { count?: number } | undefined;
         const count = typeof choice?.count === 'number' ? choice.count : undefined;
         if (count !== undefined && (!Number.isInteger(indexArg.v) || indexArg.v < 1 || indexArg.v > count)) {
           return numbersError('bad_index', { line, col: stepCol, endCol: stepCol + stepSource.length }, { index: indexArg.v, count }, {
@@ -407,6 +504,14 @@ function checkStepSource(
           });
         }
       }
+      return { source: substituted };
+    }
+    if (info && info.free !== true) {
+      const deps = objectNames(figure, figure.view.inputsOf(targetId));
+      return numbersError('not_free', { line, col: stepCol, endCol: stepCol + stepSource.length }, { name: info.name, inputs: deps.join(', ') }, {
+        token: info.name,
+        hint: `Set ${deps.join(', ')} instead: SetValue(${deps[0] ?? info.name}, ...).`,
+      });
     }
     return { source: substituted };
   }
@@ -578,6 +683,8 @@ export function addHandler(
   if (p.guard !== undefined) {
     const probeName = freshProbeName(figure);
     const bindings = definitionBindings(figure, p.target, p.event);
+    // the guard sits on the loop step, so it sees the loop variable
+    if (p.loop) bindings.set(p.loop.variable, { literal: { k: 'num', v: 1, text: '1', int: true, s: 0, e: 0 } });
     const guardParsed = parseLine(`${probeName} = ${p.guard}`, { line: 1 });
     if (!guardParsed.ok) return remap(guardParsed, line, 0);
     const substituted = printLineNode(substituteLine(guardParsed.value.node, bindings));
@@ -785,7 +892,7 @@ export function stepsMentioning(figure: Figure, name: string): { readonly target
     const hits: number[] = [];
     h.steps.forEach((s, i) => {
       const texts = [s.source, ...(s.guard ? [s.guard] : []), ...(s.loop ? [s.loop.from, s.loop.to] : [])];
-      if (texts.some((t) => new RegExp(`(^|[^A-Za-z0-9_\u0370-\u03FF])${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^A-Za-z0-9_\u0370-\u03FF]|$)`).test(t))) {
+      if (texts.some((t) => t.split(TEXT_LITERAL).some((part, k) => k % 2 === 0 && nameRe(name).test(part)))) {
         hits.push(i + 1);
       }
     });
@@ -794,31 +901,12 @@ export function stepsMentioning(figure: Figure, name: string): { readonly target
   return out;
 }
 
-/** Rewrite stored step sources after a rename (the kernel cannot see handler text). */
+/**
+ * Rewrite stored step sources after a rename. The figure's own `rename` and `Rename` already do this through its
+ * events, so a host only needs this for renames it applied some other way.
+ */
 export function rewriteStepsForRename(figure: Figure, from: string, to: string): number {
-  const store = handlersFor(figure);
-  const re = new RegExp(`(^|[^A-Za-z0-9_\u0370-\u03FF])${from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^A-Za-z0-9_\u0370-\u03FF]|$)`, 'g');
-  let rewritten = 0;
-  for (const [key, h] of store.handlers) {
-    let changed = false;
-    const steps = h.steps.map((s) => {
-      const source = s.source.replace(re, `$1${to}$2`);
-      const guard = s.guard?.replace(re, `$1${to}$2`);
-      const loop = s.loop
-        ? { variable: s.loop.variable, from: s.loop.from.replace(re, `$1${to}$2`), to: s.loop.to.replace(re, `$1${to}$2`) }
-        : undefined;
-      if (source !== s.source || guard !== s.guard || loop?.from !== s.loop?.from || loop?.to !== s.loop?.to) changed = true;
-      return { source, ...(guard !== undefined ? { guard } : {}), ...(loop ? { loop } : {}) };
-    });
-    const target = h.target === from ? to : h.target;
-    if (target !== h.target) changed = true;
-    if (changed) {
-      rewritten++;
-      store.handlers.delete(key);
-      store.handlers.set(handlerKey(target, h.event), { target, event: h.event, steps });
-    }
-  }
-  return rewritten;
+  return renameInSteps(handlersFor(figure), from, to);
 }
 
 /* ------------------------------ scripts ------------------------------ */

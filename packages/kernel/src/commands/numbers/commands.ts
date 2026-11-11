@@ -187,6 +187,21 @@ function setValueRule(args: readonly BoundArg[]): unknown {
   return {
     run: (call: ActionCall) => {
       const figure = call.figure;
+      // SetValue(L[k], v): the target is an element of a list
+      const first = targs[0]?.expr;
+      if (first?.n === 'index' && first.target.n === 'ref' && targs.length === 2) {
+        const listId = first.target.id;
+        const listView = figure.get(listId);
+        const ii = evalTNode(figure, first.index, {});
+        const vv = targs[1]?.expr ? evalTNode(figure, targs[1].expr, {}) : undefined;
+        if (!ii.defined || !vv || !vv.defined) return skipped(figure, 'undefined_argument', `SetValue(${listView?.name ?? ''}) skipped: an argument is undefined`);
+        if (typeof ii.value !== 'number') {
+          return failed(figure, numbersError('bad_argument', { line: 0, col: 1, endCol: 1 }, { command: 'SetValue', why: 'the index must be a number' }, { token: listView?.name ?? '' }), 'SetValue needs a number index');
+        }
+        const r = setListElement(figure, listId, ii.value, vv.value, {});
+        if (!r.ok) return failed(figure, r, `SetValue(${listView?.name ?? ''}) failed`);
+        return done(figure, [listId], `set ${listView?.name ?? ''}[${ii.value}]`);
+      }
       const targetId = refId(targs[0]);
       if (targetId === undefined) {
         return failed(figure, numbersError('bad_argument', { line: 0, col: 1, endCol: 1 }, { command: 'SetValue', why: 'the target must be an object' }, { token: 'SetValue' }), 'SetValue needs an object target');

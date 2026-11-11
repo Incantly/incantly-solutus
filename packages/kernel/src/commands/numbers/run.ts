@@ -350,17 +350,47 @@ function expandOnce(
   }
   const wrote: ObjId[] = [];
   if (callee === 'SetValue' && checked.expr?.n === 'command') {
-    const targetArg = checked.expr.args[0]?.expr;
-    const valueArg = checked.expr.args[1]?.expr;
-    if (targetArg?.n === 'ref' && valueArg && !checked.expr.args[1]?.omitted) {
-      const v = evalTNode(figure, valueArg, { overlay: ex.overlay });
-      if (v.defined) ex.overlay.set(targetArg.id, v.value);
-      wrote.push(targetArg.id);
+    const cmd = checked.expr;
+    const targetArg = cmd.args[0]?.expr;
+    const noteWrite = (id: ObjId, label?: string): void => {
+      wrote.push(id);
+      const info = figure.view.byId(id);
+      const shown = label ?? info?.name;
+      if (shown !== undefined && !ex.discarded.includes(shown)) ex.discarded.push(shown);
+    };
+    // A list element: SetValue(L[k], v) or SetValue(L, k, v). The overlay holds the list with the element replaced.
+    const listId = targetArg?.n === 'index' && targetArg.target.n === 'ref' ? targetArg.target.id : cmd.args.length > 2 && targetArg?.n === 'ref' ? targetArg.id : undefined;
+    if (listId !== undefined) {
+      const indexExpr = targetArg?.n === 'index' ? targetArg.index : cmd.args[1]?.expr;
+      const valueExpr = targetArg?.n === 'index' ? cmd.args[1]?.expr : cmd.args[2]?.expr;
+      const iv = indexExpr ? evalTNode(figure, indexExpr, { overlay: ex.overlay }) : undefined;
+      const vv = valueExpr ? evalTNode(figure, valueExpr, { overlay: ex.overlay }) : undefined;
+      if (iv?.defined && vv?.defined && typeof iv.value === 'number') {
+        const cur = ex.overlay.has(listId) ? ex.overlay.get(listId) : figure.value(listId);
+        const size = cur instanceof Float64Array ? cur.length : Array.isArray(cur) ? cur.length : 0;
+        if (Number.isInteger(iv.value) && iv.value >= 1 && iv.value <= size) {
+          const copy = cur instanceof Float64Array ? Float64Array.from(cur) : [...(cur as unknown[])];
+          (copy as unknown as Record<number, unknown>)[iv.value - 1] = vv.value;
+          ex.overlay.set(listId, copy);
+        }
+        noteWrite(listId, `${figure.view.byId(listId)?.name ?? '?'}[${iv.value}]`);
+      } else noteWrite(listId);
+    } else if (targetArg?.n === 'ref' && cmd.args[1]?.expr && !cmd.args[1]?.omitted) {
       const info = figure.view.byId(targetArg.id);
-      if (info && !ex.discarded.includes(info.name)) ex.discarded.push(info.name);
+      const choiceLike = info?.type.k === 'Choice' || info?.type.k === 'Input';
+      const v = evalTNode(figure, cmd.args[1].expr, { overlay: ex.overlay });
+      if (info?.type.k === 'Choice' && v.defined && typeof v.value === 'number') {
+        const choice = (ex.overlay.has(targetArg.id) ? undefined : figure.value(targetArg.id)) as { count?: number } | undefined;
+        const count = typeof choice?.count === 'number' ? choice.count : undefined;
+        if (count !== undefined && (!Number.isInteger(v.value) || v.value < 1 || v.value > count)) {
+          skip('out_of_range');
+          return;
+        }
+      }
+      // a dropdown or an input box keeps its own value; only plain objects go in the overlay
+      if (v.defined && !choiceLike) ex.overlay.set(targetArg.id, v.value);
+      noteWrite(targetArg.id);
     }
-    const listIndex = checked.expr.args.length > 2 ? checked.expr.args[1]?.expr : undefined;
-    void listIndex;
   } else if (callee === 'Toggle' && checked.expr?.n === 'command') {
     const targetArg = checked.expr.args[0]?.expr;
     if (targetArg?.n === 'ref') {
