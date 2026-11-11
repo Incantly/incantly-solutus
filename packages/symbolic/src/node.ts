@@ -492,10 +492,6 @@ export function mul(...factors: SymNode[]): SymNode {
       continue;
     }
     const { base, exp } = splitPow(f);
-    if (isOneNode(exp)) {
-      others.push(f);
-      continue;
-    }
     const hit = byBase.get(base.id);
     if (hit === undefined) {
       byBase.set(base.id, { base, exp });
@@ -506,12 +502,18 @@ export function mul(...factors: SymNode[]): SymNode {
   }
   if (num !== null && isZeroNode(num) && !hasInf) return ZERO;
   const out: SymNode[] = [];
-  if (num !== null && !isOneNode(num)) out.push(num);
+  const refold: SymNode[] = [];
   for (const id of order) {
     const e = byBase.get(id);
     if (e === undefined) continue;
-    out.push(pow(e.base, e.exp));
+    const p = pow(e.base, e.exp);
+    if (isNumberNode(p) || p.k === 'mul') refold.push(p);
+    else out.push(p);
   }
+  if (refold.length > 0) {
+    return mul(...(num === null ? [] : [num]), ...refold, ...out, ...others);
+  }
+  if (num !== null && !isOneNode(num)) out.push(num);
   out.push(...others);
   const filtered = out.filter((t) => !isOneNode(t));
   if (filtered.length === 0) return num ?? ONE;

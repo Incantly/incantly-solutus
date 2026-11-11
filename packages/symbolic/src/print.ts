@@ -5,7 +5,7 @@
  * syntax); the display form prints `=` for the CAS view.
  */
 import type { SymCond, SymNode } from './node';
-import { asInteger, isOneNode, symN, toFloat } from './node';
+import { asInteger, isNumberNode, isOneNode, isZeroNode, negateNode, pow, symN, toFloat } from './node';
 import { ONE, ZERO, intN } from './node';
 import { upolyToTree } from './poly';
 
@@ -50,15 +50,41 @@ function negateText(n: SymNode, o: TextOptions): string {
   if (n.k === 'rat') return ratText(-n.n, n.d, o);
   if (n.k === 'float') return String(-n.v);
   if (n.k === 'dec') return decText(-n.mant, n.exp);
-  if (n.k === 'mul' && n.factors.length > 1) {
-    const f0 = n.factors[0] as SymNode;
-    if (f0.k === 'int' && f0.v === -1n) {
-      const rest = n.factors.slice(1);
-      if (rest.length === 1) return textOf(rest[0] as SymNode, o, PREC_UNARY);
-      return rest.map((f) => textOf(f, o, PREC_MUL)).join(' * ');
-    }
+  return textOf(negateNode(n), o, PREC_MUL);
+}
+
+/** Presentation order of sum terms: highest degree first, plain numbers last. */
+function termRank(t: SymNode): number {
+  if (isNumberNode(t)) return -1;
+  if (t.k === 'sym') return 1;
+  if (t.k === 'pow') {
+    const e = asInteger(t.exp);
+    return e !== null && e > 0n && t.base.k === 'sym' ? Number(e) : 0;
   }
-  return `(${textOf(n, o, 0)})`;
+  if (t.k === 'mul') {
+    let r = 0;
+    for (const f of t.factors) if (!isNumberNode(f)) r += Math.max(termRank(f), 0);
+    return r;
+  }
+  return 0;
+}
+
+function displayTerms(terms: readonly SymNode[]): SymNode[] {
+  return terms
+    .map((t, i) => ({ t, i, r: termRank(t) }))
+    .sort((a, b) => b.r - a.r || a.i - b.i)
+    .map((x) => x.t);
+}
+
+/** Presentation order of product factors: numbers, then atoms, then sums by their text. */
+function displayFactors(factors: readonly SymNode[]): SymNode[] {
+  const head = factors.filter((f) => f.k !== 'add');
+  const sums = factors
+    .filter((f) => f.k === 'add')
+    .map((f) => ({ f, s: textOf(f, {}, 0) }))
+    .sort((a, b) => (a.s < b.s ? -1 : a.s > b.s ? 1 : 0))
+    .map((x) => x.f);
+  return [...head, ...sums];
 }
 
 function ratText(n: bigint, d: bigint, o: TextOptions): string {
@@ -84,14 +110,20 @@ function decText(mant: bigint, exp: number): string {
 }
 
 /** Split a product into numerator and denominator factors (negative powers go down). */
-function splitDiv(factors: readonly SymNode[]): { num: SymNode[]; den: SymNode[] } {
+function splitDiv(all: readonly SymNode[]): { num: SymNode[]; den: SymNode[] } {
   const num: SymNode[] = [];
   const den: SymNode[] = [];
+  const factors = displayFactors(all);
   for (const f of factors) {
+    if (f.k === 'rat') {
+      if (f.n !== 1n) num.push(intN(f.n));
+      den.push(intN(f.d));
+      continue;
+    }
     if (f.k === 'pow') {
       const e = asInteger(f.exp);
-      if (e !== null && e < 0n) {
-        den.push(e === -1n ? f.base : { ...f, k: 'pow', base: f.base, exp: intN(-e) } as SymNode);
+      if (e !== null && e < 0n && !isZeroNode(f.base)) {
+        den.push(e === -1n ? f.base : pow(f.base, intN(-e)));
         continue;
       }
     }
@@ -131,7 +163,7 @@ function textOf(n: SymNode, o: TextOptions, parentPrec: number): string {
     case 'ref': return `ref(${n.obj})`;
     case 'add': {
       let s = '';
-      n.terms.forEach((t, i) => {
+      displayTerms(n.terms).forEach((t, i) => {
         if (i === 0) {
           s += textOf(t, o, 0);
           return;
@@ -233,7 +265,7 @@ function latexOf(n: SymNode): string {
     case 'ref': return `\\mathrm{ref}_{${n.obj}}`;
     case 'add': {
       let s = '';
-      n.terms.forEach((t, i) => {
+      displayTerms(n.terms).forEach((t, i) => {
         if (i === 0) {
           s += latexOf(t);
           return;
@@ -284,7 +316,7 @@ function latexNeg(t: SymNode): string {
   if (t.k === 'int') return (-t.v).toString();
   if (t.k === 'rat') return `\\frac{${(-t.n).toString()}}{${t.d.toString()}}`;
   if (t.k === 'float') return String(-t.v);
-  return latexOf(t);
+  return latexOf(negateNode(t));
 }
 
 export function toLatex(n: SymNode): string {
@@ -311,9 +343,12 @@ export function condLatex(c: SymCond): string {
 const SMALL_NUMBERS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten',
   'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen', 'twenty'];
 
+/** Conditions spell small numbers out; expression readings keep digits ("5 x"). */
+let speechWords = false;
+
 function speechInt(v: bigint): string {
   if (v < 0n) return `minus ${speechInt(-v)}`;
-  if (v <= 20n) return SMALL_NUMBERS[Number(v)] as string;
+  if (speechWords && v <= 20n) return SMALL_NUMBERS[Number(v)] as string;
   return v.toString();
 }
 
@@ -341,7 +376,7 @@ function speechOf(n: SymNode): string {
     case 'ref': return 'a value';
     case 'add': {
       let s = '';
-      n.terms.forEach((t, i) => {
+      displayTerms(n.terms).forEach((t, i) => {
         if (i === 0) {
           s += speechOf(t);
           return;
@@ -353,7 +388,16 @@ function speechOf(n: SymNode): string {
     }
     case 'mul': {
       const { num, den } = splitDiv(n.factors);
-      const numStr = num.length === 0 ? 'one' : num.map(speechFactor).join(' times ');
+      let numStr = 'one';
+      if (num.length > 0) {
+        numStr = speechFactor(num[0] as SymNode);
+        for (let i = 1; i < num.length; i++) {
+          const prev = num[i - 1] as SymNode;
+          const cur = num[i] as SymNode;
+          const glue = isNumberNode(prev) && (cur.k === 'sym' || cur.k === 'const' || (cur.k === 'pow' && cur.base.k === 'sym')) ? ' ' : ' times ';
+          numStr += glue + speechFactor(cur);
+        }
+      }
       if (den.length === 0) return numStr;
       return `${numStr} over ${den.map(speechFactor).join(' times ')}`;
     }
@@ -382,7 +426,7 @@ function speechGroup(g: SymNode): string {
 function speechNeg(t: SymNode): string {
   if (t.k === 'int') return speechInt(-t.v);
   if (t.k === 'rat') return speechInt(-t.n) + ` over ${speechInt(t.d)}`;
-  return speechOf(t);
+  return speechOf(negateNode(t));
 }
 
 /**
@@ -390,14 +434,28 @@ function speechNeg(t: SymNode): string {
  * tokens) are shortened: "a long expression with N terms, starting …".
  */
 export function toSpeech(n: SymNode): string {
-  const full = speechOf(n);
+  const full = speechWith(false, () => speechOf(n));
   const tokens = full.split(' ');
   if (tokens.length <= 30) return full;
   const terms = n.k === 'add' ? n.terms.length : n.k === 'mul' ? n.factors.length : 1;
   return `a long expression with ${terms} terms, starting ${tokens.slice(0, 12).join(' ')}`;
 }
 
+function speechWith<T>(words: boolean, f: () => T): T {
+  const before = speechWords;
+  speechWords = words;
+  try {
+    return f();
+  } finally {
+    speechWords = before;
+  }
+}
+
 export function condSpeech(c: SymCond): string {
+  return speechWith(true, () => condSpeechOf(c));
+}
+
+function condSpeechOf(c: SymCond): string {
   switch (c.c) {
     case 'true': return 'true';
     case 'false': return 'false';
@@ -406,9 +464,9 @@ export function condSpeech(c: SymCond): string {
       return `${speechOf(c.l)} ${op} ${speechOf(c.r)}`;
     }
     case 'in': return `${speechOf(c.l)} in ${c.set}`;
-    case 'not': return `not ${condSpeech(c.of)}`;
-    case 'and': return c.of.map(condSpeech).join(' and ');
-    case 'or': return c.of.map(condSpeech).join(' or ');
+    case 'not': return `not ${condSpeechOf(c.of)}`;
+    case 'and': return c.of.map(condSpeechOf).join(' and ');
+    case 'or': return c.of.map(condSpeechOf).join(' or ');
   }
 }
 
