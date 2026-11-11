@@ -11,7 +11,7 @@ import type { Figure } from '../../graph/figure';
 import type { AngleUnit, AnimAnchor, LoopMode } from './types';
 import { commit, unitScale } from './commit';
 import type { CommitResult } from './commit';
-import { inferUnitFromDefinition } from './props';
+import { inferUnitFromDefinition, resumeOf } from './props';
 import { captureResetInitial } from './run';
 
 const frac = (x: number): number => x - Math.floor(x);
@@ -172,6 +172,8 @@ export function resumeAnimation(figure: Figure, id: ObjId, t: number, dir?: 1 | 
   const s = animsFor(figure);
   if (!s.paused.has(id)) return false;
   s.paused.delete(id);
+  // resume = false (numbers-sliders 3.4): the animation stays stopped after the release
+  if (!resumeOf(figure, id)) return false;
   const v = figure.value(id);
   if (typeof v !== 'number') return false;
   const range = figure.get(id)?.range;

@@ -312,6 +312,68 @@ function notAnimatable(figure: Figure, id: ObjId): ErrorObject | undefined {
   return undefined;
 }
 
+/**
+ * The limit error when starting every animatable slider would put more than 500 sliders in motion
+ * (numbers-sliders errors.md 2: nothing starts, and the error names the limit and the actual count).
+ */
+function animatingLimitError(figure: Figure): ErrorObject | undefined {
+  const live = new Set<ObjId>(animatingIds(figure));
+  let total = live.size;
+  for (const o of figure.objects()) {
+    if (o.type !== 'Number' || !o.free || !o.range || live.has(o.id)) continue;
+    total++;
+  }
+  if (total <= NUMBERS_LIMITS.animating) return undefined;
+  return numbersError('limit', { line: 0, col: 1, endCol: 1 }, { limit: NUMBERS_LIMITS.animating, actual: total, max: NUMBERS_LIMITS.animating, got: total, what: 'animating sliders' }, {
+    token: 'Animate',
+    hint: 'Animate fewer sliders: name the ones that should move.',
+  });
+}
+
+interface ScriptRate {
+  readonly rate: string;
+  readonly line: string;
+  readonly words: ReadonlySet<string>;
+}
+
+/** The rate lines (`w' = ...`) of the figure's script, with the names each body uses. */
+function scriptRates(figure: Figure): ScriptRate[] {
+  const out: ScriptRate[] = [];
+  for (const line of figure.toScript().split('\n')) {
+    const m = /^\s*([^\s'=]+)'+\s*=\s*(.+)$/u.exec(line);
+    if (!m) continue;
+    out.push({ rate: m[1] as string, line: line.trim(), words: new Set((m[2] as string).match(/[\p{L}_][\p{L}\p{N}_]*/gu) ?? []) });
+  }
+  return out;
+}
+
+/**
+ * A rate (`w' = ...`) that reads the slider, directly or through objects built from it (numbers-sliders 3.4:
+ * an animating slider that a rate reads would restart the states every frame). Rates are read from the figure's
+ * script, the public form of the figure; the dependents come from the kernel's own graph.
+ */
+function animatedInputError(figure: Figure, id: ObjId, rates: readonly ScriptRate[] = scriptRates(figure)): ErrorObject | undefined {
+  if (rates.length === 0) return undefined;
+  const view = figure.get(id);
+  if (!view) return undefined;
+  const reads = new Set<string>([view.name]);
+  for (const d of figure.dependentsOf(id)) {
+    const dv = figure.get(d);
+    if (dv) reads.add(dv.name);
+  }
+  for (const r of rates) {
+    for (const w of r.words) {
+      if (!reads.has(w)) continue;
+      return numbersError('animated_input', { line: 0, col: 1, endCol: 1 }, { slider: view.name, rate: r.rate }, {
+        token: r.line,
+        hint: `Stop the animation of ${view.name}, or write ${view.name} as a formula of t instead of a slider.`,
+        related: [view.name, r.rate],
+      });
+    }
+  }
+  return undefined;
+}
+
 function animateRule(args: readonly BoundArg[]): unknown {
   const targs = targsOf(args);
   return {
@@ -324,10 +386,15 @@ function animateRule(args: readonly BoundArg[]): unknown {
         if (!vv.defined) return skipped(figure, 'undefined_argument', 'Animate skipped: the switch is undefined');
         const on = vv.value === true;
         const names: string[] = [];
+        if (on) {
+          const over = animatingLimitError(figure);
+          if (over) return failed(figure, over, 'Too many sliders would animate');
+        }
+        const rates = on ? scriptRates(figure) : [];
         for (const o of figure.objects()) {
           if (o.type !== 'Number' || !o.free || !o.range) continue;
           if (on) {
-            if (animatingIds(figure).length >= NUMBERS_LIMITS.animating) break;
+            if (animatedInputError(figure, o.id, rates)) continue;
             const r = startAnimation(figure, o.id, t);
             if (r.started) names.push(o.name);
           } else if (clearAnchor(figure, o.id)) names.push(o.name);
@@ -344,6 +411,10 @@ function animateRule(args: readonly BoundArg[]): unknown {
       const view = figure.get(targetId);
       const bad = notAnimatable(figure, targetId);
       if (bad) return failed(figure, bad, `Animate(${view?.name ?? ''}) failed`);
+      if (vv.value === true) {
+        const animated = animatedInputError(figure, targetId);
+        if (animated) return failed(figure, animated, `Animate(${view?.name ?? ''}) failed`);
+      }
       if (vv.value !== true) {
         stopAnimation(figure, targetId, t);
         return done(figure, [], `stopped ${view?.name ?? ''}`);
@@ -557,6 +628,10 @@ export function animateSlider(figure: Figure, name: string, on = true, opts: { t
   const bad = notAnimatable(figure, view.id);
   if (bad) return bad;
   const t = opts.t ?? lastTickT(figure);
+  if (on) {
+    const animated = animatedInputError(figure, view.id);
+    if (animated) return animated;
+  }
   if (!on) {
     stopAnimation(figure, view.id, t);
     return { ok: true, value: { summary: `stopped ${name}`, animating: false }, notices: [] };
@@ -575,11 +650,16 @@ export function animateSlider(figure: Figure, name: string, on = true, opts: { t
 /** Start or stop every animatable slider. */
 export function animateAll(figure: Figure, on: boolean, opts: { t?: number } = {}): Result<{ summary: string; count: number }> {
   const t = opts.t ?? lastTickT(figure);
+  if (on) {
+    const over = animatingLimitError(figure);
+    if (over) return over;
+  }
   let count = 0;
+  const rates = on ? scriptRates(figure) : [];
   for (const o of figure.objects()) {
     if (o.type !== 'Number' || !o.free || !o.range) continue;
     if (on) {
-      if (animatingIds(figure).length >= NUMBERS_LIMITS.animating) break;
+      if (animatedInputError(figure, o.id, rates)) continue;
       if (startAnimation(figure, o.id, t).started) count++;
     } else if (clearAnchor(figure, o.id)) count++;
   }
