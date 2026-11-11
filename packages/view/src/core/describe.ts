@@ -9,7 +9,7 @@ export type DescribedRole = 'free' | 'dependent' | 'onPath';
 
 export function describePoint(name: string, posText: string, role: DescribedRole, extra: string | null): string {
   const base = `Point ${name} at ${posText}.`;
-  if (role === 'free') return `${base} Free, can be moved.`;
+  if (role === 'free') return `${base} Free.`;
   if (role === 'onPath') return `${base} On a path, can slide.`;
   return extra !== null ? `${base} ${extra}.` : `${base} Dependent.`;
 }
@@ -69,8 +69,8 @@ export function describeText(name: string, content: string): string {
 }
 
 export function describeParticles(name: string, count: number, alt: string | null): string {
-  if (alt !== null && alt !== '') return `Particle system ${name}, ${alt}.`;
-  return `Particle system ${name}, ${count.toLocaleString('en-US')} particles.`;
+  const base = `Particle system ${name}, ${count.toLocaleString('en-US')} particles`;
+  return alt !== null && alt !== '' ? `${base}, ${alt}.` : `${base}.`;
 }
 
 export function describeTrace(name: string, pointCount: number): string {
