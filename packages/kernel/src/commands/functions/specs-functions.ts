@@ -1126,6 +1126,7 @@ function limitOneSided(f: Fn1, a: number, dir: 1 | -1, tol: number, work: RuleWo
   }
   // Snap geometrically shrinking tails to exact zero (1/x, e^-x at infinity).
   const shrink = (v: number): number => {
+    if (v !== 0 && Math.abs(v) < tol * 1e-6) return 0;
     if (v !== 0 && Math.abs(v) <= tol) {
       const t = finite.slice(-4);
       if (t.length === 4 && t.every((u, i) => i === 0 || (Math.abs(u) <= 0.6 * Math.abs(t[i - 1] as number) && Math.sign(u) === Math.sign(t[0] as number)))) {
@@ -1134,9 +1135,29 @@ function limitOneSided(f: Fn1, a: number, dir: 1 | -1, tol: number, work: RuleWo
     }
     return v;
   };
-  const ex = wynn(finite, tol);
-  if (ex !== null) return { t: 'value', v: shrink(ex), spent: false };
-  const tail = finite.slice(-3);
+  // Finite point: halving steps stay clear of cancellation noise (for example
+  // (1 - cos x) / x^2 is garbage below 1e-4 but exact to 1e-12 from steps down to 2e-4).
+  // The shortest prefix on which Wynn settles wins.
+  if (!inf) {
+    const hv: number[] = [];
+    for (let k = 0; k < 9; k++) {
+      if (!work.spend(1)) return { t: 'none', spent: true };
+      hv.push(f(a + dir * 0.05 * Math.pow(2, -k)));
+    }
+    if (hv.every((v) => v === v && v !== Infinity && v !== -Infinity)) {
+      for (let m = 5; m <= hv.length; m++) {
+        const exh = wynn(hv.slice(0, m), tol);
+        if (exh !== null) return { t: 'value', v: Math.abs(exh) < tol * 1e-6 ? 0 : exh, spent: false };
+      }
+    }
+  }
+  const seq = finite;
+  // The shortest prefix on which Wynn settles wins: later samples may be rounding noise.
+  for (let m = Math.min(5, seq.length); m <= seq.length; m++) {
+    const ex = wynn(seq.slice(0, m), tol);
+    if (ex !== null) return { t: 'value', v: shrink(ex), spent: false };
+  }
+  const tail = seq.slice(-3);
   const agree = Math.abs((tail[0] as number) - (tail[1] as number)) <= tol * Math.max(1, Math.abs(tail[1] as number)) &&
     Math.abs((tail[1] as number) - (tail[2] as number)) <= tol * Math.max(1, Math.abs(tail[2] as number));
   if (agree) return { t: 'value', v: shrink(tail[2] as number), spent: false };
