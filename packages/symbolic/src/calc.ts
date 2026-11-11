@@ -729,15 +729,18 @@ function splitNumDenFlat(t: SymNode): { num: SymNode; den: SymNode | null } {
     return { num: ONE, den: ex === -1n ? t.base : pow(t.base, intN(-ex)) };
   }
   if (t.k === 'mul') {
+    const num: SymNode[] = [];
     const den: SymNode[] = [];
     for (const f of t.factors) {
       if (f.k === 'pow' && asInteger(f.exp) !== null && (asInteger(f.exp) as bigint) < 0n) {
         const ex = asInteger(f.exp) as bigint;
         den.push(ex === -1n ? f.base : pow(f.base, intN(-ex)));
+      } else {
+        num.push(f);
       }
     }
     if (den.length === 0) return { num: t, den: null };
-    return { num: ONE, den: mul(...den) };
+    return { num: num.length === 0 ? ONE : mul(...num), den: mul(...den) };
   }
   return { num: t, den: null };
 }
