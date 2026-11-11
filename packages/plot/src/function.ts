@@ -32,6 +32,7 @@ import type {
   ViewBox,
 } from './contracts';
 import { badArgument, checkBudgets, checkView, guard, isFiniteNumber } from './errors';
+import { thinChains } from './thin';
 import { createView, pointToChordPx } from './view';
 import type { PlotView } from './view';
 
@@ -445,11 +446,26 @@ function runClassify(st: FState): void {
       st.suspicious.push(span);
       return;
     }
+    // A verdict is atomic: remember how long every output list was, so a
+    // suspension in the middle can undo its partial pushes and redo it whole
+    // (cached samples keep the redo free). This keeps the finished plot the
+    // same however the work was sliced.
+    const mark = {
+      pending: st.pending.length,
+      accepted: st.accepted.length,
+      suspicious: st.suspicious.length,
+      markers: st.markers.length,
+      ink: st.ink.length,
+    };
     if (l.defined && r.defined) classifyDefined(st, span, l, r);
     else if (!l.defined && !r.defined) classifyUndefined(st, span);
     else classifyEdge(st, span, l.defined ? 'left' : 'right');
     if (st.suspended) {
-      // Suspended mid-verdict: re-queue the span; cached samples keep the redo free.
+      st.pending.length = mark.pending;
+      st.accepted.length = mark.accepted;
+      st.suspicious.length = mark.suspicious;
+      st.markers.length = mark.markers;
+      st.ink.length = mark.ink;
       st.suspicious.push(span);
       return;
     }
@@ -1118,6 +1134,11 @@ function finishComplete(st: FState): FunctionPlot {
   }
   let chains = chainSpans(st);
   chains = resolveBreaks(st, chains);
+  const thin = thinChains(chains, st.cfg.maxSamples);
+  if (thin.thinned) {
+    chains = thin.chains as number[][][];
+    st.capped = true;
+  }
   markDomainEnds(st);
   const { paths, samples } = toPaths(st, chains);
   const plot: FunctionPlot = {
@@ -1154,7 +1175,9 @@ export function plotFunction(fn: FunctionValue, view: ViewBox, options: Function
     if (!pvResult.ok) return pvResult;
     const pv = pvResult.value;
     const cfg = checked.cfg;
-    const coarse = cfg.coarse > 0 ? cfg.coarse : Math.max(64, Math.round(pv.widthEff / 4));
+    const wantCoarse = cfg.coarse > 0 ? cfg.coarse : Math.max(64, Math.round(pv.widthEff / 4));
+    // The sample cap bounds the coarse grid too (performance.md 5).
+    const coarse = Math.min(wantCoarse, cfg.maxSamples);
     const breaks = [...(options.breaks ?? [])].sort((a, b) => a - b).filter((b, i, arr) => i === 0 || b !== arr[i - 1]);
     const pieces = makePieces(view, options.domain, breaks);
     const fast = fn.call1;
@@ -1182,7 +1205,7 @@ export function plotFunction(fn: FunctionValue, view: ViewBox, options: Function
       intervalEvals: 0,
       maxDepthSeen: 0,
       rigorous: true,
-      capped: false,
+      capped: coarse < wantCoarse,
       suspended: false,
       steps: 0,
     };

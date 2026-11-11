@@ -31,6 +31,7 @@ import type {
   ViewBox,
 } from './contracts';
 import { badArgument, checkBudgets, checkView, guard, isFiniteNumber } from './errors';
+import { thinChains } from './thin';
 import { createView, pointToChordPx, turnDegrees } from './view';
 import type { PlotView } from './view';
 
@@ -485,6 +486,9 @@ function sortMarkers(st: PState): PlotMarker[] {
 export function traceParamCurve(curve: ParamCurveInput, view: ViewBox, options: ParamPlotOptions = {}): Result<ParamPlot> {
   return guard('traceParamCurve', () => {
     const caller = 'traceParamCurve';
+    if (typeof curve !== 'object' || curve === null) {
+      return badArgument(caller, 'the curve input is missing', 'Pass { fn, lo, hi } for a parametric curve.');
+    }
     const fnProblem = checkParamFn(caller, curve.fn);
     if (fnProblem) return fnProblem;
     const viewProblem = checkView(caller, view);
@@ -546,7 +550,10 @@ export function traceParamCurve(curve: ParamCurveInput, view: ViewBox, options: 
     }
     const boxes = cullBoxes(st, curve.lo, curve.hi);
     if (st.dead) return { ok: true, value: emptyParam(st), notices: [] };
-    const total = coarse > 0 ? coarse : Math.max(64, Math.round(pv.widthEff / 6));
+    const wantTotal = coarse > 0 ? coarse : Math.max(64, Math.round(pv.widthEff / 6));
+    // The sample cap bounds the coarse grid too (performance.md 5).
+    const total = Math.min(wantTotal, maxSamples);
+    if (total < wantTotal) st.capped = true;
     const width = boxes.reduce((s, b) => s + (b.s1 - b.s0), 0);
     for (const b of boxes) {
       const n = width > 0 ? Math.max(2, Math.round((total * (b.s1 - b.s0)) / width)) : 2;
@@ -562,6 +569,10 @@ export function traceParamCurve(curve: ParamCurveInput, view: ViewBox, options: 
     // Classification refines edge approaches; alternate until both drain.
     for (;;) {
       if (!st.dead && !st.capped) runRefine(st);
+      else if (st.capped && st.pending.length > 0) {
+        for (const s of st.pending) st.accepted.push(s);
+        st.pending.length = 0;
+      }
       if (st.dead || st.capped || st.suspicious.length === 0) break;
       runClassify(st);
       if (st.dead || st.capped || st.pending.length === 0) break;
@@ -581,7 +592,9 @@ function finishParam(st: PState, curve: ParamCurveInput): ParamPlot {
   const hiS = st.samples.get(curve.hi);
   if (loS && loS.defined) addMarker(st, 'end', loS.x, loS.y);
   if (hiS && hiS.defined) addMarker(st, 'end', hiS.x, hiS.y);
-  const chains = chainSpans(st);
+  const thin = thinChains(chainSpans(st), st.maxSamples);
+  if (thin.thinned) st.capped = true;
+  const chains = thin.chains;
   const w = pv.box.widthPx;
   const h = pv.box.heightPx;
   const paths: Float64Array[] = [];

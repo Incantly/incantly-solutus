@@ -25,6 +25,7 @@ function fail(
   caller: string,
   why: string,
   hint: string,
+  limitName?: string,
 ): ErrorObject {
   const message = kind === 'internal' ? `Something went wrong inside ${caller}; nothing was changed.` : `${caller}: ${why}.`;
   const recovery: Recovery = kind === 'internal' ? 'skip' : 'rewrite';
@@ -36,7 +37,7 @@ function fail(
     phase: 'runtime-host',
     message,
     messageKey: `plot.${kind}`,
-    params: { caller, why },
+    params: limitName === undefined ? { caller, why } : { caller, why, limit: limitName },
     line: 1,
     col: 1,
     endCol: 1,
@@ -64,6 +65,7 @@ export function overLimit(caller: string, what: string, max: number, got: number
     caller,
     `that would exceed the limit of ${max} ${what} (got ${got})`,
     `Use a ${what} budget of at most ${max}.`,
+    what,
   );
 }
 

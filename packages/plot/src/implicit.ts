@@ -22,6 +22,7 @@ import type {
 import { badArgument, checkBudgets, checkView, guard, isFiniteNumber } from './errors';
 import { caseIndex, crossingT, edgeEnds, linkSegments, segmentsForCase } from './squares';
 import type { RawSegment, SquareEdge } from './squares';
+import { thinChains } from './thin';
 import { createView } from './view';
 import type { PlotView } from './view';
 
@@ -546,7 +547,16 @@ export function traceImplicit(field: ImplicitFieldInput, view: ViewBox, options:
     if (st.dead) {
       return { ok: true, value: { paths: [], closed: [], markers: [], stats: makeStats(st, false, 0) }, notices: [] };
     }
-    const chains = linkSegments(st.segments);
+    const linked = linkSegments(st.segments);
+    // The sample cap bounds the emitted points too (performance.md 5).
+    const thin = thinChains(
+      linked.map((c) => c.points),
+      st.maxSamples,
+    );
+    if (thin.thinned) st.capped = true;
+    const chains = linked
+      .slice(0, thin.chains.length)
+      .map((c, i) => ({ points: thin.chains[i] as readonly (readonly [number, number])[], closed: c.closed }));
     const paths: Float64Array[] = [];
     const closed: boolean[] = [];
     let samples = 0;
