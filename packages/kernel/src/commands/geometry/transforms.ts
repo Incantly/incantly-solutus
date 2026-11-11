@@ -112,6 +112,8 @@ export function applyStored(t: StoredTransform, p: V2): V2 | undefined {
       const dy = p.y - t.cy;
       const d2 = dx * dx + dy * dy;
       if (d2 === 0) return undefined;
+      // Within 1e-12 r of the centre the image is too far to draw (polygons-transforms 10): `too_far`, not `at_infinity`.
+      if (d2 <= 1e-24 * t.r * t.r) return { x: Infinity, y: Infinity };
       const k = (t.r * t.r) / d2;
       return { x: t.cx + k * dx, y: t.cy + k * dy };
     }
@@ -879,14 +881,14 @@ function reflectLineStored(ll: LineLike, u?: number): StoredTransform {
 
 export const reflectLineRule: CommandRule = rule((call) => {
   const ll = lineLikeOf(call.values[1]);
-  if (!ll) return call.fail('zero_length');
+  if (!ll) return call.fail('coincident_points', 'the axis has no direction');
   return finish(call, mapShape(reflectLineStored(ll), call.values[0], call.tol));
 });
 
 export const reflectLineProgressRule: CommandRule = rule((call) => {
   const ll = lineLikeOf(call.values[1]);
   const u = N(call, 2);
-  if (!ll) return call.fail('zero_length');
+  if (!ll) return call.fail('coincident_points', 'the axis has no direction');
   if (!saneNum(call, u)) return undefined;
   return finish(call, mapShape(reflectLineStored(ll, u), call.values[0], call.tol));
 });
@@ -894,7 +896,7 @@ export const reflectLineProgressRule: CommandRule = rule((call) => {
 export const reflectLineVectorRule: CommandRule = rule((call) => {
   const v = P(call, 0);
   const ll = lineLikeOf(call.values[1]);
-  if (!ll) return call.fail('zero_length');
+  if (!ll) return call.fail('coincident_points', 'the axis has no direction');
   if (!sanePt(call, v)) return undefined;
   const d = ll.a * v.x + ll.b * v.y;
   return { x: v.x - 2 * d * ll.a, y: v.y - 2 * d * ll.b };
@@ -1019,7 +1021,7 @@ function shearStored(ll: LineLike, r: number, u?: number): StoredTransform {
 export const shearRule: CommandRule = rule((call) => {
   const ll = lineLikeOf(call.values[1]);
   const r = N(call, 2);
-  if (!ll) return call.fail('zero_length');
+  if (!ll) return call.fail('coincident_points', 'the axis has no direction');
   if (!saneNum(call, r)) return undefined;
   return finish(call, mapShape(shearStored(ll, r), call.values[0], call.tol));
 });
@@ -1028,7 +1030,7 @@ export const shearProgressRule: CommandRule = rule((call) => {
   const ll = lineLikeOf(call.values[1]);
   const r = N(call, 2);
   const u = N(call, 3);
-  if (!ll) return call.fail('zero_length');
+  if (!ll) return call.fail('coincident_points', 'the axis has no direction');
   if (!saneNum(call, r) || !saneNum(call, u)) return undefined;
   return finish(call, mapShape(shearStored(ll, r, u), call.values[0], call.tol));
 });
@@ -1037,7 +1039,7 @@ export const shearVectorRule: CommandRule = rule((call) => {
   const v = P(call, 0);
   const ll = lineLikeOf(call.values[1]);
   const r = N(call, 2);
-  if (!ll) return call.fail('zero_length');
+  if (!ll) return call.fail('coincident_points', 'the axis has no direction');
   if (!sanePt(call, v) || !saneNum(call, r)) return undefined;
   const d = ll.a * v.x + ll.b * v.y;
   return { x: v.x + r * d * ll.dx, y: v.y + r * d * ll.dy };
@@ -1046,7 +1048,7 @@ export const shearVectorRule: CommandRule = rule((call) => {
 export const shearCircleRule: CommandRule = rule((call) => {
   const ll = lineLikeOf(call.values[1]);
   const r = N(call, 2);
-  if (!ll) return call.fail('zero_length');
+  if (!ll) return call.fail('coincident_points', 'the axis has no direction');
   if (!saneNum(call, r)) return undefined;
   return finish(call, mapShape(shearStored(ll, r), call.values[0], call.tol));
 });
@@ -1055,7 +1057,7 @@ export const shearCircleProgressRule: CommandRule = rule((call) => {
   const ll = lineLikeOf(call.values[1]);
   const r = N(call, 2);
   const u = N(call, 3);
-  if (!ll) return call.fail('zero_length');
+  if (!ll) return call.fail('coincident_points', 'the axis has no direction');
   if (!saneNum(call, r) || !saneNum(call, u)) return undefined;
   return finish(call, mapShape(shearStored(ll, r, u), call.values[0], call.tol));
 });
@@ -1067,7 +1069,7 @@ function shearFuncBody(call: RuleCall, u: number | undefined): unknown {
   const ll = lineLikeOf(call.values[1]);
   const r = N(call, 2);
   const f = call.values[0] as FunctionValue;
-  if (!ll) return call.fail('zero_length');
+  if (!ll) return call.fail('coincident_points', 'the axis has no direction');
   if (!saneNum(call, r)) return undefined;
   if (u !== undefined && !saneNum(call, u)) return undefined;
   const m = mapFunctionToCurve(shearStored(ll, r, u), f);
@@ -1091,7 +1093,7 @@ export const stretchLineProgressRule: CommandRule = rule((call) => stretchLineBo
 function stretchLineBody(call: RuleCall, u: number | undefined): unknown {
   const ll = lineLikeOf(call.values[1]);
   const r = N(call, 2);
-  if (!ll) return call.fail('zero_length');
+  if (!ll) return call.fail('coincident_points', 'the axis has no direction');
   if (!saneNum(call, r)) return undefined;
   if (u !== undefined && !saneNum(call, u)) return undefined;
   return finish(call, mapShape(stretchLineStored(ll, r, u), call.values[0], call.tol));
@@ -1136,7 +1138,7 @@ export const stretchCircleProgressRule: CommandRule = rule((call) => stretchCirc
 function stretchCircleBody(call: RuleCall, u: number | undefined): unknown {
   const ll = lineLikeOf(call.values[1]);
   const r = N(call, 2);
-  if (!ll) return call.fail('zero_length');
+  if (!ll) return call.fail('coincident_points', 'the axis has no direction');
   if (!saneNum(call, r)) return undefined;
   if (u !== undefined && !saneNum(call, u)) return undefined;
   return finish(call, mapShape(stretchLineStored(ll, r, u), call.values[0], call.tol));
@@ -1155,7 +1157,7 @@ function stretchFuncBody(call: RuleCall, u: number | undefined): unknown {
   const ll = lineLikeOf(call.values[1]);
   const f = call.values[0] as FunctionValue;
   const r = N(call, 2);
-  if (!ll) return call.fail('zero_length');
+  if (!ll) return call.fail('coincident_points', 'the axis has no direction');
   if (!saneNum(call, r)) return undefined;
   if (u !== undefined && !saneNum(call, u)) return undefined;
   return finish(call, mapFunctionToCurve(stretchLineStored(ll, r, u), f));
@@ -1202,7 +1204,7 @@ export const reflectLineVectorProgressRule: CommandRule = rule((call) => {
   const v = P(call, 0);
   const ll = lineLikeOf(call.values[1]);
   const u = N(call, 2);
-  if (!ll) return call.fail('zero_length');
+  if (!ll) return call.fail('coincident_points', 'the axis has no direction');
   if (!sanePt(call, v) || !saneNum(call, u)) return undefined;
   const k = clampProgress(u);
   const d = ll.a * v.x + ll.b * v.y;
@@ -1231,7 +1233,7 @@ export const shearVectorProgressRule: CommandRule = rule((call) => {
   const ll = lineLikeOf(call.values[1]);
   const r = N(call, 2);
   const u = N(call, 3);
-  if (!ll) return call.fail('zero_length');
+  if (!ll) return call.fail('coincident_points', 'the axis has no direction');
   if (!sanePt(call, v) || !saneNum(call, r) || !saneNum(call, u)) return undefined;
   const d = ll.a * v.x + ll.b * v.y;
   const kr = clampProgress(u) * r;
@@ -1243,7 +1245,7 @@ export const stretchVectorProgressRule: CommandRule = rule((call) => {
   const ll = lineLikeOf(call.values[1]);
   const r = N(call, 2);
   const u = N(call, 3);
-  if (!ll) return call.fail('zero_length');
+  if (!ll) return call.fail('coincident_points', 'the axis has no direction');
   if (!sanePt(call, v) || !saneNum(call, r) || !saneNum(call, u)) return undefined;
   const ratio = 1 + clampProgress(u) * (r - 1);
   const d = ll.a * v.x + ll.b * v.y;
@@ -1370,7 +1372,7 @@ export const turnRule: CommandRule = rule((call) => {
 
 export const mirrorRule: CommandRule = rule((call) => {
   const ll = lineLikeOf(call.values[0]);
-  if (!ll) return call.fail('zero_length');
+  if (!ll) return call.fail('coincident_points', 'the axis has no direction');
   return { tag: 'transform', kind: 'reflectLine', nx: ll.a, ny: ll.b, c0: -ll.c } satisfies StoredTransform;
 });
 
@@ -1384,7 +1386,7 @@ export const scaleRule: CommandRule = rule((call) => {
 export const shearByRule: CommandRule = rule((call) => {
   const ll = lineLikeOf(call.values[0]);
   const r = N(call, 1);
-  if (!ll) return call.fail('zero_length');
+  if (!ll) return call.fail('coincident_points', 'the axis has no direction');
   if (!saneNum(call, r)) return undefined;
   return { tag: 'transform', kind: 'shear', dx: ll.dx, dy: ll.dy, nx: ll.a, ny: ll.b, c0: -ll.c, ratio: r } satisfies StoredTransform;
 });
@@ -1531,3 +1533,24 @@ function mapGeomCurve(t: StoredTransform, c: { pieces: readonly (readonly V2[])[
   };
   return { value: { tag: 'geomCurve', pieces, closed: c.closed, exact: { fx, fy, from: e.from, to: e.to } } };
 }
+/** `Rotate(f, angle[, center][, progress])`: a turned function is a Curve (polygons-transforms 6.7). */
+export const rotateFuncRule: CommandRule = rule((call) => {
+  const names = call.form.params.map((q) => q.name);
+  const ci = names.indexOf('center');
+  const pi = names.indexOf('progress');
+  const angle = N(call, 1);
+  const c = ci >= 0 ? P(call, ci) : { x: 0, y: 0 };
+  const u = pi >= 0 ? N(call, pi) : undefined;
+  if (!saneAngle(call, angle) || !sanePt(call, c)) return undefined;
+  if (u !== undefined && !saneNum(call, u)) return undefined;
+  return finish(call, mapFunctionToCurve(rotateStored(angle, c, u === undefined ? undefined : clampProgress(u)), call.values[0] as FunctionValue));
+});
+
+/** `Reflect(f, line[, progress])`: a Curve; the checker cannot tell an axis-parallel line from the type alone (6.7). */
+export const reflectLineFuncRule: CommandRule = rule((call) => {
+  const ll = lineLikeOf(call.values[1]);
+  const u = call.values.length > 2 ? N(call, 2) : undefined;
+  if (!ll) return call.fail('coincident_points', 'the axis has no direction');
+  if (u !== undefined && !saneNum(call, u)) return undefined;
+  return finish(call, mapFunctionToCurve(reflectLineStored(ll, u), call.values[0] as FunctionValue));
+});
