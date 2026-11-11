@@ -16,7 +16,7 @@ Every feature area goes through the same steps. Each step is a fresh agent with 
 | 8 | Spec reviewer | Sonnet 5.5 | Docs and code | `handoff/<area>/review.md` |
 | 9 | Studio builder | Sonnet 5.5 | The area's public API and `ui.md` | Screens in `apps/studio` |
 
-Steps 3, 5 and 7 repeat at most 3 rounds. Anything still open after that goes to the product owner.
+Steps 5 to 7 (fix, regression tests, confirm) run at most 2 rounds after the first check. Anything still open after that is logged as a known bug in `findings.md` and handed to the area that owns it; it does not hold up the merge.
 
 ## Hand-off files
 
