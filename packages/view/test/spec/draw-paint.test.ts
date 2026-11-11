@@ -291,12 +291,12 @@ describe('design 7.4/7.5 paint, split, culling, quality', () => {
     const order: string[] = [];
     const origA = a.paint;
     const origAL = a.paintLabel;
-    a.paint = () => { order.push('A-shape'); origA.call(a); };
-    a.paintLabel = () => { order.push('A-label'); origAL.call(a); };
+    a.paint = (s, ctx) => { order.push('A-shape'); origA.call(a, s, ctx); };
+    a.paintLabel = (s, ctx) => { order.push('A-label'); origAL.call(a, s, ctx); };
     const origB = b.paint;
     const origBL = b.paintLabel;
-    b.paint = () => { order.push('B-shape'); origB.call(b); };
-    b.paintLabel = () => { order.push('B-label'); origBL.call(b); };
+    b.paint = (s, ctx) => { order.push('B-shape'); origB.call(b, s, ctx); };
+    b.paintLabel = (s, ctx) => { order.push('B-label'); origBL.call(b, s, ctx); };
     const s = new RecordSurface();
     const view = { x0: px(0), x1: px(800), y0: px(0), y1: px(600) };
     const rep = paintDrawables(list, s, paintContext(), view);

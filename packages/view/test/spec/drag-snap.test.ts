@@ -26,7 +26,7 @@ import {
   snapWithHysteresis,
   wrapDelta,
 } from '@incantly/view';
-import type { DragFacts, SnapContext } from '@incantly/view';
+import type { DragFacts, MathsPoint, SnapContext } from '@incantly/view';
 import { closeTo, oid } from './helpers';
 
 function facts(over: Partial<DragFacts> = {}): DragFacts {
@@ -36,7 +36,7 @@ function facts(over: Partial<DragFacts> = {}): DragFacts {
   };
 }
 
-const mp = (x: number, y: number): { x: number; y: number } => ({ x: maths(x), y: maths(y) });
+const mp = (x: number, y: number): MathsPoint => ({ x: maths(x), y: maths(y) });
 
 describe('design 12.1 drag plans', () => {
   it('12.1 a free point drags by itself', () => {
