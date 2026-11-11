@@ -86,10 +86,11 @@ describe('Solve one equation', () => {
     expect(sols.length).toBe(1);
     expect(numOf(sols[0] ?? '')).toBeCloseTo(1.25992104989, 9);
   });
-  test('degree 5+ uses rootof, printed with the decimal (design 5.4)', () => {
-    const texts = condTexts('Solve', [cd('x^5-x-1==0'), sy('x')]);
-    expect(texts.length).toBe(1);
-    expect(texts[0]).toContain('1.1673');
+  test('degree 5+ uses rootof; the display text shows the decimal 1.1673 (design 5.4)', () => {
+    const items = asList(val('Solve', [cd('x^5-x-1==0'), sy('x')]), 'solve');
+    expect(items.length).toBe(1);
+    // Text mode stays re-enterable (ruling); the decimal belongs to display mode.
+    expect(condText(asCond(items[0] ?? cd('x==0'), 'root'), { display: true })).toContain('1.1673');
   });
   test('the rootof value evaluates to the root', () => {
     const texts = condTexts('Solve', [cd('x^5-x-1==0'), sy('x')]);

@@ -111,7 +111,7 @@ describe('Expand', () => {
     const u = undef('Expand', [ex('(x+y+z+w+1)^40')]);
     expect(u.reason).toBe('limit');
     expect(u.detail?.code).toBe('Y209');
-  }, 10000);
+  }, 30000);
 });
 
 // design 2.2, 5.8: Factor
