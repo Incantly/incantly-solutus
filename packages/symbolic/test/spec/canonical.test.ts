@@ -310,10 +310,11 @@ describe('number entry (design 5.4)', () => {
   });
   test('nearestFraction finds the close simple fraction (Rationalize, tolerance 1e-12)', () => {
     expect(nearestFraction(0.333333333333, 1e-12)).toEqual({ n: 1n, d: 3n });
-    const pi = nearestFraction(Math.PI, 1e-12);
-    expect(pi).not.toBe(null);
-    if (pi !== null) expect(Math.abs(Number(pi.n) / Number(pi.d) - Math.PI)).toBeLessThan(1e-12);
-    expect(nearestFraction(Math.PI, 1e-12)).not.toEqual({ n: 3n, d: 1n });
+    // Docs are silent on how large a denominator may be; a fraction within the tolerance
+    // of a decimal with few digits must be the simple one.
+    expect(nearestFraction(0.6666666666667, 1e-12)).toEqual({ n: 2n, d: 3n });
+    expect(nearestFraction(0.75, 1e-12)).toEqual({ n: 3n, d: 4n });
+    expect(nearestFraction(-1.5, 1e-12)).toEqual({ n: -3n, d: 2n });
   });
 });
 

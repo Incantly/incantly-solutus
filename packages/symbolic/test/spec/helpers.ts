@@ -7,6 +7,7 @@
 import { expect } from 'vitest';
 import {
   condText,
+  evalAt,
   parseCondition,
   parseExpression,
   run,
@@ -84,8 +85,7 @@ export function ran(op: OpName, args: readonly SymArg[], opts?: RunOptions, ctx?
     const e = r as ErrorObject;
     throw new Error(`run(${op}) returned error ${e.kind} (${e.code}): ${e.message}`);
   }
-  const v = r.value as RunSuccess & { notices?: readonly Notice[] };
-  return { cell: v.cell, notices: v.notices ?? [] };
+  return { cell: r.value.cell, notices: r.notices };
 }
 
 /** Run an op and return its defined value, failing when the cell is undefined or an error. */
@@ -104,7 +104,7 @@ export function undef(
   args: readonly SymArg[],
   opts?: RunOptions,
   ctx?: RunContext,
-): { reason: string; detail?: UndefinedDetail } {
+): { reason: string; detail: UndefinedDetail | undefined } {
   const { cell } = ran(op, args, opts, ctx);
   if (cell.defined) throw new Error(`run(${op}) unexpectedly defined: ${JSON.stringify(cell.value)}`);
   return { reason: cell.reason, detail: cell.detail };
@@ -235,4 +235,90 @@ export function prng(seed: number): () => number {
     t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Independent numeric checks (do not depend on Equivalent, which is itself under test)
+// ---------------------------------------------------------------------------------------------
+
+/** Value of an expression node at the given variable values; null when it is not a finite number. */
+export function numericAt(n: SymNode, vals: Readonly<Record<string, number>> = {}): number | null {
+  const v = evalAt(n, new Map(Object.entries(vals)));
+  return v === null || !Number.isFinite(v) ? null : v;
+}
+
+/** Value of an expression text at the given variable values (fails when it is not a number). */
+export function numeric(text: string, vals: Readonly<Record<string, number>> = {}): number {
+  const v = numericAt(parseExpression(text), vals);
+  if (v === null) throw new Error(`"${text}" is not a finite number at ${JSON.stringify(vals)}`);
+  return v;
+}
+
+/** Sample points (away from simple poles) used by the numeric agreement check. */
+export const SAMPLE_POINTS: readonly number[] = [0.37, 0.91, 1.43, 2.17, 3.29, -0.52, -1.7, 4.6];
+
+/**
+ * True when the two expression texts agree numerically at every sample point where both are
+ * defined, and are defined together at (at least) `minPoints` points. Variables: the single
+ * name given (default `x`), other names are set to fixed values from `extra`.
+ */
+export function agree(
+  a: string,
+  b: string,
+  v = 'x',
+  extra: Readonly<Record<string, number>> = {},
+  minPoints = 3,
+): boolean {
+  const ta = parseExpression(a);
+  const tb = parseExpression(b);
+  let both = 0;
+  for (const p of SAMPLE_POINTS) {
+    const env = { ...extra, [v]: p };
+    const va = numericAt(ta, env);
+    const vb = numericAt(tb, env);
+    if (va === null || vb === null) continue;
+    both += 1;
+    const tol = 1e-8 * Math.max(1, Math.abs(va), Math.abs(vb));
+    if (Math.abs(va - vb) > tol) return false;
+  }
+  return both >= minPoints;
+}
+
+export function expectAgree(a: string, b: string, v = 'x', extra: Readonly<Record<string, number>> = {}): void {
+  expect(agree(a, b, v, extra), `"${a}" should equal "${b}" numerically`).toBe(true);
+}
+
+/** Numeric value of an Expr result of an op. */
+export function numResult(op: OpName, args: readonly SymArg[], opts?: RunOptions, ctx?: RunContext): number {
+  const e = asExpr(val(op, args, opts, ctx), `${op} result`);
+  const v = numericAt(e);
+  if (v === null) throw new Error(`${op} result ${toText(e)} is not a finite number`);
+  return v;
+}
+
+/** A whole or real result as a JS number, whether the op returned Number, big integer or Expr. */
+export function scalarOf(v: SymArg, what: string): number {
+  if (v.k === 'num') return v.v;
+  if (v.k === 'int') return Number(v.v);
+  if (v.k === 'expr') {
+    const n = numericAt(v.e);
+    if (n === null) throw new Error(`${what}: ${toText(v.e)} is not a finite number`);
+    return n;
+  }
+  throw new Error(`${what}: expected a number, got ${v.k}`);
+}
+
+/** A whole-number result as an exact bigint (Number, big integer or integer Expr). */
+export function bigOf(v: SymArg, what: string): bigint {
+  if (v.k === 'int') return v.v;
+  if (v.k === 'num') {
+    if (!Number.isInteger(v.v)) throw new Error(`${what}: ${v.v} is not a whole number`);
+    return BigInt(v.v);
+  }
+  if (v.k === 'expr') return BigInt(toText(v.e));
+  throw new Error(`${what}: expected a whole number, got ${v.k}`);
+}
+
+export function scalar(op: OpName, args: readonly SymArg[], opts?: RunOptions, ctx?: RunContext): number {
+  return scalarOf(val(op, args, opts, ctx), `${op} result`);
 }
