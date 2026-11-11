@@ -27,7 +27,6 @@ import type {
   ScalarBox,
   ScalarEnclosure,
   ScalarTriState,
-  TriState,
   ViewBox,
 } from '@incantly/plot';
 
@@ -349,8 +348,6 @@ export const outsideTri: ScalarTriState = (lo, hi) => {
   if (mhi <= 0) return 'false';
   return 'maybe';
 };
-
-export const triStateOf = (t: TriState): string => t;
 
 // --------------------------------------------------------------------------------------------
 // Evaluation counting and forged doubles (used only where the kernel cannot go:

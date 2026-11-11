@@ -16,7 +16,6 @@ import {
   expectOk,
   fn1,
   forgedScalar,
-  markersOf,
   maxSegPx,
   pairs,
   pxOf,
