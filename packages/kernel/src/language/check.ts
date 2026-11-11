@@ -16,7 +16,7 @@ import { classify } from './relation';
 import type { ArgFacts, CallCheck, FigureView, FormCheck, FormLike, FunctionTable, ObjectInfo, ParamSpec, Refusal } from './table';
 import { formText } from './table';
 import type { RelTree, TArg, TNode } from './tnode';
-import { T, accepts, binaryOp, legalOpsFor, listOf, setLabel, tyEq, tyStr, typeSet } from './types';
+import { T, accepts, binaryOp, isCallableTy, legalOpsFor, listOf, setLabel, tyEq, tyStr, typeSet } from './types';
 import type { Ty } from './types';
 import type { LangLimits } from './source';
 
@@ -71,6 +71,8 @@ export interface CheckedLine {
   readonly existing?: ObjId;
   readonly expr?: TNode;
   readonly params?: readonly { readonly name: string; readonly slot: number }[];
+  /** For a function line with `in a..b`: the closed interval of each parameter, in order. */
+  readonly domain?: readonly { readonly from: TNode; readonly to: TNode }[];
   readonly range?: CheckedRange;
   readonly style?: readonly CheckedStyle[];
   /** Initial value and optional velocity of a state. */
@@ -1023,7 +1025,7 @@ class Checker {
     if (bspec) return this.inferBuiltin(e, bspec, expected);
     const obj = this.fig.lookup(name);
     if (obj) {
-      if (obj.type.k === 'Function') return this.inferCallObj(e, obj);
+      if (isCallableTy(obj.type)) return this.inferCallObj(e, obj);
       return this.notCallable(e, tyStr(obj.type), obj.type.k === 'Number');
     }
     return this.unknownFunction(e);
@@ -1098,7 +1100,7 @@ class Checker {
       args.push(t);
     }
     if (!ok) return null;
-    const ret = obj.type.ret === 'Point' ? T.Point : T.Number;
+    const ret = obj.type.ret === 'Point' ? T.Point : obj.type.ret === 'Bool' ? T.Bool : T.Number;
     return { n: 'callObj', id: obj.id, name: e.callee, args, ty: ret, s: e.s, e: e.e };
   }
 

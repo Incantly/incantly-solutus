@@ -33,7 +33,7 @@ export function sample1(fv: FunctionValue): Sampled1 {
         out.lastReason = 'not_finite';
         return Number.NaN;
       }
-      let v: number | object | undefined;
+      let v: number | object | boolean | undefined;
       try {
         v = fv.call1 ? fv.call1(x) : fv.call(x);
       } catch {
@@ -57,7 +57,7 @@ export function sample2(fv: FunctionValue): { readonly f: Fn2; lastReason: Undef
         out.lastReason = 'not_finite';
         return Number.NaN;
       }
-      let v: number | object | undefined;
+      let v: number | object | boolean | undefined;
       try {
         v = fv.call(x, y);
       } catch {
@@ -77,7 +77,7 @@ export function sampleN(fv: FunctionValue): { readonly f: (xs: readonly number[]
   const out: { f: (xs: readonly number[]) => number; lastReason: UndefReason | undefined } = {
     lastReason: undefined,
     f: (xs: readonly number[]): number => {
-      let v: number | object | undefined;
+      let v: number | object | boolean | undefined;
       try {
         v = fv.call(...xs);
       } catch {

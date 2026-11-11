@@ -1257,7 +1257,17 @@ export function compileLine(line: CheckedLine, opts: CompileOptions = {}): Resul
       const isN = expr.ty.k === 'Number';
       if (line.kind === 'function') {
         const params = line.params ?? [];
-        const ret = expr.ty.k === 'Point' ? 'Point' : 'Number';
+        const ret = expr.ty.k === 'Point' ? 'Point' : expr.ty.k === 'Bool' ? 'Bool' : 'Number';
+        // `in a..b`: outside the closed interval of a parameter the function is undefined (out_of_domain)
+        const dom = (line.domain ?? []).map((d) => ({ from: c.compile(d.from), to: c.compile(d.to) }));
+        const outside = (env: Env, xs: ArrayLike<number>): boolean => {
+          for (let i = 0; i < dom.length; i++) {
+            const d = dom[i] as { from: Fn; to: Fn };
+            const x = xs[i] as number;
+            if (!(x >= (d.from(env) as number) && x <= (d.to(env) as number))) return true;
+          }
+          return false;
+        };
         evalFn = (env) => {
           const fv: FunctionValue & { reason?: UndefReason | undefined } = {
             arity: params.length,
@@ -1268,6 +1278,13 @@ export function compileLine(line: CheckedLine, opts: CompileOptions = {}): Resul
               const savedCause = env.cause;
               const savedDetail = env.detail;
               env.reason = undefined;
+              if (dom.length > 0 && outside(env, xs)) {
+                fv.reason = 'out_of_domain';
+                env.reason = saved;
+                env.cause = savedCause;
+                env.detail = savedDetail;
+                return isN ? NAN : undefined;
+              }
               // the parameters live in the shared locals only for this call: put back what the caller had there
               const before = params.map((p) => env.locals[p.slot]);
               for (let i = 0; i < params.length; i++) env.locals[(params[i] as { slot: number }).slot] = xs[i];
@@ -1289,6 +1306,13 @@ export function compileLine(line: CheckedLine, opts: CompileOptions = {}): Resul
               const savedCause = env.cause;
               const savedDetail = env.detail;
               env.reason = undefined;
+              if (dom.length > 0 && outside(env, [x])) {
+                fv.reason = 'out_of_domain';
+                env.reason = saved;
+                env.cause = savedCause;
+                env.detail = savedDetail;
+                return NAN;
+              }
               const before = env.locals[slot];
               env.locals[slot] = x;
               const v = setNanReason(env, f(env) as number);
@@ -1306,6 +1330,10 @@ export function compileLine(line: CheckedLine, opts: CompileOptions = {}): Resul
               const before = env.locals[slot];
               for (let i = 0; i < xs.length; i++) {
                 env.reason = undefined;
+                if (dom.length > 0 && outside(env, [xs[i] as number])) {
+                  out[i] = NAN;
+                  continue;
+                }
                 env.locals[slot] = xs[i];
                 out[i] = setNanReason(env, f(env) as number);
               }

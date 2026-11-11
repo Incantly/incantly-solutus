@@ -2120,11 +2120,11 @@ export const LOCUS_COMMANDS: CommandSpec[] = sweeps([
   ]),
   objSpec('ImplicitDerivative', [form([p('c', CURVE)], 'Function2', runImplicitDerivative, 'dy/dx of an implicit curve as a function of x and y')]),
   objSpec('Closest', [form([p('c', CURVE), p('P', 'Point')], 'Point', runClosest, 'nearest point on the curve to P')]),
-  objSpec('Boundary', [form([p('p', 'Relation|Region'), p('a', 'Number'), p('b', 'Number')], 'List<Number>', runBoundary, 'where a one-variable predicate changes truth')]),
-  objSpec('PointIn', [form([p('q', 'Relation|Region'), p('P0', 'Point')], 'Point', runPointIn, 'a point kept inside the region')]),
+  objSpec('Boundary', [form([p('p', 'Relation|Region|Predicate|Predicate2'), p('a', 'Number'), p('b', 'Number')], 'List<Number>', runBoundary, 'where a one-variable predicate changes truth')]),
+  objSpec('PointIn', [form([p('q', 'Relation|Region|Predicate|Predicate2'), p('P0', 'Point')], 'Point', runPointIn, 'a point kept inside the region')]),
   objSpec('Area', [
     form(
-      [p('q', 'Relation|Region'), p('x0', 'Number'), p('x1', 'Number'), p('y0', 'Number'), p('y1', 'Number')],
+      [p('q', 'Relation|Region|Predicate|Predicate2'), p('x0', 'Number'), p('x1', 'Number'), p('y0', 'Number'), p('y1', 'Number')],
       'Number', runPredicateArea, 'measure of the region inside a rectangle',
     ),
   ]),

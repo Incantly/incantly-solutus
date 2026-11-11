@@ -379,9 +379,25 @@ class Parser {
     this.next(); // =
     this.lineHead = 'define';
     const expr = this.parseExpr();
+    // `in a..b` restricts a function to an interval; one range per parameter, separated by commas
+    let domain: RangeClause[] | undefined;
+    if (this.isKw('in')) {
+      domain = [];
+      const kw = this.next();
+      for (;;) {
+        const start = domain.length === 0 ? kw.s : this.peek().s;
+        const from = this.parseExpr();
+        if (!this.isOp('..')) this.unexpected(['..'], { afterOperand: true });
+        this.next();
+        const to = this.parseExpr();
+        domain.push({ s: start, e: this.prevEnd(), from, to });
+        if (!this.isOp(',')) break;
+        this.next();
+      }
+    }
     const style = this.maybeStyle();
     this.finishLine();
-    return { k: 'function', target: this.nameRef(nameTok), params, expr, ...(style ? { style } : {}) };
+    return { k: 'function', target: this.nameRef(nameTok), params, expr, ...(domain ? { domain } : {}), ...(style ? { style } : {}) };
   }
 
   looksLikeRate(): boolean {

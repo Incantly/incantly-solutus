@@ -17,9 +17,10 @@ export interface ColorValue { readonly r: number; readonly g: number; readonly b
 /** A compiled function of 1 to 4 numbers. Calling it never throws. */
 export interface FunctionValue {
   readonly arity: number;
-  readonly ret: 'Number' | 'Point';
-  /** Returns NaN (Number) or undefined (Point) when undefined; `reason` then tells why. */
-  call(...xs: number[]): number | Pt | undefined;
+  /** `'Bool'` for a predicate (`p(x) = x^2 > 4`). */
+  readonly ret: 'Number' | 'Point' | 'Bool';
+  /** Returns NaN (Number) or undefined (Point, Bool) when undefined; `reason` then tells why. A predicate returns a boolean. */
+  call(...xs: number[]): number | Pt | boolean | undefined;
   /** Fast path for one-variable Number functions. */
   call1?(x: number): number;
   /** Reason of the last undefined result of this function. */
