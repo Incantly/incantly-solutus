@@ -1406,7 +1406,8 @@ export function mapNodes(n: SymNode, f: (t: SymNode) => SymNode): SymNode {
       }
       case 'fn': {
         const args = t.args.map(go);
-        rebuilt = args.every((x, i) => x === t.args[i]) ? t : intern({ k: 'fn', name: t.name, args });
+        // The constructor folds known values, so a substituted `cos(0)` becomes 1 (SYM-SM-27).
+        rebuilt = args.every((x, i) => x === t.args[i]) ? t : fn(t.name, ...args);
         break;
       }
       case 'list': {

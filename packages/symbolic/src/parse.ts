@@ -28,7 +28,7 @@ export class ParseFailure extends Error {
 }
 
 /** Most tokens one text may have (the language itself allows 800 per line). */
-export const MAX_PARSE_TOKENS = 5000;
+export const MAX_PARSE_TOKENS = 100_000;
 /** Deepest nesting of brackets, calls and conditions. */
 const MAX_PARSE_DEPTH = 500;
 /** Highest degree a `rootof` literal may have. */

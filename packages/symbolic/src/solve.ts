@@ -3,6 +3,7 @@
  * sign charts, linear and small polynomial systems, `NSolve` numeric search, `CSolve`
  * over C, and `SolveODE` for three classes. Parameters stay symbolic with case splits.
  */
+import { closedZeroVerdict } from './equiv';
 import type { Assumptions } from './assume';
 import type { SolutionCase } from './contracts';
 import { floatToRatPreferShort } from './num';
@@ -459,8 +460,12 @@ export function solveEquation(
     const s = simplifyNode(f, ctx).node;
     if (isZeroNode(s)) return allSolutions();
     if (freeSymbols(s).size === 0) {
-      const val = evalAt(s, new Map());
-      if (val !== null) return Math.abs(val) < 1e-12 ? allSolutions() : noSolutions();
+      // "Every value" or "no value" for a constant equation is decided
+      // exactly, never by a float tolerance (SYM-SM-12).
+      const verdict = closedZeroVerdict(s, ctx);
+      if (verdict === 'true') return allSolutions();
+      if (verdict === 'false') return noSolutions();
+      throw new Unsupported('an equation without the unknown whose value could not be decided exactly', 'classify');
     }
     return noSolutions();
   }
@@ -858,12 +863,14 @@ function upolyFromTrees(coeffs: readonly SymNode[]): UPoly | null {
 }
 
 function isolateLog(f: SymNode, v: SymNode, ctx: RuleCtx, domain: 'real' | 'complex'): SolveResult | null {
-  if (f.k !== 'add' || f.terms.length !== 2) return null;
-  const logs = f.terms.filter((t) => containsGen(t, v));
-  const rest = f.terms.filter((t) => !containsGen(t, v));
-  if (logs.length !== 1 || rest.length !== 1) return null;
+  // `c * ln(u) + r == 0`, where a missing `r` is 0 (`ln(x) == 0`, SYM-SM-24).
+  const terms = f.k === 'add' ? f.terms : [f];
+  if (terms.length > 2) return null;
+  const logs = terms.filter((t) => containsGen(t, v));
+  const rest = terms.filter((t) => !containsGen(t, v));
+  if (logs.length !== 1) return null;
   const l = logs[0] as SymNode;
-  const r = negateNode(rest[0] as SymNode);
+  const r = rest.length === 1 ? negateNode(rest[0] as SymNode) : ZERO;
   let coeff: SymNode = ONE;
   let body = l;
   if (l.k === 'mul' && l.factors.length === 2 && !containsGen(l.factors[0] as SymNode, v)) {

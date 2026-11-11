@@ -19,7 +19,7 @@ import {
 } from './node';
 import { freeSymbolsCond } from './node';
 import {
-  binomialBig, divisorsFromFactors, extendedGcdBig, factorMultiplicity,
+  binomialBig, divisorCount, divisorSum, divisorsFromFactors, extendedGcdBig, factorMultiplicity,
   fromBaseText, isPrimeBig, isqrtBig, modPowBigInt, nearestFraction, nextPrimeBig,
   previousPrimeBig, primeFactorsBig, shortestDecimalRational, toBaseBig,
 } from './num';
@@ -42,7 +42,7 @@ import {
 } from './solve';
 import type { SolveResult } from './solve';
 import { definiteIntegral, diffNode, integrateNode, limitNode, NoLimit } from './calc';
-import { equivalent, equivalentCond, isZeroVerdict } from './equiv';
+import { equivalent, equivalentCond, isZeroVerdict, registerClosedSign } from './equiv';
 import { characteristicPolynomial, determinant, eigenvalues, eigenvectors, inverse, isSquare, Singular } from './matrix';
 import type { Matrix } from './matrix';
 
@@ -1097,7 +1097,13 @@ function solveOneCond(
         return rest.every((o) => {
           if (o.c !== 'rel') return false;
           const sub = simplifyNode(substituteList(add(o.l, negateNode(o.r)), [[v, val]]), rctx).node;
-          if (isZeroNode(sub)) return true;
+          // Exactly on the bound: the relation itself decides (SYM-SM-13).
+          if (isZeroNode(sub)) return o.op === '==' || o.op === '<=' || o.op === '>=';
+          // An exact rational has an exact sign; no tolerance is involved.
+          if (sub.k === 'int' || sub.k === 'rat') {
+            const sign = sub.k === 'int' ? (sub.v > 0n ? 1 : -1) : (sub.n > 0n ? 1 : -1);
+            return o.op === '!=' || ((o.op === '<' || o.op === '<=') ? sign < 0 : (o.op === '>' || o.op === '>=') ? sign > 0 : false);
+          }
           const s = evalAt(sub, new Map());
           if (s === null) return false;
           return holdsRel(o.op, s);
@@ -1433,6 +1439,32 @@ function toDecimal(e: SymNode, digits: number, tick: Ticker): SymNode | null {
  * Decimal constructor (so the global config is untouched) and rounded half-even to
  * `digits`. Null keeps the caller's float fallback.
  */
+/**
+ * Sign of a closed real constant from two decimal evaluations (80 and 160
+ * digits). The sign is reported only when both are non-zero, agree in sign
+ * and agree to 12 significant digits, so rounding noise around a true zero is
+ * never read as a sign. Null when undecided.
+ */
+function decimalSign(e: SymNode, tick: Ticker): -1 | 0 | 1 | null {
+  const at = (precision: number): Decimal | null => {
+    const Dec = Decimal.clone({ precision, rounding: Decimal.ROUND_HALF_EVEN });
+    try {
+      return decEval(e, Dec, tick);
+    } catch (err) {
+      if (err instanceof Error && err.name === 'BudgetExceeded') throw err;
+      return null;
+    }
+  };
+  const a = at(80);
+  if (a === null || !a.isFinite() || a.isZero()) return null;
+  const b = at(160);
+  if (b === null || !b.isFinite() || b.isZero() || a.s !== b.s) return null;
+  if (!a.minus(b).abs().div(b.abs()).lt('1e-12')) return null;
+  return b.s > 0 ? 1 : -1;
+}
+
+registerClosedSign((e, ctx) => decimalSign(e, ctx.tick));
+
 function decimalTree(e: SymNode, digits: number, tick: Ticker): SymNode | null {
   const Dec = Decimal.clone({ precision: digits + 10, rounding: Decimal.ROUND_HALF_EVEN });
   let v: Decimal | null;
@@ -1924,28 +1956,25 @@ function checkPrimeDigits(n: bigint): void {
   if (digits > 6000) throw new LimitExceeded('digits');
 }
 
-function opIsPrime(args: readonly SymArg[], _named: ReadonlyMap<string, SymArg>, _ctx: OpCtx): OpOut {
-  void _ctx;
+function opIsPrime(args: readonly SymArg[], _named: ReadonlyMap<string, SymArg>, ctx: OpCtx): OpOut {
   noExtras(args, 1, 'IsPrime');
   const n = wholeArg(need(args, 0, 'IsPrime'), 'IsPrime');
   checkPrimeDigits(n);
-  return okOut(defined({ k: 'bool', v: n > 0n && isPrimeBig(n) }));
+  return okOut(defined({ k: 'bool', v: n > 0n && isPrimeBig(n, ctx.tick) }));
 }
 
-function opNextPrime(args: readonly SymArg[], _named: ReadonlyMap<string, SymArg>, _ctx: OpCtx): OpOut {
-  void _ctx;
+function opNextPrime(args: readonly SymArg[], _named: ReadonlyMap<string, SymArg>, ctx: OpCtx): OpOut {
   noExtras(args, 1, 'NextPrime');
   const n = wholeArg(need(args, 0, 'NextPrime'), 'NextPrime');
   checkPrimeDigits(n);
-  return okOut(defined(numOrExpr(nextPrimeBig(n))));
+  return okOut(defined(numOrExpr(nextPrimeBig(n, ctx.tick))));
 }
 
-function opPreviousPrime(args: readonly SymArg[], _named: ReadonlyMap<string, SymArg>, _ctx: OpCtx): OpOut {
-  void _ctx;
+function opPreviousPrime(args: readonly SymArg[], _named: ReadonlyMap<string, SymArg>, ctx: OpCtx): OpOut {
   noExtras(args, 1, 'PreviousPrime');
   const n = wholeArg(need(args, 0, 'PreviousPrime'), 'PreviousPrime');
   checkPrimeDigits(n);
-  const p = previousPrimeBig(n);
+  const p = previousPrimeBig(n, ctx.tick);
   if (p === null) {
     return okOut({ defined: false, reason: 'out_of_domain', detail: { code: 'Y210', text: 'There is no prime below 2.' } });
   }
@@ -1964,8 +1993,10 @@ function opPrimeFactors(args: readonly SymArg[], _named: ReadonlyMap<string, Sym
   return okOut(defined({ k: 'list', items: f.map((x) => numOrExpr(x)) }));
 }
 
+/** Most divisors `DivisorsList` returns. */
+const MAX_DIVISORS_LISTED = 100_000;
+
 function opDivisors(args: readonly SymArg[], _named: ReadonlyMap<string, SymArg>, ctx: OpCtx, which: 'count' | 'list' | 'sum', op: string): OpOut {
-  void ctx;
   noExtras(args, 1, op);
   const n = wholeArg(need(args, 0, op), op);
   if (n === 0n) {
@@ -1975,10 +2006,18 @@ function opDivisors(args: readonly SymArg[], _named: ReadonlyMap<string, SymArg>
   if (f === null) {
     return okOut({ defined: false, reason: 'timeout', detail: { code: 'Y208', text: 'Factorisation ran out of steps.', stage: 'factor' } });
   }
-  const divs = divisorsFromFactors(factorMultiplicity(f));
-  if (which === 'count') return okOut(defined(numOrExpr(BigInt(divs.length))));
-  if (which === 'list') return okOut(defined({ k: 'list', items: divs.map((x) => numOrExpr(x)) }));
-  return okOut(defined(numOrExpr(divs.reduce((s, x) => s + x, 0n))));
+  // The count and the sum come from the factorisation; only the list is
+  // listed, and only when it is short enough to hold (SYM-SM-4).
+  const groups = factorMultiplicity(f);
+  if (which === 'count') return okOut(defined(numOrExpr(divisorCount(groups))));
+  if (which === 'sum') return okOut(defined(numOrExpr(divisorSum(groups, ctx.tick))));
+  const count = divisorCount(groups);
+  if (count > BigInt(MAX_DIVISORS_LISTED)) {
+    return okOut({ defined: false, reason: 'limit', detail: { code: 'Y209', text: `The number has ${count.toString()} divisors; at most ${MAX_DIVISORS_LISTED} are listed.`, stage: 'divisors' } });
+  }
+  ctx.tick.tick(Number(count));
+  const divs = divisorsFromFactors(groups);
+  return okOut(defined({ k: 'list', items: divs.map((x) => numOrExpr(x)) }));
 }
 
 function opToBase(args: readonly SymArg[], _named: ReadonlyMap<string, SymArg>, _ctx: OpCtx): OpOut {

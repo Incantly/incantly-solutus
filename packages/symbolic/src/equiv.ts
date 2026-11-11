@@ -5,7 +5,7 @@
  * so runs are reproducible on every machine).
  */
 import type { SymCond, SymNode } from './node';
-import { add, asRational, divideNodes, freeSymbols, isZeroNode, negateNode } from './node';
+import { add, asRational, bitLength, divideNodes, fn, freeSymbols, intN, isZeroNode, mapNodes, mul, negateNode, pow } from './node';
 import { evalAt, hasImaginaryUnit, reduceImaginary, ruleCtx, simplifyNode, togetherNode } from './rules';
 import type { RuleCtx } from './rules';
 
@@ -38,17 +38,83 @@ function testPoints(syms: readonly string[], count: number): Map<string, number>
   return pts;
 }
 
+/** Sign of a closed real constant, decided with more digits than a float has; null when undecided. */
+export type ClosedSign = (e: SymNode, ctx: RuleCtx) => -1 | 0 | 1 | null;
+
+let closedSign: ClosedSign | null = null;
+
+/** The decimal evaluator lives with the commands; it registers itself here. */
+export function registerClosedSign(f: ClosedSign): void {
+  closedSign = f;
+}
+
+/** The whole `k`-th root of `n`, or null when `n` is not a perfect `k`-th power. */
+function wholeRoot(n: bigint, k: number): bigint | null {
+  let lo = 1n;
+  let hi = 1n << BigInt(Math.ceil(bitLength(n) / k) + 1);
+  while (lo < hi) {
+    const mid = (lo + hi + 1n) >> 1n;
+    if (mid ** BigInt(k) <= n) lo = mid;
+    else hi = mid - 1n;
+  }
+  return lo ** BigInt(k) === n ? lo : null;
+}
+
+/** Rewrites `ln(b^k)` for a whole perfect power as `k * ln(b)`, with the smallest base. */
+function splitLogPowers(t: SymNode): SymNode {
+  return mapNodes(t, (n) => {
+    if (n.k !== 'fn' || n.name !== 'ln' || n.args.length !== 1) return n;
+    const a = n.args[0] as SymNode;
+    if (a.k !== 'int' || a.v < 4n || bitLength(a.v) > 2048) return n;
+    for (let k = bitLength(a.v); k >= 2; k--) {
+      const root = wholeRoot(a.v, k);
+      if (root !== null && root > 1n) return mul(intN(k), fn('ln', intN(root)));
+    }
+    return n;
+  });
+}
+
+/**
+ * Zero test for a constant with no symbols. `true` only when zero is proved
+ * exactly; `false` when the value is certainly not zero; never an answer from
+ * a float tolerance (SYM-SM-12): a tiny float can be a real small number
+ * (`exp(-50)`) or the rounding of a real zero.
+ */
+export function closedZeroVerdict(d: SymNode, ctx: RuleCtx): EquivVerdict {
+  const s = simplifyNode(d, ctx).node;
+  if (isZeroNode(s)) return 'true';
+  const exact = asRational(s);
+  if (exact !== null) return exact.n === 0n ? 'true' : 'false';
+  const val = evalAt(s, new Map());
+  if (val !== null && Number.isFinite(val) && Math.abs(val) >= 1e-9) return 'false';
+  // One more exact form: logarithms of perfect powers share a base
+  // (`ln(8)` is `3 ln(2)`), which settles `2^(ln(8)/ln(2)) - 8`.
+  const split = splitLogPowers(s);
+  if (split !== s) {
+    // Exponents are put over a common denominator so `3 ln(2) / ln(2)` cancels.
+    const tidy = mapNodes(split, (n) => {
+      if (n.k !== 'pow' || n.exp.k === 'int' || n.exp.k === 'rat') return n;
+      try {
+        return pow(n.base, togetherNode(n.exp, ctx).node);
+      } catch (err) {
+        if (err instanceof Error && err.name === 'BudgetExceeded') throw err;
+        return n;
+      }
+    });
+    if (isZeroNode(simplifyNode(tidy, ctx).node)) return 'true';
+  }
+  const sign = closedSign === null ? null : closedSign(s, ctx);
+  if (sign === 1 || sign === -1) return 'false';
+  return 'unknown';
+}
+
 /**
  * Try to prove `d` is zero, or find a counter-example. Exact normal forms first
  * (difference simplifies to zero, or both sides share a cancelled form), then points.
  */
 export function zeroVerdict(d: SymNode, ctx: RuleCtx): EquivVerdict {
   if (isZeroNode(d)) return 'true';
-  if (freeSymbols(d).size === 0) {
-    const val = evalAt(d, new Map());
-    if (val !== null) return Math.abs(val) < 1e-12 ? 'true' : 'false';
-    return 'unknown';
-  }
+  if (freeSymbols(d).size === 0) return closedZeroVerdict(d, ctx);
   if (hasImaginaryUnit(d)) {
     try {
       if (isZeroNode(reduceImaginary(d, ctx))) return 'true';

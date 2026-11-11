@@ -95,6 +95,10 @@ function karatsuba(a: readonly bigint[], b: readonly bigint[], tick: Ticker): bi
   const n = Math.max(a.length, b.length);
   if (n <= 64) return schoolMul(a, b, tick);
   const m = Math.floor(n / 2);
+  // The split needs both operands to reach past `m`. A short operand would
+  // leave an empty high half and the pieces would be added past the end of
+  // the result (the `rootof` crash in SYM-SM-2); the plain product is exact.
+  if (Math.min(a.length, b.length) <= m) return schoolMul(a, b, tick);
   const a0 = a.slice(0, m);
   const a1 = a.slice(m);
   const b0 = b.slice(0, m);
@@ -528,16 +532,23 @@ function variations(seq: readonly UPoly[], n: bigint, d: bigint): number {
 }
 
 /** Cauchy bound: all real roots lie within (-B, B). */
-function cauchyBound(p: UPoly): number {
+/**
+ * Cauchy's root bound, `1 + max |c_i| / |c_n|`, rounded up, in whole numbers.
+ * It never goes through a double: a coefficient past 1.8e308 would become
+ * `Infinity` there (SYM-SM-6). The common denominator cancels in the ratio.
+ */
+function cauchyBound(p: UPoly): bigint {
   const deg = upolyDegree(p);
-  if (deg <= 0) return 1;
-  const an = Number(upolyLead(p)) / Number(p.den);
-  let m = 0;
+  if (deg <= 0) return 1n;
+  const abs = (v: bigint): bigint => (v < 0n ? -v : v);
+  const lead = abs(upolyLead(p));
+  if (lead === 0n) return 1n;
+  let m = 0n;
   for (let i = 0; i < deg; i++) {
-    const v = Math.abs(Number(p.c[i]) / Number(p.den) / an);
+    const v = abs(p.c[i] as bigint);
     if (v > m) m = v;
   }
-  return 1 + m;
+  return 1n + (m + lead - 1n) / lead;
 }
 
 export interface RootInterval {
@@ -554,7 +565,7 @@ export function upolyIsolate(p: UPoly, tick: Ticker = NO_TICK): RootInterval[] {
   const seq = upolySturm(prim, tick);
   const B = cauchyBound(prim);
   const intervals: { a: bigint; b: bigint; d: bigint }[] = [
-    { a: BigInt(Math.floor(-B)) - 1n, b: BigInt(Math.ceil(B)) + 1n, d: 1n },
+    { a: -B - 1n, b: B + 1n, d: 1n },
   ];
   const out: RootInterval[] = [];
   let splits = 0;

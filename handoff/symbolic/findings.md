@@ -14,7 +14,8 @@ Ranked by impact: security, then hangs and crashes, then wrong results, then wro
 - **Evidence:** `parse.ts` `parseCondOrExpr` (line 442) parses each `if` argument as a full condition first; when no comparison follows, it rewinds and parses the same argument again as an expression. A nested `if` in an argument is therefore parsed twice per level. `run('Expr', [{ k: 'text', v }], { fastLaneMs: 2 })` with `v` built as `s = if(x < k, s, 2)` repeated: 12 levels 62 ms, 16 levels 957 ms, 18 levels 3,778 ms (doubling per level; 30 levels would take hours). `Expr` is not a heavy op, so it runs on the main thread, and the text is parsed in `opExpr` (`ops.ts` line 258) outside any `Budget`. `Steps` parses its call text the same way (`run.ts` `argTextToSym` → `parseExprOrCond`) before its inner budget starts. The 500-level depth cap (`parsePrimary`) does not help: 30 levels are far below it.
 - **Invariant broken:** S9: parse time is linear in the text. S1: no work runs outside a budget.
 - **Suggested fix:** decide condition versus expression without re-parsing: parse an expression once, then look at the next token (a comparison, `in`, `and`, `or`) to continue as a condition, as `parseTop` already does; or memoise `parseOr` failures by token position. Put a token-count cap on parser input (the language uses 800 tokens per line) and charge parsing to the run budget.
-- **status:** open
+- **status:** fixed
+- **fix:** Conditions and expressions are parsed in one pass with no re-parse; a text may have at most 100,000 tokens.
 
 ### SYM-SM-2: `rootof` in parsed text isolates roots with no budget
 
@@ -22,7 +23,8 @@ Ranked by impact: security, then hangs and crashes, then wrong results, then wro
 - **Evidence:** `parse.ts` `callNode`, `rootof` branch (lines 510 to 518): `treeToUPoly(args[0], symN('x'))` and `upolyIsolate(p)` run with the default `NO_TICK` ticker (`poly.ts` line 16), so the Sturm sequence and bisection are unbounded. `run('Expr', [{ k: 'text', v: 'rootof((x+1)^1000 - 2, 1)' }], { fastLaneMs: 2, limits: { maxMs: 50 } })` returned after 215,073 ms with 369 MB of heap. At degree 300 (`rootof((x+1)^300 - 2, 1)`) the same call ends in `internal` "Cannot mix BigInt and other types, use explicit conversions" after 3 ms. Other `NO_TICK` defaults: every `poly.ts` export takes `tick: Ticker = NO_TICK`, and `refineRootFloat`/`refineRootRational` take no ticker at all (called from `solve.ts` lines 329 and 1736 and `ops.ts` line 1478).
 - **Invariant broken:** S2: every loop whose length depends on the input ticks.
 - **Suggested fix:** make the ticker a required parameter in `poly.ts` (no default), pass one into the parser (or cap the degree a `rootof` literal may have, for example the 200 of `maxFactorDegree`), and give the two refiners a ticker. Check every caller of a `poly.ts` function for the same rule.
-- **status:** open
+- **status:** fixed
+- **fix:** The rootof branch passes the run's ticker to the polynomial routines and caps the degree. The polynomial multiply no longer adds past the end of its result when one operand is much shorter than the other, which was the degree-300 internal error.
 
 ### SYM-SM-3: The digit and node limits are never enforced; one `Factor` line exhausts memory
 
@@ -35,7 +37,8 @@ Ranked by impact: security, then hangs and crashes, then wrong results, then wro
   - `ratPow` in `treeToUPoly` (`poly.ts` line 770) raises the numerator and denominator to exponents up to 100,000 with no digit check.
 - **Invariant broken:** S2: `maxNodes` and `maxDigits` are enforced; design 5.5 ("more than 100,000 digits is `limit`") and 5.13.
 - **Suggested fix:** one helper that predicts the digit count before a power, a product of big integers or a divisor enumeration (`bitLength(base) * exponent`, product of `(e + 1)` over the factorisation) and throws `BudgetExceeded('digits')`; use it in `intPowNumber` (check `b` too), `roots.exact`, `ratPow`, `mulNumbers`, `intDivisors` and `divisorsFromFactors`. Count interned nodes per run against `maxNodes`. Apply the rule to every value kind that holds integers (int, rat, dec mantissa, polynomial coefficients).
-- **status:** open
+- **status:** to be implemented
+- **note:** Partly fixed: digit guards run before powers and products of big whole numbers, and the node limit is enforced through the arena guard. Not verified: the `Factor(x^2 - (10^1000)^99)` case from the evidence was not run, because code without the fix exhausts memory. Owner: symbolic.
 
 ### SYM-SM-4: Loops that ignore the run budget
 
@@ -48,7 +51,8 @@ Ranked by impact: security, then hangs and crashes, then wrong results, then wro
   - `runSteps` re-enters `run` with `ctx` only (`run.ts` line 558), so `opts.limits` given to `Steps` are dropped and the inner command always gets the default budget.
 - **Invariant broken:** S2 and S6: every input-sized loop ticks; the inner command of `Steps` runs with the caller's limits.
 - **Suggested fix:** give `roots.pull`, `roots.exact` and every `num.ts` loop the run's ticker (Miller-Rabin: one tick per squaring); compute the divisor count and sum from the factorisation without listing, and cap `DivisorsList` by the predicted count; pass `opts.limits` into the `Steps` inner call.
-- **status:** open
+- **status:** to be implemented
+- **note:** Partly fixed: the prime tests tick once per modular multiplication, weighted by the size of the number; the divisor count and sum come from the factorisation without listing, and the list is capped at 100,000; Steps passes the caller's limits to its inner command. Still to do: tickers in roots.pull and roots.exact, a cap in binomialBig, and the run's ticker in primeFactorsBig. Owner: symbolic.
 
 ### SYM-SM-5: Untrusted names read `Object.prototype` members
 
@@ -58,7 +62,8 @@ Ranked by impact: security, then hangs and crashes, then wrong results, then wro
   - `print.ts` `latexName` (line 317) does `greek[name] ?? name` on a plain object: `toLatex(symN('constructor'))` is `function Object() { [native code] }` and `toLatex(symN('toString'))` is `function toString() { [native code] }`.
 - **Invariant broken:** S1: `op` names only an entry of the command table; registries answer only their own keys (the same rule as LANG-SM-1).
 - **Suggested fix:** `Object.hasOwn(OPS, op)` in `runSteps` and at the top of `runInner`; `Object.hasOwn(greek, name)` in `latexName` (or `Map`s). Search the package for every other plain-object lookup keyed by text (`SYMBOLIC_ERROR_CODES[e.kind]`, `CORE_ERROR_CODES`, `OP_PHASES`, the `flip` tables) and do the same.
-- **status:** open
+- **status:** fixed
+- **fix:** Command and name tables are looked up with own-key checks or Maps.
 
 ## Hangs and crashes
 
@@ -68,7 +73,8 @@ Ranked by impact: security, then hangs and crashes, then wrong results, then wro
 - **Evidence:** `poly.ts` `cauchyBound` (line 531) divides coefficients converted with `Number(...)`; a coefficient above about 1.8e308 gives `Infinity`, and `upolyIsolate` (line 557) calls `BigInt(Math.floor(-B))`. `run('NSolve', [cd('x^3 - x - 10^400 == 0'), ex('x')])` ends in `internal` "The number -Infinity cannot be converted to a BigInt because it is not an integer". `run('Solve', [cd('x^3 - x - 10^400 == 0'), ex('x')])` returns `[]` after 992 ms, though every real cubic has a real root (about 4.6e133). The degree-300 `rootof` in SYM-SM-2 ends in another `internal` error inside the same code.
 - **Invariant broken:** S10: no real solution is missed; `run` maps every failure to a reason.
 - **Suggested fix:** compute the root bound in BigInt (for example `1 + max |c_i| / |c_n|` rounded up, or a power of two from bit lengths), never through `Number`; keep the interval arithmetic exact throughout. Add `limit` for coefficients past the digit budget (SYM-SM-3).
-- **status:** open
+- **status:** fixed
+- **fix:** The root bound is computed in whole numbers, never through a double.
 
 ### SYM-SM-7: The node arena only grows, and `arena.clear()` corrupts the engine
 
@@ -76,7 +82,8 @@ Ranked by impact: security, then hangs and crashes, then wrong results, then wro
 - **Evidence:** `node.ts` lines 154 to 187: the arena is a `Map` that never drops a node; design 5.13 says it is rebuilt from live nodes past 1,000,000. 3,000 calls of `run('Expand', [ex('(x + i)^12')])` with `clearCache()` between them left `arena.size()` at 525,628 nodes and 169 MB of heap. `arena.clear()` (exported, described as "Rebuild drops unreachable nodes") empties the map and restarts ids at 1 while `ZERO`, `ONE`, `MINUS_ONE`, `TWO`, `HALF` and every cache entry keep the old objects and ids: after `arena.clear(); clearCache()`, `run('Solve', [x^2 - 4 == 0, x])` returns `[]`.
 - **Invariant broken:** S4: one object per structure; constants are arena members; ids are unique for the life of every cache entry; the arena is rebuilt past 1,000,000 nodes.
 - **Suggested fix:** replace `clear()` by a rebuild that keeps the constants and every node reachable from the cache (or clears the cache with it and re-interns the constants first); trigger it from `run` when the size passes the threshold. Use a weak structure if the target engines allow it.
-- **status:** open
+- **status:** fixed
+- **fix:** arena.clear() is a rebuild that keeps the base constants and tells the run cache to forget what it held; ids are never reused; the arena is rebuilt past 1,000,000 nodes at the start of a top-level run.
 
 ## Wrong results
 
@@ -86,7 +93,8 @@ Ranked by impact: security, then hangs and crashes, then wrong results, then wro
 - **Evidence:** `worker.ts` lines 1 to 6 state that `SymNode`s "cross `postMessage` by structured clone unchanged". They do not stay interned: the clone is a new object graph, so the engine's identity tests (`t === gen` in `treeToUPoly`, `x === ONE`, `a.arg !== b.arg`) fail, and in a real worker the cloned `id` fields name unrelated nodes of the worker's own arena, which the id-keyed memo maps (`mapNodes`, `nodeCount`, `freeSymbols`) and the cache key (`argKey`, `e${id}`) then confuse. In one process: `handleWorkerRequest(structuredClone({ id: 1, op: 'Solve', args: [cd('x^2 - 1 == 0'), ex('x')] }), run)` returns `[]`; the same call on the original objects returns `[x == -1, x == 1]`.
 - **Invariant broken:** S7: a job's arguments mean the same in the worker as on the main thread. S4: `===` is structural equality.
 - **Suggested fix:** re-intern every argument on arrival (`handleWorkerRequest` rebuilds each tree bottom-up through the smart constructors, or through a raw `intern` that keeps the canonical shape) and re-intern results on the host side; better, send a compact serial form (`toText` once SYM-SM-19 is fixed, or a node table) instead of the object graph. Never trust `id` across realms.
-- **status:** open
+- **status:** fixed
+- **fix:** Every argument is re-interned on arrival, so a structured clone means the same in the worker.
 
 ### SYM-SM-9: The run cache key misses inputs, so one call's answer is served to another
 
@@ -98,7 +106,8 @@ Ranked by impact: security, then hangs and crashes, then wrong results, then wro
   - A `dec` key ignores `prec` through `condText`.
 - **Invariant broken:** S1: the key covers every input that can change the output; S5: no assumption outlives its call.
 - **Suggested fix:** key Conds and facts structurally (a bracketed form, or the interned ids of every node plus the condition shape, as `node.ts` `condKey` does); add `exact`, `excluded`, `display` and the effective limits to the key; or do not cache calls whose limits differ from the defaults.
-- **status:** open
+- **status:** fixed
+- **fix:** The cache key is structural for conditions and facts and includes exact, excluded, display and the effective limits.
 
 ### SYM-SM-10: `Simplify` turns a budget stop into a defined, unsimplified answer
 
@@ -106,7 +115,8 @@ Ranked by impact: security, then hangs and crashes, then wrong results, then wro
 - **Evidence:** `rules.ts` `tryCandidate` (lines 1392 to 1398) and the final `togetherNode` (line 1446) catch every exception, `BudgetExceeded` included. Once the step budget is spent, `Budget.tick` throws on every call, so every remaining candidate fails and `simplifyNode` returns the current form. `run('Simplify', [ex('(x^2 - 1)/(x - 1)')], { limits: { maxSteps: 40 } })` is the defined value `(x^2 - 1)/(x - 1)` with no excluded values, not `timeout`. With the `ms` budget the cut depends on machine speed, so the same line gives different results on different machines (design acceptance 9). The same catch also hides internal errors (a `TypeError` or a stack overflow) inside a candidate. `Assume`, `IsZero`, `Equivalent` and the solver call `simplifyNode` and inherit this.
 - **Invariant broken:** S3: a budget stop ends the call as `timeout`; the result does not depend on wall time.
 - **Suggested fix:** rethrow `BudgetExceeded` from `tryCandidate` and the final `try`; catch only `LimitExceeded` and `Unsupported` there. If the design wants "a candidate that blows the budget is dropped", give each candidate its own step sub-budget (deterministic), never the shared wall-clock one.
-- **status:** open
+- **status:** fixed
+- **fix:** A candidate is dropped only for Unsupported, LimitExceeded or NonElementary; a spent budget ends the call as timeout and an internal fault is reported.
 
 ### SYM-SM-11: `sin(pi/24)` is 0 and `cos(pi/24)` is 1
 
@@ -114,7 +124,8 @@ Ranked by impact: security, then hangs and crashes, then wrong results, then wro
 - **Evidence:** `node.ts` `exactTrigValue`, line 772, sends denominator 24 to `reduceTrig12`, which computes `r = (n mod 2d) * 12 / d` in BigInt division: for d = 24 and odd n the fraction truncates (`1 * 12 / 24 = 0`). `run('Simplify', [ex('sin(pi/24)')])` is `0`; `run('Evaluate', [ex('cos(pi/24)')])` is `1` (cos goes through `sin(13 pi/24)`, `r = 6`, `ONE`). Every odd multiple of `pi/24` is affected (`sin(5 pi/24)`, `cos(7 pi/24)`, `tan(pi/24)`, …).
 - **Invariant broken:** design 5.5: exact trig values only from the table of known values; a fold is exact.
 - **Suggested fix:** call `reduceTrig12` only for d = 12 (and 6, 4, 3, 2 after reduction); leave 24 unfolded, or add a correct table for multiples of `pi/24`. Check `reduceTrig10` and the `/8` table the same way (they are exact for their denominators).
-- **status:** open
+- **status:** fixed
+- **fix:** Exact trig values are folded only for the denominators the tables cover; multiples of pi/24 are left unfolded.
 
 ### SYM-SM-12: Zero tests use a float tolerance, so nonzero numbers are "proved" zero
 
@@ -122,7 +133,8 @@ Ranked by impact: security, then hangs and crashes, then wrong results, then wro
 - **Evidence:** `equiv.ts` `zeroVerdict` line 49: a symbol-free difference is `true` when its float value is below `1e-12`. `run('IsZero', [ex('exp(-50)')])` is `true`; `run('IsZero', [ex('x - x + 1/10^20')])` is `true` although `1/10^20` is an exact nonzero rational. `solve.ts` line 463 does the same for an equation without the unknown: `Solve(exp(-30) == 0, x)` is "all". Large values fail the other way: `Math.sqrt(1e40 + 1) - 1e20` is 0, so `IsZero(sqrt(10^40 + 1) - 10^20)` is `true`.
 - **Invariant broken:** design 2.2: `Equivalent` and `IsZero` are `true` only when proved; S10: "all" or "none" for a constant equation is decided exactly.
 - **Suggested fix:** decide exactly when the difference is an exact rational (`asRational`); for closed real constants evaluate with interval or decimal arithmetic at growing precision (the `toDecimal` path) and answer `false` when the interval excludes 0, `unknown` otherwise. Never answer `true` from a float.
-- **status:** open
+- **status:** fixed
+- **fix:** A constant with no symbols is zero only when simplification or an exact rational proves it; it is non-zero when a float is clearly away from zero or when 80- and 160-digit evaluations agree on a non-zero value; otherwise the answer is unknown. The same decision is used for an equation without the unknown.
 
 ### SYM-SM-13: `Solve(eq and rel)` keeps a solution that sits on a strict bound
 
@@ -130,7 +142,8 @@ Ranked by impact: security, then hangs and crashes, then wrong results, then wro
 - **Evidence:** `ops.ts` `solveOneCond`, `and` branch, line 1101: `if (isZeroNode(sub)) return true` keeps a solution whenever the substituted difference is exactly 0, whatever the relation. `Solve(x^2 == 4 and x < 2, x)` is `[x == -2, x == 2]`; `Solve(x^2 == 4 and x != 2, x)` is `[x == -2, x == 2]`. Both should be `[x == -2]`. The float fallback (`holdsRel`, line 1118) also treats `<=` and `>=` with a `1e-9` tolerance, which keeps solutions just outside a bound.
 - **Invariant broken:** S10: every solution satisfies every side condition.
 - **Suggested fix:** when the difference is exactly 0, return `op` in `{==, <=, >=}`; when it is an exact rational use its sign; otherwise use an exact or interval sign test and mark the solution `denominator_unchecked` when undecidable, not a tolerance.
-- **status:** open
+- **status:** fixed
+- **fix:** A solution exactly on a bound is kept only for ==, <= and >=; an exact rational difference uses its sign.
 
 ### SYM-SM-14: Definite integrals and limits step over poles
 
@@ -141,7 +154,8 @@ Ranked by impact: security, then hangs and crashes, then wrong results, then wro
   - `run('Integral', [ex('1/sqrt(abs(x))'), ex('x'), { k: 'num', v: -1 }, { k: 'num', v: 1 }])` is `divergent` "singular near 0"; the integral converges to 4 (design 5.10: an integrable pole is handled as an improper integral).
 - **Invariant broken:** design 5.10; the definite-integral and limit results equal the mathematical value or are undefined with the right reason.
 - **Suggested fix:** find poles of the integrand and of the antiderivative on [a, b] exactly (zeros of denominators, of `cos` under `tan`, of log arguments) before using the antiderivative; split the interval at each and take one-sided limits. In `limitNode`, test continuity at the point exactly (the argument `pi/2` is a pole of `tan`) instead of substituting a float.
-- **status:** open
+- **status:** to be implemented
+- **note:** Partly fixed: a limit at an exact pole of tan, 1/cos or 1/sin is decided from the two sides, and a definite integral over such a pole is divergent. Still to do: an integrable singularity such as 1/sqrt(abs(x)) on [-1, 1] is still reported divergent. Owner: symbolic.
 
 ### SYM-SM-15: `floor`, `ceil` and `round` of exact numbers go through a double
 
@@ -149,7 +163,8 @@ Ranked by impact: security, then hangs and crashes, then wrong results, then wro
 - **Evidence:** `node.ts` `foldFn` line 644 converts the argument with `toFloat` and folds with `Math.floor`; above 2^53 the result is `floatN`. `run('Evaluate', [ex('floor(10^20/3)')])` is `33333333333333330000` (a float); the exact value is `33333333333333333333`. Rationals whose double rounds across an integer fold wrongly even below 2^53 (for example `floor((10^17 - 1)/10^17)` folds through `1.0`).
 - **Invariant broken:** design 5.4 and 8: exact input stays exact; exactness never returns or is lost by rounding.
 - **Suggested fix:** for `int` and `rat` use BigInt floor division (`n / d` with sign correction) for `floor`, `ceil` and `round` (with the kernel's rounding convention); keep the float path for `float` and `dec` only.
-- **status:** open
+- **status:** fixed
+- **fix:** floor, ceil and round of whole numbers and rationals use whole-number division.
 
 ### SYM-SM-16: Parametric case splits list impossible cases and miss real ones
 
@@ -157,7 +172,8 @@ Ranked by impact: security, then hangs and crashes, then wrong results, then wro
 - **Evidence:** `run('Solve', [cd('x^2 == a'), ex('x')])` is `[x == sqrt(4 * a)/2, x == -sqrt(4 * a)/2]` with `cases` `1 == 0 and 0 != 0`, `1 == 0 and 0 == 0 and -a == 0`, `1 == 0 and 0 == 0 and -a != 0`: the cases split on the numeric leading coefficient 1, and there is no `a < 0` case although for `a < 0` there is no real solution. `Solve(a*x^2 + b*x + c == 0, x)` has no case for `b^2 - 4 a c < 0`. `Solve(a*x == 0, x)` lists `a == 0 and 0 != 0`, which can never hold, and `a == 0 and 0 == 0` instead of `a == 0`. `Solve(ln(x) == 1, x)` lists `1 == 0 and -e == 0`.
 - **Invariant broken:** S10: a case split lists only possible parameter values, and every value where the generic answer fails (design 2.3, 5.9 step 5).
 - **Suggested fix:** split only on coefficients that contain a parameter; simplify each case condition and drop the ones that are `false`; in real mode, add the sign condition of the radicand (`a >= 0`, discriminant `>= 0`) to the generic answer and the complementary `none` case.
-- **status:** open
+- **status:** to be implemented
+- **note:** Not fixed in this round. Owner: symbolic.
 
 ### SYM-SM-17: `Factor` stops early, and multivariate results carry a junk content
 
@@ -165,7 +181,8 @@ Ranked by impact: security, then hangs and crashes, then wrong results, then wro
 - **Evidence:** `run('Factor', [ex('x^12 - 1')])` is `(x - 1) * (x + 1) * (x^10 + x^8 + x^6 + x^4 + x^2 + 1)` with no `irreducible` notice, but `x^10 + … + 1` factors further as `(x^2 + 1)(x^2 - x + 1)(x^2 + x + 1)(x^4 - x^2 + 1)` (design acceptance 3: `Factor` recovers the planted factors). `Factor(x^2 - y^2)` is `-36 * (x/36 + y/36) * (y - x)`; `Factor(x^2 + 2*x*y + y^2 - z^2)` is `-166839735777662410596 * (z^2/166839735777662410596 - x^2/166839735777662410596 - …)`, unfactored and with a 21-digit constant (the expected answer is `(x + y - z) * (x + y + z)`). The values are equal to the input; the forms are not factorisations. `Factor(x^3 + y^3)` is left whole.
 - **Invariant broken:** design 5.8 steps 3 and 4: content extracted, every factor irreducible, the sign in front; acceptance 3.
 - **Suggested fix:** recurse `upolyFactor` on the `irreducible` pieces that `kroneckerFactor` left (or implement the documented Cantor-Zassenhaus and Hensel path); in `mpolyFactor`, take the integer content and the primitive part before the Kronecker image, map factors back to primitive integer polynomials, and reject a result whose `verifyFactor` ratio is not ±1 times the content.
-- **status:** open
+- **status:** to be implemented
+- **note:** Not fixed in this round. Owner: symbolic.
 
 ### SYM-SM-18: The parser accepts a `rootof` that names no root
 
@@ -173,7 +190,8 @@ Ranked by impact: security, then hangs and crashes, then wrong results, then wro
 - **Evidence:** `parse.ts` lines 510 to 518: `ivs[idx - 1]` may be `undefined` (index 0, negative, or above the number of real roots), and the node is built with hint 0. `run('Numeric', [ex('rootof(x^2 + 1, 1)'), { k: 'int', v: 20n }])` is `0`; `run('ToNumber', [ex('rootof(x^2 - 2, 5)')])` is `0`.
 - **Invariant broken:** S9: `rootof(p, k)` names an existing real root.
 - **Suggested fix:** throw `ParseFailure` (`bad_argument`) when `k < 1` or `k > ivs.length`; also require a square-free polynomial, as `upolyIsolate` assumes.
-- **status:** open
+- **status:** fixed
+- **fix:** rootof with an index below 1 or above the number of real roots, or with a repeated factor, is a parse error.
 
 ### SYM-SM-19: Printed text does not always parse back to the same value
 
@@ -185,7 +203,8 @@ Ranked by impact: security, then hangs and crashes, then wrong results, then wro
   - The lexer reads `1.2.3` as one number token; `Number` makes it `NaN`, a float node, instead of a syntax error. `1e999` becomes a float `Infinity`.
 - **Invariant broken:** S9: every printed text parses back to the same node; keywords are never operands; a number literal is finite.
 - **Suggested fix:** in `parseProduct`, do not multiply implicitly by the names `and`, `or`, `not`, `in`; in `parseTop`, continue with `parseAnd`/`parseOr` after a comparison; bracket `or` inside `and` and anything compound under `not` in `condText` (and in `condLatex`/`condSpeech`); print floats in a form the parser keeps inexact, or document `Numeric`-style output as display-only; reject a second `.` and non-finite literals in `lex`/`numNode`.
-- **status:** open
+- **status:** to be implemented
+- **note:** Partly fixed: keywords are not implicit factors; and, or and not print with brackets and parse back; a second decimal point and a non-finite literal are refused. Still to do: a float prints as text that parses back as an exact rational. Owner: symbolic.
 
 ### SYM-SM-20: LaTeX output uses commands that do not exist
 
@@ -193,7 +212,8 @@ Ranked by impact: security, then hangs and crashes, then wrong results, then wro
 - **Evidence:** `print.ts` line 305 prints every function as `\name`: `toLatex(asin(x))` is `\asin\left(x\right)`, and the same for `\acos`, `\atan`, `\atan2`, `\asinh`, `\acosh`, `\atanh`, `\abs`, `\sign`, `\floor`, `\ceil`, `\round`, `\cbrt`, `\log10`, `\log2`. Only `sin`, `cos`, `tan`, `sinh`, `cosh`, `tanh`, `ln`, `min`, `max` are LaTeX operators.
 - **Invariant broken:** design 5.11: `toLatex` is for typeset display.
 - **Suggested fix:** a table from function name to LaTeX: `\arcsin`, `\arccos`, `\arctan`, `\left|…\right|` for `abs`, `\lfloor…\rfloor`, `\lceil…\rceil`, `\sqrt[3]{…}`, `\log_{10}`, `\log_{2}`, and `\operatorname{…}` for the rest.
-- **status:** open
+- **status:** fixed
+- **fix:** Functions print through a table of real LaTeX commands; any other name uses \\operatorname.
 
 ### SYM-SM-21: Family parameter names depend on earlier calls
 
@@ -201,7 +221,8 @@ Ranked by impact: security, then hangs and crashes, then wrong results, then wro
 - **Evidence:** `solve.ts` line 882: `trigParamNext` is module state, incremented at lines 817, 945, 988 and 2269. After `clearCache()`: `Solve(sin(x) == 1/2, x)` uses `k1`, `Solve(tan(x) == 1, x)` then uses `k2`, and the first call repeated after another `clearCache()` uses `k3`; `Steps(Solve(sin(x) == 1/2, x))` gave `k4`. The cache hides this until it evicts the entry. The symbol is a plain `sym` with no `integer` domain, although design 2.3 calls it "an integer Symbol created for the result".
 - **Invariant broken:** S8: a result does not depend on calls made before it (design 5.12, acceptance 9).
 - **Suggested fix:** number family parameters per result (start at `k1` in each call, skipping names already free in the input), and return the parameter with domain `integer` (for example in the result's `cases` or a `params` field the kernel turns into a `Symbol`).
-- **status:** open
+- **status:** to be implemented
+- **note:** Partly fixed: family parameters are numbered from k1 in every top-level call. Still to do: skipping names already free in the input, and returning the parameter with the integer domain. Owner: symbolic.
 
 ### SYM-SM-22: `GCD(0, 0)` is 1
 
@@ -209,7 +230,8 @@ Ranked by impact: security, then hangs and crashes, then wrong results, then wro
 - **Evidence:** `node.ts` `bigGcd` line 346 returns `1n` when both inputs are 0 (to protect `ratN`); `ops.ts` `gcdBig` uses it, so `run('GCD', [{ k: 'int', v: 0n }, { k: 'int', v: 0n }])` is 1. The list form `GCD([0, 0])` follows.
 - **Invariant broken:** gcd(0, 0) = 0 by the usual convention and by `ExtendedGCD`.
 - **Suggested fix:** a `gcdWhole` that returns 0 for (0, 0) in the whole-number ops; keep the guard only where a denominator is built.
-- **status:** open
+- **status:** fixed
+- **fix:** GCD(0, 0) is 0 in the whole-number commands.
 
 ### SYM-SM-23: `a sin + b cos` forms turn exact input into floats
 
@@ -217,7 +239,8 @@ Ranked by impact: security, then hangs and crashes, then wrong results, then wro
 - **Evidence:** `rules.ts` `combineLinearTrig` (lines 973 to 1004) and `solve.ts` `solveTrigLinearCombo` build `floatN(Math.hypot(a, b))` and `floatN(Math.atan2(b, a))`. `run('TrigCombine', [ex('sin(x) + cos(x)')])` is `1.4142135623730951 * sin(x + 0.7853981633974483)` (exact: `sqrt(2) * sin(x + pi/4)`); `Solve(sin(x) == cos(x), x)` is `[x == 2 * pi * k4 + 0.7853981633974483, …]` (exact: `pi/4 + pi * k`). The cells are marked inexact, so the flag is honest, but design 5.9 lists `a sin + b cos as one sine` among the exact methods.
 - **Invariant broken:** design 5.4: exact input gives an exact result where one exists.
 - **Suggested fix:** compute `R = sqrt(a^2 + b^2)` with the constructors and `phi` with the exact inverse-trig fold (`atan(b/a)` folds for the school ratios), falling back to floats only when `a` or `b` is inexact.
-- **status:** open
+- **status:** to be implemented
+- **note:** Partly fixed: TrigCombine with exact rational coefficients gives an exact amplitude and phase. Still to do: solveTrigLinearCombo in the solver still builds floats. Owner: symbolic.
 
 ## Wrong errors
 
@@ -227,7 +250,8 @@ Ranked by impact: security, then hangs and crashes, then wrong results, then wro
 - **Evidence:** `solve.ts` `isolateLog` line 861 requires `f` to be a sum of exactly two terms; with a right side of 0 the difference is `ln(x)` alone, so the method returns `null` and the call ends `unsupported` "No exact method for an equation with a logarithmic term". `Solve(ln(x) == 1, x)` and `ln(x) == 2` solve, and so does `exp(x) - 1 == 0`.
 - **Invariant broken:** design 5.9: exponential and logarithmic equations with the unknown in one place are isolated and inverted.
 - **Suggested fix:** treat a single term as `term == 0` (rest = 0) in `isolateLog`, and check the other isolation helpers for the same two-term assumption.
-- **status:** open
+- **status:** fixed
+- **fix:** A single logarithmic term is solved as term == 0.
 
 ## Speed
 
@@ -237,7 +261,8 @@ Ranked by impact: security, then hangs and crashes, then wrong results, then wro
 - **Evidence:** `packages/symbolic/bench/cas.bench.ts` at this commit: `Factor degree-6 polynomial: 84.985 ms/call` (target 5 ms) for `x^6 - 2*x^5 - 3*x^4 + 8*x^3 + 3*x^2 - 8*x + 4`, which comes back irreducible; the fixer's breakdown (`fixer-notes.md`) puts the time in the factor search (parse about 0.1 ms). `Solve quadratic with symbolic coefficients: 3.084 ms/call` (target 3 ms) is also over. Every other bench case passes.
 - **Invariant broken:** design 5.6 and 5.13 targets.
 - **Suggested fix:** the documented modular method (factor modulo a small prime, Hensel lift, bounded recombination) replaces the Kronecker search; a cheap irreducibility test modulo two or three primes catches this input in microseconds.
-- **status:** open
+- **status:** to be implemented
+- **note:** Not fixed in this round; the bench was not run again. Owner: symbolic.
 
 ### SYM-SM-26: The two lanes never meet: heavy ops are always `pending`, and the worker cannot be cancelled
 
@@ -245,7 +270,8 @@ Ranked by impact: security, then hangs and crashes, then wrong results, then wro
 - **Evidence:** `run.ts` lines 418 to 425: with `fastLaneMs`, a heavy op returns the main-thread cache entry or `pending`, and never tries a fast finish: `run('Simplify', [ex('x')], { fastLaneMs: 2 })` is `pending`. Heavy results are computed only in the worker, whose module instance has its own cache, and nothing in the API (`cachePut` is private, `WorkerResponse` carries no key) puts them into the main-thread cache, so the fast-lane cache stays empty. The protocol (`worker.ts`) has request ids but no cancel or supersede message, and the handler is synchronous, so a job for a slider position the learner has left runs to its 1,000 ms budget while newer jobs queue behind it. The comment's `needRef` round trip is not implemented, so `ref` arguments are never resolved in the worker.
 - **Invariant broken:** S1 and S7 (design 5.13 two lanes: a cache hit or a fast finish updates the cell in the same frame).
 - **Suggested fix:** try heavy ops in the fast lane with the 2 ms budget before answering `pending`; export a `cacheStore(key, cell, notices)` (or return the key in `WorkerResponse`) so the host can seed the main-thread cache with the worker's answer; add a `cancel(id)` message checked by the worker between jobs and a generation number so the host drops stale answers; either implement `needRef` or remove it from the comment.
-- **status:** open
+- **status:** to be implemented
+- **note:** Partly fixed: a heavy op tries a fast finish before answering pending. Still to do: seeding the main-thread cache from the worker, a cancel message, and needRef. Owner: symbolic.
 
 ## Cosmetic
 
@@ -255,7 +281,8 @@ Ranked by impact: security, then hangs and crashes, then wrong results, then wro
 - **Evidence:** `mapNodes` rebuilds `fn` nodes with `intern` and no fold (`node.ts` `mapNodes`, `fn` case), so substituted values stay unfolded: `Limit((1 - cos(x))/x^2, x, 0)` is `cos(0)/2`, and `Integral(tan(x), x, 0, 2)` prints `ln(abs(cos(0)))`. `Factor(x^2 + 1, over = complex)` is `(x - i * sqrt(4)/2) * (x + i * sqrt(4)/2)`; `Solve(x^2 == a, x)` gives `sqrt(4 * a)/2`; `CSolve(exp(x) == -1, x)` gives `ln(-1) + 2 * i * pi * k1` (design 8: `ln(-1)` is `i pi` in complex mode); `Factor(6/35)` is `6/35`, not `2 * 3 / (5 * 7)`; `Simplify((x^2 + 2*x + 1)/(x + 1)^3)` records the excluded value as `x^2 + 2 * x + 1 != 0` instead of `x != -1`; divergent integrals report "singular near -4.547473508864641e-13" for a pole at 0.
 - **Invariant broken:** design 5.5 (constructors fold known values) and 5.7 (`excluded` names the values).
 - **Suggested fix:** use `fn(name, ...args)` in `mapNodes`; run the `roots.pull` rule on built radicands; fold `ln(-1)` in complex mode; build `Factor` of a rational from two display products; solve linear excluded factors with `excludedFromFactor` after factoring the cancelled gcd; round the reported singular point to the exact pole when one is known.
-- **status:** open
+- **status:** to be implemented
+- **note:** Partly fixed: substituted function values are folded by the constructor. The other forms in the evidence were not changed. Owner: symbolic.
 
 ## Fix groups
 

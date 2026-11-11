@@ -2,7 +2,7 @@
  * Exact whole-number tools (cas/design.md 2.6): primality, factorisation, divisors,
  * bases, extended gcd, modular powers, binomial coefficients. All BigInt; pure.
  */
-import { bigGcd, bigIsqrt } from './node';
+import { bigGcd, bigIsqrt, bitLength } from './node';
 
 /* --------------------------------- primes ----------------------------------- */
 
@@ -10,8 +10,21 @@ function modMul(a: bigint, b: bigint, m: bigint): bigint {
   return (a * b) % m;
 }
 
-function modPowBig(base: bigint, exp: bigint, mod: bigint): bigint {
+/** The run's budget, as these loops see it. Every loop whose length follows the input ticks (S2). */
+export interface NumTicker {
+  tick(n?: number): void;
+}
+
+const NO_NUM_TICK: NumTicker = { tick(): void {} };
+
+/** Steps charged for one multiplication modulo `m`: one per 64-bit word, so big numbers cost more. */
+function mulCost(m: bigint): number {
+  return Math.max(1, Math.ceil(bitLength(m) / 64));
+}
+
+function modPowBig(base: bigint, exp: bigint, mod: bigint, tick: NumTicker = NO_NUM_TICK): bigint {
   if (mod === 1n) return 0n;
+  const cost = mulCost(mod);
   let r = 1n;
   let b = ((base % mod) + mod) % mod;
   let e = exp;
@@ -19,15 +32,18 @@ function modPowBig(base: bigint, exp: bigint, mod: bigint): bigint {
     if ((e & 1n) === 1n) r = modMul(r, b, mod);
     b = modMul(b, b, mod);
     e >>= 1n;
+    tick.tick(cost);
   }
   return r;
 }
 
-function millerRabinWitness(n: bigint, a: bigint, d: bigint, s: number): boolean {
-  let x = modPowBig(a, d, n);
+function millerRabinWitness(n: bigint, a: bigint, d: bigint, s: number, tick: NumTicker): boolean {
+  let x = modPowBig(a, d, n, tick);
   if (x === 1n || x === n - 1n) return false;
+  const cost = mulCost(n);
   for (let r = 1; r < s; r++) {
     x = modMul(x, x, n);
+    tick.tick(cost);
     if (x === n - 1n) return false;
   }
   return true;
@@ -37,7 +53,7 @@ function millerRabinWitness(n: bigint, a: bigint, d: bigint, s: number): boolean
  * Deterministic Miller-Rabin: exact below 3.3e24 with bases 2,3,5,7,11,13,17, and a
  * wider base set beyond (first 20 prime bases).
  */
-export function isPrimeBig(n: bigint): boolean {
+export function isPrimeBig(n: bigint, tick: NumTicker = NO_NUM_TICK): boolean {
   if (n < 2n) return false;
   const small = [2n, 3n, 5n, 7n, 11n, 13n, 17n, 19n, 23n, 29n, 31n, 37n];
   for (const p of small) {
@@ -59,12 +75,12 @@ export function isPrimeBig(n: bigint): boolean {
       : [2n, 3n, 5n, 7n, 11n, 13n, 17n, 19n, 23n, 29n, 31n, 37n, 41n, 43n, 47n, 53n, 59n, 61n, 67n, 71n];
   for (const a of bases) {
     if (a >= n) continue;
-    if (millerRabinWitness(n, a, d, s)) return false;
+    if (millerRabinWitness(n, a, d, s, tick)) return false;
   }
   return true;
 }
 
-export function nextPrimeBig(n: bigint): bigint {
+export function nextPrimeBig(n: bigint, tick: NumTicker = NO_NUM_TICK): bigint {
   if (n < 2n) return 2n;
   let c = n + 1n;
   if ((c & 1n) === 0n) {
@@ -72,12 +88,13 @@ export function nextPrimeBig(n: bigint): bigint {
     c++;
   }
   for (;;) {
-    if (isPrimeBig(c)) return c;
+    tick.tick(1);
+    if (isPrimeBig(c, tick)) return c;
     c += 2n;
   }
 }
 
-export function previousPrimeBig(n: bigint): bigint | null {
+export function previousPrimeBig(n: bigint, tick: NumTicker = NO_NUM_TICK): bigint | null {
   if (n <= 2n) return null;
   let c = n - 1n;
   if ((c & 1n) === 0n) {
@@ -85,7 +102,8 @@ export function previousPrimeBig(n: bigint): bigint | null {
     c--;
   }
   for (;;) {
-    if (isPrimeBig(c)) return c;
+    tick.tick(1);
+    if (isPrimeBig(c, tick)) return c;
     if (c <= 3n) return 2n;
     c -= 2n;
   }
@@ -215,6 +233,29 @@ export function factorMultiplicity(factors: readonly bigint[]): { p: bigint; e: 
     else out.push({ p: f, e: 1 });
   }
   return out;
+}
+
+/** How many divisors a factorisation gives: the product of `e + 1`. Nothing is listed. */
+export function divisorCount(groups: readonly { p: bigint; e: number }[]): bigint {
+  let count = 1n;
+  for (const { e } of groups) count *= BigInt(e + 1);
+  return count;
+}
+
+/** The sum of the divisors: the product of `1 + p + ... + p^e`. Nothing is listed. */
+export function divisorSum(groups: readonly { p: bigint; e: number }[], tick: NumTicker = NO_NUM_TICK): bigint {
+  let sum = 1n;
+  for (const { p, e } of groups) {
+    let part = 1n;
+    let pk = 1n;
+    for (let k = 1; k <= e; k++) {
+      pk *= p;
+      part += pk;
+      tick.tick(1);
+    }
+    sum *= part;
+  }
+  return sum;
 }
 
 export function divisorsFromFactors(groups: readonly { p: bigint; e: number }[]): bigint[] {

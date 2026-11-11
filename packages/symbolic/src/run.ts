@@ -20,7 +20,7 @@ import { shortestDecimalRational } from './num';
 import type { Ticker } from './poly';
 import { parseExprOrCond, ParseFailure } from './parse';
 import { NonElementary, integrateNode } from './calc';
-import { registerIntegrator, Unsupported } from './solve';
+import { registerIntegrator, resetTrigParams, Unsupported } from './solve';
 import { OPS, OpError } from './ops';
 import type { OpCtx } from './ops';
 import { parseCommandCall, stepsToText, TEACHING_RULES } from './steps';
@@ -388,6 +388,9 @@ export function run(op: OpName, args: readonly SymArg[], opts: RunOptions = {}, 
     if (top) {
       arena.sealBase();
       if (arena.size() > ARENA_REBUILD_AT) arena.rebuild();
+      // Family parameters are numbered from k1 in every call, so a result
+      // does not depend on the calls made before it (SYM-SM-21).
+      resetTrigParams();
     }
     return runMapped(op, args, opts, ctx);
   } finally {

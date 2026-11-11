@@ -73,3 +73,23 @@ Run from the repository root of the working copy on branch `feat/symbolic`:
 - `npx eslint .`: clean.
 - `npx tsc -p tsconfig.json`: clean.
 - `npx vitest run`: 2613 passed, 2 failed (the 2 contested tests above); 2615 total.
+
+## Findings round (step 5) and regression tests (step 6)
+
+Input: `handoff/symbolic/findings.md`, SYM-SM-1 to 27. Result: 15 fixed, 12 marked `to be implemented` (8 of them partly fixed, with what is left written in the finding). Lint and typecheck are clean and all 599 symbolic tests pass.
+
+### Regression tests
+
+`packages/symbolic/test/spec/regressions.test.ts` has a section per finding for SYM-SM-1 to 15, 18 to 24, 26 and 27. It was written from the evidence in the findings before the second half of the fixes; 40 of its 102 tests failed at that point and all pass now. SYM-SM-16, 17 and 25 have no test because they are not fixed.
+
+### Spec test that changed behaviour
+
+- `contracts-errors.test.ts` "input over 20,000 nodes is the error limit" builds a 42,000-token list with `parseExpression`. The token cap is 100,000 so that the node limit, not the parser, refuses it.
+
+### Choices where the docs are silent
+
+- `DivisorsList` returns at most 100,000 divisors and is undefined `limit` above that.
+- A prime test charges one step per 64-bit word of the number for each modular multiplication, so a very large test ends as `timeout` by steps on every machine.
+- `IsZero` of a closed constant that cannot be proved zero and is not clearly non-zero is `unproven`. It was `true` under a float tolerance before.
+- The zero test rewrites `ln` of a whole perfect power over its smallest base (`ln(8)` as `3 ln(2)`) before giving up, so `2^(ln(8)/ln(2)) - 8` is proved zero.
+- A limit at a trig pole that runs to the same infinity from both sides is that infinity; to opposite infinities it is `no_limit`.

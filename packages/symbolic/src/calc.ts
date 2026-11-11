@@ -694,6 +694,12 @@ export function definiteIntegral(
   const swap = a > b;
   const lo = swap ? b : a;
   const hi = swap ? a : b;
+  // A pole of a `tan`, `1/cos` or `1/sin` inside the interval that the
+  // integrand approaches like `1 / distance` makes the integral divergent.
+  // The antiderivative must not be used across it (design 5.10, SYM-SM-14).
+  for (const p of trigPolesBetween(e, v, lo, hi)) {
+    if (growsLikeSimplePole(e, v, p)) return { divergent: true, at: p };
+  }
   let F: SymNode | null;
   try {
     F = integrateNode(e, v, ctx);
@@ -905,6 +911,18 @@ export function limitNode(e: SymNode, v: SymNode, a: SymNode, side: LimitSide, c
     // abs, sign, floor, ceil, round, min, max and piecewise forms can jump: compare both sides.
     return limitBothSides(e, v, av, ctx);
   }
+  if (side === 'both' && isTrigPoleAt(e, v, a, ctx)) {
+    // The point is exactly a pole of a `tan`, `1/cos` or `1/sin` inside. A
+    // float put into the function there gives a large finite number, which is
+    // not a limit (SYM-SM-14): the two sides decide.
+    const left = blowUpSign(e, v, av, -1);
+    const right = blowUpSign(e, v, av, 1);
+    if (left !== 0 && right !== 0) {
+      const inf = (sign: 1 | -1): SymNode => (sign > 0 ? constN('inf') : negateNode(constN('inf')));
+      if (left === right) return { node: inf(left), exact: true };
+      throw new NoLimit(`The left limit is ${left > 0 ? 'inf' : '-inf'} and the right limit is ${right > 0 ? 'inf' : '-inf'}.`, inf(left), inf(right));
+    }
+  }
   if (side === 'both') {
     const direct = tryDirect(e, v, av, ctx);
     if (direct !== null) return direct;
@@ -917,6 +935,107 @@ export function limitNode(e: SymNode, v: SymNode, a: SymNode, side: LimitSide, c
     return limitBothSides(e, v, av, ctx);
   }
   return limitOneSided(e, v, av, side === 'above' ? 1 : -1, ctx);
+}
+
+/** The trig functions whose zeros are poles here: `tan(u)` (zeros of `cos(u)`), and `cos`/`sin` under a negative power. */
+function trigPoleArgs(t: SymNode, out: { u: SymNode; of: 'cos' | 'sin' }[] = []): { u: SymNode; of: 'cos' | 'sin' }[] {
+  switch (t.k) {
+    case 'fn':
+      if (t.name === 'tan' && t.args.length === 1) out.push({ u: t.args[0] as SymNode, of: 'cos' });
+      for (const a of t.args) trigPoleArgs(a, out);
+      break;
+    case 'add': for (const x of t.terms) trigPoleArgs(x, out); break;
+    case 'mul': for (const x of t.factors) trigPoleArgs(x, out); break;
+    case 'pow': {
+      const ex = asRational(t.exp);
+      if (ex !== null && ex.n < 0n && t.base.k === 'fn' && (t.base.name === 'cos' || t.base.name === 'sin') && t.base.args.length === 1) {
+        out.push({ u: t.base.args[0] as SymNode, of: t.base.name });
+      }
+      trigPoleArgs(t.base, out);
+      trigPoleArgs(t.exp, out);
+      break;
+    }
+    case 'list': for (const x of t.items) trigPoleArgs(x, out); break;
+    default: break;
+  }
+  return out;
+}
+
+/** True when `v = a` is exactly a zero of a `cos` or `sin` that the tree divides by. Decided in exact arithmetic. */
+function isTrigPoleAt(e: SymNode, v: SymNode, a: SymNode, ctx: RuleCtx): boolean {
+  for (const { u, of } of trigPoleArgs(e)) {
+    if (!containsGen(u, v)) continue;
+    const at = simplifyNode(divideNodes(substituteList(u, [[v, a]]), constN('pi')), ctx).node;
+    const q = asRational(at);
+    if (q === null) continue;
+    // cos is zero at odd multiples of pi/2, sin at whole multiples of pi.
+    if (of === 'cos' ? q.d === 2n : q.d === 1n) return true;
+  }
+  return false;
+}
+
+/**
+ * Poles of the trig kind strictly inside `(lo, hi)`, for arguments that are
+ * linear in `v` with number coefficients. Found numerically from two samples
+ * of the argument.
+ */
+function trigPolesBetween(e: SymNode, v: SymNode, lo: number, hi: number): number[] {
+  const name = varName(v);
+  const out: number[] = [];
+  for (const { u, of } of trigPoleArgs(e)) {
+    if (!containsGen(u, v)) continue;
+    const u0 = evalAt(u, new Map([[name, 0]]));
+    const u1 = evalAt(u, new Map([[name, 1]]));
+    const u2 = evalAt(u, new Map([[name, 2]]));
+    if (u0 === null || u1 === null || u2 === null) continue;
+    const slope = u1 - u0;
+    if (!(Math.abs(slope) > 1e-12) || Math.abs(u2 - u1 - slope) > 1e-9 * Math.max(1, Math.abs(slope))) continue;
+    const shift = of === 'cos' ? Math.PI / 2 : 0;
+    const ua = u0 + slope * lo;
+    const ub = u0 + slope * hi;
+    const k0 = Math.ceil((Math.min(ua, ub) - shift) / Math.PI);
+    const k1 = Math.floor((Math.max(ua, ub) - shift) / Math.PI);
+    for (let k = k0; k <= k1 && out.length < 64; k++) {
+      const x = (shift + k * Math.PI - u0) / slope;
+      if (x > lo + 1e-12 && x < hi - 1e-12) out.push(x);
+    }
+  }
+  return out.sort((x, y) => x - y);
+}
+
+/**
+ * Which infinity the tree runs to as `v` nears `a` from one side: 1, -1, or 0
+ * when it does not blow up there (a pole that cancels, as in `cos(x) tan(x)`).
+ * Three samples, each a hundred times closer, must each be much larger.
+ */
+function blowUpSign(e: SymNode, v: SymNode, a: number, side: 1 | -1): 1 | -1 | 0 {
+  const name = varName(v);
+  const at = (h: number): number | null => evalAt(e, new Map([[name, a + side * h]]));
+  const f1 = at(1e-2);
+  const f2 = at(1e-4);
+  const f3 = at(1e-6);
+  if (f1 === null || f2 === null || f3 === null || !Number.isFinite(f2) || !Number.isFinite(f3)) return 0;
+  if (!(Math.abs(f2) > 30 * Math.abs(f1)) || !(Math.abs(f3) > 30 * Math.abs(f2))) return 0;
+  if (Math.sign(f2) !== Math.sign(f3)) return 0;
+  return f3 > 0 ? 1 : -1;
+}
+
+/**
+ * A pole is not integrable when the integrand grows at least like
+ * `1 / distance`: then `|f(p + h)| * h` does not shrink as `h` does.
+ */
+function growsLikeSimplePole(e: SymNode, v: SymNode, p: number): boolean {
+  const name = varName(v);
+  const g = (h: number): number | null => {
+    const a = evalAt(e, new Map([[name, p + h]]));
+    const b = evalAt(e, new Map([[name, p - h]]));
+    if (a === null || b === null || !Number.isFinite(a) || !Number.isFinite(b)) return null;
+    return Math.max(Math.abs(a), Math.abs(b)) * h;
+  };
+  const far = g(1e-3);
+  const near = g(1e-6);
+  if (far === null || near === null) return false;
+  return far > 1e-9 && near >= 0.5 * far;
 }
 
 /** True when the tree holds a function that can jump or has a corner. */

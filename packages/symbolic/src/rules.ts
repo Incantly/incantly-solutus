@@ -996,7 +996,23 @@ function combineLinearTrig(t: SymNode, ctx: RuleCtx): SymNode {
     const b = toFloat(cPart.coeff);
     const r = Math.hypot(a, b);
     if (!(r > 0)) return x;
-    const out = mul(floatN(r), fn('sin', add(sPart.arg, floatN(Math.atan2(b, a)))));
+    const ea = asRational(sPart.coeff);
+    const eb = asRational(cPart.coeff);
+    let out: SymNode;
+    if (ea !== null && eb !== null && ea.n !== 0n) {
+      // Exact coefficients give an exact amplitude and phase (SYM-SM-23):
+      // R = sqrt(a^2 + b^2), and the phase is atan(b/a), moved by pi when a < 0.
+      const amp = pow(add(mul(sPart.coeff, sPart.coeff), mul(cPart.coeff, cPart.coeff)), ratN(1n, 2n));
+      const ratio = divideNodes(cPart.coeff, sPart.coeff);
+      const same = ea.n * eb.d === eb.n * ea.d;
+      const opposite = ea.n * eb.d === -eb.n * ea.d;
+      const quarter = divideNodes(constN('pi'), intN(4));
+      let phase: SymNode = same ? quarter : opposite ? negateNode(quarter) : eb.n === 0n ? ZERO : fn('atan', ratio);
+      if (ea.n < 0n) phase = add(phase, constN('pi'));
+      out = mul(amp, fn('sin', add(sPart.arg, phase)));
+    } else {
+      out = mul(floatN(r), fn('sin', add(sPart.arg, floatN(Math.atan2(b, a)))));
+    }
     ctx.note('trig.linear', x, out);
     return out;
   });
@@ -1389,11 +1405,21 @@ export function costOf(t: SymNode): number {
   return nodeCount(t) + 2 * countFn(t) + bigDigits(t) / 4 + 3 * countDiv(t);
 }
 
+/**
+ * A candidate may fail because a method does not apply or a size limit was
+ * hit; then it is dropped. Anything else is not the candidate's to hide: a
+ * spent budget ends the call as `timeout` (never as an unsimplified value,
+ * SYM-SM-10) and an internal fault is reported.
+ */
+function isDroppable(err: unknown): boolean {
+  return err instanceof Error && (err.name === 'Unsupported' || err.name === 'LimitExceeded' || err.name === 'NonElementary');
+}
+
 function tryCandidate(build: () => SymNode, out: SymNode[]): void {
   try {
     out.push(build());
-  } catch {
-    void 0;
+  } catch (err) {
+    if (!isDroppable(err)) throw err;
   }
 }
 
@@ -1443,8 +1469,8 @@ export function simplifyNode(t: SymNode, ctx: RuleCtx): SimplifyResult {
       cur = tg.node;
       addExcluded(tg.excluded);
     }
-  } catch {
-    void 0;
+  } catch (err) {
+    if (!isDroppable(err)) throw err;
   }
   return { node: cur, excluded };
 }

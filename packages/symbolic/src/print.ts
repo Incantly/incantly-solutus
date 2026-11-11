@@ -246,8 +246,10 @@ export function condText(c: SymCond, o: TextOptions = {}): string {
       }
       return `${toText(c.l, o, 0)} ${eq(c.op)} ${toText(c.r, o, 0)}`;
     case 'in': return `${toText(c.l, o, 0)} in ${c.set}`;
-    case 'not': return `not ${condText(c.of, o)}`;
-    case 'and': return c.of.map((x) => condText(x, o)).join(' and ');
+    // Brackets keep the shape through a parse: `or` binds looser than `and`,
+    // and `not` takes one condition (SYM-SM-19).
+    case 'not': return c.of.c === 'and' || c.of.c === 'or' ? `not (${condText(c.of, o)})` : `not ${condText(c.of, o)}`;
+    case 'and': return c.of.map((x) => (x.c === 'or' ? `(${condText(x, o)})` : condText(x, o))).join(' and ');
     case 'or': return c.of.map((x) => condText(x, o)).join(' or ');
   }
 }
@@ -302,19 +304,48 @@ function latexOf(n: SymNode): string {
       if (n.exp.k === 'rat' && n.exp.n === 1n && n.exp.d === 2n) return `\\sqrt{${latexOf(n.base)}}`;
       return `{${latexBase(n.base)}}^{${latexOf(n.exp)}}`;
     }
-    case 'fn': return `\\${n.name}\\left(${n.args.map(latexOf).join(', ')}\\right)`;
+    case 'fn': return latexFn(n.name, n.args.map(latexOf));
     case 'rootof': return `\\mathrm{root}_{${n.index}}`;
     case 'list': return `\\left[${n.items.map(latexOf).join(', ')}\\right]`;
     case 'piecewise': return '\\mathrm{if}';
   }
 }
 
+const LATEX_GREEK = new Map<string, string>([
+  ['theta', '\\theta '], ['omega', '\\omega '], ['alpha', '\\alpha '], ['beta', '\\beta '], ['gamma', '\\gamma '],
+  ['delta', '\\delta '], ['lambda', '\\lambda '], ['mu', '\\mu '], ['phi', '\\phi '], ['psi', '\\psi '],
+]);
+
+/** A symbol name in LaTeX. A `Map` answers only its own keys (SYM-SM-5). */
 function latexName(name: string): string {
-  const greek: Record<string, string> = {
-    theta: '\\theta ', omega: '\\omega ', alpha: '\\alpha ', beta: '\\beta ', gamma: '\\gamma ',
-    delta: '\\delta ', lambda: '\\lambda ', mu: '\\mu ', phi: '\\phi ', psi: '\\psi ',
-  };
-  return greek[name] ?? name;
+  return LATEX_GREEK.get(name) ?? name;
+}
+
+/** Functions that are LaTeX operators under their own name. */
+const LATEX_OPERATORS = new Set(['sin', 'cos', 'tan', 'sinh', 'cosh', 'tanh', 'ln', 'min', 'max', 'exp', 'log', 'gcd']);
+const LATEX_RENAMED = new Map<string, string>([
+  ['asin', '\\arcsin'], ['acos', '\\arccos'], ['atan', '\\arctan'],
+  ['log10', '\\log_{10}'], ['log2', '\\log_{2}'],
+]);
+
+/**
+ * A function call in LaTeX. Only real LaTeX commands are used; any other name
+ * goes through `\operatorname` so the typesetter never meets an undefined
+ * control sequence (SYM-SM-20).
+ */
+function latexFn(name: string, args: readonly string[]): string {
+  const one = args[0] ?? '';
+  const list = args.join(', ');
+  if (name === 'abs' && args.length === 1) return `\\left|${one}\\right|`;
+  if (name === 'floor' && args.length === 1) return `\\left\\lfloor ${one}\\right\\rfloor`;
+  if (name === 'ceil' && args.length === 1) return `\\left\\lceil ${one}\\right\\rceil`;
+  if (name === 'cbrt' && args.length === 1) return `\\sqrt[3]{${one}}`;
+  if (name === 'sqrt' && args.length === 1) return `\\sqrt{${one}}`;
+  const renamed = LATEX_RENAMED.get(name);
+  if (renamed !== undefined) return `${renamed}\\left(${list}\\right)`;
+  if (LATEX_OPERATORS.has(name)) return `\\${name}\\left(${list}\\right)`;
+  const safe = name.replace(/[^A-Za-z0-9]/g, '');
+  return `\\operatorname{${safe}}\\left(${list}\\right)`;
 }
 
 function latexFactor(f: SymNode): string {
@@ -347,8 +378,8 @@ export function condLatex(c: SymCond): string {
       return `${latexOf(c.l)} ${op} ${latexOf(c.r)}`;
     }
     case 'in': return `${latexOf(c.l)} \\in \\mathbb{${c.set}}`;
-    case 'not': return `\\lnot ${condLatex(c.of)}`;
-    case 'and': return c.of.map(condLatex).join(' \\land ');
+    case 'not': return c.of.c === 'and' || c.of.c === 'or' ? `\\lnot \\left(${condLatex(c.of)}\\right)` : `\\lnot ${condLatex(c.of)}`;
+    case 'and': return c.of.map((x) => (x.c === 'or' ? `\\left(${condLatex(x)}\\right)` : condLatex(x))).join(' \\land ');
     case 'or': return c.of.map(condLatex).join(' \\lor ');
   }
 }
@@ -479,8 +510,8 @@ function condSpeechOf(c: SymCond): string {
       return `${speechOf(c.l)} ${op} ${speechOf(c.r)}`;
     }
     case 'in': return `${speechOf(c.l)} in ${c.set}`;
-    case 'not': return `not ${condSpeechOf(c.of)}`;
-    case 'and': return c.of.map(condSpeechOf).join(' and ');
+    case 'not': return c.of.c === 'and' || c.of.c === 'or' ? `not both of: ${condSpeechOf(c.of)}` : `not ${condSpeechOf(c.of)}`;
+    case 'and': return c.of.map((x) => (x.c === 'or' ? `either ${condSpeechOf(x)}` : condSpeechOf(x))).join(' and ');
     case 'or': return c.of.map(condSpeechOf).join(' or ');
   }
 }
