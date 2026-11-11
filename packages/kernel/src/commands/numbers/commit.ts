@@ -195,10 +195,12 @@ export interface RangeCheck {
  * Dynamic (rule) bounds are checked at run time by `commit` instead.
  */
 export function validateSliderRange(lo: number, hi: number, step: number | 'auto' | undefined): RangeCheck {
+  // errors.md: a bad_range carries min, max and step as evaluated, whichever check failed first
+  const given = typeof step === 'number' ? { step } : {};
   if (!Number.isFinite(lo) || !Number.isFinite(hi)) {
-    return { ok: false, kind: 'bad_range', why: 'finite', min: lo, max: hi };
+    return { ok: false, kind: 'bad_range', why: 'finite', min: lo, max: hi, ...given };
   }
-  if (!(lo < hi)) return { ok: false, kind: 'bad_range', why: 'empty', min: lo, max: hi };
+  if (!(lo < hi)) return { ok: false, kind: 'bad_range', why: 'empty', min: lo, max: hi, ...given };
   if (step === undefined || step === 'auto') return { ok: true };
   if (!Number.isFinite(step) || !(step > 0)) {
     return { ok: false, kind: 'bad_range', why: 'step', min: lo, max: hi, step };

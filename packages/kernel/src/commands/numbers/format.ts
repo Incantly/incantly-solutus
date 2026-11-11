@@ -283,11 +283,48 @@ export interface FigureDefaults {
 const figureDefaults = new WeakMap<Figure, FigureDefaults>();
 
 /**
- * Figure-wide rounding defaults (`@digits 3` / `@sig 4`). The kernel keeps
- * directives as text with no read hook, so the host mirrors them here.
+ * Figure-wide rounding defaults, set by the host. They win over the `@digits N` / `@sig N`
+ * directives of the figure, which `resolveDisplay` reads itself (see `directiveDefaults`).
  */
 export function setFigureDefaults(figure: Figure, defaults: FigureDefaults): void {
   figureDefaults.set(figure, { ...defaults });
+}
+
+interface DirectiveCache {
+  dirty: boolean;
+  digits?: number;
+  sig?: number;
+}
+
+const directiveCaches = new WeakMap<Figure, DirectiveCache>();
+
+/**
+ * The `@digits N` and `@sig N` directives, read from the figure's script (the kernel has no directive getter).
+ * The script is parsed once and again after a `directive`, `undo` or `redo` event; the listener is installed the
+ * first time a figure is formatted.
+ */
+function directiveDefaults(figure: Figure): DirectiveCache {
+  let c = directiveCaches.get(figure);
+  if (!c) {
+    const fresh: DirectiveCache = { dirty: true };
+    c = fresh;
+    directiveCaches.set(figure, fresh);
+    figure.on((e) => {
+      if (e.ev === 'directive' || e.ev === 'undo' || e.ev === 'redo') fresh.dirty = true;
+    });
+  }
+  if (c.dirty) {
+    c.dirty = false;
+    delete c.digits;
+    delete c.sig;
+    for (const line of figure.toScript().split('\n')) {
+      const m = /^@(digits|sig)\s+(\d+)\s*$/.exec(line);
+      if (!m) continue;
+      if (m[1] === 'digits') c.digits = Number(m[2]);
+      else c.sig = Number(m[2]);
+    }
+  }
+  return c;
 }
 
 function intIn(v: unknown, lo: number, hi: number): number | undefined {
@@ -308,7 +345,9 @@ export function resolveDisplay(figure: Figure, x: Name | ObjId): NumberDisplay {
   const digits = intIn(ext['digits'], 0, 15);
   const sig = intIn(ext['sig'], 1, 15);
   const trimRaw = ext['trim'];
-  const def = figureDefaults.get(figure);
+  const host = figureDefaults.get(figure);
+  const dir = digits === undefined && sig === undefined ? directiveDefaults(figure) : undefined;
+  const def = host ?? (dir ? { ...(dir.digits !== undefined ? { digits: dir.digits } : {}), ...(dir.sig !== undefined ? { sig: dir.sig } : {}) } : undefined);
   if (digits !== undefined) {
     return { unit, format: { mode: 'decimals', n: digits }, trim: trimRaw === true };
   }
