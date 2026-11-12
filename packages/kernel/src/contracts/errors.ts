@@ -63,6 +63,14 @@ export interface AreaErrorKinds {
   needs_interval: true;
   not_differentiable: true;
   missing_range: true;
+  // animation-time (codes C050 to C069)
+  not_traceable: true;
+  bad_trace_option: true;
+  unknown_particle_param: true;
+  missing_particle_param: true;
+  bad_particle_value: true;
+  particle_name_outside: true;
+  particle_command: true;
 }
 
 export type ErrorKind = CoreErrorKind | Extract<keyof AreaErrorKinds, string>;
@@ -122,6 +130,12 @@ export interface AreaNoticeKinds {
   step_hidden: true;
   shadowed_default: true;
   unstable_state: true;
+  // animation-time
+  seek_clamped: true;
+  behind_audio: true;
+  log_rewrite: true;
+  trace_decimated: true;
+  gpu_unsupported: true;
 }
 
 export type NoticeKind = CoreNoticeKind | Extract<keyof AreaNoticeKinds, string>;

@@ -649,6 +649,21 @@ An inverse may return a value for an argument that is a number written in the li
 The drag plan then holds a write with `param` set, and the drag rewrites that number in the line. The whole gesture is
 one undo entry on `commitDrag`, like a drag of a free point.
 
+### What a rule and an action receive
+
+- A rule factory gets each argument's checked tree in `BoundArg.expr`, so a rule can compile a formula further (the
+  particle formulas go to GLSL).
+- A body argument with names of its own (`u`, `age` in `Particles`) records each name's local slot in `scopeSlots`; the
+  rule writes those slots before it evaluates the body.
+- An area action gets the evaluated value of every argument that is not a plain object name in `ActionCall.values`;
+  the objects are in `ActionCall.objects`.
+
+### Work on each frame
+
+`registerFrameTicker(ticker)` adds work an area does each time the player moves the clock, before the pass: traces add
+their samples, and rebuild on a seek. The player itself is pure: the host gives it a time source and calls
+`frame(now)` from its one animation-frame loop.
+
 ### Naming helper for tools
 
 `suggestName(type, hint?)` uses the one name table in the language design (3.7): points `A, B, ... Z, A_1, B_1 ...`; vectors `u v w`; lines, rays and segments `l m n`; numbers `a b c d` (angles `α β γ δ`); functions `f g h p q r`; circles, arcs and curves `c d k`; lists `L M N`; polygons `poly1`; regions `reg1`; texts `text1`; booleans `cond1`. After the letters, a sequence continues with `_1`, `_2` (`l_1`). Skips taken and reserved names. This is for pointer tools and the playground; the teacher always names its own objects.

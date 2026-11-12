@@ -1526,8 +1526,11 @@ class Checker {
         const set = typeSet(p.type);
         this.scopes.push(frame);
         const extraFrame: Frame = { vars: new Map() };
+        const scopeSlots: { name: string; slot: number }[] = [];
         for (const sc of p.scope ?? []) {
-          extraFrame.vars.set(sc.name, { slot: this.slotCount++, ty: typeSet(sc.type).members[0] ?? T.Number });
+          const slot = this.slotCount++;
+          extraFrame.vars.set(sc.name, { slot, ty: typeSet(sc.type).members[0] ?? T.Number });
+          scopeSlots.push({ name: sc.name, slot });
           this.warnShadow(sc.name, call.cs, call.ce);
         }
         this.scopes.push(extraFrame);
@@ -1558,7 +1561,7 @@ class Checker {
           return;
         }
         tys[k] = node.ty;
-        bound[k] = { param: p, expr: node, omitted: false, ty: node.ty };
+        bound[k] = { param: p, expr: node, omitted: false, ty: node.ty, ...(scopeSlots.length > 0 ? { scopeSlots } : {}) };
         // binders unused in a body get a notice
         if (!accepts(set, node.ty)) problems.push(this.problem(ai, p, a, tyStr(node.ty), setLabel(set)));
       });

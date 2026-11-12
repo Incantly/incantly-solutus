@@ -25,6 +25,12 @@ export const NOTICE_TABLE: Readonly<Record<string, NoticeSpec>> = Object.freeze(
   clamped: { code: 'K110', severity: 'info', template: '{name} was moved to {value}, the {end} of its range.' },
   shadowed_default: { code: 'K111', severity: 'info', template: '{name}: {key} is already {value}.' },
   unstable_state: { code: 'K112', severity: 'warning', template: 'The state {names} became unstable at t = {t}.' },
+  // animation-time
+  seek_clamped: { code: 'A101', severity: 'info', template: 'The time {asked} is outside the film; the player went to {used}.' },
+  behind_audio: { code: 'A102', severity: 'warning', template: 'The figure fell {lag} s behind the voice.' },
+  log_rewrite: { code: 'A103', severity: 'info', template: 'Entries after t = {from} s for {name} were replaced ({count}).' },
+  trace_decimated: { code: 'A104', severity: 'info', template: 'The trace of {name} passed {points} points; older parts are coarser now.' },
+  gpu_unsupported: { code: 'A105', severity: 'info', template: '{name} is drawn on the CPU: {reason}.' },
 });
 
 const AREA_NOTICES = new Map<string, NoticeSpec>();

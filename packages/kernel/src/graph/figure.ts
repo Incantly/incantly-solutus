@@ -92,6 +92,11 @@ export class Figure extends FigureHist {
       compute: (r) => this.compute(r),
       ensureSlots: (n) => this.ensureSlots(n),
       write: (r, c) => this.writeCell(r, c),
+      rerunOf: (r) => {
+        const e = r.p.style.get('rerun');
+        // the default is restart (kernel ruling K12); an input opts in to continue
+        return e?.word === 'continue' || e?.text === 'continue' ? 'continue' : 'restart';
+      },
     });
     this.stateDriver = () => (this.solver.active ? this.solver.sync() : []);
   }
@@ -126,8 +131,8 @@ export class Figure extends FigureHist {
     return super.flush(force);
   }
 
-  protected override onFreeWritten(rec: ObjRec): void {
-    this.solver.noteFree(rec);
+  protected override onFreeWritten(rec: ObjRec, was?: unknown): void {
+    this.solver.noteFree(rec, was);
   }
 
   protected override onDirective(name: string): void {
@@ -151,6 +156,11 @@ export class Figure extends FigureHist {
     const d = this.directiveItem('solver');
     const m = d ? /^1\/(\d+)$/.exec(d.words[1] ?? '') : null;
     return m ? Number(m[1]) : 240;
+  }
+
+  /** The beat start times the figure was given, in seconds (ascending). */
+  beats(): readonly number[] {
+    return this.beatStarts;
   }
 
   /** Beat start times in seconds, from the film. With none, `bt` equals `t` and `beat` is 0. */

@@ -92,6 +92,13 @@ const META: Record<ErrorKind, Meta> = {
   needs_interval: { key: 'lang.needs_interval', params: ['command', 'why'], description: 'A command that needs an interval unless its function is a polynomial.' },
   not_differentiable: { key: 'lang.not_differentiable', params: ['command', 'why'], description: 'A function whose body has no derivative rule.' },
   missing_range: { key: 'lang.missing_range', params: ['command', 'why'], description: 'A parametric curve written without a finite range.' },
+  not_traceable: { key: 'lang.not_traceable', params: ['command', 'why'], description: 'Trace on an object that has no trail, such as a Text, Number or Bool.' },
+  bad_trace_option: { key: 'lang.bad_trace_option', params: ['command', 'why'], description: 'A trace option with a bad value, such as a negative window.' },
+  unknown_particle_param: { key: 'lang.unknown_particle_param', params: ['command', 'why'], description: 'A Particles parameter that does not exist.' },
+  missing_particle_param: { key: 'lang.missing_particle_param', params: ['command', 'why'], description: 'A Particles call without count, life or pos.' },
+  bad_particle_value: { key: 'lang.bad_particle_value', params: ['command', 'why'], description: 'A Particles parameter with a value out of range or of the wrong type.' },
+  particle_name_outside: { key: 'lang.particle_name_outside', params: ['command', 'why'], description: 'A particle-only name (u, v, w, age, ph, cycle) used outside Particles.' },
+  particle_command: { key: 'lang.particle_command', params: ['command', 'why'], description: 'A command inside a particle formula, where only built-ins are allowed.' },
 };
 
 function buildTable(): Record<ErrorKind, ErrorSpec> {

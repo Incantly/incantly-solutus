@@ -66,6 +66,8 @@ export interface TArg extends BoundArg {
   readonly slot?: number;
   /** Local slots of a list of binders, in order. */
   readonly slots?: readonly number[];
+  /** For a body argument with names of its own (`u`, `age` in `Particles`): each name's local slot. */
+  readonly scopeSlots?: readonly { readonly name: string; readonly slot: number }[];
   /** Type of the argument (of the body, for a body argument). */
   readonly ty?: Ty;
 }

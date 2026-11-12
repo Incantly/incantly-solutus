@@ -36,6 +36,10 @@ export interface CompiledArg {
   /** For a list of binders: the names and their local slots, in order. */
   readonly binders?: readonly string[];
   readonly slots?: readonly number[];
+  /** For a body argument with names of its own: each name's local slot. */
+  readonly scopeSlots?: readonly { readonly name: string; readonly slot: number }[];
+  /** The checked tree of the argument, for a rule that compiles it further (a particle formula to GLSL). */
+  readonly tree?: TNode;
   readonly omitted: boolean;
   readonly value?: number | boolean | string;
   /** The object this argument names when it is a plain object name (`Midpoint(A, B)`), else absent. */
@@ -1005,11 +1009,12 @@ class Compiler {
     return n.args.map((a) => ({
       param: a.param,
       omitted: a.omitted,
-      ...(a.expr ? { eval: this.compile(a.expr) } : {}),
+      ...(a.expr ? { eval: this.compile(a.expr), tree: a.expr } : {}),
       ...(a.binder !== undefined ? { binder: a.binder } : {}),
       ...(a.slot !== undefined ? { slot: a.slot } : {}),
       ...(a.binders !== undefined ? { binders: a.binders } : {}),
       ...(a.slots !== undefined ? { slots: a.slots } : {}),
+      ...(a.scopeSlots !== undefined ? { scopeSlots: a.scopeSlots } : {}),
       ...(a.value !== undefined ? { value: a.value } : {}),
       ...(a.expr && a.expr.n === 'ref' ? { ref: this.objId(a.expr.id) } : {}),
     }));

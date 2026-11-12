@@ -378,7 +378,7 @@ export class FigureCore {
     try {
       let rule = this.ruleCache.get(args);
       if (!rule) {
-        rule = form.rule(args.map((a) => ({ param: a.param, omitted: a.omitted, ...(a.binder !== undefined ? { binder: a.binder } : {}), ...(a.value !== undefined ? { value: a.value } : {}) }))) as CommandRule;
+        rule = form.rule(args.map((a) => ({ param: a.param, omitted: a.omitted, ...(a.binder !== undefined ? { binder: a.binder } : {}), ...(a.value !== undefined ? { value: a.value } : {}), ...(a.tree !== undefined ? { expr: a.tree } : {}) }))) as CommandRule;
         if (!rule || typeof rule.run !== 'function') throw new Error('the rule factory returned no rule');
         this.ruleCache.set(args, rule);
       }
