@@ -9,6 +9,7 @@ import { registerReasonPhrase } from '../../errors/phrases';
 import { CORE_TYPE_NAMES } from '../../language/types';
 import { PROPERTIES } from '../../language/props';
 import { GEOMETRY_COMMANDS } from './commands';
+import { SHARED_WITH_GEOMETRY } from '../functions/specs-functions';
 import { GEOMETRY_TYPES } from './types';
 
 export { GEOMETRY_COMMANDS } from './commands';
@@ -47,6 +48,8 @@ export function registerGeometry(registry: CommandRegistry): void {
   if (done.has(registry)) return;
   done.add(registry);
   registry.registerAll(GEOMETRY_COMMANDS);
+  // the function forms of Asymptote and of curvature at a point come from the functions area (merged by the registry)
+  registry.registerAll(SHARED_WITH_GEOMETRY);
 
   registerTypeStyle('Conic', { defaults: { color: '#111827', width: 2, opacity: 0, label: 'none' } });
   registerTypeStyle('Sector', { defaults: { color: '#111827', width: 2, opacity: 0.16, label: 'none', fill: 'solid' } });

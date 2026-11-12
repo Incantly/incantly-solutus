@@ -160,9 +160,26 @@ export class CommandRegistry {
     this.registerAll(initial);
   }
 
+  /**
+   * Adds a command. Two areas may give the same command (`Tangent` of a conic in geometry, of a function in functions):
+   * a spec of the same name and kind is merged into the one already there. Its forms are appended, a form with the same
+   * parameter types as an earlier one is left out (the first area keeps it), and the two refusals are both asked.
+   */
   register(spec: CommandSpec): void {
-    this.specs.push(spec);
     this.cached = undefined;
+    const i = this.specs.findIndex((s) => s.name === spec.name && s.kind === spec.kind);
+    if (i < 0) {
+      this.specs.push(spec);
+      return;
+    }
+    const old = this.specs[i] as CommandSpec;
+    const sig = (f: CommandSpec['forms'][number]): string => f.params.map((p) => `${p.type}${p.optional ? '?' : ''}${p.kind ? `:${p.kind}` : ''}`).join(',');
+    const have = new Set(old.forms.map(sig));
+    const forms = [...old.forms, ...spec.forms.filter((f) => !have.has(sig(f)))];
+    const a = old.refuse;
+    const b = spec.refuse;
+    const refuse = a && b ? (c: Parameters<typeof a>[0]) => a(c) ?? b(c) : (a ?? b);
+    this.specs[i] = { ...old, forms, ...(refuse ? { refuse } : {}) };
   }
 
   registerAll(specs: readonly CommandSpec[]): void {
