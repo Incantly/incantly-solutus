@@ -748,7 +748,7 @@ export class FigureHist extends FigureTx {
     let rule = this.ruleCache.get(comp.args);
     if (!rule) {
       try {
-        rule = comp.form.rule(comp.args.map((a) => ({ param: a.param, omitted: a.omitted, ...(a.binder !== undefined ? { binder: a.binder } : {}), ...(a.value !== undefined ? { value: a.value } : {}) }))) as import('./registry').CommandRule;
+        rule = comp.form.rule(comp.args.map((a) => ({ param: a.param, omitted: a.omitted, ...(a.binder !== undefined ? { binder: a.binder } : {}), ...(a.value !== undefined ? { value: a.value } : {}), ...(a.tree !== undefined ? { expr: a.tree } : {}) }))) as import('./registry').CommandRule;
       } catch {
         return { writes: [], reason: 'not_draggable' };
       }

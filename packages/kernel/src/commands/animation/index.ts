@@ -27,6 +27,9 @@ import {
   traceOptionsOf,
 } from './traces';
 import type { TraceOptions } from './traces';
+import { PARTICLES_SPEC } from './particles';
+import { particlesLineRewrite } from './particlecheck';
+import { registerLineRewriter } from '../../graph/registry';
 
 const AT = { line: 0, col: 1, endCol: 1 } as const;
 const P = (name: string, type: string, extra: Partial<ParamSpec> = {}): ParamSpec => ({ name, type, ...extra });
@@ -118,6 +121,7 @@ export const ANIMATION_COMMANDS: readonly CommandSpec[] = [
     ],
     traceRun,
   ),
+  PARTICLES_SPEC,
   action('Untrace', [{ params: [P('obj', 'Any')], summary: 'stop the trail and forget it' }], untraceRun),
   action('ClearTrace', [{ params: [P('obj', 'Any')], summary: 'forget the trail so far and keep tracing' }], clearTraceRun),
 ];
@@ -166,6 +170,7 @@ export function registerAnimation(registry: CommandRegistry): void {
     noun: 'not a function of time',
     sentence: 'It depends on a value the learner can change, so its past values are not known.',
   });
+  registerLineRewriter(particlesLineRewrite);
   registerFrameTicker((figure, t, how) => {
     syncTraceProperties(figure);
     tickTraces(figure, t, how);
@@ -177,3 +182,14 @@ export type { PlayMode, PlayerState, PlayerEvent, PlayerLoop, ClockSource, Clock
 export { startTrace, stopTrace, clearTrace, isTraced, tracePoints, traceSnapshots, tracedIds, tickTraces, MAX_TRACE_POINTS, MAX_SHAPE_SNAPSHOTS, MAX_TRACES } from './traces';
 export type { TraceOptions } from './traces';
 export type { LogEntry } from '../../clock/solver';
+export {
+  PARTICLES_SPEC,
+  MAX_PARTICLES_PER_SYSTEM,
+  MAX_PARTICLES_PER_FIGURE,
+  hash4,
+  unit4,
+  particleClock,
+  makeParticleBatch,
+  isParticlesValue,
+} from './particles';
+export type { ParticleSpecPlain, ParticleBatchPlain, ParticleProgram, ParticleShaderSource, ParticleUniformSlot, ParticlesValue } from './particles';
