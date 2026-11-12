@@ -68,6 +68,11 @@ export interface RuleCall {
    * object or an unknown id. A sweeping command uses it to find the path a point is on (`P = PointOn(c, 0.3)` reads `c`).
    */
   inputsOf(id: ObjId): readonly { readonly id: ObjId; readonly name: string; readonly value: unknown }[];
+  /**
+   * The values now of the arguments of the command that defines an object (`P = PointOn(Segment(A, B), 0.3)` gives the
+   * segment and 0.3). Empty when the object is not defined by a command. Binders and bodies are `undefined`.
+   */
+  argsOf(id: ObjId): readonly unknown[];
 }
 
 export interface SliceOptions {

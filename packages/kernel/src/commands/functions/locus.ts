@@ -115,8 +115,9 @@ export interface PathSweep {
 export function openPathSlice(call: RuleCall, mover: ObjId, target: ObjId): Fallible<PathSweep> {
   const inputs = call.inputsOf(mover);
   let path: MoverPath | undefined;
-  for (const i of inputs) {
-    path = pathOf(i.value);
+  // the path is an argument of the mover's own command, written as a name or in place: PointOn(Segment(A, B), 0.3)
+  for (const v of [...call.argsOf(mover), ...inputs.map((i) => i.value)]) {
+    path = pathOf(v);
     if (path) break;
   }
   if (!path) {
@@ -948,13 +949,21 @@ export function fitAlgebraic(pts: readonly Pt[], heldOut: readonly Pt[], tol: nu
     let largest = 0;
     for (const v of acc.values()) if (Math.abs(v) > largest) largest = Math.abs(v);
     if (!(largest > 0)) continue;
-    const poly: Coef2[] = [];
+    const kept: Coef2[] = [];
     for (const [key, v] of acc) {
       const w = v / largest;
       if (Math.abs(w) <= tol) continue;
       const [i, j] = key.split(',').map(Number) as [number, number];
-      poly.push({ i, j, c: w });
+      kept.push({ i, j, c: w });
     }
+    // The equation is written with leading coefficient 1 (curves design 10): the leading term is the one of highest
+    // total degree, and among those the one with the highest power of x.
+    let lead: Coef2 | undefined;
+    for (const t of kept) {
+      if (!lead || t.i + t.j > lead.i + lead.j || (t.i + t.j === lead.i + lead.j && t.i > lead.i)) lead = t;
+    }
+    const scale = lead ? lead.c : 1;
+    const poly: Coef2[] = kept.map((t) => ({ i: t.i, j: t.j, c: t.c / scale }));
     const f = (x: number, y: number): number => {
       let s = 0;
       for (const t of poly) s += t.c * Math.pow(x, t.i) * Math.pow(y, t.j);

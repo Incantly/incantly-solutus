@@ -432,6 +432,24 @@ export class FigureCore {
           const rec = this.byIdMap.get(id);
           return rec ? rec.valueIn.map((i) => ({ id: i.id, name: i.p.name, value: i.cell.defined ? i.cell.value : undefined })) : [];
         },
+        argsOf: (id) => {
+          const cmd = this.byIdMap.get(id)?.p.compiled?.command;
+          if (!cmd) return [];
+          const saved = { reason: env.reason, cause: env.cause, detail: env.detail };
+          const out = cmd.args.map((a) => {
+            if (!a.eval || (a.param.kind ?? 'value') !== 'value') return undefined;
+            try {
+              const v = a.eval(env);
+              return typeof v === 'number' && v !== v ? undefined : v;
+            } catch {
+              return undefined;
+            }
+          });
+          env.reason = saved.reason;
+          env.cause = saved.cause;
+          env.detail = saved.detail;
+          return out;
+        },
         slice: (source, target, opts) => {
           const tgt = this.byIdMap.get(target);
           if (!tgt) return err('unknown_name', { line: 0, col: 1, endCol: 1 }, { name: String(target) }, { recovery: 'fix_line', fingerprintKey: 'slice' });
