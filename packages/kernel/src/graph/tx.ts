@@ -11,7 +11,7 @@ import type { JournalEntry, Reanchor, ScriptItem } from '../history/journal';
 import type { Expr, LineNode, ParsedLine, StyleItem } from '../language/ast';
 import type { CheckedLine } from '../language/check';
 import { BUILTIN_FUNCTIONS } from '../language/builtins';
-import { compileLine, evaluate } from '../language/compile';
+import { compileLine, compileNode, evaluate } from '../language/compile';
 import type { CompiledLine } from '../language/compile';
 import { closestNames } from '../language/errors';
 import { nameProblem, reservedGroup } from '../language/names';
@@ -897,7 +897,17 @@ export class FigureTx extends FigureBase {
     if (opts.dryRun) return this.okResult(parsed, 'action', printLineNode(parsed.node), rep, { dryRun: true });
     try {
       const rule = call.form.rule(call.args) as ActionRule;
-      const values = call.args.map(() => undefined as unknown);
+      // the value of each argument that is not a plain object name, evaluated now (objects are in `objects`)
+      const values = call.args.map((a) => {
+        if (!a.expr || a.expr.n === 'ref' || (a.param.kind ?? 'value') !== 'value') return a.value as unknown;
+        try {
+          this.ensureSlots(checked.slots);
+          const r = evaluate(compileNode(a.expr, this.compileOptions(SELF_ID)), this.env);
+          return r.defined ? r.value : undefined;
+        } catch {
+          return undefined;
+        }
+      });
       const out = rule.run({ figure: this as never, spec: call.spec, objects: objects.filter((o): o is ObjRec => o !== undefined).map((o) => o.id), values });
       if (out && out.error) {
         // the action's own refusal, placed on the line that called it
