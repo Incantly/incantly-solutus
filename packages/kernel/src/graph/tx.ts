@@ -28,6 +28,7 @@ import { FigureBase } from './base';
 import { ObjRec } from './core';
 import { coerceProp, defaultsFor, isValidKey, validKeysFor } from './props';
 import type { ActionRule } from './registry';
+import { runLineChecks } from './registry';
 import type { ApplyOptions, Cell, ChangeReport, Persist, RateRule, StyleEntry, TxOk, TxOp, TxResult } from './types';
 import { sameValue, valueSource } from './values';
 
@@ -272,6 +273,13 @@ export class FigureTx extends FigureBase {
     if (!cr.ok) return cr;
     notices.push(...cr.notices);
     const checked = cr.value;
+    // an area's own refusal of the line, before anything changes
+    const refused = runLineChecks(this, checked, parsed);
+    if (refused) {
+      const at = this.at(parsed);
+      const placed = refused.line > 0 && refused.col > 1 ? {} : { line: at.line, col: at.col, endCol: at.endCol };
+      return { ...refused, ...placed, source: parsed.sm.raw ?? parsed.sm.text } as TxResult;
+    }
     switch (checked.kind) {
       case 'noop':
         return this.applyNoop(parsed, notices, opts);

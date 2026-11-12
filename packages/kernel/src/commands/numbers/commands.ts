@@ -118,7 +118,7 @@ function inputSpec(): CommandSpec {
     group: 'controls',
     forms: [
       {
-        params: [P('target', 'Number|Text|Point|Vector|Bool|Function'), P('caption', 'Text', { optional: true, default: '' })],
+        params: [P('target', 'Any'), P('caption', 'Text', { optional: true, default: '' })],
         returns: 'Input',
         rule: () =>
           ({

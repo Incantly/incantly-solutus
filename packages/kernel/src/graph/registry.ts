@@ -11,6 +11,8 @@ import type { Limits } from '../errors/limits';
 import type { Slice } from './types';
 import type { CompiledArg } from '../language/compile';
 import type { Env } from '../language/runtime';
+import type { CheckedLine } from '../language/check';
+import type { ParsedLine } from '../language/ast';
 import { checkTable, createCommandTable } from '../language/table';
 import type { CheckTableOptions, CommandForm, CommandSpec, CommandTable, TableProblem } from '../language/table';
 
@@ -181,4 +183,32 @@ export class CommandRegistry {
   all(): readonly CommandSpec[] {
     return this.specs;
   }
+}
+
+/* ------------------------------ line checks ------------------------------ */
+
+/**
+ * An area's own refusal of a line that the language accepted, asked before anything is committed (errors design 5.0).
+ * `figure` is the figure the line is applied to. A returned error fails the line and nothing changes. Must be pure.
+ */
+export type LineCheck = (figure: unknown, line: CheckedLine, parsed: ParsedLine) => ErrorObject | undefined;
+
+const LINE_CHECKS: LineCheck[] = [];
+
+/** Registers a line check once. */
+export function registerLineCheck(check: LineCheck): void {
+  if (!LINE_CHECKS.includes(check)) LINE_CHECKS.push(check);
+}
+
+/** The first refusal of the registered checks, or `undefined`. A check that throws is skipped. */
+export function runLineChecks(figure: unknown, line: CheckedLine, parsed: ParsedLine): ErrorObject | undefined {
+  for (const check of LINE_CHECKS) {
+    try {
+      const e = check(figure, line, parsed);
+      if (e) return e;
+    } catch {
+      // a broken check must not block the line
+    }
+  }
+  return undefined;
 }

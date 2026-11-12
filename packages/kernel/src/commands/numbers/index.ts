@@ -7,6 +7,8 @@
  */
 
 import type { CommandRegistry } from '../../graph/registry';
+import { registerLineCheck } from '../../graph/registry';
+import { numbersLineCheck } from './linecheck';
 import { isAnimating, registerNumbersCommands } from './commands';
 import { inputTextOf, inputValidOf } from './input';
 import { registerNumbersErrors } from './errors';
@@ -18,6 +20,7 @@ export function registerNumbers(registry: CommandRegistry): void {
   registerNumbersProperties();
   setFieldHooks({ animating: isAnimating, text: inputTextOf, valid: inputValidOf });
   registerNumbersCommands(registry);
+  registerLineCheck(numbersLineCheck);
 }
 
 export type {
