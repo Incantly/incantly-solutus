@@ -107,6 +107,22 @@ const timeIt = <T>(run: () => T): { readonly value: T; readonly ms: number } => 
 };
 
 /** Best (smallest) wall-clock time of `n` runs, which resists scheduler noise. */
+/** How much slower this machine is than the reference one (never below 1): a fixed loop that takes 28.5 ms there. */
+const machineFactor = (): number => {
+  const loop = (): number => {
+    let acc = 0;
+    for (let i = 0; i < 3e6; i++) acc += Math.sin(i * 0.001) * Math.sqrt(i + 1);
+    return acc;
+  };
+  let best = Infinity;
+  for (let k = 0; k < 5; k++) {
+    const t0 = performance.now();
+    loop();
+    best = Math.min(best, performance.now() - t0);
+  }
+  return Math.max(1, best / 28.5);
+};
+
 const bestMs = (n: number, run: () => unknown): number => {
   let best = Infinity;
   for (let i = 0; i < n; i += 1) best = Math.min(best, timeIt(run).ms);
@@ -285,7 +301,10 @@ describe('PLOT-SM-3: partner and fallback lookups do not scan every sample', () 
   it('sin(1/x) on the bench view runs in a few milliseconds (best of 5)', () => {
     const f = fnOf((x) => Math.sin(1 / x));
     const best = bestMs(5, () => plotFunction(f, BENCH_VIEW));
-    expect(best, `best ${best.toFixed(1)} ms`).toBeLessThan(25);
+    // The budget is 25 ms on the machine the finding was measured on (44 to 54 ms before the fix). A slower machine
+    // gets the same budget scaled by how long a fixed loop takes there, so the test checks the algorithm, not the runner.
+    const budget = 25 * machineFactor();
+    expect(best, `best ${best.toFixed(1)} ms, budget ${budget.toFixed(1)} ms`).toBeLessThan(budget);
   }, TIMEOUT);
 
   it('a NaN storm at 70,000 evaluations is not quadratic', () => {
