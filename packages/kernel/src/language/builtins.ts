@@ -475,6 +475,23 @@ const specs: FunctionSpec[] = [
     return t * t * (3 - 2 * t);
   }, 'smoothstep between e0 and e1', ['e0', 'e1', 'x']),
   f2('step', 'interpolation', (e, x) => (x < e ? 0 : 1), '0 below e, 1 from e', 'e', 'x'),
+  // time helpers (animation-time design 6, core change A7)
+  f2('pingpong', 'interpolation', (x, len, env) => {
+    if (!(len > 0)) return domain(env, 'pingpong(x, len) needs len > 0');
+    const m = x - 2 * len * Math.floor(x / (2 * len));
+    return m <= len ? m : 2 * len - m;
+  }, 'triangle wave: 0 at 0, len at len, back to 0 at 2 len', 'x', 'len'),
+  f3('ramp', 'interpolation', (x, a, b, env) => {
+    if (a === b) {
+      fail(env, 'division_by_zero', 'ramp');
+      return NaN;
+    }
+    return clamp((x - a) / (b - a), 0, 1);
+  }, '0 before a, rising to 1 at b', ['x', 'a', 'b']),
+  f1('ease', 'interpolation', (x) => {
+    const s = clamp(x, 0, 1);
+    return s * s * (3 - 2 * s);
+  }, 'a smooth start and stop between 0 and 1'),
   // Random
   f1('rand', 'random', (seed, env) => (Number.isFinite(seed) ? randUnit(seed) : (fail(env, 'not_finite', 'rand'), NaN)), 'a fixed number in [0, 1) for each seed', 'seed'),
   {

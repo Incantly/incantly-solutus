@@ -153,6 +153,11 @@ export class Figure extends FigureHist {
     return m ? Number(m[1]) : 240;
   }
 
+  /** The beat start times the figure was given, in seconds (ascending). */
+  beats(): readonly number[] {
+    return this.beatStarts;
+  }
+
   /** Beat start times in seconds, from the film. With none, `bt` equals `t` and `beat` is 0. */
   setBeats(starts: readonly number[]): void {
     if (!Array.isArray(starts)) return;
