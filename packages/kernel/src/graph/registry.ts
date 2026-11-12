@@ -212,3 +212,37 @@ export function runLineChecks(figure: unknown, line: CheckedLine, parsed: Parsed
   }
   return undefined;
 }
+
+/* ------------------------------ line rewrites ------------------------------ */
+
+/** What an area's rewrite does with a line: another text to apply in its place, notices for the result, or a refusal. */
+export interface LineRewrite {
+  readonly text?: string;
+  readonly notices?: readonly Notice[];
+  readonly error?: ErrorObject;
+}
+
+/**
+ * An area's reading of a line the core does not have a form for (`a with min = 0, max = 20` changes a slider's range).
+ * It is asked with the line as written, before it is parsed. `undefined` leaves the line as it is. Must be pure.
+ */
+export type LineRewriter = (figure: unknown, text: string) => LineRewrite | undefined;
+
+const LINE_REWRITERS: LineRewriter[] = [];
+
+export function registerLineRewriter(rewriter: LineRewriter): void {
+  if (!LINE_REWRITERS.includes(rewriter)) LINE_REWRITERS.push(rewriter);
+}
+
+/** The first rewrite the registered rewriters offer. A rewriter that throws is skipped. */
+export function runLineRewriters(figure: unknown, text: string): LineRewrite | undefined {
+  for (const rewriter of LINE_REWRITERS) {
+    try {
+      const r = rewriter(figure, text);
+      if (r) return r;
+    } catch {
+      // a broken rewriter must not block the line
+    }
+  }
+  return undefined;
+}

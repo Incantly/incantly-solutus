@@ -28,7 +28,7 @@ import { FigureBase } from './base';
 import { ObjRec } from './core';
 import { coerceProp, defaultsFor, isValidKey, validKeysFor } from './props';
 import type { ActionRule } from './registry';
-import { runLineChecks } from './registry';
+import { runLineChecks, runLineRewriters } from './registry';
 import type { ApplyOptions, Cell, ChangeReport, Persist, RateRule, StyleEntry, TxOk, TxOp, TxResult } from './types';
 import { sameValue, valueSource } from './values';
 
@@ -248,6 +248,11 @@ export class FigureTx extends FigureBase {
     const notices: Notice[] = [];
     let parsed: ParsedLine;
     if (typeof input === 'string') {
+      // an area's own reading of the line comes first: it may stand for another line, or be refused
+      const rw = runLineRewriters(this, input);
+      if (rw?.error) return { ...rw.error, line: lineNo, source: input } as TxResult;
+      if (rw?.notices) notices.push(...rw.notices);
+      if (rw?.text !== undefined) input = rw.text;
       const pr = parseLine(input, {
         line: lineNo,
         isTaken: (n) => this.byNameMap.has(n),
@@ -461,7 +466,7 @@ export class FigureTx extends FigureBase {
       const n = notices[i] as Notice;
       if (n.kind === 'clamped' && (n.params as Record<string, unknown>)['name'] === undefined) notices.splice(i, 1);
     }
-    notices.push(makeNotice('clamped', { name, value: valueText(now), end: now > want ? 'low end' : 'high end' }));
+    notices.push(makeNotice('clamped', { name, value: valueText(now), end: now > want ? 'low end' : 'high end', from: want, to: now }));
   }
 
   /** The object a `@step` title marks: the one right after its anchor. */
