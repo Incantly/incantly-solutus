@@ -2,9 +2,9 @@
 
 Error format: core design section 9. Everything is data. Two moments produce errors: **definition time** (a `draw` line is rejected) and **run time** (a handler run or a learner's input produces a record, not a dialog).
 
-## 1. How GeoGebra handles failures here
+## 1. How the reference app handles failures here
 
-| Case | GeoGebra | Weakness |
+| Case | The reference app | Weakness |
 |---|---|---|
 | Script has a bad command | Fails when the script first runs; a dialog names the line and the object | Learner sees it, author does not; no check on save |
 | Update script fails | Update scripts are blocked for the session | One error disables unrelated scripts |

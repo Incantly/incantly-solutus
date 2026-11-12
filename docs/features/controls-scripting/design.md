@@ -1,12 +1,12 @@
 # Interactive controls and scripting: design
 
-Status: draft for review. Fits `docs/design/formula-language-and-kernel.md` (the "core design"). Companion: `docs/features/numbers-sliders/` (sliders, checkboxes, `showif`, `commit`). Nothing here copies GeoGebra code or manual text.
+Status: draft for review. Fits `docs/design/formula-language-and-kernel.md` (the "core design"). Companion: `docs/features/numbers-sliders/` (sliders, checkboxes, `showif`, `commit`). Nothing here copies the reference app's code or manual text.
 
 ## 1. What this area does
 
 A learner should be able to press a button that resets a figure, pick a colour or a function from a dropdown, type a value into a box, and have the figure react. A teacher (human or the live teacher) should be able to say "when the button is pressed, set `a` to 0 and hide the tangent" in one line, with no way to break the figure or the page.
 
-GeoGebra lets users attach scripts to objects, in a command language or in JavaScript. JavaScript can do anything the page can do. Our answer: **scripts in our own line language, with no JavaScript**. A script is a short list of checked steps. It can change values and styles, start and stop animations, and press other buttons. It cannot create or delete objects, change the structure of the figure, loop without a bound, read the clock or touch the page.
+The reference app lets users attach scripts to objects, in a command language or in JavaScript. JavaScript can do anything the page can do. Our answer: **scripts in our own line language, with no JavaScript**. A script is a short list of checked steps. It can change values and styles, start and stop animations, and press other buttons. It cannot create or delete objects, change the structure of the figure, loop without a bound, read the clock or touch the page.
 
 ### Sub-features
 
@@ -30,11 +30,11 @@ GeoGebra lets users attach scripts to objects, in a command language or in JavaS
 | Remove handlers | `ClearHandler(go, click)` |
 | Read | `d.value`, `d.index`, `d.count`, `q.text`, `q.valid` |
 
-### Scripting command group: every GeoGebra scripting command, and our answer
+### Scripting command group: every the reference app scripting command, and our answer
 
-GeoGebra's scripting group is about 70 commands, most of which set one property. Our language already has `X with prop = value` for that, and it works as a handler step. So most commands disappear into one mechanism.
+The reference app's scripting group is about 70 commands, most of which set one property. Our language already has `X with prop = value` for that, and it works as a handler step. So most commands disappear into one mechanism.
 
-| GeoGebra command (idea) | Ours |
+| The reference app command (idea) | Ours |
 |---|---|
 | SetValue (number, boolean, text, point, list, list element, choice index) | `SetValue(obj, v)` with the forms in 4.1 |
 | StartAnimation (one, several, all, on/off by a boolean) | `Animate(n, on)`, `Animate(on)` (all sliders) |
@@ -64,7 +64,7 @@ GeoGebra's scripting group is about 70 commands, most of which set one property.
 | Turtle commands | Not in v1 (could be a list-of-segments command later) |
 | CopyFreeObject, DataFunction | Lists area |
 
-## 2. How GeoGebra does it (summary)
+## 2. How the reference app does it (summary)
 
 - **Action objects.** A button, a checkbox and an input box are objects in the same construction as points and circles. A button holds only a caption and a size. An input box holds a link to another object and shows its definition as text.
 - **Dropdown = a list.** A list has a flag "draw as combo box" and a selected index. The selected element is what other objects use. Selecting changes the index and updates everything that depends on the list.
@@ -73,7 +73,7 @@ GeoGebra's scripting group is about 70 commands, most of which set one property.
 - **Errors in scripts** are shown in a dialog with the line number and the object name. If an update script fails, update scripts are blocked until the user fixes it.
 - **Loops are guarded only by habit.** An update script that changes the object that triggered it can loop; JavaScript has no guard at all. A repeat command runs a list of script actions a number of times.
 - **Input boxes** parse their text as a definition of the linked object, so typing an expression in a number box can make the linked number *dependent* on other objects. On a parse error the linked object is made undefined and independent. Numbers are clamped to the slider range. Text boxes set the string.
-- **JavaScript.** A full scripting language with an API object: evaluate commands from strings, read and set values and colours, listeners for add, remove, rename, update and click on any or named objects, and reading of the file. Scripts live in the file. An option can disable JavaScript globally. The page that embeds GeoGebra must trust the file.
+- **JavaScript.** A full scripting language with an API object: evaluate commands from strings, read and set values and colours, listeners for add, remove, rename, update and click on any or named objects, and reading of the file. Scripts live in the file. An option can disable JavaScript globally. The page that embeds the reference app must trust the file.
 - **What works:** the idea that every control is an object; scripts attached to events; the global init + listener hook; error text with line number.
 - **What is weak:** scripts are unchecked until they run; JavaScript is unsafe and non-deterministic; "update" scripts fire on every recompute, which makes loops easy and results order-dependent; placeholders are text substitution; input boxes can silently restructure the figure; there is no budget on run time.
 
@@ -130,7 +130,7 @@ Buttons and Inputs take the style properties `place`, `label` (for the caption),
 
 ### 3.2 Input boxes
 
-**Data flow.** The box shows the target's value as text. When the learner commits (Enter, blur, or the box's own button on touch), the text goes through one pipeline. If any stage fails, the target is **unchanged** and the box shows the error as data (this differs from GeoGebra, which makes the target undefined).
+**Data flow.** The box shows the target's value as text. When the learner commits (Enter, blur, or the box's own button on touch), the text goes through one pipeline. If any stage fails, the target is **unchanged** and the box shows the error as data (this differs from the reference app, which makes the target undefined).
 
 1. **Length and shape.** Text must be 500 characters or fewer, with nesting depth 16 or less. Else `input_too_long` / `input_too_deep`.
 2. **Parse as an expression of the core grammar** (`expr` only; no line kinds). `=`, `with`, `@`, `#` and `on` are rejected as `input_not_expression`.
@@ -189,7 +189,7 @@ on go click for k in 1..5: SetValue(L[k], 0)
 
 Why: a handler changes **values and appearance**. The figure's structure (objects, rules, order) is what the script on the line-by-line channel creates, and stays the same while the learner plays. That makes a figure's behaviour predictable from its lines, and it means a handler cannot create objects in a loop.
 
-**Checking at definition.** When the `on` line is applied, the step is parsed and type-checked like a normal line, against the current figure. Names must exist. `self` and `value` are available (below). A step that cannot work is an error *now*, not when the learner presses the button. This is the main fix to GeoGebra's late failures.
+**Checking at definition.** When the `on` line is applied, the step is parsed and type-checked like a normal line, against the current figure. Names must exist. `self` and `value` are available (below). A step that cannot work is an error *now*, not when the learner presses the button. This is the main fix to the reference app's late failures.
 
 **Names in steps.**
 
@@ -213,7 +213,7 @@ Why: a handler changes **values and appearance**. The figure's structure (object
 | `load` | Once, after the figure's lines were applied (loading a saved figure or after `draw` of a whole script is not enough: only on file/figure load by the host) | `figure` |
 | `change` (figure) | Any `change` raised by any target | `figure` (`self` is the object) |
 
-**There is no `update` event.** GeoGebra's update fires whenever an object recomputes for any reason (dependency change, animation tick, redefinition). That makes loops easy, depends on update order, and cannot be replayed. Our events are only raised by **learner gestures** (or `Click(obj)` from a handler). A write made by a handler (`SetValue`, `Toggle`, `Animate`) never raises `change`. So `on a change: SetValue(b, 2 * a)` plus `on b change: SetValue(a, b / 2)` cannot loop.
+**There is no `update` event.** the reference app's update fires whenever an object recomputes for any reason (dependency change, animation tick, redefinition). That makes loops easy, depends on update order, and cannot be replayed. Our events are only raised by **learner gestures** (or `Click(obj)` from a handler). A write made by a handler (`SetValue`, `Toggle`, `Animate`) never raises `change`. So `on a change: SetValue(b, 2 * a)` plus `on b change: SetValue(a, b / 2)` cannot loop.
 
 If the author wants "do this whenever x changes for any reason", the rule is a formula; use the graph, not a script.
 
@@ -269,7 +269,7 @@ Forms for the action table (kind `action`, returns nothing). These extend core 6
 
 ### 3.6 JavaScript: what we do instead, and why
 
-| Question | GeoGebra | Ours |
+| Question | The reference app | Ours |
 |---|---|---|
 | What can a script do? | Anything the page can: run any command by string, read the file, make network requests, touch the DOM, loop forever | Change values and appearance of existing objects; start animations; press buttons; nothing else |
 | Is the script checked before it runs? | No | Yes, when the line is applied |
@@ -321,7 +321,7 @@ interface ControlEvent { event: string; name: string; type: string; value?: stri
 | Choice options | 1,000 |
 | Buttons + Inputs + Choices per figure | 100 |
 
-## 4. Better than GeoGebra
+## 4. Better than the reference app
 
 1. **No JavaScript.** The risk is gone, not mitigated.
 2. **Checked on definition.** The model learns at once that a step cannot work.
@@ -385,19 +385,4 @@ interface ControlEvent { event: string; name: string; type: string; value?: stri
 
 ## Sources studied
 
-GeoGebra source (commit 3608374), read only:
-
-- `source/shared/common/src/main/java/org/geogebra/common/plugin/` (script manager, script types, events, event types, script error, JS wrapper, script runner)
-- `.../plugin/script/` (command-script runner and JS script classes, error handler)
-- `.../kernel/scripting/` (scripting command implementations: set-value, animation start, repeat, click and update script runners, execute, and the list of set-style commands)
-- `.../kernel/commands/Commands.java` and `CommandDispatcher.java` (the scripting command group)
-- `.../kernel/geos/` (button, input box, list as dropdown, boolean, `inputbox/` package)
-- `.../kernel/geos/GeoElement.java` (script storage per event, click-script dispatch)
-
-Manual pages:
-
-- https://geogebra.github.io/docs/manual/en/Scripting/
-- https://geogebra.github.io/docs/manual/en/commands/Scripting_Commands/
-- https://geogebra.github.io/docs/manual/en/commands/SetValue/
-- https://geogebra.github.io/docs/manual/en/tools/Input_Box/
-- https://geogebra.github.io/docs/manual/en/tools/Slider/
+Removed before the repository was made public. The study notes above are in our own words.

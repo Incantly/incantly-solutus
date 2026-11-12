@@ -688,7 +688,7 @@ export function segSeg(a0: V2, a1: V2, b0: V2, b1: V2, tol: number): V2 | undefi
 
 export type Fn1 = (x: number) => number | undefined;
 
-export function evalFn(f: { call1?: (x: number) => number; call: (...xs: number[]) => number | V2 | undefined }, x: number): number | undefined {
+export function evalFn(f: { call1?: (x: number) => number; call: (...xs: number[]) => number | V2 | boolean | undefined }, x: number): number | undefined {
   const v = f.call1 ? f.call1(x) : f.call(x);
   return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
 }
@@ -863,7 +863,7 @@ export function newtonNear(g: Fn1, x0: number): number | undefined {
 
 /** Function with line: vertical lines evaluate; others root f(x) - (mx + b). */
 export function functionLineRoots(
-  f: { call1?: (x: number) => number; call: (...xs: number[]) => number | V2 | undefined },
+  f: { call1?: (x: number) => number; call: (...xs: number[]) => number | V2 | boolean | undefined },
   line: LineLike,
   from: number | undefined,
   to: number | undefined,
@@ -897,8 +897,8 @@ export function functionLineRoots(
 
 /** Function with function: roots of f - g. */
 export function functionFunctionRoots(
-  f: { call1?: (x: number) => number; call: (...xs: number[]) => number | V2 | undefined },
-  g2: { call1?: (x: number) => number; call: (...xs: number[]) => number | V2 | undefined },
+  f: { call1?: (x: number) => number; call: (...xs: number[]) => number | V2 | boolean | undefined },
+  g2: { call1?: (x: number) => number; call: (...xs: number[]) => number | V2 | boolean | undefined },
   from: number | undefined,
   to: number | undefined,
 ): { pts: V2[]; poly: boolean } {

@@ -30,3 +30,5 @@ export type { TypeStyle } from './graph/props';
 export { sameValue, valueSource, numberSource } from './graph/values';
 export { StateSolver } from './clock/solver';
 export * as geometry from './commands/geometry/index';
+export * from './commands/numbers/index';
+export * from './commands/functions/index';

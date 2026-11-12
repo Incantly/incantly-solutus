@@ -56,9 +56,9 @@ A small WYSIWYG maths field. Typing builds the structure and the preview typeset
 
 The field stores a LaTeX-subset source string. Switching to "source" mode shows it and lets the learner edit the text directly; an unsupported macro is underlined with the error message. This replaces the all-or-nothing "LaTeX formula" checkbox of the usual text dialog: any text can have formulas in it.
 
-### 1.4 How GeoGebra presents it and what we change
+### 1.4 How the reference app presents it and what we change
 
-| GeoGebra | Ours |
+| The reference app | Ours |
 |---|---|
 | A text is plain or a LaTeX formula, chosen by a checkbox for the whole text | Plain words and formulas mix freely in one text |
 | An object-insertion menu builds a joined expression the user cannot see | Objects appear as chips with a visible format; the saved line has `{name:fmt}` |
@@ -135,7 +135,7 @@ Pick **Relation**, click two objects. A popup appears near the second one:
 - Keyboard: select two objects with Tab and Space, press **R**.
 - Screen reader: the popup is a dialog with the sentence as its description.
 
-How GeoGebra presents this: a text dialog with a short answer and a "More…" button that runs a prover on some geometric relations. Ours replaces "More…" by the always/now chip, which is computed from how the figure was built and needs no prover.
+How the reference app presents this: a text dialog with a short answer and a "More…" button that runs a prover on some geometric relations. Ours replaces "More…" by the always/now chip, which is computed from how the figure was built and needs no prover.
 
 ## 8. Keyboard, screen reader, touch
 

@@ -19,7 +19,7 @@ Area owner: the app-wide error system. Every other area (language, kernel, geome
 
 ---
 
-## 2. What GeoGebra does (in plain words)
+## 2. What the reference app does (in plain words)
 
 - **Two worlds.** Text that fails to parse is one generic "please check your input"; the line and column the parser knew are discarded. Text that parses but is wrong raises a named error carrying a localisation key and a few string parts. There are about fifty named errors (undefined variable, illegal argument, wrong number of arguments, unknown command, circular definition, redefinition failed, fixed or dependent object may not change, name in use, unbalanced brackets, illegal addition/subtraction/multiplication/division/exponent/comparison/boolean/list operation, number expected, function expected, invalid equation, invalid function, incomplete equation, file open/save failed, delete failed, rename failed, plus symbolic-engine ones such as timeout).
 - **Command errors** add the command's accepted syntax lines to the message and open a help popup for that command. Argument errors name the offending argument as text; argument-count errors say how many were given.
@@ -175,6 +175,14 @@ A rule runs only after a line is accepted, so on its own a command can only make
 
 Both return a `Refusal`: a kind, one sentence, and optionally a hint, up to 3 suggested lines and the argument to point at. Both must be pure. The kind must be in the error table; a hook that names an unknown kind, or that throws, gives an `internal` error. A refused line changes nothing, like any other failing line.
 
+What a hook can read, beyond the literal of each argument:
+
+- **The object behind a name.** When an argument is the bare name of an existing object, the hook also gets `value` (the object's value now, absent while it is undefined) and `source` (its defining line as text). `Roots(f)` uses the value to tell a polynomial from `sin`, and `Derivative(h)` uses the source to find a built-in with no derivative rule.
+- **A limit.** A refusal of kind `limit` may carry `limit: { name, max, got }`, the same field the language's own limits use.
+- **The forms.** Every refusal lists the command's forms in `forms`, so the caller can pick another one (`Roots(f, a, b)` after `needs_interval`).
+
+Kinds added by the functions area (codes C030 to C049): `needs_interval` (C030), `not_differentiable` (C031), `missing_range` (C032).
+
 ### 5.1 Nested expressions
 
 When the fault is deep inside a larger line, the outermost span is the line, but `col/endCol/token` point at the innermost token that is wrong. `cause` is used only when the outer problem is a different kind (e.g. the line is `no_matching_form` because the third argument failed to type; `cause` is the `type_mismatch` inside it). One level only; deeper chains are flattened to the innermost.
@@ -227,7 +235,7 @@ Numbers live in rules, which return undefined with a reason; they do not raise e
 - **Tolerance:** equality tests in geometry (parallel, coincident, collinear) use a scale-relative tolerance (default `1e-9 * max(1, |scale|)`) set once in the figure; reasons `parallel`/`coincident`/`degenerate` use it.
 - **Determinism:** the same inputs give the same reason; no wall-clock timeouts decide numerical outcomes (a per-rule *work* budget, counted in iterations, replaces time where results must be reproducible; the wall-clock budget exists only as a fallback and yields `timeout`).
 
-GeoGebra: NaN flows as "undefined"; no reason; the symbolic engine has a timeout error.
+The reference app: NaN flows as "undefined"; no reason; the symbolic engine has a timeout error.
 
 ---
 
@@ -237,7 +245,7 @@ Limits are errors at line time (`limit`) and undefined at run time (`limit` reas
 
 ---
 
-## 10. Better than GeoGebra
+## 10. Better than the reference app
 
 1. Positions kept from lexer to the user (line, column, token, expected).
 2. A structured result in every channel, not a string.
@@ -268,17 +276,4 @@ Limits are errors at line time (`limit`) and undefined at run time (`limit` reas
 
 ## 12. Sources studied
 
-GeoGebra source (read-only, commit 3608374), under `source/shared/common/src/main/java/org/geogebra/common/`:
-
-- `main/MyError.java` (error type and the enum of named errors with default texts)
-- `main/MyParseError.java`
-- `main/error/ErrorHelper.java`, `main/error/ErrorHandler.java`, `main/error/ErrorLogger.java`, `main/error/AnalyticsErrorLogger.java`
-- `kernel/CircularDefinitionException.java`
-- `kernel/commands/CommandProcessor.java` (argument and argument-number errors)
-- `kernel/commands/AlgebraProcessor.java` (where errors are caught, redefinition and assignment errors, undefined variable collection)
-- `kernel/commands/CommandNotFoundError.java`, `CommandNotLoadedError.java`
-- `kernel/parser/GParser.java`, `kernel/parser/FunctionParser.java`
-- `kernel/Construction.java` (replace and the reasons it fails)
-- `kernel/geos/GeoElement.java` (protected/fixed checks)
-
-GeoGebra manual: https://geogebra.github.io/docs/manual/en/Redefine_Dialog/ and https://geogebra.github.io/docs/manual/en/Object_Properties/ (fixed objects, redefinition limits); command error behaviour was read from source rather than from a dedicated manual page (the manual has no error catalogue page).
+Removed before the repository was made public. The study notes above are in our own words.

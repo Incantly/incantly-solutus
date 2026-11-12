@@ -84,7 +84,7 @@ export type LineNode =
   | { readonly k: 'directive'; readonly name: string; readonly ns: number; readonly ne: number; readonly words: readonly DirectiveWord[] }
   | { readonly k: 'define'; readonly target: NameRef; readonly expr: Expr; readonly range?: RangeClause; readonly style?: readonly StyleItem[] }
   | { readonly k: 'defmany'; readonly targets: readonly NameRef[]; readonly expr: Expr }
-  | { readonly k: 'function'; readonly target: NameRef; readonly params: readonly NameRef[]; readonly expr: Expr; readonly style?: readonly StyleItem[] }
+  | { readonly k: 'function'; readonly target: NameRef; readonly params: readonly NameRef[]; readonly expr: Expr; readonly domain?: readonly RangeClause[]; readonly style?: readonly StyleItem[] }
   | { readonly k: 'rate'; readonly target: NameRef; readonly order: number; readonly expr: Expr }
   | { readonly k: 'restyle'; readonly target: NameRef; readonly style: readonly StyleItem[] }
   | { readonly k: 'rerange'; readonly target: NameRef; readonly range: RangeClause }

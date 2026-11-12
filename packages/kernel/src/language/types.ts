@@ -9,7 +9,7 @@ export interface Ty {
   readonly k: TypeName | 'Relation';
   /** Element type of a List. Undefined in a parameter spec means "any list". */
   readonly of?: Ty;
-  /** Codomain of a Function: Number or Point. */
+  /** Codomain of a Function: Number or Point. A predicate has Bool. */
   readonly ret?: TypeName;
   /** Parameter count of a Function (1 to 4). */
   readonly arity?: number;
@@ -36,7 +36,19 @@ export const T = {
   Relation: mk('Relation'),
 } as const;
 
+declare module '../contracts/values' {
+  interface AreaTypeNames {
+    // language: a function of one or two numbers that returns a Bool (curves-loci design 1)
+    Predicate: true;
+    Predicate2: true;
+  }
+}
+
 export const listOf = (of: Ty): Ty => ({ k: 'List', of });
+/** The type of `p(x) = x^2 > 4` (one parameter) and `q(x, y) = x^2 + y^2 < 4` (two). */
+export const predOf = (arity: 1 | 2): Ty => ({ k: arity === 1 ? 'Predicate' : 'Predicate2', ret: 'Bool', arity });
+/** True for a type an object call `name(args)` can call: a function or a predicate. */
+export const isCallableTy = (t: Ty): boolean => t.k === 'Function' || t.k === 'Predicate' || t.k === 'Predicate2';
 export const fnOf = (ret: TypeName, arity: number): Ty => ({ k: 'Function', ret, arity });
 
 export function tyEq(a: Ty, b: Ty): boolean {
@@ -84,6 +96,8 @@ export const TYPE_ALIASES: Readonly<Record<string, readonly string[]>> = {
 export function parseTy(text: string): Ty | undefined {
   const t = text.trim();
   if (t === 'Function2') return fnOf('Number', 2);
+  if (t === 'Predicate') return predOf(1);
+  if (t === 'Predicate2') return predOf(2);
   const m = /^(\w+)(?:<(.+)>)?(?:\((\d)\))?$/.exec(t);
   if (!m) return undefined;
   const base = m[1] as string;
@@ -110,7 +124,7 @@ export function parseTy(text: string): Ty | undefined {
 /** Type names the language itself knows. Areas that add a type pass it to `checkTable` as an extra name. */
 export const CORE_TYPE_NAMES: readonly string[] = [
   'Number', 'Bool', 'Text', 'Point', 'Vector', 'Segment', 'Ray', 'Line', 'Circle', 'Arc', 'Polygon', 'Function', 'Curve',
-  'Region', 'List', 'Color', 'Particles', 'Relation',
+  'Region', 'List', 'Color', 'Particles', 'Relation', 'Predicate', 'Predicate2',
 ];
 
 /**

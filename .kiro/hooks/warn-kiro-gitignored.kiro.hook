@@ -1,0 +1,18 @@
+{
+  "enabled": true,
+  "name": "Warn if .kiro is ignored",
+  "description": "When .gitignore changes, fail with a warning if any line would exclude .kiro or a folder inside it (hackathon rule 1).",
+  "version": "1",
+  "when": {
+    "type": "fileEdited",
+    "patterns": [
+      ".gitignore",
+      "**/.gitignore"
+    ]
+  },
+  "then": {
+    "type": "runCommand",
+    "command": "if grep -nE '(^|[/*])\\.kiro([/*]|$)|^\\*$|^/\\*$|^\\.\\*$' .gitignore; then echo 'WARNING: .gitignore excludes .kiro or a folder inside it. Hackathon rule 1 says .kiro must never be ignored. Remove the lines above.' >&2; exit 1; fi; if [ -d .git ] && git check-ignore -q .kiro/steering/hackathon-rules.md; then echo 'WARNING: git ignores files in .kiro. Check .gitignore files and .git/info/exclude.' >&2; exit 1; fi; echo '.gitignore check: .kiro is not ignored.'",
+    "timeout": 30
+  }
+}

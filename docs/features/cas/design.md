@@ -2,7 +2,7 @@
 
 Status: draft for review. Follows `docs/design/formula-language-and-kernel.md` and the kernel, language and errors designs under `docs/features/`. The core design lists "a symbolic algebra system" as not in v1. This document designs it so that v1 can leave it out cleanly and a later release can add it without changing the kernel's shape. Section 12 lists the few core changes it needs.
 
-No GeoGebra code, text or names are used here. Command names that are ordinary maths words (Simplify, Factor, Solve, Limit) are listed because teachers say them.
+No the reference app's code, text or names are used here. Command names that are ordinary maths words (Simplify, Factor, Solve, Limit) are listed because teachers say them.
 
 ---
 
@@ -65,7 +65,7 @@ Conventions: `e` is an Expr, `c` is a Cond, `v` is a Symbol or one of `x y z`, `
 | `ToFunction` | `ToFunction(e, v)`: a plottable, callable Function from an Expr with one free symbol | `Function` |
 | `ToExpr` | `ToExpr(f: Function)`: back the other way; fails if the function used a numeric-only builtin | `Expr` |
 
-`Hold` replaces GeoGebra's "keep input" switch. It is a command on a line, not a hidden mode of a row, so the script says what happened.
+`Hold` replaces the reference app's "keep input" switch. It is a command on a line, not a hidden mode of a row, so the script says what happened.
 
 ### 2.2 Algebra
 
@@ -135,7 +135,7 @@ Shape rules for `Solve`, which a model needs to know:
 
 "Ours" is the form in section 2. "Fold" means the command becomes an option of another command.
 
-| GeoGebra command | Ours |
+| The reference app command | Ours |
 |---|---|
 | Simplify, Expand, Factor | Same names |
 | CFactor, CIFactor | `Factor(e, over = complex)`; the second one's integer variant is `Factor(e, over = gaussian)` (phase 2) |
@@ -164,7 +164,7 @@ Shape rules for `Solve`, which a model needs to know:
 
 ---
 
-## 4. How GeoGebra does it (plain words)
+## 4. How the reference app does it (plain words)
 
 ### The CAS view
 
@@ -178,10 +178,10 @@ Shape rules for `Solve`, which a model needs to know:
 ### The bridge to the engine
 
 - Everything symbolic goes to Giac, a separate open-source computer algebra system written in C++. The source tree holds a native binding module for it, and the web app loads a compiled JavaScript or WebAssembly build (we saw the binding and test resources, not the web build itself). It starts only on first use, because it is large and slow to start.
-- The bridge is textual. GeoGebra turns its expression tree into Giac's input syntax using a table of about 180 templates, keyed by command name and argument count, each a string with holes for the arguments. The result string comes back, is parsed by a dedicated reader, and becomes an expression tree again.
+- The bridge is textual. The reference app turns its expression tree into Giac's input syntax using a table of about 180 templates, keyed by command name and argument count, each a string with holes for the arguments. The result string comes back, is parsed by a dedicated reader, and becomes an expression tree again.
 - Variable names are renamed on the way in and out so they do not clash with Giac's own names, and some commands are small Giac programs defined in text and loaded on demand.
 - A timeout (5 seconds by default, a setting) stops a runaway call. Results are cached by the exact input string, with a list of inputs that must not be cached because the engine keeps hidden state between calls (for example assumptions).
-- If Giac returns something GeoGebra's own reader cannot turn into an object, the result is undefined (a question mark).
+- If Giac returns something the reference app's own reader cannot turn into an object, the result is undefined (a question mark).
 
 ### What works
 
@@ -474,7 +474,7 @@ interface Budget {
 }
 ```
 
-- A rule never starts a thread or reads a clock outside `tick`. `BudgetExceeded` is caught by `run` and becomes undefined `timeout` (steps or ms) or `limit` (nodes or digits). A cooperative budget replaces GeoGebra's "kill the thread after 5 seconds".
+- A rule never starts a thread or reads a clock outside `tick`. `BudgetExceeded` is caught by `run` and becomes undefined `timeout` (steps or ms) or `limit` (nodes or digits). A cooperative budget replaces the reference app's "kill the thread after 5 seconds".
 - **Cache**: `run` keys on `op | argument node ids | options | assumption hash | engine version`. Hit is O(1). LRU, 4,000 entries or 32 MB, whichever first.
 - **Two lanes** (this is how heavy rules fit into the kernel's one-pass frame): the kernel calls a symbolic rule with a *fast-lane* budget of 2 ms. On a cache hit or a fast finish, the cell updates in the same frame. Otherwise the rule returns `{ defined: false, reason: 'pending' }`, the job runs in the worker with the full budget, and when it finishes the kernel receives `settle(objId, cell)`, which marks downstream and requests a frame. Between the two, views show the previous value dimmed (the kernel keeps the last defined value for a `pending` cell).
 - **The clock**: a heavy command whose input depends on `t` through the graph is rejected at plan time with `time_dependent_input`. The hint shows the working pattern: do the algebra with a Symbol, then `Substitute` the clock into the result (a cheap, structural step). This keeps every playing frame free of algebra.
@@ -524,7 +524,7 @@ A CAS cell is **an ordinary object line** whose type is `Expr`, `Cond`, `List<Co
 | Algebrite | MIT (licence file read on 2026-11-10, see `docs/design/libraries.md`) | Wide set (integrals, factor, roots) from an older design | Unmaintained; would carry its own tree. Reference only. |
 | decimal.js | MIT (licence file read) | Arbitrary precision decimals with `exp`, `ln`, `sin`, `cos`, `atan`, `sqrt` | **Fits** for `Numeric` above 17 digits and for guard-digit evaluation. About 12 KB gzipped. We use it behind our own `dec` node, not as our number type. |
 | SymPy (BSD) through Pyodide | BSD-3 (SymPy repository) | Everything | Technically possible; the download is tens of megabytes and starts in seconds. Rejected for the live teacher; could be offered as an opt-in "heavy CAS" worker in a later desktop build for research use. |
-| Giac | GPL-3 | Everything GeoGebra uses | **Not usable** (section 6). |
+| Giac | GPL-3 | Everything the reference app uses | **Not usable** (section 6). |
 
 Recommendation: write the engine ourselves; use decimal.js for high-precision output; keep Nerdamer as a dev-time cross-check; take Compute Engine only if the math input field needs LaTeX parsing.
 
@@ -532,14 +532,14 @@ Recommendation: write the engine ourselves; use decimal.js for high-precision ou
 
 ## 6. Giac, GPL, and what it means for us
 
-- Giac is a GPL-3 program. If we ship it, whether linked or compiled to WebAssembly and delivered to the browser, the combined program must be offered under the GPL with source. That is incompatible with a closed commercial product. GeoGebra's own apps are non-commercial; whether the GPL engine is part of the reason is not stated in what we read, so we draw no conclusion about their choice, only about ours.
+- Giac is a GPL-3 program. If we ship it, whether linked or compiled to WebAssembly and delivered to the browser, the combined program must be offered under the GPL with source. That is incompatible with a closed commercial product. The reference app's own apps are non-commercial; whether the GPL engine is part of the reason is not stated in what we read, so we draw no conclusion about their choice, only about ours.
 - Running Giac as a separate server process that our app talks to over a network might avoid linking, but it turns every symbolic step into a network call (breaking the "first object within a second" and offline goals), adds cost per user, and still invites a licence question. Do not take this route without a lawyer's advice.
 - Re-implementing from Giac's source is also a derived work. We learn from the *interfaces* (what a CAS must offer, what commands users expect) and from published algorithms (Cantor-Zassenhaus, Hensel lifting, Bareiss, Sturm, partial fractions, Risch-style heuristics) described in textbooks and papers. We copy no source.
 - Consequence for design: the engine is ours, smaller, pure, and deterministic; unsupported cases are honest (`unsupported`) and not hidden by falling back to a bigger engine.
 
 ---
 
-## 7. Better than GeoGebra
+## 7. Better than the reference app
 
 1. **Typed trees all the way.** No print-send-parse round trip, so no renaming of variables, no template per command, and errors keep their positions.
 2. **No hidden state.** Assumptions are data in the line or on the symbol, so the same line always gives the same answer and every answer can be cached.
@@ -618,7 +618,7 @@ Recommendation: write the engine ourselves; use decimal.js for high-precision ou
 
 ## 13. Open questions
 
-1. Is `k1` the right display name for the integer parameter in trig families (GeoGebra-like `k_1` is harder to type)? We use `k1` and create the Symbol with domain `integer`.
+1. Is `k1` the right display name for the integer parameter in trig families (The reference app-like `k_1` is harder to type)? We use `k1` and create the Symbol with domain `integer`.
 2. Should `Solve` over the reals return `rootof` forms when a short radical exists but is long to read? Current rule: radicals only when 40 nodes or fewer.
 3. How large a polynomial should `Factor` accept in the live teacher? Current budget is 1 s, then `timeout`.
 4. Do we want the CAS view to offer `Steps` in phase 1 as a stretch, given the rule names already exist?
@@ -627,17 +627,4 @@ Recommendation: write the engine ourselves; use decimal.js for high-precision ou
 
 ## Sources studied
 
-GeoGebra source (read only, commit 3608374), under `source/shared/common/src/main/java/org/geogebra/common/`:
-
-- `cas/` (engine interface, input parser, result cache, timeout setting, command templates for the engine)
-- `cas/giac/` and `source/shared/giac-jni/` (how the engine is linked)
-- `cas/view/` (CAS view, cell processing, row editing, plot marble, plottability check)
-- `kernel/cas/` (commands that use the engine: solve, simplify, derivative, integral, limits, partial fractions, trig forms, ODEs, coefficients, surd text)
-- `kernel/geos/` (symbolic object and CAS cell classes)
-- `kernel/commands/` (command table groups, command filters per app, CAS command factory)
-- `kernel/arithmetic/` (symbolic mode flags; skimmed)
-- `main/settings/config/` (per-app configuration)
-
-Manual pages (listed; the pages were not readable in the fetch tool, so behaviour was taken from the source and the command tables): https://geogebra.github.io/docs/manual/en/ sections "CAS View", "CAS Specific Commands", "Algebra Commands".
-
-Licence and library checks: https://github.com/together-science/nerdamer-prime (package manifest, MIT); https://github.com/cortex-js/compute-engine (MIT stated in repository results); https://www.npmjs.com/package/mathjs and its repository (Apache-2.0); https://github.com/sympy/sympy (BSD); https://github.com/MikeMcl/decimal.js (licence file read, MIT); http://algebrite.org/ and https://github.com/davidedc/Algebrite (licence file not fetched).
+Removed before the repository was made public. The study notes above are in our own words.

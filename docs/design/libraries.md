@@ -38,7 +38,7 @@ Apache-2.0 asks us to keep its licence and notice files and to mark changes we m
 | Giac | GPL-3 | Would force our whole product under GPL |
 | three.js, d3 and other scene or chart libraries | MIT | We build the renderer ourselves so it runs the same on web and mobile |
 | Nerdamer (original, `jiggzson/nerdamer`) | Apache-2.0 | Superseded by the maintained Nerdamer Prime fork |
-| Any GeoGebra code or asset | EUPL 1.2, non-commercial terms | We learn from it only |
+| Any code or asset of the reference app | EUPL 1.2, non-commercial terms | We learn from it only |
 
 ## Corrections to the feature studies
 

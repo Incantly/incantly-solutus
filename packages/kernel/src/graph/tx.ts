@@ -28,6 +28,7 @@ import { FigureBase } from './base';
 import { ObjRec } from './core';
 import { coerceProp, defaultsFor, isValidKey, validKeysFor } from './props';
 import type { ActionRule } from './registry';
+import { runLineChecks } from './registry';
 import type { ApplyOptions, Cell, ChangeReport, Persist, RateRule, StyleEntry, TxOk, TxOp, TxResult } from './types';
 import { sameValue, valueSource } from './values';
 
@@ -228,7 +229,8 @@ export class FigureTx extends FigureBase {
       let recovery = e.recovery;
       if (e.kind === 'unknown_name' && define !== undefined) {
         const near = suggest.some((s) => s !== define);
-        if (!near) hint = `Define it first, or use a name that exists: ${this.names().slice(0, 8).join(', ')}.`;
+        // a hint that names the variable of the command's own expression is more exact than a list of names
+        if (!near && !/^The variable here is /.test(hint ?? '')) hint = `Define it first, or use a name that exists: ${this.names().slice(0, 8).join(', ')}.`;
         else recovery = 'use_suggestion';
       }
       const { fix, ...rest } = e as ErrorObject & { fix?: string };
@@ -271,6 +273,13 @@ export class FigureTx extends FigureBase {
     if (!cr.ok) return cr;
     notices.push(...cr.notices);
     const checked = cr.value;
+    // an area's own refusal of the line, before anything changes
+    const refused = runLineChecks(this, checked, parsed);
+    if (refused) {
+      const at = this.at(parsed);
+      const placed = refused.line > 0 && refused.col > 1 ? {} : { line: at.line, col: at.col, endCol: at.endCol };
+      return { ...refused, ...placed, source: parsed.sm.raw ?? parsed.sm.text } as TxResult;
+    }
     switch (checked.kind) {
       case 'noop':
         return this.applyNoop(parsed, notices, opts);
@@ -310,6 +319,12 @@ export class FigureTx extends FigureBase {
     if (n.k !== 'define' || !e.path || e.path.length !== 2 || e.path[0] !== n.target.name || e.path[1] !== n.target.name) return false;
     const r = this.byNameMap.get(n.target.name);
     if (!r || r.p.kind !== 'free') return false;
+    // a bound that reads its own slider is a real cycle: only the value may read the old value
+    if (n.range) {
+      const text = parsed.sm.text.slice(n.range.s, n.range.e);
+      const name = n.target.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      if (new RegExp(`(^|[^\\p{L}\\p{N}_])${name}($|[^\\p{L}\\p{N}_])`, 'u').test(text)) return false;
+    }
     return r.p.type.k === 'Number' || r.p.type.k === 'Point' || r.p.type.k === 'Bool';
   }
 
@@ -869,7 +884,13 @@ export class FigureTx extends FigureBase {
       const rule = call.form.rule(call.args) as ActionRule;
       const values = call.args.map(() => undefined as unknown);
       const out = rule.run({ figure: this as never, spec: call.spec, objects: objects.filter((o): o is ObjRec => o !== undefined).map((o) => o.id), values });
+      if (out && out.error) {
+        // the action's own refusal, placed on the line that called it
+        const at = this.at(parsed);
+        return { ...out.error, line: at.line, col: at.col, endCol: at.endCol, source: parsed.sm.raw ?? parsed.sm.text } as TxResult;
+      }
       this.diffReport(pass, rep);
+      if (out && out.notices) for (const n of out.notices) if (!rep.warnings.some((w) => w.kind === n.kind)) rep.warnings.push(n);
       return this.okResult(parsed, 'action', (out && out.summary) ?? printLineNode(parsed.node), rep, out && out.data !== undefined ? { data: out.data } : {});
     } catch {
       return internalError(name, this.at(parsed), '', name);

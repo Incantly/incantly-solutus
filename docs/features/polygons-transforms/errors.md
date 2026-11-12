@@ -2,7 +2,7 @@
 
 Error object format: core design section 9. Generic kinds and the shared `bad_argument`, undefined reasons and notes are in `points-lines/errors.md`; conic reasons are in `conics/errors.md`. This file lists what polygons and transformations add.
 
-## 1. How GeoGebra handles these
+## 1. How the reference app handles these
 
 - Polygons from fewer than three points: the tool does nothing; the command line fails with a generic message.
 - Self-crossing polygon: area is the absolute shoelace value, no hint.

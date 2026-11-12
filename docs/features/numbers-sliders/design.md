@@ -1,6 +1,6 @@
 # Numbers, angles, sliders, booleans and checkboxes: design
 
-Status: draft for review. Fits `docs/design/formula-language-and-kernel.md` (the "core design"). Companion area: `docs/features/controls-scripting/` (buttons, dropdowns, input boxes, handlers, scripting). Nothing here copies GeoGebra code or manual text.
+Status: draft for review. Fits `docs/design/formula-language-and-kernel.md` (the "core design"). Companion area: `docs/features/controls-scripting/` (buttons, dropdowns, input boxes, handlers, scripting). Nothing here copies the reference app's code or manual text.
 
 ## 1. What this area does
 
@@ -38,7 +38,7 @@ A teacher or the live teacher wants a number the learner can move ("change the r
 
 New constants and functions this area adds (core change list in section 9): constant `deg` (π/180), `turn` (τ), `grad` (π/200); functions `round(x, n)` (decimals), `sig(x, n)` (significant figures), `snap(x, step)`, `wrap(x, lo, hi)`.
 
-## 2. How GeoGebra does it (summary)
+## 2. How the reference app does it (summary)
 
 - **One class for numbers, sliders and angles.** A slider is not an object of its own: it is a free number with a range and a "show as slider" flag. Angles are numbers flagged as angles, stored in radians, with an "angle style" that decides the range of results (0 to 360, 0 to 180, reflex only, or unbounded).
 - **Range ends are objects too.** Min and max can be numbers or formulas, so a slider can follow other values. If a bound is undefined the slider becomes undefined and hides.
@@ -131,7 +131,7 @@ Using the grammar in the core design:
 
 **Unit inference.** If a number literal is directly followed by `deg`, `turn` or `grad` (implicit multiplication after a number literal, already allowed by the core grammar), or the right-hand side is `Angle(...)`, the object gets that display unit. The rule does not guess from the name. `a = 1.2` is a plain number even if used as an angle later; use `a with unit = rad` to show it as an angle.
 
-**Range literals and units.** `in 0deg..360deg step 1deg` are ordinary expressions that evaluate to radians. `in 0..360 step 1` on a number whose unit is `deg` is an error `unit_mismatch` with the hint to add `deg` to the bounds. (We do not silently reinterpret bounds. GeoGebra interprets bounds typed on an angle slider as degrees; that is friendly for humans but ambiguous for a model that wrote `2*pi`.)
+**Range literals and units.** `in 0deg..360deg step 1deg` are ordinary expressions that evaluate to radians. `in 0..360 step 1` on a number whose unit is `deg` is an error `unit_mismatch` with the hint to add `deg` to the bounds. (We do not silently reinterpret bounds. The reference app interprets bounds typed on an angle slider as degrees; that is friendly for humans but ambiguous for a model that wrote `2*pi`.)
 
 **Initial value.** The initial value is clamped and snapped like any set value. If it was out of range the result carries a notice (section 5).
 
@@ -150,7 +150,7 @@ Using the grammar in the core design:
 | `digits` | Number | 0..15 |
 | `sig` | Number | 1..15 |
 | `trim` | Number | true/false |
-| `label` | Number, Bool | text; caption on the control |
+| `caption` | Number, Bool | text shown on the control (`label` is the kernel's mode word: `name`, `value`, `both`, `caption`, `none`; kernel design section 5) |
 | `showif` | any object | Bool expression, or `none` |
 | `place` | Number (slider), Bool, controls | `dock \| screen(x, y) \| at(x, y)` |
 | `vertical` | slider | true/false |
@@ -179,7 +179,7 @@ Inputs: `raw`, `lo`, `hi` (radians for angles), `step` (resolved), `unit`.
 
 ### 3.4 Animation: a function of the clock
 
-GeoGebra's timer-stepped animation is replaced by a pure function of `t` and an anchor. Let `W = hi − lo` (in display space, `uhi − ulo`), `p0 = (v0 − lo) / W` (the anchor position as a fraction), and `s = (t − t0) / period` (sweeps elapsed; negative `s` clamps to 0, so seeking before the anchor shows `v0`).
+The reference app's timer-stepped animation is replaced by a pure function of `t` and an anchor. Let `W = hi − lo` (in display space, `uhi − ulo`), `p0 = (v0 − lo) / W` (the anchor position as a fraction), and `s = (t − t0) / period` (sweeps elapsed; negative `s` clamps to 0, so seeking before the anchor shows `v0`).
 
 | loop | fraction `f(s)` |
 |---|---|
@@ -260,7 +260,7 @@ The view never recomputes `text`; the kernel does, so the screen, SVG export and
 | `a = 3 in 5..10` | The value is clamped to 5; the result notice says `clamped: 3 -> 5`. |
 | `a = 3 in 10..0` | Error `bad_range`: the minimum must be below the maximum. |
 | `a = 3 in 0..10 step 0` / negative / non-finite | Error `bad_range`. |
-| `step` larger than the range | Allowed; only `lo` and `hi` are reachable. |
+| `step` larger than the range | `bad_range`, as the kernel and `docs/features/algebra-view/errors.md` say. |
 | Step does not divide range | Top end reachable (rule in 3.3). |
 | Huge range with tiny step | `limit` error (more than 10⁶ steps). |
 | `loop = once` at the top already | The slider does not move; `anim` is cleared. |
@@ -284,10 +284,10 @@ A line can succeed and still change a value. The `draw` result carries a `notice
 
 Notice codes: `clamped`, `snapped` (value moved to the nearest step), `range_kept` (a redefinition kept the old range), `unit_inferred`.
 
-## 6. Better than GeoGebra
+## 6. Better than the reference app
 
-1. **Animation is a pure function of `t`.** Seekable, replayable, frame-rate independent, and part of film export. GeoGebra's tick-driven values cannot do this.
-2. **No hidden sliders.** An unknown name is an error. GeoGebra's offer to make sliders for unknown variables hides typos; we ask the author to write the slider line.
+1. **Animation is a pure function of `t`.** Seekable, replayable, frame-rate independent, and part of film export. The reference app's tick-driven values cannot do this.
+2. **No hidden sliders.** An unknown name is an error. The reference app's offer to make sliders for unknown variables hides typos; we ask the author to write the slider line.
 3. **Exact decimals.** Values are `lo + k·step` with decimals derived from the step's text, not repaired afterwards.
 4. **Angle bounds are explicit** and carry the unit symbol, so models and humans agree on what `360` means.
 5. **Bounds can be reached** even when the step does not divide the range, so the top of a slider is never unreachable.
@@ -327,17 +327,4 @@ Notice codes: `clamped`, `snapped` (value moved to the nearest step), `range_kep
 
 ## Sources studied
 
-GeoGebra source (commit 3608374), read only:
-
-- `source/shared/common/src/main/java/org/geogebra/common/kernel/geos/` (number, angle, boolean objects; slider fields; animation step logic; angle styles)
-- `.../kernel/AnimationManager.java` and `.../kernel/kernelND/GeoElementND.java` (animation modes)
-- `.../kernel/Kernel.java` (precision constants, rounding settings)
-- `.../kernel/scripting/CmdStartAnimation.java`, `CmdSlider.java`, `CmdCheckbox.java`, `CmdSetValue.java`
-- `.../kernel/commands/Commands.java` (command groups)
-
-Manual pages:
-
-- https://geogebra.github.io/docs/manual/en/tools/Slider/
-- https://geogebra.github.io/docs/manual/en/commands/Slider/
-- https://geogebra.github.io/docs/manual/en/commands/SetValue/
-- https://geogebra.github.io/docs/manual/en/Scripting/
+Removed before the repository was made public. The study notes above are in our own words.

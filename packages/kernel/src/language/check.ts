@@ -16,7 +16,7 @@ import { classify } from './relation';
 import type { ArgFacts, CallCheck, FigureView, FormCheck, FormLike, FunctionTable, ObjectInfo, ParamSpec, Refusal } from './table';
 import { formText } from './table';
 import type { RelTree, TArg, TNode } from './tnode';
-import { T, accepts, binaryOp, legalOpsFor, listOf, setLabel, tyEq, tyStr, typeSet } from './types';
+import { T, accepts, binaryOp, isCallableTy, legalOpsFor, listOf, setLabel, tyEq, tyStr, typeSet } from './types';
 import type { Ty } from './types';
 import type { LangLimits } from './source';
 
@@ -71,6 +71,8 @@ export interface CheckedLine {
   readonly existing?: ObjId;
   readonly expr?: TNode;
   readonly params?: readonly { readonly name: string; readonly slot: number }[];
+  /** For a function line with `in a..b`: the closed interval of each parameter, in order. */
+  readonly domain?: readonly { readonly from: TNode; readonly to: TNode }[];
   readonly range?: CheckedRange;
   readonly style?: readonly CheckedStyle[];
   /** Initial value and optional velocity of a state. */
@@ -121,6 +123,7 @@ export const FIELDS: Record<string, Record<string, Ty>> = {
   Polygon: { vertices: listOf(T.Point), area: T.Number, perimeter: T.Number },
   Line: { point: T.Point, direction: T.Vector },
   Text: { length: T.Number },
+  Region: { value: T.Number, area: T.Number },
 };
 
 interface Frame {
@@ -614,6 +617,10 @@ class Checker {
     } else if (close.length > 0) {
       extra.hint = `Did you mean ${close.join(' or ')}?`;
       for (const c of close.slice(0, 2)) suggest.push(this.replaceRange(e.s, e.e, c));
+    } else if (this.scopeNames().length > 0) {
+      // inside a command's own expression the variable is the one the command names (`θ` in Polar, `s` in Curve)
+      const vars = this.scopeNames();
+      extra.hint = `The variable here is ${vars.join(' or ')}. Write the expression with ${vars.length === 1 ? 'it' : 'those'}, or make ${name} a number first.`;
     } else {
       extra.hint = 'Make it a number first, or pick an existing name.';
     }
@@ -1027,17 +1034,19 @@ class Checker {
     if (bspec) return this.inferBuiltin(e, bspec, expected);
     const obj = this.fig.lookup(name);
     if (obj) {
-      if (obj.type.k === 'Function') return this.inferCallObj(e, obj);
+      if (isCallableTy(obj.type)) return this.inferCallObj(e, obj);
       return this.notCallable(e, tyStr(obj.type), obj.type.k === 'Number');
     }
     return this.unknownFunction(e);
   }
 
-  unknownCommand(e: CallExpr): null {
+  unknownCommand(e: CallExpr): TNode | null {
     const names = this.fig.commands.names();
     const close = closestNames(e.callee, names, 3);
     const extra: ErrorExtra = { fingerprintKey: e.callee };
     const obj = this.fig.lookup(e.callee);
+    // a function object may have a capital name (`W = Taylor(f, 0, 5)`): with no command of that name, the call is to it
+    if (obj && isCallableTy(obj.type)) return this.inferCallObj(e, obj);
     if (obj) {
       extra.hint = `${e.callee} is a ${tyStr(obj.type)} object, not a command. Names followed by ( are looked up as commands when they start with a capital letter.`;
     } else if (close.length > 0) {
@@ -1102,7 +1111,7 @@ class Checker {
       args.push(t);
     }
     if (!ok) return null;
-    const ret = obj.type.ret === 'Point' ? T.Point : T.Number;
+    const ret = obj.type.ret === 'Point' ? T.Point : obj.type.ret === 'Bool' ? T.Bool : T.Number;
     return { n: 'callObj', id: obj.id, name: e.callee, args, ty: ret, s: e.s, e: e.e };
   }
 
@@ -1186,11 +1195,21 @@ class Checker {
   /** What a check-time hook may know about a typed argument. */
   argFacts(node: TNode | null | undefined, a: Arg | undefined): ArgFacts {
     if (!node || !a) return { type: '', literal: undefined, text: a ? this.textOf(a.value) : '', omitted: !a };
-    return { type: tyStr(node.ty), literal: literalOf(node), text: this.textOf(a.value), omitted: false };
+    const base = { type: tyStr(node.ty), literal: literalOf(node), text: this.textOf(a.value), omitted: false };
+    if (node.n !== 'ref') return base;
+    // a bare object name: the hook may read what the object is now
+    const info = this.fig.byId(node.id);
+    let value: unknown;
+    try {
+      value = this.fig.read?.(node.id);
+    } catch {
+      value = undefined;
+    }
+    return { ...base, ...(value !== undefined ? { value } : {}), ...(info?.source !== undefined ? { source: info.source } : {}) };
   }
 
   /** Reports a refusal from a check-time hook as an error on the line. */
-  refuse(r: Refusal, command: string, call: CallExpr, argAt: (r: Refusal) => Arg | undefined): null {
+  refuse(r: Refusal, command: string, call: CallExpr, argAt: (r: Refusal) => Arg | undefined, forms: readonly FormLike[] = []): null {
     const a = argAt(r);
     const s = a ? a.value.s : call.cs;
     const e = a ? a.value.e : call.e;
@@ -1207,6 +1226,8 @@ class Checker {
       message: r.message,
       ...(r.hint !== undefined ? { hint: r.hint } : {}),
       ...(r.suggest !== undefined ? { suggest: r.suggest.slice(0, 3) } : {}),
+      ...(r.limit !== undefined ? { limit: { ...r.limit } } : {}),
+      ...(forms.length > 0 ? { forms: forms.map((f) => formText(command, f)) } : {}),
       phase: 'typecheck',
       fingerprintKey: `${command}:${r.kind}`,
     });
@@ -1310,8 +1331,37 @@ class Checker {
       this.errors = [];
       this.notices = [];
       let node: TNode | null = null;
+      // a parameter that takes a function of x (or of x and y) also takes an expression written in them
+      const fnHint = hint && hint.k === 'Function' && hint.ret === 'Number' && (hint.arity === 1 || hint.arity === 2) ? hint : undefined;
       try {
-        node = this.inferArg((args[i] as Arg).value, hint);
+        const value = (args[i] as Arg).value;
+        node = this.inferArg(value, fnHint ? undefined : hint);
+        if (fnHint && node === null && value.k !== 'name') {
+          const first = this.errors;
+          const firstN = this.notices;
+          this.errors = [];
+          this.notices = [];
+          const frame: Frame = { vars: new Map() };
+          const params = (fnHint.arity === 2 ? ['x', 'y'] : ['x']).map((name) => {
+            const slot = this.slotCount++;
+            frame.vars.set(name, { slot, ty: T.Number });
+            return { name, slot };
+          });
+          this.scopes.push(frame);
+          let body: TNode | null = null;
+          try {
+            body = this.inferArg(value);
+          } finally {
+            this.scopes.pop();
+          }
+          if (body && body.ty.k === 'Number' && this.errors.length === 0) {
+            node = { n: 'lambda', params, body, ty: fnHint, s: value.s, e: value.e };
+          } else {
+            // not an expression in x either: report what the plain reading found
+            this.errors = first;
+            this.notices = firstN;
+          }
+        }
       } finally {
         const got = { node, errors: this.errors, notices: this.notices };
         this.errors = saved;
@@ -1344,7 +1394,9 @@ class Checker {
 
     const elementHint = (b: Binding, k: number): Ty | undefined => {
       const set = typeSet((b.form.params[k] as ParamSpec).type);
-      return set.members.length === 1 && set.members[0]?.k === 'List' && set.members[0].of ? set.members[0] : undefined;
+      const only = set.members.length === 1 ? set.members[0] : undefined;
+      if (only?.k === 'Function' && only.ret === 'Number' && (only.arity === 1 || only.arity === 2)) return only;
+      return only?.k === 'List' && only.of ? only : undefined;
     };
 
     interface Test {
@@ -1389,6 +1441,28 @@ class Checker {
           tys[k] = node.ty;
           bound[k] = { param: p, expr: node, omitted: false, ty: node.ty };
           if (!accepts(set, node.ty)) problems.push(this.problem(ai, p, a, tyStr(node.ty), setLabel(set)));
+        } else if (kind === 'binder' && set.members[0]?.k === 'List') {
+          // a list of bare names, each a local of the bodies: `[y, v]`
+          const v = a.value;
+          const names = v.k === 'list' ? v.items : [];
+          if (v.k !== 'list' || names.length === 0 || names.some((it) => it.k !== 'name' || it.paren === true)) {
+            problems.push(this.problem(ai, p, a, v.k === 'list' ? 'a list of expressions' : 'an expression', 'a list of bare names such as [y, v]'));
+            binderBad.push({ ai, arg: a });
+            bound[k] = { param: p, omitted: false };
+            return;
+          }
+          const ety = set.members[0].of ?? T.Number;
+          const slots: number[] = [];
+          const binders: string[] = [];
+          for (const it of names as readonly (Expr & { k: 'name' })[]) {
+            const slot = this.slotCount++;
+            frame.vars.set(it.name, { slot, ty: ety });
+            this.warnShadow(it.name, it.s, it.e);
+            slots.push(slot);
+            binders.push(it.name);
+          }
+          bound[k] = { param: p, binders, slots, omitted: false, ty: listOf(ety) };
+          tys[k] = listOf(ety);
         } else if (kind === 'binder') {
           const v = a.value;
           if (v.k !== 'name' || v.paren) {
@@ -1512,7 +1586,7 @@ class Checker {
         }
         if (refusal) {
           return this.refuse(refusal, specName, call, (r) =>
-            r.param === undefined ? undefined : r.inRest === true ? (args[best.b.restArgs[r.param] ?? -1] as Arg | undefined) : paramArg(r.param));
+            r.param === undefined ? undefined : r.inRest === true ? (args[best.b.restArgs[r.param] ?? -1] as Arg | undefined) : paramArg(r.param), forms);
         }
       }
       return { form: best.b.form as F, bound: best.bound };
@@ -1549,7 +1623,7 @@ class Checker {
       } catch {
         refusal = undefined;
       }
-      if (refusal) return this.refuse(refusal, specName, call, (r) => (r.param === undefined ? undefined : (args[r.param] as Arg | undefined)));
+      if (refusal) return this.refuse(refusal, specName, call, (r) => (r.param === undefined ? undefined : (args[r.param] as Arg | undefined)), forms);
     }
     return this.diagnose(specName, forms, call, bindings, tests, shownArg);
   }

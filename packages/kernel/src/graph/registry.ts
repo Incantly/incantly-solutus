@@ -5,12 +5,14 @@
  * A command form's `rule` factory receives the bound arguments and returns a `CommandRule` (an object command) or an
  * `ActionRule` (an action). The kernel calls `run` whenever the object has to be computed.
  */
-import type { ErrorObject } from '../contracts/errors';
+import type { ErrorObject, Notice } from '../contracts/errors';
 import type { UndefReason, ObjId } from '../contracts/values';
 import type { Limits } from '../errors/limits';
 import type { Slice } from './types';
 import type { CompiledArg } from '../language/compile';
 import type { Env } from '../language/runtime';
+import type { CheckedLine } from '../language/check';
+import type { ParsedLine } from '../language/ast';
 import { checkTable, createCommandTable } from '../language/table';
 import type { CheckTableOptions, CommandForm, CommandSpec, CommandTable, TableProblem } from '../language/table';
 
@@ -42,6 +44,11 @@ export interface RuleCall {
   fail(reason: UndefReason, detail?: string): undefined;
   /** Evaluates argument `i` now (for a body argument, in the scope of its binders). */
   evalArg(i: number): unknown;
+  /**
+   * Adds a notice to the result of the line that ran this rule: a fact about a value that is still defined (a solution
+   * that stops at a blow-up, a tangential meeting). The kind must be registered with `registerNotice`.
+   */
+  notify(kind: string, params?: Readonly<Record<string, string | number | boolean>>): void;
   /** For each argument, the object it names when it is a plain object name (`Locus(P, M)`), else `undefined`. */
   readonly ids: readonly (ObjId | undefined)[];
   /**
@@ -57,7 +64,25 @@ export interface RuleCall {
    * Evaluates the rules between a free object (or `'t'`, the clock) and a target object on a scratch copy, leaving the figure
    * as it was; safe to call inside a rule. Both are ids from `ids`. An error when an id is unknown or the source is not free.
    */
-  slice(source: ObjId | 't', target: ObjId): Slice | ErrorObject;
+  slice(source: ObjId | 't', target: ObjId, opts?: SliceOptions): Slice | ErrorObject;
+  /**
+   * The objects an object's value reads directly, with their values now (`undefined` while undefined). Empty for a free
+   * object or an unknown id. A sweeping command uses it to find the path a point is on (`P = PointOn(c, 0.3)` reads `c`).
+   */
+  inputsOf(id: ObjId): readonly { readonly id: ObjId; readonly name: string; readonly value: unknown }[];
+  /**
+   * The values now of the arguments of the command that defines an object (`P = PointOn(Segment(A, B), 0.3)` gives the
+   * segment and 0.3). Empty when the object is not defined by a command. Binders and bodies are `undefined`.
+   */
+  argsOf(id: ObjId): readonly unknown[];
+}
+
+export interface SliceOptions {
+  /**
+   * Lets the source be an object defined by a rule: `run(values)` then puts each value in place of the source's own value,
+   * so a command can move a point along its path. Without it a source that is not free is the error `not_free`.
+   */
+  readonly override?: boolean;
 }
 
 /**
@@ -116,6 +141,10 @@ export interface ActionCall {
 export interface ActionOutcome {
   readonly summary?: string;
   readonly data?: unknown;
+  /** The action refused to run: the line fails with this error and nothing is changed. */
+  readonly error?: ErrorObject;
+  /** Facts the caller should know about what the action did (a value that was clamped). */
+  readonly notices?: readonly Notice[];
 }
 
 export interface ActionRule {
@@ -154,4 +183,32 @@ export class CommandRegistry {
   all(): readonly CommandSpec[] {
     return this.specs;
   }
+}
+
+/* ------------------------------ line checks ------------------------------ */
+
+/**
+ * An area's own refusal of a line that the language accepted, asked before anything is committed (errors design 5.0).
+ * `figure` is the figure the line is applied to. A returned error fails the line and nothing changes. Must be pure.
+ */
+export type LineCheck = (figure: unknown, line: CheckedLine, parsed: ParsedLine) => ErrorObject | undefined;
+
+const LINE_CHECKS: LineCheck[] = [];
+
+/** Registers a line check once. */
+export function registerLineCheck(check: LineCheck): void {
+  if (!LINE_CHECKS.includes(check)) LINE_CHECKS.push(check);
+}
+
+/** The first refusal of the registered checks, or `undefined`. A check that throws is skipped. */
+export function runLineChecks(figure: unknown, line: CheckedLine, parsed: ParsedLine): ErrorObject | undefined {
+  for (const check of LINE_CHECKS) {
+    try {
+      const e = check(figure, line, parsed);
+      if (e) return e;
+    } catch {
+      // a broken check must not block the line
+    }
+  }
+  return undefined;
 }

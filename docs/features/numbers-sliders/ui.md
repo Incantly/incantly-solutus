@@ -7,7 +7,7 @@ Sliders and checkboxes are drawn by the control layer, an HTML overlay above the
 - **Dock (default).** Controls with no `place` stack in the **control dock**, a column at the top-left of the figure, in creation order. Each control takes one row (a row is about 44 px high). If the column would cover more than 40% of the view's height it wraps into a second column. The dock never overlaps a point the learner is dragging: the dock has `pointer-events` only on its controls.
 - **`screen(x, y)`** pins to a pixel offset from a corner (default top-left). **`at(x, y)`** pins to maths coordinates and moves with pan and zoom; if it leaves the view it is clamped to the nearest edge so it cannot be lost.
 
-GeoGebra pins a slider at an arbitrary point on a first click and has two position modes with several special cases. We default to the dock because the teacher draws by text, not by clicking.
+The reference app pins a slider at an arbitrary point on a first click and has two position modes with several special cases. We default to the dock because the teacher draws by text, not by clicking.
 
 ## 2. Slider
 
@@ -108,9 +108,9 @@ A free Number with no range is not a control. It appears in the side panel and i
 
 The per-object menu (right-click, long-press, or the object list) offers: decimals 0 to 15, significant figures 1 to 15, auto, trim zeros, unit. Each choice writes the matching `with` line (the figure's script stays the single record). A figure-level setting writes `@digits` or `@sig`.
 
-## 7. Differences from GeoGebra
+## 7. Differences from the reference app
 
-| GeoGebra | Ours |
+| The reference app | Ours |
 |---|---|
 | Slider placed where you click; two coordinate modes | Dock by default; explicit `place` |
 | Slider appears automatically for free numbers | Only when the line has a range |

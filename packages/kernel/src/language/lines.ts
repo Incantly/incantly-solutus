@@ -4,8 +4,8 @@
  */
 import type { Result } from '../contracts/errors';
 import type { ObjId } from '../contracts/values';
-import type { Expr, LineNode, NameRef, ParsedLine, RangeClause, StyleItem } from './ast';
-import { Bail, Checker, FIELDS, MAX_FUNCTION_PARAMS, MAX_OBJECTS, OverlayFigure, foldNumber } from './check';
+import type { Expr, LineNode, NameRef, ParsedLine, Pos, RangeClause, StyleItem } from './ast';
+import { Bail, Checker, FIELDS, MAX_FUNCTION_PARAMS, MAX_OBJECTS, OverlayFigure, foldNumber, literalOf } from './check';
 import type { CheckOptions, CheckedLine, CheckedRange, CheckedStyle } from './check';
 import { buildError, closestNames, notice, withMore } from './errors';
 import type { ErrorExtra, LanguageError } from './errors';
@@ -15,7 +15,7 @@ import { COLOR_WORDS, DIRECTIVES, PROPERTIES, own } from './props';
 import { SELF_ID } from './table';
 import type { ObjectInfo } from './table';
 import type { TNode } from './tnode';
-import { T, fnOf, tyEq, tyStr } from './types';
+import { T, fnOf, predOf, tyEq, tyStr } from './types';
 import type { Ty } from './types';
 
 void FIELDS;
@@ -271,6 +271,9 @@ function parseOne(source: string): ParsedLine | undefined {
 
 /* --------------------------------- ranges --------------------------------- */
 
+/** The most steps a slider's range may hold (numbers-sliders design 3.9). */
+const MAX_SLIDER_STEPS = 1_000_000;
+
 function checkRange(c: Checker, r: RangeClause, initial: TNode | undefined): CheckedRange | undefined {
   const from = c.infer(r.from);
   const to = c.infer(r.to);
@@ -297,7 +300,7 @@ function checkRange(c: Checker, r: RangeClause, initial: TNode | undefined): Che
     }
     if (lo >= hi) {
       const suggest = lo > hi ? [c.replaceRange(r.from.s, r.to.e, `${c.textOf(r.to)}..${c.textOf(r.from)}`)] : [];
-      c.err('bad_range', r.from.s, r.to.e, 'lang.bad_range', { why: `The range ${c.textOf(r.from)}..${c.textOf(r.to)} is empty` }, {
+      c.err('bad_range', r.from.s, r.to.e, 'lang.bad_range', { why: `The range ${c.textOf(r.from)}..${c.textOf(r.to)} is empty`, min: lo, max: hi, ...(st !== undefined ? { step: st } : {}) }, {
         forms,
         suggest,
         hint: 'The lower bound must be below the upper bound.',
@@ -306,10 +309,19 @@ function checkRange(c: Checker, r: RangeClause, initial: TNode | undefined): Che
       return undefined;
     }
     if (st !== undefined && (st <= 0 || st > hi - lo)) {
-      c.err('bad_range', step!.s, step!.e, 'lang.bad_range', { why: st <= 0 ? 'The step must be above zero' : `The step ${st} is larger than the range` }, {
+      c.err('bad_range', step!.s, step!.e, 'lang.bad_range', { why: st <= 0 ? 'The step must be above zero' : `The step ${st} is larger than the range`, min: lo, max: hi, step: st }, {
         forms,
         hint: 'Use a step above 0 and no larger than max - min.',
         fingerprintKey: 'step',
+      });
+      return undefined;
+    }
+    if (st !== undefined && (hi - lo) / st > MAX_SLIDER_STEPS) {
+      const got = Math.floor((hi - lo) / st);
+      c.err('limit', r.s, r.e, 'lang.limit', { limit: 'slider_steps', max: MAX_SLIDER_STEPS, got, what: 'slider steps' }, {
+        limit: { name: 'slider_steps', max: MAX_SLIDER_STEPS, got },
+        hint: `Use a larger step or a shorter range: at most ${MAX_SLIDER_STEPS} steps fit on a slider.`,
+        fingerprintKey: 'slider_steps',
       });
       return undefined;
     }
@@ -609,8 +621,43 @@ function checkDefMany(c: Checker, node: Extract<LineNode, { k: 'defmany' }>): Pa
   };
 }
 
+/**
+ * A function line that makes a curve (curves-loci design 5 and 6): an equation in `x, y` is an implicit curve and a pair
+ * with a range is a parametric curve. Both are checked as the `Curve` command they stand for. `undefined` when the line
+ * is an ordinary function line; `null` when it failed.
+ */
+function curveLine(c: Checker, node: Extract<LineNode, { k: 'function' }>): Partial0 | null | undefined {
+  const e = node.expr;
+  const names = node.params.map((p) => p.name);
+  const asCurve = (args: readonly Expr[]): Partial0 | null => {
+    const call: Expr = { k: 'call', callee: 'Curve', cs: e.s, ce: e.s, args: args.map((value) => ({ value })), open: e.s, close: e.e, s: e.s, e: e.e };
+    return checkDefine(c, { k: 'define', target: node.target, expr: call, ...(node.style ? { style: node.style } : {}) }) ?? null;
+  };
+  if (e.k === 'cmp' && e.paren !== true && e.ops.length === 1 && e.ops[0] === '==' && !node.domain) {
+    if (names.length === 1) {
+      validateTarget(c, node.target);
+      const [l, r] = [c.textOf(e.operands[0] as Expr), c.textOf(e.operands[1] as Expr)];
+      c.err('bad_argument', e.s, e.e, 'lang.bad_argument', { command: node.target.name, why: 'an equation in one variable gives isolated numbers, not a curve' }, {
+        hint: `For the numbers where it holds, write g(${names[0]}) = ${l} - (${r}) and then Roots(g, a, b). A curve needs two variables: ${node.target.name}(x, y) = … == ….`,
+        fingerprintKey: 'equation_one_variable',
+      });
+      return null;
+    }
+    if (names.length === 2 && names[0] === 'x' && names[1] === 'y' && c.fig.commands.lookup('Curve')) return asCurve([e]);
+    return undefined;
+  }
+  const range = node.domain?.[0];
+  if (e.k === 'tuple' && e.items.length === 2 && names.length === 1 && range && node.domain?.length === 1 && c.fig.commands.lookup('Curve')) {
+    const p = node.params[0] as NameRef;
+    return asCurve([e.items[0] as Expr, e.items[1] as Expr, { k: 'name', name: p.name, s: p.s, e: p.e }, range.from, range.to]);
+  }
+  return undefined;
+}
+
 function checkFunction(c: Checker, node: Extract<LineNode, { k: 'function' }>): Partial0 | undefined {
   const t = node.target;
+  const curve = curveLine(c, node);
+  if (curve !== undefined) return curve ?? undefined;
   validateTarget(c, t);
   c.ctx = { name: t.name, rhsStart: node.expr.s, rhsEnd: node.expr.e, defineLine: false };
   if (node.params.length > MAX_FUNCTION_PARAMS) {
@@ -656,21 +703,57 @@ function checkFunction(c: Checker, node: Extract<LineNode, { k: 'function' }>): 
   } finally {
     c.popFrame();
   }
+  // the interval of each parameter: its ends are plain expressions, read outside the parameters
+  let domain: { from: TNode; to: TNode }[] | undefined;
+  if (node.domain) {
+    domain = [];
+    if (node.domain.length !== node.params.length) {
+      const d = node.domain[Math.min(node.domain.length, node.params.length)] ?? (node.domain[node.domain.length - 1] as Pos);
+      c.err('bad_range', d.s, d.e, 'lang.bad_range', { why: `${t.name} has ${node.params.length} parameter${node.params.length === 1 ? '' : 's'}, and the line gives ${node.domain.length} range${node.domain.length === 1 ? '' : 's'}` }, {
+        hint: `Give one range for each parameter, separated by commas: in ${node.params.map(() => '0..1').join(', ')}.`,
+        fingerprintKey: 'domain_count',
+      });
+      ok = false;
+    }
+    for (const d of node.domain) {
+      const from = c.infer(d.from);
+      const to = c.infer(d.to);
+      for (const end of [from, to]) {
+        if (end && end.ty.k !== 'Number') {
+          c.err('type_mismatch', end.s, end.e, 'lang.type_mismatch_where', { why: `The end of a range is a Number, but this is a ${tyStr(end.ty)}` }, { left: tyStr(end.ty), fingerprintKey: tyStr(end.ty) });
+          ok = false;
+        }
+      }
+      if (!from || !to) {
+        ok = false;
+        continue;
+      }
+      const lo = literalOf(from);
+      const hi = literalOf(to);
+      if (typeof lo === 'number' && typeof hi === 'number' && lo > hi) {
+        c.err('bad_range', d.s, d.e, 'lang.bad_range', { why: `The range runs backwards, from ${lo} down to ${hi}` }, { hint: `Write the low end first: ${hi}..${lo}.`, fingerprintKey: 'domain_backwards' });
+        ok = false;
+      }
+      domain.push({ from, to });
+    }
+  }
   const existing = c.fig.lookup(t.name);
-  const ownTy = body && ok && (body.ty.k === 'Number' || body.ty.k === 'Point') ? fnOf(body.ty.k, params.length) : undefined;
+  const isPredicate = body !== null && body.ty.k === 'Bool' && (params.length === 1 || params.length === 2);
+  const typeOf = (b: TNode): Ty => (b.ty.k === 'Bool' ? predOf(params.length as 1 | 2) : fnOf(b.ty.k === 'Point' ? 'Point' : 'Number', params.length));
+  const ownTy = body && ok && (body.ty.k === 'Number' || body.ty.k === 'Point' || isPredicate) ? typeOf(body) : undefined;
   const self: ObjectInfo | undefined = ownTy && !existing ? { id: SELF_ID, name: t.name, type: ownTy, free: false } : undefined;
   const style = node.style ? c.apart('style', () => c.withSelf(self, () => checkStyle(c, node.style as readonly StyleItem[], ownTy ?? existing?.type))) : undefined;
   c.styleReads.delete(SELF_ID);
   if (!body || !ok) return undefined;
-  if (body.ty.k !== 'Number' && body.ty.k !== 'Point') {
+  if (body.ty.k !== 'Number' && body.ty.k !== 'Point' && !isPredicate) {
     c.err('type_mismatch', body.s, body.e, 'lang.type_mismatch_where', { why: `A function returns a Number or a Point, but this is a ${tyStr(body.ty)}` }, {
       left: tyStr(body.ty),
-      hint: body.ty.k === 'Bool' ? 'Use if(condition, a, b) to choose between numbers.' : 'Write an expression in the parameters that gives a number or a point (x, y).',
+      hint: body.ty.k === 'Bool' ? 'A condition takes one or two parameters, such as p(x) = x > 1. Use if(condition, a, b) to choose between numbers.' : 'Write an expression in the parameters that gives a number or a point (x, y).',
       fingerprintKey: tyStr(body.ty),
     });
     return undefined;
   }
-  const type = fnOf(body.ty.k, params.length);
+  const type = typeOf(body);
   if (c.errors.length === 0) checkRedefinition(c, t, existing, type, { s: t.s, e: node.expr.e });
   if (c.errors.length > 0) return undefined;
   return {
@@ -684,6 +767,7 @@ function checkFunction(c: Checker, node: Extract<LineNode, { k: 'function' }>): 
     ...(existing ? { existing: existing.id } : {}),
     expr: body,
     params,
+    ...(domain && domain.length > 0 ? { domain } : {}),
     ...(style ? { style } : {}),
   };
 }

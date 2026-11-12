@@ -1,6 +1,6 @@
 # Statistics and charts: what the learner sees and does
 
-## 1. How GeoGebra presents it
+## 1. How the reference app presents it
 
 - Charts are ordinary graphics objects, each added by a command or by a data analysis panel. They sit on the same axes as everything else.
 - Three analysis panels live in a spreadsheet-driven window: one variable (plot beside a statistics table, class controls), two variables (scatter plot, model menu, statistics, prediction box) and several variables (stacked box plots, table, ANOVA).
@@ -161,7 +161,7 @@ The Statistics tab of the probability window and the `Record` display share one 
 | Data grid | 8 columns × 20 rows visible |
 | Panel width | 360 px |
 
-## 7. What we change from GeoGebra
+## 7. What we change from the reference app
 
 - Panels write and read lines; charts are first-class interactive objects.
 - Hover tooltips, keyboard stepping, and screen-reader summaries for every chart.

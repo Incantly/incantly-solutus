@@ -20,7 +20,10 @@ export interface ParamSpec {
    */
   readonly type: string;
   readonly optional?: boolean;
-  /** Default `value`. A `binder` is a bare name that becomes a local; a `body` is checked in the binders' scope. */
+  /**
+   * Default `value`. A `binder` is a bare name that becomes a local; with a list type (`List<Number>`) it is a list of
+   * bare names, each a local. A `body` is checked in the binders' scope.
+   */
   readonly kind?: ParamKind;
   /** Used when optional and omitted. */
   readonly default?: ConstValue;
@@ -35,6 +38,8 @@ export interface BoundArg {
   readonly expr?: unknown;
   /** The binder's local name. */
   readonly binder?: string;
+  /** For a binder parameter of a list type (`[y, v]` in `NSolveODE`): the local names, in order. */
+  readonly binders?: readonly string[];
   /** The default value when the argument was omitted. */
   readonly value?: ConstValue;
   readonly omitted: boolean;
@@ -59,6 +64,13 @@ export interface ArgFacts {
   readonly text: string;
   /** True when the argument was left out. */
   readonly omitted: boolean;
+  /**
+   * When the argument is the bare name of an existing object: its value now (`undefined` while the object is
+   * undefined). A hook may read facts the value fixes (a polygon's corner count, whether a function is a polynomial).
+   */
+  readonly value?: unknown;
+  /** When the argument is the bare name of an existing object: its defining line as text. */
+  readonly source?: string;
 }
 
 /** The arguments of the chosen form, in parameter order, then the rest arguments. */
@@ -89,6 +101,8 @@ export interface Refusal {
   readonly suggest?: readonly string[];
   /** Params for the kind's message template, when it has one. */
   readonly params?: Readonly<Record<string, string | number | boolean | readonly string[]>>;
+  /** For a `limit` refusal: the limit's name, its size and what the line asked for. */
+  readonly limit?: { readonly name: string; readonly max: number; readonly got: number };
 }
 
 export interface CommandForm {
@@ -164,7 +178,8 @@ export interface SpecLike<F extends FormLike> {
 /** The line a form prints in the catalogue: `Circle(center: Point, radius: Number) -> Circle`. */
 export function formText(name: string, f: FormLike): string {
   const ps = f.params.map((p) => {
-    const t = p.kind === 'binder' ? 'name' : p.type;
+    // a function of one variable prints as `Function`, the name the docs use for it
+    const t = p.kind === 'binder' ? 'name' : p.type.replace(/Function<Number, 1>/g, 'Function');
     const body = `${p.name}: ${t}`;
     return p.optional ? `[${body}]` : body;
   });

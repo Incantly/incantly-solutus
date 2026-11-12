@@ -89,6 +89,9 @@ const META: Record<ErrorKind, Meta> = {
   not_polynomial: { key: 'lang.not_polynomial', params: ['command', 'why'], description: 'An equation that is not a polynomial in x and y where a conic is needed.' },
   bad_equation: { key: 'lang.bad_equation', params: ['command', 'why'], description: 'An expression with no == where an equation is needed.' },
   no_dependency: { key: 'lang.no_dependency', params: ['command', 'why'], description: 'A locus whose traced point does not depend on the mover.' },
+  needs_interval: { key: 'lang.needs_interval', params: ['command', 'why'], description: 'A command that needs an interval unless its function is a polynomial.' },
+  not_differentiable: { key: 'lang.not_differentiable', params: ['command', 'why'], description: 'A function whose body has no derivative rule.' },
+  missing_range: { key: 'lang.missing_range', params: ['command', 'why'], description: 'A parametric curve written without a finite range.' },
 };
 
 function buildTable(): Record<ErrorKind, ErrorSpec> {

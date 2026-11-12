@@ -59,6 +59,10 @@ export interface AreaErrorKinds {
   not_polynomial: true;
   bad_equation: true;
   no_dependency: true;
+  // functions (codes C030 to C049)
+  needs_interval: true;
+  not_differentiable: true;
+  missing_range: true;
 }
 
 export type ErrorKind = CoreErrorKind | Extract<keyof AreaErrorKinds, string>;

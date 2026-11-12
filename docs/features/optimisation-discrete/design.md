@@ -11,7 +11,7 @@ This folder holds four small command groups that share one need: answer a questi
 
 Exact algebra (`Solve`, `Simplify`) is the symbolic area's job (`../cas/`). Where a command here can use it, the link is stated.
 
-No GeoGebra code, text or names are used. Command names that are ordinary maths words are listed because teachers say them.
+No the reference app's code, text or names are used. Command names that are ordinary maths words are listed because teachers say them.
 
 ---
 
@@ -117,7 +117,7 @@ The statistics and probability area owns the full set of such commands; this gro
 
 ---
 
-## 3. How GeoGebra does each
+## 3. How the reference app does each
 
 ### 3.1 Maximize and Minimize
 
@@ -393,7 +393,7 @@ The calc view is a list of lines, each a normal object line `r1 = 3/4 + 1/6`, so
 
 ---
 
-## 9. Better than GeoGebra
+## 9. Better than the reference app
 
 1. **Optimisation without mutating anything.** A slice evaluates the target on a scratch overlay: no private copy of the figure, no traces, no recursion guard, no flicker, and it also serves Locus.
 2. **Honest about quality.** The result says whether the optimum was proved or sampled, whether it sits at the boundary, whether several optima tie, and the achievable accuracy.
@@ -493,14 +493,4 @@ Checked 2026-11-10.
 
 ## Sources studied
 
-GeoGebra source (read only, commit 3608374), under `source/shared/common/src/main/java/org/geogebra/common/`:
-
-- `kernel/advanced/` (optimiser classes and commands for Maximize and Minimize; the financial algorithm and its five commands)
-- `kernel/optimization/` (extremum finder, fit helper)
-- `kernel/discrete/` including `delaunay/`, `geom/` and `tsp/` (hull, triangulation, Voronoi, spanning tree, shortest distance, tour)
-- `kernel/commands/` (command table groups, `filter/` and `selector/` for per-app command filters)
-- `main/settings/config/` (Scientific app configuration)
-
-Manual pages (not readable in the fetch tool; behaviour taken from the source and command tables): https://geogebra.github.io/docs/manual/en/commands/ groups "Optimization Commands", "Discrete Math Commands", "Financial Commands", and the Scientific Calculator pages.
-
-Licence checks: https://github.com/mapbox/delaunator (ISC, licence file read), https://github.com/mourner/robust-predicates (Unlicense, licence file read).
+Removed before the repository was made public. The study notes above are in our own words.

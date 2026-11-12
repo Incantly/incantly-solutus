@@ -6,7 +6,8 @@
  * cut-off); one pass per flush, in ascending order, so inputs are final when a rule runs; values of objects nobody
  * looks at can be left stale and are computed when read (`setDemand`). No DOM, no timers, no wall clock.
  */
-import type { ErrorKind, ErrorObject } from '../contracts/errors';
+import type { ErrorKind, ErrorObject, Notice, NoticeKind } from '../contracts/errors';
+import { makeNotice } from '../errors/notices';
 import { err } from '../errors/table';
 import type { Name, ObjId, UndefReason } from '../contracts/values';
 import { resolveLimits } from '../errors/limits';
@@ -114,6 +115,8 @@ export const cellsEqual = (a: Cell, b: Cell): boolean => {
 };
 
 export class FigureCore {
+  /** Notices that rules raised with `call.notify` since the last report; the next report carries them. */
+  protected ruleNotices: Notice[] = [];
   readonly registry: CommandRegistry;
   readonly functions: FunctionTable | undefined;
   readonly directives: readonly string[] | undefined;
@@ -183,6 +186,7 @@ export class FigureCore {
     this.tolOption = typeof opts.tolerance === 'number' && Number.isFinite(opts.tolerance) && opts.tolerance > 0 ? opts.tolerance : DEFAULT_TOLERANCE;
     this.env = createEnv({ read: (id) => this.readValue(id), slots: 16 });
     this.env.maxList = this.limits.listSize;
+    this.env.host = this;
     this.langLimits = Object.freeze({ objects: this.limits.objects, exprNodes: this.limits.exprNodes, lineLength: this.limits.lineLength, listSize: this.limits.listSize, depth: this.limits.depth });
     const me = (): FigureCore => this;
     this.view = {
@@ -425,12 +429,34 @@ export class FigureCore {
         tol: this.tolerance(),
         work,
         limits: this.limits,
-        slice: (source, target) => {
+        inputsOf: (id) => {
+          const rec = this.byIdMap.get(id);
+          return rec ? rec.valueIn.map((i) => ({ id: i.id, name: i.p.name, value: i.cell.defined ? i.cell.value : undefined })) : [];
+        },
+        argsOf: (id) => {
+          const cmd = this.byIdMap.get(id)?.p.compiled?.command;
+          if (!cmd) return [];
+          const saved = { reason: env.reason, cause: env.cause, detail: env.detail };
+          const out = cmd.args.map((a) => {
+            if (!a.eval || (a.param.kind ?? 'value') !== 'value') return undefined;
+            try {
+              const v = a.eval(env);
+              return typeof v === 'number' && v !== v ? undefined : v;
+            } catch {
+              return undefined;
+            }
+          });
+          env.reason = saved.reason;
+          env.cause = saved.cause;
+          env.detail = saved.detail;
+          return out;
+        },
+        slice: (source, target, opts) => {
           const tgt = this.byIdMap.get(target);
           if (!tgt) return err('unknown_name', { line: 0, col: 1, endCol: 1 }, { name: String(target) }, { recovery: 'fix_line', fingerprintKey: 'slice' });
           const src = source === 't' ? undefined : this.byIdMap.get(source);
           if (source !== 't' && !src) return err('unknown_name', { line: 0, col: 1, endCol: 1 }, { name: String(source) }, { recovery: 'fix_line', fingerprintKey: 'slice' });
-          return this.sliceRecs(src, tgt, work);
+          return this.sliceRecs(src, tgt, work, opts?.override === true);
         },
         fail: (reason, detail) => {
           if (env.reason === undefined) {
@@ -438,6 +464,11 @@ export class FigureCore {
             if (detail !== undefined) env.detail = detail;
           }
           return undefined;
+        },
+        notify: (kind, params) => {
+          // one notice per kind and line is enough: a rule may run many times in one pass
+          if (this.ruleNotices.length >= 32 || this.ruleNotices.some((n) => n.kind === kind)) return;
+          this.ruleNotices.push(makeNotice(kind as NoticeKind, params ?? {}));
         },
         evalArg: (i) => {
           const f = args[i]?.eval;
@@ -468,8 +499,8 @@ export class FigureCore {
    * Safe inside a running rule: it saves and restores the environment (reason, clock, locals) as well as the cells.
    * With `work`, each value costs one step plus one per rule run, and a spent budget leaves `timeout` cells.
    */
-  protected sliceRecs(src: ObjRec | undefined, t: ObjRec, work?: RuleWork): Slice | ErrorObject {
-    if (src && src.p.kind !== 'free') {
+  protected sliceRecs(src: ObjRec | undefined, t: ObjRec, work?: RuleWork, override = false): Slice | ErrorObject {
+    if (src && src.p.kind !== 'free' && !override) {
       return err('not_free', { line: 0, col: 1, endCol: 1 }, { name: src.p.name, inputs: src.valueIn.map((i) => i.p.name).join(', ') }, { recovery: 'choose', fingerprintKey: src.p.name });
     }
     if (this.ruleDepth > this.limits.depth) {
