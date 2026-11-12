@@ -94,7 +94,8 @@ export class Figure extends FigureHist {
       write: (r, c) => this.writeCell(r, c),
       rerunOf: (r) => {
         const e = r.p.style.get('rerun');
-        return e?.word === 'restart' || e?.text === 'restart' ? 'restart' : 'continue';
+        // the default is restart (kernel ruling K12); an input opts in to continue
+        return e?.word === 'continue' || e?.text === 'continue' ? 'continue' : 'restart';
       },
     });
     this.stateDriver = () => (this.solver.active ? this.solver.sync() : []);

@@ -71,10 +71,10 @@ see the old motion, so that "what if" is honest.
 
 1. WHEN a free value that a rate reads changes while a film runs, THE SYSTEM SHALL add a `set` entry to the input log
    at the current `t` (design 8.2).
-2. WHEN the input has `rerun = continue` (the default), THE SYSTEM SHALL apply the change from that time on: a seek to
-   an earlier time SHALL show the old value and the old motion (8.3).
-3. WHEN the input has `rerun = restart`, THE SYSTEM SHALL drop that input's entries, change its base value and replay
-   from the start (8.3).
+2. WHEN the input has `rerun = restart` (the default, kernel ruling K12), THE SYSTEM SHALL drop that input's entries,
+   change its base value and replay from the start (8.3).
+3. WHEN the input has `rerun = continue`, THE SYSTEM SHALL apply the change from that time on: a seek to an earlier
+   time SHALL show the old value and the old motion (8.3).
 4. WHEN a new entry for an input is added at `t_e`, THE SYSTEM SHALL remove that input's later entries and report
    `log_rewrite` (8.4).
 5. THE SYSTEM SHALL apply an entry at the first grid step at or after its time, so outcomes are deterministic (8.2).
@@ -133,6 +133,8 @@ trace samples (under 20 µs) and CPU particles (3,000 evaluated in under 1.5 ms)
 
 ## Decided against the design
 
+- **The `rerun` default is `restart`**, not `continue`: section 13 of the core design and kernel ruling K12 decide it.
+  An input opts in with `L with rerun = continue`.
 - **Slider animation words (A8).** The numbers area already animates sliders with `loop` and `period`, and owns
   sliders. `animate`, `seconds`, `phase` and `smooth` are not built, so there is one way to say it. To be confirmed by
   the product owner.

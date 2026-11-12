@@ -27,6 +27,7 @@ The player and its clock, time helpers, the what-if input log, traces and partic
 
 ## Decisions
 
+- `rerun` defaults to `restart` (core decision 5, kernel ruling K12); an input opts in to `continue`.
 - Slider animation stays with the numbers area (`loop`, `period`); the design's `animate` and `seconds` (A8) are not
   built.
 - Bodies and events (design 7.9) wait for v1.5.

@@ -109,14 +109,14 @@ export class StateSolver {
   constructor(private readonly fig: SolverAccess) {}
 
   /**
-   * A free value that a rate or an initial value reads changed. Before the film has started, or for an initial value, or
-   * with `rerun = restart`, the film restarts with the new value. Otherwise (`rerun = continue`, the default) the change is
-   * logged at the current time: the motion before it stays as it was, and it takes effect from that time on.
+   * A free value that a rate or an initial value reads changed. Before the film has started, for an initial value, or with
+   * `rerun = restart` (the default, kernel ruling K12), the film restarts with the new value. With `rerun = continue` the
+   * change is logged at the current time: the motion before it stays as it was, and it takes effect from that time on.
    */
   noteFree(rec: ObjRec, was?: unknown): void {
     if (!this.inputs.has(rec.id)) return;
     const t = this.fig.clockT();
-    const policy = this.fig.rerunOf?.(rec) ?? 'continue';
+    const policy = this.fig.rerunOf?.(rec) ?? 'restart';
     if (!this.rateInputs.has(rec.id) || this.initInputs.has(rec.id) || t <= this.t0 + 1e-12 || policy === 'restart') {
       // a restart rewrites the whole history of this input
       if (this.log.some((e) => e.kind === 'set' && e.id === rec.id)) {
