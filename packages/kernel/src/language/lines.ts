@@ -936,6 +936,17 @@ function checkDirective(c: Checker, node: Extract<LineNode, { k: 'directive' }>)
     case 'tolerance':
       if (words.length !== 1 || words[0]?.num === undefined || !(words[0].num > 0) || !Number.isFinite(words[0].num)) return bad('a positive number like 1e-9');
       break;
+    case 'input': {
+      // @input L 2 at 12.5 | @input P 1 2 at 3 | @input L 1 base | @input reset at 4
+      const txt = words.map((w) => w.text);
+      const isNum = (x: string | undefined): boolean => x !== undefined && x !== '' && Number.isFinite(Number(x));
+      const okReset = txt.length === 3 && txt[0] === 'reset' && txt[1] === 'at' && isNum(txt[2]);
+      const nums = txt.slice(1, txt.length - (txt[txt.length - 1] === 'base' ? 1 : 2));
+      const tail = txt[txt.length - 1] === 'base' ? true : txt[txt.length - 2] === 'at' && isNum(txt[txt.length - 1]);
+      const okSet = txt.length >= 3 && /^[A-Za-z\u0370-\u03FF_][A-Za-z0-9_\u0370-\u03FF]*$/.test(txt[0] ?? '') && txt[0] !== 'reset' && (nums.length === 1 || nums.length === 2) && nums.every(isNum) && tail;
+      if (!okReset && !okSet) return bad('a name, a value, then at t or base; or reset at t');
+      break;
+    }
     case 'clock':
       if (words.length !== 1 || !/^\d+(?:\.\d+)?\.\.\d+(?:\.\d+)?$/.test(words[0]?.text ?? '')) return bad('a range like 0..30');
       {

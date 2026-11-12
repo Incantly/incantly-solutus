@@ -99,6 +99,10 @@ export class Figure extends FigureHist {
       },
     });
     this.stateDriver = () => (this.solver.active ? this.solver.sync() : []);
+    this.stateSampler = {
+      recs: () => (this.solver.active ? this.solver.stateObjects() : []),
+      at: (t) => this.solver.statesAt(t),
+    };
   }
 
   protected writeCell(r: ObjRec, c: Cell): boolean {
@@ -133,6 +137,21 @@ export class Figure extends FigureHist {
 
   protected override onFreeWritten(rec: ObjRec, was?: unknown): void {
     this.solver.noteFree(rec, was);
+  }
+
+  protected override onInputLine(words: readonly string[]): string | undefined {
+    if (words[0] === 'reset') {
+      this.solver.restoreEntry({ kind: 'reset', t: Number(words[2]) });
+      return undefined;
+    }
+    const rec = this.byNameMap.get(words[0] as string);
+    if (!rec || rec.p.kind !== 'free') return `a free object named ${words[0] ?? ''}`;
+    const base = words[words.length - 1] === 'base';
+    const nums = words.slice(1, words.length - (base ? 1 : 2)).map(Number);
+    const value = nums.length === 2 ? { x: nums[0] as number, y: nums[1] as number } : (nums[0] as number);
+    if (base) this.solver.restoreBase(rec.id, value);
+    else this.solver.restoreEntry({ kind: 'set', t: Number(words[words.length - 1]), id: rec.id, value });
+    return undefined;
   }
 
   protected override onDirective(name: string): void {

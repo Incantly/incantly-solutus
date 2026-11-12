@@ -8,7 +8,8 @@ One-line forms printed by the catalogue builder. They go into the teacher's inst
 t, bt, beat                          film time (s), time in this beat, beat index; read-only
 P = (cos(t), sin(t))                 any formula may read t
 a = 0 in 0..10 step 0.1              slider
-a with animate = bounce|loop|loop-down|once|once-down|off, seconds = 8
+a with loop = bounce|up|down|once|random, period = 8
+Animate(a)    Animate(a, false)    the numbers area's slider animation
 x = state(x0)  x = state(x0, v0)     a value that changes by a rate (Number or Point)
 x' = expr      x'' = expr            rate rule; in x' a pair (vx, vy) is a Vector
 @solver step 1/480                   smaller step for stiff or fast systems
@@ -51,7 +52,7 @@ The model never sets `t`. It uses `Play()`, `Pause()`, and the film tools (`seek
 | Wanted motion | Use |
 |---|---|
 | A path with a formula (circle, projectile, wave) | `t` in formulas |
-| Something that sweeps a parameter back and forth for the learner to watch | A slider with `animate` |
+| Something that sweeps a parameter back and forth for the learner to watch | A slider with `loop` and `period`, then `Animate(a)` |
 | A physical system with forces (pendulum, spring, orbit) | `state` and rates |
 | A crowd of small things (fire, rain, stars) | `Particles` |
 | A trail | `Trace` |
@@ -162,14 +163,14 @@ Redefinition keeps the id. If the model had written `windd * age^2` the result w
 Teacher: "Let the point run around the circle by itself."
 
 ```text
-O = (0, 0)
-c = Circle(O, 2)
-P = PointOn(c, 0)
-P with animate = loop, seconds = 6
+s = 0 in 0..2 pi
+s with loop = up, period = 6
+P = (2 cos(s), 2 sin(s))
+Animate(s)
 Trace(P)
 ```
 
-Teacher: "Now it traces the circle." Then `P with animate = off` when it wants to freeze the picture.
+Teacher: "Now it traces the circle." Then `Animate(s, false)` when it wants to freeze the picture.
 
 ## 6. Token budget
 

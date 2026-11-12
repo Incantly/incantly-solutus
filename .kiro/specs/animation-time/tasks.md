@@ -18,3 +18,10 @@ Pipeline: `docs/process/pipeline.md`. Branch: `feat/animation-time`.
 - [ ] 7. Review the code against the docs; fix the must-fix items in one round (spec reviewer, fixer)
 - [ ] 8. Build the area's studio screens (studio builder)
 - [ ] 9. Merge into `integration` once lint, typecheck and tests pass (integrator)
+- [x] 10. Second round (R9): traces of states after a seek; the slice over the clock reads the solver's dense output
+- [x] 11. Drag traces through a kernel drag listener (R9.2)
+- [x] 12. `@input` lines: save and load the input log (R9.3)
+- [x] 13. `catching_up`, `stiff_system`, `path_pending`, `particle_shed` (R9.4 to R9.7)
+- [x] 14. `Gradient`, `px` sizes, `layer` (R9.7)
+- [x] 15. One slider animation: the player drives the numbers area's `Animate`; `with animate` is refused (R9.8)
+- [x] 16. Spec tests for R9 (`second.test.ts`)

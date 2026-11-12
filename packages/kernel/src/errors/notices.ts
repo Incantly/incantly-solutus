@@ -31,6 +31,10 @@ export const NOTICE_TABLE: Readonly<Record<string, NoticeSpec>> = Object.freeze(
   log_rewrite: { code: 'A103', severity: 'info', template: 'Entries after t = {from} s for {name} were replaced ({count}).' },
   trace_decimated: { code: 'A104', severity: 'info', template: 'The trace of {name} passed {points} points; older parts are coarser now.' },
   gpu_unsupported: { code: 'A105', severity: 'info', template: '{name} is drawn on the CPU: {reason}.' },
+  stiff_system: { code: 'A106', severity: 'warning', template: 'The states {states} move fast for the step (ω ≈ {omega}); they may become unstable.' },
+  catching_up: { code: 'A107', severity: 'info', template: 'Catching up from t = {from} s to {to} s.' },
+  particle_shed: { code: 'A108', severity: 'info', template: '{name} draws {quality} of its particles to keep the frame rate.' },
+  path_pending: { code: 'A109', severity: 'info', template: 'The path is waiting for the solver: {ready} of it is ready.' },
 });
 
 const AREA_NOTICES = new Map<string, NoticeSpec>();

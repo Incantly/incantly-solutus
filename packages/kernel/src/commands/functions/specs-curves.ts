@@ -2001,7 +2001,20 @@ function runPath(call: RuleCall): unknown {
   const setup = openSlice(call, 't', target);
   if (!setup.ok) return call.fail(setup.reason, setup.detail);
   const sw = sweepLocus(setup.value, from, to);
-  if (sw.spent) return call.fail('timeout', 'The work budget ran out.');
+  if (sw.spent && sw.pieces.every((piece) => piece.length < 2)) return call.fail('timeout', 'The work budget ran out.');
+  if (sw.spent) {
+    // a path over states can reach past what the solver has integrated so far: draw what is ready and say how much
+    // (animation-time 9.8); the later samples are a suffix of the range, so a bisection finds where they start
+    let lo = from;
+    let hi = to;
+    for (let k = 0; k < 12; k++) {
+      const mid = (lo + hi) / 2;
+      const c = setup.value.run([mid])[0];
+      if (c && !(c.defined === false && c.reason === 'timeout')) lo = mid;
+      else hi = mid;
+    }
+    call.notify('path_pending', { ready: `${Math.round((100 * (lo - from)) / (to - from))}%` });
+  }
   return toSampledCurve(sw.pieces, 'path');
 }
 

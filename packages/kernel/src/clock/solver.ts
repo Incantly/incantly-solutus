@@ -136,6 +136,26 @@ export class StateSolver {
     this.addEntry({ kind: 'reset', t, n: this.gridAt(t) });
   }
 
+  /** A saved log entry, read back with the script (`@input`): it goes in as it was, at its grid step. */
+  restoreEntry(e: { kind: 'set'; t: number; id: ObjId; value: unknown } | { kind: 'reset'; t: number }): void {
+    if (!Number.isFinite(e.t)) return;
+    if (e.kind === 'set') {
+      if (!this.base.has(e.id)) this.base.set(e.id, this.fig.byId(e.id)?.p.value);
+      this.addEntry({ kind: 'set', t: e.t, n: this.gridAt(e.t), id: e.id, value: e.value });
+    } else this.addEntry({ kind: 'reset', t: e.t, n: this.gridAt(e.t) });
+  }
+
+  /** A saved input's value before its first entry. */
+  restoreBase(id: ObjId, value: unknown): void {
+    this.base.set(id, value);
+    this.dirtyInputs = true;
+  }
+
+  /** Each logged input's value before its first entry, for saving. */
+  get inputBase(): ReadonlyMap<ObjId, unknown> {
+    return this.base;
+  }
+
   /** The input log, oldest first (design 8.2). */
   get inputLog(): readonly LogEntry[] {
     return this.log;
@@ -487,7 +507,10 @@ export class StateSolver {
    */
   private at(n: number): Float64Array {
     this.short = false;
-    if (this.y0 === undefined) this.y0 = this.initial();
+    if (this.y0 === undefined) {
+      this.y0 = this.initial();
+      this.checkStiffness(this.y0);
+    }
     let from: number;
     let y: Float64Array;
     if (this.curY !== undefined && this.curN >= 0 && this.curN <= n) {
@@ -528,13 +551,49 @@ export class StateSolver {
    * undefined; the other groups keep stepping.
    */
   sync(): ObjRec[] {
+    const target = this.fig.clockT();
+    const r = this.statesAt(target);
+    if (!r) {
+      this.catching = undefined;
+      return [];
+    }
+    // design 8.5: a far seek or a replay after a log change finishes over the next calls; say so once while it lasts
+    if (this.short) {
+      const from = Number((this.t0 + this.curN * this.h).toFixed(3));
+      if (!this.catching) this.warnings.push(makeNotice('catching_up', { from, to: Number(target.toFixed(3)) }, this.layout.map((l) => l.rec.p.name)));
+      this.catching = { from, to: target };
+    } else this.catching = undefined;
+    const changed: ObjRec[] = [];
+    for (const [rec, cell] of r) if (this.fig.write(rec, cell)) changed.push(rec);
+    return changed;
+  }
+
+  private catching: { from: number; to: number } | undefined;
+
+  /** While the states are behind the clock (a replay in slices): how far they have got and where they are going. */
+  get catchingUp(): { readonly from: number; readonly to: number } | undefined {
+    return this.catching;
+  }
+
+  /** The state objects, in layout order. */
+  stateObjects(): ObjRec[] {
     this.rebuild();
-    if (this.layout.length === 0) return [];
+    return this.layout.map((l) => l.rec);
+  }
+
+  /**
+   * The cell each state has at film time `time`, without writing anything: from the dense output (checkpoints and the
+   * Hermite step between grid points). Undefined when there are no states. The figure's slice over the clock reads it, so
+   * a trace or a path of a state-driven object is right for any time, not only the current one.
+   */
+  statesAt(time: number): (readonly [ObjRec, Cell])[] | undefined {
+    this.rebuild();
+    if (this.layout.length === 0) return undefined;
     const saved = this.cone.map((r) => r.cell);
     const stateCells = this.layout.map((l) => l.rec.cell);
     const logged = [...this.base.keys()].map((id) => this.fig.byId(id)).filter((r): r is ObjRec => r !== undefined);
     const loggedCells = logged.map((r) => r.cell);
-    const t = Math.max(this.t0, this.fig.clockT());
+    const t = Math.max(this.t0, time);
     const pos = (t - this.t0) / this.h;
     const n = Math.floor(pos + 1e-9);
     const frac = pos - n;
@@ -577,17 +636,17 @@ export class StateSolver {
         r.cell = loggedCells[i] as Cell;
       });
     }
-    const changed: ObjRec[] = [];
+    const out: (readonly [ObjRec, Cell])[] = [];
     if (behind) {
       // the target is further than one call goes: the states are undefined (timeout) until later calls catch up
-      for (const l of this.layout) if (this.fig.write(l.rec, { defined: false, reason: 'timeout' })) changed.push(l.rec);
-      return changed;
+      for (const l of this.layout) out.push([l.rec, { defined: false, reason: 'timeout' }]);
+      return out;
     }
-    const out = new Set<number>();
+    const bad = new Set<number>();
     this.groupNames.forEach((names, g) => {
       const at = this.failedAt[g] as number;
       if (at > n + (between ? 1 : 0)) return;
-      out.add(g);
+      bad.add(g);
       if (at > 0) {
         const key = `${names.join(',')}@${at}`;
         if (!this.warnedAt.has(key)) {
@@ -597,18 +656,81 @@ export class StateSolver {
       }
     });
     for (const l of this.layout) {
-      if (out.has(l.group)) {
-        if (this.fig.write(l.rec, { defined: false, reason: 'not_finite' })) changed.push(l.rec);
+      if (bad.has(l.group)) {
+        out.push([l.rec, { defined: false, reason: 'not_finite' }]);
         continue;
       }
       const v = l.point ? { x: result[l.offset] as number, y: result[l.offset + 1] as number } : (result[l.offset] as number);
-      if (this.fig.write(l.rec, { defined: true, value: v })) changed.push(l.rec);
+      out.push([l.rec, { defined: true, value: v }]);
     }
-    return changed;
+    return out;
   }
 
   private readonly warnedAt = new Set<string>();
+
+  /**
+   * Warns (`stiff_system`) when the fastest motion at the start is too fast for the step: an estimate of the Jacobian's
+   * spectral radius ω from a few power-iteration steps on finite differences of the rates, warned when ω h > 2. RK4 goes
+   * unstable a little above that, so the warning comes before `unstable_state`.
+   */
+  private checkStiffness(y: Float64Array): void {
+    const dim = this.dim;
+    if (dim === 0) return;
+    const savedBad = this.stageBad.slice();
+    const savedIdx = this.stepIdx;
+    try {
+      this.stepIdx = 0;
+      const f0 = new Float64Array(dim);
+      const f1 = new Float64Array(dim);
+      const yp = new Float64Array(dim);
+      this.deriv(y, this.t0, f0);
+      let v = new Float64Array(dim);
+      for (let i = 0; i < dim; i++) v[i] = (i % 2 === 0 ? 1 : -0.5) / Math.sqrt(dim);
+      let yn = 0;
+      for (let i = 0; i < dim; i++) yn = Math.max(yn, Math.abs(y[i] as number));
+      const eps = 1e-6 * Math.max(1, yn);
+      const logs: number[] = [];
+      for (let k = 0; k < STIFF_ITERATIONS; k++) {
+        for (let i = 0; i < dim; i++) yp[i] = (y[i] as number) + eps * (v[i] as number);
+        this.deriv(yp, this.t0, f1);
+        let nrm = 0;
+        const jv = new Float64Array(dim);
+        for (let i = 0; i < dim; i++) {
+          jv[i] = ((f1[i] as number) - (f0[i] as number)) / eps;
+          nrm += (jv[i] as number) ** 2;
+        }
+        nrm = Math.sqrt(nrm);
+        if (!(nrm > 0) || !Number.isFinite(nrm)) break;
+        logs.push(Math.log(nrm));
+        for (let i = 0; i < dim; i++) jv[i] = (jv[i] as number) / nrm;
+        v = jv;
+      }
+      // the geometric mean over an even number of steps: an oscillation's steps alternate between k and 1, so the mean is
+      // its frequency √k
+      const m = logs.length - (logs.length % 2);
+      if (m < 2) return;
+      let sum = 0;
+      for (let i = 0; i < m; i++) sum += logs[i] as number;
+      const omega = Math.exp(sum / m);
+      this.lastOmega = omega;
+      if (omega * this.h <= 2) return;
+      const names = this.layout.map((l) => l.rec.p.name);
+      const key = `stiff:${names.join(',')}:${this.h}`;
+      if (this.warnedAt.has(key)) return;
+      this.warnedAt.add(key);
+      this.warnings.push(makeNotice('stiff_system', { states: names.join(', '), omega: Number(omega.toPrecision(3)), hint: 'lower the stiffness, add damping, or use @solver step 1/960' }, names));
+    } finally {
+      this.stageBad = savedBad;
+      this.stepIdx = savedIdx;
+    }
+  }
+
+  /** The last estimate of the fastest rate (1/s), for tests and the player bar. */
+  lastOmega = 0;
 }
+
+/** Power-iteration steps of the stiffness estimate (even). */
+const STIFF_ITERATIONS = 8;
 
 function sameSignature(a: Signature, b: Signature): boolean {
   if (a.h !== b.h || a.t0 !== b.t0 || a.deps.length !== b.deps.length) return false;

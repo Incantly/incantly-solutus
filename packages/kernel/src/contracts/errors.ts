@@ -136,6 +136,10 @@ export interface AreaNoticeKinds {
   log_rewrite: true;
   trace_decimated: true;
   gpu_unsupported: true;
+  stiff_system: true;
+  catching_up: true;
+  particle_shed: true;
+  path_pending: true;
 }
 
 export type NoticeKind = CoreNoticeKind | Extract<keyof AreaNoticeKinds, string>;

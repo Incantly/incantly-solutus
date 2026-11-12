@@ -57,9 +57,9 @@ Every slider that can animate shows a small control to its right:
 
 | Part | Meaning |
 |---|---|
-| ▶ / ⏸ | Turns `animate` on (`bounce` by default) or off for this slider only |
-| `8 s` | `seconds`; click to edit (menu 2, 4, 8, 16, 32, custom) |
-| ⇔ / → / ← / ⇥ | Mode: bounce, loop, loop-down, once (click to cycle) |
+| ▶ / ⏸ | `Animate(a)` or `Animate(a, false)` for this slider only (`loop = bounce` by default) |
+| `8 s` | `period`; click to edit (menu 2, 4, 8, 16, 32, custom) |
+| ⇔ / → / ← / ⇥ | `loop`: bounce, up, down, once (click to cycle) |
 
 Behaviour:
 

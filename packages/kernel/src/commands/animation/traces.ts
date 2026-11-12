@@ -48,7 +48,13 @@ interface TraceData {
   dt: number;
   /** The film time up to which the trace is filled. */
   until: number;
+  /** Drag samples (design 9.5): appended on each drag step, never rebuilt by a seek. */
+  drag: { xs: number[]; ys: number[]; shots: unknown[]; every: number; seen: number };
+  /** The object's definition when tracing started: a redefinition forgets the drag samples (its meaning changed). */
+  definition: string;
 }
+
+const emptyDrag = (): TraceData['drag'] => ({ xs: [], ys: [], shots: [], every: 1, seen: 0 });
 
 const STORES = new WeakMap<Figure, Map<ObjId, TraceData>>();
 
@@ -71,7 +77,7 @@ export function startTrace(figure: Figure, id: ObjId, options: TraceOptions): No
   const view = figure.get(id);
   if (!view || !isTraceable(view.type)) return [];
   const kind = POINT_TRACE_TYPES.has(view.type) ? 'point' : 'shape';
-  const data: TraceData = { options, kind, times: [], xs: [], ys: [], shots: [], dt: kind === 'point' ? POINT_DT : SHAPE_DT, until: Number.NEGATIVE_INFINITY };
+  const data: TraceData = { options, kind, times: [], xs: [], ys: [], shots: [], dt: kind === 'point' ? POINT_DT : SHAPE_DT, until: Number.NEGATIVE_INFINITY, drag: emptyDrag(), definition: view.definition };
   storeOf(figure).set(id, data);
   return rebuild(figure, id, data, figure.clock().t);
 }
@@ -91,6 +97,7 @@ export function clearTrace(figure: Figure, id: ObjId): boolean {
   d.shots = [];
   d.dt = d.kind === 'point' ? POINT_DT : SHAPE_DT;
   d.until = figure.clock().t;
+  d.drag = emptyDrag();
   return true;
 }
 
@@ -106,16 +113,90 @@ export function traceOptionsOf(figure: Figure, id: ObjId): TraceOptions | undefi
   return storeOf(figure).get(id)?.options;
 }
 
-/** A point's trace as packed `x, y` pairs in maths coordinates (`NaN, NaN` for a gap): the view's `trace` value. */
+/**
+ * A point's trace as packed `x, y` pairs in maths coordinates (`NaN, NaN` for a gap): the view's `trace` value. The time
+ * samples come first; drag samples, if any, follow after a gap.
+ */
 export function tracePoints(figure: Figure, id: ObjId): Float64Array | undefined {
   const d = storeOf(figure).get(id);
   if (!d || d.kind !== 'point') return undefined;
-  const out = new Float64Array(d.xs.length * 2);
-  for (let i = 0; i < d.xs.length; i++) {
-    out[2 * i] = d.xs[i] as number;
-    out[2 * i + 1] = d.ys[i] as number;
-  }
+  const nd = d.drag.xs.length;
+  const sep = nd > 0 && d.xs.length > 0 ? 1 : 0;
+  const out = new Float64Array((d.xs.length + sep + nd) * 2);
+  let k = 0;
+  const put = (x: number, y: number): void => {
+    out[k++] = x;
+    out[k++] = y;
+  };
+  for (let i = 0; i < d.xs.length; i++) put(d.xs[i] as number, d.ys[i] as number);
+  if (sep) put(Number.NaN, Number.NaN);
+  for (let i = 0; i < nd; i++) put(d.drag.xs[i] as number, d.drag.ys[i] as number);
   return out;
+}
+
+/** A point's drag samples only, as packed `x, y` pairs. */
+export function traceDragPoints(figure: Figure, id: ObjId): Float64Array | undefined {
+  const d = storeOf(figure).get(id);
+  if (!d || d.kind !== 'point') return undefined;
+  const out = new Float64Array(d.drag.xs.length * 2);
+  d.drag.xs.forEach((x, i) => {
+    out[2 * i] = x;
+    out[2 * i + 1] = d.drag.ys[i] as number;
+  });
+  return out;
+}
+
+/** A shape's drag snapshots, oldest first. */
+export function traceDragSnapshots(figure: Figure, id: ObjId): readonly unknown[] | undefined {
+  const d = storeOf(figure).get(id);
+  if (!d || d.kind !== 'shape') return undefined;
+  return d.drag.shots.slice();
+}
+
+/**
+ * The drag listener (design 9.5): each drag step appends the current value of every traced object it changed. Drag
+ * samples are capped like time samples (thinned by 2 past the cap) and are not replayed by a seek. A redefinition of the
+ * traced object forgets them.
+ */
+export function traceDragStep(figure: Figure, changed: readonly ObjId[]): void {
+  const store = storeOf(figure);
+  if (store.size === 0) return;
+  for (const id of changed) {
+    const d = store.get(id);
+    if (!d) continue;
+    const view = figure.get(id);
+    if (!view) {
+      store.delete(id);
+      continue;
+    }
+    if (view.definition !== d.definition) {
+      d.definition = view.definition;
+      d.drag = emptyDrag();
+    }
+    const g = d.drag;
+    // after thinning, keep only every `every`-th step so the spacing stays even
+    g.seen++;
+    if ((g.seen - 1) % g.every !== 0) continue;
+    const c = figure.cellOf(id) as { defined: boolean; value?: unknown } | undefined;
+    if (d.kind === 'point') {
+      const p = c?.defined ? (c.value as { x?: unknown; y?: unknown }) : undefined;
+      const ok = typeof p?.x === 'number' && typeof p.y === 'number' && Number.isFinite(p.x) && Number.isFinite(p.y);
+      g.xs.push(ok ? (p.x as number) : Number.NaN);
+      g.ys.push(ok ? (p.y as number) : Number.NaN);
+      if (g.xs.length > MAX_TRACE_POINTS) {
+        const keep = (_: unknown, i: number): boolean => i % 2 === 0;
+        g.xs = g.xs.filter(keep);
+        g.ys = g.ys.filter(keep);
+        g.every *= 2;
+      }
+    } else {
+      g.shots.push(c?.defined ? c.value : undefined);
+      if (g.shots.length > MAX_SHAPE_SNAPSHOTS) {
+        g.shots = g.shots.filter((_, i) => i % 2 === 0);
+        g.every *= 2;
+      }
+    }
+  }
 }
 
 /** A shape's snapshots with their film times, oldest first (`value` is `undefined` for a gap). */
@@ -138,9 +219,14 @@ export function tickTraces(figure: Figure, t: number, how: 'frame' | 'seek'): No
   const notices: Notice[] = [];
   const store = storeOf(figure);
   for (const [id, d] of store) {
-    if (!figure.get(id)) {
+    const view = figure.get(id);
+    if (!view) {
       store.delete(id);
       continue;
+    }
+    if (view.definition !== d.definition) {
+      d.definition = view.definition;
+      d.drag = emptyDrag();
     }
     const far = t < d.until || t - d.until > MAX_SAMPLES_PER_FRAME * d.dt;
     if (how === 'seek' || far) notices.push(...rebuild(figure, id, d, t));
@@ -229,9 +315,9 @@ function cut(d: TraceData, k: number): void {
 function sampleInto(figure: Figure, id: ObjId, d: TraceData, times: readonly number[]): void {
   const slice = figure.slice('t', id);
   let cells: { defined: boolean; value?: unknown }[];
-  if ('run' in slice && slice.chain.length > 0) cells = slice.run(times) as { defined: boolean; value?: unknown }[];
+  if ('run' in slice && (slice.chain.length > 0 || (slice.states?.length ?? 0) > 0)) cells = slice.run(times) as { defined: boolean; value?: unknown }[];
   else {
-    // it does not move with time (or moves only through states and drags): every sample is its value now
+    // it does not move with time (it moves only through drags): every sample is its value now
     const c = figure.cellOf(id);
     cells = times.map(() => (c ? (c as { defined: boolean; value?: unknown }) : { defined: false }));
   }

@@ -6,6 +6,7 @@
  */
 import type { ErrorObject } from '../../contracts/errors';
 import { err } from '../../errors/table';
+import { PARTICLE_COMMANDS } from './colour';
 import type { Figure } from '../../graph/figure';
 import type { LineRewrite } from '../../graph/registry';
 import {
@@ -16,11 +17,12 @@ import {
   PARTICLE_PARAMS,
   RENDERERS,
   SHAPES,
+  SIZE_UNITS,
   isParticlesValue,
 } from './particles';
 
 const ORDER = Object.keys(PARTICLE_PARAMS);
-const WORDS: Readonly<Record<string, readonly string[]>> = { shape: SHAPES, blend: BLENDS, renderer: RENDERERS };
+const WORDS: Readonly<Record<string, readonly string[]>> = { shape: SHAPES, blend: BLENDS, renderer: RENDERERS, sizeUnit: SIZE_UNITS };
 const BODIES: ReadonlySet<string> = new Set(['pos', 'color', 'size', 'alpha', 'angle']);
 const NAME_RE = /^[A-Za-zͰ-Ͽ][A-Za-z0-9_Ͱ-Ͽ]*$/;
 
@@ -105,6 +107,7 @@ export function particlesLineRewrite(host: unknown, text: string): LineRewrite |
   let out = text;
   let shift = 0;
   let count: number | undefined;
+  let pxSize = false;
   for (const [k, p] of call.pieces.entries()) {
     const name = p.name ?? ORDER[k];
     if (name === undefined) continue;
@@ -137,8 +140,31 @@ export function particlesLineRewrite(host: unknown, text: string): LineRewrite |
     if (name === 'life' && /^-?\d+(\.\d+)?$/.test(p.value) && !(Number(p.value) > 0)) {
       return { error: fail('bad_particle_value', text, p.at, p.value.length, `life must be a number of seconds above 0; got ${p.value}.`, { hint: 'Try life = 1.' }) };
     }
+    if (name === 'layer' && /^-?\d+(\.\d+)?$/.test(p.value)) {
+      const l = Number(p.value);
+      if (!Number.isInteger(l) || l < 0 || l > 9) {
+        return { error: fail('bad_particle_value', text, p.at, p.value.length, `layer must be a whole number from 0 to 9; got ${p.value}.`, { hint: 'Try layer = 0.' }) };
+      }
+    }
+    if (name === 'size') {
+      // size = px(…) is a size in screen pixels (10.2): kept as the formula inside and sizeUnit = "px"
+      const px = /^px\s*\(/.exec(p.value);
+      if (px && p.value.endsWith(')') && piecesOf(p.value, px[0].length - 1)?.close === p.value.length - 1) {
+        const inner = p.value.slice(px[0].length, -1).trim();
+        out = out.slice(0, p.at + shift) + inner + out.slice(p.at + shift + p.value.length);
+        shift += inner.length - p.value.length;
+        pxSize = true;
+      }
+    }
     if (BODIES.has(name)) {
-      const cmd = /\b([A-Z][A-Za-z0-9_]*)\s*\(/.exec(p.value);
+      // the first command call, other than the few with a GLSL form (Gradient)
+      let cmd: RegExpExecArray | null = null;
+      for (const m of p.value.matchAll(/\b([A-Z][A-Za-z0-9_]*)\s*\(/g)) {
+        if (!PARTICLE_COMMANDS.has(m[1] as string)) {
+          cmd = m as RegExpExecArray;
+          break;
+        }
+      }
       if (cmd) {
         return { error: fail('particle_command', text, p.at + cmd.index, (cmd[1] as string).length, `${cmd[1] as string} is a command; a particle formula may use only built-in functions.`, {
           token: cmd[1] as string,
@@ -169,6 +195,10 @@ export function particlesLineRewrite(host: unknown, text: string): LineRewrite |
         fingerprintKey: 'particles',
       }) };
     }
+  }
+  if (pxSize && !given.has('sizeUnit')) {
+    const close = call.close + shift;
+    out = `${out.slice(0, close)}, sizeUnit = "px"${out.slice(close)}`;
   }
   return out !== text ? { text: out } : undefined;
 }

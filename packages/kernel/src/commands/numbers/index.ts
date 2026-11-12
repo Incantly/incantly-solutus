@@ -15,6 +15,17 @@ import { isAnimating, registerNumbersCommands } from './commands';
 import { inputTextOf, inputValidOf } from './input';
 import { registerNumbersErrors } from './errors';
 import { registerNumbersProperties, setFieldHooks } from './props';
+import { registerFrameTicker } from '../../clock/player';
+import type { Figure } from '../../graph/figure';
+import { animatingIds, tickAnimations } from './animate';
+
+/**
+ * Animated sliders follow the player's clock (animation-time 5: one way to write slider animation): each frame and each
+ * seek writes their values for the new time, before the other areas' per-frame work reads them.
+ */
+const sliderTicker = (figure: Figure, t: number): void => {
+  if (animatingIds(figure).length > 0) tickAnimations(figure, t);
+};
 
 /** Register every command, property, field, notice and phrase of this area. Idempotent. */
 export function registerNumbers(registry: CommandRegistry): void {
@@ -27,6 +38,7 @@ export function registerNumbers(registry: CommandRegistry): void {
   registerLineHandler(numbersLineHandler);
   registerScriptTail(handlerScriptLines);
   registerDeleteNotes(handlerDeleteNotes);
+  registerFrameTicker(sliderTicker);
 }
 
 export type {

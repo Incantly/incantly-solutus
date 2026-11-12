@@ -93,7 +93,7 @@ export class Player {
 
   /** True while the host should keep calling `frame` (zero idle cost otherwise). */
   needsFrame(): boolean {
-    return this.modeNow === 'playing';
+    return this.modeNow === 'playing' || this.figure.solver.catchingUp !== undefined;
   }
 
   /** The beat start times the figure was given, in seconds. */
@@ -201,7 +201,11 @@ export class Player {
   /** One frame of the host's loop. `now` is the source's reading; without it the player reads the source. */
   frame(now?: number): PlayerState {
     this.notices = [];
-    if (this.modeNow !== 'playing') return this.state;
+    if (this.modeNow !== 'playing') {
+      // paused while the states catch up: each frame runs one more slice of the replay
+      if (this.figure.solver.catchingUp !== undefined) this.figure.flush();
+      return this.state;
+    }
     const reading = typeof now === 'number' && Number.isFinite(now) ? now : this.readSource();
     const raw = this.last === undefined ? 0 : reading - this.last;
     this.last = reading;
