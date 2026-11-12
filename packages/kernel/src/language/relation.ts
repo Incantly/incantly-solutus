@@ -26,7 +26,7 @@ export function children(n: TNode): TNode[] {
     case 'index':
       return [n.target, n.index];
     case 'field':
-      return [n.target];
+      return [n.target, ...(n.args ?? [])];
     case 'point':
       return [n.x, n.y];
     case 'polar':
@@ -230,6 +230,7 @@ function atomKey(n: TNode): string | undefined {
     case 'clock':
       return `k${n.which}`;
     case 'field': {
+      if (n.args) return undefined;
       const t = atomKey(n.target);
       return t === undefined ? undefined : `${t}.${n.field}`;
     }

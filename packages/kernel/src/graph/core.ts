@@ -593,12 +593,29 @@ export class FigureCore {
     const min = c.range.min(this.env) as number;
     const max = c.range.max(this.env) as number;
     const step = c.range.step ? (c.range.step(this.env) as number) : undefined;
-    const ok = typeof min === 'number' && typeof max === 'number' && min === min && max === max && min < max && (step === undefined || (step === step && step > 0 && Number.isFinite(step)));
+    const bounds = typeof min === 'number' && typeof max === 'number' && Number.isFinite(min) && Number.isFinite(max);
+    const stepOk = step === undefined || (step === step && step > 0 && Number.isFinite(step));
+    const ok = bounds && stepOk && min < max;
+    const before = r.range;
     r.range = ok ? { min, max, ...(step !== undefined ? { step } : {}) } : undefined;
-    if (!ok || r.p.kind !== 'free' || !r.cell.defined || typeof r.cell.value !== 'number') return false;
-    const v = r.cell.value;
-    const c2 = Math.min(max, Math.max(min, v));
-    if (c2 === v) return false;
+    if (r.p.kind !== 'free') return false;
+    // a bound that is undefined or crosses makes the slider undefined; it keeps its last value for when the range returns
+    // (numbers-sliders design 3.4)
+    if (!ok) {
+      const reason = bounds && stepOk ? 'empty_range' : 'range_undefined';
+      if (!r.cell.defined && r.cell.reason === reason) return false;
+      if (typeof r.p.value !== 'number') return false;
+      return this.setCell(r, { defined: false, reason });
+    }
+    const last = r.cell.defined ? r.cell.value : (r.cell.reason === 'range_undefined' || r.cell.reason === 'empty_range') ? r.p.value : undefined;
+    if (typeof last !== 'number') return false;
+    let c2 = Math.min(max, Math.max(min, last));
+    // a step that changed re-snaps the value to the new grid
+    if (step !== undefined && before?.step !== undefined && before.step !== step) {
+      const q = min + Math.round((c2 - min) / step) * step;
+      c2 = Math.min(max, Math.max(min, Number(q.toPrecision(12))));
+    }
+    if (c2 === last && r.cell.defined) return false;
     r.p = { ...r.p, value: c2 };
     this.setCell(r, { defined: true, value: c2 });
     return true;

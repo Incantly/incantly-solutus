@@ -64,7 +64,7 @@ function rewriteExpr(e: Expr, bindings: ReadonlyMap<string, Binding>): Expr {
     case 'index':
       return { ...e, target: rewriteExpr(e.target, bindings), index: rewriteExpr(e.index, bindings) };
     case 'field':
-      return { ...e, target: rewriteExpr(e.target, bindings) };
+      return { ...e, target: rewriteExpr(e.target, bindings), ...(e.args ? { args: e.args.map((a) => rewriteExpr(a, bindings)) } : {}) };
     case 'fact':
     case 'deg':
       return { ...e, arg: rewriteExpr(e.arg, bindings) };

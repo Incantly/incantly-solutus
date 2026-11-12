@@ -482,6 +482,7 @@ class Parser {
           break;
         case 'field':
           walk(n.target);
+          n.args?.forEach(walk);
           break;
         case 'tuple':
         case 'list':
@@ -860,6 +861,14 @@ class Parser {
           this.next();
           this.next();
           e = { k: 'field', target: e, field: n.name ?? n.text, fs: n.s, fe: n.e, s: e.s, e: n.e };
+          // g.value(x): a field that holds a function, called (controls-scripting design 3.1)
+          const open = this.peek();
+          if (open.text === '(' && open.s === n.e) {
+            this.next();
+            const args = this.parseArgList(')', n.name ?? n.text, true);
+            const close = this.expectCloser(open, ')');
+            e = { ...e, args: args.map((a) => a.value), e: close.e };
+          }
           continue;
         }
         this.next();

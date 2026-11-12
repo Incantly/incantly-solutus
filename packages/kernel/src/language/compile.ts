@@ -463,6 +463,7 @@ class Compiler {
       case 'index':
         return this.compileIndex(n);
       case 'field': {
+        if (n.args) return this.compileFieldCall(n as TNode & { n: 'field'; args: readonly TNode[] });
         const t = this.compile(n.target);
         const type = n.target.ty.k;
         const field = n.field;
@@ -863,6 +864,33 @@ class Compiler {
         prev = next;
       }
       return all;
+    };
+  }
+
+  /** `g.value(x)`: read the field, which holds a function, and call it. */
+  compileFieldCall(n: TNode & { n: 'field'; args: readonly TNode[] }): Fn {
+    const { args: argNodes, ...plain } = n;
+    const field = this.compile({ ...plain, ty: { k: 'Function', ret: 'Number', arity: argNodes.length } } as TNode);
+    const args = argNodes.map((a) => this.compile(a));
+    const isN = isNum(n);
+    return (env) => {
+      const fv = field(env) as FunctionValue | undefined;
+      if (fv === undefined || typeof fv !== 'object' || typeof fv.call !== 'function') {
+        if (env.reason === undefined) fail(env, 'not_set', n.field);
+        return isN ? NAN : undefined;
+      }
+      const xs: number[] = [];
+      for (const a of args) {
+        const x = a(env);
+        if (x !== x) return isN ? NAN : undefined;
+        xs.push(x);
+      }
+      const v = xs.length === 1 && fv.call1 && isN ? fv.call1(xs[0] as number) : fv.call(...xs);
+      if (v === undefined || (typeof v === 'number' && v !== v)) {
+        if (env.reason === undefined) fail(env, 'not_finite');
+        return isN ? NAN : undefined;
+      }
+      return v;
     };
   }
 

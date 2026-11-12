@@ -23,6 +23,7 @@ import { lineRefStarts, refStarts, renameNode, renameStyleItem } from './rename'
 import type { ApplyOptions, BatchOptions, BatchResult, ChangeReport, Description, Persist, RateRule, StyleEntry, TxOk, TxResult } from './types';
 import { fitsType, sameValue, valueSource } from './values';
 import type { InvertCall } from './registry';
+import { deleteNotes } from './registry';
 import { toEffective } from './props';
 
 /**
@@ -37,6 +38,8 @@ const WRITE_WHYS: readonly string[] = ['drag', 'slider', 'show_me', 'api', 'solv
 export interface SetFreeOptions {
   /** Change a fixed object (the teacher's tool passes this only when it says so). */
   force?: boolean;
+  /** Why the value is undefined, when the write leaves it undefined (a slider given inf is `not_finite`). */
+  reason?: import('../contracts/values').UndefReason;
 }
 
 /** What a free-value write reports. */
@@ -195,6 +198,7 @@ export class FigureHist extends FigureTx {
       for (const o of set) if (this.isFixed(o)) return this.lockedError(parsed, o);
     }
     const names = set.map((o) => o.p.name);
+    rep.warnings.push(...deleteNotes(this, names));
     if (opts.dryRun) {
       rep.removed.push(...names);
       return this.okResult(parsed, 'delete', `deleted ${names.join(', ')}`, rep, { dryRun: true, affected: names.slice(1) });
@@ -639,14 +643,15 @@ export class FigureHist extends FigureTx {
         }
       }
     }
-    const cell = v === undefined ? ({ defined: false, reason: 'explicit' } as const) : ({ defined: true, value: v } as const);
+    const reason = opts.reason ?? 'explicit';
+    const cell = v === undefined ? ({ defined: false, reason } as const) : ({ defined: true, value: v } as const);
     if (rec.cell.defined === cell.defined && (!cell.defined || sameValue((rec.cell as { value: unknown }).value, v)) && (cell.defined || !rec.cell.defined)) {
       return { ok: true, changed: false };
     }
     // a write that is journalled now comes after the gesture that was still open (KERN-SM-11)
     if (why === 'show_me' || why === 'api') this.commitDrag();
     const before = rec.p;
-    const after: Persist = { ...before, ...(v === undefined ? { freeReason: 'explicit' as const } : {}), value: v };
+    const after: Persist = { ...before, ...(v === undefined ? { freeReason: reason } : {}), value: v };
     if (why === 'drag' || why === 'slider') {
       if (!this.gesture.has(rec)) this.gesture.set(rec, before);
     }

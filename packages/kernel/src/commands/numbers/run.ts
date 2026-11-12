@@ -188,7 +188,7 @@ interface Expansion {
   aborted?: ErrorObject;
 }
 
-function checkExprProbe(
+export function checkExprProbe(
   figure: Figure,
   text: string,
   bindings: ReadonlyMap<string, Binding>,

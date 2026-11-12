@@ -42,6 +42,8 @@ declare module '../../contracts/errors' {
     unit_inferred: true;
     step_fallback: true;
     step_below_precision: true;
+    // controls-scripting
+    handler_steps_broken: true;
   }
 }
 

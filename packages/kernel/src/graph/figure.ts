@@ -18,6 +18,7 @@ import type { FigureOptions } from './core';
 import { FigureHist, merge } from './hist';
 import { SCRIPT_VERSION, emptyReport } from './tx';
 import { defaultsFor } from './props';
+import { scriptTails } from './registry';
 import type { Cell, ChangeReport, EffectiveStyle, FrameDelta, Slice, StyleEntry, TxResult } from './types';
 
 export type { FigureOptions, Slice };
@@ -408,6 +409,7 @@ export class Figure extends FigureHist {
         if (rr) lines.push(printLineNode(rr.node));
       }
     }
+    lines.push(...scriptTails(this));
     return lines.join('\n') + '\n';
   }
 

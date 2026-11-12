@@ -28,7 +28,7 @@ import { FigureBase } from './base';
 import { ObjRec } from './core';
 import { coerceProp, defaultsFor, isValidKey, validKeysFor } from './props';
 import type { ActionRule } from './registry';
-import { runLineChecks } from './registry';
+import { runLineChecks, runLineHandlers, runLineRewriters } from './registry';
 import type { ApplyOptions, Cell, ChangeReport, Persist, RateRule, StyleEntry, TxOk, TxOp, TxResult } from './types';
 import { sameValue, valueSource } from './values';
 
@@ -248,6 +248,21 @@ export class FigureTx extends FigureBase {
     const notices: Notice[] = [];
     let parsed: ParsedLine;
     if (typeof input === 'string') {
+      // a line kind an area owns outright (an `on` line) is carried out by the area, as one undo entry
+      const handled = runLineHandlers(this, input, { dryRun: opts.dryRun === true, line: lineNo });
+      if (handled) {
+        if ('ok' in handled) return { ...handled, line: lineNo, source: input } as TxResult;
+        if (!opts.dryRun) this.record({ k: 'ext', label: input, undo: handled.undo, redo: handled.redo });
+        const rep = emptyReport();
+        rep.warnings.push(...(handled.notices ?? []));
+        return this.okResult(undefined, 'action', handled.summary, rep, { line: lineNo, ...(opts.dryRun ? { dryRun: true as const } : {}) });
+      }
+      // an area's own reading of the line comes first: it may stand for another line, or be refused
+      const rw = runLineRewriters(this, input);
+      if (rw?.error) return { ...rw.error, line: lineNo, source: input } as TxResult;
+      if (rw?.notices) notices.push(...rw.notices);
+      if (rw?.text !== undefined) input = rw.text;
+      if (rw?.dropRange) opts = { ...opts, dropRange: true };
       const pr = parseLine(input, {
         line: lineNo,
         isTaken: (n) => this.byNameMap.has(n),
@@ -461,7 +476,7 @@ export class FigureTx extends FigureBase {
       const n = notices[i] as Notice;
       if (n.kind === 'clamped' && (n.params as Record<string, unknown>)['name'] === undefined) notices.splice(i, 1);
     }
-    notices.push(makeNotice('clamped', { name, value: valueText(now), end: now > want ? 'low end' : 'high end' }));
+    notices.push(makeNotice('clamped', { name, value: valueText(now), end: now > want ? 'low end' : 'high end', from: want, to: now }));
   }
 
   /** The object a `@step` title marks: the one right after its anchor. */
@@ -598,7 +613,7 @@ export class FigureTx extends FigureBase {
     // a free Number redefined to a plain value keeps its slider range (kernel design B2)
     let node = parsed.node as DefLine;
     const old0 = existing[0];
-    if (old0 && node.k === 'define' && !node.range && (checked.free || assign) && checked.type?.k === 'Number' && old0.p.node.k === 'define' && old0.p.node.range) {
+    if (old0 && !opts.dropRange && node.k === 'define' && !node.range && (checked.free || assign) && checked.type?.k === 'Number' && old0.p.node.k === 'define' && old0.p.node.range) {
       const withRange: LineNode = { ...node, range: old0.p.node.range };
       const again = parseLine(printLineNode(withRange), { line: parsed.line, isTaken: (n) => this.byNameMap.has(n), limits: this.langLimits });
       if (again.ok) {
@@ -706,7 +721,7 @@ export class FigureTx extends FigureBase {
     // a redefinition to the same text refreshes the value and nothing else
     if (redefine && !assign && existing.length === 1 && persists.length === 1) {
       const o = existing[0] as ObjRec;
-      if (printLineNode(o.p.node) === printLineNode(persists[0]?.node as LineNode) && kind === o.p.kind && styleSources[0] instanceof Map && o.p.style.size === (styleSources[0] as Map<string, StyleEntry>).size && !((node as { style?: readonly unknown[] }).style?.length)) {
+      if (printLineNode(o.p.node) === printLineNode(persists[0]?.node as LineNode) && !opts.dropRange && kind === o.p.kind && styleSources[0] instanceof Map && o.p.style.size === (styleSources[0] as Map<string, StyleEntry>).size && !((node as { style?: readonly unknown[] }).style?.length)) {
         notices.push(makeNotice('redefined_to_same', { name: o.p.name }));
         if (!opts.dryRun) {
           this.markDirty(o);
@@ -938,6 +953,9 @@ export class FigureTx extends FigureBase {
         for (let i = e.entries.length - 1; i >= 0; i--) this.revertEntry(e.entries[i] as JournalEntry);
         return;
       }
+      case 'ext':
+        e.undo();
+        return;
     }
   }
 
@@ -974,6 +992,9 @@ export class FigureTx extends FigureBase {
         for (const x of e.entries) this.replayEntry(x);
         return;
       }
+      case 'ext':
+        e.redo();
+        return;
     }
   }
 
