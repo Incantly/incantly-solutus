@@ -63,6 +63,8 @@ export const BUILTIN_CONSTANTS: readonly ConstantSpec[] = [
   { name: 'tau', type: T.Number, value: 2 * Math.PI, doc: '2 pi' },
   { name: 'e', type: T.Number, value: Math.E, doc: '2.71828…' },
   { name: 'deg', type: T.Number, value: Math.PI / 180, unit: 'angle', doc: 'pi / 180, so 30 deg is 30° in radians' },
+  { name: 'turn', type: T.Number, value: 2 * Math.PI, unit: 'angle', doc: 'one full turn, so 0.5turn is a half turn in radians' },
+  { name: 'grad', type: T.Number, value: Math.PI / 200, unit: 'angle', doc: 'pi / 200, so 100grad is a right angle in radians' },
   { name: 'inf', type: T.Number, value: Infinity, doc: 'positive infinity; never stored as a result' },
   { name: 'xaxis', type: T.Line, value: { a: 0, b: 1, c: 0 }, doc: 'the line y = 0' },
   { name: 'yaxis', type: T.Line, value: { a: 1, b: 0, c: 0 }, doc: 'the line x = 0' },
