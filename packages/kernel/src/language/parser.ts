@@ -429,6 +429,20 @@ class Parser {
     this.relationLike = expr.k === 'cmp' || this.containsFreeXY(expr);
     let range: RangeClause | undefined;
     if (this.isKw('in')) range = this.parseRange();
+    else if (this.isKw('step')) {
+      // a step belongs to a range: say so, with the line that has one
+      const t = this.peek();
+      const rest = this.sm.text.slice(t.s).trim();
+      const fixed = `${nameTok.text} = ${this.sm.text.slice(expr.s, expr.e)} in 0..10 ${rest}`;
+      throw new Stop(
+        this.diag.at('syntax', t.s, t.e, 'lang.syntax', { token: 'step', expected: 'in min..max before step' }, {
+          expected: ['in'],
+          hint: `step only follows a range. Give the range first: ${fixed}.`,
+          suggest: [fixed],
+          fingerprintKey: 'step_without_range',
+        }),
+      );
+    }
     const style = this.maybeStyle();
     if (this.isOp('=')) this.unexpected(['end of line']);
     this.finishLine();
@@ -494,12 +508,28 @@ class Parser {
   parseRange(): RangeClause {
     const kw = this.next(); // in
     const from = this.parseExpr();
-    if (!this.isOp('..')) this.unexpected(['..'], { afterOperand: true });
+    if (!this.isOp('..')) {
+      const t = this.peek();
+      const atEnd = t.kind === 'eof' || t.kind === 'nl' || t.kind === 'comment';
+      // two numbers with a gap between them: the two dots of the range are missing
+      if (!atEnd && this.startsOperand(t) && t.kind !== 'kw') {
+        throw new Stop(
+          this.diag.at('syntax', t.s, t.e, 'lang.syntax', { token: this.tokenLabel(t), expected: '..' }, {
+            expected: ['..'],
+            hint: `Expected '..' between the two ends of the range: write ${this.sm.text.slice(from.s, from.e)}..${t.text}.`,
+            fingerprintKey: 'range_dots',
+          }),
+        );
+      }
+      this.unexpected(['..'], { afterOperand: true });
+    }
     this.next();
     const to = this.parseExpr();
     let step: Expr | undefined;
     if (this.isKw('step')) {
       this.next();
+      const t = this.peek();
+      if (t.kind === 'eof' || t.kind === 'nl' || t.kind === 'comment') this.unexpected(['a number after step']);
       step = this.parseExpr();
     }
     return { s: kw.s, e: this.prevEnd(), from, to, ...(step ? { step } : {}) };

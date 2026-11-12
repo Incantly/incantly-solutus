@@ -319,6 +319,12 @@ export class FigureTx extends FigureBase {
     if (n.k !== 'define' || !e.path || e.path.length !== 2 || e.path[0] !== n.target.name || e.path[1] !== n.target.name) return false;
     const r = this.byNameMap.get(n.target.name);
     if (!r || r.p.kind !== 'free') return false;
+    // a bound that reads its own slider is a real cycle: only the value may read the old value
+    if (n.range) {
+      const text = parsed.sm.text.slice(n.range.s, n.range.e);
+      const name = n.target.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      if (new RegExp(`(^|[^\\p{L}\\p{N}_])${name}($|[^\\p{L}\\p{N}_])`, 'u').test(text)) return false;
+    }
     return r.p.type.k === 'Number' || r.p.type.k === 'Point' || r.p.type.k === 'Bool';
   }
 
