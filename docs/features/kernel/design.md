@@ -619,6 +619,24 @@ A rule sees the figure through its `RuleCall`. Besides its own arguments it has 
 - `call.argsOf(id)`: the values of the arguments of the command that defines another object. `P = PointOn(Segment(A, B), 0.3)` gives the segment and `0.3`.
 - `call.slice(source, target, { override: true })`: a slice whose source is defined by a rule. `run(values)` puts each value in place of the source's own value and re-runs what lies between it and the target. `Locus(Q, P)` uses it to move `P` along its path: it finds the path with `argsOf` and feeds the path's points in. Without `override`, a source that is not free is still the error `not_free`.
 
+### What an area can add to a line
+
+Areas plug into how a line is read without changing the core. Each hook is registered once, when the area registers
+its commands, and a hook that throws is skipped.
+
+- `registerLineHandler(handler)`: a line kind the area owns outright, such as `on go click: SetValue(a, 0)`. The handler
+  carries the line out and returns its summary with an `undo` and a `redo`; the kernel records them as one undo entry
+  (`ext`). On a dry run the handler leaves nothing changed. It may also refuse the line with an error.
+- `registerLineRewriter(rewriter)`: reads the line before it is parsed. It may put another line in its place
+  (`a with min = 0, max = 20` becomes the slider's range line), add notices, refuse the line, or ask that a slider's
+  range be dropped (`dropRange`).
+- `registerLineCheck(check)`: runs after the language check and before anything is committed, and may refuse the line.
+- `registerScriptTail(tail)`: lines the area adds at the end of `toScript`, after every object.
+- `registerDeleteNotes(notes)`: notices the area adds to the result of a delete.
+- `registerFieldReader(type, reader)` and `registerFieldTyper(type, typer)`: evaluate and type the fields an area adds to
+  `FIELDS`. A typer types a field from the object itself (`d.value` has the type of the dropdown's options). A field that
+  holds a function can be called: `g.value(x)`.
+
 ### Naming helper for tools
 
 `suggestName(type, hint?)` uses the one name table in the language design (3.7): points `A, B, ... Z, A_1, B_1 ...`; vectors `u v w`; lines, rays and segments `l m n`; numbers `a b c d` (angles `α β γ δ`); functions `f g h p q r`; circles, arcs and curves `c d k`; lists `L M N`; polygons `poly1`; regions `reg1`; texts `text1`; booleans `cond1`. After the letters, a sequence continues with `_1`, `_2` (`l_1`). Skips taken and reserved names. This is for pointer tools and the playground; the teacher always names its own objects.

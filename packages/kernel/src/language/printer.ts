@@ -80,7 +80,7 @@ export function printExpr(e: Expr): string {
     case 'index':
       return `${wrap(e.target, 10)}[${printExpr(e.index)}]`;
     case 'field':
-      return `${wrap(e.target, 10)}.${e.field}`;
+      return `${wrap(e.target, 10)}.${e.field}${e.args ? `(${e.args.map(printExpr).join(', ')})` : ''}`;
     case 'fact':
       return `${wrap(e.arg, 10)}!`;
     case 'deg':

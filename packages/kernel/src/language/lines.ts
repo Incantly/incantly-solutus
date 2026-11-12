@@ -271,6 +271,9 @@ function parseOne(source: string): ParsedLine | undefined {
 
 /* --------------------------------- ranges --------------------------------- */
 
+/** The most steps a slider's range may hold (numbers-sliders design 3.9). */
+const MAX_SLIDER_STEPS = 1_000_000;
+
 function checkRange(c: Checker, r: RangeClause, initial: TNode | undefined): CheckedRange | undefined {
   const from = c.infer(r.from);
   const to = c.infer(r.to);
@@ -297,7 +300,7 @@ function checkRange(c: Checker, r: RangeClause, initial: TNode | undefined): Che
     }
     if (lo >= hi) {
       const suggest = lo > hi ? [c.replaceRange(r.from.s, r.to.e, `${c.textOf(r.to)}..${c.textOf(r.from)}`)] : [];
-      c.err('bad_range', r.from.s, r.to.e, 'lang.bad_range', { why: `The range ${c.textOf(r.from)}..${c.textOf(r.to)} is empty` }, {
+      c.err('bad_range', r.from.s, r.to.e, 'lang.bad_range', { why: `The range ${c.textOf(r.from)}..${c.textOf(r.to)} is empty`, min: lo, max: hi, ...(st !== undefined ? { step: st } : {}) }, {
         forms,
         suggest,
         hint: 'The lower bound must be below the upper bound.',
@@ -305,11 +308,21 @@ function checkRange(c: Checker, r: RangeClause, initial: TNode | undefined): Che
       });
       return undefined;
     }
-    if (st !== undefined && (st <= 0 || st > hi - lo)) {
-      c.err('bad_range', step!.s, step!.e, 'lang.bad_range', { why: st <= 0 ? 'The step must be above zero' : `The step ${st} is larger than the range` }, {
+    // a step larger than the range is allowed: only the two ends are left (numbers design 4)
+    if (st !== undefined && (st <= 0 || !Number.isFinite(st))) {
+      c.err('bad_range', step!.s, step!.e, 'lang.bad_range', { why: st <= 0 ? 'The step must be above zero' : 'The step must be a finite number', min: lo, max: hi, step: st }, {
         forms,
-        hint: 'Use a step above 0 and no larger than max - min.',
+        hint: 'Use a finite step above 0.',
         fingerprintKey: 'step',
+      });
+      return undefined;
+    }
+    if (st !== undefined && (hi - lo) / st > MAX_SLIDER_STEPS) {
+      const got = Math.floor((hi - lo) / st);
+      c.err('limit', r.s, r.e, 'lang.limit', { limit: 'slider_steps', max: MAX_SLIDER_STEPS, got, what: 'slider steps' }, {
+        limit: { name: 'slider_steps', max: MAX_SLIDER_STEPS, got },
+        hint: `Use a larger step or a shorter range: at most ${MAX_SLIDER_STEPS} steps fit on a slider.`,
+        fingerprintKey: 'slider_steps',
       });
       return undefined;
     }

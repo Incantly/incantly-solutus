@@ -77,6 +77,8 @@ export interface Env {
   cause: ObjId | undefined;
   /** Short plain fact for the reason, such as `sqrt(-4)`. */
   detail: string | undefined;
+  /** The figure this environment belongs to, for an area's field reader (`a.min` reads the slider's range from it). */
+  host?: unknown;
   /** Longest list a rule may build (the host's `listSize`); 100,000 when not set. */
   maxList?: number;
   /** Slot-addressed locals: function parameters, binders, particle names. */

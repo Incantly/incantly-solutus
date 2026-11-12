@@ -5,12 +5,14 @@
  * A command form's `rule` factory receives the bound arguments and returns a `CommandRule` (an object command) or an
  * `ActionRule` (an action). The kernel calls `run` whenever the object has to be computed.
  */
-import type { ErrorObject } from '../contracts/errors';
+import type { ErrorObject, Notice } from '../contracts/errors';
 import type { UndefReason, ObjId } from '../contracts/values';
 import type { Limits } from '../errors/limits';
 import type { Slice } from './types';
 import type { CompiledArg } from '../language/compile';
 import type { Env } from '../language/runtime';
+import type { CheckedLine } from '../language/check';
+import type { ParsedLine } from '../language/ast';
 import { checkTable, createCommandTable } from '../language/table';
 import type { CheckTableOptions, CommandForm, CommandSpec, CommandTable, TableProblem } from '../language/table';
 
@@ -139,6 +141,10 @@ export interface ActionCall {
 export interface ActionOutcome {
   readonly summary?: string;
   readonly data?: unknown;
+  /** The action refused to run: the line fails with this error and nothing is changed. */
+  readonly error?: ErrorObject;
+  /** Facts the caller should know about what the action did (a value that was clamped). */
+  readonly notices?: readonly Notice[];
 }
 
 export interface ActionRule {
@@ -177,4 +183,140 @@ export class CommandRegistry {
   all(): readonly CommandSpec[] {
     return this.specs;
   }
+}
+
+/* ------------------------------ line checks ------------------------------ */
+
+/**
+ * An area's own refusal of a line that the language accepted, asked before anything is committed (errors design 5.0).
+ * `figure` is the figure the line is applied to. A returned error fails the line and nothing changes. Must be pure.
+ */
+export type LineCheck = (figure: unknown, line: CheckedLine, parsed: ParsedLine) => ErrorObject | undefined;
+
+const LINE_CHECKS: LineCheck[] = [];
+
+/** Registers a line check once. */
+export function registerLineCheck(check: LineCheck): void {
+  if (!LINE_CHECKS.includes(check)) LINE_CHECKS.push(check);
+}
+
+/** The first refusal of the registered checks, or `undefined`. A check that throws is skipped. */
+export function runLineChecks(figure: unknown, line: CheckedLine, parsed: ParsedLine): ErrorObject | undefined {
+  for (const check of LINE_CHECKS) {
+    try {
+      const e = check(figure, line, parsed);
+      if (e) return e;
+    } catch {
+      // a broken check must not block the line
+    }
+  }
+  return undefined;
+}
+
+/* ------------------------------ area lines ------------------------------ */
+
+/** A line an area carried out itself, with the way to take it back and do it again (one undo entry). */
+export interface LineHandled {
+  readonly summary: string;
+  readonly notices?: readonly Notice[];
+  readonly undo: () => void;
+  readonly redo: () => void;
+}
+
+/**
+ * A line kind an area owns outright (`on go click: SetValue(a, 0)`): `undefined` when the line is not of that kind,
+ * an error to refuse it, or what was done. On a dry run the handler must leave nothing changed.
+ */
+export type LineHandler = (figure: unknown, text: string, opts: { readonly dryRun: boolean; readonly line: number }) => LineHandled | ErrorObject | undefined;
+
+const LINE_HANDLERS: LineHandler[] = [];
+
+export function registerLineHandler(handler: LineHandler): void {
+  if (!LINE_HANDLERS.includes(handler)) LINE_HANDLERS.push(handler);
+}
+
+export function runLineHandlers(figure: unknown, text: string, opts: { readonly dryRun: boolean; readonly line: number }): LineHandled | ErrorObject | undefined {
+  for (const h of LINE_HANDLERS) {
+    const r = h(figure, text, opts);
+    if (r) return r;
+  }
+  return undefined;
+}
+
+/** Lines an area adds at the end of the script (its `on` lines), after every object. */
+export type ScriptTail = (figure: unknown) => readonly string[];
+
+const SCRIPT_TAILS: ScriptTail[] = [];
+
+export function registerScriptTail(tail: ScriptTail): void {
+  if (!SCRIPT_TAILS.includes(tail)) SCRIPT_TAILS.push(tail);
+}
+
+export function scriptTails(figure: unknown): string[] {
+  const out: string[] = [];
+  for (const t of SCRIPT_TAILS) {
+    try {
+      out.push(...t(figure));
+    } catch {
+      // a broken tail must not break saving
+    }
+  }
+  return out;
+}
+
+/** Notices an area adds to the report of a delete (handler steps that named a removed object). */
+export type DeleteNotes = (figure: unknown, names: readonly string[]) => readonly Notice[];
+
+const DELETE_NOTES: DeleteNotes[] = [];
+
+export function registerDeleteNotes(notes: DeleteNotes): void {
+  if (!DELETE_NOTES.includes(notes)) DELETE_NOTES.push(notes);
+}
+
+export function deleteNotes(figure: unknown, names: readonly string[]): Notice[] {
+  const out: Notice[] = [];
+  for (const n of DELETE_NOTES) {
+    try {
+      out.push(...n(figure, names));
+    } catch {
+      // a broken hook must not block the delete
+    }
+  }
+  return out;
+}
+
+/* ------------------------------ line rewrites ------------------------------ */
+
+/** What an area's rewrite does with a line: another text to apply in its place, notices for the result, or a refusal. */
+export interface LineRewrite {
+  readonly text?: string;
+  readonly notices?: readonly Notice[];
+  readonly error?: ErrorObject;
+  /** The rewritten line redefines a slider as a plain number, so its range goes. */
+  readonly dropRange?: boolean;
+}
+
+/**
+ * An area's reading of a line the core does not have a form for (`a with min = 0, max = 20` changes a slider's range).
+ * It is asked with the line as written, before it is parsed. `undefined` leaves the line as it is. Must be pure.
+ */
+export type LineRewriter = (figure: unknown, text: string) => LineRewrite | undefined;
+
+const LINE_REWRITERS: LineRewriter[] = [];
+
+export function registerLineRewriter(rewriter: LineRewriter): void {
+  if (!LINE_REWRITERS.includes(rewriter)) LINE_REWRITERS.push(rewriter);
+}
+
+/** The first rewrite the registered rewriters offer. A rewriter that throws is skipped. */
+export function runLineRewriters(figure: unknown, text: string): LineRewrite | undefined {
+  for (const rewriter of LINE_REWRITERS) {
+    try {
+      const r = rewriter(figure, text);
+      if (r) return r;
+    } catch {
+      // a broken rewriter must not block the line
+    }
+  }
+  return undefined;
 }

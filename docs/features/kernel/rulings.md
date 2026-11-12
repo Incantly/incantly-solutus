@@ -20,3 +20,5 @@ Rulings on places where the docs disagree. They win over the other kernel docs w
 | K14 | Reusing deleted names | A deleted object's name may be used again, as the language table and the code do. Tools-2d follows this. |
 | K15 | Name sequences for new types | An area registers the name sequence for each type it adds (for example conics `c`, sectors `s`, measures `m`). A type with no registered sequence gets `o1`, `o2`, ... `to be implemented` in the kernel if the registry has no hook yet. |
 | K16 | `detail` in an undefined value | `detail` stays a short string. Structured data (stages, text pieces) goes in the error or notice `params`, never in `detail`. Area docs that use `detail.text` or `detail.stage` read `params` instead. |
+| Numbers N1 | Control caption | `caption` holds the text on a slider, checkbox or control; `label` is the kernel mode word (kernel design 5). Tests that set the caption with `label = "text"` change to `caption = "text"`. |
+| Numbers N2 | Step larger than the range | `bad_range`, as the kernel and the algebra-view errors say. The numbers design now agrees. |
