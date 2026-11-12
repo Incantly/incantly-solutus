@@ -99,6 +99,26 @@ Each item says what the kernel lacks. Checked against the public hooks: `ActionR
 | K9 | `setFree` needs a way to write "undefined with reason" so `SetValue(a, inf)` on a slider gives `not_finite` (today `explicit`). | setvalue x1 |
 | K10 | A bare word such as `dock` as a value of a text property (a prop-value hook). `place = "dock"` works; `place = dock` is `unknown_name`. | lines x1 |
 
+## Second fixer round
+
+All the kernel items above (K1 to K10) are now in place, and every numbers spec test passes (lint, typecheck and the
+whole suite are green: 6258 passed, 9 skipped, the skips are the functions area's).
+
+| # | What was added |
+|---|---|
+| K1 | `ActionOutcome` has `error` and `notices`; `applyAction` returns the error to the caller of `apply` and puts the notices in the result. Actions report through it unless they run inside a handler. |
+| K2 | `registerLineCheck`: a check that runs after the language check and before commit. The numbers check gives `not_free` for a range on a computed number, `unit_mismatch` with the fixed line, the 100-control `limit`, `bad_input_target` and `animated_input` on rate lines. The language gives the `bad_range` params, the 10^6-step `limit`, the bound cycle and the three parse messages. |
+| K3, K4, K10 | `registerLineRewriter`: an area may read a line before it is parsed and put another line in its place, add notices, or refuse it. The numbers rewrite handles `a with min/max/step`, `none` and `auto`, `range_kept`, a snapped initial value, `unit_inferred`, `label = "text"` on a control (it becomes the caption, at most 120 characters), and `place = dock`. A rewrite may set `dropRange`, so `a with min = none` turns the slider back into a plain number. |
+| K5 | `registerFieldReader` evaluates the fields an area adds; `registerFieldTyper` types a field from the object (`d.value` has the type of the options). A field can be called: `g.value(x)` calls the function the dropdown holds. |
+| K6 | The constants `turn` and `grad`. |
+| K7 | A slider whose bound is undefined or crosses is undefined with `range_undefined` or `empty_range`. It keeps its last value and gets it back, clamped, when the range returns. A dynamic step that changes re-snaps the value. |
+| K8 | `registerLineHandler`: an area may carry out a whole line itself, recorded as one `ext` undo entry with its own undo and redo. `on` lines and `ClearHandler(go, click)` go through it. `registerScriptTail` puts the `on` lines at the end of `toScript`, and `registerDeleteNotes` adds `handler_steps_broken` (N125) to the result of a delete. |
+| K9 | `setFree` takes a `reason`, so `SetValue(a, inf)` on a slider is undefined with `not_finite`. |
+
+**Contested, decided by the numbers design:** a step larger than the range is now allowed (only the two ends are left),
+as `numbers-sliders/design.md` section 4 says. `algebra-view/errors.md` still lists it as an error; that line should be
+changed when the product owner agrees. A step that is not finite is still `bad_range`.
+
 ## What changed in the public API
 
 - `emitChange` (exported from `valuewrite.ts`, not from the package index) is the single write notifier.
