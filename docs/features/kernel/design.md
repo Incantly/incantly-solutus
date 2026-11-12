@@ -637,6 +637,18 @@ its commands, and a hook that throws is skipped.
   `FIELDS`. A typer types a field from the object itself (`d.value` has the type of the dropdown's options). A field that
   holds a function can be called: `g.value(x)`.
 
+### Commands two areas both give
+
+Two areas may register a command of the same name and kind (`Tangent` of a conic and of a function). The registry
+merges them into one: the second area's forms are added after the first's, a form with the same parameter types as one
+already there is left out, and both refusals are asked in turn.
+
+### Dragging a number written in a line
+
+An inverse may return a value for an argument that is a number written in the line itself (`P = PointOn(c, 0.25)`).
+The drag plan then holds a write with `param` set, and the drag rewrites that number in the line. The whole gesture is
+one undo entry on `commitDrag`, like a drag of a free point.
+
 ### Naming helper for tools
 
 `suggestName(type, hint?)` uses the one name table in the language design (3.7): points `A, B, ... Z, A_1, B_1 ...`; vectors `u v w`; lines, rays and segments `l m n`; numbers `a b c d` (angles `α β γ δ`); functions `f g h p q r`; circles, arcs and curves `c d k`; lists `L M N`; polygons `poly1`; regions `reg1`; texts `text1`; booleans `cond1`. After the letters, a sequence continues with `_1`, `_2` (`l_1`). Skips taken and reserved names. This is for pointer tools and the playground; the teacher always names its own objects.
