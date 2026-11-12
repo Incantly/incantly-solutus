@@ -742,7 +742,11 @@ class Checker {
     } else if (op === '+' && l.ty.k === 'Point' && r.ty.k === 'Point') {
       extra.hint = `Two positions cannot be added. Add a Vector to a Point, or use Midpoint(${a}, ${b}) for the point halfway between.`;
     } else if (op === '*' && l.ty.k === 'Vector' && r.ty.k === 'Vector') {
-      extra.hint = `Use dot(${a}, ${b}) for the dot product or cross(${a}, ${b}) for the 2D cross product.`;
+      // Name the commands when the figure has them (points-lines: `Dot`, `Cross`); the functions always exist.
+      const hasCommands = this.fig.commands.lookup('Dot') !== undefined && this.fig.commands.lookup('Cross') !== undefined;
+      extra.hint = hasCommands
+        ? `Use Dot(${a}, ${b}) for the dot product or Cross(${a}, ${b}) for the 2D cross product.`
+        : `Use dot(${a}, ${b}) for the dot product or cross(${a}, ${b}) for the 2D cross product.`;
     } else {
       const legal = legalOpsFor(op, l.ty);
       extra.hint = legal.length > 0 ? `${lt} ${op} works with: ${legal.join(', ')}.` : `${op} is not defined for a ${lt} on the left.`;
@@ -1229,6 +1233,7 @@ class Checker {
   argFacts(node: TNode | null | undefined, a: Arg | undefined): ArgFacts {
     if (!node || !a) return { type: '', literal: undefined, text: a ? this.textOf(a.value) : '', omitted: !a };
     const base = { type: tyStr(node.ty), literal: literalOf(node), text: this.textOf(a.value), omitted: false };
+    if (node.n === 'relation') return { ...base, relation: node.shape };
     if (node.n !== 'ref') return base;
     // a bare object name: the hook may read what the object is now
     const info = this.fig.byId(node.id);

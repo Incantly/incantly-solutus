@@ -49,6 +49,16 @@ export interface AreaErrorKinds {
   empty_list_type: true;
   duplicate_arg: true;
   not_a_binder: true;
+  // geometry (codes C010 to C029)
+  not_a_path: true;
+  not_a_region: true;
+  too_few_points: true;
+  not_supported: true;
+  not_a_transform: true;
+  not_quadratic: true;
+  not_polynomial: true;
+  bad_equation: true;
+  no_dependency: true;
   // functions (codes C030 to C049)
   needs_interval: true;
   not_differentiable: true;

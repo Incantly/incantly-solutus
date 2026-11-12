@@ -1946,6 +1946,38 @@ function runLimitSide(call: RuleCall, side: 'left' | 'right'): unknown {
 const F2 = 'Function2';
 const BINDER = { kind: 'binder' } as const;
 
+/** `Curvature(P, f)`: the curvature of the graph of f at the x of P (points-lines and conics designs). */
+function atPointOf(mode: 'k' | 'v' | 'circle'): (call: RuleCall) => unknown {
+  return (call) => {
+    const pt = call.values[0] as { x?: unknown } | undefined;
+    if (typeof pt?.x !== 'number') return call.fail('bad_argument', 'This command needs a point and a function.');
+    const swapped = Object.assign(Object.create(call) as RuleCall, { values: [call.values[1], pt.x] });
+    return runCurvatureFn(swapped, mode);
+  };
+}
+
+const POINT_CURVATURE_FORMS = {
+  Curvature: form([p('p', 'Point'), p('f', F1)], 'Number', atPointOf('k'), 'signed curvature of the graph at the x of a point'),
+  CurvatureVector: form([p('p', 'Point'), p('f', F1)], 'Vector', atPointOf('v'), 'curvature vector of the graph at the x of a point'),
+  OsculatingCircle: form([p('p', 'Point'), p('f', F1)], 'Circle', atPointOf('circle'), 'osculating circle of the graph at the x of a point'),
+} as const;
+
+const ASYMPTOTE_FN_FORMS = [
+  form([p('f', F1)], 'List<Line>', (call) => runAsymptoteFn(call, false), 'asymptotes over the default range'),
+  form([p('f', F1), p('a', 'Number'), p('b', 'Number')], 'List<Line>', (call) => runAsymptoteFn(call, true), 'asymptotes over [a, b]'),
+];
+
+/**
+ * The function forms of commands the geometry area also gives (`Asymptote` of a conic, `Curvature` at a point of a
+ * conic). Geometry registers these next to its own; the registry merges specs of the same name.
+ */
+export const SHARED_WITH_GEOMETRY: CommandSpec[] = [
+  objSpec('Asymptote', ASYMPTOTE_FN_FORMS),
+  objSpec('Curvature', [POINT_CURVATURE_FORMS.Curvature]),
+  objSpec('CurvatureVector', [POINT_CURVATURE_FORMS.CurvatureVector]),
+  objSpec('OsculatingCircle', [POINT_CURVATURE_FORMS.OsculatingCircle]),
+];
+
 export const FUNCTIONS_SPECS: CommandSpec[] = withChecks([
   objSpec('Derivative', [
     form([p('f', F1)], F1RET, runDerivative, 'derivative as a function'),
@@ -1969,14 +2001,17 @@ export const FUNCTIONS_SPECS: CommandSpec[] = withChecks([
   ]),
   objSpec('Curvature', [
     form([p('f', F1), p('x0', 'Number')], 'Number', (call) => runCurvatureFn(call, 'k'), 'signed curvature at a point'),
+    POINT_CURVATURE_FORMS.Curvature,
     ...curvatureCurveForms,
   ]),
   objSpec('CurvatureVector', [
     form([p('f', F1), p('x0', 'Number')], 'Vector', (call) => runCurvatureFn(call, 'v'), 'curvature vector at a point'),
+    POINT_CURVATURE_FORMS.CurvatureVector,
     ...curvatureVectorCurveForms,
   ]),
   objSpec('OsculatingCircle', [
     form([p('f', F1), p('x0', 'Number')], 'Circle', (call) => runCurvatureFn(call, 'circle'), 'osculating circle at a point'),
+    POINT_CURVATURE_FORMS.OsculatingCircle,
     ...osculatingCurveForms,
   ]),
   objSpec('Integral', [
@@ -2023,8 +2058,7 @@ export const FUNCTIONS_SPECS: CommandSpec[] = withChecks([
   ]),
   objSpec('Hole', [form([p('f', F1), p('a', 'Number'), p('b', 'Number')], 'List<Point>', runHole, 'removable discontinuities in [a, b]')]),
   objSpec('Asymptote', [
-    form([p('f', F1)], 'List<Line>', (call) => runAsymptoteFn(call, false), 'asymptotes over the default range'),
-    form([p('f', F1), p('a', 'Number'), p('b', 'Number')], 'List<Line>', (call) => runAsymptoteFn(call, true), 'asymptotes over [a, b]'),
+    ...ASYMPTOTE_FN_FORMS,
     ...asymptoteCurveForms,
   ]),
   objSpec('Intersect', [
