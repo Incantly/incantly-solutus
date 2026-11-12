@@ -33,6 +33,9 @@ export interface CompiledArg {
   readonly eval?: Fn;
   readonly binder?: string;
   readonly slot?: number;
+  /** For a list of binders: the names and their local slots, in order. */
+  readonly binders?: readonly string[];
+  readonly slots?: readonly number[];
   readonly omitted: boolean;
   readonly value?: number | boolean | string;
   /** The object this argument names when it is a plain object name (`Midpoint(A, B)`), else absent. */
@@ -213,6 +216,28 @@ function polygonArea(pts: readonly Pt[]): number {
   return Math.abs(s) / 2;
 }
 
+/** The exponent `p/q` written with whole numbers and an odd `q` above 1, or `undefined`. */
+function oddRatio(n: TNode): { p: number; q: number } | undefined {
+  const int = (t: TNode): number | undefined => {
+    if (t.n === 'num') return Number.isInteger(t.v) ? t.v : undefined;
+    if (t.n === 'unary' && t.op !== 'not') {
+      const v = int(t.arg);
+      return v === undefined ? undefined : t.op === '-' ? -v : v;
+    }
+    return undefined;
+  };
+  if (n.n === 'unary' && n.op === '-') {
+    const r = oddRatio(n.arg);
+    return r ? { p: -r.p, q: r.q } : undefined;
+  }
+  if (n.n !== 'bin' || n.op !== '/') return undefined;
+  const p = int(n.l);
+  const q = int(n.r);
+  if (p === undefined || q === undefined || q === 0) return undefined;
+  const aq = Math.abs(q);
+  return aq > 1 && aq % 2 === 1 ? { p: q < 0 ? -p : p, q: aq } : undefined;
+}
+
 function fieldOf(type: string, field: string, v: unknown): unknown {
   const o = v as Record<string, unknown>;
   const M = getMathLib();
@@ -256,6 +281,9 @@ function fieldOf(type: string, field: string, v: unknown): unknown {
     }
     case 'Text':
       return (v as string).length;
+    case 'Region':
+      // a region carries its signed value and its unsigned area (functions-calculus design 14.1)
+      return typeof o[field] === 'number' ? o[field] : undefined;
     default:
       return undefined;
   }
@@ -275,6 +303,7 @@ class Compiler {
     switch (n.n) {
       case 'ref':
       case 'local':
+      case 'lambda':
       case 'clock':
       case 'callObj':
       case 'tick':
@@ -348,6 +377,35 @@ class Compiler {
             return isN ? NAN : undefined;
           }
           return v;
+        };
+      }
+      case 'lambda': {
+        // the function of an inline expression: its parameters live in the shared locals for the length of one call
+        const body = this.compile(n.body);
+        const slots = n.params.map((p) => p.slot);
+        return (env) => {
+          const fv: FunctionValue = {
+            arity: slots.length,
+            ret: 'Number',
+            reason: undefined,
+            call: (...xs: number[]) => {
+              const saved = env.reason;
+              const savedCause = env.cause;
+              const savedDetail = env.detail;
+              env.reason = undefined;
+              const before = slots.map((s) => env.locals[s]);
+              for (let i = 0; i < slots.length; i++) env.locals[slots[i] as number] = xs[i];
+              const v = setNanReason(env, body(env) as number);
+              for (let i = 0; i < slots.length; i++) env.locals[slots[i] as number] = before[i];
+              fv.reason = env.reason;
+              env.reason = saved;
+              env.cause = savedCause;
+              env.detail = savedDetail;
+              return v;
+            },
+          };
+          if (slots.length === 1) fv.call1 = (x: number): number => fv.call(x) as number;
+          return fv;
         };
       }
       case 'local': {
@@ -577,14 +635,22 @@ class Compiler {
               const v = a / b;
               return v - v === 0 ? v : guardInf(env, v, a, b);
             };
-          default:
+          default: {
+            // a written ratio with an odd denominator is a real root: (-8)^(1/3) is -2 (functions-calculus design 11)
+            const ratio = oddRatio(n.r);
             return (env) => {
               const a = l(env);
               const b = r(env);
               if (a !== a || b !== b) return NAN;
+              if (ratio && a < 0) {
+                const m = power(-a, b, env);
+                const v = ratio.p % 2 === 0 ? m : -m;
+                return v - v === 0 ? v : guardInf(env, v, a, b);
+              }
               const v = power(a, b, env);
               return v - v === 0 ? v : guardInf(env, v, a, b);
             };
+          }
         }
       case 'num*vec':
         return (env) => {
@@ -872,6 +938,8 @@ class Compiler {
       ...(a.expr ? { eval: this.compile(a.expr) } : {}),
       ...(a.binder !== undefined ? { binder: a.binder } : {}),
       ...(a.slot !== undefined ? { slot: a.slot } : {}),
+      ...(a.binders !== undefined ? { binders: a.binders } : {}),
+      ...(a.slots !== undefined ? { slots: a.slots } : {}),
       ...(a.value !== undefined ? { value: a.value } : {}),
       ...(a.expr && a.expr.n === 'ref' ? { ref: this.objId(a.expr.id) } : {}),
     }));
@@ -1257,7 +1325,17 @@ export function compileLine(line: CheckedLine, opts: CompileOptions = {}): Resul
       const isN = expr.ty.k === 'Number';
       if (line.kind === 'function') {
         const params = line.params ?? [];
-        const ret = expr.ty.k === 'Point' ? 'Point' : 'Number';
+        const ret = expr.ty.k === 'Point' ? 'Point' : expr.ty.k === 'Bool' ? 'Bool' : 'Number';
+        // `in a..b`: outside the closed interval of a parameter the function is undefined (out_of_domain)
+        const dom = (line.domain ?? []).map((d) => ({ from: c.compile(d.from), to: c.compile(d.to) }));
+        const outside = (env: Env, xs: ArrayLike<number>): boolean => {
+          for (let i = 0; i < dom.length; i++) {
+            const d = dom[i] as { from: Fn; to: Fn };
+            const x = xs[i] as number;
+            if (!(x >= (d.from(env) as number) && x <= (d.to(env) as number))) return true;
+          }
+          return false;
+        };
         evalFn = (env) => {
           const fv: FunctionValue & { reason?: UndefReason | undefined } = {
             arity: params.length,
@@ -1268,6 +1346,13 @@ export function compileLine(line: CheckedLine, opts: CompileOptions = {}): Resul
               const savedCause = env.cause;
               const savedDetail = env.detail;
               env.reason = undefined;
+              if (dom.length > 0 && outside(env, xs)) {
+                fv.reason = 'out_of_domain';
+                env.reason = saved;
+                env.cause = savedCause;
+                env.detail = savedDetail;
+                return isN ? NAN : undefined;
+              }
               // the parameters live in the shared locals only for this call: put back what the caller had there
               const before = params.map((p) => env.locals[p.slot]);
               for (let i = 0; i < params.length; i++) env.locals[(params[i] as { slot: number }).slot] = xs[i];
@@ -1289,6 +1374,13 @@ export function compileLine(line: CheckedLine, opts: CompileOptions = {}): Resul
               const savedCause = env.cause;
               const savedDetail = env.detail;
               env.reason = undefined;
+              if (dom.length > 0 && outside(env, [x])) {
+                fv.reason = 'out_of_domain';
+                env.reason = saved;
+                env.cause = savedCause;
+                env.detail = savedDetail;
+                return NAN;
+              }
               const before = env.locals[slot];
               env.locals[slot] = x;
               const v = setNanReason(env, f(env) as number);
@@ -1306,6 +1398,10 @@ export function compileLine(line: CheckedLine, opts: CompileOptions = {}): Resul
               const before = env.locals[slot];
               for (let i = 0; i < xs.length; i++) {
                 env.reason = undefined;
+                if (dom.length > 0 && outside(env, [xs[i] as number])) {
+                  out[i] = NAN;
+                  continue;
+                }
                 env.locals[slot] = xs[i];
                 out[i] = setNanReason(env, f(env) as number);
               }
