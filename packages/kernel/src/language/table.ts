@@ -71,6 +71,11 @@ export interface ArgFacts {
   readonly value?: unknown;
   /** When the argument is the bare name of an existing object: its defining line as text. */
   readonly source?: string;
+  /**
+   * When the argument is an equation or inequality in x and y: what it is. `line`, `circle` and `conic` are polynomials
+   * of degree 2 or less with `==`; `curve` is any other equation; `region` is an inequality.
+   */
+  readonly relation?: 'line' | 'circle' | 'conic' | 'curve' | 'region';
 }
 
 /** The arguments of the chosen form, in parameter order, then the rest arguments. */

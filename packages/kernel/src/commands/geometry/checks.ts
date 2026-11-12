@@ -5,10 +5,42 @@
  * to the rule, which gives the object an undefined reason.
  */
 import type { ArgFacts, CallCheck, FormCheck, ParamSpec, Refusal } from '../../language/table';
+import type { RuleWork } from '../../graph/registry';
+import type { FunctionValue } from '../../language/runtime';
+import { detectPolynomial } from '../functions/numeric';
+import { sample1 } from '../functions/sample';
 import { MAX_POLYGON_SIDES } from './polygons';
 import { T_LINE_LIKE } from './types';
 
 type Check = (c: FormCheck) => Refusal | undefined;
+
+/** True or false when the value is a one-variable function that is, or is not, a polynomial; `undefined` when unknown. */
+function isPolynomial(v: unknown): boolean | undefined {
+  const fv = v as FunctionValue | undefined;
+  if (typeof fv !== 'object' || fv === null || fv.arity !== 1 || typeof fv.call !== 'function') return undefined;
+  let used = 0;
+  const cap = 100_000;
+  const work: RuleWork = {
+    limit: cap,
+    get used(): number {
+      return used;
+    },
+    get left(): number {
+      return Math.max(0, cap - used);
+    },
+    spend(n = 1): boolean {
+      used += n;
+      return used <= cap;
+    },
+  };
+  try {
+    const det = detectPolynomial(sample1(fv).f, 0, 1e-9, work);
+    if (det.spent) return undefined;
+    return det.degree !== null && det.coeffs !== undefined;
+  } catch {
+    return undefined;
+  }
+}
 type Refuse = (c: CallCheck) => Refusal | undefined;
 
 const num = (a: ArgFacts | undefined): number | undefined => (a !== undefined && typeof a.literal === 'number' ? a.literal : undefined);
@@ -31,11 +63,43 @@ const indexOf = (params: readonly ParamSpec[], name: string): number => params.f
 
 /** The check-time hook for one form, chosen by the command and the form's parameters; `undefined` when it has none. */
 export function formCheckFor(command: string, params: readonly ParamSpec[]): Check | undefined {
+  if (command === 'Intersect' && params.length === 2) {
+    // every crossing of two functions can be found without an interval only when both are polynomials
+    return (c) => {
+      const [f, g] = c.args;
+      if (!f || !g || !f.type.startsWith('Function') || !g.type.startsWith('Function')) return undefined;
+      const other = [f, g].find((a) => isPolynomial(a.value) === false);
+      if (!other) return undefined;
+      return {
+        kind: 'no_matching_form',
+        message: `Intersect: ${other.text} is not a polynomial, so the crossings need an interval to search.`,
+        hint: `Give the interval: Intersect(${f.text}, ${g.text}, a, b), for example Intersect(${f.text}, ${g.text}, -10, 10).`,
+        params: { command: c.command, given: `${f.type}, ${g.type}` },
+      };
+    };
+  }
   const index = indexOf(params, 'index');
   if (index >= 0) {
     if (command === 'Vertex' && params[0]?.type === 'Segment') return wholeIn(index, 1, 2, 'the index of a segment end');
     // Two line-likes cross at most once, so the only slot is 1.
     if (command === 'Intersect' && params[0]?.type === T_LINE_LIKE && params[1]?.type === T_LINE_LIKE) return wholeIn(index, 1, 1, 'the index of a crossing of two lines');
+    if ((command === 'Side' || command === 'Vertex') && params[0]?.name === 'poly') {
+      // the polygon behind a name says how many corners there are: a literal index above that can never work
+      const whole = wholeIn(index, 1, Infinity, 'the index');
+      return (c) => {
+        const r = whole(c);
+        if (r) return r;
+        const v = num(c.args[index]);
+        const pts = (c.args[0]?.value as { pts?: unknown } | undefined)?.pts;
+        if (v === undefined || !Array.isArray(pts) || v <= pts.length) return undefined;
+        return {
+          kind: 'bad_argument',
+          message: `${c.command}: ${c.args[0]?.text ?? 'the polygon'} has ${pts.length} ${command === 'Side' ? 'sides' : 'corners'}; got index ${c.args[index]?.text ?? ''}.`,
+          hint: `Use a whole number from 1 to ${pts.length}.`,
+          param: index,
+        };
+      };
+    }
     return wholeIn(index, 1, Infinity, 'the index');
   }
   if (command === 'TriangleCenter') return wholeIn(indexOf(params, 'n'), 1, 13, 'the centre number');
@@ -56,6 +120,20 @@ export function formCheckFor(command: string, params: readonly ParamSpec[]): Che
         hint: 'The coefficients are a, b, c, d, e, f of a x^2 + b x y + c y^2 + d x + e y + f = 0.',
         param: 0,
       };
+    };
+  }
+  if (command === 'Conic' && params.length === 1 && params[0]?.name === 'equation') {
+    return (c) => {
+      const eq = c.args[0];
+      if (!eq || eq.relation === undefined || eq.relation === 'line' || eq.relation === 'circle' || eq.relation === 'conic') return undefined;
+      if (eq.relation === 'region') {
+        return { kind: 'bad_equation', message: 'Conic needs an equation, written with ==.', hint: `${eq.text} is an inequality. Write the two sides with == between them.`, param: 0 };
+      }
+      // x or y inside a function call is not a polynomial at all; otherwise the degree is above 2
+      if (/[A-Za-z_][A-Za-z_0-9]*\s*\([^()]*\b[xy]\b/.test(eq.text)) {
+        return { kind: 'not_polynomial', message: 'Conic needs a polynomial in x and y.', hint: 'Keep x and y out of functions such as sin or sqrt. Curve(…) draws other equations.', param: 0 };
+      }
+      return { kind: 'not_quadratic', message: 'Conic needs an equation of degree 2 in x and y.', hint: 'The highest power here is above 2. Curve(…) draws equations of higher degree.', param: 0 };
     };
   }
   const sides = indexOf(params, 'sides');
@@ -94,6 +172,17 @@ export function refuseFor(command: string): Refuse | undefined {
           kind: 'not_a_path',
           message: 'PointOn needs a line, segment, circle, conic, polygon, function or curve.',
           hint: `${a.text} is ${article(a.type)} ${a.type}. Make the path first, then put the point on it.`,
+          param: 0,
+        };
+      };
+    case 'Conic':
+      return (c) => {
+        const a = c.args[0];
+        if (c.args.length !== 1 || a === undefined || a.text.includes('==') || (a.type !== 'Number' && a.type !== '')) return undefined;
+        return {
+          kind: 'bad_equation',
+          message: 'Conic needs an equation, written with ==.',
+          hint: `${a.text} has no ==. Write both sides, for example ${a.text} == 1.`,
           param: 0,
         };
       };

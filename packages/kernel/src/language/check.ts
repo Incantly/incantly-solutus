@@ -1196,6 +1196,7 @@ class Checker {
   argFacts(node: TNode | null | undefined, a: Arg | undefined): ArgFacts {
     if (!node || !a) return { type: '', literal: undefined, text: a ? this.textOf(a.value) : '', omitted: !a };
     const base = { type: tyStr(node.ty), literal: literalOf(node), text: this.textOf(a.value), omitted: false };
+    if (node.n === 'relation') return { ...base, relation: node.shape };
     if (node.n !== 'ref') return base;
     // a bare object name: the hook may read what the object is now
     const info = this.fig.byId(node.id);
