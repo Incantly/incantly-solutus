@@ -9,6 +9,7 @@
  */
 import type { CommandRegistry } from '../../graph/registry';
 import { registerReasonPhrase } from '../../errors/phrases';
+import { registerNotice } from '../../errors/notices';
 import type { ReasonPhrase } from '../../errors/phrases';
 import { registerTypeStyle } from '../../graph/props';
 import { FUNCTIONS_SPECS } from './specs-functions';
@@ -28,6 +29,15 @@ export {
   asCurve, relationCurve, isEquation, curvePoint, curveVel, curveAcc, curveRange, curveAt01,
   curveBbox, projectImplicit, closestOnCurve,
 } from './curves';
+
+/** Notices the area's rules raise with `call.notify`: the value is defined and the caller should know this about it. */
+const NOTICES: Readonly<Record<string, { code: string; severity: 'info' | 'warning'; template: string }>> = {
+  blowup: { code: 'F101', severity: 'warning', template: 'The solution reaches infinity near {at}, so it stops there (blow-up).' },
+  tangent: { code: 'F102', severity: 'info', template: 'The curves touch without crossing (tangent) at {count} of the points.' },
+  identically_true: { code: 'F103', severity: 'info', template: 'Every point satisfies this, so the result is the whole plane (identically_true).' },
+  sample_cap: { code: 'F104', severity: 'warning', template: 'The path needed more samples than the cap of {max} allows; it stops where the cap was reached (sample_cap).' },
+  step_limit: { code: 'F105', severity: 'warning', template: 'The work budget ran out; this is the best estimate so far (step_limit).' },
+};
 
 const PHRASES: Readonly<Record<string, ReasonPhrase>> = {
   empty_interval: { noun: 'empty interval', sentence: 'The interval is empty: both ends are the same.' },
@@ -66,5 +76,6 @@ export function registerFunctions(registry: CommandRegistry): void {
   registry.registerAll(CURVE_COMMANDS);
   registry.registerAll(LOCUS_COMMANDS);
   for (const [reason, phrase] of Object.entries(PHRASES)) registerReasonPhrase(reason, phrase);
+  for (const [kind, spec] of Object.entries(NOTICES)) registerNotice(kind, spec);
   registerTypeStyle('Field', { defaults: { color: '#64748b', width: 1.2, label: 'none' } });
 }

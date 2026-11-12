@@ -1036,7 +1036,7 @@ class Checker {
     return this.unknownFunction(e);
   }
 
-  unknownCommand(e: CallExpr): null {
+  unknownCommand(e: CallExpr): TNode | null {
     const names = this.fig.commands.names();
     const close = closestNames(e.callee, names, 3);
     const extra: ErrorExtra = { fingerprintKey: e.callee };

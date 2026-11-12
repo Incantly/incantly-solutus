@@ -9,7 +9,8 @@ import type { UndefReason } from '../../contracts/values';
 import type { Cell } from '../../graph/types';
 import type { RuleCall } from '../../graph/registry';
 import type { Coef2, SampledCurveData } from './types';
-import { isPt } from './types';
+import { isCircle3, isLine3, isPt } from './types';
+import { asCurve, curvePoint, curveRange } from './curves';
 
 export type Fail = { readonly ok: false; readonly reason: UndefReason; readonly detail: string };
 export type Win<T> = { readonly ok: true; readonly value: T };
@@ -50,10 +51,100 @@ export function openSlice(call: RuleCall, mover: ObjId | 't', target: ObjId): Fa
     }
     return fail('no_dependency', `The kernel slice refused this pair (${slice.kind}).`);
   }
-  if (slice.chain.length === 0) {
-    return fail('no_dependency', 'The point does not depend on the mover, so its locus would be a single point.');
-  }
+  if (slice.chain.length === 0) return fail('no_dependency', noDependency(call, target));
   return { ok: true, value: { run: slice.run } };
+}
+
+/* ------------------------------ movers on paths ------------------------------ */
+
+/** A path a point can move along, read in natural units: an angle on a circle, a distance on a segment or a line. */
+export interface MoverPath {
+  at(s: number): Pt | undefined;
+  readonly lo: number;
+  readonly hi: number;
+  readonly closed: boolean;
+}
+
+const LINE_REACH = 10;
+
+/** The path a value is, or `undefined` when a point cannot move along it. */
+export function pathOf(v: unknown): MoverPath | undefined {
+  if (typeof v !== 'object' || v === null) return undefined;
+  if (isCircle3(v)) {
+    if (!(v.r > 0) || !Number.isFinite(v.cx) || !Number.isFinite(v.cy)) return undefined;
+    return { at: (s) => ({ x: v.cx + v.r * Math.cos(s), y: v.cy + v.r * Math.sin(s) }), lo: 0, hi: 2 * Math.PI, closed: true };
+  }
+  const o = v as { a?: unknown; b?: unknown; dir?: unknown };
+  if (isPt(o.a) && isPt(o.b)) {
+    const a = o.a;
+    const b = o.b;
+    const len = Math.hypot(b.x - a.x, b.y - a.y);
+    if (!(len > 0)) return undefined;
+    const ux = (b.x - a.x) / len;
+    const uy = (b.y - a.y) / len;
+    // a ray keeps going past its second point; a segment stops there
+    const ray = (v as { ray?: unknown }).ray === true;
+    return { at: (s) => ({ x: a.x + ux * s, y: a.y + uy * s }), lo: 0, hi: ray ? LINE_REACH * Math.max(1, len) : len, closed: false };
+  }
+  if (isLine3(v)) {
+    const n2 = v.a * v.a + v.b * v.b;
+    if (!(n2 > 0)) return undefined;
+    const n = Math.sqrt(n2);
+    const px = (v.a * v.c) / n2;
+    const py = (v.b * v.c) / n2;
+    return { at: (s) => ({ x: px - (v.b / n) * s, y: py + (v.a / n) * s }), lo: -LINE_REACH, hi: LINE_REACH, closed: false };
+  }
+  const c = asCurve(v);
+  if (c) {
+    const r = curveRange(c);
+    if (!r || !Number.isFinite(r[0]) || !Number.isFinite(r[1]) || !(r[0] < r[1])) return undefined;
+    return { at: (s) => curvePoint(c, s) ?? undefined, lo: r[0], hi: r[1], closed: false };
+  }
+  return undefined;
+}
+
+export interface PathSweep {
+  readonly setup: SweepSetup;
+  readonly path: MoverPath;
+}
+
+/**
+ * Opens a sweep whose mover is a point on a path (`P = PointOn(c, 0.3)`): the kernel puts each path point in place of
+ * the mover and re-runs what lies between it and the target. The sweep's own variable is the path's natural unit.
+ */
+export function openPathSlice(call: RuleCall, mover: ObjId, target: ObjId): Fallible<PathSweep> {
+  const inputs = call.inputsOf(mover);
+  let path: MoverPath | undefined;
+  for (const i of inputs) {
+    path = pathOf(i.value);
+    if (path) break;
+  }
+  if (!path) {
+    return fail(
+      'not_a_mover',
+      inputs.length === 0
+        ? 'The mover is a free point, not a point on a path. Put it on a path first, for example P = PointOn(c, 0.5).'
+        : 'The mover is not a point on a path. Put it on a path first, for example P = PointOn(c, 0.5).',
+    );
+  }
+  const slice = call.slice(mover, target, { override: true });
+  if ('ok' in slice) return fail('no_dependency', `The kernel slice refused this pair (${slice.kind}).`);
+  if (slice.chain.length === 0) return fail('no_dependency', noDependency(call, target));
+  const p = path;
+  const run = (values: Iterable<unknown>): Cell[] => {
+    const pts: unknown[] = [];
+    for (const s of values) pts.push(typeof s === 'number' ? p.at(s) : undefined);
+    return slice.run(pts);
+  };
+  return { ok: true, value: { setup: { run }, path } };
+}
+
+/** The no_dependency sentence, naming what the target does read. */
+function noDependency(call: RuleCall, target: ObjId): string {
+  const names = call.inputsOf(target).map((i) => i.name);
+  return names.length > 0
+    ? `The point does not depend on the mover, so its locus would be a single point. It depends on ${names.join(', ')}.`
+    : 'The point does not depend on the mover, so its locus would be a single point. It depends on nothing that moves.';
 }
 
 /* ------------------------------ adaptive sweep ------------------------------ */

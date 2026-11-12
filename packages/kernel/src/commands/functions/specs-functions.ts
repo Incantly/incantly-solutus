@@ -1691,6 +1691,9 @@ function runSolveODE(call: RuleCall): unknown {
     return true;
   };
   const sol = solveOde({ rhs, n: 1, s0: x0, y0: new Float64Array([y0]), s1: x1, rtol: 1e-8, atol: 1e-10, work: call.work });
+  // a solution that stops early is still a value: the line says why it stops
+  if (sol.end === 'blowup') call.notify('blowup', { at: fmt(sol.mesh[sol.mesh.length - 1] as number) });
+  if (sol.end === 'step_limit') call.notify('step_limit');
   switch (sol.end) {
     case 'done':
     case 'stop':

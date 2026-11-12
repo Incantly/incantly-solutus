@@ -11,7 +11,8 @@ import type { CommandForm, CommandSpec } from '../../language/table';
 import { sample2, sampleBody, numArg, isFin } from './sample';
 import { chebyshevNodes, derivativeAt, findRoots, hessian2, kappaStraight, nullspaceRect, quad } from './numeric';
 import { fn2Value, form, lineFromPointDir, objSpec, p, fmt } from './rules';
-import { fitAlgebraic, openSlice, sweepEnvelope, sweepLocus, toSampledCurve } from './locus';
+import { fitAlgebraic, openPathSlice, openSlice, sweepEnvelope, sweepLocus, toSampledCurve } from './locus';
+import type { SweepSetup } from './locus';
 import type { Coef2, CurveData, ImplicitCurveData, ParamCurveData, PiecewiseCurveData, PolyPiece } from './types';
 import { isCircle3, isLine3, isRelationValue } from './types';
 import {
@@ -1959,10 +1960,15 @@ function runLocusPP(call: RuleCall, withRange: boolean): unknown {
   }
   const ids = moverTarget(call);
   if (!ids) return undefined;
-  const setup = openSlice(call, ids.mover, ids.target);
-  if (!setup.ok) return call.fail(setup.reason, setup.detail);
-  // A slice that succeeds drove a free point, which has no path to move along.
-  return call.fail('not_a_mover', 'The mover is a free point, not on a path. Locus needs kernel support for movers on paths.');
+  const open = openPathSlice(call, ids.mover, ids.target);
+  if (!open.ok) return call.fail(open.reason, open.detail);
+  const path = open.value.path;
+  // with a range the mover goes over that stretch of its path, in the path's own units; without one, over all of it
+  const from = withRange ? (numArg(call, 2) as number) : path.lo;
+  const to = withRange ? (numArg(call, 3) as number) : path.hi;
+  const sw = sweepLocus(open.value.setup, from, to);
+  if (sw.spent) return call.fail('timeout', 'The work budget ran out.');
+  return toSampledCurve(sw.pieces, 'locus');
 }
 
 function runLocusFree(call: RuleCall): unknown {
@@ -1998,9 +2004,9 @@ function runPath(call: RuleCall): unknown {
 function runLocusEquationPP(call: RuleCall): unknown {
   const ids = moverTarget(call);
   if (!ids) return undefined;
-  const setup = openSlice(call, ids.mover, ids.target);
-  if (!setup.ok) return call.fail(setup.reason, setup.detail);
-  return call.fail('not_a_mover', 'The mover is a free point, not on a path. LocusEquation needs kernel support for movers on paths.');
+  const open = openPathSlice(call, ids.mover, ids.target);
+  if (!open.ok) return call.fail(open.reason, open.detail);
+  return locusEquation(call, open.value.setup, open.value.path.lo, open.value.path.hi);
 }
 
 function runLocusEquationFree(call: RuleCall): unknown {
@@ -2013,6 +2019,12 @@ function runLocusEquationFree(call: RuleCall): unknown {
   if (!ids) return undefined;
   const setup = openSlice(call, ids.mover, ids.target);
   if (!setup.ok) return call.fail(setup.reason, setup.detail);
+  return locusEquation(call, setup.value, from, to);
+}
+
+/** Fits the polynomial equation of the points a sweep gives over `[from, to]`. */
+function locusEquation(call: RuleCall, sweep: SweepSetup, from: number, to: number): unknown {
+  const setup = { value: sweep };
   // Fit and held-out points come straight from the slice (exact): polyline
   // interpolation noise would break the nullspace detection. Chebyshev nodes
   // for the fit, offset uniform nodes for the held-out set.
@@ -2045,9 +2057,12 @@ function runEnvelopeP(call: RuleCall): unknown {
   const family = call.ids[0];
   const mover = call.ids[1];
   if (family === undefined || mover === undefined) return call.fail('bad_argument', 'Envelope needs object names for the family and the mover.');
-  const setup = openSlice(call, mover, family);
-  if (!setup.ok) return call.fail(setup.reason, setup.detail);
-  return call.fail('not_a_mover', 'The mover is a free point, not on a path. Envelope needs kernel support for movers on paths.');
+  const open = openPathSlice(call, mover, family);
+  if (!open.ok) return call.fail(open.reason, open.detail);
+  const sw = sweepEnvelope(open.value.setup, open.value.path.lo, open.value.path.hi, call.tol);
+  if (!sw.ok) return call.fail(sw.reason, sw.detail);
+  if (sw.value.spent) return call.fail('timeout', 'The work budget ran out.');
+  return toSampledCurve(sw.value.pieces, 'envelope');
 }
 
 function runEnvelopeFree(call: RuleCall): unknown {
