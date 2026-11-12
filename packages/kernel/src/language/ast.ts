@@ -44,7 +44,7 @@ export type Expr =
   | (Base & { readonly k: 'call'; readonly callee: string; readonly cs: number; readonly ce: number; readonly args: readonly Arg[]; readonly open: number; readonly close: number })
   | (Base & { readonly k: 'tick'; readonly callee: string; readonly cs: number; readonly ce: number; readonly ticks: number; readonly args: readonly Expr[] })
   | (Base & { readonly k: 'index'; readonly target: Expr; readonly index: Expr })
-  | (Base & { readonly k: 'field'; readonly target: Expr; readonly field: string; readonly fs: number; readonly fe: number })
+  | (Base & { readonly k: 'field'; readonly target: Expr; readonly field: string; readonly fs: number; readonly fe: number; readonly args?: readonly Expr[] })
   | (Base & { readonly k: 'fact'; readonly arg: Expr })
   | (Base & { readonly k: 'deg'; readonly arg: Expr })
   | (Base & { readonly k: 'tuple'; readonly items: readonly Expr[] })

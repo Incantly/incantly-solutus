@@ -308,10 +308,11 @@ function checkRange(c: Checker, r: RangeClause, initial: TNode | undefined): Che
       });
       return undefined;
     }
-    if (st !== undefined && (st <= 0 || st > hi - lo)) {
-      c.err('bad_range', step!.s, step!.e, 'lang.bad_range', { why: st <= 0 ? 'The step must be above zero' : `The step ${st} is larger than the range`, min: lo, max: hi, step: st }, {
+    // a step larger than the range is allowed: only the two ends are left (numbers design 4)
+    if (st !== undefined && (st <= 0 || !Number.isFinite(st))) {
+      c.err('bad_range', step!.s, step!.e, 'lang.bad_range', { why: st <= 0 ? 'The step must be above zero' : 'The step must be a finite number', min: lo, max: hi, step: st }, {
         forms,
-        hint: 'Use a step above 0 and no larger than max - min.',
+        hint: 'Use a finite step above 0.',
         fingerprintKey: 'step',
       });
       return undefined;

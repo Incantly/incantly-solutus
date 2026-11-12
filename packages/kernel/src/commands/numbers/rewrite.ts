@@ -22,6 +22,11 @@ const PLAIN_DEFINE = new RegExp(`^\\s*(${NAME})\\s*=\\s*(${NUM})\\s*$`);
 const SLIDER_DEFINE = new RegExp(`^\\s*(${NAME})\\s*=\\s*(${NUM})\\s+in\\s+(${NUM})\\.\\.(${NUM})\\s+step\\s+(${NUM})(\\s+with\\s.*)?$`, 's');
 const ANGLE_DEFINE = new RegExp(`^\\s*(${NAME})\\s*=\\s*([^=]+)$`);
 const SHOW_NONE = /(\bshowIf\s*=\s*)none\b/;
+const CONTROL_WITH = new RegExp(`^\\s*(${NAME})\\s+with\\s`);
+const CONTROL_TYPES: ReadonlySet<string> = new Set(['Number', 'Bool', 'Button', 'Choice', 'Input']);
+const LABEL_TEXT = /(\blabel\s*=\s*)"([^"]*)"/;
+const PLACE_DOCK = /(\bplace\s*=\s*)dock\b/;
+const MAX_CAPTION = 120;
 
 /** The range part of a slider's own line, as written (`0..10 step 0.5`), so bounds that are expressions stay live. */
 function rangeText(definition: string): string | undefined {
@@ -57,7 +62,7 @@ export function numbersLineRewrite(host: unknown, text: string): LineRewrite | u
     // min = none or max = none: the number stops being a slider and keeps its value
     if (rr.items.some((i) => i.key !== 'step' && i.value === 'none')) {
       const v = figure.value(view.id);
-      return typeof v === 'number' && Number.isFinite(v) ? { text: `${view.name} = ${numberSource(v)}` } : undefined;
+      return typeof v === 'number' && Number.isFinite(v) ? { text: `${view.name} = ${numberSource(v)}`, dropRange: true } : undefined;
     }
     let lo = view.range?.min;
     let hi = view.range?.max;
@@ -86,6 +91,23 @@ export function numbersLineRewrite(host: unknown, text: string): LineRewrite | u
 
   // P with showIf = none: the condition goes away
   if (SHOW_NONE.test(text) && /\swith\s/.test(text)) return { text: text.replace(SHOW_NONE, '$1true') };
+
+  // a with label = "Angle": a text label on a control is its caption; place = dock is the word, not a name
+  const styled = CONTROL_WITH.exec(text);
+  const control = styled ? figure.get(styled[1] as string) : undefined;
+  if (styled && control && CONTROL_TYPES.has(control.type)) {
+    const label = LABEL_TEXT.exec(text);
+    if (label && (label[2] as string).length > MAX_CAPTION) {
+      return {
+        error: numbersError('limit', AT, { max: MAX_CAPTION, what: 'label characters', limit: 'caption_length', got: (label[2] as string).length }, {
+          token: control.name,
+          hint: `A label holds at most ${MAX_CAPTION} characters. Shorten it.`,
+        }),
+      };
+    }
+    const out = text.replace(LABEL_TEXT, 'caption = "$2", label = caption').replace(PLACE_DOCK, '$1"dock"');
+    if (out !== text) return { text: out };
+  }
 
   // a = 5 on a slider: the slider stays, with its range
   const plain = PLAIN_DEFINE.exec(text);

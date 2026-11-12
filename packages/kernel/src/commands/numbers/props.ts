@@ -9,7 +9,8 @@
 
 import type { Figure } from '../../graph/figure';
 import type { Name, ObjId } from '../../contracts/values';
-import { FIELDS } from '../../language/check';
+import { FIELDS, registerFieldTyper } from '../../language/check';
+import type { Ty } from '../../language/types';
 import { registerFieldReader } from '../../language/compile';
 import { PROPERTIES } from '../../language/props';
 import type { PropSpec } from '../../language/props';
@@ -64,6 +65,25 @@ export function registerNumbersProperties(): void {
   FIELDS['Number'] = { ...(FIELDS['Number'] ?? {}), min: T.Number, max: T.Number, step: T.Number, animating: T.Bool };
   FIELDS['Choice'] = { index: T.Number, count: T.Number };
   FIELDS['Input'] = { text: T.Text, valid: T.Bool };
+  // d.value is the selected option, so its type is the type of the options (controls-scripting design 3.1)
+  registerFieldTyper('Choice', (field, target, fig) => {
+    if (field !== 'value' || target.n !== 'ref') return undefined;
+    const inputs = fig.inputsOf(target.id).map((id) => fig.byId(id)?.type).filter((t): t is Ty => t !== undefined);
+    const first = inputs[0];
+    if (first && inputs.length === 1 && first.k === 'List' && first.of) return first.of;
+    if (first && inputs.every((t) => t.k === first.k)) return first;
+    const v = fig.read?.(target.id) as { value?: unknown } | undefined;
+    const o = v?.value;
+    if (typeof o === 'number') return T.Number;
+    if (typeof o === 'string') return T.Text;
+    if (typeof o === 'boolean') return T.Bool;
+    if (typeof o === 'object' && o !== null && 'x' in o && 'y' in o) return T.Point;
+    return undefined;
+  });
+  registerFieldReader('Choice', (field, value) => {
+    const o = value as Record<string, unknown> | undefined;
+    return o && (field === 'value' || field === 'index' || field === 'count') ? o[field] : undefined;
+  });
   registerFieldReader('Number', (field, _value, at) => {
     const figure = at.host as Figure | undefined;
     if (!figure || at.id === undefined) return undefined;

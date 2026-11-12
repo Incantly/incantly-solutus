@@ -242,6 +242,8 @@ export interface ApplyOptions {
   insertAt?: number;
   /** The teacher's tools may change a fixed object when they say so. */
   force?: boolean;
+  /** A plain redefinition of a slider drops its range instead of keeping it (set by a line rewrite such as `a with min = none`). */
+  dropRange?: boolean;
 }
 
 export interface BatchOptions {

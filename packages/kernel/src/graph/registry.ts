@@ -220,6 +220,8 @@ export interface LineRewrite {
   readonly text?: string;
   readonly notices?: readonly Notice[];
   readonly error?: ErrorObject;
+  /** The rewritten line redefines a slider as a plain number, so its range goes. */
+  readonly dropRange?: boolean;
 }
 
 /**

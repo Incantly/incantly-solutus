@@ -49,7 +49,7 @@ export type TNode =
   | (B & { readonly n: 'command'; readonly spec: CommandSpec; readonly form: CommandForm; readonly args: readonly TArg[]; readonly tuple?: readonly Ty[] })
   | (B & { readonly n: 'tick'; readonly id: ObjId; readonly name: string; readonly ticks: number; readonly arg: TNode })
   | (B & { readonly n: 'index'; readonly target: TNode; readonly index: TNode })
-  | (B & { readonly n: 'field'; readonly target: TNode; readonly field: string })
+  | (B & { readonly n: 'field'; readonly target: TNode; readonly field: string; readonly args?: readonly TNode[] })
   | (B & { readonly n: 'point'; readonly x: TNode; readonly y: TNode })
   | (B & { readonly n: 'polar'; readonly r: TNode; readonly a: TNode })
   | (B & { readonly n: 'list'; readonly items: readonly TNode[] })

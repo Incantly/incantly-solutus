@@ -67,7 +67,7 @@ export function renameExpr(e: Expr, starts: ReadonlySet<number>, from: string, t
     case 'index':
       return { ...e, target: r(e.target), index: r(e.index) };
     case 'field':
-      return { ...e, target: r(e.target) };
+      return { ...e, target: r(e.target), ...(e.args ? { args: e.args.map(r) } : {}) };
     case 'fact':
     case 'deg':
       return { ...e, arg: r(e.arg) };

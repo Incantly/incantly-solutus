@@ -77,7 +77,7 @@ export function writeNumberValue(
   const unit = displayUnitOf(figure, id);
   const c = commit(raw, { lo: range.min, hi: range.max, step: range.step ?? 'auto', unit, source: opts.source });
   if (!c.ok) {
-    const wr = figure.setFree(id, NaN, 'api');
+    const wr = figure.setFree(id, NaN, 'api', { reason: c.reason });
     if (!wr.ok) return wr;
     emitChange(figure, id, by);
     return {

@@ -226,7 +226,7 @@ function findSyntaxCommand(e: Expr): { callee: string; s: number } | undefined {
     case 'index':
       return findSyntaxCommand(e.target) ?? findSyntaxCommand(e.index);
     case 'field':
-      return findSyntaxCommand(e.target);
+      return findSyntaxCommand(e.target) ?? e.args?.map(findSyntaxCommand).find((h) => h !== undefined);
     case 'tuple':
     case 'list':
       for (const o of e.items) {

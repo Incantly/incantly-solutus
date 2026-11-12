@@ -16,6 +16,7 @@ import { classify } from './relation';
 import type { ArgFacts, CallCheck, FigureView, FormCheck, FormLike, FunctionTable, ObjectInfo, ParamSpec, Refusal } from './table';
 import { formText } from './table';
 import type { RelTree, TArg, TNode } from './tnode';
+import { printExpr } from './printer';
 import { T, accepts, binaryOp, isCallableTy, legalOpsFor, listOf, setLabel, tyEq, tyStr, typeSet } from './types';
 import type { Ty } from './types';
 import type { LangLimits } from './source';
@@ -112,6 +113,17 @@ const OP_WORDS: Record<string, string> = {
   '+': 'add', '-': 'subtract', '*': 'multiply', '/': 'divide', '^': 'use ^ on', and: 'use and on', or: 'use or on', xor: 'use xor on',
   '==': 'compare', '!=': 'compare', '<': 'compare', '<=': 'compare', '>': 'compare', '>=': 'compare',
 };
+
+/**
+ * The type of a field whose type depends on the object (`d.value` of a dropdown is the type of its options). Asked when
+ * `FIELDS` has no entry for the field; `undefined` leaves the field unknown.
+ */
+export type FieldTyper = (field: string, target: TNode, fig: FigureView) => Ty | undefined;
+const FIELD_TYPERS = new Map<string, FieldTyper>();
+/** An area registers the typer for the object-dependent fields of a type it owns. */
+export function registerFieldTyper(type: string, typer: FieldTyper): void {
+  FIELD_TYPERS.set(type, typer);
+}
 
 /** Fields by type, appended to by other areas (docs/features/language/design.md 3.10 rule 9). */
 export const FIELDS: Record<string, Record<string, Ty>> = {
@@ -369,6 +381,7 @@ class Checker {
           break;
         case 'field':
           walk(n.target);
+          n.args?.forEach(walk);
           break;
         case 'tuple':
         case 'list':
@@ -939,7 +952,7 @@ class Checker {
     const t = this.infer(e.target);
     if (!t) return null;
     const table = own(FIELDS, t.ty.k);
-    const f = table ? own(table, e.field) : undefined;
+    const f = (table ? own(table, e.field) : undefined) ?? FIELD_TYPERS.get(t.ty.k)?.(e.field, t, this.fig);
     if (!f) {
       const avail = table ? Object.keys(table) : [];
       return this.err('type_mismatch', e.fs, e.fe, 'lang.type_mismatch_where', { why: `A ${tyStr(t.ty)} has no field ${e.field}` }, {
@@ -950,7 +963,31 @@ class Checker {
         fingerprintKey: `${t.ty.k}.${e.field}`,
       });
     }
-    return { n: 'field', target: t, field: e.field, ty: f, s: e.s, e: e.e };
+    if (!e.args) return { n: 'field', target: t, field: e.field, ty: f, s: e.s, e: e.e };
+    // g.value(x): the field holds a function, which is called with numbers
+    const name = `${printExpr(e.target)}.${e.field}`;
+    if (!isCallableTy(f)) {
+      return this.err('not_callable', e.fs, e.fe, 'lang.not_callable', { name, type: tyStr(f) }, {
+        hint: `${name} is a ${tyStr(f)}, so it cannot be called.`,
+        fingerprintKey: `${t.ty.k}.${e.field}`,
+      });
+    }
+    const arity = f.arity ?? 1;
+    if (e.args.length !== arity) {
+      return this.err('arg_count', e.s, e.e, 'lang.arg_count', { name, n: arity, m: e.args.length }, {
+        hint: `Call ${name} with ${arity} number${arity === 1 ? '' : 's'}.`,
+        fingerprintKey: name,
+      });
+    }
+    const args: TNode[] = [];
+    for (const a of e.args) {
+      const x = this.infer(a);
+      if (!x) return null;
+      if (x.ty.k !== 'Number') return this.err('type_mismatch', x.s, x.e, 'lang.type_mismatch_where', { why: `${name} takes numbers, not a ${tyStr(x.ty)}` }, { left: tyStr(x.ty), fingerprintKey: `${name}.arg` });
+      args.push(x);
+    }
+    const ret = f.ret === 'Point' ? T.Point : f.ret === 'Bool' ? T.Bool : T.Number;
+    return { n: 'field', target: t, field: e.field, args, ty: ret, s: e.s, e: e.e };
   }
 
   inferTick(e: Expr & { k: 'tick' }): TNode | null {
