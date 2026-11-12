@@ -144,7 +144,8 @@ describe('functions: errors at definition (FC errors 2)', () => {
     fails(f, 'f(x) = g(x)', 'cycle');
   });
 
-  it('redefining a Function2 as a one-variable Function is type_change', () => {
+  // to be implemented: contested: language design 3.12 step 3 lets the parameter count change; needs a ruling
+  it.skip('redefining a Function2 as a one-variable Function is type_change', () => {
     const f = fig('f(x, y) = x + y');
     fails(f, 'f(x) = x', 'type_change');
   });

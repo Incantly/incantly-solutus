@@ -1967,7 +1967,9 @@ function runLocusPP(call: RuleCall, withRange: boolean): unknown {
   const from = withRange ? (numArg(call, 2) as number) : path.lo;
   const to = withRange ? (numArg(call, 3) as number) : path.hi;
   const sw = sweepLocus(open.value.setup, from, to);
-  if (sw.spent) return call.fail('timeout', 'The work budget ran out.');
+  // a path too fine to finish is drawn as far as the samples went, and the line says so
+  if (sw.spent && sw.pieces.every((piece) => piece.length < 2)) return call.fail('timeout', 'The work budget ran out.');
+  if (sw.capped || sw.spent) call.notify('sample_cap', { max: 20000 });
   return toSampledCurve(sw.pieces, 'locus');
 }
 
@@ -1982,7 +1984,9 @@ function runLocusFree(call: RuleCall): unknown {
   const setup = openSlice(call, ids.mover, ids.target);
   if (!setup.ok) return call.fail(setup.reason, setup.detail);
   const sw = sweepLocus(setup.value, from, to);
-  if (sw.spent) return call.fail('timeout', 'The work budget ran out.');
+  // a path too fine to finish is drawn as far as the samples went, and the line says so
+  if (sw.spent && sw.pieces.every((piece) => piece.length < 2)) return call.fail('timeout', 'The work budget ran out.');
+  if (sw.capped || sw.spent) call.notify('sample_cap', { max: 20000 });
   return toSampledCurve(sw.pieces, 'locus');
 }
 
@@ -2111,7 +2115,7 @@ const sweeps = (specs: CommandSpec[]): CommandSpec[] =>
       : s,
   );
 
-export const LOCUS_COMMANDS: CommandSpec[] = sweeps([
+export const LOCUS_COMMANDS: CommandSpec[] = withChecks(sweeps([
   objSpec('Locus', [
     form([p('Q', 'Point'), p('P', 'Point')], 'Curve', (call) => runLocusPP(call, false), 'path of Q as the mover P goes along its path'),
     form([p('Q', 'Point'), p('P', 'Point'), p('from', 'Number'), p('to', 'Number')], 'Curve', (call) => runLocusPP(call, true), 'locus over a natural-unit range'),
@@ -2143,4 +2147,4 @@ export const LOCUS_COMMANDS: CommandSpec[] = sweeps([
       'Number', runPredicateArea, 'measure of the region inside a rectangle',
     ),
   ]),
-]);
+]));

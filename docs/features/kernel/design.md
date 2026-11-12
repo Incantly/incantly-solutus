@@ -610,6 +610,15 @@ Added to the action table (core design section 6.6). Each is one line.
 
 These return data in the `TxResult` (they do not create objects). `DependsOn` and `Uses` can also be called as `figure.ancestorsOf` and `figure.dependentsOf`.
 
+### What a rule can ask the kernel
+
+A rule sees the figure through its `RuleCall`. Besides its own arguments it has four services, all read-only:
+
+- `call.notify(kind, params)`: adds a notice to the result of the line that ran the rule. It is for a value that is defined and still needs a remark, such as an ODE solution that stops at a blow-up. The kind is registered with `registerNotice`. One notice per kind and line is kept.
+- `call.inputsOf(id)`: the objects another object's value reads directly, with their names and values.
+- `call.argsOf(id)`: the values of the arguments of the command that defines another object. `P = PointOn(Segment(A, B), 0.3)` gives the segment and `0.3`.
+- `call.slice(source, target, { override: true })`: a slice whose source is defined by a rule. `run(values)` puts each value in place of the source's own value and re-runs what lies between it and the target. `Locus(Q, P)` uses it to move `P` along its path: it finds the path with `argsOf` and feeds the path's points in. Without `override`, a source that is not free is still the error `not_free`.
+
 ### Naming helper for tools
 
 `suggestName(type, hint?)` uses the one name table in the language design (3.7): points `A, B, ... Z, A_1, B_1 ...`; vectors `u v w`; lines, rays and segments `l m n`; numbers `a b c d` (angles `α β γ δ`); functions `f g h p q r`; circles, arcs and curves `c d k`; lists `L M N`; polygons `poly1`; regions `reg1`; texts `text1`; booleans `cond1`. After the letters, a sequence continues with `_1`, `_2` (`l_1`). Skips taken and reserved names. This is for pointer tools and the playground; the teacher always names its own objects.

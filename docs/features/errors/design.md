@@ -175,6 +175,14 @@ A rule runs only after a line is accepted, so on its own a command can only make
 
 Both return a `Refusal`: a kind, one sentence, and optionally a hint, up to 3 suggested lines and the argument to point at. Both must be pure. The kind must be in the error table; a hook that names an unknown kind, or that throws, gives an `internal` error. A refused line changes nothing, like any other failing line.
 
+What a hook can read, beyond the literal of each argument:
+
+- **The object behind a name.** When an argument is the bare name of an existing object, the hook also gets `value` (the object's value now, absent while it is undefined) and `source` (its defining line as text). `Roots(f)` uses the value to tell a polynomial from `sin`, and `Derivative(h)` uses the source to find a built-in with no derivative rule.
+- **A limit.** A refusal of kind `limit` may carry `limit: { name, max, got }`, the same field the language's own limits use.
+- **The forms.** Every refusal lists the command's forms in `forms`, so the caller can pick another one (`Roots(f, a, b)` after `needs_interval`).
+
+Kinds added by the functions area (codes C030 to C049): `needs_interval` (C030), `not_differentiable` (C031), `missing_range` (C032).
+
 ### 5.1 Nested expressions
 
 When the fault is deep inside a larger line, the outermost span is the line, but `col/endCol/token` point at the innermost token that is wrong. `cause` is used only when the outer problem is a different kind (e.g. the line is `no_matching_form` because the third argument failed to type; `cause` is the `type_mismatch` inside it). One level only; deeper chains are flattened to the innermost.

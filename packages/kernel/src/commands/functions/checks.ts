@@ -319,8 +319,24 @@ function integralOfTwo(c: CallCheck): Refusal | undefined {
   };
 }
 
+/** A number where the mover belongs: the mover is a point on a path, or a free number with its range. */
+function moverIsNumber(c: CallCheck): Refusal | undefined {
+  const m = c.args[1];
+  if (c.args.length !== 2 || !m || m.type !== 'Number') return undefined;
+  return {
+    kind: 'no_matching_form',
+    message: `${c.command} needs a mover, and ${m.text} is a plain number.`,
+    hint: `The mover is a point on a path, such as P = PointOn(c, 0.5), then ${c.command}(${c.args[0]?.text ?? '…'}, P). A free number works with its range: ${c.command}(${c.args[0]?.text ?? '…'}, k, from, to).`,
+    params: { command: c.command, given: c.args.map((a) => a.type).join(', ') },
+    param: 1,
+  };
+}
+
 const REFUSALS: Readonly<Record<string, (c: CallCheck) => Refusal | undefined>> = {
   Integral: integralOfTwo,
+  Envelope: moverIsNumber,
+  Locus: moverIsNumber,
+  LocusEquation: moverIsNumber,
 };
 
 /** Attaches the area's check-time hooks to the forms of its commands. */

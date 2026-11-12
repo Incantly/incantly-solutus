@@ -9,7 +9,7 @@ import type { RuleCall, RuleWork } from '../../graph/registry';
 import type { FunctionValue } from '../../language/runtime';
 import type { CommandSpec } from '../../language/table';
 import { toSampledCurve } from './locus';
-import { sample1, sample2, sampleN, numArg, isFin } from './sample';
+import { sample1, sample2, numArg, isFin } from './sample';
 import type { Fn1, Sampled1 } from './sample';
 import type { RationalFit } from './numeric';
 import {
