@@ -14,7 +14,7 @@ import type { ObjId } from '../../contracts/values';
 import type { SkipReason } from './types';
 import type { Figure } from '../../graph/figure';
 import type { CommandRegistry } from '../../graph/registry';
-import type { ActionCall, CommandRule } from '../../graph/registry';
+import type { ActionCall, ActionOutcome, CommandRule } from '../../graph/registry';
 import { numberSource, sameValue } from '../../graph/values';
 import type { BoundArg, CommandForm, CommandSpec, ParamSpec } from '../../language/table';
 import type { TArg } from '../../language/tnode';
@@ -24,7 +24,7 @@ import { numbersError } from './errors';
 import { makeNotice } from '../../errors/notices';
 import { evalTNode } from './eval';
 import { clearHandler, emitControlEvent } from './handlers';
-import { clickButton as runClickButton, ensureResetTracking, initialOf, pushActionOutcome } from './run';
+import { clickButton as runClickButton, ensureResetTracking, handlerRunning, initialOf, pushActionOutcome } from './run';
 import { commitInputText, inputTextOf } from './input';
 import { clearInputState } from './input';
 import { choiceStateOf, defaultCaption, setChoiceCaption, setChoiceIndex, restoreList, setListElement, toggleValue, writeNumberValue, writeSimpleValue } from './valuewrite';
@@ -154,9 +154,9 @@ function inputSpec(): CommandSpec {
 
 /* ------------------------------ action commands ------------------------------ */
 
-function done(figure: Figure, wrote: readonly ObjId[], summary: string): { summary: string } {
+function done(figure: Figure, wrote: readonly ObjId[], summary: string, notices?: readonly Notice[]): ActionOutcome {
   pushActionOutcome(figure, { status: 'done', wrote });
-  return { summary };
+  return notices && notices.length > 0 ? { summary, notices } : { summary };
 }
 
 function skipped(figure: Figure, reason: SkipReason, summary: string): { summary: string } {
@@ -164,9 +164,10 @@ function skipped(figure: Figure, reason: SkipReason, summary: string): { summary
   return { summary };
 }
 
-function failed(figure: Figure, error: ErrorObject, summary: string): { summary: string } {
+function failed(figure: Figure, error: ErrorObject, summary: string): ActionOutcome {
   pushActionOutcome(figure, { status: 'error', error });
-  return { summary };
+  // called on its own line, the action's refusal is the line's error; inside a handler it is that step's record
+  return handlerRunning(figure) ? { summary } : { summary, error };
 }
 
 function setValueSpec(): CommandSpec {
@@ -254,7 +255,7 @@ function setValueRule(args: readonly BoundArg[]): unknown {
       if (view.type === 'Number' && typeof v === 'number') {
         const r = writeNumberValue(figure, targetId, v, { source: 'setValue', by: 'host' });
         if (!r.ok) return failed(figure, r, `SetValue(${view.name}) failed`);
-        return done(figure, [targetId], `set ${view.name}`);
+        return done(figure, [targetId], `set ${view.name}`, r.value.notices);
       }
       if ((view.type === 'Bool' && typeof v === 'boolean') || (view.type === 'Text' && typeof v === 'string')) {
         const r = writeSimpleValue(figure, targetId, v, { by: 'host' });

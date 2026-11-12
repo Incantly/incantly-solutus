@@ -870,7 +870,13 @@ export class FigureTx extends FigureBase {
       const rule = call.form.rule(call.args) as ActionRule;
       const values = call.args.map(() => undefined as unknown);
       const out = rule.run({ figure: this as never, spec: call.spec, objects: objects.filter((o): o is ObjRec => o !== undefined).map((o) => o.id), values });
+      if (out && out.error) {
+        // the action's own refusal, placed on the line that called it
+        const at = this.at(parsed);
+        return { ...out.error, line: at.line, col: at.col, endCol: at.endCol, source: parsed.sm.raw ?? parsed.sm.text } as TxResult;
+      }
       this.diffReport(pass, rep);
+      if (out && out.notices) for (const n of out.notices) if (!rep.warnings.some((w) => w.kind === n.kind)) rep.warnings.push(n);
       return this.okResult(parsed, 'action', (out && out.summary) ?? printLineNode(parsed.node), rep, out && out.data !== undefined ? { data: out.data } : {});
     } catch {
       return internalError(name, this.at(parsed), '', name);

@@ -5,7 +5,7 @@
  * A command form's `rule` factory receives the bound arguments and returns a `CommandRule` (an object command) or an
  * `ActionRule` (an action). The kernel calls `run` whenever the object has to be computed.
  */
-import type { ErrorObject } from '../contracts/errors';
+import type { ErrorObject, Notice } from '../contracts/errors';
 import type { UndefReason, ObjId } from '../contracts/values';
 import type { Limits } from '../errors/limits';
 import type { Slice } from './types';
@@ -139,6 +139,10 @@ export interface ActionCall {
 export interface ActionOutcome {
   readonly summary?: string;
   readonly data?: unknown;
+  /** The action refused to run: the line fails with this error and nothing is changed. */
+  readonly error?: ErrorObject;
+  /** Facts the caller should know about what the action did (a value that was clamped). */
+  readonly notices?: readonly Notice[];
 }
 
 export interface ActionRule {

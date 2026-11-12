@@ -36,6 +36,13 @@ export type ActionOutcomeRecord =
 
 const outcomes = new WeakMap<Figure, ActionOutcomeRecord[]>();
 
+/** Figures that are running a handler's batch now: inside one, an action's refusal is a step record, not a line error. */
+const inHandler = new WeakSet<Figure>();
+
+export function handlerRunning(figure: Figure): boolean {
+  return inHandler.has(figure);
+}
+
 /** Record what an area action did (the kernel gives actions no error channel). */
 export function pushActionOutcome(figure: Figure, outcome: ActionOutcomeRecord): void {
   const list = outcomes.get(figure) ?? [];
@@ -611,10 +618,16 @@ export function runHandler(
     if (!from.has(id)) from.set(id, valueText(figure.value(id)));
   }
   drainActionOutcomes(figure);
-  const batch = figure.applyBatch(
-    ex.lines.map((l) => l.text),
-    { group: `${event} ${target}`, mode: 'atomic' },
-  );
+  inHandler.add(figure);
+  let batch: ReturnType<Figure['applyBatch']>;
+  try {
+    batch = figure.applyBatch(
+      ex.lines.map((l) => l.text),
+      { group: `${event} ${target}`, mode: 'atomic' },
+    );
+  } finally {
+    inHandler.delete(figure);
+  }
   if (!batch.ok) {
     const first = batch.results.find((r) => !r.ok) as ErrorObject | undefined;
     const run: HandlerRun = {
