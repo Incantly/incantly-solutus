@@ -186,6 +186,7 @@ export class FigureCore {
     this.tolOption = typeof opts.tolerance === 'number' && Number.isFinite(opts.tolerance) && opts.tolerance > 0 ? opts.tolerance : DEFAULT_TOLERANCE;
     this.env = createEnv({ read: (id) => this.readValue(id), slots: 16 });
     this.env.maxList = this.limits.listSize;
+    this.env.host = this;
     this.langLimits = Object.freeze({ objects: this.limits.objects, exprNodes: this.limits.exprNodes, lineLength: this.limits.lineLength, listSize: this.limits.listSize, depth: this.limits.depth });
     const me = (): FigureCore => this;
     this.view = {

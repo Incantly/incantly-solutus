@@ -238,6 +238,26 @@ function oddRatio(n: TNode): { p: number; q: number } | undefined {
   return aq > 1 && aq % 2 === 1 ? { p: q < 0 ? -p : p, q: aq } : undefined;
 }
 
+/**
+ * Reads a field an area added to `FIELDS` (`a.min`, `q.text`). `at.host` is the figure and `at.id` the object when the
+ * field is read off a plain object name. Returning `undefined` makes the field undefined.
+ */
+export type FieldReader = (field: string, value: unknown, at: { readonly host: unknown; readonly id: ObjId | undefined }) => unknown;
+
+const FIELD_READERS = new Map<string, FieldReader>();
+
+/** An area registers the reader for the fields it added to a type. The last one registered for a type wins. */
+export function registerFieldReader(type: string, reader: FieldReader): void {
+  FIELD_READERS.set(type, reader);
+}
+
+/** The fields the language itself evaluates; an area's reader is asked only for the others. */
+const CORE_FIELDS: Readonly<Record<string, readonly string[]>> = {
+  Point: ['x', 'y'], Vector: ['x', 'y', 'length'], Segment: ['length', 'start', 'end'], Circle: ['center', 'radius'],
+  Arc: ['center', 'radius', 'start', 'end'], Polygon: ['vertices', 'area', 'perimeter'], Line: ['point', 'direction'],
+  Text: ['length'], Region: ['value', 'area'],
+};
+
 function fieldOf(type: string, field: string, v: unknown): unknown {
   const o = v as Record<string, unknown>;
   const M = getMathLib();
@@ -284,8 +304,11 @@ function fieldOf(type: string, field: string, v: unknown): unknown {
     case 'Region':
       // a region carries its signed value and its unsigned area (functions-calculus design 14.1)
       return typeof o[field] === 'number' ? o[field] : undefined;
-    default:
-      return undefined;
+    default: {
+      // a value that carries the field itself (a Choice holds its index and count)
+      const own = typeof v === 'object' && v !== null && Object.hasOwn(o, field) ? o[field] : undefined;
+      return typeof own === 'number' || typeof own === 'boolean' || typeof own === 'string' ? own : undefined;
+    }
   }
 }
 
@@ -445,6 +468,25 @@ class Compiler {
         const field = n.field;
         const isN = isNum(n);
         const undef = isN ? NAN : undefined;
+        const reader = Object.hasOwn(CORE_FIELDS, type) && (CORE_FIELDS[type] as readonly string[]).includes(field) ? undefined : FIELD_READERS.get(type);
+        if (reader) {
+          const id = n.target.n === 'ref' ? this.objId(n.target.id) : undefined;
+          return (env) => {
+            const v = t(env);
+            if (v === undefined || (typeof v === 'number' && v !== v)) return undef;
+            let r: unknown;
+            try {
+              r = reader(field, v, { host: env.host, id });
+            } catch {
+              r = undefined;
+            }
+            if (r === undefined || (typeof r === 'number' && r !== r)) {
+              fail(env, 'not_set', `${type}.${field}`);
+              return undef;
+            }
+            return r;
+          };
+        }
         return (env) => {
           const v = t(env);
           if (v === undefined || (typeof v === 'number' && v !== v)) return undef;

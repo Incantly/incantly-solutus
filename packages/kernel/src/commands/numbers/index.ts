@@ -7,14 +7,16 @@
  */
 
 import type { CommandRegistry } from '../../graph/registry';
-import { registerNumbersCommands } from './commands';
+import { isAnimating, registerNumbersCommands } from './commands';
+import { inputTextOf, inputValidOf } from './input';
 import { registerNumbersErrors } from './errors';
-import { registerNumbersProperties } from './props';
+import { registerNumbersProperties, setFieldHooks } from './props';
 
 /** Register every command, property, field, notice and phrase of this area. Idempotent. */
 export function registerNumbers(registry: CommandRegistry): void {
   registerNumbersErrors();
   registerNumbersProperties();
+  setFieldHooks({ animating: isAnimating, text: inputTextOf, valid: inputValidOf });
   registerNumbersCommands(registry);
 }
 

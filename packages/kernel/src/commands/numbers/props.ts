@@ -10,6 +10,7 @@
 import type { Figure } from '../../graph/figure';
 import type { Name, ObjId } from '../../contracts/values';
 import { FIELDS } from '../../language/check';
+import { registerFieldReader } from '../../language/compile';
 import { PROPERTIES } from '../../language/props';
 import type { PropSpec } from '../../language/props';
 import { T, listOf } from '../../language/types';
@@ -63,7 +64,38 @@ export function registerNumbersProperties(): void {
   FIELDS['Number'] = { ...(FIELDS['Number'] ?? {}), min: T.Number, max: T.Number, step: T.Number, animating: T.Bool };
   FIELDS['Choice'] = { index: T.Number, count: T.Number };
   FIELDS['Input'] = { text: T.Text, valid: T.Bool };
+  registerFieldReader('Number', (field, _value, at) => {
+    const figure = at.host as Figure | undefined;
+    if (!figure || at.id === undefined) return undefined;
+    const view = figure.get(at.id);
+    if (!view) return undefined;
+    if (field === 'animating') return isAnimatingHook(figure, view.name);
+    if (!view.range) return undefined;
+    if (field === 'min') return view.range.min;
+    if (field === 'max') return view.range.max;
+    return field === 'step' ? stepOf(figure, at.id) : undefined;
+  });
+  registerFieldReader('Input', (field, _value, at) => {
+    const figure = at.host as Figure | undefined;
+    if (!figure || at.id === undefined) return undefined;
+    return field === 'text' ? inputHook.text(figure, at.id) : field === 'valid' ? inputHook.valid(figure, at.id) : undefined;
+  });
   void listOf;
+}
+
+/**
+ * Readers that live in files which import this one: they are set at registration so this file needs no import cycle.
+ */
+let isAnimatingHook: (figure: Figure, name: string) => boolean = () => false;
+const inputHook: { text: (figure: Figure, id: ObjId) => string | undefined; valid: (figure: Figure, id: ObjId) => boolean | undefined } = {
+  text: () => undefined,
+  valid: () => undefined,
+};
+
+export function setFieldHooks(h: { animating: (figure: Figure, name: string) => boolean; text: (figure: Figure, id: ObjId) => string; valid: (figure: Figure, id: ObjId) => boolean }): void {
+  isAnimatingHook = h.animating;
+  inputHook.text = h.text;
+  inputHook.valid = h.valid;
 }
 
 /* ------------------------------ selectors ------------------------------ */
