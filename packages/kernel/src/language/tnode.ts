@@ -38,6 +38,8 @@ export type TNode =
   | (B & { readonly n: 'clock'; readonly which: 't' | 'bt' | 'beat' })
   | (B & { readonly n: 'ref'; readonly id: ObjId; readonly name: string })
   | (B & { readonly n: 'local'; readonly slot: number; readonly name: string })
+  /** An expression in `x` (or `x, y`) written where a command takes a function: `Limit(sin(x) / x, 0)`. */
+  | (B & { readonly n: 'lambda'; readonly params: readonly { readonly name: string; readonly slot: number }[]; readonly body: TNode })
   | (B & { readonly n: 'unary'; readonly op: '-' | '+' | 'not'; readonly arg: TNode })
   | (B & { readonly n: 'bin'; readonly op: string; readonly l: TNode; readonly r: TNode; readonly variant: OpVariant })
   | (B & { readonly n: 'cmp'; readonly ops: readonly CmpOp[]; readonly operands: readonly TNode[] })
@@ -62,6 +64,8 @@ export interface TArg extends BoundArg {
   readonly expr?: TNode;
   /** Local slot of a binder. */
   readonly slot?: number;
+  /** Local slots of a list of binders, in order. */
+  readonly slots?: readonly number[];
   /** Type of the argument (of the body, for a body argument). */
   readonly ty?: Ty;
 }

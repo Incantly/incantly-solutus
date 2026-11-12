@@ -42,6 +42,11 @@ export interface RuleCall {
   fail(reason: UndefReason, detail?: string): undefined;
   /** Evaluates argument `i` now (for a body argument, in the scope of its binders). */
   evalArg(i: number): unknown;
+  /**
+   * Adds a notice to the result of the line that ran this rule: a fact about a value that is still defined (a solution
+   * that stops at a blow-up, a tangential meeting). The kind must be registered with `registerNotice`.
+   */
+  notify(kind: string, params?: Readonly<Record<string, string | number | boolean>>): void;
   /** For each argument, the object it names when it is a plain object name (`Locus(P, M)`), else `undefined`. */
   readonly ids: readonly (ObjId | undefined)[];
   /**
@@ -57,7 +62,25 @@ export interface RuleCall {
    * Evaluates the rules between a free object (or `'t'`, the clock) and a target object on a scratch copy, leaving the figure
    * as it was; safe to call inside a rule. Both are ids from `ids`. An error when an id is unknown or the source is not free.
    */
-  slice(source: ObjId | 't', target: ObjId): Slice | ErrorObject;
+  slice(source: ObjId | 't', target: ObjId, opts?: SliceOptions): Slice | ErrorObject;
+  /**
+   * The objects an object's value reads directly, with their values now (`undefined` while undefined). Empty for a free
+   * object or an unknown id. A sweeping command uses it to find the path a point is on (`P = PointOn(c, 0.3)` reads `c`).
+   */
+  inputsOf(id: ObjId): readonly { readonly id: ObjId; readonly name: string; readonly value: unknown }[];
+  /**
+   * The values now of the arguments of the command that defines an object (`P = PointOn(Segment(A, B), 0.3)` gives the
+   * segment and 0.3). Empty when the object is not defined by a command. Binders and bodies are `undefined`.
+   */
+  argsOf(id: ObjId): readonly unknown[];
+}
+
+export interface SliceOptions {
+  /**
+   * Lets the source be an object defined by a rule: `run(values)` then puts each value in place of the source's own value,
+   * so a command can move a point along its path. Without it a source that is not free is the error `not_free`.
+   */
+  readonly override?: boolean;
 }
 
 /**

@@ -1,6 +1,6 @@
 # Polygons and transformations: what the learner sees and does
 
-## 1. How GeoGebra presents it
+## 1. How the reference app presents it
 
 - Polygon tools in one toolbar group: polygon (click the points, click the first point again to close), regular polygon (click two points, then type the number of vertices in a dialog), rigid polygon, vector polygon.
 - Creating a polygon names and shows its vertices and sides. A transformed polygon also shows new vertices and sides with prime labels. The construction list fills with these objects.
@@ -137,7 +137,7 @@ As in `points-lines`, plus:
 
 Changes are saved as `with` lines.
 
-## 7. Differences from GeoGebra in one list
+## 7. Differences from the reference app in one list
 
 1. One object per polygon and per image; no automatic vertex and side objects.
 2. A show-motion toggle that animates every transformation with the `progress` argument.

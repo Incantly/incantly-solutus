@@ -36,6 +36,7 @@ export class FigureBase extends FigureCore {
   protected replaying = false;
   protected passDepth = 0;
 
+
   constructor(opts: FigureOptions = {}) {
     super(opts);
     this.registry.registerAll(kernelActionSpecs());
@@ -127,6 +128,8 @@ export class FigureBase extends FigureCore {
     }
     for (const [reason, names] of groups) rep.warnings.push(becameUndefinedNotice(names, reason));
     if (rep.becameDefined.length > 0) rep.warnings.push(makeNotice('became_defined', {}, rep.becameDefined));
+    for (const n of this.ruleNotices) rep.warnings.push(n);
+    this.ruleNotices = [];
   }
 
   /* ------------------------------ structural primitives ------------------------------ */

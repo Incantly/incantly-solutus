@@ -23,7 +23,7 @@ The core fields stay: `ok, line, col, endCol, kind, token, message, expected, fo
 
 ### Parse
 
-| Situation | GeoGebra | Ours |
+| Situation | The reference app | Ours |
 |---|---|---|
 | `f(x) = ` empty right side | One generic "check your input" message, no position | `syntax`, `col` at end of line, `expected: ["expression"]` |
 | `f(x) = x^^2` or `x**2` | Generic message | `syntax`, token `**`, hint "Use ^ for powers" |
@@ -89,7 +89,7 @@ The kernel reports after each line the objects that are undefined and why (core 
 
 **Partial results.** `step_limit` and `blowup` keep the part that was computed (`Function` with a shortened domain, or a number plus `err`). The object is *not* undefined; it carries a `warning: { reason, detail }` shown by `figure`.
 
-## 4. How GeoGebra handles these, in summary
+## 4. How the reference app handles these, in summary
 
 - Parse failures: one generic message, no position.
 - Argument-count and type mismatches: a named error with the command's accepted forms appended. That we keep.
@@ -253,6 +253,4 @@ A limit that does not exist:
 
 ## Sources studied
 
-GeoGebra source at commit 3608374 (`.../org/geogebra/common/`): `kernel/algos/` (root, ODE, sums), `kernel/cas/` (limit, integral wrappers), `kernel/advanced/` (asymptote, Taylor, slope field), `kernel/arithmetic/` (conditional nodes, function restriction), `euclidian/plot/`, `kernel/implicit/` (time budgets) and `kernel/algos/` locus code (per-step time limit).
-
-Manual: `commands/Integral/`, `commands/Limit/`, `commands/Extremum/`, `commands/SolveODE/`, `commands/NSolveODE/`, `commands/If/`, `commands/Asymptote/` (https://geogebra.github.io/docs/manual/en/commands/…).
+Removed before the repository was made public. The study notes above are in our own words.

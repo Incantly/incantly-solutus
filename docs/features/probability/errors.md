@@ -2,7 +2,7 @@
 
 Format: section 9 of the core design. Static errors stop the line; runtime problems give undefined with a reason code. Shared kinds (`bad_option`, `bad_argument`, `unknown_option`, warnings) are defined in `lists-matrices/errors.md` and `statistics/errors.md`.
 
-## 1. How GeoGebra handles failures here
+## 1. How the reference app handles failures here
 
 - Distribution commands with a wrong parameter (negative standard deviation, probability above 1, non-whole `n`) give undefined with no explanation, or in some cases an "illegal argument" message that does not say which parameter.
 - A probability outside [0, 1] given to an inverse command gives undefined.
@@ -27,7 +27,7 @@ Format: section 9 of the core design. Static errors stop the line; runtime probl
 
 ## 3. Runtime undefined reasons
 
-| Reason | Where | Detail example | GeoGebra | Recovery |
+| Reason | Where | Detail example | The reference app | Recovery |
 |---|---|---|---|---|
 | `bad_parameter` | any constructor whose parameters come from objects | "sigma is -0.3; Normal needs sigma > 0" | undefined, silent | Change the slider range so it cannot cross 0; the detail names the offending input |
 | `out_of_range` | `Quantile` with `q` outside [0, 1]; `CentralInterval` with mass outside (0, 1); `MinTrials` | "q = 1.2 must be between 0 and 1" | undefined | |
@@ -147,7 +147,7 @@ The view shows the same reason and detail text beside the field. Examples:
 - Lower bound above upper bound while dragging: the view swaps them and flashes both markers once (no message needed). Typing `lo = 5`, `hi = 2` in the boxes swaps on commit with a one-line note "bounds swapped".
 - A table range too large: "showing the first 100,000 rows".
 
-## 7. Better than GeoGebra
+## 7. Better than the reference app
 
 - The parameter that is wrong is named, with its allowed range and an example.
 - Renamed or removed commands (`RandomNormal`, `InverseNormal`) answer with the replacement.

@@ -1,6 +1,6 @@
 # Circles, arcs, sectors and conics: design
 
-Status: draft for review. Plane-geometry area, second folder. Uses the shared geometry model in `docs/features/points-lines/design.md` (sections 3.1 to 3.5: `V2`, `HLine`, `Tol`, `det2`, `orient`, `Path`, slot ordering, notes). Read that first. Fits `docs/design/formula-language-and-kernel.md`. Nothing is copied from GeoGebra; section 15 lists what was read.
+Status: draft for review. Plane-geometry area, second folder. Uses the shared geometry model in `docs/features/points-lines/design.md` (sections 3.1 to 3.5: `V2`, `HLine`, `Tol`, `det2`, `orient`, `Path`, slot ordering, notes). Read that first. Fits `docs/design/formula-language-and-kernel.md`. Nothing is copied from the reference app; section 15 lists what was read.
 
 ## 1. What the learner and the teacher get
 
@@ -89,7 +89,7 @@ Setting `Ellipse` with a semi-major axis less than half the focus distance does 
 
 Circle with centre through point; Circle with centre and radius; Compass; Circle through 3 points; Semicircle; Circular Arc; Circumcircular Arc; Circular Sector; Circumcircular Sector; Ellipse; Hyperbola; Parabola; Conic through 5 points; Tangents; Polar or Diameter Line. Each writes one script line (`ui.md`).
 
-## 2. How GeoGebra does it (in plain words)
+## 2. How the reference app does it (in plain words)
 
 **Model.** Every conic is a symmetric 3×3 matrix, stored as six numbers. A type tag is derived from it by classification: single point, intersecting lines, ellipse, circle, hyperbola, empty, double line, parallel lines, parabola, line (a circle with infinite radius, which circle inversion can produce). The classification looks at the determinant of the whole matrix, the determinant of the 2×2 quadratic part, and the rank. From the type it computes a frame: centre, two axis directions (eigenvectors of the quadratic part), and semi-axis lengths, and keeps them next to the matrix.
 
@@ -417,7 +417,7 @@ For a huge, nearly flat ellipse (`a ≥ 1e6` pixels), the view clips to the visi
 
 Speed targets: classification 0.2 µs; frame 0.3 µs; five-point 8 µs; tangent from a point 0.8 µs; common tangents 15 µs; closest point on ellipse 1 µs; AGM circumference 0.3 µs; adaptive ellipse arc length 4 µs.
 
-## 12. Better than GeoGebra
+## 12. Better than the reference app
 
 1. **Native frames** for constructed conics: no axis swap at the circle crossing; labelled foci stay put.
 2. **Global polar angle** as the ellipse parameter: points on ellipses survive any shape change.
@@ -450,15 +450,4 @@ Speed targets: classification 0.2 µs; frame 0.3 µs; five-point 8 µs; tangent 
 
 ## 15. Sources studied
 
-GeoGebra source (commit 3608374), `source/shared/common/src/main/java/org/geogebra/common/`:
-- `kernel/kernelND/GeoConicND.java`, `ConicMatrix.java`, `GeoConicPartND.java`, `GeoConicNDConstants.java`, `GeoQuadricND.java` : matrix form, type constants, classification, frame, path parameters
-- `kernel/geos/GeoConic.java`, `GeoConicPart.java`
-- `kernel/algos/`: circle, ellipse, hyperbola, parabola, five-point and six-coefficient conic algorithms; conic part (arc, sector) algorithms; tangent, polar, diameter, focus, vertex, directrix, axes, eccentricity, area, circumference, incircle and common-tangent algorithms; line-conic and conic-conic intersections
-- `kernel/advanced/`: asymptote, curvature, osculating circle, directrix, eccentricity, incircle
-- `kernel/Kernel.java` : precision constants
-- `kernel/commands/`: `CmdCircle`, `CmdConic`, `CmdEllipse`-family argument handling (to learn which forms exist)
-
-GeoGebra manual:
-- https://geogebra.github.io/docs/manual/en/commands/Conic_Commands/ and its pages: Axes, Center, Circle, Circumference, Coefficients, Conic, ConjugateDiameter, Curvature, Directrix, Eccentricity, Ellipse, Focus, Hyperbola, Incircle, LinearEccentricity, MajorAxis, MinorAxis, OsculatingCircle, Parabola, Parameter, PathParameter, Perimeter, Polar, Radius, Sector, SemiMajorAxisLength, SemiMinorAxisLength, Semicircle, Tangent, Type, Vertex
-- https://geogebra.github.io/docs/manual/en/commands/Geometry_Commands/ pages: Arc, Circle, CircularSector, CircumcircularArc, CircumcircularSector, Angle (conic), Area, Asymptote, IsTangent
-- https://geogebra.github.io/docs/manual/en/tools/Circle_and_Arc_Tools/ and https://geogebra.github.io/docs/manual/en/tools/Conic_Section_Tools/
+Removed before the repository was made public. The study notes above are in our own words.

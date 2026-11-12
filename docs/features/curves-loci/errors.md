@@ -69,7 +69,7 @@ Follows section 9 of the core design and `docs/features/functions-calculus/error
 
 **Not found is not an error.** `Intersect(c1, c2)` with no intersections returns `[]`; an implicit curve with no real points is a valid empty curve.
 
-## 3. How GeoGebra handles these
+## 3. How the reference app handles these
 
 - Parse failures: one generic message, no position.
 - A parametric curve with an undefined sample is split to find defined parts; the result is a curve with gaps and no message.
@@ -246,6 +246,4 @@ A warning on a gapped locus:
 
 ## Sources studied
 
-GeoGebra source at commit 3608374 (`.../org/geogebra/common/`): `euclidian/plot/`, `euclidian/draw/` (curve, implicit curve, inequality, locus drawables), `kernel/implicit/` (work meter, singular flags), `kernel/algos/` (locus and its per-step allowance), `kernel/PathMover*`, the prover/locus-equation directory.
-
-Manual: `Inequalities/`, `Curves/`, `commands/Locus/`, `commands/LocusEquation/`, `commands/Envelope/`, `commands/ImplicitCurve/` (https://geogebra.github.io/docs/manual/en/…).
+Removed before the repository was made public. The study notes above are in our own words.

@@ -18,7 +18,7 @@ The sheet is a view beside the figure, like the algebra list. Default split on a
  [ list ][ points ][ matrix ][ table ][ polyline ][ op. table ]   <- appear when a range is selected
 ```
 
-GeoGebra shows a toolbar of tool groups at the top and a context menu for creating objects. We keep the context menu but also show a **selection bar** under the grid as soon as a range is selected: one tap on the thing you want. Each button shows the line it will write on hover or long-press ("`list1 = ListFrom(A1:A8)`").
+The reference app shows a toolbar of tool groups at the top and a context menu for creating objects. We keep the context menu but also show a **selection bar** under the grid as soon as a range is selected: one tap on the thing you want. Each button shows the line it will write on hover or long-press ("`list1 = ListFrom(A1:A8)`").
 
 ## 2. Cells
 
@@ -89,7 +89,7 @@ Formula bar, gridlines, row headers, column headers, scrollbars, tooltips, requi
 - Fill preview fades in 80 ms. Written cells flash a pale highlight for 400 ms (not when `prefers-reduced-motion`; then a static outline for 1 s).
 - No animation during scroll.
 
-## 13. Differences from GeoGebra
+## 13. Differences from the reference app
 
 - Selection bar with visible lines instead of a toolbar of groups.
 - Error shown in the cell, no dialog.

@@ -60,7 +60,7 @@ Manual pages covered: Objects, Object Properties, Construction Protocol, Redefin
 
 ---
 
-## 3. How GeoGebra does it (in plain words)
+## 3. How the reference app does it (in plain words)
 
 - **Model.** Every object is a node with a value. A dependent object has one parent "algorithm" that reads input objects and writes one or more output objects. All objects and all algorithms sit in one construction list, in creation order. That order is always a valid dependency order.
 - **Lookup tables.** Names map to objects in a hash table; there is also a set per object class and a set ordered by label. Several sets mean every add and delete touches several structures.
@@ -108,7 +108,7 @@ type UndefReason =
   | 'no_convergence' | 'timeout' | 'input_undefined' | 'not_set' | 'limit';
 ```
 
-`input_undefined` is the reason on an object whose own maths is fine but one of its inputs is undefined; `cause` names the nearest undefined input: a direct input of this object, the first undefined one in rule order. It is not the root. A reader follows `cause` links, object by object, to reach the root. (GeoGebra just says "undefined" everywhere.) Details and the catalogue are in `errors.md`.
+`input_undefined` is the reason on an object whose own maths is fine but one of its inputs is undefined; `cause` names the nearest undefined input: a direct input of this object, the first undefined one in rule order. It is not the root. A reader follows `cause` links, object by object, to reach the root. (The reference app just says "undefined" everywhere.) Details and the catalogue are in `errors.md`.
 
 Equality (`sameValue(a, b)`) compares numbers bitwise-with-NaN-equal (so `NaN` equals `NaN`, `-0` differs from `0` only when a rule opts in), and compares composite values structurally. Functions and curves compare by their rule identity plus input cells, not by body, so a function whose parameters did not change counts as unchanged.
 
@@ -148,7 +148,7 @@ interface RuleInstance {
 }
 ```
 
-Rules are single-output in v1. A command that GeoGebra would answer with several objects (two intersection points, a polygon with its sides) returns one `List` or the user asks for each by index (`Intersect(c1, c2, 1)`), which the core design already does. This removes a whole class of "which output is mine?" bugs (outputs that outlive their algorithm, labelling rules, `resetLabels`). If a later command truly needs several outputs, it returns a tuple object and the lines `P1 = Part(T, 0)` pick pieces.
+Rules are single-output in v1. A command that the reference app would answer with several objects (two intersection points, a polygon with its sides) returns one `List` or the user asks for each by index (`Intersect(c1, c2, 1)`), which the core design already does. This removes a whole class of "which output is mine?" bugs (outputs that outlive their algorithm, labelling rules, `resetLabels`). If a later command truly needs several outputs, it returns a tuple object and the lines `P1 = Part(T, 0)` pick pieces.
 
 ### 4.5 The figure
 
@@ -248,7 +248,7 @@ The change report is what the teacher reads. It is also the data behind the lear
 
 ### 5.1 Why not "text in, text out"
 
-GeoGebra's input pipeline for redefinition serialises and rebuilds. We never do. The plan is a structural edit of the graph, applied in place. This keeps `ObjId`s, cuts redefinition from a whole-figure rebuild to work proportional to the object's downstream list, and makes undo exact.
+The reference app's input pipeline for redefinition serialises and rebuilds. We never do. The plan is a structural edit of the graph, applied in place. This keeps `ObjId`s, cuts redefinition from a whole-figure rebuild to work proportional to the object's downstream list, and makes undo exact.
 
 ---
 
@@ -403,7 +403,7 @@ Unknown key: `unknown_property`, hint lists the keys valid for that object's typ
 
 - A change to `a` marks the owner for restyle, not for a value recompute. The owner's `cell` is untouched, and no maths rule downstream runs because of a style edge.
 - Style edges can never form a cycle, because a property rule reads other objects' *values* and nothing reads a style. A point whose colour reads its own `x`, or an object whose `showIf` reads its own value, is therefore legal. The cycle check on lines only follows value edges.
-- When an input is deleted, the owner is not deleted (GeoGebra deletes dependents). The property rule is **detached** and the property reverts to its default, with a `property_detached` notice. Rationale: deleting a point because the slider that coloured it went away is a surprising cascade.
+- When an input is deleted, the owner is not deleted (The reference app deletes dependents). The property rule is **detached** and the property reverts to its default, with a `property_detached` notice. Rationale: deleting a point because the slider that coloured it went away is a surprising cascade.
 - Property rules are saved after the object's own line, in `with` form.
 
 ### 9.3 Defaults
@@ -425,7 +425,7 @@ These are data in a `defaultsFor(type, free)` table, not code branches, and a fi
 ### 9.4 Dynamic colours
 
 - `color = rgb(r, g, b)` with each channel 0..255 (numbers clamp to range; `NaN` falls back to the static colour).
-- `color = hsl(h, s, l)` with h in degrees, s and l in 0..1. Hue wraps. (GeoGebra offers HSV too; we offer HSL and `hsv(h, s, v)` both, converting to RGB at read time.)
+- `color = hsl(h, s, l)` with h in degrees, s and l in 0..1. Hue wraps. (The reference app offers HSV too; we offer HSL and `hsv(h, s, v)` both, converting to RGB at read time.)
 - `color = Gradient(u, c1, c2, ...)` is the colour map from the core design's particles section, usable for any object.
 - `opacity = expression` in 0..1; out of range clamps; `NaN` falls back.
 - If the rule is undefined (an input is undefined) the property reverts to its static value while undefined and no notice is raised. Rationale: a colour that depends on a missing thing should not make the object vanish.
@@ -434,7 +434,7 @@ These are data in a `defaultsFor(type, free)` table, not code branches, and a fi
 ### 9.5 Layers
 
 - Layers are integers 0..9, higher on top; draw order is layer, then type band, then order (core design section 8).
-- **New objects always start on layer 0.** (GeoGebra moves new objects up to the highest used layer; that surprises learners and is hard to explain. We do not copy it.) A script that wants a "background" says `with layer = 0` and a foreground `with layer = 5`.
+- **New objects always start on layer 0.** (The reference app moves new objects up to the highest used layer; that surprises learners and is hard to explain. We do not copy it.) A script that wants a "background" says `with layer = 0` and a foreground `with layer = 5`.
 - Selection and hit-testing prefer higher layers.
 - SVG export groups by layer.
 - A `Layer(n)` shorthand is not needed; `with layer = n` is enough.
@@ -498,7 +498,7 @@ type Move = { id: ObjId; fromOrder: number; toOrder: number };
 
 An entry for a line is a few hundred bytes. Undo cost is proportional to the entry (a redefine redoes one structural edit and one pass over its downstream), not the figure. Target: undo of one line in a 500-object figure under 1 ms.
 
-(GeoGebra: whole-document snapshots with an action list on top, capped at 100, ids unstable.)
+(The reference app: whole-document snapshots with an action list on top, capped at 100, ids unstable.)
 
 ---
 
@@ -528,7 +528,7 @@ interface Step {
 
 `figure.stepTo(n)`:
 
-- Sets the **reveal cursor** to `n`. Objects with `index >= n` are *not drawn and not listed in the object panel*, but they still exist, still hold values and still update. (GeoGebra emits remove/add notifications to views, which re-creates view state each time; we keep a single cursor and let views filter by it.)
+- Sets the **reveal cursor** to `n`. Objects with `index >= n` are *not drawn and not listed in the object panel*, but they still exist, still hold values and still update. (The reference app emits remove/add notifications to views, which re-creates view state each time; we keep a single cursor and let views filter by it.)
 - `stepTo` is O(number of steps crossed) in the view because it only flips visibility flags; it is O(1) in the kernel.
 - `figure.stepTo(figure.list.length)` is the default state; `Hide` and `Show` are independent from the cursor.
 - A film beat (`@beat`) can carry a `stepTo` value so a recorded lesson reveals the build in time with speech. The cursor is part of film state, not undo history.
@@ -610,6 +610,15 @@ Added to the action table (core design section 6.6). Each is one line.
 
 These return data in the `TxResult` (they do not create objects). `DependsOn` and `Uses` can also be called as `figure.ancestorsOf` and `figure.dependentsOf`.
 
+### What a rule can ask the kernel
+
+A rule sees the figure through its `RuleCall`. Besides its own arguments it has four services, all read-only:
+
+- `call.notify(kind, params)`: adds a notice to the result of the line that ran the rule. It is for a value that is defined and still needs a remark, such as an ODE solution that stops at a blow-up. The kind is registered with `registerNotice`. One notice per kind and line is kept.
+- `call.inputsOf(id)`: the objects another object's value reads directly, with their names and values.
+- `call.argsOf(id)`: the values of the arguments of the command that defines another object. `P = PointOn(Segment(A, B), 0.3)` gives the segment and `0.3`.
+- `call.slice(source, target, { override: true })`: a slice whose source is defined by a rule. `run(values)` puts each value in place of the source's own value and re-runs what lies between it and the target. `Locus(Q, P)` uses it to move `P` along its path: it finds the path with `argsOf` and feeds the path's points in. Without `override`, a source that is not free is still the error `not_free`.
+
 ### Naming helper for tools
 
 `suggestName(type, hint?)` uses the one name table in the language design (3.7): points `A, B, ... Z, A_1, B_1 ...`; vectors `u v w`; lines, rays and segments `l m n`; numbers `a b c d` (angles `α β γ δ`); functions `f g h p q r`; circles, arcs and curves `c d k`; lists `L M N`; polygons `poly1`; regions `reg1`; texts `text1`; booleans `cond1`. After the letters, a sequence continues with `_1`, `_2` (`l_1`). Skips taken and reserved names. This is for pointer tools and the playground; the teacher always names its own objects.
@@ -643,7 +652,7 @@ Method notes: all lookups are `Map` or typed-array indexed; the `downstream` arr
 
 ---
 
-## 16. Better than GeoGebra
+## 16. Better than the reference app
 
 1. **In-place redefinition.** No serialise-edit-rebuild; stable ids; cost proportional to the downstream.
 2. **Early cut-off.** Rules run only when an input actually changed value.
@@ -679,25 +688,4 @@ Method notes: all lookups are `Map` or typed-array indexed; the `downstream` arr
 
 ## 18. Sources studied
 
-GeoGebra source (read-only, commit 3608374), under `source/shared/common/src/main/java/org/geogebra/common/`:
-
-- `kernel/Construction.java` (construction list, algorithm list, update of all objects, redefinition/replace, step cursor, label tables, reorder)
-- `kernel/ConstructionDefaults.java` (default styles per object class)
-- `kernel/ConstructionStepper.java`, `kernel/ConstructionElementCycle.java`
-- `kernel/CircularDefinitionException.java`
-- `kernel/algos/AlgoElement.java`, `kernel/algos/AlgorithmSet.java`, `kernel/algos/ConstructionElement.java`
-- `kernel/geos/GeoElement.java` (properties: fixed, layer, visibility condition, dynamic colour, auxiliary; update cascade; removal)
-- `kernel/geos/GeoNumeric.java`, `GeoBoolean.java` (undefined handling and sliders, skimmed)
-- `kernel/commands/AlgebraProcessor.java`, `kernel/commands/Commands.java` (redefinition path, scripting setters for properties)
-- `main/undo/` (UndoManager, UndoCommand, UndoHistory, action stores, deletion executors)
-- `main/App.java` and `main/SelectionManager.java` (selection and undo hooks, skimmed)
-
-GeoGebra manual (read via https://geogebra.github.io/docs/manual/en/):
-
-- https://geogebra.github.io/docs/manual/en/Objects/
-- https://geogebra.github.io/docs/manual/en/Object_Properties/
-- https://geogebra.github.io/docs/manual/en/Construction_Protocol/
-- https://geogebra.github.io/docs/manual/en/Redefine_Dialog/
-- https://geogebra.github.io/docs/manual/en/Layers/
-- https://geogebra.github.io/docs/manual/en/Conditional_Visibility/
-- https://geogebra.github.io/docs/manual/en/Dynamic_Colors/
+Removed before the repository was made public. The study notes above are in our own words.

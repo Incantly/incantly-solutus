@@ -20,7 +20,10 @@ export interface ParamSpec {
    */
   readonly type: string;
   readonly optional?: boolean;
-  /** Default `value`. A `binder` is a bare name that becomes a local; a `body` is checked in the binders' scope. */
+  /**
+   * Default `value`. A `binder` is a bare name that becomes a local; with a list type (`List<Number>`) it is a list of
+   * bare names, each a local. A `body` is checked in the binders' scope.
+   */
   readonly kind?: ParamKind;
   /** Used when optional and omitted. */
   readonly default?: ConstValue;
@@ -35,6 +38,8 @@ export interface BoundArg {
   readonly expr?: unknown;
   /** The binder's local name. */
   readonly binder?: string;
+  /** For a binder parameter of a list type (`[y, v]` in `NSolveODE`): the local names, in order. */
+  readonly binders?: readonly string[];
   /** The default value when the argument was omitted. */
   readonly value?: ConstValue;
   readonly omitted: boolean;
@@ -42,6 +47,63 @@ export interface BoundArg {
 
 /** Builds the rule from checked inputs. Opaque to the language; the kernel defines it. */
 export type RuleFactory = (args: readonly BoundArg[]) => unknown;
+
+/**
+ * What a check-time hook sees of one argument (errors design, "Check time"). The hook runs while the line is being
+ * checked, before anything is committed, so it reads only what the text of the line fixes.
+ */
+export interface ArgFacts {
+  /** The type as text: `Number`, `Line`, `List<Point>`, `Function<Number>(1)`. Empty for an omitted argument. */
+  readonly type: string;
+  /**
+   * The value when the argument is written as a literal: a number (also `-2`, a named constant), a boolean, a text with
+   * no interpolation, a point of literal numbers as `{ x, y }`, or a list of literals as an array. Otherwise `undefined`.
+   */
+  readonly literal: unknown;
+  /** The argument as written. */
+  readonly text: string;
+  /** True when the argument was left out. */
+  readonly omitted: boolean;
+  /**
+   * When the argument is the bare name of an existing object: its value now (`undefined` while the object is
+   * undefined). A hook may read facts the value fixes (a polygon's corner count, whether a function is a polynomial).
+   */
+  readonly value?: unknown;
+  /** When the argument is the bare name of an existing object: its defining line as text. */
+  readonly source?: string;
+}
+
+/** The arguments of the chosen form, in parameter order, then the rest arguments. */
+export interface FormCheck {
+  readonly command: string;
+  readonly args: readonly ArgFacts[];
+  readonly rest: readonly ArgFacts[];
+}
+
+/** The arguments as written, when no form of the command fits them. */
+export interface CallCheck {
+  readonly command: string;
+  readonly args: readonly ArgFacts[];
+}
+
+/**
+ * A line refused at check time. The kind must be registered in the error table. `param` (an index into `args`, or into
+ * `rest` when `inRest` is true) is the argument the error points at; without it the whole call is the span.
+ */
+export interface Refusal {
+  readonly kind: string;
+  /** One plain sentence. */
+  readonly message: string;
+  readonly hint?: string;
+  readonly param?: number;
+  readonly inRest?: boolean;
+  /** Up to 3 complete replacement lines. */
+  readonly suggest?: readonly string[];
+  /** Params for the kind's message template, when it has one. */
+  readonly params?: Readonly<Record<string, string | number | boolean | readonly string[]>>;
+  /** For a `limit` refusal: the limit's name, its size and what the line asked for. */
+  readonly limit?: { readonly name: string; readonly max: number; readonly got: number };
+}
 
 export interface CommandForm {
   readonly params: readonly ParamSpec[];
@@ -58,6 +120,11 @@ export interface CommandForm {
   readonly explain?: string;
   /** True when the rule wants to run with undefined arguments (kernel design 6.4); the rule's own flag also counts. */
   readonly acceptsUndefined?: boolean;
+  /**
+   * Check-time hook: called once the arguments fit this form. A returned refusal fails the line with that error, so a
+   * literal that can never work (`Circle(O, -2)`) is an error on the line instead of an undefined object. Must be pure.
+   */
+  readonly check?: (c: FormCheck) => Refusal | undefined;
 }
 
 export interface CommandSpec {
@@ -65,6 +132,11 @@ export interface CommandSpec {
   readonly kind: 'object' | 'action';
   readonly group: string;
   readonly forms: readonly CommandForm[];
+  /**
+   * Check-time hook for arguments that fit no form: a returned refusal replaces the general `no_matching_form` or
+   * `arg_count` error with a specific one (`PointOn(3)` is `not_a_path`). Must be pure.
+   */
+  readonly refuse?: (c: CallCheck) => Refusal | undefined;
   /** Template for the Algebra view. */
   readonly describe?: string;
 }
@@ -106,7 +178,8 @@ export interface SpecLike<F extends FormLike> {
 /** The line a form prints in the catalogue: `Circle(center: Point, radius: Number) -> Circle`. */
 export function formText(name: string, f: FormLike): string {
   const ps = f.params.map((p) => {
-    const t = p.kind === 'binder' ? 'name' : p.type;
+    // a function of one variable prints as `Function`, the name the docs use for it
+    const t = p.kind === 'binder' ? 'name' : p.type.replace(/Function<Number, 1>/g, 'Function');
     const body = `${p.name}: ${t}`;
     return p.optional ? `[${body}]` : body;
   });

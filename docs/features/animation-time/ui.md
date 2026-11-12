@@ -96,9 +96,9 @@ Default look: width half the object's; 4 px-radius dots disabled, line only; col
 - If the solver blows up (`unstable_state`), a banner appears over the canvas: "The simulation became unstable at 4.2 s. Try less stiffness or more damping." with a Fix button that writes `@solver step 1/960` (a line shown in the lines panel). Seeking before 4.2 s shows valid values.
 - If a replay takes longer than one frame, "Catching up" appears next to the time.
 
-## 6. How GeoGebra presents it, and what we change
+## 6. How the reference app presents it, and what we change
 
-| GeoGebra | Ours |
+| The reference app | Ours |
 |---|---|
 | A play/pause button in a corner of the view when something animates; a separate speed setting per object in a properties dialog | One player bar with a speed menu; per-slider mini controls next to the slider |
 | Animation speed as a number where 1 means about 10 seconds | `seconds` for one pass, in the control and in the script |

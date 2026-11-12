@@ -34,7 +34,7 @@ For the teacher (the live voice): every command below is one short line. The res
 
 Out of scope here, with the owner: spreadsheet cell, row, column and fill commands (no spreadsheet in v1); selected-element and selected-index of a dropdown (controls-scripting); random choice and shuffling with seeds (shuffle is declared here, the random machinery in `probability`); vector products and unit vectors (geometry and vectors); applying a matrix to a shape (transforms, which calls the `Matrix * Point` rule below).
 
-## 2. How GeoGebra does it (summary)
+## 2. How the reference app does it (summary)
 
 Read from the source and the manual; described in our words.
 
@@ -221,7 +221,7 @@ A free matrix is `A = Matrix([[2, 1], [1, 3]])`. Entries given by formulas make 
 
 ### 5.3 Exact mode for classroom integers
 
-Learners compare their hand work to the screen. A float answer of `0.33333333333333337` for `1/3` helps nobody, and GeoGebra's rounding tricks hide real errors. We do this instead:
+Learners compare their hand work to the screen. A float answer of `0.33333333333333337` for `1/3` helps nobody, and the reference app's rounding tricks hide real errors. We do this instead:
 
 - When every entry of a matrix literal is a decimal literal of at most 9 significant digits (no formulas, no sliders), the matrix also keeps the exact rational grid. Entries as `BigInt` numerator and denominator.
 - Operations that can stay exact do: `+ - *`, `Transpose`, `Determinant`, `Invert`, `Rank`, `Rref`, `Solve`, `NullSpace`, `CharPoly`, `^` with an integer exponent. The exact path is used only if the matrix has at most 12 rows and 12 columns, and the BigInt sizes stay below 4,096 bits (else it falls back to floats and drops `exact`).
@@ -379,9 +379,9 @@ For a 2×2 matrix `A` the view can show how `A` deforms the plane (section 9 and
 - `A ^ -1` and `Invert(A)` give identical values and share a cache entry.
 - Very large entries (above 1e150) in matrix products can overflow to `inf`: undefined `not_finite`.
 
-## 11. Better than GeoGebra
+## 11. Better than the reference app
 
-- **Values, not objects.** A million-number list is one `Float64Array`. GeoGebra holds a million objects.
+- **Values, not objects.** A million-number list is one `Float64Array`. The reference app holds a million objects.
 - **A real matrix type.** Shape is known at check time for literals; every shape problem has a name; the `exact` path gives `1/3` without rounding tricks. No silent "undefined".
 - **Reasons everywhere.** `singular`, `not_square`, `complex_eigenvalues` explain themselves to the teacher.
 - **Tolerance scales with the matrix.**
@@ -413,16 +413,4 @@ For a 2×2 matrix `A` the view can show how `A` deforms the plane (section 9 and
 
 ## Sources studied
 
-GeoGebra source, read-only, commit 3608374, under `/Users/iteoluwakisibello/.kiro/crew/scratch/runtime-7c51f956/geogebra-src/source/shared/common/src/main/java/org/geogebra/common/`:
-
-- `kernel/algos/` (list-building, filtering, sorting, sequence, iteration, element access, append, remove, reverse, take, join, product, min/max algorithms)
-- `kernel/advanced/` (determinant, inverse, rank, row reduction, transpose, flatten, union, unique, zip, index-of, insert, dimension, identity, apply-matrix algorithms and their command processors)
-- `kernel/matrix/` (coordinate matrix helpers)
-- `kernel/geos/` (how lists and matrices convert)
-- `kernel/statistics/` (SVD and related list commands)
-
-GeoGebra manual (read for the list of commands and their forms, text not copied):
-
-- https://geogebra.github.io/docs/manual/en/commands/List_Commands/
-- https://geogebra.github.io/docs/manual/en/commands/Vector_and_Matrix_Commands/
-- https://geogebra.github.io/docs/manual/en/tools/Spreadsheet_Tools/ (to confirm what belongs to the spreadsheet and is left out)
+Removed before the repository was made public. The study notes above are in our own words.

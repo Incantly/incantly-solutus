@@ -7,7 +7,7 @@ Follows section 9 of the core design: every error is data, returned to the calle
 
 Runtime conditions that make a drawn object disappear are not errors. They are undefined values with a reason (core section 2).
 
-## 1. How GeoGebra handles these
+## 1. How the reference app handles these
 
 - Bad view ranges, unknown style names and bad values in dialogs are mostly prevented by the dialog (sliders, drop-downs). In the command line and scripts, view and style commands fail with the generic input error or a small set of named errors, and the caller gets only true or false.
 - A zoom that would go too far is silently clamped.
@@ -159,7 +159,7 @@ Each has a `code` for tests and for the live region.
 
 All text is localisable. Every gesture message states what happened, why, and what to do.
 
-## 5. Better than GeoGebra
+## 5. Better than the reference app
 
 - Every style and view mistake returns the property, the expected type or range, and the closest valid name.
 - `all` lists every problem on the line, so the model corrects once.

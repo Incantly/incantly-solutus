@@ -77,7 +77,7 @@ Kept from the legacy kit:
 | Notes per second, per figure | 24; extra notes are dropped, with a notice |
 | Gain | 0 to 1 per sound; the page limiter caps the total |
 
-## 6. Better than GeoGebra
+## 6. Better than the reference app
 
 - Sounds are objects with formulas, not one-off script calls, so they follow the figure live.
 - Timing follows the film clock, so sound is exact on seek, replay and export.
@@ -85,6 +85,4 @@ Kept from the legacy kit:
 
 ## Sources studied
 
-- Our legacy sound kit on `legacy/v1`: `packages/core/src/kits/sound/sound.ts`, `limits.ts`, and `packages/core/src/renderer/sound.ts`.
-- GeoGebra's manual page for the PlaySound command, for the idea of playing a function as sound.
-- Tone.js documentation for transport, offline rendering and synths.
+Removed before the repository was made public. The study notes above are in our own words.

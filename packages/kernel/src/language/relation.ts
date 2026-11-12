@@ -14,6 +14,8 @@ export function children(n: TNode): TNode[] {
       return [n.arg];
     case 'bin':
       return [n.l, n.r];
+    case 'lambda':
+      return [n.body];
     case 'cmp':
       return [...n.operands];
     case 'callObj':

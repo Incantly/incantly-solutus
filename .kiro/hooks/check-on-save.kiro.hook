@@ -1,0 +1,18 @@
+{
+  "enabled": true,
+  "name": "Run npm run check on save",
+  "description": "When a TypeScript source file in a package or app is saved, run lint, typecheck and all tests.",
+  "version": "1",
+  "when": {
+    "type": "fileEdited",
+    "patterns": [
+      "packages/*/src/**/*.ts",
+      "apps/*/src/**/*.ts"
+    ]
+  },
+  "then": {
+    "type": "runCommand",
+    "command": "npm run check",
+    "timeout": 600
+  }
+}

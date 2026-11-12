@@ -49,6 +49,10 @@ export interface AreaErrorKinds {
   empty_list_type: true;
   duplicate_arg: true;
   not_a_binder: true;
+  // functions (codes C030 to C049)
+  needs_interval: true;
+  not_differentiable: true;
+  missing_range: true;
 }
 
 export type ErrorKind = CoreErrorKind | Extract<keyof AreaErrorKinds, string>;

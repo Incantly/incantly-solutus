@@ -1,6 +1,6 @@
 # Lists and matrices: what the learner sees and does
 
-## 1. How GeoGebra presents it
+## 1. How the reference app presents it
 
 - A list shows in the algebra panel as `{1, 4, 9, …}`. A list of points or shapes also draws all its elements in the graphics view.
 - A matrix is a list of lists. The algebra view can show it as a matrix, with brackets, and lets you type or edit a matrix through a dialog in some apps. No built-in picture of what the matrix does to the plane.
@@ -126,7 +126,7 @@ Layers, all optional (each is a style property):
 - `Sort(...)` of a list of points that are shown with labels can animate the reorder when the user switches on "show steps" (a 400 ms transition of the label positions). Off by default.
 - Plane map morph as above; respect the system "reduce motion" setting by turning it into a crossfade.
 
-## 7. What we change from GeoGebra
+## 7. What we change from the reference app
 
 - Reasons for undefined, in the panel, with a link to the cause.
 - Editable matrix grid with fractions when exact.

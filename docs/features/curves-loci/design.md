@@ -2,7 +2,7 @@
 
 Status: draft for review. Fits `docs/design/formula-language-and-kernel.md` (the "core design") and builds on `docs/features/functions-calculus/design.md` (called "FC" below): its expression tree, algebras (Real, Interval, Dual, Hyper-dual, Jet), tri-state truth, `IvSet`, `Function2`, `Predicate`, `Predicate2` and the `packages/plot` package. Companion files here: `errors.md`, `agent.md`, `ui.md`.
 
-Syntax is ours and follows the core grammar. Command names are ordinary maths words. Nothing is copied from GeoGebra.
+Syntax is ours and follows the core grammar. Command names are ordinary maths words. Nothing is copied from the reference app.
 
 Not here: curve fitting by regression (statistics). The algebraic fit used by `LocusEquation` and the interpolation form of `Curve` through points are included because they are shape tools, not statistics.
 
@@ -89,7 +89,7 @@ Not here: curve fitting by regression (statistics). The algebraic fit used by `L
 
 **Not covered in v1:** the form `LocusEquation(Bool, Point)` (positions that make a geometric statement true, for example collinear): it needs a symbolic geometry prover. For statements that reduce to an equation of coordinates, use `Curve(F == G)` in the coordinates. 3D curves and surfaces: core says no 3D.
 
-## 2. How GeoGebra does it (plain words)
+## 2. How the reference app does it (plain words)
 
 Read from `euclidian/plot`, `euclidian/draw` (parametric curve, implicit curve, inequality, locus drawables), `kernel/implicit`, `kernel/algos` (locus, curve), `kernel/arithmetic` (inequality, expression tree), the locus-equation prover directory, and the manual pages for these.
 
@@ -99,7 +99,7 @@ Read from `euclidian/plot`, `euclidian/draw` (parametric curve, implicit curve, 
 
 **Inequalities.** Each inequality is classified into a type: one variable in x or y, linear, conic, "parametric in x/y" (one variable alone on one side, like `y < sin(x)`), or implicit. Types outside that list are accepted by the algebra view but not drawn. Combined inequalities (`and`, `or`) form a tree and each node draws its own filled shape clipped by its parent. Borders are dashed for strict signs.
 
-**Loci.** To draw the locus of Q as P moves along a path, GeoGebra copies the part of the figure between P and Q into a private second construction (by writing it out in its file format and reading it back), then moves P along its path in steps chosen from the path's length and the pixel distances between successive Q positions, with at least 128 steps and an allowance of half a second of wall-clock time per step. A 2D locus is a list of points. Related commands: `Locus` on a slider, on a slope field, and on the solution of a differential equation.
+**Loci.** To draw the locus of Q as P moves along a path, the reference app copies the part of the figure between P and Q into a private second construction (by writing it out in its file format and reading it back), then moves P along its path in steps chosen from the path's length and the pixel distances between successive Q positions, with at least 128 steps and an allowance of half a second of wall-clock time per step. A 2D locus is a list of points. Related commands: `Locus` on a slider, on a slope field, and on the solution of a differential equation.
 
 **Locus equation and envelope.** These do not draw; they compute an algebraic equation. The construction is turned into polynomial equations over the coordinates and a Gröbner-basis elimination (a computer-algebra step) removes the helper variables. The manual says only envelopes whose construction leads to an algebraic system can be computed, and that for a segment the whole supporting line is used. A related `LocusEquation(Bool, Point)` uses the same machinery as a geometric prover.
 
@@ -347,7 +347,7 @@ Limits: if the locus has several components (reducible algebraic curve), the fit
 - Line family: the envelope point at `s` solves the 2 x 2 linear system `a x + b y = c`, `a' x + b' y = c'`. Determinant `a b' − b a'`; zero determinant (family of parallel lines, or a stationary member) → undefined at that `s` (a gap).
 - Circle family: `(x − p)² + (y − q)² = r²` and the derivative condition `(x − p) p' + (y − q) q' + r r' = 0` (a line); intersect the line with the circle: zero, one or two points; two branches, kept apart by the sign of the cross product of `(x − p, y − q)` with `(p', q')`. Fewer than one point means the circle family has no envelope at that `s`.
 - Derivatives with respect to `s` (`a', b', c', p', q', r'`) are 5-point central differences on the slice with step `1e-4 × (range of s)`, accuracy about `1e-9`. If any member is non-smooth at `s` (a branch change) the sample is dropped.
-- Segment and ray: compute from their supporting lines, then keep only points whose line parameter lies inside the segment (or on the ray). (GeoGebra's manual says the supporting line is used; the clipped version matches what a student means by "the envelope of the ladder".)
+- Segment and ray: compute from their supporting lines, then keep only points whose line parameter lies inside the segment (or on the ray). (The reference app's manual says the supporting line is used; the clipped version matches what a student means by "the envelope of the ladder".)
 
 **Sampling.** Same adaptive rule as loci (§9) on the envelope points.
 
@@ -379,7 +379,7 @@ Limits: if the locus has several components (reducible algebraic curve), the fit
 - Moving `P` makes the construction pass through degenerate cases (coincident points): those samples are undefined; the locus has a gap there.
 - A locus with one piece but very many oscillations: capped at 20,000 samples, `warning: sample_cap`.
 
-## 14. Better than GeoGebra
+## 14. Better than the reference app
 
 1. **Certainty in implicit curves**: interval culling means small loops and isolated points are found; there is no 8-pixel coarse grid. Cost follows curve length.
 2. **No clocks anywhere**: tracing, loci and fills count evaluations, so frames and files agree on every machine.
@@ -406,15 +406,4 @@ Limits: if the locus has several components (reducible algebraic curve), the fit
 
 ## Sources studied
 
-GeoGebra source at commit 3608374, under `source/shared/common/src/main/java/org/geogebra/common/`:
-
-- `euclidian/plot/` (curve plotter, segment plotter, interval plotter)
-- `euclidian/draw/` (parametric curve, implicit curve, inequality, parametric inequality, locus drawables)
-- `kernel/implicit/` (implicit curve, quadtree, marching configurations, contour linking, intersection finder, asymptote)
-- `kernel/algos/` (locus algorithms, curve cartesian, spline, path movers)
-- `kernel/` path movers (`PathMover*`), `kernel/geos/` curve and locus objects
-- `kernel/arithmetic/` (inequality, inequality tree, function nodes)
-- `kernel/prover/` and the locus-equation code (read only to see that it is algebraic elimination)
-- `kernel/interval/` (interval type and set, used to inform the design of interval-based tracing)
-
-Manual (https://geogebra.github.io/docs/manual/en/): `Curves/`, `Inequalities/`, `commands/Curve/`, `commands/ImplicitCurve/`, `commands/Locus/`, `commands/LocusEquation/`, `commands/Envelope/`, `commands/Spline/`, `commands/PathParameter/`, `commands/CurvatureVector/`, `commands/ImplicitDerivative/`, `commands/ParametricDerivative/`, `commands/Asymptote/`, `commands/NSolveODE/`, `commands/SolveODE/`.
+Removed before the repository was made public. The study notes above are in our own words.

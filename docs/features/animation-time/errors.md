@@ -2,7 +2,7 @@
 
 Follows core section 9. Line errors are returned as data. Failures that happen **while playing** (a solver that blows up, a particle program that cannot go to the GPU) cannot be line errors, because no line is being applied; they are **runtime reports**: a structured warning delivered to the teacher's next `draw` or `figure` result and shown in the player bar, never a dialog. Undefined values carry reasons (core section 2).
 
-## 1. How GeoGebra handles these
+## 1. How the reference app handles these
 
 - Animation has few failure modes: the slider simply does not animate if its range is not finite or minimum and maximum are not active; a locked or fixed slider may refuse the dialog change.
 - A bad speed or increment is blocked by the dialog or corrected silently (for example, a step bigger than the range).
@@ -147,7 +147,7 @@ None of these stop playback. Each is reported once per change in state (not each
 | `out_of_domain` | `at(E, time)` with `time` outside `[0, duration]` |
 | `not_time_dependent` | `at(E, ...)` on an object that depends on user input (an error at definition time when detectable, otherwise this reason) |
 
-## 5. Better than GeoGebra
+## 5. Better than the reference app
 
 - Rate and state mistakes name the state and give the line to fix.
 - A solver failure is reported with a time and a fix instead of silently producing numbers.

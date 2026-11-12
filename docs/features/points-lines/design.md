@@ -1,6 +1,6 @@
 # Points, lines, vectors, intersections and measures: design
 
-Status: draft for review. Part of the plane-geometry area (with `conics` and `polygons-transforms`). It fits `docs/design/formula-language-and-kernel.md`. Nothing here copies GeoGebra code, text or names; section 12 lists what was read.
+Status: draft for review. Part of the plane-geometry area (with `conics` and `polygons-transforms`). It fits `docs/design/formula-language-and-kernel.md`. Nothing here copies the reference app's code, text or names; section 12 lists what was read.
 
 This document also defines the **shared geometry value model** (section 3): the numeric types, tolerances, paths and ordinal rules that `conics` and `polygons-transforms` reuse. Read section 3 first.
 
@@ -90,7 +90,7 @@ All forms are in our syntax (PascalCase, one result per call, `Name = Command(ar
 
 Point, Point on Object, Attach/Detach, Intersect, Midpoint, Line, Segment, Segment with Given Length, Ray, Vector, Vector from Point, Perpendicular Line, Parallel Line, Perpendicular Bisector, Angle Bisector, Locus, Angle, Angle with Given Size, Distance or Length, Slope, Relation. Each tool produces exactly one script line (or the single shortest list of lines) and appears in the same history as typed lines.
 
-## 2. How GeoGebra does it (in plain words)
+## 2. How the reference app does it (in plain words)
 
 **Model.** Points, lines, segments and rays are objects whose coordinates are stored as three numbers (homogeneous form). A line is `(a, b, c)` for `a x + b y + c = 0`. A point is `(x, y, w)`; `w = 0` is a point at infinity. The intersection of two lines is the cross product of their triples, and the line through two points is the cross product of the points. This is neat, needs no special cases for vertical lines, and gives points at infinity for free. Segments and rays are lines plus limits.
 
@@ -169,7 +169,7 @@ Concrete paths are built from the owning object's value. A `Circle` yields a `Pa
 
 ### 3.3 Tolerances: relative, explicit, and scale-aware
 
-GeoGebra uses fixed absolute epsilons. We use **relative** ones, derived from the sizes of the inputs, and keep the policy in one place.
+The reference app uses fixed absolute epsilons. We use **relative** ones, derived from the sizes of the inputs, and keep the policy in one place.
 
 ```ts
 export interface Tol {
@@ -355,7 +355,7 @@ Free points can be **attached**: `A = PointOn(path, ParamOf-at-A)` is generated 
 | Polygon, polyline | arc length fraction along the boundary | `u` |
 | Function | x | `0.5 + atan(x/xscale)/π` where `xscale` = 1 (no view dependence) |
 
-Squeezes are strictly monotone so the inverse is exact. Using `atan` (not GeoGebra's other rational map) makes 0.5 the natural middle and the derivative at 0.5 equal to `1/π` units per parameter step: easy to explain ("halfway").
+Squeezes are strictly monotone so the inverse is exact. Using `atan` (not the reference app's other rational map) makes 0.5 the natural middle and the derivative at 0.5 equal to `1/π` units per parameter step: easy to explain ("halfway").
 
 ### 6.4 `PointIn`
 
@@ -407,7 +407,7 @@ const perpendicular: CommandSpec = {
 };
 ```
 
-- **Subtype matching.** `Segment` and `Ray` are subtypes of `Line` for forms that say `Line` ("line-like"): a form written once with `Line` accepts `Segment` and `Ray` and the rule reads the carrier. This avoids the near-duplicate algorithms GeoGebra has. The rule receives a `LineLike { carrier: HLine, from: V2, dir: V2, limits: [lo, hi] }`.
+- **Subtype matching.** `Segment` and `Ray` are subtypes of `Line` for forms that say `Line` ("line-like"): a form written once with `Line` accepts `Segment` and `Ray` and the rule reads the carrier. This avoids the near-duplicate algorithms the reference app has. The rule receives a `LineLike { carrier: HLine, from: V2, dir: V2, limits: [lo, hi] }`.
 - **Rule signature.** `(inputs: Values, tol: Tol) => Result<Value>` where `Result` is a value or `{undef: Reason}`. No access to wall-clock, randomness (other than `rand(seed)`), or the view.
 - **Allocation.** Rules write into the output object's preallocated value slot (`V2` records mutated in place) to keep the frame GC-free at 500 objects.
 - **Complexity.** Everything in sections 4.2 to 5 is O(1); polygon cases are O(n); curve cases O(samples).
@@ -451,7 +451,7 @@ No order depends on history. No state across frames except the user-visible `par
 
 A frame of 500 geometry objects, 100 of them dependent on a dragged point, takes under 0.3 ms of kernel work.
 
-## 11. Better than GeoGebra
+## 11. Better than the reference app
 
 1. **Replay-exact labels.** Slot order depends only on the current inputs (section 3.5), not on drag history, so a file, a film seek and a second run agree.
 2. **Scale-free tolerances.** Relative, with explicit `Tol`; no fixed 1e-8.
@@ -466,19 +466,7 @@ A frame of 500 geometry objects, 100 of them dependent on a dragged point, takes
 
 ## 12. Sources studied
 
-GeoGebra source (commit 3608374), `source/shared/common/src/main/java/org/geogebra/common/`:
-- `kernel/algos/` : the line-line, line-conic, conic-conic, function and curve intersection algorithms; the angle, distance, slope, midpoint, bisector, perpendicular, parallel and vector algorithms; the locus algorithms; the point-in-region and random-point algorithms.
-- `kernel/geos/` : point, line, segment, ray, vector, 2D vector and the shared 3-vector types.
-- `kernel/kernelND/` : the dimension-independent intersect, midpoint, coordinate-system and conic base types.
-- `kernel/Kernel.java` : the precision constants.
-- `kernel/Path*.java`, `kernel/Region.java`, `kernel/PathMover*.java` : the path, parameter and region interfaces.
-- `kernel/advanced/` : closest point, affine and cross ratio, path parameter, asymptote, directrix algorithms.
-- `kernel/commands/` : the argument-processing for geometry and vector commands (to learn which forms exist).
-
-GeoGebra manual (read for coverage of forms and for the command list; behaviour re-described in our own words):
-- https://geogebra.github.io/docs/manual/en/commands/Geometry_Commands/ and every command page it links that is in this folder's scope (Point, PointOn forms, Midpoint, Line, Segment, Ray, Vector, PerpendicularLine, PerpendicularBisector, AngleBisector, Intersect, IntersectPath, Distance, Length, Slope, Angle, AffineRatio, CrossRatio, ClosestPoint, ClosestPointRegion, PathParameter, Locus, LocusEquation, RandomPointIn, PointIn, Barycenter, TriangleCenter, Trilinear, AreCollinear and the other Are* pages, IsInRegion, Direction)
-- https://geogebra.github.io/docs/manual/en/commands/Vector_and_Matrix_Commands/ and its vector pages (UnitVector, PerpendicularVector, UnitPerpendicularVector, Dot, Cross, ToPolar, ToComplex, CurvatureVector, Vector)
-- https://geogebra.github.io/docs/manual/en/tools/Point_Tools/, `Line_Tools`, `Special_Line_Tools`, `Measurement_Tools`
+Removed before the repository was made public. The study notes above are in our own words.
 
 ## 13. Changes to the core design
 
