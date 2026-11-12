@@ -10,7 +10,7 @@
  * never create objects, read the clock, or run JavaScript.
  */
 
-import type { ErrorObject } from '../../contracts/errors';
+import type { ErrorObject, Notice } from '../../contracts/errors';
 import type { ObjId } from '../../contracts/values';
 import type { Figure } from '../../graph/figure';
 import { BUILTIN_FUNCTIONS } from '../../language/builtins';
@@ -19,7 +19,7 @@ import { reservedGroup } from '../../language/names';
 import { splitLogicalLines } from '../../language/source';
 import type { HandlerEvent, HandlerRun } from './types';
 import { NUMBERS_LIMITS } from './types';
-import { numbersError } from './errors';
+import { numbersError, numbersNotice } from './errors';
 import { checkProbeLine, printLineNode, substituteLine, valueLiteralExpr } from './eval';
 import { parseRangeRestyle } from './rangestep';
 import type { RangeRestyle } from './rangestep';
@@ -473,7 +473,8 @@ function checkStepSource(
   // min, max and step are range edits, not kernel properties: the step is read and checked here
   const rangeStep = parseRangeRestyle(stepSource);
   if (rangeStep) return checkRangeStep(figure, target, event, rangeStep, stepSource, loopVar, line, stepCol);
-  const parsed = parseLine(stepSource, { line: 1 });
+  // `showIf = none` drops the condition; the figure reads it as `showIf = true` (numbers rewrite), and so does the check
+  const parsed = parseLine(stepSource.replace(/(\bshowIf\s*=\s*)none\b/, '$1true'), { line: 1 });
   if (!parsed.ok) return remap(parsed, line, stepCol - 1);
   const node = parsed.value.node;
   if (node.k === 'define') {
@@ -1033,4 +1034,68 @@ export function recordRun(figure: Figure, run: HandlerRun): void {
 /** A fresh probe name for expansion checks. */
 export function expansionProbeName(figure: Figure): string {
   return freshProbeName(figure);
+}
+
+/* ------------------------------ on lines through Figure.apply ------------------------------ */
+
+type HandlerSnapshot = readonly (readonly [string, StoredHandler])[];
+
+function snapshotHandlers(store: FigureHandlers): HandlerSnapshot {
+  return [...store.handlers].map(([k, h]) => [k, { target: h.target, event: h.event, steps: [...h.steps] }] as const);
+}
+
+function restoreHandlers(store: FigureHandlers, snap: HandlerSnapshot): void {
+  store.handlers.clear();
+  for (const [k, h] of snap) store.handlers.set(k, { target: h.target, event: h.event, steps: [...h.steps] });
+}
+
+const CLEAR_LINE = /^\s*ClearHandler\(\s*([A-Za-zͰ-Ͽ][A-Za-z0-9_Ͱ-Ͽ]*)\s*,\s*"?(click|change|input|dragend|load)"?\s*(?:,\s*(\d+)\s*)?\)\s*$/;
+
+/**
+ * The `on` line and `ClearHandler(go, click)` as lines of the figure (controls-scripting design 3.3): the steps live with
+ * the figure, and the line is one undo entry like any other.
+ */
+export function numbersLineHandler(host: unknown, text: string, opts: { readonly dryRun: boolean; readonly line: number }): import('../../graph/registry').LineHandled | ErrorObject | undefined {
+  const figure = host as Figure;
+  const isOn = /^\s*on\s+\S/.test(text);
+  const clear = isOn ? null : CLEAR_LINE.exec(text);
+  if (!isOn && !clear) return undefined;
+  const store = handlersFor(figure);
+  const before = snapshotHandlers(store);
+  const r = isOn
+    ? addHandler(figure, text.trim(), { line: opts.line })
+    : clearHandler(figure, clear?.[1] as string, clear?.[2] as string, clear?.[3] !== undefined ? Number(clear[3]) : undefined);
+  if (!r.ok) {
+    restoreHandlers(store, before);
+    return r;
+  }
+  const after = snapshotHandlers(store);
+  if (opts.dryRun) restoreHandlers(store, before);
+  const summary = isOn ? `on ${(r.value as { target?: string }).target ?? ''} ${(r.value as { event?: string }).event ?? ''}`.trim() : (r.value as { summary: string }).summary;
+  return {
+    summary,
+    notices: r.notices,
+    undo: () => restoreHandlers(store, before),
+    redo: () => restoreHandlers(store, after),
+  };
+}
+
+/** The `on` lines at the end of the script, after every object they name. */
+export function handlerScriptLines(host: unknown): readonly string[] {
+  const text = handlersToScript(host as Figure);
+  return text === '' ? [] : text.trimEnd().split('\n');
+}
+
+/** The handler steps a delete leaves broken, one notice per handler (controls-scripting design 5). */
+export function handlerDeleteNotes(host: unknown, names: readonly string[]): readonly Notice[] {
+  const figure = host as Figure;
+  const gone = new Set(names);
+  const out: Notice[] = [];
+  for (const name of names) {
+    for (const hit of stepsMentioning(figure, name)) {
+      if (gone.has(hit.target)) continue;
+      out.push(numbersNotice('handler_steps_broken', { target: hit.target, event: hit.event, name, steps: hit.steps.join(', ') }, [hit.target, name]));
+    }
+  }
+  return out;
 }

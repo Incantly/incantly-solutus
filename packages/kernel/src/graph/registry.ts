@@ -213,6 +213,78 @@ export function runLineChecks(figure: unknown, line: CheckedLine, parsed: Parsed
   return undefined;
 }
 
+/* ------------------------------ area lines ------------------------------ */
+
+/** A line an area carried out itself, with the way to take it back and do it again (one undo entry). */
+export interface LineHandled {
+  readonly summary: string;
+  readonly notices?: readonly Notice[];
+  readonly undo: () => void;
+  readonly redo: () => void;
+}
+
+/**
+ * A line kind an area owns outright (`on go click: SetValue(a, 0)`): `undefined` when the line is not of that kind,
+ * an error to refuse it, or what was done. On a dry run the handler must leave nothing changed.
+ */
+export type LineHandler = (figure: unknown, text: string, opts: { readonly dryRun: boolean; readonly line: number }) => LineHandled | ErrorObject | undefined;
+
+const LINE_HANDLERS: LineHandler[] = [];
+
+export function registerLineHandler(handler: LineHandler): void {
+  if (!LINE_HANDLERS.includes(handler)) LINE_HANDLERS.push(handler);
+}
+
+export function runLineHandlers(figure: unknown, text: string, opts: { readonly dryRun: boolean; readonly line: number }): LineHandled | ErrorObject | undefined {
+  for (const h of LINE_HANDLERS) {
+    const r = h(figure, text, opts);
+    if (r) return r;
+  }
+  return undefined;
+}
+
+/** Lines an area adds at the end of the script (its `on` lines), after every object. */
+export type ScriptTail = (figure: unknown) => readonly string[];
+
+const SCRIPT_TAILS: ScriptTail[] = [];
+
+export function registerScriptTail(tail: ScriptTail): void {
+  if (!SCRIPT_TAILS.includes(tail)) SCRIPT_TAILS.push(tail);
+}
+
+export function scriptTails(figure: unknown): string[] {
+  const out: string[] = [];
+  for (const t of SCRIPT_TAILS) {
+    try {
+      out.push(...t(figure));
+    } catch {
+      // a broken tail must not break saving
+    }
+  }
+  return out;
+}
+
+/** Notices an area adds to the report of a delete (handler steps that named a removed object). */
+export type DeleteNotes = (figure: unknown, names: readonly string[]) => readonly Notice[];
+
+const DELETE_NOTES: DeleteNotes[] = [];
+
+export function registerDeleteNotes(notes: DeleteNotes): void {
+  if (!DELETE_NOTES.includes(notes)) DELETE_NOTES.push(notes);
+}
+
+export function deleteNotes(figure: unknown, names: readonly string[]): Notice[] {
+  const out: Notice[] = [];
+  for (const n of DELETE_NOTES) {
+    try {
+      out.push(...n(figure, names));
+    } catch {
+      // a broken hook must not block the delete
+    }
+  }
+  return out;
+}
+
 /* ------------------------------ line rewrites ------------------------------ */
 
 /** What an area's rewrite does with a line: another text to apply in its place, notices for the result, or a refusal. */

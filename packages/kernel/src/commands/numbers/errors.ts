@@ -132,6 +132,7 @@ const NOTICE_SPECS: Readonly<Record<string, { code: string; severity: 'info' | '
   unit_inferred: { code: 'N122', severity: 'info', template: '{name} is an angle in {unit}.' },
   step_fallback: { code: 'N123', severity: 'info', template: '{name} uses an automatic step while its step is undefined.' },
   step_below_precision: { code: 'N124', severity: 'warning', template: '{name} was clamped but not snapped: the step is below precision.' },
+  handler_steps_broken: { code: 'N125', severity: 'warning', template: 'The handler on {target} {event} named {name}; steps {steps} are now broken.' },
 };
 
 /** Builds a notice of an area kind (falls back to the kernel's table for core kinds). */

@@ -23,6 +23,7 @@ import { lineRefStarts, refStarts, renameNode, renameStyleItem } from './rename'
 import type { ApplyOptions, BatchOptions, BatchResult, ChangeReport, Description, Persist, RateRule, StyleEntry, TxOk, TxResult } from './types';
 import { fitsType, sameValue, valueSource } from './values';
 import type { InvertCall } from './registry';
+import { deleteNotes } from './registry';
 import { toEffective } from './props';
 
 /**
@@ -197,6 +198,7 @@ export class FigureHist extends FigureTx {
       for (const o of set) if (this.isFixed(o)) return this.lockedError(parsed, o);
     }
     const names = set.map((o) => o.p.name);
+    rep.warnings.push(...deleteNotes(this, names));
     if (opts.dryRun) {
       rep.removed.push(...names);
       return this.okResult(parsed, 'delete', `deleted ${names.join(', ')}`, rep, { dryRun: true, affected: names.slice(1) });

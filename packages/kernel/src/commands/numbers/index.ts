@@ -7,9 +7,10 @@
  */
 
 import type { CommandRegistry } from '../../graph/registry';
-import { registerLineCheck, registerLineRewriter } from '../../graph/registry';
+import { registerDeleteNotes, registerLineCheck, registerLineHandler, registerLineRewriter, registerScriptTail } from '../../graph/registry';
 import { numbersLineRewrite } from './rewrite';
 import { numbersLineCheck } from './linecheck';
+import { handlerDeleteNotes, handlerScriptLines, numbersLineHandler } from './handlers';
 import { isAnimating, registerNumbersCommands } from './commands';
 import { inputTextOf, inputValidOf } from './input';
 import { registerNumbersErrors } from './errors';
@@ -23,6 +24,9 @@ export function registerNumbers(registry: CommandRegistry): void {
   registerNumbersCommands(registry);
   registerLineCheck(numbersLineCheck);
   registerLineRewriter(numbersLineRewrite);
+  registerLineHandler(numbersLineHandler);
+  registerScriptTail(handlerScriptLines);
+  registerDeleteNotes(handlerDeleteNotes);
 }
 
 export type {

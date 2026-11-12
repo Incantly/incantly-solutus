@@ -28,7 +28,7 @@ import { FigureBase } from './base';
 import { ObjRec } from './core';
 import { coerceProp, defaultsFor, isValidKey, validKeysFor } from './props';
 import type { ActionRule } from './registry';
-import { runLineChecks, runLineRewriters } from './registry';
+import { runLineChecks, runLineHandlers, runLineRewriters } from './registry';
 import type { ApplyOptions, Cell, ChangeReport, Persist, RateRule, StyleEntry, TxOk, TxOp, TxResult } from './types';
 import { sameValue, valueSource } from './values';
 
@@ -248,6 +248,15 @@ export class FigureTx extends FigureBase {
     const notices: Notice[] = [];
     let parsed: ParsedLine;
     if (typeof input === 'string') {
+      // a line kind an area owns outright (an `on` line) is carried out by the area, as one undo entry
+      const handled = runLineHandlers(this, input, { dryRun: opts.dryRun === true, line: lineNo });
+      if (handled) {
+        if ('ok' in handled) return { ...handled, line: lineNo, source: input } as TxResult;
+        if (!opts.dryRun) this.record({ k: 'ext', label: input, undo: handled.undo, redo: handled.redo });
+        const rep = emptyReport();
+        rep.warnings.push(...(handled.notices ?? []));
+        return this.okResult(undefined, 'action', handled.summary, rep, { line: lineNo, ...(opts.dryRun ? { dryRun: true as const } : {}) });
+      }
       // an area's own reading of the line comes first: it may stand for another line, or be refused
       const rw = runLineRewriters(this, input);
       if (rw?.error) return { ...rw.error, line: lineNo, source: input } as TxResult;
@@ -944,6 +953,9 @@ export class FigureTx extends FigureBase {
         for (let i = e.entries.length - 1; i >= 0; i--) this.revertEntry(e.entries[i] as JournalEntry);
         return;
       }
+      case 'ext':
+        e.undo();
+        return;
     }
   }
 
@@ -980,6 +992,9 @@ export class FigureTx extends FigureBase {
         for (const x of e.entries) this.replayEntry(x);
         return;
       }
+      case 'ext':
+        e.redo();
+        return;
     }
   }
 
