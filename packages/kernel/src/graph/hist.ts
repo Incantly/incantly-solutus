@@ -672,7 +672,7 @@ export class FigureHist extends FigureTx {
       this.pendingStyles.add(k.id);
     }
     this.markDirty(rec);
-    this.onFreeWritten(rec);
+    this.onFreeWritten(rec, before.value);
     if (why === 'show_me' || why === 'api') {
       this.record({ k: 'sets', changes: [{ rec, before, after }], label: `${rec.p.name} = ${valueText(v)}` });
     }
@@ -699,7 +699,7 @@ export class FigureHist extends FigureTx {
   }
 
   /** Hook for the solver: a free value that a rate may read changed. */
-  protected onFreeWritten(_rec: ObjRec): void {
+  protected onFreeWritten(_rec: ObjRec, _was?: unknown): void {
     // the solver checks its inputs when it syncs
   }
 

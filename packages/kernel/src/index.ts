@@ -32,3 +32,4 @@ export { StateSolver } from './clock/solver';
 export * as geometry from './commands/geometry/index';
 export * from './commands/numbers/index';
 export * from './commands/functions/index';
+export * from './commands/animation/index';

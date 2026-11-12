@@ -92,6 +92,10 @@ export class Figure extends FigureHist {
       compute: (r) => this.compute(r),
       ensureSlots: (n) => this.ensureSlots(n),
       write: (r, c) => this.writeCell(r, c),
+      rerunOf: (r) => {
+        const e = r.p.style.get('rerun');
+        return e?.word === 'restart' || e?.text === 'restart' ? 'restart' : 'continue';
+      },
     });
     this.stateDriver = () => (this.solver.active ? this.solver.sync() : []);
   }
@@ -126,8 +130,8 @@ export class Figure extends FigureHist {
     return super.flush(force);
   }
 
-  protected override onFreeWritten(rec: ObjRec): void {
-    this.solver.noteFree(rec);
+  protected override onFreeWritten(rec: ObjRec, was?: unknown): void {
+    this.solver.noteFree(rec, was);
   }
 
   protected override onDirective(name: string): void {
