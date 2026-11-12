@@ -9,6 +9,7 @@ import type { V2 } from './types';
 import { isPt } from './types';
 import { isSaneNum } from './numerics';
 import { rule } from './points';
+import { openPathSlice, sweepLocus } from '../functions/locus';
 
 /** Locus(Q, s, from, to) with s a free number. */
 export const locusSweepRule: CommandRule = rule((call) => {
@@ -153,10 +154,23 @@ export const locusSweepRule: CommandRule = rule((call) => {
 });
 
 /**
- * Locus(Q, P) over a point on a path. The kernel slice needs a free source and
- * rules cannot read the mover's parameter, so this form cannot run (kernel
- * gap); the sweep form above covers the same ground with a free number.
+ * Locus(Q, P) over a point on a path: P goes along its whole path and Q is traced. The sweep is the functions area's
+ * (the kernel slice with `override`, fed the path's points); the result is a geometry curve.
  */
-export const locusMoverRule: CommandRule = rule((call) =>
-  call.fail('no_dependency', 'Locus over a point on a path needs kernel sweep support; use Locus(Q, s, from, to) with a free number s'),
-);
+export const locusMoverRule: CommandRule = rule((call) => {
+  const tracer = call.ids[0] as ObjId | undefined;
+  const mover = call.ids[1] as ObjId | undefined;
+  if (tracer === undefined || mover === undefined) return call.fail('no_dependency', 'Locus needs the names of the traced point and the moving point.');
+  const open = openPathSlice(call, mover, tracer);
+  if (!open.ok) return call.fail(open.reason, open.detail);
+  const sw = sweepLocus(open.value.setup, open.value.path.lo, open.value.path.hi);
+  if (sw.spent && sw.pieces.every((piece) => piece.length < 2)) return call.fail('timeout');
+  const pieces = sw.pieces.filter((piece) => piece.length > 0).map((piece) => piece.map((q) => ({ x: q.x, y: q.y })));
+  const first = pieces.length === 1 ? (pieces[0] as V2[]) : undefined;
+  const a = first?.[0];
+  const b = first?.[first.length - 1];
+  let scale = 1;
+  for (const piece of pieces) for (const q of piece) scale = Math.max(scale, Math.abs(q.x), Math.abs(q.y));
+  const closed = first !== undefined && first.length > 2 && a !== undefined && b !== undefined && Math.hypot(a.x - b.x, a.y - b.y) <= 1e-9 * scale;
+  return { tag: 'geomCurve', pieces, closed };
+});

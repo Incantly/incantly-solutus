@@ -24,7 +24,7 @@ import type { ApplyOptions, BatchOptions, BatchResult, ChangeReport, Description
 import { fitsType, sameValue, valueSource } from './values';
 import type { InvertCall } from './registry';
 import { deleteNotes } from './registry';
-import { toEffective } from './props';
+import { toEffective, validKeysFor } from './props';
 
 /**
  * Why a free value is written. `drag` and `slider` join a gesture (one undo entry on `commitDrag`); `show_me` and `api` are
@@ -49,6 +49,11 @@ export interface DragWrite {
   readonly id: ObjId;
   readonly name: Name;
   readonly value: unknown;
+  /**
+   * Set when the write is to a number written in the object's own line, such as the `0.25` of `P = PointOn(c, 0.25)`:
+   * the index of that argument. The drag rewrites the number; undo puts the old line back.
+   */
+  readonly param?: number;
 }
 
 /** The answer of `dragPlan`: the free writes that would move the object, or why none exist. */
@@ -705,7 +710,7 @@ export class FigureHist extends FigureTx {
     for (const [rec, before] of this.gesture) {
       if (this.byIdMap.get(rec.id) !== rec) continue;
       const after = rec.p;
-      const same = sameValue(before.value, after.value) && before.freeReason === after.freeReason;
+      const same = before.node === after.node && sameValue(before.value, after.value) && before.freeReason === after.freeReason;
       if (!same) changes.push({ rec, before, after });
     }
     this.gesture.clear();
@@ -767,6 +772,11 @@ export class FigureHist extends FigureTx {
     for (const w of out) {
       const arg = expr.args[w.param];
       const parent = arg?.expr && arg.expr.n === 'ref' ? this.byIdMap.get(arg.expr.id) : undefined;
+      // a number written in the line itself is rewritten (dragging P = PointOn(c, 0.25) changes the 0.25)
+      if (!parent && arg?.expr?.n === 'num' && typeof w.value === 'number' && Number.isFinite(w.value)) {
+        writes.push({ id: rec.id, name: rec.p.name, value: w.value, param: w.param });
+        continue;
+      }
       if (!parent) return { writes: [], reason: 'not_draggable' };
       const sub = this.planDrag(parent, w.value, depth + 1);
       if (sub.writes.length === 0) return { writes: [], ...(sub.reason ? { reason: sub.reason } : {}) };
@@ -780,10 +790,41 @@ export class FigureHist extends FigureTx {
     if (typeof plan !== 'object' || plan === null || !Array.isArray(plan.writes)) return { ok: false, reason: 'not_draggable' };
     if (plan.writes.length === 0) return { ok: false, reason: plan.reason ?? 'not_draggable' };
     for (const w of plan.writes) {
+      if (w.param !== undefined) {
+        if (!this.writeLiteral(w.id, w.param, w.value as number)) return { ok: false, reason: 'not_draggable' };
+        continue;
+      }
       const r = this.setFree(w.id, w.value, 'drag');
       if (!r.ok) return { ok: false, reason: r.kind };
     }
     return { ok: true, delta: this.flush() };
+  }
+
+  /** Rewrites the number given as argument `param` in the object's line, as part of the drag gesture. */
+  protected writeLiteral(id: ObjId, param: number, value: number): boolean {
+    const rec = this.byIdMap.get(id);
+    if (!rec || this.busy) return false;
+    const node = rec.p.node;
+    const expr = rec.p.checked.expr;
+    if (node.k !== 'define' || node.expr.k !== 'call' || !expr || expr.n !== 'command') return false;
+    const t = expr.args[param]?.expr;
+    if (!t) return false;
+    const i = node.expr.args.findIndex((a) => a.value.s === t.s && a.value.e === t.e);
+    const old = node.expr.args[i];
+    if (!old) return false;
+    const v = Number(value.toPrecision(15));
+    const num = { k: 'num' as const, v, text: String(v), int: Number.isInteger(v), s: old.value.s, e: old.value.e };
+    const changed = { ...node, expr: { ...node.expr, args: node.expr.args.map((a, j) => (j === i ? { ...a, value: num } : a)) } };
+    const pr = parseLine(printLineNode(changed), { line: 1, isTaken: (n) => this.byNameMap.has(n), limits: this.langLimits });
+    if (!pr.ok || pr.value.node.k !== 'define') return false;
+    const c = checkLine(pr.value, this.view, { limits: this.langLimits, propertyKeys: validKeysFor });
+    if (!c.ok) return false;
+    const comp = this.compileFor(c.value, rec.id);
+    if (!comp) return false;
+    if (!this.gesture.has(rec)) this.gesture.set(rec, rec.p);
+    this.applyPersist(rec, { ...rec.p, node: { ...pr.value.node, ...(node.style ? { style: node.style } : {}) } as typeof node, checked: c.value, compiled: comp });
+    this.settle([rec]);
+    return true;
   }
 
   /* ------------------------------ ordering moves ------------------------------ */

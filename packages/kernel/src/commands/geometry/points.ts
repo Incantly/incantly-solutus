@@ -342,10 +342,13 @@ export const alongRule: CommandRule = rule((call) => {
 });
 
 export const paramOfRule: CommandRule = rule((call) => {
-  void call;
-  // Single-argument form: the point's path cannot be read from its value
-  // through the rule contract (kernel gap); the two-argument form works.
-  return call.fail('out_of_domain', 'use ParamOf(P, path) with the path');
+  // ParamOf(P) of P = PointOn(path, u): the path is the first argument of the line that defines P
+  const p = P(call, 0);
+  if (!sanePt(call, p)) return undefined;
+  const id = call.ids[0];
+  const path = id === undefined ? undefined : pathOf(call.argsOf(id)[0]);
+  if (!path) return call.fail('out_of_domain', 'ParamOf(P) needs a point made by PointOn; for another point use ParamOf(P, path)');
+  return path.norm(path.project(p).s);
 });
 
 export const paramOfPathRule: CommandRule = rule((call) => {
