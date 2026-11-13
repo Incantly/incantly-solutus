@@ -84,8 +84,12 @@ export class KernelSession {
   }
 
   /** Several lines as one undo step; every line applies or fails on its own (the teacher's `draw`). */
-  applyLines(lines: readonly string[], label: string): Outcome {
-    const r = this.figure.applyBatch(lines, { group: label, mode: 'independent' });
+  applyLines(lines: readonly string[], label: string, mode: 'independent' | 'atomic' = 'independent'): Outcome {
+    const r = this.figure.applyBatch(lines, { group: label, mode });
+    if (mode === 'atomic' && !r.ok) {
+      const bad = r.results.find((x) => !x.ok);
+      if (bad && !bad.ok) return { ok: false, error: bad };
+    }
     const failed = r.results.length - r.applied;
     return this.done(failed > 0 ? `${label}: ${r.applied} of ${r.results.length} lines applied` : `${label}: ${r.applied} lines applied`, r.notices);
   }
@@ -200,8 +204,23 @@ export class KernelSession {
   }
 
   /** A free point dragged on the graph. The gesture is one undo step: `done` commits it. */
+  /** True when dragging the point moves it: a free point, or one whose rule can be inverted (a point on a path). */
+  draggable(name: string): boolean {
+    const o = this.figure.get(name);
+    if (!o || o.type !== 'Point' || !o.cell.defined) return false;
+    return o.free || this.figure.dragPlan(name, o.cell.value).writes.length > 0;
+  }
+
   dragPoint(name: string, x: number, y: number, done: boolean): Outcome {
     const round = (v: number): number => Number(v.toPrecision(6));
+    if (!this.figure.get(name)?.free) {
+      // a point on a path, or a midpoint of free points: move what it is built from (kernel design 7)
+      const plan = this.figure.dragPlan(name, { x, y });
+      const r = this.figure.drag(plan);
+      if (!r.ok) return { ok: false, error: { ok: false, kind: 'not_draggable', message: `${name} cannot be dragged: ${String(r.reason ?? plan.reason ?? 'its rule cannot be inverted').replace(/_/g, ' ')}.` } as never };
+      if (done) this.figure.commitDrag();
+      return this.done(`moved ${name}`, []);
+    }
     const r = this.figure.setFree(name, { x: round(x), y: round(y) }, 'drag');
     if (!r.ok) return { ok: false, error: r };
     this.figure.flush();

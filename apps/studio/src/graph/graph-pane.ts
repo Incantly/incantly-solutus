@@ -15,6 +15,17 @@ export interface GraphPaneOptions {
   readonly bounds: () => (Box & { stretch?: boolean }) | undefined;
   /** A free point dragged to (x, y); `done` on release. */
   readonly drag: (name: string, x: number, y: number, done: boolean) => void;
+  /** A construction tool, when one is active: it takes clicks and hovers and paints its overlay (tools-2d 5). */
+  readonly tool?: () => GraphTool | undefined;
+}
+
+export interface GraphTool {
+  /** True while a tool other than Move is active: clicks go to it and points are not dragged. */
+  active(): boolean;
+  hover(px: number, py: number, vp: Viewport): void;
+  click(px: number, py: number, vp: Viewport): void;
+  /** Paints pending points, the ghost and halos after the scene. */
+  overlay(ctx: CanvasRenderingContext2D, vp: Viewport): void;
 }
 
 export interface GraphPane {
@@ -96,6 +107,7 @@ export function mountGraph(opts: GraphPaneOptions): GraphPane {
     if (!ctx || typeof ctx.setTransform !== 'function') return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     hits = paintScene(ctx, vp, opts.items());
+    opts.tool?.()?.overlay(ctx, vp);
   };
   const redraw = (): void => {
     if (frame) return;
@@ -127,6 +139,7 @@ export function mountGraph(opts: GraphPaneOptions): GraphPane {
 
   // pointer: drag a free point, else pan
   let drag: { kind: 'pan' | 'point'; x: number; y: number; name?: string; moved: boolean } | undefined;
+  let down: { x: number; y: number; tool: boolean } | undefined;
   const local = (e: PointerEvent | WheelEvent): { x: number; y: number } => {
     const r = canvas.getBoundingClientRect();
     return { x: e.clientX - r.left, y: e.clientY - r.top };
@@ -138,13 +151,26 @@ export function mountGraph(opts: GraphPaneOptions): GraphPane {
   canvas.addEventListener('pointerdown', (e) => {
     const p = local(e);
     const h = hitAt(p.x, p.y);
-    drag = h && h.k === 'circle' && h.drag ? { kind: 'point', name: h.drag, ...p, moved: false } : { kind: 'pan', ...p, moved: false };
+    const tool = opts.tool?.();
+    const toolOn = tool?.active() === true;
+    drag = !toolOn && h && h.k === 'circle' && h.drag ? { kind: 'point', name: h.drag, ...p, moved: false } : { kind: 'pan', ...p, moved: false };
+    down = { ...p, tool: toolOn };
     canvas.setPointerCapture?.(e.pointerId);
     canvas.classList.toggle('grabbing', drag.kind === 'pan');
   });
   canvas.addEventListener('pointermove', (e) => {
     const p = local(e);
+    const tool = opts.tool?.();
+    if (tool?.active() && !drag) {
+      tool.hover(p.x, p.y, vp);
+      canvas.style.cursor = 'crosshair';
+      tip.hidden = true;
+      redraw();
+      return;
+    }
     if (drag) {
+      // a small wobble during a click is not a pan, nor is a move with no button held (a late event from before the press)
+      if (!drag.moved && (Math.hypot(p.x - drag.x, p.y - drag.y) < 4 || e.buttons === 0)) return;
       drag.moved = true;
       if (drag.kind === 'pan') {
         vp.pan(p.x - drag.x, p.y - drag.y);
@@ -169,6 +195,13 @@ export function mountGraph(opts: GraphPaneOptions): GraphPane {
       const p = local(e);
       opts.drag(drag.name, vp.x(p.x), vp.y(p.y), true);
     }
+    // a click (no drag) with a tool on goes to the tool
+    if (down?.tool && drag && !drag.moved && e.type === 'pointerup') {
+      const p = local(e);
+      opts.tool?.()?.click(p.x, p.y, vp);
+      redraw();
+    }
+    down = undefined;
     drag = undefined;
     canvas.classList.remove('grabbing');
   };

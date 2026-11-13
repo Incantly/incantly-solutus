@@ -12,7 +12,7 @@ import { miniCurve, miniInterval } from './mini';
 import type { KernelSession } from './session';
 
 /** Types that draw on the graph and so get a swatch. */
-const DRAWN = new Set(['Point', 'Vector', 'Segment', 'Line', 'Ray', 'Circle', 'Arc', 'Polygon', 'Function', 'Curve', 'Relation', 'Region', 'Field', 'Chart', 'ContinuousDistribution', 'DiscreteDistribution']);
+const DRAWN = new Set(['Point', 'Vector', 'Segment', 'Line', 'Ray', 'Circle', 'Arc', 'Sector', 'Conic', 'Polyline', 'Polygon', 'Function', 'Curve', 'Relation', 'Region', 'Field', 'Chart', 'ContinuousDistribution', 'DiscreteDistribution']);
 
 export function drawsOnGraph(type: string, typeText: string, value: unknown): boolean {
   const base = type.replace(/<.*$/, '');
@@ -31,6 +31,8 @@ export interface ExpressionList {
   isHidden(id: number): boolean;
   /** Puts the caret in the empty row at the end. */
   focusNew(text?: string): void;
+  /** Highlights the rows of these objects for two seconds: the lines a tool just wrote (tools-2d ui.md 4). */
+  flash(names: readonly string[]): void;
 }
 
 export interface ExpressionOptions {
@@ -484,6 +486,13 @@ export function mountExpressions(opts: ExpressionOptions): ExpressionList {
     focusNew(text) {
       if (text !== undefined) newRow.input.value = text;
       newRow.input.focus();
+    },
+    flash(names) {
+      const want = new Set(names);
+      const rows = [...element.querySelectorAll<HTMLElement>('.expr')].filter((r) => want.has(r.dataset['name'] ?? ''));
+      for (const r of rows) r.classList.add('flash');
+      rows[rows.length - 1]?.scrollIntoView?.({ block: 'nearest' });
+      setTimeout(() => rows.forEach((r) => r.classList.remove('flash')), 2000);
     },
   };
 }

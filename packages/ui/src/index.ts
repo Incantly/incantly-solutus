@@ -25,3 +25,10 @@ export function defineLanguageElements(): void {
   if (!customElements.get(LINE_LIST_TAG)) customElements.define(LINE_LIST_TAG, LineListElement);
   if (!customElements.get(ERROR_CARD_TAG)) customElements.define(ERROR_CARD_TAG, ErrorCardElement);
 }
+
+export { ToolSession, accepts } from './tools/engine';
+export type { PendingPoint, StepResult } from './tools/engine';
+export { DEFERRED, GROUPS, TOOLS, catalogText, toolById } from './tools/catalog';
+export { allocate, definedName, nextName } from './tools/names';
+export { PATH_TYPES } from './tools/types';
+export type { Arg, EmitContext, Hit, PointCreate, Pt as ToolPt, RefusalCode, Slot, ToolAction, ToolDone, ToolGroup, ToolHost, ToolId, ToolKind, ToolRefusal, ToolSpec, ToolVariant } from './tools/types';
