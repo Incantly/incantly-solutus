@@ -4,6 +4,7 @@
  * it collects hit areas, so the pane can show tooltips and drag free points.
  */
 import { plotFunction, traceImplicit, fillRegion } from '@incantly/plot';
+import { arcPoints } from './hit';
 import type { FunctionValue } from '@incantly/kernel';
 import { gridStep, tickText } from './viewport';
 import type { Viewport } from './viewport';
@@ -21,6 +22,8 @@ export interface SceneItem {
   readonly free: boolean;
   /** Draw the name next to points. */
   readonly label: boolean;
+  /** Drawn faintly: a tool's preview, or a hidden object while the show/hide tool is on. */
+  readonly ghost?: boolean;
 }
 
 /** A place on the canvas the pointer can hover or drag. Coordinates in CSS pixels. */
@@ -311,13 +314,34 @@ export function paintItem(ctx: Ctx, vp: Viewport, it: SceneItem, hits: Hit[]): v
       ctx.stroke();
       return;
     }
-    case 'Arc': {
-      const a = v as { cx: number; cy: number; r: number; from: number; to: number };
+    case 'Arc':
+    case 'Sector': {
+      const pts = arcPoints(v as Parameters<typeof arcPoints>[0]);
+      if (pts.length < 2) return;
+      const f = (v as { conic: { frame: { cx: number; cy: number } } }).conic.frame;
+      const ring = it.type === 'Sector' ? [{ x: f.cx, y: f.cy }, ...pts] : pts;
       ctx.beginPath();
-      ctx.ellipse(vp.px(a.cx), vp.py(a.cy), a.r * vp.ppu, a.r * vp.ppuY, 0, -a.from, -a.to, true);
+      ring.forEach((p, i) => (i === 0 ? ctx.moveTo(vp.px(p.x), vp.py(p.y)) : ctx.lineTo(vp.px(p.x), vp.py(p.y))));
+      if (it.type === 'Sector') {
+        ctx.closePath();
+        ctx.fillStyle = alpha(c, 0.18);
+        ctx.fill();
+      }
       ctx.strokeStyle = c;
       ctx.lineWidth = 2.5;
       ctx.stroke();
+      return;
+    }
+    case 'Conic': {
+      const q = (v as { q?: { A: number; B: number; C: number; D: number; E: number; F: number } }).q;
+      if (!q) return;
+      const r = traceImplicit({ residual: (x: number, y: number) => q.A * x * x + q.B * x * y + q.C * y * y + q.D * x + q.E * y + q.F }, viewBox(vp)) as unknown as { ok: boolean; value?: { paths: readonly Float64Array[] } };
+      stroke(ctx, okPaths(r), c, 2.5);
+      return;
+    }
+    case 'Polyline': {
+      const pts = (v as { pts: readonly Pt[] }).pts;
+      stroke(ctx, [pts.flatMap((p) => [vp.px(p.x), vp.py(p.y)])], c, 2.5);
       return;
     }
     case 'Polygon': {
@@ -868,6 +892,15 @@ export function paintScene(ctx: Ctx, vp: Viewport, items: readonly SceneItem[]):
   const sorted = [...items].sort((a, b) => rank(a.type) - rank(b.type));
   for (const it of sorted) {
     try {
+      if (it.ghost) {
+        // a preview or a hidden object: faint and dashed, and not hoverable
+        ctx.save();
+        ctx.globalAlpha = 0.45;
+        ctx.setLineDash([6, 4]);
+        paintItem(ctx, vp, it, []);
+        ctx.restore();
+        continue;
+      }
       paintItem(ctx, vp, it, hits);
     } catch {
       // a value the painter does not understand is skipped, never fatal

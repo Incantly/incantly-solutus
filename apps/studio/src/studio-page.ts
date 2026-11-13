@@ -4,6 +4,8 @@
  */
 import { mountDataLab } from './datalab';
 import { mountProbCalc } from './probcalc';
+import { mountToolStrip } from './tools-ui';
+import type { ToolStrip } from './tools-ui';
 import type { ProbCalc } from './probcalc';
 import type { DataLab } from './datalab';
 import { EXAMPLES } from './examples';
@@ -28,6 +30,7 @@ export interface Mounted {
   readonly graph: GraphPane;
   readonly lab: DataLab;
   readonly calc: ProbCalc;
+  readonly tools: ToolStrip;
   readonly status: HTMLElement;
   /** Replaces the figure with an example's lines. */
   loadExample(id: string): void;
@@ -73,7 +76,8 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
 
   /* ------------------------------ panes ------------------------------ */
 
-  const holder: { expressions?: ExpressionList } = {};
+  const holder: { expressions?: ExpressionList; tools?: ToolStrip } = {};
+  const hiddenByStyle = (o: { style: { shown: boolean } }): boolean => o.style.shown === false;
   const items = (): SceneItem[] => {
     const out: SceneItem[] = [];
     const expressions = holder.expressions;
@@ -81,8 +85,10 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
     for (const o of session.figure.objects()) {
       if (!o.cell.defined) continue;
       if (expressions.isHidden(o.id)) continue;
+      // hidden with `with visible = false`: left out, or drawn faintly while the show/hide tool is on
+      if (hiddenByStyle(o) && !holder.tools?.showHidden()) continue;
       if (!drawsOnGraph(o.type, o.typeText, o.cell.value)) continue;
-      out.push({ id: o.id, name: o.name, type: o.type, typeText: o.typeText, value: o.cell.value, color: expressions.colorOf(o.id), free: o.free && o.type === 'Point', label: true });
+      out.push({ id: o.id, name: o.name, type: o.type, typeText: o.typeText, value: o.cell.value, color: expressions.colorOf(o.id), free: o.type === 'Point' && session.draggable(o.name), label: true, ...(hiddenByStyle(o) ? { ghost: true } : {}) });
     }
     return out;
   };
@@ -100,9 +106,15 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
       const r = session.dragPoint(name, x, y, done);
       if (!r.ok) say(r.error.message);
     },
+    tool: () => holder.tools?.graphTool,
   });
   const exprs = mountExpressions({ session, changed: () => graph.redraw(), say });
   holder.expressions = exprs;
+  const tools = mountToolStrip({
+    session, registry, say, host: () => graph.element, items, redraw: () => graph.redraw(), flash: (names) => exprs.flash(names),
+  });
+  holder.tools = tools;
+  graph.element.append(tools.element, tools.hint);
   const lab = mountDataLab(session, registry, say);
   const calc = mountProbCalc(session, registry, say);
 
@@ -277,6 +289,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
     redoBtn.disabled = !u.canRedo;
     undoBtn.title = u.label ? `Undo ${u.label}` : 'Undo';
     syncClock();
+    tools.figureChanged();
     lab.refresh();
     calc.refresh();
     graph.redraw();
@@ -306,6 +319,10 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
       else api.undo();
       return;
     }
+    if (!typing && tools.key(e.key)) {
+      e.preventDefault();
+      return;
+    }
     if (e.key === '/' && !typing) {
       e.preventDefault();
       exprs.focusNew();
@@ -319,6 +336,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
     graph,
     lab,
     calc,
+    tools,
     status,
     loadExample(id) {
       const ex = EXAMPLES.find((e) => e.id === id);
@@ -340,6 +358,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
     dispose() {
       off();
       document.removeEventListener('keydown', onKey);
+      tools.dispose();
       graph.dispose();
       if (running) caf(running);
     },
