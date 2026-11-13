@@ -43,6 +43,8 @@ const KEYS: readonly (readonly [string, string])[] = [
   ['Enter', 'Apply the line; with the completion list open, accept the suggestion'],
   ['Tab', 'Accept the highlighted completion'],
   ['Up / Down', 'Move between lines'],
+  ['Alt + Up / Down', 'In a call: the other forms of the command; in the new line: earlier lines'],
+  ['F2', 'Select the name of a line, to rename it'],
   ['Esc', 'Undo the edit in progress'],
   ['Backspace on an empty line', 'Delete the line'],
   ['Ctrl/Cmd + Z, Shift + Ctrl/Cmd + Z', 'Undo, redo'],
@@ -108,7 +110,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
     },
     tool: () => holder.tools?.graphTool,
   });
-  const exprs = mountExpressions({ session, changed: () => graph.redraw(), say });
+  const exprs = mountExpressions({ session, changed: () => graph.redraw(), say, view: () => graph.viewport.box() });
   holder.expressions = exprs;
   const tools = mountToolStrip({
     session, registry, say, host: () => graph.element, items, redraw: () => graph.redraw(), flash: (names) => exprs.flash(names),
@@ -249,6 +251,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
 
   const panel = el('aside', { class: 'panel', 'aria-label': 'Expressions' },
     el('div', { class: 'panel-head' }, el('span', {}, 'Expressions'), btn('+', 'icon-btn', 'New expression', () => exprs.focusNew())),
+    exprs.header,
     exprs.element,
     clock,
     el('footer', { class: 'panel-foot' }, status),

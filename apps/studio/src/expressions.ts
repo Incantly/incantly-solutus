@@ -4,9 +4,12 @@
  * the reason it failed. The last row is empty: type there to add a line. Rows are keyed by object id and updated in
  * place, so typing is never interrupted by a repaint.
  */
-import { complete, signatureHelp, valueText } from '@incantly/kernel';
+import { complete, niceRange, signatureHelp, valueText } from '@incantly/kernel';
 import type { Completion, ErrorObject, FigureView } from '@incantly/kernel';
+import { nextName } from '@incantly/ui';
 import type { LineRow } from '@incantly/ui';
+import { DEFAULT_PREFS, algebraRows, prefsFromScript, suggestionsFor } from '@incantly/view';
+import type { AlgebraObject, AlgebraPrefs, AlgebraRow, DisplayMode } from '@incantly/view';
 import { colorAt } from './graph/paint';
 import { miniCurve, miniInterval } from './mini';
 import type { KernelSession } from './session';
@@ -33,6 +36,11 @@ export interface ExpressionList {
   focusNew(text?: string): void;
   /** Highlights the rows of these objects for two seconds: the lines a tool just wrote (tools-2d ui.md 4). */
   flash(names: readonly string[]): void;
+  /** The list's header: filter box and display settings (algebra-view ui.md 1). */
+  readonly header: HTMLElement;
+  /** The preferences in force: the user's, overridden by the figure's `@algebra` lines. */
+  prefs(): AlgebraPrefs;
+  setPrefs(patch: Partial<AlgebraPrefs>): void;
 }
 
 export interface ExpressionOptions {
@@ -41,6 +49,8 @@ export interface ExpressionOptions {
   readonly changed: () => void;
   /** Status messages for the screen reader and the footer. */
   readonly say: (text: string) => void;
+  /** The visible x-range of the graph, for next-step cards that scan the view. */
+  readonly view?: () => { readonly x0: number; readonly x1: number };
 }
 
 interface RowParts {
@@ -50,6 +60,13 @@ interface RowParts {
   readonly input: HTMLInputElement;
   readonly out: HTMLElement;
   readonly del: HTMLButtonElement;
+  /** The row's text in maths form, shown while it is not being edited. */
+  readonly display: HTMLElement;
+  /** "Made from" and "used by", and the undefined chain, when expanded (design 3.7). */
+  readonly deps: HTMLElement;
+  readonly toggle: HTMLButtonElement;
+  /** A next-step card under the row (design 3.13). */
+  readonly card: HTMLElement;
   /** The text last shown from the figure, to tell an edit in progress from a stale row. */
   shown: string;
   error: ErrorObject | undefined;
@@ -85,6 +102,23 @@ export function mountExpressions(opts: ExpressionOptions): ExpressionList {
   element.setAttribute('aria-label', 'Expressions');
   const rows = new Map<number, RowParts>();
   const hidden = new Set<number>();
+  let userPrefs: AlgebraPrefs = DEFAULT_PREFS;
+  let prefs: AlgebraPrefs = DEFAULT_PREFS;
+  let model = new Map<number, AlgebraRow>();
+  const expanded = new Set<number>();
+  const collapsed = new Set<string>();
+  const groupHeads = new Map<string, HTMLElement>();
+  const history: string[] = [];
+  let historyAt = -1;
+  /** Objects already offered a next-step card (once per object). */
+  const offered = new Set<number>();
+  let cardFor: number | undefined;
+  /** A fresh name of a kind that is also not taken by an earlier call in the same batch. */
+  const freeOf = (taken: Set<string>) => (kind: string): string => {
+    const n = nextName(kind, (x) => !taken.has(x) && !session.figure.get(x) && session.figure.apply(`${x} = 0`, { dryRun: true }).ok);
+    taken.add(n);
+    return n;
+  };
   const colors = new Map<number, string>();
   let nextColor = 0;
   const colorOf = (id: number): string => {
@@ -140,11 +174,7 @@ export function mountExpressions(opts: ExpressionOptions): ExpressionList {
       }
     })();
     if (help) {
-      const h = help as unknown as { forms?: readonly { text?: string; active?: boolean; matches?: boolean }[] };
-      const forms = [...(h.forms ?? [])].sort((a, b) => Number(b.active ?? false) - Number(a.active ?? false) || Number(b.matches ?? false) - Number(a.matches ?? false));
-      const lines = forms.map((f) => f.text ?? '').filter(Boolean);
-      sig.textContent = lines.slice(0, 3).join('\n');
-      sig.hidden = lines.length === 0;
+      renderSignature(help);
       if (!sig.hidden) place(input, sig);
     } else sig.hidden = true;
     // completion of the word before the caret, from two letters
@@ -181,6 +211,45 @@ export function mountExpressions(opts: ExpressionOptions): ExpressionList {
     if (!sig.hidden) sig.style.top = `${parseFloat(pop.style.top) + pop.getBoundingClientRect().height + 4}px`;
   };
 
+  /** Which form the signature box shows: the active one, or another picked with Alt+Up and Alt+Down. */
+  let sigShift = 0;
+  let sigFor = '';
+  const renderSignature = (help: NonNullable<ReturnType<typeof signatureHelp>>): void => {
+    const forms = [...help.forms].sort((a, b) => Number(b.active) - Number(a.active) || Number(b.matches) - Number(a.matches));
+    if (forms.length === 0) {
+      sig.hidden = true;
+      return;
+    }
+    if (sigFor !== help.command) {
+      sigFor = help.command;
+      sigShift = 0;
+    }
+    const at = ((sigShift % forms.length) + forms.length) % forms.length;
+    const f = forms[at] as (typeof forms)[number];
+    sig.replaceChildren();
+    // the form with the parameter being typed in bold (language ui.md, signature help)
+    const m = /^(\w+)\((.*)\)(\s*->\s*(.*))?$/.exec(f.text);
+    const head = el('div', 'sig-form');
+    if (m) {
+      const params = (m[2] as string).length ? (m[2] as string).split(/,\s*/) : [];
+      head.append(el('span', 'sig-name', `${m[1]}(`));
+      params.forEach((p, i) => {
+        if (i > 0) head.append(document.createTextNode(', '));
+        head.append(el('span', i === help.activeParam && (at === 0 || f.matches) ? 'sig-param on' : 'sig-param', p));
+      });
+      head.append(document.createTextNode(')'));
+      if (m[4]) head.append(el('span', 'sig-ret', ` → ${m[4]}`));
+    } else head.textContent = f.text;
+    sig.append(head);
+    if (f.summary) sig.append(el('div', 'sig-summary', f.summary));
+    if (forms.length > 1) {
+      const n = forms.filter((x) => x.matches).length;
+      sig.append(el('div', 'sig-more', `${at + 1} of ${forms.length} forms${n > 1 ? ` · ${n} fit so far` : ''} · Alt+↑ ↓ for others`));
+    }
+    sig.setAttribute('aria-label', `${f.text}. ${f.summary}`);
+    sig.hidden = false;
+  };
+
   const accept = (input: HTMLInputElement, i: number): void => {
     const c = items[i];
     if (!c) return;
@@ -207,6 +276,19 @@ export function mountExpressions(opts: ExpressionOptions): ExpressionList {
       return;
     }
     if (parts && text === parts.shown) return;
+    // a lesson may allow only some commands (design 3.11, error kind `restricted`)
+    if (prefs.input.kind === 'commands') {
+      const allowed = prefs.input.names;
+      const used = [...text.matchAll(/\b([A-Z]\w*)\s*\(/g)].map((m) => m[1] as string).filter((c) => !allowed.includes(c) && !session.figure.get(c));
+      if (used.length > 0) {
+        return showError(parts, input, { ok: false, kind: 'restricted', line: 1, col: 1, endCol: text.length + 1, token: used[0] as string, message: `This activity allows ${allowed.join(', ')}.`, forms: allowed.map((c) => `${c}(...)`), hint: `${used[0]} is not part of this activity.` } as unknown as ErrorObject);
+      }
+    }
+    if (!parts) {
+      history.unshift(text);
+      if (history.length > 200) history.length = 200;
+      historyAt = -1;
+    }
     const newName = lineName(text);
     if (oldName && newName && newName !== oldName && !session.figure.get(newName)) {
       const rn = session.rename(oldName, newName);
@@ -222,6 +304,12 @@ export function mountExpressions(opts: ExpressionOptions): ExpressionList {
     if (!r.ok) return showError(parts, input, r.error);
     opts.say(r.announcement ?? '');
     if (!parts) {
+      const made = lineName(text);
+      const id = made ? session.figure.get(made)?.id : undefined;
+      if (id !== undefined) {
+        cardFor = id as unknown as number;
+        update();
+      }
       input.value = '';
       newRow.error = undefined;
       newRow.out.replaceChildren();
@@ -236,7 +324,25 @@ export function mountExpressions(opts: ExpressionOptions): ExpressionList {
     const box = el('div', 'err');
     box.append(el('span', 'err-msg', e.message));
     if (e.hint) box.append(el('span', 'err-hint', e.hint));
-    const fixes = (e.suggest ?? []).slice(0, 2);
+    // a missing name becomes a slider in one click, then the line runs (design 3.10, no dialog)
+    if (e.kind === 'unknown_name' && e.token && /^[A-Za-z]\w*$/.test(e.token)) {
+      const name = e.token;
+      const chip = el('button', 'err-fix', `Make slider ${name}`);
+      chip.type = 'button';
+      chip.addEventListener('click', () => {
+        const r = session.applyLines([`${name} = 1 in -5..5 step 0.1`, input.value.trim()], `Slider ${name}`, 'atomic');
+        if (!r.ok) return showError(parts, input, r.error);
+        opts.say(`Made slider ${name}.`);
+        if (!parts) {
+          input.value = '';
+          newRow.error = undefined;
+          newRow.out.replaceChildren();
+          newRow.row.classList.remove('bad');
+        }
+      });
+      box.append(chip);
+    }
+    const fixes = (e.suggest ?? []).filter((x) => !(e.kind === 'unknown_name' && x.startsWith(`${e.token} =`))).slice(0, 2);
     for (const s of fixes) {
       const b = el('button', 'err-fix', `Use: ${s}`);
       b.type = 'button';
@@ -257,6 +363,27 @@ export function mountExpressions(opts: ExpressionOptions): ExpressionList {
   };
 
   const keys = (parts: RowParts | undefined, input: HTMLInputElement) => (e: KeyboardEvent): void => {
+    if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+      e.preventDefault();
+      if (!sig.hidden) {
+        // another form of the command in the signature box
+        sigShift += e.key === 'ArrowDown' ? 1 : -1;
+        showCompletions(input);
+      } else if (!parts && history.length > 0) {
+        // the history of lines typed here (design 3.11)
+        historyAt = Math.max(-1, Math.min(history.length - 1, historyAt + (e.key === 'ArrowUp' ? 1 : -1)));
+        input.value = historyAt < 0 ? '' : (history[historyAt] as string);
+        input.setSelectionRange(input.value.length, input.value.length);
+      }
+      return;
+    }
+    if (e.key === 'F2' && parts) {
+      // rename: select the name so typing replaces it (design 3.8)
+      e.preventDefault();
+      const name = lineName(input.value);
+      if (name) input.setSelectionRange(input.value.indexOf(name), input.value.indexOf(name) + name.length);
+      return;
+    }
     if (!pop.hidden && popFor === input) {
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         e.preventDefault();
@@ -313,8 +440,13 @@ export function mountExpressions(opts: ExpressionOptions): ExpressionList {
     const index = el('span', 'expr-index');
     const swatch = el('button', 'swatch');
     swatch.type = 'button';
-    tab.append(index, swatch);
+    const toggle = el('button', 'expr-toggle', '▸');
+    toggle.type = 'button';
+    toggle.hidden = true;
+    tab.append(index, swatch, toggle);
     const main = el('div', 'expr-main');
+    const display = el('div', 'expr-display');
+    display.hidden = isNew;
     const input = el('input', 'expr-input');
     input.type = 'text';
     input.spellcheck = false;
@@ -324,18 +456,34 @@ export function mountExpressions(opts: ExpressionOptions): ExpressionList {
     if (isNew) input.placeholder = 'Type an expression, e.g.  data = [4, 7, 8, 9]';
     const out = el('div', 'expr-out');
     out.setAttribute('aria-live', 'polite');
-    main.append(input, out);
+    const deps = el('div', 'expr-deps');
+    deps.hidden = true;
+    const card = el('div', 'expr-card');
+    card.hidden = true;
+    main.append(display, input, out, deps, card);
+    // the maths text shows until the row is edited (algebra-view ui.md 2)
+    display.addEventListener('click', () => {
+      row.classList.add('editing');
+      input.focus();
+    });
     const del = el('button', 'expr-del', '×');
     del.type = 'button';
     del.title = 'Delete';
     del.setAttribute('aria-label', 'Delete expression');
     row.append(tab, main, del);
-    const parts: RowParts = { row, swatch, index, input, out, del, shown: '', error: undefined };
+    const parts: RowParts = { row, swatch, index, input, out, del, display, deps, toggle, card, shown: '', error: undefined };
+    toggle.addEventListener('click', () => {
+      const id = [...rows].find(([, p]) => p === parts)?.[0];
+      if (id === undefined) return;
+      if (expanded.has(id)) expanded.delete(id);
+      else expanded.add(id);
+      update();
+    });
     input.addEventListener('keydown', keys(isNew ? undefined : parts, input));
     input.addEventListener('input', () => showCompletions(input));
-    input.addEventListener('focus', () => row.classList.add('focus'));
+    input.addEventListener('focus', () => row.classList.add('focus', 'editing'));
     input.addEventListener('blur', () => {
-      row.classList.remove('focus');
+      row.classList.remove('focus', 'editing');
       window.setTimeout(() => {
         if (popFor === input || document.activeElement !== input) closePop();
       }, 120);
@@ -358,10 +506,11 @@ export function mountExpressions(opts: ExpressionOptions): ExpressionList {
     const out = p.out;
     out.replaceChildren();
     p.row.classList.remove('bad');
+    const m = model.get(r.id);
     if (!r.state.defined) {
       const s = r.state;
       const why = el('div', 'undef');
-      why.textContent = `undefined: ${s.reason.replace(/_/g, ' ')}${s.detail ? ` — ${s.detail}` : ''}`;
+      why.textContent = `undefined: ${m?.undefinedInfo?.text ?? s.reason.replace(/_/g, ' ')}${s.detail ? ` — ${s.detail}` : ''}`;
       out.append(why);
       return;
     }
@@ -402,19 +551,22 @@ export function mountExpressions(opts: ExpressionOptions): ExpressionList {
       return;
     }
     const v = el('div', 'value');
-    v.textContent = r.state.value.startsWith(`${r.name} `) ? r.state.value : `${r.type === 'Function' ? '' : '= '}${r.state.value}`;
-    if (r.type === 'Function') v.textContent = '';
+    // the second row of the display mode (algebra-view design 3.2): only when it adds something
+    if (m) v.textContent = m.lines[1] ?? '';
+    else v.textContent = r.state.value.startsWith(`${r.name} `) ? r.state.value : `${r.type === 'Function' ? '' : '= '}${r.state.value}`;
     // values the preview cannot print get a plain description instead of "…"
-    if (/^= [[\]…,() ]*(\(\d+ items\)\])?$/.test(v.textContent) || v.textContent === '= …') v.textContent = describe(r.type, value);
-    out.append(v);
+    if (/^= [[\]…,() {}]*(\(\d+ items\)\])?$/.test(v.textContent) || v.textContent === '= …' || v.textContent === '= [object Object]') v.textContent = describe(r.type, value);
+    if (m?.approx && v.textContent) v.title = 'rounded';
+    if (v.textContent) out.append(v);
     if (r.free && r.type === 'Number' && !c) {
       const n = Number(value);
       const add = el('button', 'chip', '+ slider');
       add.type = 'button';
       add.title = 'Make this number a slider';
       add.addEventListener('click', () => {
-        const span = Math.max(10, Math.abs(n) * 2);
-        session.submit(`${r.name} = ${valueText(n)} in ${valueText(Math.floor(n - span))}..${valueText(Math.ceil(n + span))}`);
+        // the range form keeps the value (design 3.10): 3 gives 0..10 step 0.1
+        const g = niceRange(n);
+        session.submit(`${r.name} in ${valueText(g.min)}..${valueText(g.max)} step ${valueText(g.step)}`);
       });
       out.append(add);
     }
@@ -422,12 +574,89 @@ export function mountExpressions(opts: ExpressionOptions): ExpressionList {
 
   /* ------------------------------ update ------------------------------ */
 
+  /** The header of a group (type, dependency or layer sort), collapsible. */
+  const groupHead = (key: string, label: string, count: number): HTMLElement => {
+    let h = groupHeads.get(key);
+    if (!h) {
+      h = el('button', 'expr-group');
+      (h as HTMLButtonElement).type = 'button';
+      h.addEventListener('click', () => {
+        if (collapsed.has(key)) collapsed.delete(key);
+        else collapsed.add(key);
+        update();
+      });
+      groupHeads.set(key, h);
+    }
+    h.textContent = `${collapsed.has(key) ? '▸' : '▾'} ${label} · ${count}`;
+    h.setAttribute('aria-expanded', String(!collapsed.has(key)));
+    return h;
+  };
+
+  /** "Made from", "used by" and the undefined chain (design 3.7). Names are links to their rows. */
+  const fillDeps = (p: RowParts, m: AlgebraRow): void => {
+    p.deps.replaceChildren();
+    const link = (name: string): HTMLButtonElement => {
+      const b = el('button', 'dep-link', name);
+      b.type = 'button';
+      b.addEventListener('click', () => api.flash([name]));
+      return b;
+    };
+    const line = (label: string, names: readonly string[]): void => {
+      if (names.length === 0) return;
+      const d = el('div', 'dep-line');
+      d.append(el('span', 'dep-label', label), ...names.map(link));
+      p.deps.append(d);
+    };
+    line('made from', m.madeFrom);
+    line('used by', m.usedBy);
+    if (m.undefinedInfo && m.undefinedInfo.chain.length > 0) {
+      const d = el('div', 'dep-line dep-chain');
+      d.append(el('span', 'dep-label', 'undefined because'), document.createTextNode(m.undefinedInfo.chain.join(' ← ')));
+      p.deps.append(d);
+    }
+    if (m.descriptionText) p.deps.append(el('div', 'dep-line dep-desc', m.descriptionText));
+  };
+
   const update = (): void => {
-    const list = session.rows();
-    const seen = new Set<number>();
+    prefs = prefsFromScript(session.figure.toScript(), userPrefs);
+    const objs = session.figure.objects() as unknown as AlgebraObject[];
+    const { groups } = algebraRows(objs, prefs);
+    model = new Map(groups.flatMap((g) => g.rows).map((r) => [r.id, r]));
+    const byId = new Map(session.rows().map((r) => [r.id, r]));
+    const styleOf = new Map<number, { visible: boolean }>(session.figure.objects().map((o) => [o.id as unknown as number, o.style]));
+    const list: LineRow[] = [];
+    const heads = new Map<number, HTMLElement>();
+    for (const g of groups) {
+      if (g.label) {
+        const h = groupHead(g.key, g.label, g.rows.length);
+        const first = g.rows[0];
+        if (first) heads.set(first.id, h);
+      }
+      if (g.label && collapsed.has(g.key)) {
+        const first = g.rows[0];
+        if (first && byId.get(first.id)) heads.set(-1 - list.length, groupHeads.get(g.key) as HTMLElement);
+        continue;
+      }
+      for (const r of g.rows) {
+        const lr = byId.get(r.id);
+        if (lr) list.push(lr);
+      }
+    }
+    for (const p of rows.values()) p.row.hidden = true;
+    for (const h of groupHeads.values()) h.hidden = true;
+    const seen = new Set<number>(session.rows().map((r) => r.id));
     const order: HTMLElement[] = [];
+    // a collapsed group shows only its header
+    for (const [k, h] of heads) if (k < 0) {
+      h.hidden = false;
+      order.push(h);
+    }
     list.forEach((r, i) => {
-      seen.add(r.id);
+      const head = heads.get(r.id);
+      if (head) {
+        head.hidden = false;
+        order.push(head);
+      }
       let p = rows.get(r.id);
       if (!p) {
         p = makeRow(false);
@@ -436,19 +665,61 @@ export function mountExpressions(opts: ExpressionOptions): ExpressionList {
       const value = session.figure.value(r.name);
       const drawn = drawsOnGraph(r.type, r.type, value);
       const color = colorOf(r.id);
+      p.row.hidden = false;
+      const m = model.get(r.id);
+      const off = styleOf.get(r.id)?.visible === false;
       p.index.textContent = String(i + 1);
       p.swatch.hidden = !drawn;
       p.swatch.style.setProperty('--c', color);
-      p.swatch.classList.toggle('off', hidden.has(r.id));
-      p.swatch.setAttribute('aria-pressed', String(!hidden.has(r.id)));
-      p.swatch.title = hidden.has(r.id) ? `Show ${r.name}` : `Hide ${r.name}`;
+      p.swatch.classList.toggle('off', off);
+      p.swatch.setAttribute('aria-pressed', String(!off));
+      p.swatch.title = off ? `Show ${r.name}` : `Hide ${r.name}`;
       p.swatch.setAttribute('aria-label', p.swatch.title);
       p.swatch.onclick = () => {
-        if (hidden.has(r.id)) hidden.delete(r.id);
-        else hidden.add(r.id);
-        update();
+        // the marble writes a restyle line, so it is undoable and saved (design 3.9)
+        const res = session.applyLines([`${r.name} with visible = ${off ? 'true' : 'false'}`], off ? `Show ${r.name}` : `Hide ${r.name}`, 'atomic');
+        if (!res.ok) opts.say(res.error.message);
         opts.changed();
       };
+      if (m) {
+        p.display.textContent = m.lines[0];
+        p.display.title = m.descriptionText;
+        p.display.classList.toggle('desc', prefs.mode === 'description');
+        const hasDeps = m.madeFrom.length > 0 || m.usedBy.length > 0 || m.undefinedInfo !== null;
+        p.toggle.hidden = !hasDeps;
+        const open = expanded.has(r.id) && hasDeps;
+        p.toggle.textContent = open ? '▾' : '▸';
+        p.toggle.setAttribute('aria-expanded', String(open));
+        p.toggle.setAttribute('aria-label', open ? `Hide what ${r.name} is made from` : `Show what ${r.name} is made from`);
+        p.deps.hidden = !open;
+        if (open) fillDeps(p, m);
+        // a next-step card under a row just added (design 3.13), once per object
+        if (cardFor === r.id && !offered.has(r.id)) {
+          offered.add(r.id);
+          cardFor = undefined;
+          const view = opts.view?.() ?? { x0: -10, x1: 10 };
+          const [sug] = suggestionsFor(m, objs, view, freeOf(new Set()));
+          p.card.replaceChildren();
+          p.card.hidden = !sug;
+          if (sug) {
+            const add = el('button', 'card-add', sug.text);
+            add.type = 'button';
+            add.addEventListener('click', () => {
+              p.card.hidden = true;
+              const res = session.applyLines(sug.lines, sug.text, 'atomic');
+              opts.say(res.ok ? res.message : res.error.message);
+            });
+            const no = el('button', 'card-close', '×');
+            no.type = 'button';
+            no.setAttribute('aria-label', 'Dismiss the suggestion');
+            no.addEventListener('click', () => {
+              p.card.hidden = true;
+            });
+            p.card.append(el('span', 'card-hint', 'Next step'), add, no);
+          }
+        }
+      }
+      p.input.readOnly = prefs.input.kind === 'off';
       const editing = document.activeElement === p.input && p.input.value !== p.shown;
       p.shown = r.source;
       if (!editing) {
@@ -468,6 +739,7 @@ export function mountExpressions(opts: ExpressionOptions): ExpressionList {
       }
     }
     newRow.index.textContent = String(list.length + 1);
+    newRow.row.hidden = prefs.input.kind === 'off';
     order.push(newRow.row);
     // keep the DOM order without moving a focused row
     order.forEach((node, i) => {
@@ -476,13 +748,76 @@ export function mountExpressions(opts: ExpressionOptions): ExpressionList {
     if (!pop.isConnected) element.append(pop, sig);
   };
 
-  update();
+  /* ------------------------------ header ------------------------------ */
 
-  return {
+  const header = el('div', 'expr-head');
+  const filter = el('input', 'expr-filter');
+  filter.type = 'search';
+  filter.placeholder = 'Filter';
+  filter.setAttribute('aria-label', 'Filter the expressions by name, definition or type');
+  filter.addEventListener('input', () => api.setPrefs({ filter: { ...userPrefs.filter, text: filter.value } }));
+  const gear = el('button', 'icon-btn expr-gear', '⚙');
+  gear.type = 'button';
+  gear.title = 'Display settings';
+  gear.setAttribute('aria-label', 'Display settings');
+  gear.setAttribute('aria-haspopup', 'true');
+  const menu = el('div', 'expr-menu');
+  menu.hidden = true;
+  const sel = (label: string, options: readonly (readonly [string, string])[], value: () => string, on: (v: string) => void): HTMLLabelElement => {
+    const l = el('label', 'menu-field');
+    const s2 = el('select');
+    for (const [v, t] of options) {
+      const o = el('option', '', t);
+      o.value = v;
+      s2.append(o);
+    }
+    s2.value = value();
+    s2.addEventListener('change', () => on(s2.value));
+    l.append(el('span', '', label), s2);
+    return l;
+  };
+  const chk = (label: string, value: () => boolean, on: (v: boolean) => void): HTMLLabelElement => {
+    const l = el('label', 'menu-check');
+    const i = el('input');
+    i.type = 'checkbox';
+    i.checked = value();
+    i.addEventListener('change', () => on(i.checked));
+    l.append(i, document.createTextNode(` ${label}`));
+    return l;
+  };
+  const renderMenu = (): void => {
+    menu.replaceChildren(
+      sel('Show', [['definitionAndValue', 'Definition and value'], ['definition', 'Definition'], ['value', 'Value'], ['description', 'Description']], () => prefs.mode, (v) => api.setPrefs({ mode: v as DisplayMode })),
+      sel('Sort by', [['creation', 'Order made'], ['type', 'Type'], ['dependency', 'Dependency'], ['name', 'Name'], ['layer', 'Layer']], () => prefs.sort, (v) => api.setPrefs({ sort: v as AlgebraPrefs['sort'] })),
+      sel('Rounding', [0, 1, 2, 3, 4, 5, 6, 8, 10].map((d) => [String(d), `${d} decimal places`] as const), () => String(prefs.format.decimals), (v) => api.setPrefs({ format: { ...userPrefs.format, decimals: Number(v) } })),
+      chk('Show helper objects', () => prefs.showAux, (v) => api.setPrefs({ showAux: v })),
+      chk('Only undefined', () => prefs.filter.onlyUndefined, (v) => api.setPrefs({ filter: { ...userPrefs.filter, onlyUndefined: v } })),
+      chk('Only hidden', () => prefs.filter.onlyHidden, (v) => api.setPrefs({ filter: { ...userPrefs.filter, onlyHidden: v } })),
+    );
+  };
+  gear.addEventListener('click', (e) => {
+    e.stopPropagation();
+    renderMenu();
+    menu.hidden = !menu.hidden;
+    gear.setAttribute('aria-expanded', String(!menu.hidden));
+  });
+  document.addEventListener('click', (e) => {
+    if (!menu.hidden && !menu.contains(e.target as Node) && e.target !== gear) menu.hidden = true;
+  });
+  header.append(filter, gear, menu);
+
+  const api: ExpressionList = {
     element,
+    header,
     update,
     colorOf,
-    isHidden: (id) => hidden.has(id),
+    prefs: () => prefs,
+    setPrefs(patch) {
+      userPrefs = { ...userPrefs, ...patch };
+      update();
+      opts.changed();
+    },
+    isHidden: (id) => hidden.has(id) || session.figure.get(id as never)?.style.visible === false,
     focusNew(text) {
       if (text !== undefined) newRow.input.value = text;
       newRow.input.focus();
@@ -495,6 +830,8 @@ export function mountExpressions(opts: ExpressionOptions): ExpressionList {
       setTimeout(() => rows.forEach((r) => r.classList.remove('flash')), 2000);
     },
   };
+  update();
+  return api;
 }
 
 /** A short description of a value the text preview cannot print: a region, a curve, a list of shapes. */

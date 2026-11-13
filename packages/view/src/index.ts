@@ -18,6 +18,7 @@ export * from './core/drawables';
 export * from './core/drawable';
 export * from './core/geometry';
 export * from './core/hit';
+export * from './core/algebra';
 export * from './core/drag';
 export * from './core/snap';
 export * from './core/selection';
