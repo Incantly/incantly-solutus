@@ -636,6 +636,8 @@ its commands, and a hook that throws is skipped.
 - `registerFieldReader(type, reader)` and `registerFieldTyper(type, typer)`: evaluate and type the fields an area adds to
   `FIELDS`. A typer types a field from the object itself (`d.value` has the type of the dropdown's options). A field that
   holds a function can be called: `g.value(x)`.
+- `registerSchemaType(name)`: a type name that carries a schema like `Record`, written `Name<Schema>` (statistics adds
+  `Chart` and `Table`). Its fields come from the record schemas through the area's field typer and reader.
 - `registerFieldNames(type, names)`: the full list of a type's fields (a record's schema). A missing field is then
   `unknown_field` listing the real ones.
 - `registerBinaryOp(row)`, `registerUnaryOp(row)` and `registerIndexOp(row)`: an area's rows of the operator table and

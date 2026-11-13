@@ -53,11 +53,23 @@ export const predOf = (arity: 1 | 2): Ty => ({ k: arity === 1 ? 'Predicate' : 'P
 export const isCallableTy = (t: Ty): boolean => t.k === 'Function' || t.k === 'Predicate' || t.k === 'Predicate2';
 export const fnOf = (ret: TypeName, arity: number): Ty => ({ k: 'Function', ret, arity });
 
+/**
+ * Type names that carry a schema, written `Name<Schema>`: `Record<LU>`, `Chart<Histogram>`. The fields of a value of such
+ * a type come from its schema. An area adds a name with `registerSchemaType` (statistics adds `Chart` and `Table`).
+ */
+const SCHEMA_TYPES = new Set<string>(['Record']);
+
+export function registerSchemaType(name: string): void {
+  SCHEMA_TYPES.add(name);
+}
+
+export const isSchemaType = (k: string): boolean => SCHEMA_TYPES.has(k);
+
 export function tyEq(a: Ty, b: Ty): boolean {
   if (a.k !== b.k) return false;
   if (a.k === 'List') return a.of !== undefined && b.of !== undefined ? tyEq(a.of, b.of) : a.of === b.of;
   if (a.k === 'Function') return a.ret === b.ret && a.arity === b.arity;
-  if (a.k === 'Record') return a.schema === b.schema;
+  if (SCHEMA_TYPES.has(a.k)) return a.schema === b.schema;
   return true;
 }
 
@@ -68,7 +80,7 @@ export function tyStr(t: Ty): string {
     const r = t.ret ?? 'Number';
     return t.arity !== undefined && t.arity > 1 ? `Function<${r}>(${t.arity})` : `Function<${r}>`;
   }
-  if (t.k === 'Record' && t.schema !== undefined) return `Record<${t.schema}>`;
+  if (SCHEMA_TYPES.has(t.k) && t.schema !== undefined) return `${t.k}<${t.schema}>`;
   return t.k;
 }
 
@@ -121,9 +133,9 @@ export function parseTy(text: string): Ty | undefined {
     if (n[2] !== undefined && count !== undefined) return undefined;
     return arity ? { k: 'Function', ret: n[1] as TypeName, arity: Number(arity) } : { k: 'Function', ret: n[1] as TypeName };
   }
-  if (base === 'Record') {
-    if (inner === undefined) return { k: 'Record' as TypeName };
-    return /^\w+$/.test(inner) ? { k: 'Record' as TypeName, schema: inner } : undefined;
+  if (SCHEMA_TYPES.has(base)) {
+    if (inner === undefined) return { k: base as TypeName };
+    return /^\w+$/.test(inner) ? { k: base as TypeName, schema: inner } : undefined;
   }
   if (inner !== undefined) return undefined;
   return { k: base as TypeName };
@@ -159,7 +171,7 @@ function oneTypeProblem(t: string, known: ReadonlySet<string>): string | undefin
   const inner = m[2];
   const count = m[3];
   if (base === 'List') return count === undefined ? (inner === undefined ? undefined : oneTypeProblem(inner.trim(), known)) : t;
-  if (base === 'Record') return count === undefined && (inner === undefined || /^\w+$/.test(inner)) && known.has('Record') ? undefined : t;
+  if (SCHEMA_TYPES.has(base)) return count === undefined && (inner === undefined || /^\w+$/.test(inner)) && known.has(base) ? undefined : t;
   if (base === 'Function') {
     if (inner === undefined) return count === undefined ? undefined : t;
     const n = /^(\w+)(?:\s*,\s*(\d))?$/.exec(inner);
@@ -215,7 +227,7 @@ export function memberAccepts(member: Ty, t: Ty): boolean {
     if (member.arity !== undefined && member.arity !== t.arity) return false;
     return true;
   }
-  if (member.k === 'Record') return member.schema === undefined || member.schema === t.schema;
+  if (SCHEMA_TYPES.has(member.k)) return member.schema === undefined || member.schema === t.schema;
   return true;
 }
 

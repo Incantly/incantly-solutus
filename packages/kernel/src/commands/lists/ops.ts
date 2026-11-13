@@ -12,7 +12,7 @@ import type { Ty } from '../../language/types';
 import { eAdd, eIdentity, eInverse, eMul, ePow, eScale, exactMatrix, ratFromText, ratText, rnum, usable } from './exact';
 import { inverse, matMul } from './linalg';
 import type { MatrixValue, Rat } from './types';
-import { MAX_DENSE, RECORD_SCHEMAS, isMatrix, isRecord, makeMatrix, sameValue } from './types';
+import { MAX_DENSE, RECORD_SCHEMAS, RECORD_TEXT, isMatrix, isRecord, makeMatrix, sameValue } from './types';
 
 const M: Ty = { k: 'Matrix' };
 const isM = (t: Ty): boolean => t.k === 'Matrix';
@@ -258,6 +258,8 @@ export function registerListOps(): void {
       return depth > 0 ? `Matrix ${v.rows}×${v.cols}` : `Matrix ${v.rows}×${v.cols} [${body}${v.rows > rows ? ', …' : ''}]`;
     }
     if (isRecord(v)) {
+      const own = depth === 0 ? RECORD_TEXT.get(v.schema) : undefined;
+      if (own) return own(v);
       const parts = Object.entries(v.fields).map(([k, x]) => `${k}: ${x === undefined ? `undefined (${v.reasons?.[k] ?? 'not set'})` : valueText(x, depth + 1)}`);
       return `${v.schema} {${parts.join(', ')}}`;
     }

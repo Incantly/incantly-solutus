@@ -83,7 +83,7 @@ export { LIST_COMMANDS, compensatedSum } from './list-commands';
 export { MATRIX_COMMANDS, fromLists } from './matrix-commands';
 export { addM, mulM, mulPoint, powM, scaleM } from './ops';
 export {
-  MAX_DENSE, MAX_EIGEN, MAX_EXACT, MAX_LIST, MAX_SYM_EIGEN, RECORD_SCHEMAS, identity, isMatrix, isRecord, makeMatrix, record, registerRecordSchema, zeros,
+  MAX_DENSE, MAX_EIGEN, MAX_EXACT, MAX_LIST, MAX_SYM_EIGEN, RECORD_SCHEMAS, identity, isMatrix, isRecord, makeMatrix, record, registerRecordSchema, registerRecordText, zeros,
 } from './types';
 export type { MatrixValue, Rat, RecordValue } from './types';
 export { ratText } from './exact';
