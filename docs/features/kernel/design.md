@@ -636,6 +636,15 @@ its commands, and a hook that throws is skipped.
 - `registerFieldReader(type, reader)` and `registerFieldTyper(type, typer)`: evaluate and type the fields an area adds to
   `FIELDS`. A typer types a field from the object itself (`d.value` has the type of the dropdown's options). A field that
   holds a function can be called: `g.value(x)`.
+- `registerFieldNames(type, names)`: the full list of a type's fields (a record's schema). A missing field is then
+  `unknown_field` listing the real ones.
+- `registerBinaryOp(row)`, `registerUnaryOp(row)` and `registerIndexOp(row)`: an area's rows of the operator table and
+  its indexing (`A * B` and `M[i]` for matrices, `xs + ys` for lists). They are asked only when no core row fits; the node
+  keeps the area's implementation, which gets defined values and sets its own reasons.
+- `registerValueText(texter)`: the summary text of a value the area owns (`Matrix 2×2 [[1, 2], [3, 4]]`).
+- Parameter types `@list` (the element type of the list parameter `list`) and `=init` on a binder (the type of the
+  parameter `init`); `Record<Schema>` types whose fields come from the schema. Value parameters are checked before
+  binders, so a binder may name a list written after it (`Zip(expr, a, listA, …)`).
 
 ### Commands two areas both give
 

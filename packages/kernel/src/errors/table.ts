@@ -99,6 +99,8 @@ const META: Record<ErrorKind, Meta> = {
   bad_particle_value: { key: 'lang.bad_particle_value', params: ['command', 'why'], description: 'A Particles parameter with a value out of range or of the wrong type.' },
   particle_name_outside: { key: 'lang.particle_name_outside', params: ['command', 'why'], description: 'A particle-only name (u, v, w, age, ph, cycle) used outside Particles.' },
   particle_command: { key: 'lang.particle_command', params: ['command', 'why'], description: 'A command inside a particle formula, where only built-ins are allowed.' },
+  unknown_field: { key: 'lang.unknown_field', params: ['command', 'why'], description: 'A field a record or matrix does not have, such as lu.Z.' },
+  bad_option: { key: 'lang.bad_option', params: ['command', 'why'], description: 'A text option outside its set, such as Sort(xs, "ascending").' },
 };
 
 function buildTable(): Record<ErrorKind, ErrorSpec> {

@@ -4,7 +4,7 @@
  */
 import type { ObjId } from '../contracts/values';
 import type { BoundArg, CommandForm, CommandSpec, FunctionForm, FunctionSpec } from './table';
-import type { OpVariant, Ty } from './types';
+import type { AreaOpImpl, OpVariant, Ty } from './types';
 import type { CmpOp } from './ast';
 
 interface B {
@@ -40,15 +40,16 @@ export type TNode =
   | (B & { readonly n: 'local'; readonly slot: number; readonly name: string })
   /** An expression in `x` (or `x, y`) written where a command takes a function: `Limit(sin(x) / x, 0)`. */
   | (B & { readonly n: 'lambda'; readonly params: readonly { readonly name: string; readonly slot: number }[]; readonly body: TNode })
-  | (B & { readonly n: 'unary'; readonly op: '-' | '+' | 'not'; readonly arg: TNode })
-  | (B & { readonly n: 'bin'; readonly op: string; readonly l: TNode; readonly r: TNode; readonly variant: OpVariant })
-  | (B & { readonly n: 'cmp'; readonly ops: readonly CmpOp[]; readonly operands: readonly TNode[] })
+  | (B & { readonly n: 'unary'; readonly op: '-' | '+' | 'not'; readonly arg: TNode; readonly impl?: (a: unknown, env: unknown) => unknown })
+  | (B & { readonly n: 'bin'; readonly op: string; readonly l: TNode; readonly r: TNode; readonly variant: OpVariant; readonly impl?: AreaOpImpl })
+  /** `impls[i]`: an area's equality for the i-th comparison (`A == B` of matrices), when it has one. */
+  | (B & { readonly n: 'cmp'; readonly ops: readonly CmpOp[]; readonly operands: readonly TNode[]; readonly impls?: readonly (AreaOpImpl | undefined)[] })
   | (B & { readonly n: 'fact'; readonly arg: TNode })
   | (B & { readonly n: 'callObj'; readonly id: ObjId; readonly name: string; readonly args: readonly TNode[] })
   | (B & { readonly n: 'builtin'; readonly spec: FunctionSpec; readonly form: FunctionForm; readonly args: readonly TNode[] })
   | (B & { readonly n: 'command'; readonly spec: CommandSpec; readonly form: CommandForm; readonly args: readonly TArg[]; readonly tuple?: readonly Ty[] })
   | (B & { readonly n: 'tick'; readonly id: ObjId; readonly name: string; readonly ticks: number; readonly arg: TNode })
-  | (B & { readonly n: 'index'; readonly target: TNode; readonly index: TNode })
+  | (B & { readonly n: 'index'; readonly target: TNode; readonly index: TNode; readonly impl?: AreaOpImpl })
   | (B & { readonly n: 'field'; readonly target: TNode; readonly field: string; readonly args?: readonly TNode[] })
   | (B & { readonly n: 'point'; readonly x: TNode; readonly y: TNode })
   | (B & { readonly n: 'polar'; readonly r: TNode; readonly a: TNode })

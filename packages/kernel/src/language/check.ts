@@ -17,7 +17,8 @@ import type { ArgFacts, CallCheck, FigureView, FormCheck, FormLike, FunctionTabl
 import { formText } from './table';
 import type { RelTree, TArg, TNode } from './tnode';
 import { printExpr } from './printer';
-import { T, accepts, binaryOp, isCallableTy, legalOpsFor, listOf, setLabel, tyEq, tyStr, typeSet } from './types';
+import { T, accepts, areaIndexOp, areaUnaryOp, binaryOp, isCallableTy, legalOpsFor, listOf, setLabel, tyEq, tyStr, typeSet } from './types';
+import type { AreaOpImpl, TypeSet } from './types';
 import type { Ty } from './types';
 import type { LangLimits } from './source';
 
@@ -123,6 +124,16 @@ const FIELD_TYPERS = new Map<string, FieldTyper>();
 /** An area registers the typer for the object-dependent fields of a type it owns. */
 export function registerFieldTyper(type: string, typer: FieldTyper): void {
   FIELD_TYPERS.set(type, typer);
+}
+
+/**
+ * The field names of an area type that has them all known (a record's schema): a missing field is then the error
+ * `unknown_field` listing the real ones, rather than a type mismatch.
+ */
+const FIELD_NAMES = new Map<string, (ty: Ty) => readonly string[]>();
+
+export function registerFieldNames(type: string, names: (ty: Ty) => readonly string[]): void {
+  FIELD_NAMES.set(type, names);
 }
 
 /** Fields by type, appended to by other areas (docs/features/language/design.md 3.10 rule 9). */
@@ -693,7 +704,11 @@ class Checker {
       return { n: 'unary', op: 'not', arg: a, ty: T.Bool, s: e.s, e: e.e };
     }
     const ok = a.ty.k === 'Number' || a.ty.k === 'Vector' || (a.ty.k === 'Function' && a.ty.ret === 'Number');
-    if (!ok) return this.mismatchUnary(e.op, a, e);
+    if (!ok) {
+      const area = areaUnaryOp(e.op, a.ty);
+      if (area) return { n: 'unary', op: e.op, arg: a, ty: area.result, impl: area.impl, s: e.s, e: e.e };
+      return this.mismatchUnary(e.op, a, e);
+    }
     return { n: 'unary', op: e.op, arg: a, ty: a.ty, s: e.s, e: e.e, ...(a.unit ? { unit: a.unit } : {}) };
   }
 
@@ -714,7 +729,7 @@ class Checker {
     const res = binaryOp(e.op, l.ty, r.ty);
     if (!res) return this.mismatch(e.op, l, r, e);
     const unit = this.unitOf(e.op, l, r);
-    return { n: 'bin', op: e.op, l, r, variant: res.variant, ty: res.result, s: e.s, e: e.e, ...(unit ? { unit } : {}) };
+    return { n: 'bin', op: e.op, l, r, variant: res.variant, ty: res.result, s: e.s, e: e.e, ...(unit ? { unit } : {}), ...(res.impl ? { impl: res.impl } : {}) };
   }
 
   mismatch(op: string, l: TNode, r: TNode, e: { s: number; e: number }): null {
@@ -758,15 +773,18 @@ class Checker {
     const ops = e.operands.map((o) => this.infer(o));
     if (ops.some((o) => o === null)) return null;
     const ts = ops as TNode[];
+    const impls: (AreaOpImpl | undefined)[] = [];
     for (let i = 0; i < e.ops.length; i++) {
       const l = ts[i] as TNode;
       const r = ts[i + 1] as TNode;
-      if (!binaryOp(e.ops[i] as string, l.ty, r.ty)) {
+      const res = binaryOp(e.ops[i] as string, l.ty, r.ty);
+      if (!res) {
         const p = e.opPos[i];
         return this.mismatch(e.ops[i] as string, l, r, { s: l.s, e: r.e }) ?? (p ? null : null);
       }
+      impls.push(res.impl);
     }
-    return { n: 'cmp', ops: e.ops as readonly CmpOp[], operands: ts, ty: T.Bool, s: e.s, e: e.e };
+    return { n: 'cmp', ops: e.ops as readonly CmpOp[], operands: ts, ty: T.Bool, s: e.s, e: e.e, ...(impls.some((f) => f !== undefined) ? { impls } : {}) };
   }
 
   inferTuple(e: Expr & { k: 'tuple' }): TNode | null {
@@ -931,6 +949,10 @@ class Checker {
     const t = this.infer(e.target);
     const i = this.infer(e.index);
     if (!t || !i) return null;
+    if (t.ty.k !== 'List') {
+      const area = areaIndexOp(t.ty, i.ty);
+      if (area) return { n: 'index', target: t, index: i, ty: area.result, impl: area.impl, s: e.s, e: e.e };
+    }
     if (t.ty.k !== 'List' || !t.ty.of) {
       return this.err('type_mismatch', e.s, e.e, 'lang.type_mismatch_where', { why: `Only a List can be indexed, but this is a ${tyStr(t.ty)}` }, {
         left: tyStr(t.ty),
@@ -957,6 +979,16 @@ class Checker {
     if (!t) return null;
     const table = own(FIELDS, t.ty.k);
     const f = (table ? own(table, e.field) : undefined) ?? FIELD_TYPERS.get(t.ty.k)?.(e.field, t, this.fig);
+    const listed = FIELD_NAMES.get(t.ty.k);
+    if (!f && listed) {
+      const avail = [...(table ? Object.keys(table) : []), ...listed(t.ty)];
+      return this.err('unknown_field', e.fs, e.fe, 'lang.unknown_field', { command: tyStr(t.ty), why: `A ${tyStr(t.ty)} has no field ${e.field}${avail.length > 0 ? `; its fields are ${avail.join(', ')}` : ''}.` }, {
+        expected: avail,
+        hint: avail.length > 0 ? `Read one of ${avail.join(', ')}.` : `A ${tyStr(t.ty)} has no fields.`,
+        suggest: closestNames(e.field, avail, 2).map((c) => this.replaceRange(e.fs, e.fe, c)),
+        fingerprintKey: `${tyStr(t.ty)}.${e.field}`,
+      });
+    }
     if (!f) {
       const avail = table ? Object.keys(table) : [];
       return this.err('type_mismatch', e.fs, e.fe, 'lang.type_mismatch_where', { why: `A ${tyStr(t.ty)} has no field ${e.field}` }, {
@@ -1202,6 +1234,10 @@ class Checker {
       return i >= 0 ? bound[i]?.ty : undefined;
     };
     if (text.startsWith('=')) return ref(text.slice(1)) ?? T.Number;
+    if (text.startsWith('@')) {
+      const lt = ref(text.slice(1));
+      return lt?.k === 'List' && lt.of ? lt.of : T.Number;
+    }
     const m = /^List<=(\w+)>$/.exec(text);
     if (m) return listOf(ref(m[1] as string) ?? T.Number);
     const set = typeSet(text);
@@ -1457,8 +1493,21 @@ class Checker {
       const binderBad: { ai: number; arg: Arg }[] = [];
       const bodyErrors: LanguageError[] = [];
       const frame: Frame = { vars: new Map() };
-      // pass 1: values and binders
-      b.form.params.forEach((p, k) => {
+      // `@list`: the element type of the list parameter `list`; `=init`: the type of the parameter `init`. Values are
+      // checked before binders, so a binder may name a value written after it (`Zip(expr, a, listA, …)`). Any type when
+      // the parameter is not known yet.
+      const setFor = (text: string): TypeSet => {
+        const ref = text.startsWith('@') || (text.startsWith('=') && text.length > 1) ? text.slice(1) : undefined;
+        if (ref === undefined) return typeSet(text);
+        const j = b.form.params.findIndex((q) => q.name === ref);
+        const lt = j >= 0 ? tys[j] : undefined;
+        const el = text.startsWith('@') ? (lt?.k === 'List' ? lt.of : undefined) : lt;
+        return el ? { text: tyStr(el), members: [el], any: false, size: 1 } : { text, members: [], any: true, size: 1000 };
+      };
+      const valuesFirst = b.form.params.map((_, k) => k).sort((x, y) => Number((b.form.params[x]?.kind ?? 'value') !== 'value') - Number((b.form.params[y]?.kind ?? 'value') !== 'value'));
+      // pass 1: values, then binders
+      valuesFirst.forEach((k) => {
+        const p = b.form.params[k] as ParamSpec;
         const ai = b.bind[k] as number;
         const kind = p.kind ?? 'value';
         if (ai === -1) {
@@ -1466,7 +1515,7 @@ class Checker {
           return;
         }
         const a = args[ai] as Arg;
-        const set = typeSet(p.type);
+        const set = setFor(p.type);
         score += set.size;
         if (kind === 'value') {
           const node = valueArg(ai, elementHint(b, k));
@@ -1479,7 +1528,7 @@ class Checker {
           tys[k] = node.ty;
           bound[k] = { param: p, expr: node, omitted: false, ty: node.ty };
           if (!accepts(set, node.ty)) problems.push(this.problem(ai, p, a, tyStr(node.ty), setLabel(set)));
-        } else if (kind === 'binder' && set.members[0]?.k === 'List') {
+        } else if (kind === 'binder' && set.members[0]?.k === 'List' && !p.type.startsWith('@') && !p.type.startsWith('=')) {
           // a list of bare names, each a local of the bodies: `[y, v]`
           const v = a.value;
           const names = v.k === 'list' ? v.items : [];

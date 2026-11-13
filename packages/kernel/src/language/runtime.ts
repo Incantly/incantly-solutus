@@ -179,6 +179,14 @@ function toFraction(v: number): string {
   return k1 === 1 ? `${sign}${h1}` : `${sign}${h1}/${k1}`;
 }
 
+/** An area's text for the values it owns (a matrix, a record); `undefined` leaves the value to the others. */
+export type ValueTexter = (v: unknown, depth: number) => string | undefined;
+const VALUE_TEXTERS: ValueTexter[] = [];
+
+export function registerValueText(texter: ValueTexter): void {
+  if (!VALUE_TEXTERS.includes(texter)) VALUE_TEXTERS.push(texter);
+}
+
 /** Compact text of a runtime value, for previews and summaries. */
 export function valueText(v: unknown, depth = 0): string {
   if (v === undefined) return 'undefined';
@@ -191,6 +199,10 @@ export function valueText(v: unknown, depth = 0): string {
     return '[' + shown.join(', ') + (arr.length > 6 ? `, … (${arr.length} items)` : '') + ']';
   }
   if (typeof v === 'object') {
+    for (const t of VALUE_TEXTERS) {
+      const s = t(v, depth);
+      if (s !== undefined) return s;
+    }
     const o = v as Record<string, unknown>;
     if (typeof o['x'] === 'number' && typeof o['y'] === 'number') return `(${formatNumber(o['x'])}, ${formatNumber(o['y'])})`;
     if (typeof o['arity'] === 'number') return 'function';
