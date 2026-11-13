@@ -170,3 +170,10 @@ Rules for staying inside the budget: ask `figure` for filtered sets, not the who
 4. Use `algebra = description` for puzzles, and reveal with `algebra = definitionAndValue`.
 5. Mention a value only after `draw` reported it.
 6. Do not set `@algebra input` unless the lesson asks learners to type; restrictions reduce what a learner can try.
+
+## As built
+
+- `summarize(object)` in `@incantly/kernel` gives the row text the model reads: `A = (1, 2)`, `f(x) = x² − 2`,
+  `M = Midpoint(A, B) → (3, 2)`, `h = √(a² + b²) = 5`, `r = undefined (out_of_domain)`.
+- Lessons set the list with `@algebra mode value`, `@algebra sort type`, `@algebra round 3`, `@algebra aux show`,
+  `@algebra input Midpoint Segment` (other commands are refused with the kind `restricted`) and `@algebra input off`.
