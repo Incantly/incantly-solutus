@@ -671,6 +671,9 @@ changed: drag traces add their samples.
 
 ### A slice over the clock reads the states
 
+It also replays free values an area moves with the clock (animated sliders): `registerClockDriven(provider)` names them
+and gives each one's value at a film time, and the slice sets them for each time like states.
+
 `slice('t', target)` sets the states the target reads from the state solver's dense output at each time
 (`Slice.states` names them), so a trace or a `Path` of an object that moves through states is right for any time, not
 only the current one. Nothing is written; the states' cells are put back.

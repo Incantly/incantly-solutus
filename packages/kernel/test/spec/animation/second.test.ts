@@ -254,3 +254,37 @@ describe('5 slider animation is the numbers area\'s, on the player\'s clock', ()
     expect(fig(['a = 0 in 0..10']).apply('a with animate = bounce').ok).toBe(false);
   });
 });
+
+describe('9.4 a trace of a point moved by an animated slider is right after a seek', () => {
+  it('the seek replays the slider over time, so the trace is the path, not one point repeated', () => {
+    const f = fig(['s = 0 in 0..10', 's with loop = up, period = 10', 'P = (s, s^2)']);
+    ok(f.apply('Animate(s)'));
+    ok(f.apply('Trace(P)'));
+    playerOf(f).seek(2);
+    const xy = Array.from(tracePoints(f, idOf(f, 'P')) ?? []);
+    expect(xy.length / 2).toBe(121);
+    expect(xy[0]).toBeCloseTo(0, 9);
+    expect(xy[2 * 60]).toBeCloseTo(1, 6);
+    expect(xy[2 * 60 + 1]).toBeCloseTo(1, 6);
+    expect(xy.at(-2)).toBeCloseTo(2, 6);
+  });
+});
+
+describe('6 ValueAt(obj, time): the value an object had at a film time', () => {
+  it('a formula of t, a state and an animated slider', () => {
+    const f = fig(['@clock 0..60', 'P = (cos(t), sin(t))', 'Q = ValueAt(P, pi)', ...DECAY.slice(1).map((l) => l.replace(/P = /, 'R = ')), 'w0 = ValueAt(θ, 1)']);
+    expect((f.value('Q') as { x: number }).x).toBeCloseTo(-1, 12);
+    expect(f.value('w0') as number).toBeCloseTo(Math.exp(-1), 6);
+    const g = fig(['s = 0 in 0..10', 's with loop = up, period = 10', 'v = ValueAt(s, 3)']);
+    ok(g.apply('Animate(s)'));
+    playerOf(g).seek(5);
+    expect(g.value('v')).toBeCloseTo(3, 6);
+    expect(g.value('s')).toBeCloseTo(5, 6);
+  });
+  it('an object that does not move with time is not_time_dependent; a non-name is bad_argument', () => {
+    const f = fig(['a = 3', 'k = ValueAt(a, 2)']);
+    const c = f.cellOf(idOf(f, 'k')) as { defined: boolean; reason?: string };
+    expect(c.reason).toBe('not_time_dependent');
+    bad(fig(['@clock 0..9']).apply('k = ValueAt(2 t, 1)'), 'bad_argument');
+  });
+});

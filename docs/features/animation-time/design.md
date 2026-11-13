@@ -226,7 +226,7 @@ What this area relies on, and what holds either way:
 | `pingpong(x, len)` | triangle wave: `0` at `0`, `len` at `len`, back to `0` at `2 len`, repeating |
 | `ramp(x, a, b)` | `clamp((x - a) / (b - a), 0, 1)`; `0` before `a`, `1` after `b` |
 | `ease(x)` | `smooth(clamp(x, 0, 1))` |
-| `at(obj, time)` | the value `obj` had at film time `time`; allowed only for objects that depend on `t` or states, not on user-dragged values. Cost note in 12. Not available on the GPU unless inlined (10.4). |
+| `ValueAt(obj, time)` | the value `obj` had at film time `time`; allowed only for objects that move with time (`t`, states, animated sliders), else undefined `not_time_dependent`. A command, not a built-in: it must see which object it is given. Named `at` in an earlier draft; renamed (12 November 2026) because the numbers area's `at(x, y)` is a place in the plane. Cost note in 12. |
 
 - A formula that depends on `t` is pure and can be seeked (core 7.1).
 - `bt` is set from the beat table (`@beat` directives) with a binary search on `t` each frame: O(log beats).
@@ -539,7 +539,7 @@ Named arguments are allowed in any order (core grammar `arg`). `count`, `life`, 
 | `ph` | `age / life`, 0 to 1 |
 | `t`, `bt` | Film time and beat time |
 
-Also visible: any number, point or colour in the figure by name, and the lowercase built-ins. Particle formulas may not call commands (only built-ins, arithmetic, `if`, `noise`, `rand`, `Gradient`, `at` on CPU).
+Also visible: any number, point or colour in the figure by name, and the lowercase built-ins. Particle formulas may not call commands (only built-ins, arithmetic, `if`, `noise`, `rand`, `Gradient`). `ValueAt` inside a particle formula is to be implemented.
 
 ### 10.4 Per-particle model
 
@@ -562,7 +562,7 @@ u, v, w    = rand(hash(i, cycle, seed, 1)), rand(hash(i, cycle, seed, 2)), rand(
 
 No state is stored per particle. Seeking, reverse play and export work for free.
 
-**Emitter that moves.** If `pos` reads an object `E` that moves with `t`, the whole system would move rigidly with `E`, losing the trail. To spawn from where the emitter *was*, write `at(E, t - age)`. The compiler tries to **substitute time** symbolically: if `E`'s definition is a pure formula of `t` (no states, no commands, no user input), `E` evaluated at `t - age` is the same formula with `t` replaced, which the GPU can run. Otherwise `at` makes the system CPU-only (`gpu_unsupported: at`).
+**Emitter that moves.** If `pos` reads an object `E` that moves with `t`, the whole system would move rigidly with `E`, losing the trail. To spawn from where the emitter *was*, write `ValueAt(E, t - age)` (to be implemented inside particle formulas). The compiler tries to **substitute time** symbolically: if `E`'s definition is a pure formula of `t` (no states, no commands, no user input), `E` evaluated at `t - age` is the same formula with `t` replaced, which the GPU can run. Otherwise `ValueAt` makes the system CPU-only (`gpu_unsupported: at`).
 
 ### 10.5 Two evaluators
 
@@ -588,7 +588,7 @@ interface ParticleBatch {
 
 **GPU (WebGL2).** One instanced draw call. The vertex shader derives `i` from the instance id and computes everything: the formula tree is compiled to GLSL ES 3.00, with uints for the hash. The fragment shader draws the sprite shape. External values (sliders, points, colours the formulas read) go into a uniform array filled each frame from the kernel's values (up to 64 slots; more makes it CPU-only: `gpu_unsupported: too_many_inputs`). Target: 20,000 particles at 60 fps on integrated graphics.
 
-**GPU subset.** Numbers, points (as `vec2`), colours (as `vec4`), operators `+ - * / ^`, comparisons, `if`, and the built-ins `sin cos tan asin acos atan atan2 sinh cosh tanh sqrt cbrt exp ln log10 log2 abs sign floor ceil round min max hypot clamp mod lerp step smooth fract wrap pingpong ramp ease rand noise rgb hsl Gradient`. Lists, functions of `x`, commands and non-inlinable `at` make a system CPU-only. The reason is reported in `figure`.
+**GPU subset.** Numbers, points (as `vec2`), colours (as `vec4`), operators `+ - * / ^`, comparisons, `if`, and the built-ins `sin cos tan asin acos atan atan2 sinh cosh tanh sqrt cbrt exp ln log10 log2 abs sign floor ceil round min max hypot clamp mod lerp step smooth fract wrap pingpong ramp ease rand noise rgb hsl Gradient`. Lists, functions of `x`, commands and non-inlinable `ValueAt` make a system CPU-only. The reason is reported in `figure`.
 
 **Mixed:** `renderer = auto` chooses GPU when `gpuOk` and WebGL2 exists and `count > 1,500`; otherwise CPU.
 
@@ -743,7 +743,7 @@ Collisions between bodies, contacts, friction on surfaces, joints, rigid rotatio
 | A4 | Open question 5 answered: input log with `rerun = restart` (default, kernel ruling K12) or `continue` (per input). The input log is saved with the script as `@input` lines. | Deterministic what-if. |
 | A5 | New action `ClearTrace(P)`; `Trace(P, seconds)` form; trace properties `trace`, `traceWindow`, `traceFade`, `traceJoin`. | Core 6.6 has `Trace`/`Untrace` only. |
 | A6 | A call may continue on following lines while its brackets are open, up to 12 lines. | `Particles(...)` is naturally multi-line. Core says "a line ends at a newline"; the rule becomes "a line ends at a newline when no bracket is open". |
-| A7 | Add builtins `fract wrap pingpong ramp ease` and `at(obj, time)`. `Gradient` is a command (capital names are commands), the one command a particle formula may call. | Section 6. |
+| A7 | Add builtins `fract wrap pingpong ramp ease` and `ValueAt(obj, time)` (a command, renamed from `at`). `Gradient` is a command (capital names are commands), the one command a particle formula may call. | Section 6. |
 | A8 | ~~Slider animation properties `animate`, `seconds`, `phase`, `smooth`.~~ Dropped: slider animation is the numbers area's `Animate` with `loop` and `period` (section 5). `rerun` stays (section 8). | One way to write it. |
 | A9 | `@solver step 1/n` directive. | Stiff systems. |
 | A10 | Open question 4 answered: 20,000 per system, 50,000 per figure, with device-adaptive load shedding. | Section 10.6. |

@@ -18,7 +18,8 @@ Trace(P)  Trace(P, seconds)          trail behind a moving thing; Untrace(P)  Cl
 c = Path(P, t0, t1)                  the curve P draws for t in t0..t1 (no playing needed)
 fire = Particles(count, life, pos, color?, size?, alpha?, shape?, blend?, start?, end?, loop?, seed?)
    inside Particles only: i n u v w (random per particle, 0..1) age ph (=age/life) cycle life t
-fract(x) wrap(x,a,b) pingpong(x,len) ramp(x,a,b) ease(x) at(obj,time)
+fract(x) wrap(x,a,b) pingpong(x,len) ramp(x,a,b) ease(x)
+ValueAt(obj, time)                   the value obj had at a film time
 Play()  Pause()                      the film clock
 L with rerun = continue|restart      what a changed slider does to a running simulation
 ```

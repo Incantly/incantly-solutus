@@ -48,7 +48,7 @@ watch it move and look at any moment again.
 **Acceptance criteria:**
 
 1. THE SYSTEM SHALL provide `wrap(x, a, b)`, `pingpong(x, len)`, `ramp(x, a, b)` and `ease(x)` as built-ins (design 6).
-2. THE SYSTEM SHALL provide `at(obj, time)`: the value `obj` had at film time `time`, for an object that depends only on
+2. THE SYSTEM SHALL provide `ValueAt(obj, time)` (named `at` in the design draft): the value `obj` had at film time `time`, for an object that depends only on
    `t` and states. On an object that reads a value the learner can change, it SHALL be undefined with reason
    `not_time_dependent`; outside `[0, duration]`, `out_of_domain` (errors 4).
 

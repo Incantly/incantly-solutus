@@ -193,6 +193,50 @@ export interface TickReport {
 }
 
 /**
+ * The value an anchored slider has at film time `t`, a pure function of its anchor, range and style (design 3.4). The
+ * frame tick writes it; a seek's replay over the clock (a trace, `ValueAt`) reads it for times in the past.
+ */
+export function sliderValueAt(figure: Figure, id: ObjId, anchor: AnimAnchor, t: number): { ok: true; value: number; finished: boolean } | { ok: false; reason: string } {
+  const view = figure.get(id);
+  const range = view?.range;
+  if (!view || !range) return { ok: false, reason: 'range_undefined' };
+  // One view read per slider per tick: loop/period/seed/unit all come from its ext.
+  const ext = view.style.ext as Record<string, unknown>;
+  const loopRaw = ext['loop'];
+  const loop: LoopMode = loopRaw === 'up' || loopRaw === 'down' || loopRaw === 'once' || loopRaw === 'random' || loopRaw === 'bounce' ? loopRaw : 'bounce';
+  const periodRaw = ext['period'];
+  const period = typeof periodRaw === 'number' && periodRaw > 0 && Number.isFinite(periodRaw) ? periodRaw : 10;
+  const seedRaw = ext['seed'];
+  const seed = typeof seedRaw === 'number' && Number.isInteger(seedRaw) ? seedRaw : 1;
+  const unitRaw = ext['unit'];
+  const unit: AngleUnit | 'none' =
+    unitRaw === 'rad' || unitRaw === 'deg' || unitRaw === 'turn' || unitRaw === 'grad' || unitRaw === 'none'
+      ? unitRaw
+      : (inferUnitFromDefinition(view.definition) ?? 'none');
+  const scale = unitScale(unit);
+  const w = range.max / scale - range.min / scale;
+  const p0 = w > 0 ? (anchor.v0 / scale - range.min / scale) / w : 0;
+  const ss = period > 0 ? (t - anchor.t0) / period : 0;
+  if (loop === 'once' && onceFinished(p0, ss)) {
+    const r = commit(range.max, { lo: range.min, hi: range.max, step: range.step ?? 'auto', unit, source: 'animation' });
+    return r.ok ? { ok: true, value: r.value as number, finished: true } : { ok: false, reason: r.reason };
+  }
+  const r = animationValueAt({
+    loop,
+    lo: range.min,
+    hi: range.max,
+    period,
+    anchor,
+    seed,
+    step: range.step ?? 'auto',
+    unit,
+    t,
+  });
+  if (!r.ok) return { ok: false, reason: r.reason };
+  return { ok: true, value: r.value as number, finished: false };
+}
+
+/**
  * One player tick: writes animationValueAt(t) for every anchored slider with the
  * animation write kind and runs one pass. Finished `once` sliders are written to
  * the top and reported; sliders whose range is undefined keep their anchor and
@@ -217,45 +261,15 @@ export function tickAnimations(figure: Figure, t: number): TickReport {
       continue;
     }
     captureResetInitial(figure, id);
-    // One view read per slider per tick: loop/period/seed/unit all come from its ext.
-    const ext = view.style.ext as Record<string, unknown>;
-    const loopRaw = ext['loop'];
-    const loop: LoopMode = loopRaw === 'up' || loopRaw === 'down' || loopRaw === 'once' || loopRaw === 'random' || loopRaw === 'bounce' ? loopRaw : 'bounce';
-    const periodRaw = ext['period'];
-    const period = typeof periodRaw === 'number' && periodRaw > 0 && Number.isFinite(periodRaw) ? periodRaw : 10;
-    const seedRaw = ext['seed'];
-    const seed = typeof seedRaw === 'number' && Number.isInteger(seedRaw) ? seedRaw : 1;
-    const unitRaw = ext['unit'];
-    const unit: AngleUnit | 'none' =
-      unitRaw === 'rad' || unitRaw === 'deg' || unitRaw === 'turn' || unitRaw === 'grad' || unitRaw === 'none'
-        ? unitRaw
-        : (inferUnitFromDefinition(view.definition) ?? 'none');
-    const scale = unitScale(unit);
-    const w = range.max / scale - range.min / scale;
-    const p0 = w > 0 ? (anchor.v0 / scale - range.min / scale) / w : 0;
-    const ss = period > 0 ? (t - anchor.t0) / period : 0;
-    if (loop === 'once' && onceFinished(p0, ss)) {
-      const r = commit(range.max, { lo: range.min, hi: range.max, step: range.step ?? 'auto', unit, source: 'animation' });
-      if (r.ok) {
-        const wr = figure.setFree(id, r.value, 'anim');
-        if (wr.ok) ticked.push(view.name);
-      }
-      finished.push(view.name);
-      continue;
-    }
-    const r = animationValueAt({
-      loop,
-      lo: range.min,
-      hi: range.max,
-      period,
-      anchor,
-      seed,
-      step: range.step ?? 'auto',
-      unit,
-      t,
-    });
+    const r = sliderValueAt(figure, id, anchor, t);
     if (!r.ok) {
       skipped.push({ name: view.name, reason: r.reason });
+      continue;
+    }
+    if (r.finished) {
+      const wr = figure.setFree(id, r.value, 'anim');
+      if (wr.ok) ticked.push(view.name);
+      finished.push(view.name);
       continue;
     }
     const wr = figure.setFree(id, r.value, 'anim');
