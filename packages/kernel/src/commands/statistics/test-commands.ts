@@ -9,6 +9,7 @@ import { makeMatrix } from '../lists/types';
 import type { MatrixValue } from '../lists/types';
 import { bool, centralSums, enumCheck, form, levelCheck, mean, nonEmpty, num, numbers, oneOf, opt, p, record, spec, sum, tailOf } from './core';
 import { table } from './describe-commands';
+import { dist } from '../probability/dists';
 import { chiSqSf, fSf, normalQuantile, normalSf, tQuantile, tSf } from './dist';
 import { MAX_ANOVA_GROUPS, MAX_CHI_TABLE, PROP_METHODS, TAILS, TAIL_ALIASES } from './types';
 import type { Tail } from './types';
@@ -30,12 +31,15 @@ function pValue(stat: number, tail: Tail, sf: Sf): number {
 const zSf: Sf = normalSf;
 const tSfOf = (df: number): Sf => (x) => tSf(x, df);
 
+/** The distribution of the statistic under the null: standard normal for z, Student t for t (design 8.1). */
+const nullDist = (df: number | undefined) => (df === undefined ? dist('Normal', [0, 1]) : dist('StudentT', [df]));
+
 function testRecord(name: string, stat: number, pv: number, df: number | undefined, tail: string, estimate: number, se: number, n: number): unknown {
-  return record('Test', { statistic: stat, p: pv, df, tail, estimate, se, n, test: name }, df === undefined ? { df: 'not_set' } : undefined);
+  return record('Test', { statistic: stat, p: pv, df, tail, estimate, se, n, test: name, dist: nullDist(df) }, df === undefined ? { df: 'not_set' } : undefined);
 }
 
 function intervalRecord(name: string, estimate: number, margin: number, level: number, se: number, df: number | undefined): unknown {
-  return record('Interval', { lo: estimate - margin, hi: estimate + margin, level, margin, estimate, se, df, test: name }, df === undefined ? { df: 'not_set' } : undefined);
+  return record('Interval', { lo: estimate - margin, hi: estimate + margin, level, margin, estimate, se, df, test: name, dist: nullDist(df) }, df === undefined ? { df: 'not_set' } : undefined);
 }
 
 function positive(call: RuleCall, v: number | undefined, what: string): number | undefined {
@@ -265,7 +269,7 @@ function chiResult(call: RuleCall, obs: MatrixValue, exp: Float64Array, df: numb
   }
   if (low.length > 0) call.notify('expected_count_low', { cells: low.join(', ') });
   return record('ChiSquared', {
-    statistic: stat, p: chiSqSf(stat, df), df, tail: 'right', n: sum(obs.data), expected: makeMatrix(obs.rows, obs.cols, exp), contributions: makeMatrix(obs.rows, obs.cols, contrib), test: name,
+    statistic: stat, p: chiSqSf(stat, df), df, tail: 'right', n: sum(obs.data), expected: makeMatrix(obs.rows, obs.cols, exp), contributions: makeMatrix(obs.rows, obs.cols, contrib), test: name, dist: dist('ChiSquared', [df]),
   });
 }
 
@@ -347,7 +351,7 @@ function runAnova(call: RuleCall): unknown {
   const tbl = table(['source', 'SS', 'df', 'MS', 'F', 'p'], [
     ['between', 'within', 'total'], Float64Array.of(ssb, ssw, ssb + ssw), Float64Array.of(dfb, dfw, N - 1), Float64Array.of(msb, msw, NaN), Float64Array.of(F, NaN, NaN), Float64Array.of(pv, NaN, NaN),
   ]);
-  return record('ANOVA', { F, p: pv, dfBetween: dfb, dfWithin: dfw, ssBetween: ssb, ssWithin: ssw, msBetween: msb, msWithin: msw, grandMean: grand, groupMeans: means, table: tbl });
+  return record('ANOVA', { F, p: pv, dfBetween: dfb, dfWithin: dfw, ssBetween: ssb, ssWithin: ssw, msBetween: msb, msWithin: msw, grandMean: grand, groupMeans: means, table: tbl, dist: dist('FDist', [dfb, dfw]) });
 }
 
 /* ------------------------------ intervals ------------------------------ */

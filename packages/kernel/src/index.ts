@@ -35,3 +35,4 @@ export * from './commands/functions/index';
 export * from './commands/animation/index';
 export * from './commands/lists/index';
 export * from './commands/statistics/index';
+export * from './commands/probability/index';

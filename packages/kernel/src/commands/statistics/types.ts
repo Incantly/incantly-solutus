@@ -6,10 +6,15 @@
  *
  * No DOM, no timers, no Date.
  */
-import { T, fnOf, listOf } from '../../language/types';
+import { T, fnOf, listOf, registerSchemaType } from '../../language/types';
 import type { Ty } from '../../language/types';
 
 declare module '../../contracts/values' {
+  interface AreaTypeNames {
+    // statistics: a chart is `Chart<Histogram>` and so on; a table is `Table`
+    Chart: true;
+    Table: true;
+  }
   interface AreaUndefReasons {
     // statistics
     too_few_values: true;
@@ -27,6 +32,14 @@ declare module '../../contracts/values' {
     groups_too_few: true;
   }
 }
+
+// Chart and Table carry a schema, like Record (`Chart<BoxPlot>`). Registered when the module loads, before any command
+// table parses its type texts.
+registerSchemaType('Chart');
+registerSchemaType('Table');
+
+/** Type names this area adds. Pass to `registry.problems({ types: STATISTICS_TYPES })`. */
+export const STATISTICS_TYPES: readonly string[] = ['Chart', 'Table'];
 
 /* ------------------------------ option sets ------------------------------ */
 
@@ -65,6 +78,9 @@ const NL = listOf(T.Number);
 const PL = listOf(T.Point);
 const TX = T.Text;
 const rec = (schema: string): Ty => ({ k: 'Record', schema });
+const chart = (schema: string): Ty => ({ k: 'Chart', schema });
+const TABLE: Ty = { k: 'Table' };
+const DIST: Ty = { k: 'Distribution' };
 
 type Fields = readonly { readonly name: string; readonly ty: Ty }[];
 const f = (spec: Readonly<Record<string, Ty>>): Fields => Object.entries(spec).map(([name, ty]) => ({ name, ty }));
@@ -80,23 +96,23 @@ export const STAT_SCHEMAS: Readonly<Record<string, Fields>> = {
   Describe2: f({ x: rec('Describe'), y: rec('Describe'), r: N, r2: N, cov: N, sampleCov: N, sxy: N, spearman: N, n: N }),
   FiveNumber: f({ min: N, q1: N, median: N, q3: N, max: N, method: TX }),
   Table: f({ rows: N, cols: N, titles: listOf(T.Text), columns: { k: 'List' }, caption: TX }),
-  Contingency: f({ observed: { k: 'Matrix' }, rowLabels: { k: 'List' }, colLabels: { k: 'List' }, table: rec('Table') }),
+  Contingency: f({ observed: { k: 'Matrix' }, rowLabels: { k: 'List' }, colLabels: { k: 'List' }, table: TABLE }),
   Fit: f({
     f: fnOf('Number', 1), equation: TX, params: NL, names: listOf(T.Text), stderr: NL, r2: N, adjR2: N, sse: N, rmse: N,
-    n: N, dof: N, residuals: NL, model: TX, space: TX, iterations: N,
+    n: N, dof: N, residuals: NL, model: TX, space: TX, iterations: N, from: N, to: N,
   }),
-  Test: f({ statistic: N, p: N, df: N, tail: TX, estimate: N, se: N, n: N, test: TX }),
-  ChiSquared: f({ statistic: N, p: N, df: N, tail: TX, n: N, expected: { k: 'Matrix' }, contributions: { k: 'Matrix' }, test: TX }),
+  Test: f({ statistic: N, p: N, df: N, tail: TX, estimate: N, se: N, n: N, test: TX, dist: DIST }),
+  ChiSquared: f({ statistic: N, p: N, df: N, tail: TX, n: N, expected: { k: 'Matrix' }, contributions: { k: 'Matrix' }, test: TX, dist: DIST }),
   ANOVA: f({
     F: N, p: N, dfBetween: N, dfWithin: N, ssBetween: N, ssWithin: N, msBetween: N, msWithin: N, grandMean: N,
-    groupMeans: NL, table: rec('Table'),
+    groupMeans: NL, table: TABLE, dist: DIST,
   }),
-  Interval: f({ lo: N, hi: N, level: N, margin: N, estimate: N, se: N, df: N, test: TX }),
+  Interval: f({ lo: N, hi: N, level: N, margin: N, estimate: N, se: N, df: N, test: TX, dist: DIST }),
   // charts (design 6)
   Histogram: f({ edges: NL, counts: NL, heights: NL, total: N, binWidth: N, outside: N, n: N, scale: TX, closed: TX }),
   BarChart: f({ xs: NL, heights: NL, width: N, total: N, labels: listOf(T.Text) }),
   BoxPlot: f({ y: N, halfHeight: N, min: N, q1: N, median: N, q3: N, max: N, iqr: N, outliers: NL, whisker: TX, method: TX, n: N, label: TX }),
-  BoxPlots: f({ plots: listOf(rec('BoxPlot')), labels: listOf(T.Text) }),
+  BoxPlots: f({ plots: listOf(chart('BoxPlot')), labels: listOf(T.Text) }),
   DotPlot: f({ values: NL, binWidth: N, dots: PL, n: N }),
   StemPlot: f({ stems: NL, leaves: listOf(T.Text), unit: N, text: TX, n: N }),
   PieChart: f({ values: NL, fractions: NL, angles: NL, total: N, centre: T.Point, radius: N, start: N, labels: listOf(T.Text) }),

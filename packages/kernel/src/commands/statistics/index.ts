@@ -8,7 +8,10 @@
 import type { CommandRegistry } from '../../graph/registry';
 import { registerNotice } from '../../errors/notices';
 import { registerReasonPhrase } from '../../errors/phrases';
-import { registerRecordSchema, registerRecordText } from '../lists/types';
+import { registerFieldNames, registerFieldTyper } from '../../language/check';
+import { registerFieldReader } from '../../language/compile';
+import { recordFieldNames } from '../lists/ops';
+import { RECORD_SCHEMAS, isRecord, registerRecordSchema, registerRecordText } from '../lists/types';
 import type { RecordValue } from '../lists/types';
 import { CHART_COMMANDS } from './chart-commands';
 import { fmt } from './core';
@@ -103,10 +106,21 @@ export function registerStatistics(registry: CommandRegistry): void {
   registered = true;
   for (const [name, fields] of Object.entries(STAT_SCHEMAS)) registerRecordSchema(name, fields);
   for (const [name, text] of Object.entries(TEXTS)) registerRecordText(name, text);
+  // Chart<Schema> and Table read their fields from the record schemas, like Record
+  for (const kind of ['Chart', 'Table'] as const) {
+    const schemaOf = (s: string | undefined): string | undefined => (kind === 'Table' ? 'Table' : s);
+    registerFieldTyper(kind, (field, target) => {
+      const schema = schemaOf(target.ty.schema);
+      const fields = schema !== undefined && Object.hasOwn(RECORD_SCHEMAS, schema) ? RECORD_SCHEMAS[schema] : undefined;
+      return fields?.find((x) => x.name === field)?.ty;
+    });
+    registerFieldNames(kind, (ty) => recordFieldNames(schemaOf(ty.schema)));
+    registerFieldReader(kind, (field, value) => (isRecord(value) && Object.hasOwn(value.fields, field) ? value.fields[field] : undefined));
+  }
   for (const [kind, spec] of Object.entries(NOTICES)) registerNotice(kind, spec);
   for (const [reason, phrase] of Object.entries(PHRASES)) registerReasonPhrase(reason, phrase);
 }
 
 export { CHART_COMMANDS, DESCRIBE_COMMANDS, FIT_COMMANDS, TEST_COMMANDS };
-export { CHART_SCHEMAS, STATISTICS_REASONS, STAT_SCHEMAS } from './types';
+export { CHART_SCHEMAS, STATISTICS_REASONS, STATISTICS_TYPES, STAT_SCHEMAS } from './types';
 export { betaI, chiSqCdf, chiSqQuantile, chiSqSf, erfc, fSf, gammaPQ, lgamma, normalCdf, normalPdf, normalQuantile, normalSf, tCdf, tQuantile, tSf } from './dist';

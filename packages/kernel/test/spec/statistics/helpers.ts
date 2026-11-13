@@ -3,7 +3,7 @@
  * Built from docs/features/statistics (design, errors, agent), never from the implementation.
  */
 import { expect } from 'vitest';
-import { CommandRegistry, Figure, geometry, isRecord, registerAnimation, registerFunctions, registerLists, registerNumbers, registerStatistics } from '@incantly/kernel';
+import { CommandRegistry, Figure, geometry, isRecord, registerAnimation, registerFunctions, registerLists, registerNumbers, registerProbability, registerStatistics } from '@incantly/kernel';
 import type { ErrorObject, RecordValue, TxResult } from '@incantly/kernel';
 
 export const registry = new CommandRegistry();
@@ -13,6 +13,7 @@ registerFunctions(registry);
 registerAnimation(registry);
 registerLists(registry);
 registerStatistics(registry);
+registerProbability(registry);
 
 export function fig(lines: readonly string[] = []): Figure {
   const f = new Figure({ commands: registry });

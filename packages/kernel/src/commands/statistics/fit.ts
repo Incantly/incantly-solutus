@@ -256,18 +256,20 @@ export function levenberg(model: Model, xs: Float64Array, ys: Float64Array, star
   const r = new Float64Array(n);
   const JtJ = new Float64Array(k * k);
   const Jtr = new Float64Array(k);
+  const up = new Float64Array(n);
+  const h = new Float64Array(k);
   const jacobian = (q: Float64Array): boolean => {
     for (let i = 0; i < n; i++) r[i] = (ys[i] as number) - model(xs[i] as number, q);
-    const h = new Float64Array(q);
+    h.set(q);
     for (let j = 0; j < k; j++) {
       const step = CBRT_EPS * Math.max(1, Math.abs(q[j] as number));
       const keep = h[j] as number;
       h[j] = keep + step;
-      const up = Float64Array.from(xs, (x) => model(x, h));
+      for (let i = 0; i < n; i++) up[i] = model(xs[i] as number, h);
       h[j] = keep - step;
-      const dn = Float64Array.from(xs, (x) => model(x, h));
+      const inv2 = 1 / (2 * step);
+      for (let i = 0; i < n; i++) J[i * k + j] = ((up[i] as number) - model(xs[i] as number, h)) * inv2;
       h[j] = keep;
-      for (let i = 0; i < n; i++) J[i * k + j] = ((up[i] as number) - (dn[i] as number)) / (2 * step);
     }
     JtJ.fill(0);
     Jtr.fill(0);

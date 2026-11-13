@@ -227,25 +227,36 @@ export function centralSums(xs: ArrayLike<number>, w?: ArrayLike<number>): { n: 
   const m = mean(xs, w);
   let c1 = 0;
   let s2 = 0;
-  let c2 = 0;
   let s3 = 0;
   let s4 = 0;
-  for (let i = 0; i < xs.length; i++) {
-    const f = w ? (w[i] as number) : 1;
-    if (f === 0) continue;
-    const d = (xs[i] as number) - m;
-    const d2 = d * d;
-    c1 += f * d;
-    // compensated sum of squares
-    const term = f * d2;
-    const t = s2 + term;
-    if (s2 >= term) c2 += s2 - t + term;
-    else c2 += term - t + s2;
-    s2 = t;
-    s3 += f * d2 * d;
-    s4 += f * d2 * d2;
+  if (!w) {
+    // unweighted fast path; the terms are non-negative, so plain summation in a pairwise-like split is enough
+    let a2 = 0;
+    let b2 = 0;
+    const len = xs.length;
+    for (let i = 0; i < len; i++) {
+      const d = (xs[i] as number) - m;
+      const d2 = d * d;
+      c1 += d;
+      if (i & 1) b2 += d2;
+      else a2 += d2;
+      s3 += d2 * d;
+      s4 += d2 * d2;
+    }
+    s2 = a2 + b2;
+  } else {
+    for (let i = 0; i < xs.length; i++) {
+      const f = w[i] as number;
+      if (f === 0) continue;
+      const d = (xs[i] as number) - m;
+      const d2 = d * d;
+      c1 += f * d;
+      s2 += f * d2;
+      s3 += f * d2 * d;
+      s4 += f * d2 * d2;
+    }
   }
-  s2 = s2 + c2 - (c1 * c1) / n;
+  s2 -= (c1 * c1) / n;
   return { n, mean: m + c1 / n, s2: Math.max(0, s2), s3, s4 };
 }
 
@@ -275,11 +286,64 @@ export function sxy(xs: ArrayLike<number>, ys: ArrayLike<number>): number {
 
 const SORTED = new WeakMap<object, Float64Array>();
 
+/**
+ * Ascending sort of finite doubles. Large lists use a least-significant-digit radix sort on the bit patterns (four
+ * 16-bit passes), which is several times faster than a comparison sort at a million values.
+ */
+export function sortNumbers(xs: Float64Array): Float64Array {
+  const n = xs.length;
+  if (n < 4096) return Float64Array.from(xs).sort();
+  let src = new Uint32Array(Float64Array.from(xs).buffer);
+  let dst = new Uint32Array(2 * n);
+  // map each double to an unsigned key whose order is the numeric order (little-endian: lo, hi)
+  for (let i = 0; i < n; i++) {
+    const hi = src[2 * i + 1] as number;
+    if (hi & 0x80000000) {
+      src[2 * i] = ~(src[2 * i] as number) >>> 0;
+      src[2 * i + 1] = ~hi >>> 0;
+    } else src[2 * i + 1] = (hi | 0x80000000) >>> 0;
+  }
+  const count = new Uint32Array(65536);
+  for (let pass = 0; pass < 4; pass++) {
+    const word = pass < 2 ? 0 : 1;
+    const shift = (pass & 1) * 16;
+    count.fill(0);
+    for (let i = 0; i < n; i++) { const b = ((src[2 * i + word] as number) >>> shift) & 0xffff; count[b] = (count[b] as number) + 1; }
+    let sum = 0;
+    for (let b = 0; b < 65536; b++) {
+      const c = count[b] as number;
+      count[b] = sum;
+      sum += c;
+    }
+    for (let i = 0; i < n; i++) {
+      const lo = src[2 * i] as number;
+      const hi = src[2 * i + 1] as number;
+      const key = ((word === 0 ? lo : hi) >>> shift) & 0xffff;
+      const at = count[key] as number;
+      count[key] = at + 1;
+      dst[2 * at] = lo;
+      dst[2 * at + 1] = hi;
+    }
+    const t = src;
+    src = dst;
+    dst = t;
+  }
+  for (let i = 0; i < n; i++) {
+    const hi = src[2 * i + 1] as number;
+    if (hi & 0x80000000) src[2 * i + 1] = (hi & 0x7fffffff) >>> 0;
+    else {
+      src[2 * i] = ~(src[2 * i] as number) >>> 0;
+      src[2 * i + 1] = ~hi >>> 0;
+    }
+  }
+  return new Float64Array(src.buffer);
+}
+
 /** The ascending copy of a list, cached per list value so commands on the same list sort once (design 3.2). */
 export function sorted(xs: Float64Array): Float64Array {
   let s = SORTED.get(xs);
   if (!s) {
-    s = Float64Array.from(xs).sort();
+    s = sortNumbers(xs);
     SORTED.set(xs, s);
   }
   return s;

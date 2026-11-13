@@ -4,11 +4,14 @@
 import type { RuleCall } from '../../graph/registry';
 import type { FunctionValue } from '../../language/runtime';
 import type { CommandSpec, ParamSpec, Refusal } from '../../language/table';
-import { centralSums, enumCheck, fmt, form, given, num, numbers, oneOf, opt, p, pairs, pearson, record, spec, tailOf } from './core';
+import { centralSums, enumCheck, fmt, wholeCheck, form, given, num, numbers, oneOf, opt, p, pairs, pearson, record, spec, tailOf } from './core';
 import { at } from './describe-commands';
-import { tSf } from './dist';
+import { tQuantile, tSf } from './dist';
+import { dist } from '../probability/dists';
 import { levenberg, linearLS, polyLS } from './fit';
 import type { Model } from './fit';
+import { svd } from '../lists/linalg';
+import { isRecord } from '../lists/types';
 import { MAX_FIT_POINTS, MAX_POLY_DEGREE, SPACES, TAILS, TAIL_ALIASES } from './types';
 
 const L = 'List<Number>';
@@ -24,6 +27,9 @@ interface Data {
   readonly w: Float64Array | undefined;
   /** Index of the first argument after the data. */
   readonly next: number;
+  /** The x-range the drawn curve covers (design 7.1): the data range and 5 % each side unless given. */
+  readonly from: number;
+  readonly to: number;
 }
 
 /** The points and the `weights` option (the last parameter of every fit form). */
@@ -39,8 +45,31 @@ function fitData(call: RuleCall, isPts: boolean, weightsIdx: number): Data | und
     const bad = w.findIndex((v) => v < 0);
     if (bad >= 0) return call.fail('bad_weights', `weight ${bad + 1} is ${w[bad]}; weights are 0 or more`);
   }
-  return { xs: d.xs, ys: d.ys, w, next: d.next };
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (const x of d.xs) {
+    lo = Math.min(lo, x);
+    hi = Math.max(hi, x);
+  }
+  const pad = hi > lo ? 0.05 * (hi - lo) : 1;
+  const from = given(call, weightsIdx + 1) ? num(call, weightsIdx + 1) : lo - pad;
+  const to = given(call, weightsIdx + 2) ? num(call, weightsIdx + 2) : hi + pad;
+  if (from === undefined || to === undefined) return call.fail('input_undefined', 'from or to is undefined');
+  return { xs: d.xs, ys: d.ys, w, next: d.next, from: Math.min(from, to), to: Math.max(from, to) };
 }
+
+/** What a band needs of a model linear in its parameters (design 7.2, `FitBand`). */
+interface LinearInfo {
+  readonly row: (x: number) => Float64Array;
+  readonly inv: Float64Array;
+  readonly s2: number;
+  readonly dof: number;
+  readonly g: (x: number) => number;
+  readonly from: number;
+  readonly to: number;
+}
+
+const LINEAR = new WeakMap<object, LinearInfo>();
 
 const distinctCount = (xs: Float64Array): number => new Set(xs).size;
 
@@ -74,6 +103,8 @@ interface FitParts {
   readonly iterations: number;
   /** Residuals measured on another scale (log space); default `y - g(x)`. */
   readonly residuals?: Float64Array;
+  /** For a model linear in its parameters: the design row at x, in the order of `params`. */
+  readonly row?: (x: number) => Float64Array;
 }
 
 function fitRecord(call: RuleCall, d: Data, parts: FitParts): unknown {
@@ -104,10 +135,13 @@ function fitRecord(call: RuleCall, d: Data, parts: FitParts): unknown {
   }
   if (dof < 3) call.notify('overfit', { dof });
   if (parts.space === 'log') call.notify('log_space_bias', {});
-  return record('Fit', {
+  const out = record('Fit', {
     f: fnValue(parts.g), equation: parts.equation, params: parts.params, names: parts.names.slice(), stderr, r2, adjR2, sse,
     rmse: Math.sqrt(sse / n), n, dof, residuals: res, model: parts.model, space: parts.space, iterations: parts.iterations,
+    from: d.from, to: d.to,
   }, reasons);
+  if (parts.row && parts.inv && dof > 0 && !d.w) LINEAR.set(out, { row: parts.row, inv: parts.inv, s2: sse / dof, dof, g: parts.g, from: d.from, to: d.to });
+  return out;
 }
 
 function weightedSst(ys: Float64Array, w: Float64Array): number {
@@ -167,7 +201,8 @@ function polyFit(call: RuleCall, d: Data, degree: number, model: string): unknow
     for (let i = 0; i < k; i++) s = s * x + (desc[i] as number);
     return s;
   };
-  return fitRecord(call, d, { model, g, params: desc, names: LETTERS.slice(0, k).split(''), equation: polyEquation(desc), inv, space: 'data', iterations: 0 });
+  const row = (x: number): Float64Array => Float64Array.from({ length: k }, (_, i) => x ** (k - 1 - i));
+  return fitRecord(call, d, { model, g, params: desc, names: LETTERS.slice(0, k).split(''), equation: polyEquation(desc), inv, space: 'data', iterations: 0, row });
 }
 
 const runLine = (isPts: boolean) => (call: RuleCall): unknown => {
@@ -191,7 +226,7 @@ const runLineX = (isPts: boolean) => (call: RuleCall): unknown => {
   const r = polyLS(d.ys, d.xs, 1, d.w);
   const a = r.coef[1] as number;
   const b = r.coef[0] as number;
-  const swapped: Data = { xs: d.ys, ys: d.xs, w: d.w, next: d.next };
+  const swapped: Data = { ...d, xs: d.ys, ys: d.xs };
   const inv = Float64Array.of(r.cov[3] as number, r.cov[2] as number, r.cov[1] as number, r.cov[0] as number);
   const rec = fitRecord(call, swapped, { model: 'lineX', g: (y) => a * y + b, params: Float64Array.of(a, b), names: ['a', 'b'], equation: polyEquation(Float64Array.of(a, b), 'y', 'x'), inv, space: 'data', iterations: 0 }) as ReturnType<typeof record> | undefined;
   if (!rec) return undefined;
@@ -212,6 +247,7 @@ const runLog = (isPts: boolean) => (call: RuleCall): unknown => {
   const b = r.coef[1] as number;
   return fitRecord(call, d, {
     model: 'log', g: (x) => a + b * Math.log(x), params: Float64Array.of(a, b), names: ['a', 'b'], equation: `y = ${fmt(a)}${coef(b, false)} ln(x)`, inv: r.cov, space: 'data', iterations: 0,
+    row: (x) => Float64Array.of(1, Math.log(x)),
   });
 };
 
@@ -241,7 +277,8 @@ const runBasis = (isPts: boolean) => (call: RuleCall): unknown => {
   };
   const names = Array.from({ length: k }, (_, j) => `c${j + 1}`);
   const equation = `y = ${Array.from(c, (v, j) => `${coef(v, j === 0)} f${j + 1}(x)`).join('')}`;
-  return fitRecord(call, d, { model: 'basis', g, params: c, names, equation, inv: r.inv, space: 'data', iterations: 0 });
+  const row = (x: number): Float64Array => Float64Array.from(fs, (fj) => at(fj, x));
+  return fitRecord(call, d, { model: 'basis', g, params: c, names, equation, inv: r.inv, space: 'data', iterations: 0, row });
 };
 
 /* ------------------------------ nonlinear models ------------------------------ */
@@ -306,6 +343,19 @@ const runLogModel = (kind: Kind, isPts: boolean) => (call: RuleCall): unknown =>
   return fitRecord(call, d, { model: kind, g: (x) => model(x, r.p), params: q, names, equation: eq(q[0] as number, q[1] as number), inv: r.inv, space: 'data', iterations: r.iterations });
 };
 
+/** Solves a 3 × 3 system by Cramer's rule; undefined when nearly singular. */
+function solve3(m: Float64Array, b: Float64Array): [number, number, number] | undefined {
+  const [a11, a12, a13, a21, a22, a23, a31, a32, a33] = m as unknown as number[];
+  const det = (a11 as number) * ((a22 as number) * (a33 as number) - (a23 as number) * (a32 as number)) - (a12 as number) * ((a21 as number) * (a33 as number) - (a23 as number) * (a31 as number)) + (a13 as number) * ((a21 as number) * (a32 as number) - (a22 as number) * (a31 as number));
+  const scale = Math.abs(a11 as number) * Math.abs(a22 as number) * Math.abs(a33 as number);
+  if (!(Math.abs(det) > 1e-12 * scale)) return undefined;
+  const [b1, b2, b3] = b as unknown as number[];
+  const d1 = (b1 as number) * ((a22 as number) * (a33 as number) - (a23 as number) * (a32 as number)) - (a12 as number) * ((b2 as number) * (a33 as number) - (a23 as number) * (b3 as number)) + (a13 as number) * ((b2 as number) * (a32 as number) - (a22 as number) * (b3 as number));
+  const d2 = (a11 as number) * ((b2 as number) * (a33 as number) - (a23 as number) * (b3 as number)) - (b1 as number) * ((a21 as number) * (a33 as number) - (a23 as number) * (a31 as number)) + (a13 as number) * ((a21 as number) * (b3 as number) - (b2 as number) * (a31 as number));
+  const d3 = (a11 as number) * ((a22 as number) * (b3 as number) - (b2 as number) * (a32 as number)) - (a12 as number) * ((a21 as number) * (b3 as number) - (b2 as number) * (a31 as number)) + (b1 as number) * ((a21 as number) * (a32 as number) - (a22 as number) * (a31 as number));
+  return [d1 / det, d2 / det, d3 / det];
+}
+
 /** `y = a + b sin(c x + d)`: scan c, solve the linear part at each, then refine all four (design 7.2). */
 const runSin = (isPts: boolean) => (call: RuleCall): unknown => {
   const d = fitData(call, isPts, isPts ? 1 : 2);
@@ -318,24 +368,49 @@ const runSin = (isPts: boolean) => (call: RuleCall): unknown => {
   const cMin = (2 * Math.PI) / range;
   const cMax = Math.PI / (range / (n - 1));
   let best = { sse: Infinity, a: 0, p: 0, q: 0, c: cMin };
-  const A = new Float64Array(n * 3);
   const steps = 400;
+  const sn = new Float64Array(n);
+  const cs = new Float64Array(n);
+  const ww = d.w ?? new Float64Array(n).fill(1);
+  let syy = 0;
+  let sy = 0;
+  let sw = 0;
+  for (let i = 0; i < n; i++) {
+    const wi = ww[i] as number;
+    sw += wi;
+    sy += wi * (d.ys[i] as number);
+    syy += wi * (d.ys[i] as number) ** 2;
+  }
+  const M = new Float64Array(9);
+  const rhs = new Float64Array(3);
   for (let s = 0; s < steps; s++) {
     const c = cMin + ((cMax - cMin) * s) / (steps - 1);
+    // normal equations of y ≈ a + p sin(c x) + q cos(c x)
+    let s1 = 0, c1 = 0, ss = 0, cc = 0, sc = 0, ys = 0, yc = 0;
     for (let i = 0; i < n; i++) {
       const x = d.xs[i] as number;
-      A[i * 3] = 1;
-      A[i * 3 + 1] = Math.sin(c * x);
-      A[i * 3 + 2] = Math.cos(c * x);
+      const wi = ww[i] as number;
+      const si = Math.sin(c * x);
+      const ci = Math.cos(c * x);
+      sn[i] = si;
+      cs[i] = ci;
+      const y = d.ys[i] as number;
+      s1 += wi * si;
+      c1 += wi * ci;
+      ss += wi * si * si;
+      cc += wi * ci * ci;
+      sc += wi * si * ci;
+      ys += wi * y * si;
+      yc += wi * y * ci;
     }
-    const r = linearLS(A, n, 3, d.ys, d.w);
-    if (!(r.cond < 1e12)) continue;
-    let sse = 0;
-    for (let i = 0; i < n; i++) {
-      const e = (d.ys[i] as number) - (r.c[0] as number) - (r.c[1] as number) * (A[i * 3 + 1] as number) - (r.c[2] as number) * (A[i * 3 + 2] as number);
-      sse += (d.w ? (d.w[i] as number) : 1) * e * e;
-    }
-    if (sse < best.sse) best = { sse, a: r.c[0] as number, p: r.c[1] as number, q: r.c[2] as number, c };
+    M.set([sw, s1, c1, s1, ss, sc, c1, sc, cc]);
+    rhs.set([sy, ys, yc]);
+    const sol = solve3(M, rhs);
+    if (!sol) continue;
+    const [a, p, q] = sol;
+    // sse = yᵀy - 2 βᵀXᵀy + βᵀXᵀXβ = yᵀy - βᵀXᵀy at the solution
+    const sse = syy - (a * sy + p * ys + q * yc);
+    if (sse < best.sse) best = { sse, a, p, q, c };
     if (!call.work.spend(1 + Math.floor(n / 1000))) return call.fail('no_convergence', 'the frequency scan ran out of work');
   }
   if (best.sse === Infinity) return call.fail('singular_fit', 'no frequency separates the sine and cosine parts');
@@ -401,8 +476,9 @@ const runModel = (isPts: boolean) => (call: RuleCall): unknown => {
   if (!f || !start) return f ? undefined : call.fail('input_undefined', 'the model is undefined');
   if (f.arity !== start.length + 1) return call.fail('bad_parameter', `the model takes ${f.arity} arguments; with ${start.length} start values it needs ${start.length + 1}`);
   if (d.xs.length < start.length) return call.fail('too_few_values', `${start.length} parameters need at least ${start.length} points, got ${d.xs.length}`);
+  const k = start.length;
   const model: Model = (x, q) => {
-    const v = f.call(x, ...q);
+    const v = k === 1 ? f.call(x, q[0] as number) : k === 2 ? f.call(x, q[0] as number, q[1] as number) : k === 3 ? f.call(x, q[0] as number, q[1] as number, q[2] as number) : k === 4 ? f.call(x, q[0] as number, q[1] as number, q[2] as number, q[3] as number) : f.call(x, ...q);
     return typeof v === 'number' ? v : NaN;
   };
   const r = lm(call, d, model, start);
@@ -427,12 +503,138 @@ const runCorrTest = (isPts: boolean) => (call: RuleCall): unknown => {
   const df = n - 2;
   const t = Math.abs(r) === 1 ? Math.sign(r) * Infinity : r * Math.sqrt(df / (1 - r * r));
   const pv = tail === 'two' ? Math.min(1, 2 * tSf(Math.abs(t), df)) : tail === 'right' ? tSf(t, df) : tSf(-t, df);
-  return record('Test', { statistic: t, p: pv, df, tail, estimate: r, se: Math.sqrt((1 - r * r) / df), n, test: 'CorrTest' });
+  return record('Test', { statistic: t, p: pv, df, tail, estimate: r, se: Math.sqrt((1 - r * r) / df), n, test: 'CorrTest', dist: dist('StudentT', [df]) });
+};
+
+/* ------------------------------ bands and implicit curves ------------------------------ */
+
+/**
+ * `FitBand(fit, level, kind)`: the confidence band of the mean (`"mean"`) or the prediction band (`"prediction"`) of a
+ * model linear in its parameters (design 7.2): `ŷ ± t · s · sqrt(r(x)ᵀ (AᵀA)⁻¹ r(x) [+ 1])`, as a region between two
+ * curves over the fit's drawn range.
+ */
+function runBand(call: RuleCall): unknown {
+  const fit = call.values[0];
+  const level = num(call, 1);
+  const kind = oneOf(call, 2, 'mean', BAND_KINDS, 'kind');
+  if (!isRecord(fit)) return call.fail('input_undefined', 'the fit is undefined');
+  if (level === undefined || !(level > 0 && level < 1)) return call.fail('bad_parameter', `the level must be between 0 and 1, not ${String(level)}`);
+  if (!kind) return undefined;
+  const info = LINEAR.get(fit);
+  if (!info) {
+    const model = String(fit.fields['model']);
+    if (['line', 'log', 'basis'].includes(model) || model.startsWith('poly')) {
+      if ((fit.fields['dof'] as number) <= 0) return call.fail('no_dof', 'the fit passes through every point; there is no band');
+      return call.fail('not_linear_model', 'bands of a weighted fit are not built');
+    }
+    return call.fail('not_linear_model', `a ${model} fit is not linear in its parameters; bands need a line, a polynomial, a log or a basis fit`);
+  }
+  const tc = tQuantile(1 - (1 - level) / 2, info.dof);
+  const k = Math.round(Math.sqrt(info.inv.length));
+  const half = (x: number): number => {
+    const r = info.row(x);
+    let q = 0;
+    for (let i = 0; i < k; i++) for (let j = 0; j < k; j++) q += (r[i] as number) * (info.inv[i * k + j] as number) * (r[j] as number);
+    return tc * Math.sqrt(info.s2 * (q + (kind === 'prediction' ? 1 : 0)));
+  };
+  const upper = (x: number): number => info.g(x) + half(x);
+  const lower = (x: number): number => info.g(x) - half(x);
+  // the area between the curves, by Simpson's rule
+  const m = 200;
+  const h = (info.to - info.from) / m;
+  let area = 0;
+  for (let i = 0; i <= m; i++) {
+    const x = info.from + i * h;
+    const w = i === 0 || i === m ? 1 : i % 2 === 1 ? 4 : 2;
+    area += w * (upper(x) - lower(x));
+  }
+  area *= h / 3;
+  return { kind: 'region', shape: { t: 'under', a: info.from, b: info.to }, value: area, area, f: upper, g: lower };
+}
+
+const BAND_KINDS = ['mean', 'prediction'] as const;
+
+/** Binomial coefficient for the change of variables below. */
+const choose = (n: number, k: number): number => {
+  let r = 1;
+  for (let i = 1; i <= k; i++) r = (r * (n - k + i)) / i;
+  return r;
+};
+
+/**
+ * `FitImplicit(points, degree)`: the algebraic curve of a degree through the points (design 7.2): the smallest singular
+ * vector of the monomial design matrix, after centring and scaling, mapped back to x and y.
+ */
+const runImplicit = (isPts: boolean) => (call: RuleCall): unknown => {
+  const d = pairs(call, 0, isPts);
+  if (!d) return undefined;
+  const deg = num(call, d.next);
+  if (deg === undefined || !Number.isInteger(deg) || deg < 1 || deg > 6) return call.fail('bad_parameter', `the degree must be a whole number from 1 to 6, not ${String(deg)}`);
+  const terms: [number, number][] = [];
+  for (let t = 0; t <= deg; t++) for (let j = 0; j <= t; j++) terms.push([t - j, j]);
+  const k = terms.length;
+  const n = d.xs.length;
+  if (n < k - 1) return call.fail('too_few_values', `degree ${deg} needs at least ${k - 1} points, got ${n}`);
+  let cx = 0;
+  let cy = 0;
+  for (let i = 0; i < n; i++) {
+    cx += d.xs[i] as number;
+    cy += d.ys[i] as number;
+  }
+  cx /= n;
+  cy /= n;
+  let sc = 0;
+  for (let i = 0; i < n; i++) sc = Math.max(sc, Math.abs((d.xs[i] as number) - cx), Math.abs((d.ys[i] as number) - cy));
+  if (!(sc > 0)) return call.fail('degenerate_x', 'all the points are the same');
+  const rows = Math.max(n, k);
+  const A = new Float64Array(rows * k);
+  for (let i = 0; i < n; i++) {
+    const u = ((d.xs[i] as number) - cx) / sc;
+    const v = ((d.ys[i] as number) - cy) / sc;
+    terms.forEach(([a, b], j) => {
+      A[i * k + j] = u ** a * v ** b;
+    });
+  }
+  const r = svd(A, rows, k);
+  if ('reason' in r) return call.fail('no_convergence', r.reason);
+  let best = 0;
+  for (let j = 1; j < k; j++) if ((r.s[j] as number) < (r.s[best] as number)) best = j;
+  const c = Float64Array.from({ length: k }, (_, i) => r.v[i * k + best] as number);
+  // back to x and y: u = (x - cx) / sc, v = (y - cy) / sc
+  const coef = new Map<string, number>();
+  terms.forEach(([a, b], j) => {
+    const cj = (c[j] as number) / sc ** (a + b);
+    for (let p1 = 0; p1 <= a; p1++) for (let q1 = 0; q1 <= b; q1++) {
+      const key = `${p1},${q1}`;
+      const v = cj * choose(a, p1) * (-cx) ** (a - p1) * choose(b, q1) * (-cy) ** (b - q1);
+      coef.set(key, (coef.get(key) ?? 0) + v);
+    }
+  });
+  let big = 0;
+  for (const v of coef.values()) big = Math.max(big, Math.abs(v));
+  const poly = [...coef.entries()].map(([key, v]) => {
+    const [i, j] = key.split(',').map(Number) as [number, number];
+    return { i, j, c: v / big };
+  }).filter((t) => Math.abs(t.c) > 1e-12).sort((a, b) => b.i + b.j - (a.i + a.j) || b.i - a.i);
+  const term = (t: { i: number; j: number; c: number }, first: boolean): string => {
+    const vars = `${t.i ? (t.i > 1 ? `x^${t.i}` : 'x') : ''}${t.i && t.j ? ' ' : ''}${t.j ? (t.j > 1 ? `y^${t.j}` : 'y') : ''}`;
+    const mag = Math.abs(t.c);
+    const body = vars === '' ? fmt(mag) : Math.abs(mag - 1) < 1e-12 ? vars : `${fmt(mag)} ${vars}`;
+    return first ? `${t.c < 0 ? '-' : ''}${body}` : `${t.c < 0 ? ' - ' : ' + '}${body}`;
+  };
+  const text = `${poly.map((t, i) => term(t, i === 0)).join('')} = 0`;
+  const fxy = (x: number, y: number): number => {
+    let s = 0;
+    for (const t of poly) s += t.c * x ** t.i * y ** t.j;
+    return s;
+  };
+  return { kind: 'curve', curve: 'implicit', f: fxy, level: 0, poly, text };
 };
 
 /* ------------------------------ the table ------------------------------ */
 
-const W = (): ParamSpec => opt('weights', L);
+/** The options every fit takes, at its end: weights, then the drawn range. */
+const W = (): ParamSpec[] => [opt('weights', L), opt('from', 'Number'), opt('to', 'Number')];
 const S = (): ParamSpec => opt('space', 'Text', 'data');
 const tailCheck = (i: number) => enumCheck(i, 'tail', TAILS, TAIL_ALIASES, 'Use "right" for a test that the value is larger.');
 
@@ -468,17 +670,26 @@ function both(name: string, extra: (isPts: boolean) => ParamSpec[], run: (isPts:
 }
 
 export const FIT_COMMANDS: readonly CommandSpec[] = [
-  both('FitLine', () => [W()], runLine, 'the least-squares line y = a x + b'),
-  both('FitLineX', () => [W()], runLineX, 'the line x = a y + b (x on y)'),
-  both('FitPoly', () => [p('degree', 'Number'), W()], runPoly, 'the least-squares polynomial of a degree', (off) => degreeCheck(off)),
-  both('FitPow', () => [S(), W()], (isPts) => runLogModel('pow', isPts), 'y = a x^b', (off) => enumCheck(off, 'space', SPACES)),
-  both('FitExp', () => [S(), W()], (isPts) => runLogModel('exp', isPts), 'y = a e^(b x)', (off) => enumCheck(off, 'space', SPACES)),
-  both('FitGrowth', () => [S(), W()], (isPts) => runLogModel('growth', isPts), 'y = a b^x', (off) => enumCheck(off, 'space', SPACES)),
-  both('FitLog', () => [W()], runLog, 'y = a + b ln x'),
-  both('FitSin', () => [W()], runSin, 'y = a + b sin(c x + d)'),
-  both('FitLogistic', () => [W()], runLogistic, 'y = a / (1 + b e^(-c x))'),
-  both('Fit', () => [p('basis', 'List<Function<Number>>'), W()], runBasis, 'y = c1 f1(x) + c2 f2(x) + …'),
-  both('FitModel', () => [p('f', 'Function<Number>'), p('start', L), W()], runModel, 'the parameters of f(x, p1, …) from start values', (off) => modelCheck(off, off + 1) as never),
+  both('FitLine', () => [...W()], runLine, 'the least-squares line y = a x + b'),
+  both('FitLineX', () => [...W()], runLineX, 'the line x = a y + b (x on y)'),
+  both('FitPoly', () => [p('degree', 'Number'), ...W()], runPoly, 'the least-squares polynomial of a degree', (off) => degreeCheck(off)),
+  both('FitPow', () => [S(), ...W()], (isPts) => runLogModel('pow', isPts), 'y = a x^b', (off) => enumCheck(off, 'space', SPACES)),
+  both('FitExp', () => [S(), ...W()], (isPts) => runLogModel('exp', isPts), 'y = a e^(b x)', (off) => enumCheck(off, 'space', SPACES)),
+  both('FitGrowth', () => [S(), ...W()], (isPts) => runLogModel('growth', isPts), 'y = a b^x', (off) => enumCheck(off, 'space', SPACES)),
+  both('FitLog', () => [...W()], runLog, 'y = a + b ln x'),
+  both('FitSin', () => [...W()], runSin, 'y = a + b sin(c x + d)'),
+  both('FitLogistic', () => [...W()], runLogistic, 'y = a / (1 + b e^(-c x))'),
+  both('Fit', () => [p('basis', 'List<Function<Number>>'), ...W()], runBasis, 'y = c1 f1(x) + c2 f2(x) + …'),
+  both('FitModel', () => [p('f', 'Function<Number>'), p('start', L), ...W()], runModel, 'the parameters of f(x, p1, …) from start values', (off) => modelCheck(off, off + 1) as never),
+  fits('FitBand', [
+    form([p('fit', 'Record<Fit>'), opt('level', 'Number', 0.95), opt('kind', 'Text', 'mean')], 'Region', runBand, 'the confidence or prediction band of a linear fit', {
+      check: (c) => enumCheck(2, 'kind', BAND_KINDS)(c),
+    }),
+  ]),
+  fits('FitImplicit', [
+    form([p('points', P), p('degree', 'Number')], 'Curve', runImplicit(true), 'the algebraic curve of a degree through the points', { check: wholeCheck(1, 'degree', 1, 6) }),
+    form([p('xs', L), p('ys', L), p('degree', 'Number')], 'Curve', runImplicit(false), 'the algebraic curve of a degree through the points', { check: wholeCheck(2, 'degree', 1, 6) }),
+  ]),
   fits('CorrTest', [
     form([p('points', P), opt('tail', 'Text', 'two')], 'Record<Test>', runCorrTest(true), 'the t test that r = 0', { check: tailCheck(1) }),
     form([p('xs', L), p('ys', L), opt('tail', 'Text', 'two')], 'Record<Test>', runCorrTest(false), 'the t test that r = 0', { check: tailCheck(2) }),

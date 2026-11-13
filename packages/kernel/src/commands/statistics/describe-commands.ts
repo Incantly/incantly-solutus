@@ -368,6 +368,31 @@ export function countClasses(edges: Float64Array, xs: Float64Array, closed: 'lef
   let outside = 0;
   const first = edges[0] as number;
   const last = edges[m] as number;
+  // equal widths: the class is found by division, then nudged across an edge it rounded past
+  const width = (last - first) / m;
+  let uniform = width > 0;
+  for (let k = 1; uniform && k < m; k++) if (Math.abs((edges[k] as number) - (first + k * width)) > 1e-12 * Math.max(1, Math.abs(edges[k] as number))) uniform = false;
+  if (uniform && !w) {
+    for (let i = 0; i < xs.length; i++) {
+      const x = xs[i] as number;
+      if (x < first || x > last) {
+        outside++;
+        continue;
+      }
+      let k = Math.floor((x - first) / width);
+      if (k >= m) k = m - 1;
+      if (k < 0) k = 0;
+      if (closed === 'left') {
+        if (k + 1 < m && x >= (edges[k + 1] as number)) k++;
+        else if (k > 0 && x < (edges[k] as number)) k--;
+      } else {
+        if (k > 0 && x <= (edges[k] as number)) k--;
+        else if (k + 1 < m && x > (edges[k + 1] as number)) k++;
+      }
+      counts[k] = (counts[k] as number) + 1;
+    }
+    return { counts, outside };
+  }
   for (let i = 0; i < xs.length; i++) {
     const x = xs[i] as number;
     const f = w ? (w[i] as number) : 1;
@@ -676,13 +701,22 @@ export const DESCRIBE_COMMANDS: readonly CommandSpec[] = [
     check: checks(enumCheck(2, 'closed', CLOSED), enumCheck(3, 'scale', SCALES)),
   })]),
   stat('FrequencyTable', [
-    form([p('edges', L), p('list', L), opt('closed', 'Text', 'left')], 'Record<Table>', runFrequencyTable, 'class, count, relative and cumulative columns', { check: enumCheck(2, 'closed', CLOSED) }),
-    form([p('list', L)], 'Record<Table>', runFrequencyTableValues, 'a row for each distinct value'),
+    form([p('edges', L), p('list', L), opt('closed', 'Text', 'left')], 'Table', runFrequencyTable, 'class, count, relative and cumulative columns', { check: enumCheck(2, 'closed', CLOSED) }),
+    form([p('list', L)], 'Table', runFrequencyTableValues, 'a row for each distinct value'),
   ]),
   stat('ContingencyTable', [
     form([p('a', 'List<Number>|List<Text>'), p('b', 'List<Number>|List<Text>')], 'Record<Contingency>', runContingency, 'counts of each pair of categories'),
     form([p('observed', 'Matrix'), p('rowLabels', 'List<Number>|List<Text>'), p('colLabels', 'List<Number>|List<Text>')], 'Record<Contingency>', runContingencyCounts, 'from ready counts'),
   ]),
-  { name: 'Table', kind: 'object', group: 'stats', forms: [{ ...form([p('titles', 'List<Text>')], 'Record<Table>', runTable, 'a table from columns'), rest: p('columns', 'List<Number>|List<Text>') }] },
+  stat('Column', [form([p('table', 'Table'), p('title', 'Text')], 'List', (call) => {
+    const t = call.values[0] as { fields: Record<string, unknown> } | undefined;
+    const name = call.values[1];
+    if (!t || typeof name !== 'string') return call.fail('input_undefined', 'the table or the title is undefined');
+    const titles = t.fields['titles'] as string[];
+    const k = titles.indexOf(name);
+    if (k < 0) return call.fail('bad_parameter', `no column "${name}"; the columns are ${titles.map((x) => `"${x}"`).join(', ')}`);
+    return (t.fields['columns'] as unknown[])[k];
+  }, 'the column with that title, as a list')]),
+  { name: 'Table', kind: 'object', group: 'stats', forms: [{ ...form([p('titles', 'List<Text>')], 'Table', runTable, 'a table from columns'), rest: p('columns', 'List<Number>|List<Text>') }] },
 ];
 

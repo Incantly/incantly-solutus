@@ -9,6 +9,7 @@ import type { CommandSpec, ParamSpec } from '../../language/table';
 import { checks, enumCheck, form, given, median, num, numbers, oneOf, opt, ordered, p, pairs, pearson, quartiles, record, sorted, spec, sum, text } from './core';
 import { autoEdges, checkEdges, countClasses, residualsOf, scaled } from './describe-commands';
 import { normalQuantile } from './dist';
+import { isDist } from '../probability/dists';
 import { CLOSED, MAX_PIE, MAX_STEM, QUANTILE_METHODS, SCALES, WHISKERS } from './types';
 import type { QuantileMethod, Scale } from './types';
 
@@ -169,6 +170,32 @@ function runBarExpr(call: RuleCall): unknown {
   }
   env.locals[slot] = saved;
   env.reason = undefined;
+  return bars(xs, h, 1);
+}
+
+/** `BarChart(d)` and `BarChart(d, from, to)`: the mass at each whole number of a discrete distribution (design 6). */
+function runBarDist(call: RuleCall): unknown {
+  const d = call.values[0];
+  if (!isDist(d)) return call.fail('input_undefined', 'the distribution is undefined');
+  if (!d.spec.discrete) return call.fail('not_discrete', `${d.spec.kind} is continuous`);
+  const s = d.spec.support(d.params);
+  let lo = given(call, 1) ? num(call, 1) : s.lo;
+  let hi = given(call, 2) ? num(call, 2) : s.hi;
+  if (lo === undefined || hi === undefined) return call.fail('input_undefined', 'a bound is undefined');
+  if (!Number.isFinite(hi)) {
+    // cover all but 1e-9 of the mass
+    hi = d.spec.quantile(d.params, 1 - 1e-9);
+  }
+  lo = Math.ceil(Math.max(lo, s.lo));
+  hi = Math.floor(Math.min(hi, s.hi));
+  const n = Math.max(0, hi - lo + 1);
+  if (n > 100_000) return call.fail('too_large', `${n} bars; at most 100,000`);
+  const xs = new Float64Array(n);
+  const h = new Float64Array(n);
+  for (let k = 0; k < n; k++) {
+    xs[k] = lo + k;
+    h[k] = d.spec.pdf(d.params, lo + k);
+  }
   return bars(xs, h, 1);
 }
 
@@ -420,32 +447,34 @@ const boxCheck = checks(enumCheck(3, 'whisker', WHISKERS), enumCheck(4, 'method'
 
 export const CHART_COMMANDS: readonly CommandSpec[] = [
   chart('Histogram', [
-    form([p('list', L), sc(), cl()], 'Record<Histogram>', runHistAuto, 'a histogram with automatic classes', { check: histCheck(1) }),
-    form([p('list', L), p('bins', 'Number'), sc(), cl()], 'Record<Histogram>', runHistBins, 'a histogram with equal classes', { check: histCheck(2) }),
-    form([p('edges', L), p('list', L), sc(), cl()], 'Record<Histogram>', runHistEdges, 'a histogram of data or of ready heights on the edges', { check: histCheck(2) }),
+    form([p('list', L), sc(), cl()], 'Chart<Histogram>', runHistAuto, 'a histogram with automatic classes', { check: histCheck(1) }),
+    form([p('list', L), p('bins', 'Number'), sc(), cl()], 'Chart<Histogram>', runHistBins, 'a histogram with equal classes', { check: histCheck(2) }),
+    form([p('edges', L), p('list', L), sc(), cl()], 'Chart<Histogram>', runHistEdges, 'a histogram of data or of ready heights on the edges', { check: histCheck(2) }),
   ]),
   chart('BarChart', [
-    form([p('heights', L)], 'Record<BarChart>', runBarHeights, 'bars at 1, 2, 3, …'),
-    form([p('labels', 'List<Text>'), p('heights', L)], 'Record<BarChart>', runBarLabels, 'labelled bars'),
-    form([p('xs', L), p('heights', L), p('width', 'Number')], 'Record<BarChart>', runBarXs, 'bars of a width at positions'),
-    form([p('list', L), p('width', 'Number')], 'Record<BarChart>', runBarData, 'a bar for each distinct value, as tall as its count'),
-    form([{ name: 'expr', type: 'Number', kind: 'body' }, { name: 'k', type: 'Number', kind: 'binder' }, p('from', 'Number'), p('to', 'Number')], 'Record<BarChart>', runBarExpr, 'a bar at each whole k from from to to'),
+    form([p('heights', L)], 'Chart<BarChart>', runBarHeights, 'bars at 1, 2, 3, …'),
+    form([p('labels', 'List<Text>'), p('heights', L)], 'Chart<BarChart>', runBarLabels, 'labelled bars'),
+    form([p('xs', L), p('heights', L), p('width', 'Number')], 'Chart<BarChart>', runBarXs, 'bars of a width at positions'),
+    form([p('list', L), p('width', 'Number')], 'Chart<BarChart>', runBarData, 'a bar for each distinct value, as tall as its count'),
+    form([p('d', 'Distribution')], 'Chart<BarChart>', runBarDist, 'the probability of each whole number of a discrete distribution'),
+    form([p('d', 'Distribution'), p('from', 'Number'), p('to', 'Number')], 'Chart<BarChart>', runBarDist, 'the probabilities from from to to'),
+    form([{ name: 'expr', type: 'Number', kind: 'body' }, { name: 'k', type: 'Number', kind: 'binder' }, p('from', 'Number'), p('to', 'Number')], 'Chart<BarChart>', runBarExpr, 'a bar at each whole k from from to to'),
   ]),
   chart('FrequencyPolygon', [
-    form([p('edges', L), p('list', L), opt('cumulative', 'Bool', false)], 'Record<PointsChart>', runPolyEdges, 'the frequency polygon (an ogive when cumulative)'),
-    form([p('histogram', 'Record<Histogram>'), opt('cumulative', 'Bool', false)], 'Record<PointsChart>', runPolyHist, 'the polygon of a histogram'),
+    form([p('edges', L), p('list', L), opt('cumulative', 'Bool', false)], 'Chart<PointsChart>', runPolyEdges, 'the frequency polygon (an ogive when cumulative)'),
+    form([p('histogram', 'Chart<Histogram>'), opt('cumulative', 'Bool', false)], 'Chart<PointsChart>', runPolyHist, 'the polygon of a histogram'),
   ]),
   chart('BoxPlot', [
-    form([p('y', 'Number'), p('halfHeight', 'Number'), p('list', L), opt('whisker', 'Text', 'minmax'), opt('method', 'Text', 'halves'), opt('label', 'Text', '')], 'Record<BoxPlot>', runBox, 'a box plot of the data', { check: boxCheck }),
-    form(['y', 'halfHeight', 'min', 'q1', 'median', 'q3', 'max'].map((n) => p(n, 'Number')), 'Record<BoxPlot>', runBoxNumbers, 'a box plot from five numbers'),
+    form([p('y', 'Number'), p('halfHeight', 'Number'), p('list', L), opt('whisker', 'Text', 'minmax'), opt('method', 'Text', 'halves'), opt('label', 'Text', '')], 'Chart<BoxPlot>', runBox, 'a box plot of the data', { check: boxCheck }),
+    form(['y', 'halfHeight', 'min', 'q1', 'median', 'q3', 'max'].map((n) => p(n, 'Number')), 'Chart<BoxPlot>', runBoxNumbers, 'a box plot from five numbers'),
   ]),
   chart('BoxPlots', [
-    form([p('lists', 'List<List<Number>>'), opt('labels', 'List<Text>'), opt('whisker', 'Text', 'minmax')], 'Record<BoxPlots>', runBoxes, 'stacked box plots on one axis', { check: enumCheck(2, 'whisker', WHISKERS) }),
+    form([p('lists', 'List<List<Number>>'), opt('labels', 'List<Text>'), opt('whisker', 'Text', 'minmax')], 'Chart<BoxPlots>', runBoxes, 'stacked box plots on one axis', { check: enumCheck(2, 'whisker', WHISKERS) }),
   ]),
-  chart('DotPlot', [form([p('list', L), opt('binWidth', 'Number')], 'Record<DotPlot>', runDot, 'stacked dots at each value')]),
-  chart('StemPlot', [form([p('list', L), opt('scale', 'Number', 0)], 'Record<StemPlot>', runStem, 'a stem-and-leaf plot as text')]),
+  chart('DotPlot', [form([p('list', L), opt('binWidth', 'Number')], 'Chart<DotPlot>', runDot, 'stacked dots at each value')]),
+  chart('StemPlot', [form([p('list', L), opt('scale', 'Number', 0)], 'Chart<StemPlot>', runStem, 'a stem-and-leaf plot as text')]),
   chart('PieChart', [
-    form([p('values', L), opt('labels', 'List<Text>'), opt('centre', 'Point'), opt('radius', 'Number', 1), opt('start', 'Number')], 'Record<PieChart>', runPie, 'a pie chart', {
+    form([p('values', L), opt('labels', 'List<Text>'), opt('centre', 'Point'), opt('radius', 'Number', 1), opt('start', 'Number')], 'Chart<PieChart>', runPie, 'a pie chart', {
       check: (c) => {
         const v = c.args[0]?.literal;
         const l = c.args[1]?.literal;
@@ -454,11 +483,11 @@ export const CHART_COMMANDS: readonly CommandSpec[] = [
       },
     }),
   ]),
-  chart('LineGraph', [form([p('points', P)], 'Record<PointsChart>', runPoints('line'), 'a polyline through the points, by x')]),
-  chart('StepGraph', [form([p('points', P)], 'Record<PointsChart>', runPoints('step'), 'steps through the points, by x')]),
-  chart('StickGraph', [form([p('points', P)], 'Record<PointsChart>', runPoints('stick'), 'a vertical stick at each point')]),
-  chart('NormalQuantilePlot', [form([p('list', L)], 'Record<NormalQuantilePlot>', runNormalQuantile, 'sorted data against normal scores')]),
-  chart('ResidualPlot', [form([p('points', P), p('f', 'Function<Number>')], 'Record<PointsChart>', runResidualPlot, 'the points (x, y - f(x))')]),
+  chart('LineGraph', [form([p('points', P)], 'Chart<PointsChart>', runPoints('line'), 'a polyline through the points, by x')]),
+  chart('StepGraph', [form([p('points', P)], 'Chart<PointsChart>', runPoints('step'), 'steps through the points, by x')]),
+  chart('StickGraph', [form([p('points', P)], 'Chart<PointsChart>', runPoints('stick'), 'a vertical stick at each point')]),
+  chart('NormalQuantilePlot', [form([p('list', L)], 'Chart<NormalQuantilePlot>', runNormalQuantile, 'sorted data against normal scores')]),
+  chart('ResidualPlot', [form([p('points', P), p('f', 'Function<Number>')], 'Chart<PointsChart>', runResidualPlot, 'the points (x, y - f(x))')]),
   chart('Squares', [form([p('points', P), p('f', 'Function<Number>')], 'List<Polygon>', runSquares, 'the squares of the residuals')]),
 ];
 
