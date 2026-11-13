@@ -80,7 +80,7 @@ const TX = T.Text;
 const rec = (schema: string): Ty => ({ k: 'Record', schema });
 const chart = (schema: string): Ty => ({ k: 'Chart', schema });
 const TABLE: Ty = { k: 'Table' };
-const DIST: Ty = { k: 'Distribution' };
+const DIST: Ty = { k: 'ContinuousDistribution' };
 
 type Fields = readonly { readonly name: string; readonly ty: Ty }[];
 const f = (spec: Readonly<Record<string, Ty>>): Fields => Object.entries(spec).map(([name, ty]) => ({ name, ty }));
@@ -111,6 +111,8 @@ export const STAT_SCHEMAS: Readonly<Record<string, Fields>> = {
   // charts (design 6)
   Histogram: f({ edges: NL, counts: NL, heights: NL, total: N, binWidth: N, outside: N, n: N, scale: TX, closed: TX }),
   BarChart: f({ xs: NL, heights: NL, width: N, total: N, labels: listOf(T.Text) }),
+  // the bars of a discrete distribution with an interval picked out (probability design 4.3): inside[i] is 1 or 0
+  ShadedBars: f({ xs: NL, heights: NL, width: N, total: N, labels: listOf(T.Text), inside: NL, lo: N, hi: N, ends: TX, mass: N, tails: T.Bool }),
   BoxPlot: f({ y: N, halfHeight: N, min: N, q1: N, median: N, q3: N, max: N, iqr: N, outliers: NL, whisker: TX, method: TX, n: N, label: TX }),
   BoxPlots: f({ plots: listOf(chart('BoxPlot')), labels: listOf(T.Text) }),
   DotPlot: f({ values: NL, binWidth: N, dots: PL, n: N }),
@@ -121,7 +123,7 @@ export const STAT_SCHEMAS: Readonly<Record<string, Fields>> = {
 };
 
 /** Schemas the view draws as charts. */
-export const CHART_SCHEMAS: readonly string[] = ['Histogram', 'BarChart', 'BoxPlot', 'BoxPlots', 'DotPlot', 'StemPlot', 'PieChart', 'PointsChart', 'NormalQuantilePlot'];
+export const CHART_SCHEMAS: readonly string[] = ['Histogram', 'BarChart', 'ShadedBars', 'BoxPlot', 'BoxPlots', 'DotPlot', 'StemPlot', 'PieChart', 'PointsChart', 'NormalQuantilePlot'];
 
 /** Every undefined reason this area's rules can report, its own and the shared ones. */
 export const STATISTICS_REASONS: readonly string[] = [

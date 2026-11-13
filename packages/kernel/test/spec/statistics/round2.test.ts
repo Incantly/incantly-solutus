@@ -70,11 +70,11 @@ describe('probability first round', () => {
     expect(undef(['s = -1'], 'd = Normal(0, s)')).toBe('bad_parameter');
   });
 
-  it('BarChart of a discrete distribution; a continuous one is not_discrete', () => {
+  it('BarChart of a discrete distribution; a continuous one is a type error (probability R3)', () => {
     const b = fields([], 'b = BarChart(Binomial(4, 0.5))');
     expect(nums(b['xs'])).toEqual([0, 1, 2, 3, 4]);
     nums(b['heights']).forEach((h, i) => close(h, ([1, 4, 6, 4, 1][i] as number) / 16, 1e-13));
-    expect(undef([], 'b = BarChart(Normal(0, 1))')).toBe('not_discrete');
+    bad(fig().apply('b = BarChart(Normal(0, 1))'), 'no_matching_form');
     expect(nums(fields([], 'b = BarChart(Poisson(2), 0, 3)')['xs'])).toEqual([0, 1, 2, 3]);
   });
 
@@ -82,7 +82,8 @@ describe('probability first round', () => {
     const f = fig(['d = Normal(0, 1)']);
     ok(f.apply('s = Shade(d, -1.96, 1.96)'));
     close((f.value('s') as { value: number }).value, 0.9500042097035593, 1e-12);
-    expect(undef([], 's = Shade(Poisson(2), 0, 3)')).toBe('not_continuous');
+    // a discrete distribution gives bars with the interval picked out (probability R5.2)
+    close(fields([], 's = Shade(Poisson(2), 0, 3)')['mass'] as number, 0.857123460498547, 1e-12);
   });
 });
 

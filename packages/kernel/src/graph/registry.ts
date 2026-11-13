@@ -40,6 +40,8 @@ export interface RuleCall {
   readonly values: readonly unknown[];
   /** Film time. */
   readonly t: number;
+  /** What a random command needs to make its numbers a pure function of the figure (probability design 6.2). */
+  readonly random: RandomContext;
   /** Records why the result is undefined and returns `undefined`: `return call.fail('parallel')`. */
   fail(reason: UndefReason, detail?: string): undefined;
   /** Evaluates argument `i` now (for a body argument, in the scope of its binders). */
@@ -75,6 +77,19 @@ export interface RuleCall {
    * segment and 0.3). Empty when the object is not defined by a command. Binders and bodies are `undefined`.
    */
   argsOf(id: ObjId): readonly unknown[];
+}
+
+/**
+ * The inputs of a random command's key (probability design 6.2): the figure seed (`@seed N`, default 1), the name of the
+ * object being computed, the column of the call in its line, how many times that call has already run while the line is
+ * computed, and the object's re-roll count (`with reroll = k`, default 0).
+ */
+export interface RandomContext {
+  readonly seed: number;
+  readonly owner: string;
+  readonly site: number;
+  readonly count: number;
+  readonly reroll: number;
 }
 
 export interface SliceOptions {

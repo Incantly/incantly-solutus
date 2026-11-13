@@ -932,6 +932,13 @@ function checkDirective(c: Checker, node: Extract<LineNode, { k: 'directive' }>)
     case 'beat':
       if (words.length < 1) return bad('an id and an optional "title"');
       break;
+    case 'seed': {
+      // @seed 42, or @seed 42 v1 with the generator version (probability design 6.2)
+      const n = words[0]?.num;
+      const okVersion = words.length === 1 || (words.length === 2 && words[1]?.text === 'v1');
+      if (n === undefined || !Number.isInteger(n) || n < 0 || n > 4294967295 || !okVersion) return bad('a whole number from 0 to 4,294,967,295');
+      break;
+    }
     case 'tol':
     case 'tolerance':
       if (words.length !== 1 || words[0]?.num === undefined || !(words[0].num > 0) || !Number.isFinite(words[0].num)) return bad('a positive number like 1e-9');

@@ -18,7 +18,7 @@ export { checkLine, } from './lines';
 export { OverlayFigure, FIELDS } from './check';
 export type { CheckOptions, CheckedLine, CheckedRange, CheckedStyle } from './check';
 export type { TNode, TArg, RelTree, RelationShape } from './tnode';
-export { T, listOf, fnOf, tyEq, tyStr, typeSet, parseTy, accepts, binaryOp, TYPE_ALIASES, CORE_TYPE_NAMES, typeTextProblem, registerSchemaType, isSchemaType } from './types';
+export { T, listOf, fnOf, tyEq, tyStr, typeSet, parseTy, accepts, binaryOp, TYPE_ALIASES, CORE_TYPE_NAMES, typeTextProblem, registerSchemaType, registerTypeAlias, isSchemaType } from './types';
 export type { Ty, TypeSet, OpVariant } from './types';
 export { analyseLine, preview, signatureHelp, complete, tokenize } from './tooling';
 export type { PreviewResult, GhostSpec, SignatureHelp, Completion, CompletionKind, HighlightToken, HighlightKind } from './tooling';

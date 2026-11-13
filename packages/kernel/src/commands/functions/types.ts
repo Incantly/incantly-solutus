@@ -140,6 +140,8 @@ export interface RegionData {
   readonly kind: 'region';
   readonly shape:
     | { readonly t: 'under'; readonly a: number; readonly b: number }
+    // left of a and right of b (probability ShadeTails)
+    | { readonly t: 'tails'; readonly a: number; readonly b: number }
     | { readonly t: 'bars'; readonly a: number; readonly b: number; readonly n: number; readonly rule: string; readonly offset: number };
   readonly value: number;
   readonly area: number;

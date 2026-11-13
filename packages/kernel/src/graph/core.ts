@@ -151,6 +151,10 @@ export class FigureCore {
   protected faults: string[] = [];
   /** How many rules are running now. A figure operation called from inside a rule is refused with `tool_busy` (KERN-SM-8). */
   protected ruleDepth = 0;
+  /** The object being computed, its re-roll count, and how often each call site has run in it (`RuleCall.random`). */
+  protected randOwner = '';
+  protected randReroll = 0;
+  protected randCounts = new Map<number, number>();
   protected readonly ruleCache = new WeakMap<readonly CompiledArg[], CommandRule>();
   protected pass: Pass | null = null;
   protected readonly listeners = new Set<Listener>();
@@ -347,12 +351,33 @@ export class FigureCore {
     if (!compiled) return NOT_SET;
     this.ensureSlots(p.checked.slots);
     const start = this.now?.();
-    const res = evaluate(compiled, this.env);
+    const res = this.withRandom(p.name, FigureCore.rerollOf(p.style), () => evaluate(compiled, this.env));
     if (start !== undefined && this.now) {
       const ms = this.now() - start;
       if (ms > this.limits.ruleBudgetMs) this.slowRules.push({ id: r.id, name: p.name, ms });
     }
     return this.cellFromResult(res, p.tupleIndex);
+  }
+
+  /** The re-roll count in a style (`with reroll = k`), 0 when absent. */
+  static rerollOf(style: ReadonlyMap<string, { readonly value?: unknown }>): number {
+    const rr = style.get('reroll')?.value;
+    return typeof rr === 'number' && Number.isFinite(rr) ? Math.trunc(rr) : 0;
+  }
+
+  /** Runs `fn` with the random context of an object (`RuleCall.random`): its name and re-roll count, fresh call counts. */
+  protected withRandom<R>(owner: string, reroll: number, fn: () => R): R {
+    const saved = { owner: this.randOwner, reroll: this.randReroll, counts: this.randCounts };
+    this.randOwner = owner;
+    this.randReroll = reroll;
+    this.randCounts = new Map();
+    try {
+      return fn();
+    } finally {
+      this.randOwner = saved.owner;
+      this.randReroll = saved.reroll;
+      this.randCounts = saved.counts;
+    }
   }
 
   protected cellFromResult(res: ReturnType<typeof evaluate>, tupleIndex?: number): Cell {
@@ -375,7 +400,7 @@ export class FigureCore {
   }
 
   /** The `runCommand` hook given to the compiler: evaluates arguments, finds the rule and runs it. */
-  readonly runCommand = (spec: CommandSpec, form: CommandForm, args: readonly CompiledArg[], env: Env): unknown => {
+  readonly runCommand = (spec: CommandSpec, form: CommandForm, args: readonly CompiledArg[], env: Env, site = 0): unknown => {
     this.ruleDepth++;
     try {
       let rule = this.ruleCache.get(args);
@@ -404,6 +429,8 @@ export class FigureCore {
         if (env.reason === undefined) env.reason = 'input_undefined';
         return undefined;
       }
+      const count = this.randCounts.get(site) ?? 0;
+      this.randCounts.set(site, count + 1);
       let used = 0;
       const cap = this.limits.ruleWork;
       const work: RuleWork = {
@@ -427,6 +454,7 @@ export class FigureCore {
         args,
         values,
         t: env.t,
+        random: { seed: this.figureSeed(), owner: this.randOwner, site, count, reroll: this.randReroll },
         ids: args.map((a) => a.ref),
         tol: this.tolerance(),
         work,
@@ -490,6 +518,11 @@ export class FigureCore {
       this.ruleDepth--;
     }
   };
+
+  /** The figure seed random commands see (probability design 6.3). `FigureTx` reads `@seed`. */
+  protected figureSeed(): number {
+    return 1;
+  }
 
   /** The tolerance rules see. `FigureTx` reads `@tol` first. */
   protected tolerance(): number {

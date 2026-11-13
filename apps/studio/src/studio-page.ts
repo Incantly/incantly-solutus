@@ -3,6 +3,8 @@
  * is open. Every area built so far is registered, so its commands can be typed and seen.
  */
 import { mountDataLab } from './datalab';
+import { mountProbCalc } from './probcalc';
+import type { ProbCalc } from './probcalc';
 import type { DataLab } from './datalab';
 import { EXAMPLES } from './examples';
 import { drawsOnGraph, mountExpressions } from './expressions';
@@ -25,6 +27,7 @@ export interface Mounted {
   readonly expressions: ExpressionList;
   readonly graph: GraphPane;
   readonly lab: DataLab;
+  readonly calc: ProbCalc;
   readonly status: HTMLElement;
   /** Replaces the figure with an example's lines. */
   loadExample(id: string): void;
@@ -89,7 +92,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
       const all = items();
       const b = sceneBounds(all);
       // data charts and fits may stretch the axes; geometry keeps one unit the same length both ways
-      const data = all.some((i) => i.type === 'Chart' || i.type === 'Record' || i.type === 'Distribution' || i.typeText === 'List<Point>');
+      const data = all.some((i) => i.type === 'Chart' || i.type === 'Record' || i.type.endsWith('Distribution') || i.typeText === 'List<Point>');
       const geometry = all.some((i) => ['Circle', 'Arc', 'Polygon', 'Segment', 'Line', 'Ray', 'Vector'].includes(i.type) || i.typeText === 'List<Polygon>' || (i.value as { schema?: string } | undefined)?.schema === 'PieChart');
       return b ? { ...b, y0: data ? Math.min(b.y0, 0) : b.y0, stretch: data && !geometry } : undefined;
     },
@@ -101,6 +104,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
   const exprs = mountExpressions({ session, changed: () => graph.redraw(), say });
   holder.expressions = exprs;
   const lab = mountDataLab(session, registry, say);
+  const calc = mountProbCalc(session, registry, say);
 
   /* ------------------------------ top bar ------------------------------ */
 
@@ -115,9 +119,26 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
   });
   const labBtn = btn('Data analysis', 'tool-btn', 'Open the data-analysis panel', () => {
     if (lab.isOpen()) lab.close();
-    else lab.open();
+    else {
+      calc.close();
+      calcBtn.classList.remove('on');
+      lab.open();
+    }
     labBtn.classList.toggle('on', lab.isOpen());
     // the graph changed width: show the same things in the new space
+    requestAnimationFrame(() => {
+      graph.paint();
+      graph.fit();
+    });
+  });
+  const calcBtn = btn('Probability', 'tool-btn', 'Open the probability calculator', () => {
+    if (calc.isOpen()) calc.close();
+    else {
+      lab.close();
+      labBtn.classList.remove('on');
+      calc.open();
+    }
+    calcBtn.classList.toggle('on', calc.isOpen());
     requestAnimationFrame(() => {
       graph.paint();
       graph.fit();
@@ -162,7 +183,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
 
   const top = el('header', { class: 'topbar' },
     el('div', { class: 'brand' }, el('span', { class: 'logo', 'aria-hidden': 'true' }, '∿'), el('span', { class: 'brand-name' }, 'Incantly'), el('span', { class: 'brand-sub' }, 'Studio')),
-    el('div', { class: 'top-tools' }, newBtn, examples, labBtn, scriptBtn),
+    el('div', { class: 'top-tools' }, newBtn, examples, labBtn, calcBtn, scriptBtn),
     el('div', { class: 'top-right' }, undoBtn, redoBtn, helpBtn),
   );
 
@@ -221,7 +242,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
     el('footer', { class: 'panel-foot' }, status),
   );
   const split = el('div', { class: 'split', role: 'separator', 'aria-orientation': 'vertical', 'aria-label': 'Resize the expression list', tabindex: '0' });
-  const main = el('div', { class: 'workspace' }, panel, split, graph.element, lab.element);
+  const main = el('div', { class: 'workspace' }, panel, split, graph.element, lab.element, calc.element);
   root.replaceChildren(el('div', { class: 'app' }, top, main), dialog, help);
 
   // dragging the divider resizes the expression list
@@ -257,9 +278,17 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
     undoBtn.title = u.label ? `Undo ${u.label}` : 'Undo';
     syncClock();
     lab.refresh();
+    calc.refresh();
     graph.redraw();
   };
   const off = session.onChange(sync);
+  calc.element.addEventListener('lab-closed', () => {
+    calcBtn.classList.remove('on');
+    requestAnimationFrame(() => {
+      graph.paint();
+      graph.fit();
+    });
+  });
   lab.element.addEventListener('lab-closed', () => {
     labBtn.classList.remove('on');
     requestAnimationFrame(() => {
@@ -289,6 +318,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
     expressions: exprs,
     graph,
     lab,
+    calc,
     status,
     loadExample(id) {
       const ex = EXAMPLES.find((e) => e.id === id);

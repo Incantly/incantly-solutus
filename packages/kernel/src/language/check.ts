@@ -1357,10 +1357,13 @@ class Checker {
       const extra: number[] = [];
       let pos = 0;
       let dupNamed: number | undefined;
+      // a named-only parameter (`seed =`) and the ones after it take no positional argument
+      const firstNamed = form.params.findIndex((p) => p.named === true);
+      const positional = firstNamed < 0 ? form.params.length : firstNamed;
       for (let i = 0; i < args.length; i++) {
         const a = args[i] as Arg;
         if (a.name !== undefined) continue;
-        if (pos < form.params.length) bind[pos++] = i;
+        if (pos < positional) bind[pos++] = i;
         else if (form.rest) restArgs.push(i);
         else extra.push(i);
       }

@@ -25,7 +25,7 @@ import type { TArg, TNode } from '../language/tnode';
 import type { Ty } from '../language/types';
 import { children } from '../language/relation';
 import { FigureBase } from './base';
-import { ObjRec } from './core';
+import { FigureCore, ObjRec } from './core';
 import { coerceProp, defaultsFor, isValidKey, validKeysFor } from './props';
 import type { ActionRule } from './registry';
 import { runLineChecks, runLineHandlers, runLineRewriters } from './registry';
@@ -408,6 +408,13 @@ export class FigureTx extends FigureBase {
     return Number.isFinite(n) && n > 0 ? n : this.tolOption;
   }
 
+  /** `@seed N` (an optional version word after it is allowed), else 1. */
+  protected override figureSeed(): number {
+    const w = this.directiveItem('seed')?.words[0];
+    const n = w === undefined ? NaN : Number(w);
+    return Number.isInteger(n) && n >= 0 && n <= 0xffffffff ? n : 1;
+  }
+
   /** The first item of a non-repeatable directive, by name (a map lookup, not a scan). */
   protected directiveItem(name: string): ScriptItem | undefined {
     const i = this.directiveAt.get(name);
@@ -475,7 +482,7 @@ export class FigureTx extends FigureBase {
 
   /** The rules read the tolerance when they run, so a new `@tol` runs them all again (also on undo and redo). */
   protected tolDirectiveChanged(name: string): void {
-    if (name !== 'tol' && name !== 'tolerance') return;
+    if (name !== 'tol' && name !== 'tolerance' && name !== 'seed') return;
     this.settle(this.list.filter((r) => r.p.kind === 'rule'));
   }
 
@@ -599,9 +606,9 @@ export class FigureTx extends FigureBase {
 
   /* ------------------------------ define ------------------------------ */
 
-  protected cellsFor(comp: CompiledLine, checked: CheckedLine, count: number): Cell[] {
+  protected cellsFor(comp: CompiledLine, checked: CheckedLine, count: number, reroll = 0): Cell[] {
     this.ensureSlots(checked.slots);
-    const res = evaluate(comp, this.env);
+    const res = this.withRandom(checked.names[0] ?? '', reroll, () => evaluate(comp, this.env));
     const out: Cell[] = [];
     for (let i = 0; i < count; i++) out.push(this.cellFromResult(res, checked.kind === 'defmany' ? i : undefined));
     return out;
@@ -676,7 +683,8 @@ export class FigureTx extends FigureBase {
       this.env.reason = undefined;
       const v = init ? init(this.env) : undefined;
       cells = [v === undefined || (typeof v === 'number' && v !== v) ? { defined: false, reason: this.env.reason ?? 'not_set' } : { defined: true, value: v }];
-    } else cells = this.cellsFor(comp, checked, names.length);
+    } else cells = this.cellsFor(comp, checked, names.length, redefine && existing[0] ? FigureCore.rerollOf((existing[0] as ObjRec).p.style) : 0);
+    const usedReroll = redefine && existing[0] ? FigureCore.rerollOf((existing[0] as ObjRec).p.style) : 0;
     if (this.faults.length > 0) return internalError(this.faults[0] as string, this.at(parsed), '', this.faults[0] as string);
 
     // an assignment (`a = a + 1`) stores the computed value as the object's new free value
@@ -712,6 +720,9 @@ export class FigureTx extends FigureBase {
       styleSources.push(this.buildStyle(parsed, checked, comp, tys[i] as Ty, ids[i] as ObjId, kind === 'free', base, notices, names[i] as string));
     }
     for (const s of styleSources) if (s instanceof Map === false) return s as ErrorObject;
+    // a defining line that sets its own re-roll count (`xs = Sample(d, 5) with reroll = 2`) is computed with it
+    const lineReroll = FigureCore.rerollOf(styleSources[0] as Map<string, StyleEntry>);
+    if (!checked.isState && lineReroll !== usedReroll) cells = this.cellsFor(comp, checked, names.length, lineReroll);
 
     const persists: Persist[] = names.map((name, i) => {
       const cell = cells[i] as Cell;
@@ -831,6 +842,11 @@ export class FigureTx extends FigureBase {
     this.applyPersist(rec, after);
     this.record({ k: 'sets', changes: [{ rec, before, after }], label: checked.text });
     this.pendingStyles.add(rec.id);
+    // a new re-roll count gives a random object new numbers (probability design 6.3)
+    if (rec.p.kind === 'rule' && before.style.get('reroll')?.value !== after.style.get('reroll')?.value) {
+      this.markDirty(rec);
+      this.settle([rec]);
+    }
     this.diffReport(pass, rep);
     return this.okResult(parsed, 'restyle', printLineNode(parsed.node), rep, { name: rec.p.name, id: rec.id, type: rec.p.type.k as never, ...(opts.dryRun ? { dryRun: true as const } : {}) });
   }

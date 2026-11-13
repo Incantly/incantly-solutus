@@ -97,12 +97,22 @@ export interface TypeSet {
   readonly size: number;
 }
 
-export const TYPE_ALIASES: Readonly<Record<string, readonly string[]>> = {
+export const TYPE_ALIASES: Record<string, readonly string[]> = {
   Shape: ['Point', 'Segment', 'Ray', 'Line', 'Circle', 'Arc', 'Polygon', 'Curve', 'Vector'],
   Path: ['Segment', 'Ray', 'Line', 'Circle', 'Arc', 'Curve', 'Function'],
   Curvelike: ['Function<Point>', 'Curve'],
   Scalar: ['Number'],
 };
+
+/**
+ * An area adds a parameter-type alias: `Distribution` accepts `ContinuousDistribution` and `DiscreteDistribution`. An alias
+ * is only for parameters; values always have one of its members as their type. The first call for a name wins.
+ */
+export function registerTypeAlias(name: string, members: readonly string[]): void {
+  if (Object.hasOwn(TYPE_ALIASES, name)) return;
+  TYPE_ALIASES[name] = members.slice();
+  setCache.clear();
+}
 
 /**
  * Parse one type as written in a table: `Number`, `List<Point>`, `Function<Number>`, `Function<Number>(2)`,

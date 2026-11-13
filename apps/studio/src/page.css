@@ -173,3 +173,19 @@ button:disabled { opacity: 0.4; cursor: default; }
 .expr-new .swatch { visibility: hidden; }
 .card-grid .v.wide { grid-column: span 3; }
 .lab-body > * { flex: none; }
+
+/* probability calculator */
+.calc-plot canvas { height: 230px; cursor: ew-resize; outline: none; }
+.calc-plot canvas:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
+.bounds { align-items: flex-end; }
+.bound { display: flex; align-items: flex-end; gap: 4px; }
+.end-toggle { width: 26px; height: 28px; border: 1px solid var(--line-strong); border-radius: 6px; background: #fff; font: 600 14px var(--mono); }
+.result-field input.result { width: 120px; min-width: 0; font-family: var(--mono); font-weight: 600; }
+.field input.bad { border-color: var(--danger); background: #fff5f5; }
+.calc-table { max-height: 220px; overflow-y: auto; }
+.calc-table tr.in td { background: var(--accent-soft); }
+.calc-table tr { cursor: pointer; }
+.approx { grid-template-columns: auto 1fr; }
+.sentence { margin: 0; font-size: 13px; color: #374151; }
+.sim { align-items: flex-end; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }

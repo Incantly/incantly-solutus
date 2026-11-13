@@ -88,6 +88,7 @@ const TEXTS: Readonly<Record<string, (r: RecordValue) => string>> = {
     return `BoxPlot min ${f(r, 'min')} q1 ${f(r, 'q1')} median ${f(r, 'median')} q3 ${f(r, 'q3')} max ${f(r, 'max')}${extra}`;
   },
   BarChart: (r) => `BarChart ${(r.fields['heights'] as Float64Array).length} bars, heights ${nums(r.fields['heights'])}`,
+  ShadedBars: (r) => `ShadedBars ${(r.fields['heights'] as Float64Array).length} bars, mass ${f(r, 'mass')}`,
   PieChart: (r) => `PieChart ${(r.fields['values'] as Float64Array).length} slices, total ${f(r, 'total')}`,
   PointsChart: (r) => `${String(r.fields['kind'])} chart of ${f(r, 'n')} points`,
   NormalQuantilePlot: (r) => `NormalQuantilePlot n ${f(r, 'n')}, r ${f(r, 'r')}`,
