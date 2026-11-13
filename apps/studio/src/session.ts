@@ -3,10 +3,10 @@
  * outcome of each action as text or an error object, the clock). It uses only the kernel's public API.
  */
 import { Figure, numberSource, valueText } from '@incantly/kernel';
-import type { CommandSpec, ErrorObject, ObjectView } from '@incantly/kernel';
+import type { CommandRegistry, ErrorObject, ObjectView } from '@incantly/kernel';
 import { rightSide } from '@incantly/ui';
 import type { CauseLink, LineRow, RowControl, SubmitResult } from '@incantly/ui';
-import { STUDIO_COMMANDS } from './commands';
+import { studioRegistry } from './registry';
 
 /** What an action reports: a sentence for the status line (plus notices), or the error object. */
 export type Outcome = { readonly ok: true; readonly message: string; readonly notices: readonly string[] } | { readonly ok: false; readonly error: ErrorObject };
@@ -45,13 +45,13 @@ export function parseFree(type: string, text: string): unknown {
 
 export class KernelSession {
   figure: Figure;
-  private readonly commands: readonly CommandSpec[];
+  private readonly commands: CommandRegistry;
   private off: (() => void) | undefined;
   private readonly listeners = new Set<() => void>();
 
-  constructor(commands: readonly CommandSpec[] = STUDIO_COMMANDS) {
+  constructor(commands: CommandRegistry = studioRegistry()) {
     this.commands = commands;
-    this.figure = new Figure({ commands: [...commands] });
+    this.figure = new Figure({ commands });
     this.watch();
   }
 
@@ -111,6 +111,8 @@ export class KernelSession {
 
   /** A free object prints as its current value, as `toScript` does, so an edit in place shows in the row. */
   private freeSource(v: ObjectView): string {
+    // lists and other literals keep their full text: a preview would cut them short
+    if (v.type !== 'Number' && v.type !== 'Point' && v.type !== 'Bool') return v.definition;
     const value = v.cell.defined ? v.cell.value : undefined;
     let lit = valueText(value);
     if (typeof value === 'number') lit = numberSource(value);
@@ -197,6 +199,16 @@ export class KernelSession {
     return this.done(`${name} = ${valueText(value)}`, []);
   }
 
+  /** A free point dragged on the graph. The gesture is one undo step: `done` commits it. */
+  dragPoint(name: string, x: number, y: number, done: boolean): Outcome {
+    const round = (v: number): number => Number(v.toPrecision(6));
+    const r = this.figure.setFree(name, { x: round(x), y: round(y) }, 'drag');
+    if (!r.ok) return { ok: false, error: r };
+    this.figure.flush();
+    if (done) this.figure.commitDrag();
+    return this.done(`${name} = (${valueText(round(x))}, ${valueText(round(y))})`, []);
+  }
+
   /* ------------------------------ history ------------------------------ */
 
   undoState(): UndoState {
@@ -223,7 +235,7 @@ export class KernelSession {
 
   /** Replaces the figure with the script's. When nothing in it could be used, the current figure stays. */
   load(text: string): LoadOutcome {
-    const { figure, report } = Figure.fromScript(text, { commands: [...this.commands] });
+    const { figure, report } = Figure.fromScript(text, { commands: this.commands });
     const total = report.applied + report.skipped;
     const usable = report.ok || report.applied > 0;
     if (usable) {

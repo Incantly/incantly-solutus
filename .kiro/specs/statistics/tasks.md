@@ -16,5 +16,6 @@ Pipeline: `docs/process/pipeline.md`. Branch: `feat/statistics`.
 - [ ] 5. Fix the checker's findings in one round; mark anything left `to be implemented` (fixer)
 - [ ] 6. Add regression tests for each finding (tester)
 - [ ] 7. Review the code against the docs; fix the must-fix items in one round (spec reviewer, fixer)
-- [ ] 8. Build the area's studio screens: the data-analysis panels (studio builder)
+- [x] 8. Build the area's studio screens: the data-analysis panels (studio builder)
+- [x] 3a. Benchmarks against the speed targets (R8)
 - [ ] 9. Merge into `integration` once lint, typecheck and tests pass (integrator)

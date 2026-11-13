@@ -88,13 +88,32 @@ p-value.
 
 **Acceptance criteria:** THE SYSTEM SHALL register the undefined reasons and warnings of `errors.md` that R1 to R6 use.
 
+### R8. Speed
+
+**Acceptance criteria:** THE SYSTEM SHALL meet the targets of design 7.3, 9 and 10.4 (histogram of 1e6 values under
+15 ms, box plot of 1e6 under 40 ms, a median of 1e6 under 25 ms, Levenberg–Marquardt on 1,000 points and 4 parameters
+under 5 ms and on 10,000 under 40 ms, a refit of 1,000 points under 20 ms), checked by `packages/kernel/bench/`.
+
+### R9. The data-analysis panel and the studio
+
+**User story:** As a teacher, I want to explore a list in a panel and keep what I find as lines.
+
+**Acceptance criteria:**
+
+1. THE SYSTEM SHALL offer the one-variable, two-variable and several-variable panels of design 9 and ui.md 4, each
+   showing a plot, its controls and the statistics, computed from the lines the panel would write.
+2. **Add to figure** SHALL apply those lines with an `@datalab` directive; opening the figure SHALL restore the panel.
+3. Charts, fits, bands, distributions and regions SHALL draw on the studio's graph with the looks of ui.md 2.2; tests
+   and intervals SHALL show a result card (ui.md 5).
+
 ## Decided against the design
 
-- **Charts and tables are records.** The language's schema types are records only, so a chart is a
-  `Record<Histogram>`, `Record<BoxPlot>` and so on, and a table a `Record<Table>`. Field access, type checks and
-  `unknown_field` then come for free. The view draws a record whose schema is a chart schema.
-- **`dist` on test and interval records** is not built: the `Distribution` type belongs to `probability`, which is not
-  built yet. The distribution functions this area needs live in `statistics/dist.ts` for `probability` to reuse.
+- **Charts and tables are `Chart<Kind>` and `Table`**, through a generic language hook (`registerSchemaType`): a type
+  name that carries a record schema. Their values are record values, so field access and `unknown_field` work as for
+  `Record`. (The first round used plain records; the product owner asked for real types.)
+- **The `Distribution` type** comes from a first probability round built with this area (`.kiro/specs/probability/`),
+  so tests and intervals carry `dist` and `BarChart(d)` works.
+- **`F(d1, d2)` is `FDist(d1, d2)`**: a command name is reserved for objects, and `F` is a common point name.
 - **`unknown_option`** is not added: the language already refuses a named argument no form has, as `bad_argument` with
   the closest name.
 - **`Rank`** shares its name with the matrix rank of `lists-matrices`; the forms differ by type (`List<Number>` gives

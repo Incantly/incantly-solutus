@@ -10,6 +10,7 @@ import { registerNotice } from '../../errors/notices';
 import { registerReasonPhrase } from '../../errors/phrases';
 import { registerFieldNames, registerFieldTyper } from '../../language/check';
 import { registerFieldReader } from '../../language/compile';
+import { DIRECTIVES } from '../../language/props';
 import { recordFieldNames } from '../lists/ops';
 import { RECORD_SCHEMAS, isRecord, registerRecordSchema, registerRecordText } from '../lists/types';
 import type { RecordValue } from '../lists/types';
@@ -105,6 +106,8 @@ export function registerStatistics(registry: CommandRegistry): void {
   if (registered) return;
   registered = true;
   for (const [name, fields] of Object.entries(STAT_SCHEMAS)) registerRecordSchema(name, fields);
+  // the data-analysis panel's saved state (design 9): mode, data sources, plot or model
+  DIRECTIVES['datalab'] = ['@datalab one data histogram', '@datalab two P line', '@datalab several a b c'];
   for (const [name, text] of Object.entries(TEXTS)) registerRecordText(name, text);
   // Chart<Schema> and Table read their fields from the record schemas, like Record
   for (const kind of ['Chart', 'Table'] as const) {
