@@ -52,6 +52,8 @@ A handler run returns a record, not an exception. The record goes to `figure` (l
 | `error: handler_limit` (depth) | `Click` nesting beyond 8 | **Run aborted; nothing applied** |
 | `dropped: n` | Events dropped when more than 20 were queued | Reported in the next run |
 
+Deleting an object that a step names adds the notice `handler_steps_broken` (N125, warning) to the result of the delete: it names the handler and the step numbers that are now broken.
+
 The abort case is the only one that discards writes. It reports the writes that were discarded so the teacher can say what did not happen.
 
 ## 4. Learner input errors (shown in the box, never a dialog)

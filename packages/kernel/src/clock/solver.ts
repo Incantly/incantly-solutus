@@ -35,7 +35,17 @@ export interface SolverAccess {
   readonly ensureSlots: (n: number) => void;
   /** Writes a cell without events or change tracking beyond what a normal write does. */
   readonly write: (r: ObjRec, c: Cell) => boolean;
+  /** What a change of this input does while a film runs (design 8.3): `continue` from now on, or `restart` the film. */
+  readonly rerunOf?: (r: ObjRec) => 'continue' | 'restart';
 }
+
+/** One change of a solver input while a film runs (design 8.2). Applied at grid step `n`, the first at or after `t`. */
+export type LogEntry =
+  | { readonly kind: 'set'; readonly t: number; readonly n: number; readonly id: ObjId; readonly value: unknown }
+  | { readonly kind: 'reset'; readonly t: number; readonly n: number };
+
+/** The most entries the input log keeps (errors 6). The oldest go first. */
+export const MAX_LOG_ENTRIES = 10000;
 
 interface Layout {
   readonly rec: ObjRec;
@@ -66,6 +76,13 @@ export class StateSolver {
   private dim = 0;
   private cone: ObjRec[] = [];
   private inputs = new Set<ObjId>();
+  /** Free objects the rates read (design 8.2): their changes are logged. */
+  private rateInputs = new Set<ObjId>();
+  /** Free objects the initial values read: a change restarts the film. */
+  private initInputs = new Set<ObjId>();
+  private log: LogEntry[] = [];
+  /** The value each logged input had before its first entry. */
+  private base = new Map<ObjId, unknown>();
   private y0: Float64Array | undefined;
   private checkpoints = new Map<number, Float64Array>();
   /** Grid steps between checkpoints; doubles each time the cap is reached. */
@@ -91,9 +108,100 @@ export class StateSolver {
 
   constructor(private readonly fig: SolverAccess) {}
 
-  /** A free value that a rate or an initial value may read changed: restart. */
-  noteFree(rec: ObjRec): void {
-    if (this.inputs.has(rec.id)) this.dirtyInputs = true;
+  /**
+   * A free value that a rate or an initial value reads changed. Before the film has started, for an initial value, or with
+   * `rerun = restart` (the default, kernel ruling K12), the film restarts with the new value. With `rerun = continue` the
+   * change is logged at the current time: the motion before it stays as it was, and it takes effect from that time on.
+   */
+  noteFree(rec: ObjRec, was?: unknown): void {
+    if (!this.inputs.has(rec.id)) return;
+    const t = this.fig.clockT();
+    const policy = this.fig.rerunOf?.(rec) ?? 'restart';
+    if (!this.rateInputs.has(rec.id) || this.initInputs.has(rec.id) || t <= this.t0 + 1e-12 || policy === 'restart') {
+      // a restart rewrites the whole history of this input
+      if (this.log.some((e) => e.kind === 'set' && e.id === rec.id)) {
+        this.log = this.log.filter((e) => !(e.kind === 'set' && e.id === rec.id));
+        this.base.delete(rec.id);
+      }
+      this.dirtyInputs = true;
+      return;
+    }
+    if (!this.base.has(rec.id)) this.base.set(rec.id, was);
+    this.addEntry({ kind: 'set', t, n: this.gridAt(t), id: rec.id, value: rec.p.value });
+  }
+
+  /** `Restart()`: the states go back to their initial values at the current time (design 7.5). */
+  restartStates(): void {
+    const t = this.fig.clockT();
+    this.addEntry({ kind: 'reset', t, n: this.gridAt(t) });
+  }
+
+  /** A saved log entry, read back with the script (`@input`): it goes in as it was, at its grid step. */
+  restoreEntry(e: { kind: 'set'; t: number; id: ObjId; value: unknown } | { kind: 'reset'; t: number }): void {
+    if (!Number.isFinite(e.t)) return;
+    if (e.kind === 'set') {
+      if (!this.base.has(e.id)) this.base.set(e.id, this.fig.byId(e.id)?.p.value);
+      this.addEntry({ kind: 'set', t: e.t, n: this.gridAt(e.t), id: e.id, value: e.value });
+    } else this.addEntry({ kind: 'reset', t: e.t, n: this.gridAt(e.t) });
+  }
+
+  /** A saved input's value before its first entry. */
+  restoreBase(id: ObjId, value: unknown): void {
+    this.base.set(id, value);
+    this.dirtyInputs = true;
+  }
+
+  /** Each logged input's value before its first entry, for saving. */
+  get inputBase(): ReadonlyMap<ObjId, unknown> {
+    return this.base;
+  }
+
+  /** The input log, oldest first (design 8.2). */
+  get inputLog(): readonly LogEntry[] {
+    return this.log;
+  }
+
+  /** The value an input had at grid step n: its latest logged value at or before n, else its value before the first. */
+  private inputAt(id: ObjId, n: number): unknown {
+    let v: unknown = this.base.has(id) ? this.base.get(id) : this.fig.byId(id)?.p.value;
+    for (const e of this.log) if (e.kind === 'set' && e.id === id && e.n <= n) v = e.value;
+    return v;
+  }
+
+  private gridAt(t: number): number {
+    return Math.max(0, Math.ceil((t - this.t0) / this.h - 1e-9));
+  }
+
+  /** Adds an entry: later entries for the same input are its old future, and go (design 8.4); later checkpoints go too. */
+  private addEntry(e: LogEntry): void {
+    this.rebuild();
+    if (e.kind === 'set') {
+      const later = this.log.filter((x) => x.kind === 'set' && x.id === e.id && x.n >= e.n);
+      if (later.length > 0) {
+        this.log = this.log.filter((x) => !later.includes(x));
+        const name = this.fig.byId(e.id)?.p.name ?? '';
+        this.warnings.push(makeNotice('log_rewrite', { name, from: Number(e.t.toFixed(4)), count: later.length }, [name]));
+      }
+    }
+    this.log.push(e);
+    this.log.sort((a, b) => a.n - b.n);
+    if (this.log.length > MAX_LOG_ENTRIES) this.log.splice(0, this.log.length - MAX_LOG_ENTRIES);
+    for (const k of [...this.checkpoints.keys()]) if (k > e.n) this.checkpoints.delete(k);
+    if (this.curN > e.n) {
+      this.curN = -1;
+      this.curY = undefined;
+    }
+  }
+
+  /** Puts the logged inputs' values for grid step n into their cells, and applies a reset due at n. */
+  private enter(y: Float64Array, n: number): void {
+    for (const id of this.base.keys()) {
+      const r = this.fig.byId(id);
+      if (!r) continue;
+      const v = this.inputAt(id, n);
+      r.cell = v === undefined || (typeof v === 'number' && Number.isNaN(v)) ? { defined: false, reason: 'explicit' } : { defined: true, value: v };
+    }
+    for (const e of this.log) if (e.kind === 'reset' && e.n === n && this.y0) y.set(this.y0);
   }
 
   /** True when the figure has states at all (a cheap check for the frame loop). */
@@ -147,9 +255,22 @@ export class StateSolver {
     const downOfStates = new Set<number>();
     for (const l of this.layout) for (const o of this.fig.downOf(l.rec)) downOfStates.add(o);
     this.cone = anc.filter((r) => r.p.kind === 'rule' && downOfStates.has(r.order));
-    for (const r of anc) if (r.p.kind === 'free') this.inputs.add(r.id);
+    this.rateInputs = new Set();
+    this.initInputs = new Set();
+    for (const r of anc) if (r.p.kind === 'free') {
+      this.inputs.add(r.id);
+      this.rateInputs.add(r.id);
+    }
     const ancStates = this.fig.ancestorRecs(this.layout.map((l) => l.rec));
-    for (const r of ancStates) if (r.p.kind === 'free') this.inputs.add(r.id);
+    for (const r of ancStates) if (r.p.kind === 'free' && !this.layout.some((l) => l.rec === r)) {
+      this.inputs.add(r.id);
+      this.initInputs.add(r.id);
+    }
+    // an input that is gone from the rates is gone from the log
+    for (const id of [...this.base.keys()]) if (!this.rateInputs.has(id)) {
+      this.base.delete(id);
+      this.log = this.log.filter((e) => !(e.kind === 'set' && e.id === id));
+    }
     this.formGroups();
     // the integration depends on the states, their rates, and everything those read: when none of it changed (a line about
     // some other object), the checkpoints stay and the next seek does not start over
@@ -169,7 +290,7 @@ export class StateSolver {
     return {
       h: this.h,
       t0: this.t0,
-      deps: recs.map((rec) => ({ rec, free: rec.p.kind === 'free', value: rec.p.kind === 'free' ? rec.p.value : rec.p.compiled, rates: rec.p.rates })),
+      deps: recs.map((rec) => ({ rec, free: rec.p.kind === 'free', value: rec.p.kind === 'free' ? (this.base.has(rec.id) ? this.base.get(rec.id) : rec.p.value) : rec.p.compiled, rates: rec.p.rates })),
     };
   }
 
@@ -386,7 +507,10 @@ export class StateSolver {
    */
   private at(n: number): Float64Array {
     this.short = false;
-    if (this.y0 === undefined) this.y0 = this.initial();
+    if (this.y0 === undefined) {
+      this.y0 = this.initial();
+      this.checkStiffness(this.y0);
+    }
     let from: number;
     let y: Float64Array;
     if (this.curY !== undefined && this.curN >= 0 && this.curN <= n) {
@@ -401,6 +525,7 @@ export class StateSolver {
     // a budget per call: a far seek (or an open-ended film) cannot hang the host; the rest follows on the next calls
     let i = from;
     for (let steps = 0; i < n && steps < MAX_SEEK_STEPS; i++, steps++) {
+      this.enter(y, i);
       this.step(y, i);
       const m = i + 1;
       if (m % this.cpStride === 0 && !this.checkpoints.has(m)) {
@@ -426,11 +551,49 @@ export class StateSolver {
    * undefined; the other groups keep stepping.
    */
   sync(): ObjRec[] {
+    const target = this.fig.clockT();
+    const r = this.statesAt(target);
+    if (!r) {
+      this.catching = undefined;
+      return [];
+    }
+    // design 8.5: a far seek or a replay after a log change finishes over the next calls; say so once while it lasts
+    if (this.short) {
+      const from = Number((this.t0 + this.curN * this.h).toFixed(3));
+      if (!this.catching) this.warnings.push(makeNotice('catching_up', { from, to: Number(target.toFixed(3)) }, this.layout.map((l) => l.rec.p.name)));
+      this.catching = { from, to: target };
+    } else this.catching = undefined;
+    const changed: ObjRec[] = [];
+    for (const [rec, cell] of r) if (this.fig.write(rec, cell)) changed.push(rec);
+    return changed;
+  }
+
+  private catching: { from: number; to: number } | undefined;
+
+  /** While the states are behind the clock (a replay in slices): how far they have got and where they are going. */
+  get catchingUp(): { readonly from: number; readonly to: number } | undefined {
+    return this.catching;
+  }
+
+  /** The state objects, in layout order. */
+  stateObjects(): ObjRec[] {
     this.rebuild();
-    if (this.layout.length === 0) return [];
+    return this.layout.map((l) => l.rec);
+  }
+
+  /**
+   * The cell each state has at film time `time`, without writing anything: from the dense output (checkpoints and the
+   * Hermite step between grid points). Undefined when there are no states. The figure's slice over the clock reads it, so
+   * a trace or a path of a state-driven object is right for any time, not only the current one.
+   */
+  statesAt(time: number): (readonly [ObjRec, Cell])[] | undefined {
+    this.rebuild();
+    if (this.layout.length === 0) return undefined;
     const saved = this.cone.map((r) => r.cell);
     const stateCells = this.layout.map((l) => l.rec.cell);
-    const t = Math.max(this.t0, this.fig.clockT());
+    const logged = [...this.base.keys()].map((id) => this.fig.byId(id)).filter((r): r is ObjRec => r !== undefined);
+    const loggedCells = logged.map((r) => r.cell);
+    const t = Math.max(this.t0, time);
     const pos = (t - this.t0) / this.h;
     const n = Math.floor(pos + 1e-9);
     const frac = pos - n;
@@ -446,6 +609,8 @@ export class StateSolver {
         const d0 = new Float64Array(this.dim);
         const d1 = new Float64Array(this.dim);
         const y1 = Float64Array.from(yn);
+        this.enter(y1, n);
+        yn.set(y1);
         this.stepIdx = n;
         this.deriv(yn, this.t0 + n * this.h, d0);
         this.step(y1, n);
@@ -467,18 +632,21 @@ export class StateSolver {
       this.layout.forEach((l, i) => {
         l.rec.cell = stateCells[i] as Cell;
       });
+      logged.forEach((r, i) => {
+        r.cell = loggedCells[i] as Cell;
+      });
     }
-    const changed: ObjRec[] = [];
+    const out: (readonly [ObjRec, Cell])[] = [];
     if (behind) {
       // the target is further than one call goes: the states are undefined (timeout) until later calls catch up
-      for (const l of this.layout) if (this.fig.write(l.rec, { defined: false, reason: 'timeout' })) changed.push(l.rec);
-      return changed;
+      for (const l of this.layout) out.push([l.rec, { defined: false, reason: 'timeout' }]);
+      return out;
     }
-    const out = new Set<number>();
+    const bad = new Set<number>();
     this.groupNames.forEach((names, g) => {
       const at = this.failedAt[g] as number;
       if (at > n + (between ? 1 : 0)) return;
-      out.add(g);
+      bad.add(g);
       if (at > 0) {
         const key = `${names.join(',')}@${at}`;
         if (!this.warnedAt.has(key)) {
@@ -488,18 +656,81 @@ export class StateSolver {
       }
     });
     for (const l of this.layout) {
-      if (out.has(l.group)) {
-        if (this.fig.write(l.rec, { defined: false, reason: 'not_finite' })) changed.push(l.rec);
+      if (bad.has(l.group)) {
+        out.push([l.rec, { defined: false, reason: 'not_finite' }]);
         continue;
       }
       const v = l.point ? { x: result[l.offset] as number, y: result[l.offset + 1] as number } : (result[l.offset] as number);
-      if (this.fig.write(l.rec, { defined: true, value: v })) changed.push(l.rec);
+      out.push([l.rec, { defined: true, value: v }]);
     }
-    return changed;
+    return out;
   }
 
   private readonly warnedAt = new Set<string>();
+
+  /**
+   * Warns (`stiff_system`) when the fastest motion at the start is too fast for the step: an estimate of the Jacobian's
+   * spectral radius ω from a few power-iteration steps on finite differences of the rates, warned when ω h > 2. RK4 goes
+   * unstable a little above that, so the warning comes before `unstable_state`.
+   */
+  private checkStiffness(y: Float64Array): void {
+    const dim = this.dim;
+    if (dim === 0) return;
+    const savedBad = this.stageBad.slice();
+    const savedIdx = this.stepIdx;
+    try {
+      this.stepIdx = 0;
+      const f0 = new Float64Array(dim);
+      const f1 = new Float64Array(dim);
+      const yp = new Float64Array(dim);
+      this.deriv(y, this.t0, f0);
+      let v = new Float64Array(dim);
+      for (let i = 0; i < dim; i++) v[i] = (i % 2 === 0 ? 1 : -0.5) / Math.sqrt(dim);
+      let yn = 0;
+      for (let i = 0; i < dim; i++) yn = Math.max(yn, Math.abs(y[i] as number));
+      const eps = 1e-6 * Math.max(1, yn);
+      const logs: number[] = [];
+      for (let k = 0; k < STIFF_ITERATIONS; k++) {
+        for (let i = 0; i < dim; i++) yp[i] = (y[i] as number) + eps * (v[i] as number);
+        this.deriv(yp, this.t0, f1);
+        let nrm = 0;
+        const jv = new Float64Array(dim);
+        for (let i = 0; i < dim; i++) {
+          jv[i] = ((f1[i] as number) - (f0[i] as number)) / eps;
+          nrm += (jv[i] as number) ** 2;
+        }
+        nrm = Math.sqrt(nrm);
+        if (!(nrm > 0) || !Number.isFinite(nrm)) break;
+        logs.push(Math.log(nrm));
+        for (let i = 0; i < dim; i++) jv[i] = (jv[i] as number) / nrm;
+        v = jv;
+      }
+      // the geometric mean over an even number of steps: an oscillation's steps alternate between k and 1, so the mean is
+      // its frequency √k
+      const m = logs.length - (logs.length % 2);
+      if (m < 2) return;
+      let sum = 0;
+      for (let i = 0; i < m; i++) sum += logs[i] as number;
+      const omega = Math.exp(sum / m);
+      this.lastOmega = omega;
+      if (omega * this.h <= 2) return;
+      const names = this.layout.map((l) => l.rec.p.name);
+      const key = `stiff:${names.join(',')}:${this.h}`;
+      if (this.warnedAt.has(key)) return;
+      this.warnedAt.add(key);
+      this.warnings.push(makeNotice('stiff_system', { states: names.join(', '), omega: Number(omega.toPrecision(3)), hint: 'lower the stiffness, add damping, or use @solver step 1/960' }, names));
+    } finally {
+      this.stageBad = savedBad;
+      this.stepIdx = savedIdx;
+    }
+  }
+
+  /** The last estimate of the fastest rate (1/s), for tests and the player bar. */
+  lastOmega = 0;
 }
+
+/** Power-iteration steps of the stiffness estimate (even). */
+const STIFF_ITERATIONS = 8;
 
 function sameSignature(a: Signature, b: Signature): boolean {
   if (a.h !== b.h || a.t0 !== b.t0 || a.deps.length !== b.deps.length) return false;

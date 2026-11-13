@@ -32,6 +32,8 @@ export interface AreaUndefReasons {
   explicit: true;
   not_integer: true;
   no_value_yet: true;
+  // animation-time
+  not_time_dependent: true;
 }
 
 export type UndefReason = CoreUndefReason | Extract<keyof AreaUndefReasons, string>;

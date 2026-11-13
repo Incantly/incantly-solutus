@@ -150,7 +150,7 @@ Using the grammar in the core design:
 | `digits` | Number | 0..15 |
 | `sig` | Number | 1..15 |
 | `trim` | Number | true/false |
-| `label` | Number, Bool | text; caption on the control |
+| `caption` | Number, Bool | text shown on the control (`label` is the kernel's mode word: `name`, `value`, `both`, `caption`, `none`; kernel design section 5) |
 | `showif` | any object | Bool expression, or `none` |
 | `place` | Number (slider), Bool, controls | `dock \| screen(x, y) \| at(x, y)` |
 | `vertical` | slider | true/false |
@@ -260,7 +260,7 @@ The view never recomputes `text`; the kernel does, so the screen, SVG export and
 | `a = 3 in 5..10` | The value is clamped to 5; the result notice says `clamped: 3 -> 5`. |
 | `a = 3 in 10..0` | Error `bad_range`: the minimum must be below the maximum. |
 | `a = 3 in 0..10 step 0` / negative / non-finite | Error `bad_range`. |
-| `step` larger than the range | Allowed; only `lo` and `hi` are reachable. |
+| `step` larger than the range | `bad_range`, as the kernel and `docs/features/algebra-view/errors.md` say. |
 | Step does not divide range | Top end reachable (rule in 3.3). |
 | Huge range with tiny step | `limit` error (more than 10⁶ steps). |
 | `loop = once` at the top already | The slider does not move; `anim` is cleared. |

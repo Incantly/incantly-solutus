@@ -36,6 +36,7 @@ export { createCommandTable, createFunctionTable, checkTable, checkFunctionTable
 export type {
   CommandForm, CommandSpec, CommandTable, FigureView, FormLike, FunctionForm, FunctionSpec, FunctionTable, ObjectInfo, ParamKind, ParamSpec,
   BoundArg, RuleFactory, TableProblem, TableProblemKind, CheckTableOptions, DuplicateName, ConstValue,
+  ArgFacts, CallCheck, FormCheck, Refusal,
 } from './table';
 export { BUILTIN_FUNCTIONS, BUILTIN_FUNCTION_SPECS, BUILTIN_CONSTANTS, setMathLib, getMathLib, PLATFORM_MATH } from './builtins';
 export type { MathLib, ConstantSpec } from './builtins';

@@ -17,9 +17,10 @@ export interface ColorValue { readonly r: number; readonly g: number; readonly b
 /** A compiled function of 1 to 4 numbers. Calling it never throws. */
 export interface FunctionValue {
   readonly arity: number;
-  readonly ret: 'Number' | 'Point';
-  /** Returns NaN (Number) or undefined (Point) when undefined; `reason` then tells why. */
-  call(...xs: number[]): number | Pt | undefined;
+  /** `'Bool'` for a predicate (`p(x) = x^2 > 4`). */
+  readonly ret: 'Number' | 'Point' | 'Bool';
+  /** Returns NaN (Number) or undefined (Point, Bool) when undefined; `reason` then tells why. A predicate returns a boolean. */
+  call(...xs: number[]): number | Pt | boolean | undefined;
   /** Fast path for one-variable Number functions. */
   call1?(x: number): number;
   /** Reason of the last undefined result of this function. */
@@ -76,6 +77,8 @@ export interface Env {
   cause: ObjId | undefined;
   /** Short plain fact for the reason, such as `sqrt(-4)`. */
   detail: string | undefined;
+  /** The figure this environment belongs to, for an area's field reader (`a.min` reads the slider's range from it). */
+  host?: unknown;
   /** Longest list a rule may build (the host's `listSize`); 100,000 when not set. */
   maxList?: number;
   /** Slot-addressed locals: function parameters, binders, particle names. */
@@ -176,6 +179,14 @@ function toFraction(v: number): string {
   return k1 === 1 ? `${sign}${h1}` : `${sign}${h1}/${k1}`;
 }
 
+/** An area's text for the values it owns (a matrix, a record); `undefined` leaves the value to the others. */
+export type ValueTexter = (v: unknown, depth: number) => string | undefined;
+const VALUE_TEXTERS: ValueTexter[] = [];
+
+export function registerValueText(texter: ValueTexter): void {
+  if (!VALUE_TEXTERS.includes(texter)) VALUE_TEXTERS.push(texter);
+}
+
 /** Compact text of a runtime value, for previews and summaries. */
 export function valueText(v: unknown, depth = 0): string {
   if (v === undefined) return 'undefined';
@@ -188,6 +199,10 @@ export function valueText(v: unknown, depth = 0): string {
     return '[' + shown.join(', ') + (arr.length > 6 ? `, … (${arr.length} items)` : '') + ']';
   }
   if (typeof v === 'object') {
+    for (const t of VALUE_TEXTERS) {
+      const s = t(v, depth);
+      if (s !== undefined) return s;
+    }
     const o = v as Record<string, unknown>;
     if (typeof o['x'] === 'number' && typeof o['y'] === 'number') return `(${formatNumber(o['x'])}, ${formatNumber(o['y'])})`;
     if (typeof o['arity'] === 'number') return 'function';

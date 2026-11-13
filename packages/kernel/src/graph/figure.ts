@@ -18,6 +18,7 @@ import type { FigureOptions } from './core';
 import { FigureHist, merge } from './hist';
 import { SCRIPT_VERSION, emptyReport } from './tx';
 import { defaultsFor } from './props';
+import { scriptTails } from './registry';
 import type { Cell, ChangeReport, EffectiveStyle, FrameDelta, Slice, StyleEntry, TxResult } from './types';
 
 export type { FigureOptions, Slice };
@@ -91,8 +92,17 @@ export class Figure extends FigureHist {
       compute: (r) => this.compute(r),
       ensureSlots: (n) => this.ensureSlots(n),
       write: (r, c) => this.writeCell(r, c),
+      rerunOf: (r) => {
+        const e = r.p.style.get('rerun');
+        // the default is restart (kernel ruling K12); an input opts in to continue
+        return e?.word === 'continue' || e?.text === 'continue' ? 'continue' : 'restart';
+      },
     });
     this.stateDriver = () => (this.solver.active ? this.solver.sync() : []);
+    this.stateSampler = {
+      recs: () => (this.solver.active ? this.solver.stateObjects() : []),
+      at: (t) => this.solver.statesAt(t),
+    };
   }
 
   protected writeCell(r: ObjRec, c: Cell): boolean {
@@ -125,8 +135,23 @@ export class Figure extends FigureHist {
     return super.flush(force);
   }
 
-  protected override onFreeWritten(rec: ObjRec): void {
-    this.solver.noteFree(rec);
+  protected override onFreeWritten(rec: ObjRec, was?: unknown): void {
+    this.solver.noteFree(rec, was);
+  }
+
+  protected override onInputLine(words: readonly string[]): string | undefined {
+    if (words[0] === 'reset') {
+      this.solver.restoreEntry({ kind: 'reset', t: Number(words[2]) });
+      return undefined;
+    }
+    const rec = this.byNameMap.get(words[0] as string);
+    if (!rec || rec.p.kind !== 'free') return `a free object named ${words[0] ?? ''}`;
+    const base = words[words.length - 1] === 'base';
+    const nums = words.slice(1, words.length - (base ? 1 : 2)).map(Number);
+    const value = nums.length === 2 ? { x: nums[0] as number, y: nums[1] as number } : (nums[0] as number);
+    if (base) this.solver.restoreBase(rec.id, value);
+    else this.solver.restoreEntry({ kind: 'set', t: Number(words[words.length - 1]), id: rec.id, value });
+    return undefined;
   }
 
   protected override onDirective(name: string): void {
@@ -150,6 +175,11 @@ export class Figure extends FigureHist {
     const d = this.directiveItem('solver');
     const m = d ? /^1\/(\d+)$/.exec(d.words[1] ?? '') : null;
     return m ? Number(m[1]) : 240;
+  }
+
+  /** The beat start times the figure was given, in seconds (ascending). */
+  beats(): readonly number[] {
+    return this.beatStarts;
   }
 
   /** Beat start times in seconds, from the film. With none, `bt` equals `t` and `beat` is 0. */
@@ -408,6 +438,7 @@ export class Figure extends FigureHist {
         if (rr) lines.push(printLineNode(rr.node));
       }
     }
+    lines.push(...scriptTails(this));
     return lines.join('\n') + '\n';
   }
 

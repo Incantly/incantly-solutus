@@ -23,6 +23,8 @@ export type Cell =
 export interface Slice {
   /** The objects that run, in order: the dependents of the source that the target reads, and the target. */
   readonly chain: readonly Name[];
+  /** Over the clock: the states the target reads, which take their value at each time from the state solver. */
+  readonly states?: readonly Name[];
   /**
    * For each value: the cell of the target when the source holds it. The figure is left as it was. A slice made inside a
    * rule (`RuleCall.slice`) charges the rule's work budget; once it is spent, the remaining cells are undefined with `timeout`.
@@ -242,6 +244,8 @@ export interface ApplyOptions {
   insertAt?: number;
   /** The teacher's tools may change a fixed object when they say so. */
   force?: boolean;
+  /** A plain redefinition of a slider drops its range instead of keeping it (set by a line rewrite such as `a with min = none`). */
+  dropRange?: boolean;
 }
 
 export interface BatchOptions {

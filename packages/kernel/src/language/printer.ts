@@ -80,7 +80,7 @@ export function printExpr(e: Expr): string {
     case 'index':
       return `${wrap(e.target, 10)}[${printExpr(e.index)}]`;
     case 'field':
-      return `${wrap(e.target, 10)}.${e.field}`;
+      return `${wrap(e.target, 10)}.${e.field}${e.args ? `(${e.args.map(printExpr).join(', ')})` : ''}`;
     case 'fact':
       return `${wrap(e.arg, 10)}!`;
     case 'deg':
@@ -118,7 +118,7 @@ export function printLineNode(n: LineNode): string {
     case 'defmany':
       return `${n.targets.map((t) => t.name).join(', ')} = ${printExpr(n.expr)}`;
     case 'function':
-      return `${n.target.name}(${n.params.map((p) => p.name).join(', ')}) = ${printExpr(n.expr)}${n.style ? ' ' + printStyle(n.style) : ''}`;
+      return `${n.target.name}(${n.params.map((p) => p.name).join(', ')}) = ${printExpr(n.expr)}${n.domain ? ' in ' + n.domain.map((d) => `${printExpr(d.from)}..${printExpr(d.to)}`).join(', ') : ''}${n.style ? ' ' + printStyle(n.style) : ''}`;
     case 'rate':
       return `${n.target.name}${"'".repeat(n.order)} = ${printExpr(n.expr)}`;
     case 'restyle':

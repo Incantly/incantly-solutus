@@ -63,6 +63,8 @@ export const BUILTIN_CONSTANTS: readonly ConstantSpec[] = [
   { name: 'tau', type: T.Number, value: 2 * Math.PI, doc: '2 pi' },
   { name: 'e', type: T.Number, value: Math.E, doc: '2.71828…' },
   { name: 'deg', type: T.Number, value: Math.PI / 180, unit: 'angle', doc: 'pi / 180, so 30 deg is 30° in radians' },
+  { name: 'turn', type: T.Number, value: 2 * Math.PI, unit: 'angle', doc: 'one full turn, so 0.5turn is a half turn in radians' },
+  { name: 'grad', type: T.Number, value: Math.PI / 200, unit: 'angle', doc: 'pi / 200, so 100grad is a right angle in radians' },
   { name: 'inf', type: T.Number, value: Infinity, doc: 'positive infinity; never stored as a result' },
   { name: 'xaxis', type: T.Line, value: { a: 0, b: 1, c: 0 }, doc: 'the line y = 0' },
   { name: 'yaxis', type: T.Line, value: { a: 1, b: 0, c: 0 }, doc: 'the line x = 0' },
@@ -473,6 +475,23 @@ const specs: FunctionSpec[] = [
     return t * t * (3 - 2 * t);
   }, 'smoothstep between e0 and e1', ['e0', 'e1', 'x']),
   f2('step', 'interpolation', (e, x) => (x < e ? 0 : 1), '0 below e, 1 from e', 'e', 'x'),
+  // time helpers (animation-time design 6, core change A7)
+  f2('pingpong', 'interpolation', (x, len, env) => {
+    if (!(len > 0)) return domain(env, 'pingpong(x, len) needs len > 0');
+    const m = x - 2 * len * Math.floor(x / (2 * len));
+    return m <= len ? m : 2 * len - m;
+  }, 'triangle wave: 0 at 0, len at len, back to 0 at 2 len', 'x', 'len'),
+  f3('ramp', 'interpolation', (x, a, b, env) => {
+    if (a === b) {
+      fail(env, 'division_by_zero', 'ramp');
+      return NaN;
+    }
+    return clamp((x - a) / (b - a), 0, 1);
+  }, '0 before a, rising to 1 at b', ['x', 'a', 'b']),
+  f1('ease', 'interpolation', (x) => {
+    const s = clamp(x, 0, 1);
+    return s * s * (3 - 2 * s);
+  }, 'a smooth start and stop between 0 and 1'),
   // Random
   f1('rand', 'random', (seed, env) => (Number.isFinite(seed) ? randUnit(seed) : (fail(env, 'not_finite', 'rand'), NaN)), 'a fixed number in [0, 1) for each seed', 'seed'),
   {

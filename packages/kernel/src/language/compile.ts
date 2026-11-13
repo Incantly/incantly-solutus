@@ -33,6 +33,13 @@ export interface CompiledArg {
   readonly eval?: Fn;
   readonly binder?: string;
   readonly slot?: number;
+  /** For a list of binders: the names and their local slots, in order. */
+  readonly binders?: readonly string[];
+  readonly slots?: readonly number[];
+  /** For a body argument with names of its own: each name's local slot. */
+  readonly scopeSlots?: readonly { readonly name: string; readonly slot: number }[];
+  /** The checked tree of the argument, for a rule that compiles it further (a particle formula to GLSL). */
+  readonly tree?: TNode;
   readonly omitted: boolean;
   readonly value?: number | boolean | string;
   /** The object this argument names when it is a plain object name (`Midpoint(A, B)`), else absent. */
@@ -113,6 +120,24 @@ function mkPt(env: Env, x: number, y: number): Pt | undefined {
     return undefined;
   }
   return { x, y };
+}
+
+/** An area's operator (`variant: 'area'`): undefined operands give `input_undefined`; the area sets its own reasons. */
+function areaBinary(l: Fn, r: Fn, impl: (a: unknown, b: unknown, env: unknown) => unknown, isN: boolean): Fn {
+  return (env) => {
+    const a = l(env);
+    const b = r(env);
+    if (a === undefined || b === undefined || (typeof a === 'number' && a !== a) || (typeof b === 'number' && b !== b)) {
+      undefIn(env);
+      return isN ? NAN : undefined;
+    }
+    const v = impl(a, b, env);
+    if (v === undefined || (typeof v === 'number' && v !== v)) {
+      if (env.reason === undefined) env.reason = 'input_undefined';
+      return isN ? NAN : undefined;
+    }
+    return v;
+  };
 }
 
 /** An operand of an arithmetic operation was undefined: the result is undefined with `input_undefined` unless a reason is already set. */
@@ -213,6 +238,48 @@ function polygonArea(pts: readonly Pt[]): number {
   return Math.abs(s) / 2;
 }
 
+/** The exponent `p/q` written with whole numbers and an odd `q` above 1, or `undefined`. */
+function oddRatio(n: TNode): { p: number; q: number } | undefined {
+  const int = (t: TNode): number | undefined => {
+    if (t.n === 'num') return Number.isInteger(t.v) ? t.v : undefined;
+    if (t.n === 'unary' && t.op !== 'not') {
+      const v = int(t.arg);
+      return v === undefined ? undefined : t.op === '-' ? -v : v;
+    }
+    return undefined;
+  };
+  if (n.n === 'unary' && n.op === '-') {
+    const r = oddRatio(n.arg);
+    return r ? { p: -r.p, q: r.q } : undefined;
+  }
+  if (n.n !== 'bin' || n.op !== '/') return undefined;
+  const p = int(n.l);
+  const q = int(n.r);
+  if (p === undefined || q === undefined || q === 0) return undefined;
+  const aq = Math.abs(q);
+  return aq > 1 && aq % 2 === 1 ? { p: q < 0 ? -p : p, q: aq } : undefined;
+}
+
+/**
+ * Reads a field an area added to `FIELDS` (`a.min`, `q.text`). `at.host` is the figure and `at.id` the object when the
+ * field is read off a plain object name. Returning `undefined` makes the field undefined.
+ */
+export type FieldReader = (field: string, value: unknown, at: { readonly host: unknown; readonly id: ObjId | undefined }) => unknown;
+
+const FIELD_READERS = new Map<string, FieldReader>();
+
+/** An area registers the reader for the fields it added to a type. The last one registered for a type wins. */
+export function registerFieldReader(type: string, reader: FieldReader): void {
+  FIELD_READERS.set(type, reader);
+}
+
+/** The fields the language itself evaluates; an area's reader is asked only for the others. */
+const CORE_FIELDS: Readonly<Record<string, readonly string[]>> = {
+  Point: ['x', 'y'], Vector: ['x', 'y', 'length'], Segment: ['length', 'start', 'end'], Circle: ['center', 'radius'],
+  Arc: ['center', 'radius', 'start', 'end'], Polygon: ['vertices', 'area', 'perimeter'], Line: ['point', 'direction'],
+  Text: ['length'], Region: ['value', 'area'],
+};
+
 function fieldOf(type: string, field: string, v: unknown): unknown {
   const o = v as Record<string, unknown>;
   const M = getMathLib();
@@ -256,8 +323,14 @@ function fieldOf(type: string, field: string, v: unknown): unknown {
     }
     case 'Text':
       return (v as string).length;
-    default:
-      return undefined;
+    case 'Region':
+      // a region carries its signed value and its unsigned area (functions-calculus design 14.1)
+      return typeof o[field] === 'number' ? o[field] : undefined;
+    default: {
+      // a value that carries the field itself (a Choice holds its index and count)
+      const own = typeof v === 'object' && v !== null && Object.hasOwn(o, field) ? o[field] : undefined;
+      return typeof own === 'number' || typeof own === 'boolean' || typeof own === 'string' ? own : undefined;
+    }
   }
 }
 
@@ -275,6 +348,7 @@ class Compiler {
     switch (n.n) {
       case 'ref':
       case 'local':
+      case 'lambda':
       case 'clock':
       case 'callObj':
       case 'tick':
@@ -350,6 +424,35 @@ class Compiler {
           return v;
         };
       }
+      case 'lambda': {
+        // the function of an inline expression: its parameters live in the shared locals for the length of one call
+        const body = this.compile(n.body);
+        const slots = n.params.map((p) => p.slot);
+        return (env) => {
+          const fv: FunctionValue = {
+            arity: slots.length,
+            ret: 'Number',
+            reason: undefined,
+            call: (...xs: number[]) => {
+              const saved = env.reason;
+              const savedCause = env.cause;
+              const savedDetail = env.detail;
+              env.reason = undefined;
+              const before = slots.map((s) => env.locals[s]);
+              for (let i = 0; i < slots.length; i++) env.locals[slots[i] as number] = xs[i];
+              const v = setNanReason(env, body(env) as number);
+              for (let i = 0; i < slots.length; i++) env.locals[slots[i] as number] = before[i];
+              fv.reason = env.reason;
+              env.reason = saved;
+              env.cause = savedCause;
+              env.detail = savedDetail;
+              return v;
+            },
+          };
+          if (slots.length === 1) fv.call1 = (x: number): number => fv.call(x) as number;
+          return fv;
+        };
+      }
       case 'local': {
         const slot = n.slot;
         const isN = isNum(n);
@@ -382,11 +485,31 @@ class Compiler {
       case 'index':
         return this.compileIndex(n);
       case 'field': {
+        if (n.args) return this.compileFieldCall(n as TNode & { n: 'field'; args: readonly TNode[] });
         const t = this.compile(n.target);
         const type = n.target.ty.k;
         const field = n.field;
         const isN = isNum(n);
         const undef = isN ? NAN : undefined;
+        const reader = Object.hasOwn(CORE_FIELDS, type) && (CORE_FIELDS[type] as readonly string[]).includes(field) ? undefined : FIELD_READERS.get(type);
+        if (reader) {
+          const id = n.target.n === 'ref' ? this.objId(n.target.id) : undefined;
+          return (env) => {
+            const v = t(env);
+            if (v === undefined || (typeof v === 'number' && v !== v)) return undef;
+            let r: unknown;
+            try {
+              r = reader(field, v, { host: env.host, id });
+            } catch {
+              r = undefined;
+            }
+            if (r === undefined || (typeof r === 'number' && r !== r)) {
+              fail(env, 'not_set', `${type}.${field}`);
+              return undef;
+            }
+            return r;
+          };
+        }
         return (env) => {
           const v = t(env);
           if (v === undefined || (typeof v === 'number' && v !== v)) return undef;
@@ -504,6 +627,17 @@ class Compiler {
 
   compileUnary(n: TNode & { n: 'unary' }): Fn {
     const a = this.compile(n.arg);
+    const areaImpl = n.impl;
+    if (areaImpl) {
+      return (env) => {
+        const v = a(env);
+        if (v === undefined || (typeof v === 'number' && v !== v)) {
+          undefIn(env);
+          return undefined;
+        }
+        return areaImpl(v, env);
+      };
+    }
     if (n.op === 'not') {
       return (env) => {
         const v = a(env);
@@ -542,6 +676,8 @@ class Compiler {
     const l = this.compile(n.l);
     const r = this.compile(n.r);
     const op = n.op;
+    const areaImpl = n.impl;
+    if (n.variant === 'area' && areaImpl) return areaBinary(l, r, areaImpl, isNum(n));
     switch (n.variant) {
       case 'num':
         switch (op) {
@@ -577,14 +713,22 @@ class Compiler {
               const v = a / b;
               return v - v === 0 ? v : guardInf(env, v, a, b);
             };
-          default:
+          default: {
+            // a written ratio with an odd denominator is a real root: (-8)^(1/3) is -2 (functions-calculus design 11)
+            const ratio = oddRatio(n.r);
             return (env) => {
               const a = l(env);
               const b = r(env);
               if (a !== a || b !== b) return NAN;
+              if (ratio && a < 0) {
+                const m = power(-a, b, env);
+                const v = ratio.p % 2 === 0 ? m : -m;
+                return v - v === 0 ? v : guardInf(env, v, a, b);
+              }
               const v = power(a, b, env);
               return v - v === 0 ? v : guardInf(env, v, a, b);
             };
+          }
         }
       case 'num*vec':
         return (env) => {
@@ -735,6 +879,7 @@ class Compiler {
   compileCmp(n: TNode & { n: 'cmp' }): Fn {
     const fs = n.operands.map((o) => this.compile(o));
     const ops = n.ops;
+    const impls = n.impls;
     const tys = n.operands.map((o) => o.ty.k);
     return (env) => {
       let prev = (fs[0] as Fn)(env);
@@ -743,7 +888,11 @@ class Compiler {
         const next = (fs[i + 1] as Fn)(env);
         const op = ops[i] as string;
         let res: boolean | undefined;
-        if (op === '==' || op === '!=') {
+        const areaEq = impls?.[i];
+        if (areaEq) {
+          const r = prev === undefined || next === undefined ? undefined : (areaEq(prev, next, env) as boolean | undefined);
+          res = r === undefined ? undefined : op === '!=' ? !r : r;
+        } else if (op === '==' || op === '!=') {
           const eq = valueEq(prev, next);
           res = eq === undefined ? undefined : op === '==' ? eq : !eq;
         } else {
@@ -755,6 +904,33 @@ class Compiler {
         prev = next;
       }
       return all;
+    };
+  }
+
+  /** `g.value(x)`: read the field, which holds a function, and call it. */
+  compileFieldCall(n: TNode & { n: 'field'; args: readonly TNode[] }): Fn {
+    const { args: argNodes, ...plain } = n;
+    const field = this.compile({ ...plain, ty: { k: 'Function', ret: 'Number', arity: argNodes.length } } as TNode);
+    const args = argNodes.map((a) => this.compile(a));
+    const isN = isNum(n);
+    return (env) => {
+      const fv = field(env) as FunctionValue | undefined;
+      if (fv === undefined || typeof fv !== 'object' || typeof fv.call !== 'function') {
+        if (env.reason === undefined) fail(env, 'not_set', n.field);
+        return isN ? NAN : undefined;
+      }
+      const xs: number[] = [];
+      for (const a of args) {
+        const x = a(env);
+        if (x !== x) return isN ? NAN : undefined;
+        xs.push(x);
+      }
+      const v = xs.length === 1 && fv.call1 && isN ? fv.call1(xs[0] as number) : fv.call(...xs);
+      if (v === undefined || (typeof v === 'number' && v !== v)) {
+        if (env.reason === undefined) fail(env, 'not_finite');
+        return isN ? NAN : undefined;
+      }
+      return v;
     };
   }
 
@@ -869,9 +1045,12 @@ class Compiler {
     return n.args.map((a) => ({
       param: a.param,
       omitted: a.omitted,
-      ...(a.expr ? { eval: this.compile(a.expr) } : {}),
+      ...(a.expr ? { eval: this.compile(a.expr), tree: a.expr } : {}),
       ...(a.binder !== undefined ? { binder: a.binder } : {}),
       ...(a.slot !== undefined ? { slot: a.slot } : {}),
+      ...(a.binders !== undefined ? { binders: a.binders } : {}),
+      ...(a.slots !== undefined ? { slots: a.slots } : {}),
+      ...(a.scopeSlots !== undefined ? { scopeSlots: a.scopeSlots } : {}),
       ...(a.value !== undefined ? { value: a.value } : {}),
       ...(a.expr && a.expr.n === 'ref' ? { ref: this.objId(a.expr.id) } : {}),
     }));
@@ -917,6 +1096,7 @@ class Compiler {
     const t = this.compile(n.target);
     const i = this.compile(n.index);
     const isN = isNum(n);
+    if (n.impl) return areaBinary(t, i, n.impl, isN);
     return (env) => {
       const list = t(env) as ArrayLike<unknown> | undefined;
       const k = i(env);
@@ -1257,7 +1437,17 @@ export function compileLine(line: CheckedLine, opts: CompileOptions = {}): Resul
       const isN = expr.ty.k === 'Number';
       if (line.kind === 'function') {
         const params = line.params ?? [];
-        const ret = expr.ty.k === 'Point' ? 'Point' : 'Number';
+        const ret = expr.ty.k === 'Point' ? 'Point' : expr.ty.k === 'Bool' ? 'Bool' : 'Number';
+        // `in a..b`: outside the closed interval of a parameter the function is undefined (out_of_domain)
+        const dom = (line.domain ?? []).map((d) => ({ from: c.compile(d.from), to: c.compile(d.to) }));
+        const outside = (env: Env, xs: ArrayLike<number>): boolean => {
+          for (let i = 0; i < dom.length; i++) {
+            const d = dom[i] as { from: Fn; to: Fn };
+            const x = xs[i] as number;
+            if (!(x >= (d.from(env) as number) && x <= (d.to(env) as number))) return true;
+          }
+          return false;
+        };
         evalFn = (env) => {
           const fv: FunctionValue & { reason?: UndefReason | undefined } = {
             arity: params.length,
@@ -1268,6 +1458,13 @@ export function compileLine(line: CheckedLine, opts: CompileOptions = {}): Resul
               const savedCause = env.cause;
               const savedDetail = env.detail;
               env.reason = undefined;
+              if (dom.length > 0 && outside(env, xs)) {
+                fv.reason = 'out_of_domain';
+                env.reason = saved;
+                env.cause = savedCause;
+                env.detail = savedDetail;
+                return isN ? NAN : undefined;
+              }
               // the parameters live in the shared locals only for this call: put back what the caller had there
               const before = params.map((p) => env.locals[p.slot]);
               for (let i = 0; i < params.length; i++) env.locals[(params[i] as { slot: number }).slot] = xs[i];
@@ -1289,6 +1486,13 @@ export function compileLine(line: CheckedLine, opts: CompileOptions = {}): Resul
               const savedCause = env.cause;
               const savedDetail = env.detail;
               env.reason = undefined;
+              if (dom.length > 0 && outside(env, [x])) {
+                fv.reason = 'out_of_domain';
+                env.reason = saved;
+                env.cause = savedCause;
+                env.detail = savedDetail;
+                return NAN;
+              }
               const before = env.locals[slot];
               env.locals[slot] = x;
               const v = setNanReason(env, f(env) as number);
@@ -1306,6 +1510,10 @@ export function compileLine(line: CheckedLine, opts: CompileOptions = {}): Resul
               const before = env.locals[slot];
               for (let i = 0; i < xs.length; i++) {
                 env.reason = undefined;
+                if (dom.length > 0 && outside(env, [xs[i] as number])) {
+                  out[i] = NAN;
+                  continue;
+                }
                 env.locals[slot] = xs[i];
                 out[i] = setNanReason(env, f(env) as number);
               }

@@ -6,7 +6,8 @@
  * cut-off); one pass per flush, in ascending order, so inputs are final when a rule runs; values of objects nobody
  * looks at can be left stale and are computed when read (`setDemand`). No DOM, no timers, no wall clock.
  */
-import type { ErrorKind, ErrorObject } from '../contracts/errors';
+import type { ErrorKind, ErrorObject, Notice, NoticeKind } from '../contracts/errors';
+import { makeNotice } from '../errors/notices';
 import { err } from '../errors/table';
 import type { Name, ObjId, UndefReason } from '../contracts/values';
 import { resolveLimits } from '../errors/limits';
@@ -24,7 +25,7 @@ import { NOT_SET } from './types';
 import type { Cell, EffectiveStyle, FigureEvent, FrameDelta, Persist, Props, Slice, StyleEntry, UndefChange } from './types';
 import { sameValue } from './values';
 import { KERNEL_ACTIONS } from './actions';
-import { CommandRegistry, RuleUndefined } from './registry';
+import { CommandRegistry, RuleUndefined, clockDrivenOf } from './registry';
 import type { CommandRule, RuleCall, RuleWork } from './registry';
 import { coerceDynamic, defaultsFor, setProp, toEffective } from './props';
 
@@ -114,6 +115,8 @@ export const cellsEqual = (a: Cell, b: Cell): boolean => {
 };
 
 export class FigureCore {
+  /** Notices that rules raised with `call.notify` since the last report; the next report carries them. */
+  protected ruleNotices: Notice[] = [];
   readonly registry: CommandRegistry;
   readonly functions: FunctionTable | undefined;
   readonly directives: readonly string[] | undefined;
@@ -162,6 +165,8 @@ export class FigureCore {
   protected readonly tolOption: number;
   /** Set by the state solver: advances the states to the clock and returns the state objects whose value changed. */
   protected stateDriver: (() => ObjRec[]) | undefined;
+  /** Set by the state solver: the state objects, and the cell each has at a film time (for a slice over the clock). */
+  protected stateSampler: { readonly recs: () => readonly ObjRec[]; readonly at: (t: number) => readonly (readonly [ObjRec, Cell])[] | undefined } | undefined;
 
   constructor(opts: FigureOptions = {}) {
     if (typeof opts !== 'object' || opts === null) opts = {};
@@ -183,6 +188,7 @@ export class FigureCore {
     this.tolOption = typeof opts.tolerance === 'number' && Number.isFinite(opts.tolerance) && opts.tolerance > 0 ? opts.tolerance : DEFAULT_TOLERANCE;
     this.env = createEnv({ read: (id) => this.readValue(id), slots: 16 });
     this.env.maxList = this.limits.listSize;
+    this.env.host = this;
     this.langLimits = Object.freeze({ objects: this.limits.objects, exprNodes: this.limits.exprNodes, lineLength: this.limits.lineLength, listSize: this.limits.listSize, depth: this.limits.depth });
     const me = (): FigureCore => this;
     this.view = {
@@ -374,7 +380,7 @@ export class FigureCore {
     try {
       let rule = this.ruleCache.get(args);
       if (!rule) {
-        rule = form.rule(args.map((a) => ({ param: a.param, omitted: a.omitted, ...(a.binder !== undefined ? { binder: a.binder } : {}), ...(a.value !== undefined ? { value: a.value } : {}) }))) as CommandRule;
+        rule = form.rule(args.map((a) => ({ param: a.param, omitted: a.omitted, ...(a.binder !== undefined ? { binder: a.binder } : {}), ...(a.value !== undefined ? { value: a.value } : {}), ...(a.tree !== undefined ? { expr: a.tree } : {}) }))) as CommandRule;
         if (!rule || typeof rule.run !== 'function') throw new Error('the rule factory returned no rule');
         this.ruleCache.set(args, rule);
       }
@@ -425,12 +431,34 @@ export class FigureCore {
         tol: this.tolerance(),
         work,
         limits: this.limits,
-        slice: (source, target) => {
+        inputsOf: (id) => {
+          const rec = this.byIdMap.get(id);
+          return rec ? rec.valueIn.map((i) => ({ id: i.id, name: i.p.name, value: i.cell.defined ? i.cell.value : undefined })) : [];
+        },
+        argsOf: (id) => {
+          const cmd = this.byIdMap.get(id)?.p.compiled?.command;
+          if (!cmd) return [];
+          const saved = { reason: env.reason, cause: env.cause, detail: env.detail };
+          const out = cmd.args.map((a) => {
+            if (!a.eval || (a.param.kind ?? 'value') !== 'value') return undefined;
+            try {
+              const v = a.eval(env);
+              return typeof v === 'number' && v !== v ? undefined : v;
+            } catch {
+              return undefined;
+            }
+          });
+          env.reason = saved.reason;
+          env.cause = saved.cause;
+          env.detail = saved.detail;
+          return out;
+        },
+        slice: (source, target, opts) => {
           const tgt = this.byIdMap.get(target);
           if (!tgt) return err('unknown_name', { line: 0, col: 1, endCol: 1 }, { name: String(target) }, { recovery: 'fix_line', fingerprintKey: 'slice' });
           const src = source === 't' ? undefined : this.byIdMap.get(source);
           if (source !== 't' && !src) return err('unknown_name', { line: 0, col: 1, endCol: 1 }, { name: String(source) }, { recovery: 'fix_line', fingerprintKey: 'slice' });
-          return this.sliceRecs(src, tgt, work);
+          return this.sliceRecs(src, tgt, work, opts?.override === true);
         },
         fail: (reason, detail) => {
           if (env.reason === undefined) {
@@ -438,6 +466,11 @@ export class FigureCore {
             if (detail !== undefined) env.detail = detail;
           }
           return undefined;
+        },
+        notify: (kind, params) => {
+          // one notice per kind and line is enough: a rule may run many times in one pass
+          if (this.ruleNotices.length >= 32 || this.ruleNotices.some((n) => n.kind === kind)) return;
+          this.ruleNotices.push(makeNotice(kind as NoticeKind, params ?? {}));
         },
         evalArg: (i) => {
           const f = args[i]?.eval;
@@ -468,8 +501,8 @@ export class FigureCore {
    * Safe inside a running rule: it saves and restores the environment (reason, clock, locals) as well as the cells.
    * With `work`, each value costs one step plus one per rule run, and a spent budget leaves `timeout` cells.
    */
-  protected sliceRecs(src: ObjRec | undefined, t: ObjRec, work?: RuleWork): Slice | ErrorObject {
-    if (src && src.p.kind !== 'free') {
+  protected sliceRecs(src: ObjRec | undefined, t: ObjRec, work?: RuleWork, override = false): Slice | ErrorObject {
+    if (src && src.p.kind !== 'free' && !override) {
       return err('not_free', { line: 0, col: 1, endCol: 1 }, { name: src.p.name, inputs: src.valueIn.map((i) => i.p.name).join(', ') }, { recovery: 'choose', fingerprintKey: src.p.name });
     }
     if (this.ruleDepth > this.limits.depth) {
@@ -479,11 +512,20 @@ export class FigureCore {
     if (src) for (const o of this.downOf(src)) downIdx.add(o);
     else for (const o of this.clockDown()) downIdx.add(o);
     const anc = this.ancestorRecs([t]);
+    // over the clock, the states the target reads take their value at each time from the solver's dense output
+    const ancOrders = new Set(anc.map((r) => r.order));
+    const states = !src && this.stateSampler ? this.stateSampler.recs().filter((r) => ancOrders.has(r.order) || r === t) : [];
+    for (const st of states) for (const o of this.downOf(st)) downIdx.add(o);
+    // over the clock, free values an area moves with time (animated sliders) take their value at each time from the area
+    const driven = src ? [] : clockDrivenOf(this).map((d) => ({ rec: this.byIdMap.get(d.id), at: d.at })).filter((d): d is { rec: ObjRec; at: (t: number) => unknown } => d.rec !== undefined && (ancOrders.has(d.rec.order) || d.rec === t));
+    for (const d of driven) for (const o of this.downOf(d.rec)) downIdx.add(o);
     const chain = anc.filter((r) => downIdx.has(r.order) && r.p.kind === 'rule');
-    const touched = src ? [src, ...chain] : chain;
+    const touched = src ? [src, ...chain] : [...states, ...driven.map((d) => d.rec), ...chain];
+    const sampler = states.length > 0 ? this.stateSampler : undefined;
     const env = this.env;
     return {
       chain: chain.map((r) => r.p.name),
+      ...(states.length + driven.length > 0 ? { states: [...states, ...driven.map((d) => d.rec)].map((r) => r.p.name) } : {}),
       run: (values) => {
         const saved = touched.map((r) => r.cell);
         const stale = touched.map((r) => r.stale);
@@ -504,6 +546,14 @@ export class FigureCore {
               env.t = v as number;
               env.bt = v as number;
               this.clockState.t = v as number;
+              if (sampler) {
+                const cells = sampler.at(v as number);
+                if (cells) for (const [rec, cell] of cells) if (states.includes(rec)) rec.cell = cell;
+              }
+              for (const d of driven) {
+                const x = d.at(v as number);
+                d.rec.cell = x === undefined || (typeof x === 'number' && x !== x) ? { defined: false, reason: 'input_undefined' } : { defined: true, value: x };
+              }
             }
             for (const r of chain) r.cell = this.compute(r);
             out.push(t.cell);
@@ -562,12 +612,29 @@ export class FigureCore {
     const min = c.range.min(this.env) as number;
     const max = c.range.max(this.env) as number;
     const step = c.range.step ? (c.range.step(this.env) as number) : undefined;
-    const ok = typeof min === 'number' && typeof max === 'number' && min === min && max === max && min < max && (step === undefined || (step === step && step > 0 && Number.isFinite(step)));
+    const bounds = typeof min === 'number' && typeof max === 'number' && Number.isFinite(min) && Number.isFinite(max);
+    const stepOk = step === undefined || (step === step && step > 0 && Number.isFinite(step));
+    const ok = bounds && stepOk && min < max;
+    const before = r.range;
     r.range = ok ? { min, max, ...(step !== undefined ? { step } : {}) } : undefined;
-    if (!ok || r.p.kind !== 'free' || !r.cell.defined || typeof r.cell.value !== 'number') return false;
-    const v = r.cell.value;
-    const c2 = Math.min(max, Math.max(min, v));
-    if (c2 === v) return false;
+    if (r.p.kind !== 'free') return false;
+    // a bound that is undefined or crosses makes the slider undefined; it keeps its last value for when the range returns
+    // (numbers-sliders design 3.4)
+    if (!ok) {
+      const reason = bounds && stepOk ? 'empty_range' : 'range_undefined';
+      if (!r.cell.defined && r.cell.reason === reason) return false;
+      if (typeof r.p.value !== 'number') return false;
+      return this.setCell(r, { defined: false, reason });
+    }
+    const last = r.cell.defined ? r.cell.value : (r.cell.reason === 'range_undefined' || r.cell.reason === 'empty_range') ? r.p.value : undefined;
+    if (typeof last !== 'number') return false;
+    let c2 = Math.min(max, Math.max(min, last));
+    // a step that changed re-snaps the value to the new grid
+    if (step !== undefined && before?.step !== undefined && before.step !== step) {
+      const q = min + Math.round((c2 - min) / step) * step;
+      c2 = Math.min(max, Math.max(min, Number(q.toPrecision(12))));
+    }
+    if (c2 === last && r.cell.defined) return false;
     r.p = { ...r.p, value: c2 };
     this.setCell(r, { defined: true, value: c2 });
     return true;

@@ -379,9 +379,25 @@ class Parser {
     this.next(); // =
     this.lineHead = 'define';
     const expr = this.parseExpr();
+    // `in a..b` restricts a function to an interval; one range per parameter, separated by commas
+    let domain: RangeClause[] | undefined;
+    if (this.isKw('in')) {
+      domain = [];
+      const kw = this.next();
+      for (;;) {
+        const start = domain.length === 0 ? kw.s : this.peek().s;
+        const from = this.parseExpr();
+        if (!this.isOp('..')) this.unexpected(['..'], { afterOperand: true });
+        this.next();
+        const to = this.parseExpr();
+        domain.push({ s: start, e: this.prevEnd(), from, to });
+        if (!this.isOp(',')) break;
+        this.next();
+      }
+    }
     const style = this.maybeStyle();
     this.finishLine();
-    return { k: 'function', target: this.nameRef(nameTok), params, expr, ...(style ? { style } : {}) };
+    return { k: 'function', target: this.nameRef(nameTok), params, expr, ...(domain ? { domain } : {}), ...(style ? { style } : {}) };
   }
 
   looksLikeRate(): boolean {
@@ -413,6 +429,20 @@ class Parser {
     this.relationLike = expr.k === 'cmp' || this.containsFreeXY(expr);
     let range: RangeClause | undefined;
     if (this.isKw('in')) range = this.parseRange();
+    else if (this.isKw('step')) {
+      // a step belongs to a range: say so, with the line that has one
+      const t = this.peek();
+      const rest = this.sm.text.slice(t.s).trim();
+      const fixed = `${nameTok.text} = ${this.sm.text.slice(expr.s, expr.e)} in 0..10 ${rest}`;
+      throw new Stop(
+        this.diag.at('syntax', t.s, t.e, 'lang.syntax', { token: 'step', expected: 'in min..max before step' }, {
+          expected: ['in'],
+          hint: `step only follows a range. Give the range first: ${fixed}.`,
+          suggest: [fixed],
+          fingerprintKey: 'step_without_range',
+        }),
+      );
+    }
     const style = this.maybeStyle();
     if (this.isOp('=')) this.unexpected(['end of line']);
     this.finishLine();
@@ -452,6 +482,7 @@ class Parser {
           break;
         case 'field':
           walk(n.target);
+          n.args?.forEach(walk);
           break;
         case 'tuple':
         case 'list':
@@ -478,12 +509,28 @@ class Parser {
   parseRange(): RangeClause {
     const kw = this.next(); // in
     const from = this.parseExpr();
-    if (!this.isOp('..')) this.unexpected(['..'], { afterOperand: true });
+    if (!this.isOp('..')) {
+      const t = this.peek();
+      const atEnd = t.kind === 'eof' || t.kind === 'nl' || t.kind === 'comment';
+      // two numbers with a gap between them: the two dots of the range are missing
+      if (!atEnd && this.startsOperand(t) && t.kind !== 'kw') {
+        throw new Stop(
+          this.diag.at('syntax', t.s, t.e, 'lang.syntax', { token: this.tokenLabel(t), expected: '..' }, {
+            expected: ['..'],
+            hint: `Expected '..' between the two ends of the range: write ${this.sm.text.slice(from.s, from.e)}..${t.text}.`,
+            fingerprintKey: 'range_dots',
+          }),
+        );
+      }
+      this.unexpected(['..'], { afterOperand: true });
+    }
     this.next();
     const to = this.parseExpr();
     let step: Expr | undefined;
     if (this.isKw('step')) {
       this.next();
+      const t = this.peek();
+      if (t.kind === 'eof' || t.kind === 'nl' || t.kind === 'comment') this.unexpected(['a number after step']);
       step = this.parseExpr();
     }
     return { s: kw.s, e: this.prevEnd(), from, to, ...(step ? { step } : {}) };
@@ -814,6 +861,14 @@ class Parser {
           this.next();
           this.next();
           e = { k: 'field', target: e, field: n.name ?? n.text, fs: n.s, fe: n.e, s: e.s, e: n.e };
+          // g.value(x): a field that holds a function, called (controls-scripting design 3.1)
+          const open = this.peek();
+          if (open.text === '(' && open.s === n.e) {
+            this.next();
+            const args = this.parseArgList(')', n.name ?? n.text, true);
+            const close = this.expectCloser(open, ')');
+            e = { ...e, args: args.map((a) => a.value), e: close.e };
+          }
           continue;
         }
         this.next();

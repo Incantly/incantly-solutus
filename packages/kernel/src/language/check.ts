@@ -7,16 +7,18 @@ import type { ErrorKind, Notice } from '../contracts/errors';
 import type { ObjId } from '../contracts/values';
 import type { Arg, CmpOp, Expr, LineKind, ParsedLine } from './ast';
 import { BUILTIN_FUNCTIONS, constantByName, getMathLib } from './builtins';
-import { Diag, closestNames, notice, typeList } from './errors';
+import { Diag, ERROR_KINDS, closestNames, notice, typeList } from './errors';
 import type { ArgProblem, ErrorExtra, LanguageError, QuickFix } from './errors';
 import { CONSTANT_NAMES, nameProblem, reservedGroup } from './names';
 import { defineLine } from '../errors/suggest';
 import { own } from './props';
 import { classify } from './relation';
-import type { FigureView, FormLike, FunctionTable, ObjectInfo, ParamSpec } from './table';
+import type { ArgFacts, CallCheck, FigureView, FormCheck, FormLike, FunctionTable, ObjectInfo, ParamSpec, Refusal } from './table';
 import { formText } from './table';
 import type { RelTree, TArg, TNode } from './tnode';
-import { T, accepts, binaryOp, legalOpsFor, listOf, setLabel, tyEq, tyStr, typeSet } from './types';
+import { printExpr } from './printer';
+import { T, accepts, areaIndexOp, areaUnaryOp, binaryOp, isCallableTy, legalOpsFor, listOf, setLabel, tyEq, tyStr, typeSet } from './types';
+import type { AreaOpImpl, TypeSet } from './types';
 import type { Ty } from './types';
 import type { LangLimits } from './source';
 
@@ -71,6 +73,8 @@ export interface CheckedLine {
   readonly existing?: ObjId;
   readonly expr?: TNode;
   readonly params?: readonly { readonly name: string; readonly slot: number }[];
+  /** For a function line with `in a..b`: the closed interval of each parameter, in order. */
+  readonly domain?: readonly { readonly from: TNode; readonly to: TNode }[];
   readonly range?: CheckedRange;
   readonly style?: readonly CheckedStyle[];
   /** Initial value and optional velocity of a state. */
@@ -111,6 +115,27 @@ const OP_WORDS: Record<string, string> = {
   '==': 'compare', '!=': 'compare', '<': 'compare', '<=': 'compare', '>': 'compare', '>=': 'compare',
 };
 
+/**
+ * The type of a field whose type depends on the object (`d.value` of a dropdown is the type of its options). Asked when
+ * `FIELDS` has no entry for the field; `undefined` leaves the field unknown.
+ */
+export type FieldTyper = (field: string, target: TNode, fig: FigureView) => Ty | undefined;
+const FIELD_TYPERS = new Map<string, FieldTyper>();
+/** An area registers the typer for the object-dependent fields of a type it owns. */
+export function registerFieldTyper(type: string, typer: FieldTyper): void {
+  FIELD_TYPERS.set(type, typer);
+}
+
+/**
+ * The field names of an area type that has them all known (a record's schema): a missing field is then the error
+ * `unknown_field` listing the real ones, rather than a type mismatch.
+ */
+const FIELD_NAMES = new Map<string, (ty: Ty) => readonly string[]>();
+
+export function registerFieldNames(type: string, names: (ty: Ty) => readonly string[]): void {
+  FIELD_NAMES.set(type, names);
+}
+
 /** Fields by type, appended to by other areas (docs/features/language/design.md 3.10 rule 9). */
 export const FIELDS: Record<string, Record<string, Ty>> = {
   Point: { x: T.Number, y: T.Number },
@@ -121,6 +146,7 @@ export const FIELDS: Record<string, Record<string, Ty>> = {
   Polygon: { vertices: listOf(T.Point), area: T.Number, perimeter: T.Number },
   Line: { point: T.Point, direction: T.Vector },
   Text: { length: T.Number },
+  Region: { value: T.Number, area: T.Number },
 };
 
 interface Frame {
@@ -366,6 +392,7 @@ class Checker {
           break;
         case 'field':
           walk(n.target);
+          n.args?.forEach(walk);
           break;
         case 'tuple':
         case 'list':
@@ -614,6 +641,10 @@ class Checker {
     } else if (close.length > 0) {
       extra.hint = `Did you mean ${close.join(' or ')}?`;
       for (const c of close.slice(0, 2)) suggest.push(this.replaceRange(e.s, e.e, c));
+    } else if (this.scopeNames().length > 0) {
+      // inside a command's own expression the variable is the one the command names (`θ` in Polar, `s` in Curve)
+      const vars = this.scopeNames();
+      extra.hint = `The variable here is ${vars.join(' or ')}. Write the expression with ${vars.length === 1 ? 'it' : 'those'}, or make ${name} a number first.`;
     } else {
       extra.hint = 'Make it a number first, or pick an existing name.';
     }
@@ -673,7 +704,11 @@ class Checker {
       return { n: 'unary', op: 'not', arg: a, ty: T.Bool, s: e.s, e: e.e };
     }
     const ok = a.ty.k === 'Number' || a.ty.k === 'Vector' || (a.ty.k === 'Function' && a.ty.ret === 'Number');
-    if (!ok) return this.mismatchUnary(e.op, a, e);
+    if (!ok) {
+      const area = areaUnaryOp(e.op, a.ty);
+      if (area) return { n: 'unary', op: e.op, arg: a, ty: area.result, impl: area.impl, s: e.s, e: e.e };
+      return this.mismatchUnary(e.op, a, e);
+    }
     return { n: 'unary', op: e.op, arg: a, ty: a.ty, s: e.s, e: e.e, ...(a.unit ? { unit: a.unit } : {}) };
   }
 
@@ -694,7 +729,7 @@ class Checker {
     const res = binaryOp(e.op, l.ty, r.ty);
     if (!res) return this.mismatch(e.op, l, r, e);
     const unit = this.unitOf(e.op, l, r);
-    return { n: 'bin', op: e.op, l, r, variant: res.variant, ty: res.result, s: e.s, e: e.e, ...(unit ? { unit } : {}) };
+    return { n: 'bin', op: e.op, l, r, variant: res.variant, ty: res.result, s: e.s, e: e.e, ...(unit ? { unit } : {}), ...(res.impl ? { impl: res.impl } : {}) };
   }
 
   mismatch(op: string, l: TNode, r: TNode, e: { s: number; e: number }): null {
@@ -722,7 +757,11 @@ class Checker {
     } else if (op === '+' && l.ty.k === 'Point' && r.ty.k === 'Point') {
       extra.hint = `Two positions cannot be added. Add a Vector to a Point, or use Midpoint(${a}, ${b}) for the point halfway between.`;
     } else if (op === '*' && l.ty.k === 'Vector' && r.ty.k === 'Vector') {
-      extra.hint = `Use dot(${a}, ${b}) for the dot product or cross(${a}, ${b}) for the 2D cross product.`;
+      // Name the commands when the figure has them (points-lines: `Dot`, `Cross`); the functions always exist.
+      const hasCommands = this.fig.commands.lookup('Dot') !== undefined && this.fig.commands.lookup('Cross') !== undefined;
+      extra.hint = hasCommands
+        ? `Use Dot(${a}, ${b}) for the dot product or Cross(${a}, ${b}) for the 2D cross product.`
+        : `Use dot(${a}, ${b}) for the dot product or cross(${a}, ${b}) for the 2D cross product.`;
     } else {
       const legal = legalOpsFor(op, l.ty);
       extra.hint = legal.length > 0 ? `${lt} ${op} works with: ${legal.join(', ')}.` : `${op} is not defined for a ${lt} on the left.`;
@@ -734,15 +773,18 @@ class Checker {
     const ops = e.operands.map((o) => this.infer(o));
     if (ops.some((o) => o === null)) return null;
     const ts = ops as TNode[];
+    const impls: (AreaOpImpl | undefined)[] = [];
     for (let i = 0; i < e.ops.length; i++) {
       const l = ts[i] as TNode;
       const r = ts[i + 1] as TNode;
-      if (!binaryOp(e.ops[i] as string, l.ty, r.ty)) {
+      const res = binaryOp(e.ops[i] as string, l.ty, r.ty);
+      if (!res) {
         const p = e.opPos[i];
         return this.mismatch(e.ops[i] as string, l, r, { s: l.s, e: r.e }) ?? (p ? null : null);
       }
+      impls.push(res.impl);
     }
-    return { n: 'cmp', ops: e.ops as readonly CmpOp[], operands: ts, ty: T.Bool, s: e.s, e: e.e };
+    return { n: 'cmp', ops: e.ops as readonly CmpOp[], operands: ts, ty: T.Bool, s: e.s, e: e.e, ...(impls.some((f) => f !== undefined) ? { impls } : {}) };
   }
 
   inferTuple(e: Expr & { k: 'tuple' }): TNode | null {
@@ -907,6 +949,10 @@ class Checker {
     const t = this.infer(e.target);
     const i = this.infer(e.index);
     if (!t || !i) return null;
+    if (t.ty.k !== 'List') {
+      const area = areaIndexOp(t.ty, i.ty);
+      if (area) return { n: 'index', target: t, index: i, ty: area.result, impl: area.impl, s: e.s, e: e.e };
+    }
     if (t.ty.k !== 'List' || !t.ty.of) {
       return this.err('type_mismatch', e.s, e.e, 'lang.type_mismatch_where', { why: `Only a List can be indexed, but this is a ${tyStr(t.ty)}` }, {
         left: tyStr(t.ty),
@@ -932,7 +978,17 @@ class Checker {
     const t = this.infer(e.target);
     if (!t) return null;
     const table = own(FIELDS, t.ty.k);
-    const f = table ? own(table, e.field) : undefined;
+    const f = (table ? own(table, e.field) : undefined) ?? FIELD_TYPERS.get(t.ty.k)?.(e.field, t, this.fig);
+    const listed = FIELD_NAMES.get(t.ty.k);
+    if (!f && listed) {
+      const avail = [...(table ? Object.keys(table) : []), ...listed(t.ty)];
+      return this.err('unknown_field', e.fs, e.fe, 'lang.unknown_field', { command: tyStr(t.ty), why: `A ${tyStr(t.ty)} has no field ${e.field}${avail.length > 0 ? `; its fields are ${avail.join(', ')}` : ''}.` }, {
+        expected: avail,
+        hint: avail.length > 0 ? `Read one of ${avail.join(', ')}.` : `A ${tyStr(t.ty)} has no fields.`,
+        suggest: closestNames(e.field, avail, 2).map((c) => this.replaceRange(e.fs, e.fe, c)),
+        fingerprintKey: `${tyStr(t.ty)}.${e.field}`,
+      });
+    }
     if (!f) {
       const avail = table ? Object.keys(table) : [];
       return this.err('type_mismatch', e.fs, e.fe, 'lang.type_mismatch_where', { why: `A ${tyStr(t.ty)} has no field ${e.field}` }, {
@@ -943,7 +999,31 @@ class Checker {
         fingerprintKey: `${t.ty.k}.${e.field}`,
       });
     }
-    return { n: 'field', target: t, field: e.field, ty: f, s: e.s, e: e.e };
+    if (!e.args) return { n: 'field', target: t, field: e.field, ty: f, s: e.s, e: e.e };
+    // g.value(x): the field holds a function, which is called with numbers
+    const name = `${printExpr(e.target)}.${e.field}`;
+    if (!isCallableTy(f)) {
+      return this.err('not_callable', e.fs, e.fe, 'lang.not_callable', { name, type: tyStr(f) }, {
+        hint: `${name} is a ${tyStr(f)}, so it cannot be called.`,
+        fingerprintKey: `${t.ty.k}.${e.field}`,
+      });
+    }
+    const arity = f.arity ?? 1;
+    if (e.args.length !== arity) {
+      return this.err('arg_count', e.s, e.e, 'lang.arg_count', { name, n: arity, m: e.args.length }, {
+        hint: `Call ${name} with ${arity} number${arity === 1 ? '' : 's'}.`,
+        fingerprintKey: name,
+      });
+    }
+    const args: TNode[] = [];
+    for (const a of e.args) {
+      const x = this.infer(a);
+      if (!x) return null;
+      if (x.ty.k !== 'Number') return this.err('type_mismatch', x.s, x.e, 'lang.type_mismatch_where', { why: `${name} takes numbers, not a ${tyStr(x.ty)}` }, { left: tyStr(x.ty), fingerprintKey: `${name}.arg` });
+      args.push(x);
+    }
+    const ret = f.ret === 'Point' ? T.Point : f.ret === 'Bool' ? T.Bool : T.Number;
+    return { n: 'field', target: t, field: e.field, args, ty: ret, s: e.s, e: e.e };
   }
 
   inferTick(e: Expr & { k: 'tick' }): TNode | null {
@@ -1023,17 +1103,19 @@ class Checker {
     if (bspec) return this.inferBuiltin(e, bspec, expected);
     const obj = this.fig.lookup(name);
     if (obj) {
-      if (obj.type.k === 'Function') return this.inferCallObj(e, obj);
+      if (isCallableTy(obj.type)) return this.inferCallObj(e, obj);
       return this.notCallable(e, tyStr(obj.type), obj.type.k === 'Number');
     }
     return this.unknownFunction(e);
   }
 
-  unknownCommand(e: CallExpr): null {
+  unknownCommand(e: CallExpr): TNode | null {
     const names = this.fig.commands.names();
     const close = closestNames(e.callee, names, 3);
     const extra: ErrorExtra = { fingerprintKey: e.callee };
     const obj = this.fig.lookup(e.callee);
+    // a function object may have a capital name (`W = Taylor(f, 0, 5)`): with no command of that name, the call is to it
+    if (obj && isCallableTy(obj.type)) return this.inferCallObj(e, obj);
     if (obj) {
       extra.hint = `${e.callee} is a ${tyStr(obj.type)} object, not a command. Names followed by ( are looked up as commands when they start with a capital letter.`;
     } else if (close.length > 0) {
@@ -1098,7 +1180,7 @@ class Checker {
       args.push(t);
     }
     if (!ok) return null;
-    const ret = obj.type.ret === 'Point' ? T.Point : T.Number;
+    const ret = obj.type.ret === 'Point' ? T.Point : obj.type.ret === 'Bool' ? T.Bool : T.Number;
     return { n: 'callObj', id: obj.id, name: e.callee, args, ty: ret, s: e.s, e: e.e };
   }
 
@@ -1114,7 +1196,7 @@ class Checker {
 
   inferCommand(e: CallExpr, spec: import('./table').CommandSpec, expected?: Ty): TNode | null {
     this.hasCommand = true;
-    const m = this.matchForms(spec.name, spec.forms, e, expected);
+    const m = this.matchForms(spec.name, spec.forms, e, expected, spec.refuse);
     if (!m) return null;
     const form = m.form;
     const ret = form.returns;
@@ -1152,6 +1234,10 @@ class Checker {
       return i >= 0 ? bound[i]?.ty : undefined;
     };
     if (text.startsWith('=')) return ref(text.slice(1)) ?? T.Number;
+    if (text.startsWith('@')) {
+      const lt = ref(text.slice(1));
+      return lt?.k === 'List' && lt.of ? lt.of : T.Number;
+    }
     const m = /^List<=(\w+)>$/.exec(text);
     if (m) return listOf(ref(m[1] as string) ?? T.Number);
     const set = typeSet(text);
@@ -1179,11 +1265,54 @@ class Checker {
 
   /* ------------------------------- matching ------------------------------- */
 
+  /** What a check-time hook may know about a typed argument. */
+  argFacts(node: TNode | null | undefined, a: Arg | undefined): ArgFacts {
+    if (!node || !a) return { type: '', literal: undefined, text: a ? this.textOf(a.value) : '', omitted: !a };
+    const base = { type: tyStr(node.ty), literal: literalOf(node), text: this.textOf(a.value), omitted: false };
+    if (node.n === 'relation') return { ...base, relation: node.shape };
+    if (node.n !== 'ref') return base;
+    // a bare object name: the hook may read what the object is now
+    const info = this.fig.byId(node.id);
+    let value: unknown;
+    try {
+      value = this.fig.read?.(node.id);
+    } catch {
+      value = undefined;
+    }
+    return { ...base, ...(value !== undefined ? { value } : {}), ...(info?.source !== undefined ? { source: info.source } : {}) };
+  }
+
+  /** Reports a refusal from a check-time hook as an error on the line. */
+  refuse(r: Refusal, command: string, call: CallExpr, argAt: (r: Refusal) => Arg | undefined, forms: readonly FormLike[] = []): null {
+    const a = argAt(r);
+    const s = a ? a.value.s : call.cs;
+    const e = a ? a.value.e : call.e;
+    const known = Object.hasOwn(ERROR_KINDS, r.kind);
+    // A kind the table does not know would get another kind's code: say so instead of guessing.
+    if (!known) {
+      return this.err('internal', call.cs, call.ce, 'lang.internal', { where: `${command} check hook` }, {
+        hint: `The error kind ${r.kind} is not registered in the error table; report this.`,
+        recovery: 'report',
+        fingerprintKey: `${command}:${r.kind}`,
+      });
+    }
+    return this.err(r.kind, s, e, `lang.${r.kind}`, r.params ?? { command, why: r.message }, {
+      message: r.message,
+      ...(r.hint !== undefined ? { hint: r.hint } : {}),
+      ...(r.suggest !== undefined ? { suggest: r.suggest.slice(0, 3) } : {}),
+      ...(r.limit !== undefined ? { limit: { ...r.limit } } : {}),
+      ...(forms.length > 0 ? { forms: forms.map((f) => formText(command, f)) } : {}),
+      phase: 'typecheck',
+      fingerprintKey: `${command}:${r.kind}`,
+    });
+  }
+
   matchForms<F extends FormLike>(
     specName: string,
     forms: readonly F[],
     call: CallExpr,
     _expected?: Ty,
+    refuseCall?: (c: CallCheck) => Refusal | undefined,
   ): { form: F; bound: TArg[] } | null {
     const args = call.args;
     // names and duplicates
@@ -1276,8 +1405,37 @@ class Checker {
       this.errors = [];
       this.notices = [];
       let node: TNode | null = null;
+      // a parameter that takes a function of x (or of x and y) also takes an expression written in them
+      const fnHint = hint && hint.k === 'Function' && hint.ret === 'Number' && (hint.arity === 1 || hint.arity === 2) ? hint : undefined;
       try {
-        node = this.inferArg((args[i] as Arg).value, hint);
+        const value = (args[i] as Arg).value;
+        node = this.inferArg(value, fnHint ? undefined : hint);
+        if (fnHint && node === null && value.k !== 'name') {
+          const first = this.errors;
+          const firstN = this.notices;
+          this.errors = [];
+          this.notices = [];
+          const frame: Frame = { vars: new Map() };
+          const params = (fnHint.arity === 2 ? ['x', 'y'] : ['x']).map((name) => {
+            const slot = this.slotCount++;
+            frame.vars.set(name, { slot, ty: T.Number });
+            return { name, slot };
+          });
+          this.scopes.push(frame);
+          let body: TNode | null = null;
+          try {
+            body = this.inferArg(value);
+          } finally {
+            this.scopes.pop();
+          }
+          if (body && body.ty.k === 'Number' && this.errors.length === 0) {
+            node = { n: 'lambda', params, body, ty: fnHint, s: value.s, e: value.e };
+          } else {
+            // not an expression in x either: report what the plain reading found
+            this.errors = first;
+            this.notices = firstN;
+          }
+        }
       } finally {
         const got = { node, errors: this.errors, notices: this.notices };
         this.errors = saved;
@@ -1310,7 +1468,9 @@ class Checker {
 
     const elementHint = (b: Binding, k: number): Ty | undefined => {
       const set = typeSet((b.form.params[k] as ParamSpec).type);
-      return set.members.length === 1 && set.members[0]?.k === 'List' && set.members[0].of ? set.members[0] : undefined;
+      const only = set.members.length === 1 ? set.members[0] : undefined;
+      if (only?.k === 'Function' && only.ret === 'Number' && (only.arity === 1 || only.arity === 2)) return only;
+      return only?.k === 'List' && only.of ? only : undefined;
     };
 
     interface Test {
@@ -1333,8 +1493,21 @@ class Checker {
       const binderBad: { ai: number; arg: Arg }[] = [];
       const bodyErrors: LanguageError[] = [];
       const frame: Frame = { vars: new Map() };
-      // pass 1: values and binders
-      b.form.params.forEach((p, k) => {
+      // `@list`: the element type of the list parameter `list`; `=init`: the type of the parameter `init`. Values are
+      // checked before binders, so a binder may name a value written after it (`Zip(expr, a, listA, …)`). Any type when
+      // the parameter is not known yet.
+      const setFor = (text: string): TypeSet => {
+        const ref = text.startsWith('@') || (text.startsWith('=') && text.length > 1) ? text.slice(1) : undefined;
+        if (ref === undefined) return typeSet(text);
+        const j = b.form.params.findIndex((q) => q.name === ref);
+        const lt = j >= 0 ? tys[j] : undefined;
+        const el = text.startsWith('@') ? (lt?.k === 'List' ? lt.of : undefined) : lt;
+        return el ? { text: tyStr(el), members: [el], any: false, size: 1 } : { text, members: [], any: true, size: 1000 };
+      };
+      const valuesFirst = b.form.params.map((_, k) => k).sort((x, y) => Number((b.form.params[x]?.kind ?? 'value') !== 'value') - Number((b.form.params[y]?.kind ?? 'value') !== 'value'));
+      // pass 1: values, then binders
+      valuesFirst.forEach((k) => {
+        const p = b.form.params[k] as ParamSpec;
         const ai = b.bind[k] as number;
         const kind = p.kind ?? 'value';
         if (ai === -1) {
@@ -1342,7 +1515,7 @@ class Checker {
           return;
         }
         const a = args[ai] as Arg;
-        const set = typeSet(p.type);
+        const set = setFor(p.type);
         score += set.size;
         if (kind === 'value') {
           const node = valueArg(ai, elementHint(b, k));
@@ -1355,6 +1528,28 @@ class Checker {
           tys[k] = node.ty;
           bound[k] = { param: p, expr: node, omitted: false, ty: node.ty };
           if (!accepts(set, node.ty)) problems.push(this.problem(ai, p, a, tyStr(node.ty), setLabel(set)));
+        } else if (kind === 'binder' && set.members[0]?.k === 'List' && !p.type.startsWith('@') && !p.type.startsWith('=')) {
+          // a list of bare names, each a local of the bodies: `[y, v]`
+          const v = a.value;
+          const names = v.k === 'list' ? v.items : [];
+          if (v.k !== 'list' || names.length === 0 || names.some((it) => it.k !== 'name' || it.paren === true)) {
+            problems.push(this.problem(ai, p, a, v.k === 'list' ? 'a list of expressions' : 'an expression', 'a list of bare names such as [y, v]'));
+            binderBad.push({ ai, arg: a });
+            bound[k] = { param: p, omitted: false };
+            return;
+          }
+          const ety = set.members[0].of ?? T.Number;
+          const slots: number[] = [];
+          const binders: string[] = [];
+          for (const it of names as readonly (Expr & { k: 'name' })[]) {
+            const slot = this.slotCount++;
+            frame.vars.set(it.name, { slot, ty: ety });
+            this.warnShadow(it.name, it.s, it.e);
+            slots.push(slot);
+            binders.push(it.name);
+          }
+          bound[k] = { param: p, binders, slots, omitted: false, ty: listOf(ety) };
+          tys[k] = listOf(ety);
         } else if (kind === 'binder') {
           const v = a.value;
           if (v.k !== 'name' || v.paren) {
@@ -1380,8 +1575,11 @@ class Checker {
         const set = typeSet(p.type);
         this.scopes.push(frame);
         const extraFrame: Frame = { vars: new Map() };
+        const scopeSlots: { name: string; slot: number }[] = [];
         for (const sc of p.scope ?? []) {
-          extraFrame.vars.set(sc.name, { slot: this.slotCount++, ty: typeSet(sc.type).members[0] ?? T.Number });
+          const slot = this.slotCount++;
+          extraFrame.vars.set(sc.name, { slot, ty: typeSet(sc.type).members[0] ?? T.Number });
+          scopeSlots.push({ name: sc.name, slot });
           this.warnShadow(sc.name, call.cs, call.ce);
         }
         this.scopes.push(extraFrame);
@@ -1412,7 +1610,7 @@ class Checker {
           return;
         }
         tys[k] = node.ty;
-        bound[k] = { param: p, expr: node, omitted: false, ty: node.ty };
+        bound[k] = { param: p, expr: node, omitted: false, ty: node.ty, ...(scopeSlots.length > 0 ? { scopeSlots } : {}) };
         // binders unused in a body get a notice
         if (!accepts(set, node.ty)) problems.push(this.problem(ai, p, a, tyStr(node.ty), setLabel(set)));
       });
@@ -1460,6 +1658,27 @@ class Checker {
       for (const ai of best.b.restArgs) flush(ai);
       for (const t of typed.values()) if (t.node && !flushedArgs.has(t.ai)) this.notices.push(...t.notices);
       this.checkBinderUse(best.bound, best.b.form, args);
+      // the form's own check-time hook: a literal or a type that can never work is an error on the line
+      const hook = (best.b.form as { check?: (c: FormCheck) => Refusal | undefined }).check;
+      if (hook) {
+        const nParams = best.b.form.params.length;
+        const paramArg = (k: number): Arg | undefined => {
+          const ai = best.b.bind[k];
+          return ai === undefined || ai === -1 ? undefined : (args[ai] as Arg);
+        };
+        const facts = best.b.form.params.map((_p, k) => this.argFacts(best.bound[k]?.expr, paramArg(k)));
+        const rest = best.b.restArgs.map((ai, j) => this.argFacts(best.bound[nParams + j]?.expr, args[ai] as Arg));
+        let refusal: Refusal | undefined;
+        try {
+          refusal = hook({ command: specName, args: facts, rest });
+        } catch {
+          return this.err('internal', call.cs, call.ce, 'lang.internal', { where: `${specName} check hook` }, { recovery: 'report', fingerprintKey: specName });
+        }
+        if (refusal) {
+          return this.refuse(refusal, specName, call, (r) =>
+            r.param === undefined ? undefined : r.inRest === true ? (args[best.b.restArgs[r.param] ?? -1] as Arg | undefined) : paramArg(r.param), forms);
+        }
+      }
       return { form: best.b.form as F, bound: best.bound };
     }
 
@@ -1485,6 +1704,16 @@ class Checker {
     if (badBinders) {
       this.reportBinders(badBinders.binderBad);
       return null;
+    }
+    // the command's own diagnosis of arguments that fit no form comes before the general one
+    if (refuseCall) {
+      let refusal: Refusal | undefined;
+      try {
+        refusal = refuseCall({ command: specName, args: args.map((a, i) => (a.name !== undefined ? { type: '', literal: undefined, text: this.textOf(a.value), omitted: false } : this.argFacts(shownArg(i), a))) });
+      } catch {
+        refusal = undefined;
+      }
+      if (refusal) return this.refuse(refusal, specName, call, (r) => (r.param === undefined ? undefined : (args[r.param] as Arg | undefined)), forms);
     }
     return this.diagnose(specName, forms, call, bindings, tests, shownArg);
   }
@@ -1751,3 +1980,31 @@ export function foldNumber(n: TNode): number | undefined {
 }
 
 export { Checker };
+
+/**
+ * The value of an argument written as a literal, for check-time hooks: a number (with a sign, or a named constant), a
+ * boolean, a text with no interpolation, a point of literal numbers, a list of literals. `undefined` for anything else.
+ */
+export function literalOf(node: TNode): unknown {
+  switch (node.n) {
+    case 'num': return node.v;
+    case 'bool': return node.v;
+    case 'const': return typeof node.value === 'number' ? node.value : undefined;
+    case 'unary': {
+      if (node.op === 'not') return undefined;
+      const v = literalOf(node.arg);
+      return typeof v === 'number' ? (node.op === '-' ? -v : v) : undefined;
+    }
+    case 'text': return node.parts.every((p) => typeof p === 'string') ? node.parts.join('') : undefined;
+    case 'point': {
+      const x = literalOf(node.x);
+      const y = literalOf(node.y);
+      return typeof x === 'number' && typeof y === 'number' ? { x, y } : undefined;
+    }
+    case 'list': {
+      const items = node.items.map(literalOf);
+      return items.every((v) => v !== undefined) ? items : undefined;
+    }
+    default: return undefined;
+  }
+}

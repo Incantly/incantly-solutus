@@ -49,6 +49,31 @@ export interface AreaErrorKinds {
   empty_list_type: true;
   duplicate_arg: true;
   not_a_binder: true;
+  // geometry (codes C010 to C029)
+  not_a_path: true;
+  not_a_region: true;
+  too_few_points: true;
+  not_supported: true;
+  not_a_transform: true;
+  not_quadratic: true;
+  not_polynomial: true;
+  bad_equation: true;
+  no_dependency: true;
+  // functions (codes C030 to C049)
+  needs_interval: true;
+  not_differentiable: true;
+  missing_range: true;
+  // animation-time (codes C050 to C069)
+  not_traceable: true;
+  bad_trace_option: true;
+  unknown_particle_param: true;
+  missing_particle_param: true;
+  bad_particle_value: true;
+  particle_name_outside: true;
+  particle_command: true;
+  // lists-matrices (codes C070 to C089)
+  unknown_field: true;
+  bad_option: true;
 }
 
 export type ErrorKind = CoreErrorKind | Extract<keyof AreaErrorKinds, string>;
@@ -108,6 +133,16 @@ export interface AreaNoticeKinds {
   step_hidden: true;
   shadowed_default: true;
   unstable_state: true;
+  // animation-time
+  seek_clamped: true;
+  behind_audio: true;
+  log_rewrite: true;
+  trace_decimated: true;
+  gpu_unsupported: true;
+  stiff_system: true;
+  catching_up: true;
+  particle_shed: true;
+  path_pending: true;
 }
 
 export type NoticeKind = CoreNoticeKind | Extract<keyof AreaNoticeKinds, string>;

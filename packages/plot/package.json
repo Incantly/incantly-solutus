@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Function and curve sampling, tracers and fills. No DOM.",
+  "description": "Browser-free curve and function sampling: adaptive tracers and region fills. No DOM; runs in browser, worker, Node and mobile.",
   "exports": {
     ".": "./src/index.ts"
   }

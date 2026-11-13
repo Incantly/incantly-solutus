@@ -51,7 +51,9 @@ export type JournalEntry =
     }
   | { readonly k: 'sets'; readonly changes: readonly Change[]; readonly reorder?: Reorder; readonly label: string }
   | { readonly k: 'item'; readonly item: ScriptItem; readonly was: ScriptItem | null; readonly index: number; readonly label: string }
-  | { readonly k: 'group'; readonly label: string; readonly entries: JournalEntry[] };
+  | { readonly k: 'group'; readonly label: string; readonly entries: JournalEntry[] }
+  /** A change an area keeps outside the objects (the steps of an `on` line), with its own way back and forth. */
+  | { readonly k: 'ext'; readonly label: string; readonly undo: () => void; readonly redo: () => void };
 
 export interface UndoInfo {
   /** Entries that undo can step back through. */
@@ -85,6 +87,8 @@ function sizeOf(e: JournalEntry, measure: (x: JournalEntry) => number): number {
       return 80 + e.item.text.length * 2 + (e.was ? e.was.text.length * 2 : 0);
     case 'group':
       return 40 + e.entries.reduce((n, x) => n + measure(x), 0);
+    case 'ext':
+      return 120 + e.label.length * 2;
   }
 }
 

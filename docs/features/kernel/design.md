@@ -393,7 +393,7 @@ interface PropRule<R> {
 | `trace` | Bool | |
 | `tip` | enum | |
 | `tags` | text list | |
-| `animate` | plain word | Every drawable type. The kernel accepts and stores it; the values and what they do are animation-time 5.2 (ruling K11) |
+| `animate` | plain word | Every drawable type. The kernel accepts and stores it (ruling K11). Animation-time refuses it with a hint: slider animation is the numbers area's `loop`, `period` and `Animate(a)` (animation-time 5) |
 
 Unknown key: `unknown_property`, hint lists the keys valid for that object's type.
 
@@ -609,6 +609,89 @@ Added to the action table (core design section 6.6). Each is one line.
 | `Uses(obj)` | Names that depend on obj (descendants), in order: "what would `Delete` take with it?" |
 
 These return data in the `TxResult` (they do not create objects). `DependsOn` and `Uses` can also be called as `figure.ancestorsOf` and `figure.dependentsOf`.
+
+### What a rule can ask the kernel
+
+A rule sees the figure through its `RuleCall`. Besides its own arguments it has four services, all read-only:
+
+- `call.notify(kind, params)`: adds a notice to the result of the line that ran the rule. It is for a value that is defined and still needs a remark, such as an ODE solution that stops at a blow-up. The kind is registered with `registerNotice`. One notice per kind and line is kept.
+- `call.inputsOf(id)`: the objects another object's value reads directly, with their names and values.
+- `call.argsOf(id)`: the values of the arguments of the command that defines another object. `P = PointOn(Segment(A, B), 0.3)` gives the segment and `0.3`.
+- `call.slice(source, target, { override: true })`: a slice whose source is defined by a rule. `run(values)` puts each value in place of the source's own value and re-runs what lies between it and the target. `Locus(Q, P)` uses it to move `P` along its path: it finds the path with `argsOf` and feeds the path's points in. Without `override`, a source that is not free is still the error `not_free`.
+
+### What an area can add to a line
+
+Areas plug into how a line is read without changing the core. Each hook is registered once, when the area registers
+its commands, and a hook that throws is skipped.
+
+- `registerLineHandler(handler)`: a line kind the area owns outright, such as `on go click: SetValue(a, 0)`. The handler
+  carries the line out and returns its summary with an `undo` and a `redo`; the kernel records them as one undo entry
+  (`ext`). On a dry run the handler leaves nothing changed. It may also refuse the line with an error.
+- `registerLineRewriter(rewriter)`: reads the line before it is parsed. It may put another line in its place
+  (`a with min = 0, max = 20` becomes the slider's range line), add notices, refuse the line, or ask that a slider's
+  range be dropped (`dropRange`).
+- `registerLineCheck(check)`: runs after the language check and before anything is committed, and may refuse the line.
+- `registerScriptTail(tail)`: lines the area adds at the end of `toScript`, after every object.
+- `registerDeleteNotes(notes)`: notices the area adds to the result of a delete.
+- `registerFieldReader(type, reader)` and `registerFieldTyper(type, typer)`: evaluate and type the fields an area adds to
+  `FIELDS`. A typer types a field from the object itself (`d.value` has the type of the dropdown's options). A field that
+  holds a function can be called: `g.value(x)`.
+- `registerFieldNames(type, names)`: the full list of a type's fields (a record's schema). A missing field is then
+  `unknown_field` listing the real ones.
+- `registerBinaryOp(row)`, `registerUnaryOp(row)` and `registerIndexOp(row)`: an area's rows of the operator table and
+  its indexing (`A * B` and `M[i]` for matrices, `xs + ys` for lists). They are asked only when no core row fits; the node
+  keeps the area's implementation, which gets defined values and sets its own reasons.
+- `registerValueText(texter)`: the summary text of a value the area owns (`Matrix 2×2 [[1, 2], [3, 4]]`).
+- Parameter types `@list` (the element type of the list parameter `list`) and `=init` on a binder (the type of the
+  parameter `init`); `Record<Schema>` types whose fields come from the schema. Value parameters are checked before
+  binders, so a binder may name a list written after it (`Zip(expr, a, listA, …)`).
+
+### Commands two areas both give
+
+Two areas may register a command of the same name and kind (`Tangent` of a conic and of a function). The registry
+merges them into one: the second area's forms are added after the first's, a form with the same parameter types as one
+already there is left out, and both refusals are asked in turn.
+
+### Dragging a number written in a line
+
+An inverse may return a value for an argument that is a number written in the line itself (`P = PointOn(c, 0.25)`).
+The drag plan then holds a write with `param` set, and the drag rewrites that number in the line. The whole gesture is
+one undo entry on `commitDrag`, like a drag of a free point.
+
+### What a rule and an action receive
+
+- A rule factory gets each argument's checked tree in `BoundArg.expr`, so a rule can compile a formula further (the
+  particle formulas go to GLSL).
+- A body argument with names of its own (`u`, `age` in `Particles`) records each name's local slot in `scopeSlots`; the
+  rule writes those slots before it evaluates the body.
+- An area action gets the evaluated value of every argument that is not a plain object name in `ActionCall.values`;
+  the objects are in `ActionCall.objects`.
+
+### Work on each frame
+
+`registerFrameTicker(ticker)` adds work an area does each time the player moves the clock, before the pass: traces add
+their samples, and rebuild on a seek. The player itself is pure: the host gives it a time source and calls
+`frame(now)` from its one animation-frame loop.
+
+The numbers area's animated sliders are a frame ticker too, so `Animate(a)` follows `Play()` and seeks.
+
+`registerDragListener(listener)` adds work an area does after each step of a drag gesture, with the objects whose value
+changed: drag traces add their samples.
+
+### A slice over the clock reads the states
+
+It also replays free values an area moves with the clock (animated sliders): `registerClockDriven(provider)` names them
+and gives each one's value at a film time, and the slice sets them for each time like states.
+
+`slice('t', target)` sets the states the target reads from the state solver's dense output at each time
+(`Slice.states` names them), so a trace or a `Path` of an object that moves through states is right for any time, not
+only the current one. Nothing is written; the states' cells are put back.
+
+### The input log in the script
+
+The state solver's input log is saved at the end of the script as `@input` lines (`@input L 1 base`,
+`@input L 2 at 12.5`, `@input reset at 20`). Reading one puts the entry back into the log; it is not kept as a script
+item, so saving again writes the log once.
 
 ### Naming helper for tools
 
