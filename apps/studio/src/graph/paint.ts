@@ -215,6 +215,42 @@ const viewBox = (vp: Viewport) => {
 /** The pixel paths of a plot result (maths y up is already pixel y down in the plot package). */
 const okPaths = (r: { ok: boolean; value?: { paths: readonly Float64Array[] } }): readonly Float64Array[] => (r.ok && r.value ? r.value.paths : []);
 
+const valueAt = (f: FunctionValue, x: number): number => (f.call1 ? f.call1(x) : (f.call(x) as number));
+
+/** A mass function: a stem and a dot at each whole number (probability design 8). */
+function paintLattice(ctx: Ctx, vp: Viewport, f: FunctionValue, c: string): void {
+  const box = vp.box();
+  const step = Math.max(1, Math.ceil((box.x1 - box.x0) / 400));
+  for (let k = Math.ceil(box.x0 / step) * step; k <= box.x1; k += step) {
+    const p = valueAt(f, k);
+    if (!(p > 0)) continue;
+    stroke(ctx, [[vp.px(k), vp.py(0), vp.px(k), vp.py(p)]], c, 2);
+    dot(ctx, vp.px(k), vp.py(p), 3.5, c, false);
+  }
+}
+
+/** A right-continuous step function of whole numbers: a flat piece per step, filled dot on the left, open on the right. */
+function paintSteps(ctx: Ctx, vp: Viewport, f: FunctionValue, c: string): void {
+  const box = vp.box();
+  if (box.x1 - box.x0 > 400) {
+    plotFn(ctx, vp, f, c);
+    return;
+  }
+  for (let k = Math.floor(box.x0); k <= box.x1; k++) {
+    const y = valueAt(f, k);
+    if (!Number.isFinite(y)) continue;
+    stroke(ctx, [[vp.px(k), vp.py(y), vp.px(k + 1), vp.py(y)]], c, 2.5);
+    dot(ctx, vp.px(k), vp.py(y), 3.5, c, false);
+    ctx.beginPath();
+    ctx.arc(vp.px(k + 1), vp.py(y), 3.5, 0, Math.PI * 2);
+    ctx.fillStyle = '#ffffff';
+    ctx.fill();
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = c;
+    ctx.stroke();
+  }
+}
+
 function plotFn(ctx: Ctx, vp: Viewport, f: FunctionValue, color: string): void {
   const r = plotFunction(f, viewBox(vp)) as unknown as { ok: boolean; value?: { paths: readonly Float64Array[] } };
   stroke(ctx, okPaths(r), color);
@@ -289,7 +325,11 @@ export function paintItem(ctx: Ctx, vp: Viewport, it: SceneItem, hits: Hit[]): v
       return;
     }
     case 'Function': {
-      if (isFn(v) && v.arity === 1 && v.ret === 'Number') plotFn(ctx, vp, v, c);
+      if (!isFn(v) || v.arity !== 1 || v.ret !== 'Number') return;
+      const flags = v as unknown as { lattice?: boolean; step?: boolean };
+      if (flags.lattice) paintLattice(ctx, vp, v, c);
+      else if (flags.step) paintSteps(ctx, vp, v, c);
+      else plotFn(ctx, vp, v, c);
       return;
     }
     case 'Curve':
@@ -309,7 +349,8 @@ export function paintItem(ctx: Ctx, vp: Viewport, it: SceneItem, hits: Hit[]): v
     case 'Record':
       if (isRec(v) && v.schema === 'Fit') paintFit(ctx, vp, v, c);
       return;
-    case 'Distribution':
+    case 'ContinuousDistribution':
+    case 'DiscreteDistribution':
       paintDist(ctx, vp, v as { spec: { discrete: boolean; pdf: (p: readonly number[], x: number) => number }; params: readonly number[] }, c);
       return;
     default:
@@ -434,6 +475,13 @@ function paintCurveLike(ctx: Ctx, vp: Viewport, v: unknown, c: string): void {
     const f = o['f'] as (x: number) => number;
     const g = (o['g'] as ((x: number) => number) | null) ?? (() => 0);
     const box = vp.box();
+    if (shape.t === 'tails') {
+      // left of a and right of b (ShadeTails)
+      ctx.fillStyle = alpha(c, 0.32);
+      fillBetween(ctx, vp, f, g, box.x0 - 1, Math.min(shape.a, box.x1 + 1));
+      fillBetween(ctx, vp, f, g, Math.max(shape.b, box.x0 - 1), box.x1 + 1);
+      return;
+    }
     const a = Math.max(shape.a, box.x0 - 1);
     const b = Math.min(shape.b, box.x1 + 1);
     if (!(b > a)) return;
@@ -474,6 +522,30 @@ function paintCurveLike(ctx: Ctx, vp: Viewport, v: unknown, c: string): void {
     ctx.closePath();
     ctx.fill();
   }
+}
+
+/** Fills between f and g from a to b with the current fill style. */
+function fillBetween(ctx: Ctx, vp: Viewport, f: (x: number) => number, g: (x: number) => number, a: number, b: number): void {
+  if (!(b > a)) return;
+  const n = 300;
+  ctx.beginPath();
+  let started = false;
+  for (let i = 0; i <= n; i++) {
+    const x = a + ((b - a) * i) / n;
+    const y = f(x);
+    if (!Number.isFinite(y)) continue;
+    if (!started) {
+      ctx.moveTo(vp.px(x), vp.py(y));
+      started = true;
+    } else ctx.lineTo(vp.px(x), vp.py(y));
+  }
+  for (let i = n; i >= 0; i--) {
+    const x = a + ((b - a) * i) / n;
+    const y = g(x);
+    if (Number.isFinite(y)) ctx.lineTo(vp.px(x), vp.py(y));
+  }
+  ctx.closePath();
+  ctx.fill();
 }
 
 function paintField(ctx: Ctx, vp: Viewport, f: { slope: (x: number, y: number) => number; n: number }, c: string): void {
@@ -560,18 +632,22 @@ function paintChart(ctx: Ctx, vp: Viewport, it: SceneItem, hits: Hit[]): void {
       if (F['scale'] === 'density' && e.length > 1) badge(ctx, vp.px(e[0] as number), vp.py(Math.max(...h)) - 22, 'heights are density');
       return;
     }
-    case 'BarChart': {
+    case 'BarChart':
+    case 'ShadedBars': {
       const xs = nums(F['xs']);
       const h = nums(F['heights']);
       const w = (F['width'] as number) ?? 1;
       const labels = (F['labels'] as string[] | undefined) ?? [];
+      const inside = r.schema === 'ShadedBars' ? nums(F['inside']) : undefined;
       const y0 = vp.py(0);
       xs.forEach((x, k) => {
+        if (inside && !((h[k] as number) > 0)) return;
         const half = (w * 0.8) / 2;
         const x0 = vp.px(x - half);
         const x1 = vp.px(x + half);
         const y1 = vp.py(h[k] as number);
-        ctx.fillStyle = alpha(c, 0.7);
+        // a shaded interval: full colour inside, pale outside (probability ui 3.2)
+        ctx.fillStyle = alpha(c, inside ? (inside[k] ? 0.85 : 0.22) : 0.7);
         ctx.fillRect(x0, Math.min(y0, y1), x1 - x0, Math.abs(y1 - y0));
         hits.push({ k: 'rect', x0, y0: Math.min(y0, y1, y0 - 24), x1, y1: Math.max(y0, y1), text: `${labels[k] ?? fmt(x)}: ${fmt(h[k] as number)}`, id: it.id });
       });
@@ -788,7 +864,7 @@ export function paintScene(ctx: Ctx, vp: Viewport, items: readonly SceneItem[]):
   stemOffset = 0;
   paintGrid(ctx, vp);
   // areas and charts first, then curves, then points on top
-  const rank = (t: string): number => (t === 'Point' ? 3 : t === 'Chart' || t === 'Region' || t === 'Polygon' || t === 'Distribution' ? 0 : t === 'List' ? 2 : 1);
+  const rank = (t: string): number => (t === 'Point' ? 3 : t === 'Chart' || t === 'Region' || t === 'Polygon' || t.endsWith('Distribution') ? 0 : t === 'List' ? 2 : 1);
   const sorted = [...items].sort((a, b) => rank(a.type) - rank(b.type));
   for (const it of sorted) {
     try {
@@ -834,7 +910,7 @@ export function sceneBounds(items: readonly SceneItem[]): { x0: number; x1: numb
         const e = nums(F['edges']);
         add(e[0] as number, 0);
         add(e[e.length - 1] as number, Math.max(0, ...nums(F['heights'])));
-      } else if (v.schema === 'BarChart') {
+      } else if (v.schema === 'BarChart' || v.schema === 'ShadedBars') {
         const xs = nums(F['xs']);
         const w = (F['width'] as number) ?? 1;
         add(Math.min(...xs) - w, 0);
@@ -861,7 +937,7 @@ export function sceneBounds(items: readonly SceneItem[]): { x0: number; x1: numb
       } else {
         for (const p of ((F['points'] as Pt[]) ?? [])) add(p.x, p.y);
       }
-    } else if (it.type === 'Distribution') {
+    } else if (it.type.endsWith('Distribution')) {
       const d = v as { spec: { discrete: boolean; pdf: (p: readonly number[], x: number) => number; quantile: (p: readonly number[], q: number) => number }; params: readonly number[] };
       const lo = d.spec.quantile(d.params, 0.001);
       const hi = d.spec.quantile(d.params, 0.999);

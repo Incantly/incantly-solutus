@@ -48,7 +48,7 @@ export interface CompiledArg {
 
 export interface CompileOptions {
   /** Runs a command form inside an expression. Provided by the kernel. */
-  runCommand?: (spec: CommandSpec, form: CommandForm, args: readonly CompiledArg[], env: Env) => unknown;
+  runCommand?: (spec: CommandSpec, form: CommandForm, args: readonly CompiledArg[], env: Env, site?: number) => unknown;
   /** The id the kernel gave the object this line defines: a style value that names that object (`SELF_ID`) reads it (Q-R4-1). */
   selfId?: ObjId;
 }
@@ -1037,7 +1037,7 @@ class Compiler {
         fail(env, 'not_set', `${n.spec.name} is evaluated by the kernel`);
         return undef;
       }
-      return run(n.spec, n.form, args, env);
+      return run(n.spec, n.form, args, env, n.s);
     };
   }
 

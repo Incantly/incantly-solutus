@@ -105,6 +105,7 @@ export function betaI(x: number, a: number, b: number): number {
 export function erfc(x: number): number {
   if (x < 0) return 2 - erfc(-x);
   if (x === 0) return 1;
+  if (x > 27) return 0;
   return gammaPQ(0.5, x * x).q;
 }
 

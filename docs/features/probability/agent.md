@@ -214,3 +214,17 @@ p = Prob(d, 62, inf)
 | Typical `draw` result for three lines | 120 to 220 |
 
 Together at most 830 when both are loaded.
+
+## 7. As built (second round)
+
+- **Two types.** Constructors return `ContinuousDistribution` or `DiscreteDistribution`; `Distribution` in a signature
+  accepts both. `Shade(d, a, b)` is a `Region` for a continuous `d` and a `Chart<ShadedBars>` for a discrete one (with
+  `ends`); both have `.mass`, the probability. `BarChart(d)` takes only a discrete distribution.
+- **`F(d1, d2)` is `FDist(d1, d2)`**: `F` is a common point name.
+- **`seed =` is named only.** `RandomInt(1, 6, 10)` is ten numbers; `RandomInt(1, 6, seed = 3)` is one.
+- **Same script, same numbers.** Random values come from `@seed`, the object's name, where the call sits in its line and
+  `with reroll = k`. Renaming an object changes its numbers. `Reroll(xs)` adds one to the count; on a free number used as
+  a seed it adds one to the number.
+- **`Kurtosis(d)` is the plain kurtosis** (3 for a normal), like `Kurtosis(list)`.
+- **`Shuffle(list, seed)`** stays the lists command: its seed is the second argument, not the figure seed.
+- Notices: `probs_normalised` P101, `probs_not_normalised` P102, `rounding_discrete_quantile` P103, `heavy_tail_plot` P104.

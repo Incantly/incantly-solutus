@@ -162,16 +162,16 @@ export interface DataLab {
   readonly state: LabState;
 }
 
-const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls = '', text = ''): HTMLElementTagNameMap[K] => {
+export const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls = '', text = ''): HTMLElementTagNameMap[K] => {
   const node = document.createElement(tag);
   if (cls) node.className = cls;
   if (text) node.textContent = text;
   return node;
 };
 
-const fmt = (x: unknown): string => (typeof x === 'number' ? (Number.isFinite(x) ? String(Number(x.toPrecision(4))) : String(x)) : x === undefined ? '—' : valueText(x));
+export const fmt = (x: unknown): string => (typeof x === 'number' ? (Number.isFinite(x) ? String(Number(x.toPrecision(4))) : String(x)) : x === undefined ? '—' : valueText(x));
 
-function select(label: string, options: readonly (readonly [string, string])[], value: string, on: (v: string) => void): HTMLLabelElement {
+export function select(label: string, options: readonly (readonly [string, string])[], value: string, on: (v: string) => void): HTMLLabelElement {
   const l = el('label', 'field');
   l.append(el('span', 'field-label', label));
   const s = el('select');
@@ -186,7 +186,7 @@ function select(label: string, options: readonly (readonly [string, string])[], 
   return l;
 }
 
-function number(label: string, value: number | string, on: (v: string) => void, attrs: Record<string, string> = {}): HTMLLabelElement {
+export function number(label: string, value: number | string, on: (v: string) => void, attrs: Record<string, string> = {}): HTMLLabelElement {
   const l = el('label', 'field small');
   l.append(el('span', 'field-label', label));
   const i = el('input');
@@ -198,7 +198,7 @@ function number(label: string, value: number | string, on: (v: string) => void, 
   return l;
 }
 
-function check(label: string, value: boolean, on: (v: boolean) => void): HTMLLabelElement {
+export function check(label: string, value: boolean, on: (v: boolean) => void): HTMLLabelElement {
   const l = el('label', 'check');
   const i = el('input');
   i.type = 'checkbox';
@@ -208,7 +208,7 @@ function check(label: string, value: boolean, on: (v: boolean) => void): HTMLLab
   return l;
 }
 
-function segmented<T extends string>(options: readonly (readonly [T, string])[], value: T, on: (v: T) => void, label: string): HTMLElement {
+export function segmented<T extends string>(options: readonly (readonly [T, string])[], value: T, on: (v: T) => void, label: string): HTMLElement {
   const g = el('div', 'seg');
   g.setAttribute('role', 'radiogroup');
   g.setAttribute('aria-label', label);
@@ -223,7 +223,7 @@ function segmented<T extends string>(options: readonly (readonly [T, string])[],
   return g;
 }
 
-function statsTable(rows: readonly (readonly [string, unknown])[]): HTMLElement {
+export function statsTable(rows: readonly (readonly [string, unknown])[]): HTMLElement {
   const t = el('dl', 'stats');
   for (const [k, v] of rows) t.append(el('dt', '', k), el('dd', '', fmt(v)));
   return t;

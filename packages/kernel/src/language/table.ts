@@ -20,6 +20,8 @@ export interface ParamSpec {
    */
   readonly type: string;
   readonly optional?: boolean;
+  /** Only given by name (`seed = 3`), never by position. Such parameters come last and are optional. */
+  readonly named?: boolean;
   /**
    * Default `value`. A `binder` is a bare name that becomes a local; with a list type (`List<Number>`) it is a list of
    * bare names, each a local. A `body` is checked in the binders' scope.

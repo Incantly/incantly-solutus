@@ -97,7 +97,19 @@ export const EXAMPLES: readonly Example[] = [
       'd = Normal(mu, sigma)',
       'area = Shade(d, mu - sigma, mu + sigma)',
       'p = Prob(d, mu - sigma, mu + sigma)',
-      'b = BarChart(Binomial(10, 0.4))',
+      'b = Shade(Binomial(10, 0.4), 3, 6)',
+    ],
+  },
+  {
+    id: 'random',
+    title: 'Probability: dice, samples and seeds',
+    lines: [
+      '@seed 7',
+      'n = 60 in 1..600 step 1',
+      'die = DiscreteUniform(1, 6)',
+      'rolls = Sample(die, n)',
+      'tally = BarChart(rolls, 1)',
+      'avg = Mean(rolls)',
     ],
   },
   {

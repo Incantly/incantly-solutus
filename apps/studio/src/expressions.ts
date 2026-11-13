@@ -12,7 +12,7 @@ import { miniCurve, miniInterval } from './mini';
 import type { KernelSession } from './session';
 
 /** Types that draw on the graph and so get a swatch. */
-const DRAWN = new Set(['Point', 'Vector', 'Segment', 'Line', 'Ray', 'Circle', 'Arc', 'Polygon', 'Function', 'Curve', 'Relation', 'Region', 'Field', 'Chart', 'Distribution']);
+const DRAWN = new Set(['Point', 'Vector', 'Segment', 'Line', 'Ray', 'Circle', 'Arc', 'Polygon', 'Function', 'Curve', 'Relation', 'Region', 'Field', 'Chart', 'ContinuousDistribution', 'DiscreteDistribution']);
 
 export function drawsOnGraph(type: string, typeText: string, value: unknown): boolean {
   const base = type.replace(/<.*$/, '');

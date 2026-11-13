@@ -456,8 +456,8 @@ export const CHART_COMMANDS: readonly CommandSpec[] = [
     form([p('labels', 'List<Text>'), p('heights', L)], 'Chart<BarChart>', runBarLabels, 'labelled bars'),
     form([p('xs', L), p('heights', L), p('width', 'Number')], 'Chart<BarChart>', runBarXs, 'bars of a width at positions'),
     form([p('list', L), p('width', 'Number')], 'Chart<BarChart>', runBarData, 'a bar for each distinct value, as tall as its count'),
-    form([p('d', 'Distribution')], 'Chart<BarChart>', runBarDist, 'the probability of each whole number of a discrete distribution'),
-    form([p('d', 'Distribution'), p('from', 'Number'), p('to', 'Number')], 'Chart<BarChart>', runBarDist, 'the probabilities from from to to'),
+    form([p('d', 'DiscreteDistribution')], 'Chart<BarChart>', runBarDist, 'the probability of each whole number of a discrete distribution'),
+    form([p('d', 'DiscreteDistribution'), p('from', 'Number'), p('to', 'Number')], 'Chart<BarChart>', runBarDist, 'the probabilities from from to to'),
     form([{ name: 'expr', type: 'Number', kind: 'body' }, { name: 'k', type: 'Number', kind: 'binder' }, p('from', 'Number'), p('to', 'Number')], 'Chart<BarChart>', runBarExpr, 'a bar at each whole k from from to to'),
   ]),
   chart('FrequencyPolygon', [
