@@ -13,6 +13,8 @@ export interface Ty {
   readonly ret?: TypeName;
   /** Parameter count of a Function (1 to 4). */
   readonly arity?: number;
+  /** Schema name of a Record (`Record<LU>`): its fields come from `recordSchema`. Undefined in a parameter accepts any. */
+  readonly schema?: string;
 }
 
 const mk = (k: Ty['k']): Ty => ({ k });
@@ -55,6 +57,7 @@ export function tyEq(a: Ty, b: Ty): boolean {
   if (a.k !== b.k) return false;
   if (a.k === 'List') return a.of !== undefined && b.of !== undefined ? tyEq(a.of, b.of) : a.of === b.of;
   if (a.k === 'Function') return a.ret === b.ret && a.arity === b.arity;
+  if (a.k === 'Record') return a.schema === b.schema;
   return true;
 }
 
@@ -65,6 +68,7 @@ export function tyStr(t: Ty): string {
     const r = t.ret ?? 'Number';
     return t.arity !== undefined && t.arity > 1 ? `Function<${r}>(${t.arity})` : `Function<${r}>`;
   }
+  if (t.k === 'Record' && t.schema !== undefined) return `Record<${t.schema}>`;
   return t.k;
 }
 
@@ -117,6 +121,10 @@ export function parseTy(text: string): Ty | undefined {
     if (n[2] !== undefined && count !== undefined) return undefined;
     return arity ? { k: 'Function', ret: n[1] as TypeName, arity: Number(arity) } : { k: 'Function', ret: n[1] as TypeName };
   }
+  if (base === 'Record') {
+    if (inner === undefined) return { k: 'Record' as TypeName };
+    return /^\w+$/.test(inner) ? { k: 'Record' as TypeName, schema: inner } : undefined;
+  }
   if (inner !== undefined) return undefined;
   return { k: base as TypeName };
 }
@@ -143,12 +151,15 @@ export function typeTextProblem(text: string, known: ReadonlySet<string>): strin
 function oneTypeProblem(t: string, known: ReadonlySet<string>): string | undefined {
   if (t === '') return 'an empty type';
   if (t === 'Any' || t === 'Function2' || Object.hasOwn(TYPE_ALIASES, t)) return undefined;
+  // `@list`: the element type of the list parameter named list (a binder, a value or a result)
+  if (/^@\w+$/.test(t)) return undefined;
   const m = /^(\w+)(?:<(.+)>)?(?:\((\d)\))?$/.exec(t);
   if (!m) return t;
   const base = m[1] as string;
   const inner = m[2];
   const count = m[3];
   if (base === 'List') return count === undefined ? (inner === undefined ? undefined : oneTypeProblem(inner.trim(), known)) : t;
+  if (base === 'Record') return count === undefined && (inner === undefined || /^\w+$/.test(inner)) && known.has('Record') ? undefined : t;
   if (base === 'Function') {
     if (inner === undefined) return count === undefined ? undefined : t;
     const n = /^(\w+)(?:\s*,\s*(\d))?$/.exec(inner);
@@ -204,6 +215,7 @@ export function memberAccepts(member: Ty, t: Ty): boolean {
     if (member.arity !== undefined && member.arity !== t.arity) return false;
     return true;
   }
+  if (member.k === 'Record') return member.schema === undefined || member.schema === t.schema;
   return true;
 }
 
@@ -239,18 +251,73 @@ export function setsIntersect(a: TypeSet, b: TypeSet): boolean {
 
 export type OpVariant =
   | 'num' | 'num*vec' | 'vec*num' | 'vec/num' | 'vec+vec' | 'vec-vec' | 'pt+vec' | 'pt-vec' | 'pt-pt'
-  | 'fn' | 'text+text' | 'bool' | 'list-num' | 'cmp-eq' | 'cmp-num';
+  | 'fn' | 'text+text' | 'bool' | 'list-num' | 'cmp-eq' | 'cmp-num' | 'area';
+
+/**
+ * An area's operator: it gets the two values (never undefined) and the evaluation environment, and returns the result or
+ * `undefined` after setting a reason (`fail(env, reason, detail)`).
+ */
+export type AreaOpImpl = (a: unknown, b: unknown, env: unknown) => unknown;
 
 export interface OpResult {
   readonly result: Ty;
   readonly variant: OpVariant;
+  /** For an area's row (`variant: 'area'`). */
+  readonly impl?: AreaOpImpl;
+}
+
+/** An area's rows of the operator table (a Matrix area adds `A * B`). Consulted only when no core row fits. */
+export type AreaBinaryRow = (op: string, l: Ty, r: Ty) => { readonly result: Ty; readonly impl: AreaOpImpl } | undefined;
+/** An area's unary rows (`-A`). */
+export type AreaUnaryRow = (op: string, a: Ty) => { readonly result: Ty; readonly impl: (a: unknown, env: unknown) => unknown } | undefined;
+/** An area's indexing (`M[i]`): the result type for a target and index type, and how to read it. */
+export type AreaIndexRow = (target: Ty, index: Ty) => { readonly result: Ty; readonly impl: AreaOpImpl } | undefined;
+
+const AREA_BINARY: AreaBinaryRow[] = [];
+const AREA_UNARY: AreaUnaryRow[] = [];
+const AREA_INDEX: AreaIndexRow[] = [];
+
+export function registerBinaryOp(row: AreaBinaryRow): void {
+  if (!AREA_BINARY.includes(row)) AREA_BINARY.push(row);
+}
+export function registerUnaryOp(row: AreaUnaryRow): void {
+  if (!AREA_UNARY.includes(row)) AREA_UNARY.push(row);
+}
+export function registerIndexOp(row: AreaIndexRow): void {
+  if (!AREA_INDEX.includes(row)) AREA_INDEX.push(row);
+}
+
+export function areaUnaryOp(op: string, a: Ty): ReturnType<AreaUnaryRow> {
+  for (const row of AREA_UNARY) {
+    const r = row(op, a);
+    if (r) return r;
+  }
+  return undefined;
+}
+
+export function areaIndexOp(target: Ty, index: Ty): ReturnType<AreaIndexRow> {
+  for (const row of AREA_INDEX) {
+    const r = row(target, index);
+    if (r) return r;
+  }
+  return undefined;
+}
+
+/** Binary arithmetic and comparison: the core rows, then the areas' rows. Exact match on both operand types, no coercion. */
+export function binaryOp(op: string, l: Ty, r: Ty): OpResult | undefined {
+  const core = coreBinaryOp(op, l, r);
+  if (core) return core;
+  for (const row of AREA_BINARY) {
+    const x = row(op, l, r);
+    if (x) return { result: x.result, variant: 'area', impl: x.impl };
+  }
+  return undefined;
 }
 
 const isFnNum = (t: Ty): boolean => t.k === 'Function' && t.ret === 'Number';
 const EQ_TYPES: ReadonlySet<string> = new Set(['Number', 'Bool', 'Text', 'Point', 'Vector']);
 
-/** Binary arithmetic and comparison. Exact match on both operand types, no coercion. */
-export function binaryOp(op: string, l: Ty, r: Ty): OpResult | undefined {
+function coreBinaryOp(op: string, l: Ty, r: Ty): OpResult | undefined {
   const arith = op === '+' || op === '-' || op === '*' || op === '/' || op === '^';
   if (arith) {
     if (l.k === 'Number' && r.k === 'Number') return { result: T.Number, variant: 'num' };

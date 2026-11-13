@@ -122,6 +122,24 @@ function mkPt(env: Env, x: number, y: number): Pt | undefined {
   return { x, y };
 }
 
+/** An area's operator (`variant: 'area'`): undefined operands give `input_undefined`; the area sets its own reasons. */
+function areaBinary(l: Fn, r: Fn, impl: (a: unknown, b: unknown, env: unknown) => unknown, isN: boolean): Fn {
+  return (env) => {
+    const a = l(env);
+    const b = r(env);
+    if (a === undefined || b === undefined || (typeof a === 'number' && a !== a) || (typeof b === 'number' && b !== b)) {
+      undefIn(env);
+      return isN ? NAN : undefined;
+    }
+    const v = impl(a, b, env);
+    if (v === undefined || (typeof v === 'number' && v !== v)) {
+      if (env.reason === undefined) env.reason = 'input_undefined';
+      return isN ? NAN : undefined;
+    }
+    return v;
+  };
+}
+
 /** An operand of an arithmetic operation was undefined: the result is undefined with `input_undefined` unless a reason is already set. */
 function undefIn(env: Env): void {
   if (env.reason === undefined) env.reason = 'input_undefined';
@@ -609,6 +627,17 @@ class Compiler {
 
   compileUnary(n: TNode & { n: 'unary' }): Fn {
     const a = this.compile(n.arg);
+    const areaImpl = n.impl;
+    if (areaImpl) {
+      return (env) => {
+        const v = a(env);
+        if (v === undefined || (typeof v === 'number' && v !== v)) {
+          undefIn(env);
+          return undefined;
+        }
+        return areaImpl(v, env);
+      };
+    }
     if (n.op === 'not') {
       return (env) => {
         const v = a(env);
@@ -647,6 +676,8 @@ class Compiler {
     const l = this.compile(n.l);
     const r = this.compile(n.r);
     const op = n.op;
+    const areaImpl = n.impl;
+    if (n.variant === 'area' && areaImpl) return areaBinary(l, r, areaImpl, isNum(n));
     switch (n.variant) {
       case 'num':
         switch (op) {
@@ -848,6 +879,7 @@ class Compiler {
   compileCmp(n: TNode & { n: 'cmp' }): Fn {
     const fs = n.operands.map((o) => this.compile(o));
     const ops = n.ops;
+    const impls = n.impls;
     const tys = n.operands.map((o) => o.ty.k);
     return (env) => {
       let prev = (fs[0] as Fn)(env);
@@ -856,7 +888,11 @@ class Compiler {
         const next = (fs[i + 1] as Fn)(env);
         const op = ops[i] as string;
         let res: boolean | undefined;
-        if (op === '==' || op === '!=') {
+        const areaEq = impls?.[i];
+        if (areaEq) {
+          const r = prev === undefined || next === undefined ? undefined : (areaEq(prev, next, env) as boolean | undefined);
+          res = r === undefined ? undefined : op === '!=' ? !r : r;
+        } else if (op === '==' || op === '!=') {
           const eq = valueEq(prev, next);
           res = eq === undefined ? undefined : op === '==' ? eq : !eq;
         } else {
@@ -1060,6 +1096,7 @@ class Compiler {
     const t = this.compile(n.target);
     const i = this.compile(n.index);
     const isN = isNum(n);
+    if (n.impl) return areaBinary(t, i, n.impl, isN);
     return (env) => {
       const list = t(env) as ArrayLike<unknown> | undefined;
       const k = i(env);

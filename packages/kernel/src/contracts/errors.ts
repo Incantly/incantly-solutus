@@ -71,6 +71,9 @@ export interface AreaErrorKinds {
   bad_particle_value: true;
   particle_name_outside: true;
   particle_command: true;
+  // lists-matrices (codes C070 to C089)
+  unknown_field: true;
+  bad_option: true;
 }
 
 export type ErrorKind = CoreErrorKind | Extract<keyof AreaErrorKinds, string>;
