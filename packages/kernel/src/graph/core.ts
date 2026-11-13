@@ -165,6 +165,8 @@ export class FigureCore {
   protected readonly tolOption: number;
   /** Set by the state solver: advances the states to the clock and returns the state objects whose value changed. */
   protected stateDriver: (() => ObjRec[]) | undefined;
+  /** Set by the state solver: the state objects, and the cell each has at a film time (for a slice over the clock). */
+  protected stateSampler: { readonly recs: () => readonly ObjRec[]; readonly at: (t: number) => readonly (readonly [ObjRec, Cell])[] | undefined } | undefined;
 
   constructor(opts: FigureOptions = {}) {
     if (typeof opts !== 'object' || opts === null) opts = {};
@@ -510,11 +512,17 @@ export class FigureCore {
     if (src) for (const o of this.downOf(src)) downIdx.add(o);
     else for (const o of this.clockDown()) downIdx.add(o);
     const anc = this.ancestorRecs([t]);
+    // over the clock, the states the target reads take their value at each time from the solver's dense output
+    const ancOrders = new Set(anc.map((r) => r.order));
+    const states = !src && this.stateSampler ? this.stateSampler.recs().filter((r) => ancOrders.has(r.order) || r === t) : [];
+    for (const st of states) for (const o of this.downOf(st)) downIdx.add(o);
     const chain = anc.filter((r) => downIdx.has(r.order) && r.p.kind === 'rule');
-    const touched = src ? [src, ...chain] : chain;
+    const touched = src ? [src, ...chain] : [...states, ...chain];
+    const sampler = states.length > 0 ? this.stateSampler : undefined;
     const env = this.env;
     return {
       chain: chain.map((r) => r.p.name),
+      ...(states.length > 0 ? { states: states.map((r) => r.p.name) } : {}),
       run: (values) => {
         const saved = touched.map((r) => r.cell);
         const stale = touched.map((r) => r.stale);
@@ -535,6 +543,10 @@ export class FigureCore {
               env.t = v as number;
               env.bt = v as number;
               this.clockState.t = v as number;
+              if (sampler) {
+                const cells = sampler.at(v as number);
+                if (cells) for (const [rec, cell] of cells) if (states.includes(rec)) rec.cell = cell;
+              }
             }
             for (const r of chain) r.cell = this.compute(r);
             out.push(t.cell);

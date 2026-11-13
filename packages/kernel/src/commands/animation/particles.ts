@@ -8,6 +8,8 @@
  * The object's value carries the plain spec the view draws with and the program that fills a batch (CPU) or gives
  * shader sources (GPU): the `ParticleProgram` contract of `packages/view/src/contracts.ts`.
  */
+import type { Notice } from '../../contracts/errors';
+import { makeNotice } from '../../errors/notices';
 import type { CommandRule, RuleCall } from '../../graph/registry';
 import type { CompiledArg } from '../../language/compile';
 import type { Env } from '../../language/runtime';
@@ -28,6 +30,8 @@ export const PARTICLE_ONLY_NAMES: ReadonlySet<string> = new Set(['u', 'v', 'w', 
 export const SHAPES = ['dot', 'ring', 'square', 'streak', 'spark'] as const;
 export const BLENDS = ['normal', 'add'] as const;
 export const RENDERERS = ['auto', 'cpu', 'gpu'] as const;
+/** What `size` is measured in: maths units (it scales with zoom) or screen pixels (`size = px(4)`). */
+export const SIZE_UNITS = ['units', 'px'] as const;
 
 type Shape = (typeof SHAPES)[number];
 type Blend = (typeof BLENDS)[number];
@@ -50,6 +54,7 @@ export const PARTICLE_PARAMS: Readonly<Record<string, { readonly required: boole
   seed: { required: false },
   layer: { required: false },
   renderer: { required: false },
+  sizeUnit: { required: false },
 };
 
 /* ------------------------------ the shared hash ------------------------------ */
@@ -79,6 +84,8 @@ export interface ParticleSpecPlain {
   readonly shape: Shape;
   readonly blend: Blend;
   readonly sizeIsPx: boolean;
+  /** Draw layer 0..9, as other objects (10.2). */
+  readonly layer?: number;
   readonly start: number;
   readonly end: number;
   readonly loop: boolean;
@@ -449,6 +456,20 @@ class GlslEmitter {
         }
         return out;
       }
+      case 'command': {
+        if (n.spec.name !== 'Gradient') throw new Unsupported('command:' + n.spec.name);
+        {
+          // an even ramp: each later colour mixes in over its own stretch of x, so one chain of mix() is the whole ramp
+          const trees = n.args.map((a) => a.expr);
+          if (trees.some((t) => t === undefined)) throw new Unsupported('command:Gradient');
+          const x = this.emit(trees[0] as TNode);
+          const cs = trees.slice(1).map((t) => this.emit(t as TNode));
+          const s = `(clamp(${x}, 0.0, 1.0) * ${(cs.length - 1).toFixed(1)})`;
+          let out = cs[0] as string;
+          for (let k = 1; k < cs.length; k++) out = `mix(${out}, ${cs[k] as string}, clamp(${s} - ${(k - 1).toFixed(1)}, 0.0, 1.0))`;
+          return out;
+        }
+      }
       case 'builtin': {
         const g = GLSL_FUNCS[n.spec.name];
         if (!g) throw new Unsupported('command:' + n.spec.name);
@@ -552,6 +573,7 @@ const PARAMS: readonly ParamSpec[] = [
   value('seed', 'Number', true),
   value('layer', 'Number', true),
   value('renderer', 'Text', true),
+  value('sizeUnit', 'Text', true),
 ];
 
 function particlesRule(bound: readonly TArg[]): CommandRule {
@@ -578,7 +600,8 @@ function particlesRule(bound: readonly TArg[]): CommandRule {
         life,
         shape: word('shape', SHAPES, 'dot'),
         blend: word('blend', BLENDS, 'normal'),
-        sizeIsPx: false,
+        sizeIsPx: word('sizeUnit', SIZE_UNITS, 'units') === 'px',
+        layer: Math.min(9, Math.max(0, Math.trunc(numOr('layer', 0)))),
         start: numOr('start', 0),
         end: numOr('end', Number.POSITIVE_INFINITY),
         loop: val('loop') !== false,
@@ -605,3 +628,64 @@ export const PARTICLES_SPEC: CommandSpec = {
   group: 'animation',
   forms: [{ params: PARAMS, returns: 'Particles', summary: 'a system of small particles, each a pure function of its index and time', rule: (args) => particlesRule(args as readonly TArg[]) }],
 };
+
+/* ------------------------------ load shedding ------------------------------ */
+
+/** Frame time above which a frame is slow, slow frames in a row before shedding, good frames before recovering (10.6). */
+export const SHED_FRAME_MS = 14;
+export const SHED_AFTER = 5;
+export const RECOVER_AFTER = 60;
+export const MIN_QUALITY = 0.25;
+
+/**
+ * The renderer's load shedding (design 10.6), kept pure so it is the same everywhere: the host reports each frame's total
+ * time and draws `drawCount(count)` particles with alpha and size scaled by `scale()`. After 5 frames over 14 ms the
+ * quality drops by a quarter (to at least 25%); after 60 good frames it rises by a quarter. Particles are independent, so
+ * drawing the first indices only never changes the others. The clock and the kernel never slow down.
+ */
+export class ParticleShedder {
+  private q = 1;
+  private slow = 0;
+  private good = 0;
+
+  /** The share of particles drawn now, 0.25 to 1. */
+  get quality(): number {
+    return this.q;
+  }
+
+  /** Reports one frame; returns a `particle_shed` notice when the quality changed. */
+  frame(frameMs: number, name = ''): Notice | undefined {
+    if (typeof frameMs !== 'number' || !Number.isFinite(frameMs)) return undefined;
+    if (frameMs > SHED_FRAME_MS) {
+      this.slow++;
+      this.good = 0;
+      if (this.slow >= SHED_AFTER && this.q > MIN_QUALITY) {
+        this.slow = 0;
+        return this.set(Math.max(MIN_QUALITY, this.q - 0.25), name);
+      }
+      return undefined;
+    }
+    this.slow = 0;
+    this.good++;
+    if (this.good >= RECOVER_AFTER && this.q < 1) {
+      this.good = 0;
+      return this.set(Math.min(1, this.q + 0.25), name);
+    }
+    return undefined;
+  }
+
+  /** How many of `count` particles to draw: the first `ceil(count × q)` indices. */
+  drawCount(count: number): number {
+    return Math.min(count, Math.ceil(count * this.q));
+  }
+
+  /** The factor for alpha and size, `1 / sqrt(q)`, so fewer particles keep the same look. */
+  scale(): number {
+    return 1 / Math.sqrt(this.q);
+  }
+
+  private set(q: number, name: string): Notice {
+    this.q = q;
+    return makeNotice('particle_shed', { name, quality: `${Math.round(q * 100)}%` }, name ? [name] : []);
+  }
+}

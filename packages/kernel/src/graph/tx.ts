@@ -432,6 +432,13 @@ export class FigureTx extends FigureBase {
       }
       return this.okResult(parsed, 'noop', '@fig', rep);
     }
+    if (d.name === 'input') {
+      // a line of a saved input log goes into the log, not into the script's items: the log writes itself back on save
+      if (opts.dryRun) return this.okResult(parsed, 'noop', '@input', rep, { dryRun: true });
+      const why = this.onInputLine(d.words);
+      if (why !== undefined) return this.fail(parsed, 'bad_directive', { directive: '@input', need: why }, { hint: 'Write @input L 2 at 12.5.' });
+      return this.okResult(parsed, 'noop', '@input', rep);
+    }
     const text = printLineNode(parsed.node);
     const at = REPEATABLE.has(d.name) ? -1 : (this.directiveAt.get(d.name) ?? -1);
     if (at < 0) {
@@ -453,6 +460,11 @@ export class FigureTx extends FigureBase {
     this.queue({ ev: 'directive', name: d.name });
     this.onDirective(d.name);
     return this.okResult(parsed, 'directive', text, rep);
+  }
+
+  /** Hook for the state solver: one `@input` line of a saved input log. Returns why it was refused, if it was. */
+  protected onInputLine(_words: readonly string[]): string | undefined {
+    return 'a figure with a clock';
   }
 
   /** Hook for the clock and solver when a directive changes. */

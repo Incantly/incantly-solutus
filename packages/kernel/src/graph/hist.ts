@@ -23,7 +23,7 @@ import { lineRefStarts, refStarts, renameNode, renameStyleItem } from './rename'
 import type { ApplyOptions, BatchOptions, BatchResult, ChangeReport, Description, Persist, RateRule, StyleEntry, TxOk, TxResult } from './types';
 import { fitsType, sameValue, valueSource } from './values';
 import type { InvertCall } from './registry';
-import { deleteNotes } from './registry';
+import { deleteNotes, runDragListeners } from './registry';
 import { toEffective, validKeysFor } from './props';
 
 /**
@@ -797,7 +797,9 @@ export class FigureHist extends FigureTx {
       const r = this.setFree(w.id, w.value, 'drag');
       if (!r.ok) return { ok: false, reason: r.kind };
     }
-    return { ok: true, delta: this.flush() };
+    const delta = this.flush();
+    runDragListeners(this, delta.valueIds);
+    return { ok: true, delta };
   }
 
   /** Rewrites the number given as argument `param` in the object's line, as part of the drag gesture. */

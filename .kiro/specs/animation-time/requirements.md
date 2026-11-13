@@ -131,11 +131,38 @@ fix, so that I can correct it on the next line.
 **Acceptance criteria:** THE SYSTEM SHALL meet the budgets of design section 12 for the player (under 0.1 ms per frame),
 trace samples (under 20 µs) and CPU particles (3,000 evaluated in under 1.5 ms).
 
+### R9. Second round: what the first round left out
+
+**User story:** As a teacher, I want the motion features to work for every kind of motion (states, drags, saved films),
+so that what the class sees does not depend on how it was made.
+
+**Acceptance criteria:**
+
+1. WHEN the player seeks, THE SYSTEM SHALL rebuild a trace of an object that moves through states from the solver's
+   dense output, each sample at its own time (9.4).
+2. WHILE a drag gesture moves a traced object, THE SYSTEM SHALL add one sample per drag step, capped and thinned like
+   time samples, not replayed by a seek, and forgotten by `ClearTrace`, `Untrace` or a redefinition (9.5).
+3. THE SYSTEM SHALL save the input log at the end of the script as `@input` lines and read them back on load (R4.6).
+4. WHEN the states are behind the clock after a far seek, THE SYSTEM SHALL report `catching_up` once and keep the player
+   asking for frames until they catch up (8.5).
+5. WHEN the fastest rate of the states is too fast for the step (`ω h > 2`), THE SYSTEM SHALL report `stiff_system`
+   (errors 3).
+6. THE SYSTEM SHALL let `Path(P, t0, t1)` follow a point that moves through states, and report `path_pending` with how
+   much is ready when the solver has not reached `t1` (9.8).
+7. THE SYSTEM SHALL provide `Gradient(x, c1, c2, ...)` on the CPU and the GPU, `size = px(...)` and `layer` for
+   particles (10.2), and the load shedding of 10.6 with `particle_shed`.
+8. THE SYSTEM SHALL animate sliders one way only, the numbers area's `loop`, `period` and `Animate(a)`, on the player's
+   clock, and refuse `with animate = ...` with a hint to that form (design 5).
+
 ## Decided against the design
 
 - **The `rerun` default is `restart`**, not `continue`: section 13 of the core design and kernel ruling K12 decide it.
   An input opts in with `L with rerun = continue`.
-- **Slider animation words (A8).** The numbers area already animates sliders with `loop` and `period`, and owns
-  sliders. `animate`, `seconds`, `phase` and `smooth` are not built, so there is one way to say it. To be confirmed by
-  the product owner.
+- **Slider animation words (A8).** Decided by the product owner on 12 November 2026: one way to write it, the numbers
+  area's `loop`, `period` and `Animate(a)`. `animate`, `seconds`, `phase` and `smooth` are dropped from the design.
+- **`fract`** is the language's `x - trunc(x)`, not `x - floor(x)`. Decided by the product owner on 12 November 2026.
+- **`Gradient` is a command**, not a built-in: built-ins are lowercase and capital names are commands. It is the one
+  command a particle formula may call.
+- **`px(...)`** is not a built-in (that would reserve the name `px`). Inside `Particles`, `size = px(e)` is rewritten
+  to `size = e, sizeUnit = "px"`.
 - **Bodies and events (7.9)** are designed for v1.5 and are not built here.

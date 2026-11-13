@@ -182,90 +182,37 @@ Properties:
 
 ## 5. Slider animation
 
-### 5.1 What animates
-
-A **free Number with a range** (a slider, core section 3: `a = 3 in 0..10 step 0.5`). Angles are Numbers with `unit = angle`. Points on paths animate by the same mechanism through their parameter `s` (graphics-view 12.4): `P = PointOn(c, 0)` with `animate` runs the point round the circle. Free Bool and free points do not animate.
-
-### 5.2 Script form
+**Decided (product owner, 12 November 2026): there is one way to write slider animation, the numbers area's.** This
+area does not add its own words for it. The earlier draft of this section proposed `animate`, `seconds`, `phase` and
+`smooth`; they describe the same thing as `Animate(a)` with `loop` and `period`, so they were dropped. The full design
+is in `numbers-sliders/design.md` 3.4.
 
 ```text
 a = 0 in 0..10 step 0.1
-a with animate = bounce, seconds = 8
-P = PointOn(c, 0)
-P with animate = loop, seconds = 5
-a with animate = off
+a with loop = bounce, period = 8
+Animate(a)            # start
+Animate(a, false)     # stop, keeping the value
 ```
 
-| Property | Values | Default |
+| Property (numbers area) | Values | Default |
 |---|---|---|
-| `animate` | `off`, `bounce`, `loop`, `loop-down`, `once`, `once-down` | `off` |
-| `seconds` | Time for one pass from low end to high end of the range, 0.1 to 3,600 | 10 |
-| `phase` | Fraction 0..1 of the range at which the track starts at `t = 0` | derived from the slider's initial value |
-| `smooth` | `true` to ignore `step` while animating | `false` |
-| `rerun` | `continue` or `restart` (section 8) | `continue` |
+| `loop` | `bounce`, `up`, `down`, `once`, `random` | `bounce` |
+| `period` | Seconds for one sweep of the range | 10 |
+| `seed` | Seed of `random` | 1 |
+| `resume` | `false` to stay stopped after a drag | `true` |
 
-Mode meanings:
+What this area relies on, and what holds either way:
 
-| Mode | Behaviour |
-|---|---|
-| `bounce` | Up to the high end, then down to the low end, forever |
-| `loop` | Up, jump to the low end, repeat |
-| `loop-down` | Down, jump to the high end, repeat |
-| `once` | Up, stop at the high end |
-| `once-down` | Down, stop at the low end |
-
-The word `seconds` replaces the idea of a "speed" number: the author says what they mean. (A speed of 1 meant 10 seconds in the reference app; ours is just `seconds = 10`.)
-
-### 5.3 The track is a function of time
-
-An animated slider's value is **computed**, not accumulated:
-
-```ts
-interface Track {
-  readonly lo: number; readonly hi: number; readonly step: number;     // from the slider
-  readonly mode: AnimMode;
-  readonly seconds: number;
-  readonly phase0: number;       // fraction at t = t0
-  readonly t0: number;           // when this segment of the track started
-  readonly smooth: boolean;
-}
-
-/** value of the slider at film time t */
-function trackValue(k: Track, t: number): number;
-```
-
-With `dir = +1` (or `-1` for the `-down` modes) and progress `u = phase0 + dir * (t - t0) / seconds`:
-
-| Mode | Fraction `f` of the range |
-|---|---|
-| `loop`, `loop-down` | `fract(u)` |
-| `bounce` | let `x = mod(u, 2)`; `f = x ≤ 1 ? x : 2 - x` |
-| `once` | `clamp(u, 0, 1)` |
-| `once-down` | `clamp(u, 0, 1)` with `u = phase0 - (t - t0)/seconds` |
-
-`value = lo + f * (hi - lo)`. Unless `smooth`, the value is **quantised to `step`**: `value = lo + round((value - lo) / step) * step`, then rounded to the number of decimals of `step` so that `0.1 + 0.2` never shows as `0.30000000000000004`.
-
-For `once`, when `u ≥ 1` the track reports `done` and the slider becomes plain (the object keeps the end value; `animate` shows `off` in the style bar).
-
-Why a function: the value at any `t` is exact and repeatable, seeking is free, and a replayed film shows the same slider values.
-
-### 5.4 Drag while animating
-
-When the learner grabs an animated slider (or changes its value by keyboard or `show_me`):
-
-1. The track pauses for that slider while the pointer is down.
-2. On release, a new track segment starts: `t0 = t`, `phase0 =` fraction of the dragged value, same mode and seconds.
-3. The change is appended to the input log (section 8) as `{ t, id, kind: 'track', phase0 }`, so replays and seeks reproduce it.
-
-If the film's time moves back before the change, the track follows the log: the value before `t` of the change is the older segment. Only that slider is paused; the rest of the figure keeps running.
-
-### 5.5 Several animated numbers
-
-Each runs from its own track, all evaluated from the same `t` in one pass. The player's "animation" and "film" are the same clock; there is not a separate global animation button. `Play()` and `Pause()` (core 6.6) are the only commands.
-
-### 5.6 Random sliders
-
-A random slider is `a = rand(seed + floor(t / period))`-style: a pure function of `t` (`a = lerp(lo, hi, rand(floor(t * rate)))`) written by the author. No special slider type. (The reference app has a random-number slider that re-rolls on a timer.)
+- **The track is a function of time.** The value at film time `t` is computed from the anchor `{ t0, v0, dir }` and
+  the clock, never accumulated, so seeking is free and a replayed film shows the same values. The value is quantised
+  to `step` unless the step is `auto`.
+- **Dragging while animating** pauses the slider under the pointer and, on release, starts a new anchor at the dragged
+  value (numbers 3.4).
+- **Several animated sliders** all run from the same `t` in one pass. There is one clock: the player's. `Play()` and
+  `Pause()` are the only commands for it.
+- **Random sliders** are the `random` loop mode, a pure function of `t` and `seed`.
+- **A slider that a rate reads cannot animate** (`animated_input`, numbers errors): every frame would restart the
+  motion. Change it while playing instead; section 8 says what that does.
 
 ## 6. Time in formulas
 
@@ -274,7 +221,7 @@ A random slider is `a = rand(seed + floor(t / period))`-style: a pure function o
 
 | Function | Meaning |
 |---|---|
-| `fract(x)` | `x - floor(x)` |
+| `fract(x)` | `x - trunc(x)`, the language's own (decided 12 November 2026); for negative `x` it is negative |
 | `wrap(x, a, b)` | `a + mod(x - a, b - a)` |
 | `pingpong(x, len)` | triangle wave: `0` at `0`, `len` at `len`, back to `0` at `2 len`, repeating |
 | `ramp(x, a, b)` | `clamp((x - a) / (b - a), 0, 1)`; `0` before `a`, `1` after `b` |
@@ -444,17 +391,26 @@ type LogEntry =
 interface InputLog { readonly entries: readonly LogEntry[] }
 ```
 
-- The log is part of the film state, stored with the film (so a recorded lesson replays the same).
+- The log is part of the film state, saved with the script as `@input` lines (8.3), so a recorded lesson replays the same.
 - The solver applies an entry at the first grid step `n ≥ ceil(t * 240)`, so outcomes are deterministic.
 - Evaluating `L` at any time is a pure function of the log: the latest `set` with `t_entry ≤ t`, else the figure's base value.
 
 ### 8.3 Two policies (per input)
 
-`L with rerun = continue` (default): the change takes effect **from now on**. At `t = 12` the pendulum swings on from its current angle with the new length. Seeking back to `t = 5` shows the old length; seeking to 20 replays and shows the new length from 12 on. Checkpoints after 12 are dropped and rebuilt.
+`L with rerun = continue`: the change takes effect **from now on**. At `t = 12` the pendulum swings on from its current angle with the new length. Seeking back to `t = 5` shows the old length; seeking to 20 replays and shows the new length from 12 on. Checkpoints after 12 are dropped and rebuilt.
 
-`L with rerun = restart`: the change rewrites history: the base value changes, all log entries for `L` are dropped, all checkpoints are dropped, and the figure replays from `t = 0` with the new `L`. "What if `L` were 2?" then shows the whole motion again.
+`L with rerun = restart` (default, kernel ruling K12): the change rewrites history: the base value changes, all log entries for `L` are dropped, all checkpoints are dropped, and the figure replays from `t = 0` with the new `L`. "What if `L` were 2?" then shows the whole motion again.
 
-The teacher chooses by what it wants to say ("from here on" vs "the whole thing"). The default is `continue` because a learner dragging a slider mid-swing expects the pendulum to keep swinging.
+The teacher chooses by what it wants to say ("from here on" vs "the whole thing"). The default is `restart` (core decision 5, kernel ruling K12): a changed value means the same thing at every time unless the author opts in to `continue`.
+
+**Saved with the script.** The log is written at the end of the script as `@input` lines, read back into the log on load:
+
+```text
+@input L 1 base          # L's value before its first change
+@input L 2 at 12.5       # L became 2 at t = 12.5
+@input P 1 2 at 3        # a point input: x and y
+@input reset at 20       # Restart()
+```
 
 ### 8.4 History rewrite
 
@@ -462,7 +418,7 @@ A new entry for object `X` at time `t_e` removes later entries for `X` (the futu
 
 ### 8.5 Catch-up budget
 
-After checkpoints are dropped, the figure needs the states at the current `t` right away. The solver replays from the latest valid checkpoint in time slices of at most 6 ms per frame. While replaying, the last valid frame is shown and the player bar shows a small "catching up" indicator. In practice replays from `restart` take under 20 ms for 60 s of film and a 100-op cone.
+After checkpoints are dropped, the figure needs the states at the current `t` right away. The solver replays from the latest valid checkpoint in slices. The kernel has no clock to measure 6 ms with, so a slice is a step budget (400,000 grid steps a call); while it is behind, the states are undefined (`timeout`), `catching_up` is reported once, and the player asks for frames (even when paused) until the states reach `t`. While replaying, the last valid frame is shown and the player bar shows a small "catching up" indicator. In practice replays from `restart` take under 20 ms for 60 s of film and a 100-op cone.
 
 ### 8.6 Other free values
 
@@ -555,8 +511,9 @@ A line is one logical line (core: a line ends at a newline; a call may continue 
 | `count` | integer 1..20,000 | Particles alive in a steady emitter | required |
 | `life` | Number > 0 | Seconds each particle lives | required |
 | `pos` | Point expression | Position (maths units) | required |
-| `color` | Color expression | Colour | `black` |
-| `size` | Number expression | Radius in maths units (so it scales with zoom) or `px(…)` for pixels | `0.05` |
+| `color` | Color expression; `Gradient(ph, c1, c2, ...)` runs through colours | Colour | `black` |
+| `size` | Number expression | Radius in maths units (so it scales with zoom) or `px(…)` for pixels; `px(e)` is saved as `size = e, sizeUnit = "px"` | `0.05` |
+| `sizeUnit` | `units`, `px` | What `size` is measured in | `units` |
 | `alpha` | Number expression 0..1 | Opacity | `1` |
 | `angle` | Number expression (radians) | Rotation for streaks and squares | `0` |
 | `shape` | `dot`, `ring`, `square`, `streak`, `spark` | Sprite | `dot` |
@@ -783,11 +740,11 @@ Collisions between bodies, contacts, friction on surfaces, joints, rigid rotatio
 | A1 | Add `bt` and `beat` read-only built-ins, set by the player; answers open question 1. | Formulas that want "time since this beat started". |
 | A2 | In a rate rule `name' = expr`, a pair literal is a Vector. Add `state(x0, v0)` and `name'' = expr`. | Point states and second-order sugar. |
 | A3 | Allow `x'` (the first derivative of a second-order state) on the right side of its own `x''` rule. | Damping terms. |
-| A4 | Open question 5 answered: input log with `rerun = continue` (default) or `restart` (per input). The input log is stored with the film. | Deterministic what-if. |
+| A4 | Open question 5 answered: input log with `rerun = restart` (default, kernel ruling K12) or `continue` (per input). The input log is saved with the script as `@input` lines. | Deterministic what-if. |
 | A5 | New action `ClearTrace(P)`; `Trace(P, seconds)` form; trace properties `trace`, `traceWindow`, `traceFade`, `traceJoin`. | Core 6.6 has `Trace`/`Untrace` only. |
 | A6 | A call may continue on following lines while its brackets are open, up to 12 lines. | `Particles(...)` is naturally multi-line. Core says "a line ends at a newline"; the rule becomes "a line ends at a newline when no bracket is open". |
-| A7 | Add builtins `fract wrap pingpong ramp ease` and `at(obj, time)`. | Section 6. |
-| A8 | Slider animation properties `animate`, `seconds`, `phase`, `smooth`, `rerun`. | Section 5. |
+| A7 | Add builtins `fract wrap pingpong ramp ease` and `at(obj, time)`. `Gradient` is a command (capital names are commands), the one command a particle formula may call. | Section 6. |
+| A8 | ~~Slider animation properties `animate`, `seconds`, `phase`, `smooth`.~~ Dropped: slider animation is the numbers area's `Animate` with `loop` and `period` (section 5). `rerun` stays (section 8). | One way to write it. |
 | A9 | `@solver step 1/n` directive. | Stiff systems. |
 | A10 | Open question 4 answered: 20,000 per system, 50,000 per figure, with device-adaptive load shedding. | Section 10.6. |
 | A11 | Particle parameter names and the extra formula names `n w cycle ph life`. | Section 10.3. |

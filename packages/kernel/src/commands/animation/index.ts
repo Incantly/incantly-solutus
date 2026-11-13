@@ -24,12 +24,15 @@ import {
   stopTrace,
   tickTraces,
   traceCount,
+  traceDragStep,
   traceOptionsOf,
 } from './traces';
 import type { TraceOptions } from './traces';
 import { PARTICLES_SPEC } from './particles';
+import { GRADIENT_SPEC } from './colour';
 import { particlesLineRewrite } from './particlecheck';
-import { registerLineRewriter } from '../../graph/registry';
+import { registerDragListener, registerLineCheck, registerLineRewriter, registerScriptTail } from '../../graph/registry';
+import type { ParsedLine } from '../../language/ast';
 
 const AT = { line: 0, col: 1, endCol: 1 } as const;
 const P = (name: string, type: string, extra: Partial<ParamSpec> = {}): ParamSpec => ({ name, type, ...extra });
@@ -122,6 +125,7 @@ export const ANIMATION_COMMANDS: readonly CommandSpec[] = [
     traceRun,
   ),
   PARTICLES_SPEC,
+  GRADIENT_SPEC,
   action('Untrace', [{ params: [P('obj', 'Any')], summary: 'stop the trail and forget it' }], untraceRun),
   action('ClearTrace', [{ params: [P('obj', 'Any')], summary: 'forget the trail so far and keep tracing' }], clearTraceRun),
 ];
@@ -171,16 +175,75 @@ export function registerAnimation(registry: CommandRegistry): void {
     sentence: 'It depends on a value the learner can change, so its past values are not known.',
   });
   registerLineRewriter(particlesLineRewrite);
+  registerLineCheck((_figure, _line, parsed) => animateWordCheck(parsed));
   registerFrameTicker((figure, t, how) => {
     syncTraceProperties(figure);
     tickTraces(figure, t, how);
   });
+  registerScriptTail((figure) => inputLogLines(figure as Figure));
+  registerDragListener((figure, changed) => {
+    syncTraceProperties(figure as Figure);
+    traceDragStep(figure as Figure, changed);
+  });
+}
+
+/**
+ * `with animate = …` (kernel ruling K11 keeps the property in the table): this area gives it one meaning, a refusal that
+ * points to the one way to animate a slider, the numbers area's `loop`, `period` and `Animate(a)` (design 5).
+ */
+function animateWordCheck(parsed: ParsedLine): ErrorObject | undefined {
+  const node = parsed.node;
+  const style = node.k === 'restyle' || node.k === 'define' || node.k === 'function' ? node.style : undefined;
+  const item = style?.find((s) => s.key === 'animate');
+  if (!item) return undefined;
+  const name = node.k === 'restyle' || node.k === 'define' || node.k === 'function' ? node.target.name : 'a';
+  return err('bad_property_value', { line: 1, col: item.ks + 1, endCol: item.ke + 1 }, { key: 'animate', allowed: `not used: animate a slider with ${name} with loop = bounce, period = 8, then Animate(${name})` }, {
+    token: 'animate',
+    hint: `Write ${name} with loop = bounce, period = 8, then Animate(${name}). For a point, animate a slider it reads.`,
+    recovery: 'fix_line',
+    fingerprintKey: 'animate',
+  });
+}
+
+/** A number as the script writes it: 15 significant digits, no trailing noise. */
+const numText = (x: number): string => String(Number(x.toPrecision(15)));
+const valueWords = (v: unknown): string | undefined => {
+  if (typeof v === 'number' && Number.isFinite(v)) return numText(v);
+  const p = v as { x?: unknown; y?: unknown } | undefined;
+  if (typeof p?.x === 'number' && typeof p.y === 'number' && Number.isFinite(p.x) && Number.isFinite(p.y)) return `${numText(p.x)} ${numText(p.y)}`;
+  return undefined;
+};
+
+/**
+ * The film's input log as `@input` lines at the end of the script (R4.6), so a saved film replays the same: first each
+ * logged input's value before its first change (`base`), then the entries in time order.
+ */
+export function inputLogLines(figure: Figure): string[] {
+  const out: string[] = [];
+  const log = figure.solver.inputLog;
+  if (log.length === 0) return out;
+  for (const [id, v] of figure.solver.inputBase) {
+    const name = figure.get(id)?.name;
+    const w = valueWords(v);
+    if (name !== undefined && w !== undefined) out.push(`@input ${name} ${w} base`);
+  }
+  for (const e of log) {
+    if (e.kind === 'reset') {
+      out.push(`@input reset at ${numText(e.t)}`);
+      continue;
+    }
+    const name = figure.get(e.id)?.name;
+    const w = valueWords(e.value);
+    if (name !== undefined && w !== undefined) out.push(`@input ${name} ${w} at ${numText(e.t)}`);
+  }
+  return out;
 }
 
 export { playerOf, registerFrameTicker, Player, FRAME_STEP, MAX_FRAME_DELTA } from '../../clock/player';
 export type { PlayMode, PlayerState, PlayerEvent, PlayerLoop, ClockSource, ClockSourceKind, SeekWhy, FrameTicker } from '../../clock/player';
-export { startTrace, stopTrace, clearTrace, isTraced, tracePoints, traceSnapshots, tracedIds, tickTraces, MAX_TRACE_POINTS, MAX_SHAPE_SNAPSHOTS, MAX_TRACES } from './traces';
+export { startTrace, stopTrace, clearTrace, isTraced, tracePoints, traceSnapshots, traceDragPoints, traceDragSnapshots, traceDragStep, tracedIds, tickTraces, MAX_TRACE_POINTS, MAX_SHAPE_SNAPSHOTS, MAX_TRACES } from './traces';
 export type { TraceOptions } from './traces';
+export { GRADIENT_SPEC, gradientAt } from './colour';
 export type { LogEntry } from '../../clock/solver';
 export {
   PARTICLES_SPEC,
@@ -191,5 +254,10 @@ export {
   particleClock,
   makeParticleBatch,
   isParticlesValue,
+  ParticleShedder,
+  SHED_FRAME_MS,
+  SHED_AFTER,
+  RECOVER_AFTER,
+  MIN_QUALITY,
 } from './particles';
 export type { ParticleSpecPlain, ParticleBatchPlain, ParticleProgram, ParticleShaderSource, ParticleUniformSlot, ParticlesValue } from './particles';

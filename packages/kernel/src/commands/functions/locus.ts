@@ -51,7 +51,8 @@ export function openSlice(call: RuleCall, mover: ObjId | 't', target: ObjId): Fa
     }
     return fail('no_dependency', `The kernel slice refused this pair (${slice.kind}).`);
   }
-  if (slice.chain.length === 0) return fail('no_dependency', noDependency(call, target));
+  // over the clock, a point that moves only through states has no rules in between, but it still moves
+  if (slice.chain.length === 0 && (slice.states?.length ?? 0) === 0) return fail('no_dependency', noDependency(call, target));
   return { ok: true, value: { run: slice.run } };
 }
 

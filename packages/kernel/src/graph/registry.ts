@@ -260,6 +260,26 @@ export function runLineHandlers(figure: unknown, text: string, opts: { readonly 
   return undefined;
 }
 
+/** Work an area does after each step of a drag gesture, with the objects whose value changed (a drag trace). */
+export type DragListener = (figure: unknown, changed: readonly ObjId[]) => void;
+
+const DRAG_LISTENERS: DragListener[] = [];
+
+export function registerDragListener(listener: DragListener): void {
+  if (!DRAG_LISTENERS.includes(listener)) DRAG_LISTENERS.push(listener);
+}
+
+/** Runs the drag listeners; one that throws is skipped. */
+export function runDragListeners(figure: unknown, changed: readonly ObjId[]): void {
+  for (const l of DRAG_LISTENERS) {
+    try {
+      l(figure, changed);
+    } catch {
+      // an area's listener must not break the drag
+    }
+  }
+}
+
 /** Lines an area adds at the end of the script (its `on` lines), after every object. */
 export type ScriptTail = (figure: unknown) => readonly string[];
 

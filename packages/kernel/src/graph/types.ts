@@ -23,6 +23,8 @@ export type Cell =
 export interface Slice {
   /** The objects that run, in order: the dependents of the source that the target reads, and the target. */
   readonly chain: readonly Name[];
+  /** Over the clock: the states the target reads, which take their value at each time from the state solver. */
+  readonly states?: readonly Name[];
   /**
    * For each value: the cell of the target when the source holds it. The figure is left as it was. A slice made inside a
    * rule (`RuleCall.slice`) charges the rule's work budget; once it is spent, the remaining cells are undefined with `timeout`.

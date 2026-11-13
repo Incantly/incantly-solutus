@@ -393,7 +393,7 @@ interface PropRule<R> {
 | `trace` | Bool | |
 | `tip` | enum | |
 | `tags` | text list | |
-| `animate` | plain word | Every drawable type. The kernel accepts and stores it; the values and what they do are animation-time 5.2 (ruling K11) |
+| `animate` | plain word | Every drawable type. The kernel accepts and stores it (ruling K11). Animation-time refuses it with a hint: slider animation is the numbers area's `loop`, `period` and `Animate(a)` (animation-time 5) |
 
 Unknown key: `unknown_property`, hint lists the keys valid for that object's type.
 
@@ -663,6 +663,23 @@ one undo entry on `commitDrag`, like a drag of a free point.
 `registerFrameTicker(ticker)` adds work an area does each time the player moves the clock, before the pass: traces add
 their samples, and rebuild on a seek. The player itself is pure: the host gives it a time source and calls
 `frame(now)` from its one animation-frame loop.
+
+The numbers area's animated sliders are a frame ticker too, so `Animate(a)` follows `Play()` and seeks.
+
+`registerDragListener(listener)` adds work an area does after each step of a drag gesture, with the objects whose value
+changed: drag traces add their samples.
+
+### A slice over the clock reads the states
+
+`slice('t', target)` sets the states the target reads from the state solver's dense output at each time
+(`Slice.states` names them), so a trace or a `Path` of an object that moves through states is right for any time, not
+only the current one. Nothing is written; the states' cells are put back.
+
+### The input log in the script
+
+The state solver's input log is saved at the end of the script as `@input` lines (`@input L 1 base`,
+`@input L 2 at 12.5`, `@input reset at 20`). Reading one puts the entry back into the log; it is not kept as a script
+item, so saving again writes the log once.
 
 ### Naming helper for tools
 
