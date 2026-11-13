@@ -46,6 +46,16 @@ the build machine, at the budget of design 12.
 
 Tests: `packages/kernel/test/spec/animation/second.test.ts` (22).
 
+## Third round (13 November 2026)
+
+- **`ValueAt(obj, time)`**: the value an object had at a film time. The design called it `at(obj, time)`; it was renamed
+  because the numbers area's `at(x, y)` is a place in the plane, and because only a command can see which object it is
+  given. It replays the clock slice, with states from the solver and animated sliders from their tracks. An object that
+  does not move with time is `not_time_dependent`; an argument that is not a name is `bad_argument`.
+- **Traces of points moved by animated sliders**: the kernel's `registerClockDriven` lets an area say which free values
+  it moves with the clock and what each is at any time. The numbers area registers its animated sliders
+  (`sliderValueAt`, shared with the frame tick), so a seek rebuilds such a trace as the path instead of one point.
+
 ## Decided against the design
 
 - `rerun` defaults to `restart`, not `continue` (core decision 5, kernel ruling K12).
@@ -57,11 +67,6 @@ Tests: `packages/kernel/test/spec/animation/second.test.ts` (22).
 
 ## To be implemented
 
-- `at(obj, time)` (R2.2): a built-in function cannot see which object its argument names, and the numbers area already
-  has `at(x, y)` (a place in the maths plane for `place = at(1, 2)`). `at(k, 3)` with a Number `k` would be ambiguous.
-  Needs a product-owner decision on the name.
-- A trace of a point that moves only through an animated slider is sampled at the slider's current value when a seek
-  rebuilds it: the slider is a free value the numbers area writes each frame, not a rule of `t`, so the slice over the
-  clock cannot replay it.
+- `ValueAt` inside a particle formula (`ValueAt(E, t - age)` for an emitter that moves).
 - The GLSL program has not run on a real GPU yet: the view's integrator should render CPU and GPU on fixtures and
   compare (design 10.7).

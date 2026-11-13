@@ -260,6 +260,30 @@ export function runLineHandlers(figure: unknown, text: string, opts: { readonly 
   return undefined;
 }
 
+/**
+ * Free values an area moves with the clock by writing them each frame (animated sliders): for each, the value it has at
+ * a film time. A slice over the clock asks for them, so a trace rebuilt on a seek, or `ValueAt`, replays them.
+ */
+export type ClockDriven = (figure: unknown) => readonly { readonly id: ObjId; readonly at: (t: number) => unknown }[];
+
+const CLOCK_DRIVEN: ClockDriven[] = [];
+
+export function registerClockDriven(provider: ClockDriven): void {
+  if (!CLOCK_DRIVEN.includes(provider)) CLOCK_DRIVEN.push(provider);
+}
+
+export function clockDrivenOf(figure: unknown): { readonly id: ObjId; readonly at: (t: number) => unknown }[] {
+  const out: { readonly id: ObjId; readonly at: (t: number) => unknown }[] = [];
+  for (const p of CLOCK_DRIVEN) {
+    try {
+      out.push(...p(figure));
+    } catch {
+      // an area's provider must not break the slice
+    }
+  }
+  return out;
+}
+
 /** Work an area does after each step of a drag gesture, with the objects whose value changed (a drag trace). */
 export type DragListener = (figure: unknown, changed: readonly ObjId[]) => void;
 

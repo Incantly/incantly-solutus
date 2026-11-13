@@ -4,7 +4,7 @@ Pipeline: `docs/process/pipeline.md`. Branch: `feat/animation-time`.
 
 - [x] 1. Build the area from the design docs (builder, writes no tests)
   - [x] 1.1 The player: modes, frame delta, end and loop, seek, frame steps, rate, time sources, beats (R1)
-  - [x] 1.2 Time helpers `wrap`, `pingpong`, `ramp`, `ease` (R2); `at(obj, time)` is to be implemented
+  - [x] 1.2 Time helpers `wrap`, `pingpong`, `ramp`, `ease` (R2); `ValueAt(obj, time)` (renamed from `at`) is built in task 17
   - [x] 1.3 `Play()`, `Pause()`, `Restart()` (R3)
   - [x] 1.4 Input log with `rerun = continue | restart` in the solver (R4)
   - [x] 1.5 Traces: actions, properties, sampler, caps, the view's `trace` value (R5)
@@ -25,3 +25,4 @@ Pipeline: `docs/process/pipeline.md`. Branch: `feat/animation-time`.
 - [x] 14. `Gradient`, `px` sizes, `layer` (R9.7)
 - [x] 15. One slider animation: the player drives the numbers area's `Animate`; `with animate` is refused (R9.8)
 - [x] 16. Spec tests for R9 (`second.test.ts`)
+- [x] 17. `ValueAt(obj, time)`, and seeks replay animated sliders so their traces are the path (`second.test.ts`)

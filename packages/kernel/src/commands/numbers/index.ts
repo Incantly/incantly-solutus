@@ -7,7 +7,7 @@
  */
 
 import type { CommandRegistry } from '../../graph/registry';
-import { registerDeleteNotes, registerLineCheck, registerLineHandler, registerLineRewriter, registerScriptTail } from '../../graph/registry';
+import { registerClockDriven, registerDeleteNotes, registerLineCheck, registerLineHandler, registerLineRewriter, registerScriptTail } from '../../graph/registry';
 import { numbersLineRewrite } from './rewrite';
 import { numbersLineCheck } from './linecheck';
 import { handlerDeleteNotes, handlerScriptLines, numbersLineHandler } from './handlers';
@@ -17,7 +17,8 @@ import { registerNumbersErrors } from './errors';
 import { registerNumbersProperties, setFieldHooks } from './props';
 import { registerFrameTicker } from '../../clock/player';
 import type { Figure } from '../../graph/figure';
-import { animatingIds, tickAnimations } from './animate';
+import type { ObjId } from '../../contracts/values';
+import { animatingIds, getAnchor, sliderValueAt, tickAnimations } from './animate';
 
 /**
  * Animated sliders follow the player's clock (animation-time 5: one way to write slider animation): each frame and each
@@ -39,7 +40,22 @@ export function registerNumbers(registry: CommandRegistry): void {
   registerScriptTail(handlerScriptLines);
   registerDeleteNotes(handlerDeleteNotes);
   registerFrameTicker(sliderTicker);
+  registerClockDriven(animatedSliders);
 }
+
+/** Animated sliders as functions of film time, for a replay over the clock (a trace rebuilt on a seek, ValueAt). */
+const animatedSliders = (host: unknown): { id: ObjId; at: (t: number) => unknown }[] => {
+  const figure = host as Figure;
+  return animatingIds(figure).map((id) => ({
+    id,
+    at: (t: number) => {
+      const anchor = getAnchor(figure, id);
+      if (!anchor) return figure.value(id);
+      const r = sliderValueAt(figure, id, anchor, t);
+      return r.ok ? r.value : undefined;
+    },
+  }));
+};
 
 export type {
   AngleUnit,

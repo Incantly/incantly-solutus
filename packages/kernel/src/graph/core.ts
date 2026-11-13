@@ -25,7 +25,7 @@ import { NOT_SET } from './types';
 import type { Cell, EffectiveStyle, FigureEvent, FrameDelta, Persist, Props, Slice, StyleEntry, UndefChange } from './types';
 import { sameValue } from './values';
 import { KERNEL_ACTIONS } from './actions';
-import { CommandRegistry, RuleUndefined } from './registry';
+import { CommandRegistry, RuleUndefined, clockDrivenOf } from './registry';
 import type { CommandRule, RuleCall, RuleWork } from './registry';
 import { coerceDynamic, defaultsFor, setProp, toEffective } from './props';
 
@@ -516,13 +516,16 @@ export class FigureCore {
     const ancOrders = new Set(anc.map((r) => r.order));
     const states = !src && this.stateSampler ? this.stateSampler.recs().filter((r) => ancOrders.has(r.order) || r === t) : [];
     for (const st of states) for (const o of this.downOf(st)) downIdx.add(o);
+    // over the clock, free values an area moves with time (animated sliders) take their value at each time from the area
+    const driven = src ? [] : clockDrivenOf(this).map((d) => ({ rec: this.byIdMap.get(d.id), at: d.at })).filter((d): d is { rec: ObjRec; at: (t: number) => unknown } => d.rec !== undefined && (ancOrders.has(d.rec.order) || d.rec === t));
+    for (const d of driven) for (const o of this.downOf(d.rec)) downIdx.add(o);
     const chain = anc.filter((r) => downIdx.has(r.order) && r.p.kind === 'rule');
-    const touched = src ? [src, ...chain] : [...states, ...chain];
+    const touched = src ? [src, ...chain] : [...states, ...driven.map((d) => d.rec), ...chain];
     const sampler = states.length > 0 ? this.stateSampler : undefined;
     const env = this.env;
     return {
       chain: chain.map((r) => r.p.name),
-      ...(states.length > 0 ? { states: states.map((r) => r.p.name) } : {}),
+      ...(states.length + driven.length > 0 ? { states: [...states, ...driven.map((d) => d.rec)].map((r) => r.p.name) } : {}),
       run: (values) => {
         const saved = touched.map((r) => r.cell);
         const stale = touched.map((r) => r.stale);
@@ -546,6 +549,10 @@ export class FigureCore {
               if (sampler) {
                 const cells = sampler.at(v as number);
                 if (cells) for (const [rec, cell] of cells) if (states.includes(rec)) rec.cell = cell;
+              }
+              for (const d of driven) {
+                const x = d.at(v as number);
+                d.rec.cell = x === undefined || (typeof x === 'number' && x !== x) ? { defined: false, reason: 'input_undefined' } : { defined: true, value: x };
               }
             }
             for (const r of chain) r.cell = this.compute(r);

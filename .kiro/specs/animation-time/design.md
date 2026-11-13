@@ -11,7 +11,7 @@ The player and its clock, time helpers, the what-if input log, traces and partic
 
 - `packages/kernel/src/clock/player.ts`: the player. Pure: the host passes a `ClockSource` and calls `frame(now)` from
   its one animation-frame loop; the player never schedules anything itself.
-- `packages/kernel/src/commands/animation/`: `Play`, `Pause`, `Restart`, `Trace`, `Untrace`, `ClearTrace`, `at`,
+- `packages/kernel/src/commands/animation/`: `Play`, `Pause`, `Restart`, `Trace`, `Untrace`, `ClearTrace`, `ValueAt`,
   `Particles`, the trace store and sampler, the particle compiler (CPU closures and GLSL), the error kinds.
 - `packages/kernel/src/clock/solver.ts`: the input log and the `rerun` policy.
 - Branch `feat/animation-time`. Hand-off notes in `handoff/animation-time/`.

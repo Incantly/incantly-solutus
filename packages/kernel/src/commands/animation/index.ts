@@ -10,7 +10,7 @@ import { err } from '../../errors/table';
 import { registerReasonPhrase } from '../../errors/phrases';
 import type { Figure } from '../../graph/figure';
 import { registerPropertyTypes } from '../../graph/props';
-import type { ActionCall, ActionOutcome, CommandRegistry } from '../../graph/registry';
+import type { ActionCall, ActionOutcome, CommandRegistry, RuleCall } from '../../graph/registry';
 import { PROPERTIES } from '../../language/props';
 import type { CommandSpec, ParamSpec } from '../../language/table';
 import { playerOf, registerFrameTicker } from '../../clock/player';
@@ -46,6 +46,41 @@ function action(name: string, forms: readonly { params: readonly ParamSpec[]; su
     forms: forms.map((f) => ({ params: f.params, returns: null, summary: f.summary, rule: () => ({ run }) })),
   };
 }
+
+/**
+ * `ValueAt(obj, time)` (design 6, where the draft called it `at`; renamed because the numbers area's `at(x, y)` is a
+ * place in the plane): the value `obj` had at film time `time`. It replays the rules between the clock and the object,
+ * with states from the solver and animated sliders from their tracks, so it is exact for any time. An object that does
+ * not move with time is `not_time_dependent`.
+ */
+const VALUE_AT_SPEC: CommandSpec = {
+  name: 'ValueAt',
+  kind: 'object',
+  group: 'animation',
+  forms: [
+    {
+      params: [P('obj', 'Any'), P('time', 'Number')],
+      returns: '=obj',
+      summary: 'the value obj had at a film time',
+      explain: '{name} is {0} at time {1}',
+      check: (c) => (/^[A-Za-z\u0370-\u03FF_][A-Za-z0-9_\u0370-\u03FF]*$/.test(c.args[0]?.text.trim() ?? '') ? undefined : { kind: 'bad_argument', message: 'ValueAt needs the name of an object, such as ValueAt(P, 2).', param: 0, params: { command: 'ValueAt', why: 'it needs the name of an object' } }),
+      rule: () => ({
+        run(call: RuleCall) {
+          const id = call.ids[0];
+          const time = call.values[1];
+          if (id === undefined) return call.fail('input_undefined', 'ValueAt needs the name of an object');
+          if (typeof time !== 'number' || time !== time) return call.fail('input_undefined', 'the time is undefined');
+          const slice = call.slice('t', id);
+          if (!('run' in slice)) return call.fail('input_undefined', slice.message);
+          if (slice.chain.length === 0 && (slice.states?.length ?? 0) === 0) return call.fail('not_time_dependent', 'it does not change with time');
+          const cell = slice.run([time])[0];
+          if (!cell || !cell.defined) return call.fail(cell?.reason ?? 'input_undefined', `undefined at t = ${time}`);
+          return cell.value;
+        },
+      }),
+    },
+  ],
+};
 
 /** The object an action names, with the error when it cannot be traced. */
 function traceTarget(call: ActionCall, command: string): { id: ObjId } | { error: ErrorObject } {
@@ -126,6 +161,7 @@ export const ANIMATION_COMMANDS: readonly CommandSpec[] = [
   ),
   PARTICLES_SPEC,
   GRADIENT_SPEC,
+  VALUE_AT_SPEC,
   action('Untrace', [{ params: [P('obj', 'Any')], summary: 'stop the trail and forget it' }], untraceRun),
   action('ClearTrace', [{ params: [P('obj', 'Any')], summary: 'forget the trail so far and keep tracing' }], clearTraceRun),
 ];
