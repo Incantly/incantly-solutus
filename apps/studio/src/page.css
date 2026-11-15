@@ -262,3 +262,7 @@ button:disabled { opacity: 0.4; cursor: default; }
 .sig-ret { color: #9ca3af; }
 .sig-summary { font: 12px/1.4 var(--font); color: #d1d5db; margin-top: 2px; }
 .sig-more { font: 11px/1.4 var(--font); color: #9ca3af; margin-top: 3px; }
+
+/* selection (algebra-view design 3.9, ui.md: accent border on the left, tinted background) */
+.expr.selected { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+.expr.hovered:not(.selected) { background: #f7f9fd; }

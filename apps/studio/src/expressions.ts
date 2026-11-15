@@ -13,6 +13,8 @@ import type { AlgebraObject, AlgebraPrefs, AlgebraRow, DisplayMode } from '@inca
 import { colorAt } from './graph/paint';
 import { miniCurve, miniInterval } from './mini';
 import type { KernelSession } from './session';
+import { selectionFrom } from './selection';
+import type { Selection } from './selection';
 
 /** Types that draw on the graph and so get a swatch. */
 const DRAWN = new Set(['Point', 'Vector', 'Segment', 'Line', 'Ray', 'Circle', 'Arc', 'Sector', 'Conic', 'Polyline', 'Polygon', 'Function', 'Curve', 'Relation', 'Region', 'Field', 'Chart', 'ContinuousDistribution', 'DiscreteDistribution']);
@@ -51,6 +53,8 @@ export interface ExpressionOptions {
   readonly say: (text: string) => void;
   /** The visible x-range of the graph, for next-step cards that scan the view. */
   readonly view?: () => { readonly x0: number; readonly x1: number };
+  /** The studio's selection (design 3.9): a row click selects, a canvas pick scrolls to and marks the row. */
+  readonly selection?: Selection;
 }
 
 interface RowParts {
@@ -471,6 +475,30 @@ export function mountExpressions(opts: ExpressionOptions): ExpressionList {
     del.title = 'Delete';
     del.setAttribute('aria-label', 'Delete expression');
     row.append(tab, main, del);
+    // a click on the row selects its object (design 3.9); Shift or Ctrl/Cmd adds to the selection. The marble, the
+    // delete button and the expand arrow keep their own jobs.
+    row.addEventListener('pointerdown', (e) => {
+      const sel = opts.selection ? selectionFrom(opts.selection, 'list') : undefined;
+      const name = row.dataset['name'];
+      if (!sel || !name || isNew) return;
+      const t = e.target as HTMLElement;
+      if (t === swatch || t === del || t === toggle) return;
+      if (e.shiftKey || e.ctrlKey || e.metaKey) {
+        // Shift would also select the row's text: the click is a pick, not a text selection
+        e.preventDefault();
+        sel.toggle(name);
+      }
+      else if (!sel.has(name) || sel.names().length > 1) sel.set(name);
+      markSelection();
+    });
+    row.addEventListener('pointerenter', () => {
+      const name = row.dataset['name'];
+      if (opts.selection && name && !isNew) selectionFrom(opts.selection, 'list').setHover(name);
+    });
+    row.addEventListener('pointerleave', () => {
+      const name = row.dataset['name'];
+      if (opts.selection && name && opts.selection.hover() === name) selectionFrom(opts.selection, 'list').setHover(undefined);
+    });
     const parts: RowParts = { row, swatch, index, input, out, del, display, deps, toggle, card, shown: '', error: undefined };
     toggle.addEventListener('click', () => {
       const id = [...rows].find(([, p]) => p === parts)?.[0];
@@ -812,6 +840,7 @@ export function mountExpressions(opts: ExpressionOptions): ExpressionList {
     const want = new Set<Node>([...order, pop, sig]);
     for (const c of [...element.children]) if (!want.has(c)) c.remove();
     if (!pop.isConnected) element.append(pop, sig);
+    markSelection();
     // measure what is in the page, for the spacers next time (no layout in tests: keep the guesses)
     for (const i of keep) {
       const e = entries[i] as Entry;
@@ -871,6 +900,29 @@ export function mountExpressions(opts: ExpressionOptions): ExpressionList {
   };
 
   /** Scrolls a row into the window and puts it in the page; false when the row is filtered out or collapsed. */
+  /** Marks the selected rows and the hovered row (ui.md: accent border, tinted background). */
+  function markSelection(): void {
+    const sel = opts.selection;
+    for (const p of rows.values()) {
+      const name = p.row.dataset['name'] ?? '';
+      const on = sel?.has(name) === true;
+      p.row.classList.toggle('selected', on);
+      p.row.setAttribute('aria-selected', String(on));
+      p.row.classList.toggle('hovered', sel?.hover() === name);
+    }
+  }
+
+  // a pick on the canvas scrolls the list to the row (design 3.9)
+  opts.selection?.onChange((source) => {
+    const sel = opts.selection as Selection;
+    if (source === 'canvas' || source === 'tool') {
+      const last = sel.names()[sel.names().length - 1];
+      const id = last === undefined ? undefined : (session.figure.get(last)?.id as unknown as number | undefined);
+      if (id !== undefined) reveal(id);
+    }
+    markSelection();
+  });
+
   const reveal = (id: number): RowParts | undefined => {
     let y = 0;
     for (const e of entries) {

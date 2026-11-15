@@ -19,6 +19,9 @@ import { sceneBounds } from './graph/paint';
 import type { SceneItem } from './graph/paint';
 import { studioRegistry } from './registry';
 import { KernelSession } from './session';
+import { createSelection, selectionFrom } from './selection';
+import type { Selection } from './selection';
+import { hitTest } from './graph/hit';
 
 export interface StudioOptions {
   /** Frame scheduler for the clock; defaults to `requestAnimationFrame`. A test passes its own. */
@@ -36,6 +39,8 @@ export interface Mounted {
   readonly calc: ProbCalc;
   readonly tools: ToolStrip;
   readonly sim: SimStrip;
+  /** What is selected in the list and on the canvas (algebra-view design 3.9). */
+  readonly selection: Selection;
   readonly status: HTMLElement;
   /** Replaces the figure with an example's lines. */
   loadExample(id: string): void;
@@ -84,6 +89,8 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
   /* ------------------------------ panes ------------------------------ */
 
   const holder: { expressions?: ExpressionList; tools?: ToolStrip } = {};
+  const selection = createSelection();
+  const fromCanvas = selectionFrom(selection, 'canvas');
   const hiddenByStyle = (o: { style: { shown: boolean } }): boolean => o.style.shown === false;
   const items = (): SceneItem[] => {
     const out: SceneItem[] = [];
@@ -95,7 +102,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
       // hidden with `with visible = false`: left out, or drawn faintly while the show/hide tool is on
       if (hiddenByStyle(o) && !holder.tools?.showHidden()) continue;
       if (!drawsOnGraph(o.type, o.typeText, o.cell.value)) continue;
-      out.push({ id: o.id, name: o.name, type: o.type, typeText: o.typeText, value: o.cell.value, color: expressions.colorOf(o.id), free: o.type === 'Point' && session.draggable(o.name), label: true, ...(hiddenByStyle(o) ? { ghost: true } : {}) });
+      out.push({ id: o.id, name: o.name, type: o.type, typeText: o.typeText, value: o.cell.value, color: expressions.colorOf(o.id), free: o.type === 'Point' && session.draggable(o.name), label: true, ...(hiddenByStyle(o) ? { ghost: true } : {}), ...(selection.has(o.name) ? { selected: true } : {}), ...(selection.hover() === o.name ? { hovered: true } : {}) });
     }
     return out;
   };
@@ -114,17 +121,34 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
       if (!r.ok) say(r.error.message);
     },
     tool: () => holder.tools?.graphTool,
+    // a click on an object selects it; on the background it clears the selection (design 3.9)
+    pick: (px, py, vp, extend) => {
+      const hit = hitTest(items(), vp, px, py, 8)[0];
+      if (!hit) {
+        if (!extend) fromCanvas.clear();
+        return;
+      }
+      if (extend) fromCanvas.toggle(hit.name);
+      else fromCanvas.set(hit.name);
+      say(selection.names().length > 1 ? `Selected ${selection.names().join(', ')}.` : `Selected ${hit.name}.`);
+    },
+    hoverAt: (px, py, vp) => fromCanvas.setHover(hitTest(items(), vp, px, py, 8)[0]?.name),
   });
-  const exprs = mountExpressions({ session, changed: () => graph.redraw(), say, view: () => graph.viewport.box() });
+  const exprs = mountExpressions({ session, changed: () => graph.redraw(), say, view: () => graph.viewport.box(), selection });
   holder.expressions = exprs;
   const tools = mountToolStrip({
     session, registry, say, host: () => graph.element, items, redraw: () => graph.redraw(), flash: (names) => exprs.flash(names),
+    selection: () => selection.names(),
+  });
+  selection.onChange(() => {
+    graph.redraw();
+    sim.refresh();
   });
   holder.tools = tools;
   graph.element.append(tools.element, tools.hint);
   const lab = mountDataLab(session, registry, say);
   const calc = mountProbCalc(session, registry, say);
-  const sim = mountSimStrip({ session, registry, say, ...(opts.every ? { every: opts.every } : {}) });
+  const sim = mountSimStrip({ session, registry, say, selected: () => selection.names(), ...(opts.every ? { every: opts.every } : {}) });
   graph.element.append(sim.element);
   // the panel's Simulate section opens the strip (ui.md 6)
   calc.element.addEventListener('open-simulation', () => {
@@ -298,6 +322,8 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
   /* ------------------------------ wiring ------------------------------ */
 
   const sync = (): void => {
+    // a deleted object leaves the selection; a renamed one is found by its new name on the next pick
+    selection.keep((n) => session.figure.get(n) !== undefined);
     exprs.update();
     const u = session.undoState();
     undoBtn.disabled = !u.canUndo;
@@ -340,6 +366,10 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
       e.preventDefault();
       return;
     }
+    if (e.key === 'Escape' && !typing && selection.names().length > 0) {
+      selection.clear();
+      return;
+    }
     if (e.key === '/' && !typing) {
       e.preventDefault();
       exprs.focusNew();
@@ -355,6 +385,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
     calc,
     tools,
     sim,
+    selection,
     status,
     loadExample(id) {
       const ex = EXAMPLES.find((e) => e.id === id);

@@ -17,6 +17,10 @@ export interface GraphPaneOptions {
   readonly drag: (name: string, x: number, y: number, done: boolean) => void;
   /** A construction tool, when one is active: it takes clicks and hovers and paints its overlay (tools-2d 5). */
   readonly tool?: () => GraphTool | undefined;
+  /** A click with no tool on and no drag: select what is under it (`extend` with Shift or Ctrl/Cmd), algebra-view 3.9. */
+  readonly pick?: (px: number, py: number, vp: Viewport, extend: boolean) => void;
+  /** The pointer moved with no tool on and no drag. */
+  readonly hoverAt?: (px: number, py: number, vp: Viewport) => void;
 }
 
 export interface GraphTool {
@@ -181,6 +185,7 @@ export function mountGraph(opts: GraphPaneOptions): GraphPane {
       tip.hidden = true;
       return;
     }
+    opts.hoverAt?.(p.x, p.y, vp);
     const h = hitAt(p.x, p.y);
     canvas.style.cursor = h && h.k === 'circle' && h.drag ? 'grab' : h ? 'pointer' : '';
     if (h) {
@@ -200,6 +205,10 @@ export function mountGraph(opts: GraphPaneOptions): GraphPane {
       const p = local(e);
       opts.tool?.()?.click(p.x, p.y, vp);
       redraw();
+    } else if (down && !down.tool && drag && !drag.moved && e.type === 'pointerup') {
+      const p = local(e);
+      opts.pick?.(p.x, p.y, vp, e.shiftKey || e.ctrlKey || e.metaKey);
+      redraw();
     }
     down = undefined;
     drag = undefined;
@@ -209,6 +218,7 @@ export function mountGraph(opts: GraphPaneOptions): GraphPane {
   canvas.addEventListener('pointercancel', end);
   canvas.addEventListener('pointerleave', () => {
     tip.hidden = true;
+    opts.hoverAt?.(-1e9, -1e9, vp);
   });
   canvas.addEventListener('wheel', (e) => {
     e.preventDefault();

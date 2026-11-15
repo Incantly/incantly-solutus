@@ -42,6 +42,8 @@ export interface ToolStripOptions {
   readonly say: (text: string) => void;
   /** Highlights the rows a tool wrote. */
   readonly flash: (names: readonly string[]) => void;
+  /** Objects selected before a tool starts become its first picks, in order (tools-2d design 5.4). */
+  readonly selection?: () => readonly string[];
 }
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls = '', text = ''): HTMLElementTagNameMap[K] => {
@@ -429,6 +431,8 @@ export function mountToolStrip(opts: ToolStripOptions): ToolStrip {
       refusal = '';
       closeEntry();
       newSession();
+      const pre = opts.selection?.() ?? [];
+      if (tool && pre.length > 0) handle(tool.preselect(pre));
       renderStrip();
       showHint();
       say(`${s.label}. ${s.description}`);

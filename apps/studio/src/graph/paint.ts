@@ -24,6 +24,10 @@ export interface SceneItem {
   readonly label: boolean;
   /** Drawn faintly: a tool's preview, or a hidden object while the show/hide tool is on. */
   readonly ghost?: boolean;
+  /** Selected in the list or on the canvas: drawn with a glow (algebra-view design 3.9). */
+  readonly selected?: boolean;
+  /** The pointer is over its row or over it. */
+  readonly hovered?: boolean;
 }
 
 /** A place on the canvas the pointer can hover or drag. Coordinates in CSS pixels. */
@@ -900,6 +904,15 @@ export function paintScene(ctx: Ctx, vp: Viewport, items: readonly SceneItem[]):
         paintItem(ctx, vp, it, []);
         ctx.restore();
         continue;
+      }
+      if (it.selected || it.hovered) {
+        // a glow under a selected object (algebra-view design 3.9), lighter for the one the pointer is over
+        ctx.save();
+        ctx.shadowColor = it.selected ? 'rgba(47, 111, 219, 0.95)' : 'rgba(47, 111, 219, 0.55)';
+        ctx.shadowBlur = it.selected ? 14 : 9;
+        ctx.globalAlpha = it.selected ? 0.9 : 0.6;
+        paintItem(ctx, vp, it, []);
+        ctx.restore();
       }
       paintItem(ctx, vp, it, hits);
     } catch {
