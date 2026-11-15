@@ -308,6 +308,10 @@ export const EXAMPLES: readonly Example[] = [
       'c = Symbol()',
       'roots = Solutions(a*x^2 + b*x + c == 0, x)',
       'label = FormulaText(fp) with at = (-6, 6), anchor = nw, size = 22',
+      '# rows the CAS view draws: a hole, a circle, an interval',
+      'h = Simplify((x^2 - 1)/(x - 1)) with plot = true',
+      'circ = Expr(x^2 + y^2 == 9) with plot = true',
+      'band = Expr(x^2 < 4) with plot = true',
     ],
   },
 ];

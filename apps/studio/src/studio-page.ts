@@ -3,10 +3,14 @@
  * is open. Every area built so far is registered, so its commands can be typed and seen.
  */
 import { mountDataLab } from './datalab';
+import { mountCasPanel } from './caspanel';
+import { loadCasEngine } from './registry';
+import type { CasPanel } from './caspanel';
 import { mountProbCalc } from './probcalc';
 import { mountSimStrip } from './simstrip';
 import type { SimStrip } from './simstrip';
 import { mountToolStrip } from './tools-ui';
+import { symDrawing } from './graph/symplot';
 import type { ToolStrip } from './tools-ui';
 import type { ProbCalc } from './probcalc';
 import type { DataLab } from './datalab';
@@ -38,6 +42,7 @@ export interface Mounted {
   readonly graph: GraphPane;
   readonly lab: DataLab;
   readonly calc: ProbCalc;
+  readonly cas: CasPanel;
   readonly tools: ToolStrip;
   readonly sim: SimStrip;
   /** What is selected in the list and on the canvas (algebra-view design 3.9). */
@@ -119,6 +124,16 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
       if (expressions.isHidden(o.id)) continue;
       // hidden with `with visible = false`: left out, or drawn faintly while the show/hide tool is on
       if (hiddenByStyle(o) && !holder.tools?.showHidden()) continue;
+      // a symbolic row with its show switch on (cas ui.md 4, 7)
+      if ((o.style.ext as { plot?: unknown }).plot === true) {
+        const d = symDrawing(o.cell.value);
+        const base = { id: o.id, name: o.name, typeText: o.typeText, color: expressions.colorOf(o.id), free: false, label: false, ...(selection.has(o.name) ? { selected: true } : {}), ...(selection.hover() === o.name ? { hovered: true } : {}) };
+        if (d?.kind === 'curve') out.push({ ...base, type: 'Function', value: d.fn, holes: d.holes });
+        else if (d?.kind === 'relation') out.push({ ...base, type: 'Relation', value: d.value });
+        else if (d?.kind === 'axis') out.push({ ...base, type: 'SymAxis', value: d });
+        else if (d?.kind === 'points') out.push({ ...base, type: 'List', typeText: 'List<Point>', value: d.pts });
+        continue;
+      }
       if (!drawsOnGraph(o.type, o.typeText, o.cell.value)) continue;
       out.push({ id: o.id, name: o.name, type: o.type, typeText: o.typeText, value: o.cell.value, color: expressions.colorOf(o.id), free: o.type === 'Point' && session.draggable(o.name), label: true, ...(hiddenByStyle(o) ? { ghost: true } : {}), ...(selection.has(o.name) ? { selected: true } : {}), ...(selection.hover() === o.name ? { hovered: true } : {}), ...(o.type === 'Particles' ? { time: session.time() } : {}), ...(traced.has(o.id as unknown as number) ? { trace: tracePoints(session.figure, o.id) as Float64Array } : {}) });
     }
@@ -177,6 +192,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
   graph.element.append(tools.element, tools.hint);
   const lab = mountDataLab(session, registry, say);
   const calc = mountProbCalc(session, registry, say);
+  const cas = mountCasPanel(session, say);
   const sim = mountSimStrip({ session, registry, say, selected: () => selection.names(), ...(opts.every ? { every: opts.every } : {}) });
   graph.element.append(sim.element);
   // the panel's Simulate section opens the strip (ui.md 6)
@@ -196,9 +212,33 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
     if (examples.value) api.loadExample(examples.value);
     examples.value = '';
   });
+  /** One side panel at a time: opening one closes the others. */
+  const closeOthers = (keep: 'lab' | 'calc' | 'cas'): void => {
+    if (keep !== 'lab' && lab.isOpen()) lab.close();
+    if (keep !== 'calc' && calc.isOpen()) calc.close();
+    if (keep !== 'cas' && cas.isOpen()) cas.close();
+    labBtn.classList.toggle('on', lab.isOpen());
+    calcBtn.classList.toggle('on', calc.isOpen());
+    casBtn.classList.toggle('on', cas.isOpen());
+  };
+  const casBtn = btn('CAS', 'tool-btn', 'Open the CAS view: algebra row by row', () => {
+    if (cas.isOpen()) cas.close();
+    else {
+      closeOthers('cas');
+      cas.open();
+      // the engine loads with the view, so the first button press does not wait
+      void loadCasEngine();
+    }
+    casBtn.classList.toggle('on', cas.isOpen());
+    requestAnimationFrame(() => {
+      graph.paint();
+      graph.fit();
+    });
+  });
   const labBtn = btn('Data analysis', 'tool-btn', 'Open the data-analysis panel', () => {
     if (lab.isOpen()) lab.close();
     else {
+      closeOthers('lab');
       calc.close();
       calcBtn.classList.remove('on');
       lab.open();
@@ -213,6 +253,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
   const calcBtn = btn('Probability', 'tool-btn', 'Open the probability calculator', () => {
     if (calc.isOpen()) calc.close();
     else {
+      closeOthers('calc');
       lab.close();
       labBtn.classList.remove('on');
       calc.open();
@@ -262,7 +303,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
 
   const top = el('header', { class: 'topbar' },
     el('div', { class: 'brand' }, el('span', { class: 'logo', 'aria-hidden': 'true' }, '∿'), el('span', { class: 'brand-name' }, 'Incantly'), el('span', { class: 'brand-sub' }, 'Studio')),
-    el('div', { class: 'top-tools' }, newBtn, examples, labBtn, calcBtn, scriptBtn),
+    el('div', { class: 'top-tools' }, newBtn, examples, labBtn, calcBtn, casBtn, scriptBtn),
     el('div', { class: 'top-right' }, undoBtn, redoBtn, helpBtn),
   );
 
@@ -318,7 +359,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
     el('footer', { class: 'panel-foot' }, status),
   );
   const split = el('div', { class: 'split', role: 'separator', 'aria-orientation': 'vertical', 'aria-label': 'Resize the expression list', tabindex: '0' });
-  const main = el('div', { class: 'workspace' }, panel, split, graph.element, lab.element, calc.element);
+  const main = el('div', { class: 'workspace' }, panel, split, graph.element, lab.element, calc.element, cas.element);
   root.replaceChildren(el('div', { class: 'app' }, top, main), dialog, help);
 
   // dragging the divider resizes the expression list
@@ -358,6 +399,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
     tools.figureChanged();
     lab.refresh();
     calc.refresh();
+    cas.refresh();
     sim.refresh();
     graph.element.classList.toggle('has-sim', sim.isShown());
     graph.redraw();
@@ -365,6 +407,13 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
   const off = session.onChange(sync);
   calc.element.addEventListener('lab-closed', () => {
     calcBtn.classList.remove('on');
+    requestAnimationFrame(() => {
+      graph.paint();
+      graph.fit();
+    });
+  });
+  cas.element.addEventListener('lab-closed', () => {
+    casBtn.classList.remove('on');
     requestAnimationFrame(() => {
       graph.paint();
       graph.fit();
@@ -408,6 +457,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
     graph,
     lab,
     calc,
+    cas,
     tools,
     sim,
     selection,
