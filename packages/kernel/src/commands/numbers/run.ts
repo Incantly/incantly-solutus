@@ -152,7 +152,10 @@ function runtimeBindings(
 ): Map<string, Binding> {
   const bindings = new Map<string, Binding>();
   bindings.set('self', { ref: selfName });
-  const raw = payload.text ?? payload.value ?? figure.value(target === 'figure' ? selfName : target);
+  let raw = payload.text ?? payload.value ?? figure.value(target === 'figure' ? selfName : target);
+  // a box's `change` carries the linked object's new value, as the step was checked with (handlers.ts)
+  const linked = figure.get(target)?.type === 'Input' && event !== 'input' ? (figure.value(target) as { target?: unknown } | undefined)?.target : undefined;
+  if (typeof linked === 'number' && (payload.value === undefined || typeof payload.value === 'object')) raw = figure.value(linked as ObjId);
   const lit = valueLiteralExpr(raw);
   if (lit) bindings.set('value', { literal: lit });
   else bindings.set('value', { ref: target === 'figure' ? selfName : target });

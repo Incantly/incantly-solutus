@@ -2,8 +2,12 @@
  * The studio's session: one kernel `Figure`, and the bookkeeping the screen needs around it (rows for the line list, the
  * outcome of each action as text or an error object, the clock). It uses only the kernel's public API.
  */
-import { Figure, animatingIds, numberSource, playerOf, tracedIds, valueText } from '@incantly/kernel';
-import type { Player } from '@incantly/kernel';
+import {
+  Figure, animatingIds, brokenSteps, buttonLabelOf, captionsOf, choiceStateOf, clickButton, commitInputText, defaultCaption, getStoredHandler,
+  inputErrorOf, inputNoticeOf, targetTextOf, inputTextOf, isClickable, listHandlers, numberSource, playerOf, runHandler, runLoadHandlers, setChoiceIndex,
+  toggleCheckbox, tracedIds, typeInputText, valueText,
+} from '@incantly/kernel';
+import type { HandlerEvent, HandlerRun, Player } from '@incantly/kernel';
 import type { CommandRegistry, ErrorObject, ObjectView } from '@incantly/kernel';
 import { rightSide } from '@incantly/ui';
 import type { CauseLink, LineRow, RowControl, SubmitResult } from '@incantly/ui';
@@ -80,8 +84,21 @@ export class KernelSession {
     });
   }
 
+  /** Goes up on each control gesture: a box's text, error or notice can change with no change to the figure. */
+  controlVersion = 0;
+
   private emit(): void {
     for (const fn of this.listeners) fn();
+  }
+
+  private linesChanged(): void {
+    this.structureVersion++;
+    this.emit();
+  }
+
+  private controlChanged(): void {
+    this.controlVersion++;
+    this.emit();
   }
 
   private done(message: string, notices: readonly { readonly message: string }[]): Outcome {
@@ -94,12 +111,15 @@ export class KernelSession {
   submit(source: string): SubmitResult {
     const r = this.figure.apply(source.trim());
     if (!r.ok) return { ok: false, error: r };
+    // `on` and `ClearHandler` lines change handlers, which raise no figure event of their own
+    if (r.op === 'action') this.linesChanged();
     return { ok: true, announcement: [r.summary, ...r.notices.map((n) => n.message)].join('. ') };
   }
 
   /** Several lines as one undo step; every line applies or fails on its own (the teacher's `draw`). */
   applyLines(lines: readonly string[], label: string, mode: 'independent' | 'atomic' = 'independent'): Outcome {
     const r = this.figure.applyBatch(lines, { group: label, mode });
+    if (r.applied > 0) this.linesChanged();
     if (mode === 'atomic' && !r.ok) {
       const bad = r.results.find((x) => !x.ok);
       if (bad && !bad.ok) return { ok: false, error: bad };
@@ -126,7 +146,7 @@ export class KernelSession {
     const base = { id: v.id, name: v.name, type: v.typeText, source, ...(v.free ? { free: true } : {}), ...(v.style.fixed ? { locked: true } : {}) };
     if (cell.defined) {
       const isFunction = v.type === 'Function';
-      const control = v.free ? this.controlOf(v, cell.value) : undefined;
+      const control = this.widgetOf(v) ?? (v.free ? this.controlOf(v, cell.value) : undefined);
       return { ...base, ...(control ? { control } : {}), state: { defined: true, value: isFunction ? rightSide(source) : valueText(cell.value) } };
     }
     const cause = this.causeChain(v);
@@ -147,6 +167,29 @@ export class KernelSession {
     const r = v.range;
     const range = r ? ` in ${numberSource(r.min)}..${numberSource(r.max)}${r.step !== undefined ? ` step ${numberSource(r.step)}` : ''}` : '';
     return `${v.name} = ${lit}${range}`;
+  }
+
+  /** A Button, a Choice or an Input as the control its row draws (controls-scripting ui.md 1 to 3). */
+  private widgetOf(v: ObjectView): RowControl | undefined {
+    if (v.type === 'Button') return { kind: 'button', label: buttonLabelOf(this.figure, v.id) };
+    if (v.type === 'Choice') {
+      const st = choiceStateOf(this.figure, v.id);
+      const options = captionsOf(this.figure, v.id) ?? st?.options.map((o) => (isFunctionValue(o) ? functionCaption(this.figure, o) : defaultCaption(o))) ?? [];
+      return { kind: 'choice', options, index: st?.index ?? 0 };
+    }
+    if (v.type === 'Input') {
+      const caption = (v.cell.defined ? (v.cell.value as { caption?: unknown } | undefined)?.caption : undefined) ?? '';
+      const err = inputErrorOf(this.figure, v.id);
+      const notice = inputNoticeOf(this.figure, v.id);
+      return {
+        kind: 'input',
+        caption: typeof caption === 'string' ? caption : '',
+        text: inputTextOf(this.figure, v.id),
+        ...(err ? { error: { message: err.message, ...(err.col !== undefined ? { col: err.col, endCol: err.endCol } : {}) } } : {}),
+        ...(notice ? { notice: notice.message } : {}),
+      };
+    }
+    return undefined;
   }
 
   private controlOf(v: ObjectView, value: unknown): RowControl | undefined {
@@ -218,8 +261,11 @@ export class KernelSession {
     const r = this.figure.setFree(name, value, 'slider');
     if (!r.ok) return { ok: false, error: r };
     this.figure.flush();
+    // learner gestures raise events (design 3.3): change on each move, dragend on release
+    this.raise(name, 'change', this.figure.value(name));
     if (!done) return this.done(`${name} = ${valueText(value)}`, []);
     this.figure.commitDrag();
+    this.raise(name, 'dragend', this.figure.value(name));
     return this.done(`${name} = ${valueText(value)}`, []);
   }
 
@@ -244,8 +290,115 @@ export class KernelSession {
     const r = this.figure.setFree(name, { x: round(x), y: round(y) }, 'drag');
     if (!r.ok) return { ok: false, error: r };
     this.figure.flush();
-    if (done) this.figure.commitDrag();
+    this.raise(name, 'change', this.figure.value(name));
+    if (done) {
+      this.figure.commitDrag();
+      this.raise(name, 'dragend', this.figure.value(name));
+    }
     return this.done(`${name} = (${valueText(round(x))}, ${valueText(round(y))})`, []);
+  }
+
+  /* ------------------------------ controls (controls-scripting design 3.3) ------------------------------ */
+
+  /** The last handler run a gesture caused, for the aborted-run badge. */
+  lastRun: HandlerRun | undefined;
+
+  /** True when `target` has a stored handler for `event`, so a gesture with none costs nothing. */
+  hasHandler(target: string, event: HandlerEvent): boolean {
+    return getStoredHandler(this.figure, target, event) !== undefined;
+  }
+
+  /** A learner gesture on `name`: runs its handler, and for `change` the figure's `on figure change`. */
+  private raise(name: string, event: HandlerEvent, value?: unknown): void {
+    if (this.hasHandler(name, event)) this.lastRun = runHandler(this.figure, name, event, { value, by: 'learner' }, 'learner');
+    if (event === 'change' && this.hasHandler('figure', 'change')) runHandler(this.figure, 'figure', 'change', { changedName: name, by: 'learner' }, 'learner');
+  }
+
+  /** A button pressed, or a clickable object clicked. */
+  click(name: string): Outcome {
+    const r = clickButton(this.figure, name, { by: 'learner' });
+    if (!r.ok) return { ok: false, error: r };
+    this.lastRun = r.value;
+    this.controlChanged();
+    return r.value.ok ? this.done(`click ${name}`, []) : { ok: false, error: r.value.error as ErrorObject };
+  }
+
+  /** True when clicking the object on the graph does something: `clickable = true` and a click handler. */
+  clickable(name: string): boolean {
+    return isClickable(this.figure, name) && this.hasHandler(name, 'click');
+  }
+
+  /** A dropdown pick, 1-based. Raises `change` (the writer does). */
+  choose(name: string, index: number): Outcome {
+    const id = this.figure.get(name)?.id;
+    if (id === undefined) return { ok: false, error: this.figure.apply(`${name}`) as ErrorObject };
+    const r = setChoiceIndex(this.figure, id, index, { by: 'learner' });
+    this.controlChanged();
+    return r.ok ? this.done(`${name}: option ${index}`, r.notices) : { ok: false, error: r };
+  }
+
+  /** A checkbox toggled by the learner. Raises `change`. */
+  toggle(name: string): Outcome {
+    const r = toggleCheckbox(this.figure, name, { by: 'learner' });
+    this.controlChanged();
+    return r.ok ? this.done(r.value.summary, r.notices) : { ok: false, error: r };
+  }
+
+  /** Text typed into an input box: checked at once, never written; `input` handlers run after a pause (the caller's). */
+  typeInput(name: string, text: string): { readonly valid: boolean; readonly error: ErrorObject | null } {
+    return typeInputText(this.figure, name, text);
+  }
+
+  /** The text of the object an input box is linked to, as the box shows it when idle. */
+  targetText(name: string): string {
+    const v = this.figure.get(name);
+    const t = v?.cell.defined ? (v.cell.value as { target?: number } | undefined)?.target : undefined;
+    return typeof t === 'number' ? targetTextOf(this.figure, t as never) : '';
+  }
+
+  /** The pause after typing is over: the `input` handler sees the text. */
+  inputPaused(name: string, text: string): void {
+    if (this.hasHandler(name, 'input')) {
+      this.lastRun = runHandler(this.figure, name, 'input', { value: text, by: 'learner' }, 'learner');
+      this.controlChanged();
+    }
+  }
+
+  /** Enter or blur in an input box. On an error the target keeps its value and the box shows the error. */
+  commitInput(name: string, text: string): Outcome {
+    const r = commitInputText(this.figure, name, text, { by: 'learner' });
+    this.controlChanged();
+    return r.ok ? this.done(r.value.summary, r.value.notices) : { ok: false, error: r };
+  }
+
+  /** Runs `on figure load` once, after an example or a file is in. */
+  runLoad(): void {
+    if (runLoadHandlers(this.figure, { by: 'host' })) this.controlChanged();
+  }
+
+  private handlerCache: { key: string; by: Map<string, ReturnType<KernelSession['handlers']>> } | undefined;
+
+  /** The handlers on one target (`figure` for the figure's own), cached until the figure's structure changes. */
+  handlersOn(target: string): ReturnType<KernelSession['handlers']> {
+    const key = `${this.structureVersion}|${this.controlVersion}`;
+    if (this.handlerCache?.key !== key) {
+      const by = new Map<string, ReturnType<KernelSession['handlers']>>();
+      for (const h of this.handlers()) by.set(h.target, [...(by.get(h.target) ?? []), h]);
+      this.handlerCache = { key, by };
+    }
+    return this.handlerCache.by.get(target) ?? [];
+  }
+
+  /** Every handler with its steps and which steps are broken (ui.md 5). */
+  handlers(): readonly { readonly target: string; readonly event: HandlerEvent; readonly steps: readonly { readonly text: string; readonly broken: boolean }[] }[] {
+    return listHandlers(this.figure).map((h) => {
+      const broken = new Set(brokenSteps(this.figure, h.target, h.event));
+      return {
+        target: h.target,
+        event: h.event,
+        steps: h.steps.map((s, i) => ({ text: `${s.loop ? `for ${s.loop.variable} in ${s.loop.from}..${s.loop.to} ` : ''}${s.guard ? `if ${s.guard}: ` : ''}${s.source}`, broken: broken.has(i + 1) })),
+      };
+    });
   }
 
   /* ------------------------------ history ------------------------------ */
@@ -281,6 +434,8 @@ export class KernelSession {
       this.figure = figure;
       this.watch();
       this.emit();
+      // a loaded figure runs its `on figure load` once (controls-scripting design 3.3)
+      this.runLoad();
     }
     return { applied: report.applied, total, errors: report.errors, replaced: usable };
   }
@@ -348,4 +503,14 @@ export class KernelSession {
     const r = this.player().seek(t);
     return 'ok' in r && r.ok === false ? { ok: false, error: r as ErrorObject } : this.done(`t = ${valueText(this.time())}`, []);
   }
+}
+
+function isFunctionValue(v: unknown): boolean {
+  return typeof v === 'object' && v !== null && typeof (v as { arity?: unknown }).arity === 'number';
+}
+
+/** A function option's caption: its definition when it is a named function, else `function`. */
+function functionCaption(figure: Figure, v: unknown): string {
+  for (const o of figure.objects()) if (o.type === 'Function' && o.cell.defined && o.cell.value === v) return rightSide(o.definition);
+  return valueText(v);
 }
