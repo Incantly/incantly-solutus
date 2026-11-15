@@ -4,6 +4,8 @@
  */
 import { mountDataLab } from './datalab';
 import { mountProbCalc } from './probcalc';
+import { mountSimStrip } from './simstrip';
+import type { SimStrip } from './simstrip';
 import { mountToolStrip } from './tools-ui';
 import type { ToolStrip } from './tools-ui';
 import type { ProbCalc } from './probcalc';
@@ -22,6 +24,8 @@ export interface StudioOptions {
   /** Frame scheduler for the clock; defaults to `requestAnimationFrame`. A test passes its own. */
   readonly raf?: (cb: (now: number) => void) => number;
   readonly caf?: (handle: number) => void;
+  /** Repeating timer for the simulation strip's Run; a test passes its own. */
+  readonly every?: (ms: number, fn: () => void) => () => void;
 }
 
 export interface Mounted {
@@ -31,6 +35,7 @@ export interface Mounted {
   readonly lab: DataLab;
   readonly calc: ProbCalc;
   readonly tools: ToolStrip;
+  readonly sim: SimStrip;
   readonly status: HTMLElement;
   /** Replaces the figure with an example's lines. */
   loadExample(id: string): void;
@@ -119,6 +124,13 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
   graph.element.append(tools.element, tools.hint);
   const lab = mountDataLab(session, registry, say);
   const calc = mountProbCalc(session, registry, say);
+  const sim = mountSimStrip({ session, registry, say, ...(opts.every ? { every: opts.every } : {}) });
+  graph.element.append(sim.element);
+  // the panel's Simulate section opens the strip (ui.md 6)
+  calc.element.addEventListener('open-simulation', () => {
+    sim.open();
+    graph.element.classList.toggle('has-sim', sim.isShown());
+  });
 
   /* ------------------------------ top bar ------------------------------ */
 
@@ -295,6 +307,8 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
     tools.figureChanged();
     lab.refresh();
     calc.refresh();
+    sim.refresh();
+    graph.element.classList.toggle('has-sim', sim.isShown());
     graph.redraw();
   };
   const off = session.onChange(sync);
@@ -340,6 +354,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
     lab,
     calc,
     tools,
+    sim,
     status,
     loadExample(id) {
       const ex = EXAMPLES.find((e) => e.id === id);
@@ -362,6 +377,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
       off();
       document.removeEventListener('keydown', onKey);
       tools.dispose();
+      sim.dispose();
       graph.dispose();
       if (running) caf(running);
     },

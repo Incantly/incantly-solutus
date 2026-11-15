@@ -22,9 +22,105 @@ export function lgamma(x: number): number {
 const EPS = 1e-16;
 const TINY = 1e-300;
 
+/** μ − ln(1 + μ), without the cancellation near 0. */
+function log1pmxNeg(mu: number): number {
+  if (Math.abs(mu) > 0.01) return mu - Math.log1p(mu);
+  // μ²/2 − μ³/3 + μ⁴/4 − …
+  let term = mu * mu;
+  let s = 0;
+  for (let k = 2; k < 30; k++) {
+    const add = term / k;
+    s += k % 2 === 0 ? add : -add;
+    if (Math.abs(add) < Math.abs(s) * EPS) break;
+    term *= mu;
+  }
+  return s;
+}
+
+/** ln Γ(a) − ((a − ½) ln a − a + ½ ln 2π), the Stirling correction, for a ≥ 10. */
+function stirlingCorr(a: number): number {
+  const r = 1 / a;
+  const r2 = r * r;
+  return r * (1 / 12 - r2 * (1 / 360 - r2 * (1 / 1260 - r2 * (1 / 1680 - r2 / 1188))));
+}
+
+/** 18-point Gauss–Legendre nodes and weights on [0, 1], found once by Newton's method on P₁₈. */
+const GL = ((): { y: Float64Array; w: Float64Array } => {
+  const n = 18;
+  const y = new Float64Array(n);
+  const w = new Float64Array(n);
+  for (let i = 0; i < n / 2; i++) {
+    let z = Math.cos((Math.PI * (i + 0.75)) / (n + 0.5));
+    let pp = 0;
+    for (let it = 0; it < 100; it++) {
+      let p1 = 1;
+      let p2 = 0;
+      for (let j = 1; j <= n; j++) {
+        const p3 = p2;
+        p2 = p1;
+        p1 = ((2 * j - 1) * z * p2 - (j - 1) * p3) / j;
+      }
+      pp = (n * (z * p1 - p2)) / (z * z - 1);
+      const dz = p1 / pp;
+      z -= dz;
+      if (Math.abs(dz) < 1e-16) break;
+    }
+    y[i] = (1 - z) / 2;
+    y[n - 1 - i] = (1 + z) / 2;
+    const wi = 1 / ((1 - z * z) * pp * pp);
+    w[i] = wi;
+    w[n - 1 - i] = wi;
+  }
+  return { y, w };
+})();
+
+/** ∫ f from lo to hi (either order) by 18-point Gauss–Legendre on `panels` equal pieces. */
+function glIntegrate(f: (t: number) => number, lo: number, hi: number, panels: number): number {
+  const h = (hi - lo) / panels;
+  let sum = 0;
+  for (let k = 0; k < panels; k++) {
+    const left = lo + k * h;
+    for (let j = 0; j < 18; j++) sum += (GL.w[j] as number) * f(left + h * (GL.y[j] as number));
+  }
+  return sum * h;
+}
+
+/** Pieces of the quadrature: the integrand spans up to about 16 standard deviations. */
+const PANELS = 6;
+
+/** From this shape on, the incomplete gamma is integrated by quadrature: the series needs about √a steps. */
+const QUAD_FROM = 100;
+
+/**
+ * P(a, x) or Q(a, x), whichever is the small side, for a ≥ 100, by quadrature of the integrand near its peak. The
+ * prefactor and the integrand are written in forms that do not cancel for large a (Stirling's series, log1p).
+ */
+function gammaQuad(a: number, x: number): { p: number; q: number } {
+  const a1 = a - 1;
+  const s = Math.sqrt(a1);
+  const upper = x > a1;
+  const xu = upper ? Math.max(a1 + 11.5 * s, x + 6 * s) : Math.max(0, Math.min(a1 - 7.5 * s, x - 5 * s));
+  const integral = glIntegrate((t) => Math.exp(-a1 * log1pmxNeg((t - a1) / a1)), x, xu, PANELS);
+  // a1^a1 e^−a1 / Γ(a) = 1 / √(2π a1) · e^−corr(a1)
+  const ans = integral * Math.exp(-0.5 * Math.log(2 * Math.PI * a1) - stirlingCorr(a1));
+  if (upper) return { p: 1 - ans, q: ans };
+  return { p: -ans, q: 1 + ans };
+}
+
+/**
+ * ln(y^(a−1) e^−y / Γ(a)), the log density of Gamma(a, 1) at y > 0. For a large shape the terms of size a ln a are
+ * cancelled by hand (Stirling's series), so the result keeps its digits up to a = 1e15.
+ */
+export function gammaLogDensity(a: number, y: number): number {
+  if (a < 100) return (a - 1) * Math.log(y) - y - lgamma(a);
+  const a1 = a - 1;
+  return -a1 * log1pmxNeg((y - a1) / a1) - 0.5 * Math.log(2 * Math.PI * a1) - stirlingCorr(a1);
+}
+
 /** Regularised lower and upper incomplete gamma P(a, x) and Q(a, x). */
 export function gammaPQ(a: number, x: number): { p: number; q: number } {
   if (x <= 0) return { p: 0, q: 1 };
+  if (a >= QUAD_FROM) return gammaQuad(a, x);
   const lead = -x + a * Math.log(x) - lgamma(a);
   if (x < a + 1) {
     // series
@@ -62,6 +158,8 @@ export function gammaPQ(a: number, x: number): { p: number; q: number } {
 }
 
 function betacf(a: number, b: number, x: number): number {
+  // the fraction needs about √(max(a, b)) terms where the shapes are far apart
+  const cap = Math.min(200000, 1000 + Math.ceil(4 * Math.sqrt(Math.max(a, b))));
   const qab = a + b;
   const qap = a + 1;
   const qam = a - 1;
@@ -70,7 +168,7 @@ function betacf(a: number, b: number, x: number): number {
   if (Math.abs(d) < TINY) d = TINY;
   d = 1 / d;
   let h = d;
-  for (let m = 1; m < 1000; m++) {
+  for (let m = 1; m < cap; m++) {
     const m2 = 2 * m;
     let aa = (m * (b - m) * x) / ((qam + m2) * (a + m2));
     d = 1 + aa * d;
@@ -92,13 +190,61 @@ function betacf(a: number, b: number, x: number): number {
   return h;
 }
 
-/** Regularised incomplete beta I_x(a, b). */
-export function betaI(x: number, a: number, b: number): number {
+/** From these shapes on (both), the incomplete beta is integrated by quadrature. */
+const BETA_QUAD_FROM = 3000;
+
+/**
+ * I_x(a, b) for a, b ≥ 3000 by quadrature near the peak. The exponent's linear terms are summed exactly and the
+ * prefactor B(a, b)⁻¹ μ^(a−1) (1−μ)^(b−1) is reduced by Stirling's series, so nothing of size a cancels.
+ */
+function betaQuad(x: number, a: number, b: number): number {
+  const s = a + b;
+  const mu = a / s;
+  const a1 = a - 1;
+  const b1 = b - 1;
+  const sd = Math.sqrt((a * b) / (s * s * (s + 1)));
+  const upper = x > mu;
+  const xu = upper ? Math.min(1, Math.max(mu + 10 * sd, x + 5 * sd)) : Math.max(0, Math.min(mu - 10 * sd, x - 5 * sd));
+  const lin = s * (1 / b - 1 / a);
+  const integral = glIntegrate((t) => {
+    const d = t - mu;
+    return Math.exp(d * lin - a1 * log1pmxNeg(d / mu) - b1 * log1pmxNeg(-d / (1 - mu)));
+  }, x, xu, PANELS);
+  const pre = -0.5 * Math.log(a) - 0.5 * Math.log(b) + 1.5 * Math.log(s) - 0.5 * Math.log(2 * Math.PI)
+    + stirlingCorr(s) - stirlingCorr(a) - stirlingCorr(b);
+  const ans = integral * Math.exp(pre);
+  return ans > 0 ? 1 - ans : -ans;
+}
+
+/**
+ * Regularised incomplete beta I_x(a, b). `xc` is 1 − x when the caller knows it exactly (a binomial's `p` near 0
+ * makes `1 − p` lose the digits of `p`).
+ */
+export function betaI(x: number, a: number, b: number, xc = 1 - x): number {
   if (x <= 0) return 0;
   if (x >= 1) return 1;
-  const lead = lgamma(a + b) - lgamma(a) - lgamma(b) + a * Math.log(x) + b * Math.log1p(-x);
+  if (a >= BETA_QUAD_FROM && b >= BETA_QUAD_FROM) return betaQuad(x, a, b);
+  // the logs are taken of whichever of x and 1 − x is small, so a huge shape does not multiply a rounding error
+  const lx = xc < 0.5 ? Math.log1p(-xc) : Math.log(x);
+  const lxc = x < 0.5 ? Math.log1p(-x) : Math.log(xc);
+  const lead = -lbeta(a, b) + a * lx + b * lxc;
   if (x < (a + 1) / (a + b + 2)) return (Math.exp(lead) * betacf(a, b, x)) / a;
-  return 1 - (Math.exp(lead) * betacf(b, a, 1 - x)) / b;
+  return 1 - (Math.exp(lead) * betacf(b, a, xc)) / b;
+}
+
+/**
+ * ln B(a, b) = ln Γ(a) + ln Γ(b) − ln Γ(a + b). For a large shape the three log-gammas are of size a ln a and cancel
+ * to something of size b ln a, so the difference is formed from Stirling's series directly.
+ */
+export function lbeta(a: number, b: number): number {
+  const big = Math.max(a, b);
+  const small = Math.min(a, b);
+  if (big < 100) return lgamma(a) + lgamma(b) - lgamma(a + b);
+  const s = a + b;
+  // ln Γ(big) − ln Γ(s) = −(big − ½) log1p(small / big) − small ln s + small + corr(big) − corr(s)
+  const diff = -(big - 0.5) * Math.log1p(small / big) - small * Math.log(s) + small + stirlingCorr(big) - stirlingCorr(s);
+  if (small < 10) return lgamma(small) + diff;
+  return (small - 0.5) * Math.log(small) - small + 0.5 * Math.log(2 * Math.PI) + stirlingCorr(small) + diff;
 }
 
 /** The complementary error function, from Q(1/2, x²). */
