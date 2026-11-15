@@ -234,6 +234,11 @@ export function coerceProp(key: string, v: unknown): Coerced {
       const c = toColor(v);
       return c ? { ok: true, value: c } : bad();
     }
+    case 'point': {
+      const o = v as { x?: unknown; y?: unknown } | null;
+      return typeof o === 'object' && o !== null && typeof o.x === 'number' && typeof o.y === 'number' && Number.isFinite(o.x) && Number.isFinite(o.y)
+        ? { ok: true, value: { x: o.x, y: o.y } } : bad();
+    }
   }
 }
 

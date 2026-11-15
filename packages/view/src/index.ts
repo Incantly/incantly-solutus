@@ -39,3 +39,5 @@ export * from './web/shared-context';
 export * from './web/scheduler-host';
 export * from './web/figure-3d';
 export * from './web/figure-view';
+export * as math from './core/math/index';
+export type { DrawItem as MathItem, MathLayout, Measure } from './core/math/index';

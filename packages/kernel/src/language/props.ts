@@ -3,7 +3,8 @@
  * The kernel owns the meaning; the language checks key names and literal values.
  * Other areas may append entries.
  */
-export type PropKind = 'bool' | 'enum' | 'int' | 'number' | 'text' | 'color' | 'boolexpr' | 'textlist';
+/** `point`: a position, written as a point expression (`at = M`, `at = (1, 2)`), text-logic design 2.1. */
+export type PropKind = 'bool' | 'enum' | 'int' | 'number' | 'text' | 'color' | 'boolexpr' | 'textlist' | 'point';
 
 export interface PropSpec {
   readonly kind: PropKind;

@@ -266,3 +266,7 @@ button:disabled { opacity: 0.4; cursor: default; }
 /* selection (algebra-view design 3.9, ui.md: accent border on the left, tinted background) */
 .expr.selected { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
 .expr.hovered:not(.selected) { background: #f7f9fd; }
+
+/* typeset maths in the list (text-logic design 6) */
+.value.typeset { display: flex; align-items: center; gap: 4px; }
+.math svg { display: inline-block; overflow: visible; }

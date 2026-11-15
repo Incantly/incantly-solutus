@@ -465,6 +465,13 @@ function checkStyleItem(c: Checker, it: StyleItem, keys: readonly string[], out:
       else out.push({ key: it.key, value: n });
       break;
     }
+    case 'point': {
+      const n = c.infer(v);
+      if (!n) break;
+      if (n.ty.k !== 'Point') bad();
+      else out.push({ key: it.key, value: n });
+      break;
+    }
   }
 }
 

@@ -12,6 +12,7 @@ import { AlgebraCache, DEFAULT_PREFS, algebraRows, prefsFromScript, refreshAlgeb
 import type { AlgebraObject, AlgebraPrefs, AlgebraRow, DisplayMode } from '@incantly/view';
 import { colorAt } from './graph/paint';
 import { miniCurve, miniInterval } from './mini';
+import { mathElement } from './graph/mathdraw';
 import type { KernelSession } from './session';
 import { selectionFrom } from './selection';
 import type { Selection } from './selection';
@@ -585,7 +586,13 @@ export function mountExpressions(opts: ExpressionOptions): ExpressionList {
     // values the preview cannot print get a plain description instead of "…"
     if (/^= [[\]…,() {}]*(\(\d+ items\)\])?$/.test(v.textContent) || v.textContent === '= …' || v.textContent === '= [object Object]') v.textContent = describe(r.type, value);
     if (m?.approx && v.textContent) v.title = 'rounded';
-    if (v.textContent) out.append(v);
+    // a text with $…$ parts is typeset (text-logic design 6)
+    const typeset = r.type === 'Text' && typeof value === 'string' ? mathElement(value) : undefined;
+    if (typeset) {
+      v.replaceChildren(document.createTextNode('= '), typeset);
+      v.classList.add('typeset');
+    }
+    if (v.textContent || typeset) out.append(v);
     if (r.free && r.type === 'Number' && !c) {
       const n = Number(value);
       const add = el('button', 'chip', '+ slider');
