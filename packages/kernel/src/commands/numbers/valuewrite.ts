@@ -71,6 +71,7 @@ export function writeNumberValue(
   if (!range) {
     const r = figure.setFree(id, raw, 'api');
     if (!r.ok) return r;
+    figure.flush();
     emitChange(figure, id, by);
     return { ok: true, value: { notices: [], wrote: { name: view.name, from, to: valueText(figure.value(id)) } }, notices: [] };
   }
@@ -79,6 +80,7 @@ export function writeNumberValue(
   if (!c.ok) {
     const wr = figure.setFree(id, NaN, 'api', { reason: c.reason });
     if (!wr.ok) return wr;
+    figure.flush();
     emitChange(figure, id, by);
     return {
       ok: true,
