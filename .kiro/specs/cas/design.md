@@ -40,6 +40,11 @@ applied again. Rows print `toLatex` through the view's math layout.
 - `k = Symbol() with domain = positive` is stored as `k = Symbol(domain = "positive")`.
 - `Hold(2 + 3)` gives 5: the engine's constructors fold numbers, so the typed form is not kept yet.
 
+- The show switch is a `plot` property, not `visible`: every Expr is visible by default, and drawing each one would
+  fill the graph by itself (ui.md 1 shows switches off). `visible = false` still hides a row's drawing.
+- Not built in the view yet: "Use selection" of a sub-expression, reordering rows by drag, the teacher's avatar dot,
+  `Highlight` of a row, a virtual list (200 rows render in full), and `#` text rows (comments are not objects).
+
 ## 5. Not in this round
 
 The CAS panel, plotting, the toolbar and the remaining correctness findings (rounds 3 to 7 of the plan).

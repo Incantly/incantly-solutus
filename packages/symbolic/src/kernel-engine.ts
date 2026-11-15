@@ -5,15 +5,16 @@
  * booleans, lists, or a callable Function for `ToFunction`. Nothing throws out of it.
  */
 import { isCasForm } from '@incantly/kernel';
-import type { CasArgIn, CasEngine, CasHost, CasOut, FunctionValue, ObjId, SymValue, TNode } from '@incantly/kernel';
+import type { CasArgIn, CasEngine, CasHost, CasOut, FunctionValue, ObjId, SymPlot, SymValue, TNode } from '@incantly/kernel';
 import { BridgeError, compileFunction, condFromTNode, nodeFromTNode } from './bridge';
 import type { BridgeObject, BridgeScope } from './bridge';
 import { HEAVY_OPS } from './contracts';
 import type { Domain, OpName, SymArg } from './contracts';
 import type { SymCond, SymNode } from './node';
-import { andCond, floatN, intN, notCond, orCond, symN } from './node';
+import { andCond, floatN, freeSymbols, freeSymbolsCond, intN, notCond, orCond, symN } from './node';
 import { parseExpression } from './parse';
-import { approxOf, condLatex, condText, isExactTree, toLatex, toText } from './print';
+import { condLatex, condSpeech, condText, isExactTree, toLatex, toSpeech, toText } from './print';
+import { evalAt } from './rules';
 import { run } from './run';
 
 /** A SymValue made by this engine: the engine's own argument is kept as `arg`. */
@@ -27,12 +28,27 @@ export function heldOf(a: SymArg): unknown {
   switch (a.k) {
     case 'expr': {
       const text = toText(a.e, { display: true, ...(a.display?.mixed ? { mixed: true } : {}) });
-      return { sym: 'Expr', arg: a, text, latex: toLatex(a.e), exact: a.exact && isExactTree(a.e) } satisfies Held;
+      const unknowns = [...freeSymbols(a.e)].sort();
+      const approx = unknowns.length === 0 ? numeric(a.e) : undefined;
+      const plot = unknowns.length === 1 ? curvePlot(a.e, unknowns[0] as string, a.excluded ?? []) : undefined;
+      return {
+        sym: 'Expr', arg: a, text, latex: toLatex(a.e), exact: a.exact && isExactTree(a.e), input: toText(a.e), speech: toSpeech(a.e), unknowns,
+        ...(approx !== undefined && Number.isFinite(approx) ? { approx } : {}),
+        ...(plot ? { plot } : {}),
+      } satisfies Held;
     }
-    case 'cond':
-      return { sym: 'Cond', arg: a, text: condText(a.c, { display: true }), latex: condLatex(a.c), exact: a.exact } satisfies Held;
+    case 'cond': {
+      const unknowns = [...freeSymbolsCond(a.c)].sort();
+      const solved = solvedOf(a.c);
+      const plot = condPlot(a.c, unknowns);
+      return {
+        sym: 'Cond', arg: a, text: condText(a.c, { display: true }), latex: condLatex(a.c), exact: a.exact, input: condText(a.c), speech: condSpeech(a.c), unknowns,
+        ...(solved ? { solved } : {}),
+        ...(plot ? { plot } : {}),
+      } satisfies Held;
+    }
     case 'sym':
-      return { sym: 'Symbol', arg: a, text: a.name, latex: a.name.length === 1 ? a.name : `\\mathit{${a.name}}`, exact: true } satisfies Held;
+      return { sym: 'Symbol', arg: a, text: a.name, latex: a.name.length === 1 ? a.name : `\\mathit{${a.name}}`, exact: true, input: a.name, speech: a.name, unknowns: [a.name] } satisfies Held;
     case 'num':
       return a.v;
     case 'int':
@@ -50,6 +66,90 @@ export function heldOf(a: SymArg): unknown {
     case 'matrix':
       return a.rows.map((r) => r.map((e) => heldOf({ k: 'expr', e, exact: true })));
   }
+}
+
+/** The decimal value of a closed tree (`-sqrt(2)`, `pi/6`), NaN when it has unknowns or no real value. */
+function numeric(e: SymNode): number {
+  const v = evalAt(e, new Map());
+  return v === null ? NaN : v;
+}
+
+/* ------------------------------ plots (cas ui.md 7) ------------------------------ */
+
+const at1 = (e: SymNode, v: string): ((x: number) => number) => {
+  const c = compileFunction(v, e);
+  return (x) => c.call(x);
+};
+
+function curvePlot(e: SymNode, v: string, excluded: readonly SymCond[]): SymPlot {
+  const holes: number[] = [];
+  for (const c of excluded) {
+    if (c.c === 'rel' && c.op === '!=' && c.l.k === 'sym' && c.l.name === v) {
+      const h = numeric(c.r);
+      if (Number.isFinite(h)) holes.push(h);
+    }
+  }
+  return { kind: 'curve', f: at1(e, v), holes };
+}
+
+/** `x == 2`: the unknown and its value, when the right side is a number. */
+function solvedOf(c: SymCond): { name: string; value: number } | undefined {
+  if (c.c !== 'rel' || c.op !== '==') return undefined;
+  const [s, other] = c.l.k === 'sym' ? [c.l, c.r] : c.r.k === 'sym' ? [c.r, c.l] : [undefined, undefined];
+  if (!s || s.k !== 'sym' || !other || freeSymbols(other).size > 0) return undefined;
+  const v = numeric(other);
+  return Number.isFinite(v) ? { name: s.name, value: v } : undefined;
+}
+
+/** The comparisons of a condition, in order, and whether a point satisfies all of it. */
+function condTester(c: SymCond, names: readonly string[]): { ops: string[]; residual: (vals: number[]) => number; test: (vals: number[]) => boolean | undefined } | undefined {
+  const rels: (SymCond & { c: 'rel' })[] = [];
+  const walk = (k: SymCond): boolean => {
+    if (k.c === 'rel') {
+      rels.push(k);
+      return true;
+    }
+    if (k.c === 'and') return k.of.every(walk);
+    return false;
+  };
+  if (!walk(c) || rels.length === 0) return undefined;
+  const at = (n: SymNode, vals: number[]): number => {
+    const m = new Map<string, number>();
+    names.forEach((nm, i) => m.set(nm, vals[i] as number));
+    const r = evalAt(n, m);
+    return r === null ? NaN : r;
+  };
+  const first = rels[0] as SymCond & { c: 'rel' };
+  return {
+    ops: rels.map((r) => r.op),
+    residual: (vals) => at(first.l, vals) - at(first.r, vals),
+    test: (vals) => {
+      for (const r of rels) {
+        const d = at(r.l, vals) - at(r.r, vals);
+        if (!Number.isFinite(d)) return undefined;
+        const tol = 1e-9 * Math.max(1, Math.abs(at(r.l, vals)));
+        const ok = r.op === '==' ? Math.abs(d) <= tol : r.op === '!=' ? Math.abs(d) > tol : r.op === '<' ? d < 0 : r.op === '<=' ? d <= tol : r.op === '>' ? d > 0 : d >= -tol;
+        if (!ok) return false;
+      }
+      return true;
+    },
+  };
+}
+
+function condPlot(c: SymCond, unknowns: readonly string[]): SymPlot | undefined {
+  if (unknowns.length === 1) {
+    const t = condTester(c, unknowns);
+    if (!t) return undefined;
+    return { kind: 'axis', residual: (x) => t.residual([x]), test: (x) => t.test([x]), ops: t.ops };
+  }
+  if (unknowns.length === 2) {
+    // x and y go across and up; two other unknowns in name order
+    const names = unknowns.includes('x') && unknowns.includes('y') ? ['x', 'y'] : [...unknowns];
+    const t = condTester(c, names);
+    if (!t) return undefined;
+    return { kind: 'relation', residual: (x, y) => t.residual([x, y]), test: (x, y) => t.test([x, y]), ops: t.ops };
+  }
+  return undefined;
 }
 
 /** A callable figure Function for a one-variable body (`ToFunction`), keeping the body for `ToExpr`. */
@@ -70,7 +170,7 @@ function coerce(v: unknown, returns: string): unknown {
   if (returns === 'Number') {
     if (typeof v === 'number') return v;
     if (isHeld(v) && v.arg.k === 'expr') {
-      const n = approxOf(v.arg.e);
+      const n = numeric(v.arg.e);
       return Number.isFinite(n) ? n : undefined;
     }
     return v;

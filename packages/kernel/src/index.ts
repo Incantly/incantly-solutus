@@ -39,6 +39,6 @@ export * from './commands/probability/index';
 export * as text from './commands/text/index';
 export { registerText } from './commands/text/index';
 export { CAS_COMMAND_NAMES, CAS_TYPE_NAMES, casEngineReady, isCasForm, isSymValue, onCasEngine, registerCas, setCasEngine } from './commands/cas/index';
-export type { CasArgIn, CasCommand, CasEngine, CasForm, CasHost, CasOut, CasParam, SymValue } from './commands/cas/index';
+export type { CasArgIn, CasCommand, CasEngine, CasForm, CasHost, CasOut, CasParam, SymPlot, SymValue } from './commands/cas/index';
 export { DEFAULT_FORMAT, describeObject, formatNumber, fractionOf, lineEquation, niceRange, prettyText, speechText, summarize, valueTextOf } from './algebra/format';
 export type { ObjectFacts, Summary, ValueFormat } from './algebra/format';

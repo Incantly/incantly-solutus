@@ -36,6 +36,8 @@ export interface SceneItem {
   readonly time?: number;
   /** A point's trace as packed `x, y` pairs; `NaN` pairs break the line (design 6). */
   readonly trace?: Float64Array;
+  /** Open circles on a curve: the values a cancelled factor excludes (cas ui.md 7). */
+  readonly holes?: readonly Pt[];
   /** A Text placed on the graph (`with at = …`, text-logic design 2.1 and 7). */
   readonly text?: { readonly at: Pt; readonly size: number; readonly anchor: string; readonly rotate: number; readonly bg?: string; readonly vertical?: boolean; readonly full?: boolean };
 }
@@ -268,6 +270,53 @@ function paintSteps(ctx: Ctx, vp: Viewport, f: FunctionValue, c: string): void {
   }
 }
 
+/**
+ * A condition in one unknown on the x axis (cas ui.md 7): the roots of an equation as points, the intervals of an
+ * inequality as a thick band. Roots are found by a sign change between neighbouring pixels, then bisection.
+ */
+function paintAxisCond(ctx: Ctx, vp: Viewport, a: { residual: (x: number) => number; test: (x: number) => boolean | undefined; ops: readonly string[] }, color: string, it: SceneItem, hits: Hit[]): void {
+  const y0 = vp.py(0);
+  const step = 1;
+  if (a.ops.every((op) => op === '==')) {
+    let prevX = vp.x(0);
+    let prev = a.residual(prevX);
+    for (let px = step; px <= vp.w; px += step) {
+      const x = vp.x(px);
+      const r = a.residual(x);
+      if (Number.isFinite(prev) && Number.isFinite(r) && (r === 0 || prev * r < 0)) {
+        let lo = prevX;
+        let hi = x;
+        for (let k = 0; k < 50; k++) {
+          const mid = (lo + hi) / 2;
+          if (a.residual(lo) * a.residual(mid) <= 0) hi = mid;
+          else lo = mid;
+        }
+        const root = (lo + hi) / 2;
+        // a pole changes sign too; a root is where the residual is small
+        if (Math.abs(a.residual(root)) < 1e-6 * Math.max(1, Math.abs(root))) {
+          dot(ctx, vp.px(root), y0, 4.5, color);
+          hits.push({ k: 'circle', x: vp.px(root), y: y0, r: 7, text: `${it.name}: x = ${fmt(root)}`, id: it.id });
+        }
+      }
+      prevX = x;
+      prev = r;
+    }
+    return;
+  }
+  ctx.save();
+  ctx.fillStyle = alpha(color, 0.55);
+  let start: number | undefined;
+  for (let px = 0; px <= vp.w + step; px += step) {
+    const inside = px <= vp.w && a.test(vp.x(px)) === true;
+    if (inside && start === undefined) start = px;
+    if (!inside && start !== undefined) {
+      ctx.fillRect(start, y0 - 3, px - start, 6);
+      start = undefined;
+    }
+  }
+  ctx.restore();
+}
+
 function plotFn(ctx: Ctx, vp: Viewport, f: FunctionValue, color: string): void {
   const r = plotFunction(f, viewBox(vp)) as unknown as { ok: boolean; value?: { paths: readonly Float64Array[] } };
   stroke(ctx, okPaths(r), color);
@@ -368,6 +417,23 @@ export function paintItem(ctx: Ctx, vp: Viewport, it: SceneItem, hits: Hit[]): v
       if (flags.lattice) paintLattice(ctx, vp, v, c);
       else if (flags.step) paintSteps(ctx, vp, v, c);
       else plotFn(ctx, vp, v, c);
+      for (const h of it.holes ?? []) {
+        // an open circle in the curve's colour
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(vp.px(h.x), vp.py(h.y), 4.5, 0, Math.PI * 2);
+        ctx.fillStyle = '#fff';
+        ctx.fill();
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = c;
+        ctx.stroke();
+        ctx.restore();
+        hits.push({ k: 'circle', x: vp.px(h.x), y: vp.py(h.y), r: 7, text: `${it.name} is not defined at x = ${fmt(h.x)}`, id: it.id });
+      }
+      return;
+    }
+    case 'SymAxis': {
+      paintAxisCond(ctx, vp, v as { residual: (x: number) => number; test: (x: number) => boolean | undefined; ops: readonly string[] }, c, it, hits);
       return;
     }
     case 'Curve':

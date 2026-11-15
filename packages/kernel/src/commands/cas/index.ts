@@ -87,7 +87,28 @@ export interface SymValue {
   readonly latex: string;
   /** False when an inexact number entered (printed with ≈). */
   readonly exact: boolean;
+  /** The text in the input syntax (`==` for an equation), so the value can be typed back as a line. */
+  readonly input?: string;
+  /** Spoken form for screen readers (ui.md 8). */
+  readonly speech?: string;
+  /** The free unknowns, sorted. */
+  readonly unknowns?: readonly string[];
+  /** The decimal value of an Expr with no unknowns (the hover of an exact output, ui.md 5). */
+  readonly approx?: number;
+  /** For an equation `v == number` in one unknown: that unknown and number (a solution, drawn as a point). */
+  readonly solved?: { readonly name: string; readonly value: number };
+  /** What the value draws (ui.md 7), built once by the engine. */
+  readonly plot?: SymPlot;
 }
+
+/** The drawing of a symbolic value (cas ui.md 7). Functions are of the screen's x (and y). */
+export type SymPlot =
+  /** An Expr in one unknown: the curve y = e, with open circles at the excluded values. */
+  | { readonly kind: 'curve'; readonly f: (x: number) => number; readonly holes: readonly number[] }
+  /** A Cond in one unknown: points on the x axis for ==, shaded intervals for an inequality. */
+  | { readonly kind: 'axis'; readonly residual: (x: number) => number; readonly test: (x: number) => boolean | undefined; readonly ops: readonly string[] }
+  /** A Cond in two unknowns: an implicit curve or a shaded region. */
+  | { readonly kind: 'relation'; readonly residual: (x: number, y: number) => number; readonly test: (x: number, y: number) => boolean | undefined; readonly ops: readonly string[] };
 
 export function isSymValue(v: unknown): v is SymValue {
   return typeof v === 'object' && v !== null && typeof (v as { sym?: unknown }).sym === 'string' && typeof (v as { text?: unknown }).text === 'string';
@@ -221,6 +242,9 @@ function registerTypes(): void {
     allowed: 'real, positive, nonneg, negative, nonpos, nonzero, integer, natural, rational or complex',
   } as (typeof PROPERTIES)[string];
   registerPropertyTypes('domain', ['Symbol']);
+  // the row's show switch (ui.md 1 and 4): off by default, so a worked solution does not fill the graph by itself
+  PROPERTIES['plot'] ??= { kind: 'bool', allowed: 'true or false' } as (typeof PROPERTIES)[string];
+  registerPropertyTypes('plot', ['Expr', 'Cond', 'List']);
   registerLineRewriter((_fig, text) => {
     const m = /^(\s*[A-Za-z\u0370-\u03FF][\w\u0370-\u03FF]*\s*=\s*Symbol\(\s*\))\s+with\s+(.*)$/.exec(text);
     if (!m) return undefined;
