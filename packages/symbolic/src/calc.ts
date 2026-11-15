@@ -841,7 +841,6 @@ function quadBreaks(e: SymNode, v: SymNode): number[] {
  */
 function tanhSinh(e: SymNode, v: SymNode, a: number, b: number, ctx: RuleCtx): number | null {
   const name = varName(v);
-  const c = (a + b) / 2;
   const r = (b - a) / 2;
   const f = (x: number): number | null => {
     const y = evalAt(e, new Map([[name, x]]));
