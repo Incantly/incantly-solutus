@@ -1823,7 +1823,7 @@ function opIntegral(args: readonly SymArg[], _named: ReadonlyMap<string, SymArg>
       return okOut({
         defined: false,
         reason: 'divergent',
-        detail: { code: 'Y204', text: `The integral does not converge; singular near ${r.at}.` },
+        detail: { code: 'Y204', text: `The integral does not converge; singular near ${snapPoint(r.at)}.` },
       });
     }
     const notices = r.notice === 'numeric_fallback'
@@ -2244,4 +2244,11 @@ export function binomialExact(n: bigint, k: bigint): bigint | undefined {
 /** An expression for a message: the text itself when short, else its two ends (a reason must stay readable aloud). */
 function shortText(t: string, max = 60): string {
   return t.length <= max ? t : `${t.slice(0, 20)}…${t.slice(-20)} (${t.length} characters)`;
+}
+
+/** A pole found by root isolation, printed as the number it stands for: 0 for -4.5e-13, pi/2 kept as 1.5708. */
+function snapPoint(x: number): string {
+  const r = Math.round(x * 1e6) / 1e6;
+  const near = Math.abs(x - r) < 1e-9 * Math.max(1, Math.abs(x)) ? r : x;
+  return String(Number(near.toPrecision(10)) + 0);
 }

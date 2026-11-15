@@ -4,6 +4,7 @@
  * specs-curves). Exact symbolic results belong to the CAS area: every result here is
  * numeric, computed from the language's compiled closures.
  */
+import { casCalculus } from '../cas/index';
 import type { Pt, UndefReason } from '../../contracts/values';
 import type { RuleCall, RuleWork } from '../../graph/registry';
 import type { FunctionValue } from '../../language/runtime';
@@ -277,11 +278,37 @@ function quadOpts(call: RuleCall): { tolAbs: number; tolRel: number; maxDepth: n
   return { tolAbs: 1e-10, tolRel: 1e-10, maxDepth: 20, work: call.work };
 }
 
+/**
+ * A named function's definition and the numbers it reads, for the CAS's exact calculus (cas/design.md 5.15). Undefined
+ * when there is no engine, or the argument is not a function object with a formula.
+ */
+function exactInput(call: RuleCall, i: number): { calc: NonNullable<ReturnType<typeof casCalculus>>; def: string; inputs: Map<string, number> } | undefined {
+  const calc = casCalculus();
+  const id = call.ids[i];
+  if (!calc || id === undefined) return undefined;
+  const d = call.definitionOf?.(id);
+  if (!d || !/^\s*[^(=]+\(\s*[A-Za-z]\w*\s*\)\s*=/.test(d.text)) return undefined;
+  const inputs = new Map<string, number>();
+  for (const x of call.inputsOf(id)) {
+    if (typeof x.value === 'number') inputs.set(x.name, x.value);
+    else return undefined;
+  }
+  return { calc, def: d.text, inputs };
+}
+
 function runIntegralDef(call: RuleCall): unknown {
   const f = reqFn1(call, 0);
   const a = numArg(call, 1);
   const b = numArg(call, 2);
   if (!f || a === undefined || b === undefined) return call.fail('bad_argument', 'Integral needs a function and bounds.');
+  // an exact antiderivative first, when the CAS is loaded (cas/design.md 5.15); the numeric rule otherwise
+  const ex = exactInput(call, 0);
+  if (ex) {
+    const r = ex.calc.definite(ex.def, ex.inputs, a, b);
+    // the engine finds every pole inside and decides each from both sides (SYM-SM-14), which quadrature cannot
+    if (r && 'value' in r && Number.isFinite(r.value)) return r.value;
+    if (r && 'diverges' in r) return call.fail('diverges', r.diverges);
+  }
   const r = quad(f.f, a, b, quadOpts(call));
   if (r.noData) return call.fail(f.lastReason ?? 'out_of_domain', `f is not defined anywhere on [${fmt(Math.min(a, b))}, ${fmt(Math.max(a, b))}].`);
   if (r.divergesAt !== undefined) {
@@ -381,6 +408,9 @@ function antiderivative(f: Fn1, x0: number, c0: number): { readonly f: Fn1; last
 function runIntegralIndef(call: RuleCall): unknown {
   const f = reqFn1(call, 0);
   if (!f) return undefined;
+  const ex = exactInput(call, 0);
+  const F = ex?.calc.antiderivative(ex.def, ex.inputs);
+  if (F) return fn1Value(F, () => undefined);
   const a = antiderivative(f.f, 0, 0);
   return fn1Value(a.f, a.lastReason);
 }
@@ -996,7 +1026,10 @@ function runExtremumPoly(call: RuleCall): unknown {
   if (det.degree <= 1) return [];
   const B = Math.min(cauchyBound(det.coeffs), 1e9);
   const dp = (x: number): number => diff1(f.f, x);
-  const rr = findRoots(dp, -B, B, tol, call.work, 512);
+  // the exact zeros of f' when the CAS is loaded; the numeric root finder otherwise
+  const ex = exactInput(call, 0);
+  const exact = ex?.calc.stationary(ex.def, ex.inputs);
+  const rr = exact ? { roots: exact.filter((x) => Math.abs(x) <= B), spent: false } : findRoots(dp, -B, B, tol, call.work, 512);
   if (rr.spent) return call.fail('timeout', 'The work budget ran out.');
   const out: Pt[] = [];
   const bounds = [-B, ...rr.roots, B];
