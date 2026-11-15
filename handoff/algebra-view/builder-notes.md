@@ -34,9 +34,18 @@ Picked up where the first round stopped (its draft list survived; the cache and 
 Measured at 5,000 objects (2,500 reading one slider), happy-dom: a slider move costs the list 0.24 ms (target 4 ms);
 a full render is well under 100 ms. Tests: `apps/studio/test/algebra-list.test.ts`, `packages/view/test/algebra-cache.test.ts`.
 
+## Third round (15 November 2026): selection
+
+- `apps/studio/src/selection.ts`: the selection in pick order and the hovered object; view layer only.
+- A row click selects (Shift or Ctrl/Cmd adds or removes); a canvas click on an object selects it, on the background
+  clears; Esc clears. Selected objects glow on the canvas and their rows are tinted; hover shows on both sides.
+- A canvas pick scrolls the list to the row. Tools take the selection as their first picks (tools-2d 5.4).
+- The simulation strip's Reroll rerolls only a selected random object (`Reroll(xs)`).
+- Tests: `apps/studio/test/selection.test.ts`. Example: **Selection** in the Examples menu.
+
 ## Not done
 
-- Selection linking between rows and the canvas, multi-select (design 3.9).
+- Arrow keys to move the selection and Space to toggle the marble (design 3.9).
 - Range editing on the slider's end labels, play in explore mode (design 3.10).
 - The `with algebra = …` per-object mode override; value throttling while playing.
 - `restricted` is made by the studio, not registered as a kernel error kind.
