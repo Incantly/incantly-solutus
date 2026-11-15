@@ -230,7 +230,10 @@ export class FigureTx extends FigureBase {
       if (e.kind === 'unknown_name' && define !== undefined) {
         const near = suggest.some((s) => s !== define);
         // a hint that names the variable of the command's own expression is more exact than a list of names
-        if (!near && !/^The variable here is /.test(hint ?? '')) hint = `Define it first, or use a name that exists: ${this.names().slice(0, 8).join(', ')}.`;
+        if (!near && !/^(The variable here is |In algebra, )/.test(hint ?? '')) {
+          const names = this.names().slice(0, 8);
+          hint = names.length > 0 ? `Define it first, or use a name that exists: ${names.join(', ')}.` : 'Define it first.';
+        }
         else recovery = 'use_suggestion';
       }
       const { fix, ...rest } = e as ErrorObject & { fix?: string };

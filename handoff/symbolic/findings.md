@@ -37,8 +37,8 @@ Ranked by impact: security, then hangs and crashes, then wrong results, then wro
   - `ratPow` in `treeToUPoly` (`poly.ts` line 770) raises the numerator and denominator to exponents up to 100,000 with no digit check.
 - **Invariant broken:** S2: `maxNodes` and `maxDigits` are enforced; design 5.5 ("more than 100,000 digits is `limit`") and 5.13.
 - **Suggested fix:** one helper that predicts the digit count before a power, a product of big integers or a divisor enumeration (`bitLength(base) * exponent`, product of `(e + 1)` over the factorisation) and throws `BudgetExceeded('digits')`; use it in `intPowNumber` (check `b` too), `roots.exact`, `ratPow`, `mulNumbers`, `intDivisors` and `divisorsFromFactors`. Count interned nodes per run against `maxNodes`. Apply the rule to every value kind that holds integers (int, rat, dec mantissa, polynomial coefficients).
-- **status:** to be implemented
-- **note:** Partly fixed: digit guards run before powers and products of big whole numbers, and the node limit is enforced through the arena guard. Not verified: the `Factor(x^2 - (10^1000)^99)` case from the evidence was not run, because code without the fix exhausts memory. Owner: symbolic.
+- **status:** fixed
+- **note:** Fixed on `feat/cas`: digit guards before `ratPow`, `upolyPow` (coefficient bound), `roots.exact` powers and products; divisor lists charged to the run before they are built; each trial division of a long number is a step. `Factor(x^2 - (10^1000)^99)` now ends as `timeout` in about 80 ms. Tests: `packages/symbolic/test/spec/budgets.test.ts`.
 
 ### SYM-SM-4: Loops that ignore the run budget
 
@@ -51,8 +51,8 @@ Ranked by impact: security, then hangs and crashes, then wrong results, then wro
   - `runSteps` re-enters `run` with `ctx` only (`run.ts` line 558), so `opts.limits` given to `Steps` are dropped and the inner command always gets the default budget.
 - **Invariant broken:** S2 and S6: every input-sized loop ticks; the inner command of `Steps` runs with the caller's limits.
 - **Suggested fix:** give `roots.pull`, `roots.exact` and every `num.ts` loop the run's ticker (Miller-Rabin: one tick per squaring); compute the divisor count and sum from the factorisation without listing, and cap `DivisorsList` by the predicted count; pass `opts.limits` into the `Steps` inner call.
-- **status:** to be implemented
-- **note:** Partly fixed: the prime tests tick once per modular multiplication, weighted by the size of the number; the divisor count and sum come from the factorisation without listing, and the list is capped at 100,000; Steps passes the caller's limits to its inner command. Still to do: tickers in roots.pull and roots.exact, a cap in binomialBig, and the run's ticker in primeFactorsBig. Owner: symbolic.
+- **status:** fixed
+- **note:** Fixed on `feat/cas`: `roots.pull` and `roots.exact` tick per trial; `primeFactorsBig` charges the run's ticker, weighted by the size of the number; `binomialBig` ticks and refuses k past 10^6 (`binomialExact` returns undefined). Every evidence case now stops within twice its `maxMs`. Tests: `budgets.test.ts`.
 
 ### SYM-SM-5: Untrusted names read `Object.prototype` members
 
@@ -282,7 +282,7 @@ Ranked by impact: security, then hangs and crashes, then wrong results, then wro
 - **Invariant broken:** design 5.5 (constructors fold known values) and 5.7 (`excluded` names the values).
 - **Suggested fix:** use `fn(name, ...args)` in `mapNodes`; run the `roots.pull` rule on built radicands; fold `ln(-1)` in complex mode; build `Factor` of a rational from two display products; solve linear excluded factors with `excludedFromFactor` after factoring the cancelled gcd; round the reported singular point to the exact pole when one is known.
 - **status:** to be implemented
-- **note:** Partly fixed: substituted function values are folded by the constructor. The other forms in the evidence were not changed. Owner: symbolic.
+- **note:** Partly fixed: substituted function values are folded by the constructor. On `feat/cas`: square roots pull square factors (`sqrt(4 a)` is `2 sqrt(a)`), a negative half power of a whole number is a root over a number (`sqrt(2)/2`), rational quadratic roots split into a number and a root (`1 - sqrt(2)`), so `Factor(x^2 + 1, over = complex)` is `(x - i)(x + i)`. Still open: `ln(-1)` in complex mode, `Factor(6/35)`, excluded values, the singular point text. Tests: `tidy.test.ts`. Owner: symbolic.
 
 ## Fix groups
 

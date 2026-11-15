@@ -5,7 +5,8 @@
   "type": "module",
   "description": "The CAS layer, loaded on demand. No DOM.",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./catalogue": "./src/contracts.ts"
   },
   "dependencies": {
     "decimal.js": "^10.6.0"

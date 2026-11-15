@@ -32,6 +32,9 @@ export function defineLine(name: string, type: TypeName | string): string | unde
       return `${name} = true`;
     case 'Text':
       return `${name} = "text"`;
+    // an unknown in algebra (cas/design.md 5.3 rule 5)
+    case 'Symbol':
+      return `${name} = Symbol()`;
     default:
       return undefined;
   }

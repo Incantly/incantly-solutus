@@ -15,6 +15,7 @@ import { registerPropertyTypes } from '../../graph/props';
 import { PROPERTIES } from '../../language/props';
 import { registerStyleLift } from '../../language/lines';
 import { lineLatex, numberLatex, valueLatex } from './latex';
+import { isSymValue } from '../cas/index';
 import { bestRational, continuedFraction, continuedFractionLatex, fractionLatex, scientificLatex, surd } from './numtext';
 
 declare module '../../contracts/values' {
@@ -75,6 +76,9 @@ function latexOf(call: RuleCall, i: number, substitute: boolean): string | undef
   const id = call.ids[i];
   const d = id === undefined ? undefined : call.definitionOf?.(id);
   const v = call.values[i];
+  // an Expr, Cond or Symbol prints as its own maths (cas/design.md 5.15: FormulaText and LaTeX call toLatex)
+  if (isSymValue(v)) return v.latex;
+  if (Array.isArray(v) && v.length > 0 && v.every(isSymValue)) return v.map((x) => x.latex).join(',\\; ');
   const type = call.args[i]?.tree?.ty.k ?? '';
   const free = d && (d.node as LineNode).k === 'define' && isLiteral((d.node as { expr: { k: string } }).expr.k);
   if (d && !free) {

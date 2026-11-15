@@ -754,8 +754,60 @@ export function pow(base: SymNode, exp: SymNode): SymNode {
   if (base.k === 'pow' && exp.k === 'int') {
     return pow(base.base, mul(base.exp, exp));
   }
+  // design 5.5: a square root keeps no square factor of its whole-number part: sqrt(4) = 2, sqrt(12) = 2 sqrt(3),
+  // sqrt(4 a) = 2 sqrt(a) (SYM-SM-27). Only small primes are tried, so the constructor stays cheap.
+  if (exp.k === 'rat' && exp.n === 1n && exp.d === 2n) {
+    const pulled = pullSquare(base);
+    if (pulled !== null) return pulled;
+  }
+  // no root in a denominator: 2^(-1/2) is sqrt(2)/2 and 3^(-3/2) is sqrt(3)/9 (design 5.5, SYM-SM-27)
+  if (base.k === 'int' && base.v > 1n && exp.k === 'rat' && exp.d === 2n && exp.n < 0n && bitLength(base.v) <= 128) {
+    const k = (-exp.n + 1n) / 2n;
+    guardPowDigits(base.v, k);
+    return mul(ratN(1n, base.v ** k), pow(base, HALF_EXP()));
+  }
   return intern({ k: 'pow', base, exp });
 }
+
+const HALF_EXP = (): SymNode => ratN(1n, 2n);
+
+/** `sqrt(c * rest)` with a square factor s^2 of the positive whole number c, as `s * sqrt(c / s^2 * rest)`; else null. */
+function pullSquare(base: SymNode): SymNode | null {
+  let c: bigint;
+  let rest: readonly SymNode[];
+  if (base.k === 'int') {
+    c = base.v;
+    rest = [];
+  } else if (base.k === 'mul' && base.factors[0]?.k === 'int') {
+    c = (base.factors[0] as SymNode & { k: 'int' }).v;
+    rest = base.factors.slice(1);
+  } else return null;
+  if (c <= 3n || bitLength(c) > 128) return null;
+  let s = 1n;
+  let f = c;
+  for (const p of SQUARE_TRIAL_PRIMES) {
+    const pp = p * p;
+    if (pp > f) break;
+    while (f % pp === 0n) {
+      f /= pp;
+      s *= p;
+    }
+  }
+  if (s === 1n) return null;
+  const inside = rest.length === 0 ? intN(f) : f === 1n ? (rest.length === 1 ? (rest[0] as SymNode) : mul(...rest)) : mul(intN(f), ...rest);
+  if (isOneNode(inside)) return intN(s);
+  return mul(intN(s), pow(inside, HALF_EXP()));
+}
+
+const SQUARE_TRIAL_PRIMES: readonly bigint[] = (() => {
+  const out: bigint[] = [];
+  for (let n = 2; n < 1000; n++) {
+    let prime = true;
+    for (let d = 2; d * d <= n; d++) if (n % d === 0) { prime = false; break; }
+    if (prime) out.push(BigInt(n));
+  }
+  return out;
+})();
 
 function isNegativeNumber(n: SymNode): boolean {
   if (n.k === 'int') return n.v < 0n;

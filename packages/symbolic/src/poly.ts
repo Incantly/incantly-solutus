@@ -3,7 +3,7 @@
  * multivariate sparse polynomials, division, gcd, square-free split, factoring over the
  * rationals, resultants, Sturm sequences and real root isolation. All BigInt; pure.
  */
-import { bigGcd, LimitExceeded } from './node';
+import { bigGcd, guardPowDigits, LimitExceeded } from './node';
 import { divisorsFromFactors, factorMultiplicity, floatToRatPreferShort, primeFactorsBig } from './num';
 import type { SymNode } from './node';
 import { add, asInteger, intN, isZeroNode, mul, pow, ratN } from './node';
@@ -254,9 +254,9 @@ function intDivisors(n: bigint, tick: Ticker): bigint[] {
     }
     return small.concat(large.reverse());
   }
-  const f = primeFactorsBig(a);
+  const f = primeFactorsBig(a, 2000000, tick);
   if (f === null) return [1n, a];
-  return divisorsFromFactors(factorMultiplicity(f));
+  return divisorsFromFactors(factorMultiplicity(f), tick);
 }
 
 /** Rational roots by the rational-root theorem: p|a0, q|an. Each root once. */
@@ -779,12 +779,19 @@ export function treeToUPoly(t: SymNode, gen: SymNode, tick: Ticker = NO_TICK): U
 }
 
 function ratPow(num: bigint, den: bigint, e: bigint): UPoly {
+  // SYM-SM-3: the size is predicted before either power is built
+  guardPowDigits(num, e < 0n ? -e : e);
+  guardPowDigits(den, e < 0n ? -e : e);
   if (e >= 0n) return upolyNormalize([num ** e], den ** e);
   const ae = -e;
   return upolyNormalize([den ** ae], num ** ae);
 }
 
 function upolyPow(p: UPoly, e: bigint, tick: Ticker): UPoly {
+  // SYM-SM-3: a coefficient of p^e is at most (sum of |c|)^e, so that bound is checked before multiplying
+  let sum = p.den < 0n ? -p.den : p.den;
+  for (const c of p.c) sum += c < 0n ? -c : c;
+  guardPowDigits(sum, e);
   let r: UPoly = { c: [1n], den: 1n };
   let b = p;
   let k = e;

@@ -7,7 +7,7 @@ import type { Assumptions } from './assume';
 import { EMPTY_ASSUMPTIONS, isNonneg, isPositive, signOf } from './assume';
 import type { SymCond, SymFn, SymNode } from './node';
 import {
-  ONE, TWO, ZERO, add, andCond, asInteger, asRational, bigGcd, compareNodes, constN, divideNodes,
+  ONE, TWO, ZERO, add, andCond, guardMulDigits, guardPowDigits, asInteger, asRational, bigGcd, compareNodes, constN, divideNodes,
   factoredIntegerNode, floatN, fn, freeSymbols, intN, isExactNumber, isNumberNode, isOneNode, isZeroNode,
   LimitExceeded, mapNodes, mul, negateNode, nodeCount, pow, ratN, rel, symN, toFloat,
 } from './node';
@@ -125,7 +125,6 @@ const rootsPull: Rule = {
   on: 'pow',
   teaching: true,
   apply(n, ctx) {
-    void ctx;
     const pe = asBaseExpPow(n);
     if (pe === null) return null;
     const er = asRational(pe.exp);
@@ -137,6 +136,8 @@ const rootsPull: Rule = {
     let rest = v;
     let f = 2n;
     while (f * f <= rest && f < 1000000n) {
+      // SYM-SM-4: each trial division is a step of the run's budget
+      ctx.tick.tick(1);
       let count = 0;
       while (rest % f === 0n) {
         rest /= f;
@@ -355,7 +356,7 @@ const rootsExact: Rule = {
   id: 'roots.exact',
   on: 'pow',
   teaching: true,
-  apply(n) {
+  apply(n, ctx) {
     const pe = asBaseExpPow(n);
     if (pe === null) return null;
     const er = asRational(pe.exp);
@@ -365,6 +366,7 @@ const rootsExact: Rule = {
     let rest = pe.base.v;
     const parts: { p: bigint; e: bigint }[] = [];
     for (let f = 2n; f * f <= rest && f < 100000n; f += f === 2n ? 1n : 2n) {
+      ctx.tick.tick(1);
       let count = 0n;
       while (rest % f === 0n) {
         rest /= f;
@@ -379,8 +381,12 @@ const rootsExact: Rule = {
       const t = e * er.n;
       const whole = t / er.d;
       const rem = t % er.d;
+      // SYM-SM-3: predict the size before the power is built
+      guardPowDigits(p, whole);
+      guardPowDigits(p, rem);
       outside *= p ** whole;
       inside *= p ** rem;
+      guardMulDigits(outside, inside);
     }
     if (outside === 1n) return null;
     return inside === 1n ? intN(outside) : mul(intN(outside), pow(intN(inside), ratN(1n, er.d)));
@@ -1162,7 +1168,7 @@ export function factorNode(t: SymNode, ctx: RuleCtx, over: 'rational' | 'complex
   if (t.k === 'int') {
     if (t.v === 0n || t.v === 1n || t.v === -1n) return { node: t, irreducible: true };
     const neg = t.v < 0n;
-    const factors = primeFactorsBig(neg ? -t.v : t.v);
+    const factors = primeFactorsBig(neg ? -t.v : t.v, 2000000, ctx.tick);
     if (factors === null) return { node: t, irreducible: true };
     if (factors.length <= 1) return { node: t, irreducible: true };
     const node = factoredIntegerNode([...factors].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)), neg);

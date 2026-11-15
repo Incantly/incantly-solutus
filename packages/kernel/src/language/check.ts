@@ -571,7 +571,11 @@ class Checker {
     const obj = this.fig.lookup(name);
     if (obj) {
       this.reads.add(obj.id);
-      return { n: 'ref', id: obj.id, name, ty: obj.type, s: e.s, e: e.e, ...(obj.unit ? { unit: obj.unit } : {}) };
+      // in a symbolic argument an Expr or a Symbol is read as a number formula and a Cond as a condition: the engine
+      // reads the tree, so `sqrt(a^2)` and `q and x > 0` check like any formula (cas/design.md 5.3)
+      const k = obj.type.k as string;
+      const ty = this.casBody && (k === 'Expr' || k === 'Symbol') ? T.Number : this.casBody && k === 'Cond' ? T.Bool : obj.type;
+      return { n: 'ref', id: obj.id, name, ty, s: e.s, e: e.e, ...(obj.unit ? { unit: obj.unit } : {}) };
     }
     return this.unknownName(e);
   }
@@ -662,6 +666,9 @@ class Checker {
     } else if (close.length > 0) {
       extra.hint = `Did you mean ${close.join(' or ')}?`;
       for (const c of close.slice(0, 2)) suggest.push(this.replaceRange(e.s, e.e, c));
+    } else if (this.casBody) {
+      // cas/design.md 5.3 rule 5: in algebra an unknown other than x, y and z is made first, so a typo is never a new unknown
+      extra.hint = `In algebra, x, y and z are unknowns; make ${name} one first with ${name} = Symbol(), or make it a number.`;
     } else if (this.scopeNames().length > 0) {
       // inside a command's own expression the variable is the one the command names (`θ` in Polar, `s` in Curve)
       const vars = this.scopeNames();
@@ -675,6 +682,10 @@ class Checker {
     if (!this.simpleUnknown && !nameProblem(name) && !reservedGroup(name, this.fig.commands, this.functions)) {
       const original = this.parsed.sm.text;
       // the line that makes the name what the argument needs: a slider for a number, a point for a point, nothing for a type with no plain literal
+      if (this.casBody) {
+        extra.quickFixes = [{ label: `Make ${name} an unknown`, lines: [`${name} = Symbol()`, original] }];
+        return this.err('unknown_name', e.s, e.e, 'lang.unknown_name', { name, type: 'Symbol' }, extra);
+      }
       if (want === undefined || want === 'Number') {
         const slider = `${name} = 1 in -5..5 step 0.1`;
         const qf: QuickFix[] = [{ label: `Create slider ${name} from -5 to 5`, lines: [slider, original] }];
@@ -696,6 +707,8 @@ class Checker {
     }
   }
   simpleUnknown = false;
+  /** True while a symbolic argument of a CAS command is checked (cas/design.md 5.3). */
+  casBody = false;
   /** The type a bare name needs in its argument position, when the forms that fit agree; `Any` when it has no plain literal. */
   readonly wants = new Map<Expr, string>();
 
@@ -1617,9 +1630,12 @@ class Checker {
         this.errors = [];
         this.notices = [];
         let node: TNode | null;
+        const outerCas = this.casBody;
+        this.casBody = p.type.startsWith('Cas');
         try {
           node = this.inferArg(a.value, set.members.length === 1 ? set.members[0] : undefined);
         } finally {
+          this.casBody = outerCas;
           const errs = this.errors;
           this.errors = saved;
           this.notices = savedN.concat(this.notices);
@@ -1713,6 +1729,13 @@ class Checker {
 
     // real errors inside arguments take priority over a form diagnosis
     const failedValueArgs = tests.filter((t) => t.invalid);
+    // an argument written as algebra (an unknown x, y or z, or a comparison) fits a CAS form: its errors say how to fix it
+    const algebra = args.some((a) => /(^|[^\w.])[xyz]([^\w(]|$)|==|<|>/.test(this.textOf(a.value)));
+    const casFail = algebra ? failedValueArgs.find((t) => t.bodyErrors.length > 0 && t.b.form.params.some((p) => p.kind === 'body' && p.type.startsWith('Cas'))) : undefined;
+    if (casFail) {
+      for (const er of casFail.bodyErrors) if (this.errors.length < MAX_ERRORS_PER_LINE) this.errors.push(er);
+      return null;
+    }
     if (failedValueArgs.length > 0) {
       const first = failedValueArgs[0] as Test;
       first.b.form.params.forEach((p, k) => {
