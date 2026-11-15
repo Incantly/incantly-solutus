@@ -366,7 +366,10 @@ function definitionBindings(figure: Figure, target: string, event: HandlerEvent)
     }
   } else {
     bindings.set('self', { ref: target });
-    const v = figure.value(target);
+    const view = figure.get(target);
+    // design 3.3: `value` is the text while typing (`input`); for a box's `change` it is the linked object's new value
+    const linked = view?.type === 'Input' ? (figure.value(target) as { target?: unknown } | undefined)?.target : undefined;
+    const v = event === 'input' ? '' : typeof linked === 'number' ? figure.value(linked as ObjId) : figure.value(target);
     const lit = valueLiteralExpr(v) ?? ({ k: 'num', v: 0, text: '0', int: true, s: 0, e: 0 } as const);
     bindings.set('value', { literal: lit });
   }

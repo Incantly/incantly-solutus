@@ -7,7 +7,7 @@
 import { complete, niceRange, signatureHelp, valueText } from '@incantly/kernel';
 import type { Completion, ErrorObject, FigureView } from '@incantly/kernel';
 import { nextName } from '@incantly/ui';
-import type { LineRow } from '@incantly/ui';
+import type { LineRow, RowControl } from '@incantly/ui';
 import { AlgebraCache, DEFAULT_PREFS, algebraRows, prefsFromScript, refreshAlgebraRows, suggestionsFor } from '@incantly/view';
 import type { AlgebraObject, AlgebraPrefs, AlgebraRow, DisplayMode } from '@incantly/view';
 import { colorAt } from './graph/paint';
@@ -530,9 +530,106 @@ export function mountExpressions(opts: ExpressionOptions): ExpressionList {
 
   /* ------------------------------ output under a row ------------------------------ */
 
+  const optionEl = (text: string, value: string, selected: boolean): HTMLOptionElement => {
+    const o = document.createElement('option');
+    o.textContent = text;
+    o.value = value;
+    o.title = text;
+    o.selected = selected;
+    return o;
+  };
+
+  /** Buttons whose last run was aborted: they show a "!" badge for 3 s (ui.md 1). */
+  const aborted = new Set<string>();
+
+  /** An input box (ui.md 3): caption, field, and an error or notice line under it. */
+  const inputBox = (name: string, c: Extract<RowControl, { kind: 'input' }>): HTMLElement => {
+    const wrap = el('div', 'ctl-input');
+    const label = el('label', 'ctl-input-row');
+    if (c.caption) label.append(el('span', 'ctl-caption', c.caption));
+    const field = el('input', 'ctl-field');
+    field.type = 'text';
+    field.value = c.text;
+    field.spellcheck = false;
+    field.autocomplete = 'off';
+    field.setAttribute('aria-label', c.caption || name);
+    label.append(field);
+    wrap.append(label);
+    const errId = `inerr-${name}`;
+    if (c.error) {
+      field.setAttribute('aria-invalid', 'true');
+      field.setAttribute('aria-describedby', errId);
+      const e = el('div', 'ctl-error', `⚠ ${c.error.message}`);
+      e.id = errId;
+      wrap.append(e);
+    }
+    const live = el('div', 'ctl-notice', c.notice ? `ⓘ ${c.notice}` : '');
+    live.setAttribute('aria-live', 'polite');
+    wrap.append(live);
+    let timer = 0;
+    let dirty = false;
+    field.addEventListener('input', () => {
+      dirty = true;
+      const t = session.typeInput(name, field.value);
+      field.classList.toggle('invalid', !t.valid);
+      window.clearTimeout(timer);
+      const text = field.value;
+      timer = window.setTimeout(() => session.inputPaused(name, text), 150);
+    });
+    const commit = (): void => {
+      dirty = false;
+      window.clearTimeout(timer);
+      session.commitInput(name, field.value);
+    };
+    field.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        commit();
+      } else if (e.key === 'Escape') {
+        // back to the target's own text; nothing is written
+        e.preventDefault();
+        dirty = false;
+        field.value = session.targetText(name);
+        session.typeInput(name, field.value);
+        field.blur();
+      }
+    });
+    field.addEventListener('blur', () => {
+      if (dirty) commit();
+    });
+    return wrap;
+  };
+
+  /** The handlers on an object, under its row (ui.md 5): each event, its steps in order, a check or "broken". */
+  const handlersBlock = (out: HTMLElement, name: string): void => {
+    const hs = session.handlersOn(name);
+    if (hs.length === 0) return;
+    const box = el('div', 'handlers');
+    for (const h of hs) {
+      box.append(el('div', 'handler-event', `on ${h.event}`));
+      h.steps.forEach((s, i) => {
+        const line = el('div', `handler-step${s.broken ? ' broken' : ''}`);
+        line.append(el('span', 'step-n', String(i + 1)), el('code', 'step-text', s.text), el('span', 'step-ok', s.broken ? 'broken' : '✓'));
+        const del = el('button', 'step-del', '×');
+        del.type = 'button';
+        del.title = `Remove step ${i + 1}`;
+        del.setAttribute('aria-label', `Remove step ${i + 1} of ${name} ${h.event}`);
+        del.addEventListener('click', () => {
+          const r = session.submit(`ClearHandler(${name}, ${h.event}, ${i + 1})`);
+          if (!r.ok) opts.say(r.error.message);
+        });
+        line.append(del);
+        box.append(line);
+      });
+    }
+    out.append(box);
+  };
+
   const output = (p: RowParts, r: LineRow, value: unknown): void => {
     if (p.error) return;
     const out = p.out;
+    // an input box being typed in keeps its text, focus and caret across a redraw (ui.md 3: no refresh while focused)
+    const typing = ((f) => (f && f === document.activeElement ? { value: f.value, a: f.selectionStart, b: f.selectionEnd } : undefined))(out.querySelector<HTMLInputElement>('.ctl-field'));
     out.replaceChildren();
     p.row.classList.remove('bad');
     const m = model.get(r.id);
@@ -566,8 +663,67 @@ export function mountExpressions(opts: ExpressionOptions): ExpressionList {
       box.type = 'checkbox';
       box.checked = c.checked;
       box.setAttribute('aria-label', r.name);
-      box.addEventListener('change', () => session.setText(r.name, box.checked ? 'true' : 'false'));
+      box.addEventListener('change', () => session.toggle(r.name));
       out.append(box);
+      handlersBlock(out, r.name);
+      return;
+    }
+    if (c?.kind === 'button') {
+      // controls-scripting ui.md 1: a native button; click, tap, Enter or Space raise click
+      const b = el('button', 'ctl-button', c.label);
+      b.type = 'button';
+      if (aborted.has(r.name)) {
+        b.classList.add('aborted');
+        b.title = 'Something went wrong; nothing was changed.';
+      }
+      b.addEventListener('click', () => {
+        const res = session.click(r.name);
+        if (!res.ok || session.lastRun?.ok === false) {
+          aborted.add(r.name);
+          opts.say(res.ok ? 'Something went wrong; nothing was changed.' : res.error.message);
+          window.setTimeout(() => {
+            aborted.delete(r.name);
+            filled.delete(r.id);
+            update();
+          }, 3000);
+          filled.delete(r.id);
+          update();
+        }
+      });
+      out.append(b);
+      handlersBlock(out, r.name);
+      return;
+    }
+    if (c?.kind === 'choice') {
+      // ui.md 2: a native select, so touch gets the platform picker and readers the right role
+      const sel = el('select', 'ctl-choice');
+      sel.setAttribute('aria-label', r.name);
+      if (c.options.length === 0) {
+        sel.disabled = true;
+        sel.title = 'No options';
+        sel.append(optionEl('–', '0', true));
+      }
+      c.options.forEach((o, i) => {
+        sel.append(optionEl(o, String(i + 1), i + 1 === c.index));
+      });
+      sel.addEventListener('change', () => {
+        const res = session.choose(r.name, Number(sel.value));
+        if (!res.ok) opts.say(res.error.message);
+      });
+      out.append(sel);
+      handlersBlock(out, r.name);
+      return;
+    }
+    if (c?.kind === 'input') {
+      const box = inputBox(r.name, c);
+      out.append(box);
+      const f = box.querySelector<HTMLInputElement>('.ctl-field');
+      if (typing && f) {
+        f.value = typing.value;
+        f.focus();
+        f.setSelectionRange(typing.a, typing.b);
+      }
+      handlersBlock(out, r.name);
       return;
     }
     const schema = (value as { schema?: string } | undefined)?.schema;
@@ -594,6 +750,7 @@ export function mountExpressions(opts: ExpressionOptions): ExpressionList {
       v.classList.add('typeset');
     }
     if (v.textContent || typeset) out.append(v);
+    handlersBlock(out, r.name);
     if (r.free && r.type === 'Number' && !c) {
       const n = Number(value);
       const add = el('button', 'chip', '+ slider');
@@ -697,7 +854,7 @@ export function mountExpressions(opts: ExpressionOptions): ExpressionList {
   /** Fills a row's parts from its model row and session row; skipped when nothing it shows has changed. */
   const fill = (p: RowParts, id: number, index: number, m: AlgebraRow): void => {
     // the model row is reused while nothing it shows changed: then only a moving slider knob can need setting
-    const quick = `${settingsVersion}|${index}|${expanded.has(id)}|${prefs.input.kind}|${cardFor === id}|${m.usedBy.length}`;
+    const quick = `${settingsVersion}|${index}|${expanded.has(id)}|${prefs.input.kind}|${cardFor === id}|${m.usedBy.length}|${session.controlVersion}|${session.structureVersion}`;
     if (filledFrom.get(id) === m && filledQuick.get(id) === quick && !p.error) return;
     filledFrom.set(id, m);
     filledQuick.set(id, quick);
@@ -708,7 +865,7 @@ export function mountExpressions(opts: ExpressionOptions): ExpressionList {
     const r = session.row(id);
     if (!r) return;
     const control = r.control?.kind === 'slider' ? { ...r.control, value: 0 } : r.control;
-    const stamp = `${settingsVersion}|${index}|${off}|${open}|${prefs.input.kind}|${cardFor === id}|${r.source}|${JSON.stringify(r.state)}|${JSON.stringify(control)}|${m.lines[0]}|${m.lines[1]}|${m.madeFrom.join(',')}|${m.usedBy.join(',')}`;
+    const stamp = `${settingsVersion}|${index}|${off}|${open}|${prefs.input.kind}|${cardFor === id}|${r.source}|${JSON.stringify(r.state)}|${JSON.stringify(control)}|${m.lines[0]}|${m.lines[1]}|${m.madeFrom.join(',')}|${m.usedBy.join(',')}|${JSON.stringify(session.handlersOn(r.name))}|${aborted.has(r.name)}`;
     if (filled.get(id) === stamp && !p.error) {
       // a slider that only moved: set its knob, keep the element (so a drag in progress is not cut)
       if (r.control?.kind === 'slider') {

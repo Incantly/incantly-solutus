@@ -140,6 +140,16 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
     },
     tool: () => holder.tools?.graphTool,
     // a click on an object selects it; on the background it clears the selection (design 3.9)
+    clickable: (id) => {
+      const o = session.figure.get(id as never);
+      return o !== undefined && session.clickable(o.name);
+    },
+    activate: (id) => {
+      const o = session.figure.get(id as never);
+      if (!o) return;
+      const r = session.click(o.name);
+      say(r.ok ? `Clicked ${o.name}.` : r.error.message);
+    },
     pick: (px, py, vp, extend) => {
       const hit = hitTest(items(), vp, px, py, 8)[0];
       if (!hit) {

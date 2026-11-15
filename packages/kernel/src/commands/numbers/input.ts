@@ -22,6 +22,7 @@ import { expansionProbeName, emitControlEvent } from './handlers';
 import { formatDisplayNumber } from './format';
 import { resolveDisplay } from './format';
 import { emitChange, writeNumberValue, writeSimpleValue } from './valuewrite';
+import { handlerRunning, runHandler } from './run';
 
 /* ------------------------------ typing state ------------------------------ */
 
@@ -136,6 +137,13 @@ export function inputValidOf(figure: Figure, x: Name | ObjId): boolean {
 }
 
 /** The last parse/type error from the learner's text, as data. */
+/** The box's last notice (such as `clamped`), or null. */
+export function inputNoticeOf(figure: Figure, x: Name | ObjId): Notice | null {
+  const id = figure.get(x)?.id;
+  if (id === undefined) return null;
+  return statesFor(figure).get(id)?.notice ?? null;
+}
+
 export function inputErrorOf(figure: Figure, x: Name | ObjId): ErrorObject | null {
   const id = figure.get(x)?.id;
   if (id === undefined) return null;
@@ -474,6 +482,18 @@ export interface CommitInputValue {
  * the box keeps the text with the error as data.
  */
 export function commitInputText(
+  figure: Figure,
+  name: string,
+  text: string,
+  opts: { by?: 'learner' | 'host' } = {},
+): Result<CommitInputValue> {
+  const r = commitInputTextOnce(figure, name, text, opts);
+  // design 3.2 step 6: a commit is a change of the box as well as of its target; only a learner's commit runs handlers
+  if (r.ok && (opts.by ?? 'host') === 'learner' && !handlerRunning(figure)) runHandler(figure, name, 'change', { by: 'learner' }, 'learner');
+  return r;
+}
+
+function commitInputTextOnce(
   figure: Figure,
   name: string,
   text: string,

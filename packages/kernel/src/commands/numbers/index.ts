@@ -181,6 +181,7 @@ export {
   inputTextOf,
   inputValidOf,
   inputErrorOf,
+  inputNoticeOf,
   typeInputText,
   commitInputText,
 } from './input';

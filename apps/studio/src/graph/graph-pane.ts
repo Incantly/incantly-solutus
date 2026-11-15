@@ -20,6 +20,10 @@ export interface GraphPaneOptions {
   readonly tool?: () => GraphTool | undefined;
   /** A click with no tool on and no drag: select what is under it (`extend` with Shift or Ctrl/Cmd), algebra-view 3.9. */
   readonly pick?: (px: number, py: number, vp: Viewport, extend: boolean) => void;
+  /** True when the object under the pointer runs a handler on click (`clickable = true`, controls-scripting ui.md 4). */
+  readonly clickable?: (id: number) => boolean;
+  /** A click on a clickable object, with no tool on and no drag. */
+  readonly activate?: (id: number) => void;
   /** The pointer moved with no tool on and no drag. */
   readonly hoverAt?: (px: number, py: number, vp: Viewport) => void;
 }
@@ -217,7 +221,7 @@ export function mountGraph(opts: GraphPaneOptions): GraphPane {
     }
     opts.hoverAt?.(p.x, p.y, vp);
     const h = hitAt(p.x, p.y);
-    canvas.style.cursor = h && h.k === 'circle' && h.drag ? 'grab' : h ? 'pointer' : '';
+    canvas.style.cursor = h && opts.clickable?.(h.id) ? 'pointer' : h && h.k === 'circle' && h.drag ? 'grab' : h ? 'pointer' : '';
     if (h) {
       tip.textContent = h.text;
       tip.hidden = false;
@@ -245,7 +249,10 @@ export function mountGraph(opts: GraphPaneOptions): GraphPane {
       redraw();
     } else if (down && !down.tool && drag && !drag.moved && e.type === 'pointerup') {
       const p = local(e);
-      opts.pick?.(p.x, p.y, vp, e.shiftKey || e.ctrlKey || e.metaKey);
+      const h = hitAt(p.x, p.y);
+      // a clickable object runs its click handler; a click elsewhere selects (algebra-view 3.9)
+      if (h && opts.clickable?.(h.id)) opts.activate?.(h.id);
+      else opts.pick?.(p.x, p.y, vp, e.shiftKey || e.ctrlKey || e.metaKey);
       redraw();
     }
     down = undefined;
