@@ -826,6 +826,19 @@ export class FigureCore {
 
   /* ------------------------------ the update pass ------------------------------ */
 
+  /**
+   * Computes these objects' rules again, now, and marks them so the next `flush` updates what reads them. For a rule
+   * whose answer arrived later from elsewhere (the CAS worker filled its cache, cas/design.md 5.13). No undo entry.
+   */
+  recompute(ids: readonly ObjId[]): void {
+    for (const id of ids) {
+      const r = this.byIdMap.get(id);
+      if (!r || r.p.kind !== 'rule') continue;
+      this.setCell(r, this.compute(r));
+      this.dirty.add(r);
+    }
+  }
+
   /** Marks a free object or state as written; the next `flush` updates what reads it. */
   markDirty(r: ObjRec): void {
     this.dirty.add(r);

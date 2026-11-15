@@ -172,6 +172,19 @@ export function seedCache(key: string, result: Result<RunSuccess>): void {
   if (result.ok) cachePut(key, result.value.cell, result.notices);
 }
 
+/**
+ * A worker's answer, cloned across `postMessage`, put in this realm's cache (SYM-SM-26): its trees are interned here
+ * first, so the next fast-lane run of the same call finds it.
+ */
+export function acceptWorkerResult(key: string, result: Result<RunSuccess>): void {
+  if (!result.ok) return;
+  const memo = new Map<SymNode, SymNode>();
+  const cell = result.value.cell;
+  const own: Cell<SymArg> = cell.defined ? { defined: true, value: internArg(cell.value, memo) } : cell;
+  if (!own.defined && own.reason === 'pending') return;
+  cachePut(key, own, result.notices);
+}
+
 /* ---------------------------------- errors ----------------------------------- */
 
 const OP_PHASES: Readonly<Record<string, Phase>> = {
@@ -356,7 +369,7 @@ function readsClockArg(a: SymArg): boolean {
 let runDepth = 0;
 
 /** Rebuild every argument tree as this arena's nodes (a no-op for nodes it already owns). */
-function internArg(a: SymArg, memo: Map<SymNode, SymNode>): SymArg {
+export function internArg(a: SymArg, memo: Map<SymNode, SymNode>): SymArg {
   switch (a.k) {
     case 'expr': {
       const out: { -readonly [K in keyof typeof a]: (typeof a)[K] } = { ...a, e: internTree(a.e, memo) };

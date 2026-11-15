@@ -11,7 +11,7 @@ import type { HandlerEvent, HandlerRun, Player } from '@incantly/kernel';
 import type { CommandRegistry, ErrorObject, ObjectView } from '@incantly/kernel';
 import { rightSide } from '@incantly/ui';
 import type { CauseLink, LineRow, RowControl, SubmitResult } from '@incantly/ui';
-import { loadCasEngine, studioRegistry } from './registry';
+import { loadCasEngine, onCasAnswer, studioRegistry } from './registry';
 
 /** What an action reports: a sentence for the status line (plus notices), or the error object. */
 export type Outcome = { readonly ok: true; readonly message: string; readonly notices: readonly string[] } | { readonly ok: false; readonly error: ErrorObject };
@@ -59,7 +59,19 @@ export class KernelSession {
     this.figure = new Figure({ commands });
     this.watch();
     // objects made while the algebra engine was still loading are computed again once it is in (cas spec R2.7)
-    onCasEngine(() => this.refreshPending());
+    // objects made while the engine loaded are computed in place, so the undo history stays
+    onCasEngine(() => this.recomputePending());
+    // an answer from the CAS worker: the objects that were pending are computed again from the filled cache
+    onCasAnswer(() => this.recomputePending());
+  }
+
+  /** Recomputes the objects that wait for the CAS worker, without an undo entry. */
+  recomputePending(): void {
+    const ids = this.figure.objects().filter((o) => !o.cell.defined && o.cell.reason === 'pending').map((o) => o.id);
+    if (ids.length === 0) return;
+    this.figure.recompute(ids);
+    this.figure.flush();
+    this.emit();
   }
 
   /** True when an object waits for the algebra engine. */
