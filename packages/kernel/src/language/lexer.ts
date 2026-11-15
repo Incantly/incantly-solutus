@@ -56,8 +56,9 @@ const LOOKALIKE: Readonly<Record<string, string>> = {
   А: 'A', В: 'B', Е: 'E', К: 'K', М: 'M', Н: 'H', О: 'O', Р: 'P', С: 'C', Т: 'T', Х: 'X', У: 'Y',
 };
 
-const FORMAT_RE = /^(?:\d+|\.\d+|d|f|%)$/;
-export const TEXT_FORMATS: readonly string[] = ['2', '.3', 'd', 'f', '%'];
+/** Text formats: the language's short ones and the text area's names (text-logic design 2.3). */
+const FORMAT_RE = /^(?:\d+|\.\d+|\d+sf|d|deg\d*|f|frac|%|pct\d*|sci\d*|ord)$/;
+export const TEXT_FORMATS: readonly string[] = ['2', '.3', '3sf', 'd', 'deg', 'f', 'frac', '%', 'pct', 'sci', 'ord'];
 
 function codePointLabel(c: string): string {
   const cp = c.codePointAt(0) ?? 0;
@@ -501,7 +502,7 @@ export function lex(sm: SourceMap, opts: { maxTokens?: number; limits?: LangLimi
             errors.push(
               diag.at('bad_format', colonAt + 1, k, 'lang.bad_format', { fmt }, {
                 expected: [...TEXT_FORMATS],
-                hint: 'Formats: 2 (decimals), .3 (significant figures), d (degrees), f (fraction), % (percent).',
+                hint: 'Formats: 2 (decimals), .3 or 3sf (significant figures), deg (degrees), frac (fraction), pct (percent), sci (scientific), ord (1st, 2nd).',
                 fingerprintKey: fmt,
               }),
             );

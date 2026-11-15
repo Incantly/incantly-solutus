@@ -1,6 +1,6 @@
-/** The command table of every area built so far: geometry, numbers, functions, animation, lists, statistics, probability. */
+/** The command table of every area built so far: geometry, numbers, functions, animation, lists, statistics, probability, text and logic. */
 import {
-  CommandRegistry, geometry, registerAnimation, registerFunctions, registerLists, registerNumbers, registerProbability, registerStatistics,
+  CommandRegistry, geometry, registerAnimation, registerFunctions, registerLists, registerNumbers, registerProbability, registerStatistics, registerText,
 } from '@incantly/kernel';
 
 let shared: CommandRegistry | undefined;
@@ -15,6 +15,7 @@ export function studioRegistry(): CommandRegistry {
   registerLists(r);
   registerStatistics(r);
   registerProbability(r);
+  registerText(r);
   shared = r;
   return r;
 }

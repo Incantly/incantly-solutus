@@ -77,6 +77,12 @@ export interface RuleCall {
    * segment and 0.3). Empty when the object is not defined by a command. Binders and bodies are `undefined`.
    */
   argsOf(id: ObjId): readonly unknown[];
+  /**
+   * How an object was made: its printed line and the parsed line node, for rules that show a definition
+   * (`Text(M, show = "definition")`, `FormulaText(f)`, text-logic design 4.1), and its undefined reason now
+   * (`UndefinedReason`, design 5.3). Undefined for an unknown id.
+   */
+  definitionOf?(id: ObjId): { readonly text: string; readonly node: unknown; readonly reason?: string; readonly detail?: string } | undefined;
 }
 
 /**
