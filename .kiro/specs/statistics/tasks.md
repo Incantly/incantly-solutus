@@ -18,4 +18,7 @@ Pipeline: `docs/process/pipeline.md`. Branch: `feat/statistics`.
 - [ ] 7. Review the code against the docs; fix the must-fix items in one round (spec reviewer, fixer)
 - [x] 8. Build the area's studio screens: the data-analysis panels (studio builder)
 - [x] 3a. Benchmarks against the speed targets (R8)
-- [ ] 9. Merge into `integration` once lint, typecheck and tests pass (integrator)
+- [x] 9. Merge into `integration` once lint, typecheck and tests pass (integrator)
+- [ ] 10. Chart interactions of ui.md 2.1: drag bars and edges, data table toggle (Alt+T), grow and morph animations
+- [ ] 11. `with labels =`, `with residuals = true`, per-bar colours, the `mark` option of `Table`
+- [ ] 12. The data grid of ui.md 4.4

@@ -20,3 +20,13 @@ Features: **Spec** (`.kiro/specs/`), **Spec task**, **Hook** (`.kiro/hooks/`), *
 | 2026-11-11 | Hook | `.kiro/hooks/check-on-save.kiro.hook` | Runs `npm run check` when a source file in `packages/` or `apps/` is saved. |
 | 2026-11-11 | Hook | `.kiro/hooks/log-spec-task.kiro.hook` | After each spec task, asks the agent to append a row to this log. |
 | 2026-11-11 | Hook | `.kiro/hooks/warn-kiro-gitignored.kiro.hook` | Warns and fails when `.gitignore` would exclude `.kiro` or a folder inside it. |
+| 2026-11-12 | Spec | `.kiro/specs/animation-time/`, `lists-matrices/`, `statistics/` | Specs for animation and time, lists and matrices, and statistics written before their builds. |
+| 2026-11-13 | Spec | `.kiro/specs/probability/`, `tools-2d/`, `algebra-view/` | Specs for probability, the 2D tools and the algebra view written before their builds. |
+| 2026-11-13 | Spec task | `.kiro/specs/animation-time/tasks.md` | Tasks 10 to 17: state traces, drag traces, `@input` lines, `ValueAt`, one slider animation (PRs #40, #41, #43). |
+| 2026-11-13 | Spec task | `.kiro/specs/lists-matrices/tasks.md`, `statistics/tasks.md` | Built and merged lists and matrices (PR #42) and statistics with the studio panels (PR #45). |
+| 2026-11-13 | Spec task | `.kiro/specs/probability/tasks.md`, `tools-2d/tasks.md`, `algebra-view/tasks.md` | Built and merged probability (PR #46), the 2D tools (PR #47) and the algebra view (PR #48). |
+| 2026-11-15 | Spec task | `.kiro/specs/numbers/tasks.md` task 10 | Fixed the shared update bug: a plain-number `SetValue` now updates command objects (PR #49). |
+| 2026-11-15 | Spec task | `.kiro/specs/probability/tasks.md` tasks 9 to 14 | Large-parameter accuracy, `not_accurate`, renamed-command hints, quantile walks, the simulation strip (PR #50). |
+| 2026-11-15 | Property-based test | `packages/kernel/test/spec/probability/leftovers.test.ts` | Kolmogorov–Smirnov test of 27 samplers on 20,000 seeded draws each. |
+| 2026-11-15 | Spec task | `.kiro/specs/algebra-view/tasks.md` task 7 | Windowed, incremental expression list for 5,000 objects (PR #51). |
+| 2026-11-15 | Spec | `.kiro/specs/algebra-view/`, `tools-2d/`, `statistics/`, `lists-matrices/` | Added the leftover items as open tasks before building them; wrote the missing `tools-2d/tasks.md`. |

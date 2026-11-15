@@ -42,4 +42,4 @@ Pipeline: `docs/process/pipeline.md`. Branch: `feat/geometry`.
 - [ ] 6. Add regression tests for each finding (tester)
 - [ ] 7. Review the code against the docs; fix the must-fix items in one round (spec reviewer, fixer)
 - [ ] 8. Build the area's studio screens (studio builder)
-- [ ] 9. Merge into `integration` once lint, typecheck and tests pass (integrator)
+- [x] 9. Merge into `integration` once lint, typecheck and tests pass (integrator)
