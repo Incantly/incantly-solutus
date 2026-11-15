@@ -17,7 +17,7 @@ Pipeline: `docs/process/pipeline.md`. Branch: `feat/animation-time`.
 - [ ] 6. Add regression tests for each finding (tester)
 - [ ] 7. Review the code against the docs; fix the must-fix items in one round (spec reviewer, fixer)
 - [ ] 8. Build the area's studio screens (studio builder)
-- [ ] 9. Merge into `integration` once lint, typecheck and tests pass (integrator)
+- [x] 9. Merge into `integration` once lint, typecheck and tests pass (integrator)
 - [x] 10. Second round (R9): traces of states after a seek; the slice over the clock reads the solver's dense output
 - [x] 11. Drag traces through a kernel drag listener (R9.2)
 - [x] 12. `@input` lines: save and load the input log (R9.3)
