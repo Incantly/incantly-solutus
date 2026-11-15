@@ -1,6 +1,6 @@
 /** Typeset texts in the studio (text-logic design 6 and 7): maths in list rows, placed texts on the graph. */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { paintScene } from '../src/graph/paint';
+import { paintScene, verticalParts } from '../src/graph/paint';
 import type { SceneItem } from '../src/graph/paint';
 import { Viewport } from '../src/graph/viewport';
 import { mountStudio } from '../src/studio-page';
@@ -67,5 +67,43 @@ describe('typeset texts in the studio', () => {
     m.session.applyLines(['P = (1, 1)', 'note = "here" with at = P'], 'test');
     m.session.dragPoint('P', 3, 2, true);
     expect((m.session.figure.get('note')?.style.ext as { at: { x: number; y: number } }).at).toEqual({ x: 3, y: 2 });
+  });
+
+  it('a vertical text draws its letters one under another', () => {
+    expect(verticalParts('ab $x^2$ c')).toEqual(['a', 'b', ' ', '$x^2$', ' ', 'c']);
+    const item: SceneItem = { id: 1, name: 'v', type: 'Text', typeText: 'Text', value: 'abc', color: '#000', free: false, label: false, text: { at: { x: 0, y: 0 }, size: 16, anchor: 'nw', rotate: 0, vertical: true } };
+    const vp = new Viewport();
+    vp.resize(800, 600);
+    vp.home();
+    const ys: number[] = [];
+    const ctx = countingCtx();
+    (ctx as unknown as { fillText: (s: string, x: number, y: number) => void }).fillText = (s, _x, y) => void (/^[abc]$/.test(s) && ys.push(y));
+    const hits = paintScene(ctx, vp, [item]);
+    expect(ys).toHaveLength(3);
+    expect(ys[0]).toBeLessThan(ys[1] as number);
+    expect(ys[1]).toBeLessThan(ys[2] as number);
+    const h = hits.find((x) => x.k === 'rect') as { y0: number; y1: number; x0: number; x1: number };
+    expect(h.y1 - h.y0).toBeGreaterThan(h.x1 - h.x0);
+  });
+
+  it('the example has a vertical, a turned and a full-LaTeX text', () => {
+    m.loadExample('text-logic');
+    const ext = (n: string): Record<string, unknown> => m.session.figure.get(n)?.style.ext as Record<string, unknown>;
+    expect(ext('side')['vertical']).toBe(true);
+    expect(ext('spin')['rotate']).toBeCloseTo(Number(m.session.figure.value('a')), 12);
+    expect(ext('stokes')['latex']).toBe('full');
+  });
+
+  it('a full-LaTeX text is left to the overlay, not painted on the canvas', async () => {
+    m.session.applyLines(['k = "$\\\\iint_S x$" with at = (1, 1), latex = full'], 'test');
+    const item: SceneItem = { id: 1, name: 'k', type: 'Text', typeText: 'Text', value: '$\\iint_S x$', color: '#000', free: false, label: false, text: { at: { x: 1, y: 1 }, size: 16, anchor: 'sw', rotate: 0, full: true } };
+    const vp = new Viewport();
+    vp.resize(800, 600);
+    vp.home();
+    const ctx = countingCtx();
+    paintScene(ctx, vp, [item]);
+    expect(ctx.texts.filter((t) => /[Sx∬]/.test(t))).toEqual([]);
+    const row = root.querySelector('.expr[data-name="k"] .latex-full');
+    expect(row).not.toBeNull();
   });
 });

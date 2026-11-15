@@ -246,7 +246,7 @@ export class ScratchFigure implements FigureView {
   private recordStyleRules(line: CheckedLine, node: LineNode): void {
     const e = this.byName.get(line.names[0] as string);
     if (!e) return;
-    const items = styleItemsOf(node);
+    const items = line.styleItems ?? styleItemsOf(node);
     for (const st of line.style ?? []) {
       const rules = e.styleRules ?? new Map<string, StyleRule>();
       rules.delete(st.key);

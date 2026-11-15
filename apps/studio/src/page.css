@@ -104,6 +104,10 @@ button:disabled { opacity: 0.4; cursor: default; }
 .graph { flex: 1; position: relative; min-width: 0; overflow: hidden; background: #fff; }
 .graph-canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: default; }
 .graph-canvas.grabbing { cursor: grabbing; }
+.graph-latex { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.graph-latex-item { position: absolute; white-space: nowrap; padding: 2px 3px; line-height: 1.2; }
+.latex-full .katex { font-size: 1.1em; }
+.latex-error { color: #b91c1c; font-family: var(--mono, monospace); }
 .graph-controls { position: absolute; top: 12px; right: 12px; display: flex; flex-direction: column; background: #fff; border: 1px solid var(--line-strong); border-radius: var(--radius); box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08); overflow: hidden; }
 .graph-btn { width: 34px; height: 34px; border: 0; border-bottom: 1px solid var(--line); background: #fff; font-size: 17px; color: #374151; }
 .graph-btn:last-child { border-bottom: 0; }

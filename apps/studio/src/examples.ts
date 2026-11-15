@@ -251,6 +251,9 @@ export const EXAMPLES: readonly Example[] = [
       'tag = "M = {M}" with at = M, anchor = nw, size = 15',
       'grid = TableText([[1, 2], [3, 4]], brackets = "paren") with at = (1.2, -1.6), size = 20',
       'tilted = "$\\\\sqrt{a} \\\\approx {sqrt(a):3sf}$" with at = (-2.5, -2.2), rotate = 15deg, size = 18, bg = rgb(255, 245, 200)',
+      'side = VerticalText("height") with at = (-5, 3), anchor = n, size = 16',
+      'spin = RotateText("turning {a}", a) with at = (5, -2), size = 16',
+      String.raw`stokes = "$\\oint_\{\\partial S\} \\mathbf\{F\} \\cdot d\\mathbf\{r\} = \\iint_S (\\nabla \\times \\mathbf\{F\}) \\cdot d\\mathbf\{S\}$" with at = (-9, -5.5), size = 20, latex = full`,
     ],
   },
 ];

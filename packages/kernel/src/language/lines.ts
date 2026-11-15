@@ -483,7 +483,44 @@ function lineSpan(c: Checker, node: { target: NameRef }, end: number): SpanLike 
   return { s: node.target.s, e: Math.max(end, node.target.e) + 0 * c.text.length };
 }
 
-function checkDefine(c: Checker, node: Extract<LineNode, { k: 'define' }>): Partial0 | undefined {
+/**
+ * A command that only sets properties of its first argument (text-logic design 4.7: `RotateText(T, 30deg)` is `T` with
+ * `rotate = 30deg`). Each prop takes the argument at `arg`, or `true` when `arg` is left out.
+ */
+export interface StyleLift {
+  readonly args: number;
+  readonly type: string;
+  readonly props: readonly { readonly key: string; readonly arg?: number }[];
+}
+
+const STYLE_LIFTS = new Map<string, StyleLift>();
+
+/** An area registers a command whose definition is its first argument with properties set (text-logic design 2.1). */
+export function registerStyleLift(name: string, lift: StyleLift): void {
+  STYLE_LIFTS.set(name, lift);
+}
+
+/** `X = RotateText(T, a) with …` read as `X = T with rotate = a, …`; the written properties come after, so they win. */
+function liftStyle(c: Checker, node: Extract<LineNode, { k: 'define' }>): { node: Extract<LineNode, { k: 'define' }>; lift: StyleLift; call: Expr & { k: 'call' } } | undefined {
+  const e = node.expr;
+  if (e.k !== 'call' || c.lookupLocal(e.callee)) return undefined;
+  const lift = STYLE_LIFTS.get(e.callee);
+  if (!lift || e.args.length !== lift.args || e.args.some((a) => a.name !== undefined)) return undefined;
+  const items: StyleItem[] = lift.props.map((p) => ({
+    key: p.key,
+    ks: e.cs,
+    ke: e.ce,
+    s: e.s,
+    e: e.e,
+    value: p.arg !== undefined ? (e.args[p.arg] as { value: Expr }).value : { k: 'bool', v: true, s: e.cs, e: e.ce },
+  }));
+  const style = [...items, ...(node.style ?? [])];
+  return { node: { ...node, expr: (e.args[0] as { value: Expr }).value, style }, lift, call: e };
+}
+
+function checkDefine(c: Checker, written: Extract<LineNode, { k: 'define' }>): Partial0 | undefined {
+  const lifted = liftStyle(c, written);
+  const node = lifted?.node ?? written;
   const t = node.target;
   const expr = node.expr;
   validateTarget(c, t, fieldHint(expr));
@@ -501,6 +538,17 @@ function checkDefine(c: Checker, node: Extract<LineNode, { k: 'define' }>): Part
     tn = c.buildRelation(expr);
   } else {
     tn = c.infer(expr);
+  }
+  if (lifted && tn && tn.ty.k !== lifted.lift.type) {
+    const call = lifted.call;
+    c.err('type_mismatch', expr.s, expr.e, 'lang.type_mismatch_where', { why: `${call.callee} takes a ${lifted.lift.type}, not a ${tyStr(tn.ty)}` }, {
+      left: lifted.lift.type,
+      right: tyStr(tn.ty),
+      hint: `Turn it into text first: ${call.callee}(Text(${c.textOf(expr)})${call.args.slice(1).map((a) => `, ${c.textOf(a.value)}`).join('')}).`,
+      suggest: [c.replaceRange(expr.s, expr.e, `Text(${c.textOf(expr)})`)],
+      fingerprintKey: `${call.callee}:type`,
+    });
+    return undefined;
   }
 
   let range: CheckedRange | undefined;
@@ -544,6 +592,7 @@ function checkDefine(c: Checker, node: Extract<LineNode, { k: 'define' }>): Part
     expr: tn,
     ...(range ? { range } : {}),
     ...(style ? { style } : {}),
+    ...(lifted && node.style ? { styleItems: node.style } : {}),
     ...(state ? { state } : {}),
     ...(tn.n === 'relation' ? { shape: tn.shape } : {}),
   };

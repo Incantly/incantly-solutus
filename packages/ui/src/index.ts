@@ -32,3 +32,4 @@ export { DEFERRED, GROUPS, TOOLS, catalogText, toolById } from './tools/catalog'
 export { allocate, definedName, nextName } from './tools/names';
 export { PATH_TYPES } from './tools/types';
 export type { Arg, EmitContext, Hit, PointCreate, Pt as ToolPt, RefusalCode, Slot, ToolAction, ToolDone, ToolGroup, ToolHost, ToolId, ToolKind, ToolRefusal, ToolSpec, ToolVariant } from './tools/types';
+export { fullLatexHtml, fullLatexReady, loadFullLatex } from './katex';

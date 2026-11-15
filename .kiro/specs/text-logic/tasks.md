@@ -9,5 +9,5 @@ Branch: `feat/text-logic`.
 - [x] 5. `CountIf`, `KeepIf`, `IsInteger`, `IsDefined`, `UndefinedReason`, `IsInRegion`, `Related` (R5)
 - [x] 6. Spec tests and a studio example (R7)
 - [x] 7. Round 2: math layout engine in the view; texts drawn in the studio with their properties (R6)
-- [ ] 8. Round 2: `VerticalText`, `RotateText`; full LaTeX through KaTeX for macros the subset lacks
+- [x] 8. Round 2: `VerticalText`, `RotateText`; full LaTeX through KaTeX for macros the subset lacks
 - [ ] 9. Later: `implies` (needs an area hook for built-in functions), `Related` by construction (design 5.4), localised formats (phase 3)

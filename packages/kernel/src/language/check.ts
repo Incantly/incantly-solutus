@@ -77,6 +77,8 @@ export interface CheckedLine {
   readonly domain?: readonly { readonly from: TNode; readonly to: TNode }[];
   readonly range?: CheckedRange;
   readonly style?: readonly CheckedStyle[];
+  /** The `with` items `style` was checked from, when they differ from the written ones (a style lift, `RotateText`). */
+  readonly styleItems?: readonly import('./ast').StyleItem[];
   /** Initial value and optional velocity of a state. */
   readonly state?: { readonly initial: TNode; readonly velocity?: TNode };
   /** For a rate line: the state and the derivative order. */

@@ -109,11 +109,11 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
       if (!o.cell.defined) continue;
       // a text is drawn on the graph when it has a place (`with at = …`)
       if (o.type === 'Text') {
-        const ext = o.style.ext as { at?: { x: number; y: number }; size?: number; anchor?: string; rotate?: number; bg?: unknown };
+        const ext = o.style.ext as { at?: { x: number; y: number }; size?: number; anchor?: string; rotate?: number; bg?: unknown; vertical?: boolean; latex?: string };
         if (!ext.at || expressions.isHidden(o.id) || hiddenByStyle(o)) continue;
         const bg = typeof ext.bg === 'object' && ext.bg !== null ? colorCss(ext.bg) : undefined;
         out.push({ id: o.id, name: o.name, type: 'Text', typeText: 'Text', value: o.cell.value, color: expressions.colorOf(o.id), free: false, label: false,
-          text: { at: ext.at, size: ext.size ?? 16, anchor: ext.anchor ?? 'sw', rotate: ext.rotate ?? 0, ...(bg ? { bg } : {}) } });
+          text: { at: ext.at, size: ext.size ?? 16, anchor: ext.anchor ?? 'sw', rotate: ext.rotate ?? 0, ...(bg ? { bg } : {}), ...(ext.vertical === true ? { vertical: true } : {}), ...(ext.latex === 'full' ? { full: true } : {}) } });
         continue;
       }
       if (expressions.isHidden(o.id)) continue;

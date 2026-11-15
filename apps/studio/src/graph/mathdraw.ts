@@ -4,6 +4,7 @@
  */
 import { math } from '@incantly/view';
 import type { MathItem, MathLayout, Measure } from '@incantly/view';
+import { fullLatexHtml, loadFullLatex } from '@incantly/ui';
 
 let ctx: CanvasRenderingContext2D | null | undefined;
 
@@ -64,5 +65,29 @@ export function mathElement(s: string, px = 15, color = '#1f2430'): Element | un
   holder.innerHTML = math.mathSvg(l, color);
   holder.setAttribute('role', 'img');
   holder.setAttribute('aria-label', s.replace(/\$/g, ''));
+  return holder;
+}
+
+/**
+ * A text with `latex = full` as an element: KaTeX's HTML once it has loaded, the plain text until then (design 6.4).
+ * `ready` runs after a late fill, so a caller that positions the element can measure it again.
+ */
+export function fullElement(s: string, ready?: () => void): HTMLElement {
+  const holder = document.createElement('span');
+  holder.className = 'latex-full';
+  holder.setAttribute('aria-label', s.replace(/\$/g, ''));
+  const fill = (): boolean => {
+    // KaTeX output from escaped source, rendered with trust off: no link, script or style reaches the page
+    const html = fullLatexHtml(s);
+    if (html === undefined) return false;
+    holder.innerHTML = html;
+    return true;
+  };
+  if (!fill()) {
+    holder.textContent = s.replace(/\$/g, '');
+    void loadFullLatex().then((ok) => {
+      if (ok && fill()) ready?.();
+    });
+  }
   return holder;
 }

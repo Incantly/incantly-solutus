@@ -6,6 +6,7 @@
 import { plotFunction, traceImplicit, fillRegion } from '@incantly/plot';
 import { arcPoints } from './hit';
 import { math } from '@incantly/view';
+import type { MathItem, MathLayout } from '@incantly/view';
 import { canvasMeasure, drawMath } from './mathdraw';
 import { isParticlesValue, makeParticleBatch } from '@incantly/kernel';
 import type { FunctionValue, ParticleBatchPlain, ParticlesValue } from '@incantly/kernel';
@@ -36,7 +37,7 @@ export interface SceneItem {
   /** A point's trace as packed `x, y` pairs; `NaN` pairs break the line (design 6). */
   readonly trace?: Float64Array;
   /** A Text placed on the graph (`with at = …`, text-logic design 2.1 and 7). */
-  readonly text?: { readonly at: Pt; readonly size: number; readonly anchor: string; readonly rotate: number; readonly bg?: string };
+  readonly text?: { readonly at: Pt; readonly size: number; readonly anchor: string; readonly rotate: number; readonly bg?: string; readonly vertical?: boolean; readonly full?: boolean };
 }
 
 /** A place on the canvas the pointer can hover or drag. Coordinates in CSS pixels. */
@@ -951,8 +952,45 @@ function paintTrace(ctx: Ctx, vp: Viewport, xs: Float64Array, color: string): vo
 }
 
 /** A placed text: the anchor corner at `at`, rotated about it; maths typeset by the view's engine. */
+/** The parts of a vertical text, top to bottom: each letter alone, each `$…$` part whole (design 4.7). */
+export function verticalParts(s: string): string[] {
+  const out: string[] = [];
+  for (const piece of s.split(/(\$[^$]*\$)/)) {
+    if (piece.startsWith('$') && piece.endsWith('$') && piece.length >= 2) out.push(piece);
+    else for (const ch of piece) if (ch.trim() !== '' || out.length > 0) out.push(ch);
+  }
+  while (out.length > 0 && (out[out.length - 1] as string).trim() === '') out.pop();
+  return out;
+}
+
+/** A vertical text as one layout: the parts stacked, each centred and upright, the baseline at the bottom. */
+function verticalLayout(s: string, px: number): MathLayout {
+  const texts = verticalParts(s);
+  const parts = texts.map((p) => math.layoutText(p.trim() === '' ? 'x' : p, px, canvasMeasure));
+  const gap = px * 0.08;
+  const w = Math.max(0, ...parts.map((l) => l.w));
+  const tops: number[] = [];
+  let y = 0;
+  for (const l of parts) {
+    tops.push(y);
+    y += Math.max(l.asc + l.desc, px * 0.9) + gap;
+  }
+  const h = Math.max(0, y - gap);
+  const items: MathItem[] = [];
+  parts.forEach((l, i) => {
+    if ((texts[i] as string).trim() === '') return;
+    for (const it of l.items) items.push(shiftItem(it, (w - l.w) / 2, (tops[i] as number) + l.asc - h));
+  });
+  return { w, asc: h, desc: 0, items };
+}
+
+function shiftItem(it: MathItem, dx: number, dy: number): MathItem {
+  if (it.k === 'path') return { ...it, pts: it.pts.map(([x, y]) => [x + dx, y + dy] as const) };
+  return { ...it, x: it.x + dx, y: it.y + dy };
+}
+
 function paintText(ctx: Ctx, vp: Viewport, s: string, t: NonNullable<SceneItem['text']>, color: string, hits: Hit[], id: number): void {
-  const l = math.layoutText(s, t.size, canvasMeasure);
+  const l = t.vertical ? verticalLayout(s, t.size) : math.layoutText(s, t.size, canvasMeasure);
   const h = l.asc + l.desc;
   // compass words, and the controls' corners (tl, tr, bl, br)
   const an = ({ tl: 'nw', tr: 'ne', bl: 'sw', br: 'se' } as Record<string, string>)[t.anchor] ?? t.anchor;
@@ -988,6 +1026,8 @@ export function paintScene(ctx: Ctx, vp: Viewport, items: readonly SceneItem[]):
     try {
       if (it.trace && it.trace.length >= 4) paintTrace(ctx, vp, it.trace, it.color);
       if (it.type === 'Text') {
+        // full LaTeX is drawn by the HTML overlay over the canvas (latex-overlay.ts)
+        if (it.text?.full) continue;
         if (it.text && typeof it.value === 'string') paintText(ctx, vp, it.value, it.text, it.color, hits, it.id);
         continue;
       }
