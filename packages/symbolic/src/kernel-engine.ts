@@ -32,7 +32,7 @@ export function heldOf(a: SymArg): unknown {
       const approx = unknowns.length === 0 ? numeric(a.e) : undefined;
       const plot = unknowns.length === 1 ? curvePlot(a.e, unknowns[0] as string, a.excluded ?? []) : undefined;
       return {
-        sym: 'Expr', arg: a, text, latex: toLatex(a.e), exact: a.exact && isExactTree(a.e), input: toText(a.e), speech: toSpeech(a.e), unknowns,
+        sym: 'Expr', arg: a, text, latex: toLatex(a.e), exact: a.exact && isExactTree(a.e), input: toText(a.e, { plainFloats: true }), speech: toSpeech(a.e), unknowns,
         ...(approx !== undefined && Number.isFinite(approx) ? { approx } : {}),
         ...(plot ? { plot } : {}),
       } satisfies Held;
@@ -42,7 +42,7 @@ export function heldOf(a: SymArg): unknown {
       const solved = solvedOf(a.c);
       const plot = condPlot(a.c, unknowns);
       return {
-        sym: 'Cond', arg: a, text: condText(a.c, { display: true }), latex: condLatex(a.c), exact: a.exact, input: condText(a.c), speech: condSpeech(a.c), unknowns,
+        sym: 'Cond', arg: a, text: condText(a.c, { display: true }), latex: condLatex(a.c), exact: a.exact, input: condText(a.c, { plainFloats: true }), speech: condSpeech(a.c), unknowns,
         ...(solved ? { solved } : {}),
         ...(plot ? { plot } : {}),
       } satisfies Held;
@@ -615,6 +615,8 @@ export const casEngine: CasEngine = {
       if (err instanceof BridgeError) return { ok: false, reason: err.kind === 'unknown_name' ? 'not_symbolic' : err.kind, detail: err.message };
       return { ok: false, reason: 'unsupported', detail: 'The argument could not be read' };
     }
+    // a family parameter of an earlier answer (k1, k2, … that no Symbol object names) is a whole number (SYM-SM-21)
+    for (const name of argNames(args)) if (/^k\d+$/.test(name) && !domains.has(name)) domains.set(name, 'integer');
     const op = req.op as OpName;
     if (op === 'Substitute' && args[0]?.k === 'list') return substituteEach(args, domains, req.returns);
     if (readsClock && HEAVY_OPS.has(op)) {
@@ -661,4 +663,16 @@ function substituteEach(args: readonly SymArg[], domains: Map<string, Domain>, r
     } else items.push(it);
   }
   return { ok: true, value: coerce(heldOf({ k: 'list', items }), returns) };
+}
+
+function argNames(args: readonly SymArg[]): Set<string> {
+  const out = new Set<string>();
+  const walk = (a: SymArg): void => {
+    if (a.k === 'expr') for (const s of freeSymbols(a.e)) out.add(s);
+    else if (a.k === 'cond') for (const s of freeSymbolsCond(a.c)) out.add(s);
+    else if (a.k === 'list') a.items.forEach(walk);
+    else if (a.k === 'named') walk(a.v);
+  };
+  args.forEach(walk);
+  return out;
 }

@@ -16,6 +16,8 @@ export interface TextOptions {
   readonly display?: boolean;
   /** Show a mixed number as `2 3/4` (from `MixedNumber`). */
   readonly mixed?: boolean;
+  /** Print inexact numbers as plain decimals (text for the figure language, where every decimal is exact). */
+  readonly plainFloats?: boolean;
 }
 
 const PREC_ADD = 1;
@@ -158,7 +160,13 @@ function textOf(n: SymNode, o: TextOptions, parentPrec: number): string {
     case 'int': return wrap(n.v.toString(), n.v < 0n ? PREC_UNARY : PREC_ATOM);
     case 'rat': return wrap(ratText(n.n, n.d, o), PREC_MUL);
     case 'dec': return wrap(decText(n.mant, n.exp), n.mant < 0n ? PREC_UNARY : PREC_ATOM);
-    case 'float': return wrap(String(n.v), n.v < 0 ? PREC_UNARY : PREC_ATOM);
+    case 'float': {
+      // SYM-SM-19: a decimal is read back as exact, so an inexact number is written float(…) to stay inexact; the
+      // CAS view (display) and lines for the figure language (plainFloats) show the plain decimal
+      const plain = Number.isNaN(n.v) ? 'nan' : n.v === Infinity ? 'inf' : n.v === -Infinity ? '-inf' : String(n.v);
+      if (o.display === true || o.plainFloats === true) return wrap(plain, n.v < 0 ? PREC_UNARY : PREC_ATOM);
+      return `float(${plain})`;
+    }
     case 'const':
       if (n.name === 'pi') return 'pi';
       if (n.name === 'e') return 'e';
@@ -201,6 +209,8 @@ function textOf(n: SymNode, o: TextOptions, parentPrec: number): string {
       return wrap(`${sign}${numStr} / ${dd}`, PREC_MUL);
     }
     case 'pow': {
+      // a negative whole power on its own is a fraction: 1 / (x + 1), not (x + 1)^-1
+      if (n.exp.k === 'int' && n.exp.v < 0n && !isZeroNode(n.base)) return textOf({ k: 'mul', factors: [n] } as unknown as SymNode, o, parentPrec);
       if (n.base.k === 'const' && n.base.name === 'e') return wrap(`exp(${textOf(n.exp, o, 0)})`, PREC_ATOM);
       if (n.exp.k === 'rat' && n.exp.n === 1n && n.exp.d === 2n) {
         return wrap(`sqrt(${textOf(n.base, o, 0)})`, PREC_ATOM);
@@ -306,6 +316,7 @@ function latexOf(n: SymNode): string {
       return `${sign}\\frac{${numStr}}{${latexProduct(den)}}`;
     }
     case 'pow': {
+      if (n.exp.k === 'int' && n.exp.v < 0n && !isZeroNode(n.base)) return latexOf({ k: 'mul', factors: [n] } as unknown as SymNode);
       if (n.base.k === 'const' && n.base.name === 'e') return `\\exp\\left(${latexOf(n.exp)}\\right)`;
       if (n.exp.k === 'rat' && n.exp.n === 1n && n.exp.d === 2n) return `\\sqrt{${latexOf(n.base)}}`;
       return `{${latexBase(n.base)}}^{${latexOf(n.exp)}}`;
