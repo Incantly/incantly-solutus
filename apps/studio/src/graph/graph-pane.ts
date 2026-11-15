@@ -26,8 +26,16 @@ export interface GraphPaneOptions {
 export interface GraphTool {
   /** True while a tool other than Move is active: clicks go to it and points are not dragged. */
   active(): boolean;
-  hover(px: number, py: number, vp: Viewport): void;
-  click(px: number, py: number, vp: Viewport): void;
+  /** `touch`: a finger is down, so the tool shows its loupe (design 7.2). */
+  hover(px: number, py: number, vp: Viewport, touch?: boolean): void;
+  /** `alt`: Alt was held, the tool's special alternative (ui.md 2). */
+  click(px: number, py: number, vp: Viewport, alt?: boolean): void;
+  /** A press on a pending point starts moving it (design 7.2); true when it did. */
+  grab?(px: number, py: number, vp: Viewport): boolean;
+  /** The grabbed pending point follows the pointer. */
+  dragTo?(px: number, py: number, vp: Viewport): void;
+  /** The pointer is up: the grabbed point stays, or the loupe goes. */
+  release?(): void;
   /** Paints pending points, the ghost and halos after the scene. */
   overlay(ctx: CanvasRenderingContext2D, vp: Viewport): void;
 }
@@ -142,7 +150,7 @@ export function mountGraph(opts: GraphPaneOptions): GraphPane {
   element.append(canvas, controls, tip);
 
   // pointer: drag a free point, else pan
-  let drag: { kind: 'pan' | 'point'; x: number; y: number; name?: string; moved: boolean } | undefined;
+  let drag: { kind: 'pan' | 'point' | 'pending' | 'aim'; x: number; y: number; name?: string; moved: boolean } | undefined;
   let down: { x: number; y: number; tool: boolean } | undefined;
   const local = (e: PointerEvent | WheelEvent): { x: number; y: number } => {
     const r = canvas.getBoundingClientRect();
@@ -157,7 +165,13 @@ export function mountGraph(opts: GraphPaneOptions): GraphPane {
     const h = hitAt(p.x, p.y);
     const tool = opts.tool?.();
     const toolOn = tool?.active() === true;
-    drag = !toolOn && h && h.k === 'circle' && h.drag ? { kind: 'point', name: h.drag, ...p, moved: false } : { kind: 'pan', ...p, moved: false };
+    if (toolOn && tool?.grab?.(p.x, p.y, vp)) drag = { kind: 'pending', ...p, moved: false };
+    // a finger with a tool on aims: the loupe follows it and the release is the click (design 7.2)
+    else if (toolOn && e.pointerType === 'touch') {
+      drag = { kind: 'aim', ...p, moved: false };
+      tool?.hover(p.x, p.y, vp, true);
+      redraw();
+    } else drag = !toolOn && h && h.k === 'circle' && h.drag ? { kind: 'point', name: h.drag, ...p, moved: false } : { kind: 'pan', ...p, moved: false };
     down = { ...p, tool: toolOn };
     canvas.setPointerCapture?.(e.pointerId);
     canvas.classList.toggle('grabbing', drag.kind === 'pan');
@@ -176,6 +190,18 @@ export function mountGraph(opts: GraphPaneOptions): GraphPane {
       // a small wobble during a click is not a pan, nor is a move with no button held (a late event from before the press)
       if (!drag.moved && (Math.hypot(p.x - drag.x, p.y - drag.y) < 4 || e.buttons === 0)) return;
       drag.moved = true;
+      if (drag.kind === 'pending') {
+        opts.tool?.()?.dragTo?.(p.x, p.y, vp);
+        redraw();
+        return;
+      }
+      if (drag.kind === 'aim') {
+        drag.x = p.x;
+        drag.y = p.y;
+        opts.tool?.()?.hover(p.x, p.y, vp, true);
+        redraw();
+        return;
+      }
       if (drag.kind === 'pan') {
         vp.pan(p.x - drag.x, p.y - drag.y);
         drag.x = p.x;
@@ -201,9 +227,17 @@ export function mountGraph(opts: GraphPaneOptions): GraphPane {
       opts.drag(drag.name, vp.x(p.x), vp.y(p.y), true);
     }
     // a click (no drag) with a tool on goes to the tool
-    if (down?.tool && drag && !drag.moved && e.type === 'pointerup') {
+    if (drag?.kind === 'pending') {
+      opts.tool?.()?.release?.();
+      redraw();
+    } else if (drag?.kind === 'aim') {
       const p = local(e);
-      opts.tool?.()?.click(p.x, p.y, vp);
+      opts.tool?.()?.release?.();
+      if (e.type === 'pointerup') opts.tool?.()?.click(p.x, p.y, vp, e.altKey);
+      redraw();
+    } else if (down?.tool && drag && !drag.moved && e.type === 'pointerup') {
+      const p = local(e);
+      opts.tool?.()?.click(p.x, p.y, vp, e.altKey);
       redraw();
     } else if (down && !down.tool && drag && !drag.moved && e.type === 'pointerup') {
       const p = local(e);

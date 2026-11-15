@@ -10,6 +10,7 @@ import type { Hit, StepResult, ToolDone, ToolSpec } from '@incantly/ui';
 import type { GraphTool } from './graph/graph-pane';
 import { hitTest } from './graph/hit';
 import { colorAt, paintItem } from './graph/paint';
+import { gridStep } from './graph/viewport';
 import type { SceneItem } from './graph/paint';
 import type { Viewport } from './graph/viewport';
 import { figureHost } from './tools-host';
@@ -28,6 +29,13 @@ export interface ToolStrip {
   figureChanged(): void;
   /** Esc, Backspace and Enter for the active tool; true when the key was used. */
   key(k: string): boolean;
+  /**
+   * Every key the tools answer (ui.md 2, Keyboard): Ctrl+1…9 for the groups; with a tool on, arrows move the virtual
+   * cursor (Shift ×5, Alt ÷5), Enter or Space clicks there, Tab cycles what is under it; then Esc, Backspace, Enter.
+   */
+  keyDown(e: KeyboardEvent): boolean;
+  /** The virtual cursor in screen pixels, while one is shown. */
+  cursor(): { readonly px: number; readonly py: number } | undefined;
   dispose(): void;
 }
 
@@ -44,6 +52,8 @@ export interface ToolStripOptions {
   readonly flash: (names: readonly string[]) => void;
   /** Objects selected before a tool starts become its first picks, in order (tools-2d design 5.4). */
   readonly selection?: () => readonly string[];
+  /** The graph's viewport, for the keyboard cursor before anything is painted. */
+  readonly viewport?: () => Viewport;
 }
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls = '', text = ''): HTMLElementTagNameMap[K] => {
@@ -76,6 +86,14 @@ export function mountToolStrip(opts: ToolStripOptions): ToolStrip {
   let scratch: Figure | undefined;
   let entry: HTMLInputElement | undefined;
   let lastClick = { px: 0, py: 0 };
+  /** The keyboard's virtual cursor (ui.md 2), the viewport it was last drawn in, and the Tab position in its hit list. */
+  let vcursor: { px: number; py: number } | undefined;
+  let lastVp: Viewport | undefined;
+  let cycle = 0;
+  /** A pending point being moved (design 7.2), and the finger position for the loupe. */
+  let grabbed: string | undefined;
+  let loupe: { px: number; py: number } | undefined;
+  let spokenAt = 0;
 
   const spec = (): ToolSpec => toolById(currentId) ?? (TOOLS[0] as ToolSpec);
 
@@ -226,6 +244,7 @@ export function mountToolStrip(opts: ToolStripOptions): ToolStrip {
       newSession();
       return;
     } else {
+      // an undefined result is refused unless Alt was held, so that dragging can fix it later (errors.md 2, degenerate)
       const r = session.applyLines(done.lines, s.label, 'atomic');
       if (!r.ok) {
         refusal = `That didn't work: ${r.error.message}`;
@@ -279,7 +298,7 @@ export function mountToolStrip(opts: ToolStripOptions): ToolStrip {
       e.stopPropagation();
       if (e.key === 'Enter') {
         e.preventDefault();
-        const r = tool?.entry(box.value);
+        const r = tool?.entry(box.value, { alt: e.altKey });
         if (r) handle(r);
       } else if (e.key === 'Escape') {
         e.preventDefault();
@@ -337,16 +356,48 @@ export function mountToolStrip(opts: ToolStripOptions): ToolStrip {
     } else hint.querySelector('.tool-why')?.remove();
   };
 
+  /** Says where the virtual cursor is and what is under it, at most twice a second (ui.md 2, screen reader). */
+  const speak = (vp: Viewport): void => {
+    if (!vcursor) return;
+    const now = typeof performance !== 'undefined' ? performance.now() : 0;
+    if (now - spokenAt < 500) return;
+    spokenAt = now;
+    const x = Number(vp.x(vcursor.px).toPrecision(3));
+    const y = Number(vp.y(vcursor.py).toPrecision(3));
+    const h = hitsAt(vcursor.px, vcursor.py, vp)[0];
+    say(`At ${x}, ${y}.${h && !h.name.startsWith('{') ? ` On ${h.name}.` : ''}`);
+  };
+
   /* ------------------------------ the graph's side ------------------------------ */
 
   const graphTool: GraphTool = {
     active: () => currentId !== 'move',
-    hover(px, py, vp) {
+    hover(px, py, vp, touch) {
       pointer = { px, py };
+      vcursor = undefined;
+      loupe = touch ? { px, py } : undefined;
       preview(px, py, vp);
     },
-    click(px, py, vp) {
+    grab(px, py, vp) {
+      const p = tool?.pending().find((q) => q.how === 'free' && Math.hypot(vp.px(q.at.x) - px, vp.py(q.at.y) - py) <= 10);
+      grabbed = p?.tag;
+      return grabbed !== undefined;
+    },
+    dragTo(px, py, vp) {
+      if (!grabbed || !tool) return;
+      tool.movePending(grabbed, { x: vp.x(px), y: vp.y(py) });
+      loupe = { px, py };
+      pointer = { px, py };
+      ghosts = [];
+    },
+    release() {
+      if (grabbed) say('Moved the new point.');
+      grabbed = undefined;
+      loupe = undefined;
+    },
+    click(px, py, vp, alt) {
       lastClick = { px, py };
+      cycle = 0;
       if (currentId === 'zoom-in' || currentId === 'zoom-out') {
         vp.zoomAt(px, py, currentId === 'zoom-in' ? 1.5 : 1 / 1.5);
         return;
@@ -356,9 +407,10 @@ export function mountToolStrip(opts: ToolStripOptions): ToolStrip {
       const t = tool as ToolSession;
       const b = vp.box();
       t.view = { x0: b.x0, x1: b.x1, y0: b.y0, y1: b.y1 };
-      handle(t.click({ x: vp.x(px), y: vp.y(py) }, hitsAt(px, py, vp)));
+      handle(t.click({ x: vp.x(px), y: vp.y(py) }, hitsAt(px, py, vp), { alt: alt === true }));
     },
     overlay(ctx, vp) {
+      lastVp = vp;
       if (!tool) return;
       for (const g of ghosts) {
         ctx.save();
@@ -415,6 +467,49 @@ export function mountToolStrip(opts: ToolStripOptions): ToolStrip {
           ctx.restore();
         }
       }
+      // the keyboard's virtual cursor: a crosshair in a ring (ui.md 2)
+      if (vcursor) {
+        const { px, py } = vcursor;
+        ctx.save();
+        ctx.strokeStyle = '#2d70b3';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(px, py, 9, 0, Math.PI * 2);
+        ctx.moveTo(px - 14, py);
+        ctx.lineTo(px + 14, py);
+        ctx.moveTo(px, py - 14);
+        ctx.lineTo(px, py + 14);
+        ctx.stroke();
+        ctx.restore();
+      }
+      // the touch loupe: what is under the finger, twice as big, above it (design 7.2)
+      if (loupe && typeof ctx.drawImage === 'function') {
+        const r = 46;
+        const cx = loupe.px;
+        const cy = Math.max(r + 6, loupe.py - 90);
+        const dpr = ctx.canvas.width / Math.max(1, vp.w);
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.clip();
+        try {
+          ctx.drawImage(ctx.canvas, (loupe.px - r / 2) * dpr, (loupe.py - r / 2) * dpr, r * dpr, r * dpr, cx - r, cy - r, 2 * r, 2 * r);
+        } catch {
+          // a canvas that cannot copy itself shows the ring only
+        }
+        ctx.restore();
+        ctx.save();
+        ctx.strokeStyle = '#2d70b3';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.moveTo(cx - 6, cy);
+        ctx.lineTo(cx + 6, cy);
+        ctx.moveTo(cx, cy - 6);
+        ctx.lineTo(cx, cy + 6);
+        ctx.stroke();
+        ctx.restore();
+      }
     },
   };
 
@@ -442,6 +537,61 @@ export function mountToolStrip(opts: ToolStripOptions): ToolStrip {
     figureChanged() {
       if (tool && tool.step === 0) newSession();
     },
+    cursor: () => vcursor,
+    keyDown(e) {
+      // Ctrl+1…9: the first nine groups' current tools
+      if ((e.ctrlKey || e.metaKey) && /^[1-9]$/.test(e.key)) {
+        const g = GROUPS.filter((x) => TOOLS.some((t) => t.group === x.id))[Number(e.key) - 1];
+        const id = g ? lastInGroup.get(g.id) : undefined;
+        if (!id) return false;
+        api.select(id);
+        return true;
+      }
+      if (currentId === 'move' || !tool) return api.key(e.key);
+      const vp = lastVp ?? opts.viewport?.();
+      const arrows: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+      const dir = arrows[e.key];
+      if (dir && vp) {
+        // one grid step, Shift ×5, Alt ÷5
+        const g = gridStep(vp.ppu);
+        let step = g.minor * vp.ppu || 10;
+        if (e.shiftKey) step *= 5;
+        if (e.altKey) step /= 5;
+        const at = vcursor ?? pointer ?? { px: vp.w / 2, py: vp.h / 2 };
+        vcursor = { px: Math.min(vp.w, Math.max(0, at.px + dir[0] * step)), py: Math.min(vp.h, Math.max(0, at.py + dir[1] * step)) };
+        pointer = vcursor;
+        cycle = 0;
+        preview(vcursor.px, vcursor.py, vp);
+        speak(vp);
+        opts.redraw();
+        return true;
+      }
+      if (e.key === 'Tab' && vcursor && vp) {
+        const hits = hitsAt(vcursor.px, vcursor.py, vp);
+        if (hits.length < 2) return false;
+        cycle = (cycle + (e.shiftKey ? hits.length - 1 : 1)) % hits.length;
+        say(`${cycle + 1} of ${hits.length}: ${hits.map((h) => (h.name.startsWith('{') ? 'new point' : h.name)).join(', ')}`);
+        return true;
+      }
+      if ((e.key === 'Enter' || e.key === ' ') && vcursor && vp && !tool.awaitingNumber()) {
+        const hits = hitsAt(vcursor.px, vcursor.py, vp);
+        const ordered = [...hits.slice(cycle), ...hits.slice(0, cycle)];
+        lastClick = vcursor;
+        if (tool.step === 0) newSession(vp);
+        const t = tool as ToolSession;
+        const b = vp.box();
+        t.view = { x0: b.x0, x1: b.x1, y0: b.y0, y1: b.y1 };
+        cycle = 0;
+        handle(t.click({ x: vp.x(vcursor.px), y: vp.y(vcursor.py) }, ordered, { alt: e.altKey }));
+        return true;
+      }
+      if (e.key === 'Escape' && vcursor && tool.step === 0) {
+        vcursor = undefined;
+        opts.redraw();
+        return true;
+      }
+      return api.key(e.key);
+    },
     key(k) {
       if (currentId === 'move') return false;
       if (k === 'Escape' || k === 'Backspace' || k === 'Enter') {
@@ -463,3 +613,4 @@ export function mountToolStrip(opts: ToolStripOptions): ToolStrip {
   showHint();
   return api;
 }
+

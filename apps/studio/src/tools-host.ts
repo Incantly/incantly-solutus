@@ -7,6 +7,9 @@ import { Figure } from '@incantly/kernel';
 import type { CommandRegistry } from '@incantly/kernel';
 import type { ToolHost, ToolPt } from '@incantly/ui';
 
+/** Undefined reasons that mean the picks do not make the object (tools-2d errors.md 2, `degenerate`). */
+const DEGENERATE = new Set(['collinear', 'coincident', 'parallel', 'zero_length', 'degenerate']);
+
 const isPt = (v: unknown): v is ToolPt => typeof v === 'object' && v !== null && typeof (v as ToolPt).x === 'number' && typeof (v as ToolPt).y === 'number';
 
 /**
@@ -78,6 +81,15 @@ export function figureHost(figure: Figure, registry: CommandRegistry, slack = 0.
       const r = tryValue(`(${text})`);
       if (!r.ok) return { ok: false, message: r.message, ...(r.hint ? { hint: r.hint } : {}) };
       return typeof r.value === 'number' && Number.isFinite(r.value) ? { ok: true, value: r.value } : { ok: false, message: `${text} is not a number.`, hint: 'Type a number, such as 3, 2*r or 40°.' };
+    },
+    degenerate(lines, results) {
+      const { figure: f } = Figure.fromScript(figure.toScript(), { commands: registry });
+      if (!f.applyBatch(lines, { group: 'check', mode: 'atomic' }).ok) return undefined;
+      for (const n of results) {
+        const c = f.cellOf(n);
+        if (c && !c.defined && DEGENERATE.has(c.reason)) return c.reason;
+      }
+      return undefined;
     },
     nameFree(name) {
       if (figure.get(name)) return false;

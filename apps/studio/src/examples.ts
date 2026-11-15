@@ -141,4 +141,9 @@ export const EXAMPLES: readonly Example[] = [
     title: 'Big list: 2,500 rows that follow one slider',
     lines: ['a = 1 in 0..10 step 0.1', 'f(x) = sin(a*x)', 'P = (a, f(a))', ...Array.from({ length: 2497 }, (_, i) => `b${i} = a + ${i}`)],
   },
+  {
+    id: 'tools-keys',
+    title: 'Tools: Ctrl+8 Angle, Alt for the reflex angle, arrows and Enter',
+    lines: ['A = (-4, 0)', 'V = (0, 0)', 'B = (3, 3)', 'P = (-2, -3)', 'Q = (0, -3)', 'R = (2, -3)'],
+  },
 ];

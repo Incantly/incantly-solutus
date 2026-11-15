@@ -38,6 +38,8 @@ export interface Arg {
   readonly value?: number;
   /** True when the pick made a new point (a pending point). */
   readonly made?: boolean;
+  /** A typed literal turned into a slider with Alt: the slider's line, written before the tool's own lines. */
+  readonly slider?: string;
 }
 
 /** What `emit` may ask while it writes lines. */
@@ -46,6 +48,8 @@ export interface EmitContext {
   readonly view: { readonly x0: number; readonly x1: number; readonly y0: number; readonly y1: number };
   /** How many intersection points two objects have now. */
   intersections(a: string, b: string): number;
+  /** Alt was held on the click or Enter that finished the tool: the tool's special alternative (ui.md 2, Keyboard). */
+  readonly alt?: boolean;
 }
 
 /** An edit the tool asks the host to do instead of writing a defining line. */
@@ -104,11 +108,16 @@ export interface ToolHost {
   checkNumber(text: string): { readonly ok: true; readonly value: number } | { readonly ok: false; readonly message: string; readonly hint?: string };
   /** True when `name` may name a new object (not used, not reserved). */
   nameFree(name: string): boolean;
+  /**
+   * The undefined reason a tool's lines would leave on one of `results` when the picks do not make the object
+   * (`collinear`, `coincident`, `parallel`, `zero_length`, `degenerate`), or undefined (errors.md 2, `degenerate`).
+   */
+  degenerate?(lines: readonly string[], results: readonly string[]): string | undefined;
 }
 
 export type RefusalCode =
   | 'no_target' | 'wrong_type' | 'already_picked' | 'not_a_path' | 'bad_number' | 'number_out_of_range' | 'mixed_types'
-  | 'too_few' | 'limit';
+  | 'too_few' | 'limit' | 'degenerate';
 
 /** A click or entry that does not fit the step (errors.md 2). The session stays on its step. */
 export interface ToolRefusal {
@@ -135,6 +144,8 @@ export interface ToolDone {
   /** Names of the new points it made. */
   readonly points: readonly string[];
   readonly action?: ToolAction;
+  /** Alt was held on the input that finished the tool: commit even an undefined result (errors.md 2, degenerate). */
+  readonly alt?: boolean;
 }
 
 /** Objects a point slot can sit on: what design 7.3 calls path-like. */

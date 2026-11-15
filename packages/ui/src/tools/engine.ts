@@ -46,6 +46,23 @@ const words = (ts: readonly string[]): string => {
   return w.length <= 1 ? w.join('') : `${w.slice(0, -1).join(', ')} or ${w[w.length - 1]}`;
 };
 
+/** The slider line for a typed literal under Alt: a range that holds the value with room to move (design 7.5). */
+function sliderLine(v: number, slot: Extract<Slot, { kind: 'number' }>): string {
+  const [lo0, hi0] = slot.range ?? [-Infinity, Infinity];
+  const mag = Math.max(1, Math.abs(v));
+  const p = Math.pow(10, Math.floor(Math.log10(mag)));
+  const top = Math.ceil((mag * 2) / p) * p;
+  const lo = Math.max(lo0, v >= 0 ? 0 : -top);
+  const hi = Math.min(hi0, top);
+  const step = slot.integer ? 1 : Number((p / 10).toPrecision(3));
+  return `{number#slider} = ${v} in ${lo}..${hi} step ${step}`;
+}
+
+const DEGENERATE_WORDS: Readonly<Record<string, string>> = {
+  collinear: 'These points are in a line, so this cannot be made.', coincident: 'These two points are the same point.',
+  parallel: 'These lines are parallel; they never meet.', zero_length: 'This has zero length.', degenerate: "These points don't make the shape.",
+};
+
 export class ToolSession {
   private branches: Branch[];
   private readonly history: Branch[][] = [];
@@ -53,6 +70,8 @@ export class ToolSession {
   private counter = 0;
   /** The visible box; tools that scan the view read it. Grid step for free points: 1/100 of the view's width, rounded. */
   view = { x0: -10, x1: 10, y0: -10, y1: 10 };
+  /** Alt held on the last input: the tool's alternative, and "use slider" for a typed literal (design 7.5, ui.md 2). */
+  private alt = false;
   /** The most points a repeating tool takes (errors.md 6). */
   static readonly MAX_PENDING = 200;
 
@@ -193,7 +212,8 @@ export class ToolSession {
   }
 
   /** A click in maths coordinates with the objects under the pointer, nearest first. */
-  click(at: Pt, hits: readonly Hit[]): StepResult {
+  click(at: Pt, hits: readonly Hit[], opts: { readonly alt?: boolean } = {}): StepResult {
+    this.alt = opts.alt === true;
     if (this.awaitingNumber()) return this.refuse('bad_number', 'Type the number first.', 'Press Enter to accept it, or Esc to cancel.');
     // a click on the first point of a repeating tool closes it (polygon)
     for (const b of this.branches) {
@@ -230,7 +250,8 @@ export class ToolSession {
   }
 
   /** A typed number for the waiting number slot: a formula or a name, checked by the language (7.5). */
-  entry(text: string): StepResult {
+  entry(text: string, opts: { readonly alt?: boolean } = {}): StepResult {
+    this.alt = opts.alt === true;
     const slot = this.awaitingNumber();
     if (!slot) return { ok: true };
     let src = text.trim().replace(/°$/, 'deg');
@@ -243,7 +264,10 @@ export class ToolSession {
       return this.refuse('number_out_of_range', `${slot.prompt.replace(/^Type (the )?/, '').replace(/\.$/, '')} must be ${what}.`, `Type ${what}.`);
     }
     this.history.push(this.branches);
-    this.branches = this.branches.filter((b) => this.slotOf(b)?.kind === 'number').map((b) => ({ variant: b.variant, args: [...b.args, { text: src, type: 'Number', value: r.value }] }));
+    // Alt on a typed literal makes it a slider and uses its name (design 7.5): `r = 3 in 0..10`
+    const literal = /^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i.test(src);
+    const arg: Arg = this.alt && literal ? { text: '{number#slider}', type: 'Number', value: r.value, slider: sliderLine(r.value, slot) } : { text: src, type: 'Number', value: r.value };
+    this.branches = this.branches.filter((b) => this.slotOf(b)?.kind === 'number').map((b) => ({ variant: b.variant, args: [...b.args, arg] }));
     return this.settle();
   }
 
@@ -320,16 +344,42 @@ export class ToolSession {
       this.reset();
       return { ok: true, tool: this.spec.id, variant: b.variant.id, lines: [], results: [], points: [], action };
     }
-    const ctx: EmitContext = { view: this.view, intersections: (x, y) => this.host.intersections(x, y) };
+    const ctx: EmitContext = { view: this.view, intersections: (x, y) => this.host.intersections(x, y), alt: this.alt };
     // a list of picks in a line (A, B, C) or a list literal
-    const own = b.variant.emit ? b.variant.emit(b.args, ctx) : [];
+    const sliders = b.args.flatMap((a) => (a.slider ? [a.slider] : []));
+    const own = [...sliders, ...(b.variant.emit ? b.variant.emit(b.args, ctx) : [])];
     // the point tools write only their new point; picking a point that is already there makes nothing
     if (own.length === 0 && pointLines.length === 0) return this.refuse('already_picked', 'That point is already there.', 'Click empty space, a path or a crossing.');
     const { lines } = allocate([...pointLines, ...own], (n) => this.host.nameFree(n));
     const points = lines.slice(0, pointLines.length).map((l) => definedName(l) as string);
     const results = lines.slice(pointLines.length).map(definedName).filter((n): n is string => n !== undefined);
+    const alt = this.alt;
+    // picks that do not make the object are refused, and the last pick dropped, unless Alt was held: an undefined
+    // object is still worth placing when dragging will fix it (errors.md 2, degenerate)
+    const why = alt || this.spec.kind !== 'construct' ? undefined : this.host.degenerate?.(lines, results);
+    if (why) {
+      const prev = this.history.pop();
+      if (prev) this.branches = prev;
+      return this.refuse('degenerate', `${DEGENERATE_WORDS[why] ?? `The result would be undefined (${why.replace(/_/g, ' ')}).`}`, 'Move a point, or hold Alt and click to place it anyway.');
+    }
     this.reset();
-    return { ok: true, tool: this.spec.id, variant: b.variant.id, lines, results, points };
+    return { ok: true, tool: this.spec.id, variant: b.variant.id, lines, results, points, ...(alt ? { alt: true } : {}) };
+  }
+
+  /**
+   * Moves a pending free point before the next click (design 7.2: press, drag, release), snapped to the grid.
+   * Points on a path or at a crossing stay where they are. Returns false when `tag` is not a free pending point.
+   */
+  movePending(tag: string, at: Pt): boolean {
+    const p = this.made.get(tag);
+    if (!p || p.how !== 'free') return false;
+    const g = this.gridStep();
+    const q = { x: round(at.x, g), y: round(at.y, g) };
+    this.made.set(tag, { ...p, at: q, line: `${tag} = (${q.x}, ${q.y})` });
+    const move = (b: Branch): Branch => ({ variant: b.variant, args: b.args.map((a) => (a.text === tag ? { ...a, at: q } : a)) });
+    this.branches = this.branches.map(move);
+    for (let i = 0; i < this.history.length; i++) this.history[i] = (this.history[i] as Branch[]).map(move);
+    return true;
   }
 
   /** Back to the first step (a sticky tool starts again). */
