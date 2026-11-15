@@ -139,6 +139,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
   const tools = mountToolStrip({
     session, registry, say, host: () => graph.element, items, redraw: () => graph.redraw(), flash: (names) => exprs.flash(names),
     selection: () => selection.names(),
+    viewport: () => graph.viewport,
   });
   selection.onChange(() => {
     graph.redraw();

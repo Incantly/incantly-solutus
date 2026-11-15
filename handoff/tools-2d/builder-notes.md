@@ -21,11 +21,20 @@ Built on `feat/tools-2d` from `.kiro/specs/tools-2d`.
 the engine (picking, narrowing, refusals, numbers, preselection, previews, edits, names), the strip in the page, and the
 hit-list speed (under 0.3 ms at 1,000 objects).
 
+## Second round (15 November 2026)
+
+- Keyboard (ui.md 2): with a tool on, arrows move a virtual cursor by a grid step (Shift ×5, Alt ÷5), Enter or Space
+  clicks there, Tab cycles the hit list ("2 of 3: …"); the position is spoken at most twice a second. Ctrl+1…9 pick
+  the first nine groups' current tools. `ToolStrip.keyDown`.
+- Moving while building (design 7.2): press on a pending free point and drag; it snaps to the grid
+  (`ToolSession.movePending`). A finger with a tool on shows a loupe; the release is the click.
+- Alt (ui.md 2): Angle takes the reflex angle (arms reversed); Angle with size and Rotate turn clockwise; a typed
+  literal becomes a slider used by name (`r = 3 in 0..6 step 0.1`).
+- `degenerate` (errors.md 2): the engine asks the host for undefined results (collinear, coincident, parallel,
+  zero length) and refuses the last pick unless Alt was held.
+- Tests: `apps/studio/test/tools-keys.test.ts`. Example: **Tools** in the Examples menu.
+
 ## Not done
 
-- Keyboard virtual cursor (ui.md 2, Keyboard) and Tab cycling of the hit list; Ctrl+1…9 for groups.
-- Touch loupe and dragging a pending point before the next click (design 7.2).
-- Alt variants: reflex angle, clockwise rotation, "use slider", committing a degenerate pick.
-- The selection in the studio: preselection works in the engine but the studio has no selection to pass yet.
 - Readouts, `@tools`, `Suggest` and learner events (decided against the design for this area).
 - The deferred tools in `DEFERRED`.

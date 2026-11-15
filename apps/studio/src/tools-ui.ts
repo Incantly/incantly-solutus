@@ -52,6 +52,8 @@ export interface ToolStripOptions {
   readonly flash: (names: readonly string[]) => void;
   /** Objects selected before a tool starts become its first picks, in order (tools-2d design 5.4). */
   readonly selection?: () => readonly string[];
+  /** The graph's viewport, for the keyboard cursor before anything is painted. */
+  readonly viewport?: () => Viewport;
 }
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls = '', text = ''): HTMLElementTagNameMap[K] => {
@@ -243,14 +245,6 @@ export function mountToolStrip(opts: ToolStripOptions): ToolStrip {
       return;
     } else {
       // an undefined result is refused unless Alt was held, so that dragging can fix it later (errors.md 2, degenerate)
-      const why = done.alt ? undefined : degenerateReason(done);
-      if (why) {
-        refusal = `${DEGENERATE_WORDS[why] ?? `The result would be undefined (${why.replace(/_/g, ' ')}).`} Move a point, or hold Alt and click to place it anyway.`;
-        say(refusal);
-        tool?.key('Backspace');
-        showHint();
-        return;
-      }
       const r = session.applyLines(done.lines, s.label, 'atomic');
       if (!r.ok) {
         refusal = `That didn't work: ${r.error.message}`;
@@ -264,18 +258,6 @@ export function mountToolStrip(opts: ToolStripOptions): ToolStrip {
     }
     if (!s.sticky) api.select('move');
     else newSession();
-  };
-
-  /** The undefined reason of a tool's result in a scratch copy, when it is a degenerate pick. */
-  const degenerateReason = (done: ToolDone): string | undefined => {
-    const { figure } = Figure.fromScript(session.figure.toScript(), { commands: registry });
-    const r = figure.applyBatch(done.lines, { group: 'check', mode: 'atomic' });
-    if (!r.ok) return undefined;
-    for (const n of done.results) {
-      const c = figure.cellOf(n);
-      if (c && !c.defined && DEGENERATE.has(c.reason)) return c.reason;
-    }
-    return undefined;
   };
 
   const handle = (r: StepResult): void => {
@@ -566,7 +548,7 @@ export function mountToolStrip(opts: ToolStripOptions): ToolStrip {
         return true;
       }
       if (currentId === 'move' || !tool) return api.key(e.key);
-      const vp = lastVp;
+      const vp = lastVp ?? opts.viewport?.();
       const arrows: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
       const dir = arrows[e.key];
       if (dir && vp) {
@@ -632,9 +614,3 @@ export function mountToolStrip(opts: ToolStripOptions): ToolStrip {
   return api;
 }
 
-/** Undefined reasons that mean the picks do not make the object (errors.md 2, `degenerate`). */
-const DEGENERATE = new Set(['collinear', 'coincident', 'parallel', 'zero_length', 'degenerate']);
-const DEGENERATE_WORDS: Readonly<Record<string, string>> = {
-  collinear: 'These points are in a line, so this cannot be made.', coincident: 'These two points are the same point.',
-  parallel: 'These lines are parallel; they never meet.', zero_length: 'This has zero length.', degenerate: "These points don't make the shape.",
-};

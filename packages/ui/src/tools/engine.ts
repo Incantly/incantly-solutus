@@ -58,6 +58,11 @@ function sliderLine(v: number, slot: Extract<Slot, { kind: 'number' }>): string 
   return `{number#slider} = ${v} in ${lo}..${hi} step ${step}`;
 }
 
+const DEGENERATE_WORDS: Readonly<Record<string, string>> = {
+  collinear: 'These points are in a line, so this cannot be made.', coincident: 'These two points are the same point.',
+  parallel: 'These lines are parallel; they never meet.', zero_length: 'This has zero length.', degenerate: "These points don't make the shape.",
+};
+
 export class ToolSession {
   private branches: Branch[];
   private readonly history: Branch[][] = [];
@@ -349,6 +354,14 @@ export class ToolSession {
     const points = lines.slice(0, pointLines.length).map((l) => definedName(l) as string);
     const results = lines.slice(pointLines.length).map(definedName).filter((n): n is string => n !== undefined);
     const alt = this.alt;
+    // picks that do not make the object are refused, and the last pick dropped, unless Alt was held: an undefined
+    // object is still worth placing when dragging will fix it (errors.md 2, degenerate)
+    const why = alt || this.spec.kind !== 'construct' ? undefined : this.host.degenerate?.(lines, results);
+    if (why) {
+      const prev = this.history.pop();
+      if (prev) this.branches = prev;
+      return this.refuse('degenerate', `${DEGENERATE_WORDS[why] ?? `The result would be undefined (${why.replace(/_/g, ' ')}).`}`, 'Move a point, or hold Alt and click to place it anyway.');
+    }
     this.reset();
     return { ok: true, tool: this.spec.id, variant: b.variant.id, lines, results, points, ...(alt ? { alt: true } : {}) };
   }

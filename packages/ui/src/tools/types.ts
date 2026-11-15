@@ -108,11 +108,16 @@ export interface ToolHost {
   checkNumber(text: string): { readonly ok: true; readonly value: number } | { readonly ok: false; readonly message: string; readonly hint?: string };
   /** True when `name` may name a new object (not used, not reserved). */
   nameFree(name: string): boolean;
+  /**
+   * The undefined reason a tool's lines would leave on one of `results` when the picks do not make the object
+   * (`collinear`, `coincident`, `parallel`, `zero_length`, `degenerate`), or undefined (errors.md 2, `degenerate`).
+   */
+  degenerate?(lines: readonly string[], results: readonly string[]): string | undefined;
 }
 
 export type RefusalCode =
   | 'no_target' | 'wrong_type' | 'already_picked' | 'not_a_path' | 'bad_number' | 'number_out_of_range' | 'mixed_types'
-  | 'too_few' | 'limit';
+  | 'too_few' | 'limit' | 'degenerate';
 
 /** A click or entry that does not fit the step (errors.md 2). The session stays on its step. */
 export interface ToolRefusal {
