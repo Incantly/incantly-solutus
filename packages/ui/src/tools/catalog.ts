@@ -2,7 +2,7 @@
  * The tool table (docs/features/tools-2d/design.md 6). Every tool writes ordinary lines; the toolbar, the hints and the
  * model's catalogue are printed from here.
  */
-import type { Arg, Slot, ToolGroup, ToolKind, ToolSpec, ToolVariant } from './types';
+import type { Arg, EmitContext, Slot, ToolGroup, ToolKind, ToolSpec, ToolVariant } from './types';
 
 const ANY_POINT = ['existing', 'free', 'on-path', 'intersection'] as const;
 const P = (prompt: string): Slot => ({ kind: 'point', prompt, create: ANY_POINT });
@@ -20,6 +20,10 @@ function tool(id: string, group: ToolGroup, label: string, icon: string, descrip
 
 /** Lines that make one result from all the picks: `{line} = Line(A, B)`. */
 const make = (kind: string, cmd: string) => (a: readonly Arg[]): string[] => [`{${kind}} = ${cmd}(${a.map((x) => x.text).join(', ')})`];
+/** An angle, or with Alt its reflex complement: the same arms taken the other way round (design 6, angle). */
+const angle = (a: readonly Arg[], ctx: EmitContext): string[] => [`{angle} = Angle(${(ctx.alt ? [...a].reverse() : a).map((x) => x.text).join(', ')})`];
+/** A typed angle, turned clockwise with Alt (design 6, angle-fixed and rotate). */
+const turn = (text: string, ctx: EmitContext): string => (ctx.alt ? `-(${text})` : text);
 
 export const TOOLS: readonly ToolSpec[] = [
   /* move */
@@ -156,13 +160,13 @@ export const TOOLS: readonly ToolSpec[] = [
 
   /* measurement */
   tool('angle', 'measure', 'Angle', '∡', 'Measures an angle, counter-clockwise from the first arm to the second.', [
-    v('points', [P('Click a point on the first arm.'), P('Click the vertex.'), P('Click a point on the second arm.')], make('angle', 'Angle')),
-    v('lines', [O('Select the first line or segment.', ...STRAIGHT), O('Select the second.', ...STRAIGHT)], make('angle', 'Angle')),
-    v('vectors', [O('Select the first vector.', 'Vector'), O('Select the second vector.', 'Vector')], make('angle', 'Angle')),
+    v('points', [P('Click a point on the first arm.'), P('Click the vertex.'), P('Click a point on the second arm.')], angle),
+    v('lines', [O('Select the first line or segment.', ...STRAIGHT), O('Select the second.', ...STRAIGHT)], angle),
+    v('vectors', [O('Select the first vector.', 'Vector'), O('Select the second vector.', 'Vector')], angle),
   ]),
   tool('angle-fixed', 'measure', 'Angle with size', '∢', 'Turns a point about a vertex by a typed angle, counter-clockwise.', [
-    v('fixed', [P('Click a point on the first arm.'), P('Click the vertex.'), N('Type the angle, such as 40°.', { unit: 'angle', def: 0.6981317 })], (a) => [
-      `{point#end} = Rotate(${t(a, 0)}, ${t(a, 2)}, ${t(a, 1)})`, `{angle} = Angle(${t(a, 0)}, ${t(a, 1)}, {point#end})`,
+    v('fixed', [P('Click a point on the first arm.'), P('Click the vertex.'), N('Type the angle, such as 40°.', { unit: 'angle', def: 0.6981317 })], (a, ctx) => [
+      `{point#end} = Rotate(${t(a, 0)}, ${turn(t(a, 2), ctx)}, ${t(a, 1)})`, `{angle} = Angle(${t(a, 0)}, ${t(a, 1)}, {point#end})`,
     ]),
   ]),
   tool('distance-length', 'measure', 'Distance or length', '↔', 'Measures the distance between two objects, or the length of one.', [
@@ -194,7 +198,7 @@ export const TOOLS: readonly ToolSpec[] = [
     v('invert', [O('Select the object to invert.', 'Point', 'Line', 'Circle'), O('Select the circle.', 'Circle')], (a) => [`{${imageKind(a[0] as Arg)}} = Reflect(${t(a, 0)}, ${t(a, 1)})`]),
   ]),
   tool('rotate-angle', 'transform', 'Rotate', '↻', 'Turns an object about a point by a typed angle, counter-clockwise.', [
-    v('rotate', [O('Select the object to rotate.', 'Shape'), P('Click the centre.'), N('Type the angle, such as 45°.', { unit: 'angle', def: 0.7853982 })], (a) => [`{${imageKind(a[0] as Arg)}} = Rotate(${t(a, 0)}, ${t(a, 2)}, ${t(a, 1)})`]),
+    v('rotate', [O('Select the object to rotate.', 'Shape'), P('Click the centre.'), N('Type the angle, such as 45°.', { unit: 'angle', def: 0.7853982 })], (a, ctx) => [`{${imageKind(a[0] as Arg)}} = Rotate(${t(a, 0)}, ${turn(t(a, 2), ctx)}, ${t(a, 1)})`]),
   ]),
   tool('translate-vector', 'transform', 'Translate', '⇢', 'Moves an object by a vector.', [
     v('translate', [O('Select the object to move.', 'Shape', 'Function'), O('Select the vector.', 'Vector')], (a) => [`{${imageKind(a[0] as Arg)}} = Translate(${t(a, 0)}, ${t(a, 1)})`]),

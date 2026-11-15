@@ -362,7 +362,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
       else api.undo();
       return;
     }
-    if (!typing && tools.key(e.key)) {
+    if (!typing && tools.keyDown(e)) {
       e.preventDefault();
       return;
     }
