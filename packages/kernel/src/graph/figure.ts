@@ -248,7 +248,7 @@ export class Figure extends FigureHist {
       free: r.p.kind === 'free',
       state: r.p.kind === 'state',
       ...(r.range ? { range: r.range } : {}),
-      definition: printLineNode(r.p.node),
+      definition: printedLine(r.p.node),
       inputs: r.inputs.map((i) => i.id),
       style: this.styleOf(r.id) as EffectiveStyle,
     };
@@ -327,7 +327,7 @@ export class Figure extends FigureHist {
         id: r.id,
         name: r.p.name,
         type: r.p.type.k as TypeName,
-        definition: printLineNode(r.p.node),
+        definition: printedLine(r.p.node),
         valueText: c.defined ? valueText(c.value) : `undefined (${c.reason})`,
         sentence: this.sentence(r),
         ...(title !== undefined ? { group: { title, breakpoint: true as const } } : {}),
@@ -389,7 +389,7 @@ export class Figure extends FigureHist {
   /** The text of one object: its line, with its `with` list. Free values print as their current value. */
   protected objectLine(r: ObjRec): string {
     const p = r.p;
-    let base = printLineNode(p.node);
+    let base = printedLine(p.node);
     if (p.kind === 'free') {
       const lit = valueSource(p.type, p.value);
       if (lit !== undefined && p.node.k === 'define') {
@@ -517,6 +517,20 @@ export class Figure extends FigureHist {
     }
     return { ok: e0 === 0, applied, skipped: total - applied, errors: out, warnings };
   }
+}
+
+/**
+ * The printed text of a parsed line, kept per node. Nodes are never edited in place (a redefine, rename or range
+ * change makes a new one), so the text of a node never changes; `objects()` on 5,000 objects stops printing them all.
+ */
+const PRINTED = new WeakMap<object, string>();
+function printedLine(node: Parameters<typeof printLineNode>[0]): string {
+  let s = PRINTED.get(node);
+  if (s === undefined) {
+    s = printLineNode(node);
+    PRINTED.set(node, s);
+  }
+  return s;
 }
 
 function tyText(r: ObjRec): string {

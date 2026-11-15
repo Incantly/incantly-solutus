@@ -61,9 +61,22 @@ export class KernelSession {
     return () => this.listeners.delete(fn);
   }
 
+  /** Goes up when a directive line (`@algebra …`, `@seed …`) changes or a script is loaded, so readers of the script's
+   * directives need not print the whole script on every change. */
+  directiveVersion = 0;
+  /** Goes up on every change except a value or the clock: objects added, removed, renamed, restyled or reordered. */
+  structureVersion = 0;
+
   private watch(): void {
     this.off?.();
-    this.off = this.figure.on(() => this.emit());
+    this.directiveVersion++;
+    this.structureVersion++;
+    this.off = this.figure.on((ev) => {
+      if (ev.ev === 'directive' || ev.ev === 'undo' || ev.ev === 'redo') this.directiveVersion++;
+      // anything but a value or the clock may change which rows there are, their order, names or links
+      if (ev.ev !== 'value' && ev.ev !== 'clock' && ev.ev !== 'step') this.structureVersion++;
+      this.emit();
+    });
   }
 
   private emit(): void {
@@ -98,6 +111,12 @@ export class KernelSession {
 
   rows(): LineRow[] {
     return this.figure.objects().map((v) => this.rowOf(v));
+  }
+
+  /** One row, by object id: the list builds only the rows in view. */
+  row(id: number): LineRow | undefined {
+    const v = this.figure.get(id as never);
+    return v ? this.rowOf(v) : undefined;
   }
 
   private rowOf(v: ObjectView): LineRow {

@@ -123,8 +123,164 @@ function chainOf(o: AlgebraObject, byId: ReadonlyMap<number, AlgebraObject>): st
   return out;
 }
 
+/** The figure-wide maps a row reads when its links are asked for. */
+interface RowContext {
+  byId: Map<number, AlgebraObject>;
+  usedBy: ReadonlyMap<number, string[]>;
+}
+
+const sameRange = (a: AlgebraObject['range'], b: AlgebraObject['range']): boolean =>
+  a === b || (a !== undefined && b !== undefined && a.min === b.min && a.max === b.max && a.step === b.step);
+
+/**
+ * One row. Only the fields the filter and the sort need are made at once; the pretty text, value text, description
+ * and lines are made when first read (design 3.16: "valueText is computed lazily by getter"), so a slider that moves
+ * 2,500 dependents formats only the rows in view.
+ */
+class LazyRow implements AlgebraRow {
+  readonly id: number;
+  readonly name: string;
+  readonly type: string;
+  readonly free: boolean;
+  readonly visible: boolean;
+  readonly aux: boolean;
+  readonly layer: number;
+  readonly source: string;
+  private def_: string | undefined;
+  private val_: string | null | undefined;
+  private lines_: readonly [string, string | null] | undefined;
+
+  constructor(private readonly o: AlgebraObject, private readonly prefs: AlgebraPrefs, readonly depth: number, private readonly ctx: RowContext) {
+    this.id = o.id;
+    this.name = o.name;
+    this.type = o.type;
+    this.free = o.free;
+    this.visible = o.style.visible;
+    this.aux = o.style.aux === true;
+    this.layer = o.style.layer ?? 0;
+    this.source = o.definition;
+  }
+
+  get definitionText(): string {
+    return (this.def_ ??= prettyText(this.source.replace(/\swith\s.*$/, '')));
+  }
+
+  get valueText(): string | null {
+    if (this.val_ === undefined) this.val_ = this.o.cell.defined ? valueTextOf(this.o.typeText || this.o.type, this.o.cell.value, this.prefs.format) : null;
+    return this.val_;
+  }
+
+  get madeFrom(): string[] {
+    return this.o.inputs.map((i) => this.ctx.byId.get(i)?.name).filter((x): x is string => x !== undefined);
+  }
+
+  get usedBy(): readonly string[] {
+    return this.ctx.usedBy.get(this.o.id) ?? [];
+  }
+
+  get descriptionText(): string {
+    return describeObject(this.o, this.madeFrom);
+  }
+
+  get lines(): readonly [string, string | null] {
+    if (this.lines_) return this.lines_;
+    const o = this.o;
+    const definitionText = this.definitionText;
+    const v = this.valueText;
+    const rhs = definitionText.slice(definitionText.indexOf('=') + 1).trim();
+    const isFunction = o.type === 'Function' || /^\S+\([^)]*\)\s*=/.test(definitionText);
+    const shown = v === null ? '—' : v;
+    // the second row only when it adds something (design 3.2)
+    const adds = !isFunction && v !== null && v !== rhs && !(o.free && o.type !== 'List');
+    switch (this.prefs.mode) {
+      case 'definition': this.lines_ = [definitionText, null]; break;
+      case 'value': this.lines_ = [isFunction ? definitionText : `${o.name} = ${shown}`, null]; break;
+      case 'description': this.lines_ = [`${o.name}: ${this.descriptionText}`, isFunction || v === null ? null : shown]; break;
+      // an equation (a line's, a circle's) is shown as it is, not after another "="
+      default: this.lines_ = [o.free && o.type !== 'List' ? `${o.name} = ${shown}` : definitionText, adds ? (shown.includes('=') ? shown : `= ${shown}`) : null];
+    }
+    return this.lines_;
+  }
+
+  get undefinedInfo(): AlgebraRow['undefinedInfo'] {
+    const c = this.o.cell;
+    return c.defined ? null : { reason: c.reason ?? 'undefined', text: reasonWords(c.reason ?? 'undefined'), chain: chainOf(this.o, this.ctx.byId) };
+  }
+
+  get slider(): AlgebraRow['slider'] {
+    const o = this.o;
+    return o.free && o.type === 'Number' && o.range && typeof o.cell.value === 'number'
+      ? { min: o.range.min, max: o.range.max, step: o.range.step ?? (o.range.max - o.range.min) / 100, value: o.cell.value } : null;
+  }
+
+  get approx(): boolean {
+    return this.o.cell.defined && typeof this.o.cell.value === 'number' ? formatNumber(this.o.cell.value, this.prefs.format).approx : false;
+  }
+
+  /** A plain copy with every field read: for equality checks and printing. */
+  toJSON(): Record<string, unknown> {
+    return {
+      id: this.id, name: this.name, type: this.type, free: this.free, depth: this.depth, visible: this.visible, aux: this.aux, layer: this.layer,
+      definitionText: this.definitionText, source: this.source, valueText: this.valueText, descriptionText: this.descriptionText, lines: this.lines,
+      undefinedInfo: this.undefinedInfo, slider: this.slider, approx: this.approx, madeFrom: this.madeFrom, usedBy: this.usedBy,
+    };
+  }
+}
+
+const makeRow = (o: AlgebraObject, prefs: AlgebraPrefs, depth: number, ctx: RowContext): AlgebraRow => new LazyRow(o, prefs, depth, ctx);
+
+/**
+ * Rows kept between two calls of `algebraRows` (design 3.16, incremental updates): a row is made again only when
+ * something it shows changed (its source, value, state, style, links or the display preferences). The pretty text,
+ * value text and description are the costly parts; a slider drag remakes the rows that read the slider, not all of them.
+ */
+export class AlgebraCache {
+  readonly rows = new Map<number, { readonly prefs: string; readonly o: AlgebraObject; readonly depth: number; readonly row: AlgebraRow }>();
+  /** The figure-wide maps the rows read their links from; replaced on every call. */
+  ctx: RowContext | undefined;
+  /** Rows made, and rows reused, by the last call: for tests and the speed check. */
+  made = 0;
+  reused = 0;
+  /** Forgets objects that are gone. */
+  prune(alive: ReadonlySet<number>): void {
+    for (const id of this.rows.keys()) if (!alive.has(id)) this.rows.delete(id);
+  }
+}
+
+/**
+ * Fresh rows for a few objects whose values changed, after a full `algebraRows` with the same cache and preferences
+ * (design 3.16: value text for the rows in view; the rest waits until scrolled into view). The figure's structure
+ * (names, links, order) must be the same as at that call. Returns `undefined` when a row changed in a way that can
+ * move it (defined to undefined or back, under an "only undefined" filter): then the caller does the full call.
+ */
+export function refreshAlgebraRows(objects: readonly AlgebraObject[], prefs: AlgebraPrefs, cache: AlgebraCache): AlgebraRow[] | undefined {
+  const ctx = cache.ctx;
+  if (!ctx) return undefined;
+  const prefsKey = `${prefs.mode}|${prefs.showAux}|${JSON.stringify(prefs.format)}`;
+  const out: AlgebraRow[] = [];
+  for (const o of objects) {
+    const hit = cache.rows.get(o.id);
+    if (!hit || hit.prefs !== prefsKey) return undefined;
+    if (hit.o.cell.defined !== o.cell.defined && prefs.filter.onlyUndefined) return undefined;
+    ctx.byId.set(o.id, o);
+    if (Object.is(hit.o.cell.value, o.cell.value) && hit.o.cell.defined === o.cell.defined && hit.o.cell.reason === o.cell.reason && hit.o.definition === o.definition) {
+      out.push(hit.row);
+      continue;
+    }
+    const row = makeRow(o, prefs, hit.depth, ctx);
+    cache.rows.set(o.id, { prefs: prefsKey, o, depth: hit.depth, row });
+    out.push(row);
+  }
+  return out;
+}
+
 /** The rows of the figure, for the preferences: filtered, sorted and grouped (design 3.6). */
-export function algebraRows(objects: readonly AlgebraObject[], prefs: AlgebraPrefs = DEFAULT_PREFS): { rows: AlgebraRow[]; groups: AlgebraGroup[] } {
+export function algebraRows(objects: readonly AlgebraObject[], prefs: AlgebraPrefs = DEFAULT_PREFS, cache?: AlgebraCache): { rows: AlgebraRow[]; groups: AlgebraGroup[] } {
+  if (cache) {
+    cache.made = 0;
+    cache.reused = 0;
+  }
+  const prefsKey = `${prefs.mode}|${prefs.showAux}|${JSON.stringify(prefs.format)}`;
   const byId = new Map(objects.map((o) => [o.id, o]));
   const usedBy = new Map<number, string[]>();
   for (const o of objects) for (const i of o.inputs) (usedBy.get(i) ?? usedBy.set(i, []).get(i) as string[]).push(o.name);
@@ -132,46 +288,45 @@ export function algebraRows(objects: readonly AlgebraObject[], prefs: AlgebraPre
   const depthOf = (o: AlgebraObject, guard = 0): number => {
     const hit = depth.get(o.id);
     if (hit !== undefined) return hit;
-    const d = o.free || o.inputs.length === 0 || guard > 64 ? 0 : 1 + Math.max(...o.inputs.map((i) => { const x = byId.get(i); return x ? depthOf(x, guard + 1) : 0; }));
+    let d = 0;
+    if (!o.free && guard <= 64) for (const i of o.inputs) {
+      const x = byId.get(i);
+      d = Math.max(d, 1 + (x ? depthOf(x, guard + 1) : 0));
+    }
     depth.set(o.id, d);
     return d;
   };
+  // what a row reads from the whole figure (links, the undefined chain) is looked up when read, so a reused row
+  // still shows the current links
+  const ctx = cache ? (cache.ctx ??= { byId, usedBy }) : { byId, usedBy };
+  ctx.byId = byId;
+  ctx.usedBy = usedBy;
   const rows: AlgebraRow[] = [];
   for (const o of objects) {
     const aux = o.style.aux === true;
     if (aux && !prefs.showAux) continue;
-    const source = o.definition;
-    const definitionText = prettyText(source.replace(/\swith\s.*$/, ''));
-    const madeFrom = o.inputs.map((i) => byId.get(i)?.name).filter((x): x is string => x !== undefined);
-    const value = o.cell.defined ? valueTextOf(o.typeText || o.type, o.cell.value, prefs.format) : null;
-    const approx = o.cell.defined && typeof o.cell.value === 'number' ? formatNumber(o.cell.value, prefs.format).approx : false;
-    const descriptionText = describeObject(o, madeFrom);
-    const rhs = definitionText.slice(definitionText.indexOf('=') + 1).trim();
-    const isFunction = o.type === 'Function' || /^\S+\([^)]*\)\s*=/.test(definitionText);
-    const shown = value === null ? '—' : value;
-    // the second row only when it adds something (design 3.2)
-    const adds = !isFunction && value !== null && value !== rhs && !(o.free && o.type !== 'List');
-    let lines: [string, string | null];
-    switch (prefs.mode) {
-      case 'definition': lines = [definitionText, null]; break;
-      case 'value': lines = [isFunction ? definitionText : `${o.name} = ${shown}`, null]; break;
-      case 'description': lines = [`${o.name}: ${descriptionText}`, isFunction || value === null ? null : shown]; break;
-      // an equation (a line's, a circle's) is shown as it is, not after another "="
-      default: lines = [o.free && o.type !== 'List' ? `${o.name} = ${shown}` : definitionText, adds ? (shown.includes('=') ? shown : `= ${shown}`) : null];
+    if (cache) {
+      const hit = cache.rows.get(o.id);
+      if (hit && hit.prefs === prefsKey && hit.o.definition === o.definition && hit.o.name === o.name && hit.o.typeText === o.typeText
+        && hit.o.free === o.free && hit.o.cell.defined === o.cell.defined && hit.o.cell.reason === o.cell.reason && hit.o.cell.detail === o.cell.detail
+        && Object.is(hit.o.cell.value, o.cell.value) && hit.o.style.visible === o.style.visible && hit.o.style.aux === o.style.aux
+        && hit.o.style.layer === o.style.layer && sameRange(hit.o.range, o.range) && hit.depth === depthOf(o)) {
+        cache.reused++;
+        rows.push(hit.row);
+        continue;
+      }
     }
-    const undefinedInfo = o.cell.defined ? null : { reason: o.cell.reason ?? 'undefined', text: reasonWords(o.cell.reason ?? 'undefined'), chain: chainOf(o, byId) };
-    rows.push({
-      id: o.id, name: o.name, type: o.type, free: o.free, depth: depthOf(o), visible: o.style.visible, aux, layer: o.style.layer ?? 0,
-      definitionText, source, valueText: value, descriptionText, lines, undefinedInfo,
-      slider: o.free && o.type === 'Number' && o.range && typeof o.cell.value === 'number'
-        ? { min: o.range.min, max: o.range.max, step: o.range.step ?? (o.range.max - o.range.min) / 100, value: o.cell.value } : null,
-      approx, madeFrom, usedBy: usedBy.get(o.id) ?? [],
-    });
+    const row = makeRow(o, prefs, depthOf(o), ctx);
+    if (cache) {
+      cache.made++;
+      cache.rows.set(o.id, { prefs: prefsKey, o, depth: depthOf(o), row });
+    }
+    rows.push(row);
   }
   // filter (never reorders)
   const f = prefs.filter;
   const q = f.text.trim().toLowerCase();
-  const kept = rows.filter((r) => (!q || r.name.toLowerCase().includes(q) || r.definitionText.toLowerCase().includes(q) || r.source.toLowerCase().includes(q) || r.type.toLowerCase().includes(q))
+  const kept = !q && !f.onlyUndefined && !f.onlyHidden ? rows : rows.filter((r) => (!q || r.name.toLowerCase().includes(q) || r.definitionText.toLowerCase().includes(q) || r.source.toLowerCase().includes(q) || r.type.toLowerCase().includes(q))
     && (!f.onlyUndefined || r.undefinedInfo !== null) && (!f.onlyHidden || !r.visible));
   const order = new Map(objects.map((o) => [o.id, o.order]));
   const byOrder = (a: AlgebraRow, b: AlgebraRow): number => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0);
@@ -195,10 +350,14 @@ export function algebraRows(objects: readonly AlgebraObject[], prefs: AlgebraPre
       groups = layers.map((l) => ({ key: `layer${l}`, label: `Layer ${l}`, rows: kept.filter((r) => r.layer === l).sort(byOrder) }));
       break;
     }
-    default:
-      groups = [{ key: 'all', label: '', rows: [...kept].sort(byOrder) }];
+    default: {
+      // the figure lists its objects in creation order already; sort only when it does not
+      let sorted = true;
+      for (let i = 1; i < kept.length && sorted; i++) sorted = byOrder(kept[i - 1] as AlgebraRow, kept[i] as AlgebraRow) <= 0;
+      groups = [{ key: 'all', label: '', rows: sorted ? kept : [...kept].sort(byOrder) }];
+    }
   }
-  return { rows: groups.flatMap((g) => g.rows), groups };
+  return { rows: groups.length === 1 ? (groups[0] as AlgebraGroup).rows as AlgebraRow[] : groups.flatMap((g) => g.rows), groups };
 }
 
 /** The first type group whose test accepts the type. */

@@ -64,7 +64,8 @@ describe('the algebra view in the studio', () => {
     m.expressions.setPrefs({ sort: 'creation', filter: { text: 'A', onlyUndefined: false, onlyHidden: false } });
     expect(row('a').hidden).toBe(false);
     m.expressions.setPrefs({ filter: { text: '(1', onlyUndefined: false, onlyHidden: false } });
-    expect(row('a').hidden).toBe(true);
+    // a filtered-out row leaves the page (the list keeps only rows it shows, design 3.16)
+    expect(row('a')).toBeNull();
     expect(row('A').hidden).toBe(false);
   });
 

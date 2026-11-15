@@ -8,7 +8,7 @@ import { complete, niceRange, signatureHelp, valueText } from '@incantly/kernel'
 import type { Completion, ErrorObject, FigureView } from '@incantly/kernel';
 import { nextName } from '@incantly/ui';
 import type { LineRow } from '@incantly/ui';
-import { DEFAULT_PREFS, algebraRows, prefsFromScript, suggestionsFor } from '@incantly/view';
+import { AlgebraCache, DEFAULT_PREFS, algebraRows, prefsFromScript, refreshAlgebraRows, suggestionsFor } from '@incantly/view';
 import type { AlgebraObject, AlgebraPrefs, AlgebraRow, DisplayMode } from '@incantly/view';
 import { colorAt } from './graph/paint';
 import { miniCurve, miniInterval } from './mini';
@@ -617,136 +617,275 @@ export function mountExpressions(opts: ExpressionOptions): ExpressionList {
     if (m.descriptionText) p.deps.append(el('div', 'dep-line dep-desc', m.descriptionText));
   };
 
-  const update = (): void => {
-    prefs = prefsFromScript(session.figure.toScript(), userPrefs);
-    const objs = session.figure.objects() as unknown as AlgebraObject[];
-    const { groups } = algebraRows(objs, prefs);
-    model = new Map(groups.flatMap((g) => g.rows).map((r) => [r.id, r]));
-    const byId = new Map(session.rows().map((r) => [r.id, r]));
-    const styleOf = new Map<number, { visible: boolean }>(session.figure.objects().map((o) => [o.id as unknown as number, o.style]));
-    const list: LineRow[] = [];
-    const heads = new Map<number, HTMLElement>();
-    for (const g of groups) {
-      if (g.label) {
-        const h = groupHead(g.key, g.label, g.rows.length);
-        const first = g.rows[0];
-        if (first) heads.set(first.id, h);
+  /*
+   * The list is virtualised (design 3.16): only the rows in view, plus OVERSCAN above and below, are in the page.
+   * Gaps are spacers of the rows' heights (measured once seen, estimated before). A row is filled again only when its
+   * model row, its source or its state changed, so a slider drag touches the rows that move, not all of them.
+   */
+  const OVERSCAN = 10;
+  const ROW_GUESS = 58;
+  const HEAD_GUESS = 30;
+  type Entry = { readonly kind: 'head'; readonly key: string; readonly label: string; readonly count: number } | { readonly kind: 'row'; readonly id: number; readonly index: number };
+  let entries: Entry[] = [];
+  const heights = new Map<string | number, number>();
+  // rows by id, headers by their group key: no string is built per row on a scroll or an update
+  const keyOf = (e: Entry): string | number => (e.kind === 'head' ? `h:${e.key}` : e.id);
+  const cache = new AlgebraCache();
+  let objs: AlgebraObject[] = [];
+  let lastDirectives = -1;
+  let lastFigure: unknown;
+  let lastStructure = -1;
+  let lastSettings = -1;
+  /** Goes up on every update; `fullEpoch` is the last full one. A row read at an older epoch is read again. */
+  let valueEpoch = 0;
+  let fullEpoch = 0;
+  const seenAt = new Map<number, number>();
+  let lastPrefs: { user: AlgebraPrefs; out: AlgebraPrefs } | undefined;
+  let settingsVersion = 0;
+  /** What each shown row was last filled from, to skip rows that did not change. */
+  const filled = new Map<number, string>();
+  const filledFrom = new Map<number, AlgebraRow>();
+  const filledQuick = new Map<number, string>();
+  const spacers: HTMLElement[] = [];
+  const spacer = (i: number, h: number): HTMLElement => {
+    let s = spacers[i];
+    if (!s) {
+      s = el('div', 'expr-spacer');
+      s.setAttribute('aria-hidden', 'true');
+      spacers[i] = s;
+    }
+    s.style.height = `${h}px`;
+    return s;
+  };
+
+  /** Fills a row's parts from its model row and session row; skipped when nothing it shows has changed. */
+  const fill = (p: RowParts, id: number, index: number, m: AlgebraRow): void => {
+    // the model row is reused while nothing it shows changed: then only a moving slider knob can need setting
+    const quick = `${settingsVersion}|${index}|${expanded.has(id)}|${prefs.input.kind}|${cardFor === id}|${m.usedBy.length}`;
+    if (filledFrom.get(id) === m && filledQuick.get(id) === quick && !p.error) return;
+    filledFrom.set(id, m);
+    filledQuick.set(id, quick);
+    const off = m.visible === false;
+    const hasDeps = m.madeFrom.length > 0 || m.usedBy.length > 0 || m.undefinedInfo !== null;
+    const open = expanded.has(id) && hasDeps;
+    const editing = document.activeElement === p.input && p.input.value !== p.shown;
+    const r = session.row(id);
+    if (!r) return;
+    const control = r.control?.kind === 'slider' ? { ...r.control, value: 0 } : r.control;
+    const stamp = `${settingsVersion}|${index}|${off}|${open}|${prefs.input.kind}|${cardFor === id}|${r.source}|${JSON.stringify(r.state)}|${JSON.stringify(control)}|${m.lines[0]}|${m.lines[1]}|${m.madeFrom.join(',')}|${m.usedBy.join(',')}`;
+    if (filled.get(id) === stamp && !p.error) {
+      // a slider that only moved: set its knob, keep the element (so a drag in progress is not cut)
+      if (r.control?.kind === 'slider') {
+        const range = p.out.querySelector<HTMLInputElement>('input[type="range"]');
+        if (range && Number(range.value) !== r.control.value) range.value = String(r.control.value);
       }
-      if (g.label && collapsed.has(g.key)) {
-        const first = g.rows[0];
-        if (first && byId.get(first.id)) heads.set(-1 - list.length, groupHeads.get(g.key) as HTMLElement);
+      return;
+    }
+    filled.set(id, stamp);
+    const value = session.figure.value(r.name);
+    const drawn = drawsOnGraph(r.type, r.type, value);
+    const color = colorOf(id);
+    p.index.textContent = String(index + 1);
+    p.swatch.hidden = !drawn;
+    p.swatch.style.setProperty('--c', color);
+    p.swatch.classList.toggle('off', off);
+    p.swatch.setAttribute('aria-pressed', String(!off));
+    p.swatch.title = off ? `Show ${r.name}` : `Hide ${r.name}`;
+    p.swatch.setAttribute('aria-label', p.swatch.title);
+    p.swatch.onclick = () => {
+      // the marble writes a restyle line, so it is undoable and saved (design 3.9)
+      const res = session.applyLines([`${r.name} with visible = ${off ? 'true' : 'false'}`], off ? `Show ${r.name}` : `Hide ${r.name}`, 'atomic');
+      if (!res.ok) opts.say(res.error.message);
+      opts.changed();
+    };
+    p.display.textContent = m.lines[0];
+    p.display.title = m.descriptionText;
+    p.display.classList.toggle('desc', prefs.mode === 'description');
+    p.toggle.hidden = !hasDeps;
+    p.toggle.textContent = open ? '▾' : '▸';
+    p.toggle.setAttribute('aria-expanded', String(open));
+    p.toggle.setAttribute('aria-label', open ? `Hide what ${r.name} is made from` : `Show what ${r.name} is made from`);
+    p.deps.hidden = !open;
+    if (open) fillDeps(p, m);
+    // a next-step card under a row just added (design 3.13), once per object
+    if (cardFor === id && !offered.has(id)) {
+      offered.add(id);
+      cardFor = undefined;
+      const view = opts.view?.() ?? { x0: -10, x1: 10 };
+      const [sug] = suggestionsFor(m, objs, view, freeOf(new Set()));
+      p.card.replaceChildren();
+      p.card.hidden = !sug;
+      if (sug) {
+        const add = el('button', 'card-add', sug.text);
+        add.type = 'button';
+        add.addEventListener('click', () => {
+          p.card.hidden = true;
+          const res = session.applyLines(sug.lines, sug.text, 'atomic');
+          opts.say(res.ok ? res.message : res.error.message);
+        });
+        const no = el('button', 'card-close', '×');
+        no.type = 'button';
+        no.setAttribute('aria-label', 'Dismiss the suggestion');
+        no.addEventListener('click', () => {
+          p.card.hidden = true;
+        });
+        p.card.append(el('span', 'card-hint', 'Next step'), add, no);
+      }
+    }
+    p.input.readOnly = prefs.input.kind === 'off';
+    p.shown = r.source;
+    if (!editing) {
+      p.input.value = r.source;
+      p.error = undefined;
+    }
+    p.row.dataset['name'] = r.name;
+    p.row.title = r.type;
+    output(p, r, value);
+  };
+
+  /** Puts the rows in view (and the focused row) in the page, with spacers for the rest. */
+  const render = (): void => {
+    const view = element.clientHeight || 800;
+    const top = element.scrollTop;
+    const focusedId = [...rows].find(([, p]) => document.activeElement === p.input)?.[0];
+    // the window: entries that overlap the view, widened by OVERSCAN
+    let y = 0;
+    let first = -1;
+    let last = -1;
+    const at: number[] = [];
+    entries.forEach((e, i) => {
+      at.push(y);
+      const h = heights.get(keyOf(e)) ?? (e.kind === 'head' ? HEAD_GUESS : ROW_GUESS);
+      if (first < 0 && y + h > top) first = i;
+      if (y < top + view) last = i;
+      y += h;
+    });
+    const total = y;
+    if (first < 0) first = Math.max(0, entries.length - 1);
+    const lo = Math.max(0, first - OVERSCAN);
+    const hi = Math.min(entries.length - 1, last + OVERSCAN);
+    const keep: number[] = [];
+    entries.forEach((e, i) => {
+      if ((i >= lo && i <= hi) || (e.kind === 'row' && e.id === focusedId)) keep.push(i);
+    });
+    const order: HTMLElement[] = [];
+    const shown = new Set<number>();
+    let gap = 0;
+    let prevEnd = 0;
+    for (const i of keep) {
+      const e = entries[i] as Entry;
+      const start = at[i] as number;
+      if (start > prevEnd) order.push(spacer(gap++, start - prevEnd));
+      prevEnd = start + (heights.get(keyOf(e)) ?? (e.kind === 'head' ? HEAD_GUESS : ROW_GUESS));
+      if (e.kind === 'head') {
+        order.push(groupHead(e.key, e.label, e.count));
         continue;
       }
-      for (const r of g.rows) {
-        const lr = byId.get(r.id);
-        if (lr) list.push(lr);
-      }
-    }
-    for (const p of rows.values()) p.row.hidden = true;
-    for (const h of groupHeads.values()) h.hidden = true;
-    const seen = new Set<number>(session.rows().map((r) => r.id));
-    const order: HTMLElement[] = [];
-    // a collapsed group shows only its header
-    for (const [k, h] of heads) if (k < 0) {
-      h.hidden = false;
-      order.push(h);
-    }
-    list.forEach((r, i) => {
-      const head = heads.get(r.id);
-      if (head) {
-        head.hidden = false;
-        order.push(head);
-      }
-      let p = rows.get(r.id);
+      const m = freshRow(e.id);
+      if (!m) continue;
+      let p = rows.get(e.id);
       if (!p) {
         p = makeRow(false);
-        rows.set(r.id, p);
+        rows.set(e.id, p);
+        filled.delete(e.id);
+        filledFrom.delete(e.id);
       }
-      const value = session.figure.value(r.name);
-      const drawn = drawsOnGraph(r.type, r.type, value);
-      const color = colorOf(r.id);
-      p.row.hidden = false;
-      const m = model.get(r.id);
-      const off = styleOf.get(r.id)?.visible === false;
-      p.index.textContent = String(i + 1);
-      p.swatch.hidden = !drawn;
-      p.swatch.style.setProperty('--c', color);
-      p.swatch.classList.toggle('off', off);
-      p.swatch.setAttribute('aria-pressed', String(!off));
-      p.swatch.title = off ? `Show ${r.name}` : `Hide ${r.name}`;
-      p.swatch.setAttribute('aria-label', p.swatch.title);
-      p.swatch.onclick = () => {
-        // the marble writes a restyle line, so it is undoable and saved (design 3.9)
-        const res = session.applyLines([`${r.name} with visible = ${off ? 'true' : 'false'}`], off ? `Show ${r.name}` : `Hide ${r.name}`, 'atomic');
-        if (!res.ok) opts.say(res.error.message);
-        opts.changed();
-      };
-      if (m) {
-        p.display.textContent = m.lines[0];
-        p.display.title = m.descriptionText;
-        p.display.classList.toggle('desc', prefs.mode === 'description');
-        const hasDeps = m.madeFrom.length > 0 || m.usedBy.length > 0 || m.undefinedInfo !== null;
-        p.toggle.hidden = !hasDeps;
-        const open = expanded.has(r.id) && hasDeps;
-        p.toggle.textContent = open ? '▾' : '▸';
-        p.toggle.setAttribute('aria-expanded', String(open));
-        p.toggle.setAttribute('aria-label', open ? `Hide what ${r.name} is made from` : `Show what ${r.name} is made from`);
-        p.deps.hidden = !open;
-        if (open) fillDeps(p, m);
-        // a next-step card under a row just added (design 3.13), once per object
-        if (cardFor === r.id && !offered.has(r.id)) {
-          offered.add(r.id);
-          cardFor = undefined;
-          const view = opts.view?.() ?? { x0: -10, x1: 10 };
-          const [sug] = suggestionsFor(m, objs, view, freeOf(new Set()));
-          p.card.replaceChildren();
-          p.card.hidden = !sug;
-          if (sug) {
-            const add = el('button', 'card-add', sug.text);
-            add.type = 'button';
-            add.addEventListener('click', () => {
-              p.card.hidden = true;
-              const res = session.applyLines(sug.lines, sug.text, 'atomic');
-              opts.say(res.ok ? res.message : res.error.message);
-            });
-            const no = el('button', 'card-close', '×');
-            no.type = 'button';
-            no.setAttribute('aria-label', 'Dismiss the suggestion');
-            no.addEventListener('click', () => {
-              p.card.hidden = true;
-            });
-            p.card.append(el('span', 'card-hint', 'Next step'), add, no);
-          }
-        }
-      }
-      p.input.readOnly = prefs.input.kind === 'off';
-      const editing = document.activeElement === p.input && p.input.value !== p.shown;
-      p.shown = r.source;
-      if (!editing) {
-        p.input.value = r.source;
-        p.error = undefined;
-      }
-      p.row.dataset['name'] = r.name;
-      p.row.title = r.type;
-      output(p, r, value);
+      fill(p, e.id, e.index, m);
+      shown.add(e.id);
       order.push(p.row);
-    });
-    for (const [id, p] of rows) {
-      if (!seen.has(id)) {
-        p.row.remove();
-        rows.delete(id);
-        hidden.delete(id);
-      }
     }
-    newRow.index.textContent = String(list.length + 1);
+    if (total > prevEnd) order.push(spacer(gap, total - prevEnd));
+    // rows out of view leave the page (their parts are made again when scrolled back)
+    for (const [id, p] of rows) {
+      if (shown.has(id)) continue;
+      p.row.remove();
+      rows.delete(id);
+      filled.delete(id);
+      filledFrom.delete(id);
+    }
     newRow.row.hidden = prefs.input.kind === 'off';
     order.push(newRow.row);
-    // keep the DOM order without moving a focused row
+    // keep the page order without moving a focused row
     order.forEach((node, i) => {
       if (element.children[i] !== node) element.insertBefore(node, element.children[i] ?? null);
     });
+    const want = new Set<Node>([...order, pop, sig]);
+    for (const c of [...element.children]) if (!want.has(c)) c.remove();
     if (!pop.isConnected) element.append(pop, sig);
+    // measure what is in the page, for the spacers next time (no layout in tests: keep the guesses)
+    for (const i of keep) {
+      const e = entries[i] as Entry;
+      const node = e.kind === 'head' ? groupHeads.get(e.key) : rows.get(e.id)?.row;
+      const h = node?.offsetHeight ?? 0;
+      if (h > 0) heights.set(keyOf(e), h);
+    }
   };
+
+  const update = (): void => {
+    // the `@algebra` lines are read again only when a directive or the user's settings changed
+    if (session.directiveVersion !== lastDirectives || session.figure !== lastFigure || lastPrefs?.user !== userPrefs) {
+      const next = prefsFromScript(session.figure.toScript(), userPrefs);
+      if (!lastPrefs || JSON.stringify(next) !== JSON.stringify(lastPrefs.out)) settingsVersion++;
+      lastPrefs = { user: userPrefs, out: next };
+      lastDirectives = session.directiveVersion;
+      lastFigure = session.figure;
+    }
+    prefs = (lastPrefs as { out: AlgebraPrefs }).out;
+    // only values moved (a slider drag, the clock): the rows, their order and their links are the same, so only the
+    // rows in view are read again; the others are refreshed when they scroll into view (design 3.16)
+    const sameShape = session.structureVersion === lastStructure && settingsVersion === lastSettings && !prefs.filter.onlyUndefined && entries.length > 0;
+    if (sameShape) {
+      valueEpoch++;
+      render();
+      return;
+    }
+    lastStructure = session.structureVersion;
+    lastSettings = settingsVersion;
+    objs = session.figure.objects() as unknown as AlgebraObject[];
+    if (objs.length < cache.rows.size) cache.prune(new Set(objs.map((o) => o.id)));
+    const { groups } = algebraRows(objs, prefs, cache);
+    model = new Map(groups.flatMap((g) => g.rows).map((r) => [r.id, r]));
+    const next: Entry[] = [];
+    let index = 0;
+    for (const g of groups) {
+      if (g.label) next.push({ kind: 'head', key: g.key, label: g.label, count: g.rows.length });
+      // a collapsed group shows only its header
+      if (g.label && collapsed.has(g.key)) continue;
+      for (const r of g.rows) next.push({ kind: 'row', id: r.id, index: index++ });
+    }
+    entries = next;
+    fullEpoch = ++valueEpoch;
+    newRow.index.textContent = String(index + 1);
+    render();
+  };
+
+  /** The model row of an object, read again from the figure when values moved since it was made. */
+  const freshRow = (id: number): AlgebraRow | undefined => {
+    const m = model.get(id);
+    if (valueEpoch === fullEpoch || (seenAt.get(id) ?? -1) >= valueEpoch) return m;
+    seenAt.set(id, valueEpoch);
+    const o = session.figure.get(id as never) as unknown as AlgebraObject | undefined;
+    const r = o ? refreshAlgebraRows([o], prefs, cache)?.[0] : undefined;
+    if (r) model.set(id, r);
+    return r ?? m;
+  };
+
+  /** Scrolls a row into the window and puts it in the page; false when the row is filtered out or collapsed. */
+  const reveal = (id: number): RowParts | undefined => {
+    let y = 0;
+    for (const e of entries) {
+      if (e.kind === 'row' && e.id === id) {
+        const h = heights.get(keyOf(e)) ?? ROW_GUESS;
+        const view = element.clientHeight || 800;
+        if (y < element.scrollTop || y + h > element.scrollTop + view) element.scrollTop = Math.max(0, y - view / 3);
+        render();
+        return rows.get(id);
+      }
+      y += heights.get(keyOf(e)) ?? (e.kind === 'head' ? HEAD_GUESS : ROW_GUESS);
+    }
+    return undefined;
+  };
+  element.addEventListener('scroll', () => render(), { passive: true });
 
   /* ------------------------------ header ------------------------------ */
 
@@ -823,11 +962,15 @@ export function mountExpressions(opts: ExpressionOptions): ExpressionList {
       newRow.input.focus();
     },
     flash(names) {
+      // the last row may be out of the window: scroll it in, so its parts are in the page
+      const lastName = names[names.length - 1];
+      const lastId = lastName === undefined ? undefined : (session.figure.get(lastName)?.id as unknown as number | undefined);
+      if (lastId !== undefined) reveal(lastId);
       const want = new Set(names);
-      const rows = [...element.querySelectorAll<HTMLElement>('.expr')].filter((r) => want.has(r.dataset['name'] ?? ''));
-      for (const r of rows) r.classList.add('flash');
-      rows[rows.length - 1]?.scrollIntoView?.({ block: 'nearest' });
-      setTimeout(() => rows.forEach((r) => r.classList.remove('flash')), 2000);
+      const found = [...element.querySelectorAll<HTMLElement>('.expr')].filter((r) => want.has(r.dataset['name'] ?? ''));
+      for (const r of found) r.classList.add('flash');
+      found[found.length - 1]?.scrollIntoView?.({ block: 'nearest' });
+      setTimeout(() => found.forEach((r) => r.classList.remove('flash')), 2000);
     },
   };
   update();
