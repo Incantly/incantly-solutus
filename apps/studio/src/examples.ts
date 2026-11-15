@@ -312,6 +312,13 @@ export const EXAMPLES: readonly Example[] = [
       'h = Simplify((x^2 - 1)/(x - 1)) with plot = true',
       'circ = Expr(x^2 + y^2 == 9) with plot = true',
       'band = Expr(x^2 < 4) with plot = true',
+      '# harder factoring, trig solving, an integral with a pole',
+      'f12 = Factor(Expr(x^12 - 1))',
+      'tr = Solve(sin(x) == cos(x), x)',
+      'k(x) = 1/sqrt(abs(x))',
+      'Ik = Integral(k, -1, 1)',
+      '# heavy work goes to the worker and fills in when ready',
+      'f30 = Factor(Expr(x^30 - 1))',
     ],
   },
 ];

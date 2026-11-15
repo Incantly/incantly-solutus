@@ -407,6 +407,7 @@ export function mountCasPanel(session: KernelSession, say: (t: string) => void):
     input.spellcheck = false;
     input.autocomplete = 'off';
     input.value = rightOf(o.definition);
+    input.title = input.value;
     input.setAttribute('aria-label', `Definition of ${o.name}`);
     const err = el('div', 'cas-error');
     err.setAttribute('role', 'alert');
