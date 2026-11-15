@@ -26,3 +26,4 @@ Pipeline: `docs/process/pipeline.md`. Branch: `feat/animation-time`.
 - [x] 15. One slider animation: the player drives the numbers area's `Animate`; `with animate` is refused (R9.8)
 - [x] 16. Spec tests for R9 (`second.test.ts`)
 - [x] 17. `ValueAt(obj, time)`, and seeks replay animated sliders so their traces are the path (`second.test.ts`)
+- [x] 18. Studio: the clock runs through the player (traces, `Animate`, film loop); particles and traces are drawn; eight animation examples

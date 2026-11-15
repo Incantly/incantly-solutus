@@ -2,7 +2,8 @@
  * The studio's session: one kernel `Figure`, and the bookkeeping the screen needs around it (rows for the line list, the
  * outcome of each action as text or an error object, the clock). It uses only the kernel's public API.
  */
-import { Figure, numberSource, valueText } from '@incantly/kernel';
+import { Figure, animatingIds, numberSource, playerOf, tracedIds, valueText } from '@incantly/kernel';
+import type { Player } from '@incantly/kernel';
 import type { CommandRegistry, ErrorObject, ObjectView } from '@incantly/kernel';
 import { rightSide } from '@incantly/ui';
 import type { CauseLink, LineRow, RowControl, SubmitResult } from '@incantly/ui';
@@ -286,8 +287,46 @@ export class KernelSession {
 
   /* ------------------------------ clock ------------------------------ */
 
-  /** True when some object reads `t`: a definition that mentions it, confirmed by a `slice` from the clock. */
+  /** The figure's player (animation-time design 3): play, pause, frames and seeks, so traces and animated sliders run. */
+  player(): Player {
+    return playerOf(this.figure);
+  }
+
+  /** True while the clock is playing. */
+  playing(): boolean {
+    return this.player().state.mode === 'playing';
+  }
+
+  play(): void {
+    this.player().play();
+  }
+
+  pause(): void {
+    this.player().pause();
+  }
+
+  /** One frame of the host's loop, with the reading in seconds. When an open film ends it starts again. */
+  frame(nowSeconds: number): void {
+    const p = this.player();
+    const before = p.state.mode;
+    p.frame(nowSeconds);
+    if (before === 'playing' && p.state.mode === 'paused' && Number.isFinite(p.state.duration)) {
+      p.seek(this.range().from);
+      p.play();
+    }
+  }
+
+  /**
+   * True when the figure moves with time: an object reads `t`, a particle system or a trace exists, a slider is
+   * animated, or the script sets a `@clock`.
+   */
   hasClock(): boolean {
+    if (tracedIds(this.figure).length > 0 || animatingIds(this.figure).length > 0) return true;
+    for (const v of this.figure.objects()) {
+      if (v.type === 'Particles') return true;
+      if (/\banimate\s*=/.test(v.definition)) return true;
+    }
+    if (/^@clock /m.test(this.figure.toScript())) return true;
     for (const v of this.figure.objects()) {
       if (!READS_CLOCK.test(v.definition.replace(/"(?:[^"\\]|\\.)*"/g, '""'))) continue;
       const s = this.figure.slice('t', v.id);
@@ -306,7 +345,7 @@ export class KernelSession {
 
   /** Moves the clock; the kernel clamps it to the film range. */
   setTime(t: number): Outcome {
-    const r = this.figure.setClock(t);
-    return 'ok' in r && r.ok === false ? { ok: false, error: r } : this.done(`t = ${valueText(this.time())}`, []);
+    const r = this.player().seek(t);
+    return 'ok' in r && r.ok === false ? { ok: false, error: r as ErrorObject } : this.done(`t = ${valueText(this.time())}`, []);
   }
 }

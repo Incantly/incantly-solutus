@@ -19,6 +19,7 @@ import { sceneBounds } from './graph/paint';
 import type { SceneItem } from './graph/paint';
 import { studioRegistry } from './registry';
 import { KernelSession } from './session';
+import { tracePoints, tracedIds } from '@incantly/kernel';
 import { createSelection, selectionFrom } from './selection';
 import type { Selection } from './selection';
 import { hitTest } from './graph/hit';
@@ -96,13 +97,14 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
     const out: SceneItem[] = [];
     const expressions = holder.expressions;
     if (!expressions) return out;
+    const traced = new Set(tracedIds(session.figure).map((x) => x as unknown as number));
     for (const o of session.figure.objects()) {
       if (!o.cell.defined) continue;
       if (expressions.isHidden(o.id)) continue;
       // hidden with `with visible = false`: left out, or drawn faintly while the show/hide tool is on
       if (hiddenByStyle(o) && !holder.tools?.showHidden()) continue;
       if (!drawsOnGraph(o.type, o.typeText, o.cell.value)) continue;
-      out.push({ id: o.id, name: o.name, type: o.type, typeText: o.typeText, value: o.cell.value, color: expressions.colorOf(o.id), free: o.type === 'Point' && session.draggable(o.name), label: true, ...(hiddenByStyle(o) ? { ghost: true } : {}), ...(selection.has(o.name) ? { selected: true } : {}), ...(selection.hover() === o.name ? { hovered: true } : {}) });
+      out.push({ id: o.id, name: o.name, type: o.type, typeText: o.typeText, value: o.cell.value, color: expressions.colorOf(o.id), free: o.type === 'Point' && session.draggable(o.name), label: true, ...(hiddenByStyle(o) ? { ghost: true } : {}), ...(selection.has(o.name) ? { selected: true } : {}), ...(selection.hover() === o.name ? { hovered: true } : {}), ...(o.type === 'Particles' ? { time: session.time() } : {}), ...(traced.has(o.id as unknown as number) ? { trace: tracePoints(session.figure, o.id) as Float64Array } : {}) });
     }
     return out;
   };
@@ -246,24 +248,20 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
   const clock = el('div', { class: 'clock', role: 'group', 'aria-label': 'Clock' }, play, scrub, readout);
   clock.hidden = true;
   let running = 0;
-  let last = 0;
   const tick = (now: number): void => {
-    const dt = last ? (now - last) / 1000 : 0;
-    last = now;
-    const { from, to } = session.range();
-    let t = session.time() + dt;
-    if (t > to) t = from;
-    session.setTime(t);
+    // the kernel's player moves `t`, runs the traces and animated sliders, and starts an ended film again
+    session.frame(now / 1000);
     running = raf(tick);
   };
   const toggleClock = (): void => {
     if (running) {
       caf(running);
       running = 0;
+      session.pause();
       play.textContent = '▶';
       play.title = 'Play';
     } else {
-      last = 0;
+      session.play();
       running = raf(tick);
       play.textContent = '❚❚';
       play.title = 'Pause';
