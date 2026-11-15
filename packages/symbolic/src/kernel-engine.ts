@@ -11,7 +11,7 @@ import type { BridgeObject, BridgeScope } from './bridge';
 import { HEAVY_OPS } from './contracts';
 import type { Domain, OpName, SymArg } from './contracts';
 import type { SymCond, SymNode } from './node';
-import { andCond, floatN, freeSymbols, freeSymbolsCond, intN, notCond, orCond, symN } from './node';
+import { andCond, floatN, freeSymbols, freeSymbolsCond, intN, notCond, orCond, rel, symN } from './node';
 import { parseExpression } from './parse';
 import { condLatex, condSpeech, condText, isExactTree, toLatex, toSpeech, toText } from './print';
 import { evalAt } from './rules';
@@ -523,7 +523,73 @@ function functionArg(v: unknown, host: CasHost, id: ObjId | undefined): SymArg {
 
 /* ------------------------------ the engine ------------------------------ */
 
+/* ------------------------------ exact calculus for the functions area ------------------------------ */
+
+/** A one-variable definition `f(x) = body` with its numbers in place, or undefined when it cannot be read exactly. */
+function bodyOf(def: string, inputs: ReadonlyMap<string, number>): { v: string; body: SymNode } | undefined {
+  const m = /^\s*[^(=]+\(\s*([A-Za-z]\w*)\s*\)\s*=\s*(.+)$/.exec(def);
+  if (!m) return undefined;
+  let body: SymNode;
+  try {
+    body = parseExpression((m[2] as string).replace(/\swith\s.*$/, ''));
+  } catch {
+    return undefined;
+  }
+  const v = m[1] as string;
+  const rest = [...freeSymbols(body)].filter((s) => s !== v);
+  for (const s of rest) if (!inputs.has(s)) return undefined;
+  if (rest.length > 0) body = substituteSyms(body, new Map(rest.map((s) => [s, numberNode(inputs.get(s) as number)])));
+  return { v, body };
+}
+
+/** Results that need no more than a fast answer: the slider must not wait on the algebra (design 5.13). */
+const CALC_LIMITS = { limits: { maxMs: 30 } } as const;
+
+const calculus: NonNullable<CasEngine['calculus']> = {
+  definite(def, inputs, a, b) {
+    const f = bodyOf(def, inputs);
+    if (!f) return undefined;
+    const r = run('Integral', [{ k: 'expr', e: f.body, exact: true }, { k: 'sym', name: f.v, domain: 'real' }, numberArg(a), numberArg(b)], CALC_LIMITS);
+    if (!r.ok) return undefined;
+    const c = r.value.cell;
+    if (!c.defined) return c.reason === 'divergent' ? { diverges: c.detail?.text ?? 'The integral does not converge.' } : undefined;
+    if (c.value.k !== 'expr') return c.value.k === 'num' ? { value: c.value.v } : c.value.k === 'int' ? { value: Number(c.value.v) } : undefined;
+    const n = numeric(c.value.e);
+    return Number.isFinite(n) ? { value: n } : undefined;
+  },
+  antiderivative(def, inputs) {
+    const f = bodyOf(def, inputs);
+    if (!f) return undefined;
+    const r = run('Integral', [{ k: 'expr', e: f.body, exact: true }, { k: 'sym', name: f.v, domain: 'real' }], CALC_LIMITS);
+    if (!r.ok || !r.value.cell.defined || r.value.cell.value.k !== 'expr') return undefined;
+    const F = r.value.cell.value.e;
+    // F(0) = 0, as the numeric antiderivative is taken from 0
+    const g = compileFunction(f.v, F);
+    const at0 = g.call(0);
+    if (!Number.isFinite(at0)) return undefined;
+    return (x: number) => g.call(x) - at0;
+  },
+  stationary(def, inputs) {
+    const f = bodyOf(def, inputs);
+    if (!f) return undefined;
+    const d = run('Derivative', [{ k: 'expr', e: f.body, exact: true }, { k: 'sym', name: f.v, domain: 'real' }], CALC_LIMITS);
+    if (!d.ok || !d.value.cell.defined || d.value.cell.value.k !== 'expr') return undefined;
+    const cond: SymCond = rel('==', d.value.cell.value.e, intN(0n));
+    const s = run('Solutions', [{ k: 'cond', c: cond, exact: true }, { k: 'sym', name: f.v, domain: 'real' }], CALC_LIMITS);
+    if (!s.ok || !s.value.cell.defined || s.value.cell.value.k !== 'list') return undefined;
+    const xs: number[] = [];
+    for (const it of s.value.cell.value.items) {
+      if (it.k !== 'expr') return undefined;
+      const n = numeric(it.e);
+      if (!Number.isFinite(n)) return undefined;
+      xs.push(n);
+    }
+    return xs.sort((p, q) => p - q);
+  },
+};
+
 export const casEngine: CasEngine = {
+  calculus,
   evaluate(req): CasOut {
     const domains = new Map<string, Domain>();
     const args: SymArg[] = [];

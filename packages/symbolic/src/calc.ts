@@ -694,10 +694,11 @@ export function definiteIntegral(
   const swap = a > b;
   const lo = swap ? b : a;
   const hi = swap ? a : b;
-  // A pole of a `tan`, `1/cos` or `1/sin` inside the interval that the
-  // integrand approaches like `1 / distance` makes the integral divergent.
-  // The antiderivative must not be used across it (design 5.10, SYM-SM-14).
-  for (const p of trigPolesBetween(e, v, lo, hi)) {
+  // Every pole inside: zeros of a denominator and of a cos or sin under tan, 1/cos, 1/sin (SYM-SM-14). A pole the
+  // integrand approaches like 1 / distance or faster makes the integral divergent; a weaker one (1/sqrt|x|) is an
+  // improper integral taken from both sides.
+  const poles = [...new Set([...interiorPoles(e, v, lo, hi, ctx), ...trigPolesBetween(e, v, lo, hi)])].sort((x, y) => x - y);
+  for (const p of poles) {
     if (growsLikeSimplePole(e, v, p)) return { divergent: true, at: p };
   }
   let F: SymNode | null;
@@ -708,39 +709,44 @@ export function definiteIntegral(
     else throw err;
   }
   if (F !== null) {
-    const poles = interiorPoles(e, v, lo, hi, ctx);
-    if (poles.length === 0) {
-      // An endpoint where the antiderivative is not finite is an improper integral: the
-      // one-sided limit there decides it, and an infinite one diverges.
-      const endValue = (x: number, side: LimitSide): SymNode | { divergent: true; at: number } | null => {
-        const direct = simplifyNode(substituteList(F, [[v, numNode(x)]]), ctx).node;
-        const dv = freeSymbols(direct).size === 0 ? evalAt(direct, new Map()) : 0;
-        if (dv !== null && Number.isFinite(dv) && !containsInf(direct)) return direct;
-        try {
-          const L = limitNode(F, v, numNode(x), side, ctx);
-          const lv = evalAt(L.node, new Map());
-          if (lv !== null && Number.isFinite(lv) && !containsInf(L.node)) return L.node;
-          return { divergent: true, at: x };
-        } catch (err) {
-          if (err instanceof Unsupported || err instanceof NoLimit) return null;
-          throw err;
-        }
-      };
-      const top = endValue(hi, 'below');
-      const bottom = endValue(lo, 'above');
-      if (top !== null && bottom !== null) {
-        if ('divergent' in top) return top;
-        if ('divergent' in bottom) return bottom;
-        const s = simplifyNode(add(top, negateNode(bottom)), ctx).node;
-        return { node: swap ? negateNode(s) : s, exact: true };
+    const G = F;
+    // An end of a piece where the antiderivative is not finite is improper: the one-sided limit decides it, and an
+    // infinite one diverges. The antiderivative is used only on open pieces between poles, where it is continuous.
+    const endValue = (x: number, side: LimitSide): SymNode | { divergent: true; at: number } | null => {
+      const direct = simplifyNode(substituteList(G, [[v, numNode(x)]]), ctx).node;
+      const dv = freeSymbols(direct).size === 0 ? evalAt(direct, new Map()) : 0;
+      if (dv !== null && Number.isFinite(dv) && !containsInf(direct)) return direct;
+      try {
+        const L = limitNode(G, v, numNode(x), side, ctx);
+        const lv = evalAt(L.node, new Map());
+        if (lv !== null && Number.isFinite(lv) && !containsInf(L.node)) return L.node;
+        return { divergent: true, at: x };
+      } catch (err) {
+        if (err instanceof Unsupported || err instanceof NoLimit) return null;
+        throw err;
       }
+    };
+    const pts = [lo, ...poles, hi];
+    const parts: SymNode[] = [];
+    let ok = true;
+    for (let i = 0; i + 1 < pts.length; i++) {
+      const top = endValue(pts[i + 1] as number, 'below');
+      const bottom = endValue(pts[i] as number, 'above');
+      if (top === null || bottom === null) {
+        ok = false;
+        break;
+      }
+      if ('divergent' in top) return top;
+      if ('divergent' in bottom) return bottom;
+      parts.push(add(top, negateNode(bottom)));
+    }
+    if (ok) {
+      const s = simplifyNode(parts.length === 1 ? (parts[0] as SymNode) : add(...parts), ctx).node;
+      return { node: swap ? negateNode(s) : s, exact: true };
     }
   }
-  const num = quadSplit(e, v, lo, hi, ctx);
-  if (num === null) {
-    const poles = interiorPoles(e, v, lo, hi, ctx);
-    return { divergent: true, at: poles.length > 0 ? (poles[0] as number) : (lo + hi) / 2 };
-  }
+  const num = quadSplit(e, v, lo, hi, ctx, poles);
+  if (num === null) return { divergent: true, at: poles.length > 0 ? (poles[0] as number) : (lo + hi) / 2 };
   return { node: floatN(swap ? -num : num), exact: false, notice: 'numeric_fallback' };
 }
 
@@ -781,12 +787,13 @@ function splitNumDenFlat(t: SymNode): { num: SymNode; den: SymNode | null } {
 }
 
 /** Adaptive Simpson with a Kahan-compensated stack, split at breakpoints. */
-function quadSplit(e: SymNode, v: SymNode, lo: number, hi: number, ctx: RuleCtx): number | null {
-  const breaks = quadBreaks(e, v);
+function quadSplit(e: SymNode, v: SymNode, lo: number, hi: number, ctx: RuleCtx, poles: readonly number[] = []): number | null {
+  const breaks = [...quadBreaks(e, v), ...poles];
   const pts = [lo, ...breaks.filter((x) => x > lo && x < hi), hi].sort((x, y) => x - y);
   let total = 0;
   for (let i = 0; i + 1 < pts.length; i++) {
-    const q = adaptiveSimpson(e, v, pts[i] as number, pts[i + 1] as number, ctx);
+    // an end where the integrand is not defined (1/sqrt(x) at 0) is improper: tanh-sinh never samples the ends
+    const q = adaptiveSimpson(e, v, pts[i] as number, pts[i + 1] as number, ctx) ?? tanhSinh(e, v, pts[i] as number, pts[i + 1] as number, ctx);
     if (q === null) return null;
     total += q;
   }
@@ -826,6 +833,42 @@ function quadBreaks(e: SymNode, v: SymNode): number[] {
   };
   walk(e);
   return out;
+}
+
+/**
+ * Tanh-sinh (double exponential) quadrature on [a, b] for an integrand with integrable singular ends. Levels halve
+ * the step until two agree to 1e-10 relative; null when they never do, or a sample is not finite inside.
+ */
+function tanhSinh(e: SymNode, v: SymNode, a: number, b: number, ctx: RuleCtx): number | null {
+  const name = varName(v);
+  const c = (a + b) / 2;
+  const r = (b - a) / 2;
+  const f = (x: number): number | null => {
+    const y = evalAt(e, new Map([[name, x]]));
+    return y === null || !Number.isFinite(y) ? null : y;
+  };
+  let prev: number | null = null;
+  for (let level = 0; level < 8; level++) {
+    const h = 2 ** -level;
+    let sum = 0;
+    for (let k = -Math.ceil(6 / h); k <= Math.ceil(6 / h); k++) {
+      ctx.tick.tick(1);
+      const t = k * h;
+      const u = (Math.PI / 2) * Math.sinh(t);
+      // the distance to the nearer end, 1 - |tanh u| = 2 / (e^(2|u|) + 1), without cancellation
+      const gap = 2 / (Math.exp(2 * Math.abs(u)) + 1);
+      const w = ((Math.PI / 2) * Math.cosh(t)) / (Math.cosh(u) * Math.cosh(u));
+      const px = u >= 0 ? b - r * gap : a + r * gap;
+      if (px <= a || px >= b || !(w > 1e-300)) continue;
+      const y = f(px);
+      if (y === null) return null;
+      sum += w * y;
+    }
+    const est = r * h * sum;
+    if (prev !== null && Math.abs(est - prev) <= 1e-10 * Math.max(1, Math.abs(est))) return est;
+    prev = est;
+  }
+  return null;
 }
 
 function adaptiveSimpson(e: SymNode, v: SymNode, a: number, b: number, ctx: RuleCtx): number | null {

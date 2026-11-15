@@ -154,8 +154,8 @@ Ranked by impact: security, then hangs and crashes, then wrong results, then wro
   - `run('Integral', [ex('1/sqrt(abs(x))'), ex('x'), { k: 'num', v: -1 }, { k: 'num', v: 1 }])` is `divergent` "singular near 0"; the integral converges to 4 (design 5.10: an integrable pole is handled as an improper integral).
 - **Invariant broken:** design 5.10; the definite-integral and limit results equal the mathematical value or are undefined with the right reason.
 - **Suggested fix:** find poles of the integrand and of the antiderivative on [a, b] exactly (zeros of denominators, of `cos` under `tan`, of log arguments) before using the antiderivative; split the interval at each and take one-sided limits. In `limitNode`, test continuity at the point exactly (the argument `pi/2` is a pole of `tan`) instead of substituting a float.
-- **status:** to be implemented
-- **note:** Partly fixed: a limit at an exact pole of tan, 1/cos or 1/sin is decided from the two sides, and a definite integral over such a pole is divergent. Still to do: an integrable singularity such as 1/sqrt(abs(x)) on [-1, 1] is still reported divergent. Owner: symbolic.
+- **status:** fixed
+- **note:** Fixed on `feat/cas-calculus`: every pole inside [a, b] (denominator zeros and trig poles) is found; one that grows like 1/distance or faster is divergent; otherwise each piece between poles is an improper integral from both sides, and a piece with a singular end that has no antiderivative uses tanh-sinh quadrature. `1/sqrt(abs(x))` on [-1, 1] is 4, `1/x` on [-1, 2] diverges near 0. Tests: `calculus-area.test.ts`.
 
 ### SYM-SM-15: `floor`, `ceil` and `round` of exact numbers go through a double
 

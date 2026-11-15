@@ -74,7 +74,21 @@ export interface CasHost {
 
 export type CasOut = { readonly ok: true; readonly value: unknown } | { readonly ok: false; readonly reason: string; readonly detail?: string };
 
+/**
+ * Exact calculus for the functions area (cas/design.md 5.15): a Function object's definition (`f(x) = x^2 - 3x`) and the
+ * numbers it reads go in; exact results come back as numbers, or `undefined` to fall back to the numeric method.
+ */
+export interface CasCalculus {
+  /** The definite integral; `{ diverges }` when the engine proves it does not converge. */
+  definite(def: string, inputs: ReadonlyMap<string, number>, a: number, b: number): { readonly value: number } | { readonly diverges: string } | undefined;
+  /** The exact antiderivative as a callable function of x. */
+  antiderivative(def: string, inputs: ReadonlyMap<string, number>): ((x: number) => number) | undefined;
+  /** The exact zeros of f', sorted. */
+  stationary(def: string, inputs: ReadonlyMap<string, number>): readonly number[] | undefined;
+}
+
 export interface CasEngine {
+  readonly calculus?: CasCalculus;
   evaluate(req: { readonly op: string; readonly returns: string; readonly args: readonly CasArgIn[]; readonly owner: string; readonly t: number; readonly host: CasHost }): CasOut;
 }
 
@@ -128,6 +142,11 @@ export function setCasEngine(e: CasEngine): void {
     }
   }
   waiting.clear();
+}
+
+/** The engine's exact calculus, when an engine with one is set. */
+export function casCalculus(): CasCalculus | undefined {
+  return engine?.calculus;
 }
 
 export function casEngineReady(): boolean {
