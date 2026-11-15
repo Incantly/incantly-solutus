@@ -15,7 +15,7 @@ import { andCond, floatN, freeSymbols, freeSymbolsCond, intN, notCond, orCond, r
 import { parseExpression } from './parse';
 import { condLatex, condSpeech, condText, isExactTree, toLatex, toSpeech, toText } from './print';
 import { evalAt } from './rules';
-import { run } from './run';
+import { run, runCacheKey } from './run';
 
 /** A SymValue made by this engine: the engine's own argument is kept as `arg`. */
 type Held = SymValue & { readonly arg: SymArg };
@@ -588,6 +588,26 @@ const calculus: NonNullable<CasEngine['calculus']> = {
   },
 };
 
+/** A job for the worker lane: the call, its main-thread cache key, and the object that waits for it. */
+export interface LaneJob {
+  readonly key: string;
+  readonly op: OpName;
+  readonly args: readonly SymArg[];
+  readonly domains: ReadonlyArray<readonly [string, Domain]>;
+  readonly owner: string;
+}
+
+let lanes: { readonly fastLaneMs: number; readonly submit: (job: LaneJob) => void } | undefined;
+
+/**
+ * Turns the two lanes on (design 5.13, SYM-SM-26): heavy calls get `fastLaneMs` on the main thread; past it they are
+ * submitted and the cell is pending. The host runs them in a worker, hands each answer to `acceptWorkerResult`, and
+ * recomputes the objects that waited. Without lanes every call runs to its full budget here (Node, tests).
+ */
+export function setCasLanes(l: { readonly fastLaneMs: number; readonly submit: (job: LaneJob) => void } | undefined): void {
+  lanes = l;
+}
+
 export const casEngine: CasEngine = {
   calculus,
   evaluate(req): CasOut {
@@ -622,7 +642,13 @@ export const casEngine: CasEngine = {
     if (readsClock && HEAVY_OPS.has(op)) {
       return { ok: false, reason: 'time_dependent_input', detail: `${req.op} cannot use the clock t; do the algebra with a Symbol, then Substitute the clock` };
     }
-    const r = run(op, args, {}, { domains });
+    const r = run(op, args, lanes ? { fastLaneMs: lanes.fastLaneMs } : {}, { domains });
+    // design 5.13: a heavy call that runs past the fast lane goes to the worker; the cell is pending until it answers
+    if (lanes && r.ok && !r.value.cell.defined && r.value.cell.reason === 'pending') {
+      const key = runCacheKey(op, args, {}, { domains });
+      if (key !== null) lanes.submit({ key, op, args, domains: [...domains], owner: req.owner });
+      return { ok: false, reason: 'pending', detail: 'calculating' };
+    }
     if (!r.ok) return { ok: false, reason: 'unsupported', detail: r.message };
     const cell = r.value.cell;
     if (!cell.defined) return { ok: false, reason: cell.reason, ...(cell.detail?.text ? { detail: cell.detail.text } : {}) };
