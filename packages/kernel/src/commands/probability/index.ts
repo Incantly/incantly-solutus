@@ -6,7 +6,8 @@
  */
 import type { ActionCall, CommandRegistry, CommandRule, RuleCall } from '../../graph/registry';
 import { registerPropertyTypes } from '../../graph/props';
-import { FIELDS, registerFieldNames, registerFieldTyper } from '../../language/check';
+import { FIELDS, registerCommandRename, registerFieldNames, registerFieldTyper } from '../../language/check';
+import type { CommandRename } from '../../language/check';
 import { registerFieldReader } from '../../language/compile';
 import { PROPERTIES } from '../../language/props';
 import { registerValueText } from '../../language/runtime';
@@ -67,9 +68,42 @@ const num = (call: RuleCall, i: number): number | undefined => {
   return typeof v === 'number' && v === v ? v : undefined;
 };
 
-function distArg(call: RuleCall, i: number): DistributionValue | undefined {
+/**
+ * Above this size a shape or count parameter is outside the accurate range (design 5.2, errors.md 3): whole numbers
+ * stop being exact near 2^53, and the special functions are checked to 1e-9 only up to here.
+ */
+export const ACCURATE_MAX = 1e15;
+
+/** The shape and count parameters of each distribution, by position; location and scale never limit accuracy. */
+const SHAPES: Readonly<Record<string, readonly number[]>> = {
+  StudentT: [0], ChiSquared: [0], FDist: [0, 1], Gamma: [0], Erlang: [0], Beta: [0, 1], Weibull: [0],
+  Binomial: [0], Poisson: [0], NegBinomial: [0], HyperGeometric: [0, 1, 2], Zipf: [0, 1], DiscreteUniform: [0, 1],
+};
+
+/** Why the special functions cannot answer for `d`, or `undefined` when they can. */
+export function accuracyProblem(d: DistributionValue): string | undefined {
+  for (const i of SHAPES[d.spec.kind] ?? []) {
+    const v = d.params[i] as number;
+    if (Math.abs(v) > ACCURATE_MAX) {
+      const name = d.spec.params[i]?.name ?? `parameter ${i + 1}`;
+      return `${d.spec.kind} ${name} ${v} is outside the accurate range (up to 1e15); try NormalApprox`;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The distribution argument. `evaluates` is false for answers that need no special function (closed-form moments, the
+ * support, `NormalApprox`): those stay defined for any parameters.
+ */
+function distArg(call: RuleCall, i: number, evaluates = true): DistributionValue | undefined {
   const d = call.values[i];
-  return isDist(d) ? d : call.fail('input_undefined', 'the distribution is undefined');
+  if (!isDist(d)) return call.fail('input_undefined', 'the distribution is undefined');
+  if (evaluates) {
+    const why = accuracyProblem(d);
+    if (why) return call.fail('not_accurate', why);
+  }
+  return d;
 }
 
 const checks = (...hooks: Check[]): Check => (c) => {
@@ -312,7 +346,8 @@ export function momentOf(d: DistributionValue, kind: MomentName): number | undef
 
 function moment(kind: MomentName) {
   return (call: RuleCall): unknown => {
-    const d = distArg(call, 0);
+    // the median may need a quantile; the other moments are closed forms
+    const d = distArg(call, 0, kind === 'median');
     if (!d) return undefined;
     const v = momentOf(d, kind);
     if (v === undefined) {
@@ -333,7 +368,7 @@ function runMode(call: RuleCall): unknown {
 }
 
 function runSupport(call: RuleCall): unknown {
-  const d = distArg(call, 0);
+  const d = distArg(call, 0, false);
   if (!d) return undefined;
   const s = d.spec.support(d.params);
   return record('Support', { lo: s.lo, hi: s.hi, discrete: d.spec.discrete });
@@ -387,7 +422,7 @@ function runPlotRange(call: RuleCall): unknown {
 }
 
 function runNormalApprox(call: RuleCall): unknown {
-  const d = distArg(call, 0);
+  const d = distArg(call, 0, false);
   if (!d) return undefined;
   const m = d.spec.moments(d.params);
   if (m.mean === undefined || m.variance === undefined || !Number.isFinite(m.variance)) return call.fail('undefined_moment', `${d.spec.kind} has no finite mean and variance`);
@@ -903,7 +938,41 @@ export function registerProbability(registry: CommandRegistry): void {
   registerReasonPhrase('sample_too_large', { noun: 'sample too large', sentence: 'Without replacement a sample cannot be longer than the list.' });
   registerReasonPhrase('zero_probability', { noun: 'probability zero', sentence: 'With probability 0 this can never happen.' });
   registerReasonPhrase('not_accurate', { noun: 'not accurate', sentence: 'These parameters are outside the range where the answer is accurate.' });
+  for (const [name, rename] of Object.entries(RENAMED)) registerCommandRename(name, rename);
 }
+
+/** Commands other apps have, and what we write instead (errors.md 2, `unknown_command`). */
+const RENAMED: Record<string, CommandRename> = (() => {
+  const out: Record<string, CommandRename> = {};
+  const sample = 'Sample(d: Distribution, n: Number) -> List<Number>';
+  const draw = 'Draw(d: Distribution) -> Number';
+  const quantile = 'Quantile(d: Distribution, p: Number) -> Number';
+  const pdf = 'Pdf(d: Distribution, x: Number) -> Number';
+  const cdf = 'Cdf(d: Distribution, x: Number) -> Number';
+  // random draws named after a distribution
+  const random: Record<string, string> = {
+    RandomNormal: 'Normal(mu, sigma)', RandomBinomial: 'Binomial(n, p)', RandomPoisson: 'Poisson(lambda)',
+    RandomUniform: 'Uniform(a, b)', RandomExponential: 'Exponential(lambda)', RandomGeometric: 'Geometric(p)',
+  };
+  for (const [name, d] of Object.entries(random)) {
+    out[name] = { hint: `Use Sample(${d}, n). For one value use Draw(${d}).`, forms: [sample, draw] };
+  }
+  // inverse cdfs and densities named after a distribution
+  const families: Record<string, string> = {
+    Normal: 'Normal(mu, sigma)', Binomial: 'Binomial(n, p)', Poisson: 'Poisson(lambda)', T: 'StudentT(nu)',
+    ChiSquared: 'ChiSquared(k)', Exponential: 'Exponential(lambda)', Gamma: 'Gamma(k, theta)', Beta: 'Beta(a, b)',
+  };
+  for (const [fam, d] of Object.entries(families)) {
+    out[`Inverse${fam}`] = { hint: `Use Quantile(${d}, p).`, forms: [quantile] };
+    out[`${fam}Pdf`] = { hint: `Use Pdf(${d}, x).`, forms: [pdf] };
+    out[`${fam}Cdf`] = { hint: `Use Cdf(${d}, x).`, forms: [cdf] };
+  }
+  out['Pascal'] = { hint: 'Use NegBinomial(r, p).', forms: ['NegBinomial(r: Number, p: Number) -> DiscreteDistribution'] };
+  out['BinomialDist'] = { hint: 'Use Binomial(n, p).', forms: ['Binomial(n: Number, p: Number) -> DiscreteDistribution'] };
+  out['TDistribution'] = { hint: 'Use StudentT(nu).', forms: ['StudentT(nu: Number) -> ContinuousDistribution'] };
+  out['Hypergeometric'] = { hint: 'Use HyperGeometric(N, K, n).', forms: ['HyperGeometric(N: Number, K: Number, n: Number) -> DiscreteDistribution'] };
+  return out;
+})();
 
 export const PROBABILITY_TYPES: readonly string[] = [CD, DD];
 export { DISTRIBUTIONS, discreteSpec, dist, distText, distType, isDist } from './dists';

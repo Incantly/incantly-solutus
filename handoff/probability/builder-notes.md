@@ -26,12 +26,32 @@ Built on `feat/probability` from `.kiro/specs/probability` (R3 to R8).
 | gamma quantile | 6 µs | 50 µs |
 | PdfTable, 10,000 rows | 0.4 ms | 15 ms |
 
+## Third round (15 November 2026): the items left from round two
+
+- **Large parameters.** The incomplete gamma (shape ≥ 100) and the incomplete beta (both shapes ≥ 3,000) are now
+  integrated by Gauss–Legendre quadrature near the peak, with the prefactor reduced by Stirling's series. `lbeta` and
+  `gammaLogDensity` replace every difference of large log-gammas (binomial, negative binomial, Poisson and t masses,
+  the F and beta densities). `betaI` takes `1 − x` exactly when the caller knows it, so `Binomial(1e12, 1e-11)` keeps
+  its digits. Measured: `Cdf(Gamma(1e8, 1), 1e8)` was 0.040, now 0.5000133 (right); `Cdf(Beta(1e8, 1e8), 0.5)` is
+  0.5 to 1e-14; the quadrature agrees with the series to 2e-12 where the series converges.
+- **`not_accurate`.** A shape or count parameter above 1e15 makes every evaluation undefined `not_accurate`
+  (`ACCURATE_MAX`, `accuracyProblem`). Closed-form moments, `Support` and `NormalApprox` stay defined, so the recovery
+  in errors.md works. The errors.md example moved from 3e9 (now accurate) to 3e15.
+- **Renamed commands.** The language has a new hook, `registerCommandRename` in `language/check.ts`. Probability
+  registers `RandomNormal`, `InverseNormal`, `NormalPdf`, `Pascal`, `BinomialDist` and their family (`RandomPoisson`,
+  `InverseT`, `ChiSquaredCdf`, …): the `unknown_command` error carries the replacement in `hint` and its `forms`.
+- **Quantiles.** HyperGeometric walks from the mode by the mass recurrence (a tiny upper tail still bisects on the
+  survival function); Zipf binary-searches its cumulative table.
+- **Kolmogorov–Smirnov.** `test/spec/probability/leftovers.test.ts` runs a KS test on all 27 samplers (n = 20,000,
+  false-alarm rate 1e-6).
+- **Simulation strip** (`apps/studio/src/simstrip.ts`): under the graph when a random object exists, or from the
+  panel's "Simulation strip" button. Seed, Reroll, one slider per free `Sample(…, n)` count, Run with 0.02 to 1 s per
+  draw, the tally against the distribution with the largest bar gap or the Kolmogorov distance, a 300 ms pulse on the
+  newest draw, die faces under 12 rolls, and the Simulate menu (coin, die, two dice, spinner).
+
 ## Not done
 
-- `not_accurate`: the reason is registered but no rule reports it yet; the special functions are not checked against a
-  per-parameter accuracy range.
-- The Kolmogorov–Smirnov check of every sampler (design 6.2) is replaced by mean, variance and chi-squared tests.
-- Hypergeometric and Zipf quantiles bisect on the summed cdf rather than walking from the mode.
-- The random strip at the bottom of the figure (ui.md 6) lives in the Probability panel's Simulate row instead.
-- Unknown-command hints for `RandomNormal`, `InverseNormal` and the like (errors 2) need a kernel hook for renamed
-  commands, which does not exist yet.
+- Run uses a timer, not the clock: ui.md 6 asks for a `t`-driven run so a film seeks exactly. That needs `n` written
+  as a clock formula, which would make it stop being a free slider; left for the animation area.
+- Reroll always adds one to the figure seed: the studio has no selection yet, so "reroll only the selected object"
+  waits for selection linking.

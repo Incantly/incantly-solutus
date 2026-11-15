@@ -136,6 +136,25 @@ export function registerFieldNames(type: string, names: (ty: Ty) => readonly str
   FIELD_NAMES.set(type, names);
 }
 
+/** What an `unknown_command` error says for a command that other apps have and we name differently. */
+export interface CommandRename {
+  /** The replacement, written as a sentence: "Use Sample(Normal(mu, sigma), n)." */
+  readonly hint: string;
+  /** Signatures of the replacement, shown as `forms`. */
+  readonly forms?: readonly string[];
+  /** Lines the editor may offer in place of the call. */
+  readonly suggest?: readonly string[];
+}
+const RENAMES = new Map<string, CommandRename>();
+
+/**
+ * An area registers a renamed or removed command (probability errors.md 2: `RandomNormal`, `InverseNormal`). A real
+ * command of the same name always wins; the rename only shapes the `unknown_command` error.
+ */
+export function registerCommandRename(name: string, rename: CommandRename): void {
+  RENAMES.set(name, rename);
+}
+
 /** Fields by type, appended to by other areas (docs/features/language/design.md 3.10 rule 9). */
 export const FIELDS: Record<string, Record<string, Ty>> = {
   Point: { x: T.Number, y: T.Number },
@@ -1116,8 +1135,13 @@ class Checker {
     const obj = this.fig.lookup(e.callee);
     // a function object may have a capital name (`W = Taylor(f, 0, 5)`): with no command of that name, the call is to it
     if (obj && isCallableTy(obj.type)) return this.inferCallObj(e, obj);
+    const rename = RENAMES.get(e.callee);
     if (obj) {
       extra.hint = `${e.callee} is a ${tyStr(obj.type)} object, not a command. Names followed by ( are looked up as commands when they start with a capital letter.`;
+    } else if (rename) {
+      extra.hint = rename.hint;
+      if (rename.forms) extra.forms = rename.forms;
+      if (rename.suggest) extra.suggest = rename.suggest;
     } else if (close.length > 0) {
       extra.hint = `Did you mean ${close.join(' or ')}?`;
       extra.suggest = close.map((c) => this.replaceRange(e.cs, e.ce, c));

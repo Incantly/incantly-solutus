@@ -619,7 +619,11 @@ export function mountProbCalc(session: KernelSession, registry: CommandRegistry,
       const r = session.applyLines(lines, 'Sample');
       say(r.ok ? r.message : r.error.message);
     });
-    sim.append(sampleBtn);
+    const stripBtn = el('button', 'secondary', 'Simulation strip');
+    stripBtn.type = 'button';
+    stripBtn.title = 'Show the simulation strip under the graph: seed, sample sizes, Run and the tally';
+    stripBtn.addEventListener('click', () => element.dispatchEvent(new CustomEvent('open-simulation', { bubbles: true })));
+    sim.append(sampleBtn, stripBtn);
     body.append(el('h3', '', 'Simulate'), sim);
 
     actions(calcLines(state, n, now.range));

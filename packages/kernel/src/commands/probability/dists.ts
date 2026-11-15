@@ -5,7 +5,7 @@
  * No DOM, no timers, no Date.
  */
 import {
-  betaI, chiSqQuantile, gammaPQ, lgamma, normalCdf, normalQuantile, normalSf, tCdf, tQuantile, tSf,
+  betaI, chiSqQuantile, gammaLogDensity, gammaPQ, lbeta, lgamma, normalCdf, normalQuantile, normalSf, tCdf, tQuantile, tSf,
 } from '../statistics/dist';
 
 declare module '../../contracts/values' {
@@ -83,7 +83,8 @@ const whole = (name: string, min: number): ParamDef => ({ name, ok: (v) => Numbe
 
 const LN_SQRT_2PI = 0.5 * Math.log(2 * Math.PI);
 const gammaFn = (x: number): number => Math.exp(lgamma(x));
-const lchoose = (n: number, k: number): number => lgamma(n + 1) - lgamma(k + 1) - lgamma(n - k + 1);
+/** ln C(n, k) = −ln(n + 1) − ln B(k + 1, n − k + 1), without the cancellation of three large log-gammas. */
+const lchoose = (n: number, k: number): number => -Math.log(n + 1) - lbeta(k + 1, n - k + 1);
 
 /* ------------------------------ solvers ------------------------------ */
 
@@ -295,7 +296,8 @@ const NORMAL: DistSpec = {
   sample: ([m, s], u) => (m as number) + (s as number) * normalQuantile(u()),
 };
 
-const tLog = (n: number, x: number): number => lgamma((n + 1) / 2) - lgamma(n / 2) - 0.5 * Math.log(n * Math.PI) - ((n + 1) / 2) * Math.log1p((x * x) / n);
+// Γ((n+1)/2) / Γ(n/2) = Γ(1/2) / B(n/2, 1/2), and ln Γ(1/2) = ln π / 2
+const tLog = (n: number, x: number): number => 0.5 * Math.log(Math.PI) - lbeta(n / 2, 0.5) - 0.5 * Math.log(n * Math.PI) - ((n + 1) / 2) * Math.log1p((x * x) / n);
 
 const STUDENT_T: DistSpec = {
   kind: 'StudentT', discrete: false, params: [pos('df')],
@@ -322,7 +324,7 @@ const STUDENT_T: DistSpec = {
   },
 };
 
-const gammaLog = (a: number, r: number, x: number): number => a * Math.log(r) + (a - 1) * Math.log(x) - r * x - lgamma(a);
+const gammaLog = (a: number, r: number, x: number): number => Math.log(r) + gammaLogDensity(a, r * x);
 const gammaPdf = (a: number, r: number, x: number): number => (x < 0 ? 0 : x === 0 ? (a === 1 ? r : a < 1 ? Infinity : 0) : Math.exp(gammaLog(a, r, x)));
 
 /** A gamma-family entry with shape and rate taken from the parameters. */
@@ -373,7 +375,7 @@ const GAMMA = gammaFamily('Gamma', [pos('shape'), pos('rate')], ([a, r]) => [a a
 const ERLANG = gammaFamily('Erlang', [whole('k', 1), pos('rate')], ([k, r]) => [k as number, r as number]);
 
 const fLog = (d1: number, d2: number, x: number): number => {
-  const lb = lgamma(d1 / 2) + lgamma(d2 / 2) - lgamma((d1 + d2) / 2);
+  const lb = lbeta(d1 / 2, d2 / 2);
   return 0.5 * (d1 * Math.log(d1 * x) + d2 * Math.log(d2) - (d1 + d2) * Math.log(d1 * x + d2)) - Math.log(x) - lb;
 };
 
@@ -416,7 +418,7 @@ const EXPONENTIAL: DistSpec = {
   moments: ([r]) => ({ mean: 1 / (r as number), variance: 1 / (r as number) ** 2, skewness: 2, kurtosis: 6, median: Math.LN2 / (r as number), mode: [0] }),
 };
 
-const betaLog = (a: number, b: number, x: number): number => (a - 1) * Math.log(x) + (b - 1) * Math.log1p(-x) - (lgamma(a) + lgamma(b) - lgamma(a + b));
+const betaLog = (a: number, b: number, x: number): number => (a - 1) * Math.log(x) + (b - 1) * Math.log1p(-x) - lbeta(a, b);
 
 const BETA: DistSpec = {
   kind: 'Beta', discrete: false, params: [pos('a'), pos('b')],
@@ -606,7 +608,7 @@ const binomCdf = (n: number, p: number, k: number): number => {
   if (k < 0) return 0;
   if (k >= n) return 1;
   const j = Math.floor(k);
-  return betaI(1 - p, n - j, j + 1);
+  return betaI(1 - p, n - j, j + 1, p);
 };
 const binomSf = (n: number, p: number, k: number): number => {
   if (k < 0) return 1;
@@ -652,9 +654,10 @@ const POISSON: DistSpec = {
     const l = m as number;
     if (!Number.isInteger(k) || k < 0) return 0;
     if (l === 0) return k === 0 ? 1 : 0;
-    return Math.exp(k * Math.log(l) - l - lgamma(k + 1));
+    // the mass is the Gamma(k + 1, 1) density at the mean
+    return Math.exp(gammaLogDensity(k + 1, l));
   },
-  logpdf: ([m], k) => (!Number.isInteger(k) || k < 0 ? -Infinity : (m as number) === 0 ? (k === 0 ? 0 : -Infinity) : k * Math.log(m as number) - (m as number) - lgamma(k + 1)),
+  logpdf: ([m], k) => (!Number.isInteger(k) || k < 0 ? -Infinity : (m as number) === 0 ? (k === 0 ? 0 : -Infinity) : gammaLogDensity(k + 1, m as number)),
   cdf: ([m], k) => (k < 0 ? 0 : (m as number) === 0 ? 1 : gammaPQ(Math.floor(k) + 1, m as number).q),
   cdfBelow: lattice(() => POISSON),
   sf: ([m], k) => (k < 0 ? 1 : (m as number) === 0 ? 0 : gammaPQ(Math.floor(k) + 1, m as number).p),
@@ -714,11 +717,12 @@ const NEG_BINOMIAL: DistSpec = {
     const P = p as number;
     if (!Number.isInteger(k) || k < 0) return 0;
     if (P === 1) return k === 0 ? 1 : 0;
-    return Math.exp(lgamma(k + R) - lgamma(k + 1) - lgamma(R) + R * Math.log(P) + k * Math.log1p(-P));
+    // Γ(k + R) / (Γ(k + 1) Γ(R)) = 1 / ((k + R) B(k + 1, R))
+    return Math.exp(-Math.log(k + R) - lbeta(k + 1, R) + R * Math.log(P) + k * Math.log1p(-P));
   },
   cdf: ([r, p], k) => (k < 0 ? 0 : (p as number) === 1 ? 1 : betaI(p as number, r as number, Math.floor(k) + 1)),
   cdfBelow: lattice(() => NEG_BINOMIAL),
-  sf: ([r, p], k) => (k < 0 ? 1 : (p as number) === 1 ? 0 : betaI(1 - (p as number), Math.floor(k) + 1, r as number)),
+  sf: ([r, p], k) => (k < 0 ? 1 : (p as number) === 1 ? 0 : betaI(1 - (p as number), Math.floor(k) + 1, r as number, p as number)),
   quantile: (p, q) => discreteQuantile((k) => NEG_BINOMIAL.cdf(p, k), q, 0, Infinity),
   quantileUpper: (p, q) => discreteQuantileUpper((k) => NEG_BINOMIAL.sf(p, k), q, 0, Infinity),
   moments: ([r, p]) => {
@@ -739,6 +743,40 @@ const hyperHi = (K: number, n: number): number => Math.min(n, K);
 const hyperLog = (N: number, K: number, n: number, k: number): number => lchoose(K, k) + lchoose(N - K, n - k) - lchoose(N, n);
 
 /** Sums the pmf of the hypergeometric over [from, to]. */
+/**
+ * The smallest k with cdf(k) ≥ q (or with sf(k) ≤ q for `upper`), by a walk from the mode (design 5.2): the cdf is
+ * summed once there, then moved one step at a time by the ratio of neighbouring masses, so the cost is the distance
+ * from the mode, about a few standard deviations.
+ */
+function hyperQuantile(N: number, K: number, n: number, q: number, upper: boolean): number {
+  const lo = hyperLo(N, K, n);
+  const hi = hyperHi(K, n);
+  if (lo === hi) return lo;
+  // walking on the cdf: for the upper form, cdf(k) ≥ 1 − q is the same as sf(k) ≤ q
+  const target = upper ? 1 - q * (1 + 1e-12) : q * (1 - 1e-12);
+  if (target <= 0) return lo;
+  let k = Math.min(hi, Math.max(lo, Math.floor(((n + 1) * (K + 1)) / (N + 2))));
+  let p = Math.exp(hyperLog(N, K, n, k));
+  let F = k - lo <= hi - k ? hyperSum(N, K, n, lo, k) : 1 - hyperSum(N, K, n, k + 1, hi);
+  if (F >= target) {
+    // down while the step below still reaches the target
+    while (k > lo) {
+      const below = F - p;
+      if (below < target) break;
+      p *= (k * (N - K - n + k)) / ((K - k + 1) * (n - k + 1));
+      k--;
+      F = below;
+    }
+    return k;
+  }
+  while (k < hi && F < target) {
+    p *= ((K - k) * (n - k)) / ((k + 1) * (N - K - n + k + 1));
+    k++;
+    F += p;
+  }
+  return k;
+}
+
 function hyperSum(N: number, K: number, n: number, from: number, to: number): number {
   let s = 0;
   for (let k = from; k <= to; k++) s += Math.exp(hyperLog(N, K, n, k));
@@ -775,8 +813,11 @@ const HYPER_GEOMETRIC: DistSpec = {
     if (k >= hi) return 0;
     return hi - k <= k - lo ? hyperSum(N as number, K as number, n as number, k + 1, hi) : 1 - hyperSum(N as number, K as number, n as number, lo, k);
   },
-  quantile: (p, q) => discreteQuantile((k) => HYPER_GEOMETRIC.cdf(p, k), q, hyperLo(p[0] as number, p[1] as number, p[2] as number), hyperHi(p[1] as number, p[2] as number)),
-  quantileUpper: (p, q) => discreteQuantileUpper((k) => HYPER_GEOMETRIC.sf(p, k), q, hyperLo(p[0] as number, p[1] as number, p[2] as number), hyperHi(p[1] as number, p[2] as number)),
+  quantile: ([N, K, n], q) => hyperQuantile(N as number, K as number, n as number, q, false),
+  // a tiny upper tail is found on the survival function itself: 1 − q would lose its digits
+  quantileUpper: (p, q) => (q < 0.01
+    ? discreteQuantileUpper((k) => HYPER_GEOMETRIC.sf(p, k), q, hyperLo(p[0] as number, p[1] as number, p[2] as number), hyperHi(p[1] as number, p[2] as number))
+    : hyperQuantile(p[0] as number, p[1] as number, p[2] as number, q, true)),
   moments: ([N0, K0, n0]) => {
     const N = N0 as number;
     const K = K0 as number;
@@ -827,7 +868,21 @@ const ZIPF: DistSpec = {
   },
   cdfBelow: lattice(() => ZIPF),
   sf: (p, x) => 1 - ZIPF.cdf(p, x),
-  quantile: (p, q) => discreteQuantile((k) => ZIPF.cdf(p, k), q, 1, p[1] as number),
+  quantile: ([s, N], q) => {
+    // binary search of the cumulative table (design 5.2)
+    const n = N as number;
+    if (q <= 0) return 1;
+    const c = zipfTable(s as number, n);
+    const target = q * (1 - 1e-12);
+    let a = 0;
+    let b = n - 1;
+    while (a < b) {
+      const m = (a + b) >> 1;
+      if ((c[m] as number) >= target) b = m;
+      else a = m + 1;
+    }
+    return a + 1;
+  },
   moments: ([s, N]) => {
     const S = s as number;
     const n = N as number;
