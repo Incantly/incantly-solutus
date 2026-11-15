@@ -30,3 +30,4 @@ Features: **Spec** (`.kiro/specs/`), **Spec task**, **Hook** (`.kiro/hooks/`), *
 | 2026-11-15 | Property-based test | `packages/kernel/test/spec/probability/leftovers.test.ts` | Kolmogorov–Smirnov test of 27 samplers on 20,000 seeded draws each. |
 | 2026-11-15 | Spec task | `.kiro/specs/algebra-view/tasks.md` task 7 | Windowed, incremental expression list for 5,000 objects (PR #51). |
 | 2026-11-15 | Spec | `.kiro/specs/algebra-view/`, `tools-2d/`, `statistics/`, `lists-matrices/` | Added the leftover items as open tasks before building them; wrote the missing `tools-2d/tasks.md`. |
+| 2026-11-15 | Spec task | `.kiro/specs/algebra-view/tasks.md` task 8, `tools-2d/tasks.md` task 7, `probability/tasks.md` task 15 | Selection shared by the list and the canvas (Shift and Ctrl/Cmd add, hover both ways, Esc clears); selected objects become a tool's first picks; Reroll rerolls only a selected random object. Examples: Selection, Big list. |

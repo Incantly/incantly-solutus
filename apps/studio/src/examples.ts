@@ -124,4 +124,21 @@ export const EXAMPLES: readonly Example[] = [
       'stem = StemPlot(ages)',
     ],
   },
+  {
+    id: 'selection',
+    title: 'Selection: click rows or shapes (Shift adds)',
+    lines: [
+      'A = (-3, -1)',
+      'B = (3, -1)',
+      'C = (0, 3)',
+      'tri = Polygon(A, B, C)',
+      'c = Circle(C, 2)',
+      'xs = Sample(Normal(0, 1), 20)',
+    ],
+  },
+  {
+    id: 'big-list',
+    title: 'Big list: 2,500 rows that follow one slider',
+    lines: ['a = 1 in 0..10 step 0.1', 'f(x) = sin(a*x)', 'P = (a, f(a))', ...Array.from({ length: 2497 }, (_, i) => `b${i} = a + ${i}`)],
+  },
 ];

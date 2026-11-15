@@ -216,6 +216,8 @@ export interface SimStripOptions {
   readonly say: (text: string) => void;
   /** Timer for Run; a test passes its own. */
   readonly every?: (ms: number, fn: () => void) => () => void;
+  /** The studio's selection: with a random object selected, Reroll rerolls only it (ui.md 6). */
+  readonly selected?: () => readonly string[];
 }
 
 export interface SimStrip {
@@ -323,10 +325,19 @@ export function mountSimStrip(opts: SimStripOptions): SimStrip {
       say(r.ok ? `Seed ${s}.` : r.error.message);
     });
     seedField.append(el('span', 'field-label', 'Seed'), seedInput);
-    const reroll = el('button', 'secondary', '↻ Reroll');
+    const picked = (opts.selected?.() ?? []).filter((n) => {
+      const o = session.figure.get(n);
+      return o !== undefined && RANDOM_CALL.test(o.definition);
+    });
+    const reroll = el('button', 'secondary', picked.length > 0 ? `↻ Reroll ${picked.join(', ')}` : '↻ Reroll');
     reroll.type = 'button';
-    reroll.title = 'Add one to the figure seed: every random object draws new numbers';
+    reroll.title = picked.length > 0 ? `New numbers for ${picked.join(', ')} only (Reroll adds one to their re-roll count)` : 'Add one to the figure seed: every random object draws new numbers';
     reroll.addEventListener('click', () => {
+      if (picked.length > 0) {
+        const r = session.applyLines(picked.map((n) => `Reroll(${n})`), 'Reroll');
+        say(r.ok ? `New random numbers for ${picked.join(', ')}.` : r.error.message);
+        return;
+      }
       const r = session.applyLines([`@seed ${seed + 1}`], 'Reroll');
       say(r.ok ? `Seed ${seed + 1}: new random numbers.` : r.error.message);
     });

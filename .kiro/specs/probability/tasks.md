@@ -14,4 +14,4 @@
 - [x] 12. HyperGeometric mode walk and Zipf table search for quantiles (PR #50)
 - [x] 13. Kolmogorov–Smirnov test of every sampler (PR #50)
 - [x] 14. The simulation strip in the studio (ui.md 6) (PR #50)
-- [ ] 15. Reroll only the selected random object (needs studio selection)
+- [x] 15. Reroll only the selected random object
