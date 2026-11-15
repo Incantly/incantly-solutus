@@ -542,7 +542,7 @@ export class FigureTx extends FigureBase {
     owner: string,
   ): ErrorObject | Map<string, StyleEntry> {
     const out = new Map(base);
-    const items: readonly StyleItem[] = (parsed.node as { style?: readonly StyleItem[] }).style ?? [];
+    const items: readonly StyleItem[] = checked.styleItems ?? (parsed.node as { style?: readonly StyleItem[] }).style ?? [];
     const defaults = defaultsFor(ty.k, free);
     const cs = checked.style ?? [];
     for (let i = 0; i < cs.length; i++) {

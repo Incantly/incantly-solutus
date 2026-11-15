@@ -13,6 +13,7 @@ import type { CommandForm, CommandSpec, ParamSpec } from '../../language/table';
 import { registerNotice } from '../../errors/notices';
 import { registerPropertyTypes } from '../../graph/props';
 import { PROPERTIES } from '../../language/props';
+import { registerStyleLift } from '../../language/lines';
 import { lineLatex, numberLatex, valueLatex } from './latex';
 import { bestRational, continuedFraction, continuedFractionLatex, fractionLatex, scientificLatex, surd } from './numtext';
 
@@ -521,6 +522,10 @@ const TEXT_COMMANDS: readonly CommandSpec[] = [
   spec('TableText', 'text', [form([
     p('rows', 'List'), named('align', 'Text', 'l'), named('header', 'Bool', false), named('brackets', 'Text', 'none'), named('byColumns', 'Bool', false), named('fmt', 'Text'),
   ], 'Text', runTableText, 'a typeset table of a list of rows')]),
+  // conveniences for `T with vertical = true` and `T with rotate = a` (design 4.7); a definition is read as that, so
+  // the rule only runs where the call sits inside a larger expression, and then it is the text unchanged
+  spec('VerticalText', 'text', [form([p('T', 'Text')], 'Text', (call) => call.values[0], 'the text with its letters stacked top to bottom')]),
+  spec('RotateText', 'text', [form([p('T', 'Text'), p('angle', 'Number')], 'Text', (call) => call.values[0], 'the text turned by an angle about its anchor')]),
   spec('ReplaceAll', 'text', [form([p('T', 'Text'), p('old', 'Text'), p('new', 'Text')], 'Text', runReplaceAll, 'every old in T replaced by new')]),
   spec('Split', 'text', [form([p('T', 'Text'), p('sep', 'Text')], 'List<Text>', runSplit, 'T cut at each sep')]),
   spec('LetterToUnicode', 'text', [form([p('T', 'Text')], 'Number', runLetterToUnicode, 'the code point of the first character')]),
@@ -556,7 +561,12 @@ export function registerText(registry: CommandRegistry): void {
     size: { kind: 'number', min: 4, max: 200, allowed: 'a size in points from 4 to 200', expr: true },
     rotate: { kind: 'number', allowed: 'an angle', expr: true },
     bg: { kind: 'color', allowed: 'a colour name, rgb(r, g, b) or hsl(h, s, l)', expr: true },
+    vertical: { kind: 'bool', allowed: 'true or false' },
+    // `full` draws the `$…$` parts with KaTeX instead of the built-in subset (design 6.4)
+    latex: { kind: 'enum', values: ['subset', 'full'], allowed: 'subset or full' },
   } as const;
+  registerStyleLift('VerticalText', { args: 1, type: 'Text', props: [{ key: 'vertical' }] });
+  registerStyleLift('RotateText', { args: 2, type: 'Text', props: [{ key: 'rotate', arg: 1 }] });
   for (const [key, spec] of Object.entries(props)) {
     const old = PROPERTIES[key];
     if (!old) PROPERTIES[key] = spec as (typeof PROPERTIES)[string];

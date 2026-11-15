@@ -4,6 +4,7 @@
  * and slices. Keyboard: arrows pan, + and - zoom, 0 goes home.
  */
 import { paintScene } from './paint';
+import { mountLatexOverlay } from './latex-overlay';
 import type { Hit, SceneItem } from './paint';
 import { Viewport } from './viewport';
 import type { Box } from './viewport';
@@ -88,6 +89,7 @@ export function mountGraph(opts: GraphPaneOptions): GraphPane {
   tip.className = 'graph-tip';
   tip.hidden = true;
   const vp = new Viewport();
+  const latex = mountLatexOverlay();
   let hits: Hit[] = [];
   let frame = 0;
   let first = true;
@@ -118,7 +120,9 @@ export function mountGraph(opts: GraphPaneOptions): GraphPane {
     })();
     if (!ctx || typeof ctx.setTransform !== 'function') return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    hits = paintScene(ctx, vp, opts.items());
+    const scene = opts.items();
+    hits = paintScene(ctx, vp, scene);
+    latex.sync(vp, scene);
     opts.tool?.()?.overlay(ctx, vp);
   };
   const redraw = (): void => {
@@ -147,7 +151,7 @@ export function mountGraph(opts: GraphPaneOptions): GraphPane {
     }),
     button('⤢', 'Zoom to fit', fit),
   );
-  element.append(canvas, controls, tip);
+  element.append(canvas, latex.element, controls, tip);
 
   // pointer: drag a free point, else pan
   let drag: { kind: 'pan' | 'point' | 'pending' | 'aim'; x: number; y: number; name?: string; moved: boolean } | undefined;
