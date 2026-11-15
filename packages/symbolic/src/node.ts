@@ -1192,6 +1192,17 @@ export function divideNodes(a: SymNode, b: SymNode): SymNode {
  * product: the canonical constructors would fold it straight back into `n`, so the node
  * is built directly (`2^2 * 3`). Parsing its text gives the number again.
  */
+/** A fraction in its prime factors, kept unfolded: `2 * 3 / (5 * 7)` (SYM-SM-27). */
+export function factoredRationalNode(num: readonly bigint[], den: readonly bigint[], negative: boolean): SymNode {
+  const top = factoredIntegerNode(num, negative);
+  const parts: SymNode[] = top.k === 'mul' ? [...top.factors] : num.length === 0 && !negative ? [] : [top];
+  const groups = new Map<bigint, number>();
+  for (const p of den) groups.set(p, (groups.get(p) ?? 0) + 1);
+  for (const [p, k] of [...groups].sort((a, b) => (a[0] < b[0] ? -1 : 1))) parts.push(intern({ k: 'pow', base: intN(p), exp: intN(-k) }));
+  if (parts.length === 1) return parts[0] as SymNode;
+  return intern({ k: 'mul', factors: parts });
+}
+
 export function factoredIntegerNode(primes: readonly bigint[], negative: boolean): SymNode {
   const parts: SymNode[] = negative ? [MINUS_ONE] : [];
   let i = 0;

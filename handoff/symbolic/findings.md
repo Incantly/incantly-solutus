@@ -172,8 +172,8 @@ Ranked by impact: security, then hangs and crashes, then wrong results, then wro
 - **Evidence:** `run('Solve', [cd('x^2 == a'), ex('x')])` is `[x == sqrt(4 * a)/2, x == -sqrt(4 * a)/2]` with `cases` `1 == 0 and 0 != 0`, `1 == 0 and 0 == 0 and -a == 0`, `1 == 0 and 0 == 0 and -a != 0`: the cases split on the numeric leading coefficient 1, and there is no `a < 0` case although for `a < 0` there is no real solution. `Solve(a*x^2 + b*x + c == 0, x)` has no case for `b^2 - 4 a c < 0`. `Solve(a*x == 0, x)` lists `a == 0 and 0 != 0`, which can never hold, and `a == 0 and 0 == 0` instead of `a == 0`. `Solve(ln(x) == 1, x)` lists `1 == 0 and -e == 0`.
 - **Invariant broken:** S10: a case split lists only possible parameter values, and every value where the generic answer fails (design 2.3, 5.9 step 5).
 - **Suggested fix:** split only on coefficients that contain a parameter; simplify each case condition and drop the ones that are `false`; in real mode, add the sign condition of the radicand (`a >= 0`, discriminant `>= 0`) to the generic answer and the complementary `none` case.
-- **status:** to be implemented
-- **note:** Not fixed in this round. Owner: symbolic.
+- **status:** fixed
+- **note:** Fixed on `feat/cas-correctness`: case conditions are decided when they compare numbers (true parts dropped, false cases dropped), `-a == 0` is `a == 0` and `4 a < 0` is `a < 0`, and over the reals the negative discriminant (`a < 0` for `x^2 == a`) is a `none` case. Tests: `correctness.test.ts`.
 
 ### SYM-SM-17: `Factor` stops early, and multivariate results carry a junk content
 
@@ -181,8 +181,8 @@ Ranked by impact: security, then hangs and crashes, then wrong results, then wro
 - **Evidence:** `run('Factor', [ex('x^12 - 1')])` is `(x - 1) * (x + 1) * (x^10 + x^8 + x^6 + x^4 + x^2 + 1)` with no `irreducible` notice, but `x^10 + … + 1` factors further as `(x^2 + 1)(x^2 - x + 1)(x^2 + x + 1)(x^4 - x^2 + 1)` (design acceptance 3: `Factor` recovers the planted factors). `Factor(x^2 - y^2)` is `-36 * (x/36 + y/36) * (y - x)`; `Factor(x^2 + 2*x*y + y^2 - z^2)` is `-166839735777662410596 * (z^2/166839735777662410596 - x^2/166839735777662410596 - …)`, unfactored and with a 21-digit constant (the expected answer is `(x + y - z) * (x + y + z)`). The values are equal to the input; the forms are not factorisations. `Factor(x^3 + y^3)` is left whole.
 - **Invariant broken:** design 5.8 steps 3 and 4: content extracted, every factor irreducible, the sign in front; acceptance 3.
 - **Suggested fix:** recurse `upolyFactor` on the `irreducible` pieces that `kroneckerFactor` left (or implement the documented Cantor-Zassenhaus and Hensel path); in `mpolyFactor`, take the integer content and the primitive part before the Kronecker image, map factors back to primitive integer polynomials, and reject a result whose `verifyFactor` ratio is not ±1 times the content.
-- **status:** to be implemented
-- **note:** Not fixed in this round. Owner: symbolic.
+- **status:** fixed
+- **note:** Fixed on `feat/cas-correctness`: the modular method (`zassenhaus.ts`: factoring mod p, quadratic Hensel lifting, recombination with the constant-term test) replaces the bounded Kronecker search; multivariate factors are integer, primitive, with a positive leading term and an exact unit checked term by term. `x^12 - 1`, `x^2 + 2xy + y^2 - z^2`, `x^3 + y^3` factor fully. Tests: `correctness.test.ts`.
 
 ### SYM-SM-18: The parser accepts a `rootof` that names no root
 
@@ -203,8 +203,8 @@ Ranked by impact: security, then hangs and crashes, then wrong results, then wro
   - The lexer reads `1.2.3` as one number token; `Number` makes it `NaN`, a float node, instead of a syntax error. `1e999` becomes a float `Infinity`.
 - **Invariant broken:** S9: every printed text parses back to the same node; keywords are never operands; a number literal is finite.
 - **Suggested fix:** in `parseProduct`, do not multiply implicitly by the names `and`, `or`, `not`, `in`; in `parseTop`, continue with `parseAnd`/`parseOr` after a comparison; bracket `or` inside `and` and anything compound under `not` in `condText` (and in `condLatex`/`condSpeech`); print floats in a form the parser keeps inexact, or document `Numeric`-style output as display-only; reject a second `.` and non-finite literals in `lex`/`numNode`.
-- **status:** to be implemented
-- **note:** Partly fixed: keywords are not implicit factors; and, or and not print with brackets and parse back; a second decimal point and a non-finite literal are refused. Still to do: a float prints as text that parses back as an exact rational. Owner: symbolic.
+- **status:** fixed
+- **note:** Fixed on `feat/cas-correctness`: an inexact number prints as `float(0.5)` and parses back inexact; the CAS view and lines for the figure language print the plain decimal. Tests: `correctness.test.ts`.
 
 ### SYM-SM-20: LaTeX output uses commands that do not exist
 
@@ -221,8 +221,8 @@ Ranked by impact: security, then hangs and crashes, then wrong results, then wro
 - **Evidence:** `solve.ts` line 882: `trigParamNext` is module state, incremented at lines 817, 945, 988 and 2269. After `clearCache()`: `Solve(sin(x) == 1/2, x)` uses `k1`, `Solve(tan(x) == 1, x)` then uses `k2`, and the first call repeated after another `clearCache()` uses `k3`; `Steps(Solve(sin(x) == 1/2, x))` gave `k4`. The cache hides this until it evicts the entry. The symbol is a plain `sym` with no `integer` domain, although design 2.3 calls it "an integer Symbol created for the result".
 - **Invariant broken:** S8: a result does not depend on calls made before it (design 5.12, acceptance 9).
 - **Suggested fix:** number family parameters per result (start at `k1` in each call, skipping names already free in the input), and return the parameter with domain `integer` (for example in the result's `cases` or a `params` field the kernel turns into a `Symbol`).
-- **status:** to be implemented
-- **note:** Partly fixed: family parameters are numbered from k1 in every top-level call. Still to do: skipping names already free in the input, and returning the parameter with the integer domain. Owner: symbolic.
+- **status:** fixed
+- **note:** Fixed on `feat/cas-correctness`: a family parameter skips every name free in the input (`k1` taken gives `k2`), and the kernel's engine treats a free `k1`, `k2`, … that no Symbol object names as an integer. Tests: `correctness.test.ts`.
 
 ### SYM-SM-22: `GCD(0, 0)` is 1
 
@@ -239,8 +239,8 @@ Ranked by impact: security, then hangs and crashes, then wrong results, then wro
 - **Evidence:** `rules.ts` `combineLinearTrig` (lines 973 to 1004) and `solve.ts` `solveTrigLinearCombo` build `floatN(Math.hypot(a, b))` and `floatN(Math.atan2(b, a))`. `run('TrigCombine', [ex('sin(x) + cos(x)')])` is `1.4142135623730951 * sin(x + 0.7853981633974483)` (exact: `sqrt(2) * sin(x + pi/4)`); `Solve(sin(x) == cos(x), x)` is `[x == 2 * pi * k4 + 0.7853981633974483, …]` (exact: `pi/4 + pi * k`). The cells are marked inexact, so the flag is honest, but design 5.9 lists `a sin + b cos as one sine` among the exact methods.
 - **Invariant broken:** design 5.4: exact input gives an exact result where one exists.
 - **Suggested fix:** compute `R = sqrt(a^2 + b^2)` with the constructors and `phi` with the exact inverse-trig fold (`atan(b/a)` folds for the school ratios), falling back to floats only when `a` or `b` is inexact.
-- **status:** to be implemented
-- **note:** Partly fixed: TrigCombine with exact rational coefficients gives an exact amplitude and phase. Still to do: solveTrigLinearCombo in the solver still builds floats. Owner: symbolic.
+- **status:** fixed
+- **note:** Fixed on `feat/cas-correctness`: the solver builds the amplitude and phase exactly for exact coefficients: `Solve(sin(x) == cos(x), x)` is `pi/4 + 2 pi k1`. Tests: `correctness.test.ts`.
 
 ## Wrong errors
 
@@ -261,8 +261,8 @@ Ranked by impact: security, then hangs and crashes, then wrong results, then wro
 - **Evidence:** `packages/symbolic/bench/cas.bench.ts` at this commit: `Factor degree-6 polynomial: 84.985 ms/call` (target 5 ms) for `x^6 - 2*x^5 - 3*x^4 + 8*x^3 + 3*x^2 - 8*x + 4`, which comes back irreducible; the fixer's breakdown (`fixer-notes.md`) puts the time in the factor search (parse about 0.1 ms). `Solve quadratic with symbolic coefficients: 3.084 ms/call` (target 3 ms) is also over. Every other bench case passes.
 - **Invariant broken:** design 5.6 and 5.13 targets.
 - **Suggested fix:** the documented modular method (factor modulo a small prime, Hensel lift, bounded recombination) replaces the Kronecker search; a cheap irreducibility test modulo two or three primes catches this input in microseconds.
-- **status:** to be implemented
-- **note:** Not fixed in this round; the bench was not run again. Owner: symbolic.
+- **status:** fixed
+- **note:** Fixed on `feat/cas-correctness`: the bench polynomial is irreducible modulo a small prime, found in 0.35 ms (target 5 ms); the general quadratic solves in 2.2 ms (target 3 ms), its discriminant no longer simplified (which tried to factor it). Tests: `correctness.test.ts`.
 
 ### SYM-SM-26: The two lanes never meet: heavy ops are always `pending`, and the worker cannot be cancelled
 
@@ -281,8 +281,8 @@ Ranked by impact: security, then hangs and crashes, then wrong results, then wro
 - **Evidence:** `mapNodes` rebuilds `fn` nodes with `intern` and no fold (`node.ts` `mapNodes`, `fn` case), so substituted values stay unfolded: `Limit((1 - cos(x))/x^2, x, 0)` is `cos(0)/2`, and `Integral(tan(x), x, 0, 2)` prints `ln(abs(cos(0)))`. `Factor(x^2 + 1, over = complex)` is `(x - i * sqrt(4)/2) * (x + i * sqrt(4)/2)`; `Solve(x^2 == a, x)` gives `sqrt(4 * a)/2`; `CSolve(exp(x) == -1, x)` gives `ln(-1) + 2 * i * pi * k1` (design 8: `ln(-1)` is `i pi` in complex mode); `Factor(6/35)` is `6/35`, not `2 * 3 / (5 * 7)`; `Simplify((x^2 + 2*x + 1)/(x + 1)^3)` records the excluded value as `x^2 + 2 * x + 1 != 0` instead of `x != -1`; divergent integrals report "singular near -4.547473508864641e-13" for a pole at 0.
 - **Invariant broken:** design 5.5 (constructors fold known values) and 5.7 (`excluded` names the values).
 - **Suggested fix:** use `fn(name, ...args)` in `mapNodes`; run the `roots.pull` rule on built radicands; fold `ln(-1)` in complex mode; build `Factor` of a rational from two display products; solve linear excluded factors with `excludedFromFactor` after factoring the cancelled gcd; round the reported singular point to the exact pole when one is known.
-- **status:** to be implemented
-- **note:** Partly fixed: substituted function values are folded by the constructor. On `feat/cas`: square roots pull square factors (`sqrt(4 a)` is `2 sqrt(a)`), a negative half power of a whole number is a root over a number (`sqrt(2)/2`), rational quadratic roots split into a number and a root (`1 - sqrt(2)`), so `Factor(x^2 + 1, over = complex)` is `(x - i)(x + i)`. Still open: `ln(-1)` in complex mode, `Factor(6/35)`, excluded values, the singular point text. Tests: `tidy.test.ts`. Owner: symbolic.
+- **status:** fixed
+- **note:** Fixed on `feat/cas` and `feat/cas-correctness`: roots, quadratic roots and half powers are tidy; `Factor(6/35)` is `2 * 3 / (5 * 7)`; a cancelled factor names its rational zeros (`x != -1`); `ln(-1)` in complex mode is `i pi`; a lone negative power prints as a fraction; pole texts are snapped. Tests: `tidy.test.ts`, `correctness.test.ts`.
 
 ## Fix groups
 

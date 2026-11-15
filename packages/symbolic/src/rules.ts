@@ -8,15 +8,15 @@ import { EMPTY_ASSUMPTIONS, isNonneg, isPositive, signOf } from './assume';
 import type { SymCond, SymFn, SymNode } from './node';
 import {
   ONE, TWO, ZERO, add, andCond, guardMulDigits, guardPowDigits, asInteger, asRational, bigGcd, compareNodes, constN, divideNodes,
-  factoredIntegerNode, floatN, fn, freeSymbols, intN, isExactNumber, isNumberNode, isOneNode, isZeroNode,
+  factoredIntegerNode, factoredRationalNode, floatN, fn, freeSymbols, intN, isExactNumber, isNumberNode, isOneNode, isZeroNode,
   LimitExceeded, mapNodes, mul, negateNode, nodeCount, pow, ratN, rel, symN, toFloat,
 } from './node';
 import { nearestFraction, primeFactorsBig } from './num';
 import type { MPoly, Ticker } from './poly';
 import {
-  mpolyAdd, mpolyDivMod, mpolyFactor, mpolyGcd, mpolyIsZero, mpolyMul, mpolyNormalize, mpolyToTree,
+  mpolyAdd, mpolyDivMod, mpolyFactorExact, mpolyGcd, mpolyIsZero, mpolyMul, mpolyNormalize, mpolyToTree,
   treeToMPoly, treeToUPoly, treeToUPolySym, upolyAdd, upolyDegree, upolyDivMod, upolyFactor, upolyGcd,
-  upolyIsZero, upolyMul, upolyToTree, upolyFromInts,
+  upolyIsZero, upolyMul, upolyNormalize, upolyRationalRoots, upolyToTree, upolyFromInts,
 } from './poly';
 import type { UPoly } from './poly';
 import { condText, toText } from './print';
@@ -617,7 +617,6 @@ function mpolyPow(p: MPoly, e: bigint, tick: Ticker): MPoly {
 
 /** Zero conditions of a cancelled factor: linear univariate factors solve directly. */
 function excludedFromFactor(g: { terms: ReadonlyMap<string, bigint>; den: bigint; gens: readonly SymNode[] }, gens: readonly SymNode[], ctx: RuleCtx): SymCond[] {
-  void ctx;
   const tree = mpolyToTree(g as Parameters<typeof mpolyToTree>[0]);
   for (const v of gens) {
     if (v.k !== 'sym') continue;
@@ -629,6 +628,20 @@ function excludedFromFactor(g: { terms: ReadonlyMap<string, bigint>; den: bigint
     if (coeffs.length === 2 && !isZeroNode(coeffs[1] as SymNode)) {
       const root = divideNodes(negateNode(coeffs[0] as SymNode), coeffs[1] as SymNode);
       return [rel('!=', v, root)];
+    }
+    // a cancelled factor of higher degree names its zeros when they are all rational: x^2 + 2x + 1 != 0 is x != -1
+    const up = treeToUPoly(tree, v, ctx.tick);
+    if (up !== null && upolyDegree(up) > 1) {
+      const roots = upolyRationalRoots(up, ctx.tick);
+      let rest = up;
+      for (const rt of roots) {
+        for (;;) {
+          const { q, r: rm } = upolyDivMod(rest, upolyNormalize([-rt.n, rt.d], 1n), ctx.tick);
+          if (!upolyIsZero(rm) || upolyDegree(rest) < 1) break;
+          rest = q;
+        }
+      }
+      if (roots.length > 0 && upolyDegree(rest) <= 0) return roots.map((rt) => rel('!=', v, rt.d === 1n ? intN(rt.n) : ratN(rt.n, rt.d)));
     }
   }
   return [rel('!=', tree, ZERO)];
@@ -1176,10 +1189,15 @@ export function factorNode(t: SymNode, ctx: RuleCtx, over: 'rational' | 'complex
     return { node, irreducible: false };
   }
   if (t.k === 'rat') {
-    const n = factorNode(intN(t.n), ctx);
-    const d = factorNode(intN(t.d), ctx);
-    if (n.irreducible && d.irreducible) return { node: t, irreducible: true };
-    return { node: divideNodes(n.node, d.node), irreducible: false };
+    const neg = t.n < 0n;
+    const nf = primeFactorsBig(neg ? -t.n : t.n, 2000000, ctx.tick);
+    const df = primeFactorsBig(t.d, 2000000, ctx.tick);
+    if (nf === null || df === null) return { node: t, irreducible: true };
+    // 6/35 is 2 * 3 / (5 * 7): the parts stay unfolded, so the factors show (SYM-SM-27)
+    if (nf.length + df.length <= 1) return { node: t, irreducible: true };
+    const node = factoredRationalNode(nf, df, neg);
+    ctx.note('factor.int', t, node);
+    return { node, irreducible: false };
   }
   const atoms = collectAtoms(t);
   const syms = [...freeSymbols(t)].map((s) => symN(s)).sort(compareNodes);
@@ -1191,7 +1209,7 @@ export function factorNode(t: SymNode, ctx: RuleCtx, over: 'rational' | 'complex
   }
   const mp = treeToMPoly(t, gens, ctx.tick);
   if (mp === null || mpolyIsZero(mp)) return { node: t, irreducible: true };
-  const { content, factors, rest } = mpolyFactor(mp, ctx.tick);
+  const { unit, factors, rest } = mpolyFactorExact(mp, ctx.tick);
   if (factors.length === 0) {
     if (over === 'complex') {
       const c = factorComplexUni(t, gens, ctx);
@@ -1200,7 +1218,7 @@ export function factorNode(t: SymNode, ctx: RuleCtx, over: 'rational' | 'complex
     return { node: t, irreducible: true };
   }
   const parts: SymNode[] = [];
-  if (content !== 1n) parts.push(intN(content));
+  if (unit.n !== unit.d) parts.push(unit.d === 1n ? intN(unit.n) : ratN(unit.n, unit.d));
   const merged = mergeFactorTrees(factors.map(({ f, m }) => ({ tree: mpolyToTree(f), m })));
   for (const { tree, m } of merged) {
     parts.push(m === 1 ? tree : pow(tree, intN(m)));
@@ -1208,10 +1226,21 @@ export function factorNode(t: SymNode, ctx: RuleCtx, over: 'rational' | 'complex
   const restTree = mpolyToTree(rest);
   if (!isOneNode(restTree)) parts.push(restTree);
   const built = parts.length === 0 ? ONE : mul(...parts);
-  const node = verifyFactor(t, built, ctx);
-  if (node === null || node.id === t.id) return { node: t, irreducible: true };
+  // the unit was checked term by term against the product, so the factorisation is exact
+  const node = built;
+  if (node.id === t.id) return { node: t, irreducible: true };
   ctx.note('factor.poly', t, node);
   return { node, irreducible: false };
+}
+
+/** True when content * sign * prod(f^m) is exactly p (a factorisation can never be wrong, design 5.8). */
+function upolyProductIs(p: UPoly, content: bigint, fs: readonly { f: UPoly; m: number }[], ctx: RuleCtx): boolean {
+  const sign = (p.c[p.c.length - 1] as bigint) < 0n ? -1n : 1n;
+  let prod: UPoly = upolyNormalize([content * sign], 1n);
+  for (const { f, m } of fs) for (let i = 0; i < m; i++) prod = upolyMul(prod, f, ctx.tick);
+  const a = upolyNormalize(p.c, p.den);
+  if (prod.c.length !== a.c.length || prod.den * a.den === 0n) return false;
+  return prod.c.every((c, i) => c * a.den === (a.c[i] as bigint) * prod.den);
 }
 
 /**
@@ -1290,7 +1319,8 @@ function factorUni(t: SymNode, p: UPoly, v: SymNode, ctx: RuleCtx, over: 'ration
   }
   if (!changed) return { node: t, irreducible: true };
   const built = mul(...out);
-  const node = verifyFactor(t, built, ctx);
+  // over the rationals the product is checked as polynomials: exact, and free of the rational-function size caps
+  const node = over === 'rational' && upolyProductIs(p, content, [...factors, ...irreducible], ctx) ? built : verifyFactor(t, built, ctx);
   if (node === null || node.id === t.id) return { node: t, irreducible: true };
   ctx.note('factor.poly', t, node);
   return { node, irreducible: false };
