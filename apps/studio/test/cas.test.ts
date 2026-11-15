@@ -50,6 +50,10 @@ describe('algebra in the studio', () => {
     expect(m.session.figure.value('R2')).toEqual({ x: 3, y: 0 });
     expect(m.session.figure.value('ok')).toBe(true);
     expect(String(m.session.figure.value('label'))).toMatch(/^\$.*\$$/);
+    // round 8 rows: an integral through a pole, trig solving, cyclotomic factors
+    expect(Number(m.session.figure.value('Ik'))).toBeCloseTo(4, 6);
+    expect(row('f12').querySelector('svg')).not.toBeNull();
+    expect(row('tr').querySelector('svg')).not.toBeNull();
   });
 
   it('an unknown letter offers to make it a Symbol', async () => {

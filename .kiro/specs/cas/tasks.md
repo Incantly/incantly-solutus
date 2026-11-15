@@ -13,4 +13,4 @@ Branch: `feat/cas`. The engine came from the symbolic area.
 - [x] 9. Round 5: exact results inside the calculus area: Integral(f, a, b), Integral(f), Extremum(f) (Tangent and Derivative already use the functions area's own symbolic derivative)
 - [x] 10. Round 6: correctness findings SYM-SM-14, 16, 17, 19, 21, 23, 25, 27
 - [x] 11. Round 7: the worker lane (SYM-SM-26)
-- [ ] 12. Round 8: example, screenshots, final check
+- [x] 12. Round 8: example, screenshots, final check

@@ -333,7 +333,10 @@ button:disabled { opacity: 0.4; cursor: default; }
 .cas-body { flex: 1; min-width: 0; }
 .cas-input { width: 100%; border: 0; border-bottom: 1px solid transparent; background: transparent; font: 14.5px/1.5 var(--mono); padding: 2px 0; outline: none; }
 .cas-input:focus { border-bottom-color: #2f6fdb; }
-.cas-output { display: flex; align-items: center; gap: 6px; margin-top: 2px; font-size: 1.1em; min-height: 24px; flex-wrap: wrap; }
+.cas-output { display: flex; align-items: center; gap: 6px; margin-top: 2px; font-size: 1.1em; min-height: 24px; overflow-x: auto; overflow-y: hidden; padding-bottom: 2px; }
+.cas-output > * { flex: none; }
+.cas-output > .cas-long { flex: 1 1 0; min-width: 0; overflow-wrap: anywhere; }
+.cas-output:has(.cas-long) { flex-wrap: wrap; overflow-x: visible; }
 .cas-sign { color: #6b7280; }
 .cas-sign.approx { color: #b45309; }
 .cas-pending { color: rgba(31, 36, 48, 0.5); }
