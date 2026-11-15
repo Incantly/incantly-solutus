@@ -5,6 +5,8 @@
  */
 import { plotFunction, traceImplicit, fillRegion } from '@incantly/plot';
 import { arcPoints } from './hit';
+import { math } from '@incantly/view';
+import { canvasMeasure, drawMath } from './mathdraw';
 import { isParticlesValue, makeParticleBatch } from '@incantly/kernel';
 import type { FunctionValue, ParticleBatchPlain, ParticlesValue } from '@incantly/kernel';
 import { gridStep, tickText } from './viewport';
@@ -33,6 +35,8 @@ export interface SceneItem {
   readonly time?: number;
   /** A point's trace as packed `x, y` pairs; `NaN` pairs break the line (design 6). */
   readonly trace?: Float64Array;
+  /** A Text placed on the graph (`with at = …`, text-logic design 2.1 and 7). */
+  readonly text?: { readonly at: Pt; readonly size: number; readonly anchor: string; readonly rotate: number; readonly bg?: string };
 }
 
 /** A place on the canvas the pointer can hover or drag. Coordinates in CSS pixels. */
@@ -946,6 +950,30 @@ function paintTrace(ctx: Ctx, vp: Viewport, xs: Float64Array, color: string): vo
   ctx.restore();
 }
 
+/** A placed text: the anchor corner at `at`, rotated about it; maths typeset by the view's engine. */
+function paintText(ctx: Ctx, vp: Viewport, s: string, t: NonNullable<SceneItem['text']>, color: string, hits: Hit[], id: number): void {
+  const l = math.layoutText(s, t.size, canvasMeasure);
+  const h = l.asc + l.desc;
+  // compass words, and the controls' corners (tl, tr, bl, br)
+  const an = ({ tl: 'nw', tr: 'ne', bl: 'sw', br: 'se' } as Record<string, string>)[t.anchor] ?? t.anchor;
+  const ax = an.includes('w') ? 0 : an.includes('e') ? l.w : l.w / 2;
+  const ay = an.includes('n') ? 0 : an.includes('s') ? h : h / 2;
+  const x = vp.px(t.at.x);
+  const y = vp.py(t.at.y);
+  ctx.save();
+  ctx.translate(x, y);
+  // a maths angle counter-clockwise is clockwise on the canvas, whose y grows down
+  if (t.rotate) ctx.rotate(-t.rotate);
+  if (t.bg) {
+    ctx.fillStyle = t.bg;
+    ctx.fillRect(-ax - 3, -ay - 2, l.w + 6, h + 4);
+  }
+  drawMath(ctx, l, -ax, -ay + l.asc, '#1f2430');
+  ctx.restore();
+  hits.push({ k: 'rect', x0: x - ax, y0: y - ay, x1: x - ax + l.w, y1: y - ay + h, text: s.replace(/\$/g, ''), id });
+  void color;
+}
+
 /* ------------------------------ the scene ------------------------------ */
 
 /** Paints the grid and every item, and returns the hit areas, topmost last. */
@@ -959,6 +987,10 @@ export function paintScene(ctx: Ctx, vp: Viewport, items: readonly SceneItem[]):
   for (const it of sorted) {
     try {
       if (it.trace && it.trace.length >= 4) paintTrace(ctx, vp, it.trace, it.color);
+      if (it.type === 'Text') {
+        if (it.text && typeof it.value === 'string') paintText(ctx, vp, it.value, it.text, it.color, hits, it.id);
+        continue;
+      }
       if (it.type === 'Particles') {
         if (isParticlesValue(it.value)) paintParticles(ctx, vp, it.value, it.time ?? 0);
         continue;

@@ -93,6 +93,13 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
   const selection = createSelection();
   const fromCanvas = selectionFrom(selection, 'canvas');
   const hiddenByStyle = (o: { style: { shown: boolean } }): boolean => o.style.shown === false;
+  /** A kernel colour as CSS: `{ r, g, b, a }` with channels 0 to 255 (or 0 to 1). */
+  const colorCss = (c: unknown): string | undefined => {
+    const o = c as { r?: number; g?: number; b?: number; a?: number };
+    if (typeof o.r !== 'number' || typeof o.g !== 'number' || typeof o.b !== 'number') return undefined;
+    const k = o.r <= 1 && o.g <= 1 && o.b <= 1 ? 255 : 1;
+    return `rgba(${Math.round(o.r * k)}, ${Math.round(o.g * k)}, ${Math.round(o.b * k)}, ${o.a ?? 1})`;
+  };
   const items = (): SceneItem[] => {
     const out: SceneItem[] = [];
     const expressions = holder.expressions;
@@ -100,6 +107,15 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
     const traced = new Set(tracedIds(session.figure).map((x) => x as unknown as number));
     for (const o of session.figure.objects()) {
       if (!o.cell.defined) continue;
+      // a text is drawn on the graph when it has a place (`with at = …`)
+      if (o.type === 'Text') {
+        const ext = o.style.ext as { at?: { x: number; y: number }; size?: number; anchor?: string; rotate?: number; bg?: unknown };
+        if (!ext.at || expressions.isHidden(o.id) || hiddenByStyle(o)) continue;
+        const bg = typeof ext.bg === 'object' && ext.bg !== null ? colorCss(ext.bg) : undefined;
+        out.push({ id: o.id, name: o.name, type: 'Text', typeText: 'Text', value: o.cell.value, color: expressions.colorOf(o.id), free: false, label: false,
+          text: { at: ext.at, size: ext.size ?? 16, anchor: ext.anchor ?? 'sw', rotate: ext.rotate ?? 0, ...(bg ? { bg } : {}) } });
+        continue;
+      }
       if (expressions.isHidden(o.id)) continue;
       // hidden with `with visible = false`: left out, or drawn faintly while the show/hide tool is on
       if (hiddenByStyle(o) && !holder.tools?.showHidden()) continue;

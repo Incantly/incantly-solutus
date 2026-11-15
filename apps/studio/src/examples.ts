@@ -247,6 +247,10 @@ export const EXAMPLES: readonly Example[] = [
       'evens = KeepIf(L, k, k / 2 == floor(k / 2))',
       'inside = IsInRegion(M, c)',
       'onLine = Related(M, Line(A, B), "on")',
+      'label = FormulaText(f) with at = (-2.8, 2.6), size = 22',
+      'tag = "M = {M}" with at = M, anchor = nw, size = 15',
+      'grid = TableText([[1, 2], [3, 4]], brackets = "paren") with at = (1.2, -1.6), size = 20',
+      'tilted = "$\\\\sqrt{a} \\\\approx {sqrt(a):3sf}$" with at = (-2.5, -2.2), rotate = 15deg, size = 18, bg = rgb(255, 245, 200)',
     ],
   },
 ];

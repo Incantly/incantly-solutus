@@ -11,6 +11,8 @@ import type { LineNode } from '../../language/ast';
 import { valueText } from '../../language/runtime';
 import type { CommandForm, CommandSpec, ParamSpec } from '../../language/table';
 import { registerNotice } from '../../errors/notices';
+import { registerPropertyTypes } from '../../graph/props';
+import { PROPERTIES } from '../../language/props';
 import { lineLatex, numberLatex, valueLatex } from './latex';
 import { bestRational, continuedFraction, continuedFractionLatex, fractionLatex, scientificLatex, surd } from './numtext';
 
@@ -547,6 +549,24 @@ export function registerText(registry: CommandRegistry): void {
   if (registered) return;
   registered = true;
   for (const [kind, s] of Object.entries(NOTICES)) registerNotice(kind, s);
+  // placement and style of a text (design 2.1); properties, so they never make the text recompute
+  const props = {
+    at: { kind: 'point', allowed: 'a point, such as (1, 2) or the name of a point', expr: true },
+    anchor: { kind: 'enum', values: ['nw', 'n', 'ne', 'w', 'c', 'e', 'sw', 's', 'se'], allowed: 'nw, n, ne, w, c, e, sw, s or se' },
+    size: { kind: 'number', min: 4, max: 200, allowed: 'a size in points from 4 to 200', expr: true },
+    rotate: { kind: 'number', allowed: 'an angle', expr: true },
+    bg: { kind: 'color', allowed: 'a colour name, rgb(r, g, b) or hsl(h, s, l)', expr: true },
+  } as const;
+  for (const [key, spec] of Object.entries(props)) {
+    const old = PROPERTIES[key];
+    if (!old) PROPERTIES[key] = spec as (typeof PROPERTIES)[string];
+    else if (old.kind === 'enum' && spec.kind === 'enum') {
+      // another area owns the key (controls use tl, tr, bl, br): the compass words are added beside its words
+      const values = [...new Set([...(old.values ?? []), ...spec.values])];
+      PROPERTIES[key] = { ...old, values, allowed: values.join(', ') };
+    }
+    registerPropertyTypes(key, ['Text']);
+  }
 }
 
 export { exprLatex, lineLatex, nameLatex, numberLatex, valueLatex } from './latex';
