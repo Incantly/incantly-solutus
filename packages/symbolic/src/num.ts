@@ -2,7 +2,7 @@
  * Exact whole-number tools (cas/design.md 2.6): primality, factorisation, divisors,
  * bases, extended gcd, modular powers, binomial coefficients. All BigInt; pure.
  */
-import { bigGcd, bigIsqrt, bitLength } from './node';
+import { LimitExceeded, bigGcd, bigIsqrt, bitLength } from './node';
 
 /* --------------------------------- primes ----------------------------------- */
 
@@ -180,11 +180,23 @@ function pollardBrent(n: bigint, budget: { steps: number }): bigint | null {
  * Prime factors with repeats, ascending. Trial division to 1e6 (sieve to 1e5, then odd
  * steps), then Pollard rho. Returns null when the step budget runs out.
  */
-export function primeFactorsBig(n: bigint, maxSteps = 2000000): bigint[] | null {
+export function primeFactorsBig(n: bigint, maxSteps = 2000000, tick: NumTicker = NO_NUM_TICK): bigint[] | null {
   if (n < 0n) n = -n;
   if (n < 2n) return [];
   const out: bigint[] = [];
-  const budget = { steps: maxSteps };
+  // SYM-SM-4: the area's own cap stays, and every step is charged to the run as well, weighted by the size of n
+  const weight = Math.max(1, Math.ceil(bitLength(n) / 64));
+  const own = { steps: maxSteps };
+  const budget = {
+    get steps(): number {
+      return own.steps;
+    },
+    set steps(v: number) {
+      const used = own.steps - v;
+      own.steps = v;
+      if (used > 0) tick.tick(used * weight);
+    },
+  };
   let rest = n;
   for (const p of SMALL_PRIMES) {
     const bp = BigInt(p);
@@ -192,6 +204,9 @@ export function primeFactorsBig(n: bigint, maxSteps = 2000000): bigint[] | null 
     while (rest % bp === 0n) {
       out.push(bp);
       rest /= bp;
+      // each division of a long number is work: charged to the run, so 10^99000 does not stall it
+      budget.steps -= 1;
+      if (budget.steps <= 0) return null;
     }
     budget.steps -= 2;
     if (budget.steps <= 0) return null;
@@ -213,7 +228,7 @@ export function primeFactorsBig(n: bigint, maxSteps = 2000000): bigint[] | null 
   while (stack.length > 0) {
     const m = stack.pop() as bigint;
     if (m === 1n) continue;
-    if (isPrimeBig(m)) {
+    if (isPrimeBig(m, tick)) {
       out.push(m);
       continue;
     }
@@ -258,7 +273,10 @@ export function divisorSum(groups: readonly { p: bigint; e: number }[], tick: Nu
   return sum;
 }
 
-export function divisorsFromFactors(groups: readonly { p: bigint; e: number }[]): bigint[] {
+export function divisorsFromFactors(groups: readonly { p: bigint; e: number }[], tick: NumTicker = NO_NUM_TICK): bigint[] {
+  // SYM-SM-3: the list is charged before it is built, so a number with billions of divisors ends the run
+  const count = divisorCount(groups);
+  tick.tick(count > 1_000_000_000n ? 1e9 : Number(count));
   let divs: bigint[] = [1n];
   for (const { p, e } of groups) {
     const next: bigint[] = [];
@@ -342,13 +360,16 @@ export function fromBaseText(text: string, base: bigint): bigint | null {
 /* --------------------------- binomials, rationals ---------------------------- */
 
 /** Exact binomial coefficient by the multiplicative formula with gcd reduction. */
-export function binomialBig(n: bigint, k: bigint): bigint {
+export function binomialBig(n: bigint, k: bigint, tick: NumTicker = NO_NUM_TICK): bigint {
   if (k < 0n || k > n) return 0n;
   if (k === 0n || k === n) return 1n;
   if (k > n - k) k = n - k;
+  // SYM-SM-4: k multiplications; a k past a million is refused (the result would pass any digit limit)
+  if (k > 1000000n) throw new LimitExceeded('digits');
   let num = 1n;
   let den = 1n;
   for (let i = 1n; i <= k; i++) {
+    tick.tick(1);
     num *= n - k + i;
     den *= i;
     const g = bigGcd(num < 0n ? -num : num, den);

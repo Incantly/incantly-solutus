@@ -258,10 +258,10 @@ function solveQuadraticRat(f: UPoly, v: SymNode, domain: 'real' | 'complex'): Sy
   if (s > 0) {
     const sq = pow(discExact, ratN(1n, 2n));
     const simp = simplifyNode(sq, ruleCtx()).node;
-    return [
-      divideNodes(add(negateNode(B), simp), mul(TWO, A)),
-      divideNodes(add(negateNode(B), negateNode(simp)), mul(TWO, A)),
-    ];
+    // -B/(2A) ± sqrt(D)/(2A) as two terms, so the number divides each: 1 - sqrt(2), not (-2 sqrt(2) + 2)/2 (SYM-SM-27)
+    const centre = divideNodes(negateNode(B), mul(TWO, A));
+    const half = divideNodes(simp, mul(TWO, A));
+    return [add(centre, half), add(centre, negateNode(half))];
   }
   if (domain === 'complex') {
     const sq = simplifyNode(pow(negateNode(discExact), ratN(1n, 2n)), ruleCtx()).node;

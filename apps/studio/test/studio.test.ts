@@ -1,5 +1,5 @@
 /** The studio screen: examples, the data-analysis lines, the graph's camera and painter, and the mounted page. */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { defaultState, labLines, parseLab } from '../src/datalab';
 import type { LabNames } from '../src/datalab';
 import { EXAMPLES } from '../src/examples';
@@ -7,11 +7,17 @@ import { drawsOnGraph, lineName } from '../src/expressions';
 import { paintScene, sceneBounds } from '../src/graph/paint';
 import type { SceneItem } from '../src/graph/paint';
 import { Viewport, gridStep } from '../src/graph/viewport';
+import { loadCasEngine } from '../src/registry';
 import { KernelSession } from '../src/session';
 import { mountStudio } from '../src/studio-page';
 import type { Mounted } from '../src/studio-page';
 
 const NAMES: LabNames = { data: 'pts1', plot: 'chart1', stats: 'stats1', fit: 'fit1', extra: 'overlay1', band: 'band1', curve: 'nc1' };
+
+// the Algebra example needs the CAS engine, which the studio loads on demand
+beforeAll(async () => {
+  await loadCasEngine();
+});
 
 describe('examples', () => {
   it.each(EXAMPLES.map((e) => [e.id, e] as const))('%s applies every line and leaves nothing undefined', (_id, ex) => {

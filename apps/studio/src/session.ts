@@ -3,7 +3,7 @@
  * outcome of each action as text or an error object, the clock). It uses only the kernel's public API.
  */
 import {
-  Figure, animatingIds, brokenSteps, buttonLabelOf, captionsOf, choiceStateOf, clickButton, commitInputText, defaultCaption, getStoredHandler,
+  CAS_COMMAND_NAMES, Figure, animatingIds, onCasEngine, brokenSteps, buttonLabelOf, captionsOf, choiceStateOf, clickButton, commitInputText, defaultCaption, getStoredHandler,
   inputErrorOf, inputNoticeOf, targetTextOf, inputTextOf, isClickable, listHandlers, numberSource, playerOf, runHandler, runLoadHandlers, setChoiceIndex,
   toggleCheckbox, tracedIds, typeInputText, valueText,
 } from '@incantly/kernel';
@@ -11,7 +11,7 @@ import type { HandlerEvent, HandlerRun, Player } from '@incantly/kernel';
 import type { CommandRegistry, ErrorObject, ObjectView } from '@incantly/kernel';
 import { rightSide } from '@incantly/ui';
 import type { CauseLink, LineRow, RowControl, SubmitResult } from '@incantly/ui';
-import { studioRegistry } from './registry';
+import { loadCasEngine, studioRegistry } from './registry';
 
 /** What an action reports: a sentence for the status line (plus notices), or the error object. */
 export type Outcome = { readonly ok: true; readonly message: string; readonly notices: readonly string[] } | { readonly ok: false; readonly error: ErrorObject };
@@ -58,6 +58,23 @@ export class KernelSession {
     this.commands = commands;
     this.figure = new Figure({ commands });
     this.watch();
+    // objects made while the algebra engine was still loading are computed again once it is in (cas spec R2.7)
+    onCasEngine(() => this.refreshPending());
+  }
+
+  /** True when an object waits for the algebra engine. */
+  hasPending(): boolean {
+    return this.figure.objects().some((o) => !o.cell.defined && o.cell.reason === 'pending');
+  }
+
+  /** Builds the figure again from its own lines when something waited for the engine; the undo history is kept short. */
+  refreshPending(): void {
+    if (!this.hasPending()) return;
+    const { figure, report } = Figure.fromScript(this.figure.toScript(), { commands: this.commands });
+    if (!report.ok && report.applied === 0) return;
+    this.figure = figure;
+    this.watch();
+    this.emit();
   }
 
   /** Called after every kernel event (a line, a value, a rename, undo, the clock). */
@@ -109,6 +126,7 @@ export class KernelSession {
 
   /** The input line's handler: one line through `apply`. A failing line changes nothing. */
   submit(source: string): SubmitResult {
+    this.needEngine(source);
     const r = this.figure.apply(source.trim());
     if (!r.ok) return { ok: false, error: r };
     // `on` and `ClearHandler` lines change handlers, which raise no figure event of their own
@@ -118,6 +136,7 @@ export class KernelSession {
 
   /** Several lines as one undo step; every line applies or fails on its own (the teacher's `draw`). */
   applyLines(lines: readonly string[], label: string, mode: 'independent' | 'atomic' = 'independent'): Outcome {
+    this.needEngine(lines.join('\n'));
     const r = this.figure.applyBatch(lines, { group: label, mode });
     if (r.applied > 0) this.linesChanged();
     if (mode === 'atomic' && !r.ok) {
@@ -127,6 +146,20 @@ export class KernelSession {
     const failed = r.results.length - r.applied;
     return this.done(failed > 0 ? `${label}: ${r.applied} of ${r.results.length} lines applied` : `${label}: ${r.applied} lines applied`, r.notices);
   }
+
+  /** Starts loading the algebra engine when a text names a CAS command (the engine is its own chunk). */
+  private needEngine(text: string): void {
+    if (this.engineAsked) return;
+    for (const m of text.matchAll(/\b([A-Z][A-Za-z]*)\s*\(/g)) {
+      if (CAS_COMMAND_NAMES.has(m[1] as string)) {
+        this.engineAsked = true;
+        void loadCasEngine();
+        return;
+      }
+    }
+  }
+
+  private engineAsked = false;
 
   /* ------------------------------ rows ------------------------------ */
 
@@ -427,6 +460,7 @@ export class KernelSession {
 
   /** Replaces the figure with the script's. When nothing in it could be used, the current figure stays. */
   load(text: string): LoadOutcome {
+    this.needEngine(text);
     const { figure, report } = Figure.fromScript(text, { commands: this.commands });
     const total = report.applied + report.skipped;
     const usable = report.ok || report.applied > 0;

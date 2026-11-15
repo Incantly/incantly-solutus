@@ -294,10 +294,16 @@ function latexOf(n: SymNode): string {
     }
     case 'mul': {
       const { num, den } = splitDiv(n.factors);
-      const numStr = num.length === 0 ? '1' : num.map(latexFactor).join(' \\cdot ');
-      if (den.length === 0) return numStr;
-      const denStr = den.map(latexFactor).join(' \\cdot ');
-      return `\\frac{${numStr}}{${denStr}}`;
+      // a leading -1 is a minus sign: -\sqrt{2}, not -1 \cdot \sqrt{2}
+      let sign = '';
+      let top = num;
+      if (top.length > 1 && top[0]?.k === 'int' && top[0].v === -1n) {
+        sign = '-';
+        top = top.slice(1);
+      }
+      const numStr = top.length === 0 ? '1' : latexProduct(top);
+      if (den.length === 0) return sign + numStr;
+      return `${sign}\\frac{${numStr}}{${latexProduct(den)}}`;
     }
     case 'pow': {
       if (n.base.k === 'const' && n.base.name === 'e') return `\\exp\\left(${latexOf(n.exp)}\\right)`;
@@ -346,6 +352,23 @@ function latexFn(name: string, args: readonly string[]): string {
   if (LATEX_OPERATORS.has(name)) return `\\${name}\\left(${list}\\right)`;
   const safe = name.replace(/[^A-Za-z0-9]/g, '');
   return `\\operatorname{${safe}}\\left(${list}\\right)`;
+}
+
+/**
+ * Factors side by side, as written by hand: `5x`, `2\sqrt{3}`, `(x - 2)(x - 3)`. A dot stays only where two numbers
+ * would run together (`2 \cdot 3^{x}`).
+ */
+function latexProduct(fs: readonly SymNode[]): string {
+  let out = '';
+  fs.forEach((f, i) => {
+    const t = latexFactor(f);
+    if (i > 0) {
+      const startsWithDigit = /^\{?-?[\d.]/.test(t);
+      out += startsWithDigit ? ' \\cdot ' : ' ';
+    }
+    out += t;
+  });
+  return out;
 }
 
 function latexFactor(f: SymNode): string {

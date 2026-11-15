@@ -4,7 +4,7 @@
  * the reason it failed. The last row is empty: type there to add a line. Rows are keyed by object id and updated in
  * place, so typing is never interrupted by a repaint.
  */
-import { complete, niceRange, signatureHelp, valueText } from '@incantly/kernel';
+import { complete, isSymValue, niceRange, signatureHelp, valueText } from '@incantly/kernel';
 import type { Completion, ErrorObject, FigureView } from '@incantly/kernel';
 import { nextName } from '@incantly/ui';
 import type { LineRow, RowControl } from '@incantly/ui';
@@ -744,9 +744,13 @@ export function mountExpressions(opts: ExpressionOptions): ExpressionList {
     if (m?.approx && v.textContent) v.title = 'rounded';
     // a text with $…$ parts is typeset (text-logic design 6)
     const full = r.type === 'Text' && typeof value === 'string' && value.includes('$') && (session.figure.get(r.name)?.style.ext as Record<string, unknown> | undefined)?.['latex'] === 'full';
-    const typeset = r.type === 'Text' && typeof value === 'string' ? (full ? fullElement(value) : mathElement(value)) : undefined;
+    // an Expr, a Cond or a list of them is typeset from the engine's LaTeX (cas ui.md 1, 5: ≈ for an inexact value)
+    const sym = symLatex(value);
+    const typeset = sym !== undefined
+      ? mathElement(`$${sym.latex}$`)
+      : r.type === 'Text' && typeof value === 'string' ? (full ? fullElement(value) : mathElement(value)) : undefined;
     if (typeset) {
-      v.replaceChildren(document.createTextNode('= '), typeset);
+      v.replaceChildren(document.createTextNode(sym && !sym.exact ? '≈ ' : '= '), typeset);
       v.classList.add('typeset');
     }
     if (v.textContent || typeset) out.append(v);
@@ -1242,4 +1246,15 @@ function intervalCard(rec: { fields: Record<string, unknown> }, color: string): 
   grid.append(el('span', 'k', 'margin'), el('span', 'v', fmt(F['margin'])));
   card.append(grid, miniInterval(F['lo'] as number, F['hi'] as number, F['estimate'] as number, color));
   return card;
+}
+
+/** The LaTeX of a symbolic value, or of a list (of lists) of them, and whether every part is exact. */
+function symLatex(v: unknown): { latex: string; exact: boolean } | undefined {
+  if (isSymValue(v)) return { latex: v.latex, exact: v.exact };
+  if (!Array.isArray(v) || v.length === 0) return undefined;
+  const parts = v.map((x) => symLatex(x));
+  if (parts.some((p) => p === undefined)) return undefined;
+  const ok = parts as { latex: string; exact: boolean }[];
+  const inner = ok.map((p) => p.latex).join(',\\; ');
+  return { latex: `\\left\\{ ${inner} \\right\\}`, exact: ok.every((p) => p.exact) };
 }
