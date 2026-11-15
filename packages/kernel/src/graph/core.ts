@@ -463,6 +463,12 @@ export class FigureCore {
           const rec = this.byIdMap.get(id);
           return rec ? rec.valueIn.map((i) => ({ id: i.id, name: i.p.name, value: i.cell.defined ? i.cell.value : undefined })) : [];
         },
+        definitionOf: (id) => {
+          const rec = this.byIdMap.get(id);
+          if (!rec) return undefined;
+          const c = rec.cell;
+          return { text: printLineNode(rec.p.node), node: rec.p.node, ...(c.defined ? {} : { reason: c.reason, ...(c.detail ? { detail: c.detail } : {}) }) };
+        },
         argsOf: (id) => {
           const cmd = this.byIdMap.get(id)?.p.compiled?.command;
           if (!cmd) return [];

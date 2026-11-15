@@ -226,4 +226,28 @@ export const EXAMPLES: readonly Example[] = [
       'edge = Circle((0, 0), 5.5)',
     ],
   },
+  {
+    id: 'text-logic',
+    title: 'Text and logic: live text, fractions, surds, tests',
+    lines: [
+      'a = 0.75 in 0..2 step 0.05',
+      'A = (0, 0)',
+      'B = (4, 2)',
+      'M = Midpoint(A, B)',
+      'c = Circle(A, 3)',
+      'f(x) = x^2/2 - 3*x',
+      'info = "a = {a:2}, as a fraction {a:frac}, as a percent {a:pct}"',
+      'frac = FractionText(a)',
+      'root = SurdText(sqrt(8)/3)',
+      'big = ScientificText(123456, sig = 3)',
+      'place = Ordinal(21)',
+      'how = Text(M, show = "definition")',
+      'formula = FormulaText(f)',
+      'L = [1, 2, 3, 4, 5, 6, 7, 8]',
+      'evens = KeepIf(L, k, k / 2 == floor(k / 2))',
+      'inside = IsInRegion(M, c)',
+      'onLine = Related(M, Line(A, B), "on")',
+    ],
+  },
 ];
+

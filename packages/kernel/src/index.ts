@@ -36,5 +36,7 @@ export * from './commands/animation/index';
 export * from './commands/lists/index';
 export * from './commands/statistics/index';
 export * from './commands/probability/index';
+export * as text from './commands/text/index';
+export { registerText } from './commands/text/index';
 export { DEFAULT_FORMAT, describeObject, formatNumber, fractionOf, lineEquation, niceRange, prettyText, speechText, summarize, valueTextOf } from './algebra/format';
 export type { ObjectFacts, Summary, ValueFormat } from './algebra/format';
