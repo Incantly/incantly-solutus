@@ -5,7 +5,8 @@
  */
 import { plotFunction, traceImplicit, fillRegion } from '@incantly/plot';
 import { arcPoints } from './hit';
-import type { FunctionValue } from '@incantly/kernel';
+import { isParticlesValue, makeParticleBatch } from '@incantly/kernel';
+import type { FunctionValue, ParticleBatchPlain, ParticlesValue } from '@incantly/kernel';
 import { gridStep, tickText } from './viewport';
 import type { Viewport } from './viewport';
 
@@ -28,6 +29,10 @@ export interface SceneItem {
   readonly selected?: boolean;
   /** The pointer is over its row or over it. */
   readonly hovered?: boolean;
+  /** The clock now, for particle systems (animation-time design 10). */
+  readonly time?: number;
+  /** A point's trace as packed `x, y` pairs; `NaN` pairs break the line (design 6). */
+  readonly trace?: Float64Array;
 }
 
 /** A place on the canvas the pointer can hover or drag. Coordinates in CSS pixels. */
@@ -884,6 +889,63 @@ function paintDist(ctx: Ctx, vp: Viewport, d: { spec: { discrete: boolean; pdf: 
   stroke(ctx, paths, c, 2.5);
 }
 
+/* ------------------------------ animation ------------------------------ */
+
+/** One batch per particle system, reused every frame. */
+const BATCHES = new WeakMap<object, ParticleBatchPlain>();
+
+/** A particle system on the CPU path (animation-time design 10.7): each live particle as a disc of its colour. */
+function paintParticles(ctx: Ctx, vp: Viewport, v: ParticlesValue, t: number): void {
+  let b = BATCHES.get(v.program);
+  if (!b || b.count !== v.spec.count) {
+    b = makeParticleBatch(v.spec.count);
+    BATCHES.set(v.program, b);
+  }
+  v.program.evalCpu(t, t, b);
+  ctx.save();
+  // `blend = add` brightens towards white; on the studio's white board that would hide the particles, so it is drawn
+  // as normal here (a dark board or the GPU renderer can honour it)
+  for (let i = 0; i < b.count; i++) {
+    const a = b.alpha[i] as number;
+    const size = b.size[i] as number;
+    if (!(a > 0.003) || !(size > 0)) continue;
+    const x = vp.px(b.x[i] as number);
+    const y = vp.py(b.y[i] as number);
+    if (x < -20 || y < -20 || x > vp.w + 20 || y > vp.h + 20) continue;
+    const c = (b.rgba[i] as number) >>> 0;
+    const r = Math.max(0.6, (v.spec.sizeIsPx ? size : size * vp.ppu) / 2);
+    ctx.globalAlpha = Math.min(1, a * (((c & 255) / 255) || 1));
+    ctx.fillStyle = `rgb(${c >>> 24}, ${(c >>> 16) & 255}, ${(c >>> 8) & 255})`;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+/** A trace: the path the point has drawn so far, in its colour (design 6). */
+function paintTrace(ctx: Ctx, vp: Viewport, xs: Float64Array, color: string): void {
+  ctx.save();
+  ctx.strokeStyle = alpha(color, 0.75);
+  ctx.lineWidth = 2;
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  let pen = false;
+  for (let i = 0; i + 1 < xs.length; i += 2) {
+    const x = xs[i] as number;
+    const y = xs[i + 1] as number;
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      pen = false;
+      continue;
+    }
+    if (pen) ctx.lineTo(vp.px(x), vp.py(y));
+    else ctx.moveTo(vp.px(x), vp.py(y));
+    pen = true;
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
 /* ------------------------------ the scene ------------------------------ */
 
 /** Paints the grid and every item, and returns the hit areas, topmost last. */
@@ -896,6 +958,11 @@ export function paintScene(ctx: Ctx, vp: Viewport, items: readonly SceneItem[]):
   const sorted = [...items].sort((a, b) => rank(a.type) - rank(b.type));
   for (const it of sorted) {
     try {
+      if (it.trace && it.trace.length >= 4) paintTrace(ctx, vp, it.trace, it.color);
+      if (it.type === 'Particles') {
+        if (isParticlesValue(it.value)) paintParticles(ctx, vp, it.value, it.time ?? 0);
+        continue;
+      }
       if (it.ghost) {
         // a preview or a hidden object: faint and dashed, and not hoverable
         ctx.save();

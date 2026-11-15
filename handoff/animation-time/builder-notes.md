@@ -70,3 +70,13 @@ Tests: `packages/kernel/test/spec/animation/second.test.ts` (22).
 - `ValueAt` inside a particle formula (`ValueAt(E, t - age)` for an emitter that moves).
 - The GLSL program has not run on a real GPU yet: the view's integrator should render CPU and GPU on fixtures and
   compare (design 10.7).
+
+## Studio round (15 November 2026)
+
+- `KernelSession` plays through `playerOf(figure)`: `play`, `pause`, `frame(seconds)`, `setTime` seeks. An ended film
+  with a `@clock` starts again. `hasClock` is also true for traces, `Animate` sliders, particles and `@clock`.
+- The painter draws `Particles` on the CPU path (`evalCpu`, one batch per system) and point traces (`tracePoints`).
+  `blend = add` is drawn as normal on the white board, where adding light would hide the particles.
+- Examples: `anim-lissajous`, `anim-spirograph`, `anim-pendulum`, `anim-slider`, `anim-tangent`, `anim-fire`,
+  `anim-fountain`, `anim-galaxy`. Tests: `apps/studio/test/animation.test.ts`.
+
