@@ -62,7 +62,7 @@ describe('app modes in the studio', () => {
     typeLine('f(x) = x^2');
     typeLine('d = Derivative(f)');
     expect(root.querySelector('.expr-new .err-msg')?.textContent).toBe('Derivative is not available in the geometry mode.');
-    expect(root.querySelector('.expr-new')?.textContent).toMatch(/Try: /);
+    expect(root.querySelector('.expr-new .err-hint')?.textContent).toMatch(/are available\./);
     expect(m.session.figure.get('d')).toBeUndefined();
   });
 

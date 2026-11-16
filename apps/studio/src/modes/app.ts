@@ -32,6 +32,8 @@ export interface ModeHostParts {
   readonly setRounding: (r: Rounding) => void;
   /** `localStorage`, or null in tests. */
   readonly storage?: StorageLike | null;
+  /** Why the app may not change now (an exam is running), or undefined. */
+  readonly canSwitch?: () => string | undefined;
 }
 
 export interface AppModes {
@@ -361,6 +363,11 @@ export function mountAppModes(p: ModeHostParts, initial: AppModeId = 'classic'):
         return { ok: false, kept: p.session.figure.objects().length, dropped: [], viewsChanged: [], error: next };
       }
       const to = next.value;
+      const why = p.canSwitch?.();
+      if (why) {
+        p.say(why);
+        return { ok: false, kept: p.session.figure.objects().length, dropped: [], viewsChanged: [], error: { ok: false, area: 'api', kind: 'exam_blocked', message: why } };
+      }
       if (to.id === mode.id && !opts.force) {
         applyLayout();
         return { ok: true, kept: p.session.figure.objects().length, dropped: [], viewsChanged: [] };
