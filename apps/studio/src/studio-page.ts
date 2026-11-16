@@ -4,6 +4,12 @@
  */
 import type { AppModeId, StorageLike } from '@incantly/modes';
 import { mountAppModes } from './modes/app';
+import { mountScientific } from './modes/scientific';
+import { mountKeyboard } from './modes/keyboard';
+import { mountExamScreens } from './modes/exam-ui';
+import type { ScientificView } from './modes/scientific';
+import type { MathKeyboard } from './modes/keyboard';
+import type { ExamScreens } from './modes/exam-ui';
 import type { AppModes } from './modes/app';
 import { mountDataLab } from './datalab';
 import { mountCasPanel } from './caspanel';
@@ -43,6 +49,10 @@ export interface StudioOptions {
   readonly start?: boolean;
   /** Storage for user settings; `localStorage` by default, `null` for none. */
   readonly storage?: StorageLike | null;
+  /** Monotonic clock for exams; `performance.now` by default. */
+  readonly now?: () => number;
+  /** Asks for full screen at the exam start; a test passes its own. */
+  readonly requestFullscreen?: () => Promise<boolean>;
 }
 
 export interface Mounted {
@@ -59,6 +69,12 @@ export interface Mounted {
   readonly status: HTMLElement;
   /** The app mode, its settings and languages (app-modes). */
   readonly modes: AppModes;
+  /** The scientific calculator's rows. */
+  readonly scientific: ScientificView;
+  /** The on-screen maths keyboard. */
+  readonly keyboard: MathKeyboard;
+  /** Exam mode screens. */
+  readonly exam: ExamScreens;
   /** Replaces the figure with an example's lines. */
   loadExample(id: string): void;
   undo(): void;
@@ -415,6 +431,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
     lab.refresh();
     calc.refresh();
     cas.refresh();
+    sciHolder.current?.refresh();
     sim.refresh();
     graph.element.classList.toggle('has-sim', sim.isShown());
     graph.redraw();
@@ -479,6 +496,8 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
       return null;
     }
   })();
+  const sciHolder: { current?: ScientificView } = {};
+  const examHolder: { current?: ExamScreens } = {};
   const modes = mountAppModes({
     app: appEl,
     session,
@@ -491,6 +510,11 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
         cas.open();
         void loadCasEngine();
       }, close: () => cas.close(), isOpen: () => cas.isOpen(), button: casBtn },
+      results: { open: () => sciHolder.current?.open(), close: () => sciHolder.current?.close(), isOpen: () => sciHolder.current?.isOpen() ?? false },
+    },
+    canSwitch: () => {
+      const st = examHolder.current?.controller()?.state;
+      return st === 'active' || st === 'finished' ? 'The app cannot change during an exam.' : undefined;
     },
     buttons: { script: scriptBtn, examples, newFigure: newBtn },
     topTools,
@@ -501,10 +525,57 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
     storage,
   }, opts.mode ?? 'classic');
   modeRef.current = modes;
+  const scientific = mountScientific(session, modes.settings, modes.i18n, say);
+  sciHolder.current = scientific;
+  main.append(scientific.element);
+  const keyboard = mountKeyboard({ i18n: modes.i18n, catalogue: modes.catalogue, mode: modes.mode, onLayout: relayout });
+  keyboard.setDefaultTarget(root.querySelector<HTMLInputElement>('.expr-new .expr-input') ?? undefined);
+  keyboard.onToggle((what) => (what === 'exact' ? scientific.toggleExact() : scientific.toggleAngle()));
+  appEl.append(keyboard.element);
+  topRight.prepend(keyboard.toggleButton);
+  const sessionStore = (() => {
+    try {
+      return opts.storage === null ? null : typeof sessionStorage !== 'undefined' ? sessionStorage : null;
+    } catch {
+      return null;
+    }
+  })();
+  const exam = mountExamScreens({
+    session, settings: modes.settings, i18n: modes.i18n, catalogue: modes.catalogue, mode: modes.mode, say,
+    narrowed: (m) => {
+      modes.setNarrowed(m);
+      keyboard.setMode(m ?? modes.mode);
+    },
+    session_storage: sessionStore,
+    ...(opts.every ? { every: opts.every } : {}),
+    ...(opts.now ? { now: opts.now } : {}),
+    ...(opts.requestFullscreen ? { requestFullscreen: opts.requestFullscreen } : {}),
+  });
+  examHolder.current = exam;
+  topRight.prepend(exam.button);
+  appEl.prepend(exam.banner);
+  appEl.append(exam.awayNotice, exam.startDialog, exam.finishDialog);
+  const sciShown = (): void => {
+    const sci = modes.mode.views.initial.includes('results');
+    if (sci) scientific.open();
+    else scientific.close();
+    keyboard.setDefaultTarget(sci ? scientific.input : (root.querySelector<HTMLInputElement>('.expr-new .expr-input') ?? undefined));
+    // the scientific keyboard is always shown (ui 2)
+    if (sci) keyboard.open();
+  };
+  modes.onChange((m) => {
+    keyboard.setMode(m);
+    exam.setMode(m);
+    sciShown();
+  });
+  sciShown();
   if (opts.start) modes.showStart();
 
   const api: Mounted = {
     modes,
+    scientific,
+    keyboard,
+    exam,
     session,
     expressions: exprs,
     graph,
@@ -533,6 +604,8 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
       say(r.ok ? r.message : r.error.message);
     },
     dispose() {
+      exam.dispose();
+      keyboard.dispose();
       modes.dispose();
       off();
       document.removeEventListener('keydown', onKey);

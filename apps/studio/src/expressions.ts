@@ -349,9 +349,6 @@ export function mountExpressions(opts: ExpressionOptions): ExpressionList {
       });
       box.append(chip);
     }
-    // a command the mode leaves out: the permitted ones nearby, as plain text (errors 1)
-    const instead = (e as ErrorObject & { allowedInstead?: readonly string[] }).allowedInstead;
-    if (e.kind === 'mode_forbids' && instead && instead.length > 0) box.append(el('span', 'err-hint', `Try: ${instead.join(', ')}.`));
     const fixes = (e.suggest ?? []).filter((x) => !(e.kind === 'unknown_name' && x.startsWith(`${e.token} =`))).slice(0, 2);
     for (const s of fixes) {
       const b = el('button', 'err-fix', `Use: ${s}`);
