@@ -436,6 +436,36 @@ export const EXAMPLES: readonly Example[] = [
       'Trace(K)',
     ],
   },
+  /* ---------------- geometry: particles on shapes ---------------- */
+  {
+    id: 'geo-particles-ring',
+    modes: ['geometry', 'classic'],
+    title: 'Particles: a spinning ring of sparks round a circle',
+    lines: [
+      '@clock 0..30',
+      '@view -5 5 -4 4',
+      'O = (0, 0)',
+      'c = Circle(O, 3)',
+      'P = (3*cos(t), 3*sin(t))',
+      'arm = Segment(O, P)',
+      'ring = Particles(count = 2500, life = 2, pos = ((3 + 0.4*(v - 0.5))*cos(6.2832*u + t), (3 + 0.4*(v - 0.5))*sin(6.2832*u + t)), color = Gradient(u, rgb(255, 200, 60), rgb(255, 70, 120)), size = 0.06, alpha = 1 - ph, blend = add)',
+    ],
+  },
+  {
+    id: 'geo-particles-comet',
+    modes: ['geometry', 'classic'],
+    title: 'Particles: a comet on an ellipse, with its tail',
+    lines: [
+      '@clock 0..30',
+      '@view -6 6 -4 4',
+      'F1 = (-3.2, 0)',
+      'F2 = (3.2, 0)',
+      'orbit = Ellipse(F1, F2, 4)',
+      'sun = Circle(F2, 0.3)',
+      'comet = (4*cos(t), 2.4*sin(t))',
+      'tail = Particles(count = 1500, life = 1.2, pos = (4*cos(t - age) + 0.3*(u - 0.5)*age, 2.4*sin(t - age) + 0.3*(v - 0.5)*age), color = Gradient(ph, rgb(180, 230, 255), rgb(60, 90, 220)), size = 0.07*(1 - ph), alpha = 1 - ph, blend = add)',
+    ],
+  },
   /* ---------------- graphing: particles ---------------- */
   {
     id: 'particles-snow',

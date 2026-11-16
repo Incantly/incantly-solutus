@@ -97,7 +97,7 @@ const geometry: ModeConfig = {
     allow: ['figure', 'batch', 'geometry', 'conics', 'polygons', 'transforms', 'lists', 'text', 'logic', 'controls', 'animation', 'rounding', 'size', 'trig', 'vector'],
     add: ['Root', 'Roots', 'Extremum', 'Slope'],
   },
-  expressions: { ...ALL_EXPRESSIONS, allowStates: false, allowParticles: false },
+  expressions: { ...ALL_EXPRESSIONS, allowStates: false, allowParticles: true },
   defaults: {
     ...BASE_DEFAULTS, angleUnit: 'degree', axes: false, grid: 'none', autoLabels: 'all', dragDependent: true, previewPoints: true, greekAngleLabels: true,
     equationForm: 'implicit', view: { x0: -8, x1: 8, y0: -5, y1: 5, keepRatio: true },
