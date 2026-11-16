@@ -52,6 +52,15 @@ describe('examples per app mode', () => {
     expect(groups).toEqual(['Classic', 'Geometry', 'Graphing', 'Probability', 'CAS', 'Scientific']);
   });
 
+  it('geometry allows particles but not state() motion (R4)', () => {
+    const s = mount('geometry');
+    expect(s.session.submit('sp = Particles(count = 10, life = 1, pos = (u, v))').ok).toBe(true);
+    const r = s.session.submit('st = state(0)');
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.kind).toBe('mode_forbids');
+    expect(examplesFor('geometry').flatMap((g) => g.examples.map((e) => e.id)).filter((id) => id.startsWith('geo-particles-')).length).toBeGreaterThanOrEqual(2);
+  });
+
   it('in geometry, with no list, the play bar floats on the graph so a film can play', () => {
     const s = mount('geometry');
     s.loadExample('geo-euler');
