@@ -211,7 +211,7 @@ const graphing3d: ModeConfig = {
   available: true,
   views: { available: ['graphics3d', 'algebra', 'graphics'], initial: ['algebra', 'graphics3d'], layout: 'split', canToggle: true },
   tools: { groups: ['move', 'space'], toolbar: 'full', customTools: false },
-  commands: { allow: ['figure', 'batch', 'space', 'functions', 'geometry', 'transforms', 'lists', 'rounding', 'size', 'trig', 'vector', 'animation'] },
+  commands: { allow: ['figure', 'batch', 'space', 'functions', 'geometry', 'transforms', 'lists', 'rounding', 'size', 'trig', 'vector', 'animation', 'controls'] },
   expressions: ALL_EXPRESSIONS,
   defaults: { ...BASE_DEFAULTS, autoSliders: true, dragDependent: true },
   features: { ...NO_FEATURES, threeD: true, inputBar: true, suggestions: true, clockBar: true, export: true, menu: true },

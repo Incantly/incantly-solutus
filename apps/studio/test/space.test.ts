@@ -32,9 +32,12 @@ describe('the 3D app (R4.5)', () => {
     expect(m.graph.element.hidden).toBe(false);
   });
 
-  it('has three examples, which open with every line', () => {
+  it('has twelve examples, nine of them moving, which open with every line', () => {
     const own = EXAMPLES.filter((e) => e.modes.includes('graphing3d'));
-    expect(own.map((e) => e.id)).toEqual(['cube-slice', 'sphere-cut', 'pyramid-volume']);
+    expect(own.map((e) => e.id)).toEqual([
+      'cube-slice', 'sphere-cut', 'pyramid-volume',
+      'space-helix', 'space-cube', 'space-wave', 'space-sweep', 'space-fountain', 'space-orbit', 'space-saddle', 'space-slice', 'space-galaxy',
+    ]);
     for (const e of own) {
       m.loadExample(e.id);
       expect(root.querySelector('.status')?.textContent).toContain(`${e.lines.length} of ${e.lines.length} lines`);
@@ -48,6 +51,20 @@ describe('the 3D app (R4.5)', () => {
     m.loadExample('sphere-cut');
     const r = m.session.figure.get('r');
     expect(r?.cell.defined && (r.cell as { value: number }).value).toBeCloseTo(Math.sqrt(9 - 2.25), 12);
+  });
+
+  it('every moving example has a clock bar, and moves when the film runs (R4.1)', () => {
+    for (const e of EXAMPLES.filter((x) => x.id.startsWith('space-'))) {
+      m.loadExample(e.id);
+      expect(m.session.hasClock()).toBe(true);
+      m.space.paint();
+      const before = JSON.stringify(m.space.last()?.hits.slice(0, 40).map((h) => ('x' in h ? h.x : h.k === 'line' ? h.x0 : h.pts[0]?.x)));
+      m.session.setTime(1.7);
+      m.space.paint();
+      const after = JSON.stringify(m.space.last()?.hits.slice(0, 40).map((h) => ('x' in h ? h.x : h.k === 'line' ? h.x0 : h.pts[0]?.x)));
+      expect(after, e.id).not.toBe(before);
+      m.session.setTime(0);
+    }
   });
 
   it('a camera key writes the camera line into the figure, and undo takes it back', () => {
