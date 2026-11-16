@@ -75,9 +75,11 @@ describe('the gate in a mode (R3.1)', () => {
     expect(e.hint).toMatch(/available/);
   });
 
-  it('geometry refuses motion with state()', () => {
+  it('geometry allows motion with state(); probability refuses it', () => {
     const f = figureIn([layer(MODES.geometry)]);
-    expect(forbids(f, 's = state(0)').message).toMatch(/state/);
+    expect(f.apply('s = state(0)', { origin: 'learner' }).ok).toBe(true);
+    expect(f.apply("s' = 1", { origin: 'learner' }).ok).toBe(true);
+    expect(forbids(figureIn([layer(MODES.probability)]), 's = state(0)').message).toMatch(/state/);
   });
 
   it('figure mode lets everything through', () => {
