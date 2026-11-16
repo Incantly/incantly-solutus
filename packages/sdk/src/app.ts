@@ -250,6 +250,8 @@ export interface App {
   destroy(): void;
   readonly destroyed: boolean;
 
+  /** For hosts (the frame, the screen): tells the app's `error` listeners of a problem outside the figure. */
+  reportError(error: ApiError): void;
   /** For the screen: runs `fn` with this event source and writer (a learner's drag is `user`, origin `learner`). */
   as<T>(source: EventSource, fn: () => T): T;
 }
@@ -792,6 +794,10 @@ class AppCore implements App {
   once<E extends EventType>(type: E, handler: (e: EventOf<E>) => void): Unsubscribe {
     need(typeof type === 'string' && typeof handler === 'function', 'once', 'it needs an event type and a function');
     return this.hub.once(type, handler);
+  }
+
+  reportError(error: ApiError): void {
+    if (!this.gone) this.emit({ type: 'error', error });
   }
 
   /** Delivers what waits now (for tests and hosts that do not want to wait for the microtask and the frame). */
