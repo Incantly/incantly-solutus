@@ -500,7 +500,7 @@ export class FigureHist extends FigureTx {
     this.inPass((pass) => {
       for (let i = 0; i < lines.length; i++) {
         const input = lines[i] as string | ParsedLine;
-        const r = this.apply(input, { line: opts.lines?.[i] ?? i + 1, failed, ...(opts.force ? { force: true } : {}), ...(opts.origin ? { origin: opts.origin } : {}), ...(opts.rebind ? { rebind: true } : {}) });
+        const r = this.apply(input, { line: opts.lines?.[i] ?? i + 1, failed, ...(opts.force ? { force: true } : {}), ...(opts.origin ? { origin: opts.origin } : {}), ...(opts.rebind ? { rebind: true } : {}), ...(opts.generated ? { generated: true } : {}) });
         results.push(r);
         if (r.ok) {
           applied++;

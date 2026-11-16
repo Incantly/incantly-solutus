@@ -7,3 +7,4 @@ Branches: `feat/sheet-1` and up, one PR per round into `integration`.
 - [x] 3. Round 3: paste and CSV parser, `planImport` (R6)
 - [x] 4. Round 4: studio grid: view, editing, selection, fill handle, clipboard, selection bar, toast, settings (R8)
 - [x] 5. Round 5: examples, benches, screenshots, final check (R9)
+- [x] 6. Round 6: fills meet design 4: plan 9,998 formulas under 20 ms, apply under 100 ms (R9)

@@ -7,12 +7,12 @@ import { err } from '../../errors/table';
 import { makeNotice } from '../../errors/notices';
 import type { Figure } from '../../graph/figure';
 import { numberSource } from '../../graph/values';
-import type { Expr } from '../../language/ast';
+import type { Expr, ParsedLine } from '../../language/ast';
 import { EXCLUDED_CELLS, cellName, columnLetters, parseCellName } from '../../language/cells';
 import type { CellAddress, CellRect } from '../../language/cells';
 import { parseLine } from '../../language/parser';
 import { valueText } from '../../language/runtime';
-import { ACTION_ORIGIN, applyPlan, literalOf, lockedAmong, lockedError, planClear } from './actions';
+import { ACTION_ORIGIN, applyPlan, literalOf, lockedAmong, lockedError, numberLine, planClear, typeOf } from './actions';
 import { shiftLine } from './shift';
 
 /**
@@ -119,6 +119,8 @@ export interface PastePlan {
   readonly range: string;
   readonly header: boolean;
   readonly warnings: readonly Notice[];
+  /** The same lines, plain numbers already parsed, for `applyPlan`. */
+  readonly inputs?: readonly (string | ParsedLine)[];
 }
 
 export interface ImportOptions {
@@ -166,6 +168,7 @@ function binaryProblem(text: string): string | undefined {
 function planRows(figure: Figure, rows: readonly (readonly string[])[], at: CellAddress, decimal: '.' | ',', header: boolean, replace: boolean): PastePlan | ErrorObject {
   const size = sizeOf(figure);
   const lines: string[] = [];
+  const inputs: (string | ParsedLine)[] = [];
   const cells: string[] = [];
   const warnings: Notice[] = [];
   const conflicts: string[] = [];
@@ -189,10 +192,15 @@ function planRows(figure: Figure, rows: readonly (readonly string[])[], at: Cell
       const name = cellName(col, row) as string;
       if (f.k === 'text' && f.looked) looked.push(name);
       const lit = f.k === 'num' ? { text: numberSource(f.v), type: 'Number' } : { text: textSource(f.v), type: 'Text' };
-      const old = figure.get(name);
-      if (old && !replace) conflicts.push(name);
-      if (old && old.type !== lit.type) lines.push(`Delete(${name})`);
+      const oldType = typeOf(figure, name);
+      if (oldType !== undefined && !replace) conflicts.push(name);
+      if (oldType !== undefined && oldType !== lit.type) {
+        lines.push(`Delete(${name})`);
+        inputs.push(`Delete(${name})`);
+      }
+      const pl = lit.type === 'Number' ? numberLine(name, lit.text) : undefined;
       lines.push(`${name} = ${lit.text}`);
+      inputs.push(pl ?? `${name} = ${lit.text}`);
       cells.push(name);
     }
   }
@@ -212,7 +220,7 @@ function planRows(figure: Figure, rows: readonly (readonly string[])[], at: Cell
   for (const name of looked.slice(0, 20)) warnings.push(makeNotice('text_number_mix', { cell: name }));
   const first = cells[0];
   const last = cellName(maxC, maxR);
-  return { lines, cells, range: first === undefined ? '' : `${cellName(at.col, at.row) as string}:${last as string}`, header, warnings };
+  return { lines, cells, range: first === undefined ? '' : `${cellName(at.col, at.row) as string}:${last as string}`, header, warnings, inputs };
 }
 
 /** Pasted text from outside (design 3.11): rows by newline, columns by tab (or comma), numbers by the decimal setting. */
@@ -369,7 +377,7 @@ function run(figure: Figure, plan: PastePlan | ErrorObject, group: string, origi
   ACTION_ORIGIN.set(figure, origin);
   for (const c of extra.excluded) EXCLUDED_CELLS.add(c);
   try {
-    const r = applyPlan(figure, [...plan.lines, ...extra.lines], group, 'pasted', extra.lines.length > 0 ? { rebind: true } : {});
+    const r = applyPlan(figure, [...(plan.inputs ?? plan.lines), ...extra.lines], group, 'pasted', extra.lines.length > 0 ? { rebind: true } : {});
     return r.ok ? { ok: true, plan } : { ok: false, error: r.error };
   } finally {
     EXCLUDED_CELLS.clear();

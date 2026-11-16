@@ -129,7 +129,8 @@ export class FigureCore {
   readonly byIdMap = new Map<ObjId, ObjRec>();
   readonly byNameMap = new Map<Name, ObjRec>();
   /** The same records by lower-case name, to find names that differ only by case without scanning the figure (KERN-SM-17). */
-  protected readonly byLowerMap = new Map<string, Set<ObjRec>>();
+  /** Objects by lower-case name: one record, or a set when names differ only by case (rare, so no set per name). */
+  protected readonly byLowerMap = new Map<string, ObjRec | Set<ObjRec>>();
   readonly list: ObjRec[] = [];
   protected nextId = 1;
   /** Bumped by every change of structure; cached closures older than this are rebuilt. */

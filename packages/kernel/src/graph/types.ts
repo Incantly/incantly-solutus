@@ -253,6 +253,11 @@ export interface ApplyOptions {
    * (a range that now covers a new cell, spreadsheet design 3.5).
    */
   rebind?: boolean;
+  /**
+   * The line was written by an area from lines it already checked (a fill, a paste): when it defines a new name, no area
+   * handler or rewrite is asked for it, which they would not change. Only for lines an area made, never for typed text.
+   */
+  generated?: boolean;
 }
 
 /** Who wrote a line. Only the host may write `@mode`, `@restrict` and `@exam`. */
@@ -286,6 +291,8 @@ export interface BatchOptions {
   dryRun?: boolean;
   /** As `ApplyOptions.rebind`, for every line of the batch. */
   rebind?: boolean;
+  /** As `ApplyOptions.generated`, for every line of the batch. */
+  generated?: boolean;
 }
 
 export interface BatchResult {

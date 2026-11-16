@@ -31,6 +31,7 @@ import {
 import type { CellRect, CellRef, RangeValue } from '../../language/cells';
 import type { CommandSpec, ParamSpec } from '../../language/table';
 import type { TNode } from '../../language/tnode';
+import { children } from '../../language/relation';
 import { makeMatrix } from '../lists/types';
 import { table } from '../statistics/describe-commands';
 import { ACTION_ORIGIN, lockedAmong, lockedError, sheetActionSpecs, registerSheetActions } from './actions';
@@ -342,15 +343,7 @@ function lineExprs(parsed: ParsedLine): Expr[] {
 function walkT(n: TNode | undefined, visit: (n: TNode) => void): void {
   if (!n) return;
   visit(n);
-  for (const [k, v] of Object.entries(n as unknown as Node)) {
-    if (k === 'spec' || k === 'form' || k === 'ty' || k === 'impl' || k === 'variant' || k === 'value') continue;
-    if (Array.isArray(v)) {
-      for (const x of v) {
-        if (x && typeof x === 'object' && typeof (x as Node)['n'] === 'string') walkT(x as TNode, visit);
-        else if (x && typeof x === 'object' && (x as Node)['expr']) walkT((x as { expr: TNode }).expr, visit);
-      }
-    } else if (v && typeof v === 'object' && typeof (v as Node)['n'] === 'string') walkT(v as TNode, visit);
-  }
+  for (const c of children(n)) walkT(c, visit);
 }
 
 const SHAPE_RULES: Readonly<Record<string, (r: CellRect, items: number) => string | undefined>> = {
@@ -384,9 +377,9 @@ function sheetLineCheck(figure: unknown, line: CheckedLine, parsed: ParsedLine, 
     return undefined;
   }
   if (node.k === 'directive' || node.k === 'noop') return undefined;
-  // what of the sheet the line uses: `$` references, ranges, sheet commands
+  // what of the sheet the line uses: `$` references, ranges, sheet commands (asked only when there is no sheet)
   let sheetUse: { token: string; s: number; e: number } | undefined;
-  for (const e of lineExprs(parsed)) {
+  if (!size) for (const e of lineExprs(parsed)) {
     walkExpr(e, (x) => {
       if (sheetUse) return;
       if (x.k === 'cells' || (x.k === 'name' && (x.cabs || x.rabs))) sheetUse = { token: text.slice(x.s, x.e), s: x.s, e: x.e };
@@ -441,6 +434,8 @@ function sheetLineCheck(figure: unknown, line: CheckedLine, parsed: ParsedLine, 
     const token = text.slice(target.e).replace(/^\s*=\s*/, '').trim();
     return err('range_not_object', span(0, text.length), { token }, { token, hint: `Make a list or a matrix from it: ${target.name} = ListFrom(${token}).`, suggest: [`${target.name} = ListFrom(${token})`], recovery: 'use_suggestion', fingerprintKey: 'range_not_object' });
   }
+  // ranges come only from `A1:B2` or a call (`CellRange`, a cell given to a range parameter, `Cell`'s hidden sheet)
+  if (!text.includes(':') && !text.includes('(')) return undefined;
   // a range that holds the cell it defines: `A1 = Sum(A1:A5)` (errors 2, cycle)
   const own = target ? parseCellName(target.name) : undefined;
   if (own && target) {

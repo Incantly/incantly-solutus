@@ -9,13 +9,13 @@ import { makeNotice, registerNotice } from '../../errors/notices';
 import type { Figure } from '../../graph/figure';
 import type { ActionCall, ActionOutcome, RuleCall } from '../../graph/registry';
 import { numberSource } from '../../graph/values';
-import type { Expr, LineNode } from '../../language/ast';
+import type { Expr, ParsedLine } from '../../language/ast';
 import { EXCLUDED_CELLS, cellName, columnLetters, isRangeValue, parseCellName, rectHas, rectText } from '../../language/cells';
 import type { CellRect, CellRef } from '../../language/cells';
 import { parseLine } from '../../language/parser';
+import { SourceMap } from '../../language/source';
 import type { CommandSpec, ParamSpec } from '../../language/table';
-import { shiftRefs } from './shift';
-import { printLineNode } from '../../language/printer';
+import { shiftParsed } from './shift';
 
 /* ------------------------------ shared state ------------------------------ */
 
@@ -97,6 +97,18 @@ export function literalOf(v: unknown): { text: string; type: string } | undefine
   return undefined;
 }
 
+/**
+ * The parsed line `name = 12.5` for a plain non-negative number, made directly: exactly what parsing the text gives, so a
+ * fill of many values does not parse each one. `undefined` for anything else (the text is parsed as usual).
+ */
+export function numberLine(name: string, text: string): ParsedLine | undefined {
+  if (!/^\d+(\.\d+)?$/.test(text) || !/^[A-Z]{1,2}\d+$/.test(name)) return undefined;
+  const source = `${name} = ${text}`;
+  const s = name.length + 3;
+  const expr: Expr = { k: 'num', v: Number(text), text, int: !text.includes('.'), s, e: s + text.length };
+  return { line: 1, source, sm: new SourceMap(source, 1), node: { k: 'define', target: { name, s: 0, e: name.length }, expr } };
+}
+
 /** The lines that write a value into a cell: a cell of another type is deleted first (design 3.7). */
 function writeLines(figure: Figure, name: string, text: string, type: string): string[] {
   const old = typeOf(figure, name);
@@ -106,6 +118,7 @@ function writeLines(figure: Figure, name: string, text: string, type: string): s
 
 /** The type of an object by name, without building its full view. */
 export function typeOf(figure: Figure, name: string): string | undefined {
+  if (!figure.has(name)) return undefined;
   return (figure as unknown as { lookup(n: string): { type: { k: string } } | undefined }).lookup(name)?.type.k;
 }
 
@@ -139,10 +152,10 @@ function sampleOf(lines: readonly string[]): string[] {
  * Applies the lines as one batch, all or nothing: a failure leaves no trace.
  * `done` names what was done for the message (`filled`, `cleared`).
  */
-export function applyPlan(figure: Figure, lines: readonly string[], group: string, done: string, opts: { rebind?: boolean } = {}): { ok: true } | { ok: false; error: ErrorObject } {
+export function applyPlan(figure: Figure, lines: readonly (string | ParsedLine)[], group: string, done: string, opts: { rebind?: boolean } = {}): { ok: true } | { ok: false; error: ErrorObject } {
   if (lines.length === 0) return { ok: true };
   const origin = (ACTION_ORIGIN.get(figure) ?? 'host') as 'host' | 'learner' | 'model';
-  const base = { group, mode: 'atomic' as const, origin, ...(opts.rebind ? { rebind: true } : {}) };
+  const base = { group, mode: 'atomic' as const, origin, generated: true, ...(opts.rebind ? { rebind: true } : {}) };
   // an atomic batch takes itself back on a failure, also inside an action's line (`rollbackUnit` prunes that line's log)
   const real = figure.applyBatch(lines, base);
   if (!real.ok) {
@@ -171,9 +184,10 @@ const failure = (e: ErrorObject): ActionOutcome => ({ error: e });
 /* ------------------------------ free values: FillColumn, FillRow, FillCells ------------------------------ */
 
 /** The lines that write a grid of values with its top-left cell at (col, row). */
-function valueLines(figure: Figure, col: number, row: number, rows: readonly (readonly unknown[])[]): { lines: string[]; names: string[]; error?: ErrorObject } {
+function valueLines(figure: Figure, col: number, row: number, rows: readonly (readonly unknown[])[]): { lines: string[]; inputs: (string | ParsedLine)[]; names: string[]; error?: ErrorObject } {
   const size = bounds(figure);
   const lines: string[] = [];
+  const inputs: (string | ParsedLine)[] = [];
   const names: string[] = [];
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i] as readonly unknown[];
@@ -184,19 +198,23 @@ function valueLines(figure: Figure, col: number, row: number, rows: readonly (re
       if (name === undefined) {
         const at = cellName(c, rr) ?? `${columnLetters(Math.min(c, 702)) ?? 'ZZ'}${rr}`;
         return {
-          lines, names,
+          lines, inputs, names,
           error: err('cell_out_of_range', { line: 0, col: 1, endCol: 1 }, { token: at, cols: size.cols, rows: size.rows }, { token: at, hint: `Use @sheet ${Math.max(size.cols, c)} ${Math.max(size.rows, rr)} to make the sheet larger.`, suggest: [`@sheet ${Math.min(702, Math.max(size.cols, c))} ${Math.min(9999, Math.max(size.rows, rr))}`], recovery: 'create_first', fingerprintKey: 'fill' }),
         };
       }
       const lit = literalOf(r[j]);
       if (!lit) {
-        return { lines, names, error: err('bad_argument', { line: 0, col: 1, endCol: 1 }, { command: 'Fill', why: `item ${i * r.length + j + 1} is not a number, text, Bool or point` }, { recovery: 'fix_line', fingerprintKey: 'fill_item' }) };
+        return { lines, inputs, names, error: err('bad_argument', { line: 0, col: 1, endCol: 1 }, { command: 'Fill', why: `item ${i * r.length + j + 1} is not a number, text, Bool or point` }, { recovery: 'fix_line', fingerprintKey: 'fill_item' }) };
       }
-      lines.push(...writeLines(figure, name, lit.text, lit.type));
+      const ls = writeLines(figure, name, lit.text, lit.type);
+      const pl = ls.length === 1 && lit.type === 'Number' ? numberLine(name, lit.text) : undefined;
+      lines.push(...ls);
+      if (pl) inputs.push(pl);
+      else inputs.push(...ls);
       names.push(name);
     }
   }
-  return { lines, names };
+  return { lines, inputs, names };
 }
 
 function runValues(call: ActionCall, action: string, col: number, row: number, rows: readonly (readonly unknown[])[]): ActionOutcome {
@@ -205,7 +223,7 @@ function runValues(call: ActionCall, action: string, col: number, row: number, r
   if (plan.error) return failure(plan.error);
   const locked = lockedAmong(figure, plan.names, ACTION_ORIGIN.get(figure));
   if (locked.length > 0) return failure(lockedError(locked));
-  const r = applyPlan(figure, plan.lines, action, 'filled');
+  const r = applyPlan(figure, plan.inputs, action, 'filled');
   if (!r.ok) return failure(r.error);
   const first = plan.names[0];
   const last = plan.names[plan.names.length - 1];
@@ -308,6 +326,8 @@ export interface FillPlan {
   /** Cells whose copied reference left the sheet: they are written `undefined` with reason `off_sheet`. */
   readonly offSheet: readonly string[];
   readonly warnings: readonly Notice[];
+  /** The same lines, some already parsed (shifted on the tree, or plain numbers), for `applyPlan`. */
+  readonly inputs?: readonly (string | ParsedLine)[];
 }
 
 /** One cell of the source as the fill sees it: a free number, a text, a free value of another kind, or a definition. */
@@ -316,7 +336,7 @@ type Src =
   | { k: 'num'; v: number }
   | { k: 'text'; v: string }
   | { k: 'value'; text: string; type: string }
-  | { k: 'def'; name: string; line: string; type: string; node?: LineNode };
+  | { k: 'def'; name: string; line: string; type: string; parsed?: ParsedLine };
 
 function sourceCell(figure: Figure, name: string): Src {
   const o = figure.get(name);
@@ -329,7 +349,7 @@ function sourceCell(figure: Figure, name: string): Src {
     if (lit) return { k: 'value', text: lit.text, type: lit.type };
   }
   const pr = parseLine(o.definition, {});
-  return { k: 'def', name, line: o.definition, type: o.type, ...(pr.ok ? { node: pr.value.node } : {}) };
+  return { k: 'def', name, line: o.definition, type: o.type, ...(pr.ok ? { parsed: pr.value } : {}) };
 }
 
 const TEXT_NUM = /^(.*?)(-?\d+)$/;
@@ -344,6 +364,21 @@ export function planFill(figure: Figure, source: CellRect, target: CellRect, dir
   const vertical = direction === 'down' || direction === 'up';
   const size = bounds(figure);
   const lines: string[] = [];
+  const inputs: (string | ParsedLine)[] = [];
+  const add = (...ls: string[]): void => {
+    for (const l of ls) {
+      lines.push(l);
+      inputs.push(l);
+    }
+  };
+  const addValue = (name: string, text: string, type: string): void => {
+    const ls = writeLines(figure, name, text, type);
+    const pl = ls.length === 1 && type === 'Number' ? numberLine(name, text) : undefined;
+    if (pl) {
+      lines.push(pl.source);
+      inputs.push(pl);
+    } else add(...ls);
+  };
   const cells: string[] = [];
   const offSheet: string[] = [];
   const warnings: Notice[] = [];
@@ -385,35 +420,39 @@ export function planFill(figure: Figure, source: CellRect, target: CellRect, dir
       if (nums && step !== undefined) {
         const v = (nums[0] as number) + step * i;
         const intLike = nums.every(Number.isInteger) && Number.isInteger(step);
-        lines.push(...writeLines(figure, name, numberSource(intLike ? Math.round(v) : v), 'Number'));
+        addValue(name, numberSource(intLike ? Math.round(v) : v), 'Number');
         cells.push(name);
         continue;
       }
       if (textStep) {
         const k = textStep.first + textStep.step * i;
         const digits = String(Math.abs(k)).padStart(textStep.width - (k < 0 ? 1 : 0), '0');
-        lines.push(...writeLines(figure, name, textSource(`${textStep.prefix}${k < 0 ? '-' : ''}${digits}`), 'Text'));
+        add(...writeLines(figure, name, textSource(`${textStep.prefix}${k < 0 ? '-' : ''}${digits}`), 'Text'));
         cells.push(name);
         continue;
       }
       const j = ((i % n) + n) % n;
       const s = src[j] as Src;
       if (s.k === 'empty') continue;
-      if (s.k === 'num') lines.push(...writeLines(figure, name, numberSource(s.v), 'Number'));
-      else if (s.k === 'text') lines.push(...writeLines(figure, name, textSource(s.v), 'Text'));
-      else if (s.k === 'value') lines.push(...writeLines(figure, name, s.text, s.type));
+      if (s.k === 'num') addValue(name, numberSource(s.v), 'Number');
+      else if (s.k === 'text') add(...writeLines(figure, name, textSource(s.v), 'Text'));
+      else if (s.k === 'value') add(...writeLines(figure, name, s.text, s.type));
       else {
-        const moved = shiftNode(s, name, size);
-        const empty = moved.ok ? emptyIn(figure, moved.tree, name, written) : undefined;
+        const reads: string[] = [];
+        const moved = s.parsed ? shiftParsed(s.parsed, s.name, name, size, reads) : ({ ok: false, reason: 'parse' } as const);
+        const empty = moved.ok ? reads.find((n) => n !== name && !written.has(n) && !figure.has(n)) : undefined;
         if (empty !== undefined) {
           skipped.push({ cell: name, empty });
           continue;
         }
-        // a function cell keeps its parameters: `B1(x, y) = …`
-        if (moved.ok && moved.line.startsWith(`${name}(`)) lines.push(...(figure.get(name) && figure.get(name)?.type !== s.type ? [`Delete(${name})`] : []), moved.line);
-        else if (moved.ok) lines.push(...writeLines(figure, name, moved.line.slice(moved.line.indexOf('=') + 1).trim(), s.type));
-        else if (moved.reason === 'off_sheet') {
-          lines.push(...writeLines(figure, name, 'OffSheet()', 'Number'));
+        if (moved.ok) {
+          // a cell of another type goes first; a function cell keeps its parameters (`B1(x, y) = …`)
+          const old = typeOf(figure, name);
+          if (old !== undefined && old !== s.type) add(`Delete(${name})`);
+          lines.push(moved.line.source);
+          inputs.push(moved.line);
+        } else if (moved.reason === 'off_sheet') {
+          add(...writeLines(figure, name, 'OffSheet()', 'Number'));
           offSheet.push(name);
         } else continue;
       }
@@ -426,40 +465,7 @@ export function planFill(figure: Figure, source: CellRect, target: CellRect, dir
     warnings.push(makeNotice('fill_skipped', { count: skipped.length, first: first.cell, empty: first.empty }));
   }
   if (offSheet.length > 0) warnings.push(makeNotice('off_sheet_cells', { count: offSheet.length, names: offSheet.slice(0, 5).join(', ') }));
-  return { direction, source, target, lines, cells, offSheet, warnings };
-}
-
-/**
- * The first cell a copied line reads by name that is empty, neither filled nor written earlier by the same fill (`C10 =
- * A10 - 2` past the end of the data): such a target is left as it is, with a notice, since an object cannot read a cell
- * that does not exist.
- */
-function emptyIn(figure: Figure, tree: unknown, self: string, written: ReadonlySet<string>): string | undefined {
-  let found: string | undefined;
-  const walk = (e: unknown): void => {
-    if (found !== undefined || !e || typeof e !== 'object') return;
-    if (Array.isArray(e)) {
-      for (const x of e) walk(x);
-      return;
-    }
-    const o = e as Expr;
-    if ((o as { k?: string }).k === 'cells') return;
-    if (o.k === 'name' && o.name !== self && parseCellName(o.name) && !written.has(o.name) && typeOf(figure, o.name) === undefined) found = o.name;
-    for (const v of Object.values(o as object)) if (v && typeof v === 'object') walk(v);
-  };
-  walk(tree);
-  return found;
-}
-
-/** A source definition moved to another cell, on its parsed tree (parsed once per source cell). */
-function shiftNode(s: Extract<Src, { k: 'def' }>, to: string, size: { cols: number; rows: number }): { ok: true; line: string; tree: Expr } | { ok: false; reason: 'off_sheet' | 'parse' } {
-  const node = s.node;
-  const a = parseCellName(s.name);
-  const b = parseCellName(to);
-  if (!node || !a || !b || (node.k !== 'define' && node.k !== 'function')) return { ok: false, reason: 'parse' };
-  const r = shiftRefs(node.expr, b.col - a.col, b.row - a.row, size);
-  if (!r.ok) return { ok: false, reason: 'off_sheet' };
-  return { ok: true, line: printLineNode({ ...node, target: { ...node.target, name: to }, expr: r.tree }), tree: r.tree };
+  return { direction, source, target, lines, cells, offSheet, warnings, inputs };
 }
 
 /**
@@ -471,7 +477,7 @@ export function applyFill(figure: Figure, source: CellRect, target: CellRect, di
   const locked = lockedAmong(figure, plan.cells, origin);
   if (locked.length > 0) return { ok: false, plan, error: lockedError(locked) };
   ACTION_ORIGIN.set(figure, origin);
-  const r = applyPlan(figure, plan.lines, `Fill ${rectText(target)}`, 'filled');
+  const r = applyPlan(figure, plan.inputs ?? plan.lines, `Fill ${rectText(target)}`, 'filled');
   return r.ok ? { ok: true, plan } : { ok: false, plan, error: r.error };
 }
 
@@ -490,7 +496,7 @@ function runFill(call: ActionCall, action: 'FillDown' | 'FillRight'): ActionOutc
   const plan = planFill(call.figure, source, target, down ? 'down' : 'right');
   const locked = lockedAmong(call.figure, plan.cells, ACTION_ORIGIN.get(call.figure));
   if (locked.length > 0) return failure(lockedError(locked));
-  const r = applyPlan(call.figure, plan.lines, action, 'filled');
+  const r = applyPlan(call.figure, plan.inputs ?? plan.lines, action, 'filled');
   if (!r.ok) return failure(r.error);
   return outcome(action, { written: plan.cells.length, range: rectText(target), sample: sampleOf(plan.lines), undefined: plan.offSheet, lines: plan.lines }, plan.warnings);
 }

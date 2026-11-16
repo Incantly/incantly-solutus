@@ -38,6 +38,19 @@ export function columnLetters(col: number): string | undefined {
 
 /** The address of a cell name such as `B12`, or `undefined` when the name is not a cell. */
 export function parseCellName(name: string): CellAddress | undefined {
+  const hit = ADDRESS_CACHE.get(name);
+  if (hit !== undefined) return hit === NOT_A_CELL ? undefined : hit;
+  const a = readCellName(name);
+  if (ADDRESS_CACHE.size > 50_000) ADDRESS_CACHE.clear();
+  ADDRESS_CACHE.set(name, a ?? NOT_A_CELL);
+  return a;
+}
+
+/** Names already read, with their address (or `NOT_A_CELL`): the sheet asks about the same names many times. */
+const NOT_A_CELL: CellAddress = Object.freeze({ col: 0, row: 0 });
+const ADDRESS_CACHE = new Map<string, CellAddress>();
+
+function readCellName(name: string): CellAddress | undefined {
   const m = CELL_RE.exec(name);
   if (!m) return undefined;
   const col = columnNumber(m[1] as string);

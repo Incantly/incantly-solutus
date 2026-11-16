@@ -265,6 +265,11 @@ export class Figure extends FigureHist {
     };
   }
 
+  /** True when an object has this name (cheaper than `get`, which builds the whole view). */
+  has(name: Name): boolean {
+    return this.byNameMap.has(name);
+  }
+
   /** One object by name or id. */
   get(x: Name | ObjId): ObjectView | undefined {
     const r = this.recOf(x);

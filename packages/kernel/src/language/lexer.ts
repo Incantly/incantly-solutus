@@ -51,8 +51,8 @@ const LETTER = /\p{L}/u;
 export const isAsciiLetter = (c: string): boolean => (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
 export const isDigit = (c: string): boolean => c >= '0' && c <= '9';
 export const isGreekLetter = (c: string): boolean => GREEK.test(c) && LETTER.test(c);
-export const isNameStart = (c: string): boolean => isAsciiLetter(c) || isGreekLetter(c);
-const isNameChar = (c: string): boolean => isNameStart(c) || isDigit(c) || c === '_';
+export const isNameStart = (c: string): boolean => isAsciiLetter(c) || (c > '\x7f' && isGreekLetter(c));
+const isNameChar = (c: string): boolean => isAsciiLetter(c) || isDigit(c) || c === '_' || (c > '\x7f' && isGreekLetter(c));
 
 /** Latin look-alikes of letters from other scripts. */
 const LOOKALIKE: Readonly<Record<string, string>> = {
