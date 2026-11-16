@@ -1,5 +1,5 @@
 /** @incantly/sdk: createApp, the embed API, iframe protocol, file format and export (.kiro/specs/sdk). */
-export { API_VERSION, LIST_LIMIT, RUN_LIMIT, createHeadlessApp, defaultTicker, isKernelError } from './app';
+export { API_VERSION, HEADER, LIST_LIMIT, RUN_LIMIT, createHeadlessApp, defaultTicker, isKernelError } from './app';
 export type {
   App, ClockControl, DeleteResult, FigureSummary, HeadlessOptions, KernelError, LineOk, LineResult, ObjectDetail, ObjectFilter, ObjectSummary,
   SdkBatchResult, StylePatch, Ticker, ViewControl, ViewState, AppModeId, ModeChangeResult,
@@ -21,3 +21,5 @@ export type { AsyncApp, ConnectOptions, Envelope, MessageHost, MessageLike, Mess
 export { EXPORT_FORMATS, EXPORT_LIMITS, exportFigure } from './export';
 export type { CanvasFactory, ExportEnv, ExportOptions, ExportRegion, ExportResult, ExportWarning } from './export';
 export { SvgContext } from './svg-context';
+export { createApp, hasClock } from './mount';
+export type { AppOptions, MountedApp, UiOptions } from './mount';

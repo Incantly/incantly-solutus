@@ -7,3 +7,4 @@ export * from './paint';
 export * from './symplot';
 export * from './viewport';
 export * from './scene';
+export * from './files';

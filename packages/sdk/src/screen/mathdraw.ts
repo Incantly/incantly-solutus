@@ -4,7 +4,8 @@
  */
 import { math } from '@incantly/view';
 import type { MathItem, MathLayout, Measure } from '@incantly/view';
-import { fullLatexHtml, loadFullLatex } from '@incantly/ui';
+// the KaTeX loader only: the package index also defines its Web Components, which a Node or worker host has no DOM for
+import { fullLatexHtml, loadFullLatex } from '@incantly/ui/katex';
 
 let ctx: CanvasRenderingContext2D | null | undefined;
 
