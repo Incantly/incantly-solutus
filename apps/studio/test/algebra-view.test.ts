@@ -117,6 +117,6 @@ describe('the algebra view in the studio', () => {
     expect(sig.querySelector('.sig-param.on')?.textContent).toBe('radius: Number');
     expect(sig.querySelector('.sig-summary')?.textContent).toBe('circle by centre and radius');
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', altKey: true, bubbles: true }));
-    expect(sig.querySelector('.sig-more')?.textContent).toMatch(/^2 of 4 forms/);
+    expect(sig.querySelector('.sig-more')?.textContent).toMatch(/^2 of 5 forms · 4 fit so far/);
   });
 });

@@ -14,17 +14,21 @@ import type { CallCheck, CommandForm, CommandSpec, ParamSpec, Refusal } from '..
 import { T, registerBinaryOp, registerTypeAlias, registerUnaryOp } from '../../language/types';
 import type { Ty } from '../../language/types';
 import * as R from './rules';
+import * as S from './solids';
 import { FLAT_OF, SPACE_OF, shape3Of } from './types';
-import type { Plane3, Polygon3, Segment3 } from './types';
+import type { Circle3, Cone3, Cylinder3, Plane3, Polygon3, Polyhedron, Segment3, Sphere3 } from './types';
 import type { V3 } from './v3';
-import { add, isV3, len, scale, sub } from './v3';
+import { add, dist, isV3, len, scale, sub } from './v3';
 
 export * from './types';
 export * from './v3';
 export { lineLike, newell, plane3, polygon3 } from './rules';
+export { edgesOf, faceOf, polyArea, polyVolume, sectionOf } from './solids';
 
 const GROUP = 'space';
 const LL = 'LineLike3';
+const SOLID = 'Solid3';
+const ROUND = 'Round3';
 const p = (name: string, type: string): ParamSpec => ({ name, type });
 
 interface FormDef {
@@ -137,13 +141,59 @@ export const SPACE_COMMANDS: readonly CommandSpec[] = [
     { params: [p('v', 'Vector3')], returns: 'Number', summary: 'length of a vector in space', rule: R.lengthVector },
     { params: [p('s', 'Segment3')], returns: 'Number', summary: 'length of a segment in space', rule: R.lengthSegment },
   ]),
-  cmd('Area', [{ params: [p('polygon', 'Polygon3')], returns: 'Number', summary: 'area of a flat polygon in space', rule: R.areaPolygon }]),
+  cmd('Area', [
+    { params: [p('polygon', 'Polygon3')], returns: 'Number', summary: 'area of a flat polygon in space', rule: R.areaPolygon },
+    { params: [p('c', 'Circle3')], returns: 'Number', summary: 'area of a circle in space', rule: S.circleArea },
+  ]),
+  cmd('Circle', [{ params: [p('center', 'Point3'), p('radius', 'Number'), p('axis', 'Vector3')], returns: 'Circle3', summary: 'circle in space about an axis', rule: S.circleAxis }]),
+  cmd('Center', [
+    { params: [p('c', 'Circle3')], returns: 'Point3', summary: 'centre of a circle in space', rule: S.centerRule },
+    { params: [p('s', 'Sphere')], returns: 'Point3', summary: 'centre of a sphere', rule: S.centerRule },
+  ]),
+  cmd('Radius', [
+    { params: [p('c', 'Circle3')], returns: 'Number', summary: 'radius of a circle in space', rule: S.radiusRule },
+    { params: [p('s', 'Sphere')], returns: 'Number', summary: 'radius of a sphere', rule: S.radiusRule },
+    { params: [p('s', ROUND)], returns: 'Number', summary: 'radius of a cylinder or cone', rule: S.radiusRule },
+  ]),
+  cmd('Pyramid', [
+    { params: [p('base', 'Polygon3'), p('apex', 'Point3')], returns: 'Polyhedron', summary: 'pyramid on a base with an apex', rule: S.pyramidApex },
+    { params: [p('base', 'Polygon3'), p('height', 'Number')], returns: 'Polyhedron', summary: 'pyramid of a height above the centre of its base', rule: S.pyramidHeight },
+  ]),
+  cmd('Prism', [
+    { params: [p('base', 'Polygon3'), p('top', 'Point3')], returns: 'Polyhedron', summary: 'prism whose first top corner is a point', rule: S.prismTop },
+    { params: [p('base', 'Polygon3'), p('height', 'Number')], returns: 'Polyhedron', summary: 'right prism of a height', rule: S.prismHeight },
+  ]),
+  cmd('Cube', [{ params: [p('p', 'Point3'), p('q', 'Point3'), p('side', 'Point3')], returns: 'Polyhedron', summary: 'cube on edge PQ, on the side of a point', rule: S.cubeRule }]),
+  cmd('Tetrahedron', [{ params: [p('p', 'Point3'), p('q', 'Point3'), p('side', 'Point3')], returns: 'Polyhedron', summary: 'regular tetrahedron on edge PQ, on the side of a point', rule: S.tetrahedronRule }]),
+  cmd('Octahedron', [{ params: [p('p', 'Point3'), p('q', 'Point3'), p('side', 'Point3')], returns: 'Polyhedron', summary: 'regular octahedron on edge PQ, on the side of a point', rule: S.octahedronRule }]),
+  cmd('Sphere', [
+    { params: [p('center', 'Point3'), p('radius', 'Number')], returns: 'Sphere', summary: 'sphere by centre and radius', rule: S.sphereRadius },
+    { params: [p('center', 'Point3'), p('through', 'Point3')], returns: 'Sphere', summary: 'sphere by centre and a point on it', rule: S.sphereThrough },
+  ]),
+  cmd('Cylinder', [{ params: [p('base', 'Point3'), p('top', 'Point3'), p('radius', 'Number')], returns: 'Cylinder', summary: 'cylinder between two centres', rule: S.cylinderRule }]),
+  cmd('Cone', [{ params: [p('base', 'Point3'), p('apex', 'Point3'), p('radius', 'Number')], returns: 'Cone', summary: 'cone from a base centre to an apex', rule: S.coneRule }]),
+  cmd('Volume', [{ params: [p('solid', SOLID)], returns: 'Number', summary: 'volume of a solid', rule: S.volumeRule }]),
+  cmd('SurfaceArea', [{ params: [p('solid', SOLID)], returns: 'Number', summary: 'area of the surface of a solid', rule: S.surfaceAreaRule }]),
+  cmd('Height', [
+    { params: [p('solid', 'Polyhedron')], returns: 'Number', summary: 'height of a pyramid, prism or cube', rule: S.heightRule },
+    { params: [p('solid', ROUND)], returns: 'Number', summary: 'height of a cylinder or cone', rule: S.heightRule },
+  ]),
+  cmd('Vertices', [{ params: [p('solid', 'Polyhedron')], returns: 'List<Point3>', summary: 'corners of a solid, in a fixed order', rule: S.verticesRule }]),
+  cmd('Edges', [{ params: [p('solid', 'Polyhedron')], returns: 'List<Segment3>', summary: 'edges of a solid, in a fixed order', rule: S.edgesRule }]),
+  cmd('Faces', [{ params: [p('solid', 'Polyhedron')], returns: 'List<Polygon3>', summary: 'faces of a solid: base first, then the sides', rule: S.facesRule }]),
   cmd('Intersect', [
     { params: [p('l', LL), p('m', LL)], returns: 'Point3', summary: 'meeting point of two lines in space', rule: R.intersectLL },
     { params: [p('l', LL), p('plane', 'Plane')], returns: 'Point3', summary: 'where a line meets a plane', rule: R.intersectLPlane },
     { params: [p('plane', 'Plane'), p('l', LL)], returns: 'Point3', summary: 'where a plane meets a line', rule: R.intersectLPlane },
     { params: [p('a', 'Plane'), p('b', 'Plane')], returns: 'Line3', summary: 'line where two planes meet', rule: R.intersectPlanePlane },
     { params: [p('l', LL), p('polygon', 'Polygon3')], returns: 'Point3', summary: 'where a line meets a flat polygon', rule: R.intersectLPolygon },
+    { params: [p('plane', 'Plane'), p('solid', 'Polyhedron')], returns: 'Polygon3', summary: 'cross-section of a solid by a plane', rule: S.intersectPlanePoly },
+    { params: [p('solid', 'Polyhedron'), p('plane', 'Plane')], returns: 'Polygon3', summary: 'cross-section of a solid by a plane', rule: S.intersectPlanePoly },
+    { params: [p('plane', 'Plane'), p('s', 'Sphere')], returns: 'Circle3', summary: 'circle where a plane cuts a sphere', rule: S.intersectPlaneSphere },
+    { params: [p('s', 'Sphere'), p('plane', 'Plane')], returns: 'Circle3', summary: 'circle where a plane cuts a sphere', rule: S.intersectPlaneSphere },
+    { params: [p('l', LL), p('s', 'Sphere')], returns: 'List<Point3>', summary: 'the two points where a line meets a sphere', rule: S.intersectLineSphere },
+    { params: [p('l', LL), p('s', 'Sphere'), p('index', 'Number')], returns: 'Point3', summary: 'point 1 or 2 where a line meets a sphere', rule: S.intersectLineSphereK },
+    { params: [p('l', LL), p('solid', 'Polyhedron')], returns: 'List<Point3>', summary: 'where a line meets a solid, in order along the line', rule: S.intersectLinePoly },
   ]),
 ];
 
@@ -213,6 +263,23 @@ export function spaceText(v: unknown): string | undefined {
       const g = v as Polygon3;
       return `polygon of ${g.pts.length} points, area ${f6(len(R.newell(g.pts)) / 2)}`;
     }
+    case 'Circle3': {
+      const c = v as Circle3;
+      return `circle r=${f6(c.r)} about ${pt(c.f.o)}`;
+    }
+    case 'Polyhedron': {
+      const s = v as Polyhedron;
+      return `${s.kind === 'general' ? 'solid' : s.kind}, ${s.faces.length} faces${s.closed ? `, volume ${f6(S.polyVolume(s))}` : ''}`;
+    }
+    case 'Sphere': {
+      const s = v as Sphere3;
+      return `sphere r=${f6(s.r)} about ${pt(s.c)}`;
+    }
+    case 'Cylinder':
+    case 'Cone': {
+      const s = v as Cylinder3 | Cone3;
+      return `${s.shape3.toLowerCase()} r=${f6(s.r)} h=${f6(dist(s.a, s.b))}`;
+    }
     default:
       return undefined;
   }
@@ -226,6 +293,8 @@ export function registerSpace(registry: CommandRegistry): void {
   if (registered) return;
   registered = true;
   registerTypeAlias(LL, ['Line3', 'Segment3', 'Ray3']);
+  registerTypeAlias(SOLID, ['Polyhedron', 'Sphere', 'Cylinder', 'Cone']);
+  registerTypeAlias(ROUND, ['Cylinder', 'Cone']);
   registerTupleType(tupleRow);
   registerBinaryOp(binaryRow);
   registerUnaryOp(unaryRow);
@@ -251,6 +320,9 @@ export function registerSpace(registry: CommandRegistry): void {
   for (const t of ['Line3', 'Segment3', 'Ray3']) registerTypeStyle(t, { defaults: { color: '#3d4451', width: 2, label: 'none' } });
   registerTypeStyle('Plane', { defaults: { color: '#7fa7e0', opacity: 0.25, label: 'none' } });
   registerTypeStyle('Polygon3', { defaults: { color: '#e9a23b', opacity: 0.4, width: 2, label: 'none' } });
+  registerTypeStyle('Circle3', { defaults: { color: '#cc4c8c', width: 2.5, opacity: 0, label: 'none' } });
+  registerTypeStyle('Polyhedron', { defaults: { color: '#8fb3e8', opacity: 0.4, width: 1.5, label: 'none' } });
+  for (const t of ['Sphere', 'Cylinder', 'Cone']) registerTypeStyle(t, { defaults: { color: '#9ccfb4', opacity: 0.45, width: 1, label: 'none' } });
   registerReasonPhrase('skew', { noun: 'skew lines', sentence: 'The lines are skew: they pass each other without meeting.' });
   registerReasonPhrase('not_coplanar', { noun: 'not flat', sentence: 'The points are not on one plane, so they make no flat polygon.' });
   registerReasonPhrase('not_closed', { noun: 'not closed', sentence: 'The solid has a hole, so it has no volume.' });
