@@ -164,6 +164,7 @@ export interface AreaNoticeKinds {
   off_sheet_cells: true;
   cells_kept: true;
   fill_skipped: true;
+  text_number_mix: true;
 }
 
 export type NoticeKind = CoreNoticeKind | Extract<keyof AreaNoticeKinds, string>;

@@ -600,6 +600,7 @@ export function registerSheetActions(): void {
   registered = true;
   registerNotice('off_sheet_cells', { code: 'H102', severity: 'warning', template: 'A copied reference left the sheet in {count} cells ({names}); they are undefined.' });
   registerNotice('fill_skipped', { code: 'H104', severity: 'warning', template: '{count} cells were left as they were, from {first}: {empty} is empty.' });
+  registerNotice('text_number_mix', { code: 'H105', severity: 'warning', template: "{cell} looks like a number but is not one; it is stored as text." });
   registerNotice('cells_kept', { code: 'H103', severity: 'info', template: '{names} kept: other objects read them by name.' });
 }
 
