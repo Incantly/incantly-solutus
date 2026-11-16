@@ -2,6 +2,9 @@
  * The studio: a top bar, the expression list on the left, the graph on the right, and the data-analysis panel when it
  * is open. Every area built so far is registered, so its commands can be typed and seen.
  */
+import type { AppModeId, StorageLike } from '@incantly/modes';
+import { mountAppModes } from './modes/app';
+import type { AppModes } from './modes/app';
 import { mountDataLab } from './datalab';
 import { mountCasPanel } from './caspanel';
 import { loadCasEngine } from './registry';
@@ -34,6 +37,12 @@ export interface StudioOptions {
   readonly caf?: (handle: number) => void;
   /** Repeating timer for the simulation strip's Run; a test passes its own. */
   readonly every?: (ms: number, fn: () => void) => () => void;
+  /** The app mode to open in (app-modes design 3.2). Default `classic`: everything. */
+  readonly mode?: AppModeId;
+  /** Show the start screen with the mode tiles. */
+  readonly start?: boolean;
+  /** Storage for user settings; `localStorage` by default, `null` for none. */
+  readonly storage?: StorageLike | null;
 }
 
 export interface Mounted {
@@ -48,6 +57,8 @@ export interface Mounted {
   /** What is selected in the list and on the canvas (algebra-view design 3.9). */
   readonly selection: Selection;
   readonly status: HTMLElement;
+  /** The app mode, its settings and languages (app-modes). */
+  readonly modes: AppModes;
   /** Replaces the figure with an example's lines. */
   loadExample(id: string): void;
   undo(): void;
@@ -177,7 +188,8 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
     },
     hoverAt: (px, py, vp) => fromCanvas.setHover(hitTest(items(), vp, px, py, 8)[0]?.name),
   });
-  const exprs = mountExpressions({ session, changed: () => graph.redraw(), say, view: () => graph.viewport.box(), selection });
+  const modeRef: { current?: AppModes } = {};
+  const exprs = mountExpressions({ session, changed: () => graph.redraw(), say, view: () => graph.viewport.box(), selection, autoSliders: () => modeRef.current?.mode.defaults.autoSliders ?? true });
   holder.expressions = exprs;
   const tools = mountToolStrip({
     session, registry, say, host: () => graph.element, items, redraw: () => graph.redraw(), flash: (names) => exprs.flash(names),
@@ -301,10 +313,12 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
   help.append(el('h2', {}, 'Keyboard'), keys, el('div', { class: 'dialog-actions' }, btn('Close', 'secondary', 'Close', () => help.close())));
   const helpBtn = btn('?', 'icon-btn', 'Keyboard shortcuts', () => (typeof help.showModal === 'function' ? help.showModal() : help.setAttribute('open', '')));
 
+  const topTools = el('div', { class: 'top-tools' }, newBtn, examples, labBtn, calcBtn, casBtn, scriptBtn);
+  const topRight = el('div', { class: 'top-right' }, undoBtn, redoBtn, helpBtn);
   const top = el('header', { class: 'topbar' },
     el('div', { class: 'brand' }, el('span', { class: 'logo', 'aria-hidden': 'true' }, '∿'), el('span', { class: 'brand-name' }, 'Incantly'), el('span', { class: 'brand-sub' }, 'Studio')),
-    el('div', { class: 'top-tools' }, newBtn, examples, labBtn, calcBtn, casBtn, scriptBtn),
-    el('div', { class: 'top-right' }, undoBtn, redoBtn, helpBtn),
+    topTools,
+    topRight,
   );
 
   /* ------------------------------ clock ------------------------------ */
@@ -360,7 +374,8 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
   );
   const split = el('div', { class: 'split', role: 'separator', 'aria-orientation': 'vertical', 'aria-label': 'Resize the expression list', tabindex: '0' });
   const main = el('div', { class: 'workspace' }, panel, split, graph.element, lab.element, calc.element, cas.element);
-  root.replaceChildren(el('div', { class: 'app' }, top, main), dialog, help);
+  const appEl = el('div', { class: 'app' }, top, main);
+  root.replaceChildren(appEl, dialog, help);
 
   // dragging the divider resizes the expression list
   split.addEventListener('pointerdown', (e) => {
@@ -451,7 +466,45 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
   };
   document.addEventListener('keydown', onKey);
 
+  const relayout = (): void => {
+    requestAnimationFrame?.(() => {
+      graph.paint();
+      graph.fit();
+    });
+  };
+  const storage = opts.storage !== undefined ? opts.storage : (() => {
+    try {
+      return typeof localStorage !== 'undefined' ? localStorage : null;
+    } catch {
+      return null;
+    }
+  })();
+  const modes = mountAppModes({
+    app: appEl,
+    session,
+    tools,
+    panes: { algebra: panel, split, graphics: graph.element },
+    views: {
+      datalab: { open: () => lab.open(), close: () => lab.close(), isOpen: () => lab.isOpen(), button: labBtn },
+      distribution: { open: () => calc.open(), close: () => calc.close(), isOpen: () => calc.isOpen(), button: calcBtn },
+      cas: { open: () => {
+        cas.open();
+        void loadCasEngine();
+      }, close: () => cas.close(), isOpen: () => cas.isOpen(), button: casBtn },
+    },
+    buttons: { script: scriptBtn, examples, newFigure: newBtn },
+    topTools,
+    topRight,
+    say,
+    relayout,
+    setRounding: (r) => exprs.setPrefs({ format: { ...exprs.prefs().format, decimals: r.mode === 'decimals' ? r.digits : exprs.prefs().format.decimals, significant: r.mode === 'sig' ? r.digits : null } }),
+    storage,
+  }, opts.mode ?? 'classic');
+  modeRef.current = modes;
+  if (opts.start) modes.showStart();
+
   const api: Mounted = {
+    modes,
     session,
     expressions: exprs,
     graph,
@@ -480,6 +533,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
       say(r.ok ? r.message : r.error.message);
     },
     dispose() {
+      modes.dispose();
       off();
       document.removeEventListener('keydown', onKey);
       tools.dispose();

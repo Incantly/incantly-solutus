@@ -78,6 +78,7 @@ export class Figure extends FigureHist {
 
   constructor(opts: FigureOptions = {}) {
     super(opts);
+    if (opts.gate) this.setGate(opts.gate);
     this.solver = new StateSolver({
       list: this.list,
       states: () => this.stateRecs,

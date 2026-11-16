@@ -80,10 +80,14 @@ const MONO = '13px "JetBrains Mono", "SFMono-Regular", Menlo, Consolas, monospac
 
 /* ------------------------------ grid ------------------------------ */
 
+/** How the frame looks (app-modes settings `axes`, `grid`, `highContrast`): set by the app mode, read on every paint. */
+export const frameStyle: { axes: boolean; grid: 'none' | 'major' | 'minor'; highContrast: boolean } = { axes: true, grid: 'minor', highContrast: false };
+
 export function paintGrid(ctx: Ctx, vp: Viewport): void {
   const { w, h } = vp;
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, w, h);
+  if (frameStyle.grid === 'none' && !frameStyle.axes) return;
   const gx = gridStep(vp.ppu);
   const gy = gridStep(vp.ppuY);
   const major = gx.major;
@@ -105,13 +109,14 @@ export function paintGrid(ctx: Ctx, vp: Viewport): void {
     }
     ctx.stroke();
   };
-  lines(gx.minor, gy.minor, '#f0f2f5', 1);
-  lines(major, majorY, '#d8dde4', 1);
+  if (frameStyle.grid === 'minor') lines(gx.minor, gy.minor, frameStyle.highContrast ? '#d0d4da' : '#f0f2f5', 1);
+  if (frameStyle.grid !== 'none') lines(major, majorY, frameStyle.highContrast ? '#9aa1ab' : '#d8dde4', 1);
+  if (!frameStyle.axes) return;
   // axes
   const ax = vp.px(0);
   const ay = vp.py(0);
-  ctx.strokeStyle = '#2b2f36';
-  ctx.lineWidth = 1.25;
+  ctx.strokeStyle = frameStyle.highContrast ? '#000000' : '#2b2f36';
+  ctx.lineWidth = frameStyle.highContrast ? 2 : 1.25;
   ctx.beginPath();
   if (ax >= 0 && ax <= w) {
     ctx.moveTo(Math.round(ax) + 0.5, 0);
