@@ -29,7 +29,13 @@ import { FigureCore, ObjRec } from './core';
 import { coerceProp, defaultsFor, isValidKey, validKeysFor } from './props';
 import type { ActionRule } from './registry';
 import { runLineChecks, runLineHandlers, runLineRewriters } from './registry';
-import type { ApplyOptions, Cell, ChangeReport, Persist, RateRule, StyleEntry, TxOk, TxOp, TxResult } from './types';
+import type { ApplyOptions, Cell, ChangeReport, LineGate, Persist, RateRule, StyleEntry, TxOk, TxOp, TxResult } from './types';
+import { lineUses } from '../language/uses';
+
+/** Directives only the host page may write (app-modes design 3.6). */
+const HOST_DIRECTIVES = new Set(['mode', 'restrict', 'exam']);
+/** The directives a model or a learner may write, for the error's `expected`. */
+const LINE_DIRECTIVES = ['@view', '@grid', '@axes', '@clock', '@angleunit', '@rounding', '@coords', '@title'];
 import { sameValue, valueSource } from './values';
 
 const REPEATABLE: ReadonlySet<string> = new Set(['step', 'beat', 'cell', 'colwidth', 'limit']);
@@ -77,6 +83,13 @@ export class FigureTx extends FigureBase {
   protected log: LogItem[] = [];
   /** How many `apply` calls are running; the log is kept only inside one. */
   protected applyDepth = 0;
+  /** The host's line gate (a mode policy), asked after the areas' own checks. */
+  protected gate: LineGate | undefined;
+
+  /** Installs (or, with `undefined`, removes) the host's line gate. Lines already in the figure are not checked again. */
+  setGate(gate: LineGate | undefined): void {
+    this.gate = gate;
+  }
 
   /* ------------------------------ errors ------------------------------ */
 
@@ -297,6 +310,29 @@ export class FigureTx extends FigureBase {
       const at = this.at(parsed);
       const placed = refused.line > 0 && refused.col > 1 ? {} : { line: at.line, col: at.col, endCol: at.endCol };
       return { ...refused, ...placed, source: parsed.sm.raw ?? parsed.sm.text } as TxResult;
+    }
+    const origin = opts.origin ?? 'host';
+    if (checked.kind === 'directive' && origin !== 'host' && HOST_DIRECTIVES.has(checked.directive?.name ?? '')) {
+      const name = `@${checked.directive?.name ?? ''}`;
+      return this.fail(parsed, 'bad_directive', { directive: name, need: 'the host page to set it' }, {
+        expected: LINE_DIRECTIVES,
+        hint: 'Remove this line. The host page chooses the mode, restrictions and exams.',
+        messageKey: 'lang.host_directive',
+        fingerprintKey: name,
+      });
+    }
+    if (this.gate) {
+      let gated: ErrorObject | undefined;
+      try {
+        gated = this.gate({ uses: lineUses(checked), line: checked, parsed, origin });
+      } catch {
+        gated = undefined;
+      }
+      if (gated) {
+        const at = this.at(parsed);
+        const placed = gated.line > 0 && gated.col > 1 ? {} : { line: at.line, col: at.col, endCol: at.endCol };
+        return { ...gated, ...placed, source: parsed.sm.raw ?? parsed.sm.text } as TxResult;
+      }
     }
     switch (checked.kind) {
       case 'noop':

@@ -971,6 +971,16 @@ function checkDirective(c: Checker, node: Extract<LineNode, { k: 'directive' }>)
     });
     return undefined;
   };
+  /** A value outside a closed set: `expected` lists the legal lines. */
+  const badValues = (need: string, expected: readonly string[]): undefined => {
+    c.err('bad_directive', node.ns - 1, words.length > 0 ? (words[words.length - 1] as { e: number }).e : node.ne, 'lang.bad_directive', { directive: '@' + node.name, need }, {
+      forms: forms ? [...forms] : [],
+      expected: [...expected],
+      hint: `Write ${expected[0]}.`,
+      fingerprintKey: node.name,
+    });
+    return undefined;
+  };
   switch (node.name) {
     case 'view': {
       if (words.length === 1 && words[0]?.text === 'home') break;
@@ -1016,6 +1026,31 @@ function checkDirective(c: Checker, node: Extract<LineNode, { k: 'directive' }>)
         const [a, b] = (words[0] as { text: string }).text.split('..').map(Number) as [number, number];
         if (a >= b) return bad('a range with start before end');
       }
+      break;
+    // app-modes design 3.6, agent 3
+    case 'angleunit':
+      if (words.length !== 1 || !['radian', 'degree'].includes(words[0]?.text ?? '')) return badValues('radian or degree', ['@angleunit radian', '@angleunit degree']);
+      break;
+    case 'rounding': {
+      const m = words.length === 1 ? /^(\d{1,2})(s?)$/.exec(words[0]?.text ?? '') : null;
+      const d = m ? Number(m[1]) : NaN;
+      if (!m || (m[2] === 's' ? d < 1 || d > 15 : d > 15)) return badValues('0 to 15 decimal places, or 1s to 15s significant digits', ['@rounding 2', '@rounding 4s']);
+      break;
+    }
+    case 'coords':
+      if (words.length !== 1 || !['cartesian', 'polar'].includes(words[0]?.text ?? '')) return badValues('cartesian or polar', ['@coords cartesian', '@coords polar']);
+      break;
+    case 'title':
+      if (words.length !== 1 || node.words[0]?.str === undefined) return badValues('a title in quotes', ['@title "Triangle centres"']);
+      break;
+    case 'mode':
+      if (words.length !== 1 || !/^[a-z0-9]+$/.test(words[0]?.text ?? '')) return bad('one mode name, such as graphing');
+      break;
+    case 'exam':
+      if (words.length < 1 || !/^[a-z-]+$/.test(words[0]?.text ?? '')) return bad('a profile name or off');
+      break;
+    case 'restrict':
+      if (words.length < 1 || words.some((w) => !/^[a-z]+=\S+$/.test(w.text))) return bad('items like hide=algebra deny=Derivative');
       break;
     default:
       break;

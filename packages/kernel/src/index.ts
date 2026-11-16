@@ -21,7 +21,7 @@ export { KERNEL_ACTIONS, kernelActionSpecs } from './graph/actions';
 // figure shapes
 export type {
   Cell, ColorSpec, Props, EffectiveStyle, StyleEntry, FigureEvent, FrameDelta, UndefChange, ChangeReport, UndefinedName,
-  TxOk, TxOp, TxResult, ApplyOptions, BatchOptions, BatchResult, Description,
+  TxOk, TxOp, TxResult, ApplyOptions, BatchOptions, BatchResult, Description, LineGate, GateCall, LineOrigin,
 } from './graph/types';
 export type { WriteWhy, WriteResult, SetFreeOptions, DragPlan, DragWrite, MovePlan, UndoUnit, FrameDeltaResult } from './graph/hist';
 export type { UndoInfo } from './history/journal';
