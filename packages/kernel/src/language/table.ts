@@ -278,6 +278,8 @@ export const SELF_ID = -1 as ObjId;
 /** Read-only facts the language needs from the kernel. The kernel implements it. */
 export interface FigureView {
   lookup(name: string): ObjectInfo | undefined;
+  /** True when the name is a cell of the figure's sheet (`@sheet`): it may then be defined even where a command has that name (`Q1`). */
+  isSheetCell?(name: string): boolean;
   byId(id: ObjId): ObjectInfo | undefined;
   /** All object names in creation order (the most recent last). */
   names(): readonly string[];

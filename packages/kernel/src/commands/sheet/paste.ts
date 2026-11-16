@@ -8,15 +8,18 @@ import { makeNotice } from '../../errors/notices';
 import type { Figure } from '../../graph/figure';
 import { numberSource } from '../../graph/values';
 import type { Expr } from '../../language/ast';
-import { EXCLUDED_CELLS, cellName, parseCellName } from '../../language/cells';
+import { EXCLUDED_CELLS, cellName, columnLetters, parseCellName } from '../../language/cells';
 import type { CellAddress, CellRect } from '../../language/cells';
 import { parseLine } from '../../language/parser';
 import { valueText } from '../../language/runtime';
 import { ACTION_ORIGIN, applyPlan, literalOf, lockedAmong, lockedError, planClear } from './actions';
 import { shiftLine } from './shift';
 
-/** The limits of design 3.11 and 3.12. */
-export const PASTE_LIMITS = Object.freeze({ cells: 50_000, fileBytes: 5 * 1024 * 1024 });
+/**
+ * The limits of design 3.11 and 3.12. A paste of up to 50,000 cells is read; at most 20,000 are written in one step, the
+ * number of cell objects a figure may hold (design 3.6) and of lines in one batch.
+ */
+export const PASTE_LIMITS = Object.freeze({ cells: 50_000, written: 20_000, fileBytes: 5 * 1024 * 1024 });
 
 export type Separator = ',' | ';' | '\t';
 
@@ -194,7 +197,7 @@ function planRows(figure: Figure, rows: readonly (readonly string[])[], at: Cell
     }
   }
   if (maxC > size.cols || maxR > size.rows) {
-    const token = cellName(Math.min(maxC, 702), Math.min(maxR, 9999)) ?? '';
+    const token = cellName(maxC, maxR) ?? `${columnLetters(Math.min(maxC, 702)) ?? 'ZZ'}${maxR}`;
     const cols = Math.min(702, Math.max(size.cols, maxC));
     const rowsN = Math.min(9999, Math.max(size.rows, maxR));
     return err('cell_out_of_range', at0, { token, cols: size.cols, rows: size.rows }, { token, hint: `Use @sheet ${cols} ${rowsN} to make room for the data.`, suggest: [`@sheet ${cols} ${rowsN}`], recovery: 'create_first', fingerprintKey: 'paste' });
@@ -202,6 +205,9 @@ function planRows(figure: Figure, rows: readonly (readonly string[])[], at: Cell
   if (conflicts.length > 0) {
     const shown = conflicts.slice(0, 5).join(', ') + (conflicts.length > 5 ? ` and ${conflicts.length - 5} more` : '');
     return err('import_conflict', at0, { why: `The cells ${shown} are already filled; nothing was imported.` }, { token: conflicts[0] as string, hint: 'Import somewhere empty, or replace the cells.', recovery: 'choose', fingerprintKey: 'conflict' });
+  }
+  if (lines.length > PASTE_LIMITS.written) {
+    return err('limit', at0, { limit: 'paste_cells', max: PASTE_LIMITS.written, got: cells.length, what: 'cells written in one paste' }, { hint: 'Paste the data in parts, or keep it as a list.', recovery: 'rewrite', fingerprintKey: 'paste_written' });
   }
   for (const name of looked.slice(0, 20)) warnings.push(makeNotice('text_number_mix', { cell: name }));
   const first = cells[0];
@@ -343,7 +349,7 @@ export function planPasteCells(figure: Figure, rect: CellRect, at: CellAddress, 
     }
   }
   if (maxC > size.cols || maxR > size.rows) {
-    const token = cellName(Math.min(maxC, 702), Math.min(maxR, 9999)) ?? '';
+    const token = cellName(maxC, maxR) ?? `${columnLetters(Math.min(maxC, 702)) ?? 'ZZ'}${maxR}`;
     return err('cell_out_of_range', at0, { token, cols: size.cols, rows: size.rows }, { token, hint: `Use @sheet ${Math.min(702, Math.max(size.cols, maxC))} ${Math.min(9999, Math.max(size.rows, maxR))} to make room.`, recovery: 'create_first', fingerprintKey: 'paste' });
   }
   if (skipped.length > 0) warnings.push(makeNotice('fill_skipped', { count: skipped.length, first: skipped[0] as string, empty: 'a cell it reads' }));

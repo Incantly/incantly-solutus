@@ -92,7 +92,7 @@ function validateTarget(c: Checker, t: NameRef, rhsFieldHint?: string): boolean 
     });
     return false;
   }
-  const group = reservedGroup(t.name, c.fig.commands, c.functions);
+  const group = c.fig.isSheetCell?.(t.name) ? undefined : reservedGroup(t.name, c.fig.commands, c.functions);
   if (group) {
     const alts: string[] = [];
     if (rhsFieldHint && !reservedGroup(rhsFieldHint, c.fig.commands, c.functions) && !c.fig.lookup(rhsFieldHint)) alts.push(rhsFieldHint);
