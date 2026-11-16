@@ -14,7 +14,7 @@ export type { Step, LoadOpts, LoadReport, ScriptOpts, ObjectView, Slice } from '
 export type { FigureOptions } from './graph/core';
 
 // command registry: the hooks the command areas plug into
-export { CommandRegistry, RuleUndefined, undef } from './graph/registry';
+export { CommandRegistry, RuleUndefined, undef, formGroup } from './graph/registry';
 export type { CommandRule, RuleCall, InvertCall, ActionRule, ActionCall, ActionOutcome } from './graph/registry';
 export { KERNEL_ACTIONS, kernelActionSpecs } from './graph/actions';
 

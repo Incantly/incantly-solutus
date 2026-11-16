@@ -126,7 +126,8 @@ function fakeCtx(): CanvasRenderingContext2D & { calls: string[] } {
 
 describe('the painter', () => {
   // the tests example shows result cards in the list and draws nothing on the graph
-  it.each(EXAMPLES.filter((e) => e.id !== 'tests').map((e) => [e.id, e] as const))('paints the %s example and finds its bounds', (_id, ex) => {
+  // calculator and CAS-only examples have no graph
+  it.each(EXAMPLES.filter((e) => e.id !== 'tests' && !e.modes.includes('scientific') && !e.id.startsWith('cas-')).map((e) => [e.id, e] as const))('paints the %s example and finds its bounds', (_id, ex) => {
     const s = new KernelSession();
     s.load(ex.lines.join('\n'));
     const items: SceneItem[] = s.figure.objects()

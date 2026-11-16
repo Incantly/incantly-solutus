@@ -1,14 +1,21 @@
-/** Example figures, one per area built so far, so each can be tried in the studio. */
+/**
+ * Example figures, each made for one or more app modes (.kiro/specs/mode-examples), so the Examples menu shows the ones
+ * that fit the app in use.
+ */
+import type { AppModeId } from '@incantly/modes';
 
 export interface Example {
   readonly id: string;
   readonly title: string;
+  /** The app modes this example is made for; it loads with no failed line in each. */
+  readonly modes: readonly AppModeId[];
   readonly lines: readonly string[];
 }
 
 export const EXAMPLES: readonly Example[] = [
   {
     id: 'geometry',
+    modes: ['geometry'],
     title: 'Geometry: a triangle and its circles',
     lines: [
       'A = (-3, -1)',
@@ -23,6 +30,7 @@ export const EXAMPLES: readonly Example[] = [
   },
   {
     id: 'functions',
+    modes: ['graphing'],
     title: 'Functions: a cubic, its derivative and area',
     lines: [
       'a = 1 in -3..3 step 0.1',
@@ -34,6 +42,7 @@ export const EXAMPLES: readonly Example[] = [
   },
   {
     id: 'animation',
+    modes: ['graphing'],
     title: 'Animation: a point on a moving wave',
     lines: [
       'f(x) = sin(x - t)',
@@ -44,6 +53,7 @@ export const EXAMPLES: readonly Example[] = [
   },
   {
     id: 'lists',
+    modes: ['classic'],
     title: 'Lists and matrices',
     lines: [
       'xs = Seq(k, k, 1, 8)',
@@ -56,6 +66,7 @@ export const EXAMPLES: readonly Example[] = [
   },
   {
     id: 'one',
+    modes: ['graphing', 'probability'],
     title: 'Statistics: one variable',
     lines: [
       'data = [4, 7, 8, 8, 9, 10, 12, 12, 13, 15, 15, 16, 18, 21, 24]',
@@ -68,6 +79,7 @@ export const EXAMPLES: readonly Example[] = [
   },
   {
     id: 'regression',
+    modes: ['graphing'],
     title: 'Statistics: regression',
     lines: [
       'P = [(1, 2.1), (2, 3.9), (3, 6.2), (4, 7.8), (5, 10.1), (6, 11.7), (7, 14.2)]',
@@ -79,6 +91,7 @@ export const EXAMPLES: readonly Example[] = [
   },
   {
     id: 'tests',
+    modes: ['probability'],
     title: 'Statistics: tests and intervals',
     lines: [
       's = [5.1, 4.9, 5.6, 5.8, 6.0, 5.4, 5.2, 5.9]',
@@ -90,6 +103,7 @@ export const EXAMPLES: readonly Example[] = [
   },
   {
     id: 'probability',
+    modes: ['probability'],
     title: 'Probability: distributions',
     lines: [
       'mu = 0 in -3..3 step 0.1',
@@ -102,6 +116,7 @@ export const EXAMPLES: readonly Example[] = [
   },
   {
     id: 'random',
+    modes: ['probability'],
     title: 'Probability: dice, samples and seeds',
     lines: [
       '@seed 7',
@@ -114,6 +129,7 @@ export const EXAMPLES: readonly Example[] = [
   },
   {
     id: 'charts',
+    modes: ['probability'],
     title: 'Charts: pie, dots and stems',
     lines: [
       'votes = [12, 7, 5, 3]',
@@ -126,6 +142,7 @@ export const EXAMPLES: readonly Example[] = [
   },
   {
     id: 'selection',
+    modes: ['classic'],
     title: 'Selection: click rows or shapes (Shift adds)',
     lines: [
       'A = (-3, -1)',
@@ -138,21 +155,25 @@ export const EXAMPLES: readonly Example[] = [
   },
   {
     id: 'big-list',
+    modes: ['classic'],
     title: 'Big list: 2,500 rows that follow one slider',
     lines: ['a = 1 in 0..10 step 0.1', 'f(x) = sin(a*x)', 'P = (a, f(a))', ...Array.from({ length: 2497 }, (_, i) => `b${i} = a + ${i}`)],
   },
   {
     id: 'tools-keys',
+    modes: ['geometry'],
     title: 'Tools: Ctrl+8 Angle, Alt for the reflex angle, arrows and Enter',
     lines: ['A = (-4, 0)', 'V = (0, 0)', 'B = (3, 3)', 'P = (-2, -3)', 'Q = (0, -3)', 'R = (2, -3)'],
   },
   {
     id: 'anim-lissajous',
+    modes: ['graphing', 'geometry'],
     title: 'Animation: a Lissajous curve drawn by a traced point',
     lines: ['@clock 0..12.6', 'a = 3 in 1..5 step 1', 'P = (4*cos(a*t), 3*sin(2*t))', 'Trace(P)', 'frame = Polygon((-4.5, -3.5), (4.5, -3.5), (4.5, 3.5), (-4.5, 3.5))'],
   },
   {
     id: 'anim-spirograph',
+    modes: ['geometry', 'graphing'],
     title: 'Animation: a spirograph (move r, then press play)',
     lines: [
       '@clock 0..40',
@@ -169,6 +190,7 @@ export const EXAMPLES: readonly Example[] = [
   },
   {
     id: 'anim-pendulum',
+    modes: ['geometry', 'graphing'],
     title: 'Animation: a swinging pendulum and its path',
     lines: [
       '@clock 0..20',
@@ -182,11 +204,13 @@ export const EXAMPLES: readonly Example[] = [
   },
   {
     id: 'anim-slider',
+    modes: ['graphing'],
     title: 'Animation: a slider that plays itself (Animate)',
     lines: ['a = 1 in -2..2 step 0.01', 'f(x) = a*x^2 - 2', 'g(x) = -a*x + 1', 'V = (0, -2)', 'Animate(a)'],
   },
   {
     id: 'anim-tangent',
+    modes: ['graphing'],
     title: 'Animation: a tangent sliding along a curve',
     lines: [
       'f(x) = sin(x) + 0.3*x',
@@ -198,6 +222,7 @@ export const EXAMPLES: readonly Example[] = [
   },
   {
     id: 'anim-fire',
+    modes: ['graphing'],
     title: 'Particles: a fire',
     lines: [
       '@clock 0..30',
@@ -208,6 +233,7 @@ export const EXAMPLES: readonly Example[] = [
   },
   {
     id: 'anim-fountain',
+    modes: ['graphing'],
     title: 'Particles: a fountain with a colour fade',
     lines: [
       '@clock 0..30',
@@ -218,6 +244,7 @@ export const EXAMPLES: readonly Example[] = [
   },
   {
     id: 'anim-galaxy',
+    modes: ['graphing'],
     title: 'Particles: a turning spiral galaxy',
     lines: [
       '@clock 0..60',
@@ -228,6 +255,7 @@ export const EXAMPLES: readonly Example[] = [
   },
   {
     id: 'text-logic',
+    modes: ['classic'],
     title: 'Text and logic: live text, fractions, surds, tests',
     lines: [
       'a = 0.75 in 0..2 step 0.05',
@@ -258,6 +286,7 @@ export const EXAMPLES: readonly Example[] = [
   },
   {
     id: 'controls',
+    modes: ['classic'],
     title: 'Controls: buttons, a dropdown, an input box, handlers',
     lines: [
       'a = 2 in 0..10 step 0.5',
@@ -284,6 +313,7 @@ export const EXAMPLES: readonly Example[] = [
   },
   {
     id: 'cas',
+    modes: ['cas'],
     title: 'Algebra: factor, solve, expand, derivative, integral, limit',
     lines: [
       '# a quadratic, solved by factoring',
@@ -321,4 +351,189 @@ export const EXAMPLES: readonly Example[] = [
       'f30 = Factor(Expr(x^30 - 1))',
     ],
   },
+  /* ---------------- geometry: animations on the clock (no state, no particles) ---------------- */
+  {
+    id: 'geo-euler',
+    modes: ['geometry', 'classic'],
+    title: "Animation: Euler's formula, e^(it) on the unit circle",
+    lines: [
+      '@clock 0..12.57',
+      '@view -2.5 9 -3.4 3.4',
+      'O = (0, 0)',
+      'ring = Circle(O, 1)',
+      'P = (cos(t), sin(t))',
+      'radius = Segment(O, P)',
+      'X = (cos(t), 0)',
+      're = Segment(O, X)',
+      'im = Segment(X, P)',
+      'W = (1.5 + t / 2, sin(t))',
+      'Trace(W)',
+      'link = Segment(P, W)',
+      String.raw`eq = "$e^\{i t\} = \\cos t + i \\sin t$" with at = (-2.3, 3.2), anchor = nw, size = 22, latex = full`,
+      'now = "t = {t:2}" with at = (-2.3, 2.2), anchor = nw, size = 16',
+    ],
+  },
+  {
+    id: 'geo-cycloid',
+    modes: ['geometry', 'classic'],
+    title: 'Animation: a rolling wheel draws a cycloid',
+    lines: [
+      '@clock 0..18.85',
+      '@view -7.5 14.5 -2 6',
+      'rad = 1 in 0.5..2 step 0.1',
+      'C = (rad*t - 6, rad)',
+      'wheel = Circle(C, rad)',
+      'P = (rad*t - 6 - rad*sin(t), rad - rad*cos(t))',
+      'spoke = Segment(C, P)',
+      'ground = Segment((-7, 0), (14, 0))',
+      'Trace(P)',
+    ],
+  },
+  {
+    id: 'geo-thales',
+    modes: ['geometry', 'classic'],
+    title: "Animation: Thales' circle, the angle stays 90°",
+    lines: [
+      '@clock 0..12.57',
+      '@view -7 7 -5 7',
+      'O = (0, 0)',
+      'A = (-4, 0)',
+      'B = (4, 0)',
+      'c = Circle(O, 4)',
+      'P = (4*cos(t + 0.3), 4*sin(t + 0.3))',
+      'tri = Polygon(A, B, P)',
+      'raw = Angle(A, P, B)',
+      'ang = min(raw, 2*pi - raw)',
+      'note = "angle APB = {ang:deg}" with at = (-4, 5.5), anchor = nw, size = 18',
+    ],
+  },
+  {
+    id: 'geo-cardioid',
+    modes: ['geometry', 'classic'],
+    title: 'Animation: a circle rolling round a circle draws a cardioid',
+    lines: [
+      '@clock 0..6.29',
+      '@view -5 5 -4 4',
+      'base = Circle((0, 0), 1)',
+      'C = (2*cos(t), 2*sin(t))',
+      'roll = Circle(C, 1)',
+      'P = (2*cos(t) - cos(2*t), 2*sin(t) - sin(2*t))',
+      'arm = Segment(C, P)',
+      'Trace(P)',
+    ],
+  },
+  {
+    id: 'geo-rotate',
+    modes: ['geometry', 'classic'],
+    title: 'Animation: a square turning about a point',
+    lines: [
+      '@clock 0..12.57',
+      '@view -5 5 -4 4',
+      'O = (0, 0)',
+      'sq = Polygon((1, -1), (3, -1), (3, 1), (1, 1))',
+      'turn = Rotate(sq, t, O)',
+      'K = Rotate((3, 1), t, O)',
+      'Trace(K)',
+    ],
+  },
+  /* ---------------- graphing: particles ---------------- */
+  {
+    id: 'particles-snow',
+    modes: ['graphing', 'classic'],
+    title: 'Particles: falling snow',
+    lines: [
+      '@clock 0..30',
+      '@view -7 7 -6.5 6.5',
+      'snow = Particles(count = 2000, life = 6, pos = (12 (u - 0.5) + 0.4 sin(2 age + 6 v), 6 - 2 age), color = rgb(200, 220, 255), size = 0.05 + 0.05 v, alpha = 1 - ph)',
+      'ground = Segment((-6, -6), (6, -6))',
+    ],
+  },
+  {
+    id: 'particles-wave',
+    modes: ['graphing', 'classic'],
+    title: 'Particles: a ribbon riding a sine wave',
+    lines: [
+      '@clock 0..30',
+      'f(x) = sin(x - 2 t)',
+      'ribbon = Particles(count = 3000, life = 2, pos = (12 (u - 0.5), sin(12 (u - 0.5) - 2 t) + 0.3 (v - 0.5)), color = Gradient(u, rgb(255, 80, 120), rgb(80, 120, 255)), size = 0.06, alpha = 1 - ph)',
+      'axis = Segment((-6, -2), (6, -2))',
+    ],
+  },
+  {
+    id: 'particles-firework',
+    modes: ['graphing', 'classic'],
+    title: 'Particles: a firework burst',
+    lines: [
+      '@clock 0..30',
+      '@view -7 7 -5 5',
+      'burst = Particles(count = 2500, life = 1.5, pos = (4*age*cos(6.2832*u), 4*age*sin(6.2832*u) - 1.5*age^2 + 1), color = Gradient(ph, rgb(255, 220, 90), rgb(255, 60, 30)), size = 0.07, alpha = 1 - ph, blend = add)',
+      'ground = Segment((-5, -4), (5, -4))',
+    ],
+  },
+  /* ---------------- scientific: calculation rows ---------------- */
+  {
+    id: 'sci-fractions',
+    modes: ['scientific'],
+    title: 'Fractions: add, double, square',
+    lines: ['r1 = 3/5 + 1/4', 'r2 = r1 * 2', 'r3 = 1/3 + 1/6', 'r4 = (2/3)^2'],
+  },
+  {
+    id: 'sci-powers',
+    modes: ['scientific'],
+    title: 'Powers, roots and factorials',
+    lines: ['r1 = 2^10', 'r2 = sqrt(144)', 'r3 = 5!', 'r4 = 5^(-2)', 'r5 = sqrt(2) * sqrt(8)'],
+  },
+  {
+    id: 'sci-everyday',
+    modes: ['scientific'],
+    title: 'Everyday sums: interest, a tip, an average',
+    lines: ['r1 = 1000 * (1 + 0.05)^10', 'r2 = 45 * 0.2', 'r3 = Mean([4, 8, 15, 16, 23, 42])', 'r4 = sin(pi / 6) + cos(pi / 3)'],
+  },
+  /* ---------------- cas ---------------- */
+  {
+    id: 'cas-roots',
+    modes: ['cas', 'classic'],
+    title: 'Algebra: exact roots, expanding and cancelling',
+    lines: [
+      'p = Expr(x^3 - 6x^2 + 11x - 6)',
+      'fp = Factor(p)',
+      'r = Solutions(p == 0, x)',
+      'q = Expr(x^2 - 2)',
+      'rq = Solutions(q == 0, x)',
+      'ex = Expand(Expr((x + 1)^5))',
+      'cut = Simplify(Expr((x^2 - 9) / (x - 3)))',
+    ],
+  },
+  {
+    id: 'cas-calculus',
+    modes: ['cas', 'classic'],
+    title: 'Calculus: derivative, antiderivative and limits',
+    lines: [
+      'h = Expr(x * sin(x))',
+      'dh = Derivative(h, x)',
+      'ih = Integral(h, x)',
+      'dih = Derivative(ih, x)',
+      'back = Equivalent(dih, h)',
+      'L1 = Limit((exp(x) - 1) / x, x, 0)',
+      'L2 = Limit((1 - cos(x)) / x^2, x, 0)',
+    ],
+  },
 ];
+
+/** The order other modes' examples follow in classic, after classic's own. */
+const GROUPS: readonly AppModeId[] = ['geometry', 'graphing', 'probability', 'cas', 'scientific'];
+
+/**
+ * The examples of a mode, in groups. Every mode lists its own; classic, which runs everything, lists its own first and
+ * then the other modes' examples under their names.
+ */
+export function examplesFor(mode: AppModeId): { readonly group: AppModeId; readonly examples: readonly Example[] }[] {
+  const own = EXAMPLES.filter((e) => e.modes.includes(mode));
+  if (mode !== 'classic') return own.length > 0 ? [{ group: mode, examples: own }] : [];
+  const out: { group: AppModeId; examples: readonly Example[] }[] = [{ group: 'classic', examples: own }];
+  for (const g of GROUPS) {
+    const more = EXAMPLES.filter((e) => e.modes.includes(g) && !e.modes.includes('classic'));
+    if (more.length > 0) out.push({ group: g, examples: more });
+  }
+  return out;
+}

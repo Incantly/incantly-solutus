@@ -441,3 +441,4 @@ button:disabled { opacity: 0.4; cursor: default; }
 .app.no-graphics .datalab, .app.no-graphics .caspanel { flex: 1; width: auto; max-width: none; border-inline-start: 0; }
 .app.no-graphics .datalab .lab-body, .app.no-graphics .caspanel > * { max-width: 900px; width: 100%; margin-inline: auto; }
 .app[dir="rtl"] .expr-display, .app[dir="rtl"] .expr-out, .app[dir="rtl"] .value, .app[dir="rtl"] .slider, .app[dir="rtl"] .sci-row, .app[dir="rtl"] .cas-row, .app[dir="rtl"] .graph-canvas { direction: ltr; }
+.clock.clock-float { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); width: min(520px, 80%); border: 1px solid var(--line-strong); border-radius: 10px; box-shadow: 0 4px 14px rgba(15, 23, 42, 0.12); background: #fff; z-index: 3; }

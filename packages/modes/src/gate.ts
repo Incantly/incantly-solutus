@@ -3,7 +3,7 @@
  * that uses something the mode, a restriction or an exam switches off, with `mode_forbids`. Lines already in the figure
  * are never checked again, so existing objects keep working.
  */
-import { err } from '@incantly/kernel';
+import { err, formGroup } from '@incantly/kernel';
 import type { ErrorObject, GateCall, LineGate, UsedName } from '@incantly/kernel';
 import { allowedInstead } from './policy';
 import type { CommandRef, CompiledPolicy } from './policy';
@@ -140,6 +140,12 @@ function findCommand(root: unknown, at: UsedName): CmdNode | undefined {
 }
 
 /** The catalogue of a command list: name and group of each spec. */
-export function catalogueOf(specs: readonly { readonly name: string; readonly group: string }[]): CommandRef[] {
-  return specs.map((s) => ({ name: s.name, group: s.group }));
+export function catalogueOf(specs: readonly { readonly name: string; readonly group: string; readonly forms?: readonly object[] }[]): CommandRef[] {
+  // a command two areas give appears once per area group (Normal: geometry and distributions)
+  const out: CommandRef[] = [];
+  for (const s of specs) {
+    const groups = new Set([s.group, ...(s.forms ?? []).map((f) => formGroup(f)).filter((g): g is string => g !== undefined)]);
+    for (const group of groups) out.push({ name: s.name, group });
+  }
+  return out;
 }

@@ -5,6 +5,7 @@
  */
 import type { CheckedLine } from './check';
 import type { RelTree, TNode } from './tnode';
+import { formGroup } from '../graph/registry';
 
 export interface UsedName {
   readonly name: string;
@@ -48,7 +49,7 @@ export function lineUses(line: CheckedLine): LineUses {
     if (n.ty?.k === 'List') list = true;
     switch (n.n) {
       case 'command':
-        commands.push({ name: n.spec.name, group: n.spec.group, s: n.s, e: n.e });
+        commands.push({ name: n.spec.name, group: formGroup(n.form) ?? n.spec.group, s: n.s, e: n.e });
         for (const a of n.args) walk(a.expr);
         return;
       case 'builtin':

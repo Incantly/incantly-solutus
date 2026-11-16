@@ -172,6 +172,16 @@ export interface ActionRule {
   run(call: ActionCall): ActionOutcome | void;
 }
 
+const FORM_GROUP = new WeakMap<object, string>();
+
+/**
+ * The group of the area that gave this form, when it differs from its command's (two areas give `Normal`: a line in
+ * geometry, a distribution in probability). Mode policies read it; `undefined` means the command's own group.
+ */
+export function formGroup(form: object): string | undefined {
+  return FORM_GROUP.get(form);
+}
+
 /** A growing set of command specs. Areas call `register`; the figure builds one table from it. */
 export class CommandRegistry {
   private readonly specs: CommandSpec[] = [];
@@ -196,7 +206,11 @@ export class CommandRegistry {
     const old = this.specs[i] as CommandSpec;
     const sig = (f: CommandSpec['forms'][number]): string => f.params.map((p) => `${p.type}${p.optional ? '?' : ''}${p.kind ? `:${p.kind}` : ''}`).join(',');
     const have = new Set(old.forms.map(sig));
-    const forms = [...old.forms, ...spec.forms.filter((f) => !have.has(sig(f)))];
+    // a form from another area keeps that area's group, so a mode that allows one area's form allows only that one
+    // (forms keep their identity: other areas know their own forms by object)
+    const added = spec.forms.filter((f) => !have.has(sig(f)));
+    if (spec.group !== old.group) for (const f of added) if (!FORM_GROUP.has(f)) FORM_GROUP.set(f, spec.group);
+    const forms = [...old.forms, ...added];
     const a = old.refuse;
     const b = spec.refuse;
     const refuse = a && b ? (c: Parameters<typeof a>[0]) => a(c) ?? b(c) : (a ?? b);

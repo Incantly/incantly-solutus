@@ -35,7 +35,7 @@ describe('the mode records (R1)', () => {
     expect(MODES.cas.views.initial).toEqual(['cas']);
     expect(MODES.cas.features.inputBar).toBe(false);
     expect(MODES.classic.features.scripting).toBe(true);
-    expect(MODES.probability.views.initial).toEqual(['distribution']);
+    expect(MODES.probability.views.initial).toEqual(['distribution', 'graphics']);
   });
 
   it('lists notes and 3D but says they are not available yet', () => {
