@@ -377,11 +377,16 @@ class Compiler {
    * value undefined, like any list.
    */
   compileCells(n: Extract<TNode, { n: 'cells' }>): Fn {
-    const items = n.items.map((it) => ({ id: this.objId(it.id), name: it.name, col: it.col, row: it.row }));
+    const items = n.items.map((it) => ({ id: this.objId(it.id), name: it.name, col: it.col, row: it.row, blank: it.blank === true }));
     const rect = n.rect;
     if (n.as === 'range') {
       return (env) => {
-        const cells = items.map((it) => ({ col: it.col, row: it.row, name: it.name, value: env.read(it.id) }));
+        const cells: { col: number; row: number; name: string; value: unknown }[] = [];
+        for (const it of items) {
+          const value = env.read(it.id);
+          if (value === undefined && it.blank) continue;
+          cells.push({ col: it.col, row: it.row, name: it.name, value });
+        }
         const v: RangeValue = { schema: 'Range', rect, cells };
         return v;
       };
@@ -390,19 +395,22 @@ class Compiler {
     const pack = (vals: unknown[]): unknown => (numeric ? Float64Array.from(vals as number[]) : vals);
     return (env) => {
       const vals: unknown[] = [];
+      const kept: typeof items = [];
       for (const it of items) {
         const v = env.read(it.id);
+        if (v === undefined && it.blank) continue;
         if (v === undefined || (typeof v === 'number' && v !== v)) {
           failInput(env, it.id);
           return undefined;
         }
         vals.push(v);
+        kept.push(it);
       }
       if (n.as === 'list') return pack(vals);
       const rows: unknown[] = [];
       for (let r = rect.r0, k = 0; r <= rect.r1; r++) {
         const row: unknown[] = [];
-        while (k < items.length && (items[k] as { row: number }).row === r) row.push(vals[k++]);
+        while (k < kept.length && (kept[k] as { row: number }).row === r) row.push(vals[k++]);
         if (row.length > 0) rows.push(pack(row));
       }
       return rows;

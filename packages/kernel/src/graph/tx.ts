@@ -326,7 +326,7 @@ export class FigureTx extends FigureBase {
     notices.push(...cr.notices);
     const checked = cr.value;
     // an area's own refusal of the line, before anything changes
-    const refused = runLineChecks(this, checked, parsed);
+    const refused = runLineChecks(this, checked, parsed, { origin: opts.origin ?? 'host' });
     if (refused) {
       const at = this.at(parsed);
       const placed = refused.line > 0 && refused.col > 1 ? {} : { line: at.line, col: at.col, endCol: at.endCol };
@@ -996,7 +996,7 @@ export class FigureTx extends FigureBase {
           return undefined;
         }
       });
-      const out = rule.run({ figure: this as never, spec: call.spec, objects: objects.filter((o): o is ObjRec => o !== undefined).map((o) => o.id), values });
+      const out = rule.run({ figure: this as never, spec: call.spec, objects: objects.filter((o): o is ObjRec => o !== undefined).map((o) => o.id), values, refs: objects.map((o) => o?.id) });
       if (out && out.error) {
         // the action's own refusal, placed on the line that called it
         const at = this.at(parsed);

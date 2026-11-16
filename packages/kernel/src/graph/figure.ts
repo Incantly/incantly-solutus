@@ -170,6 +170,11 @@ export class Figure extends FigureHist {
     return this.directiveItem(name)?.words;
   }
 
+  /** The words of every line of a directive that may be written many times (`@cell`), in order. */
+  directiveLines(name: string): readonly (readonly string[])[] {
+    return this.items.filter((it) => it.name === name).map((it) => it.words);
+  }
+
   /** The film range from `@clock a..b`: `0..Infinity` without the directive. */
   clockRange(): { from: number; to: number } {
     const d = this.directiveItem('clock');

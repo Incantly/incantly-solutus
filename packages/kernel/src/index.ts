@@ -40,8 +40,11 @@ export * as text from './commands/text/index';
 export { registerSound, soundsAt, soundEvents, clearSoundEvents, isMuted, setMuted, isSoundValue, soundText, SOUND_LIMITS, SOUND_SPECS, WAVES, NOISE_COLORS } from './commands/sound/index';
 export type { SoundValue, SoundEvent, SoundFrame, PlayingSound, Wave, NoiseColor } from './commands/sound/index';
 export { noteFrequency, midiOfNote, midiToFrequency, semitonesUp } from './language/notes';
-export { registerSheet, sheetSize, rangeReadersOf, undefinedCode, UNDEFINED_CODES, SHEET_LIMITS, SHEET_SPECS, shiftRefs, shiftLine } from './commands/sheet/index';
-export type { ShiftResult } from './commands/sheet/index';
+export {
+  registerSheet, sheetSize, rangeReadersOf, undefinedCode, UNDEFINED_CODES, SHEET_LIMITS, SHEET_SPECS, shiftRefs, shiftLine, planFill, planClear, applyPlan, applyFill, cellMarks,
+  setSheetLocks, sheetLocksOn, literalOf,
+} from './commands/sheet/index';
+export type { ShiftResult, FillPlan, FillDirection, CellMark, SheetWrite } from './commands/sheet/index';
 export * from './language/cells';
 export { registerText } from './commands/text/index';
 export { CAS_COMMAND_NAMES, CAS_TYPE_NAMES, casCalculus, casEngineReady, isCasForm, isSymValue, onCasEngine, registerCas, setCasEngine } from './commands/cas/index';
