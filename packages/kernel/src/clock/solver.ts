@@ -213,6 +213,11 @@ export class StateSolver {
   /** Reads the figure's states and rates when the structure changed. */
   private rebuild(): void {
     if (this.version === this.fig.version() && !this.dirtyInputs) return;
+    // no states before and none now: nothing to build (most lines of most figures)
+    if (!this.dirtyInputs && this.layout.length === 0 && this.missing.length === 0 && this.fig.states().size === 0) {
+      this.version = this.fig.version();
+      return;
+    }
     const rebuilt = this.version !== this.fig.version();
     const restart = this.dirtyInputs;
     this.version = this.fig.version();

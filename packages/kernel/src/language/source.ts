@@ -59,8 +59,40 @@ export function hexColourLength(text: string, i: number): number {
   return m ? m[0].length : 0;
 }
 
+/** Text `normalise` leaves exactly as it is: printable ASCII and `\n` (no tab, no carriage return). */
+const PLAIN = /^[\x20-\x7E\n]*$/;
+
+/** The map of a text `normalise` leaves as it is: index i is i. The arrays are made only if someone reads them. */
+class IdentityMap implements Normalised {
+  readonly identity = true;
+  private s: Int32Array | undefined;
+  private e: Int32Array | undefined;
+  constructor(readonly text: string) {}
+  private make(): void {
+    const n = this.text.length;
+    this.s = new Int32Array(n);
+    this.e = new Int32Array(n);
+    for (let i = 0; i < n; i++) {
+      this.s[i] = i;
+      this.e[i] = i + 1;
+    }
+  }
+  get start(): Int32Array {
+    if (!this.s) this.make();
+    return this.s as Int32Array;
+  }
+  get end(): Int32Array {
+    if (!this.e) this.make();
+    return this.e as Int32Array;
+  }
+}
+
+const identityMap = (raw: string): Normalised => new IdentityMap(raw);
+
 /** Rewrites typographic variants. Strings and comments are copied verbatim, except for smart quotes. */
 export function normalise(raw: string): Normalised {
+  // printable ASCII and newlines: nothing to rewrite, every character maps to itself (most lines, and every generated one)
+  if (PLAIN.test(raw)) return identityMap(raw);
   // NFC, chunked at combining marks so the map stays exact.
   let src = raw;
   let srcStart: Int32Array | undefined;
@@ -243,9 +275,7 @@ export class SourceMap {
     this.norm = normalise(raw);
     this.firstLine = firstLine;
     this.lineStarts = [0];
-    for (let i = 0; i < raw.length; i++) {
-      if (raw[i] === '\n') this.lineStarts.push(i + 1);
-    }
+    for (let i = raw.indexOf('\n'); i >= 0; i = raw.indexOf('\n', i + 1)) this.lineStarts.push(i + 1);
   }
 
   get text(): string {
@@ -257,6 +287,7 @@ export class SourceMap {
     const n = this.norm;
     if (n.text.length === 0) return 0;
     if (s >= n.text.length) return this.raw.length;
+    if ((n as { identity?: boolean }).identity) return s;
     return n.start[s] as number;
   }
 
@@ -264,6 +295,7 @@ export class SourceMap {
     const n = this.norm;
     if (n.text.length === 0 || e <= 0) return 0;
     if (e > n.text.length) return this.raw.length;
+    if ((n as { identity?: boolean }).identity) return e;
     return n.end[e - 1] as number;
   }
 

@@ -39,6 +39,7 @@ const HOST_DIRECTIVES = new Set(['mode', 'restrict', 'exam']);
 const LINE_DIRECTIVES = ['@view', '@grid', '@axes', '@clock', '@angleunit', '@rounding', '@coords', '@title'];
 import { sameValue, valueSource } from './values';
 
+const FRESH_NAME = /^[A-Za-z][A-Za-z0-9_]*$/;
 const REPEATABLE: ReadonlySet<string> = new Set(['step', 'beat', 'cell', 'colwidth', 'limit']);
 export const SCRIPT_VERSION = 1;
 
@@ -286,8 +287,10 @@ export class FigureTx extends FigureBase {
     const notices: Notice[] = [];
     let parsed: ParsedLine;
     if (typeof input === 'string') {
+      // a line an area generated that defines a new name: no handler or rewrite would change it
+      const fresh = opts.generated === true && this.freshDefine(input);
       // a line kind an area owns outright (an `on` line) is carried out by the area, as one undo entry
-      const handled = runLineHandlers(this, input, { dryRun: opts.dryRun === true, line: lineNo });
+      const handled = fresh ? undefined : runLineHandlers(this, input, { dryRun: opts.dryRun === true, line: lineNo });
       if (handled) {
         if ('ok' in handled) return { ...handled, line: lineNo, source: input } as TxResult;
         if (!opts.dryRun) this.record({ k: 'ext', label: input, undo: handled.undo, redo: handled.redo });
@@ -296,7 +299,7 @@ export class FigureTx extends FigureBase {
         return this.okResult(undefined, 'action', handled.summary, rep, { line: lineNo, ...(opts.dryRun ? { dryRun: true as const } : {}) });
       }
       // an area's own reading of the line comes first: it may stand for another line, or be refused
-      const rw = runLineRewriters(this, input);
+      const rw = fresh ? undefined : runLineRewriters(this, input);
       if (rw?.error) return { ...rw.error, line: lineNo, source: input } as TxResult;
       if (rw?.notices) notices.push(...rw.notices);
       if (rw?.text !== undefined) input = rw.text;
@@ -374,6 +377,14 @@ export class FigureTx extends FigureBase {
       case 'action':
         return this.applyAction(parsed, checked, notices, opts, pass);
     }
+  }
+
+  /** `name = …` with no `with` or `in` list, for a name no object has yet. */
+  protected freshDefine(text: string): boolean {
+    const eq = text.indexOf(' = ');
+    if (eq <= 0 || text.includes(' with ') || text.includes(' in ')) return false;
+    const name = text.slice(0, eq);
+    return FRESH_NAME.test(name) && !this.byNameMap.has(name);
   }
 
   /** `Rename(M, N)` with a bare new name is read as `Rename(M, "N")` when no object is called N. */
@@ -857,7 +868,7 @@ export class FigureTx extends FigureBase {
       const pre = new Map<ObjRec, Cell>();
       recs.forEach((r, i) => pre.set(r, cells[i] as Cell));
       this.record({ k: 'add', items: recs.map((rec) => ({ rec, pos: rec.order })), label, ...(reanchored.length > 0 ? { reanchored } : {}) });
-      this.settle(recs, pre);
+      this.settleNew(recs, pre);
     } else {
       recs = existing;
       const changes = recs.map((rec, i) => ({ rec, before: rec.p, after: persists[i] as Persist }));
@@ -883,7 +894,9 @@ export class FigureTx extends FigureBase {
     }
     this.diffReport(pass, rep);
     const first = recs[0] as ObjRec;
-    return this.okResult(parsed, redefine ? 'redefine' : 'add', this.summaryOf(first), rep, {
+    // a generated line (a fill) is reported by its area, not line by line: its summary is the line itself
+    const summary = opts.generated ? parsed.source : this.summaryOf(first);
+    return this.okResult(parsed, redefine ? 'redefine' : 'add', summary, rep, {
       name: first.p.name,
       ...(names.length > 1 ? { names } : {}),
       id: first.id,
