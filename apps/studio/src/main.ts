@@ -6,4 +6,8 @@ const root = document.getElementById('app');
 const q = new URLSearchParams(location.search);
 // `?mode=geometry` opens an app; `?start` shows the app tiles first (app-modes ui 1)
 const mode = q.get('mode') as AppModeId | null;
-if (root) mountStudio(root, { ...(mode ? { mode } : {}), start: q.has('start') });
+if (root) {
+  const studio = mountStudio(root, { ...(mode ? { mode } : {}), start: q.has('start') });
+  // a shared link (`#f=…`) opens its figure (embed-files-export ui.md 5)
+  void studio.files.openLink(location.href);
+}

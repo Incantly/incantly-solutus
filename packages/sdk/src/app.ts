@@ -178,6 +178,16 @@ function styleText(v: string | number | boolean): string {
 /** The first line of a script: `# incantly 1 mode=graphing`. */
 export const HEADER = /^\s*# incantly \d+[^\n]*(\n|$)/;
 
+/** Why a point does not follow the pointer, in words. */
+const DRAG_REASONS: Readonly<Record<string, string>> = {
+  not_draggable: 'its rule cannot be worked backwards from a new place',
+  locked: 'it is locked',
+  owned_by_solver: 'the solver places it',
+  undefined: 'it is undefined',
+  bad_target: 'that place is not on its path',
+  unknown_object: 'it does not exist',
+};
+
 const DEFAULT_VIEW = { x0: -10, x1: 10, y0: -7, y1: 7 };
 
 const NOT_LOADED = (failed: readonly KernelError[]): LoadResult => ({ ok: false, migrated: false, applied: 0, failed, warnings: [] });
@@ -256,6 +266,14 @@ export interface App {
   reportError(error: ApiError): void;
   /** For the screen: runs `fn` with this event source and writer (a learner's drag is `user`, origin `learner`). */
   as<T>(source: EventSource, fn: () => T): T;
+  /**
+   * For the screen: the learner drags a point to (x, y); `done` on release. A free point moves itself; a point on a
+   * path or built from free points moves what it is built from. Sends `dragStart`, `drag` (one per frame) and
+   * `dragEnd`, with source `user`; the whole drag is one undo step.
+   */
+  dragPoint(name: string, x: number, y: number, done: boolean): LineResult;
+  /** True when the screen may drag the point. */
+  draggable(name: string): boolean;
 }
 
 class AppCore implements App {
@@ -365,6 +383,7 @@ class AppCore implements App {
           break;
         case 'directive':
           if (ev.name === 'view') this.emit({ type: 'viewChanged', view: this.viewWindow() });
+          else if (ev.name === 'clock') this.emit({ type: 'clockChanged' });
           break;
         case 'clock':
           this.emit({ type: 'clockChanged' });
@@ -386,6 +405,62 @@ class AppCore implements App {
     } finally {
       this.source = was;
     }
+  }
+
+  private dragging: string | undefined;
+
+  draggable(name: string): boolean {
+    if (this.gone || this.readOnly) return false;
+    const o = this.figure.get(name);
+    if (!o || o.type !== 'Point' || !o.cell.defined) return false;
+    return o.free || this.figure.dragPlan(name, o.cell.value).writes.length > 0;
+  }
+
+  dragPoint(name: string, x: number, y: number, done: boolean): LineResult {
+    need(typeof name === 'string' && typeof x === 'number' && typeof y === 'number', 'dragPoint', 'it needs a name and two numbers');
+    if (this.gone) return destroyed();
+    if (this.readOnly) return apiError('api', 'read_only', 'This figure is read-only.', { hint: 'Turn off readOnly, or work on a copy.' });
+    const o = this.figure.get(name);
+    if (!o) return unknownName(name, [...this.figure.objects()].map((v) => v.name));
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return apiError('api', 'bad_argument', 'The place needs two finite numbers.', { detail: { argument: 'point' } });
+    return this.as('user', (): LineResult => {
+      const f = this.figure;
+      const round = (v: number): number => Number(v.toPrecision(6));
+      if (o.free) {
+        const r = f.setFree(name, { x: round(x), y: round(y) }, 'drag');
+        if (!r.ok) return this.failDrag(r, done);
+        f.flush();
+      } else {
+        const plan = f.dragPlan(name, { x, y });
+        const r = f.drag(plan);
+        if (!r.ok) {
+          const why = String(r.reason ?? plan.reason ?? 'not_draggable');
+          return this.failDrag(apiError('api', 'not_draggable', `${name} cannot be dragged: ${DRAG_REASONS[why] ?? why.replace(/_/g, ' ')}.`, { hint: 'Drag a free point it is built from.', detail: { name, reason: why } }), done);
+        }
+      }
+      if (this.dragging !== name) {
+        if (this.dragging !== undefined) this.emit({ type: 'dragEnd', name: this.dragging });
+        this.dragging = name;
+        this.emit({ type: 'dragStart', name });
+      }
+      const v = f.get(name);
+      this.emit({ type: 'drag', name, value: toValue(v && v.cell.defined ? v.cell.value : undefined) });
+      this.endDrag(done);
+      return { ok: true, line: 1, name, type: o.type, ...(v ? { summary: this.summaryOf(v).summary } : {}), created: [], changed: [name], undefined: [] };
+    });
+  }
+
+  /** A move that failed changes nothing; a release still ends the drag that was going on. */
+  private failDrag(e: LineResult, done: boolean): LineResult {
+    this.endDrag(done);
+    return e;
+  }
+
+  private endDrag(done: boolean): void {
+    if (!done || this.dragging === undefined) return;
+    this.figure.commitDrag();
+    this.emit({ type: 'dragEnd', name: this.dragging });
+    this.dragging = undefined;
   }
 
   private origin(): LineOrigin {
@@ -886,12 +961,12 @@ class AppCore implements App {
     if (typeof input === 'string') {
       const sn = sniff(input);
       if ('ok' in sn) return sn;
-      if (sn.kind === 'script') return this.openScript(sn.text);
+      if (sn.kind === 'script') return this.openScriptText(sn.text);
       value = sn.value;
     }
     const r = readFile(value);
     if ('ok' in r) return r;
-    return this.openFile(r.file, r.migrated, r.warnings);
+    return this.openFileData(r.file, r.migrated, r.warnings);
   }
 
   async loadBytes(bytes: Uint8Array): Promise<LoadResult | ApiError> {
@@ -916,7 +991,7 @@ class AppCore implements App {
   }
 
   /** A plain script: its header names the mode. */
-  private openScript(text: string): LoadResult {
+  private openScriptText(text: string): LoadResult {
     const m = /^\s*# incantly \d+[^\n]*\bmode=([a-z0-9]+)/.exec(text);
     const want = m ? modeFor(m[1] as string) : { mode: this.mode };
     const from = this.mode;
@@ -934,7 +1009,7 @@ class AppCore implements App {
     return { ok: r.ok, migrated: false, applied: r.applied, failed: r.failed, warnings: [], ...('adjusted' in want && want.adjusted ? { modeAdjusted: want.adjusted } : {}) };
   }
 
-  private openFile(f: IncantlyFile, migrated: boolean, warnings: readonly FileWarning[]): LoadResult {
+  private openFileData(f: IncantlyFile, migrated: boolean, warnings: readonly FileWarning[]): LoadResult {
     const want = modeFor(f.mode);
     const from = this.mode;
     this.mode = want.mode;

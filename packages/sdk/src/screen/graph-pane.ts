@@ -26,6 +26,14 @@ export interface GraphPaneOptions {
   readonly activate?: (id: number) => void;
   /** The pointer moved with no tool on and no drag. */
   readonly hoverAt?: (px: number, py: number, vp: Viewport) => void;
+  /** The window shown at the first paint and by the home button; the default is 20 units across the short side. */
+  readonly home?: () => Box | undefined;
+  /** The zoom buttons (default on). */
+  readonly zoomButtons?: boolean;
+  /** Pan by dragging, zoom with the wheel and the keys (default on). */
+  readonly panAndZoom?: boolean;
+  /** The window changed by a pan or a zoom on the screen. */
+  readonly viewMoved?: (vp: Viewport) => void;
 }
 
 export interface GraphTool {
@@ -97,6 +105,16 @@ export function mountGraph(opts: GraphPaneOptions): GraphPane {
   let hits: Hit[] = [];
   let frame = 0;
   let first = true;
+  const panAndZoom = opts.panAndZoom !== false;
+  const goHome = (): void => {
+    const b = opts.home?.();
+    if (b) vp.fit(b, 0, false);
+    else vp.home();
+  };
+  const moved = (): void => {
+    opts.viewMoved?.(vp);
+    redraw();
+  };
 
   const paint = (): void => {
     frame = 0;
@@ -105,7 +123,7 @@ export function mountGraph(opts: GraphPaneOptions): GraphPane {
     const h = rect.height || 600;
     vp.resize(w, h);
     if (first) {
-      vp.home();
+      goHome();
       first = false;
     }
     const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
@@ -142,7 +160,7 @@ export function mountGraph(opts: GraphPaneOptions): GraphPane {
 
   const zoom = (factor: number): void => {
     vp.zoomAt(vp.w / 2, vp.h / 2, factor);
-    redraw();
+    moved();
   };
   const controls = document.createElement('div');
   controls.className = 'graph-controls';
@@ -150,15 +168,19 @@ export function mountGraph(opts: GraphPaneOptions): GraphPane {
     button('+', 'Zoom in', () => zoom(1.5)),
     button('−', 'Zoom out', () => zoom(1 / 1.5)),
     button('⌂', 'Default view', () => {
-      vp.home();
-      redraw();
+      goHome();
+      moved();
     }),
-    button('⤢', 'Zoom to fit', fit),
+    button('⤢', 'Zoom to fit', () => {
+      fit();
+      opts.viewMoved?.(vp);
+    }),
   );
+  controls.hidden = opts.zoomButtons === false;
   element.append(canvas, latex.element, controls, tip);
 
   // pointer: drag a free point, else pan
-  let drag: { kind: 'pan' | 'point' | 'pending' | 'aim'; x: number; y: number; name?: string; moved: boolean } | undefined;
+  let drag: { kind: 'pan' | 'point' | 'pending' | 'aim' | 'still'; x: number; y: number; name?: string; moved: boolean } | undefined;
   let down: { x: number; y: number; tool: boolean } | undefined;
   const local = (e: PointerEvent | WheelEvent): { x: number; y: number } => {
     const r = canvas.getBoundingClientRect();
@@ -179,7 +201,7 @@ export function mountGraph(opts: GraphPaneOptions): GraphPane {
       drag = { kind: 'aim', ...p, moved: false };
       tool?.hover(p.x, p.y, vp, true);
       redraw();
-    } else drag = !toolOn && h && h.k === 'circle' && h.drag ? { kind: 'point', name: h.drag, ...p, moved: false } : { kind: 'pan', ...p, moved: false };
+    } else drag = !toolOn && h && h.k === 'circle' && h.drag ? { kind: 'point', name: h.drag, ...p, moved: false } : panAndZoom || toolOn ? { kind: 'pan', ...p, moved: false } : { kind: 'still', ...p, moved: false };
     down = { ...p, tool: toolOn };
     canvas.setPointerCapture?.(e.pointerId);
     canvas.classList.toggle('grabbing', drag.kind === 'pan');
@@ -203,6 +225,8 @@ export function mountGraph(opts: GraphPaneOptions): GraphPane {
         redraw();
         return;
       }
+      // pan and zoom are off: the background stays where it is
+      if (drag.kind === 'still') return;
       if (drag.kind === 'aim') {
         drag.x = p.x;
         drag.y = p.y;
@@ -214,7 +238,7 @@ export function mountGraph(opts: GraphPaneOptions): GraphPane {
         vp.pan(p.x - drag.x, p.y - drag.y);
         drag.x = p.x;
         drag.y = p.y;
-        redraw();
+        moved();
       } else if (drag.name) opts.drag(drag.name, vp.x(p.x), vp.y(p.y), false);
       tip.hidden = true;
       return;
@@ -266,12 +290,14 @@ export function mountGraph(opts: GraphPaneOptions): GraphPane {
     opts.hoverAt?.(-1e9, -1e9, vp);
   });
   canvas.addEventListener('wheel', (e) => {
+    if (!panAndZoom) return;
     e.preventDefault();
     const p = local(e);
     vp.zoomAt(p.x, p.y, Math.exp(-e.deltaY * 0.0015));
-    redraw();
+    moved();
   }, { passive: false });
   canvas.addEventListener('keydown', (e) => {
+    if (!panAndZoom) return;
     const step = 60;
     const k = e.key;
     if (k === 'ArrowLeft') vp.pan(step, 0);
@@ -280,10 +306,10 @@ export function mountGraph(opts: GraphPaneOptions): GraphPane {
     else if (k === 'ArrowDown') vp.pan(0, -step);
     else if (k === '+' || k === '=') vp.zoomAt(vp.w / 2, vp.h / 2, 1.25);
     else if (k === '-') vp.zoomAt(vp.w / 2, vp.h / 2, 0.8);
-    else if (k === '0') vp.home();
+    else if (k === '0') goHome();
     else return;
     e.preventDefault();
-    redraw();
+    moved();
   });
 
   const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(() => redraw()) : undefined;

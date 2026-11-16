@@ -201,6 +201,8 @@ export class EventHub {
     const events = this.pending;
     this.pending = [];
     for (const e of events) {
+      // the drag's last place reaches the page before its end, not on the next frame
+      if (e.type === 'dragEnd') this.flushFrame();
       for (const l of [...this.listeners]) {
         if (l.type !== e.type) continue;
         const ev = fit(l, e);

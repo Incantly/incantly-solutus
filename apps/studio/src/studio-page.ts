@@ -41,6 +41,8 @@ import { tracePoints, tracedIds } from '@incantly/kernel';
 import { createSelection, selectionFrom } from './selection';
 import type { Selection } from './selection';
 import { hitTest } from '@incantly/sdk/screen';
+import { mountFileMenu } from './files-ui';
+import type { FileMenu } from './files-ui';
 
 export interface StudioOptions {
   /** Frame scheduler for the clock; defaults to `requestAnimationFrame`. A test passes its own. */
@@ -87,6 +89,8 @@ export interface Mounted {
   /** The speaker button and the sound feed. */
   readonly sound: SoundUi;
   /** Replaces the figure with an example's lines. */
+  /** Open, save, export and share (embed-files-export ui.md 2 to 5). */
+  readonly files: FileMenu;
   loadExample(id: string): void;
   undo(): void;
   redo(): void;
@@ -377,7 +381,13 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
   help.append(el('h2', {}, 'Keyboard'), keys, el('div', { class: 'dialog-actions' }, btn('Close', 'secondary', 'Close', () => help.close())));
   const helpBtn = btn('?', 'icon-btn', 'Keyboard shortcuts', () => (typeof help.showModal === 'function' ? help.showModal() : help.setAttribute('open', '')));
 
-  const topTools = el('div', { class: 'top-tools' }, newBtn, examples, sheetBtn, labBtn, calcBtn, casBtn, scriptBtn);
+  const files: FileMenu = mountFileMenu({
+    session, graph, say, status,
+    expressions: () => holder.expressions,
+    mode: () => modeRef.current?.mode.id ?? opts.mode ?? 'classic',
+    setMode: (m) => void modeRef.current?.setMode(m, { force: true }),
+  });
+  const topTools = el('div', { class: 'top-tools' }, newBtn, files.element, examples, sheetBtn, labBtn, calcBtn, casBtn, scriptBtn);
   const topRight = el('div', { class: 'top-right' }, undoBtn, redoBtn, helpBtn);
   const top = el('header', { class: 'topbar' },
     el('div', { class: 'brand' }, el('span', { class: 'logo', 'aria-hidden': 'true' }, '∿'), el('span', { class: 'brand-name' }, 'Incantly'), el('span', { class: 'brand-sub' }, 'Studio')),
@@ -439,7 +449,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
   const split = el('div', { class: 'split', role: 'separator', 'aria-orientation': 'vertical', 'aria-label': 'Resize the expression list', tabindex: '0' });
   const main = el('div', { class: 'workspace' }, panel, split, graph.element, sheet.element, lab.element, calc.element, cas.element);
   const appEl = el('div', { class: 'app' }, top, main);
-  root.replaceChildren(appEl, dialog, help);
+  root.replaceChildren(appEl, dialog, help, ...files.dialogs);
 
   // dragging the divider resizes the expression list
   split.addEventListener('pointerdown', (e) => {
@@ -523,6 +533,10 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
       e.preventDefault();
       if (e.shiftKey) api.redo();
       else api.undo();
+      return;
+    }
+    if (files.keyDown(e)) {
+      e.preventDefault();
       return;
     }
     if (!typing && tools.keyDown(e)) {
@@ -659,6 +673,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
   if (opts.start) modes.showStart();
 
   const api: Mounted = {
+    files,
     modes,
     scientific,
     keyboard,

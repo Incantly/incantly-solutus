@@ -5,7 +5,8 @@
   "type": "module",
   "description": "Algebra view, toolbars, input bar, sheet, style bar and maths keyboard, as Web Components.",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./katex": "./src/katex.ts"
   },
   "dependencies": {
     "katex": "^0.19.1"
