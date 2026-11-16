@@ -106,9 +106,9 @@ describe('load (R2.3)', () => {
 
   it('a mode this build does not have opens in graphing, and says so', () => {
     const app = createHeadlessApp();
-    const r = loaded(app.load({ ...app.save(), mode: 'graphing3d', script: 'a = 1' }));
+    const r = loaded(app.load({ ...app.save(), mode: 'notes', script: 'a = 1' }));
     expect(app.mode).toBe('graphing');
-    expect(r.modeAdjusted).toMatchObject({ from: 'graphing3d', to: 'graphing' });
+    expect(r.modeAdjusted).toMatchObject({ from: 'notes', to: 'graphing' });
   });
 
   it('binary data is file_not_text; too large is file_too_large', () => {

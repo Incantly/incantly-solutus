@@ -45,7 +45,8 @@ export type AppEvent =
   | (Base & { readonly type: 'error'; readonly error: ApiError | { readonly ok: false; readonly kind: string; readonly message: string } });
 
 export type EventType = AppEvent['type'];
-export type EventOf<E extends EventType> = Extract<AppEvent, { type: E }>;
+/** The event of a type; an entry that serves two types (`dragStart | dragEnd`) is the event of each. */
+export type EventOf<E extends EventType> = AppEvent extends infer X ? (X extends { readonly type: infer T } ? (E extends T ? X : never) : never) : never;
 export type Unsubscribe = () => void;
 
 export interface ListenOpts {

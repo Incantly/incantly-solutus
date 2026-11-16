@@ -49,7 +49,7 @@ describe('examples per app mode', () => {
   it('classic lists its own first, then the others in groups (R1.3)', () => {
     mount('classic');
     const groups = [...root!.querySelectorAll('select.examples optgroup')].map((g) => g.getAttribute('label'));
-    expect(groups).toEqual(['Classic', 'Geometry', 'Graphing', 'Probability', 'CAS', 'Scientific']);
+    expect(groups).toEqual(['Classic', 'Geometry', 'Graphing', '3D', 'Probability', 'CAS', 'Scientific']);
   });
 
   it('geometry allows particles and state() motion (R4, R5)', () => {

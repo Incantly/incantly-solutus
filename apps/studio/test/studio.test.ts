@@ -127,8 +127,8 @@ function fakeCtx(): CanvasRenderingContext2D & { calls: string[] } {
 describe('the painter', () => {
   // the tests example shows result cards in the list and draws nothing on the graph
   // calculator and CAS-only examples have no graph
-  // sheet-times holds a table and cells only: nothing to draw
-  it.each(EXAMPLES.filter((e) => e.id !== 'tests' && !e.modes.includes('scientific') && !e.id.startsWith('cas-') && e.id !== 'sound-beats' && e.id !== 'sound-sonify' && e.id !== 'sheet-times').map((e) => [e.id, e] as const))('paints the %s example and finds its bounds', (_id, ex) => {
+  // sheet-times holds a table and cells only: nothing to draw; the 3D examples draw in the Space view (space.test.ts)
+  it.each(EXAMPLES.filter((e) => e.id !== 'tests' && !e.modes.includes('graphing3d') && !e.modes.includes('scientific') && !e.id.startsWith('cas-') && e.id !== 'sound-beats' && e.id !== 'sound-sonify' && e.id !== 'sheet-times').map((e) => [e.id, e] as const))('paints the %s example and finds its bounds', (_id, ex) => {
     const s = new KernelSession();
     s.load(ex.lines.join('\n'));
     const items: SceneItem[] = s.figure.objects()

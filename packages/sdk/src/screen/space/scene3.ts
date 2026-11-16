@@ -31,6 +31,8 @@ export interface LineItem {
   readonly hiddenDashed: boolean;
   /** An arrow head at `b` (vectors and the axes). */
   readonly arrow?: boolean;
+  /** A thin dotted guide (a dragged point's drop to the floor). */
+  readonly dotted?: boolean;
 }
 
 export interface FaceItem {
@@ -67,8 +69,10 @@ export interface Scene3Options {
   readonly extent?: number;
   /** Objects the screen hides on its own. */
   readonly hidden?: (o: { id: number; name: string }) => boolean;
-  /** The selected objects, drawn with a halo. */
+  /** The selected objects, drawn larger. */
   readonly selected?: ReadonlySet<string>;
+  /** A point whose height is shown by a dotted line down to the floor (ui.md 5.1). */
+  readonly guide?: string;
 }
 
 const AXIS_COLORS = { x: '#d64545', y: '#2a9d6f', z: '#2f6fdb' } as const;
@@ -151,6 +155,7 @@ export function sceneOf3(figure: Figure, view: space.View3, opts: Scene3Options 
     const alpha = Math.max(0.05, Math.min(1, o.style.opacity ?? 0.4));
     switch (o.type) {
       case 'Point3':
+        if (isV3(v) && opts.guide === o.name && Math.abs(v.z) > 1e-9) items.push({ k: 'line', id: -3, a: v, b: { x: v.x, y: v.y, z: 0 }, color: '#5b6472', width: 1, hiddenDashed: false, dotted: true });
         if (isV3(v)) items.push({ k: 'point', id, name: o.name, p: v, color, size: (o.style.pointSize || 4) + (opts.selected?.has(o.name) ? 2 : 0), label: o.style.label !== 'none', free: o.free });
         break;
       case 'Vector3':

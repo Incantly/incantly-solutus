@@ -13,6 +13,52 @@ export interface Example {
 }
 
 export const EXAMPLES: readonly Example[] = [
+  // the 3D app (.kiro/specs/space-3d R4.5; space-3d agent.md 5)
+  {
+    id: 'cube-slice',
+    modes: ['graphing3d'],
+    title: '3D: a cube cut by a plane',
+    lines: [
+      'A = (0, 0, 0)',
+      'B = (3, 0, 0)',
+      'C = (0, 1, 0)',
+      'k = Cube(A, B, C)',
+      'h = 1.5 in 0..3 step 0.1',
+      'p = Plane((0, 0, h), Vector(1, 1, 2))',
+      'cut = Intersect(p, k)',
+      'cut with color = red, opacity = 0.6',
+      'area = Area(cut)',
+    ],
+  },
+  {
+    id: 'sphere-cut',
+    modes: ['graphing3d'],
+    title: '3D: a sphere cut by a plane is a circle',
+    lines: [
+      'O = (0, 0, 0)',
+      's = Sphere(O, 3)',
+      'd = 1.5 in -3..3 step 0.1',
+      'p = Plane((0, 0, d), Vector(0, 0, 1))',
+      'c = Intersect(p, s)',
+      'c with color = red, width = 3',
+      'r = Radius(c)',
+      'space with elevation = 30deg',
+    ],
+  },
+  {
+    id: 'pyramid-volume',
+    modes: ['graphing3d'],
+    title: '3D: a pyramid is a third of its prism',
+    lines: [
+      'base = Polygon((0, 0, 0), (3, 0, 0), (3, 3, 0), (0, 3, 0))',
+      'h = 3 in 1..5 step 0.5',
+      'py = Pyramid(base, h)',
+      'pr = Prism(base, h)',
+      'pr with opacity = 0.12',
+      'ratio = Volume(py) / Volume(pr)',
+      'ViewPreset(isometric)',
+    ],
+  },
   {
     id: 'geometry',
     modes: ['geometry'],
@@ -691,7 +737,7 @@ export const EXAMPLES: readonly Example[] = [
 ];
 
 /** The order other modes' examples follow in classic, after classic's own. */
-const GROUPS: readonly AppModeId[] = ['geometry', 'graphing', 'probability', 'cas', 'scientific'];
+const GROUPS: readonly AppModeId[] = ['geometry', 'graphing', 'graphing3d', 'probability', 'cas', 'scientific'];
 
 /**
  * The examples of a mode, in groups. Every mode lists its own; classic, which runs everything, lists its own first and

@@ -34,7 +34,7 @@ describe('app modes in the studio', () => {
     mount();
     m.modes.showStart();
     const tiles = [...root.querySelectorAll<HTMLElement>('.mode-tile')].map((t) => t.dataset['mode']);
-    expect(tiles).toEqual(['graphing', 'geometry', 'scientific', 'probability', 'cas', 'classic']);
+    expect(tiles).toEqual(['graphing', 'geometry', 'scientific', 'probability', 'cas', 'classic', 'graphing3d']);
     expect(root.querySelector('.mode-tile[data-mode="geometry"] .tile-purpose')?.textContent).toBe('build and measure');
   });
 
@@ -112,7 +112,7 @@ describe('app modes in the studio', () => {
 
   it('a mode that is not built is refused', () => {
     mount();
-    const r = m.modes.setMode('graphing3d');
+    const r = m.modes.setMode('notes');
     expect(r.error?.kind).toBe('mode_unavailable');
     expect(m.modes.mode.id).toBe('classic');
   });

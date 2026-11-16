@@ -23,6 +23,8 @@ export interface FileMenuOptions {
   readonly status: HTMLElement;
   /** The page address the share link starts from; the current page by default. */
   readonly href?: () => string;
+  /** The Space view's size, when it is the view in use (the 3D app exports what it shows). */
+  readonly size3?: () => { readonly w: number; readonly h: number } | undefined;
 }
 
 export interface FileMenu {
@@ -184,7 +186,8 @@ export function mountFileMenu(opts: FileMenuOptions): FileMenu {
     const vp = graph.viewport;
     const ex = opts.expressions();
     try {
-      const size = { region: vp.box(), width: Math.round(vp.w), height: Math.round(vp.h) };
+      const s3 = opts.mode() === 'graphing3d' ? opts.size3?.() : undefined;
+      const size = s3 ? { width: Math.round(s3.w), height: Math.round(s3.h), view: '3d' as const } : { region: vp.box(), width: Math.round(vp.w), height: Math.round(vp.h) };
       const r = await exportFigure(app, format === 'png' ? { format, ...size, scale: 2 } : { format, ...size }, {
         scene: ex ? { color: (o) => ex.colorOf(o.id as number), hidden: (o) => ex.isHidden(o.id as number) } : {},
       });

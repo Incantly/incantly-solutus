@@ -31,7 +31,8 @@ import type { DataLab } from './datalab';
 import { EXAMPLES, examplesFor } from './examples';
 import { drawsOnGraph, mountExpressions } from './expressions';
 import type { ExpressionList } from './expressions';
-import { mountGraph } from '@incantly/sdk/screen';
+import { mountGraph, mountSpace } from '@incantly/sdk/screen';
+import type { SpacePane } from '@incantly/sdk/screen';
 import type { GraphPane } from '@incantly/sdk/screen';
 import { sceneBounds } from '@incantly/sdk/screen';
 import type { SceneItem } from '@incantly/sdk/screen';
@@ -91,6 +92,8 @@ export interface Mounted {
   /** Replaces the figure with an example's lines. */
   /** Open, save, export and share (embed-files-export ui.md 2 to 5). */
   readonly files: FileMenu;
+  /** The Space view of the 3D app (.kiro/specs/space-3d R4.5). */
+  readonly space: SpacePane;
   loadExample(id: string): void;
   undo(): void;
   redo(): void;
@@ -136,6 +139,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
 
   /* ------------------------------ panes ------------------------------ */
 
+  const space3Ref: { current?: SpacePane } = {};
   const holder: { expressions?: ExpressionList; tools?: ToolStrip } = {};
   const selection = createSelection();
   const fromCanvas = selectionFrom(selection, 'canvas');
@@ -235,6 +239,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
   });
   selection.onChange(() => {
     graph.redraw();
+    space3Ref.current?.redraw();
     sim.refresh();
   });
   holder.tools = tools;
@@ -386,6 +391,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
     expressions: () => holder.expressions,
     mode: () => modeRef.current?.mode.id ?? opts.mode ?? 'classic',
     setMode: (m) => void modeRef.current?.setMode(m, { force: true }),
+    size3: () => space3Ref.current?.size(),
   });
   const topTools = el('div', { class: 'top-tools' }, newBtn, files.element, examples, sheetBtn, labBtn, calcBtn, casBtn, scriptBtn);
   const topRight = el('div', { class: 'top-right' }, undoBtn, redoBtn, helpBtn);
@@ -447,7 +453,25 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
     el('footer', { class: 'panel-foot' }, status),
   );
   const split = el('div', { class: 'split', role: 'separator', 'aria-orientation': 'vertical', 'aria-label': 'Resize the expression list', tabindex: '0' });
-  const main = el('div', { class: 'workspace' }, panel, split, graph.element, sheet.element, lab.element, calc.element, cas.element);
+  // the Space view: camera gestures write lines as the learner, drags move points in space (.kiro/specs/space-3d R4)
+  const space3 = mountSpace({
+    figure: () => session.figure,
+    scene: () => ({ hidden: (o) => exprs.isHidden(o.id), selected: new Set(selection.names()) }),
+    write: (line) => {
+      const r = session.applyLines([line], 'view', 'independent', 'learner');
+      if (!r.ok) say(r.error.message);
+    },
+    drag: (name, p, done) => {
+      const r = session.dragPoint(name, p.x, p.y, done, p.z);
+      return r.ok ? undefined : r.error.message;
+    },
+    draggable: (name) => session.draggable(name),
+    select: (name) => (name ? fromCanvas.set(name) : fromCanvas.clear()),
+    say,
+  });
+  space3.element.hidden = true;
+  space3Ref.current = space3;
+  const main = el('div', { class: 'workspace' }, panel, split, graph.element, space3.element, sheet.element, lab.element, calc.element, cas.element);
   const appEl = el('div', { class: 'app' }, top, main);
   root.replaceChildren(appEl, dialog, help, ...files.dialogs);
 
@@ -495,6 +519,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
     sim.refresh();
     graph.element.classList.toggle('has-sim', sim.isShown());
     graph.redraw();
+    space3.redraw();
   };
   const off = session.onChange(sync);
   calc.element.addEventListener('lab-closed', () => {
@@ -574,7 +599,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
     app: appEl,
     session,
     tools,
-    panes: { algebra: panel, split, graphics: graph.element },
+    panes: { algebra: panel, split, graphics: graph.element, space: space3.element },
     views: {
       datalab: { open: () => lab.open(), close: () => lab.close(), isOpen: () => lab.isOpen(), button: labBtn },
       distribution: { open: () => calc.open(), close: () => calc.close(), isOpen: () => calc.isOpen(), button: calcBtn },
@@ -674,6 +699,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
 
   const api: Mounted = {
     files,
+    space: space3,
     modes,
     scientific,
     keyboard,

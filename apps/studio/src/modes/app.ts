@@ -17,7 +17,7 @@ export interface ModeHostParts {
   readonly session: KernelSession;
   readonly tools: ToolStrip;
   /** The expression list's pane, the divider and the graph. */
-  readonly panes: { readonly algebra: HTMLElement; readonly split: HTMLElement; readonly graphics: HTMLElement };
+  readonly panes: { readonly algebra: HTMLElement; readonly split: HTMLElement; readonly graphics: HTMLElement; readonly space?: HTMLElement };
   /** Side views with open and close. */
   readonly views: Partial<Record<ViewKind, { open(): void; close(): void; isOpen(): boolean; button?: HTMLElement }>>;
   /** Top-bar buttons for features (`script` is the file dialog). */
@@ -98,12 +98,15 @@ export function mountAppModes(p: ModeHostParts, initial: AppModeId = 'classic'):
     const v = m.views;
     p.app.dataset['mode'] = m.derivedFrom ?? m.id;
     const showAlgebra = v.initial.includes('algebra');
-    const showGraphics = v.initial.includes('graphics') || (v.available.includes('graphics') && !v.initial.includes('results') && !v.initial.includes('distribution') && !v.initial.includes('cas'));
+    // the 3D app shows the Space view where the graph is (.kiro/specs/space-3d R4.5)
+    const show3d = v.initial.includes('graphics3d') && p.panes.space !== undefined;
+    const showGraphics = v.initial.includes('graphics') || (v.available.includes('graphics') && !show3d && !v.initial.includes('results') && !v.initial.includes('distribution') && !v.initial.includes('cas'));
     p.panes.algebra.hidden = !showAlgebra;
-    p.panes.split.hidden = !showAlgebra || !showGraphics;
+    p.panes.split.hidden = !showAlgebra || !(showGraphics || show3d);
     p.panes.graphics.hidden = !showGraphics;
+    if (p.panes.space) p.panes.space.hidden = !show3d;
     // a side view is the whole app when there is no graph (probability, CAS)
-    p.app.classList.toggle('no-graphics', !showGraphics);
+    p.app.classList.toggle('no-graphics', !showGraphics && !show3d);
     for (const [kind, view] of Object.entries(p.views) as [ViewKind, NonNullable<ModeHostParts['views'][ViewKind]>][]) {
       const available = v.available.includes(kind);
       if (view.button) view.button.hidden = !available || !v.canToggle;

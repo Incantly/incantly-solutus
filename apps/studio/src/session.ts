@@ -345,21 +345,22 @@ export class KernelSession {
   /** True when dragging the point moves it: a free point, or one whose rule can be inverted (a point on a path). */
   draggable(name: string): boolean {
     const o = this.figure.get(name);
-    if (!o || o.type !== 'Point' || !o.cell.defined) return false;
+    if (!o || (o.type !== 'Point' && o.type !== 'Point3') || !o.cell.defined) return false;
     return o.free || this.figure.dragPlan(name, o.cell.value).writes.length > 0;
   }
 
-  dragPoint(name: string, x: number, y: number, done: boolean): Outcome {
+  dragPoint(name: string, x: number, y: number, done: boolean, z?: number): Outcome {
     const round = (v: number): number => Number(v.toPrecision(6));
     if (!this.figure.get(name)?.free) {
       // a point on a path, or a midpoint of free points: move what it is built from (kernel design 7)
-      const plan = this.figure.dragPlan(name, { x, y });
+      const plan = this.figure.dragPlan(name, z === undefined ? { x, y } : { x, y, z });
       const r = this.figure.drag(plan);
       if (!r.ok) return { ok: false, error: { ok: false, kind: 'not_draggable', message: `${name} cannot be dragged: ${String(r.reason ?? plan.reason ?? 'its rule cannot be inverted').replace(/_/g, ' ')}.` } as never };
       if (done) this.figure.commitDrag();
       return this.done(`moved ${name}`, []);
     }
-    const r = this.figure.setFree(name, { x: round(x), y: round(y) }, 'drag');
+    // a point in space keeps its third coordinate
+    const r = this.figure.setFree(name, z === undefined ? { x: round(x), y: round(y) } : { x: round(x), y: round(y), z: round(z) }, 'drag');
     if (!r.ok) return { ok: false, error: r };
     this.figure.flush();
     this.raise(name, 'change', this.figure.value(name));
@@ -367,7 +368,7 @@ export class KernelSession {
       this.figure.commitDrag();
       this.raise(name, 'dragend', this.figure.value(name));
     }
-    return this.done(`${name} = (${valueText(round(x))}, ${valueText(round(y))})`, []);
+    return this.done(z === undefined ? `${name} = (${valueText(round(x))}, ${valueText(round(y))})` : `${name} = (${valueText(round(x))}, ${valueText(round(y))}, ${valueText(round(z))})`, []);
   }
 
   /* ------------------------------ controls (controls-scripting design 3.3) ------------------------------ */

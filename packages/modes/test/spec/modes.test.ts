@@ -38,8 +38,9 @@ describe('the mode records (R1)', () => {
     expect(MODES.probability.views.initial).toEqual(['distribution', 'graphics']);
   });
 
-  it('lists notes and 3D but says they are not available yet', () => {
-    const r = getMode('graphing3d');
+  it('lists notes but says it is not available yet; 3D is available', () => {
+    expect(getMode('graphing3d').ok).toBe(true);
+    const r = getMode('notes');
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.kind).toBe('mode_unavailable');
