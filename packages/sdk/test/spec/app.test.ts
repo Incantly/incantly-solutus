@@ -29,7 +29,7 @@ describe('run and runBatch (R1.2)', () => {
     const [r1, r2, r3] = app.run(['b = a + 1', 'c = b * 2', 'a = 5']);
     expect(ok(r1)).toMatchObject({ name: 'b', type: 'Number', created: ['b'] });
     expect(ok(r2).created).toEqual(['c']);
-    expect(ok(r3).changed.sort()).toEqual(['b', 'c']);
+    expect([...ok(r3).changed].sort()).toEqual(['b', 'c']);
     expect(app.value('c')).toBe(12);
   });
 
