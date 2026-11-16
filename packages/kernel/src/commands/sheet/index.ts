@@ -10,7 +10,7 @@ import { err } from '../../errors/table';
 import { registerNotice } from '../../errors/notices';
 import { registerReasonPhrase } from '../../errors/phrases';
 import type { Figure } from '../../graph/figure';
-import type { CommandRegistry, RuleCall } from '../../graph/registry';
+import type { CommandRegistry, LineCheckContext, RuleCall } from '../../graph/registry';
 import { registerAfterLine, registerLineCheck } from '../../graph/registry';
 import type { Expr, ParsedLine } from '../../language/ast';
 import type { CheckedLine } from '../../language/check';
@@ -33,7 +33,10 @@ import type { CommandSpec, ParamSpec } from '../../language/table';
 import type { TNode } from '../../language/tnode';
 import { makeMatrix } from '../lists/types';
 import { table } from '../statistics/describe-commands';
-import { sheetActionSpecs, registerSheetActions } from './actions';
+import { ACTION_ORIGIN, lockedAmong, lockedError, sheetActionSpecs, registerSheetActions } from './actions';
+
+export { planFill, planClear, applyPlan, applyFill, cellMarks, setSheetLocks, sheetLocksOn, literalOf } from './actions';
+export type { FillPlan, FillDirection, CellMark, SheetWrite } from './actions';
 
 export { shiftRefs, shiftLine } from './shift';
 export type { ShiftResult } from './shift';
@@ -362,7 +365,7 @@ const SHAPE_EXPECTED: Readonly<Record<string, string>> = {
   MatrixFrom: 'a range of filled cells, e.g. A1:C3',
 };
 
-function sheetLineCheck(figure: unknown, line: CheckedLine, parsed: ParsedLine): ErrorObject | undefined {
+function sheetLineCheck(figure: unknown, line: CheckedLine, parsed: ParsedLine, ctx: LineCheckContext): ErrorObject | undefined {
   const size = sheetSize(figure);
   const text = parsed.sm.text;
   const node = parsed.node;
@@ -399,6 +402,16 @@ function sheetLineCheck(figure: unknown, line: CheckedLine, parsed: ParsedLine):
       return err('no_sheet', span(sheetUse.s, sheetUse.e), { token: sheetUse.token }, { token: sheetUse.token, hint: 'Add @sheet 26 100 first.', suggest: ['@sheet 26 100'], recovery: 'create_first', fingerprintKey: sheetUse.token });
     }
     return undefined;
+  }
+  // the action learns who wrote its line, for the locks
+  if (node.k === 'action' && figure && typeof figure === 'object') ACTION_ORIGIN.set(figure, ctx.origin);
+  // a locked cell (design 3.15)
+  if (target && parseCellName(target.name)) {
+    const locked = lockedAmong(figure, [target.name], ctx.origin);
+    if (locked.length > 0) {
+      const e = lockedError(locked);
+      return { ...e, ...span(target.s, target.e) };
+    }
   }
   // a cell outside the size of the sheet
   const targets = node.k === 'defmany' ? node.targets : target ? [target] : [];

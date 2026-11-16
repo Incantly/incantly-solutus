@@ -157,6 +157,8 @@ export interface ActionCall {
   readonly objects: readonly ObjId[];
   /** Evaluated values of the other arguments, in parameter order (`undefined` for objects). */
   readonly values: readonly unknown[];
+  /** For each argument in parameter order, the object it names when it is a plain object name, else `undefined`. */
+  readonly refs?: readonly (ObjId | undefined)[];
 }
 
 export interface ActionOutcome {
@@ -243,7 +245,12 @@ export class CommandRegistry {
  * An area's own refusal of a line that the language accepted, asked before anything is committed (errors design 5.0).
  * `figure` is the figure the line is applied to. A returned error fails the line and nothing changes. Must be pure.
  */
-export type LineCheck = (figure: unknown, line: CheckedLine, parsed: ParsedLine) => ErrorObject | undefined;
+export type LineCheck = (figure: unknown, line: CheckedLine, parsed: ParsedLine, ctx: LineCheckContext) => ErrorObject | undefined;
+
+/** What else a line check may know: who wrote the line (app-modes design 3.6). */
+export interface LineCheckContext {
+  readonly origin: import('./types').LineOrigin;
+}
 
 const LINE_CHECKS: LineCheck[] = [];
 
@@ -253,10 +260,10 @@ export function registerLineCheck(check: LineCheck): void {
 }
 
 /** The first refusal of the registered checks, or `undefined`. A check that throws is skipped. */
-export function runLineChecks(figure: unknown, line: CheckedLine, parsed: ParsedLine): ErrorObject | undefined {
+export function runLineChecks(figure: unknown, line: CheckedLine, parsed: ParsedLine, ctx: LineCheckContext = { origin: 'host' }): ErrorObject | undefined {
   for (const check of LINE_CHECKS) {
     try {
-      const e = check(figure, line, parsed);
+      const e = check(figure, line, parsed, ctx);
       if (e) return e;
     } catch {
       // a broken check must not block the line

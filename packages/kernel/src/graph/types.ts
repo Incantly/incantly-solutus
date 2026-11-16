@@ -284,6 +284,8 @@ export interface BatchOptions {
    * the undo history are as they were. The result has the shape of a real batch, with `dryRun: true` on it and on each success.
    */
   dryRun?: boolean;
+  /** As `ApplyOptions.rebind`, for every line of the batch. */
+  rebind?: boolean;
 }
 
 export interface BatchResult {

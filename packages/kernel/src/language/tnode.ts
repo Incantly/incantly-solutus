@@ -65,7 +65,7 @@ export type TNode =
   | (B & { readonly n: 'relation'; readonly tree: RelTree; readonly slotX: number; readonly slotY: number; readonly poly?: PolyNodes; readonly shape: RelationShape });
 
 /** One filled cell of a range: a `ref` with its address. */
-export type CellItem = TNode & { readonly n: 'ref'; readonly col: number; readonly row: number };
+export type CellItem = TNode & { readonly n: 'ref'; readonly col: number; readonly row: number; readonly blank?: boolean };
 
 export type RelationShape = 'line' | 'circle' | 'conic' | 'curve' | 'region';
 

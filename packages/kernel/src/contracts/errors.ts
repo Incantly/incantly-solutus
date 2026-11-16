@@ -161,6 +161,9 @@ export interface AreaNoticeKinds {
   path_pending: true;
   // spreadsheet
   skipped_non_numeric: true;
+  off_sheet_cells: true;
+  cells_kept: true;
+  fill_skipped: true;
 }
 
 export type NoticeKind = CoreNoticeKind | Extract<keyof AreaNoticeKinds, string>;

@@ -559,7 +559,9 @@ class Checker {
     for (const c of found) {
       const obj = this.fig.lookup(c.name) as ObjectInfo;
       this.reads.add(obj.id);
-      items.push({ n: 'ref', id: obj.id, name: c.name, ty: obj.type, col: c.col, row: c.row, s: e.s, e: e.e });
+      // a cell cleared to `undefined` while something reads it directly is a hole, not an undefined value
+      const blank = obj.free === true && obj.source !== undefined && / = undefined$/.test(obj.source);
+      items.push({ n: 'ref', id: obj.id, name: c.name, ty: obj.type, col: c.col, row: c.row, s: e.s, e: e.e, ...(blank ? { blank: true } : {}) });
     }
     const of = items.length > 0 ? (items[0] as CellItem).ty : T.Number;
     return { n: 'cells', rect, items, as: 'range', ty: { k: 'Range', of }, s: e.s, e: e.e };
