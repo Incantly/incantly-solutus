@@ -155,6 +155,20 @@ describe('FillDown and FillRight: definitions with shifted references (R3.4)', (
   });
 });
 
+describe('a failed fill inside a line', () => {
+  it('takes itself back once; the figure and the undo history are as before', () => {
+    const f = fig(['@sheet 4 12', 'A1 = (1, 2)', 'A2 = 3', 'C1 = A1.x', 'k = 1']);
+    const before = f.toScript();
+    const depth = f.undoInfo().depth;
+    expect(f.apply('FillDown(C1:C2)').ok).toBe(false);
+    expect(f.toScript()).toBe(before);
+    expect(f.undoInfo().depth).toBe(depth);
+    f.undo();
+    expect(f.get('k')).toBeUndefined();
+    expect(val(f, 'C1')).toBe(1);
+  });
+});
+
 describe('planFill: series detection (design 3.9)', () => {
   it('two numbers with a common step continue the series, without drift', () => {
     const f = fig(['@sheet 2 200', 'A1 = 0.1', 'A2 = 0.2']);

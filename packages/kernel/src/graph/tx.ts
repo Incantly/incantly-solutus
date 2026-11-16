@@ -28,6 +28,7 @@ import { FigureBase } from './base';
 import { FigureCore, ObjRec } from './core';
 import { coerceProp, defaultsFor, isValidKey, validKeysFor } from './props';
 import type { ActionRule } from './registry';
+import { isCellName } from '../language/cells';
 import { hasAfterLine, runAfterLine, runLineChecks, runLineHandlers, runLineRewriters } from './registry';
 import type { ApplyOptions, Cell, ChangeReport, LineGate, Persist, RateRule, StyleEntry, TxOk, TxOp, TxResult } from './types';
 import { lineUses } from '../language/uses';
@@ -462,6 +463,10 @@ export class FigureTx extends FigureBase {
   }
 
   /** `@tol N` (or `@tolerance N`) when the figure has one, else the option or `1e-9`. */
+  protected override isSheetCell(name: string): boolean {
+    return this.directiveAt.has('sheet') && isCellName(name);
+  }
+
   protected override tolerance(): number {
     const w = (this.directiveItem('tol') ?? this.directiveItem('tolerance'))?.words[0];
     const n = w === undefined ? NaN : Number(w);

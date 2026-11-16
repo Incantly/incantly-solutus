@@ -6,4 +6,4 @@ Branches: `feat/sheet-1` and up, one PR per round into `integration`.
 - [x] 2. Round 2: `shiftRefs`, `FillColumn`, `FillRow`, `FillCells`, `FillDown`, `FillRight`, `ClearCells` as batches, series detection, locked and input cells (R3.3 to R3.5, R4, R5)
 - [x] 3. Round 3: paste and CSV parser, `planImport` (R6)
 - [x] 4. Round 4: studio grid: view, editing, selection, fill handle, clipboard, selection bar, toast, settings (R8)
-- [ ] 5. Round 5: examples, benches, screenshots, final check (R9)
+- [x] 5. Round 5: examples, benches, screenshots, final check (R9)

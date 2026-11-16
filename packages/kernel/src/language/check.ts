@@ -202,6 +202,9 @@ export class OverlayFigure implements FigureView {
   get size() {
     return this.base.size;
   }
+  isSheetCell(name: string): boolean {
+    return this.base.isSheetCell?.(name) ?? false;
+  }
   lookup(name: string): ObjectInfo | undefined {
     if (this.over.has(name)) return this.over.get(name) ?? undefined;
     return this.base.lookup(name);

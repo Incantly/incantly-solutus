@@ -208,6 +208,16 @@ describe('references and ranges (R2)', () => {
     expect(e.path).toEqual(['A1', 'A1:A5', 'A1']);
   });
 
+  it('with a sheet, cells named like commands (Q1, Q3) are cells; the commands still work', () => {
+    const f = fig(['xs = [1, 2, 3, 4, 5]']);
+    expect(fails(f, 'Q1 = 2').kind).toBe('reserved_name');
+    f.apply('@sheet 26 10');
+    expect(f.apply('Q1 = 2').ok).toBe(true);
+    expect(f.apply('q = Q1(xs)').ok).toBe(true);
+    expect(val(f, 'q')).toBe(1.5);
+    expect(f.apply('w = Q1 + 1').ok && val(f, 'w')).toBe(3);
+  });
+
   it('names that look like cells are not cells inside other names', () => {
     const f = fig(['@sheet 4 12', 'pA1 = 1', 'A_1 = 2', 'A1 = pA1 + A_1']);
     expect(val(f, 'A1')).toBe(3);

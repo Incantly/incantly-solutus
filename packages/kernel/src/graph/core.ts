@@ -199,6 +199,7 @@ export class FigureCore {
     const me = (): FigureCore => this;
     this.view = {
       lookup: (n) => this.lookup(n),
+      isSheetCell: (n) => this.isSheetCell(n),
       byId: (id) => this.byId(id),
       names: () => this.names(),
       inputsOf: (id) => this.inputsOf(id),
@@ -249,6 +250,11 @@ export class FigureCore {
     };
     rec.infoCache = info;
     return info;
+  }
+
+  /** Overridden where directives are known: a cell name of the figure's sheet. */
+  protected isSheetCell(_name: string): boolean {
+    return false;
   }
 
   lookup(name: string): ObjectInfo | undefined {

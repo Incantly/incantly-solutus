@@ -550,6 +550,12 @@ export class FigureHist extends FigureTx {
   /** Gives up the group and takes back every entry it holds, newest first; both stacks and the pending events are as `beginUnit` saw them. */
   protected rollbackUnit(u: Unit, pass?: import('./core').Pass): void {
     const entries = this.journal.abandon(u.mark);
+    // a batch inside a line (an action that applies lines): what it took back leaves that line's log too, or a failure of
+    // the line would take it back a second time
+    if (this.log.length > 0 && entries.length > 0) {
+      const gone = new Set(entries);
+      this.log = this.log.filter((x) => x.k !== 'rec' || !gone.has(x.e));
+    }
     this.replaying = true;
     try {
       for (let k = entries.length - 1; k >= 0; k--) this.revertEntry(entries[k] as JournalEntry);

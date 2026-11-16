@@ -9,12 +9,13 @@ import { makeNotice, registerNotice } from '../../errors/notices';
 import type { Figure } from '../../graph/figure';
 import type { ActionCall, ActionOutcome, RuleCall } from '../../graph/registry';
 import { numberSource } from '../../graph/values';
-import type { Expr } from '../../language/ast';
-import { EXCLUDED_CELLS, cellName, isRangeValue, parseCellName, rectHas, rectText } from '../../language/cells';
+import type { Expr, LineNode } from '../../language/ast';
+import { EXCLUDED_CELLS, cellName, columnLetters, isRangeValue, parseCellName, rectHas, rectText } from '../../language/cells';
 import type { CellRect, CellRef } from '../../language/cells';
 import { parseLine } from '../../language/parser';
 import type { CommandSpec, ParamSpec } from '../../language/table';
-import { shiftLine } from './shift';
+import { shiftRefs } from './shift';
+import { printLineNode } from '../../language/printer';
 
 /* ------------------------------ shared state ------------------------------ */
 
@@ -98,9 +99,14 @@ export function literalOf(v: unknown): { text: string; type: string } | undefine
 
 /** The lines that write a value into a cell: a cell of another type is deleted first (design 3.7). */
 function writeLines(figure: Figure, name: string, text: string, type: string): string[] {
-  const old = figure.get(name);
-  if (old && old.type !== type) return [`Delete(${name})`, `${name} = ${text}`];
+  const old = typeOf(figure, name);
+  if (old !== undefined && old !== type) return [`Delete(${name})`, `${name} = ${text}`];
   return [`${name} = ${text}`];
+}
+
+/** The type of an object by name, without building its full view. */
+export function typeOf(figure: Figure, name: string): string | undefined {
+  return (figure as unknown as { lookup(n: string): { type: { k: string } } | undefined }).lookup(name)?.type.k;
 }
 
 const listItems = (v: unknown): unknown[] | undefined => (v instanceof Float64Array ? Array.from(v) : Array.isArray(v) ? v : undefined);
@@ -130,19 +136,14 @@ function sampleOf(lines: readonly string[]): string[] {
 }
 
 /**
- * Applies the lines as one batch, all or nothing: tried first as a dry run, so a failure leaves no trace, then for real.
+ * Applies the lines as one batch, all or nothing: a failure leaves no trace.
  * `done` names what was done for the message (`filled`, `cleared`).
  */
 export function applyPlan(figure: Figure, lines: readonly string[], group: string, done: string, opts: { rebind?: boolean } = {}): { ok: true } | { ok: false; error: ErrorObject } {
   if (lines.length === 0) return { ok: true };
   const origin = (ACTION_ORIGIN.get(figure) ?? 'host') as 'host' | 'learner' | 'model';
   const base = { group, mode: 'atomic' as const, origin, ...(opts.rebind ? { rebind: true } : {}) };
-  const dry = figure.applyBatch(lines, { ...base, dryRun: true });
-  if (!dry.ok) {
-    const i = dry.results.findIndex((r) => !r.ok);
-    const cause = dry.results[i] as ErrorObject;
-    return { ok: false, error: batchFailed(i, lines.length, cause, done) };
-  }
+  // an atomic batch takes itself back on a failure, also inside an action's line (`rollbackUnit` prunes that line's log)
   const real = figure.applyBatch(lines, base);
   if (!real.ok) {
     const i = real.results.findIndex((r) => !r.ok);
@@ -181,7 +182,7 @@ function valueLines(figure: Figure, col: number, row: number, rows: readonly (re
       const rr = row + i;
       const name = c <= size.cols && rr <= size.rows ? cellName(c, rr) : undefined;
       if (name === undefined) {
-        const at = cellName(Math.min(c, 702), Math.min(rr, 9999)) ?? `column ${c}, row ${rr}`;
+        const at = cellName(c, rr) ?? `${columnLetters(Math.min(c, 702)) ?? 'ZZ'}${rr}`;
         return {
           lines, names,
           error: err('cell_out_of_range', { line: 0, col: 1, endCol: 1 }, { token: at, cols: size.cols, rows: size.rows }, { token: at, hint: `Use @sheet ${Math.max(size.cols, c)} ${Math.max(size.rows, rr)} to make the sheet larger.`, suggest: [`@sheet ${Math.min(702, Math.max(size.cols, c))} ${Math.min(9999, Math.max(size.rows, rr))}`], recovery: 'create_first', fingerprintKey: 'fill' }),
@@ -315,7 +316,7 @@ type Src =
   | { k: 'num'; v: number }
   | { k: 'text'; v: string }
   | { k: 'value'; text: string; type: string }
-  | { k: 'def'; name: string; line: string; type: string };
+  | { k: 'def'; name: string; line: string; type: string; node?: LineNode };
 
 function sourceCell(figure: Figure, name: string): Src {
   const o = figure.get(name);
@@ -327,7 +328,8 @@ function sourceCell(figure: Figure, name: string): Src {
     const lit = literalOf(v);
     if (lit) return { k: 'value', text: lit.text, type: lit.type };
   }
-  return { k: 'def', name, line: o.definition, type: o.type };
+  const pr = parseLine(o.definition, {});
+  return { k: 'def', name, line: o.definition, type: o.type, ...(pr.ok ? { node: pr.value.node } : {}) };
 }
 
 const TEXT_NUM = /^(.*?)(-?\d+)$/;
@@ -401,8 +403,8 @@ export function planFill(figure: Figure, source: CellRect, target: CellRect, dir
       else if (s.k === 'text') lines.push(...writeLines(figure, name, textSource(s.v), 'Text'));
       else if (s.k === 'value') lines.push(...writeLines(figure, name, s.text, s.type));
       else {
-        const moved = shiftLine(s.line, s.name, name, size);
-        const empty = moved.ok ? emptyRead(figure, moved.line, name, written) : undefined;
+        const moved = shiftNode(s, name, size);
+        const empty = moved.ok ? emptyIn(figure, moved.tree, name, written) : undefined;
         if (empty !== undefined) {
           skipped.push({ cell: name, empty });
           continue;
@@ -432,10 +434,7 @@ export function planFill(figure: Figure, source: CellRect, target: CellRect, dir
  * A10 - 2` past the end of the data): such a target is left as it is, with a notice, since an object cannot read a cell
  * that does not exist.
  */
-function emptyRead(figure: Figure, line: string, self: string, written: ReadonlySet<string>): string | undefined {
-  const pr = parseLine(line, {});
-  if (!pr.ok) return undefined;
-  const node = pr.value.node;
+function emptyIn(figure: Figure, tree: unknown, self: string, written: ReadonlySet<string>): string | undefined {
   let found: string | undefined;
   const walk = (e: unknown): void => {
     if (found !== undefined || !e || typeof e !== 'object') return;
@@ -445,11 +444,22 @@ function emptyRead(figure: Figure, line: string, self: string, written: Readonly
     }
     const o = e as Expr;
     if ((o as { k?: string }).k === 'cells') return;
-    if (o.k === 'name' && o.name !== self && parseCellName(o.name) && !written.has(o.name) && figure.get(o.name) === undefined) found = o.name;
+    if (o.k === 'name' && o.name !== self && parseCellName(o.name) && !written.has(o.name) && typeOf(figure, o.name) === undefined) found = o.name;
     for (const v of Object.values(o as object)) if (v && typeof v === 'object') walk(v);
   };
-  walk('expr' in node ? node.expr : undefined);
+  walk(tree);
   return found;
+}
+
+/** A source definition moved to another cell, on its parsed tree (parsed once per source cell). */
+function shiftNode(s: Extract<Src, { k: 'def' }>, to: string, size: { cols: number; rows: number }): { ok: true; line: string; tree: Expr } | { ok: false; reason: 'off_sheet' | 'parse' } {
+  const node = s.node;
+  const a = parseCellName(s.name);
+  const b = parseCellName(to);
+  if (!node || !a || !b || (node.k !== 'define' && node.k !== 'function')) return { ok: false, reason: 'parse' };
+  const r = shiftRefs(node.expr, b.col - a.col, b.row - a.row, size);
+  if (!r.ok) return { ok: false, reason: 'off_sheet' };
+  return { ok: true, line: printLineNode({ ...node, target: { ...node.target, name: to }, expr: r.tree }), tree: r.tree };
 }
 
 /**
