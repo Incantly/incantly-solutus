@@ -438,3 +438,6 @@ button:disabled { opacity: 0.4; cursor: default; }
 .exam-away { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.45); display: grid; place-items: center; z-index: 30; }
 .exam-away p { background: #fff; padding: 18px 20px; border-radius: 12px; max-width: 420px; margin: 0 0 10px; }
 .exam-away { align-content: center; }
+.app.no-graphics .datalab, .app.no-graphics .caspanel { flex: 1; width: auto; max-width: none; border-inline-start: 0; }
+.app.no-graphics .datalab .lab-body, .app.no-graphics .caspanel > * { max-width: 900px; width: 100%; margin-inline: auto; }
+.app[dir="rtl"] .expr-display, .app[dir="rtl"] .expr-out, .app[dir="rtl"] .value, .app[dir="rtl"] .slider, .app[dir="rtl"] .sci-row, .app[dir="rtl"] .cas-row, .app[dir="rtl"] .graph-canvas { direction: ltr; }
