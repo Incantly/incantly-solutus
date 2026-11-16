@@ -37,6 +37,8 @@ import { ACTION_ORIGIN, lockedAmong, lockedError, sheetActionSpecs, registerShee
 
 export { planFill, planClear, applyPlan, applyFill, cellMarks, setSheetLocks, sheetLocksOn, literalOf } from './actions';
 export type { FillPlan, FillDirection, CellMark, SheetWrite } from './actions';
+export { PASTE_LIMITS, splitDelimited, pasteSeparator, detectSeparator, parseField, planPaste, planImport, planPasteCells, copyText, applyPaste, applyImport, applyPasteCells } from './paste';
+export type { Separator, Field, PastePlan, ImportOptions, CellClip, PasteCellsOptions, PasteResult } from './paste';
 
 export { shiftRefs, shiftLine } from './shift';
 export type { ShiftResult } from './shift';

@@ -42,9 +42,12 @@ export type { SoundValue, SoundEvent, SoundFrame, PlayingSound, Wave, NoiseColor
 export { noteFrequency, midiOfNote, midiToFrequency, semitonesUp } from './language/notes';
 export {
   registerSheet, sheetSize, rangeReadersOf, undefinedCode, UNDEFINED_CODES, SHEET_LIMITS, SHEET_SPECS, shiftRefs, shiftLine, planFill, planClear, applyPlan, applyFill, cellMarks,
-  setSheetLocks, sheetLocksOn, literalOf,
+  setSheetLocks, sheetLocksOn, literalOf, PASTE_LIMITS, splitDelimited, pasteSeparator, detectSeparator, parseField, planPaste, planImport, planPasteCells,
+  copyText, applyPaste, applyImport, applyPasteCells,
 } from './commands/sheet/index';
-export type { ShiftResult, FillPlan, FillDirection, CellMark, SheetWrite } from './commands/sheet/index';
+export type {
+  ShiftResult, FillPlan, FillDirection, CellMark, SheetWrite, Separator, Field, PastePlan, ImportOptions, CellClip, PasteCellsOptions, PasteResult,
+} from './commands/sheet/index';
 export * from './language/cells';
 export { registerText } from './commands/text/index';
 export { CAS_COMMAND_NAMES, CAS_TYPE_NAMES, casCalculus, casEngineReady, isCasForm, isSymValue, onCasEngine, registerCas, setCasEngine } from './commands/cas/index';
