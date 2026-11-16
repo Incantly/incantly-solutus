@@ -163,6 +163,21 @@ export function paintSpace(ctx: Ctx, view: space.View3, w: number, h: number, sc
     f.pts.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
     ctx.closePath();
     ctx.fill();
+    if (it.stroke && it.edges) {
+      // the face's grid lines go with it, so the faces in front cover the ones behind
+      ctx.globalAlpha = Math.min(1, it.alpha + 0.1);
+      ctx.strokeStyle = it.stroke;
+      ctx.lineWidth = 0.75;
+      ctx.beginPath();
+      for (let s = 0; s < 4; s++) {
+        if (!it.edges[s]) continue;
+        const a = f.pts[s] as Proj;
+        const b = f.pts[(s + 1) % f.pts.length] as Proj;
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+      }
+      ctx.stroke();
+    }
     ctx.globalAlpha = 1;
   };
 

@@ -33,6 +33,8 @@ export interface AreaTypeNames {
   Cylinder: true;
   Cone: true;
   View3: true;
+  Surface: true;
+  Curve3: true;
 }
 
 export type TypeName = CoreTypeName | Extract<keyof AreaTypeNames, string>;

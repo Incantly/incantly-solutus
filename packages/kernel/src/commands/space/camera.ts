@@ -274,6 +274,26 @@ export function pointsOf(v: unknown): V3[] {
       const r = { x: s.r, y: s.r, z: s.r };
       return [add(s.a, r), sub(s.a, r), add(s.b, r), sub(s.b, r)];
     }
+    case 'Curve3': {
+      const c = v as { at(s: number): V3 | undefined; lo: number; hi: number };
+      const out: V3[] = [];
+      for (let i = 0; i <= 16; i++) {
+        const q = c.at(c.lo + ((c.hi - c.lo) * i) / 16);
+        if (q) out.push(q);
+      }
+      return out;
+    }
+    case 'Surface': {
+      const sf = v as { at(u: number, w: number): V3 | undefined; u: readonly [number, number]; v: readonly [number, number] };
+      const out: V3[] = [];
+      for (let i = 0; i <= 6; i++) {
+        for (let j = 0; j <= 6; j++) {
+          const q = sf.at(sf.u[0] + ((sf.u[1] - sf.u[0]) * i) / 6, sf.v[0] + ((sf.v[1] - sf.v[0]) * j) / 6);
+          if (q) out.push(q);
+        }
+      }
+      return out;
+    }
     default: return [];
   }
 }

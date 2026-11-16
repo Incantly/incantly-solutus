@@ -18,6 +18,8 @@ import { T, registerBinaryOp, registerTypeAlias, registerUnaryOp } from '../../l
 import type { Ty } from '../../language/types';
 import * as R from './rules';
 import * as S from './solids';
+import { curve3Rule, pointOnCurve3, surfaceRule } from './surfaces';
+import type { Curve3, Surface3 } from './surfaces';
 import { FLAT_OF, SPACE_OF, shape3Of } from './types';
 import type { Circle3, Cone3, Cylinder3, Plane3, Polygon3, Polyhedron, Segment3, Sphere3 } from './types';
 import type { V3 } from './v3';
@@ -28,6 +30,8 @@ export * from './v3';
 export { lineLike, newell, plane3, polygon3 } from './rules';
 export { DEFAULT_VIEW3, SPACE_FIT_RADIUS, VIEW3_PROPERTIES, VIEW_PRESETS, azElOf, pointsOf, viewOf } from './camera';
 export type { Light, Projection, View3 } from './camera';
+export { nearestOnCurve } from './surfaces';
+export type { Curve3, Surface3 } from './surfaces';
 export { edgesOf, faceOf, polyArea, polyVolume, sectionOf } from './solids';
 
 const GROUP = 'space';
@@ -87,6 +91,31 @@ function mixedDimension(command: string): (c: CallCheck) => Refusal | undefined 
 }
 
 /* ------------------------------ the table ------------------------------ */
+
+const body = (name: string): ParamSpec => ({ name, type: 'Number', kind: 'body' });
+const binder = (name: string): ParamSpec => ({ name, type: 'Number', kind: 'binder' });
+
+/** Surfaces and curves in space (.kiro/specs/space-3d-surfaces R1): bodies in binders, like the flat `Curve`. */
+const SURFACE_COMMANDS: readonly CommandSpec[] = [
+  {
+    name: 'Surface', kind: 'object', group: GROUP,
+    forms: [{
+      params: [body('x'), body('y'), body('z'), binder('u'), p('u0', 'Number'), p('u1', 'Number'), binder('v'), p('v0', 'Number'), p('v1', 'Number')],
+      returns: 'Surface', rule: () => surfaceRule, summary: 'surface (x(u, v), y(u, v), z(u, v)) for u in u0..u1 and v in v0..v1',
+    }],
+  },
+  {
+    name: 'Curve', kind: 'object', group: GROUP,
+    forms: [{
+      params: [body('x'), body('y'), body('z'), binder('s'), p('a', 'Number'), p('b', 'Number')],
+      returns: 'Curve3', rule: () => curve3Rule, summary: 'curve in space (x(s), y(s), z(s)) for s in a..b',
+    }],
+  },
+  {
+    name: 'PointOn', kind: 'object', group: GROUP,
+    forms: [{ params: [p('curve', 'Curve3'), p('s', 'Number')], returns: 'Point3', rule: () => pointOnCurve3, summary: 'draggable point at parameter s of a curve in space' }],
+  },
+];
 
 export const SPACE_COMMANDS: readonly CommandSpec[] = [
   cmd('Vector', [
@@ -280,6 +309,14 @@ export function spaceText(v: unknown): string | undefined {
       const s = v as Sphere3;
       return `sphere r=${f6(s.r)} about ${pt(s.c)}`;
     }
+    case 'Surface': {
+      const s = v as Surface3;
+      return `surface, u ${f6(s.u[0])}..${f6(s.u[1])}, v ${f6(s.v[0])}..${f6(s.v[1])}`;
+    }
+    case 'Curve3': {
+      const c = v as Curve3;
+      return `curve in space, s ${f6(c.lo)}..${f6(c.hi)}`;
+    }
     case 'View3': {
       const c = v as View3;
       const d = (x: number): string => `${f6(Number(((x * 180) / Math.PI).toFixed(2)))}°`;
@@ -301,6 +338,7 @@ let registered = false;
 export function registerSpace(registry: CommandRegistry): void {
   registry.registerAll(SPACE_COMMANDS);
   registry.registerAll(SPACE_CAMERA_COMMANDS);
+  registry.registerAll(SURFACE_COMMANDS);
   if (registered) return;
   registered = true;
   registerTypeAlias(LL, ['Line3', 'Segment3', 'Ray3']);
@@ -336,6 +374,8 @@ export function registerSpace(registry: CommandRegistry): void {
   registerTypeStyle('Polygon3', { defaults: { color: '#e9a23b', opacity: 0.4, width: 2, label: 'none' } });
   registerTypeStyle('Circle3', { defaults: { color: '#cc4c8c', width: 2.5, opacity: 0, label: 'none' } });
   registerTypeStyle('Polyhedron', { defaults: { color: '#8fb3e8', opacity: 0.4, width: 1.5, label: 'none' } });
+  registerTypeStyle('Surface', { defaults: { color: '#e9a23b', opacity: 0.85, width: 1, label: 'none' } });
+  registerTypeStyle('Curve3', { defaults: { color: '#cc4c8c', width: 2.5, label: 'none' } });
   for (const t of ['Sphere', 'Cylinder', 'Cone']) registerTypeStyle(t, { defaults: { color: '#9ccfb4', opacity: 0.45, width: 1, label: 'none' } });
   registerReasonPhrase('skew', { noun: 'skew lines', sentence: 'The lines are skew: they pass each other without meeting.' });
   registerReasonPhrase('not_coplanar', { noun: 'not flat', sentence: 'The points are not on one plane, so they make no flat polygon.' });
