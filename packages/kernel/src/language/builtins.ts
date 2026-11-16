@@ -6,6 +6,7 @@ import { fail } from './runtime';
 import type { ColorValue, Env } from './runtime';
 import type { Pt } from '../contracts/values';
 import { createFunctionTable } from './table';
+import { midiToFrequency, noteFrequency, semitonesUp } from './notes';
 import type { FunctionForm, FunctionSpec, FunctionTable, ParamSpec } from './table';
 import { T } from './types';
 import type { Ty } from './types';
@@ -503,6 +504,19 @@ const specs: FunctionSpec[] = [
       { params: [P('x'), P('y'), P('z')], returns: 'Number', summary: 'smooth noise in [-1, 1]', n3: (x, y, z) => noise3(x, y, z) },
     ],
   },
+  // Sound (sound design 2): pitches in hertz
+  {
+    name: 'note',
+    group: 'sound',
+    forms: [{
+      params: [P('name', 'Text')],
+      returns: 'Number',
+      summary: 'the pitch of a note name in hertz, like note("A4") = 440',
+      call: (env, a) => noteFrequency(String(a[0])) ?? (fail(env as Env, 'bad_note_name', 'note'), NaN),
+    }],
+  },
+  f1('midi', 'sound', (n, env) => (Number.isFinite(n) ? midiToFrequency(n) : (fail(env, 'not_finite', 'midi'), NaN)), 'the pitch of a MIDI note number in hertz, midi(69) = 440', 'n'),
+  f2('semitones', 'sound', (f, n) => semitonesUp(f, n), 'f moved up by n equal-tempered semitones', 'f', 'n'),
   // Vector
   { name: 'dot', group: 'vector', forms: [{ params: [P('u', 'Vector'), P('v', 'Vector')], returns: 'Number', summary: 'dot product', call: (_e, a) => vec(a[0]).x * vec(a[1]).x + vec(a[0]).y * vec(a[1]).y }] },
   { name: 'cross', group: 'vector', forms: [{ params: [P('u', 'Vector'), P('v', 'Vector')], returns: 'Number', summary: '2D cross product (a scalar)', call: (_e, a) => vec(a[0]).x * vec(a[1]).y - vec(a[0]).y * vec(a[1]).x }] },

@@ -16,8 +16,10 @@ export type CoreTypeName =
   | 'List' | 'Color' | 'Particles';
 
 /** Area type names, append-only, one per line under the area's comment, such as `Point3: true;` under `// space-3d`. */
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type
-export interface AreaTypeNames {}
+export interface AreaTypeNames {
+  // sound
+  Sound: true;
+}
 
 export type TypeName = CoreTypeName | Extract<keyof AreaTypeNames, string>;
 
@@ -34,6 +36,8 @@ export interface AreaUndefReasons {
   no_value_yet: true;
   // animation-time
   not_time_dependent: true;
+  // sound
+  bad_note_name: true;
 }
 
 export type UndefReason = CoreUndefReason | Extract<keyof AreaUndefReasons, string>;

@@ -77,6 +77,8 @@ export interface AreaErrorKinds {
   // app-modes (codes C090 to C099)
   mode_forbids: true;
   decimal_comma: true;
+  // sound (codes C092 to C099)
+  bad_note_name: true;
 }
 
 export type ErrorKind = CoreErrorKind | Extract<keyof AreaErrorKinds, string>;

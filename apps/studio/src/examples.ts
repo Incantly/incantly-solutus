@@ -404,7 +404,7 @@ export const EXAMPLES: readonly Example[] = [
       'tri = Polygon(A, B, P)',
       'raw = Angle(A, P, B)',
       'ang = min(raw, 2*pi - raw)',
-      'note = "angle APB = {ang:deg}" with at = (-4, 5.5), anchor = nw, size = 18',
+      'msg = "angle APB = {ang:deg}" with at = (-4, 5.5), anchor = nw, size = 18',
     ],
   },
   {

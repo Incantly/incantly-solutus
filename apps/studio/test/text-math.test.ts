@@ -64,9 +64,9 @@ describe('typeset texts in the studio', () => {
   });
 
   it('a placed text follows the point it is placed at', () => {
-    m.session.applyLines(['P = (1, 1)', 'note = "here" with at = P'], 'test');
+    m.session.applyLines(['P = (1, 1)', 'memo = "here" with at = P'], 'test');
     m.session.dragPoint('P', 3, 2, true);
-    expect((m.session.figure.get('note')?.style.ext as { at: { x: number; y: number } }).at).toEqual({ x: 3, y: 2 });
+    expect((m.session.figure.get('memo')?.style.ext as { at: { x: number; y: number } }).at).toEqual({ x: 3, y: 2 });
   });
 
   it('a vertical text draws its letters one under another', () => {
