@@ -98,6 +98,9 @@ export function lineUses(line: CheckedLine): LineUses {
         walk(n.x);
         walk(n.y);
         return;
+      case 'tuple':
+        n.items.forEach(walk);
+        return;
       case 'polar':
         walk(n.r);
         walk(n.a);

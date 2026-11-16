@@ -90,6 +90,8 @@ export interface AreaErrorKinds {
   batch_failed: true;
   import_format: true;
   import_conflict: true;
+  // space-3d (codes C120 to C139)
+  mixed_dimension: true;
 }
 
 export type ErrorKind = CoreErrorKind | Extract<keyof AreaErrorKinds, string>;

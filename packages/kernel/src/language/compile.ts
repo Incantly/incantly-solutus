@@ -580,6 +580,22 @@ class Compiler {
           return r;
         };
       }
+      case 'tuple': {
+        const parts = n.items.map((i) => this.compile(i));
+        const impl = n.impl;
+        return (env) => {
+          const vals: unknown[] = [];
+          for (const p of parts) {
+            const v = p(env);
+            if (v === undefined || v !== v) {
+              undefIn(env);
+              return undefined;
+            }
+            vals.push(v);
+          }
+          return impl(vals);
+        };
+      }
       case 'point': {
         const x = this.compile(n.x);
         const y = this.compile(n.y);

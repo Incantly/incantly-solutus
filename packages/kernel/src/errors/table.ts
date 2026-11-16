@@ -114,6 +114,7 @@ const META: Record<ErrorKind, Meta> = {
   batch_failed: { key: 'lang.batch_failed', params: ['done', 'n', 'total'], description: 'One line of a fill, paste or import failed, so none was applied.' },
   import_format: { key: 'lang.import_format', params: ['why'], description: 'Data to import that is not text, or is too large.' },
   import_conflict: { key: 'lang.import_conflict', params: ['why'], description: 'An import over cells that are already filled, without replace.' },
+  mixed_dimension: { key: 'lang.mixed_dimension', params: ['why'], description: 'A flat (2D) value where a command needs one in space (3D), or the other way round.' },
 };
 
 function buildTable(): Record<ErrorKind, ErrorSpec> {

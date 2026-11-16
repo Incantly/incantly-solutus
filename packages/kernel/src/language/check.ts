@@ -142,6 +142,17 @@ export function registerFieldNames(type: string, names: (ty: Ty) => readonly str
   FIELD_NAMES.set(type, names);
 }
 
+/**
+ * An area's tuple: the type and builder of a parenthesised list that is not the core `(x, y)` (`(x, y, z)` is a
+ * `Point3`). Asked with the item types; `undefined` passes.
+ */
+export type TupleRow = (items: readonly Ty[]) => { readonly result: Ty; readonly impl: (values: readonly unknown[]) => unknown } | undefined;
+const TUPLE_ROWS: TupleRow[] = [];
+
+export function registerTupleType(row: TupleRow): void {
+  if (!TUPLE_ROWS.includes(row)) TUPLE_ROWS.push(row);
+}
+
 /** What an `unknown_command` error says for a command that other apps have and we name differently. */
 export interface CommandRename {
   /** The replacement, written as a sentence: "Use Sample(Normal(mu, sigma), n)." */
@@ -919,11 +930,28 @@ class Checker {
   }
 
   inferTuple(e: Expr & { k: 'tuple' }): TNode | null {
+    if (e.items.length !== 2 && TUPLE_ROWS.length > 0) {
+      const xs = e.items.map((i) => this.infer(i));
+      if (xs.some((x) => x === null)) return null;
+      const items = xs as TNode[];
+      for (const row of TUPLE_ROWS) {
+        const r = row(items.map((i) => i.ty));
+        if (r) return { n: 'tuple', items, impl: r.impl, ty: r.result, s: e.s, e: e.e };
+      }
+      const bad = items.find((i) => i.ty.k !== 'Number');
+      if (bad && items.length === 3) {
+        return this.err('type_mismatch', bad.s, bad.e, 'lang.type_mismatch_where', { why: `A point in space takes three Numbers, but this is a ${tyStr(bad.ty)}` }, {
+          hint: 'Write (x, y, z) with three numbers.',
+          left: tyStr(bad.ty),
+          fingerprintKey: 'point3',
+        });
+      }
+    }
     if (e.items.length !== 2) {
       const third = e.items[2] as Expr;
       return this.err('syntax', third.s, third.e, 'lang.syntax', { token: this.textOf(third), expected: ')' }, {
         expected: [')'],
-        hint: 'A point has two coordinates: (x, y).',
+        hint: TUPLE_ROWS.length > 0 ? 'A point has two coordinates (x, y), or three in space (x, y, z).' : 'A point has two coordinates: (x, y).',
         fingerprintKey: 'tuple',
       });
     }
@@ -1435,7 +1463,9 @@ class Checker {
     return this.err(r.kind, s, e, `lang.${r.kind}`, r.params ?? { command, why: r.message }, {
       message: r.message,
       ...(r.hint !== undefined ? { hint: r.hint } : {}),
-      ...(r.suggest !== undefined ? { suggest: r.suggest.slice(0, 3) } : {}),
+      ...(r.suggest !== undefined || (r.replaceArg !== undefined && a)
+        ? { suggest: [...(r.replaceArg !== undefined && a ? [this.replaceRange(a.value.s, a.value.e, r.replaceArg)] : []), ...(r.suggest ?? [])].slice(0, 3) }
+        : {}),
       ...(r.limit !== undefined ? { limit: { ...r.limit } } : {}),
       ...(forms.length > 0 ? { forms: forms.map((f) => formText(command, f)) } : {}),
       phase: 'typecheck',
@@ -2174,6 +2204,10 @@ export function literalOf(node: TNode): unknown {
       const x = literalOf(node.x);
       const y = literalOf(node.y);
       return typeof x === 'number' && typeof y === 'number' ? { x, y } : undefined;
+    }
+    case 'tuple': {
+      const items = node.items.map(literalOf);
+      return items.every((v) => typeof v === 'number') ? node.impl(items) : undefined;
     }
     case 'list': {
       const items = node.items.map(literalOf);

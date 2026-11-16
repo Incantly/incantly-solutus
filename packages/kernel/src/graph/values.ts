@@ -56,6 +56,30 @@ function textSource(s: string): string {
   return '"' + s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\{/g, '\\{').replace(/\}/g, '\\}').replace(/\n/g, '\\n') + '"';
 }
 
+/** How an area's type is held as a free value: its literal text and the values `setFree` accepts. */
+export interface FreeType {
+  readonly source: (v: unknown) => string | undefined;
+  readonly fits: (v: unknown) => boolean;
+  /** A copy the figure can keep (the caller's object may change later). */
+  readonly own?: (v: unknown) => unknown;
+}
+
+const FREE_TYPES = new Map<string, FreeType>();
+
+/** An area registers a type it owns that can be free (a `Point3` written `(1, 2, 3)` is dragged like a point). */
+export function registerFreeType(type: string, t: FreeType): void {
+  if (typeof type === 'string' && type !== '' && !FREE_TYPES.has(type)) FREE_TYPES.set(type, t);
+}
+
+/** True when an area registered this type as one that can be free (and so dragged). */
+export const isFreeType = (type: string): boolean => FREE_TYPES.has(type);
+
+/** An area's own copy of a free value, or the value itself. */
+export function ownAreaValue(type: string, v: unknown): unknown {
+  const t = FREE_TYPES.get(type);
+  return t?.own ? t.own(v) : v;
+}
+
 /**
  * The source text of a free value of this type, or `undefined` when the type has no literal (a list, a colour, a
  * function): the caller then keeps the text the line was written with.
@@ -73,7 +97,7 @@ export function valueSource(ty: Ty, v: unknown): string | undefined {
       return p && typeof p.x === 'number' ? `(${numberSource(p.x)}, ${numberSource(p.y)})` : undefined;
     }
     default:
-      return undefined;
+      return FREE_TYPES.get(ty.k)?.source(v);
   }
 }
 
@@ -90,6 +114,6 @@ export function fitsType(ty: Ty, v: unknown): boolean {
     case 'Vector':
       return typeof v === 'object' && v !== null && typeof (v as { x?: unknown }).x === 'number' && typeof (v as { y?: unknown }).y === 'number';
     default:
-      return false;
+      return FREE_TYPES.get(ty.k)?.fits(v) ?? false;
   }
 }
