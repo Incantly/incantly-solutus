@@ -9,6 +9,7 @@ import { Diag, buildError, withMore } from './errors';
 import type { ErrorExtra, LanguageError } from './errors';
 import { MAX_DEPTH, lex } from './lexer';
 import { suggestName } from './names';
+import { isCellName } from './cells';
 import type { Token } from './lexer';
 import { SourceMap, splitLogicalLines } from './source';
 import type { LangLimits } from './source';
@@ -988,7 +989,27 @@ class Parser {
         const name = t.name ?? t.text;
         if (name === 'true' || name === 'false') return { k: 'bool', v: name === 'true', s: t.s, e: t.e };
         if (name === 'undefined') return { k: 'undef', s: t.s, e: t.e };
-        return { k: 'name', name, s: t.s, e: t.e };
+        const node: Expr & { k: 'name' } = { k: 'name', name, s: t.s, e: t.e, ...(t.cabs ? { cabs: true } : {}), ...(t.rabs ? { rabs: true } : {}) };
+        // `A1:C5` written without spaces is a range of cells (spreadsheet design 3.3)
+        const colon = this.peek();
+        if (isCellName(name) && colon.kind === 'op' && colon.text === ':' && colon.s === t.e) {
+          const end = this.peek(1);
+          const endName = end.kind === 'name' ? (end.name ?? end.text) : '';
+          if (end.s !== colon.e || end.kind !== 'name' || !isCellName(endName)) {
+            throw new Stop(
+              this.diag.at('syntax', colon.s, Math.max(colon.e, end.s === colon.e ? end.e : colon.e), 'lang.syntax', { token: end.s === colon.e && end.text !== '' ? end.text : 'the end', expected: 'a cell such as B3' }, {
+                expected: ['a cell such as B3'],
+                hint: `A range is two cells joined by a colon, such as ${t.text}:B3.`,
+                fingerprintKey: 'range_end',
+              }),
+            );
+          }
+          this.next();
+          this.next();
+          const to: Expr & { k: 'name' } = { k: 'name', name: endName, s: end.s, e: end.e, ...(end.cabs ? { cabs: true } : {}), ...(end.rabs ? { rabs: true } : {}) };
+          return { k: 'cells', from: node, to, s: t.s, e: end.e };
+        }
+        return node;
       }
       case 'sqrt': {
         this.next();

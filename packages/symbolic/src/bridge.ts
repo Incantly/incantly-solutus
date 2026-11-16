@@ -159,6 +159,8 @@ export function nodeFromTNode(t: TNode, scope: BridgeScope): BridgeResult {
     }
     case 'range':
       throw new BridgeError('not_symbolic', 'A range cannot be used in an expression.');
+    case 'cells':
+      throw new BridgeError('not_symbolic', 'A range of cells cannot be used in an expression.');
     case 'cond': {
       let readsClock = false;
       const cases = t.arms.map((arm) => {

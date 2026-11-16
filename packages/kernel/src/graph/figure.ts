@@ -165,6 +165,11 @@ export class Figure extends FigureHist {
 
   /* ------------------------------ the clock ------------------------------ */
 
+  /** The words of a directive the figure has (`@sheet 26 100` gives `['26', '100']`), or `undefined`. */
+  directive(name: string): readonly string[] | undefined {
+    return this.directiveItem(name)?.words;
+  }
+
   /** The film range from `@clock a..b`: `0..Infinity` without the directive. */
   clockRange(): { from: number; to: number } {
     const d = this.directiveItem('clock');

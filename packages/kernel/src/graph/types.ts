@@ -248,6 +248,11 @@ export interface ApplyOptions {
   dropRange?: boolean;
   /** Who wrote the line (app-modes design 3.6): the host page (default), a learner typing, or the model. */
   origin?: LineOrigin;
+  /**
+   * A redefinition to the same text checks the line again and rebuilds its inputs, instead of only refreshing the value
+   * (a range that now covers a new cell, spreadsheet design 3.5).
+   */
+  rebind?: boolean;
 }
 
 /** Who wrote a line. Only the host may write `@mode`, `@restrict` and `@exam`. */

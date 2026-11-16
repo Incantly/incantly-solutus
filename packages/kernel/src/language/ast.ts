@@ -37,7 +37,10 @@ export type Expr =
   | (Base & { readonly k: 'str'; readonly parts: readonly StrNodePart[] })
   | (Base & { readonly k: 'bool'; readonly v: boolean })
   | (Base & { readonly k: 'undef' })
-  | (Base & { readonly k: 'name'; readonly name: string })
+  /** `cabs`/`rabs`: a cell reference written with `$` before its column or row (`$A$1`), kept for copying (spreadsheet 3.4). */
+  | (Base & { readonly k: 'name'; readonly name: string; readonly cabs?: boolean; readonly rabs?: boolean })
+  /** `A1:C5`: a range of cells (spreadsheet design 3.3), only where a range or a list is accepted. */
+  | (Base & { readonly k: 'cells'; readonly from: NameExpr; readonly to: NameExpr })
   | (Base & { readonly k: 'unary'; readonly op: '-' | '+' | 'not'; readonly arg: Expr })
   | (Base & { readonly k: 'bin'; readonly op: BinOp; readonly l: Expr; readonly r: Expr; readonly implicit?: boolean })
   | (Base & { readonly k: 'cmp'; readonly ops: readonly CmpOp[]; readonly opPos: readonly Pos[]; readonly operands: readonly Expr[] })
@@ -54,6 +57,8 @@ export type Expr =
   | (Base & { readonly k: 'cond'; readonly args: readonly Expr[] });
 
 export type ExprKind = Expr['k'];
+
+export type NameExpr = Extract<Expr, { k: 'name' }>;
 
 export interface NameRef extends Pos {
   readonly name: string;

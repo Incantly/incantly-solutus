@@ -6,6 +6,7 @@ import type { ObjId } from '../contracts/values';
 import type { BoundArg, CommandForm, CommandSpec, FunctionForm, FunctionSpec } from './table';
 import type { AreaOpImpl, OpVariant, Ty } from './types';
 import type { CmpOp } from './ast';
+import type { CellRect } from './cells';
 
 interface B {
   readonly ty: Ty;
@@ -55,8 +56,16 @@ export type TNode =
   | (B & { readonly n: 'polar'; readonly r: TNode; readonly a: TNode })
   | (B & { readonly n: 'list'; readonly items: readonly TNode[] })
   | (B & { readonly n: 'range'; readonly from: TNode; readonly to: TNode; readonly step?: TNode })
+  /**
+   * A range of cells (spreadsheet design 3.3): the filled cells it covers, row by row, each a `ref` with its address.
+   * `as` says what it evaluates to: a `RangeValue` for a `Range` parameter, a list (one row or column) or a list of rows.
+   */
+  | (B & { readonly n: 'cells'; readonly rect: CellRect; readonly items: readonly CellItem[]; readonly as: 'range' | 'list' | 'rows' })
   | (B & { readonly n: 'cond'; readonly arms: readonly { readonly c: TNode; readonly v: TNode }[]; readonly otherwise?: TNode })
   | (B & { readonly n: 'relation'; readonly tree: RelTree; readonly slotX: number; readonly slotY: number; readonly poly?: PolyNodes; readonly shape: RelationShape });
+
+/** One filled cell of a range: a `ref` with its address. */
+export type CellItem = TNode & { readonly n: 'ref'; readonly col: number; readonly row: number };
 
 export type RelationShape = 'line' | 'circle' | 'conic' | 'curve' | 'region';
 

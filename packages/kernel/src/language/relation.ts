@@ -32,6 +32,7 @@ export function children(n: TNode): TNode[] {
     case 'polar':
       return [n.r, n.a];
     case 'list':
+    case 'cells':
       return [...n.items];
     case 'range':
       return n.step ? [n.from, n.to, n.step] : [n.from, n.to];

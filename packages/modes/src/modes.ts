@@ -8,7 +8,7 @@ import type { AppModeId, ExpressionPolicy, FeatureFlags, ModeConfig, ModeDefault
 export const COMMAND_GROUPS = [
   'figure', 'batch', 'geometry', 'conics', 'polygons', 'transforms', 'functions', 'lists', 'matrices', 'stats', 'charts',
   'fits', 'probability', 'distributions', 'random', 'symbolic', 'text', 'logic', 'controls', 'animation', 'rounding',
-  'size', 'colour', 'vector', 'trig', 'space', 'sound',
+  'size', 'colour', 'vector', 'trig', 'space', 'sound', 'sheet',
 ] as const;
 
 const ALL_EXPRESSIONS: ExpressionPolicy = {
@@ -73,7 +73,7 @@ const graphing: ModeConfig = {
   views: { available: ['graphics', 'algebra', 'sheet', 'datalab'], initial: ['algebra', 'graphics'], layout: 'split', canToggle: true },
   tools: { groups: ['move', 'point', 'line', 'general'], toolbar: 'compact', add: ['tangents', 'slider'], deny: ['polyline', 'segment-fixed-length'], customTools: false },
   commands: {
-    allow: ['figure', 'batch', 'functions', 'lists', 'stats', 'charts', 'fits', 'tests', 'text', 'logic', 'controls', 'animation', 'rounding', 'size', 'trig', 'random', 'sound'],
+    allow: ['figure', 'batch', 'functions', 'lists', 'stats', 'charts', 'fits', 'tests', 'text', 'logic', 'controls', 'animation', 'rounding', 'size', 'trig', 'random', 'sound', 'sheet'],
     add: ['Point', 'PointOn', 'Midpoint', 'Line', 'Segment', 'Ray', 'Vector', 'Intersect', 'Tangent', 'Slope', 'Distance', 'Circle', 'Polygon', 'Area', 'Reflect', 'Translate'],
   },
   expressions: ALL_EXPRESSIONS,

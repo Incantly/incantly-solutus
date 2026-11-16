@@ -10,6 +10,7 @@ import type { CheckedLine } from './check';
 import { buildError } from './errors';
 import type { LanguageError } from './errors';
 import { children, usesSlot } from './relation';
+import type { RangeValue } from './cells';
 import { fail, formatNumber } from './runtime';
 import type { Env, FunctionValue, RelationValue } from './runtime';
 import type { Pt } from '../contracts/values';
@@ -355,6 +356,7 @@ class Compiler {
       case 'command':
       case 'relation':
       case 'range':
+      case 'cells':
         return false;
       case 'undef':
         return false;
@@ -367,6 +369,44 @@ class Compiler {
       default:
         return children(n).every((c) => this.isConstant(c));
     }
+  }
+
+  /**
+   * A range of cells (spreadsheet design 3.3). As a `Range` it is the rectangle and every filled cell, undefined ones
+   * included, for the command to judge. As a list (one row or column) or a list of rows, an undefined cell makes the whole
+   * value undefined, like any list.
+   */
+  compileCells(n: Extract<TNode, { n: 'cells' }>): Fn {
+    const items = n.items.map((it) => ({ id: this.objId(it.id), name: it.name, col: it.col, row: it.row }));
+    const rect = n.rect;
+    if (n.as === 'range') {
+      return (env) => {
+        const cells = items.map((it) => ({ col: it.col, row: it.row, name: it.name, value: env.read(it.id) }));
+        const v: RangeValue = { schema: 'Range', rect, cells };
+        return v;
+      };
+    }
+    const numeric = (n.as === 'list' ? n.ty.of : n.ty.of?.of)?.k === 'Number';
+    const pack = (vals: unknown[]): unknown => (numeric ? Float64Array.from(vals as number[]) : vals);
+    return (env) => {
+      const vals: unknown[] = [];
+      for (const it of items) {
+        const v = env.read(it.id);
+        if (v === undefined || (typeof v === 'number' && v !== v)) {
+          failInput(env, it.id);
+          return undefined;
+        }
+        vals.push(v);
+      }
+      if (n.as === 'list') return pack(vals);
+      const rows: unknown[] = [];
+      for (let r = rect.r0, k = 0; r <= rect.r1; r++) {
+        const row: unknown[] = [];
+        while (k < items.length && (items[k] as { row: number }).row === r) row.push(vals[k++]);
+        if (row.length > 0) rows.push(pack(row));
+      }
+      return rows;
+    };
   }
 
   compile(n: TNode): Fn {
@@ -594,6 +634,8 @@ class Compiler {
       }
       case 'range':
         return this.compileRange(n);
+      case 'cells':
+        return this.compileCells(n);
       case 'cond':
         return this.compileCond(n);
       case 'relation':

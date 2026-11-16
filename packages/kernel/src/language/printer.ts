@@ -42,7 +42,9 @@ export function printExpr(e: Expr): string {
     case 'undef':
       return 'undefined';
     case 'name':
-      return e.name;
+      return e.cabs || e.rabs ? printCellRef(e) : e.name;
+    case 'cells':
+      return `${printExpr(e.from)}:${printExpr(e.to)}`;
     case 'str': {
       let out = '"';
       for (const p of e.parts) {
@@ -96,6 +98,13 @@ export function printExpr(e: Expr): string {
     case 'cond':
       return `if(${e.args.map(printExpr).join(', ')})`;
   }
+}
+
+/** `$A$1`, `A$1`, `$A1`: a cell name with its absolute flags. */
+function printCellRef(e: Extract<Expr, { k: 'name' }>): string {
+  const m = /^([A-Z]+)(\d+)$/.exec(e.name);
+  if (!m) return e.name;
+  return `${e.cabs ? '$' : ''}${m[1]}${e.rabs ? '$' : ''}${m[2]}`;
 }
 
 export function printRange(r: RangeClause): string {

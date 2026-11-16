@@ -28,7 +28,7 @@ import { FigureBase } from './base';
 import { FigureCore, ObjRec } from './core';
 import { coerceProp, defaultsFor, isValidKey, validKeysFor } from './props';
 import type { ActionRule } from './registry';
-import { runLineChecks, runLineHandlers, runLineRewriters } from './registry';
+import { hasAfterLine, runAfterLine, runLineChecks, runLineHandlers, runLineRewriters } from './registry';
 import type { ApplyOptions, Cell, ChangeReport, LineGate, Persist, RateRule, StyleEntry, TxOk, TxOp, TxResult } from './types';
 import { lineUses } from '../language/uses';
 
@@ -179,6 +179,7 @@ export class FigureTx extends FigureBase {
           this.rollbackTx();
           return internalError(bad, { line: lineNo, col: 1, endCol: 1 }, '', bad);
         }
+        if (!dry && hasAfterLine()) runAfterLine(this, r, { together: (fn) => this.together(typeof input === 'string' ? input : input.source, fn) });
         return r;
       });
     } catch {
@@ -205,6 +206,26 @@ export class FigureTx extends FigureBase {
       if (failed > 0) (result.notices as Notice[]).push(makeNotice('listener_failed', { where: 'a listener' }));
     }
     return result;
+  }
+
+  /**
+   * Runs `fn` so that what it applies joins the current line's undo step: the entries the line recorded so far move into
+   * one group with what `fn` records. Inside a group already open (a batch, a load) `fn` simply runs.
+   */
+  protected together(label: string, fn: () => void): void {
+    if (this.journal.isOpen) {
+      fn();
+      return;
+    }
+    const mine = this.log.filter((x): x is Extract<LogItem, { k: 'rec' }> => x.k === 'rec').map((x) => x.e);
+    for (let i = mine.length - 1; i >= 0; i--) this.journal.discard(mine[i] as JournalEntry);
+    this.journal.begin(label);
+    for (const e of mine) this.journal.record(e);
+    try {
+      fn();
+    } finally {
+      this.journal.end();
+    }
   }
 
   /** True while suggested lines are being tried, so a failed try is not repaired in turn. */
@@ -783,7 +804,7 @@ export class FigureTx extends FigureBase {
     // a redefinition to the same text refreshes the value and nothing else
     if (redefine && !assign && existing.length === 1 && persists.length === 1) {
       const o = existing[0] as ObjRec;
-      if (printLineNode(o.p.node) === printLineNode(persists[0]?.node as LineNode) && !opts.dropRange && kind === o.p.kind && styleSources[0] instanceof Map && o.p.style.size === (styleSources[0] as Map<string, StyleEntry>).size && !((node as { style?: readonly unknown[] }).style?.length)) {
+      if (!opts.rebind && printLineNode(o.p.node) === printLineNode(persists[0]?.node as LineNode) && !opts.dropRange && kind === o.p.kind && styleSources[0] instanceof Map && o.p.style.size === (styleSources[0] as Map<string, StyleEntry>).size && !((node as { style?: readonly unknown[] }).style?.length)) {
         notices.push(makeNotice('redefined_to_same', { name: o.p.name }));
         if (!opts.dryRun) {
           this.markDirty(o);

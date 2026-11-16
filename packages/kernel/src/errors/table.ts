@@ -104,6 +104,16 @@ const META: Record<ErrorKind, Meta> = {
   mode_forbids: { key: 'lang.mode_forbids', params: ['why'], description: 'A command, function, operator or form the app mode, a restriction or an exam switches off.' },
   decimal_comma: { key: 'lang.decimal_comma', params: [], description: 'A decimal written with a comma, such as 2,5, where a number is meant.' },
   bad_note_name: { key: 'lang.bad_note_name', params: ['token'], description: 'A text in note() that is not a note name, such as "H4".' },
+  bad_reference: { key: 'lang.bad_reference', params: ['token', 'why'], description: 'A cell reference that is not one: $ alone, a column past ZZ, row 0 or a row past 9999.' },
+  range_not_object: { key: 'lang.range_not_object', params: ['token'], description: 'A range such as A1:C5 defined as an object of its own.' },
+  range_misplaced: { key: 'lang.range_misplaced', params: ['token'], description: 'A range used where a single value is wanted, such as A1:B3 + 1.' },
+  cell_out_of_range: { key: 'lang.cell_out_of_range', params: ['token', 'cols', 'rows'], description: 'A cell outside the size the @sheet line gives.' },
+  no_sheet: { key: 'lang.no_sheet', params: ['token'], description: 'A cell reference, range or sheet command in a figure with no @sheet.' },
+  cell_locked: { key: 'lang.cell_locked', params: ['why'], description: 'An edit, fill or paste that touches a locked cell.' },
+  bad_shape: { key: 'lang.bad_shape', params: ['why'], description: 'A range of the wrong shape, such as PointsFrom of three columns.' },
+  batch_failed: { key: 'lang.batch_failed', params: ['done', 'n', 'total'], description: 'One line of a fill, paste or import failed, so none was applied.' },
+  import_format: { key: 'lang.import_format', params: ['why'], description: 'Data to import that is not text, or is too large.' },
+  import_conflict: { key: 'lang.import_conflict', params: ['why'], description: 'An import over cells that are already filled, without replace.' },
 };
 
 function buildTable(): Record<ErrorKind, ErrorSpec> {

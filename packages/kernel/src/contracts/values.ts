@@ -38,6 +38,11 @@ export interface AreaUndefReasons {
   not_time_dependent: true;
   // sound
   bad_note_name: true;
+  // spreadsheet
+  off_sheet: true;
+  deleted_cell: true;
+  empty_cell: true;
+  not_numeric: true;
 }
 
 export type UndefReason = CoreUndefReason | Extract<keyof AreaUndefReasons, string>;

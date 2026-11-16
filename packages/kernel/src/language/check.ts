@@ -21,6 +21,10 @@ import { T, accepts, areaIndexOp, areaUnaryOp, binaryOp, isCallableTy, legalOpsF
 import type { AreaOpImpl, TypeSet } from './types';
 import type { Ty } from './types';
 import type { LangLimits } from './source';
+import { EXCLUDED_CELLS, WHOLE_SHEET, cellsIn, isCellName, parseCellName, rectCols, rectOf, rectRows } from './cells';
+import type { CellAddress, CellRect, CellRef } from './cells';
+import type { CellItem } from './tnode';
+import { makeNotice } from '../errors/notices';
 
 /* ------------------------------ public shapes ------------------------------ */
 
@@ -518,7 +522,95 @@ class Checker {
         return this.inferRange(e);
       case 'cond':
         return this.inferCond(e, expected);
+      case 'cells':
+        return this.misplacedCells(e);
     }
+  }
+
+  /* ------------------------------ ranges of cells ------------------------------ */
+
+  /** A range where a value is wanted: `r = A1:C5` is not an object, `A1:B3 + 1` is not a number (spreadsheet errors 1). */
+  misplacedCells(e: Expr & { k: 'cells' }): null {
+    const token = this.textOf(e);
+    const node = this.parsed.node;
+    if (node.k === 'define' && node.expr === e) {
+      const name = node.target.name;
+      return this.err('range_not_object', e.s, e.e, 'lang.range_not_object', { token }, {
+        hint: `Make a list or a matrix from it: ${name} = ListFrom(${token}) or ${name} = MatrixFrom(${token}).`,
+        suggest: [`${name} = ListFrom(${token})`, `${name} = MatrixFrom(${token})`],
+        fingerprintKey: 'range_not_object',
+      });
+    }
+    return this.err('range_misplaced', e.s, e.e, 'lang.range_misplaced', { token }, {
+      hint: `Give it to a command that takes a range or a list, such as Sum(${token}), ListFrom(${token}) or PointsFrom(${token}).`,
+      fingerprintKey: 'range_misplaced',
+    });
+  }
+
+  /**
+   * A range as a command argument: the filled cells it covers become inputs of the line, row by row. Its type is `Range`
+   * with the element type of the cells, until a parameter decides what it becomes (`fitCells`).
+   */
+  inferCells(e: Expr & { k: 'cells' }, rect: CellRect = rectOf(parseCellName(e.from.name) as CellAddress, parseCellName(e.to.name) as CellAddress)): TNode {
+    // the whole sheet (`Cell(i, 1)`) leaves out the cell the line defines, which cannot read itself
+    const self = rect === WHOLE_SHEET ? this.ctx.name : undefined;
+    const found = cellsIn(rect, (n) => n !== self && !EXCLUDED_CELLS.has(n) && this.fig.lookup(n) !== undefined, () => this.fig.names());
+    const items: CellItem[] = [];
+    for (const c of found) {
+      const obj = this.fig.lookup(c.name) as ObjectInfo;
+      this.reads.add(obj.id);
+      items.push({ n: 'ref', id: obj.id, name: c.name, ty: obj.type, col: c.col, row: c.row, s: e.s, e: e.e });
+    }
+    const of = items.length > 0 ? (items[0] as CellItem).ty : T.Number;
+    return { n: 'cells', rect, items, as: 'range', ty: { k: 'Range', of }, s: e.s, e: e.e };
+  }
+
+  /**
+   * What a range becomes for a parameter: a `Range` stays one; for a list parameter one row or column is a list and a
+   * larger range a list of rows, holding the cells of one type (the numbers when the cells are mixed, with a notice).
+   */
+  fitCells(node: TNode & { n: 'cells' }, set: TypeSet): TNode {
+    if (set.members.some((m) => m.k === 'Range')) return node;
+    const counts = new Map<string, { ty: Ty; n: number }>();
+    for (const it of node.items) {
+      const k = tyStr(it.ty);
+      const c = counts.get(k);
+      if (c) c.n++;
+      else counts.set(k, { ty: it.ty, n: 1 });
+    }
+    const pick = counts.get('Number')?.ty ?? (node.items[0] as CellItem | undefined)?.ty ?? T.Number;
+    const items = node.items.filter((it) => tyEq(it.ty, pick));
+    const skipped = node.items.length - items.length;
+    if (skipped > 0) {
+      const range = this.textOf(node);
+      this.warn(makeNotice('skipped_non_numeric', { range, count: skipped }));
+    }
+    const line = rectCols(node.rect) === 1 || rectRows(node.rect) === 1;
+    return { ...node, items, as: line ? 'list' : 'rows', ty: line ? listOf(pick) : listOf(listOf(pick)) };
+  }
+
+  /**
+   * The cells a command with a left-out `sheet` parameter reads: the rectangle between its `from` and `to` addresses, the
+   * one cell of literal `col` and `row` numbers, or else the whole sheet (`Cell(i, 1)` with a slider `i`).
+   */
+  sheetRectOf(params: readonly ParamSpec[], bound: readonly (TArg | undefined)[]): CellRect {
+    const arg = (name: string): TNode | undefined => bound[params.findIndex((q) => q.name === name)]?.expr;
+    const from = arg('from');
+    const to = arg('to');
+    if (from?.n === 'const' && to?.n === 'const' && from.ty.k === 'CellAddr' && to.ty.k === 'CellAddr') return rectOf(from.value as CellAddress, to.value as CellAddress);
+    const col = arg('col');
+    const row = arg('row');
+    if (col?.n === 'num' && row?.n === 'num' && Number.isInteger(col.v) && Number.isInteger(row.v) && col.v >= 1 && row.v >= 1 && col.v <= WHOLE_SHEET.c1 && row.v <= WHOLE_SHEET.r1) {
+      return { c0: col.v, r0: row.v, c1: col.v, r1: row.v };
+    }
+    return WHOLE_SHEET;
+  }
+
+  /** A cell name given to a `CellAddr` parameter: its address, whether the cell is filled or not (`FillCells(A2, …)`). */
+  cellAddrNode(e: Expr & { k: 'name' }): TNode {
+    const a = parseCellName(e.name) as CellAddress;
+    const value: CellRef = { col: a.col, row: a.row, colAbs: e.cabs === true, rowAbs: e.rabs === true };
+    return { n: 'const', name: e.name, value, ty: { k: 'CellAddr' }, s: e.s, e: e.e };
   }
 
   inferText(e: Expr & { k: 'str' }): TNode | null {
@@ -1553,14 +1645,30 @@ class Checker {
         const ai = b.bind[k] as number;
         const kind = p.kind ?? 'value';
         if (ai === -1) {
+          // `Cell(col, row)` reads the whole sheet: a left-out parameter `sheet` of type Range is every filled cell
+          if (p.name === 'sheet' && p.type === 'Range') {
+            const whole = this.inferCells({ k: 'cells', from: { k: 'name', name: 'A1', s: call.cs, e: call.ce }, to: { k: 'name', name: 'A1', s: call.cs, e: call.ce }, s: call.cs, e: call.ce }, this.sheetRectOf(b.form.params, bound));
+            bound[k] = { param: p, expr: whole, omitted: false, ty: whole.ty };
+            tys[k] = whole.ty;
+            return;
+          }
           bound[k] = { param: p, omitted: true, ...(p.default !== undefined ? { value: p.default } : {}) };
           return;
         }
         const a = args[ai] as Arg;
         const set = setFor(p.type);
         score += set.size;
+        // a cell name where an address or a range is wanted (`FillCells(A2, …)`, `ClearCells(B2)`)
+        const av = a.value;
+        if (kind === 'value' && av.k === 'name' && isCellName(av.name) && set.members.some((m) => m.k === 'CellAddr' || m.k === 'Range')) {
+          const node = set.members.some((m) => m.k === 'CellAddr') ? this.cellAddrNode(av) : this.inferCells({ k: 'cells', from: av, to: av, s: av.s, e: av.e });
+          tys[k] = node.ty;
+          bound[k] = { param: p, expr: node, omitted: false, ty: node.ty };
+          return;
+        }
         if (kind === 'value') {
-          const node = valueArg(ai, elementHint(b, k));
+          let node = valueArg(ai, elementHint(b, k));
+          if (node && node.n === 'cells') node = this.fitCells(node, set);
           if (!node) {
             invalid = true;
             bound[k] = { param: p, omitted: false };
@@ -1799,6 +1907,15 @@ class Checker {
   }
 
   inferArg(e: Expr, expected?: Ty): TNode | null {
+    if (e.k === 'cells') {
+      this.node();
+      return this.inferCells(e);
+    }
+    // `CellRange(A1, B3)` given to a command is the range A1:B3 itself (spreadsheet design 3.8)
+    if (e.k === 'call' && e.callee === 'CellRange' && e.args.length === 2 && e.args.every((a) => a.name === undefined && a.value.k === 'name' && isCellName(a.value.name))) {
+      this.node();
+      return this.inferCells({ k: 'cells', from: (e.args[0] as Arg).value as Expr & { k: 'name' }, to: (e.args[1] as Arg).value as Expr & { k: 'name' }, s: e.s, e: e.e });
+    }
     if (this.relationCapable(e) && this.freeVars(e).size > 0) return this.buildRelation(e);
     return this.infer(e, expected);
   }

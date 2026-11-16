@@ -43,6 +43,9 @@ declare module '../contracts/values' {
     // language: a function of one or two numbers that returns a Bool (curves-loci design 1)
     Predicate: true;
     Predicate2: true;
+    // language: a range of cells and a cell address, only as command arguments (spreadsheet design 3.2)
+    Range: true;
+    CellAddr: true;
   }
 }
 
