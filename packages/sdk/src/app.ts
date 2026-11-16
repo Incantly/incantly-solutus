@@ -7,12 +7,14 @@ import type { CommandRegistry, ErrorObject, LineOrigin, ObjectView, TxResult } f
 import { MODES, catalogueOf, compilePolicy, makeGate, switchMode } from '@incantly/modes';
 import type { AppModeId, ModeChangeResult, ModeConfig } from '@incantly/modes';
 import type { ApiError } from './errors';
-import { apiError, destroyed, need, unknownName } from './errors';
+import { apiError, destroyed, isApiError, need, unknownName } from './errors';
 import { EventHub } from './events';
 import type { AppEvent, ChangedObject, EventOf, EventSource, EventType, ListenOpts, Scheduler, Unsubscribe } from './events';
 import { sdkRegistry } from './registry';
 import type { Value } from './values';
 import { cellValue, toValue } from './values';
+import { APP_VERSION, FORMAT_VERSION, defaultSettings, fromFragment, modeFor, readFile, sniff, textOfBytes, toFragment, unknownKeys } from './file';
+import type { Asset, FileSettings, FileWarning, IncantlyFile, LoadResult, Meta } from './file';
 
 export const API_VERSION = 1 as const;
 /** The most objects `list` returns (design 7). */
@@ -178,6 +180,8 @@ export const HEADER = /^\s*# incantly \d+[^\n]*(\n|$)/;
 
 const DEFAULT_VIEW = { x0: -10, x1: 10, y0: -7, y1: 7 };
 
+const NOT_LOADED = (failed: readonly KernelError[]): LoadResult => ({ ok: false, migrated: false, applied: 0, failed, warnings: [] });
+
 /** An event before the app stamps its source and time. */
 type Draft = AppEvent extends infer E ? (E extends AppEvent ? Omit<E, 'source' | 't'> : never) : never;
 
@@ -222,8 +226,24 @@ export interface App {
   once<E extends EventType>(type: E, handler: (e: EventOf<E>) => void): Unsubscribe;
 
   toScript(): string;
-  /** Replaces the figure with a script's (round 2 adds files): every line is tried, failures are listed. */
+  /** Replaces the figure with a script's: every line is tried, failures are listed. */
   loadScript(text: string): { readonly ok: boolean; readonly applied: number; readonly failed: readonly KernelError[] };
+  /** The figure as a file (design 4.3). */
+  save(): IncantlyFile;
+  /** The file as JSON text. */
+  saveText(): string;
+  /** Opens a file, its JSON text or a script. On a file error nothing changes. */
+  load(input: IncantlyFile | string | Readonly<Record<string, unknown>>): LoadResult | ApiError;
+  /** Opens the bytes of a file (gzipped or not). */
+  loadBytes(bytes: Uint8Array): Promise<LoadResult | ApiError>;
+  /** The figure as a URL fragment `f=…` (design 6). */
+  toFragment(): Promise<string>;
+  /** Opens a figure from a URL fragment. */
+  loadFragment(fragment: string): Promise<LoadResult | ApiError>;
+  /** The display settings of the figure (the screen reads them). */
+  readonly settings: FileSettings;
+  /** Images the file holds, by id. */
+  readonly assets: Readonly<Record<string, Asset>>;
 
   setMode(mode: AppModeId, opts?: { readonly force?: boolean }): ModeChangeResult;
   resize(width: number, height: number): void;
@@ -252,6 +272,12 @@ class AppCore implements App {
   private gone = false;
   /** Value changes seen during the current call, for `LineOk.changed`. */
   private seen: Set<string> | undefined;
+  /** What the last opened file held that the script does not: settings, assets, metadata, keys this version keeps. */
+  private fileSettings: FileSettings = defaultSettings();
+  private fileAssets: Record<string, Asset> = {};
+  private fileMeta: Meta = {};
+  private fileKeep: Record<string, unknown> = {};
+  private language = 'en';
 
   constructor(opts: HeadlessOptions) {
     need(typeof opts === 'object' && opts !== null, 'createApp', 'options must be an object');
@@ -600,7 +626,9 @@ class AppCore implements App {
   private viewWindow(): { x0: number; x1: number; y0: number; y1: number } {
     const w = this.gone ? undefined : this.figure.directive('view');
     const n = w?.map(Number) ?? [];
-    return n.length === 4 && n.every(Number.isFinite) ? { x0: n[0] as number, x1: n[1] as number, y0: n[2] as number, y1: n[3] as number } : { ...DEFAULT_VIEW };
+    if (n.length === 4 && n.every(Number.isFinite)) return { x0: n[0] as number, x1: n[1] as number, y0: n[2] as number, y1: n[3] as number };
+    const v = this.fileSettings?.view;
+    return v ? { x0: v.x0, x1: v.x1, y0: v.y0, y1: v.y1 } : { ...DEFAULT_VIEW };
   }
 
   private host(line: string): LineResult {
@@ -795,6 +823,130 @@ class AppCore implements App {
       this.as('file', () => this.emit({ type: 'loaded', applied: report.applied, failed: report.errors.length }));
     }
     return { ok: report.ok, applied: report.applied, failed: report.errors };
+  }
+
+  get settings(): FileSettings {
+    const d = (name: string): string | undefined => (this.gone ? undefined : this.figure.directive(name)?.[0]);
+    const grid = d('grid');
+    const axes = d('axes');
+    const unit = d('angleunit');
+    const round = /^(\d+)(s?)$/.exec(d('rounding') ?? '');
+    const v = this.viewWindow();
+    return {
+      ...this.fileSettings,
+      view: { ...v, keepRatio: this.keep },
+      axes: axes === undefined ? this.fileSettings.axes : { x: axes !== 'off', y: axes !== 'off' },
+      grid: grid === undefined ? this.fileSettings.grid : grid === 'off' ? 'none' : grid === 'minor' ? 'minor' : 'major',
+      angleUnit: unit === undefined ? this.fileSettings.angleUnit : /^deg/.test(unit) ? 'degree' : 'radian',
+      rounding: round ? { mode: round[2] ? 'sig' : 'decimals', digits: Number(round[1]) } : this.fileSettings.rounding,
+      coordinatesStyle: d('coords') === 'polar' ? 'polar' : this.fileSettings.coordinatesStyle,
+      language: this.language,
+    };
+  }
+
+  get assets(): Readonly<Record<string, Asset>> {
+    return this.fileAssets;
+  }
+
+  save(): IncantlyFile {
+    const range = this.gone ? { from: 0, to: Infinity } : this.figure.clockRange();
+    const p = this.gone ? undefined : playerOf(this.figure).state;
+    const title = this.gone ? undefined : this.figure.directive('title')?.join(' ').replace(/^"|"$/g, '');
+    return {
+      ...this.fileKeep,
+      format: 'incantly',
+      formatVersion: FORMAT_VERSION,
+      appVersion: APP_VERSION,
+      mode: this.mode,
+      script: this.toScript(),
+      settings: this.settings,
+      ...(Number.isFinite(range.to) && p ? { clock: { range: [range.from, range.to] as const, t: p.t, speed: p.rate, playing: p.mode === 'playing' } } : {}),
+      views: { panes: [...this.modeConfig().views.initial] },
+      assets: { ...this.fileAssets },
+      meta: { ...this.fileMeta, ...(title ? { title } : {}) },
+    };
+  }
+
+  saveText(): string {
+    return JSON.stringify(this.save(), null, 1);
+  }
+
+  load(input: IncantlyFile | string | Readonly<Record<string, unknown>>): LoadResult | ApiError {
+    need(typeof input === 'string' || (typeof input === 'object' && input !== null), 'load', 'it needs a file, its text or a script');
+    if (this.gone) return destroyed();
+    let value: unknown = input;
+    if (typeof input === 'string') {
+      const sn = sniff(input);
+      if ('ok' in sn) return sn;
+      if (sn.kind === 'script') return this.openScript(sn.text);
+      value = sn.value;
+    }
+    const r = readFile(value);
+    if ('ok' in r) return r;
+    return this.openFile(r.file, r.migrated, r.warnings);
+  }
+
+  async loadBytes(bytes: Uint8Array): Promise<LoadResult | ApiError> {
+    need(bytes instanceof Uint8Array, 'loadBytes', 'it needs the bytes of a file');
+    const text = await textOfBytes(bytes);
+    return typeof text === 'string' ? this.load(text) : text;
+  }
+
+  async toFragment(): Promise<string> {
+    return toFragment(this.save());
+  }
+
+  async loadFragment(fragment: string): Promise<LoadResult | ApiError> {
+    need(typeof fragment === 'string', 'loadFragment', 'it needs the fragment text');
+    const f = await fromFragment(fragment);
+    return isApiError(f) ? f : this.load(f);
+  }
+
+  /** A plain script: its header names the mode. */
+  private openScript(text: string): LoadResult {
+    const m = /^\s*# incantly \d+[^\n]*\bmode=([a-z0-9]+)/.exec(text);
+    const want = m ? modeFor(m[1] as string) : { mode: this.mode };
+    const from = this.mode;
+    this.mode = want.mode;
+    const r = this.loadScript(text);
+    if (!r.ok && r.applied === 0 && text.trim() !== '') {
+      this.mode = from;
+      return NOT_LOADED(r.failed);
+    }
+    this.fileSettings = defaultSettings();
+    this.fileAssets = {};
+    this.fileMeta = {};
+    this.fileKeep = {};
+    if (from !== this.mode) this.as('file', () => this.emit({ type: 'modeChanged', mode: this.mode, from }));
+    return { ok: r.ok, migrated: false, applied: r.applied, failed: r.failed, warnings: [], ...('adjusted' in want && want.adjusted ? { modeAdjusted: want.adjusted } : {}) };
+  }
+
+  private openFile(f: IncantlyFile, migrated: boolean, warnings: readonly FileWarning[]): LoadResult {
+    const want = modeFor(f.mode);
+    const from = this.mode;
+    this.mode = want.mode;
+    const r = this.loadScript(f.script);
+    if (!r.ok && r.applied === 0 && f.script.replace(HEADER, '').trim() !== '') {
+      this.mode = from;
+      return { ...NOT_LOADED(r.failed), warnings };
+    }
+    this.fileSettings = f.settings;
+    this.fileAssets = { ...f.assets };
+    this.fileMeta = { ...f.meta };
+    this.fileKeep = { ...unknownKeys(f), ...(f.extensions ? { extensions: f.extensions } : {}) };
+    this.keep = f.settings.view.keepRatio;
+    this.language = f.settings.language;
+    if (f.clock) {
+      const p = playerOf(this.figure);
+      this.as('file', () => {
+        p.seek(f.clock?.t ?? 0);
+        p.setRate(f.clock?.speed ?? 1);
+      });
+      if (f.clock.playing) this.clock.play();
+    }
+    this.savedScript = this.figure.toScript();
+    if (from !== this.mode) this.as('file', () => this.emit({ type: 'modeChanged', mode: this.mode, from }));
+    return { ok: r.ok, migrated, applied: r.applied, failed: r.failed, warnings, ...(want.adjusted ? { modeAdjusted: want.adjusted } : {}) };
   }
 
   /* ------------------------------ lifetime ------------------------------ */
