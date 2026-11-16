@@ -213,10 +213,12 @@ export function validateLayout(layout: KeyboardLayout, opts: { readonly commands
 export function layoutFor(id: KeyboardId | string, policy: CompiledPolicy, catalogue: readonly CommandRef[]): { readonly layout: KeyboardLayout; readonly fellBack: boolean } {
   const base = (LAYOUTS as Record<string, KeyboardLayout | undefined>)[id];
   const layout = base ?? LAYOUTS.standard;
-  const groups = new Map(catalogue.map((c) => [c.name, c.group]));
+  // a command two areas give has a group per area (Midpoint: geometry and space): its key shows when the mode allows one
+  const groups = new Map<string, string[]>();
+  for (const c of catalogue) groups.set(c.name, [...(groups.get(c.name) ?? []), c.group]);
   const allowed = (k: Key): boolean => {
     const a = k.action;
-    if (a.kind === 'command') return groups.has(a.name) && policy.command(a.name, groups.get(a.name) as string);
+    if (a.kind === 'command') return (groups.get(a.name) ?? []).some((g) => policy.command(a.name, g));
     if (a.kind === 'insert' && k.id.startsWith('fn-')) return policy.fn(a.text.replace(/\(.*$/, ''));
     return true;
   };

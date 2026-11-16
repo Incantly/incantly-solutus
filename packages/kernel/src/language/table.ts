@@ -106,6 +106,8 @@ export interface Refusal {
   readonly inRest?: boolean;
   /** Up to 3 complete replacement lines. */
   readonly suggest?: readonly string[];
+  /** A replacement for the argument at `param`: the checker suggests the whole line with that argument rewritten. */
+  readonly replaceArg?: string;
   /** Params for the kind's message template, when it has one. */
   readonly params?: Readonly<Record<string, string | number | boolean | readonly string[]>>;
   /** For a `limit` refusal: the limit's name, its size and what the line asked for. */

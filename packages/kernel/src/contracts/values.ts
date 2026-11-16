@@ -19,6 +19,20 @@ export type CoreTypeName =
 export interface AreaTypeNames {
   // sound
   Sound: true;
+  // space-3d
+  Point3: true;
+  Vector3: true;
+  Line3: true;
+  Segment3: true;
+  Ray3: true;
+  Plane: true;
+  Polygon3: true;
+  Circle3: true;
+  Polyhedron: true;
+  Sphere: true;
+  Cylinder: true;
+  Cone: true;
+  View3: true;
 }
 
 export type TypeName = CoreTypeName | Extract<keyof AreaTypeNames, string>;
@@ -43,6 +57,10 @@ export interface AreaUndefReasons {
   deleted_cell: true;
   empty_cell: true;
   not_numeric: true;
+  // space-3d
+  skew: true;
+  not_coplanar: true;
+  not_closed: true;
 }
 
 export type UndefReason = CoreUndefReason | Extract<keyof AreaUndefReasons, string>;

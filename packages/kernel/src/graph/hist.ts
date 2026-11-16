@@ -21,7 +21,7 @@ import type { ActionContext, ActionResult } from './tx';
 import { ObjRec } from './core';
 import { lineRefStarts, refStarts, renameNode, renameStyleItem } from './rename';
 import type { ApplyOptions, BatchOptions, BatchResult, ChangeReport, Description, Persist, RateRule, StyleEntry, TxOk, TxResult } from './types';
-import { fitsType, sameValue, valueSource } from './values';
+import { fitsType, isFreeType, ownAreaValue, sameValue, valueSource } from './values';
 import type { InvertCall } from './registry';
 import { deleteNotes, runDragListeners } from './registry';
 import { toEffective, validKeysFor } from './props';
@@ -743,7 +743,7 @@ export class FigureHist extends FigureTx {
     if (rec.p.kind === 'state') return { writes: [], reason: 'owned_by_solver' };
     if (rec.p.kind === 'free') {
       const k = rec.p.type.k;
-      if (k !== 'Point' && k !== 'Number' && k !== 'Bool') return { writes: [], reason: 'not_draggable' };
+      if (k !== 'Point' && k !== 'Number' && k !== 'Bool' && !isFreeType(k)) return { writes: [], reason: 'not_draggable' };
       if (!fitsType(rec.p.type, target)) return { writes: [], reason: 'bad_target' };
       return { writes: [{ id: rec.id, name: rec.p.name, value: target }], kind: 'free' };
     }
@@ -944,7 +944,7 @@ function ownValue(type: string, v: unknown): unknown {
     const y = o.y;
     return typeof x === 'number' && typeof y === 'number' ? { x, y } : v;
   }
-  return v;
+  return ownAreaValue(type, v);
 }
 
 function decimals(x: number): number {

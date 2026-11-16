@@ -151,6 +151,7 @@ export function nodeFromTNode(t: TNode, scope: BridgeScope): BridgeResult {
       throw new BridgeError('not_symbolic', 'Indexing cannot be used inside an expression.');
     case 'field': return fieldFromTNode(t, scope);
     case 'point':
+    case 'tuple':
     case 'polar':
       throw new BridgeError('not_symbolic', 'A point cannot be used in an expression.');
     case 'list': {

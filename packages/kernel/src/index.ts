@@ -39,6 +39,8 @@ export * from './commands/probability/index';
 export * as text from './commands/text/index';
 export { registerSound, soundsAt, soundEvents, clearSoundEvents, isMuted, setMuted, isSoundValue, soundText, SOUND_LIMITS, SOUND_SPECS, WAVES, NOISE_COLORS } from './commands/sound/index';
 export type { SoundValue, SoundEvent, SoundFrame, PlayingSound, Wave, NoiseColor } from './commands/sound/index';
+export * as space from './commands/space/index';
+export { registerSpace } from './commands/space/index';
 export { noteFrequency, midiOfNote, midiToFrequency, semitonesUp } from './language/notes';
 export {
   registerSheet, sheetSize, rangeReadersOf, undefinedCode, UNDEFINED_CODES, SHEET_LIMITS, SHEET_SPECS, shiftRefs, shiftLine, planFill, planClear, applyPlan, applyFill, cellMarks,

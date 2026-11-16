@@ -53,6 +53,8 @@ export type TNode =
   | (B & { readonly n: 'index'; readonly target: TNode; readonly index: TNode; readonly impl?: AreaOpImpl })
   | (B & { readonly n: 'field'; readonly target: TNode; readonly field: string; readonly args?: readonly TNode[] })
   | (B & { readonly n: 'point'; readonly x: TNode; readonly y: TNode })
+  /** A tuple an area reads (`(x, y, z)` is a `Point3`): `impl` builds the value from the item values. */
+  | (B & { readonly n: 'tuple'; readonly items: readonly TNode[]; readonly impl: (values: readonly unknown[]) => unknown })
   | (B & { readonly n: 'polar'; readonly r: TNode; readonly a: TNode })
   | (B & { readonly n: 'list'; readonly items: readonly TNode[] })
   | (B & { readonly n: 'range'; readonly from: TNode; readonly to: TNode; readonly step?: TNode })
