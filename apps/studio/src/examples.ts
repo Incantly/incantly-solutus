@@ -436,6 +436,60 @@ export const EXAMPLES: readonly Example[] = [
       'Trace(K)',
     ],
   },
+  /* ---------------- sound (press the speaker to hear) ---------------- */
+  {
+    id: 'sound-beats',
+    modes: ['graphing', 'classic'],
+    title: 'Sound: beats — two close tones wobble (press 🔇)',
+    lines: [
+      'f = 440 in 220..880 step 1',
+      'd = 3 in 0..10 step 0.5',
+      'a = Tone(f, 0.25)',
+      'b = Tone(f + d, 0.25)',
+      'wave(x) = sin(8*x) + sin((8 + d / 2)*x)',
+      'hint = "Drag d: the wobble speeds up as the tones move apart" with at = (-9, 5.5), anchor = nw, size = 16',
+    ],
+  },
+  {
+    id: 'sound-scale',
+    modes: ['graphing', 'classic'],
+    title: 'Sound: a C major scale on the film clock (press 🔇, then play)',
+    lines: [
+      '@clock 0..8',
+      'scale = Melody([note("C4"), note("D4"), note("E4"), note("F4"), note("G4"), note("A4"), note("B4"), note("C5")], 0.5, loop = true)',
+      'k = floor(t / 0.5) - 8*floor(t / 4)',
+      'P = (k - 3.5, 0)',
+      'keys = Seq((j - 3.5, 0), j, 0, 7)',
+    ],
+  },
+  {
+    id: 'sound-sonify',
+    modes: ['graphing', 'classic'],
+    title: 'Sound: hear a function with Sonify (press 🔇, then the button)',
+    lines: [
+      'f(x) = sin(x) + 0.3*x',
+      'go = Button("Hear f from -6 to 6")',
+      'on go click: Sonify(f, -6, 6, 3)',
+    ],
+  },
+  {
+    id: 'sound-metronome',
+    modes: ['geometry', 'classic'],
+    title: 'Sound: a pendulum that clicks at the bottom of its swing (press 🔇, then play)',
+    lines: [
+      '@clock 0..30',
+      '@view -3.5 3.5 -3.2 1',
+      'g = 9.8',
+      'L = 2 in 0.5..2.5 step 0.1',
+      'θ = state(1, 0)',
+      "θ'' = -g / L * sin(θ)",
+      'L with rerun = continue',
+      'pivot = (0, 0)',
+      'bob = (pivot.x + L*sin(θ), pivot.y - L*cos(θ))',
+      'rod = Segment(pivot, bob)',
+      'tick = Tone(1200, 0.3, wave = "square") with on = abs(θ) < 0.06',
+    ],
+  },
   /* ---------------- geometry: motion with state() ---------------- */
   {
     id: 'geo-state-pendulum',

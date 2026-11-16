@@ -40,7 +40,7 @@ const BASE_DEFAULTS: ModeDefaults = {
 
 const UI_ALL: UiOptions = { menu: true, toolbar: true, algebra: true, inputBar: true, zoomButtons: true, fullscreenButton: true };
 
-const SETTINGS_COMMON = ['angleUnit', 'rounding', 'coordinates', 'undoLimit', 'language', 'decimalSeparator', 'reducedMotion', 'highContrast', 'textScale', 'screenReaderMode', 'keyboard', 'keyboardLayout', 'theme'];
+const SETTINGS_COMMON = ['angleUnit', 'rounding', 'coordinates', 'undoLimit', 'language', 'decimalSeparator', 'reducedMotion', 'highContrast', 'textScale', 'screenReaderMode', 'keyboard', 'keyboardLayout', 'theme', 'masterVolume', 'soundOnStart'];
 const SETTINGS_GRAPHICS = ['axes', 'grid', 'keepRatio', 'snapToGrid', 'pointSnap', 'showLabels', 'defaultLineWidth', 'defaultPointSize', 'fontSize'];
 const SETTINGS_ALGEBRA = ['sort', 'description'];
 

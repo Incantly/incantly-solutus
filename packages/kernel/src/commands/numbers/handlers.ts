@@ -29,10 +29,11 @@ import type { TNode } from '../../language/tnode';
 
 const EVENTS: readonly HandlerEvent[] = ['click', 'change', 'input', 'dragend', 'load'];
 
-/** Steps may call these actions (3.3). The last seven belong to later areas. */
+/** Steps may call these actions (3.3). The sound actions are fired by handlers too (sound design 1.3). */
 const STEP_ACTIONS: ReadonlySet<string> = new Set([
   'SetValue', 'Toggle', 'Animate', 'Show', 'Hide', 'Reset', 'Click',
   'Highlight', 'Trace', 'Untrace', 'Play', 'Pause', 'View', 'Axes', 'Grid',
+  'Note', 'Sonify', 'Mute', 'Unmute',
 ]);
 const FUTURE_ACTIONS: ReadonlySet<string> = new Set(['Highlight', 'Trace', 'Untrace', 'Play', 'Pause', 'View', 'Axes', 'Grid']);
 /** Restyle keys that would create a rule; formulas for them are rejected in steps. */

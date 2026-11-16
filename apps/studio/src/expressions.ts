@@ -756,6 +756,16 @@ export function mountExpressions(opts: ExpressionOptions): ExpressionList {
       v.classList.add('typeset');
     }
     if (v.textContent || typeset) out.append(v);
+    // a sound row's mute toggle (sound ui)
+    if (r.type === 'Sound') {
+      const muted = session.isMuted(r.name);
+      const t = el('button', `chip sound-mute${muted ? ' on' : ''}`, muted ? '🔇 muted' : '🔊 mute');
+      t.type = 'button';
+      t.title = muted ? `Let ${r.name} play` : `Mute ${r.name}`;
+      t.setAttribute('aria-pressed', String(muted));
+      t.addEventListener('click', () => session.toggleMute(r.name));
+      out.append(t);
+    }
     handlersBlock(out, r.name);
     if (r.free && r.type === 'Number' && !c) {
       const n = Number(value);
@@ -871,7 +881,7 @@ export function mountExpressions(opts: ExpressionOptions): ExpressionList {
     const r = session.row(id);
     if (!r) return;
     const control = r.control?.kind === 'slider' ? { ...r.control, value: 0 } : r.control;
-    const stamp = `${settingsVersion}|${index}|${off}|${open}|${prefs.input.kind}|${cardFor === id}|${r.source}|${JSON.stringify(r.state)}|${JSON.stringify(control)}|${m.lines[0]}|${m.lines[1]}|${m.madeFrom.join(',')}|${m.usedBy.join(',')}|${JSON.stringify(session.handlersOn(r.name))}|${aborted.has(r.name)}`;
+    const stamp = `${settingsVersion}|${index}|${off}|${open}|${prefs.input.kind}|${cardFor === id}|${r.source}|${JSON.stringify(r.state)}|${JSON.stringify(control)}|${m.lines[0]}|${m.lines[1]}|${m.madeFrom.join(',')}|${m.usedBy.join(',')}|${JSON.stringify(session.handlersOn(r.name))}|${aborted.has(r.name)}|${r.type === 'Sound' && session.isMuted(r.name)}`;
     if (filled.get(id) === stamp && !p.error) {
       // a slider that only moved: set its knob, keep the element (so a drag in progress is not cut)
       if (r.control?.kind === 'slider') {
