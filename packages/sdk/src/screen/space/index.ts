@@ -4,3 +4,4 @@ export * from './paint3';
 export * from './space-pane';
 export * from './controls3';
 export * from './mesh3';
+export * from './clip3';

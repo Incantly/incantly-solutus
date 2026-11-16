@@ -3,7 +3,7 @@
  * screen is the shared graph pane; around it an optional top bar (menu, title, reset, undo and redo), the clock bar
  * and the file dialogs. Every write the screen makes goes through the app, so the page sees the same events.
  */
-import { animatingIds, tracedIds } from '@incantly/kernel';
+import { animatingIds, space, tracedIds } from '@incantly/kernel';
 import type { Figure } from '@incantly/kernel';
 import { createHeadlessApp } from './app';
 import type { App, HeadlessOptions } from './app';
@@ -143,6 +143,8 @@ function closeDialog(d: HTMLDialogElement): void {
 /** True when the figure moves with time: a film range, animated sliders, traces or particles (the clock bar shows). */
 export function hasClock(figure: Figure): boolean {
   if (Number.isFinite(figure.clockRange().to)) return true;
+  // a camera that spins moves with the film (.kiro/specs/space-3d-surfaces R3.1)
+  if (space.viewOf(figure).spin !== 0) return true;
   if (tracedIds(figure).length > 0 || animatingIds(figure).length > 0) return true;
   for (const o of figure.objects()) if (o.type === 'Particles' || /\banimate\s*=/.test(o.definition)) return true;
   return false;

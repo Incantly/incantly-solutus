@@ -104,7 +104,13 @@ export function mountSpace(opts: SpacePaneOptions): SpacePane {
   let guide: string | undefined;
   let zoomTimer: ReturnType<typeof setTimeout> | undefined;
 
-  const viewNow = (): space.View3 => live ?? space.viewOf(opts.figure());
+  /** The camera a gesture changes: the one the figure stores (or the live copy), before spin and clip size. */
+  const baseView = (): space.View3 => live ?? space.viewOf(opts.figure());
+  /** The camera drawn now: at the film time. */
+  const viewNow = (): space.View3 => {
+    const fig = opts.figure() as unknown as { clock?(): { t: number } };
+    return space.viewAtTime(baseView(), typeof fig.clock === 'function' ? fig.clock().t : 0);
+  };
 
   const paint = (): void => {
     frame = 0;
@@ -201,8 +207,8 @@ export function mountSpace(opts: SpacePaneOptions): SpacePane {
     const dy = p.y - gesture.y;
     gesture.x = p.x;
     gesture.y = p.y;
-    const v = viewNow();
-    live = gesture.kind === 'orbit' ? orbit(v, dx, dy) : pan(v, cameraFor(v, w, h), dx, dy);
+    const v = baseView();
+    live = gesture.kind === 'orbit' ? orbit(v, dx, dy) : pan(v, cameraFor(viewNow(), w, h), dx, dy);
     redraw();
   });
   const end = (e: PointerEvent): void => {
@@ -242,8 +248,7 @@ export function mountSpace(opts: SpacePaneOptions): SpacePane {
   canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
     const p = local(e);
-    const v = viewNow();
-    live = zoomAt(v, cameraFor(v, w, h), Math.exp(-e.deltaY * 0.0015), p.x, p.y);
+    live = zoomAt(baseView(), cameraFor(viewNow(), w, h), Math.exp(-e.deltaY * 0.0015), p.x, p.y);
     redraw();
     // a burst of wheel steps is one zoom line
     if (zoomTimer) clearTimeout(zoomTimer);
@@ -268,7 +273,7 @@ export function mountSpace(opts: SpacePaneOptions): SpacePane {
       opts.say?.(why ?? `${chosen} = ${space.spaceText(valueOf(chosen))}`);
     } else if (e.key === 'Escape') choose(undefined);
     else {
-      const line = keyLine(e.key, viewNow());
+      const line = keyLine(e.key, baseView());
       if (!line) return;
       opts.write?.(line);
     }
@@ -301,6 +306,7 @@ export function mountSpace(opts: SpacePaneOptions): SpacePane {
         const on = !(v.axes && v.floor && v.grid);
         write(`space with axes = ${on}, floor = ${on}, grid = ${on}`);
       }),
+      button('⛶', 'Clip box on or off', () => write(`space with clip = ${!space.viewOf(opts.figure()).clip}`)),
       button('◩', 'Orthographic or perspective', () => write(`space with projection = ${space.viewOf(opts.figure()).projection === 'persp' ? 'ortho' : 'persp'}`)),
       presets,
     );
