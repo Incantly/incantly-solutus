@@ -271,7 +271,7 @@ export interface App {
    * path or built from free points moves what it is built from. Sends `dragStart`, `drag` (one per frame) and
    * `dragEnd`, with source `user`; the whole drag is one undo step.
    */
-  dragPoint(name: string, x: number, y: number, done: boolean): LineResult;
+  dragPoint(name: string, x: number, y: number, done: boolean, z?: number): LineResult;
   /** True when the screen may drag the point. */
   draggable(name: string): boolean;
 }
@@ -412,26 +412,27 @@ class AppCore implements App {
   draggable(name: string): boolean {
     if (this.gone || this.readOnly) return false;
     const o = this.figure.get(name);
-    if (!o || o.type !== 'Point' || !o.cell.defined) return false;
+    if (!o || (o.type !== 'Point' && o.type !== 'Point3') || !o.cell.defined) return false;
     return o.free || this.figure.dragPlan(name, o.cell.value).writes.length > 0;
   }
 
-  dragPoint(name: string, x: number, y: number, done: boolean): LineResult {
-    need(typeof name === 'string' && typeof x === 'number' && typeof y === 'number', 'dragPoint', 'it needs a name and two numbers');
+  dragPoint(name: string, x: number, y: number, done: boolean, z?: number): LineResult {
+    need(typeof name === 'string' && typeof x === 'number' && typeof y === 'number' && (z === undefined || typeof z === 'number'), 'dragPoint', 'it needs a name and two or three numbers');
     if (this.gone) return destroyed();
     if (this.readOnly) return apiError('api', 'read_only', 'This figure is read-only.', { hint: 'Turn off readOnly, or work on a copy.' });
     const o = this.figure.get(name);
     if (!o) return unknownName(name, [...this.figure.objects()].map((v) => v.name));
-    if (!Number.isFinite(x) || !Number.isFinite(y)) return apiError('api', 'bad_argument', 'The place needs two finite numbers.', { detail: { argument: 'point' } });
+    if (!Number.isFinite(x) || !Number.isFinite(y) || (z !== undefined && !Number.isFinite(z))) return apiError('api', 'bad_argument', 'The place needs two finite numbers.', { detail: { argument: 'point' } });
     return this.as('user', (): LineResult => {
       const f = this.figure;
       const round = (v: number): number => Number(v.toPrecision(6));
       if (o.free) {
-        const r = f.setFree(name, { x: round(x), y: round(y) }, 'drag');
+        // a point in space keeps its third coordinate
+        const r = f.setFree(name, z === undefined ? { x: round(x), y: round(y) } : { x: round(x), y: round(y), z: round(z) }, 'drag');
         if (!r.ok) return this.failDrag(r, done);
         f.flush();
       } else {
-        const plan = f.dragPlan(name, { x, y });
+        const plan = f.dragPlan(name, z === undefined ? { x, y } : { x, y, z });
         const r = f.drag(plan);
         if (!r.ok) {
           const why = String(r.reason ?? plan.reason ?? 'not_draggable');

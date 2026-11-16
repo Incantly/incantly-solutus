@@ -2,3 +2,4 @@
 export * from './scene3';
 export * from './paint3';
 export * from './space-pane';
+export * from './controls3';

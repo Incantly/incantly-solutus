@@ -84,6 +84,10 @@ const CSS = `
 .inc-app .graph[hidden]{display:none}
 .inc-app .space-view{position:relative;flex:1;min-height:0}
 .inc-app .space-canvas{display:block;width:100%;height:100%;touch-action:none}
+.inc-app .space-canvas:focus-visible{outline:2px solid #2f6fdb;outline-offset:-2px}
+.inc-app .space-bar{position:absolute;right:8px;top:8px;display:flex;flex-direction:column;gap:4px}
+.inc-app .space-btn{width:32px;height:32px;border:1px solid #d5d7dd;border-radius:6px;background:#fff;cursor:pointer}
+.inc-app .space-presets{width:32px;height:32px;border:1px solid #d5d7dd;border-radius:6px;background:#fff;font-size:11px}
 .inc-app .graph-canvas{display:block;width:100%;height:100%;touch-action:none}
 .inc-app .graph-controls{position:absolute;right:8px;bottom:8px;display:flex;flex-direction:column;gap:4px}
 .inc-app .graph-controls[hidden]{display:none}
@@ -215,7 +219,23 @@ export async function createApp(opts: AppOptions): Promise<MountedApp> {
   });
 
   // the 3D app shows the Space view where the graph would be
-  const space3: SpacePane | undefined = core.mode === 'graphing3d' ? mountSpace({ figure: () => core.figure }) : undefined;
+  const space3: SpacePane | undefined = core.mode === 'graphing3d'
+    ? mountSpace({
+      figure: () => core.figure,
+      // a camera gesture is a line the learner wrote (.kiro/specs/space-3d R4.1)
+      write: (line) => {
+        const [r] = core.as('user', () => core.run(line));
+        if (r && !r.ok) say(r.message);
+      },
+      ...(ui.dragPoints && !core.readOnly ? { drag: (name: string, p: { x: number; y: number; z: number }, done: boolean) => {
+        const r = core.dragPoint(name, p.x, p.y, done, p.z);
+        return r.ok ? undefined : r.message;
+      } } : {}),
+      draggable: (name) => ui.dragPoints && core.draggable(name),
+      say: (t) => say(t),
+      styleBar: ui.zoomButtons,
+    })
+    : undefined;
   if (space3) graph.element.hidden = true;
 
   /* ------------------------------ top bar and menu ------------------------------ */

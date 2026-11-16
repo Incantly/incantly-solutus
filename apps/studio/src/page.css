@@ -520,3 +520,13 @@ button:disabled { opacity: 0.4; cursor: default; }
 .failed-lines li { margin-bottom: 8px; }
 .failed-lines code { font-size: 12px; color: #5b6472; }
 .failed-lines .hint { margin: 2px 0 0; color: #5b6472; font-size: 13px; }
+
+/* Space view (space-3d ui.md 2, 6.2) */
+.space-view { flex: 1; position: relative; min-width: 0; overflow: hidden; background: #fff; }
+.space-view[hidden] { display: none; }
+.space-canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; }
+.space-canvas:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.space-bar { position: absolute; right: 10px; top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.space-btn { width: 34px; height: 34px; border: 1px solid var(--line-strong); border-radius: 8px; background: #fff; cursor: pointer; font-size: 15px; }
+.space-btn:hover { background: var(--tab); }
+.space-presets { width: 34px; height: 34px; border: 1px solid var(--line-strong); border-radius: 8px; background: #fff; font-size: 11px; }

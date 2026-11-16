@@ -174,6 +174,15 @@ export function paintSpace(ctx: Ctx, view: space.View3, w: number, h: number, sc
     ctx.lineWidth = l.width;
     const len = Math.hypot(b.x - a.x, b.y - a.y);
     const pieces = l.hiddenDashed && occluders.length > 0 ? Math.max(1, Math.min(24, Math.ceil(len / 12))) : 1;
+    if (l.dotted) {
+      ctx.setLineDash([2, 3]);
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      return;
+    }
     // run the pieces in groups of the same visibility, so a line is a few strokes
     let start = 0;
     let wasHidden: boolean | undefined;

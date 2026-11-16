@@ -82,7 +82,7 @@ describe('switching modes (R4)', () => {
 
   it('a mode that is not built is refused', () => {
     const f = graphingFigure();
-    const r = switchMode(f, MODES.graphing, MODES.graphing3d, { catalogue: CAT });
+    const r = switchMode(f, MODES.graphing, MODES.notes, { catalogue: CAT });
     expect(r.ok).toBe(false);
     expect(r.error?.kind).toBe('mode_unavailable');
   });
