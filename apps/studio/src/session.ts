@@ -554,10 +554,12 @@ export class KernelSession {
     // a camera that spins moves with the film (.kiro/specs/space-3d-surfaces R3.1)
     if (space.viewOf(this.figure).spin !== 0) return true;
     for (const v of this.figure.objects()) {
-      if (v.type === 'Particles') return true;
+      if (v.type === 'Particles' || v.state) return true;
       if (/\banimate\s*=/.test(v.definition)) return true;
     }
     if (/^@clock /m.test(this.figure.toScript())) return true;
+    // a slider set going by Animate(h)
+    if (/^\s*Animate\(/m.test(this.figure.toScript())) return true;
     for (const v of this.figure.objects()) {
       if (!READS_CLOCK.test(v.definition.replace(/"(?:[^"\\]|\\.)*"/g, '""'))) continue;
       const s = this.figure.slice('t', v.id);

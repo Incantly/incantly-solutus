@@ -13,6 +13,8 @@ const DRAWN = new Set(['Particles', 'Point', 'Vector', 'Segment', 'Line', 'Ray',
 
 export function drawsOnGraph(type: string, typeText: string, value: unknown): boolean {
   const base = type.replace(/<.*$/, '');
+  // particles in space belong to the Space view
+  if (base === 'Particles' && (value as { space?: unknown } | undefined)?.space === true) return false;
   if (DRAWN.has(base)) return true;
   if (base === 'List') return /^List<(Point|Polygon|Segment|Circle|Line|Vector)/.test(typeText);
   if (base === 'Record') return (value as { schema?: string } | undefined)?.schema === 'Fit';

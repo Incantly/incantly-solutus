@@ -7,7 +7,7 @@
 import { buildCamera, projectPoint, quatRotate } from '@incantly/view/camera';
 import type { Camera, SpaceCameraProps } from '@incantly/view/camera';
 import { space } from '@incantly/kernel';
-import type { FaceItem, Item3, LineItem, PointItem, Scene3 } from './scene3';
+import type { DotItem, FaceItem, Item3, LineItem, PointItem, Scene3 } from './scene3';
 
 type V3 = space.V3;
 type Ctx = Pick<CanvasRenderingContext2D, 'beginPath' | 'moveTo' | 'lineTo' | 'closePath' | 'fill' | 'stroke' | 'arc' | 'fillText' | 'strokeText' | 'setLineDash' | 'save' | 'restore' | 'fillRect'> & {
@@ -135,11 +135,12 @@ export function paintSpace(ctx: Ctx, view: space.View3, w: number, h: number, sc
     return k * (0.45 + 0.55 * d + 0.18 * f);
   };
 
-  const project = (items: readonly Item3[]): { faces: FaceP[]; lines: LineItem[]; points: PointItem[]; labels: Item3[] } => {
+  const project = (items: readonly Item3[]): { faces: FaceP[]; lines: LineItem[]; points: PointItem[]; labels: Item3[]; dots: DotItem[] } => {
     const faces: FaceP[] = [];
     const lines: LineItem[] = [];
     const points: PointItem[] = [];
     const labels: Item3[] = [];
+    const dots: DotItem[] = [];
     for (const it of items) {
       if (it.k === 'face') {
         const pts = it.pts.map(P);
@@ -149,9 +150,10 @@ export function paintSpace(ctx: Ctx, view: space.View3, w: number, h: number, sc
         faces.push({ item: it, pts, depth: pts.reduce((s, p) => s + p.z, 0) / pts.length, minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) });
       } else if (it.k === 'line') lines.push(it);
       else if (it.k === 'point') points.push(it);
+      else if (it.k === 'dot') dots.push(it);
       else labels.push(it);
     }
-    return { faces, lines, points, labels };
+    return { faces, lines, points, labels, dots };
   };
 
   const drawFace = (f: FaceP): void => {
@@ -263,6 +265,19 @@ export function paintSpace(ctx: Ctx, view: space.View3, w: number, h: number, sc
   }
   const occluders = sc.faces.filter((f) => f.item.occludes);
   for (const l of sc.lines) drawLine(l, occluders);
+  // particles: far ones first, so near ones cover them
+  if (sc.dots.length > 0) {
+    const ds = sc.dots.map((d) => ({ d, q: P(d.p) })).filter((x) => !x.q.behind).sort((a, b) => b.q.z - a.q.z);
+    for (const { d, q } of ds) {
+      const r = Math.max(0.6, d.px ? d.size : d.size * cam.scale);
+      ctx.globalAlpha = d.alpha;
+      ctx.fillStyle = d.color;
+      ctx.beginPath();
+      ctx.arc(q.x, q.y, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
   for (const p of sc.points) {
     const q = P(p.p);
     if (q.behind) continue;
