@@ -17,3 +17,8 @@ export type { Catalogue, Message, I18nOptions } from './i18n';
 export { en as EN_MESSAGES } from './locales/en';
 export { LAYOUTS, validateLayout, layoutFor, applyKey } from './keyboard';
 export type { Key, KeyAction, KeyboardLayout, KeyboardTab, LayoutProblem } from './keyboard';
+export { switchMode } from './switch';
+export type { ModeChangeResult, DroppedObject, SwitchOptions } from './switch';
+export { ExamController, EXAM_NOTE, awayOf } from './exam';
+export type { ExamFigure, ExamOptions, ExamAction } from './exam';
+export { sha256 } from './sha256';

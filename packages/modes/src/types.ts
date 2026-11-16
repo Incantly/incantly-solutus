@@ -71,6 +71,8 @@ export interface ExpressionPolicy {
   readonly denyFunctions?: readonly string[];
   /** Lines like `x^2 + y^2 == 4`. */
   readonly allowImplicitEquations: boolean;
+  /** Lines like `f(x) = x^2` (off in the scientific calculator). Default true. */
+  readonly allowUserFunctions?: boolean;
   readonly allowTextObjects: boolean;
   readonly allowLists: boolean;
   /** `state()` and rates (physics). */
