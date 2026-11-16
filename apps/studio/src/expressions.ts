@@ -56,6 +56,8 @@ export interface ExpressionOptions {
   readonly view?: () => { readonly x0: number; readonly x1: number };
   /** The studio's selection (design 3.9): a row click selects, a canvas pick scrolls to and marks the row. */
   readonly selection?: Selection;
+  /** Whether the mode offers the "Make slider" chip for an unknown name (app-modes design 3.4). Default on. */
+  readonly autoSliders?: () => boolean;
 }
 
 interface RowParts {
@@ -330,12 +332,12 @@ export function mountExpressions(opts: ExpressionOptions): ExpressionList {
     box.append(el('span', 'err-msg', e.message));
     if (e.hint) box.append(el('span', 'err-hint', e.hint));
     // a missing name becomes a slider in one click, then the line runs (design 3.10, no dialog)
-    if (e.kind === 'unknown_name' && e.token && /^[A-Za-z]\w*$/.test(e.token)) {
+    if (e.kind === 'unknown_name' && e.token && /^[A-Za-z]\w*$/.test(e.token) && (opts.autoSliders?.() ?? true)) {
       const name = e.token;
       const chip = el('button', 'err-fix', `Make slider ${name}`);
       chip.type = 'button';
       chip.addEventListener('click', () => {
-        const r = session.applyLines([`${name} = 1 in -5..5 step 0.1`, input.value.trim()], `Slider ${name}`, 'atomic');
+        const r = session.applyLines([`${name} = 1 in -5..5 step 0.1`, input.value.trim()], `Slider ${name}`, 'atomic', 'learner');
         if (!r.ok) return showError(parts, input, r.error);
         opts.say(`Made slider ${name}.`);
         if (!parts) {
@@ -347,6 +349,9 @@ export function mountExpressions(opts: ExpressionOptions): ExpressionList {
       });
       box.append(chip);
     }
+    // a command the mode leaves out: the permitted ones nearby, as plain text (errors 1)
+    const instead = (e as ErrorObject & { allowedInstead?: readonly string[] }).allowedInstead;
+    if (e.kind === 'mode_forbids' && instead && instead.length > 0) box.append(el('span', 'err-hint', `Try: ${instead.join(', ')}.`));
     const fixes = (e.suggest ?? []).filter((x) => !(e.kind === 'unknown_name' && x.startsWith(`${e.token} =`))).slice(0, 2);
     for (const s of fixes) {
       const b = el('button', 'err-fix', `Use: ${s}`);

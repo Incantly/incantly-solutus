@@ -36,6 +36,8 @@ export interface ToolStrip {
   keyDown(e: KeyboardEvent): boolean;
   /** The virtual cursor in screen pixels, while one is shown. */
   cursor(): { readonly px: number; readonly py: number } | undefined;
+  /** Only the tools the app mode allows (app-modes design 3.1); `undefined` allows every tool. */
+  setAllowed(allow: ((id: string, group: string) => boolean) | undefined): void;
   dispose(): void;
 }
 
@@ -77,6 +79,8 @@ export function mountToolStrip(opts: ToolStripOptions): ToolStrip {
   drawer.setAttribute('role', 'menu');
 
   let currentId = 'move';
+  let allowTool: ((id: string, group: string) => boolean) | undefined;
+  const usable = (): readonly ToolSpec[] => (allowTool ? TOOLS.filter((t) => t.id === 'move' || (allowTool as (id: string, group: string) => boolean)(t.id, t.group)) : TOOLS);
   const lastInGroup = new Map<string, string>(GROUPS.map((g) => [g.id, TOOLS.find((t) => t.group === g.id)?.id ?? 'move']));
   let tool: ToolSession | undefined;
   let refusal = '';
@@ -129,7 +133,7 @@ export function mountToolStrip(opts: ToolStripOptions): ToolStrip {
     element.replaceChildren();
     groupButtons.length = 0;
     for (const g of GROUPS) {
-      const tools = TOOLS.filter((t) => t.group === g.id);
+      const tools = usable().filter((t) => t.group === g.id);
       if (tools.length === 0) continue;
       const shown = toolById(lastInGroup.get(g.id) ?? '') ?? (tools[0] as ToolSpec);
       const wrap = el('div', 'tool-group');
@@ -176,7 +180,7 @@ export function mountToolStrip(opts: ToolStripOptions): ToolStrip {
     drawer.dataset['group'] = group;
     const label = GROUPS.find((g) => g.id === group)?.label ?? '';
     drawer.append(el('p', 'drawer-title', label));
-    for (const t of TOOLS.filter((x) => x.group === group)) {
+    for (const t of usable().filter((x) => x.group === group)) {
       const item = el('button', `drawer-item${t.id === currentId ? ' on' : ''}`);
       item.type = 'button';
       item.setAttribute('role', 'menuitem');
@@ -518,9 +522,21 @@ export function mountToolStrip(opts: ToolStripOptions): ToolStrip {
     hint,
     graphTool,
     current: () => currentId,
+    setAllowed(allow) {
+      allowTool = allow;
+      for (const g of GROUPS) {
+        const first = usable().find((t) => t.group === g.id);
+        const last = lastInGroup.get(g.id);
+        if (first && !usable().some((t) => t.id === last)) lastInGroup.set(g.id, first.id);
+      }
+      if (!usable().some((t) => t.id === currentId)) api.select('move');
+      else renderStrip();
+      element.hidden = usable().length <= 1 && allow !== undefined && !allow('move', 'move');
+    },
     select(id) {
       const s = toolById(id);
       if (!s) return;
+      if (!usable().some((t) => t.id === id)) return;
       currentId = id;
       lastInGroup.set(s.group, id);
       refusal = '';
@@ -541,7 +557,7 @@ export function mountToolStrip(opts: ToolStripOptions): ToolStrip {
     keyDown(e) {
       // Ctrl+1…9: the first nine groups' current tools
       if ((e.ctrlKey || e.metaKey) && /^[1-9]$/.test(e.key)) {
-        const g = GROUPS.filter((x) => TOOLS.some((t) => t.group === x.id))[Number(e.key) - 1];
+        const g = GROUPS.filter((x) => usable().some((t) => t.group === x.id))[Number(e.key) - 1];
         const id = g ? lastInGroup.get(g.id) : undefined;
         if (!id) return false;
         api.select(id);

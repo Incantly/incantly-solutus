@@ -8,7 +8,7 @@ import {
   toggleCheckbox, tracedIds, typeInputText, valueText,
 } from '@incantly/kernel';
 import type { HandlerEvent, HandlerRun, Player } from '@incantly/kernel';
-import type { CommandRegistry, ErrorObject, ObjectView } from '@incantly/kernel';
+import type { CommandRegistry, ErrorObject, LineGate, LineOrigin, ObjectView } from '@incantly/kernel';
 import { rightSide } from '@incantly/ui';
 import type { CauseLink, LineRow, RowControl, SubmitResult } from '@incantly/ui';
 import { loadCasEngine, onCasAnswer, studioRegistry } from './registry';
@@ -53,6 +53,18 @@ export class KernelSession {
   private readonly commands: CommandRegistry;
   private off: (() => void) | undefined;
   private readonly listeners = new Set<() => void>();
+  /** The app mode's gate (app-modes design 3.1): kept across a new or loaded figure. */
+  private gate: LineGate | undefined;
+
+  /** Installs the mode's line gate on this figure and every figure loaded after it. */
+  setGate(gate: LineGate | undefined): void {
+    this.gate = gate;
+    this.figure.setGate(gate);
+  }
+
+  get registry(): CommandRegistry {
+    return this.commands;
+  }
 
   constructor(commands: CommandRegistry = studioRegistry()) {
     this.commands = commands;
@@ -82,7 +94,7 @@ export class KernelSession {
   /** Builds the figure again from its own lines when something waited for the engine; the undo history is kept short. */
   refreshPending(): void {
     if (!this.hasPending()) return;
-    const { figure, report } = Figure.fromScript(this.figure.toScript(), { commands: this.commands });
+    const { figure, report } = Figure.fromScript(this.figure.toScript(), { commands: this.commands, ...(this.gate ? { gate: this.gate } : {}) });
     if (!report.ok && report.applied === 0) return;
     this.figure = figure;
     this.watch();
@@ -137,9 +149,9 @@ export class KernelSession {
   /* ------------------------------ lines ------------------------------ */
 
   /** The input line's handler: one line through `apply`. A failing line changes nothing. */
-  submit(source: string): SubmitResult {
+  submit(source: string, origin: LineOrigin = 'learner'): SubmitResult {
     this.needEngine(source);
-    const r = this.figure.apply(source.trim());
+    const r = this.figure.apply(source.trim(), { origin });
     if (!r.ok) return { ok: false, error: r };
     // `on` and `ClearHandler` lines change handlers, which raise no figure event of their own
     if (r.op === 'action') this.linesChanged();
@@ -147,9 +159,9 @@ export class KernelSession {
   }
 
   /** Several lines as one undo step; every line applies or fails on its own (the teacher's `draw`). */
-  applyLines(lines: readonly string[], label: string, mode: 'independent' | 'atomic' = 'independent'): Outcome {
+  applyLines(lines: readonly string[], label: string, mode: 'independent' | 'atomic' = 'independent', origin: LineOrigin = 'host'): Outcome {
     this.needEngine(lines.join('\n'));
-    const r = this.figure.applyBatch(lines, { group: label, mode });
+    const r = this.figure.applyBatch(lines, { group: label, mode, origin });
     if (r.applied > 0) this.linesChanged();
     if (mode === 'atomic' && !r.ok) {
       const bad = r.results.find((x) => !x.ok);
@@ -292,7 +304,7 @@ export class KernelSession {
     }
     const value = v.free ? parseFree(v.type, text) : undefined;
     if (value === undefined) {
-      const r = this.figure.apply(`${name} = ${text.trim()}`);
+      const r = this.figure.apply(`${name} = ${text.trim()}`, { origin: 'learner' });
       return r.ok ? this.done(r.summary, r.notices) : { ok: false, error: r };
     }
     const r = this.figure.setFree(name, value, 'api');
@@ -473,7 +485,7 @@ export class KernelSession {
   /** Replaces the figure with the script's. When nothing in it could be used, the current figure stays. */
   load(text: string): LoadOutcome {
     this.needEngine(text);
-    const { figure, report } = Figure.fromScript(text, { commands: this.commands });
+    const { figure, report } = Figure.fromScript(text, { commands: this.commands, ...(this.gate ? { gate: this.gate } : {}) });
     const total = report.applied + report.skipped;
     const usable = report.ok || report.applied > 0;
     if (usable) {

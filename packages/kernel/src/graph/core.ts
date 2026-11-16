@@ -88,6 +88,8 @@ export interface FigureOptions {
   now?: () => number;
   /** The tolerance rules see (`RuleCall.tol`) when the figure has no `@tol` directive. Default `1e-9`. */
   tolerance?: number;
+  /** A host's line gate (an app mode), in force from the first line, so a loaded script is checked too. */
+  gate?: import('./types').LineGate;
 }
 
 /** The tolerance for equality tests when nothing says otherwise (errors design 8). */
