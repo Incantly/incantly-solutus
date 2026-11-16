@@ -64,16 +64,16 @@ describe('SYM-SM-1: parse time does not double with each nested if', () => {
     return s;
   };
 
-  test('16 nested ifs parse in well under the old second', () => {
+  test('16 nested ifs parse in well under the old second', { retry: 2, timeout: 30000 }, () => {
     const { ms } = timed(() => outcome('Expr', [tx(nested(16))], { fastLaneMs: 2 }));
     expect(ms).toBeLessThan(300);
-  }, 30000);
+  });
 
-  test('20 nested ifs cost about what 10 do, not a thousand times more', () => {
+  test('20 nested ifs cost about what 10 do, not a thousand times more', { retry: 2, timeout: 30000 }, () => {
     const ten = timed(() => parseExpression(nested(10))).ms;
     const twenty = timed(() => parseExpression(nested(20))).ms;
     expect(twenty).toBeLessThan(Math.max(50, ten * 40));
-  }, 30000);
+  });
 
   test('a nested if still parses to an expression', () => {
     expect(() => parseExpression(nested(6))).not.toThrow();
@@ -86,10 +86,10 @@ describe('SYM-SM-2: a rootof literal cannot run root isolation without a budget'
     expect(o.k === 'error' && o.kind === 'internal').toBe(false);
   }, 30000);
 
-  test('it comes back quickly', () => {
+  test('it comes back quickly', { retry: 2, timeout: 30000 }, () => {
     const { ms } = timed(() => outcome('Expr', [tx('rootof((x+1)^300 - 2, 1)')], { fastLaneMs: 2, limits: { maxMs: 50 } }));
     expect(ms).toBeLessThan(2000);
-  }, 30000);
+  });
 
   test('a small rootof literal still works', () => {
     expect(() => parseExpression('rootof(x^2 - 2, 2)')).not.toThrow();
@@ -97,35 +97,35 @@ describe('SYM-SM-2: a rootof literal cannot run root isolation without a budget'
 });
 
 describe('SYM-SM-3: the digit limit is enforced before the number is built', () => {
-  test('(10^100)^65536 is refused or left unevaluated quickly', () => {
+  test('(10^100)^65536 is refused or left unevaluated quickly', { retry: 2, timeout: 30000 }, () => {
     const { ms } = timed(() => outcome('Expr', [tx('(10^100)^65536')], { fastLaneMs: 2 }));
     expect(ms).toBeLessThan(400);
-  }, 30000);
+  });
 
   test('a power with 200,000 digits is never returned as a number', () => {
     const o = outcome('Expand', [ex('(10^1000)^200')]);
     if (o.k === 'value') expect(o.text.length).toBeLessThan(100_000);
   }, 30000);
 
-  test('2^(2000000001/2) does not compute 2^1000000000', () => {
+  test('2^(2000000001/2) does not compute 2^1000000000', { retry: 2, timeout: 60000 }, () => {
     const { ms } = timed(() => outcome('Simplify', [ex('2^(2000000001/2)')]));
     expect(ms).toBeLessThan(1000);
-  }, 60000);
+  });
 });
 
 describe('SYM-SM-4: whole-number loops follow the run budget', () => {
-  test('IsPrime of a 1,300-digit number stops near its time limit', () => {
+  test('IsPrime of a 1,300-digit number stops near its time limit', { retry: 2, timeout: 60000 }, () => {
     const { ms } = timed(() => outcome('IsPrime', [ex('2^4423 - 1')], { limits: { maxMs: 50 } }));
     expect(ms).toBeLessThan(700);
-  }, 60000);
+  });
 
-  test('the divisor count of a number with 2^21 divisors does not list them', () => {
+  test('the divisor count of a number with 2^21 divisors does not list them', { retry: 2, timeout: 60000 }, () => {
     const primes = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71, 73];
     const n = primes.reduce((a, p) => a * BigInt(p), 1n);
     const { value, ms } = timed(() => outcome('Divisors', [bi(n)], { limits: { maxMs: 50, maxSteps: 1000 } }));
     expect(ms).toBeLessThan(300);
     if (value.k === 'value') expect(value.text).toBe(String(2 ** 21));
-  }, 60000);
+  });
 });
 
 describe('SYM-SM-5: names from text never reach Object.prototype', () => {

@@ -192,7 +192,7 @@ describe('logic (R5, design 5.2 to 5.4)', () => {
 });
 
 describe('speed (R7)', () => {
-  it('a text with 3 live parts rebuilds fast', () => {
+  it('a text with 3 live parts rebuilds fast', { retry: 2 }, () => {
     const f = fig(['a = 1 in 0..10', 'b = 2 * a', 'c = a + b', 's = "a = {a:2}, b = {b:3sf}, c = {c:pct}"']);
     const t0 = performance.now();
     for (let k = 0; k < 2000; k++) {

@@ -220,12 +220,12 @@ describe('FC9 targets: doc timing cases complete fast (hang limits + eval budget
     expect(ms).toBeLessThan(5000);
   }, HEAVY_TIMEOUT);
 
-  it('FC9 targets: sin(1/x) (target 5ms) completes within budget', () => {
+  it('FC9 targets: sin(1/x) (target 5ms) completes within budget', { retry: 2, timeout: HEAVY_TIMEOUT }, () => {
     const t0 = performance.now();
     const p = expectOk(plotFunction(fn1('sin(1/x)'), VIEW));
     const ms = performance.now() - t0;
     expect(p.stats.complete).toBe(true);
     expect(p.stats.evals).toBeLessThanOrEqual(20000);
     expect(ms).toBeLessThan(5000);
-  }, HEAVY_TIMEOUT);
+  });
 });

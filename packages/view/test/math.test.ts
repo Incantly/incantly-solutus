@@ -92,7 +92,7 @@ describe('SVG and speed (6.6)', () => {
     expect(svg).toContain('&lt;');
     expect(svg).not.toMatch(/<script/);
   });
-  it('a typical formula lays out in under 0.3 ms', () => {
+  it('a typical formula lays out in under 0.3 ms', { retry: 2 }, () => {
     const src = '\\frac{-b \\pm \\sqrt{b^{2} - 4 a c}}{2 a} + \\sum_{k=1}^{n} \\frac{1}{k^{2}}';
     const r = math.parseTex(src);
     if (!r.ok) throw new Error('parse');

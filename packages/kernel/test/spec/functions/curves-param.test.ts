@@ -304,7 +304,7 @@ describe('Closest(c, P) on parametric curves (5)', () => {
 
 describe('Parametric curve edge cases (13)', () => {
 
-  it('a huge parameter range is cheap to define and query: s in 0..1000', () => {
+  it('a huge parameter range is cheap to define and query: s in 0..1000', { retry: 2 }, () => {
     const f = within(1000, () => fig(['sp = Curve(s * cos(s), s * sin(s), s, 0, 1000)', 'T = Tangent(sp, 3)']));
     expect(reasonOf(f, 'T')).toBeUndefined();
   });

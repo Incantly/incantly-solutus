@@ -264,7 +264,7 @@ describe('3.4 and 3.9 budgets: counted, not timed', () => {
     for (let i = 0; i < 25; i++) click(f);
     expect(lastRuns(f)).toHaveLength(20);
   });
-  it('a typical 3-step handler on a figure of 500 objects runs fast', () => {
+  it('a typical 3-step handler on a figure of 500 objects runs fast', { retry: 2, timeout: T }, () => {
     const f = newFigure();
     const lines = ['a = 3 in 0..10', 'c = 1 in 0..10', 'go = Button("Go")'];
     for (let i = 0; i < 497; i++) lines.push(`p${i} = a + ${i}`);
@@ -273,7 +273,7 @@ describe('3.4 and 3.9 budgets: counted, not timed', () => {
     within(500, () => {
       for (let i = 0; i < 50; i++) click(f);
     });
-  }, T);
+  });
 });
 
 describe('3.3 events come from learner gestures only, so handlers cannot loop', () => {

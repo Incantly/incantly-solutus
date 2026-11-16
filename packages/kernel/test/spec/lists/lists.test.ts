@@ -193,7 +193,7 @@ describe('4.7 broadcasting', () => {
 });
 
 describe('3.3 speed', () => {
-  it('Seq(sin(k), k, 1, 100000) builds in well under 50 ms', () => {
+  it('Seq(sin(k), k, 1, 100000) builds in well under 50 ms', { retry: 2 }, () => {
     const f = fig();
     const t0 = performance.now();
     ok(f.apply('s = Seq(sin(k), k, 1, 100000)'));

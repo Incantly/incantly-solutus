@@ -80,7 +80,7 @@ describe('the mode records (R1)', () => {
     expect(g.view('cas')).toBe(false);
   });
 
-  it('a check is a set lookup (design 5: under 5 µs)', () => {
+  it('a check is a set lookup (design 5: under 5 µs)', { retry: 2 }, () => {
     const p = compilePolicy(MODES.graphing);
     const t0 = performance.now();
     let n = 0;

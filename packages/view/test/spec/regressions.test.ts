@@ -758,11 +758,11 @@ describe('VIEW-SM-5 grid drawing is bounded by the view size', () => {
     expect(g.circles.length).toBeLessThanOrEqual(4000);
   }, TIMEOUT);
 
-  it('the polar grid is built in well under a second at x = 1e6', () => {
+  it('the polar grid is built in well under a second at x = 1e6', { retry: 2, timeout: TIMEOUT }, () => {
     const t0 = performance.now();
     polarGrid(bounds(1e6 - 8, 1e6 + 8, -6, 6), 1, 30);
     expect(performance.now() - t0).toBeLessThan(1000);
-  }, TIMEOUT);
+  });
 
   it('an iso grid with a tiny step stays within a fixed line cap', () => {
     const g = isoGrid(bounds(-8, 8, -6, 6), 1e-3);

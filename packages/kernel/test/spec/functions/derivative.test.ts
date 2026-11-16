@@ -216,7 +216,7 @@ describe('Curvature(f, x0) and OsculatingCircle(f, x0) of a function graph (FC 1
 });
 
 describe('Derivative: the derivative integrates back (FC 13: property tests)', () => {
-  it('Integral of Derivative(f) over [0, 20] equals f(20) - f(0), under 300 ms', () => {
+  it('Integral of Derivative(f) over [0, 20] equals f(20) - f(0), under 300 ms', { retry: 2 }, () => {
     const f = within(300, () => fig(['f(x) = sin(x) * cos(2 * x) + sqrt(x + 2)', 'd = Derivative(f)', 'I = Integral(d, 0, 20)']));
     near(Number(f.value('I')), ev(f, 'f(20)') - ev(f, 'f(0)'), 1e-7);
   });

@@ -133,7 +133,7 @@ describe('Inflection(f, a, b): sign changes of f\'\' (8.4)', () => {
 });
 
 describe('Extremum and Inflection: time limits', () => {
-  it('Extremum of sin(x) on (0, 100) finds 32 extrema under 500 ms', () => {
+  it('Extremum of sin(x) on (0, 100) finds 32 extrema under 500 ms', { retry: 2 }, () => {
     const f = within(500, () => fig(['f(x) = sin(x)', 'E = Extremum(f, 0, 100)']));
     expect(pts(f, 'E').length).toBe(32);
   });

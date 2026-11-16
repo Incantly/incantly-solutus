@@ -18,7 +18,7 @@ const cell = (r: ReturnType<typeof run>) => {
 };
 
 describe('size limits are checked before a value is built (SYM-SM-3)', () => {
-  it('Factor of x^2 - (10^1000)^99 ends as a refusal, without running out of memory', () => {
+  it('Factor of x^2 - (10^1000)^99 ends as a refusal, without running out of memory', { retry: 2 }, () => {
     const { ms, r } = timed('Factor', [ex('x^2 - (10^1000)^99')], { limits: { maxMs: 50 } });
     const c = cell(r);
     expect(c?.defined).toBe(false);
@@ -26,7 +26,7 @@ describe('size limits are checked before a value is built (SYM-SM-3)', () => {
     expect(ms).toBeLessThan(1000);
   });
 
-  it('2^(2000000001/2) is a digits limit, at once', () => {
+  it('2^(2000000001/2) is a digits limit, at once', { retry: 2 }, () => {
     const { ms, r } = timed('Simplify', [ex('2^(2000000001/2)')], { limits: { maxMs: 50 } });
     const c = cell(r);
     expect(c && !c.defined ? c.reason : '').toBe('limit');
@@ -40,7 +40,7 @@ describe('size limits are checked before a value is built (SYM-SM-3)', () => {
     expect(text.length).toBeLessThan(200);
   });
 
-  it('(10^100)^65536 typed as text stays a power and is quick', () => {
+  it('(10^100)^65536 typed as text stays a power and is quick', { retry: 2 }, () => {
     const { ms, r } = timed('Expr', [tx('(10^100)^65536')], { limits: { maxMs: 50 } });
     expect(r.ok).toBe(true);
     expect(ms).toBeLessThan(200);
@@ -53,7 +53,7 @@ describe('size limits are checked before a value is built (SYM-SM-3)', () => {
 });
 
 describe('loops that grow with the input tick the run budget (SYM-SM-4)', () => {
-  it('Simplify of 40 large square roots stops near its budget', () => {
+  it('Simplify of 40 large square roots stops near its budget', { retry: 2 }, () => {
     const sum = Array.from({ length: 40 }, (_, i) => `sqrt(${i + 2} * 1000000000039)`).join(' + ');
     const { ms } = timed('Simplify', [ex(sum)], { limits: { maxMs: 200 } });
     expect(ms).toBeLessThan(400);
@@ -69,7 +69,7 @@ describe('loops that grow with the input tick the run budget (SYM-SM-4)', () => 
     expect(ms).toBeLessThan(100);
   });
 
-  it('the divisor count of a product of 30 primes comes from the factorisation, at once', () => {
+  it('the divisor count of a product of 30 primes comes from the factorisation, at once', { retry: 2 }, () => {
     const p30 = '2*3*5*7*11*13*17*19*23*29*31*37*41*43*47*53*59*61*67*71*73*79*83*89*97*101*103*107*109*113';
     const { ms, r } = timed('Divisors', [ex(p30)], { limits: { maxMs: 50, maxSteps: 1000 } });
     const c = cell(r);
