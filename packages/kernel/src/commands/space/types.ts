@@ -44,10 +44,10 @@ export interface Cone3 { readonly shape3: 'Cone'; readonly a: V3; readonly b: V3
 
 export type Shape3 = Line3 | Ray3 | Segment3 | Plane3 | Polygon3 | Circle3 | Polyhedron | Sphere3 | Cylinder3 | Cone3;
 
-export function shape3Of(v: unknown): Shape3['shape3'] | undefined {
+export function shape3Of(v: unknown): Shape3['shape3'] | 'View3' | undefined {
   if (typeof v !== 'object' || v === null) return undefined;
   const s = (v as { shape3?: unknown }).shape3;
-  return typeof s === 'string' ? (s as Shape3['shape3']) : undefined;
+  return typeof s === 'string' ? (s as Shape3['shape3'] | 'View3') : undefined;
 }
 
 export const is3 = <K extends Shape3['shape3']>(v: unknown, k: K): v is Extract<Shape3, { shape3: K }> => shape3Of(v) === k;

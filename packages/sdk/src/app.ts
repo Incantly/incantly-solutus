@@ -1078,7 +1078,10 @@ function valueTextOf(o: ObjectView): string {
   if (typeof v === 'number') return numberSource(Number(v.toPrecision(10)));
   if (typeof v === 'string') return JSON.stringify(v);
   if (typeof v === 'boolean') return String(v);
-  if (typeof v === 'object' && v !== null && 'x' in v && 'y' in v && !Array.isArray(v)) return `(${numberSource(Number((v.x as number).toPrecision(10)))}, ${numberSource(Number((v.y as number).toPrecision(10)))})`;
+  if (typeof v === 'object' && v !== null && 'x' in v && 'y' in v && !Array.isArray(v)) {
+    const n = (x: number): string => numberSource(Number(x.toPrecision(10)));
+    return 'z' in v && typeof v.z === 'number' ? `(${n(v.x as number)}, ${n(v.y as number)}, ${n(v.z)})` : `(${n(v.x as number)}, ${n(v.y as number)})`;
+  }
   if (Array.isArray(v)) return `list of ${v.length}`;
   return (v as { text?: string }).text ?? o.typeText;
 }

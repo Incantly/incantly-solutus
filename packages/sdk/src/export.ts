@@ -13,14 +13,17 @@ import { sceneOf } from './screen/scene';
 import type { SceneOptions } from './screen/scene';
 import { Viewport } from './screen/viewport';
 import { SvgContext } from './svg-context';
+import { space } from '@incantly/kernel';
+import { paintSpace } from './screen/space/paint3';
+import { sceneOf3 } from './screen/space/scene3';
 
 export const EXPORT_LIMITS = Object.freeze({ side: 8192, megapixels: 64, svgElements: 50_000 });
 
 export type ExportRegion = 'view' | 'all' | { readonly x0: number; readonly x1: number; readonly y0: number; readonly y1: number };
 
 export type ExportOptions =
-  | { readonly format: 'png'; readonly scale?: number; readonly width?: number; readonly height?: number; readonly transparent?: boolean; readonly region?: ExportRegion; readonly t?: number }
-  | { readonly format: 'svg'; readonly width?: number; readonly height?: number; readonly transparent?: boolean; readonly region?: ExportRegion; readonly t?: number }
+  | { readonly format: 'png'; readonly scale?: number; readonly width?: number; readonly height?: number; readonly transparent?: boolean; readonly region?: ExportRegion; readonly t?: number; readonly view?: '2d' | '3d' }
+  | { readonly format: 'svg'; readonly width?: number; readonly height?: number; readonly transparent?: boolean; readonly region?: ExportRegion; readonly t?: number; readonly view?: '2d' | '3d' }
   | { readonly format: 'pdf' | 'gif' | 'webm' | 'mp4' | 'print' | 'tikz' };
 
 export interface ExportWarning {
@@ -151,14 +154,21 @@ export async function exportFigure(app: App, opts: ExportOptions, env: ExportEnv
   if ('ok' in src) return src;
   try {
     const items = sceneOf(src.app.figure, env.scene ?? {});
-    const box = regionBox(src.app, items, opts.region ?? 'view');
+    // the Space view: the 3D app, or a host that asks (.kiro/specs/space-3d R3.4); its camera frames it, not a region
+    const in3d = (opts.view ?? (src.app.mode === 'graphing3d' ? '3d' : '2d')) === '3d';
+    const box = in3d ? { x0: -1, x1: 1, y0: -1, y1: 1 } : regionBox(src.app, items, opts.region ?? 'view');
     if ('ok' in box) return box;
     const warnings: ExportWarning[] = [];
     const background = opts.transparent ? undefined : '#ffffff';
+    const draw = (ctx: unknown, bg: string | undefined): void => {
+      if (!in3d) return paintWith(src.app, ctx, viewportOf(box, cssW, cssH), items, bg);
+      const view = space.viewOf(src.app.figure);
+      paintSpace(ctx as CanvasRenderingContext2D, view, cssW, cssH, sceneOf3(src.app.figure, view), { background: bg ?? null });
+    };
     if (opts.format === 'svg') {
       const ctx = new SvgContext(cssW, cssH);
       // the background is one <rect> written by toString, not a painted path
-      paintWith(src.app, ctx, viewportOf(box, cssW, cssH), items, undefined);
+      draw(ctx, undefined);
       if (ctx.elements > EXPORT_LIMITS.svgElements) warnings.push({ kind: 'svg_large', message: `The picture has ${ctx.elements} parts; some programs open it slowly.` });
       if (items.some((i) => i.type === 'Particles')) warnings.push({ kind: 'particles_sampled', message: 'Particles are drawn as they are now, one shape each.' });
       if (items.some((i) => i.type === 'Text' && i.text?.full)) warnings.push({ kind: 'latex_left_out', message: 'Texts typeset with full LaTeX are not in the SVG yet.' });
@@ -171,7 +181,7 @@ export async function exportFigure(app: App, opts: ExportOptions, env: ExportEnv
     if (!canvas || !ctx) return apiError('export', 'export_unsupported', 'PNG export needs a canvas, and there is none here.', { hint: 'Export SVG instead, or export in a browser.', detail: { supported: ['svg'] } });
     ctx.save();
     ctx.scale(scale, scale);
-    paintWith(src.app, ctx, viewportOf(box, cssW, cssH), items, background);
+    draw(ctx, background);
     ctx.restore();
     const blob = canvas.convertToBlob ? await canvas.convertToBlob({ type: 'image/png' }) : await new Promise<Blob | null>((res) => (canvas.toBlob ? canvas.toBlob(res, 'image/png') : res(null)));
     if (!blob) return apiError('export', 'export_oom', 'The picture could not be encoded.', { hint: 'Try a smaller scale.' });

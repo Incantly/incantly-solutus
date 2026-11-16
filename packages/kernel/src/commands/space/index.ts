@@ -4,6 +4,9 @@
  */
 import { registerTypeStyle } from '../../graph/props';
 import type { CommandRegistry, CommandRule } from '../../graph/registry';
+import { registerLineCheck, registerLineRewriter } from '../../graph/registry';
+import { SPACE_CAMERA_COMMANDS, cameraRewrite, spaceLineCheck } from './camera';
+import type { View3 } from './camera';
 import { registerFreeType } from '../../graph/values';
 import { numberSource } from '../../graph/values';
 import { registerReasonPhrase } from '../../errors/phrases';
@@ -23,6 +26,8 @@ import { add, dist, isV3, len, scale, sub } from './v3';
 export * from './types';
 export * from './v3';
 export { lineLike, newell, plane3, polygon3 } from './rules';
+export { DEFAULT_VIEW3, SPACE_FIT_RADIUS, VIEW3_PROPERTIES, VIEW_PRESETS, azElOf, pointsOf, viewOf } from './camera';
+export type { Light, Projection, View3 } from './camera';
 export { edgesOf, faceOf, polyArea, polyVolume, sectionOf } from './solids';
 
 const GROUP = 'space';
@@ -275,6 +280,11 @@ export function spaceText(v: unknown): string | undefined {
       const s = v as Sphere3;
       return `sphere r=${f6(s.r)} about ${pt(s.c)}`;
     }
+    case 'View3': {
+      const c = v as View3;
+      const d = (x: number): string => `${f6(Number(((x * 180) / Math.PI).toFixed(2)))}°`;
+      return `camera ${c.projection}, azimuth ${d(c.azimuth)}, elevation ${d(c.elevation)}, zoom ${f6(c.zoom)}`;
+    }
     case 'Cylinder':
     case 'Cone': {
       const s = v as Cylinder3 | Cone3;
@@ -290,6 +300,7 @@ let registered = false;
 /** Registers the area's commands into the registry, and its language rows once. */
 export function registerSpace(registry: CommandRegistry): void {
   registry.registerAll(SPACE_COMMANDS);
+  registry.registerAll(SPACE_CAMERA_COMMANDS);
   if (registered) return;
   registered = true;
   registerTypeAlias(LL, ['Line3', 'Segment3', 'Ray3']);
@@ -314,6 +325,9 @@ export function registerSpace(registry: CommandRegistry): void {
     own: (v) => (isV3(v) ? { x: v.x, y: v.y, z: v.z } : v),
   });
   registerValueText((v) => spaceText(v));
+  registerLineCheck(spaceLineCheck);
+  registerLineRewriter(cameraRewrite);
+  registerTypeStyle('View3', { drawable: false });
   // the look of ui.md 7: points dark blue, lines dark gray, planes light blue and faint, polygons pastel
   registerTypeStyle('Point3', { defaults: { color: '#1f4fa3', pointSize: 4, label: 'name' }, freeDefaults: { pointSize: 5 } });
   registerTypeStyle('Vector3', { defaults: { color: '#3d4451', width: 2, label: 'none' } });

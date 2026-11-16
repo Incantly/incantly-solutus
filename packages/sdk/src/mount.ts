@@ -15,6 +15,8 @@ import { mountGraph } from './screen/graph-pane';
 import type { GraphPane } from './screen/graph-pane';
 import { sceneBounds } from './screen/paint';
 import { sceneOf } from './screen/scene';
+import { mountSpace } from './screen/space/space-pane';
+import type { SpacePane } from './screen/space/space-pane';
 import { bytesOf, download, failedList, fileName, openedText, pickFile, shareUrl } from './screen/files';
 
 /** The parts of the screen (design 3.2); defaults depend on the options (ui.md 1). */
@@ -49,6 +51,8 @@ export interface MountedApp extends App {
   readonly ui: UiOptions;
   readonly screen: {
     readonly graph: GraphPane;
+    /** The Space view, in the 3D app (.kiro/specs/space-3d R3.3). */
+    readonly space?: SpacePane;
     /** Paints now (tests and first paint). */
     paint(): void;
     /** The line under the screen: what the last action said. */
@@ -77,6 +81,9 @@ const CSS = `
 .inc-menu button:hover,.inc-menu button:focus-visible{background:#eef1f5}
 .inc-menu hr{width:100%;border:0;border-top:1px solid #e3e6eb;margin:4px 0}
 .inc-app .graph{position:relative;flex:1;min-height:0}
+.inc-app .graph[hidden]{display:none}
+.inc-app .space-view{position:relative;flex:1;min-height:0}
+.inc-app .space-canvas{display:block;width:100%;height:100%;touch-action:none}
 .inc-app .graph-canvas{display:block;width:100%;height:100%;touch-action:none}
 .inc-app .graph-controls{position:absolute;right:8px;bottom:8px;display:flex;flex-direction:column;gap:4px}
 .inc-app .graph-controls[hidden]{display:none}
@@ -207,6 +214,10 @@ export async function createApp(opts: AppOptions): Promise<MountedApp> {
     },
   });
 
+  // the 3D app shows the Space view where the graph would be
+  const space3: SpacePane | undefined = core.mode === 'graphing3d' ? mountSpace({ figure: () => core.figure }) : undefined;
+  if (space3) graph.element.hidden = true;
+
   /* ------------------------------ top bar and menu ------------------------------ */
 
   const titleText = h('span', {});
@@ -283,7 +294,7 @@ export async function createApp(opts: AppOptions): Promise<MountedApp> {
     return `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
   };
 
-  element.append(top, graph.element, clockBar, menu, status, failedDialog, shareDialog, tooNewDialog);
+  element.append(top, graph.element, ...(space3 ? [space3.element] : []), clockBar, menu, status, failedDialog, shareDialog, tooNewDialog);
   container.append(element);
 
   /* ------------------------------ keeping the screen up to date ------------------------------ */
@@ -308,6 +319,7 @@ export async function createApp(opts: AppOptions): Promise<MountedApp> {
       play.setAttribute('aria-label', play.title);
     }
     graph.redraw();
+    space3?.redraw();
   };
   const offs = (['ready', 'loaded', 'modeChanged', 'added', 'removed', 'changed', 'restyled', 'renamed', 'redefined', 'cleared', 'drag', 'dragEnd', 'clockChanged', 'play', 'pause', 'undoPoint', 'undone', 'redone'] as const).map((t) => core.on(t, sync));
   // a script that sets `@view` moves the screen to it; the learner's own pans do not write lines
@@ -381,6 +393,10 @@ export async function createApp(opts: AppOptions): Promise<MountedApp> {
   };
   // "what I see": the screen's window at the screen's size
   const shotOf = (format: 'png' | 'svg'): ExportOptions => {
+    if (space3) {
+      const sz = space3.size();
+      return format === 'png' ? { format, width: Math.round(sz.w), height: Math.round(sz.h), scale: 2, view: '3d' } : { format, width: Math.round(sz.w), height: Math.round(sz.h), view: '3d' };
+    }
     const b = graph.viewport.box();
     const w = Math.round(graph.viewport.w);
     const hgt = Math.round(graph.viewport.h);
@@ -439,7 +455,7 @@ export async function createApp(opts: AppOptions): Promise<MountedApp> {
   const extra = {
     element,
     ui,
-    screen: { graph, paint: () => graph.paint(), status },
+    screen: { graph, ...(space3 ? { space: space3 } : {}), paint: () => (space3 ? space3.paint() : graph.paint()), status },
     saveFile,
     saveScript,
     openFile,
@@ -448,6 +464,10 @@ export async function createApp(opts: AppOptions): Promise<MountedApp> {
     // "view" is what the screen shows, which the learner may have panned
     export: (o: ExportOptions, env?: ExportEnv): Promise<ExportResult | ApiError> => {
       if (typeof o !== 'object' || o === null || (o.format !== 'png' && o.format !== 'svg') || (o.region !== undefined && o.region !== 'view')) return coreExport(o, env);
+      if (space3) {
+        const sz = space3.size();
+        return coreExport({ ...o, width: o.width ?? Math.round(sz.w), height: o.height ?? Math.round(sz.h) }, env);
+      }
       const here = { region: graph.viewport.box(), width: o.width ?? Math.round(graph.viewport.w), height: o.height ?? Math.round(graph.viewport.h) };
       return coreExport({ ...o, ...here }, env);
     },
@@ -456,6 +476,7 @@ export async function createApp(opts: AppOptions): Promise<MountedApp> {
       for (const off of offs) off();
       ro?.disconnect();
       graph.dispose();
+      space3?.dispose();
       if (statusTimer) clearTimeout(statusTimer);
       element.remove();
       coreDestroy();
@@ -466,6 +487,7 @@ export async function createApp(opts: AppOptions): Promise<MountedApp> {
   const mounted = Object.assign(core, extra) as unknown as MountedApp;
 
   graph.paint();
+  space3?.paint();
   sync();
   return mounted;
 }
