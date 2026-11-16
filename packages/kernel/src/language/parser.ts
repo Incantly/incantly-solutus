@@ -314,6 +314,15 @@ class Parser {
   finishLine(): void {
     const t = this.peek();
     if (t.kind === 'eof' || t.kind === 'nl' || t.kind === 'comment') return;
+    // `2,5` outside brackets: a decimal written with a comma (app-modes errors 1)
+    const before = this.pos > 0 ? (this.toks[this.pos - 1] as Token) : undefined;
+    const after = this.peek(1);
+    if (t.kind === 'op' && t.text === ',' && before?.kind === 'num' && before.e === t.s && after.kind === 'num' && after.s === t.e && /^\d+$/.test(before.text) && /^\d/.test(after.text)) {
+      const text = this.sm.text;
+      const fixed = `${text.slice(0, t.s)}.${text.slice(t.e)}`;
+      const num = `${before.text}.${/^\d+/.exec(after.text)?.[0] ?? after.text}`;
+      throw new Stop(this.diag.at('decimal_comma', before.s, after.e, 'lang.decimal_comma', {}, { suggest: [fixed], hint: `Write ${num}.`, fingerprintKey: 'comma' }));
+    }
     this.unexpected(['end of line'], { afterOperand: true });
   }
 

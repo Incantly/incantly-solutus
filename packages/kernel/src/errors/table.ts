@@ -101,6 +101,8 @@ const META: Record<ErrorKind, Meta> = {
   particle_command: { key: 'lang.particle_command', params: ['command', 'why'], description: 'A command inside a particle formula, where only built-ins are allowed.' },
   unknown_field: { key: 'lang.unknown_field', params: ['command', 'why'], description: 'A field a record or matrix does not have, such as lu.Z.' },
   bad_option: { key: 'lang.bad_option', params: ['command', 'why'], description: 'A text option outside its set, such as Sort(xs, "ascending").' },
+  mode_forbids: { key: 'lang.mode_forbids', params: ['why'], description: 'A command, function, operator or form the app mode, a restriction or an exam switches off.' },
+  decimal_comma: { key: 'lang.decimal_comma', params: [], description: 'A decimal written with a comma, such as 2,5, where a number is meant.' },
 };
 
 function buildTable(): Record<ErrorKind, ErrorSpec> {

@@ -74,6 +74,9 @@ export interface AreaErrorKinds {
   // lists-matrices (codes C070 to C089)
   unknown_field: true;
   bad_option: true;
+  // app-modes (codes C090 to C099)
+  mode_forbids: true;
+  decimal_comma: true;
 }
 
 export type ErrorKind = CoreErrorKind | Extract<keyof AreaErrorKinds, string>;

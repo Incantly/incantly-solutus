@@ -8,3 +8,5 @@ export {
 export type { CommandRef, CompiledPolicy } from './policy';
 export { deriveMode, parseRestrict } from './derive';
 export type { KnownNames } from './derive';
+export { makeGate, catalogueOf } from './gate';
+export type { GateLayer, GateOptions, ForbidReason, ModeForbidsError } from './gate';

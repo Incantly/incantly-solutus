@@ -17,6 +17,8 @@ export { printExpr, printLineNode } from './printer';
 export { checkLine, } from './lines';
 export { OverlayFigure, FIELDS } from './check';
 export type { CheckOptions, CheckedLine, CheckedRange, CheckedStyle } from './check';
+export { lineUses } from './uses';
+export type { LineUses, UsedName } from './uses';
 export type { TNode, TArg, RelTree, RelationShape } from './tnode';
 export { T, listOf, fnOf, tyEq, tyStr, typeSet, parseTy, accepts, binaryOp, TYPE_ALIASES, CORE_TYPE_NAMES, typeTextProblem, registerSchemaType, registerTypeAlias, isSchemaType } from './types';
 export type { Ty, TypeSet, OpVariant } from './types';
