@@ -16,3 +16,5 @@ export {
   sniff, textOfBytes, toFragment,
 } from './file';
 export type { Asset, AssetMime, FileSettings, FileWarning, IncantlyFile, LoadResult, Meta } from './file';
+export { FRAME_LIMITS, FRAME_METHODS, PROTOCOL_VERSION, connectApp, serveApp } from './frame';
+export type { AsyncApp, ConnectOptions, Envelope, MessageHost, MessageLike, MessageTarget, ServeOptions, Served } from './frame';
