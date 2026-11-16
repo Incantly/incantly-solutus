@@ -300,8 +300,11 @@ export interface SoundFrame {
 /**
  * What plays at film time `t` (default: the figure's clock): every defined, unmuted, `on` sound object, the melody note
  * of the beat `t` falls in, and the notes and sweeps under way. A pure function of the figure and `t` (design 3).
+ *
+ * `eventsAt` is the time notes and sweeps are read at (default `t`). A host whose film clock is not running (a figure
+ * with no `@clock`, a button that plays a note) passes the clock time plus the seconds since, so a note still ends.
  */
-export function soundsAt(figure: Figure, t: number = timeOf(figure)): SoundFrame {
+export function soundsAt(figure: Figure, t: number = timeOf(figure), eventsAt: number = t): SoundFrame {
   const out: PlayingSound[] = [];
   const s = stateOf(figure);
   let hasSound = s.events.length > 0;
@@ -326,10 +329,10 @@ export function soundsAt(figure: Figure, t: number = timeOf(figure)): SoundFrame
     else out.push({ key, name: o.name, kind: 'noise', color: v.color ?? 'white', gain: v.gain, pan: v.pan });
   }
   for (const e of s.events) {
-    if (t < e.at || t >= e.at + e.seconds) continue;
+    if (eventsAt < e.at || eventsAt >= e.at + e.seconds) continue;
     let f = e.frequency;
     if (e.kind === 'sweep' && e.sweep) {
-      const pos = ((t - e.at) / e.seconds) * (e.sweep.length - 1);
+      const pos = ((eventsAt - e.at) / e.seconds) * (e.sweep.length - 1);
       const i = Math.floor(pos);
       const y0 = e.sweep[i];
       const y1 = e.sweep[Math.min(i + 1, e.sweep.length - 1)];
