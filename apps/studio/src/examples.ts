@@ -436,6 +436,42 @@ export const EXAMPLES: readonly Example[] = [
       'Trace(K)',
     ],
   },
+  /* ---------------- geometry: motion with state() ---------------- */
+  {
+    id: 'geo-state-pendulum',
+    modes: ['geometry', 'classic'],
+    title: 'Motion: a real pendulum (θ″ = −g/L sin θ), move L',
+    lines: [
+      '@clock 0..30',
+      '@view -3.5 3.5 -3.2 1',
+      'g = 9.8',
+      'L = 2 in 0.5..2.5 step 0.1',
+      'θ = state(1.2, 0)',
+      "θ'' = -g / L * sin(θ)",
+      'L with rerun = continue',
+      'pivot = (0, 0)',
+      'bob = (L*sin(θ), -L*cos(θ))',
+      'rod = Segment(pivot, bob)',
+      'Trace(bob)',
+    ],
+  },
+  {
+    id: 'geo-state-orbit',
+    modes: ['geometry', 'classic'],
+    title: 'Motion: a planet pulled by the sun traces an ellipse',
+    lines: [
+      '@clock 0..40',
+      '@view -4 4 -3 3',
+      'sun = Circle((0, 0), 0.15)',
+      'px = state(3, 0)',
+      'py = state(0, 0.8)',
+      "px'' = -3 * px / (px^2 + py^2)^1.5",
+      "py'' = -3 * py / (px^2 + py^2)^1.5",
+      'planet = (px, py)',
+      'pull = Segment(planet, (0, 0))',
+      'Trace(planet)',
+    ],
+  },
   /* ---------------- geometry: particles on shapes ---------------- */
   {
     id: 'geo-particles-ring',

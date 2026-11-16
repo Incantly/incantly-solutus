@@ -26,3 +26,8 @@ Area: `apps/studio` (examples and the Examples menu), on top of `.kiro/specs/app
 
 1. Geometry mode SHALL allow `Particles`. `state()` motion stays off there.
 2. Geometry SHALL have at least two particle examples built on its shapes.
+
+### R5. Motion with state() in geometry (product owner, 2026-11-16)
+
+1. Geometry mode SHALL allow `state()` lines and their rates. Scientific and probability still refuse them.
+2. Geometry SHALL have at least two examples driven by `state()`.
