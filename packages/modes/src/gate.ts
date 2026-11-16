@@ -102,6 +102,7 @@ export function makeGate(opts: GateOptions): LineGate {
       if (l) return forbid(call, l, { operator: o.name, label: `The operator ${o.name}` }, o, []);
     }
     const kinds: [boolean, (p: CompiledPolicy) => boolean, string][] = [
+      [line.kind === 'function', (p) => p.mode.expressions.allowUserFunctions !== false, 'A function'],
       [uses.equation, (p) => p.mode.expressions.allowImplicitEquations, 'An equation in x and y'],
       [uses.text, (p) => p.mode.expressions.allowTextObjects, 'Text'],
       [uses.list, (p) => p.mode.expressions.allowLists, 'A list'],

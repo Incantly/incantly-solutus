@@ -139,7 +139,7 @@ const scientific: ModeConfig = {
   views: { available: ['results'], initial: ['results'], layout: 'single', canToggle: false },
   tools: { groups: [], toolbar: 'none', customTools: false },
   commands: { allow: ['rounding', 'size', 'trig'], add: ['Mean', 'Median', 'Sum', 'StdDev', 'Min', 'Max', 'Product'] },
-  expressions: { functions: 'all', operators: 'all', allowImplicitEquations: false, allowTextObjects: false, allowLists: true, allowStates: false, allowParticles: false },
+  expressions: { functions: 'all', operators: 'all', allowImplicitEquations: false, allowUserFunctions: false, allowTextObjects: false, allowLists: true, allowStates: false, allowParticles: false },
   defaults: { ...BASE_DEFAULTS, angleUnit: 'degree', rounding: { mode: 'sig', digits: 10 }, axes: false, grid: 'none', autoLabels: 'none' },
   features: { ...NO_FEATURES, ansButton: true },
   keyboard: 'scientific',
