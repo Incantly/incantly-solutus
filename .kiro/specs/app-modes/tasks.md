@@ -8,4 +8,4 @@ Branch: `feat/app-modes`, one PR per round into `integration`.
 - [x] 4. Round 4: mode switch dry run and `force` (R4); exam controller, profiles, signals, summary (R5)
 - [x] 5. Round 5: studio: start tiles, per-mode layout, switcher with the drop dialog, settings sheet (R10.1 to R10.4)
 - [x] 6. Round 6: studio: scientific calc rows, exam screens, the keyboard, accessibility and language settings (R8.3, R9, R10.5)
-- [ ] 7. Round 7: benches, screenshots of every mode, final check (R11)
+- [x] 7. Round 7: benches, screenshots of every mode, final check (R11)

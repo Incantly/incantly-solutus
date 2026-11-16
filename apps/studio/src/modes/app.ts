@@ -102,6 +102,8 @@ export function mountAppModes(p: ModeHostParts, initial: AppModeId = 'classic'):
     p.panes.algebra.hidden = !showAlgebra;
     p.panes.split.hidden = !showAlgebra || !showGraphics;
     p.panes.graphics.hidden = !showGraphics;
+    // a side view is the whole app when there is no graph (probability, CAS)
+    p.app.classList.toggle('no-graphics', !showGraphics);
     for (const [kind, view] of Object.entries(p.views) as [ViewKind, NonNullable<ModeHostParts['views'][ViewKind]>][]) {
       const available = v.available.includes(kind);
       if (view.button) view.button.hidden = !available || !v.canToggle;
