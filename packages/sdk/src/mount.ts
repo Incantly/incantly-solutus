@@ -146,9 +146,16 @@ export function hasClock(figure: Figure): boolean {
   // a camera that spins moves with the film (.kiro/specs/space-3d-surfaces R3.1)
   if (space.viewOf(figure).spin !== 0) return true;
   if (tracedIds(figure).length > 0 || animatingIds(figure).length > 0) return true;
-  for (const o of figure.objects()) if (o.type === 'Particles' || /\banimate\s*=/.test(o.definition)) return true;
-  return false;
+  for (const o of figure.objects()) {
+    if (o.type === 'Particles' || o.state || /\banimate\s*=/.test(o.definition)) return true;
+    // an object whose formula reads the film time (`P = (cos(t), sin(t), 0)`)
+    if (READS_CLOCK.test(o.definition.replace(/"(?:[^"\\]|\\.)*"/g, '""'))) return true;
+  }
+  // a slider set going by Animate(h)
+  return /^\s*Animate\(/m.test(figure.toScript());
 }
+
+const READS_CLOCK = /(?<![\w.'])(?:t|bt|beat)(?![\w(])/;
 
 /** Mounts an app in a container (design 3.2). */
 export async function createApp(opts: AppOptions): Promise<MountedApp> {

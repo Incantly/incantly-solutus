@@ -126,6 +126,8 @@ export interface ParticleBatchPlain {
   /** Packed `0xRRGGBBAA`. */
   readonly rgba: Uint32Array;
   readonly angle: Float32Array;
+  /** The third coordinate, for particles in space (`pos = (x, y, z)`; .kiro/specs/space-3d-surfaces R3.2). */
+  readonly z?: Float32Array;
 }
 
 export interface ParticleUniformSlot {
@@ -153,6 +155,8 @@ export interface ParticlesValue {
   readonly kind: 'particles';
   readonly spec: ParticleSpecPlain;
   readonly program: ParticleProgram;
+  /** True when `pos` is a point in space: the Space view draws them, on the CPU. */
+  readonly space?: boolean;
 }
 
 export function isParticlesValue(v: unknown): v is ParticlesValue {
@@ -160,8 +164,9 @@ export function isParticlesValue(v: unknown): v is ParticlesValue {
 }
 
 /** A batch sized for `count` particles. */
-export function makeParticleBatch(count: number): ParticleBatchPlain {
+export function makeParticleBatch(count: number, inSpace = false): ParticleBatchPlain {
   return {
+    ...(inSpace ? { z: new Float32Array(count) } : {}),
     count,
     x: new Float32Array(count),
     y: new Float32Array(count),
@@ -264,9 +269,13 @@ function makeProgram(spec: ParticleSpecPlain, env: Env, bodies: Readonly<Record<
           pv[8] = age / life;
           put(sPos);
           env.reason = undefined;
-          const p = posB.fn(env) as { x?: number; y?: number } | undefined;
+          const p = posB.fn(env) as { x?: number; y?: number; z?: number } | undefined;
           const x = p?.x;
           const y = p?.y;
+          if (out.z) {
+            const z = p?.z;
+            out.z[i] = typeof z === 'number' ? z : Number.NaN;
+          }
           if (typeof x !== 'number' || typeof y !== 'number' || x - x !== 0 || y - y !== 0) {
             out.alpha[i] = 0;
             out.size[i] = 0;
@@ -492,6 +501,8 @@ function compileGpu(spec: ParticleSpecPlain, bodies: Readonly<Record<string, Bod
       if (!b.tree) throw new Unsupported('command:notree:' + key);
       return em.emit(b.tree);
     };
+    // a position in space has no GPU path here: the Space view's painter draws on the CPU
+    if (bodies['pos']?.tree?.ty.k === 'Point3') throw new Unsupported('pos in space');
     const pos = expr('pos', 'vec2(0.0)');
     const size = expr('size', '0.05');
     const alpha = expr('alpha', '1.0');
@@ -560,7 +571,7 @@ const value = (name: string, type: string, optional: boolean): ParamSpec => ({ n
 const PARAMS: readonly ParamSpec[] = [
   value('count', 'Number', false),
   value('life', 'Number', false),
-  body('pos', 'Point', false),
+  body('pos', 'Point|Point3', false),
   body('color', 'Color', true),
   body('size', 'Number', true),
   body('alpha', 'Number', true),
@@ -615,8 +626,8 @@ function particlesRule(bound: readonly TArg[]): CommandRule {
       });
       if (!bodies['pos']) return call.fail('input_undefined', 'pos is required');
       const program = makeProgram(spec, call.env, bodies);
-      if (!program.gpuOk && spec.renderer !== 'cpu' && count > 1500) call.notify('gpu_unsupported', { name: '', reason: program.gpuReason ?? 'command' });
-      const v: ParticlesValue = { kind: 'particles', spec, program };
+      if (!program.gpuOk && spec.renderer !== 'cpu' && count > 1500 && trees.get('pos')?.ty.k !== 'Point3') call.notify('gpu_unsupported', { name: '', reason: program.gpuReason ?? 'command' });
+      const v: ParticlesValue = { kind: 'particles', spec, program, ...(trees.get('pos')?.ty.k === 'Point3' ? { space: true } : {}) };
       return v;
     },
   };

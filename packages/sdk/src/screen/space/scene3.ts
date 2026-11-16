@@ -3,7 +3,7 @@
  * objects to points, line pieces and flat faces in space, with their colours. Pure: no DOM, so the screen, the export
  * and the tests share it.
  */
-import { colorHex, space } from '@incantly/kernel';
+import { colorHex, isParticlesValue, makeParticleBatch, space } from '@incantly/kernel';
 import type { Figure } from '@incantly/kernel';
 import { curveRuns, gridFaces } from './mesh3';
 import { boxEdges, clipFace, clipSegment, inBox } from './clip3';
@@ -54,6 +54,19 @@ export interface FaceItem {
   readonly edges?: readonly [boolean, boolean, boolean, boolean];
 }
 
+/** A particle: a small dot, drawn after the faces, never hidden and never picked (there are thousands). */
+export interface DotItem {
+  readonly k: 'dot';
+  readonly id: number;
+  readonly p: V3;
+  /** CSS colour. */
+  readonly color: string;
+  readonly alpha: number;
+  /** Radius in world units, or in pixels when `px`. */
+  readonly size: number;
+  readonly px: boolean;
+}
+
 export interface LabelItem {
   readonly k: 'label';
   readonly at: V3;
@@ -62,7 +75,7 @@ export interface LabelItem {
   readonly size: number;
 }
 
-export type Item3 = PointItem | LineItem | FaceItem | LabelItem;
+export type Item3 = PointItem | LineItem | FaceItem | LabelItem | DotItem;
 
 export interface Scene3 {
   /** The floor plate and grid, drawn first and never hiding anything. */
@@ -232,6 +245,26 @@ export function sceneOf3(figure: Figure, view: space.View3, opts: Scene3Options 
         for (const run of curveRuns(c.at, c.lo, c.hi)) items.push(...loopLines(id, run, color, width, false));
         break;
       }
+      case 'Particles': {
+        // particles in space (.kiro/specs/space-3d-surfaces R3.2): each a pure function of its index and the film time
+        if (!isParticlesValue(v) || !v.space) break;
+        const n = Math.min(v.spec.count, 20000);
+        const batch = makeParticleBatch(n, true);
+        const clock = figure.clock();
+        v.program.evalCpu(clock.t, clock.bt, batch);
+        const z = batch.z as Float32Array;
+        for (let i = 0; i < n; i++) {
+          const a = batch.alpha[i] as number;
+          const sz = batch.size[i] as number;
+          if (!(a > 0) || !(sz > 0)) continue;
+          const p = { x: batch.x[i] as number, y: batch.y[i] as number, z: z[i] as number };
+          if (!Number.isFinite(p.z)) continue;
+          const c = batch.rgba[i] as number;
+          const css = c === 0x000000ff ? color : `#${(c >>> 8).toString(16).padStart(6, '0')}`;
+          items.push({ k: 'dot', id, p, color: css, alpha: a * ((c & 255) / 255 || 1), size: sz, px: v.spec.sizeIsPx });
+        }
+        break;
+      }
       case 'Function': {
         // a function of two variables is the surface z = f(x, y) over the floor (.kiro/specs/space-3d-surfaces R1.1)
         const fn = v as { arity?: number; ret?: string; call(...xs: number[]): unknown };
@@ -266,7 +299,7 @@ export function sceneOf3(figure: Figure, view: space.View3, opts: Scene3Options 
   const cut: Item3[] = [];
   for (const it of items) {
     if (it.k === 'label' || it.id < 0) cut.push(it);
-    else if (it.k === 'point') {
+    else if (it.k === 'point' || it.k === 'dot') {
       if (inBox(box, it.p)) cut.push(it);
     } else if (it.k === 'line') {
       const seg = clipSegment(it.a, it.b, box);
