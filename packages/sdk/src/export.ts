@@ -162,7 +162,7 @@ export async function exportFigure(app: App, opts: ExportOptions, env: ExportEnv
     const background = opts.transparent ? undefined : '#ffffff';
     const draw = (ctx: unknown, bg: string | undefined): void => {
       if (!in3d) return paintWith(src.app, ctx, viewportOf(box, cssW, cssH), items, bg);
-      const view = space.viewOf(src.app.figure);
+      const view = space.viewAt(src.app.figure);
       paintSpace(ctx as CanvasRenderingContext2D, view, cssW, cssH, sceneOf3(src.app.figure, view), { background: bg ?? null });
     };
     if (opts.format === 'svg') {

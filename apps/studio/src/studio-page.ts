@@ -412,6 +412,8 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
   const tick = (now: number): void => {
     // the kernel's player moves `t`, runs the traces and animated sliders, and starts an ended film again
     session.frame(now / 1000);
+    // a spinning camera changes no object, so the Space view is told each frame
+    if (!space3Ref.current?.element.hidden) space3Ref.current?.redraw();
     running = raf(tick);
   };
   const toggleClock = (): void => {

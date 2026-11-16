@@ -18,6 +18,7 @@ import { add, isV3, normalOf, scale, sub, unit } from './v3';
 
 export type Projection = 'ortho' | 'persp' | 'oblique';
 export type Light = 'on' | 'off' | 'flat';
+export type ClipSize = 'tiny' | 'small' | 'medium' | 'large' | 'huge';
 
 /** The value of `space`: the camera and display properties of design 8.1 that phase 1 draws. Angles in radians. */
 export interface View3 {
@@ -35,6 +36,13 @@ export interface View3 {
   readonly floor: boolean;
   readonly grid: boolean;
   readonly light: Light;
+  /** The clip box (design 8.7): on, its corners, and a size that scales it about its centre. */
+  readonly clip: boolean;
+  readonly clipMin: V3;
+  readonly clipMax: V3;
+  readonly clipSize: ClipSize;
+  /** Degrees a second the camera turns with film time. */
+  readonly spin: number;
 }
 
 const DEG = Math.PI / 180;
@@ -54,11 +62,18 @@ export const DEFAULT_VIEW3: View3 = Object.freeze({
   floor: true,
   grid: true,
   light: 'on',
+  clip: false,
+  clipMin: Object.freeze({ x: -5, y: -5, z: -5 }),
+  clipMax: Object.freeze({ x: 5, y: 5, z: 5 }),
+  clipSize: 'medium',
+  spin: 0,
 });
 
 const PROJECTIONS: readonly Projection[] = ['ortho', 'persp', 'oblique'];
 const LIGHTS: readonly Light[] = ['on', 'off', 'flat'];
-const WORDS: Readonly<Record<string, readonly string[]>> = { projection: PROJECTIONS, light: LIGHTS };
+const CLIP_SIZES: readonly ClipSize[] = ['tiny', 'small', 'medium', 'large', 'huge'];
+const WORDS: Readonly<Record<string, readonly string[]>> = { projection: PROJECTIONS, light: LIGHTS, clipSize: CLIP_SIZES };
+const CLIP_SCALE: Readonly<Record<ClipSize, number>> = { tiny: 0.25, small: 0.5, medium: 1, large: 1.5, huge: 2 };
 
 /** The properties in their written order, with their types. */
 /** The radius of space the view shows at zoom 1 (the axes run from -5 to 5 with room around them). */
@@ -67,6 +82,7 @@ export const SPACE_FIT_RADIUS = 6;
 const PROPS: readonly (readonly [keyof View3, string])[] = [
   ['azimuth', 'Number'], ['elevation', 'Number'], ['roll', 'Number'], ['zoom', 'Number'], ['target', 'Point3'], ['projection', 'Text'],
   ['fov', 'Number'], ['obliqueAngle', 'Number'], ['obliqueFactor', 'Number'], ['axes', 'Bool'], ['floor', 'Bool'], ['grid', 'Bool'], ['light', 'Text'],
+  ['clip', 'Bool'], ['clipMin', 'Point3'], ['clipMax', 'Point3'], ['clipSize', 'Text'], ['spin', 'Number'],
 ];
 export const VIEW3_PROPERTIES: readonly string[] = PROPS.map(([k]) => k);
 
@@ -75,6 +91,29 @@ export function viewOf(figure: { get(name: string): { type: string; cell: { defi
   const o = figure.get('space');
   if (o && o.type === 'View3' && o.cell.defined && shape3Of(o.cell.value) === 'View3') return o.cell.value as View3;
   return DEFAULT_VIEW3;
+}
+
+/**
+ * The camera at the film time, as the screen draws it: the spin turns the azimuth, and the clip size scales the box
+ * about its centre (.kiro/specs/space-3d-surfaces R2.2, R3.1).
+ */
+export function viewAt(figure: Parameters<typeof viewOf>[0] & { clock?(): { t: number } }): View3 {
+  return viewAtTime(viewOf(figure), typeof figure.clock === 'function' ? figure.clock().t : 0);
+}
+
+/** A camera at film time `t`: the spin applied to its azimuth, its clip size applied to its box. */
+export function viewAtTime(v: View3, t: number): View3 {
+  const k = CLIP_SCALE[v.clipSize] ?? 1;
+  if (v.spin === 0 && k === 1) return v;
+  const c = { x: (v.clipMin.x + v.clipMax.x) / 2, y: (v.clipMin.y + v.clipMax.y) / 2, z: (v.clipMin.z + v.clipMax.z) / 2 };
+  const h = { x: ((v.clipMax.x - v.clipMin.x) / 2) * k, y: ((v.clipMax.y - v.clipMin.y) / 2) * k, z: ((v.clipMax.z - v.clipMin.z) / 2) * k };
+  const az = v.azimuth + v.spin * DEG * (Number.isFinite(t) ? t : 0);
+  return {
+    ...v,
+    azimuth: Math.atan2(Math.sin(az), Math.cos(az)),
+    clipMin: { x: c.x - h.x, y: c.y - h.y, z: c.z - h.z },
+    clipMax: { x: c.x + h.x, y: c.y + h.y, z: c.z + h.z },
+  };
 }
 
 /* ------------------------------ the Space command ------------------------------ */
@@ -125,6 +164,16 @@ function checkSpace(c: FormCheck): Refusal | undefined {
     if (key === 'zoom' && !(n > 0)) return bad(i, key, 'above 0', 'Zoom 1 fits the figure; 2 is twice as close.');
     if (key === 'elevation' && Math.abs(n) > Math.PI / 2 + 1e-12) return bad(i, key, 'between -90deg and 90deg', 'Elevation is the tilt above the floor; 90deg looks straight down.');
     if (key === 'obliqueFactor' && (n < 0 || n > 1)) return bad(i, key, 'between 0 and 1', 'The depth axis is drawn at this fraction of its length; 0.5 is usual.');
+  }
+  // the clip box needs its min below its max in each coordinate (errors S006)
+  const iMin = PROPS.findIndex(([k]) => k === 'clipMin');
+  const iMax = PROPS.findIndex(([k]) => k === 'clipMax');
+  const lo = c.args[iMin]?.literal as V3 | undefined;
+  const hi = c.args[iMax]?.literal as V3 | undefined;
+  if (lo && hi && isV3(lo) && isV3(hi)) {
+    for (const k of ['x', 'y', 'z'] as const) {
+      if (!(lo[k] < hi[k])) return bad(iMin, 'clipMin', `below clipMax in ${k}`, `clipMin.${k} is ${lo[k]} and clipMax.${k} is ${hi[k]}; swap them or make the box larger.`);
+    }
   }
   return undefined;
 }

@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { space } from '@incantly/kernel';
 import { SvgContext, createHeadlessApp } from '../../src/index';
-import { curveRuns, gridFaces, heightColor, paintSpace, sceneOf3 } from '../../src/screen/index';
+import { boxEdges, clipFace, clipSegment, curveRuns, gridFaces, heightColor, inBox, paintSpace, sceneOf3 } from '../../src/screen/index';
 import type { FaceItem, LineItem } from '../../src/screen/index';
 
 const scene = (lines: readonly string[]) => {
@@ -71,5 +71,57 @@ describe('surfaces in the scene (R1.1 to R1.4)', () => {
     const svg = ctx.toString();
     expect((svg.match(/<path /g) ?? []).length).toBeGreaterThan(1600);
     expect(svg).toMatch(/stroke-width="0.75"/);
+  });
+});
+
+describe('the clip box (R2, design 8.7)', () => {
+  const box = { min: { x: -1, y: -1, z: -1 }, max: { x: 1, y: 1, z: 1 } };
+
+  it('a face is cut at the box; a face outside is gone', () => {
+    const big = clipFace([{ x: -3, y: -3, z: 0 }, { x: 3, y: -3, z: 0 }, { x: 3, y: 3, z: 0 }, { x: -3, y: 3, z: 0 }], box) as space.V3[];
+    expect(big).toHaveLength(4);
+    expect(big.every((p) => Math.abs(p.x) <= 1 + 1e-12 && Math.abs(p.y) <= 1 + 1e-12)).toBe(true);
+    expect(clipFace([{ x: 5, y: 5, z: 5 }, { x: 6, y: 5, z: 5 }, { x: 5, y: 6, z: 5 }], box)).toBeUndefined();
+    // a triangle with one corner out becomes four corners
+    expect(clipFace([{ x: 0, y: 0, z: 0 }, { x: 3, y: 0, z: 0 }, { x: 0, y: 0.5, z: 0 }], box)).toHaveLength(4);
+  });
+
+  it('a piece of line is cut at the box; one that misses it is gone', () => {
+    expect(clipSegment({ x: -5, y: 0, z: 0 }, { x: 5, y: 0, z: 0 }, box)).toEqual([{ x: -1, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }]);
+    expect(clipSegment({ x: -5, y: 3, z: 0 }, { x: 5, y: 3, z: 0 }, box)).toBeUndefined();
+    expect(inBox(box, { x: 0.5, y: 0.5, z: 1 })).toBe(true);
+    expect(inBox(box, { x: 0.5, y: 0.5, z: 1.1 })).toBe(false);
+    expect(boxEdges(box)).toHaveLength(12);
+  });
+
+  it('with the box on, objects are cut to it and its edges drawn; a point outside is left out', () => {
+    const { scene: s } = scene(['f(x, y) = x^2 + y^2', 'P = (4, 4, 4)', 'Q = (0, 0, 0)', 'space with clip = true, clipMin = (-2, -2, -1), clipMax = (2, 2, 3)']);
+    const faces = own<FaceItem>(s.items, 'face');
+    expect(faces.length).toBeGreaterThan(0);
+    for (const f of faces) {
+      for (const p of f.pts) {
+        expect(Math.abs(p.x)).toBeLessThanOrEqual(2 + 1e-9);
+        expect(p.z).toBeLessThanOrEqual(3 + 1e-9);
+      }
+    }
+    expect(own<{ name: string }>(s.items, 'point').map((p) => p.name)).toEqual(['Q']);
+    expect(s.items.filter((i) => i.k === 'line' && i.id === -1)).toHaveLength(12);
+  });
+
+  it('clipSize scales the box about its centre; spin turns the camera with time', () => {
+    const v = space.viewAtTime({ ...space.DEFAULT_VIEW3, clip: true, clipSize: 'small', spin: 30 }, 2);
+    expect(v.clipMin).toEqual({ x: -2.5, y: -2.5, z: -2.5 });
+    expect(v.clipMax).toEqual({ x: 2.5, y: 2.5, z: 2.5 });
+    expect(v.azimuth).toBeCloseTo((-40 + 60) * (Math.PI / 180), 12);
+  });
+
+  it('the camera line takes the box and refuses a box turned inside out or a size it does not have', () => {
+    const a = createHeadlessApp({ mode: 'graphing3d' });
+    expect(a.run('space with clip = true, clipSize = large, spin = 10')[0]?.ok).toBe(true);
+    expect(space.viewOf(a.figure)).toMatchObject({ clip: true, clipSize: 'large', spin: 10 });
+    const [bad] = a.run('space with clipMin = (1, 0, 0), clipMax = (0, 1, 1)');
+    expect(bad).toMatchObject({ ok: false, kind: 'bad_property_value' });
+    const [size] = a.run('space with clipSize = big');
+    expect(size).toMatchObject({ ok: false, kind: 'bad_property_value' });
   });
 });

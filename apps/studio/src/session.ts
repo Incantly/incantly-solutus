@@ -5,7 +5,7 @@
 import {
   CAS_COMMAND_NAMES, Figure, animatingIds, onCasEngine, brokenSteps, buttonLabelOf, captionsOf, choiceStateOf, clickButton, commitInputText, defaultCaption, getStoredHandler,
   inputErrorOf, inputNoticeOf, targetTextOf, inputTextOf, isClickable, listHandlers, numberSource, playerOf, runHandler, runLoadHandlers, setChoiceIndex,
-  toggleCheckbox, tracedIds, typeInputText, valueText, isMuted, setMuted,
+  toggleCheckbox, tracedIds, typeInputText, valueText, isMuted, setMuted, space,
 } from '@incantly/kernel';
 import type { HandlerEvent, HandlerRun, Player } from '@incantly/kernel';
 import type { CommandRegistry, ErrorObject, LineGate, LineOrigin, ObjectView } from '@incantly/kernel';
@@ -551,6 +551,8 @@ export class KernelSession {
    */
   hasClock(): boolean {
     if (tracedIds(this.figure).length > 0 || animatingIds(this.figure).length > 0) return true;
+    // a camera that spins moves with the film (.kiro/specs/space-3d-surfaces R3.1)
+    if (space.viewOf(this.figure).spin !== 0) return true;
     for (const v of this.figure.objects()) {
       if (v.type === 'Particles') return true;
       if (/\banimate\s*=/.test(v.definition)) return true;

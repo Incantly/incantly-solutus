@@ -6,6 +6,8 @@
 import { colorHex, space } from '@incantly/kernel';
 import type { Figure } from '@incantly/kernel';
 import { curveRuns, gridFaces } from './mesh3';
+import { boxEdges, clipFace, clipSegment, inBox } from './clip3';
+import type { Box3 } from './clip3';
 
 type V3 = space.V3;
 const { add, dot, frameOf, fromFrame, isV3, scale, sub, unit } = space;
@@ -235,13 +237,15 @@ export function sceneOf3(figure: Figure, view: space.View3, opts: Scene3Options 
         const fn = v as { arity?: number; ret?: string; call(...xs: number[]): unknown };
         if (fn.arity !== 2 || fn.ret !== 'Number' || typeof fn.call !== 'function') break;
         const N = 40;
-        const x0 = C.x - L;
-        const y0 = C.y - L;
-        const d = (2 * L) / N;
-        const zMax = 2 * L;
+        // over the floor about the target, or over the clip box's floor (R2.3)
+        const x0 = view.clip ? view.clipMin.x : C.x - L;
+        const y0 = view.clip ? view.clipMin.y : C.y - L;
+        const dx = view.clip ? (view.clipMax.x - view.clipMin.x) / N : (2 * L) / N;
+        const dy = view.clip ? (view.clipMax.y - view.clipMin.y) / N : (2 * L) / N;
+        const zMax = view.clip ? Infinity : 2 * L;
         const at = (i: number, j: number): V3 | undefined => {
-          const x = x0 + d * i;
-          const y = y0 + d * j;
+          const x = x0 + dx * i;
+          const y = y0 + dy * j;
           const z = fn.call(x, y);
           return typeof z === 'number' && Number.isFinite(z) ? { x, y, z } : undefined;
         };
@@ -256,7 +260,29 @@ export function sceneOf3(figure: Figure, view: space.View3, opts: Scene3Options 
         break;
     }
   }
-  return { floor, items };
+  if (!view.clip) return { floor, items };
+  // cut everything the figure holds to the box, and draw the box (design 8.7, ui.md 8)
+  const box: Box3 = { min: view.clipMin, max: view.clipMax };
+  const cut: Item3[] = [];
+  for (const it of items) {
+    if (it.k === 'label' || it.id < 0) cut.push(it);
+    else if (it.k === 'point') {
+      if (inBox(box, it.p)) cut.push(it);
+    } else if (it.k === 'line') {
+      const seg = clipSegment(it.a, it.b, box);
+      if (seg) cut.push({ ...it, a: seg[0], b: seg[1] });
+    } else {
+      const pts = clipFace(it.pts, box);
+      if (!pts) continue;
+      // a cut face keeps no grid sides: they no longer match its corners
+      const whole = pts.length === it.pts.length && it.pts.every((p) => inBox(box, p));
+      const { edges: _e, ...rest } = it;
+      void _e;
+      cut.push(whole ? it : { ...rest, pts });
+    }
+  }
+  for (const [a, b] of boxEdges(box)) cut.push({ k: 'line', id: -1, a, b, color: '#a3abb8', width: 1, hiddenDashed: false });
+  return { floor, items: cut };
 }
 
 /** The colour made a third darker, for edges. */
