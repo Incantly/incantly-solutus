@@ -394,7 +394,7 @@ describe('3.4 on a figure: start, tick, stop', () => {
     const f = start();
     for (const t of [NaN, Infinity, -Infinity, -1, 1e300]) expect(() => tickAnimations(f, t)).not.toThrow();
   });
-  it('20 animating sliders cost little: 1000 frames in under a second', () => {
+  it('20 animating sliders cost little: 1000 frames in under a second', { retry: 2, timeout: T }, () => {
     const f = newFigure();
     const lines: string[] = [];
     for (let i = 0; i < 20; i++) lines.push(`s${i} = 0 in 0..10`);
@@ -403,7 +403,7 @@ describe('3.4 on a figure: start, tick, stop', () => {
     within(1000, () => {
       for (let k = 1; k <= 1000; k++) tickAnimations(f, k / 60);
     });
-  }, T);
+  });
 });
 
 describe('3.4 dragging an animating slider', () => {

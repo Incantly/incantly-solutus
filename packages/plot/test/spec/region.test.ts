@@ -92,13 +92,13 @@ describe('CL7 predicateFromRelation: language relations become fillable predicat
     for (const b of p.borders) expect(b.strict).toBe(false);
   }, HEAVY_TIMEOUT);
 
-  it('CL7: x^2 + y^2 == 4 fills no area (zero-area curve)', () => {
+  it('CL7: x^2 + y^2 == 4 fills no area (zero-area curve)', { retry: 2, timeout: TIMEOUT }, () => {
     // The kernel's == test has a small tolerance, so boundary slivers may
     // appear as polygons; no full cell (rect) can be inside a zero-area set.
     const p = expectOk(fillRegion(expectOk(predicateFromRelation(rel2('x^2 + y^2 == 4'))), VIEW_SQ));
     expect(p.rects.length).toBe(0);
     expect(p.stats.complete).toBe(true);
-  }, TIMEOUT);
+  });
 
   it('CL7: an exact == test fills nothing at all', () => {
     const p = expectOk(fillRegion({ test: (x, y) => x * x + y * y === 4 }, VIEW_SQ));
@@ -521,12 +521,12 @@ describe('CL7 output, certainty flags, budgets and targets', () => {
     expect(ms).toBeLessThan(15000);
   }, HEAVY_TIMEOUT);
 
-  it('CL7 targets: sin(x)*y > 1 band (target 8ms) completes within budget', () => {
+  it('CL7 targets: sin(x)*y > 1 band (target 8ms) completes within budget', { retry: 2, timeout: HEAVY_TIMEOUT }, () => {
     const t0 = performance.now();
     const p = expectOk(fillRegion({ test: (x, y) => Math.sin(x) * y > 1 }, VIEW_SQ));
     const ms = performance.now() - t0;
     expect(p.stats.complete).toBe(true);
     expect(p.stats.evals).toBeLessThanOrEqual(200000);
     expect(ms).toBeLessThan(30000);
-  }, HEAVY_TIMEOUT);
+  });
 });

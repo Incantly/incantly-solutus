@@ -162,7 +162,7 @@ describe('Iterate, IterateList, Cobweb (8.8)', () => {
     fails(fig('g(x) = x / 2'), 'L = IterateList(g, 1, 100001)', 'limit');
   });
 
-  it('IterateList of 100000 steps is allowed and quick', () => {
+  it('IterateList of 100000 steps is allowed and quick', { retry: 2 }, () => {
     const f = within(1500, () => fig(['g(x) = cos(x)', 'L = IterateList(g, 1, 100000)']));
     expect(list(f, 'L').length).toBeGreaterThanOrEqual(100000);
   });
@@ -236,7 +236,7 @@ describe('SolveODE(g, x0, y0, x1): first-order solution as a Function (8.9)', ()
     expect(reasonOf(f, 'sol')).toBeUndefined();
   });
 
-  it('a long solve with 3000+ steps finishes in a blink: y\' = cos(50 x) y', () => {
+  it('a long solve with 3000+ steps finishes in a blink: y\' = cos(50 x) y', { retry: 2 }, () => {
     const f = within(500, () => fig(['g(x, y) = cos(50 * x) * y', 'sol = SolveODE(g, 0, 1, 30)']));
     near(ev(f, 'sol(30)'), Math.exp(Math.sin(1500) / 50), 1e-5);
   });

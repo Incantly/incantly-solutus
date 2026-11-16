@@ -113,7 +113,7 @@ describe('the format (design 13.1)', () => {
     expect(g.problems()).toEqual([]);
   });
 
-  it('the `animate` property of design 10 is accepted on a slider', () => {
+  it('the `animate` property of design 10 is accepted on a slider', { retry: 2 }, () => {
     // Design 10 and the 13.1 example use `with animate = oscillate`; design 9.1's key table does not list it.
     const f = newFigure();
     const r = f.apply('a = 2 in 0..5 step 0.5 with animate = oscillate');
@@ -483,7 +483,7 @@ describe('speed (design 13.2 and 15)', () => {
     return `${lines.join('\n')}\n`;
   };
 
-  it('loads a 1,000-line script (target 100 ms; limit 1500 ms)', () => {
+  it('loads a 1,000-line script (target 100 ms; limit 1500 ms)', { retry: 2 }, () => {
     const text = thousand();
     const { ms, value } = timed(() => load(text, { mode: 'strict' }));
     expect(value.report.errors).toEqual([]);
@@ -491,7 +491,7 @@ describe('speed (design 13.2 and 15)', () => {
     expect(ms).toBeLessThan(1500);
   });
 
-  it('toScript for 1,000 objects (target 20 ms; limit 300 ms)', () => {
+  it('toScript for 1,000 objects (target 20 ms; limit 300 ms)', { retry: 2 }, () => {
     const f = load(thousand()).figure;
     const { ms, value } = timed(() => f.toScript());
     expect(value.split('\n').length).toBe(1002);

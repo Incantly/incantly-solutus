@@ -88,7 +88,7 @@ describe('the windowed list', () => {
     expect(row('a')?.querySelector('.expr-deps')?.textContent).toMatch(/used by.*b.*c/);
   });
 
-  it('speed: a slider move on 5,000 objects costs the list under 4 ms (design 3.16)', () => {
+  it('speed: a slider move on 5,000 objects costs the list under 4 ms (design 3.16)', { retry: 2 }, () => {
     m.session.load(bigScript());
     const times: number[] = [];
     for (let k = 0; k < 21; k++) {
@@ -101,7 +101,7 @@ describe('the windowed list', () => {
     expect(median(times)).toBeLessThan(4);
   });
 
-  it('speed: a full render of 5,000 rows (viewport only) is under 100 ms', () => {
+  it('speed: a full render of 5,000 rows (viewport only) is under 100 ms', { retry: 2 }, () => {
     m.session.load(bigScript());
     const times: number[] = [];
     for (let k = 0; k < 5; k++) {

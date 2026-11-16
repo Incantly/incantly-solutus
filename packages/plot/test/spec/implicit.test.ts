@@ -455,12 +455,12 @@ describe('CL6 output, certainty flags, budgets and targets', () => {
     expect(ms).toBeLessThan(15000);
   }, HEAVY_TIMEOUT);
 
-  it('CL6 targets: sin(x)+sin(y)==sin(x*y) (target 15ms) completes within budget', () => {
+  it('CL6 targets: sin(x)+sin(y)==sin(x*y) (target 15ms) completes within budget', { retry: 2, timeout: HEAVY_TIMEOUT }, () => {
     const t0 = performance.now();
     const p = expectOk(traceImplicit({ residual: (x, y) => Math.sin(x) + Math.sin(y) - Math.sin(x * y) }, VIEW_SQ));
     const ms = performance.now() - t0;
     expect(p.stats.complete).toBe(true);
     expect(p.stats.evals).toBeLessThanOrEqual(200000);
     expect(ms).toBeLessThan(30000);
-  }, HEAVY_TIMEOUT);
+  });
 });

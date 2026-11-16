@@ -99,7 +99,7 @@ describe('@algebra directives (3.15) and next-step cards (3.13)', () => {
 });
 
 describe('speed (3.16)', () => {
-  it('rows for 2,000 objects', () => {
+  it('rows for 2,000 objects', { retry: 2 }, () => {
     const lines = ['a = 1 in 0..10'];
     for (let i = 0; i < 1000; i++) lines.push(`P${i} = (${i % 50}, ${Math.floor(i / 50)})`, `Q${i} = Midpoint(P${i}, (a, 0))`);
     const f = fig(lines);

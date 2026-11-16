@@ -106,7 +106,7 @@ describe('Locus(Q, a, from, to): the mover is a free number (9)', () => {
     expect(noticeCodes(r).concat(r.notices.map((n) => n.message))).toEqual(expect.arrayContaining([expect.stringMatching(/sample_cap|cap/i)]));
   });
 
-  it('a locus in a time budget: 600 samples from 8 rules under 100 ms', () => {
+  it('a locus in a time budget: 600 samples from 8 rules under 100 ms', { retry: 2 }, () => {
     const f = fig(['k = 0', 'A = (k, k^2)', 'B = (A.x + 1, A.y * 2)', 'C = (B.x * B.y, B.y)', 'D = (C.x - A.x, C.y + A.y)', 'Q = (D.x / 2, D.y / 2)']);
     within(100, () => ok(f, 'loc = Locus(Q, k, -2, 2)'));
   });

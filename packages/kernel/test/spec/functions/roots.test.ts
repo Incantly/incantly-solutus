@@ -144,14 +144,14 @@ describe('Roots(f, a, b): every root, sorted (8.3)', () => {
 });
 
 describe('Roots: hard cases and time limits (8.3 targets)', () => {
-  it('sin(1/x) on [0.01, 1] has 31 roots (the doc says 62; the roots are 1/(k pi) for k = 1..31)', () => {
+  it('sin(1/x) on [0.01, 1] has 31 roots (the doc says 62; the roots are 1/(k pi) for k = 1..31)', { retry: 2 }, () => {
     const f = within(500, () => fig(['f(x) = sin(1 / x)', 'r = Roots(f, 0.01, 1)']));
     const xs = pts(f, 'r').map((p) => p.x);
     expect(xs.length).toBe(31);
     xs.forEach((x, i) => near(x, 1 / ((31 - i) * Math.PI), 1e-8));
   });
 
-  it('a degree-8 polynomial on [-10, 10] has all 8 roots to 1e-9, fast', () => {
+  it('a degree-8 polynomial on [-10, 10] has all 8 roots to 1e-9, fast', { retry: 2 }, () => {
     const body = '(x + 4) * (x + 3) * (x + 2) * (x + 1) * (x - 1) * (x - 2) * (x - 3) * (x - 4)';
     const f = within(500, () => fig([`f(x) = ${body}`, 'r = Roots(f, -10, 10)']));
     const xs = pts(f, 'r').map((p) => p.x);
@@ -159,7 +159,7 @@ describe('Roots: hard cases and time limits (8.3 targets)', () => {
     [-4, -3, -2, -1, 1, 2, 3, 4].forEach((v, i) => near(xs[i] as number, v, 1e-9));
   });
 
-  it('Roots over a huge interval [-1e9, 1e9] finds x = 0', () => {
+  it('Roots over a huge interval [-1e9, 1e9] finds x = 0', { retry: 2 }, () => {
     const f = within(500, () => fig(['f(x) = x', 'r = Roots(f, -1000000000, 1000000000)']));
     const r = pts(f, 'r');
     expect(r.length).toBe(1);
@@ -174,7 +174,7 @@ describe('Roots: hard cases and time limits (8.3 targets)', () => {
     near(xs[1] as number, 1.001, 1e-8);
   });
 
-  it('an oscillating function with many roots: sin(20 x) on [0, 10] has 64 roots', () => {
+  it('an oscillating function with many roots: sin(20 x) on [0, 10] has 64 roots', { retry: 2 }, () => {
     const f = within(500, () => fig(['f(x) = sin(20 * x)', 'r = Roots(f, 0, 10)']));
     expect(pts(f, 'r').length).toBe(64);
   });

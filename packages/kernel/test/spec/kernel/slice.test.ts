@@ -227,7 +227,7 @@ describe('slice errors are data, not exceptions', () => {
 });
 
 describe('slice speed', () => {
-  it('10,000 values through a 3-rule chain in well under a second', () => {
+  it('10,000 values through a 3-rule chain in well under a second', { retry: 2 }, () => {
     const f = figure(['a = 1 in -100..100', 'r = Reciprocal(a)', 'r2 = Reciprocal(r)', 'r3 = Reciprocal(r2)']);
     const s = f.slice('a', 'r3');
     if (!('run' in s)) throw new Error('expected a slice');

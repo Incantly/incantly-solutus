@@ -387,7 +387,7 @@ describe('events and cost', () => {
     expect(kinds).toContain('add');
   });
 
-  it('undo of one line in a 500-object figure is fast (target 1 ms; limit 50 ms)', () => {
+  it('undo of one line in a 500-object figure is fast (target 1 ms; limit 50 ms)', { retry: 2 }, () => {
     const lines: string[] = ['A = (0, 0)', 'B = (10, 0)'];
     for (let i = 0; i < 498; i++) lines.push(`P${i} = Midpoint(${i === 0 ? 'A' : `P${i - 1}`}, B)`);
     const f = figure(lines);

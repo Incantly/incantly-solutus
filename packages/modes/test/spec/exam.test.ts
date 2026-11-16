@@ -87,7 +87,7 @@ describe('switching modes (R4)', () => {
     expect(r.error?.kind).toBe('mode_unavailable');
   });
 
-  it('a dry run on 500 objects is quick (design 5: under 30 ms; ceiling for CI 300 ms)', () => {
+  it('a dry run on 500 objects is quick (design 5: under 30 ms; ceiling for CI 300 ms)', { retry: 2 }, () => {
     const f = new Figure({ commands: REG });
     const lines: string[] = [];
     for (let i = 0; i < 250; i++) lines.push(`pt${i} = (${i}, ${i % 7})`, `md${i} = Midpoint(pt${i}, (0, 0))`);

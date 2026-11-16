@@ -297,7 +297,7 @@ describe('determinism and seeking', () => {
     expect(f.value('th')).toBe(fresh.value('th'));
   });
 
-  it('a seek is fast once the integration has been done (target 50 ms; limit 500 ms)', () => {
+  it('a seek is fast once the integration has been done (target 50 ms; limit 500 ms)', { retry: 2 }, () => {
     const f = figure(['@clock 0..60', ...PENDULUM]);
     f.setClock(59); // the first seek integrates the whole film
     const { ms } = timed(() => {

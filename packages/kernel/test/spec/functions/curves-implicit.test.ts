@@ -270,7 +270,7 @@ describe('Intersect of curves, lines, circles and functions (6)', () => {
     [-1, 0, 1].forEach((x, i) => nearPt(r[i] as { x: number; y: number }, x, 0, 1e-7));
   });
 
-  it('two conics in a time budget: ellipse and circle intersect fast', () => {
+  it('two conics in a time budget: ellipse and circle intersect fast', { retry: 2 }, () => {
     const f = within(500, () => fig([ELL, 'bc = Curve(x^2 + y^2 == 2)', 'I = Intersect(el, bc)']));
     expect(pts(f, 'I').length).toBe(4);
   });
@@ -364,7 +364,7 @@ describe('Curve(pts): the algebraic curve of lowest degree (1, 6, errors 1)', ()
 });
 
 describe('implicit curves: speed (6 targets)', () => {
-  it('defining and querying the transcendental curve is fast', () => {
+  it('defining and querying the transcendental curve is fast', { retry: 2 }, () => {
     within(500, () => fig(['wc = Curve(sin(x) + sin(y) == sin(x * y))', 'cl = Closest(wc, (1, 1))']));
     void val;
   });

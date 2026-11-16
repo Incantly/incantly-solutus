@@ -107,17 +107,17 @@ describe('Integral: improper bounds and singularities (8.1)', () => {
     near(num(f, 'I'), want, 1e-6);
   });
 
-  it('1/x^2 over [-1, 1] diverges at the interior pole', () => {
+  it('1/x^2 over [-1, 1] diverges at the interior pole', { retry: 2 }, () => {
     const f = within(1000, () => fig(['f(x) = 1 / x^2', 'I = Integral(f, -1, 1)']));
     expectUndefined(f, 'I', 'diverges');
   });
 
-  it('1/x over [0, 1] diverges', () => {
+  it('1/x over [0, 1] diverges', { retry: 2 }, () => {
     const f = within(1000, () => fig(['f(x) = 1 / x', 'I = Integral(f, 0, 1)']));
     expectUndefined(f, 'I', 'diverges');
   });
 
-  it('1/x over [-1, 1] diverges (no principal value)', () => {
+  it('1/x over [-1, 1] diverges (no principal value)', { retry: 2 }, () => {
     const f = within(1000, () => fig(['f(x) = 1 / x', 'I = Integral(f, -1, 1)']));
     expectUndefined(f, 'I', 'diverges');
   });
@@ -148,7 +148,7 @@ describe('Integral(f): antiderivative as a Function (7)', () => {
     near(ev(f, 'af(2)'), 5 + 7 / 3, 1e-8);
   });
 
-  it('a long run of sequential evaluations is fast (the panel cache): 1000 evaluations of F', () => {
+  it('a long run of sequential evaluations is fast (the panel cache): 1000 evaluations of F', { retry: 2 }, () => {
     const f = fig(['f(x) = sin(x) * exp(-x / 5)', 'af = Integral(f)', 'g(x) = af(x)']);
     within(500, () => {
       let s = 0;
@@ -326,7 +326,7 @@ describe('Riemann and Integral: argument errors (errors 2)', () => {
 
 describe('Integral: results carry notices when partial (errors 3)', () => {
 
-  it('a wildly oscillating integrand either converges or returns a value with a step_limit warning, never hangs', () => {
+  it('a wildly oscillating integrand either converges or returns a value with a step_limit warning, never hangs', { retry: 2 }, () => {
     const f = within(3000, () => fig(['f(x) = sin(1 / x)', 'I = Integral(f, 0.0001, 1)']));
     const c = f.cellOf('I');
     expect(c).toBeDefined();

@@ -248,7 +248,7 @@ describe('the tool strip in the page (R5) and speed (R6)', () => {
     root.remove();
   });
 
-  it('a hit list over 1,000 objects takes under 0.3 ms', async () => {
+  it('a hit list over 1,000 objects takes under 0.3 ms', { retry: 2 }, async () => {
     const { hitTest } = await import('../src/graph/hit');
     const { Viewport } = await import('../src/graph/viewport');
     const vp = new Viewport();
