@@ -240,6 +240,8 @@ export interface App {
   toFragment(): Promise<string>;
   /** Opens a figure from a URL fragment. */
   loadFragment(fragment: string): Promise<LoadResult | ApiError>;
+  /** PNG or SVG of the view or of everything, at a film time (design 5). */
+  export(opts: import('./export').ExportOptions, env?: import('./export').ExportEnv): Promise<import('./export').ExportResult | ApiError>;
   /** The display settings of the figure (the screen reads them). */
   readonly settings: FileSettings;
   /** Images the file holds, by id. */
@@ -896,6 +898,11 @@ class AppCore implements App {
     need(bytes instanceof Uint8Array, 'loadBytes', 'it needs the bytes of a file');
     const text = await textOfBytes(bytes);
     return typeof text === 'string' ? this.load(text) : text;
+  }
+
+  async export(opts: import('./export').ExportOptions, env?: import('./export').ExportEnv): Promise<import('./export').ExportResult | ApiError> {
+    const m = await import('./export');
+    return m.exportFigure(this, opts, env);
   }
 
   async toFragment(): Promise<string> {

@@ -249,8 +249,8 @@ describe('the tool strip in the page (R5) and speed (R6)', () => {
   });
 
   it('a hit list over 1,000 objects takes under 0.3 ms', { retry: 2 }, async () => {
-    const { hitTest } = await import('../src/graph/hit');
-    const { Viewport } = await import('../src/graph/viewport');
+    const { hitTest } = await import('@incantly/sdk/screen');
+    const { Viewport } = await import('@incantly/sdk/screen');
     const vp = new Viewport();
     vp.resize(800, 600);
     vp.home();

@@ -10,23 +10,15 @@ import { nextName } from '@incantly/ui';
 import type { LineRow, RowControl } from '@incantly/ui';
 import { AlgebraCache, DEFAULT_PREFS, algebraRows, prefsFromScript, refreshAlgebraRows, suggestionsFor } from '@incantly/view';
 import type { AlgebraObject, AlgebraPrefs, AlgebraRow, DisplayMode } from '@incantly/view';
-import { colorAt } from './graph/paint';
+import { colorAt } from '@incantly/sdk/screen';
 import { miniCurve, miniInterval } from './mini';
-import { fullElement, mathElement } from './graph/mathdraw';
+import { drawsOnGraph, fullElement, mathElement } from '@incantly/sdk/screen';
 import type { KernelSession } from './session';
 import { selectionFrom } from './selection';
 import type { Selection } from './selection';
 
-/** Types that draw on the graph and so get a swatch. */
-const DRAWN = new Set(['Particles', 'Point', 'Vector', 'Segment', 'Line', 'Ray', 'Circle', 'Arc', 'Sector', 'Conic', 'Polyline', 'Polygon', 'Function', 'Curve', 'Relation', 'Region', 'Field', 'Chart', 'ContinuousDistribution', 'DiscreteDistribution']);
-
-export function drawsOnGraph(type: string, typeText: string, value: unknown): boolean {
-  const base = type.replace(/<.*$/, '');
-  if (DRAWN.has(base)) return true;
-  if (base === 'List') return /^List<(Point|Polygon|Segment|Circle|Line|Vector)/.test(typeText);
-  if (base === 'Record') return (value as { schema?: string } | undefined)?.schema === 'Fit';
-  return false;
-}
+/** Types that draw on the graph: the SDK's rule, the same for the list and every export. */
+export { drawsOnGraph };
 
 export interface ExpressionList {
   readonly element: HTMLElement;

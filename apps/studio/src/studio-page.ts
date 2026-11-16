@@ -24,23 +24,23 @@ import { mountProbCalc } from './probcalc';
 import { mountSimStrip } from './simstrip';
 import type { SimStrip } from './simstrip';
 import { mountToolStrip } from './tools-ui';
-import { symDrawing } from './graph/symplot';
+import { symDrawing } from '@incantly/sdk/screen';
 import type { ToolStrip } from './tools-ui';
 import type { ProbCalc } from './probcalc';
 import type { DataLab } from './datalab';
 import { EXAMPLES, examplesFor } from './examples';
 import { drawsOnGraph, mountExpressions } from './expressions';
 import type { ExpressionList } from './expressions';
-import { mountGraph } from './graph/graph-pane';
-import type { GraphPane } from './graph/graph-pane';
-import { sceneBounds } from './graph/paint';
-import type { SceneItem } from './graph/paint';
+import { mountGraph } from '@incantly/sdk/screen';
+import type { GraphPane } from '@incantly/sdk/screen';
+import { sceneBounds } from '@incantly/sdk/screen';
+import type { SceneItem } from '@incantly/sdk/screen';
 import { studioRegistry } from './registry';
 import { KernelSession } from './session';
 import { tracePoints, tracedIds } from '@incantly/kernel';
 import { createSelection, selectionFrom } from './selection';
 import type { Selection } from './selection';
-import { hitTest } from './graph/hit';
+import { hitTest } from '@incantly/sdk/screen';
 
 export interface StudioOptions {
   /** Frame scheduler for the clock; defaults to `requestAnimationFrame`. A test passes its own. */

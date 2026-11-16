@@ -1,10 +1,10 @@
 /** The CAS view (cas ui.md 1 to 8, 11; .kiro/specs/cas R4, R5). */
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { loadCasEngine } from '../src/registry';
-import { paintScene } from '../src/graph/paint';
-import type { SceneItem } from '../src/graph/paint';
-import { symDrawing } from '../src/graph/symplot';
-import { Viewport } from '../src/graph/viewport';
+import { paintScene } from '@incantly/sdk/screen';
+import type { SceneItem } from '@incantly/sdk/screen';
+import { symDrawing } from '@incantly/sdk/screen';
+import { Viewport } from '@incantly/sdk/screen';
 import { mountStudio } from '../src/studio-page';
 import type { Mounted } from '../src/studio-page';
 

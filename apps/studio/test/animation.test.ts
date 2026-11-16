@@ -4,9 +4,9 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { tracePoints } from '@incantly/kernel';
-import { paintScene } from '../src/graph/paint';
-import type { SceneItem } from '../src/graph/paint';
-import { Viewport } from '../src/graph/viewport';
+import { paintScene } from '@incantly/sdk/screen';
+import type { SceneItem } from '@incantly/sdk/screen';
+import { Viewport } from '@incantly/sdk/screen';
 import { KernelSession } from '../src/session';
 import { mountStudio } from '../src/studio-page';
 import type { Mounted } from '../src/studio-page';

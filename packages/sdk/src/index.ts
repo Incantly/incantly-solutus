@@ -18,3 +18,6 @@ export {
 export type { Asset, AssetMime, FileSettings, FileWarning, IncantlyFile, LoadResult, Meta } from './file';
 export { FRAME_LIMITS, FRAME_METHODS, PROTOCOL_VERSION, connectApp, serveApp } from './frame';
 export type { AsyncApp, ConnectOptions, Envelope, MessageHost, MessageLike, MessageTarget, ServeOptions, Served } from './frame';
+export { EXPORT_FORMATS, EXPORT_LIMITS, exportFigure } from './export';
+export type { CanvasFactory, ExportEnv, ExportOptions, ExportRegion, ExportResult, ExportWarning } from './export';
+export { SvgContext } from './svg-context';

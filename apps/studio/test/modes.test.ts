@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { mountStudio } from '../src/studio-page';
 import type { Mounted } from '../src/studio-page';
-import { frameStyle } from '../src/graph/paint';
+import { frameStyle } from '@incantly/sdk/screen';
 
 describe('app modes in the studio', () => {
   let root: HTMLElement;

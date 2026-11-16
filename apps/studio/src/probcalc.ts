@@ -6,9 +6,9 @@
 import { Figure } from '@incantly/kernel';
 import type { CommandRegistry } from '@incantly/kernel';
 import { check, el, fmt, number, segmented, select, statsTable } from './datalab';
-import { colorAt, paintScene } from './graph/paint';
-import type { SceneItem } from './graph/paint';
-import { Viewport } from './graph/viewport';
+import { colorAt, paintScene } from '@incantly/sdk/screen';
+import type { SceneItem } from '@incantly/sdk/screen';
+import { Viewport } from '@incantly/sdk/screen';
 import { miniCurve } from './mini';
 import type { KernelSession } from './session';
 

@@ -81,12 +81,14 @@ const MONO = '13px "JetBrains Mono", "SFMono-Regular", Menlo, Consolas, monospac
 /* ------------------------------ grid ------------------------------ */
 
 /** How the frame looks (app-modes settings `axes`, `grid`, `highContrast`): set by the app mode, read on every paint. */
-export const frameStyle: { axes: boolean; grid: 'none' | 'major' | 'minor'; highContrast: boolean } = { axes: true, grid: 'minor', highContrast: false };
+export const frameStyle: { axes: boolean; grid: 'none' | 'major' | 'minor'; highContrast: boolean; background: string | null } = { axes: true, grid: 'minor', highContrast: false, background: '#ffffff' };
 
 export function paintGrid(ctx: Ctx, vp: Viewport): void {
   const { w, h } = vp;
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, w, h);
+  if (frameStyle.background) {
+    ctx.fillStyle = frameStyle.background;
+    ctx.fillRect(0, 0, w, h);
+  }
   if (frameStyle.grid === 'none' && !frameStyle.axes) return;
   const gx = gridStep(vp.ppu);
   const gy = gridStep(vp.ppuY);

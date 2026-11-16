@@ -9,7 +9,7 @@ import {
 import type { AppModeId, CommandRef, ModeChangeResult, ModeConfig, Rounding, SettingDef, StorageLike, ViewKind } from '@incantly/modes';
 import type { KernelSession } from '../session';
 import type { ToolStrip } from '../tools-ui';
-import { frameStyle } from '../graph/paint';
+import { frameStyle } from '@incantly/sdk/screen';
 
 /** The parts of the page a mode shows, hides or narrows. */
 export interface ModeHostParts {
