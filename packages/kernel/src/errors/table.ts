@@ -103,6 +103,7 @@ const META: Record<ErrorKind, Meta> = {
   bad_option: { key: 'lang.bad_option', params: ['command', 'why'], description: 'A text option outside its set, such as Sort(xs, "ascending").' },
   mode_forbids: { key: 'lang.mode_forbids', params: ['why'], description: 'A command, function, operator or form the app mode, a restriction or an exam switches off.' },
   decimal_comma: { key: 'lang.decimal_comma', params: [], description: 'A decimal written with a comma, such as 2,5, where a number is meant.' },
+  bad_note_name: { key: 'lang.bad_note_name', params: ['token'], description: 'A text in note() that is not a note name, such as "H4".' },
 };
 
 function buildTable(): Record<ErrorKind, ErrorSpec> {
