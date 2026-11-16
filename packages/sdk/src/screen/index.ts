@@ -8,3 +8,4 @@ export * from './symplot';
 export * from './viewport';
 export * from './scene';
 export * from './files';
+export * from './space/index';

@@ -4,6 +4,6 @@ Branch per round: `feat/space-3d-<n>`, one PR into `integration` each, merged af
 
 - [x] 1. Round 1: points, vectors, lines and planes in the kernel; the core hooks; `mixed_dimension` (R1)
 - [x] 2. Round 2: solids, spheres, cylinders, cones, measures and their intersections (R2)
-- [ ] 3. Round 3: the `space` camera object, the software painter, the Space pane, export (R3)
+- [x] 3. Round 3: the `space` camera object, the software painter, the Space pane, export (R3)
 - [ ] 4. Round 4: orbit, pan, zoom, drag, picking, the style bar, the 3D app and its examples (R4)
 - [ ] 5. Round 5: benches; the WebGL2 back-end if the painter misses its frame budget; screenshots (R5)
