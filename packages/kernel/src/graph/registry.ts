@@ -416,3 +416,30 @@ export function runLineRewriters(figure: unknown, text: string): LineRewrite | u
   }
   return undefined;
 }
+
+/* ------------------------------ after a line ------------------------------ */
+
+/**
+ * Work an area does after a committed line, inside its transaction (the sheet checks again the ranges that cover a new
+ * cell). `together` runs lines so that they join the line's own undo step. Not called for dry runs.
+ */
+export type AfterLine = (figure: unknown, result: import('./types').TxOk, ctx: { readonly together: (fn: () => void) => void }) => void;
+
+const AFTER_LINE: AfterLine[] = [];
+
+export function registerAfterLine(hook: AfterLine): void {
+  if (!AFTER_LINE.includes(hook)) AFTER_LINE.push(hook);
+}
+
+export const hasAfterLine = (): boolean => AFTER_LINE.length > 0;
+
+/** Runs the after-line hooks; one that throws is skipped. */
+export function runAfterLine(figure: unknown, result: import('./types').TxOk, ctx: { readonly together: (fn: () => void) => void }): void {
+  for (const h of AFTER_LINE) {
+    try {
+      h(figure, result, ctx);
+    } catch {
+      // an area's hook must not break the line
+    }
+  }
+}

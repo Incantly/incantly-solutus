@@ -80,6 +80,9 @@ export function renameExpr(e: Expr, starts: ReadonlySet<number>, from: string, t
       return { ...e, from: r(e.from), to: r(e.to), ...(e.step ? { step: r(e.step) } : {}) };
     case 'cond':
       return { ...e, args: e.args.map(r) };
+    case 'cells':
+      // a range names addresses, not objects: renaming a cell does not move a range
+      return e;
   }
 }
 

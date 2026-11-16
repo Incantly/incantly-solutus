@@ -7,6 +7,7 @@ import { Diag, notice } from './errors';
 import type { LanguageError } from './errors';
 import { MAX_LINE_LENGTH, SourceMap, hexColourLength } from './source';
 import type { LangLimits } from './source';
+import { referenceProblem } from './cells';
 
 export type TokKind = 'num' | 'name' | 'kw' | 'str' | 'op' | 'sqrt' | 'at' | 'comment' | 'nl' | 'bad' | 'eof';
 
@@ -30,6 +31,9 @@ export interface Token {
   readonly parts?: readonly StrPart[];
   /** True when the number literal has no '.', exponent or '_' (an integer literal). */
   readonly int?: boolean;
+  /** A cell reference written with `$` before its column (`$A1`) or its row (`A$1`): spreadsheet design 3.3. */
+  readonly cabs?: boolean;
+  readonly rabs?: boolean;
 }
 
 export const MAX_TOKENS = 800;
@@ -156,6 +160,13 @@ export function lex(sm: SourceMap, opts: { maxTokens?: number; limits?: LangLimi
       }
       if (isDigit(c) || (c === '.' && isDigit(text[i + 1] ?? ''))) {
         const r = lexNumber(i, to);
+        push(r.tok);
+        i = r.next;
+        continue;
+      }
+      // `$` right before a letter or a digit starts a cell reference; anywhere else it is not part of the language
+      if (c === '$' && (isAsciiLetter(text[i + 1] ?? '') || isDigit(text[i + 1] ?? ''))) {
+        const r = lexRef(i, to);
         push(r.tok);
         i = r.next;
         continue;
@@ -315,9 +326,51 @@ export function lex(sm: SourceMap, opts: { maxTokens?: number; limits?: LangLimi
     return diag.at('bad_character', i, end, 'lang.bad_character', { token: ch, cp: label }, { hint, fingerprintKey: ch });
   }
 
+  /** `$A$1`, `$A1`: a cell reference that starts with `$` (spreadsheet design 3.1). */
+  function lexRef(i: number, to: number): { tok: Token; next: number } {
+    let j = i + 1;
+    while (j < to && isAsciiLetter(text[j] as string)) j++;
+    const letters = text.slice(i + 1, j);
+    let rabs = false;
+    if (text[j] === '$') {
+      rabs = true;
+      j++;
+    }
+    const d0 = j;
+    while (j < to && isDigit(text[j] as string)) j++;
+    const raw = text.slice(i, j);
+    const why = referenceProblem(raw);
+    if (why !== undefined || j === d0) {
+      const end = Math.max(j, i + 1);
+      errors.push(
+        diag.at('bad_reference', i, end, 'lang.bad_reference', { token: text.slice(i, end), why: why ?? 'a reference needs a row number' }, {
+          hint: 'Write a cell reference such as $A$1, $A1 or A$1.',
+          fingerprintKey: text.slice(i, end),
+        }),
+      );
+      return { tok: { kind: 'bad', text: text.slice(i, end), s: i, e: end }, next: end };
+    }
+    const name = letters + text.slice(d0, j);
+    return { tok: { kind: 'name', text: raw, s: i, e: j, name, cabs: true, ...(rabs ? { rabs: true } : {}) }, next: j };
+  }
+
   function lexName(i: number, to: number): { tok: Token; next: number } {
     let j = i;
     while (j < to && isNameChar(text[j] as string)) j++;
+    // `A$1`: a cell reference with an absolute row
+    if (text[j] === '$' && /^[A-Za-z]+$/.test(text.slice(i, j)) && j - i <= 3 && isDigit(text[j + 1] ?? '')) {
+      let k = j + 1;
+      while (k < to && isDigit(text[k] as string)) k++;
+      const raw = text.slice(i, k);
+      const why = referenceProblem(raw);
+      if (why !== undefined) {
+        errors.push(
+          diag.at('bad_reference', i, k, 'lang.bad_reference', { token: raw, why }, { hint: 'Write a cell reference such as $A$1, $A1 or A$1.', fingerprintKey: raw }),
+        );
+        return { tok: { kind: 'bad', text: raw, s: i, e: k }, next: k };
+      }
+      return { tok: { kind: 'name', text: raw, s: i, e: k, name: text.slice(i, j) + text.slice(j + 1, k), rabs: true }, next: k };
+    }
     if (text[j] === '{' && text[j - 1] === '_') {
       // subscript P_{1,2}
       let k = j + 1;

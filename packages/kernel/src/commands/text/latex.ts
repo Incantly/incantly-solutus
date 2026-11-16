@@ -62,6 +62,7 @@ export function exprLatex(e: Expr, sub?: (name: string) => string | undefined): 
     case 'undef': return '\\text{undefined}';
     case 'str': return `\\text{${e.parts.map((p) => (typeof p === 'string' ? p : '…')).join('').replace(/[{}\\]/g, '')}}`;
     case 'name': return nameLatex(e.name, sub);
+    case 'cells': return `\\text{${e.from.name}:${e.to.name}}`;
     case 'unary': return e.op === 'not' ? `\\neg ${wrap(e.arg, PREC['unary'] as number)}` : `${e.op}${wrap(e.arg, PREC['unary'] as number)}`;
     case 'bin': {
       const p = PREC[e.op] ?? 4;

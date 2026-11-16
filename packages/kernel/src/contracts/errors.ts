@@ -79,6 +79,17 @@ export interface AreaErrorKinds {
   decimal_comma: true;
   // sound (codes C092 to C099)
   bad_note_name: true;
+  // spreadsheet (codes C100 to C119)
+  bad_reference: true;
+  range_not_object: true;
+  range_misplaced: true;
+  cell_out_of_range: true;
+  no_sheet: true;
+  cell_locked: true;
+  bad_shape: true;
+  batch_failed: true;
+  import_format: true;
+  import_conflict: true;
 }
 
 export type ErrorKind = CoreErrorKind | Extract<keyof AreaErrorKinds, string>;
@@ -148,6 +159,8 @@ export interface AreaNoticeKinds {
   catching_up: true;
   particle_shed: true;
   path_pending: true;
+  // spreadsheet
+  skipped_non_numeric: true;
 }
 
 export type NoticeKind = CoreNoticeKind | Extract<keyof AreaNoticeKinds, string>;
