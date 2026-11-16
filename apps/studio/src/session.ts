@@ -5,7 +5,7 @@
 import {
   CAS_COMMAND_NAMES, Figure, animatingIds, onCasEngine, brokenSteps, buttonLabelOf, captionsOf, choiceStateOf, clickButton, commitInputText, defaultCaption, getStoredHandler,
   inputErrorOf, inputNoticeOf, targetTextOf, inputTextOf, isClickable, listHandlers, numberSource, playerOf, runHandler, runLoadHandlers, setChoiceIndex,
-  toggleCheckbox, tracedIds, typeInputText, valueText,
+  toggleCheckbox, tracedIds, typeInputText, valueText, isMuted, setMuted,
 } from '@incantly/kernel';
 import type { HandlerEvent, HandlerRun, Player } from '@incantly/kernel';
 import type { CommandRegistry, ErrorObject, LineGate, LineOrigin, ObjectView } from '@incantly/kernel';
@@ -147,6 +147,21 @@ export class KernelSession {
   }
 
   /* ------------------------------ lines ------------------------------ */
+
+  /* ------------------------------ sound ------------------------------ */
+
+  isMuted(name: string): boolean {
+    const id = this.figure.get(name)?.id;
+    return id !== undefined && isMuted(this.figure, id);
+  }
+
+  /** The mute toggle of a sound row: playback state, not a line, so no undo step (sound ui). */
+  toggleMute(name: string): void {
+    const id = this.figure.get(name)?.id;
+    if (id === undefined) return;
+    setMuted(this.figure, id, !isMuted(this.figure, id));
+    this.controlChanged();
+  }
 
   /** The input line's handler: one line through `apply`. A failing line changes nothing. */
   submit(source: string, origin: LineOrigin = 'learner'): SubmitResult {

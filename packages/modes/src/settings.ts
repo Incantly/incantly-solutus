@@ -14,7 +14,7 @@ export type SettingType =
   | { readonly k: 'string'; readonly max: number }
   | { readonly k: 'rounding' };
 
-export type SettingGroup = 'general' | 'graphics' | 'algebra' | 'sheet' | 'keyboard' | 'accessibility' | 'language';
+export type SettingGroup = 'general' | 'graphics' | 'algebra' | 'sheet' | 'keyboard' | 'sound' | 'accessibility' | 'language';
 
 export interface SettingDef {
   readonly id: SettingId;
@@ -58,6 +58,8 @@ export const SETTINGS: readonly SettingDef[] = [
   D({ id: 'highContrast', scope: 'user', type: { k: 'bool' }, default: false, label: 'setting.highContrast', group: 'accessibility' }),
   D({ id: 'textScale', scope: 'user', type: { k: 'int', min: 80, max: 200 }, default: 100, label: 'setting.textScale', group: 'accessibility' }),
   D({ id: 'screenReaderMode', scope: 'user', type: { k: 'bool' }, default: false, label: 'setting.screenReaderMode', group: 'accessibility' }),
+  D({ id: 'masterVolume', scope: 'user', type: { k: 'int', min: 0, max: 100 }, default: 80, label: 'setting.masterVolume', group: 'sound' }),
+  D({ id: 'soundOnStart', scope: 'user', type: { k: 'bool' }, default: false, label: 'setting.soundOnStart', group: 'sound' }),
   D({ id: 'theme', scope: 'user', type: { k: 'enum', values: ['system', 'light', 'dark'] }, default: 'system', label: 'setting.theme', group: 'accessibility' }),
   D({ id: 'language', scope: 'user', type: { k: 'string', max: 20 }, default: 'auto', label: 'setting.language', group: 'language' }),
   D({ id: 'decimalSeparator', scope: 'user', type: { k: 'enum', values: ['auto', '.', ','] }, default: 'auto', label: 'setting.decimalSeparator', group: 'language' }),
@@ -285,7 +287,7 @@ export class Settings {
   /** The settings the mode's panel offers, by group, in table order. */
   panel(): { group: SettingGroup; defs: SettingDef[] }[] {
     const offered = new Set(this.mode.settings);
-    const groups: SettingGroup[] = ['general', 'graphics', 'algebra', 'sheet', 'keyboard', 'accessibility', 'language'];
+    const groups: SettingGroup[] = ['general', 'graphics', 'algebra', 'sheet', 'keyboard', 'sound', 'accessibility', 'language'];
     return groups.map((group) => ({ group, defs: SETTINGS.filter((d) => d.group === group && offered.has(d.id)) })).filter((g) => g.defs.length > 0);
   }
 

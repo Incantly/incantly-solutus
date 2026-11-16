@@ -4,6 +4,9 @@
  */
 import type { AppModeId, StorageLike } from '@incantly/modes';
 import { mountAppModes } from './modes/app';
+import { mountSoundUi } from './sound-ui';
+import type { SoundUi } from './sound-ui';
+import type { SoundEngine } from '@incantly/audio';
 import { mountScientific } from './modes/scientific';
 import { mountKeyboard } from './modes/keyboard';
 import { mountExamScreens } from './modes/exam-ui';
@@ -51,6 +54,8 @@ export interface StudioOptions {
   readonly storage?: StorageLike | null;
   /** Monotonic clock for exams; `performance.now` by default. */
   readonly now?: () => number;
+  /** The sound engine; a test passes its own. */
+  readonly soundEngine?: () => Promise<SoundEngine>;
   /** Asks for full screen at the exam start; a test passes its own. */
   readonly requestFullscreen?: () => Promise<boolean>;
 }
@@ -75,6 +80,8 @@ export interface Mounted {
   readonly keyboard: MathKeyboard;
   /** Exam mode screens. */
   readonly exam: ExamScreens;
+  /** The speaker button and the sound feed. */
+  readonly sound: SoundUi;
   /** Replaces the figure with an example's lines. */
   loadExample(id: string): void;
   undo(): void;
@@ -447,6 +454,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
     calc.refresh();
     cas.refresh();
     sciHolder.current?.refresh();
+    soundHolder.current?.refresh();
     sim.refresh();
     graph.element.classList.toggle('has-sim', sim.isShown());
     graph.redraw();
@@ -512,6 +520,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
     }
   })();
   const sciHolder: { current?: ScientificView } = {};
+  const soundHolder: { current?: SoundUi } = {};
   const examHolder: { current?: ExamScreens } = {};
   const modes = mountAppModes({
     app: appEl,
@@ -567,6 +576,18 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
     ...(opts.requestFullscreen ? { requestFullscreen: opts.requestFullscreen } : {}),
   });
   examHolder.current = exam;
+  const sound = mountSoundUi({ session, say, ...(opts.soundEngine ? { engine: opts.soundEngine } : {}), raf, caf });
+  soundHolder.current = sound;
+  (graph.element.querySelector('.graph-controls') ?? graph.element).append(sound.button);
+  sound.setVolume(modes.settings.get<number>('masterVolume') / 100);
+  modes.settings.onChange('masterVolume', (_id, v) => sound.setVolume(Number(v) / 100));
+  // "Start with sound on" (sound ui): the browser still needs a gesture, so the first click anywhere turns it on
+  const firstGesture = (): void => {
+    document.removeEventListener('pointerdown', firstGesture, true);
+    if (modes.settings.get<boolean>('soundOnStart') && !sound.isOn() && !sound.button.hidden) void sound.enable();
+  };
+  document.addEventListener('pointerdown', firstGesture, true);
+  sound.refresh();
   topRight.prepend(exam.button);
   appEl.prepend(exam.banner);
   appEl.append(exam.awayNotice, exam.startDialog, exam.finishDialog);
@@ -607,6 +628,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
     scientific,
     keyboard,
     exam,
+    sound,
     session,
     expressions: exprs,
     graph,
@@ -635,6 +657,8 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
       say(r.ok ? r.message : r.error.message);
     },
     dispose() {
+      sound.dispose();
+      document.removeEventListener('pointerdown', firstGesture, true);
       exam.dispose();
       keyboard.dispose();
       modes.dispose();
