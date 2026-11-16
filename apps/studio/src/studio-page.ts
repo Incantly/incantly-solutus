@@ -16,6 +16,8 @@ import type { ExamScreens } from './modes/exam-ui';
 import type { AppModes } from './modes/app';
 import { mountDataLab } from './datalab';
 import { mountCasPanel } from './caspanel';
+import { mountSheet } from './sheet/grid';
+import type { SheetPanel } from './sheet/grid';
 import { loadCasEngine } from './registry';
 import type { CasPanel } from './caspanel';
 import { mountProbCalc } from './probcalc';
@@ -67,6 +69,8 @@ export interface Mounted {
   readonly lab: DataLab;
   readonly calc: ProbCalc;
   readonly cas: CasPanel;
+  /** The spreadsheet view (spreadsheet ui). */
+  readonly sheet: SheetPanel;
   readonly tools: ToolStrip;
   readonly sim: SimStrip;
   /** What is selected in the list and on the canvas (algebra-view design 3.9). */
@@ -234,6 +238,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
   const lab = mountDataLab(session, registry, say);
   const calc = mountProbCalc(session, registry, say);
   const cas = mountCasPanel(session, say);
+  const sheet = mountSheet({ session, say, pick: (n) => selection.set(n) });
   const sim = mountSimStrip({ session, registry, say, selected: () => selection.names(), ...(opts.every ? { every: opts.every } : {}) });
   graph.element.append(sim.element);
   // the panel's Simulate section opens the strip (ui.md 6)
@@ -263,14 +268,35 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
     examples.value = '';
   });
   /** One side panel at a time: opening one closes the others. */
-  const closeOthers = (keep: 'lab' | 'calc' | 'cas'): void => {
+  const closeOthers = (keep: 'lab' | 'calc' | 'cas' | 'sheet'): void => {
     if (keep !== 'lab' && lab.isOpen()) lab.close();
     if (keep !== 'calc' && calc.isOpen()) calc.close();
     if (keep !== 'cas' && cas.isOpen()) cas.close();
+    if (keep !== 'sheet' && sheet.isOpen()) sheet.close();
     labBtn.classList.toggle('on', lab.isOpen());
     calcBtn.classList.toggle('on', calc.isOpen());
     casBtn.classList.toggle('on', cas.isOpen());
+    sheetBtn.classList.toggle('on', sheet.isOpen());
   };
+  const openSheet = (): void => {
+    closeOthers('sheet');
+    sheet.open();
+    sheetBtn.classList.add('on');
+    requestAnimationFrame(() => {
+      graph.paint();
+      graph.fit();
+    });
+  };
+  const sheetBtn = btn('Sheet', 'tool-btn', 'Open the spreadsheet: cells are objects', () => {
+    if (sheet.isOpen()) {
+      sheet.close();
+      sheetBtn.classList.remove('on');
+      requestAnimationFrame(() => {
+        graph.paint();
+        graph.fit();
+      });
+    } else openSheet();
+  });
   const casBtn = btn('CAS', 'tool-btn', 'Open the CAS view: algebra row by row', () => {
     if (cas.isOpen()) cas.close();
     else {
@@ -351,7 +377,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
   help.append(el('h2', {}, 'Keyboard'), keys, el('div', { class: 'dialog-actions' }, btn('Close', 'secondary', 'Close', () => help.close())));
   const helpBtn = btn('?', 'icon-btn', 'Keyboard shortcuts', () => (typeof help.showModal === 'function' ? help.showModal() : help.setAttribute('open', '')));
 
-  const topTools = el('div', { class: 'top-tools' }, newBtn, examples, labBtn, calcBtn, casBtn, scriptBtn);
+  const topTools = el('div', { class: 'top-tools' }, newBtn, examples, sheetBtn, labBtn, calcBtn, casBtn, scriptBtn);
   const topRight = el('div', { class: 'top-right' }, undoBtn, redoBtn, helpBtn);
   const top = el('header', { class: 'topbar' },
     el('div', { class: 'brand' }, el('span', { class: 'logo', 'aria-hidden': 'true' }, '∿'), el('span', { class: 'brand-name' }, 'Incantly'), el('span', { class: 'brand-sub' }, 'Studio')),
@@ -411,7 +437,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
     el('footer', { class: 'panel-foot' }, status),
   );
   const split = el('div', { class: 'split', role: 'separator', 'aria-orientation': 'vertical', 'aria-label': 'Resize the expression list', tabindex: '0' });
-  const main = el('div', { class: 'workspace' }, panel, split, graph.element, lab.element, calc.element, cas.element);
+  const main = el('div', { class: 'workspace' }, panel, split, graph.element, sheet.element, lab.element, calc.element, cas.element);
   const appEl = el('div', { class: 'app' }, top, main);
   root.replaceChildren(appEl, dialog, help);
 
@@ -453,6 +479,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
     lab.refresh();
     calc.refresh();
     cas.refresh();
+    sheet.refresh();
     sciHolder.current?.refresh();
     soundHolder.current?.refresh();
     sim.refresh();
@@ -462,6 +489,13 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
   const off = session.onChange(sync);
   calc.element.addEventListener('lab-closed', () => {
     calcBtn.classList.remove('on');
+    requestAnimationFrame(() => {
+      graph.paint();
+      graph.fit();
+    });
+  });
+  sheet.element.addEventListener('lab-closed', () => {
+    sheetBtn.classList.remove('on');
     requestAnimationFrame(() => {
       graph.paint();
       graph.fit();
@@ -534,6 +568,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
         cas.open();
         void loadCasEngine();
       }, close: () => cas.close(), isOpen: () => cas.isOpen(), button: casBtn },
+      sheet: { open: () => openSheet(), close: () => sheet.close(), isOpen: () => sheet.isOpen(), button: sheetBtn },
       results: { open: () => sciHolder.current?.open(), close: () => sciHolder.current?.close(), isOpen: () => sciHolder.current?.isOpen() ?? false },
     },
     canSwitch: () => {
@@ -635,6 +670,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
     lab,
     calc,
     cas,
+    sheet,
     tools,
     sim,
     selection,
@@ -644,6 +680,8 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
       if (!ex) return;
       const r = session.load(ex.lines.join('\n'));
       say(r.replaced ? `${ex.title}: ${r.applied} of ${r.total} lines.${r.errors.length ? ` ${r.errors[0]?.message ?? ''}` : ''}` : `Could not open ${ex.title}.`);
+      // a figure with a sheet opens it, where the app has one (spreadsheet ui 1)
+      if (session.figure.directive('sheet') && !sheetBtn.hidden && !sheet.isOpen()) openSheet();
       sync();
       graph.paint();
       graph.fit();
