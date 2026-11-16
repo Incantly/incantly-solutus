@@ -23,7 +23,7 @@ import { symDrawing } from './graph/symplot';
 import type { ToolStrip } from './tools-ui';
 import type { ProbCalc } from './probcalc';
 import type { DataLab } from './datalab';
-import { EXAMPLES } from './examples';
+import { EXAMPLES, examplesFor } from './examples';
 import { drawsOnGraph, mountExpressions } from './expressions';
 import type { ExpressionList } from './expressions';
 import { mountGraph } from './graph/graph-pane';
@@ -169,6 +169,12 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
   const graph = mountGraph({
     items,
     bounds: () => {
+      // the figure's own `@view x0 x1 y0 y1` wins over zoom to fit (it is how a film frames itself)
+      const v = /^@view\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s*$/m.exec(session.save());
+      if (v) {
+        const [x0, x1, y0, y1] = v.slice(1, 5).map(Number) as [number, number, number, number];
+        if (x0 < x1 && y0 < y1) return { x0, x1, y0, y1 };
+      }
       const all = items();
       const b = sceneBounds(all);
       // data charts and fits may stretch the axes; geometry keeps one unit the same length both ways
@@ -234,8 +240,17 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
   const undoBtn = btn('↶', 'icon-btn', 'Undo', () => api.undo());
   const redoBtn = btn('↷', 'icon-btn', 'Redo', () => api.redo());
   const examples = el('select', { class: 'examples', 'aria-label': 'Open an example' });
-  examples.append(el('option', { value: '' }, 'Examples…'));
-  for (const e of EXAMPLES) examples.append(el('option', { value: e.id }, e.title));
+  /** The menu lists the examples made for the app in use (.kiro/specs/mode-examples R1). */
+  const fillExamples = (mode: AppModeId, title: (m: AppModeId) => string): void => {
+    examples.replaceChildren(el('option', { value: '' }, 'Examples…'));
+    const groups = examplesFor(mode);
+    for (const g of groups) {
+      const into = groups.length > 1 ? el('optgroup', { label: title(g.group) }) : examples;
+      for (const e of g.examples) into.append(el('option', { value: e.id }, e.title));
+      if (into !== examples) examples.append(into);
+    }
+    examples.hidden = groups.length === 0;
+  };
   examples.addEventListener('change', () => {
     if (examples.value) api.loadExample(examples.value);
     examples.value = '';
@@ -563,12 +578,28 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
     // the scientific keyboard is always shown (ui 2)
     if (sci) keyboard.open();
   };
+  const titleOf = (id: AppModeId): string => modes.i18n.t(`mode.${id}.title`);
+  fillExamples(modes.mode.id, titleOf);
   modes.onChange((m) => {
+    fillExamples(m.id, titleOf);
     keyboard.setMode(m);
     exam.setMode(m);
     sciShown();
+    placeClock();
   });
+  /** The play bar sits under the list; with no list (geometry) it floats on the graph, so films can still play. */
+  const foot = panel.querySelector('.panel-foot');
+  const placeClock = (): void => {
+    if (panel.hidden && !graph.element.hidden) {
+      clock.classList.add('clock-float');
+      graph.element.append(clock);
+    } else if (clock.parentElement !== panel) {
+      clock.classList.remove('clock-float');
+      panel.insertBefore(clock, foot);
+    }
+  };
   sciShown();
+  placeClock();
   if (opts.start) modes.showStart();
 
   const api: Mounted = {

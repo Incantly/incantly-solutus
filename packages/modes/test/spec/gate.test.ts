@@ -53,6 +53,12 @@ describe('the gate in a mode (R3.1)', () => {
     expect(f.get('c')).toBeUndefined();
   });
 
+  it('a command two areas give is judged by the form used (Normal: a line, a curve normal or a distribution)', () => {
+    expect(CAT.filter((c) => c.name === 'Normal').map((c) => c.group).sort()).toEqual(['distributions', 'functions', 'geometry']);
+    expect(figureIn([layer(MODES.probability)]).apply('d = Normal(0, 1)', { origin: 'learner' }).ok).toBe(true);
+    expect(forbids(figureIn([layer(MODES.geometry)]), 'd = Normal(0, 1)').command).toBe('Normal');
+  });
+
   it('scientific refuses equations and texts', () => {
     const f = figureIn([layer(MODES.scientific)]);
     expect(forbids(f, 'cc = x^2 + y^2 == 4').message).toMatch(/equation/);

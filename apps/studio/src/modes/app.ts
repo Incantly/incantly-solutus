@@ -112,7 +112,7 @@ export function mountAppModes(p: ModeHostParts, initial: AppModeId = 'classic'):
       view.button?.classList.toggle('on', view.isOpen());
     }
     if (p.buttons.script) p.buttons.script.hidden = !(m.features.fileOps || m.features.scripting);
-    if (p.buttons.examples) p.buttons.examples.hidden = m.id === 'scientific';
+    if (p.buttons.examples) p.buttons.examples.hidden = m.id === 'figure' || p.buttons.examples.childElementCount <= 1;
     const policy = compilePolicy(m);
     p.tools.setAllowed(m.tools.toolbar === 'none' ? () => false : (id, group) => policy.tool(id, group as never));
     p.tools.element.hidden = m.tools.toolbar === 'none' || !showGraphics;
