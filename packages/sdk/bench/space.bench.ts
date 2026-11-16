@@ -77,3 +77,23 @@ describe('the Space view (R5.2)', () => {
     expect(pick).toBeLessThan(0.5);
   });
 });
+
+describe('surfaces and particles (.kiro/specs/space-3d-surfaces R4.2)', () => {
+  it('a 40 × 40 surface meshes in under 8 ms; 2,000 particles and a surface paint in under 16 ms', () => {
+    const app = createHeadlessApp({
+      mode: 'graphing3d',
+      script: [
+        'f(x, y) = sin(sqrt(x^2 + y^2) * 1.5 - 2t) / (1 + 0.1 * (x^2 + y^2))',
+        'stars = Particles(count = 2000, life = 6, pos = ((0.5 + 4 * u) * cos(6 * u + t), (0.5 + 4 * u) * sin(6 * u + t), 3 + 0.3 * (w - 0.5)), size = 0.04)',
+      ].join('\n'),
+    });
+    app.clock.seek(1.5);
+    const view = space.viewAt(app.figure);
+    const surfaceOnly = createHeadlessApp({ mode: 'graphing3d', script: 'f(x, y) = sin(x) * cos(y)\nspace with axes = false, floor = false, grid = false' });
+    const mesh = best(10, () => void sceneOf3(surfaceOnly.figure, space.viewOf(surfaceOnly.figure)));
+    const frame = best(8, () => void paintSpace(NULL_CTX, view, 1000, 700, sceneOf3(app.figure, view)));
+    console.log(`surface mesh (1,600 cells): ${mesh.toFixed(2)} ms; frame with 2,000 particles and the surface: ${frame.toFixed(2)} ms`);
+    expect(mesh).toBeLessThan(8);
+    expect(frame).toBeLessThan(16);
+  });
+});
