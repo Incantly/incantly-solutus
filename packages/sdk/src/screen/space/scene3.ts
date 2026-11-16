@@ -5,6 +5,7 @@
  */
 import { colorHex, space } from '@incantly/kernel';
 import type { Figure } from '@incantly/kernel';
+import { curveRuns, gridFaces } from './mesh3';
 
 type V3 = space.V3;
 const { add, dot, frameOf, fromFrame, isV3, scale, sub, unit } = space;
@@ -46,6 +47,9 @@ export interface FaceItem {
   readonly occludes: boolean;
   /** Shaded by the light; the floor is not. */
   readonly shade: boolean;
+  /** Grid lines drawn on the face: the colour, and which sides (a→b, b→c, c→d, d→a). */
+  readonly stroke?: string;
+  readonly edges?: readonly [boolean, boolean, boolean, boolean];
 }
 
 export interface LabelItem {
@@ -209,6 +213,43 @@ export function sceneOf3(figure: Figure, view: space.View3, opts: Scene3Options 
       case 'Cone': {
         const s = v as space.Cylinder3;
         items.push(...roundFaces(id, s, o.type === 'Cone', color, alpha));
+        break;
+      }
+      case 'Surface': {
+        const s = v as space.Surface3;
+        const N = 36;
+        const du = (s.u[1] - s.u[0]) / N;
+        const dv = (s.v[1] - s.v[0]) / N;
+        for (const f of gridFaces(N, (i, j) => s.at(s.u[0] + du * i, s.v[0] + dv * j), { step: 4 })) {
+          items.push({ k: 'face', id, pts: f.pts, color: f.color, alpha, occludes: alpha >= 0.3, shade: true, stroke: darker(f.color, 0.55), edges: f.edges });
+        }
+        break;
+      }
+      case 'Curve3': {
+        const c = v as space.Curve3;
+        for (const run of curveRuns(c.at, c.lo, c.hi)) items.push(...loopLines(id, run, color, width, false));
+        break;
+      }
+      case 'Function': {
+        // a function of two variables is the surface z = f(x, y) over the floor (.kiro/specs/space-3d-surfaces R1.1)
+        const fn = v as { arity?: number; ret?: string; call(...xs: number[]): unknown };
+        if (fn.arity !== 2 || fn.ret !== 'Number' || typeof fn.call !== 'function') break;
+        const N = 40;
+        const x0 = C.x - L;
+        const y0 = C.y - L;
+        const d = (2 * L) / N;
+        const zMax = 2 * L;
+        const at = (i: number, j: number): V3 | undefined => {
+          const x = x0 + d * i;
+          const y = y0 + d * j;
+          const z = fn.call(x, y);
+          return typeof z === 'number' && Number.isFinite(z) ? { x, y, z } : undefined;
+        };
+        const keep = (p: V3): boolean => Math.abs(p.z - C.z) <= zMax;
+        const a = Math.max(0.05, Math.min(1, o.style.opacity > 0 ? Math.max(o.style.opacity, 0.85) : 0.85));
+        for (const f of gridFaces(N, at, { step: 5, keep })) {
+          items.push({ k: 'face', id, pts: f.pts, color: f.color, alpha: a, occludes: true, shade: true, stroke: darker(f.color, 0.55), edges: f.edges });
+        }
         break;
       }
       default:

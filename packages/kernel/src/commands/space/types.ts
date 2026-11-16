@@ -44,17 +44,17 @@ export interface Cone3 { readonly shape3: 'Cone'; readonly a: V3; readonly b: V3
 
 export type Shape3 = Line3 | Ray3 | Segment3 | Plane3 | Polygon3 | Circle3 | Polyhedron | Sphere3 | Cylinder3 | Cone3;
 
-export function shape3Of(v: unknown): Shape3['shape3'] | 'View3' | undefined {
+export function shape3Of(v: unknown): Shape3['shape3'] | 'View3' | 'Surface' | 'Curve3' | undefined {
   if (typeof v !== 'object' || v === null) return undefined;
   const s = (v as { shape3?: unknown }).shape3;
-  return typeof s === 'string' ? (s as Shape3['shape3'] | 'View3') : undefined;
+  return typeof s === 'string' ? (s as Shape3['shape3'] | 'View3' | 'Surface' | 'Curve3') : undefined;
 }
 
 export const is3 = <K extends Shape3['shape3']>(v: unknown, k: K): v is Extract<Shape3, { shape3: K }> => shape3Of(v) === k;
 
 /** The 3D type names, for the table check and the mode catalogue. */
 export const SPACE_TYPES: readonly string[] = [
-  'Point3', 'Vector3', 'Line3', 'Segment3', 'Ray3', 'Plane', 'Polygon3', 'Circle3', 'Polyhedron', 'Sphere', 'Cylinder', 'Cone', 'View3',
+  'Point3', 'Vector3', 'Line3', 'Segment3', 'Ray3', 'Plane', 'Polygon3', 'Circle3', 'Polyhedron', 'Sphere', 'Cylinder', 'Cone', 'View3', 'Surface', 'Curve3',
 ];
 
 /** The flat type a 3D type is the counterpart of, for `mixed_dimension`. */
