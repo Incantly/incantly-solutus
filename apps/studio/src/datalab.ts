@@ -6,9 +6,9 @@
  */
 import { Figure, valueText } from '@incantly/kernel';
 import type { CommandRegistry } from '@incantly/kernel';
-import { colorAt, paintScene, sceneBounds } from './graph/paint';
-import type { SceneItem } from './graph/paint';
-import { Viewport } from './graph/viewport';
+import { colorAt, paintScene, sceneBounds } from '@incantly/sdk/screen';
+import type { SceneItem } from '@incantly/sdk/screen';
+import { Viewport } from '@incantly/sdk/screen';
 import type { KernelSession } from './session';
 
 export type Mode = 'one' | 'two' | 'several';

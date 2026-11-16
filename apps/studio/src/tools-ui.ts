@@ -7,12 +7,12 @@ import { Figure } from '@incantly/kernel';
 import type { CommandRegistry } from '@incantly/kernel';
 import { GROUPS, TOOLS, ToolSession, toolById } from '@incantly/ui';
 import type { Hit, StepResult, ToolDone, ToolSpec } from '@incantly/ui';
-import type { GraphTool } from './graph/graph-pane';
-import { hitTest } from './graph/hit';
-import { colorAt, paintItem } from './graph/paint';
-import { gridStep } from './graph/viewport';
-import type { SceneItem } from './graph/paint';
-import type { Viewport } from './graph/viewport';
+import type { GraphTool } from '@incantly/sdk/screen';
+import { hitTest } from '@incantly/sdk/screen';
+import { colorAt, paintItem } from '@incantly/sdk/screen';
+import { gridStep } from '@incantly/sdk/screen';
+import type { SceneItem } from '@incantly/sdk/screen';
+import type { Viewport } from '@incantly/sdk/screen';
 import { figureHost } from './tools-host';
 import type { KernelSession } from './session';
 

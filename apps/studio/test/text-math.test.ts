@@ -1,8 +1,8 @@
 /** Typeset texts in the studio (text-logic design 6 and 7): maths in list rows, placed texts on the graph. */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { paintScene, verticalParts } from '../src/graph/paint';
-import type { SceneItem } from '../src/graph/paint';
-import { Viewport } from '../src/graph/viewport';
+import { paintScene, verticalParts } from '@incantly/sdk/screen';
+import type { SceneItem } from '@incantly/sdk/screen';
+import { Viewport } from '@incantly/sdk/screen';
 import { mountStudio } from '../src/studio-page';
 import type { Mounted } from '../src/studio-page';
 

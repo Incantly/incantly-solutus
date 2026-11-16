@@ -5,8 +5,8 @@
  */
 import { isSymValue, valueText } from '@incantly/kernel';
 import type { ErrorObject, ObjectView, SymValue } from '@incantly/kernel';
-import { mathElement } from './graph/mathdraw';
-import { hasDrawing } from './graph/symplot';
+import { mathElement } from '@incantly/sdk/screen';
+import { hasDrawing } from '@incantly/sdk/screen';
 import type { KernelSession } from './session';
 
 export interface CasPanel {
