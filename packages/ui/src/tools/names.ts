@@ -15,7 +15,7 @@ const SEQUENCES: Readonly<Record<string, readonly string[]>> = {
 };
 
 /** Kinds whose names are a word and a count: `poly1`, `poly2`. */
-const NUMBERED: Readonly<Record<string, string>> = { polygon: 'poly', region: 'reg', text: 'text', fit: 'fit', locus: 'locus', bool: 'cond', relation: 'rel', body: 'body', joint: 'joint', ground: 'ground' };
+const NUMBERED: Readonly<Record<string, string>> = { polygon: 'poly', region: 'reg', text: 'text', fit: 'fit', locus: 'locus', bool: 'cond', relation: 'rel', body: 'body', joint: 'joint', ground: 'ground', water: 'water', liquid: 'liquid' };
 
 /**
  * The first free name of a kind: the letters in order, then the letters with `_1`, `_2`, … (`A_1`), or a word with a

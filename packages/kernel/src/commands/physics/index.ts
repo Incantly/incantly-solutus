@@ -35,6 +35,8 @@ import { body3ShapeOf, isBody3Value, startOf3 } from './body3';
 import type { Body3Value, BodySpec3 } from './body3';
 import { JOINT_COMMANDS, MEASURE_COMMANDS, isJointValue } from './joints';
 import { VEHICLE_COMMANDS, isVehicleValue, isWheelValue } from './vehicle';
+import { registerLiquids } from './liquid-reg';
+import { LIQUID_COMMANDS } from './liquid';
 import type { BodySpec, BodyValue, Outline, WorldValue } from './types';
 import { DEFAULT_WORLD, SHOW_WORDS, isBodyValue, isWorldValue } from './types';
 
@@ -49,6 +51,8 @@ export { isBody3Value, solidNow } from './body3';
 export type { Body3Value, BodySpec3 } from './body3';
 export type { VehicleValue, WheelValue } from './vehicle';
 export type { JointValue, JointKind } from './joints';
+export { isLiquidValue, isWaterValue } from './liquid';
+export type { LiquidValue, LiquidSpec, WaterValue } from './liquid';
 
 /** The limits of design 11.3, the same on every computer. */
 export const PHYSICS_LIMITS = Object.freeze({ bodies: 1000, joints: 1000, liquid: 2000, grid: 64, groundPieces: 2000, contactPoints: 4000 });
@@ -765,6 +769,7 @@ let registered = false;
 
 export function registerPhysics(registry: CommandRegistry): void {
   registry.registerAll([...PHYSICS_COMMANDS, ...JOINT_COMMANDS, ...MEASURE_COMMANDS, ...VEHICLE_COMMANDS]);
+  registry.registerAll(LIQUID_COMMANDS);
   if (registered) return;
   registered = true;
   registerWorldDriver((figure) => {
@@ -844,6 +849,7 @@ export function registerPhysics(registry: CommandRegistry): void {
   registerNotice('unstable_world', { code: 'B109', severity: 'warning', template: '{name} became unstable at t = {t} s: {hint}.' });
   registerNotice('physics_behind', { code: 'B110', severity: 'info', template: 'The film plays slower than real time on this computer; it is the same film.' });
   registerNotice('broken', { code: 'B111', severity: 'info', template: '{name} broke at t = {t} s.' });
+  registerLiquids();
 }
 
 const fmt = (x: number): string => (Number.isFinite(x) ? String(Number(x.toFixed(3))) : String(x));

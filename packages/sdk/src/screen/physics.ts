@@ -26,7 +26,7 @@ export const FORCE_STYLE: Readonly<Record<string, { color: string; label: string
 const KINDS = ['gravity', 'normal', 'friction', 'tension', 'spring', 'buoyancy', 'drag', 'electric', 'applied', 'net'] as const;
 
 export function isPhysicsItem(it: SceneItem): boolean {
-  return it.type === 'Body' || it.type === 'Joint' || it.type === 'Wheel' || it.type === 'Contacts' || (it.type === 'List' && /^List<(Body|Joint|Wheel)>/.test(it.typeText));
+  return it.type === 'Body' || it.type === 'Joint' || it.type === 'Wheel' || it.type === 'Contacts' || it.type === 'Liquid' || it.type === 'Water' || (it.type === 'List' && /^List<(Body|Joint|Wheel)>/.test(it.typeText));
 }
 
 function bodiesOf(it: SceneItem): physics.BodyValue[] {
@@ -250,8 +250,96 @@ function paintWheel(ctx: Ctx, vp: Viewport, w: physics.WheelValue, hits: Hit[], 
   hits.push({ k: 'circle', x, y, r: Math.max(10, r), text: `${name}: ${fmt(Math.abs(w.spin))} rad/s${w.broken ? ', broken off' : ''}`, id });
 }
 
-/** Paints one physics item: a body or bodies, a joint or joints, or the contact points. */
+/** The default look of liquid and water (ui.md 7): light blue drops, a light blue fill under a darker line. */
+const LIQUID_BLUE = '#5aa7e8';
+const WATER_BLUE = '#2f7fc1';
+
+/** Liquid: every drop a disc in one batch, so 2,000 drops cost one fill (ui.md 7). */
+function paintLiquid(ctx: Ctx, vp: Viewport, l: physics.LiquidValue, it: SceneItem, hits: Hit[]): void {
+  const n = Math.min(l.xs.length, l.ys.length);
+  if (n === 0) return;
+  const r = Math.max(1.5, 0.5 * l.size * vp.ppu * 1.3);
+  ctx.save();
+  ctx.fillStyle = withAlpha(l.spec.color ?? LIQUID_BLUE, 0.85);
+  ctx.beginPath();
+  let sx = 0;
+  let sy = 0;
+  for (let i = 0; i < n; i++) {
+    const x = vp.px(l.xs[i] as number);
+    const y = vp.py(l.ys[i] as number);
+    sx += x;
+    sy += y;
+    ctx.moveTo(x + r, y);
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+  }
+  ctx.fill();
+  ctx.restore();
+  hits.push({ k: 'circle', x: sx / n, y: sy / n, r: 14, text: `${it.name}: ${l.count} drops${Number.isFinite(l.level) ? `, level ${fmt(l.level)}` : ''}`, id: it.id });
+}
+
+/** Still water: a light fill below a darker line, inside its region when it has one (ui.md 7). */
+function paintWater(ctx: Ctx, vp: Viewport, w: physics.WaterValue, it: SceneItem, hits: Hit[]): void {
+  const b = vp.box();
+  let pts: Pt[];
+  if (w.region) pts = clipBelow(w.region, w.level);
+  else {
+    if (w.level < b.y0) return;
+    const top = Math.min(w.level, b.y1 + 1);
+    pts = [{ x: b.x0 - 1, y: b.y0 - 1 }, { x: b.x1 + 1, y: b.y0 - 1 }, { x: b.x1 + 1, y: top }, { x: b.x0 - 1, y: top }];
+  }
+  if (pts.length < 3) return;
+  ctx.save();
+  ctx.fillStyle = withAlpha(WATER_BLUE, 0.25);
+  ctx.beginPath();
+  pts.forEach((p, k) => (k === 0 ? ctx.moveTo(vp.px(p.x), vp.py(p.y)) : ctx.lineTo(vp.px(p.x), vp.py(p.y))));
+  ctx.closePath();
+  ctx.fill();
+  // the surface: the top edge of the water
+  let x0 = Infinity;
+  let x1 = -Infinity;
+  for (const p of pts) if (Math.abs(p.y - w.level) < 1e-9) {
+    x0 = Math.min(x0, p.x);
+    x1 = Math.max(x1, p.x);
+  }
+  if (x1 > x0) {
+    ctx.strokeStyle = WATER_BLUE;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(vp.px(x0), vp.py(w.level));
+    ctx.lineTo(vp.px(x1), vp.py(w.level));
+    ctx.stroke();
+    hits.push({ k: 'circle', x: vp.px((Math.max(x0, b.x0) + Math.min(x1, b.x1)) / 2), y: vp.py(w.level), r: 10, text: `${it.name}: water, level ${fmt(w.level)}`, id: it.id });
+  }
+  ctx.restore();
+}
+
+/** The part of a polygon below y = level (Sutherland and Hodgman against one line). */
+function clipBelow(pts: readonly Pt[], level: number): Pt[] {
+  const out: Pt[] = [];
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i] as Pt;
+    const q = pts[(i + 1) % pts.length] as Pt;
+    const pin = p.y <= level;
+    const qin = q.y <= level;
+    if (pin) out.push(p);
+    if (pin !== qin) {
+      const t = (level - p.y) / (q.y - p.y);
+      out.push({ x: p.x + t * (q.x - p.x), y: level });
+    }
+  }
+  return out;
+}
+
+/** Paints one physics item: a body or bodies, a joint or joints, liquid, water, or the contact points. */
 export function paintPhysicsItem(ctx: Ctx, vp: Viewport, it: SceneItem, hits: Hit[], scale: number): void {
+  if (physics.isLiquidValue(it.value)) {
+    paintLiquid(ctx, vp, it.value, it, hits);
+    return;
+  }
+  if (physics.isWaterValue(it.value)) {
+    paintWater(ctx, vp, it.value, it, hits);
+    return;
+  }
   if (it.type === 'Contacts') {
     const pts = (it.value as { x: number; y: number; nx: number; ny: number }[]) ?? [];
     ctx.fillStyle = '#b3261e';

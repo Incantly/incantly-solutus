@@ -574,6 +574,8 @@ export class KernelSession {
       if (v.type === 'Particles' || v.state) return true;
       // a body moves with the film (physics ui.md 2)
       if (v.type === 'Body' || v.typeText === 'List<Body>' || v.type === 'Body3' || v.typeText === 'List<Body3>') return true;
+      // liquid flows with the film (physics design 9.1)
+      if (v.type === 'Liquid') return true;
       if (/\banimate\s*=/.test(v.definition)) return true;
     }
     if (/^@clock /m.test(this.figure.toScript())) return true;

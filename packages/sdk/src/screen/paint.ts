@@ -1098,7 +1098,7 @@ export function paintScene(ctx: Ctx, vp: Viewport, items: readonly SceneItem[]):
   stemOffset = 0;
   paintGrid(ctx, vp);
   // areas and charts first, then curves, then points on top
-  const rank = (t: string): number => (t === 'Point' ? 3 : t === 'Chart' || t === 'Region' || t === 'Polygon' || t.endsWith('Distribution') ? 0 : t === 'List' ? 2 : 1);
+  const rank = (t: string): number => (t === 'Point' ? 3 : t === 'Water' || t === 'Chart' || t === 'Region' || t === 'Polygon' || t.endsWith('Distribution') ? 0 : t === 'List' ? 2 : 1);
   const sorted = [...items].sort((a, b) => rank(a.type) - rank(b.type));
   const scale = forceScale(items);
   for (const it of sorted) {
@@ -1194,6 +1194,15 @@ export function sceneBounds(items: readonly SceneItem[]): { x0: number; x1: numb
         } else if (s?.schema === 'Joint') {
           add(s.ax as number, s.ay as number);
           add(s.bx as number, s.by as number);
+        } else if (s?.schema === 'Liquid') {
+          const l = s as unknown as { xs: Float32Array; ys: Float32Array; spec: { region?: Pt[]; at?: Pt } };
+          for (const p of l.spec.region ?? []) add(p.x, p.y);
+          if (l.spec.at) add(l.spec.at.x, l.spec.at.y);
+          for (let i = 0; i < l.xs.length; i += 8) add(l.xs[i] as number, l.ys[i] as number);
+        } else if (s?.schema === 'Water') {
+          const wv = s as unknown as { level: number; region?: Pt[] };
+          for (const p of wv.region ?? []) add(p.x, p.y);
+          if (!wv.region) add(0, wv.level);
         }
       }
     } else if (it.type === 'Chart' && isRec(v)) {

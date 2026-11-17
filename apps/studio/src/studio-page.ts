@@ -435,11 +435,14 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
     }
     readout.textContent = `t = ${session.time().toFixed(2)} s${mark}`;
     // the physics row of physics ui.md 12: frame time, awake bodies, touching points
-    const w = physicsOf(session.figure).world;
+    const pd = physicsOf(session.figure);
+    const w = pd.world;
     perf.hidden = !w;
     if (w) {
       frameAvg = frameAvg * 0.9 + cost * 0.1;
-      perf.textContent = `${frameAvg.toFixed(1)} ms · ${w.awakeCount()} awake · ${w.contactCount} contacts`;
+      // drops when there are any (physics ui.md 12)
+      const drops = pd.fluid?.ps.n ?? 0;
+      perf.textContent = `${frameAvg.toFixed(1)} ms · ${w.awakeCount()} awake · ${w.contactCount} contacts${pd.fluid ? ` · ${drops} drops` : ''}`;
       perf.classList.toggle('busy', frameAvg > 6);
     }
     // a spinning camera changes no object, so the Space view is told each frame
