@@ -83,6 +83,9 @@ Rules:
 | Curve samples | 4,000 per curve on screen | Adaptive sampler stops refining |
 | Labels shown | 300 | Lowest-priority labels hidden, with a notice |
 | Sounds at once | 8 | See `docs/features/sound/` |
+| Physics bodies and joints | 1,000 each | Line refused with `limit`; see `docs/features/physics/` |
+| Liquid particles | 2,000 | Line refused with `limit` |
+| Physics time per frame | 6 ms on a CPU 4 times slower than the build machine | The film plays slower, never differently |
 
 ### Techniques
 
