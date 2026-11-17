@@ -73,7 +73,6 @@ describe('physics in space (design 11.2)', () => {
       expect(1 - 2 * (qx * qx + qy * qy)).toBeGreaterThan(0.8);
       if (r.mean < best.mean) best = r;
     }
-    // eslint-disable-next-line no-console -- the bench reports its numbers
     console.log(`3D car on 128 x 128 terrain: ${best.mean.toFixed(4)} ms a frame on average, worst ${best.worst.toFixed(3)} ms`);
     expect(best.mean).toBeLessThan(0.12);
   });
@@ -89,7 +88,6 @@ describe('physics in space (design 11.2)', () => {
       f.flush();
       best = Math.min(best, performance.now() - t);
     }
-    // eslint-disable-next-line no-console -- the bench reports its numbers
     console.log(`one car line in a figure with 128 x 128 terrain: ${best.toFixed(3)} ms`);
     expect(best).toBeLessThan(0.25);
   });
