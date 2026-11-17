@@ -877,6 +877,9 @@ export class Wheel3 implements Joint3 {
     const J = this.push * h;
     push(w, this.a, 1, this.rb, [n[0] * J, n[1] * J, n[2] * J]);
     push(w, this.ground, -1, this.ra, [n[0] * J, n[1] * J, n[2] * J]);
+    // the tyre pushes the chassis at the wheel's hub, as an axle does, so a hard turn leans the car instead of rolling
+    // it over on the slightest slope (the ground takes the same push at the touch point)
+    this.rb = [this.rb[0] + n[0] * r, this.rb[1] + n[1] * r, this.rb[2] + n[2] * r];
     // the tyre's frame on the ground
     const fn = dot(f, n);
     this.f = unitOf([f[0] - n[0] * fn, f[1] - n[1] * fn, f[2] - n[2] * fn]);

@@ -2054,8 +2054,33 @@ function clearOfTri(f: Heightfield, i: number, j: number, t: number, B: Shape3, 
     return gx * gx + gy * gy + gz * gz > reach * reach;
   }
   const v = B.wv;
-  for (let q = 0; q < v.length; q += 3) if (nx * ((v[q] as number) - xa) + ny * ((v[q + 1] as number) - ya) + nz * ((v[q + 2] as number) - za) <= margin) return false;
-  return true;
+  let near = false;
+  for (let q = 0; q < v.length; q += 3) {
+    if (nx * ((v[q] as number) - xa) + ny * ((v[q + 1] as number) - ya) + nz * ((v[q + 2] as number) - za) <= margin) {
+      near = true;
+      break;
+    }
+  }
+  if (!near) return true;
+  // the hull's own faces are separating axes too: a slab wholly outside one face cannot touch (a tilted car over hills)
+  const px = [xa, xa + ux, xa + vx];
+  const py = [ya, ya + uy, ya + vy];
+  const pz = [za, za + uz, za + vz];
+  for (let k = 0; k < B.faces.length; k++) {
+    const fx = B.wn[k * 3] as number;
+    const fy = B.wn[k * 3 + 1] as number;
+    const fz = B.wn[k * 3 + 2] as number;
+    const o = ((B.faces[k] as Int32Array)[0] as number) * 3;
+    const off = fx * (v[o] as number) + fy * (v[o + 1] as number) + fz * (v[o + 2] as number) + margin;
+    let out = true;
+    for (let c = 0; c < 3 && out; c++) {
+      const d = fx * (px[c] as number) + fy * (py[c] as number) + fz * (pz[c] as number);
+      // the slab's corner on top, and the one half a unit under it
+      if (d <= off || d - 0.5 * fz <= off) out = false;
+    }
+    if (out) return true;
+  }
+  return false;
 }
 
 /** The slab under a terrain triangle, made once when first met; null where the terrain is undefined. */
