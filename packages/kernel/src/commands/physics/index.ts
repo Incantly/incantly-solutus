@@ -25,6 +25,7 @@ import type { CallCheck, CommandSpec, FormCheck, ParamSpec, Refusal } from '../.
 import { T } from '../../language/types';
 import type { Ty } from '../../language/types';
 import { makePolygon } from '../geometry/polygons';
+import { polyhedron } from '../space/solids';
 import { polygonMass } from '../../physics/geom2';
 import { cos, sin } from '../../physics/math';
 import { FORCE_KINDS } from '../../physics/world2';
@@ -34,7 +35,7 @@ import { bodyShapeOf } from './shapes';
 import { body3ShapeOf, isBody3Value, startOf3 } from './body3';
 import type { Body3Value, BodySpec3 } from './body3';
 import { JOINT_COMMANDS, MEASURE_COMMANDS, isJointValue } from './joints';
-import { VEHICLE_COMMANDS, isVehicleValue, isWheelValue } from './vehicle';
+import { VEHICLE_COMMANDS, isVehicleValue, isWheel3Value, isWheelValue } from './vehicle';
 import type { BodySpec, BodyValue, Outline, WorldValue } from './types';
 import { DEFAULT_WORLD, SHOW_WORDS, isBodyValue, isWorldValue } from './types';
 
@@ -44,7 +45,10 @@ export { isBodyValue, isWorldValue, DEFAULT_WORLD } from './types';
 export { bodyShapeOf, solidShapeOf } from './shapes';
 export { isJointValue } from './joints';
 export { dragBody, dragBody3, draggingBody } from './drag';
-export { isVehicleValue, isWheelValue } from './vehicle';
+export { isVehicleValue, isWheelValue, isWheel3Value, isVehicle3Value } from './vehicle';
+export { isJoint3Value } from './joints';
+export type { JointValue3, JointEnd3 } from './joints';
+export type { Wheel3Value, Vehicle3Value, LooseWheel } from './vehicle';
 export { isBody3Value, solidNow } from './body3';
 export type { Body3Value, BodySpec3 } from './body3';
 export type { VehicleValue, WheelValue } from './vehicle';
@@ -265,6 +269,23 @@ function boxRule(): { run(call: RuleCall): unknown } {
   };
 }
 
+function box3Rule(): { run(call: RuleCall): unknown } {
+  return {
+    run(call) {
+      const [c, w, d, h, a] = call.values as [{ x: number; y: number; z: number }, number, number, number, number | undefined];
+      if (!(w > 0) || !(d > 0) || !(h > 0)) return call.fail('degenerate', 'a box needs a width, a depth and a height above 0');
+      if (![c.x, c.y, c.z].every(Number.isFinite)) return call.fail('input_undefined', 'the centre is undefined');
+      const ang = num(a, 0);
+      const cs = cos(ang);
+      const sn = sin(ang);
+      const at = (x: number, y: number, z: number): { x: number; y: number; z: number } => ({ x: c.x + cs * x - sn * y, y: c.y + sn * x + cs * y, z: c.z + z });
+      const verts = [[-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1], [-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1]].map(([x, y, z]) => at(((x as number) * w) / 2, ((y as number) * d) / 2, ((z as number) * h) / 2));
+      const loops = [[0, 1, 2, 3], [0, 1, 5, 4], [1, 2, 6, 5], [2, 3, 7, 6], [3, 0, 4, 7], [4, 5, 6, 7]];
+      return polyhedron(verts, loops, 'prism', h);
+    },
+  };
+}
+
 function groundRule(): { run(call: RuleCall): unknown } {
   return {
     run(call) {
@@ -457,7 +478,10 @@ export const PHYSICS_COMMANDS: readonly CommandSpec[] = [
     name: 'Box',
     kind: 'object',
     group: 'physics',
-    forms: [{ params: [P('centre', 'Point'), P('w', 'Number'), P('h', 'Number'), named('angle', 'Number')], returns: 'Polygon', rule: boxRule, summary: 'a box of width w and height h about its centre' }],
+    forms: [
+      { params: [P('centre', 'Point'), P('w', 'Number'), P('h', 'Number'), named('angle', 'Number')], returns: 'Polygon', rule: boxRule, summary: 'a box of width w and height h about its centre' },
+      { params: [P('centre', 'Point3'), P('w', 'Number'), P('d', 'Number'), P('h', 'Number'), named('angle', 'Number')], returns: 'Polyhedron', rule: box3Rule, summary: 'a box in space, w along x, d along y and h along z about its centre, turned by angle about the up axis' },
+    ],
   },
   {
     name: 'Ground',
@@ -658,6 +682,24 @@ function readWheel(field: string, v: unknown): unknown {
   return field === 'spin' ? v.spin : field === 'broken' ? v.broken : field === 'pos' ? { x: v.x, y: v.y } : undefined;
 }
 
+const WHEEL3_FIELDS: Readonly<Record<string, Ty>> = { spin: T.Number, pos: { k: 'Point3' } as Ty, force: T.Number, touching: T.Bool };
+
+function readWheel3(field: string, v: unknown): unknown {
+  if (!isWheel3Value(v)) return undefined;
+  switch (field) {
+    case 'spin':
+      return v.spin;
+    case 'pos':
+      return { x: v.x, y: v.y, z: v.z };
+    case 'force':
+      return v.push;
+    case 'touching':
+      return v.touching;
+    default:
+      return undefined;
+  }
+}
+
 function readVehicle(field: string, v: unknown): unknown {
   return isVehicleValue(v) && field === 'speedometer' ? v.speedometer : undefined;
 }
@@ -783,7 +825,7 @@ export function registerPhysics(registry: CommandRegistry): void {
     DRIVERS3.set(f, d);
     return d;
   });
-  for (const [type, fields, reader] of [['Body', BODY_FIELDS, readBody], ['World', WORLD_FIELDS, readWorld], ['Joint', JOINT_FIELDS, readJoint], ['Wheel', WHEEL_FIELDS, readWheel], ['Vehicle', VEHICLE_FIELDS, readVehicle], ['Body3', BODY3_FIELDS, readBody3]] as const) {
+  for (const [type, fields, reader] of [['Body', BODY_FIELDS, readBody], ['World', WORLD_FIELDS, readWorld], ['Joint', JOINT_FIELDS, readJoint], ['Wheel', WHEEL_FIELDS, readWheel], ['Vehicle', VEHICLE_FIELDS, readVehicle], ['Body3', BODY3_FIELDS, readBody3], ['Wheel3', WHEEL3_FIELDS, readWheel3]] as const) {
     registerFieldNames(type, () => Object.keys(fields));
     registerFieldTyper(type, (field) => fields[field]);
     registerFieldReader(type, (field, v) => reader(field, v));
@@ -794,6 +836,7 @@ export function registerPhysics(registry: CommandRegistry): void {
     if (isWorldValue(v)) return `world, gravity (${fmt(v.gx)}, ${fmt(v.gy)})`;
     if (isJointValue(v)) return `${v.kind}${v.broken ? ', broken' : `, ${fmt(v.force)} N`}`;
     if (isWheelValue(v)) return `wheel, ${fmt(Math.abs(v.spin))} rad/s${v.broken ? ', broken off' : ''}`;
+    if (isWheel3Value(v)) return `wheel at (${fmt(v.x)}, ${fmt(v.y)}, ${fmt(v.z)}), ${fmt(Math.abs(v.spin))} rad/s${v.touching ? `, ${fmt(v.push)} N` : ', in the air'}`;
     if (isVehicleValue(v)) return `vehicle, ${fmt(v.speedometer)} m/s`;
     return undefined;
   });
@@ -802,6 +845,7 @@ export function registerPhysics(registry: CommandRegistry): void {
   registerTypeStyle('World', { drawable: false });
   registerTypeStyle('Joint', { defaults: { color: '#555555', width: 1.5 } });
   registerTypeStyle('Wheel', { defaults: { color: '#2b2f36', width: 2 } });
+  registerTypeStyle('Wheel3', { lists: true, defaults: { color: '#2b2f36', width: 2 } });
   registerTypeStyle('Vehicle', { drawable: false });
   // `with solid = true` on every flat shape, and the material of solids and bodies
   const PROPS: Readonly<Record<string, PropSpec>> = {

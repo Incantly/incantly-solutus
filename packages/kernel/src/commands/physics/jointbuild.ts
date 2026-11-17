@@ -5,12 +5,11 @@ import type { ObjId } from '../../contracts/values';
 import type { Joint2, World2 } from '../../physics/world2';
 import { Distance2, Grab2, Hinge2, Pulley2, Slider2, Weld2, localAnchor } from '../../physics/joints2';
 import type { JointEnd, JointValue } from './joints';
-import type { BodySpec } from './types';
 
 /** A stable small number for each body start, so a joint's key does not compare whole shapes. */
-const SPEC_KEYS = new WeakMap<BodySpec, number>();
+const SPEC_KEYS = new WeakMap<object, number>();
 let nextKey = 1;
-export function specKey(s: BodySpec): number {
+export function specKey(s: object): number {
   let k = SPEC_KEYS.get(s);
   if (k === undefined) {
     k = nextKey++;

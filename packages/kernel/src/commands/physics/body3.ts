@@ -154,32 +154,21 @@ export function solid3Of(v: unknown): ShapeDef3[] | undefined {
 }
 
 /**
- * Terrain from a solid function of two variables: slabs half a unit thick under each triangle of an n × n grid over a
- * square (design 7).
+ * Terrain from a solid function of two variables: a heightfield on an n × n grid over a rectangle (design 7). The
+ * world tests only the cells under each shape, each triangle as a slab half a unit thick, so a 128 × 128 grid costs
+ * no more a step than a small one.
  */
 export function terrainOf(f: (x: number, y: number) => unknown, x0: number, x1: number, y0: number, y1: number, n: number): ShapeDef3[] {
-  const out: ShapeDef3[] = [];
-  const at = (i: number, j: number): V3 | undefined => {
-    const x = x0 + ((x1 - x0) * i) / n;
-    const y = y0 + ((y1 - y0) * j) / n;
-    const z = f(x, y);
-    return typeof z === 'number' && Number.isFinite(z) ? { x, y, z } : undefined;
-  };
-  for (let i = 0; i < n; i++) {
-    for (let j = 0; j < n; j++) {
-      const a = at(i, j);
-      const b = at(i + 1, j);
-      const c = at(i + 1, j + 1);
-      const d = at(i, j + 1);
-      if (!a || !b || !c || !d) continue;
-      for (const [p, q, r] of [[a, b, c], [a, c, d]] as const) {
-        const low = (s: V3): V3 => ({ x: s.x, y: s.y, z: s.z - 0.5 });
-        // top counter-clockwise from above, bottom the other way, and the three sides
-        out.push({ kind: 'hull', verts: [p, q, r, low(p), low(q), low(r)], faces: [[0, 1, 2], [3, 5, 4], [0, 3, 4, 1], [1, 4, 5, 2], [2, 5, 3, 0]] });
-      }
+  const h = new Float64Array((n + 1) * (n + 1));
+  const dx = (x1 - x0) / n;
+  const dy = (y1 - y0) / n;
+  for (let i = 0; i <= n; i++) {
+    for (let j = 0; j <= n; j++) {
+      const z = f(x0 + dx * i, y0 + dy * j);
+      h[i * (n + 1) + j] = typeof z === 'number' && Number.isFinite(z) ? z : Number.NaN;
     }
   }
-  return out;
+  return [{ kind: 'heightfield', x0, y0, dx, dy, nx: n, ny: n, h }];
 }
 
 /** The start of a body in space: its centre of mass and mass. */
