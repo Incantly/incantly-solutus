@@ -197,11 +197,13 @@ describe('smoke (design 11.2, R7)', () => {
     const mean = times.reduce((a, b) => a + b, 0) / times.length;
     const p95 = s[Math.floor(s.length * 0.95)] as number;
     const worst = s[s.length - 1] as number;
-    console.log(`smoke 64 x 64, a frame: mean ${mean.toFixed(3)} ms, 95% ${p95.toFixed(3)} ms, worst ${worst.toFixed(3)} ms (budget 0.75 ms)`);
+    const p99 = s[Math.floor(s.length * 0.99)] as number;
+    console.log(`smoke 64 x 64, a frame: mean ${mean.toFixed(3)} ms, 95% ${p95.toFixed(3)} ms, 99% ${p99.toFixed(3)} ms, worst ${worst.toFixed(3)} ms (budget 0.75 ms)`);
     const g = physicsOf(f).smokeMembers[0]?.grid;
     expect(g?.n).toBe(64);
     expect(mean).toBeLessThan(0.75);
     expect(p95).toBeLessThan(0.75);
+    expect(p99).toBeLessThan(0.75);
   });
 
   it('seek anywhere in a 60 s film with 64 × 64 smoke, warm: under 25 ms in Node', () => {

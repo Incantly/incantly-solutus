@@ -472,28 +472,68 @@ export class Smoke2 {
     const v = this.v;
     const u2 = this.u2;
     const v2 = this.v2;
-    const { x0, y0, dx, dy } = this;
-    // x speeds: the face's own u, and v as the mean of the four faces round it
+    // Back along the flow in grid units (cells a step), then bilinear between the faces round the point where it came
+    // from: the same as sampleU and sampleV, written out here because this is the step's second-largest cost.
+    const kx = h / this.dx;
+    const ky = h / this.dy;
+    const windX = this.windX;
+    const windY = this.windY;
+    // x speeds: the face's own u, and v as the mean of the four faces round it; face (i, j) is at grid (i, j + ½)
     for (let j = 0; j < n; j++) {
-      const y = y0 + (j + 0.5) * dy;
       for (let i = 0; i <= n; i++) {
-        const x = x0 + i * dx;
         const uu = u[j * W + i] as number;
         const il = i > 0 ? i - 1 : 0;
         const ir = i < n ? i : n - 1;
         const vv = 0.25 * ((v[j * n + il] as number) + (v[j * n + ir] as number) + (v[(j + 1) * n + il] as number) + (v[(j + 1) * n + ir] as number));
-        u2[j * W + i] = this.sampleU(x - h * uu, y - h * vv);
+        const fx = i - kx * uu;
+        let fy = j - ky * vv;
+        if (!(fx >= 0 && fx <= n && fy >= -0.5 && fy <= n - 0.5)) {
+          u2[j * W + i] = windX;
+          continue;
+        }
+        if (fy < 0) fy = 0;
+        else if (fy > n - 1) fy = n - 1;
+        let a = fx | 0;
+        let b = fy | 0;
+        if (a > n - 1) a = n - 1;
+        if (b > n - 2) b = n - 2;
+        const tx = fx - a;
+        const ty = fy - b;
+        const q = b * W + a;
+        const p0 = u[q] as number;
+        const p1 = u[q + 1] as number;
+        const p2 = u[q + W] as number;
+        const p3 = u[q + W + 1] as number;
+        u2[j * W + i] = (p0 + (p1 - p0) * tx) * (1 - ty) + (p2 + (p3 - p2) * tx) * ty;
       }
     }
+    // y speeds: face (i, j) is at grid (i + ½, j)
     for (let j = 0; j <= n; j++) {
-      const y = y0 + j * dy;
       const jb = j > 0 ? j - 1 : 0;
       const jt = j < n ? j : n - 1;
       for (let i = 0; i < n; i++) {
-        const x = x0 + (i + 0.5) * dx;
         const vv = v[j * n + i] as number;
         const uu = 0.25 * ((u[jb * W + i] as number) + (u[jb * W + i + 1] as number) + (u[jt * W + i] as number) + (u[jt * W + i + 1] as number));
-        v2[j * n + i] = this.sampleV(x - h * uu, y - h * vv);
+        let fx = i - kx * uu;
+        const fy = j - ky * vv;
+        if (!(fx >= -0.5 && fx <= n - 0.5 && fy >= 0 && fy <= n)) {
+          v2[j * n + i] = windY;
+          continue;
+        }
+        if (fx < 0) fx = 0;
+        else if (fx > n - 1) fx = n - 1;
+        let a = fx | 0;
+        let b = fy | 0;
+        if (a > n - 2) a = n - 2;
+        if (b > n - 1) b = n - 1;
+        const tx = fx - a;
+        const ty = fy - b;
+        const q = b * n + a;
+        const p0 = v[q] as number;
+        const p1 = v[q + 1] as number;
+        const p2 = v[q + n] as number;
+        const p3 = v[q + n + 1] as number;
+        v2[j * n + i] = (p0 + (p1 - p0) * tx) * (1 - ty) + (p2 + (p3 - p2) * tx) * ty;
       }
     }
     this.u = u2;

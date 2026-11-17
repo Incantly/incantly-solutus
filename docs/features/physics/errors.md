@@ -135,10 +135,10 @@ Reasons are registered in `AreaUndefReasons` (`packages/kernel/src/contracts/val
 
 | Reason | On | When | `detail` |
 |---|---|---|---|
-| `input_undefined` | body, joint, cloth | The shape, mass, an anchor or a cloth's corner or sides is undefined at the start | names the input |
+| `input_undefined` | body, joint, cloth, smoke | The shape, mass, an anchor, a cloth's corner or sides, or a smoke's region, grid size or source is undefined at the start | names the input |
 | `self_crossing` (new) | body | The shape's edges cross at the start, for these values | names the two edges |
-| `degenerate` | body | The shape has no area (all points on a line) or a radius of 0 | "has no area" |
-| `unstable_world` (new) | body, joint, liquid, cloth | A position or speed became not finite or over 1e6 | the time, and "springs too stiff for the step" or "too much force" |
+| `degenerate` | body, smoke | The shape (or the smoke's region) has no area (all points on a line) or a radius of 0 | "has no area" |
+| `unstable_world` (new) | body, joint, liquid, smoke, cloth | A position or speed became not finite or over 1e6 | the time, and "springs too stiff for the step" or "too much force" |
 | `broken` (new) | wheel | A wheel with `breaks` went over its force (a broken joint stays defined, with `j.broken` true and `j.force` 0) | the time and the force |
 | `left_world` (new) | body | It left `world.range` | the time and where it left |
 | `timeout` | body, liquid, cloth | The world is still catching up after a seek or a restart | "catching up" |
