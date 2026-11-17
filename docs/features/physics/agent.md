@@ -22,7 +22,7 @@ Describe only what `figure` reports at the current time.
 
 ## 2. Catalogue chunks
 
-Physics chunks load on demand, so a lesson with no physics pays nothing. The first physics line loads `physics-basic`. The others load when the topic needs them ("spring", "car", "water", "smoke"), or when the model asks with `figure` `want: ["physics-joints"]`.
+Physics chunks load on demand, so a lesson with no physics pays nothing. The first physics line loads `physics-basic`. The others load when the topic needs them ("spring", "car", "water", "smoke", "cloth", "flag", "rope that bends"), or when the model asks with `figure` `want: ["physics-joints"]`.
 
 ### 2.1 `physics-basic` (target 260 tokens)
 
@@ -68,6 +68,17 @@ Pour(at: Point, rate, speed, max?) -> Liquid
 Water(level) -> Water      Water(region, level) -> Water        # floating, cheap
 Waves(box, n) -> Waves     Smoke(region, n, source?, heat?, wind?) -> Smoke
 l.count l.level
+```
+
+### 2.5 `physics-cloth` (target 90 tokens)
+
+```text
+Cloth(corner: Point3, u: Vector3, v: Vector3, nu, nv, mass?, stretch?, bend?, pins?, tears?, self?) -> Cloth
+Cloth(a: Point, b: Point, n) -> Cloth            # a rope that bends
+Cloth(box: Polygon, nu, nv) -> Cloth             # a net or curtain in the plane
+Pin(c, at) -> Joint      Pin(c, at, b) -> Joint  # pins = "top" | "left" | "corners"
+world with wind = (4, 0, 0)                      # at most 64 x 32 per cloth, 4,096 points in all
+c.torn c.stretchMax c.at(i, j)
 ```
 
 ---
@@ -217,6 +228,32 @@ gate with solid = false
 
 ---
 
+### 5.5 A flag in the wind, then a sheet on a ball (3D)
+
+```text
+pole = Cylinder((0, 0, 0), (0, 0, 4), 0.05) with solid = true
+flag = Cloth((0, 0, 4), (3, 0, 0), (0, 0, -2), 48, 32, pins = "left")
+world with wind = (5, 1, 0)
+```
+
+Teacher: "Make the wind gusty."
+
+```text
+world with wind = (5 + 3 sin(2 t), 1, 0)
+```
+
+Teacher: "Now drop a sheet on a ball."
+
+```text
+g = Ground()
+ball = Body(Sphere((6, 0, 1), 1), mass = 2)
+sheet = Cloth((4.5, -1.5, 3), (3, 0, 0), (0, 3, 0), 32, 32, mass = 0.3)
+```
+
+The `figure` result then says: `sheet: 32 by 32, touching ball, most stretched 2%`. The ball takes the sheet's weight, so `ball.force("normal")` grows by about 2.9 N.
+
+---
+
 ## 6. Common patterns the model should know
 
 - Still things should be solid shapes, not bodies with `fixed = true`. They cost almost nothing.
@@ -225,6 +262,9 @@ gate with solid = false
 - A body's start is its shape. To start a ball higher, move the circle's centre.
 - `b.force("normal")` and `b.force("friction")` give numbers to say out loud.
 - `Trace(b)` draws the path.
+- A flag is a cloth pinned on one side, with `world with wind`. 32 × 32 looks smooth and costs half of 64 × 32.
+- A rope that bends is `Cloth(a, b, n)`. `Rope(a, b, L)` is only a length limit between two bodies.
+- A cloth holds water and bodies both ways: a ball on a sheet sags it, and the pins carry the weight.
 
 ## 7. Token budget summary
 
@@ -235,4 +275,5 @@ gate with solid = false
 | `physics-joints` | 150 |
 | `physics-vehicles` | 80 |
 | `physics-fluids` | 90 |
-| All loaded | about 780 |
+| `physics-cloth` | 90 |
+| All loaded | about 870 |

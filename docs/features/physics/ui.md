@@ -6,7 +6,7 @@ Companion to `design.md`. The same in the studio, in `createApp` embeds and in T
 
 | Place | What is new |
 |---|---|
-| Board (2D) or Space view (3D) | Bodies, solid shapes, joints, liquid, waves and smoke; force and speed arrows when switched on |
+| Board (2D) or Space view (3D) | Bodies, solid shapes, joints, liquid, waves, smoke and cloth; force and speed arrows when switched on |
 | Player bar | Appears once the figure has physics; "catching up" and "slow" marks |
 | Algebra list | Body, joint and world rows with live values |
 | Tool strip | A "Physics" group |
@@ -36,6 +36,8 @@ The "Physics" group in the tool strip. Each tool writes the lines a person would
 | Push | drag from a body; the arrow's length is the kick | `Push(b, (vx, vy), (x, y))` |
 | Water | drag up from the bottom of a box to set the level | `wa = Water(region, level)` |
 | Liquid | drag a box | `l = Liquid(Box(…), 500)` |
+| Cloth | 2D: drag a line for a rope, or a box for a net; 3D: drag a rectangle on the floor plane, then up for its height | `rope = Cloth(A, B, 40)`, `net = Cloth(Box(…), 24, 16)`, `sheet = Cloth(P, u, v, 32, 32)` |
+| Pin | click a point of a cloth, then nothing (the world) or a body | `Pin(c, (x, y, z))` or `Pin(c, (x, y, z), b)` |
 
 Wrong clicks get the tool's own short message under the cursor, from the error's `hint` ("Click a closed shape. A line can only be made solid.").
 
@@ -47,6 +49,8 @@ Wrong clicks get the tool's own short message under the cursor, from the error's
 | A point of a solid shape | moves the shape (a wall moves) | the shape moves and pushes bodies (a mover) |
 | A slider read by physics | changes the value; the film replays from 0 | the same, or from now on if the slider has `rerun = continue` |
 | A joint anchor | moves the anchor | not draggable while playing |
+| A cloth | moves its start (its corner, or its ends) | grabs its nearest point, so the cloth stretches and swings from there |
+| A pin | moves the pin | not draggable while playing |
 
 A grab while playing is logged, so the replay shows the same grab. The grab line shows while the pointer is down, from the pointer to the grabbed point, with a small ring at each end. A grab lets go when the pointer leaves the board.
 
@@ -69,6 +73,7 @@ Keyboard: with a body selected, arrow keys give a small push (`Push(b, (±1, 0))
 | Joint | kind and the two bodies, with its force ("tension 12 N"); struck through when broken |
 | World | gravity and how many bodies are awake |
 | Liquid | the particle count and its level |
+| Cloth | its grid ("48 by 32"), pins, and a live line: "most stretched 3%, 0 torn"; a small "z" when asleep |
 
 Clicking a body row selects the body on the board, as for every object. The live line updates at most 10 times a second, so the list stays still enough to read.
 
@@ -86,6 +91,9 @@ Clicking a body row selects the body on the board, as for every object. The live
 | Liquid | light blue discs, drawn in one batch |
 | Water | a light blue fill below a darker line |
 | Smoke | a grey shaded image under the shapes |
+| Cloth in space | a lit sheet in a soft orange, the back side a little darker, faint threads every 8 points |
+| Cloth in the plane | its threads as thin lines; a rope as a smooth line |
+| Pin | a small dark dot |
 
 ## 8. Hits and sound
 
@@ -94,7 +102,7 @@ Clicking a body row selects the body on the board, as for every object. The live
 
 ## 9. 3D
 
-- Bodies, the floor, terrain and waves are drawn in the Space view, with its light and hidden lines.
+- Bodies, the floor, terrain, waves and cloth are drawn in the Space view, with its light and hidden lines. Cloth and drops use the WebGL 2 painter (`design.md` 12.1); without it they are drawn coarser, and move the same.
 - Dragging a body in 3D grabs it on the plane facing the camera, as for free points (`space-3d/ui.md` 5.1). Shift drags it up and down.
 - A car: when a figure has a `Vehicle`, the arrow keys drive it while the Space view has focus (up and down for `motor`, left and right for `steer`, Space for `brake`). They write the slider values the car reads, logged while playing. A "Follow" button on the style bar keeps the camera behind the car.
 
@@ -102,6 +110,7 @@ Clicking a body row selects the body on the board, as for every object. The live
 
 - The hidden object list reads each body: "Body b, box, moving right at 3.9 metres a second, touching ramp". It updates at most once a second.
 - Hits are announced in the live region at most once a second: "b hit the wall at 2 metres a second".
+- A cloth reads: "Cloth flag, 48 by 32 points, pinned on the left, waving, 0 torn". A tear is announced once: "net tore".
 - Force arrows have text labels, not colour alone.
 - Every tool works by keyboard, through the virtual cursor of `docs/features/tools-2d/`.
 
@@ -113,7 +122,7 @@ Clicking a body row selects the body on the board, as for every object. The live
 
 ## 12. Performance panel
 
-The studio has no performance panel yet (`docs/design/performance.md` 6). Until it does, the time bar shows a physics readout next to the time: milliseconds of work per frame, awake bodies and touching points. It turns amber above 6 ms. The full panel row (steps per frame, liquid particles, checkpoint memory) comes with the panel.
+The studio has no performance panel yet (`docs/design/performance.md` 6). Until it does, the time bar shows a physics readout next to the time: milliseconds of work per frame, awake bodies and touching points, and cloth points and drops when there are any. It turns amber above 6 ms on the page, or above 8 ms when the world runs in the worker. The full panel row (steps per frame, liquid particles, checkpoint memory) comes with the panel.
 
 ## 13. Settings
 
