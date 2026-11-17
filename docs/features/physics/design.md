@@ -1,6 +1,6 @@
 # Physics: design
 
-Status: proposed, for review by the product owner. This is the "bodies and collisions" area that the core design keeps for later (core 7.4, wave 4) and that `docs/features/animation-time/design.md` 7.9 reserves room for. It covers rigid bodies, friction, joints, vehicles, liquids and smoke, in 2D and in 3D.
+Status: proposed, for review by the product owner. This is the "bodies and collisions" area that the core design keeps for later (core 7.4, wave 4) and that `docs/features/animation-time/design.md` 7.9 reserves room for. It covers rigid bodies, friction, joints, vehicles, liquids, smoke and cloth, in 2D and in 3D.
 
 The engine is our own TypeScript code. No physics library is on the allowed list (`docs/design/libraries.md`), and adding one needs the product owner's approval. We may reuse ideas and code from our own legacy kit on `legacy/v1` (`packages/core/src/kits/physics2d/`), which we wrote: a sequential-impulse solver with warm starting, joints, a liquid tank and force accounting, at a fixed step of 1/120 s and at most 60 bodies.
 
@@ -15,6 +15,7 @@ The engine is our own TypeScript code. No physics library is on the allowed list
 - See the forces that act: gravity, the push of the ground, friction, rope tension and the net force, as arrows.
 - Drive a car with sliders and crash it into a wall, in 2D or 3D.
 - Pour water into a glass, break a dam, float a boat, blow smoke past a ball.
+- Hang a flag in the wind, drop a sheet over a ball, swing a rope that bends, tear a net, soak a cloth in water.
 - Pause, seek and replay. A film plays out the same every time and on every computer.
 
 ### For the teacher (the live AI voice)
@@ -25,7 +26,7 @@ The engine is our own TypeScript code. No physics library is on the allowed list
 
 ### Out of scope here
 
-- Soft bodies, cloth and ropes that bend along their length (a rope here is a length limit between two points).
+- Soft bodies that keep their volume (jelly, balloons). Cloth and bending ropes are in scope (section 9.5); a `Rope` joint stays a length limit between two points.
 - Breaking shapes into pieces, other than welds that break.
 - Exact simulation for engineering. The engine is built for lessons: stable, honest and fast. Accuracy targets are in section 12.
 
@@ -65,6 +66,7 @@ A body copies its shape once. That is the one rule that keeps definitions honest
 | `Liquid` | Liquid particles | Particle positions and speeds (typed arrays), `count`, `level` |
 | `Water` | A still or waving body of water | Surface height or grid |
 | `Smoke` | Smoke on a grid | Density and flow grid |
+| `Cloth` | A sheet or a rope of points joined by links, in the plane or in space | Point positions and speeds (typed arrays), grid size, pins, torn links |
 | `World` | The one physics world of a figure | Gravity, step, solver passes, `time`, `energy` |
 
 Type names are registered in `AreaTypeNames` (`packages/kernel/src/contracts/values.ts`).
@@ -80,6 +82,7 @@ world with air = 0.02                   # air drag on every body, per second
 world with passes = 8                   # solver passes (1 to 20)
 world with timestep = 1/120                 # seconds per step (1/60 to 1/480)
 world with sleep = false                # keep every body awake
+world with wind = (3, 0, 0)             # moving air: pushes cloth and smoke
 ```
 
 | Property | Type | Default | Allowed |
@@ -91,6 +94,7 @@ world with sleep = false                # keep every body awake
 | `sleep` | `Bool` | `true` | |
 | `range` | range `a..b` | `−50..50` | the world's size in every direction; bodies and particles that leave it are removed (`errors.md` 5) |
 | `show` | `Text` | `"bodies"` | `"bodies"`, `"forces"`, `"speeds"`, `"contacts"`, `"none"` |
+| `wind` | `Vector` or `Vector3` | `(0, 0)` / `(0, 0, 0)` | any finite vector, m/s; a formula of `t` makes gusts |
 
 Read-only values: `world.time`, `world.energy` (kinetic plus potential of every body), `world.momentum`, `world.awake` (bodies awake), `world.contacts`.
 
@@ -202,6 +206,39 @@ The usual way to write a car is four `Wheel` lines and one `Vehicle` line. `moto
 
 All of them hit solid shapes and bodies (section 9).
 
+**Cloth:**
+
+| Command | Forms | What it is |
+|---|---|---|
+| `Cloth` | `(corner: Point3, u: Vector3, v: Vector3, nu, nv)` in space | A sheet of `nu` by `nv` points spanning `corner + s u + r v`, `s` and `r` from 0 to 1 |
+| `Cloth` | `(a: Point, b: Point, n)` in the plane | A rope of `n` points from `a` to `b` that bends, swings and drapes |
+| `Cloth` | `(box: Polygon, nu, nv)` in the plane | A net of `nu` by `nv` points over a box, seen from the side (a curtain, a hammock) |
+| `Pin` | `(c: Cloth, at: Point or Point3)`, `(c, at, b: Body)` | Holds the cloth point nearest `at` still, or to a body, so the cloth moves with it and pulls on it |
+
+Named arguments of `Cloth`:
+
+| Name | Type | Default | Allowed | What it does |
+|---|---|---|---|---|
+| `mass` | `Number` | `1` | over 0 | Mass of the whole cloth in kg, shared by its points |
+| `stretch` | `Number` | `1` | 0 to 1 | How hard the links resist stretching; 1 is cloth, 0.5 is rubber |
+| `bend` | `Number` | `0.1` | 0 to 1 | How hard it resists folding; 0 is silk, 1 is card |
+| `damping` | `Number` | `0.02` | 0 to 1 | Loss of speed per second, so a flag settles |
+| `pins` | `Text` or `List` | none | `"top"`, `"left"`, `"corners"`, `"top corners"`, or a list of points | Points held still at the start; each becomes a `Pin` |
+| `tears` | `Number` | none | 1.1 to 10 | A link breaks when stretched past this many times its length |
+| `self` | `Bool` | `false` | | The cloth hits itself (costs more, section 11.2) |
+| `thickness` | `Number` | `0.02` | 0.005 to 0.2 | How far points keep from solids, bodies and each other |
+| `friction` | `Number` | `0.4` | 0 to 2 | Friction against solids and bodies |
+
+Read-only values: `c.count` (points), `c.torn` (broken links), `c.stretchMax` (the most stretched link, as a ratio), `c.energy`, `c.at(i, j)` (a point, as `Point3` or `Point`), `c.asleep`, `c.touching`.
+
+```text
+flag = Cloth((0, 0, 3), (3, 0, 0), (0, 0, -2), 48, 32, pins = "left")
+world with wind = (4 + 2 sin(3 t), 1, 0)
+sheet = Cloth((-2, -2, 4), (4, 0, 0), (0, 4, 0), 32, 32, mass = 0.5)
+ball = Sphere((0, 0, 1), 1) with solid = true
+rope = Cloth((0, 5), (4, 5), 40, pins = [(0, 5)])
+```
+
 **Events.** The controls area's handlers gain one event:
 
 ```text
@@ -222,7 +259,7 @@ The guard uses the controls area's `if` (`docs/features/controls-scripting/desig
 
 ### 2.6 Tools the learner can pick
 
-A new "Physics" tool group (in `docs/features/tools-2d/` and `space-3d`): Make solid (click shapes), Make body (click a shape), Hinge (click two bodies, then the point), Spring, Rope, Weld, Push (drag an arrow from a body), Water (drag a level). Each tool writes the same lines a person would type. Details in `ui.md` 3.
+A new "Physics" tool group (in `docs/features/tools-2d/` and `space-3d`): Make solid (click shapes), Make body (click a shape), Hinge (click two bodies, then the point), Spring, Rope, Weld, Push (drag an arrow from a body), Water (drag a level), Cloth (drag a box or a line), Pin (click a cloth). Each tool writes the same lines a person would type. Details in `ui.md` 3.
 
 ## 3. How the reference app does it, in plain words
 
@@ -389,7 +426,7 @@ A car is a chassis body and wheels. We use **ray wheels**, which are the usual w
 
 In 2D the same `Wheel` and `Vehicle` make a side-view car on hills; the wheels are real circle bodies on `Slider` joints with springs, because in the side view the wheels must roll over bumps.
 
-## 9. Liquids, water and smoke
+## 9. Liquids, water, smoke and cloth
 
 ### 9.1 Liquid particles (`Liquid`, `Pour`)
 
@@ -414,6 +451,57 @@ A height grid that follows the wave equation, stepped with the same `h`. Bodies 
 ### 9.4 Smoke (`Smoke`)
 
 A grid of flow and smoke density, stepped by the stable-fluids method: carry the flow along itself, add heat as an upward force, make the flow lose no volume (20 pressure passes), then carry the smoke along the flow. Solid shapes and bodies block the flow, and moving bodies stir it. It is drawn as a shaded image on the board.
+
+### 9.5 Cloth (`Cloth`, `Pin`)
+
+A cloth is a grid of points joined by links of fixed length. We use **extended position-based dynamics (XPBD) with small steps**, the method most games and film tools now use for cloth, because it stays stable at our fixed step for any stiffness, and its stiffness does not change with the number of passes.
+
+**Links.** Each point is joined to its neighbours by three kinds of link:
+
+| Link | Joins | Resists | Set by |
+|---|---|---|---|
+| Stretch | each point and the next along each thread | stretching | `stretch` |
+| Shear | each point and the next across the diagonal | skewing | `stretch` |
+| Bend | each point and the one two along each thread | folding | `bend` |
+
+A rope in the plane has stretch and bend links only. A 64 by 32 sheet has about 12,000 links.
+
+**One step (h = 1/120 s)** is split into **4 small steps** of `h / 4`. Each small step:
+
+1. Moves each point by its speed, gravity and the push of the air (below).
+2. Pulls each link back toward its length once, in a fixed order: stretch links in red-black order, so no two links in one batch share a point, then shear, then bend. Stiffness is a compliance, so `stretch = 1` is the same cloth at any step.
+3. Keeps pinned points where their pin is.
+4. Pushes points out of solids, bodies, liquid drops and (with `self = true`) other parts of the cloth, with friction (9.6).
+5. Sets each point's speed from how far it moved, less `damping`.
+
+Four small steps with one pass each are stiffer and cheaper than one step with four passes. That is the finding of the "small steps" method (Macklin and others, 2019), and why we choose it.
+
+**Air.** Each triangle of the sheet feels the wind on its face: a force along its normal, set by its area and by how fast the air moves through it (`world.wind` minus the triangle's speed). This is what makes a flag ripple. In 2D, smoke's flow (9.4) counts as wind, so smoke blows a curtain.
+
+**Tearing.** With `tears = k`, a link stretched past `k` times its length breaks for good, in id order, so the same links tear in every replay. `c.torn` counts them, a `torn` notice says when, and the `figure` result lists it as an event.
+
+**Sleep.** A cloth whose points all move under 1 mm/s for 0.5 s sleeps and costs nothing, as a body does (6.7). Wind that changes, a body that touches it, a drag or a push wakes it.
+
+**Pins.** A pin to the world holds a point in place. A pin to a body is a two-way link: the point moves with the body, and the cloth's pull acts on the body. So a cape follows a moving ball and slows it.
+
+**Drag.** Dragging a cloth grabs its nearest point with the stiff spring of `Grab`, as for a body (`ui.md` 4). The grab is logged with the point's index.
+
+### 9.6 How particles meet bodies, and each other
+
+Liquid drops and cloth points are both moving points. So they share one neighbour grid and one step, and every pair below is handled both ways.
+
+| Pair | How it is found | What happens |
+|---|---|---|
+| Cloth point and a solid shape | the shape's distance test (sphere, hull, plane, terrain, the 2D shapes) | the point is pushed out to `thickness`, with friction |
+| Cloth point and a body | the same test on the body's shape at its pose | the point is pushed out; the body gets the equal and opposite impulse |
+| Cloth and a liquid drop | the drop's grid cell, against the cloth's triangles (segments in 2D), so drops never slip between points | both are pushed apart by their masses: a sheet holds water, a drop wets and weighs down the cloth |
+| Liquid drop and a body | 9.1 step 4 | as before |
+| Cloth and itself (`self = true`) | point against triangle, on the grid | points keep `thickness` apart, so a falling sheet folds instead of passing through |
+| Cloth and another cloth | as `self` | always on |
+
+**Order inside one step.** First the rigid bodies take their step (section 6 or 7). Then drops and cloth take their small steps against the bodies at their new poses, and add up the impulses they give each body. Those impulses are applied to the bodies at the start of the next step. The lag is one step (8 ms), which nobody can see, and it is the same on every computer and in every replay, so the film stays exact.
+
+**Where it runs.** A figure with cloth or liquid runs its whole physics world, bodies included, in one worker (a second thread). One world in one thread keeps every hit in a fixed order, so the film is exact. The page sends inputs (sliders, drags, pushes) and gets back, each frame, the points and the poses to draw (11.2: under 0.5 ms). Without a worker, the same steps run on the page: the film is the same, and plays slower on a slow computer (10.5), with a `worker_unavailable` notice.
 
 ## 10. Time, exact replay and seeking
 
@@ -447,12 +535,17 @@ Size, at full Float64 precision:
 | 2,000 liquid particles in 2D | about 64 KB | about 7.7 MB |
 | 2,000 liquid particles in 3D | about 96 KB | about 11.5 MB |
 | A 64 by 64 smoke grid | about 100 KB | about 12 MB |
+| A 32 by 32 cloth | about 50 KB | about 12 MB (240 checkpoints) |
+| A 64 by 32 cloth | about 100 KB | about 24 MB (240 checkpoints) |
+| Two 64 by 32 cloths | about 200 KB | about 48 MB: thinned after about 40 s |
+
+A figure with cloth saves a checkpoint every **0.25 s** instead of 0.5 s, so a seek steps at most 30 steps (11.2). A checkpoint holds each point's place and speed, the torn links as bits, and the pins.
 
 A figure may use at most **32 MB** for physics checkpoints. Past that, the oldest half of the checkpoints is thinned to every 1 s, then every 2 s, with a notice `checkpoints_thinned`. Seeking into a thinned part takes longer (section 11.2).
 
 ### 10.4 Seeking
 
-Seek to `t`: load the last checkpoint at or before `t`, then step forward to `t` (at most 60 steps of 1/120 s). A figure that was just loaded computes checkpoints ahead in idle slices, at most 5 ms each, so the first seek is fast too. While the world is behind, the player shows "catching up", as for states (`animation-time/design.md` 8.5).
+Seek to `t`: load the last checkpoint at or before `t`, then step forward to `t` (at most 60 steps of 1/120 s, or 30 with cloth). A figure that was just loaded computes checkpoints ahead in idle slices, at most 5 ms each, so the first seek is fast too. While the world is behind, the player shows "catching up", as for states (`animation-time/design.md` 8.5).
 
 ### 10.5 Falling behind
 
@@ -473,7 +566,16 @@ Memory is not the limit on such laptops. Every scene below uses under 40 MB incl
 
 ### 11.2 Budgets
 
-At 60 frames a second, a frame is 16.7 ms. Physics gets at most **6 ms** of it; drawing and the rest of the kernel need the other 10 ms. At the default step of 1/120 s, one frame is 2 steps.
+At 60 frames a second, a frame is 16.7 ms. Physics on the page gets at most **6 ms** of it; drawing and the rest of the kernel need the other 10 ms. At the default step of 1/120 s, one frame is 2 steps.
+
+A world with cloth or liquid runs in a worker (9.6). The worker has its own core, so it gets **8 ms** a frame for its steps, which leaves room for slow moments in a 16.7 ms frame. The page then pays only the copy of what to draw and the drawing:
+
+| Part of a frame with cloth or liquid | Where | Chrome, CPU 4× slower | Node, normal speed |
+|---|---|---|---|
+| Steps of the whole world (2 steps) | worker | under 8 ms | under 2 ms |
+| Copy points and poses to the page | page | under 0.5 ms | |
+| Draw 2,048 cloth points as a sheet (WebGL 2, 12.1) | page | under 3 ms | |
+| Everything else on the page | page | about 10 ms | |
 
 | Scene | Count | Physics per frame (Chrome, CPU 4× slower) | Node, normal speed |
 |---|---|---|---|
@@ -488,8 +590,17 @@ At 60 frames a second, a frame is 16.7 ms. Physics gets at most **6 ms** of it; 
 | 3D liquid, in a worker | 2,000 particles | 6 ms | 1.5 ms |
 | Waves | 64 × 64 | 1 ms | 0.25 ms |
 | Smoke | 64 × 64 | 3 ms | 0.75 ms |
+| 2D rope or curtain | 400 points | 2 ms | 0.5 ms |
+| 3D cloth, the default size | 32 × 32 | 3 ms | 0.75 ms |
+| 3D cloth, the largest, in wind | 64 × 32 | 6 ms, in a worker | 1.5 ms |
+| 3D cloth over bodies | 64 × 32 and 40 bodies | 8 ms, in a worker | 2 ms |
+| Cloth that hits itself | 64 × 32, `self = true` | 8 ms, in a worker | 2 ms |
+| Cloth in water | 64 × 32 and 2,000 drops | 8 ms, in a worker | 2 ms |
+| Two cloths | 2 × 64 × 32 | 8 ms, in a worker | 2 ms |
 | Seek anywhere in a 60 s film, 300 bodies, warm | | 100 ms | 25 ms |
 | Seek anywhere in a 60 s film, 2,000 particles, warm | | 250 ms | 60 ms |
+| Seek anywhere in a 60 s film, cloth up to 2,048 points, warm | | 100 ms | 25 ms |
+| Seek anywhere in a 60 s film, 4,096 cloth points, warm | | 100 ms in the first 40 s, 200 ms after (10.3) | 50 ms |
 | Restart a 60 s film with 300 bodies | | catches up within 1 s, film shown at once | |
 
 ### 11.3 Hard limits
@@ -503,6 +614,10 @@ These are the same on every computer. Over a limit, the line is refused with `li
 | Liquid particles (all `Liquid` and `Pour` together) | 2,000 |
 | Wave grid | 64 × 64 |
 | Smoke grid | 64 × 64 |
+| Cloth points (all cloths together) | 4,096 |
+| One cloth | 64 × 32 points (a sheet), 400 points (a rope) |
+| Cloths with `self = true` | 1 per figure |
+| Pins | 64 per cloth |
 | Ground pieces from curves | 2,000 per curve |
 | Contact points | 4,000; past that, the deepest are kept, with a notice `contacts_dropped` |
 | Physics checkpoints | 32 MB (10.3) |
@@ -529,6 +644,17 @@ Speed on average is not enough. The physics bench suite checks all of these, and
 | Worker cost | Sending the world from the worker to the page each frame | under 0.5 ms a frame for 2,000 particles |
 | One line | `ball with bounce = 0.9` in a figure with 300 bodies | under 1 ms |
 | No garbage | Steps of a 300-body world | no memory made during a step after the first second |
+| Cloth, worst frame | A 64 × 32 flag in gusts for 60 s, then a sheet over 40 bodies | every frame within 11.2 |
+| Cloth, still flag | A 32 × 32 cloth pinned at the top, no wind, 60 s | no point moves more than 1 mm after 3 s, and it sleeps |
+| Cloth, stretch | A 64 × 32 sheet hanging from two corners | every link within 2% of its length |
+| Cloth, no pass-through | A sheet dropped on a ball, a box and terrain, 100 drops; a ball fired at a pinned sheet at 20 m/s | no point ends inside a solid; the ball never passes |
+| Cloth, two-way | A ball resting on a sheet pinned at its four corners | the pins carry the ball's weight within 1% |
+| Cloth and water | 2,000 drops poured on a sheet held at its corners | no drop passes through; the sheet sags under the water's weight within 5% |
+| Cloth, energy | A cloth swinging with `damping = 0` and no air for 60 s | never gains energy |
+| Cloth, tearing | A net with `tears = 1.5` torn by a heavy ball, played twice and on three browsers | the same links tear at the same steps |
+| Cloth, page cost | 4,096 cloth points and 2,000 drops | copy under 0.5 ms, draw under 3 ms a frame |
+| Cloth, no worker | The 64 × 32 flag with the worker turned off | the same world hash every second as with it |
+| Cloth, no garbage | Steps of a 64 × 32 sheet | no memory made during a step after the first second |
 
 ### 11.5 Accuracy checks (lessons must be right)
 
@@ -543,6 +669,9 @@ Speed on average is not enough. The physics bench suite checks all of these, and
 | Newton's cradle | 5 balls on ropes, the end one lifted | one ball leaves the other end |
 | Floating | A box of density 0.5 in `Water` | floats half under, within 2% |
 | Car | A car at full motor on flat ground | reaches the speed set by `power` and drag, within 5% |
+| Hanging rope | A 2D rope of 200 points hanging from two pins at the same height | follows the catenary `a cosh(x / a)`, within 2% of its sag |
+| Rope pendulum | A 1 kg ball pinned to the end of a 2 m rope of 0.01 kg, swung 5° | period within 1% of `2π √(L / g)` |
+| Wet cloth | A sheet that holds 1 kg of water | the pins carry the sheet's weight plus 9.8 N, within 2% |
 
 ## 12. Drawing
 
@@ -551,18 +680,32 @@ Speed on average is not enough. The physics bench suite checks all of these, and
 - Joints draw thin: a hinge as a small ring, a spring as a zigzag, a rope as a line that sags when slack, a weld as a small cross.
 - Liquid particles draw as one batch of discs in the liquid's colour (the particle painter, `animation-time/design.md` 10.8). A smooth surface (metaballs) is for later.
 - Waves draw as a surface in the Space view, smoke as a shaded image under the shapes.
+- Cloth in space draws as a lit sheet, two-sided (the back a little darker), with faint threads every 8 points. Cloth in the plane draws as its threads, a rope as a smooth line.
 - 2D drawing is in `packages/sdk/src/screen/`, 3D in its Space painter, as for every area.
+
+### 12.1 The WebGL 2 painter for cloth and liquid in space
+
+The Space view's software painter (Canvas 2D) sorts and fills every face each frame. That is fast enough for solids and surfaces, but 4,000 cloth triangles on a CPU 4 times slower would take more than the whole frame. So cloth and liquid in space are drawn by a WebGL 2 painter in `packages/view`, the first part of the WebGL 2 renderer of `docs/features/space-3d/design.md` 9, written against its `GpuBackend` interface:
+
+- The cloth's points go into one vertex buffer each frame (the copy of 11.2); the triangles are fixed, so their index buffer is made once. Normals are worked out on the GPU.
+- Drops draw as one instanced batch of discs.
+- The depth buffer hides what is behind, so nothing is sorted on the CPU.
+- The software painter draws everything else on its canvas, under or over the WebGL canvas as depth needs: solids, points and labels stay exactly as today.
+
+Without WebGL 2, the software painter draws the cloth from every second point (a 32 by 16 sheet for a 64 by 32 cloth) and every second drop. Only the picture is coarser: the physics and the film are the same.
 
 ## 13. Where each part lives
 
 | Part | Place |
 |---|---|
-| Engine: world, shapes, broad and narrow phase, solver, joints, vehicles, liquids, waves, smoke, checkpoints, exact maths | `packages/kernel/src/physics/` |
+| Engine: world, shapes, broad and narrow phase, solver, joints, vehicles, liquids, waves, smoke, cloth, checkpoints, exact maths | `packages/kernel/src/physics/` |
+| Cloth and liquid in one step, their shared neighbour grid | `packages/kernel/src/physics/particles.ts`, `cloth.ts` |
+| The WebGL 2 painter for cloth and drops in space | `packages/view` |
 | Commands, types, properties, readouts, errors, reasons | `packages/kernel/src/commands/physics/` |
 | Error kinds and undefined reasons | the kernel's registries (`contracts/errors.ts`, `contracts/values.ts`, `language/errors.ts`) |
 | The `hit` event | `packages/kernel/src/commands/numbers/handlers.ts` (the controls handlers) |
 | Command group `physics` and mode allow lists | `packages/modes` |
-| Worker hosting for liquids and big worlds | `packages/sdk` |
+| Worker hosting for liquids, cloth and big worlds | `packages/sdk` |
 | 2D and 3D drawing, the drag `Grab`, the style bar | `packages/sdk/src/screen/` |
 | Tools, examples, the performance panel's physics row | `apps/studio` |
 | Benches | `packages/kernel/bench/physics.bench.ts`, `packages/sdk/bench/physics.bench.ts` |
@@ -579,7 +722,8 @@ Each round is one PR, with tests, examples in the studio and screenshots.
 6. **Water and liquid in 2D.** `Water`, `Liquid`, `Pour`, the worker. Examples: a floating boat, density of ice, a dam breaking, filling a glass.
 7. **Liquid and waves in 3D.** Examples: a splash, a boat on waves.
 8. **Smoke.** Examples: smoke past a ball, a candle.
-9. **Speed round.** The full bench suite of 11.4 and 11.5, in Node and in throttled Chrome, and the browser hash test.
+9. **Cloth.** `Cloth`, `Pin`, `world with wind`, tearing, cloth with bodies and water in the worker, the WebGL 2 painter. Examples: a flag in the wind, a sheet dropped on a ball, a rope that swings, a hammock with a ball, a net that tears, a cloth that catches water.
+10. **Speed round.** The full bench suite of 11.4 and 11.5, in Node and in throttled Chrome, and the browser hash test.
 
 ## 15. Changes to other areas
 
@@ -588,12 +732,15 @@ Each round is one PR, with tests, examples in the studio and screenshots.
 - **Kernel:** compiled functions use the exact maths of `physics/math.ts` (10.2). Reserved names `world` and `hit`. A new undefined reason `unstable_world` and the notices in `errors.md` 5.
 - **Controls and scripting:** a `hit` event, and `Push`, `Wake`, `Sleep` allowed in handlers (`STEP_ACTIONS`).
 - **App modes:** a new command group `physics`, allowed in Classic, Graphing, Geometry and 3D. Scientific, Probability and CAS refuse it. Exam profiles may forbid it.
-- **Performance (`docs/design/performance.md` 5):** the budget rows of 11.3.
+- **Performance (`docs/design/performance.md` 5):** the budget rows of 11.3, cloth points among them, and the worker's 8 ms.
+- **View:** a WebGL 2 painter for cloth and drops in the Space view (12.1). The Space 3D phase plan put the WebGL 2 back-end later; cloth needs this part of it now.
+- **SDK:** a world with cloth or liquid runs in the SDK's physics worker, bodies and all (9.6).
 - **Tools 2D and Space 3D:** a Physics tool group.
 
 ## 16. Better than the reference app
 
-- A real engine with contacts, friction, joints, vehicles and liquids, where the reference app has none.
+- A real engine with contacts, friction, joints, vehicles, liquids and cloth, where the reference app has none.
+- Cloth, water and bodies push each other both ways, in one exact film.
 - Every part is a line in the same language, so formulas, sliders and the teacher drive it.
 - Seek and replay are exact, and the same on every computer.
 - Forces are counted per kind and drawn, so a lesson shows why a body moves.
@@ -603,4 +750,4 @@ Each round is one PR, with tests, examples in the studio and screenshots.
 
 - Our own legacy kit on `legacy/v1`, `packages/core/src/kits/physics2d/` (solver, joints, tank, force accounting).
 - The reference app's motion workarounds, as studied in `docs/features/animation-time/design.md` 2.
-- Public methods, used from their descriptions and not from any code: sequential impulses with warm starting (Erin Catto, GDC talks 2006 to 2014); separating axis tests, GJK and sweep and prune (Christer Ericson, *Real-Time Collision Detection*, 2005); expanding polytope depth (Gino van den Bergen, 2001); position-based fluids (Macklin and Müller, 2013); stable fluids (Jos Stam, 1999); ray wheels, as described in many public vehicle write-ups.
+- Public methods, used from their descriptions and not from any code: sequential impulses with warm starting (Erin Catto, GDC talks 2006 to 2014); separating axis tests, GJK and sweep and prune (Christer Ericson, *Real-Time Collision Detection*, 2005); expanding polytope depth (Gino van den Bergen, 2001); position-based fluids (Macklin and Müller, 2013); extended position-based dynamics (Macklin, Müller and Chentanez, 2016); small steps in physics simulation (Macklin and others, 2019); unified particle physics for cloth and liquids together (Macklin and others, 2014); stable fluids (Jos Stam, 1999); ray wheels, as described in many public vehicle write-ups.

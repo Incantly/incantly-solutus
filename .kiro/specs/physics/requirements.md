@@ -65,11 +65,21 @@ Source: `docs/features/physics/` (design, errors, agent, ui). Section numbers be
 
 ## R8. Errors and modes (errors.md)
 
-1. Every error B001 to B017, every undefined reason and notice in errors.md 4 to 6.
+1. Every error B001 to B019, every undefined reason and notice in errors.md 4 to 6.
 2. Command group `physics` allowed in Classic, Graphing, Geometry and 3D only.
 
 ## R9. Speed (design 11)
 
 1. One level for every computer: the limits of 11.3 everywhere.
-2. Every budget of 11.2 in Node at a quarter of the budget, and in Chrome with the CPU slowed 4 times at the full budget.
+2. Every budget of 11.2 in Node at a quarter of the budget, and in Chrome with the CPU slowed 4 times at the full budget, the cloth rows and the worker's 8 ms among them.
 3. Every check of 11.4 and 11.5.
+
+## R10. Cloth (design 9.5, 9.6, 12.1)
+
+1. `Cloth` in space (a sheet), and in the plane (a rope that bends, a net); `Pin` to the world or to a body; `world with wind`.
+2. XPBD with 4 small steps a step: stretch, shear and bend links, compliance from `stretch` and `bend`, `damping`, `tears`, sleep.
+3. Two-way hits with solids, bodies (equal and opposite impulse), liquid drops (against triangles) and, with `self = true`, itself.
+4. A world with cloth or liquid runs whole in the physics worker; without a worker the same steps run on the page and give the same film.
+5. A WebGL 2 painter for cloth and drops in the Space view; without WebGL 2 the software painter draws every second point.
+6. Drag grabs the nearest point (logged); a drag at the start moves the cloth's start.
+7. Examples: a flag in the wind, a sheet on a ball, a swinging rope, a hammock, a net that tears, a cloth that catches water.

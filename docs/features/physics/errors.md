@@ -5,7 +5,7 @@ Companion to `design.md`. Error objects use the format in `docs/features/errors/
 Four families, as in the other areas:
 
 1. **Errors:** the line was refused, and nothing changed (`ok: false`).
-2. **Undefined values:** the line was accepted, but a body, joint or liquid has no value. It carries a `reason`, a short `detail` and maybe a `cause`.
+2. **Undefined values:** the line was accepted, but a body, joint, liquid or cloth has no value. It carries a `reason`, a short `detail` and maybe a `cause`.
 3. **Notices:** the line or the film worked, with a fact the caller should know (a shape was split, the film runs slow).
 4. **Runtime reports:** things that happen while the film plays, when no line is being applied. They are warnings in the next `draw` or `figure` result and in the player bar, never a dialog (`docs/features/animation-time/errors.md`).
 
@@ -31,20 +31,22 @@ The reference app has no physics engine, so it has no physics errors. Hand-made 
 | B001 | `not_a_body_shape` (new) | typecheck | `Body(s)` where `s` has no area: a `Line`, `Ray`, `Segment`, open `Polyline`, `Curve` or function graph | `use_suggestion` | "A line has no mass. To make it solid, write `s with solid = true`." `suggest`: that line |
 | B002 | `self_crossing` (new) | typecheck | `Body(p)` or `p with solid = true` where `p` is a literal polygon whose edges cross | `fix_line` | names the two edges that cross |
 | B003 | `not_convex_3d` (new) | typecheck | `Body(s)` on a polyhedron with dents | `fix_line` | "Bodies in space must have no dents. Split it into convex parts and `Weld` them." |
-| B004 | `bad_property_value` | typecheck | A literal property out of range: `mass = 0`, `mass = −2`, `bounce = 1.5`, `friction = −1`, `passes = 50`, `world with timestep = 1/1000` | `fix_line` | `expected` has the range |
+| B004 | `bad_property_value` | typecheck | A literal property out of range: `mass = 0`, `mass = −2`, `bounce = 1.5`, `friction = −1`, `passes = 50`, `world with timestep = 1/1000`, a cloth's `stretch = 2`, `tears = 0.5`, `thickness = 1` | `fix_line` | `expected` has the range |
 | B005 | `bad_property_value` | typecheck | `world with timestep = 1/100`: not a whole number of solver steps | `fix_line` | "The step must divide 1/240 s steps evenly. Try 1/120 or 1/60." |
 | B006 | `unknown_property` | resolve | `b with bounciness = 0.9` | `use_suggestion` | the closest names (`bounce`) |
 | B007 | `read_only` | commit | `b with pos = (1, 2)`, `b with x = 3`, `world with time = 2` | `use_suggestion` | "The physics moves `b`. To move its start, change its shape `p`. To kick it, use `Push(b, (1, 0))`." |
 | B008 | `not_a_body` (new) | typecheck | A joint or `Push` with an object that is neither a body nor a solid shape | `use_suggestion` | `suggest`: `p with solid = true`, or `Body(p, mass = 1)` |
 | B009 | `same_body` (new) | typecheck | `Hinge(a, a, P)`, `Spring(b, b)` | `fix_line` | "A joint links two different bodies." |
-| B010 | `mixed_dimension` (C120) | typecheck | A 2D body and a 3D body in one joint, a 2D `Push` on a `Body3`, a 3D world gravity in a 2D figure | `use_suggestion` | as in `space-3d/errors.md` S001 |
+| B010 | `mixed_dimension` (C120) | typecheck | A 2D body and a 3D body in one joint, a 2D `Push` on a `Body3`, a 3D world gravity in a 2D figure, a cloth in space pinned to a 2D body | `use_suggestion` | as in `space-3d/errors.md` S001 |
 | B011 | `reserved_name` | resolve | Defining `world` or `hit` | `rewrite` | pick another name |
 | B012 | `cycle` | commit | A body's shape or mass reads the body itself (`Body(Circle(b.pos, 1))`) | `rewrite` | the chain; "Forces may read `b`, but its shape may not." |
-| B013 | `limit` | plan | A 1,001st body or joint, more than 2,000 liquid particles, a grid over 64 × 64 | `rewrite` | the limit and the current count, the same on every computer |
+| B013 | `limit` | plan | A 1,001st body or joint, more than 2,000 liquid particles, a grid over 64 × 64, a cloth over 64 × 32 points (400 for a rope), more than 4,096 cloth points in all, a second cloth with `self = true`, a 65th pin | `rewrite` | the limit and the current count, the same on every computer |
 | B014 | `no_matching_form` | typecheck | Wrong argument types, as for any command | `choose_form` | the forms |
 | B015 | `not_in_world` (new) | typecheck | `on b hit: …` where `b` is not a body | `fix_line` | "Only bodies hit things. Make `b` a body first." |
 | B016 | `mode_forbids` | plan | A physics line in Scientific, Probability or CAS, or in an exam that forbids it | `report` | as in `app-modes` |
-| B017 | `bad_argument` | typecheck | `Wheel(c, at, 0)` (radius 0), `Liquid(region, 0)`, `Rope(a, b, −1)` as literals | `fix_line` | `expected` |
+| B017 | `bad_argument` | typecheck | `Wheel(c, at, 0)` (radius 0), `Liquid(region, 0)`, `Rope(a, b, −1)`, `Cloth(P, u, v, 1, 8)` (fewer than 2 points a side), a cloth with `u` and `v` along one line, as literals | `fix_line` | `expected` |
+| B018 | `not_a_cloth` (new) | typecheck | `Pin(c, P)` where `c` is not a cloth | `use_suggestion` | "Pin holds a cloth. To hold a body, use `Hinge(b, wall, P)`." `suggest`: that line |
+| B019 | `pin_off_cloth` (new) | typecheck | `Pin(c, P)` with `P` a literal point further than one link from every point of `c` | `fix_line` | names the nearest point of the cloth and how far it is |
 
 **Values versus text.** A polygon built from points whose edges only cross for some values is not an error. It is an undefined body (section 4). Only a literal shape that can never be valid is refused at check time.
 
@@ -133,13 +135,13 @@ Reasons are registered in `AreaUndefReasons` (`packages/kernel/src/contracts/val
 
 | Reason | On | When | `detail` |
 |---|---|---|---|
-| `input_undefined` | body, joint | The shape, mass or an anchor is undefined at the start | names the input |
+| `input_undefined` | body, joint, cloth | The shape, mass, an anchor or a cloth's corner or sides is undefined at the start | names the input |
 | `self_crossing` (new) | body | The shape's edges cross at the start, for these values | names the two edges |
 | `degenerate` | body | The shape has no area (all points on a line) or a radius of 0 | "has no area" |
-| `unstable_world` (new) | body, joint, liquid | A position or speed became not finite or over 1e6 | the time, and "springs too stiff for the step" or "too much force" |
+| `unstable_world` (new) | body, joint, liquid, cloth | A position or speed became not finite or over 1e6 | the time, and "springs too stiff for the step" or "too much force" |
 | `broken` (new) | wheel | A wheel with `breaks` went over its force (a broken joint stays defined, with `j.broken` true and `j.force` 0) | the time and the force |
 | `left_world` (new) | body | It left `world.range` | the time and where it left |
-| `timeout` | body, liquid | The world is still catching up after a seek or a restart | "catching up" |
+| `timeout` | body, liquid, cloth | The world is still catching up after a seek or a restart | "catching up" |
 
 An unstable world is handled like an unstable state (`animation-time/design.md` 7.8):
 
@@ -175,7 +177,9 @@ An unstable world is handled like an unstable state (`animation-time/design.md` 
 | `checkpoints_thinned` | info | The 32 MB checkpoint cap was reached | "Seeking before t = 30 s may take longer." |
 | `ground_sampled` | info | A solid curve was cut to 2,000 pieces | "f is solid between x = −50 and 50." |
 | `input_undefined` | warning | A force or property formula was undefined during the film | "b's force was undefined at t = 2 s and was taken as 0." |
-| `worker_unavailable` | info | The browser has no worker, so liquids run on the page | "Liquids may slow the page down." |
+| `worker_unavailable` | info | The browser has no worker, so liquids and cloth run on the page | "Liquids and cloth run on the page, so the film may play slower here. It is the same film." |
+| `torn` | info | Links of a cloth with `tears` broke | "net tore at t = 2.4 s: 18 links." |
+| `cloth_drawn_coarse` | info | No WebGL 2, so a cloth in space is drawn from every second point | "flag is drawn coarser on this computer; it moves the same." |
 
 ---
 
@@ -187,6 +191,7 @@ An unstable world is handled like an unstable state (`animation-time/design.md` 
 | `physics_behind` | Steps took longer than the frame for 1 s; the film runs slower than real time | a small "slow" mark on the player bar, once | "The film is the same, only slower. Fewer awake bodies make it faster." |
 | `catching_up` | The world is stepping to the current time after a seek or restart | "catching up" on the player bar | none |
 | `broken` | A weld or wheel broke | the next `figure`, as a fact the teacher can say | none |
+| `torn` | A cloth tore | the next `figure`, as an event the teacher can say | none |
 
 ---
 
@@ -196,6 +201,7 @@ An unstable world is handled like an unstable state (`animation-time/design.md` 
 |---|---|---|
 | `worker_unavailable` | No worker support | Physics runs on the page; a notice once |
 | `worker_crashed` | The physics worker stopped | The world restarts from the last checkpoint on the page; a notice once |
+| `webgl_unavailable` | No WebGL 2 for the Space view | Cloth and drops in space are drawn coarser by the software painter (`design.md` 12.1); the notice `cloth_drawn_coarse` once |
 
 They never block a line and never change the figure.
 
@@ -210,6 +216,10 @@ They never block a line and never change the figure.
 | `limit` | Use fewer bodies; still things should be solid shapes, not bodies |
 | `unstable_world` report | Add `damping` to springs, lower `k`, or halve the step |
 | `physics_behind` | Nothing is wrong; say the film plays slower on this computer |
+| `limit` on a cloth | Use fewer points: 32 × 32 looks smooth and costs half |
+| `not_a_cloth` | `Pin` is for cloth; use `Hinge` for a body |
+| `pin_off_cloth` | Pin at a point on the cloth, such as a corner, or use `pins = "top"` |
+| `unstable_world` on a cloth | Lower `stretch` a little, or add `damping` |
 
 ## 9. Cross-links
 

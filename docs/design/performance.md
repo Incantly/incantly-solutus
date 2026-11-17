@@ -85,7 +85,8 @@ Rules:
 | Sounds at once | 8 | See `docs/features/sound/` |
 | Physics bodies and joints | 1,000 each | Line refused with `limit`; see `docs/features/physics/` |
 | Liquid particles | 2,000 | Line refused with `limit` |
-| Physics time per frame | 6 ms on a CPU 4 times slower than the build machine | The film plays slower, never differently |
+| Cloth points | 4,096 (64 × 32 per cloth) | Line refused with `limit` |
+| Physics time per frame | 6 ms on the page, or 8 ms in the physics worker for a world with cloth or liquid, on a CPU 4 times slower than the build machine | The film plays slower, never differently |
 
 ### Techniques
 

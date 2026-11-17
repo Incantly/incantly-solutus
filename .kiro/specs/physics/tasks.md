@@ -29,9 +29,17 @@ Each round is one branch `feat/physics-<n>` and one PR into `integration`, merge
 - [ ] 6. Round 6: water and 2D liquid, worker (R7)
 - [ ] 7. Round 7: 3D liquid and waves (R7)
 - [ ] 8. Round 8: smoke (R7)
-- [ ] 9. Round 9: speed (R9)
-  - [ ] 9.1 Node benches for every budget of design 11.2
-  - [ ] 9.2 Throttled Chrome bench script
-  - [ ] 9.3 Checks of design 11.4
-  - [ ] 9.4 Cross-browser hash test
-  - [ ] 9.5 Exact maths in compiled user formulas
+- [ ] 9. Round 9: cloth (R10)
+  - [ ] 9.1 `Cloth` (sheet, rope, net), `Pin`, `world with wind`; errors B018, B019, the `torn` notice
+  - [ ] 9.2 XPBD small steps: stretch, shear and bend links, damping, tearing, sleep, checkpoints every 0.25 s
+  - [ ] 9.3 Two-way hits: solids, bodies, drops (shared grid), self
+  - [ ] 9.4 The driver in the physics worker, with the same film without it
+  - [ ] 9.5 The WebGL 2 painter for cloth and drops; the coarse fallback
+  - [ ] 9.6 Drag and grab, algebra rows, the Cloth and Pin tools, the readout
+  - [ ] 9.7 Examples, screenshots, spec tests and the cloth checks of design 11.4 and 11.5
+- [ ] 10. Round 10: speed (R9)
+  - [ ] 10.1 Node benches for every budget of design 11.2
+  - [ ] 10.2 Throttled Chrome bench script
+  - [ ] 10.3 Checks of design 11.4
+  - [ ] 10.4 Cross-browser hash test
+  - [ ] 10.5 Exact maths in compiled user formulas
