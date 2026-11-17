@@ -26,7 +26,7 @@ export const FORCE_STYLE: Readonly<Record<string, { color: string; label: string
 const KINDS = ['gravity', 'normal', 'friction', 'tension', 'spring', 'buoyancy', 'drag', 'electric', 'applied', 'net'] as const;
 
 export function isPhysicsItem(it: SceneItem): boolean {
-  return it.type === 'Body' || it.type === 'Joint' || it.type === 'Wheel' || it.type === 'Contacts' || it.type === 'Liquid' || it.type === 'Water' || it.type === 'Waves' || (it.type === 'List' && /^List<(Body|Joint|Wheel)>/.test(it.typeText));
+  return it.type === 'Body' || it.type === 'Joint' || it.type === 'Wheel' || it.type === 'Contacts' || it.type === 'Liquid' || it.type === 'Water' || it.type === 'Waves' || it.type === 'Smoke' || (it.type === 'List' && /^List<(Body|Joint|Wheel)>/.test(it.typeText));
 }
 
 function bodiesOf(it: SceneItem): physics.BodyValue[] {
@@ -342,6 +342,97 @@ function paintWaves(ctx: Ctx, vp: Viewport, w: physics.WavesValue, it: SceneItem
   hits.push({ k: 'circle', x: x(mid), y: y(mid), r: 10, text: `${it.name}: waves, ${fmt(w.speed)} m/s`, id: it.id });
 }
 
+/** The grey of smoke (ui.md 7) and how dark thick smoke is drawn. */
+const SMOKE_GREY = [95, 102, 112] as const;
+const SMOKE_ALPHA = 0.85;
+
+/**
+ * The smoke image: one RGBA pixel per cell, grey with the cell's density as its cover, top row first (the grid's
+ * rows go up). Written into `out`, so a frame makes no new buffer.
+ */
+export function smokeImage(density: Float32Array, n: number, out: Uint8ClampedArray): void {
+  const [r, g, b] = SMOKE_GREY;
+  for (let j = 0; j < n; j++) {
+    const row = (n - 1 - j) * n;
+    for (let i = 0; i < n; i++) {
+      const d = density[j * n + i] as number;
+      const o = (row + i) * 4;
+      out[o] = r;
+      out[o + 1] = g;
+      out[o + 2] = b;
+      out[o + 3] = d > 0 ? Math.round(255 * SMOKE_ALPHA * (d < 1 ? d : 1)) : 0;
+    }
+  }
+}
+
+type SmallCanvas = { width: number; height: number; getContext(k: '2d'): { putImageData(d: ImageData, x: number, y: number): void; createImageData(w: number, h: number): ImageData } | null };
+/** One small canvas and image a grid size, reused every frame. */
+const SMOKE_CANVAS = new Map<number, { canvas: SmallCanvas; image: ImageData } | null>();
+
+function smokeCanvas(n: number): { canvas: SmallCanvas; image: ImageData } | null {
+  const had = SMOKE_CANVAS.get(n);
+  if (had !== undefined) return had;
+  let made: { canvas: SmallCanvas; image: ImageData } | null = null;
+  try {
+    const Off = (globalThis as { OffscreenCanvas?: new (w: number, h: number) => SmallCanvas }).OffscreenCanvas;
+    const doc = (globalThis as { document?: { createElement(k: 'canvas'): SmallCanvas } }).document;
+    const canvas = Off ? new Off(n, n) : doc ? doc.createElement('canvas') : undefined;
+    if (canvas) {
+      canvas.width = n;
+      canvas.height = n;
+      const g = canvas.getContext('2d');
+      if (g && typeof g.createImageData === 'function') made = { canvas, image: g.createImageData(n, n) };
+    }
+  } catch {
+    made = null;
+  }
+  SMOKE_CANVAS.set(n, made);
+  return made;
+}
+
+/**
+ * Smoke: a grey shaded image under the shapes, one image a frame from the density grid, scaled to the box and smoothed
+ * (ui.md 7). Where the board cannot take an image (an SVG export), each cell is a grey square.
+ */
+function paintSmoke(ctx: Ctx, vp: Viewport, s: physics.SmokeValue, it: SceneItem, hits: Hit[]): void {
+  const { n, x0, y0, x1, y1 } = s.spec;
+  const px0 = vp.px(x0);
+  const px1 = vp.px(x1);
+  const py0 = vp.py(y1);
+  const py1 = vp.py(y0);
+  const w = px1 - px0;
+  const h = py1 - py0;
+  if (!(w > 0) || !(h > 0)) return;
+  const small = typeof (ctx as { drawImage?: unknown }).drawImage === 'function' ? smokeCanvas(n) : null;
+  ctx.save();
+  if (small) {
+    smokeImage(s.density, n, small.image.data);
+    small.canvas.getContext('2d')?.putImageData(small.image, 0, 0);
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(small.canvas as unknown as CanvasImageSource, px0, py0, w, h);
+  } else {
+    const cw = w / n;
+    const ch = h / n;
+    const [r, g, b] = SMOKE_GREY;
+    for (let j = 0; j < n; j++) {
+      for (let i = 0; i < n; i++) {
+        const d = s.density[j * n + i] as number;
+        if (!(d > 0.02)) continue;
+        ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${(SMOKE_ALPHA * Math.min(1, d)).toFixed(2)})`;
+        ctx.fillRect(px0 + i * cw, py1 - (j + 1) * ch, cw + 0.5, ch + 0.5);
+      }
+    }
+  }
+  // a faint frame, so the box shows before any smoke reaches its edges
+  ctx.strokeStyle = 'rgba(95, 102, 112, 0.35)';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([4, 4]);
+  ctx.strokeRect(px0, py0, w, h);
+  ctx.setLineDash([]);
+  ctx.restore();
+  hits.push({ k: 'rect', x0: px0, y0: py0, x1: px0 + Math.min(w, 24), y1: py0 + Math.min(h, 24), text: `${it.name}: smoke ${n} by ${n}, air up to ${fmt(s.speed)} m/s`, id: it.id });
+}
+
 /** The part of a polygon below y = level (Sutherland and Hodgman against one line). */
 function clipBelow(pts: readonly Pt[], level: number): Pt[] {
   const out: Pt[] = [];
@@ -371,6 +462,10 @@ export function paintPhysicsItem(ctx: Ctx, vp: Viewport, it: SceneItem, hits: Hi
   }
   if (physics.isWavesValue(it.value)) {
     paintWaves(ctx, vp, it.value, it, hits);
+    return;
+  }
+  if (physics.isSmokeValue(it.value)) {
+    paintSmoke(ctx, vp, it.value, it, hits);
     return;
   }
   if (it.type === 'Contacts') {

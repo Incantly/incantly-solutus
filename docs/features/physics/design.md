@@ -202,7 +202,7 @@ The usual way to write a car is four `Wheel` lines and one `Vehicle` line. `moto
 | `Pour` | `(at: Point, rate, speed)`, `(at: Point3, rate, speed)`; named `max` | A tap: adds particles over time, up to `max` |
 | `Water` | `(level: Number)`, `(region, level)` | Still water: bodies float by Archimedes' rule, cheap |
 | `Waves` | `(box: Polyhedron, n)` in space; `(segment, n)` in the plane | A water surface on an `n` by `n` grid (or `n` points) that waves when hit |
-| `Smoke` | `(region, n)`; named `source`, `heat`, `wind` | Smoke and air on an `n` by `n` grid in a box of the plane |
+| `Smoke` | `(region, n)`; named `source`, `heat`, `wind`, `until` | Smoke and air on an `n` by `n` grid (4 to 64) in a box of the plane; read `sm.mass`, `sm.speed`, `sm.at(x, y)` |
 
 All of them hit solid shapes and bodies (section 9). Readouts: `l.count`, `l.level` for a liquid; `wa.level` for still water; `w.level`, `w.speed` and `w.height(x, y)` for waves (9.3). `Waves` takes `damping` named, and in the plane `depth`.
 
@@ -494,6 +494,18 @@ How it is built (round 7, `packages/kernel/src/physics/waves.ts`):
 
 A grid of flow and smoke density, stepped by the stable-fluids method: carry the flow along itself, add heat as an upward force, make the flow lose no volume (20 pressure passes), then carry the smoke along the flow. Solid shapes and bodies block the flow, and moving bodies stir it. It is drawn as a shaded image on the board.
 
+Choices made while building it (round 8, `packages/kernel/src/physics/smoke2.ts`, `commands/physics/smoke.ts`):
+
+- **The grid.** A staggered grid over the bounding box of `region`: smoke and pressure at cell centres, the flow's x speeds on the vertical faces and its y speeds on the horizontal ones, so the divergence, the pressure gradient and the pressure solve are one operator. `n` is 4 to 64 (11.3: all smoke grids of a figure together at most 64 × 64 cells).
+- **The step.** Smoke steps 60 times a second of film (every second step at the default 1/120 s), with `h = 1/60`: (1) mark the cells inside solid shapes (once, again when a mover moves) and bodies (each step); (2) carry the flow back along itself (semi-Lagrangian, bilinear), air from outside the box coming in with the wind; (3) heat lifts the flow by `heat × density` m/s²; (4) the faces of a solid cell take that solid's speed at the face (a moving body or mover pushes the air); (5) the projection: 20 red-black over-relaxed passes (ω = 1.8) of the pressure solve, started from the last step's pressure, with the open air outside the box at pressure 0 and no term for a solid neighbour; (6) carry the smoke along the new flow and make smoke at the source (density 1 in its cells).
+- **The start.** The air starts moving with the wind (the smoke's own `wind`, else `world.wind` at the first step), and ten projections (200 passes) once make that start flow lose no volume round the solids. The source starts full of smoke, so it shows before the film runs. A first guess of 0 pressure in a cell a body has just left is replaced by the mean of its neighbours.
+- **Named arguments.** `source` is a point (its cell), a circle or a polygon; `heat` is the lift of thick smoke in m/s², −50 to 50, 2 when a source is given and 0 without one (a candle is about 5); `wind` is the smoke's own wind, each part at most 100 m/s; `until` (seconds, 0 or more) stops the source, so `until = 0` is one puff. A source or heat that reads `t` or a slider is read at each smoke step.
+- **Smoke kept.** Carrying smoke back and blending four cells is not exact about mass: it loses about 0.05% to 0.3% a step. With no source making smoke, the new smoke is scaled so it holds what it held less what flowed out of the open edges this step, by at most 0.5% a step. Smoke inside a solid is taken away.
+- **Two-way.** The air pushes each body beside it with a drag `½ ρ Cd D |Δv| Δv` (ρ = 1.2 kg/m³, Cd = 1, D the body's width, Δv the mean air speed in the air cells beside it less the body's speed), capped at half the speed difference per smoke step, counted as `drag` and applied over the bodies' steps up to the next smoke step (one step late, as drops push, 9.6). A body smaller than a cell feels the air at its centre and does not block it.
+- **Blowing up.** A flow speed over 1e6 m/s or not a number stops the grid: `unstable_world` on the smoke, a notice once; seeking back shows it again.
+- **Where it runs.** A 64 × 64 grid costs about 0.5 ms a frame in Node (11.2), so smoke stays on the page. In a figure with liquid it runs with the rest of the world in the worker, and its density grid comes back moved, not copied.
+- **Drawing.** One grey image a frame, one pixel per cell, its cover the density (0.85 at density 1), scaled to the box and smoothed, under every other shape, with a faint dashed frame for the box (ui.md 7). Where the board cannot draw images (SVG export), each cell is a grey square.
+
 ### 9.5 Cloth (`Cloth`, `Pin`)
 
 A cloth is a grid of points joined by links of fixed length. We use **extended position-based dynamics (XPBD) with small steps**, the method most games and film tools now use for cloth, because it stays stable at our fixed step for any stiffness, and its stiffness does not change with the number of passes.
@@ -545,7 +557,7 @@ Liquid drops and cloth points are both moving points. So they share one neighbou
 
 **Where it runs.** A figure with cloth or liquid runs its whole physics world, bodies included, in one worker (a second thread). One world in one thread keeps every hit in a fixed order, so the film is exact. The page sends inputs (sliders, drags, pushes) and gets back, each frame, the points and the poses to draw (11.2: under 0.5 ms). Without a worker, the same steps run on the page: the film is the same, and plays slower on a slow computer (10.5), with a `worker_unavailable` notice.
 
-How it is built (round 6, `packages/sdk/src/worker/`): the worker holds a headless copy of the figure, loaded from the page's script whenever the page's lines change (its `@input` log included). Each frame the page sends the film time, the free values that changed and the `@input` lines made on the page since (pushes, grabs, restarts, which the page's driver makes instead of applying), and gets back the cells of every object the world owns, with the drops' and forces' typed arrays moved. One frame is in flight at a time, so a slow worker makes the film slower, not a queue longer. The page's driver steps nothing meanwhile; it writes the cells it is sent. If the worker stops, the page takes the world back, rebuilds it from its start with the same log and catches up (`worker_crashed`). A figure with liquid or waves goes to the worker, in the plane or in space (round 7: the host talks to whichever driver holds the world); cloth joins it in round 9. When the worker's own `@input` log changes (a car's pedal or a slider with `rerun = continue` moved while the film played, which the worker logs itself), it is sent back with the cells, and the page saves it with its own lines not yet sent; so a line edit that reloads the worker's script keeps them (round 7, fixing a round 6 gap).
+How it is built (round 6, `packages/sdk/src/worker/`): the worker holds a headless copy of the figure, loaded from the page's script whenever the page's lines change (its `@input` log included). Each frame the page sends the film time, the free values that changed and the `@input` lines made on the page since (pushes, grabs, restarts, which the page's driver makes instead of applying), and gets back the cells of every object the world owns, with the drops' and forces' typed arrays moved. One frame is in flight at a time, so a slow worker makes the film slower, not a queue longer. The page's driver steps nothing meanwhile; it writes the cells it is sent. If the worker stops, the page takes the world back, rebuilds it from its start with the same log and catches up (`worker_crashed`). A figure with liquid or waves goes to the worker, in the plane or in space (round 7: the host talks to whichever driver holds the world), and its smoke goes with it; a figure with smoke and no liquid or waves stays on the page, which its 0.5 ms a frame fits (9.4); cloth joins the worker in round 9. When the worker's own `@input` log changes (a car's pedal or a slider with `rerun = continue` moved while the film played, which the worker logs itself), it is sent back with the cells, and the page saves it with its own lines not yet sent; so a line edit that reloads the worker's script keeps them (round 7, fixing a round 6 gap).
 
 ## 10. Time, exact replay and seeking
 
@@ -578,7 +590,7 @@ Size, at full Float64 precision:
 | 100 boxes in 3D | about 25 KB | about 3 MB |
 | 2,000 liquid particles in 2D | about 64 KB | about 7.7 MB |
 | 2,000 liquid particles in 3D | about 96 KB | about 11.5 MB |
-| A 64 by 64 smoke grid | about 100 KB | about 12 MB |
+| A 64 by 64 smoke grid (flow, smoke and the pressure the next step starts from) | about 131 KB | about 16 MB |
 | A 32 by 32 cloth | about 50 KB | about 12 MB (240 checkpoints) |
 | A 64 by 32 cloth | about 100 KB | about 24 MB (240 checkpoints) |
 | Two 64 by 32 cloths | about 200 KB | about 48 MB: thinned after about 40 s |
@@ -590,6 +602,8 @@ A figure may use at most **32 MB** for physics checkpoints. Past that, the oldes
 ### 10.4 Seeking
 
 Seek to `t`: load the last checkpoint at or before `t`, then step forward to `t` (at most 60 steps of 1/120 s, or 30 with cloth). A figure that was just loaded computes checkpoints ahead in idle slices, at most 5 ms each, so the first seek is fast too. While the world is behind, the player shows "catching up", as for states (`animation-time/design.md` 8.5).
+
+A world can be built at any film time (the time the figure is shown when it is loaded or sought), so nothing in the first step may depend on that time: a mover starts at rest at the first step (its speed is the change of its shape between steps, and there is no step before the first), and a smoke grid takes its wind and source at the first step (round 8).
 
 ### 10.5 Falling behind
 
@@ -720,6 +734,9 @@ Speed on average is not enough. The physics bench suite checks all of these, and
 | Hanging rope | A 2D rope of 200 points hanging from two pins at the same height | follows the catenary `a cosh(x / a)`, within 2% of its sag |
 | Rope pendulum | A 1 kg ball pinned to the end of a 2 m rope of 0.01 kg, swung 5° | period within 1% of `2π √(L / g)` |
 | Wet cloth | A sheet that holds 1 kg of water | the pins carry the sheet's weight plus 9.8 N, within 2% |
+| Smoke, no volume lost | Smoke past a ball in a steady wind, a candle, and a gusty wind with a light body, read at 0.5 to 3 s | after the projection, the largest divergence is under 0.25% of (fastest air / cell size); measured at most 0.15%. 20 passes leave the slowest, box-wide part of the error a little open, so it is not 0 |
+| Smoke kept | Hot smoke in a closed jar, its source stopped (`until = 0.5`), for 10 s | the mass stays within 0.1%; measured within 1e-12, because the step scales the carried smoke back to its mass (9.4) and the blending loses far less than the 0.5% a step that scaling may make up |
+| Still air | Smoke round a solid ball with no heat and no wind, 10 s | every air speed stays exactly 0 and the smoke does not move, to the last bit |
 
 ## 12. Drawing
 

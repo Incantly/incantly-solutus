@@ -1098,7 +1098,8 @@ export function paintScene(ctx: Ctx, vp: Viewport, items: readonly SceneItem[]):
   stemOffset = 0;
   paintGrid(ctx, vp);
   // areas and charts first, then curves, then points on top
-  const rank = (t: string): number => (t === 'Point' ? 3 : t === 'Water' || t === 'Waves' || t === 'Chart' || t === 'Region' || t === 'Polygon' || t.endsWith('Distribution') ? 0 : t === 'List' ? 2 : 1);
+  // smoke is a shaded image under everything (ui.md 7)
+  const rank = (t: string): number => (t === 'Smoke' ? -1 : t === 'Point' ? 3 : t === 'Water' || t === 'Waves' || t === 'Chart' || t === 'Region' || t === 'Polygon' || t.endsWith('Distribution') ? 0 : t === 'List' ? 2 : 1);
   const sorted = [...items].sort((a, b) => rank(a.type) - rank(b.type));
   const scale = forceScale(items);
   for (const it of sorted) {
@@ -1205,6 +1206,10 @@ export function sceneBounds(items: readonly SceneItem[]): { x0: number; x1: numb
             add(wv.x0, wv.level - wv.depth);
             add(wv.x0 + wv.nx * wv.dx, wv.level + 0.5);
           }
+        } else if (s?.schema === 'Smoke') {
+          const sm = s as unknown as { spec: { x0: number; y0: number; x1: number; y1: number } };
+          add(sm.spec.x0, sm.spec.y0);
+          add(sm.spec.x1, sm.spec.y1);
         } else if (s?.schema === 'Water') {
           const wv = s as unknown as { level: number; region?: Pt[] };
           for (const p of wv.region ?? []) add(p.x, p.y);

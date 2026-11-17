@@ -38,6 +38,8 @@ import { JOINT_COMMANDS, MEASURE_COMMANDS, isJointValue } from './joints';
 import { VEHICLE_COMMANDS, isVehicleValue, isWheel3Value, isWheelValue } from './vehicle';
 import { registerLiquids } from './liquid-reg';
 import { LIQUID_COMMANDS } from './liquid';
+import { registerSmoke } from './smoke-reg';
+import { SMOKE_COMMANDS, SMOKE_MAX_WIND } from './smoke';
 import type { BodySpec, BodyValue, Outline, WorldValue } from './types';
 import { DEFAULT_WORLD, SHOW_WORDS, isBodyValue, isWorldValue } from './types';
 
@@ -63,6 +65,8 @@ export { Physics3Driver } from './driver3';
 /** Notices of the physics area for hosts (the worker's `worker_unavailable`, `worker_crashed`). */
 export { makeNotice } from '../../errors/notices';
 export type { LiquidValue, LiquidSpec, WaterValue, WavesValue } from './liquid';
+export { isSmokeValue } from './smoke';
+export type { SmokeValue, SmokeSpec } from './smoke';
 
 /** The limits of design 11.3, the same on every computer. */
 export const PHYSICS_LIMITS = Object.freeze({ bodies: 1000, joints: 1000, liquid: 2000, grid: 64, groundPieces: 2000, contactPoints: 4000 });
@@ -316,13 +320,15 @@ function groundRule(): { run(call: RuleCall): unknown } {
 
 /* ------------------------------ the world ------------------------------ */
 
-const WORLD_PROPS: readonly (readonly [string, string])[] = [['gravity', 'Vector|Point|Vector3|Point3'], ['air', 'Number'], ['passes', 'Number'], ['timestep', 'Number'], ['sleep', 'Bool'], ['range', 'Number'], ['show', 'Text']];
+const WORLD_PROPS: readonly (readonly [string, string])[] = [['gravity', 'Vector|Point|Vector3|Point3'], ['air', 'Number'], ['passes', 'Number'], ['timestep', 'Number'], ['sleep', 'Bool'], ['range', 'Number'], ['show', 'Text'], ['wind', 'Vector|Point|Vector3|Point3']];
 
 function worldRule(): { run(call: RuleCall): unknown } {
   return {
     run(call) {
-      const [g, air, passes, step, sleep, range, show] = call.values;
+      const [g, air, passes, step, sleep, range, show, wind] = call.values;
       const gv = g as { x?: number; y?: number; z?: number } | undefined;
+      const wv = wind as { x?: number; y?: number; z?: number } | undefined;
+      const wpart = (x: unknown): number => Math.min(SMOKE_MAX_WIND, Math.max(-SMOKE_MAX_WIND, num(x, 0)));
       const st = num(step, 1 / 120);
       const g3 = typeof gv?.z === 'number';
       const v: WorldValue = {
@@ -330,6 +336,7 @@ function worldRule(): { run(call: RuleCall): unknown } {
         gx: num(gv?.x, 0), gy: num(gv?.y, -9.8), gz: g3 ? num(gv?.z, -9.8) : num(gv?.y, -9.8), g3, air: Math.min(10, Math.max(0, num(air, 0))), passes: Math.min(20, Math.max(1, Math.round(num(passes, 8)))),
         rate: st > 0 ? Math.round(1 / st) : 120, sleep: bool(sleep, true), range: Math.max(1, num(range, 50)),
         show: typeof show === 'string' && (SHOW_WORDS as readonly string[]).includes(show) ? show : 'bodies',
+        windX: wpart(wv?.x), windY: wpart(wv?.y), windZ: wpart(wv?.z),
       };
       return v;
     },
@@ -343,6 +350,15 @@ function checkWorld(c: FormCheck): Refusal | undefined {
     const a = c.args[i];
     if (!a || a.omitted) continue;
     const [key] = WORLD_PROPS[i] as readonly [string, string];
+    if (key === 'wind') {
+      // any finite vector (design 2.3), each part at most 100 m/s
+      if (typeof a.literal === 'number') return bad(i, key, 'a vector such as (3, 0)', 'wind is the speed of the air in m/s: (3, 0) blows to the right.', 'world with wind = (3, 0)');
+      // a vector written in the line is its literal; a bare name, its value now
+      const v = (a.literal ?? a.value) as { x?: unknown; y?: unknown; z?: unknown } | undefined;
+      const parts = [v?.x, v?.y, v?.z].filter((x): x is number => typeof x === 'number');
+      if (parts.some((x) => !(Math.abs(x) <= SMOKE_MAX_WIND))) return bad(i, key, `a vector with each part at most ${SMOKE_MAX_WIND} m/s`, 'A strong wind is 10 m/s; a hurricane about 70.');
+      continue;
+    }
     if (key === 'show' && typeof a.literal === 'string' && !(SHOW_WORDS as readonly string[]).includes(a.literal)) return bad(i, key, SHOW_WORDS.join(', '), 'Write world with show = "forces".');
     const n = typeof a.literal === 'number' ? a.literal : fraction(a.text);
     if (n === undefined) continue;
@@ -534,7 +550,7 @@ const BODY_FIELDS: Readonly<Record<string, Ty>> = {
   force: { k: 'Function', ret: 'Vector', arity: 1, textArgs: true } as Ty,
 };
 
-const WORLD_FIELDS: Readonly<Record<string, Ty>> = { time: T.Number, energy: T.Number, momentum: T.Vector, awake: T.Number, contacts: T.Number, gravity: T.Vector };
+const WORLD_FIELDS: Readonly<Record<string, Ty>> = { time: T.Number, energy: T.Number, momentum: T.Vector, awake: T.Number, contacts: T.Number, gravity: T.Vector, wind: T.Vector };
 
 /** The shape of a body where it is now. */
 export function shapeNow(b: BodyValue): unknown {
@@ -616,6 +632,8 @@ function readWorld(field: string, v: unknown): unknown {
       return v.contacts;
     case 'gravity':
       return { x: v.gx, y: v.gy };
+    case 'wind':
+      return { x: v.windX, y: v.windY };
     default:
       return undefined;
   }
@@ -826,6 +844,7 @@ let registered = false;
 export function registerPhysics(registry: CommandRegistry): void {
   registry.registerAll([...PHYSICS_COMMANDS, ...JOINT_COMMANDS, ...MEASURE_COMMANDS, ...VEHICLE_COMMANDS]);
   registry.registerAll(LIQUID_COMMANDS);
+  registry.registerAll(SMOKE_COMMANDS);
   if (registered) return;
   registered = true;
   registerWorldDriver((figure) => {
@@ -908,6 +927,7 @@ export function registerPhysics(registry: CommandRegistry): void {
   registerNotice('physics_behind', { code: 'B110', severity: 'info', template: 'The film plays slower than real time on this computer; it is the same film.' });
   registerNotice('broken', { code: 'B111', severity: 'info', template: '{name} broke at t = {t} s.' });
   registerLiquids();
+  registerSmoke();
 }
 
 const fmt = (x: number): string => (Number.isFinite(x) ? String(Number(x.toFixed(3))) : String(x));

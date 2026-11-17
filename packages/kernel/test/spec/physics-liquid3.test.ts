@@ -394,6 +394,18 @@ describe('the exact film with liquid and waves in space (design 10)', () => {
     expect(sought.value('boat')).toEqual(played.value('boat'));
   });
 
+  it('in the plane, waves with smoke and drops in one world: seek equals play (one checkpoint holds them all)', () => {
+    const lines = ['bed = Ground(-1)', 'sea = Waves(Segment((-5, 0), (5, 0)), 40)', 'boat = Body(Box((0, 0.6), 1.6, 0.5), density = 0.5)', 'air = Smoke(Box((0, 3), 6, 4), 16, source = (0, 2))', 'rain = Pour((2, 4), 30, 1, max = 60)'];
+    const played = make(lines);
+    play(2.5, played);
+    const sought = make(lines);
+    seek(sought, 1.2);
+    seek(sought, 2.5);
+    expect(physicsOf(sought).worldHash()).toBe(physicsOf(played).worldHash());
+    expect(waves('sea', sought).heights).toEqual(waves('sea', played).heights);
+    expect(sought.value('boat')).toEqual(played.value('boat'));
+  });
+
   it('a push in a splash is logged, and the reloaded script plays the same film', () => {
     all(SPLASH);
     play(1);
