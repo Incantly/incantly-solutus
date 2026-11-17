@@ -37,8 +37,8 @@ describe('cloth links', () => {
     const d = sheet(8, 6);
     const c = new ClothSet([d], 3);
     expect(c.la.length).toBe(countLinks(d));
-    // 8 × 6: 6·7 + 8·5 stretch, 2·7·5 shear, 6·6 + 8·4 bend
-    expect(countLinks(d)).toBe(42 + 40 + 70 + 36 + 32);
+    // 8 × 6: 6·7 + 8·5 stretch, 7·5 shear (one diagonal a cell), 6·6 + 8·4 bend
+    expect(countLinks(d)).toBe(42 + 40 + 35 + 36 + 32);
     // batches: runs of stretch links of one parity and direction share no point
     const seen = new Set<number>();
     let batch = -1;

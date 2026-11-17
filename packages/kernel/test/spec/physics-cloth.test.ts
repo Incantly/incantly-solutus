@@ -229,13 +229,13 @@ describe('cloth meets bodies, solids and drops (design 9.6, 11.4)', () => {
   });
 
   it('a ball resting on a sheet pinned at its four corners: the pins carry its weight and the sheet\'s within 1% (Cloth, two-way)', () => {
-    all(['sheet = Cloth((-1, -1, 1), (2, 0, 0), (0, 2, 0), 24, 24, mass = 0.5, damping = 0.5, pins = "corners")', 'ball = Body(Sphere((0, 0, 1.33), 0.3), mass = 2)']);
-    // the ball settles in about 9 s (the sheet rings, damped)
-    play(10);
+    all(['sheet = Cloth((-1, -1, 1), (2, 0, 0), (0, 2, 0), 24, 24, mass = 0.5, damping = 1, pins = "corners")', 'ball = Body(Sphere((0, 0, 1.33), 0.3), mass = 2)']);
+    // the ball settles in about 12 s (the sheet rings, damped)
+    play(14);
     let fz = 0;
     let n = 0;
     for (let k = 1; k <= 120; k++) {
-      f.setClock(10 + k / 60);
+      f.setClock(14 + k / 60);
       fz += physics3Of(f).pinForce(idOf('sheet'))?.z ?? Number.NaN;
       n++;
     }

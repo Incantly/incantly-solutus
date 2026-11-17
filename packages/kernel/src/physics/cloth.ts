@@ -102,6 +102,8 @@ export interface ClothInfo {
   readonly pinN: number;
   readonly te0: number;
   readonly teN: number;
+  /** The first bend link (they come last). */
+  readonly bend0: number;
   /** A rope's first entry in the chain table. */
   readonly ch0: number;
   readonly mPt: number;
@@ -164,6 +166,10 @@ export class ClothSet {
   pinOf: Int32Array;
   /** Points a tether held back in this small step (they pass a push on to their pins, as a pinned point does). */
   taut: Uint8Array;
+  /** The air's push on each point in each small step of this step, as a change of speed. */
+  afx: Float64Array;
+  afy: Float64Array;
+  afz: Float64Array;
   /** Tethers: point, pin, length. */
   tePoint: Int32Array;
   tePin: Int32Array;
@@ -246,6 +252,9 @@ export class ClothSet {
     this.owner = I(np);
     this.pinOf = I(np).fill(-1);
     this.taut = new Uint8Array(np);
+    this.afx = F(np);
+    this.afy = F(np);
+    this.afz = F(np);
     this.la = I(nl);
     this.lb = I(nl);
     this.rest = F(nl);
@@ -278,7 +287,7 @@ export class ClothSet {
       const n = d.nu * d.nv;
       const mPt = d.mass / n;
       const info: ClothInfo = {
-        def: d, p0: p, n, l0: l, ln: 0, t0: t, tn: 0, pin0: pin, pinN: d.pins.length, te0: te, teN: 0, ch0: 0, mPt,
+        def: d, p0: p, n, l0: l, ln: 0, t0: t, tn: 0, pin0: pin, pinN: d.pins.length, te0: te, teN: 0, ch0: 0, bend0: 0, mPt,
         asleep: false, sleepTime: 0, torn: 0, unstable: false, windX: 0, windY: 0, windZ: 0,
       };
       for (let k = 0; k < n; k++) {
@@ -291,6 +300,9 @@ export class ClothSet {
         this.owner[i] = c;
       }
       l = this.buildLinks(d, p, l, mPt);
+      let b0 = info.l0;
+      while (b0 < l && this.kind[b0] !== LinkKind.bend) b0++;
+      (info as { bend0: number }).bend0 = b0;
       (info as { ln: number }).ln = l - info.l0;
       t = this.buildTris(d, p, t, info.l0, l);
       (info as { tn: number }).tn = t - info.t0;
@@ -407,8 +419,12 @@ export class ClothSet {
     for (let par = 0; par < 2; par++) for (let j = 0; j < nv; j++) for (let i = par; i + 1 < nu; i += 2) add(at(i, j), at(i + 1, j), LinkKind.stretch, aS);
     for (let par = 0; par < 2; par++) for (let j = par; j + 1 < nv; j += 2) for (let i = 0; i < nu; i++) add(at(i, j), at(i, j + 1), LinkKind.stretch, aS);
     if (nv > 1) {
-      for (let j = 0; j + 1 < nv; j++) for (let i = 0; i + 1 < nu; i++) add(at(i, j), at(i + 1, j + 1), LinkKind.shear, aS);
-      for (let j = 0; j + 1 < nv; j++) for (let i = 0; i + 1 < nu; i++) add(at(i + 1, j), at(i, j + 1), LinkKind.shear, aS);
+      // one diagonal a cell, the two kinds in a checkerboard so the cloth skews alike both ways (half the links of
+      // both diagonals, for the same feel at our stiffness)
+      for (let j = 0; j + 1 < nv; j++) for (let i = 0; i + 1 < nu; i++) {
+        if ((i + j) % 2 === 0) add(at(i, j), at(i + 1, j + 1), LinkKind.shear, aS);
+        else add(at(i + 1, j), at(i, j + 1), LinkKind.shear, aS);
+      }
     }
     if (b > 0) {
       for (let j = 0; j < nv; j++) for (let i = 0; i + 2 < nu; i++) add(at(i, j), at(i + 2, j), LinkKind.bend, aB);
@@ -624,6 +640,11 @@ export class ClothSet {
     this.prepareSelf();
     const hs = h / SUBSTEPS;
     this.beginSub();
+    // the air's push, once a step from the speeds at its start, felt in each small step
+    for (let c = 0; c < this.cloths.length; c++) {
+      const ci = this.cloths[c] as ClothInfo;
+      if (!ci.asleep && !ci.unstable) this.airForces(ci, hs);
+    }
     for (let s = 0; s < SUBSTEPS; s++) {
       this.subFrac = (s + 1) / SUBSTEPS;
       this.substep(hs);
@@ -670,7 +691,6 @@ export class ClothSet {
     // 1. move by speed, gravity and the air
     for (const c of this.cloths) {
       if (c.asleep || c.unstable) continue;
-      this.airForces(c, hs);
       const e = c.p0 + c.n;
       for (let i = c.p0; i < e; i++) {
         const xi = x[i] as number;
@@ -682,9 +702,9 @@ export class ClothSet {
         if (w[i] === 0) continue;
         const pin = this.pinOf[i] as number;
         if (pin >= 0) continue;
-        const nvx = (vx[i] as number) + hs * this.gx;
-        const nvy = (vy[i] as number) + hs * this.gy;
-        const nvz = (vz[i] as number) + hs * this.gz;
+        const nvx = (vx[i] as number) + hs * this.gx + (this.afx[i] as number);
+        const nvy = (vy[i] as number) + hs * this.gy + (this.afy[i] as number);
+        const nvz = (vz[i] as number) + hs * this.gz + (this.afz[i] as number);
         vx[i] = nvx;
         vy[i] = nvy;
         vz[i] = nvz;
@@ -726,8 +746,12 @@ export class ClothSet {
       if (c.def.kind === 'rope') {
         // a rope's stretch links are one chain: solved together along it, then its bend links once each
         this.solveChain(c, inv2);
-        this.solveLinks(c.l0 + c.n - 1, c.l0 + c.ln, inv2);
-      } else this.solveLinks(c.l0, c.l0 + c.ln, inv2);
+        if (this.subFrac * SUBSTEPS % 2 === 0) this.solveLinks(c.l0 + c.n - 1, c.l0 + c.ln, inv2 * 0.25);
+      } else {
+        this.solveLinks(c.l0, c.bend0, inv2);
+        // bend links every second small step, as one of twice the length (their stiffness is the same)
+        if (this.subFrac * SUBSTEPS % 2 === 0) this.solveLinks(c.bend0, c.l0 + c.ln, inv2 * 0.25);
+      }
       this.solveTethers(c.te0, c.te0 + c.teN);
     }
     // 3. body pins: what the point moved, the body moves (a push now, a move at the next step)
@@ -1045,7 +1069,10 @@ export class ClothSet {
    * ½ ρ A (u·n)|u·n|, plus a little skin drag along it, shared by its corners. u is the air's speed less the face's.
    */
   private airForces(c: ClothInfo, hs: number): void {
-    const { x, y, z, vx, vy, vz, w, ta, tb, tc } = this;
+    const { x, y, z, vx, vy, vz, w, ta, tb, tc, afx, afy, afz } = this;
+    afx.fill(0, c.p0, c.p0 + c.n);
+    afy.fill(0, c.p0, c.p0 + c.n);
+    afz.fill(0, c.p0, c.p0 + c.n);
     const air = this.scratch;
     const t1 = c.t0 + c.tn;
     const calm = this.windX === 0 && this.windY === 0 && this.windZ === 0 && !this.hasFlow();
@@ -1062,7 +1089,26 @@ export class ClothSet {
       let uy: number;
       let uz: number;
       let share: number;
-      if (e < 0) {
+      let q = -1;
+      if (e >= 0 && ((t - c.t0) & 1) === 0 && t + 1 < t1 && !this.triTorn(t + 1)) {
+        // a whole cell (its two faces): the area along its normal is half the cross of its diagonals
+        q = tc[t + 1] as number;
+        const dax = (x[e] as number) - (x[a] as number);
+        const day = (y[e] as number) - (y[a] as number);
+        const daz = (z[e] as number) - (z[a] as number);
+        const dbx = (x[q] as number) - (x[b] as number);
+        const dby = (y[q] as number) - (y[b] as number);
+        const dbz = (z[q] as number) - (z[b] as number);
+        nx = 0.5 * (day * dbz - daz * dby);
+        ny = 0.5 * (daz * dbx - dax * dbz);
+        nz = 0.5 * (dax * dby - day * dbx);
+        this.airAt(x[a] as number, y[a] as number, air);
+        ux = (air[0] as number) - 0.25 * ((vx[a] as number) + (vx[b] as number) + (vx[e] as number) + (vx[q] as number));
+        uy = (air[1] as number) - 0.25 * ((vy[a] as number) + (vy[b] as number) + (vy[e] as number) + (vy[q] as number));
+        uz = (air[2] as number) - 0.25 * ((vz[a] as number) + (vz[b] as number) + (vz[e] as number) + (vz[q] as number));
+        share = 0.25;
+        t++;
+      } else if (e < 0) {
         // a thread in the plane: its normal in the plane, as long as it is, as wide as a thread
         const dx = (x[b] as number) - (x[a] as number);
         const dy = (y[b] as number) - (y[a] as number);
@@ -1113,14 +1159,14 @@ export class ClothSet {
       fx *= share * hs;
       fy *= share * hs;
       fz *= share * hs;
-      for (let k = 0; k < 3; k++) {
-        const i = k === 0 ? a : k === 1 ? b : e;
+      for (let k = 0; k < 4; k++) {
+        const i = k === 0 ? a : k === 1 ? b : k === 2 ? e : q;
         if (i < 0) continue;
         const wi = w[i] as number;
         if (wi === 0 || (this.pinOf[i] as number) >= 0) continue;
-        vx[i] = (vx[i] as number) + wi * fx;
-        vy[i] = (vy[i] as number) + wi * fy;
-        vz[i] = (vz[i] as number) + wi * fz;
+        afx[i] = (afx[i] as number) + wi * fx;
+        afy[i] = (afy[i] as number) + wi * fy;
+        afz[i] = (afz[i] as number) + wi * fz;
       }
     }
   }
@@ -1316,6 +1362,9 @@ export class ClothSet {
       const ny = o[1] as number;
       const nz = o[2] as number;
       if (nx === 0 && ny === 0 && nz === 0) continue;
+      // a point found on the other side by more than the thickness was not this face's to hold (it went round an edge,
+      // or the face swung past it): it is left alone, so a wrong side can never fling the cloth
+      if (s * side < -th) continue;
       const C = th - s * side;
       if (!(C > 0)) continue;
       // the foot of the point must be on the face (a neighbouring face takes it otherwise)
@@ -1869,7 +1918,7 @@ export class ClothSet {
 export function countLinks(d: { readonly nu: number; readonly nv: number; readonly bend: number }): number {
   const { nu, nv } = d;
   let n = nv * (nu - 1) + nu * (nv - 1);
-  if (nv > 1) n += 2 * (nu - 1) * (nv - 1);
+  if (nv > 1) n += (nu - 1) * (nv - 1);
   if (d.bend > 0) n += nv * Math.max(0, nu - 2) + nu * Math.max(0, nv - 2);
   return n;
 }
