@@ -1235,38 +1235,78 @@ export class ClothSet {
       const A = this.cloths[c] as ClothInfo;
       if (A.unstable) continue;
       const t1 = A.t0 + A.tn;
-      const reach = A.def.thickness + this.pad + 0.05;
-      for (let t = A.t0; t < t1; t++) {
-        if (this.triTorn(t)) continue;
-        const a = this.ta[t] as number;
-        const b = this.tb[t] as number;
-        const e = this.tc[t] as number;
-        const ee = e < 0 ? b : e;
-        const m = this.grid.inBox(
-          Math.min(x[a] as number, x[b] as number, x[ee] as number) - reach, Math.min(y[a] as number, y[b] as number, y[ee] as number) - reach, Math.min(z[a] as number, z[b] as number, z[ee] as number) - reach,
-          Math.max(x[a] as number, x[b] as number, x[ee] as number) + reach, Math.max(y[a] as number, y[b] as number, y[ee] as number) + reach, Math.max(z[a] as number, z[b] as number, z[ee] as number) + reach,
-          this.n,
-        );
+      const reach = A.def.thickness + this.pad;
+      // a sheet's two faces of a cell share one search of the grid
+      const sheet = A.def.kind === 'sheet';
+      for (let t = A.t0; t < t1; t += sheet ? 2 : 1) {
+        const tt = sheet && t + 1 < t1 ? 2 : 1;
+        let lx = Infinity;
+        let ly = Infinity;
+        let lz = Infinity;
+        let hx = -Infinity;
+        let hy = -Infinity;
+        let hz = -Infinity;
+        let live = 0;
+        for (let f = 0; f < tt; f++) {
+          const u = t + f;
+          const fn = this.faceN;
+          if (this.triTorn(u)) {
+            fn[f * 4] = 0;
+            fn[f * 4 + 1] = 0;
+            fn[f * 4 + 2] = 0;
+            continue;
+          }
+          // the face's plane at the start of the step, once for all the points near it
+          fn[f * 4 + 3] = this.faceHeight(u, 0, 0, 0, sx, sy, sz);
+          fn[f * 4] = this.scratch[0] as number;
+          fn[f * 4 + 1] = this.scratch[1] as number;
+          fn[f * 4 + 2] = this.scratch[2] as number;
+          live++;
+          for (let k = 0; k < 3; k++) {
+            const v = k === 0 ? (this.ta[u] as number) : k === 1 ? (this.tb[u] as number) : (this.tc[u] as number);
+            if (v < 0) continue;
+            lx = Math.min(lx, x[v] as number);
+            ly = Math.min(ly, y[v] as number);
+            lz = Math.min(lz, z[v] as number);
+            hx = Math.max(hx, x[v] as number);
+            hy = Math.max(hy, y[v] as number);
+            hz = Math.max(hz, z[v] as number);
+          }
+        }
+        if (live === 0) continue;
+        const m = this.grid.inBox(lx - reach, ly - reach, lz - reach, hx + reach, hy + reach, hz + reach, this.n);
         for (let q = 0; q < m; q++) {
           const i = found[q] as number;
           const oc = this.owner[i] as number;
           if (oc === c && !A.def.self) continue;
           const B = this.cloths[oc] as ClothInfo;
           if ((A.asleep && B.asleep) || B.unstable) continue;
-          if (oc === c && this.nearOwn(i, t, A)) continue;
-          if ((this.w[i] as number) === 0 && (this.w[a] as number) === 0 && (this.w[b] as number) === 0 && (e < 0 || (this.w[e] as number) === 0)) continue;
           const th = 0.5 * (A.def.thickness + B.def.thickness);
-          // the side of the face the point was on at the start of the step
-          const s0 = this.faceHeight(t, sx[i] as number, sy[i] as number, sz[i] as number, sx, sy, sz);
-          if (Math.abs(s0) > th + 2 * this.pad + 0.01) continue;
-          // and over the face (or just beside it), not only near its plane
-          const o = this.scratch;
-          if (!this.footOn(t, (sx[i] as number) - s0 * (o[0] as number), (sy[i] as number) - s0 * (o[1] as number), (sz[i] as number) - s0 * (o[2] as number), 0.25)) continue;
-          this.pushSelf(i, t, s0 >= 0 ? 1 : -1, th);
+          for (let f = 0; f < tt; f++) {
+            const u = t + f;
+            const fn = this.faceN;
+            const fnx = fn[f * 4] as number;
+            const fny = fn[f * 4 + 1] as number;
+            const fnz = fn[f * 4 + 2] as number;
+            if (fnx === 0 && fny === 0 && fnz === 0) continue;
+            // the side of the face the point was on at the start of the step, near its plane and over it
+            const s0 = fnx * (sx[i] as number) + fny * (sy[i] as number) + fnz * (sz[i] as number) + (fn[f * 4 + 3] as number);
+            if (Math.abs(s0) > th + 2 * this.pad + 0.01) continue;
+            if (oc === c && this.nearOwn(i, u, A)) continue;
+            const a = this.ta[u] as number;
+            const b = this.tb[u] as number;
+            const e = this.tc[u] as number;
+            if ((this.w[i] as number) === 0 && (this.w[a] as number) === 0 && (this.w[b] as number) === 0 && (e < 0 || (this.w[e] as number) === 0)) continue;
+            if (!this.footOn(u, (sx[i] as number) - s0 * fnx, (sy[i] as number) - s0 * fny, (sz[i] as number) - s0 * fnz, 0.25)) continue;
+            this.pushSelf(i, u, s0 >= 0 ? 1 : -1, th);
+          }
         }
       }
     }
   }
+
+  /** The planes of the faces of one search (scratch for prepareSelf). */
+  private faceN = new Float64Array(8);
 
   /** Face t's unit normal (a segment's, in the plane) into scratch 0..2, and the height of a point over it. */
   protected faceHeight(t: number, px: number, py: number, pz: number, X: Float64Array, Y: Float64Array, Z: Float64Array): number {
