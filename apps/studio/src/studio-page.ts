@@ -163,7 +163,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
         const ext = o.style.ext as { at?: { x: number; y: number }; size?: number; anchor?: string; rotate?: number; bg?: unknown; vertical?: boolean; latex?: string };
         if (!ext.at || expressions.isHidden(o.id) || hiddenByStyle(o)) continue;
         const bg = typeof ext.bg === 'object' && ext.bg !== null ? colorCss(ext.bg) : undefined;
-        out.push({ id: o.id, name: o.name, type: 'Text', typeText: 'Text', value: o.cell.value, color: expressions.colorOf(o.id), free: false, label: false,
+        out.push({ id: o.id, name: o.name, type: 'Text', typeText: 'Text', value: o.cell.value, color: expressions.colorOf(o.id, o), free: false, label: false,
           text: { at: ext.at, size: ext.size ?? 16, anchor: ext.anchor ?? 'sw', rotate: ext.rotate ?? 0, ...(bg ? { bg } : {}), ...(ext.vertical === true ? { vertical: true } : {}), ...(ext.latex === 'full' ? { full: true } : {}) } });
         continue;
       }
@@ -173,7 +173,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
       // a symbolic row with its show switch on (cas ui.md 4, 7)
       if ((o.style.ext as { plot?: unknown }).plot === true) {
         const d = symDrawing(o.cell.value);
-        const base = { id: o.id, name: o.name, typeText: o.typeText, color: expressions.colorOf(o.id), free: false, label: false, ...(selection.has(o.name) ? { selected: true } : {}), ...(selection.hover() === o.name ? { hovered: true } : {}) };
+        const base = { id: o.id, name: o.name, typeText: o.typeText, color: expressions.colorOf(o.id, o), free: false, label: false, ...(selection.has(o.name) ? { selected: true } : {}), ...(selection.hover() === o.name ? { hovered: true } : {}) };
         if (d?.kind === 'curve') out.push({ ...base, type: 'Function', value: d.fn, holes: d.holes });
         else if (d?.kind === 'relation') out.push({ ...base, type: 'Relation', value: d.value });
         else if (d?.kind === 'axis') out.push({ ...base, type: 'SymAxis', value: d });
@@ -181,7 +181,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
         continue;
       }
       if (!drawsOnGraph(o.type, o.typeText, o.cell.value)) continue;
-      out.push({ id: o.id, name: o.name, type: o.type, typeText: o.typeText, value: o.cell.value, color: expressions.colorOf(o.id), free: o.type === 'Point' && session.draggable(o.name), label: true, ...physicsMarks(session.figure, o), ...(hiddenByStyle(o) ? { ghost: true } : {}), ...(selection.has(o.name) ? { selected: true } : {}), ...(selection.hover() === o.name ? { hovered: true } : {}), ...(o.type === 'Particles' ? { time: session.time() } : {}), ...(traced.has(o.id as unknown as number) ? { trace: tracePoints(session.figure, o.id) as Float64Array } : {}) });
+      out.push({ id: o.id, name: o.name, type: o.type, typeText: o.typeText, value: o.cell.value, color: expressions.colorOf(o.id, o), free: o.type === 'Point' && session.draggable(o.name), label: true, ...physicsMarks(session.figure, o), ...(hiddenByStyle(o) ? { ghost: true } : {}), ...(selection.has(o.name) ? { selected: true } : {}), ...(selection.hover() === o.name ? { hovered: true } : {}), ...(o.type === 'Particles' ? { time: session.time() } : {}), ...(traced.has(o.id as unknown as number) ? { trace: tracePoints(session.figure, o.id) as Float64Array } : {}) });
     }
     const contacts = contactsItem(session.figure);
     if (contacts) out.push(contacts);

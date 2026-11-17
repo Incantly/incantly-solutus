@@ -9,7 +9,7 @@ import { Bail, Checker, FIELDS, MAX_FUNCTION_PARAMS, MAX_OBJECTS, OverlayFigure,
 import type { CheckOptions, CheckedLine, CheckedRange, CheckedStyle } from './check';
 import { buildError, closestNames, notice, withMore } from './errors';
 import type { ErrorExtra, LanguageError } from './errors';
-import { nameProblem, reservedGroup, reservedGroupText } from './names';
+import { RESERVED_ALTERNATIVES, nameProblem, reservedGroup, reservedGroupText } from './names';
 import { printLineNode } from './printer';
 import { COLOR_WORDS, DIRECTIVES, PROPERTIES, own } from './props';
 import { SELF_ID } from './table';
@@ -96,6 +96,8 @@ function validateTarget(c: Checker, t: NameRef, rhsFieldHint?: string): boolean 
   if (group) {
     const alts: string[] = [];
     if (rhsFieldHint && !reservedGroup(rhsFieldHint, c.fig.commands, c.functions) && !c.fig.lookup(rhsFieldHint)) alts.push(rhsFieldHint);
+    const word = RESERVED_ALTERNATIVES[t.name];
+    if (word && !alts.includes(word) && !reservedGroup(word, c.fig.commands, c.functions) && !c.fig.lookup(word)) alts.push(word);
     let k = 1;
     while (alts.length < 2) {
       const cand = `${t.name}_${k++}`;

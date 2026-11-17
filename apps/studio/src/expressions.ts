@@ -5,12 +5,12 @@
  * place, so typing is never interrupted by a repaint.
  */
 import { complete, isSymValue, niceRange, signatureHelp, valueText } from '@incantly/kernel';
-import type { Completion, ErrorObject, FigureView } from '@incantly/kernel';
+import type { Completion, ErrorObject, FigureView, ObjectView } from '@incantly/kernel';
 import { nextName } from '@incantly/ui';
 import type { LineRow, RowControl } from '@incantly/ui';
 import { AlgebraCache, DEFAULT_PREFS, algebraRows, prefsFromScript, refreshAlgebraRows, suggestionsFor } from '@incantly/view';
 import type { AlgebraObject, AlgebraPrefs, AlgebraRow, DisplayMode } from '@incantly/view';
-import { colorAt } from '@incantly/sdk/screen';
+import { colorAt, ownColorOf } from '@incantly/sdk/screen';
 import { miniCurve, miniInterval } from './mini';
 import { drawsOnGraph, fullElement, mathElement } from '@incantly/sdk/screen';
 import type { KernelSession } from './session';
@@ -24,8 +24,11 @@ export interface ExpressionList {
   readonly element: HTMLElement;
   /** Rebuilds the rows from the session (after any change). */
   update(): void;
-  /** The colour of an object, by id. */
-  colorOf(id: number): string;
+  /**
+   * The colour of an object, by id: the colour its own line sets (or its type's own look), else a palette colour given
+   * in order. Pass the object's view when the caller has it, to skip a lookup.
+   */
+  colorOf(id: number, o?: Pick<ObjectView, 'type' | 'style'>): string;
   isHidden(id: number): boolean;
   /** Puts the caret in the empty row at the end. */
   focusNew(text?: string): void;
@@ -120,7 +123,10 @@ export function mountExpressions(opts: ExpressionOptions): ExpressionList {
   };
   const colors = new Map<number, string>();
   let nextColor = 0;
-  const colorOf = (id: number): string => {
+  const colorOf = (id: number, o?: Pick<ObjectView, 'type' | 'style'>): string => {
+    const view = o ?? session.figure.get(id as ObjectView['id']);
+    const own = view ? ownColorOf(view) : undefined;
+    if (own) return own;
     let c = colors.get(id);
     if (!c) {
       c = colorAt(nextColor++);
@@ -873,7 +879,8 @@ export function mountExpressions(opts: ExpressionOptions): ExpressionList {
     const r = session.row(id);
     if (!r) return;
     const control = r.control?.kind === 'slider' ? { ...r.control, value: 0 } : r.control;
-    const stamp = `${settingsVersion}|${index}|${off}|${open}|${prefs.input.kind}|${cardFor === id}|${r.source}|${JSON.stringify(r.state)}|${JSON.stringify(control)}|${m.lines[0]}|${m.lines[1]}|${m.madeFrom.join(',')}|${m.usedBy.join(',')}|${JSON.stringify(session.handlersOn(r.name))}|${aborted.has(r.name)}|${r.type === 'Sound' && session.isMuted(r.name)}`;
+    const color = colorOf(id);
+    const stamp = `${color}|${settingsVersion}|${index}|${off}|${open}|${prefs.input.kind}|${cardFor === id}|${r.source}|${JSON.stringify(r.state)}|${JSON.stringify(control)}|${m.lines[0]}|${m.lines[1]}|${m.madeFrom.join(',')}|${m.usedBy.join(',')}|${JSON.stringify(session.handlersOn(r.name))}|${aborted.has(r.name)}|${r.type === 'Sound' && session.isMuted(r.name)}`;
     if (filled.get(id) === stamp && !p.error) {
       // a slider that only moved: set its knob, keep the element (so a drag in progress is not cut)
       if (r.control?.kind === 'slider') {
@@ -885,7 +892,6 @@ export function mountExpressions(opts: ExpressionOptions): ExpressionList {
     filled.set(id, stamp);
     const value = session.figure.value(r.name);
     const drawn = drawsOnGraph(r.type, r.type, value);
-    const color = colorOf(id);
     p.index.textContent = String(index + 1);
     p.swatch.hidden = !drawn;
     p.swatch.style.setProperty('--c', color);

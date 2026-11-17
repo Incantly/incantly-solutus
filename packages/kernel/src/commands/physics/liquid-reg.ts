@@ -80,7 +80,7 @@ export function registerLiquids(): void {
     if (isWaterValue(v)) return `water, level ${fmt(v.level)}`;
     return undefined;
   });
-  registerTypeStyle('Liquid', { defaults: { color: '#4a9fe0', width: 1, opacity: 0.85 } });
+  registerTypeStyle('Liquid', { defaults: { color: '#5aa7e8', width: 1, opacity: 0.85 } });
   registerTypeStyle('Water', { defaults: { color: '#2f7fc1', width: 2, opacity: 0.3 } });
   registerTypeStyle('Waves', { defaults: { color: '#2f7fc1', width: 2, opacity: 0.75 } });
   registerLineCheck(liquidLineCheck);

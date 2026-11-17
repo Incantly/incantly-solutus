@@ -98,6 +98,8 @@ Clicking a body row selects the body on the board, as for every object. The live
 | Cloth in the plane | its threads as thin lines; a rope as a smooth line |
 | Pin | a small dark dot |
 
+Colour: an object whose own line sets `color` (`b with color = red`, a rule included) draws in that colour on the board and in its list swatch. Liquid, water, waves and smoke have a colour of their type (the blue and grey above), so their swatch matches what is drawn and `sm with color = …` tints them. Every other object with no colour of its own takes the studio's palette colour in order (algebra-view ui.md 13).
+
 ## 8. Hits and sound
 
 - A hit flashes the force arrows if they are on. Nothing else flashes by default, for people who are sensitive to flashing.
@@ -110,7 +112,7 @@ Clicking a body row selects the body on the board, as for every object. The live
 - A car: when a figure has a `Vehicle`, the arrow keys drive it while the Space view has focus (up and down for `motor`, left and right for `steer`, Space for `brake`). They write the slider values the car reads, logged while playing. A "Follow" button on the style bar keeps the camera behind the car.
   - Only pedals written as a plain name of a free number are driven. A key press sets the slider to its end (motor ±1, steer to the slider's ends or ±0.5 rad, brake 1); letting go sets it back to 0. While a point is selected the arrow keys move the point instead.
   - Follow changes only what is drawn: the camera looks along the car from behind and a little above it, in perspective. It writes no camera line, so the figure is unchanged.
-  - Name the steering slider something other than `turn`: `turn` is also the angle unit (1 turn = 360°).
+  - `turn` cannot name the steering slider: it is the angle unit (1 turn = 360°), a reserved constant, so `turn = 0 in -1..1` is `reserved_name` with the hint `steering` (`language/design.md` 3.7).
 
 ## 10. Accessibility
 

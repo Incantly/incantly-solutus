@@ -246,7 +246,7 @@ Each row is a `listitem` in a `list` labelled "Algebra". Its accessible name is 
 | Error | #B00020 | #FF8A9A |
 | Accent | #0B6BCB | #6AB0FF |
 
-Default object colours for new objects (by type, cycling, picked for contrast with white and dark backgrounds): points blue, lines and segments black or dark grey, circles and curves dark blue, functions a distinct hue per function (a palette of 8 cycling), polygons and regions at 20 percent alpha of their hue, text ink. Marbles use the object colour with a 1.5 px ring in a darker shade. All text and the marble-to-background contrast pass 3:1 for non-text.
+Default object colours for new objects (by type, cycling, picked for contrast with white and dark backgrounds): points blue, lines and segments black or dark grey, circles and curves dark blue, functions a distinct hue per function (a palette of 8 cycling), polygons and regions at 20 percent alpha of their hue, text ink. Marbles use the object colour with a 1.5 px ring in a darker shade. All text and the marble-to-background contrast pass 3:1 for non-text. An object whose line sets `color` (`p with color = red`) keeps that colour on the canvas and in its marble; the palette is only for objects with no colour of their own (physics ui.md 7 for liquid, water, waves and smoke, whose type has its own colour).
 
 ## 14. Animation
 

@@ -299,7 +299,7 @@ export function setProp(p: Props, key: string, value: unknown): void {
 export const NO_TAGS: readonly string[] = Object.freeze([]);
 
 /** Shapes a `Props` and the evaluated `showIf` into an `EffectiveStyle`. */
-export function toEffective(p: Props, showIf: boolean | undefined | 'none', showIfText?: string): EffectiveStyle {
+export function toEffective(p: Props, showIf: boolean | undefined | 'none', showIfText?: string, ownColor = false): EffectiveStyle {
   let shown = p.visible;
   let why: string | undefined;
   if (!p.visible) why = 'visible is false';
@@ -318,6 +318,7 @@ export function toEffective(p: Props, showIf: boolean | undefined | 'none', show
     selectable: p.selectable,
     layer: p.layer,
     color: p.color,
+    ...(ownColor ? { ownColor: true as const } : {}),
     opacity: p.opacity,
     width: p.width,
     lineStyle: p.lineStyle,

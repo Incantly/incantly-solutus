@@ -410,7 +410,7 @@ The 3D engine shares the 2D engine's step order (6.2), solver (6.5), sleep (6.7)
 | any – heightfield (terrain) | the cells under the body, as triangles |
 
 - **Contact manifolds** keep at most 4 points per pair: the deepest point and the three that span the largest area.
-- **Ground** is the floor plane `z = 0` with `Ground()`. A surface `z = f(x, y)` with `solid = true` becomes a heightfield on a grid of at most 128 by 128 cells over the clip box (`space-3d/design.md` 8.7).
+- **Ground** is the floor plane `z = 0` with `Ground()`. A surface `z = f(x, y)` with `solid = true` becomes a heightfield on a grid of at most 128 by 128 cells over the clip box (`space-3d/design.md` 8.7). Each triangle under a moving shape is a slab 0.5 m deep, written when met into one slab shape the terrain reuses, so a long drive keeps nothing per triangle crossed (keeping one made the young collector copy about 14 KB of new shapes a frame, 1 to 2 ms frames every 2 s). The 11.2 car row also holds the worst frame of a 60 s drive under 0.5 ms in Node, frames with a collector pause aside.
 - **Cylinders and cones** are convex shapes with smooth sides. For contacts they are approximated by 24 sides; they are drawn round.
 
 ## 8. Vehicles

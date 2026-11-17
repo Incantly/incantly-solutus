@@ -715,7 +715,7 @@ export const EXAMPLES: readonly Example[] = [
       '@view -5 5 -4 4',
       'O = (0, 0)',
       'sq = Polygon((1, -1), (3, -1), (3, 1), (1, 1))',
-      'turn = Rotate(sq, t, O)',
+      'spun = Rotate(sq, t, O)',
       'K = Rotate((3, 1), t, O)',
       'Trace(K)',
     ],
