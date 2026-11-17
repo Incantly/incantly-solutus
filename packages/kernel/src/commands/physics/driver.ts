@@ -1743,6 +1743,10 @@ export class PhysicsDriver implements WorldDriver {
       // the page's own log is the worker's: each line goes back in, then the film is built and played here
       const lines = this.remoteLog;
       this.remoteLog = [];
+      // the worker's log already holds the page's earlier entries: start the log afresh, or each would count twice
+      this.log = [];
+      this.base = new Map();
+      this.logged = new Set();
       this.sig = undefined;
       this.version = -1;
       for (const l of lines) this.inputLine(l.replace(/^@input\s+/, '').split(/\s+/));
@@ -1750,14 +1754,18 @@ export class PhysicsDriver implements WorldDriver {
       this.remoteLog = this.inputLines();
       this.world = undefined;
       this.fluid = undefined;
+      this.waveMembers = [];
       this.sig = undefined;
     }
   }
 
   /** The cells the worker computed for a frame: they are written on the next pass. */
-  accept(cells: readonly (readonly [string, Cell])[], info?: { drops: number; awake: number; contacts: number; hash: string }): void {
+  accept(cells: readonly (readonly [string, Cell])[], info?: { drops: number; awake: number; contacts: number; hash: string }, log?: readonly string[]): void {
     for (const [name, cell] of cells) this.remoteCells.set(name, cell);
     if (info) this.remoteInfo = info;
+    // the worker's own log holds what it logged itself (a slider moved while the film played, round 6's carry-over): it,
+    // plus the page's lines not sent yet, is the film's, so a reload of the script in the worker keeps them (round 7)
+    if (log) this.remoteLog = [...log, ...this.outbox.filter((l) => !log.includes(l))];
   }
 
   /** The page's new `@input` lines for the worker, once. */
