@@ -161,7 +161,7 @@ export class Physics3Driver implements WorldDriver {
     const k = rec.p.type.k;
     // a wheel, a car or a joint reads its bodies only for their start: a body that left the world or blew up during
     // the film leaves them as they were built, so the world is not rebuilt from the start mid-film
-    if (!computed.defined && this.world && this.lastCells.has(rec.id) && (isWheel3Rec(rec) || k === 'Vehicle' || isJointRec(rec)) && rec.inputs.some((r) => this.bodyRecs.includes(r) && this.written.has(r.id) && !r.cell.defined)) return this.lastCells.get(rec.id);
+    if (!computed.defined && this.world && this.lastCells.has(rec.id) && (isWheel3Rec(rec) || k === 'Vehicle' || isJointRec(rec)) && rec.inputs.some((r) => this.written.has(r.id) && !r.cell.defined)) return this.lastCells.get(rec.id);
     if (isWheel3Rec(rec)) {
       this.wheelSpecs.set(rec.id, computed.defined ? (Array.isArray(computed.value) ? (computed.value as unknown[]) : [computed.value]).map((v) => (isWheel3Value(v) ? v : undefined)) : []);
       const last = this.lastCells.get(rec.id);
@@ -1099,7 +1099,9 @@ export class Physics3Driver implements WorldDriver {
     if (this.vehicleRecs.length === 0 || this.wheelMembers.length === 0) return;
     const w = this.world as World3;
     for (const r of this.vehicleRecs) {
-      const v = this.vehicleOf(r);
+      // pedals that change during the film: the car as computed at this step's time
+      const c = this.varySet.has(r) ? r.cell : undefined;
+      const v = c?.defined && isVehicle3Value(c.value) ? c.value : this.vehicleOf(r);
       if (!v) continue;
       const mine = this.carWheels.get(r.id) ?? [];
       const share = Math.max(1, mine.filter((wm) => wm.value.drive && !wm.joint.broken).length);
@@ -1111,8 +1113,8 @@ export class Physics3Driver implements WorldDriver {
         j.power = v.power;
         j.share = share;
       }
-      const c = mine[0]?.chassis;
-      if (c !== undefined && (v.motor !== 0 || v.brake > 0 || v.steer !== 0)) w.wakeBody(c);
+      const ch = mine[0]?.chassis;
+      if (ch !== undefined && (v.motor !== 0 || v.brake > 0 || v.steer !== 0)) w.wakeBody(ch);
     }
   }
 

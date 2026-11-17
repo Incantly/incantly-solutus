@@ -781,6 +781,8 @@ export class Wheel3 implements Joint3 {
   push = 0;
   touching = false;
   private latI = 0;
+  /** The mount's speed at the last step, for the force that carries the wheel with the chassis. */
+  private lastV: V = [Number.NaN, 0, 0];
   private lonI = 0;
   private brakeI = 0;
   private ground = 0;
@@ -821,6 +823,15 @@ export class Wheel3 implements Joint3 {
     this.brakeI = 0;
     const r = this.spec.r;
     const m = w.toWorld(this.a, this.mount[0], this.mount[1], this.mount[2]);
+    // what it takes to carry the wheel's own mass with the chassis: a hard stop throws a wheel off
+    const pc0 = posOf(w, this.a);
+    const vm = velAt(w, this.a, [m[0] - pc0[0], m[1] - pc0[1], m[2] - pc0[2]]);
+    const jerk = Number.isNaN(this.lastV[0]) ? 0 : (this.spec.mass * lenOf([vm[0] - this.lastV[0], vm[1] - this.lastV[1], vm[2] - this.lastV[2]])) / h;
+    this.lastV = vm;
+    if (this.spec.breaks > 0 && jerk > this.spec.breaks) {
+      this.breakOff(w);
+      return;
+    }
     const { f, down } = this.dirs(w);
     this.up = [-down[0], -down[1], -down[2]];
     const hit = w.rayCast(m[0], m[1], m[2], down[0], down[1], down[2], this.spec.travel + r, this.skip);
@@ -857,7 +868,7 @@ export class Wheel3 implements Joint3 {
     // normal at the touch point, so a tilted chassis is not pushed along the road (the tyre holds it there)
     const x = this.spec.travel - this.susp;
     this.push = Math.max(0, this.spec.spring * x + this.spec.damping * dot(vrel, down));
-    if (this.spec.breaks > 0 && this.push > this.spec.breaks) {
+    if (this.spec.breaks > 0 && this.push + jerk > this.spec.breaks) {
       this.breakOff(w);
       return;
     }
@@ -967,7 +978,7 @@ export class Wheel3 implements Joint3 {
   }
 
   save(out: number[]): void {
-    out.push(this.spin, this.turn, this.susp, this.push, this.touching ? 1 : 0, this.latI, this.lonI);
+    out.push(this.spin, this.turn, this.susp, this.push, this.touching ? 1 : 0, this.latI, this.lonI, ...this.lastV);
   }
 
   load(s: Float64Array, k: number): number {
@@ -978,6 +989,7 @@ export class Wheel3 implements Joint3 {
     this.touching = s[k++] === 1;
     this.latI = s[k++] as number;
     this.lonI = s[k++] as number;
+    this.lastV = [s[k++] as number, s[k++] as number, s[k++] as number];
     return k;
   }
 }
