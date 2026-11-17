@@ -10,6 +10,8 @@ declare module '../../contracts/values' {
     Body: true;
     World: true;
     Joint: true;
+    Wheel: true;
+    Vehicle: true;
   }
   interface AreaUndefReasons {
     self_crossing: true;

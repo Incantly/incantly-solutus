@@ -7,9 +7,13 @@ import type { Arg, EmitContext, Slot, ToolGroup, ToolKind, ToolSpec, ToolVariant
 const ANY_POINT = ['existing', 'free', 'on-path', 'intersection'] as const;
 const P = (prompt: string): Slot => ({ kind: 'point', prompt, create: ANY_POINT });
 const O = (prompt: string, ...accept: string[]): Slot => ({ kind: 'object', prompt, accept });
+/** An object pick that may not be the one picked before it. */
+const OD = (prompt: string, ...accept: string[]): Slot => ({ kind: 'object', prompt, accept, distinct: true });
 const N = (prompt: string, extra: Partial<Extract<Slot, { kind: 'number' }>> = {}): Slot => ({ kind: 'number', prompt, ...extra });
 const STRAIGHT = ['Line', 'Segment', 'Ray'];
 const CONIC = ['Circle', 'Conic'];
+/** Shapes that can be made solid (physics design 2.1). */
+const SOLID = ['Polygon', 'Circle', 'Conic', 'Segment', 'Line', 'Ray', 'Arc', 'Polyline', 'Function', 'Curve'];
 
 const t = (args: readonly Arg[], i: number): string => (args[i] as Arg).text;
 const v = (id: string, slots: readonly Slot[], emit: ToolVariant['emit'] | undefined, extra: Partial<ToolVariant> = {}): ToolVariant => ({ id, slots, ...(emit ? { emit } : {}), ...extra });
@@ -224,7 +228,38 @@ export const TOOLS: readonly ToolSpec[] = [
   tool('delete', 'general', 'Delete', '⌫', 'Click an object to delete it and what is built on it.', [
     v('delete', [O('Click the object to delete.', 'Any')], undefined, { act: (a) => ({ op: 'delete', name: t(a, 0) }) }),
   ], 'edit'),
+
+  /* physics (docs/features/physics/ui.md 3) */
+  tool('make-solid', 'physics', 'Make solid', '▦', 'Click shapes to make them solid walls that bodies hit.', [
+    v('solid', [O('Click a shape to make it solid.', ...SOLID)], (a) => [`${t(a, 0)} with solid = true`]),
+  ]),
+  tool('make-body', 'physics', 'Make body', '◼', 'Click a closed shape to make it a body that falls, slides and bounces.', [
+    v('body', [O('Click a closed shape. A line can only be made solid.', 'Polygon', 'Circle', 'Conic')], (a) => [`{body} = Body(${t(a, 0)}, mass = 1)`]),
+  ]),
+  tool('ground', 'physics', 'Ground', '▁', 'Adds a solid floor at a height.', [
+    v('ground', [N('Type the height of the ground.', { unit: 'length', def: 0 })], (a) => [`{ground} = Ground(${t(a, 0)})`]),
+  ]),
+  tool('hinge', 'physics', 'Hinge', '◎', 'Click a body, a second body or a solid shape, then the point they turn about.', [
+    v('hinge', [O('Click a body.', 'Body'), OD('Click a second body or a solid shape.', 'Body', ...SOLID), P('Click the point they turn about.')], make('joint', 'Hinge')),
+  ]),
+  tool('spring', 'physics', 'Spring', '⌇', 'Click two bodies (or a body and a solid shape) to join them with a spring.', [
+    v('spring', [O('Click a body.', 'Body'), OD('Click the other end.', 'Body', ...SOLID)], (a) => [`{joint} = Spring(${t(a, 0)}, ${t(a, 1)}, 50)`]),
+  ]),
+  tool('rope', 'physics', 'Rope', '∿', 'Click two bodies (or a body and a solid shape) to tie them with a rope as long as they are apart.', [
+    v('rope', [O('Click a body.', 'Body'), OD('Click the other end.', 'Body', ...SOLID), N('Type the rope length.', { unit: 'length', def: 2 })], make('joint', 'Rope')),
+  ]),
+  tool('weld', 'physics', 'Weld', '✚', 'Click two touching bodies to make them move as one.', [
+    v('weld', [O('Click a body.', 'Body'), OD('Click the body to weld it to.', 'Body')], make('joint', 'Weld')),
+  ]),
+  tool('push', 'physics', 'Push', '➶', 'Click a body, then where to push it toward: a kick that size.', [
+    v('push', [O('Click a body.', 'Body'), { kind: 'position', prompt: 'Click where to push it toward.' }], (a) => {
+      const at = (a[1] as Arg & { at?: { x: number; y: number } }).at;
+      const b = t(a, 0);
+      return at ? [`Push(${b}, (${num(at.x)} - ${b}.x, ${num(at.y)} - ${b}.y))`] : [];
+    }),
+  ]),
 ];
+
 
 function imageKind(a: Arg): string {
   const base = /^(\w+)/.exec(a.type)?.[1] ?? a.type;
@@ -271,7 +306,7 @@ export const GROUPS: readonly { readonly id: ToolGroup; readonly label: string }
   { id: 'move', label: 'Move' }, { id: 'point', label: 'Points' }, { id: 'line', label: 'Lines' },
   { id: 'special-line', label: 'Special lines' }, { id: 'polygon', label: 'Polygons' }, { id: 'circle-arc', label: 'Circles and arcs' },
   { id: 'conic', label: 'Conics' }, { id: 'measure', label: 'Measure' }, { id: 'transform', label: 'Transform' },
-  { id: 'action', label: 'Controls' }, { id: 'general', label: 'General' },
+  { id: 'action', label: 'Controls' }, { id: 'physics', label: 'Physics' }, { id: 'general', label: 'General' },
 ];
 
 export const toolById = (id: string): ToolSpec | undefined => TOOLS.find((x) => x.id === id);

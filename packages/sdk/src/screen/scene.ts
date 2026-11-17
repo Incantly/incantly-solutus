@@ -2,21 +2,21 @@
  * What a figure draws: one scene item per object that shows on the graph (the studio's list and every export read
  * the same rule). Selection, hover and tool previews are the screen's own and are added by it.
  */
-import { tracePoints, tracedIds } from '@incantly/kernel';
+import { physics, physicsOf, tracePoints, tracedIds } from '@incantly/kernel';
 import type { Figure, ObjectView } from '@incantly/kernel';
 import { colorAt } from './paint';
 import type { SceneItem } from './paint';
 import { symDrawing } from './symplot';
 
 /** Types that draw on the graph and so get a swatch. */
-const DRAWN = new Set(['Particles', 'Point', 'Vector', 'Segment', 'Line', 'Ray', 'Circle', 'Arc', 'Sector', 'Conic', 'Polyline', 'Polygon', 'Function', 'Curve', 'Relation', 'Region', 'Field', 'Chart', 'ContinuousDistribution', 'DiscreteDistribution']);
+const DRAWN = new Set(['Body', 'Joint', 'Wheel', 'Particles', 'Point', 'Vector', 'Segment', 'Line', 'Ray', 'Circle', 'Arc', 'Sector', 'Conic', 'Polyline', 'Polygon', 'Function', 'Curve', 'Relation', 'Region', 'Field', 'Chart', 'ContinuousDistribution', 'DiscreteDistribution']);
 
 export function drawsOnGraph(type: string, typeText: string, value: unknown): boolean {
   const base = type.replace(/<.*$/, '');
   // particles in space belong to the Space view
   if (base === 'Particles' && (value as { space?: unknown } | undefined)?.space === true) return false;
   if (DRAWN.has(base)) return true;
-  if (base === 'List') return /^List<(Point|Polygon|Segment|Circle|Line|Vector)/.test(typeText);
+  if (base === 'List') return /^List<(Point|Polygon|Segment|Circle|Line|Vector|Body|Joint|Wheel)/.test(typeText);
   if (base === 'Record') return (value as { schema?: string } | undefined)?.schema === 'Fit';
   return false;
 }
@@ -78,10 +78,33 @@ export function sceneOf(figure: Figure, opts: SceneOptions = {}): SceneItem[] {
     if (!drawsOnGraph(o.type, o.typeText, o.cell.value)) continue;
     out.push({
       id: o.id, name: o.name, type: o.type, typeText: o.typeText, value: o.cell.value, color, free: o.type === 'Point' && (opts.draggable?.(o) ?? o.free), label: true,
+      ...physicsMarks(figure, o),
       ...(hiddenByStyle(o) ? { ghost: true } : {}),
       ...(o.type === 'Particles' ? { time: t } : {}),
       ...(traced.has(o.id as unknown as number) ? { trace: tracePoints(figure, o.id) as Float64Array } : {}),
     });
   }
+  const contacts = contactsItem(figure);
+  if (contacts) out.push(contacts);
   return out;
+}
+
+/** The physics marks of an object: solid shapes are hatched, and bodies show the arrows `world` or they ask for. */
+export function physicsMarks(figure: Figure, o: ObjectView): { solid?: true; arrows?: 'forces' | 'speeds' } {
+  const ext = o.style.ext as { solid?: unknown; show?: unknown };
+  const isGround = /^\s*\w+\s*=\s*Ground\(/.test(o.definition);
+  if (ext.solid === true || (isGround && ext.solid !== false)) return { solid: true };
+  if (o.type !== 'Body' && !(o.type === 'List' && o.typeText === 'List<Body>')) return {};
+  const own = typeof ext.show === 'string' ? ext.show : undefined;
+  const w = figure.value('world');
+  const all = physics.isWorldValue(w) ? w.show : 'bodies';
+  const mode = own ?? all;
+  return mode === 'forces' || mode === 'speeds' ? { arrows: mode } : {};
+}
+
+/** The touching points, when `world with show = "contacts"`. */
+export function contactsItem(figure: Figure): SceneItem | undefined {
+  const w = figure.value('world');
+  if (!physics.isWorldValue(w) || w.show !== 'contacts') return undefined;
+  return { id: -1, name: 'contacts', type: 'Contacts', typeText: 'Contacts', value: physicsOf(figure).contactPoints(), color: '#b3261e', free: false, label: false };
 }

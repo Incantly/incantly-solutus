@@ -6,6 +6,7 @@ import {
   CAS_COMMAND_NAMES, Figure, animatingIds, onCasEngine, brokenSteps, buttonLabelOf, captionsOf, choiceStateOf, clickButton, commitInputText, defaultCaption, getStoredHandler,
   inputErrorOf, inputNoticeOf, targetTextOf, inputTextOf, isClickable, listHandlers, numberSource, playerOf, runHandler, runLoadHandlers, setChoiceIndex,
   toggleCheckbox, tracedIds, typeInputText, valueText, isMuted, setMuted, space,
+  physics,
 } from '@incantly/kernel';
 import type { HandlerEvent, HandlerRun, Player } from '@incantly/kernel';
 import type { CommandRegistry, ErrorObject, LineGate, LineOrigin, ObjectView } from '@incantly/kernel';
@@ -351,6 +352,15 @@ export class KernelSession {
 
   dragPoint(name: string, x: number, y: number, done: boolean, z?: number): Outcome {
     const round = (v: number): number => Number(v.toPrecision(6));
+    // a body: at the start of the film the drag moves where it starts; later it grabs it (physics ui.md 4)
+    const base = name.replace(/\[\d+\]$/, '');
+    const bt = this.figure.get(base);
+    if (bt && (bt.type === 'Body' || bt.typeText === 'List<Body>') && z === undefined) {
+      const r = physics.dragBody(this.figure, name, x, y, done);
+      if (!r.ok) return { ok: false, error: { ok: false, kind: 'not_draggable', message: r.why } as never };
+      this.figure.flush();
+      return this.done(r.did === 'moved start' ? `moved where ${name} starts` : r.did === 'grabbed' ? `holding ${name}` : `let go of ${name}`, []);
+    }
     if (!this.figure.get(name)?.free) {
       // a point on a path, or a midpoint of free points: move what it is built from (kernel design 7)
       const plan = this.figure.dragPlan(name, z === undefined ? { x, y } : { x, y, z });
@@ -555,6 +565,8 @@ export class KernelSession {
     if (space.viewOf(this.figure).spin !== 0) return true;
     for (const v of this.figure.objects()) {
       if (v.type === 'Particles' || v.state) return true;
+      // a body moves with the film (physics ui.md 2)
+      if (v.type === 'Body' || v.typeText === 'List<Body>') return true;
       if (/\banimate\s*=/.test(v.definition)) return true;
     }
     if (/^@clock /m.test(this.figure.toScript())) return true;

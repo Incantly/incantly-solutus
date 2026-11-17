@@ -113,7 +113,7 @@ Clicking a body row selects the body on the board, as for every object. The live
 
 ## 12. Performance panel
 
-The studio's performance panel (`docs/design/performance.md` 6) gains a physics row: milliseconds per frame, steps per frame, awake bodies, contact points, liquid particles and checkpoint memory. When the "slow" mark shows, the row turns amber.
+The studio has no performance panel yet (`docs/design/performance.md` 6). Until it does, the time bar shows a physics readout next to the time: milliseconds of work per frame, awake bodies and touching points. It turns amber above 6 ms. The full panel row (steps per frame, liquid particles, checkpoint memory) comes with the panel.
 
 ## 13. Settings
 
