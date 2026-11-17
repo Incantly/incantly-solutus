@@ -11,6 +11,7 @@ declare module '../../contracts/values' {
     World: true;
     Joint: true;
     Wheel: true;
+    Wheel3: true;
     Vehicle: true;
   }
   interface AreaUndefReasons {

@@ -105,6 +105,9 @@ Clicking a body row selects the body on the board, as for every object. The live
 - Bodies, the floor, terrain, waves and cloth are drawn in the Space view, with its light and hidden lines. Cloth and drops use the WebGL 2 painter (`design.md` 12.1); without it they are drawn coarser, and move the same.
 - Dragging a body in 3D grabs it on the plane facing the camera, as for free points (`space-3d/ui.md` 5.1). Shift drags it up and down.
 - A car: when a figure has a `Vehicle`, the arrow keys drive it while the Space view has focus (up and down for `motor`, left and right for `steer`, Space for `brake`). They write the slider values the car reads, logged while playing. A "Follow" button on the style bar keeps the camera behind the car.
+  - Only pedals written as a plain name of a free number are driven. A key press sets the slider to its end (motor ±1, steer to the slider's ends or ±0.5 rad, brake 1); letting go sets it back to 0. While a point is selected the arrow keys move the point instead.
+  - Follow changes only what is drawn: the camera looks along the car from behind and a little above it, in perspective. It writes no camera line, so the figure is unchanged.
+  - Name the steering slider something other than `turn`: `turn` is also the angle unit (1 turn = 360°).
 
 ## 10. Accessibility
 

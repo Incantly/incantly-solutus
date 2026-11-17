@@ -250,6 +250,11 @@ export function sceneOf3(figure: Figure, view: space.View3, opts: Scene3Options 
       case 'List': {
         // bodies in space (physics design 7, ui.md 3): the solid where the body is now, its faces tagged to drag it by
         const list = o.type === 'Body3' ? [v] : Array.isArray(v) ? (v as unknown[]) : [];
+        // a list of wheels or of joints in space (round 5)
+        for (const x of list) {
+          if (physics.isWheel3Value(x)) items.push(...wheelItems(id, x, x.r, color));
+          else if (physics.isJoint3Value(x)) items.push(...jointItems(id, x, color, width));
+        }
         list.forEach((b, k) => {
           if (!physics.isBody3Value(b)) return;
           const name = o.type === 'Body3' ? o.name : `${o.name}[${k + 1}]`;
@@ -268,6 +273,17 @@ export function sceneOf3(figure: Figure, view: space.View3, opts: Scene3Options 
         });
         break;
       }
+      case 'Wheel3':
+        // a wheel of a car in space: a dark tyre with spokes, so its turn shows (ui.md 7)
+        if (physics.isWheel3Value(v)) items.push(...wheelItems(id, v, v.r, color));
+        break;
+      case 'Vehicle':
+        // the wheels that came off, where they are now
+        if (physics.isVehicle3Value(v)) for (const w of v.loose) items.push(...wheelItems(id, w, w.r, '#2b2f36'));
+        break;
+      case 'Joint':
+        if (physics.isJoint3Value(v)) items.push(...jointItems(id, v, color, width));
+        break;
       case 'Surface': {
         const s = v as space.Surface3;
         const N = 36;
@@ -381,6 +397,51 @@ function sphereFaces(id: number, s: space.Sphere3, color: string, alpha: number)
     }
   }
   return out;
+}
+
+type WheelPose = { readonly x: number; readonly y: number; readonly z: number; readonly axle: V3; readonly spoke: V3 };
+
+/** A wheel in space: a short dark cylinder about its axle, and four spokes on its outer side turned by its spin. */
+function wheelItems(id: number, w: WheelPose, r: number, color: string): Item3[] {
+  const c = { x: w.x, y: w.y, z: w.z };
+  const half = Math.min(0.2, r * 0.3);
+  const a = sub(c, scale(w.axle, half));
+  const b = add(c, scale(w.axle, half));
+  const out = roundFaces(id, { shape3: 'Cylinder', a, b, r } as unknown as space.Cylinder3, false, color, 1);
+  const across = space.cross(w.axle, w.spoke);
+  const hub = add(c, scale(w.axle, half * 1.05));
+  const rim = '#c9ced6';
+  for (const d of [w.spoke, across]) out.push({ k: 'line', id, a: add(hub, scale(d, -r * 0.9)), b: add(hub, scale(d, r * 0.9)), color: rim, width: 1.5, hiddenDashed: false });
+  return out;
+}
+
+/** A joint in space, drawn thin (design 12): a ring for a hinge, a zigzag for a spring, a line for a rope or a rod, a cross for a weld. */
+function jointItems(id: number, j: physics.JointValue3, color: string, width: number): Item3[] {
+  const A = { x: j.ax, y: j.ay, z: j.az };
+  const B = { x: j.bx, y: j.by, z: j.bz };
+  const w = Math.max(1, width * 0.8);
+  const c = j.broken ? '#b0b4ba' : color;
+  if (j.kind === 'hinge') {
+    const ax = unit(j.axis ? (j.axis as V3) : { x: 0, y: 0, z: 1 }) ?? { x: 0, y: 0, z: 1 };
+    return loopLines(id, ring(frameOf(A, ax), 0.12, 16), c, w);
+  }
+  if (j.kind === 'weld') {
+    const s = 0.12;
+    return [{ x: s, y: 0, z: 0 }, { x: 0, y: s, z: 0 }, { x: 0, y: 0, z: s }].map((d) => ({ k: 'line' as const, id, a: sub(A, d), b: add(A, d), color: c, width: w, hiddenDashed: false }));
+  }
+  if (j.kind === 'spring') {
+    const d = sub(B, A);
+    const n = unit(d);
+    if (!n) return [];
+    const f = frameOf(A, n);
+    const side = sub(fromFrame(f, 1, 0), A);
+    const pts: V3[] = [A];
+    const turns = 12;
+    for (let i = 1; i < turns; i++) pts.push(add(add(A, scale(d, i / turns)), scale(side, i % 2 === 0 ? 0.12 : -0.12)));
+    pts.push(B);
+    return loopLines(id, pts, c, w, false);
+  }
+  return [{ k: 'line', id, a: A, b: B, color: c, width: w, hiddenDashed: false }];
 }
 
 function roundFaces(id: number, s: space.Cylinder3, cone: boolean, color: string, alpha: number): Item3[] {

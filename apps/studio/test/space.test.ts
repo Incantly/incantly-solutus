@@ -32,12 +32,12 @@ describe('the 3D app (R4.5)', () => {
     expect(m.graph.element.hidden).toBe(false);
   });
 
-  it('has fifteen examples, twelve of them moving, which open with every line', () => {
+  it('has seventeen examples, fourteen of them moving, which open with every line', () => {
     const own = EXAMPLES.filter((e) => e.modes.includes('graphing3d'));
     expect(own.map((e) => e.id)).toEqual([
       'cube-slice', 'sphere-cut', 'pyramid-volume',
       'space-helix', 'space-cube', 'space-wave', 'space-sweep', 'space-fountain', 'space-orbit', 'space-saddle', 'space-slice', 'space-galaxy',
-      'physics-dice', 'physics-dominoes-3d', 'physics-bowl',
+      'physics-dice', 'physics-dominoes-3d', 'physics-bowl', 'physics-car-terrain', 'physics-car-crash',
     ]);
     for (const e of own) {
       m.loadExample(e.id);
@@ -83,5 +83,32 @@ describe('the 3D app (R4.5)', () => {
     const items = [...root.querySelectorAll('.space-sr li')].map((li) => li.textContent);
     expect(items[0]).toBe('A, (0, 0, 0)');
     expect(items).toContain('k, cube, 6 faces, volume 27');
+  });
+
+  it('a car in space: the arrow keys drive it through its sliders (logged while playing), Follow keeps the camera behind it (physics ui.md 9)', () => {
+    m.loadExample('physics-car-terrain');
+    m.session.setTime(1);
+    m.space.paint();
+    // wheels are drawn as tyres
+    expect(m.space.last()?.hits.length).toBeGreaterThan(0);
+    const key = (type: string, k: string): void => {
+      m.space.canvas.dispatchEvent(new KeyboardEvent(type, { key: k, bubbles: true }));
+    };
+    key('keydown', 'ArrowLeft');
+    expect(m.session.figure.value('steering')).toBe(0.5);
+    key('keyup', 'ArrowLeft');
+    expect(m.session.figure.value('steering')).toBe(0);
+    key('keydown', ' ');
+    expect(m.session.figure.value('stop')).toBe(1);
+    key('keyup', ' ');
+    key('keydown', 'ArrowDown');
+    expect(m.session.figure.value('gas')).toBe(-1);
+    expect(m.session.save()).toMatch(/@input physics set gas -1 at 1/);
+    const follow = root.querySelector('.space-follow') as HTMLButtonElement;
+    expect(follow).not.toBeNull();
+    follow.click();
+    expect(m.space.following()).toBe(true);
+    m.space.paint();
+    expect(follow.getAttribute('aria-pressed')).toBe('true');
   });
 });
