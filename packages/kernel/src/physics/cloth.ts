@@ -1631,6 +1631,27 @@ export class ClothSet {
     return m;
   }
 
+  /**
+   * The torn threads of cloth c by place, for drawing: first along u, (nu − 1) × nv, index j (nu − 1) + i for the
+   * thread from (i, j) to (i + 1, j); then along v, nu × (nv − 1), index j nu + i for (i, j) to (i, j + 1). 1 is torn.
+   */
+  threadCuts(c: number): Uint8Array {
+    const ci = this.cloths[c] as ClothInfo;
+    const { nu, nv } = ci.def;
+    const out = new Uint8Array((nu - 1) * nv + nu * (nv - 1));
+    if (ci.torn === 0) return out;
+    for (let l = ci.l0; l < ci.l0 + ci.ln; l++) {
+      if (this.kind[l] !== LinkKind.stretch || this.broken[l] !== 1) continue;
+      const a = Math.min(this.la[l] as number, this.lb[l] as number) - ci.p0;
+      const b = Math.max(this.la[l] as number, this.lb[l] as number) - ci.p0;
+      const i = a % nu;
+      const j = Math.floor(a / nu);
+      if (b - a === 1) out[j * (nu - 1) + i] = 1;
+      else out[(nu - 1) * nv + j * nu + i] = 1;
+    }
+    return out;
+  }
+
   /** Kinetic plus potential energy of cloth c (the potential from gravity, 0 at the origin). */
   energy(c: number): number {
     const ci = this.cloths[c] as ClothInfo;

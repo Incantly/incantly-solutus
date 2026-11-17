@@ -245,3 +245,127 @@ export function dragBody3(figure: Figure, name: string, p: V3, done: boolean): {
   figure.flush(true);
   return { ok: true, did: done ? 'released' : 'grabbed' };
 }
+
+/* ------------------------------ cloth (ui.md 4) ------------------------------ */
+
+interface ClothDrag {
+  readonly name: string;
+  last: V3;
+  mode: 'start' | 'grab';
+  point: number;
+}
+
+const CLOTH_DRAGS = new WeakMap<Figure, ClothDrag>();
+
+/** The top-level arguments of `name = Cmd(…)`: where each starts and ends in the line. */
+function argSpans(def: string): { start: number; end: number }[] {
+  const open = def.indexOf('(');
+  if (open < 0) return [];
+  const out: { start: number; end: number }[] = [];
+  let depth = 0;
+  let quote = false;
+  let from = open + 1;
+  for (let i = open + 1; i < def.length; i++) {
+    const c = def[i];
+    if (c === '"') quote = !quote;
+    if (quote) continue;
+    if (c === '(' || c === '[') depth++;
+    else if (c === ')' || c === ']') {
+      if (depth === 0) {
+        out.push({ start: from, end: i });
+        return out;
+      }
+      depth--;
+    } else if (c === ',' && depth === 0) {
+      out.push({ start: from, end: i });
+      from = i + 1;
+    }
+  }
+  return out;
+}
+
+/**
+ * Moves where a cloth starts by d (ui.md 4): a sheet's corner, a rope's two ends, a net's box, and the points of its
+ * `pins` list, so the cloth moves whole; a sheet's sides are directions and stay. True when the line changed.
+ */
+function moveCloth(figure: Figure, name: string, d: V3, space: boolean): boolean {
+  const o = figure.get(name);
+  if (!o) return false;
+  const def = o.definition;
+  const spans = argSpans(def);
+  if (spans.length === 0) return false;
+  const first = def.slice(spans[0]?.start ?? 0, spans[0]?.end ?? 0).trim();
+  const rope = !space && /^\(/.test(first) && spans.length >= 3 && /^\s*\(/.test(def.slice(spans[1]?.start ?? 0, spans[1]?.end ?? 0));
+  const moveArgs = new Set<number>([0]);
+  if (rope) moveArgs.add(1);
+  spans.forEach((s, k) => {
+    if (/^\s*pins\s*=/.test(def.slice(s.start, s.end))) moveArgs.add(k);
+  });
+  let out = '';
+  let at = 0;
+  let any = false;
+  spans.forEach((s, k) => {
+    if (!moveArgs.has(k)) return;
+    const text = def.slice(s.start, s.end);
+    const moved = space ? shiftTriples(text, d) : shiftPairs(text, d.x, d.y);
+    if (moved !== text) any = true;
+    out += def.slice(at, s.start) + moved;
+    at = s.end;
+  });
+  out += def.slice(at);
+  if (any) return figure.apply(out, { origin: 'learner' } as never).ok;
+  // the start is a named point (or shape): move it instead
+  return space ? moveShape3(figure, first, d) : moveShape(figure, first, d.x, d.y);
+}
+
+/**
+ * One step of dragging a cloth (ui.md 4): paused at the film's start the drag moves where the cloth starts; later it
+ * grabs the cloth's point nearest where the gesture began and pulls it toward the pointer, logged with the point's
+ * index so the replay shows the same pull. `p` is the pointer (z is not read in the plane).
+ */
+export function dragCloth(figure: Figure, name: string, p: V3, done: boolean): { ok: true; did: 'moved start' | 'grabbed' | 'released'; point?: number } | { ok: false; why: string } {
+  const o = figure.get(name);
+  const v = o?.cell.defined ? (o.cell.value as { schema?: string; spec?: { space?: boolean } }) : undefined;
+  if (!o || v?.schema !== 'Cloth') return { ok: false, why: `${name} is not a cloth` };
+  const space = v.spec?.space === true;
+  let g = CLOTH_DRAGS.get(figure);
+  if (!g || g.name !== name) {
+    const atStart = figure.clock().t <= figure.clockRange().from + 1e-9;
+    figure.flush();
+    const point = space ? physics3Of(figure).clothPointNear(o.id, p) : physicsOf(figure).clothPointNear(o.id, p.x, p.y);
+    if (point === undefined) return { ok: false, why: `${name} is not in the physics world` };
+    g = { name, last: p, mode: atStart ? 'start' : 'grab', point };
+    CLOTH_DRAGS.set(figure, g);
+  }
+  if (g.mode === 'start') {
+    const d = { x: p.x - g.last.x, y: p.y - g.last.y, z: space ? p.z - g.last.z : 0 };
+    g.last = p;
+    if (d.x !== 0 || d.y !== 0 || d.z !== 0) {
+      if (!moveCloth(figure, name, d, space)) {
+        CLOTH_DRAGS.delete(figure);
+        return { ok: false, why: `${name}'s start cannot be moved: it is not written with points the drag can move` };
+      }
+      figure.flush();
+    }
+    if (done) CLOTH_DRAGS.delete(figure);
+    return { ok: true, did: 'moved start' };
+  }
+  figure.flush();
+  const ok = space ? physics3Of(figure).grabCloth(o.id, g.point, p) : physicsOf(figure).grabCloth(o.id, g.point, p.x, p.y);
+  if (!ok) {
+    CLOTH_DRAGS.delete(figure);
+    return { ok: false, why: `${name} is not in the physics world` };
+  }
+  if (done) {
+    if (space) physics3Of(figure).releaseCloth(o.id, g.point);
+    else physicsOf(figure).releaseCloth(o.id, g.point);
+    CLOTH_DRAGS.delete(figure);
+  }
+  figure.flush(true);
+  return { ok: true, did: done ? 'released' : 'grabbed', point: g.point };
+}
+
+/** The cloth being dragged now, if any. */
+export function draggingCloth(figure: Figure): string | undefined {
+  return CLOTH_DRAGS.get(figure)?.name;
+}

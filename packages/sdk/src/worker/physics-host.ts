@@ -1,6 +1,6 @@
 /**
  * The page's side of the physics worker (docs/features/physics/design.md 9.6, 11.2; errors.md 5, 7): a figure with
- * liquid or waves, in the plane or in space, hands its world to the worker; each frame the page sends the time, the free values that changed and its new
+ * liquid, waves or cloth, in the plane or in space, hands its world to the worker; each frame the page sends the time, the free values that changed and its new
  * `@input` lines, and writes the cells that come back. Without a worker the same steps run on the page, with the notice
  * `worker_unavailable` once; if the worker stops, the page takes the world back from its start (`worker_crashed`).
  * Either way the film is the same.
@@ -41,7 +41,8 @@ export class PhysicsWorkerHost {
   /** Before the page's frame at film time t. */
   frame(t: number): void {
     const f = this.figure;
-    const wants = f.objects().some((o) => o.type === 'Liquid' || o.type === 'Waves');
+    // a world with liquid, waves or cloth runs whole in the worker (design 9.6, round 9 for cloth)
+    const wants = f.objects().some((o) => o.type === 'Liquid' || o.type === 'Waves' || o.type === 'Cloth');
     const d = worldDriverOf(f);
     // a line moved the world between the plane and space: the old driver takes its world back first
     if (!wants || (this.active && this.driver !== d)) {

@@ -24,7 +24,7 @@ export type ToWorker =
 export type FromWorker =
   | {
     readonly k: 'cells'; readonly seq: number; readonly t: number; readonly cells: readonly (readonly [string, Cell])[];
-    readonly info: { readonly drops: number; readonly awake: number; readonly contacts: number; readonly hash: string }; readonly warnings: readonly Notice[];
+    readonly info: { readonly drops: number; readonly awake: number; readonly contacts: number; readonly hash: string; readonly cloth?: number }; readonly warnings: readonly Notice[];
     /** The worker's whole `@input` log, when it changed: what the page saves (a pedal moved in the worker included). */
     readonly log?: readonly string[];
   }
@@ -60,7 +60,7 @@ export class PhysicsWorkerState {
     const d = worldDriverOf(f);
     const { cells, transfer } = d.ownedCells();
     const w = d.world;
-    const info = { drops: d.fluid?.ps.n ?? 0, awake: w ? w.awakeCount() : 0, contacts: w ? w.contactCount : 0, hash: d.worldHash() };
+    const info = { drops: d.fluid?.ps.n ?? 0, awake: w ? w.awakeCount() : 0, contacts: w ? w.contactCount : 0, hash: d.worldHash(), cloth: d.cloth?.n ?? 0 };
     const lines = d.inputLines();
     const key = lines.join('\n');
     const log = key !== this.lastLog ? lines : undefined;

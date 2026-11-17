@@ -4,7 +4,7 @@
  * and the tests share it.
  */
 import { colorHex, isParticlesValue, makeParticleBatch, physics, space } from '@incantly/kernel';
-import type { Figure } from '@incantly/kernel';
+import type { Figure, Notice } from '@incantly/kernel';
 import { curveRuns, gridFaces } from './mesh3';
 import { boxEdges, clipFace, clipSegment, inBox } from './clip3';
 import type { Box3 } from './clip3';
@@ -308,6 +308,10 @@ export function sceneOf3(figure: Figure, view: space.View3, opts: Scene3Options 
         for (let i = 0; i < n; i++) items.push({ k: 'dot', id, p: { x: v.xs[i] as number, y: v.ys[i] as number, z: v.zs[i] as number }, color: css, alpha: 0.85, size: r, px: false });
         break;
       }
+      case 'Cloth':
+        // cloth in space, until the WebGL 2 painter (physics design 12, 12.1): lit faces, every second point past 32
+        if (physics.isClothValue(v) && v.spec.space) items.push(...clothFaces(id, o.name, v, color, Math.max(alpha, 0.85), figure));
+        break;
       case 'Waves':
         // a wave surface in space: a lit mesh through the heights (physics design 12), at most 32 by 32 faces
         if (physics.isWavesValue(v) && v.space) items.push(...wavesFaces(id, v, color, Math.max(alpha, 0.6)));
@@ -455,6 +459,77 @@ function wavesFaces(id: number, w: physics.WavesValue, color: string, alpha: num
   // the rim of the surface, so its edge reads against the floor
   const rim: V3[] = [...is.map((_, a) => P[a]?.[0] as V3), ...js.map((_, b) => P[is.length - 1]?.[b] as V3), ...is.map((_, a) => P[is.length - 1 - a]?.[js.length - 1] as V3), ...js.map((_, b) => P[0]?.[js.length - 1 - b] as V3)];
   out.push(...loopLines(id, rim, darker(color), 1));
+  return out;
+}
+
+/** Cloths the software painter drew coarser, per figure: each gets the notice `cloth_drawn_coarse` once. */
+const COARSE = new WeakMap<object, { told: Set<string>; notices: Notice[] }>();
+
+/** The notices the Space view's painter made since the last call (`cloth_drawn_coarse`, errors.md 5). */
+export function takeSpaceNotices(figure: object): Notice[] {
+  const c = COARSE.get(figure);
+  return c ? c.notices.splice(0, c.notices.length) : [];
+}
+
+/**
+ * A cloth in space drawn by the software painter (physics design 12, 12.1): a lit face per cell through its points,
+ * from every second point when the cloth is larger than 32 a side (with `cloth_drawn_coarse` once), torn cells left
+ * out, faint threads every 8 points and its pins as dark points.
+ */
+function clothFaces(id: number, name: string, c: physics.ClothValue, color: string, alpha: number, figure: object): Item3[] {
+  const { nu, nv } = c.spec;
+  const step = nu > 32 || nv > 32 ? 2 : 1;
+  if (step > 1) {
+    let rec = COARSE.get(figure);
+    if (!rec) {
+      rec = { told: new Set(), notices: [] };
+      COARSE.set(figure, rec);
+    }
+    if (!rec.told.has(name)) {
+      rec.told.add(name);
+      rec.notices.push(physics.makeNotice('cloth_drawn_coarse', { name }, [name]));
+    }
+  }
+  const P = (i: number, j: number): V3 => {
+    const k = j * nu + i;
+    return { x: c.xs[k] as number, y: c.ys[k] as number, z: c.zs[k] as number };
+  };
+  const torn = (i0: number, j0: number, i1: number, j1: number): boolean => {
+    if (c.torn === 0 || c.cut.length === 0) return false;
+    for (let j = j0; j < j1; j++) for (let i = i0; i < i1; i++) {
+      const t = 2 * (j * (nu - 1) + i);
+      if (c.cut[t] === 1 || c.cut[t + 1] === 1) return true;
+    }
+    return false;
+  };
+  const is: number[] = [];
+  for (let i = 0; i < nu - 1; i += step) is.push(i);
+  is.push(nu - 1);
+  const js: number[] = [];
+  for (let j = 0; j < nv - 1; j += step) js.push(j);
+  js.push(nv - 1);
+  const out: Item3[] = [];
+  for (let b = 0; b + 1 < js.length; b++) {
+    for (let a = 0; a + 1 < is.length; a++) {
+      const i0 = is[a] as number;
+      const i1 = is[a + 1] as number;
+      const j0 = js[b] as number;
+      const j1 = js[b + 1] as number;
+      if (torn(i0, j0, i1, j1)) continue;
+      // two triangles a cell, so a cell that folds stays flat pieces
+      const p00 = P(i0, j0);
+      const p10 = P(i1, j0);
+      const p11 = P(i1, j1);
+      const p01 = P(i0, j1);
+      out.push({ k: 'face', id, pts: [p00, p10, p11], color, alpha, occludes: true, shade: true, body: name });
+      out.push({ k: 'face', id, pts: [p00, p11, p01], color, alpha, occludes: true, shade: true, body: name });
+    }
+  }
+  // faint threads every 8 points
+  const thread = darker(color, 0.75);
+  for (let j = 0; j < nv; j += 8) for (let i = 0; i + step < nu; i += step) if (!torn(i, Math.max(0, j - 1), Math.min(nu - 1, i + step), Math.min(nv - 1, j + 1))) out.push({ k: 'line', id, a: P(i, j), b: P(Math.min(nu - 1, i + step), j), color: thread, width: 0.6, hiddenDashed: false });
+  for (let i = 0; i < nu; i += 8) for (let j = 0; j + step < nv; j += step) if (!torn(Math.max(0, i - 1), j, Math.min(nu - 1, i + 1), Math.min(nv - 1, j + step))) out.push({ k: 'line', id, a: P(i, j), b: P(i, Math.min(nv - 1, j + step)), color: thread, width: 0.6, hiddenDashed: false });
+  for (let k = 0; k + 2 < c.pinsAt.length; k += 3) out.push({ k: 'dot', id, p: { x: c.pinsAt[k] as number, y: c.pinsAt[k + 1] as number, z: c.pinsAt[k + 2] as number }, color: '#2b2f36', alpha: 1, size: 3, px: true });
   return out;
 }
 

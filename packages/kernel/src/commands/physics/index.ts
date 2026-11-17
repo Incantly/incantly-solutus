@@ -50,7 +50,7 @@ export type { BodySpec, BodyValue, Outline, WorldValue } from './types';
 export { isBodyValue, isWorldValue, DEFAULT_WORLD } from './types';
 export { bodyShapeOf, solidShapeOf } from './shapes';
 export { isJointValue } from './joints';
-export { dragBody, dragBody3, draggingBody } from './drag';
+export { dragBody, dragBody3, dragCloth, draggingBody, draggingCloth } from './drag';
 export { carKey, carPedals, carPose } from './drive';
 export type { CarPedals } from './drive';
 export { isVehicleValue, isWheelValue, isWheel3Value, isVehicle3Value } from './vehicle';
@@ -928,7 +928,7 @@ export function registerPhysics(registry: CommandRegistry): void {
   registerNotice('checkpoints_thinned', { code: 'B105', severity: 'info', template: 'The film now keeps a checkpoint every {seconds} s, so far seeks may take longer.' });
   registerNotice('ground_sampled', { code: 'B106', severity: 'info', template: '{name} is solid between -{range} and {range}.' });
   registerNotice('input_undefined', { code: 'B107', severity: 'warning', template: "{name}'s {what} was undefined at t = {t} s and was taken as 0." });
-  registerNotice('worker_unavailable', { code: 'B108', severity: 'info', template: 'Liquids run on the page, so they may slow it down.' });
+  registerNotice('worker_unavailable', { code: 'B108', severity: 'info', template: 'Liquids and cloth run on the page, so the film may play slower here. It is the same film.' });
   registerNotice('unstable_world', { code: 'B109', severity: 'warning', template: '{name} became unstable at t = {t} s: {hint}.' });
   registerNotice('physics_behind', { code: 'B110', severity: 'info', template: 'The film plays slower than real time on this computer; it is the same film.' });
   registerNotice('broken', { code: 'B111', severity: 'info', template: '{name} broke at t = {t} s.' });

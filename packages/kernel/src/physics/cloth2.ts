@@ -536,8 +536,8 @@ export class Cloth2 extends ClothSet {
     if (held && this.live(b)) {
       const wb = this.bodyWn(b, cx, cy, nx, ny);
       if (!(wb > 0)) return;
-      const kk = depth / wb / hs;
-      this.give(b, this.owner[a] as number, -nx * kk, -ny * kk, 0, cx + nx * sh.radius, cy + ny * sh.radius, 0, hs);
+      const kk = depth / wb / this.hStep;
+      this.give(b, this.owner[a] as number, -nx * kk, -ny * kk, 0, cx + nx * sh.radius, cy + ny * sh.radius, 0, this.hStep);
       return;
     }
     const W = (1 - f) * (1 - f) * wa + f * f * we;
@@ -580,8 +580,8 @@ export class Cloth2 extends ClothSet {
     if (moving && (wp === 0 || this.taut[i] === 1)) {
       const wb = this.bodyWn(b, x, y, nx, ny);
       if (!(wb > 0)) return;
-      const k = depth / wb / hs;
-      this.give(b, this.owner[i] as number, -nx * k, -ny * k, 0, x, y, 0, hs);
+      const k = depth / wb / this.hStep;
+      this.give(b, this.owner[i] as number, -nx * k, -ny * k, 0, x, y, 0, this.hStep);
       return;
     }
     if (wp === 0) return;

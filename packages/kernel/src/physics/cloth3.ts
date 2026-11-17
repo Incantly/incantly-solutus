@@ -451,8 +451,8 @@ export class Cloth3 extends ClothSet {
     if (held && moving) {
       const wb = this.bodyWn(b, cx, cy, cz, mx, my, mz);
       if (!(wb > 0)) return;
-      const kk = depth / wb / hs;
-      this.give(b, this.owner[a] as number, -mx * kk, -my * kk, -mz * kk, cx + mx * sh.r, cy + my * sh.r, cz + mz * sh.r, hs);
+      const kk = depth / wb / this.hStep;
+      this.give(b, this.owner[a] as number, -mx * kk, -my * kk, -mz * kk, cx + mx * sh.r, cy + my * sh.r, cz + mz * sh.r, this.hStep);
       const share = kk * hs;
       this.holdPush(a, mx * share * ba, my * share * ba, mz * share * ba);
       this.holdPush(bb, mx * share * bbw, my * share * bbw, mz * share * bbw);
@@ -543,8 +543,8 @@ export class Cloth3 extends ClothSet {
       const wb = this.bodyWn(b, x, y, z, nx, ny, nz);
       if (!(wb > 0)) return;
       const dl = depth / wb;
-      const k = dl / hs;
-      this.give(b, this.owner[i] as number, -nx * k, -ny * k, -nz * k, x, y, z, hs);
+      const k = dl / this.hStep;
+      this.give(b, this.owner[i] as number, -nx * k, -ny * k, -nz * k, x, y, z, this.hStep);
       this.holdPush(i, nx * k * hs, ny * k * hs, nz * k * hs);
       return;
     }

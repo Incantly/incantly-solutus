@@ -62,7 +62,11 @@ export interface ClothValue {
   readonly xs: Float64Array;
   readonly ys: Float64Array;
   readonly zs: Float64Array;
-  /** Faces (threads in the plane) with a torn side: 1 each; empty before the film runs. */
+  /**
+   * What tore, 1 each; empty before the film runs. In space the faces with a torn side, two a cell row by row (the
+   * cell (i, j) has faces 2 (j (nu − 1) + i) and the next). In the plane the torn threads: along u first, (nu − 1) × nv,
+   * index j (nu − 1) + i, then along v, nu × (nv − 1), index j nu + i.
+   */
   readonly cut: Uint8Array;
   readonly torn: number;
   readonly stretchMax: number;

@@ -1948,8 +1948,7 @@ export class PhysicsDriver implements WorldDriver {
           xs[k] = sx + ((c.x[i] as number) - sx) * alpha;
           ys[k] = sy + ((c.y[i] as number) - sy) * alpha;
         }
-        const cut = new Uint8Array(info.tn);
-        if (info.torn > 0) for (let t = 0; t < info.tn; t++) cut[t] = c.triTorn(info.t0 + t) ? 1 : 0;
+        const cut = c.threadCuts(cm.index);
         const pinsAt: number[] = [];
         for (let q = info.pin0; q < info.pin0 + info.pinN; q++) {
           const i = (c.pinPoint[q] as number) - info.p0;
@@ -2122,7 +2121,7 @@ export class PhysicsDriver implements WorldDriver {
   private remoteLog: string[] = [];
   private grabAnchor = new Map<string, { ax: number; ay: number }>();
   /** The world in the worker: drops and steps, for the time bar readout. */
-  remoteInfo = { drops: 0, awake: 0, contacts: 0, hash: '' };
+  remoteInfo: { drops: number; awake: number; contacts: number; hash: string; cloth?: number } = { drops: 0, awake: 0, contacts: 0, hash: '' };
 
   /** Hands the world to a worker (or takes it back: then it is built again here, from its start). */
   setRemote(on: boolean): void {
@@ -2152,7 +2151,7 @@ export class PhysicsDriver implements WorldDriver {
   }
 
   /** The cells the worker computed for a frame: they are written on the next pass. */
-  accept(cells: readonly (readonly [string, Cell])[], info?: { drops: number; awake: number; contacts: number; hash: string }, log?: readonly string[]): void {
+  accept(cells: readonly (readonly [string, Cell])[], info?: { drops: number; awake: number; contacts: number; hash: string; cloth?: number }, log?: readonly string[]): void {
     for (const [name, cell] of cells) this.remoteCells.set(name, cell);
     if (info) this.remoteInfo = info;
     // the worker's own log holds what it logged itself (a slider moved while the film played, round 6's carry-over): it,
