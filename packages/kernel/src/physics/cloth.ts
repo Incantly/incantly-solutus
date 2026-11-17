@@ -1352,6 +1352,8 @@ export class ClothSet {
 
   /** Which cloths drops met in the last liquid step (it wakes them). */
   private wet = new Uint8Array(0);
+  /** How many times drops met the cloth since the world began (for tests). */
+  meets = 0;
   /** The pushes drops gave pinned corners in the last liquid step (N), counted in the pins' forces. */
   dropPinX = new Float64Array(0);
   dropPinY = new Float64Array(0);
@@ -1402,7 +1404,10 @@ export class ClothSet {
           const ny = o[1] as number;
           const nz = o[2] as number;
           if (nx === 0 && ny === 0 && nz === 0) continue;
-          const s0 = nx * ((ps.x0[d] as number) - (x[a] as number)) + ny * ((ps.y0[d] as number) - (y[a] as number)) + nz * ((ps.z0[d] as number) - (z[a] as number));
+          // the side the drop was on: where it started this step against the face where the last liquid step left it
+          // (the cloth's own step since may have carried the face past a drop resting on it)
+          const s0 = this.faceHeight(t, ps.x0[d] as number, ps.y0[d] as number, ps.z0[d] as number, this.sx, this.sy, this.sz);
+          this.faceHeight(t, dx, dy, dz, x, y, z);
           const crossed = s0 * s1 < 0;
           const side = s0 >= 0 ? 1 : -1;
           const C = reach - s1 * side;
@@ -1423,17 +1428,20 @@ export class ClothSet {
             fy = dy - s1 * ny;
             fz = dz - s1 * nz;
           }
-          if (!this.footOn(t, fx, fy, fz, 1e-6)) continue;
+          // a margin over the edges: a drop in the fold between two faces is held by both, so it cannot slip down the crease
+          if (!this.footOn(t, fx, fy, fz, 0.15)) continue;
           const ba = o[3] as number;
           const bb = o[4] as number;
           const be = o[5] as number;
-          const wd = 1 / (mass[ps.owner[d] as number] as number);
-          const wc = ba * ba * (w[a] as number) + bb * bb * (w[b] as number) + (e >= 0 ? be * be * (w[e] as number) : 0);
-          const dl = (C / (wd + wc)) * side;
-          ps.x[d] = dx + wd * dl * nx;
-          ps.y[d] = dy + wd * dl * ny;
-          ps.z[d] = dz + wd * dl * nz;
+          // the drop goes all the way back to its side, so it can never be left across the face for the next step; the
+          // cloth takes the drop's change of momentum as a change of its corners' speed (the drop's share of the pair's
+          // push, by their masses, is its whole move: Δλ = m_drop C)
+          const dl = (mass[ps.owner[d] as number] as number) * C * side;
+          ps.x[d] = dx + C * side * nx;
+          ps.y[d] = dy + C * side * ny;
+          ps.z[d] = dz + C * side * nz;
           this.wet[c] = 1;
+          this.meets++;
           for (let k = 0; k < 3; k++) {
             const j = k === 0 ? a : k === 1 ? b : e;
             const bj = k === 0 ? ba : k === 1 ? bb : be;
@@ -1449,9 +1457,12 @@ export class ClothSet {
               }
               continue;
             }
-            vx[j] = (vx[j] as number) - wj * bj * dl * nx * inv;
-            vy[j] = (vy[j] as number) - wj * bj * dl * ny * inv;
-            vz[j] = (vz[j] as number) - wj * bj * dl * nz * inv;
+            // the corner moves now, by its share, and keeps the speed of that move (position-based: both sides of
+            // the pair end apart, so a drop is never left across the face)
+            const m = wj * bj * dl;
+            vx[j] = (vx[j] as number) - m * nx * inv;
+            vy[j] = (vy[j] as number) - m * ny * inv;
+            vz[j] = (vz[j] as number) - m * nz * inv;
           }
         }
       }
