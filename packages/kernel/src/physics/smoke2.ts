@@ -27,6 +27,10 @@ import { BodyType, FK } from './world2';
 export const SMOKE_PASSES = 20;
 /** Over-relaxation of the pressure passes: near the best for a 64 grid, so 20 passes do the work of a few hundred plain ones. */
 const OMEGA = 1.8;
+/** Projections of the start's flow, once (see `settle`). */
+const START_PROJECTIONS = 10;
+/** What an over-relaxed pass keeps of a cell's old value. */
+const KEEP = 1 - OMEGA;
 /** Air, kg per m³; the plane is 1 m deep. */
 export const AIR_DENSITY = 1.2;
 /** Drag number of a blunt body in a flow. */
@@ -84,7 +88,12 @@ export class Smoke2 {
   private readonly wd: Float64Array;
   private readonly wu: Float64Array;
   private readonly inv: Float64Array;
-  private readonly plain: Uint8Array;
+  /**
+   * The cells off the plain stencil (solids and the air beside them): even cells from 0, odd cells from n², each in
+   * index order; and their new values in a pass.
+   */
+  private readonly fix: Int32Array;
+  private readonly fixed: Float64Array;
   /** Wind (m/s): the air outside the box and coming in at its edges. */
   windX = 0;
   windY = 0;
@@ -134,7 +143,8 @@ export class Smoke2 {
     this.wd = new Float64Array(S);
     this.wu = new Float64Array(S);
     this.inv = new Float64Array(S);
-    this.plain = new Uint8Array(S);
+    this.fix = new Int32Array(2 * n * n);
+    this.fixed = new Float64Array(2 * n * n);
     this.own = new Int32Array(n * n).fill(-1);
     this.own0 = new Int32Array(n * n).fill(-1);
     this.src = new Uint8Array(n * n);
@@ -152,6 +162,17 @@ export class Smoke2 {
     this.p.fill(0);
     this.unstable = false;
     this.makeSmoke();
+  }
+
+  /**
+   * Makes the start's flow lose no volume round the solids and bodies where they are: the wind fills the box, also
+   * where a ball stands, so the first projection has a large error to take off. Ten projections (200 passes) once at
+   * the start do it; after that each step starts from the last step's pressure and 20 passes keep up.
+   */
+  settle(w: World2 | undefined): void {
+    this.markSolids(w);
+    this.solidFaces(w);
+    for (let k = 0; k < START_PROJECTIONS; k++) this.project();
   }
 
   /** Marks the cells of the source; a point fills the cell it is in. */
@@ -560,58 +581,89 @@ export class Smoke2 {
     const own = this.own;
     const p = this.p;
     const div = this.div;
-    const { wl, wr, wd, wu, inv, plain } = this;
+    const { wl, wr, wd, wu, inv, fix, fixed } = this;
     const wx = 1 / (this.dx * this.dx);
     const wy = 1 / (this.dy * this.dy);
     const ip = 1 / (2 * wx + 2 * wy);
+    const ax = OMEGA * ip * wx;
+    const ay = OMEGA * ip * wy;
     const u = this.u;
     const v = this.v;
     const idx = 1 / this.dx;
     const idy = 1 / this.dy;
-    // the weights of each air cell's neighbours: an air cell or the open air outside counts, a solid does not
+    // The weights of each cell's neighbours: an air cell or the open air outside counts, a solid does not. A cell with
+    // air (or the open air, where p stays 0) on all four sides takes the plain stencil; the few others (solids and the
+    // air beside them) go on a list of their colour and are solved with their own weights.
+    let nf0 = 0;
+    let nf1 = 0;
+    const half = n * n;
     for (let j = 0; j < n; j++) {
       for (let i = 0; i < n; i++) {
         const c = j * n + i;
         const q = (j + 1) * S + i + 1;
+        const odd = (i + j) & 1;
         if ((own[c] as number) >= 0) {
-          wl[q] = 0;
-          wr[q] = 0;
-          wd[q] = 0;
-          wu[q] = 0;
           inv[q] = 0;
           div[q] = 0;
           p[q] = 0;
-          plain[q] = 0;
+          if (odd === 0) fix[nf0++] = q;
+          else fix[half + nf1++] = q;
           continue;
         }
         const l = i === 0 || (own[c - 1] as number) < 0 ? wx : 0;
         const r = i === n - 1 || (own[c + 1] as number) < 0 ? wx : 0;
         const d = j === 0 || (own[c - n] as number) < 0 ? wy : 0;
         const t = j === n - 1 || (own[c + n] as number) < 0 ? wy : 0;
+        const dv = ((u[j * W + i + 1] as number) - (u[j * W + i] as number)) * idx + ((v[(j + 1) * n + i] as number) - (v[j * n + i] as number)) * idy;
+        // A cell a body has just left held p = 0 (solid cells do): a poor first guess beside a moving body, where the
+        // pressure is far from 0. Start it from the mean of its neighbours (read from the pressure alone, so a
+        // checkpoint holds all it needs). Still air has p = 0 everywhere and stays so.
+        if ((p[q] as number) === 0) {
+          const s4 = (p[q - 1] as number) + (p[q + 1] as number) + (p[q - S] as number) + (p[q + S] as number);
+          if (s4 !== 0) p[q] = 0.25 * s4;
+        }
+        if (l !== 0 && r !== 0 && d !== 0 && t !== 0) {
+          // kept already times the over-relaxation and the diagonal's inverse, so a pass does fewer products
+          div[q] = OMEGA * ip * dv;
+          continue;
+        }
         // outside the box p stays 0, so its weight only goes into the diagonal
-        wl[q] = i === 0 ? 0 : l;
-        wr[q] = i === n - 1 ? 0 : r;
-        wd[q] = j === 0 ? 0 : d;
-        wu[q] = j === n - 1 ? 0 : t;
         const sum = l + r + d + t;
-        inv[q] = sum > 0 ? 1 / sum : 0;
-        plain[q] = i > 0 && i < n - 1 && j > 0 && j < n - 1 && l !== 0 && r !== 0 && d !== 0 && t !== 0 ? 1 : 0;
-        div[q] = ((u[j * W + i + 1] as number) - (u[j * W + i] as number)) * idx + ((v[(j + 1) * n + i] as number) - (v[j * n + i] as number)) * idy;
+        const iq = sum > 0 ? OMEGA / sum : 0;
+        wl[q] = i === 0 ? 0 : l * iq;
+        wr[q] = i === n - 1 ? 0 : r * iq;
+        wd[q] = j === 0 ? 0 : d * iq;
+        wu[q] = j === n - 1 ? 0 : t * iq;
+        inv[q] = iq;
+        div[q] = iq * dv;
+        if (odd === 0) fix[nf0++] = q;
+        else fix[half + nf1++] = q;
       }
     }
+    // Red-black over-relaxed passes. In one colour's sweep a cell reads only cells of the other colour, so the listed
+    // cells' new values are found first, then every cell of the colour takes the plain stencil in one tight loop, and
+    // the listed cells get their own values back.
     for (let pass = 0; pass < SMOKE_PASSES; pass++) {
       for (let colour = 0; colour < 2; colour++) {
+        const f0 = colour === 0 ? 0 : half;
+        const f1 = f0 + (colour === 0 ? nf0 : nf1);
+        for (let k = f0; k < f1; k++) {
+          const q = fix[k] as number;
+          const iq = inv[q] as number;
+          if (iq === 0) {
+            fixed[k] = 0;
+            continue;
+          }
+          // p ← (1 − ω) p + ω (Σ w p_nb − div) / Σ w, the weights and div already times ω / Σ w
+          fixed[k] = KEEP * (p[q] as number) + (wl[q] as number) * (p[q - 1] as number) + (wr[q] as number) * (p[q + 1] as number) + (wd[q] as number) * (p[q - S] as number) + (wu[q] as number) * (p[q + S] as number) - (div[q] as number);
+        }
         for (let j = 0; j < n; j++) {
           const end = (j + 1) * S + n + 1;
           for (let q = (j + 1) * S + 1 + ((j + colour) & 1); q < end; q += 2) {
-            const pq = p[q] as number;
-            // most cells are air on all four sides: the plain stencil, with fewer reads
-            const g = plain[q] === 1
-              ? (wx * ((p[q - 1] as number) + (p[q + 1] as number)) + wy * ((p[q - S] as number) + (p[q + S] as number)) - (div[q] as number)) * ip
-              : ((wl[q] as number) * (p[q - 1] as number) + (wr[q] as number) * (p[q + 1] as number) + (wd[q] as number) * (p[q - S] as number) + (wu[q] as number) * (p[q + S] as number) - (div[q] as number)) * (inv[q] as number);
-            p[q] = pq + OMEGA * (g - pq);
+            p[q] = KEEP * (p[q] as number) + ax * ((p[q - 1] as number) + (p[q + 1] as number)) + ay * ((p[q - S] as number) + (p[q + S] as number)) - (div[q] as number);
           }
         }
+        for (let k = f0; k < f1; k++) p[fix[k] as number] = fixed[k] as number;
       }
     }
     // take the gradient off every face between two air cells, or an air cell and the open air outside (p = 0 there)
@@ -771,6 +823,17 @@ export class Smoke2 {
         if (t >= 0 && t !== l && t !== r && t !== d) this.near(w, t, uu, vv);
       }
     }
+    // a body smaller than a cell fills no cell and so has no air beside it: it feels the air at its centre instead
+    // (it is too small to block the flow, but the flow still carries it)
+    for (let b = 0; b < nb; b++) {
+      if (this.cnt[b] !== 0 || w.type[b] !== BodyType.Dynamic || w.gone.has(b)) continue;
+      const x = w.px[b] as number;
+      const y = w.py[b] as number;
+      if (!(x > this.x0 && x < this.x1 && y > this.y0 && y < this.y1)) continue;
+      this.sumX[b] = this.sampleU(x, y);
+      this.sumY[b] = this.sampleV(x, y);
+      this.cnt[b] = 1;
+    }
     const k = 0.5 * AIR_DENSITY * DRAG_CD;
     for (let b = 0; b < nb; b++) {
       const m = this.cnt[b] as number;
@@ -890,6 +953,8 @@ export class Smoke2 {
     const nv = this.v.length;
     const ns = this.s.length;
     this.unstable = src[1] === 1;
+    // the walls are marked again from where they are in the world loaded with this checkpoint
+    this.staticDirty = true;
     const nb = src[2] as number;
     let k = 3;
     this.u.set(src.subarray(k, k + nu));

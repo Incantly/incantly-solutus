@@ -1026,6 +1026,8 @@ export class PhysicsDriver implements WorldDriver {
     const h = 1 / this.rate;
     this.applyLog(n);
     if (varying) this.stepInputs(n);
+    // the air at the film's start, from the wind and the source at its first step, not at the time the grid was built
+    if (n === 0) this.startSmoke();
     this.applyGrabs();
     this.applyVehicles();
     if (n === 0) {
@@ -1093,6 +1095,32 @@ export class PhysicsDriver implements WorldDriver {
   }
 
   /**
+   * Sets each smoke grid to its start, as the first step reads it: a grid is built at whatever time the figure is
+   * shown, and a wind or a source that changes with t must not make the start depend on that time (seek == play).
+   */
+  private startSmoke(): void {
+    for (const sm of this.smokeMembers) {
+      if (this.varySet.has(sm.rec)) {
+        const c = sm.rec.cell;
+        if (c.defined && isSmokeValue(c.value)) sm.value = c.value;
+      }
+      const spec = sm.value.spec;
+      sm.grid.setSource(spec.source);
+      sm.grid.heat = spec.heat;
+      sm.grid.making = spec.until > 0;
+      const ws = spec.wind ?? this.windNow();
+      sm.grid.start(ws.x, ws.y);
+      sm.grid.settle(this.world);
+    }
+  }
+
+  /** The world's wind at the step being taken (a formula of t was evaluated for it). */
+  private windNow(): { x: number; y: number } {
+    const ws = this.varyingWorld && this.worldRec?.cell.defined && isWorldValue(this.worldRec.cell.value) ? this.worldRec.cell.value : this.settings();
+    return { x: ws.windX, y: ws.windY };
+  }
+
+  /**
    * Smoke after the bodies' step (design 9.6): its drag is counted on every step, and every `smokeEvery` steps the
    * grids step once, by that many steps' time, against the bodies where they are now.
    */
@@ -1116,9 +1144,9 @@ export class PhysicsDriver implements WorldDriver {
       // the source makes smoke while the film is before `until`
       sm.grid.making = t - this.smokeEvery * h < spec.until - 1e-9;
       if (!spec.wind) {
-        const ws = this.varyingWorld && this.worldRec?.cell.defined && isWorldValue(this.worldRec.cell.value) ? this.worldRec.cell.value : this.settings();
-        sm.grid.windX = ws.windX;
-        sm.grid.windY = ws.windY;
+        const ws = this.windNow();
+        sm.grid.windX = ws.x;
+        sm.grid.windY = ws.y;
       }
       const was = sm.grid.unstable;
       sm.grid.step(w, this.smokeEvery * h);
@@ -1376,7 +1404,10 @@ export class PhysicsDriver implements WorldDriver {
       if (!w.setStaticShapes(i, sh.shapes)) continue;
       // smoke marks its walls again
       for (const s of this.smokeMembers) s.grid.staticDirty = true;
-      const mv = rigidMotion(old, sh.shapes, h);
+      // At the first step there is no step before it: the world was built from the shape at whatever time the figure
+      // showed (t = 0 when played, the seek's time when sought), so its move from there is not a speed. It starts at
+      // rest, in every case (seek == play).
+      const mv = n === 0 ? REST : rigidMotion(old, sh.shapes, h);
       w.vx[i] = mv.vx;
       w.vy[i] = mv.vy;
       w.w[i] = mv.w;
@@ -1955,6 +1986,8 @@ function sameSpec(cell: Cell, computed: unknown): boolean {
 }
 
 /** The translation and turn that carry one set of shapes to another with the same corners (a moving solid). */
+const REST = Object.freeze({ vx: 0, vy: 0, w: 0 });
+
 function rigidMotion(a: readonly ShapeDef2[], b: readonly ShapeDef2[], h: number): { vx: number; vy: number; w: number } {
   const pa: { x: number; y: number }[] = [];
   const pb: { x: number; y: number }[] = [];

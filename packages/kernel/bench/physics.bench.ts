@@ -172,3 +172,73 @@ describe('2D liquid (design 11.2, R7)', () => {
     expect(s[Math.floor(s.length * 0.95)]).toBeLessThan(0.1);
   });
 });
+
+/** Smoke on the finest grid, 64 × 64, blown past a solid ball with a light body in it: the smoke row of design 11.2. */
+const SMOKE = [
+  'world with wind = (3 + sin(2 t), 0)',
+  'ball = Circle((0, 0), 0.7)',
+  'ball with solid = true',
+  'leaf = Body(Circle((2, 1.2), 0.2), mass = 0.02)',
+  'sm = Smoke(Box((1, 0), 10, 6), 64, source = Box((-3.7, 0), 0.3, 2), heat = 1)',
+  'm = sm.mass',
+];
+
+describe('smoke (design 11.2, R7)', () => {
+  it('64 × 64 smoke: a frame (two steps, one smoke step) under 0.75 ms in Node, mean and the slow frames', { retry: 2 }, () => {
+    const f = load(SMOKE);
+    for (let k = 1; k <= 60; k++) f.setClock(k / 60);
+    const times: number[] = [];
+    for (let k = 61; k <= 60 * 20; k++) {
+      const t = performance.now();
+      f.setClock(k / 60);
+      times.push(performance.now() - t);
+    }
+    const s = sorted(times);
+    const mean = times.reduce((a, b) => a + b, 0) / times.length;
+    const p95 = s[Math.floor(s.length * 0.95)] as number;
+    const worst = s[s.length - 1] as number;
+    console.log(`smoke 64 x 64, a frame: mean ${mean.toFixed(3)} ms, 95% ${p95.toFixed(3)} ms, worst ${worst.toFixed(3)} ms (budget 0.75 ms)`);
+    const g = physicsOf(f).smokeMembers[0]?.grid;
+    expect(g?.n).toBe(64);
+    expect(mean).toBeLessThan(0.75);
+    expect(p95).toBeLessThan(0.75);
+  });
+
+  it('seek anywhere in a 60 s film with 64 × 64 smoke, warm: under 25 ms in Node', () => {
+    const f = load(SMOKE);
+    for (let k = 1; k <= 60 * 60; k++) f.setClock(k / 60);
+    const times: number[] = [];
+    for (let i = 0; i < 100; i++) {
+      const t = ((i * 37) % 100) * 0.59 + 0.3;
+      const a = performance.now();
+      f.setClock(t);
+      times.push(performance.now() - a);
+    }
+    const s = sorted(times);
+    console.log(`seek, 64 x 64 smoke: median ${(s[50] as number).toFixed(1)} ms, worst ${(s[99] as number).toFixed(1)} ms (budget 25 ms, as for 300 bodies)`);
+    expect(s[99]).toBeLessThan(25);
+  });
+
+  it('a checkpoint of a 64 × 64 smoke grid: the flow, the smoke and the pressure guess, about 130 KB (design 10.3)', () => {
+    const f = load(SMOKE);
+    f.setClock(1);
+    const d = physicsOf(f) as unknown as { saveState(): Float64Array };
+    const kb = d.saveState().byteLength / 1024;
+    console.log(`a checkpoint with 64 x 64 smoke: ${kb.toFixed(1)} KB`);
+    expect(kb).toBeLessThan(140);
+  });
+
+  it('a smoke step makes no garbage after the first second', () => {
+    const f = load(SMOKE);
+    for (let k = 1; k <= 60; k++) f.setClock(k / 60);
+    const d = physicsOf(f);
+    const sm = d.smokeMembers[0];
+    const w = (d as unknown as { world: World2 }).world;
+    if (!sm) throw new Error('no smoke');
+    const g = sm.grid;
+    const arrays = [g.u, g.v, g.s, g.p, g.fx];
+    for (let k = 0; k < 200; k++) g.step(w, 1 / 60);
+    // the grid swaps its two buffers each step: after an even number of steps, the very same arrays
+    for (const [a, b] of [[g.u, arrays[0]], [g.v, arrays[1]], [g.s, arrays[2]], [g.p, arrays[3]], [g.fx, arrays[4]]] as const) expect(a === b).toBe(true);
+  });
+});

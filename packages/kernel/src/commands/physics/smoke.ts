@@ -126,7 +126,8 @@ function checkSmoke(c: FormCheck): Refusal | undefined {
   if (heat !== undefined && !(Math.abs(heat) <= SMOKE_MAX_HEAT)) return { kind: 'bad_property_value', message: `heat must be between -${SMOKE_MAX_HEAT} and ${SMOKE_MAX_HEAT}.`, hint: 'heat is how hard thick smoke rises, in m/s²: a candle is about 5. Below 0 it sinks.', param: 3, params: { key: 'heat', allowed: `between -${SMOKE_MAX_HEAT} and ${SMOKE_MAX_HEAT}` } };
   const wind = c.args[4];
   if (wind && !wind.omitted) {
-    const v = wind.value as { x?: unknown; y?: unknown } | undefined;
+    // a vector written in the line is its literal; a bare name, its value now
+    const v = (wind.literal ?? wind.value) as { x?: unknown; y?: unknown } | undefined;
     if (typeof wind.literal === 'number') return { kind: 'bad_property_value', message: 'wind must be a vector, such as (3, 0).', hint: 'wind is the speed of the air in m/s: (3, 0) blows to the right.', param: 4, params: { key: 'wind', allowed: 'a vector such as (3, 0)' } };
     if (v && typeof v.x === 'number' && typeof v.y === 'number' && !(Math.abs(v.x) <= SMOKE_MAX_WIND && Math.abs(v.y) <= SMOKE_MAX_WIND)) {
       return { kind: 'bad_property_value', message: `Each part of the wind must be at most ${SMOKE_MAX_WIND} m/s.`, hint: 'A strong wind is 10 m/s; a hurricane about 70.', param: 4, params: { key: 'wind', allowed: `each part between -${SMOKE_MAX_WIND} and ${SMOKE_MAX_WIND} m/s` } };
@@ -189,7 +190,7 @@ export function smokeGrid(spec: SmokeSpec, windX: number, windY: number): Smoke2
 
 /** The smoke a grid holds now, as a value. */
 export function smokeValue(spec: SmokeSpec, g: Smoke2): SmokeValue {
-  return { schema: 'Smoke', spec, density: Float32Array.from(g.s), mass: g.mass(), speed: g.maxSpeed() };
+  return { schema: 'Smoke', spec, density: new Float32Array(g.s), mass: g.mass(), speed: g.maxSpeed() };
 }
 
 /** The start: the source already full of smoke, so it shows before the film runs (no grid is made for it). */

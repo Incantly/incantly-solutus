@@ -343,7 +343,8 @@ function checkWorld(c: FormCheck): Refusal | undefined {
     if (key === 'wind') {
       // any finite vector (design 2.3), each part at most 100 m/s
       if (typeof a.literal === 'number') return bad(i, key, 'a vector such as (3, 0)', 'wind is the speed of the air in m/s: (3, 0) blows to the right.', 'world with wind = (3, 0)');
-      const v = a.value as { x?: unknown; y?: unknown; z?: unknown } | undefined;
+      // a vector written in the line is its literal; a bare name, its value now
+      const v = (a.literal ?? a.value) as { x?: unknown; y?: unknown; z?: unknown } | undefined;
       const parts = [v?.x, v?.y, v?.z].filter((x): x is number => typeof x === 'number');
       if (parts.some((x) => !(Math.abs(x) <= SMOKE_MAX_WIND))) return bad(i, key, `a vector with each part at most ${SMOKE_MAX_WIND} m/s`, 'A strong wind is 10 m/s; a hurricane about 70.');
       continue;

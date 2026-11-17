@@ -12,7 +12,7 @@ import type { Ty } from '../../language/types';
 import { isSmokeValue, smokeLineCheck } from './smoke';
 import type { SmokeValue } from './smoke';
 
-const SMOKE_FIELDS: Readonly<Record<string, Ty>> = { mass: T.Number, speed: T.Number, n: T.Number, at: { k: 'Function', ret: 'Number', arity: 1 } as Ty };
+const SMOKE_FIELDS: Readonly<Record<string, Ty>> = { mass: T.Number, speed: T.Number, n: T.Number, at: { k: 'Function', ret: 'Number', arity: 2 } as Ty };
 
 const fmt = (x: number): string => (Number.isFinite(x) ? String(Number(x.toFixed(2))) : 'undefined');
 
@@ -34,12 +34,10 @@ export function registerSmoke(): void {
     if (field === 'speed') return v.speed;
     if (field === 'n') return v.spec.n;
     if (field === 'at') {
+      // sm.at(x, y): two numbers, as c.at(i, j) of a cloth
       return {
-        arity: 1,
-        call: (p: unknown) => {
-          const q = p as { x?: unknown; y?: unknown } | undefined;
-          return typeof q?.x === 'number' && typeof q.y === 'number' ? smokeAt(v, q.x, q.y) : undefined;
-        },
+        arity: 2,
+        call: (x: unknown, y: unknown) => (typeof x === 'number' && typeof y === 'number' && Number.isFinite(x) && Number.isFinite(y) ? smokeAt(v, x, y) : undefined),
       };
     }
     return undefined;
