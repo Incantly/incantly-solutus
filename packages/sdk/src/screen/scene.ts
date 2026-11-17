@@ -2,7 +2,7 @@
  * What a figure draws: one scene item per object that shows on the graph (the studio's list and every export read
  * the same rule). Selection, hover and tool previews are the screen's own and are added by it.
  */
-import { physics, physicsOf, tracePoints, tracedIds } from '@incantly/kernel';
+import { colorHex, physics, physicsOf, tracePoints, tracedIds } from '@incantly/kernel';
 import type { Figure, ObjectView } from '@incantly/kernel';
 import { colorAt } from './paint';
 import type { SceneItem } from './paint';
@@ -30,8 +30,20 @@ function colorCss(c: unknown): string | undefined {
   return `rgba(${Math.round(o.r * k)}, ${Math.round(o.g * k)}, ${Math.round(o.b * k)}, ${o.a ?? 1})`;
 }
 
+/** Types drawn in a look of their own (grey smoke, blue water, physics ui.md 7): their type's colour, never the palette. */
+const OWN_LOOK = new Set(['Smoke', 'Liquid', 'Water', 'Waves']);
+
+/**
+ * The colour an object asks for itself, as `#rrggbb`: the colour its own line sets (`p with color = red`), or the
+ * colour of a type drawn in a look of its own. Undefined when the screen should give it a palette colour.
+ */
+export function ownColorOf(o: Pick<ObjectView, 'type' | 'style'>): string | undefined {
+  if (o.style.ownColor === true || OWN_LOOK.has(o.type)) return colorHex({ ...o.style.color, a: 1 });
+  return undefined;
+}
+
 export interface SceneOptions {
-  /** The colour of an object (the studio's list gives each a palette colour in order). */
+  /** The colour of an object with no colour of its own (the studio's list gives each a palette colour in order). */
   readonly color?: (o: ObjectView, index: number) => string;
   /** Objects the screen hides on its own (not by style). */
   readonly hidden?: (o: ObjectView) => boolean;
@@ -48,7 +60,7 @@ export function sceneOf(figure: Figure, opts: SceneOptions = {}): SceneItem[] {
   const t = figure.clock().t;
   let index = 0;
   for (const o of figure.objects()) {
-    const color = opts.color ? opts.color(o, index) : colorAt(index);
+    const color = ownColorOf(o) ?? (opts.color ? opts.color(o, index) : colorAt(index));
     index++;
     if (!o.cell.defined) continue;
     const hiddenHere = opts.hidden?.(o) === true;

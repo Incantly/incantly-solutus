@@ -1001,7 +1001,7 @@ export class FigureCore {
       // a rule that is undefined leaves the static value and raises no warning (design 9.4)
       if (v !== undefined) setProp(props, e.key, v);
     }
-    const eff = toEffective(props, showIf, showText);
+    const eff = toEffective(props, showIf, showText, r.p.style.has('color'));
     r.styleCache = eff;
     this.styleClockStamp.set(r, this.clockStamp());
     return eff;

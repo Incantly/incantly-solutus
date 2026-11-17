@@ -104,6 +104,8 @@ export interface EffectiveStyle {
   readonly selectable: boolean;
   readonly layer: number;
   readonly color: ColorSpec;
+  /** Present when the object's own line sets `color` (a value or a rule), so a view draws that colour, not its palette. */
+  readonly ownColor?: true;
   readonly opacity: number;
   readonly width: number;
   readonly lineStyle: Props['lineStyle'];
