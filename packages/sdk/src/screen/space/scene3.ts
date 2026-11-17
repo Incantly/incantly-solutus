@@ -77,7 +77,47 @@ export interface LabelItem {
   readonly size: number;
 }
 
-export type Item3 = PointItem | LineItem | FaceItem | LabelItem | DotItem;
+/**
+ * A sheet of points (a cloth, a wave surface; physics design 12.1): nx × ny points row by row (point i + j nx), drawn
+ * as a lit two-sided surface. The WebGL 2 painter draws every point; the software painter draws every `coarse`-th
+ * point on a screen without WebGL 2 and every `fine`-th in an SVG.
+ */
+export interface SheetItem {
+  readonly k: 'sheet';
+  readonly id: number;
+  readonly name: string;
+  readonly nx: number;
+  readonly ny: number;
+  /** nx · ny · 3 floats (x, y, z of each point). */
+  readonly pos: Float32Array;
+  /** Triangles by point index when not the full grid (a torn cloth), and a number that changes with them. */
+  readonly tris?: Uint32Array;
+  readonly topology?: number;
+  readonly color: string;
+  readonly alpha: number;
+  /** A faint thread every this many points (0 for none). */
+  readonly threads: number;
+  /** Hides the lines and points behind it (a cloth does; waves do not). */
+  readonly occludes: boolean;
+  readonly coarse: number;
+  readonly fine: number;
+}
+
+/** A batch of drops (physics design 12.1): one instanced draw of discs, or the software painter's dots. */
+export interface DropsItem {
+  readonly k: 'drops';
+  readonly id: number;
+  readonly name: string;
+  /** count · 3 floats. */
+  readonly pos: Float32Array;
+  readonly count: number;
+  readonly color: string;
+  readonly alpha: number;
+  /** Radius in world units. */
+  readonly radius: number;
+}
+
+export type Item3 = PointItem | LineItem | FaceItem | LabelItem | DotItem | SheetItem | DropsItem;
 
 export interface Scene3 {
   /** The floor plate and grid, drawn first and never hiding anything. */
@@ -300,17 +340,22 @@ export function sceneOf3(figure: Figure, view: space.View3, opts: Scene3Options 
         break;
       }
       case 'Liquid': {
-        // drops in space (physics design 12, ui.md 7): dots a drop wide, drawn far to near after the faces
+        // drops in space (physics design 12, 12.1): one batch of discs a drop wide; the software painter's dots without
+        // WebGL 2, drawn far to near among the faces
         if (!physics.isLiquidValue(v) || !v.zs) break;
-        const css = v.spec.color ?? color;
-        const r = 0.6 * v.size;
         const n = Math.min(v.xs.length, v.ys.length, v.zs.length);
-        for (let i = 0; i < n; i++) items.push({ k: 'dot', id, p: { x: v.xs[i] as number, y: v.ys[i] as number, z: v.zs[i] as number }, color: css, alpha: 0.85, size: r, px: false });
+        const pos = new Float32Array(n * 3);
+        for (let i = 0; i < n; i++) {
+          pos[i * 3] = v.xs[i] as number;
+          pos[i * 3 + 1] = v.ys[i] as number;
+          pos[i * 3 + 2] = v.zs[i] as number;
+        }
+        items.push({ k: 'drops', id, name: o.name, pos, count: n, color: v.spec.color ?? color, alpha: 0.85, radius: 0.6 * v.size });
         break;
       }
       case 'Waves':
-        // a wave surface in space: a lit mesh through the heights (physics design 12), at most 32 by 32 faces
-        if (physics.isWavesValue(v) && v.space) items.push(...wavesFaces(id, v, color, Math.max(alpha, 0.6)));
+        // a wave surface in space: a lit sheet through the cell corners (physics design 12, 12.1)
+        if (physics.isWavesValue(v) && v.space) items.push(...wavesItems(id, o.name, v, color, Math.max(alpha, 0.6)));
         break;
       case 'Water': {
         // still water in space: a translucent patch at its level, the size of the view (ui.md 7)
@@ -374,7 +419,8 @@ export function sceneOf3(figure: Figure, view: space.View3, opts: Scene3Options 
   const box: Box3 = { min: view.clipMin, max: view.clipMax };
   const cut: Item3[] = [];
   for (const it of items) {
-    if (it.k === 'label' || it.id < 0) cut.push(it);
+    // sheets and drops are cut by their painter: the GPU per pixel, the software one per face and dot
+    if (it.k === 'label' || it.k === 'sheet' || it.k === 'drops' || it.id < 0) cut.push(it);
     else if (it.k === 'point' || it.k === 'dot') {
       if (inBox(box, it.p)) cut.push(it);
     } else if (it.k === 'line') {
@@ -421,40 +467,105 @@ function sphereFaces(id: number, s: space.Sphere3, color: string, alpha: number)
   return out;
 }
 
+/** Every `step`-th index of 0 … n − 1, and always the last, so a coarse grid keeps its edges. */
+export function strideIndices(n: number, step: number): number[] {
+  const s = Math.max(1, Math.floor(step));
+  const out: number[] = [];
+  for (let i = 0; i < n - 1; i += s) out.push(i);
+  if (n > 0) out.push(n - 1);
+  return out;
+}
+
 /**
- * A wave surface: the corners of its cells at the mean height of the cells round them, joined into faces. A grid over
- * 32 a side is drawn from every second corner, so the software painter sorts at most about a thousand faces.
+ * A wave surface: the corners of its cells at the mean height of the cells round them, a sheet of (nx + 1) × (ny + 1)
+ * points. The software painter draws a grid over 32 a side from every second corner (round 7), so it sorts at most
+ * about a thousand faces; the rim is a loop of lines through the same corners.
  */
-function wavesFaces(id: number, w: physics.WavesValue, color: string, alpha: number): Item3[] {
+function wavesItems(id: number, name: string, w: physics.WavesValue, color: string, alpha: number): Item3[] {
   const { nx, ny, heights: h } = w;
   const step = Math.max(1, Math.ceil(Math.max(nx, ny) / 32));
-  const corner = (ci: number, cj: number): V3 => {
-    let s = 0;
-    let k = 0;
-    for (const i of [ci - 1, ci]) for (const j of [cj - 1, cj]) {
-      if (i < 0 || j < 0 || i >= nx || j >= ny) continue;
-      s += h[j * nx + i] as number;
-      k++;
-    }
-    return { x: w.x0 + ci * w.dx, y: w.y0 + cj * w.dy, z: w.level + (k > 0 ? s / k : 0) };
-  };
-  const out: Item3[] = [];
-  const is: number[] = [];
-  for (let i = 0; i < nx; i += step) is.push(i);
-  is.push(nx);
-  const js: number[] = [];
-  for (let j = 0; j < ny; j += step) js.push(j);
-  js.push(ny);
-  const P = is.map((i) => js.map((j) => corner(i, j)));
-  for (let a = 0; a + 1 < is.length; a++) {
-    for (let b = 0; b + 1 < js.length; b++) {
-      const pts = [P[a]?.[b], P[a + 1]?.[b], P[a + 1]?.[b + 1], P[a]?.[b + 1]] as V3[];
-      out.push({ k: 'face', id, pts, color, alpha, occludes: false, shade: true });
+  const NX = nx + 1;
+  const NY = ny + 1;
+  const pos = new Float32Array(NX * NY * 3);
+  for (let cj = 0; cj < NY; cj++) {
+    for (let ci = 0; ci < NX; ci++) {
+      let s = 0;
+      let k = 0;
+      for (let j = cj - 1; j <= cj; j++) {
+        if (j < 0 || j >= ny) continue;
+        for (let i = ci - 1; i <= ci; i++) {
+          if (i < 0 || i >= nx) continue;
+          s += h[j * nx + i] as number;
+          k++;
+        }
+      }
+      const o = (cj * NX + ci) * 3;
+      pos[o] = w.x0 + ci * w.dx;
+      pos[o + 1] = w.y0 + cj * w.dy;
+      pos[o + 2] = w.level + (k > 0 ? s / k : 0);
     }
   }
+  const sheet: SheetItem = { k: 'sheet', id, name, nx: NX, ny: NY, pos, color, alpha, threads: 0, occludes: false, coarse: step, fine: step };
+  const at = (i: number, j: number): V3 => {
+    const o = (j * NX + i) * 3;
+    return { x: pos[o] as number, y: pos[o + 1] as number, z: pos[o + 2] as number };
+  };
+  const is = strideIndices(NX, step);
+  const js = strideIndices(NY, step);
+  const last = (xs: number[]): number => xs[xs.length - 1] as number;
   // the rim of the surface, so its edge reads against the floor
-  const rim: V3[] = [...is.map((_, a) => P[a]?.[0] as V3), ...js.map((_, b) => P[is.length - 1]?.[b] as V3), ...is.map((_, a) => P[is.length - 1 - a]?.[js.length - 1] as V3), ...js.map((_, b) => P[0]?.[js.length - 1 - b] as V3)];
-  out.push(...loopLines(id, rim, darker(color), 1));
+  const rim: V3[] = [...is.map((i) => at(i, 0)), ...js.map((j) => at(last(is), j)), ...[...is].reverse().map((i) => at(i, last(js))), ...[...js].reverse().map((j) => at(0, j))];
+  return [sheet, ...loopLines(id, rim, darker(color), 1)];
+}
+
+/**
+ * The software painter's faces for a sheet, from every `step`-th point (and the last row and column), cut to the clip
+ * box. A cloth's threads go on the faces' sides, darker, every `threads` points.
+ */
+export function sheetFaces(s: SheetItem, step: number, box?: Box3): FaceItem[] {
+  const out: FaceItem[] = [];
+  const is = strideIndices(s.nx, step);
+  const js = strideIndices(s.ny, step);
+  const at = (i: number, j: number): V3 => {
+    const o = (j * s.nx + i) * 3;
+    return { x: s.pos[o] as number, y: s.pos[o + 1] as number, z: s.pos[o + 2] as number };
+  };
+  const k = s.threads;
+  const thread = (n: number): boolean => k > 0 && n % k === 0;
+  const stroke = k > 0 ? darker(s.color, 0.55) : undefined;
+  for (let b = 0; b + 1 < js.length; b++) {
+    const j0 = js[b] as number;
+    const j1 = js[b + 1] as number;
+    for (let a = 0; a + 1 < is.length; a++) {
+      const i0 = is[a] as number;
+      const i1 = is[a + 1] as number;
+      const pts = [at(i0, j0), at(i1, j0), at(i1, j1), at(i0, j1)];
+      if (pts.some((p) => !Number.isFinite(p.x + p.y + p.z))) continue;
+      const base: FaceItem = { k: 'face', id: s.id, pts, color: s.color, alpha: s.alpha, occludes: s.occludes, shade: true };
+      if (box) {
+        const cut = clipFace(pts, box);
+        if (!cut) continue;
+        if (cut.length !== 4 || !pts.every((p) => inBox(box, p))) {
+          out.push({ ...base, pts: cut });
+          continue;
+        }
+      }
+      out.push(stroke ? { ...base, stroke, edges: [thread(j0), thread(i1), thread(j1), thread(i0)] } : base);
+    }
+  }
+  return out;
+}
+
+/** The software painter's dots for a batch of drops: every `every`-th drop, cut to the clip box. */
+export function dropDots(d: DropsItem, every: number, box?: Box3): DotItem[] {
+  const out: DotItem[] = [];
+  const s = Math.max(1, Math.floor(every));
+  const n = Math.min(d.count, Math.floor(d.pos.length / 3));
+  for (let i = 0; i < n; i += s) {
+    const p = { x: d.pos[i * 3] as number, y: d.pos[i * 3 + 1] as number, z: d.pos[i * 3 + 2] as number };
+    if (box && !inBox(box, p)) continue;
+    out.push({ k: 'dot', id: d.id, p, color: d.color, alpha: d.alpha, size: d.radius, px: false });
+  }
   return out;
 }
 

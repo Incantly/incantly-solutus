@@ -1,7 +1,8 @@
 /** Physics in the studio (.kiro/specs/physics R4; docs/features/physics ui.md 2, 4, 5, 7). */
 import { describe, expect, it } from 'vitest';
 import { space } from '@incantly/kernel';
-import { paintScene, sceneOf, sceneOf3, smokeImage } from '@incantly/sdk/screen';
+import { paintScene, sceneOf, sceneOf3, sheetFaces, smokeImage } from '@incantly/sdk/screen';
+import type { DropsItem, SheetItem } from '@incantly/sdk/screen';
 import type { Viewport } from '@incantly/sdk/screen';
 import { toolById } from '@incantly/ui';
 import { KernelSession } from '../src/session';
@@ -114,15 +115,19 @@ describe('the studio and physics', () => {
     expect(s.figure.get('smoke1')?.type).toBe('Smoke');
   });
 
-  it('in space, drops are dots, waves a lit mesh and still water a patch at its level (R7; design 12, ui.md 7, 9)', () => {
+  it('in space, drops are one batch, waves a lit sheet and still water a patch at its level (R7, R10.5; design 12, 12.1, ui.md 7, 9)', () => {
     const s = load(['g = Ground()', 'drop = Liquid(Box((0, 0, 1), 1, 1, 1), 300)', 'pool = Box((4, 0, -0.5), 4, 4, 1)', 'sea = Waves(pool, 48)', 'calm = Water(-2)']);
     expect(s.hasClock()).toBe(true);
     s.setTime(0.5);
     const sc = sceneOf3(s.figure, space.viewOf(s.figure));
     const id = (n: string): number => s.figure.objects().find((o) => o.name === n)?.id as unknown as number;
-    expect(sc.items.filter((i) => i.k === 'dot' && i.id === id('drop')).length).toBe(300);
-    // a grid of 48 is drawn from every second corner: 24 by 24 faces, shaded
-    const waves = sc.items.filter((i) => i.k === 'face' && i.id === id('sea')) as { shade: boolean }[];
+    const drops = sc.items.find((i): i is DropsItem => i.k === 'drops' && i.id === id('drop'));
+    expect(drops?.count).toBe(300);
+    // waves are a sheet through the 49 by 49 cell corners; the software painter draws a grid of 48 from every second
+    // corner: 24 by 24 faces, shaded (round 7)
+    const sea = sc.items.find((i): i is SheetItem => i.k === 'sheet' && i.id === id('sea'));
+    expect([sea?.nx, sea?.ny]).toEqual([49, 49]);
+    const waves = sea ? sheetFaces(sea, sea.coarse) : [];
     expect(waves.length).toBe(24 * 24);
     expect(waves.every((f) => f.shade)).toBe(true);
     const calm = sc.items.find((i) => i.k === 'face' && i.id === id('calm')) as { pts: { z: number }[]; alpha: number } | undefined;

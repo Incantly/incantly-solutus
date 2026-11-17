@@ -515,6 +515,8 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
     },
     select: (name) => (name ? fromCanvas.set(name) : fromCanvas.clear()),
     say,
+    // no WebGL 2: cloth and drops are drawn coarser, said once (physics errors.md 5, 7)
+    notice: (n) => say(n.message),
   });
   space3.element.hidden = true;
   space3Ref.current = space3;

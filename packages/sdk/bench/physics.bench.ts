@@ -10,7 +10,7 @@ import { sdkRegistry } from '../src/registry';
 import { PhysicsWorkerHost, PhysicsWorkerState } from '../src/worker/index';
 import type { FromWorker, PhysicsChannel } from '../src/worker/index';
 import { paintScene, paintSpace, sceneOf, sceneOf3, smokeImage } from '../src/screen/index';
-import type { Viewport } from '../src/screen/index';
+import type { DropsItem, Scene3, SheetItem, SpaceGpu, Viewport } from '../src/screen/index';
 
 const noop = (): void => undefined;
 const NULL_CTX = {
@@ -196,7 +196,59 @@ describe('liquid and waves in space, the page side (design 11.2, 12; round 7)', 
     const a = sorted(sTimes);
     const b = sorted(pTimes);
     const items = sceneOf3(f, view).items;
-    console.log(`Space view, 2,000 drops + 64 x 64 waves: scene ${(a[a.length >> 1] as number).toFixed(2)} ms, paint ${(b[b.length >> 1] as number).toFixed(2)} ms (median, Node, a canvas that draws nothing); ${items.filter((i) => i.k === 'dot').length} dots, ${items.filter((i) => i.k === 'face').length} faces`);
+    console.log(`Space view, 2,000 drops + 64 x 64 waves: scene ${(a[a.length >> 1] as number).toFixed(2)} ms, paint ${(b[b.length >> 1] as number).toFixed(2)} ms (median, Node, a canvas that draws nothing, the software painter at full detail); ${items.filter((i) => i.k === 'drops').length} batch of drops, ${items.filter((i) => i.k === 'sheet').length} wave sheet, ${items.filter((i) => i.k === 'face').length} other faces`);
     expect((a[a.length >> 1] as number) + (b[b.length >> 1] as number)).toBeLessThan(10);
+  });
+});
+
+describe('the WebGL 2 painter of the Space view, the page side (design 11.2 "Draw 2,048 cloth points", 12.1)', () => {
+  const NX = 64;
+  const NY = 32;
+  const sheetOf = (t: number): SheetItem => {
+    const pos = new Float32Array(NX * NY * 3);
+    for (let j = 0; j < NY; j++) for (let i = 0; i < NX; i++) {
+      const o = (j * NX + i) * 3;
+      pos[o] = -3 + (6 * i) / (NX - 1);
+      pos[o + 1] = -1.5 + (3 * j) / (NY - 1);
+      pos[o + 2] = 1.2 + 0.1 * Math.sin(i / 5 + t);
+    }
+    return { k: 'sheet', id: 9001, name: 'flag', nx: NX, ny: NY, pos, color: '#3d7fd1', alpha: 1, threads: 8, occludes: true, coarse: 2, fine: 1 };
+  };
+  const dropsOf = (): DropsItem => {
+    const pos = new Float32Array(2000 * 3);
+    for (let k = 0; k < 2000; k++) {
+      pos[k * 3] = 2 + (k % 20) * 0.1;
+      pos[k * 3 + 1] = (Math.floor(k / 20) % 10) * 0.1;
+      pos[k * 3 + 2] = Math.floor(k / 200) * 0.1;
+    }
+    return { k: 'drops', id: 9002, name: 'water', pos, count: 2000, color: '#5aa7e8', alpha: 0.85, radius: 0.04 };
+  };
+  const gpu: SpaceGpu = {
+    paint: () => ({ ok: true, notices: [], value: { source: {} as HTMLCanvasElement, sw: 1, sh: 1, stats: { drawCalls: 0, triangles: 0, drops: 0, uploadBytes: 0, indexBuilds: 0 } } }),
+  };
+  const ctx = { ...NULL_CTX, drawImage: noop } as unknown as CanvasRenderingContext2D;
+
+  it('a 64 × 32 sheet and 2,000 drops: the page\'s share of a GPU frame, against the software painter\'s coarse fallback', () => {
+    const f = makeLines(['g = Ground()', 'ball = Sphere((0, 0, 0.5), 0.5)', 'ball with opacity = 1']);
+    const view = space.viewOf(f);
+    const base = sceneOf3(f, view);
+    const scene = (t: number): Scene3 => ({ floor: base.floor, items: [...base.items, sheetOf(t), dropsOf()] });
+    const time = (opts: Parameters<typeof paintSpace>[5], c: CanvasRenderingContext2D, withSheet: boolean): number[] => {
+      const out: number[] = [];
+      for (let k = 0; k < 120; k++) {
+        const sc = withSheet ? scene(k / 60) : base;
+        const t0 = performance.now();
+        paintSpace(c, view, 1200, 800, sc, opts);
+        out.push(performance.now() - t0);
+      }
+      return sorted(out.slice(20));
+    };
+    const med = (xs: number[]): number => xs[xs.length >> 1] as number;
+    const g = med(time({ gpu }, ctx, true));
+    const w = med(time({ gpu }, ctx, false));
+    const s = med(time({ coarse: true }, NULL_CTX, true));
+    const share = g - w;
+    console.log(`64 x 32 sheet + 2,000 drops, page side in Node: with the GPU painter ${g.toFixed(3)} ms (the view alone ${w.toFixed(3)} ms, so the sheet and drops ${share.toFixed(3)} ms; budget a quarter of 3 ms = 0.75 ms); the software painter's coarse fallback ${s.toFixed(3)} ms`);
+    expect(share).toBeLessThan(0.75);
   });
 });

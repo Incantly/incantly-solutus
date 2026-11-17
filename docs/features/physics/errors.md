@@ -180,7 +180,7 @@ An unstable world is handled like an unstable state (`animation-time/design.md` 
 | `worker_unavailable` | info | The browser has no worker, so liquids and cloth run on the page | "Liquids and cloth run on the page, so the film may play slower here. It is the same film." |
 | `torn` | info | Links of a cloth with `tears` broke | "net tore at t = 2.4 s: 18 links." |
 | `worker_crashed` | info | The physics worker stopped; the page took the world back from its start (code B112) | "The physics worker stopped, so the film goes on here on the page. It is the same film." |
-| `cloth_drawn_coarse` | info | No WebGL 2, so a cloth in space is drawn from every second point | "flag is drawn coarser on this computer; it moves the same." |
+| `cloth_drawn_coarse` | info | No WebGL 2, so a cloth in space is drawn from every second point, and drops from every second drop (code B114; B113 is kept for `torn`). Raised by the Space pane once, naming the first object drawn coarser | "flag is drawn coarser on this computer; it moves the same." |
 
 ---
 
@@ -202,7 +202,7 @@ An unstable world is handled like an unstable state (`animation-time/design.md` 
 |---|---|---|
 | `worker_unavailable` | No worker support | Physics runs on the page; a notice once |
 | `worker_crashed` | The physics worker stopped | The page builds the world again from its start, with the same input log, and catches up; a notice once |
-| `webgl_unavailable` | No WebGL 2 for the Space view | Cloth and drops in space are drawn coarser by the software painter (`design.md` 12.1); the notice `cloth_drawn_coarse` once |
+| `webgl_unavailable` | No WebGL 2 for the Space view | Cloth and drops in space are drawn coarser by the software painter (`design.md` 12.1); the notice `cloth_drawn_coarse` once. A lost context (`webgl_lost`) is not this fault: the software painter draws until the context is back, with no notice |
 
 They never block a line and never change the figure.
 

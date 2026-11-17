@@ -26,6 +26,7 @@ declare module '../../contracts/values' {
 declare module '../../contracts/errors' {
   interface AreaNoticeKinds {
     worker_crashed: true;
+    cloth_drawn_coarse: true;
   }
 }
 

@@ -16,6 +16,7 @@ import { SvgContext } from './svg-context';
 import { space } from '@incantly/kernel';
 import { paintSpace } from './screen/space/paint3';
 import { sceneOf3 } from './screen/space/scene3';
+import { sharedSpaceGpu } from './screen/space/gpu3';
 
 export const EXPORT_LIMITS = Object.freeze({ side: 8192, megapixels: 64, svgElements: 50_000 });
 
@@ -160,10 +161,14 @@ export async function exportFigure(app: App, opts: ExportOptions, env: ExportEnv
     if ('ok' in box) return box;
     const warnings: ExportWarning[] = [];
     const background = opts.transparent ? undefined : '#ffffff';
-    const draw = (ctx: unknown, bg: string | undefined): void => {
+    const draw = (ctx: unknown, bg: string | undefined, png = false): void => {
       if (!in3d) return paintWith(src.app, ctx, viewportOf(box, cssW, cssH), items, bg);
       const view = space.viewAt(src.app.figure);
-      paintSpace(ctx as CanvasRenderingContext2D, view, cssW, cssH, sceneOf3(src.app.figure, view), { background: bg ?? null });
+      const scene = sceneOf3(src.app.figure, view);
+      // a PNG takes cloth, drops and waves from the WebGL 2 painter, as the screen does (physics design 12.1); the SVG
+      // keeps the software painter, at full detail
+      const gpu = png && scene.items.some((it) => it.k === 'sheet' || it.k === 'drops') ? sharedSpaceGpu() : undefined;
+      paintSpace(ctx as CanvasRenderingContext2D, view, cssW, cssH, scene, { background: bg ?? null, pixelRatio: scale, ...(gpu ? { gpu } : {}) });
     };
     if (opts.format === 'svg') {
       const ctx = new SvgContext(cssW, cssH);
@@ -181,7 +186,7 @@ export async function exportFigure(app: App, opts: ExportOptions, env: ExportEnv
     if (!canvas || !ctx) return apiError('export', 'export_unsupported', 'PNG export needs a canvas, and there is none here.', { hint: 'Export SVG instead, or export in a browser.', detail: { supported: ['svg'] } });
     ctx.save();
     ctx.scale(scale, scale);
-    draw(ctx, background);
+    draw(ctx, background, true);
     ctx.restore();
     const blob = canvas.convertToBlob ? await canvas.convertToBlob({ type: 'image/png' }) : await new Promise<Blob | null>((res) => (canvas.toBlob ? canvas.toBlob(res, 'image/png') : res(null)));
     if (!blob) return apiError('export', 'export_oom', 'The picture could not be encoded.', { hint: 'Try a smaller scale.' });
