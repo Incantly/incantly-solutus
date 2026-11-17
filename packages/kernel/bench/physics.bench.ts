@@ -5,7 +5,7 @@
  * case is a test that fails when it misses its target. A frame is 1/60 s of film: two steps of 1/120 s, the driver's
  * reading of its inputs and the writing of the cells it owns.
  */
-import { performance } from 'node:perf_hooks';
+import { PerformanceObserver, performance } from 'node:perf_hooks';
 import { describe, expect, it } from 'vitest';
 import type { Water2 } from '../src/physics/water2';
 import { WaterForces } from '../src/physics/water2';
@@ -78,6 +78,34 @@ describe('physics in space (design 11.2)', () => {
     }
     console.log(`3D car on 128 x 128 terrain: ${best.mean.toFixed(4)} ms a frame on average, worst ${best.worst.toFixed(3)} ms`);
     expect(best.mean).toBeLessThan(0.12);
+  });
+
+  it('3D car with terrain, a 60 s drive: no frame over 0.5 ms but for a collector pause (Node)', { retry: 2 }, async () => {
+    const f = load(CAR_ON_TERRAIN);
+    // the first frame builds the world (its own row below)
+    f.setClock(1 / 60);
+    const gcs: { at: number; end: number }[] = [];
+    const obs = new PerformanceObserver((l) => {
+      for (const e of l.getEntries()) gcs.push({ at: e.startTime, end: e.startTime + e.duration });
+    });
+    obs.observe({ entryTypes: ['gc'] });
+    const frames: { at: number; end: number }[] = [];
+    for (let k = 2; k <= 61 * 60; k++) {
+      const a = performance.now();
+      f.setClock(k / 60);
+      frames.push({ at: a, end: performance.now() });
+    }
+    await new Promise((r) => setTimeout(r, 20));
+    obs.disconnect();
+    const ms = frames.map((x) => x.end - x.at);
+    const paused = frames.map((x) => gcs.some((g) => g.end >= x.at && g.at <= x.end));
+    const clear = ms.filter((_, i) => !paused[i]);
+    const worst = Math.max(...ms);
+    const worstClear = Math.max(...clear);
+    const mean = ms.reduce((a, b) => a + b, 0) / ms.length;
+    console.log(`3D car on 128 x 128 terrain, 60 s: mean ${mean.toFixed(4)} ms, worst ${worstClear.toFixed(3)} ms without a collector pause, worst ${worst.toFixed(3)} ms with one (${paused.filter(Boolean).length} frames had one)`);
+    expect(mean).toBeLessThan(0.12);
+    expect(worstClear).toBeLessThan(0.5);
   });
 
   it('building the 128 × 128 terrain world (applying the car line): under 0.25 ms of physics, one line (Node)', () => {

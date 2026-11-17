@@ -53,8 +53,11 @@ interface Heightfield {
   readonly nx: number;
   readonly ny: number;
   readonly h: Float64Array;
-  /** The slabs of the triangles met so far, made when first needed. */
-  readonly slabs: Map<number, Shape3 | null>;
+  /**
+   * The one slab shape a terrain triangle is written into when it is met (`slabOf`), reused for every triangle, so a
+   * long drive over new ground keeps no shape a triangle and leaves nothing for the young collector to copy.
+   */
+  slab?: Shape3 | undefined;
 }
 
 type Found3 = { nx: number; ny: number; nz: number; pts: { x: number; y: number; z: number; s: number }[] };
@@ -1571,7 +1574,7 @@ function makeShape3(body: number, d: ShapeDef3, ox: number, oy: number, oz: numb
     return { kind: 0, body, r: d.r, lc: Float64Array.of(d.c.x - ox, d.c.y - oy, d.c.z - oz), lv: z, wv: z, faces: noFaces, ln: z, wn: z, le: z, we: z, edges: new Int32Array(0), wc: new Float64Array(3), reach: Math.sqrt((d.c.x - ox) ** 2 + (d.c.y - oy) ** 2 + (d.c.z - oz) ** 2) + d.r };
   }
   if (d.kind === 'heightfield') {
-    const hf: Heightfield = { x0: d.x0, y0: d.y0, dx: d.dx, dy: d.dy, nx: d.nx, ny: d.ny, h: d.h, slabs: new Map() };
+    const hf: Heightfield = { x0: d.x0, y0: d.y0, dx: d.dx, dy: d.dy, nx: d.nx, ny: d.ny, h: d.h };
     return { kind: 3, hf, body, r: 0, lc: z, lv: z, wv: z, faces: noFaces, ln: z, wn: z, le: z, we: z, edges: new Int32Array(0), wc: new Float64Array(3), reach: 0 };
   }
   if (d.kind === 'plane') {
@@ -2083,29 +2086,136 @@ function clearOfTri(f: Heightfield, i: number, j: number, t: number, B: Shape3, 
   return false;
 }
 
-/** The slab under a terrain triangle, made once when first met; null where the terrain is undefined. */
-function slabOf(f: Heightfield, body: number, i: number, j: number, t: number): Shape3 | undefined {
-  const key = (i * f.ny + j) * 2 + t;
-  const had = f.slabs.get(key);
-  if (had !== undefined) return had ?? undefined;
-  const at = (q: number): P3 => {
-    const ii = Math.floor(q / (f.ny + 1));
-    return { x: f.x0 + f.dx * ii, y: f.y0 + f.dy * (q - ii * (f.ny + 1)), z: f.h[q] as number };
-  };
-  const [a, b, c] = triCorners(f, i, j, t).map(at) as [P3, P3, P3];
-  if (!Number.isFinite(a.z) || !Number.isFinite(b.z) || !Number.isFinite(c.z)) {
-    f.slabs.set(key, null);
-    return undefined;
-  }
+/** A new slab shape under a triangle a b c, made as any hull is: top counter-clockwise from above, bottom the other way, three sides. */
+function newSlab(body: number, a: P3, b: P3, c: P3): Shape3 {
   const low = (s: P3): P3 => ({ x: s.x, y: s.y, z: s.z - 0.5 });
-  // top counter-clockwise from above, bottom the other way, and the three sides
   const s = makeShape3(body, { kind: 'hull', verts: [a, b, c, low(a), low(b), low(c)], faces: [[0, 1, 2], [3, 5, 4], [0, 3, 4, 1], [1, 4, 5, 2], [2, 5, 3, 0]] }, 0, 0, 0);
   // terrain never moves: its world corners are its own
   s.wv.set(s.lv);
   s.wn.set(s.ln);
   s.we.set(s.le);
-  f.slabs.set(key, s);
   return s;
+}
+
+/** The corner q of a terrain grid (row-major by x, ny + 1 a row), into out at k. */
+function cornerInto(f: Heightfield, q: number, out: Float64Array, k: number): void {
+  const ii = Math.floor(q / (f.ny + 1));
+  out[k] = f.x0 + f.dx * ii;
+  out[k + 1] = f.y0 + f.dy * (q - ii * (f.ny + 1));
+  out[k + 2] = f.h[q] as number;
+}
+
+/**
+ * The slab under a terrain triangle for the step that asks, undefined where the terrain is undefined. Every triangle
+ * is written into the terrain's one slab shape, with the arithmetic of `makeShape3` in its order, so it is to the last
+ * bit the slab a new hull would be; it holds until the next call. Keeping a shape for each triangle met made a long
+ * drive keep about 14 KB of new shapes a frame, which the young collector copied every collection (1 to 2 ms frames).
+ */
+function slabOf(f: Heightfield, body: number, i: number, j: number, t: number): Shape3 | undefined {
+  const [qa, qb, qc] = triCorners(f, i, j, t);
+  if (!Number.isFinite(f.h[qa] as number) || !Number.isFinite(f.h[qb] as number) || !Number.isFinite(f.h[qc] as number)) return undefined;
+  const s = f.slab;
+  if (!s || s.body !== body) {
+    const at = (q: number): P3 => {
+      const ii = Math.floor(q / (f.ny + 1));
+      return { x: f.x0 + f.dx * ii, y: f.y0 + f.dy * (q - ii * (f.ny + 1)), z: f.h[q] as number };
+    };
+    const made = newSlab(body, at(qa), at(qb), at(qc));
+    // a slab has the four edge directions of a prism (the triangle's three and the upright); reuse needs that shape
+    if (made.le.length === 12) f.slab = made;
+    return made;
+  }
+  const lv = s.lv;
+  cornerInto(f, qa, lv, 0);
+  cornerInto(f, qb, lv, 3);
+  cornerInto(f, qc, lv, 6);
+  for (let k = 0; k < 9; k += 3) {
+    lv[k + 9] = lv[k] as number;
+    lv[k + 10] = lv[k + 1] as number;
+    lv[k + 11] = (lv[k + 2] as number) - 0.5;
+  }
+  let reach = 0;
+  for (let k = 0; k < 18; k += 3) reach = Math.max(reach, Math.sqrt((lv[k] as number) ** 2 + (lv[k + 1] as number) ** 2 + (lv[k + 2] as number) ** 2));
+  const ln = s.ln;
+  for (let k = 0; k < s.faces.length; k++) {
+    const fc = s.faces[k] as Int32Array;
+    // Newell's normal, as makeShape3
+    let nx = 0;
+    let ny = 0;
+    let nz = 0;
+    for (let q = 0; q < fc.length; q++) {
+      const a = (fc[q] as number) * 3;
+      const b = (fc[(q + 1) % fc.length] as number) * 3;
+      nx += ((lv[a + 1] as number) - (lv[b + 1] as number)) * ((lv[a + 2] as number) + (lv[b + 2] as number));
+      ny += ((lv[a + 2] as number) - (lv[b + 2] as number)) * ((lv[a] as number) + (lv[b] as number));
+      nz += ((lv[a] as number) - (lv[b] as number)) * ((lv[a + 1] as number) + (lv[b + 1] as number));
+    }
+    const l = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
+    ln[k * 3] = nx / l;
+    ln[k * 3 + 1] = ny / l;
+    ln[k * 3 + 2] = nz / l;
+  }
+  // the unique edge directions, as makeShape3 finds them; a triangle that does not give four is made new
+  const le = s.le;
+  const edges = s.edges;
+  let nd = 0;
+  for (let e = 0; e < edges.length; e += 2) {
+    const a = (edges[e] as number) * 3;
+    const b = (edges[e + 1] as number) * 3;
+    let dx = (lv[b] as number) - (lv[a] as number);
+    let dy = (lv[b + 1] as number) - (lv[a + 1] as number);
+    let dz = (lv[b + 2] as number) - (lv[a + 2] as number);
+    const l = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    if (!(l > 1e-12)) continue;
+    dx /= l;
+    dy /= l;
+    dz /= l;
+    let dup = false;
+    for (let k = 0; k < nd * 3; k += 3) {
+      if (Math.abs(dx * (le[k] as number) + dy * (le[k + 1] as number) + dz * (le[k + 2] as number)) > 1 - 1e-9) {
+        dup = true;
+        break;
+      }
+    }
+    if (dup) continue;
+    if (nd === 4) {
+      nd = -1;
+      break;
+    }
+    le[nd * 3] = dx;
+    le[nd * 3 + 1] = dy;
+    le[nd * 3 + 2] = dz;
+    nd++;
+  }
+  if (nd !== 4) {
+    // not a prism with four directions (never for a real triangle): a new shape, the reused one made whole again later
+    f.slab = undefined;
+    return slabOf(f, body, i, j, t);
+  }
+  (s as { reach: number }).reach = reach;
+  s.wv.set(lv);
+  s.wn.set(ln);
+  s.we.set(le);
+  return s;
+}
+
+/** For tests: the slab of a triangle as `slabOf` writes it into a reused shape, or as a new hull (corners as wv). */
+export function terrainSlabForTest(d: { x0: number; y0: number; dx: number; dy: number; nx: number; ny: number; h: Float64Array }, i: number, j: number, t: number, reuse: boolean): { wv: number[]; wn: number[]; we: number[]; edges: number[]; reach: number } | undefined {
+  const f: Heightfield = { ...d };
+  let s: Shape3 | undefined;
+  if (reuse) {
+    // first another triangle, so this one is written over it
+    slabOf(f, 0, i + 1 < f.nx ? i + 1 : i - 1, j, 1 - t);
+    s = slabOf(f, 0, i, j, t);
+  } else {
+    const [qa, qb, qc] = triCorners(f, i, j, t);
+    const at = (q: number): P3 => {
+      const ii = Math.floor(q / (f.ny + 1));
+      return { x: f.x0 + f.dx * ii, y: f.y0 + f.dy * (q - ii * (f.ny + 1)), z: f.h[q] as number };
+    };
+    if ([qa, qb, qc].every((q) => Number.isFinite(f.h[q] as number))) s = newSlab(0, at(qa), at(qb), at(qc));
+  }
+  return s ? { wv: [...s.wv], wn: [...s.wn], we: [...s.we], edges: [...s.edges], reach: s.reach } : undefined;
 }
 
 type RayHit = { t: number; nx: number; ny: number; nz: number };
