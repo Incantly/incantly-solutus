@@ -308,7 +308,6 @@ export class Cloth3 extends ClothSet {
     this.nWide = 0;
     this.nFace = 0;
     this.stamp = (this.stamp + 1) % 500000;
-    const found = this.grid.found;
     let thick = 0;
     for (let c = 0; c < this.cloths.length; c++) thick = Math.max(thick, (this.cloths[c] as { def: { thickness: number } }).def.thickness);
     const pad = thick + this.pad + 0.01;
@@ -332,11 +331,12 @@ export class Cloth3 extends ClothSet {
         const dx = (w.p[b * 3] as number) - (this.bp0[b * 3] as number);
         const dy = (w.p[b * 3 + 1] as number) - (this.bp0[b * 3 + 1] as number);
         const dz = (w.p[b * 3 + 2] as number) - (this.bp0[b * 3 + 2] as number);
-        const m = this.grid.inBox(
+        // one box test against all the cloth's points first (inGrid), then the grid
+        const m = this.inGrid(
           (w.lo[k * 3] as number) - pad + Math.min(0, -dx), (w.lo[k * 3 + 1] as number) - pad + Math.min(0, -dy), (w.lo[k * 3 + 2] as number) - pad + Math.min(0, -dz),
           (w.hi[k * 3] as number) + pad + Math.max(0, -dx), (w.hi[k * 3 + 1] as number) + pad + Math.max(0, -dy), (w.hi[k * 3 + 2] as number) + pad + Math.max(0, -dz),
-          this.n,
         );
+        const found = this.grid.found;
         for (let q = 0; q < m; q++) {
           const i = found[q] as number;
           const ci = this.cloths[this.owner[i] as number];
@@ -587,13 +587,10 @@ export class Cloth3 extends ClothSet {
       this.pinFz[q] = (this.pinFz[q] as number) + ez;
       return;
     }
-    const ci = this.cloths[this.owner[i] as number];
-    if (!ci) return;
-    let n = 0;
-    for (let k = ci.te0; k < ci.te0 + ci.teN; k++) if (this.tePoint[k] === i) n++;
+    const n = this.teCnt[i] as number;
     if (n === 0) return;
-    for (let k = ci.te0; k < ci.te0 + ci.teN; k++) {
-      if (this.tePoint[k] !== i) continue;
+    const k0 = this.teOf[i] as number;
+    for (let k = k0; k < k0 + n; k++) {
       const p = this.tePin[k] as number;
       this.pinFx[p] = (this.pinFx[p] as number) + ex / n;
       this.pinFy[p] = (this.pinFy[p] as number) + ey / n;

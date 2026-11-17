@@ -278,7 +278,6 @@ export class Cloth2 extends ClothSet {
     this.nSeg = 0;
     this.stamp = (this.stamp + 1) % 500000;
     if (this.segMark.length !== this.ta.length) this.segMark = new Int32Array(this.ta.length);
-    const found = this.grid.found;
     let thick = 0;
     for (let c = 0; c < this.cloths.length; c++) thick = Math.max(thick, (this.cloths[c] as (typeof this.cloths)[number]).def.thickness);
     const pad = thick + this.pad + 0.01;
@@ -289,7 +288,8 @@ export class Cloth2 extends ClothSet {
       for (let k = w.shape0[b] as number; k < (w.shape0[b] as number) + (w.shapeN[b] as number); k++) {
         const sh = w.shapes[k];
         if (!sh) continue;
-        const m = this.grid.inBox((w.minX[k] as number) - pad + Math.min(0, -dx), (w.minY[k] as number) - pad + Math.min(0, -dy), -1, (w.maxX[k] as number) + pad + Math.max(0, -dx), (w.maxY[k] as number) + pad + Math.max(0, -dy), 1, this.n);
+        const m = this.inGrid((w.minX[k] as number) - pad + Math.min(0, -dx), (w.minY[k] as number) - pad + Math.min(0, -dy), -1, (w.maxX[k] as number) + pad + Math.max(0, -dx), (w.maxY[k] as number) + pad + Math.max(0, -dy), 1);
+        const found = this.grid.found;
         for (let q = 0; q < m; q++) {
           const i = found[q] as number;
           const ci = this.cloths[this.owner[i] as number];

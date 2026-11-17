@@ -104,6 +104,8 @@ export interface ClothInfo {
   readonly teN: number;
   /** The first bend link (they come last). */
   readonly bend0: number;
+  /** The first shear link (they come after the stretch links). */
+  readonly sh0: number;
   /** A rope's first entry in the chain table. */
   readonly ch0: number;
   readonly mPt: number;
@@ -174,6 +176,11 @@ export class ClothSet {
   tePoint: Int32Array;
   tePin: Int32Array;
   teRest: Float64Array;
+  /** Each tether's held point and its length squared; each point's first tether (−1: none) and how many (at most 2). */
+  teJ: Int32Array;
+  teL2: Float64Array;
+  teOf: Int32Array;
+  teCnt: Uint8Array;
   gx = 0;
   gy = 0;
   gz = -9.8;
@@ -235,37 +242,43 @@ export class ClothSet {
     }
     const F = (k: number): Float64Array => new Float64Array(k);
     const I = (k: number): Int32Array => new Int32Array(k);
-    this.x = F(np);
-    this.y = F(np);
-    this.z = F(np);
-    this.px = F(np);
-    this.py = F(np);
-    this.pz = F(np);
-    this.sx = F(np);
-    this.sy = F(np);
-    this.sz = F(np);
-    this.vx = F(np);
-    this.vy = F(np);
-    this.vz = F(np);
-    this.w = F(np);
-    this.w0 = F(np);
+    // the arrays read together in the small steps are cut from one buffer, staggered (see `Stagger`)
+    const P = new Stagger(np, 19);
+    this.x = P.f();
+    this.y = P.f();
+    this.z = P.f();
+    this.px = P.f();
+    this.py = P.f();
+    this.pz = P.f();
+    this.sx = P.f();
+    this.sy = P.f();
+    this.sz = P.f();
+    this.vx = P.f();
+    this.vy = P.f();
+    this.vz = P.f();
+    this.w = P.f();
+    this.w0 = P.f();
     this.owner = I(np);
-    this.pinOf = I(np).fill(-1);
+    this.pinOf = P.i().fill(-1);
     this.taut = new Uint8Array(np);
-    this.afx = F(np);
-    this.afy = F(np);
-    this.afz = F(np);
-    this.la = I(nl);
-    this.lb = I(nl);
-    this.rest = F(nl);
+    this.afx = P.f();
+    this.afy = P.f();
+    this.afz = P.f();
+    const L = new Stagger(nl, 6);
+    this.la = L.i();
+    this.lb = L.i();
+    this.rest = L.f();
     this.alpha = F(nl);
     this.kind = new Uint8Array(nl);
     this.broken = new Uint8Array(nl);
     this.lid = I(nl);
+    this.lq = L.f();
+    this.lr2 = L.f();
     this.ta = I(nt);
     this.tb = I(nt);
     this.tc = I(nt);
     this.te = I(nt * 3).fill(-1);
+    this.triCut = new Uint8Array(nt);
     this.pinPoint = I(npin);
     this.pinBody = I(npin);
     this.pinX = F(npin);
@@ -277,6 +290,10 @@ export class ClothSet {
     this.tePoint = I(nte);
     this.tePin = I(nte);
     this.teRest = F(nte);
+    this.teJ = I(nte);
+    this.teL2 = F(nte);
+    this.teOf = I(np).fill(-1);
+    this.teCnt = new Uint8Array(np);
     this.tornNow = I(defs.length);
     let p = 0;
     let l = 0;
@@ -287,7 +304,7 @@ export class ClothSet {
       const n = d.nu * d.nv;
       const mPt = d.mass / n;
       const info: ClothInfo = {
-        def: d, p0: p, n, l0: l, ln: 0, t0: t, tn: 0, pin0: pin, pinN: d.pins.length, te0: te, teN: 0, ch0: 0, bend0: 0, mPt,
+        def: d, p0: p, n, l0: l, ln: 0, t0: t, tn: 0, pin0: pin, pinN: d.pins.length, te0: te, teN: 0, ch0: 0, bend0: 0, sh0: 0, mPt,
         asleep: false, sleepTime: 0, torn: 0, unstable: false, windX: 0, windY: 0, windZ: 0,
       };
       for (let k = 0; k < n; k++) {
@@ -303,6 +320,9 @@ export class ClothSet {
       let b0 = info.l0;
       while (b0 < l && this.kind[b0] !== LinkKind.bend) b0++;
       (info as { bend0: number }).bend0 = b0;
+      let s0 = info.l0;
+      while (s0 < b0 && this.kind[s0] === LinkKind.stretch) s0++;
+      (info as { sh0: number }).sh0 = s0;
       (info as { ln: number }).ln = l - info.l0;
       t = this.buildTris(d, p, t, info.l0, l);
       (info as { tn: number }).tn = t - info.t0;
@@ -347,6 +367,10 @@ export class ClothSet {
             this.tePoint[te] = i;
             this.tePin[te] = q;
             this.teRest[te] = dd * slack;
+            this.teJ[te] = this.pinPoint[q] as number;
+            this.teL2[te] = dd * slack * (dd * slack);
+            if (this.teOf[i] === -1) this.teOf[i] = te;
+            this.teCnt[i] = (this.teCnt[i] as number) + 1;
             te++;
           }
         }
@@ -484,11 +508,21 @@ export class ClothSet {
 
   /** True when the triangle (or segment) t has a torn side. */
   triTorn(t: number): boolean {
-    for (let k = 0; k < 3; k++) {
-      const e = this.te[t * 3 + k] as number;
-      if (e >= 0 && this.broken[e] === 1) return true;
+    return this.triCut[t] === 1;
+  }
+
+  /** Which triangles have a torn side, kept when links tear or a checkpoint loads. */
+  private triCut: Uint8Array;
+
+  private markCuts(t0: number, t1: number): void {
+    for (let t = t0; t < t1; t++) {
+      let cut = 0;
+      for (let k = 0; k < 3; k++) {
+        const e = this.te[t * 3 + k] as number;
+        if (e >= 0 && this.broken[e] === 1) cut = 1;
+      }
+      this.triCut[t] = cut;
     }
-    return false;
   }
 
   /** Makes room for pushes owed to `nb` bodies. */
@@ -626,18 +660,44 @@ export class ClothSet {
     if (!awake) return;
     // how far a point may go this step: its speed, and a grab's pull
     let v2 = 0;
-    for (let i = 0; i < n; i++) {
-      const a = this.vx[i] as number;
-      const b = this.vy[i] as number;
-      const d = this.vz[i] as number;
-      const s2 = a * a + b * b + d * d;
-      if (s2 > v2) v2 = s2;
+    let lx = Infinity;
+    let ly = Infinity;
+    let lz = Infinity;
+    let hx = -Infinity;
+    let hy = -Infinity;
+    let hz = -Infinity;
+    {
+      const { x, y, z, vx, vy, vz } = this;
+      for (let i = 0; i < n; i++) {
+        const a = vx[i] as number;
+        const b = vy[i] as number;
+        const d = vz[i] as number;
+        const s2 = a * a + b * b + d * d;
+        if (s2 > v2) v2 = s2;
+        const xi = x[i] as number;
+        const yi = y[i] as number;
+        const zi = z[i] as number;
+        if (xi < lx) lx = xi;
+        if (xi > hx) hx = xi;
+        if (yi < ly) ly = yi;
+        if (yi > hy) hy = yi;
+        if (zi < lz) lz = zi;
+        if (zi > hz) hz = zi;
+      }
     }
     this.pad = 1.5 * h * Math.sqrt(v2) + 9.8 * h * h + (this.nGrab > 0 ? 0.5 : 0);
-    this.grid.build(this.x, this.y, this.z, n);
+    // the box of every point this step (a shape outside it meets no point), and the grid, built when first asked
+    this.bx0 = lx - this.pad;
+    this.by0 = ly - this.pad;
+    this.bz0 = lz - this.pad;
+    this.bx1 = hx + this.pad;
+    this.by1 = hy + this.pad;
+    this.bz1 = hz + this.pad;
+    this.gridOk = false;
     this.prepare(h);
     this.prepareSelf();
     const hs = h / SUBSTEPS;
+    this.prepLinks(hs);
     this.beginSub();
     // the air's push, once a step from the speeds at its start, felt in each small step
     for (let c = 0; c < this.cloths.length; c++) {
@@ -646,7 +706,7 @@ export class ClothSet {
     }
     for (let s = 0; s < SUBSTEPS; s++) {
       this.subFrac = (s + 1) / SUBSTEPS;
-      this.substep(hs);
+      this.substep(hs, s === 0, s === SUBSTEPS - 1);
     }
     this.endSub();
     // the forces on the pins, averaged over the small steps
@@ -671,8 +731,79 @@ export class ClothSet {
     this.settle(h);
   }
 
-  private substep(hs: number): void {
-    const { x, y, z, px, py, pz, vx, vy, vz, w } = this;
+  /** Moves the points of cloth c by their speed, gravity and the air (the first small step of a world step). */
+  private advance(c: ClothInfo, hs: number): void {
+    const { x, y, z, px, py, pz, vx, vy, vz, pinOf, afx, afy, afz } = this;
+    const gx = hs * this.gx;
+    const gy = hs * this.gy;
+    const gz = hs * this.gz;
+    const e = c.p0 + c.n;
+    for (let i = c.p0; i < e; i++) {
+      const xi = x[i] as number;
+      const yi = y[i] as number;
+      const zi = z[i] as number;
+      px[i] = xi;
+      py[i] = yi;
+      pz[i] = zi;
+      if ((pinOf[i] as number) >= 0) continue;
+      const ux = (vx[i] as number) + gx + (afx[i] as number);
+      const uy = (vy[i] as number) + gy + (afy[i] as number);
+      const uz = (vz[i] as number) + gz + (afz[i] as number);
+      vx[i] = ux;
+      vy[i] = uy;
+      vz[i] = uz;
+      x[i] = xi + hs * ux;
+      y[i] = yi + hs * uy;
+      z[i] = zi + hs * uz;
+    }
+  }
+
+  /** The speeds from the last small step's moves, less damping, then the move of this one: one pass over the points. */
+  private speedsAdvance(c: ClothInfo, hs: number): void {
+    const { x, y, z, px, py, pz, vx, vy, vz, pinOf, afx, afy, afz } = this;
+    const gx = hs * this.gx;
+    const gy = hs * this.gy;
+    const gz = hs * this.gz;
+    const k = 1 / (hs * (1 + Math.min(1, Math.max(0, c.def.damping)) * hs));
+    const e = c.p0 + c.n;
+    for (let i = c.p0; i < e; i++) {
+      const xi = x[i] as number;
+      const yi = y[i] as number;
+      const zi = z[i] as number;
+      let ux = (xi - (px[i] as number)) * k;
+      let uy = (yi - (py[i] as number)) * k;
+      let uz = (zi - (pz[i] as number)) * k;
+      px[i] = xi;
+      py[i] = yi;
+      pz[i] = zi;
+      if ((pinOf[i] as number) < 0) {
+        ux += gx + (afx[i] as number);
+        uy += gy + (afy[i] as number);
+        uz += gz + (afz[i] as number);
+        x[i] = xi + hs * ux;
+        y[i] = yi + hs * uy;
+        z[i] = zi + hs * uz;
+      }
+      vx[i] = ux;
+      vy[i] = uy;
+      vz[i] = uz;
+    }
+  }
+
+  /** The speeds of cloth c from the moves of the small step, less damping. */
+  private speeds(c: ClothInfo, hs: number): void {
+    const { x, y, z, px, py, pz, vx, vy, vz } = this;
+    const k = 1 / (hs * (1 + Math.min(1, Math.max(0, c.def.damping)) * hs));
+    const e = c.p0 + c.n;
+    for (let i = c.p0; i < e; i++) {
+      vx[i] = ((x[i] as number) - (px[i] as number)) * k;
+      vy[i] = ((y[i] as number) - (py[i] as number)) * k;
+      vz[i] = ((z[i] as number) - (pz[i] as number)) * k;
+    }
+  }
+
+  private substep(hs: number, first = true, last = true): void {
+    const { x, y, z, w } = this;
     this.taut.fill(0);
     // bodies held by pins take the small steps too: the world's change of their speed this step, a quarter each
     for (let k = 0; k < this.nSub; k++) {
@@ -687,30 +818,11 @@ export class ClothSet {
       this.spz[k] = (this.spz[k] as number) + (this.svz[k] as number) * hs;
     }
     const out = this.scratch;
-    // 1. move by speed, gravity and the air
+    // 1. the speeds from the last small step's moves (less damping), then move by speed, gravity and the air
     for (const c of this.cloths) {
       if (c.asleep || c.unstable) continue;
-      const e = c.p0 + c.n;
-      for (let i = c.p0; i < e; i++) {
-        const xi = x[i] as number;
-        const yi = y[i] as number;
-        const zi = z[i] as number;
-        px[i] = xi;
-        py[i] = yi;
-        pz[i] = zi;
-        if (w[i] === 0) continue;
-        const pin = this.pinOf[i] as number;
-        if (pin >= 0) continue;
-        const nvx = (vx[i] as number) + hs * this.gx + (this.afx[i] as number);
-        const nvy = (vy[i] as number) + hs * this.gy + (this.afy[i] as number);
-        const nvz = (vz[i] as number) + hs * this.gz + (this.afz[i] as number);
-        vx[i] = nvx;
-        vy[i] = nvy;
-        vz[i] = nvz;
-        x[i] = xi + hs * nvx;
-        y[i] = yi + hs * nvy;
-        z[i] = zi + hs * nvz;
-      }
+      if (first) this.advance(c, hs);
+      else this.speedsAdvance(c, hs);
     }
     // the pins: a world pin holds its place, a body pin goes where the body is now
     for (let q = 0; q < this.pinPoint.length; q++) {
@@ -747,9 +859,11 @@ export class ClothSet {
         this.solveChain(c, inv2);
         if (this.subFrac * SUBSTEPS % 2 === 0) this.solveLinks(c.l0 + c.n - 1, c.l0 + c.ln, inv2 * 0.25);
       } else {
+        const k = Math.round(this.subFrac * SUBSTEPS);
+        // bend links once a world step, as over a small step four times as long: the same stiffness for a quarter of
+        // the work (shear links stay in every small step: a sheet crumpled on a post folds its cells flat without them)
         this.solveLinks(c.l0, c.bend0, inv2);
-        // bend links every second small step, as one of twice the length (their stiffness is the same)
-        if (this.subFrac * SUBSTEPS % 2 === 0) this.solveLinks(c.bend0, c.l0 + c.ln, inv2 * 0.25);
+        if (k === SUBSTEPS) this.solveLinks(c.bend0, c.l0 + c.ln, inv2 / (SUBSTEPS * SUBSTEPS));
       }
       this.solveTethers(c.te0, c.te0 + c.teN);
     }
@@ -793,16 +907,11 @@ export class ClothSet {
     // 4. solids and bodies, then the cloth against itself and other cloths
     this.collide(hs);
     if (this.nSelf > 0) this.solveSelf();
-    // 5. speeds from the moves, less damping
-    for (const c of this.cloths) {
-      if (c.asleep || c.unstable) continue;
-      const keep = 1 / (1 + Math.min(1, Math.max(0, c.def.damping)) * hs);
-      const e = c.p0 + c.n;
-      const ih = 1 / hs;
-      for (let i = c.p0; i < e; i++) {
-        vx[i] = ((x[i] as number) - (px[i] as number)) * ih * keep;
-        vy[i] = ((y[i] as number) - (py[i] as number)) * ih * keep;
-        vz[i] = ((z[i] as number) - (pz[i] as number)) * ih * keep;
+    // 5. after the last small step, the speeds from the moves, less damping (the others take theirs in step 1 of the next)
+    if (last) {
+      for (const c of this.cloths) {
+        if (c.asleep || c.unstable) continue;
+        this.speeds(c, hs);
       }
     }
     for (let k = 0; k < this.nSub; k++) {
@@ -983,22 +1092,102 @@ export class ClothSet {
   private chU = new Float64Array(0);
   private chR = new Float64Array(0);
 
-  /** One pass over links [l0, l1): XPBD with the multiplier started at 0 each small step. */
+  /**
+   * Each link's factor for the fast pass: 1 / (2 r² (w_a + w_b + α / h²)) for a link between two free points, 0 for a
+   * torn link or one between two held points, −1 for a link with a pinned end (the full pass, which counts the pins'
+   * pulls and reads a body pin's mass now). Worked out again when the small step's length changes, a link tears or a
+   * checkpoint is loaded.
+   */
+  private lq: Float64Array;
+  private lr2: Float64Array;
+  private lqHs = 0;
+
+  private prepLinks(hs: number): void {
+    if (this.lqHs === hs) return;
+    this.lqHs = hs;
+    const { la, lb, rest, alpha, broken, kind, pinOf, w0, lq, lr2 } = this;
+    const inv2 = 1 / (hs * hs);
+    let ns = 0;
+    for (let k = 0; k < la.length; k++) if (broken[k] !== 1 && ((pinOf[la[k] as number] as number) >= 0 || (pinOf[lb[k] as number] as number) >= 0)) ns++;
+    if (this.slowL.length < ns) this.slowL = new Int32Array(ns);
+    this.nSlow = 0;
+    for (let k = 0; k < la.length; k++) {
+      const r = rest[k] as number;
+      lr2[k] = r * r;
+      const a = la[k] as number;
+      const b = lb[k] as number;
+      if (broken[k] === 1) lq[k] = 0;
+      else if ((pinOf[a] as number) >= 0 || (pinOf[b] as number) >= 0) {
+        lq[k] = -1;
+        this.slowL[this.nSlow++] = k;
+      }
+      else {
+        // as solved: a sheet's bend links once a world step, a rope's every second small step
+        const rope = (this.cloths[this.owner[a] as number] as ClothInfo).def.kind === 'rope';
+        const i2 = kind[k] === LinkKind.bend ? (rope ? inv2 * 0.25 : inv2 / (SUBSTEPS * SUBSTEPS)) : inv2;
+        const ws = (w0[a] as number) + (w0[b] as number);
+        lq[k] = ws > 0 && r > 0 ? 1 / (2 * r * r * (ws + (alpha[k] as number) * i2)) : 0;
+      }
+    }
+  }
+
+  /**
+   * One pass over links [l0, l1): XPBD with the multiplier started at 0 each small step. Between two free points the
+   * length is taken to first order about the rest length, C ≈ (d² − r²) / 2r with ∇C ≈ d / r: no root and no division,
+   * the same rest state (C = 0 exactly when d = r), and within 2% of the exact step while a link is within 1% of its
+   * length (a cloth's links are within 2%); past 10% either way the exact step is used.
+   */
   private solveLinks(l0: number, l1: number, inv2: number): void {
-    const { x, y, z, w, la, lb, rest, alpha, broken } = this;
+    const { x, y, z, w0, la, lb, lq, lr2 } = this;
+    // links with a pinned end have q < 0 here and move nothing (s ≤ 0 · … is skipped below); they follow in full
     for (let k = l0; k < l1; k++) {
-      if (broken[k] === 1) continue;
+      const q = lq[k] as number;
+      const a = la[k] as number;
+      const b = lb[k] as number;
+      const dx = (x[a] as number) - (x[b] as number);
+      const dy = (y[a] as number) - (y[b] as number);
+      const dz = (z[a] as number) - (z[b] as number);
+      const d2 = dx * dx + dy * dy + dz * dz;
+      const r2 = lr2[k] as number;
+      let s = (r2 - d2) * q;
+      if (!(d2 < 1.21 * r2 && d2 > 0.81 * r2)) s = d2 > 1e-24 ? (Math.sqrt(r2 / d2) - 1) * 2 * r2 * q : 0;
+      if (!(q > 0)) continue;
+      const sa = (w0[a] as number) * s;
+      const sb = (w0[b] as number) * s;
+      x[a] = (x[a] as number) + sa * dx;
+      y[a] = (y[a] as number) + sa * dy;
+      z[a] = (z[a] as number) + sa * dz;
+      x[b] = (x[b] as number) - sb * dx;
+      y[b] = (y[b] as number) - sb * dy;
+      z[b] = (z[b] as number) - sb * dz;
+    }
+    const sl = this.slowL;
+    for (let k = 0; k < this.nSlow; k++) {
+      const l = sl[k] as number;
+      if (l >= l0 && l < l1) this.solveLink(l, inv2);
+    }
+  }
+
+  /** Links with a pinned end (the full pass), in id order. */
+  private slowL = new Int32Array(0);
+  private nSlow = 0;
+
+  /** One link with a pinned end, in full. */
+  private solveLink(k: number, inv2: number): void {
+    const { x, y, z, w, la, lb, rest, alpha, broken } = this;
+    {
+      if (broken[k] === 1) return;
       const a = la[k] as number;
       const b = lb[k] as number;
       const wa = w[a] as number;
       const wb = w[b] as number;
       const ws = wa + wb;
-      if (ws === 0) continue;
+      if (ws === 0) return;
       const dx = (x[a] as number) - (x[b] as number);
       const dy = (y[a] as number) - (y[b] as number);
       const dz = (z[a] as number) - (z[b] as number);
       const d2 = dx * dx + dy * dy + dz * dz;
-      if (!(d2 > 1e-24)) continue;
+      if (!(d2 > 1e-24)) return;
       const d = Math.sqrt(d2);
       const C = d - (rest[k] as number);
       const dl = -C / (ws + (alpha[k] as number) * inv2);
@@ -1028,38 +1217,32 @@ export class ClothSet {
     this.pinFz[q] = (this.pinFz[q] as number) + ez;
   }
 
-  /** Each point keeps within its tether of its pins: a one-way limit that moves only the point. */
+  /**
+   * Each point keeps within its tether of its pins: a one-way limit that moves only the point (the pins hold whatever
+   * holds them). Tethers are only on free points, so a point's mass is its own; the held point and the length squared are
+   * kept with each tether.
+   */
   private solveTethers(t0: number, t1: number): void {
-    const { x, y, z, w } = this;
+    const { x, y, z, w0, tePoint, teJ, teL2, tePin, pinFx, pinFy, pinFz, taut } = this;
     for (let k = t0; k < t1; k++) {
-      const i = this.tePoint[k] as number;
-      const wi = w[i] as number;
-      if (wi === 0) continue;
-      const q = this.tePin[k] as number;
-      const j = this.pinPoint[q] as number;
+      const i = tePoint[k] as number;
+      const j = teJ[k] as number;
       const dx = (x[i] as number) - (x[j] as number);
       const dy = (y[i] as number) - (y[j] as number);
       const dz = (z[i] as number) - (z[j] as number);
       const d2 = dx * dx + dy * dy + dz * dz;
-      const L = this.teRest[k] as number;
-      if (d2 <= L * L) continue;
-      this.taut[i] = 1;
-      const d = Math.sqrt(d2);
-      // only the far end moves: a tether is a limit on the cloth, the pins hold whatever holds them
-      const wj = 0;
-      const f = (d - L) / (d * (wi + wj));
-      x[i] = (x[i] as number) - wi * f * dx;
-      y[i] = (y[i] as number) - wi * f * dy;
-      z[i] = (z[i] as number) - wi * f * dz;
-      if (wj > 0) {
-        x[j] = (x[j] as number) + wj * f * dx;
-        y[j] = (y[j] as number) + wj * f * dy;
-        z[j] = (z[j] as number) + wj * f * dz;
-      } else {
-        this.pinFx[q] = (this.pinFx[q] as number) + f * dx;
-        this.pinFy[q] = (this.pinFy[q] as number) + f * dy;
-        this.pinFz[q] = (this.pinFz[q] as number) + f * dz;
-      }
+      const L2 = teL2[k] as number;
+      if (d2 <= L2) continue;
+      taut[i] = 1;
+      const f = 1 - Math.sqrt(L2 / d2);
+      x[i] = (x[i] as number) - f * dx;
+      y[i] = (y[i] as number) - f * dy;
+      z[i] = (z[i] as number) - f * dz;
+      const q = tePin[k] as number;
+      const m = f / (w0[i] as number);
+      pinFx[q] = (pinFx[q] as number) + m * dx;
+      pinFy[q] = (pinFy[q] as number) + m * dy;
+      pinFz[q] = (pinFz[q] as number) + m * dz;
     }
   }
 
@@ -1202,53 +1385,176 @@ export class ClothSet {
     this.nSelf++;
   }
 
-  /** Is point i one of face t's corners, or (same cloth) beside them on the grid, so it never counts as a hit? */
-  private nearOwn(i: number, t: number, c: ClothInfo): boolean {
-    const a = this.ta[t] as number;
-    const b = this.tb[t] as number;
-    const e = this.tc[t] as number;
-    if (i === a || i === b || i === e) return true;
-    if ((this.owner[i] as number) !== (this.owner[a] as number)) return false;
-    const nu = c.def.nu;
-    const pi = (i - c.p0) % nu;
-    const pj = Math.floor((i - c.p0) / nu);
-    const lo = Math.min(a, b, e < 0 ? a : e) - c.p0;
-    const hi = Math.max(a, b, e) - c.p0;
-    const i0 = Math.min(lo % nu, hi % nu);
-    const i1 = Math.max(lo % nu, hi % nu);
-    const j0 = Math.floor(lo / nu);
-    const j1 = Math.floor(hi / nu);
-    return pi >= i0 - 1 && pi <= i1 + 1 && pj >= j0 - 1 && pj <= j1 + 1;
+  /** Each point's place in its cloth's grid (i along u, j along v), for telling neighbours apart by index. */
+  private pu = new Int32Array(0);
+  private pv = new Int32Array(0);
+  /**
+   * Tiles: blocks of 8 × 8 points of a cloth (8 points of a rope), each with the box of its points at the start of the
+   * step. Faces of one cloth look for points of another only where a tile of it is near, so two cloths apart cost a box
+   * test a face pair.
+   */
+  private tileOf = new Int32Array(0);
+  private tile0 = new Int32Array(0);
+  private tileN = new Int32Array(0);
+  private tileBox = new Float64Array(0);
+  /** The other cloths' tiles near the cloth whose faces are being searched. */
+  private near = new Int32Array(0);
+
+  private buildTiles(): void {
+    const n = this.n;
+    this.pu = new Int32Array(n);
+    this.pv = new Int32Array(n);
+    this.tileOf = new Int32Array(n);
+    const count = this.cloths.length;
+    this.tile0 = new Int32Array(count);
+    this.tileN = new Int32Array(count);
+    let nt = 0;
+    for (let c = 0; c < count; c++) {
+      const ci = this.cloths[c] as ClothInfo;
+      const { nu, nv } = ci.def;
+      const tu = Math.ceil(nu / 8);
+      const tv = Math.ceil(nv / 8);
+      this.tile0[c] = nt;
+      this.tileN[c] = tu * tv;
+      for (let k = 0; k < ci.n; k++) {
+        const i = k % nu;
+        const j = (k - i) / nu;
+        this.pu[ci.p0 + k] = i;
+        this.pv[ci.p0 + k] = j;
+        this.tileOf[ci.p0 + k] = nt + ((j >> 3) * tu + (i >> 3));
+      }
+      nt += tu * tv;
+    }
+    this.tileBox = new Float64Array(nt * 6);
+    this.near = new Int32Array(nt);
   }
 
-  /** The point and face pairs of this step: self hits on a cloth with `self`, and every pair of different cloths. */
+  /** The tiles' boxes from the points now. */
+  private tileBoxes(): void {
+    const b = this.tileBox;
+    for (let k = 0; k < b.length; k += 6) {
+      b[k] = Infinity;
+      b[k + 1] = Infinity;
+      b[k + 2] = Infinity;
+      b[k + 3] = -Infinity;
+      b[k + 4] = -Infinity;
+      b[k + 5] = -Infinity;
+    }
+    const { x, y, z, tileOf } = this;
+    for (let i = 0; i < this.n; i++) {
+      const k = (tileOf[i] as number) * 6;
+      const xi = x[i] as number;
+      const yi = y[i] as number;
+      const zi = z[i] as number;
+      if (xi < (b[k] as number)) b[k] = xi;
+      if (yi < (b[k + 1] as number)) b[k + 1] = yi;
+      if (zi < (b[k + 2] as number)) b[k + 2] = zi;
+      if (xi > (b[k + 3] as number)) b[k + 3] = xi;
+      if (yi > (b[k + 4] as number)) b[k + 4] = yi;
+      if (zi > (b[k + 5] as number)) b[k + 5] = zi;
+    }
+  }
+
+  /** Does tile k's box come within m of the box (lx..hx)? */
+  private tileMeets(k: number, lx: number, ly: number, lz: number, hx: number, hy: number, hz: number, m: number): boolean {
+    const b = this.tileBox;
+    const o = k * 6;
+    return (b[o] as number) <= hx + m && (b[o + 3] as number) >= lx - m && (b[o + 1] as number) <= hy + m && (b[o + 4] as number) >= ly - m && (b[o + 2] as number) <= hz + m && (b[o + 5] as number) >= lz - m;
+  }
+
+  /**
+   * The point and face pairs of this step: self hits on a cloth with `self`, and every pair of different cloths. A
+   * sheet's two faces of a cell share one search of the grid, made only when the cloth hits itself or a tile of another
+   * cloth is near; a point of the same cloth beside the cell (one point round it, by index) never counts.
+   */
   private prepareSelf(): void {
     this.nSelf = 0;
     const count = this.cloths.length;
     let any = false;
     for (let c = 0; c < count; c++) if ((this.cloths[c] as ClothInfo).def.self) any = true;
     if (!any && count < 2) return;
-    const { x, y, z, sx, sy, sz } = this;
-    const found = this.grid.found;
+    if (this.pu.length !== this.n) this.buildTiles();
+    this.tileBoxes();
+    const { x, y, z, sx, sy, sz, pu, pv, ta, tb, tc, owner, w } = this;
+    const fn = this.faceN;
+    const tb6 = this.tileBox;
     for (let c = 0; c < count; c++) {
       const A = this.cloths[c] as ClothInfo;
       if (A.unstable) continue;
       const t1 = A.t0 + A.tn;
       const reach = A.def.thickness + this.pad;
-      // a sheet's two faces of a cell share one search of the grid
+      const self = A.def.self;
+      // the other cloths' tiles near this cloth (its own tiles' boxes, joined)
+      let nNear = 0;
+      const k0 = this.tile0[c] as number;
+      const k1 = k0 + (this.tileN[c] as number);
+      let lx = Infinity;
+      let ly = Infinity;
+      let lz = Infinity;
+      let hx = -Infinity;
+      let hy = -Infinity;
+      let hz = -Infinity;
+      for (let k = k0; k < k1; k++) {
+        lx = Math.min(lx, tb6[k * 6] as number);
+        ly = Math.min(ly, tb6[k * 6 + 1] as number);
+        lz = Math.min(lz, tb6[k * 6 + 2] as number);
+        hx = Math.max(hx, tb6[k * 6 + 3] as number);
+        hy = Math.max(hy, tb6[k * 6 + 4] as number);
+        hz = Math.max(hz, tb6[k * 6 + 5] as number);
+      }
+      const m = 2 * reach + 0.01;
+      for (let oc = 0; oc < count; oc++) {
+        if (oc === c) continue;
+        const B = this.cloths[oc] as ClothInfo;
+        if (B.unstable || (A.asleep && B.asleep)) continue;
+        const q0 = this.tile0[oc] as number;
+        const q1 = q0 + (this.tileN[oc] as number);
+        for (let k = q0; k < q1; k++) if (this.tileMeets(k, lx, ly, lz, hx, hy, hz, m)) this.near[nNear++] = k;
+      }
+      if (!self && nNear === 0) continue;
       const sheet = A.def.kind === 'sheet';
       for (let t = A.t0; t < t1; t += sheet ? 2 : 1) {
         const tt = sheet && t + 1 < t1 ? 2 : 1;
-        let lx = Infinity;
-        let ly = Infinity;
-        let lz = Infinity;
-        let hx = -Infinity;
-        let hy = -Infinity;
-        let hz = -Infinity;
+        let fx0 = Infinity;
+        let fy0 = Infinity;
+        let fz0 = Infinity;
+        let fx1 = -Infinity;
+        let fy1 = -Infinity;
+        let fz1 = -Infinity;
+        let i0 = 1 << 30;
+        let i1 = -1;
+        let j0 = 1 << 30;
+        let j1 = -1;
+        for (let f = 0; f < tt; f++) {
+          const u = t + f;
+          for (let k = 0; k < 3; k++) {
+            const v = k === 0 ? (ta[u] as number) : k === 1 ? (tb[u] as number) : (tc[u] as number);
+            if (v < 0) continue;
+            const xv = x[v] as number;
+            const yv = y[v] as number;
+            const zv = z[v] as number;
+            if (xv < fx0) fx0 = xv;
+            if (yv < fy0) fy0 = yv;
+            if (zv < fz0) fz0 = zv;
+            if (xv > fx1) fx1 = xv;
+            if (yv > fy1) fy1 = yv;
+            if (zv > fz1) fz1 = zv;
+            const iv = pu[v] as number;
+            const jv = pv[v] as number;
+            if (iv < i0) i0 = iv;
+            if (iv > i1) i1 = iv;
+            if (jv < j0) j0 = jv;
+            if (jv > j1) j1 = jv;
+          }
+        }
+        if (!self) {
+          let meets = false;
+          for (let q = 0; q < nNear && !meets; q++) meets = this.tileMeets(this.near[q] as number, fx0, fy0, fz0, fx1, fy1, fz1, reach);
+          if (!meets) continue;
+        }
         let live = 0;
         for (let f = 0; f < tt; f++) {
           const u = t + f;
-          const fn = this.faceN;
           if (this.triTorn(u)) {
             fn[f * 4] = 0;
             fn[f * 4 + 1] = 0;
@@ -1260,48 +1566,72 @@ export class ClothSet {
           fn[f * 4] = this.scratch[0] as number;
           fn[f * 4 + 1] = this.scratch[1] as number;
           fn[f * 4 + 2] = this.scratch[2] as number;
-          live++;
-          for (let k = 0; k < 3; k++) {
-            const v = k === 0 ? (this.ta[u] as number) : k === 1 ? (this.tb[u] as number) : (this.tc[u] as number);
-            if (v < 0) continue;
-            lx = Math.min(lx, x[v] as number);
-            ly = Math.min(ly, y[v] as number);
-            lz = Math.min(lz, z[v] as number);
-            hx = Math.max(hx, x[v] as number);
-            hy = Math.max(hy, y[v] as number);
-            hz = Math.max(hz, z[v] as number);
-          }
+          if (fn[f * 4] !== 0 || fn[f * 4 + 1] !== 0 || fn[f * 4 + 2] !== 0) live++;
         }
         if (live === 0) continue;
-        const m = this.grid.inBox(lx - reach, ly - reach, lz - reach, hx + reach, hy + reach, hz + reach, this.n);
-        for (let q = 0; q < m; q++) {
+        i0--;
+        i1++;
+        j0--;
+        j1++;
+        const mm = this.inGrid(fx0 - reach, fy0 - reach, fz0 - reach, fx1 + reach, fy1 + reach, fz1 + reach);
+        const found = this.grid.found;
+        for (let q = 0; q < mm; q++) {
           const i = found[q] as number;
-          const oc = this.owner[i] as number;
-          if (oc === c && !A.def.self) continue;
+          const oc = owner[i] as number;
+          if (oc === c) {
+            if (!self) continue;
+            // beside the cell by index: a neighbour, never a hit
+            const pi = pu[i] as number;
+            const pj = pv[i] as number;
+            if (pi >= i0 && pi <= i1 && pj >= j0 && pj <= j1) continue;
+          }
           const B = this.cloths[oc] as ClothInfo;
           if ((A.asleep && B.asleep) || B.unstable) continue;
           const th = 0.5 * (A.def.thickness + B.def.thickness);
+          const sxi = sx[i] as number;
+          const syi = sy[i] as number;
+          const szi = sz[i] as number;
           for (let f = 0; f < tt; f++) {
             const u = t + f;
-            const fn = this.faceN;
             const fnx = fn[f * 4] as number;
             const fny = fn[f * 4 + 1] as number;
             const fnz = fn[f * 4 + 2] as number;
             if (fnx === 0 && fny === 0 && fnz === 0) continue;
             // the side of the face the point was on at the start of the step, near its plane and over it
-            const s0 = fnx * (sx[i] as number) + fny * (sy[i] as number) + fnz * (sz[i] as number) + (fn[f * 4 + 3] as number);
+            const s0 = fnx * sxi + fny * syi + fnz * szi + (fn[f * 4 + 3] as number);
             if (Math.abs(s0) > th + 2 * this.pad + 0.01) continue;
-            if (oc === c && this.nearOwn(i, u, A)) continue;
-            const a = this.ta[u] as number;
-            const b = this.tb[u] as number;
-            const e = this.tc[u] as number;
-            if ((this.w[i] as number) === 0 && (this.w[a] as number) === 0 && (this.w[b] as number) === 0 && (e < 0 || (this.w[e] as number) === 0)) continue;
-            if (!this.footOn(u, (sx[i] as number) - s0 * fnx, (sy[i] as number) - s0 * fny, (sz[i] as number) - s0 * fnz, 0.25)) continue;
+            const a = ta[u] as number;
+            const b = tb[u] as number;
+            const e = tc[u] as number;
+            if ((w[i] as number) === 0 && (w[a] as number) === 0 && (w[b] as number) === 0 && (e < 0 || (w[e] as number) === 0)) continue;
+            if (!this.footOn(u, sxi - s0 * fnx, syi - s0 * fny, szi - s0 * fnz, 0.25)) continue;
             this.pushSelf(i, u, s0 >= 0 ? 1 : -1, th);
           }
         }
       }
     }
+  }
+
+  /** The box of every point at the start of this step, padded by how far a point may go in it. */
+  protected bx0 = 0;
+  protected by0 = 0;
+  protected bz0 = 0;
+  protected bx1 = 0;
+  protected by1 = 0;
+  protected bz1 = 0;
+  private gridOk = false;
+
+  /**
+   * The points whose grid cell meets the box, into `grid.found`: none when the box misses every point's box (the grid is
+   * then never built this step), else from the grid, built on the first ask of the step.
+   */
+  protected inGrid(x0: number, y0: number, z0: number, x1: number, y1: number, z1: number): number {
+    if (x0 > this.bx1 || x1 < this.bx0 || y0 > this.by1 || y1 < this.by0 || z0 > this.bz1 || z1 < this.bz0) return 0;
+    if (!this.gridOk) {
+      this.grid.build(this.x, this.y, this.z, this.n);
+      this.gridOk = true;
+    }
+    return this.grid.inBox(x0, y0, z0, x1, y1, z1, this.n);
   }
 
   /** The planes of the faces of one search (scratch for prepareSelf). */
@@ -1598,6 +1928,8 @@ export class ClothSet {
       }
       c.torn += torn;
       this.tornNow[ci] = torn;
+      this.lqHs = 0;
+      this.markCuts(c.t0, c.t0 + c.tn);
     }
   }
 
@@ -1739,10 +2071,11 @@ export class ClothSet {
       const dx = (x[a] as number) - (x[b] as number);
       const dy = (y[a] as number) - (y[b] as number);
       const dz = (z[a] as number) - (z[b] as number);
-      const r = Math.sqrt(dx * dx + dy * dy + dz * dz) / (this.rest[l] as number);
-      if (r > m) m = r;
+      const r = this.rest[l] as number;
+      const q = (dx * dx + dy * dy + dz * dz) / (r * r);
+      if (q > m) m = q;
     }
-    return m;
+    return Math.sqrt(m);
   }
 
   /**
@@ -1953,6 +2286,43 @@ export class ClothSet {
     this.sy.set(this.y.subarray(0, n));
     this.sz.set(this.z.subarray(0, n));
     this.tornNow.fill(0);
+    this.lqHs = 0;
+    this.markCuts(0, this.ta.length);
+  }
+}
+
+/**
+ * Typed arrays of one length cut from one buffer, each starting three cache lines past a multiple of 4 KB from the one
+ * before. Arrays of a power-of-two size made one by one start at the same place in the processor's cache sets, so a loop
+ * that reads and writes a dozen of them at once (a 64 × 32 cloth has 2,048 points: 16 KB an array) keeps evicting its
+ * own lines; staggered, the same loop runs about twice as fast.
+ */
+class Stagger {
+  private readonly buf: ArrayBuffer;
+  private off = 0;
+  private readonly n: number;
+
+  constructor(n: number, count: number) {
+    this.n = n;
+    this.buf = new ArrayBuffer(count * (Stagger.span(n) + 192));
+  }
+
+  private static span(n: number): number {
+    return Math.ceil((n * 8) / 64) * 64;
+  }
+
+  private take(): number {
+    const o = this.off;
+    this.off += Stagger.span(this.n) + 192;
+    return o;
+  }
+
+  f(): Float64Array {
+    return new Float64Array(this.buf, this.take(), this.n);
+  }
+
+  i(): Int32Array {
+    return new Int32Array(this.buf, this.take(), this.n);
   }
 }
 
