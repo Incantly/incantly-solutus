@@ -65,7 +65,12 @@ Each round is one branch `feat/physics-<n>` and one PR into `integration`, merge
   - [ ] 9.2 XPBD small steps: stretch, shear and bend links, damping, tearing, sleep, checkpoints every 0.25 s
   - [ ] 9.3 Two-way hits: solids, bodies, drops (shared grid), self
   - [ ] 9.4 The driver in the physics worker, with the same film without it
-  - [ ] 9.5 The WebGL 2 painter for cloth and drops; the coarse fallback
+  - [x] 9.5 The WebGL 2 painter for cloth and drops; the coarse fallback
+    - [x] 9.5.1 `sheet` and `drops` items in the Space view's scene; liquids in space as one batch, waves as a sheet through their corners
+    - [x] 9.5.2 `GlBackend3` and `MeshPainter3` in `packages/view/src/gl/`: points as a float texture each frame, triangles once per topology, normals in the vertex shader, the software painter's light, threads every k points, instanced lit discs, a depth pass for the solids, resize, context loss
+    - [x] 9.5.3 Compositing: one shared context, its picture copied between the faces and the lines; lines behind a cloth dashed; the order and its limits in design 12.1
+    - [x] 9.5.4 Without WebGL 2: every second point and drop on the screen, `cloth_drawn_coarse` (B114) once; SVG at full detail, PNG from the GPU
+    - [x] 9.5.5 Spec tests (fallback, split, the painter against a recording context), the Chrome bench with the CPU slowed 4× (`packages/sdk/bench/chrome-gl.mjs`), screenshots
   - [ ] 9.6 Drag and grab, algebra rows, the Cloth and Pin tools, the readout
   - [ ] 9.7 Examples, screenshots, spec tests and the cloth checks of design 11.4 and 11.5
 - [ ] 10. Round 10: speed (R9)
