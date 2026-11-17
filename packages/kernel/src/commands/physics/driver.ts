@@ -887,7 +887,7 @@ export class PhysicsDriver implements WorldDriver {
     if (this.fluid) this.fluid.load(part(i++));
     for (const sm of this.smokeMembers) sm.grid.load(part(i++));
     for (const m of this.waveMembers) m.grid.load(part(i++));
-    if (this.cloth) this.cloth.load(part(i++));
+    if (this.cloth) this.cloth.load(part(i));
   }
 
   /** A hash of everything a step reads (FNV-1a over the bytes): equal films have equal hashes at every step. */

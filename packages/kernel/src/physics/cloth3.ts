@@ -259,7 +259,6 @@ export class Cloth3 extends ClothSet {
   }
 
   protected override bodyArm(b: number, x: number, y: number, z: number, out: Float64Array): void {
-    const w = this.world as World3;
     out[0] = x - (this.centre(b)[0] as number);
     out[1] = y - (this.centre(b)[1] as number);
     out[2] = z - (this.centre(b)[2] as number);
@@ -562,17 +561,11 @@ export class Cloth3 extends ClothSet {
     const ty = ry - rn * ny;
     const tz = rz - rn * nz;
     const tl = Math.sqrt(tx * tx + ty * ty + tz * tz);
-    let fx = 0;
-    let fy = 0;
-    let fz = 0;
     if (tl > 1e-15 && mu > 0) {
       const cut = Math.min(1, (mu * depth) / tl);
-      fx = -tx * cut;
-      fy = -ty * cut;
-      fz = -tz * cut;
-      mx += fx;
-      my += fy;
-      mz += fz;
+      mx -= tx * cut;
+      my -= ty * cut;
+      mz -= tz * cut;
     }
     this.x[i] = x + mx;
     this.y[i] = y + my;

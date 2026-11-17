@@ -42,7 +42,7 @@ import type { LiquidValue, WaterValue, WavesValue } from './liquid';
 import { inSpace, isLiquidValue, isWaterValue, isWavesValue } from './liquid';
 import { Cloth3 } from '../../physics/cloth3';
 import type { PinDef } from '../../physics/cloth';
-import type { ClothSpec, ClothValue, PinValue } from './cloth';
+import type { ClothSpec, ClothValue } from './cloth';
 import { clothDef, isClothValue, isPinValue } from './cloth';
 
 const CHECKPOINT_SECONDS = 0.5;
@@ -1739,7 +1739,7 @@ export class Physics3Driver implements WorldDriver {
     let i = 2;
     if (this.fluid) this.fluid.load(part(i++));
     for (const m of this.waveMembers) m.grid.load(part(i++));
-    if (this.cloth) this.cloth.load(part(i++));
+    if (this.cloth) this.cloth.load(part(i));
   }
 
   /** A hash of everything a step reads (FNV-1a over the bytes): equal films have equal hashes at every step. */

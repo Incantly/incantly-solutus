@@ -76,7 +76,7 @@ l.count l.level   w.level w.speed w.height(x, y)   sm.mass sm.speed sm.at(x, y) 
 Cloth(corner: Point3, u: Vector3, v: Vector3, nu, nv, mass?, stretch?, bend?, pins?, tears?, self?) -> Cloth
 Cloth(a: Point, b: Point, n) -> Cloth            # a rope that bends
 Cloth(box: Polygon, nu, nv) -> Cloth             # a net or curtain in the plane
-Pin(c, at) -> Joint      Pin(c, at, b) -> Joint  # pins = "top" | "left" | "corners"
+Pin(c, at) -> Pin        Pin(c, at, b) -> Pin    # pins = "top" | "left" | "corners"
 world with wind = (4, 0, 0)                      # at most 64 x 32 per cloth, 4,096 points in all
 c.torn c.stretchMax c.at(i, j)
 ```

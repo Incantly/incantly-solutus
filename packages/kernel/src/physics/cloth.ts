@@ -1258,7 +1258,10 @@ export class ClothSet {
           const th = 0.5 * (A.def.thickness + B.def.thickness);
           // the side of the face the point was on at the start of the step
           const s0 = this.faceHeight(t, sx[i] as number, sy[i] as number, sz[i] as number, sx, sy, sz);
-          if (Math.abs(s0) > th + 2 * this.pad + 0.05) continue;
+          if (Math.abs(s0) > th + 2 * this.pad + 0.01) continue;
+          // and over the face (or just beside it), not only near its plane
+          const o = this.scratch;
+          if (!this.footOn(t, (sx[i] as number) - s0 * (o[0] as number), (sy[i] as number) - s0 * (o[1] as number), (sz[i] as number) - s0 * (o[2] as number), 0.25)) continue;
           this.pushSelf(i, t, s0 >= 0 ? 1 : -1, th);
         }
       }

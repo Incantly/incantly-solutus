@@ -45,8 +45,8 @@ The reference app has no physics engine, so it has no physics errors. Hand-made 
 | B015 | `not_in_world` (new) | typecheck | `on b hit: …` where `b` is not a body | `fix_line` | "Only bodies hit things. Make `b` a body first." |
 | B016 | `mode_forbids` | plan | A physics line in Scientific, Probability or CAS, or in an exam that forbids it | `report` | as in `app-modes` |
 | B017 | `bad_argument` | typecheck | `Wheel(c, at, 0)` (radius 0), `Liquid(region, 0)`, `Pour(at, 0, speed)`, `Waves(box, 1)` (fewer than 2 a side), `Rope(a, b, −1)`, `Cloth(P, u, v, 1, 8)` (fewer than 2 points a side), a cloth with `u` and `v` along one line, as literals | `fix_line` | `expected` |
-| B018 | `not_a_cloth` (new) | typecheck | `Pin(c, P)` where `c` is not a cloth | `use_suggestion` | "Pin holds a cloth. To hold a body, use `Hinge(b, wall, P)`." `suggest`: that line |
-| B019 | `pin_off_cloth` (new) | typecheck | `Pin(c, P)` with `P` a literal point further than one link from every point of `c` | `fix_line` | names the nearest point of the cloth and how far it is |
+| B018 | `not_a_cloth` (new, C137) | typecheck | `Pin(c, P)` where `c` is not a cloth | `use_suggestion` | "Pin holds a cloth. To hold a body, use `Hinge(b, wall, P)`." `suggest`: that line |
+| B019 | `pin_off_cloth` (new, C138) | typecheck | `Pin(c, P)` with `P` a literal point further than one link from every point of `c` | `fix_line` | names the nearest point of the cloth and how far it is |
 
 **Values versus text.** A polygon built from points whose edges only cross for some values is not an error. It is an undefined body (section 4). Only a literal shape that can never be valid is refused at check time.
 
@@ -178,9 +178,9 @@ An unstable world is handled like an unstable state (`animation-time/design.md` 
 | `ground_sampled` | info | A solid curve was cut to 2,000 pieces | "f is solid between x = −50 and 50." |
 | `input_undefined` | warning | A force or property formula was undefined during the film | "b's force was undefined at t = 2 s and was taken as 0." |
 | `worker_unavailable` | info | The browser has no worker, so liquids and cloth run on the page | "Liquids and cloth run on the page, so the film may play slower here. It is the same film." |
-| `torn` | info | Links of a cloth with `tears` broke | "net tore at t = 2.4 s: 18 links." |
+| `torn` | info | Links of a cloth with `tears` broke (code B113, once a cloth) | "net tore at t = 2.4 s: 18 links." |
 | `worker_crashed` | info | The physics worker stopped; the page took the world back from its start (code B112) | "The physics worker stopped, so the film goes on here on the page. It is the same film." |
-| `cloth_drawn_coarse` | info | No WebGL 2, so a cloth in space is drawn from every second point | "flag is drawn coarser on this computer; it moves the same." |
+| `cloth_drawn_coarse` | info | A cloth in space larger than 32 a side is drawn by the software painter from every second point (no WebGL 2; until round 9B's painter, always) (code B114, once a cloth) | "flag is drawn coarser on this computer; it moves the same." |
 
 ---
 

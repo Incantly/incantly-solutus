@@ -462,7 +462,7 @@ function asked(expr: unknown): { points: number; self: boolean } | undefined {
   };
   const first = e.form?.params?.[0]?.type ?? '';
   let points: number | undefined;
-  let selfAt = -1;
+  let selfAt: number;
   if (first === 'Point3') {
     const a = lit(3);
     const b = lit(4);

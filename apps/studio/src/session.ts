@@ -595,6 +595,8 @@ export class KernelSession {
       if (v.type === 'Liquid') return true;
       // and smoke drifts with it (physics design 9.4)
       if (v.type === 'Smoke') return true;
+      // and cloth waves and falls with it (physics design 9.5)
+      if (v.type === 'Cloth') return true;
       if (/\banimate\s*=/.test(v.definition)) return true;
     }
     if (/^@clock /m.test(this.figure.toScript())) return true;

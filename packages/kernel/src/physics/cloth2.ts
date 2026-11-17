@@ -239,7 +239,6 @@ export class Cloth2 extends ClothSet {
   }
 
   protected override bodyArm(b: number, x: number, y: number, _z: number, out: Float64Array): void {
-    const w = this.world as World2;
     out[0] = x - (this.centre(b)[0] as number);
     out[1] = y - (this.centre(b)[1] as number);
     out[2] = 0;
