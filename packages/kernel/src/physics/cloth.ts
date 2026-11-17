@@ -48,8 +48,20 @@ const STRETCH_OMEGA = 400;
 const BEND_OMEGA = 200;
 /** The grab's pull per small step: part of the way to the pointer (a stiff spring, as for bodies). */
 const GRAB_PULL = 0.35;
+const MAX_GRABS = 8;
 
 export type ClothKind = 'sheet' | 'rope' | 'net';
+
+/** The drops as the cloth meets them (the liquid's particle store). */
+export interface DropsView {
+  readonly x: Float64Array;
+  readonly y: Float64Array;
+  readonly z: Float64Array;
+  readonly x0: Float64Array;
+  readonly y0: Float64Array;
+  readonly z0: Float64Array;
+  readonly owner: Int32Array;
+}
 export const LinkKind = { stretch: 0, shear: 1, bend: 2 } as const;
 
 /** A pin: a point held still (body −1) or held to a body, at a point of the body's own frame. */
@@ -90,6 +102,8 @@ export interface ClothInfo {
   readonly pinN: number;
   readonly te0: number;
   readonly teN: number;
+  /** A rope's first entry in the chain table. */
+  readonly ch0: number;
   readonly mPt: number;
   asleep: boolean;
   sleepTime: number;
@@ -173,8 +187,14 @@ export class ClothSet {
   applied = new Float64Array(0);
   /** Which bodies each cloth touched in the last step (a mark per cloth and body). */
   touched = new Uint8Array(0);
-  /** Grabbed points and where the pointer is. */
-  readonly grabs = new Map<number, { x: number; y: number; z: number }>();
+  /** Grabbed points and where the pointer is (at most MAX_GRABS at once). */
+  nGrab = 0;
+  readonly grabI = new Int32Array(MAX_GRABS);
+  readonly grabX = new Float64Array(MAX_GRABS);
+  readonly grabY = new Float64Array(MAX_GRABS);
+  readonly grabZ = new Float64Array(MAX_GRABS);
+  /** How far a point may move in this step (its speed, the grabs), for the searches of `prepare`. */
+  protected pad = 0;
   /** Links that tore in the last step, per cloth. */
   tornNow: Int32Array;
   steps = 0;
@@ -247,7 +267,7 @@ export class ClothSet {
       const n = d.nu * d.nv;
       const mPt = d.mass / n;
       const info: ClothInfo = {
-        def: d, p0: p, n, l0: l, ln: 0, t0: t, tn: 0, pin0: pin, pinN: d.pins.length, te0: te, teN: 0, mPt,
+        def: d, p0: p, n, l0: l, ln: 0, t0: t, tn: 0, pin0: pin, pinN: d.pins.length, te0: te, teN: 0, ch0: 0, mPt,
         asleep: false, sleepTime: 0, torn: 0, unstable: false, windX: 0, windY: 0, windZ: 0,
       };
       for (let k = 0; k < n; k++) {
@@ -313,6 +333,7 @@ export class ClothSet {
       pin += d.pins.length;
     });
     this.n = p;
+    this.buildChains();
     this.px.set(this.x);
     this.py.set(this.y);
     this.pz.set(this.z);
@@ -322,6 +343,34 @@ export class ClothSet {
     let longest = 0;
     for (let k = 0; k < l; k++) if (this.kind[k] === LinkKind.stretch) longest = Math.max(longest, this.rest[k] as number);
     this.grid.setSize(Math.max(0.02, 1.5 * longest));
+  }
+
+  /** The chain table of every rope: its stretch links in order along it. */
+  private buildChains(): void {
+    let total = 0;
+    let longest = 0;
+    for (const c of this.cloths) {
+      if (c.def.kind !== 'rope') continue;
+      (c as { ch0: number }).ch0 = total;
+      total += c.n - 1;
+      longest = Math.max(longest, c.n);
+    }
+    this.chain = new Int32Array(total);
+    for (const c of this.cloths) {
+      if (c.def.kind !== 'rope') continue;
+      for (let l = c.l0; l < c.l0 + c.ln; l++) {
+        if (this.kind[l] !== LinkKind.stretch) continue;
+        const a = Math.min(this.la[l] as number, this.lb[l] as number);
+        this.chain[c.ch0 + a - c.p0] = l;
+      }
+    }
+    const F = (): Float64Array<ArrayBuffer> => new Float64Array(longest);
+    this.chNx = F();
+    this.chNy = F();
+    this.chNz = F();
+    this.chD = F();
+    this.chU = F();
+    this.chR = F();
   }
 
   /** The links of a cloth, in the order they are solved: stretch red-black, then shear, then bend. */
@@ -418,7 +467,7 @@ export class ClothSet {
   /** Makes room for pushes owed to `nb` bodies. */
   protected sizeBodies(nb: number): void {
     if (this.bjx.length === nb) return;
-    const F = (): Float64Array => new Float64Array(nb);
+    const F = (): Float64Array<ArrayBuffer> => new Float64Array(nb);
     this.bjx = F();
     this.bjy = F();
     this.bjz = F();
@@ -523,8 +572,25 @@ export class ClothSet {
     this.sy.set(this.y.subarray(0, n));
     this.sz.set(this.z.subarray(0, n));
     this.wakeCheck();
-    if (!this.cloths.some((c) => !c.asleep && !c.unstable)) return;
+    let awake = false;
+    for (let c = 0; c < this.cloths.length; c++) {
+      const ci = this.cloths[c] as ClothInfo;
+      if (!ci.asleep && !ci.unstable) awake = true;
+    }
+    if (!awake) return;
+    // how far a point may go this step: its speed, and a grab's pull
+    let v2 = 0;
+    for (let i = 0; i < n; i++) {
+      const a = this.vx[i] as number;
+      const b = this.vy[i] as number;
+      const d = this.vz[i] as number;
+      const s2 = a * a + b * b + d * d;
+      if (s2 > v2) v2 = s2;
+    }
+    this.pad = 1.5 * h * Math.sqrt(v2) + 9.8 * h * h + (this.nGrab > 0 ? 0.5 : 0);
+    this.grid.build(this.x, this.y, this.z, n);
     this.prepare(h);
+    this.prepareSelf();
     const hs = h / SUBSTEPS;
     for (let s = 0; s < SUBSTEPS; s++) this.substep(hs);
     // the forces on the pins, averaged over the small steps
@@ -533,9 +599,14 @@ export class ClothSet {
       this.pinFx[q] = (this.pinFx[q] as number) * inv;
       this.pinFy[q] = (this.pinFy[q] as number) * inv;
       this.pinFz[q] = (this.pinFz[q] as number) * inv;
+      if (q < this.dropPinX.length) {
+        // drops resting on a pinned corner push on its pin
+        this.pinFx[q] = (this.pinFx[q] as number) + (this.dropPinX[q] as number);
+        this.pinFy[q] = (this.pinFy[q] as number) + (this.dropPinY[q] as number);
+        this.pinFz[q] = (this.pinFz[q] as number) + (this.dropPinZ[q] as number);
+      }
     }
     this.tear();
-    if (this.cloths.some((c) => c.def.self) || this.cloths.length > 1) this.selfHits(h);
     this.settle(h);
   }
 
@@ -587,17 +658,22 @@ export class ClothSet {
       }
     }
     // grabbed points are pulled toward the pointer
-    for (const [i, g] of this.grabs) {
+    for (let g = 0; g < this.nGrab; g++) {
+      const i = this.grabI[g] as number;
       if ((w[i] as number) === 0) continue;
-      x[i] = (x[i] as number) + ((g.x - (x[i] as number)) * GRAB_PULL);
-      y[i] = (y[i] as number) + ((g.y - (y[i] as number)) * GRAB_PULL);
-      z[i] = (z[i] as number) + ((g.z - (z[i] as number)) * GRAB_PULL);
+      x[i] = (x[i] as number) + ((this.grabX[g] as number) - (x[i] as number)) * GRAB_PULL;
+      y[i] = (y[i] as number) + ((this.grabY[g] as number) - (y[i] as number)) * GRAB_PULL;
+      z[i] = (z[i] as number) + ((this.grabZ[g] as number) - (z[i] as number)) * GRAB_PULL;
     }
     // 2. the links, once each, in order
     const inv2 = 1 / (hs * hs);
     for (const c of this.cloths) {
       if (c.asleep || c.unstable) continue;
-      this.solveLinks(c.l0, c.l0 + c.ln, inv2);
+      if (c.def.kind === 'rope') {
+        // a rope's stretch links are one chain: solved together along it, then its bend links once each
+        this.solveChain(c, inv2);
+        this.solveLinks(c.l0 + c.n - 1, c.l0 + c.ln, inv2);
+      } else this.solveLinks(c.l0, c.l0 + c.ln, inv2);
       this.solveTethers(c.te0, c.te0 + c.teN);
     }
     // 3. body pins: what the point moved, the body moves (a push now, a move at the next step)
@@ -627,8 +703,9 @@ export class ClothSet {
       z[i] = out[2] as number;
       w[i] = 0;
     }
-    // 4. solids and bodies
+    // 4. solids and bodies, then the cloth against itself and other cloths
     this.collide(hs);
+    if (this.nSelf > 0) this.solveSelf();
     // 5. speeds from the moves, less damping
     for (const c of this.cloths) {
       if (c.asleep || c.unstable) continue;
@@ -642,6 +719,86 @@ export class ClothSet {
       }
     }
   }
+
+  /**
+   * A rope's stretch links in one pass along the whole rope: the links' equations, made linear about the places now,
+   * form a three-band system (each link shares a point with the one before and the one after), solved exactly in linear
+   * time. One pass then reaches from one end to the other, so a rope of 400 points holds its length as a short one does
+   * and carries a body a hundred times heavier than itself (a pass link by link needs hundreds of passes for both).
+   */
+  private solveChain(c: ClothInfo, inv2: number): void {
+    const { x, y, z, w, rest, alpha, broken } = this;
+    const m = c.n - 1;
+    const ch = this.chain;
+    const nx = this.chNx;
+    const ny = this.chNy;
+    const nz = this.chNz;
+    const dg = this.chD;
+    const up = this.chU;
+    const rhs = this.chR;
+    const p0 = c.p0;
+    for (let k = 0; k < m; k++) {
+      const l = ch[c.ch0 + k] as number;
+      const a = p0 + k;
+      const b = a + 1;
+      const dx = (x[b] as number) - (x[a] as number);
+      const dy = (y[b] as number) - (y[a] as number);
+      const dz = (z[b] as number) - (z[a] as number);
+      const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      const ws = (w[a] as number) + (w[b] as number);
+      if (broken[l] === 1 || !(d > 1e-12) || ws === 0) {
+        // a torn (or unmovable) link: its row stands alone and moves nothing
+        nx[k] = 0;
+        ny[k] = 0;
+        nz[k] = 0;
+        dg[k] = 1;
+        rhs[k] = 0;
+        continue;
+      }
+      nx[k] = dx / d;
+      ny[k] = dy / d;
+      nz[k] = dz / d;
+      dg[k] = ws + (alpha[l] as number) * inv2;
+      rhs[k] = (rest[l] as number) - d;
+    }
+    // the band beside the diagonal: links k and k + 1 share point k + 1
+    for (let k = 0; k + 1 < m; k++) {
+      const wb = w[p0 + k + 1] as number;
+      up[k] = -wb * ((nx[k] as number) * (nx[k + 1] as number) + (ny[k] as number) * (ny[k + 1] as number) + (nz[k] as number) * (nz[k + 1] as number));
+    }
+    // forward sweep, then back (the Thomas method); the system is symmetric and diagonally dominant
+    for (let k = 1; k < m; k++) {
+      const f = (up[k - 1] as number) / (dg[k - 1] as number);
+      dg[k] = (dg[k] as number) - f * (up[k - 1] as number);
+      rhs[k] = (rhs[k] as number) - f * (rhs[k - 1] as number);
+    }
+    rhs[m - 1] = (rhs[m - 1] as number) / (dg[m - 1] as number);
+    for (let k = m - 2; k >= 0; k--) rhs[k] = ((rhs[k] as number) - (up[k] as number) * (rhs[k + 1] as number)) / (dg[k] as number);
+    // each point moves by its links' Δλ along their directions: Δx_k = w_k (n_{k−1} Δλ_{k−1} − n_k Δλ_k)
+    for (let k = 0; k <= m; k++) {
+      const i = p0 + k;
+      const lb = k > 0 ? (rhs[k - 1] as number) : 0;
+      const la = k < m ? (rhs[k] as number) : 0;
+      const ex = (k > 0 ? (nx[k - 1] as number) * lb : 0) - (k < m ? (nx[k] as number) * la : 0);
+      const ey = (k > 0 ? (ny[k - 1] as number) * lb : 0) - (k < m ? (ny[k] as number) * la : 0);
+      const ez = (k > 0 ? (nz[k - 1] as number) * lb : 0) - (k < m ? (nz[k] as number) * la : 0);
+      const wi = w[i] as number;
+      if (wi > 0) {
+        x[i] = (x[i] as number) + wi * ex;
+        y[i] = (y[i] as number) + wi * ey;
+        z[i] = (z[i] as number) + wi * ez;
+      } else this.pinForce(i, ex, ey, ez);
+    }
+  }
+
+  /** Each rope's stretch links by place along it (segment k joins points k and k + 1), and the chain solve's scratch. */
+  private chain = new Int32Array(0);
+  private chNx = new Float64Array(0);
+  private chNy = new Float64Array(0);
+  private chNz = new Float64Array(0);
+  private chD = new Float64Array(0);
+  private chU = new Float64Array(0);
+  private chR = new Float64Array(0);
 
   /** One pass over links [l0, l1): XPBD with the multiplier started at 0 each small step. */
   private solveLinks(l0: number, l1: number, inv2: number): void {
@@ -795,13 +952,351 @@ export class ClothSet {
       fx *= share * hs;
       fy *= share * hs;
       fz *= share * hs;
-      for (const i of [a, b, e]) {
+      for (let k = 0; k < 3; k++) {
+        const i = k === 0 ? a : k === 1 ? b : e;
         if (i < 0) continue;
         const wi = w[i] as number;
         if (wi === 0 || (this.pinOf[i] as number) >= 0) continue;
         vx[i] = (vx[i] as number) + wi * fx;
         vy[i] = (vy[i] as number) + wi * fy;
         vz[i] = (vz[i] as number) + wi * fz;
+      }
+    }
+  }
+
+  /* ------------------------------ the cloth against itself and other cloths (design 9.6) ------------------------------ */
+
+  /** Point and face pairs that may meet this step (found once a step on the grid), and the side each point was on. */
+  protected nSelf = 0;
+  private selfP = new Int32Array(0);
+  private selfT = new Int32Array(0);
+  private selfS = new Float64Array(0);
+  private selfH = new Float64Array(0);
+
+  private pushSelf(i: number, t: number, side: number, th: number): void {
+    if (this.nSelf >= this.selfP.length) {
+      const cap = Math.max(256, this.selfP.length * 2);
+      const P = new Int32Array(cap);
+      P.set(this.selfP);
+      const T = new Int32Array(cap);
+      T.set(this.selfT);
+      const S = new Float64Array(cap);
+      S.set(this.selfS);
+      const Th = new Float64Array(cap);
+      Th.set(this.selfH);
+      this.selfP = P;
+      this.selfT = T;
+      this.selfS = S;
+      this.selfH = Th;
+    }
+    this.selfP[this.nSelf] = i;
+    this.selfT[this.nSelf] = t;
+    this.selfS[this.nSelf] = side;
+    this.selfH[this.nSelf] = th;
+    this.nSelf++;
+  }
+
+  /** Is point i one of face t's corners, or (same cloth) beside them on the grid, so it never counts as a hit? */
+  private nearOwn(i: number, t: number, c: ClothInfo): boolean {
+    const a = this.ta[t] as number;
+    const b = this.tb[t] as number;
+    const e = this.tc[t] as number;
+    if (i === a || i === b || i === e) return true;
+    if ((this.owner[i] as number) !== (this.owner[a] as number)) return false;
+    const nu = c.def.nu;
+    const pi = (i - c.p0) % nu;
+    const pj = Math.floor((i - c.p0) / nu);
+    const lo = Math.min(a, b, e < 0 ? a : e) - c.p0;
+    const hi = Math.max(a, b, e) - c.p0;
+    const i0 = Math.min(lo % nu, hi % nu);
+    const i1 = Math.max(lo % nu, hi % nu);
+    const j0 = Math.floor(lo / nu);
+    const j1 = Math.floor(hi / nu);
+    return pi >= i0 - 1 && pi <= i1 + 1 && pj >= j0 - 1 && pj <= j1 + 1;
+  }
+
+  /** The point and face pairs of this step: self hits on a cloth with `self`, and every pair of different cloths. */
+  private prepareSelf(): void {
+    this.nSelf = 0;
+    const count = this.cloths.length;
+    let any = false;
+    for (let c = 0; c < count; c++) if ((this.cloths[c] as ClothInfo).def.self) any = true;
+    if (!any && count < 2) return;
+    const { x, y, z, sx, sy, sz } = this;
+    const found = this.grid.found;
+    for (let c = 0; c < count; c++) {
+      const A = this.cloths[c] as ClothInfo;
+      if (A.unstable) continue;
+      const t1 = A.t0 + A.tn;
+      const reach = A.def.thickness + this.pad + 0.05;
+      for (let t = A.t0; t < t1; t++) {
+        if (this.triTorn(t)) continue;
+        const a = this.ta[t] as number;
+        const b = this.tb[t] as number;
+        const e = this.tc[t] as number;
+        const ee = e < 0 ? b : e;
+        const m = this.grid.inBox(
+          Math.min(x[a] as number, x[b] as number, x[ee] as number) - reach, Math.min(y[a] as number, y[b] as number, y[ee] as number) - reach, Math.min(z[a] as number, z[b] as number, z[ee] as number) - reach,
+          Math.max(x[a] as number, x[b] as number, x[ee] as number) + reach, Math.max(y[a] as number, y[b] as number, y[ee] as number) + reach, Math.max(z[a] as number, z[b] as number, z[ee] as number) + reach,
+          this.n,
+        );
+        for (let q = 0; q < m; q++) {
+          const i = found[q] as number;
+          const oc = this.owner[i] as number;
+          if (oc === c && !A.def.self) continue;
+          const B = this.cloths[oc] as ClothInfo;
+          if ((A.asleep && B.asleep) || B.unstable) continue;
+          if (oc === c && this.nearOwn(i, t, A)) continue;
+          if ((this.w[i] as number) === 0 && (this.w[a] as number) === 0 && (this.w[b] as number) === 0 && (e < 0 || (this.w[e] as number) === 0)) continue;
+          const th = 0.5 * (A.def.thickness + B.def.thickness);
+          // the side of the face the point was on at the start of the step
+          const s0 = this.faceHeight(t, sx[i] as number, sy[i] as number, sz[i] as number, sx, sy, sz);
+          if (Math.abs(s0) > th + 2 * this.pad + 0.05) continue;
+          this.pushSelf(i, t, s0 >= 0 ? 1 : -1, th);
+        }
+      }
+    }
+  }
+
+  /** Face t's unit normal (a segment's, in the plane) into scratch 0..2, and the height of a point over it. */
+  protected faceHeight(t: number, px: number, py: number, pz: number, X: Float64Array, Y: Float64Array, Z: Float64Array): number {
+    const a = this.ta[t] as number;
+    const b = this.tb[t] as number;
+    const e = this.tc[t] as number;
+    const o = this.scratch;
+    const ax = X[a] as number;
+    const ay = Y[a] as number;
+    const az = Z[a] as number;
+    let nx: number;
+    let ny: number;
+    let nz: number;
+    if (e < 0) {
+      nx = -((Y[b] as number) - ay);
+      ny = (X[b] as number) - ax;
+      nz = 0;
+    } else {
+      const ux = (X[b] as number) - ax;
+      const uy = (Y[b] as number) - ay;
+      const uz = (Z[b] as number) - az;
+      const vx = (X[e] as number) - ax;
+      const vy = (Y[e] as number) - ay;
+      const vz = (Z[e] as number) - az;
+      nx = uy * vz - uz * vy;
+      ny = uz * vx - ux * vz;
+      nz = ux * vy - uy * vx;
+    }
+    const l = Math.sqrt(nx * nx + ny * ny + nz * nz);
+    if (!(l > 1e-18)) {
+      o[0] = 0;
+      o[1] = 0;
+      o[2] = 0;
+      return 0;
+    }
+    o[0] = nx / l;
+    o[1] = ny / l;
+    o[2] = nz / l;
+    return (o[0] as number) * (px - ax) + (o[1] as number) * (py - ay) + (o[2] as number) * (pz - az);
+  }
+
+  /** The corners' weights of a point on face t's plane (into scratch 3..5), true when it is on the face. */
+  protected footOn(t: number, px: number, py: number, pz: number, margin: number): boolean {
+    const { x, y, z } = this;
+    const o = this.scratch;
+    const a = this.ta[t] as number;
+    const b = this.tb[t] as number;
+    const e = this.tc[t] as number;
+    const qx = px - (x[a] as number);
+    const qy = py - (y[a] as number);
+    const qz = pz - (z[a] as number);
+    const ux = (x[b] as number) - (x[a] as number);
+    const uy = (y[b] as number) - (y[a] as number);
+    const uz = (z[b] as number) - (z[a] as number);
+    if (e < 0) {
+      const l2 = ux * ux + uy * uy + uz * uz;
+      if (!(l2 > 0)) return false;
+      const f = (qx * ux + qy * uy + qz * uz) / l2;
+      o[3] = 1 - f;
+      o[4] = f;
+      o[5] = 0;
+      return f >= -margin && f <= 1 + margin;
+    }
+    const vx = (x[e] as number) - (x[a] as number);
+    const vy = (y[e] as number) - (y[a] as number);
+    const vz = (z[e] as number) - (z[a] as number);
+    const d00 = ux * ux + uy * uy + uz * uz;
+    const d01 = ux * vx + uy * vy + uz * vz;
+    const d11 = vx * vx + vy * vy + vz * vz;
+    const d20 = qx * ux + qy * uy + qz * uz;
+    const d21 = qx * vx + qy * vy + qz * vz;
+    const den = d00 * d11 - d01 * d01;
+    if (!(den > 0)) return false;
+    const fb = (d11 * d20 - d01 * d21) / den;
+    const fe = (d00 * d21 - d01 * d20) / den;
+    o[3] = 1 - fb - fe;
+    o[4] = fb;
+    o[5] = fe;
+    return fb >= -margin && fe >= -margin && fb + fe <= 1 + margin;
+  }
+
+  /**
+   * Each point keeps `thickness` from the faces near it, on the side it started the step on, so a falling sheet folds
+   * over itself instead of passing through: the point and the face's corners move apart by their masses.
+   */
+  private solveSelf(): void {
+    const { x, y, z, w } = this;
+    const o = this.scratch;
+    for (let k = 0; k < this.nSelf; k++) {
+      const i = this.selfP[k] as number;
+      const t = this.selfT[k] as number;
+      const side = this.selfS[k] as number;
+      const th = this.selfH[k] as number;
+      const s = this.faceHeight(t, x[i] as number, y[i] as number, z[i] as number, x, y, z);
+      const nx = o[0] as number;
+      const ny = o[1] as number;
+      const nz = o[2] as number;
+      if (nx === 0 && ny === 0 && nz === 0) continue;
+      const C = th - s * side;
+      if (!(C > 0)) continue;
+      // the foot of the point must be on the face (a neighbouring face takes it otherwise)
+      if (!this.footOn(t, (x[i] as number) - s * nx, (y[i] as number) - s * ny, (z[i] as number) - s * nz, 1e-9)) continue;
+      const a = this.ta[t] as number;
+      const b = this.tb[t] as number;
+      const e = this.tc[t] as number;
+      const ba = o[3] as number;
+      const bb = o[4] as number;
+      const be = o[5] as number;
+      const wi = w[i] as number;
+      const W = wi + ba * ba * (w[a] as number) + bb * bb * (w[b] as number) + (e >= 0 ? be * be * (w[e] as number) : 0);
+      if (!(W > 0)) continue;
+      const dl = (C / W) * side;
+      if (wi > 0) {
+        x[i] = (x[i] as number) + wi * dl * nx;
+        y[i] = (y[i] as number) + wi * dl * ny;
+        z[i] = (z[i] as number) + wi * dl * nz;
+      }
+      for (let q = 0; q < 3; q++) {
+        const j = q === 0 ? a : q === 1 ? b : e;
+        const bj = q === 0 ? ba : q === 1 ? bb : be;
+        if (j < 0) continue;
+        const wj = w[j] as number;
+        if (wj === 0) continue;
+        x[j] = (x[j] as number) - wj * bj * dl * nx;
+        y[j] = (y[j] as number) - wj * bj * dl * ny;
+        z[j] = (z[j] as number) - wj * bj * dl * nz;
+      }
+    }
+  }
+
+  /* ------------------------------ liquid drops against the cloth (design 9.6) ------------------------------ */
+
+  /** Which cloths drops met in the last liquid step (it wakes them). */
+  private wet = new Uint8Array(0);
+  /** The pushes drops gave pinned corners in the last liquid step (N), counted in the pins' forces. */
+  dropPinX = new Float64Array(0);
+  dropPinY = new Float64Array(0);
+  dropPinZ = new Float64Array(0);
+
+  /**
+   * Drops against the cloth's faces (in the plane, its threads), called by the liquid in its step after the drops met
+   * the bodies. A drop that came within `r + thickness` of a face, or crossed it, goes back to the side it started the
+   * step on; the drop and the face's corners move apart by their masses, the cloth's share as a change of speed (it moves
+   * in its own step next), so a sheet holds water and the water weighs it down. `box` finds the drops near a box on the
+   * liquid's grid; `found` is that grid's list.
+   */
+  meetDrops(ps: DropsView, box: (x0: number, y0: number, z0: number, x1: number, y1: number, z1: number) => number, found: () => Int32Array, r: number, spacing: number, mass: Float64Array, h: number): void {
+    if (this.wet.length !== this.cloths.length) this.wet = new Uint8Array(this.cloths.length);
+    this.wet.fill(0);
+    if (this.dropPinX.length !== this.pinPoint.length) {
+      this.dropPinX = new Float64Array(this.pinPoint.length);
+      this.dropPinY = new Float64Array(this.pinPoint.length);
+      this.dropPinZ = new Float64Array(this.pinPoint.length);
+    }
+    this.dropPinX.fill(0);
+    this.dropPinY.fill(0);
+    this.dropPinZ.fill(0);
+    const { x, y, z, vx, vy, vz, w } = this;
+    const o = this.scratch;
+    const inv = 1 / h;
+    for (let c = 0; c < this.cloths.length; c++) {
+      const ci = this.cloths[c] as ClothInfo;
+      if (ci.unstable) continue;
+      const reach = r + ci.def.thickness;
+      const pad = reach + 2 * spacing;
+      const t1 = ci.t0 + ci.tn;
+      for (let t = ci.t0; t < t1; t++) {
+        if (this.triTorn(t)) continue;
+        const a = this.ta[t] as number;
+        const b = this.tb[t] as number;
+        const e = this.tc[t] as number;
+        const ee = e < 0 ? b : e;
+        const m = box(
+          Math.min(x[a] as number, x[b] as number, x[ee] as number) - pad, Math.min(y[a] as number, y[b] as number, y[ee] as number) - pad, Math.min(z[a] as number, z[b] as number, z[ee] as number) - pad,
+          Math.max(x[a] as number, x[b] as number, x[ee] as number) + pad, Math.max(y[a] as number, y[b] as number, y[ee] as number) + pad, Math.max(z[a] as number, z[b] as number, z[ee] as number) + pad,
+        );
+        if (m === 0) continue;
+        const list = found();
+        for (let q = 0; q < m; q++) {
+          const d = list[q] as number;
+          const dx = ps.x[d] as number;
+          const dy = ps.y[d] as number;
+          const dz = ps.z[d] as number;
+          const s1 = this.faceHeight(t, dx, dy, dz, x, y, z);
+          const nx = o[0] as number;
+          const ny = o[1] as number;
+          const nz = o[2] as number;
+          if (nx === 0 && ny === 0 && nz === 0) continue;
+          const s0 = nx * ((ps.x0[d] as number) - (x[a] as number)) + ny * ((ps.y0[d] as number) - (y[a] as number)) + nz * ((ps.z0[d] as number) - (z[a] as number));
+          const crossed = s0 * s1 < 0;
+          const side = s0 >= 0 ? 1 : -1;
+          const C = reach - s1 * side;
+          if (!(C > 0)) continue;
+          // a drop under the face by more than its reach that did not cross it belongs to the other side
+          if (!crossed && s1 * side < 0) continue;
+          // the foot of the drop on the face: where its path crossed it, or straight below it
+          let fx: number;
+          let fy: number;
+          let fz: number;
+          if (crossed) {
+            const f = s0 / (s0 - s1);
+            fx = (ps.x0[d] as number) + f * (dx - (ps.x0[d] as number));
+            fy = (ps.y0[d] as number) + f * (dy - (ps.y0[d] as number));
+            fz = (ps.z0[d] as number) + f * (dz - (ps.z0[d] as number));
+          } else {
+            fx = dx - s1 * nx;
+            fy = dy - s1 * ny;
+            fz = dz - s1 * nz;
+          }
+          if (!this.footOn(t, fx, fy, fz, 1e-6)) continue;
+          const ba = o[3] as number;
+          const bb = o[4] as number;
+          const be = o[5] as number;
+          const wd = 1 / (mass[ps.owner[d] as number] as number);
+          const wc = ba * ba * (w[a] as number) + bb * bb * (w[b] as number) + (e >= 0 ? be * be * (w[e] as number) : 0);
+          const dl = (C / (wd + wc)) * side;
+          ps.x[d] = dx + wd * dl * nx;
+          ps.y[d] = dy + wd * dl * ny;
+          ps.z[d] = dz + wd * dl * nz;
+          this.wet[c] = 1;
+          for (let k = 0; k < 3; k++) {
+            const j = k === 0 ? a : k === 1 ? b : e;
+            const bj = k === 0 ? ba : k === 1 ? bb : be;
+            if (j < 0) continue;
+            const wj = w[j] as number;
+            if (wj === 0) {
+              // a pinned corner: its pin carries the drop's push
+              const pq = this.pinOf[j] as number;
+              if (pq >= 0) {
+                this.dropPinX[pq] = (this.dropPinX[pq] as number) - bj * dl * nx * inv * inv;
+                this.dropPinY[pq] = (this.dropPinY[pq] as number) - bj * dl * ny * inv * inv;
+                this.dropPinZ[pq] = (this.dropPinZ[pq] as number) - bj * dl * nz * inv * inv;
+              }
+              continue;
+            }
+            vx[j] = (vx[j] as number) - wj * bj * dl * nx * inv;
+            vy[j] = (vy[j] as number) - wj * bj * dl * ny * inv;
+            vz[j] = (vz[j] as number) - wj * bj * dl * nz * inv;
+          }
+        }
       }
     }
   }
@@ -860,8 +1355,6 @@ export class ClothSet {
   /** Stretch links by their two points (a × 8192 + b, a < b), for tearing. */
   private readonly stretchAt = new Map<number, number>();
 
-  /** Cloth against itself (with `self`) and against other cloths: points keep `thickness` from faces (design 9.6). */
-  protected selfHits(_h: number): void {}
 
   /** Sleep: a cloth whose points all move under 1 mm/s for 0.5 s; blow-up: a place or a speed not finite or over 1e6. */
   private settle(h: number): void {
@@ -904,21 +1397,25 @@ export class ClothSet {
   sleeping = true;
 
   private grabsOn(c: ClothInfo): boolean {
-    for (const i of this.grabs.keys()) if (i >= c.p0 && i < c.p0 + c.n) return true;
+    for (let g = 0; g < this.nGrab; g++) {
+      const i = this.grabI[g] as number;
+      if (i >= c.p0 && i < c.p0 + c.n) return true;
+    }
     return false;
   }
 
   /** A sleeping cloth wakes when the wind changes, a body near it moves, it is grabbed, or a drop comes near. */
   private wakeCheck(): void {
-    this.cloths.forEach((c, ci) => {
-      if (!c.asleep) return;
+    for (let ci = 0; ci < this.cloths.length; ci++) {
+      const c = this.cloths[ci] as ClothInfo;
+      if (!c.asleep) continue;
       if (c.windX !== this.windX || c.windY !== this.windY || c.windZ !== this.windZ || this.grabsOn(c) || this.bodiesStir(ci) || this.dropsNear(ci)) this.wake(ci);
-    });
+    }
   }
 
-  /** Are any drops near cloth c (set by the world that has drops)? */
-  protected dropsNear(_c: number): boolean {
-    return false;
+  /** Did drops meet cloth c in the last liquid step? */
+  protected dropsNear(c: number): boolean {
+    return this.wet[c] === 1;
   }
 
   wake(c: number): void {
@@ -991,12 +1488,34 @@ export class ClothSet {
 
   /** Takes hold of a point (or moves the hold) and pulls it toward (x, y, z). */
   grab(i: number, x: number, y: number, z: number): void {
-    this.grabs.set(i, { x, y, z });
+    let g = 0;
+    while (g < this.nGrab && this.grabI[g] !== i) g++;
+    if (g === this.nGrab) {
+      if (g >= MAX_GRABS) return;
+      this.nGrab++;
+    }
+    this.grabI[g] = i;
+    this.grabX[g] = x;
+    this.grabY[g] = y;
+    this.grabZ[g] = z;
     this.wake(this.owner[i] as number);
   }
 
   release(i: number): void {
-    this.grabs.delete(i);
+    for (let g = 0; g < this.nGrab; g++) {
+      if (this.grabI[g] !== i) continue;
+      this.nGrab--;
+      this.grabI[g] = this.grabI[this.nGrab] as number;
+      this.grabX[g] = this.grabX[this.nGrab] as number;
+      this.grabY[g] = this.grabY[this.nGrab] as number;
+      this.grabZ[g] = this.grabZ[this.nGrab] as number;
+      return;
+    }
+  }
+
+  /** Lets go of every point. */
+  releaseAll(): void {
+    this.nGrab = 0;
   }
 
   /** The point of cloth c nearest (x, y, z). */
@@ -1031,7 +1550,7 @@ export class ClothSet {
     const np = this.pinPoint.length;
     const nc = this.cloths.length;
     const per = this.dim === 3 ? 6 : 4;
-    const out = new Float64Array(3 + nc * 7 + np * 3 + 1 + 6 * nb + words + per * n);
+    const out = new Float64Array(3 + nc * 7 + np * 3 + 1 + 9 * nb + words + per * n);
     let k = 0;
     out[k++] = n;
     out[k++] = this.steps;
@@ -1051,7 +1570,7 @@ export class ClothSet {
       out[k++] = this.pinZ[q] as number;
     }
     out[k++] = words;
-    for (const a of [this.bjx, this.bjy, this.bjz, this.btx, this.bty, this.btz]) {
+    for (const a of [this.bjx, this.bjy, this.bjz, this.btx, this.bty, this.btz, this.bdx, this.bdy, this.bdz]) {
       out.set(a, k);
       k += nb;
     }
@@ -1095,7 +1614,7 @@ export class ClothSet {
       this.pinZ[q] = s[k++] as number;
     }
     const words = s[k++] as number;
-    for (const a of [this.bjx, this.bjy, this.bjz, this.btx, this.bty, this.btz]) {
+    for (const a of [this.bjx, this.bjy, this.bjz, this.btx, this.bty, this.btz, this.bdx, this.bdy, this.bdz]) {
       a.set(s.subarray(k, k + nb));
       k += nb;
     }
