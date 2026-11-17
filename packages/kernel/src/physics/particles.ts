@@ -1,6 +1,6 @@
 /**
  * Moving points that are not rigid bodies (docs/features/physics/design.md 9.1, 9.6): the shared store of particles and
- * the neighbour grid that liquid drops use now and cloth points will join (round 9).
+ * the neighbour grids that liquid drops use, in the plane and in space, and cloth points will join (round 9).
  *
  * The neighbour grid (`./grid2`) is rebuilt every step by a counting sort. It
  * makes no garbage: every buffer grows by doubling and is kept. A counting sort is stable, so the particles of a cell
@@ -17,6 +17,10 @@ export class ParticleSet {
   y0 = new Float64Array(0);
   vx = new Float64Array(0);
   vy = new Float64Array(0);
+  /** The third number of drops in space (round 7); zero for drops in the plane. */
+  z = new Float64Array(0);
+  z0 = new Float64Array(0);
+  vz = new Float64Array(0);
   owner = new Int32Array(0);
 
   constructor(cap = 0) {
@@ -39,6 +43,9 @@ export class ParticleSet {
     this.y0 = grow(this.y0);
     this.vx = grow(this.vx);
     this.vy = grow(this.vy);
+    this.z = grow(this.z);
+    this.z0 = grow(this.z0);
+    this.vz = grow(this.vz);
     const o = new Int32Array(c);
     o.set(this.owner.subarray(0, this.n));
     this.owner = o;
@@ -54,6 +61,18 @@ export class ParticleSet {
     this.vx[i] = vx;
     this.vy[i] = vy;
     this.owner[i] = owner;
+    this.z[i] = 0;
+    this.z0[i] = 0;
+    this.vz[i] = 0;
+    return i;
+  }
+
+  /** A drop in space. */
+  add3(x: number, y: number, z: number, vx: number, vy: number, vz: number, owner: number): number {
+    const i = this.add(x, y, vx, vy, owner);
+    this.z[i] = z;
+    this.z0[i] = z;
+    this.vz[i] = vz;
     return i;
   }
 
@@ -70,6 +89,9 @@ export class ParticleSet {
         this.y0[k] = this.y0[i] as number;
         this.vx[k] = this.vx[i] as number;
         this.vy[k] = this.vy[i] as number;
+        this.z[k] = this.z[i] as number;
+        this.z0[k] = this.z0[i] as number;
+        this.vz[k] = this.vz[i] as number;
         this.owner[k] = this.owner[i] as number;
       }
       k++;
@@ -80,3 +102,4 @@ export class ParticleSet {
 }
 
 export { MAX_NEIGHBOURS, NeighbourGrid } from './grid2';
+export { MAX_NEIGHBOURS3, NeighbourGrid3 } from './grid3';
