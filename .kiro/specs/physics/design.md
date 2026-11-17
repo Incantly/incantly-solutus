@@ -43,4 +43,6 @@ The full design is `docs/features/physics/design.md`. This file says where each 
 - A world with cloth or liquid runs whole in one worker, bodies included, so every hit has one order.
 - Cloth checkpoints every 0.25 s, so a seek is at most 30 steps.
 - `world` is a reserved object written `world = World(...)`; `world with gravity = …` is rewritten to it, as `space` is.
+- A figure with a liquid or waves in space is a world in space too (told by the line's form), even with no body. The worker host talks to whichever driver holds the world (`worldDriverOf`), and the worker sends its `@input` log back when it changes (round 7).
+- Drops in space take one density pass a step, with the pair list kept for two steps and the λ denominator from the neighbours' gradients only (design 9.1, round 7): the 1.5 ms budget for 2,000 drops, the same volume kept as with two passes.
 - Compiled user formulas keep `Math.*` for now; the cross-browser test covers films whose formulas use only arithmetic. Moving the compiler to exact maths is task 10.5.

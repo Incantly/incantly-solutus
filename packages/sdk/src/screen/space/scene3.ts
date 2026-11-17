@@ -299,6 +299,28 @@ export function sceneOf3(figure: Figure, view: space.View3, opts: Scene3Options 
         for (const run of curveRuns(c.at, c.lo, c.hi)) items.push(...loopLines(id, run, color, width, false));
         break;
       }
+      case 'Liquid': {
+        // drops in space (physics design 12, ui.md 7): dots a drop wide, drawn far to near after the faces
+        if (!physics.isLiquidValue(v) || !v.zs) break;
+        const css = v.spec.color ?? color;
+        const r = 0.6 * v.size;
+        const n = Math.min(v.xs.length, v.ys.length, v.zs.length);
+        for (let i = 0; i < n; i++) items.push({ k: 'dot', id, p: { x: v.xs[i] as number, y: v.ys[i] as number, z: v.zs[i] as number }, color: css, alpha: 0.85, size: r, px: false });
+        break;
+      }
+      case 'Waves':
+        // a wave surface in space: a lit mesh through the heights (physics design 12), at most 32 by 32 faces
+        if (physics.isWavesValue(v) && v.space) items.push(...wavesFaces(id, v, color, Math.max(alpha, 0.6)));
+        break;
+      case 'Water': {
+        // still water in space: a translucent patch at its level, the size of the view (ui.md 7)
+        if (!physics.isWaterValue(v)) break;
+        const z = v.level;
+        const pts = [{ x: C.x - L, y: C.y - L, z }, { x: C.x + L, y: C.y - L, z }, { x: C.x + L, y: C.y + L, z }, { x: C.x - L, y: C.y + L, z }];
+        items.push({ k: 'face', id, pts, color, alpha: Math.min(alpha, 0.3), occludes: false, shade: true });
+        items.push(...loopLines(id, pts, color, 1));
+        break;
+      }
       case 'Particles': {
         // particles in space (.kiro/specs/space-3d-surfaces R3.2): each a pure function of its index and the film time
         if (!isParticlesValue(v) || !v.space) break;
@@ -396,6 +418,43 @@ function sphereFaces(id: number, s: space.Sphere3, color: string, alpha: number)
       out.push({ k: 'face', id, pts, color, alpha, occludes: true, shade: true });
     }
   }
+  return out;
+}
+
+/**
+ * A wave surface: the corners of its cells at the mean height of the cells round them, joined into faces. A grid over
+ * 32 a side is drawn from every second corner, so the software painter sorts at most about a thousand faces.
+ */
+function wavesFaces(id: number, w: physics.WavesValue, color: string, alpha: number): Item3[] {
+  const { nx, ny, heights: h } = w;
+  const step = Math.max(1, Math.ceil(Math.max(nx, ny) / 32));
+  const corner = (ci: number, cj: number): V3 => {
+    let s = 0;
+    let k = 0;
+    for (const i of [ci - 1, ci]) for (const j of [cj - 1, cj]) {
+      if (i < 0 || j < 0 || i >= nx || j >= ny) continue;
+      s += h[j * nx + i] as number;
+      k++;
+    }
+    return { x: w.x0 + ci * w.dx, y: w.y0 + cj * w.dy, z: w.level + (k > 0 ? s / k : 0) };
+  };
+  const out: Item3[] = [];
+  const is: number[] = [];
+  for (let i = 0; i < nx; i += step) is.push(i);
+  is.push(nx);
+  const js: number[] = [];
+  for (let j = 0; j < ny; j += step) js.push(j);
+  js.push(ny);
+  const P = is.map((i) => js.map((j) => corner(i, j)));
+  for (let a = 0; a + 1 < is.length; a++) {
+    for (let b = 0; b + 1 < js.length; b++) {
+      const pts = [P[a]?.[b], P[a + 1]?.[b], P[a + 1]?.[b + 1], P[a]?.[b + 1]] as V3[];
+      out.push({ k: 'face', id, pts, color, alpha, occludes: false, shade: true });
+    }
+  }
+  // the rim of the surface, so its edge reads against the floor
+  const rim: V3[] = [...is.map((_, a) => P[a]?.[0] as V3), ...js.map((_, b) => P[is.length - 1]?.[b] as V3), ...is.map((_, a) => P[is.length - 1 - a]?.[js.length - 1] as V3), ...js.map((_, b) => P[0]?.[js.length - 1 - b] as V3)];
+  out.push(...loopLines(id, rim, darker(color), 1));
   return out;
 }
 

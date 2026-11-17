@@ -31,7 +31,7 @@ The reference app has no physics engine, so it has no physics errors. Hand-made 
 | B001 | `not_a_body_shape` (new) | typecheck | `Body(s)` where `s` has no area: a `Line`, `Ray`, `Segment`, open `Polyline`, `Curve` or function graph | `use_suggestion` | "A line has no mass. To make it solid, write `s with solid = true`." `suggest`: that line |
 | B002 | `self_crossing` (new) | typecheck | `Body(p)` or `p with solid = true` where `p` is a literal polygon whose edges cross | `fix_line` | names the two edges that cross |
 | B003 | `not_convex_3d` (new) | typecheck | `Body(s)` on a polyhedron with dents | `fix_line` | "Bodies in space must have no dents. Split it into convex parts and `Weld` them." |
-| B004 | `bad_property_value` | typecheck | A literal property out of range: `mass = 0`, `mass = −2`, `bounce = 1.5`, `friction = −1`, `passes = 50`, `world with timestep = 1/1000`, a cloth's `stretch = 2`, `tears = 0.5`, `thickness = 1` | `fix_line` | `expected` has the range |
+| B004 | `bad_property_value` | typecheck | A literal property out of range: `mass = 0`, `mass = −2`, `bounce = 1.5`, `friction = −1`, `passes = 50`, `world with timestep = 1/1000`, a cloth's `stretch = 2`, `tears = 0.5`, `thickness = 1`, a wave grid's `damping = 20` (0 to 10) or `depth = 0` | `fix_line` | `expected` has the range |
 | B005 | `bad_property_value` | typecheck | `world with timestep = 1/100`: not a whole number of solver steps | `fix_line` | "The step must divide 1/240 s steps evenly. Try 1/120 or 1/60." |
 | B006 | `unknown_property` | resolve | `b with bounciness = 0.9` | `use_suggestion` | the closest names (`bounce`) |
 | B007 | `read_only` | commit | `b with pos = (1, 2)`, `b with x = 3`, `world with time = 2` | `use_suggestion` | "The physics moves `b`. To move its start, change its shape `p`. To kick it, use `Push(b, (1, 0))`." |
@@ -40,11 +40,11 @@ The reference app has no physics engine, so it has no physics errors. Hand-made 
 | B010 | `mixed_dimension` (C120) | typecheck | A 2D body and a 3D body in one joint, a 2D `Push` on a `Body3`, a 3D world gravity in a 2D figure, a cloth in space pinned to a 2D body | `use_suggestion` | as in `space-3d/errors.md` S001 |
 | B011 | `reserved_name` | resolve | Defining `world` or `hit` | `rewrite` | pick another name |
 | B012 | `cycle` | commit | A body's shape or mass reads the body itself (`Body(Circle(b.pos, 1))`) | `rewrite` | the chain; "Forces may read `b`, but its shape may not." |
-| B013 | `limit` | plan | A 1,001st body or joint, more than 2,000 liquid particles, a grid over 64 × 64, a cloth over 64 × 32 points (400 for a rope), more than 4,096 cloth points in all, a second cloth with `self = true`, a 65th pin | `rewrite` | the limit and the current count, the same on every computer |
+| B013 | `limit` | plan | A 1,001st body or joint, more than 2,000 liquid particles (every liquid and tap of the figure, in the plane or in space), a wave or smoke grid over 64 × 64 (`Waves(box, 65)`), a cloth over 64 × 32 points (400 for a rope), more than 4,096 cloth points in all, a second cloth with `self = true`, a 65th pin | `rewrite` | the limit and the current count, the same on every computer |
 | B014 | `no_matching_form` | typecheck | Wrong argument types, as for any command | `choose_form` | the forms |
 | B015 | `not_in_world` (new) | typecheck | `on b hit: …` where `b` is not a body | `fix_line` | "Only bodies hit things. Make `b` a body first." |
 | B016 | `mode_forbids` | plan | A physics line in Scientific, Probability or CAS, or in an exam that forbids it | `report` | as in `app-modes` |
-| B017 | `bad_argument` | typecheck | `Wheel(c, at, 0)` (radius 0), `Liquid(region, 0)`, `Rope(a, b, −1)`, `Cloth(P, u, v, 1, 8)` (fewer than 2 points a side), a cloth with `u` and `v` along one line, as literals | `fix_line` | `expected` |
+| B017 | `bad_argument` | typecheck | `Wheel(c, at, 0)` (radius 0), `Liquid(region, 0)`, `Pour(at, 0, speed)`, `Waves(box, 1)` (fewer than 2 a side), `Rope(a, b, −1)`, `Cloth(P, u, v, 1, 8)` (fewer than 2 points a side), a cloth with `u` and `v` along one line, as literals | `fix_line` | `expected` |
 | B018 | `not_a_cloth` (new) | typecheck | `Pin(c, P)` where `c` is not a cloth | `use_suggestion` | "Pin holds a cloth. To hold a body, use `Hinge(b, wall, P)`." `suggest`: that line |
 | B019 | `pin_off_cloth` (new) | typecheck | `Pin(c, P)` with `P` a literal point further than one link from every point of `c` | `fix_line` | names the nearest point of the cloth and how far it is |
 

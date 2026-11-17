@@ -114,6 +114,25 @@ describe('the studio and physics', () => {
     expect(s.figure.get('smoke1')?.type).toBe('Smoke');
   });
 
+  it('in space, drops are dots, waves a lit mesh and still water a patch at its level (R7; design 12, ui.md 7, 9)', () => {
+    const s = load(['g = Ground()', 'drop = Liquid(Box((0, 0, 1), 1, 1, 1), 300)', 'pool = Box((4, 0, -0.5), 4, 4, 1)', 'sea = Waves(pool, 48)', 'calm = Water(-2)']);
+    expect(s.hasClock()).toBe(true);
+    s.setTime(0.5);
+    const sc = sceneOf3(s.figure, space.viewOf(s.figure));
+    const id = (n: string): number => s.figure.objects().find((o) => o.name === n)?.id as unknown as number;
+    expect(sc.items.filter((i) => i.k === 'dot' && i.id === id('drop')).length).toBe(300);
+    // a grid of 48 is drawn from every second corner: 24 by 24 faces, shaded
+    const waves = sc.items.filter((i) => i.k === 'face' && i.id === id('sea')) as { shade: boolean }[];
+    expect(waves.length).toBe(24 * 24);
+    expect(waves.every((f) => f.shade)).toBe(true);
+    const calm = sc.items.find((i) => i.k === 'face' && i.id === id('calm')) as { pts: { z: number }[]; alpha: number } | undefined;
+    expect(calm?.pts.every((p) => p.z === -2)).toBe(true);
+    expect(calm?.alpha).toBeLessThanOrEqual(0.3);
+    // the board does not draw the drops in space
+    const flat = sceneOf(s.figure).find((i) => i.name === 'drop');
+    expect((flat?.value as { zs?: Float32Array } | undefined)?.zs?.length).toBe(300);
+  });
+
   it('every physics example opens with all its lines and moves when the film runs', () => {
     for (const ex of EXAMPLES.filter((e) => e.id.startsWith('physics-'))) {
       const s = new KernelSession();

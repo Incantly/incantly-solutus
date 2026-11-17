@@ -20,7 +20,7 @@ import { BodyType, FK, FORCE_KINDS, World2 } from '../../physics/world2';
 import { atan2, cos, sin } from '../../physics/math';
 import { solidShapeOf } from './shapes';
 import type { BodySpec, BodyValue, WorldValue } from './types';
-import { DEFAULT_WORLD, isBodyValue, isWorldValue } from './types';
+import { DEFAULT_WORLD, collectBuffers, isBodyValue, isWorldValue } from './types';
 import type { JointEnd, JointValue } from './joints';
 import { isJointValue } from './joints';
 import type { JointMember } from './jointbuild';
@@ -36,8 +36,9 @@ import type { DropSource2 } from '../../physics/fluid2';
 import { DEFAULT_SPACING, Fluid2, fillRegion, spacingFor } from '../../physics/fluid2';
 import type { Water2 } from '../../physics/water2';
 import { WaterForces, waterClip } from '../../physics/water2';
-import type { LiquidValue, WaterValue } from './liquid';
-import { isLiquidValue, isWaterValue } from './liquid';
+import type { LiquidValue, WaterValue, WavesValue } from './liquid';
+import { isLiquidValue, isWaterValue, isWavesValue } from './liquid';
+import { WaveGrid } from '../../physics/waves';
 import type { Smoke2 } from '../../physics/smoke2';
 import type { SmokeValue } from './smoke';
 import { isSmokeValue, smokeGrid, smokeValue } from './smoke';
@@ -110,6 +111,10 @@ export class PhysicsDriver implements WorldDriver {
   liquidMembers: { readonly rec: ObjRec; readonly owner: number; readonly value: LiquidValue }[] = [];
   private waters: Water2[] = [];
   private waterForces = new WaterForces();
+  /** Waves in the plane (round 7, design 9.3): a line of heights along a segment. */
+  private wavesRecs: ObjRec[] = [];
+  private wavesSpecs = new Map<ObjId, WavesValue>();
+  waveMembers: { readonly rec: ObjRec; readonly value: WavesValue; readonly grid: WaveGrid }[] = [];
   /** Smoke grids (design 9.4): the start each smoke's rule gave, and each grid, in figure order. */
   private smokeRecs: ObjRec[] = [];
   private smokeSpecs = new Map<ObjId, SmokeValue>();
@@ -211,6 +216,13 @@ export class PhysicsDriver implements WorldDriver {
       if (last && computed.defined && this.live() && last.defined && isLiquidValue(last.value) && isLiquidValue(computed.value) && sameValue(last.value.spec, computed.value.spec)) return last;
       return undefined;
     }
+    if (rec.p.type.k === 'Waves') {
+      if (computed.defined && isWavesValue(computed.value)) this.wavesSpecs.set(rec.id, computed.value);
+      else this.wavesSpecs.delete(rec.id);
+      const last = this.lastCells.get(rec.id);
+      if (last && computed.defined && this.live() && last.defined && isWavesValue(last.value) && isWavesValue(computed.value) && sameValue(wavesKey2(last.value), wavesKey2(computed.value))) return last;
+      return undefined;
+    }
     if (rec.p.type.k === 'World') {
       if (computed.defined && isWorldValue(computed.value)) this.worldSettings = computed.value;
       const last = this.lastCells.get(rec.id);
@@ -285,7 +297,7 @@ export class PhysicsDriver implements WorldDriver {
 
   owns(id: ObjId): boolean {
     if (this.remote) return this.remoteCells.has(this.acc.byId(id)?.p.name ?? '');
-    return this.byId.has(id) || this.worldRec?.id === id || this.liquidMembers.some((l) => l.rec.id === id) || this.smokeMembers.some((s) => s.rec.id === id);
+    return this.byId.has(id) || this.worldRec?.id === id || this.liquidMembers.some((l) => l.rec.id === id) || this.waveMembers.some((m) => m.rec.id === id) || this.smokeMembers.some((s) => s.rec.id === id);
   }
 
   sampleRecs(): readonly ObjRec[] {
@@ -333,7 +345,7 @@ export class PhysicsDriver implements WorldDriver {
   afterPass(): readonly ObjRec[] {
     this.scan();
     if (this.remote) return this.writeRemote();
-    if (this.bodyRecs.length === 0 && this.solidRecs.length === 0 && this.liquidRecs.length === 0 && this.smokeRecs.length === 0 && !this.world) return [];
+    if (this.bodyRecs.length === 0 && this.solidRecs.length === 0 && this.liquidRecs.length === 0 && this.wavesRecs.length === 0 && this.smokeRecs.length === 0 && !this.world) return [];
     if (this.coneDirty) this.findCone();
     const sig = this.signature();
     if (!this.sig || !sameValue(this.sig, sig)) {
@@ -371,6 +383,7 @@ export class PhysicsDriver implements WorldDriver {
     this.vehicleRecs = [];
     this.liquidRecs = [];
     this.waterRecs = [];
+    this.wavesRecs = [];
     this.smokeRecs = [];
     this.worldRec = undefined;
     this.coneDirty = true;
@@ -381,6 +394,7 @@ export class PhysicsDriver implements WorldDriver {
       if (k === 'Liquid') this.liquidRecs.push(r);
       else if (k === 'Smoke') this.smokeRecs.push(r);
       else if (k === 'Water') this.waterRecs.push(r);
+      else if (k === 'Waves') this.wavesRecs.push(r);
       else if (isJointRec(r)) this.jointRecs.push(r);
       else if (isWheelRec(r)) this.wheelRecs.push(r);
       else if (k === 'Vehicle') this.vehicleRecs.push(r);
@@ -472,6 +486,14 @@ export class PhysicsDriver implements WorldDriver {
     return undefined;
   }
 
+  private wavesOf(r: ObjRec): WavesValue | undefined {
+    const s = this.wavesSpecs.get(r.id);
+    const v = s ?? (!this.written.has(r.id) && r.cell.defined && isWavesValue(r.cell.value) ? r.cell.value : undefined);
+    if (!v || v.space) return undefined;
+    if (!s) this.wavesSpecs.set(r.id, v);
+    return v;
+  }
+
   /** A smoke grid's start, as its rule gave it. */
   private smokeOf(r: ObjRec): SmokeValue | undefined {
     const s = this.smokeSpecs.get(r.id);
@@ -545,6 +567,10 @@ export class PhysicsDriver implements WorldDriver {
     for (const r of this.waterRecs) {
       const wv = this.waterOf(r);
       sig.push(r.id, this.varySet.has(r) ? ['varying', r.p.compiled] : wv ? [wv.level, wv.region ?? null] : null);
+    }
+    for (const r of this.wavesRecs) {
+      const v = this.wavesOf(r);
+      sig.push(r.id, v ? wavesKey2(v) : null);
     }
     return sig;
   }
@@ -632,11 +658,12 @@ export class PhysicsDriver implements WorldDriver {
         wheelDefs.push({ rec: r, ...(r.p.type.k === 'List' ? { item } : {}), value: wv, index, chassis });
       }
     }
-    if (defs.length === 0 && !this.liquidRecs.some((r) => this.liquidOf(r) !== undefined) && !this.smokeRecs.some((r) => this.smokeOf(r) !== undefined)) {
+    if (defs.length === 0 && !this.liquidRecs.some((r) => this.liquidOf(r) !== undefined) && !this.wavesRecs.some((r) => this.wavesOf(r) !== undefined) && !this.smokeRecs.some((r) => this.smokeOf(r) !== undefined)) {
       this.world = undefined;
       this.fluid = undefined;
       this.smokeMembers = [];
       this.liquidMembers = [];
+      this.waveMembers = [];
       this.members = [];
       this.byId = new Map();
       return;
@@ -665,6 +692,7 @@ export class PhysicsDriver implements WorldDriver {
       this.nameOfIndex[wd.index] = wd.item !== undefined ? `${wd.rec.p.name}[${wd.item + 1}]` : wd.rec.p.name;
     }
     for (const m of members) if (m.role === 'body' && m.spec && m.spec.parts > 1) this.warnOnce(`split:${m.rec.id}:${m.spec.parts}`, makeNotice('split_shape', { name: m.rec.p.name, parts: m.spec.parts }, [m.rec.p.name]));
+    this.buildWaves(world);
     this.buildFluid();
     this.buildSmoke(w);
     this.n = 0;
@@ -715,7 +743,38 @@ export class PhysicsDriver implements WorldDriver {
     this.fluid = new Fluid2(d, sources, list.length);
   }
 
-  /** Still water as the step reads it: the level of each `Water` now (a formula of `t` is read at each step). */
+  /** `w.level` in the plane: the rest level raised by the water the bodies over it move aside (as in space). */
+  private wavesLevel(v: WavesValue): number {
+    const w = this.world as World2;
+    const g = Math.sqrt(w.gx * w.gx + w.gy * w.gy);
+    if (!(g > 0)) return v.level;
+    const kb = FORCE_KINDS.indexOf('buoyancy');
+    let moved = 0;
+    for (let i = 0; i < w.n; i++) {
+      if (w.type[i] !== BodyType.Dynamic || w.gone.has(i)) continue;
+      const x = w.px[i] as number;
+      if (!(x >= v.x0 && x <= v.x0 + v.nx * v.dx)) continue;
+      const o = (i * FORCE_KINDS.length + kb) * 2;
+      const fx = w.forces[o] as number;
+      const fy = w.forces[o + 1] as number;
+      moved += Math.sqrt(fx * fx + fy * fy) / g;
+    }
+    return v.level + moved / (v.nx * v.dx);
+  }
+
+  /** Each wave line's heights, stepped with the world's step and its gravity (design 9.3). */
+  private buildWaves(world: World2): void {
+    this.waveMembers = [];
+    const g = Math.sqrt(world.gx * world.gx + world.gy * world.gy);
+    for (const r of this.wavesRecs) {
+      const v = this.wavesOf(r);
+      if (!v) continue;
+      const grid = new WaveGrid({ nx: v.nx, ny: 1, x0: v.x0, y0: 0, dx: v.dx, dy: 1, level: v.level, depth: v.depth, damping: v.damping }, g, 1 / this.rate);
+      this.waveMembers.push({ rec: r, value: v, grid });
+    }
+  }
+
+  /** Still water as the step reads it: the level of each `Water` now (a formula of `t` is read at each step), and waves. */
   private refreshWaters(all: boolean): void {
     if (!all && !this.waterRecs.some((r) => this.varySet.has(r))) return;
     const out: Water2[] = [];
@@ -723,6 +782,10 @@ export class PhysicsDriver implements WorldDriver {
       const wv = this.waterOf(r);
       if (!wv) continue;
       out.push({ level: wv.level, density: wv.density, ...(wv.region ? { clip: waterClip(wv.region) } : {}) });
+    }
+    for (const wm of this.waveMembers) {
+      const grid = wm.grid;
+      out.push({ level: wm.value.level, density: 1, local: (x, line) => grid.line2(x, line) });
     }
     this.waters = out;
   }
@@ -747,8 +810,8 @@ export class PhysicsDriver implements WorldDriver {
    */
   private saveState(): Float64Array {
     const ws = (this.world as World2).save();
-    if (!this.fluid && this.smokeMembers.length === 0) return ws;
-    const parts = [ws, ...(this.fluid ? [this.fluid.save()] : []), ...this.smokeMembers.map((s) => s.grid.save())];
+    if (!this.fluid && this.smokeMembers.length === 0 && this.waveMembers.length === 0) return ws;
+    const parts = [ws, ...(this.fluid ? [this.fluid.save()] : []), ...this.smokeMembers.map((s) => s.grid.save()), ...this.waveMembers.map((m) => m.grid.save())];
     let len = 1 + parts.length;
     for (const p of parts) len += p.length;
     const out = new Float64Array(len);
@@ -764,7 +827,7 @@ export class PhysicsDriver implements WorldDriver {
 
   private loadState(s: Float64Array): void {
     const w = this.world as World2;
-    if (!this.fluid && this.smokeMembers.length === 0) {
+    if (!this.fluid && this.smokeMembers.length === 0 && this.waveMembers.length === 0) {
       w.load(s);
       return;
     }
@@ -780,6 +843,7 @@ export class PhysicsDriver implements WorldDriver {
     w.load(part(i++));
     if (this.fluid) this.fluid.load(part(i++));
     for (const sm of this.smokeMembers) sm.grid.load(part(i++));
+    for (const m of this.waveMembers) m.grid.load(part(i++));
   }
 
   /** A hash of everything a step reads (FNV-1a over the bytes): equal films have equal hashes at every step. */
@@ -1044,6 +1108,13 @@ export class PhysicsDriver implements WorldDriver {
     // design 9.6: the drops' push of the last step, and still water's buoyancy and drag at the pose now, go in first
     const fl = this.fluid;
     if (fl) fl.applyImpulses(w);
+    if (this.waveMembers.length > 0) {
+      for (let i = 0; i < w.n; i++) if (w.type[i] === BodyType.Dynamic && !w.gone.has(i)) w.updateShapes(i);
+      for (const wm of this.waveMembers) {
+        wm.grid.pressBodies2(w);
+        wm.grid.step();
+      }
+    }
     // and the air's drag from the last smoke step
     for (const sm of this.smokeMembers) sm.grid.applyImpulses(w, h);
     if (this.waters.length > 0) {
@@ -1659,6 +1730,22 @@ export class PhysicsDriver implements WorldDriver {
         if (this.acc.write(lm.rec, cell)) changed.push(lm.rec);
       }
     }
+    // waves in the plane: the height of each point
+    for (const wm of this.waveMembers) {
+      const g = wm.grid;
+      let ok = true;
+      const heights = new Float32Array(g.n);
+      for (let k = 0; k < g.n; k++) {
+        // the water's level as it shows: the surface, and under a body the level its push holds the water at
+        const u = (g.u[k] as number) + (g.P[k] as number);
+        if (!(Math.abs(u) < BLOW_UP)) ok = false;
+        heights[k] = u;
+      }
+      const cell: Cell = ok ? { defined: true, value: { ...wm.value, heights, speed: g.c, mean: this.wavesLevel(wm.value) } satisfies WavesValue } : { defined: false, reason: 'unstable_world' };
+      this.lastCells.set(wm.rec.id, cell);
+      this.written.add(wm.rec.id);
+      if (this.acc.write(wm.rec, cell)) changed.push(wm.rec);
+    }
     // smoke: the density of each cell after the last smoke step (drawn as one image a frame, ui.md 7)
     for (const sm of this.smokeMembers) {
       const cell: Cell = sm.grid.unstable ? { defined: false, reason: 'unstable_world' } : { defined: true, value: smokeValue(sm.value.spec, sm.grid) };
@@ -1815,6 +1902,10 @@ export class PhysicsDriver implements WorldDriver {
       // the page's own log is the worker's: each line goes back in, then the film is built and played here
       const lines = this.remoteLog;
       this.remoteLog = [];
+      // the worker's log already holds the page's earlier entries: start the log afresh, or each would count twice
+      this.log = [];
+      this.base = new Map();
+      this.logged = new Set();
       this.sig = undefined;
       this.version = -1;
       for (const l of lines) this.inputLine(l.replace(/^@input\s+/, '').split(/\s+/));
@@ -1822,15 +1913,19 @@ export class PhysicsDriver implements WorldDriver {
       this.remoteLog = this.inputLines();
       this.world = undefined;
       this.fluid = undefined;
+      this.waveMembers = [];
       this.smokeMembers = [];
       this.sig = undefined;
     }
   }
 
   /** The cells the worker computed for a frame: they are written on the next pass. */
-  accept(cells: readonly (readonly [string, Cell])[], info?: { drops: number; awake: number; contacts: number; hash: string }): void {
+  accept(cells: readonly (readonly [string, Cell])[], info?: { drops: number; awake: number; contacts: number; hash: string }, log?: readonly string[]): void {
     for (const [name, cell] of cells) this.remoteCells.set(name, cell);
     if (info) this.remoteInfo = info;
+    // the worker's own log holds what it logged itself (a slider moved while the film played, round 6's carry-over): it,
+    // plus the page's lines not sent yet, is the film's, so a reload of the script in the worker keeps them (round 7)
+    if (log) this.remoteLog = [...log, ...this.outbox.filter((l) => !log.includes(l))];
   }
 
   /** The page's new `@input` lines for the worker, once. */
@@ -1861,6 +1956,7 @@ export class PhysicsDriver implements WorldDriver {
     for (const w of this.wheelMembers) add(w.rec);
     for (const r of this.vehicleRecs) add(r);
     for (const l of this.liquidMembers) add(l.rec);
+    for (const m of this.waveMembers) add(m.rec);
     for (const s of this.smokeMembers) add(s.rec);
     if (this.worldRec) add(this.worldRec);
     return { cells, transfer };
@@ -1963,24 +2059,6 @@ function numWords(v: unknown): string | undefined {
   return undefined;
 }
 
-/** The typed arrays inside a cell's value, to move to the page instead of copying. */
-function collectBuffers(v: unknown, out: ArrayBuffer[], depth: number): void {
-  if (depth > 3 || typeof v !== 'object' || v === null) return;
-  if (ArrayBuffer.isView(v)) {
-    const b = v.buffer;
-    if (b instanceof ArrayBuffer && !out.includes(b)) out.push(b);
-    return;
-  }
-  if (Array.isArray(v)) {
-    for (const x of v) collectBuffers(x, out, depth + 1);
-    return;
-  }
-  for (const k of ['forces', 'xs', 'ys', 'density'] as const) {
-    const x = (v as Record<string, unknown>)[k];
-    if (x !== undefined) collectBuffers(x, out, depth + 1);
-  }
-}
-
 function sameSpec(cell: Cell, computed: unknown): boolean {
   return cell.defined && isBodyValue(cell.value) && isBodyValue(computed) && (cell.value.spec === computed.spec || sameValue(cell.value.spec, computed.spec));
 }
@@ -2035,4 +2113,9 @@ function rigidMotion(a: readonly ShapeDef2[], b: readonly ShapeDef2[], h: number
   const vcy = (by - ay) / h;
   // the world frame of a solid is the origin: carry the centre's speed to it
   return { vx: vcx + w * ay, vy: vcy - w * ax, w };
+}
+
+/** What a wave line is built from (not its heights): equal keys give the same film. */
+function wavesKey2(v: WavesValue): unknown[] {
+  return [v.space, v.nx, v.x0, v.dx, v.level, v.depth, v.damping];
 }

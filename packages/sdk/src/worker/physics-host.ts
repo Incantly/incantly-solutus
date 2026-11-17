@@ -1,11 +1,11 @@
 /**
  * The page's side of the physics worker (docs/features/physics/design.md 9.6, 11.2; errors.md 5, 7): a figure with
- * liquid hands its world to the worker; each frame the page sends the time, the free values that changed and its new
+ * liquid or waves, in the plane or in space, hands its world to the worker; each frame the page sends the time, the free values that changed and its new
  * `@input` lines, and writes the cells that come back. Without a worker the same steps run on the page, with the notice
  * `worker_unavailable` once; if the worker stops, the page takes the world back from its start (`worker_crashed`).
  * Either way the film is the same.
  */
-import { physics, physicsOf, sameValue } from '@incantly/kernel';
+import { physics, sameValue, worldDriverOf } from '@incantly/kernel';
 import type { Figure, Notice } from '@incantly/kernel';
 import type { FromWorker, ToWorker } from './physics-worker';
 
@@ -24,6 +24,8 @@ export class PhysicsWorkerHost {
   private version = -1;
   private seq = 0;
   private sent = new Map<string, unknown>();
+  /** The driver that handed its world to the worker (the plane's or the space's). */
+  private driver: ReturnType<typeof worldDriverOf> | undefined;
   private warnings: Notice[] = [];
   /** The time of the last frame the worker answered, and how long the copy of its cells took on the page (ms). */
   lastT = Number.NaN;
@@ -39,11 +41,12 @@ export class PhysicsWorkerHost {
   /** Before the page's frame at film time t. */
   frame(t: number): void {
     const f = this.figure;
-    const wants = f.objects().some((o) => o.type === 'Liquid');
-    const d = physicsOf(f);
-    if (!wants) {
+    const wants = f.objects().some((o) => o.type === 'Liquid' || o.type === 'Waves');
+    const d = worldDriverOf(f);
+    // a line moved the world between the plane and space: the old driver takes its world back first
+    if (!wants || (this.active && this.driver !== d)) {
       if (this.active) this.stop();
-      return;
+      if (!wants) return;
     }
     if (!this.active) {
       if (this.told && !this.channel) return;
@@ -57,6 +60,7 @@ export class PhysicsWorkerHost {
       ch.onMessage((m) => this.receive(m));
       ch.onError(() => this.crashed());
       this.active = true;
+      this.driver = d;
       d.setRemote(true);
       this.version = -1;
     }
@@ -83,7 +87,7 @@ export class PhysicsWorkerHost {
 
   private postFrame(t: number): void {
     const f = this.figure;
-    const d = physicsOf(f);
+    const d = this.driver ?? worldDriverOf(f);
     const ch = this.channel as PhysicsChannel;
     const sets: [string, unknown][] = [];
     for (const o of f.objects()) {
@@ -107,7 +111,8 @@ export class PhysicsWorkerHost {
     this.channel = undefined;
     this.waiting = false;
     this.wantT = undefined;
-    if (this.active) physicsOf(this.figure).setRemote(false);
+    if (this.active) (this.driver ?? worldDriverOf(this.figure)).setRemote(false);
+    this.driver = undefined;
     this.active = false;
   }
 
@@ -118,7 +123,7 @@ export class PhysicsWorkerHost {
       return;
     }
     const t0 = this.now();
-    physicsOf(this.figure).accept(m.cells, m.info);
+    (this.driver ?? worldDriverOf(this.figure)).accept(m.cells, m.info, m.log);
     this.figure.flush(true);
     this.copyMs = this.now() - t0;
     this.lastT = m.t;

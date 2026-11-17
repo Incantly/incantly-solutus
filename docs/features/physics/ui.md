@@ -90,7 +90,9 @@ Clicking a body row selects the body on the board, as for every object. The live
 | Weld | a small cross |
 | Wheel | a dark circle with spokes, so its spin shows |
 | Liquid | light blue discs, drawn in one batch |
-| Water | a light blue fill below a darker line |
+| Water | a light blue fill below a darker line; in space a translucent patch at its level |
+| Waves | in space a lit blue surface mesh through the heights; in the plane a darker line over a light fill |
+| Liquid in space | light blue dots a drop wide, drawn far to near among the faces |
 | Smoke | a grey shaded image under the shapes |
 | Cloth in space | a lit sheet in a soft orange, the back side a little darker, faint threads every 8 points |
 | Cloth in the plane | its threads as thin lines; a rope as a smooth line |
@@ -103,7 +105,7 @@ Clicking a body row selects the body on the board, as for every object. The live
 
 ## 9. 3D
 
-- Bodies, the floor, terrain, waves and cloth are drawn in the Space view, with its light and hidden lines. Cloth and drops use the WebGL 2 painter (`design.md` 12.1); without it they are drawn coarser, and move the same.
+- Bodies, the floor, terrain, waves and cloth are drawn in the Space view, with its light and hidden lines. Cloth and drops use the WebGL 2 painter (`design.md` 12.1); without it they are drawn coarser, and move the same. Until round 9 builds that painter, drops in space are the software painter's dots and waves its faces (`design.md` 12). The physics row of the time bar also shows a world in space, its drops and whether it runs in the worker.
 - Dragging a body in 3D grabs it on the plane facing the camera, as for free points (`space-3d/ui.md` 5.1). Shift drags it up and down.
 - A car: when a figure has a `Vehicle`, the arrow keys drive it while the Space view has focus (up and down for `motor`, left and right for `steer`, Space for `brake`). They write the slider values the car reads, logged while playing. A "Follow" button on the style bar keeps the camera behind the car.
   - Only pedals written as a plain name of a free number are driven. A key press sets the slider to its end (motor ±1, steer to the slider's ends or ±0.5 rad, brake 1); letting go sets it back to 0. While a point is selected the arrow keys move the point instead.

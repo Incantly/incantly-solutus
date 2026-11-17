@@ -9,7 +9,7 @@ import type { SceneItem } from './paint';
 import { symDrawing } from './symplot';
 
 /** Types that draw on the graph and so get a swatch. */
-const DRAWN = new Set(['Body', 'Joint', 'Wheel', 'Liquid', 'Water', 'Smoke', 'Particles', 'Point', 'Vector', 'Segment', 'Line', 'Ray', 'Circle', 'Arc', 'Sector', 'Conic', 'Polyline', 'Polygon', 'Function', 'Curve', 'Relation', 'Region', 'Field', 'Chart', 'ContinuousDistribution', 'DiscreteDistribution']);
+const DRAWN = new Set(['Body', 'Joint', 'Wheel', 'Liquid', 'Water', 'Waves', 'Smoke', 'Particles', 'Point', 'Vector', 'Segment', 'Line', 'Ray', 'Circle', 'Arc', 'Sector', 'Conic', 'Polyline', 'Polygon', 'Function', 'Curve', 'Relation', 'Region', 'Field', 'Chart', 'ContinuousDistribution', 'DiscreteDistribution']);
 
 export function drawsOnGraph(type: string, typeText: string, value: unknown): boolean {
   const base = type.replace(/<.*$/, '');

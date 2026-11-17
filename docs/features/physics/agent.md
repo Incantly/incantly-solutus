@@ -64,10 +64,10 @@ v.speedometer
 
 ```text
 Liquid(region, count, viscosity?, density?, color?) -> Liquid   # at most 2,000 particles per figure
-Pour(at: Point, rate, speed, max?) -> Liquid
+Pour(at: Point|Point3, rate, speed, max?) -> Liquid       # in space: Liquid(Box(c, w, d, h) or Sphere, count)
 Water(level) -> Water      Water(region, level) -> Water        # floating, cheap
-Waves(box, n) -> Waves     Smoke(region, n, source?, heat?, wind?, until?) -> Smoke   # n 4..64
-l.count l.level  sm.mass sm.speed sm.at(x, y)  world with wind = (3, 0)
+Waves(box, n) Waves(segment, n, depth?) -> Waves     Smoke(region, n, source?, heat?, wind?, until?) -> Smoke   # n 4..64
+l.count l.level   w.level w.speed w.height(x, y)   sm.mass sm.speed sm.at(x, y)  world with wind = (3, 0)
 ```
 
 ### 2.5 `physics-cloth` (target 90 tokens)

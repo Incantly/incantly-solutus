@@ -30,7 +30,7 @@ import { polygonMass } from '../../physics/geom2';
 import { cos, sin } from '../../physics/math';
 import { FORCE_KINDS } from '../../physics/world2';
 import { PhysicsDriver } from './driver';
-import { Physics3Driver } from './driver3';
+import { Physics3Driver, isSpaceWorld } from './driver3';
 import { bodyShapeOf } from './shapes';
 import { body3ShapeOf, isBody3Value, startOf3 } from './body3';
 import type { Body3Value, BodySpec3 } from './body3';
@@ -59,10 +59,12 @@ export { isBody3Value, solidNow } from './body3';
 export type { Body3Value, BodySpec3 } from './body3';
 export type { VehicleValue, WheelValue } from './vehicle';
 export type { JointValue, JointKind } from './joints';
-export { isLiquidValue, isWaterValue } from './liquid';
+export { inSpace, isLiquidValue, isWaterValue, isWavesValue } from './liquid';
+export { waveHeightAt } from './liquid-reg';
+export { Physics3Driver } from './driver3';
 /** Notices of the physics area for hosts (the worker's `worker_unavailable`, `worker_crashed`). */
 export { makeNotice } from '../../errors/notices';
-export type { LiquidValue, LiquidSpec, WaterValue } from './liquid';
+export type { LiquidValue, LiquidSpec, WaterValue, WavesValue } from './liquid';
 export { isSmokeValue } from './smoke';
 export type { SmokeValue, SmokeSpec } from './smoke';
 
@@ -88,6 +90,14 @@ export function physicsOf(figure: Figure): PhysicsDriver {
     DRIVERS.set(figure, d);
   }
   return d;
+}
+
+/**
+ * The driver that holds the figure's world: the space driver when the figure has a body, a liquid or waves in space,
+ * else the plane driver. The physics worker and its host talk to this one (design 9.6).
+ */
+export function worldDriverOf(figure: Figure): PhysicsDriver | Physics3Driver {
+  return isSpaceWorld(figure.driverAccess().list) ? physics3Of(figure) : physicsOf(figure);
 }
 
 const DRIVERS3 = new WeakMap<object, Physics3Driver>();

@@ -19,6 +19,8 @@ export interface Water2 {
   readonly clip?: readonly Pt[];
   /** kg per m². */
   readonly density: number;
+  /** For waves: the surface line under a body at x (water on the side n · p <= c), or false where there is no water. */
+  readonly local?: (x: number, out: { nx: number; ny: number; c: number }) => boolean;
 }
 
 /**
@@ -73,6 +75,7 @@ export class WaterForces {
   private roundC = new Float64Array(ROUND_SIDES);
   private roundS = new Float64Array(ROUND_SIDES);
   private roundScale = 1;
+  private line = { nx: 0, ny: 1, c: 0 };
 
   constructor() {
     for (let k = 0; k < ROUND_SIDES; k++) {
@@ -104,6 +107,14 @@ export class WaterForces {
       let my = 0;
       let rho = 0;
       for (const wa of waters) {
+        const line = this.line;
+        if (wa.local) {
+          if (!wa.local(bxp, line)) continue;
+        } else {
+          line.nx = 0;
+          line.ny = 1;
+          line.c = wa.level;
+        }
         const s0 = w.shape0[i] as number;
         for (let k = s0; k < s0 + (w.shapeN[i] as number); k++) {
           const sh = w.shapes[k];
@@ -129,8 +140,8 @@ export class WaterForces {
             }
             n = sh.lx.length;
           }
-          // under the line y = level: the half-plane with normal (0, 1)
-          n = this.clipHalf(n, 0, 1, wa.level);
+          // under the line y = level (the half-plane with normal (0, 1)), or under the waves' surface
+          n = this.clipHalf(n, line.nx, line.ny, line.c);
           if (wa.clip) {
             const cp = wa.clip;
             for (let e = 0; e < cp.length && n > 0; e++) {

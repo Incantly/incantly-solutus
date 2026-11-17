@@ -1099,7 +1099,7 @@ export function paintScene(ctx: Ctx, vp: Viewport, items: readonly SceneItem[]):
   paintGrid(ctx, vp);
   // areas and charts first, then curves, then points on top
   // smoke is a shaded image under everything (ui.md 7)
-  const rank = (t: string): number => (t === 'Smoke' ? -1 : t === 'Point' ? 3 : t === 'Water' || t === 'Chart' || t === 'Region' || t === 'Polygon' || t.endsWith('Distribution') ? 0 : t === 'List' ? 2 : 1);
+  const rank = (t: string): number => (t === 'Smoke' ? -1 : t === 'Point' ? 3 : t === 'Water' || t === 'Waves' || t === 'Chart' || t === 'Region' || t === 'Polygon' || t.endsWith('Distribution') ? 0 : t === 'List' ? 2 : 1);
   const sorted = [...items].sort((a, b) => rank(a.type) - rank(b.type));
   const scale = forceScale(items);
   for (const it of sorted) {
@@ -1196,10 +1196,16 @@ export function sceneBounds(items: readonly SceneItem[]): { x0: number; x1: numb
           add(s.ax as number, s.ay as number);
           add(s.bx as number, s.by as number);
         } else if (s?.schema === 'Liquid') {
-          const l = s as unknown as { xs: Float32Array; ys: Float32Array; spec: { region?: Pt[]; at?: Pt } };
+          const l = s as unknown as { xs: Float32Array; ys: Float32Array; zs?: Float32Array; spec: { region?: Pt[]; at?: Pt } };
           for (const p of l.spec.region ?? []) add(p.x, p.y);
           if (l.spec.at) add(l.spec.at.x, l.spec.at.y);
-          for (let i = 0; i < l.xs.length; i += 8) add(l.xs[i] as number, l.ys[i] as number);
+          for (let i = 0; !l.zs && i < l.xs.length; i += 8) add(l.xs[i] as number, l.ys[i] as number);
+        } else if (s?.schema === 'Waves') {
+          const wv = s as unknown as { space: boolean; x0: number; dx: number; nx: number; level: number; depth: number };
+          if (!wv.space) {
+            add(wv.x0, wv.level - wv.depth);
+            add(wv.x0 + wv.nx * wv.dx, wv.level + 0.5);
+          }
         } else if (s?.schema === 'Smoke') {
           const sm = s as unknown as { spec: { x0: number; y0: number; x1: number; y1: number } };
           add(sm.spec.x0, sm.spec.y0);

@@ -38,7 +38,7 @@ import { sceneBounds } from '@incantly/sdk/screen';
 import type { SceneItem } from '@incantly/sdk/screen';
 import { studioRegistry } from './registry';
 import { KernelSession } from './session';
-import { physicsOf, tracePoints, tracedIds } from '@incantly/kernel';
+import { tracePoints, tracedIds, worldDriverOf } from '@incantly/kernel';
 import { createSelection, selectionFrom } from './selection';
 import type { Selection } from './selection';
 import { hitTest } from '@incantly/sdk/screen';
@@ -434,8 +434,8 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
       clock.title = mark === ' · slow' ? 'This computer is busy. The film is the same, only slower.' : mark === ' · catching up' ? 'The physics is catching up with the time bar.' : '';
     }
     readout.textContent = `t = ${session.time().toFixed(2)} s${mark}`;
-    // the physics row of physics ui.md 12: frame time, awake bodies, touching points
-    const pd = physicsOf(session.figure);
+    // the physics row of physics ui.md 12: frame time, awake bodies, touching points (in the plane or in space)
+    const pd = worldDriverOf(session.figure);
     const w = pd.world;
     perf.hidden = !w && !pd.remote;
     if (w || pd.remote) {

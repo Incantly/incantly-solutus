@@ -28,10 +28,18 @@ import type { Body3Value, BodySpec3 } from './body3';
 import { isBody3Value, solid3Of, solidNow, terrainOf } from './body3';
 import { specKey } from './jointbuild';
 import type { WorldValue } from './types';
-import { DEFAULT_WORLD, isWorldValue } from './types';
+import { DEFAULT_WORLD, collectBuffers, isWorldValue } from './types';
 import { getStoredHandler } from '../numbers/handlers';
 import { cos, sin } from '../../physics/math';
 import { runHandler } from '../numbers/run';
+import { MAX_DROPS } from '../../physics/fluid2';
+import type { DropSource3 } from '../../physics/fluid3';
+import { DEFAULT_SPACING3, Fluid3, PAIR_EVERY, fillRegion3, spacingFor3 } from '../../physics/fluid3';
+import type { Water3 } from '../../physics/water3';
+import { WaterForces3 } from '../../physics/water3';
+import { WaveGrid } from '../../physics/waves';
+import type { LiquidValue, WaterValue, WavesValue } from './liquid';
+import { inSpace, isLiquidValue, isWaterValue, isWavesValue } from './liquid';
 
 const CHECKPOINT_SECONDS = 0.5;
 const CHECKPOINT_BYTES = 32 * 1024 * 1024;
@@ -75,10 +83,23 @@ interface Member3 {
   readonly item?: number;
 }
 
-/** True when the figure holds a body in space: then it is a world in space. */
+/** True when the figure holds a body, a liquid or waves in space: then it is a world in space. */
 export function isSpaceWorld(list: readonly ObjRec[]): boolean {
-  for (const r of list) if (isBody3Rec(r)) return true;
+  for (const r of list) if (isBody3Rec(r) || isSpaceFluidRec(r)) return true;
   return false;
+}
+
+/**
+ * A liquid or waves in space (round 7): told by the form its line was checked with (a solid or a `Point3` first), so
+ * it stays in space while its value is undefined (a liquid that blew up).
+ */
+export function isSpaceFluidRec(r: ObjRec): boolean {
+  const k = r.p.type.k;
+  if (k !== 'Liquid' && k !== 'Waves') return false;
+  const e = (r.p.checked as { readonly expr?: { readonly n?: string; readonly form?: { readonly params?: readonly { readonly type: string }[] } } }).expr;
+  const t = e?.n === 'command' ? e.form?.params?.[0]?.type : undefined;
+  if (t !== undefined) return /Polyhedron|Sphere|Point3/.test(t);
+  return r.cell.defined && inSpace(r.cell.value);
 }
 
 export function isBody3Rec(r: ObjRec): boolean {
@@ -150,6 +171,17 @@ export class Physics3Driver implements WorldDriver {
   events: { readonly t: number; readonly kind: 'broken'; readonly name: string }[] = [];
   /** Terrain heights, kept while the function, the box and the grid stay the same (a body line does not remeasure it). */
   private terrainCache = new Map<ObjId, { key: unknown[]; shapes: ShapeDef3[] }>();
+  /* liquid, still water and waves in space (round 7; design 9.1 to 9.3, 9.6) */
+  private liquidRecs: ObjRec[] = [];
+  private waterRecs: ObjRec[] = [];
+  private wavesRecs: ObjRec[] = [];
+  private liquidSpecs = new Map<ObjId, LiquidValue>();
+  private wavesSpecs = new Map<ObjId, WavesValue>();
+  fluid: Fluid3 | undefined;
+  liquidMembers: { readonly rec: ObjRec; readonly owner: number; readonly value: LiquidValue }[] = [];
+  waveMembers: { readonly rec: ObjRec; readonly value: WavesValue; readonly grid: WaveGrid }[] = [];
+  private waters: Water3[] = [];
+  private waterForces = new WaterForces3();
 
   constructor(readonly figure: Figure) {
     this.acc = figure.driverAccess();
@@ -165,33 +197,47 @@ export class Physics3Driver implements WorldDriver {
     if (isWheel3Rec(rec)) {
       this.wheelSpecs.set(rec.id, computed.defined ? (Array.isArray(computed.value) ? (computed.value as unknown[]) : [computed.value]).map((v) => (isWheel3Value(v) ? v : undefined)) : []);
       const last = this.lastCells.get(rec.id);
-      return last && this.world ? last : undefined;
+      return last && this.live() ? last : undefined;
     }
     if (k === 'Vehicle' && computed.defined && isVehicle3Value(computed.value)) {
       this.vehicleSpecs.set(rec.id, computed.value);
       const last = this.lastCells.get(rec.id);
-      return last && this.world ? last : undefined;
+      return last && this.live() ? last : undefined;
     }
     if (isJointRec(rec) && this.bodyRecs.length > 0) {
       this.jointSpecs.set(rec.id, computed.defined ? (Array.isArray(computed.value) ? (computed.value as unknown[]) : [computed.value]).map((v) => (isJoint3Value(v) ? v : undefined)) : []);
       const last = this.lastCells.get(rec.id);
-      return last && computed.defined && this.world ? last : undefined;
+      return last && computed.defined && this.live() ? last : undefined;
     }
     if (k === 'List' && rec.p.type.of?.k === 'Body3') {
       if (computed.defined && Array.isArray(computed.value)) this.listSpecs.set(rec.id, (computed.value as unknown[]).map((v) => (isBody3Value(v) ? v : undefined)));
       else this.listSpecs.delete(rec.id);
       const last = this.lastCells.get(rec.id);
-      if (last && computed.defined && this.world && last.defined && Array.isArray(last.value) && Array.isArray(computed.value) && last.value.length === computed.value.length && (last.value as unknown[]).every((v, i) => sameSpec3(v, (computed.value as unknown[])[i]))) return last;
+      if (last && computed.defined && this.live() && last.defined && Array.isArray(last.value) && Array.isArray(computed.value) && last.value.length === computed.value.length && (last.value as unknown[]).every((v, i) => sameSpec3(v, (computed.value as unknown[])[i]))) return last;
       return undefined;
     }
     if (k === 'Body3') {
       if (computed.defined && isBody3Value(computed.value)) this.specs.set(rec.id, computed.value);
       else this.specs.delete(rec.id);
       const last = this.lastCells.get(rec.id);
-      if (last && computed.defined && this.world && last.defined && sameSpec3(last.value, computed.value)) return last;
+      if (last && computed.defined && this.live() && last.defined && sameSpec3(last.value, computed.value)) return last;
       return undefined;
     }
-    if (k === 'World' && this.bodyRecs.length > 0) {
+    if (k === 'Liquid' && isSpaceFluidRec(rec)) {
+      if (computed.defined && isLiquidValue(computed.value)) this.liquidSpecs.set(rec.id, computed.value);
+      else this.liquidSpecs.delete(rec.id);
+      const last = this.lastCells.get(rec.id);
+      if (last && computed.defined && this.live() && last.defined && isLiquidValue(last.value) && isLiquidValue(computed.value) && sameValue(last.value.spec, computed.value.spec)) return last;
+      return undefined;
+    }
+    if (k === 'Waves' && isSpaceFluidRec(rec)) {
+      if (computed.defined && isWavesValue(computed.value)) this.wavesSpecs.set(rec.id, computed.value);
+      else this.wavesSpecs.delete(rec.id);
+      const last = this.lastCells.get(rec.id);
+      if (last && computed.defined && this.live() && last.defined && isWavesValue(last.value) && isWavesValue(computed.value) && sameValue(wavesKey(last.value), wavesKey(computed.value))) return last;
+      return undefined;
+    }
+    if (k === 'World' && this.hasWorld()) {
       if (computed.defined && isWorldValue(computed.value)) this.worldSettings = computed.value;
       const last = this.lastCells.get(rec.id);
       return last && computed.defined ? last : undefined;
@@ -218,7 +264,7 @@ export class Physics3Driver implements WorldDriver {
   inputLine(words: readonly string[]): string | undefined | false {
     if (words[0] !== 'physics') return false;
     this.scan();
-    if (this.bodyRecs.length === 0) return false;
+    if (!this.hasWorld()) return false;
     const kind = words[1];
     const at = Number(words[words.length - 1]);
     if (words[words.length - 2] !== 'at' || !Number.isFinite(at)) return 'a time at the end: @input physics push b 1 0 0 at 2.5';
@@ -272,7 +318,9 @@ export class Physics3Driver implements WorldDriver {
   }
 
   owns(id: ObjId): boolean {
-    if (this.byId.has(id) || (this.bodyRecs.length > 0 && this.worldRec?.id === id)) return true;
+    if (this.remote) return this.remoteCells.has(this.acc.byId(id)?.p.name ?? '');
+    if (this.byId.has(id) || (this.hasWorld() && this.worldRec?.id === id)) return true;
+    if (this.liquidMembers.some((l) => l.rec.id === id) || this.waveMembers.some((m) => m.rec.id === id)) return true;
     return this.world !== undefined && [...this.jointRecs, ...this.wheelRecs, ...this.vehicleRecs].some((r) => r.id === id);
   }
 
@@ -282,7 +330,8 @@ export class Physics3Driver implements WorldDriver {
 
   sample(t: number): readonly (readonly [ObjRec, Cell])[] | undefined {
     if (!this.world) return undefined;
-    const keep = this.world.save();
+    const keep = this.saveState();
+    const pairs = this.fluid?.keepPairs();
     const keepN = this.n;
     const kp = Float64Array.from(this.prevP);
     const kq = Float64Array.from(this.prevQ);
@@ -307,7 +356,8 @@ export class Physics3Driver implements WorldDriver {
       return out;
     } finally {
       this.sampling = false;
-      this.world.load(keep);
+      this.loadState(keep);
+      if (pairs) this.fluid?.restorePairs(pairs);
       this.n = keepN;
       this.prevP = kp;
       this.prevQ = kq;
@@ -316,9 +366,13 @@ export class Physics3Driver implements WorldDriver {
 
   afterPass(): readonly ObjRec[] {
     this.scan();
-    if (this.bodyRecs.length === 0) {
+    if (this.remote) return this.writeRemote();
+    if (!this.hasWorld()) {
       if (this.world) {
         this.world = undefined;
+        this.fluid = undefined;
+        this.liquidMembers = [];
+        this.waveMembers = [];
         this.members = [];
         this.byId = new Map();
         this.sig = undefined;
@@ -354,7 +408,7 @@ export class Physics3Driver implements WorldDriver {
   }
 
   onRestart(): void {
-    if (this.world) this.restart();
+    if (this.world || this.remote) this.restart();
   }
 
   /* ------------------------------ reading the figure ------------------------------ */
@@ -379,11 +433,17 @@ export class Physics3Driver implements WorldDriver {
     this.jointRecs = [];
     this.wheelRecs = [];
     this.vehicleRecs = [];
+    this.liquidRecs = [];
+    this.waterRecs = [];
+    this.wavesRecs = [];
     this.worldRec = undefined;
     this.spaceRec = undefined;
     for (const r of this.acc.list) {
       const k = r.p.type.k;
       if (isBody3Rec(r)) this.bodyRecs.push(r);
+      else if (k === 'Liquid' || k === 'Waves') {
+        if (isSpaceFluidRec(r)) (k === 'Liquid' ? this.liquidRecs : this.wavesRecs).push(r);
+      } else if (k === 'Water') this.waterRecs.push(r);
       else if (isJointRec(r)) this.jointRecs.push(r);
       else if (isWheel3Rec(r)) this.wheelRecs.push(r);
       else if (k === 'Vehicle') this.vehicleRecs.push(r);
@@ -505,6 +565,15 @@ export class Physics3Driver implements WorldDriver {
       const v = this.vehicleOf(r);
       sig.push(r.id, this.varySet.has(r) ? 'varying' : v ? [v.motor, v.steer, v.brake, v.power, v.wheels.length, v.chassis.spec ? specKey(v.chassis.spec) : null] : null);
     }
+    for (const r of this.liquidRecs) sig.push(r.id, this.liquidOf(r)?.spec ?? null);
+    for (const r of this.waterRecs) {
+      const wv = this.waterOf(r);
+      sig.push(r.id, this.varySet.has(r) ? ['varying', r.p.compiled] : wv ? [wv.level, wv.density] : null);
+    }
+    for (const r of this.wavesRecs) {
+      const v = this.wavesOf(r);
+      sig.push(r.id, v ? wavesKey(v) : null);
+    }
     return sig;
   }
 
@@ -584,8 +653,11 @@ export class Physics3Driver implements WorldDriver {
       defs.push({ type: BodyType3.Static, shapes, friction: this.styleNumber(r, 'friction', Number.NaN), bounce: this.styleNumber(r, 'bounce', 0) });
       members.push({ rec: r, role: 'solid', index: defs.length - 1 });
     }
-    if (!members.some((m) => m.role === 'body')) {
+    if (!members.some((m) => m.role === 'body') && !this.liquidRecs.some((r) => this.liquidOf(r) !== undefined) && !this.wavesRecs.some((r) => this.wavesOf(r) !== undefined)) {
       this.world = undefined;
+      this.fluid = undefined;
+      this.liquidMembers = [];
+      this.waveMembers = [];
       this.members = [];
       this.byId = new Map();
       return;
@@ -646,11 +718,17 @@ export class Physics3Driver implements WorldDriver {
       const c = v ? this.endIndex(v.chassis, members) : undefined;
       this.carWheels.set(r.id, c === undefined ? [] : this.wheelMembers.filter((wm) => wm.chassis === c));
     }
+    this.buildFluid();
+    this.buildWaves(world);
+    this.refreshWaters(true);
     this.n = 0;
     this.prevP = Float64Array.from(world.p);
     this.prevQ = Float64Array.from(world.q);
     this.checkpoints = new Map();
-    this.cpStride = Math.max(1, Math.round(CHECKPOINT_SECONDS * this.rate));
+    // a whole number of the drops' pair-listing rounds (twice, for the speed smoothing on every second step), so the step
+    // after a checkpoint lists them as the film did
+    const K = 2 * PAIR_EVERY;
+    this.cpStride = Math.max(K, K * Math.round((CHECKPOINT_SECONDS * this.rate) / K));
     this.cpBytes = 0;
     this.failedAt = new Map();
     this.leftAt = new Map();
@@ -746,7 +824,7 @@ export class Physics3Driver implements WorldDriver {
       }
     }
     for (const r of this.solidRecs) targets.push(r);
-    targets.push(...this.jointRecs, ...this.vehicleRecs);
+    targets.push(...this.jointRecs, ...this.vehicleRecs, ...this.waterRecs);
     const anc = this.acc.ancestorRecs(targets);
     const all = [...new Set([...anc, ...targets])].sort((a, b) => a.order - b.order);
     const vary = new Set<ObjRec>();
@@ -786,7 +864,7 @@ export class Physics3Driver implements WorldDriver {
       if (best < 0) best = 0;
       const cp = this.checkpoints.get(best);
       if (cp) {
-        w.load(cp);
+        this.loadState(cp);
         this.n = best;
       }
       this.prevP.set(w.p);
@@ -797,7 +875,10 @@ export class Physics3Driver implements WorldDriver {
       this.catching = undefined;
       return;
     }
-    const perStep = Math.max(1, w.awakeCount() + 1);
+    // a drop costs about a quarter of an awake body, a wave cell a sixty-fourth
+    let cells = 0;
+    for (const m of this.waveMembers) cells += m.grid.n;
+    const perStep = Math.max(1, w.awakeCount() + 1 + Math.ceil((this.fluid?.ps.n ?? 0) / 4) + Math.ceil(cells / 64));
     let steps = Math.max(2, Math.floor(budget / perStep));
     const varying = this.cone.length > 0 || this.varyingStyle.length > 0 || this.varyingWorld || this.base.size > 0;
     const saved = varying ? this.saveCells() : undefined;
@@ -832,10 +913,37 @@ export class Physics3Driver implements WorldDriver {
         for (let a = 0; a < 3; a++) w.v[i * 3 + a] = (w.v[i * 3 + a] as number) - 0.5 * h * ((g[a] as number) + im * (w.force[i * 3 + a] as number));
       }
     }
+    // design 9.6: the drops' push of the last step, then the waves and still water at the pose now, go in first
+    const fl = this.fluid;
+    if (fl) fl.applyImpulses(w);
+    if (this.waveMembers.length > 0) {
+      for (let i = 0; i < w.n; i++) if (w.type[i] === BodyType3.Dynamic && !w.gone.has(i)) w.updateShapes(i);
+      for (const wm of this.waveMembers) {
+        wm.grid.pressBodies3(w);
+        wm.grid.step();
+      }
+    }
+    if (this.waters.length > 0) {
+      this.refreshWaters(false);
+      this.waterForces.apply(w, this.waters, h);
+    }
     this.prevP.set(w.p);
     this.prevQ.set(w.q);
     w.step(h);
     this.n = n + 1;
+    if (this.waters.length > 0) this.waterForces.account(w);
+    if (fl) {
+      fl.account(w, h);
+      // then the drops take their step against the bodies where they are now
+      for (let i = 0; i < w.n; i++) if (w.type[i] !== BodyType3.Static && !w.gone.has(i)) w.updateShapes(i);
+      fl.step(w, h, w.range);
+      const t = Number((this.t0 + this.n / this.rate).toFixed(3));
+      for (const owner of fl.left) {
+        const lm = this.liquidMembers[owner];
+        if (lm) this.warnOnce(`drops:${lm.rec.id}`, makeNotice('left_world', { name: `drops of ${lm.rec.p.name}`, t }, [lm.rec.p.name]));
+      }
+      if (fl.unstable) for (const lm of this.liquidMembers) this.warnOnce(`unstable-liquid:${lm.rec.id}`, makeNotice('unstable_world', { name: lm.rec.p.name, t, hint: 'make the liquid less viscous or use world with timestep = 1/240' }, [lm.rec.p.name]));
+    }
     this.checkHealth();
     for (const jm of [...this.jointMembers, ...this.wheelMembers]) {
       if (!jm.joint.broken || this.brokeAt.has(jm.joint)) continue;
@@ -862,7 +970,7 @@ export class Physics3Driver implements WorldDriver {
   }
 
   private saveCheckpoint(n: number): void {
-    const s = (this.world as World3).save();
+    const s = this.saveState();
     this.checkpoints.set(n, s);
     this.cpBytes += s.byteLength;
     if (this.cpBytes > CHECKPOINT_BYTES) {
@@ -1002,13 +1110,14 @@ export class Physics3Driver implements WorldDriver {
       for (const k of this.checkpoints.keys()) if (k <= e.n && k > best) best = k;
       const cp = this.checkpoints.get(best);
       if (cp && this.world) {
-        this.world.load(cp);
+        this.loadState(cp);
         this.n = best;
       }
     }
   }
 
   inputLines(): string[] {
+    if (this.remote) return [...this.remoteLog];
     const out: string[] = [];
     const t = (n: number): string => String(Number((this.t0 + n / this.rate).toFixed(6)));
     const v3 = (p: V3): string => `${num(p.x)} ${num(p.y)} ${num(p.z)}`;
@@ -1045,7 +1154,7 @@ export class Physics3Driver implements WorldDriver {
         const cp = this.checkpoints.get(0);
         if (cp) {
           const keep = w.stepIndex;
-          w.load(cp);
+          this.loadState(cp);
           w.stepIndex = keep;
         }
         this.grabs.clear();
@@ -1230,6 +1339,7 @@ export class Physics3Driver implements WorldDriver {
     }
     for (const [rec, arr] of lists) this.put(rec, { defined: true, value: arr }, changed);
     this.writeLinks(alpha, changed);
+    this.writeFluids(alpha, changed);
     if (this.worldRec) {
       const s = this.settings();
       let energy = 0;
@@ -1330,10 +1440,370 @@ export class Physics3Driver implements WorldDriver {
     }
   }
 
+  /** Liquids: each drop where it is (between the last two steps, as bodies), how many, the surface; waves: their heights. */
+  private writeFluids(alpha: number, changed: ObjRec[]): void {
+    const fl = this.fluid;
+    if (fl) {
+      const ps = fl.ps;
+      for (const lm of this.liquidMembers) {
+        let cell: Cell;
+        if (fl.unstable) cell = { defined: false, reason: 'unstable_world' };
+        else {
+          const count = fl.countOf(lm.owner);
+          const xs = new Float32Array(count);
+          const ys = new Float32Array(count);
+          const zs = new Float32Array(count);
+          let k = 0;
+          for (let i = 0; i < ps.n; i++) {
+            if (ps.owner[i] !== lm.owner) continue;
+            const x0 = ps.x0[i] as number;
+            const y0 = ps.y0[i] as number;
+            const z0 = ps.z0[i] as number;
+            xs[k] = x0 + ((ps.x[i] as number) - x0) * alpha;
+            ys[k] = y0 + ((ps.y[i] as number) - y0) * alpha;
+            zs[k] = z0 + ((ps.z[i] as number) - z0) * alpha;
+            k++;
+          }
+          cell = { defined: true, value: { ...lm.value, count, level: fl.levelOf(lm.owner), xs, ys, zs, size: fl.d } satisfies LiquidValue };
+        }
+        this.put(lm.rec, cell, changed);
+      }
+    }
+    for (const wm of this.waveMembers) {
+      const g = wm.grid;
+      let ok = true;
+      const heights = new Float32Array(g.n);
+      for (let k = 0; k < g.n; k++) {
+        // the water's level as it shows: the surface, and under a body the level its push holds the water at
+        const u = (g.u[k] as number) + (g.P[k] as number);
+        if (!(Math.abs(u) < BLOW_UP)) ok = false;
+        heights[k] = u;
+      }
+      this.put(wm.rec, ok ? { defined: true, value: { ...wm.value, heights, speed: g.c, mean: this.wavesLevel(wm.value) } satisfies WavesValue } : { defined: false, reason: 'unstable_world' }, changed);
+    }
+  }
+
   private put(rec: ObjRec, cell: Cell, changed: ObjRec[]): void {
     this.lastCells.set(rec.id, cell);
     this.written.add(rec.id);
     if (this.acc.write(rec, cell)) changed.push(rec);
+  }
+
+  /* ------------------------------ liquid, water and waves (round 7) ------------------------------ */
+
+  /**
+   * The level of the water under waves (`w.level`): the rest level raised by the water the bodies over it move aside,
+   * exactly (their buoyancy over g, water weighing 1 kg a unit of volume), over the surface's area. A sleeping body
+   * keeps its last buoyancy, so a boat at rest still counts.
+   */
+  private wavesLevel(v: WavesValue): number {
+    const w = this.world as World3;
+    const g = Math.sqrt(w.gx * w.gx + w.gy * w.gy + w.gz * w.gz);
+    if (!(g > 0)) return v.level;
+    let moved = 0;
+    for (let i = 0; i < w.n; i++) {
+      if (w.type[i] !== BodyType3.Dynamic || w.gone.has(i)) continue;
+      const x = w.p[i * 3] as number;
+      const y = w.p[i * 3 + 1] as number;
+      if (!(x >= v.x0 && x <= v.x0 + v.nx * v.dx && y >= v.y0 && y <= v.y0 + v.ny * v.dy)) continue;
+      const o = i * NK * 3 + FK3.buoyancy * 3;
+      const fx = w.forces[o] as number;
+      const fy = w.forces[o + 1] as number;
+      const fz = w.forces[o + 2] as number;
+      moved += Math.sqrt(fx * fx + fy * fy + fz * fz) / g;
+    }
+    return v.level + moved / (v.nx * v.dx * v.ny * v.dy);
+  }
+
+  /** True when the figure holds a world in space: bodies, or drops or waves with no bodies yet. */
+  private hasWorld(): boolean {
+    return this.bodyRecs.length > 0 || this.liquidRecs.length > 0 || this.wavesRecs.length > 0;
+  }
+
+  /** The world is built here or held by the worker: a rule run of an owned object keeps what the world wrote. */
+  private live(): boolean {
+    return this.world !== undefined || this.remote;
+  }
+
+  private liquidOf(r: ObjRec): LiquidValue | undefined {
+    const s = this.liquidSpecs.get(r.id);
+    const v = s ?? (!this.written.has(r.id) && r.cell.defined && isLiquidValue(r.cell.value) ? r.cell.value : undefined);
+    if (!v || (!v.spec.region3 && !v.spec.at3)) return undefined;
+    if (!s) this.liquidSpecs.set(r.id, v);
+    return v;
+  }
+
+  private waterOf(r: ObjRec): WaterValue | undefined {
+    return r.cell.defined && isWaterValue(r.cell.value) ? r.cell.value : undefined;
+  }
+
+  private wavesOf(r: ObjRec): WavesValue | undefined {
+    const s = this.wavesSpecs.get(r.id);
+    const v = s ?? (!this.written.has(r.id) && r.cell.defined && isWavesValue(r.cell.value) ? r.cell.value : undefined);
+    if (!v || !v.space) return undefined;
+    if (!s) this.wavesSpecs.set(r.id, v);
+    return v;
+  }
+
+  /**
+   * The drops of the world (design 9.1): one drop size for every liquid, set by the first `Liquid` (the spacing that
+   * fills its region with its count), or 0.1 m with only taps. Each liquid owns its drops, in figure order.
+   */
+  private buildFluid(): void {
+    this.liquidMembers = [];
+    this.fluid = undefined;
+    const list: { rec: ObjRec; v: LiquidValue }[] = [];
+    for (const r of this.liquidRecs) {
+      const v = this.liquidOf(r);
+      if (v) list.push({ rec: r, v });
+    }
+    if (list.length === 0) return;
+    const first = list.find((l) => l.v.spec.region3 !== undefined);
+    const region = first?.v.spec.region3;
+    const d = first && region ? spacingFor3(region, first.v.spec.count) : DEFAULT_SPACING3;
+    const sources: DropSource3[] = [];
+    let total = 0;
+    list.forEach(({ rec, v }, owner) => {
+      this.liquidMembers.push({ rec, owner, value: v });
+      const s = v.spec;
+      if (s.region3) {
+        const f = fillRegion3(s.region3, Math.max(0, Math.min(s.count, MAX_DROPS - total)), d);
+        total += f.xs.length;
+        sources.push({ owner, viscosity: s.viscosity, density: s.density, start: f });
+      } else if (s.at3) {
+        sources.push({ owner, viscosity: s.viscosity, density: s.density, pour: { x: s.at3.x, y: s.at3.y, z: s.at3.z, vx: s.vx ?? 0, vy: s.vy ?? 0, vz: s.vz ?? 0, rate: s.rate ?? 0, max: s.count } });
+      }
+    });
+    const fl = new Fluid3(d, sources, list.length);
+    fl.hStep = 1 / this.rate;
+    this.fluid = fl;
+  }
+
+  /** Each wave surface's grid, stepped with the world's step and its gravity (design 9.3). */
+  private buildWaves(world: World3): void {
+    this.waveMembers = [];
+    const g = Math.sqrt(world.gx * world.gx + world.gy * world.gy + world.gz * world.gz);
+    for (const r of this.wavesRecs) {
+      const v = this.wavesOf(r);
+      if (!v) continue;
+      const grid = new WaveGrid({ nx: v.nx, ny: v.ny, x0: v.x0, y0: v.y0, dx: v.dx, dy: v.dy, level: v.level, depth: v.depth, damping: v.damping }, g, 1 / this.rate);
+      this.waveMembers.push({ rec: r, value: v, grid });
+    }
+  }
+
+  /** Still water and the waves' surfaces as the step reads them (a level that reads `t` is read at each step). */
+  private refreshWaters(all: boolean): void {
+    if (!all && !this.waterRecs.some((r) => this.varySet.has(r))) return;
+    const out: Water3[] = [];
+    for (const r of this.waterRecs) {
+      const wv = this.waterOf(r);
+      if (wv) out.push({ level: wv.level, density: wv.density });
+    }
+    for (const wm of this.waveMembers) {
+      const grid = wm.grid;
+      out.push({ level: wm.value.level, density: 1, local: (x, y, pl) => grid.plane3(x, y, pl) });
+    }
+    this.waters = out;
+  }
+
+  /** Everything a step reads, bodies, drops and waves, as one array (a checkpoint). */
+  private saveState(): Float64Array {
+    const w = this.world as World3;
+    const ws = w.save();
+    // a sleeping body keeps showing the forces of its last awake step: they go in too, so a seek shows the same arrows
+    let asleep = 0;
+    for (let i = 0; i < w.n; i++) if (w.type[i] === BodyType3.Dynamic && w.awake[i] === 0) asleep++;
+    const fs = new Float64Array(1 + asleep * (1 + NK * 3));
+    fs[0] = asleep;
+    let q = 1;
+    for (let i = 0; i < w.n; i++) {
+      if (w.type[i] !== BodyType3.Dynamic || w.awake[i] !== 0) continue;
+      fs[q++] = i;
+      fs.set(w.forces.subarray(i * NK * 3, (i + 1) * NK * 3), q);
+      q += NK * 3;
+    }
+    const parts = [ws, fs, ...(this.fluid ? [this.fluid.save()] : []), ...this.waveMembers.map((m) => m.grid.save())];
+    let len = 1 + parts.length;
+    for (const p of parts) len += p.length;
+    const out = new Float64Array(len);
+    out[0] = parts.length;
+    let k = 1 + parts.length;
+    parts.forEach((p, i) => {
+      out[1 + i] = p.length;
+      out.set(p, k);
+      k += p.length;
+    });
+    return out;
+  }
+
+  private loadState(s: Float64Array): void {
+    const w = this.world as World3;
+    const np = s[0] as number;
+    let k = 1 + np;
+    const part = (i: number): Float64Array => {
+      const len = s[1 + i] as number;
+      const out = s.subarray(k, k + len);
+      k += len;
+      return out;
+    };
+    w.load(part(0));
+    const fs = part(1);
+    for (let k = 0, q = 1; k < (fs[0] as number); k++) {
+      const b = fs[q++] as number;
+      w.forces.set(fs.subarray(q, q + NK * 3), b * NK * 3);
+      q += NK * 3;
+    }
+    let i = 2;
+    if (this.fluid) this.fluid.load(part(i++));
+    for (const m of this.waveMembers) m.grid.load(part(i++));
+  }
+
+  /** A hash of everything a step reads (FNV-1a over the bytes): equal films have equal hashes at every step. */
+  worldHash(): string {
+    if (!this.world) return '0';
+    const s = this.saveState();
+    const b = new Uint8Array(s.buffer, s.byteOffset, s.byteLength);
+    let h1 = 0x811c9dc5;
+    let h2 = 0x01000193;
+    for (let i = 0; i < b.length; i++) {
+      h1 = Math.imul(h1 ^ (b[i] as number), 0x01000193);
+      h2 = Math.imul(h2 ^ (b[i] as number), 0x5bd1e995);
+    }
+    return `${this.n}:${(h1 >>> 0).toString(16)}${(h2 >>> 0).toString(16)}`;
+  }
+
+  /** The size of one checkpoint now, in bytes (design 10.3). */
+  checkpointBytes(): number {
+    return this.world ? this.saveState().byteLength : 0;
+  }
+
+  /** The height of a wave surface at (x, y), or NaN off its grid (`w.height(x, y)`). */
+  waveHeight(id: ObjId, x: number, y: number): number {
+    const m = this.waveMembers.find((wm) => wm.rec.id === id);
+    return m ? m.grid.heightAt(x, y) : Number.NaN;
+  }
+
+  /* ------------------------------ in a worker (design 9.6; round 7) ------------------------------ */
+
+  /** True while the world runs in a worker: this driver writes the cells it is sent and steps nothing. */
+  remote = false;
+  private remoteCells = new Map<string, Cell>();
+  /** `@input` lines made on the page not yet sent to the worker, and every line of the film, for saving. */
+  private outbox: string[] = [];
+  private remoteLog: string[] = [];
+  remoteInfo = { drops: 0, awake: 0, contacts: 0, hash: '' };
+
+  /** Hands the world to a worker (or takes it back: then it is built again here, from its start, with the same log). */
+  setRemote(on: boolean): void {
+    if (this.remote === on) return;
+    this.remote = on;
+    this.remoteCells = new Map();
+    this.outbox = [];
+    if (!on) {
+      const lines = this.remoteLog;
+      this.remoteLog = [];
+      this.log = [];
+      this.base = new Map();
+      this.logged = new Set();
+      this.sig = undefined;
+      this.version = -1;
+      for (const l of lines) this.inputLine(l.replace(/^@input\s+/, '').split(/\s+/));
+    } else {
+      this.remoteLog = this.inputLines();
+      this.world = undefined;
+      this.fluid = undefined;
+      this.liquidMembers = [];
+      this.waveMembers = [];
+      this.sig = undefined;
+    }
+  }
+
+  /** The cells the worker computed for a frame, written on the next pass; and the worker's whole log, when it changed. */
+  accept(cells: readonly (readonly [string, Cell])[], info?: { drops: number; awake: number; contacts: number; hash: string }, log?: readonly string[]): void {
+    for (const [name, cell] of cells) this.remoteCells.set(name, cell);
+    if (info) this.remoteInfo = info;
+    // the worker logs what it was sent and what it made itself (a pedal moved while the film played): its log, plus the
+    // page's lines it has not had yet, is the film's, so a reload of the script in the worker keeps them
+    if (log) this.remoteLog = [...log, ...this.outbox.filter((l) => !log.includes(l))];
+  }
+
+  takeOutbox(): string[] {
+    return this.outbox.splice(0, this.outbox.length);
+  }
+
+  clearOutbox(): void {
+    this.outbox = [];
+  }
+
+  /** The cells of every object the world owns now, by name, for the page (and the typed arrays in them to move). */
+  ownedCells(): { cells: [string, Cell][]; transfer: ArrayBuffer[] } {
+    const cells: [string, Cell][] = [];
+    const transfer: ArrayBuffer[] = [];
+    const seen = new Set<ObjId>();
+    const add = (rec: ObjRec): void => {
+      if (seen.has(rec.id)) return;
+      seen.add(rec.id);
+      const c = this.lastCells.get(rec.id);
+      if (!c) return;
+      cells.push([rec.p.name, c]);
+      collectBuffers(c.defined ? c.value : undefined, transfer, 0);
+    };
+    for (const m of this.members) if (m.role === 'body') add(m.rec);
+    for (const j of this.jointMembers) add(j.rec);
+    for (const w of this.wheelMembers) add(w.rec);
+    for (const r of this.vehicleRecs) add(r);
+    for (const l of this.liquidMembers) add(l.rec);
+    for (const m of this.waveMembers) add(m.rec);
+    if (this.worldRec) add(this.worldRec);
+    return { cells, transfer };
+  }
+
+  private queueLine(line: string): void {
+    this.outbox.push(line);
+    this.remoteLog.push(line);
+  }
+
+  /** An input made on the page while the worker has the world: a line for the worker, at the film time now. */
+  private sendInput(id: ObjId, item: number | undefined, kind: string, nums: readonly number[]): boolean {
+    const base = this.acc.byId(id)?.p.name;
+    if (!base || !this.remoteCells.has(base)) return false;
+    const nm = item !== undefined ? `${base}[${item + 1}]` : base;
+    const t = String(Number(this.acc.clockT().toFixed(6)));
+    this.queueLine(`@input physics ${kind} ${nm}${nums.map((x) => ` ${num(x)}`).join('')} at ${t}`);
+    return true;
+  }
+
+  private grabAnchor = new Map<string, V3>();
+
+  /** A grab while the worker has the world: the point taken, in the body's frame, from the pose the page shows now. */
+  private remoteGrab(id: ObjId, to: V3, at: V3 | undefined, item: number | undefined): boolean {
+    const base = this.acc.byId(id)?.p.name;
+    const c = base ? this.remoteCells.get(base) : undefined;
+    const v = c?.defined ? (item !== undefined && Array.isArray(c.value) ? (c.value as unknown[])[item] : c.value) : undefined;
+    if (!isBody3Value(v)) return false;
+    const key = `${id}:${item ?? ''}`;
+    let a = this.grabAnchor.get(key);
+    if (!a) {
+      const p = at ?? to;
+      const [qw, qx, qy, qz] = v.q;
+      // the inverse turn of the body's quaternion carries the offset into its own frame
+      const [lx, ly, lz] = rotate([qw, -qx, -qy, -qz], p.x - v.x, p.y - v.y, p.z - v.z);
+      a = { x: lx, y: ly, z: lz };
+      this.grabAnchor.set(key, a);
+    }
+    return this.sendInput(id, item, 'grab', [to.x, to.y, to.z, a.x, a.y, a.z]);
+  }
+
+  private writeRemote(): ObjRec[] {
+    const changed: ObjRec[] = [];
+    for (const [name, cell] of this.remoteCells) {
+      const r = this.acc.byName(name);
+      if (!r) continue;
+      this.lastCells.set(r.id, cell);
+      this.written.add(r.id);
+      if (this.acc.write(r, cell)) changed.push(r);
+    }
+    return changed;
   }
 
   /* ------------------------------ for actions ------------------------------ */
@@ -1349,6 +1819,7 @@ export class Physics3Driver implements WorldDriver {
   }
 
   push(id: ObjId, j: V3, at?: V3, item?: number): boolean {
+    if (this.remote) return this.sendInput(id, item, 'push', [j.x, j.y, j.z, ...(at ? [at.x, at.y, at.z] : [])]);
     if (!this.memberOf(id, item)) return false;
     this.addEntry({ kind: 'push', n: this.gridAt(this.acc.clockT()), id, ...(item !== undefined ? { item } : {}), j, ...(at ? { at } : {}) });
     return true;
@@ -1356,6 +1827,7 @@ export class Physics3Driver implements WorldDriver {
 
   /** The learner takes hold of a body at a point in space (or keeps the point taken) and moves it to `to`. */
   grab(id: ObjId, to: V3, at?: V3, item?: number): boolean {
+    if (this.remote) return this.remoteGrab(id, to, at, item);
     const m = this.memberOf(id, item);
     if (!m || !this.world) return false;
     const mine = (e: LogEntry3): boolean => (e.kind === 'grab' || e.kind === 'release') && e.id === id && e.item === item;
@@ -1372,11 +1844,20 @@ export class Physics3Driver implements WorldDriver {
   }
 
   release(id: ObjId, item?: number): void {
+    if (this.remote) {
+      this.grabAnchor.delete(`${id}:${item ?? ''}`);
+      this.sendInput(id, item, 'release', []);
+      return;
+    }
     if (!this.memberOf(id, item)) return;
     this.addEntry({ kind: 'release', n: this.gridAt(this.acc.clockT()), id, ...(item !== undefined ? { item } : {}) });
   }
 
   restart(): void {
+    if (this.remote) {
+      this.queueLine(`@input physics reset at ${String(Number(this.acc.clockT().toFixed(6)))}`);
+      return;
+    }
     this.addEntry({ kind: 'reset', n: this.gridAt(this.acc.clockT()) });
   }
 
@@ -1511,4 +1992,9 @@ function numWords(v: unknown): string | undefined {
 
 function sameSpec3(a: unknown, b: unknown): boolean {
   return isBody3Value(a) && isBody3Value(b) && (a.spec === b.spec || sameValue(a.spec, b.spec));
+}
+
+/** What a wave surface is built from (not its heights): equal keys give the same film. */
+function wavesKey(v: WavesValue): unknown[] {
+  return [v.space, v.nx, v.ny, v.x0, v.y0, v.dx, v.dy, v.level, v.depth, v.damping];
 }
