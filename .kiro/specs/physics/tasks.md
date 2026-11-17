@@ -44,7 +44,14 @@ Each round is one branch `feat/physics-<n>` and one PR into `integration`, merge
   - [x] 6.4 The physics worker in `packages/sdk/src/worker/`: the page sends the script, free values and `@input` lines, gets back the owned cells with their arrays moved; `worker_unavailable`, `worker_crashed`; the same film with and without it
   - [x] 6.5 Drawing (one batch of discs, water as a fill under its line), the Water and Liquid tools, algebra rows, drops in the time-bar readout
   - [x] 6.6 Examples (a floating boat, density of ice, a dam breaking, filling a glass), screenshots, spec tests, benches
-- [ ] 7. Round 7: 3D liquid and waves (R7)
+- [x] 7. Round 7: 3D liquid and waves (R7)
+  - [x] 7.1 `Liquid` (box or ball) and `Pour` in space: position-based fluids on the shared particle store, a 3D neighbour grid (counting sort, no garbage), drops against bodies, solids, the floor and terrain with the equal and opposite impulse a step later, the 2,000-drop limit shared with the plane (B013)
+  - [x] 7.2 `Water(level)` in space: buoyancy and drag for `Body3`, exact for balls (a cap) and convex hulls (clipped)
+  - [x] 7.3 `Waves(box, n)` in space and `Waves(segment, n)` in the plane: the wave equation on a height grid, bodies press it and ride it, `w.level`, `w.speed`, `w.height(x, y)`; B013, B017, B004
+  - [x] 7.4 The space driver in the worker, the same film without it; the worker's log comes back to the page (round 6 carry-over)
+  - [x] 7.5 Checkpoints with drops and waves (a sleeping body's forces too), seek equals play, reload plays the same
+  - [x] 7.6 Drawing in the Space view: drops as dots among the faces by depth, waves as a lit mesh, still water as a patch; waves in the plane as a line; the painter's cost measured
+  - [x] 7.7 Examples (a splash, a boat on waves), screenshots, spec tests, the round 7 checks of design 11.5 and the bench rows of 11.2
 - [ ] 8. Round 8: smoke (R7)
 - [ ] 9. Round 9: cloth (R10)
   - [ ] 9.1 `Cloth` (sheet, rope, net), `Pin`, `world with wind`; errors B018, B019, the `torn` notice

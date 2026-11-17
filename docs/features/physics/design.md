@@ -198,13 +198,13 @@ The usual way to write a car is four `Wheel` lines and one `Vehicle` line. `moto
 
 | Command | Forms | What it is |
 |---|---|---|
-| `Liquid` | `(region, count)`; named `viscosity`, `density`, `color` | Liquid particles that fill `region` (a polygon or a box) at the start |
-| `Pour` | `(at: Point, rate, speed)`; named `max` | A tap: adds particles over time, up to `max` |
+| `Liquid` | `(region, count)`; named `viscosity`, `density`, `color` | Liquid particles that fill `region` at the start: a polygon in the plane, a box (convex `Polyhedron`) or a `Sphere` in space |
+| `Pour` | `(at: Point, rate, speed)`, `(at: Point3, rate, speed)`; named `max` | A tap: adds particles over time, up to `max` |
 | `Water` | `(level: Number)`, `(region, level)` | Still water: bodies float by Archimedes' rule, cheap |
 | `Waves` | `(box: Polyhedron, n)` in space; `(segment, n)` in the plane | A water surface on an `n` by `n` grid (or `n` points) that waves when hit |
 | `Smoke` | `(region, n)`; named `source`, `heat`, `wind` | Smoke and air on an `n` by `n` grid in a box of the plane |
 
-All of them hit solid shapes and bodies (section 9).
+All of them hit solid shapes and bodies (section 9). Readouts: `l.count`, `l.level` for a liquid; `wa.level` for still water; `w.level`, `w.speed` and `w.height(x, y)` for waves (9.3). `Waves` takes `damping` named, and in the plane `depth`.
 
 **Cloth:**
 
@@ -460,15 +460,35 @@ Choices made while building it (round 6, `packages/kernel/src/physics/fluid2.ts`
 - **Walls.** A drop that crosses a thin wall in one step is put back on the side it started on, so a glass never leaks.
 - **Viscosity** is XSPH smoothing, 0 to 1 (`0.01` default), with the weights of the last density pass.
 
+Choices made for liquid in space (round 7, `packages/kernel/src/physics/fluid3.ts`, `grid3.ts`):
+
+- **Forms.** `Liquid(region, count)` with a box (any convex `Polyhedron`) or a `Sphere`, and `Pour(at: Point3, rate, speed)`, where a number `speed` is straight down and a `Vector3` is the direction. A liquid's line is in space by its form, so a figure with a liquid or waves in space is a world in space even with no body yet. The drops' `density` is 1 by default, as water and bodies. The 2,000-drop limit counts every liquid of the figure, in the plane or in space.
+- **Drop size.** The first `Liquid` sets the spacing `d` that fills its region with its count on a cubic grid (bottom layer first); with only taps `d = 0.1` m. A drop reaches `1.6 d` (18 neighbours on the grid, about 14 in a settled tank) and is a ball of radius `d / 2` against solids and bodies.
+- **Neighbour grid.** Cubic cells as wide as the reach, counting sort, the 13 cells of one half searched round each cell, so each pair is found once. The pairs are listed on every second step and kept for the next one (a drop moves far less than its reach in a step, and the weights fade to nothing at the reach); a load or a drop that left lists them afresh. Checkpoints fall on listing steps (a whole number of rounds apart), so a seek lists them where the film did.
+- **One density pass a step** (two in the plane). λ divides by the sum of the neighbours' gradients squared plus a small `eps`; the drop's own gradient (the sum of theirs, which nearly cancels where drops crowd, the only place λ acts) is left out. A second pass kept the volume no better (3.6% against 3.5% in a 1 m tank) and cost 0.25 ms a step, so space has one; crowded drops have larger gradients and move less, so a body that squeezes drops against the floor makes no jets.
+- **Viscosity** smooths speeds on every second step, twice as strongly (at most 1): the same smoothing for half the work.
+- **Walls and bodies.** After the pass, each drop is pushed out of bodies, then out of the floor, terrain and solids (walls win). Against a solid the drop's whole path this step is tested (it goes back out through the face it came in by, also when it started on that face, so a thin wall never leaks). Against a moving body a drop inside goes out through the nearest face; the body takes the equal and opposite impulse at the start of the next step, as in the plane.
+- **Readouts.** `l.count`, `l.level` (the middle of the column tops, one spacing square), as in the plane. The drops' places are `xs`, `ys` and `zs` of the value.
+
 ### 9.2 Still water (`Water`)
 
 Cheap buoyancy, from the legacy kit's tank: each body is clipped by the water line, and the part under it gives an upward push at its centre, plus water drag. This handles boats, ice and density lessons with no particles at all.
 
 Round 6 (`packages/kernel/src/physics/water2.ts`): water has density 1. Before each body step, every awake body's shapes (a circle as 48 sides, its area kept) are clipped by the water line and by the water's region (a convex region, else its box); the weight of water under it pushes up at that part's centre, and drag of `2 × (mass of that water)` per second slows that part's speed and the body's turn. Both go into the step as impulses, and are counted as `buoyancy` and `drag`. A level that reads `t` or a slider is read at each step, so a tide lifts a boat.
 
+In space (round 7, `packages/kernel/src/physics/water3.ts`): `Water(level)` is still water below the plane `z = level` (density 1). The part of each awake body under the plane is exact: a cap for a ball, the hull clipped by the plane for a convex hull. Its weight of water pushes up at its centre; drag of `2 × (mass of that water)` per second slows that part's speed and turn. A sleeping body keeps the forces it showed when it fell asleep, and they are kept in checkpoints, so a seek shows the same arrows.
+
 ### 9.3 Waves (`Waves`)
 
 A height grid that follows the wave equation, stepped with the same `h`. Bodies that touch the surface push it down and are pushed up (the buoyancy of 9.2 at the local height). It is drawn as a surface mesh in 3D or as a line in 2D.
+
+How it is built (round 7, `packages/kernel/src/physics/waves.ts`):
+
+- **Forms.** `Waves(box: Polyhedron, n)` in space: an `n` by `n` grid over the box's floor plan, the water at rest up to the box's top, as deep as the box. `Waves(segment, n)` in the plane: `n` points along the segment, at its height, `depth` deep (named, 1 m). Both take `damping` (0 to 10 per second, 0.2 by default). The box itself is not solid; hide it with `visible = false`. At most 64 a side (B013); fewer than 2 is B017.
+- **The step.** Each cell holds a height `u` and a speed `v`. A body over a cell pushes on it with the water standing over the body's bottom (tested at 3 by 3 points a cell, so the push covers the body's own footprint): the head is `F = u + P`, and `v += h c² ∇²F`, `v ×= 1 / (1 + h damping)`, `u += h v`, with the edges as walls, so the water keeps its volume exactly. `c = √(g × depth)`, at most `0.45` cells a step (the grid's limit with a margin).
+- **Bodies.** Before the body step each body is pushed up by the buoyancy of 9.2 under the plane that touches the head below its centre, so a boat rides the waves and rocks on them. A body asleep on water that moves faster than 2 mm/s wakes.
+- **Readouts.** `w.level`: the rest level raised by the water the bodies over it move aside (their buoyancy over `g`, over the surface's area), exact. `w.speed`: `c`. `w.height(x, y)`: the water's height at a point (in the plane `w.height(x, 0)`; the second number is not read). `heights` in the value is each cell's head, so under a floating body it reads its waterline and the surface round a boat at rest reads flat. The drawn surface rises by about 70% of what `w.level` says round a body, because the grid holds the water under a body down by the body's push, not to its bottom.
+- **Checkpoints** hold `u`, `v` and the last head of every cell (three numbers a cell: 96 KB for 64 × 64).
 
 ### 9.4 Smoke (`Smoke`)
 
@@ -525,7 +545,7 @@ Liquid drops and cloth points are both moving points. So they share one neighbou
 
 **Where it runs.** A figure with cloth or liquid runs its whole physics world, bodies included, in one worker (a second thread). One world in one thread keeps every hit in a fixed order, so the film is exact. The page sends inputs (sliders, drags, pushes) and gets back, each frame, the points and the poses to draw (11.2: under 0.5 ms). Without a worker, the same steps run on the page: the film is the same, and plays slower on a slow computer (10.5), with a `worker_unavailable` notice.
 
-How it is built (round 6, `packages/sdk/src/worker/`): the worker holds a headless copy of the figure, loaded from the page's script whenever the page's lines change (its `@input` log included). Each frame the page sends the film time, the free values that changed and the `@input` lines made on the page since (pushes, grabs, restarts, which the page's driver makes instead of applying), and gets back the cells of every object the world owns, with the drops' and forces' typed arrays moved. One frame is in flight at a time, so a slow worker makes the film slower, not a queue longer. The page's driver steps nothing meanwhile; it writes the cells it is sent. If the worker stops, the page takes the world back, rebuilds it from its start with the same log and catches up (`worker_crashed`). For now only a figure with liquid goes to the worker; cloth joins it in round 9.
+How it is built (round 6, `packages/sdk/src/worker/`): the worker holds a headless copy of the figure, loaded from the page's script whenever the page's lines change (its `@input` log included). Each frame the page sends the film time, the free values that changed and the `@input` lines made on the page since (pushes, grabs, restarts, which the page's driver makes instead of applying), and gets back the cells of every object the world owns, with the drops' and forces' typed arrays moved. One frame is in flight at a time, so a slow worker makes the film slower, not a queue longer. The page's driver steps nothing meanwhile; it writes the cells it is sent. If the worker stops, the page takes the world back, rebuilds it from its start with the same log and catches up (`worker_crashed`). A figure with liquid or waves goes to the worker, in the plane or in space (round 7: the host talks to whichever driver holds the world); cloth joins it in round 9. When the worker's own `@input` log changes (a car's pedal or a slider with `rerun = continue` moved while the film played, which the worker logs itself), it is sent back with the cells, and the page saves it with its own lines not yet sent; so a line edit that reloads the worker's script keeps them (round 7, fixing a round 6 gap).
 
 ## 10. Time, exact replay and seeking
 
@@ -692,6 +712,10 @@ Speed on average is not enough. The physics bench suite checks all of these, and
 | Pendulum | A `Hinge` pendulum against the `state()` pendulum | the same period within 0.5% |
 | Newton's cradle | 5 balls on ropes, the end one lifted | one ball leaves the other end |
 | Floating | A box of density 0.5 in `Water` | floats half under, within 2% |
+| Floating in space | A `Body3` box of density 0.5 in `Water`, and on still `Waves` | half under within 2% (round 7: 0.2% in water, 1.3% on waves) |
+| Wave speed | The first sloshing mode of a basin 20 m long, 1 m deep, 64 points: its period against `2 L / c` | `c` within 5% (round 7: 1.5%) |
+| Liquid volume | 2,000 drops filling a 3 m tank 1 m deep, left to settle | the level within 5% of where it filled (round 7: 2.6%) |
+| Level under waves | A floating boat and a sunk rock in a 10 m pool | `w.level` rises by the water they move aside over the area, within 10% (round 7: 1%) |
 | Car | A car at full motor on flat ground | reaches the speed set by `power` and drag, within 5% |
 | Hanging rope | A 2D rope of 200 points hanging from two pins at the same height | follows the catenary `a cosh(x / a)`, within 2% of its sag |
 | Rope pendulum | A 1 kg ball pinned to the end of a 2 m rope of 0.01 kg, swung 5° | period within 1% of `2π √(L / g)` |
@@ -704,6 +728,7 @@ Speed on average is not enough. The physics bench suite checks all of these, and
 - Joints draw thin: a hinge as a small ring, a spring as a zigzag, a rope as a line that sags when slack, a weld as a small cross.
 - Liquid particles draw as one batch of discs in the liquid's colour (the particle painter, `animation-time/design.md` 10.8). A smooth surface (metaballs) is for later.
 - Waves draw as a surface in the Space view, smoke as a shaded image under the shapes.
+- In space (round 7, until the WebGL 2 painter of 12.1): drops are the software painter's dots, a drop wide, drawn far to near among the faces, so a ball in a tank shows over the drops behind it; waves are a lit mesh through the cell corners, from every second corner past 32 a side (at most about a thousand faces), that hides no lines; still water is a translucent patch the size of the view at its level. Waves in the plane are a line through their points over a light fill down to their bottom. Measured in Node with a canvas that draws nothing, 2,000 drops and a 64 × 64 wave grid cost 0.3 ms for the scene and 2.3 ms for the painter a frame.
 - Cloth in space draws as a lit sheet, two-sided (the back a little darker), with faint threads every 8 points. Cloth in the plane draws as its threads, a rope as a smooth line.
 - 2D drawing is in `packages/sdk/src/screen/`, 3D in its Space painter, as for every area.
 
