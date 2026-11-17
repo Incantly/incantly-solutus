@@ -2,6 +2,8 @@
  * The studio's session: one kernel `Figure`, and the bookkeeping the screen needs around it (rows for the line list, the
  * outcome of each action as text or an error object, the clock). It uses only the kernel's public API.
  */
+import { PhysicsWorkerHost, browserPhysicsChannel } from '@incantly/sdk/worker';
+import type { PhysicsChannel } from '@incantly/sdk/worker';
 import {
   CAS_COMMAND_NAMES, Figure, animatingIds, onCasEngine, brokenSteps, buttonLabelOf, captionsOf, choiceStateOf, clickButton, commitInputText, defaultCaption, getStoredHandler,
   inputErrorOf, inputNoticeOf, targetTextOf, inputTextOf, isClickable, listHandlers, numberSource, playerOf, runHandler, runLoadHandlers, setChoiceIndex,
@@ -114,8 +116,15 @@ export class KernelSession {
   /** Goes up on every change except a value or the clock: objects added, removed, renamed, restyled or reordered. */
   structureVersion = 0;
 
+  /** The physics worker of the figure: a world with liquid runs in it (physics design 9.6). */
+  physicsHost: PhysicsWorkerHost | undefined;
+  /** Where the physics worker comes from; tests put a channel that runs it in the same thread, or none. */
+  physicsChannel: () => PhysicsChannel | undefined = browserPhysicsChannel;
+
   private watch(): void {
     this.off?.();
+    this.physicsHost?.stop();
+    this.physicsHost = new PhysicsWorkerHost(this.figure, () => this.physicsChannel(), () => performance.now());
     this.directiveVersion++;
     this.structureVersion++;
     this.off = this.figure.on((ev) => {
@@ -560,6 +569,7 @@ export class KernelSession {
       p.seek(this.range().from);
       p.play();
     }
+    this.physicsHost?.frame(this.time());
   }
 
   /**
@@ -600,6 +610,7 @@ export class KernelSession {
   /** Moves the clock; the kernel clamps it to the film range. */
   setTime(t: number): Outcome {
     const r = this.player().seek(t);
+    this.physicsHost?.frame(this.time());
     return 'ok' in r && r.ok === false ? { ok: false, error: r as ErrorObject } : this.done(`t = ${valueText(this.time())}`, []);
   }
 }

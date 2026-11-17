@@ -28,6 +28,8 @@ import { addForce } from './water2';
 export const MAX_DROPS = 2000;
 /** The most one density pass moves a drop, in spacings. */
 export const MAX_CORRECTION = 0.5;
+/** A drop's reach in spacings: about ten neighbours at rest. */
+export const REACH = 1.8;
 /** Drop size when a figure has only taps. */
 export const DEFAULT_SPACING = 0.1;
 
@@ -160,12 +162,13 @@ export class Fluid2 {
   private sx = new Float64Array(0);
   private sy = new Float64Array(0);
   private s2 = new Float64Array(0);
+  private vw = new Float64Array(0);
   private visc: Float64Array;
   private mass: Float64Array;
 
   constructor(spacing: number, sources: readonly DropSource2[], owners: number) {
     this.d = spacing;
-    this.H = 2 * spacing;
+    this.H = REACH * spacing;
     this.r = 0.5 * spacing;
     this.sources = sources;
     this.grid.setSize(this.H);
@@ -237,6 +240,7 @@ export class Fluid2 {
     this.s2 = new Float64Array(c);
     this.gx = new Float64Array((c * MAX_NEIGHBOURS) / 2);
     this.gy = new Float64Array((c * MAX_NEIGHBOURS) / 2);
+    this.vw = new Float64Array((c * MAX_NEIGHBOURS) / 2);
   }
 
   /** Before the body step: the drops' push of the last step goes into the bodies (design 9.6). */
@@ -387,6 +391,8 @@ export class Fluid2 {
     const sx = this.sx;
     const sy = this.sy;
     const s2 = this.s2;
+    const vw = this.vw;
+    const invSelf = 1 / (k6 * H2 * H2 * H2);
     rho.fill(k6 * H2 * H2 * H2, 0, n);
     sx.fill(0, 0, n);
     sy.fill(0, 0, n);
@@ -400,10 +406,13 @@ export class Fluid2 {
       if (r2 >= H2) {
         gxs[p] = 0;
         gys[p] = 0;
+        vw[p] = 0;
         continue;
       }
       const q = H2 - r2;
       const w = k6 * q * q * q;
+      // the viscosity weight (1 - r² / H²)³ of the last pass, kept for the speeds
+      vw[p] = w * invSelf;
       rho[i] = (rho[i] as number) + w;
       rho[j] = (rho[j] as number) + w;
       let gx = 0;
@@ -467,14 +476,17 @@ export class Fluid2 {
     }
   }
 
-  /** XSPH viscosity over the pairs: each drop's speed is pulled toward its neighbours' (Jacobi). */
+  /**
+   * XSPH viscosity over the pairs: each drop's speed is pulled toward its neighbours' (Jacobi), with the weights of the
+   * last density pass.
+   */
   private viscosity(n: number): void {
-    const { x, y, vx, vy, owner } = this.ps;
+    const { vx, vy, owner } = this.ps;
     const grid = this.grid;
     const pi = grid.pi;
     const pj = grid.pj;
     const np = grid.pairs;
-    const H2 = this.H * this.H;
+    const vw = this.vw;
     const visc = this.visc;
     let any = false;
     for (let o = 0; o < visc.length; o++) if ((visc[o] as number) > 0) any = true;
@@ -488,12 +500,8 @@ export class Fluid2 {
     for (let p = 0; p < np; p++) {
       const i = pi[p] as number;
       const j = pj[p] as number;
-      const ex = (x[i] as number) - (x[j] as number);
-      const ey = (y[i] as number) - (y[j] as number);
-      const r2 = ex * ex + ey * ey;
-      if (r2 >= H2) continue;
-      const q = 1 - r2 / H2;
-      const w = q * q * q;
+      const w = vw[p] as number;
+      if (w === 0) continue;
       const ux = w * ((vx[j] as number) - (vx[i] as number));
       const uy = w * ((vy[j] as number) - (vy[i] as number));
       sx[i] = (sx[i] as number) + ux;

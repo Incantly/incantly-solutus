@@ -17,7 +17,7 @@ import type { Cell, StyleEntry } from '../../graph/types';
 import { sameValue } from '../../graph/values';
 import type { BodyDef2, ShapeDef2 } from '../../physics/world2';
 import { BodyType, FK, FORCE_KINDS, World2 } from '../../physics/world2';
-import { atan2 } from '../../physics/math';
+import { atan2, cos, sin } from '../../physics/math';
 import { solidShapeOf } from './shapes';
 import type { BodySpec, BodyValue, WorldValue } from './types';
 import { DEFAULT_WORLD, isBodyValue, isWorldValue } from './types';
@@ -158,38 +158,38 @@ export class PhysicsDriver implements WorldDriver {
     if (isWheelRec(rec)) {
       this.wheelSpecs.set(rec.id, computed.defined ? (Array.isArray(computed.value) ? (computed.value as unknown[]) : [computed.value]).map((v) => (isWheelValue(v) ? v : undefined)) : []);
       const last = this.lastCells.get(rec.id);
-      return last && computed.defined && this.world ? last : undefined;
+      return last && computed.defined && this.live() ? last : undefined;
     }
     if (rec.p.type.k === 'Vehicle') {
       if (computed.defined && isVehicleValue(computed.value)) this.vehicleSpecs.set(rec.id, computed.value);
       else this.vehicleSpecs.delete(rec.id);
       const last = this.lastCells.get(rec.id);
-      return last && computed.defined && this.world ? last : undefined;
+      return last && computed.defined && this.live() ? last : undefined;
     }
     if (isJointRec(rec)) {
       this.jointSpecs.set(rec.id, computed.defined ? (Array.isArray(computed.value) ? (computed.value as unknown[]) : [computed.value]).map((v) => (isJointValue(v) ? v : undefined)) : []);
       const last = this.lastCells.get(rec.id);
-      return last && computed.defined && this.world ? last : undefined;
+      return last && computed.defined && this.live() ? last : undefined;
     }
     if (rec.p.type.k === 'List' && rec.p.type.of?.k === 'Body') {
       if (computed.defined && Array.isArray(computed.value)) this.listSpecs.set(rec.id, (computed.value as unknown[]).map((v) => (isBodyValue(v) ? v : undefined)));
       else this.listSpecs.delete(rec.id);
       const last = this.lastCells.get(rec.id);
-      if (last && computed.defined && this.world && last.defined && Array.isArray(last.value) && Array.isArray(computed.value) && last.value.length === computed.value.length && (last.value as unknown[]).every((v, i) => sameSpec({ defined: true, value: v }, (computed.value as unknown[])[i]))) return last;
+      if (last && computed.defined && this.live() && last.defined && Array.isArray(last.value) && Array.isArray(computed.value) && last.value.length === computed.value.length && (last.value as unknown[]).every((v, i) => sameSpec({ defined: true, value: v }, (computed.value as unknown[])[i]))) return last;
       return undefined;
     }
     if (rec.p.type.k === 'Body') {
       if (computed.defined && isBodyValue(computed.value)) this.specs.set(rec.id, computed.value);
       else this.specs.delete(rec.id);
       const last = this.lastCells.get(rec.id);
-      if (last && computed.defined && this.world && sameSpec(last, computed.value)) return last;
+      if (last && computed.defined && this.live() && sameSpec(last, computed.value)) return last;
       return undefined;
     }
     if (rec.p.type.k === 'Liquid') {
       if (computed.defined && isLiquidValue(computed.value)) this.liquidSpecs.set(rec.id, computed.value);
       else this.liquidSpecs.delete(rec.id);
       const last = this.lastCells.get(rec.id);
-      if (last && computed.defined && this.world && last.defined && isLiquidValue(last.value) && isLiquidValue(computed.value) && sameValue(last.value.spec, computed.value.spec)) return last;
+      if (last && computed.defined && this.live() && last.defined && isLiquidValue(last.value) && isLiquidValue(computed.value) && sameValue(last.value.spec, computed.value.spec)) return last;
       return undefined;
     }
     if (rec.p.type.k === 'World') {
@@ -265,6 +265,7 @@ export class PhysicsDriver implements WorldDriver {
   }
 
   owns(id: ObjId): boolean {
+    if (this.remote) return this.remoteCells.has(this.acc.byId(id)?.p.name ?? '');
     return this.byId.has(id) || this.worldRec?.id === id || this.liquidMembers.some((l) => l.rec.id === id);
   }
 
@@ -312,6 +313,7 @@ export class PhysicsDriver implements WorldDriver {
 
   afterPass(): readonly ObjRec[] {
     this.scan();
+    if (this.remote) return this.writeRemote();
     if (this.bodyRecs.length === 0 && this.solidRecs.length === 0 && this.liquidRecs.length === 0 && !this.world) return [];
     if (this.coneDirty) this.findCone();
     const sig = this.signature();
@@ -1078,6 +1080,7 @@ export class PhysicsDriver implements WorldDriver {
 
   /** The log as `@input physics …` lines, saved with the script. */
   inputLines(): string[] {
+    if (this.remote) return [...this.remoteLog];
     const out: string[] = [];
     const t = (n: number): string => String(Number((this.t0 + n / this.rate).toFixed(6)));
     const name = (id: ObjId): string | undefined => this.acc.byId(id)?.p.name;
@@ -1554,6 +1557,7 @@ export class PhysicsDriver implements WorldDriver {
 
   /** Push(b, impulse, at?): logged at the next step (design 5.4). */
   push(id: ObjId, x: number, y: number, at?: { x: number; y: number }, item?: number): boolean {
+    if (this.remote) return this.sendInput(id, item, 'push', [x, y, ...(at ? [at.x, at.y] : [])]);
     if (!this.memberOf(id, item)) return false;
     const n = this.gridAt(this.acc.clockT());
     this.addEntry({ kind: 'push', n, id, ...(item !== undefined ? { item } : {}), x, y, ...(at ? { ax: at.x, ay: at.y } : {}) });
@@ -1562,6 +1566,7 @@ export class PhysicsDriver implements WorldDriver {
 
   /** The learner takes hold of a body at a point (world space) and moves the pointer. */
   grab(id: ObjId, x: number, y: number, at?: { x: number; y: number }, item?: number): boolean {
+    if (this.remote) return this.remoteGrab(id, x, y, at, item);
     const m = this.memberOf(id, item);
     if (!m || !this.world) return false;
     const w = this.world;
@@ -1589,11 +1594,20 @@ export class PhysicsDriver implements WorldDriver {
   }
 
   release(id: ObjId, item?: number): void {
+    if (this.remote) {
+      this.sendInput(id, item, 'release', []);
+      this.grabAnchor.delete(`${id}:${item ?? ''}`);
+      return;
+    }
     if (!this.memberOf(id, item)) return;
     this.addEntry({ kind: 'release', n: this.gridAt(this.acc.clockT()), id, ...(item !== undefined ? { item } : {}) });
   }
 
   restart(): void {
+    if (this.remote) {
+      this.queueLine(`@input physics reset at ${String(Number(this.acc.clockT().toFixed(6)))}`);
+      return;
+    }
     this.addEntry({ kind: 'reset', n: this.gridAt(this.acc.clockT()) });
   }
 
@@ -1626,6 +1640,128 @@ export class PhysicsDriver implements WorldDriver {
     if (awake) this.world.wakeBody(m.index);
     else this.world.sleepBody(m.index);
     return true;
+  }
+
+  /* ------------------------------ in a worker (design 9.6; core hook 7) ------------------------------ */
+
+  /** True while the world runs in a worker: this driver writes the cells it is sent and steps nothing. */
+  remote = false;
+  private remoteCells = new Map<string, Cell>();
+  /** `@input` lines made on the page (pushes, grabs, restarts) not yet sent to the worker, and all of them, for saving. */
+  private outbox: string[] = [];
+  private remoteLog: string[] = [];
+  private grabAnchor = new Map<string, { ax: number; ay: number }>();
+  /** The world in the worker: drops and steps, for the time bar readout. */
+  remoteInfo = { drops: 0, awake: 0, contacts: 0, hash: '' };
+
+  /** Hands the world to a worker (or takes it back: then it is built again here, from its start). */
+  setRemote(on: boolean): void {
+    if (this.remote === on) return;
+    this.remote = on;
+    this.remoteCells = new Map();
+    this.outbox = [];
+    if (!on) {
+      // the page's own log is the worker's: each line goes back in, then the film is built and played here
+      const lines = this.remoteLog;
+      this.remoteLog = [];
+      this.sig = undefined;
+      this.version = -1;
+      for (const l of lines) this.inputLine(l.replace(/^@input\s+/, '').split(/\s+/));
+    } else {
+      this.remoteLog = this.inputLines();
+      this.world = undefined;
+      this.fluid = undefined;
+      this.sig = undefined;
+    }
+  }
+
+  /** The cells the worker computed for a frame: they are written on the next pass. */
+  accept(cells: readonly (readonly [string, Cell])[], info?: { drops: number; awake: number; contacts: number; hash: string }): void {
+    for (const [name, cell] of cells) this.remoteCells.set(name, cell);
+    if (info) this.remoteInfo = info;
+  }
+
+  /** The page's new `@input` lines for the worker, once. */
+  takeOutbox(): string[] {
+    return this.outbox.splice(0, this.outbox.length);
+  }
+
+  /** Forgets the lines not yet sent: a fresh copy of the script, which holds them, goes to the worker. */
+  clearOutbox(): void {
+    this.outbox = [];
+  }
+
+  /** The cells of every object the world owns now, by name, for the page (and the typed arrays in them to move). */
+  ownedCells(): { cells: [string, Cell][]; transfer: ArrayBuffer[] } {
+    const cells: [string, Cell][] = [];
+    const transfer: ArrayBuffer[] = [];
+    const seen = new Set<ObjId>();
+    const add = (rec: ObjRec): void => {
+      if (seen.has(rec.id)) return;
+      seen.add(rec.id);
+      const c = this.lastCells.get(rec.id);
+      if (!c) return;
+      cells.push([rec.p.name, c]);
+      collectBuffers(c.defined ? c.value : undefined, transfer, 0);
+    };
+    for (const m of this.members) if (m.role === 'body') add(m.rec);
+    for (const j of this.jointMembers) add(j.rec);
+    for (const w of this.wheelMembers) add(w.rec);
+    for (const r of this.vehicleRecs) add(r);
+    for (const l of this.liquidMembers) add(l.rec);
+    if (this.worldRec) add(this.worldRec);
+    return { cells, transfer };
+  }
+
+  private queueLine(line: string): void {
+    this.outbox.push(line);
+    this.remoteLog.push(line);
+  }
+
+  private sendInput(id: ObjId, item: number | undefined, kind: string, nums: readonly number[]): boolean {
+    const base = this.acc.byId(id)?.p.name;
+    if (!base || !this.remoteCells.has(base)) return false;
+    const nm = item !== undefined ? `${base}[${item + 1}]` : base;
+    const t = String(Number(this.acc.clockT().toFixed(6)));
+    this.queueLine(`@input physics ${kind} ${nm}${nums.map((x) => ` ${num(x)}`).join('')} at ${t}`);
+    return true;
+  }
+
+  /** A grab while the worker has the world: the point taken, in the body's frame, from the pose the page shows now. */
+  private remoteGrab(id: ObjId, x: number, y: number, at: { x: number; y: number } | undefined, item: number | undefined): boolean {
+    const base = this.acc.byId(id)?.p.name;
+    const c = base ? this.remoteCells.get(base) : undefined;
+    const v = c?.defined ? (item !== undefined && Array.isArray(c.value) ? (c.value as unknown[])[item] : c.value) : undefined;
+    if (!isBodyValue(v)) return false;
+    const key = `${id}:${item ?? ''}`;
+    let a = this.grabAnchor.get(key);
+    if (!a) {
+      const p = at ?? { x, y };
+      const cs = cos(v.angle);
+      const sn = sin(v.angle);
+      const dx = p.x - v.x;
+      const dy = p.y - v.y;
+      a = { ax: cs * dx + sn * dy, ay: -sn * dx + cs * dy };
+      this.grabAnchor.set(key, a);
+    }
+    return this.sendInput(id, item, 'grab', [x, y, a.ax, a.ay]);
+  }
+
+  private writeRemote(): ObjRec[] {
+    const changed: ObjRec[] = [];
+    for (const [name, cell] of this.remoteCells) {
+      const r = this.acc.byName(name);
+      if (!r) continue;
+      this.lastCells.set(r.id, cell);
+      this.written.add(r.id);
+      if (this.acc.write(r, cell)) changed.push(r);
+    }
+    return changed;
+  }
+
+  /** The world is built (or held by a worker): a rule run of an owned object keeps the pose. */
+  private live(): boolean {
+    return this.world !== undefined || this.remote;
   }
 
   /** The index of an object in the world, for drawing and tests. */
@@ -1672,6 +1808,24 @@ function numWords(v: unknown): string | undefined {
   if (typeof v === 'number' && Number.isFinite(v)) return num(v);
   if (typeof v === 'object' && v !== null && typeof (v as { x?: unknown }).x === 'number' && typeof (v as { y?: unknown }).y === 'number') return `${num((v as { x: number }).x)} ${num((v as { y: number }).y)}`;
   return undefined;
+}
+
+/** The typed arrays inside a cell's value, to move to the page instead of copying. */
+function collectBuffers(v: unknown, out: ArrayBuffer[], depth: number): void {
+  if (depth > 3 || typeof v !== 'object' || v === null) return;
+  if (ArrayBuffer.isView(v)) {
+    const b = v.buffer;
+    if (b instanceof ArrayBuffer && !out.includes(b)) out.push(b);
+    return;
+  }
+  if (Array.isArray(v)) {
+    for (const x of v) collectBuffers(x, out, depth + 1);
+    return;
+  }
+  for (const k of ['forces', 'xs', 'ys'] as const) {
+    const x = (v as Record<string, unknown>)[k];
+    if (x !== undefined) collectBuffers(x, out, depth + 1);
+  }
 }
 
 function sameSpec(cell: Cell, computed: unknown): boolean {

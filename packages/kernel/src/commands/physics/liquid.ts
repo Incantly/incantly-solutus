@@ -18,6 +18,11 @@ declare module '../../contracts/values' {
     Water: true;
   }
 }
+declare module '../../contracts/errors' {
+  interface AreaNoticeKinds {
+    worker_crashed: true;
+  }
+}
 
 export interface Pt2 {
   readonly x: number;

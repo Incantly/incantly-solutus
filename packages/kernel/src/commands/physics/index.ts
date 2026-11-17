@@ -52,6 +52,8 @@ export type { Body3Value, BodySpec3 } from './body3';
 export type { VehicleValue, WheelValue } from './vehicle';
 export type { JointValue, JointKind } from './joints';
 export { isLiquidValue, isWaterValue } from './liquid';
+/** Notices of the physics area for hosts (the worker's `worker_unavailable`, `worker_crashed`). */
+export { makeNotice } from '../../errors/notices';
 export type { LiquidValue, LiquidSpec, WaterValue } from './liquid';
 
 /** The limits of design 11.3, the same on every computer. */
