@@ -24,7 +24,12 @@ Each round is one branch `feat/physics-<n>` and one PR into `integration`, merge
   - [x] 3.4 Algebra rows, Physics tools, performance row
   - [x] 3.5 2D car (`Wheel`, `Vehicle` in the plane)
   - [x] 3.6 Examples and screenshots
-- [ ] 4. Round 4: 3D bodies (R5)
+- [x] 4. Round 4: 3D bodies (R5)
+  - [x] 4.1 3D world: spheres, convex hulls (cylinders and cones as 24 sides), quaternions, inertia tensors, sweep and prune with fixed shapes searched, SAT with face clipping (at most 4 points), planes, sleep, checkpoints
+  - [x] 4.2 `Body` and `Bodies` on solids give `Body3`; dents refused (B003); readouts and `force(kind)` in three numbers
+  - [x] 4.3 The space driver: `Ground()` as the floor, solid planes and solids, terrain from `z = f(x, y)`, gravity in three numbers, push, grab and release logged, hits, left world
+  - [x] 4.4 Drawn in the Space view with drag (start move at t = 0, grab while playing)
+  - [x] 4.5 Examples (dice, dominoes, a bowl), screenshots, spec tests
 - [ ] 5. Round 5: 3D vehicles and crashes (R6)
 - [ ] 6. Round 6: water and 2D liquid, worker (R7)
 - [ ] 7. Round 7: 3D liquid and waves (R7)

@@ -346,6 +346,7 @@ export class KernelSession {
   /** True when dragging the point moves it: a free point, or one whose rule can be inverted (a point on a path). */
   draggable(name: string): boolean {
     const o = this.figure.get(name);
+    if (o && (o.type === 'Body3' || o.typeText === 'List<Body3>')) return o.cell.defined;
     if (!o || (o.type !== 'Point' && o.type !== 'Point3') || !o.cell.defined) return false;
     return o.free || this.figure.dragPlan(name, o.cell.value).writes.length > 0;
   }
@@ -357,6 +358,12 @@ export class KernelSession {
     const bt = this.figure.get(base);
     if (bt && (bt.type === 'Body' || bt.typeText === 'List<Body>') && z === undefined) {
       const r = physics.dragBody(this.figure, name, x, y, done);
+      if (!r.ok) return { ok: false, error: { ok: false, kind: 'not_draggable', message: r.why } as never };
+      this.figure.flush();
+      return this.done(r.did === 'moved start' ? `moved where ${name} starts` : r.did === 'grabbed' ? `holding ${name}` : `let go of ${name}`, []);
+    }
+    if (bt && (bt.type === 'Body3' || bt.typeText === 'List<Body3>')) {
+      const r = physics.dragBody3(this.figure, name, { x, y, z: z ?? 0 }, done);
       if (!r.ok) return { ok: false, error: { ok: false, kind: 'not_draggable', message: r.why } as never };
       this.figure.flush();
       return this.done(r.did === 'moved start' ? `moved where ${name} starts` : r.did === 'grabbed' ? `holding ${name}` : `let go of ${name}`, []);
@@ -566,7 +573,7 @@ export class KernelSession {
     for (const v of this.figure.objects()) {
       if (v.type === 'Particles' || v.state) return true;
       // a body moves with the film (physics ui.md 2)
-      if (v.type === 'Body' || v.typeText === 'List<Body>') return true;
+      if (v.type === 'Body' || v.typeText === 'List<Body>' || v.type === 'Body3' || v.typeText === 'List<Body3>') return true;
       if (/\banimate\s*=/.test(v.definition)) return true;
     }
     if (/^@clock /m.test(this.figure.toScript())) return true;

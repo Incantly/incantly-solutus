@@ -1183,7 +1183,7 @@ class Checker {
       if (x.ty.k !== 'Number' && !textOk) return this.err('type_mismatch', x.s, x.e, 'lang.type_mismatch_where', { why: `${name} takes ${(f as Ty & { readonly textArgs?: boolean }).textArgs === true ? 'a word in quotes' : 'numbers'}, not a ${tyStr(x.ty)}` }, { left: tyStr(x.ty), fingerprintKey: `${name}.arg` });
       args.push(x);
     }
-    const ret = f.ret === 'Point' ? T.Point : f.ret === 'Bool' ? T.Bool : f.ret === 'Vector' ? T.Vector : T.Number;
+    const ret = f.ret === 'Point' ? T.Point : f.ret === 'Bool' ? T.Bool : f.ret === 'Vector' ? T.Vector : f.ret === 'Vector3' || f.ret === 'Point3' ? ({ k: f.ret } as Ty) : T.Number;
     return { n: 'field', target: t, field: e.field, args, ty: ret, s: e.s, e: e.e };
   }
 

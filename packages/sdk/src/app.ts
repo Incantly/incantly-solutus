@@ -412,6 +412,7 @@ class AppCore implements App {
   draggable(name: string): boolean {
     if (this.gone || this.readOnly) return false;
     const o = this.figure.get(name);
+    if (o && (o.type === 'Body3' || o.typeText === 'List<Body3>')) return o.cell.defined;
     if (!o || (o.type !== 'Point' && o.type !== 'Point3') || !o.cell.defined) return false;
     return o.free || this.figure.dragPlan(name, o.cell.value).writes.length > 0;
   }
@@ -430,6 +431,9 @@ class AppCore implements App {
         // physics ui.md 4: at the start a drag moves where the body starts, later it grabs it
         const r = physics.dragBody(f, name, x, y, done);
         if (!r.ok) return this.failDrag(apiError('api', 'not_draggable', r.why, { hint: 'Drag the shape it is made from.', detail: { name, reason: 'body' } }), done);
+      } else if (o.type === 'Body3' || o.typeText === 'List<Body3>') {
+        const r = physics.dragBody3(f, name, { x, y, z: z ?? 0 }, done);
+        if (!r.ok) return this.failDrag(apiError('api', 'not_draggable', r.why, { hint: 'Drag the solid it is made from.', detail: { name, reason: 'body' } }), done);
       } else if (o.free) {
         // a point in space keeps its third coordinate
         const r = f.setFree(name, z === undefined ? { x: round(x), y: round(y) } : { x: round(x), y: round(y), z: round(z) }, 'drag');

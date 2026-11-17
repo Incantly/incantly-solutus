@@ -1,6 +1,7 @@
 /** Physics in the studio (.kiro/specs/physics R4; docs/features/physics ui.md 2, 4, 5, 7). */
 import { describe, expect, it } from 'vitest';
-import { sceneOf } from '@incantly/sdk/screen';
+import { space } from '@incantly/kernel';
+import { sceneOf, sceneOf3 } from '@incantly/sdk/screen';
 import { KernelSession } from '../src/session';
 import { EXAMPLES } from '../src/examples';
 
@@ -28,6 +29,28 @@ describe('the studio and physics', () => {
     expect(items.find((i) => i.type === 'Contacts')).toBeDefined();
   });
 
+  it('a body in space is drawn as its solid where it is now, its faces tagged to drag it by (R5.4)', () => {
+    const s = load(['g = Ground()', 'A = (0, 0, 2)', 'k = Cube(A, (1, 0, 2), (0, 1, 2))', 'b = Body(k)', 'balls = Bodies(Seq(Sphere((3, k, 1), 0.5), k, 0, 1))']);
+    expect(s.hasClock()).toBe(true);
+    s.setTime(1);
+    const sc = sceneOf3(s.figure, space.viewOf(s.figure));
+    const faces = sc.items.filter((i) => i.k === 'face' && i.body !== undefined) as { body: string; pts: { z: number }[] }[];
+    expect(new Set(faces.map((f) => f.body))).toEqual(new Set(['b', 'balls[1]', 'balls[2]']));
+    // the cube has landed: its lowest face is on the floor
+    const low = Math.min(...faces.filter((f) => f.body === 'b').flatMap((f) => f.pts.map((p) => p.z)));
+    expect(low).toBeCloseTo(0, 1);
+    // dragging it at the start moves the free point it is built from; later it grabs
+    s.setTime(0);
+    expect(s.draggable('b')).toBe(true);
+    expect(s.dragPoint('b', 0.5, 0.5, false, 2.5).ok).toBe(true);
+    expect(s.dragPoint('b', 2.5, 0.5, true, 2.5).ok).toBe(true);
+    expect((s.figure.value('A') as { x: number }).x).toBeCloseTo(2, 9);
+    s.setTime(1);
+    expect(s.dragPoint('b', 2.5, 2, false, 2).ok).toBe(true);
+    s.dragPoint('b', 2.5, 2, true, 2);
+    expect(s.save()).toMatch(/@input physics grab b /);
+  });
+
   it('dragging a body at the start moves where it starts; later it grabs', () => {
     const s = load(['g = Ground()', 'p = Box((0, 3), 1, 1)', 'b = Body(p)']);
     expect(s.dragPoint('b', 0, 3, false).ok).toBe(true);
@@ -45,7 +68,7 @@ describe('the studio and physics', () => {
       const s = new KernelSession();
       const r = s.applyLines([...ex.lines], ex.id, 'independent', 'host');
       expect(r.ok, ex.id).toBe(true);
-      const bodies = s.figure.objects().filter((o) => o.type === 'Body' || o.typeText === 'List<Body>');
+      const bodies = s.figure.objects().filter((o) => o.type === 'Body' || o.type === 'Body3' || /^List<Body3?>/.test(o.typeText));
       expect(bodies.length, ex.id).toBeGreaterThan(0);
       const before = JSON.stringify(bodies.map((o) => s.figure.value(o.id)));
       for (let k = 1; k <= 60; k++) s.setTime(k / 60);

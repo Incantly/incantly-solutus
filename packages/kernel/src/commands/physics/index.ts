@@ -29,7 +29,10 @@ import { polygonMass } from '../../physics/geom2';
 import { cos, sin } from '../../physics/math';
 import { FORCE_KINDS } from '../../physics/world2';
 import { PhysicsDriver } from './driver';
+import { Physics3Driver } from './driver3';
 import { bodyShapeOf } from './shapes';
+import { body3ShapeOf, isBody3Value, startOf3 } from './body3';
+import type { Body3Value, BodySpec3 } from './body3';
 import { JOINT_COMMANDS, MEASURE_COMMANDS, isJointValue } from './joints';
 import { VEHICLE_COMMANDS, isVehicleValue, isWheelValue } from './vehicle';
 import type { BodySpec, BodyValue, Outline, WorldValue } from './types';
@@ -40,8 +43,10 @@ export type { BodySpec, BodyValue, Outline, WorldValue } from './types';
 export { isBodyValue, isWorldValue, DEFAULT_WORLD } from './types';
 export { bodyShapeOf, solidShapeOf } from './shapes';
 export { isJointValue } from './joints';
-export { dragBody, draggingBody } from './drag';
+export { dragBody, dragBody3, draggingBody } from './drag';
 export { isVehicleValue, isWheelValue } from './vehicle';
+export { isBody3Value, solidNow } from './body3';
+export type { Body3Value, BodySpec3 } from './body3';
 export type { VehicleValue, WheelValue } from './vehicle';
 export type { JointValue, JointKind } from './joints';
 
@@ -69,6 +74,19 @@ export function physicsOf(figure: Figure): PhysicsDriver {
   return d;
 }
 
+const DRIVERS3 = new WeakMap<object, Physics3Driver>();
+
+/** The figure's physics driver in space (made on first use). */
+export function physics3Of(figure: Figure): Physics3Driver {
+  for (const d of figure.worldDrivers()) if (d instanceof Physics3Driver) return d;
+  let d = DRIVERS3.get(figure);
+  if (!d) {
+    d = new Physics3Driver(figure);
+    DRIVERS3.set(figure, d);
+  }
+  return d;
+}
+
 /* ------------------------------ Body ------------------------------ */
 
 const BODY_NAMED = [
@@ -76,6 +94,7 @@ const BODY_NAMED = [
   named('turns', 'Bool'), named('bullet', 'Bool'), named('fixed', 'Bool'), named('group', 'Number'), named('charge', 'Number'),
 ];
 const BODY_SHAPES = 'Polygon|Circle|Conic|Polyline';
+const BODY3_NAMED = [named('mass', 'Number'), named('density', 'Number'), named('speed', 'Vector3|Point3'), named('spin', 'Vector3|Point3'), named('bounce', 'Number'), named('friction', 'Number'), named('fixed', 'Bool'), named('group', 'Number')];
 
 /** Literal values that can never work (errors B004). */
 function checkBodyArgs(c: FormCheck, first: number): Refusal | undefined {
@@ -107,6 +126,53 @@ function checkCrossing(c: FormCheck): Refusal | undefined {
     hint: 'Put the corners in order round the shape, so no two edges cross.',
     param: 0,
     params: { why: `edges ${s.edges[0] + 1} and ${s.edges[1] + 1} cross` },
+  };
+}
+
+/** `Body(s)` on a solid with dents (errors B003). */
+function checkConvex3(c: FormCheck): Refusal | undefined {
+  const a = c.args[0];
+  if (!a || a.omitted || a.value === undefined) return undefined;
+  const s = body3ShapeOf(a.value);
+  if (s.ok || s.why !== 'not_convex') return undefined;
+  return { kind: 'not_convex_3d', message: `Body(${a.text}): ${a.text} has dents.`, hint: 'Bodies in space must have no dents. Split it into convex parts and Weld them.', param: 0, params: { why: `${a.text} has dents` } };
+}
+
+/** `Bodies(list)` of solids, one with dents (errors B003). */
+function checkConvexList3(c: FormCheck): Refusal | undefined {
+  const a = c.args[0];
+  if (!a || a.omitted || !Array.isArray(a.value)) return undefined;
+  const k = (a.value as unknown[]).findIndex((s) => {
+    const r = body3ShapeOf(s);
+    return !r.ok && r.why === 'not_convex';
+  });
+  if (k < 0) return undefined;
+  return { kind: 'not_convex_3d', message: `Bodies(${a.text}): solid ${k + 1} has dents.`, hint: 'Bodies in space must have no dents. Split it into convex parts and Weld them.', param: 0, params: { why: `solid ${k + 1} has dents` } };
+}
+
+function body3Rule(): { run(call: RuleCall): unknown } {
+  return {
+    run(call) {
+      const [solid, mass, density, speed, spin, bounce, friction, fixed, group] = call.values;
+      const s = body3ShapeOf(solid);
+      if (!s.ok) return call.fail(s.why === 'not_convex' ? 'degenerate' : 'degenerate', s.detail);
+      const v3 = (x: unknown): { x: number; y: number; z: number } => {
+        const p = x as { x?: number; y?: number; z?: number } | undefined;
+        return { x: num(p?.x, 0), y: num(p?.y, 0), z: num(p?.z, 0) };
+      };
+      const d = num(density, 1) > 0 ? num(density, 1) : 1;
+      const m = typeof mass === 'number' && mass > 0 ? mass : undefined;
+      const st = startOf3(s.shapes, m, d);
+      const spec: BodySpec3 = {
+        shapes: s.shapes, solid: s.solid, ...(m !== undefined ? { mass: m } : {}), density: d, v: v3(speed), w: v3(spin),
+        bounce: Math.min(1, Math.max(0, num(bounce, 0.2))), friction: Math.min(2, Math.max(0, num(friction, 0.4))), fixed: bool(fixed, false), group: Math.round(num(group, 0)), ...st,
+      };
+      const value: Body3Value = {
+        schema: 'Body3', spec, x: st.cx, y: st.cy, z: st.cz, q: [1, 0, 0, 0], v: spec.v, spin: spec.w, asleep: false, mass: spec.fixed ? Infinity : st.massNow,
+        energy: 0, kinetic: 0, potential: 0, touching: [], now: s.solid,
+      };
+      return value;
+    },
   };
 }
 
@@ -211,17 +277,18 @@ function groundRule(): { run(call: RuleCall): unknown } {
 
 /* ------------------------------ the world ------------------------------ */
 
-const WORLD_PROPS: readonly (readonly [string, string])[] = [['gravity', 'Vector|Point'], ['air', 'Number'], ['passes', 'Number'], ['timestep', 'Number'], ['sleep', 'Bool'], ['range', 'Number'], ['show', 'Text']];
+const WORLD_PROPS: readonly (readonly [string, string])[] = [['gravity', 'Vector|Point|Vector3|Point3'], ['air', 'Number'], ['passes', 'Number'], ['timestep', 'Number'], ['sleep', 'Bool'], ['range', 'Number'], ['show', 'Text']];
 
 function worldRule(): { run(call: RuleCall): unknown } {
   return {
     run(call) {
       const [g, air, passes, step, sleep, range, show] = call.values;
-      const gv = g as { x?: number; y?: number } | undefined;
+      const gv = g as { x?: number; y?: number; z?: number } | undefined;
       const st = num(step, 1 / 120);
+      const g3 = typeof gv?.z === 'number';
       const v: WorldValue = {
         ...DEFAULT_WORLD,
-        gx: num(gv?.x, 0), gy: num(gv?.y, -9.8), air: Math.min(10, Math.max(0, num(air, 0))), passes: Math.min(20, Math.max(1, Math.round(num(passes, 8)))),
+        gx: num(gv?.x, 0), gy: num(gv?.y, -9.8), gz: g3 ? num(gv?.z, -9.8) : num(gv?.y, -9.8), g3, air: Math.min(10, Math.max(0, num(air, 0))), passes: Math.min(20, Math.max(1, Math.round(num(passes, 8)))),
         rate: st > 0 ? Math.round(1 / st) : 120, sleep: bool(sleep, true), range: Math.max(1, num(range, 50)),
         show: typeof show === 'string' && (SHOW_WORDS as readonly string[]).includes(show) ? show : 'bodies',
       };
@@ -262,7 +329,7 @@ function fraction(text: string): number | undefined {
 
 /* ------------------------------ actions ------------------------------ */
 
-function bodyArg(call: ActionCall, k = 0): { id: ObjId; item?: number } | { error: ErrorObject } {
+function bodyArg(call: ActionCall, k = 0): { id: ObjId; item?: number; space?: boolean } | { error: ErrorObject } {
   const id = call.refs?.[k] ?? call.objects[k];
   const at = { line: 0, col: 1, endCol: 1 };
   const o = id !== undefined ? call.figure.get(id) : undefined;
@@ -273,6 +340,12 @@ function bodyArg(call: ActionCall, k = 0): { id: ObjId; item?: number } | { erro
     const owner = physicsOf(call.figure).ownerOf(v.spec);
     if (owner) return owner;
   }
+  if (!o && isBody3Value(v)) {
+    call.figure.flush();
+    const owner = physics3Of(call.figure).ownerOf(v.spec);
+    if (owner) return { ...owner, space: true };
+  }
+  if (o?.type === 'Body3') return { id: o.id, space: true };
   if (!o || o.type !== 'Body') {
     const name = o?.name ?? 'it';
     return { error: err('not_a_body', at, { why: `${name} is not a body` }, { hint: `Make it a body first: b = Body(${name}, mass = 1).`, suggest: o ? [`b = Body(${o.name}, mass = 1)`] : [], recovery: 'use_suggestion', fingerprintKey: `push:${name}` }) };
@@ -283,9 +356,17 @@ function bodyArg(call: ActionCall, k = 0): { id: ObjId; item?: number } | { erro
 function pushRun(call: ActionCall): ActionOutcome {
   const b = bodyArg(call);
   if ('error' in b) return { error: b.error };
-  const j = call.values[1] as { x?: number; y?: number } | undefined;
-  const at = call.values[2] as { x?: number; y?: number } | undefined;
+  const j = call.values[1] as { x?: number; y?: number; z?: number } | undefined;
+  const at = call.values[2] as { x?: number; y?: number; z?: number } | undefined;
   if (typeof j?.x !== 'number' || typeof j.y !== 'number') return { summary: 'nothing to push with' };
+  if (b.space) {
+    const d3 = physics3Of(call.figure);
+    call.figure.flush();
+    const z = (p: { z?: number }): number => (typeof p.z === 'number' ? p.z : 0);
+    d3.push(b.id, { x: j.x, y: j.y, z: z(j) }, typeof at?.x === 'number' && typeof at.y === 'number' ? { x: at.x, y: at.y, z: z(at) } : undefined, b.item);
+    call.figure.flush(true);
+    return { summary: `pushed ${call.figure.get(b.id)?.name ?? ''}` };
+  }
   const d = physicsOf(call.figure);
   call.figure.flush();
   d.push(b.id, j.x, j.y, typeof at?.x === 'number' && typeof at.y === 'number' ? { x: at.x, y: at.y } : undefined, b.item);
@@ -298,7 +379,8 @@ function wakeRun(awake: boolean): (call: ActionCall) => ActionOutcome {
     const b = bodyArg(call);
     if ('error' in b) return { error: b.error };
     call.figure.flush();
-    physicsOf(call.figure).wake(b.id, awake, b.item);
+    if (b.space) physics3Of(call.figure).wake(b.id, awake, b.item);
+    else physicsOf(call.figure).wake(b.id, awake, b.item);
     call.figure.flush(true);
     return { summary: awake ? 'woken' : 'put to sleep' };
   };
@@ -325,6 +407,13 @@ export const PHYSICS_COMMANDS: readonly CommandSpec[] = [
       summary: 'a body that falls, slides and bounces, made from a closed shape',
       explain: '{name} is a body made from {0}',
       check: (c) => checkCrossing(c) ?? checkBodyArgs(c, 1),
+    }, {
+      params: [P('solid', 'Polyhedron|Sphere|Cylinder|Cone'), ...BODY3_NAMED],
+      returns: 'Body3',
+      rule: body3Rule,
+      summary: 'a body in space that falls, rolls and bounces, made from a solid',
+      explain: '{name} is a body made from {0}',
+      check: (c) => checkConvex3(c),
     }],
     refuse: refuseBody,
   },
@@ -333,7 +422,21 @@ export const PHYSICS_COMMANDS: readonly CommandSpec[] = [
     kind: 'object',
     group: 'physics',
     forms: [{
-      params: [P('shapes', 'List'), ...BODY_NAMED],
+      // first, so a list of solids in space makes bodies in space
+      params: [P('solids', 'List<Polyhedron>|List<Sphere>|List<Cylinder>|List<Cone>'), ...BODY3_NAMED],
+      returns: 'List<Body3>',
+      rule: () => ({
+        run(call: RuleCall) {
+          const list = call.values[0];
+          const one = body3Rule();
+          return (Array.isArray(list) ? list : []).map((s) => one.run({ ...call, values: [s, ...call.values.slice(1)], fail: () => undefined } as RuleCall));
+        },
+      }),
+      summary: 'a body in space for each solid in a list, all with the same settings',
+      check: (c) => checkConvexList3(c),
+    }, {
+      // any list; the plane's shapes are named so the form of solids in space (fewer types) is chosen for those
+      params: [P('shapes', 'List<Polygon>|List<Circle>|List<Conic>|List<Polyline>|List<Point>|List'), ...BODY_NAMED],
       returns: 'List<Body>',
       rule: () => ({
         run(call: RuleCall) {
@@ -374,6 +477,8 @@ export const PHYSICS_COMMANDS: readonly CommandSpec[] = [
   action('Push', [
     { params: [P('b', 'Any'), P('impulse', 'Vector|Point')], summary: 'kick a body at its centre (N s)' },
     { params: [P('b', 'Any'), P('impulse', 'Vector|Point'), P('at', 'Point')], summary: 'kick a body at a point, so it also turns' },
+    { params: [P('b', 'Any'), P('impulse', 'Vector3|Point3')], summary: 'kick a body in space at its centre (N s)' },
+    { params: [P('b', 'Any'), P('impulse', 'Vector3|Point3'), P('at', 'Point3')], summary: 'kick a body in space at a point, so it also turns' },
   ], pushRun),
   action('Wake', [{ params: [P('b', 'Any')], summary: 'wake a sleeping body' }], wakeRun(true)),
   action('Sleep', [{ params: [P('b', 'Any')], summary: 'put a body to sleep until something touches it' }], wakeRun(false)),
@@ -469,6 +574,59 @@ function readWorld(field: string, v: unknown): unknown {
       return v.contacts;
     case 'gravity':
       return { x: v.gx, y: v.gy };
+    default:
+      return undefined;
+  }
+}
+
+const V3T: Ty = { k: 'Vector3' } as Ty;
+const BODY3_FIELDS: Readonly<Record<string, Ty>> = {
+  pos: { k: 'Point3' } as Ty, x: T.Number, y: T.Number, z: T.Number, speed: V3T, v: T.Number, spin: V3T, energy: T.Number, kinetic: T.Number, potential: T.Number,
+  momentum: V3T, mass: T.Number, asleep: T.Bool, touching: { k: 'List', of: T.Text },
+  force: { k: 'Function', ret: 'Vector3', arity: 1, textArgs: true } as Ty,
+};
+
+function readBody3(field: string, v: unknown): unknown {
+  if (!isBody3Value(v)) return undefined;
+  switch (field) {
+    case 'pos':
+      return { x: v.x, y: v.y, z: v.z };
+    case 'x':
+      return v.x;
+    case 'y':
+      return v.y;
+    case 'z':
+      return v.z;
+    case 'speed':
+      return v.v;
+    case 'v':
+      return Math.sqrt(v.v.x * v.v.x + v.v.y * v.v.y + v.v.z * v.v.z);
+    case 'spin':
+      return v.spin;
+    case 'energy':
+      return v.energy;
+    case 'kinetic':
+      return v.kinetic;
+    case 'potential':
+      return v.potential;
+    case 'momentum':
+      return Number.isFinite(v.mass) ? { x: v.mass * v.v.x, y: v.mass * v.v.y, z: v.mass * v.v.z } : { x: 0, y: 0, z: 0 };
+    case 'mass':
+      return v.mass;
+    case 'asleep':
+      return v.asleep;
+    case 'touching':
+      return v.touching;
+    case 'force':
+      return {
+        arity: 1,
+        call: (kind: unknown) => {
+          const k = FORCE_KINDS.indexOf(String(kind) as (typeof FORCE_KINDS)[number]);
+          const f = v.forces;
+          if (k < 0) return undefined;
+          return f ? { x: f[k * 3] as number, y: f[k * 3 + 1] as number, z: f[k * 3 + 2] as number } : { x: 0, y: 0, z: 0 };
+        },
+      };
     default:
       return undefined;
   }
@@ -617,20 +775,30 @@ export function registerPhysics(registry: CommandRegistry): void {
     DRIVERS.set(f, d);
     return d;
   });
-  for (const [type, fields, reader] of [['Body', BODY_FIELDS, readBody], ['World', WORLD_FIELDS, readWorld], ['Joint', JOINT_FIELDS, readJoint], ['Wheel', WHEEL_FIELDS, readWheel], ['Vehicle', VEHICLE_FIELDS, readVehicle]] as const) {
+  registerWorldDriver((figure) => {
+    const f = figure as Figure;
+    const old = DRIVERS3.get(f);
+    if (old) return old;
+    const d = new Physics3Driver(f);
+    DRIVERS3.set(f, d);
+    return d;
+  });
+  for (const [type, fields, reader] of [['Body', BODY_FIELDS, readBody], ['World', WORLD_FIELDS, readWorld], ['Joint', JOINT_FIELDS, readJoint], ['Wheel', WHEEL_FIELDS, readWheel], ['Vehicle', VEHICLE_FIELDS, readVehicle], ['Body3', BODY3_FIELDS, readBody3]] as const) {
     registerFieldNames(type, () => Object.keys(fields));
     registerFieldTyper(type, (field) => fields[field]);
     registerFieldReader(type, (field, v) => reader(field, v));
   }
   registerValueText((v) => {
     if (isBodyValue(v)) return `body at (${fmt(v.x)}, ${fmt(v.y)}), ${fmt(Math.sqrt(v.vx * v.vx + v.vy * v.vy))} m/s${v.asleep ? ', asleep' : ''}`;
+    if (isBody3Value(v)) return `body at (${fmt(v.x)}, ${fmt(v.y)}, ${fmt(v.z)}), ${fmt(Math.sqrt(v.v.x ** 2 + v.v.y ** 2 + v.v.z ** 2))} m/s${v.asleep ? ', asleep' : ''}`;
     if (isWorldValue(v)) return `world, gravity (${fmt(v.gx)}, ${fmt(v.gy)})`;
     if (isJointValue(v)) return `${v.kind}${v.broken ? ', broken' : `, ${fmt(v.force)} N`}`;
     if (isWheelValue(v)) return `wheel, ${fmt(Math.abs(v.spin))} rad/s${v.broken ? ', broken off' : ''}`;
     if (isVehicleValue(v)) return `vehicle, ${fmt(v.speedometer)} m/s`;
     return undefined;
   });
-  registerTypeStyle('Body', { defaults: { color: '#c0602a', width: 2, opacity: 0.35 }, keys: ['bounce', 'friction', 'force', 'torque', 'bullet', 'group', 'charge', 'show'] });
+  registerTypeStyle('Body3', { lists: true, defaults: { color: '#c0602a', width: 2, opacity: 0.85 }, keys: ['bounce', 'friction', 'force', 'torque', 'group', 'show'] });
+  registerTypeStyle('Body', { lists: true, defaults: { color: '#c0602a', width: 2, opacity: 0.35 }, keys: ['bounce', 'friction', 'force', 'torque', 'bullet', 'group', 'charge', 'show'] });
   registerTypeStyle('World', { drawable: false });
   registerTypeStyle('Joint', { defaults: { color: '#555555', width: 1.5 } });
   registerTypeStyle('Wheel', { defaults: { color: '#2b2f36', width: 2 } });
@@ -650,13 +818,17 @@ export function registerPhysics(registry: CommandRegistry): void {
   for (const [k, spec] of Object.entries(PROPS)) if (!Object.hasOwn(PROPERTIES, k)) PROPERTIES[k] = spec;
   const SOLID_TYPES = ['Polygon', 'Circle', 'Conic', 'Segment', 'Line', 'Ray', 'Arc', 'Sector', 'Polyline', 'Curve', 'Function'];
   registerPropertyTypes('solid', SOLID_TYPES);
-  registerPropertyTypes('bounce', [...SOLID_TYPES, 'Body']);
-  registerPropertyTypes('friction', [...SOLID_TYPES, 'Body']);
+  const SOLID3 = ['Polyhedron', 'Sphere', 'Cylinder', 'Cone', 'Plane'];
+  registerPropertyTypes('solid', SOLID3);
+  registerPropertyTypes('bounce', [...SOLID_TYPES, ...SOLID3, 'Body', 'Body3']);
+  registerPropertyTypes('friction', [...SOLID_TYPES, ...SOLID3, 'Body', 'Body3']);
+  registerPropertyTypes('show', ['Body3']);
   for (const k of ['force', 'torque', 'bullet', 'group', 'charge', 'show']) registerPropertyTypes(k, ['Body']);
+  for (const k of ['force', 'torque', 'group']) registerPropertyTypes(k, ['Body3']);
   registerLineCheck(physicsLineCheck);
   registerLineRewriter(worldRewrite);
   registerLineRewriter(bodyWithRewrite);
-  registerScriptTail((figure) => physicsOf(figure as Figure).inputLines());
+  registerScriptTail((figure) => [...physicsOf(figure as Figure).inputLines(), ...physics3Of(figure as Figure).inputLines()]);
   registerReasonPhrase('self_crossing', { noun: 'crossing edges', sentence: 'Its edges cross, so it has no inside to fill with mass.' });
   registerReasonPhrase('unstable_world', { noun: 'an unstable world', sentence: 'The physics went unstable: a spring was too stiff or a force too large for the step.' });
   registerReasonPhrase('broken', { noun: 'a broken joint', sentence: 'The joint broke: the force on it went over its limit.' });

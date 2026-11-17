@@ -29,6 +29,7 @@ import type { Hinge2, Slider2, Grab2 } from '../../physics/joints2';
 import { Wheel2, localAnchor } from '../../physics/joints2';
 import type { VehicleValue, WheelValue } from './vehicle';
 import { isVehicleValue, isWheelValue } from './vehicle';
+import { isSpaceWorld } from './driver3';
 import { getStoredHandler } from '../numbers/handlers';
 import { runHandler } from '../numbers/run';
 
@@ -195,6 +196,7 @@ export class PhysicsDriver implements WorldDriver {
 
   inputLine(words: readonly string[]): string | undefined | false {
     if (words[0] !== 'physics') return false;
+    if (isSpaceWorld(this.acc.list)) return false;
     const kind = words[1];
     const at = Number(words[words.length - 1]);
     if (words[words.length - 2] !== 'at' || !Number.isFinite(at)) return 'a time at the end: @input physics push b 1 0 at 2.5';
@@ -325,6 +327,9 @@ export class PhysicsDriver implements WorldDriver {
     this.wheelRecs = [];
     this.vehicleRecs = [];
     this.worldRec = undefined;
+    this.coneDirty = true;
+    // a figure with a body in space is a world in space: its driver takes the world, the ground and the solids
+    if (isSpaceWorld(this.acc.list)) return;
     for (const r of this.acc.list) {
       const k = r.p.type.k;
       if (isJointRec(r)) this.jointRecs.push(r);

@@ -32,11 +32,12 @@ describe('the 3D app (R4.5)', () => {
     expect(m.graph.element.hidden).toBe(false);
   });
 
-  it('has twelve examples, nine of them moving, which open with every line', () => {
+  it('has fifteen examples, twelve of them moving, which open with every line', () => {
     const own = EXAMPLES.filter((e) => e.modes.includes('graphing3d'));
     expect(own.map((e) => e.id)).toEqual([
       'cube-slice', 'sphere-cut', 'pyramid-volume',
       'space-helix', 'space-cube', 'space-wave', 'space-sweep', 'space-fountain', 'space-orbit', 'space-saddle', 'space-slice', 'space-galaxy',
+      'physics-dice', 'physics-dominoes-3d', 'physics-bowl',
     ]);
     for (const e of own) {
       m.loadExample(e.id);

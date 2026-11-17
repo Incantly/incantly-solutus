@@ -698,7 +698,7 @@ function allowedEvents(figure: Figure, target: string): HandlerEvent[] | undefin
   if (view.type === 'Input') return ['change', 'input', 'dragend'];
   if (view.type === 'Choice') return ['change'];
   // a body raises `hit` on each new touch (physics design 2.4)
-  if (view.type === 'Body' || (view.type === 'List' && figure.get(target)?.typeText === 'List<Body>')) return isClickableName(figure, target) ? ['click', 'hit'] : ['hit'];
+  if (view.type === 'Body' || view.type === 'Body3' || (view.type === 'List' && /^List<Body3?>$/.test(figure.get(target)?.typeText ?? ''))) return isClickableName(figure, target) ? ['click', 'hit'] : ['hit'];
   if (view.type === 'Bool') return view.free ? ['change'] : [];
   if (view.type === 'Number' || view.type === 'Point') {
     const out: HandlerEvent[] = view.free ? ['change', 'dragend'] : [];

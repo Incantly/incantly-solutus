@@ -86,6 +86,8 @@ export interface TypeStyle {
   readonly keys?: readonly string[];
   /** False for a type that is not drawn (a matrix, a distribution): it then takes only the keys every object takes. Default true. */
   readonly drawable?: boolean;
+  /** A list of this type looks like one of them (a list of bodies is drawn in the bodies' colour). Default false. */
+  readonly lists?: boolean;
 }
 
 interface TypeStyleRec {
@@ -93,6 +95,7 @@ interface TypeStyleRec {
   freeDefaults: Partial<NonNullable<TypeStyle['defaults']>>;
   keys: Set<string>;
   drawable: boolean | undefined;
+  lists: boolean;
 }
 const typeStyles = new Map<string, TypeStyleRec>();
 
@@ -104,13 +107,20 @@ export function registerTypeStyle(type: string, style: TypeStyle): void {
   if (typeof type !== 'string' || type === '' || type === '__proto__' || typeof style !== 'object' || style === null) return;
   let r = typeStyles.get(type);
   if (!r) {
-    r = { defaults: {}, freeDefaults: {}, keys: new Set(), drawable: undefined };
+    r = { defaults: {}, freeDefaults: {}, keys: new Set(), drawable: undefined, lists: false };
     typeStyles.set(type, r);
   }
   if (style.defaults) Object.assign(r.defaults, style.defaults);
   if (style.freeDefaults) Object.assign(r.freeDefaults, style.freeDefaults);
   for (const k of style.keys ?? []) r.keys.add(k);
   if (style.drawable !== undefined) r.drawable = style.drawable;
+  if (style.lists !== undefined) r.lists = style.lists;
+}
+
+/** The type whose default look an object of type `ty` takes: a list's item type when that type asks for it. */
+export function styleTypeOf(ty: { readonly k: string; readonly of?: { readonly k: string } }): string {
+  if (ty.k === 'List' && ty.of && typeStyles.get(ty.of.k)?.lists === true) return ty.of.k;
+  return ty.k;
 }
 
 /** The default properties of an object of this type. `dependent` and `onPath` only matter for a Point. */
