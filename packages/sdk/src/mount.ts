@@ -249,6 +249,8 @@ export async function createApp(opts: AppOptions): Promise<MountedApp> {
         if (!r.ok) say(r.message);
       } } : {}),
       say: (t) => say(t),
+      // no WebGL 2: cloth and drops drawn coarser, said once (physics errors.md 5, 7)
+      notice: (n) => say(n.message),
       styleBar: ui.zoomButtons,
     })
     : undefined;
