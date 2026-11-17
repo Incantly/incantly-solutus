@@ -1016,8 +1016,11 @@ function checkDirective(c: Checker, node: Extract<LineNode, { k: 'directive' }>)
       const okReset = txt.length === 3 && txt[0] === 'reset' && txt[1] === 'at' && isNum(txt[2]);
       const nums = txt.slice(1, txt.length - (txt[txt.length - 1] === 'base' ? 1 : 2));
       const tail = txt[txt.length - 1] === 'base' ? true : txt[txt.length - 2] === 'at' && isNum(txt[txt.length - 1]);
-      const okSet = txt.length >= 3 && /^[A-Za-z\u0370-\u03FF_][A-Za-z0-9_\u0370-\u03FF]*$/.test(txt[0] ?? '') && txt[0] !== 'reset' && (nums.length === 1 || nums.length === 2) && nums.every(isNum) && tail;
-      if (!okReset && !okSet) return bad('a name, a value, then at t or base; or reset at t');
+      const okSet = txt.length >= 3 && /^[A-Za-z\u0370-\u03FF_][A-Za-z0-9_\u0370-\u03FF]*$/.test(txt[0] ?? '') && txt[0] !== 'reset' && txt[0] !== 'physics' && (nums.length === 1 || nums.length === 2) && nums.every(isNum) && tail;
+      // the physics log (physics design 5.4): @input physics push b 1 0 at 2.5, grab, release, set, reset; the driver
+      // checks the rest
+      const okPhysics = txt[0] === 'physics' && txt.length >= 4 && txt[txt.length - 2] === 'at' && isNum(txt[txt.length - 1]);
+      if (!okReset && !okSet && !okPhysics) return bad('a name, a value, then at t or base; or reset at t');
       break;
     }
     case 'clock':

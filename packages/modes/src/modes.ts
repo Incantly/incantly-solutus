@@ -8,7 +8,7 @@ import type { AppModeId, ExpressionPolicy, FeatureFlags, ModeConfig, ModeDefault
 export const COMMAND_GROUPS = [
   'figure', 'batch', 'geometry', 'conics', 'polygons', 'transforms', 'functions', 'lists', 'matrices', 'stats', 'charts',
   'fits', 'probability', 'distributions', 'random', 'symbolic', 'text', 'logic', 'controls', 'animation', 'rounding',
-  'size', 'colour', 'vector', 'trig', 'space', 'sound', 'sheet',
+  'size', 'colour', 'vector', 'trig', 'space', 'sound', 'sheet', 'physics',
 ] as const;
 
 const ALL_EXPRESSIONS: ExpressionPolicy = {
@@ -73,7 +73,7 @@ const graphing: ModeConfig = {
   views: { available: ['graphics', 'algebra', 'sheet', 'datalab'], initial: ['algebra', 'graphics'], layout: 'split', canToggle: true },
   tools: { groups: ['move', 'point', 'line', 'general'], toolbar: 'compact', add: ['tangents', 'slider'], deny: ['polyline', 'segment-fixed-length'], customTools: false },
   commands: {
-    allow: ['figure', 'batch', 'functions', 'lists', 'stats', 'charts', 'fits', 'tests', 'text', 'logic', 'controls', 'animation', 'rounding', 'size', 'trig', 'random', 'sound', 'sheet'],
+    allow: ['figure', 'batch', 'functions', 'lists', 'stats', 'charts', 'fits', 'tests', 'text', 'logic', 'controls', 'animation', 'rounding', 'size', 'trig', 'random', 'sound', 'sheet', 'physics'],
     add: ['Point', 'PointOn', 'Midpoint', 'Line', 'Segment', 'Ray', 'Vector', 'Intersect', 'Tangent', 'Slope', 'Distance', 'Circle', 'Polygon', 'Area', 'Reflect', 'Translate'],
   },
   expressions: ALL_EXPRESSIONS,
@@ -94,7 +94,7 @@ const geometry: ModeConfig = {
   views: { available: ['graphics', 'algebra'], initial: ['graphics'], layout: 'single', canToggle: true },
   tools: { groups: ['move', 'point', 'line', 'special-line', 'polygon', 'circle-arc', 'conic', 'measure', 'transform', 'action', 'general'], toolbar: 'full', customTools: false },
   commands: {
-    allow: ['figure', 'batch', 'geometry', 'conics', 'polygons', 'transforms', 'lists', 'text', 'logic', 'controls', 'animation', 'rounding', 'size', 'trig', 'vector', 'sound'],
+    allow: ['figure', 'batch', 'geometry', 'conics', 'polygons', 'transforms', 'lists', 'text', 'logic', 'controls', 'animation', 'rounding', 'size', 'trig', 'vector', 'sound', 'physics'],
     add: ['Root', 'Roots', 'Extremum', 'Slope'],
   },
   expressions: { ...ALL_EXPRESSIONS, allowStates: true, allowParticles: true },
@@ -211,7 +211,7 @@ const graphing3d: ModeConfig = {
   available: true,
   views: { available: ['graphics3d', 'algebra', 'graphics'], initial: ['algebra', 'graphics3d'], layout: 'split', canToggle: true },
   tools: { groups: ['move', 'space'], toolbar: 'full', customTools: false },
-  commands: { allow: ['figure', 'batch', 'space', 'functions', 'geometry', 'transforms', 'lists', 'rounding', 'size', 'trig', 'vector', 'animation', 'controls'] },
+  commands: { allow: ['figure', 'batch', 'space', 'functions', 'geometry', 'transforms', 'lists', 'rounding', 'size', 'trig', 'vector', 'animation', 'controls', 'physics'] },
   expressions: ALL_EXPRESSIONS,
   defaults: { ...BASE_DEFAULTS, autoSliders: true, dragDependent: true },
   features: { ...NO_FEATURES, threeD: true, inputBar: true, suggestions: true, clockBar: true, export: true, menu: true },

@@ -74,6 +74,7 @@ export class Player {
   private sourceKind: ClockSourceKind;
   private last: number | undefined;
   private clampRun = 0;
+  private behindNoted = false;
   private readonly listeners = new Set<(e: PlayerEvent) => void>();
   /** Notices the last call gave (a clamped seek). */
   notices: Notice[] = [];
@@ -93,7 +94,7 @@ export class Player {
 
   /** True while the host should keep calling `frame` (zero idle cost otherwise). */
   needsFrame(): boolean {
-    return this.modeNow === 'playing' || this.figure.solver.catchingUp !== undefined;
+    return this.modeNow === 'playing' || this.figure.solver.catchingUp !== undefined || this.figure.driversNeedFrames();
   }
 
   /** The beat start times the figure was given, in seconds. */
@@ -203,12 +204,23 @@ export class Player {
     this.notices = [];
     if (this.modeNow !== 'playing') {
       // paused while the states catch up: each frame runs one more slice of the replay
-      if (this.figure.solver.catchingUp !== undefined) this.figure.flush();
+      if (this.figure.solver.catchingUp !== undefined || this.figure.driversNeedFrames()) this.figure.flush();
       return this.state;
     }
     const reading = typeof now === 'number' && Number.isFinite(now) ? now : this.readSource();
     const raw = this.last === undefined ? 0 : reading - this.last;
     this.last = reading;
+    // a world driver still behind the clock (physics design 10.5): the clock waits for it, so the film plays slower
+    // but stays the same film
+    if (this.figure.driversNeedFrames()) {
+      this.figure.flush();
+      if (!this.behindNoted) {
+        this.behindNoted = true;
+        this.notices = [makeNotice('physics_behind', {})];
+      }
+      return this.state;
+    }
+    this.behindNoted = false;
     const clamped = raw > MAX_FRAME_DELTA;
     this.clampRun = clamped ? this.clampRun + 1 : 0;
     if (this.clampRun === BEHIND_FRAMES) this.emit({ kind: 'behind', lag: raw });

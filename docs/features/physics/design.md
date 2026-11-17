@@ -78,7 +78,7 @@ world with gravity = (0, −9.8)          # the default; (0, 0, −9.8) in space
 world with gravity = (0, −g)            # a formula: g can be a slider
 world with air = 0.02                   # air drag on every body, per second
 world with passes = 8                   # solver passes (1 to 20)
-world with step = 1/120                 # seconds per step (1/60 to 1/480)
+world with timestep = 1/120                 # seconds per step (1/60 to 1/480)
 world with sleep = false                # keep every body awake
 ```
 
@@ -87,7 +87,7 @@ world with sleep = false                # keep every body awake
 | `gravity` | `Vector` or `Vector3` | `(0, −9.8)` / `(0, 0, −9.8)` | any finite vector |
 | `air` | `Number` | `0` | 0 to 10 |
 | `passes` | `Number` | `8` | integer 1 to 20 |
-| `step` | `Number` | `1/120` | `1/n`, `n` from 60 to 480, and a whole number of solver steps (section 10.1) |
+| `timestep` | `Number` | `1/120` | `1/n`, `n` from 60 to 480, and a whole number of solver steps (section 10.1) |
 | `sleep` | `Bool` | `true` | |
 | `range` | range `a..b` | `−50..50` | the world's size in every direction; bodies and particles that leave it are removed (`errors.md` 5) |
 | `show` | `Text` | `"bodies"` | `"bodies"`, `"forces"`, `"speeds"`, `"contacts"`, `"none"` |

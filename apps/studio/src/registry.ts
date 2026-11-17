@@ -4,7 +4,7 @@
  */
 import {
   CommandRegistry, casEngineReady, geometry, registerAnimation, registerCas, registerFunctions, registerLists, registerNumbers, registerProbability,
-  registerSheet, registerSound, registerSpace, registerStatistics, registerText, setCasEngine,
+  registerSheet, registerPhysics, registerSound, registerSpace, registerStatistics, registerText, setCasEngine,
 } from '@incantly/kernel';
 import { SYMBOLIC_COMMANDS } from '@incantly/symbolic/catalogue';
 import { startCasLanes } from './caslane';
@@ -24,6 +24,7 @@ export function studioRegistry(): CommandRegistry {
   registerText(r);
   registerSound(r);
   registerSpace(r);
+  registerPhysics(r);
   registerSheet(r);
   registerCas(r, SYMBOLIC_COMMANDS);
   shared = r;
