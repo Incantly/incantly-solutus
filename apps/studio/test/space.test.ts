@@ -95,9 +95,9 @@ describe('the 3D app (R4.5)', () => {
       m.space.canvas.dispatchEvent(new KeyboardEvent(type, { key: k, bubbles: true }));
     };
     key('keydown', 'ArrowLeft');
-    expect(m.session.figure.value('turn')).toBe(0.5);
+    expect(m.session.figure.value('steering')).toBe(0.5);
     key('keyup', 'ArrowLeft');
-    expect(m.session.figure.value('turn')).toBe(0);
+    expect(m.session.figure.value('steering')).toBe(0);
     key('keydown', ' ');
     expect(m.session.figure.value('stop')).toBe(1);
     key('keyup', ' ');

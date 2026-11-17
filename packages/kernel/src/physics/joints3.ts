@@ -897,8 +897,7 @@ export class Wheel3 implements Joint3 {
     this.spin += (driveT(this.push) * h) / this.Iw;
     // warm start: last step's tyre impulses, kept inside this step's grip
     this.lonI = Math.max(-this.maxF, Math.min(this.maxF, this.lonI));
-    const side = Math.sqrt(Math.max(0, this.maxF * this.maxF - this.lonI * this.lonI));
-    this.latI = Math.max(-side, Math.min(side, this.latI));
+    this.latI = Math.max(-this.maxF, Math.min(this.maxF, this.latI));
     this.tyre(w, this.lonI, this.latI);
   }
 
@@ -930,9 +929,8 @@ export class Wheel3 implements Joint3 {
     const dl = lon - this.lonI;
     this.lonI = lon;
     this.tyre(w, dl, 0);
-    // across: no sliding sideways, within what the grip has left
-    const side = Math.sqrt(Math.max(0, this.maxF * this.maxF - this.lonI * this.lonI));
-    const lat = Math.max(-side, Math.min(side, this.latI - dot(this.s, vrel()) * this.mLat));
+    // across: no sliding sideways, within the grip (a box of grip times the push each way, as contacts have, 6.5)
+    const lat = Math.max(-this.maxF, Math.min(this.maxF, this.latI - dot(this.s, vrel()) * this.mLat));
     const ds = lat - this.latI;
     this.latI = lat;
     this.tyre(w, 0, ds);

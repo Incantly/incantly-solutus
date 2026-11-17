@@ -51,7 +51,7 @@ const heading = (b: physics.Body3Value): number => {
 const CAR = (pedals = 'motor = gas', extra: readonly string[] = []): string[] => [
   'g = Ground()',
   'gas = 1 in -1..1',
-  'turn = 0 in -0.6..0.6',
+  'steering = 0 in -0.6..0.6',
   'stop = 0 in 0..1',
   'chassis = Body(Box((0, 0, 0.9), 3, 1.6, 0.5), mass = 400)',
   'w1 = Wheel(chassis, (1.1, 0.8, 0.45), 0.4, steers = true)',
