@@ -5,7 +5,9 @@
  * line, so a turn is one undo step and the file and the teacher see it.
  */
 import { physics, space } from '@incantly/kernel';
-import type { Figure } from '@incantly/kernel';
+import type { Figure, Notice } from '@incantly/kernel';
+import { sharedSpaceGpu } from './gpu3';
+import type { SpaceGpu } from './gpu3';
 import { cameraLine, dragTo, facingAxis, keyLine, keyMove, orbit, pan, pick3, zoomAt } from './controls3';
 import type { DragMode } from './controls3';
 import type { Hit3, Painted3 } from './paint3';
@@ -36,6 +38,13 @@ export interface SpacePaneOptions {
   readonly slide?: (name: string, value: number, done: boolean) => void;
   /** The style bar of ui.md 6.2 (default on). */
   readonly styleBar?: boolean;
+  /**
+   * The WebGL 2 painter for cloth, drops and waves (physics design 12.1): the page's shared one by default; `null` for
+   * none, so the software painter draws them coarser.
+   */
+  readonly gpu?: SpaceGpu | null;
+  /** A notice for the learner, once: `cloth_drawn_coarse` when there is no WebGL 2 (physics errors.md 5, 7). */
+  readonly notice?: (n: Notice) => void;
 }
 
 export interface SpacePane {
@@ -53,6 +62,10 @@ export interface SpacePane {
   selected(): string | undefined;
   /** True while the camera follows the car. */
   following(): boolean;
+  /** Who draws sheets and drops: the WebGL 2 painter, or the software one (the host fault `webgl_unavailable`). */
+  renderer(): 'webgl2' | 'software';
+  /** The notices raised so far (each kind once). */
+  notices(): readonly Notice[];
   dispose(): void;
 }
 
@@ -112,6 +125,10 @@ export function mountSpace(opts: SpacePaneOptions): SpacePane {
   let zoomTimer: ReturnType<typeof setTimeout> | undefined;
   /** The camera keeps behind the car (physics ui.md 9). */
   let follow = false;
+  /** The GPU painter, asked for on the first frame that has sheets or drops. */
+  let gpu: SpaceGpu | undefined | null = opts.gpu === undefined ? undefined : opts.gpu;
+  let gpuAsked = opts.gpu !== undefined;
+  const raised: Notice[] = [];
 
   /** The camera a gesture changes: the one the figure stores (or the live copy), before spin and clip size. */
   const baseView = (): space.View3 => live ?? space.viewOf(opts.figure());
@@ -150,7 +167,17 @@ export function mountSpace(opts: SpacePaneOptions): SpacePane {
     }
     const c = ctx && typeof ctx.setTransform === 'function' ? ctx : NULL_CTX;
     c.setTransform(dpr, 0, 0, dpr, 0, 0);
-    painted = paintSpace(c, view, w, h, scene);
+    if (!gpuAsked && scene.items.some((it) => it.k === 'sheet' || it.k === 'drops')) {
+      gpuAsked = true;
+      gpu = sharedSpaceGpu();
+    }
+    painted = paintSpace(c, view, w, h, scene, { pixelRatio: dpr, coarse: !gpu, ...(gpu ? { gpu } : {}) });
+    if (painted.coarse.length > 0 && !raised.some((n) => n.kind === 'cloth_drawn_coarse')) {
+      // no WebGL 2 (the host fault webgl_unavailable): said once; the physics and the film are the same
+      const n = physics.makeNotice('cloth_drawn_coarse', { name: painted.coarse[0] as string }, []);
+      raised.push(n);
+      opts.notice?.(n);
+    }
     const lines = describe3(fig);
     if (list.childElementCount !== lines.length || [...list.children].some((li, i) => li.textContent !== lines[i])) {
       list.replaceChildren(...lines.map((t) => Object.assign(document.createElement('li'), { textContent: t })));
@@ -391,6 +418,8 @@ export function mountSpace(opts: SpacePaneOptions): SpacePane {
     size: () => ({ w, h }),
     selected: () => chosen,
     following: () => follow,
+    renderer: () => (gpuAsked ? (gpu ? 'webgl2' : 'software') : sharedSpaceGpu() ? 'webgl2' : 'software'),
+    notices: () => raised,
     dispose() {
       ro?.disconnect();
       if (zoomTimer) clearTimeout(zoomTimer);

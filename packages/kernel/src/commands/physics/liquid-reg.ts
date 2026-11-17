@@ -85,4 +85,6 @@ export function registerLiquids(): void {
   registerTypeStyle('Waves', { defaults: { color: '#2f7fc1', width: 2, opacity: 0.75 } });
   registerLineCheck(liquidLineCheck);
   registerNotice('worker_crashed', { code: 'B112', severity: 'info', template: 'The physics worker stopped, so the film goes on here on the page. It is the same film.' });
+  // no WebGL 2 for the Space view (host fault webgl_unavailable, errors.md 7): cloth and drops are drawn coarser
+  registerNotice('cloth_drawn_coarse', { code: 'B114', severity: 'info', template: '{name} is drawn coarser on this computer; it moves the same.' });
 }

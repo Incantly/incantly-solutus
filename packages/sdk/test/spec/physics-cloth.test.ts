@@ -1,14 +1,15 @@
 /**
  * Cloth on the page (.kiro/specs/physics R10.4, R10.5 fallback; docs/features/physics design 9.6, 11.4 "Cloth, no
- * worker", 12, 12.1; errors.md `cloth_drawn_coarse`): a world with cloth runs whole in the worker with the same film
- * as without it, and the Space view's software painter draws cloth, coarser past 32 a side.
+ * worker", 12.1): a world with cloth runs whole in the worker with the same film as without it, and
+ * a cloth in space is one sheet for the WebGL 2 painter.
  */
 import { describe, expect, it } from 'vitest';
 import { Figure, physics, physics3Of, physicsOf, space } from '@incantly/kernel';
 import { sdkRegistry } from '../../src/registry';
 import { PhysicsWorkerHost, PhysicsWorkerState } from '../../src/worker/index';
 import type { FromWorker, PhysicsChannel } from '../../src/worker/index';
-import { sceneOf3, takeSpaceNotices } from '../../src/screen/space/scene3';
+import { sceneOf3 } from '../../src/screen/space/scene3';
+import type { SheetItem } from '../../src/screen/space/scene3';
 
 const make = (lines: readonly string[]): Figure => {
   const f = new Figure({ commands: sdkRegistry() });
@@ -83,35 +84,27 @@ describe('cloth in the worker (design 9.6, 11.4 "Cloth, no worker")', () => {
   });
 });
 
-describe('cloth drawn by the Space view\'s software painter (design 12, 12.1)', () => {
-  it('a 32 × 32 sheet: two faces a cell from every point, its pins as dots, no notice', () => {
-    const f = make(['sheet = Cloth((0, 0, 3), (3, 0, 0), (0, 0, -2), 32, 32, pins = "top")']);
-    const sc = sceneOf3(f, space.viewOf(f));
-    const id = f.get('sheet')?.id as unknown as number;
-    expect(sc.items.filter((i) => i.k === 'face' && i.id === id).length).toBe(2 * 31 * 31);
-    expect(sc.items.filter((i) => i.k === 'dot' && i.id === id).length).toBe(32);
-    expect(takeSpaceNotices(f)).toEqual([]);
-  });
-
-  it('a 64 × 32 flag is drawn from every second point, with cloth_drawn_coarse once', () => {
+describe('cloth in the Space view (design 12.1)', () => {
+  it('a sheet becomes one sheet item for the WebGL 2 painter, every point, threads every 8, its pins as dots', () => {
     const f = make(FLAG);
-    const view = space.viewOf(f);
-    const sc = sceneOf3(f, view);
+    const sc = sceneOf3(f, space.viewOf(f));
     const id = f.get('flag')?.id as unknown as number;
-    // 32 by 16 cells of two faces
-    expect(sc.items.filter((i) => i.k === 'face' && i.id === id).length).toBe(2 * 32 * 16);
-    sceneOf3(f, view);
-    const notes = takeSpaceNotices(f);
-    expect(notes.map((n) => n.kind)).toEqual(['cloth_drawn_coarse']);
-    expect(takeSpaceNotices(f)).toEqual([]);
+    const sheet = sc.items.find((i) => i.k === 'sheet' && i.id === id) as SheetItem | undefined;
+    expect(sheet).toMatchObject({ nx: 64, ny: 32, threads: 8, occludes: true, coarse: 2, fine: 1 });
+    expect(sheet?.pos.length).toBe(64 * 32 * 3);
+    expect(sheet?.tris).toBeUndefined();
+    expect(sc.items.filter((i) => i.k === 'dot' && i.id === id).length).toBe(32);
   });
 
-  it('a torn cell is left out', () => {
+  it('a torn cloth lists its whole faces only', () => {
     const f = make(['g = Ground()', 'net = Cloth((-1, -1, 2), (2, 0, 0), (0, 2, 0), 12, 12, tears = 1.2, stretch = 0.5, pins = "corners")', 'ball = Body(Sphere((0, 0, 3), 0.3), mass = 20)']);
     for (let k = 1; k <= 120; k++) f.setClock(k / 60);
     const v = f.value('net') as physics.ClothValue;
     expect(v.torn).toBeGreaterThan(0);
     const id = f.get('net')?.id as unknown as number;
-    expect(sceneOf3(f, space.viewOf(f)).items.filter((i) => i.k === 'face' && i.id === id).length).toBeLessThan(2 * 11 * 11);
+    const sheet = sceneOf3(f, space.viewOf(f)).items.find((i) => i.k === 'sheet' && i.id === id) as SheetItem | undefined;
+    expect(sheet?.tris).toBeDefined();
+    expect((sheet?.tris?.length ?? 0) / 3).toBeLessThan(2 * 11 * 11);
+    expect(sheet?.topology).toBe(v.torn);
   });
 });

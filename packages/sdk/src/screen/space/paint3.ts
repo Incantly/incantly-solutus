@@ -6,8 +6,12 @@
  */
 import { buildCamera, projectPoint, quatRotate } from '@incantly/view/camera';
 import type { Camera, SpaceCameraProps } from '@incantly/view/camera';
+import { FloatPool, fanTriangles, rgb01, rotationOf } from '@incantly/view/gl';
+import type { GlFrame3, GlPainted3, GlStats3 } from '@incantly/view/gl';
 import { space } from '@incantly/kernel';
-import type { DotItem, FaceItem, Item3, LineItem, PointItem, Scene3 } from './scene3';
+import { dropDots, sheetFaces } from './scene3';
+import type { DotItem, DropsItem, FaceItem, Item3, LineItem, PointItem, Scene3, SheetItem } from './scene3';
+import type { SpaceGpu } from './gpu3';
 
 type V3 = space.V3;
 type Ctx = Pick<CanvasRenderingContext2D, 'beginPath' | 'moveTo' | 'lineTo' | 'closePath' | 'fill' | 'stroke' | 'arc' | 'fillText' | 'strokeText' | 'setLineDash' | 'save' | 'restore' | 'fillRect'> & {
@@ -20,6 +24,8 @@ type Ctx = Pick<CanvasRenderingContext2D, 'beginPath' | 'moveTo' | 'lineTo' | 'c
   textBaseline: CanvasTextBaseline;
   lineJoin: CanvasLineJoin;
   lineCap: CanvasLineCap;
+  /** Only needed with a GPU painter: its picture is copied in among the layers. */
+  drawImage?: (image: CanvasImageSource, sx: number, sy: number, sw: number, sh: number, dx: number, dy: number, dw: number, dh: number) => void;
 };
 
 /** What a pointer can hit: a point, a line piece or a face, nearest the viewer last. */
@@ -31,7 +37,30 @@ export type Hit3 =
 export interface Painted3 {
   readonly camera: Camera;
   readonly hits: readonly Hit3[];
+  /** Who drew the sheets and drops of this frame: the WebGL 2 painter, the software one, or none were there. */
+  readonly sheets: 'gl' | 'software' | 'none';
+  /** The objects drawn coarser than they are (no WebGL 2 on a screen): the notice `cloth_drawn_coarse` names them. */
+  readonly coarse: readonly string[];
+  /** The WebGL 2 painter's counts, when it drew. */
+  readonly gl?: GlStats3;
 }
+
+export interface PaintSpaceOptions {
+  /** The background; `null` paints none (the SVG writes its own). */
+  readonly background?: string | null;
+  /** The WebGL 2 painter for sheets and drops (physics design 12.1); without it the software painter draws them. */
+  readonly gpu?: SpaceGpu | undefined;
+  /** Device pixels per CSS pixel of the target, so the GPU's picture is as sharp as the canvas (default 1). */
+  readonly pixelRatio?: number;
+  /**
+   * A screen without WebGL 2: the software painter draws sheets from every `coarse`-th point and every second drop
+   * (design 12.1). Off, it draws them as finely as an SVG wants.
+   */
+  readonly coarse?: boolean;
+}
+
+/** The solids for the GPU's depth pass, reused from frame to frame. */
+const OCCLUDERS = new FloatPool();
 
 /** The camera of a view at a size (design 8.2): zoom 1 fits a ball of `SPACE_FIT_RADIUS` about the target. */
 export function cameraFor(view: space.View3, w: number, h: number): Camera {
@@ -106,7 +135,7 @@ function occluded(faces: readonly FaceP[], x: number, y: number, z: number, self
 }
 
 /** Paints a scene with a view, `w` by `h` CSS pixels, and returns the camera and the hit areas. */
-export function paintSpace(ctx: Ctx, view: space.View3, w: number, h: number, scene: Scene3, opts: { background?: string | null } = {}): Painted3 {
+export function paintSpace(ctx: Ctx, view: space.View3, w: number, h: number, scene: Scene3, opts: PaintSpaceOptions = {}): Painted3 {
   const cam = cameraFor(view, w, h);
   const P = (v: V3): Proj => {
     const q = projectPoint(cam, v);
@@ -135,25 +164,33 @@ export function paintSpace(ctx: Ctx, view: space.View3, w: number, h: number, sc
     return k * (0.45 + 0.55 * d + 0.18 * f);
   };
 
-  const project = (items: readonly Item3[]): { faces: FaceP[]; lines: LineItem[]; points: PointItem[]; labels: Item3[]; dots: DotItem[] } => {
+  const faceP = (it: FaceItem): FaceP | undefined => {
+    const pts = it.pts.map(P);
+    if (pts.some((p) => p.behind)) return undefined;
+    const xs = pts.map((p) => p.x);
+    const ys = pts.map((p) => p.y);
+    return { item: it, pts, depth: pts.reduce((s, p) => s + p.z, 0) / pts.length, minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) };
+  };
+  const project = (items: readonly Item3[]): { faces: FaceP[]; lines: LineItem[]; points: PointItem[]; labels: Item3[]; dots: DotItem[]; sheets: SheetItem[]; drops: DropsItem[] } => {
     const faces: FaceP[] = [];
     const lines: LineItem[] = [];
     const points: PointItem[] = [];
     const labels: Item3[] = [];
     const dots: DotItem[] = [];
+    const sheets: SheetItem[] = [];
+    const drops: DropsItem[] = [];
     for (const it of items) {
       if (it.k === 'face') {
-        const pts = it.pts.map(P);
-        if (pts.some((p) => p.behind)) continue;
-        const xs = pts.map((p) => p.x);
-        const ys = pts.map((p) => p.y);
-        faces.push({ item: it, pts, depth: pts.reduce((s, p) => s + p.z, 0) / pts.length, minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) });
+        const f = faceP(it);
+        if (f) faces.push(f);
       } else if (it.k === 'line') lines.push(it);
       else if (it.k === 'point') points.push(it);
       else if (it.k === 'dot') dots.push(it);
+      else if (it.k === 'sheet') sheets.push(it);
+      else if (it.k === 'drops') drops.push(it);
       else labels.push(it);
     }
-    return { faces, lines, points, labels, dots };
+    return { faces, lines, points, labels, dots, sheets, drops };
   };
 
   const drawFace = (f: FaceP): void => {
@@ -258,6 +295,39 @@ export function paintSpace(ctx: Ctx, view: space.View3, w: number, h: number, sc
 
   /* 2. faces far to near; 3. lines; 4. points; 5. labels */
   const sc = project(scene.items);
+  const box = view.clip ? { min: view.clipMin, max: view.clipMax } : undefined;
+  // sheets and drops (design 12.1): the WebGL 2 painter draws them with a depth buffer that the solids are written into
+  // first, and its picture goes over the faces and under the lines; without it they become faces and dots here
+  let gl: GlPainted3 | undefined;
+  const coarse: string[] = [];
+  const hasSheets = sc.sheets.length + sc.drops.length > 0;
+  if (hasSheets && opts.gpu && typeof ctx.drawImage === 'function') {
+    // only solids one can not see through hide sheets and drops: drops in a glass tank show through its walls
+    const occ = fanTriangles(sc.faces.filter((f) => f.item.occludes && f.item.alpha >= 0.5).map((f) => f.item.pts), OCCLUDERS);
+    const frame: GlFrame3 = {
+      width: w, height: h, pixelRatio: opts.pixelRatio ?? 1, vp: cam.vp, rot: rotationOf(cam.view), right: cam.right, up: cam.up,
+      light: view.light === 'flat' ? 'flat' : view.light === 'off' ? 'off' : 'lit', clip: box ?? null,
+      occluders: occ.data, occluderVerts: occ.verts,
+      sheets: sc.sheets.map((s) => ({ key: s.id, nx: s.nx, ny: s.ny, pos: s.pos, ...(s.tris ? { tris: s.tris } : {}), ...(s.topology !== undefined ? { topology: s.topology } : {}), color: rgb01(s.color), alpha: s.alpha, threads: s.threads })),
+      drops: sc.drops.map((d) => ({ pos: d.pos, count: d.count, color: rgb01(d.color), alpha: d.alpha, radius: d.radius })),
+    };
+    const r = opts.gpu.paint(frame);
+    if (r.ok) gl = r.value;
+  }
+  if (hasSheets && !gl) {
+    for (const s of sc.sheets) {
+      const step = opts.coarse ? s.coarse : s.fine;
+      if (step > s.fine) coarse.push(s.name);
+      for (const it of sheetFaces(s, step, box)) {
+        const f = faceP(it);
+        if (f) sc.faces.push(f);
+      }
+    }
+    for (const d of sc.drops) {
+      if (opts.coarse) coarse.push(d.name);
+      sc.dots.push(...dropDots(d, opts.coarse ? 2 : 1, box));
+    }
+  }
   const sorted = [...sc.faces].sort((x, y) => y.depth - x.depth);
   // particles and drops go in among the faces far to near, so a ball in a liquid shows above the drops behind it and
   // under the ones in front (physics design 12, round 7)
@@ -283,6 +353,18 @@ export function paintSpace(ctx: Ctx, view: space.View3, w: number, h: number, sc
   }
   drawDotsTo(-Infinity);
   const occluders = sc.faces.filter((f) => f.item.occludes);
+  if (gl && ctx.drawImage) {
+    ctx.globalAlpha = 1;
+    ctx.drawImage(gl.source, 0, 0, gl.sw, gl.sh, 0, 0, w, h);
+    // a cloth drawn by the GPU still hides the lines and points behind it, from a coarse copy of its faces
+    for (const s of sc.sheets) {
+      if (!s.occludes) continue;
+      for (const it of sheetFaces(s, Math.max(1, Math.ceil(Math.max(s.nx, s.ny) / 16)), box)) {
+        const f = faceP(it);
+        if (f) occluders.push(f);
+      }
+    }
+  }
   for (const l of sc.lines) drawLine(l, occluders);
   for (const p of sc.points) {
     const q = P(p.p);
@@ -311,5 +393,5 @@ export function paintSpace(ctx: Ctx, view: space.View3, w: number, h: number, sc
   }
   // nearest last, as the 2D painter does
   hits.sort((a, b) => b.depth - a.depth);
-  return { camera: cam, hits };
+  return { camera: cam, hits, sheets: !hasSheets ? 'none' : gl ? 'gl' : 'software', coarse, ...(gl ? { gl: gl.stats } : {}) };
 }
