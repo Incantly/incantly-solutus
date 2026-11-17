@@ -302,7 +302,8 @@ export function paintSpace(ctx: Ctx, view: space.View3, w: number, h: number, sc
   const coarse: string[] = [];
   const hasSheets = sc.sheets.length + sc.drops.length > 0;
   if (hasSheets && opts.gpu && typeof ctx.drawImage === 'function') {
-    const occ = fanTriangles(sc.faces.filter((f) => f.item.occludes).map((f) => f.item.pts), OCCLUDERS);
+    // only solids one can not see through hide sheets and drops: drops in a glass tank show through its walls
+    const occ = fanTriangles(sc.faces.filter((f) => f.item.occludes && f.item.alpha >= 0.5).map((f) => f.item.pts), OCCLUDERS);
     const frame: GlFrame3 = {
       width: w, height: h, pixelRatio: opts.pixelRatio ?? 1, vp: cam.vp, rot: rotationOf(cam.view), right: cam.right, up: cam.up,
       light: view.light === 'flat' ? 'flat' : view.light === 'off' ? 'off' : 'lit', clip: box ?? null,
