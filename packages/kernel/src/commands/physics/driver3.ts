@@ -16,13 +16,21 @@ import type { DriverAccess, Figure } from '../../graph/figure';
 import type { Cell, StyleEntry } from '../../graph/types';
 import { sameValue } from '../../graph/values';
 import type { BodyDef3, ShapeDef3 } from '../../physics/world3';
-import { BodyType3, FK3, World3 } from '../../physics/world3';
+import { BodyType3, FK3, World3, quatAxis } from '../../physics/world3';
+import { Distance3, Hinge3, Slider3, Weld3, Wheel3 } from '../../physics/joints3';
+import type { JointValue3 } from './joints';
+import { isJoint3Value } from './joints';
+import type { LooseWheel, Vehicle3Value, Wheel3Value } from './vehicle';
+import { isVehicle3Value, isWheel3Value } from './vehicle';
+import { ROUND_SIDES } from './body3';
 import { FORCE_KINDS } from '../../physics/world2';
 import type { Body3Value, BodySpec3 } from './body3';
 import { isBody3Value, solid3Of, solidNow, terrainOf } from './body3';
+import { specKey } from './jointbuild';
 import type { WorldValue } from './types';
 import { DEFAULT_WORLD, isWorldValue } from './types';
 import { getStoredHandler } from '../numbers/handlers';
+import { cos, sin } from '../../physics/math';
 import { runHandler } from '../numbers/run';
 
 const CHECKPOINT_SECONDS = 0.5;
@@ -30,8 +38,8 @@ const CHECKPOINT_BYTES = 32 * 1024 * 1024;
 const STEP_BUDGET = 60000;
 const BLOW_UP = 1e6;
 const NK = FORCE_KINDS.length;
-/** Cells a side of terrain (design 7: 32 to 128 over the clip box). */
-export const TERRAIN_CELLS = 32;
+/** Cells a side of terrain (design 7: at most 128 over the clip box). */
+export const TERRAIN_CELLS = 128;
 
 type V3 = { x: number; y: number; z: number };
 
@@ -39,7 +47,25 @@ export type LogEntry3 =
   | { readonly kind: 'push'; readonly n: number; readonly id: ObjId; readonly item?: number; readonly j: V3; readonly at?: V3 }
   | { readonly kind: 'grab'; readonly n: number; readonly id: ObjId; readonly item?: number; readonly to: V3; readonly a: V3 }
   | { readonly kind: 'release'; readonly n: number; readonly id: ObjId; readonly item?: number }
-  | { readonly kind: 'reset'; readonly n: number };
+  | { readonly kind: 'reset'; readonly n: number }
+  | { readonly kind: 'set'; readonly n: number; readonly id: ObjId; readonly value: unknown };
+
+type AnyJoint3 = Hinge3 | Distance3 | Weld3 | Slider3;
+
+interface JointMember3 {
+  readonly rec: ObjRec;
+  readonly item?: number;
+  readonly value: JointValue3;
+  readonly joint: AnyJoint3;
+}
+
+interface WheelMember3 {
+  readonly rec: ObjRec;
+  readonly item?: number;
+  readonly value: Wheel3Value;
+  readonly joint: Wheel3;
+  readonly chassis: number;
+}
 
 interface Member3 {
   readonly rec: ObjRec;
@@ -104,6 +130,26 @@ export class Physics3Driver implements WorldDriver {
   hits: { readonly t: number; readonly a: string; readonly b: string; readonly speed: number; readonly x: number; readonly y: number; readonly z: number; readonly impulse: number }[] = [];
   private pendingHits: Physics3Driver['hits'] = [];
   frontier = 0;
+  /* joints, wheels and cars (round 5) */
+  private jointRecs: ObjRec[] = [];
+  private wheelRecs: ObjRec[] = [];
+  private vehicleRecs: ObjRec[] = [];
+  private jointSpecs = new Map<ObjId, (JointValue3 | undefined)[]>();
+  private wheelSpecs = new Map<ObjId, (Wheel3Value | undefined)[]>();
+  private vehicleSpecs = new Map<ObjId, Vehicle3Value>();
+  jointMembers: JointMember3[] = [];
+  private carWheels = new Map<ObjId, WheelMember3[]>();
+  wheelMembers: WheelMember3[] = [];
+  /** Logged free values (a car's pedals while the film plays): their value before the first entry. */
+  private base = new Map<ObjId, unknown>();
+  private logged = new Set<ObjId>();
+  private vehicleInputs = new Set<ObjId>();
+  private startInputs = new Set<ObjId>();
+  private brokeAt = new WeakMap<object, number>();
+  /** Joints and wheels that broke, for the teacher's `figure` result. */
+  events: { readonly t: number; readonly kind: 'broken'; readonly name: string }[] = [];
+  /** Terrain heights, kept while the function, the box and the grid stay the same (a body line does not remeasure it). */
+  private terrainCache = new Map<ObjId, { key: unknown[]; shapes: ShapeDef3[] }>();
 
   constructor(readonly figure: Figure) {
     this.acc = figure.driverAccess();
@@ -113,6 +159,24 @@ export class Physics3Driver implements WorldDriver {
 
   onCompute(rec: ObjRec, computed: Cell): Cell | undefined {
     const k = rec.p.type.k;
+    // a wheel, a car or a joint reads its bodies only for their start: a body that left the world or blew up during
+    // the film leaves them as they were built, so the world is not rebuilt from the start mid-film
+    if (!computed.defined && this.world && this.lastCells.has(rec.id) && (isWheel3Rec(rec) || k === 'Vehicle' || isJointRec(rec)) && rec.inputs.some((r) => this.written.has(r.id) && !r.cell.defined)) return this.lastCells.get(rec.id);
+    if (isWheel3Rec(rec)) {
+      this.wheelSpecs.set(rec.id, computed.defined ? (Array.isArray(computed.value) ? (computed.value as unknown[]) : [computed.value]).map((v) => (isWheel3Value(v) ? v : undefined)) : []);
+      const last = this.lastCells.get(rec.id);
+      return last && this.world ? last : undefined;
+    }
+    if (k === 'Vehicle' && computed.defined && isVehicle3Value(computed.value)) {
+      this.vehicleSpecs.set(rec.id, computed.value);
+      const last = this.lastCells.get(rec.id);
+      return last && this.world ? last : undefined;
+    }
+    if (isJointRec(rec) && this.bodyRecs.length > 0) {
+      this.jointSpecs.set(rec.id, computed.defined ? (Array.isArray(computed.value) ? (computed.value as unknown[]) : [computed.value]).map((v) => (isJoint3Value(v) ? v : undefined)) : []);
+      const last = this.lastCells.get(rec.id);
+      return last && computed.defined && this.world ? last : undefined;
+    }
     if (k === 'List' && rec.p.type.of?.k === 'Body3') {
       if (computed.defined && Array.isArray(computed.value)) this.listSpecs.set(rec.id, (computed.value as unknown[]).map((v) => (isBody3Value(v) ? v : undefined)));
       else this.listSpecs.delete(rec.id);
@@ -135,6 +199,22 @@ export class Physics3Driver implements WorldDriver {
     return undefined;
   }
 
+  /**
+   * A free value was written. A car's pedals and wheel (what a vehicle reads) go on from now while the film plays, logged
+   * so the replay is the same (ui.md 9); other inputs restart the film when the world they build changes.
+   */
+  noteFree(rec: ObjRec, was: unknown): void {
+    if (!this.world) return;
+    const t = this.acc.clockT();
+    if (t <= this.t0 + 1e-12) return;
+    if (this.coneDirty) this.findCone();
+    if (!this.vehicleInputs.has(rec.id) || this.startInputs.has(rec.id)) return;
+    if (!this.base.has(rec.id)) this.base.set(rec.id, was);
+    this.addEntry({ kind: 'set', n: this.gridAt(t), id: rec.id, value: rec.p.value });
+    this.logged.add(rec.id);
+    this.coneDirty = true;
+  }
+
   inputLine(words: readonly string[]): string | undefined | false {
     if (words[0] !== 'physics') return false;
     this.scan();
@@ -151,6 +231,21 @@ export class Physics3Driver implements WorldDriver {
     const listed = /^(.+)\[(\d+)\]$/.exec(nameWord);
     const rec = this.acc.byName(listed ? (listed[1] as string) : nameWord);
     if (!rec) return `an object named ${nameWord}`;
+    if (kind === 'set') {
+      // a pedal or the steering, written while the film played
+      const isBase = words[3] === 'base';
+      const nums = words.slice(isBase ? 4 : 3, -2).map(Number);
+      if (nums.length === 0 || nums.some((x) => !Number.isFinite(x))) return 'a number: @input physics set gas 1 at 2.5';
+      const value = nums.length >= 2 ? { x: nums[0] as number, y: nums[1] as number } : nums[0];
+      if (isBase) this.base.set(rec.id, value);
+      else {
+        if (!this.base.has(rec.id)) this.base.set(rec.id, rec.p.value);
+        this.addEntry({ kind: 'set', n, id: rec.id, value });
+        this.logged.add(rec.id);
+        this.coneDirty = true;
+      }
+      return undefined;
+    }
     if (!isBody3Rec(rec)) return false;
     const item = listed ? Number(listed[2]) - 1 : undefined;
     const it = item !== undefined ? { item } : {};
@@ -177,7 +272,8 @@ export class Physics3Driver implements WorldDriver {
   }
 
   owns(id: ObjId): boolean {
-    return this.byId.has(id) || (this.bodyRecs.length > 0 && this.worldRec?.id === id);
+    if (this.byId.has(id) || (this.bodyRecs.length > 0 && this.worldRec?.id === id)) return true;
+    return this.world !== undefined && [...this.jointRecs, ...this.wheelRecs, ...this.vehicleRecs].some((r) => r.id === id);
   }
 
   sampleRecs(): readonly ObjRec[] {
@@ -280,11 +376,17 @@ export class Physics3Driver implements WorldDriver {
     this.version = v;
     this.bodyRecs = [];
     this.solidRecs = [];
+    this.jointRecs = [];
+    this.wheelRecs = [];
+    this.vehicleRecs = [];
     this.worldRec = undefined;
     this.spaceRec = undefined;
     for (const r of this.acc.list) {
       const k = r.p.type.k;
       if (isBody3Rec(r)) this.bodyRecs.push(r);
+      else if (isJointRec(r)) this.jointRecs.push(r);
+      else if (isWheel3Rec(r)) this.wheelRecs.push(r);
+      else if (k === 'Vehicle') this.vehicleRecs.push(r);
       else if (k === 'World') this.worldRec = r;
       else if (k === 'View3') this.spaceRec = r;
       else if (r.p.style.has('solid') || isGround(r)) this.solidRecs.push(r);
@@ -318,6 +420,34 @@ export class Physics3Driver implements WorldDriver {
       return list;
     }
     return [];
+  }
+
+  private jointsOf(r: ObjRec): (JointValue3 | undefined)[] {
+    const s = this.jointSpecs.get(r.id);
+    if (s) return s;
+    if (this.written.has(r.id) || !r.cell.defined) return [];
+    const list = (Array.isArray(r.cell.value) ? (r.cell.value as unknown[]) : [r.cell.value]).map((v) => (isJoint3Value(v) ? v : undefined));
+    this.jointSpecs.set(r.id, list);
+    return list;
+  }
+
+  private wheelsOf(r: ObjRec): (Wheel3Value | undefined)[] {
+    const s = this.wheelSpecs.get(r.id);
+    if (s) return s;
+    if (this.written.has(r.id) || !r.cell.defined) return [];
+    const list = (Array.isArray(r.cell.value) ? (r.cell.value as unknown[]) : [r.cell.value]).map((v) => (isWheel3Value(v) ? v : undefined));
+    this.wheelSpecs.set(r.id, list);
+    return list;
+  }
+
+  private vehicleOf(r: ObjRec): Vehicle3Value | undefined {
+    const s = this.vehicleSpecs.get(r.id);
+    if (s) return s;
+    if (!this.written.has(r.id) && r.cell.defined && isVehicle3Value(r.cell.value)) {
+      this.vehicleSpecs.set(r.id, r.cell.value);
+      return r.cell.value;
+    }
+    return undefined;
   }
 
   private settings(): WorldValue {
@@ -365,6 +495,16 @@ export class Physics3Driver implements WorldDriver {
       }
     }
     if (terrain) sig.push(this.terrainBox());
+    for (const r of this.jointRecs) {
+      // a joint whose motor moves during the film is rebuilt only when its line changes
+      if (this.varySet.has(r)) sig.push(r.id, 'varying', r.p.compiled);
+      else sig.push(r.id, this.jointsOf(r).map((j) => (j ? jointKey3(j) : null)));
+    }
+    for (const r of this.wheelRecs) sig.push(r.id, this.wheelsOf(r).map((w) => (w ? [w.chassis.spec ? specKey(w.chassis.spec) : w.chassis.id, w.at.x, w.at.y, w.at.z, w.r, w.spring, w.damping, w.travel, w.grip, w.drive, w.steers, w.breaks, w.mass] : null)));
+    for (const r of this.vehicleRecs) {
+      const v = this.vehicleOf(r);
+      sig.push(r.id, this.varySet.has(r) ? 'varying' : v ? [v.motor, v.steer, v.brake, v.power, v.wheels.length, v.chassis.spec ? specKey(v.chassis.spec) : null] : null);
+    }
     return sig;
   }
 
@@ -450,6 +590,25 @@ export class Physics3Driver implements WorldDriver {
       this.byId = new Map();
       return;
     }
+    // wheels: a ray each on its chassis; one that may come off waits in the world as a free round slab (design 8)
+    const wheelDefs: { rec: ObjRec; item?: number; value: Wheel3Value; chassis: number; body: number }[] = [];
+    for (const r of this.wheelRecs) {
+      const list = this.wheelsOf(r);
+      for (let item = 0; item < list.length; item++) {
+        const wv = list[item];
+        if (!wv) continue;
+        const chassis = this.endIndex(wv.chassis, members);
+        if (chassis === undefined) continue;
+        let body = -1;
+        if (wv.breaks > 0) {
+          const width = Math.min(0.4, wv.r * 0.6);
+          const c = { x: wv.at.x, y: wv.at.y, z: wv.at.z };
+          defs.push({ type: BodyType3.Dynamic, shapes: [wheelSlab(c, wv.r, width)], mass: wv.mass, friction: wv.grip, bounce: 0.2, group: (defs[chassis] as BodyDef3).group ?? 0, off: true });
+          body = defs.length - 1;
+        }
+        wheelDefs.push({ rec: r, ...(r.p.type.k === 'List' ? { item } : {}), value: wv, chassis, body });
+      }
+    }
     const world = new World3(defs);
     world.gx = w.g3 ? w.gx : 0;
     world.gy = w.g3 ? w.gy : 0;
@@ -464,6 +623,29 @@ export class Physics3Driver implements WorldDriver {
     for (const m of members) if (!this.byId.has(m.rec.id)) this.byId.set(m.rec.id, m);
     this.nameOfIndex = [];
     for (const m of members) this.nameOfIndex[m.index] = m.item !== undefined ? `${m.rec.p.name}[${m.item + 1}]` : m.rec.p.name;
+    this.buildJoints(world, members);
+    this.wheelMembers = [];
+    for (const wd of wheelDefs) {
+      const v = wd.value;
+      // the mount: the wheel's centre at the start, up by its travel (the chassis's own up is z at the start)
+      const mount = world.toLocal(wd.chassis, v.at.x, v.at.y, v.at.z + v.travel);
+      const group = world.group[wd.chassis] as number;
+      const chassis = wd.chassis;
+      const own = wd.body;
+      const skip = (i: number): boolean => i === chassis || i === own || (group !== 0 && world.group[i] === group);
+      const joint = new Wheel3(chassis, mount, { r: v.r, spring: v.spring, damping: v.damping, travel: v.travel, grip: v.grip, drive: v.drive, steers: v.steers, breaks: v.breaks, mass: v.mass }, own, skip);
+      world.joints.push(joint);
+      const name = wd.item !== undefined ? `${wd.rec.p.name}[${wd.item + 1}]` : wd.rec.p.name;
+      if (own >= 0) this.nameOfIndex[own] = name;
+      this.wheelMembers.push({ rec: wd.rec, ...(wd.item !== undefined ? { item: wd.item } : {}), value: v, joint, chassis });
+    }
+    // each car's wheels: those on its chassis
+    this.carWheels = new Map();
+    for (const r of this.vehicleRecs) {
+      const v = this.vehicleOf(r);
+      const c = v ? this.endIndex(v.chassis, members) : undefined;
+      this.carWheels.set(r.id, c === undefined ? [] : this.wheelMembers.filter((wm) => wm.chassis === c));
+    }
     this.n = 0;
     this.prevP = Float64Array.from(world.p);
     this.prevQ = Float64Array.from(world.q);
@@ -477,6 +659,32 @@ export class Physics3Driver implements WorldDriver {
     this.findCone();
     this.applyStatic();
     this.saveCheckpoint(0);
+  }
+
+  /** The world index of a joint's end: a body by its start, or a solid by id. */
+  private endIndex(e: { readonly id?: ObjId; readonly spec?: BodySpec3 }, members: readonly Member3[]): number | undefined {
+    if (e.spec) for (const m of members) if (m.spec === e.spec || (m.spec && sameValue(m.spec, e.spec))) return m.index;
+    if (e.id !== undefined) for (const m of members) if (m.rec.id === e.id && m.item === undefined) return m.index;
+    return undefined;
+  }
+
+  private buildJoints(world: World3, members: readonly Member3[]): void {
+    this.jointMembers = [];
+    world.joints = [];
+    for (const r of this.jointRecs) {
+      const list = this.jointsOf(r);
+      const isList = r.p.type.k === 'List';
+      for (let item = 0; item < list.length; item++) {
+        const j = list[item];
+        if (!j) continue;
+        const a = this.endIndex(j.a, members);
+        const b = this.endIndex(j.b, members);
+        if (a === undefined || b === undefined || a === b) continue;
+        const joint = buildJoint3(world, j, a, b);
+        world.joints.push(joint);
+        this.jointMembers.push({ rec: r, value: j, joint, ...(isList ? { item } : {}) });
+      }
+    }
   }
 
   /** A solid's walls: the floor of `Ground()`, terrain of `z = f(x, y)`, or the shape itself. */
@@ -493,7 +701,12 @@ export class Physics3Driver implements WorldDriver {
       const box = this.terrainBox();
       this.warnOnce(`ground:${r.id}`, makeNotice('ground_sampled', { name: r.p.name, range: Math.max(box.max.x - box.min.x, box.max.y - box.min.y) / 2 }, [r.p.name]));
       const call = fn.call;
-      return terrainOf((x, y) => call(x, y), box.min.x, box.max.x, box.min.y, box.max.y, TERRAIN_CELLS);
+      const key: unknown[] = [v, box.min.x, box.max.x, box.min.y, box.max.y, TERRAIN_CELLS];
+      const had = this.terrainCache.get(r.id);
+      if (had && had.key.length === key.length && had.key.every((k, i) => k === key[i])) return had.shapes;
+      const shapes = terrainOf((x, y) => call(x, y), box.min.x, box.max.x, box.min.y, box.max.y, TERRAIN_CELLS);
+      this.terrainCache.set(r.id, { key, shapes });
+      return shapes;
     }
     return solid3Of(v);
   }
@@ -533,15 +746,23 @@ export class Physics3Driver implements WorldDriver {
       }
     }
     for (const r of this.solidRecs) targets.push(r);
+    targets.push(...this.jointRecs, ...this.vehicleRecs);
     const anc = this.acc.ancestorRecs(targets);
     const all = [...new Set([...anc, ...targets])].sort((a, b) => a.order - b.order);
     const vary = new Set<ObjRec>();
+    const joints = new Set(this.jointRecs);
     for (const r of all) {
       if (bodies.has(r)) continue;
-      if (r.usesClock || r.inputs.some((i) => vary.has(i) || bodies.has(i))) vary.add(r);
+      // a joint reads its bodies only for its start, so a moving body does not make it change
+      if (r.usesClock || this.logged.has(r.id) || r.inputs.some((i) => vary.has(i) || (bodies.has(i) && !joints.has(r)))) vary.add(r);
     }
     this.varySet = vary;
     this.cone = all.filter((r) => vary.has(r) && r.p.kind === 'rule' && !bodies.has(r) && !this.solidRecs.includes(r));
+    // a car's pedals and wheel are driven while the film plays: they always go on from now (design 8, ui.md 9)
+    this.vehicleInputs = new Set();
+    for (const r of this.acc.ancestorRecs(this.vehicleRecs)) if (r.p.kind === 'free') this.vehicleInputs.add(r.id);
+    this.startInputs = new Set();
+    for (const r of this.acc.ancestorRecs(this.bodyRecs)) if (r.p.kind === 'free') this.startInputs.add(r.id);
     this.varyingStyle = [];
     for (const m of this.members) {
       if (m.role !== 'body') continue;
@@ -578,7 +799,7 @@ export class Physics3Driver implements WorldDriver {
     }
     const perStep = Math.max(1, w.awakeCount() + 1);
     let steps = Math.max(2, Math.floor(budget / perStep));
-    const varying = this.cone.length > 0 || this.varyingStyle.length > 0 || this.varyingWorld;
+    const varying = this.cone.length > 0 || this.varyingStyle.length > 0 || this.varyingWorld || this.base.size > 0;
     const saved = varying ? this.saveCells() : undefined;
     try {
       while (this.n < nTarget && steps-- > 0) this.stepOnce(varying);
@@ -600,6 +821,7 @@ export class Physics3Driver implements WorldDriver {
     this.applyLog(n);
     if (varying) this.stepInputs(n);
     this.applyGrabs();
+    this.applyVehicles();
     if (n === 0) {
       // leapfrog start (as the plane driver): free flight follows x0 + v0 t + a t² / 2 at every step
       for (const m of this.members) {
@@ -615,6 +837,13 @@ export class Physics3Driver implements WorldDriver {
     w.step(h);
     this.n = n + 1;
     this.checkHealth();
+    for (const jm of [...this.jointMembers, ...this.wheelMembers]) {
+      if (!jm.joint.broken || this.brokeAt.has(jm.joint)) continue;
+      const name = jm.item !== undefined ? `${jm.rec.p.name}[${jm.item + 1}]` : jm.rec.p.name;
+      this.brokeAt.set(jm.joint, this.n);
+      this.events.push({ t: this.t0 + this.n / this.rate, kind: 'broken', name });
+      this.warnOnce(`broken:${name}:${this.n}`, makeNotice('broken', { name, t: Number((this.t0 + this.n / this.rate).toFixed(3)) }, [name]));
+    }
     for (const i of w.left) if (!this.leftAt.has(i)) {
       this.leftAt.set(i, this.n);
       const name = this.nameOfIndex[i] ?? '';
@@ -677,7 +906,7 @@ export class Physics3Driver implements WorldDriver {
   /* ------------------------------ inputs ------------------------------ */
 
   private saveCells(): { recs: ObjRec[]; cells: Cell[]; t: number } {
-    const recs = [...this.cone, ...this.bodyRecs, ...(this.worldRec ? [this.worldRec] : [])];
+    const recs = [...this.cone, ...this.bodyRecs, ...(this.worldRec ? [this.worldRec] : []), ...[...this.base.keys()].map((id) => this.acc.byId(id)).filter((r): r is ObjRec => r !== undefined)];
     return { recs, cells: recs.map((r) => r.cell), t: this.acc.env.t };
   }
 
@@ -692,6 +921,13 @@ export class Physics3Driver implements WorldDriver {
     const w = this.world as World3;
     const env = this.acc.env;
     env.t = this.t0 + n / this.rate;
+    // logged free values (the pedals) as they were at this step
+    for (const id of this.base.keys()) {
+      const r = this.acc.byId(id);
+      if (!r) continue;
+      const v = this.inputAt(id, n);
+      r.cell = v === undefined ? { defined: false, reason: 'explicit' } : { defined: true, value: v };
+    }
     // formulas that read a body read it where it is at this step
     const lists = new Map<ObjRec, unknown[]>();
     for (const m of this.members) {
@@ -705,6 +941,21 @@ export class Physics3Driver implements WorldDriver {
     }
     for (const [r, arr] of lists) r.cell = { defined: true, value: arr };
     for (const r of this.cone) r.cell = this.acc.compute(r);
+    // joints whose motor or limits change during the film
+    for (const jm of this.jointMembers) {
+      if (!this.varySet.has(jm.rec)) continue;
+      const c = jm.rec.cell;
+      if (!c.defined) continue;
+      const v = Array.isArray(c.value) ? (c.value as unknown[])[jm.item ?? 0] : c.value;
+      if (!isJoint3Value(v)) continue;
+      const o = <K extends string>(k: K, x: number | undefined): Partial<Record<K, number>> => (x === undefined ? {} : ({ [k]: x } as Record<K, number>));
+      if (jm.joint instanceof Hinge3) jm.joint.opts = { ...o('motor', v.motor), ...o('torque', v.torque), ...o('min', v.min), ...o('max', v.max) };
+      else if (jm.joint instanceof Slider3) jm.joint.opts = { ...o('min', v.min), ...o('max', v.max), ...o('motor', v.motor), ...o('force', v.torque) };
+      if (v.motor !== undefined) {
+        w.wakeBody(jm.joint.a);
+        w.wakeBody(jm.joint.b);
+      }
+    }
     if (this.varyingWorld && this.worldRec) {
       const c = this.worldRec.cell;
       if (c.defined && isWorldValue(c.value)) {
@@ -739,6 +990,7 @@ export class Physics3Driver implements WorldDriver {
   }
 
   private addEntry(e: LogEntry3): void {
+    if (e.kind === 'set') this.log = this.log.filter((x) => !(x.kind === 'set' && x.id === e.id && x.n >= e.n));
     this.log.push(e);
     this.log.sort((a, b) => a.n - b.n);
     for (const k of [...this.checkpoints.keys()]) if (k > e.n) this.checkpoints.delete(k);
@@ -760,6 +1012,11 @@ export class Physics3Driver implements WorldDriver {
     const out: string[] = [];
     const t = (n: number): string => String(Number((this.t0 + n / this.rate).toFixed(6)));
     const v3 = (p: V3): string => `${num(p.x)} ${num(p.y)} ${num(p.z)}`;
+    for (const [id, v] of this.base) {
+      const nm = this.acc.byId(id)?.p.name;
+      const w = numWords(v);
+      if (nm && w) out.push(`@input physics set ${nm} base ${w} at 0`);
+    }
     for (const e of this.log) {
       if (e.kind === 'reset') {
         out.push(`@input physics reset at ${t(e.n)}`);
@@ -767,6 +1024,11 @@ export class Physics3Driver implements WorldDriver {
       }
       const base = this.acc.byId(e.id)?.p.name;
       if (!base) continue;
+      if (e.kind === 'set') {
+        const w = numWords(e.value);
+        if (w) out.push(`@input physics set ${base} ${w} at ${t(e.n)}`);
+        continue;
+      }
       const nm = e.item !== undefined ? `${base}[${e.item + 1}]` : base;
       if (e.kind === 'push') out.push(`@input physics push ${nm} ${v3(e.j)}${e.at ? ` ${v3(e.at)}` : ''} at ${t(e.n)}`);
       else if (e.kind === 'grab') out.push(`@input physics grab ${nm} ${v3(e.to)} ${v3(e.a)} at ${t(e.n)}`);
@@ -789,6 +1051,7 @@ export class Physics3Driver implements WorldDriver {
         this.grabs.clear();
         continue;
       }
+      if (e.kind === 'set') continue;
       const m = this.memberOf(e.id, e.item);
       if (!m) continue;
       const i = m.index;
@@ -821,6 +1084,37 @@ export class Physics3Driver implements WorldDriver {
       let s = 0;
       for (let b = 0; b < 3; b++) s += (w.invIw[i * 9 + a * 3 + b] as number) * (t[b] as number);
       w.w[i * 3 + a] = (w.w[i * 3 + a] as number) + turn * s;
+    }
+  }
+
+  /** The value of a logged input at step n. */
+  private inputAt(id: ObjId, n: number): unknown {
+    let v: unknown = this.base.has(id) ? this.base.get(id) : this.acc.byId(id)?.p.value;
+    for (const e of this.log) if (e.kind === 'set' && e.id === id && e.n <= n) v = e.value;
+    return v;
+  }
+
+  /** Each car tells its wheels the pedals and the steering of this step (design 8). */
+  private applyVehicles(): void {
+    if (this.vehicleRecs.length === 0 || this.wheelMembers.length === 0) return;
+    const w = this.world as World3;
+    for (const r of this.vehicleRecs) {
+      // pedals that change during the film: the car as computed at this step's time
+      const c = this.varySet.has(r) ? r.cell : undefined;
+      const v = c?.defined && isVehicle3Value(c.value) ? c.value : this.vehicleOf(r);
+      if (!v) continue;
+      const mine = this.carWheels.get(r.id) ?? [];
+      const share = Math.max(1, mine.filter((wm) => wm.value.drive && !wm.joint.broken).length);
+      for (const wm of mine) {
+        const j = wm.joint;
+        j.motor = v.motor;
+        j.steer = v.steer;
+        j.brake = v.brake;
+        j.power = v.power;
+        j.share = share;
+      }
+      const ch = mine[0]?.chassis;
+      if (ch !== undefined && (v.motor !== 0 || v.brake > 0 || v.steer !== 0)) w.wakeBody(ch);
     }
   }
 
@@ -935,6 +1229,7 @@ export class Physics3Driver implements WorldDriver {
       this.put(m.rec, cell, changed);
     }
     for (const [rec, arr] of lists) this.put(rec, { defined: true, value: arr }, changed);
+    this.writeLinks(alpha, changed);
     if (this.worldRec) {
       const s = this.settings();
       let energy = 0;
@@ -947,10 +1242,92 @@ export class Physics3Driver implements WorldDriver {
         px += (w.mass[i] as number) * (w.v[i * 3] as number);
         py += (w.mass[i] as number) * (w.v[i * 3 + 1] as number);
       }
+      for (const j of w.joints) if (!j.broken) energy += j.energy(w);
       const cell: Cell = { defined: true, value: { ...s, time: this.t0 + this.n / this.rate, energy, momentumX: px, momentumY: py, awake: w.awakeCount(), contacts: w.contactCount } satisfies WorldValue };
       this.put(this.worldRec, cell, changed);
     }
     return changed;
+  }
+
+  /** A point of body i in its frame, in the world at the drawn pose. */
+  private drawnPoint(i: number, l: readonly number[], alpha: number): V3 {
+    const { p, q } = this.pose(i, alpha);
+    const [x, y, z] = rotate(q, l[0] as number, l[1] as number, l[2] as number);
+    return { x: p.x + x, y: p.y + y, z: p.z + z };
+  }
+
+  /** Joints: what they carry and where their ends are; wheels: where they are and how they turn; cars: their speed. */
+  private writeLinks(alpha: number, changed: ObjRec[]): void {
+    const w = this.world as World3;
+    const h = 1 / this.rate;
+    const put = (rec: ObjRec, item: number | undefined, value: unknown, groups: Map<ObjRec, unknown[]>, all: () => unknown[]): void => {
+      if (item === undefined) {
+        this.put(rec, value === undefined ? { defined: false, reason: 'broken' } : { defined: true, value }, changed);
+        return;
+      }
+      const arr = groups.get(rec) ?? all().slice();
+      arr[item] = value;
+      groups.set(rec, arr);
+    };
+    const jl = new Map<ObjRec, unknown[]>();
+    for (const jm of this.jointMembers) {
+      const j = jm.joint;
+      const a = this.drawnPoint(j.a, j.la, alpha);
+      const b = this.drawnPoint(j.b, j.lb, alpha);
+      const value: JointValue3 = {
+        ...jm.value, force: j.broken ? 0 : j.force(h), lengthNow: jm.value.kind === 'hinge' || jm.value.kind === 'weld' ? 0 : j.length(w), angleNow: j instanceof Hinge3 ? j.angle(w) : 0, broken: j.broken,
+        ax: a.x, ay: a.y, az: a.z, bx: b.x, by: b.y, bz: b.z,
+      };
+      put(jm.rec, jm.item, value, jl, () => this.jointsOf(jm.rec));
+    }
+    for (const [rec, arr] of jl) this.put(rec, { defined: true, value: arr }, changed);
+    const wl = new Map<ObjRec, unknown[]>();
+    for (const wm of this.wheelMembers) {
+      const j = wm.joint;
+      if (j.broken) {
+        // a wheel that came off is no longer a wheel: its value is undefined, and the car draws it where it is
+        const t = this.brokeAt.get(j);
+        const detail = `it came off at t = ${t === undefined ? '?' : Number((this.t0 + t / this.rate).toFixed(3))} s, when its spring pushed over ${num(wm.value.breaks)} N`;
+        if (wm.item === undefined) this.put(wm.rec, { defined: false, reason: 'broken', detail }, changed);
+        else put(wm.rec, wm.item, undefined, wl, () => this.wheelsOf(wm.rec));
+        continue;
+      }
+      const d = j.spec.steers ? j.steer : 0;
+      const cd = d === 0 ? 1 : cos(d);
+      const sd = d === 0 ? 0 : sin(d);
+      const l = Math.max(0, j.susp);
+      const m = j.mount;
+      const c = this.drawnPoint(wm.chassis, [m[0] as number, m[1] as number, (m[2] as number) - l], alpha);
+      const { q } = this.pose(wm.chassis, alpha);
+      const ct = cos(j.turn);
+      const st = sin(j.turn);
+      const [ax, ay, az] = rotate(q, -sd, cd, 0);
+      const [sx, sy, sz] = rotate(q, st * cd, st * sd, ct);
+      const value: Wheel3Value = { ...wm.value, x: c.x, y: c.y, z: c.z, axle: { x: ax, y: ay, z: az }, spoke: { x: sx, y: sy, z: sz }, spin: j.spin, push: j.push, touching: j.touching };
+      put(wm.rec, wm.item, value, wl, () => this.wheelsOf(wm.rec));
+    }
+    for (const [rec, arr] of wl) this.put(rec, { defined: true, value: arr }, changed);
+    for (const r of this.vehicleRecs) {
+      const v = this.vehicleOf(r);
+      if (!v) continue;
+      const wheels = this.carWheels.get(r.id) ?? [];
+      const c = wheels[0]?.chassis ?? this.endIndex(v.chassis, this.members);
+      let speed = 0;
+      if (c !== undefined) {
+        const f = rotate([w.q[c * 4] as number, w.q[c * 4 + 1] as number, w.q[c * 4 + 2] as number, w.q[c * 4 + 3] as number], 1, 0, 0);
+        speed = f[0] * (w.v[c * 3] as number) + f[1] * (w.v[c * 3 + 1] as number) + f[2] * (w.v[c * 3 + 2] as number);
+      }
+      const loose: LooseWheel[] = [];
+      for (const wm of wheels) {
+        const b = wm.joint.body;
+        if (!wm.joint.broken || b < 0 || w.gone.has(b)) continue;
+        const { p, q } = this.pose(b, alpha);
+        const [ax, ay, az] = rotate(q, 0, 1, 0);
+        const [sx, sy, sz] = rotate(q, 0, 0, 1);
+        loose.push({ x: p.x, y: p.y, z: p.z, axle: { x: ax, y: ay, z: az }, spoke: { x: sx, y: sy, z: sz }, r: wm.value.r });
+      }
+      this.put(r, { defined: true, value: { ...v, speedometer: speed, loose } satisfies Vehicle3Value }, changed);
+    }
   }
 
   private put(rec: ObjRec, cell: Cell, changed: ObjRec[]): void {
@@ -1024,6 +1401,76 @@ export class Physics3Driver implements WorldDriver {
   }
 }
 
+/** A wheel, or a list of wheels, in space. */
+function isWheel3Rec(r: ObjRec): boolean {
+  const t = r.p.type;
+  return t.k === 'Wheel3' || (t.k === 'List' && t.of?.k === 'Wheel3');
+}
+
+/** A joint, or a list of joints. */
+function isJointRec(r: ObjRec): boolean {
+  const t = r.p.type;
+  return t.k === 'Joint' || (t.k === 'List' && t.of?.k === 'Joint');
+}
+
+/** What a joint in space is built from: equal keys give the same joint. */
+function jointKey3(j: JointValue3): unknown[] {
+  const end = (e: JointValue3['a']): unknown => (e.spec ? `s${specKey(e.spec)}` : `i${e.id ?? -1}`);
+  return [j.kind, end(j.a), end(j.b), j.pa.x, j.pa.y, j.pa.z, j.pb.x, j.pb.y, j.pb.z, j.axis?.x, j.axis?.y, j.axis?.z, j.length, j.k, j.rest, j.damping, j.motor, j.torque, j.min, j.max, j.breaks];
+}
+
+/** A joint in space between world bodies a and b, its anchors taken where they are at the start. */
+function buildJoint3(w: World3, j: JointValue3, a: number, b: number): AnyJoint3 {
+  const la = w.toLocal(a, j.pa.x, j.pa.y, j.pa.z);
+  const lb = w.toLocal(b, j.pb.x, j.pb.y, j.pb.z);
+  const ax: [number, number, number] = [j.axis?.x ?? 1, j.axis?.y ?? 0, j.axis?.z ?? 0];
+  const o = <K extends string>(k: K, v: number | undefined): Partial<Record<K, number>> => (v === undefined ? {} : ({ [k]: v } as Record<K, number>));
+  let joint: AnyJoint3;
+  switch (j.kind) {
+    case 'hinge':
+      joint = new Hinge3(w, a, b, la, lb, ax, { ...o('motor', j.motor), ...o('torque', j.torque), ...o('min', j.min), ...o('max', j.max) });
+      break;
+    case 'spring':
+      joint = new Distance3(a, b, la, lb, 'spring', j.rest ?? 0, j.k ?? 50, j.damping ?? 0);
+      break;
+    case 'rope':
+      joint = new Distance3(a, b, la, lb, 'rope', j.length ?? 1);
+      break;
+    case 'rod':
+      joint = new Distance3(a, b, la, lb, 'rod', j.length ?? 1);
+      break;
+    case 'slider':
+      joint = new Slider3(w, a, b, la, lb, ax, { ...o('min', j.min), ...o('max', j.max), ...o('motor', j.motor), ...o('force', j.torque) });
+      break;
+    default:
+      joint = new Weld3(w, a, b, la, lb, j.breaks ?? 0);
+      break;
+  }
+  if (j.breaks !== undefined && j.kind !== 'weld') joint.breaks = j.breaks;
+  return joint;
+}
+
+/** A wheel as a free body: a round slab of `ROUND_SIDES` sides about the y axis, centred at c. */
+function wheelSlab(c: V3, r: number, width: number): ShapeDef3 {
+  const n = ROUND_SIDES;
+  const verts: V3[] = [];
+  for (const y of [c.y - width / 2, c.y + width / 2]) {
+    for (let k = 0; k < n; k++) {
+      // the corners by the exact maths: the turn about y of the unit x axis
+      const q = quatAxis(0, 1, 0, (2 * Math.PI * k) / n);
+      const cs = q[0] * q[0] - q[2] * q[2];
+      const sn = 2 * q[0] * q[2];
+      verts.push({ x: c.x + r * cs, y, z: c.z - r * sn });
+    }
+  }
+  const faces: number[][] = [];
+  // the side at −y seen from outside, then the one at +y, then the rim
+  faces.push(Array.from({ length: n }, (_, k) => n - 1 - k));
+  faces.push(Array.from({ length: n }, (_, k) => n + k));
+  for (let k = 0; k < n; k++) faces.push([k, (k + 1) % n, n + ((k + 1) % n), n + k]);
+  return { kind: 'hull', verts, faces };
+}
+
 /** Body properties a `with` line may set on a body in space. */
 export const BODY3_PROPS = ['bounce', 'friction', 'force', 'torque', 'group'] as const;
 
@@ -1044,6 +1491,23 @@ function clamp(x: number, lo: number, hi: number): number {
 }
 
 const num = (x: number): string => String(Number(x.toPrecision(10)));
+
+/** A vector turned by the quaternion q (w, x, y, z). */
+function rotate(q: readonly number[], x: number, y: number, z: number): [number, number, number] {
+  const [qw, qx, qy, qz] = q as [number, number, number, number];
+  return [
+    (1 - 2 * (qy * qy + qz * qz)) * x + 2 * (qx * qy - qw * qz) * y + 2 * (qx * qz + qw * qy) * z,
+    2 * (qx * qy + qw * qz) * x + (1 - 2 * (qx * qx + qz * qz)) * y + 2 * (qy * qz - qw * qx) * z,
+    2 * (qx * qz - qw * qy) * x + 2 * (qy * qz + qw * qx) * y + (1 - 2 * (qx * qx + qy * qy)) * z,
+  ];
+}
+
+function numWords(v: unknown): string | undefined {
+  if (typeof v === 'number' && Number.isFinite(v)) return num(v);
+  const p = v as { x?: unknown; y?: unknown } | undefined;
+  if (p && typeof p.x === 'number' && typeof p.y === 'number') return `${num(p.x)} ${num(p.y)}`;
+  return undefined;
+}
 
 function sameSpec3(a: unknown, b: unknown): boolean {
   return isBody3Value(a) && isBody3Value(b) && (a.spec === b.spec || sameValue(a.spec, b.spec));

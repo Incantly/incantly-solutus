@@ -507,6 +507,12 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
       return r.ok ? undefined : r.error.message;
     },
     draggable: (name) => session.draggable(name),
+    // the arrow keys drive a car in space: they move the sliders its pedals read (physics ui.md 9)
+    slide: (name, value, done) => {
+      const r = session.slide(name, value, done);
+      if (!r.ok) say(r.error.message);
+      else sync();
+    },
     select: (name) => (name ? fromCanvas.set(name) : fromCanvas.clear()),
     say,
   });

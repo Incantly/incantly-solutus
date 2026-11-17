@@ -4,7 +4,7 @@
  * for screen readers. While a gesture runs the pane turns its own copy of the camera; on release it writes one camera
  * line, so a turn is one undo step and the file and the teacher see it.
  */
-import { space } from '@incantly/kernel';
+import { physics, space } from '@incantly/kernel';
 import type { Figure } from '@incantly/kernel';
 import { cameraLine, dragTo, facingAxis, keyLine, keyMove, orbit, pan, pick3, zoomAt } from './controls3';
 import type { DragMode } from './controls3';
@@ -29,6 +29,11 @@ export interface SpacePaneOptions {
   readonly select?: (name: string | undefined) => void;
   /** Says a short fact in the status line. */
   readonly say?: (text: string) => void;
+  /**
+   * Sets a free number (a slider) as the learner: the arrow keys drive a car through it (physics ui.md 9). `done` ends
+   * the gesture. Without it the keys do not drive.
+   */
+  readonly slide?: (name: string, value: number, done: boolean) => void;
   /** The style bar of ui.md 6.2 (default on). */
   readonly styleBar?: boolean;
 }
@@ -46,6 +51,8 @@ export interface SpacePane {
   size(): { w: number; h: number };
   /** The selected point, which the arrow keys move. */
   selected(): string | undefined;
+  /** True while the camera follows the car. */
+  following(): boolean;
   dispose(): void;
 }
 
@@ -103,13 +110,18 @@ export function mountSpace(opts: SpacePaneOptions): SpacePane {
   let chosen: string | undefined;
   let guide: string | undefined;
   let zoomTimer: ReturnType<typeof setTimeout> | undefined;
+  /** The camera keeps behind the car (physics ui.md 9). */
+  let follow = false;
 
   /** The camera a gesture changes: the one the figure stores (or the live copy), before spin and clip size. */
   const baseView = (): space.View3 => live ?? space.viewOf(opts.figure());
   /** The camera drawn now: at the film time. */
   const viewNow = (): space.View3 => {
     const fig = opts.figure() as unknown as { clock?(): { t: number } };
-    return space.viewAtTime(baseView(), typeof fig.clock === 'function' ? fig.clock().t : 0);
+    const v = space.viewAtTime(baseView(), typeof fig.clock === 'function' ? fig.clock().t : 0);
+    const car = follow ? physics.carPose(opts.figure()) : undefined;
+    // behind the car, a little above it, looking the way it goes
+    return car ? { ...v, target: { x: car.x, y: car.y, z: car.z }, azimuth: car.heading - Math.PI / 2, elevation: (18 * Math.PI) / 180, spin: 0, projection: 'persp', zoom: Math.max(2, v.zoom) } : v;
   };
 
   const paint = (): void => {
@@ -278,8 +290,23 @@ export function mountSpace(opts: SpacePaneOptions): SpacePane {
 
   /* ------------------------------ keys (ui.md 5.4) ------------------------------ */
 
+  /** The arrow keys and Space drive a car while nothing is chosen (physics ui.md 9). */
+  const drive = (e: KeyboardEvent, down: boolean): boolean => {
+    if (!opts.slide || chosen || e.ctrlKey || e.metaKey || e.altKey) return false;
+    const writes = physics.carKey(opts.figure(), e.key, down);
+    if (writes.length === 0) return false;
+    e.preventDefault();
+    if (!e.repeat) for (const w of writes) opts.slide(w.name, w.value, true);
+    redraw();
+    return true;
+  };
+  canvas.addEventListener('keyup', (e) => {
+    drive(e, false);
+  });
+
   canvas.addEventListener('keydown', (e) => {
     if (e.ctrlKey || e.metaKey) return;
+    if (drive(e, true)) return;
     const move = chosen ? keyMove(e.key, e.shiftKey, e.altKey) : undefined;
     const at = chosen ? valueOf(chosen) : undefined;
     if (move && chosen && at && (opts.draggable?.(chosen) ?? true)) {
@@ -324,6 +351,16 @@ export function mountSpace(opts: SpacePaneOptions): SpacePane {
       button('◩', 'Orthographic or perspective', () => write(`space with projection = ${space.viewOf(opts.figure()).projection === 'persp' ? 'ortho' : 'persp'}`)),
       presets,
     );
+    const followBtn = button('Follow', 'Keep the camera behind the car', () => {
+      follow = !follow;
+      followBtn.setAttribute('aria-pressed', String(follow));
+      followBtn.classList.toggle('on', follow);
+      opts.say?.(follow ? 'The camera follows the car.' : 'The camera stays where it is.');
+      redraw();
+    });
+    followBtn.classList.add('space-follow');
+    followBtn.setAttribute('aria-pressed', 'false');
+    bar.append(followBtn);
     element.append(bar);
   }
 
@@ -337,6 +374,7 @@ export function mountSpace(opts: SpacePaneOptions): SpacePane {
     last: () => painted,
     size: () => ({ w, h }),
     selected: () => chosen,
+    following: () => follow,
     dispose() {
       ro?.disconnect();
       if (zoomTimer) clearTimeout(zoomTimer);

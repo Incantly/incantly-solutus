@@ -30,7 +30,13 @@ Each round is one branch `feat/physics-<n>` and one PR into `integration`, merge
   - [x] 4.3 The space driver: `Ground()` as the floor, solid planes and solids, terrain from `z = f(x, y)`, gravity in three numbers, push, grab and release logged, hits, left world
   - [x] 4.4 Drawn in the Space view with drag (start move at t = 0, grab while playing)
   - [x] 4.5 Examples (dice, dominoes, a bowl), screenshots, spec tests
-- [ ] 5. Round 5: 3D vehicles and crashes (R6)
+- [x] 5. Round 5: 3D vehicles and crashes (R6)
+  - [x] 5.1 Joints in space: `Hinge` about an axis (motor, limits), `Spring`, `Rope`, `Rod`, `Weld` (breaks), `Slider` (limits, motor), with `j.force`, `j.length`, `j.angle`, `j.broken`; B010 for a flat body joined to one in space
+  - [x] 5.2 Ray wheels: `Wheel` and `Vehicle` on a `Body3` (spring, damping, travel, grip, drive, steers, power, brake, `speedometer`), `Box` in space
+  - [x] 5.3 Crashes: wheels with `breaks` come off as free bodies (reason `broken`, notice B111), welds break in a hard hit
+  - [x] 5.4 Terrain as a heightfield of 128 × 128 cells, only the cells under a shape tested
+  - [x] 5.5 Driving in the Space view: arrow keys and Space write the pedals (logged while playing), Follow camera; wheels, loose wheels and joints drawn
+  - [x] 5.6 Examples (a car on hills, a car hits a wall), screenshots, spec tests, the car accuracy check of design 11.5 and the bench row of 11.2
 - [x] 6. Round 6: water and 2D liquid, worker (R7)
   - [x] 6.1 `Water(level)`, `Water(region, level)`: clipped buoyancy and water drag, counted as `buoyancy` and `drag`; a level may read `t`
   - [x] 6.2 `Liquid`, `Pour` in the plane: position-based fluids, the shared particle store and neighbour grid (counting sort, no garbage), two density passes, drops against solids and bodies with the equal and opposite impulse a step later, viscosity, seeded taps, `left_world`, the 2,000-drop limit (B013), `l.count`, `l.level`

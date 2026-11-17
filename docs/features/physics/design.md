@@ -424,6 +424,17 @@ A car is a chassis body and wheels. We use **ray wheels**, which are the usual w
 
 **Crashes.** The chassis is a real body, so it hits walls and other bodies with the full solver. A wheel with `breaks = F` comes off when its spring force goes above `F`: it becomes a free `Body3` cylinder from that moment, with the wheel's speed and spin. A body made of welded parts (`Weld(a, b, breaks = 5000)`) breaks apart in a hard hit. So "a car hits a wall" shows a dented stop, flying wheels and loose parts, with forces that can be read.
 
+**Decisions taken when building it (round 5).**
+
+- `Wheel(chassis, at, r)` in space: `at` is the wheel's centre at the start with its spring at full `travel`; the mount is `travel` above it. A car faces its chassis's own x axis; `steer` is an angle, left (towards +y) positive, at most 1.2 rad. Defaults: `spring` 30 N/m per kg of chassis, `damping` about half of critical, `travel` 0.6 r, `grip` 1, `mass` 4% of the chassis.
+- The spring pushes along the ground's normal at the touch point. The tyre's forward and side impulses push the chassis at the wheel's hub, as an axle does, so a hard turn leans the car instead of rolling it over. Grip is a box of `grip` times the spring's push in each direction, the friction rule of the contacts in space (6.5).
+- `motor` gives each driven wheel its share of `power` as a torque at its spin (at most what its grip can pass on); the wheel's spin is a state, saved in checkpoints.
+- A wheel's load for `breaks` is its spring's push plus the force it takes to carry the wheel's own mass with the chassis, so a hard stop throws a wheel off as well as a hard landing. A wheel that comes off is a free round slab of 24 sides with the wheel's speed and spin; the wheel object becomes undefined with reason `broken`, and the car's value lists it under `loose` so it is still drawn.
+- `Weld` in space breaks when its pull plus its turning push over the distance between the parts' centres goes over `breaks`.
+- `Box(centre: Point3, w, d, h)` gives a cuboid in space (x, y and z sizes), turned by `angle` about z.
+- Terrain is a heightfield of 128 × 128 cells over the clip box: the cells under a shape are tested, each triangle as a slab half a unit deep, culled by the slab's top plane and by the moving hull's own faces.
+- A joint in space takes `Point3` anchors; `Hinge(a, b, at, axis)` and `Slider(a, b, axis)` take a `Vector3` axis. Joint forces count in `b.force("tension")` and `"spring"`; a wheel's in `"normal"` and `"friction"`.
+
 In 2D the same `Wheel` and `Vehicle` make a side-view car on hills; the wheels are real circle bodies on `Slider` joints with springs, because in the side view the wheels must roll over bumps.
 
 ## 9. Liquids, water, smoke and cloth

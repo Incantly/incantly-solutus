@@ -19,7 +19,13 @@ export interface P3 {
 export type ShapeDef3 =
   | { readonly kind: 'sphere'; readonly c: P3; readonly r: number }
   | { readonly kind: 'hull'; readonly verts: readonly P3[]; readonly faces: readonly (readonly number[])[] }
-  | { readonly kind: 'plane'; readonly n: P3; readonly d: number };
+  | { readonly kind: 'plane'; readonly n: P3; readonly d: number }
+  /**
+   * Terrain `z = f(x, y)` on an nx × ny grid from (x0, y0) in steps dx, dy: heights at the (nx + 1) × (ny + 1) corners,
+   * index i (ny + 1) + j, NaN where f is undefined. Each cell is two triangles, (i, j) (i+1, j) (i+1, j+1) and
+   * (i, j) (i+1, j+1) (i, j+1), each the top of a slab half a unit deep; only the cells under a shape are tested.
+   */
+  | { readonly kind: 'heightfield'; readonly x0: number; readonly y0: number; readonly dx: number; readonly dy: number; readonly nx: number; readonly ny: number; readonly h: Float64Array };
 
 export interface BodyDef3 {
   readonly type: BodyType3;
@@ -31,14 +37,34 @@ export interface BodyDef3 {
   readonly friction?: number;
   readonly bounce?: number;
   readonly group?: number;
+  /** A body that takes no part until `activate` (a wheel that may come off). */
+  readonly off?: boolean;
 }
 
 /** A force kind index, as in the plane (`FORCE_KINDS` of world2). */
 export const FK3 = { gravity: 0, normal: 1, friction: 2, tension: 3, spring: 4, buoyancy: 5, drag: 6, electric: 7, applied: 8, net: 9 } as const;
 const NK = 10;
 
+interface Heightfield {
+  readonly x0: number;
+  readonly y0: number;
+  readonly dx: number;
+  readonly dy: number;
+  readonly nx: number;
+  readonly ny: number;
+  readonly h: Float64Array;
+  /** The slabs of the triangles met so far, made when first needed. */
+  readonly slabs: Map<number, Shape3 | null>;
+}
+
+type Found3 = { nx: number; ny: number; nz: number; pts: { x: number; y: number; z: number; s: number }[] };
+
+/** Which method a pair of kinds takes: the lower one is A. */
+const PRI: readonly number[] = [2, 1, 0, -1];
+
 interface Shape3 {
-  readonly kind: 0 | 1 | 2; // sphere, hull, plane
+  readonly kind: 0 | 1 | 2 | 3; // sphere, hull, plane, heightfield
+  readonly hf?: Heightfield;
   readonly body: number;
   readonly r: number;
   /** Sphere centre, body frame; plane normal and offset in world. */
@@ -129,6 +155,8 @@ export interface Joint3 {
   solveVelocity(w: World3, h: number): void;
   solvePosition(w: World3): boolean;
   energy(w: World3): number;
+  /** Adds the forces it gave its bodies this step to their counts (`b.force(kind)`). */
+  account?(w: World3, inv_h: number): void;
   save(out: number[]): void;
   load(s: Float64Array, k: number): number;
 }
@@ -155,6 +183,11 @@ export class World3 {
   invIw = new Float64Array(0);
   invIl = new Float64Array(0);
   invM = new Float64Array(0);
+  /** The inverse masses and body-frame inverse inertias the bodies were made with, for a body that comes back. */
+  private invM0 = new Float64Array(0);
+  private invIl0 = new Float64Array(0);
+  /** Triangles of the largest terrain, for contact keys. */
+  private triMax = 1;
   mass = new Float64Array(0);
   /** The inertia tensor in the body frame, for kinetic energy. */
   Il = new Float64Array(0);
@@ -231,6 +264,9 @@ export class World3 {
       this.setRot(i);
       this.updateShapes(i);
     }
+    this.invM0 = Float64Array.from(this.invM);
+    this.invIl0 = Float64Array.from(this.invIl);
+    for (const s of this.shapes) if (s.hf) this.triMax = Math.max(this.triMax, s.hf.nx * s.hf.ny * 2);
     // the shapes of fixed bodies never move: they are sorted once and searched, so terrain of thousands of slabs costs
     // only the slabs under each moving shape; endless ones (planes) are tried against every moving shape
     const moving: number[] = [];
@@ -239,7 +275,7 @@ export class World3 {
     for (let k = 0; k < ns; k++) {
       const s = this.shapes[k] as Shape3;
       if (this.type[s.body] !== BodyType3.Static) moving.push(k);
-      else if (s.kind === 2 || !((this.hi[k * 3] as number) - (this.lo[k * 3] as number) < 20)) big.push(k);
+      else if (s.kind === 2 || s.kind === 3 || !((this.hi[k * 3] as number) - (this.lo[k * 3] as number) < 20)) big.push(k);
       else fixed.push(k);
     }
     fixed.sort((a, b) => (this.lo[a * 3] as number) - (this.lo[b * 3] as number) || a - b);
@@ -250,6 +286,78 @@ export class World3 {
     let w = 0;
     for (const k of fixed) w = Math.max(w, (this.hi[k * 3] as number) - (this.lo[k * 3] as number));
     this.fixedWidth = w;
+    // bodies that wait (a wheel that may come off) are out of the world until they are let in
+    for (let i = 0; i < n; i++) if ((defs[i] as BodyDef3).off) this.removeBody(i);
+  }
+
+  /**
+   * Lets a waiting body in (or one that was removed), at a pose with a speed and a turning speed: a wheel that came off
+   * (design 8). It keeps the mass it was made with.
+   */
+  activate(i: number, p: P3, q: readonly [number, number, number, number], v: P3, w: P3): void {
+    this.gone.delete(i);
+    this.type[i] = BodyType3.Dynamic;
+    this.invM[i] = this.invM0[i] as number;
+    this.invIl.set(this.invIl0.subarray(i * 9, i * 9 + 9), i * 9);
+    this.p[i * 3] = p.x;
+    this.p[i * 3 + 1] = p.y;
+    this.p[i * 3 + 2] = p.z;
+    this.q.set(q, i * 4);
+    this.v[i * 3] = v.x;
+    this.v[i * 3 + 1] = v.y;
+    this.v[i * 3 + 2] = v.z;
+    this.w[i * 3] = w.x;
+    this.w[i * 3 + 1] = w.y;
+    this.w[i * 3 + 2] = w.z;
+    this.awake[i] = 1;
+    this.sleepTime[i] = 0;
+    this.setRot(i);
+    this.updateShapes(i);
+  }
+
+  /** Adds a force of a kind to what body i felt this step (joints and wheels count theirs here). */
+  account(i: number, k: number, x: number, y: number, z: number): void {
+    if (this.type[i] !== BodyType3.Dynamic || this.awake[i] === 0) return;
+    const o = i * NK * 3 + k * 3;
+    this.forces[o] = (this.forces[o] as number) + x;
+    this.forces[o + 1] = (this.forces[o + 1] as number) + y;
+    this.forces[o + 2] = (this.forces[o + 2] as number) + z;
+  }
+
+  /** A joint is solved while one of its bodies moves. */
+  private live(j: Joint3): boolean {
+    if (j.broken) return false;
+    const on = (i: number): boolean => this.type[i] === BodyType3.Dynamic && this.awake[i] === 1;
+    return on(j.a) || on(j.b);
+  }
+
+  /**
+   * The first hit of the ray o + t d (d of length 1), 0 ≤ t ≤ maxT, on any shape whose body `skip` does not refuse:
+   * the floor, terrain, solids and bodies. A ray that starts inside a shape hits it at t = 0. Undefined when it misses.
+   */
+  rayCast(ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, maxT: number, skip: (body: number) => boolean): { t: number; nx: number; ny: number; nz: number; body: number } | undefined {
+    const ex = ox + dx * maxT;
+    const ey = oy + dy * maxT;
+    const ez = oz + dz * maxT;
+    const lx = Math.min(ox, ex);
+    const ly = Math.min(oy, ey);
+    const lz = Math.min(oz, ez);
+    const hx = Math.max(ox, ex);
+    const hy = Math.max(oy, ey);
+    const hz = Math.max(oz, ez);
+    let best: { t: number; nx: number; ny: number; nz: number; body: number } | undefined;
+    let bt = maxT;
+    for (let k = 0; k < this.shapes.length; k++) {
+      const s = this.shapes[k] as Shape3;
+      if (hx < (this.lo[k * 3] as number) || lx > (this.hi[k * 3] as number) || hy < (this.lo[k * 3 + 1] as number) || ly > (this.hi[k * 3 + 1] as number) || hz < (this.lo[k * 3 + 2] as number) || lz > (this.hi[k * 3 + 2] as number)) continue;
+      if (this.gone.has(s.body) || skip(s.body)) continue;
+      const r = rayShape(s, ox, oy, oz, dx, dy, dz, bt);
+      if (r && r.t <= bt) {
+        bt = r.t;
+        best = { ...r, body: s.body };
+      }
+    }
+    return best;
   }
 
   /* ------------------------------ building ------------------------------ */
@@ -268,7 +376,7 @@ export class World3 {
     const C = [0, 0, 0, 0, 0, 0, 0, 0, 0];
     // fixed bodies have no mass: their moments are not needed
     for (const s of d.type === BodyType3.Dynamic ? d.shapes : []) {
-      if (s.kind === 'plane') continue;
+      if (s.kind === 'plane' || s.kind === 'heightfield') continue;
       if (s.kind === 'sphere') {
         const v = (4 / 3) * Math.PI * s.r * s.r * s.r;
         vol += v;
@@ -386,7 +494,20 @@ export class World3 {
       let hx = -Infinity;
       let hy = -Infinity;
       let hz = -Infinity;
-      if (s.kind === 2) {
+      if (s.kind === 3) {
+        // terrain never moves: its box is the grid, from half a unit under its lowest corner to its highest
+        const f = s.hf as Heightfield;
+        lx = f.x0;
+        ly = f.y0;
+        hx = f.x0 + f.nx * f.dx;
+        hy = f.y0 + f.ny * f.dy;
+        for (let q = 0; q < f.h.length; q++) {
+          const z = f.h[q] as number;
+          if (z < lz) lz = z;
+          if (z > hz) hz = z;
+        }
+        lz -= 0.5;
+      } else if (s.kind === 2) {
         lx = ly = lz = -1e9;
         hx = hy = hz = 1e9;
         // a plane: everything on its back side; a floor z = d gives a box below d
@@ -494,11 +615,12 @@ export class World3 {
     this.updateContacts(h);
     this.wakeTouched();
     this.initContacts();
-    for (const j of this.joints) if (!j.broken) j.initVelocity(this, h);
+    const live = this.joints.filter((j) => this.live(j));
+    for (const j of live) j.initVelocity(this, h);
     this.warmStart();
     const inv_h = 1 / h;
     for (let it = 0; it < this.passes; it++) {
-      for (const j of this.joints) if (!j.broken) j.solveVelocity(this, h);
+      for (const j of live) if (!j.broken) j.solveVelocity(this, h);
       this.solveContacts(inv_h);
     }
     this.restitution();
@@ -523,7 +645,7 @@ export class World3 {
     }
     for (let it = 0; it < 3; it++) {
       let ok = this.solvePositions();
-      for (const j of this.joints) if (!j.broken) ok = j.solvePosition(this) && ok;
+      for (const j of live) if (!j.broken) ok = j.solvePosition(this) && ok;
       if (ok) break;
     }
     this.countForces(h, v0);
@@ -657,9 +779,8 @@ export class World3 {
       let sb = key - sa * ns;
       let A = this.shapes[sa] as Shape3;
       let B = this.shapes[sb] as Shape3;
-      // order: plane before hull before sphere, so each pair has one method
-      const pri = (k: number): number => (k === 2 ? 0 : k === 1 ? 1 : 2);
-      if (pri(A.kind) > pri(B.kind)) {
+      // order: terrain, then plane, hull, sphere, so each pair has one method
+      if ((PRI[A.kind] as number) > (PRI[B.kind] as number)) {
         const t = sa;
         sa = sb;
         sb = t;
@@ -668,60 +789,39 @@ export class World3 {
         B = T;
       }
       const margin = this.marginOf(A.body, h) + this.marginOf(B.body, h);
-      const found: { nx: number; ny: number; nz: number; pts: { x: number; y: number; z: number; s: number }[] } | undefined = this.collide(A, B, margin);
-      const prev = old.get(key);
-      if (prev) old.delete(key);
-      if (!found || found.pts.length === 0) {
-        if (prev) {
-          prev.pts = [];
-          prev.pushed = false;
-          prev.touching = false;
-          next.set(key, prev);
-        }
-        continue;
-      }
-      const c: Contact3 = prev ?? { key, a: A.body, b: B.body, sa, sb, nx: 0, ny: 0, nz: 0, pts: [], friction: 0, restitution: 0, pushed: false, touching: false, t1x: 0, t1y: 0, t1z: 0, t2x: 0, t2y: 0, t2z: 0 };
-      c.a = A.body;
-      c.b = B.body;
-      c.sa = sa;
-      c.sb = sb;
-      c.nx = found.nx;
-      c.ny = found.ny;
-      c.nz = found.nz;
-      const olds = c.pts;
-      const pts: CPoint[] = [];
-      for (const q of found.pts) {
-        // the point on A's surface and on B's: q is on B's, q - s n on A's
-        const ax = q.x - q.s * c.nx;
-        const ay = q.y - q.s * c.ny;
-        const az = q.z - q.s * c.nz;
-        const la = this.toLocal(c.a, ax, ay, az);
-        const lb = this.toLocal(c.b, q.x, q.y, q.z);
-        const cp: CPoint = { ax: la[0], ay: la[1], az: la[2], bx: lb[0], by: lb[1], bz: lb[2], s: q.s, ni: 0, t1i: 0, t2i: 0, rax: 0, ray: 0, raz: 0, rbx: 0, rby: 0, rbz: 0, nm: 0, t1m: 0, t2m: 0, rv: 0, max: 0 };
-        // warm start from the old point nearest on B
-        let best: CPoint | undefined;
-        let bd = 0.04 * 0.04;
-        for (const o of olds) {
-          const d = (o.bx - cp.bx) ** 2 + (o.by - cp.by) ** 2 + (o.bz - cp.bz) ** 2;
-          if (d < bd) {
-            bd = d;
-            best = o;
+      if (A.kind === 3) {
+        // terrain: only the cells under the other shape, each triangle a slab of its own with its own touch
+        const hf = A.hf as Heightfield;
+        const base = ns * ns + (sb * ns + sa) * this.triMax;
+        const i0 = Math.max(0, Math.floor(((this.lo[sb * 3] as number) - margin - hf.x0) / hf.dx));
+        const i1 = Math.min(hf.nx - 1, Math.floor(((this.hi[sb * 3] as number) + margin - hf.x0) / hf.dx));
+        const j0 = Math.max(0, Math.floor(((this.lo[sb * 3 + 1] as number) - margin - hf.y0) / hf.dy));
+        const j1 = Math.min(hf.ny - 1, Math.floor(((this.hi[sb * 3 + 1] as number) + margin - hf.y0) / hf.dy));
+        const zlo = (this.lo[sb * 3 + 2] as number) - margin;
+        const found: { tri: number; f: Found3; s: number }[] = [];
+        for (let i = i0; i <= i1; i++) {
+          for (let j = j0; j <= j1; j++) {
+            for (let t = 0; t < 2; t++) {
+              const top = triTop(hf, i, j, t);
+              // a triangle wholly under the shape's box, or whose top plane the shape is clear of (a separating axis
+              // of the slab), cannot touch it
+              if (!(top >= zlo) || clearOfTri(hf, i, j, t, B, margin)) continue;
+              const slab = slabOf(hf, A.body, i, j, t);
+              const f = slab ? this.collide(slab, B, margin) : undefined;
+              if (!f || f.pts.length === 0) continue;
+              let s = Infinity;
+              for (const q of f.pts) s = Math.min(s, q.s);
+              found.push({ tri: (i * hf.ny + j) * 2 + t, f, s });
+            }
           }
         }
-        if (best) {
-          cp.ni = best.ni;
-          cp.t1i = best.t1i;
-          cp.t2i = best.t2i;
-        }
-        pts.push(cp);
+        // a shape resting on fine terrain is near many triangles: the closest few carry it (a ball needs one or two)
+        found.sort((x, y) => x.s - y.s || x.tri - y.tri);
+        const keep = found.slice(0, 4).sort((x, y) => x.tri - y.tri);
+        for (const c of keep) this.meet(base + c.tri, sa, sb, A, B, c.f, old, next, list);
+        continue;
       }
-      c.pts = pts;
-      const fa = this.fric[c.a] as number;
-      const fb = this.fric[c.b] as number;
-      c.friction = Number.isNaN(fa) ? (Number.isNaN(fb) ? 0.4 : fb) : Number.isNaN(fb) ? fa : Math.sqrt(fa * fb);
-      c.restitution = Math.max(this.rest[c.a] as number, this.rest[c.b] as number);
-      next.set(key, c);
-      list.push(c);
+      this.meet(key, sa, sb, A, B, this.collide(A, B, margin), old, next, list);
     }
     // a sleeping body keeps its touches (and what it reads of them) until it wakes; they are not solved
     for (const [key, c] of old) {
@@ -730,6 +830,74 @@ export class World3 {
     }
     this.contactMap = next;
     this.contacts = list;
+  }
+
+  /** The contact of one pair of shapes (or one terrain triangle and a shape), keeping last step's impulses. */
+  private meet(key: number, sa: number, sb: number, A: Shape3, B: Shape3, found: Found3 | undefined, old: Map<number, Contact3>, next: Map<number, Contact3>, list: Contact3[]): void {
+    const prev = old.get(key);
+    if (prev) old.delete(key);
+    if (!found || found.pts.length === 0) {
+      if (prev) {
+        prev.pts = [];
+        prev.pushed = false;
+        prev.touching = false;
+        next.set(key, prev);
+      }
+      return;
+    }
+    const c: Contact3 = prev ?? { key, a: A.body, b: B.body, sa, sb, nx: 0, ny: 0, nz: 0, pts: [], friction: 0, restitution: 0, pushed: false, touching: false, t1x: 0, t1y: 0, t1z: 0, t2x: 0, t2y: 0, t2z: 0 };
+    c.a = A.body;
+    c.b = B.body;
+    c.sa = sa;
+    c.sb = sb;
+    c.nx = found.nx;
+    c.ny = found.ny;
+    c.nz = found.nz;
+    const olds = c.pts;
+    const pts: CPoint[] = [];
+    for (const q of found.pts) {
+      // the point on A's surface and on B's: q is on B's, q - s n on A's
+      const ax = q.x - q.s * c.nx;
+      const ay = q.y - q.s * c.ny;
+      const az = q.z - q.s * c.nz;
+      const la = this.toLocal(c.a, ax, ay, az);
+      const lb = this.toLocal(c.b, q.x, q.y, q.z);
+      const cp: CPoint = { ax: la[0], ay: la[1], az: la[2], bx: lb[0], by: lb[1], bz: lb[2], s: q.s, ni: 0, t1i: 0, t2i: 0, rax: 0, ray: 0, raz: 0, rbx: 0, rby: 0, rbz: 0, nm: 0, t1m: 0, t2m: 0, rv: 0, max: 0 };
+      // warm start from the old point nearest on B
+      let best: CPoint | undefined;
+      let bd = 0.04 * 0.04;
+      for (const o of olds) {
+        const d = (o.bx - cp.bx) ** 2 + (o.by - cp.by) ** 2 + (o.bz - cp.bz) ** 2;
+        if (d < bd) {
+          bd = d;
+          best = o;
+        }
+      }
+      if (best) {
+        cp.ni = best.ni;
+        cp.t1i = best.t1i;
+        cp.t2i = best.t2i;
+      }
+      pts.push(cp);
+    }
+    c.pts = pts;
+    const fa = this.fric[c.a] as number;
+    const fb = this.fric[c.b] as number;
+    c.friction = Number.isNaN(fa) ? (Number.isNaN(fb) ? 0.4 : fb) : Number.isNaN(fb) ? fa : Math.sqrt(fa * fb);
+    c.restitution = Math.max(this.rest[c.a] as number, this.rest[c.b] as number);
+    next.set(key, c);
+    list.push(c);
+  }
+
+  /** The two shapes of a contact key: a pair of shapes, or a terrain triangle and a shape. */
+  private shapesOfKey(key: number): [number, number] {
+    const ns = this.shapes.length;
+    if (key < ns * ns) {
+      const sa = Math.floor(key / ns);
+      return [sa, key - sa * ns];
+    }
+    const k = Math.floor((key - ns * ns) / this.triMax);
+    return [k % ns, Math.floor(k / ns)];
   }
 
   private marginOf(i: number, h: number): number {
@@ -901,15 +1069,21 @@ export class World3 {
       for (const p of c.pts) {
         // friction in two directions, a box of μ times the push
         const maxF = c.friction * p.ni;
-        for (const [tx, ty, tz, which] of [[c.t1x, c.t1y, c.t1z, 1], [c.t2x, c.t2y, c.t2z, 2]] as const) {
-          const vt = this.relV(c.a, c.b, p, tx, ty, tz);
-          const m = which === 1 ? p.t1m : p.t2m;
-          const old = which === 1 ? p.t1i : p.t2i;
-          const nw = Math.max(-maxF, Math.min(maxF, old - m * vt));
+        {
+          const vt = this.relV(c.a, c.b, p, c.t1x, c.t1y, c.t1z);
+          const old = p.t1i;
+          const nw = Math.max(-maxF, Math.min(maxF, old - p.t1m * vt));
           const d = nw - old;
-          if (which === 1) p.t1i = nw;
-          else p.t2i = nw;
-          if (d !== 0) this.applyAt(c.a, c.b, p.rax, p.ray, p.raz, p.rbx, p.rby, p.rbz, d * tx, d * ty, d * tz);
+          p.t1i = nw;
+          if (d !== 0) this.applyAt(c.a, c.b, p.rax, p.ray, p.raz, p.rbx, p.rby, p.rbz, d * c.t1x, d * c.t1y, d * c.t1z);
+        }
+        {
+          const vt = this.relV(c.a, c.b, p, c.t2x, c.t2y, c.t2z);
+          const old = p.t2i;
+          const nw = Math.max(-maxF, Math.min(maxF, old - p.t2m * vt));
+          const d = nw - old;
+          p.t2i = nw;
+          if (d !== 0) this.applyAt(c.a, c.b, p.rax, p.ray, p.raz, p.rbx, p.rby, p.rbz, d * c.t2x, d * c.t2y, d * c.t2z);
         }
       }
       for (const p of c.pts) {
@@ -1101,7 +1275,11 @@ export class World3 {
       add(c.b, FK3.friction, fx, fy, fz);
       add(c.a, FK3.friction, -fx, -fy, -fz);
     }
-    for (const j of this.joints) if (j.breaks > 0 && !j.broken && Math.abs(j.impulse) * inv_h > j.breaks) j.broken = true;
+    for (const j of this.joints) {
+      if (j.broken) continue;
+      if (j.breaks > 0 && Math.abs(j.impulse) * inv_h > j.breaks) j.broken = true;
+      else j.account?.(this, inv_h);
+    }
     for (let i = 0; i < this.n; i++) {
       if (this.type[i] !== BodyType3.Dynamic || this.awake[i] === 0) continue;
       const m = this.mass[i] as number;
@@ -1230,18 +1408,15 @@ export class World3 {
       this.sleepTime[i] = s[k++] as number;
       this.awake[i] = s[k++] as number;
       this.type[i] = s[k++] as number;
-      this.setRot(i);
     }
     this.contactMap = new Map();
     this.contacts = [];
-    const ns = this.shapes.length;
     const nc = s[k++] as number;
     for (let i = 0; i < nc; i++) {
       const key = s[k++] as number;
       const np = s[k++] as number;
       const flags = s[k++] as number;
-      const sa = Math.floor(key / ns);
-      const sb = key - sa * ns;
+      const [sa, sb] = this.shapesOfKey(key);
       const c: Contact3 = { key, a: (this.shapes[sa] as Shape3).body, b: (this.shapes[sb] as Shape3).body, sa, sb, nx: s[k++] as number, ny: s[k++] as number, nz: s[k++] as number, pts: [], friction: 0, restitution: 0, pushed: (flags & 2) === 2, touching: (flags & 1) === 1, t1x: 0, t1y: 0, t1z: 0, t2x: 0, t2y: 0, t2z: 0 };
       for (let q = 0; q < np; q++) {
         c.pts.push({ ax: s[k++] as number, ay: s[k++] as number, az: s[k++] as number, bx: s[k++] as number, by: s[k++] as number, bz: s[k++] as number, s: 0, ni: s[k++] as number, t1i: s[k++] as number, t2i: s[k++] as number, rax: 0, ray: 0, raz: 0, rbx: 0, rby: 0, rbz: 0, nm: 0, t1m: 0, t2m: 0, rv: 0, max: 0 });
@@ -1256,19 +1431,22 @@ export class World3 {
     }
     const ng = s[k++] as number;
     this.gone = new Set();
-    for (let i = 0; i < ng; i++) {
-      const b = s[k++] as number;
-      this.gone.add(b);
-      this.invM[b] = 0;
-      this.invIw.fill(0, b * 9, b * 9 + 9);
-      this.invIl.fill(0, b * 9, b * 9 + 9);
-      const s0 = this.shape0[b] as number;
-      for (let q = s0; q < s0 + (this.shapeN[b] as number); q++) {
-        this.lo[q * 3] = Infinity;
-        this.hi[q * 3] = -Infinity;
-      }
+    for (let i = 0; i < ng; i++) this.gone.add(s[k++] as number);
+    // a body that left, broke loose or blew up later in the film is back with its mass; one gone by now has none
+    for (let i = 0; i < this.n; i++) {
+      const out = this.gone.has(i);
+      this.invM[i] = out ? 0 : (this.invM0[i] as number);
+      if (out) this.invIl.fill(0, i * 9, i * 9 + 9);
+      else this.invIl.set(this.invIl0.subarray(i * 9, i * 9 + 9), i * 9);
+      this.setRot(i);
+      if (out) {
+        const s0 = this.shape0[i] as number;
+        for (let q = s0; q < s0 + (this.shapeN[i] as number); q++) {
+          this.lo[q * 3] = Infinity;
+          this.hi[q * 3] = -Infinity;
+        }
+      } else this.updateShapes(i);
     }
-    for (let i = 0; i < this.n; i++) if (!this.gone.has(i)) this.updateShapes(i);
   }
 }
 
@@ -1316,7 +1494,7 @@ export function volumeOf3(shapes: readonly ShapeDef3[]): { vol: number; cx: numb
   let cy = 0;
   let cz = 0;
   for (const s of shapes) {
-    if (s.kind === 'plane') continue;
+    if (s.kind === 'plane' || s.kind === 'heightfield') continue;
     if (s.kind === 'sphere') {
       const v = (4 / 3) * Math.PI * s.r ** 3;
       vol += v;
@@ -1391,6 +1569,10 @@ function makeShape3(body: number, d: ShapeDef3, ox: number, oy: number, oz: numb
   const noFaces: Int32Array[] = [];
   if (d.kind === 'sphere') {
     return { kind: 0, body, r: d.r, lc: Float64Array.of(d.c.x - ox, d.c.y - oy, d.c.z - oz), lv: z, wv: z, faces: noFaces, ln: z, wn: z, le: z, we: z, edges: new Int32Array(0), wc: new Float64Array(3), reach: Math.sqrt((d.c.x - ox) ** 2 + (d.c.y - oy) ** 2 + (d.c.z - oz) ** 2) + d.r };
+  }
+  if (d.kind === 'heightfield') {
+    const hf: Heightfield = { x0: d.x0, y0: d.y0, dx: d.dx, dy: d.dy, nx: d.nx, ny: d.ny, h: d.h, slabs: new Map() };
+    return { kind: 3, hf, body, r: 0, lc: z, lv: z, wv: z, faces: noFaces, ln: z, wn: z, le: z, we: z, edges: new Int32Array(0), wc: new Float64Array(3), reach: 0 };
   }
   if (d.kind === 'plane') {
     const l = Math.sqrt(d.n.x * d.n.x + d.n.y * d.n.y + d.n.z * d.n.z) || 1;
@@ -1813,4 +1995,212 @@ export function quatAxis(x: number, y: number, z: number, angle: number): [numbe
   const sc = new Float64Array(2);
   sincos(angle / 2, sc);
   return [sc[1] as number, x * (sc[0] as number), y * (sc[0] as number), z * (sc[0] as number)];
+}
+
+/* ------------------------------ terrain and rays ------------------------------ */
+
+/** The corners of triangle t of cell (i, j), as height indices. */
+function triCorners(f: Heightfield, i: number, j: number, t: number): [number, number, number] {
+  const m = f.ny + 1;
+  const a = i * m + j;
+  const b = (i + 1) * m + j;
+  const c = (i + 1) * m + j + 1;
+  const d = i * m + j + 1;
+  return t === 0 ? [a, b, c] : [a, c, d];
+}
+
+/** The highest corner of a terrain triangle (NaN when a corner is undefined). */
+function triTop(f: Heightfield, i: number, j: number, t: number): number {
+  const [a, b, c] = triCorners(f, i, j, t);
+  return Math.max(f.h[a] as number, f.h[b] as number, f.h[c] as number);
+}
+
+/** True when shape B is more than `margin` above the plane of a terrain triangle's top (or the triangle is undefined). */
+function clearOfTri(f: Heightfield, i: number, j: number, t: number, B: Shape3, margin: number): boolean {
+  const [ia, ib, ic] = triCorners(f, i, j, t);
+  const m = f.ny + 1;
+  const xa = f.x0 + f.dx * Math.floor(ia / m);
+  const ya = f.y0 + f.dy * (ia % m);
+  const za = f.h[ia] as number;
+  const ux = f.x0 + f.dx * Math.floor(ib / m) - xa;
+  const uy = f.y0 + f.dy * (ib % m) - ya;
+  const uz = (f.h[ib] as number) - za;
+  const vx = f.x0 + f.dx * Math.floor(ic / m) - xa;
+  const vy = f.y0 + f.dy * (ic % m) - ya;
+  const vz = (f.h[ic] as number) - za;
+  let nx = uy * vz - uz * vy;
+  let ny = uz * vx - ux * vz;
+  let nz = ux * vy - uy * vx;
+  const l = Math.sqrt(nx * nx + ny * ny + nz * nz);
+  if (!(l > 0)) return true;
+  nx /= l;
+  ny /= l;
+  nz /= l;
+  if (B.kind === 0) {
+    const cx = B.wc[0] as number;
+    const cy = B.wc[1] as number;
+    const cz = B.wc[2] as number;
+    if (nx * (cx - xa) + ny * (cy - ya) + nz * (cz - za) - B.r > margin) return true;
+    // the triangle's box is a bound from below on its distance: a ball on flat ground is near only the cells under it
+    const gap = (c: number, a: number, b: number, d: number): number => {
+      const lo = Math.min(a, b, d);
+      const hi = Math.max(a, b, d);
+      return c < lo ? lo - c : c > hi ? c - hi : 0;
+    };
+    const gx = gap(cx, xa, xa + ux, xa + vx);
+    const gy = gap(cy, ya, ya + uy, ya + vy);
+    const gz = gap(cz, za, za + uz, za + vz);
+    const reach = B.r + margin;
+    return gx * gx + gy * gy + gz * gz > reach * reach;
+  }
+  const v = B.wv;
+  let near = false;
+  for (let q = 0; q < v.length; q += 3) {
+    if (nx * ((v[q] as number) - xa) + ny * ((v[q + 1] as number) - ya) + nz * ((v[q + 2] as number) - za) <= margin) {
+      near = true;
+      break;
+    }
+  }
+  if (!near) return true;
+  // the hull's own faces are separating axes too: a slab wholly outside one face cannot touch (a tilted car over hills)
+  const px = [xa, xa + ux, xa + vx];
+  const py = [ya, ya + uy, ya + vy];
+  const pz = [za, za + uz, za + vz];
+  for (let k = 0; k < B.faces.length; k++) {
+    const fx = B.wn[k * 3] as number;
+    const fy = B.wn[k * 3 + 1] as number;
+    const fz = B.wn[k * 3 + 2] as number;
+    const o = ((B.faces[k] as Int32Array)[0] as number) * 3;
+    const off = fx * (v[o] as number) + fy * (v[o + 1] as number) + fz * (v[o + 2] as number) + margin;
+    let out = true;
+    for (let c = 0; c < 3 && out; c++) {
+      const d = fx * (px[c] as number) + fy * (py[c] as number) + fz * (pz[c] as number);
+      // the slab's corner on top, and the one half a unit under it
+      if (d <= off || d - 0.5 * fz <= off) out = false;
+    }
+    if (out) return true;
+  }
+  return false;
+}
+
+/** The slab under a terrain triangle, made once when first met; null where the terrain is undefined. */
+function slabOf(f: Heightfield, body: number, i: number, j: number, t: number): Shape3 | undefined {
+  const key = (i * f.ny + j) * 2 + t;
+  const had = f.slabs.get(key);
+  if (had !== undefined) return had ?? undefined;
+  const at = (q: number): P3 => {
+    const ii = Math.floor(q / (f.ny + 1));
+    return { x: f.x0 + f.dx * ii, y: f.y0 + f.dy * (q - ii * (f.ny + 1)), z: f.h[q] as number };
+  };
+  const [a, b, c] = triCorners(f, i, j, t).map(at) as [P3, P3, P3];
+  if (!Number.isFinite(a.z) || !Number.isFinite(b.z) || !Number.isFinite(c.z)) {
+    f.slabs.set(key, null);
+    return undefined;
+  }
+  const low = (s: P3): P3 => ({ x: s.x, y: s.y, z: s.z - 0.5 });
+  // top counter-clockwise from above, bottom the other way, and the three sides
+  const s = makeShape3(body, { kind: 'hull', verts: [a, b, c, low(a), low(b), low(c)], faces: [[0, 1, 2], [3, 5, 4], [0, 3, 4, 1], [1, 4, 5, 2], [2, 5, 3, 0]] }, 0, 0, 0);
+  // terrain never moves: its world corners are its own
+  s.wv.set(s.lv);
+  s.wn.set(s.ln);
+  s.we.set(s.le);
+  f.slabs.set(key, s);
+  return s;
+}
+
+type RayHit = { t: number; nx: number; ny: number; nz: number };
+
+/** A ray against one shape in world space (d of length 1), up to maxT. */
+function rayShape(s: Shape3, ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, maxT: number): RayHit | undefined {
+  if (s.kind === 0) {
+    const cx = ox - (s.wc[0] as number);
+    const cy = oy - (s.wc[1] as number);
+    const cz = oz - (s.wc[2] as number);
+    const b = cx * dx + cy * dy + cz * dz;
+    const c = cx * cx + cy * cy + cz * cz - s.r * s.r;
+    if (c <= 0) {
+      const l = Math.sqrt(cx * cx + cy * cy + cz * cz) || 1;
+      return { t: 0, nx: cx / l, ny: cy / l, nz: cz / l };
+    }
+    const disc = b * b - c;
+    if (b > 0 || disc < 0) return undefined;
+    const t = -b - Math.sqrt(disc);
+    if (t > maxT) return undefined;
+    const r = 1 / s.r;
+    return { t, nx: (cx + t * dx) * r, ny: (cy + t * dy) * r, nz: (cz + t * dz) * r };
+  }
+  if (s.kind === 2) {
+    const nx = s.lc[0] as number;
+    const ny = s.lc[1] as number;
+    const nz = s.lc[2] as number;
+    const dist = nx * ox + ny * oy + nz * oz - (s.lc[3] as number);
+    if (dist <= 0) return { t: 0, nx, ny, nz };
+    const den = nx * dx + ny * dy + nz * dz;
+    if (den >= 0) return undefined;
+    const t = -dist / den;
+    return t <= maxT ? { t, nx, ny, nz } : undefined;
+  }
+  if (s.kind === 1) return rayHull(s, ox, oy, oz, dx, dy, dz, maxT);
+  // terrain: the triangles of the cells the ray passes over, from above
+  const f = s.hf as Heightfield;
+  const ex = ox + dx * maxT;
+  const ey = oy + dy * maxT;
+  const i0 = Math.max(0, Math.floor((Math.min(ox, ex) - f.x0) / f.dx));
+  const i1 = Math.min(f.nx - 1, Math.floor((Math.max(ox, ex) - f.x0) / f.dx));
+  const j0 = Math.max(0, Math.floor((Math.min(oy, ey) - f.y0) / f.dy));
+  const j1 = Math.min(f.ny - 1, Math.floor((Math.max(oy, ey) - f.y0) / f.dy));
+  let best: RayHit | undefined;
+  let bt = maxT;
+  for (let i = i0; i <= i1; i++) {
+    for (let j = j0; j <= j1; j++) {
+      for (let t = 0; t < 2; t++) {
+        const slab = slabOf(f, s.body, i, j, t);
+        if (!slab) continue;
+        const r = rayHull(slab, ox, oy, oz, dx, dy, dz, bt);
+        if (r && r.t <= bt) {
+          bt = r.t;
+          best = r;
+        }
+      }
+    }
+  }
+  return best;
+}
+
+/** A ray against a convex hull: the last face plane it enters before it leaves any (the slab method). */
+function rayHull(s: Shape3, ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, maxT: number): RayHit | undefined {
+  let t0 = 0;
+  let t1 = maxT;
+  let face = -1;
+  let deepest = -Infinity;
+  let deepFace = 0;
+  const v = s.wv;
+  for (let k = 0; k < s.faces.length; k++) {
+    const nx = s.wn[k * 3] as number;
+    const ny = s.wn[k * 3 + 1] as number;
+    const nz = s.wn[k * 3 + 2] as number;
+    const o = ((s.faces[k] as Int32Array)[0] as number) * 3;
+    const dist = nx * (ox - (v[o] as number)) + ny * (oy - (v[o + 1] as number)) + nz * (oz - (v[o + 2] as number));
+    if (dist > deepest) {
+      deepest = dist;
+      deepFace = k;
+    }
+    const den = nx * dx + ny * dy + nz * dz;
+    if (den === 0) {
+      if (dist > 0) return undefined;
+      continue;
+    }
+    const t = -dist / den;
+    if (den < 0) {
+      if (t > t0) {
+        t0 = t;
+        face = k;
+      }
+    } else if (t < t1) t1 = t;
+    if (t0 > t1) return undefined;
+  }
+  // the start is inside: out through the nearest face
+  const k = face < 0 ? deepFace : face;
+  if (face < 0 && deepest > 0) return undefined;
+  return { t: face < 0 ? 0 : t0, nx: s.wn[k * 3] as number, ny: s.wn[k * 3 + 1] as number, nz: s.wn[k * 3 + 2] as number };
 }

@@ -243,6 +243,11 @@ export async function createApp(opts: AppOptions): Promise<MountedApp> {
         return r.ok ? undefined : r.message;
       } } : {}),
       draggable: (name) => ui.dragPoints && core.draggable(name),
+      // the arrow keys drive a car in space through the sliders it reads (physics ui.md 9)
+      ...(!core.readOnly ? { slide: (name: string, value: number) => {
+        const r = core.set(name, value);
+        if (!r.ok) say(r.message);
+      } } : {}),
       say: (t) => say(t),
       styleBar: ui.zoomButtons,
     })
