@@ -162,6 +162,8 @@ export class ClothSet {
   pinFz: Float64Array;
   /** The pin each point is held by, or −1. */
   pinOf: Int32Array;
+  /** Points a tether held back in this small step (they pass a push on to their pins, as a pinned point does). */
+  taut: Uint8Array;
   /** Tethers: point, pin, length. */
   tePoint: Int32Array;
   tePin: Int32Array;
@@ -235,6 +237,7 @@ export class ClothSet {
     this.w0 = F(np);
     this.owner = I(np);
     this.pinOf = I(np).fill(-1);
+    this.taut = new Uint8Array(np);
     this.la = I(nl);
     this.lb = I(nl);
     this.rest = F(nl);
@@ -522,9 +525,9 @@ export class ClothSet {
 
   /**
    * A point and a body met (or a pin pulled): the point took Δλ along n, the body takes −Δλ n as a push J = −Δλ n / hs
-   * at (x, y, z), and moves by its share now, so the next small steps see it there.
+   * at (x, y, z), and moves by im × J × dt now (dt the time the push stands for), so the next small steps see it there.
    */
-  protected give(b: number, c: number, jx: number, jy: number, jz: number, x: number, y: number, z: number, hs: number): void {
+  protected give(b: number, c: number, jx: number, jy: number, jz: number, x: number, y: number, z: number, dt: number): void {
     this.bjx[b] = (this.bjx[b] as number) + jx;
     this.bjy[b] = (this.bjy[b] as number) + jy;
     this.bjz[b] = (this.bjz[b] as number) + jz;
@@ -537,9 +540,9 @@ export class ClothSet {
     this.bty[b] = (this.bty[b] as number) + rz * jx - rx * jz;
     this.btz[b] = (this.btz[b] as number) + rx * jy - ry * jx;
     const im = this.bodyInvMass(b);
-    this.bdx[b] = (this.bdx[b] as number) + im * jx * hs;
-    this.bdy[b] = (this.bdy[b] as number) + im * jy * hs;
-    this.bdz[b] = (this.bdz[b] as number) + im * jz * hs;
+    this.bdx[b] = (this.bdx[b] as number) + im * jx * dt;
+    this.bdy[b] = (this.bdy[b] as number) + im * jy * dt;
+    this.bdz[b] = (this.bdz[b] as number) + im * jz * dt;
     if (c >= 0) this.touched[c * this.bjx.length + b] = 1;
   }
 
@@ -559,6 +562,7 @@ export class ClothSet {
   /** One world step of h: 4 small steps of the cloth against the bodies where they are now (design 9.5, 9.6). */
   stepCloth(h: number): void {
     this.steps++;
+    this.hStep = h;
     this.bdx.fill(0);
     this.bdy.fill(0);
     this.bdz.fill(0);
@@ -606,12 +610,18 @@ export class ClothSet {
         this.pinFz[q] = (this.pinFz[q] as number) + (this.dropPinZ[q] as number);
       }
     }
+    // the drops of this step are counted: the next liquid step marks afresh
+    this.dropPinX.fill(0);
+    this.dropPinY.fill(0);
+    this.dropPinZ.fill(0);
+    this.wet.fill(0);
     this.tear();
     this.settle(h);
   }
 
   private substep(hs: number): void {
     const { x, y, z, px, py, pz, vx, vy, vz, w } = this;
+    this.taut.fill(0);
     const out = this.scratch;
     // 1. move by speed, gravity and the air
     for (const c of this.cloths) {
@@ -677,6 +687,7 @@ export class ClothSet {
       this.solveTethers(c.te0, c.te0 + c.teN);
     }
     // 3. body pins: what the point moved, the body moves (a push now, a move at the next step)
+    this.inPins = true;
     for (let q = 0; q < this.pinPoint.length; q++) {
       const b = this.pinBody[q] as number;
       if (b < 0) continue;
@@ -690,9 +701,10 @@ export class ClothSet {
       const dz = (z[i] as number) - (out[2] as number);
       const wb = w[i] as number;
       if (wb > 0 && (dx !== 0 || dy !== 0 || dz !== 0)) {
-        // Δx = w Δλ: the body's push is Δλ / hs = Δx / (w hs)
-        const k = 1 / (wb * hs);
-        this.give(b, c, dx * k, dy * k, dz * k, out[0] as number, out[1] as number, out[2] as number, hs);
+        // Δx = w Δλ: the body moves with its point now, and takes the push Δλ / h at the start of the next step (it
+        // steps once a world step, so a push of Δλ / h keeps its speed and its place in step)
+        const k = 1 / (wb * this.hStep);
+        this.give(b, c, dx * k, dy * k, dz * k, out[0] as number, out[1] as number, out[2] as number, this.hStep);
         this.pinFx[q] = (this.pinFx[q] as number) + dx / wb;
         this.pinFy[q] = (this.pinFy[q] as number) + dy / wb;
         this.pinFz[q] = (this.pinFz[q] as number) + dz / wb;
@@ -703,6 +715,7 @@ export class ClothSet {
       z[i] = out[2] as number;
       w[i] = 0;
     }
+    this.inPins = false;
     // 4. solids and bodies, then the cloth against itself and other cloths
     this.collide(hs);
     if (this.nSelf > 0) this.solveSelf();
@@ -860,6 +873,7 @@ export class ClothSet {
       const d2 = dx * dx + dy * dy + dz * dz;
       const L = this.teRest[k] as number;
       if (d2 <= L * L) continue;
+      this.taut[i] = 1;
       const d = Math.sqrt(d2);
       const wj = w[j] as number;
       // the far end moves, and a body pin's point too, as it stands for its body
@@ -1205,15 +1219,11 @@ export class ClothSet {
    */
   meetDrops(ps: DropsView, box: (x0: number, y0: number, z0: number, x1: number, y1: number, z1: number) => number, found: () => Int32Array, r: number, spacing: number, mass: Float64Array, h: number): void {
     if (this.wet.length !== this.cloths.length) this.wet = new Uint8Array(this.cloths.length);
-    this.wet.fill(0);
     if (this.dropPinX.length !== this.pinPoint.length) {
       this.dropPinX = new Float64Array(this.pinPoint.length);
       this.dropPinY = new Float64Array(this.pinPoint.length);
       this.dropPinZ = new Float64Array(this.pinPoint.length);
     }
-    this.dropPinX.fill(0);
-    this.dropPinY.fill(0);
-    this.dropPinZ.fill(0);
     const { x, y, z, vx, vy, vz, w } = this;
     const o = this.scratch;
     const inv = 1 / h;
@@ -1392,6 +1402,12 @@ export class ClothSet {
       }
     }
   }
+
+  /** The world step now. */
+  protected hStep = 1 / 120;
+
+  /** True while the body pins give their pushes (a world counts them as tension). */
+  protected inPins = false;
 
   /** The world's `sleep` setting. */
   sleeping = true;

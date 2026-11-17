@@ -19,6 +19,7 @@
  */
 import { mix32 } from '../commands/probability/random';
 import type { Pt } from './geom2';
+import type { DropMeeter } from './particles';
 import { MAX_NEIGHBOURS, NeighbourGrid, ParticleSet } from './particles';
 import type { World2 } from './world2';
 import { BodyType, FK } from './world2';
@@ -165,6 +166,10 @@ export class Fluid2 {
   private vw = new Float64Array(0);
   private visc: Float64Array;
   private mass: Float64Array;
+  /** Cloth the drops meet (round 9), between the bodies and the walls. */
+  cloth: DropMeeter | undefined;
+  private readonly boxFn = (x0: number, y0: number, _z0: number, x1: number, y1: number): number => this.grid.inBox(x0, y0, x1, y1, this.ps.n);
+  private readonly foundFn = (): Int32Array => this.grid.found;
 
   constructor(spacing: number, sources: readonly DropSource2[], owners: number) {
     this.d = spacing;
@@ -525,6 +530,7 @@ export class Fluid2 {
   /** Pushes drops out of bodies (first), then walls and movers. Bodies get the equal and opposite impulse. */
   private collide(w: World2, h: number): void {
     for (let pass = 0; pass < 2; pass++) {
+      if (pass === 1 && this.cloth) this.cloth.meetDrops(this.ps, this.boxFn, this.foundFn, this.r, this.d, this.mass, h);
       for (let b = 0; b < w.n; b++) {
         if (w.gone.has(b)) continue;
         const dynamic = w.type[b] === BodyType.Dynamic;

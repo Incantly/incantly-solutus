@@ -40,6 +40,8 @@ import { registerLiquids } from './liquid-reg';
 import { LIQUID_COMMANDS } from './liquid';
 import { registerSmoke } from './smoke-reg';
 import { SMOKE_COMMANDS, SMOKE_MAX_WIND } from './smoke';
+import { CLOTH_COMMANDS } from './cloth';
+import { registerCloth } from './cloth-reg';
 import type { BodySpec, BodyValue, Outline, WorldValue } from './types';
 import { DEFAULT_WORLD, SHOW_WORDS, isBodyValue, isWorldValue } from './types';
 
@@ -66,6 +68,9 @@ export { Physics3Driver } from './driver3';
 export { makeNotice } from '../../errors/notices';
 export type { LiquidValue, LiquidSpec, WaterValue, WavesValue } from './liquid';
 export { isSmokeValue } from './smoke';
+export { isClothValue, isPinValue } from './cloth';
+export type { ClothValue, ClothSpec, PinValue } from './cloth';
+export { clothAt, clothRow } from './cloth-reg';
 export type { SmokeValue, SmokeSpec } from './smoke';
 
 /** The limits of design 11.3, the same on every computer. */
@@ -845,6 +850,7 @@ export function registerPhysics(registry: CommandRegistry): void {
   registry.registerAll([...PHYSICS_COMMANDS, ...JOINT_COMMANDS, ...MEASURE_COMMANDS, ...VEHICLE_COMMANDS]);
   registry.registerAll(LIQUID_COMMANDS);
   registry.registerAll(SMOKE_COMMANDS);
+  registry.registerAll(CLOTH_COMMANDS);
   if (registered) return;
   registered = true;
   registerWorldDriver((figure) => {
@@ -928,6 +934,7 @@ export function registerPhysics(registry: CommandRegistry): void {
   registerNotice('broken', { code: 'B111', severity: 'info', template: '{name} broke at t = {t} s.' });
   registerLiquids();
   registerSmoke();
+  registerCloth();
 }
 
 const fmt = (x: number): string => (Number.isFinite(x) ? String(Number(x.toFixed(3))) : String(x));

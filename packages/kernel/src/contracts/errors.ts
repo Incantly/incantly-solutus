@@ -100,6 +100,8 @@ export interface AreaErrorKinds {
   same_body: true;
   not_in_world: true;
   read_only: true;
+  not_a_cloth: true;
+  pin_off_cloth: true;
 }
 
 export type ErrorKind = CoreErrorKind | Extract<keyof AreaErrorKinds, string>;
