@@ -78,7 +78,7 @@ describe('a car driving over terrain', () => {
     g.setClock(4);
     const sought = g.value('chassis') as typeof played;
     expect([sought.x, sought.y, sought.z, ...sought.q]).toEqual([played.x, played.y, played.z, ...played.q]);
-    const shapes = (physics3Of(f).world?.shapes ?? []) as { hf?: Record<string, unknown> }[];
+    const shapes = (physics3Of(f).world?.shapes ?? []) as unknown as { hf?: Record<string, unknown> }[];
     const hf = shapes.find((s) => s.hf)?.hf;
     expect(hf).toBeDefined();
     // no map of slabs that grows with the ground driven over
