@@ -27,7 +27,7 @@ import { sameValue } from './values';
 import { KERNEL_ACTIONS } from './actions';
 import { CommandRegistry, RuleUndefined, clockDrivenOf } from './registry';
 import type { CommandRule, RuleCall, RuleWork } from './registry';
-import { coerceDynamic, defaultsFor, setProp, toEffective } from './props';
+import { coerceDynamic, defaultsFor, setProp, styleTypeOf, toEffective } from './props';
 
 /* ------------------------------ the object record ------------------------------ */
 
@@ -958,7 +958,7 @@ export class FigureCore {
   /** The static properties of an object: the type defaults with its constant `with` values on top. */
   propsOf(r: ObjRec): Props {
     const onPath = r.p.node.k === 'define' && r.p.node.expr.k === 'call' && r.p.node.expr.callee === 'PointOn';
-    const base = defaultsFor(r.p.type.k, r.p.kind === 'free', onPath);
+    const base = defaultsFor(styleTypeOf(r.p.type), r.p.kind === 'free', onPath);
     for (const e of r.p.style.values()) {
       const v = e.word ?? e.value;
       if (e.eval === undefined && v !== undefined) {

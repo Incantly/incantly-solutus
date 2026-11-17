@@ -89,6 +89,9 @@ export interface WorldValue {
   readonly schema: 'World';
   readonly gx: number;
   readonly gy: number;
+  /** Gravity in space: written in three numbers, or the flat gravity turned so its y is down the z axis. */
+  readonly gz: number;
+  readonly g3: boolean;
   readonly air: number;
   readonly passes: number;
   /** Steps per second (the step is 1/rate). */
@@ -109,7 +112,7 @@ export function isWorldValue(v: unknown): v is WorldValue {
 }
 
 export const DEFAULT_WORLD: WorldValue = Object.freeze({
-  schema: 'World', gx: 0, gy: -9.8, air: 0, passes: 8, rate: 120, sleep: true, range: 50, show: 'bodies', time: 0, energy: 0, momentumX: 0, momentumY: 0, awake: 0, contacts: 0,
+  schema: 'World', gx: 0, gy: -9.8, gz: -9.8, g3: false, air: 0, passes: 8, rate: 120, sleep: true, range: 50, show: 'bodies', time: 0, energy: 0, momentumX: 0, momentumY: 0, awake: 0, contacts: 0,
 });
 
 export const SHOW_WORDS = ['bodies', 'forces', 'speeds', 'contacts', 'none'] as const;

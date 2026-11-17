@@ -5,8 +5,9 @@
  */
 import type { ObjId } from '../../contracts/values';
 import type { Figure } from '../../graph/figure';
-import { physicsOf } from './index';
+import { physics3Of, physicsOf } from './index';
 import { isBodyValue } from './types';
+import { isBody3Value } from './body3';
 
 export interface BodyDrag {
   readonly name: string;
@@ -145,4 +146,102 @@ export function dragBody(figure: Figure, name: string, x: number, y: number, don
 /** True while a body is held. */
 export function draggingBody(figure: Figure): string | undefined {
   return DRAGS.get(figure)?.name;
+}
+
+/* ------------------------------ in space ------------------------------ */
+
+type V3 = { x: number; y: number; z: number };
+
+const TRIPLE = new RegExp(`\\(\\s*${NUM}\\s*,\\s*${NUM}\\s*,\\s*${NUM}\\s*\\)`, 'g');
+
+function shiftTriples(text: string, d: V3): string {
+  return text.replace(TRIPLE, (_m, a: string, b: string, c: string) => `(${fmt(Number(a) + d.x)}, ${fmt(Number(b) + d.y)}, ${fmt(Number(c) + d.z)})`);
+}
+
+/** Moves a solid: its own literal points, or the free points in space it is built from (all of its ancestors). */
+function moveShape3(figure: Figure, name: string, d: V3, seen = new Set<string>()): boolean {
+  if (seen.has(name)) return false;
+  seen.add(name);
+  const o = figure.get(name);
+  if (!o) return false;
+  if (o.free && o.type === 'Point3') {
+    const p = o.cell.defined ? (o.cell.value as V3) : undefined;
+    return p ? figure.setFree(name, { x: Number((p.x + d.x).toPrecision(6)), y: Number((p.y + d.y).toPrecision(6)), z: Number((p.z + d.z).toPrecision(6)) }, 'drag').ok : false;
+  }
+  // its own numbers, and the points it is built from, so the whole solid moves and keeps its shape
+  const inputs = [...o.inputs];
+  const moved = shiftTriples(o.definition, d);
+  let any = false;
+  if (moved !== o.definition) {
+    if (!figure.apply(moved, { origin: 'learner' } as never).ok) return false;
+    any = true;
+  }
+  for (const id of inputs) {
+    const i = figure.get(id);
+    if (i) any = moveShape3(figure, i.name, d, seen) || any;
+  }
+  return any;
+}
+
+function moveStart3(figure: Figure, name: string, d: V3): boolean {
+  const b = figure.get(name);
+  if (!b) return false;
+  const def = b.definition;
+  const arg = firstArg(def);
+  if (!arg) return false;
+  const text = def.slice(arg.start, arg.end).trim();
+  if (/^[A-Za-z\u0370-\u03FF_]\w*$/.test(text)) return moveShape3(figure, text, d);
+  const moved = shiftTriples(text, d);
+  if (moved === text) return false;
+  return figure.apply(def.slice(0, arg.start) + moved + def.slice(arg.end), { origin: 'learner' } as never).ok;
+}
+
+interface BodyDrag3 {
+  readonly name: string;
+  last: V3;
+  mode: 'start' | 'grab';
+}
+
+const DRAGS3 = new WeakMap<Figure, BodyDrag3>();
+
+/**
+ * One step of dragging a body in space: `p` is where the pointer puts the body's centre. At the start of the film the
+ * start moves; later the body is grabbed at its centre and pulled toward `p`, logged.
+ */
+export function dragBody3(figure: Figure, name: string, p: V3, done: boolean): { ok: true; did: 'moved start' | 'grabbed' | 'released' } | { ok: false; why: string } {
+  const at = target(figure, name);
+  if (!at) return { ok: false, why: `${name} is not a body` };
+  const d = physics3Of(figure);
+  let g = DRAGS3.get(figure);
+  if (!g || g.name !== name) {
+    const atStart = figure.clock().t <= figure.clockRange().from + 1e-9;
+    const v = figure.value(at.item === undefined ? name : (figure.get(at.id)?.name ?? name));
+    const c = isBody3Value(v) ? { x: v.x, y: v.y, z: v.z } : p;
+    g = { name, last: c, mode: atStart && at.item === undefined ? 'start' : 'grab' };
+    DRAGS3.set(figure, g);
+  }
+  if (g.mode === 'start') {
+    const dv = { x: p.x - g.last.x, y: p.y - g.last.y, z: p.z - g.last.z };
+    g.last = p;
+    if (dv.x !== 0 || dv.y !== 0 || dv.z !== 0) {
+      if (!moveStart3(figure, name, dv)) {
+        DRAGS3.delete(figure);
+        return { ok: false, why: `${name}'s start cannot be moved: its solid is not built from points it can move` };
+      }
+      figure.flush();
+    }
+    if (done) DRAGS3.delete(figure);
+    return { ok: true, did: 'moved start' };
+  }
+  figure.flush();
+  if (!d.grab(at.id, p, g.last, at.item)) {
+    DRAGS3.delete(figure);
+    return { ok: false, why: `${name} is not in the physics world` };
+  }
+  if (done) {
+    d.release(at.id, at.item);
+    DRAGS3.delete(figure);
+  }
+  figure.flush(true);
+  return { ok: true, did: done ? 'released' : 'grabbed' };
 }

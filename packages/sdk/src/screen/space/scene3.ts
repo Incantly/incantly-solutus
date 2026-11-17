@@ -3,7 +3,7 @@
  * objects to points, line pieces and flat faces in space, with their colours. Pure: no DOM, so the screen, the export
  * and the tests share it.
  */
-import { colorHex, isParticlesValue, makeParticleBatch, space } from '@incantly/kernel';
+import { colorHex, isParticlesValue, makeParticleBatch, physics, space } from '@incantly/kernel';
 import type { Figure } from '@incantly/kernel';
 import { curveRuns, gridFaces } from './mesh3';
 import { boxEdges, clipFace, clipSegment, inBox } from './clip3';
@@ -52,6 +52,8 @@ export interface FaceItem {
   /** Grid lines drawn on the face: the colour, and which sides (a→b, b→c, c→d, d→a). */
   readonly stroke?: string;
   readonly edges?: readonly [boolean, boolean, boolean, boolean];
+  /** A face of a body: the name to drag it by (`dice[2]` for an item of a list). */
+  readonly body?: string;
 }
 
 /** A particle: a small dot, drawn after the faces, never hidden and never picked (there are thousands). */
@@ -123,6 +125,20 @@ function ring(f: space.Frame, r: number, n: number): V3[] {
   for (let i = 0; i < n; i++) {
     const a = (2 * Math.PI * i) / n;
     out.push(fromFrame(f, r * Math.cos(a), r * Math.sin(a)));
+  }
+  return out;
+}
+
+/** A great circle of a ball, in the ball's own x-y plane, turned by its quaternion. */
+function stripe(c: V3, r: number, q: readonly [number, number, number, number]): V3[] {
+  const [w, x, y, z] = q;
+  const R = [1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (x * z - w * y), 2 * (y * z + w * x)];
+  const out: V3[] = [];
+  for (let i = 0; i < 32; i++) {
+    const a = (2 * Math.PI * i) / 32;
+    const u = r * Math.cos(a);
+    const v = r * Math.sin(a);
+    out.push({ x: c.x + (R[0] as number) * u + (R[1] as number) * v, y: c.y + (R[2] as number) * u + (R[3] as number) * v, z: c.z + (R[4] as number) * u + (R[5] as number) * v });
   }
   return out;
 }
@@ -228,6 +244,28 @@ export function sceneOf3(figure: Figure, view: space.View3, opts: Scene3Options 
       case 'Cone': {
         const s = v as space.Cylinder3;
         items.push(...roundFaces(id, s, o.type === 'Cone', color, alpha));
+        break;
+      }
+      case 'Body3':
+      case 'List': {
+        // bodies in space (physics design 7, ui.md 3): the solid where the body is now, its faces tagged to drag it by
+        const list = o.type === 'Body3' ? [v] : Array.isArray(v) ? (v as unknown[]) : [];
+        list.forEach((b, k) => {
+          if (!physics.isBody3Value(b)) return;
+          const name = o.type === 'Body3' ? o.name : `${o.name}[${k + 1}]`;
+          const a = Math.max(alpha, 0.85);
+          const s = b.now;
+          if (s.shape3 === 'Polyhedron') {
+            for (const face of s.faces) items.push({ k: 'face', id, pts: face.idx.map((i) => s.verts[i] as V3), color, alpha: a, occludes: true, shade: true, body: name });
+            for (const [p, q] of space.edgesOf(s)) items.push({ k: 'line', id, a: s.verts[p] as V3, b: s.verts[q] as V3, color: darker(color), width: Math.max(1, width * 0.6), hiddenDashed: false });
+          } else if (s.shape3 === 'Sphere') {
+            for (const f of sphereFaces(id, s, color, a)) items.push(f.k === 'face' ? { ...f, body: name } : f);
+            // a stripe turned with the body, so a ball is seen to roll
+            items.push(...loopLines(id, stripe(s.c, s.r * 1.01, b.q), darker(color), Math.max(1, width * 0.75)));
+          } else {
+            for (const f of roundFaces(id, s as space.Cylinder3, s.shape3 === 'Cone', color, a)) items.push(f.k === 'face' ? { ...f, body: name } : f);
+          }
+        });
         break;
       }
       case 'Surface': {

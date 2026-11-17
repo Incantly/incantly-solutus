@@ -148,6 +148,8 @@ export function hasClock(figure: Figure): boolean {
   if (tracedIds(figure).length > 0 || animatingIds(figure).length > 0) return true;
   for (const o of figure.objects()) {
     if (o.type === 'Particles' || o.state || /\banimate\s*=/.test(o.definition)) return true;
+    // a body moves with the film (physics ui.md 2)
+    if (o.type === 'Body' || o.type === 'Body3' || /^List<Body3?>/.test(o.typeText)) return true;
     // an object whose formula reads the film time (`P = (cos(t), sin(t), 0)`)
     if (READS_CLOCK.test(o.definition.replace(/"(?:[^"\\]|\\.)*"/g, '""'))) return true;
   }

@@ -26,7 +26,7 @@ type Ctx = Pick<CanvasRenderingContext2D, 'beginPath' | 'moveTo' | 'lineTo' | 'c
 export type Hit3 =
   | { readonly k: 'point'; readonly id: number; readonly name: string; readonly x: number; readonly y: number; readonly r: number; readonly depth: number; readonly free: boolean }
   | { readonly k: 'line'; readonly id: number; readonly x0: number; readonly y0: number; readonly x1: number; readonly y1: number; readonly depth: number }
-  | { readonly k: 'face'; readonly id: number; readonly pts: readonly { x: number; y: number }[]; readonly depth: number; readonly alpha: number };
+  | { readonly k: 'face'; readonly id: number; readonly pts: readonly { x: number; y: number }[]; readonly depth: number; readonly alpha: number; readonly body?: string };
 
 export interface Painted3 {
   readonly camera: Camera;
@@ -261,7 +261,7 @@ export function paintSpace(ctx: Ctx, view: space.View3, w: number, h: number, sc
   const sorted = [...sc.faces].sort((x, y) => y.depth - x.depth);
   for (const f of sorted) {
     drawFace(f);
-    hits.push({ k: 'face', id: f.item.id, pts: f.pts.map((p) => ({ x: p.x, y: p.y })), depth: f.depth, alpha: f.item.alpha });
+    hits.push({ k: 'face', id: f.item.id, pts: f.pts.map((p) => ({ x: p.x, y: p.y })), depth: f.depth, alpha: f.item.alpha, ...(f.item.body !== undefined ? { body: f.item.body } : {}) });
   }
   const occluders = sc.faces.filter((f) => f.item.occludes);
   for (const l of sc.lines) drawLine(l, occluders);

@@ -176,6 +176,44 @@ export const EXAMPLES: readonly Example[] = [
       'space with elevation = 50deg, spin = 6',
     ],
   },
+  // physics in space (.kiro/specs/physics R5.5)
+  {
+    id: 'physics-dice',
+    modes: ['graphing3d'],
+    title: 'Physics 3D: three dice thrown on the floor (press ▶)',
+    lines: [
+      'g = Ground()',
+      'd1 = Body(Cube((-2, 0, 3), (-1, 0, 3.4), (-2, 1, 3)), spin = (3, 2, 1), speed = (1.5, 0, 0))',
+      'd2 = Body(Cube((0, 1, 4), (0.8, 1.6, 4.2), (0, 2, 4)), spin = (-2, 4, 0), speed = (0.5, -1, 0))',
+      'd3 = Body(Tetrahedron((2, -1, 2.5), (3, -1, 3), (2, 0, 2.5)), spin = (1, 1, 5))',
+      'd2 with color = blue',
+      'd3 with color = green',
+      'space with elevation = 25deg',
+    ],
+  },
+  {
+    id: 'physics-dominoes-3d',
+    modes: ['graphing3d'],
+    title: 'Physics 3D: a row of dominoes, the first one pushed (press ▶)',
+    lines: [
+      'g = Ground()',
+      'row = Bodies(Seq(Prism(Polygon((1.2 k - 5, 0, 0), (1.2 k - 4.75, 0, 0), (1.2 k - 4.75, 1, 0), (1.2 k - 5, 1, 0)), 2), k, 0, 8), friction = 0.5)',
+      'Push(row[1], (0.6, 0, 0), (-4.9, 0.5, 1.9))',
+      'space with azimuth = -60deg, elevation = 20deg',
+    ],
+  },
+  {
+    id: 'physics-bowl',
+    modes: ['graphing3d'],
+    title: 'Physics 3D: balls rolling in a bowl (press ▶)',
+    lines: [
+      'bowl(x, y) = 0.08 (x^2 + y^2)',
+      'bowl with solid = true',
+      'balls = Bodies(Seq(Sphere((k - 2, 3, 3), 0.4), k, 0, 4), friction = 0.6)',
+      'balls with color = red',
+      'space with elevation = 30deg',
+    ],
+  },
   {
     id: 'geometry',
     modes: ['geometry'],

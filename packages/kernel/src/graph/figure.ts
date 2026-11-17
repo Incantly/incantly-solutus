@@ -17,7 +17,7 @@ import { ObjRec } from './core';
 import type { FigureOptions } from './core';
 import { FigureHist, merge } from './hist';
 import { SCRIPT_VERSION, emptyReport } from './tx';
-import { defaultsFor } from './props';
+import { defaultsFor, styleTypeOf } from './props';
 import { scriptTails } from './registry';
 import type { WorldDriver } from './drivers';
 import { worldDriverFactories } from './drivers';
@@ -545,7 +545,7 @@ export class Figure extends FigureHist {
       }
     }
     const withs: string[] = [];
-    const defaults = defaultsFor(p.type.k, p.kind === 'free');
+    const defaults = defaultsFor(styleTypeOf(p.type), p.kind === 'free');
     for (const e of p.style.values()) {
       if (e.eval === undefined && e.value !== undefined && e.word === undefined) {
         const dv = (defaults as unknown as Record<string, unknown>)[e.key];

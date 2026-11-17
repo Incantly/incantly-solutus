@@ -26,7 +26,7 @@ import type { Ty } from '../language/types';
 import { children } from '../language/relation';
 import { FigureBase } from './base';
 import { FigureCore, ObjRec } from './core';
-import { coerceProp, defaultsFor, isValidKey, validKeysFor } from './props';
+import { coerceProp, defaultsFor, isValidKey, styleTypeOf, validKeysFor } from './props';
 import type { ActionRule } from './registry';
 import { isCellName } from '../language/cells';
 import { hasAfterLine, runAfterLine, runLineChecks, runLineHandlers, runLineRewriters } from './registry';
@@ -619,7 +619,7 @@ export class FigureTx extends FigureBase {
   ): ErrorObject | Map<string, StyleEntry> {
     const out = new Map(base);
     const items: readonly StyleItem[] = checked.styleItems ?? (parsed.node as { style?: readonly StyleItem[] }).style ?? [];
-    const defaults = defaultsFor(ty.k, free);
+    const defaults = defaultsFor(styleTypeOf(ty), free);
     const cs = checked.style ?? [];
     for (let i = 0; i < cs.length; i++) {
       const c = cs[i] as (typeof cs)[number];

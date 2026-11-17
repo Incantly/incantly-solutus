@@ -269,7 +269,8 @@ const pt = (q: V3): string => `(${f6(q.x)}, ${f6(q.y)}, ${f6(q.z)})`;
 
 /** Row text of a value of the area (`plane 2x + 3y − z = 4`, `polygon of 4 points, area 6`). */
 export function spaceText(v: unknown): string | undefined {
-  if (isV3(v)) return pt(v);
+  // an area's value with a place (a body in space) says what it is itself
+  if (isV3(v) && (v as { schema?: unknown }).schema === undefined) return pt(v);
   switch (shape3Of(v)) {
     case 'Line3': {
       const l = v as { o: V3; d: V3 };

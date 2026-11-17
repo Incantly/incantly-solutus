@@ -169,6 +169,15 @@ export function mountSpace(opts: SpacePaneOptions): SpacePane {
     return o && o.cell.defined && space.isV3(o.cell.value) ? o.cell.value : undefined;
   };
 
+  const bodyCentre = (name: string): V3 | undefined => {
+    const m = /^(.+)\[(\d+)\]$/.exec(name);
+    const o = opts.figure().get(m ? (m[1] as string) : name);
+    if (!o || !o.cell.defined) return undefined;
+    const v = m && Array.isArray(o.cell.value) ? (o.cell.value as unknown[])[Number(m[2]) - 1] : o.cell.value;
+    const b = v as { x?: unknown; y?: unknown; z?: unknown } | undefined;
+    return b && typeof b.x === 'number' && typeof b.y === 'number' && typeof b.z === 'number' ? { x: b.x, y: b.y, z: b.z } : undefined;
+  };
+
   let gesture:
     | { kind: 'orbit' | 'pan'; x: number; y: number; moved: boolean }
     | { kind: 'point'; name: string; from: V3; mode: DragMode; normal: V3; moved: boolean; x: number; y: number }
@@ -186,6 +195,11 @@ export function mountSpace(opts: SpacePaneOptions): SpacePane {
         gesture = { kind: 'point', name: hit.name, from, mode: e.shiftKey ? 'vertical' : 'plane', normal, moved: false, ...p };
         guide = hit.name;
       }
+    } else if (hit?.k === 'face' && hit.body !== undefined && opts.drag && (opts.draggable?.(hit.body.replace(/\[\d+\]$/, '')) ?? false)) {
+      // a body in space: dragged by its centre, on the camera-facing plane (physics ui.md 4)
+      const from = bodyCentre(hit.body);
+      if (from) gesture = { kind: 'point', name: hit.body, from, mode: e.shiftKey ? 'vertical' : 'plane', normal: facingAxis(cameraFor(viewNow(), w, h)), moved: false, ...p };
+      else gesture = { kind: 'orbit', ...p, moved: false };
     } else gesture = { kind: e.shiftKey || e.button === 1 ? 'pan' : 'orbit', ...p, moved: false };
     canvas.setPointerCapture?.(e.pointerId);
   });
