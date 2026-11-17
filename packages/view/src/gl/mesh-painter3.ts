@@ -67,7 +67,7 @@ export class GlBackend3 {
 
   /** A WebGL 2 context on the canvas, or the host fault `webgl_unavailable`. */
   static open(canvas: GlCanvas): Result<GlBackend3> {
-    let gl: WebGL2RenderingContext | null = null;
+    let gl: WebGL2RenderingContext | null;
     try {
       gl = canvas.getContext('webgl2', GL3_ATTRIBUTES) as WebGL2RenderingContext | null;
     } catch {
