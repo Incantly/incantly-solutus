@@ -63,12 +63,24 @@ describe('the studio and physics', () => {
     expect(s.save()).toMatch(/@input physics grab b/);
   });
 
+  it('liquid is one item of drops and water a fill, and the film runs for them (R7; ui.md 7)', () => {
+    const s = load(['tank = Polyline((-2, 3), (-2, 0), (2, 0), (2, 3))', 'tank with solid = true', 'l = Liquid(Box((0, 1), 2, 2), 400)', 'sea = Water(Box((0, -2), 6, 2), -1)']);
+    expect(s.hasClock()).toBe(true);
+    s.setTime(0.5);
+    const items = sceneOf(s.figure);
+    const l = items.find((i) => i.name === 'l');
+    const v = l?.value as { xs: Float32Array; count: number } | undefined;
+    expect(v?.count).toBe(400);
+    expect(v?.xs.length).toBe(400);
+    expect(items.find((i) => i.name === 'sea')?.type).toBe('Water');
+  });
+
   it('every physics example opens with all its lines and moves when the film runs', () => {
     for (const ex of EXAMPLES.filter((e) => e.id.startsWith('physics-'))) {
       const s = new KernelSession();
       const r = s.applyLines([...ex.lines], ex.id, 'independent', 'host');
       expect(r.ok, ex.id).toBe(true);
-      const bodies = s.figure.objects().filter((o) => o.type === 'Body' || o.type === 'Body3' || /^List<Body3?>/.test(o.typeText));
+      const bodies = s.figure.objects().filter((o) => o.type === 'Body' || o.type === 'Body3' || o.type === 'Liquid' || /^List<Body3?>/.test(o.typeText));
       expect(bodies.length, ex.id).toBeGreaterThan(0);
       const before = JSON.stringify(bodies.map((o) => s.figure.value(o.id)));
       for (let k = 1; k <= 60; k++) s.setTime(k / 60);

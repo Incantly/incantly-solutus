@@ -451,9 +451,20 @@ In 2D the same `Wheel` and `Vehicle` make a side-view car on hills; the wheels a
 
 This method stays stable at our fixed step, which is why we choose it. Particles that leave the world range are removed, with a notice `left_world` once.
 
+Choices made while building it (round 6, `packages/kernel/src/physics/fluid2.ts`, `particles.ts`, `grid2.ts`):
+
+- **One drop size per figure.** The first `Liquid` sets the spacing `d` that fills its region with its count on a square grid; a figure with only taps uses `d = 0.1` m. A drop reaches `1.8 d` (about ten neighbours at rest), and is a disc of radius `d / 2` against solids and bodies. A drop's mass is `density × d²`.
+- **The start.** `Liquid` fills its region from the bottom row up, left to right; drops that do not fit stand in rows above it and fall in. `l.count` and `l.level` read at once, before the film runs. `l.level` is the middle of the column tops (one spacing wide), so a few splashing drops do not move it; with no drops it is undefined.
+- **Density passes** push only where drops crowd (never pull at a free surface), are Jacobi over each pair once, and move a drop at most half a spacing a pass.
+- **Taps.** `Pour(at, rate, speed)` lets out drops three abreast, with seeded jitter; a number `speed` is straight down, a vector is the direction. When `rate` is more than three lanes of drops one spacing apart can carry, they leave faster, so new drops never land on the last ones. `max` defaults to 500.
+- **Walls.** A drop that crosses a thin wall in one step is put back on the side it started on, so a glass never leaks.
+- **Viscosity** is XSPH smoothing, 0 to 1 (`0.01` default), with the weights of the last density pass.
+
 ### 9.2 Still water (`Water`)
 
 Cheap buoyancy, from the legacy kit's tank: each body is clipped by the water line, and the part under it gives an upward push at its centre, plus water drag. This handles boats, ice and density lessons with no particles at all.
+
+Round 6 (`packages/kernel/src/physics/water2.ts`): water has density 1. Before each body step, every awake body's shapes (a circle as 48 sides, its area kept) are clipped by the water line and by the water's region (a convex region, else its box); the weight of water under it pushes up at that part's centre, and drag of `2 × (mass of that water)` per second slows that part's speed and the body's turn. Both go into the step as impulses, and are counted as `buoyancy` and `drag`. A level that reads `t` or a slider is read at each step, so a tide lifts a boat.
 
 ### 9.3 Waves (`Waves`)
 
@@ -513,6 +524,8 @@ Liquid drops and cloth points are both moving points. So they share one neighbou
 **Order inside one step.** First the rigid bodies take their step (section 6 or 7). Then drops and cloth take their small steps against the bodies at their new poses, and add up the impulses they give each body. Those impulses are applied to the bodies at the start of the next step. The lag is one step (8 ms), which nobody can see, and it is the same on every computer and in every replay, so the film stays exact.
 
 **Where it runs.** A figure with cloth or liquid runs its whole physics world, bodies included, in one worker (a second thread). One world in one thread keeps every hit in a fixed order, so the film is exact. The page sends inputs (sliders, drags, pushes) and gets back, each frame, the points and the poses to draw (11.2: under 0.5 ms). Without a worker, the same steps run on the page: the film is the same, and plays slower on a slow computer (10.5), with a `worker_unavailable` notice.
+
+How it is built (round 6, `packages/sdk/src/worker/`): the worker holds a headless copy of the figure, loaded from the page's script whenever the page's lines change (its `@input` log included). Each frame the page sends the film time, the free values that changed and the `@input` lines made on the page since (pushes, grabs, restarts, which the page's driver makes instead of applying), and gets back the cells of every object the world owns, with the drops' and forces' typed arrays moved. One frame is in flight at a time, so a slow worker makes the film slower, not a queue longer. The page's driver steps nothing meanwhile; it writes the cells it is sent. If the worker stops, the page takes the world back, rebuilds it from its start with the same log and catches up (`worker_crashed`). For now only a figure with liquid goes to the worker; cloth joins it in round 9.
 
 ## 10. Time, exact replay and seeking
 

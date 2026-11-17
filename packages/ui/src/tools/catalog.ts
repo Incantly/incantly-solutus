@@ -258,6 +258,20 @@ export const TOOLS: readonly ToolSpec[] = [
       return at ? [`Push(${b}, (${num(at.x)} - ${b}.x, ${num(at.y)} - ${b}.y))`] : [];
     }),
   ]),
+  tool('water', 'physics', 'Water', '≈', 'Click a box for the tank, then the height of the water: bodies in it float.', [
+    v('water', [O('Click the tank: a box or a polygon.', 'Polygon'), { kind: 'position', prompt: 'Click the height of the water.' }], (a) => {
+      const at = (a[1] as Arg & { at?: { x: number; y: number } }).at;
+      return at ? [`{water} = Water(${t(a, 0)}, ${num(at.y)})`] : [];
+    }),
+  ]),
+  tool('liquid', 'physics', 'Liquid', '∴', 'Click two corners of a box to fill it with 500 drops of liquid.', [
+    v('liquid', [{ kind: 'position', prompt: 'Click a corner of the box to fill.' }, { kind: 'position', prompt: 'Click the opposite corner.' }], (a) => {
+      const p = (a[0] as Arg & { at?: { x: number; y: number } }).at;
+      const q = (a[1] as Arg & { at?: { x: number; y: number } }).at;
+      if (!p || !q || p.x === q.x || p.y === q.y) return [];
+      return [`{liquid} = Liquid(Box((${num((p.x + q.x) / 2)}, ${num((p.y + q.y) / 2)}), ${num(Math.abs(q.x - p.x))}, ${num(Math.abs(q.y - p.y))}), 500)`];
+    }),
+  ]),
 ];
 
 

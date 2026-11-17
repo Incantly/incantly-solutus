@@ -37,7 +37,13 @@ Each round is one branch `feat/physics-<n>` and one PR into `integration`, merge
   - [x] 5.4 Terrain as a heightfield of 128 × 128 cells, only the cells under a shape tested
   - [x] 5.5 Driving in the Space view: arrow keys and Space write the pedals (logged while playing), Follow camera; wheels, loose wheels and joints drawn
   - [x] 5.6 Examples (a car on hills, a car hits a wall), screenshots, spec tests, the car accuracy check of design 11.5 and the bench row of 11.2
-- [ ] 6. Round 6: water and 2D liquid, worker (R7)
+- [x] 6. Round 6: water and 2D liquid, worker (R7)
+  - [x] 6.1 `Water(level)`, `Water(region, level)`: clipped buoyancy and water drag, counted as `buoyancy` and `drag`; a level may read `t`
+  - [x] 6.2 `Liquid`, `Pour` in the plane: position-based fluids, the shared particle store and neighbour grid (counting sort, no garbage), two density passes, drops against solids and bodies with the equal and opposite impulse a step later, viscosity, seeded taps, `left_world`, the 2,000-drop limit (B013), `l.count`, `l.level`
+  - [x] 6.3 Checkpoints and seek with drops; seek equals play
+  - [x] 6.4 The physics worker in `packages/sdk/src/worker/`: the page sends the script, free values and `@input` lines, gets back the owned cells with their arrays moved; `worker_unavailable`, `worker_crashed`; the same film with and without it
+  - [x] 6.5 Drawing (one batch of discs, water as a fill under its line), the Water and Liquid tools, algebra rows, drops in the time-bar readout
+  - [x] 6.6 Examples (a floating boat, density of ice, a dam breaking, filling a glass), screenshots, spec tests, benches
 - [ ] 7. Round 7: 3D liquid and waves (R7)
 - [ ] 8. Round 8: smoke (R7)
 - [ ] 9. Round 9: cloth (R10)
