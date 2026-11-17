@@ -947,6 +947,38 @@ export const EXAMPLES: readonly Example[] = [
       'drops = tap.count',
     ],
   },
+  /* smoke (.kiro/specs/physics R7; design 9.4, 14 item 8) */
+  {
+    id: 'physics-smoke-ball',
+    modes: ['geometry', 'classic'],
+    title: 'Physics: smoke blown past a ball — it parts round it and swirls behind (press ▶, slide the wind)',
+    lines: [
+      '@view -5 7 -3.5 3.5',
+      'u = 3 in 0..8 step 0.5',
+      'world with wind = (u, 0)',
+      'ball = Circle((0, 0), 0.7)',
+      'ball with solid = true',
+      'sm = Smoke(Box((1, 0), 12, 6), 64, source = Box((-4.6, 0), 0.3, 3), heat = 0)',
+      'leaf = Body(Circle((3, 1.6), 0.15), mass = 0.01)',
+      'hint = "The air must go round the ball: it speeds up at its sides and leaves a wake behind it" with at = (-4.8, 3.3), anchor = nw, size = 14',
+    ],
+  },
+  {
+    id: 'physics-candle',
+    modes: ['geometry', 'classic'],
+    title: 'Physics: a candle — hot smoke rises in a plume and a draught bends it (press ▶, slide the draught)',
+    lines: [
+      '@view -2.5 2.5 -0.3 4.5',
+      'table = Ground(0)',
+      'candle = Box((0, 0.4), 0.3, 0.8)',
+      'candle with solid = true, color = rgb(242, 230, 200)',
+      'flame = Circle((0, 0.9), 0.08)',
+      'flame with color = orange',
+      'draught = 0 in -1..1 step 0.1',
+      'sm = Smoke(Box((0, 2.3), 4.4, 4.4), 48, source = flame, heat = 6, wind = (draught, 0))',
+      'up = sm.speed',
+    ],
+  },
   /* ---------------- sound (press the speaker to hear) ---------------- */
   {
     id: 'sound-beats',

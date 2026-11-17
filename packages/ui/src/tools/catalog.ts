@@ -272,6 +272,17 @@ export const TOOLS: readonly ToolSpec[] = [
       return [`{liquid} = Liquid(Box((${num((p.x + q.x) / 2)}, ${num((p.y + q.y) / 2)}), ${num(Math.abs(q.x - p.x))}, ${num(Math.abs(q.y - p.y))}), 500)`];
     }),
   ]),
+  tool('smoke', 'physics', 'Smoke', '☁', 'Click two corners of a box for the air, then where the smoke comes from: it rises and drifts with the wind.', [
+    v('smoke', [{ kind: 'position', prompt: 'Click a corner of the box of air.' }, { kind: 'position', prompt: 'Click the opposite corner.' }, { kind: 'position', prompt: 'Click where the smoke comes from.' }], (a) => {
+      const p = (a[0] as Arg & { at?: { x: number; y: number } }).at;
+      const q = (a[1] as Arg & { at?: { x: number; y: number } }).at;
+      const s = (a[2] as Arg & { at?: { x: number; y: number } }).at;
+      if (!p || !q || !s || p.x === q.x || p.y === q.y) return [];
+      // a source a twentieth of the box wide, as a small fire or a chimney
+      const r = Math.min(Math.abs(q.x - p.x), Math.abs(q.y - p.y)) / 20;
+      return [`{smoke} = Smoke(Box((${num((p.x + q.x) / 2)}, ${num((p.y + q.y) / 2)}), ${num(Math.abs(q.x - p.x))}, ${num(Math.abs(q.y - p.y))}), 48, source = Circle((${num(s.x)}, ${num(s.y)}), ${num(r)}))`];
+    }),
+  ]),
 ];
 
 
