@@ -354,7 +354,6 @@ export class ClothSet {
       (info as { teN: number }).teN = te - info.te0;
       this.cloths.push(info);
       p += n;
-      pin += d.pins.length;
     });
     this.n = p;
     this.buildChains();
