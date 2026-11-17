@@ -121,7 +121,7 @@ export function mountSpace(opts: SpacePaneOptions): SpacePane {
     const v = space.viewAtTime(baseView(), typeof fig.clock === 'function' ? fig.clock().t : 0);
     const car = follow ? physics.carPose(opts.figure()) : undefined;
     // behind the car, a little above it, looking the way it goes
-    return car ? { ...v, target: { x: car.x, y: car.y, z: car.z }, azimuth: car.heading - Math.PI / 2, elevation: (18 * Math.PI) / 180, spin: 0 } : v;
+    return car ? { ...v, target: { x: car.x, y: car.y, z: car.z }, azimuth: car.heading - Math.PI / 2, elevation: (18 * Math.PI) / 180, spin: 0, projection: 'persp', zoom: Math.max(2, v.zoom) } : v;
   };
 
   const paint = (): void => {

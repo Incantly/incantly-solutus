@@ -233,7 +233,7 @@ export const EXAMPLES: readonly Example[] = [
       'w4 = Wheel(chassis, (-11.1, -0.8, 1.15), 0.4)',
       'car = Vehicle(chassis, [w1, w2, w3, w4], motor = gas, steer = steering, brake = stop, power = 6000)',
       'speed = car.speedometer',
-      'space with elevation = 25deg',
+      'space with elevation = 30deg, zoom = 0.45',
     ],
   },
   {
