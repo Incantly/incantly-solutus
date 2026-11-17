@@ -1,7 +1,9 @@
 /** Physics in the studio (.kiro/specs/physics R4; docs/features/physics ui.md 2, 4, 5, 7). */
 import { describe, expect, it } from 'vitest';
 import { space } from '@incantly/kernel';
-import { sceneOf, sceneOf3 } from '@incantly/sdk/screen';
+import { paintScene, sceneOf, sceneOf3, smokeImage } from '@incantly/sdk/screen';
+import type { Viewport } from '@incantly/sdk/screen';
+import { toolById } from '@incantly/ui';
 import { KernelSession } from '../src/session';
 import { EXAMPLES } from '../src/examples';
 
@@ -75,12 +77,49 @@ describe('the studio and physics', () => {
     expect(items.find((i) => i.name === 'sea')?.type).toBe('Water');
   });
 
+  it('smoke is one item, drawn first as a grey image of its density, and the film runs for it (R7; ui.md 7)', () => {
+    const s = load(['ball = Circle((0, 0), 0.5)', 'ball with solid = true', 'sm = Smoke(Box((0, 0), 4, 4), 32, source = Circle((0, -1.5), 0.2), heat = 4)']);
+    expect(s.hasClock()).toBe(true);
+    s.setTime(1);
+    const items = sceneOf(s.figure);
+    const sm = items.find((i) => i.name === 'sm');
+    expect(sm?.type).toBe('Smoke');
+    const v = sm?.value as { density: Float32Array; spec: { n: number } } | undefined;
+    expect(v?.density.length).toBe(32 * 32);
+    expect(Math.max(...(v?.density ?? []))).toBeGreaterThan(0.5);
+    // the image: grey, its cover the density, top row first
+    const out = new Uint8ClampedArray(32 * 32 * 4);
+    smokeImage(v?.density ?? new Float32Array(0), 32, out);
+    const d = v?.density ?? new Float32Array(0);
+    const k = d.indexOf(Math.max(...d));
+    const row = 31 - Math.floor(k / 32);
+    expect(out[(row * 32 + (k % 32)) * 4 + 3]).toBeGreaterThan(100);
+    expect(out[3]).toBe(Math.round(255 * 0.85 * Math.min(1, d[31 * 32] as number)));
+    // painted under the shapes, and with no image support each cell is a square
+    const calls: string[] = [];
+    const ctx = new Proxy({}, { get: (_t, p) => (p === 'measureText' ? () => ({ width: 10 }) : typeof p === 'string' && /^[a-z]/.test(p) && !['fillStyle', 'strokeStyle', 'lineWidth', 'globalAlpha', 'font', 'textAlign', 'textBaseline', 'lineJoin', 'lineCap', 'imageSmoothingEnabled', 'drawImage'].includes(p) ? (..._a: unknown[]) => calls.push(p) : undefined), set: () => true }) as unknown as CanvasRenderingContext2D;
+    const vp = { w: 400, h: 400, ppu: 100, px: (x: number) => 200 + x * 100, py: (y: number) => 200 - y * 100, box: () => ({ x0: -2, x1: 2, y0: -2, y1: 2 }) } as unknown as Viewport;
+    paintScene(ctx, vp, items);
+    expect(calls.filter((c) => c === 'fillRect').length).toBeGreaterThan(20);
+  });
+
+  it('the Smoke tool writes a box of air with a small source where it was clicked', () => {
+    const tool = toolById('smoke');
+    expect(tool?.group).toBe('physics');
+    const v = tool?.variants[0];
+    const at = (x: number, y: number) => ({ text: `(${x}, ${y})`, type: 'Position', at: { x, y } });
+    const lines = v?.emit?.([at(-2, 0), at(2, 4), at(0, 0.5)] as never) ?? [];
+    expect(lines).toEqual(['{smoke} = Smoke(Box((0, 2), 4, 4), 48, source = Circle((0, 0.5), 0.2))']);
+    const s = load([lines[0]?.replace('{smoke}', 'smoke1') ?? '']);
+    expect(s.figure.get('smoke1')?.type).toBe('Smoke');
+  });
+
   it('every physics example opens with all its lines and moves when the film runs', () => {
     for (const ex of EXAMPLES.filter((e) => e.id.startsWith('physics-'))) {
       const s = new KernelSession();
       const r = s.applyLines([...ex.lines], ex.id, 'independent', 'host');
       expect(r.ok, ex.id).toBe(true);
-      const bodies = s.figure.objects().filter((o) => o.type === 'Body' || o.type === 'Body3' || o.type === 'Liquid' || /^List<Body3?>/.test(o.typeText));
+      const bodies = s.figure.objects().filter((o) => o.type === 'Body' || o.type === 'Body3' || o.type === 'Liquid' || o.type === 'Smoke' || /^List<Body3?>/.test(o.typeText));
       expect(bodies.length, ex.id).toBeGreaterThan(0);
       const before = JSON.stringify(bodies.map((o) => s.figure.value(o.id)));
       for (let k = 1; k <= 60; k++) s.setTime(k / 60);

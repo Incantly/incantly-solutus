@@ -45,7 +45,14 @@ Each round is one branch `feat/physics-<n>` and one PR into `integration`, merge
   - [x] 6.5 Drawing (one batch of discs, water as a fill under its line), the Water and Liquid tools, algebra rows, drops in the time-bar readout
   - [x] 6.6 Examples (a floating boat, density of ice, a dam breaking, filling a glass), screenshots, spec tests, benches
 - [ ] 7. Round 7: 3D liquid and waves (R7)
-- [ ] 8. Round 8: smoke (R7)
+- [x] 8. Round 8: smoke (R7)
+  - [x] 8.1 `Smoke(region, n)` with `source`, `heat`, `wind`, `until`: stable fluids on a staggered grid (semi-Lagrangian flow and smoke, heat as lift, 20 red-black over-relaxed pressure passes started from the last step's pressure), typed arrays made once, no garbage in a step
+  - [x] 8.2 `world with wind` (a vector, a formula of `t` allowed), felt at the grid's edges; B004 on bad literals
+  - [x] 8.3 Two-way: solids and bodies block the flow with their own speed on their faces, movers and moving bodies stir it, the air's drag pushes bodies (kind `drag`, one step late)
+  - [x] 8.4 Limits and errors: at most 64 × 64 cells per figure (B013), grids under 4 or not whole (B017), `heat`, `wind`, `until` out of range (B004), `input_undefined`, `degenerate`, `unstable_world`
+  - [x] 8.5 Checkpoints (131 KB for 64 × 64), seek equals play, reload plays the same; the start read at the first step, a mover at rest at the first step
+  - [x] 8.6 Drawing (one grey image a frame under the shapes), the Smoke tool, algebra rows, readouts `sm.mass`, `sm.speed`, `sm.n`, `sm.at(x, y)`; smoke stays on the page, and goes with liquid to the worker
+  - [x] 8.7 Examples (smoke past a ball, a candle), screenshots, spec tests, the smoke checks of design 11.5 and the bench rows of 11.2
 - [ ] 9. Round 9: cloth (R10)
   - [ ] 9.1 `Cloth` (sheet, rope, net), `Pin`, `world with wind`; errors B018, B019, the `torn` notice
   - [ ] 9.2 XPBD small steps: stretch, shear and bend links, damping, tearing, sleep, checkpoints every 0.25 s

@@ -155,6 +155,40 @@ describe('the physics worker (design 9.6)', () => {
     expect(physicsOf(page).worldHash()).toBe(physicsOf(alone).worldHash());
   });
 
+  it('smoke with liquid runs in the worker with it, the density grid moved to the page, the same film', () => {
+    const lines = [...DAM, 'sm = Smoke(Box((0, 3), 12, 6), 32, source = Circle((4, 1), 0.3), heat = 4)'];
+    const page = make(lines);
+    const alone = make(lines);
+    const { channel } = sameThread();
+    const host = new PhysicsWorkerHost(page, () => channel);
+    for (let k = 1; k <= 2 * 60; k++) {
+      const t = k / 60;
+      page.setClock(t);
+      host.frame(t);
+      alone.setClock(t);
+    }
+    expect(host.running).toBe(true);
+    expect(physicsOf(page).remoteInfo.hash).toBe(physicsOf(alone).worldHash());
+    const a = page.value('sm');
+    const b = alone.value('sm');
+    if (!physics.isSmokeValue(a) || !physics.isSmokeValue(b)) throw new Error('sm is not smoke');
+    expect(a.density).toEqual(b.density);
+    expect(a.mass).toBeGreaterThan(0.3);
+  });
+
+  it('a figure with smoke and no liquid stays on the page (it fits the page\'s 6 ms)', () => {
+    const page = make(['sm = Smoke(Box((0, 0), 4, 4), 32, source = Circle((0, -1), 0.3))']);
+    let asked = 0;
+    const host = new PhysicsWorkerHost(page, () => {
+      asked++;
+      return undefined;
+    });
+    page.setClock(0.5);
+    host.frame(0.5);
+    expect(asked).toBe(0);
+    expect(physicsOf(page).world).toBeDefined();
+  });
+
   it('a figure without liquid stays on the page', () => {
     const page = make(['g = Ground()', 'b = Body(Box((0, 2), 1, 1))']);
     let asked = 0;

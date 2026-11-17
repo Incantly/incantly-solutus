@@ -36,6 +36,7 @@ The "Physics" group in the tool strip. Each tool writes the lines a person would
 | Push | drag from a body; the arrow's length is the kick | `Push(b, (vx, vy), (x, y))` |
 | Water | drag up from the bottom of a box to set the level | `wa = Water(region, level)` |
 | Liquid | drag a box | `l = Liquid(Box(…), 500)` |
+| Smoke | click two corners of the box of air, then where the smoke comes from | `smoke1 = Smoke(Box(…), 48, source = Circle(P, r))`, `r` a twentieth of the box |
 | Cloth | 2D: drag a line for a rope, or a box for a net; 3D: drag a rectangle on the floor plane, then up for its height | `rope = Cloth(A, B, 40)`, `net = Cloth(Box(…), 24, 16)`, `sheet = Cloth(P, u, v, 32, 32)` |
 | Pin | click a point of a cloth, then nothing (the world) or a body | `Pin(c, (x, y, z))` or `Pin(c, (x, y, z), b)` |
 
