@@ -19,9 +19,31 @@ import { FigureHist, merge } from './hist';
 import { SCRIPT_VERSION, emptyReport } from './tx';
 import { defaultsFor } from './props';
 import { scriptTails } from './registry';
+import type { WorldDriver } from './drivers';
+import { worldDriverFactories } from './drivers';
 import type { Cell, ChangeReport, EffectiveStyle, FrameDelta, Slice, StyleEntry, TxResult } from './types';
 
 export type { FigureOptions, Slice };
+
+/** What a world driver inside the kernel may use of its figure (`Figure.driverAccess`). */
+export interface DriverAccess {
+  readonly list: readonly ObjRec[];
+  readonly env: import('../language/runtime').Env;
+  readonly byId: (id: ObjId) => ObjRec | undefined;
+  readonly byName: (name: Name) => ObjRec | undefined;
+  readonly version: () => number;
+  readonly clockT: () => number;
+  readonly t0: () => number;
+  readonly solverStepsPerSecond: () => number;
+  readonly ancestorRecs: (seeds: readonly ObjRec[]) => ObjRec[];
+  readonly downOf: (r: ObjRec) => Int32Array;
+  readonly compute: (r: ObjRec) => Cell;
+  readonly ensureSlots: (n: number) => void;
+  readonly write: (r: ObjRec, c: Cell) => boolean;
+  readonly styleOf: (id: ObjId) => EffectiveStyle | undefined;
+  readonly rerunOf: (r: ObjRec) => 'continue' | 'restart';
+  readonly sliceClock: (target: ObjRec) => Slice | ErrorObject;
+}
 export { SCRIPT_VERSION };
 
 /** One row of the build list (kernel design 12.1). */
@@ -101,8 +123,73 @@ export class Figure extends FigureHist {
     });
     this.stateDriver = () => (this.solver.active ? this.solver.sync() : []);
     this.stateSampler = {
-      recs: () => (this.solver.active ? this.solver.stateObjects() : []),
-      at: (t) => this.solver.statesAt(t),
+      recs: () => {
+        const own = this.solver.active ? this.solver.stateObjects() : [];
+        const drv = this.worldDrivers();
+        if (drv.length === 0) return own;
+        const extra: ObjRec[] = [];
+        for (const d of drv) extra.push(...(d.sampleRecs?.() ?? []));
+        return [...own, ...extra];
+      },
+      at: (t) => {
+        const own = this.solver.active ? this.solver.statesAt(t) : undefined;
+        const drv = this.worldDrivers();
+        if (drv.length === 0) return own;
+        const out: (readonly [ObjRec, Cell])[] = [...(own ?? [])];
+        for (const d of drv) out.push(...(d.sample?.(t) ?? []));
+        return out;
+      },
+    };
+  }
+
+  /* ------------------------------ world drivers ------------------------------ */
+
+  private drivers: WorldDriver[] = [];
+  private driverFactoryCount = 0;
+
+  /** The figure's world drivers (core hook 1), made on first use from the registered factories. */
+  worldDrivers(): readonly WorldDriver[] {
+    const fs = worldDriverFactories();
+    while (this.driverFactoryCount < fs.length) {
+      const d = (fs[this.driverFactoryCount++] as (f: unknown) => WorldDriver | undefined)(this);
+      if (d) this.drivers.push(d);
+    }
+    return this.drivers;
+  }
+
+  protected override drivenCell(r: ObjRec, c: Cell): Cell {
+    for (const d of this.drivers) {
+      const k = d.onCompute?.(r, c);
+      if (k) return k;
+    }
+    return c;
+  }
+
+  /**
+   * What a world driver may use of the figure: its records and the evaluation services the state solver uses. Only for
+   * drivers inside the kernel.
+   */
+  driverAccess(): DriverAccess {
+    return {
+      list: this.list,
+      env: this.env,
+      byId: (id) => this.byIdMap.get(id),
+      byName: (name) => this.byNameMap.get(name),
+      version: () => this.structureVersion,
+      clockT: () => this.clockState.t,
+      t0: () => this.clockRange().from,
+      solverStepsPerSecond: () => this.directiveStepRate(),
+      ancestorRecs: (seeds) => this.ancestorRecs(seeds),
+      downOf: (r) => this.downOf(r),
+      compute: (r) => this.compute(r),
+      ensureSlots: (n) => this.ensureSlots(n),
+      write: (r, c) => this.writeCell(r, c),
+      styleOf: (id) => this.styleOf(id),
+      rerunOf: (r) => {
+        const e = r.p.style.get('rerun');
+        return e?.word === 'continue' || e?.text === 'continue' ? 'continue' : 'restart';
+      },
+      sliceClock: (target) => this.sliceRecs(undefined, target),
     };
   }
 
@@ -133,14 +220,34 @@ export class Figure extends FigureHist {
   }
 
   private flushNow(force: boolean): FrameDelta {
-    return super.flush(force);
+    let d = super.flush(force);
+    const drv = this.worldDrivers();
+    if (drv.length === 0) return d;
+    // core hook 1: the drivers write what they own, then one more pass runs over what reads it
+    const owned: ObjRec[] = [];
+    for (const w of drv) owned.push(...w.afterPass());
+    if (owned.length === 0) return d;
+    for (const r of owned) this.markDirty(r);
+    const d2 = super.flush(false);
+    const seen = new Set(d.valueIds);
+    const valueIds = [...d.valueIds];
+    for (const id of d2.valueIds) if (!seen.has(id)) valueIds.push(id);
+    const styleIds = [...new Set([...d.styleIds, ...d2.styleIds])];
+    d = { valueIds, styleIds, undefinedChanges: [...d.undefinedChanges, ...d2.undefinedChanges], ran: d.ran + d2.ran };
+    return d;
   }
 
   protected override onFreeWritten(rec: ObjRec, was?: unknown): void {
     this.solver.noteFree(rec, was);
+    for (const w of this.drivers) w.noteFree?.(rec, was);
   }
 
   protected override onInputLine(words: readonly string[]): string | undefined {
+    for (const w of this.worldDrivers()) {
+      const r = w.inputLine?.(words);
+      if (r !== false && r !== undefined) return r;
+      if (r === undefined && w.inputLine) return undefined;
+    }
     if (words[0] === 'reset') {
       this.solver.restoreEntry({ kind: 'reset', t: Number(words[2]) });
       return undefined;
@@ -243,7 +350,19 @@ export class Figure extends FigureHist {
 
   /** Warnings the solver raised (an unstable state) since the last call. */
   takeWarnings(): Notice[] {
-    return this.solver.warnings.splice(0, this.solver.warnings.length);
+    const out = this.solver.warnings.splice(0, this.solver.warnings.length);
+    for (const w of this.drivers) out.push(...(w.takeWarnings?.() ?? []));
+    return out;
+  }
+
+  /** `Restart()` for the world drivers (the physics world goes back to its start at the current time). */
+  restartDrivers(): void {
+    for (const w of this.worldDrivers()) w.onRestart?.();
+  }
+
+  /** True while a world driver is behind the clock and wants frames even when paused. */
+  driversNeedFrames(): boolean {
+    return this.drivers.some((w) => w.needsFrame?.() === true);
   }
 
   /* ------------------------------ read-only views ------------------------------ */

@@ -115,6 +115,13 @@ const META: Record<ErrorKind, Meta> = {
   import_format: { key: 'lang.import_format', params: ['why'], description: 'Data to import that is not text, or is too large.' },
   import_conflict: { key: 'lang.import_conflict', params: ['why'], description: 'An import over cells that are already filled, without replace.' },
   mixed_dimension: { key: 'lang.mixed_dimension', params: ['why'], description: 'A flat (2D) value where a command needs one in space (3D), or the other way round.' },
+  not_a_body_shape: { key: 'lang.not_a_body_shape', params: ['why'], description: 'A shape with no area (a line, a segment, an open polyline, a curve) given to Body.' },
+  self_crossing: { key: 'lang.self_crossing', params: ['why'], description: 'A polygon whose edges cross, given to Body or made solid.' },
+  not_convex_3d: { key: 'lang.not_convex_3d', params: ['why'], description: 'A solid with dents given to Body in space.' },
+  not_a_body: { key: 'lang.not_a_body', params: ['why'], description: 'A joint or a push with an object that is neither a body nor a solid shape.' },
+  same_body: { key: 'lang.same_body', params: ['why'], description: 'A joint whose two ends are the same body.' },
+  read_only: { key: 'lang.read_only', params: ['name'], description: 'A line that sets a value the physics measures, such as where a body is.' },
+  not_in_world: { key: 'lang.not_in_world', params: ['why'], description: 'A hit handler on an object that is not a body.' },
 };
 
 function buildTable(): Record<ErrorKind, ErrorSpec> {

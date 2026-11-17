@@ -988,7 +988,7 @@ class Compiler {
       const xs: number[] = [];
       for (const a of args) {
         const x = a(env);
-        if (x !== x) return isN ? NAN : undefined;
+        if (x !== x || x === undefined) return isN ? NAN : undefined;
         xs.push(x);
       }
       const v = xs.length === 1 && fv.call1 && isN ? fv.call1(xs[0] as number) : fv.call(...xs);

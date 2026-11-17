@@ -857,6 +857,11 @@ export class FigureCore {
     this.clockDirty = true;
   }
 
+  /** The cell a rule object holds after its rule ran: a world driver that owns it may keep its own (core hook 2). */
+  protected drivenCell(_r: ObjRec, c: Cell): Cell {
+    return c;
+  }
+
   /**
    * One pass over everything marked since the last flush: the merged downstream sets of the dirty sources, in ascending
    * order, each rule once, and only when an input actually changed value.
@@ -911,7 +916,7 @@ export class FigureCore {
       let changed = false;
       if (r.p.kind === 'rule') {
         ran++;
-        changed = this.setCell(r, this.compute(r));
+        changed = this.setCell(r, this.drivenCell(r, this.compute(r)));
       }
       if (r.rangeIn.length > 0 || (clockChanged && r.p.checked.rangeUsesT)) {
         if (this.updateRange(r)) changed = true;

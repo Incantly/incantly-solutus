@@ -31,8 +31,8 @@ The reference app has no physics engine, so it has no physics errors. Hand-made 
 | B001 | `not_a_body_shape` (new) | typecheck | `Body(s)` where `s` has no area: a `Line`, `Ray`, `Segment`, open `Polyline`, `Curve` or function graph | `use_suggestion` | "A line has no mass. To make it solid, write `s with solid = true`." `suggest`: that line |
 | B002 | `self_crossing` (new) | typecheck | `Body(p)` or `p with solid = true` where `p` is a literal polygon whose edges cross | `fix_line` | names the two edges that cross |
 | B003 | `not_convex_3d` (new) | typecheck | `Body(s)` on a polyhedron with dents | `fix_line` | "Bodies in space must have no dents. Split it into convex parts and `Weld` them." |
-| B004 | `bad_property_value` | typecheck | A literal property out of range: `mass = 0`, `mass = −2`, `bounce = 1.5`, `friction = −1`, `passes = 50`, `world with step = 1/1000` | `fix_line` | `expected` has the range |
-| B005 | `bad_property_value` | typecheck | `world with step = 1/100`: not a whole number of solver steps | `fix_line` | "The step must divide 1/240 s steps evenly. Try 1/120 or 1/60." |
+| B004 | `bad_property_value` | typecheck | A literal property out of range: `mass = 0`, `mass = −2`, `bounce = 1.5`, `friction = −1`, `passes = 50`, `world with timestep = 1/1000` | `fix_line` | `expected` has the range |
+| B005 | `bad_property_value` | typecheck | `world with timestep = 1/100`: not a whole number of solver steps | `fix_line` | "The step must divide 1/240 s steps evenly. Try 1/120 or 1/60." |
 | B006 | `unknown_property` | resolve | `b with bounciness = 0.9` | `use_suggestion` | the closest names (`bounce`) |
 | B007 | `read_only` | commit | `b with pos = (1, 2)`, `b with x = 3`, `world with time = 2` | `use_suggestion` | "The physics moves `b`. To move its start, change its shape `p`. To kick it, use `Push(b, (1, 0))`." |
 | B008 | `not_a_body` (new) | typecheck | A joint or `Push` with an object that is neither a body nor a solid shape | `use_suggestion` | `suggest`: `p with solid = true`, or `Body(p, mass = 1)` |
@@ -95,15 +95,15 @@ The reference app has no physics engine, so it has no physics errors. Hand-made 
 {
   "ok": false, "committed": false,
   "kind": "bad_property_value", "code": "B005", "phase": "typecheck",
-  "message": "world step 1/100 does not divide the solver's 1/240 s steps evenly.",
+  "message": "world timestep 1/100 does not divide the solver's 1/240 s steps evenly.",
   "messageKey": "physics.bad_step",
   "params": { "got": "1/100", "solverStep": "1/240" },
   "line": 2, "col": 18, "endCol": 23, "token": "1/100",
   "expected": ["1/60", "1/80", "1/120", "1/240", "1/480"],
   "hint": "Use 1/120 (the default) or 1/240 for stiff springs.",
-  "suggest": ["world with step = 1/120"],
+  "suggest": ["world with timestep = 1/120"],
   "recovery": "fix_line",
-  "fingerprint": "bad_property_value:world:step",
+  "fingerprint": "bad_property_value:world:timestep",
   "severity": "error"
 }
 ```
@@ -183,7 +183,7 @@ An unstable world is handled like an unstable state (`animation-time/design.md` 
 
 | Kind | When | Where it shows | Hint |
 |---|---|---|---|
-| `unstable_world` | An island blew up (section 4) | player bar, the next `figure` | "Lower the spring's `k`, add `damping`, or use `world with step = 1/240`." |
+| `unstable_world` | An island blew up (section 4) | player bar, the next `figure` | "Lower the spring's `k`, add `damping`, or use `world with timestep = 1/240`." |
 | `physics_behind` | Steps took longer than the frame for 1 s; the film runs slower than real time | a small "slow" mark on the player bar, once | "The film is the same, only slower. Fewer awake bodies make it faster." |
 | `catching_up` | The world is stepping to the current time after a seek or restart | "catching up" on the player bar | none |
 | `broken` | A weld or wheel broke | the next `figure`, as a fact the teacher can say | none |

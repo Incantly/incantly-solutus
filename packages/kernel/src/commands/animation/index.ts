@@ -148,6 +148,7 @@ export const ANIMATION_COMMANDS: readonly CommandSpec[] = [
   }),
   action('Restart', [{ params: [], summary: 'put every state back to its initial value, from now on' }], (call) => {
     call.figure.solver.restartStates();
+    call.figure.restartDrivers();
     call.figure.flush();
     return { summary: 'states restarted' };
   }),

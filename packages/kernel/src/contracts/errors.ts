@@ -90,8 +90,16 @@ export interface AreaErrorKinds {
   batch_failed: true;
   import_format: true;
   import_conflict: true;
-  // space-3d (codes C120 to C139)
+  // space-3d (codes C120 to C129)
   mixed_dimension: true;
+  // physics (codes C130 to C149)
+  not_a_body_shape: true;
+  self_crossing: true;
+  not_convex_3d: true;
+  not_a_body: true;
+  same_body: true;
+  not_in_world: true;
+  read_only: true;
 }
 
 export type ErrorKind = CoreErrorKind | Extract<keyof AreaErrorKinds, string>;
@@ -167,6 +175,18 @@ export interface AreaNoticeKinds {
   cells_kept: true;
   fill_skipped: true;
   text_number_mix: true;
+  // physics
+  split_shape: true;
+  shape_approximated: true;
+  left_world: true;
+  contacts_dropped: true;
+  checkpoints_thinned: true;
+  ground_sampled: true;
+  input_undefined: true;
+  worker_unavailable: true;
+  unstable_world: true;
+  physics_behind: true;
+  broken: true;
 }
 
 export type NoticeKind = CoreNoticeKind | Extract<keyof AreaNoticeKinds, string>;

@@ -4,7 +4,7 @@
  */
 import {
   CommandRegistry, geometry, registerAnimation, registerCas, registerFunctions, registerLists, registerNumbers, registerProbability, registerSheet,
-  registerSound, registerSpace, registerStatistics, registerText,
+  registerPhysics, registerSound, registerSpace, registerStatistics, registerText,
 } from '@incantly/kernel';
 import { SYMBOLIC_COMMANDS } from '@incantly/symbolic/catalogue';
 
@@ -24,6 +24,7 @@ export function sdkRegistry(): CommandRegistry {
   registerText(r);
   registerSound(r);
   registerSpace(r);
+  registerPhysics(r);
   registerSheet(r);
   registerCas(r, SYMBOLIC_COMMANDS);
   shared = r;

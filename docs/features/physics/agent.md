@@ -34,7 +34,7 @@ Box(centre: Point, w, h, angle?) -> Polygon      Box(centre: Point3, w, d, h) ->
 Ground(y?: Number) -> Line    # solid; in space: the floor z = 0
 <shape> with solid = true                       # wall or mover
 <body> with bounce, friction, speed, spin, force, torque, fixed, turns, bullet, group, charge
-world with gravity, air, passes, step, sleep, range, show
+world with gravity, air, passes, timestep, sleep, range, show
 Push(b, impulse: Vector, at?: Point)   Wake(b)   Sleep(b)   Restart()
 b.pos b.x b.y b.angle b.speed b.v b.spin b.energy b.momentum b.shape b.touching b.asleep b.force(kind)
 Energy(b | world)  Momentum(b | world)  KineticEnergy(b)  PotentialEnergy(b)  Forces(b)
@@ -121,7 +121,7 @@ l.count l.level
 | `same_body` | Use the second body's name |
 | `bad_property_value` | Pick a value from `expected` |
 | `limit` | Turn still bodies into solid shapes |
-| `unstable_world` warning | `s with damping = 0.5`, a smaller `k`, or `world with step = 1/240` |
+| `unstable_world` warning | `s with damping = 0.5`, a smaller `k`, or `world with timestep = 1/240` |
 
 ---
 

@@ -1178,10 +1178,12 @@ class Checker {
     for (const a of e.args) {
       const x = this.infer(a);
       if (!x) return null;
-      if (x.ty.k !== 'Number') return this.err('type_mismatch', x.s, x.e, 'lang.type_mismatch_where', { why: `${name} takes numbers, not a ${tyStr(x.ty)}` }, { left: tyStr(x.ty), fingerprintKey: `${name}.arg` });
+      // an area's field may take a word instead (`b.force("normal")`, physics design 2.4)
+      const textOk = (f as Ty & { readonly textArgs?: boolean }).textArgs === true && x.ty.k === 'Text';
+      if (x.ty.k !== 'Number' && !textOk) return this.err('type_mismatch', x.s, x.e, 'lang.type_mismatch_where', { why: `${name} takes ${(f as Ty & { readonly textArgs?: boolean }).textArgs === true ? 'a word in quotes' : 'numbers'}, not a ${tyStr(x.ty)}` }, { left: tyStr(x.ty), fingerprintKey: `${name}.arg` });
       args.push(x);
     }
-    const ret = f.ret === 'Point' ? T.Point : f.ret === 'Bool' ? T.Bool : T.Number;
+    const ret = f.ret === 'Point' ? T.Point : f.ret === 'Bool' ? T.Bool : f.ret === 'Vector' ? T.Vector : T.Number;
     return { n: 'field', target: t, field: e.field, args, ty: ret, s: e.s, e: e.e };
   }
 
