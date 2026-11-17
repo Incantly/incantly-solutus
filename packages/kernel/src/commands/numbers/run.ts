@@ -129,6 +129,8 @@ export interface RunPayload {
   /** The object that changed (figure change events). */
   readonly changedName?: string;
   readonly by?: 'learner' | 'host';
+  /** More names the steps may read (a hit's `speed`, `other`, `point`, `impulse`). */
+  readonly extra?: Readonly<Record<string, unknown>>;
 }
 
 export type RunTrigger = 'learner' | 'host' | 'click_call';
@@ -160,6 +162,10 @@ function runtimeBindings(
   if (lit) bindings.set('value', { literal: lit });
   else bindings.set('value', { ref: target === 'figure' ? selfName : target });
   bindings.set('event', { literal: { k: 'str', parts: [event], s: 0, e: 0 } });
+  for (const [k, v] of Object.entries(payload.extra ?? {})) {
+    const l = valueLiteralExpr(v);
+    if (l) bindings.set(k, { literal: l });
+  }
   void figure;
   return bindings;
 }

@@ -38,7 +38,7 @@ world with gravity, air, passes, timestep, sleep, range, show
 Push(b, impulse: Vector, at?: Point)   Wake(b)   Sleep(b)   Restart()
 b.pos b.x b.y b.angle b.speed b.v b.spin b.energy b.momentum b.shape b.touching b.asleep b.force(kind)
 Energy(b | world)  Momentum(b | world)  KineticEnergy(b)  PotentialEnergy(b)  Forces(b)
-on b hit: …   (hit.speed, hit.point, hit.other, hit.impulse)
+on b hit: …   (speed, point, other as a text, impulse)
 ```
 
 ### 2.2 `physics-joints` (target 150 tokens)

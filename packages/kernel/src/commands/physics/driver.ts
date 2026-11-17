@@ -21,6 +21,13 @@ import { atan2 } from '../../physics/math';
 import { solidShapeOf } from './shapes';
 import type { BodySpec, BodyValue, WorldValue } from './types';
 import { DEFAULT_WORLD, isBodyValue, isWorldValue } from './types';
+import type { JointEnd, JointValue } from './joints';
+import { isJointValue } from './joints';
+import type { JointMember } from './jointbuild';
+import { buildJoint, jointKey, jointNow, specKey } from './jointbuild';
+import type { Hinge2, Slider2, Grab2 } from '../../physics/joints2';
+import { getStoredHandler } from '../numbers/handlers';
+import { runHandler } from '../numbers/run';
 
 /** Checkpoints every half second of film (design 10.3). */
 const CHECKPOINT_SECONDS = 0.5;
@@ -31,9 +38,9 @@ const STEP_BUDGET = 60000;
 const BLOW_UP = 1e6;
 
 export type LogEntry =
-  | { readonly kind: 'push'; readonly n: number; readonly id: ObjId; readonly x: number; readonly y: number; readonly ax?: number; readonly ay?: number }
-  | { readonly kind: 'grab'; readonly n: number; readonly id: ObjId; readonly x: number; readonly y: number; readonly ax: number; readonly ay: number }
-  | { readonly kind: 'release'; readonly n: number; readonly id: ObjId }
+  | { readonly kind: 'push'; readonly n: number; readonly id: ObjId; readonly item?: number; readonly x: number; readonly y: number; readonly ax?: number; readonly ay?: number }
+  | { readonly kind: 'grab'; readonly n: number; readonly id: ObjId; readonly item?: number; readonly x: number; readonly y: number; readonly ax: number; readonly ay: number }
+  | { readonly kind: 'release'; readonly n: number; readonly id: ObjId; readonly item?: number }
   | { readonly kind: 'set'; readonly n: number; readonly id: ObjId; readonly value: unknown }
   | { readonly kind: 'reset'; readonly n: number };
 
@@ -67,6 +74,10 @@ export class PhysicsDriver implements WorldDriver {
   private version = -1;
   private bodyRecs: ObjRec[] = [];
   private solidRecs: ObjRec[] = [];
+  private jointRecs: ObjRec[] = [];
+  /** The value each joint's rule gave (its start), or each item of a list of joints. */
+  private jointSpecs = new Map<ObjId, (JointValue | undefined)[]>();
+  jointMembers: (JointMember & { readonly rec: ObjRec })[] = [];
   private worldRec: ObjRec | undefined;
   /** The value each body's rule gave (its start), kept because the cell holds the pose. */
   private specs = new Map<ObjId, BodyValue>();
@@ -104,7 +115,13 @@ export class PhysicsDriver implements WorldDriver {
   /** Hits of the steps taken in the last pass, for `on … hit` handlers. */
   hits: { readonly t: number; readonly a: string; readonly b: string; readonly speed: number; readonly x: number; readonly y: number; readonly impulse: number }[] = [];
   /** Time of the last step taken, so hits are reported once. */
-  private hitN = 0;
+  private sampling = false;
+  private pendingHits: PhysicsDriver['hits'] = [];
+  private brokeAt = new WeakMap<object, number>();
+  /** Joints that broke, for the teacher's `figure` result. */
+  events: { readonly t: number; readonly kind: 'broken'; readonly name: string }[] = [];
+  /** The furthest step ever taken: hits beyond it fire `on … hit` handlers, a replay before it does not fire them again. */
+  frontier = 0;
 
   constructor(readonly figure: Figure) {
     this.acc = figure.driverAccess();
@@ -113,6 +130,11 @@ export class PhysicsDriver implements WorldDriver {
   /* ------------------------------ the driver hooks ------------------------------ */
 
   onCompute(rec: ObjRec, computed: Cell): Cell | undefined {
+    if (isJointRec(rec)) {
+      this.jointSpecs.set(rec.id, computed.defined ? (Array.isArray(computed.value) ? (computed.value as unknown[]) : [computed.value]).map((v) => (isJointValue(v) ? v : undefined)) : []);
+      const last = this.lastCells.get(rec.id);
+      return last && computed.defined && this.world ? last : undefined;
+    }
     if (rec.p.type.k === 'List' && rec.p.type.of?.k === 'Body') {
       if (computed.defined && Array.isArray(computed.value)) this.listSpecs.set(rec.id, (computed.value as unknown[]).map((v) => (isBodyValue(v) ? v : undefined)));
       else this.listSpecs.delete(rec.id);
@@ -161,14 +183,18 @@ export class PhysicsDriver implements WorldDriver {
       this.addEntry({ kind: 'reset', n });
       return undefined;
     }
-    const rec = this.acc.byName(words[2] ?? '');
-    if (!rec) return `an object named ${words[2] ?? ''}`;
+    const nameWord = words[2] ?? '';
+    const listed = /^(.+)\[(\d+)\]$/.exec(nameWord);
+    const rec = this.acc.byName(listed ? (listed[1] as string) : nameWord);
+    if (!rec) return `an object named ${nameWord}`;
+    const item = listed ? Number(listed[2]) - 1 : undefined;
+    const it = item !== undefined ? { item } : {};
     const isBase = words[3] === 'base';
     const nums = words.slice(isBase ? 4 : 3, -2).map(Number);
     if (nums.some((x) => !Number.isFinite(x))) return 'numbers';
-    if (kind === 'push' && nums.length >= 2) this.addEntry({ kind: 'push', n, id: rec.id, x: nums[0] as number, y: nums[1] as number, ...(nums.length >= 4 ? { ax: nums[2] as number, ay: nums[3] as number } : {}) });
-    else if (kind === 'grab' && nums.length >= 4) this.addEntry({ kind: 'grab', n, id: rec.id, x: nums[0] as number, y: nums[1] as number, ax: nums[2] as number, ay: nums[3] as number });
-    else if (kind === 'release') this.addEntry({ kind: 'release', n, id: rec.id });
+    if (kind === 'push' && nums.length >= 2) this.addEntry({ kind: 'push', n, id: rec.id, ...it, x: nums[0] as number, y: nums[1] as number, ...(nums.length >= 4 ? { ax: nums[2] as number, ay: nums[3] as number } : {}) });
+    else if (kind === 'grab' && nums.length >= 4) this.addEntry({ kind: 'grab', n, id: rec.id, ...it, x: nums[0] as number, y: nums[1] as number, ax: nums[2] as number, ay: nums[3] as number });
+    else if (kind === 'release') this.addEntry({ kind: 'release', n, id: rec.id, ...it });
     else if (kind === 'set' && nums.length >= 1) {
       const value = nums.length >= 2 ? { x: nums[0] as number, y: nums[1] as number } : nums[0];
       if (isBase) this.base.set(rec.id, value);
@@ -207,6 +233,7 @@ export class PhysicsDriver implements WorldDriver {
     if (!this.world) return undefined;
     const keep = this.world.save();
     const keepN = this.n;
+    this.sampling = true;
     const kx = Float64Array.from(this.prevX);
     const ky = Float64Array.from(this.prevY);
     const ka = Float64Array.from(this.prevA);
@@ -228,6 +255,7 @@ export class PhysicsDriver implements WorldDriver {
       for (const [r, arr] of lists) out.push([r, { defined: true, value: arr }]);
       return out;
     } finally {
+      this.sampling = false;
       this.world.load(keep);
       this.n = keepN;
       this.prevX = kx;
@@ -273,10 +301,12 @@ export class PhysicsDriver implements WorldDriver {
     this.version = v;
     this.bodyRecs = [];
     this.solidRecs = [];
+    this.jointRecs = [];
     this.worldRec = undefined;
     for (const r of this.acc.list) {
       const k = r.p.type.k;
-      if (k === 'Body' || (k === 'List' && r.p.type.of?.k === 'Body')) this.bodyRecs.push(r);
+      if (isJointRec(r)) this.jointRecs.push(r);
+      else if (k === 'Body' || (k === 'List' && r.p.type.of?.k === 'Body')) this.bodyRecs.push(r);
       else if (k === 'World') this.worldRec = r;
       else if (r.p.style.has('solid') || isGround(r)) this.solidRecs.push(r);
     }
@@ -324,6 +354,16 @@ export class PhysicsDriver implements WorldDriver {
 
   private listSpecs = new Map<ObjId, (BodyValue | undefined)[]>();
 
+  /** The joints of a joint object (one, or each of a list), as their rules gave them. */
+  private jointsOf(r: ObjRec): (JointValue | undefined)[] {
+    const s = this.jointSpecs.get(r.id);
+    if (s) return s;
+    if (this.written.has(r.id) || !r.cell.defined) return [];
+    const list = (Array.isArray(r.cell.value) ? (r.cell.value as unknown[]) : [r.cell.value]).map((v) => (isJointValue(v) ? v : undefined));
+    this.jointSpecs.set(r.id, list);
+    return list;
+  }
+
   private settings(): WorldValue {
     if (!this.worldRec) return DEFAULT_WORLD;
     if (this.worldSettings) return this.worldSettings;
@@ -359,6 +399,14 @@ export class PhysicsDriver implements WorldDriver {
         const e = r.p.style.get(k);
         if (e) sig.push(k, e.text, this.isVarying(e) ? 'varying' : this.evalStyle(r, e));
       }
+    }
+    for (const r of this.jointRecs) {
+      // a joint whose motor or target moves during the film is rebuilt only when its line changes
+      if (this.varySet.has(r)) {
+        sig.push(r.id, 'varying', r.p.compiled);
+        continue;
+      }
+      sig.push(r.id, this.jointsOf(r).map((j) => (j ? jointKey(j) : null)));
     }
     return sig;
   }
@@ -449,6 +497,7 @@ export class PhysicsDriver implements WorldDriver {
     for (const m of members) if (!this.byId.has(m.rec.id)) this.byId.set(m.rec.id, m);
     this.nameOfIndex = [];
     for (const m of members) this.nameOfIndex[m.index] = m.item !== undefined ? `${m.rec.p.name}[${m.item + 1}]` : m.rec.p.name;
+    this.buildJoints(world, members);
     for (const m of members) if (m.role === 'body' && m.spec && m.spec.parts > 1) this.warnOnce(`split:${m.rec.id}:${m.spec.parts}`, makeNotice('split_shape', { name: m.rec.p.name, parts: m.spec.parts }, [m.rec.p.name]));
     this.n = 0;
     this.prevX = Float64Array.from(world.px);
@@ -460,10 +509,39 @@ export class PhysicsDriver implements WorldDriver {
     this.failedAt = new Map();
     this.leftAt = new Map();
     this.grabs = new Map();
-    this.hitN = 0;
     this.findCone();
     this.applyStatic();
     this.saveCheckpoint(0);
+  }
+
+  /** The world index of a joint's end: a body by its start, or an object by id. */
+  private endIndex(e: JointEnd, members: readonly Member[]): number | undefined {
+    if (e.spec) {
+      const key = specKey(e.spec);
+      for (const m of members) if (m.spec && specKey(m.spec) === key) return m.index;
+    }
+    if (e.id !== undefined) for (const m of members) if (m.rec.id === e.id && m.item === undefined) return m.index;
+    return undefined;
+  }
+
+  private buildJoints(world: World2, members: readonly Member[]): void {
+    this.jointMembers = [];
+    world.joints = [];
+    for (const r of this.jointRecs) {
+      const list = this.jointsOf(r);
+      const isList = r.p.type.k === 'List';
+      for (let item = 0; item < list.length; item++) {
+        const j = list[item];
+        if (!j) continue;
+        const a = this.endIndex(j.a, members);
+        const b = this.endIndex(j.b, members);
+        if (a === undefined || b === undefined) continue;
+        const built = buildJoint(world, j, a, b);
+        if (!built) continue;
+        world.joints.push(built.joint);
+        this.jointMembers.push({ rec: r, value: j, joint: built.joint, la: built.la, lb: built.lb, ...(isList ? { item } : {}) });
+      }
+    }
   }
 
   private stepRate(rate: number): number {
@@ -538,7 +616,7 @@ export class PhysicsDriver implements WorldDriver {
     this.coneDirty = false;
     const bodies = new Set(this.bodyRecs);
     // what physics reads: solid shapes, the world, and the reads of body and solid properties
-    const targets: ObjRec[] = [...this.solidRecs];
+    const targets: ObjRec[] = [...this.solidRecs, ...this.jointRecs];
     if (this.worldRec) targets.push(this.worldRec);
     for (const r of [...this.bodyRecs, ...this.solidRecs]) {
       for (const k of [...BODY_PROPS, 'solid']) {
@@ -555,13 +633,15 @@ export class PhysicsDriver implements WorldDriver {
     const vary = new Set<ObjRec>();
     for (const r of all) {
       if (bodies.has(r)) continue;
-      const v = r.usesClock || this.logged.has(r.id) || r.inputs.some((i) => vary.has(i) || bodies.has(i));
+      // a joint reads its bodies only for its start, so a moving body does not make it change
+      const joint = isJointRec(r);
+      const v = r.usesClock || this.logged.has(r.id) || r.inputs.some((i) => vary.has(i) || (bodies.has(i) && !joint));
       if (v) vary.add(r);
     }
     this.varySet = vary;
     this.bodyVaries = new Set(this.bodyRecs.filter((r) => r.usesClock || r.inputs.some((i) => vary.has(i))));
     this.cone = all.filter((r) => vary.has(r) && r.p.kind === 'rule' && !bodies.has(r));
-    this.readsBodies = all.some((r) => vary.has(r) && r.inputs.some((i) => bodies.has(i)));
+    this.readsBodies = all.some((r) => vary.has(r) && !isJointRec(r) && r.inputs.some((i) => bodies.has(i)));
     // the free inputs: of the start (body shapes and named arguments), and of movers
     this.inputs = new Set();
     this.startInputs = new Set();
@@ -674,9 +754,25 @@ export class PhysicsDriver implements WorldDriver {
     this.prevStale = false;
     this.checkHealth();
     for (const i of w.left) if (!this.leftAt.has(i)) this.leftAt.set(i, this.n);
-    if (this.n > this.hitN) {
-      for (const hit of w.hits) this.hits.push({ t: this.t0 + this.n / this.rate, a: this.nameOfIndex[hit.a] ?? '', b: this.nameOfIndex[hit.b] ?? '', speed: hit.speed, x: hit.x, y: hit.y, impulse: hit.impulse });
-      this.hitN = this.n;
+    for (const jm of this.jointMembers) {
+      if (!jm.joint.broken) continue;
+      const name = jm.item !== undefined ? `${jm.rec.p.name}[${jm.item + 1}]` : jm.rec.p.name;
+      const t = Number((this.t0 + this.n / this.rate).toFixed(3));
+      if (!this.brokeAt.has(jm.joint)) {
+        this.brokeAt.set(jm.joint, this.n);
+        this.events.push({ t: this.t0 + this.n / this.rate, kind: 'broken', name });
+        this.warnOnce(`broken:${name}:${this.n}`, makeNotice('broken', { name, t }, [name]));
+      }
+    }
+    if (!this.sampling) {
+      const fresh = this.n > this.frontier;
+      for (const hit of w.hits) {
+        const e = { t: this.t0 + this.n / this.rate, a: this.nameOfIndex[hit.a] ?? '', b: this.nameOfIndex[hit.b] ?? '', speed: hit.speed, x: hit.x, y: hit.y, impulse: hit.impulse };
+        this.hits.push(e);
+        // handlers run once per hit: a replay or a seek back over it does not run them again
+        if (fresh) this.pendingHits.push(e);
+      }
+      if (fresh) this.frontier = this.n;
     }
     if (this.n % this.cpStride === 0 && !this.checkpoints.has(this.n)) this.saveCheckpoint(this.n);
   }
@@ -759,8 +855,9 @@ export class PhysicsDriver implements WorldDriver {
         out.push(`@input physics reset at ${t(e.n)}`);
         continue;
       }
-      const nm = name(e.id);
-      if (!nm) continue;
+      const base = name(e.id);
+      if (!base) continue;
+      const nm = e.kind !== 'set' && e.item !== undefined ? `${base}[${e.item + 1}]` : base;
       if (e.kind === 'push') out.push(`@input physics push ${nm} ${num(e.x)} ${num(e.y)}${e.ax !== undefined ? ` ${num(e.ax)} ${num(e.ay ?? 0)}` : ''} at ${t(e.n)}`);
       else if (e.kind === 'grab') out.push(`@input physics grab ${nm} ${num(e.x)} ${num(e.y)} ${num(e.ax)} ${num(e.ay)} at ${t(e.n)}`);
       else if (e.kind === 'release') out.push(`@input physics release ${nm} at ${t(e.n)}`);
@@ -786,7 +883,7 @@ export class PhysicsDriver implements WorldDriver {
         this.grabs.clear();
         continue;
       }
-      const m = this.byId.get(e.id);
+      const m = e.kind === 'set' ? undefined : this.memberOf(e.id, e.item);
       if (!m && e.kind !== 'set') continue;
       if (e.kind === 'push' && m) {
         const i = m.index;
@@ -930,6 +1027,21 @@ export class PhysicsDriver implements WorldDriver {
           break;
       }
     }
+    // joints whose motor, limits or target change during the film
+    for (const jm of this.jointMembers) {
+      if (!this.varySet.has(jm.rec)) continue;
+      const c = jm.rec.cell;
+      if (!c.defined) continue;
+      const v = Array.isArray(c.value) ? (c.value as unknown[])[jm.item ?? 0] : c.value;
+      if (!isJointValue(v)) continue;
+      if (v.kind === 'hinge') (jm.joint as Hinge2).opts = { ...(v.motor !== undefined ? { motor: v.motor } : {}), ...(v.torque !== undefined ? { torque: v.torque } : {}), ...(v.min !== undefined ? { min: v.min } : {}), ...(v.max !== undefined ? { max: v.max } : {}) };
+      else if (v.kind === 'slider') (jm.joint as Slider2).opts = { ...(jm.joint as Slider2).opts, ...(v.motor !== undefined ? { motor: v.motor } : {}), ...(v.torque !== undefined ? { force: v.torque } : {}) };
+      else if (v.kind === 'grab' && v.target) {
+        (jm.joint as Grab2).tx = v.target.x;
+        (jm.joint as Grab2).ty = v.target.y;
+        w.wakeBody(jm.joint.b);
+      }
+    }
     if (this.varyingWorld && this.worldRec) {
       const c = this.worldRec.cell;
       if (c.defined && isWorldValue(c.value)) {
@@ -967,12 +1079,44 @@ export class PhysicsDriver implements WorldDriver {
     const x = lerp(this.prevX[i] as number, w.px[i] as number);
     const y = lerp(this.prevY[i] as number, w.py[i] as number);
     const angle = lerp(this.prevA[i] as number, w.ang[i] as number);
+    // the speed is the one of the last step (leapfrog), so the height is taken in the middle of that step: then a
+    // body in free flight keeps its energy exactly, and an oscillator to O((ω h)²)
     const ke = w.kinetic(i);
-    const pe = w.potential(i);
+    const pe = this.midPotential(i);
     return {
       schema: 'Body', spec: sp, x, y, angle, vx: w.vx[i] as number, vy: w.vy[i] as number, spin: w.w[i] as number, asleep: w.type[i] === BodyType.Dynamic && w.awake[i] === 0,
       mass: sp.fixed ? Infinity : (w.mass[i] as number), inertia: w.inertia[i] as number, energy: ke + pe, kinetic: ke, potential: pe, touching: [], moving: this.n > 0,
     };
+  }
+
+  private midPotential(i: number): number {
+    const w = this.world as World2;
+    const mx = 0.5 * ((this.prevX[i] as number) + (w.px[i] as number));
+    const my = 0.5 * ((this.prevY[i] as number) + (w.py[i] as number));
+    return -(w.mass[i] as number) * (w.gx * mx + w.gy * my);
+  }
+
+  /** Energy of the springs in the middle of the last step (as `midPotential`). */
+  private springEnergy(): number {
+    const w = this.world as World2;
+    if (!w.joints.some((j) => !j.broken && j.energy(w) !== 0)) return 0;
+    const kx = Float64Array.from(w.px);
+    const ky = Float64Array.from(w.py);
+    const ka = Float64Array.from(w.ang);
+    for (let i = 0; i < w.n; i++) {
+      if (w.type[i] !== BodyType.Dynamic) continue;
+      w.px[i] = 0.5 * ((this.prevX[i] as number) + (kx[i] as number));
+      w.py[i] = 0.5 * ((this.prevY[i] as number) + (ky[i] as number));
+      w.ang[i] = 0.5 * ((this.prevA[i] as number) + (ka[i] as number));
+      w.setRot(i);
+    }
+    let e = 0;
+    for (const j of w.joints) if (!j.broken) e += j.energy(w);
+    w.px.set(kx);
+    w.py.set(ky);
+    w.ang.set(ka);
+    for (let i = 0; i < w.n; i++) if (w.type[i] === BodyType.Dynamic) w.setRot(i);
+    return e;
   }
 
   private bodyCell(m: Member, alpha: number): Cell {
@@ -1021,6 +1165,28 @@ export class PhysicsDriver implements WorldDriver {
       this.written.add(rec.id);
       if (this.acc.write(rec, cell)) changed.push(rec);
     }
+    // joints: what they carry, how long they are, where their ends are
+    const h = 1 / this.rate;
+    const jl = new Map<ObjRec, unknown[]>();
+    for (const jm of this.jointMembers) {
+      const v = jointNow(w, jm, h);
+      if (jm.item === undefined) {
+        const cell: Cell = { defined: true, value: v };
+        this.lastCells.set(jm.rec.id, cell);
+        this.written.add(jm.rec.id);
+        if (this.acc.write(jm.rec, cell)) changed.push(jm.rec);
+        continue;
+      }
+      const arr = jl.get(jm.rec) ?? (this.jointsOf(jm.rec) as unknown[]).slice();
+      arr[jm.item] = v;
+      jl.set(jm.rec, arr);
+    }
+    for (const [rec, arr] of jl) {
+      const cell: Cell = { defined: true, value: arr };
+      this.lastCells.set(rec.id, cell);
+      this.written.add(rec.id);
+      if (this.acc.write(rec, cell)) changed.push(rec);
+    }
     // bodies whose start is undefined stay as their rule left them
     if (this.worldRec) {
       const s = this.settings();
@@ -1029,10 +1195,11 @@ export class PhysicsDriver implements WorldDriver {
       let py = 0;
       for (const m of this.members) {
         if (m.role !== 'body' || w.type[m.index] !== BodyType.Dynamic) continue;
-        energy += w.kinetic(m.index) + w.potential(m.index);
+        energy += w.kinetic(m.index) + this.midPotential(m.index);
         px += (w.mass[m.index] as number) * (w.vx[m.index] as number);
         py += (w.mass[m.index] as number) * (w.vy[m.index] as number);
       }
+      energy += this.springEnergy();
       const cell: Cell = { defined: true, value: { ...s, time: this.t0 + this.n / this.rate, energy, momentumX: px, momentumY: py, awake: w.awakeCount(), contacts: w.contactCount } satisfies WorldValue };
       this.lastCells.set(this.worldRec.id, cell);
       this.written.add(this.worldRec.id);
@@ -1048,23 +1215,36 @@ export class PhysicsDriver implements WorldDriver {
 
   /* ------------------------------ for actions ------------------------------ */
 
+  /** The body of an object, or of one item of a list of bodies (0-based). */
+  memberOf(id: ObjId, item?: number): Member | undefined {
+    for (const m of this.members) if (m.rec.id === id && m.item === item) return m;
+    return undefined;
+  }
+
+  /** Which object (and list item) a body value belongs to, from its start. */
+  ownerOf(spec: BodySpec): { id: ObjId; item?: number } | undefined {
+    for (const m of this.members) if (m.spec === spec) return { id: m.rec.id, ...(m.item !== undefined ? { item: m.item } : {}) };
+    return undefined;
+  }
+
   /** Push(b, impulse, at?): logged at the next step (design 5.4). */
-  push(id: ObjId, x: number, y: number, at?: { x: number; y: number }): boolean {
-    if (!this.byId.has(id)) return false;
+  push(id: ObjId, x: number, y: number, at?: { x: number; y: number }, item?: number): boolean {
+    if (!this.memberOf(id, item)) return false;
     const n = this.gridAt(this.acc.clockT());
-    this.addEntry({ kind: 'push', n, id, x, y, ...(at ? { ax: at.x, ay: at.y } : {}) });
+    this.addEntry({ kind: 'push', n, id, ...(item !== undefined ? { item } : {}), x, y, ...(at ? { ax: at.x, ay: at.y } : {}) });
     return true;
   }
 
   /** The learner takes hold of a body at a point (world space) and moves the pointer. */
-  grab(id: ObjId, x: number, y: number, at?: { x: number; y: number }): boolean {
-    const m = this.byId.get(id);
+  grab(id: ObjId, x: number, y: number, at?: { x: number; y: number }, item?: number): boolean {
+    const m = this.memberOf(id, item);
     if (!m || !this.world) return false;
     const w = this.world;
     const i = m.index;
     const n = this.gridAt(this.acc.clockT());
-    const g = this.log.filter((e) => e.kind === 'grab' && e.id === id).at(-1) as (LogEntry & { kind: 'grab' }) | undefined;
-    const released = this.log.filter((e) => (e.kind === 'release' || e.kind === 'grab') && e.id === id).at(-1)?.kind !== 'grab';
+    const mine = (e: LogEntry): boolean => (e.kind === 'grab' || e.kind === 'release') && e.id === id && e.item === item;
+    const g = this.log.filter((e) => e.kind === 'grab' && mine(e)).at(-1) as (LogEntry & { kind: 'grab' }) | undefined;
+    const released = this.log.filter(mine).at(-1)?.kind !== 'grab';
     let ax: number;
     let ay: number;
     if (g && !released) {
@@ -1079,13 +1259,13 @@ export class PhysicsDriver implements WorldDriver {
       ax = c * dx + s * dy;
       ay = -s * dx + c * dy;
     }
-    this.addEntry({ kind: 'grab', n, id, x, y, ax, ay });
+    this.addEntry({ kind: 'grab', n, id, ...(item !== undefined ? { item } : {}), x, y, ax, ay });
     return true;
   }
 
-  release(id: ObjId): void {
-    if (!this.byId.has(id)) return;
-    this.addEntry({ kind: 'release', n: this.gridAt(this.acc.clockT()), id });
+  release(id: ObjId, item?: number): void {
+    if (!this.memberOf(id, item)) return;
+    this.addEntry({ kind: 'release', n: this.gridAt(this.acc.clockT()), id, ...(item !== undefined ? { item } : {}) });
   }
 
   restart(): void {
@@ -1096,8 +1276,27 @@ export class PhysicsDriver implements WorldDriver {
     if (this.world) this.restart();
   }
 
-  wake(id: ObjId, awake: boolean): boolean {
-    const m = this.byId.get(id);
+  /**
+   * After the flush: each new hit runs the `on … hit` handlers of both objects, with `speed`, `other`, `point` and
+   * `impulse` (design 2.4). At most 24 runs a film second, as sounds are limited.
+   */
+  afterFlush(): void {
+    if (this.pendingHits.length === 0) return;
+    const hits = this.pendingHits.splice(0, this.pendingHits.length);
+    let runs = 0;
+    for (const h of hits) {
+      for (const [self, other] of [[h.a, h.b], [h.b, h.a]] as const) {
+        const target = self.replace(/\[\d+\]$/, '');
+        if (!getStoredHandler(this.figure, target, 'hit')) continue;
+        if (runs >= 24) return;
+        runs++;
+        runHandler(this.figure, target, 'hit', { by: 'host', extra: { speed: h.speed, other: other.replace(/\[\d+\]$/, ''), point: { x: h.x, y: h.y }, impulse: h.impulse } }, 'host');
+      }
+    }
+  }
+
+  wake(id: ObjId, awake: boolean, item?: number): boolean {
+    const m = this.memberOf(id, item);
     if (!m || !this.world) return false;
     if (awake) this.world.wakeBody(m.index);
     else this.world.sleepBody(m.index);
@@ -1118,6 +1317,12 @@ export class PhysicsDriver implements WorldDriver {
   stepsPerSecond(): number {
     return this.rate;
   }
+}
+
+/** A joint, or a list of joints (`Seq(Rope(…), k, 1, 5)`). */
+function isJointRec(r: ObjRec): boolean {
+  const t = r.p.type;
+  return t.k === 'Joint' || (t.k === 'List' && t.of?.k === 'Joint');
 }
 
 /** `g = Ground()` is solid without saying so. */

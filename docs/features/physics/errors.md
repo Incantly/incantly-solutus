@@ -137,7 +137,7 @@ Reasons are registered in `AreaUndefReasons` (`packages/kernel/src/contracts/val
 | `self_crossing` (new) | body | The shape's edges cross at the start, for these values | names the two edges |
 | `degenerate` | body | The shape has no area (all points on a line) or a radius of 0 | "has no area" |
 | `unstable_world` (new) | body, joint, liquid | A position or speed became not finite or over 1e6 | the time, and "springs too stiff for the step" or "too much force" |
-| `broken` (new) | joint, wheel | A `Weld` or a wheel with `breaks` went over its force | the time and the force |
+| `broken` (new) | wheel | A wheel with `breaks` went over its force (a broken joint stays defined, with `j.broken` true and `j.force` 0) | the time and the force |
 | `left_world` (new) | body | It left `world.range` | the time and where it left |
 | `timeout` | body, liquid | The world is still catching up after a seek or a restart | "catching up" |
 

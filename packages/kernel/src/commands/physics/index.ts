@@ -30,6 +30,7 @@ import { cos, sin } from '../../physics/math';
 import { FORCE_KINDS } from '../../physics/world2';
 import { PhysicsDriver } from './driver';
 import { bodyShapeOf } from './shapes';
+import { JOINT_COMMANDS, MEASURE_COMMANDS, isJointValue } from './joints';
 import type { BodySpec, BodyValue, Outline, WorldValue } from './types';
 import { DEFAULT_WORLD, SHOW_WORDS, isBodyValue, isWorldValue } from './types';
 
@@ -37,6 +38,8 @@ export { PhysicsDriver } from './driver';
 export type { BodySpec, BodyValue, Outline, WorldValue } from './types';
 export { isBodyValue, isWorldValue, DEFAULT_WORLD } from './types';
 export { bodyShapeOf, solidShapeOf } from './shapes';
+export { isJointValue } from './joints';
+export type { JointValue, JointKind } from './joints';
 
 /** The limits of design 11.3, the same on every computer. */
 export const PHYSICS_LIMITS = Object.freeze({ bodies: 1000, joints: 1000, liquid: 2000, grid: 64, groundPieces: 2000, contactPoints: 4000 });
@@ -255,10 +258,17 @@ function fraction(text: string): number | undefined {
 
 /* ------------------------------ actions ------------------------------ */
 
-function bodyArg(call: ActionCall, k = 0): { id: ObjId } | { error: ErrorObject } {
+function bodyArg(call: ActionCall, k = 0): { id: ObjId; item?: number } | { error: ErrorObject } {
   const id = call.refs?.[k] ?? call.objects[k];
   const at = { line: 0, col: 1, endCol: 1 };
   const o = id !== undefined ? call.figure.get(id) : undefined;
+  // a body of a list (`balls[1]`) is found by its start
+  const v = call.values[k];
+  if (!o && isBodyValue(v)) {
+    call.figure.flush();
+    const owner = physicsOf(call.figure).ownerOf(v.spec);
+    if (owner) return owner;
+  }
   if (!o || o.type !== 'Body') {
     const name = o?.name ?? 'it';
     return { error: err('not_a_body', at, { why: `${name} is not a body` }, { hint: `Make it a body first: b = Body(${name}, mass = 1).`, suggest: o ? [`b = Body(${o.name}, mass = 1)`] : [], recovery: 'use_suggestion', fingerprintKey: `push:${name}` }) };
@@ -274,7 +284,7 @@ function pushRun(call: ActionCall): ActionOutcome {
   if (typeof j?.x !== 'number' || typeof j.y !== 'number') return { summary: 'nothing to push with' };
   const d = physicsOf(call.figure);
   call.figure.flush();
-  d.push(b.id, j.x, j.y, typeof at?.x === 'number' && typeof at.y === 'number' ? { x: at.x, y: at.y } : undefined);
+  d.push(b.id, j.x, j.y, typeof at?.x === 'number' && typeof at.y === 'number' ? { x: at.x, y: at.y } : undefined, b.item);
   call.figure.flush(true);
   return { summary: `pushed ${call.figure.get(b.id)?.name ?? ''}` };
 }
@@ -284,7 +294,7 @@ function wakeRun(awake: boolean): (call: ActionCall) => ActionOutcome {
     const b = bodyArg(call);
     if ('error' in b) return { error: b.error };
     call.figure.flush();
-    physicsOf(call.figure).wake(b.id, awake);
+    physicsOf(call.figure).wake(b.id, awake, b.item);
     call.figure.flush(true);
     return { summary: awake ? 'woken' : 'put to sleep' };
   };
@@ -460,6 +470,24 @@ function readWorld(field: string, v: unknown): unknown {
   }
 }
 
+const JOINT_FIELDS: Readonly<Record<string, Ty>> = { force: T.Number, length: T.Number, angle: T.Number, broken: T.Bool };
+
+function readJoint(field: string, v: unknown): unknown {
+  if (!isJointValue(v)) return undefined;
+  switch (field) {
+    case 'force':
+      return v.force;
+    case 'length':
+      return v.lengthNow;
+    case 'angle':
+      return v.angleNow;
+    case 'broken':
+      return v.broken;
+    default:
+      return undefined;
+  }
+}
+
 /* ------------------------------ line checks and rewrites ------------------------------ */
 
 const WITH_WORLD = /^\s*world\s+with\s+([\s\S]+)$/;
@@ -562,7 +590,7 @@ export function physicsLineCheck(_figure: unknown, line: CheckedLine): ErrorObje
 let registered = false;
 
 export function registerPhysics(registry: CommandRegistry): void {
-  registry.registerAll(PHYSICS_COMMANDS);
+  registry.registerAll([...PHYSICS_COMMANDS, ...JOINT_COMMANDS, ...MEASURE_COMMANDS]);
   if (registered) return;
   registered = true;
   registerWorldDriver((figure) => {
@@ -573,7 +601,7 @@ export function registerPhysics(registry: CommandRegistry): void {
     DRIVERS.set(f, d);
     return d;
   });
-  for (const [type, fields, reader] of [['Body', BODY_FIELDS, readBody], ['World', WORLD_FIELDS, readWorld]] as const) {
+  for (const [type, fields, reader] of [['Body', BODY_FIELDS, readBody], ['World', WORLD_FIELDS, readWorld], ['Joint', JOINT_FIELDS, readJoint]] as const) {
     registerFieldNames(type, () => Object.keys(fields));
     registerFieldTyper(type, (field) => fields[field]);
     registerFieldReader(type, (field, v) => reader(field, v));
@@ -581,10 +609,12 @@ export function registerPhysics(registry: CommandRegistry): void {
   registerValueText((v) => {
     if (isBodyValue(v)) return `body at (${fmt(v.x)}, ${fmt(v.y)}), ${fmt(Math.sqrt(v.vx * v.vx + v.vy * v.vy))} m/s${v.asleep ? ', asleep' : ''}`;
     if (isWorldValue(v)) return `world, gravity (${fmt(v.gx)}, ${fmt(v.gy)})`;
+    if (isJointValue(v)) return `${v.kind}${v.broken ? ', broken' : `, ${fmt(v.force)} N`}`;
     return undefined;
   });
   registerTypeStyle('Body', { defaults: { color: '#c0602a', width: 2, opacity: 0.35 }, keys: ['bounce', 'friction', 'force', 'torque', 'bullet', 'group', 'charge', 'show'] });
   registerTypeStyle('World', { drawable: false });
+  registerTypeStyle('Joint', { defaults: { color: '#555555', width: 1.5 } });
   // `with solid = true` on every flat shape, and the material of solids and bodies
   const PROPS: Readonly<Record<string, PropSpec>> = {
     solid: { kind: 'bool', allowed: 'true or false', expr: true },

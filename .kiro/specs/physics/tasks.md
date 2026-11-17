@@ -11,12 +11,12 @@ Each round is one branch `feat/physics-<n>` and one PR into `integration`, merge
   - [x] 1.6 The driver: steps, checkpoints with cap, seek, catch-up, `rerun`, falling behind
   - [x] 1.7 Errors, reasons, notices, the `physics` group in modes
   - [x] 1.8 Spec tests
-- [ ] 2. Round 2: joints, forces, events (R3)
-  - [ ] 2.1 `Hinge`, `Spring`, `Rope`, `Rod`, `Weld`, `Slider`, `Pulley`, `Grab`
-  - [ ] 2.2 Force accounting by kind, `force(kind)`, `Forces`, energy and momentum measures
-  - [ ] 2.3 `Push`, `Wake`, `Sleep`, `Restart`; logged and saved as `@input`
-  - [ ] 2.4 `on b hit` handlers
-  - [ ] 2.5 Spec tests, including accuracy checks of design 11.5
+- [x] 2. Round 2: joints, forces, events (R3)
+  - [x] 2.1 `Hinge`, `Spring`, `Rope`, `Rod`, `Weld`, `Slider`, `Pulley`, `Grab`
+  - [x] 2.2 Force accounting by kind, `force(kind)`, `Forces`, energy and momentum measures
+  - [x] 2.3 `Push`, `Wake`, `Sleep`, `Restart`; logged and saved as `@input`
+  - [x] 2.4 `on b hit` handlers
+  - [x] 2.5 Spec tests, including accuracy checks of design 11.5
 - [ ] 3. Round 3: studio and embed in 2D (R4)
   - [ ] 3.1 Drawing bodies, solids, joints, arrows, contacts
   - [ ] 3.2 Player bar, catching up and slow marks; the host measures physics time per frame and slows the film when it goes over 6 ms (the kernel holds the clock while the world catches up)

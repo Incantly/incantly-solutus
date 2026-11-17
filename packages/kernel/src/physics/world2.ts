@@ -80,6 +80,8 @@ interface Contact {
   restitution: number;
   touching: boolean;
   wasTouching: boolean;
+  /** The contact pushed in the last step (for hits). */
+  pushed: boolean;
   // solver data
   nx: number;
   ny: number;
@@ -702,6 +704,7 @@ export class World2 implements Poses {
         c.ni0 = c.ti0 = c.ni1 = c.ti1 = 0;
         c.wasTouching = false;
         c.touching = false;
+        c.pushed = false;
         c.m.count = 0;
       } else old.delete(key);
       c.sa = sa;
@@ -743,6 +746,7 @@ export class World2 implements Poses {
       c.wasTouching = c.touching;
       if (c.m.count === 0) {
         c.touching = false;
+        c.pushed = false;
         next.set(key, c);
         continue;
       }
@@ -1285,9 +1289,16 @@ export class World2 implements Poses {
     return { x: this.forces[o] as number, y: this.forces[o + 1] as number };
   }
 
+  /**
+   * A hit is the first step a contact pushes (a speculative contact pushes the step before the shapes meet), when the
+   * two came together faster than 0.05 m/s.
+   */
   private collectHits(): void {
     for (const c of this.contacts) {
-      if (!c.touching || c.wasTouching) continue;
+      const pushing = c.max0 > 0 || (c.m.count > 1 && c.max1 > 0);
+      const was = c.pushed;
+      c.pushed = pushing;
+      if (!pushing || was) continue;
       const speed = -Math.min(c.rv0, c.m.count > 1 ? c.rv1 : c.rv0);
       if (!(speed > HIT_THRESHOLD)) continue;
       this.hits.push({ a: c.a, b: c.b, speed, x: c.px0, y: c.py0, impulse: c.ni0 + (c.m.count > 1 ? c.ni1 : 0) });
@@ -1361,7 +1372,7 @@ export class World2 implements Poses {
     }
     out.push(this.contactMap.size);
     for (const c of this.contactMap.values()) {
-      out.push(c.key, c.m.count, c.touching ? 1 : 0, c.m.id0, c.ni0, c.ti0, c.m.id1, c.ni1, c.ti1);
+      out.push(c.key, c.m.count, (c.touching ? 1 : 0) + (c.pushed ? 2 : 0), c.m.id0, c.ni0, c.ti0, c.m.id1, c.ni1, c.ti1);
     }
     out.push(this.joints.length);
     for (const j of this.joints) {
@@ -1396,7 +1407,9 @@ export class World2 implements Poses {
       const c = this.pool.pop() ?? newContact();
       c.key = s[k++] as number;
       c.m.count = s[k++] as number;
-      c.touching = s[k++] === 1;
+      const flags = s[k++] as number;
+      c.touching = (flags & 1) === 1;
+      c.pushed = (flags & 2) === 2;
       c.m.id0 = s[k++] as number;
       c.ni0 = s[k++] as number;
       c.ti0 = s[k++] as number;
@@ -1440,7 +1453,7 @@ export function mixFriction(a: number, b: number): number {
 
 function newContact(): Contact {
   return {
-    key: 0, sa: 0, sb: 0, a: 0, b: 0, m: newManifold(), ni0: 0, ti0: 0, ni1: 0, ti1: 0, friction: 0, restitution: 0, touching: false, wasTouching: false,
+    key: 0, sa: 0, sb: 0, a: 0, b: 0, m: newManifold(), ni0: 0, ti0: 0, ni1: 0, ti1: 0, friction: 0, restitution: 0, touching: false, wasTouching: false, pushed: false,
     nx: 0, ny: 0, rAx0: 0, rAy0: 0, rBx0: 0, rBy0: 0, rAx1: 0, rAy1: 0, rBx1: 0, rBy1: 0, nm0: 0, tm0: 0, nm1: 0, tm1: 0, rv0: 0, rv1: 0, s0: 0, s1: 0, max0: 0, max1: 0, px0: 0, py0: 0,
     block: false, k11: 0, k22: 0, k12: 0, i11: 0, i22: 0, i12: 0,
   };
