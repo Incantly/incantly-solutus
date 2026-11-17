@@ -24,6 +24,12 @@ import { MAX_CORRECTION, MAX_DROPS } from './fluid2';
 export const REACH3 = 1.6;
 /** Drop size in space when a figure has only taps. */
 export const DEFAULT_SPACING3 = 0.1;
+/**
+ * The drops list their pairs on every third step and keep the list for the next two (round 7): a drop moves far less than
+ * its reach in two steps, and the weights fade to nothing at the reach, so a pair that came near is missed only where it
+ * would weigh almost nothing. Checkpoints fall on listing steps (the driver keeps them a multiple of this apart).
+ */
+export const PAIR_EVERY = 3;
 const NK = 10;
 
 export interface DropSource3 {
@@ -225,21 +231,23 @@ export class Fluid3 {
   unstable = false;
   private rho0 = 1;
   private eps = 1;
+  /** The constraint's gradient squared, summed over the neighbours of a drop at rest, plus eps: every drop's λ divides by it. */
+  private denom = 1;
   private k6 = 1;
   private ks = 1;
   private lam = new Float64Array(0);
   private dx = new Float64Array(0);
   private dy = new Float64Array(0);
   private dz = new Float64Array(0);
-  private gx = new Float64Array(0);
-  private gy = new Float64Array(0);
-  private gz = new Float64Array(0);
+  /** Each pair's gradient over its distance, in the density pass now. */
+  private gs = new Float64Array(0);
+  /** Each pair's weight in the last density pass, for the viscosity. */
+  private vw = new Float64Array(0);
   private rho = new Float64Array(0);
   private sx = new Float64Array(0);
   private sy = new Float64Array(0);
   private sz = new Float64Array(0);
   private s2 = new Float64Array(0);
-  private vw = new Float64Array(0);
   private visc: Float64Array;
   private mass: Float64Array;
   /** Planes of the hull being tested, scratch. */
@@ -256,6 +264,7 @@ export class Fluid3 {
     this.mass = new Float64Array(Math.max(1, owners));
     for (const s of sources) {
       this.visc[s.owner] = Math.min(1, Math.max(0, s.viscosity));
+      if ((this.visc[s.owner] as number) > 0) this.anyViscous = true;
       this.mass[s.owner] = Math.max(1e-6, s.density) * spacing * spacing * spacing;
     }
     const H = this.H;
@@ -285,6 +294,7 @@ export class Fluid3 {
     }
     this.rho0 = rho;
     this.eps = 0.1 * (g2 / (rho * rho));
+    this.denom = g2 / (rho * rho) + this.eps;
     let total = 0;
     for (const s of sources) if (s.start) total += s.start.xs.length;
     this.ps = new ParticleSet(Math.min(MAX_DROPS, total + 64));
@@ -324,9 +334,7 @@ export class Fluid3 {
     this.sz = new Float64Array(c);
     this.s2 = new Float64Array(c);
     const np = (c * MAX_NEIGHBOURS3) / 2;
-    this.gx = new Float64Array(np);
-    this.gy = new Float64Array(np);
-    this.gz = new Float64Array(np);
+    this.gs = new Float64Array(np);
     this.vw = new Float64Array(np);
   }
 
@@ -467,10 +475,16 @@ export class Fluid3 {
     }
     const grid = this.grid;
     grid.build(x, y, z, n);
-    grid.findPairs(x, y, z, n, this.H);
+    // the pairs are listed on every third step (PAIR_EVERY), and afresh after a load or when drops went: a checkpoint is on
+    // a listing step, so a seek lists them where the film did
+    if (this.stale || this.steps % PAIR_EVERY === 1) {
+      grid.findPairs(x, y, z, n, this.H);
+      this.stale = false;
+    }
     for (let pass = 0; pass < 2; pass++) {
-      this.densityPass(n);
-      this.collide(w);
+      this.densityPass(n, pass === 1);
+      // once, after the last pass: the walls win (a drop's whole path this step is tested, so none slips through)
+      if (pass === 1) this.collide(w);
     }
     const inv = 1 / h;
     for (let i = 0; i < n; i++) {
@@ -492,10 +506,35 @@ export class Fluid3 {
       }
     }
     if (bad) this.unstable = true;
-    if (out) ps.compact((i) => Math.abs(x[i] as number) <= range && Math.abs(y[i] as number) <= range && Math.abs(z[i] as number) <= range);
+    if (out) {
+      ps.compact((i) => Math.abs(x[i] as number) <= range && Math.abs(y[i] as number) <= range && Math.abs(z[i] as number) <= range);
+      this.stale = true;
+    }
   }
 
-  private densityPass(n: number): void {
+  /** The pairs must be listed afresh at the next step (after a load, or when drops went). */
+  private stale = true;
+
+  /** The pair list as it is now, to put back after a look ahead (the driver's `sample`). */
+  keepPairs(): { pi: Int32Array; pj: Int32Array; pairs: number; stale: boolean } {
+    const g = this.grid;
+    return { pi: g.pi.slice(0, g.pairs), pj: g.pj.slice(0, g.pairs), pairs: g.pairs, stale: this.stale };
+  }
+
+  restorePairs(k: { pi: Int32Array; pj: Int32Array; pairs: number; stale: boolean }): void {
+    const g = this.grid;
+    g.pi.set(k.pi);
+    g.pj.set(k.pj);
+    g.pairs = k.pairs;
+    this.stale = k.stale;
+  }
+
+  /**
+   * One density pass, Jacobi over the pairs. A pair keeps one number, its gradient over its distance; the direction is
+   * read again from the places, which do not move until the pass ends (less to read and write). Only the last pass keeps
+   * the pairs' weights, for the viscosity.
+   */
+  private densityPass(n: number, last: boolean): void {
     const { x, y, z } = this.ps;
     const grid = this.grid;
     const pi = grid.pi;
@@ -504,16 +543,12 @@ export class Fluid3 {
     const H = this.H;
     const H2 = H * H;
     const k6 = this.k6;
-    const ks = this.ks;
     const inv0 = 1 / this.rho0;
-    const { lam, gx: gxs, gy: gys, gz: gzs, rho, sx, sy, sz, s2, vw } = this;
+    const ks = this.ks * inv0;
+    const { lam, gs, rho, vw } = this;
     const self = k6 * H2 * H2 * H2;
     const invSelf = 1 / self;
     rho.fill(self, 0, n);
-    sx.fill(0, 0, n);
-    sy.fill(0, 0, n);
-    sz.fill(0, 0, n);
-    s2.fill(0, 0, n);
     for (let p = 0; p < np; p++) {
       const i = pi[p] as number;
       const j = pj[p] as number;
@@ -522,61 +557,50 @@ export class Fluid3 {
       const ez = (z[i] as number) - (z[j] as number);
       const r2 = ex * ex + ey * ey + ez * ez;
       if (r2 >= H2) {
-        gxs[p] = 0;
-        gys[p] = 0;
-        gzs[p] = 0;
-        vw[p] = 0;
+        gs[p] = 0;
+        if (last) vw[p] = 0;
         continue;
       }
       const q = H2 - r2;
       const wt = k6 * q * q * q;
-      vw[p] = wt * invSelf;
+      if (last) vw[p] = wt * invSelf;
       rho[i] = (rho[i] as number) + wt;
       rho[j] = (rho[j] as number) + wt;
-      let gx = 0;
-      let gy = 0;
-      let gz = 0;
+      let g = 0;
       if (r2 > 1e-24) {
         const r = Math.sqrt(r2);
         const hr = H - r;
-        const g = (ks * hr * hr * inv0) / r;
-        gx = g * ex;
-        gy = g * ey;
-        gz = g * ez;
+        g = (ks * hr * hr) / r;
       }
-      gxs[p] = gx;
-      gys[p] = gy;
-      gzs[p] = gz;
-      const g2 = gx * gx + gy * gy + gz * gz;
-      sx[i] = (sx[i] as number) + gx;
-      sy[i] = (sy[i] as number) + gy;
-      sz[i] = (sz[i] as number) + gz;
-      sx[j] = (sx[j] as number) - gx;
-      sy[j] = (sy[j] as number) - gy;
-      sz[j] = (sz[j] as number) - gz;
-      s2[i] = (s2[i] as number) + g2;
-      s2[j] = (s2[j] as number) + g2;
+      gs[p] = g;
     }
-    const eps = this.eps;
+    // λ = −C / (the gradient's size squared at rest, plus eps): a fixed stiffness, the same for every drop (round 7: the
+    // per-drop sums cost a third of the step and change λ little where drops crowd, the only place it acts)
+    const inv = 1 / this.denom;
+    let any = false;
     for (let i = 0; i < n; i++) {
       const C = (rho[i] as number) * inv0 - 1;
-      const a = sx[i] as number;
-      const b = sy[i] as number;
-      const c = sz[i] as number;
-      lam[i] = C > 0 ? -C / (a * a + b * b + c * c + (s2[i] as number) + eps) : 0;
+      if (C > 0) {
+        lam[i] = -C * inv;
+        any = true;
+      } else lam[i] = 0;
     }
+    if (!any) return;
     const { dx, dy, dz } = this;
     dx.fill(0, 0, n);
     dy.fill(0, 0, n);
     dz.fill(0, 0, n);
     for (let p = 0; p < np; p++) {
+      const g = gs[p] as number;
+      if (g === 0) continue;
       const i = pi[p] as number;
       const j = pj[p] as number;
       const sum = (lam[i] as number) + (lam[j] as number);
       if (sum === 0) continue;
-      const mx = sum * (gxs[p] as number);
-      const my = sum * (gys[p] as number);
-      const mz = sum * (gzs[p] as number);
+      const f = sum * g;
+      const mx = f * ((x[i] as number) - (x[j] as number));
+      const my = f * ((y[i] as number) - (y[j] as number));
+      const mz = f * ((z[i] as number) - (z[j] as number));
       dx[i] = (dx[i] as number) + mx;
       dy[i] = (dy[i] as number) + my;
       dz[i] = (dz[i] as number) + mz;
@@ -603,7 +627,13 @@ export class Fluid3 {
     }
   }
 
+  /** True when some liquid has a viscosity above 0. */
+  private anyViscous = false;
+
+  /** XSPH viscosity: each drop's speed moves toward its neighbours' by its liquid's viscosity, with the last pass's weights. */
   private viscosity(n: number): void {
+    // on every second step, twice as strong (at most 1): the same smoothing for half the work (round 7)
+    if (!this.anyViscous || this.steps % 2 === 1) return;
     const { vx, vy, vz, owner } = this.ps;
     const grid = this.grid;
     const pi = grid.pi;
@@ -611,20 +641,15 @@ export class Fluid3 {
     const np = grid.pairs;
     const vw = this.vw;
     const visc = this.visc;
-    let any = false;
-    for (let o = 0; o < visc.length; o++) if ((visc[o] as number) > 0) any = true;
-    if (!any) return;
-    const { sx, sy, sz } = this;
-    const sw = this.s2;
+    const { sx, sy, sz, rho } = this;
     sx.fill(0, 0, n);
     sy.fill(0, 0, n);
     sz.fill(0, 0, n);
-    sw.fill(0, 0, n);
     for (let p = 0; p < np; p++) {
-      const i = pi[p] as number;
-      const j = pj[p] as number;
       const wt = vw[p] as number;
       if (wt === 0) continue;
+      const i = pi[p] as number;
+      const j = pj[p] as number;
       const ux = wt * ((vx[j] as number) - (vx[i] as number));
       const uy = wt * ((vy[j] as number) - (vy[i] as number));
       const uz = wt * ((vz[j] as number) - (vz[i] as number));
@@ -634,13 +659,15 @@ export class Fluid3 {
       sx[j] = (sx[j] as number) - ux;
       sy[j] = (sy[j] as number) - uy;
       sz[j] = (sz[j] as number) - uz;
-      sw[i] = (sw[i] as number) + wt;
-      sw[j] = (sw[j] as number) + wt;
     }
+    // each drop's weights add up to its last density less its own, over its own
+    const H2 = this.H * this.H;
+    const self = this.k6 * H2 * H2 * H2;
+    const invSelf = 1 / self;
     for (let i = 0; i < n; i++) {
-      const s = sw[i] as number;
+      const s = ((rho[i] as number) - self) * invSelf;
       if (!(s > 0)) continue;
-      const f = (visc[owner[i] as number] as number) / Math.max(1, s);
+      const f = Math.min(1, 2 * (visc[owner[i] as number] as number)) / Math.max(1, s);
       vx[i] = (vx[i] as number) + f * (sx[i] as number);
       vy[i] = (vy[i] as number) + f * (sy[i] as number);
       vz[i] = (vz[i] as number) + f * (sz[i] as number);
@@ -742,11 +769,22 @@ export class Fluid3 {
       pl[f * 4 + 3] = nx * (wv[c0 * 3] as number) + ny * (wv[c0 * 3 + 1] as number) + nz * (wv[c0 * 3 + 2] as number) + r;
     }
     const { x0, y0, z0 } = ps;
+    const bx0 = (lo[k * 3] as number) - r;
+    const by0 = (lo[k * 3 + 1] as number) - r;
+    const bz0 = (lo[k * 3 + 2] as number) - r;
+    const bx1 = (hi[k * 3] as number) + r;
+    const by1 = (hi[k * 3 + 1] as number) + r;
+    const bz1 = (hi[k * 3 + 2] as number) + r;
     for (let q = 0; q < m; q++) {
       const i = found[q] as number;
       const xi = x[i] as number;
       const yi = y[i] as number;
       const zi = z[i] as number;
+      // the box of the drop's path this step misses the hull's box: it cannot touch
+      const ax0 = x0[i] as number;
+      const ay0 = y0[i] as number;
+      const az0 = z0[i] as number;
+      if ((xi < bx0 && ax0 < bx0) || (xi > bx1 && ax0 > bx1) || (yi < by0 && ay0 < by0) || (yi > by1 && ay0 > by1) || (zi < bz0 && az0 < bz0) || (zi > bz1 && az0 > bz1)) continue;
       // the face the drop is least inside of, at its place now
       let sep = -Infinity;
       let best = 0;
@@ -1021,5 +1059,6 @@ export class Fluid3 {
     ps.y0.set(ps.y.subarray(0, n));
     ps.z0.set(ps.z.subarray(0, n));
     this.left.length = 0;
+    this.stale = true;
   }
 }

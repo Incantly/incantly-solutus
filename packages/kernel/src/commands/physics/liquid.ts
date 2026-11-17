@@ -210,7 +210,7 @@ export const LIQUID_COMMANDS: readonly CommandSpec[] = [
           const n = Math.round(num(count, 0));
           if (!(n >= 1)) return call.fail('degenerate', 'a liquid needs at least one drop');
           const spec: LiquidSpec = {
-            kind: 'fill', region3: r, count: Math.min(MAX_DROPS, n), viscosity: Math.min(1, Math.max(0, num(viscosity, DEFAULT_VISCOSITY))), density: num(density, 1000) > 0 ? num(density, 1000) : 1000,
+            kind: 'fill', region3: r, count: Math.min(MAX_DROPS, n), viscosity: Math.min(1, Math.max(0, num(viscosity, DEFAULT_VISCOSITY))), density: num(density, 1) > 0 ? num(density, 1) : 1,
             ...(typeof color === 'string' && color !== '' ? { color } : {}),
           };
           return startValue(spec);
@@ -264,7 +264,7 @@ export const LIQUID_COMMANDS: readonly CommandSpec[] = [
           const m = Math.round(num(max, POUR_MAX));
           const spec: LiquidSpec = {
             kind: 'pour', at3: { x: p.x, y: p.y, z: p.z }, rate: r, vx: v.x, vy: v.y, vz: v.z, count: Math.min(MAX_DROPS, Math.max(1, m)),
-            viscosity: Math.min(1, Math.max(0, num(viscosity, DEFAULT_VISCOSITY))), density: num(density, 1000) > 0 ? num(density, 1000) : 1000,
+            viscosity: Math.min(1, Math.max(0, num(viscosity, DEFAULT_VISCOSITY))), density: num(density, 1) > 0 ? num(density, 1) : 1,
             ...(typeof color === 'string' && color !== '' ? { color } : {}),
           };
           return startValue(spec);

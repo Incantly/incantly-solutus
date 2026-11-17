@@ -46,6 +46,7 @@ export class NeighbourGrid3 {
   pairs = 0;
   /** Scratch for `inBox`. */
   found = new Int32Array(0);
+  private off = new Int32Array(13);
 
   setSize(size: number): void {
     this.size = size;
@@ -203,8 +204,14 @@ export class NeighbourGrid3 {
     const sx = this.sx;
     const sy = this.sy;
     const sz = this.sz;
+    const nbrN = this.nbrN;
+    const pi = this.pi;
+    const pj = this.pj;
+    const M = MAX_NEIGHBOURS3;
     const nx = this.nx;
     const nxy = this.nx * this.ny;
+    const off = this.off;
+    for (let c = 0; c < 13; c++) off[c] = (HX[c] as number) + (HY[c] as number) * nx + (HZ[c] as number) * nxy;
     const t = this.slots;
     let np = 0;
     for (let s = 0; s < t; s++) {
@@ -215,16 +222,26 @@ export class NeighbourGrid3 {
         const xi = sx[u] as number;
         const yi = sy[u] as number;
         const zi = sz[u] as number;
+        const i = sorted[u] as number;
         for (let v = u + 1; v < b; v++) {
           const ex = (sx[v] as number) - xi;
           const ey = (sy[v] as number) - yi;
           const ez = (sz[v] as number) - zi;
-          if (ex * ex + ey * ey + ez * ez < r2) np = this.addPair(sorted[u] as number, sorted[v] as number, np);
+          if (ex * ex + ey * ey + ez * ez >= r2) continue;
+          const j = sorted[v] as number;
+          const mi = nbrN[i] as number;
+          const mj = nbrN[j] as number;
+          if (mi >= M || mj >= M) continue;
+          nbrN[i] = mi + 1;
+          nbrN[j] = mj + 1;
+          pi[np] = i;
+          pj[np] = j;
+          np++;
         }
       }
       // a cell with drops is never on the border, so its 26 neighbours are in the table
       for (let c = 0; c < 13; c++) {
-        const ns = s + (HX[c] as number) + (HY[c] as number) * nx + (HZ[c] as number) * nxy;
+        const ns = s + (off[c] as number);
         const na = start[ns] as number;
         const nb = start[ns + 1] as number;
         if (na === nb) continue;
@@ -232,11 +249,21 @@ export class NeighbourGrid3 {
           const xj = sx[q] as number;
           const yj = sy[q] as number;
           const zj = sz[q] as number;
+          const j = sorted[q] as number;
           for (let u = a; u < b; u++) {
             const ex = xj - (sx[u] as number);
             const ey = yj - (sy[u] as number);
             const ez = zj - (sz[u] as number);
-            if (ex * ex + ey * ey + ez * ez < r2) np = this.addPair(sorted[u] as number, sorted[q] as number, np);
+            if (ex * ex + ey * ey + ez * ez >= r2) continue;
+            const i = sorted[u] as number;
+            const mi = nbrN[i] as number;
+            const mj = nbrN[j] as number;
+            if (mi >= M || mj >= M) continue;
+            nbrN[i] = mi + 1;
+            nbrN[j] = mj + 1;
+            pi[np] = i;
+            pj[np] = j;
+            np++;
           }
         }
       }

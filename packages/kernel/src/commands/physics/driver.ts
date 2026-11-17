@@ -20,7 +20,7 @@ import { BodyType, FK, FORCE_KINDS, World2 } from '../../physics/world2';
 import { atan2, cos, sin } from '../../physics/math';
 import { solidShapeOf } from './shapes';
 import type { BodySpec, BodyValue, WorldValue } from './types';
-import { DEFAULT_WORLD, isBodyValue, isWorldValue } from './types';
+import { DEFAULT_WORLD, collectBuffers, isBodyValue, isWorldValue } from './types';
 import type { JointEnd, JointValue } from './joints';
 import { isJointValue } from './joints';
 import type { JointMember } from './jointbuild';
@@ -36,8 +36,9 @@ import type { DropSource2 } from '../../physics/fluid2';
 import { DEFAULT_SPACING, Fluid2, fillRegion, spacingFor } from '../../physics/fluid2';
 import type { Water2 } from '../../physics/water2';
 import { WaterForces, waterClip } from '../../physics/water2';
-import type { LiquidValue, WaterValue } from './liquid';
-import { isLiquidValue, isWaterValue } from './liquid';
+import type { LiquidValue, WaterValue, WavesValue } from './liquid';
+import { isLiquidValue, isWaterValue, isWavesValue } from './liquid';
+import { WaveGrid } from '../../physics/waves';
 
 /** Checkpoints every half second of film (design 10.3). */
 const CHECKPOINT_SECONDS = 0.5;
@@ -104,6 +105,10 @@ export class PhysicsDriver implements WorldDriver {
   liquidMembers: { readonly rec: ObjRec; readonly owner: number; readonly value: LiquidValue }[] = [];
   private waters: Water2[] = [];
   private waterForces = new WaterForces();
+  /** Waves in the plane (round 7, design 9.3): a line of heights along a segment. */
+  private wavesRecs: ObjRec[] = [];
+  private wavesSpecs = new Map<ObjId, WavesValue>();
+  waveMembers: { readonly rec: ObjRec; readonly value: WavesValue; readonly grid: WaveGrid }[] = [];
   /** The value each body's rule gave (its start), kept because the cell holds the pose. */
   private specs = new Map<ObjId, BodyValue>();
   private worldSettings: WorldValue | undefined;
@@ -192,6 +197,13 @@ export class PhysicsDriver implements WorldDriver {
       if (last && computed.defined && this.live() && last.defined && isLiquidValue(last.value) && isLiquidValue(computed.value) && sameValue(last.value.spec, computed.value.spec)) return last;
       return undefined;
     }
+    if (rec.p.type.k === 'Waves') {
+      if (computed.defined && isWavesValue(computed.value)) this.wavesSpecs.set(rec.id, computed.value);
+      else this.wavesSpecs.delete(rec.id);
+      const last = this.lastCells.get(rec.id);
+      if (last && computed.defined && this.live() && last.defined && isWavesValue(last.value) && isWavesValue(computed.value) && sameValue(wavesKey2(last.value), wavesKey2(computed.value))) return last;
+      return undefined;
+    }
     if (rec.p.type.k === 'World') {
       if (computed.defined && isWorldValue(computed.value)) this.worldSettings = computed.value;
       const last = this.lastCells.get(rec.id);
@@ -266,7 +278,7 @@ export class PhysicsDriver implements WorldDriver {
 
   owns(id: ObjId): boolean {
     if (this.remote) return this.remoteCells.has(this.acc.byId(id)?.p.name ?? '');
-    return this.byId.has(id) || this.worldRec?.id === id || this.liquidMembers.some((l) => l.rec.id === id);
+    return this.byId.has(id) || this.worldRec?.id === id || this.liquidMembers.some((l) => l.rec.id === id) || this.waveMembers.some((m) => m.rec.id === id);
   }
 
   sampleRecs(): readonly ObjRec[] {
@@ -314,7 +326,7 @@ export class PhysicsDriver implements WorldDriver {
   afterPass(): readonly ObjRec[] {
     this.scan();
     if (this.remote) return this.writeRemote();
-    if (this.bodyRecs.length === 0 && this.solidRecs.length === 0 && this.liquidRecs.length === 0 && !this.world) return [];
+    if (this.bodyRecs.length === 0 && this.solidRecs.length === 0 && this.liquidRecs.length === 0 && this.wavesRecs.length === 0 && !this.world) return [];
     if (this.coneDirty) this.findCone();
     const sig = this.signature();
     if (!this.sig || !sameValue(this.sig, sig)) {
@@ -352,6 +364,7 @@ export class PhysicsDriver implements WorldDriver {
     this.vehicleRecs = [];
     this.liquidRecs = [];
     this.waterRecs = [];
+    this.wavesRecs = [];
     this.worldRec = undefined;
     this.coneDirty = true;
     // a figure with a body in space is a world in space: its driver takes the world, the ground and the solids
@@ -360,6 +373,7 @@ export class PhysicsDriver implements WorldDriver {
       const k = r.p.type.k;
       if (k === 'Liquid') this.liquidRecs.push(r);
       else if (k === 'Water') this.waterRecs.push(r);
+      else if (k === 'Waves') this.wavesRecs.push(r);
       else if (isJointRec(r)) this.jointRecs.push(r);
       else if (isWheelRec(r)) this.wheelRecs.push(r);
       else if (k === 'Vehicle') this.vehicleRecs.push(r);
@@ -451,6 +465,14 @@ export class PhysicsDriver implements WorldDriver {
     return undefined;
   }
 
+  private wavesOf(r: ObjRec): WavesValue | undefined {
+    const s = this.wavesSpecs.get(r.id);
+    const v = s ?? (!this.written.has(r.id) && r.cell.defined && isWavesValue(r.cell.value) ? r.cell.value : undefined);
+    if (!v || v.space) return undefined;
+    if (!s) this.wavesSpecs.set(r.id, v);
+    return v;
+  }
+
   private waterOf(r: ObjRec): WaterValue | undefined {
     return r.cell.defined && isWaterValue(r.cell.value) ? r.cell.value : undefined;
   }
@@ -508,6 +530,10 @@ export class PhysicsDriver implements WorldDriver {
     for (const r of this.waterRecs) {
       const wv = this.waterOf(r);
       sig.push(r.id, this.varySet.has(r) ? ['varying', r.p.compiled] : wv ? [wv.level, wv.region ?? null] : null);
+    }
+    for (const r of this.wavesRecs) {
+      const v = this.wavesOf(r);
+      sig.push(r.id, v ? wavesKey2(v) : null);
     }
     return sig;
   }
@@ -595,10 +621,11 @@ export class PhysicsDriver implements WorldDriver {
         wheelDefs.push({ rec: r, ...(r.p.type.k === 'List' ? { item } : {}), value: wv, index, chassis });
       }
     }
-    if (defs.length === 0 && !this.liquidRecs.some((r) => this.liquidOf(r) !== undefined)) {
+    if (defs.length === 0 && !this.liquidRecs.some((r) => this.liquidOf(r) !== undefined) && !this.wavesRecs.some((r) => this.wavesOf(r) !== undefined)) {
       this.world = undefined;
       this.fluid = undefined;
       this.liquidMembers = [];
+      this.waveMembers = [];
       this.members = [];
       this.byId = new Map();
       return;
@@ -627,6 +654,7 @@ export class PhysicsDriver implements WorldDriver {
       this.nameOfIndex[wd.index] = wd.item !== undefined ? `${wd.rec.p.name}[${wd.item + 1}]` : wd.rec.p.name;
     }
     for (const m of members) if (m.role === 'body' && m.spec && m.spec.parts > 1) this.warnOnce(`split:${m.rec.id}:${m.spec.parts}`, makeNotice('split_shape', { name: m.rec.p.name, parts: m.spec.parts }, [m.rec.p.name]));
+    this.buildWaves(world);
     this.buildFluid();
     this.n = 0;
     this.prevX = Float64Array.from(world.px);
@@ -676,7 +704,19 @@ export class PhysicsDriver implements WorldDriver {
     this.fluid = new Fluid2(d, sources, list.length);
   }
 
-  /** Still water as the step reads it: the level of each `Water` now (a formula of `t` is read at each step). */
+  /** Each wave line's heights, stepped with the world's step and its gravity (design 9.3). */
+  private buildWaves(world: World2): void {
+    this.waveMembers = [];
+    const g = Math.sqrt(world.gx * world.gx + world.gy * world.gy);
+    for (const r of this.wavesRecs) {
+      const v = this.wavesOf(r);
+      if (!v) continue;
+      const grid = new WaveGrid({ nx: v.nx, ny: 1, x0: v.x0, y0: 0, dx: v.dx, dy: 1, level: v.level, depth: v.depth, damping: v.damping }, g, 1 / this.rate);
+      this.waveMembers.push({ rec: r, value: v, grid });
+    }
+  }
+
+  /** Still water as the step reads it: the level of each `Water` now (a formula of `t` is read at each step), and waves. */
   private refreshWaters(all: boolean): void {
     if (!all && !this.waterRecs.some((r) => this.varySet.has(r))) return;
     const out: Water2[] = [];
@@ -685,30 +725,47 @@ export class PhysicsDriver implements WorldDriver {
       if (!wv) continue;
       out.push({ level: wv.level, density: wv.density, ...(wv.region ? { clip: waterClip(wv.region) } : {}) });
     }
+    for (const wm of this.waveMembers) {
+      const grid = wm.grid;
+      out.push({ level: wm.value.level, density: 1, local: (x, line) => grid.line2(x, line) });
+    }
     this.waters = out;
   }
 
   /** Everything a step reads, bodies and drops, as one array (a checkpoint). */
   private saveState(): Float64Array {
     const ws = (this.world as World2).save();
-    if (!this.fluid) return ws;
-    const fs = this.fluid.save();
-    const out = new Float64Array(1 + ws.length + fs.length);
+    if (!this.fluid && this.waveMembers.length === 0) return ws;
+    const fs = this.fluid ? this.fluid.save() : new Float64Array(0);
+    let len = 1 + ws.length + fs.length;
+    for (const m of this.waveMembers) len += 2 * m.grid.n;
+    const out = new Float64Array(len);
     out[0] = ws.length;
     out.set(ws, 1);
-    out.set(fs, 1 + ws.length);
+    let k = 1 + ws.length;
+    // the waves first (their size is known from the figure), then the drops to the end, as round 6 kept them
+    for (const m of this.waveMembers) {
+      out.set(m.grid.save(), k);
+      k += 2 * m.grid.n;
+    }
+    out.set(fs, k);
     return out;
   }
 
   private loadState(s: Float64Array): void {
     const w = this.world as World2;
-    if (!this.fluid) {
+    if (!this.fluid && this.waveMembers.length === 0) {
       w.load(s);
       return;
     }
     const n = s[0] as number;
     w.load(s.subarray(1, 1 + n));
-    this.fluid.load(s.subarray(1 + n));
+    let k = 1 + n;
+    for (const m of this.waveMembers) {
+      m.grid.load(s.subarray(k, k + 2 * m.grid.n));
+      k += 2 * m.grid.n;
+    }
+    if (this.fluid) this.fluid.load(s.subarray(k));
   }
 
   /** A hash of everything a step reads (FNV-1a over the bytes): equal films have equal hashes at every step. */
@@ -968,6 +1025,13 @@ export class PhysicsDriver implements WorldDriver {
     // design 9.6: the drops' push of the last step, and still water's buoyancy and drag at the pose now, go in first
     const fl = this.fluid;
     if (fl) fl.applyImpulses(w);
+    if (this.waveMembers.length > 0) {
+      for (let i = 0; i < w.n; i++) if (w.type[i] === BodyType.Dynamic && !w.gone.has(i)) w.updateShapes(i);
+      for (const wm of this.waveMembers) {
+        wm.grid.pressBodies2(w);
+        wm.grid.step();
+      }
+    }
     if (this.waters.length > 0) {
       this.refreshWaters(false);
       this.waterForces.apply(w, this.waters, h);
@@ -1515,6 +1579,21 @@ export class PhysicsDriver implements WorldDriver {
         if (this.acc.write(lm.rec, cell)) changed.push(lm.rec);
       }
     }
+    // waves in the plane: the height of each point
+    for (const wm of this.waveMembers) {
+      const g = wm.grid;
+      let ok = true;
+      const heights = new Float32Array(g.n);
+      for (let k = 0; k < g.n; k++) {
+        const u = g.u[k] as number;
+        if (!(Math.abs(u) < BLOW_UP)) ok = false;
+        heights[k] = u;
+      }
+      const cell: Cell = ok ? { defined: true, value: { ...wm.value, heights, speed: g.c } satisfies WavesValue } : { defined: false, reason: 'unstable_world' };
+      this.lastCells.set(wm.rec.id, cell);
+      this.written.add(wm.rec.id);
+      if (this.acc.write(wm.rec, cell)) changed.push(wm.rec);
+    }
     // bodies whose start is undefined stay as their rule left them
     if (this.worldRec) {
       const s = this.settings();
@@ -1709,6 +1788,7 @@ export class PhysicsDriver implements WorldDriver {
     for (const w of this.wheelMembers) add(w.rec);
     for (const r of this.vehicleRecs) add(r);
     for (const l of this.liquidMembers) add(l.rec);
+    for (const m of this.waveMembers) add(m.rec);
     if (this.worldRec) add(this.worldRec);
     return { cells, transfer };
   }
@@ -1810,24 +1890,6 @@ function numWords(v: unknown): string | undefined {
   return undefined;
 }
 
-/** The typed arrays inside a cell's value, to move to the page instead of copying. */
-function collectBuffers(v: unknown, out: ArrayBuffer[], depth: number): void {
-  if (depth > 3 || typeof v !== 'object' || v === null) return;
-  if (ArrayBuffer.isView(v)) {
-    const b = v.buffer;
-    if (b instanceof ArrayBuffer && !out.includes(b)) out.push(b);
-    return;
-  }
-  if (Array.isArray(v)) {
-    for (const x of v) collectBuffers(x, out, depth + 1);
-    return;
-  }
-  for (const k of ['forces', 'xs', 'ys'] as const) {
-    const x = (v as Record<string, unknown>)[k];
-    if (x !== undefined) collectBuffers(x, out, depth + 1);
-  }
-}
-
 function sameSpec(cell: Cell, computed: unknown): boolean {
   return cell.defined && isBodyValue(cell.value) && isBodyValue(computed) && (cell.value.spec === computed.spec || sameValue(cell.value.spec, computed.spec));
 }
@@ -1880,4 +1942,9 @@ function rigidMotion(a: readonly ShapeDef2[], b: readonly ShapeDef2[], h: number
   const vcy = (by - ay) / h;
   // the world frame of a solid is the origin: carry the centre's speed to it
   return { vx: vcx + w * ay, vy: vcy - w * ax, w };
+}
+
+/** What a wave line is built from (not its heights): equal keys give the same film. */
+function wavesKey2(v: WavesValue): unknown[] {
+  return [v.space, v.nx, v.x0, v.dx, v.level, v.depth, v.damping];
 }

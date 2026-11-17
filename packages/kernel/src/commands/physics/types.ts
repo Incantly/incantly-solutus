@@ -117,3 +117,21 @@ export const DEFAULT_WORLD: WorldValue = Object.freeze({
 });
 
 export const SHOW_WORDS = ['bodies', 'forces', 'speeds', 'contacts', 'none'] as const;
+
+/** The typed arrays inside a cell's value, to move to the page from the physics worker instead of copying (design 9.6). */
+export function collectBuffers(v: unknown, out: ArrayBuffer[], depth: number): void {
+  if (depth > 3 || typeof v !== 'object' || v === null) return;
+  if (ArrayBuffer.isView(v)) {
+    const b = v.buffer;
+    if (b instanceof ArrayBuffer && !out.includes(b)) out.push(b);
+    return;
+  }
+  if (Array.isArray(v)) {
+    for (const x of v) collectBuffers(x, out, depth + 1);
+    return;
+  }
+  for (const k of ['forces', 'xs', 'ys', 'zs', 'heights'] as const) {
+    const x = (v as Record<string, unknown>)[k];
+    if (x !== undefined) collectBuffers(x, out, depth + 1);
+  }
+}
