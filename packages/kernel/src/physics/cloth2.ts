@@ -30,8 +30,6 @@ export class Cloth2 extends ClothSet {
   private bp0 = new Float64Array(0);
   private appliedN = new Float64Array(0);
   private appliedT = new Float64Array(0);
-  private pjx = new Float64Array(0);
-  private pjy = new Float64Array(0);
   private attached = false;
   private o2 = new Float64Array(4);
 
@@ -46,8 +44,6 @@ export class Cloth2 extends ClothSet {
     this.sizeBodies(w.n);
     if (this.bp0.length !== w.n * 2) {
       this.bp0 = new Float64Array(w.n * 2);
-      this.pjx = new Float64Array(w.n);
-      this.pjy = new Float64Array(w.n);
       this.appliedN = new Float64Array(w.n * 2);
       this.appliedT = new Float64Array(w.n * 2);
       for (let i = 0; i < w.n; i++) {
@@ -563,13 +559,7 @@ export class Cloth2 extends ClothSet {
     else this.touched[(this.owner[a] as number) * this.bjx.length + b] = 1;
   }
 
-  protected override give(b: number, c: number, jx: number, jy: number, jz: number, x: number, y: number, z: number, dt: number): void {
-    super.give(b, c, jx, jy, jz, x, y, z, dt);
-    if (this.inPins) {
-      this.pjx[b] = (this.pjx[b] as number) + jx;
-      this.pjy[b] = (this.pjy[b] as number) + jy;
-    }
-  }
+
 
   /** As in space: a free point moves out (the body takes its momentum); a held one pushes the body back out. */
   private pushOut(i: number, b: number, nx: number, ny: number, depth: number, mu: number, hs: number): void {

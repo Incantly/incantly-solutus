@@ -186,6 +186,10 @@ export class ClothSet {
   bdy = new Float64Array(0);
   bdz = new Float64Array(0);
   /** The change of speed the bodies took from the cloth in this step: they drift by it over the small steps left. */
+  /** The part of the pushes owed to bodies that came through pins (the bodies took it in the small steps already). */
+  pjx = new Float64Array(0);
+  pjy = new Float64Array(0);
+  pjz = new Float64Array(0);
   bvx = new Float64Array(0);
   bvy = new Float64Array(0);
   bvz = new Float64Array(0);
@@ -488,6 +492,9 @@ export class ClothSet {
     this.bvx = F();
     this.bvy = F();
     this.bvz = F();
+    this.pjx = F();
+    this.pjy = F();
+    this.pjz = F();
     this.applied = new Float64Array(nb * 3);
     this.touched = new Uint8Array(nb * Math.max(1, this.cloths.length));
   }
@@ -552,6 +559,11 @@ export class ClothSet {
     this.bdx[b] = (this.bdx[b] as number) + im * jx * dt;
     this.bdy[b] = (this.bdy[b] as number) + im * jy * dt;
     this.bdz[b] = (this.bdz[b] as number) + im * jz * dt;
+    if (this.inPins) {
+      this.pjx[b] = (this.pjx[b] as number) + jx;
+      this.pjy[b] = (this.pjy[b] as number) + jy;
+      this.pjz[b] = (this.pjz[b] as number) + jz;
+    }
     this.bvx[b] = (this.bvx[b] as number) + im * jx;
     this.bvy[b] = (this.bvy[b] as number) + im * jy;
     this.bvz[b] = (this.bvz[b] as number) + im * jz;
@@ -1752,7 +1764,7 @@ export class ClothSet {
     const np = this.pinPoint.length;
     const nc = this.cloths.length;
     const per = this.dim === 3 ? 6 : 4;
-    const out = new Float64Array(3 + nc * 7 + np * 3 + 1 + 9 * nb + words + per * n);
+    const out = new Float64Array(3 + nc * 7 + np * 3 + 1 + 12 * nb + words + per * n);
     let k = 0;
     out[k++] = n;
     out[k++] = this.steps;
@@ -1772,7 +1784,7 @@ export class ClothSet {
       out[k++] = this.pinZ[q] as number;
     }
     out[k++] = words;
-    for (const a of [this.bjx, this.bjy, this.bjz, this.btx, this.bty, this.btz, this.bdx, this.bdy, this.bdz]) {
+    for (const a of [this.bjx, this.bjy, this.bjz, this.btx, this.bty, this.btz, this.bdx, this.bdy, this.bdz, this.pjx, this.pjy, this.pjz]) {
       out.set(a, k);
       k += nb;
     }
@@ -1816,7 +1828,7 @@ export class ClothSet {
       this.pinZ[q] = s[k++] as number;
     }
     const words = s[k++] as number;
-    for (const a of [this.bjx, this.bjy, this.bjz, this.btx, this.bty, this.btz, this.bdx, this.bdy, this.bdz]) {
+    for (const a of [this.bjx, this.bjy, this.bjz, this.btx, this.bty, this.btz, this.bdx, this.bdy, this.bdz, this.pjx, this.pjy, this.pjz]) {
       a.set(s.subarray(k, k + nb));
       k += nb;
     }

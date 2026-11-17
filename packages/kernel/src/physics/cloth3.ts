@@ -33,9 +33,6 @@ export class Cloth3 extends ClothSet {
   private appliedN = new Float64Array(0);
   private appliedT = new Float64Array(0);
   /** The part of the owed pushes that came through pins. */
-  private pjx = new Float64Array(0);
-  private pjy = new Float64Array(0);
-  private pjz = new Float64Array(0);
   private attached = false;
 
   constructor(defs: readonly ClothDef[]) {
@@ -47,10 +44,7 @@ export class Cloth3 extends ClothSet {
     this.world = w;
     this.sizeBodies(w.n);
     if (this.bp0.length !== w.n * 3) this.bp0 = Float64Array.from(w.p);
-    if (this.pjx.length !== w.n) {
-      this.pjx = new Float64Array(w.n);
-      this.pjy = new Float64Array(w.n);
-      this.pjz = new Float64Array(w.n);
+    if (this.appliedN.length !== w.n * 3) {
       this.appliedN = new Float64Array(w.n * 3);
       this.appliedT = new Float64Array(w.n * 3);
     }
@@ -780,12 +774,5 @@ export class Cloth3 extends ClothSet {
   }
 
   /** The give of the base class, with the pins' part kept apart (it counts as tension). */
-  protected override give(b: number, c: number, jx: number, jy: number, jz: number, x: number, y: number, z: number, hs: number): void {
-    super.give(b, c, jx, jy, jz, x, y, z, hs);
-    if (this.inPins) {
-      this.pjx[b] = (this.pjx[b] as number) + jx;
-      this.pjy[b] = (this.pjy[b] as number) + jy;
-      this.pjz[b] = (this.pjz[b] as number) + jz;
-    }
-  }
+
 }

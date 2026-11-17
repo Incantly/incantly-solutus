@@ -283,6 +283,26 @@ export const TOOLS: readonly ToolSpec[] = [
       return [`{smoke} = Smoke(Box((${num((p.x + q.x) / 2)}, ${num((p.y + q.y) / 2)}), ${num(Math.abs(q.x - p.x))}, ${num(Math.abs(q.y - p.y))}), 48, source = Circle((${num(s.x)}, ${num(s.y)}), ${num(r)}))`];
     }),
   ]),
+  tool('cloth', 'physics', 'Cloth', '⌇⌇', 'Click the two ends of a rope, or two corners of a box for a net: a rope hangs from its first end, a net from its top.', [
+    v('cloth', [{ kind: 'position', prompt: 'Click where the rope starts, or a corner of the net.' }, { kind: 'position', prompt: 'Click the other end of the rope, or the opposite corner of the net.' }], (a) => {
+      const p = (a[0] as Arg & { at?: { x: number; y: number } }).at;
+      const q = (a[1] as Arg & { at?: { x: number; y: number } }).at;
+      if (!p || !q || (p.x === q.x && p.y === q.y)) return [];
+      const w = Math.abs(q.x - p.x);
+      const h = Math.abs(q.y - p.y);
+      // a thin box is a line: a rope of 40 points, held at its first end; else a net held along its top
+      if (Math.min(w, h) < 0.15 * Math.max(w, h)) return [`{cloth} = Cloth((${num(p.x)}, ${num(p.y)}), (${num(q.x)}, ${num(q.y)}), 40, pins = [(${num(p.x)}, ${num(p.y)})])`];
+      return [`{cloth} = Cloth(Box((${num((p.x + q.x) / 2)}, ${num((p.y + q.y) / 2)}), ${num(w)}, ${num(h)}), 24, 16, pins = "top")`];
+    }),
+  ]),
+  tool('pin', 'physics', 'Pin', '•', 'Click a cloth, then the point to hold; then a body to pin it to, or Enter to hold it still.', [
+    v('pin', [O('Click a cloth.', 'Cloth'), { kind: 'position', prompt: 'Click the point of the cloth to hold.' }], (a) => {
+      const at = (a[1] as Arg & { at?: { x: number; y: number } }).at;
+      if (!at) return [];
+      const body = a[2];
+      return [`{pin} = Pin(${t(a, 0)}, (${num(at.x)}, ${num(at.y)})${body ? `, ${body.text}` : ''})`];
+    }, { tail: { slot: O('Click a body to pin it to, or press Enter to hold it still.', 'Body'), min: 0, max: 1 } }),
+  ]),
 ];
 
 
