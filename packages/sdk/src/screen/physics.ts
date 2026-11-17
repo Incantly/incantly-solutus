@@ -26,7 +26,7 @@ export const FORCE_STYLE: Readonly<Record<string, { color: string; label: string
 const KINDS = ['gravity', 'normal', 'friction', 'tension', 'spring', 'buoyancy', 'drag', 'electric', 'applied', 'net'] as const;
 
 export function isPhysicsItem(it: SceneItem): boolean {
-  return it.type === 'Body' || it.type === 'Joint' || it.type === 'Wheel' || it.type === 'Contacts' || it.type === 'Liquid' || it.type === 'Water' || (it.type === 'List' && /^List<(Body|Joint|Wheel)>/.test(it.typeText));
+  return it.type === 'Body' || it.type === 'Joint' || it.type === 'Wheel' || it.type === 'Contacts' || it.type === 'Liquid' || it.type === 'Water' || it.type === 'Waves' || (it.type === 'List' && /^List<(Body|Joint|Wheel)>/.test(it.typeText));
 }
 
 function bodiesOf(it: SceneItem): physics.BodyValue[] {
@@ -257,7 +257,8 @@ const WATER_BLUE = '#2f7fc1';
 /** Liquid: every drop a disc in one batch, so 2,000 drops cost one fill (ui.md 7). */
 function paintLiquid(ctx: Ctx, vp: Viewport, l: physics.LiquidValue, it: SceneItem, hits: Hit[]): void {
   const n = Math.min(l.xs.length, l.ys.length);
-  if (n === 0) return;
+  // drops in space are drawn by the Space view
+  if (n === 0 || l.zs) return;
   const r = Math.max(1.5, 0.5 * l.size * vp.ppu * 1.3);
   ctx.save();
   ctx.fillStyle = withAlpha(l.spec.color ?? LIQUID_BLUE, 0.85);
@@ -313,6 +314,34 @@ function paintWater(ctx: Ctx, vp: Viewport, w: physics.WaterValue, it: SceneItem
   ctx.restore();
 }
 
+/** Waves in the plane: the surface as a line through its points, a light fill down to the bottom (design 12). */
+function paintWaves(ctx: Ctx, vp: Viewport, w: physics.WavesValue, it: SceneItem, hits: Hit[]): void {
+  if (w.space || w.nx < 2) return;
+  const bottom = w.level - w.depth;
+  const x = (i: number): number => vp.px(w.x0 + (i + 0.5) * w.dx);
+  const y = (i: number): number => vp.py(w.level + (w.heights[i] as number));
+  ctx.save();
+  ctx.fillStyle = withAlpha(WATER_BLUE, 0.25);
+  ctx.beginPath();
+  ctx.moveTo(vp.px(w.x0), vp.py(bottom));
+  ctx.lineTo(vp.px(w.x0), y(0));
+  for (let i = 0; i < w.nx; i++) ctx.lineTo(x(i), y(i));
+  ctx.lineTo(vp.px(w.x0 + w.nx * w.dx), y(w.nx - 1));
+  ctx.lineTo(vp.px(w.x0 + w.nx * w.dx), vp.py(bottom));
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = WATER_BLUE;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(vp.px(w.x0), y(0));
+  for (let i = 0; i < w.nx; i++) ctx.lineTo(x(i), y(i));
+  ctx.lineTo(vp.px(w.x0 + w.nx * w.dx), y(w.nx - 1));
+  ctx.stroke();
+  ctx.restore();
+  const mid = w.nx >> 1;
+  hits.push({ k: 'circle', x: x(mid), y: y(mid), r: 10, text: `${it.name}: waves, ${fmt(w.speed)} m/s`, id: it.id });
+}
+
 /** The part of a polygon below y = level (Sutherland and Hodgman against one line). */
 function clipBelow(pts: readonly Pt[], level: number): Pt[] {
   const out: Pt[] = [];
@@ -338,6 +367,10 @@ export function paintPhysicsItem(ctx: Ctx, vp: Viewport, it: SceneItem, hits: Hi
   }
   if (physics.isWaterValue(it.value)) {
     paintWater(ctx, vp, it.value, it, hits);
+    return;
+  }
+  if (physics.isWavesValue(it.value)) {
+    paintWaves(ctx, vp, it.value, it, hits);
     return;
   }
   if (it.type === 'Contacts') {

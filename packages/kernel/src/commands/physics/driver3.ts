@@ -1478,7 +1478,7 @@ export class Physics3Driver implements WorldDriver {
         if (!(Math.abs(u) < BLOW_UP)) ok = false;
         heights[k] = u;
       }
-      this.put(wm.rec, ok ? { defined: true, value: { ...wm.value, heights, speed: g.c } satisfies WavesValue } : { defined: false, reason: 'unstable_world' }, changed);
+      this.put(wm.rec, ok ? { defined: true, value: { ...wm.value, heights, speed: g.c, mean: g.meanLevel() } satisfies WavesValue } : { defined: false, reason: 'unstable_world' }, changed);
     }
   }
 
@@ -1583,9 +1583,21 @@ export class Physics3Driver implements WorldDriver {
 
   /** Everything a step reads, bodies, drops and waves, as one array (a checkpoint). */
   private saveState(): Float64Array {
-    const ws = (this.world as World3).save();
-    if (!this.fluid && this.waveMembers.length === 0) return ws;
-    const parts = [ws, ...(this.fluid ? [this.fluid.save()] : []), ...this.waveMembers.map((m) => m.grid.save())];
+    const w = this.world as World3;
+    const ws = w.save();
+    // a sleeping body keeps showing the forces of its last awake step: they go in too, so a seek shows the same arrows
+    let asleep = 0;
+    for (let i = 0; i < w.n; i++) if (w.type[i] === BodyType3.Dynamic && w.awake[i] === 0) asleep++;
+    const fs = new Float64Array(1 + asleep * (1 + NK * 3));
+    fs[0] = asleep;
+    let q = 1;
+    for (let i = 0; i < w.n; i++) {
+      if (w.type[i] !== BodyType3.Dynamic || w.awake[i] !== 0) continue;
+      fs[q++] = i;
+      fs.set(w.forces.subarray(i * NK * 3, (i + 1) * NK * 3), q);
+      q += NK * 3;
+    }
+    const parts = [ws, fs, ...(this.fluid ? [this.fluid.save()] : []), ...this.waveMembers.map((m) => m.grid.save())];
     let len = 1 + parts.length;
     for (const p of parts) len += p.length;
     const out = new Float64Array(len);
@@ -1601,10 +1613,6 @@ export class Physics3Driver implements WorldDriver {
 
   private loadState(s: Float64Array): void {
     const w = this.world as World3;
-    if (!this.fluid && this.waveMembers.length === 0) {
-      w.load(s);
-      return;
-    }
     const np = s[0] as number;
     let k = 1 + np;
     const part = (i: number): Float64Array => {
@@ -1614,7 +1622,13 @@ export class Physics3Driver implements WorldDriver {
       return out;
     };
     w.load(part(0));
-    let i = 1;
+    const fs = part(1);
+    for (let k = 0, q = 1; k < (fs[0] as number); k++) {
+      const b = fs[q++] as number;
+      w.forces.set(fs.subarray(q, q + NK * 3), b * NK * 3);
+      q += NK * 3;
+    }
+    let i = 2;
     if (this.fluid) this.fluid.load(part(i++));
     for (const m of this.waveMembers) m.grid.load(part(i++));
   }

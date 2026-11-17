@@ -25,6 +25,8 @@ export const MAX_WAVE_CELLS = 64 * 64;
 export const MAX_WAVE_SIDE = 64;
 /** Waves lose this much of their speed each second unless the line says otherwise. */
 export const WAVE_DAMPING = 0.2;
+/** Water under a sleeping body moving faster than this (m/s) wakes it. */
+const WAKE_SPEED = 2e-3;
 
 export interface WaveSpec {
   /** Cells along x and y (1 along y for waves in the plane). */
@@ -85,8 +87,14 @@ export class WaveGrid {
   press(k: number, zBot: number, zTop: number, weight: number): void {
     const s = this.spec.level + (this.u[k] as number);
     const p = Math.min(zTop, s) - zBot;
-    if (p > 0) this.P[k] = (this.P[k] as number) + p * weight;
+    if (!(p > 0)) return;
+    this.P[k] = (this.P[k] as number) + p * weight;
+    const v = Math.abs(this.v[k] as number);
+    if (v > this.moving) this.moving = v;
   }
+
+  /** The fastest the water moved under the body being pressed now (m/s). */
+  private moving = 0;
 
   step(): void {
     const { nx, ny } = this.spec;
@@ -204,10 +212,10 @@ export class WaveGrid {
     return true;
   }
 
-  /** The mean height of the surface (the rest level, raised by what bodies and drops moved aside). */
+  /** The level of the water: the rest level, raised by what the bodies pressing on it moved aside (the mean head). */
   meanLevel(): number {
     let s = 0;
-    for (let k = 0; k < this.n; k++) s += this.u[k] as number;
+    for (let k = 0; k < this.n; k++) s += (this.u[k] as number) + (this.P[k] as number);
     return this.spec.level + s / this.n;
   }
 
@@ -231,6 +239,15 @@ export class WaveGrid {
     const s = this.spec;
     for (let b = 0; b < w.n; b++) {
       if (w.type[b] !== BodyType3.Dynamic || w.gone.has(b)) continue;
+      this.moving = 0;
+      this.pressBody3(w, b, s);
+      // a body asleep on water that moves wakes, so a boat keeps riding the waves
+      if (this.moving > WAKE_SPEED && w.awake[b] === 0) w.wakeBody(b);
+    }
+  }
+
+  private pressBody3(w: World3, b: number, s: WaveSpec): void {
+    {
       const s0 = w.shape0[b] as number;
       for (let k = s0; k < s0 + (w.shapeN[b] as number); k++) {
         const sh = w.shapes[k];
@@ -314,6 +331,14 @@ export class WaveGrid {
     const s = this.spec;
     for (let b = 0; b < w.n; b++) {
       if (w.type[b] !== BodyType.Dynamic || w.gone.has(b)) continue;
+      this.moving = 0;
+      this.pressBody2(w, b, s);
+      if (this.moving > WAKE_SPEED && w.awake[b] === 0) w.wakeBody(b);
+    }
+  }
+
+  private pressBody2(w: World2, b: number, s: WaveSpec): void {
+    {
       const s0 = w.shape0[b] as number;
       for (let k = s0; k < s0 + (w.shapeN[b] as number); k++) {
         const sh = w.shapes[k];

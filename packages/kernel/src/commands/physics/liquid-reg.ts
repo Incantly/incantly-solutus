@@ -1,6 +1,6 @@
 /**
  * The one-time registration of liquids, water and waves (docs/features/physics/design.md 2.4, 9.3; ui.md 6 and 7;
- * errors.md 5, 7): readouts `l.count`, `l.level`, `wa.level`, `w.level`, `w.speed`, `w.height(p)`, the algebra row
+ * errors.md 5, 7): readouts `l.count`, `l.level`, `wa.level`, `w.level`, `w.speed`, `w.height(x, y)`, the algebra row
  * text, the default look, the drop limit and the notices.
  */
 import { registerNotice } from '../../errors/notices';
@@ -16,13 +16,11 @@ import { isLiquidValue, isWaterValue, isWavesValue, liquidLineCheck } from './li
 
 const LIQUID_FIELDS: Readonly<Record<string, Ty>> = { count: T.Number, level: T.Number };
 const WATER_FIELDS: Readonly<Record<string, Ty>> = { level: T.Number };
-const WAVES_FIELDS: Readonly<Record<string, Ty>> = { level: T.Number, speed: T.Number, height: { k: 'Function', ret: 'Number', arity: 1 } as Ty };
+const WAVES_FIELDS: Readonly<Record<string, Ty>> = { level: T.Number, speed: T.Number, height: { k: 'Function', ret: 'Number', arity: 2 } as Ty };
 
-/** The mean height of a wave surface (the rest level plus what bodies moved aside). */
+/** The level of the water under waves now (the rest level raised by what bodies moved aside). */
 function meanLevel(v: WavesValue): number {
-  let s = 0;
-  for (let k = 0; k < v.heights.length; k++) s += v.heights[k] as number;
-  return v.level + (v.heights.length > 0 ? s / v.heights.length : 0);
+  return Number.isFinite(v.mean) ? v.mean : v.level;
 }
 
 /** The height of the surface at a point (its x and y) or at x in the plane: bilinear over the cell centres. */
@@ -69,13 +67,9 @@ export function registerLiquids(): void {
     if (field === 'speed') return v.speed;
     if (field === 'height') {
       return {
-        arity: 1,
-        call: (p: unknown) => {
-          const q = p as { x?: unknown; y?: unknown } | number | undefined;
-          const x = typeof q === 'number' ? q : typeof q?.x === 'number' ? q.x : Number.NaN;
-          const y = typeof q === 'object' && typeof q.y === 'number' ? q.y : 0;
-          return Number.isFinite(x) && Number.isFinite(y) ? waveHeightAt(v, x, y) : undefined;
-        },
+        arity: 2,
+        // in the plane the second number is not read: w.height(x, 0)
+        call: (x: unknown, y: unknown) => (typeof x === 'number' && typeof y === 'number' && Number.isFinite(x) && Number.isFinite(y) ? waveHeightAt(v, x, y) : undefined),
       };
     }
     return undefined;

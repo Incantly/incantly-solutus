@@ -1589,7 +1589,7 @@ export class PhysicsDriver implements WorldDriver {
         if (!(Math.abs(u) < BLOW_UP)) ok = false;
         heights[k] = u;
       }
-      const cell: Cell = ok ? { defined: true, value: { ...wm.value, heights, speed: g.c } satisfies WavesValue } : { defined: false, reason: 'unstable_world' };
+      const cell: Cell = ok ? { defined: true, value: { ...wm.value, heights, speed: g.c, mean: g.meanLevel() } satisfies WavesValue } : { defined: false, reason: 'unstable_world' };
       this.lastCells.set(wm.rec.id, cell);
       this.written.add(wm.rec.id);
       if (this.acc.write(wm.rec, cell)) changed.push(wm.rec);
