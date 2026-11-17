@@ -104,18 +104,3 @@ export class ParticleSet {
 export { MAX_NEIGHBOURS, NeighbourGrid } from './grid2';
 export { MAX_NEIGHBOURS3, NeighbourGrid3 } from './grid3';
 
-/**
- * Something drops meet besides bodies and solids (round 9: cloth, design 9.6), called by the liquid's step after the
- * drops met the bodies and before the walls: it may move drops (`ps.x`, …) and must make no garbage.
- */
-export interface DropMeeter {
-  meetDrops(
-    ps: ParticleSet,
-    box: (x0: number, y0: number, z0: number, x1: number, y1: number, z1: number) => number,
-    found: () => Int32Array,
-    r: number,
-    spacing: number,
-    mass: Float64Array,
-    h: number,
-  ): void;
-}

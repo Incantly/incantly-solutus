@@ -17,7 +17,6 @@
 import { mix32 } from '../commands/probability/random';
 import type { ShapeDef3, World3 } from './world3';
 import { BodyType3, FK3 } from './world3';
-import type { DropMeeter } from './particles';
 import { MAX_NEIGHBOURS3, NeighbourGrid3, ParticleSet } from './particles';
 import { MAX_CORRECTION, MAX_DROPS } from './fluid2';
 
@@ -250,10 +249,6 @@ export class Fluid3 {
   private s2 = new Float64Array(0);
   private visc: Float64Array;
   private mass: Float64Array;
-  /** Cloth the drops meet (round 9), between the bodies and the walls. */
-  cloth: DropMeeter | undefined;
-  private readonly boxFn = (x0: number, y0: number, z0: number, x1: number, y1: number, z1: number): number => this.grid.inBox(x0, y0, z0, x1, y1, z1, this.ps.n);
-  private readonly foundFn = (): Int32Array => this.grid.found;
   /** Planes of the hull being tested, scratch. */
   private planes = new Float64Array(64);
 
@@ -684,7 +679,6 @@ export class Fluid3 {
   /** Pushes drops out of bodies (first), then the floor, terrain and solids. Bodies get the equal and opposite impulse. */
   private collide(w: World3): void {
     for (let pass = 0; pass < 2; pass++) {
-      if (pass === 1 && this.cloth) this.cloth.meetDrops(this.ps, this.boxFn, this.foundFn, this.r, this.d, this.mass, this.hStep);
       for (let b = 0; b < w.n; b++) {
         if (w.gone.has(b)) continue;
         const dynamic = w.type[b] === BodyType3.Dynamic;

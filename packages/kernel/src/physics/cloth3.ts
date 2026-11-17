@@ -14,6 +14,8 @@ import type { World3 } from './world3';
 import { BodyType3, FK3 } from './world3';
 
 const NK = 10;
+/** A ball keeps this part of the cloth's thickness from a face's middle (and all of it from its points). */
+const FACE_GAP = 0.5;
 
 export class Cloth3 extends ClothSet {
   private world: World3 | undefined;
@@ -172,16 +174,6 @@ export class Cloth3 extends ClothSet {
 
   /* ------------------------------ hooks ------------------------------ */
 
-  /**
-   * Where body b is in this small step against its pose now: back along its step to the small step's end (the world
-   * stepped it whole; the cloth sees it move through the step), plus what the cloth moved it.
-   */
-  private off(a: 'x' | 'y' | 'z', b: number): number {
-    const w = this.world as World3;
-    const k = a === 'x' ? 0 : a === 'y' ? 1 : 2;
-    return (this.centre(b)[k] as number) - (w.p[b * 3 + k] as number);
-  }
-
   private live(b: number): boolean {
     const w = this.world as World3;
     return w.type[b] === BodyType3.Dynamic && !w.gone.has(b) && w.awake[b] === 1;
@@ -337,10 +329,26 @@ export class Cloth3 extends ClothSet {
           (w.hi[k * 3] as number) + pad + Math.max(0, -dx), (w.hi[k * 3 + 1] as number) + pad + Math.max(0, -dy), (w.hi[k * 3 + 2] as number) + pad + Math.max(0, -dz),
         );
         const found = this.grid.found;
+        // a ball: only points that may come within its radius this step (by their own speed and the ball's move)
+        const ball = sh.kind === 0;
+        const move = ball ? Math.sqrt(dx * dx + dy * dy + dz * dz) : 0;
+        const hh = this.hStep;
+        const near0 = ball ? sh.r + thick + 9.8 * hh * hh + (this.nGrab > 0 ? 0.5 : 0) + move + 0.01 : 0;
         for (let q = 0; q < m; q++) {
           const i = found[q] as number;
           const ci = this.cloths[this.owner[i] as number];
           if (!ci || ci.asleep || ci.unstable) continue;
+          if (ball) {
+            const ex = (this.x[i] as number) - (sh.wc[0] as number);
+            const ey = (this.y[i] as number) - (sh.wc[1] as number);
+            const ez = (this.z[i] as number) - (sh.wc[2] as number);
+            const ua = this.vx[i] as number;
+            const ub = this.vy[i] as number;
+            const uc = this.vz[i] as number;
+            const vi = Math.sqrt(ua * ua + ub * ub + uc * uc);
+            const reach = near0 + 1.5 * hh * vi;
+            if (ex * ex + ey * ey + ez * ez > reach * reach) continue;
+          }
           if (this.nCand >= this.candS.length) {
             const S = new Int32Array(this.candS.length * 2);
             S.set(this.candS);
@@ -381,6 +389,7 @@ export class Cloth3 extends ClothSet {
           const t = ci.t0 + 2 * (cj * (nu - 1) + cx) + h;
           if (this.faceMark[t] === key) continue;
           this.faceMark[t] = key;
+          if (!this.faceMayMeet(k, t)) continue;
           if (this.nFace >= this.faceS.length) {
             const S = new Int32Array(this.faceS.length * 2);
             S.set(this.faceS);
@@ -395,6 +404,59 @@ export class Cloth3 extends ClothSet {
         }
       }
     }
+  }
+
+  /**
+   * Can ball k meet face t this step? Its centre must come within the face's radius of its plane (the start of the step,
+   * plus how far the face and the ball may move in it) over the face. A sheet draped on a ball keeps its points
+   * `thickness` out and its faces' middles sag less than half that, so a resting sheet's faces are left out.
+   */
+  private faceMayMeet(k: number, t: number): boolean {
+    const w = this.world as World3;
+    const sh = w.shapes[k];
+    if (!sh || this.triTorn(t)) return false;
+    const ci = this.cloths[this.owner[this.ta[t] as number] as number];
+    if (!ci) return false;
+    const b = sh.body;
+    const dx = (w.p[b * 3] as number) - (this.bp0[b * 3] as number);
+    const dy = (w.p[b * 3 + 1] as number) - (this.bp0[b * 3 + 1] as number);
+    const dz = (w.p[b * 3 + 2] as number) - (this.bp0[b * 3 + 2] as number);
+    const move = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    const cx = sh.wc[0] as number;
+    const cy = sh.wc[1] as number;
+    const cz = sh.wc[2] as number;
+    const s = this.faceHeight(t, cx, cy, cz, this.x, this.y, this.z);
+    const o = this.scratch;
+    const nx = o[0] as number;
+    const ny = o[1] as number;
+    const nz = o[2] as number;
+    if (nx === 0 && ny === 0 && nz === 0) return false;
+    // how far the face may move this step: its fastest corner's speed (and gravity), not the whole cloth's
+    let v2 = 0;
+    for (let q = 0; q < 3; q++) {
+      const j = q === 0 ? (this.ta[t] as number) : q === 1 ? (this.tb[t] as number) : (this.tc[t] as number);
+      const a = this.vx[j] as number;
+      const bq = this.vy[j] as number;
+      const c = this.vz[j] as number;
+      v2 = Math.max(v2, a * a + bq * bq + c * c);
+    }
+    const h = this.hStep;
+    const grab = this.nGrab > 0 ? 0.5 : 0;
+    const reach = sh.r + FACE_GAP * ci.def.thickness + 2 * (1.5 * h * Math.sqrt(v2) + 9.8 * h * h + grab) + move;
+    if (Math.abs(s) >= reach) return false;
+    return this.footOn(t, cx - s * nx, cy - s * ny, cz - s * nz, 0.25);
+  }
+
+  /** Body b's offset in this small step from its pose now (where the small steps have it less where the world put it). */
+  private ob = new Float64Array(3);
+  private offs(b: number): Float64Array {
+    const w = this.world as World3;
+    const c = this.centre(b);
+    const o = this.ob;
+    o[0] = (c[0] as number) - (w.p[b * 3] as number);
+    o[1] = (c[1] as number) - (w.p[b * 3 + 1] as number);
+    o[2] = (c[2] as number) - (w.p[b * 3 + 2] as number);
+    return o;
   }
 
   /**
@@ -413,10 +475,12 @@ export class Cloth3 extends ClothSet {
     const e = this.tc[t] as number;
     const ci = this.cloths[this.owner[a] as number];
     if (!ci || ci.asleep) return;
-    const R = sh.r + ci.def.thickness;
-    const cx = (sh.wc[0] as number) + this.off("x", b);
-    const cy = (sh.wc[1] as number) + this.off("y", b);
-    const cz = (sh.wc[2] as number) + this.off("z", b);
+    // a face keeps the ball's surface half the thickness off (its corners keep all of it, as points)
+    const R = sh.r + FACE_GAP * ci.def.thickness;
+    const ob = this.offs(b);
+    const cx = (sh.wc[0] as number) + (ob[0] as number);
+    const cy = (sh.wc[1] as number) + (ob[1] as number);
+    const cz = (sh.wc[2] as number) + (ob[2] as number);
     // the centre's height over the face now and at the start of the step (against the face as it was then)
     const o = this.scratch;
     const s1 = this.faceHeight(t, cx, cy, cz, this.x, this.y, this.z);
@@ -490,7 +554,10 @@ export class Cloth3 extends ClothSet {
       const pq = this.pinOf[i] as number;
       if (pq >= 0 && this.pinBody[pq] === b) continue;
       if (this.hasBodyPins && this.nearBodyPin(i, b, 2 * sh.reach + ci.def.thickness)) continue;
-      if (sh.kind === 0) this.hitSphere(i, b, (sh.wc[0] as number) + this.off("x", b), (sh.wc[1] as number) + this.off("y", b), (sh.wc[2] as number) + this.off("z", b), sh.r + ci.def.thickness, ci.def.friction, hs);
+      if (sh.kind === 0) {
+        const ob = this.offs(b);
+        this.hitSphere(i, b, (sh.wc[0] as number) + (ob[0] as number), (sh.wc[1] as number) + (ob[1] as number), (sh.wc[2] as number) + (ob[2] as number), sh.r + ci.def.thickness, ci.def.friction, hs);
+      }
       else this.hitHull(i, k, ci.def.thickness, ci.def.friction, hs);
     }
     for (let q = 0; q < this.nFace; q++) this.hitFace(this.faceS[q] as number, this.faceT[q] as number, hs);
@@ -509,6 +576,10 @@ export class Cloth3 extends ClothSet {
           const ny = sh.lc[1] as number;
           const nz = sh.lc[2] as number;
           const d = sh.lc[3] as number;
+          // the lowest corner of every point's box this step (padded by how far a point may go): above the plane by the
+          // thickness, no point reaches it
+          const lowest = nx * (nx > 0 ? this.bx0 : this.bx1) + ny * (ny > 0 ? this.by0 : this.by1) + nz * (nz > 0 ? this.bz0 : this.bz1) - d;
+          if (lowest >= th) continue;
           for (let i = ci.p0; i < e; i++) {
             if ((this.w[i] as number) === 0) continue;
             const s = nx * (this.x[i] as number) + ny * (this.y[i] as number) + nz * (this.z[i] as number) - d;
@@ -576,26 +647,6 @@ export class Cloth3 extends ClothSet {
       const k = 1 / (wp * hs);
       this.give(b, this.owner[i] as number, -mx * k, -my * k, -mz * k, x, y, z, 0);
     } else if (b >= 0) this.markTouch(i, b);
-  }
-
-  /** A push (in the pins' Δλ units) a held point passes on: to its own pin, or shared by the pins its tethers reach. */
-  private holdPush(i: number, ex: number, ey: number, ez: number): void {
-    const q = this.pinOf[i] as number;
-    if (q >= 0 && (this.pinBody[q] as number) < 0) {
-      this.pinFx[q] = (this.pinFx[q] as number) + ex;
-      this.pinFy[q] = (this.pinFy[q] as number) + ey;
-      this.pinFz[q] = (this.pinFz[q] as number) + ez;
-      return;
-    }
-    const n = this.teCnt[i] as number;
-    if (n === 0) return;
-    const k0 = this.teOf[i] as number;
-    for (let k = k0; k < k0 + n; k++) {
-      const p = this.tePin[k] as number;
-      this.pinFx[p] = (this.pinFx[p] as number) + ex / n;
-      this.pinFy[p] = (this.pinFy[p] as number) + ey / n;
-      this.pinFz[p] = (this.pinFz[p] as number) + ez / n;
-    }
   }
 
   /** A point against a ball: out along the direction its path met the ball (as the ball moved this step). */
@@ -669,9 +720,10 @@ export class Cloth3 extends ClothSet {
     const wv = sh.wv;
     const wn = sh.wn;
     // the point against the hull where the body is now (it may have been pushed back this step)
-    const x = (this.x[i] as number) - this.off("x", b);
-    const y = (this.y[i] as number) - this.off("y", b);
-    const z = (this.z[i] as number) - this.off("z", b);
+    const ob = this.offs(b);
+    const x = (this.x[i] as number) - (ob[0] as number);
+    const y = (this.y[i] as number) - (ob[1] as number);
+    const z = (this.z[i] as number) - (ob[2] as number);
     let sep = -Infinity;
     let best = 0;
     for (let f = 0; f < nf; f++) {

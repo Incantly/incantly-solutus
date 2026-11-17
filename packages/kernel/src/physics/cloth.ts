@@ -52,15 +52,23 @@ const MAX_GRABS = 8;
 
 export type ClothKind = 'sheet' | 'rope' | 'net';
 
-/** The drops as the cloth meets them (the liquid's particle store). */
-export interface DropsView {
-  readonly x: Float64Array;
-  readonly y: Float64Array;
-  readonly z: Float64Array;
-  readonly x0: Float64Array;
-  readonly y0: Float64Array;
-  readonly z0: Float64Array;
-  readonly owner: Int32Array;
+/** The drops as the cloth meets them: the liquid's particle store, its drops' radius and their masses. */
+export interface LiquidView {
+  readonly ps: {
+    readonly n: number;
+    readonly x: Float64Array;
+    readonly y: Float64Array;
+    readonly z: Float64Array;
+    readonly x0: Float64Array;
+    readonly y0: Float64Array;
+    readonly z0: Float64Array;
+    readonly vx: Float64Array;
+    readonly vy: Float64Array;
+    readonly vz: Float64Array;
+    readonly owner: Int32Array;
+  };
+  readonly r: number;
+  massOf(owner: number): number;
 }
 export const LinkKind = { stretch: 0, shear: 1, bend: 2 } as const;
 
@@ -632,6 +640,14 @@ export class ClothSet {
 
   /* ------------------------------ the step ------------------------------ */
 
+  private anyAwake(): boolean {
+    for (let c = 0; c < this.cloths.length; c++) {
+      const ci = this.cloths[c] as ClothInfo;
+      if (!ci.asleep && !ci.unstable) return true;
+    }
+    return false;
+  }
+
   /** One world step of h: 4 small steps of the cloth against the bodies where they are now (design 9.5, 9.6). */
   stepCloth(h: number): void {
     this.steps++;
@@ -652,12 +668,10 @@ export class ClothSet {
     this.sy.set(this.y.subarray(0, n));
     this.sz.set(this.z.subarray(0, n));
     this.wakeCheck();
-    let awake = false;
-    for (let c = 0; c < this.cloths.length; c++) {
-      const ci = this.cloths[c] as ClothInfo;
-      if (!ci.asleep && !ci.unstable) awake = true;
+    if (!this.anyAwake() && !(this.liquid && this.liquid.ps.n > 0)) {
+      if (this.wet.length === this.cloths.length) this.wet.fill(0);
+      return;
     }
-    if (!awake) return;
     // how far a point may go this step: its speed, and a grab's pull
     let v2 = 0;
     let lx = Infinity;
@@ -694,6 +708,13 @@ export class ClothSet {
     this.by1 = hy + this.pad;
     this.bz1 = hz + this.pad;
     this.gridOk = false;
+    // drops that came near wake the cloth they meet
+    this.prepareDrops(h);
+    if (!this.anyAwake()) {
+      this.nCD = 0;
+      this.nDP = 0;
+      return;
+    }
     this.prepare(h);
     this.prepareSelf();
     const hs = h / SUBSTEPS;
@@ -709,24 +730,14 @@ export class ClothSet {
       this.substep(hs, s === 0, s === SUBSTEPS - 1);
     }
     this.endSub();
+    this.endDrops();
     // the forces on the pins, averaged over the small steps
     const inv = 1 / (SUBSTEPS * hs * hs);
     for (let q = 0; q < this.pinFx.length; q++) {
       this.pinFx[q] = (this.pinFx[q] as number) * inv;
       this.pinFy[q] = (this.pinFy[q] as number) * inv;
       this.pinFz[q] = (this.pinFz[q] as number) * inv;
-      if (q < this.dropPinX.length) {
-        // drops resting on a pinned corner push on its pin
-        this.pinFx[q] = (this.pinFx[q] as number) + (this.dropPinX[q] as number);
-        this.pinFy[q] = (this.pinFy[q] as number) + (this.dropPinY[q] as number);
-        this.pinFz[q] = (this.pinFz[q] as number) + (this.dropPinZ[q] as number);
-      }
     }
-    // the drops of this step are counted: the next liquid step marks afresh
-    this.dropPinX.fill(0);
-    this.dropPinY.fill(0);
-    this.dropPinZ.fill(0);
-    this.wet.fill(0);
     this.tear();
     this.settle(h);
   }
@@ -805,6 +816,7 @@ export class ClothSet {
   private substep(hs: number, first = true, last = true): void {
     const { x, y, z, w } = this;
     this.taut.fill(0);
+    if (this.nCD > 0) this.moveDrops(hs);
     // bodies held by pins take the small steps too: the world's change of their speed this step, a quarter each
     for (let k = 0; k < this.nSub; k++) {
       this.sqx[k] = this.spx[k] as number;
@@ -906,6 +918,7 @@ export class ClothSet {
     this.inPins = false;
     // 4. solids and bodies, then the cloth against itself and other cloths
     this.collide(hs);
+    if (this.nDP > 0) this.solveDrops();
     if (this.nSelf > 0) this.solveSelf();
     // 5. after the last small step, the speeds from the moves, less damping (the others take theirs in step 1 of the next)
     if (last) {
@@ -914,6 +927,7 @@ export class ClothSet {
         this.speeds(c, hs);
       }
     }
+    if (this.nCD > 0) this.dropSpeeds(hs);
     for (let k = 0; k < this.nSub; k++) {
       this.svx[k] = ((this.spx[k] as number) - (this.sqx[k] as number)) / hs;
       this.svy[k] = ((this.spy[k] as number) - (this.sqy[k] as number)) / hs;
@@ -1429,6 +1443,16 @@ export class ClothSet {
     this.near = new Int32Array(nt);
   }
 
+  private tilesAt = -1;
+
+  /** The tiles, and their boxes for this step (once a step). */
+  private ensureTiles(): void {
+    if (this.pu.length !== this.n) this.buildTiles();
+    if (this.tilesAt === this.steps) return;
+    this.tilesAt = this.steps;
+    this.tileBoxes();
+  }
+
   /** The tiles' boxes from the points now. */
   private tileBoxes(): void {
     const b = this.tileBox;
@@ -1473,8 +1497,7 @@ export class ClothSet {
     let any = false;
     for (let c = 0; c < count; c++) if ((this.cloths[c] as ClothInfo).def.self) any = true;
     if (!any && count < 2) return;
-    if (this.pu.length !== this.n) this.buildTiles();
-    this.tileBoxes();
+    this.ensureTiles();
     const { x, y, z, sx, sy, sz, pu, pv, ta, tb, tc, owner, w } = this;
     const fn = this.faceN;
     const tb6 = this.tileBox;
@@ -1771,122 +1794,541 @@ export class ClothSet {
 
   /* ------------------------------ liquid drops against the cloth (design 9.6) ------------------------------ */
 
-  /** Which cloths drops met in the last liquid step (it wakes them). */
+  /**
+   * Drops meet the cloth inside its small steps (round 9C). After the liquid's step, the drops near a face are found once
+   * (the nearest cloth point to the drop, then its faces), and each such drop takes the cloth's small steps with it: it
+   * goes back to where the liquid step began it and moves along that step's path in four parts, and in each small step
+   * the drop and the face's corners share the push that keeps the drop `r + thickness` from the face, on the side it
+   * started on, by their masses. A face with a held corner (a pin, or a tether at its length) does not give: the drop
+   * takes the whole push and the pins carry it. So a sheet holds water, and the water's weight reaches the pins in the
+   * same small steps as the sheet's own. At the end a drop still across its face goes back whole, so none passes.
+   */
+  private liquid: LiquidView | undefined;
+  /** Which cloths drops met in this step (it wakes them). */
   private wet = new Uint8Array(0);
-  /** How many times drops met the cloth since the world began (for tests). */
+  /** How many drop and face pairs the cloth has met since the world began (for tests). */
   meets = 0;
-  /** The pushes drops gave pinned corners in the last liquid step (N), counted in the pins' forces. */
-  dropPinX = new Float64Array(0);
-  dropPinY = new Float64Array(0);
-  dropPinZ = new Float64Array(0);
+  /** Drops taking the small steps: the drop, its place, its place at the start of the small step, its speed, 1 / mass. */
+  private nCD = 0;
+  private cdI = new Int32Array(0);
+  private cpx = new Float64Array(0);
+  private cpy = new Float64Array(0);
+  private cpz = new Float64Array(0);
+  private cqx = new Float64Array(0);
+  private cqy = new Float64Array(0);
+  private cqz = new Float64Array(0);
+  private cvx = new Float64Array(0);
+  private cvy = new Float64Array(0);
+  private cvz = new Float64Array(0);
+  private cw = new Float64Array(0);
+  /** Pairs: the drop (its place in the lists above), the face, the side, the corners' weights, the normal, the reach. */
+  private nDP = 0;
+  private dpK = new Int32Array(0);
+  private dpT = new Int32Array(0);
+  private dpS = new Float64Array(0);
+  private dpB = new Float64Array(0);
+  private dpN = new Float64Array(0);
+  private dpR = new Float64Array(0);
+  /** Each drop's place in the lists, valid when its mark is this step's. */
+  private dropMark = new Int32Array(0);
+  private dropSlot = new Int32Array(0);
+  private dropStamp = 0;
+  /** Faces seen for the drop being searched (a mark per face). */
+  private faceSeen = new Int32Array(0);
+  private faceStamp = 0;
+  /** Each face's plane and the numbers for the foot of a point on it, at the start of the step (14 a face). */
+  private faceTab = new Float64Array(0);
+  private faceTabOk = new Uint8Array(0);
+  /** Each point's faces (the triangles, or in the plane the threads, it is a corner of). */
+  private pf0 = new Int32Array(0);
+  private pfT = new Int32Array(0);
+
+  /** The liquid the cloth meets this step (the drivers set it before each cloth step), or none. */
+  useDrops(liquid: LiquidView | undefined): void {
+    this.liquid = liquid;
+  }
+
+  private buildPointFaces(): void {
+    const n = this.n;
+    const nt = this.ta.length;
+    const cnt = new Int32Array(n + 1);
+    for (let t = 0; t < nt; t++) {
+      cnt[this.ta[t] as number] = (cnt[this.ta[t] as number] as number) + 1;
+      cnt[this.tb[t] as number] = (cnt[this.tb[t] as number] as number) + 1;
+      const e = this.tc[t] as number;
+      if (e >= 0) cnt[e] = (cnt[e] as number) + 1;
+    }
+    this.pf0 = new Int32Array(n + 1);
+    for (let i = 0; i < n; i++) this.pf0[i + 1] = (this.pf0[i] as number) + (cnt[i] as number);
+    this.pfT = new Int32Array(this.pf0[n] as number);
+    const fill = Int32Array.from(this.pf0.subarray(0, n));
+    for (let t = 0; t < nt; t++) {
+      for (let k = 0; k < 3; k++) {
+        const v = k === 0 ? (this.ta[t] as number) : k === 1 ? (this.tb[t] as number) : (this.tc[t] as number);
+        if (v < 0) continue;
+        this.pfT[fill[v] as number] = t;
+        fill[v] = (fill[v] as number) + 1;
+      }
+    }
+    this.faceSeen = new Int32Array(nt);
+    this.faceTab = new Float64Array(nt * 14);
+    this.faceTabOk = new Uint8Array(this.cloths.length);
+  }
+
+  /** Cloth c's faces' planes and foot numbers from the points now: normal, offset, the two sides from the first corner, d00 d01 d11 and 1 / det. */
+  private faceTable(c: number): void {
+    const ci = this.cloths[c] as ClothInfo;
+    const { x, y, z, ta, tb, tc } = this;
+    const F = this.faceTab;
+    for (let t = ci.t0; t < ci.t0 + ci.tn; t++) {
+      const o = t * 14;
+      const a = ta[t] as number;
+      const b = tb[t] as number;
+      const e = tc[t] as number;
+      const ax = x[a] as number;
+      const ay = y[a] as number;
+      const az = z[a] as number;
+      const ux = (x[b] as number) - ax;
+      const uy = (y[b] as number) - ay;
+      const uz = (z[b] as number) - az;
+      F[o] = 0;
+      F[o + 1] = 0;
+      F[o + 2] = 0;
+      if (this.triTorn(t)) continue;
+      if (e < 0) {
+        const l2 = ux * ux + uy * uy;
+        if (!(l2 > 1e-24)) continue;
+        const l = Math.sqrt(l2);
+        F[o] = -uy / l;
+        F[o + 1] = ux / l;
+        F[o + 3] = (F[o] as number) * ax + (F[o + 1] as number) * ay;
+        F[o + 4] = ux;
+        F[o + 5] = uy;
+        F[o + 6] = 0;
+        F[o + 13] = 1 / l2;
+        continue;
+      }
+      const vx = (x[e] as number) - ax;
+      const vy = (y[e] as number) - ay;
+      const vz = (z[e] as number) - az;
+      const nx = uy * vz - uz * vy;
+      const ny = uz * vx - ux * vz;
+      const nz = ux * vy - uy * vx;
+      const l = Math.sqrt(nx * nx + ny * ny + nz * nz);
+      const d00 = ux * ux + uy * uy + uz * uz;
+      const d01 = ux * vx + uy * vy + uz * vz;
+      const d11 = vx * vx + vy * vy + vz * vz;
+      const den = d00 * d11 - d01 * d01;
+      if (!(l > 1e-18) || !(den > 0)) continue;
+      F[o] = nx / l;
+      F[o + 1] = ny / l;
+      F[o + 2] = nz / l;
+      F[o + 3] = (F[o] as number) * ax + (F[o + 1] as number) * ay + (F[o + 2] as number) * az;
+      F[o + 4] = ux;
+      F[o + 5] = uy;
+      F[o + 6] = uz;
+      F[o + 7] = vx;
+      F[o + 8] = vy;
+      F[o + 9] = vz;
+      F[o + 10] = d00;
+      F[o + 11] = d01;
+      F[o + 12] = d11;
+      F[o + 13] = 1 / den;
+    }
+  }
+
+  /** Room for `k` more pairs and drops. */
+  private roomDrops(n: number): void {
+    if (this.dropMark.length < n) {
+      let c = Math.max(256, this.dropMark.length);
+      while (c < n) c *= 2;
+      this.dropMark = new Int32Array(c);
+      this.dropSlot = new Int32Array(c);
+      this.dropStamp = 0;
+    }
+  }
+
+  private pushDrop(d: number): number {
+    if (this.nCD >= this.cdI.length) {
+      const c = Math.max(256, this.cdI.length * 2);
+      const I = new Int32Array(c);
+      I.set(this.cdI);
+      this.cdI = I;
+      const grow = (a: Float64Array): Float64Array<ArrayBuffer> => {
+        const b = new Float64Array(c);
+        b.set(a);
+        return b;
+      };
+      this.cpx = grow(this.cpx);
+      this.cpy = grow(this.cpy);
+      this.cpz = grow(this.cpz);
+      this.cqx = grow(this.cqx);
+      this.cqy = grow(this.cqy);
+      this.cqz = grow(this.cqz);
+      this.cvx = grow(this.cvx);
+      this.cvy = grow(this.cvy);
+      this.cvz = grow(this.cvz);
+      this.cw = grow(this.cw);
+    }
+    const k = this.nCD++;
+    this.cdI[k] = d;
+    this.dropMark[d] = this.dropStamp;
+    this.dropSlot[d] = k;
+    return k;
+  }
+
+  private pushPair(k: number, t: number, side: number, ba: number, bb: number, be: number, nx: number, ny: number, nz: number, reach: number): void {
+    if (this.nDP >= this.dpK.length) {
+      const c = Math.max(512, this.dpK.length * 2);
+      const K = new Int32Array(c);
+      K.set(this.dpK);
+      const T = new Int32Array(c);
+      T.set(this.dpT);
+      const S = new Float64Array(c);
+      S.set(this.dpS);
+      const B = new Float64Array(c * 3);
+      B.set(this.dpB);
+      const N = new Float64Array(c * 3);
+      N.set(this.dpN);
+      const R = new Float64Array(c);
+      R.set(this.dpR);
+      this.dpK = K;
+      this.dpT = T;
+      this.dpS = S;
+      this.dpB = B;
+      this.dpN = N;
+      this.dpR = R;
+    }
+    const p = this.nDP++;
+    this.dpK[p] = k;
+    this.dpT[p] = t;
+    this.dpS[p] = side;
+    this.dpB[p * 3] = ba;
+    this.dpB[p * 3 + 1] = bb;
+    this.dpB[p * 3 + 2] = be;
+    this.dpN[p * 3] = nx;
+    this.dpN[p * 3 + 1] = ny;
+    this.dpN[p * 3 + 2] = nz;
+    this.dpR[p] = reach;
+  }
 
   /**
-   * Drops against the cloth's faces (in the plane, its threads), called by the liquid in its step after the drops met
-   * the bodies. A drop that came within `r + thickness` of a face, or crossed it, goes back to the side it started the
-   * step on; the drop and the face's corners move apart by their masses, the cloth's share as a change of speed (it moves
-   * in its own step next), so a sheet holds water and the water weighs it down. `box` finds the drops near a box on the
-   * liquid's grid; `found` is that grid's list.
+   * The drop and face pairs of this step, from the liquid's step just made: for each drop whose path comes near the
+   * cloth, the cloth points round it on the grid, the nearest of them (to where the drop ends, and to where it began when
+   * it went far), and that point's faces whose plane the drop is near or crossed and whose face is under it.
    */
-  meetDrops(ps: DropsView, box: (x0: number, y0: number, z0: number, x1: number, y1: number, z1: number) => number, found: () => Int32Array, r: number, spacing: number, mass: Float64Array, h: number): void {
+  private prepareDrops(h: number): void {
+    this.nDP = 0;
+    this.nCD = 0;
+    const L = this.liquid;
     if (this.wet.length !== this.cloths.length) this.wet = new Uint8Array(this.cloths.length);
-    if (this.dropPinX.length !== this.pinPoint.length) {
-      this.dropPinX = new Float64Array(this.pinPoint.length);
-      this.dropPinY = new Float64Array(this.pinPoint.length);
-      this.dropPinZ = new Float64Array(this.pinPoint.length);
+    this.wet.fill(0);
+    if (!L || L.ps.n === 0 || this.ta.length === 0) return;
+    const ps = L.ps;
+    const n = ps.n;
+    if (this.pf0.length !== this.n + 1) this.buildPointFaces();
+    this.faceTabOk.fill(0);
+    this.roomDrops(n);
+    this.dropStamp++;
+    if (this.dropStamp > 1 << 29) {
+      this.dropStamp = 1;
+      this.dropMark.fill(0);
     }
-    const { x, y, z, vx, vy, vz, w } = this;
-    const o = this.scratch;
-    const inv = 1 / h;
-    for (let c = 0; c < this.cloths.length; c++) {
-      const ci = this.cloths[c] as ClothInfo;
-      if (ci.unstable) continue;
-      const reach = r + ci.def.thickness;
-      const pad = reach + 2 * spacing;
-      const t1 = ci.t0 + ci.tn;
-      for (let t = ci.t0; t < t1; t++) {
-        if (this.triTorn(t)) continue;
-        const a = this.ta[t] as number;
-        const b = this.tb[t] as number;
-        const e = this.tc[t] as number;
-        const ee = e < 0 ? b : e;
-        const m = box(
-          Math.min(x[a] as number, x[b] as number, x[ee] as number) - pad, Math.min(y[a] as number, y[b] as number, y[ee] as number) - pad, Math.min(z[a] as number, z[b] as number, z[ee] as number) - pad,
-          Math.max(x[a] as number, x[b] as number, x[ee] as number) + pad, Math.max(y[a] as number, y[b] as number, y[ee] as number) + pad, Math.max(z[a] as number, z[b] as number, z[ee] as number) + pad,
-        );
-        if (m === 0) continue;
-        const list = found();
-        for (let q = 0; q < m; q++) {
-          const d = list[q] as number;
-          const dx = ps.x[d] as number;
-          const dy = ps.y[d] as number;
-          const dz = ps.z[d] as number;
-          const s1 = this.faceHeight(t, dx, dy, dz, x, y, z);
-          const nx = o[0] as number;
-          const ny = o[1] as number;
-          const nz = o[2] as number;
-          if (nx === 0 && ny === 0 && nz === 0) continue;
-          // the side the drop was on: where it started this step against the face where the last liquid step left it
-          // (the cloth's own step since may have carried the face past a drop resting on it)
-          const s0 = this.faceHeight(t, ps.x0[d] as number, ps.y0[d] as number, ps.z0[d] as number, this.sx, this.sy, this.sz);
-          this.faceHeight(t, dx, dy, dz, x, y, z);
-          const crossed = s0 * s1 < 0;
-          const side = s0 >= 0 ? 1 : -1;
-          const C = reach - s1 * side;
-          if (!(C > 0)) continue;
-          // a drop under the face by more than its reach that did not cross it belongs to the other side
-          if (!crossed && s1 * side < 0) continue;
-          // the foot of the drop on the face: where its path crossed it, or straight below it
-          let fx: number;
-          let fy: number;
-          let fz: number;
-          if (crossed) {
-            const f = s0 / (s0 - s1);
-            fx = (ps.x0[d] as number) + f * (dx - (ps.x0[d] as number));
-            fy = (ps.y0[d] as number) + f * (dy - (ps.y0[d] as number));
-            fz = (ps.z0[d] as number) + f * (dz - (ps.z0[d] as number));
-          } else {
-            fx = dx - s1 * nx;
-            fy = dy - s1 * ny;
-            fz = dz - s1 * nz;
-          }
-          // a margin over the edges: a drop in the fold between two faces is held by both, so it cannot slip down the crease
-          if (!this.footOn(t, fx, fy, fz, 0.15)) continue;
-          const ba = o[3] as number;
-          const bb = o[4] as number;
-          const be = o[5] as number;
-          // the drop goes all the way back to its side, so it can never be left across the face for the next step; the
-          // cloth takes the drop's change of momentum as a change of its corners' speed (the drop's share of the pair's
-          // push, by their masses, is its whole move: Δλ = m_drop C)
-          const dl = (mass[ps.owner[d] as number] as number) * C * side;
-          ps.x[d] = dx + C * side * nx;
-          ps.y[d] = dy + C * side * ny;
-          ps.z[d] = dz + C * side * nz;
-          this.wet[c] = 1;
-          this.meets++;
-          for (let k = 0; k < 3; k++) {
-            const j = k === 0 ? a : k === 1 ? b : e;
-            const bj = k === 0 ? ba : k === 1 ? bb : be;
-            if (j < 0) continue;
-            const wj = w[j] as number;
-            if (wj === 0) {
-              // a pinned corner: its pin carries the drop's push
-              const pq = this.pinOf[j] as number;
-              if (pq >= 0) {
-                this.dropPinX[pq] = (this.dropPinX[pq] as number) - bj * dl * nx * inv * inv;
-                this.dropPinY[pq] = (this.dropPinY[pq] as number) - bj * dl * ny * inv * inv;
-                this.dropPinZ[pq] = (this.dropPinZ[pq] as number) - bj * dl * nz * inv * inv;
-              }
-              continue;
-            }
-            // the corner moves now, by its share, and keeps the speed of that move (position-based: both sides of
-            // the pair end apart, so a drop is never left across the face)
-            const m = wj * bj * dl;
-            vx[j] = (vx[j] as number) - m * nx * inv;
-            vy[j] = (vy[j] as number) - m * ny * inv;
-            vz[j] = (vz[j] as number) - m * nz * inv;
+    let thick = 0;
+    for (const c of this.cloths) thick = Math.max(thick, c.def.thickness);
+    const r = L.r;
+    const reachMax = r + thick;
+    const pad = reachMax + this.pad + 0.01;
+    const { x, y, z, owner, pfT, pf0 } = this;
+    const F = this.faceTab;
+    const cell = this.grid.size;
+    this.ensureTiles();
+    const tb6 = this.tileBox;
+    const nTiles = tb6.length / 6;
+    for (let d = 0; d < n; d++) {
+      const x1 = ps.x[d] as number;
+      const y1 = ps.y[d] as number;
+      const z1 = ps.z[d] as number;
+      const x0 = ps.x0[d] as number;
+      const y0 = ps.y0[d] as number;
+      const z0 = ps.z0[d] as number;
+      const lx = Math.min(x0, x1) - pad;
+      const ly = Math.min(y0, y1) - pad;
+      const lz = Math.min(z0, z1) - pad;
+      const hx = Math.max(x0, x1) + pad;
+      const hy = Math.max(y0, y1) + pad;
+      const hz = Math.max(z0, z1) + pad;
+      if (lx > this.bx1 || hx < this.bx0 || ly > this.by1 || hy < this.by0 || lz > this.bz1 || hz < this.bz0) continue;
+      // a tile of cloth near the drop's path (a face within reach has a corner within half a cell more)
+      const g = 0.5 * cell;
+      let nearTile = false;
+      for (let k = 0; k < nTiles && !nearTile; k++) {
+        const o = k * 6;
+        nearTile = (tb6[o] as number) <= hx + g && (tb6[o + 3] as number) >= lx - g && (tb6[o + 1] as number) <= hy + g && (tb6[o + 4] as number) >= ly - g && (tb6[o + 2] as number) <= hz + g && (tb6[o + 5] as number) >= lz - g;
+      }
+      if (!nearTile) continue;
+      const m = this.inGrid(lx - g, ly - g, lz - g, hx + g, hy + g, hz + g);
+      if (m === 0) continue;
+      const found = this.grid.found;
+      // the nearest cloth point to where the drop ends, and to where it began
+      let j1 = -1;
+      let j0 = -1;
+      let e1 = Infinity;
+      let e0 = Infinity;
+      const far = (x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0) + (z1 - z0) * (z1 - z0) > 0.25 * cell * cell;
+      for (let q = 0; q < m; q++) {
+        const i = found[q] as number;
+        if ((this.cloths[owner[i] as number] as ClothInfo).unstable) continue;
+        const dx = (x[i] as number) - x1;
+        const dy = (y[i] as number) - y1;
+        const dz = (z[i] as number) - z1;
+        const q1 = dx * dx + dy * dy + dz * dz;
+        if (q1 < e1) {
+          e1 = q1;
+          j1 = i;
+        }
+        if (far) {
+          const fx = (x[i] as number) - x0;
+          const fy = (y[i] as number) - y0;
+          const fz = (z[i] as number) - z0;
+          const q0 = fx * fx + fy * fy + fz * fz;
+          if (q0 < e0) {
+            e0 = q0;
+            j0 = i;
           }
         }
       }
+      if (j1 < 0) continue;
+      this.faceStamp++;
+      if (this.faceStamp > 1 << 29) {
+        this.faceStamp = 1;
+        this.faceSeen.fill(0);
+      }
+      for (let pass = 0; pass < 2; pass++) {
+        const j = pass === 0 ? j1 : j0;
+        if (j < 0) continue;
+        const c = owner[j] as number;
+        const ci = this.cloths[c] as ClothInfo;
+        if (this.faceTabOk[c] === 0) {
+          this.faceTable(c);
+          this.faceTabOk[c] = 1;
+        }
+        const reach = r + ci.def.thickness;
+        for (let f = pf0[j] as number; f < (pf0[j + 1] as number); f++) {
+          const t = pfT[f] as number;
+          if (this.faceSeen[t] === this.faceStamp) continue;
+          this.faceSeen[t] = this.faceStamp;
+          const o = t * 14;
+          const nx = F[o] as number;
+          const ny = F[o + 1] as number;
+          const nz = F[o + 2] as number;
+          if (nx === 0 && ny === 0 && nz === 0) continue;
+          const off = F[o + 3] as number;
+          const s1 = nx * x1 + ny * y1 + nz * z1 - off;
+          const s0 = nx * x0 + ny * y0 + nz * z0 - off;
+          const side = s0 >= 0 ? 1 : -1;
+          const crossed = s0 * s1 < 0;
+          if (!crossed && (s1 * side > reach + 2 * this.pad + 0.01 || s1 * side < -reach)) continue;
+          // the foot: where the path crossed the plane, or straight below where the drop ends
+          let px: number;
+          let py: number;
+          let pz: number;
+          if (crossed) {
+            const u = s0 / (s0 - s1);
+            px = x0 + u * (x1 - x0);
+            py = y0 + u * (y1 - y0);
+            pz = z0 + u * (z1 - z0);
+          } else {
+            px = x1 - s1 * nx;
+            py = y1 - s1 * ny;
+            pz = z1 - s1 * nz;
+          }
+          const a = this.ta[t] as number;
+          const qx = px - (x[a] as number);
+          const qy = py - (y[a] as number);
+          const qz = pz - (z[a] as number);
+          let fb: number;
+          let fe: number;
+          if ((this.tc[t] as number) < 0) {
+            fb = (qx * (F[o + 4] as number) + qy * (F[o + 5] as number)) * (F[o + 13] as number);
+            fe = 0;
+            if (fb < -0.15 || fb > 1.15) continue;
+          } else {
+            const d20 = qx * (F[o + 4] as number) + qy * (F[o + 5] as number) + qz * (F[o + 6] as number);
+            const d21 = qx * (F[o + 7] as number) + qy * (F[o + 8] as number) + qz * (F[o + 9] as number);
+            const d00 = F[o + 10] as number;
+            const d01 = F[o + 11] as number;
+            const d11 = F[o + 12] as number;
+            const inv = F[o + 13] as number;
+            fb = (d11 * d20 - d01 * d21) * inv;
+            fe = (d00 * d21 - d01 * d20) * inv;
+            // a margin over the edges: a drop in the fold between two faces is held by both
+            if (fb < -0.15 || fe < -0.15 || fb + fe > 1.15) continue;
+          }
+          // the weights of the corners at the foot, kept on the face
+          fb = Math.min(1, Math.max(0, fb));
+          fe = Math.min(1 - fb, Math.max(0, fe));
+          let k: number;
+          if (this.dropMark[d] === this.dropStamp) k = this.dropSlot[d] as number;
+          else {
+            k = this.pushDrop(d);
+            this.cw[k] = 1 / L.massOf(ps.owner[d] as number);
+          }
+          this.pushPair(k, t, side, 1 - fb - fe, fb, fe, nx, ny, nz, reach);
+          this.wet[c] = 1;
+          if (ci.asleep) this.wake(c);
+          this.meets++;
+        }
+      }
+    }
+    // the drops that take the small steps start where the liquid began them, moving along its step
+    const ih = 1 / h;
+    for (let k = 0; k < this.nCD; k++) {
+      const d = this.cdI[k] as number;
+      this.cpx[k] = ps.x0[d] as number;
+      this.cpy[k] = ps.y0[d] as number;
+      this.cpz[k] = ps.z0[d] as number;
+      this.cvx[k] = ((ps.x[d] as number) - (ps.x0[d] as number)) * ih;
+      this.cvy[k] = ((ps.y[d] as number) - (ps.y0[d] as number)) * ih;
+      this.cvz[k] = ((ps.z[d] as number) - (ps.z0[d] as number)) * ih;
+    }
+  }
+
+  /** The drops that take the small steps move by their speed (at the start of a small step). */
+  private moveDrops(hs: number): void {
+    for (let k = 0; k < this.nCD; k++) {
+      this.cqx[k] = this.cpx[k] as number;
+      this.cqy[k] = this.cpy[k] as number;
+      this.cqz[k] = this.cpz[k] as number;
+      this.cpx[k] = (this.cpx[k] as number) + (this.cvx[k] as number) * hs;
+      this.cpy[k] = (this.cpy[k] as number) + (this.cvy[k] as number) * hs;
+      this.cpz[k] = (this.cpz[k] as number) + (this.cvz[k] as number) * hs;
+    }
+  }
+
+  /** Each drop keeps its reach from its faces, on its side: the drop and the corners share the push by their masses. */
+  private solveDrops(): void {
+    const { x, y, z, w, taut, ta, tb, tc, dpK, dpT, dpS, dpB, dpN, dpR, cpx, cpy, cpz, cw } = this;
+    for (let p = 0; p < this.nDP; p++) {
+      const k = dpK[p] as number;
+      const t = dpT[p] as number;
+      const a = ta[t] as number;
+      const b = tb[t] as number;
+      const e = tc[t] as number;
+      const ba = dpB[p * 3] as number;
+      const bb = dpB[p * 3 + 1] as number;
+      const be = dpB[p * 3 + 2] as number;
+      const nx = dpN[p * 3] as number;
+      const ny = dpN[p * 3 + 1] as number;
+      const nz = dpN[p * 3 + 2] as number;
+      const side = dpS[p] as number;
+      let fx = ba * (x[a] as number) + bb * (x[b] as number);
+      let fy = ba * (y[a] as number) + bb * (y[b] as number);
+      let fz = ba * (z[a] as number) + bb * (z[b] as number);
+      if (e >= 0) {
+        fx += be * (x[e] as number);
+        fy += be * (y[e] as number);
+        fz += be * (z[e] as number);
+      }
+      const s = nx * ((cpx[k] as number) - fx) + ny * ((cpy[k] as number) - fy) + nz * ((cpz[k] as number) - fz);
+      const C = (dpR[p] as number) - s * side;
+      if (!(C > 0)) continue;
+      const wd = cw[k] as number;
+      const held = w[a] === 0 || w[b] === 0 || (e >= 0 && w[e] === 0) || taut[a] === 1 || taut[b] === 1 || (e >= 0 && taut[e] === 1);
+      if (held) {
+        // the face does not give: the drop goes out whole, and the pins carry its push (Δλ = m C)
+        cpx[k] = (cpx[k] as number) + C * side * nx;
+        cpy[k] = (cpy[k] as number) + C * side * ny;
+        cpz[k] = (cpz[k] as number) + C * side * nz;
+        const L = (C / wd) * side;
+        this.holdPush(a, -L * ba * nx, -L * ba * ny, -L * ba * nz);
+        this.holdPush(b, -L * bb * nx, -L * bb * ny, -L * bb * nz);
+        if (e >= 0) this.holdPush(e, -L * be * nx, -L * be * ny, -L * be * nz);
+        continue;
+      }
+      const W = wd + ba * ba * (w[a] as number) + bb * bb * (w[b] as number) + (e >= 0 ? be * be * (w[e] as number) : 0);
+      const dl = (C / W) * side;
+      cpx[k] = (cpx[k] as number) + wd * dl * nx;
+      cpy[k] = (cpy[k] as number) + wd * dl * ny;
+      cpz[k] = (cpz[k] as number) + wd * dl * nz;
+      for (let q = 0; q < 3; q++) {
+        const j = q === 0 ? a : q === 1 ? b : e;
+        if (j < 0) continue;
+        const m = (w[j] as number) * (q === 0 ? ba : q === 1 ? bb : be) * dl;
+        x[j] = (x[j] as number) - m * nx;
+        y[j] = (y[j] as number) - m * ny;
+        z[j] = (z[j] as number) - m * nz;
+      }
+    }
+  }
+
+  /** The speeds of the drops that take the small steps, from their moves (at the end of a small step). */
+  private dropSpeeds(hs: number): void {
+    const ih = 1 / hs;
+    for (let k = 0; k < this.nCD; k++) {
+      this.cvx[k] = ((this.cpx[k] as number) - (this.cqx[k] as number)) * ih;
+      this.cvy[k] = ((this.cpy[k] as number) - (this.cqy[k] as number)) * ih;
+      this.cvz[k] = ((this.cpz[k] as number) - (this.cqz[k] as number)) * ih;
+    }
+  }
+
+  /** After the small steps: a drop still across its face goes back whole; the drops' places and speeds go to the liquid. */
+  private endDrops(): void {
+    const L = this.liquid;
+    if (!L || this.nCD === 0) return;
+    const { x, y, z, ta, tb, tc, dpK, dpT, dpS, dpB, dpN, dpR, cpx, cpy, cpz } = this;
+    for (let p = 0; p < this.nDP; p++) {
+      const k = dpK[p] as number;
+      const t = dpT[p] as number;
+      const a = ta[t] as number;
+      const b = tb[t] as number;
+      const e = tc[t] as number;
+      const ba = dpB[p * 3] as number;
+      const bb = dpB[p * 3 + 1] as number;
+      const be = dpB[p * 3 + 2] as number;
+      const nx = dpN[p * 3] as number;
+      const ny = dpN[p * 3 + 1] as number;
+      const nz = dpN[p * 3 + 2] as number;
+      const side = dpS[p] as number;
+      const fx = ba * (x[a] as number) + bb * (x[b] as number) + (e >= 0 ? be * (x[e] as number) : 0);
+      const fy = ba * (y[a] as number) + bb * (y[b] as number) + (e >= 0 ? be * (y[e] as number) : 0);
+      const fz = ba * (z[a] as number) + bb * (z[b] as number) + (e >= 0 ? be * (z[e] as number) : 0);
+      const s = nx * ((cpx[k] as number) - fx) + ny * ((cpy[k] as number) - fy) + nz * ((cpz[k] as number) - fz);
+      if (s * side >= 0) continue;
+      const C = (dpR[p] as number) - s * side;
+      cpx[k] = (cpx[k] as number) + C * side * nx;
+      cpy[k] = (cpy[k] as number) + C * side * ny;
+      cpz[k] = (cpz[k] as number) + C * side * nz;
+    }
+    const ps = L.ps;
+    for (let k = 0; k < this.nCD; k++) {
+      const d = this.cdI[k] as number;
+      ps.x[d] = this.cpx[k] as number;
+      ps.y[d] = this.cpy[k] as number;
+      ps.z[d] = this.cpz[k] as number;
+      ps.vx[d] = this.cvx[k] as number;
+      ps.vy[d] = this.cvy[k] as number;
+      ps.vz[d] = this.cvz[k] as number;
+    }
+  }
+
+  /** A push (in the pins' Δλ units) a held point passes on: to its own world pin, or shared by the pins its tethers reach. */
+  protected holdPush(i: number, ex: number, ey: number, ez: number): void {
+    const q = this.pinOf[i] as number;
+    if (q >= 0 && (this.pinBody[q] as number) < 0) {
+      this.pinFx[q] = (this.pinFx[q] as number) + ex;
+      this.pinFy[q] = (this.pinFy[q] as number) + ey;
+      this.pinFz[q] = (this.pinFz[q] as number) + ez;
+      return;
+    }
+    const n = this.teCnt[i] as number;
+    if (n === 0) return;
+    const k0 = this.teOf[i] as number;
+    for (let k = k0; k < k0 + n; k++) {
+      const p = this.tePin[k] as number;
+      this.pinFx[p] = (this.pinFx[p] as number) + ex / n;
+      this.pinFy[p] = (this.pinFy[p] as number) + ey / n;
+      this.pinFz[p] = (this.pinFz[p] as number) + ez / n;
     }
   }
 
@@ -2062,20 +2504,27 @@ export class ClothSet {
   /** The most stretched link of cloth c, as its length over its rest length (stretch and shear links). */
   stretchMax(c: number): number {
     const ci = this.cloths[c] as ClothInfo;
-    let m = 0;
+    let bestD2 = 0;
+    let bestR2 = 1;
     const { x, y, z } = this;
-    for (let l = ci.l0; l < ci.l0 + ci.ln; l++) {
-      if (this.broken[l] === 1 || this.kind[l] !== LinkKind.stretch) continue;
+    // the stretch links come first ([l0, sh0))
+    for (let l = ci.l0; l < ci.sh0; l++) {
+      if (this.broken[l] === 1) continue;
       const a = this.la[l] as number;
       const b = this.lb[l] as number;
       const dx = (x[a] as number) - (x[b] as number);
       const dy = (y[a] as number) - (y[b] as number);
       const dz = (z[a] as number) - (z[b] as number);
+      // the largest d² / r², compared without dividing: d² r_best² > d_best² r²
       const r = this.rest[l] as number;
-      const q = (dx * dx + dy * dy + dz * dz) / (r * r);
-      if (q > m) m = q;
+      const d2 = dx * dx + dy * dy + dz * dz;
+      const r2 = r * r;
+      if (d2 * bestR2 > bestD2 * r2) {
+        bestD2 = d2;
+        bestR2 = r2;
+      }
     }
-    return Math.sqrt(m);
+    return bestR2 > 0 ? Math.sqrt(bestD2 / bestR2) : 0;
   }
 
   /**
@@ -2288,6 +2737,7 @@ export class ClothSet {
     this.tornNow.fill(0);
     this.lqHs = 0;
     this.markCuts(0, this.ta.length);
+    this.tilesAt = -1;
   }
 }
 

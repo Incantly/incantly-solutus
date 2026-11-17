@@ -1007,8 +1007,7 @@ export class Physics3Driver implements WorldDriver {
     if (fl || cl) for (let i = 0; i < w.n; i++) if (w.type[i] !== BodyType3.Static && !w.gone.has(i)) w.updateShapes(i);
     if (fl) {
       fl.account(w, h);
-      // then the drops take their step against the bodies where they are now, and the cloth's faces
-      fl.cloth = cl;
+      // then the drops take their step against the bodies where they are now (they meet the cloth in its step)
       fl.step(w, h, w.range);
       const t = Number((this.t0 + this.n / this.rate).toFixed(3));
       for (const owner of fl.left) {
@@ -1017,7 +1016,10 @@ export class Physics3Driver implements WorldDriver {
       }
       if (fl.unstable) for (const lm of this.liquidMembers) this.warnOnce(`unstable-liquid:${lm.rec.id}`, makeNotice('unstable_world', { name: lm.rec.p.name, t, hint: 'make the liquid less viscous or use world with timestep = 1/240' }, [lm.rec.p.name]));
     }
-    if (cl) this.stepCloth(cl, w, h);
+    if (cl) {
+      cl.useDrops(fl);
+      this.stepCloth(cl, w, h);
+    }
     this.checkHealth();
     for (const jm of [...this.jointMembers, ...this.wheelMembers]) {
       if (!jm.joint.broken || this.brokeAt.has(jm.joint)) continue;
