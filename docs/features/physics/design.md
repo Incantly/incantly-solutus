@@ -205,11 +205,11 @@ All of them hit solid shapes and bodies (section 9).
 **Events.** The controls area's handlers gain one event:
 
 ```text
-on b hit if hit.other == floor: Note(note("C5"), 0.1)
+on b hit if other == "floor": Note(note("C5"), 0.1)
 on b hit: c with color = red
 ```
 
-The guard uses the controls area's `if` (`docs/features/controls-scripting/design.md`). In a `hit` handler, `hit.speed`, `hit.point`, `hit.other` and `hit.impulse` are readable. A body that stays in contact does not keep firing: one hit per new contact, and none for contacts slower than 0.05 m/s (resting).
+The guard uses the controls area's `if` (`docs/features/controls-scripting/design.md`). In a `hit` handler, `speed` (m/s), `point`, `other` (the other object's name, as a text) and `impulse` (N s) are readable, as `value` and `self` are in other handlers. A hit runs its handlers once: a replay or a seek back over it does not run them again. A body that stays in contact does not keep firing: one hit per new contact, and none for contacts slower than 0.05 m/s (resting).
 
 ### 2.5 Measures for lessons
 

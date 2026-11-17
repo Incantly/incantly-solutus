@@ -171,7 +171,7 @@ export interface ButtonValue {
 
 /* ------------------------------ handlers (3.3, 3.4) ------------------------------ */
 
-export type HandlerEvent = 'click' | 'change' | 'input' | 'dragend' | 'load';
+export type HandlerEvent = 'click' | 'change' | 'input' | 'dragend' | 'load' | 'hit';
 
 export type SkipReason = 'guard_false' | 'undefined_argument' | 'out_of_range' | 'loop_range' | 'broken';
 

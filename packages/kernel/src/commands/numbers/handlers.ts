@@ -19,6 +19,7 @@ import { reservedGroup } from '../../language/names';
 import { splitLogicalLines } from '../../language/source';
 import type { HandlerEvent, HandlerRun } from './types';
 import { NUMBERS_LIMITS } from './types';
+import { err } from '../../errors/table';
 import { numbersError, numbersNotice } from './errors';
 import { checkProbeLine, printLineNode, substituteLine, valueLiteralExpr } from './eval';
 import { parseRangeRestyle } from './rangestep';
@@ -27,13 +28,14 @@ import type { Binding } from './eval';
 import { parseLine } from '../../language/parser';
 import type { TNode } from '../../language/tnode';
 
-const EVENTS: readonly HandlerEvent[] = ['click', 'change', 'input', 'dragend', 'load'];
+const EVENTS: readonly HandlerEvent[] = ['click', 'change', 'input', 'dragend', 'load', 'hit'];
 
 /** Steps may call these actions (3.3). The sound actions are fired by handlers too (sound design 1.3). */
 const STEP_ACTIONS: ReadonlySet<string> = new Set([
   'SetValue', 'Toggle', 'Animate', 'Show', 'Hide', 'Reset', 'Click',
   'Highlight', 'Trace', 'Untrace', 'Play', 'Pause', 'View', 'Axes', 'Grid',
   'Note', 'Sonify', 'Mute', 'Unmute',
+  'Push', 'Wake', 'Sleep',
 ]);
 const FUTURE_ACTIONS: ReadonlySet<string> = new Set(['Highlight', 'Trace', 'Untrace', 'Play', 'Pause', 'View', 'Axes', 'Grid']);
 /** Restyle keys that would create a rule; formulas for them are rejected in steps. */
@@ -254,7 +256,7 @@ export function parseHandlerLine(source: string, line = 1): ParsedHandler | Erro
     return numbersError('unknown_event', at(col, col + eventWord.length), { event: eventWord }, {
       token: eventWord,
       expected: [...EVENTS],
-      hint: close.length > 0 ? `Did you mean ${close[0]}? Events: click, change, input, dragend, load.` : 'Events: click, change, input, dragend, load.',
+      hint: close.length > 0 ? `Did you mean ${close[0]}? Events: click, change, input, dragend, load, hit.` : 'Events: click, change, input, dragend, load, hit.',
       suggest: close.length > 0 ? [`on ${target} ${close[0]}: ${step}`] : [`on ${target} click: ${step}`],
     });
   }
@@ -375,8 +377,15 @@ function definitionBindings(figure: Figure, target: string, event: HandlerEvent)
     bindings.set('value', { literal: lit });
   }
   bindings.set('event', { literal: { k: 'str', parts: [event], s: 0, e: 0 } });
+  if (event === 'hit') for (const [k, v] of Object.entries(HIT_SAMPLE)) {
+    const lit = valueLiteralExpr(v);
+    if (lit) bindings.set(k, { literal: lit });
+  }
   return bindings;
 }
+
+/** What a `hit` handler can read (physics design 2.4): the speed of the hit, the other object's name, where, how hard. */
+export const HIT_SAMPLE: Readonly<Record<string, unknown>> = { speed: 1, other: 'floor', point: { x: 0, y: 0 }, impulse: 1 };
 
 function remap(error: ErrorObject, line: number, colOffset: number): ErrorObject {
   return { ...error, line, col: error.col + colOffset, endCol: error.endCol + colOffset };
@@ -468,7 +477,7 @@ function checkStepSource(
   stepCol: number,
 ): StepCheck | ErrorObject {
   // Another `on` line as a step: the kernel parser does not know the `on` line kind, so name it here.
-  if (/^on\s+\S+\s+(?:click|change|input|dragend|load)\b/.test(stepSource.trim())) {
+  if (/^on\s+\S+\s+(?:click|change|input|dragend|load|hit)\b/.test(stepSource.trim())) {
     return numbersError('handler_structure', { line, col: stepCol, endCol: stepCol + stepSource.length }, { what: 'add another handler', step_kind: 'on' }, {
       token: stepSource.trim(),
       hint: `A step is one action. Add the other handler as its own line: ${stepSource.trim()}`,
@@ -688,6 +697,8 @@ function allowedEvents(figure: Figure, target: string): HandlerEvent[] | undefin
   if (view.type === 'Button') return ['click'];
   if (view.type === 'Input') return ['change', 'input', 'dragend'];
   if (view.type === 'Choice') return ['change'];
+  // a body raises `hit` on each new touch (physics design 2.4)
+  if (view.type === 'Body' || (view.type === 'List' && figure.get(target)?.typeText === 'List<Body>')) return isClickableName(figure, target) ? ['click', 'hit'] : ['hit'];
   if (view.type === 'Bool') return view.free ? ['change'] : [];
   if (view.type === 'Number' || view.type === 'Point') {
     const out: HandlerEvent[] = view.free ? ['change', 'dragend'] : [];
@@ -726,6 +737,15 @@ export function addHandler(
     });
   }
   const allowed = allowedEvents(figure, p.target);
+  if (p.event === 'hit' && (!allowed || !allowed.includes('hit'))) {
+    // physics errors B015: only bodies hit things
+    return err('not_in_world', { line, col: 4, endCol: 4 + p.target.length }, { why: `${p.target} is not a body` }, {
+      token: p.target,
+      hint: `Only bodies hit things. Make ${p.target} a body first: b = Body(${p.target}, mass = 1).`,
+      recovery: 'fix_line',
+      fingerprintKey: `hit:${p.target}`,
+    });
+  }
   if (!allowed || !allowed.includes(p.event)) {
     const what = p.target === 'figure' ? 'the figure' : describeType(figure.get(p.target)?.type ?? 'object');
     const hint =
@@ -1053,7 +1073,7 @@ function restoreHandlers(store: FigureHandlers, snap: HandlerSnapshot): void {
   for (const [k, h] of snap) store.handlers.set(k, { target: h.target, event: h.event, steps: [...h.steps] });
 }
 
-const CLEAR_LINE = /^\s*ClearHandler\(\s*([A-Za-zͰ-Ͽ][A-Za-z0-9_Ͱ-Ͽ]*)\s*,\s*"?(click|change|input|dragend|load)"?\s*(?:,\s*(\d+)\s*)?\)\s*$/;
+const CLEAR_LINE = /^\s*ClearHandler\(\s*([A-Za-zͰ-Ͽ][A-Za-z0-9_Ͱ-Ͽ]*)\s*,\s*"?(click|change|input|dragend|load|hit)"?\s*(?:,\s*(\d+)\s*)?\)\s*$/;
 
 /**
  * The `on` line and `ClearHandler(go, click)` as lines of the figure (controls-scripting design 3.3): the steps live with

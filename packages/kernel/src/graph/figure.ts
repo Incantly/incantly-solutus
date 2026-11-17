@@ -216,8 +216,20 @@ export class Figure extends FigureHist {
     }
     this.deliver();
     const failed = this.takeListenerFailures();
+    if (this.drivers.length > 0 && !this.inAfterFlush) {
+      this.inAfterFlush = true;
+      try {
+        for (const w of this.drivers) w.afterFlush?.();
+      } catch {
+        // a driver's follow-up must not take the frame down
+      } finally {
+        this.inAfterFlush = false;
+      }
+    }
     return failed > 0 ? { ...d, listenerFailures: failed } : d;
   }
+
+  private inAfterFlush = false;
 
   private flushNow(force: boolean): FrameDelta {
     let d = super.flush(force);

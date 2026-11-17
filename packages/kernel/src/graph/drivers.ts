@@ -32,6 +32,8 @@ export interface WorldDriver {
   owns?(id: ObjId): boolean;
   /** `Restart()`: everything the driver owns goes back to its start at the current time. */
   onRestart?(): void;
+  /** After a whole flush, outside any pass: run what the pass found (`on … hit` handlers). */
+  afterFlush?(): void;
 }
 
 export type WorldDriverFactory = (figure: unknown) => WorldDriver | undefined;
