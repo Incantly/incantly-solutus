@@ -788,3 +788,157 @@ export class Grab2 extends Base {
     return k;
   }
 }
+
+/* ------------------------------ wheel ------------------------------ */
+
+export interface WheelOptions {
+  /** Suspension stiffness, N/m, and damping, N s/m. */
+  readonly spring: number;
+  readonly damping: number;
+  /** How far the wheel may move along the suspension from its rest place, m. */
+  readonly travel: number;
+  /** Target spin of the wheel against the chassis, rad/s, and the most torque the motor gives, N m. */
+  motor?: number;
+  torque?: number;
+}
+
+/**
+ * A wheel on a chassis (physics design 8, in the plane): the wheel's centre stays on a line fixed in the chassis (the
+ * suspension), a spring and damper hold it along that line, it turns freely, and a motor may drive its spin.
+ */
+export class Wheel2 extends Base {
+  readonly kind = FK.spring;
+  private ip = 0;
+  private im = 0;
+  private il = 0;
+  private iu = 0;
+  private readonly axl: [number, number];
+  private rAx = 0;
+  private rAy = 0;
+  private rBx = 0;
+  private rBy = 0;
+  private ax = 0;
+  private ay = 0;
+  private trans = 0;
+  constructor(w: World2, a: number, b: number, private readonly la: [number, number], axis: [number, number], public opts: WheelOptions) {
+    super(a, b);
+    const l = Math.sqrt(axis[0] * axis[0] + axis[1] * axis[1]) || 1;
+    const c = w.qc[a] as number;
+    const s = w.qs[a] as number;
+    const x = axis[0] / l;
+    const y = axis[1] / l;
+    this.axl = [c * x + s * y, -s * x + c * y];
+  }
+
+  private frame(w: World2): void {
+    [this.rAx, this.rAy] = rot(w, this.a, this.la[0], this.la[1]);
+    this.rBx = 0;
+    this.rBy = 0;
+    [this.ax, this.ay] = rot(w, this.a, this.axl[0], this.axl[1]);
+    const dx = (w.px[this.b] as number) - (w.px[this.a] as number) - this.rAx;
+    const dy = (w.py[this.b] as number) - (w.py[this.a] as number) - this.rAy;
+    this.trans = dx * this.ax + dy * this.ay;
+  }
+
+  override length(w: World2): number {
+    this.frame(w);
+    return this.trans;
+  }
+
+  private row(w: World2, dx: number, dy: number, target: number, acc: number, lo: number, hi: number): number {
+    const { a, b } = this;
+    const d1x = (w.px[b] as number) - (w.px[a] as number);
+    const d1y = (w.py[b] as number) - (w.py[a] as number);
+    const sA = d1x * dy - d1y * dx;
+    const mA = w.invM[a] as number;
+    const mB = w.invM[b] as number;
+    const iA = w.invI[a] as number;
+    const k = mA + mB + iA * sA * sA;
+    if (!(k > 0)) return acc;
+    const cdot = dx * ((w.vx[b] as number) - (w.vx[a] as number)) + dy * ((w.vy[b] as number) - (w.vy[a] as number)) - sA * (w.w[a] as number);
+    const next = Math.max(lo, Math.min(hi, acc - (cdot - target) / k));
+    const d = next - acc;
+    w.vx[a] = (w.vx[a] as number) - mA * d * dx;
+    w.vy[a] = (w.vy[a] as number) - mA * d * dy;
+    w.w[a] = (w.w[a] as number) - iA * d * sA;
+    w.vx[b] = (w.vx[b] as number) + mB * d * dx;
+    w.vy[b] = (w.vy[b] as number) + mB * d * dy;
+    return next;
+  }
+
+  initVelocity(w: World2, h: number): void {
+    this.frame(w);
+    const { a, b } = this;
+    // the suspension spring and damper, as a force along the axis
+    const vx = (w.vx[b] as number) - (w.vx[a] as number) + (w.w[a] as number) * this.rAy;
+    const vy = (w.vy[b] as number) - (w.vy[a] as number) - (w.w[a] as number) * this.rAx;
+    const rate = vx * this.ax + vy * this.ay;
+    const f = -this.opts.spring * this.trans - this.opts.damping * rate;
+    applyP(w, a, b, this.rAx + (w.px[b] as number) - (w.px[a] as number) - this.rAx, this.rAy + (w.py[b] as number) - (w.py[a] as number) - this.rAy, 0, 0, f * h * this.ax, f * h * this.ay);
+    this.springX = f * h * this.ax;
+    this.springY = f * h * this.ay;
+    this.impulseX = this.springX;
+    this.impulseY = this.springY;
+  }
+
+  warmStart(): void {
+    this.ip = this.im = this.il = this.iu = 0;
+  }
+
+  solveVelocity(w: World2, h: number): void {
+    const { a, b } = this;
+    // the motor turns the wheel against the chassis
+    if (this.opts.motor !== undefined) {
+      const iA = w.invI[a] as number;
+      const iB = w.invI[b] as number;
+      if (iA + iB > 0) {
+        const max = (this.opts.torque ?? 0) * h;
+        const cdot = (w.w[b] as number) - (w.w[a] as number) - this.opts.motor;
+        const old = this.im;
+        this.im = Math.max(-max, Math.min(max, old - cdot / (iA + iB)));
+        const d = this.im - old;
+        w.w[a] = (w.w[a] as number) - iA * d;
+        w.w[b] = (w.w[b] as number) + iB * d;
+      }
+    }
+    this.ip = this.row(w, -this.ay, this.ax, 0, this.ip, -Infinity, Infinity);
+    const inv_h = 1 / h;
+    const lo = this.trans + this.opts.travel;
+    this.il = this.row(w, this.ax, this.ay, lo > 0 ? -lo * inv_h : 0, this.il, 0, Infinity);
+    const hi = this.opts.travel - this.trans;
+    this.iu = this.row(w, -this.ax, -this.ay, hi > 0 ? -hi * inv_h : 0, this.iu, 0, Infinity);
+    // everything the mount carries: the spring, the side push, and the stops at the ends of its travel
+    this.impulseX = this.springX - this.ay * this.ip + (this.il - this.iu) * this.ax;
+    this.impulseY = this.springY + this.ax * this.ip + (this.il - this.iu) * this.ay;
+  }
+
+  private springX = 0;
+  private springY = 0;
+
+  solvePosition(w: World2): boolean {
+    this.frame(w);
+    const { a, b } = this;
+    const dx = (w.px[b] as number) - (w.px[a] as number) - this.rAx;
+    const dy = (w.py[b] as number) - (w.py[a] as number) - this.rAy;
+    const perp = -this.ay * dx + this.ax * dy;
+    const mA = w.invM[a] as number;
+    const mB = w.invM[b] as number;
+    const m = mA + mB;
+    if (m > 0 && Math.abs(perp) > LINEAR_SLOP) {
+      const c = Math.max(-MAX_LIN, Math.min(MAX_LIN, perp)) / m;
+      w.px[a] = (w.px[a] as number) - mA * c * this.ay;
+      w.py[a] = (w.py[a] as number) + mA * c * this.ax;
+      w.px[b] = (w.px[b] as number) + mB * c * this.ay;
+      w.py[b] = (w.py[b] as number) - mB * c * this.ax;
+    }
+    return Math.abs(perp) <= LINEAR_SLOP;
+  }
+
+  save(out: number[]): void {
+    out.push(0);
+  }
+
+  load(_s: Float64Array, k: number): number {
+    return k + 1;
+  }
+}

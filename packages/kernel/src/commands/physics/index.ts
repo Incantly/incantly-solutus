@@ -31,6 +31,7 @@ import { FORCE_KINDS } from '../../physics/world2';
 import { PhysicsDriver } from './driver';
 import { bodyShapeOf } from './shapes';
 import { JOINT_COMMANDS, MEASURE_COMMANDS, isJointValue } from './joints';
+import { VEHICLE_COMMANDS, isVehicleValue, isWheelValue } from './vehicle';
 import type { BodySpec, BodyValue, Outline, WorldValue } from './types';
 import { DEFAULT_WORLD, SHOW_WORDS, isBodyValue, isWorldValue } from './types';
 
@@ -39,6 +40,9 @@ export type { BodySpec, BodyValue, Outline, WorldValue } from './types';
 export { isBodyValue, isWorldValue, DEFAULT_WORLD } from './types';
 export { bodyShapeOf, solidShapeOf } from './shapes';
 export { isJointValue } from './joints';
+export { dragBody, draggingBody } from './drag';
+export { isVehicleValue, isWheelValue } from './vehicle';
+export type { VehicleValue, WheelValue } from './vehicle';
 export type { JointValue, JointKind } from './joints';
 
 /** The limits of design 11.3, the same on every computer. */
@@ -488,6 +492,18 @@ function readJoint(field: string, v: unknown): unknown {
   }
 }
 
+const WHEEL_FIELDS: Readonly<Record<string, Ty>> = { spin: T.Number, broken: T.Bool, pos: T.Point };
+const VEHICLE_FIELDS: Readonly<Record<string, Ty>> = { speedometer: T.Number };
+
+function readWheel(field: string, v: unknown): unknown {
+  if (!isWheelValue(v)) return undefined;
+  return field === 'spin' ? v.spin : field === 'broken' ? v.broken : field === 'pos' ? { x: v.x, y: v.y } : undefined;
+}
+
+function readVehicle(field: string, v: unknown): unknown {
+  return isVehicleValue(v) && field === 'speedometer' ? v.speedometer : undefined;
+}
+
 /* ------------------------------ line checks and rewrites ------------------------------ */
 
 const WITH_WORLD = /^\s*world\s+with\s+([\s\S]+)$/;
@@ -590,7 +606,7 @@ export function physicsLineCheck(_figure: unknown, line: CheckedLine): ErrorObje
 let registered = false;
 
 export function registerPhysics(registry: CommandRegistry): void {
-  registry.registerAll([...PHYSICS_COMMANDS, ...JOINT_COMMANDS, ...MEASURE_COMMANDS]);
+  registry.registerAll([...PHYSICS_COMMANDS, ...JOINT_COMMANDS, ...MEASURE_COMMANDS, ...VEHICLE_COMMANDS]);
   if (registered) return;
   registered = true;
   registerWorldDriver((figure) => {
@@ -601,7 +617,7 @@ export function registerPhysics(registry: CommandRegistry): void {
     DRIVERS.set(f, d);
     return d;
   });
-  for (const [type, fields, reader] of [['Body', BODY_FIELDS, readBody], ['World', WORLD_FIELDS, readWorld], ['Joint', JOINT_FIELDS, readJoint]] as const) {
+  for (const [type, fields, reader] of [['Body', BODY_FIELDS, readBody], ['World', WORLD_FIELDS, readWorld], ['Joint', JOINT_FIELDS, readJoint], ['Wheel', WHEEL_FIELDS, readWheel], ['Vehicle', VEHICLE_FIELDS, readVehicle]] as const) {
     registerFieldNames(type, () => Object.keys(fields));
     registerFieldTyper(type, (field) => fields[field]);
     registerFieldReader(type, (field, v) => reader(field, v));
@@ -610,11 +626,15 @@ export function registerPhysics(registry: CommandRegistry): void {
     if (isBodyValue(v)) return `body at (${fmt(v.x)}, ${fmt(v.y)}), ${fmt(Math.sqrt(v.vx * v.vx + v.vy * v.vy))} m/s${v.asleep ? ', asleep' : ''}`;
     if (isWorldValue(v)) return `world, gravity (${fmt(v.gx)}, ${fmt(v.gy)})`;
     if (isJointValue(v)) return `${v.kind}${v.broken ? ', broken' : `, ${fmt(v.force)} N`}`;
+    if (isWheelValue(v)) return `wheel, ${fmt(Math.abs(v.spin))} rad/s${v.broken ? ', broken off' : ''}`;
+    if (isVehicleValue(v)) return `vehicle, ${fmt(v.speedometer)} m/s`;
     return undefined;
   });
   registerTypeStyle('Body', { defaults: { color: '#c0602a', width: 2, opacity: 0.35 }, keys: ['bounce', 'friction', 'force', 'torque', 'bullet', 'group', 'charge', 'show'] });
   registerTypeStyle('World', { drawable: false });
   registerTypeStyle('Joint', { defaults: { color: '#555555', width: 1.5 } });
+  registerTypeStyle('Wheel', { defaults: { color: '#2b2f36', width: 2 } });
+  registerTypeStyle('Vehicle', { drawable: false });
   // `with solid = true` on every flat shape, and the material of solids and bodies
   const PROPS: Readonly<Record<string, PropSpec>> = {
     solid: { kind: 'bool', allowed: 'true or false', expr: true },

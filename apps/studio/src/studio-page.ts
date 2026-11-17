@@ -24,7 +24,7 @@ import { mountProbCalc } from './probcalc';
 import { mountSimStrip } from './simstrip';
 import type { SimStrip } from './simstrip';
 import { mountToolStrip } from './tools-ui';
-import { symDrawing } from '@incantly/sdk/screen';
+import { contactsItem, physicsMarks, symDrawing } from '@incantly/sdk/screen';
 import type { ToolStrip } from './tools-ui';
 import type { ProbCalc } from './probcalc';
 import type { DataLab } from './datalab';
@@ -38,7 +38,7 @@ import { sceneBounds } from '@incantly/sdk/screen';
 import type { SceneItem } from '@incantly/sdk/screen';
 import { studioRegistry } from './registry';
 import { KernelSession } from './session';
-import { tracePoints, tracedIds } from '@incantly/kernel';
+import { physicsOf, tracePoints, tracedIds } from '@incantly/kernel';
 import { createSelection, selectionFrom } from './selection';
 import type { Selection } from './selection';
 import { hitTest } from '@incantly/sdk/screen';
@@ -181,8 +181,10 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
         continue;
       }
       if (!drawsOnGraph(o.type, o.typeText, o.cell.value)) continue;
-      out.push({ id: o.id, name: o.name, type: o.type, typeText: o.typeText, value: o.cell.value, color: expressions.colorOf(o.id), free: o.type === 'Point' && session.draggable(o.name), label: true, ...(hiddenByStyle(o) ? { ghost: true } : {}), ...(selection.has(o.name) ? { selected: true } : {}), ...(selection.hover() === o.name ? { hovered: true } : {}), ...(o.type === 'Particles' ? { time: session.time() } : {}), ...(traced.has(o.id as unknown as number) ? { trace: tracePoints(session.figure, o.id) as Float64Array } : {}) });
+      out.push({ id: o.id, name: o.name, type: o.type, typeText: o.typeText, value: o.cell.value, color: expressions.colorOf(o.id), free: o.type === 'Point' && session.draggable(o.name), label: true, ...physicsMarks(session.figure, o), ...(hiddenByStyle(o) ? { ghost: true } : {}), ...(selection.has(o.name) ? { selected: true } : {}), ...(selection.hover() === o.name ? { hovered: true } : {}), ...(o.type === 'Particles' ? { time: session.time() } : {}), ...(traced.has(o.id as unknown as number) ? { trace: tracePoints(session.figure, o.id) as Float64Array } : {}) });
     }
+    const contacts = contactsItem(session.figure);
+    if (contacts) out.push(contacts);
     return out;
   };
   const graph = mountGraph({
@@ -406,12 +408,40 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
   const play = btn('▶', 'icon-btn', 'Play', () => toggleClock());
   const scrub = el('input', { type: 'range', class: 'scrub', 'aria-label': 'Time', step: 'any' });
   const readout = el('output', { class: 'readout' });
-  const clock = el('div', { class: 'clock', role: 'group', 'aria-label': 'Clock' }, play, scrub, readout);
+  const perf = el('output', { class: 'perf', 'aria-label': 'Physics speed', title: 'Work per frame, bodies awake, touching points' });
+  perf.hidden = true;
+  let frameAvg = 0;
+  const clock = el('div', { class: 'clock', role: 'group', 'aria-label': 'Clock' }, play, scrub, readout, perf);
   clock.hidden = true;
   let running = 0;
+  // physics ui.md 2: when a frame's work goes over its share (6 ms), the film plays slower; the steps never change
+  let filmNow = 0;
+  let lastNow: number | undefined;
+  let pace = 1;
+  let mark = '';
   const tick = (now: number): void => {
+    const dt = lastNow === undefined ? 0 : Math.max(0, now - lastNow);
+    lastNow = now;
+    filmNow += dt * pace;
+    const t0 = performance.now();
     // the kernel's player moves `t`, runs the traces and animated sliders, and starts an ended film again
-    session.frame(now / 1000);
+    session.frame(filmNow / 1000);
+    const cost = performance.now() - t0;
+    pace = cost > 6 ? Math.max(0.25, pace * 0.9) : Math.min(1, pace * 1.05);
+    const nextMark = session.figure.driversNeedFrames() ? ' · catching up' : pace < 0.95 ? ' · slow' : '';
+    if (nextMark !== mark) {
+      mark = nextMark;
+      clock.title = mark === ' · slow' ? 'This computer is busy. The film is the same, only slower.' : mark === ' · catching up' ? 'The physics is catching up with the time bar.' : '';
+    }
+    readout.textContent = `t = ${session.time().toFixed(2)} s${mark}`;
+    // the physics row of physics ui.md 12: frame time, awake bodies, touching points
+    const w = physicsOf(session.figure).world;
+    perf.hidden = !w;
+    if (w) {
+      frameAvg = frameAvg * 0.9 + cost * 0.1;
+      perf.textContent = `${frameAvg.toFixed(1)} ms · ${w.awakeCount()} awake · ${w.contactCount} contacts`;
+      perf.classList.toggle('busy', frameAvg > 6);
+    }
     // a spinning camera changes no object, so the Space view is told each frame
     if (!space3Ref.current?.element.hidden) space3Ref.current?.redraw();
     running = raf(tick);
@@ -425,6 +455,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
       play.title = 'Play';
     } else {
       session.play();
+      lastNow = undefined;
       running = raf(tick);
       play.textContent = '❚❚';
       play.title = 'Pause';
@@ -565,6 +596,19 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
     if (files.keyDown(e)) {
       e.preventDefault();
       return;
+    }
+    // arrow keys give a selected body a small push, Shift five times as much (physics ui.md 4)
+    const pushDir: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, 1], ArrowDown: [0, -1] };
+    const dir = pushDir[e.key];
+    if (!typing && dir) {
+      const bodies = selection.names().filter((n) => session.figure.get(n.replace(/\[\d+\]$/, ''))?.type === 'Body');
+      if (bodies.length > 0) {
+        e.preventDefault();
+        const k = e.shiftKey ? 5 : 1;
+        const r = session.applyLines(bodies.map((n) => `Push(${n}, (${dir[0] * k}, ${dir[1] * k}))`), 'push', 'independent', 'learner');
+        say(r.ok ? `Pushed ${bodies.join(', ')}.` : r.error.message);
+        return;
+      }
     }
     if (!typing && tools.keyDown(e)) {
       e.preventDefault();

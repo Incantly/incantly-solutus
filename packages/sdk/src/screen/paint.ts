@@ -9,6 +9,7 @@ import { math } from '@incantly/view';
 import type { MathItem, MathLayout } from '@incantly/view';
 import { canvasMeasure, drawMath } from './mathdraw';
 import { isParticlesValue, makeParticleBatch } from '@incantly/kernel';
+import { forceScale, isPhysicsItem, paintForceKey, paintPhysicsItem, paintSolidEdge } from './physics';
 import type { FunctionValue, ParticleBatchPlain, ParticlesValue } from '@incantly/kernel';
 import { gridStep, tickText } from './viewport';
 import type { Viewport } from './viewport';
@@ -38,6 +39,10 @@ export interface SceneItem {
   readonly trace?: Float64Array;
   /** Open circles on a curve: the values a cancelled factor excludes (cas ui.md 7). */
   readonly holes?: readonly Pt[];
+  /** A solid shape (`with solid = true`): drawn with a hatched edge (physics ui.md 7). */
+  readonly solid?: boolean;
+  /** Arrows on a body: its forces or its speed (physics ui.md 5). */
+  readonly arrows?: 'forces' | 'speeds';
   /** A Text placed on the graph (`with at = …`, text-logic design 2.1 and 7). */
   readonly text?: { readonly at: Pt; readonly size: number; readonly anchor: string; readonly rotate: number; readonly bg?: string; readonly vertical?: boolean; readonly full?: boolean };
 }
@@ -1095,8 +1100,14 @@ export function paintScene(ctx: Ctx, vp: Viewport, items: readonly SceneItem[]):
   // areas and charts first, then curves, then points on top
   const rank = (t: string): number => (t === 'Point' ? 3 : t === 'Chart' || t === 'Region' || t === 'Polygon' || t.endsWith('Distribution') ? 0 : t === 'List' ? 2 : 1);
   const sorted = [...items].sort((a, b) => rank(a.type) - rank(b.type));
+  const scale = forceScale(items);
   for (const it of sorted) {
     try {
+      if (isPhysicsItem(it)) {
+        if (it.ghost) continue;
+        paintPhysicsItem(ctx, vp, it, hits, scale);
+        continue;
+      }
       if (it.trace && it.trace.length >= 4) paintTrace(ctx, vp, it.trace, it.color);
       if (it.type === 'Text') {
         // full LaTeX is drawn by the HTML overlay over the canvas (latex-overlay.ts)
@@ -1127,10 +1138,12 @@ export function paintScene(ctx: Ctx, vp: Viewport, items: readonly SceneItem[]):
         ctx.restore();
       }
       paintItem(ctx, vp, it, hits);
+      if (it.solid) paintSolidEdge(ctx, vp, it);
     } catch {
       // a value the painter does not understand is skipped, never fatal
     }
   }
+  paintForceKey(ctx, vp, scale);
   return hits;
 }
 
@@ -1162,6 +1175,27 @@ export function sceneBounds(items: readonly SceneItem[]): { x0: number; x1: numb
       add(s.b.x, s.b.y);
     } else if (it.type === 'Polygon') {
       for (const p of (v as { pts: Pt[] }).pts) add(p.x, p.y);
+    } else if (isPhysicsItem(it)) {
+      // bodies by their shape now, joints by their ends
+      for (const x of Array.isArray(v) ? v : [v]) {
+        const s = x as { schema?: string; spec?: { outline?: { kind: string; r?: number } }; x?: number; y?: number; ax?: number; ay?: number; bx?: number; by?: number };
+        if (s?.schema === 'Body' && typeof s.x === 'number' && typeof s.y === 'number') {
+          const o = s.spec?.outline;
+          const pts = o && o.kind !== 'circle' ? ((o as unknown as { pts: Pt[] }).pts ?? []) : [];
+          let r = o?.kind === 'circle' ? (o.r ?? 0.5) : 0;
+          const c0 = s.spec as unknown as { cx: number; cy: number };
+          for (const p of pts) r = Math.max(r, Math.hypot(p.x - c0.cx, p.y - c0.cy));
+          add(s.x - r, s.y - r);
+          add(s.x + r, s.y + r);
+        } else if (s?.schema === 'Wheel') {
+          const wv = s as unknown as { x: number; y: number; r: number };
+          add(wv.x - wv.r, wv.y - wv.r);
+          add(wv.x + wv.r, wv.y + wv.r);
+        } else if (s?.schema === 'Joint') {
+          add(s.ax as number, s.ay as number);
+          add(s.bx as number, s.by as number);
+        }
+      }
     } else if (it.type === 'Chart' && isRec(v)) {
       const F = v.fields;
       if (v.schema === 'Histogram') {

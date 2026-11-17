@@ -17,6 +17,7 @@ const BASE = [
   's = Segment(A, B)', 'l = Line(A, C)', 'r = Ray(B, D)', 'v = Vector(A, D)', 'w = Vector(B, C)', 'c = Circle(A, 2)', 'k = Circle(B, 3)',
   'co = Ellipse(A, B, C)', 'poly = Polygon(A, B, C)', 'f(x) = x^2 / 4 - 1', 'sct = Sector(A, B, C)', 'arc = Arc(A, B, C)', 'pl = Polyline(E, A, F)',
   'P = PointOn(k, 0.3)', 'M = Midpoint(P, A)', 'm2 = Line(E, F)',
+  'b1 = Body(Circle((8, 8), 0.5))', 'b2 = Body(Circle((10, 8), 0.5))',
 ];
 
 const fig = (): Figure => {
@@ -31,7 +32,7 @@ const fig = (): Figure => {
 /** An example object for each type a slot may accept. */
 const EXAMPLE: Readonly<Record<string, string[]>> = {
   Point: ['D', 'E', 'F', 'B', 'C'], Segment: ['s'], Line: ['l', 'm2'], Ray: ['r'], Vector: ['v', 'w'], Circle: ['c', 'k'], Conic: ['co'], Polygon: ['poly'],
-  Function: ['f'], Sector: ['sct'], Arc: ['arc'], Polyline: ['pl'], Any: ['A', 's', 'c'], Shape: ['poly'], Path: ['c', 'k'],
+  Function: ['f'], Sector: ['sct'], Arc: ['arc'], Polyline: ['pl'], Body: ['b1', 'b2'], Any: ['A', 's', 'c'], Shape: ['poly'], Path: ['c', 'k'],
 };
 
 /** Example args for a variant: points A, B, C… in order, an object of the first accepted type, the default number. */

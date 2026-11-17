@@ -2,7 +2,7 @@
  * The app core (embed-files-export design 3; .kiro/specs/sdk R1): one figure behind a small typed API. Writing goes
  * through lines; reads return data; errors are data. No DOM: the screen (`createApp`) and the frame host sit on top.
  */
-import { Figure, numberSource, playerOf, setSheetLocks } from '@incantly/kernel';
+import { Figure, numberSource, physics, playerOf, setSheetLocks } from '@incantly/kernel';
 import type { CommandRegistry, ErrorObject, LineOrigin, ObjectView, TxResult } from '@incantly/kernel';
 import { MODES, catalogueOf, compilePolicy, makeGate, switchMode } from '@incantly/modes';
 import type { AppModeId, ModeChangeResult, ModeConfig } from '@incantly/modes';
@@ -420,13 +420,17 @@ class AppCore implements App {
     need(typeof name === 'string' && typeof x === 'number' && typeof y === 'number' && (z === undefined || typeof z === 'number'), 'dragPoint', 'it needs a name and two or three numbers');
     if (this.gone) return destroyed();
     if (this.readOnly) return apiError('api', 'read_only', 'This figure is read-only.', { hint: 'Turn off readOnly, or work on a copy.' });
-    const o = this.figure.get(name);
+    const o = this.figure.get(name.replace(/\[\d+\]$/, ''));
     if (!o) return unknownName(name, [...this.figure.objects()].map((v) => v.name));
     if (!Number.isFinite(x) || !Number.isFinite(y) || (z !== undefined && !Number.isFinite(z))) return apiError('api', 'bad_argument', 'The place needs two finite numbers.', { detail: { argument: 'point' } });
     return this.as('user', (): LineResult => {
       const f = this.figure;
       const round = (v: number): number => Number(v.toPrecision(6));
-      if (o.free) {
+      if (o.type === 'Body' || o.typeText === 'List<Body>') {
+        // physics ui.md 4: at the start a drag moves where the body starts, later it grabs it
+        const r = physics.dragBody(f, name, x, y, done);
+        if (!r.ok) return this.failDrag(apiError('api', 'not_draggable', r.why, { hint: 'Drag the shape it is made from.', detail: { name, reason: 'body' } }), done);
+      } else if (o.free) {
         // a point in space keeps its third coordinate
         const r = f.setFree(name, z === undefined ? { x: round(x), y: round(y) } : { x: round(x), y: round(y), z: round(z) }, 'drag');
         if (!r.ok) return this.failDrag(r, done);

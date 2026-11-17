@@ -6,7 +6,7 @@
 export type ToolId = string;
 
 export type ToolGroup =
-  | 'move' | 'point' | 'line' | 'special-line' | 'polygon' | 'circle-arc' | 'conic' | 'measure' | 'transform' | 'action' | 'general';
+  | 'move' | 'point' | 'line' | 'special-line' | 'polygon' | 'circle-arc' | 'conic' | 'measure' | 'transform' | 'action' | 'general' | 'physics';
 
 export type PointCreate = 'existing' | 'free' | 'on-path' | 'intersection';
 

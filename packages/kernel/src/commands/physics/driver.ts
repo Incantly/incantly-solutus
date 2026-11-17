@@ -26,6 +26,9 @@ import { isJointValue } from './joints';
 import type { JointMember } from './jointbuild';
 import { buildJoint, jointKey, jointNow, specKey } from './jointbuild';
 import type { Hinge2, Slider2, Grab2 } from '../../physics/joints2';
+import { Wheel2, localAnchor } from '../../physics/joints2';
+import type { VehicleValue, WheelValue } from './vehicle';
+import { isVehicleValue, isWheelValue } from './vehicle';
 import { getStoredHandler } from '../numbers/handlers';
 import { runHandler } from '../numbers/run';
 
@@ -49,7 +52,7 @@ export const BODY_PROPS = ['bounce', 'friction', 'force', 'torque', 'bullet', 'g
 
 interface Member {
   readonly rec: ObjRec;
-  readonly role: 'body' | 'solid';
+  readonly role: 'body' | 'solid' | 'wheel';
   /** Index in the world. */
   readonly index: number;
   readonly spec?: BodySpec;
@@ -75,6 +78,12 @@ export class PhysicsDriver implements WorldDriver {
   private bodyRecs: ObjRec[] = [];
   private solidRecs: ObjRec[] = [];
   private jointRecs: ObjRec[] = [];
+  private wheelRecs: ObjRec[] = [];
+  private vehicleRecs: ObjRec[] = [];
+  private wheelSpecs = new Map<ObjId, (WheelValue | undefined)[]>();
+  private vehicleSpecs = new Map<ObjId, VehicleValue>();
+  wheelMembers: { readonly rec: ObjRec; readonly item?: number; readonly value: WheelValue; readonly index: number; readonly chassis: number; readonly joint: Wheel2 }[] = [];
+  private vehicleInputs = new Set<ObjId>();
   /** The value each joint's rule gave (its start), or each item of a list of joints. */
   private jointSpecs = new Map<ObjId, (JointValue | undefined)[]>();
   jointMembers: (JointMember & { readonly rec: ObjRec })[] = [];
@@ -130,6 +139,17 @@ export class PhysicsDriver implements WorldDriver {
   /* ------------------------------ the driver hooks ------------------------------ */
 
   onCompute(rec: ObjRec, computed: Cell): Cell | undefined {
+    if (isWheelRec(rec)) {
+      this.wheelSpecs.set(rec.id, computed.defined ? (Array.isArray(computed.value) ? (computed.value as unknown[]) : [computed.value]).map((v) => (isWheelValue(v) ? v : undefined)) : []);
+      const last = this.lastCells.get(rec.id);
+      return last && computed.defined && this.world ? last : undefined;
+    }
+    if (rec.p.type.k === 'Vehicle') {
+      if (computed.defined && isVehicleValue(computed.value)) this.vehicleSpecs.set(rec.id, computed.value);
+      else this.vehicleSpecs.delete(rec.id);
+      const last = this.lastCells.get(rec.id);
+      return last && computed.defined && this.world ? last : undefined;
+    }
     if (isJointRec(rec)) {
       this.jointSpecs.set(rec.id, computed.defined ? (Array.isArray(computed.value) ? (computed.value as unknown[]) : [computed.value]).map((v) => (isJointValue(v) ? v : undefined)) : []);
       const last = this.lastCells.get(rec.id);
@@ -165,7 +185,7 @@ export class PhysicsDriver implements WorldDriver {
     if (t <= this.t0 + 1e-12) return;
     if (!this.inputs.has(rec.id)) return;
     // a mover's point moves the mover from now on; a slider follows its rerun policy
-    const policy = this.moverInputs.has(rec.id) && !this.startInputs.has(rec.id) ? 'continue' : this.acc.rerunOf(rec);
+    const policy = (this.moverInputs.has(rec.id) || this.vehicleInputs.has(rec.id)) && !this.startInputs.has(rec.id) ? 'continue' : this.acc.rerunOf(rec);
     if (policy !== 'continue' || this.startInputs.has(rec.id)) return;
     if (!this.base.has(rec.id)) this.base.set(rec.id, was);
     this.addEntry({ kind: 'set', n: this.gridAt(t), id: rec.id, value: rec.p.value });
@@ -302,10 +322,14 @@ export class PhysicsDriver implements WorldDriver {
     this.bodyRecs = [];
     this.solidRecs = [];
     this.jointRecs = [];
+    this.wheelRecs = [];
+    this.vehicleRecs = [];
     this.worldRec = undefined;
     for (const r of this.acc.list) {
       const k = r.p.type.k;
       if (isJointRec(r)) this.jointRecs.push(r);
+      else if (isWheelRec(r)) this.wheelRecs.push(r);
+      else if (k === 'Vehicle') this.vehicleRecs.push(r);
       else if (k === 'Body' || (k === 'List' && r.p.type.of?.k === 'Body')) this.bodyRecs.push(r);
       else if (k === 'World') this.worldRec = r;
       else if (r.p.style.has('solid') || isGround(r)) this.solidRecs.push(r);
@@ -354,6 +378,25 @@ export class PhysicsDriver implements WorldDriver {
 
   private listSpecs = new Map<ObjId, (BodyValue | undefined)[]>();
 
+  private wheelsOf(r: ObjRec): (WheelValue | undefined)[] {
+    const s = this.wheelSpecs.get(r.id);
+    if (s) return s;
+    if (this.written.has(r.id) || !r.cell.defined) return [];
+    const list = (Array.isArray(r.cell.value) ? (r.cell.value as unknown[]) : [r.cell.value]).map((v) => (isWheelValue(v) ? v : undefined));
+    this.wheelSpecs.set(r.id, list);
+    return list;
+  }
+
+  private vehicleOf(r: ObjRec): VehicleValue | undefined {
+    const s = this.vehicleSpecs.get(r.id);
+    if (s) return s;
+    if (!this.written.has(r.id) && r.cell.defined && isVehicleValue(r.cell.value)) {
+      this.vehicleSpecs.set(r.id, r.cell.value);
+      return r.cell.value;
+    }
+    return undefined;
+  }
+
   /** The joints of a joint object (one, or each of a list), as their rules gave them. */
   private jointsOf(r: ObjRec): (JointValue | undefined)[] {
     const s = this.jointSpecs.get(r.id);
@@ -399,6 +442,11 @@ export class PhysicsDriver implements WorldDriver {
         const e = r.p.style.get(k);
         if (e) sig.push(k, e.text, this.isVarying(e) ? 'varying' : this.evalStyle(r, e));
       }
+    }
+    for (const r of this.wheelRecs) sig.push(r.id, this.wheelsOf(r).map((w) => (w ? [w.chassis.spec ? specKey(w.chassis.spec) : w.chassis.id, w.at.x, w.at.y, w.r, w.spring, w.damping, w.travel, w.grip, w.drive, w.breaks, w.mass] : null)));
+    for (const r of this.vehicleRecs) {
+      const v = this.vehicleOf(r);
+      sig.push(r.id, this.varySet.has(r) ? 'varying' : v ? [v.motor, v.brake, v.power, v.wheels.length] : null);
     }
     for (const r of this.jointRecs) {
       // a joint whose motor or target moves during the film is rebuilt only when its line changes
@@ -478,6 +526,22 @@ export class PhysicsDriver implements WorldDriver {
         members.push({ rec: r, role: 'solid', index: defs.length - 1, shapeCount: sh.shapes.length, moving: false });
       }
     }
+    // wheels: a round body each, on its chassis (design 8)
+    const wheelDefs: { rec: ObjRec; item?: number; value: WheelValue; index: number; chassis: number }[] = [];
+    for (const r of this.wheelRecs) {
+      const list = this.wheelsOf(r);
+      for (let item = 0; item < list.length; item++) {
+        const wv = list[item];
+        if (!wv) continue;
+        const chassis = this.endIndex(wv.chassis, members);
+        if (chassis === undefined) continue;
+        const cm = members.find((m) => m.index === chassis)?.spec?.massNow ?? 10;
+        defs.push({ type: BodyType.Dynamic, shapes: [{ kind: 'circle', x: wv.at.x, y: wv.at.y, r: wv.r }], mass: wv.mass ?? Math.max(0.5, cm * 0.04), friction: wv.grip, bounce: 0.1 });
+        const index = defs.length - 1;
+        members.push({ rec: r, role: 'wheel', index, moving: false, ...(r.p.type.k === 'List' ? { item } : {}) });
+        wheelDefs.push({ rec: r, ...(r.p.type.k === 'List' ? { item } : {}), value: wv, index, chassis });
+      }
+    }
     if (defs.length === 0) {
       this.world = undefined;
       this.members = [];
@@ -498,6 +562,15 @@ export class PhysicsDriver implements WorldDriver {
     this.nameOfIndex = [];
     for (const m of members) this.nameOfIndex[m.index] = m.item !== undefined ? `${m.rec.p.name}[${m.item + 1}]` : m.rec.p.name;
     this.buildJoints(world, members);
+    this.wheelMembers = [];
+    for (const wd of wheelDefs) {
+      const la = localAnchor(world, wd.chassis, wd.value.at.x, wd.value.at.y);
+      const joint = new Wheel2(world, wd.chassis, wd.index, la, [0, -1], { spring: wd.value.spring, damping: wd.value.damping, travel: wd.value.travel });
+      if (wd.value.breaks > 0) (joint as { breaks: number }).breaks = wd.value.breaks;
+      world.joints.push(joint);
+      this.wheelMembers.push({ ...wd, joint });
+      this.nameOfIndex[wd.index] = wd.item !== undefined ? `${wd.rec.p.name}[${wd.item + 1}]` : wd.rec.p.name;
+    }
     for (const m of members) if (m.role === 'body' && m.spec && m.spec.parts > 1) this.warnOnce(`split:${m.rec.id}:${m.spec.parts}`, makeNotice('split_shape', { name: m.rec.p.name, parts: m.spec.parts }, [m.rec.p.name]));
     this.n = 0;
     this.prevX = Float64Array.from(world.px);
@@ -616,7 +689,7 @@ export class PhysicsDriver implements WorldDriver {
     this.coneDirty = false;
     const bodies = new Set(this.bodyRecs);
     // what physics reads: solid shapes, the world, and the reads of body and solid properties
-    const targets: ObjRec[] = [...this.solidRecs, ...this.jointRecs];
+    const targets: ObjRec[] = [...this.solidRecs, ...this.jointRecs, ...this.vehicleRecs];
     if (this.worldRec) targets.push(this.worldRec);
     for (const r of [...this.bodyRecs, ...this.solidRecs]) {
       for (const k of [...BODY_PROPS, 'solid']) {
@@ -652,6 +725,12 @@ export class PhysicsDriver implements WorldDriver {
       this.startInputs.add(r.id);
     }
     for (const r of this.acc.ancestorRecs(this.solidRecs)) if (r.p.kind === 'free') this.moverInputs.add(r.id);
+    // a car's pedal and wheel are driven while the film plays: they always go on from now (design 8, ui.md 9)
+    this.vehicleInputs = new Set();
+    for (const r of this.acc.ancestorRecs(this.vehicleRecs)) if (r.p.kind === 'free') {
+      this.vehicleInputs.add(r.id);
+      this.inputs.add(r.id);
+    }
     // members whose solid moves, and property formulas that change
     this.members = this.members.map((m) => (m.role === 'solid' ? { ...m, moving: vary.has(m.rec) } : m));
     this.byId = new Map();
@@ -735,6 +814,7 @@ export class PhysicsDriver implements WorldDriver {
     this.applyLog(n);
     if (varying) this.stepInputs(n);
     this.applyGrabs();
+    this.applyVehicles();
     if (n === 0) {
       // leapfrog start: the first step takes half a step of the forces off the start speed, so a body in free flight
       // follows x0 + v0 t + a t² / 2 exactly at every step (design 11.5, projectile)
@@ -754,7 +834,7 @@ export class PhysicsDriver implements WorldDriver {
     this.prevStale = false;
     this.checkHealth();
     for (const i of w.left) if (!this.leftAt.has(i)) this.leftAt.set(i, this.n);
-    for (const jm of this.jointMembers) {
+    for (const jm of [...this.jointMembers, ...this.wheelMembers]) {
       if (!jm.joint.broken) continue;
       const name = jm.item !== undefined ? `${jm.rec.p.name}[${jm.item + 1}]` : jm.rec.p.name;
       const t = Number((this.t0 + this.n / this.rate).toFixed(3));
@@ -942,6 +1022,35 @@ export class PhysicsDriver implements WorldDriver {
       w.jt[i] = (w.jt[i] as number) + (rx * fy - ry * fx) * h * 0.2;
       w.account(i, FK.applied, fx, fy);
       w.wakeBody(i);
+    }
+  }
+
+  /** Each vehicle drives its wheels marked `drive` and brakes them all (design 8). */
+  private applyVehicles(): void {
+    if (this.vehicleRecs.length === 0 || this.wheelMembers.length === 0) return;
+    const w = this.world as World2;
+    for (const r of this.vehicleRecs) {
+      const c = this.varySet.has(r) ? r.cell : { defined: true, value: this.vehicleOf(r) };
+      const v = c.defined && isVehicleValue(c.value) ? c.value : this.vehicleOf(r);
+      if (!v) continue;
+      const ck = v.chassis.spec ? specKey(v.chassis.spec) : undefined;
+      for (const wm of this.wheelMembers) {
+        if (wm.value.chassis.spec && ck !== undefined && specKey(wm.value.chassis.spec) !== ck) continue;
+        const spin = Math.abs(w.w[wm.index] as number);
+        const mass = Math.max(1, (w.mass[wm.chassis] as number) + 0);
+        if (v.brake > 0) {
+          wm.joint.opts = { ...wm.joint.opts, motor: 0, torque: v.brake * mass * 9.8 * wm.value.r * 1.5 };
+        } else if (wm.value.drive && v.motor !== 0) {
+          // full pedal turns the wheels at 40 rad/s, with the torque the power gives at that spin
+          wm.joint.opts = { ...wm.joint.opts, motor: -v.motor * 40, torque: Math.min(v.power / Math.max(1, spin), mass * 9.8 * wm.value.r * 3) };
+        } else {
+          wm.joint.opts = { spring: wm.joint.opts.spring, damping: wm.joint.opts.damping, travel: wm.joint.opts.travel };
+        }
+        if (v.motor !== 0 || v.brake > 0) {
+          w.wakeBody(wm.index);
+          w.wakeBody(wm.chassis);
+        }
+      }
     }
   }
 
@@ -1165,6 +1274,39 @@ export class PhysicsDriver implements WorldDriver {
       this.written.add(rec.id);
       if (this.acc.write(rec, cell)) changed.push(rec);
     }
+    // wheels: where they are and how far they have turned; vehicles: their speed
+    const wl = new Map<ObjRec, unknown[]>();
+    for (const wm of this.wheelMembers) {
+      const i = wm.index;
+      const lerpA = (this.prevA[i] as number) + ((w.ang[i] as number) - (this.prevA[i] as number)) * alpha;
+      const value: WheelValue = { ...wm.value, x: (this.prevX[i] as number) + ((w.px[i] as number) - (this.prevX[i] as number)) * alpha, y: (this.prevY[i] as number) + ((w.py[i] as number) - (this.prevY[i] as number)) * alpha, angle: lerpA, spin: w.w[i] as number, broken: wm.joint.broken };
+      if (wm.item === undefined) {
+        const cell: Cell = { defined: true, value };
+        this.lastCells.set(wm.rec.id, cell);
+        this.written.add(wm.rec.id);
+        if (this.acc.write(wm.rec, cell)) changed.push(wm.rec);
+      } else {
+        const arr = wl.get(wm.rec) ?? (this.wheelsOf(wm.rec) as unknown[]).slice();
+        arr[wm.item] = value;
+        wl.set(wm.rec, arr);
+      }
+    }
+    for (const [rec, arr] of wl) {
+      const cell: Cell = { defined: true, value: arr };
+      this.lastCells.set(rec.id, cell);
+      this.written.add(rec.id);
+      if (this.acc.write(rec, cell)) changed.push(rec);
+    }
+    for (const r of this.vehicleRecs) {
+      const v = this.vehicleOf(r);
+      if (!v) continue;
+      const ci = v.chassis.spec ? this.members.find((m) => m.spec === v.chassis.spec)?.index : undefined;
+      const speed = ci === undefined ? 0 : (w.qc[ci] as number) * (w.vx[ci] as number) + (w.qs[ci] as number) * (w.vy[ci] as number);
+      const cell: Cell = { defined: true, value: { ...v, speedometer: speed } };
+      this.lastCells.set(r.id, cell);
+      this.written.add(r.id);
+      if (this.acc.write(r, cell)) changed.push(r);
+    }
     // joints: what they carry, how long they are, where their ends are
     const h = 1 / this.rate;
     const jl = new Map<ObjRec, unknown[]>();
@@ -1317,6 +1459,12 @@ export class PhysicsDriver implements WorldDriver {
   stepsPerSecond(): number {
     return this.rate;
   }
+}
+
+/** A wheel, or a list of wheels. */
+function isWheelRec(r: ObjRec): boolean {
+  const t = r.p.type;
+  return t.k === 'Wheel' || (t.k === 'List' && t.of?.k === 'Wheel');
 }
 
 /** A joint, or a list of joints (`Seq(Rope(…), k, 1, 5)`). */

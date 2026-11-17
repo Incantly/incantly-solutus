@@ -17,13 +17,13 @@ Each round is one branch `feat/physics-<n>` and one PR into `integration`, merge
   - [x] 2.3 `Push`, `Wake`, `Sleep`, `Restart`; logged and saved as `@input`
   - [x] 2.4 `on b hit` handlers
   - [x] 2.5 Spec tests, including accuracy checks of design 11.5
-- [ ] 3. Round 3: studio and embed in 2D (R4)
-  - [ ] 3.1 Drawing bodies, solids, joints, arrows, contacts
-  - [ ] 3.2 Player bar, catching up and slow marks; the host measures physics time per frame and slows the film when it goes over 6 ms (the kernel holds the clock while the world catches up)
-  - [ ] 3.3 Drag: start move at t = 0, grab while playing; arrow-key pushes
-  - [ ] 3.4 Algebra rows, Physics tools, performance row
-  - [ ] 3.5 2D car (`Wheel`, `Vehicle` in the plane)
-  - [ ] 3.6 Examples and screenshots
+- [x] 3. Round 3: studio and embed in 2D (R4)
+  - [x] 3.1 Drawing bodies, solids, joints, arrows, contacts
+  - [x] 3.2 Player bar, catching up and slow marks; the host measures physics time per frame and slows the film when it goes over 6 ms (the kernel holds the clock while the world catches up)
+  - [x] 3.3 Drag: start move at t = 0, grab while playing; arrow-key pushes
+  - [x] 3.4 Algebra rows, Physics tools, performance row
+  - [x] 3.5 2D car (`Wheel`, `Vehicle` in the plane)
+  - [x] 3.6 Examples and screenshots
 - [ ] 4. Round 4: 3D bodies (R5)
 - [ ] 5. Round 5: 3D vehicles and crashes (R6)
 - [ ] 6. Round 6: water and 2D liquid, worker (R7)
