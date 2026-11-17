@@ -45,6 +45,8 @@ export { isBodyValue, isWorldValue, DEFAULT_WORLD } from './types';
 export { bodyShapeOf, solidShapeOf } from './shapes';
 export { isJointValue } from './joints';
 export { dragBody, dragBody3, draggingBody } from './drag';
+export { carKey, carPedals, carPose } from './drive';
+export type { CarPedals } from './drive';
 export { isVehicleValue, isWheelValue, isWheel3Value, isVehicle3Value } from './vehicle';
 export { isJoint3Value } from './joints';
 export type { JointValue3, JointEnd3 } from './joints';
