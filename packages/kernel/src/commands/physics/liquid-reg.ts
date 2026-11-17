@@ -38,5 +38,5 @@ export function registerLiquids(): void {
   registerTypeStyle('Liquid', { defaults: { color: '#4a9fe0', width: 1, opacity: 0.85 } });
   registerTypeStyle('Water', { defaults: { color: '#2f7fc1', width: 2, opacity: 0.3 } });
   registerLineCheck(liquidLineCheck);
-  registerNotice('worker_crashed', { code: 'B112', severity: 'info', template: 'The physics worker stopped, so the film goes on here on the page from its last checkpoint. It is the same film.' });
+  registerNotice('worker_crashed', { code: 'B112', severity: 'info', template: 'The physics worker stopped, so the film goes on here on the page. It is the same film.' });
 }

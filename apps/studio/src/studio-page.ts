@@ -437,13 +437,18 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
     // the physics row of physics ui.md 12: frame time, awake bodies, touching points
     const pd = physicsOf(session.figure);
     const w = pd.world;
-    perf.hidden = !w;
-    if (w) {
+    perf.hidden = !w && !pd.remote;
+    if (w || pd.remote) {
       frameAvg = frameAvg * 0.9 + cost * 0.1;
-      // drops when there are any (physics ui.md 12)
-      const drops = pd.fluid?.ps.n ?? 0;
-      perf.textContent = `${frameAvg.toFixed(1)} ms · ${w.awakeCount()} awake · ${w.contactCount} contacts${pd.fluid ? ` · ${drops} drops` : ''}`;
-      perf.classList.toggle('busy', frameAvg > 6);
+      // drops when there are any (physics ui.md 12); a world in the worker reports its own counts
+      const r = pd.remoteInfo;
+      const awake = w ? w.awakeCount() : r.awake;
+      const contacts = w ? w.contactCount : r.contacts;
+      const drops = w ? (pd.fluid?.ps.n ?? 0) : r.drops;
+      const where = pd.remote ? ' · in a worker' : '';
+      perf.textContent = `${frameAvg.toFixed(1)} ms · ${awake} awake · ${contacts} contacts${pd.fluid || pd.remote ? ` · ${drops} drops` : ''}${where}`;
+      // over 6 ms on the page, or 8 ms when the world is in the worker, the readout turns amber (ui.md 12)
+      perf.classList.toggle('busy', frameAvg > (pd.remote ? 8 : 6));
     }
     // a spinning camera changes no object, so the Space view is told each frame
     if (!space3Ref.current?.element.hidden) space3Ref.current?.redraw();

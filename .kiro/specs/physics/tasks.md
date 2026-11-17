@@ -31,7 +31,13 @@ Each round is one branch `feat/physics-<n>` and one PR into `integration`, merge
   - [x] 4.4 Drawn in the Space view with drag (start move at t = 0, grab while playing)
   - [x] 4.5 Examples (dice, dominoes, a bowl), screenshots, spec tests
 - [ ] 5. Round 5: 3D vehicles and crashes (R6)
-- [ ] 6. Round 6: water and 2D liquid, worker (R7)
+- [x] 6. Round 6: water and 2D liquid, worker (R7)
+  - [x] 6.1 `Water(level)`, `Water(region, level)`: clipped buoyancy and water drag, counted as `buoyancy` and `drag`; a level may read `t`
+  - [x] 6.2 `Liquid`, `Pour` in the plane: position-based fluids, the shared particle store and neighbour grid (counting sort, no garbage), two density passes, drops against solids and bodies with the equal and opposite impulse a step later, viscosity, seeded taps, `left_world`, the 2,000-drop limit (B013), `l.count`, `l.level`
+  - [x] 6.3 Checkpoints and seek with drops; seek equals play
+  - [x] 6.4 The physics worker in `packages/sdk/src/worker/`: the page sends the script, free values and `@input` lines, gets back the owned cells with their arrays moved; `worker_unavailable`, `worker_crashed`; the same film with and without it
+  - [x] 6.5 Drawing (one batch of discs, water as a fill under its line), the Water and Liquid tools, algebra rows, drops in the time-bar readout
+  - [x] 6.6 Examples (a floating boat, density of ice, a dam breaking, filling a glass), screenshots, spec tests, benches
 - [ ] 7. Round 7: 3D liquid and waves (R7)
 - [ ] 8. Round 8: smoke (R7)
 - [ ] 9. Round 9: cloth (R10)
