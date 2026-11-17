@@ -172,3 +172,81 @@ describe('2D liquid (design 11.2, R7)', () => {
     expect(s[Math.floor(s.length * 0.95)]).toBeLessThan(0.1);
   });
 });
+
+/** A ball dropped into a tank of 2,000 drops in space: the 3D liquid row of design 11.2. */
+const SPLASH3 = [
+  'g = Ground()',
+  'w1 = Box((-1.6, 0, 0.9), 0.2, 3.4, 1.8)', 'w2 = Box((1.6, 0, 0.9), 0.2, 3.4, 1.8)', 'w3 = Box((0, -1.6, 0.9), 3.4, 0.2, 1.8)', 'w4 = Box((0, 1.6, 0.9), 3.4, 0.2, 1.8)',
+  'w1 with solid = true', 'w2 with solid = true', 'w3 with solid = true', 'w4 with solid = true',
+  'water = Liquid(Box((0, 0, 0.5), 3, 3, 1), 2000)',
+  'ball = Body(Sphere((0.3, 0.2, 3), 0.4), density = 0.5)',
+  'stone = Body(Box((-0.6, -0.5, 2.5), 0.5, 0.5, 0.5), density = 3)',
+];
+
+/** A boat and a rock on a 64 × 64 wave grid: the waves row. */
+const WAVES64 = [
+  'bed = Ground(-1.2)',
+  'pool = Box((0, 0, -0.6), 10, 10, 1.2)',
+  'sea = Waves(pool, 64)',
+  'boat = Body(Box((1.5, 0, 0.3), 2, 0.9, 0.5), density = 0.35)',
+  'rock = Body(Sphere((-1.2, 0.8, 3), 0.5), density = 2.5)',
+];
+
+describe('3D liquid and waves (design 11.2, round 7)', () => {
+  it('3D liquid, 2,000 drops: a frame (two steps) under 1.5 ms in Node, mean and the slow frames', { retry: 2 }, () => {
+    const f = load(SPLASH3);
+    for (let k = 1; k <= 60; k++) f.setClock(k / 60);
+    const times: number[] = [];
+    for (let k = 61; k <= 60 * 12; k++) {
+      const t = performance.now();
+      f.setClock(k / 60);
+      times.push(performance.now() - t);
+    }
+    const s = sorted(times);
+    const mean = times.reduce((a, b) => a + b, 0) / times.length;
+    const p95 = s[Math.floor(s.length * 0.95)] as number;
+    console.log(`3D liquid, 2,000 drops, a frame: mean ${mean.toFixed(3)} ms, 95% ${p95.toFixed(3)} ms, worst ${(s[s.length - 1] as number).toFixed(3)} ms (budget 1.5 ms)`);
+    expect(physics3Of(f).fluid?.ps.n).toBe(2000);
+    expect(mean).toBeLessThan(1.5);
+    expect(p95).toBeLessThan(1.5);
+  });
+
+  it('seek anywhere in a 60 s film with 2,000 drops in space, warm: under 60 ms in Node', () => {
+    const f = load(SPLASH3);
+    for (let k = 1; k <= 60 * 60; k++) f.setClock(k / 60);
+    const times: number[] = [];
+    for (let i = 0; i < 100; i++) {
+      const t = ((i * 37) % 100) * 0.59 + 0.3;
+      const a = performance.now();
+      f.setClock(t);
+      times.push(performance.now() - a);
+    }
+    const s = sorted(times);
+    console.log(`seek, 2,000 drops in space: median ${(s[50] as number).toFixed(1)} ms, worst ${(s[99] as number).toFixed(1)} ms (budget 60 ms)`);
+    expect(s[99]).toBeLessThan(60);
+  });
+
+  it('a checkpoint of 2,000 drops in space is about 96 KB (design 10.3)', () => {
+    const f = load(SPLASH3);
+    f.setClock(1);
+    const kb = physics3Of(f).checkpointBytes() / 1024;
+    console.log(`a checkpoint with 2,000 drops in space: ${kb.toFixed(1)} KB`);
+    expect(kb).toBeLessThan(110);
+  });
+
+  it('waves 64 × 64 with a boat and a rock: under 0.25 ms a frame in Node', { retry: 2 }, () => {
+    const f = load(WAVES64);
+    for (let k = 1; k <= 60; k++) f.setClock(k / 60);
+    const times: number[] = [];
+    for (let k = 61; k <= 60 * 12; k++) {
+      const t = performance.now();
+      f.setClock(k / 60);
+      times.push(performance.now() - t);
+    }
+    const s = sorted(times);
+    const mean = times.reduce((a, b) => a + b, 0) / times.length;
+    const p95 = s[Math.floor(s.length * 0.95)] as number;
+    console.log(`waves 64 x 64, a frame: mean ${mean.toFixed(3)} ms, 95% ${p95.toFixed(3)} ms (budget 0.25 ms)`);
+    expect(mean).toBeLessThan(0.25);
+  });
+});

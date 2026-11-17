@@ -29,7 +29,8 @@ export const DEFAULT_SPACING3 = 0.1;
  * its reach in two steps, and the weights fade to nothing at the reach, so a pair that came near is missed only where it
  * would weigh almost nothing. Checkpoints fall on listing steps (the driver keeps them a multiple of this apart).
  */
-export const PAIR_EVERY = 3;
+export const PAIR_EVERY = 2;
+const PASSES = 1;
 const NK = 10;
 
 export interface DropSource3 {
@@ -231,8 +232,6 @@ export class Fluid3 {
   unstable = false;
   private rho0 = 1;
   private eps = 1;
-  /** The constraint's gradient squared, summed over the neighbours of a drop at rest, plus eps: every drop's λ divides by it. */
-  private denom = 1;
   private k6 = 1;
   private ks = 1;
   private lam = new Float64Array(0);
@@ -294,7 +293,6 @@ export class Fluid3 {
     }
     this.rho0 = rho;
     this.eps = 0.1 * (g2 / (rho * rho));
-    this.denom = g2 / (rho * rho) + this.eps;
     let total = 0;
     for (const s of sources) if (s.start) total += s.start.xs.length;
     this.ps = new ParticleSet(Math.min(MAX_DROPS, total + 64));
@@ -481,11 +479,8 @@ export class Fluid3 {
       grid.findPairs(x, y, z, n, this.H);
       this.stale = false;
     }
-    for (let pass = 0; pass < 2; pass++) {
-      this.densityPass(n, pass === 1);
-      // once, after the last pass: the walls win (a drop's whole path this step is tested, so none slips through)
-      if (pass === 1) this.collide(w);
-    }
+    for (let pass = 0; pass < PASSES; pass++) this.densityPass(n, pass === PASSES - 1);
+    this.collide(w);
     const inv = 1 / h;
     for (let i = 0; i < n; i++) {
       vx[i] = ((x[i] as number) - (x0[i] as number)) * inv;
@@ -545,10 +540,11 @@ export class Fluid3 {
     const k6 = this.k6;
     const inv0 = 1 / this.rho0;
     const ks = this.ks * inv0;
-    const { lam, gs, rho, vw } = this;
+    const { lam, gs, rho, s2, vw } = this;
     const self = k6 * H2 * H2 * H2;
     const invSelf = 1 / self;
     rho.fill(self, 0, n);
+    s2.fill(0, 0, n);
     for (let p = 0; p < np; p++) {
       const i = pi[p] as number;
       const j = pj[p] as number;
@@ -573,15 +569,19 @@ export class Fluid3 {
         g = (ks * hr * hr) / r;
       }
       gs[p] = g;
+      const g2 = g * g * r2;
+      s2[i] = (s2[i] as number) + g2;
+      s2[j] = (s2[j] as number) + g2;
     }
-    // λ = −C / (the gradient's size squared at rest, plus eps): a fixed stiffness, the same for every drop (round 7: the
-    // per-drop sums cost a third of the step and change λ little where drops crowd, the only place it acts)
-    const inv = 1 / this.denom;
+    // λ = −C / (Σ|∇C|² + eps) with the neighbours' part of the sum only: the drop's own gradient is the sum of theirs,
+    // which nearly cancels where drops crowd (the only place λ acts), and its vector sums cost a fifth of the step
+    // (round 7). Crowded drops have larger gradients, so they move less: no jets where a body squeezes them
+    const eps = this.eps;
     let any = false;
     for (let i = 0; i < n; i++) {
       const C = (rho[i] as number) * inv0 - 1;
       if (C > 0) {
-        lam[i] = -C * inv;
+        lam[i] = -C / ((s2[i] as number) + eps);
         any = true;
       } else lam[i] = 0;
     }
@@ -717,8 +717,9 @@ export class Fluid3 {
       if (sh.hf) this.collideTerrain(sh.hf);
       return;
     }
-    // drops may have moved a cell since the grid was built, and a fast one 1.5 spacings this step
-    const pad = r + this.H + 1.5 * this.d;
+    // the grid holds where drops were predicted to be: since then a drop moved at most half a spacing (the density pass),
+    // and its path this step reaches 1.5 spacings back, so a drop that crossed the shape is within 2 spacings of it
+    const pad = r + 2 * this.d;
     const lo = w.lo;
     const hi = w.hi;
     const m = this.grid.inBox((lo[k * 3] as number) - pad, (lo[k * 3 + 1] as number) - pad, (lo[k * 3 + 2] as number) - pad, (hi[k * 3] as number) + pad, (hi[k * 3 + 1] as number) + pad, (hi[k * 3 + 2] as number) + pad, n);
@@ -797,15 +798,31 @@ export class Fluid3 {
       }
       let face = -1;
       let depth = 0;
-      // the path from the start of the step: where it went in (Cyrus and Beck), so a drop that crossed a thin wall goes
-      // back out the side it came from
+      if (dynamic) {
+        // a body moves during the step, so the drop's path is not against the hull where it is now: a drop it moved onto
+        // goes out through the nearest face (the path test would throw it out through the far side)
+        if (sep < 0) {
+          const px = (pl[best * 4] as number) * -sep;
+          const py = (pl[best * 4 + 1] as number) * -sep;
+          const pz = (pl[best * 4 + 2] as number) * -sep;
+          x[i] = xi + px;
+          y[i] = yi + py;
+          z[i] = zi + pz;
+          this.giveBack(w, b, i, px, py, pz);
+        }
+        continue;
+      }
+      // a wall: the path from the start of the step, where it went in (Cyrus and Beck), so a drop that crossed a thin
+      // wall goes back out the side it came from
       const ax = x0[i] as number;
       const ay = y0[i] as number;
       const az = z0[i] as number;
       const ux = xi - ax;
       const uy = yi - ay;
       const uz = zi - az;
-      let tIn = 0;
+      // a drop that starts on a face (pushed out onto it last step) enters at t = 0: it must count as entering, or the
+      // nearest-face rule below would throw it out through the far side of a thin wall
+      let tIn = -Infinity;
       let tOut = 1;
       let inFace = -1;
       let crossed = true;
@@ -829,7 +846,7 @@ export class Fluid3 {
         } else if (t < tOut) tOut = t;
         if (tIn > tOut) crossed = false;
       }
-      if (crossed && inFace >= 0) {
+      if (crossed && inFace >= 0 && tIn >= -1e-9) {
         // it started outside and its path met the hull: back out through the face it came in by
         face = inFace;
         const nx = pl[face * 4] as number;
