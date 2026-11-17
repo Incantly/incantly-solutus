@@ -98,6 +98,8 @@ Clicking a body row selects the body on the board, as for every object. The live
 | Cloth in the plane | its threads as thin lines; a rope as a smooth line |
 | Pin | a small dark dot |
 
+Colour: an object whose own line sets `color` (`b with color = red`, a rule included) draws in that colour on the board and in its list swatch. Liquid, water, waves and smoke have a colour of their type (the blue and grey above), so their swatch matches what is drawn and `sm with color = …` tints them. Every other object with no colour of its own takes the studio's palette colour in order (algebra-view ui.md 13).
+
 ## 8. Hits and sound
 
 - A hit flashes the force arrows if they are on. Nothing else flashes by default, for people who are sensitive to flashing.

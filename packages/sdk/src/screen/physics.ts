@@ -250,9 +250,10 @@ function paintWheel(ctx: Ctx, vp: Viewport, w: physics.WheelValue, hits: Hit[], 
   hits.push({ k: 'circle', x, y, r: Math.max(10, r), text: `${name}: ${fmt(Math.abs(w.spin))} rad/s${w.broken ? ', broken off' : ''}`, id });
 }
 
-/** The default look of liquid and water (ui.md 7): light blue drops, a light blue fill under a darker line. */
-const LIQUID_BLUE = '#5aa7e8';
-const WATER_BLUE = '#2f7fc1';
+/*
+ * Liquid, water and waves draw in their item's colour: the type's own blue (ui.md 7: light blue drops, a light blue
+ * fill under a darker line) unless the object's line sets a colour.
+ */
 
 /** Liquid: every drop a disc in one batch, so 2,000 drops cost one fill (ui.md 7). */
 function paintLiquid(ctx: Ctx, vp: Viewport, l: physics.LiquidValue, it: SceneItem, hits: Hit[]): void {
@@ -261,7 +262,7 @@ function paintLiquid(ctx: Ctx, vp: Viewport, l: physics.LiquidValue, it: SceneIt
   if (n === 0 || l.zs) return;
   const r = Math.max(1.5, 0.5 * l.size * vp.ppu * 1.3);
   ctx.save();
-  ctx.fillStyle = withAlpha(l.spec.color ?? LIQUID_BLUE, 0.85);
+  ctx.fillStyle = withAlpha(l.spec.color ?? it.color, 0.85);
   ctx.beginPath();
   let sx = 0;
   let sy = 0;
@@ -290,7 +291,7 @@ function paintWater(ctx: Ctx, vp: Viewport, w: physics.WaterValue, it: SceneItem
   }
   if (pts.length < 3) return;
   ctx.save();
-  ctx.fillStyle = withAlpha(WATER_BLUE, 0.25);
+  ctx.fillStyle = withAlpha(it.color, 0.25);
   ctx.beginPath();
   pts.forEach((p, k) => (k === 0 ? ctx.moveTo(vp.px(p.x), vp.py(p.y)) : ctx.lineTo(vp.px(p.x), vp.py(p.y))));
   ctx.closePath();
@@ -303,7 +304,7 @@ function paintWater(ctx: Ctx, vp: Viewport, w: physics.WaterValue, it: SceneItem
     x1 = Math.max(x1, p.x);
   }
   if (x1 > x0) {
-    ctx.strokeStyle = WATER_BLUE;
+    ctx.strokeStyle = it.color;
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.moveTo(vp.px(x0), vp.py(w.level));
@@ -321,7 +322,7 @@ function paintWaves(ctx: Ctx, vp: Viewport, w: physics.WavesValue, it: SceneItem
   const x = (i: number): number => vp.px(w.x0 + (i + 0.5) * w.dx);
   const y = (i: number): number => vp.py(w.level + (w.heights[i] as number));
   ctx.save();
-  ctx.fillStyle = withAlpha(WATER_BLUE, 0.25);
+  ctx.fillStyle = withAlpha(it.color, 0.25);
   ctx.beginPath();
   ctx.moveTo(vp.px(w.x0), vp.py(bottom));
   ctx.lineTo(vp.px(w.x0), y(0));
@@ -330,7 +331,7 @@ function paintWaves(ctx: Ctx, vp: Viewport, w: physics.WavesValue, it: SceneItem
   ctx.lineTo(vp.px(w.x0 + w.nx * w.dx), vp.py(bottom));
   ctx.closePath();
   ctx.fill();
-  ctx.strokeStyle = WATER_BLUE;
+  ctx.strokeStyle = it.color;
   ctx.lineWidth = 2;
   ctx.beginPath();
   ctx.moveTo(vp.px(w.x0), y(0));
@@ -342,7 +343,7 @@ function paintWaves(ctx: Ctx, vp: Viewport, w: physics.WavesValue, it: SceneItem
   hits.push({ k: 'circle', x: x(mid), y: y(mid), r: 10, text: `${it.name}: waves, ${fmt(w.speed)} m/s`, id: it.id });
 }
 
-/** The grey of smoke (ui.md 7) and how dark thick smoke is drawn. */
+/** The grey of smoke (ui.md 7), used when the item's colour is not `#rrggbb`, and how dark thick smoke is drawn. */
 const SMOKE_GREY = [95, 102, 112] as const;
 const SMOKE_ALPHA = 0.85;
 
@@ -350,8 +351,8 @@ const SMOKE_ALPHA = 0.85;
  * The smoke image: one RGBA pixel per cell, grey with the cell's density as its cover, top row first (the grid's
  * rows go up). Written into `out`, so a frame makes no new buffer.
  */
-export function smokeImage(density: Float32Array, n: number, out: Uint8ClampedArray): void {
-  const [r, g, b] = SMOKE_GREY;
+export function smokeImage(density: Float32Array, n: number, out: Uint8ClampedArray, rgb: readonly [number, number, number] = SMOKE_GREY): void {
+  const [r, g, b] = rgb;
   for (let j = 0; j < n; j++) {
     const row = (n - 1 - j) * n;
     for (let i = 0; i < n; i++) {
@@ -404,16 +405,17 @@ function paintSmoke(ctx: Ctx, vp: Viewport, s: physics.SmokeValue, it: SceneItem
   const h = py1 - py0;
   if (!(w > 0) || !(h > 0)) return;
   const small = typeof (ctx as { drawImage?: unknown }).drawImage === 'function' ? smokeCanvas(n) : null;
+  const rgb = rgbOf(it.color) ?? SMOKE_GREY;
   ctx.save();
   if (small) {
-    smokeImage(s.density, n, small.image.data);
+    smokeImage(s.density, n, small.image.data, rgb);
     small.canvas.getContext('2d')?.putImageData(small.image, 0, 0);
     ctx.imageSmoothingEnabled = true;
     ctx.drawImage(small.canvas as unknown as CanvasImageSource, px0, py0, w, h);
   } else {
     const cw = w / n;
     const ch = h / n;
-    const [r, g, b] = SMOKE_GREY;
+    const [r, g, b] = rgb;
     for (let j = 0; j < n; j++) {
       for (let i = 0; i < n; i++) {
         const d = s.density[j * n + i] as number;
@@ -424,7 +426,7 @@ function paintSmoke(ctx: Ctx, vp: Viewport, s: physics.SmokeValue, it: SceneItem
     }
   }
   // a faint frame, so the box shows before any smoke reaches its edges
-  ctx.strokeStyle = 'rgba(95, 102, 112, 0.35)';
+  ctx.strokeStyle = `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, 0.35)`;
   ctx.lineWidth = 1;
   ctx.setLineDash([4, 4]);
   ctx.strokeRect(px0, py0, w, h);
@@ -581,6 +583,13 @@ export function paintSolidEdge(ctx: Ctx, vp: Viewport, it: SceneItem): void {
     ctx.stroke();
   }
   ctx.restore();
+}
+
+/** The channels of a `#rrggbb` colour. */
+function rgbOf(c: string): [number, number, number] | undefined {
+  if (!/^#[0-9a-f]{6}$/i.test(c)) return undefined;
+  const n = parseInt(c.slice(1), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 }
 
 function withAlpha(c: string, a: number): string {
