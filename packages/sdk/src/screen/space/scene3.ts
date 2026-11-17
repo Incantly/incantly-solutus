@@ -449,7 +449,7 @@ function wavesFaces(id: number, w: physics.WavesValue, color: string, alpha: num
   for (let a = 0; a + 1 < is.length; a++) {
     for (let b = 0; b + 1 < js.length; b++) {
       const pts = [P[a]?.[b], P[a + 1]?.[b], P[a + 1]?.[b + 1], P[a]?.[b + 1]] as V3[];
-      out.push({ k: 'face', id, pts, color, alpha, occludes: true, shade: true });
+      out.push({ k: 'face', id, pts, color, alpha, occludes: false, shade: true });
     }
   }
   // the rim of the surface, so its edge reads against the floor

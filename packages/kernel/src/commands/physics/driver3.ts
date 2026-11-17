@@ -1474,11 +1474,12 @@ export class Physics3Driver implements WorldDriver {
       let ok = true;
       const heights = new Float32Array(g.n);
       for (let k = 0; k < g.n; k++) {
-        const u = g.u[k] as number;
+        // the water's level as it shows: the surface, and under a body the level its push holds the water at
+        const u = (g.u[k] as number) + (g.P[k] as number);
         if (!(Math.abs(u) < BLOW_UP)) ok = false;
         heights[k] = u;
       }
-      this.put(wm.rec, ok ? { defined: true, value: { ...wm.value, heights, speed: g.c, mean: g.meanLevel() } satisfies WavesValue } : { defined: false, reason: 'unstable_world' }, changed);
+      this.put(wm.rec, ok ? { defined: true, value: { ...wm.value, heights, speed: g.c, mean: this.wavesLevel(wm.value) } satisfies WavesValue } : { defined: false, reason: 'unstable_world' }, changed);
     }
   }
 
@@ -1489,6 +1490,30 @@ export class Physics3Driver implements WorldDriver {
   }
 
   /* ------------------------------ liquid, water and waves (round 7) ------------------------------ */
+
+  /**
+   * The level of the water under waves (`w.level`): the rest level raised by the water the bodies over it move aside,
+   * exactly (their buoyancy over g, water weighing 1 kg a unit of volume), over the surface's area. A sleeping body
+   * keeps its last buoyancy, so a boat at rest still counts.
+   */
+  private wavesLevel(v: WavesValue): number {
+    const w = this.world as World3;
+    const g = Math.sqrt(w.gx * w.gx + w.gy * w.gy + w.gz * w.gz);
+    if (!(g > 0)) return v.level;
+    let moved = 0;
+    for (let i = 0; i < w.n; i++) {
+      if (w.type[i] !== BodyType3.Dynamic || w.gone.has(i)) continue;
+      const x = w.p[i * 3] as number;
+      const y = w.p[i * 3 + 1] as number;
+      if (!(x >= v.x0 && x <= v.x0 + v.nx * v.dx && y >= v.y0 && y <= v.y0 + v.ny * v.dy)) continue;
+      const o = i * NK * 3 + FK3.buoyancy * 3;
+      const fx = w.forces[o] as number;
+      const fy = w.forces[o + 1] as number;
+      const fz = w.forces[o + 2] as number;
+      moved += Math.sqrt(fx * fx + fy * fy + fz * fz) / g;
+    }
+    return v.level + moved / (v.nx * v.dx * v.ny * v.dy);
+  }
 
   /** True when the figure holds a world in space: bodies, or drops or waves with no bodies yet. */
   private hasWorld(): boolean {

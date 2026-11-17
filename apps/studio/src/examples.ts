@@ -286,6 +286,7 @@ export const EXAMPLES: readonly Example[] = [
     lines: [
       'bed = Ground(-1.2)',
       'pool = Box((0, 0, -0.6), 10, 10, 1.2)',
+      'pool with visible = false',
       'sea = Waves(pool, 48)',
       'boat = Body(Box((1.5, 0, 0.3), 2, 0.9, 0.5), density = 0.35)',
       'boat with color = orange',

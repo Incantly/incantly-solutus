@@ -27,6 +27,8 @@ export const MAX_WAVE_SIDE = 64;
 export const WAVE_DAMPING = 0.2;
 /** Water under a sleeping body moving faster than this (m/s) wakes it. */
 const WAKE_SPEED = 2e-3;
+/** Each cell (or point) under a body is tested at SUB points a side, so the push covers the body's own footprint. */
+const SUB = 3;
 
 export interface WaveSpec {
   /** Cells along x and y (1 along y for waves in the plane). */
@@ -85,6 +87,8 @@ export class WaveGrid {
    * it (scaled by how much of the cell the body covers).
    */
   press(k: number, zBot: number, zTop: number, weight: number): void {
+    // the water presses up to the body's waterline (the head at its middle in the last step), so a floating body moves
+    // aside its whole draft and the level rises by it; one number a body, so the push does not feed on itself
     const s = this.spec.level + (this.u[k] as number);
     const p = Math.min(zTop, s) - zBot;
     if (!(p > 0)) return;
@@ -219,16 +223,19 @@ export class WaveGrid {
     return this.spec.level + s / this.n;
   }
 
+  /** The heights, their speeds and the last head (the next push reads it). */
   save(): Float64Array {
-    const out = new Float64Array(2 * this.n);
+    const out = new Float64Array(3 * this.n);
     out.set(this.u, 0);
     out.set(this.v, this.n);
+    out.set(this.F, 2 * this.n);
     return out;
   }
 
   load(s: Float64Array): void {
     this.u.set(s.subarray(0, this.n));
     this.v.set(s.subarray(this.n, 2 * this.n));
+    this.F.set(s.subarray(2 * this.n, 3 * this.n));
   }
 
   /* ------------------------------ bodies press on the water ------------------------------ */
@@ -259,19 +266,26 @@ export class WaveGrid {
         const hy = w.hi[k * 3 + 1] as number;
         // above the highest the water could be: no touch
         if (lz > s.level + s.depth) continue;
-        const i0 = Math.max(0, Math.floor((lx - s.x0) / s.dx - 0.5));
-        const i1 = Math.min(s.nx - 1, Math.ceil((hx - s.x0) / s.dx - 0.5));
-        const j0 = Math.max(0, Math.floor((ly - s.y0) / s.dy - 0.5));
-        const j1 = Math.min(s.ny - 1, Math.ceil((hy - s.y0) / s.dy - 0.5));
+        // the cells under its box, each tested at SUB × SUB points, so the push covers the body's own footprint
+        const i0 = Math.max(0, Math.floor((lx - s.x0) / s.dx));
+        const i1 = Math.min(s.nx - 1, Math.floor((hx - s.x0) / s.dx));
+        const j0 = Math.max(0, Math.floor((ly - s.y0) / s.dy));
+        const j1 = Math.min(s.ny - 1, Math.floor((hy - s.y0) / s.dy));
         if (i1 < i0 || j1 < j0) continue;
         let hit = 0;
+        const share = 1 / (SUB * SUB);
         for (let j = j0; j <= j1; j++) {
-          const y = s.y0 + (j + 0.5) * s.dy;
           for (let i = i0; i <= i1; i++) {
-            const x = s.x0 + (i + 0.5) * s.dx;
-            if (this.column3(sh, x, y)) {
-              this.press(j * s.nx + i, this.zLo, this.zHi, 1);
-              hit++;
+            const cell = j * s.nx + i;
+            for (let b2 = 0; b2 < SUB; b2++) {
+              const y = s.y0 + (j + (b2 + 0.5) / SUB) * s.dy;
+              for (let a2 = 0; a2 < SUB; a2++) {
+                const x = s.x0 + (i + (a2 + 0.5) / SUB) * s.dx;
+                if (this.column3(sh, x, y)) {
+                  this.press(cell, this.zLo, this.zHi, share);
+                  hit++;
+                }
+              }
             }
           }
         }
@@ -362,14 +376,16 @@ export class WaveGrid {
           }
         }
         if (ly > s.level + s.depth) continue;
-        const i0 = Math.max(0, Math.floor((lx - s.x0) / s.dx - 0.5));
-        const i1 = Math.min(s.nx - 1, Math.ceil((hx - s.x0) / s.dx - 0.5));
+        const i0 = Math.max(0, Math.floor((lx - s.x0) / s.dx));
+        const i1 = Math.min(s.nx - 1, Math.floor((hx - s.x0) / s.dx));
         let hit = 0;
         for (let i = i0; i <= i1; i++) {
-          const x = s.x0 + (i + 0.5) * s.dx;
-          if (this.column2(sh, x)) {
-            this.press(i, this.zLo, this.zHi, 1);
-            hit++;
+          for (let a2 = 0; a2 < SUB; a2++) {
+            const x = s.x0 + (i + (a2 + 0.5) / SUB) * s.dx;
+            if (this.column2(sh, x)) {
+              this.press(i, this.zLo, this.zHi, 1 / SUB);
+              hit++;
+            }
           }
         }
         if (hit > 0 || i1 < i0) continue;

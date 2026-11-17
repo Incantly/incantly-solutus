@@ -95,13 +95,15 @@ export interface WavesValue {
   readonly level: number;
   readonly depth: number;
   readonly damping: number;
-  /** Height above the rest level at each cell centre, row by row (j × nx + i). */
+  /**
+   * The water's height above the rest level at each cell centre, row by row (j × nx + i): the surface, and under a body
+   * the level the body's push holds the water at (its waterline), so the surface reads flat round a floating boat.
+   */
   readonly heights: Float32Array;
   /** The wave speed √(g × depth), or the most the grid can carry (written by the driver). */
   readonly speed: number;
   /**
-   * The level of the water now: the rest level raised by what bodies moved aside (the mean of the surface plus the
-   * bodies' push on it; the mean of `heights` alone stays at the rest level, since the water keeps its volume).
+   * The level of the water now: the rest level raised by what bodies moved aside (the mean of `heights`).
    */
   readonly mean: number;
 }

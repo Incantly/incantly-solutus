@@ -259,16 +259,14 @@ export function paintSpace(ctx: Ctx, view: space.View3, w: number, h: number, sc
   /* 2. faces far to near; 3. lines; 4. points; 5. labels */
   const sc = project(scene.items);
   const sorted = [...sc.faces].sort((x, y) => y.depth - x.depth);
-  for (const f of sorted) {
-    drawFace(f);
-    hits.push({ k: 'face', id: f.item.id, pts: f.pts.map((p) => ({ x: p.x, y: p.y })), depth: f.depth, alpha: f.item.alpha, ...(f.item.body !== undefined ? { body: f.item.body } : {}) });
-  }
-  const occluders = sc.faces.filter((f) => f.item.occludes);
-  for (const l of sc.lines) drawLine(l, occluders);
-  // particles: far ones first, so near ones cover them
-  if (sc.dots.length > 0) {
-    const ds = sc.dots.map((d) => ({ d, q: P(d.p) })).filter((x) => !x.q.behind).sort((a, b) => b.q.z - a.q.z);
-    for (const { d, q } of ds) {
+  // particles and drops go in among the faces far to near, so a ball in a liquid shows above the drops behind it and
+  // under the ones in front (physics design 12, round 7)
+  const ds = sc.dots.length > 0 ? sc.dots.map((d) => ({ d, q: P(d.p) })).filter((x) => !x.q.behind).sort((a, b) => b.q.z - a.q.z) : [];
+  let di = 0;
+  const drawDotsTo = (depth: number): void => {
+    if (di >= ds.length) return;
+    for (; di < ds.length && (ds[di] as { q: Proj }).q.z >= depth; di++) {
+      const { d, q } = ds[di] as { d: DotItem; q: Proj };
       const r = Math.max(0.6, d.px ? d.size : d.size * cam.scale);
       ctx.globalAlpha = d.alpha;
       ctx.fillStyle = d.color;
@@ -277,7 +275,15 @@ export function paintSpace(ctx: Ctx, view: space.View3, w: number, h: number, sc
       ctx.fill();
     }
     ctx.globalAlpha = 1;
+  };
+  for (const f of sorted) {
+    drawDotsTo(f.depth);
+    drawFace(f);
+    hits.push({ k: 'face', id: f.item.id, pts: f.pts.map((p) => ({ x: p.x, y: p.y })), depth: f.depth, alpha: f.item.alpha, ...(f.item.body !== undefined ? { body: f.item.body } : {}) });
   }
+  drawDotsTo(-Infinity);
+  const occluders = sc.faces.filter((f) => f.item.occludes);
+  for (const l of sc.lines) drawLine(l, occluders);
   for (const p of sc.points) {
     const q = P(p.p);
     if (q.behind) continue;

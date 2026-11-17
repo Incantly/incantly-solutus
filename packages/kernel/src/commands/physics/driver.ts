@@ -704,6 +704,25 @@ export class PhysicsDriver implements WorldDriver {
     this.fluid = new Fluid2(d, sources, list.length);
   }
 
+  /** `w.level` in the plane: the rest level raised by the water the bodies over it move aside (as in space). */
+  private wavesLevel(v: WavesValue): number {
+    const w = this.world as World2;
+    const g = Math.sqrt(w.gx * w.gx + w.gy * w.gy);
+    if (!(g > 0)) return v.level;
+    const kb = FORCE_KINDS.indexOf('buoyancy');
+    let moved = 0;
+    for (let i = 0; i < w.n; i++) {
+      if (w.type[i] !== BodyType.Dynamic || w.gone.has(i)) continue;
+      const x = w.px[i] as number;
+      if (!(x >= v.x0 && x <= v.x0 + v.nx * v.dx)) continue;
+      const o = (i * FORCE_KINDS.length + kb) * 2;
+      const fx = w.forces[o] as number;
+      const fy = w.forces[o + 1] as number;
+      moved += Math.sqrt(fx * fx + fy * fy) / g;
+    }
+    return v.level + moved / (v.nx * v.dx);
+  }
+
   /** Each wave line's heights, stepped with the world's step and its gravity (design 9.3). */
   private buildWaves(world: World2): void {
     this.waveMembers = [];
@@ -738,7 +757,7 @@ export class PhysicsDriver implements WorldDriver {
     if (!this.fluid && this.waveMembers.length === 0) return ws;
     const fs = this.fluid ? this.fluid.save() : new Float64Array(0);
     let len = 1 + ws.length + fs.length;
-    for (const m of this.waveMembers) len += 2 * m.grid.n;
+    for (const m of this.waveMembers) len += 3 * m.grid.n;
     const out = new Float64Array(len);
     out[0] = ws.length;
     out.set(ws, 1);
@@ -746,7 +765,7 @@ export class PhysicsDriver implements WorldDriver {
     // the waves first (their size is known from the figure), then the drops to the end, as round 6 kept them
     for (const m of this.waveMembers) {
       out.set(m.grid.save(), k);
-      k += 2 * m.grid.n;
+      k += 3 * m.grid.n;
     }
     out.set(fs, k);
     return out;
@@ -762,8 +781,8 @@ export class PhysicsDriver implements WorldDriver {
     w.load(s.subarray(1, 1 + n));
     let k = 1 + n;
     for (const m of this.waveMembers) {
-      m.grid.load(s.subarray(k, k + 2 * m.grid.n));
-      k += 2 * m.grid.n;
+      m.grid.load(s.subarray(k, k + 3 * m.grid.n));
+      k += 3 * m.grid.n;
     }
     if (this.fluid) this.fluid.load(s.subarray(k));
   }
@@ -1585,11 +1604,12 @@ export class PhysicsDriver implements WorldDriver {
       let ok = true;
       const heights = new Float32Array(g.n);
       for (let k = 0; k < g.n; k++) {
-        const u = g.u[k] as number;
+        // the water's level as it shows: the surface, and under a body the level its push holds the water at
+        const u = (g.u[k] as number) + (g.P[k] as number);
         if (!(Math.abs(u) < BLOW_UP)) ok = false;
         heights[k] = u;
       }
-      const cell: Cell = ok ? { defined: true, value: { ...wm.value, heights, speed: g.c, mean: g.meanLevel() } satisfies WavesValue } : { defined: false, reason: 'unstable_world' };
+      const cell: Cell = ok ? { defined: true, value: { ...wm.value, heights, speed: g.c, mean: this.wavesLevel(wm.value) } satisfies WavesValue } : { defined: false, reason: 'unstable_world' };
       this.lastCells.set(wm.rec.id, cell);
       this.written.add(wm.rec.id);
       if (this.acc.write(wm.rec, cell)) changed.push(wm.rec);

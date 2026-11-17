@@ -306,20 +306,21 @@ describe('waves (design 9.3)', () => {
     expect(Math.abs((level - (b.z - 0.5)) - 0.5)).toBeLessThan(0.01);
   });
 
-  it('a body that falls in makes waves, and the water keeps its volume', () => {
-    all([...POOL, 'sea = Waves(pool, 32)', 'rock = Body(Sphere((0, 0, 1.5), 0.4), density = 0.6)']);
-    play(1.5);
-    const s = waves('sea');
+  it('a body that falls in makes waves, and the level rises by what the bodies moved aside', () => {
+    all([...POOL, 'sea = Waves(pool, 32)', 'rock = Body(Sphere((0, 0, 1.5), 0.4), density = 3)', 'boat = Body(Box((2.5, 2.5, 0.5), 2, 1, 0.5), density = 0.4)', 'lv = sea.level']);
+    play(1);
     let top = 0;
-    let sum = 0;
-    for (const h of s.heights) {
-      top = Math.max(top, Math.abs(h));
-      sum += h;
-    }
+    for (const h of waves('sea').heights) top = Math.max(top, Math.abs(h));
     expect(top).toBeGreaterThan(0.02);
-    // walls at the edges: what goes down under the rock comes up round it (exact in the engine; the heights are read
-    // in single precision)
-    expect(Math.abs(sum) / top).toBeLessThan(1e-5);
+    play(20);
+    // the rock under water (its whole volume) and the boat (its mass over the water's density), over the pool's 100 m²
+    const moved = (4 / 3) * Math.PI * 0.4 * 0.4 * 0.4 + 0.4 * 2 * 1 * 0.5;
+    expect(body('rock').z).toBeLessThan(-0.7);
+    expect(Math.abs((f.value('lv') as number) - moved / 100) / (moved / 100)).toBeLessThan(0.1);
+    // round the floating boat the surface is flat: the water under it reads its waterline
+    const s = waves('sea');
+    const at = (x: number, y: number): number => s.heights[Math.floor((y + 5) / s.dy) * s.nx + Math.floor((x + 5) / s.dx)] as number;
+    expect(Math.abs(at(2.5, 2.5) - at(-3, -3))).toBeLessThan(0.01);
   });
 
   it('a boat rocks on the waves a falling rock makes', () => {
@@ -367,12 +368,12 @@ describe('waves (design 9.3)', () => {
   });
 
   it('waves in the plane: a segment of points, a body floats on them', () => {
-    all(['bed = Ground(-1)', 'sea = Waves(Segment((-5, 0), (5, 0)), 40, damping = 1)', 'boat = Body(Box((0, 0.5), 1.6, 0.5), density = 0.5)', 'lv = sea.level']);
+    all(['bed = Ground(-1)', 'sea = Waves(Segment((-5, 0), (5, 0)), 40, damping = 1)', 'boat = Body(Box((0, 0.5), 1.6, 0.5), density = 0.5)', 'lv = sea.height(4, 0)']);
     expect(waves('sea').nx).toBe(40);
     expect(waves('sea').space).toBe(false);
     play(10);
     const b = (f.value('boat') as physics.BodyValue);
-    // half under the water's level now (the rest level raised by what the boat moved aside)
+    // half under the water round it (the surface 4 m away)
     expect(Math.abs(b.y - (f.value('lv') as number))).toBeLessThan(0.01);
     expect(physicsOf(f).world).toBeDefined();
   });
