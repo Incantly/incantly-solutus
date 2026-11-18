@@ -932,8 +932,20 @@ flow and the liquid through many hooks, and moving all of it would move most of 
   `npm run build:wasm`; `node packages/kernel/wasm/build.mjs --check` tells whether the file is what the source builds to).
 - **Main thread.** A browser's main thread may refuse to compile a module over 4 KB in one go (Chrome). The loader
   compiles in a worker or Node at the first use, and a page's main thread calls `initPhysicsKernels()` once at start-up
-  (the Chrome bench page does); without it the TypeScript loops run there, with the same film. `setPhysicsKernels(false)`
-  turns the kernels off for solvers built after it (tests, the hash check).
+  (the Chrome bench page does, and so do `createHeadlessApp`, which `createApp` starts through, and the studio's
+  `main.ts`; nothing waits for it, one compile serves every call); a solver built before it resolves runs the TypeScript
+  loops, with the same film. `setPhysicsKernels(false)` turns the kernels off for solvers built after it (tests, the hash
+  check). `physicsKernelsActive(figure)` says which loops a figure's cloth and liquid solvers run (`true`, `false`, or
+  `undefined` with no such solver); the studio's physics readout ends with "Rust" or "TypeScript" (for a world in the
+  worker, the worker's answer in its reply).
+- **A stale module is caught.** `build.mjs` writes into the header of `kernels-wasm.ts` the SHA-256 of `lib.rs`,
+  `Cargo.toml` and `Cargo.lock`; a spec test hashes the three files and compares, so CI (which has no Rust) fails when a
+  source changed and `npm run build:wasm` was not run.
+- **No garbage in a step.** The moves and speeds hand the Rust loop their raw inputs (the small step, gravity, the cloth's
+  damping) and it works out the products and the speeds' factor itself, the same operations as the TypeScript loops: a
+  number worked out in TypeScript is a heap number until the engine has optimised that function, and with the loop gone
+  the function is called too seldom to be optimised soon. A step's copy of the points to the start-of-step arrays no
+  longer makes three views a step.
 - **Measured**, Chrome 157 with the CPU 4× slower, mean of a frame of two steps, the TypeScript loops and the Rust loops
   on the same computer in the same session (best of three runs each): rope 1.38 → 1.10 ms, 32 × 32 on a ball 3.50 → 3.13,
   flag 4.50 → 3.05, over 40 bodies 8.25 → 6.98, self 8.88 → 8.00, two cloths 10.30 → 7.57, cloth in water 11.04 → 9.11
