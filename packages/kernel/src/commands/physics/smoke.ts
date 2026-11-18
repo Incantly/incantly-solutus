@@ -11,6 +11,7 @@ import type { RuleCall } from '../../graph/registry';
 import type { CheckedLine } from '../../language/check';
 import type { CommandSpec, FormCheck, ParamSpec, Refusal } from '../../language/table';
 import { FLAME_AT, FUEL_GONE, IGNITE_AT, flameCells, fuelSum, hottest } from '../../physics/fire2';
+import type { SmokeOut } from './flip';
 import { flameCells3, fuelSum3, hottest3 } from '../../physics/fire3';
 import type { SmokeSource2 } from '../../physics/smoke2';
 import { Smoke2, markSource } from '../../physics/smoke2';
@@ -382,14 +383,27 @@ export function smokeGrid(spec: SmokeSpec, windX: number, windY: number): Smoke2
 }
 
 /** The smoke a grid holds now, as a value; a fire's value also holds its temperature. */
-export function smokeValue(spec: SmokeSpec, g: Smoke2): SmokeValue {
-  const base: SmokeValue = { schema: 'Smoke', spec, density: new Float32Array(g.s), mass: g.mass(), speed: g.maxSpeed() };
-  if (!spec.fire) return base;
+export function smokeValue(spec: SmokeSpec, g: Smoke2, out?: SmokeOut): SmokeValue {
+  // (the arrays the driver keeps in turn when it gives them, so a frame makes none; fresh ones for a look ahead)
+  let density: Float32Array;
+  if (out) {
+    density = out.density.next(g.s.length);
+    density.set(g.s);
+  } else density = new Float32Array(g.s);
+  if (!spec.fire) return { schema: 'Smoke', spec, density, mass: g.mass(), speed: g.maxSpeed() };
+  let temp: Float32Array;
+  if (out) {
+    temp = out.temp.next(g.T.length);
+    temp.set(g.T);
+  } else temp = new Float32Array(g.T);
+  const mass = g.mass();
+  const speed = g.maxSpeed();
   const top = hottest(g.T);
   const fuel = fuelSum(g);
   const flames = flameCells(g.T);
   const stopped = !(g.sourced && g.making);
-  const fire: FireValue = { ...base, spec: spec as FireValue['spec'], temp: new Float32Array(g.T), hottest: top, burning: flames > 0, fuel, flames, out: g.alive && stopped && !(top > IGNITE_AT) && fuel < FUEL_GONE };
+  // (every field written out, not `{ ...base, … }`: see the world's cell in the driver)
+  const fire: FireValue = { schema: 'Smoke', spec: spec as FireValue['spec'], density, mass, speed, temp, hottest: top, burning: flames > 0, fuel, flames, out: g.alive && stopped && !(top > IGNITE_AT) && fuel < FUEL_GONE };
   return fire;
 }
 
@@ -406,14 +420,26 @@ export function smokeGrid3(spec: SmokeSpec, windX: number, windY: number, windZ:
 }
 
 /** The smoke a grid in space holds now, as a value (`density` and `temp` are copies, so they can be moved to the page). */
-export function smokeValue3(spec: SmokeSpec, g: Smoke3): SmokeValue {
-  const base: SmokeValue = { schema: 'Smoke', spec, density: new Float32Array(g.s), mass: g.mass(), speed: g.maxSpeed() };
-  if (!spec.fire) return base;
+export function smokeValue3(spec: SmokeSpec, g: Smoke3, out?: SmokeOut): SmokeValue {
+  // (the arrays the driver keeps in turn when it gives them, so a frame makes none; see `smokeValue`)
+  let density: Float32Array;
+  if (out) {
+    density = out.density.next(g.s.length);
+    density.set(g.s);
+  } else density = new Float32Array(g.s);
+  if (!spec.fire) return { schema: 'Smoke', spec, density, mass: g.mass(), speed: g.maxSpeed() };
+  let temp: Float32Array;
+  if (out) {
+    temp = out.temp.next(g.T.length);
+    temp.set(g.T);
+  } else temp = new Float32Array(g.T);
+  const mass = g.mass();
+  const speed = g.maxSpeed();
   const top = hottest3(g.T);
   const fuel = fuelSum3(g);
   const flames = flameCells3(g.T);
   const stopped = !(g.sourced && g.making);
-  const fire: FireValue = { ...base, spec: spec as FireValue['spec'], temp: new Float32Array(g.T), hottest: top, burning: flames > 0, fuel, flames, out: g.alive && stopped && !(top > IGNITE_AT) && fuel < FUEL_GONE };
+  const fire: FireValue = { schema: 'Smoke', spec: spec as FireValue['spec'], density, mass, speed, temp, hottest: top, burning: flames > 0, fuel, flames, out: g.alive && stopped && !(top > IGNITE_AT) && fuel < FUEL_GONE };
   return fire;
 }
 

@@ -55,6 +55,8 @@ export class ObjRec {
   downVersion = -1;
   styleCache: EffectiveStyle | undefined;
   infoCache: ObjectInfo | undefined;
+  /** True while the object is in the figure's list of dirty sources (see `DirtyList`). */
+  inDirty = false;
 
   constructor(
     readonly id: ObjId,
@@ -69,6 +71,48 @@ export class ObjRec {
   }
   get usesClock(): boolean {
     return this.p.checked.usesT || this.p.checked.rangeUsesT === true;
+  }
+}
+
+/**
+ * The objects written since the last pass, each once, in the order they were written. A `Set` would do, but a set that is
+ * filled and emptied at every frame makes a new table at each emptying (design 11.4); this keeps a flag on each object and
+ * an array it fills again from the start.
+ */
+export class DirtyList {
+  private list: ObjRec[] = [];
+  private n = 0;
+
+  get size(): number {
+    return this.n;
+  }
+
+  add(r: ObjRec): void {
+    if (r.inDirty) return;
+    r.inDirty = true;
+    this.list[this.n++] = r;
+  }
+
+  delete(r: ObjRec): void {
+    if (!r.inDirty) return;
+    r.inDirty = false;
+    const i = this.list.indexOf(r);
+    if (i >= 0 && i < this.n) {
+      for (let k = i + 1; k < this.n; k++) this.list[k - 1] = this.list[k] as ObjRec;
+      this.n--;
+    }
+  }
+
+  /** Copies the objects, in order, to the start of `into` and empties the list. Returns how many. */
+  drain(into: ObjRec[]): number {
+    const n = this.n;
+    for (let k = 0; k < n; k++) {
+      const r = this.list[k] as ObjRec;
+      into[k] = r;
+      r.inDirty = false;
+    }
+    this.n = 0;
+    return n;
   }
 }
 
@@ -91,6 +135,9 @@ export interface FigureOptions {
   /** A host's line gate (an app mode), in force from the first line, so a loaded script is checked too. */
   gate?: import('./types').LineGate;
 }
+
+/** What the state driver gives when it has nothing (read, never changed: a pass makes no list for it). */
+const NO_RECS: ObjRec[] = [];
 
 /** The tolerance for equality tests when nothing says otherwise (errors design 8). */
 export const DEFAULT_TOLERANCE = 1e-9;
@@ -139,7 +186,7 @@ export class FigureCore {
   readonly env: Env;
   readonly clockState = { t: 0, bt: 0, beat: 0 };
 
-  protected dirty = new Set<ObjRec>();
+  protected dirty = new DirtyList();
   protected clockDirty = false;
   protected epoch = 0;
   /** Lazy mode: ids the host reads. `null` means everything (eager). */
@@ -161,6 +208,10 @@ export class FigureCore {
   protected readonly ruleCache = new WeakMap<readonly CompiledArg[], CommandRule>();
   protected pass: Pass | null = null;
   protected readonly listeners = new Set<Listener>();
+  /** The listeners as an array, rebuilt only when one subscribes or leaves (delivery walks it with an index, copying nothing). */
+  private listenerList: readonly Listener[] | null = null;
+  /** The event array of the last round, kept for the next one (a round swaps the two). */
+  private spareEvents: FigureEvent[] = [];
   protected pendingValues = new Set<ObjId>();
   protected pendingStyles = new Set<ObjId>();
   protected pendingEvents: FigureEvent[] = [];
@@ -339,10 +390,17 @@ export class FigureCore {
 
   protected setCell(r: ObjRec, cell: Cell): boolean {
     if (cellsEqual(r.cell, cell)) return false;
+    return this.setCellNew(r, cell);
+  }
+
+  /** Puts a cell the caller knows differs from the one held (no comparison made: a driver that knows a field moved says so). Returns true. */
+  protected setCellNew(r: ObjRec, cell: Cell): boolean {
     if (this.pass && !this.pass.before.has(r) && !this.pass.added.has(r)) this.pass.before.set(r, r.cell);
     r.cell = cell;
     r.changedAt = this.epoch;
-    this.pendingValues.add(r.id);
+    // (the changed ids are for the listeners' `value` event: with none, and no operation to batch for, nobody reads them,
+    // and a set filled and emptied at each frame makes a new table each time)
+    if (this.listeners.size > 0 || this.opDepth > 0) this.pendingValues.add(r.id);
     return true;
   }
 
@@ -867,45 +925,112 @@ export class FigureCore {
    * order, each rule once, and only when an input actually changed value.
    */
   flush(force = false): FrameDelta {
-    if (this.busy) return { valueIds: [], styleIds: [], undefinedChanges: [], ran: 0 };
-    const drivers = this.stateDriver ? this.stateDriver() : [];
-    for (const s of drivers) this.dirty.add(s);
-    if (this.dirty.size === 0 && !this.clockDirty && !force) return { valueIds: [], styleIds: [], undefinedChanges: [], ran: 0 };
+    return this.flushPass(force, undefined);
+  }
+
+  /*
+   * The pass keeps its work arrays between flushes (design 11.4: a frame of a world makes no garbage), so the only things
+   * it makes are what it returns: the delta and its three lists. A second pass of one flush (`into`) adds its changes to
+   * the delta of the first, which is what the figure's `flush` did by making a merged copy.
+   */
+  private readonly sourcesBuf: ObjRec[] = [];
+  private candBuf = new Int32Array(64);
+  private candN = 0;
+  private readonly styleScratch = new Set<ObjRec>();
+  private readonly idsBuf: ObjId[] = [];
+  private readonly styleOne = (o: ObjRec): void => {
+    o.styleCache = undefined;
+    this.pendingStyles.add(o.id);
+  };
+
+  /** Adds the objects of a sorted list not marked in this epoch to the candidates. */
+  private takeDown(arr: Int32Array, mark: Uint32Array, epoch: number): void {
+    for (let i = 0; i < arr.length; i++) {
+      const o = arr[i] as number;
+      if (mark[o] !== epoch) {
+        mark[o] = epoch;
+        if (this.candN === this.candBuf.length) {
+          const b = new Int32Array(this.candBuf.length * 2);
+          b.set(this.candBuf);
+          this.candBuf = b;
+        }
+        this.candBuf[this.candN++] = o;
+      }
+    }
+  }
+
+  /**
+   * The style rules to run again: forgets their cached style, and gives their ids (added to the first pass's, each once, for
+   * a second pass). Apart from `flushPass` because a function that holds a closure makes its context at every call.
+   */
+  private styleIdsOf(styleSet: Set<ObjRec>, into: FrameDelta | undefined): ObjId[] {
+    styleSet.forEach(this.styleOne);
+    let ids: ObjId[];
+    if (into) {
+      ids = into.styleIds;
+      styleSet.forEach((o) => {
+        if (!ids.includes(o.id)) ids.push(o.id);
+      });
+    } else ids = [...styleSet].map((o) => o.id);
+    styleSet.clear();
+    return ids;
+  }
+
+  protected flushPass(force: boolean, into: FrameDelta | undefined): FrameDelta {
+    if (this.busy) return into ?? { valueIds: [], styleIds: [], undefinedChanges: [], ran: 0 };
+    const drivers = this.stateDriver ? this.stateDriver() : NO_RECS;
+    for (let k = 0; k < drivers.length; k++) this.dirty.add(drivers[k] as ObjRec);
+    if (this.dirty.size === 0 && !this.clockDirty && !force) return into ?? { valueIds: [], styleIds: [], undefinedChanges: [], ran: 0 };
     this.epoch++;
     const epoch = this.epoch;
-    const sources = [...this.dirty];
-    this.dirty.clear();
+    const sources = this.sourcesBuf;
+    const nSources = this.dirty.drain(sources);
     const clockChanged = this.clockDirty;
     this.clockDirty = false;
-    for (const s of sources) s.changedAt = epoch;
+    for (let k = 0; k < nSources; k++) (sources[k] as ObjRec).changedAt = epoch;
 
     // 1. candidates
-    const cand: number[] = [];
+    this.candN = 0;
     const mark = this.markArray();
-    const take = (arr: Int32Array): void => {
-      for (let i = 0; i < arr.length; i++) {
-        const o = arr[i] as number;
-        if (mark[o] !== epoch) {
-          mark[o] = epoch;
-          cand.push(o);
+    for (let k = 0; k < nSources; k++) this.takeDown(this.downOf(sources[k] as ObjRec), mark, epoch);
+    if (clockChanged) this.takeDown(this.clockDown(), mark, epoch);
+    const order = this.candBuf;
+    const nOrder = this.candN;
+    if (nOrder > 32) order.subarray(0, nOrder).sort();
+    else {
+      // a few: an insertion sort (no view made for the engine's sort)
+      for (let i = 1; i < nOrder; i++) {
+        const key = order[i] as number;
+        let j = i - 1;
+        while (j >= 0 && (order[j] as number) > key) {
+          order[j + 1] = order[j] as number;
+          j--;
         }
+        order[j + 1] = key;
       }
-    };
-    for (const s of sources) take(this.downOf(s));
-    if (clockChanged) take(this.clockDown());
-    const order = Int32Array.from(cand);
-    order.sort();
+    }
 
     // 2. walk
     const needed = this.neededArray();
-    const valueIds: ObjId[] = [];
-    const styleSet = new Set<ObjRec>();
-    const changes: UndefChange[] = [];
+    // the ids this pass found changed: a list made for the delta, or (a second pass) the one kept between frames, written
+    // from the start, with `nv` of its places in use (setting its length to 0 would free the places each time)
+    const valueIds: ObjId[] = into ? this.idsBuf : [];
+    let nv = 0;
+    const styleSet = this.styleScratch;
+    const changes: UndefChange[] = into ? into.undefinedChanges : [];
     let ran = 0;
-    for (let k = 0; k < order.length; k++) {
+    for (let k = 0; k < nOrder; k++) {
       const r = this.list[order[k] as number] as ObjRec;
       let go = clockChanged && r.usesClock;
-      if (!go) for (const i of r.inputs) if (i.changedAt === epoch || i.stale) { go = true; break; }
+      if (!go) {
+        for (let q = 0; q < r.inputs.length; q++) {
+          const i = r.inputs[q] as ObjRec;
+          if (i.changedAt === epoch || i.stale) {
+            go = true;
+            break;
+          }
+        }
+      }
       if (!go) continue;
       if (needed !== null && needed[r.order] !== 1 && !this.forceAll) {
         r.stale = true;
@@ -924,23 +1049,59 @@ export class FigureCore {
         this.updateRange(r);
       }
       if (changed) {
-        valueIds.push(r.id);
+        valueIds[nv++] = r.id;
         if (!wasCell.defined || !r.cell.defined) changes.push({ id: r.id, name: r.p.name, now: r.cell, was: wasCell });
       }
     }
     // 3. style rules that read something that changed
-    for (const s of sources) for (const o of s.styleKids) styleSet.add(o);
-    for (const id of valueIds) for (const o of (this.byIdMap.get(id) as ObjRec).styleKids) styleSet.add(o);
+    for (let k = 0; k < nSources; k++) {
+      const kids = (sources[k] as ObjRec).styleKids;
+      for (let q = 0; q < kids.length; q++) styleSet.add(kids[q] as ObjRec);
+    }
+    for (let k = 0; k < nv; k++) {
+      const kids = (this.byIdMap.get(valueIds[k] as ObjId) as ObjRec).styleKids;
+      for (let q = 0; q < kids.length; q++) styleSet.add(kids[q] as ObjRec);
+    }
     if (clockChanged) {
       this.clockDown();
-      for (const o of this.clockStyleCache ?? []) styleSet.add(o);
+      const cache = this.clockStyleCache;
+      if (cache) for (let k = 0; k < cache.length; k++) styleSet.add(cache[k] as ObjRec);
     }
-    for (const o of styleSet) {
-      o.styleCache = undefined;
-      this.pendingStyles.add(o.id);
+    let styleIds: ObjId[] = into ? into.styleIds : [];
+    if (styleSet.size > 0) {
+      styleIds = this.styleIdsOf(styleSet, into);
     }
-    for (const s of sources) valueIds.unshift(s.id);
-    const styleIds = [...styleSet].map((o) => o.id);
+    // each source's id goes in front, one after the other (so the last source comes first), as `unshift` did
+    if (!into) for (let k = 0; k < nSources; k++) valueIds.unshift((sources[k] as ObjRec).id);
+    else if (nSources > 0) {
+      for (let k = nv - 1; k >= 0; k--) valueIds[k + nSources] = valueIds[k] as ObjId;
+      for (let k = 0; k < nSources; k++) valueIds[nSources - 1 - k] = (sources[k] as ObjRec).id;
+      nv += nSources;
+    }
+    if (into) {
+      // the ids of this pass not in the first pass's (a ruler id the first pass named stays where it was)
+      const dst = into.valueIds;
+      const n0 = dst.length;
+      if (n0 * nv <= 20000) {
+        for (let k = 0; k < nv; k++) {
+          const id = valueIds[k] as ObjId;
+          let seen = false;
+          for (let q = 0; q < n0; q++) {
+            if (dst[q] === id) {
+              seen = true;
+              break;
+            }
+          }
+          if (!seen) dst.push(id);
+        }
+      } else {
+        const first = new Set<ObjId>();
+        for (let q = 0; q < n0; q++) first.add(dst[q] as ObjId);
+        for (let k = 0; k < nv; k++) if (!first.has(valueIds[k] as ObjId)) dst.push(valueIds[k] as ObjId);
+      }
+      (into as { ran: number }).ran += ran;
+      return into;
+    }
     return { valueIds, styleIds, undefinedChanges: changes, ran };
   }
 
@@ -1022,7 +1183,11 @@ export class FigureCore {
   on(listener: Listener): () => void {
     if (typeof listener !== 'function') return () => false;
     this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
+    this.listenerList = null;
+    return () => {
+      this.listenerList = null;
+      return this.listeners.delete(listener);
+    };
   }
 
   protected queue(ev: FigureEvent): void {
@@ -1039,29 +1204,55 @@ export class FigureCore {
    */
   protected deliver(): void {
     if (this.opDepth > 0 || this.delivering) return;
+    if (this.listeners.size === 0) {
+      // no one to tell: what is queued is dropped, and nothing is made for it (the queues are usually empty here)
+      if (this.pendingEvents.length > 0) this.pendingEvents = [];
+      if (this.pendingValues.size > 0) this.pendingValues = new Set();
+      if (this.pendingStyles.size > 0) this.pendingStyles = new Set();
+      return;
+    }
     this.delivering = true;
     try {
       for (let round = 0; round < 1000; round++) {
+        // (nothing queued: nothing is made, so a quiet frame with listeners attached makes no garbage)
+        if (this.pendingEvents.length === 0 && this.pendingValues.size === 0 && this.pendingStyles.size === 0) return;
         const evs = this.pendingEvents;
-        this.pendingEvents = [];
-        if (this.pendingValues.size > 0) evs.push({ ev: 'value', ids: [...this.pendingValues] });
-        if (this.pendingStyles.size > 0) evs.push({ ev: 'style', ids: [...this.pendingStyles] });
-        this.pendingValues = new Set();
-        this.pendingStyles = new Set();
-        if (evs.length === 0 || this.listeners.size === 0) return;
-        for (const ev of evs) {
-          for (const l of [...this.listeners]) {
+        this.pendingEvents = this.spareEvents;
+        if (this.pendingValues.size > 0) {
+          evs.push({ ev: 'value', ids: [...this.pendingValues] });
+          this.pendingValues = new Set();
+        }
+        if (this.pendingStyles.size > 0) {
+          evs.push({ ev: 'style', ids: [...this.pendingStyles] });
+          this.pendingStyles = new Set();
+        }
+        if (this.listeners.size === 0) {
+          this.spareEvents = this.emptied(evs);
+          return;
+        }
+        for (let e = 0; e < evs.length; e++) {
+          const ev = evs[e] as FigureEvent;
+          // (a listener that subscribes or leaves changes the list the next event is told to, as the copy it replaces did)
+          const ls = this.listenerList ?? (this.listenerList = [...this.listeners]);
+          for (let i = 0; i < ls.length; i++) {
             try {
-              l(ev);
+              (ls[i] as Listener)(ev);
             } catch {
               this.listenerFailures++;
             }
           }
         }
+        this.spareEvents = this.emptied(evs);
       }
     } finally {
       this.delivering = false;
     }
+  }
+
+  /** Empties a round's events and keeps the array (`length = 0` would free its store and the next push would make one). */
+  private emptied(evs: FigureEvent[]): FigureEvent[] {
+    while (evs.length > 0) evs.pop();
+    return evs;
   }
 
   /** Listener faults since the last call (they become a `listener_failed` notice). */

@@ -76,29 +76,50 @@ export class ParticleSet {
     return i;
   }
 
-  /** Keeps the particles `keep` says yes to, in order. Returns how many went. */
-  compact(keep: (i: number) => boolean): number {
+  /** How far from the origin a particle may be (each coordinate) for `compactInside`; set by the caller (a field, not an argument). */
+  limit = 0;
+
+  /**
+   * Keeps the particles whose first `dims` (2 or 3) coordinates are all within `limit` of the origin, in order, and moves
+   * the others out. No closure, no call: |v| <= limit is two comparisons, so a NaN or infinite coordinate goes. Returns how
+   * many went.
+   */
+  compactInside(dims: number): number {
     let k = 0;
     const n = this.n;
+    const lim = this.limit;
+    const x = this.x;
+    const y = this.y;
+    const z = this.z;
     for (let i = 0; i < n; i++) {
-      if (!keep(i)) continue;
-      if (k !== i) {
-        this.x[k] = this.x[i] as number;
-        this.y[k] = this.y[i] as number;
-        this.x0[k] = this.x0[i] as number;
-        this.y0[k] = this.y0[i] as number;
-        this.vx[k] = this.vx[i] as number;
-        this.vy[k] = this.vy[i] as number;
-        this.z[k] = this.z[i] as number;
-        this.z0[k] = this.z0[i] as number;
-        this.vz[k] = this.vz[i] as number;
-        this.owner[k] = this.owner[i] as number;
+      const xi = x[i] as number;
+      const yi = y[i] as number;
+      if (!(xi <= lim && xi >= -lim && yi <= lim && yi >= -lim)) continue;
+      if (dims === 3) {
+        const zi = z[i] as number;
+        if (!(zi <= lim && zi >= -lim)) continue;
       }
+      if (k !== i) this.move(k, i);
       k++;
     }
     this.n = k;
     return n - k;
   }
+
+  /** Particle `i` over particle `k`. */
+  private move(k: number, i: number): void {
+    this.x[k] = this.x[i] as number;
+    this.y[k] = this.y[i] as number;
+    this.x0[k] = this.x0[i] as number;
+    this.y0[k] = this.y0[i] as number;
+    this.vx[k] = this.vx[i] as number;
+    this.vy[k] = this.vy[i] as number;
+    this.z[k] = this.z[i] as number;
+    this.z0[k] = this.z0[i] as number;
+    this.vz[k] = this.vz[i] as number;
+    this.owner[k] = this.owner[i] as number;
+  }
+
 }
 
 export { MAX_NEIGHBOURS, NeighbourGrid } from './grid2';

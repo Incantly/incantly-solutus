@@ -42,6 +42,10 @@ export class NeighbourGrid {
   pairs = 0;
   /** Scratch for `inBox`. */
   found = new Int32Array(0);
+  /** The box `inBox` is asked for: x0, y0, x1, y1 (numbers passed in a call are heap numbers, garbage). */
+  readonly box = new Float64Array(4);
+  /** The reach `findPairs` lists pairs within (a field, not an argument). */
+  reach = 0;
   private group = new Int32Array(0);
 
   setSize(size: number): void {
@@ -143,14 +147,14 @@ export class NeighbourGrid {
    * the pairs inside a cell, then with the cells to the right and above (the other half find the same pairs). Returns
    * how many.
    */
-  findPairs(x: Float64Array, y: Float64Array, n: number, reach: number): number {
+  findPairs(x: Float64Array, y: Float64Array, n: number): number {
     if (this.pi.length < n * (MAX_NEIGHBOURS / 2)) {
       this.pi = new Int32Array(this.sorted.length * (MAX_NEIGHBOURS / 2));
       this.pj = new Int32Array(this.sorted.length * (MAX_NEIGHBOURS / 2));
       this.group = new Int32Array(this.sorted.length);
     }
     this.nbrN.fill(0, 0, n);
-    this.pairs = this.dense ? this.pairsDense(x, y, reach * reach) : this.pairsHashed(x, y, reach * reach);
+    this.pairs = this.dense ? this.pairsDense(x, y) : this.pairsHashed(x, y);
     return this.pairs;
   }
 
@@ -166,7 +170,8 @@ export class NeighbourGrid {
     return np + 1;
   }
 
-  private pairsDense(x: Float64Array, y: Float64Array, r2: number): number {
+  private pairsDense(x: Float64Array, y: Float64Array): number {
+    const r2 = this.reach * this.reach;
     const start = this.start;
     const sorted = this.sorted;
     const nx = this.nx;
@@ -208,7 +213,8 @@ export class NeighbourGrid {
     return np;
   }
 
-  private pairsHashed(x: Float64Array, y: Float64Array, r2: number): number {
+  private pairsHashed(x: Float64Array, y: Float64Array): number {
+    const r2 = this.reach * this.reach;
     const start = this.start;
     const sorted = this.sorted;
     const cxs = this.cx;
@@ -273,13 +279,14 @@ export class NeighbourGrid {
    * The particles whose cell overlaps the box, each once, into `found`; returns how many. When the box covers more cells
    * than there are particles, it walks the particles instead (in index order).
    */
-  inBox(x0: number, y0: number, x1: number, y1: number, n: number): number {
+  inBox(n: number): number {
     if (this.found.length < n) this.found = new Int32Array(this.sorted.length);
     const out = this.found;
-    let cx0 = Math.floor(x0 * this.inv);
-    let cy0 = Math.floor(y0 * this.inv);
-    let cx1 = Math.floor(x1 * this.inv);
-    let cy1 = Math.floor(y1 * this.inv);
+    const box = this.box;
+    let cx0 = Math.floor((box[0] as number) * this.inv);
+    let cy0 = Math.floor((box[1] as number) * this.inv);
+    let cx1 = Math.floor((box[2] as number) * this.inv);
+    let cy1 = Math.floor((box[3] as number) * this.inv);
     if (this.dense) {
       // only the cells of the table hold particles
       cx0 = Math.max(cx0, this.ox);
