@@ -54,7 +54,16 @@ export class NeighbourGrid3 {
   /** The box `inBox` is asked for: x0, y0, z0, x1, y1, z1 (numbers passed in a call are heap numbers, garbage). */
   readonly box = new Float64Array(6);
   /** The reach `findPairs` lists pairs within (a field, not an argument: a number passed in a call is a heap number). */
-  reach = 0;
+  get reach(): number {
+    return this.reachV;
+  }
+
+  set reach(v: number) {
+    this.reachV = v;
+    this.mf[9] = v;
+  }
+
+  private reachV = 0;
   private off = new Int32Array(13);
 
   /** The arena the arrays live in, when the Rust loops run; undefined for the TypeScript loops. */
@@ -119,6 +128,8 @@ export class NeighbourGrid3 {
     };
     this.mf = mf;
     this.mi = mi;
+    mf[8] = this.inv;
+    mf[9] = this.reachV;
     if (arena.overflow) this.ar = undefined;
   }
 
@@ -148,6 +159,9 @@ export class NeighbourGrid3 {
   setSize(size: number): void {
     this.size = size;
     this.inv = 1 / size;
+    // (the Rust loops read the cell width and the reach from `mf`: they are put there when they are set, so a step reads no
+    // number from a field to put it there, which in code the engine has not fully optimized is a new heap number)
+    this.mf[8] = this.inv;
   }
 
   private reserve(n: number): void {
@@ -198,7 +212,6 @@ export class NeighbourGrid3 {
       const py = this.place(y, n, this.cpy, o.py);
       const pz = this.place(z, n, this.cpz, o.pz);
       if (px >= 0 && py >= 0 && pz >= 0) {
-        this.mf[8] = this.inv;
         this.ar.fn.grid_build(px, py, pz, n, o.cx, o.cy, o.cz, o.slot, o.start, o.count, o.sorted, o.mf, o.mi);
         return;
       }
@@ -284,7 +297,6 @@ export class NeighbourGrid3 {
       const py = this.place(y, n, this.cpy, o.py);
       const pz = this.place(z, n, this.cpz, o.pz);
       if (px >= 0 && py >= 0 && pz >= 0) {
-        this.mf[9] = this.reach;
         this.pairs = this.ar.fn.grid_pairs(px, py, pz, n, o.cx, o.cy, o.cz, o.start, o.sorted, o.sx, o.sy, o.sz, o.nbrN, o.pi, o.pj, o.found, o.mf, o.mi);
         return this.pairs;
       }
@@ -468,7 +480,6 @@ export class NeighbourGrid3 {
     if (this.ar) {
       const o = this.o;
       const mf = this.mf;
-      mf[8] = this.inv;
       mf[10] = box[0] as number;
       mf[11] = box[1] as number;
       mf[12] = box[2] as number;

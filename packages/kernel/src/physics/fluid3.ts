@@ -405,11 +405,13 @@ export class Fluid3 {
 
   /** Lets out this step's drops of each tap: four abreast across the stream, rows back up it. */
   private pour(): void {
-    const h = this.hStep;
     for (let k = 0; k < this.sources.length; k++) {
       const s = this.sources[k] as DropSource3;
       const p = s.pour;
       if (!p) continue;
+      // (read here, not above the loop: a number read from a field in code the engine has not optimized is a new heap
+      // number, a step with no tap would make one for nothing)
+      const h = this.hStep;
       const target = Math.min(p.max, Math.floor((this.steps + 1) * h * p.rate + 1e-9));
       let e = this.emitted[k] as number;
       if (e >= target) continue;

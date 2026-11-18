@@ -529,28 +529,44 @@ function heapUsed(): number {
 }
 
 /**
- * Runs `work` after a `gc()` and tells how many collections ran in it (Node's `gc` performance entries) and how many bytes
- * of heap it made. A step that makes 100 bytes fills the young generation too slowly for a collection to show in a short
- * window, so each row also bounds the bytes: `bytesPerStep` over `steps` calls.
+ * Runs `work` five times after a `gc()` and tells how many collections ran in them (Node's `gc` performance entries) and
+ * how many bytes of heap the run that made least made. A step that makes 100 bytes fills the young generation too slowly
+ * for a collection to show in a short window, so each row also bounds the bytes a step makes.
+ *
+ * A collection throws away the code the engine made for functions that hold the Rust module of an earlier row, and code
+ * not made again runs in the interpreter, where every number read from a field is a new heap number. So `warm` runs after
+ * the `gc()`, before the counting, and makes the code again.
  */
-async function allocation(work: () => void): Promise<{ gcs: number; bytes: number }> {
+async function allocation(work: () => void, warm: () => void): Promise<{ gcs: number; bytes: number }> {
   let gcs = 0;
   const obs = new PerformanceObserver((list) => {
     gcs += list.getEntries().length;
   });
   collectNow();
+  // the engine makes its fastest code on another thread and puts it in at a later call: the warm-up is three rounds with
+  // a pause after each, so a busy machine has made it before the counting starts
+  for (let round = 0; round < 3; round++) {
+    warm();
+    await new Promise((r) => setTimeout(r, 100));
+  }
   obs.observe({ entryTypes: ['gc'] });
   // reading the heap makes a few KB of its own: take it off, measured by an empty window
   heapUsed();
   heapUsed();
   const z = heapUsed();
   const own = heapUsed() - z;
-  const a = heapUsed();
-  work();
-  const b = heapUsed();
+  // five windows, the least taken: a step that makes garbage makes it in every window, while the engine's own work (it
+  // makes code, or grows a table, in whichever window it happens to fall) is in one of them
+  let least = Infinity;
+  for (let k = 0; k < 5; k++) {
+    const a = heapUsed();
+    work();
+    const b = heapUsed();
+    least = Math.min(least, b - a - own);
+  }
   await new Promise((r) => setTimeout(r, 50));
   obs.disconnect();
-  return { gcs, bytes: b - a - own };
+  return { gcs, bytes: least };
 }
 
 describe('liquid steps make no garbage (design 11.4)', () => {
@@ -566,12 +582,16 @@ describe('liquid steps make no garbage (design 11.4)', () => {
         const w = (d as unknown as { world: World3 }).world;
         if (!fl) throw new Error('no liquid');
         expect(fl.usesKernels).toBe(kernels);
+        const steps = 500;
         // the engine makes the code of the loops in the first few thousand steps
-        for (let k = 0; k < 3000; k++) fl.step(w);
-        const steps = 3000;
-        const r = await allocation(() => {
-          for (let k = 0; k < steps; k++) fl.step(w);
-        });
+        const r = await allocation(
+          () => {
+            for (let k = 0; k < steps; k++) fl.step(w);
+          },
+          () => {
+            for (let k = 0; k < 1500; k++) fl.step(w);
+          },
+        );
         console.log(`3D liquid, ${steps} steps, kernels ${kernels ? 'on' : 'off'}: ${r.gcs} collections, ${(r.bytes / steps).toFixed(2)} bytes a step`);
         expect(r.gcs).toBe(0);
         expect(r.bytes / steps).toBeLessThan(16);
@@ -589,13 +609,135 @@ describe('liquid steps make no garbage (design 11.4)', () => {
     const fl = d.fluid;
     const w = (d as unknown as { world: World2 }).world;
     if (!fl) throw new Error('no liquid');
-    for (let k = 0; k < 3000; k++) fl.step(w);
-    const steps = 3000;
-    const r = await allocation(() => {
-      for (let k = 0; k < steps; k++) fl.step(w);
-    });
+    const steps = 500;
+    const r = await allocation(
+      () => {
+        for (let k = 0; k < steps; k++) fl.step(w);
+      },
+      () => {
+        for (let k = 0; k < 1500; k++) fl.step(w);
+      },
+    );
     console.log(`2D liquid, ${steps} steps: ${r.gcs} collections, ${(r.bytes / steps).toFixed(2)} bytes a step`);
     expect(r.gcs).toBe(0);
     expect(r.bytes / steps).toBeLessThan(16);
   });
+});
+
+/**
+ * The frames of a figure played through `setClock` (what a host does at each tick), after a warm-up the engine makes its
+ * code in: the bytes of heap one frame makes, and the collections that ran. The checkpoints a driver keeps are its film
+ * (the state at every half second, kept to seek from), not garbage, so a window of ten frames, shorter than the spacing
+ * of checkpoints (a quarter of a second at the least), counts only when none was saved in it.
+ *
+ * What a frame must make (design 11.4): the delta `setClock` returns, the clock's event, the value of each cell that
+ * changed (a new object, because the figure compares a cell with the one it holds) and the arrays of its numbers kept in
+ * turn. A body that rests keeps the cell it had, so a pile of sleeping bodies makes nothing of its own.
+ */
+async function framesOf(f: Figure, checkpoints: () => number, warm: number, window = 10, wanted = 12): Promise<{ gcs: number; perFrame: number; windows: number }> {
+  let frame = 0;
+  for (; frame < warm; ) f.setClock(++frame / 60);
+  let gcs = 0;
+  const obs = new PerformanceObserver((list) => {
+    gcs += list.getEntries().length;
+  });
+  collectNow();
+  obs.observe({ entryTypes: ['gc'] });
+  heapUsed();
+  heapUsed();
+  const z = heapUsed();
+  const own = heapUsed() - z;
+  let bytes = 0;
+  let counted = 0;
+  let windows = 0;
+  for (let w = 0; w < 80 && windows < wanted; w++) {
+    const cp = checkpoints();
+    const a = heapUsed();
+    for (let k = 0; k < window; k++) f.setClock(++frame / 60);
+    const b = heapUsed();
+    if (checkpoints() !== cp) continue;
+    bytes += b - a - own;
+    counted += window;
+    windows++;
+  }
+  await new Promise((r) => setTimeout(r, 50));
+  obs.disconnect();
+  return { gcs, perFrame: bytes / counted, windows };
+}
+
+const checkpointsOf = (d: unknown): (() => number) => () => (d as { checkpoints: { size: number } }).checkpoints.size;
+
+const FLAG_WIND = ['g = Ground()', 'flag = Cloth((0, 0, 4), (3, 0, 0), (0, 0, -2), 64, 32, mass = 0.5, pins = "left")', 'world with wind = (5, 1, 0)'];
+const BOXES = ['g = Ground()', 'boxes = Bodies(Seq(Box((1.2 mod(k, 30) - 18, 1 + 1.2 floor(k / 30)), 1, 0.6), k, 0, 299))'];
+/** 300 boxes dropped from 60 m: they fall, land and go to sleep. */
+const BOXES_FALLING = ['g = Ground()', 'boxes = Bodies(Seq(Box((2.4 mod(k, 6) - 7, 60 + 1.4 floor(k / 6)), 1, 0.6), k, 0, 299))'];
+/** The dam of the 2D liquid with its gate shut (a gate that moves with `t` makes a new shape at each step: that is the rule's, not the liquid's). */
+const DAM_SHUT = DAM.map((l) => (l.startsWith('lift') ? 'lift = 0' : l));
+
+describe("the drivers' frame makes no garbage (design 11.4; PH-25)", () => {
+  for (const kernels of [true, false]) {
+    it(`a frame of a 3D flag through setClock makes no garbage (no collection runs, under 2 KB a frame: the cells), kernels ${kernels ? 'on' : 'off'}`, async () => {
+      setPhysicsKernels(kernels);
+      collectNow();
+      try {
+        const f = load(FLAG_WIND);
+        const d = physics3Of(f);
+        const r = await framesOf(f, checkpointsOf(d), 4000);
+        const c = d.cloth;
+        if (c) expect(c.usesKernels).toBe(kernels);
+        console.log(`3D flag 64 x 32, a frame, kernels ${kernels ? 'on' : 'off'}: ${r.gcs} collections, ${r.perFrame.toFixed(0)} bytes a frame over ${r.windows} windows`);
+        expect(r.windows).toBeGreaterThanOrEqual(4);
+        expect(r.gcs).toBe(0);
+        // (the frame made 35,046 bytes before; what is left is the delta, the clock event, the world's cell and the cloth's)
+        expect(r.perFrame).toBeLessThan(2048);
+      } finally {
+        setPhysicsKernels(true);
+      }
+    }, 120_000);
+  }
+
+  it('a frame of 300 2D boxes at rest through setClock makes no garbage (no collection runs, under 1 KB a frame)', async () => {
+    collectNow();
+    const f = load(BOXES);
+    const r = await framesOf(f, checkpointsOf(physicsOf(f)), 4000);
+    console.log(`300 boxes at rest, a frame: ${r.gcs} collections, ${r.perFrame.toFixed(0)} bytes a frame over ${r.windows} windows`);
+    expect(r.windows).toBeGreaterThanOrEqual(4);
+    expect(r.gcs).toBe(0);
+    expect(r.perFrame).toBeLessThan(1024);
+  }, 120_000);
+
+  it('a frame of 300 2D boxes falling and landing through setClock makes only the cells of the bodies that move (under 30 KB a frame)', async () => {
+    collectNow();
+    const f = load(BOXES_FALLING);
+    // the engine makes its code on a first film; the one measured is a second, from its start
+    for (let k = 1; k <= 3000; k++) f.setClock(k / 60);
+    const g = load(BOXES_FALLING);
+    const r = await framesOf(g, checkpointsOf(physicsOf(g)), 120, 10, 24);
+    console.log(`300 boxes falling, a frame: ${r.gcs} collections, ${r.perFrame.toFixed(0)} bytes a frame over ${r.windows} windows`);
+    expect(r.windows).toBeGreaterThanOrEqual(4);
+    // (528,510 to 694,542 bytes a frame before)
+    expect(r.perFrame).toBeLessThan(30_000);
+  }, 120_000);
+
+  it('a frame of a 2D liquid of 2,000 drops through setClock makes no garbage (no collection runs, under 4 KB a frame: the cells)', async () => {
+    collectNow();
+    const f = load(DAM_SHUT);
+    const r = await framesOf(f, checkpointsOf(physicsOf(f)), 4000);
+    console.log(`2D liquid 2,000 drops, a frame: ${r.gcs} collections, ${r.perFrame.toFixed(0)} bytes a frame over ${r.windows} windows`);
+    expect(r.windows).toBeGreaterThanOrEqual(4);
+    expect(r.gcs).toBe(0);
+    // (60,180 bytes a frame before)
+    expect(r.perFrame).toBeLessThan(4096);
+  }, 120_000);
+
+  it('a frame of fire in the plane (64 × 64, two burning bodies) through setClock makes no garbage (no collection runs, under 8 KB a frame: the cells)', async () => {
+    collectNow();
+    const f = load(FIRE);
+    const r = await framesOf(f, checkpointsOf(physicsOf(f)), 4000);
+    console.log(`2D fire 64 x 64, a frame: ${r.gcs} collections, ${r.perFrame.toFixed(0)} bytes a frame over ${r.windows} windows`);
+    expect(r.windows).toBeGreaterThanOrEqual(4);
+    expect(r.gcs).toBe(0);
+    // (155,999 to 172,246 bytes a frame before)
+    expect(r.perFrame).toBeLessThan(8192);
+  }, 120_000);
 });
