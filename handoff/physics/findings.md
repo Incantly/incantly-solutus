@@ -40,3 +40,33 @@ Found while fixing (after the review, so not fixed in this round):
 
 - PH-2: `keepOut` is a hook of `ClothSet` (a no-op there) that `cloth3.ts` and `cloth2.ts` pass to `World3.keepOut` and `World2.keepOut`, which walk the world's touching contacts of the body against fixed shapes (any other body that is not dynamic, so the ground, terrain, static and kinematic bodies) in the world's order. It runs in two places: in `endSub` (the cloth's move and speed of a body that took the small steps) and in `keepFixed`, once at the end of the cloth's step (the move `bdx` and the push `bj` that the world applies at the next step; the part into the ground is taken out of the move, and out of the body's speed now). The second place is needed: the tester's ball was driven into the ground by held points pushing it as a wall (`give` with `dt = h`: 6 cm and 38 m/s in one step), not by the pin. It is at the end of the cloth's step, not in `applyImpulses`, because after a seek the world has no contact list until it steps.
 - PH-3: the fix as listed (the body tether of a sheet at `start distance × 1.02`) made the tester's two failing tests worse (the ball was lost at 0.65 s instead of 0.0 s) and breaks the "body's tether" tests (a ball on a sheet reached 1.0200 to 1.0204 of the start distance, the test allows less than 1.02): a ball that may wander 4 cm along the ground rolls off its pin. What fixes it is the 2% of play on the sheet's point tethers, and only for a sheet or net that holds a body (`max(1 + 2 (1 − stretch), 1.02)`; a rope and a sheet with no body pin keep theirs, or the hanging-sheet check of 2% on its links and the pinned-ball weight check break). The body's own tether stays `start distance × (1 + 2 (1 − stretch))`. Design 9.5 says so.
+
+## Review of 10.9 Rust kernels (2026-11-18, one round)
+
+Read: the builder's diff `36a31ee..f124249` (crate, `kernels.ts`, cloth, grid and hull wiring), builder notes, the tester's
+report. Ran the "no garbage" bench.
+
+| Id | Where | What | Evidence | Harm | Status |
+|---|---|---|---|---|---|
+| PH-8 | `physics/wasm/kernels.ts`, the wiring in `cloth.ts`, `grid3.ts` | With kernels on, cloth steps make garbage: the bench "Cloth, no garbage" fails (design 11.4). | `npx vitest run --config packages/kernel/bench/vitest.config.ts packages/kernel/bench/physics.bench.ts -t "no garbage"`: 3 collections in 2,000 steps (0 with kernels off). | high | open |
+| PH-9 | `packages/sdk` (createApp, headless app, worker start), `apps/studio` start | Nothing calls `initPhysicsKernels()`, so in a browser the page's own physics (no worker, the SDK on the page) always uses the TypeScript loops. Only the worker can compile synchronously. | Builder notes, "Main-thread compile". | medium | open |
+| PH-10 | `kernels.ts`, the kernel's public API | No public way to tell whether a solver uses the Rust loops, so a module that silently fails to load passes every test. | Tester report 10.9. | medium | open |
+| PH-11 | `packages/kernel/wasm/build.mjs`, `kernels-wasm.ts` | CI has no Rust, so nothing notices when `lib.rs` changes and the committed `kernels-wasm.ts` is not rebuilt. | By reading. | medium | open |
+| PH-12 | rope with kernels | The rope's worst frame in Chrome is 5 ms with Rust against 2.9 ms without, in all 3 runs. | Builder notes. | low | to be implemented |
+| PH-13 | round 2 | Still over goal in Chrome 4× slower: cloth in water 9.11 (8), 32 × 32 on a ball 3.13 (3), self 8.00 (8). Round 2 list: `prepareDrops`/`faceTable`, `prepareSelf` and batched `grid_in_box`, `hitSphere`, link layout or SIMD. | Builder notes. | medium | to be implemented (replaces the cloth part of PH-6) |
+
+**Fixes for PH-8 to PH-11** (the one fix round):
+
+- PH-8: find what allocates per step with kernels on (`--trace-gc`, or a heap profile over 2,000 steps after warm-up;
+  likely a typed-array view, a closure, or a boxed number at a call). Fix it so the bench shows 0 collections; the bench
+  is not changed.
+- PH-9: call `initPhysicsKernels()` once (not awaited by anything that changes a film) in the SDK's app start
+  (`createApp` and the headless app) and in the studio's start; a solver built before it resolves uses the TypeScript
+  loops and the film is the same. One line in design 11.6.
+- PH-10: export `physicsKernelsActive(figure): boolean | undefined` from the kernel (true when the figure's cloth or
+  liquid solver runs the Rust loops; undefined with no such solver), and show it in the studio's physics readout as
+  "Rust" or "TypeScript". Regression test: in Node a 3D sheet's figure reports `true`; with `setPhysicsKernels(false)`
+  it reports `false`.
+- PH-11: `build.mjs` writes into the header of `kernels-wasm.ts` a SHA-256 of `lib.rs`, `Cargo.toml` and `Cargo.lock`
+  (the sources). Regression test: it hashes those three files and expects the header's value, with a message that
+  says to run `npm run build:wasm`.
