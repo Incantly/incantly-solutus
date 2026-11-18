@@ -4,7 +4,7 @@
  * Other areas may append entries.
  */
 /** `point`: a position, written as a point expression (`at = M`, `at = (1, 2)`), text-logic design 2.1. */
-export type PropKind = 'bool' | 'enum' | 'int' | 'number' | 'text' | 'color' | 'boolexpr' | 'textlist' | 'point';
+export type PropKind = 'bool' | 'enum' | 'int' | 'number' | 'text' | 'color' | 'boolexpr' | 'textlist' | 'point' | 'boolnum';
 
 export interface PropSpec {
   readonly kind: PropKind;

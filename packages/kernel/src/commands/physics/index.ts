@@ -40,6 +40,10 @@ import { registerLiquids } from './liquid-reg';
 import { LIQUID_COMMANDS } from './liquid';
 import { registerSmoke } from './smoke-reg';
 import { SMOKE_COMMANDS, SMOKE_MAX_WIND } from './smoke';
+import { registerFire } from './fire-reg';
+import { FIRE_COMMANDS } from './fire';
+import { crackleSource } from './crackle';
+import { registerSoundSource } from '../sound/index';
 import { CLOTH_COMMANDS } from './cloth';
 import { registerCloth } from './cloth-reg';
 import type { BodySpec, BodyValue, Outline, WorldValue } from './types';
@@ -67,7 +71,8 @@ export { Physics3Driver } from './driver3';
 /** Notices of the physics area for hosts (the worker's `worker_unavailable`, `worker_crashed`). */
 export { makeNotice } from '../../errors/notices';
 export type { LiquidValue, LiquidSpec, WaterValue, WavesValue } from './liquid';
-export { isSmokeValue } from './smoke';
+export { isSmokeValue, isFireValue } from './smoke';
+export type { FireValue, FireSpec } from './smoke';
 export { isClothValue, isPinValue } from './cloth';
 export type { ClothValue, ClothSpec, PinValue } from './cloth';
 export { clothAt, clothRow } from './cloth-reg';
@@ -142,6 +147,7 @@ export function physics3Of(figure: Figure): Physics3Driver {
 const BODY_NAMED = [
   named('mass', 'Number'), named('density', 'Number'), named('speed', 'Vector|Point'), named('spin', 'Number'), named('bounce', 'Number'), named('friction', 'Number'),
   named('turns', 'Bool'), named('bullet', 'Bool'), named('fixed', 'Bool'), named('group', 'Number'), named('charge', 'Number'),
+  named('burns', 'Bool|Number'), named('ignite', 'Number'),
 ];
 const BODY_SHAPES = 'Polygon|Circle|Conic|Polyline';
 const BODY3_NAMED = [named('mass', 'Number'), named('density', 'Number'), named('speed', 'Vector3|Point3'), named('spin', 'Vector3|Point3'), named('bounce', 'Number'), named('friction', 'Number'), named('fixed', 'Bool'), named('group', 'Number')];
@@ -157,6 +163,8 @@ function checkBodyArgs(c: FormCheck, first: number): Refusal | undefined {
     if ((key === 'mass' || key === 'density') && !(n > 0)) return bad(first + k, key, 'above 0', `A body needs some ${key}. Try ${key} = 1.`);
     if (key === 'bounce' && (n < 0 || n > 1)) return bad(first + k, key, 'between 0 and 1', '0 is no bounce, 1 is a perfect bounce.');
     if (key === 'friction' && (n < 0 || n > 2)) return bad(first + k, key, 'between 0 and 2', 'Ice is about 0.05, rubber on concrete about 1.');
+    if (key === 'burns' && !(n > 0)) return bad(first + k, key, 'true, false or above 0 seconds', 'burns = true burns for 10 s a kg; a number is the seconds it burns.');
+    if (key === 'ignite' && (n < 150 || n > 1000)) return bad(first + k, key, 'between 150 and 1,000 °C', 'ignite is the temperature at which it catches fire: wood about 250.');
   }
   return undefined;
 }
@@ -229,20 +237,27 @@ function body3Rule(): { run(call: RuleCall): unknown } {
 function bodyRule(): { run(call: RuleCall): unknown } {
   return {
     run(call) {
-      const [shape, mass, density, speed, spin, bounce, friction, turns, bullet, fixed, group, charge] = call.values;
+      const [shape, mass, density, speed, spin, bounce, friction, turns, bullet, fixed, group, charge, burns, ignite] = call.values;
       const s = bodyShapeOf(shape);
       if (!s.ok) return call.fail(s.why === 'self_crossing' ? 'self_crossing' : s.why === 'degenerate' ? 'degenerate' : 'input_undefined', s.detail);
       const v = speed as { x?: number; y?: number } | undefined;
-      const spec = makeSpec(s.shapes, s.outline, s.parts, {
+      const spec = withBurns(makeSpec(s.shapes, s.outline, s.parts, {
         ...(typeof mass === 'number' && mass > 0 ? { mass } : {}),
         density: num(density, 1) > 0 ? num(density, 1) : 1,
         vx: num(v?.x, 0), vy: num(v?.y, 0), spin: num(spin, 0),
         bounce: Math.min(1, Math.max(0, num(bounce, 0.2))), friction: Math.min(2, Math.max(0, num(friction, 0.4))),
         turns: bool(turns, true), bullet: bool(bullet, false), fixed: bool(fixed, false), group: Math.round(num(group, 0)), charge: num(charge, 0),
-      });
+      }), burns, ignite);
       return startValue(spec);
     },
   };
+}
+
+/** `burns = true` is 10 s a kg of the start mass, at least 1 s; a number is the seconds (design 9.7). The spec keeps no `burns` for a body that does not burn. */
+function withBurns(spec: BodySpec, burns: unknown, ignite: unknown): BodySpec {
+  const seconds = burns === true ? Math.max(1, 10 * spec.massNow) : typeof burns === 'number' && burns > 0 ? burns : 0;
+  if (!(seconds > 0)) return spec;
+  return { ...spec, burns: seconds, ignite: Math.min(1000, Math.max(150, num(ignite, 250))) };
 }
 
 type SpecProps = Omit<BodySpec, 'shapes' | 'outline' | 'parts' | 'cx' | 'cy' | 'massNow'>;
@@ -453,6 +468,42 @@ function pushRun(call: ActionCall): ActionOutcome {
   return { summary: `pushed ${call.figure.get(b.id)?.name ?? ''}` };
 }
 
+/** The types of flat shapes that may be solid, and so may burn (design 9.7). */
+const SOLID_SHAPE_TYPES = new Set(['Polygon', 'Circle', 'Conic', 'Segment', 'Line', 'Ray', 'Arc', 'Sector', 'Polyline', 'Curve', 'Function']);
+/** The types that may burn: bodies, cloths and solid shapes. */
+const BURNABLE_TYPES = new Set(['Body', 'Cloth', ...SOLID_SHAPE_TYPES]);
+
+/** `Ignite(thing)`: sets a burnable body, cloth or solid shape on fire now (design 9.7), logged as `@input physics ignite`. */
+function igniteRun(call: ActionCall): ActionOutcome {
+  const at = { line: 0, col: 1, endCol: 1 };
+  const id = call.refs?.[0] ?? call.objects[0];
+  const o = id !== undefined ? call.figure.get(id) : undefined;
+  let target: { id: ObjId; item?: number };
+  if (o && o.type !== 'Body' && !/^List/.test(o.type)) {
+    if (!BURNABLE_TYPES.has(o.type)) {
+      return { error: err('not_burnable', at, { why: `${o.name} can't burn: it is not a body, a cloth or a solid shape.` }, { hint: `Only a body, a cloth or a solid shape can burn. Make ${o.name} a body first: b = Body(${o.name}, mass = 1, burns = true).`, suggest: [`b = Body(${o.name}, mass = 1, burns = true)`], recovery: 'use_suggestion', fingerprintKey: `ignite:${o.name}` }) };
+    }
+    target = { id: o.id };
+  } else {
+    const b = bodyArg(call);
+    if ('error' in b) return { error: b.error };
+    target = { id: b.id, ...(b.item !== undefined ? { item: b.item } : {}) };
+  }
+  const name = call.figure.get(target.id)?.name ?? 'it';
+  const d = physicsOf(call.figure);
+  call.figure.flush();
+  const r = d.ignite(target.id, target.item);
+  if (r.ok) {
+    call.figure.flush(true);
+    return { summary: `lit ${name}` };
+  }
+  if (r.why === 'not_burnable') {
+    return { error: err('not_burnable', at, { why: `${name} can't burn yet.` }, { hint: `${name} can't burn yet. Add ${name} with burns = true first.`, suggest: [`${name} with burns = true`], recovery: 'use_suggestion', fingerprintKey: `ignite:${name}` }) };
+  }
+  const where = o && o.type === 'Body' || !o ? `${name}.pos` : `(${fmt(r.x)}, ${fmt(r.y)})`;
+  return { error: err('no_fire_grid', at, { why: `${name} is outside every fire.` }, { hint: `Nothing can burn outside a fire. Make a fire round ${name}.`, suggest: [`fire = Fire(${where})`], recovery: 'use_suggestion', fingerprintKey: `ignite:${name}` }) };
+}
+
 function wakeRun(awake: boolean): (call: ActionCall) => ActionOutcome {
   return (call) => {
     const b = bodyArg(call);
@@ -562,6 +613,7 @@ export const PHYSICS_COMMANDS: readonly CommandSpec[] = [
     { params: [P('b', 'Any'), P('impulse', 'Vector3|Point3')], summary: 'kick a body in space at its centre (N s)' },
     { params: [P('b', 'Any'), P('impulse', 'Vector3|Point3'), P('at', 'Point3')], summary: 'kick a body in space at a point, so it also turns' },
   ], pushRun),
+  action('Ignite', [{ params: [P('thing', 'Any')], summary: 'set a burnable body, cloth or solid shape on fire now' }], igniteRun),
   action('Wake', [{ params: [P('b', 'Any')], summary: 'wake a sleeping body' }], wakeRun(true)),
   action('Sleep', [{ params: [P('b', 'Any')], summary: 'put a body to sleep until something touches it' }], wakeRun(false)),
 ];
@@ -572,6 +624,7 @@ const BODY_FIELDS: Readonly<Record<string, Ty>> = {
   pos: T.Point, x: T.Number, y: T.Number, angle: T.Number, speed: T.Vector, v: T.Number, spin: T.Number, energy: T.Number, kinetic: T.Number, potential: T.Number,
   momentum: T.Vector, mass: T.Number, asleep: T.Bool, shape: { k: 'Polygon' }, touching: { k: 'List', of: T.Text },
   force: { k: 'Function', ret: 'Vector', arity: 1, textArgs: true } as Ty,
+  temperature: T.Number, burnt: T.Number, burning: T.Bool,
 };
 
 const WORLD_FIELDS: Readonly<Record<string, Ty>> = { time: T.Number, energy: T.Number, momentum: T.Vector, awake: T.Number, contacts: T.Number, gravity: T.Vector, wind: T.Vector };
@@ -626,6 +679,12 @@ function readBody(field: string, v: unknown): unknown {
       return shapeNow(v);
     case 'touching':
       return v.touching;
+    case 'temperature':
+      return v.temperature ?? 0;
+    case 'burnt':
+      return v.burnt ?? 0;
+    case 'burning':
+      return v.burning ?? false;
     case 'force':
       return {
         arity: 1,
@@ -768,7 +827,7 @@ function readVehicle(field: string, v: unknown): unknown {
 
 const WITH_WORLD = /^\s*world\s+with\s+([\s\S]+)$/;
 const RESERVED = new Set(['world', 'hit']);
-const READ_ONLY = new Set(['pos', 'x', 'y', 'angle', 'v', 'energy', 'momentum', 'asleep', 'touching', 'kinetic', 'potential']);
+const READ_ONLY = new Set(['pos', 'x', 'y', 'angle', 'v', 'energy', 'momentum', 'asleep', 'touching', 'kinetic', 'potential', 'temperature', 'burnt', 'burning']);
 
 /** Splits `a = 1, b = f(2, 3)` at the top-level commas. */
 function splitTop(s: string): string[] {
@@ -844,6 +903,19 @@ export function bodyWithRewrite(figure: unknown, text: string): LineRewrite | un
   return undefined;
 }
 
+/** `burns` or `ignite` on a thing that is not a body, a cloth or a solid shape: a point, a smoke, a number (errors B020). */
+export function burnLineCheck(figure: unknown, line: CheckedLine): ErrorObject | undefined {
+  const asked = (line.style ?? []).filter((s) => s.key === 'burns' || s.key === 'ignite');
+  if (asked.length === 0) return undefined;
+  const type = line.op === 'restyle' ? (figure as FigureLike).get(line.names[0] ?? '')?.type : line.op === 'add' || line.op === 'redefine' ? line.type?.k : undefined;
+  if (type === undefined || BURNABLE_TYPES.has(type) || type === 'List') return undefined;
+  const name = line.names[0] ?? 'it';
+  const key = (asked[0] as { key: string }).key;
+  return err('not_burnable', { line: line.line, col: 1, endCol: 1 }, { why: `${name} is a ${type.toLowerCase()}, and only a body, a cloth or a solid shape can have ${key}.` }, {
+    hint: `Only a body, a cloth or a solid shape can burn. To make ${name} burn, make it a body: b = Body(${name}, mass = 1, burns = true).`, suggest: [`b = Body(${name}, mass = 1, burns = true)`], recovery: 'use_suggestion', fingerprintKey: `burns:${type}`,
+  });
+}
+
 export function physicsLineCheck(_figure: unknown, line: CheckedLine): ErrorObject | undefined {
   const expr = line.expr as { n?: string; spec?: { name?: string } } | undefined;
   const isWorld = expr?.n === 'command' && expr.spec?.name === 'World';
@@ -869,6 +941,7 @@ export function registerPhysics(registry: CommandRegistry): void {
   registry.registerAll([...PHYSICS_COMMANDS, ...JOINT_COMMANDS, ...MEASURE_COMMANDS, ...VEHICLE_COMMANDS]);
   registry.registerAll(LIQUID_COMMANDS);
   registry.registerAll(SMOKE_COMMANDS);
+  registry.registerAll(FIRE_COMMANDS);
   registry.registerAll(CLOTH_COMMANDS);
   if (registered) return;
   registered = true;
@@ -904,7 +977,7 @@ export function registerPhysics(registry: CommandRegistry): void {
     return undefined;
   });
   registerTypeStyle('Body3', { lists: true, defaults: { color: '#c0602a', width: 2, opacity: 0.85 }, keys: ['bounce', 'friction', 'force', 'torque', 'group', 'show'] });
-  registerTypeStyle('Body', { lists: true, defaults: { color: '#c0602a', width: 2, opacity: 0.35 }, keys: ['bounce', 'friction', 'force', 'torque', 'bullet', 'group', 'charge', 'show'] });
+  registerTypeStyle('Body', { lists: true, defaults: { color: '#c0602a', width: 2, opacity: 0.35 }, keys: ['bounce', 'friction', 'force', 'torque', 'bullet', 'group', 'charge', 'show', 'burns', 'ignite'] });
   registerTypeStyle('World', { drawable: false });
   registerTypeStyle('Joint', { defaults: { color: '#555555', width: 1.5 } });
   registerTypeStyle('Wheel', { defaults: { color: '#2b2f36', width: 2 } });
@@ -921,6 +994,9 @@ export function registerPhysics(registry: CommandRegistry): void {
     group: { kind: 'int', min: 0, allowed: 'a whole number from 0' },
     charge: { kind: 'number', allowed: 'a number', expr: true },
     show: { kind: 'enum', values: ['forces', 'speeds', 'none'], allowed: 'forces, speeds or none' },
+    // `burns = true`, or the seconds of burning (design 9.7); `ignite` the °C at which it catches fire
+    burns: { kind: 'boolnum', min: 0, allowed: 'true, false or a number of seconds above 0', expr: true },
+    ignite: { kind: 'number', min: 150, max: 1000, allowed: 'a number from 150 to 1,000', expr: true },
   };
   for (const [k, spec] of Object.entries(PROPS)) if (!Object.hasOwn(PROPERTIES, k)) PROPERTIES[k] = spec;
   const SOLID_TYPES = ['Polygon', 'Circle', 'Conic', 'Segment', 'Line', 'Ray', 'Arc', 'Sector', 'Polyline', 'Curve', 'Function'];
@@ -933,6 +1009,7 @@ export function registerPhysics(registry: CommandRegistry): void {
   for (const k of ['force', 'torque', 'bullet', 'group', 'charge', 'show']) registerPropertyTypes(k, ['Body']);
   for (const k of ['force', 'torque', 'group']) registerPropertyTypes(k, ['Body3']);
   registerLineCheck(physicsLineCheck);
+  registerLineCheck(burnLineCheck);
   registerLineRewriter(worldRewrite);
   registerLineRewriter(bodyWithRewrite);
   registerScriptTail((figure) => [...physicsOf(figure as Figure).inputLines(), ...physics3Of(figure as Figure).inputLines()]);
@@ -953,7 +1030,9 @@ export function registerPhysics(registry: CommandRegistry): void {
   registerNotice('broken', { code: 'B111', severity: 'info', template: '{name} broke at t = {t} s.' });
   registerLiquids();
   registerSmoke();
+  registerFire();
   registerCloth();
+  registerSoundSource(crackleSource);
 }
 
 const fmt = (x: number): string => (Number.isFinite(x) ? String(Number(x.toFixed(3))) : String(x));

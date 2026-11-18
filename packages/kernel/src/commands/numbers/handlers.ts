@@ -35,7 +35,7 @@ const STEP_ACTIONS: ReadonlySet<string> = new Set([
   'SetValue', 'Toggle', 'Animate', 'Show', 'Hide', 'Reset', 'Click',
   'Highlight', 'Trace', 'Untrace', 'Play', 'Pause', 'View', 'Axes', 'Grid',
   'Note', 'Sonify', 'Mute', 'Unmute',
-  'Push', 'Wake', 'Sleep',
+  'Push', 'Wake', 'Sleep', 'Ignite',
 ]);
 const FUTURE_ACTIONS: ReadonlySet<string> = new Set(['Highlight', 'Trace', 'Untrace', 'Play', 'Pause', 'View', 'Axes', 'Grid']);
 /** Restyle keys that would create a rule; formulas for them are rejected in steps. */

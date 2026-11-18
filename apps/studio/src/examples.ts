@@ -1016,6 +1016,61 @@ export const EXAMPLES: readonly Example[] = [
       'up = sm.speed',
     ],
   },
+  /* fire in the plane (.kiro/specs/physics R11; design 9.7, 14 item 11) */
+  {
+    id: 'physics-candle-flame',
+    modes: ['geometry', 'classic'],
+    title: 'Physics: a candle flame that flickers — fuel burns where it is hot, and a draught bends it (press ▶, slide the draught)',
+    lines: [
+      '@view -2 2 -0.3 3.8',
+      'table = Ground(0)',
+      'candle = Box((0, 0.4), 0.3, 0.8)',
+      'candle with solid = true',
+      'draught = 0 in -1..1 step 0.1',
+      'flame = Fire((0, 0.88), source = Circle((0, 0.88), 0.07), heat = 800, fuel = 0.3, burn = 2, wind = (draught, 0))',
+      'ash = Body(Circle((0.3, 1.6), 0.04), mass = 0.002)',
+      'tip = flame.temperature(0, 1.1)',
+    ],
+  },
+  {
+    id: 'physics-campfire',
+    modes: ['geometry', 'classic'],
+    title: 'Physics: a camp fire — the log catches from the flames, darkens, loses mass and burns away (press ▶)',
+    lines: [
+      '@view -3 3 -0.5 4',
+      'g = Ground()',
+      'campfire = Fire((0, 0.2), fuel = 1, heat = 1200)',
+      'wood = Body(Box((0, 0.4), 1.2, 0.2), burns = 8, ignite = 200)',
+      'warmth = wood.temperature',
+      'charred = wood.burnt',
+    ],
+  },
+  {
+    id: 'physics-curtain-fire',
+    modes: ['geometry', 'classic'],
+    title: 'Physics: a curtain catches fire — each burnt cell tears its threads and the cloth falls away (press ▶)',
+    lines: [
+      '@view -2.5 2.5 -0.5 4.2',
+      'g = Ground()',
+      'blaze = Fire(Box((0, 2), 4, 4), 48, source = Circle((0, 0.3), 0.3), heat = 1500, fuel = 3, burn = 0.4)',
+      'curtain = Cloth(Box((0.5, 2.5), 1.2, 2), 20, 14, pins = "top", burns = true)',
+      'burnt = curtain.burnt',
+      'torn = curtain.torn',
+    ],
+  },
+  {
+    id: 'physics-put-out',
+    modes: ['geometry', 'classic'],
+    title: 'Physics: a tap puts the fire out — the water takes the heat and the fuel, and the log goes dark (press ▶)',
+    lines: [
+      '@view -3 3 -0.5 4',
+      'g = Ground()',
+      'blaze = Fire((0, 0.2), source = Circle((0, 0.3), 0.3), until = 1.5, fuel = 2, heat = 1200)',
+      'wood = Body(Box((0, 0.3), 1.2, 0.2), burns = 30, ignite = 150)',
+      'tap = Pour((0, 25), 100, 0)',
+      'warmth = wood.temperature',
+    ],
+  },
   /* cloth (.kiro/specs/physics R10; design 9.5, 14 item 9) */
   {
     id: 'physics-flag',

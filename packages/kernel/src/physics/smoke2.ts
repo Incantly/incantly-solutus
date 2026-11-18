@@ -20,6 +20,8 @@
  * Exact maths only (`+ - * /` and `Math.sqrt`), typed arrays made once, no garbage in a step, every loop in a fixed
  * order: the same film on every replay, seek and computer.
  */
+import type { DropsView, FireParams } from './fire2';
+import { advectFire, burnFuel, confine, coolFire, fireLift, fireSource, quench } from './fire2';
 import type { World2 } from './world2';
 import { BodyType, FK } from './world2';
 
@@ -50,6 +52,8 @@ export interface SmokeSetup2 {
   readonly x1: number;
   readonly y1: number;
   readonly n: number;
+  /** A fire grid: the settings of its fire (design 9.7); without it, the grid is plain smoke. */
+  readonly fire?: FireParams;
 }
 
 export class Smoke2 {
@@ -75,9 +79,29 @@ export class Smoke2 {
   readonly own: Int32Array;
   /** The same for the walls only (shapes that do not move), marked once. */
   private readonly own0: Int32Array;
-  /** Cells where the source makes smoke. */
+  /** Cells where the source makes smoke (or, for a fire, fuel). */
   readonly src: Uint8Array;
   private hasSource = false;
+  /* ------------------------------ fire (design 9.7), empty for plain smoke ------------------------------ */
+  /** The fire's settings; undefined for a smoke grid. */
+  fire: FireParams | undefined;
+  /** Temperature (°C above the air) and fuel at the cell centres, and their copies for carrying; length 0 without fire. */
+  T: Float64Array;
+  F: Float64Array;
+  T2: Float64Array;
+  F2: Float64Array;
+  /** The cells a liquid drop was in at the last step (water, design 9.7 step 7). */
+  readonly wet: Uint8Array;
+  /** True once something was above the ignite point or held fuel (a fire that has been alight can go out). */
+  alive = false;
+  /** Curls kept by vorticity confinement, 0 to 10 (0 is none: the film is exactly smoke's own). */
+  swirl = 0;
+  /** Scratch of the swirl: the curl at each cell and the force on it. */
+  readonly om: Float64Array;
+  readonly fcx: Float64Array;
+  readonly fcy: Float64Array;
+  /** Scratch for carrying two fields at once. */
+  readonly pair = new Float64Array(2);
   private u2: Float64Array;
   private v2: Float64Array;
   private s2: Float64Array;
@@ -148,6 +172,22 @@ export class Smoke2 {
     this.own = new Int32Array(n * n).fill(-1);
     this.own0 = new Int32Array(n * n).fill(-1);
     this.src = new Uint8Array(n * n);
+    // fire: temperature and fuel, made once; a smoke grid keeps them empty and skips their steps
+    this.fire = setup.fire ? { ...setup.fire } : undefined;
+    const nf = setup.fire ? n * n : 0;
+    this.T = new Float64Array(nf);
+    this.F = new Float64Array(nf);
+    this.T2 = new Float64Array(nf);
+    this.F2 = new Float64Array(nf);
+    this.wet = new Uint8Array(nf);
+    this.om = new Float64Array(n * n);
+    this.fcx = new Float64Array(n * n);
+    this.fcy = new Float64Array(n * n);
+  }
+
+  /** True when the grid has a source. */
+  get sourced(): boolean {
+    return this.hasSource;
   }
 
   /* ------------------------------ setting up ------------------------------ */
@@ -161,7 +201,18 @@ export class Smoke2 {
     this.s.fill(0);
     this.p.fill(0);
     this.unstable = false;
-    this.makeSmoke();
+    if (this.fire) this.seedFire();
+    else this.makeSmoke();
+  }
+
+  /** A fire starts with no fuel and the source cells at `heat`, so the source shows before the film runs. */
+  private seedFire(): void {
+    this.T.fill(0);
+    this.F.fill(0);
+    this.alive = false;
+    if (!this.hasSource || !this.making || !this.fire) return;
+    const heat = this.fire.heat;
+    for (let c = 0; c < this.src.length; c++) if (this.src[c] === 1 && (this.own[c] as number) < 0) this.T[c] = heat;
   }
 
   /**
@@ -451,18 +502,46 @@ export class Smoke2 {
     }
   }
 
-  /** One step of `h` against the bodies where they are now. */
-  step(w: World2 | undefined, h: number): void {
+  /**
+   * One step of `h` against the bodies where they are now. A fire grid (design 9.7) also carries its temperature and fuel,
+   * lifts by heat, burns, makes fuel at the source, cools and takes water's heat before the solid faces; `drops` are the
+   * liquid's drops (for water). A smoke grid with no swirl takes exactly the steps it always did.
+   */
+  step(w: World2 | undefined, h: number, drops?: DropsView): void {
     if (this.unstable) return;
     this.markSolids(w);
     this.advectFlow(h);
-    this.lift(h);
+    const fire = this.fire !== undefined;
+    if (fire) {
+      advectFire(this, h);
+      fireLift(this, h);
+    } else this.lift(h);
+    if (this.swirl > 0) confine(this, h);
+    if (fire) {
+      burnFuel(this, h);
+      fireSource(this, h);
+      coolFire(this, h);
+      quench(this, drops);
+    }
     this.solidFaces(w);
     this.project();
     this.advectSmoke(h);
-    this.makeSmoke();
+    if (fire) this.markAlive();
+    else this.makeSmoke();
     this.drag(w, h);
     this.checkHealth();
+  }
+
+  /** A fire that has had a flame or fuel can go out (the notice `fire_out`). */
+  private markAlive(): void {
+    if (this.alive) return;
+    const { T, F } = this;
+    for (let c = 0; c < T.length; c++) {
+      if ((T[c] as number) > 150 || (F[c] as number) > 0) {
+        this.alive = true;
+        return;
+      }
+    }
   }
 
   private advectFlow(h: number): void {
@@ -923,6 +1002,8 @@ export class Smoke2 {
     this.u.fill(0);
     this.v.fill(0);
     this.s.fill(0);
+    this.T.fill(0);
+    this.F.fill(0);
     this.fx.fill(0);
     this.fy.fill(0);
   }
@@ -969,7 +1050,8 @@ export class Smoke2 {
     const ns = this.s.length;
     const nb = this.fx.length;
     const np = this.p.length;
-    const out = new Float64Array(3 + nu + nv + ns + np + 2 * nb);
+    const nt = this.T.length;
+    const out = new Float64Array(3 + nu + nv + ns + np + 2 * nb + (nt > 0 ? 1 + 2 * nt : 0));
     out[0] = this.n;
     out[1] = this.unstable ? 1 : 0;
     out[2] = nb;
@@ -985,6 +1067,14 @@ export class Smoke2 {
     out.set(this.fx, k);
     k += nb;
     out.set(this.fy, k);
+    k += nb;
+    // a fire's temperature, fuel and whether it has been alight
+    if (nt > 0) {
+      out[k++] = this.alive ? 1 : 0;
+      out.set(this.T, k);
+      k += nt;
+      out.set(this.F, k);
+    }
     return out;
   }
 
@@ -1013,11 +1103,19 @@ export class Smoke2 {
     this.fx.set(src.subarray(k, k + nb));
     k += nb;
     this.fy.set(src.subarray(k, k + nb));
+    k += nb;
+    const nt = this.T.length;
+    if (nt > 0) {
+      this.alive = src[k++] === 1;
+      this.T.set(src.subarray(k, k + nt));
+      k += nt;
+      this.F.set(src.subarray(k, k + nt));
+    }
   }
 
   /** The size of a checkpoint in values, before it is made. */
   saveLength(): number {
-    return 3 + this.u.length + this.v.length + this.s.length + this.p.length + 2 * this.fx.length;
+    return 3 + this.u.length + this.v.length + this.s.length + this.p.length + 2 * this.fx.length + (this.T.length > 0 ? 1 + 2 * this.T.length : 0);
   }
 }
 

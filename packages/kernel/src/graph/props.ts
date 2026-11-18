@@ -226,6 +226,12 @@ export function coerceProp(key: string, v: unknown): Coerced {
       const b = typeof v === 'string' ? (v === 'true' ? true : v === 'false' ? false : undefined) : v;
       return typeof b === 'boolean' ? { ok: true, value: b } : bad();
     }
+    case 'boolnum': {
+      // true, false, or a number above `min` (physics `burns`: true, or the seconds of burning)
+      const b = typeof v === 'string' ? (v === 'true' ? true : v === 'false' ? false : undefined) : v;
+      if (typeof b === 'boolean') return { ok: true, value: b };
+      return typeof b === 'number' && b === b && b > (spec.min ?? -Infinity) && b <= (spec.max ?? Infinity) ? { ok: true, value: b } : bad();
+    }
     case 'enum':
       return typeof v === 'string' && (spec.values ?? []).includes(v) ? { ok: true, value: v } : bad();
     case 'int':
