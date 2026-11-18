@@ -47,6 +47,8 @@ The reference app has no physics engine, so it has no physics errors. Hand-made 
 | B017 | `bad_argument` | typecheck | `Wheel(c, at, 0)` (radius 0), `Liquid(region, 0)`, `Pour(at, 0, speed)`, `Waves(box, 1)` (fewer than 2 a side), `Rope(a, b, −1)`, `Cloth(P, u, v, 1, 8)` (fewer than 2 points a side), a cloth with `u` and `v` along one line, as literals | `fix_line` | `expected` |
 | B018 | `not_a_cloth` (new, C137) | typecheck | `Pin(c, P)` where `c` is not a cloth | `use_suggestion` | "Pin holds a cloth. To hold a body, use `Hinge(b, wall, P)`." `suggest`: that line |
 | B019 | `pin_off_cloth` (new, C138) | typecheck | `Pin(c, P)` with `P` a literal point further than one link from every point of `c` | `fix_line` | names the nearest point of the cloth and how far it is |
+| B020 | `not_burnable` (new, round 11) | typecheck | `Ignite(b)` where `b` has no `burns`, or `burns` on something that is not a body, cloth or solid shape | `use_suggestion` | "b can't burn yet. Add `b with burns = true` first." `suggest`: that line |
+| B021 | `no_fire_grid` (new, round 11) | plan | `Ignite(b)` or `burns` on a thing outside every `Fire` grid | `use_suggestion` | "Nothing can burn outside a fire. Make a fire round b." `suggest`: `Fire(b.pos)` |
 
 **Values versus text.** A polygon built from points whose edges only cross for some values is not an error. It is an undefined body (section 4). Only a literal shape that can never be valid is refused at check time.
 
@@ -141,6 +143,7 @@ Reasons are registered in `AreaUndefReasons` (`packages/kernel/src/contracts/val
 | `unstable_world` (new) | body, joint, liquid, smoke, cloth | A position or speed became not finite or over 1e6 | the time, and "springs too stiff for the step" or "too much force" |
 | `broken` (new) | wheel | A wheel with `breaks` went over its force (a broken joint stays defined, with `j.broken` true and `j.force` 0) | the time and the force |
 | `left_world` (new) | body | It left `world.range` | the time and where it left |
+| `burnt` (new, round 11) | body, solid shape | It burnt away (`b.burnt` reached 1, design 9.7) | the time |
 | `timeout` | body, liquid, cloth | The world is still catching up after a seek or a restart | "catching up" |
 
 An unstable world is handled like an unstable state (`animation-time/design.md` 7.8):
@@ -179,6 +182,8 @@ An unstable world is handled like an unstable state (`animation-time/design.md` 
 | `input_undefined` | warning | A force or property formula was undefined during the film | "b's force was undefined at t = 2 s and was taken as 0." |
 | `worker_unavailable` | info | The browser has no worker, so liquids and cloth run on the page | "Liquids and cloth run on the page, so the film may play slower here. It is the same film." |
 | `torn` | info | Links of a cloth with `tears` broke (code B113, once a cloth) | "net tore at t = 2.4 s: 18 links." |
+| `burnt` | info | A burnable body or shape burnt away (round 11) | "log burnt away at t = 12.3 s." |
+| `fire_out` | info | A fire's grid has no fuel and no flame left (round 11) | "f went out at t = 20 s." |
 | `worker_crashed` | info | The physics worker stopped; the page took the world back from its start (code B112) | "The physics worker stopped, so the film goes on here on the page. It is the same film." |
 | `cloth_drawn_coarse` | info | No WebGL 2, so a cloth in space is drawn from every second point, and drops from every second drop (code B114; B113 is kept for `torn`). Raised by the Space pane once, naming the first object drawn coarser | "flag is drawn coarser on this computer; it moves the same." |
 

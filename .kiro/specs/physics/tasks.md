@@ -97,3 +97,13 @@ Each round is one branch `feat/physics-<n>` and one PR into `integration`, merge
   - [ ] 10.5 Exact maths in compiled user formulas
   - [x] 10.6 Stacks that land stand still and sleep (2D): a face's two points bounce in one block solve, not one after the other (that spun each landing box, so dropped towers tilted, walked over and never slept); spec tests for a dropped tower of 20 and a pile of 100
   - [x] 10.7 Soft step for bodies in the plane and in space (design 6.2, 6.5): small steps of half the passes, soft contacts (30 Hz, damping 10, push-out at most 3 m/s), a relax pass, gaps from the anchors' moves (narrow phase once a step), pushes spread over the small steps; a face's two points pushed in one soft 2 × 2 solve in the plane; bounces off walls turn back before the move (a perfect bounce keeps its height exactly), between bodies after the relax pass. Columns of 50 balls sleep by 4 s (were 12 s), 3D towers by 3 s (were awake after 10 s). Found and fixed: a grab's anchor was logged with fewer digits than it was used with, so a reload played a hair differently
+  - [ ] 10.8 The Rust rule of design 11.6: after the TypeScript fixes, measure each solver in Chrome with the CPU 4× slower and report which (if any) are more than 25% over goal; ask the product owner before any Rust tool or crate
+- [ ] 11. Round 11: fire, and smoke in space (R11)
+  - [ ] 11.1 `swirl` on `Smoke` (vorticity confinement), with a check that a plume past a ball sheds curls and the mass check of 9.4 still holds
+  - [ ] 11.2 `Fire` in the plane: temperature and fuel per cell, lift, burning, cooling, the source, named arguments and readouts, B017 and limits, `fire_out`
+  - [ ] 11.3 `burns` and `Ignite`: heat swap, burning bodies (mass, char, `burnt`, joints break), cloth cells that burn and tear, solid shapes that stop being solid, B020, B021; water that puts fire out
+  - [ ] 11.4 Drawing in the plane: black-body colour added under the smoke, char on burnt bodies; the crackle with `sound = true`
+  - [ ] 11.5 The grid in space: `Smoke(box, n)`, `Fire(box, n)`, `Fire(at: Point3)`, Float32 cells, in the worker, cloth in its wind, checkpoints every 1 s
+  - [ ] 11.6 Drawing in space: ray marching a 3D texture in the WebGL 2 painter with the solids' depth; 12 slices without WebGL 2; PNG and SVG
+  - [ ] 11.7 Examples, screenshots, spec tests (seek equals play with fire, a log burns away the same on replay, water puts it out, a flag over a fire ripples), the agent's rows in `agent.md`
+  - [ ] 11.8 Benches for the fire rows of design 11.2 in Node and in Chrome with the CPU 4× slower; the Rust rule of 11.6
