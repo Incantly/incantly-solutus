@@ -15,6 +15,7 @@ import { DEPTH_SRC, DISC_SRC, SHEET_SRC } from './shaders3';
 import type { GlProgramSrc } from './shaders3';
 import { gridTriangles } from './sheet3';
 import type { GlFrame3, GlSheet3 } from './sheet3';
+import { VolumePainter3 } from './volume3';
 
 export type GlCanvas = HTMLCanvasElement | OffscreenCanvas;
 
@@ -25,7 +26,7 @@ function glError(where: string, token: string, hint?: string): Result<never> {
   return viewError({ kind: 'internal', messageKey: 'view.internal', params: { where }, token, ...(hint === undefined ? {} : { hint }) });
 }
 
-interface Prog {
+export interface GlProg {
   readonly program: WebGLProgram;
   readonly u: Readonly<Record<string, WebGLUniformLocation | null>>;
 }
@@ -46,7 +47,7 @@ export class GlBackend3 {
   /** Bumped when a lost context comes back, so everything made before is made again. */
   generation = 0;
   private lostFlag = false;
-  private progs: { sheet: Prog; disc: Prog; depth: Prog } | undefined;
+  private progs: { sheet: GlProg; disc: GlProg; depth: GlProg } | undefined;
   private readonly onLost = (e: Event): void => {
     // asking for the context back: the browser restores it when it can
     e.preventDefault();
@@ -84,7 +85,7 @@ export class GlBackend3 {
   }
 
   /** The three programs, compiled once per context. */
-  programs(): Result<{ sheet: Prog; disc: Prog; depth: Prog }> {
+  programs(): Result<{ sheet: GlProg; disc: GlProg; depth: GlProg }> {
     if (this.progs) return okResult(this.progs);
     const sheet = this.compile(SHEET_SRC, UNIFORMS.sheet);
     if (!sheet.ok) return sheet;
@@ -96,7 +97,7 @@ export class GlBackend3 {
     return okResult(this.progs);
   }
 
-  private compile(src: GlProgramSrc, names: readonly string[]): Result<Prog> {
+  compile(src: GlProgramSrc, names: readonly string[]): Result<GlProg> {
     const gl = this.gl;
     const shader = (type: number, code: string): WebGLShader | null => {
       const s = gl.createShader(type);
@@ -201,9 +202,12 @@ export class MeshPainter3 {
   private depthVao: WebGLVertexArrayObject | null = null;
   private readonly vp32 = new Float32Array(16);
   private readonly rot32 = new Float32Array(9);
+  /** Smoke and fire in space (physics design 12.1), ray-marched after the sheets and drops. */
+  readonly volumes: VolumePainter3;
 
   private constructor(backend: GlBackend3) {
     this.backend = backend;
+    this.volumes = new VolumePainter3(backend);
   }
 
   /** A painter on its own canvas; `webgl_unavailable` when the browser has no WebGL 2. */
@@ -402,6 +406,15 @@ export class MeshPainter3 {
       }
       gl.bindVertexArray(null);
       gl.disable(gl.BLEND);
+
+      /* 4. smoke and fire: a ray through each box, over everything above, ended by the solids and the cloth */
+      if (f.volumes && f.volumes.length > 0) {
+        const v = this.volumes.paint(f, { wd, hd, H, vp: this.vp32, depth: P.depth, frameNo: this.frameNo, gen: this.gen });
+        if (!v.ok) return v;
+        stats.drawCalls += f.volumes.length + 1;
+        gl.disable(gl.BLEND);
+        gl.enable(gl.DEPTH_TEST);
+      }
       this.sweep();
       return okResult({ source: b.canvas, sw: wd, sh: hd, stats });
     } catch {
@@ -474,6 +487,7 @@ export class MeshPainter3 {
       for (const x of [this.quad, this.inst, this.depthBuf]) if (x) gl.deleteBuffer(x);
       for (const v of [this.discVao, this.depthVao]) if (v) gl.deleteVertexArray(v);
     }
+    this.volumes.dispose();
     this.backend.dispose();
   }
 }

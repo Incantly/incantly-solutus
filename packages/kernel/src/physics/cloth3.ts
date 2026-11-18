@@ -10,6 +10,7 @@
  */
 import type { ClothDef } from './cloth';
 import { ClothSet } from './cloth';
+import type { Smoke3 } from './smoke3';
 import type { World3 } from './world3';
 import { BodyType3, FK3 } from './world3';
 
@@ -19,6 +20,8 @@ const FACE_GAP = 0.5;
 
 export class Cloth3 extends ClothSet {
   private world: World3 | undefined;
+  /** Smoke and fire grids in space whose flow is the air the cloth feels (design 9.5, 9.8). */
+  smokes: readonly Smoke3[] = [];
   /** Shape and point pairs that may touch this step. */
   private nCand = 0;
   private candS = new Int32Array(1024);
@@ -242,6 +245,29 @@ export class Cloth3 extends ClothSet {
   private live(b: number): boolean {
     const w = this.world as World3;
     return w.type[b] === BodyType3.Dynamic && !w.gone.has(b) && w.awake[b] === 1;
+  }
+
+  protected override hasFlow(): boolean {
+    return this.smokes.length > 0;
+  }
+
+  /** The air at the point in `ar`: the world's wind, or the flow of the first grid whose box holds it (trilinear on the faces). */
+  protected override airAt(out: Float64Array): void {
+    const x = this.ar[0] as number;
+    const y = this.ar[1] as number;
+    const z = this.ar[2] as number;
+    out[0] = this.windX;
+    out[1] = this.windY;
+    out[2] = this.windZ;
+    for (let k = 0; k < this.smokes.length; k++) {
+      const s = this.smokes[k] as Smoke3;
+      if (x < s.x0 || x > s.x1 || y < s.y0 || y > s.y1 || z < s.z0 || z > s.z1) continue;
+      s.flowAt(x, y, z);
+      out[0] = s.ox;
+      out[1] = s.oy;
+      out[2] = s.oz;
+      return;
+    }
   }
 
   protected override anchor(q: number, out: Float64Array): void {

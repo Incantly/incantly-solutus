@@ -37,6 +37,24 @@ export interface GlDrops3 {
   readonly radius: number;
 }
 
+/**
+ * A smoke or fire grid in space (physics design 9.8, 12.1): the box, `n` cells a side, the smoke `density` and the
+ * temperature `temp` (°C, none for smoke) of each cell, index (k n + j) n + i (x fastest).
+ */
+export interface GlVolume3 {
+  /** Stable for the life of the volume (the object id): its 3D texture is kept under it. */
+  readonly key: number;
+  readonly n: number;
+  readonly min: GlV3;
+  readonly max: GlV3;
+  readonly density: Float32Array;
+  readonly temp?: Float32Array;
+  /** The fire's hottest, °C: the temperature is sent as `T / heat` (0 for smoke). */
+  readonly heat: number;
+  /** Linear colour 0..1 of the smoke. */
+  readonly smoke: readonly [number, number, number];
+}
+
 export type GlLight = 'lit' | 'flat' | 'off';
 
 /** Everything one frame of the painter needs; the camera matrices are the Space view's own (`cam.vp`, `cam.view`). */
@@ -60,6 +78,11 @@ export interface GlFrame3 {
   readonly occluderVerts: number;
   readonly sheets: readonly GlSheet3[];
   readonly drops: readonly GlDrops3[];
+  /** Smoke and fire in space: ray-marched after the sheets and drops. */
+  readonly volumes?: readonly GlVolume3[];
+  /** What ends a ray through a volume (the solids and a cloth, as triangles): its own depth pass, since the screen's depth buffer cannot be read. */
+  readonly volumeOccluders?: Float32Array;
+  readonly volumeOccluderVerts?: number;
 }
 
 /** The two triangles of every cell of an nx × ny grid of points. */

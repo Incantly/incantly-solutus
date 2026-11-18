@@ -207,10 +207,10 @@ function named9(vals: readonly unknown[], at: number, pos: Float64Array, nu: num
     pinWords = `${pinIdx.length} point${pinIdx.length === 1 ? '' : 's'}`;
   }
   const t = num(tears, 0);
-  // a cloth in the plane that burns: seconds each cell burns (`true`: 10 s a kg of the cell's mass, at least 1 s)
+  // a cloth that burns (in the plane or in space): seconds each cell burns (`true`: 10 s a kg of the cell's mass, at least 1 s)
   const m0 = num(mass, CLOTH_DEFAULTS.mass) > 0 ? num(mass, CLOTH_DEFAULTS.mass) : CLOTH_DEFAULTS.mass;
   const cells = Math.max(1, (nu - 1) * (nv > 1 ? nv - 1 : 1));
-  const burnSeconds = dim === 3 ? 0 : burns === true ? Math.max(1, (10 * m0) / cells) : typeof burns === 'number' && burns > 0 ? burns : 0;
+  const burnSeconds = burns === true ? Math.max(1, (10 * m0) / cells) : typeof burns === 'number' && burns > 0 ? burns : 0;
   return {
     ...(burnSeconds > 0 ? { burns: burnSeconds, ignite: clamp(num(ignite, 250), 150, 1000) } : {}),
     mass: m0,
@@ -366,11 +366,11 @@ export const CLOTH_COMMANDS: readonly CommandSpec[] = [
     group: 'physics',
     forms: [
       {
-        params: [P('corner', 'Point3'), P('u', 'Vector3|Point3'), P('v', 'Vector3|Point3'), P('nu', 'Number'), P('nv', 'Number'), ...NAMED],
+        params: [P('corner', 'Point3'), P('u', 'Vector3|Point3'), P('v', 'Vector3|Point3'), P('nu', 'Number'), P('nv', 'Number'), ...NAMED_PLANE],
         returns: 'Cloth',
         summary: 'a sheet of nu by nv points spanning corner + s u + r v in space: it hangs, drapes and waves in the wind',
         explain: '{name} is a cloth of {3} by {4} points from {0}',
-        check: (c) => checkCloth(c, 5, [3, 4], false) ?? checkSides(c),
+        check: (c) => checkCloth(c, 5, [3, 4], false, NAMES_PLANE) ?? checkSides(c),
         rule: () => ({
           run(call: RuleCall) {
             const [corner, u, v, nu, nv] = call.values;

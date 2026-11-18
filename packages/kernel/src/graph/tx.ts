@@ -256,7 +256,9 @@ export class FigureTx extends FigureBase {
         for (const s of define !== undefined ? [...suggest, define] : suggest) {
           if (kept.includes(s)) continue;
           const r = this.apply(s, { dryRun: true });
-          if (r.ok) kept.push(s);
+          // `Fire(b.pos)` for a thing outside every fire (errors B021) is the line the docs name, and the one a figure with
+          // a fire grid already in space refuses with `limit` (one grid there): it stays, and the hint says so (PH-32)
+          if (r.ok || (e.kind === 'no_fire_grid' && r.kind === 'limit')) kept.push(s);
         }
       } finally {
         this.vetting = false;
