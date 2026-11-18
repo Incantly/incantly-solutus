@@ -84,7 +84,7 @@ export function jointNow(w: World2, m: JointMember, h: number): JointValue {
   const b = m.value.kind === 'grab' ? { x: (j as unknown as Grab2).tx, y: (j as unknown as Grab2).ty } : worldOf(w, j.b, m.lb);
   return {
     ...m.value,
-    force: j.broken ? 0 : j.force(h),
+    force: j.broken ? 0 : j.force(h / w.substeps),
     lengthNow: m.value.kind === 'hinge' || m.value.kind === 'weld' ? 0 : j.length(w),
     angleNow: m.value.kind === 'hinge' ? j.angle(w) : 0,
     broken: j.broken,

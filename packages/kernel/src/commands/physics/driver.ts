@@ -1095,14 +1095,15 @@ export class PhysicsDriver implements WorldDriver {
     this.applyGrabs();
     this.applyVehicles();
     if (n === 0) {
-      // leapfrog start: the first step takes half a step of the forces off the start speed, so a body in free flight
-      // follows x0 + v0 t + a t² / 2 exactly at every step (design 11.5, projectile)
+      // leapfrog start: the first small step takes half a small step of the forces off the start speed, so a body in
+      // free flight follows x0 + v0 t + a t² / 2 exactly at every step (design 11.5, projectile)
+      const hs = h / w.substeps;
       for (const m of this.members) {
         const i = m.index;
         if (m.role !== 'body' || w.type[i] !== BodyType.Dynamic) continue;
         const im = w.invM[i] as number;
-        w.vx[i] = (w.vx[i] as number) - 0.5 * h * (w.gx + im * (w.fx[i] as number));
-        w.vy[i] = (w.vy[i] as number) - 0.5 * h * (w.gy + im * (w.fy[i] as number));
+        w.vx[i] = (w.vx[i] as number) - 0.5 * hs * (w.gx + im * (w.fx[i] as number));
+        w.vy[i] = (w.vy[i] as number) - 0.5 * hs * (w.gy + im * (w.fy[i] as number));
       }
     }
     // design 9.6: the drops' push of the last step, and still water's buoyancy and drag at the pose now, go in first
@@ -1574,8 +1575,10 @@ export class PhysicsDriver implements WorldDriver {
 
   private midPotential(i: number): number {
     const w = this.world as World2;
-    const mx = 0.5 * ((this.prevX[i] as number) + (w.px[i] as number));
-    const my = 0.5 * ((this.prevY[i] as number) + (w.py[i] as number));
+    // the speed is the last small step's, so the height is taken in the middle of that small step
+    const hs = 1 / this.rate / w.substeps;
+    const mx = (w.px[i] as number) - 0.5 * hs * (w.vx[i] as number);
+    const my = (w.py[i] as number) - 0.5 * hs * (w.vy[i] as number);
     return -(w.mass[i] as number) * (w.gx * mx + w.gy * my);
   }
 
@@ -1586,11 +1589,13 @@ export class PhysicsDriver implements WorldDriver {
     const kx = Float64Array.from(w.px);
     const ky = Float64Array.from(w.py);
     const ka = Float64Array.from(w.ang);
+    // the middle of the last small step: the speeds are that small step's
+    const hs = 1 / this.rate / w.substeps;
     for (let i = 0; i < w.n; i++) {
       if (w.type[i] !== BodyType.Dynamic) continue;
-      w.px[i] = 0.5 * ((this.prevX[i] as number) + (kx[i] as number));
-      w.py[i] = 0.5 * ((this.prevY[i] as number) + (ky[i] as number));
-      w.ang[i] = 0.5 * ((this.prevA[i] as number) + (ka[i] as number));
+      w.px[i] = (kx[i] as number) - 0.5 * hs * (w.vx[i] as number);
+      w.py[i] = (ky[i] as number) - 0.5 * hs * (w.vy[i] as number);
+      w.ang[i] = (ka[i] as number) - 0.5 * hs * (w.w[i] as number);
       w.setRot(i);
     }
     let e = 0;
@@ -1824,10 +1829,12 @@ export class PhysicsDriver implements WorldDriver {
       const s = w.qs[i] as number;
       const dx = p.x - (w.px[i] as number);
       const dy = p.y - (w.py[i] as number);
-      ax = c * dx + s * dy;
-      ay = -s * dx + c * dy;
+      // rounded as the `@input` line writes it, so the film plays the same after a reload (a body resting a hair into
+      // the ground gave an anchor with more digits than the line keeps)
+      ax = Number(num(c * dx + s * dy));
+      ay = Number(num(-s * dx + c * dy));
     }
-    this.addEntry({ kind: 'grab', n, id, ...(item !== undefined ? { item } : {}), x, y, ax, ay });
+    this.addEntry({ kind: 'grab', n, id, ...(item !== undefined ? { item } : {}), x: Number(num(x)), y: Number(num(y)), ax, ay });
     return true;
   }
 
