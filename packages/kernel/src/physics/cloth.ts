@@ -3120,7 +3120,21 @@ export class ClothSet {
     const ci = this.cloths[c] as ClothInfo;
     const { nu, nv } = ci.def;
     const out = new Uint8Array((nu - 1) * nv + nu * (nv - 1));
-    if (ci.torn === 0) return out;
+    this.threadCutsInto(c, out);
+    return out;
+  }
+
+  /** How many threads cloth c has (the length of `threadCuts`). */
+  threadCutCount(c: number): number {
+    const { nu, nv } = (this.cloths[c] as ClothInfo).def;
+    return (nu - 1) * nv + nu * (nv - 1);
+  }
+
+  /** The same, written into `out` (of the right length, all zero). */
+  threadCutsInto(c: number, out: Uint8Array): void {
+    const ci = this.cloths[c] as ClothInfo;
+    const { nu, nv } = ci.def;
+    if (ci.torn === 0) return;
     for (let l = ci.l0; l < ci.l0 + ci.ln; l++) {
       if (this.kind[l] !== LinkKind.stretch || this.broken[l] !== 1) continue;
       const a = Math.min(this.la[l] as number, this.lb[l] as number) - ci.p0;
@@ -3130,7 +3144,6 @@ export class ClothSet {
       if (b - a === 1) out[j * (nu - 1) + i] = 1;
       else out[(nu - 1) * nv + j * nu + i] = 1;
     }
-    return out;
   }
 
   /** Kinetic plus potential energy of cloth c (the potential from gravity, 0 at the origin). */

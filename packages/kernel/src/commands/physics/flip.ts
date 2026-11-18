@@ -68,6 +68,13 @@ export class ClothOut {
   touchingNow: string[] = [];
   touchIndex: number[] = [];
 
+  /** Makes `cutNow` `n` long and zero, ready to be written; returns `n`. */
+  cutLength(n: number): number {
+    if (this.cutNow.length !== n) this.cutNow = new Uint8Array(n);
+    else this.cutNow.fill(0);
+    return n;
+  }
+
   /** The torn-thread array for this frame, `n` long: the last one when `cutNow` holds the same ones. */
   cutFor(n: number): Uint8Array {
     if (this.cut.length !== n) this.cut = new Uint8Array(n);
@@ -132,4 +139,58 @@ export class DropsOut {
   readonly xs = new FlipArrays<Float32Array>(makeFloat32);
   readonly ys = new FlipArrays<Float32Array>(makeFloat32);
   readonly zs = new FlipArrays<Float32Array>(makeFloat32);
+}
+
+/**
+ * What a driver keeps of one body to write its cell each frame without making arrays: the forces' array in turn, the
+ * names of what it touches held until they change, and, for a body at rest, the last cell with the numbers it was made
+ * from, so a frame that changed none of them hands the figure the very cell it holds (nothing to compare, nothing made).
+ */
+export class BodyOut {
+  readonly forces = new FlipArrays<Float64Array>(makeFloat64);
+  /** The names the last cell holds, and the ones being collected for this frame (`nNow` of them). */
+  touching: string[] = [];
+  private readonly names: string[] = [];
+  private nNow = 0;
+  /** A body at rest: the numbers its last cell was made from, the ones now, and the cell. */
+  key: Float64Array = new Float64Array(0);
+  keyNow: Float64Array = new Float64Array(0);
+  keySpec: unknown;
+  cell: unknown;
+  /** The names the held cell holds (the cell is the held one only while this is still `touching`). */
+  cellTouching: string[] | undefined;
+
+  /** The numbers just worked out in `keyNow` are the held ones now (the two arrays swap, nothing is copied). */
+  holdKey(): void {
+    const t = this.key;
+    this.key = this.keyNow;
+    this.keyNow = t;
+  }
+
+  /** Starts this frame's list of names. (Written from the start, not emptied by `length = 0`, which frees the places.) */
+  beginTouch(): void {
+    this.nNow = 0;
+  }
+
+  addTouch(name: string): void {
+    this.names[this.nNow++] = name;
+  }
+
+  /** The touched bodies' names for this frame: the last array when this frame's are the same ones. */
+  touchingFor(): string[] {
+    const t = this.touching;
+    let same = t.length === this.nNow;
+    for (let i = 0; same && i < this.nNow; i++) if (t[i] !== this.names[i]) same = false;
+    if (!same) this.touching = this.names.slice(0, this.nNow);
+    return this.touching;
+  }
+
+  /** Does `keyNow` hold the numbers the held cell was made from? */
+  sameKey(): boolean {
+    const a = this.key;
+    const b = this.keyNow;
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) if (!Object.is(a[i], b[i])) return false;
+    return true;
+  }
 }
