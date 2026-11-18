@@ -38,7 +38,7 @@ The full design is `docs/features/physics/design.md`. This file says where each 
 ## Decisions
 
 - The 2D and 3D engines are separate worlds, each with its own driver. A figure with a body in space is a world in space; the plane driver leaves it alone.
-- Cloth uses XPBD with 4 small steps and one pass each (design 9.5), not more passes: stiffer and cheaper.
+- Cloth uses XPBD with 3 small steps (4 for a cloth that hits itself) and one pass each (design 9.5), not more passes: stiffer and cheaper.
 - Bodies give and take cloth and drop impulses with a lag of one step, in a fixed order, so the film stays exact (design 9.6).
 - A world with cloth or liquid runs whole in one worker, bodies included, so every hit has one order.
 - Cloth checkpoints every 0.25 s, so a seek is at most 30 steps.

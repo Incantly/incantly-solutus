@@ -85,10 +85,10 @@ Each round is one branch `feat/physics-<n>` and one PR into `integration`, merge
     - [ ] 9.7.3 Node benches of the cloth rows of 11.2: run and reported; the rows over budget are left for round 10
   - [ ] 9.8 Finish cloth (docs/research/physics-papers.md 8)
     - [x] 9.8.1 Merge integration (the soft step) into the cloth branch; physics tests pass, pinned balls still carried within 1%
-    - [ ] 9.8.2 A body held by pins takes the cloth's small steps, and the counts agree with the soft step's
-    - [ ] 9.8.3 A heavy ball on a light rope: the ball in the rope's exact chain solve, stretch within 2%
-    - [ ] 9.8.4 Hits listed once a step, shapes moved through the small steps; one pass a small step; cloth against cloth once a step; drops by grid cells
-    - [ ] 9.8.5 Chrome bench with the CPU 4× slower for every cloth row of 11.2; the Rust rule of design 11.6
+    - [x] 9.8.2 A body held by pins takes the cloth's small steps, and the counts agree with the soft step's (the body takes the world's own move in each small step; a ball pinned under a sheet sinks under 1 mm, was 3 to 5 cm)
+    - [x] 9.8.3 A heavy ball on a light rope: the body's tether (design 9.5); rope within 0.2% of its length, ball within 0.1% of its reach
+    - [ ] 9.8.4 Hits listed once a step, shapes moved through the small steps; one pass a small step; cloth against cloth once a step; drops by grid cells. Done: three small steps (four with `self`). Already so: hits and cloth pairs listed once a step, drops found on the grid. Tried and left: tethers every second small step (breaks the pinned-ball weight check). Node rows still over: 32 × 32 (0.78 of 0.75 ms), two cloths (2.29 of 2), cloth in water (2.30 of 2)
+    - [x] 9.8.5 Chrome bench with the CPU 4× slower for every cloth row of 11.2 (`packages/kernel/bench/chrome-physics.mjs`); the Rust rule list: cloth in water (28% over its goal)
 - [ ] 10. Round 10: speed (R9)
   - [ ] 10.1 Node benches for every budget of design 11.2
   - [ ] 10.2 Throttled Chrome bench script

@@ -77,7 +77,7 @@ Source: `docs/features/physics/` (design, errors, agent, ui). Section numbers be
 ## R10. Cloth (design 9.5, 9.6, 12.1)
 
 1. `Cloth` in space (a sheet), and in the plane (a rope that bends, a net); `Pin` to the world or to a body; `world with wind`.
-2. XPBD with 4 small steps a step: stretch, shear and bend links, compliance from `stretch` and `bend`, `damping`, `tears`, sleep.
+2. XPBD with 3 small steps a step (4 for a cloth that hits itself): stretch, shear and bend links, compliance from `stretch` and `bend`, `damping`, `tears`, sleep.
 3. Two-way hits with solids, bodies (equal and opposite impulse), liquid drops (against triangles) and, with `self = true`, itself.
 4. A world with cloth or liquid runs whole in the physics worker; without a worker the same steps run on the page and give the same film.
 5. A WebGL 2 painter for cloth and drops in the Space view; without WebGL 2 the software painter draws every second point.
