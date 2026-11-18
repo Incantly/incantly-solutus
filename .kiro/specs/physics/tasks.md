@@ -79,3 +79,5 @@ Each round is one branch `feat/physics-<n>` and one PR into `integration`, merge
   - [ ] 10.3 Checks of design 11.4
   - [ ] 10.4 Cross-browser hash test
   - [ ] 10.5 Exact maths in compiled user formulas
+  - [x] 10.6 Stacks that land stand still and sleep (2D): a face's two points bounce in one block solve, not one after the other (that spun each landing box, so dropped towers tilted, walked over and never slept); spec tests for a dropped tower of 20 and a pile of 100
+  - [ ] 10.7 Tall columns of balls (50 high) breathe for about 10 s before they sleep; 3D towers of touching boxes sway for about 10 s (no block solve for four points). Candidates: the soft-step solver (Catto, Solver2D 2024), small steps (`docs/research/physics-papers.md`)

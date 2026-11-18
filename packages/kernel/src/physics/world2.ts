@@ -949,6 +949,15 @@ export class World2 implements Poses {
    * four cases in turn (both push, only the first, only the second, neither), as Box2D's block solver does.
    */
   private solveBlock(c: Contact, inv_h: number): void {
+    // the speed each point must reach: 0, or the speculative gap closed this step
+    this.blockTo(c, c.s0 > 0 ? c.s0 * inv_h : 0, c.s1 > 0 ? c.s1 * inv_h : 0);
+  }
+
+  /**
+   * The block solve with each point's normal speed kept at least −bias: bias is the speculative gap over the step in
+   * the velocity passes, and e × the closing speed for a bounce (so both points of a face bounce together, with no spin).
+   */
+  private blockTo(c: Contact, bias1: number, bias2: number): void {
     const vx = this.vx;
     const vy = this.vy;
     const w = this.w;
@@ -960,9 +969,8 @@ export class World2 implements Poses {
     const dv2y = (vy[b] as number) + (w[b] as number) * c.rBx1 - (vy[a] as number) - (w[a] as number) * c.rAx1;
     const a1 = c.ni0;
     const a2 = c.ni1;
-    // the speed each point must reach: 0, or the speculative gap closed this step
-    const b1 = dv1x * c.nx + dv1y * c.ny + (c.s0 > 0 ? c.s0 * inv_h : 0) - (c.k11 * a1 + c.k12 * a2);
-    const b2 = dv2x * c.nx + dv2y * c.ny + (c.s1 > 0 ? c.s1 * inv_h : 0) - (c.k12 * a1 + c.k22 * a2);
+    const b1 = dv1x * c.nx + dv1y * c.ny + bias1 - (c.k11 * a1 + c.k12 * a2);
+    const b2 = dv2x * c.nx + dv2y * c.ny + bias2 - (c.k12 * a1 + c.k22 * a2);
     let x1 = -(c.i11 * b1 + c.i12 * b2);
     let x2 = -(c.i12 * b1 + c.i22 * b2);
     if (!(x1 >= 0 && x2 >= 0)) {
@@ -997,6 +1005,15 @@ export class World2 implements Poses {
     const w = this.w;
     for (const c of this.contacts) {
       if (c.restitution === 0) continue;
+      if (c.block) {
+        // a face lands on a face: both points bounce in one solve, as in the velocity passes. One point at a time gave the
+        // first point all the bounce and the second little, so each landing set the body spinning (a dropped stack
+        // tilted, rocked and never slept)
+        const q0 = c.rv0 <= -RESTITUTION_THRESHOLD && c.max0 > 0;
+        const q1 = c.rv1 <= -RESTITUTION_THRESHOLD && c.max1 > 0;
+        if (q0 || q1) this.blockTo(c, q0 ? c.restitution * c.rv0 : 0, q1 ? c.restitution * c.rv1 : 0);
+        continue;
+      }
       for (let k = 0; k < c.m.count; k++) {
         const rv = k === 0 ? c.rv0 : c.rv1;
         const mx = k === 0 ? c.max0 : c.max1;
