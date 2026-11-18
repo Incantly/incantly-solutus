@@ -5,11 +5,13 @@
  * case is a test that fails when it misses its target. A frame is 1/60 s of film: two steps of 1/120 s, the driver's
  * reading of its inputs and the writing of the cells it owns.
  */
+import v8 from 'node:v8';
 import { PerformanceObserver, performance } from 'node:perf_hooks';
 import { describe, expect, it } from 'vitest';
 import type { Water2 } from '../src/physics/water2';
 import { WaterForces } from '../src/physics/water2';
 import type { World2 } from '../src/physics/world2';
+import type { World3 } from '../src/physics/world3';
 import { CommandRegistry, Figure, geometry, physics3Of, physicsOf, registerAnimation, registerFunctions, registerLists, registerNumbers, registerPhysics, registerSpace, setPhysicsKernels } from '../src/index';
 
 const REG = (() => {
@@ -517,4 +519,83 @@ describe('cloth (design 11.2, round 9)', () => {
       }
     });
   }
+});
+
+/* ------------------------------ liquid steps and the drivers' frame, no garbage (design 11.4; PH-24, PH-25) ------------------------------ */
+
+/** Bytes of heap in use now, new space included: while no collection runs, a difference over a window is what the window made. */
+function heapUsed(): number {
+  return v8.getHeapStatistics().used_heap_size;
+}
+
+/**
+ * Runs `work` after a `gc()` and tells how many collections ran in it (Node's `gc` performance entries) and how many bytes
+ * of heap it made. A step that makes 100 bytes fills the young generation too slowly for a collection to show in a short
+ * window, so each row also bounds the bytes: `bytesPerStep` over `steps` calls.
+ */
+async function allocation(work: () => void): Promise<{ gcs: number; bytes: number }> {
+  let gcs = 0;
+  const obs = new PerformanceObserver((list) => {
+    gcs += list.getEntries().length;
+  });
+  collectNow();
+  obs.observe({ entryTypes: ['gc'] });
+  // reading the heap makes a few KB of its own: take it off, measured by an empty window
+  heapUsed();
+  heapUsed();
+  const z = heapUsed();
+  const own = heapUsed() - z;
+  const a = heapUsed();
+  work();
+  const b = heapUsed();
+  await new Promise((r) => setTimeout(r, 50));
+  obs.disconnect();
+  return { gcs, bytes: b - a - own };
+}
+
+describe('liquid steps make no garbage (design 11.4)', () => {
+  for (const kernels of [true, false]) {
+    it(`a 3D liquid step makes no garbage (no collection runs, under 16 bytes a step), kernels ${kernels ? 'on' : 'off'}`, async () => {
+      setPhysicsKernels(kernels);
+      collectNow();
+      try {
+        const f = load(SPLASH3);
+        for (let k = 1; k <= 60; k++) f.setClock(k / 60);
+        const d = physics3Of(f);
+        const fl = d.fluid;
+        const w = (d as unknown as { world: World3 }).world;
+        if (!fl) throw new Error('no liquid');
+        expect(fl.usesKernels).toBe(kernels);
+        // the engine makes the code of the loops in the first few thousand steps
+        for (let k = 0; k < 3000; k++) fl.step(w);
+        const steps = 3000;
+        const r = await allocation(() => {
+          for (let k = 0; k < steps; k++) fl.step(w);
+        });
+        console.log(`3D liquid, ${steps} steps, kernels ${kernels ? 'on' : 'off'}: ${r.gcs} collections, ${(r.bytes / steps).toFixed(2)} bytes a step`);
+        expect(r.gcs).toBe(0);
+        expect(r.bytes / steps).toBeLessThan(16);
+      } finally {
+        setPhysicsKernels(true);
+      }
+    });
+  }
+
+  it('a 2D liquid step makes no garbage (no collection runs, under 16 bytes a step)', async () => {
+    collectNow();
+    const f = load(DAM);
+    for (let k = 1; k <= 60; k++) f.setClock(k / 60);
+    const d = physicsOf(f);
+    const fl = d.fluid;
+    const w = (d as unknown as { world: World2 }).world;
+    if (!fl) throw new Error('no liquid');
+    for (let k = 0; k < 3000; k++) fl.step(w);
+    const steps = 3000;
+    const r = await allocation(() => {
+      for (let k = 0; k < steps; k++) fl.step(w);
+    });
+    console.log(`2D liquid, ${steps} steps: ${r.gcs} collections, ${(r.bytes / steps).toFixed(2)} bytes a step`);
+    expect(r.gcs).toBe(0);
+    expect(r.bytes / steps).toBeLessThan(16);
+  });
 });

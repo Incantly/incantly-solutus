@@ -1048,9 +1048,11 @@ export class Physics3Driver implements WorldDriver {
     if (cl) cl.account(w, h);
     if (fl || cl) for (let i = 0; i < w.n; i++) if (w.type[i] !== BodyType3.Static && !w.gone.has(i)) w.updateShapes(i);
     if (fl) {
-      fl.account(w, h);
+      fl.hStep = h;
+      fl.range = w.range;
+      fl.account(w);
       // then the drops take their step against the bodies where they are now (they meet the cloth in its step)
-      fl.step(w, h, w.range);
+      fl.step(w);
       const t = Number((this.t0 + this.n / this.rate).toFixed(3));
       for (const owner of fl.left) {
         const lm = this.liquidMembers[owner];

@@ -53,6 +53,8 @@ export class NeighbourGrid3 {
   found = new Int32Array(0);
   /** The box `inBox` is asked for: x0, y0, z0, x1, y1, z1 (numbers passed in a call are heap numbers, garbage). */
   readonly box = new Float64Array(6);
+  /** The reach `findPairs` lists pairs within (a field, not an argument: a number passed in a call is a heap number). */
+  reach = 0;
   private off = new Int32Array(13);
 
   /** The arena the arrays live in, when the Rust loops run; undefined for the TypeScript loops. */
@@ -272,17 +274,17 @@ export class NeighbourGrid3 {
   }
 
   /**
-   * Lists the pairs of drops closer than `reach`, each pair once, in a fixed order: cell by cell in table order, the pairs
+   * Lists the pairs of drops closer than `this.reach`, each pair once, in a fixed order: cell by cell in table order, the pairs
    * inside a cell, then with the 13 cells of one half around it. Returns how many.
    */
-  findPairs(x: Float64Array, y: Float64Array, z: Float64Array, n: number, reach: number): number {
+  findPairs(x: Float64Array, y: Float64Array, z: Float64Array, n: number): number {
     if (this.ar) {
       const o = this.o;
       const px = this.place(x, n, this.cpx, o.px);
       const py = this.place(y, n, this.cpy, o.py);
       const pz = this.place(z, n, this.cpz, o.pz);
       if (px >= 0 && py >= 0 && pz >= 0) {
-        this.mf[9] = reach;
+        this.mf[9] = this.reach;
         this.pairs = this.ar.fn.grid_pairs(px, py, pz, n, o.cx, o.cy, o.cz, o.start, o.sorted, o.sx, o.sy, o.sz, o.nbrN, o.pi, o.pj, o.found, o.mf, o.mi);
         return this.pairs;
       }
@@ -301,7 +303,7 @@ export class NeighbourGrid3 {
       this.sy[k] = y[i] as number;
       this.sz[k] = z[i] as number;
     }
-    this.pairs = this.dense ? this.pairsDense(reach * reach) : this.pairsHashed(reach * reach);
+    this.pairs = this.dense ? this.pairsDense() : this.pairsHashed();
     return this.pairs;
   }
 
@@ -317,7 +319,8 @@ export class NeighbourGrid3 {
     return np + 1;
   }
 
-  private pairsDense(r2: number): number {
+  private pairsDense(): number {
+    const r2 = this.reach * this.reach;
     const start = this.start;
     const sorted = this.sorted;
     const sx = this.sx;
@@ -390,7 +393,8 @@ export class NeighbourGrid3 {
     return np;
   }
 
-  private pairsHashed(r2: number): number {
+  private pairsHashed(): number {
+    const r2 = this.reach * this.reach;
     const start = this.start;
     const sorted = this.sorted;
     const sx = this.sx;
