@@ -43,3 +43,36 @@ No failing tests, so there are no findings for the fixer. What is covered (desig
 - At the limits of 11.3: two 64 × 32 cloths (4,096 points, one with `self`) with 2,000 3D drops, 2 s on against off; the net tears the same links with one `torn` notice on and off.
 
 Limit of these tests: the public API gives no way to see that the Rust loops ran (only `physicsKernelsOn()`, the switch). If the module were silently missing in Node, the on-against-off tests would still pass; the test that `initPhysicsKernels()` resolves `true` is the only guard.
+
+## 11A fire in the plane
+
+Tests: `packages/kernel/test/spec/physics-fire.test.ts` (78 tests, 4 fail) and `packages/kernel/test/spec/physics-fire-sound.test.ts` (12 tests, all pass). `npm run lint` and `npm run typecheck` pass. The physics set (kernel physics specs, `packages/sdk/test/spec/physics*`, `apps/studio/test/physics.test.ts`, kernel `sound`; 20 files) is 387 pass, 4 fail, the 4 below.
+
+Covered and passing: `swirl` range (Smoke and Fire), `swirl = 0` equal to no swirl (every density, hash and checkpoint to the bit), `swirl > 0` changes the flow, swirl 0.5 and 2 keep the jar's mass, divergence and still air with swirl; `Fire(at)` box, cells, source and readouts; every named argument's limits and the 64 × 64 cells shared with smoke; source lights, cooling, `fire_out` once, lift, `burn`, `smoke`, `heat` cap, symmetry, wind; water puts the fire out earlier (6.0 s against 7.0 s); a body that burns (lit, `b.burnt` 0 to 1, mass 1 − 0.8 burnt, undefined with reason `burnt`, `burnt` notice once, weld notice `broken`); a cloth that burns (`c.burnt`, `c.torn`, `torn` notice); `Ignite` as a line, in a hit handler, on a list item (`row[2]`), on a cloth; B020 and B021 kinds, hints and suggestions; `ignite` range; seek equals play (body, cloth, `Ignite` line and handler, reload of the script), kernels on against off; the crackle.
+
+### 11A.1 Smoke kept with `swirl = 10`: the jar loses 23% of its smoke
+
+- Test: `swirl on Smoke > smoke kept with the largest swirl (10): the same jar keeps its mass within 0.1% for 10 s`
+- Doc line: design 11.5 "Smoke kept" (hot smoke in a closed jar, source stopped at 0.5 s, mass within 0.1% for 10 s) with 9.7 "`swirl` ... 0 to 10", and the round task "smoke mass check of 11.5 still holds with swirl".
+- Scene: `jar = Polyline((-2, 2), (-2, -2), (2, -2), (2, 2), (-2, 2))`, `jar with solid = true`, `sm = Smoke(Box((0, 0), 5, 5), 40, source = Circle((0, -1), 0.4), heat = 5, until = 0.5, swirl = 10)`.
+- Code gave: mass divided by its value at 0.6 s is 0.956 at 1 s, 0.791 at 2 s and 0.771 from 3 s on (worst 22.9%). With no swirl, `swirl = 0.5` and `swirl = 2` it is 1.00000 at every second.
+
+### 11A.2 A ball on a shelf that burnt away stays up for seconds
+
+- Test: `burns and Ignite: cloth and solid shapes > a ball on a shelf that burns away falls soon after the burnt notice (1.5 s is time enough to fall a metre)`
+- Doc line: design 9.7 "A solid shape burns as a body would, and when it is burnt it stops being solid", and the choices list, "A solid shape that burns is removed from the world the same way (the grids mark their walls again)".
+- Scene: `g = Ground()`, `cold = Fire(Box((0, 2), 4, 4), 32)`, `shelf = Box((0, 1), 1.6, 0.2)`, `shelf with solid = true, burns = 1`, `ball = Body(Circle((0, 1.5), 0.2))`; play to 2 s, `Ignite(shelf)`.
+- Code gave: the `burnt` notice comes at 3.0 s; the ball's `y` is still 1.2999 (resting on the shelf) 1.5 s later and at 8 s; it reads 0.2 (on the ground) at 12 s. A ball left in the air would fall 1.1 m in 0.47 s. The ball may be asleep and not woken, or the walls are marked again late; the tester did not look inside.
+
+### 11A.3 A solid shape that burnt away still reads defined
+
+- Tests: `... > a shape that burnt away reads undefined with the reason burnt (errors.md 4)` (shelf lit by `Ignite`) and `... > a solid shape beside a fire lights on its own, burns away and reads undefined with the reason burnt` (shelf at `Box((0, 0.9), 1.6, 0.2)` over `CAMP`, `burns = 1`, lit by the fire alone, 30 s).
+- Doc line: errors.md 4, reason `burnt` "On: body, solid shape ... It burnt away (`b.burnt` reached 1)", and 9.7 "at 1 the body leaves the world: it reads `undefined` with the reason `burnt`" (the shape "the same way").
+- Code gave: the notice `shelf burnt away at t = 3 s.` comes once (so the shape did burn, and it lights by itself beside a fire), but `f.get('shelf').cell` stays `{ defined: true, value: Polygon }`; no reason `burnt`.
+
+### Notes (no test failed on these)
+
+- The row text of a fire (`fire, 48 by 48, up to 980 °C, burning`) is not tested: no function of the kernel's public API gives a fire's row (`clothRow` exists; no `fireRow`), and `ui.md` does not give one.
+- A `Weld` to a body that burnt away reads undefined (`input_undefined`, cause the body) rather than `j.broken = true`, with a `broken` notice (`w broke at t = 5.083 s.`) at the same time as `burnt`. The test accepts either reading (9.7 says both "its joints break (`broken`)" and "a joint whose rule goes undefined because a body burnt keeps its place").
+- A fresh figure with `on ball hit: Ignite(wood)` that is sought straight from 0 to 6 s logs `@input physics ignite wood at 6` (twice) instead of the hit times (0.55 s and 0.7 s when played), and its hash differs from the played film. A reload of the played film's script gives the same hash as the played film (tested, passes). Design 10 does not say whether a handler runs during a seek that never played the hit, so no test asserts it; the product owner may want a ruling.
+- `Ignite(list)` of a whole list is `not a body`; the list item form `Ignite(row[2])` works and is logged as `row[2]`.
