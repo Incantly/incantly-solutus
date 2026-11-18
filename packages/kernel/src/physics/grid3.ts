@@ -51,6 +51,8 @@ export class NeighbourGrid3 {
   pairs = 0;
   /** Scratch for `inBox`. */
   found = new Int32Array(0);
+  /** The box `inBox` is asked for: x0, y0, z0, x1, y1, z1 (numbers passed in a call are heap numbers, garbage). */
+  readonly box = new Float64Array(6);
   private off = new Int32Array(13);
 
   /** The arena the arrays live in, when the Rust loops run; undefined for the TypeScript loops. */
@@ -457,26 +459,27 @@ export class NeighbourGrid3 {
    * The drops whose cell overlaps the box, each once, into `found`; returns how many. When the box covers more cells than
    * there are drops, it walks the drops instead (in index order).
    */
-  inBox(x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, n: number): number {
+  inBox(n: number): number {
+    const box = this.box;
     if (this.ar) {
       const o = this.o;
       const mf = this.mf;
       mf[8] = this.inv;
-      mf[10] = x0;
-      mf[11] = y0;
-      mf[12] = z0;
-      mf[13] = x1;
-      mf[14] = y1;
-      mf[15] = z1;
+      mf[10] = box[0] as number;
+      mf[11] = box[1] as number;
+      mf[12] = box[2] as number;
+      mf[13] = box[3] as number;
+      mf[14] = box[4] as number;
+      mf[15] = box[5] as number;
       return this.ar.fn.grid_in_box(n, o.cx, o.cy, o.cz, o.start, o.sorted, o.found, o.mf, o.mi);
     }
     const out = this.found;
-    let cx0 = Math.floor(x0 * this.inv);
-    let cy0 = Math.floor(y0 * this.inv);
-    let cz0 = Math.floor(z0 * this.inv);
-    let cx1 = Math.floor(x1 * this.inv);
-    let cy1 = Math.floor(y1 * this.inv);
-    let cz1 = Math.floor(z1 * this.inv);
+    let cx0 = Math.floor((box[0] as number) * this.inv);
+    let cy0 = Math.floor((box[1] as number) * this.inv);
+    let cz0 = Math.floor((box[2] as number) * this.inv);
+    let cx1 = Math.floor((box[3] as number) * this.inv);
+    let cy1 = Math.floor((box[4] as number) * this.inv);
+    let cz1 = Math.floor((box[5] as number) * this.inv);
     if (this.dense) {
       cx0 = Math.max(cx0, this.ox);
       cy0 = Math.max(cy0, this.oy);

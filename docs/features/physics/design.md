@@ -879,7 +879,14 @@ Speed on average is not enough. The physics bench suite checks all of these, and
 | Cloth, tearing | A net with `tears = 1.5` torn by a heavy ball, played twice and on three browsers | the same links tear at the same steps |
 | Cloth, page cost | 4,096 cloth points and 2,000 drops | copy under 0.5 ms, draw under 3 ms a frame |
 | Cloth, no worker | The 64 × 32 flag with the worker turned off | the same world hash every second as with it |
-| Cloth, no garbage | Steps of a 64 × 32 sheet | no memory made during a step after the first second |
+| Cloth, no garbage | 2,000 steps of a 64 × 32 flag in wind, with the Rust loops on and with them off | no collector run in the 2,000 steps |
+
+The "no garbage" rows count collector runs (Node's `gc` performance entries) in a window that starts after a `gc()`, so what
+the setup left in the young generation does not fall into it: the bench's Node is started with `--expose-gc`
+(`packages/kernel/bench/vitest.config.ts`), and a row that needs the setup's garbage gone fails with a message that says so
+when it is not. A row collects once before its own setup too: a collection frees the Rust module of the row before, and
+the code the engine made that holds that module is thrown away with it, which makes the next steps run in the interpreter
+and make megabytes in their first 40 steps (a collection in the window, from a row that makes none).
 
 ### 11.5 Accuracy checks (lessons must be right)
 
@@ -966,6 +973,20 @@ flow and the liquid through many hooks, and moving all of it would move most of 
   number worked out in TypeScript is a heap number until the engine has optimised that function, and with the loop gone
   the function is called too seldom to be optimised soon. A step's copy of the points to the start-of-step arrays no
   longer makes three views a step.
+- **No garbage in the rest of a step (findings PH-15).** What was left, 110 bytes a step with the kernels on and off, and
+  in a sheet resting on a ball 130 KB a step, came from numbers handed from one method to the next and from objects made
+  at each call, in both modes. A sampling heap profile (minor collections included, 3,000 steps after 8,000) found them;
+  the rules that fixed them hold for every method a step calls. (1) A double passed as an argument or returned is a heap
+  number unless the engine inlines the call, and it inlines only small calls, so the collision code hands doubles
+  through `ClothSet.ar` (a `Float64Array` of 24: the caller writes the slots, the callee reads them; the slots are named
+  at each method), the step's length through the fields `hStep` and `hsub` (a driver sets `hStep` and calls `stepWorld`),
+  the box of a grid search through `NeighbourGrid3.box`, and the liquid's masses are read from its array. (2) No closure
+  made inside a method a step calls (it puts a context on the heap at each call, even when the closure is never made),
+  no `for … of` and no `some`/`find` with a function in the step, a loop with an index instead. (3) A method that
+  returns at once on most steps is checked in its caller (`prepLinks`), since a small method called once a step is not
+  optimised for a long time and boxes every number it reads. None of it changes an operation or its order: the film is
+  the same bits (a hash of every readout and array every second, 12 scenes, 8 s, kernels on and off, equal before and
+  after).
 - **Measured**, Chrome 157 with the CPU 4× slower, mean of a frame of two steps, the TypeScript loops and the Rust loops
   on the same computer in the same session (best of three runs each): rope 1.38 → 1.10 ms, 32 × 32 on a ball 3.50 → 3.13,
   flag 4.50 → 3.05, over 40 bodies 8.25 → 6.98, self 8.88 → 8.00, two cloths 10.30 → 7.57, cloth in water 11.04 → 9.11

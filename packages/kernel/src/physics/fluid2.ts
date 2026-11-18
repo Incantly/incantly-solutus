@@ -164,7 +164,7 @@ export class Fluid2 {
   private s2 = new Float64Array(0);
   private vw = new Float64Array(0);
   private visc: Float64Array;
-  private mass: Float64Array;
+  readonly mass: Float64Array;
 
   constructor(spacing: number, sources: readonly DropSource2[], owners: number) {
     this.d = spacing;

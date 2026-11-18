@@ -122,12 +122,13 @@ export class Cloth2 extends ClothSet {
     out[11] = 0;
   }
 
-  protected override setBody(b: number, x: number, y: number, _z: number, vx: number, vy: number): void {
+  protected override setBody(b: number): void {
     const w = this.world as World2;
-    w.px[b] = x;
-    w.py[b] = y;
-    w.vx[b] = vx;
-    w.vy[b] = vy;
+    const a = this.ar;
+    w.px[b] = a[0] as number;
+    w.py[b] = a[1] as number;
+    w.vx[b] = a[3] as number;
+    w.vy[b] = a[4] as number;
     w.updateShapes(b);
   }
 
@@ -135,10 +136,11 @@ export class Cloth2 extends ClothSet {
     return (this.world as World2).keepOut(b, io);
   }
 
-  protected override shiftSpeed(b: number, dx: number, dy: number): void {
+  protected override shiftSpeed(b: number): void {
     const w = this.world as World2;
-    w.vx[b] = (w.vx[b] as number) + dx;
-    w.vy[b] = (w.vy[b] as number) + dy;
+    const a = this.ar;
+    w.vx[b] = (w.vx[b] as number) + (a[0] as number);
+    w.vy[b] = (w.vy[b] as number) + (a[1] as number);
   }
 
   private c2 = new Float64Array(3);
@@ -166,11 +168,17 @@ export class Cloth2 extends ClothSet {
   }
 
   step(w: World2, h: number): void {
+    this.hStep = h;
+    this.stepWorld(w);
+  }
+
+  /** The step of `hStep` (set by the caller): the same as `step`, with no number passed in the call. */
+  stepWorld(w: World2): void {
     this.attach(w);
     this.gx = w.gx;
     this.gy = w.gy;
     this.gz = 0;
-    this.stepCloth(h);
+    this.stepNow();
   }
 
   /* ------------------------------ hooks ------------------------------ */
@@ -179,7 +187,9 @@ export class Cloth2 extends ClothSet {
     return this.smokes.length > 0;
   }
 
-  protected override airAt(x: number, y: number, out: Float64Array): void {
+  protected override airAt(out: Float64Array): void {
+    const x = this.ar[0] as number;
+    const y = this.ar[1] as number;
     out[0] = this.windX;
     out[1] = this.windY;
     out[2] = 0;
@@ -190,13 +200,6 @@ export class Cloth2 extends ClothSet {
       out[1] = s.sampleV(x, y);
       return;
     }
-  }
-
-  /** Where body b is in this small step against its pose now (as in space). */
-  private off(a: 'x' | 'y', b: number): number {
-    const w = this.world as World2;
-    const now = a === 'x' ? (w.px[b] as number) : (w.py[b] as number);
-    return (this.centre(b)[a === 'x' ? 0 : 1] as number) - now;
   }
 
   private live(b: number): boolean {
@@ -217,25 +220,39 @@ export class Cloth2 extends ClothSet {
     out[2] = 0;
   }
 
-  protected override bodyW(b: number, x: number, y: number): number {
-    if (!this.live(b)) return 0;
+  protected override bodyW(b: number): void {
+    const q = this.ar;
+    if (!this.live(b)) {
+      q[21] = 0;
+      return;
+    }
     const w = this.world as World2;
-    const rx = x - (this.centre(b)[0] as number);
-    const ry = y - (this.centre(b)[1] as number);
-    return (w.invM[b] as number) + (rx * rx + ry * ry) * (w.invI[b] as number);
+    const rx = (q[11] as number) - (this.centre(b)[0] as number);
+    const ry = (q[12] as number) - (this.centre(b)[1] as number);
+    q[21] = (w.invM[b] as number) + (rx * rx + ry * ry) * (w.invI[b] as number);
   }
 
-  private bodyWn(b: number, x: number, y: number, nx: number, ny: number): number {
-    if (!this.live(b)) return 0;
+  /** The inverse mass of body b along the normal `ar[0..1]` at the point `ar[11..12]`, into `ar[21]`. */
+  private bodyWn(b: number): void {
+    const q = this.ar;
+    if (!this.live(b)) {
+      q[21] = 0;
+      return;
+    }
     const w = this.world as World2;
-    const rx = x - (this.centre(b)[0] as number);
-    const ry = y - (this.centre(b)[1] as number);
+    const nx = q[0] as number;
+    const ny = q[1] as number;
+    const rx = (q[11] as number) - (this.centre(b)[0] as number);
+    const ry = (q[12] as number) - (this.centre(b)[1] as number);
     const rn = rx * ny - ry * nx;
-    return (w.invM[b] as number) + rn * rn * (w.invI[b] as number);
+    q[21] = (w.invM[b] as number) + rn * rn * (w.invI[b] as number);
   }
 
-  protected override bodyV(b: number, x: number, y: number, _z: number, out: Float64Array): void {
+  protected override bodyV(b: number, out: Float64Array): void {
     const w = this.world as World2;
+    const q = this.ar;
+    const x = q[11] as number;
+    const y = q[12] as number;
     if (w.type[b] === BodyType.Static || w.gone.has(b)) {
       out[0] = 0;
       out[1] = 0;
@@ -248,14 +265,15 @@ export class Cloth2 extends ClothSet {
     out[2] = 0;
   }
 
-  protected override bodyArm(b: number, x: number, y: number, _z: number, out: Float64Array): void {
-    out[0] = x - (this.centre(b)[0] as number);
-    out[1] = y - (this.centre(b)[1] as number);
+  protected override bodyArm(b: number, out: Float64Array): void {
+    const q = this.ar;
+    out[0] = (q[11] as number) - (this.centre(b)[0] as number);
+    out[1] = (q[12] as number) - (this.centre(b)[1] as number);
     out[2] = 0;
   }
 
-  protected override bodyInvMass(b: number): number {
-    return this.live(b) ? ((this.world as World2).invM[b] as number) : 0;
+  protected override bodyInvMass(b: number): void {
+    this.ar[23] = this.live(b) ? ((this.world as World2).invM[b] as number) : 0;
   }
 
   protected override bodiesStir(c: number): boolean {
@@ -282,7 +300,7 @@ export class Cloth2 extends ClothSet {
     return false;
   }
 
-  protected override prepare(_h: number): void {
+  protected override prepare(): void {
     const w = this.world as World2;
     this.nCand = 0;
     this.nSeg = 0;
@@ -291,6 +309,7 @@ export class Cloth2 extends ClothSet {
     let thick = 0;
     for (let c = 0; c < this.cloths.length; c++) thick = Math.max(thick, (this.cloths[c] as (typeof this.cloths)[number]).def.thickness);
     const pad = thick + this.pad + 0.01;
+    if (this.reachK.length < w.shapes.length) this.reachK = new Float64Array(w.shapes.length);
     for (let b = 0; b < w.n; b++) {
       if (w.gone.has(b)) continue;
       const dx = (w.px[b] as number) - (this.bp0[b * 2] as number);
@@ -298,7 +317,16 @@ export class Cloth2 extends ClothSet {
       for (let k = w.shape0[b] as number; k < (w.shape0[b] as number) + (w.shapeN[b] as number); k++) {
         const sh = w.shapes[k];
         if (!sh) continue;
-        const m = this.inGrid((w.minX[k] as number) - pad + Math.min(0, -dx), (w.minY[k] as number) - pad + Math.min(0, -dy), -1, (w.maxX[k] as number) + pad + Math.max(0, -dx), (w.maxY[k] as number) + pad + Math.max(0, -dy), 1);
+        if (sh.kind === 0) this.reachK[k] = sh.radius;
+        else polyReach(sh, this.reachK, k);
+        const ag = this.ar;
+        ag[0] = (w.minX[k] as number) - pad + Math.min(0, -dx);
+        ag[1] = (w.minY[k] as number) - pad + Math.min(0, -dy);
+        ag[2] = -1;
+        ag[3] = (w.maxX[k] as number) + pad + Math.max(0, -dx);
+        ag[4] = (w.maxY[k] as number) + pad + Math.max(0, -dy);
+        ag[5] = 1;
+        const m = this.inGrid();
         const found = this.grid.found;
         for (let q = 0; q < m; q++) {
           const i = found[q] as number;
@@ -343,8 +371,9 @@ export class Cloth2 extends ClothSet {
     }
   }
 
-  protected override collide(hs: number): void {
+  protected override collide(): void {
     const w = this.world as World2;
+    const ac = this.ar;
     for (let q = 0; q < this.nCand; q++) {
       const k = this.candS[q] as number;
       const i = this.candP[q] as number;
@@ -356,33 +385,55 @@ export class Cloth2 extends ClothSet {
       const pq = this.pinOf[i] as number;
       if (pq >= 0 && this.pinBody[pq] === b) continue;
       const th = ci.def.thickness;
-      if (this.hasBodyPins && this.nearBodyPin(i, b, 2 * reach2(sh) + th)) continue;
-      const fr = ci.def.friction;
-      if (sh.kind === 0) this.hitCircle(i, b, sh.wcx + this.off("x", b), sh.wcy + this.off("y", b), sh.radius + th, fr, hs);
-      else if (sh.wx.length === 2) this.hitWall(i, b, sh.wx, sh.wy, th, fr, hs);
-      else this.hitPoly(i, b, sh.wx, sh.wy, sh.wnx, sh.wny, th, fr, hs);
+      if (this.hasBodyPins) {
+        ac[6] = 2 * (this.reachK[k] as number) + th;
+        if (this.nearBodyPin(i, b)) continue;
+      }
+      ac[4] = ci.def.friction;
+      if (sh.kind === 0) {
+        const ob = this.offs(b);
+        ac[0] = sh.wcx + (ob[0] as number);
+        ac[1] = sh.wcy + (ob[1] as number);
+        ac[3] = sh.radius + th;
+        this.hitCircle(i, b);
+      } else if (sh.wx.length === 2) {
+        ac[5] = th;
+        this.hitWall(i, b, sh.wx, sh.wy);
+      } else {
+        ac[5] = th;
+        this.hitPoly(i, b, sh.wx, sh.wy, sh.wnx, sh.wny);
+      }
     }
-    for (let q = 0; q < this.nSeg; q++) this.hitThread(this.segS[q] as number, this.segT[q] as number, hs);
+    for (let q = 0; q < this.nSeg; q++) this.hitThread(this.segS[q] as number, this.segT[q] as number);
   }
 
-  /** The path's start against body b: the point at the start of the step, moved as the body moved. */
-  private startX(i: number, b: number): number {
+  /** Half the largest distance across each shape (a circle's radius; a polygon's half diagonal), made in `prepare`. */
+  private reachK = new Float64Array(0);
+
+  /** Body b's offset in this small step from its pose now (where the small steps have it, less where the world put it). */
+  private ob = new Float64Array(2);
+  private offs(b: number): Float64Array {
     const w = this.world as World2;
-    return (this.sx[i] as number) + (w.px[b] as number) - (this.bp0[b * 2] as number);
+    const c = this.centre(b);
+    const o = this.ob;
+    o[0] = (c[0] as number) - (w.px[b] as number);
+    o[1] = (c[1] as number) - (w.py[b] as number);
+    return o;
   }
 
-  private startY(i: number, b: number): number {
+  /** A round shape against a point: the centre `ar[0..1]` and the radius plus thickness `ar[3]`; friction `ar[4]`. */
+  private hitCircle(i: number, b: number): void {
+    const aq = this.ar;
+    const cx = aq[0] as number;
+    const cy = aq[1] as number;
+    const R = aq[3] as number;
     const w = this.world as World2;
-    return (this.sy[i] as number) + (w.py[b] as number) - (this.bp0[b * 2 + 1] as number);
-  }
-
-  private hitCircle(i: number, b: number, cx: number, cy: number, R: number, mu: number, hs: number): void {
     const ex = (this.x[i] as number) - cx;
     const ey = (this.y[i] as number) - cy;
     const d2 = ex * ex + ey * ey;
     if (d2 >= R * R) return;
-    const ax = this.startX(i, b) - cx;
-    const ay = this.startY(i, b) - cy;
+    const ax = (this.sx[i] as number) + (w.px[b] as number) - (this.bp0[b * 2] as number) - cx;
+    const ay = (this.sy[i] as number) + (w.py[b] as number) - (this.bp0[b * 2 + 1] as number) - cy;
     let nx: number;
     let ny: number;
     let depth: number;
@@ -406,13 +457,22 @@ export class Cloth2 extends ClothSet {
       ny = d > 1e-12 ? ey / d : 1;
       depth = R - d;
     }
-    if (depth > 0) this.pushOut(i, b, nx, ny, depth, mu, hs);
+    if (depth > 0) {
+      aq[0] = nx;
+      aq[1] = ny;
+      aq[3] = depth;
+      this.pushOut(i, b);
+    }
   }
 
-  /** A thin wall: the point stays on the side it started the step on, `th` off the wall, round its ends. */
-  private hitWall(i: number, b: number, wx: Float64Array, wy: Float64Array, th: number, mu: number, hs: number): void {
-    const bx = this.off("x", b);
-    const by = this.off("y", b);
+  /** A thin wall: the point stays on the side it started the step on, `th` (`ar[5]`) off the wall, round its ends; friction `ar[4]`. */
+  private hitWall(i: number, b: number, wx: Float64Array, wy: Float64Array): void {
+    const aq = this.ar;
+    const th = aq[5] as number;
+    const w = this.world as World2;
+    const ob = this.offs(b);
+    const bx = ob[0] as number;
+    const by = ob[1] as number;
     const ax = (wx[0] as number) + bx;
     const ay = (wy[0] as number) + by;
     const ex = (wx[1] as number) + bx - ax;
@@ -424,23 +484,31 @@ export class Cloth2 extends ClothSet {
     const ny = ex / l;
     const xi = this.x[i] as number;
     const yi = this.y[i] as number;
-    const s0 = nx * (this.startX(i, b) - ax) + ny * (this.startY(i, b) - ay);
+    const stx = (this.sx[i] as number) + (w.px[b] as number) - (this.bp0[b * 2] as number);
+    const sty = (this.sy[i] as number) + (w.py[b] as number) - (this.bp0[b * 2 + 1] as number);
+    const s0 = nx * (stx - ax) + ny * (sty - ay);
     const s1 = nx * (xi - ax) + ny * (yi - ay);
     const side = s0 >= 0 ? 1 : -1;
     const t = ((xi - ax) * ex + (yi - ay) * ey) / l2;
     if (s0 * s1 < 0) {
       const f = s0 / (s0 - s1);
-      const mx = this.startX(i, b) + f * (xi - this.startX(i, b));
-      const my = this.startY(i, b) + f * (yi - this.startY(i, b));
+      const mx = stx + f * (xi - stx);
+      const my = sty + f * (yi - sty);
       const tm = ((mx - ax) * ex + (my - ay) * ey) / l2;
       if (tm >= 0 && tm <= 1) {
-        this.pushOut(i, b, nx * side, ny * side, th - s1 * side, mu, hs);
+        aq[0] = nx * side;
+        aq[1] = ny * side;
+        aq[3] = th - s1 * side;
+        this.pushOut(i, b);
         return;
       }
     }
     if (t >= 0 && t <= 1) {
       if (s1 * side >= th) return;
-      this.pushOut(i, b, nx * side, ny * side, th - s1 * side, mu, hs);
+      aq[0] = nx * side;
+      aq[1] = ny * side;
+      aq[3] = th - s1 * side;
+      this.pushOut(i, b);
       return;
     }
     // past an end: round the corner
@@ -449,14 +517,21 @@ export class Cloth2 extends ClothSet {
     const cy = yi - (ay + tc * ey);
     const d = Math.sqrt(cx * cx + cy * cy);
     if (d >= th || !(d > 1e-12)) return;
-    this.pushOut(i, b, cx / d, cy / d, th - d, mu, hs);
+    aq[0] = cx / d;
+    aq[1] = cy / d;
+    aq[3] = th - d;
+    this.pushOut(i, b);
   }
 
   /** A convex polygon: out through the edge the path came in by (Cyrus and Beck), else the nearest edge. */
-  private hitPoly(i: number, b: number, wx: Float64Array, wy: Float64Array, wnx: Float64Array, wny: Float64Array, th: number, mu: number, hs: number): void {
+  private hitPoly(i: number, b: number, wx: Float64Array, wy: Float64Array, wnx: Float64Array, wny: Float64Array): void {
+    const aq = this.ar;
+    const th = aq[5] as number;
+    const w = this.world as World2;
     const n = wx.length;
-    const bx = this.off("x", b);
-    const by = this.off("y", b);
+    const ob = this.offs(b);
+    const bx = ob[0] as number;
+    const by = ob[1] as number;
     const x = (this.x[i] as number) - bx;
     const y = (this.y[i] as number) - by;
     let sep = -Infinity;
@@ -469,8 +544,8 @@ export class Cloth2 extends ClothSet {
         best = e;
       }
     }
-    const ax = this.startX(i, b) - bx;
-    const ay = this.startY(i, b) - by;
+    const ax = (this.sx[i] as number) + (w.px[b] as number) - (this.bp0[b * 2] as number) - bx;
+    const ay = (this.sy[i] as number) + (w.py[b] as number) - (this.bp0[b * 2 + 1] as number) - by;
     const ux = x - ax;
     const uy = y - ay;
     let tIn = -Infinity;
@@ -492,11 +567,18 @@ export class Cloth2 extends ClothSet {
     const nx = wnx[e] as number;
     const ny = wny[e] as number;
     const depth = -(nx * (x - (wx[e] as number)) + ny * (y - (wy[e] as number)) - th);
-    if (depth > 0) this.pushOut(i, b, nx, ny, depth, mu, hs);
+    if (depth > 0) {
+      aq[0] = nx;
+      aq[1] = ny;
+      aq[3] = depth;
+      this.pushOut(i, b);
+    }
   }
 
   /** A thread against a round shape: its nearest point to the centre goes out to the rim, the ends sharing the move. */
-  private hitThread(k: number, t: number, hs: number): void {
+  private hitThread(k: number, t: number): void {
+    const hs = this.hsub;
+    const aq = this.ar;
     const w = this.world as World2;
     const sh = w.shapes[k];
     if (!sh || this.triTorn(t)) return;
@@ -510,12 +592,13 @@ export class Cloth2 extends ClothSet {
       const pa = this.pinOf[a] as number;
       const pe = this.pinOf[e] as number;
       if ((pa >= 0 && this.pinBody[pa] === b) || (pe >= 0 && this.pinBody[pe] === b)) return;
-      const reach = 2 * reach2(sh) + ci.def.thickness;
-      if (this.nearBodyPin(a, b, reach) || this.nearBodyPin(e, b, reach)) return;
+      aq[6] = 2 * (this.reachK[k] as number) + ci.def.thickness;
+      if (this.nearBodyPin(a, b) || this.nearBodyPin(e, b)) return;
     }
     const R = sh.radius + ci.def.thickness;
-    const cx = sh.wcx + this.off("x", b);
-    const cy = sh.wcy + this.off("y", b);
+    const ob = this.offs(b);
+    const cx = sh.wcx + (ob[0] as number);
+    const cy = sh.wcy + (ob[1] as number);
     const ax = this.x[a] as number;
     const ay = this.y[a] as number;
     const ex = (this.x[e] as number) - ax;
@@ -547,10 +630,22 @@ export class Cloth2 extends ClothSet {
     const we = this.w[e] as number;
     const held = wa === 0 || we === 0 || this.taut[a] === 1 || this.taut[e] === 1;
     if (held && this.live(b)) {
-      const wb = this.bodyWn(b, cx, cy, nx, ny);
+      aq[0] = nx;
+      aq[1] = ny;
+      aq[11] = cx;
+      aq[12] = cy;
+      this.bodyWn(b);
+      const wb = aq[21] as number;
       if (!(wb > 0)) return;
       const kk = depth / wb / this.hStep;
-      this.give(b, this.owner[a] as number, -nx * kk, -ny * kk, 0, cx + nx * sh.radius, cy + ny * sh.radius, 0, this.hStep);
+      aq[8] = -nx * kk;
+      aq[9] = -ny * kk;
+      aq[10] = 0;
+      aq[11] = cx + nx * sh.radius;
+      aq[12] = cy + ny * sh.radius;
+      aq[13] = 0;
+      aq[14] = this.hStep;
+      this.give(b, this.owner[a] as number);
       return;
     }
     const W = (1 - f) * (1 - f) * wa + f * f * we;
@@ -572,30 +667,56 @@ export class Cloth2 extends ClothSet {
       jx -= (d * nx) / (we * hs);
       jy -= (d * ny) / (we * hs);
     }
-    if (this.live(b)) this.give(b, this.owner[a] as number, jx, jy, 0, cx + nx * sh.radius, cy + ny * sh.radius, 0, 0);
-    else this.touched[(this.owner[a] as number) * this.bjx.length + b] = 1;
+    if (this.live(b)) {
+      aq[8] = jx;
+      aq[9] = jy;
+      aq[10] = 0;
+      aq[11] = cx + nx * sh.radius;
+      aq[12] = cy + ny * sh.radius;
+      aq[13] = 0;
+      aq[14] = 0;
+      this.give(b, this.owner[a] as number);
+    } else this.touched[(this.owner[a] as number) * this.bjx.length + b] = 1;
   }
 
 
 
   /** As in space: a free point moves out (the body takes its momentum); a held one pushes the body back out. */
-  private pushOut(i: number, b: number, nx: number, ny: number, depth: number, mu: number, hs: number): void {
+  private pushOut(i: number, b: number): void {
+    const hs = this.hsub;
+    const aq = this.ar;
+    const nx = aq[0] as number;
+    const ny = aq[1] as number;
+    const depth = aq[3] as number;
+    const mu = aq[4] as number;
     const wp = this.w[i] as number;
     const x = this.x[i] as number;
     const y = this.y[i] as number;
     const moving = this.live(b);
     if (moving && (wp === 0 || this.taut[i] === 1)) {
-      const wb = this.bodyWn(b, x, y, nx, ny);
+      aq[11] = x;
+      aq[12] = y;
+      this.bodyWn(b);
+      const wb = aq[21] as number;
       if (!(wb > 0)) return;
       const k = depth / wb / this.hStep;
-      this.give(b, this.owner[i] as number, -nx * k, -ny * k, 0, x, y, 0, this.hStep);
+      aq[8] = -nx * k;
+      aq[9] = -ny * k;
+      aq[10] = 0;
+      aq[13] = 0;
+      aq[14] = this.hStep;
+      this.give(b, this.owner[i] as number);
       return;
     }
     if (wp === 0) return;
     let mx = depth * nx;
     let my = depth * ny;
     const o = this.o2;
-    if (moving) this.bodyV(b, x, y, 0, this.scratch);
+    if (moving) {
+      aq[11] = x;
+      aq[12] = y;
+      this.bodyV(b, this.scratch);
+    }
     o[0] = moving ? (this.scratch[0] as number) : 0;
     o[1] = moving ? (this.scratch[1] as number) : 0;
     const rx = x + mx - (this.px[i] as number) - (o[0] as number) * hs;
@@ -613,14 +734,20 @@ export class Cloth2 extends ClothSet {
     this.y[i] = y + my;
     if (moving) {
       const k = 1 / (wp * hs);
-      this.give(b, this.owner[i] as number, -mx * k, -my * k, 0, x, y, 0, 0);
+      aq[8] = -mx * k;
+      aq[9] = -my * k;
+      aq[10] = 0;
+      aq[11] = x;
+      aq[12] = y;
+      aq[13] = 0;
+      aq[14] = 0;
+      this.give(b, this.owner[i] as number);
     } else this.touched[(this.owner[i] as number) * this.bjx.length + b] = 1;
   }
 }
 
-/** Half the largest distance across a shape in the plane (a circle's radius; a polygon's half diagonal). */
-function reach2(sh: { readonly kind: number; readonly radius: number; readonly wx: Float64Array; readonly wy: Float64Array }): number {
-  if (sh.kind === 0) return sh.radius;
+/** Half the largest distance across a polygon in the plane (its half diagonal), into `out[at]`. */
+function polyReach(sh: { readonly wx: Float64Array; readonly wy: Float64Array }, out: Float64Array, at: number): void {
   let x0 = Infinity;
   let y0 = Infinity;
   let x1 = -Infinity;
@@ -631,5 +758,5 @@ function reach2(sh: { readonly kind: number; readonly radius: number; readonly w
     y0 = Math.min(y0, sh.wy[k] as number);
     y1 = Math.max(y1, sh.wy[k] as number);
   }
-  return 0.5 * Math.sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0));
+  out[at] = 0.5 * Math.sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0));
 }
