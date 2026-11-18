@@ -6,7 +6,7 @@
  * The crackle (`sound = true`) is checked in physics-fire-sound.test.ts.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { CommandRegistry, Figure, geometry, physics, physicsOf, registerAnimation, registerFunctions, registerLists, registerNumbers, registerPhysics, setPhysicsKernels } from '../../src/index';
+import { CommandRegistry, Figure, geometry, physics, physics3Of, physicsOf, registerAnimation, registerFunctions, registerLists, registerNumbers, registerPhysics, registerSpace, setPhysicsKernels } from '../../src/index';
 
 const REG = (() => {
   const r = new CommandRegistry();
@@ -835,11 +835,47 @@ describe('errors: B020 not_burnable, B021 no_fire_grid, ignite range (errors.md 
     expect(fail('d = Body(Box((9, 1), 1, 1), burns = "yes")').kind).toMatch(/no_matching_form|bad_property_value/);
   });
 
-  it('more than 64 burnable things in a figure: the 65th is ignored, with no refusal', () => {
+  // design 11.3: "Over a limit, the line is refused with `limit`", and the table gives "Burnable things | 64". (The first version
+  // of this test said the 65th is ignored with no refusal, which the table's own rule contradicts: findings PH-19.)
+  const burner = (k: number): string => `b${k} = Body(Box((${(k % 20) * 0.2 - 2}, ${0.5 + Math.floor(k / 20) * 0.3}), 0.1, 0.1), burns = true)`;
+
+  it('the 65th thing with burns is refused with limit (errors.md 3), naming the 64; the 64 before it are accepted and play', () => {
     const lines = ['g = Ground()', 'cold = Fire(Box((0, 2), 4, 4), 16)'];
-    for (let k = 0; k < 66; k++) lines.push(`b${k} = Body(Box((${(k % 20) * 0.2 - 2}, ${0.5 + Math.floor(k / 20) * 0.3}), 0.1, 0.1), burns = true)`);
+    for (let k = 0; k < 64; k++) lines.push(burner(k));
     all(lines);
+    const e = fail(burner(64));
+    expect(e.kind).toBe('limit');
+    expect(e.message).toContain('64');
+    expect(f.get('b64')).toBeUndefined();
     play(1);
+    expect(f.takeWarnings().map((w) => w.kind)).not.toContain('unstable_world');
+  });
+
+  it('every kind of burnable thing counts toward the 64: bodies of a list, a cloth and a solid shape, by `burns = …` or `with burns`', () => {
+    all(['g = Ground()', 'cold = Fire(Box((0, 2), 4, 4), 16)']);
+    for (let k = 0; k < 60; k++) all([burner(k)]);
+    // a list of three bodies is three things: 63
+    all(['row = Bodies([Box((-1, 4), 0.2, 0.2), Box((0, 4), 0.2, 0.2), Box((1, 4), 0.2, 0.2)])', 'row with burns = 2']);
+    // a cloth is one: 64
+    all(['flag = Cloth(Box((0, 3), 1, 1), 6, 4, pins = "top", burns = 1)']);
+    // the 65th, whatever it is
+    expect(fail(burner(61)).kind).toBe('limit');
+    all(['plank = Box((3, 1), 1, 0.2)', 'plank with solid = true']);
+    expect(fail('plank with burns = true').kind).toBe('limit');
+    expect(fail('late = Cloth(Box((-3, 3), 1, 1), 6, 4, pins = "top", burns = 2)').kind).toBe('limit');
+    // things that do not burn are not counted, and a thing already counted can be changed
+    all(['calm = Body(Box((2, 5), 0.2, 0.2))', 'calm with burns = false', 'b3 with burns = 5', burner(3)]);
+    expect(f.get('plank')).toBeDefined();
+  });
+
+  it('turning burns off frees a place: the 65th is then accepted', () => {
+    const lines = ['g = Ground()', 'cold = Fire(Box((0, 2), 4, 4), 16)'];
+    for (let k = 0; k < 64; k++) lines.push(burner(k));
+    all(lines);
+    expect(fail(burner(64)).kind).toBe('limit');
+    all(['b0 with burns = false']);
+    all([burner(64)]);
+    expect(fail(burner(65)).kind).toBe('limit');
   });
 });
 
@@ -1059,5 +1095,220 @@ describe('a fire in a figure with other physics (design 9.4, 9.7)', () => {
       }
     }
     expect(mx / m).toBeGreaterThan(0.2);
+  });
+});
+
+/** The `@input physics` lines of a figure's script, in order. */
+const inputs = (fig: Figure): string[] => fig.toScript().split('\n').filter((l) => l.startsWith('@input physics'));
+/** The film time a line was logged at. */
+const atOf = (line: string): number => Number(line.slice(line.lastIndexOf(' ') + 1));
+
+describe('hit handlers run their physics actions at the hit, not at the clock (findings PH-16; design 10)', () => {
+  // a ball falls on to the ground at 0.55 s, bounces and lands again at 0.69 s; `wood` lies apart, in the fire's box
+  const SCENE = ['g = Ground()', 'cold = Fire(Box((0, 2), 4, 4), 32)', 'wood = Body(Box((1.4, 0.1), 1, 0.2), mass = 1, burns = 2)', 'ball = Body(Circle((-1, 1.5), 0.2))', 'bur = wood.burnt', 'wy = wood.y'];
+
+  /** Played to `to` frame by frame; sought from 0; and a reload of the played script, sought: the three films and their `@input` lines. */
+  const threeFilms = (handler: string, to: number): { played: Figure; sought: Figure; reloaded: Figure } => {
+    const lines = [...SCENE, `on ball hit: ${handler}`];
+    const played = make(lines);
+    play(to, played);
+    const sought = make(lines);
+    seek(sought, to);
+    const { figure: reloaded } = Figure.fromScript(played.toScript(), { commands: REG });
+    seek(reloaded, to);
+    return { played, sought, reloaded };
+  };
+
+  for (const handler of ['Ignite(wood)', 'Push(wood, (0, 2))', 'Sleep(wood)', 'Push(wood, (0.5, 1), (1.6, 0.1))']) {
+    it(`on ball hit: ${handler}: seek from 0 to 6 s equals play to 6 s (hash and @input lines), and so does a reload of the played script`, () => {
+      const { played, sought, reloaded } = threeFilms(handler, 6);
+      const lines = inputs(played);
+      // the handler ran once for each hit of the ball (two within the first second), at the time of the hit
+      expect(lines.length, lines.join('\n')).toBeGreaterThanOrEqual(2);
+      for (const l of lines) expect(atOf(l), l).toBeLessThan(1.5);
+      expect(inputs(sought)).toEqual(lines);
+      expect(inputs(reloaded)).toEqual(lines);
+      expect(hash(sought)).toBe(hash(played));
+      expect(hash(reloaded)).toBe(hash(played));
+      for (const p of ['bur', 'wy']) {
+        expect(sought.value(p), p).toEqual(played.value(p));
+        expect(reloaded.value(p), p).toEqual(played.value(p));
+      }
+    });
+  }
+
+  it('the actions take effect: each handler gives another film than the figure with none', () => {
+    const none = make(SCENE);
+    play(3, none);
+    for (const handler of ['Ignite(wood)', 'Push(wood, (0, 2))', 'Sleep(wood)']) {
+      const g = make([...SCENE, `on ball hit: ${handler}`]);
+      play(3, g);
+      expect(hash(g), handler).not.toBe(hash(none));
+    }
+  });
+
+  it('seeking back over the hits and forward again, and across them in steps, keeps the film', () => {
+    const lines = [...SCENE, 'on ball hit: Push(wood, (0, 2))'];
+    const a = make(lines);
+    play(4, a);
+    const b = make(lines);
+    for (const t of [0.3, 1.2, 0.6, 3, 0.1, 4]) seek(b, t);
+    expect(hash(b)).toBe(hash(a));
+    expect(inputs(b)).toEqual(inputs(a));
+    // the hits at 0.55 s and 0.69 s are in the log once each, however often the film passed them
+    expect(inputs(b).length).toBe(inputs(a).length);
+  });
+
+  it('a handler that pushes does not push twice on a reload: the played script, played again, has the same lines and the same wood', () => {
+    const a = make([...SCENE, 'on ball hit: Push(wood, (0, 2))']);
+    play(2, a);
+    const lines = inputs(a);
+    const { figure: b } = Figure.fromScript(a.toScript(), { commands: REG });
+    play(2, b);
+    expect(inputs(b)).toEqual(lines);
+    expect(lines.length).toBe(2);
+    expect(b.value('wy')).toBe(a.value('wy'));
+    expect(b.value('bur')).toBe(a.value('bur'));
+  });
+
+  it('Wake and Sleep as lines are in the log at the film time and play back exactly', () => {
+    const lines = ['g = Ground()', 'b = Body(Circle((0, 3), 0.2))', 'c = Body(Circle((2, 3), 0.2))', 'by = b.y', 'ba = b.asleep'];
+    const a = make(lines);
+    play(0.5, a);
+    all(['Sleep(b)'], a);
+    play(1, a);
+    expect(a.value('ba')).toBe(true);
+    const sleptAt = a.value('by') as number;
+    play(1.5, a);
+    expect(a.value('by')).toBe(sleptAt);
+    all(['Wake(b)'], a);
+    play(2.5, a);
+    expect(a.value('ba')).toBe(false);
+    expect(a.value('by') as number).toBeLessThan(sleptAt);
+    expect(inputs(a).filter((l) => /physics (sleep|wake) b at /.test(l)).map((l) => l.split(' ')[2])).toEqual(['sleep', 'wake']);
+    const { figure: b } = Figure.fromScript(a.toScript(), { commands: REG });
+    seek(b, 2.5);
+    expect(hash(b)).toBe(hash(a));
+    seek(b, 0.2);
+    seek(b, 1.2);
+    expect(b.value('ba')).toBe(true);
+    seek(b, 2.5);
+    expect(hash(b)).toBe(hash(a));
+  });
+});
+
+describe('hit handlers in space (findings PH-16: every physics action, in the plane and in space)', () => {
+  const REG3 = (() => {
+    const r = new CommandRegistry();
+    geometry.registerGeometry(r);
+    registerNumbers(r);
+    registerFunctions(r);
+    registerAnimation(r);
+    registerLists(r);
+    registerSpace(r);
+    registerPhysics(r);
+    return r;
+  })();
+  const SCENE3 = ['g = Ground()', 'b = Body(Sphere((0, 0, 3), 0.25), bounce = 0.6)', 'c = Body(Sphere((2, 0, 6), 0.25))', 'cx = c.x', 'cz = c.z'];
+  const make3 = (lines: readonly string[]): Figure => {
+    const g = new Figure({ commands: REG3 });
+    all(lines, g);
+    return g;
+  };
+  const hash3 = (fig: Figure): string => physics3Of(fig).worldHash();
+
+  for (const handler of ['Push(c, (0, 0.05, 0))', 'Sleep(c)', 'Push(c, (0.02, 0, 0.03), (2, 0, 6.1))']) {
+    it(`on b hit: ${handler}: seek from 0 equals play, and a reload of the played script, with the same @input lines`, () => {
+      const lines = [...SCENE3, `on b hit: ${handler}`];
+      const a = make3(lines);
+      play(4, a);
+      const logged = inputs(a);
+      expect(logged.length, logged.join('\n')).toBeGreaterThanOrEqual(2);
+      // the ball lands at about 0.75 s and bounces on: the lines are at the hits, not at the end of the seek (4 s)
+      for (const l of logged) expect(atOf(l), l).toBeLessThan(3);
+      const b = make3(lines);
+      seek(b, 4);
+      expect(inputs(b)).toEqual(logged);
+      expect(hash3(b)).toBe(hash3(a));
+      const { figure: c } = Figure.fromScript(a.toScript(), { commands: REG3 });
+      seek(c, 4);
+      expect(inputs(c)).toEqual(logged);
+      expect(hash3(c)).toBe(hash3(a));
+      const none = make3(SCENE3);
+      play(4, none);
+      expect(hash3(none), 'the action did something').not.toBe(hash3(a));
+    });
+  }
+
+  it('Wake and Sleep as lines in space are logged and play back exactly', () => {
+    const a = make3(['g = Ground()', 'b = Body(Sphere((0, 0, 3), 0.25))', 'bz = b.z', 'ba = b.asleep']);
+    play(0.3, a);
+    all(['Sleep(b)'], a);
+    play(1, a);
+    expect(a.value('ba')).toBe(true);
+    all(['Wake(b)'], a);
+    play(2, a);
+    expect(a.value('bz') as number).toBeLessThan(2);
+    expect(inputs(a).map((l) => l.split(' ')[2])).toEqual(['sleep', 'wake']);
+    const { figure: b } = Figure.fromScript(a.toScript(), { commands: REG3 });
+    seek(b, 2);
+    expect(hash3(b)).toBe(hash3(a));
+  });
+});
+
+describe('a solid shape or a body that burnt away (findings PH-17; design 9.7; errors.md 4)', () => {
+  const SHELF = ['g = Ground()', 'cold = Fire(Box((0, 2), 4, 4), 32)', 'shelf = Box((0, 1), 1.6, 0.2)', 'shelf with solid = true, burns = 1', 'ball = Body(Circle((0, 1.5), 0.2))', 'by = ball.y'];
+
+  it('the ball on a burnt shelf falls: it is back on the ground well within 1.5 s of the burnt notice, and it was asleep when it was left', () => {
+    const g = make(SHELF);
+    play(3, g);
+    expect(physicsOf(g).world?.awake[2], 'the ball sleeps on the shelf').toBe(0);
+    all(['Ignite(shelf)'], g);
+    const r = firstNotice(g, 'burnt', 12, true);
+    expect(r.at).toBeDefined();
+    play((r.at as number) + 1.5, g);
+    expect(g.value('by') as number).toBeLessThan(0.3);
+  });
+
+  it('the shelf reads undefined with the reason burnt, in a figure played and in one sought; seeking back before the burn gives it back, and forward the same film', () => {
+    const lines = SHELF;
+    const a = make(lines);
+    play(2, a);
+    all(['Ignite(shelf)'], a);
+    play(8, a);
+    expect(a.get('shelf')?.cell).toMatchObject({ defined: false, reason: 'burnt' });
+    const b = Figure.fromScript(a.toScript(), { commands: REG }).figure;
+    seek(b, 8);
+    expect(b.get('shelf')?.cell).toMatchObject({ defined: false, reason: 'burnt' });
+    expect(hash(b)).toBe(hash(a));
+    seek(b, 2.5);
+    expect(b.get('shelf')?.cell.defined, 'before the burn the shelf is there').toBe(true);
+    expect(b.value('by') as number).toBeCloseTo(1.3, 1);
+    seek(b, 8);
+    expect(b.get('shelf')?.cell).toMatchObject({ defined: false, reason: 'burnt' });
+    expect(hash(b)).toBe(hash(a));
+    expect(b.value('by')).toEqual(a.value('by'));
+  });
+
+  it('a line changed after the shelf burnt away does not bring it back or start the film again', () => {
+    const g = make(SHELF);
+    play(2, g);
+    all(['Ignite(shelf)'], g);
+    play(6, g);
+    const before = g.value('by');
+    all(['other = Body(Circle((3, 2), 0.2))'], g);
+    play(7, g);
+    expect(g.get('shelf')?.cell).toMatchObject({ defined: false, reason: 'burnt' });
+    expect(g.value('by')).toBeCloseTo(before as number, 3);
+  });
+
+  it('a body that burns away lets what rested on it fall', () => {
+    const g = make(['g = Ground()', 'cold = Fire(Box((0, 2), 4, 4), 32)', 'plank = Body(Box((0, 0.1), 1.2, 0.2), mass = 1, burns = 1)', 'ball = Body(Circle((0, 0.4), 0.2))', 'by = ball.y']);
+    play(3, g);
+    expect(g.value('by') as number).toBeCloseTo(0.4, 1);
+    all(['Ignite(plank)'], g);
+    play(12, g);
+    expect(g.get('plank')?.cell).toMatchObject({ defined: false, reason: 'burnt' });
+    expect(g.value('by') as number).toBeLessThan(0.25);
   });
 });

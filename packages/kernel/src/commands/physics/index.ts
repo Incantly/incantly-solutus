@@ -11,6 +11,7 @@ import { err } from '../../errors/table';
 import { registerNotice } from '../../errors/notices';
 import { registerReasonPhrase } from '../../errors/phrases';
 import { registerWorldDriver } from '../../graph/drivers';
+import type { ObjRec } from '../../graph/core';
 import type { Figure } from '../../graph/figure';
 import { registerPropertyTypes, registerTypeStyle } from '../../graph/props';
 import type { ActionCall, ActionOutcome, CommandRegistry, LineRewrite, RuleCall } from '../../graph/registry';
@@ -44,7 +45,7 @@ import { registerFire } from './fire-reg';
 import { FIRE_COMMANDS } from './fire';
 import { crackleSource } from './crackle';
 import { registerSoundSource } from '../sound/index';
-import { CLOTH_COMMANDS } from './cloth';
+import { CLOTH_COMMANDS, isClothValue } from './cloth';
 import { registerCloth } from './cloth-reg';
 import type { BodySpec, BodyValue, Outline, WorldValue } from './types';
 import { DEFAULT_WORLD, SHOW_WORDS, isBodyValue, isWorldValue } from './types';
@@ -916,6 +917,67 @@ export function burnLineCheck(figure: unknown, line: CheckedLine): ErrorObject |
   });
 }
 
+/** The most things that burn in a figure (design 11.3; the driver keeps the same cap for a `burns` that is a formula). */
+export const MAX_BURNABLE_THINGS = 64;
+
+/** Is a `burns` setting written as a word or a number on? `undefined` for a formula, which is read while the film plays. */
+function burnsWritten(value: unknown): boolean | undefined {
+  if (typeof value === 'object' && value !== null && 'word' in value) return (value as { word: string }).word === 'true';
+  const n = value as { n?: string; v?: unknown } | undefined;
+  if (n?.n === 'bool') return n.v === true;
+  if (n?.n === 'num') return typeof n.v === 'number' && n.v > 0;
+  return undefined;
+}
+
+/** How many things of an object burn: a body (each of a list), a cloth or a solid shape, from its start and its `with burns`. */
+function burningThings(rec: ObjRec): number {
+  // a `with burns` overrides the one the thing was made with (the driver reads it so)
+  const e = rec.p.style.get('burns');
+  const styled = e && e.eval === undefined ? (e.word !== undefined ? e.word === 'true' : e.value === true || (typeof e.value === 'number' && e.value > 0)) : undefined;
+  const on = (made: number | undefined): boolean => styled ?? (made ?? 0) > 0;
+  const c = rec.cell;
+  if (!c.defined) return styled ? 1 : 0;
+  if (Array.isArray(c.value) && rec.p.type.k === 'List') return (c.value as unknown[]).filter((v) => isBodyValue(v) && on(v.spec.burns)).length;
+  if (isBodyValue(c.value)) return on(c.value.spec.burns) ? 1 : 0;
+  if (isClothValue(c.value)) return on(c.value.spec.burns) ? 1 : 0;
+  return styled ? 1 : 0;
+}
+
+/**
+ * A 65th thing with `burns` is refused with `limit`, naming the 64 (design 11.3, errors B013). Counted from what the lines
+ * write (`burns = true`, a number of seconds, `with burns = …`); a `burns` that is a formula is read while the film plays,
+ * where the driver ignores the things past the 64th.
+ */
+export function burnLimitCheck(figure: unknown, line: CheckedLine): ErrorObject | undefined {
+  if (line.op !== 'add' && line.op !== 'redefine' && line.op !== 'restyle') return undefined;
+  const recs = (figure as Figure).driverAccess().list;
+  let added: number;
+  let target: ObjRec | undefined;
+  if (line.op === 'restyle') {
+    const s = (line.style ?? []).find((x) => x.key === 'burns');
+    if (!s || burnsWritten(s.value) !== true) return undefined;
+    target = recs.find((r) => r.p.name === line.names[0]);
+    if (!target) return undefined;
+    const c = target.cell;
+    added = c.defined && Array.isArray(c.value) ? c.value.length : 1;
+  } else {
+    const e = line.expr as { n?: string; spec?: { name?: string }; args?: readonly { param?: { name?: string }; omitted?: boolean; expr?: unknown }[] } | undefined;
+    if (e?.n !== 'command' || (e.spec?.name !== 'Body' && e.spec?.name !== 'Cloth')) return undefined;
+    const b = e.args?.find((a) => a.param?.name === 'burns' && !a.omitted);
+    if (!b || burnsWritten(b.expr) !== true) return undefined;
+    target = line.existing !== undefined ? recs.find((r) => r.id === line.existing) : undefined;
+    const list = line.type?.k === 'List';
+    const first = e.args?.[0]?.expr as { n?: string; items?: readonly unknown[] } | undefined;
+    added = list ? (first?.n === 'list' && first.items ? first.items.length : 1) : 1;
+  }
+  let others = 0;
+  for (const r of recs) if (r !== target) others += burningThings(r);
+  if (others + added <= MAX_BURNABLE_THINGS) return undefined;
+  return err('limit', { line: line.line, col: 1, endCol: 1 }, { max: MAX_BURNABLE_THINGS, what: 'things that burn in a figure', limit: 'burnable things', got: others + added }, {
+    hint: `The figure already has ${others} things that burn, so at most ${Math.max(0, MAX_BURNABLE_THINGS - others)} more can. Let fewer things burn, or use one body for the whole pile.`, recovery: 'rewrite', fingerprintKey: 'limit:burnable',
+  });
+}
+
 export function physicsLineCheck(_figure: unknown, line: CheckedLine): ErrorObject | undefined {
   const expr = line.expr as { n?: string; spec?: { name?: string } } | undefined;
   const isWorld = expr?.n === 'command' && expr.spec?.name === 'World';
@@ -1010,6 +1072,7 @@ export function registerPhysics(registry: CommandRegistry): void {
   for (const k of ['force', 'torque', 'group']) registerPropertyTypes(k, ['Body3']);
   registerLineCheck(physicsLineCheck);
   registerLineCheck(burnLineCheck);
+  registerLineCheck(burnLimitCheck);
   registerLineRewriter(worldRewrite);
   registerLineRewriter(bodyWithRewrite);
   registerScriptTail((figure) => [...physicsOf(figure as Figure).inputLines(), ...physics3Of(figure as Figure).inputLines()]);

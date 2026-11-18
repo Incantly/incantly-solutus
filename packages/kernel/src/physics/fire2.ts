@@ -198,18 +198,26 @@ export function confine(g: Smoke2, h: number): void {
       fcy[c] = -k * (gx / m) * w;
     }
   }
+  // a face takes at most half a cell's worth of speed a step: dv ≤ 0.5 min(dx, dy) / h (findings PH-18)
+  const cap = (0.5 * Math.min(g.dx, g.dy)) / h;
   for (let j = 0; j < n; j++) {
     for (let i = 1; i < n; i++) {
       const c = j * n + i;
       if ((own[c - 1] as number) >= 0 || (own[c] as number) >= 0) continue;
-      u[j * W + i] = (u[j * W + i] as number) + h * 0.5 * ((fcx[c - 1] as number) + (fcx[c] as number));
+      let dv = h * 0.5 * ((fcx[c - 1] as number) + (fcx[c] as number));
+      if (dv > cap) dv = cap;
+      else if (dv < -cap) dv = -cap;
+      u[j * W + i] = (u[j * W + i] as number) + dv;
     }
   }
   for (let j = 1; j < n; j++) {
     for (let i = 0; i < n; i++) {
       const c = j * n + i;
       if ((own[c - n] as number) >= 0 || (own[c] as number) >= 0) continue;
-      v[j * n + i] = (v[j * n + i] as number) + h * 0.5 * ((fcy[c - n] as number) + (fcy[c] as number));
+      let dv = h * 0.5 * ((fcy[c - n] as number) + (fcy[c] as number));
+      if (dv > cap) dv = cap;
+      else if (dv < -cap) dv = -cap;
+      v[j * n + i] = (v[j * n + i] as number) + dv;
     }
   }
 }

@@ -33,6 +33,8 @@ const OMEGA = 1.8;
 const START_PROJECTIONS = 10;
 /** What an over-relaxed pass keeps of a cell's old value. */
 const KEEP = 1 - OMEGA;
+/** The most the smoke is scaled by in a step to keep its mass: 0.5% (more with `swirl`, see `advectSmoke`). */
+const SCALE_CAP = 0.005;
 /** Air, kg per m³; the plane is 1 m deep. */
 export const AIR_DENSITY = 1.2;
 /** Drag number of a blunt body in a flow. */
@@ -845,8 +847,11 @@ export class Smoke2 {
     if (after > 1e-12 && before > 1e-12 && !(this.hasSource && this.making)) {
       const out = h * this.outflow(s) / (this.dx * this.dy);
       let f = (before - out) / after;
-      if (f > 1.005) f = 1.005;
-      else if (f < 0.995) f = 0.995;
+      // a swirling plume turns, and carrying it back along the flow loses more than a plain plume does (0.4% to 1% a step
+      // against 0.05%): the cap grows with `swirl` (findings PH-18); with no swirl it is the 0.5% it always was
+      const cap = this.swirl > 0 ? SCALE_CAP * (1 + this.swirl) : SCALE_CAP;
+      if (f > 1 + cap) f = 1 + cap;
+      else if (f < 1 - cap) f = 1 - cap;
       if (f !== 1) for (let c = 0; c < s2.length; c++) s2[c] = (s2[c] as number) * f;
       this.lastScale = f;
     }
