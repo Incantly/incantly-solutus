@@ -142,3 +142,80 @@ Same scenes as section 5, after the change (Node, ms: mean / 95% / worst, bounce
 
 The 2,000 balls' slow frames are slower while the pile lands (the small steps do more work per contact) but it sleeps
 instead of moving for good. The broad and narrow phases are now the largest cost there (about a third of the step).
+
+## 8. Finishing cloth (2026-11-18)
+
+What is left from round 9, and what papers and other engines say about each part. Chrome numbers are ms a frame with
+the CPU slowed 4 times; goals are design 11.2.
+
+| Scene | Now | Goal |
+|---|---|---|
+| Sheet 32 × 32 | 3.9 | 3 |
+| Flag 64 × 32 in wind | 5.5 | 6 |
+| Sheet over 40 bodies | 10.1 | 8 |
+| Cloth that hits itself | 8.4 | 8 |
+| Two cloths | 12.4 | 8 |
+| Cloth in water | 12.1 | 8 |
+
+| Source | What it gives us |
+|---|---|
+| Small Steps in Physics Simulation (Macklin et al., 2019), [PDF](https://mmacklin.com/smallsteps.pdf) | Many small steps with one solve pass each beat one step with many passes, for the same work: less stretch, stiffer cloth. Our cloth already takes 4 small steps; each must do one pass only. |
+| Long Range Attachments (Kim, Chentanez and Müller, 2012), [PDF](https://matthias-research.github.io/pages/publications/sca2012cloth.pdf) | Tethers: each point stays within its rest distance of a pin. We have them. They do not help when the heavy part is the thing that hangs (a ball on a rope), because the ball is not a pin. |
+| Vertex Block Descent (Chen et al., 2024), [arXiv 2403.06321](https://arxiv.org/abs/2403.06321) | XPBD's known weakness is a large mass ratio: the paper shows XPBD failing at 1 : 2,000 where its own solver holds. It also finds hits once a step, not every small step, and stays stable. For us: a ball on a light rope needs the ball inside an exact solve, not one more pass. |
+| Real-Time Cloth Simulation Using WebGPU (2025), [arXiv 2507.11794](https://arxiv.org/abs/2507.11794) | The GPU wins only far above our sizes (4,096 points). |
+| NVIDIA PhysX 3 cloth manual, [docs](https://documentation.help/NVIDIA.PhysX-SDK/Cloth.html) | Links come in four kinds (along, across, shear, bend), each with its own stiffness; bend can be soft. Tethers cost almost nothing next to more passes. Hit shapes are moved smoothly through the small steps from their poses at the step's two ends; spheres and capsules are the cheap shapes. Cloth against other cloth is checked once a frame, after every cloth has moved. |
+| Jolt Physics, [repo](https://github.com/jrouwe/joltphysics) | Soft bodies (cloth) with long range attachments, in a deterministic engine. |
+| Box2D v3, Rapier | No cloth, so nothing to learn here. |
+
+The fixes this gives, in order:
+
+1. **Merge integration into the cloth branch, then recheck pins to bodies.** Since the soft step (section 7) bodies take
+   `ceil(passes / 2)` small steps of their own; cloth takes 4. A body held by pins must take the cloth's small steps
+   (design 9.5), so both counts must agree in a world with pinned bodies.
+2. **The heavy ball on a light rope.** Put the pinned body into the rope's exact chain solve (the three-band solve of
+   9.2.1) as one more point, with its real mass and the anchor's offset. One direct solve handles any mass ratio, where
+   passes cannot (Vertex Block Descent, figure 20).
+3. **Hits found once a step.** Make the list of nearby body shapes, solids and drop cells once a step; each small step
+   only pushes points out against that list, with shapes moved through the small steps as PhysX does.
+4. **One pass a small step,** bend links every second small step (PhysX keeps bend soft), shear only where `stretch`
+   is below 1.
+5. **Cloth against cloth once a step** (PhysX), not every small step.
+6. **Drops against cloth by the shared grid's cells only,** so a sheet of 4,096 points is not visited by 2,000 drops.
+
+**When cloth moves to Rust.** After these fixes, any cloth row more than 25% over its goal in Chrome with the CPU 4×
+slower moves the cloth solver to Rust compiled to WebAssembly (sections 4 and 5). The rest stays TypeScript. The tools
+(rustup, cargo, the wasm32 target) need the product owner's approval first.
+
+## 9. Fire, and smoke in space (2026-11-18)
+
+### Papers
+
+| Paper | Source | What it gives us |
+|---|---|---|
+| Visual Simulation of Smoke (Fedkiw, Stam and Jensen, 2001) | [PDF](http://physbam.stanford.edu/papers/stanford2001-01.pdf) | Heat lifts and thick smoke sinks: lift = `α (T − T_air) − β s`. Vorticity confinement puts back the curls the grid smears, so smoke rolls and flames flicker. |
+| Physically Based Modeling and Animation of Fire (Nguyen, Fedkiw and Jensen, 2002) | [PDF](https://physbam.stanford.edu/~fedkiw/papers/stanford2002-02.pdf) | Fuel gas and hot products as two parts of the flow; the gas grows as fuel burns; heat lifts; flames coloured by black-body light; solid fuel can catch fire. We take the colour, the lift and burning solids; the moving flame front (a level set) is more than our grid needs. |
+| Real-Time Fluid Dynamics for Games (Stam, 2003) | section 3 | The grid step we already run. |
+| Interactive Wood Combustion for Botanical Tree Models (Pirk et al., 2017) | [PDF](https://storage.googleapis.com/pirk.io/papers/Pirk.etal-2017-WoodCombustion.pdf) | Burning at interactive rates: heat spreads along the wood and to the air, the wood loses mass, branches weaken, bend and break when the strain passes a limit. |
+| FlameForge: Combustion of Generalized Wooden Structures (2024) | [arXiv 2412.16735](https://arxiv.org/abs/2412.16735) | A full recipe with numbers: the solid's own temperature, heat swapped with the air at a set rate each way, cooling by `T⁴`, burning that starts at a lower temperature and is full at an upper one (smoothstep between), mass lost, heat and smoke made in step with the mass burnt and put into the air cells next to the solid. Its air grid is 5 times coarser than the solid's. |
+| Melting and Burning Solids into Liquids and Gases (Losasso et al., 2006) | [PubMed 16640248](https://pubmed.ncbi.nlm.nih.gov/16640248/) | Solids turning into gas as they burn; for later. |
+
+### Other engines and tools
+
+| Tool | What we learn |
+|---|---|
+| Blender's gas simulation (manual only, its code is GPL and not read): [flow](https://docs.blender.org/manual/en/latest/physics/fluid/type/flow.html), [domain](https://docs.blender.org/manual/en/latest/physics/fluid/type/domain/settings.html) | A source makes smoke, fire, or both. Fire settings: fuel amount, reaction speed (fast burning makes short flames, slow burning tall ones), smoke made from burnt fuel, extra swirl for flames, the hottest flame temperature. Lift has two parts, from density and from heat. These are the settings a teacher needs, so our names follow the same ideas. |
+| Box2D v3, Rapier, Jolt, PhysX cloth | No fire or smoke. |
+
+### What this means for us
+
+- Fire is our smoke grid (design 9.4) with three more values in each cell: temperature, fuel and the smoke itself.
+  Burning turns fuel into heat and smoke; heat lifts the flow and cools by `T⁴`; colour comes from temperature.
+- Vorticity confinement goes into smoke too, as the `swirl` setting.
+- Burnable bodies, cloth and walls get a temperature and a fuel amount of their own, swap heat with the air cells they
+  touch, and burn between two temperatures (FlameForge). Burnt cloth links tear; a burnt body is gone.
+- Water puts fire out: drops in a hot cell take its heat and its fuel.
+- In space the same grid runs in 3D, in the worker, at 24 × 24 × 24 (32 × 32 × 32 at most), and is drawn by ray
+  marching a 3D texture in the WebGL 2 painter.
+- Speed guess: 2D fire at 64 × 64 adds about 40% to smoke (two more values to carry). 3D at 24³ is about 2 to 3 ms a
+  step in Node, so 8 to 12 ms in Chrome with the CPU 4× slower: at or over the worker's 8 ms. The 3D grid is the
+  second Rust candidate, after cloth, by the same 25% rule.

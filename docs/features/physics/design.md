@@ -203,6 +203,9 @@ The usual way to write a car is four `Wheel` lines and one `Vehicle` line. `moto
 | `Water` | `(level: Number)`, `(region, level)` | Still water: bodies float by Archimedes' rule, cheap |
 | `Waves` | `(box: Polyhedron, n)` in space; `(segment, n)` in the plane | A water surface on an `n` by `n` grid (or `n` points) that waves when hit |
 | `Smoke` | `(region, n)`; named `source`, `heat`, `wind`, `until` | Smoke and air on an `n` by `n` grid (4 to 64) in a box of the plane; read `sm.mass`, `sm.speed`, `sm.at(x, y)` |
+| `Smoke` | `(box: Polyhedron, n)` in space; named as in the plane, and `swirl` | Smoke on an `n` × `n` × `n` grid (4 to 32) in a box of space (9.8); `swirl` (0 to 10, also in the plane) keeps its curls |
+| `Fire` | `(region, n)`, `(box: Polyhedron, n)`, `(at: Point)`, `(at: Point3)`; named `source`, `fuel`, `burn`, `heat`, `smoke`, `swirl`, `wind`, `until`, `sound` | Fire and its smoke on a smoke grid (9.7); read `f.temperature(x, y)`, `f.burning`, `f.fuel`, and every smoke readout |
+| `Ignite` | `(thing)` | Sets a burnable body, cloth or solid shape on fire now; a handler step, logged as `@input physics ignite …` |
 
 All of them hit solid shapes and bodies (section 9). Readouts: `l.count`, `l.level` for a liquid; `wa.level` for still water; `w.level`, `w.speed` and `w.height(x, y)` for waves (9.3). `Waves` takes `damping` named, and in the plane `depth`.
 
@@ -564,6 +567,92 @@ Liquid drops and cloth points are both moving points. So they share one neighbou
 
 How it is built (round 6, `packages/sdk/src/worker/`): the worker holds a headless copy of the figure, loaded from the page's script whenever the page's lines change (its `@input` log included). Each frame the page sends the film time, the free values that changed and the `@input` lines made on the page since (pushes, grabs, restarts, which the page's driver makes instead of applying), and gets back the cells of every object the world owns, with the drops' and forces' typed arrays moved. One frame is in flight at a time, so a slow worker makes the film slower, not a queue longer. The page's driver steps nothing meanwhile; it writes the cells it is sent. If the worker stops, the page takes the world back, rebuilds it from its start with the same log and catches up (`worker_crashed`). A figure with liquid or waves goes to the worker, in the plane or in space (round 7: the host talks to whichever driver holds the world), and its smoke goes with it; a figure with smoke and no liquid or waves stays on the page, which its 0.5 ms a frame fits (9.4); cloth joins the worker in round 9. When the worker's own `@input` log changes (a car's pedal or a slider with `rerun = continue` moved while the film played, which the worker logs itself), it is sent back with the cells, and the page saves it with its own lines not yet sent; so a line edit that reloads the worker's script keeps them (round 7, fixing a round 6 gap).
 
+### 9.7 Fire (`Fire`, `Ignite`, `burns`)
+
+Status: proposed (round 11). Research: `docs/research/physics-papers.md` 9.
+
+Fire is the smoke grid of 9.4 with two more values in each cell: **temperature** `T` (°C above the air) and **fuel**
+`F`. The smoke value `s` stays. The same grid runs in the plane and in space (9.8).
+
+```text
+f = Fire((0, 0))                                  # a camp fire at the origin: a 2 m × 4 m grid, 48 cells across
+f = Fire(Box((0, 2), 4, 4), 64, source = Circle((0, 0.3), 0.3), fuel = 2, burn = 1)
+f = Fire((0, 0, 0))                               # in space: 2 × 2 × 3 m, 24 cells a side
+log = Body(Box((0, 0.2), 1, 0.2), burns = true)   # a log that catches fire from the flames
+flag with burns = true                            # a cloth that burns: its burnt links tear
+on button click: Ignite(log)
+```
+
+**Named arguments.**
+
+| Name | What it does | Default |
+|---|---|---|
+| `source` | Where fuel comes in: a point, circle or polygon (a point, sphere or solid in space) | a small circle at the point, for `Fire(at)` |
+| `fuel` | Fuel made at the source, per second, 0 to 10 | 1 |
+| `burn` | How fast fuel burns, 0.1 to 10: fast burning makes short flames, slow burning tall ones | 1 |
+| `heat` | The hottest a flame gets, 100 to 2,000 °C; hotter rises faster | 1,000 |
+| `smoke` | Smoke made per unit of fuel burnt, 0 to 5 | 1 |
+| `swirl` | Curls kept by vorticity confinement, 0 to 10 | 2 for fire, 0 for smoke |
+| `wind`, `until` | As for smoke (9.4) | |
+| `sound` | `true` plays a soft crackle that follows how much burns (the sound area's `Noise`, its pops from the figure's seed); off unless asked | `false` |
+
+**The step** (60 times a second of film, as smoke):
+
+1. Marks, carrying and the wind, as smoke (9.4 steps 1 and 2). `T`, `F` and `s` are carried along the flow.
+2. **Lift:** `a = α T − β s`, upward (Fedkiw, Stam and Jensen 2001), with `α` set so the hottest flame lifts at
+   `heat / 100` m/s² and `β = 0.5` m/s² per unit of smoke. The fire's `heat` replaces the smoke's `heat` lift.
+3. **Swirl:** vorticity confinement, force `ε dx (N × ω)` with `ε = swirl`, `ω` the curl of the flow and `N` the unit
+   gradient of `|ω|`.
+4. **Burning:** where `F > 0` and `T` is above the ignite point (150 °C), burn
+   `r = min(F, burn × h × ξ)`, `ξ` the smoothstep from 150 °C to 400 °C (FlameForge). Then `F −= r`,
+   `T += heat × r × 2`, capped at `heat`, and `s += smoke × r`. The source puts in fuel and keeps its cells at `heat`
+   while `until` has not passed, so it lights.
+5. **Cooling:** `T −= c T⁴ / heat³ × h` (black-body cooling, Nguyen 2002), `c = 3` per second, and `T` never below 0.
+6. Solid faces, bodies and the projection, as smoke (9.4 steps 4 and 5).
+7. **Water:** a liquid drop in a cell takes up to 50 °C and all the fuel of that cell each step; so water puts a fire
+   out. The drop is not changed (no steam yet).
+
+**Burnable things.** `burns = true` (or a number: the fuel it holds, in seconds of burning; `true` is 10 s per kg)
+on a body, a cloth or a solid shape. Each one gets its own temperature `Tm`, read as `b.temperature`.
+
+- **Heat swaps** with the air cells it touches: `Tm += (T − Tm) φm h`, and the cells get `(Tm − T) φa h` back, with
+  `φm = 0.5` and `φa = 2` per second (FlameForge eq. 6, made faster for lessons).
+- **Burning** starts when `Tm` passes `ignite` (named, default 250 °C) or at `Ignite(b)`. It burns at the rate of
+  step 4 with `ξ` from `Tm`, puts the heat and smoke it makes into the cells it touches, and keeps itself hot.
+- **A body** loses up to 80% of its mass as it burns and darkens to char. `b.burnt` goes from 0 to 1; at 1 the body
+  leaves the world: it reads `undefined` with the reason `burnt`, its joints break (`broken`), and the notice `burnt`
+  shows once.
+- **A cloth** burns cell by cell (each quad has its own `Tm`, from the grid at its centre). A burnt cell's links tear,
+  as `tears` (9.5) would; a cloth that burns tears even without `tears`. `c.burnt` is the part burnt.
+- **A solid shape** burns as a body would, and when it is burnt it stops being solid.
+- Only things inside a fire grid can burn. `Ignite(b)` with `b` outside every fire grid is refused with
+  `no_fire_grid` (B021), and `Ignite` of a thing without `burns` with `not_burnable` (B020).
+
+**Drawing.** Each cell's colour is the black-body colour of its temperature (dark red at 500 °C, orange, yellow, white
+at 1,500 °C), added over the picture, with the smoke grey on top by its density (9.4's image). In space, the WebGL 2
+painter ray-marches a 3D texture of `T` and `s` through the grid's box, front to back, with the depth of the solids
+(12.1); without WebGL 2, the software painter draws 12 slices facing the camera. PNG comes from the GPU; SVG gets the
+slices as images.
+
+**The film.** Grids save in checkpoints (10.3) with `Tm` and `burnt` of every burnable thing. `Ignite` steps are
+`@input` lines, so seek and replay are exact. Burning a body changes the world's list of bodies at a step; that is a
+state change the solver already handles (a weld that breaks).
+
+### 9.8 Smoke and fire in space
+
+Status: proposed (round 11).
+
+`Smoke(box, n)` and `Fire(box, n)` in space run the same step on a cubic grid of `n` cells a side (4 to 32; one grid in
+space per figure). Flow is staggered as in the plane, with a third speed on the faces across `z`; the pressure solve is
+the same red-black passes. The grid in space keeps its values in `Float32Array` (the arithmetic stays Float64, so the
+film stays exact) to halve the memory and the copy. It runs in the physics worker with the rest of the world, and its
+`T` and `s` go to the page as one moved buffer each frame.
+
+- Cloth in a grid feels its flow as wind, in space as in the plane (9.5 Air), so a flag over a fire ripples.
+- Bodies feel its drag as in 9.4.
+- Checkpoints of a grid in space are kept every 1 s, not every 0.5 s: a 24³ grid is about 390 KB each, so 60 s of film
+  is about 23 MB of the 32 MB (10.3). A seek may replay up to 1 s of grid steps (11.2).
+
 ## 10. Time, exact replay and seeking
 
 ### 10.1 The step and the solver grid
@@ -653,6 +742,11 @@ A world with cloth or liquid runs in a worker (9.6). The worker has its own core
 | 3D liquid, in a worker | 2,000 particles | 6 ms | 1.5 ms |
 | Waves | 64 × 64 | 1 ms | 0.25 ms |
 | Smoke | 64 × 64 | 3 ms | 0.75 ms |
+| Fire in the plane, with two burning bodies | 64 × 64 | 4 ms | 1 ms |
+| Smoke or fire in space, the default size, in a worker | 24 × 24 × 24 | 8 ms | 2 ms |
+| Fire in space, the largest, in a worker | 32 × 32 × 32 | 8 ms (a candidate for Rust, 11.6) | 4 ms |
+| Flag over a fire in space, in a worker | 64 × 32 cloth and 24³ fire | 8 ms | 2.5 ms |
+| Seek anywhere in a 60 s film, fire in space, warm | 24³ | 500 ms | 120 ms |
 | 2D rope or curtain | 400 points | 2 ms | 0.5 ms |
 | 3D cloth, the default size | 32 × 32 | 3 ms | 0.75 ms |
 | 3D cloth, the largest, in wind | 64 × 32 | 6 ms, in a worker | 1.5 ms |
@@ -677,6 +771,9 @@ These are the same on every computer. Over a limit, the line is refused with `li
 | Liquid particles (all `Liquid` and `Pour` together) | 2,000 |
 | Wave grid | 64 × 64 |
 | Smoke grid | 64 × 64 |
+| Smoke and fire grids in the plane, together | 64 × 64 cells |
+| Smoke or fire grid in space | one, at most 32 × 32 × 32 |
+| Burnable things | 64 |
 | Cloth points (all cloths together) | 4,096 |
 | One cloth | 64 × 32 points (a sheet), 400 points (a rope) |
 | Cloths with `self = true` | 1 per figure |
@@ -743,6 +840,20 @@ Speed on average is not enough. The physics bench suite checks all of these, and
 | Smoke kept | Hot smoke in a closed jar, its source stopped (`until = 0.5`), for 10 s | the mass stays within 0.1%; measured within 1e-12, because the step scales the carried smoke back to its mass (9.4) and the blending loses far less than the 0.5% a step that scaling may make up |
 | Still air | Smoke round a solid ball with no heat and no wind, 10 s | every air speed stays exactly 0 and the smoke does not move, to the last bit |
 
+### 11.6 When a solver moves to Rust
+
+Status: proposed. Each solver is first made as fast as it can be in TypeScript (the fixes in
+`docs/research/physics-papers.md` 8 and 9). Then, in Chrome with the CPU 4 times slower:
+
+- A solver whose rows are all within their goal stays TypeScript.
+- A solver with any row more than 25% over its goal moves to Rust compiled to WebAssembly, alone: one `step()` call a
+  step, its arrays read by TypeScript through typed-array views, its checkpoints as bytes. The TypeScript solver stays
+  as the fallback and the reference; a test compares the two films' hashes.
+- The order, if needed: cloth, then the grid in space (9.8), then liquid. Bodies, the driver, the kernel and the UI stay
+  TypeScript.
+- The Rust tools (rustup, cargo, the `wasm32` target) and any crate need the product owner's approval first, and a
+  crate needs an entry in `docs/design/libraries.md`.
+
 ## 12. Drawing
 
 - Bodies draw as their shape at their pose, interpolated between steps (10.1), with the shape's style. A sleeping body looks the same; the algebra row shows it is asleep.
@@ -803,6 +914,7 @@ Each round is one PR, with tests, examples in the studio and screenshots.
 8. **Smoke.** Examples: smoke past a ball, a candle.
 9. **Cloth.** `Cloth`, `Pin`, `world with wind`, tearing, cloth with bodies and water in the worker, the WebGL 2 painter. Examples: a flag in the wind, a sheet dropped on a ball, a rope that swings, a hammock with a ball, a net that tears, a cloth that catches water.
 10. **Speed round.** The full bench suite of 11.4 and 11.5, in Node and in throttled Chrome, and the browser hash test.
+11. **Fire, and smoke in space.** `swirl` for smoke, `Fire` in the plane, burnable bodies, cloth and walls, water that puts fire out, the crackle on request; then the grid in space, its ray-marched drawing, cloth in its wind. Examples: a candle, a camp fire with a log that burns away, a curtain that catches fire, a fire put out by a tap, a flag over a fire in space, smoke round a ball in space.
 
 ## 15. Changes to other areas
 
@@ -828,5 +940,6 @@ Each round is one PR, with tests, examples in the studio and screenshots.
 ## 17. Sources studied
 
 - Our own legacy kit on `legacy/v1`, `packages/core/src/kits/physics2d/` (solver, joints, tank, force accounting).
+- For fire and smoke in space (9.7, 9.8) and the cloth fixes: the papers and manuals in `docs/research/physics-papers.md` 8 and 9 (Fedkiw, Stam and Jensen 2001; Nguyen, Fedkiw and Jensen 2002; Pirk et al. 2017; FlameForge 2024; Macklin et al. 2019; Kim, Chentanez and Müller 2012; Vertex Block Descent 2024; the PhysX 3 cloth manual; Blender's gas manual). Methods only, no code.
 - The reference app's motion workarounds, as studied in `docs/features/animation-time/design.md` 2.
 - Public methods, used from their descriptions and not from any code: sequential impulses with warm starting (Erin Catto, GDC talks 2006 to 2014); separating axis tests, GJK and sweep and prune (Christer Ericson, *Real-Time Collision Detection*, 2005); expanding polytope depth (Gino van den Bergen, 2001); position-based fluids (Macklin and Müller, 2013); extended position-based dynamics (Macklin, Müller and Chentanez, 2016); small steps in physics simulation (Macklin and others, 2019); unified particle physics for cloth and liquids together (Macklin and others, 2014); stable fluids (Jos Stam, 1999); ray wheels, as described in many public vehicle write-ups.
