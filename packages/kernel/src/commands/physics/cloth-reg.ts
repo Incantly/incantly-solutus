@@ -64,7 +64,7 @@ export function clothRow(v: ClothValue, name: string): { grid: string; live: str
 
 export function registerCloth(): void {
   const fields = (space: boolean): Readonly<Record<string, Ty>> => ({
-    count: T.Number, torn: T.Number, stretchMax: T.Number, energy: T.Number, asleep: T.Bool, touching: { k: 'List', of: T.Text } as Ty,
+    count: T.Number, torn: T.Number, stretchMax: T.Number, energy: T.Number, asleep: T.Bool, touching: { k: 'List', of: T.Text } as Ty, burnt: T.Number,
     at: { k: 'Function', ret: space ? 'Point3' : 'Point', arity: 2 } as Ty,
   });
   registerFieldNames('Cloth', () => Object.keys(fields(false)));
@@ -84,6 +84,8 @@ export function registerCloth(): void {
         return v.asleep;
       case 'touching':
         return [...v.touching];
+      case 'burnt':
+        return v.burnt ?? 0;
       case 'at':
         return { arity: 2, call: (i: unknown, j: unknown) => (typeof i === 'number' && typeof j === 'number' ? clothAt(v, i, j) : undefined) };
       default:

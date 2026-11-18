@@ -594,7 +594,7 @@ export class KernelSession {
       // liquid flows with the film (physics design 9.1)
       if (v.type === 'Liquid') return true;
       // and smoke drifts with it (physics design 9.4)
-      if (v.type === 'Smoke') return true;
+      if (v.type === 'Smoke' || v.type === 'Fire') return true;
       // and cloth waves and falls with it (physics design 9.5)
       if (v.type === 'Cloth') return true;
       if (/\banimate\s*=/.test(v.definition)) return true;

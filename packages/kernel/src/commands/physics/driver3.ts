@@ -64,7 +64,8 @@ export type LogEntry3 =
   | { readonly kind: 'reset'; readonly n: number }
   | { readonly kind: 'set'; readonly n: number; readonly id: ObjId; readonly value: unknown }
   | { readonly kind: 'cgrab'; readonly n: number; readonly id: ObjId; readonly point: number; readonly to: V3 }
-  | { readonly kind: 'crelease'; readonly n: number; readonly id: ObjId; readonly point: number };
+  | { readonly kind: 'crelease'; readonly n: number; readonly id: ObjId; readonly point: number }
+  | { readonly kind: 'wake' | 'sleep'; readonly n: number; readonly id: ObjId; readonly item?: number };
 
 type AnyJoint3 = Hinge3 | Distance3 | Weld3 | Slider3;
 
@@ -305,6 +306,15 @@ export class Physics3Driver implements WorldDriver {
   }
 
   inputLine(words: readonly string[]): string | undefined | false {
+    this.restoring = true;
+    try {
+      return this.inputLineOf(words);
+    } finally {
+      this.restoring = false;
+    }
+  }
+
+  private inputLineOf(words: readonly string[]): string | undefined | false {
     if (words[0] !== 'physics') return false;
     this.scan();
     if (!this.hasWorld()) return false;
@@ -351,10 +361,11 @@ export class Physics3Driver implements WorldDriver {
     const nums = words.slice(3, -2).map(Number);
     if (nums.some((x) => !Number.isFinite(x))) return 'numbers';
     const v = (k: number): V3 => ({ x: nums[k] as number, y: nums[k + 1] as number, z: nums[k + 2] as number });
-    if (kind === 'push' && nums.length >= 3) this.addEntry({ kind: 'push', n, id: rec.id, ...it, j: v(0), ...(nums.length >= 6 ? { at: v(3) } : {}) });
+    if (kind === 'wake' || kind === 'sleep') this.addEntry({ kind, n, id: rec.id, ...it });
+    else if (kind === 'push' && nums.length >= 3) this.addEntry({ kind: 'push', n, id: rec.id, ...it, j: v(0), ...(nums.length >= 6 ? { at: v(3) } : {}) });
     else if (kind === 'grab' && nums.length >= 6) this.addEntry({ kind: 'grab', n, id: rec.id, ...it, to: v(0), a: v(3) });
     else if (kind === 'release') this.addEntry({ kind: 'release', n, id: rec.id, ...it });
-    else return 'push, grab, release or reset, with three numbers a vector';
+    else return 'push, grab, release, wake, sleep or reset, with three numbers a vector';
     return undefined;
   }
 
@@ -459,9 +470,37 @@ export class Physics3Driver implements WorldDriver {
         if (!getStoredHandler(this.figure, target, 'hit')) continue;
         if (runs >= 24) return;
         runs++;
-        runHandler(this.figure, target, 'hit', { by: 'host', extra: { speed: h.speed, other: other.replace(/\[\d+\]$/, ''), point: { x: h.x, y: h.y, z: h.z }, impulse: h.impulse } }, 'host');
+        // the handler's physics actions (Push, Wake, Sleep) are logged at the film time of the hit, not at the clock's
+        this.actionT = h.t;
+        try {
+          runHandler(this.figure, target, 'hit', { by: 'host', extra: { speed: h.speed, other: other.replace(/\[\d+\]$/, ''), point: { x: h.x, y: h.y, z: h.z }, impulse: h.impulse } }, 'host');
+        } finally {
+          this.actionT = undefined;
+        }
       }
     }
+  }
+
+  /** The film time a physics action is logged at: the hit's while a hit handler runs, else the clock's. */
+  private actionT: number | undefined;
+  private clockNow(): number {
+    return this.actionT ?? this.acc.clockT();
+  }
+
+  /** Entries that came in as `@input` lines (a reloaded script), not yet matched by a hit handler's own action. */
+  private restored = new Set<LogEntry3>();
+  private restoring = false;
+
+  /** A hit handler's action that the script's `@input` lines already hold is that line, not a second one (once per hit). */
+  private claimRestored(e: LogEntry3): boolean {
+    const k = entryKey3(e);
+    if (k === undefined) return false;
+    for (const x of this.restored) {
+      if (entryKey3(x) !== k) continue;
+      this.restored.delete(x);
+      return true;
+    }
+    return false;
   }
 
   onRestart(): void {
@@ -1177,6 +1216,8 @@ export class Physics3Driver implements WorldDriver {
   }
 
   private addEntry(e: LogEntry3): void {
+    if (this.restoring) this.restored.add(e);
+    else if (this.actionT !== undefined && this.claimRestored(e)) return;
     if (e.kind === 'set') this.log = this.log.filter((x) => !(x.kind === 'set' && x.id === e.id && x.n >= e.n));
     this.log.push(e);
     this.log.sort((a, b) => a.n - b.n);
@@ -1228,6 +1269,7 @@ export class Physics3Driver implements WorldDriver {
       const nm = e.item !== undefined ? `${base}[${e.item + 1}]` : base;
       if (e.kind === 'push') out.push(`@input physics push ${nm} ${v3(e.j)}${e.at ? ` ${v3(e.at)}` : ''} at ${t(e.n)}`);
       else if (e.kind === 'grab') out.push(`@input physics grab ${nm} ${v3(e.to)} ${v3(e.a)} at ${t(e.n)}`);
+      else if (e.kind === 'wake' || e.kind === 'sleep') out.push(`@input physics ${e.kind} ${nm} at ${t(e.n)}`);
       else out.push(`@input physics release ${nm} at ${t(e.n)}`);
     }
     return out;
@@ -1259,7 +1301,9 @@ export class Physics3Driver implements WorldDriver {
         if (g) g.to = e.to;
         else this.grabs.set(i, { to: e.to, a: e.a });
         w.wakeBody(i);
-      } else this.grabs.delete(i);
+      } else if (e.kind === 'wake') w.wakeBody(i);
+      else if (e.kind === 'sleep') w.sleepBody(i);
+      else this.grabs.delete(i);
     }
   }
 
@@ -1969,7 +2013,7 @@ export class Physics3Driver implements WorldDriver {
   grabCloth(id: ObjId, point: number, to: V3): boolean {
     if (this.remote) return this.sendInput(id, undefined, 'grab', [point, to.x, to.y, to.z]);
     if (!this.clothMembers.some((cm) => cm.rec.id === id)) return false;
-    this.addEntry({ kind: 'cgrab', n: this.gridAt(this.acc.clockT()), id, point, to });
+    this.addEntry({ kind: 'cgrab', n: this.gridAt(this.clockNow()), id, point, to });
     return true;
   }
 
@@ -1979,7 +2023,7 @@ export class Physics3Driver implements WorldDriver {
       return;
     }
     if (!this.clothMembers.some((cm) => cm.rec.id === id)) return;
-    this.addEntry({ kind: 'crelease', n: this.gridAt(this.acc.clockT()), id, point });
+    this.addEntry({ kind: 'crelease', n: this.gridAt(this.clockNow()), id, point });
   }
 
   /** The forces the pins of a cloth carry now (N), summed: for lessons and tests. */
@@ -2076,7 +2120,7 @@ export class Physics3Driver implements WorldDriver {
     const base = this.acc.byId(id)?.p.name;
     if (!base || !this.remoteCells.has(base)) return false;
     const nm = item !== undefined ? `${base}[${item + 1}]` : base;
-    const t = String(Number(this.acc.clockT().toFixed(6)));
+    const t = String(Number(this.clockNow().toFixed(6)));
     this.queueLine(`@input physics ${kind} ${nm}${nums.map((x) => ` ${num(x)}`).join('')} at ${t}`);
     return true;
   }
@@ -2129,7 +2173,7 @@ export class Physics3Driver implements WorldDriver {
   push(id: ObjId, j: V3, at?: V3, item?: number): boolean {
     if (this.remote) return this.sendInput(id, item, 'push', [j.x, j.y, j.z, ...(at ? [at.x, at.y, at.z] : [])]);
     if (!this.memberOf(id, item)) return false;
-    this.addEntry({ kind: 'push', n: this.gridAt(this.acc.clockT()), id, ...(item !== undefined ? { item } : {}), j, ...(at ? { at } : {}) });
+    this.addEntry({ kind: 'push', n: this.gridAt(this.clockNow()), id, ...(item !== undefined ? { item } : {}), j, ...(at ? { at } : {}) });
     return true;
   }
 
@@ -2147,7 +2191,7 @@ export class Physics3Driver implements WorldDriver {
       const l = this.world.toLocal(m.index, p.x, p.y, p.z);
       a = { x: l[0], y: l[1], z: l[2] };
     }
-    this.addEntry({ kind: 'grab', n: this.gridAt(this.acc.clockT()), id, ...(item !== undefined ? { item } : {}), to, a });
+    this.addEntry({ kind: 'grab', n: this.gridAt(this.clockNow()), id, ...(item !== undefined ? { item } : {}), to, a });
     return true;
   }
 
@@ -2158,22 +2202,22 @@ export class Physics3Driver implements WorldDriver {
       return;
     }
     if (!this.memberOf(id, item)) return;
-    this.addEntry({ kind: 'release', n: this.gridAt(this.acc.clockT()), id, ...(item !== undefined ? { item } : {}) });
+    this.addEntry({ kind: 'release', n: this.gridAt(this.clockNow()), id, ...(item !== undefined ? { item } : {}) });
   }
 
   restart(): void {
     if (this.remote) {
-      this.queueLine(`@input physics reset at ${String(Number(this.acc.clockT().toFixed(6)))}`);
+      this.queueLine(`@input physics reset at ${String(Number(this.clockNow().toFixed(6)))}`);
       return;
     }
-    this.addEntry({ kind: 'reset', n: this.gridAt(this.acc.clockT()) });
+    this.addEntry({ kind: 'reset', n: this.gridAt(this.clockNow()) });
   }
 
+  /** `Wake(b)` and `Sleep(b)`: an entry in the input log, applied at the start of the next step. */
   wake(id: ObjId, awake: boolean, item?: number): boolean {
-    const m = this.memberOf(id, item);
-    if (!m || !this.world) return false;
-    if (awake) this.world.wakeBody(m.index);
-    else this.world.sleepBody(m.index);
+    if (this.remote) return this.sendInput(id, item, awake ? 'wake' : 'sleep', []);
+    if (!this.memberOf(id, item) || !this.world) return false;
+    this.addEntry({ kind: awake ? 'wake' : 'sleep', n: this.gridAt(this.clockNow()), id, ...(item !== undefined ? { item } : {}) });
     return true;
   }
 
@@ -2280,6 +2324,19 @@ function clamp(x: number, lo: number, hi: number): number {
 }
 
 const num = (x: number): string => String(Number(x.toPrecision(10)));
+
+/** What makes two log entries of one action the same, with numbers as an `@input` line keeps them; undefined for entries no hit handler writes. */
+function entryKey3(e: LogEntry3): string | undefined {
+  switch (e.kind) {
+    case 'push':
+      return `push ${e.n} ${e.id} ${e.item ?? ''} ${num(e.j.x)} ${num(e.j.y)} ${num(e.j.z)} ${e.at ? `${num(e.at.x)} ${num(e.at.y)} ${num(e.at.z)}` : ''}`;
+    case 'wake':
+    case 'sleep':
+      return `${e.kind} ${e.n} ${e.id} ${e.item ?? ''}`;
+    default:
+      return undefined;
+  }
+}
 
 /** A vector turned by the quaternion q (w, x, y, z). */
 function rotate(q: readonly number[], x: number, y: number, z: number): [number, number, number] {

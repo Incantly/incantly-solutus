@@ -33,9 +33,9 @@ Bodies(shapes: List) -> List<Body>
 Box(centre: Point, w, h, angle?) -> Polygon      Box(centre: Point3, w, d, h) -> Polyhedron
 Ground(y?: Number) -> Line    # solid; in space: the floor z = 0
 <shape> with solid = true                       # wall or mover
-<body> with bounce, friction, speed, spin, force, torque, fixed, turns, bullet, group, charge
+<body> with bounce, friction, speed, spin, force, torque, fixed, turns, bullet, group, charge, burns, ignite
 world with gravity, air, passes, timestep, sleep, range, show
-Push(b, impulse: Vector, at?: Point)   Wake(b)   Sleep(b)   Restart()
+Push(b, impulse: Vector, at?: Point)   Wake(b)   Sleep(b)   Restart()   Ignite(thing)   # a body, cloth or solid shape with burns
 b.pos b.x b.y b.angle b.speed b.v b.spin b.energy b.momentum b.shape b.touching b.asleep b.force(kind)
 Energy(b | world)  Momentum(b | world)  KineticEnergy(b)  PotentialEnergy(b)  Forces(b)
 on b hit: …   (speed, point, other as a text, impulse)
@@ -66,8 +66,12 @@ v.speedometer
 Liquid(region, count, viscosity?, density?, color?) -> Liquid   # at most 2,000 particles per figure
 Pour(at: Point|Point3, rate, speed, max?) -> Liquid       # in space: Liquid(Box(c, w, d, h) or Sphere, count)
 Water(level) -> Water      Water(region, level) -> Water        # floating, cheap
-Waves(box, n) Waves(segment, n, depth?) -> Waves     Smoke(region, n, source?, heat?, wind?, until?) -> Smoke   # n 4..64
+Waves(box, n) Waves(segment, n, depth?) -> Waves     Smoke(region, n, source?, heat?, wind?, until?, swirl?) -> Smoke   # n 4..64
+Fire(region, n, source?, fuel?, burn?, heat?, smoke?, swirl?, wind?, until?, sound?) -> Fire   Fire(at: Point) -> Fire   # 2 x 4 m, 48 cells
 l.count l.level   w.level w.speed w.height(x, y)   sm.mass sm.speed sm.at(x, y)  world with wind = (3, 0)
+f.temperature(x, y) f.burning f.fuel   # and every smoke readout; flames need fuel at a source, or a thing with burns
+wood = Body(Box((0, 0.4), 1.2, 0.2), burns = true)   Cloth(…, burns = true)   p with solid = true, burns = true   # inside a Fire's box
+b.temperature b.burnt b.burning  c.burnt   Ignite(wood)   # burnt away: undefined, reason burnt; never name an object log (reserved)
 ```
 
 ### 2.5 `physics-cloth` (target 90 tokens)

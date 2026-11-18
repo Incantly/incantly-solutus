@@ -10,6 +10,7 @@ import { err } from '../../errors/table';
 import type { RuleCall } from '../../graph/registry';
 import type { CheckedLine } from '../../language/check';
 import type { CommandSpec, FormCheck, ParamSpec, Refusal } from '../../language/table';
+import { FLAME_AT, FUEL_GONE, IGNITE_AT, flameCells, fuelSum, hottest } from '../../physics/fire2';
 import type { SmokeSource2 } from '../../physics/smoke2';
 import { Smoke2, markSource } from '../../physics/smoke2';
 
@@ -45,6 +46,21 @@ export interface SmokeSpec {
   readonly wind?: { readonly x: number; readonly y: number };
   /** The source makes smoke while the film time is before this (seconds); Infinity for all the film. */
   readonly until: number;
+  /** Curls kept by vorticity confinement (0 to 10); left out when 0, so a smoke without it has its old spec. */
+  readonly swirl?: number;
+  /** A fire grid's settings (design 9.7); left out for smoke. */
+  readonly fire?: FireSpec;
+}
+
+/** What a `Fire` adds to a smoke grid's spec (design 9.7). */
+export interface FireSpec {
+  readonly fuel: number;
+  readonly burn: number;
+  /** The hottest a flame gets, °C. */
+  readonly heat: number;
+  readonly smoke: number;
+  /** A crackle that follows how much burns. */
+  readonly sound: boolean;
 }
 
 /** A smoke grid's value: its start, and its smoke now (written by the driver). */
@@ -59,8 +75,29 @@ export interface SmokeValue {
   readonly speed: number;
 }
 
+/** A fire's value: a smoke value with the temperature of each cell and what is burning (design 9.7). */
+export interface FireValue extends SmokeValue {
+  readonly spec: SmokeSpec & { readonly fire: FireSpec };
+  /** Temperature in each cell, °C above the air, laid out as `density`. */
+  readonly temp: Float32Array;
+  /** The hottest cell, °C. */
+  readonly hottest: number;
+  /** Some cell is above 500 °C. */
+  readonly burning: boolean;
+  /** Fuel in the grid: Σ F × dx × dy. */
+  readonly fuel: number;
+  /** Cells above 500 °C. */
+  readonly flames: number;
+  /** The fire has been alight and is out (no source, nothing above 150 °C, no fuel). */
+  readonly out: boolean;
+}
+
 export function isSmokeValue(v: unknown): v is SmokeValue {
   return typeof v === 'object' && v !== null && (v as { schema?: unknown }).schema === 'Smoke';
+}
+
+export function isFireValue(v: unknown): v is FireValue {
+  return isSmokeValue(v) && v.spec.fire !== undefined && (v as { temp?: unknown }).temp instanceof Float32Array;
 }
 
 const P = (name: string, type: string, extra: Partial<ParamSpec> = {}): ParamSpec => ({ name, type, ...extra });
@@ -84,7 +121,7 @@ export function sourceOf(v: unknown): SmokeSource2 | undefined {
   return undefined;
 }
 
-function boxOf(region: unknown): { x0: number; y0: number; x1: number; y1: number } | undefined {
+export function boxOf(region: unknown): { x0: number; y0: number; x1: number; y1: number } | undefined {
   const pts = (region as { pts?: unknown } | undefined)?.pts;
   if (!Array.isArray(pts) || pts.length < 3) return undefined;
   let x0 = Infinity;
@@ -135,7 +172,15 @@ function checkSmoke(c: FormCheck): Refusal | undefined {
   }
   const until = lit(5);
   if (until !== undefined && !(until >= 0)) return { kind: 'bad_property_value', message: 'until must be 0 or more seconds.', hint: 'until = 0 makes one puff at the start; leave it out to keep making smoke.', param: 5, params: { key: 'until', allowed: '0 or more' } };
+  const swirl = lit(6);
+  if (swirl !== undefined && !(swirl >= 0 && swirl <= SWIRL_MAX)) return swirlRefusal(6);
   return undefined;
+}
+
+/** `swirl` is 0 to 10 on smoke and fire. */
+export const SWIRL_MAX = 10;
+export function swirlRefusal(param: number): Refusal {
+  return { kind: 'bad_property_value', message: `swirl must be between 0 and ${SWIRL_MAX}.`, hint: 'swirl keeps the curls of the flow: 0 is none, 2 is a lively flame.', param, params: { key: 'swirl', allowed: `between 0 and ${SWIRL_MAX}` } };
 }
 
 export const SMOKE_COMMANDS: readonly CommandSpec[] = [
@@ -144,14 +189,14 @@ export const SMOKE_COMMANDS: readonly CommandSpec[] = [
     kind: 'object',
     group: 'physics',
     forms: [{
-      params: [P('region', 'Polygon'), P('n', 'Number'), named('source', 'Point|Circle|Polygon'), named('heat', 'Number'), named('wind', 'Vector|Point'), named('until', 'Number')],
+      params: [P('region', 'Polygon'), P('n', 'Number'), named('source', 'Point|Circle|Polygon'), named('heat', 'Number'), named('wind', 'Vector|Point'), named('until', 'Number'), named('swirl', 'Number')],
       returns: 'Smoke',
-      summary: 'smoke and air on an n by n grid over a box: made at source, lifted by heat, blown by the wind, blocked and stirred by solids and bodies',
+      summary: 'smoke and air on an n by n grid over a box: made at source, lifted by heat, blown by the wind, blocked and stirred by solids and bodies; swirl keeps its curls',
       explain: '{name} is smoke on a {1} by {1} grid over {0}',
       check: checkSmoke,
       rule: () => ({
         run(call: RuleCall) {
-          const [region, n, source, heat, wind, until] = call.values;
+          const [region, n, source, heat, wind, until, swirl] = call.values;
           const box = boxOf(region);
           if (!box) return call.fail('input_undefined', 'the region is undefined');
           if (!(box.x1 > box.x0 && box.y1 > box.y0)) return call.fail('degenerate', 'the region has no area');
@@ -166,6 +211,7 @@ export const SMOKE_COMMANDS: readonly CommandSpec[] = [
             heat: clamp(num(heat, src ? SMOKE_DEFAULT_HEAT : 0), SMOKE_MAX_HEAT),
             ...(w ? { wind: w } : {}),
             until: typeof until === 'number' && until >= 0 ? until : Infinity,
+            ...(typeof swirl === 'number' && swirl > 0 ? { swirl: Math.min(SWIRL_MAX, swirl) } : {}),
           };
           return startValue(spec);
         },
@@ -174,26 +220,35 @@ export const SMOKE_COMMANDS: readonly CommandSpec[] = [
   },
 ];
 
-function clamp(x: number, m: number): number {
+export function clamp(x: number, m: number): number {
   return Math.min(m, Math.max(-m, x));
 }
 
 /** The grid of a spec, set up at its start. */
 export function smokeGrid(spec: SmokeSpec, windX: number, windY: number): Smoke2 {
-  const g = new Smoke2({ x0: spec.x0, y0: spec.y0, x1: spec.x1, y1: spec.y1, n: spec.n });
+  const f = spec.fire;
+  const g = new Smoke2({ x0: spec.x0, y0: spec.y0, x1: spec.x1, y1: spec.y1, n: spec.n, ...(f ? { fire: { fuel: f.fuel, burn: f.burn, heat: f.heat, smoke: f.smoke } } : {}) });
   g.heat = spec.heat;
+  g.swirl = spec.swirl ?? 0;
   g.setSource(spec.source);
   g.making = spec.until > 0;
   g.start(windX, windY);
   return g;
 }
 
-/** The smoke a grid holds now, as a value. */
+/** The smoke a grid holds now, as a value; a fire's value also holds its temperature. */
 export function smokeValue(spec: SmokeSpec, g: Smoke2): SmokeValue {
-  return { schema: 'Smoke', spec, density: new Float32Array(g.s), mass: g.mass(), speed: g.maxSpeed() };
+  const base: SmokeValue = { schema: 'Smoke', spec, density: new Float32Array(g.s), mass: g.mass(), speed: g.maxSpeed() };
+  if (!spec.fire) return base;
+  const top = hottest(g.T);
+  const fuel = fuelSum(g);
+  const flames = flameCells(g.T);
+  const stopped = !(g.sourced && g.making);
+  const fire: FireValue = { ...base, spec: spec as FireValue['spec'], temp: new Float32Array(g.T), hottest: top, burning: flames > 0, fuel, flames, out: g.alive && stopped && !(top > IGNITE_AT) && fuel < FUEL_GONE };
+  return fire;
 }
 
-/** The start: the source already full of smoke, so it shows before the film runs (no grid is made for it). */
+/** The start: the source already full of smoke (a fire: at its heat), so it shows before the film runs (no grid is made for it). */
 function startValue(spec: SmokeSpec): SmokeValue {
   const n = spec.n;
   const dx = (spec.x1 - spec.x0) / n;
@@ -201,22 +256,43 @@ function startValue(spec: SmokeSpec): SmokeValue {
   const cells = new Uint8Array(n * n);
   markSource(cells, { n, x0: spec.x0, y0: spec.y0, dx, dy }, spec.source);
   const density = new Float32Array(n * n);
+  const w = spec.wind;
+  const speed = w ? Math.max(Math.abs(w.x), Math.abs(w.y)) : 0;
+  if (spec.fire) {
+    const temp = new Float32Array(n * n);
+    let hot = 0;
+    if (spec.until > 0) for (let c = 0; c < cells.length; c++) if (cells[c] === 1) {
+      temp[c] = spec.fire.heat;
+      hot = spec.fire.heat;
+    }
+    const fire: FireValue = { schema: 'Smoke', spec: spec as FireValue['spec'], density, mass: 0, speed, temp, hottest: hot, burning: hot > FLAME_AT, fuel: 0, flames: hot > FLAME_AT ? cells.reduce((a, b) => a + b, 0) : 0, out: false };
+    return fire;
+  }
   let k = 0;
   for (let c = 0; c < cells.length; c++) if (cells[c] === 1) {
     density[c] = 1;
     k++;
   }
-  const w = spec.wind;
-  return { schema: 'Smoke', spec, density, mass: k * dx * dy, speed: w ? Math.max(Math.abs(w.x), Math.abs(w.y)) : 0 };
+  return { schema: 'Smoke', spec, density, mass: k * dx * dy, speed };
 }
 
-/** How many cells a line of `Smoke` asks for, when its grid is a number written in the line. */
+/** The start of a fire (its rule, `fire.ts`). */
+export function fireStart(spec: SmokeSpec): SmokeValue {
+  return startValue(spec);
+}
+
+/** How many cells a line of `Smoke` or `Fire` asks for, when its grid is a number written in the line. */
 function asked(expr: unknown): number | undefined {
-  const e = expr as { n?: string; spec?: { name?: string }; args?: readonly { expr?: { n?: string; v?: number } }[] } | undefined;
-  if (e?.n !== 'command' || e.spec?.name !== 'Smoke') return undefined;
+  const e = expr as { n?: string; spec?: { name?: string }; form?: { params?: readonly { type: string }[] }; args?: readonly { expr?: { n?: string; v?: number } }[] } | undefined;
+  if (e?.n !== 'command') return undefined;
+  if (e.spec?.name === 'Fire' && e.form?.params?.[0]?.type === 'Point') return FIRE_AT_N * FIRE_AT_N;
+  if (e.spec?.name !== 'Smoke' && e.spec?.name !== 'Fire') return undefined;
   const a = e.args?.[1]?.expr;
   return a?.n === 'num' && typeof a.v === 'number' ? Math.round(a.v) * Math.round(a.v) : undefined;
 }
+
+/** The grid of `Fire(at)`: 48 cells a side. */
+export const FIRE_AT_N = 48;
 
 interface FigureObjects {
   objects(): readonly { readonly id: unknown; readonly type: string; readonly cell: { readonly defined: boolean; readonly value?: unknown } }[];
@@ -229,11 +305,11 @@ export function smokeLineCheck(figure: unknown, line: CheckedLine): ErrorObject 
   if (cells === undefined) return undefined;
   let others = 0;
   for (const o of (figure as FigureObjects).objects()) {
-    if (o.type !== 'Smoke' || o.id === line.existing) continue;
+    if ((o.type !== 'Smoke' && o.type !== 'Fire') || o.id === line.existing) continue;
     if (o.cell.defined && isSmokeValue(o.cell.value)) others += o.cell.value.spec.n * o.cell.value.spec.n;
   }
   if (others + cells <= SMOKE_MAX_CELLS) return undefined;
-  return err('limit', { line: line.line, col: 1, endCol: 1 }, { max: SMOKE_MAX_CELLS, what: 'smoke cells in a figure (one 64 by 64 grid)', limit: 'smoke cells', got: others + cells }, {
-    hint: `The other smoke grids already have ${others} cells, so this one can have at most ${Math.max(0, SMOKE_MAX_CELLS - others)} (${Math.floor(Math.sqrt(Math.max(0, SMOKE_MAX_CELLS - others)))} a side).`, recovery: 'rewrite', fingerprintKey: 'limit:smoke',
+  return err('limit', { line: line.line, col: 1, endCol: 1 }, { max: SMOKE_MAX_CELLS, what: 'smoke and fire cells in a figure (one 64 by 64 grid)', limit: 'smoke cells', got: others + cells }, {
+    hint: `The other smoke and fire grids already have ${others} cells, so this one can have at most ${Math.max(0, SMOKE_MAX_CELLS - others)} (${Math.floor(Math.sqrt(Math.max(0, SMOKE_MAX_CELLS - others)))} a side).`, recovery: 'rewrite', fingerprintKey: 'limit:smoke',
   });
 }

@@ -211,6 +211,17 @@ const SMOKE = [
   'm = sm.mass',
 ];
 
+/** Fire on the finest grid, 64 × 64, with two logs that burn on it and a ball in the plume: the fire row of design 11.2. */
+const FIRE = [
+  'g = Ground()',
+  'ball = Circle((1.3, 1.5), 0.25)',
+  'ball with solid = true',
+  'fr = Fire(Box((0, 2), 4, 4), 64, source = Circle((0, 0.3), 0.3), heat = 1200, fuel = 2)',
+  'wood1 = Body(Box((-0.6, 0.3), 0.8, 0.2), burns = 60, ignite = 150)',
+  'wood2 = Body(Box((0.6, 0.3), 0.8, 0.2), burns = 60, ignite = 150)',
+  'm = fr.fuel',
+];
+
 describe('smoke (design 11.2, R7)', () => {
   it('64 × 64 smoke: a frame (two steps, one smoke step) under 0.75 ms in Node, mean and the slow frames', { retry: 2 }, () => {
     const f = load(SMOKE);
@@ -256,6 +267,27 @@ describe('smoke (design 11.2, R7)', () => {
     const kb = d.saveState().byteLength / 1024;
     console.log(`a checkpoint with 64 x 64 smoke: ${kb.toFixed(1)} KB`);
     expect(kb).toBeLessThan(140);
+  });
+
+  it('fire in the plane, 64 × 64, two burning bodies: a frame under 1 ms in Node, mean and the slow frames (design 11.2, R11)', { retry: 2 }, () => {
+    const f = load(FIRE);
+    for (let k = 1; k <= 60; k++) f.setClock(k / 60);
+    const times: number[] = [];
+    for (let k = 61; k <= 60 * 20; k++) {
+      const t = performance.now();
+      f.setClock(k / 60);
+      times.push(performance.now() - t);
+    }
+    const s = sorted(times);
+    const mean = times.reduce((a, b) => a + b, 0) / times.length;
+    const p95 = s[Math.floor(s.length * 0.95)] as number;
+    const worst = s[s.length - 1] as number;
+    const p99 = s[Math.floor(s.length * 0.99)] as number;
+    console.log(`fire 64 x 64, two burning bodies, a frame: mean ${mean.toFixed(3)} ms, 95% ${p95.toFixed(3)} ms, 99% ${p99.toFixed(3)} ms, worst ${worst.toFixed(3)} ms (budget 1 ms)`);
+    const d = physicsOf(f);
+    expect(d.smokeMembers[0]?.grid.n).toBe(64);
+    expect(mean).toBeLessThan(1);
+    expect(p95).toBeLessThan(1);
   });
 
   it('a smoke step makes no garbage after the first second', () => {

@@ -445,6 +445,19 @@ function checkStyleItem(c: Checker, it: StyleItem, keys: readonly string[], out:
       else out.push({ key: it.key, value: n });
       break;
     }
+    case 'boolnum': {
+      // true or false, or a number (physics `burns`: true, or the seconds of burning)
+      const n = c.infer(v);
+      if (!n) break;
+      if (n.ty.k === 'Bool') out.push({ key: it.key, value: n });
+      else if (n.ty.k !== 'Number') bad();
+      else {
+        const lit = foldNumber(n);
+        if (lit !== undefined && !(lit > (spec.min ?? -Infinity))) bad();
+        else out.push({ key: it.key, value: n });
+      }
+      break;
+    }
     case 'color': {
       if (v.k === 'name' && (COLOR_WORDS.includes(v.name) || hexWord(v.name) || unboundWord)) {
         if (COLOR_WORDS.includes(v.name) || hexWord(v.name)) out.push({ key: it.key, value: { word: v.name } });

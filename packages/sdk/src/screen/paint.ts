@@ -1099,7 +1099,7 @@ export function paintScene(ctx: Ctx, vp: Viewport, items: readonly SceneItem[]):
   paintGrid(ctx, vp);
   // areas and charts first, then curves, then points on top
   // smoke is a shaded image under everything (ui.md 7)
-  const rank = (t: string): number => (t === 'Smoke' ? -1 : t === 'Point' ? 3 : t === 'Water' || t === 'Waves' || t === 'Chart' || t === 'Region' || t === 'Polygon' || t.endsWith('Distribution') ? 0 : t === 'List' ? 2 : 1);
+  const rank = (t: string): number => (t === 'Smoke' || t === 'Fire' ? -1 : t === 'Point' ? 3 : t === 'Water' || t === 'Waves' || t === 'Chart' || t === 'Region' || t === 'Polygon' || t.endsWith('Distribution') ? 0 : t === 'List' ? 2 : 1);
   const sorted = [...items].sort((a, b) => rank(a.type) - rank(b.type));
   const scale = forceScale(items);
   for (const it of sorted) {

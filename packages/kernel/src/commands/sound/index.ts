@@ -297,6 +297,16 @@ export interface SoundFrame {
   readonly hasSound: boolean;
 }
 
+/** Another area's sounds: what it plays at film time `t`, and whether the figure has sound of its kind at all (the speaker shows). */
+export type SoundSource = (figure: Figure, t: number) => { readonly sounds: readonly PlayingSound[]; readonly has: boolean };
+
+const SOURCES: SoundSource[] = [];
+
+/** An area registers a source of sounds that `soundsAt` calls after the sound objects (physics: the crackle of a fire). */
+export function registerSoundSource(source: SoundSource): void {
+  if (!SOURCES.includes(source)) SOURCES.push(source);
+}
+
 /**
  * What plays at film time `t` (default: the figure's clock): every defined, unmuted, `on` sound object, the melody note
  * of the beat `t` falls in, and the notes and sweeps under way. A pure function of the figure and `t` (design 3).
@@ -341,6 +351,11 @@ export function soundsAt(figure: Figure, t: number = timeOf(figure), eventsAt: n
     }
     if (f === undefined) continue;
     out.push({ key: `note:${e.key}`, kind: 'tone', frequency: f, gain: e.gain, pan: 0, wave: e.wave });
+  }
+  for (const source of SOURCES) {
+    const r = source(figure, t);
+    for (const p of r.sounds) out.push(p);
+    if (r.has) hasSound = true;
   }
   return { t, sounds: out, hasSound };
 }

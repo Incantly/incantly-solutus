@@ -9,7 +9,7 @@ import type { SceneItem } from './paint';
 import { symDrawing } from './symplot';
 
 /** Types that draw on the graph and so get a swatch. */
-const DRAWN = new Set(['Body', 'Joint', 'Wheel', 'Liquid', 'Water', 'Waves', 'Smoke', 'Cloth', 'Pin', 'Particles', 'Point', 'Vector', 'Segment', 'Line', 'Ray', 'Circle', 'Arc', 'Sector', 'Conic', 'Polyline', 'Polygon', 'Function', 'Curve', 'Relation', 'Region', 'Field', 'Chart', 'ContinuousDistribution', 'DiscreteDistribution']);
+const DRAWN = new Set(['Body', 'Joint', 'Wheel', 'Liquid', 'Water', 'Waves', 'Smoke', 'Fire', 'Cloth', 'Pin', 'Particles', 'Point', 'Vector', 'Segment', 'Line', 'Ray', 'Circle', 'Arc', 'Sector', 'Conic', 'Polyline', 'Polygon', 'Function', 'Curve', 'Relation', 'Region', 'Field', 'Chart', 'ContinuousDistribution', 'DiscreteDistribution']);
 
 export function drawsOnGraph(type: string, typeText: string, value: unknown): boolean {
   const base = type.replace(/<.*$/, '');
@@ -31,7 +31,7 @@ function colorCss(c: unknown): string | undefined {
 }
 
 /** Types drawn in a look of their own (grey smoke, blue water, physics ui.md 7): their type's colour, never the palette. */
-const OWN_LOOK = new Set(['Smoke', 'Liquid', 'Water', 'Waves']);
+const OWN_LOOK = new Set(['Smoke', 'Fire', 'Liquid', 'Water', 'Waves']);
 
 /**
  * The colour an object asks for itself, as `#rrggbb`: the colour its own line sets (`p with color = red`), or the
