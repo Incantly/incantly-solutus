@@ -297,3 +297,38 @@ Branch `feat/physics-11b`. Plan: `handoff/physics/plan-11b-fire-3d.md`. Design: 
 ### Numbers
 
 Node (`physics.bench.ts`, "smoke and fire in space"): 24³ fire a frame mean 3.95 to 4.40 ms, 95% 4.4 to 5.0 ms (goal 2 ms); 32³ 9.06 to 9.20 ms, 95% 9.6 to 9.8 (goal 4); a 64 × 32 flag over a 24³ fire 5.00 to 5.18 ms, 95% 5.8 (goal 2.5); a seek anywhere in a 60 s film, warm, median 127.8 ms, worst 300 ms (goal 120); a checkpoint 399.7 KB, 23.4 MB for 60 s; 0 collections in 200 grid steps. Chrome 157, CPU 4× slower (`chrome-physics.mjs --scenes fire24,fire32,flagfire`): 24³ 15.65 and 15.25 ms (goal 8), 32³ 35.27 ms, flag over a fire 20.65 ms. **All over the 25% of the Rust rule** (design 11.6 lists the loops).
+
+## 10.10 Rust grid
+
+Branch `feat/physics-rust-grid`. Plan: `handoff/physics/plan-11.6b-rust-grid.md`. No tests written. Scratch probes only (`$KIROCREW_SCRATCH/prof/grid-parity.ts`, `grid-time.ts`, `grid-gc.ts`).
+
+Files: `packages/kernel/wasm/src/lib.rs` (the `grid3_*` exports), `packages/kernel/wasm/build.mjs` (two builds), `packages/kernel/src/physics/wasm/kernels.ts` and the generated `kernels-wasm.ts`, `physics/smoke3.ts`, `physics/fire3.ts`, `commands/physics/index.ts` (one line in `physicsKernelsActive`), `packages/kernel/bench/physics.bench.ts` (the grid's no-garbage row, kernels off and on), `bench/chrome/main.ts` and `chrome-physics.mjs` (a line that says the grid runs, and with SIMD), docs (design 9.8 cost line, 11.2, 11.6, `libraries.md`), tasks (10.10), usage log.
+
+### What is in Rust and what is not
+
+Exports: `grid3_advect_flow`, `grid3_lift`, `grid3_fire_lift`, `grid3_swirl`, `grid3_advect_fire`, `grid3_fire` (burn, source and cool in one pass over the cells, then the drops' cells in order), `grid3_solid_faces`, `grid3_project`, `grid3_advect_smoke` (with the outflow and the mass scale), `grid3_health`, and the readouts `grid3_hottest`, `grid3_flames`, `grid3_fuel_sum`, `grid3_smoke_sum`, `grid3_max_speed`.
+
+Differences from the plan, and why:
+
+1. **`divergence` is not ported.** Only `maxDivergence()` (a measure for tests) calls it; a step computes the divergence inside `project`.
+2. **`outflow` is not an export**, it is called by `grid3_advect_smoke`: an export that returns a number hands TypeScript a boxed number. The readouts leave their number in a slot of the number block (`GF.out`) instead, and TypeScript reads it.
+3. **Readouts and the health check are ported too** (the plan leaves `checkHealth` in TypeScript). A profile of the 24³ frame showed `checkHealth` 3% and `hottest3`, `flameCells3`, `fuelSum3`, `mass` and `maxSpeed` 8%: the driver reads them every step. `hottest3(T)` and `flameCells3(T)` get an array, not the grid, so the grid registers its two `T` arrays in a `WeakMap` (`GRID_OF` in `kernels.ts`).
+4. **`burnFuel3`, `fireSource3`, `coolFire3` are one pass over the cells.** Each cell's three steps read and write that cell only, so the bits are the same; `quench3` stays a separate pass over the drops, which TypeScript turns into a list of cells (`Smoke3.cellOfDrop`, which passes the arrays and an index, not three numbers). More than 2,048 drops, or more than 1,024 bodies, run the TypeScript loops for the fire and the solid faces (the limits of 11.3 are 2,000 and 1,000).
+5. **SIMD: where and where not.** Two builds of one source (`build.mjs`), the SIMD one used only by the grid (`KernelArena.create(bytes, true)`). `f64x2`, one cell a lane, in the three carries of the flow and in the carrying of `T`, `F` and smoke; a pair with a lane outside the box, in a solid, at rest, or with no air to gather from is done cell by cell by the scalar code. Tried and dropped: the pressure passes with two cells of one colour in a vector (loads of four `f32` and shuffles): equal bits, 0.63 ms against 0.59 ms for the scalar loop. Not tried: the swirl and the projection's gradient.
+6. **The pressure loop is the same shape as the TypeScript one**, including its quirk: the plain stencil also writes the cells that are then overwritten from the list of cells off the plain stencil. It is kept because it gives the same bits at no cost the compiler can see.
+7. **Memory.** One instance per grid (about 2 MB for 24³, 4.5 MB for 32³; `Smoke3.arenaBytes`). Arrays are views made once; the grid swaps views and the two slots in the integer block together, so the "same arrays after an even number of steps" check holds.
+8. **Garbage with the TypeScript loops and drops**: with the kernels off and a liquid in the figure, the first 200 grid steps make 7 to 10 collections in the vitest runner (none from 600 frames on in plain Node): the loop over the drops runs in the interpreter for a long time there. The bench row for the grid with kernels off has no liquid for that reason; with the kernels on it has one (200 drops) and makes none. Not looked into further (it is the fallback path; I did not run the build before this one with a liquid to see whether it did the same).
+
+### Checks
+
+- **Hash check** (`grid-parity.ts`): 17 scenes, 10 s each, the grid's every array (`save()` and the plain arrays), `lastScale`, the world hash, cloth and burning state, every second, in three modes: kernels off, kernels on with the scalar module, kernels on with the SIMD module. **All 17 equal in all three modes, every second.** Scenes: fire 24³, fire 32³, a 64 × 32 flag over a fire, a burning crate, fire with a burning crate and flag, smoke round a ball (with and without swirl), a liquid dousing a fire (stopped source and running source), a ball and a box in the plume (drag and moving solid faces), a closed jar with swirl, wind in x and in z with the source stopped (outflow and mass scale), a 4³ grid, an 8³ grid with swirl, a 20³ fire with swirl and a ball.
+- The physics set (`packages/kernel/test/spec/physics*`, `packages/sdk/test/spec/physics*`, `apps/studio/test/physics.test.ts`, `space.test.ts`): 22 files, 518 tests pass. `npm run lint`, `npm run typecheck`, `cargo fmt --check`, `cargo clippy` (both builds): clean. `node packages/kernel/wasm/build.mjs --check`: matches.
+- Bench rows: "a step of the grid in space makes no garbage", kernels off and on: 0 collections, 8 runs in 8.
+
+### Numbers
+
+Node (`physics.bench.ts`) and Chrome 157 with the CPU 4× slower, before and after: see design 11.2 ("Measured (task 10.10)"). In short: 24³ 3.4 → 1.6 ms Node, 13.8 → 6.7 to 7.4 Chrome (goal 8: met); 32³ 7.8 → 3.6 Node (goal 4: met), 32.5 → 15.5 to 16.7 Chrome (goal 8: not met); flag over a fire 4.8 → 2.7 Node (goal 2.5), 18.4 → 11.8 to 12.9 Chrome (goal 8): not met; seek 101 → 45 ms median.
+
+### What is left (not started)
+
+In the order of what it would buy, none changes a bit: (1) `f64x2` in the swirl and in the projection's gradient and setup (about 0.1 ms of a 24³ step); (2) the pressure as `f64` values rounded to `f32` in a work array split in red and black halves (no shuffles in a vector; the stored layout stays); (3) the flag row's cloth: tethers and links are 20% of it, the air from the flow (`airForces`, `flowAt`, `airAt` in TypeScript) 12% (round 2 of the cloth); (4) a bigger step for the 32³ grid or fewer passes needs the planner. PH-35 in `findings.md` is left as it is: the checker closes it.

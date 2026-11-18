@@ -699,7 +699,7 @@ film stays exact) to halve the memory and the copy. It runs in the physics worke
 - **Things that burn in space** are bodies, the cells of a sheet and solid shapes (a polyhedron, sphere, cylinder or cone with `solid = true`; round 11B fix round, below). `Body(solid, burns = x, ignite = y)` (and `with burns`) as in the plane; `burns = true` is 10 s a kg, at least 1 s. A body's mass and inertia are 80% less when burnt, the world inverse inertia made again from its turn (the quaternion is not normalised again). At `burnt = 1` it leaves the world as in the plane (`burnt`, joints broken, what rested on it wakes). `Ignite` on a body, a list item or a sheet is an `@input physics ignite name at t` line, as in the plane. A sheet's cell uses the grid cell at its quad's centre and tears through `ClothSet.burnCells`.
 - **After the review (round 11B fix round, `handoff/physics/findings.md` PH-30 to PH-34).** (1) **`Ignite` of a sheet** reaches the space driver: the argument that names an object has no value of its own in the call, so the action read the sheet as a plane thing and refused it with `not_burnable`; it reads the object's value now (a sheet, and a solid shape in space, are told by what they are). (2) **The `torn` notice of a burning sheet** comes: the cloth step clears its count of links torn in the step, and the burnt cells' links were torn before that step, so the count was lost; they are torn after the step, as in the plane (a burning sheet's links in space tear one step later than in the build before, so films of burning sheets in space change a little). (3) **B021 in space** keeps its suggestion `fire = Fire(b.pos)` when the figure already has its one grid in space: the line is refused with `limit`, so the check that offers only lines that would work dropped it. `no_fire_grid` now keeps a suggestion refused for `limit` alone (a plane figure with its 64 × 64 cells used has the same case), and in space the hint says a figure has one smoke or fire grid, so the line should change the grid it has. (4) **Bodies in space count toward the 64 burnable things**, with sheets and solid shapes: the 65th is refused with `limit` by `burns = …` or `with burns`, each item of a list counts. (5) **A solid shape in space that burns** (`p with burns = true`, a number of seconds, `ignite`) is a burnable unit like the plane's: `true` is 10 s a m³ of its volume (at least 1 s), its place is the middle of its box, and a plane, the floor or terrain cannot burn. Once burnt it leaves the world, its cell reads `undefined` with the reason `burnt` (shown once as the notice `burnt`), the grids mark their walls again, the sleeping bodies whose boxes meet it wake (`World3.wakeAround`, used for burnt bodies too, in place of a search of the touching pairs, which made a list each time), and a seek back before the burn gives it back. A rule is told to be a solid by its `solid` style when it is computed, not by the scan of the driver (a rule whose value was not kept before the shelf burnt gave a world built again without the shelf, so the film started over; the driver also keeps the value the rule has when the shelf burns. The plane's driver has the same two guards).
 - **Drawing** is 12.1 ("Smoke and fire in space").
-- **Cost.** A 24³ grid, Float32, 20 passes: about 3.7 ms a smoke step in Node, so a frame is about 4 ms (the plan's budget was 2 ms): the pressure passes alone are 1.3 ms. 32³ is 9 ms, the flag over a fire 5 ms, a seek 130 ms median (11.2). They are candidates for Rust (11.6).
+- **Cost.** A 24³ grid, Float32, 20 passes: about 3.7 ms a smoke step in Node, so a frame is about 4 ms (the plan's budget was 2 ms): the pressure passes alone are 1.3 ms. 32³ is 9 ms, the flag over a fire 5 ms, a seek 130 ms median (11.2). With the loops in Rust (task 10.10, 11.6 "As built, round 2") a step is about 1.5 ms, 32³ 3.6 ms, the flag over a fire 2.7 ms and a seek 45 ms.
 
 ## 10. Time, exact replay and seeking
 
@@ -794,7 +794,7 @@ A world with cloth or liquid runs in a worker (9.6). The worker has its own core
 | Smoke | 64 × 64 | 3 ms | 0.75 ms |
 | Fire in the plane, with two burning bodies | 64 × 64 | 4 ms | 1 ms |
 | Smoke or fire in space, the default size, in a worker | 24 × 24 × 24 | 8 ms | 2 ms |
-| Fire in space, the largest, in a worker | 32 × 32 × 32 | 8 ms (a candidate for Rust, 11.6) | 4 ms |
+| Fire in space, the largest, in a worker | 32 × 32 × 32 | 8 ms (in Rust, 16 ms measured, 11.6) | 4 ms |
 | Flag over a fire in space, in a worker | 64 × 32 cloth and 24³ fire | 8 ms | 2.5 ms |
 | Seek anywhere in a 60 s film, fire in space, warm | 24³ | 500 ms | 120 ms |
 | 2D rope or curtain | 400 points | 2 ms | 0.5 ms |
@@ -848,7 +848,18 @@ The Chrome means drift by about 10% between runs and over a session on this comp
 | 64 × 32 flag over a fire, 24³ | 8 ms | 20.7 ms (22.0) | 2.5 ms | 5.0 to 5.2 ms (5.8) |
 | Seek anywhere in a 60 s film, fire 24³, warm | | | 120 ms | 128 ms median, 300 ms worst |
 
-All four miss their goals by about a factor of two. A smoke step is about 3.7 ms in Node: the 20 pressure passes 1.3 to 1.5, carrying the flow 0.75, `T`, `F` and smoke 0.75, swirl 0.4, the rest 0.3. They are Rust-rule candidates (11.6); no port was made in this round. A checkpoint is 399.7 KB; 200 grid steps make no collection.
+All four missed their goals by about a factor of two. A smoke step was about 3.7 ms in Node: the 20 pressure passes 1.3 to 1.5, carrying the flow 0.75, `T`, `F` and smoke 0.75, swirl 0.4, the rest 0.3. They were Rust-rule candidates (11.6); no port was made in that round. A checkpoint is 399.7 KB; 200 grid steps make no collection.
+
+**Measured (task 10.10, the grid in space in Rust, 11.6).** The same Node bench and Chrome script, on the same computer, before the port (the TypeScript loops, the table above, measured again the same day) and after it (the Rust loops, the grid on the build with SIMD):
+
+| Scene | Goal (Chrome ×4) | Chrome before | Chrome after | Node goal | Node before | Node after |
+|---|---|---|---|---|---|---|
+| Fire in space, 24³ | 8 ms | 13.8 ms (95% 14.3) | 6.7 to 7.4 ms (7.6 to 8.1) | 2 ms | 3.3 to 3.4 ms (3.7) | 1.6 ms (1.7) |
+| Fire in space, 32³ | 8 ms | 32.5 ms (34.2) | 15.5 to 16.7 ms (16.5 to 20.2) | 4 ms | 7.8 ms (8.2) | 3.6 ms (3.8) |
+| 64 × 32 flag over a fire, 24³ | 8 ms | 18.4 ms (20.0) | 11.8 to 12.9 ms (12.6 to 13.9) | 2.5 ms | 4.7 to 4.9 ms (5.0) | 2.7 ms (2.9) |
+| Seek anywhere in a 60 s film, fire 24³, warm | | | | 120 ms | 101 ms median, 208 worst | 45 ms median, 86 worst |
+
+The 24³ fire and the 32³ fire meet their Node goals and the 24³ fire its Chrome goal. The 32³ fire (194%) and the flag over a fire (148%) are still over in Chrome, the flag over a fire by 8% in Node (11.6 lists what is left to try). A checkpoint is 399.7 KB; 200 grid steps make no collection, with the kernels on and off.
 
 ### 11.3 Hard limits
 
@@ -940,7 +951,7 @@ and make megabytes in their first 40 steps (a collection in the window, from a r
 
 ### 11.6 When a solver moves to Rust
 
-Status: round 1 built (task 10.9, "As built" below); round 2 open. Each solver is first made as fast as it can be in TypeScript (the fixes in
+Status: round 1 built (task 10.9, "As built" below); the grid in space built (task 10.10, "As built, round 2"); the cloth's round 2 open. Each solver is first made as fast as it can be in TypeScript (the fixes in
 `docs/research/physics-papers.md` 8 and 9). Then, in Chrome with the CPU 4 times slower:
 
 - A solver whose rows are all within their goal stays TypeScript.
@@ -1024,12 +1035,49 @@ flow and the liquid through many hooks, and moving all of it would move most of 
   call and a batch of boxes in one call is the next step), `prepareDrops` and `faceTable` (14% of cloth in water),
   `hitSphere` and the faces a ball meets (about 17% of the 32 × 32 on a ball). Rows still over their goal in Chrome after
   round 1: cloth in water (114%), the 32 × 32 on a ball (104%), self (100%).
-- **Candidates from round 11B (not ported):** the grid in space (9.8). In Chrome with the CPU 4× slower the 24³ fire is 15.5 ms
-  against 8 (194%), the 32³ fire 35.3 ms (441%) and the flag over a fire 20.7 ms (258%), all far over the 25% of the rule. In
-  Node a smoke step is 3.7 ms: the 20 red-black passes of the pressure solve (1.3 to 1.5 ms, 4.8 ns a cell, `Float32Array` was
-  twice as fast as `Float64Array` there), carrying the three speeds (0.75), `T` and `F` (0.4), smoke (0.35) and the swirl (0.4).
-  The passes are the first loop to move: one call a step on the padded pressure and divergence arrays, the fix list for solids
-  and the plain stencil, with the gradient taken off the faces after.
+- **Candidates from round 11B (now built, below):** the grid in space (9.8). In Chrome with the CPU 4× slower the 24³ fire was
+  15.5 ms against 8 (194%), the 32³ fire 35.3 ms (441%) and the flag over a fire 20.7 ms (258%), all far over the 25% of the
+  rule. In Node a smoke step was 3.7 ms: the 20 red-black passes of the pressure solve (1.3 to 1.5 ms), carrying the three
+  speeds (0.75), `T` and `F` (0.4), smoke (0.35) and the swirl (0.4).
+
+**As built, round 2 (task 10.10, the grid in space; finding PH-35).** Same rules as round 1 (`f64` arithmetic, line-by-line
+copies, no fused multiply-add, the TypeScript loops stay as the fallback and the reference, no memory made in a step).
+
+- **What is in Rust** (`lib.rs`, the exports `grid3_*`): the three carries of the flow (`advectFlow`), the lift of a smoke and
+  of a fire (`lift`, `fireLift3`), the swirl (`confine3`), the fire's cells (`burnFuel3`, `fireSource3` and `coolFire3` in one pass
+  over the cells, then `quench3` over a list of the cells the drops are in: each cell's three steps read and write that cell
+  only, so one pass gives the bits of three), the solid faces (`solidFaces`, from nine numbers a body that TypeScript writes
+  each step), the projection (`project`: the rows' air spans, the cells off the plain stencil, 20 red-black passes, the gradient),
+  the carrying of `T` and `F` and of smoke with its mass kept and the outflow (`advectFire3`, `advectSmoke`, `outflow`), the health
+  check (`checkHealth`) and the readouts (`hottest3`, `flameCells3`, `fuelSum3`, `Smoke3.mass`, `Smoke3.maxSpeed`: sums stay in
+  index order). `divergence` (a measure for tests, not in a step), marking solids, the drag, `applyImpulses`, `flowAt` (called per
+  cloth point, 25 ns), the source marks, `save` and `load` stay TypeScript. `grid3_outflow` is not an export: it returns a number,
+  and a number returned to TypeScript is boxed; it is a function inside `grid3_advect_smoke`.
+- **Two blocks, no number in a call.** Each export takes two byte offsets: an integer block (`GI` in `kernels.ts`: the size, the flags and
+  where each array is) and a number block (`GF`: the cell sizes, the step, the wind, the lift, the swirl, the fire's settings, and a
+  slot for a result). `Smoke3` writes them, swaps an array's slot when it swaps the array (`u` with `u2`, `s` with `s2`, `T` with
+  `T2`), and every array of the grid is a view on the grid's own module instance (`KernelArena`, about 2 MB for 24³ and 4.5 MB for 32³),
+  made once. Without the kernels the arrays are plain typed arrays and the old loops run. `physicsKernelsActive` also asks the grid.
+- **SIMD.** The same source is built twice (`build.mjs`), without and with `-C target-feature=+simd128`; the grid takes the second
+  where the engine compiles it (`setPhysicsGridSimd(false)` is the switch for the hash check; cloth and liquid keep the scalar
+  module). Where the engine has no SIMD, the loader marks that build failed and the grid runs the scalar module. SIMD is in the
+  three carries of the flow and in the carrying of `T`, `F` and smoke: each lane of an `f64x2` is one cell and does that cell's
+  scalar operations in the same order; a pair that has a lane outside the box, in a solid, at rest or with no air to gather from
+  is done by the scalar code, cell by cell. The 20 pressure passes were tried with SIMD (two cells of one colour a vector, `f32x4`
+  loads and shuffles) and were no faster (0.63 against 0.59 ms), so they are scalar. The hash is equal in all three modes.
+- **Numbers.** Node, `physics.bench.ts` (a frame, two steps and a grid step): 24³ fire 3.3 to 3.4 ms → 1.6, 32³ 7.8 → 3.6, flag over a
+  fire 4.7 to 4.9 → 2.7, seek in a 60 s film (median, warm) 101 → 45 ms. Chrome 157, CPU 4× slower: 24³ 13.8 → 6.7 to 7.4 ms, 32³ 32.5 →
+  15.5 to 16.7, flag over a fire 18.4 → 11.8 to 12.9. A 24³ grid step in Node is about 1.5 ms: the pressure passes 0.47, setup and
+  gradient of the projection 0.12, the flow's carrying 0.29, `T` and `F` 0.16, smoke 0.13, swirl 0.14, solid faces 0.045.
+- **Size.** `kernels-wasm.ts` holds the two builds: 35,183 bytes scalar and 44,767 bytes with SIMD (round 1 alone was 13.5 KB), about 107 KB of base64.
+  A grid step makes no collection with the kernels on and off (bench rows of 11.4).
+- **Still over their goal in Chrome:** 32³ (194% of 8 ms) and the flag over a fire (148%); in Node the flag over a fire (2.7 against 2.5).
+  The pressure passes (30% of a step) cost 1.7 ns a cell and a pass; a two-cell vector there was no faster (above), so what is left
+  is the instruction count of a cell, not the arithmetic; what is left to try, none of which changes a bit: (1) the swirl and the gradient of the projection with `f64x2` (the
+  loops are contiguous; about 0.1 ms of 24³), (2) the pressure kept as `f64` values rounded to `f32` in a work array in red and black halves, so
+  that a vector is two cells of one colour with no shuffles (a bigger change, the layout of `p` in a checkpoint stays), (3) the cloth's
+  own cost in the flag row (tethers 10% and links 10% of the row, the air from the flow 12%, round 2 of the cloth). A 32³ fire at 8 ms
+  in Chrome needs about 2× more than (1) and (2) together; a change of the pass count or the grid size is the planner's.
 
 ## 12. Drawing
 
