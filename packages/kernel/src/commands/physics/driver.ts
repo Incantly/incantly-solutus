@@ -25,6 +25,7 @@ import type { JointEnd, JointValue } from './joints';
 import { isJointValue } from './joints';
 import type { JointMember } from './jointbuild';
 import { buildJoint, jointKey, jointNow, specKey } from './jointbuild';
+import { CheckpointStore } from './checkpoints';
 import type { Hinge2, Slider2, Grab2 } from '../../physics/joints2';
 import { Wheel2, localAnchor } from '../../physics/joints2';
 import type { VehicleValue, WheelValue } from './vehicle';
@@ -175,7 +176,7 @@ export class PhysicsDriver implements WorldDriver {
   private prevX = new Float64Array(0);
   private prevY = new Float64Array(0);
   private prevA = new Float64Array(0);
-  private checkpoints = new Map<number, Float64Array>();
+  private checkpoints = new CheckpointStore();
   private cpStride = 60;
   private cpBytes = 0;
   private log: LogEntry[] = [];
@@ -822,7 +823,7 @@ export class PhysicsDriver implements WorldDriver {
     this.prevX = Float64Array.from(world.px);
     this.prevY = Float64Array.from(world.py);
     this.prevA = Float64Array.from(world.ang);
-    this.checkpoints = new Map();
+    this.checkpoints = new CheckpointStore();
     this.cpStride = Math.max(1, this.cloth ? Math.floor(CLOTH_CHECKPOINT_SECONDS * this.rate) : Math.round(CHECKPOINT_SECONDS * this.rate));
     this.cpBytes = 0;
     this.failedAt = new Map();
@@ -1170,8 +1171,7 @@ export class PhysicsDriver implements WorldDriver {
     this.short = false;
     // the nearest checkpoint at least one step before the target, so the pose before the last step is known
     const want = Math.max(0, nTarget - 1);
-    let best = -1;
-    for (const k of this.checkpoints.keys()) if (k <= want && k > best) best = k;
+    let best = this.checkpoints.best(want);
     if (this.n > nTarget || this.prevStale || best > this.n) {
       if (best < 0) best = 0;
       const cp = this.checkpoints.get(best);
@@ -1394,11 +1394,7 @@ export class PhysicsDriver implements WorldDriver {
     if (this.cpBytes > CHECKPOINT_BYTES) {
       // keep every second one and double the spacing (design 10.3)
       this.cpStride *= 2;
-      this.cpBytes = 0;
-      for (const [k, v] of [...this.checkpoints]) {
-        if (k !== 0 && k % this.cpStride !== 0) this.checkpoints.delete(k);
-        else this.cpBytes += v.byteLength;
-      }
+      this.cpBytes = this.checkpoints.thin(this.cpStride);
       this.warnOnce(`thin:${this.cpStride}`, makeNotice('checkpoints_thinned', { seconds: this.cpStride / this.rate }, []));
     }
   }
@@ -1455,14 +1451,12 @@ export class PhysicsDriver implements WorldDriver {
     }
     this.log.push(e);
     this.log.sort((a, b) => a.n - b.n);
-    for (const k of [...this.checkpoints.keys()]) if (k > e.n) this.checkpoints.delete(k);
-    this.cpBytes = 0;
-    for (const v of this.checkpoints.values()) this.cpBytes += v.byteLength;
+    this.checkpoints.dropAfter(e.n);
+    this.cpBytes = this.checkpoints.bytes();
     if (this.n > e.n) this.prevStale = true;
     if (this.n > e.n) {
       // the world is past the entry: go back to a checkpoint before it on the next pass
-      let best = 0;
-      for (const k of this.checkpoints.keys()) if (k <= e.n && k > best) best = k;
+      const best = Math.max(0, this.checkpoints.best(e.n));
       const cp = this.checkpoints.get(best);
       if (cp && this.world) {
         this.loadState(cp);

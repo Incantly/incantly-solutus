@@ -15,7 +15,7 @@ import type { WorldDriver } from '../../graph/drivers';
 import type { DriverAccess, Figure } from '../../graph/figure';
 import type { Cell, StyleEntry } from '../../graph/types';
 import { sameValue } from '../../graph/values';
-import type { BodyDef3, ShapeDef3 } from '../../physics/world3';
+import type { BodyDef3, Joint3, ShapeDef3 } from '../../physics/world3';
 import { BodyType3, FK3, World3, quatAxis } from '../../physics/world3';
 import { Distance3, Hinge3, Slider3, Weld3, Wheel3 } from '../../physics/joints3';
 import type { JointValue3 } from './joints';
@@ -27,6 +27,8 @@ import { FORCE_KINDS } from '../../physics/world2';
 import type { Body3Value, BodySpec3 } from './body3';
 import { isBody3Value, solid3Of, solidNow, terrainOf } from './body3';
 import { specKey } from './jointbuild';
+import { CheckpointStore } from './checkpoints';
+import { ClothOut, DropsOut, FlipArrays, RecList, makeFloat32 } from './flip';
 import type { WorldValue } from './types';
 import { DEFAULT_WORLD, collectBuffers, isWorldValue } from './types';
 import { getStoredHandler } from '../numbers/handlers';
@@ -159,7 +161,7 @@ export class Physics3Driver implements WorldDriver {
   n = 0;
   private prevP = new Float64Array(0);
   private prevQ = new Float64Array(0);
-  private checkpoints = new Map<number, Float64Array>();
+  private checkpoints = new CheckpointStore();
   private cpStride = 60;
   private cpBytes = 0;
   private log: LogEntry3[] = [];
@@ -208,8 +210,8 @@ export class Physics3Driver implements WorldDriver {
   private liquidSpecs = new Map<ObjId, LiquidValue>();
   private wavesSpecs = new Map<ObjId, WavesValue>();
   fluid: Fluid3 | undefined;
-  liquidMembers: { readonly rec: ObjRec; readonly owner: number; readonly value: LiquidValue }[] = [];
-  waveMembers: { readonly rec: ObjRec; readonly value: WavesValue; readonly grid: WaveGrid }[] = [];
+  liquidMembers: { readonly rec: ObjRec; readonly owner: number; readonly value: LiquidValue; readonly out: DropsOut }[] = [];
+  waveMembers: { readonly rec: ObjRec; readonly value: WavesValue; readonly grid: WaveGrid; readonly heights: FlipArrays<Float32Array> }[] = [];
   private waters: Water3[] = [];
   private waterForces = new WaterForces3();
   /* cloth in space (round 9; design 9.5, 9.6) */
@@ -217,7 +219,7 @@ export class Physics3Driver implements WorldDriver {
   private pinRecs: ObjRec[] = [];
   private clothSpecs = new Map<ObjId, ClothValue>();
   cloth: Cloth3 | undefined;
-  clothMembers: { readonly rec: ObjRec; readonly value: ClothValue; readonly index: number }[] = [];
+  clothMembers: { readonly rec: ObjRec; readonly value: ClothValue; readonly index: number; readonly out: ClothOut }[] = [];
   private pinMembers: ObjRec[] = [];
 
   constructor(readonly figure: Figure) {
@@ -402,8 +404,9 @@ export class Physics3Driver implements WorldDriver {
     const kq = Float64Array.from(this.prevQ);
     this.sampling = true;
     try {
-      const { nTarget, alpha } = this.gridFor(t);
-      this.advance(nTarget, Infinity);
+      this.gridFor(t);
+      const alpha = this.gridAlpha;
+      this.advance(this.gridN, Infinity);
       this.touchLists = this.world.touchingAll();
       const out: (readonly [ObjRec, Cell])[] = [];
       const lists = new Map<ObjRec, unknown[]>();
@@ -448,16 +451,12 @@ export class Physics3Driver implements WorldDriver {
       return [];
     }
     if (this.coneDirty) this.findCone();
-    const sig = this.signature();
-    if (!this.sig || !sameValue(this.sig, sig)) {
-      this.sig = sig;
-      this.build();
-    }
+    if (this.signatureChanged()) this.build();
     if (!this.world) return [];
-    const { nTarget, alpha } = this.gridFor(this.acc.clockT());
-    this.hits = [];
-    this.advance(nTarget, STEP_BUDGET);
-    return this.writeCells(this.short ? 1 : alpha);
+    this.gridFor(this.acc.clockT());
+    this.hits.length = 0;
+    this.advance(this.gridN, STEP_BUDGET);
+    return this.writeCells();
   }
 
   afterFlush(): void {
@@ -509,11 +508,15 @@ export class Physics3Driver implements WorldDriver {
 
   /* ------------------------------ reading the figure ------------------------------ */
 
-  private gridFor(t: number): { nTarget: number; alpha: number } {
+  /** The step the film time falls on and how far into it (0..1): `gridFor` leaves them here (fields, not a returned object: it made one each frame). */
+  private gridN = 0;
+  private gridAlpha = 1;
+
+  private gridFor(t: number): void {
     const ft = Math.max(0, (t - this.t0) * this.rate);
     const nTarget = Math.max(0, Math.ceil(ft - 1e-9));
-    const alpha = nTarget === 0 ? 1 : Math.min(1, Math.max(0, ft - (nTarget - 1)));
-    return { nTarget, alpha };
+    this.gridN = nTarget;
+    this.gridAlpha = nTarget === 0 ? 1 : Math.min(1, Math.max(0, ft - (nTarget - 1)));
   }
 
   private gridAt(t: number): number {
@@ -626,61 +629,194 @@ export class Physics3Driver implements WorldDriver {
     return { min: { x: -5, y: -5, z: -5 }, max: { x: 5, y: 5, z: 5 } };
   }
 
-  private signature(): unknown[] {
-    const sig: unknown[] = [this.acc.t0(), this.acc.solverStepsPerSecond()];
+  /**
+   * Is what the world is built from changed since it was built? The signature (every spec and setting the build reads) is
+   * not made as an array to compare with the last one, which would make one every frame: each item is compared with the
+   * last signature's at once as it is met (`sigPush`), and an array is made only from the first item that differs. The
+   * items are pushed flat, each group after its length, so two different signatures never read alike. The new signature
+   * replaces `this.sig` when it changed.
+   */
+  private signatureChanged(): boolean {
+    this.sigBuild = undefined;
+    this.sigK = 0;
+    this.sigPush(this.acc.t0());
+    this.sigPush(this.acc.solverStepsPerSecond());
     const w = this.settings();
-    sig.push(this.varyingWorld ? 'varying' : [w.gx, w.gy, w.gz, w.g3, w.air, w.passes, w.rate, w.sleep, w.range]);
-    for (const r of this.bodyRecs) {
+    if (this.varyingWorld) this.sigPush('varying');
+    else {
+      this.sigPush(w.gx);
+      this.sigPush(w.gy);
+      this.sigPush(w.gz);
+      this.sigPush(w.g3);
+      this.sigPush(w.air);
+      this.sigPush(w.passes);
+      this.sigPush(w.rate);
+      this.sigPush(w.sleep);
+      this.sigPush(w.range);
+    }
+    for (let q = 0; q < this.bodyRecs.length; q++) {
+      const r = this.bodyRecs[q] as ObjRec;
       if (r.p.type.k === 'List') {
-        sig.push(r.id, this.specsOfList(r).map((b) => (b ? b.spec : null)));
+        const l = this.specsOfList(r);
+        this.sigPush(r.id);
+        this.sigPush(l.length);
+        for (let k = 0; k < l.length; k++) this.sigPush(l[k] ? (l[k] as Body3Value).spec : null);
         continue;
       }
       const s = this.specOf(r);
-      sig.push(r.id, s ? s.spec : null);
-      for (const k of BODY3_PROPS) {
+      this.sigPush(r.id);
+      this.sigPush(s ? s.spec : null);
+      for (let q2 = 0; q2 < BODY3_PROPS.length; q2++) {
+        const k = BODY3_PROPS[q2] as string;
         const e = r.p.style.get(k);
-        if (e) sig.push(k, e.text, this.isVarying(e) ? 'varying' : this.evalStyle(r, e));
+        if (!e) continue;
+        this.sigPush(k);
+        this.sigPush(e.text);
+        this.sigPush(this.isVarying(e) ? 'varying' : this.evalStyle(r, e));
       }
     }
     let terrain = false;
-    for (const r of this.solidRecs) {
+    for (let q = 0; q < this.solidRecs.length; q++) {
+      const r = this.solidRecs[q] as ObjRec;
       const on = this.solidOn(r);
-      sig.push(r.id, on);
+      this.sigPush(r.id);
+      this.sigPush(on);
       if (!on) continue;
       // a solid that moves during the film is taken where it starts (round 5 moves solids in space)
-      sig.push(this.varySet.has(r) ? 'moving' : r.cell.defined ? r.cell.value : null);
+      this.sigPush(this.varySet.has(r) ? 'moving' : r.cell.defined ? r.cell.value : null);
       if (r.p.type.k === 'Function') terrain = true;
-      for (const k of ['bounce', 'friction'] as const) {
+      for (let q2 = 0; q2 < SOLID_PROPS.length; q2++) {
+        const k = SOLID_PROPS[q2] as string;
         const e = r.p.style.get(k);
-        if (e) sig.push(k, e.text, this.evalStyle(r, e));
+        if (!e) continue;
+        this.sigPush(k);
+        this.sigPush(e.text);
+        this.sigPush(this.evalStyle(r, e));
       }
     }
-    if (terrain) sig.push(this.terrainBox());
-    for (const r of this.jointRecs) {
+    if (terrain) this.sigPush(this.terrainBox());
+    for (let q = 0; q < this.jointRecs.length; q++) {
+      const r = this.jointRecs[q] as ObjRec;
+      this.sigPush(r.id);
       // a joint whose motor moves during the film is rebuilt only when its line changes
-      if (this.varySet.has(r)) sig.push(r.id, 'varying', r.p.compiled);
-      else sig.push(r.id, this.jointsOf(r).map((j) => (j ? jointKey3(j) : null)));
+      if (this.varySet.has(r)) {
+        this.sigPush('varying');
+        this.sigPush(r.p.compiled);
+      } else {
+        const js = this.jointsOf(r);
+        this.sigPush(js.length);
+        for (let k = 0; k < js.length; k++) this.sigPush(js[k] ? jointKey3(js[k] as JointValue3) : null);
+      }
     }
-    for (const r of this.wheelRecs) sig.push(r.id, this.wheelsOf(r).map((w) => (w ? [w.chassis.spec ? specKey(w.chassis.spec) : w.chassis.id, w.at.x, w.at.y, w.at.z, w.r, w.spring, w.damping, w.travel, w.grip, w.drive, w.steers, w.breaks, w.mass] : null)));
-    for (const r of this.vehicleRecs) {
+    for (let q = 0; q < this.wheelRecs.length; q++) {
+      const r = this.wheelRecs[q] as ObjRec;
+      const ws = this.wheelsOf(r);
+      this.sigPush(r.id);
+      this.sigPush(ws.length);
+      for (let k = 0; k < ws.length; k++) {
+        const wh = ws[k];
+        if (!wh) {
+          this.sigPush(null);
+          continue;
+        }
+        this.sigPush(wh.chassis.spec ? specKey(wh.chassis.spec) : wh.chassis.id);
+        this.sigPush(wh.at.x);
+        this.sigPush(wh.at.y);
+        this.sigPush(wh.at.z);
+        this.sigPush(wh.r);
+        this.sigPush(wh.spring);
+        this.sigPush(wh.damping);
+        this.sigPush(wh.travel);
+        this.sigPush(wh.grip);
+        this.sigPush(wh.drive);
+        this.sigPush(wh.steers);
+        this.sigPush(wh.breaks);
+        this.sigPush(wh.mass);
+      }
+    }
+    for (let q = 0; q < this.vehicleRecs.length; q++) {
+      const r = this.vehicleRecs[q] as ObjRec;
       const v = this.vehicleOf(r);
-      sig.push(r.id, this.varySet.has(r) ? 'varying' : v ? [v.motor, v.steer, v.brake, v.power, v.wheels.length, v.chassis.spec ? specKey(v.chassis.spec) : null] : null);
+      this.sigPush(r.id);
+      if (this.varySet.has(r)) this.sigPush('varying');
+      else if (v) {
+        this.sigPush(v.motor);
+        this.sigPush(v.steer);
+        this.sigPush(v.brake);
+        this.sigPush(v.power);
+        this.sigPush(v.wheels.length);
+        this.sigPush(v.chassis.spec ? specKey(v.chassis.spec) : null);
+      } else this.sigPush(null);
     }
-    for (const r of this.liquidRecs) sig.push(r.id, this.liquidOf(r)?.spec ?? null);
-    for (const r of this.waterRecs) {
+    for (let q = 0; q < this.liquidRecs.length; q++) {
+      const r = this.liquidRecs[q] as ObjRec;
+      this.sigPush(r.id);
+      this.sigPush(this.liquidOf(r)?.spec ?? null);
+    }
+    for (let q = 0; q < this.waterRecs.length; q++) {
+      const r = this.waterRecs[q] as ObjRec;
       const wv = this.waterOf(r);
-      sig.push(r.id, this.varySet.has(r) ? ['varying', r.p.compiled] : wv ? [wv.level, wv.density] : null);
+      this.sigPush(r.id);
+      if (this.varySet.has(r)) {
+        this.sigPush('varying');
+        this.sigPush(r.p.compiled);
+      } else if (wv) {
+        this.sigPush(wv.level);
+        this.sigPush(wv.density);
+      } else this.sigPush(null);
     }
-    for (const r of this.wavesRecs) {
+    for (let q = 0; q < this.wavesRecs.length; q++) {
+      const r = this.wavesRecs[q] as ObjRec;
       const v = this.wavesOf(r);
-      sig.push(r.id, v ? wavesKey(v) : null);
+      this.sigPush(r.id);
+      if (v) {
+        this.sigPush(v.space);
+        this.sigPush(v.nx);
+        this.sigPush(v.ny);
+        this.sigPush(v.x0);
+        this.sigPush(v.y0);
+        this.sigPush(v.dx);
+        this.sigPush(v.dy);
+        this.sigPush(v.level);
+        this.sigPush(v.depth);
+        this.sigPush(v.damping);
+      } else this.sigPush(null);
     }
-    for (const r of this.clothRecs) sig.push(r.id, this.clothOf(r)?.spec ?? null);
-    for (const r of this.pinRecs) {
+    for (let q = 0; q < this.clothRecs.length; q++) {
+      const r = this.clothRecs[q] as ObjRec;
+      this.sigPush(r.id);
+      this.sigPush(this.clothOf(r)?.spec ?? null);
+    }
+    for (let q = 0; q < this.pinRecs.length; q++) {
+      const r = this.pinRecs[q] as ObjRec;
       const v = r.cell.defined && isPinValue(r.cell.value) ? r.cell.value : undefined;
-      sig.push(r.id, v ? [v.point, v.cloth, v.body ? specKey(v.body as never) : null] : null);
+      this.sigPush(r.id);
+      if (v) {
+        this.sigPush(v.point);
+        this.sigPush(v.cloth);
+        this.sigPush(v.body ? specKey(v.body as never) : null);
+      } else this.sigPush(null);
     }
-    return sig;
+    const prev = this.sig;
+    if (this.sigBuild === undefined && prev !== undefined && this.sigK === prev.length) return false;
+    this.sig = this.sigBuild ?? (prev as unknown[]).slice(0, this.sigK);
+    return true;
+  }
+
+  /** The signature being compared (see `signatureChanged`): the array made from the first item that differed, and how many items were read. */
+  private sigBuild: unknown[] | undefined;
+  private sigK = 0;
+
+  private sigPush(v: unknown): void {
+    const prev = this.sig;
+    if (this.sigBuild === undefined && prev !== undefined && this.sigK < prev.length && sameValue(prev[this.sigK], v)) this.sigK++;
+    else this.sigDiverged(v);
+  }
+
+  private sigDiverged(v: unknown): void {
+    if (this.sigBuild === undefined) this.sigBuild = this.sig === undefined ? [] : this.sig.slice(0, this.sigK);
+    this.sigBuild.push(v);
+    this.sigK++;
   }
 
   private isVarying(e: StyleEntry): boolean {
@@ -835,7 +971,7 @@ export class Physics3Driver implements WorldDriver {
     this.n = 0;
     this.prevP = Float64Array.from(world.p);
     this.prevQ = Float64Array.from(world.q);
-    this.checkpoints = new Map();
+    this.checkpoints = new CheckpointStore();
     // a whole number of the drops' pair-listing rounds (twice, for the speed smoothing on every second step), so the step
     // after a checkpoint lists them as the film did
     const K = 2 * PAIR_EVERY;
@@ -969,8 +1105,7 @@ export class Physics3Driver implements WorldDriver {
     const w = this.world as World3;
     this.short = false;
     const want = Math.max(0, nTarget - 1);
-    let best = -1;
-    for (const k of this.checkpoints.keys()) if (k <= want && k > best) best = k;
+    let best = this.checkpoints.best(want);
     if (this.n > nTarget || this.prevStale || best > this.n) {
       if (best < 0) best = 0;
       const cp = this.checkpoints.get(best);
@@ -988,8 +1123,9 @@ export class Physics3Driver implements WorldDriver {
     }
     // a drop costs about a quarter of an awake body, a wave cell a sixty-fourth
     let cells = 0;
-    for (const m of this.waveMembers) cells += m.grid.n;
-    const perStep = Math.max(1, w.awakeCount() + 1 + Math.ceil((this.fluid?.ps.n ?? 0) / 4) + Math.ceil(cells / 64) + Math.ceil((this.cloth?.n ?? 0) / 8));
+    for (let k = 0; k < this.waveMembers.length; k++) cells += (this.waveMembers[k] as (typeof this.waveMembers)[number]).grid.n;
+    // (whole numbers: ⌈x / 4⌉ is (x + 3) >> 2 for a count, with no division made in a number the engine boxes)
+    const perStep = Math.max(1, w.awakeCount() + 1 + (((this.fluid?.ps.n ?? 0) + 3) >> 2) + ((cells + 63) >> 6) + (((this.cloth?.n ?? 0) + 7) >> 3));
     let steps = Math.max(2, Math.floor(budget / perStep));
     const varying = this.cone.length > 0 || this.varyingStyle.length > 0 || this.varyingWorld || this.base.size > 0;
     const saved = varying ? this.saveCells() : undefined;
@@ -1042,7 +1178,8 @@ export class Physics3Driver implements WorldDriver {
     if (cl) cl.applyImpulses(w);
     this.prevP.set(w.p);
     this.prevQ.set(w.q);
-    w.step(h);
+    w.hStep = h;
+    w.step();
     this.n = n + 1;
     if (this.waters.length > 0) this.waterForces.account(w);
     if (cl) cl.account(w, h);
@@ -1053,33 +1190,37 @@ export class Physics3Driver implements WorldDriver {
       fl.account(w);
       // then the drops take their step against the bodies where they are now (they meet the cloth in its step)
       fl.step(w);
-      const t = Number((this.t0 + this.n / this.rate).toFixed(3));
-      for (const owner of fl.left) {
-        const lm = this.liquidMembers[owner];
-        if (lm) this.warnOnce(`drops:${lm.rec.id}`, makeNotice('left_world', { name: `drops of ${lm.rec.p.name}`, t }, [lm.rec.p.name]));
+      // (the time is worked out only where a notice needs it: a number made and formatted at each step is garbage)
+      if (fl.left.length > 0 || fl.unstable) {
+        const t = Number((this.t0 + this.n / this.rate).toFixed(3));
+        for (let k = 0; k < fl.left.length; k++) {
+          const lm = this.liquidMembers[fl.left[k] as number];
+          if (lm) this.warnOnce(`drops:${lm.rec.id}`, makeNotice('left_world', { name: `drops of ${lm.rec.p.name}`, t }, [lm.rec.p.name]));
+        }
+        if (fl.unstable) for (let k = 0; k < this.liquidMembers.length; k++) {
+          const lm = this.liquidMembers[k] as (typeof this.liquidMembers)[number];
+          this.warnOnce(`unstable-liquid:${lm.rec.id}`, makeNotice('unstable_world', { name: lm.rec.p.name, t, hint: 'make the liquid less viscous or use world with timestep = 1/240' }, [lm.rec.p.name]));
+        }
       }
-      if (fl.unstable) for (const lm of this.liquidMembers) this.warnOnce(`unstable-liquid:${lm.rec.id}`, makeNotice('unstable_world', { name: lm.rec.p.name, t, hint: 'make the liquid less viscous or use world with timestep = 1/240' }, [lm.rec.p.name]));
     }
     if (cl) {
       cl.useDrops(fl);
       this.stepCloth(cl, w);
     }
     this.checkHealth();
-    for (const jm of [...this.jointMembers, ...this.wheelMembers]) {
-      if (!jm.joint.broken || this.brokeAt.has(jm.joint)) continue;
-      const name = jm.item !== undefined ? `${jm.rec.p.name}[${jm.item + 1}]` : jm.rec.p.name;
-      this.brokeAt.set(jm.joint, this.n);
-      this.events.push({ t: this.t0 + this.n / this.rate, kind: 'broken', name });
-      this.warnOnce(`broken:${name}:${this.n}`, makeNotice('broken', { name, t: Number((this.t0 + this.n / this.rate).toFixed(3)) }, [name]));
-    }
-    for (const i of w.left) if (!this.leftAt.has(i)) {
+    for (let k = 0; k < this.jointMembers.length; k++) this.noteBroken(this.jointMembers[k] as (typeof this.jointMembers)[number]);
+    for (let k = 0; k < this.wheelMembers.length; k++) this.noteBroken(this.wheelMembers[k] as (typeof this.wheelMembers)[number]);
+    for (let k = 0; k < w.left.length; k++) {
+      const i = w.left[k] as number;
+      if (this.leftAt.has(i)) continue;
       this.leftAt.set(i, this.n);
       const name = this.nameOfIndex[i] ?? '';
       this.warnOnce(`left:${i}`, makeNotice('left_world', { name, t: Number((this.t0 + this.n / this.rate).toFixed(3)), range: w.range }, [name]));
     }
     if (!this.sampling) {
       const fresh = this.n > this.frontier;
-      for (const hit of w.hits) {
+      for (let k = 0; k < w.hits.length; k++) {
+        const hit = w.hits[k] as (typeof w.hits)[number];
         const e = { t: this.t0 + this.n / this.rate, a: this.nameOfIndex[hit.a] ?? '', b: this.nameOfIndex[hit.b] ?? '', speed: hit.speed, x: hit.x, y: hit.y, z: hit.z, impulse: hit.impulse };
         this.hits.push(e);
         if (fresh) this.pendingHits.push(e);
@@ -1095,18 +1236,24 @@ export class Physics3Driver implements WorldDriver {
     this.cpBytes += s.byteLength;
     if (this.cpBytes > CHECKPOINT_BYTES) {
       this.cpStride *= 2;
-      this.cpBytes = 0;
-      for (const [k, v] of [...this.checkpoints]) {
-        if (k !== 0 && k % this.cpStride !== 0) this.checkpoints.delete(k);
-        else this.cpBytes += v.byteLength;
-      }
+      this.cpBytes = this.checkpoints.thin(this.cpStride);
       this.warnOnce(`thin:${this.cpStride}`, makeNotice('checkpoints_thinned', { seconds: this.cpStride / this.rate }, []));
     }
   }
 
+  /** A joint or wheel that broke in this step is told once: an event and a notice. */
+  private noteBroken(jm: { readonly rec: ObjRec; readonly item?: number; readonly joint: { readonly broken: boolean } }): void {
+    if (!jm.joint.broken || this.brokeAt.has(jm.joint)) return;
+    const name = jm.item !== undefined ? `${jm.rec.p.name}[${jm.item + 1}]` : jm.rec.p.name;
+    this.brokeAt.set(jm.joint, this.n);
+    this.events.push({ t: this.t0 + this.n / this.rate, kind: 'broken', name });
+    this.warnOnce(`broken:${name}:${this.n}`, makeNotice('broken', { name, t: Number((this.t0 + this.n / this.rate).toFixed(3)) }, [name]));
+  }
+
   private checkHealth(): void {
     const w = this.world as World3;
-    for (const m of this.members) {
+    for (let k = 0; k < this.members.length; k++) {
+      const m = this.members[k] as Member3;
       if (m.role !== 'body') continue;
       const i = m.index;
       if (w.type[i] !== BodyType3.Dynamic) continue;
@@ -1223,13 +1370,11 @@ export class Physics3Driver implements WorldDriver {
     if (e.kind === 'set') this.log = this.log.filter((x) => !(x.kind === 'set' && x.id === e.id && x.n >= e.n));
     this.log.push(e);
     this.log.sort((a, b) => a.n - b.n);
-    for (const k of [...this.checkpoints.keys()]) if (k > e.n) this.checkpoints.delete(k);
-    this.cpBytes = 0;
-    for (const v of this.checkpoints.values()) this.cpBytes += v.byteLength;
+    this.checkpoints.dropAfter(e.n);
+    this.cpBytes = this.checkpoints.bytes();
     if (this.n > e.n) {
       this.prevStale = true;
-      let best = 0;
-      for (const k of this.checkpoints.keys()) if (k <= e.n && k > best) best = k;
+      const best = Math.max(0, this.checkpoints.best(e.n));
       const cp = this.checkpoints.get(best);
       if (cp && this.world) {
         this.loadState(cp);
@@ -1279,7 +1424,9 @@ export class Physics3Driver implements WorldDriver {
 
   private applyLog(n: number): void {
     const w = this.world as World3;
-    for (const e of this.log) {
+    // (indexed: a `for … of` makes an iterator on the heap, garbage, in every step)
+    for (let k = 0; k < this.log.length; k++) {
+      const e = this.log[k] as LogEntry3;
       if (e.n !== n) continue;
       if (e.kind === 'reset') {
         const cp = this.checkpoints.get(0);
@@ -1495,15 +1642,25 @@ export class Physics3Driver implements WorldDriver {
     return k;
   }
 
-  private writeCells(alpha: number): ObjRec[] {
+  /** How far into the step the cells are drawn (0..1), set by `writeCells` for the writers it calls (a field: a number passed in a call is a heap number). */
+  private alphaNow = 1;
+  /** The cells `writeCells` found changed, in one array kept between frames (the figure reads it at once). */
+  private changedBuf = new RecList<ObjRec>();
+
+  private writeCells(): readonly ObjRec[] {
     const w = this.world as World3;
-    const changed: ObjRec[] = [];
+    const alpha = this.short ? 1 : this.gridAlpha;
+    this.alphaNow = alpha;
+    const changed = this.changedBuf;
+    changed.reset();
     this.touchLists = w.touchingAll();
-    const lists = new Map<ObjRec, unknown[]>();
-    for (const m of this.members) {
+    let lists: Map<ObjRec, unknown[]> | undefined;
+    for (let k = 0; k < this.members.length; k++) {
+      const m = this.members[k] as Member3;
       if (m.role !== 'body') continue;
       const cell = this.bodyCell(m, alpha);
       if (m.item !== undefined) {
+        lists ??= new Map<ObjRec, unknown[]>();
         let arr = lists.get(m.rec);
         if (!arr) {
           arr = (this.specsOfList(m.rec) as unknown[]).slice();
@@ -1514,27 +1671,42 @@ export class Physics3Driver implements WorldDriver {
       }
       this.put(m.rec, cell, changed);
     }
-    for (const [rec, arr] of lists) this.put(rec, { defined: true, value: arr }, changed);
-    this.writeLinks(alpha, changed);
-    this.writeFluids(alpha, changed);
-    this.writeCloth(alpha, changed);
+    if (lists) for (const [rec, arr] of lists) this.put(rec, { defined: true, value: arr }, changed);
+    this.writeLinks(changed);
+    this.writeFluids(changed);
+    this.writeCloth(changed);
     if (this.worldRec) {
       const s = this.settings();
       let energy = 0;
       let px = 0;
       let py = 0;
-      for (const m of this.members) {
+      for (let k = 0; k < this.members.length; k++) {
+        const m = this.members[k] as Member3;
         const i = m.index;
         if (m.role !== 'body' || w.type[i] !== BodyType3.Dynamic) continue;
         energy += w.kinetic(i) + this.midPotential(i);
         px += (w.mass[i] as number) * (w.v[i * 3] as number);
         py += (w.mass[i] as number) * (w.v[i * 3 + 1] as number);
       }
-      for (const j of w.joints) if (!j.broken) energy += j.energy(w);
-      const cell: Cell = { defined: true, value: { ...s, time: this.t0 + this.n / this.rate, energy, momentumX: px, momentumY: py, awake: w.awakeCount(), contacts: w.contactCount } satisfies WorldValue };
-      this.put(this.worldRec, cell, changed);
+      for (let k = 0; k < w.joints.length; k++) {
+        const j = w.joints[k] as Joint3;
+        if (!j.broken) energy += j.energy(w);
+      }
+      // (every field written out, not `{ ...s, time, … }`: the object a spread makes has no cache of its keys, so comparing it
+      // with the last frame's makes a list of them each time, garbage, design 11.4)
+      const value: WorldValue = {
+        schema: 'World', gx: s.gx, gy: s.gy, gz: s.gz, g3: s.g3, air: s.air, passes: s.passes, rate: s.rate, sleep: s.sleep, range: s.range, show: s.show, windX: s.windX, windY: s.windY, windZ: s.windZ,
+        time: this.t0 + this.n / this.rate, energy, momentumX: px, momentumY: py, awake: w.awakeCount(), contacts: w.contactCount,
+      };
+      const cell: Cell = { defined: true, value };
+      if (this.n !== this.worldN) {
+        // the world's time moved with the step number, so this cell differs from the last: no comparison made (a compare of
+        // twenty numbers read by name boxes the doubles, garbage in every frame)
+        this.worldN = this.n;
+        this.putNew(this.worldRec, cell, changed);
+      } else this.put(this.worldRec, cell, changed);
     }
-    return changed;
+    return changed.take();
   }
 
   /** A point of body i in its frame, in the world at the drawn pose. */
@@ -1545,7 +1717,15 @@ export class Physics3Driver implements WorldDriver {
   }
 
   /** Joints: what they carry and where their ends are; wheels: where they are and how they turn; cars: their speed. */
-  private writeLinks(alpha: number, changed: ObjRec[]): void {
+  private writeLinks(changed: RecList<ObjRec>): void {
+    // (nothing to write: no map, no closure made for it; the work is in `writeLinksNow` because a function that holds a
+    // closure makes its context on the heap at every call, even one that returns at once)
+    if (this.jointMembers.length === 0 && this.wheelMembers.length === 0 && this.vehicleRecs.length === 0) return;
+    this.writeLinksNow(changed);
+  }
+
+  private writeLinksNow(changed: RecList<ObjRec>): void {
+    const alpha = this.alphaNow;
     const w = this.world as World3;
     const h = 1 / this.rate;
     const put = (rec: ObjRec, item: number | undefined, value: unknown, groups: Map<ObjRec, unknown[]>, all: () => unknown[]): void => {
@@ -1619,18 +1799,21 @@ export class Physics3Driver implements WorldDriver {
   }
 
   /** Liquids: each drop where it is (between the last two steps, as bodies), how many, the surface; waves: their heights. */
-  private writeFluids(alpha: number, changed: ObjRec[]): void {
+  private writeFluids(changed: RecList<ObjRec>): void {
+    const alpha = this.alphaNow;
     const fl = this.fluid;
     if (fl) {
       const ps = fl.ps;
-      for (const lm of this.liquidMembers) {
+      for (let m = 0; m < this.liquidMembers.length; m++) {
+        const lm = this.liquidMembers[m] as (typeof this.liquidMembers)[number];
         let cell: Cell;
         if (fl.unstable) cell = { defined: false, reason: 'unstable_world' };
         else {
           const count = fl.countOf(lm.owner);
-          const xs = new Float32Array(count);
-          const ys = new Float32Array(count);
-          const zs = new Float32Array(count);
+          // (the arrays of the frame before the last, written over: see `FlipArrays`)
+          const xs = lm.out.xs.next(count);
+          const ys = lm.out.ys.next(count);
+          const zs = lm.out.zs.next(count);
           let k = 0;
           for (let i = 0; i < ps.n; i++) {
             if (ps.owner[i] !== lm.owner) continue;
@@ -1647,10 +1830,11 @@ export class Physics3Driver implements WorldDriver {
         this.put(lm.rec, cell, changed);
       }
     }
-    for (const wm of this.waveMembers) {
+    for (let m = 0; m < this.waveMembers.length; m++) {
+      const wm = this.waveMembers[m] as (typeof this.waveMembers)[number];
       const g = wm.grid;
       let ok = true;
-      const heights = new Float32Array(g.n);
+      const heights = wm.heights.next(g.n);
       for (let k = 0; k < g.n; k++) {
         // the water's level as it shows: the surface, and under a body the level its push holds the water at
         const u = (g.u[k] as number) + (g.P[k] as number);
@@ -1661,10 +1845,20 @@ export class Physics3Driver implements WorldDriver {
     }
   }
 
-  private put(rec: ObjRec, cell: Cell, changed: ObjRec[]): void {
+  private put(rec: ObjRec, cell: Cell, changed: RecList<ObjRec>): void {
     this.lastCells.set(rec.id, cell);
     this.written.add(rec.id);
     if (this.acc.write(rec, cell)) changed.push(rec);
+  }
+
+  /** The step number the world's cell was last written at (-1: not yet). */
+  private worldN = -1;
+
+  /** A cell known to differ from the held one: written without the comparison. */
+  private putNew(rec: ObjRec, cell: Cell, changed: RecList<ObjRec>): void {
+    this.lastCells.set(rec.id, cell);
+    this.written.add(rec.id);
+    if (this.acc.writeNew(rec, cell)) changed.push(rec);
   }
 
   /* ------------------------------ liquid, water and waves (round 7) ------------------------------ */
@@ -1742,7 +1936,7 @@ export class Physics3Driver implements WorldDriver {
     const sources: DropSource3[] = [];
     let total = 0;
     list.forEach(({ rec, v }, owner) => {
-      this.liquidMembers.push({ rec, owner, value: v });
+      this.liquidMembers.push({ rec, owner, value: v, out: new DropsOut() });
       const s = v.spec;
       if (s.region3) {
         const f = fillRegion3(s.region3, Math.max(0, Math.min(s.count, MAX_DROPS - total)), d);
@@ -1765,7 +1959,7 @@ export class Physics3Driver implements WorldDriver {
       const v = this.wavesOf(r);
       if (!v) continue;
       const grid = new WaveGrid({ nx: v.nx, ny: v.ny, x0: v.x0, y0: v.y0, dx: v.dx, dy: v.dy, level: v.level, depth: v.depth, damping: v.damping }, g, 1 / this.rate);
-      this.waveMembers.push({ rec: r, value: v, grid });
+      this.waveMembers.push({ rec: r, value: v, grid, heights: new FlipArrays<Float32Array>(makeFloat32) });
     }
   }
 
@@ -1905,7 +2099,7 @@ export class Physics3Driver implements WorldDriver {
     c.sleeping = world.sleeping;
     c.attach(world);
     this.cloth = c;
-    this.clothMembers = list.map(({ rec, v }, index) => ({ rec, value: v, index }));
+    this.clothMembers = list.map(({ rec, v }, index) => ({ rec, value: v, index, out: new ClothOut() }));
   }
 
   /** The wind of this step (a formula of `t` is read at each step) and the grabs the log holds at step n. */
@@ -1922,8 +2116,12 @@ export class Physics3Driver implements WorldDriver {
     c.windY = wv.windY;
     c.windZ = wv.windZ;
     c.releaseAll();
-    if (!this.logHasGrab()) return;
-    // the grab that holds each point at step n: its last grab, unless released since
+    // (the grabs are held apart: a function that holds a closure makes its context on the heap at every call, design 11.4)
+    if (this.logHasGrab()) this.holdGrabs(c, n);
+  }
+
+  /** The grab that holds each point at step n: its last grab, unless released since. */
+  private holdGrabs(c: Cloth3, n: number): void {
     const held = new Map<string, V3 | undefined>();
     for (const e of this.log) {
       if (e.n > n) break;
@@ -1967,20 +2165,24 @@ export class Physics3Driver implements WorldDriver {
   }
 
   /** Each cloth's points where they are (between the last two steps), and its readouts. */
-  private writeCloth(alpha: number, changed: ObjRec[]): void {
+  private writeCloth(changed: RecList<ObjRec>): void {
     const c = this.cloth;
     if (!c) return;
-    for (const cm of this.clothMembers) {
+    const alpha = this.alphaNow;
+    for (let m = 0; m < this.clothMembers.length; m++) {
+      const cm = this.clothMembers[m] as (typeof this.clothMembers)[number];
       const info = c.cloths[cm.index];
       if (!info) continue;
       if (info.unstable) {
         this.put(cm.rec, { defined: false, reason: 'unstable_world' }, changed);
         continue;
       }
+      const out = cm.out;
       const n = info.n;
-      const xs = new Float64Array(n);
-      const ys = new Float64Array(n);
-      const zs = new Float64Array(n);
+      // (the arrays of the frame before the last, written over; and the rare ones kept while they hold: see `ClothOut`)
+      const xs = out.xs.next(n);
+      const ys = out.ys.next(n);
+      const zs = out.zs.next(n);
       for (let k = 0; k < n; k++) {
         const i = info.p0 + k;
         const sx = c.sx[i] as number;
@@ -1990,15 +2192,33 @@ export class Physics3Driver implements WorldDriver {
         ys[k] = sy + ((c.y[i] as number) - sy) * alpha;
         zs[k] = sz + ((c.z[i] as number) - sz) * alpha;
       }
-      const cut = new Uint8Array(info.tn);
-      if (info.torn > 0) for (let t = 0; t < info.tn; t++) cut[t] = c.triTorn(info.t0 + t) ? 1 : 0;
-      const pinsAt: number[] = [];
-      for (let q = info.pin0; q < info.pin0 + info.pinN; q++) {
-        const i = c.pinPoint[q] as number;
-        pinsAt.push(xs[i - info.p0] as number, ys[i - info.p0] as number, zs[i - info.p0] as number);
+      if (out.cutNow.length !== info.tn) out.cutNow = new Uint8Array(info.tn);
+      else out.cutNow.fill(0);
+      if (info.torn > 0) for (let t = 0; t < info.tn; t++) out.cutNow[t] = c.triTorn(info.t0 + t) ? 1 : 0;
+      const cut = out.cutFor(info.tn);
+      const pins = out.pinsNow;
+      const np = 3 * info.pinN;
+      if (pins.length !== np) {
+        pins.length = np;
+        pins.fill(0);
       }
-      const touching = c.touching(cm.index).map((b) => this.nameOfIndex[b] ?? '').filter((s) => s !== '');
-      const value: ClothValue = { ...cm.value, xs, ys, zs, cut, torn: info.torn, stretchMax: c.stretchMax(cm.index), energy: c.energy(cm.index), asleep: info.asleep, touching, pinsAt };
+      for (let q = 0; q < info.pinN; q++) {
+        const i = (c.pinPoint[info.pin0 + q] as number) - info.p0;
+        pins[q * 3] = xs[i] as number;
+        pins[q * 3 + 1] = ys[i] as number;
+        pins[q * 3 + 2] = zs[i] as number;
+      }
+      const pinsAt = out.pinsFor();
+      c.touchingInto(cm.index, out.touchIndex);
+      const names = out.touchingNow;
+      names.length = 0;
+      for (let k = 0; k < out.touchIndex.length; k++) {
+        const nm = this.nameOfIndex[out.touchIndex[k] as number] ?? '';
+        if (nm !== '') names.push(nm);
+      }
+      const touching = out.touchingFor();
+      // (every field written out, not spread: see the world's cell in `writeCells`)
+      const value: ClothValue = { schema: 'Cloth', spec: cm.value.spec, xs, ys, zs, cut, torn: info.torn, stretchMax: c.stretchMax(cm.index), energy: c.energy(cm.index), asleep: info.asleep, touching, pinsAt };
       this.put(cm.rec, { defined: true, value }, changed);
     }
   }
@@ -2322,6 +2542,8 @@ function wheelSlab(c: V3, r: number, width: number): ShapeDef3 {
 
 /** Body properties a `with` line may set on a body in space. */
 export const BODY3_PROPS = ['bounce', 'friction', 'force', 'torque', 'group'] as const;
+/** The style properties of a solid the world reads. */
+const SOLID_PROPS = ['bounce', 'friction'] as const;
 
 function isGround(r: ObjRec): boolean {
   const n = r.p.node;

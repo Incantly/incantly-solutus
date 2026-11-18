@@ -342,8 +342,7 @@ export class World3 {
   /** A joint is solved while one of its bodies moves. */
   private live(j: Joint3): boolean {
     if (j.broken) return false;
-    const on = (i: number): boolean => this.type[i] === BodyType3.Dynamic && this.awake[i] === 1;
-    return on(j.a) || on(j.b);
+    return (this.type[j.a] === BodyType3.Dynamic && this.awake[j.a] === 1) || (this.type[j.b] === BodyType3.Dynamic && this.awake[j.b] === 1);
   }
 
   /**
@@ -561,16 +560,8 @@ export class World3 {
           if (y > hy) hy = y;
           if (z > hz) hz = z;
         }
-        for (const [src, dst] of [[s.ln, s.wn], [s.le, s.we]] as const) {
-          for (let j = 0; j < src.length; j += 3) {
-            const a = src[j] as number;
-            const b = src[j + 1] as number;
-            const c = src[j + 2] as number;
-            dst[j] = (R[r] as number) * a + (R[r + 1] as number) * b + (R[r + 2] as number) * c;
-            dst[j + 1] = (R[r + 3] as number) * a + (R[r + 4] as number) * b + (R[r + 5] as number) * c;
-            dst[j + 2] = (R[r + 6] as number) * a + (R[r + 7] as number) * b + (R[r + 8] as number) * c;
-          }
-        }
+        turnAll(s.ln, s.wn, R, r);
+        turnAll(s.le, s.we, R, r);
       }
       this.lo[k * 3] = lx - margin;
       this.lo[k * 3 + 1] = ly - margin;
@@ -583,7 +574,14 @@ export class World3 {
 
   /* ------------------------------ the step ------------------------------ */
 
-  step(h: number): void {
+  /** The step's length: set by the driver before `step` (a field, not an argument: a number passed in a call is a heap number, design 11.4). */
+  hStep = 1 / 120;
+  /** Scratch a step keeps: the speeds at its start, and the joints it solves. */
+  private v0 = new Float64Array(0);
+  private liveJoints: Joint3[] = [];
+
+  step(): void {
+    const h = this.hStep;
     const n = this.n;
     this.hits.length = 0;
     this.left.length = 0;
@@ -595,7 +593,9 @@ export class World3 {
     this.pw.set(this.w);
     for (let i = 0; i < n; i++) if (this.type[i] !== BodyType3.Dynamic || this.awake[i] === 1) this.forces.fill(0, i * NK * 3, (i + 1) * NK * 3);
     // pushes and steady forces wake a body; the speeds at the start with this step's pushes, for the net force
-    const v0 = new Float64Array(this.v);
+    if (this.v0.length !== this.v.length) this.v0 = new Float64Array(this.v.length);
+    const v0 = this.v0;
+    v0.set(this.v);
     for (let i = 0; i < n; i++) {
       if (this.type[i] !== BodyType3.Dynamic) continue;
       const pushed = this.force[i * 3] !== 0 || this.force[i * 3 + 1] !== 0 || this.force[i * 3 + 2] !== 0 || this.impulse[i * 3] !== 0 || this.impulse[i * 3 + 1] !== 0 || this.impulse[i * 3 + 2] !== 0 || this.torque[i * 3] !== 0 || this.torque[i * 3 + 1] !== 0 || this.torque[i * 3 + 2] !== 0;
@@ -604,29 +604,46 @@ export class World3 {
     }
     for (let i = 0; i < n; i++) if ((this.type[i] !== BodyType3.Static || this.stepIndex === 0) && !this.gone.has(i)) this.updateShapes(i);
     this.findPairs();
-    this.updateContacts(h);
+    this.updateContacts();
     this.wakeTouched();
     this.initContacts();
     // the soft step (design 6.5), as in the plane: small steps of forces, bounce, warm start, solve, move, relax
-    const live = this.joints.filter((j) => this.live(j));
+    // (indexed loops and fields throughout: an iterator or a number passed in a call is garbage in every step, design 11.4)
+    const live = this.liveJoints;
+    live.length = 0;
+    for (let k = 0; k < this.joints.length; k++) {
+      const j = this.joints[k] as Joint3;
+      if (this.live(j)) live.push(j);
+    }
     const S = this.substeps;
     const hs = h / S;
     const inv_hs = 1 / hs;
-    this.beginSoft(hs);
+    this.hsNow = hs;
+    this.invHs = inv_hs;
+    this.beginSoft();
     for (let s = 0; s < S; s++) {
       this.pfv.set(this.v);
       this.pfw.set(this.w);
-      this.integrateForces(hs, s === 0, S);
+      this.integrateForces(s === 0, S);
       if (s === S - 1) this.impulse.fill(0);
-      this.closingSpeeds(hs);
+      this.closingSpeeds();
       this.bounceWalls();
-      for (const j of live) if (!j.broken) j.initVelocity(this, hs);
+      for (let k = 0; k < live.length; k++) {
+        const j = live[k] as Joint3;
+        if (!j.broken) j.initVelocity(this, hs);
+      }
       this.warmStart();
-      for (const j of live) if (!j.broken) j.solveVelocity(this, hs);
-      this.solveSoft(inv_hs, true);
-      this.integratePositions(hs);
-      for (const j of live) if (!j.broken) j.solveVelocity(this, hs);
-      this.solveSoft(inv_hs, false);
+      for (let k = 0; k < live.length; k++) {
+        const j = live[k] as Joint3;
+        if (!j.broken) j.solveVelocity(this, hs);
+      }
+      this.solveSoft(true);
+      this.integratePositions();
+      for (let k = 0; k < live.length; k++) {
+        const j = live[k] as Joint3;
+        if (!j.broken) j.solveVelocity(this, hs);
+      }
+      this.solveSoft(false);
       this.bounceBodies();
       this.addUpImpulses();
     }
@@ -634,18 +651,22 @@ export class World3 {
     if (live.length > 0) {
       for (let it = 0; it < 3; it++) {
         let ok = true;
-        for (const j of live) if (!j.broken) ok = j.solvePosition(this) && ok;
+        for (let k = 0; k < live.length; k++) {
+          const j = live[k] as Joint3;
+          if (!j.broken) ok = j.solvePosition(this) && ok;
+        }
         if (ok) break;
       }
     }
-    this.countForces(h, v0, inv_hs);
+    this.countForces(v0);
     this.collectHits();
-    if (this.sleeping) this.sleepIslands(h);
+    if (this.sleeping) this.sleepIslands();
+    const range = this.range;
     for (let i = 0; i < n; i++) {
       if (this.type[i] !== BodyType3.Dynamic || this.gone.has(i)) continue;
-      if (Math.abs(this.p[i * 3] as number) > this.range || Math.abs(this.p[i * 3 + 1] as number) > this.range || Math.abs(this.p[i * 3 + 2] as number) > this.range) this.left.push(i);
+      if (Math.abs(this.p[i * 3] as number) > range || Math.abs(this.p[i * 3 + 1] as number) > range || Math.abs(this.p[i * 3 + 2] as number) > range) this.left.push(i);
     }
-    for (const i of this.left) this.removeBody(i);
+    for (let k = 0; k < this.left.length; k++) this.removeBody(this.left[k] as number);
     this.stepIndex++;
   }
 
@@ -683,19 +704,6 @@ export class World3 {
     }
     this.pairCount = 0;
     const hi = this.hi;
-    const all = this.shapes.length;
-    const overlapYZ = (a: number, b: number): boolean =>
-      !((hi[a * 3 + 1] as number) < (lo[b * 3 + 1] as number) || (hi[b * 3 + 1] as number) < (lo[a * 3 + 1] as number) || (hi[a * 3 + 2] as number) < (lo[b * 3 + 2] as number) || (hi[b * 3 + 2] as number) < (lo[a * 3 + 2] as number));
-    const add = (s1: number, s2: number, b1: number): void => {
-      const b2 = (this.shapes[s2] as Shape3).body;
-      if (b1 === b2 || !this.mayHit(b1, b2)) return;
-      if (this.pairCount === this.pairs.length) {
-        const p = new Float64Array(this.pairs.length * 2);
-        p.set(this.pairs);
-        this.pairs = p;
-      }
-      this.pairs[this.pairCount++] = (s1 < s2 ? s1 : s2) * all + (s1 < s2 ? s2 : s1);
-    };
     const fs = this.fixedSorted;
     const flo = this.fixedLo;
     const nf = fs.length;
@@ -709,13 +717,13 @@ export class World3 {
       for (let j = i + 1; j < ns; j++) {
         const s2 = sap[j] as number;
         if ((lo[s2 * 3] as number) > hx) break;
-        if (overlapYZ(s1, s2)) add(s1, s2, b1);
+        if (this.overlapYZ(s1, s2)) this.addPair(s1, s2, b1);
       }
       // a sleeping body only meets fixed shapes when it wakes
       if (this.type[b1] === BodyType3.Dynamic && this.awake[b1] === 0) continue;
       for (let j = 0; j < this.fixedBig.length; j++) {
         const s2 = this.fixedBig[j] as number;
-        if ((hi[s2 * 3] as number) >= lx && (lo[s2 * 3] as number) <= hx && overlapYZ(s1, s2)) add(s1, s2, b1);
+        if ((hi[s2 * 3] as number) >= lx && (lo[s2 * 3] as number) <= hx && this.overlapYZ(s1, s2)) this.addPair(s1, s2, b1);
       }
       // the fixed shapes whose left edge is within the widest fixed shape of this one's left edge
       let a = 0;
@@ -729,10 +737,44 @@ export class World3 {
       for (let j = a; j < nf; j++) {
         if ((flo[j] as number) > hx) break;
         const s2 = fs[j] as number;
-        if ((hi[s2 * 3] as number) >= lx && overlapYZ(s1, s2)) add(s1, s2, b1);
+        if ((hi[s2 * 3] as number) >= lx && this.overlapYZ(s1, s2)) this.addPair(s1, s2, b1);
       }
     }
-    this.pairs.subarray(0, this.pairCount).sort();
+    const np = this.pairCount;
+    if (np > 16) this.pairs.subarray(0, np).sort();
+    else {
+      // a few pairs (a quiet world): insertion sort, and no typed-array view made for the engine's sort
+      const pairs = this.pairs;
+      for (let i = 1; i < np; i++) {
+        const key = pairs[i] as number;
+        let j = i - 1;
+        while (j >= 0 && (pairs[j] as number) > key) {
+          pairs[j + 1] = pairs[j] as number;
+          j--;
+        }
+        pairs[j + 1] = key;
+      }
+    }
+  }
+
+  /** Do the boxes of shapes a and b overlap in y and z (the sweep has settled x)? */
+  private overlapYZ(a: number, b: number): boolean {
+    const lo = this.lo;
+    const hi = this.hi;
+    return !((hi[a * 3 + 1] as number) < (lo[b * 3 + 1] as number) || (hi[b * 3 + 1] as number) < (lo[a * 3 + 1] as number) || (hi[a * 3 + 2] as number) < (lo[b * 3 + 2] as number) || (hi[b * 3 + 2] as number) < (lo[a * 3 + 2] as number));
+  }
+
+  /** Lists the pair of shapes s1 and s2 (of bodies b1 and the other) when the bodies may hit. */
+  private addPair(s1: number, s2: number, b1: number): void {
+    const b2 = (this.shapes[s2] as Shape3).body;
+    if (b1 === b2 || !this.mayHit(b1, b2)) return;
+    if (this.pairCount === this.pairs.length) {
+      const p = new Float64Array(this.pairs.length * 2);
+      p.set(this.pairs);
+      this.pairs = p;
+    }
+    const all = this.shapes.length;
+    this.pairs[this.pairCount++] = (s1 < s2 ? s1 : s2) * all + (s1 < s2 ? s2 : s1);
   }
 
   private mayHit(a: number, b: number): boolean {
@@ -747,7 +789,10 @@ export class World3 {
     }
     const ga = this.group[a] as number;
     if (ga !== 0 && ga === this.group[b]) return false;
-    for (const j of this.joints) if (!j.broken && ((j.a === a && j.b === b) || (j.a === b && j.b === a))) return false;
+    for (let k = 0; k < this.joints.length; k++) {
+      const j = this.joints[k] as Joint3;
+      if (!j.broken && ((j.a === a && j.b === b) || (j.a === b && j.b === a))) return false;
+    }
     return true;
   }
 
@@ -758,10 +803,25 @@ export class World3 {
 
   /* ------------------------------ narrow phase ------------------------------ */
 
-  private updateContacts(h: number): void {
+  /** The contact table and list the next step fills (the last step's are swapped with them: a step makes no new map or list). */
+  private spareMap = new Map<number, Contact3>();
+  private spareList: Contact3[] = [];
+
+  /** A sleeping body's touch survives into the new table (kept by `updateContacts` through `Map.forEach`: no iterator). */
+  private readonly keepTouch = (c: Contact3, key: number): void => {
+    if (c.touching && this.stillBody(c.a) && this.stillBody(c.b)) this.spareMap.set(key, c);
+  };
+
+  private stillBody(i: number): boolean {
+    return this.type[i] !== BodyType3.Dynamic || (this.awake[i] === 0 && !this.gone.has(i));
+  }
+
+  private updateContacts(): void {
+    const h = this.hStep;
     const old = this.contactMap;
-    const next = new Map<number, Contact3>();
-    const list: Contact3[] = [];
+    const next = this.spareMap;
+    const list = this.spareList;
+    list.length = 0;
     const ns = this.shapes.length;
     for (let p = 0; p < this.pairCount; p++) {
       const key = this.pairs[p] as number;
@@ -814,10 +874,13 @@ export class World3 {
       this.meet(key, sa, sb, A, B, this.collide(A, B, margin), old, next, list);
     }
     // a sleeping body keeps its touches (and what it reads of them) until it wakes; they are not solved
-    for (const [key, c] of old) {
-      const still = (i: number): boolean => this.type[i] !== BodyType3.Dynamic || (this.awake[i] === 0 && !this.gone.has(i));
-      if (c.touching && still(c.a) && still(c.b)) next.set(key, c);
+    // (`clear` makes a new table even on an empty map, so it is asked of a map that holds something)
+    if (old.size > 0) {
+      old.forEach(this.keepTouch);
+      old.clear();
     }
+    this.spareMap = old;
+    this.spareList = this.contacts;
     this.contactMap = next;
     this.contacts = list;
   }
@@ -969,7 +1032,8 @@ export class World3 {
   private initContacts(): void {
     const v = this.pv;
     const w = this.pw;
-    for (const c of this.contacts) {
+    for (let kc = 0; kc < this.contacts.length; kc++) {
+      const c = this.contacts[kc] as Contact3;
       // two friction directions across the normal
       const nx = c.nx;
       const ny = c.ny;
@@ -989,7 +1053,8 @@ export class World3 {
       c.t2y = nz * c.t1x - nx * c.t1z;
       c.t2z = nx * c.t1y - ny * c.t1x;
       let touching = false;
-      for (const p of c.pts) {
+      for (let kp = 0; kp < c.pts.length; kp++) {
+        const p = c.pts[kp] as CPoint;
         const wa = this.toWorld(c.a, p.ax, p.ay, p.az);
         const wb = this.toWorld(c.b, p.bx, p.by, p.bz);
         p.s = nx * (wb[0] - wa[0]) + ny * (wb[1] - wa[1]) + nz * (wb[2] - wa[2]);
@@ -1044,8 +1109,10 @@ export class World3 {
   }
 
   private warmStart(): void {
-    for (const c of this.contacts) {
-      for (const p of c.pts) {
+    for (let kc = 0; kc < this.contacts.length; kc++) {
+      const c = this.contacts[kc] as Contact3;
+      for (let kp = 0; kp < c.pts.length; kp++) {
+        const p = c.pts[kp] as CPoint;
         const x = p.ni * c.nx + p.t1i * c.t1x + p.t2i * c.t2x;
         const y = p.ni * c.ny + p.t1i * c.t1y + p.t2i * c.t2y;
         const z = p.ni * c.nz + p.t1i * c.t1z + p.t2i * c.t2z;
@@ -1071,24 +1138,37 @@ export class World3 {
   private wallMass = 1;
   private wallImp = 0;
 
-  private beginSoft(hs: number): void {
+  /** The small step's length and its inverse, set by `step` (fields, not arguments). */
+  private hsNow = 0;
+  private invHs = 0;
+
+  private beginSoft(): void {
+    const hs = this.hsNow;
     if (this.pfv.length !== this.v.length) {
       this.pfv = new Float64Array(this.v.length);
       this.pfw = new Float64Array(this.w.length);
     }
     // a contact is a stiff, heavily damped spring: 30 Hz (at most a quarter of the small steps' rate), damping ratio 10
+    // (the numbers of a spring of frequency f are worked out in line, twice: no closure, no array, no call)
     const hz = Math.min(CONTACT_HERTZ, 0.25 / hs);
-    const soft = (f: number): [number, number, number] => {
-      const om = 2 * Math.PI * f;
-      const a1 = 2 * CONTACT_DAMPING + hs * om;
-      const a2 = hs * om * a1;
-      const a3 = 1 / (1 + a2);
-      return [om / a1, a2 * a3, a3];
-    };
-    [this.softBias, this.softMass, this.softImp] = soft(hz);
-    [this.wallBias, this.wallMass, this.wallImp] = soft(2 * hz);
-    for (const c of this.contacts) {
-      for (const p of c.pts) {
+    const om1 = 2 * Math.PI * hz;
+    const a11 = 2 * CONTACT_DAMPING + hs * om1;
+    const a21 = hs * om1 * a11;
+    const a31 = 1 / (1 + a21);
+    this.softBias = om1 / a11;
+    this.softMass = a21 * a31;
+    this.softImp = a31;
+    const om2 = 2 * Math.PI * (2 * hz);
+    const a12 = 2 * CONTACT_DAMPING + hs * om2;
+    const a22 = hs * om2 * a12;
+    const a32 = 1 / (1 + a22);
+    this.wallBias = om2 / a12;
+    this.wallMass = a22 * a32;
+    this.wallImp = a32;
+    for (let kc = 0; kc < this.contacts.length; kc++) {
+      const c = this.contacts[kc] as Contact3;
+      for (let kp = 0; kp < c.pts.length; kp++) {
+        const p = c.pts[kp] as CPoint;
         p.tn = p.t1t = p.t2t = 0;
         p.max = 0;
         p.bounced = 0;
@@ -1097,7 +1177,8 @@ export class World3 {
   }
 
   /** Gravity, steady forces, torques, drag, and the step's pushes spread over its small steps, into the speeds. */
-  private integrateForces(hs: number, first: boolean, S: number): void {
+  private integrateForces(first: boolean, S: number): void {
+    const hs = this.hsNow;
     const n = this.n;
     const damp = 1 / (1 + hs * this.air);
     const g0 = this.gx;
@@ -1136,7 +1217,8 @@ export class World3 {
   }
 
   /** Positions and turns move by speed times the small step. */
-  private integratePositions(hs: number): void {
+  private integratePositions(): void {
+    const hs = this.hsNow;
     const n = this.n;
     for (let i = 0; i < n; i++) {
       if (this.type[i] !== BodyType3.Dynamic || this.awake[i] === 0) continue;
@@ -1175,11 +1257,12 @@ export class World3 {
   }
 
   /** Each point's closing speed after the small step's forces; for a point fast enough to bounce, before them and its gap. */
-  private closingSpeeds(hs: number): void {
-    this.hsNow = hs;
-    for (const c of this.contacts) {
+  private closingSpeeds(): void {
+    for (let kc = 0; kc < this.contacts.length; kc++) {
+      const c = this.contacts[kc] as Contact3;
       if (c.restitution === 0) continue;
-      for (const p of c.pts) {
+      for (let kp = 0; kp < c.pts.length; kp++) {
+        const p = c.pts[kp] as CPoint;
         p.sf = this.relV(c.a, c.b, p, c.nx, c.ny, c.nz);
         if (p.sf <= -RESTITUTION_THRESHOLD) {
           p.sv = this.relV(c.a, c.b, p, c.nx, c.ny, c.nz, this.pfv, this.pfw);
@@ -1197,13 +1280,16 @@ export class World3 {
    * overlaps is pushed out softly (at most 3 m/s); without (the relax pass), only to a standstill. A point with a gap may
    * close it within the small step, but not go below zero (speculative).
    */
-  private solveSoft(inv_hs: number, bias: boolean): void {
-    for (const c of this.contacts) {
+  private solveSoft(bias: boolean): void {
+    const inv_hs = this.invHs;
+    for (let kc = 0; kc < this.contacts.length; kc++) {
+      const c = this.contacts[kc] as Contact3;
       const wall = this.type[c.a] !== BodyType3.Dynamic || this.type[c.b] !== BodyType3.Dynamic;
       const sBias = wall ? this.wallBias : this.softBias;
       const sMass = wall ? this.wallMass : this.softMass;
       const sImp = wall ? this.wallImp : this.softImp;
-      for (const p of c.pts) {
+      for (let kp = 0; kp < c.pts.length; kp++) {
+        const p = c.pts[kp] as CPoint;
         // friction in two directions, a box of μ times the push
         const maxF = c.friction * p.ni;
         {
@@ -1223,7 +1309,8 @@ export class World3 {
           if (d !== 0) this.applyAt(c.a, c.b, p.rax, p.ray, p.raz, p.rbx, p.rby, p.rbz, d * c.t2x, d * c.t2y, d * c.t2z);
         }
       }
-      for (const p of c.pts) {
+      for (let kp = 0; kp < c.pts.length; kp++) {
+        const p = c.pts[kp] as CPoint;
         const s = this.gapOf(c, p);
         const vn = this.relV(c.a, c.b, p, c.nx, c.ny, c.nz);
         // the relax pass leaves a fast point with a gap to a wall alone if it bounces: it meets in the next small step
@@ -1255,7 +1342,8 @@ export class World3 {
    */
   private bounceContact(c: Contact3, wallStep: boolean): void {
     let any = false;
-    for (const p of c.pts) {
+    for (let kp = 0; kp < c.pts.length; kp++) {
+      const p = c.pts[kp] as CPoint;
       p.bi = 0;
       const q = p.bounced === 0 && (wallStep ? p.sf <= -RESTITUTION_THRESHOLD && p.sg + this.hsNow * p.sf < 0 : p.sv <= -RESTITUTION_THRESHOLD && p.ni > 0);
       if (q) {
@@ -1265,7 +1353,8 @@ export class World3 {
     }
     if (!any) return;
     for (let it = 0; it < 8; it++) {
-      for (const p of c.pts) {
+      for (let kp = 0; kp < c.pts.length; kp++) {
+        const p = c.pts[kp] as CPoint;
         if (p.bounced !== 2) continue;
         const vn = this.relV(c.a, c.b, p, c.nx, c.ny, c.nz);
         const target = -c.restitution * p.sv;
@@ -1275,7 +1364,8 @@ export class World3 {
         if (d !== 0) this.applyAt(c.a, c.b, p.rax, p.ray, p.raz, p.rbx, p.rby, p.rbz, d * c.nx, d * c.ny, d * c.nz);
       }
     }
-    for (const p of c.pts) {
+    for (let kp = 0; kp < c.pts.length; kp++) {
+      const p = c.pts[kp] as CPoint;
       if (p.bounced !== 2) continue;
       p.bounced = 1;
       p.tn += p.bi;
@@ -1283,11 +1373,10 @@ export class World3 {
     }
   }
 
-  private hsNow = 0;
-
   /** Off a wall: a point that would go through its gap in this small step turns back now, before it moves. */
   private bounceWalls(): void {
-    for (const c of this.contacts) {
+    for (let kc = 0; kc < this.contacts.length; kc++) {
+      const c = this.contacts[kc] as Contact3;
       if (c.restitution === 0) continue;
       if (this.type[c.a] === BodyType3.Dynamic && this.type[c.b] === BodyType3.Dynamic) continue;
       this.bounceContact(c, true);
@@ -1296,7 +1385,8 @@ export class World3 {
 
   /** Between two bodies: after the relax pass of the small step where a point first pushes (turning back before the move let a falling stack sink and fall over). */
   private bounceBodies(): void {
-    for (const c of this.contacts) {
+    for (let kc = 0; kc < this.contacts.length; kc++) {
+      const c = this.contacts[kc] as Contact3;
       if (c.restitution === 0 || this.type[c.a] !== BodyType3.Dynamic || this.type[c.b] !== BodyType3.Dynamic) continue;
       this.bounceContact(c, false);
     }
@@ -1304,8 +1394,10 @@ export class World3 {
 
   /** After a small step: its impulses go into the step's totals and the largest push. */
   private addUpImpulses(): void {
-    for (const c of this.contacts) {
-      for (const p of c.pts) {
+    for (let kc = 0; kc < this.contacts.length; kc++) {
+      const c = this.contacts[kc] as Contact3;
+      for (let kp = 0; kp < c.pts.length; kp++) {
+        const p = c.pts[kp] as CPoint;
         p.tn += p.ni;
         p.t1t += p.t1i;
         p.t2t += p.t2i;
@@ -1364,23 +1456,38 @@ export class World3 {
     const n = this.n;
     if (this.parent.length !== n) this.parent = new Int32Array(n);
     for (let i = 0; i < n; i++) this.parent[i] = i;
-    const join = (a: number, b: number): void => {
-      if (this.type[a] !== BodyType3.Dynamic || this.type[b] !== BodyType3.Dynamic) return;
-      const ra = this.find(a);
-      const rb = this.find(b);
-      if (ra !== rb) this.parent[Math.max(ra, rb)] = Math.min(ra, rb);
-    };
-    for (const c of this.contacts) if (c.pts.length > 0) join(c.a, c.b);
-    for (const j of this.joints) if (!j.broken) join(j.a, j.b);
+    for (let k = 0; k < this.contacts.length; k++) {
+      const c = this.contacts[k] as Contact3;
+      if (c.pts.length > 0) this.join(c.a, c.b);
+    }
+    for (let k = 0; k < this.joints.length; k++) {
+      const j = this.joints[k] as Joint3;
+      if (!j.broken) this.join(j.a, j.b);
+    }
   }
+
+  /** Puts the islands of bodies a and b together (two dynamic bodies only). */
+  private join(a: number, b: number): void {
+    if (this.type[a] !== BodyType3.Dynamic || this.type[b] !== BodyType3.Dynamic) return;
+    const ra = this.find(a);
+    const rb = this.find(b);
+    if (ra !== rb) this.parent[Math.max(ra, rb)] = Math.min(ra, rb);
+  }
+
+  /** Scratch of the sleep passes: which islands are awake, and each island's least sleep time. */
+  private awakeIsland = new Uint8Array(0);
+  private minT = new Float64Array(0);
 
   private wakeTouched(): void {
     if (!this.sleeping) return;
     this.islands();
     const n = this.n;
-    const awakeIsland = new Uint8Array(n);
+    if (this.awakeIsland.length !== n) this.awakeIsland = new Uint8Array(n);
+    const awakeIsland = this.awakeIsland;
+    awakeIsland.fill(0);
     for (let i = 0; i < n; i++) if (this.type[i] === BodyType3.Dynamic && this.awake[i] === 1) awakeIsland[this.find(i)] = 1;
-    for (const c of this.contacts) {
+    for (let kc = 0; kc < this.contacts.length; kc++) {
+      const c = this.contacts[kc] as Contact3;
       if (this.type[c.a] === BodyType3.Kinematic && this.isMoving(c.a) && this.type[c.b] === BodyType3.Dynamic) awakeIsland[this.find(c.b)] = 1;
       if (this.type[c.b] === BodyType3.Kinematic && this.isMoving(c.b) && this.type[c.a] === BodyType3.Dynamic) awakeIsland[this.find(c.a)] = 1;
     }
@@ -1401,7 +1508,8 @@ export class World3 {
     this.w.fill(0, i * 3, i * 3 + 3);
   }
 
-  private sleepIslands(h: number): void {
+  private sleepIslands(): void {
+    const h = this.hStep;
     const n = this.n;
     for (let i = 0; i < n; i++) {
       if (this.type[i] !== BodyType3.Dynamic || this.awake[i] === 0) continue;
@@ -1412,7 +1520,9 @@ export class World3 {
       else this.sleepTime[i] = (this.sleepTime[i] as number) + h;
     }
     this.islands();
-    const minT = new Float64Array(n).fill(Infinity);
+    if (this.minT.length !== n) this.minT = new Float64Array(n);
+    const minT = this.minT;
+    minT.fill(Infinity);
     for (let i = 0; i < n; i++) {
       if (this.type[i] !== BodyType3.Dynamic || this.awake[i] === 0) continue;
       const r = this.find(i);
@@ -1421,21 +1531,18 @@ export class World3 {
     for (let i = 0; i < n; i++) if (this.type[i] === BodyType3.Dynamic && this.awake[i] === 1 && (minT[this.find(i)] as number) >= TIME_TO_SLEEP) this.sleepBody(i);
   }
 
-  private countForces(h: number, v0: Float64Array, inv_hs: number): void {
-    const inv_h = 1 / h;
-    const add = (i: number, k: number, x: number, y: number, z: number): void => {
-      if (this.type[i] !== BodyType3.Dynamic || this.awake[i] === 0) return;
-      const o = i * NK * 3 + k * 3;
-      this.forces[o] = (this.forces[o] as number) + x;
-      this.forces[o + 1] = (this.forces[o + 1] as number) + y;
-      this.forces[o + 2] = (this.forces[o + 2] as number) + z;
-    };
-    for (const c of this.contacts) {
+  private countForces(v0: Float64Array): void {
+    const inv_h = 1 / this.hStep;
+    const inv_hs = this.invHs;
+    const forces = this.forces;
+    for (let kc = 0; kc < this.contacts.length; kc++) {
+      const c = this.contacts[kc] as Contact3;
       let ni = 0;
       let f1 = 0;
       let f2 = 0;
       // the step's impulses, added up over its small steps
-      for (const p of c.pts) {
+      for (let kp = 0; kp < c.pts.length; kp++) {
+        const p = c.pts[kp] as CPoint;
         ni += p.tn;
         f1 += p.t1t;
         f2 += p.t2t;
@@ -1446,12 +1553,34 @@ export class World3 {
       const fx = (f1 * c.t1x + f2 * c.t2x) * inv_h;
       const fy = (f1 * c.t1y + f2 * c.t2y) * inv_h;
       const fz = (f1 * c.t1z + f2 * c.t2z) * inv_h;
-      add(c.b, FK3.normal, nx, ny, nz);
-      add(c.a, FK3.normal, -nx, -ny, -nz);
-      add(c.b, FK3.friction, fx, fy, fz);
-      add(c.a, FK3.friction, -fx, -fy, -fz);
+      // each body that is awake and dynamic gets its part of the normal and friction forces (in line: a call with these numbers makes heap numbers)
+      if (this.type[c.b] === BodyType3.Dynamic && this.awake[c.b] !== 0) {
+        const o = c.b * NK * 3 + FK3.normal * 3;
+        forces[o] = (forces[o] as number) + nx;
+        forces[o + 1] = (forces[o + 1] as number) + ny;
+        forces[o + 2] = (forces[o + 2] as number) + nz;
+      }
+      if (this.type[c.a] === BodyType3.Dynamic && this.awake[c.a] !== 0) {
+        const o = c.a * NK * 3 + FK3.normal * 3;
+        forces[o] = (forces[o] as number) + -nx;
+        forces[o + 1] = (forces[o + 1] as number) + -ny;
+        forces[o + 2] = (forces[o + 2] as number) + -nz;
+      }
+      if (this.type[c.b] === BodyType3.Dynamic && this.awake[c.b] !== 0) {
+        const o = c.b * NK * 3 + FK3.friction * 3;
+        forces[o] = (forces[o] as number) + fx;
+        forces[o + 1] = (forces[o + 1] as number) + fy;
+        forces[o + 2] = (forces[o + 2] as number) + fz;
+      }
+      if (this.type[c.a] === BodyType3.Dynamic && this.awake[c.a] !== 0) {
+        const o = c.a * NK * 3 + FK3.friction * 3;
+        forces[o] = (forces[o] as number) + -fx;
+        forces[o + 1] = (forces[o + 1] as number) + -fy;
+        forces[o + 2] = (forces[o + 2] as number) + -fz;
+      }
     }
-    for (const j of this.joints) {
+    for (let k = 0; k < this.joints.length; k++) {
+      const j = this.joints[k] as Joint3;
       if (j.broken) continue;
       if (j.breaks > 0 && Math.abs(j.impulse) * inv_hs > j.breaks) j.broken = true;
       else j.account?.(this, inv_hs);
@@ -1467,11 +1596,13 @@ export class World3 {
   }
 
   private collectHits(): void {
-    for (const c of this.contacts) {
+    for (let kc = 0; kc < this.contacts.length; kc++) {
+      const c = this.contacts[kc] as Contact3;
       let pushing = false;
       let rv = 0;
       let imp = 0;
-      for (const p of c.pts) {
+      for (let kp = 0; kp < c.pts.length; kp++) {
+        const p = c.pts[kp] as CPoint;
         if (p.max > 0) pushing = true;
         if (p.rv < rv) rv = p.rv;
         imp += p.tn;
@@ -1523,22 +1654,41 @@ export class World3 {
     return changed;
   }
 
+  /** Each body's touching bodies, ascending. The lists are the world's own and are refilled by the next call: read them before it. */
+  private touchLists: number[][] = [];
+
+  /** Adds a touching contact's two bodies to each other's list (`Map.forEach` with a closure made once: no iterator). */
+  private readonly addTouch = (c: Contact3): void => {
+    if (!c.touching) return;
+    const out = this.touchLists;
+    const la = out[c.a] as number[];
+    const lb = out[c.b] as number[];
+    if (!la.includes(c.b)) la.push(c.b);
+    if (!lb.includes(c.a)) lb.push(c.a);
+  };
+
   touchingAll(): number[][] {
-    const out: number[][] = [];
-    for (let i = 0; i < this.n; i++) out.push([]);
-    for (const c of this.contactMap.values()) {
-      if (!c.touching) continue;
-      if (!(out[c.a] as number[]).includes(c.b)) (out[c.a] as number[]).push(c.b);
-      if (!(out[c.b] as number[]).includes(c.a)) (out[c.b] as number[]).push(c.a);
+    const out = this.touchLists;
+    while (out.length < this.n) out.push([]);
+    out.length = this.n;
+    for (let i = 0; i < this.n; i++) (out[i] as number[]).length = 0;
+    this.contactMap.forEach(this.addTouch);
+    for (let i = 0; i < this.n; i++) {
+      const l = out[i] as number[];
+      if (l.length > 1) l.sort(ascending);
     }
-    for (const l of out) l.sort((x, y) => x - y);
     return out;
   }
 
+  private contactTotal = 0;
+  private readonly countContact = (c: Contact3): void => {
+    if (c.touching) this.contactTotal += c.pts.length;
+  };
+
   get contactCount(): number {
-    let k = 0;
-    for (const c of this.contactMap.values()) if (c.touching) k += c.pts.length;
-    return k;
+    this.contactTotal = 0;
+    this.contactMap.forEach(this.countContact);
+    return this.contactTotal;
   }
 
   awakeCount(): number {
@@ -1568,9 +1718,11 @@ export class World3 {
 
   contactPoints(): { x: number; y: number; z: number; nx: number; ny: number; nz: number }[] {
     const out: { x: number; y: number; z: number; nx: number; ny: number; nz: number }[] = [];
-    for (const c of this.contacts) {
+    for (let kc = 0; kc < this.contacts.length; kc++) {
+      const c = this.contacts[kc] as Contact3;
       if (!c.touching) continue;
-      for (const p of c.pts) {
+      for (let kp = 0; kp < c.pts.length; kp++) {
+        const p = c.pts[kp] as CPoint;
         const wb = this.toWorld(c.b, p.bx, p.by, p.bz);
         out.push({ x: wb[0], y: wb[1], z: wb[2], nx: c.nx, ny: c.ny, nz: c.nz });
       }
@@ -1665,6 +1817,20 @@ export class World3 {
 }
 
 /* ------------------------------ helpers ------------------------------ */
+
+const ascending = (x: number, y: number): number => x - y;
+
+/** The directions in `src` (x, y, z packed) turned by the rotation at row `r` of `R` (row major), into `dst`. */
+function turnAll(src: Float64Array, dst: Float64Array, R: Float64Array, r: number): void {
+  for (let j = 0; j < src.length; j += 3) {
+    const a = src[j] as number;
+    const b = src[j + 1] as number;
+    const c = src[j + 2] as number;
+    dst[j] = (R[r] as number) * a + (R[r + 1] as number) * b + (R[r + 2] as number) * c;
+    dst[j + 1] = (R[r + 3] as number) * a + (R[r + 4] as number) * b + (R[r + 5] as number) * c;
+    dst[j + 2] = (R[r + 6] as number) * a + (R[r + 7] as number) * b + (R[r + 8] as number) * c;
+  }
+}
 
 function inverseOrZero(k: number): number {
   return k > 0 ? 1 / k : 0;

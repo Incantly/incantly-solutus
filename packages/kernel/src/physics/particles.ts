@@ -120,29 +120,6 @@ export class ParticleSet {
     this.owner[k] = this.owner[i] as number;
   }
 
-  /** Keeps the particles `keep` says yes to, in order. Returns how many went. */
-  compact(keep: (i: number) => boolean): number {
-    let k = 0;
-    const n = this.n;
-    for (let i = 0; i < n; i++) {
-      if (!keep(i)) continue;
-      if (k !== i) {
-        this.x[k] = this.x[i] as number;
-        this.y[k] = this.y[i] as number;
-        this.x0[k] = this.x0[i] as number;
-        this.y0[k] = this.y0[i] as number;
-        this.vx[k] = this.vx[i] as number;
-        this.vy[k] = this.vy[i] as number;
-        this.z[k] = this.z[i] as number;
-        this.z0[k] = this.z0[i] as number;
-        this.vz[k] = this.vz[i] as number;
-        this.owner[k] = this.owner[i] as number;
-      }
-      k++;
-    }
-    this.n = k;
-    return n - k;
-  }
 }
 
 export { MAX_NEIGHBOURS, NeighbourGrid } from './grid2';

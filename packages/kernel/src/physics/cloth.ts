@@ -3163,10 +3163,16 @@ export class ClothSet {
 
   /** The bodies cloth c touched in the last step (world indices, in order). */
   touching(c: number): number[] {
-    const nb = this.bjx.length;
     const out: number[] = [];
-    for (let b = 0; b < nb; b++) if (this.touched[c * nb + b] === 1) out.push(b);
+    this.touchingInto(c, out);
     return out;
+  }
+
+  /** The same, put into `out` (emptied first): a frame reads it without making an array. */
+  touchingInto(c: number, out: number[]): void {
+    const nb = this.bjx.length;
+    out.length = 0;
+    for (let b = 0; b < nb; b++) if (this.touched[c * nb + b] === 1) out.push(b);
   }
 
   /** Takes hold of a point (or moves the hold) and pulls it toward (x, y, z). */

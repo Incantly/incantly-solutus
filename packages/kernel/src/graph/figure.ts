@@ -21,6 +21,11 @@ import { defaultsFor, styleTypeOf } from './props';
 import { scriptTails } from './registry';
 import type { WorldDriver } from './drivers';
 import { worldDriverFactories } from './drivers';
+
+/** What the state driver gives when no state is on (read, never changed: a pass makes no list for it). */
+const NO_RECS: ObjRec[] = [];
+/** The options of a `setClock` that gives none. */
+const NO_CLOCK_OPTS: { bt?: number; beat?: number; flush?: boolean } = {};
 import type { Cell, ChangeReport, EffectiveStyle, FrameDelta, Slice, StyleEntry, TxResult } from './types';
 
 export type { FigureOptions, Slice };
@@ -40,6 +45,8 @@ export interface DriverAccess {
   readonly compute: (r: ObjRec) => Cell;
   readonly ensureSlots: (n: number) => void;
   readonly write: (r: ObjRec, c: Cell) => boolean;
+  /** Writes a cell known to differ from the held one, without comparing (a driver whose time moved). */
+  readonly writeNew: (r: ObjRec, c: Cell) => boolean;
   readonly styleOf: (id: ObjId) => EffectiveStyle | undefined;
   readonly rerunOf: (r: ObjRec) => 'continue' | 'restart';
   readonly sliceClock: (target: ObjRec) => Slice | ErrorObject;
@@ -108,7 +115,7 @@ export class Figure extends FigureHist {
       byId: (id) => this.byIdMap.get(id),
       version: () => this.structureVersion,
       clockT: () => this.clockState.t,
-      t0: () => this.clockRange().from,
+      t0: () => this.clockFromOf(),
       stepsPerSecond: () => this.directiveStepRate(),
       ancestorRecs: (seeds) => this.ancestorRecs(seeds),
       downOf: (r) => this.downOf(r),
@@ -121,7 +128,7 @@ export class Figure extends FigureHist {
         return e?.word === 'continue' || e?.text === 'continue' ? 'continue' : 'restart';
       },
     });
-    this.stateDriver = () => (this.solver.active ? this.solver.sync() : []);
+    this.stateDriver = () => (this.solver.active ? this.solver.sync() : NO_RECS);
     this.stateSampler = {
       recs: () => {
         const own = this.solver.active ? this.solver.stateObjects() : [];
@@ -177,13 +184,14 @@ export class Figure extends FigureHist {
       byName: (name) => this.byNameMap.get(name),
       version: () => this.structureVersion,
       clockT: () => this.clockState.t,
-      t0: () => this.clockRange().from,
+      t0: () => this.clockFromOf(),
       solverStepsPerSecond: () => this.directiveStepRate(),
       ancestorRecs: (seeds) => this.ancestorRecs(seeds),
       downOf: (r) => this.downOf(r),
       compute: (r) => this.compute(r),
       ensureSlots: (n) => this.ensureSlots(n),
       write: (r, c) => this.writeCell(r, c),
+      writeNew: (r, c) => this.writeNewCell(r, c),
       styleOf: (id) => this.styleOf(id),
       rerunOf: (r) => {
         const e = r.p.style.get('rerun');
@@ -197,6 +205,10 @@ export class Figure extends FigureHist {
     return this.setCell(r, c);
   }
 
+  protected writeNewCell(r: ObjRec, c: Cell): boolean {
+    return this.setCellNew(r, c);
+  }
+
   /* ------------------------------ update ------------------------------ */
 
   /** Runs one pass over everything marked since the last flush, then delivers the batched events. */
@@ -204,7 +216,7 @@ export class Figure extends FigureHist {
     if (this.busy) return { valueIds: [], styleIds: [], undefinedChanges: [], ran: 0 };
     // a frame outside any operation starts with no faults, so a rule that throws every frame cannot grow the list
     if (this.opDepth > 0) return this.flushNow(force);
-    this.faults = [];
+    if (this.faults.length > 0) this.faults = [];
     this.listenerFailures = 0;
     let d: FrameDelta;
     try {
@@ -219,7 +231,7 @@ export class Figure extends FigureHist {
     if (this.drivers.length > 0 && !this.inAfterFlush) {
       this.inAfterFlush = true;
       try {
-        for (const w of this.drivers) w.afterFlush?.();
+        for (let k = 0; k < this.drivers.length; k++) (this.drivers[k] as WorldDriver).afterFlush?.();
       } catch {
         // a driver's follow-up must not take the frame down
       } finally {
@@ -232,21 +244,22 @@ export class Figure extends FigureHist {
   private inAfterFlush = false;
 
   private flushNow(force: boolean): FrameDelta {
-    let d = super.flush(force);
+    const d = super.flushPass(force, undefined);
     const drv = this.worldDrivers();
     if (drv.length === 0) return d;
-    // core hook 1: the drivers write what they own, then one more pass runs over what reads it
-    const owned: ObjRec[] = [];
-    for (const w of drv) owned.push(...w.afterPass());
-    if (owned.length === 0) return d;
-    for (const r of owned) this.markDirty(r);
-    const d2 = super.flush(false);
-    const seen = new Set(d.valueIds);
-    const valueIds = [...d.valueIds];
-    for (const id of d2.valueIds) if (!seen.has(id)) valueIds.push(id);
-    const styleIds = [...new Set([...d.styleIds, ...d2.styleIds])];
-    d = { valueIds, styleIds, undefinedChanges: [...d.undefinedChanges, ...d2.undefinedChanges], ran: d.ran + d2.ran };
-    return d;
+    // core hook 1: the drivers write what they own, then one more pass runs over what reads it. Each driver's changed
+    // objects are marked at once (the same order as listing them all first: a driver writes only what it owns)
+    let any = false;
+    for (let k = 0; k < drv.length; k++) {
+      const got = (drv[k] as WorldDriver).afterPass();
+      for (let q = 0; q < got.length; q++) {
+        this.markDirty(got[q] as ObjRec);
+        any = true;
+      }
+    }
+    if (!any) return d;
+    // the second pass adds its changes to the first one's delta
+    return super.flushPass(false, d);
   }
 
   protected override onFreeWritten(rec: ObjRec, was?: unknown): void {
@@ -296,15 +309,53 @@ export class Figure extends FigureHist {
 
   /** The film range from `@clock a..b`: `0..Infinity` without the directive. */
   clockRange(): { from: number; to: number } {
-    const d = this.directiveItem('clock');
-    const m = d ? /^(-?\d+(?:\.\d+)?)\.\.(-?\d+(?:\.\d+)?)$/.exec(d.words[0] ?? '') : null;
-    return m ? { from: Number(m[1]), to: Number(m[2]) } : { from: 0, to: Infinity };
+    this.readClock();
+    return { from: this.clockFromNow, to: this.clockToNow };
   }
+
+  /*
+   * The film range and the solver rate, read from their directives only when the directive changed (a frame asks for them
+   * at every step, and a regular expression makes its match array each time, which is garbage, design 11.4).
+   */
+  private clockItem: unknown;
+  private clockWord: string | undefined;
+  private clockRead = false;
+  private clockFromNow = 0;
+  private clockToNow = Infinity;
+
+  /** The film's first moment, `@clock a..b`'s a (0 without it). */
+  private clockFromOf(): number {
+    this.readClock();
+    return this.clockFromNow;
+  }
+
+  private readClock(): void {
+    const d = this.directiveItem('clock');
+    const word = d?.words[0];
+    if (this.clockRead && d === this.clockItem && word === this.clockWord) return;
+    this.clockRead = true;
+    this.clockItem = d;
+    this.clockWord = word;
+    const m = d ? /^(-?\d+(?:\.\d+)?)\.\.(-?\d+(?:\.\d+)?)$/.exec(d.words[0] ?? '') : null;
+    this.clockFromNow = m ? Number(m[1]) : 0;
+    this.clockToNow = m ? Number(m[2]) : Infinity;
+  }
+
+  private rateItem: unknown;
+  private rateWord: string | undefined;
+  private rateRead = false;
+  private rateNow = 240;
 
   protected directiveStepRate(): number {
     const d = this.directiveItem('solver');
+    const word = d?.words[1];
+    if (this.rateRead && d === this.rateItem && word === this.rateWord) return this.rateNow;
+    this.rateRead = true;
+    this.rateItem = d;
+    this.rateWord = word;
     const m = d ? /^1\/(\d+)$/.exec(d.words[1] ?? '') : null;
-    return m ? Number(m[1]) : 240;
+    this.rateNow = m ? Number(m[1]) : 240;
+    return this.rateNow;
   }
 
   /** The beat start times the figure was given, in seconds (ascending). */
@@ -323,14 +374,14 @@ export class Figure extends FigureHist {
    * Moves the clock and runs one pass (a seek is one update pass). `t` is clamped to the film range. `bt` and `beat` follow
    * from the beat starts unless given. Only `t`, `bt` and `beat` change; the view, the selection and history are untouched.
    */
-  setClock(t: number, opts: { bt?: number; beat?: number; flush?: boolean } = {}): FrameDelta | ErrorObject {
+  setClock(t: number, opts: { bt?: number; beat?: number; flush?: boolean } = NO_CLOCK_OPTS): FrameDelta | ErrorObject {
     if (this.busy) return this.busyError('setClock');
     if (typeof t !== 'number' || !Number.isFinite(t)) {
       return err('bad_argument', { line: 0, col: 1, endCol: 1 }, { command: 'setClock', why: 'the time must be a finite number' }, { recovery: 'fix_line', fingerprintKey: 'setClock' });
     }
     if (typeof opts !== 'object' || opts === null) opts = {};
-    const { from, to } = this.clockRange();
-    const tt = Math.min(to, Math.max(from, t));
+    this.readClock();
+    const tt = Math.min(this.clockToNow, Math.max(this.clockFromNow, t));
     let beat = 0;
     for (let i = 0; i < this.beatStarts.length; i++) if ((this.beatStarts[i] as number) <= tt) beat = i;
     const start = this.beatStarts.length > 0 ? (this.beatStarts[beat] as number) : 0;
@@ -345,7 +396,8 @@ export class Figure extends FigureHist {
     this.env.bt = nbt;
     this.env.beat = nb;
     this.markClockDirty();
-    this.queue({ ev: 'clock', t: tt });
+    // (the event is for the listeners: with none, and the flush below delivering at once, it would be made and dropped)
+    if (this.listeners.size > 0 || this.opDepth > 0 || opts.flush === false) this.queue({ ev: 'clock', t: tt });
     if (opts.flush === false) return { valueIds: [], styleIds: [], undefinedChanges: [], ran: 0 };
     return this.flush();
   }

@@ -12,33 +12,61 @@ export function sameValue(a: unknown, b: unknown, depth = 0): boolean {
   if (a === b) return true;
   if (typeof a === 'number' && typeof b === 'number') return a !== a && b !== b;
   if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null || depth > 8) return false;
+  // (numbers inside a list are compared in line, and the keys of an object walked with `for … in`: a call made with each
+  // number, and a keys array made for each object, are garbage in every frame a world driver writes a cell, design 11.4)
   if (ArrayBuffer.isView(a) || ArrayBuffer.isView(b)) {
     if (!(ArrayBuffer.isView(a) && ArrayBuffer.isView(b)) || a.constructor !== b.constructor) return false;
     const x = a as unknown as ArrayLike<number>;
     const y = b as unknown as ArrayLike<number>;
     if (x.length !== y.length) return false;
-    for (let i = 0; i < x.length; i++) if (!sameValue(x[i], y[i])) return false;
+    for (let i = 0; i < x.length; i++) {
+      const p = x[i];
+      const q = y[i];
+      if (p !== q && !(p !== p && q !== q)) return false;
+    }
     return true;
   }
   if (Array.isArray(a) || Array.isArray(b)) {
     if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
-    for (let i = 0; i < a.length; i++) if (!sameValue(a[i], b[i], depth + 1)) return false;
+    for (let i = 0; i < a.length; i++) {
+      const p: unknown = a[i];
+      const q: unknown = b[i];
+      if (p === q) continue;
+      if (typeof p === 'number' && typeof q === 'number') {
+        if (p !== p && q !== q) continue;
+        return false;
+      }
+      if (!sameValue(p, q, depth + 1)) return false;
+    }
     return true;
   }
   const oa = a as Record<string, unknown>;
   const ob = b as Record<string, unknown>;
-  const ka = Object.keys(oa);
-  if (ka.length !== Object.keys(ob).length) return false;
-  for (const k of ka) {
+  // the own enumerable keys of each, counted: the same keys when a's all are b's and the counts are equal
+  let na = 0;
+  for (const k in oa) {
+    if (!Object.hasOwn(oa, k)) continue;
+    na++;
     const va = oa[k];
     const vb = ob[k];
+    if (va === vb) {
+      if (typeof va === 'function' || Object.hasOwn(ob, k)) continue;
+      return false;
+    }
+    // two numbers are compared here, not by a call that would box them
+    if (typeof va === 'number' && typeof vb === 'number') {
+      if (va !== va && vb !== vb && Object.hasOwn(ob, k)) continue;
+      return false;
+    }
     if (typeof va === 'function' || typeof vb === 'function') {
       if (va !== vb) return false;
       continue;
     }
     if (!Object.hasOwn(ob, k) || !sameValue(va, vb, depth + 1)) return false;
   }
-  return true;
+  let nb = 0;
+  for (const k in ob) if (Object.hasOwn(ob, k)) nb++;
+  return na === nb;
 }
 
 /** Shortest text that reads back as the same number. `inf` and `-inf` for infinities; `undefined` for NaN. */
