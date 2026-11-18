@@ -36,6 +36,9 @@ export interface BodySpec3 {
   readonly cy: number;
   readonly cz: number;
   readonly massNow: number;
+  /** Seconds the body burns and the °C above the air at which it lights (design 9.7); left out when it does not burn, so such a body has its old spec. */
+  readonly burns?: number;
+  readonly ignite?: number;
 }
 
 export interface Body3Value {
@@ -57,6 +60,10 @@ export interface Body3Value {
   readonly touching: readonly string[];
   /** The solid where the body is now. */
   readonly now: Polyhedron | Sphere3 | Cylinder3 | Cone3;
+  /** A body that burns: its temperature (°C above the air), how much of it has burnt (0 to 1), and whether it burns now. */
+  readonly temperature?: number;
+  readonly burnt?: number;
+  readonly burning?: boolean;
 }
 
 export function isBody3Value(v: unknown): v is Body3Value {

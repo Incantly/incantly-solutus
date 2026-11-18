@@ -26,13 +26,13 @@ export interface FireParams {
 /** Where burning starts, °C above the air (design 9.7 step 4). */
 export const IGNITE_AT = 150;
 /** Burning is full at this temperature above the ignite point: the smoothstep runs 150 to 400 °C. */
-const RAMP = 250;
+export const RAMP = 250;
 /** Lift of the hottest flame is `heat / 100` m/s²: α = 0.01 per °C (plan 11A). */
-const LIFT_PER_DEGREE = 0.01;
+export const LIFT_PER_DEGREE = 0.01;
 /** Smoke sinks: β m/s² per unit of density. */
-const SINK_PER_SMOKE = 0.5;
+export const SINK_PER_SMOKE = 0.5;
 /** Black-body cooling per second (Nguyen 2002). */
-const COOLING = 3;
+export const COOLING = 3;
 /** The most heat a drop takes from a cell in one step. */
 export const DROP_COOLS = 50;
 /** A fire with less fuel than this (Σ F dx dy, m²) has none left: the notice `fire_out`. */

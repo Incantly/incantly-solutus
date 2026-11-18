@@ -151,7 +151,21 @@ const BODY_NAMED = [
   named('burns', 'Bool|Number'), named('ignite', 'Number'),
 ];
 const BODY_SHAPES = 'Polygon|Circle|Conic|Polyline';
-const BODY3_NAMED = [named('mass', 'Number'), named('density', 'Number'), named('speed', 'Vector3|Point3'), named('spin', 'Vector3|Point3'), named('bounce', 'Number'), named('friction', 'Number'), named('fixed', 'Bool'), named('group', 'Number')];
+const BODY3_NAMED = [named('mass', 'Number'), named('density', 'Number'), named('speed', 'Vector3|Point3'), named('spin', 'Vector3|Point3'), named('bounce', 'Number'), named('friction', 'Number'), named('fixed', 'Bool'), named('group', 'Number'), named('burns', 'Bool|Number'), named('ignite', 'Number')];
+
+/** `burns` and `ignite` of a body in space that can never work (the other settings of a solid have no literal checks). */
+function checkBurn3(c: FormCheck, first: number): Refusal | undefined {
+  const bad = (i: number, key: string, allowed: string, hint: string): Refusal => ({ kind: 'bad_property_value', message: `${key} must be ${allowed}.`, hint, param: i, params: { key, allowed } });
+  for (let k = 0; k < BODY3_NAMED.length; k++) {
+    const key = (BODY3_NAMED[k] as ParamSpec).name;
+    if (key !== 'burns' && key !== 'ignite') continue;
+    const a = c.args[first + k];
+    if (!a || a.omitted || typeof a.literal !== 'number') continue;
+    if (key === 'burns' && !(a.literal > 0)) return bad(first + k, key, 'true, false or above 0 seconds', 'burns = true burns for 10 s a kg; a number is the seconds it burns.');
+    if (key === 'ignite' && (a.literal < 150 || a.literal > 1000)) return bad(first + k, key, 'between 150 and 1,000 °C', 'ignite is the temperature at which it catches fire: wood about 250.');
+  }
+  return undefined;
+}
 
 /** Literal values that can never work (errors B004). */
 function checkBodyArgs(c: FormCheck, first: number): Refusal | undefined {
@@ -212,7 +226,7 @@ function checkConvexList3(c: FormCheck): Refusal | undefined {
 function body3Rule(): { run(call: RuleCall): unknown } {
   return {
     run(call) {
-      const [solid, mass, density, speed, spin, bounce, friction, fixed, group] = call.values;
+      const [solid, mass, density, speed, spin, bounce, friction, fixed, group, burns, ignite] = call.values;
       const s = body3ShapeOf(solid);
       if (!s.ok) return call.fail(s.why === 'not_convex' ? 'degenerate' : 'degenerate', s.detail);
       const v3 = (x: unknown): { x: number; y: number; z: number } => {
@@ -222,9 +236,12 @@ function body3Rule(): { run(call: RuleCall): unknown } {
       const d = num(density, 1) > 0 ? num(density, 1) : 1;
       const m = typeof mass === 'number' && mass > 0 ? mass : undefined;
       const st = startOf3(s.shapes, m, d);
+      // `burns = true` is 10 s a kg of the start mass, at least 1 s; a number is the seconds; no `burns` in the spec of a body that does not burn
+      const seconds = burns === true ? Math.max(1, 10 * st.massNow) : typeof burns === 'number' && burns > 0 ? burns : 0;
       const spec: BodySpec3 = {
         shapes: s.shapes, solid: s.solid, ...(m !== undefined ? { mass: m } : {}), density: d, v: v3(speed), w: v3(spin),
         bounce: Math.min(1, Math.max(0, num(bounce, 0.2))), friction: Math.min(2, Math.max(0, num(friction, 0.4))), fixed: bool(fixed, false), group: Math.round(num(group, 0)), ...st,
+        ...(seconds > 0 ? { burns: seconds, ignite: Math.min(1000, Math.max(150, num(ignite, 250))) } : {}),
       };
       const value: Body3Value = {
         schema: 'Body3', spec, x: st.cx, y: st.cy, z: st.cz, q: [1, 0, 0, 0], v: spec.v, spin: spec.w, asleep: false, mass: spec.fixed ? Infinity : st.massNow,
@@ -472,7 +489,7 @@ function pushRun(call: ActionCall): ActionOutcome {
 /** The types of flat shapes that may be solid, and so may burn (design 9.7). */
 const SOLID_SHAPE_TYPES = new Set(['Polygon', 'Circle', 'Conic', 'Segment', 'Line', 'Ray', 'Arc', 'Sector', 'Polyline', 'Curve', 'Function']);
 /** The types that may burn: bodies, cloths and solid shapes. */
-const BURNABLE_TYPES = new Set(['Body', 'Cloth', ...SOLID_SHAPE_TYPES]);
+const BURNABLE_TYPES = new Set(['Body', 'Body3', 'Cloth', ...SOLID_SHAPE_TYPES]);
 
 /** `Ignite(thing)`: sets a burnable body, cloth or solid shape on fire now (design 9.7), logged as `@input physics ignite`. */
 function igniteRun(call: ActionCall): ActionOutcome {
@@ -480,7 +497,11 @@ function igniteRun(call: ActionCall): ActionOutcome {
   const id = call.refs?.[0] ?? call.objects[0];
   const o = id !== undefined ? call.figure.get(id) : undefined;
   let target: { id: ObjId; item?: number };
+  // a body or a cloth in space is lit by the space driver
+  let space: boolean;
   if (o && o.type !== 'Body' && !/^List/.test(o.type)) {
+    const v0 = call.values[0];
+    space = o.type === 'Body3' || (isClothValue(v0) && v0.spec.space);
     if (!BURNABLE_TYPES.has(o.type)) {
       return { error: err('not_burnable', at, { why: `${o.name} can't burn: it is not a body, a cloth or a solid shape.` }, { hint: `Only a body, a cloth or a solid shape can burn. Make ${o.name} a body first: b = Body(${o.name}, mass = 1, burns = true).`, suggest: [`b = Body(${o.name}, mass = 1, burns = true)`], recovery: 'use_suggestion', fingerprintKey: `ignite:${o.name}` }) };
     }
@@ -488,10 +509,11 @@ function igniteRun(call: ActionCall): ActionOutcome {
   } else {
     const b = bodyArg(call);
     if ('error' in b) return { error: b.error };
+    space = b.space === true;
     target = { id: b.id, ...(b.item !== undefined ? { item: b.item } : {}) };
   }
   const name = call.figure.get(target.id)?.name ?? 'it';
-  const d = physicsOf(call.figure);
+  const d = space ? physics3Of(call.figure) : physicsOf(call.figure);
   call.figure.flush();
   const r = d.ignite(target.id, target.item);
   if (r.ok) {
@@ -501,7 +523,7 @@ function igniteRun(call: ActionCall): ActionOutcome {
   if (r.why === 'not_burnable') {
     return { error: err('not_burnable', at, { why: `${name} can't burn yet.` }, { hint: `${name} can't burn yet. Add ${name} with burns = true first.`, suggest: [`${name} with burns = true`], recovery: 'use_suggestion', fingerprintKey: `ignite:${name}` }) };
   }
-  const where = o && o.type === 'Body' || !o ? `${name}.pos` : `(${fmt(r.x)}, ${fmt(r.y)})`;
+  const where = o && (o.type === 'Body' || o.type === 'Body3') || !o ? `${name}.pos` : `(${fmt(r.x)}, ${fmt(r.y)}${'z' in r && typeof r.z === 'number' ? `, ${fmt(r.z)}` : ''})`;
   return { error: err('no_fire_grid', at, { why: `${name} is outside every fire.` }, { hint: `Nothing can burn outside a fire. Make a fire round ${name}.`, suggest: [`fire = Fire(${where})`], recovery: 'use_suggestion', fingerprintKey: `ignite:${name}` }) };
 }
 
@@ -544,7 +566,7 @@ export const PHYSICS_COMMANDS: readonly CommandSpec[] = [
       rule: body3Rule,
       summary: 'a body in space that falls, rolls and bounces, made from a solid',
       explain: '{name} is a body made from {0}',
-      check: (c) => checkConvex3(c),
+      check: (c) => checkConvex3(c) ?? checkBurn3(c, 1),
     }],
     refuse: refuseBody,
   },
@@ -564,7 +586,7 @@ export const PHYSICS_COMMANDS: readonly CommandSpec[] = [
         },
       }),
       summary: 'a body in space for each solid in a list, all with the same settings',
-      check: (c) => checkConvexList3(c),
+      check: (c) => checkConvexList3(c) ?? checkBurn3(c, 1),
     }, {
       // any list; the plane's shapes are named so the form of solids in space (fewer types) is chosen for those
       params: [P('shapes', 'List<Polygon>|List<Circle>|List<Conic>|List<Polyline>|List<Point>|List'), ...BODY_NAMED],
@@ -728,6 +750,7 @@ const BODY3_FIELDS: Readonly<Record<string, Ty>> = {
   pos: { k: 'Point3' } as Ty, x: T.Number, y: T.Number, z: T.Number, speed: V3T, v: T.Number, spin: V3T, energy: T.Number, kinetic: T.Number, potential: T.Number,
   momentum: V3T, mass: T.Number, asleep: T.Bool, touching: { k: 'List', of: T.Text },
   force: { k: 'Function', ret: 'Vector3', arity: 1, textArgs: true } as Ty,
+  temperature: T.Number, burnt: T.Number, burning: T.Bool,
 };
 
 function readBody3(field: string, v: unknown): unknown {
@@ -761,6 +784,12 @@ function readBody3(field: string, v: unknown): unknown {
       return v.asleep;
     case 'touching':
       return v.touching;
+    case 'temperature':
+      return v.temperature ?? 0;
+    case 'burnt':
+      return v.burnt ?? 0;
+    case 'burning':
+      return v.burning ?? false;
     case 'force':
       return {
         arity: 1,
@@ -1038,7 +1067,7 @@ export function registerPhysics(registry: CommandRegistry): void {
     if (isVehicleValue(v)) return `vehicle, ${fmt(v.speedometer)} m/s`;
     return undefined;
   });
-  registerTypeStyle('Body3', { lists: true, defaults: { color: '#c0602a', width: 2, opacity: 0.85 }, keys: ['bounce', 'friction', 'force', 'torque', 'group', 'show'] });
+  registerTypeStyle('Body3', { lists: true, defaults: { color: '#c0602a', width: 2, opacity: 0.85 }, keys: ['bounce', 'friction', 'force', 'torque', 'group', 'show', 'burns', 'ignite'] });
   registerTypeStyle('Body', { lists: true, defaults: { color: '#c0602a', width: 2, opacity: 0.35 }, keys: ['bounce', 'friction', 'force', 'torque', 'bullet', 'group', 'charge', 'show', 'burns', 'ignite'] });
   registerTypeStyle('World', { drawable: false });
   registerTypeStyle('Joint', { defaults: { color: '#555555', width: 1.5 } });

@@ -1071,6 +1071,46 @@ export const EXAMPLES: readonly Example[] = [
       'warmth = wood.temperature',
     ],
   },
+  /* smoke and fire in space (.kiro/specs/physics R11; design 9.8, 14 item 11) */
+  {
+    id: 'physics-3d-flag-fire',
+    modes: ['graphing3d'],
+    title: 'Physics 3D: a flag over a fire — the rising air lifts it and sets it rippling (press ▶)',
+    lines: [
+      'g = Ground()',
+      'blaze = Fire((0, 0, 0))',
+      'flag = Cloth((-0.8, -0.8, 1.2), (1.6, 0, 0), (0, 1.6, 0), 32, 32, mass = 0.1, pins = "corners")',
+      'lift = flag.at(16, 16).z',
+      'space with target = (0, 0, 1.2), azimuth = -35deg, elevation = 22deg, zoom = 1.6',
+    ],
+  },
+  {
+    id: 'physics-3d-smoke-ball',
+    modes: ['graphing3d'],
+    title: 'Physics 3D: smoke flows round a ball — the air parts round it and closes behind (press ▶, slide the wind)',
+    lines: [
+      'g = Ground()',
+      'u = 2 in 0..6 step 0.5',
+      'plume = Smoke(Box((0, 0, 1), 4, 2, 2), 24, source = Sphere((-1.5, 0, 0.6), 0.2), heat = 0, wind = (u, 0, 0))',
+      'ball = Sphere((0, 0, 0.6), 0.4)',
+      'ball with solid = true, color = gray',
+      'behind = plume.at(1, 0, 0.6)',
+      'space with target = (0, 0, 0.8), azimuth = -50deg, elevation = 20deg, zoom = 1.6',
+    ],
+  },
+  {
+    id: 'physics-3d-crate-burns',
+    modes: ['graphing3d'],
+    title: 'Physics 3D: a crate catches fire and burns away — it darkens, loses mass and is gone (press ▶)',
+    lines: [
+      'g = Ground()',
+      'blaze = Fire((0, 0, 0), source = Sphere((0, 0, 0.25), 0.6), heat = 1200)',
+      'crate = Body(Box((0, 0, 0.5), 0.5, 0.5, 0.5), burns = 6, ignite = 200)',
+      'warmth = crate.temperature',
+      'charred = crate.burnt',
+      'space with target = (0, 0, 0.8), azimuth = -40deg, elevation = 22deg, zoom = 1.8',
+    ],
+  },
   /* cloth (.kiro/specs/physics R10; design 9.5, 14 item 9) */
   {
     id: 'physics-flag',

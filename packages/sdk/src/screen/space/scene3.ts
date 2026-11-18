@@ -5,6 +5,7 @@
  */
 import { colorHex, isParticlesValue, makeParticleBatch, physics, space } from '@incantly/kernel';
 import type { Figure } from '@incantly/kernel';
+import { fireColor } from '../physics';
 import { curveRuns, gridFaces } from './mesh3';
 import { boxEdges, clipFace, clipSegment, inBox } from './clip3';
 import type { Box3 } from './clip3';
@@ -54,6 +55,8 @@ export interface FaceItem {
   readonly edges?: readonly [boolean, boolean, boolean, boolean];
   /** A face of a body: the name to drag it by (`dice[2]` for an item of a list). */
   readonly body?: string;
+  /** False for a face the pointer passes through (a slice of smoke): no hit area is made for it. */
+  readonly pick?: boolean;
 }
 
 /** A particle: a small dot, drawn after the faces, never hidden and never picked (there are thousands). */
@@ -117,7 +120,27 @@ export interface DropsItem {
   readonly radius: number;
 }
 
-export type Item3 = PointItem | LineItem | FaceItem | LabelItem | DotItem | SheetItem | DropsItem;
+/**
+ * A smoke or fire grid in space (physics design 9.8, 12.1): the box, `n` cells a side, the smoke density `s` and the
+ * temperature `T` (°C; none for smoke) of each cell, index (k n + j) n + i. The WebGL 2 painter ray-marches them; the
+ * software painter draws 12 slices of cells as quads.
+ */
+export interface VolumeItem {
+  readonly k: 'volume';
+  readonly id: number;
+  readonly name: string;
+  readonly n: number;
+  readonly min: V3;
+  readonly max: V3;
+  readonly density: Float32Array;
+  readonly temp?: Float32Array;
+  /** The fire's hottest, °C: temperature is drawn as `T / heat` of the ramp's scale (0 for smoke). */
+  readonly heat: number;
+  /** The smoke's colour. */
+  readonly color: string;
+}
+
+export type Item3 = PointItem | LineItem | FaceItem | LabelItem | DotItem | SheetItem | DropsItem | VolumeItem;
 
 export interface Scene3 {
   /** The floor plate and grid, drawn first and never hiding anything. */
@@ -353,6 +376,18 @@ export function sceneOf3(figure: Figure, view: space.View3, opts: Scene3Options 
         items.push({ k: 'drops', id, name: o.name, pos, count: n, color: v.spec.color ?? color, alpha: 0.85, radius: 0.6 * v.size });
         break;
       }
+      case 'Smoke':
+      case 'Fire': {
+        // smoke or fire in space (physics design 9.8, 12.1): a volume for the WebGL 2 painter, slices for the software one
+        if (!physics.isSmokeValue(v) || v.spec.space !== true) break;
+        const s = v.spec;
+        const fire = physics.isFireValue(v);
+        items.push({
+          k: 'volume', id, name: o.name, n: s.n, min: { x: s.x0, y: s.y0, z: s.z0 ?? 0 }, max: { x: s.x1, y: s.y1, z: s.z1 ?? 1 },
+          density: v.density, ...(fire ? { temp: v.temp } : {}), heat: fire ? v.spec.fire.heat : 0, color: fire ? '#5f6670' : color,
+        });
+        break;
+      }
       case 'Cloth':
         // cloth in space (physics design 12.1): a sheet for the WebGL 2 painter
         if (physics.isClothValue(v) && v.spec.space) items.push(...clothItems(id, o.name, v, color, Math.max(alpha, 0.85)));
@@ -424,7 +459,7 @@ export function sceneOf3(figure: Figure, view: space.View3, opts: Scene3Options 
   const cut: Item3[] = [];
   for (const it of items) {
     // sheets and drops are cut by their painter: the GPU per pixel, the software one per face and dot
-    if (it.k === 'label' || it.k === 'sheet' || it.k === 'drops' || it.id < 0) cut.push(it);
+    if (it.k === 'label' || it.k === 'sheet' || it.k === 'drops' || it.k === 'volume' || it.id < 0) cut.push(it);
     else if (it.k === 'point' || it.k === 'dot') {
       if (inBox(box, it.p)) cut.push(it);
     } else if (it.k === 'line') {
@@ -555,6 +590,57 @@ export function sheetFaces(s: SheetItem, step: number, box?: Box3): FaceItem[] {
         }
       }
       out.push(stroke ? { ...base, stroke, edges: [thread(j0), thread(i1), thread(j1), thread(i0)] } : base);
+    }
+  }
+  return out;
+}
+
+/** Slices of a volume the software painter draws (physics design 12.1). */
+export const VOLUME_SLICES = 12;
+
+const FIRE_RGBA = new Float64Array(4);
+
+/**
+ * The software painter's faces for a volume: `VOLUME_SLICES` layers of cells across `axis` (0 x, 1 y, 2 z: the one that
+ * faces the camera most), each cell with a cover over 0.02 a quad in the plane of its layer's middle. A flame cell has the
+ * ramp's colour (`fireColor`, the plane's) and a cover made for the cells a slice stands for; smoke a grey quad over it.
+ * Cut to the clip box by the quad's middle.
+ */
+export function volumeFaces(v: VolumeItem, axis: 0 | 1 | 2, box?: Box3): FaceItem[] {
+  const n = v.n;
+  const out: FaceItem[] = [];
+  const slices = Math.min(VOLUME_SLICES, n);
+  // a slice stands for this many cells of depth, so its cover is the cover of that many cells in a row
+  const depth = n / slices;
+  const d = { x: (v.max.x - v.min.x) / n, y: (v.max.y - v.min.y) / n, z: (v.max.z - v.min.z) / n };
+  const c = FIRE_RGBA;
+  const hex = (r: number, g: number, b: number): string => `#${[r, g, b].map((x) => Math.max(0, Math.min(255, Math.round(x))).toString(16).padStart(2, '0')).join('')}`;
+  for (let s = 0; s < slices; s++) {
+    const L = Math.min(n - 1, Math.floor(((s + 0.5) * n) / slices));
+    for (let b = 0; b < n; b++) {
+      for (let a = 0; a < n; a++) {
+        // the cell at (a, b) of layer L, whichever axis the layers run along
+        const i = axis === 0 ? L : a;
+        const j = axis === 1 ? L : axis === 0 ? a : b;
+        const k = axis === 2 ? L : b;
+        const cell = (k * n + j) * n + i;
+        const sm = Math.min(1, v.density[cell] as number);
+        const t = v.temp ? Math.min(v.temp[cell] as number, v.heat) : 0;
+        const x0 = v.min.x + i * d.x;
+        const y0 = v.min.y + j * d.y;
+        const z0 = v.min.z + k * d.z;
+        const corner = (u: number, w: number): V3 => (axis === 0 ? { x: x0 + 0.5 * d.x, y: y0 + u * d.y, z: z0 + w * d.z } : axis === 1 ? { x: x0 + u * d.x, y: y0 + 0.5 * d.y, z: z0 + w * d.z } : { x: x0 + u * d.x, y: y0 + w * d.y, z: z0 + 0.5 * d.z });
+        let pts: V3[] | undefined;
+        const quad = (): V3[] => (pts ??= [corner(0, 0), corner(1, 0), corner(1, 1), corner(0, 1)]);
+        if (box && !inBox(box, { x: x0 + 0.5 * d.x, y: y0 + 0.5 * d.y, z: z0 + 0.5 * d.z })) continue;
+        if (v.temp) {
+          fireColor(t, c);
+          const cover = (c[3] as number) * (1 - 0.4 * sm);
+          if (cover > 0.02) out.push({ k: 'face', id: v.id, pts: quad(), color: hex(c[0] as number, c[1] as number, c[2] as number), alpha: 1 - Math.pow(1 - cover, depth), occludes: false, shade: false, pick: false });
+        }
+        const sc = 0.85 * sm;
+        if (sc > 0.02) out.push({ k: 'face', id: v.id, pts: quad(), color: v.color, alpha: 1 - Math.pow(1 - sc, depth), occludes: false, shade: false, pick: false });
+      }
     }
   }
   return out;

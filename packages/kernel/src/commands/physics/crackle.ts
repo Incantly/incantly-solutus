@@ -33,7 +33,7 @@ export function crackleSource(figure: Figure, t: number): { readonly sounds: rea
     has = true;
     if (!(v.flames > 0)) continue;
     const q = crackleHash(Number(o.id), Math.floor(t * 20));
-    sounds.push({ key: `fire:${String(o.id)}`, name: o.name, kind: 'noise', color: 'brown', gain: crackleGain(v.flames, v.spec.n * v.spec.n, q), pan: 0 });
+    sounds.push({ key: `fire:${String(o.id)}`, name: o.name, kind: 'noise', color: 'brown', gain: crackleGain(v.flames, v.temp.length, q), pan: 0 });
   }
   return { sounds, has };
 }

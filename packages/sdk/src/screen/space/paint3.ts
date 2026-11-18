@@ -9,8 +9,8 @@ import type { Camera, SpaceCameraProps } from '@incantly/view/camera';
 import { FloatPool, fanTriangles, rgb01, rotationOf } from '@incantly/view/gl';
 import type { GlFrame3, GlPainted3, GlStats3 } from '@incantly/view/gl';
 import { space } from '@incantly/kernel';
-import { dropDots, sheetFaces } from './scene3';
-import type { DotItem, DropsItem, FaceItem, Item3, LineItem, PointItem, Scene3, SheetItem } from './scene3';
+import { dropDots, sheetFaces, volumeFaces } from './scene3';
+import type { DotItem, DropsItem, FaceItem, Item3, LineItem, PointItem, Scene3, SheetItem, VolumeItem } from './scene3';
 import type { SpaceGpu } from './gpu3';
 
 type V3 = space.V3;
@@ -61,6 +61,8 @@ export interface PaintSpaceOptions {
 
 /** The solids for the GPU's depth pass, reused from frame to frame. */
 const OCCLUDERS = new FloatPool();
+/** What bounds a ray through smoke or fire: the solids and a cloth's faces, for the volume pass's own depth. */
+const VOLUME_OCCLUDERS = new FloatPool();
 
 /** The camera of a view at a size (design 8.2): zoom 1 fits a ball of `SPACE_FIT_RADIUS` about the target. */
 export function cameraFor(view: space.View3, w: number, h: number): Camera {
@@ -171,7 +173,7 @@ export function paintSpace(ctx: Ctx, view: space.View3, w: number, h: number, sc
     const ys = pts.map((p) => p.y);
     return { item: it, pts, depth: pts.reduce((s, p) => s + p.z, 0) / pts.length, minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) };
   };
-  const project = (items: readonly Item3[]): { faces: FaceP[]; lines: LineItem[]; points: PointItem[]; labels: Item3[]; dots: DotItem[]; sheets: SheetItem[]; drops: DropsItem[] } => {
+  const project = (items: readonly Item3[]): { faces: FaceP[]; lines: LineItem[]; points: PointItem[]; labels: Item3[]; dots: DotItem[]; sheets: SheetItem[]; drops: DropsItem[]; volumes: VolumeItem[] } => {
     const faces: FaceP[] = [];
     const lines: LineItem[] = [];
     const points: PointItem[] = [];
@@ -179,6 +181,7 @@ export function paintSpace(ctx: Ctx, view: space.View3, w: number, h: number, sc
     const dots: DotItem[] = [];
     const sheets: SheetItem[] = [];
     const drops: DropsItem[] = [];
+    const volumes: VolumeItem[] = [];
     for (const it of items) {
       if (it.k === 'face') {
         const f = faceP(it);
@@ -188,9 +191,10 @@ export function paintSpace(ctx: Ctx, view: space.View3, w: number, h: number, sc
       else if (it.k === 'dot') dots.push(it);
       else if (it.k === 'sheet') sheets.push(it);
       else if (it.k === 'drops') drops.push(it);
+      else if (it.k === 'volume') volumes.push(it);
       else labels.push(it);
     }
-    return { faces, lines, points, labels, dots, sheets, drops };
+    return { faces, lines, points, labels, dots, sheets, drops, volumes };
   };
 
   const drawFace = (f: FaceP): void => {
@@ -300,16 +304,27 @@ export function paintSpace(ctx: Ctx, view: space.View3, w: number, h: number, sc
   // first, and its picture goes over the faces and under the lines; without it they become faces and dots here
   let gl: GlPainted3 | undefined;
   const coarse: string[] = [];
-  const hasSheets = sc.sheets.length + sc.drops.length > 0;
+  const hasSheets = sc.sheets.length + sc.drops.length + sc.volumes.length > 0;
   if (hasSheets && opts.gpu && typeof ctx.drawImage === 'function') {
     // only solids one can not see through hide sheets and drops: drops in a glass tank show through its walls
     const occ = fanTriangles(sc.faces.filter((f) => f.item.occludes && f.item.alpha >= 0.5).map((f) => f.item.pts), OCCLUDERS);
+    // a ray through smoke or fire ends at a solid, or at a cloth (a coarse copy of its faces, as the lines are hidden by)
+    let volOcc: { data: Float32Array; verts: number } | undefined;
+    if (sc.volumes.length > 0) {
+      const loops = sc.faces.filter((f) => f.item.occludes && f.item.alpha >= 0.5).map((f) => f.item.pts);
+      for (const s of sc.sheets) if (s.occludes && s.alpha >= 0.5) for (const it of sheetFaces(s, Math.max(1, Math.ceil(Math.max(s.nx, s.ny) / 16)), box)) loops.push(it.pts);
+      volOcc = fanTriangles(loops, VOLUME_OCCLUDERS);
+    }
     const frame: GlFrame3 = {
       width: w, height: h, pixelRatio: opts.pixelRatio ?? 1, vp: cam.vp, rot: rotationOf(cam.view), right: cam.right, up: cam.up,
       light: view.light === 'flat' ? 'flat' : view.light === 'off' ? 'off' : 'lit', clip: box ?? null,
       occluders: occ.data, occluderVerts: occ.verts,
       sheets: sc.sheets.map((s) => ({ key: s.id, nx: s.nx, ny: s.ny, pos: s.pos, ...(s.tris ? { tris: s.tris } : {}), ...(s.topology !== undefined ? { topology: s.topology } : {}), color: rgb01(s.color), alpha: s.alpha, threads: s.threads })),
       drops: sc.drops.map((d) => ({ pos: d.pos, count: d.count, color: rgb01(d.color), alpha: d.alpha, radius: d.radius })),
+      ...(volOcc ? {
+        volumes: sc.volumes.map((v) => ({ key: v.id, n: v.n, min: v.min, max: v.max, density: v.density, ...(v.temp ? { temp: v.temp } : {}), heat: v.heat, smoke: rgb01(v.color) })),
+        volumeOccluders: volOcc.data, volumeOccluderVerts: volOcc.verts,
+      } : {}),
     };
     const r = opts.gpu.paint(frame);
     if (r.ok) gl = r.value;
@@ -326,6 +341,16 @@ export function paintSpace(ctx: Ctx, view: space.View3, w: number, h: number, sc
     for (const d of sc.drops) {
       if (opts.coarse) coarse.push(d.name);
       sc.dots.push(...dropDots(d, opts.coarse ? 2 : 1, box));
+    }
+    // smoke and fire: 12 slices across the axis that faces the camera most, a quad a cell, far to near with the faces
+    // (no notice: it is the picture the volumes have without WebGL 2)
+    for (const v of sc.volumes) {
+      const axes = [{ x: 1, y: 0, z: 0 }, { x: 0, y: 1, z: 0 }, { x: 0, y: 0, z: 1 }].map((e) => Math.abs(quatRotate(cam.q, e).z));
+      const axis = (axes[0] as number) >= (axes[1] as number) && (axes[0] as number) >= (axes[2] as number) ? 0 : (axes[1] as number) >= (axes[2] as number) ? 1 : 2;
+      for (const it of volumeFaces(v, axis, box)) {
+        const f = faceP(it);
+        if (f) sc.faces.push(f);
+      }
     }
   }
   const sorted = [...sc.faces].sort((x, y) => y.depth - x.depth);
@@ -349,7 +374,7 @@ export function paintSpace(ctx: Ctx, view: space.View3, w: number, h: number, sc
   for (const f of sorted) {
     drawDotsTo(f.depth);
     drawFace(f);
-    hits.push({ k: 'face', id: f.item.id, pts: f.pts.map((p) => ({ x: p.x, y: p.y })), depth: f.depth, alpha: f.item.alpha, ...(f.item.body !== undefined ? { body: f.item.body } : {}) });
+    if (f.item.pick !== false) hits.push({ k: 'face', id: f.item.id, pts: f.pts.map((p) => ({ x: p.x, y: p.y })), depth: f.depth, alpha: f.item.alpha, ...(f.item.body !== undefined ? { body: f.item.body } : {}) });
   }
   drawDotsTo(-Infinity);
   const occluders = sc.faces.filter((f) => f.item.occludes);
