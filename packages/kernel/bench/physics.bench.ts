@@ -518,3 +518,107 @@ describe('cloth (design 11.2, round 9)', () => {
     });
   }
 });
+
+/** A fire in space, 24 cells a side (its default), on the ground: the fire rows of design 11.2, round 11B. */
+const FIRE24 = ['g = Ground()', 'blaze = Fire((0, 0, 0))', 'm = blaze.fuel'];
+
+/** The finest fire in space, 32 cells a side. */
+const FIRE32 = ['g = Ground()', 'blaze = Fire(Box((0, 0, 1), 2, 2, 3), 32, source = Sphere((0, 0, 0.1), 0.3))', 'm = blaze.fuel'];
+
+/** A 64 × 32 flag over a fire of 24³: the flag-over-fire row. */
+const FLAGFIRE = [
+  'g = Ground()',
+  'blaze = Fire((0, 0, 0))',
+  'flag = Cloth((-1, -0.3, 2.4), (2, 0, 0), (0, 0, -1.2), 64, 32, mass = 0.4, pins = "top")',
+  'lift = flag.at(32, 16).y',
+];
+
+/** Plays frames 61 to 60 s + 1 of a figure, one `setClock` of 1/60 s each: the mean, 95%, 99% and worst frame, ms. */
+function playFrames(f: Figure, from: number, to: number): { mean: number; p95: number; p99: number; worst: number } {
+  const times: number[] = [];
+  for (let k = from; k <= to; k++) {
+    const t = performance.now();
+    f.setClock(k / 60);
+    times.push(performance.now() - t);
+  }
+  const s = sorted(times);
+  return { mean: times.reduce((a, b) => a + b, 0) / times.length, p95: s[Math.floor(s.length * 0.95)] as number, p99: s[Math.floor(s.length * 0.99)] as number, worst: s[s.length - 1] as number };
+}
+
+describe('smoke and fire in space (design 9.8, 11.2, round 11B)', () => {
+  it('fire in space, 24³: a frame (two steps, one smoke step) under 2 ms in Node, mean and the slow frames', { retry: 2 }, () => {
+    const f = load(FIRE24);
+    for (let k = 1; k <= 60; k++) f.setClock(k / 60);
+    const r = playFrames(f, 61, 60 * 20);
+    console.log(`fire in space 24³, a frame: mean ${r.mean.toFixed(3)} ms, 95% ${r.p95.toFixed(3)} ms, 99% ${r.p99.toFixed(3)} ms, worst ${r.worst.toFixed(3)} ms (budget 2 ms)`);
+    expect(physics3Of(f).smokeMembers[0]?.grid.n).toBe(24);
+    expect(r.mean).toBeLessThan(2);
+  });
+
+  it('fire in space, 32³, the largest: a frame under 4 ms in Node, mean and the slow frames', { retry: 2 }, () => {
+    const f = load(FIRE32);
+    for (let k = 1; k <= 60; k++) f.setClock(k / 60);
+    const r = playFrames(f, 61, 60 * 10);
+    console.log(`fire in space 32³, a frame: mean ${r.mean.toFixed(3)} ms, 95% ${r.p95.toFixed(3)} ms, 99% ${r.p99.toFixed(3)} ms, worst ${r.worst.toFixed(3)} ms (budget 4 ms)`);
+    expect(physics3Of(f).smokeMembers[0]?.grid.n).toBe(32);
+    expect(r.mean).toBeLessThan(4);
+  });
+
+  it('a 64 × 32 flag over a fire in space (24³): a frame under 2.5 ms in Node, mean and the slow frames', { retry: 2 }, () => {
+    const f = load(FLAGFIRE);
+    for (let k = 1; k <= 60; k++) f.setClock(k / 60);
+    const r = playFrames(f, 61, 60 * 10);
+    console.log(`64 x 32 flag over a fire 24³, a frame: mean ${r.mean.toFixed(3)} ms, 95% ${r.p95.toFixed(3)} ms, 99% ${r.p99.toFixed(3)} ms, worst ${r.worst.toFixed(3)} ms (budget 2.5 ms)`);
+    expect(physics3Of(f).cloth?.smokes.length).toBe(1);
+    expect(r.mean).toBeLessThan(2.5);
+  });
+
+  it('seek anywhere in a 60 s film with a fire in space (24³), warm: under 120 ms in Node', () => {
+    const f = load(FIRE24);
+    for (let k = 1; k <= 60 * 60; k++) f.setClock(k / 60);
+    const times: number[] = [];
+    for (let i = 0; i < 100; i++) {
+      const t = ((i * 37) % 100) * 0.59 + 0.3;
+      const a = performance.now();
+      f.setClock(t);
+      times.push(performance.now() - a);
+    }
+    const s = sorted(times);
+    console.log(`seek, fire in space 24³: median ${(s[50] as number).toFixed(1)} ms, worst ${(s[99] as number).toFixed(1)} ms (budget 120 ms)`);
+    expect(s[99]).toBeLessThan(120);
+  });
+
+  it('a checkpoint of a 24³ grid is about 400 KB, and 60 s of film stays under 32 MB (design 10.3)', () => {
+    const f = load(FIRE24);
+    f.setClock(1);
+    const kb = physics3Of(f).checkpointBytes() / 1024;
+    console.log(`a checkpoint with a 24³ fire: ${kb.toFixed(1)} KB; 60 checkpoints (one a second) ${((kb * 60) / 1024).toFixed(1)} MB`);
+    expect(kb).toBeLessThan(420);
+    expect((kb * 60) / 1024).toBeLessThan(32);
+  });
+
+  it('a step of the grid in space makes no garbage after the first second (no collection runs)', async () => {
+    const f = load(['g = Ground()', 'blaze = Fire((0, 0, 0))', 'ball = Body(Sphere((0.6, 0, 1.2), 0.3), mass = 0.5)', 'stone = Body(Box((-0.5, 0, 0.5), 0.3, 0.3, 0.3), burns = 20, ignite = 150)']);
+    for (let k = 1; k <= 60; k++) f.setClock(k / 60);
+    const d = physics3Of(f);
+    const sm = d.smokeMembers[0];
+    const w = d.world;
+    if (!sm || !w) throw new Error('no grid in space');
+    const g = sm.grid;
+    const arrays = [g.u, g.v, g.w, g.s, g.p, g.T, g.F, g.fx];
+    let gcs = 0;
+    const obs = new PerformanceObserver((list) => {
+      gcs += list.getEntries().length;
+    });
+    collectNow();
+    obs.observe({ entryTypes: ['gc'] });
+    for (let k = 0; k < 200; k++) g.step(w, 1 / 60);
+    await new Promise((r) => setTimeout(r, 50));
+    obs.disconnect();
+    console.log(`collections during 200 steps of a 24³ fire: ${gcs}`);
+    // the grid swaps its two buffers each step: after an even number of steps, the very same arrays
+    const now = [g.u, g.v, g.w, g.s, g.p, g.T, g.F, g.fx];
+    for (let i = 0; i < now.length; i++) expect(now[i] === arrays[i]).toBe(true);
+    expect(gcs).toBe(0);
+  });
+});

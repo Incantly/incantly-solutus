@@ -4,7 +4,7 @@
  *
  * Run from the repository root:
  *   PLAYWRIGHT_DIR=/path/with/node_modules/playwright node packages/kernel/bench/chrome-physics.mjs
- *     [--rate 4] [--warm 1] [--run 5] [--scenes rope,sheet32,flag,over40,self,two,wet] [--kernels off] [--headed]
+ *     [--rate 4] [--warm 1] [--run 5] [--scenes rope,sheet32,flag,over40,self,two,wet,fire24,fire32,flagfire] [--kernels off] [--headed]
  *
  * `--kernels off` runs the TypeScript loops instead of the WebAssembly ones (design 11.6); the line after the Chrome
  * version says whether the kernels were compiled and are running.
@@ -29,7 +29,7 @@ const flag = (name) => process.argv.includes(`--${name}`);
 const rate = Number(arg('rate', '4'));
 const warm = Number(arg('warm', '1'));
 const run = Number(arg('run', '5'));
-const goals = { rope: 2, sheet32: 3, flag: 6, over40: 8, self: 8, two: 8, wet: 8 };
+const goals = { rope: 2, sheet32: 3, flag: 6, over40: 8, self: 8, two: 8, wet: 8, fire24: 8, fire32: 8, flagfire: 8 };
 const scenes = arg('scenes', Object.keys(goals).join(',')).split(',');
 const out = (s) => process.stdout.write(`${s}\n`);
 
