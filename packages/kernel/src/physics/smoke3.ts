@@ -23,9 +23,15 @@
  */
 import type { FireParams } from './fire2';
 import type { DropsView3 } from './fire3';
-import { advectFire3, burnFuel3, confine3, coolFire3, fireLift3, fireSource3, quench3 } from './fire3';
+import { advectFire3, confine3, fireLift3, fireStep3 } from './fire3';
+import type { Allocator, GridKernels } from './wasm/kernels';
+import { GF, GI, GRID_OF, KernelArena, PLAIN } from './wasm/kernels';
 import type { World3 } from './world3';
 import { BodyType3, FK3 } from './world3';
+
+/** The most bodies the Rust solid-face loop has room for (design 11.3: 1,000 bodies), and the most drops the fire's water list holds (2,000). */
+const BODY_CAP = 1024;
+const DROP_CAP = 2048;
 
 /** A body that moves (a constant of this file: a binding imported from another module is looked up each time by some loaders). */
 const DYNAMIC = BodyType3.Dynamic;
@@ -124,8 +130,13 @@ export class Smoke3 {
   /** Per row (j, k): the first air cell and one past the last, so a floor or wall is not solved. */
   private readonly rowLo: Int32Array;
   private readonly rowHi: Int32Array;
-  /** Per body: 1 when it is not moving at all (its faces are at rest). */
-  private still = new Uint8Array(0);
+  /** Per body: 1 when it is not moving at all (its faces are at rest). With the Rust loops, room for `BODY_CAP` bodies in the arena. */
+  private still: Uint8Array;
+  /** With the Rust loops: the cells the liquid's drops are in (room for `DROP_CAP`), and each body's place, speed and spin (nine numbers). */
+  readonly dropCells: Int32Array;
+  private readonly bodyRows: Float64Array;
+  /** The Rust loops, or undefined when the grid runs the TypeScript loops (kernels off or missing, or no room in the arena). */
+  kn: GridKernels | undefined;
   /** Wind (m/s): the air outside the box and coming in at its edges. */
   windX = 0;
   windY = 0;
@@ -170,45 +181,193 @@ export class Smoke3 {
     this.dy = (this.y1 - this.y0) / n;
     this.dz = (this.z1 - this.z0) / n;
     const N = n * n * n;
-    this.u = new Float32Array((n + 1) * n * n);
-    this.v = new Float32Array(n * (n + 1) * n);
-    this.w = new Float32Array(n * n * (n + 1));
-    this.u2 = new Float32Array(this.u.length);
-    this.v2 = new Float32Array(this.v.length);
-    this.w2 = new Float32Array(this.w.length);
-    this.s = new Float32Array(N);
-    this.s2 = new Float32Array(N);
+    const arena = KernelArena.create(Smoke3.arenaBytes(n, setup.fire !== undefined), true);
+    // every array the Rust loops touch lives in the module's memory when there is one, else it is a plain typed array
+    const A: Allocator = arena ?? PLAIN;
+    this.u = A.f32((n + 1) * n * n);
+    this.v = A.f32(n * (n + 1) * n);
+    this.w = A.f32(n * n * (n + 1));
+    this.u2 = A.f32(this.u.length);
+    this.v2 = A.f32(this.v.length);
+    this.w2 = A.f32(this.w.length);
+    this.s = A.f32(N);
+    this.s2 = A.f32(N);
     const S = (n + 2) * (n + 2) * (n + 2);
-    this.p = new Float32Array(S);
-    this.div = new Float32Array(S);
-    this.wl = new Float32Array(S);
-    this.wr = new Float32Array(S);
-    this.wd = new Float32Array(S);
-    this.wu = new Float32Array(S);
-    this.wb = new Float32Array(S);
-    this.wf = new Float32Array(S);
-    this.inv = new Float32Array(S);
-    this.fix = new Int32Array(2 * N);
-    this.fixed = new Float32Array(2 * N);
-    this.rowLo = new Int32Array(n * n);
-    this.rowHi = new Int32Array(n * n);
-    this.own = new Int32Array(N).fill(-1);
+    this.p = A.f32(S);
+    this.div = A.f32(S);
+    this.wl = A.f32(S);
+    this.wr = A.f32(S);
+    this.wd = A.f32(S);
+    this.wu = A.f32(S);
+    this.wb = A.f32(S);
+    this.wf = A.f32(S);
+    this.inv = A.f32(S);
+    this.fix = A.i32(2 * N);
+    this.fixed = A.f32(2 * N);
+    this.rowLo = A.i32(n * n);
+    this.rowHi = A.i32(n * n);
+    this.own = A.i32(N).fill(-1);
     this.own0 = new Int32Array(N).fill(-1);
-    this.src = new Uint8Array(N);
+    this.src = A.u8(N);
     this.fire = setup.fire ? { ...setup.fire } : undefined;
     const nf = setup.fire ? N : 0;
-    this.T = new Float32Array(nf);
-    this.F = new Float32Array(nf);
-    this.T2 = new Float32Array(nf);
-    this.F2 = new Float32Array(nf);
-    this.wet = new Uint8Array(nf);
-    this.ca = new Float32Array(N);
-    this.cb = new Float32Array(N);
-    this.cc = new Float32Array(N);
-    this.oa = new Float32Array(N);
-    this.ob = new Float32Array(N);
-    this.oc = new Float32Array(N);
-    this.om = new Float32Array(N);
+    this.T = A.f32(nf);
+    this.F = A.f32(nf);
+    this.T2 = A.f32(nf);
+    this.F2 = A.f32(nf);
+    this.wet = A.u8(nf);
+    this.ca = A.f32(N);
+    this.cb = A.f32(N);
+    this.cc = A.f32(N);
+    this.oa = A.f32(N);
+    this.ob = A.f32(N);
+    this.oc = A.f32(N);
+    this.om = A.f32(N);
+    this.still = arena ? A.u8(BODY_CAP) : new Uint8Array(0);
+    this.dropCells = arena ? A.i32(DROP_CAP) : new Int32Array(0);
+    this.bodyRows = arena ? A.f64(9 * BODY_CAP) : new Float64Array(0);
+    const I = A.i32(GI.size);
+    const F = A.f64(GF.size);
+    this.kn = arena && !arena.overflow ? this.bind(arena, I, F) : undefined;
+    this.usesSimd = this.kn !== undefined && arena !== undefined && arena.simd;
+    if (this.kn) {
+      GRID_OF.set(this.T, this.kn);
+      GRID_OF.set(this.T2, this.kn);
+    }
+  }
+
+  /** The bytes of arena a grid of `n` cells a side needs (every region, rounded up to 64, and room for the blocks). */
+  static arenaBytes(n: number, fire: boolean): number {
+    const N = n * n * n;
+    const U = (n + 1) * n * n;
+    const S = (n + 2) * (n + 2) * (n + 2);
+    const f32 = 6 * U + 2 * N + 9 * S + 2 * N + 7 * N + (fire ? 4 * N : 0);
+    const i32 = 2 * N + 2 * n * n + N + DROP_CAP + GI.size;
+    const u8 = N + (fire ? N : 0) + BODY_CAP;
+    const f64 = 9 * BODY_CAP + GF.size;
+    return 4 * f32 + 4 * i32 + u8 + 8 * f64 + 64 * 48 + 4096;
+  }
+
+  /** Writes where every array is, and the cell sizes, into the two blocks the Rust loops read. */
+  private bind(arena: KernelArena, I: Int32Array, F: Float64Array): GridKernels {
+    I[GI.n] = this.n;
+    I[GI.fire] = this.T.length > 0 ? 1 : 0;
+    I[GI.u] = this.u.byteOffset;
+    I[GI.v] = this.v.byteOffset;
+    I[GI.w] = this.w.byteOffset;
+    I[GI.u2] = this.u2.byteOffset;
+    I[GI.v2] = this.v2.byteOffset;
+    I[GI.w2] = this.w2.byteOffset;
+    I[GI.s] = this.s.byteOffset;
+    I[GI.s2] = this.s2.byteOffset;
+    I[GI.p] = this.p.byteOffset;
+    I[GI.div] = this.div.byteOffset;
+    I[GI.wl] = this.wl.byteOffset;
+    I[GI.wr] = this.wr.byteOffset;
+    I[GI.wd] = this.wd.byteOffset;
+    I[GI.wu] = this.wu.byteOffset;
+    I[GI.wb] = this.wb.byteOffset;
+    I[GI.wf] = this.wf.byteOffset;
+    I[GI.inv] = this.inv.byteOffset;
+    I[GI.fix] = this.fix.byteOffset;
+    I[GI.fixed] = this.fixed.byteOffset;
+    I[GI.rowLo] = this.rowLo.byteOffset;
+    I[GI.rowHi] = this.rowHi.byteOffset;
+    I[GI.own] = this.own.byteOffset;
+    I[GI.src] = this.src.byteOffset;
+    I[GI.T] = this.T.byteOffset;
+    I[GI.F] = this.F.byteOffset;
+    I[GI.T2] = this.T2.byteOffset;
+    I[GI.F2] = this.F2.byteOffset;
+    I[GI.wet] = this.wet.byteOffset;
+    I[GI.ca] = this.ca.byteOffset;
+    I[GI.cb] = this.cb.byteOffset;
+    I[GI.cc] = this.cc.byteOffset;
+    I[GI.oa] = this.oa.byteOffset;
+    I[GI.ob] = this.ob.byteOffset;
+    I[GI.oc] = this.oc.byteOffset;
+    I[GI.om] = this.om.byteOffset;
+    I[GI.sb] = this.bodyRows.byteOffset;
+    I[GI.still] = this.still.byteOffset;
+    I[GI.drops] = this.dropCells.byteOffset;
+    F[GF.x0] = this.x0;
+    F[GF.y0] = this.y0;
+    F[GF.z0] = this.z0;
+    F[GF.dx] = this.dx;
+    F[GF.dy] = this.dy;
+    F[GF.dz] = this.dz;
+    return { fn: arena.fn, gi: I.byteOffset, gf: F.byteOffset, I, F };
+  }
+
+  /** Does the grid run the Rust loops (design 11.6)? */
+  get usesKernels(): boolean {
+    return this.kn !== undefined;
+  }
+
+  /** Is the module the grid runs the build with SIMD? */
+  usesSimd = false;
+
+  /** The step's own numbers, written to the block the Rust loops read (only numbers, so a call has none to pass). */
+  private writeNumbers(k: GridKernels, h: number): void {
+    const F = k.F;
+    F[GF.h] = h;
+    F[GF.windX] = this.windX;
+    F[GF.windY] = this.windY;
+    F[GF.windZ] = this.windZ;
+    F[GF.lift] = this.heat;
+    F[GF.swirl] = this.swirl;
+    const fire = this.fire;
+    if (fire) {
+      F[GF.burn] = fire.burn;
+      F[GF.fheat] = fire.heat;
+      F[GF.fsmoke] = fire.smoke;
+      F[GF.fuel] = fire.fuel;
+    }
+    const on = this.hasSource && this.making ? 1 : 0;
+    k.I[GI.sourceOn] = on;
+    k.I[GI.hold] = on;
+  }
+
+  /** The flow's two sets of arrays trade places (and so do their slots in the block). */
+  private swapFlow(k: GridKernels): void {
+    const u = this.u;
+    this.u = this.u2;
+    this.u2 = u;
+    const v = this.v;
+    this.v = this.v2;
+    this.v2 = v;
+    const w = this.w;
+    this.w = this.w2;
+    this.w2 = w;
+    const I = k.I;
+    const iu = I[GI.u] as number;
+    I[GI.u] = I[GI.u2] as number;
+    I[GI.u2] = iu;
+    const iv = I[GI.v] as number;
+    I[GI.v] = I[GI.v2] as number;
+    I[GI.v2] = iv;
+    const iw = I[GI.w] as number;
+    I[GI.w] = I[GI.w2] as number;
+    I[GI.w2] = iw;
+  }
+
+  /** `T` and `F` trade places with their second arrays (the fire's advection under the Rust loops). */
+  swapFire(): void {
+    const t = this.T;
+    this.T = this.T2;
+    this.T2 = t;
+    const f = this.F;
+    this.F = this.F2;
+    this.F2 = f;
+    const k = this.kn;
+    if (!k) return;
+    const I = k.I;
+    const it = I[GI.T] as number;
+    I[GI.T] = I[GI.T2] as number;
+    I[GI.T2] = it;
+    const jf = I[GI.F] as number;
+    I[GI.F] = I[GI.F2] as number;
+    I[GI.F2] = jf;
   }
 
   get sourced(): boolean {
@@ -285,7 +444,8 @@ export class Smoke3 {
     this.own.set(this.own0);
     for (let b = 0; b < w.n; b++) if (w.type[b] === DYNAMIC && !w.gone.has(b)) this.markBody(w, b, this.own);
     // a body that is not moving at all (the floor, a wall) holds its faces at rest without any sum
-    if (this.still.length !== w.n) this.still = new Uint8Array(w.n);
+    if (this.kn && w.n > BODY_CAP) this.kn = undefined;
+    if (!this.kn && this.still.length < w.n) this.still = new Uint8Array(w.n);
     for (let b = 0; b < w.n; b++) {
       const o = b * 3;
       this.still[b] = w.v[o] === 0 && w.v[o + 1] === 0 && w.v[o + 2] === 0 && w.w[o] === 0 && w.w[o + 1] === 0 && w.w[o + 2] === 0 ? 1 : 0;
@@ -525,6 +685,19 @@ export class Smoke3 {
     }
   }
 
+  /** The cell holding drop `m` of the arrays, or −1 outside the box (`cellAt` without three numbers passed through a call). */
+  cellOfDrop(xs: Float64Array, ys: Float64Array, zs: Float64Array, m: number): number {
+    const n = this.n;
+    if (!((xs[m] as number) >= this.x0 && (xs[m] as number) <= this.x1 && (ys[m] as number) >= this.y0 && (ys[m] as number) <= this.y1 && (zs[m] as number) >= this.z0 && (zs[m] as number) <= this.z1)) return -1;
+    let i = Math.floor(((xs[m] as number) - this.x0) / this.dx);
+    let j = Math.floor(((ys[m] as number) - this.y0) / this.dy);
+    let k = Math.floor(((zs[m] as number) - this.z0) / this.dz);
+    if (i > n - 1) i = n - 1;
+    if (j > n - 1) j = n - 1;
+    if (k > n - 1) k = n - 1;
+    return (k * n + j) * n + i;
+  }
+
   /** The cell holding a point, or −1 outside the box. */
   cellAt(x: number, y: number, z: number): number {
     const n = this.n;
@@ -572,6 +745,8 @@ export class Smoke3 {
   step(w: World3 | undefined, h: number, drops?: DropsView3): void {
     if (this.unstable) return;
     this.markSolids(w);
+    const k = this.kn;
+    if (k) this.writeNumbers(k, h);
     this.advectFlow(h);
     const fire = this.fire !== undefined;
     if (fire) {
@@ -579,12 +754,7 @@ export class Smoke3 {
       fireLift3(this, h);
     } else this.lift(h);
     if (this.swirl > 0) confine3(this, h);
-    if (fire) {
-      burnFuel3(this, h);
-      fireSource3(this, h);
-      coolFire3(this, h);
-      quench3(this, drops);
-    }
+    if (fire) fireStep3(this, h, drops);
     this.solidFaces(w);
     this.project();
     this.advectSmoke(h);
@@ -606,6 +776,12 @@ export class Smoke3 {
   }
 
   private advectFlow(h: number): void {
+    const k = this.kn;
+    if (k) {
+      k.fn.grid3_advect_flow(k.gi, k.gf);
+      this.swapFlow(k);
+      return;
+    }
     const n = this.n;
     const W1 = n + 1;
     const nn = n * n;
@@ -758,6 +934,11 @@ export class Smoke3 {
   /** Heat lifts the z speeds where there is smoke. */
   private lift(h: number): void {
     if (this.heat === 0) return;
+    const kn = this.kn;
+    if (kn) {
+      kn.fn.grid3_lift(kn.gi, kn.gf);
+      return;
+    }
     const n = this.n;
     const nn = n * n;
     const s = this.s;
@@ -789,6 +970,26 @@ export class Smoke3 {
   /** Faces next to a solid cell carry the solid's speed: the air cannot go into it, and a moving body pushes it. */
   private solidFaces(w: World3 | undefined): void {
     if (!w) return;
+    const kn = this.kn;
+    if (kn) {
+      // each body's place, speed and spin go to the arena; the loop works out each face's speed as `bodyV` does
+      const sb = this.bodyRows;
+      for (let b = 0; b < w.n; b++) {
+        const o = b * 9;
+        const q = b * 3;
+        sb[o] = w.p[q] as number;
+        sb[o + 1] = w.p[q + 1] as number;
+        sb[o + 2] = w.p[q + 2] as number;
+        sb[o + 3] = w.v[q] as number;
+        sb[o + 4] = w.v[q + 1] as number;
+        sb[o + 5] = w.v[q + 2] as number;
+        sb[o + 6] = w.w[q] as number;
+        sb[o + 7] = w.w[q + 1] as number;
+        sb[o + 8] = w.w[q + 2] as number;
+      }
+      kn.fn.grid3_solid_faces(kn.gi, kn.gf);
+      return;
+    }
     const n = this.n;
     const W1 = n + 1;
     const own = this.own;
@@ -873,6 +1074,11 @@ export class Smoke3 {
    * a solid neighbour, by red-black over-relaxed passes; then take the gradient off the faces.
    */
   private project(): void {
+    const kn = this.kn;
+    if (kn) {
+      kn.fn.grid3_project(kn.gi, kn.gf);
+      return;
+    }
     const n = this.n;
     const nn = n * n;
     const W1 = n + 1;
@@ -1006,6 +1212,19 @@ export class Smoke3 {
 
   /** Smoke is carried back along the flow now, and scaled so a closed box keeps its mass (design 9.4). */
   private advectSmoke(h: number): void {
+    const kn = this.kn;
+    if (kn) {
+      kn.fn.grid3_advect_smoke(kn.gi, kn.gf);
+      this.lastScale = kn.F[GF.last] as number;
+      const s = this.s;
+      this.s = this.s2;
+      this.s2 = s;
+      const I = kn.I;
+      const is = I[GI.s] as number;
+      I[GI.s] = I[GI.s2] as number;
+      I[GI.s2] = is;
+      return;
+    }
     const n = this.n;
     const nn = n * n;
     const W1 = n + 1;
@@ -1221,6 +1440,11 @@ export class Smoke3 {
   }
 
   private checkHealth(): void {
+    const kn = this.kn;
+    if (kn) {
+      if (kn.fn.grid3_health(kn.gi) !== 0) this.blowUp();
+      return;
+    }
     let bad = false;
     const u = this.u;
     const v = this.v;
@@ -1238,6 +1462,11 @@ export class Smoke3 {
       if (!(x > -BLOW_UP && x < BLOW_UP)) bad = true;
     }
     if (!bad) return;
+    this.blowUp();
+  }
+
+  /** The grid blew up: everything is set to rest and the grid stops. */
+  private blowUp(): void {
     this.unstable = true;
     this.u.fill(0);
     this.v.fill(0);
@@ -1254,6 +1483,11 @@ export class Smoke3 {
 
   /** Total smoke: density times cell volume. */
   mass(): number {
+    const kn = this.kn;
+    if (kn) {
+      kn.fn.grid3_smoke_sum(kn.gi, kn.gf);
+      return (kn.F[GF.out] as number) * this.dx * this.dy * this.dz;
+    }
     let m = 0;
     for (let c = 0; c < this.s.length; c++) m += this.s[c] as number;
     return m * this.dx * this.dy * this.dz;
@@ -1270,6 +1504,11 @@ export class Smoke3 {
 
   /** The fastest air (m/s). */
   maxSpeed(): number {
+    const kn = this.kn;
+    if (kn) {
+      kn.fn.grid3_max_speed(kn.gi, kn.gf);
+      return kn.F[GF.out] as number;
+    }
     let m = 0;
     for (let k = 0; k < this.u.length; k++) m = Math.max(m, Math.abs(this.u[k] as number));
     for (let k = 0; k < this.v.length; k++) m = Math.max(m, Math.abs(this.v[k] as number));

@@ -77,11 +77,21 @@ function kernelsRunning(): boolean {
   return cloth?.kfn !== undefined;
 }
 
+/** Does a grid in space built now run the Rust loops, and the build with SIMD? */
+function gridRunning(): { running: boolean; simd: boolean } {
+  const figure = new Figure({ commands });
+  for (const line of SCENES.fire24 as string[]) figure.apply(line);
+  figure.setClock(1 / 60);
+  const grid = physics3Of(figure).smokeMembers[0]?.grid;
+  return { running: grid?.usesKernels === true, simd: grid?.usesSimd === true };
+}
+
 declare global {
   interface Window {
     physicsBench: typeof physicsBench;
-    physicsKernels: { wanted: boolean; compiled: boolean; running: boolean };
+    physicsKernels: { wanted: boolean; compiled: boolean; running: boolean; grid: boolean; gridSimd: boolean };
   }
 }
 window.physicsBench = physicsBench;
-window.physicsKernels = { wanted: kernelsWanted, compiled: kernelsReady, running: kernelsRunning() };
+const grid = gridRunning();
+window.physicsKernels = { wanted: kernelsWanted, compiled: kernelsReady, running: kernelsRunning(), grid: grid.running, gridSimd: grid.simd };
