@@ -29,3 +29,17 @@ Passing: Heavy ball, wide swing (11.5); the body's tether in the plane and in sp
 - Scene: F1 with `stretch` left at its default (1).
 - Code gave: the ball's value is `undefined` from frame 133 (2.22 s): the body is gone (NaN or removed), so there is no sink to measure and the test reads NaN. Before that z jumps 0.452, 0.477, 0.500, 0.369, 0.726, 0.676, 0.521, ... 1.35 at 1 s, 0.16 at 1.5 s, 1.44 at 2 s.
 - The builder notes (T2) name a flat sheet at `stretch = 1` pinned to a ball at exactly its start distance as an over-constrained scene. The tester's reading is that a figure the learner can type must not lose the ball, whatever the constraints; the design text has no such exception.
+
+## 10.9 Rust kernels
+
+Tests: `packages/kernel/test/spec/physics-kernels.test.ts`, 41 tests: 41 pass, 0 fail. `packages/kernel/test/spec/physics-bodies.test.ts` (29) passes after its source scan was changed to walk files under `src/physics` recursively (it threw `EISDIR` on `wasm/`). The physics set (17 files, 278 tests) and `npm run lint` pass.
+
+No failing tests, so there are no findings for the fixer. What is covered (design 11.6 "As built"):
+
+- Kernels on against off, 5 s, every second, `toBe` on every readout (`c.at(i, j)`, `torn`, body `x`/`y`/`z`, drop `count` and `level`) and `toEqual` on the whole `xs`/`ys`/`zs`/`cut` arrays: a 3D sheet on a ball, a flag in wind, a 64 × 32 sheet over boxes, two cloths (one with `self`), a sheet with 2,000 drops, a 2D rope with a ball, a 2D net that tears, a body pinned to a 3D sheet, plus a sheet that hits itself, a box hull falling on a sheet, a rope in smoke, and a 3D liquid with a ball.
+- Seek from 0 to 3 s equals play to 3 s with kernels on (all 12 scenes), seek back and forward, and a film played with kernels on against one sought with them off.
+- No WebAssembly (`globalThis.WebAssembly` stubbed to `undefined`, fresh figure built after): no throw, same film as the TypeScript loops. The docs do not say whether a module compiled earlier in the process is dropped, so the tests check only the promised film. `initPhysicsKernels()` under the stub neither throws nor rejects and resolves to a boolean.
+- `physicsKernelsOn()` follows `setPhysicsKernels`; `initPhysicsKernels()` resolves `true` in Node, also on repeated and concurrent calls; the film after it equals the kernels-off film; the switch flipped mid-film (either way) keeps the film; three figures played frame by frame at once, with different switch states, give the same film.
+- At the limits of 11.3: two 64 × 32 cloths (4,096 points, one with `self`) with 2,000 3D drops, 2 s on against off; the net tears the same links with one `torn` notice on and off.
+
+Limit of these tests: the public API gives no way to see that the Rust loops ran (only `physicsKernelsOn()`, the switch). If the module were silently missing in Node, the on-against-off tests would still pass; the test that `initPhysicsKernels()` resolves `true` is the only guard.

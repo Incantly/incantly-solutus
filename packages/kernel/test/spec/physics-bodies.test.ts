@@ -1,5 +1,5 @@
 /** Bodies, solids, the world and the exact film (.kiro/specs/physics R1, R2, R8; docs/features/physics design 2, 5, 6, 10, 11.5; errors 3 to 5). */
-import { readdirSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { CommandRegistry, Figure, geometry, physics, physicsMath, physicsOf, playerOf, registerAnimation, registerFunctions, registerNumbers, registerPhysics } from '../../src/index';
@@ -60,7 +60,10 @@ describe('exact maths (design 10.2)', () => {
 
   it('no inexact Math function appears in the engine (design 10.2)', () => {
     const dir = join(__dirname, '../../src/physics');
-    for (const file of readdirSync(dir)) {
+    // every file under src/physics, folders (such as wasm/) included
+    const files = (readdirSync(dir, { recursive: true }) as string[]).filter((p) => statSync(join(dir, p)).isFile());
+    expect(files.length).toBeGreaterThan(0);
+    for (const file of files) {
       const src = readFileSync(join(dir, file), 'utf8').replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, '');
       expect(src, file).not.toMatch(/Math\.(sin|cos|tan|atan2?|asin|acos|exp|log|pow|hypot|cbrt|random)\b/);
     }
