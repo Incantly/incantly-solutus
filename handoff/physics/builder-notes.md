@@ -222,3 +222,32 @@ Chrome rows still over their goal: cloth in water 9.11 ms (goal 8), the 32 × 32
 The link pass is 15% (over40, sheet32, self) to 34% (two) of what is left and only 1.2× faster in Rust: it is bound by the gathers and stores,
 not the maths (a version that did two links at a time when they share no point was no faster and was dropped). A layout with a link's ends and
 numbers side by side, or a point's `x y z w` side by side, would be the next try; SIMD (f64x2 gives the same bits lane by lane) is the other.
+
+## 11A fire in the plane
+
+Branch `feat/physics-11a`. Plan: `handoff/physics/plan-11a-fire-2d.md`. Design: `docs/features/physics/design.md` 9.7 ("Choices made while building it in the plane" holds every number and decision). No tests written. Scratch probes only (`$KIROCREW_SCRATCH/probe/`).
+
+### Files
+
+- New: `packages/kernel/src/physics/fire2.ts` (the fire steps on a `Smoke2`, swirl), `physics/burn2.ts` (`Burnables`: the burnable units and their step), `commands/physics/fire.ts` (`Fire`), `fire-reg.ts` (readouts, row text, notices, reason), `crackle.ts` (the sound source).
+- Changed: `physics/smoke2.ts` (fire fields, `step(w, h, drops?)`, checkpoint), `physics/cloth.ts` (`ClothSet.burnCells`), `commands/physics/` `smoke.ts`, `smoke-reg.ts`, `cloth.ts`, `cloth-reg.ts`, `types.ts`, `index.ts`, `driver.ts`; `commands/sound/index.ts` (`registerSoundSource`); `commands/numbers/handlers.ts` (`Ignite` in `STEP_ACTIONS`); errors (`contracts/errors.ts`, `errors/table.ts`, `language/errors.ts`); the `boolnum` property kind (`language/props.ts`, `language/lines.ts`, `graph/props.ts`); `packages/sdk/src/screen/` `physics.ts`, `scene.ts`, `paint.ts`; `apps/studio/src/` `examples.ts`, `session.ts`; docs, tasks, usage log, bench.
+
+### Public API
+
+`Fire`, `Ignite`, `Smoke(…, swirl = k)`, `burns` and `ignite` on `Body`, `Cloth` (rope, net) and (as `with`) any solid shape; readouts `f.temperature(x, y)`, `f.burning`, `f.fuel`, `b.temperature`, `b.burnt`, `b.burning`, `c.burnt`. Kernel exports: `physics.isFireValue`, `FireValue`, `FireSpec`. SDK exports: `fireImage`, `fireColor`, `charred` in `screen/physics.ts`.
+
+### Decisions the plan did not settle
+
+See design 9.7 for the full list. The ones to look at first: the example id `physics-candle-flame` (the id `physics-candle` is the smoke candle that is already there) and `wood` for `log` (`log` is a reserved name); `Ignite` lights a whole thing at once; a cloth's `burns = true` is 10 s a kg of one cell's mass (at least 1 s a cell); `fire_out` needs the fire to have been alight and 1e-4 m² of fuel (never exactly 0); a joint whose rule goes undefined because a body burnt or left the world no longer makes the world start again (it did, and with a burnt body in a weld the film restarted at every pass); `with burns` takes a number too (new property kind `boolnum`); at most 64 burnable things, the rest ignored with no `limit` refusal.
+
+### Left out
+
+- The `limit` refusal of design 11.3 for the 65th burnable thing (ignored in the driver instead).
+- `Pin` to a burnt body (its rule goes undefined; not looked at).
+- Crackle: not muted by `Mute` (that is for `Sound` objects); no test of it.
+- `ui.md` (a Fire tool for the toolbar, the drawing row), screenshots, Chrome numbers, spec tests: later steps.
+- Fire in space (11B).
+
+### Numbers
+
+`physics.bench.ts`, "fire in the plane, 64 × 64, two burning bodies": mean 0.84 ms, 95% 0.89 ms, 99% 0.96 ms, worst 1.28 ms a frame (budget 1 ms); the smoke row on the same run: 0.56 ms. A burning curtain (20 × 14, a 48 × 48 fire) with a burning body and a weld: about 0.9 ms a frame.

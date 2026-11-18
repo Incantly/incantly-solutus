@@ -102,6 +102,8 @@ export interface AreaErrorKinds {
   read_only: true;
   not_a_cloth: true;
   pin_off_cloth: true;
+  not_burnable: true;
+  no_fire_grid: true;
 }
 
 export type ErrorKind = CoreErrorKind | Extract<keyof AreaErrorKinds, string>;

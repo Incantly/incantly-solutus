@@ -26,7 +26,7 @@ export const FORCE_STYLE: Readonly<Record<string, { color: string; label: string
 const KINDS = ['gravity', 'normal', 'friction', 'tension', 'spring', 'buoyancy', 'drag', 'electric', 'applied', 'net'] as const;
 
 export function isPhysicsItem(it: SceneItem): boolean {
-  return it.type === 'Body' || it.type === 'Joint' || it.type === 'Wheel' || it.type === 'Contacts' || it.type === 'Liquid' || it.type === 'Water' || it.type === 'Waves' || it.type === 'Smoke' || it.type === 'Cloth' || it.type === 'Pin' || (it.type === 'List' && /^List<(Body|Joint|Wheel)>/.test(it.typeText));
+  return it.type === 'Body' || it.type === 'Joint' || it.type === 'Wheel' || it.type === 'Contacts' || it.type === 'Liquid' || it.type === 'Water' || it.type === 'Waves' || it.type === 'Smoke' || it.type === 'Fire' || it.type === 'Cloth' || it.type === 'Pin' || (it.type === 'List' && /^List<(Body|Joint|Wheel)>/.test(it.typeText));
 }
 
 function bodiesOf(it: SceneItem): physics.BodyValue[] {
@@ -86,7 +86,7 @@ function smallLabel(ctx: Ctx, text: string, x: number, y: number, color: string)
 
 function paintBody(ctx: Ctx, vp: Viewport, b: physics.BodyValue, it: SceneItem, hits: Hit[], scale: number, name: string): void {
   const shape = physics.shapeNow(b) as { cx?: number; cy?: number; r?: number; pts?: Pt[] };
-  const c = it.color;
+  const c = charred(it.color, b.burnt ?? 0);
   ctx.lineWidth = 2;
   ctx.strokeStyle = c;
   ctx.fillStyle = withAlpha(c, b.asleep ? 0.22 : 0.32);
@@ -465,7 +465,7 @@ function smokeCanvas(n: number): { canvas: SmallCanvas; image: ImageData } | nul
  * Smoke: a grey shaded image under the shapes, one image a frame from the density grid, scaled to the box and smoothed
  * (ui.md 7). Where the board cannot take an image (an SVG export), each cell is a grey square.
  */
-function paintSmoke(ctx: Ctx, vp: Viewport, s: physics.SmokeValue, it: SceneItem, hits: Hit[]): void {
+function paintSmoke(ctx: Ctx, vp: Viewport, s: physics.SmokeValue, it: SceneItem, hits: Hit[], text?: string): void {
   const { n, x0, y0, x1, y1 } = s.spec;
   const px0 = vp.px(x0);
   const px1 = vp.px(x1);
@@ -502,7 +502,118 @@ function paintSmoke(ctx: Ctx, vp: Viewport, s: physics.SmokeValue, it: SceneItem
   ctx.strokeRect(px0, py0, w, h);
   ctx.setLineDash([]);
   ctx.restore();
-  hits.push({ k: 'rect', x0: px0, y0: py0, x1: px0 + Math.min(w, 24), y1: py0 + Math.min(h, 24), text: `${it.name}: smoke ${n} by ${n}, air up to ${fmt(s.speed)} m/s`, id: it.id });
+  hits.push({ k: 'rect', x0: px0, y0: py0, x1: px0 + Math.min(w, 24), y1: py0 + Math.min(h, 24), text: text ?? `${it.name}: smoke ${n} by ${n}, air up to ${fmt(s.speed)} m/s`, id: it.id });
+}
+
+/** The colour of fire by temperature (design 9.7, plan 11A section 5): rows of °C, red, green, blue and cover, linear between. */
+const FIRE_RAMP: readonly (readonly [number, number, number, number, number])[] = [
+  [400, 130, 20, 0, 0],
+  [500, 130, 20, 0, 0.35],
+  [800, 230, 80, 0, 0.7],
+  [1100, 255, 160, 30, 0.85],
+  [1500, 255, 240, 180, 0.95],
+];
+
+/** The colour and cover of a cell at `t` °C: nothing under 400, then the ramp, held from 1,500 up; written into `out` as r, g, b, a (a in 0..1). */
+export function fireColor(t: number, out: number[] | Float64Array): void {
+  if (!(t > 400)) {
+    out[0] = 0;
+    out[1] = 0;
+    out[2] = 0;
+    out[3] = 0;
+    return;
+  }
+  const top = FIRE_RAMP[FIRE_RAMP.length - 1] as readonly number[];
+  if (t >= (top[0] as number)) {
+    out[0] = top[1] as number;
+    out[1] = top[2] as number;
+    out[2] = top[3] as number;
+    out[3] = top[4] as number;
+    return;
+  }
+  for (let k = 1; k < FIRE_RAMP.length; k++) {
+    const b = FIRE_RAMP[k] as readonly number[];
+    if (t > (b[0] as number)) continue;
+    const a = FIRE_RAMP[k - 1] as readonly number[];
+    const u = (t - (a[0] as number)) / ((b[0] as number) - (a[0] as number));
+    for (let q = 1; q <= 4; q++) out[q - 1] = (a[q] as number) + ((b[q] as number) - (a[q] as number)) * u;
+    return;
+  }
+}
+
+const FIRE_RGBA = new Float64Array(4);
+
+/**
+ * The fire image: one RGBA pixel per cell, top row first, its colour and cover from the temperature `T` (a cell is never
+ * drawn hotter than the fire's `heat`) and a little less where thick smoke `s` hides it. Written into `out`, so a frame
+ * makes no new buffer.
+ */
+export function fireImage(T: Float32Array, s: Float32Array, n: number, heat: number, out: Uint8ClampedArray): void {
+  const c = FIRE_RGBA;
+  for (let j = 0; j < n; j++) {
+    const row = (n - 1 - j) * n;
+    for (let i = 0; i < n; i++) {
+      const t = T[j * n + i] as number;
+      fireColor(t > heat ? heat : t, c);
+      const d = s[j * n + i] as number;
+      const o = (row + i) * 4;
+      out[o] = Math.round(c[0] as number);
+      out[o + 1] = Math.round(c[1] as number);
+      out[o + 2] = Math.round(c[2] as number);
+      out[o + 3] = Math.round(255 * (c[3] as number) * (1 - 0.4 * (d < 1 ? d : 1)));
+    }
+  }
+}
+
+/**
+ * Fire: the black-body colour of each cell, added over what is under it (`lighter`), then the smoke image over that
+ * (design 9.7). Where the board cannot take an image (an SVG export), each cell is a square of its colour.
+ */
+function paintFire(ctx: Ctx, vp: Viewport, f: physics.FireValue, it: SceneItem, hits: Hit[]): void {
+  const { n, x0, y0, x1, y1 } = f.spec;
+  const px0 = vp.px(x0);
+  const px1 = vp.px(x1);
+  const py0 = vp.py(y1);
+  const py1 = vp.py(y0);
+  const w = px1 - px0;
+  const h = py1 - py0;
+  if (!(w > 0) || !(h > 0)) return;
+  const heat = f.spec.fire.heat;
+  const small = typeof (ctx as { drawImage?: unknown }).drawImage === 'function' ? smokeCanvas(n) : null;
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  if (small) {
+    fireImage(f.temp, f.density, n, heat, small.image.data);
+    small.canvas.getContext('2d')?.putImageData(small.image, 0, 0);
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(small.canvas as unknown as CanvasImageSource, px0, py0, w, h);
+  } else {
+    const cw = w / n;
+    const ch = h / n;
+    const c = FIRE_RGBA;
+    for (let j = 0; j < n; j++) {
+      for (let i = 0; i < n; i++) {
+        const t = f.temp[j * n + i] as number;
+        fireColor(t > heat ? heat : t, c);
+        if (!((c[3] as number) > 0.02)) continue;
+        ctx.fillStyle = `rgba(${Math.round(c[0] as number)}, ${Math.round(c[1] as number)}, ${Math.round(c[2] as number)}, ${(c[3] as number).toFixed(2)})`;
+        ctx.fillRect(px0 + i * cw, py1 - (j + 1) * ch, cw + 0.5, ch + 0.5);
+      }
+    }
+  }
+  ctx.restore();
+  // the smoke over the flames, in smoke's own grey whatever the fire's colour is
+  paintSmoke(ctx, vp, f, { ...it, color: '#5f6670' }, hits, `${it.name}: fire ${n} by ${n}, up to ${fmt(f.hottest)} °C${f.burning ? ', burning' : ''}`);
+}
+
+/** A colour moved toward char (`#2b2622`) by `burnt` (0 to 1): a body that burns darkens as it goes (design 9.7). */
+export function charred(color: string, burnt: number): string {
+  const rgb = rgbOf(color);
+  if (!rgb || !(burnt > 0)) return color;
+  const u = burnt < 1 ? burnt : 1;
+  const ch = [0x2b, 0x26, 0x22];
+  const h = (k: number): string => Math.round((rgb[k] as number) + ((ch[k] as number) - (rgb[k] as number)) * u).toString(16).padStart(2, '0');
+  return `#${h(0)}${h(1)}${h(2)}`;
 }
 
 /** The part of a polygon below y = level (Sutherland and Hodgman against one line). */
@@ -534,6 +645,10 @@ export function paintPhysicsItem(ctx: Ctx, vp: Viewport, it: SceneItem, hits: Hi
   }
   if (physics.isWavesValue(it.value)) {
     paintWaves(ctx, vp, it.value, it, hits);
+    return;
+  }
+  if (physics.isFireValue(it.value)) {
+    paintFire(ctx, vp, it.value, it, hits);
     return;
   }
   if (physics.isSmokeValue(it.value)) {

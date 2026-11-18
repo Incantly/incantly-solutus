@@ -40,8 +40,12 @@ import type { LiquidValue, WaterValue, WavesValue } from './liquid';
 import { isLiquidValue, isWaterValue, isWavesValue } from './liquid';
 import { WaveGrid } from '../../physics/waves';
 import type { Smoke2 } from '../../physics/smoke2';
-import type { SmokeValue } from './smoke';
+import type { SmokeSpec, SmokeValue } from './smoke';
 import { isSmokeValue, smokeGrid, smokeValue } from './smoke';
+import type { BurnDef } from '../../physics/burn2';
+import { BURN_BODY, BURN_CELL, BURN_SHAPE, Burnables, MAX_BURNABLE } from '../../physics/burn2';
+import { FUEL_GONE, IGNITE_AT, fuelSum, hottest } from '../../physics/fire2';
+import { polygonMass } from '../../physics/geom2';
 import { Cloth2 } from '../../physics/cloth2';
 import type { PinDef } from '../../physics/cloth';
 import type { ClothSpec, ClothValue } from './cloth';
@@ -67,7 +71,9 @@ export type LogEntry =
   | { readonly kind: 'set'; readonly n: number; readonly id: ObjId; readonly value: unknown }
   | { readonly kind: 'reset'; readonly n: number }
   | { readonly kind: 'cgrab'; readonly n: number; readonly id: ObjId; readonly point: number; readonly x: number; readonly y: number }
-  | { readonly kind: 'crelease'; readonly n: number; readonly id: ObjId; readonly point: number };
+  | { readonly kind: 'crelease'; readonly n: number; readonly id: ObjId; readonly point: number }
+  | { readonly kind: 'ignite'; readonly n: number; readonly id: ObjId; readonly item?: number }
+  | { readonly kind: 'wake' | 'sleep'; readonly n: number; readonly id: ObjId; readonly item?: number };
 
 /** Body properties a `with` line may set (design 2.4). */
 export const BODY_PROPS = ['bounce', 'friction', 'force', 'torque', 'bullet', 'group', 'charge'] as const;
@@ -92,6 +98,21 @@ interface Grab {
   y: number;
   ax: number;
   ay: number;
+}
+
+/** A thing that burns (design 9.7): a body, a solid shape or a cloth, and the units that stand for it. */
+interface BurnThing {
+  readonly rec: ObjRec;
+  readonly kind: 'body' | 'shape' | 'cloth';
+  readonly item?: number;
+  /** The world index of a body or shape; the cloth's number in the set. */
+  readonly index: number;
+  readonly first: number;
+  readonly count: number;
+  readonly name: string;
+  /** A cloth's cells that burnt away, and whether its links still have to be torn for the newly burnt ones. */
+  readonly mask?: Uint8Array;
+  dirty: boolean;
 }
 
 export class PhysicsDriver implements WorldDriver {
@@ -129,6 +150,15 @@ export class PhysicsDriver implements WorldDriver {
   smokeMembers: { readonly rec: ObjRec; value: SmokeValue; readonly grid: Smoke2 }[] = [];
   /** Bodies' steps per smoke step. */
   private smokeEvery = 2;
+  /** Things that burn (design 9.7): their units, the things, and the mass and inertia each body unit started with. */
+  private burn: Burnables | undefined;
+  private burnThings: BurnThing[] = [];
+  private burnMass = new Float64Array(0);
+  private burnInertia = new Float64Array(0);
+  private burnInvM = new Float64Array(0);
+  private burnInvI = new Float64Array(0);
+  /** The unit of each world index (−1: none). */
+  private unitOfIndex = new Int32Array(0);
   /** The value each body's rule gave (its start), kept because the cell holds the pose. */
   private specs = new Map<ObjId, BodyValue>();
   private worldSettings: WorldValue | undefined;
@@ -199,6 +229,9 @@ export class PhysicsDriver implements WorldDriver {
       return last && computed.defined && this.live() ? last : undefined;
     }
     if (isJointRec(rec)) {
+      // a body that burnt away or left the world makes its joint's rule undefined: the joint breaks (the driver says so),
+      // and the world is not built again from its start for it
+      if (!computed.defined && this.goneBody(computed.cause)) return undefined;
       this.jointSpecs.set(rec.id, computed.defined ? (Array.isArray(computed.value) ? (computed.value as unknown[]) : [computed.value]).map((v) => (isJointValue(v) ? v : undefined)) : []);
       const last = this.lastCells.get(rec.id);
       return last && computed.defined && this.live() ? last : undefined;
@@ -224,7 +257,7 @@ export class PhysicsDriver implements WorldDriver {
       if (last && computed.defined && this.live() && last.defined && isClothValue(last.value) && isClothValue(computed.value) && sameValue(last.value.spec, computed.value.spec)) return last;
       return undefined;
     }
-    if (rec.p.type.k === 'Smoke') {
+    if (rec.p.type.k === 'Smoke' || rec.p.type.k === 'Fire') {
       if (computed.defined && isSmokeValue(computed.value)) this.smokeSpecs.set(rec.id, computed.value);
       else this.smokeSpecs.delete(rec.id);
       const last = this.lastCells.get(rec.id);
@@ -250,10 +283,32 @@ export class PhysicsDriver implements WorldDriver {
       const last = this.lastCells.get(rec.id);
       return last && computed.defined ? last : undefined;
     }
+    if (this.solidRecs.includes(rec)) {
+      // a solid shape: its rule's value is what the world is built from; one that burnt away reads undefined
+      this.solidVals.set(rec.id, computed);
+      return this.burntSolids.has(rec.id) ? { defined: false, reason: 'burnt' } : undefined;
+    }
     return undefined;
   }
 
+  /** The value each solid shape's rule gave last (a solid that burnt away reads undefined, but the world is still built from this). */
+  private solidVals = new Map<ObjId, Cell>();
+  /** The solid shapes whose cell reads undefined now because they burnt away. */
+  private burntSolids = new Set<ObjId>();
+
+  /** A solid shape's cell as its rule gave it, not as the burning left it. */
+  private solidCell(r: ObjRec): Cell {
+    return this.burntSolids.has(r.id) ? (this.solidVals.get(r.id) ?? r.cell) : r.cell;
+  }
+
   private lastCells = new Map<ObjId, Cell>();
+
+  /** Is the object a body of this world that burnt away (or left it)? Its value is undefined for that reason. */
+  private goneBody(id: ObjId | undefined): boolean {
+    if (id === undefined) return false;
+    const c = this.lastCells.get(id);
+    return c !== undefined && !c.defined && (c.reason === 'burnt' || c.reason === 'left_world');
+  }
 
   noteFree(rec: ObjRec, was: unknown): void {
     if (!this.world) return;
@@ -270,6 +325,15 @@ export class PhysicsDriver implements WorldDriver {
   }
 
   inputLine(words: readonly string[]): string | undefined | false {
+    this.restoring = true;
+    try {
+      return this.inputLineOf(words);
+    } finally {
+      this.restoring = false;
+    }
+  }
+
+  private inputLineOf(words: readonly string[]): string | undefined | false {
     if (words[0] !== 'physics') return false;
     if (isSpaceWorld(this.acc.list)) return false;
     const kind = words[1];
@@ -284,6 +348,10 @@ export class PhysicsDriver implements WorldDriver {
     const listed = /^(.+)\[(\d+)\]$/.exec(nameWord);
     const rec = this.acc.byName(listed ? (listed[1] as string) : nameWord);
     if (!rec) return `an object named ${nameWord}`;
+    if (kind === 'ignite' || kind === 'wake' || kind === 'sleep') {
+      this.addEntry({ kind, n, id: rec.id, ...(listed ? { item: Number(listed[2]) - 1 } : {}) });
+      return undefined;
+    }
     if (rec.p.type.k === 'Cloth') {
       const cn = words.slice(3, -2).map(Number);
       const point = cn[0];
@@ -310,7 +378,7 @@ export class PhysicsDriver implements WorldDriver {
         this.logged.add(rec.id);
         this.coneDirty = true;
       }
-    } else return 'push, grab, release, set or reset';
+    } else return 'push, grab, release, set, ignite, wake, sleep or reset';
     return undefined;
   }
 
@@ -427,7 +495,7 @@ export class PhysicsDriver implements WorldDriver {
       if (k === 'Liquid') this.liquidRecs.push(r);
       else if (k === 'Cloth') this.clothRecs.push(r);
       else if (k === 'Pin') this.pinRecs.push(r);
-      else if (k === 'Smoke') this.smokeRecs.push(r);
+      else if (k === 'Smoke' || k === 'Fire') this.smokeRecs.push(r);
       else if (k === 'Water') this.waterRecs.push(r);
       else if (k === 'Waves') this.wavesRecs.push(r);
       else if (isJointRec(r)) this.jointRecs.push(r);
@@ -556,6 +624,13 @@ export class PhysicsDriver implements WorldDriver {
     const sig: unknown[] = [this.acc.t0(), this.acc.solverStepsPerSecond()];
     const w = this.settings();
     sig.push(this.varyingWorld ? 'varying' : [w.gx, w.gy, w.air, w.passes, w.rate, w.sleep, w.range, w.windX, w.windY]);
+    for (const r of [...this.bodyRecs, ...this.solidRecs]) {
+      // what burns, and at what temperature, is read when the world is built
+      for (const k of ['burns', 'ignite']) {
+        const e = r.p.style.get(k);
+        if (e) sig.push(r.id, k, e.text, this.evalStyle(r, e));
+      }
+    }
     for (const r of this.bodyRecs) {
       if (r.p.type.k === 'List') {
         sig.push(r.id, this.bodyVaries.has(r) ? this.members.filter((m) => m.rec === r).map((m) => m.spec) : this.specsOfList(r).map((b) => (b ? b.spec : null)));
@@ -574,7 +649,8 @@ export class PhysicsDriver implements WorldDriver {
       const on = this.solidOn(r);
       sig.push(r.id, on);
       if (!on) continue;
-      sig.push(this.varySet.has(r) ? 'moving' : r.cell.defined ? r.cell.value : null);
+      const sc = this.solidCell(r);
+      sig.push(this.varySet.has(r) ? 'moving' : sc.defined ? sc.value : null);
       for (const k of ['bounce', 'friction'] as const) {
         const e = r.p.style.get(k);
         if (e) sig.push(k, e.text, this.isVarying(e) ? 'varying' : this.evalStyle(r, e));
@@ -671,8 +747,9 @@ export class PhysicsDriver implements WorldDriver {
         members.push({ rec: r, role: 'body', index: defs.length - 1, spec: sp, moving: false, ...(r.p.type.k === 'List' ? { item, items: list.length } : {}) });
         }
       } else {
-        if (!this.solidOn(r) || !r.cell.defined) continue;
-        const sh = solidShapeOf(r.cell.value, w.range);
+        const sc = this.solidCell(r);
+        if (!this.solidOn(r) || !sc.defined) continue;
+        const sh = solidShapeOf(sc.value, w.range);
         if (!sh || sh.shapes.length === 0) continue;
         if (sh.sampled) this.warnOnce(`ground:${r.id}`, makeNotice('ground_sampled', { name: r.p.name, range: w.range }, [r.p.name]));
         // a solid without its own friction takes the body's (design 6.5); without its own bounce it adds none
@@ -704,6 +781,8 @@ export class PhysicsDriver implements WorldDriver {
       this.cloth = undefined;
       this.clothMembers = [];
       this.smokeMembers = [];
+      this.burn = undefined;
+      this.burnThings = [];
       this.liquidMembers = [];
       this.waveMembers = [];
       this.members = [];
@@ -738,6 +817,7 @@ export class PhysicsDriver implements WorldDriver {
     this.buildFluid();
     this.buildSmoke(w);
     this.buildCloth(world, members);
+    this.buildBurn(world, members);
     this.n = 0;
     this.prevX = Float64Array.from(world.px);
     this.prevY = Float64Array.from(world.py);
@@ -854,7 +934,7 @@ export class PhysicsDriver implements WorldDriver {
   private saveState(): Float64Array {
     const ws = (this.world as World2).save();
     if (!this.fluid && this.smokeMembers.length === 0 && this.waveMembers.length === 0 && !this.cloth) return ws;
-    const parts = [ws, ...(this.fluid ? [this.fluid.save()] : []), ...this.smokeMembers.map((s) => s.grid.save()), ...this.waveMembers.map((m) => m.grid.save()), ...(this.cloth ? [this.cloth.save()] : [])];
+    const parts = [ws, ...(this.fluid ? [this.fluid.save()] : []), ...this.smokeMembers.map((s) => s.grid.save()), ...this.waveMembers.map((m) => m.grid.save()), ...(this.cloth ? [this.cloth.save()] : []), ...(this.burn ? [this.burn.save()] : [])];
     let len = 1 + parts.length;
     for (const p of parts) len += p.length;
     const out = new Float64Array(len);
@@ -887,7 +967,11 @@ export class PhysicsDriver implements WorldDriver {
     if (this.fluid) this.fluid.load(part(i++));
     for (const sm of this.smokeMembers) sm.grid.load(part(i++));
     for (const m of this.waveMembers) m.grid.load(part(i++));
-    if (this.cloth) this.cloth.load(part(i));
+    if (this.cloth) this.cloth.load(part(i++));
+    if (this.burn) {
+      this.burn.load(part(i));
+      this.syncBurn();
+    }
   }
 
   /** A hash of everything a step reads (FNV-1a over the bytes): equal films have equal hashes at every step. */
@@ -1229,7 +1313,7 @@ export class PhysicsDriver implements WorldDriver {
       }
       const spec = sm.value.spec;
       sm.grid.setSource(spec.source);
-      sm.grid.heat = spec.heat;
+      this.applySpec(sm.grid, spec);
       sm.grid.making = spec.until > 0;
       const ws = spec.wind ?? this.windNow();
       sm.grid.start(ws.x, ws.y);
@@ -1259,7 +1343,7 @@ export class PhysicsDriver implements WorldDriver {
         if (c.defined && isSmokeValue(c.value) && !sameValue(c.value.spec, sm.value.spec)) {
           const nv = c.value;
           if (!sameValue(nv.spec.source, sm.value.spec.source)) sm.grid.setSource(nv.spec.source);
-          sm.grid.heat = nv.spec.heat;
+          this.applySpec(sm.grid, nv.spec);
           sm.value = nv;
         }
       }
@@ -1272,9 +1356,33 @@ export class PhysicsDriver implements WorldDriver {
         sm.grid.windY = ws.y;
       }
       const was = sm.grid.unstable;
-      sm.grid.step(w, this.smokeEvery * h);
+      sm.grid.step(w, this.smokeEvery * h, this.fluid?.ps);
       if (sm.grid.unstable && !was) this.warnOnce(`unstable-smoke:${sm.rec.id}`, makeNotice('unstable_world', { name: sm.rec.p.name, t: Number(t.toFixed(3)), hint: 'a body moved through the smoke too fast; use slower bodies or a coarser grid' }, [sm.rec.p.name]));
+      if (sm.grid.fire) this.checkFireOut(sm, t);
     }
+    if (due && this.burn) this.stepBurn(w, t, this.smokeEvery * h);
+  }
+
+  /** The settings of a smoke or fire spec that may change during the film, put on its grid. */
+  private applySpec(grid: Smoke2, spec: SmokeSpec): void {
+    grid.heat = spec.heat;
+    grid.swirl = spec.swirl ?? 0;
+    const f = spec.fire;
+    if (f && grid.fire) {
+      grid.fire.fuel = f.fuel;
+      grid.fire.burn = f.burn;
+      grid.fire.heat = f.heat;
+      grid.fire.smoke = f.smoke;
+    }
+  }
+
+  /** `fire_out`, once: the source has stopped, nothing is above 150 °C, and no fuel is left (after the fire was alight). */
+  private checkFireOut(sm: { readonly rec: ObjRec; readonly grid: Smoke2 }, t: number): void {
+    const g = sm.grid;
+    const key = `fire_out:${sm.rec.id}`;
+    if (!g.alive || (g.sourced && g.making) || this.warned.has(key)) return;
+    if (hottest(g.T) > IGNITE_AT || fuelSum(g) >= FUEL_GONE) return;
+    this.warnOnce(key, makeNotice('fire_out', { name: sm.rec.p.name, t: Number(t.toFixed(3)) }, [sm.rec.p.name]));
   }
 
   private saveCheckpoint(n: number): void {
@@ -1317,7 +1425,28 @@ export class PhysicsDriver implements WorldDriver {
 
   /* ------------------------------ the input log ------------------------------ */
 
+  /** Entries that came in as `@input` lines (a reloaded script), not yet matched by a hit handler's own action. */
+  private restored = new Set<LogEntry>();
+  private restoring = false;
+
+  /**
+   * A hit handler's action that the script's `@input` lines already hold (a reload of a played film) is that line, not a
+   * second one: the handler runs once per hit, and a line it wrote before is claimed by the action that writes it again.
+   */
+  private claimRestored(e: LogEntry): boolean {
+    const k = entryKey(e);
+    if (k === undefined) return false;
+    for (const x of this.restored) {
+      if (entryKey(x) !== k) continue;
+      this.restored.delete(x);
+      return true;
+    }
+    return false;
+  }
+
   private addEntry(e: LogEntry): void {
+    if (this.restoring) this.restored.add(e);
+    else if (this.actionT !== undefined && this.claimRestored(e)) return;
     if (e.kind === 'set') {
       const later = this.log.filter((x) => x.kind === 'set' && x.id === e.id && x.n >= e.n);
       if (later.length > 0) this.log = this.log.filter((x) => !later.includes(x));
@@ -1367,10 +1496,11 @@ export class PhysicsDriver implements WorldDriver {
         continue;
       }
       const nm = e.kind !== 'set' && e.item !== undefined ? `${base}[${e.item + 1}]` : base;
-      if (e.kind === 'push') out.push(`@input physics push ${nm} ${num(e.x)} ${num(e.y)}${e.ax !== undefined ? ` ${num(e.ax)} ${num(e.ay ?? 0)}` : ''} at ${t(e.n)}`);
+      if (e.kind === 'ignite' || e.kind === 'wake' || e.kind === 'sleep') out.push(`@input physics ${e.kind} ${nm} at ${t(e.n)}`);
+      else if (e.kind === 'push') out.push(`@input physics push ${nm} ${num(e.x)} ${num(e.y)}${e.ax !== undefined ? ` ${num(e.ax)} ${num(e.ay ?? 0)}` : ''} at ${t(e.n)}`);
       else if (e.kind === 'grab') out.push(`@input physics grab ${nm} ${num(e.x)} ${num(e.y)} ${num(e.ax)} ${num(e.ay)} at ${t(e.n)}`);
       else if (e.kind === 'release') out.push(`@input physics release ${nm} at ${t(e.n)}`);
-      else {
+      else if (e.kind === 'set') {
         const w = numWords(e.value);
         if (w) out.push(`@input physics set ${nm} ${w} at ${t(e.n)}`);
       }
@@ -1393,6 +1523,12 @@ export class PhysicsDriver implements WorldDriver {
         continue;
       }
       if (e.kind === 'cgrab' || e.kind === 'crelease') continue;
+      if (e.kind === 'ignite') {
+        // set a burnable thing alight now (a unit that burnt away stays burnt)
+        const t = this.burnThings.find((x) => x.rec.id === e.id && x.item === e.item);
+        if (t && this.burn) this.burn.igniteThing(this.burnThings.indexOf(t));
+        continue;
+      }
       const m = e.kind === 'set' ? undefined : this.memberOf(e.id, e.item);
       if (!m && e.kind !== 'set') continue;
       if (e.kind === 'push' && m) {
@@ -1412,6 +1548,8 @@ export class PhysicsDriver implements WorldDriver {
         } else this.grabs.set(m.index, { x: e.x, y: e.y, ax: e.ax, ay: e.ay });
         w.wakeBody(m.index);
       } else if (e.kind === 'release' && m) this.grabs.delete(m.index);
+      else if (e.kind === 'wake' && m) w.wakeBody(m.index);
+      else if (e.kind === 'sleep' && m) w.sleepBody(m.index);
     }
   }
 
@@ -1670,6 +1808,8 @@ export class PhysicsDriver implements WorldDriver {
   private bodyCell(m: Member, alpha: number): Cell {
     const i = m.index;
     if (this.failedAt.has(i)) return { defined: false, reason: 'unstable_world' };
+    const bu = this.burn && i < this.unitOfIndex.length ? (this.unitOfIndex[i] as number) : -1;
+    if (bu >= 0 && (this.burn as Burnables).kind[bu] === BURN_BODY && (this.burn as Burnables).gone[bu] === 1) return { defined: false, reason: 'burnt' };
     if (this.leftAt.has(i)) return { defined: false, reason: 'left_world' };
     const w = this.world as World2;
     const v = this.liveValue(m, alpha);
@@ -1681,6 +1821,7 @@ export class PhysicsDriver implements WorldDriver {
       forces[FK.net * 2 + 1] = 0;
     }
     const touching = (this.touchLists[i] ?? []).map((k) => this.nameOfIndex[k] ?? '').filter((s) => s !== '');
+    if (bu >= 0 && this.burn) return { defined: true, value: { ...v, forces, touching, temperature: this.burn.tm[bu] as number, burnt: this.burn.burnt(bu), burning: this.burn.burning(bu) } };
     return { defined: true, value: { ...v, forces, touching } };
   }
 
@@ -1689,6 +1830,7 @@ export class PhysicsDriver implements WorldDriver {
   private writeCells(alpha: number): ObjRec[] {
     const w = this.world as World2;
     const changed: ObjRec[] = [];
+    this.syncBurntSolids(changed);
     this.touchLists = w.touchingAll();
     const lists = new Map<ObjRec, unknown[]>();
     for (const m of this.members) {
@@ -1930,6 +2072,8 @@ export class PhysicsDriver implements WorldDriver {
     // the step's length goes in a field of the cloth, not in the call (a number passed in a call is garbage)
     c.hStep = 1 / this.rate;
     c.stepWorld(w);
+    // cells that burnt away in this step's smoke step tear their links now (counted as torn, saved as torn)
+    if (this.burn) this.burnCloth(c);
     // (indexed, and the time worked out only where a notice needs it: a `for … of` and a string made at each step are garbage)
     for (let m = 0; m < this.clothMembers.length; m++) {
       const cm = this.clothMembers[m] as (typeof this.clothMembers)[number];
@@ -1976,12 +2120,24 @@ export class PhysicsDriver implements WorldDriver {
           pinsAt.push(xs[i] as number, ys[i] as number, 0);
         }
         const touching = c.touching(cm.index).map((b) => this.nameOfIndex[b] ?? '').filter((s) => s !== '');
-        cell = { defined: true, value: { ...cm.value, xs, ys, zs, cut, torn: info.torn, stretchMax: c.stretchMax(cm.index), energy: c.energy(cm.index), asleep: info.asleep, touching, pinsAt } satisfies ClothValue };
+        const burnt = this.clothBurnt(cm.index);
+        cell = { defined: true, value: { ...cm.value, xs, ys, zs, cut, torn: info.torn, stretchMax: c.stretchMax(cm.index), energy: c.energy(cm.index), asleep: info.asleep, touching, pinsAt, ...(burnt !== undefined ? { burnt } : {}) } satisfies ClothValue };
       }
       this.lastCells.set(cm.rec.id, cell);
       this.written.add(cm.rec.id);
       if (this.acc.write(cm.rec, cell)) changed.push(cm.rec);
     }
+  }
+
+  /** The part of a burning cloth's cells that burnt away (undefined for a cloth that does not burn). */
+  private clothBurnt(index: number): number | undefined {
+    const b = this.burn;
+    if (!b) return undefined;
+    const th = this.burnThings.find((x) => x.kind === 'cloth' && x.index === index);
+    if (!th) return undefined;
+    let k = 0;
+    for (let q = th.first; q < th.first + th.count; q++) k += b.gone[q] as number;
+    return k / Math.max(1, th.count);
   }
 
   /** The point of a cloth nearest a point now (for a drag). */
@@ -2010,7 +2166,7 @@ export class PhysicsDriver implements WorldDriver {
   grabCloth(id: ObjId, point: number, x: number, y: number): boolean {
     if (this.remote) return this.sendInput(id, undefined, 'grab', [point, x, y]);
     if (!this.clothMembers.some((cm) => cm.rec.id === id)) return false;
-    this.addEntry({ kind: 'cgrab', n: this.gridAt(this.acc.clockT()), id, point, x, y });
+    this.addEntry({ kind: 'cgrab', n: this.gridAt(this.clockNow()), id, point, x, y });
     return true;
   }
 
@@ -2020,7 +2176,7 @@ export class PhysicsDriver implements WorldDriver {
       return;
     }
     if (!this.clothMembers.some((cm) => cm.rec.id === id)) return;
-    this.addEntry({ kind: 'crelease', n: this.gridAt(this.acc.clockT()), id, point });
+    this.addEntry({ kind: 'crelease', n: this.gridAt(this.clockNow()), id, point });
   }
 
   /** The forces the pins of a cloth carry now (N), summed. */
@@ -2029,6 +2185,304 @@ export class PhysicsDriver implements WorldDriver {
     if (!m || !this.cloth) return undefined;
     const f = this.cloth.pinForce3(m.index);
     return { x: f.x, y: f.y };
+  }
+
+  /* ------------------------------ things that burn (round 11; design 9.7) ------------------------------ */
+
+  /** Seconds a body burns and its ignite point, from its `with` values over its named arguments; 0 seconds: it does not burn. */
+  private bodyBurn(r: ObjRec, sp: BodySpec): { seconds: number; ignite: number } {
+    let seconds = sp.burns ?? 0;
+    let ignite = sp.ignite ?? 250;
+    const e = r.p.style.get('burns');
+    if (e) {
+      const v = this.evalStyle(r, e);
+      seconds = v === true ? Math.max(1, 10 * sp.massNow) : typeof v === 'number' && v > 0 ? v : 0;
+    }
+    const g = r.p.style.get('ignite');
+    if (g) {
+      const v = this.evalStyle(r, g);
+      if (typeof v === 'number' && Number.isFinite(v)) ignite = clamp(v, 150, 1000);
+    }
+    return { seconds, ignite };
+  }
+
+  /** A solid shape that burns (`p with burns = true`): `true` is 10 s a m² of its area (at least 1 s), a number the seconds. */
+  private solidBurn(r: ObjRec, shapes: readonly ShapeDef2[]): { seconds: number; ignite: number; x: number; y: number } | undefined {
+    const e = r.p.style.get('burns');
+    if (!e) return undefined;
+    const v = this.evalStyle(r, e);
+    let area = 0;
+    let x0 = Infinity;
+    let y0 = Infinity;
+    let x1 = -Infinity;
+    let y1 = -Infinity;
+    for (const s of shapes) {
+      if (s.kind === 'circle') {
+        area += Math.PI * s.r * s.r;
+        x0 = Math.min(x0, s.x - s.r);
+        x1 = Math.max(x1, s.x + s.r);
+        y0 = Math.min(y0, s.y - s.r);
+        y1 = Math.max(y1, s.y + s.r);
+      } else {
+        if (s.pts.length >= 3) area += polygonMass(s.pts).area;
+        for (const p of s.pts) {
+          x0 = Math.min(x0, p.x);
+          x1 = Math.max(x1, p.x);
+          y0 = Math.min(y0, p.y);
+          y1 = Math.max(y1, p.y);
+        }
+      }
+    }
+    const seconds = v === true ? Math.max(1, 10 * area) : typeof v === 'number' && v > 0 ? v : 0;
+    if (!(seconds > 0) || !Number.isFinite(x0)) return undefined;
+    const g = r.p.style.get('ignite');
+    const iv = g ? this.evalStyle(r, g) : undefined;
+    return { seconds, ignite: typeof iv === 'number' && Number.isFinite(iv) ? clamp(iv, 150, 1000) : 250, x: 0.5 * (x0 + x1), y: 0.5 * (y0 + y1) };
+  }
+
+  /** The burnable units of the world (bodies, solid shapes and cloth cells with `burns`), tied to the fire grids. */
+  private buildBurn(world: World2, members: readonly Member[]): void {
+    this.burn = undefined;
+    this.burnThings = [];
+    const grids = this.smokeMembers.filter((sm) => sm.grid.fire).map((sm) => sm.grid);
+    if (grids.length === 0) return;
+    const defs: BurnDef[] = [];
+    const things: BurnThing[] = [];
+    const range = this.settings().range;
+    const nameOf = (r: ObjRec, item?: number): string => (item !== undefined ? `${r.p.name}[${item + 1}]` : r.p.name);
+    for (const m of members) {
+      if (things.length >= MAX_BURNABLE) break;
+      if (m.role === 'body' && m.spec) {
+        const b = this.bodyBurn(m.rec, m.spec);
+        if (!(b.seconds > 0)) continue;
+        defs.push({ kind: BURN_BODY, index: m.index, cell: 0, thing: things.length, ignite: b.ignite, seconds: b.seconds, x: 0, y: 0 });
+        things.push({ rec: m.rec, kind: 'body', ...(m.item !== undefined ? { item: m.item } : {}), index: m.index, first: defs.length - 1, count: 1, name: nameOf(m.rec, m.item), dirty: false });
+      } else if (m.role === 'solid' && this.solidCell(m.rec).defined) {
+        const sc = this.solidCell(m.rec);
+        const sh = sc.defined ? solidShapeOf(sc.value, range) : undefined;
+        const b = sh ? this.solidBurn(m.rec, sh.shapes) : undefined;
+        if (!b) continue;
+        defs.push({ kind: BURN_SHAPE, index: m.index, cell: 0, thing: things.length, ignite: b.ignite, seconds: b.seconds, x: b.x, y: b.y });
+        things.push({ rec: m.rec, kind: 'shape', index: m.index, first: defs.length - 1, count: 1, name: m.rec.p.name, dirty: false });
+      }
+    }
+    for (const cm of this.clothMembers) {
+      if (things.length >= MAX_BURNABLE) break;
+      const spec = cm.value.spec;
+      if (!(spec.burns !== undefined && spec.burns > 0)) continue;
+      const cu = spec.nu - 1;
+      const cv = spec.nv > 1 ? spec.nv - 1 : 1;
+      const first = defs.length;
+      for (let k = 0; k < cu * cv; k++) {
+        const i = k % cu;
+        const j = (k - i) / cu;
+        const p0 = j * spec.nu + i;
+        const pts = spec.nv > 1 ? [p0, p0 + 1, p0 + spec.nu, p0 + spec.nu + 1] : [p0, p0 + 1];
+        let x = 0;
+        let y = 0;
+        for (const p of pts) {
+          x += spec.pos[p * 3] as number;
+          y += spec.pos[p * 3 + 1] as number;
+        }
+        defs.push({ kind: BURN_CELL, index: cm.index, cell: k, thing: things.length, ignite: spec.ignite ?? 250, seconds: spec.burns, x: x / pts.length, y: y / pts.length });
+      }
+      things.push({ rec: cm.rec, kind: 'cloth', index: cm.index, first, count: cu * cv, name: cm.rec.p.name, mask: new Uint8Array(cu * cv), dirty: false });
+    }
+    if (defs.length === 0) return;
+    const burn = new Burnables(defs);
+    burn.bind(grids, world.n);
+    this.burn = burn;
+    this.burnThings = things;
+    this.burnMass = new Float64Array(burn.n);
+    this.burnInertia = new Float64Array(burn.n);
+    this.burnInvM = new Float64Array(burn.n);
+    this.burnInvI = new Float64Array(burn.n);
+    this.unitOfIndex = new Int32Array(world.n).fill(-1);
+    for (let u = 0; u < burn.n; u++) {
+      if (burn.kind[u] === BURN_CELL) continue;
+      const i = burn.index[u] as number;
+      this.unitOfIndex[i] = u;
+      this.burnMass[u] = world.mass[i] as number;
+      this.burnInertia[u] = world.inertia[i] as number;
+      this.burnInvM[u] = world.invM[i] as number;
+      this.burnInvI[u] = world.invI[i] as number;
+    }
+  }
+
+  /** After a checkpoint loads: bodies take the mass their burning left them, and a cloth's burnt cells are read again. */
+  private syncBurn(): void {
+    const b = this.burn;
+    const w = this.world;
+    if (!b || !w) return;
+    for (const th of this.burnThings) {
+      if (th.kind === 'cloth' && th.mask) {
+        for (let k = 0; k < th.count; k++) th.mask[k] = b.gone[th.first + k] as number;
+        th.dirty = false;
+      } else if (th.kind === 'body') this.setBurntMass(w, th.first);
+    }
+  }
+
+  /** A body's mass and inertia, less 80% of them as it burns away (design 9.7). */
+  private setBurntMass(w: World2, u: number): void {
+    const b = this.burn as Burnables;
+    const i = b.index[u] as number;
+    if (w.type[i] !== BodyType.Dynamic || w.gone.has(i)) return;
+    const f = 1 - 0.8 * b.burnt(u);
+    w.mass[i] = (this.burnMass[u] as number) * f;
+    w.inertia[i] = (this.burnInertia[u] as number) * f;
+    w.invM[i] = (this.burnInvM[u] as number) / f;
+    w.invI[i] = (this.burnInvI[u] as number) / f;
+  }
+
+  /** Each smoke step, after the grids: the burnable things swap heat with the air, and what burnt away leaves (design 9.7). */
+  private stepBurn(w: World2, t: number, h: number): void {
+    const b = this.burn as Burnables;
+    const cl = this.cloth;
+    if (cl) {
+      // where each cloth cell is now: the mean of its corners
+      for (const th of this.burnThings) {
+        if (th.kind !== 'cloth') continue;
+        const info = cl.cloths[th.index];
+        if (!info) continue;
+        const nu = info.def.nu;
+        const rope = info.def.nv === 1;
+        const cu = nu - 1;
+        for (let k = 0; k < th.count; k++) {
+          const i = k % cu;
+          const p0 = info.p0 + ((k - i) / cu) * nu + i;
+          if (rope) {
+            b.ux[th.first + k] = 0.5 * ((cl.x[p0] as number) + (cl.x[p0 + 1] as number));
+            b.uy[th.first + k] = 0.5 * ((cl.y[p0] as number) + (cl.y[p0 + 1] as number));
+          } else {
+            b.ux[th.first + k] = 0.25 * ((cl.x[p0] as number) + (cl.x[p0 + 1] as number) + (cl.x[p0 + nu] as number) + (cl.x[p0 + nu + 1] as number));
+            b.uy[th.first + k] = 0.25 * ((cl.y[p0] as number) + (cl.y[p0 + 1] as number) + (cl.y[p0 + nu] as number) + (cl.y[p0 + nu + 1] as number));
+          }
+        }
+      }
+    }
+    b.step(w, h);
+    for (const th of this.burnThings) if (th.kind === 'body') this.setBurntMass(w, th.first);
+    for (let q = 0; q < b.nGone; q++) {
+      const u = b.newlyGone[q] as number;
+      const th = this.burnThings[b.thing[u] as number] as BurnThing;
+      if (th.kind === 'cloth') {
+        (th.mask as Uint8Array)[u - th.first] = 1;
+        th.dirty = true;
+        continue;
+      }
+      const i = th.index;
+      // what rested on it wakes, or a sleeping body would stay where its support was (a sleeping body does not fall)
+      w.wakeAround(i);
+      w.removeBody(i);
+      if (th.kind === 'body') {
+        // its joints break, as a weld does
+        for (const j of w.joints) if (j.a === i || j.b === i) j.broken = true;
+      } else {
+        // a wall that burnt away is no longer solid: the grids mark their walls again
+        for (const sm of this.smokeMembers) sm.grid.staticDirty = true;
+      }
+      this.warnOnce(`burnt:${th.name}`, makeNotice('burnt', { name: th.name, t: Number(t.toFixed(3)) }, [th.name]));
+    }
+  }
+
+  /**
+   * A solid shape that burnt away reads undefined with the reason `burnt` (errors.md 4); after a seek back, or a world
+   * built again, it reads as its rule gives it. The cell is set where the rule is run again (`onCompute`); a shape whose
+   * state changed is handed back so the figure runs its rule.
+   */
+  private syncBurntSolids(changed: ObjRec[]): void {
+    const b = this.burn;
+    if (!b && this.burntSolids.size === 0) return;
+    const gone = new Map<ObjId, ObjRec>();
+    if (b) for (const th of this.burnThings) if (th.kind === 'shape' && b.gone[th.first] === 1) gone.set(th.rec.id, th.rec);
+    for (const id of [...this.burntSolids]) {
+      if (gone.has(id)) continue;
+      this.burntSolids.delete(id);
+      const r = this.acc.byId(id);
+      if (!r) continue;
+      const c = this.acc.compute(r);
+      this.solidVals.set(id, c);
+      if (this.acc.write(r, c)) changed.push(r);
+    }
+    for (const [id, r] of gone) {
+      if (this.burntSolids.has(id)) continue;
+      this.burntSolids.add(id);
+      this.everBurnt.add(id);
+      if (this.acc.write(r, { defined: false, reason: 'burnt' })) changed.push(r);
+    }
+  }
+
+  /** Solid shapes that have burnt away at some time: a worker sends their cells to the page. */
+  private everBurnt = new Set<ObjId>();
+
+  /** The links of cloth cells that burnt away tear, through the cloth's own tearing (`tornNow`, `broken`). */
+  private burnCloth(c: Cloth2): void {
+    for (const th of this.burnThings) {
+      if (th.kind !== 'cloth' || !th.dirty) continue;
+      th.dirty = false;
+      c.burnCells(th.index, th.mask as Uint8Array);
+    }
+  }
+
+  /** What a thing that may burn is: does it burn, and where is it (for `Ignite`). */
+  private burnCentre(rec: ObjRec, item?: number): { burns: boolean; x: number; y: number } | undefined {
+    const k = rec.p.type.k;
+    if (k === 'Body' || k === 'List') {
+      const sp = k === 'List' ? this.specsOfList(rec)[item ?? 0] : this.specOf(rec);
+      if (!sp) return undefined;
+      const cv = rec.cell.defined ? rec.cell.value : undefined;
+      const v = Array.isArray(cv) ? (cv as unknown[])[item ?? 0] : cv;
+      const at = isBodyValue(v) ? v : sp;
+      return { burns: this.bodyBurn(rec, sp.spec).seconds > 0, x: at.x, y: at.y };
+    }
+    if (k === 'Cloth') {
+      const c = this.clothOf(rec);
+      if (!c) return undefined;
+      const cur = rec.cell.defined && isClothValue(rec.cell.value) ? rec.cell.value : c;
+      let x = 0;
+      let y = 0;
+      for (let q = 0; q < cur.xs.length; q++) {
+        x += cur.xs[q] as number;
+        y += cur.ys[q] as number;
+      }
+      const n = Math.max(1, cur.xs.length);
+      return { burns: (c.spec.burns ?? 0) > 0, x: x / n, y: y / n };
+    }
+    const sc = this.solidCell(rec);
+    if (!sc.defined) return undefined;
+    const sh = solidShapeOf(sc.value, this.settings().range);
+    const b = sh ? this.solidBurn(rec, sh.shapes) : undefined;
+    if (b) return { burns: true, x: b.x, y: b.y };
+    const sb = sh?.shapes[0];
+    const p = sb ? (sb.kind === 'circle' ? { x: sb.x, y: sb.y } : (sb.pts[0] ?? { x: 0, y: 0 })) : { x: 0, y: 0 };
+    return { burns: false, x: p.x, y: p.y };
+  }
+
+  /** Is a point inside the box of some fire? */
+  private inFireBox(x: number, y: number): boolean {
+    for (const r of this.smokeRecs) {
+      const v = this.smokeOf(r);
+      if (!v?.spec.fire) continue;
+      const s = v.spec;
+      if (x >= s.x0 && x <= s.x1 && y >= s.y0 && y <= s.y1) return true;
+    }
+    return false;
+  }
+
+  /**
+   * `Ignite(thing)` (design 9.7): logged at the next step. Refused when the thing does not burn (`not_burnable`), or is
+   * outside every fire's box (`no_fire_grid`, with where it is).
+   */
+  ignite(id: ObjId, item?: number): { readonly ok: true } | { readonly ok: false; readonly why: 'not_burnable' | 'no_fire_grid'; readonly x: number; readonly y: number } {
+    const rec = this.acc.byId(id);
+    const c = rec ? this.burnCentre(rec, item) : undefined;
+    if (!rec || !c || !c.burns) return { ok: false, why: 'not_burnable', x: c?.x ?? 0, y: c?.y ?? 0 };
+    if (!this.inFireBox(c.x, c.y)) return { ok: false, why: 'no_fire_grid', x: c.x, y: c.y };
+    if (this.remote) {
+      const nm = item !== undefined ? `${rec.p.name}[${item + 1}]` : rec.p.name;
+      this.queueLine(`@input physics ignite ${nm} at ${String(Number(this.clockNow().toFixed(6)))}`);
+    } else this.addEntry({ kind: 'ignite', n: this.gridAt(this.clockNow()), id, ...(item !== undefined ? { item } : {}) });
+    return { ok: true };
   }
 
   /* ------------------------------ for actions ------------------------------ */
@@ -2049,7 +2503,7 @@ export class PhysicsDriver implements WorldDriver {
   push(id: ObjId, x: number, y: number, at?: { x: number; y: number }, item?: number): boolean {
     if (this.remote) return this.sendInput(id, item, 'push', [x, y, ...(at ? [at.x, at.y] : [])]);
     if (!this.memberOf(id, item)) return false;
-    const n = this.gridAt(this.acc.clockT());
+    const n = this.gridAt(this.clockNow());
     this.addEntry({ kind: 'push', n, id, ...(item !== undefined ? { item } : {}), x, y, ...(at ? { ax: at.x, ay: at.y } : {}) });
     return true;
   }
@@ -2061,7 +2515,7 @@ export class PhysicsDriver implements WorldDriver {
     if (!m || !this.world) return false;
     const w = this.world;
     const i = m.index;
-    const n = this.gridAt(this.acc.clockT());
+    const n = this.gridAt(this.clockNow());
     const mine = (e: LogEntry): boolean => (e.kind === 'grab' || e.kind === 'release') && e.id === id && e.item === item;
     const g = this.log.filter((e) => e.kind === 'grab' && mine(e)).at(-1) as (LogEntry & { kind: 'grab' }) | undefined;
     const released = this.log.filter(mine).at(-1)?.kind !== 'grab';
@@ -2092,15 +2546,15 @@ export class PhysicsDriver implements WorldDriver {
       return;
     }
     if (!this.memberOf(id, item)) return;
-    this.addEntry({ kind: 'release', n: this.gridAt(this.acc.clockT()), id, ...(item !== undefined ? { item } : {}) });
+    this.addEntry({ kind: 'release', n: this.gridAt(this.clockNow()), id, ...(item !== undefined ? { item } : {}) });
   }
 
   restart(): void {
     if (this.remote) {
-      this.queueLine(`@input physics reset at ${String(Number(this.acc.clockT().toFixed(6)))}`);
+      this.queueLine(`@input physics reset at ${String(Number(this.clockNow().toFixed(6)))}`);
       return;
     }
-    this.addEntry({ kind: 'reset', n: this.gridAt(this.acc.clockT()) });
+    this.addEntry({ kind: 'reset', n: this.gridAt(this.clockNow()) });
   }
 
   onRestart(): void {
@@ -2121,16 +2575,29 @@ export class PhysicsDriver implements WorldDriver {
         if (!getStoredHandler(this.figure, target, 'hit')) continue;
         if (runs >= 24) return;
         runs++;
-        runHandler(this.figure, target, 'hit', { by: 'host', extra: { speed: h.speed, other: other.replace(/\[\d+\]$/, ''), point: { x: h.x, y: h.y }, impulse: h.impulse } }, 'host');
+        // the handler's physics actions (Push, Ignite, Wake, Sleep) are logged at the film time of the hit, not at the
+        // clock's, so playing, seeking over the hit and reloading the script give one film (design 10)
+        this.actionT = h.t;
+        try {
+          runHandler(this.figure, target, 'hit', { by: 'host', extra: { speed: h.speed, other: other.replace(/\[\d+\]$/, ''), point: { x: h.x, y: h.y }, impulse: h.impulse } }, 'host');
+        } finally {
+          this.actionT = undefined;
+        }
       }
     }
   }
 
+  /** The film time a physics action is logged at: the hit's while a hit handler runs, else the clock's. */
+  private actionT: number | undefined;
+  private clockNow(): number {
+    return this.actionT ?? this.acc.clockT();
+  }
+
+  /** `Wake(b)` and `Sleep(b)`: an entry in the input log, applied at the start of the next step. */
   wake(id: ObjId, awake: boolean, item?: number): boolean {
-    const m = this.memberOf(id, item);
-    if (!m || !this.world) return false;
-    if (awake) this.world.wakeBody(m.index);
-    else this.world.sleepBody(m.index);
+    if (this.remote) return this.sendInput(id, item, awake ? 'wake' : 'sleep', []);
+    if (!this.memberOf(id, item) || !this.world) return false;
+    this.addEntry({ kind: awake ? 'wake' : 'sleep', n: this.gridAt(this.clockNow()), id, ...(item !== undefined ? { item } : {}) });
     return true;
   }
 
@@ -2169,6 +2636,8 @@ export class PhysicsDriver implements WorldDriver {
       this.fluid = undefined;
       this.waveMembers = [];
       this.smokeMembers = [];
+      this.burn = undefined;
+      this.burnThings = [];
       this.sig = undefined;
     }
   }
@@ -2214,6 +2683,13 @@ export class PhysicsDriver implements WorldDriver {
     for (const s of this.smokeMembers) add(s.rec);
     for (const c of this.clothMembers) add(c.rec);
     if (this.worldRec) add(this.worldRec);
+    // a solid shape that burnt away reads undefined on the page too (and its rule's value again after a seek back)
+    for (const id of this.everBurnt) {
+      const r = this.acc.byId(id);
+      if (!r || seen.has(id)) continue;
+      seen.add(id);
+      cells.push([r.p.name, this.burntSolids.has(id) ? { defined: false, reason: 'burnt' } : (this.solidVals.get(id) ?? r.cell)]);
+    }
     return { cells, transfer };
   }
 
@@ -2226,7 +2702,7 @@ export class PhysicsDriver implements WorldDriver {
     const base = this.acc.byId(id)?.p.name;
     if (!base || !this.remoteCells.has(base)) return false;
     const nm = item !== undefined ? `${base}[${item + 1}]` : base;
-    const t = String(Number(this.acc.clockT().toFixed(6)));
+    const t = String(Number(this.clockNow().toFixed(6)));
     this.queueLine(`@input physics ${kind} ${nm}${nums.map((x) => ` ${num(x)}`).join('')} at ${t}`);
     return true;
   }
@@ -2307,6 +2783,20 @@ function clamp(x: number, lo: number, hi: number): number {
 }
 
 const num = (x: number): string => String(Number(x.toPrecision(10)));
+
+/** What makes two log entries of one action the same, with numbers as an `@input` line keeps them; undefined for entries no hit handler writes. */
+function entryKey(e: LogEntry): string | undefined {
+  switch (e.kind) {
+    case 'push':
+      return `push ${e.n} ${e.id} ${e.item ?? ''} ${num(e.x)} ${num(e.y)} ${e.ax === undefined ? '' : `${num(e.ax)} ${num(e.ay ?? 0)}`}`;
+    case 'ignite':
+    case 'wake':
+    case 'sleep':
+      return `${e.kind} ${e.n} ${e.id} ${e.item ?? ''}`;
+    default:
+      return undefined;
+  }
+}
 
 function numWords(v: unknown): string | undefined {
   if (typeof v === 'number' && Number.isFinite(v)) return num(v);

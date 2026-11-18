@@ -49,6 +49,10 @@ export interface ClothSpec {
   readonly self: boolean;
   readonly thickness: number;
   readonly friction: number;
+  /** Seconds each cell burns (design 9.7); left out when the cloth does not burn, so such a cloth has its old spec. */
+  readonly burns?: number;
+  /** °C above the air at which a cell lights (150 to 1,000); left out with `burns`. */
+  readonly ignite?: number;
   /** The points `pins` holds still at the start. */
   readonly pins: readonly number[];
   /** How `pins` was written, for the row ("pinned on the left"). */
@@ -73,6 +77,8 @@ export interface ClothValue {
   readonly energy: number;
   readonly asleep: boolean;
   readonly touching: readonly string[];
+  /** The part of its cells that burnt away, 0 to 1 (a cloth that burns, in the plane). */
+  readonly burnt?: number;
   /** Where each pin holds its point now (x y z each), for drawing. */
   readonly pinsAt: readonly number[];
 }
@@ -111,11 +117,16 @@ const RANGES: Readonly<Record<string, { lo: number; hi: number; open?: boolean; 
   tears: { lo: 1.1, hi: 10, allowed: 'between 1.1 and 10', hint: 'tears = 1.5: a link breaks when stretched to 1.5 times its length.' },
   thickness: { lo: 0.005, hi: 0.2, allowed: 'between 0.005 and 0.2 m', hint: '0.02 m keeps the cloth just off what it lies on.' },
   friction: { lo: 0, hi: 2, allowed: 'between 0 and 2', hint: '0.4 is cloth on wood.' },
+  burns: { lo: 0, hi: Infinity, open: true, allowed: 'true, false or above 0 seconds', hint: 'burns = true burns each cell for a second or so; a number is the seconds each cell burns.' },
+  ignite: { lo: 150, hi: 1000, allowed: 'between 150 and 1,000 °C', hint: 'ignite is the temperature at which a cell catches fire: 250 is paper or cloth.' },
 };
 const NAMES = ['mass', 'stretch', 'bend', 'damping', 'pins', 'tears', 'self', 'thickness', 'friction'];
+/** A cloth in the plane (rope, net) may also burn (design 9.7). */
+const NAMED_PLANE = [...NAMED, named('burns', 'Bool|Number'), named('ignite', 'Number')];
+const NAMES_PLANE = [...NAMES, 'burns', 'ignite'];
 
 /** Literal values that can never work (errors B004, B013, B017). `first` is the index of `mass`; `sides` the grid. */
-function checkCloth(c: FormCheck, first: number, sides: readonly number[], rope: boolean): Refusal | undefined {
+function checkCloth(c: FormCheck, first: number, sides: readonly number[], rope: boolean, names: readonly string[] = NAMES): Refusal | undefined {
   const lit = (i: number): number | undefined => {
     const a = c.args[i];
     return a && !a.omitted && typeof a.literal === 'number' ? a.literal : undefined;
@@ -134,8 +145,8 @@ function checkCloth(c: FormCheck, first: number, sides: readonly number[], rope:
       return { kind: 'limit', message: `A cloth can have at most 64 by 32 points. This line asks for ${a} by ${b}.`, hint: 'Use fewer points: 32 × 32 looks smooth and costs half.', param: sides[0] as number, params: { max: MAX_SHEET, what: 'points in a cloth (64 by 32)' }, limit: { name: 'cloth points', max: MAX_SHEET, got: a * b } };
     }
   }
-  for (let k = 0; k < NAMES.length; k++) {
-    const name = NAMES[k] as string;
+  for (let k = 0; k < names.length; k++) {
+    const name = names[k] as string;
     const r = RANGES[name];
     if (!r) continue;
     const v = lit(first + k);
@@ -178,7 +189,7 @@ function checkSides(c: FormCheck): Refusal | undefined {
 
 /** The common part of a cloth's spec from the named arguments. */
 function named9(vals: readonly unknown[], at: number, pos: Float64Array, nu: number, nv: number, dim: 2 | 3, call: RuleCall): Omit<ClothSpec, 'kind' | 'space' | 'nu' | 'nv' | 'pos'> | { fail: unknown } {
-  const [mass, stretch, bend, damping, pins, tears, self, thickness, friction] = vals.slice(at);
+  const [mass, stretch, bend, damping, pins, tears, self, thickness, friction, burns, ignite] = vals.slice(at);
   let pinIdx: number[] = [];
   let pinWords = '';
   if (typeof pins === 'string') {
@@ -196,8 +207,13 @@ function named9(vals: readonly unknown[], at: number, pos: Float64Array, nu: num
     pinWords = `${pinIdx.length} point${pinIdx.length === 1 ? '' : 's'}`;
   }
   const t = num(tears, 0);
+  // a cloth in the plane that burns: seconds each cell burns (`true`: 10 s a kg of the cell's mass, at least 1 s)
+  const m0 = num(mass, CLOTH_DEFAULTS.mass) > 0 ? num(mass, CLOTH_DEFAULTS.mass) : CLOTH_DEFAULTS.mass;
+  const cells = Math.max(1, (nu - 1) * (nv > 1 ? nv - 1 : 1));
+  const burnSeconds = dim === 3 ? 0 : burns === true ? Math.max(1, (10 * m0) / cells) : typeof burns === 'number' && burns > 0 ? burns : 0;
   return {
-    mass: num(mass, CLOTH_DEFAULTS.mass) > 0 ? num(mass, CLOTH_DEFAULTS.mass) : CLOTH_DEFAULTS.mass,
+    ...(burnSeconds > 0 ? { burns: burnSeconds, ignite: clamp(num(ignite, 250), 150, 1000) } : {}),
+    mass: m0,
     stretch: clamp(num(stretch, CLOTH_DEFAULTS.stretch), 0, 1),
     bend: clamp(num(bend, CLOTH_DEFAULTS.bend), 0, 1),
     damping: clamp(num(damping, CLOTH_DEFAULTS.damping), 0, 1),
@@ -252,6 +268,9 @@ export function startValue(spec: ClothSpec): ClothValue {
   return { schema: 'Cloth', spec, xs, ys, zs, cut: new Uint8Array(0), torn: 0, stretchMax: 1, energy: e, asleep: false, touching: [], pinsAt };
 }
 
+/** What a burning cloth's `tears` is for the engine when none was given (no tethers, no tearing by stretch). */
+const BURN_TEARS = 1000;
+
 /** The engine's definition of a cloth, with the pins of `Pin` lines added (body: the world index, −1 the world). */
 export function clothDef(spec: ClothSpec, extra: readonly PinDef[]): ClothDef {
   const pins: PinDef[] = spec.pins.map((point) => ({ point, body: -1 }));
@@ -263,7 +282,9 @@ export function clothDef(spec: ClothSpec, extra: readonly PinDef[]): ClothDef {
   pins.sort((a, b) => a.point - b.point);
   return {
     kind: spec.kind, nu: spec.nu, nv: spec.nv, pos: Float64Array.from(spec.pos), mass: spec.mass, stretch: spec.stretch, bend: spec.bend, damping: spec.damping,
-    tears: spec.tears, self: spec.self, thickness: spec.thickness, friction: spec.friction, pins: pins.slice(0, MAX_PINS),
+    // a cloth that burns tears where it burns even with no `tears`: it has no tethers (they would hold a burnt-off piece),
+    // and a link must stretch a thousand times its length to tear on its own
+    tears: spec.tears > 0 ? spec.tears : spec.burns !== undefined ? BURN_TEARS : 0, self: spec.self, thickness: spec.thickness, friction: spec.friction, pins: pins.slice(0, MAX_PINS),
   };
 }
 
@@ -371,11 +392,11 @@ export const CLOTH_COMMANDS: readonly CommandSpec[] = [
         }),
       },
       {
-        params: [P('a', 'Point'), P('b', 'Point'), P('n', 'Number'), ...NAMED],
+        params: [P('a', 'Point'), P('b', 'Point'), P('n', 'Number'), ...NAMED_PLANE],
         returns: 'Cloth',
-        summary: 'a rope of n points from a to b in the plane that bends, swings and drapes',
+        summary: 'a rope of n points from a to b in the plane that bends, swings and drapes; it burns with burns = true',
         explain: '{name} is a rope of {2} points from {0} to {1}',
-        check: (c) => checkCloth(c, 3, [2], true),
+        check: (c) => checkCloth(c, 3, [2], true, NAMES_PLANE),
         rule: () => ({
           run(call: RuleCall) {
             const [a, b, n] = call.values;
@@ -392,11 +413,11 @@ export const CLOTH_COMMANDS: readonly CommandSpec[] = [
         }),
       },
       {
-        params: [P('box', 'Polygon'), P('nu', 'Number'), P('nv', 'Number'), ...NAMED],
+        params: [P('box', 'Polygon'), P('nu', 'Number'), P('nv', 'Number'), ...NAMED_PLANE],
         returns: 'Cloth',
-        summary: 'a net of nu by nv points over a box in the plane, seen from the side: a curtain or a hammock',
+        summary: 'a net of nu by nv points over a box in the plane, seen from the side: a curtain or a hammock; it burns with burns = true',
         explain: '{name} is a net of {1} by {2} points over {0}',
-        check: (c) => checkCloth(c, 3, [1, 2], false),
+        check: (c) => checkCloth(c, 3, [1, 2], false, NAMES_PLANE),
         rule: () => ({
           run(call: RuleCall) {
             const [box, nu, nv] = call.values;

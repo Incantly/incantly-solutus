@@ -124,6 +124,8 @@ const META: Record<ErrorKind, Meta> = {
   not_in_world: { key: 'lang.not_in_world', params: ['why'], description: 'A hit handler on an object that is not a body.' },
   not_a_cloth: { key: 'lang.not_a_cloth', params: ['why'], description: 'A Pin whose first argument is not a cloth.' },
   pin_off_cloth: { key: 'lang.pin_off_cloth', params: ['why'], description: 'A Pin at a point further than one link from every point of its cloth.' },
+  not_burnable: { key: 'lang.not_burnable', params: ['why'], description: 'burns on a thing that is not a body, cloth or solid shape, or Ignite of a thing with no burns.' },
+  no_fire_grid: { key: 'lang.no_fire_grid', params: ['why'], description: 'Ignite of a burnable thing outside every Fire grid.' },
 };
 
 function buildTable(): Record<ErrorKind, ErrorSpec> {

@@ -2894,6 +2894,53 @@ export class ClothSet {
     }
   }
 
+  /**
+   * Burnt cells tear their links (design 9.7): `burnt` has one byte a cell of cloth `ci` (a sheet or net: (nu − 1) ×
+   * (nv − 1) cells row by row, a rope: nu − 1 segments), 1 where the cell burnt away. A stretch or shear link that lies on
+   * a burnt cell breaks, then the bend links across a broken stretch link, as `tear` does; the count goes to `torn` and
+   * `tornNow`, and a sleeping cloth wakes. Nothing is replaced: the arrays are written in place. Returns the links broken.
+   */
+  burnCells(ci: number, burnt: Uint8Array): number {
+    const c = this.cloths[ci];
+    if (!c) return 0;
+    const nu = c.def.nu;
+    const nv = c.def.nv;
+    const cu = nu - 1;
+    const cv = nv > 1 ? nv - 1 : 1;
+    const at = (i: number, j: number): boolean => i >= 0 && i < cu && j >= 0 && j < cv && burnt[j * cu + i] === 1;
+    const { la, lb, broken } = this;
+    let torn = 0;
+    for (let l = c.l0; l < c.l0 + c.ln; l++) {
+      if (broken[l] === 1) continue;
+      const k = this.kind[l];
+      if (k === LinkKind.bend) continue;
+      const pa = Math.min(la[l] as number, lb[l] as number) - c.p0;
+      const pb = Math.max(la[l] as number, lb[l] as number) - c.p0;
+      const d = pb - pa;
+      const i = pa % nu;
+      const j = (pa - i) / nu;
+      let hit: boolean;
+      if (nv === 1) hit = d === 1 && at(i, 0);
+      else if (k === LinkKind.stretch) hit = d === 1 ? at(i, j) || at(i, j - 1) : at(i, j) || at(i - 1, j);
+      else hit = d === nu + 1 ? at(i, j) : at(i - 1, j);
+      if (hit) {
+        broken[l] = 1;
+        torn++;
+      }
+    }
+    if (torn === 0) return 0;
+    for (let l = c.l0; l < c.l0 + c.ln; l++) {
+      if (this.kind[l] !== LinkKind.bend || broken[l] === 1) continue;
+      if (this.bendCrossesTorn(l, c)) broken[l] = 1;
+    }
+    c.torn += torn;
+    this.tornNow[ci] = (this.tornNow[ci] as number) + torn;
+    this.lqHs = 0;
+    this.markCuts(c.t0, c.t0 + c.tn);
+    this.wake(ci);
+    return torn;
+  }
+
   /** A bend link joins a, m, b along a thread: is either stretch link a–m or m–b torn? */
   private bendCrossesTorn(l: number, _c: ClothInfo): boolean {
     const a = this.la[l] as number;

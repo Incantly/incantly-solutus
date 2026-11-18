@@ -527,6 +527,29 @@ export class World2 implements Poses {
     return (this.type[a] === BodyType.Dynamic && this.awake[a] === 1) || (this.type[b] === BodyType.Dynamic && this.awake[b] === 1);
   }
 
+  /**
+   * Wakes the sleeping dynamic bodies whose boxes meet those of body i (the boxes hold the contact margin): used before a
+   * body leaves, so what it held up falls. A sleeping body is not woken by a wall that goes away.
+   */
+  wakeAround(i: number): void {
+    const s0 = this.shape0[i] as number;
+    const sn = this.shapeN[i] as number;
+    for (let j = 0; j < this.n; j++) {
+      if (j === i || this.type[j] !== BodyType.Dynamic || this.awake[j] === 1) continue;
+      const t0 = this.shape0[j] as number;
+      const tn = this.shapeN[j] as number;
+      let meets = false;
+      for (let k = s0; k < s0 + sn && !meets; k++) {
+        for (let q = t0; q < t0 + tn && !meets; q++) {
+          if ((this.maxX[k] as number) < (this.minX[q] as number) || (this.maxX[q] as number) < (this.minX[k] as number)) continue;
+          if ((this.maxY[k] as number) < (this.minY[q] as number) || (this.maxY[q] as number) < (this.minY[k] as number)) continue;
+          meets = true;
+        }
+      }
+      if (meets) this.wakeBody(j);
+    }
+  }
+
   /** A body that left the world stops taking part: it no longer moves or hits anything. */
   removeBody(i: number): void {
     this.type[i] = BodyType.Static;

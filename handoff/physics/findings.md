@@ -56,8 +56,8 @@ report. Ran the "no garbage" bench.
 | PH-13 | round 2 | Still over goal in Chrome 4× slower: cloth in water 9.11 (8), 32 × 32 on a ball 3.13 (3), self 8.00 (8). Round 2 list: `prepareDrops`/`faceTable`, `prepareSelf` and batched `grid_in_box`, `hitSphere`, link layout or SIMD. | Builder notes. | medium | to be implemented (replaces the cloth part of PH-6) |
 | PH-14 | `packages/kernel/bench/physics.bench.ts` "Cloth, no garbage" | The row counts collections in a window that starts wherever V8's young generation happens to be. With the kernels on it fails in about half of the runs (0, 3, 0, 0, 0, 3, 1, 3, 1, 3, 0, 0 collections in 12 runs, after the fix of PH-8), with them off in none of 20, yet the sheet makes no garbage that fills it: with one `gc()` before the observer starts, 10 runs in 10 show 0 collections. | New space at the start of the window, printed in the row's own setup: 29 to 31 MB of 32 in the failing runs (a collection follows at the first idle moment, the row's `await` of 50 ms, or inside the loop), 9 MB in the passing ones. The first frames (the sheet's construction, 9 MB, and the engine's first runs of every loop) put 16.5 MB in the young generation with the kernels on and, estimated, about 25 MB with the loops in TypeScript (their first runs make more garbage): the TypeScript run wraps round the 32 MB to a low fill, the Rust run lands near the top. | medium | fixed (27a756e) |
 | PH-15 | `cloth.ts` steps, both modes | About 110 bytes of garbage a step remain with the kernels on and off (sampling heap profile over 3,000 steps after 8,000: `sizeBodies` 40 B, the step's own boxed `h` 24 B, `stepCloth` 17 B, `prepLinks` 16 B). Not enough to fill the young generation in 2,000 steps (0.2 MB), but design 11.4 says none. | `HeapProfiler.startSampling` with minor collections included. | low | fixed (27a756e) |
-| PH-16 | `fluid3.ts` `step`, `densityPass` | Found while profiling PH-15 (the 2,000-drop sheet): the 3D liquid's own step makes about 85 B a step in both modes (`step` 66 to 69 B, `densityPass` 17 B, and when drops leave the world `ps.compact((i) => …)` makes a closure and `Math.abs` a call, 24 B each). It is not a cloth step, so PH-15 leaves it. | Same profile, `Fluid3.step` called as the driver does, 3,000 steps. | low | to be implemented |
-| PH-17 | the drivers' frame (`driver3.ts`, `driver.ts`, `world3.ts`, `core.ts`) | A frame played through `setClock` (a 64 × 32 flag, kernels on) makes about 17 KB per step: iterators (`next` 3.9 to 4.5 KB), `writeCloth` 1.9 KB (three new arrays a frame for the readout), `world3.step` 1.2 KB, `flush` 1.2 KB, `beginSoft` 0.6 KB, `islands` 0.5 KB, `signature` 0.5 KB. The cloth's own part is 37 to 57 B a step (the engine's tiers, not a call that makes a number). Not a cloth step. | Same profile, 1,000 frames after 1,500. | low | to be implemented |
+| PH-24 | `fluid3.ts` `step`, `densityPass` | Found while profiling PH-15 (the 2,000-drop sheet): the 3D liquid's own step makes about 85 B a step in both modes (`step` 66 to 69 B, `densityPass` 17 B, and when drops leave the world `ps.compact((i) => …)` makes a closure and `Math.abs` a call, 24 B each). It is not a cloth step, so PH-15 leaves it. | Same profile, `Fluid3.step` called as the driver does, 3,000 steps. | low | to be implemented |
+| PH-25 | the drivers' frame (`driver3.ts`, `driver.ts`, `world3.ts`, `core.ts`) | A frame played through `setClock` (a 64 × 32 flag, kernels on) makes about 17 KB per step: iterators (`next` 3.9 to 4.5 KB), `writeCloth` 1.9 KB (three new arrays a frame for the readout), `world3.step` 1.2 KB, `flush` 1.2 KB, `beginSoft` 0.6 KB, `islands` 0.5 KB, `signature` 0.5 KB. The cloth's own part is 37 to 57 B a step (the engine's tiers, not a call that makes a number). Not a cloth step. | Same profile, 1,000 frames after 1,500. | low | to be implemented |
 
 **Fixes for PH-8 to PH-11** (the one fix round):
 
@@ -93,7 +93,7 @@ report. Ran the "no garbage" bench.
   | 64 × 32 flag in wind | off | 78.2 | 5.5 | 2.8 | 1.1 |
   | 32 × 32 sheet on a ball | on | 133,486 | 6.3 | 3.2 | 1.7 |
   | 32 × 32 sheet on a ball | off | 133,532 | 6.2 | 2.1 | 2.1 |
-  | 64 × 32 sheet, 2,000 drops (the cloth's part; the liquid's own about 90 B is PH-16) | on | 1,112 | 1.8 | 2.2 | 0.3 |
+  | 64 × 32 sheet, 2,000 drops (the cloth's part; the liquid's own about 90 B is PH-24) | on | 1,112 | 1.8 | 2.2 | 0.3 |
   | 64 × 32 sheet, 2,000 drops (the cloth's part) | off | 1,104 | 1.6 | 3.0 | 0.2 |
   | 2D rope, 400 points, a ball | on | 74,127 | 21.5 | 313 | 1.1 |
   | 2D rope, 400 points, a ball | off | 74,064 | 19.8 | 314 | 0.6 |
@@ -101,3 +101,71 @@ report. Ran the "no garbage" bench.
   After 8,000 steps the water of the drops scene has poured off the sheet (18 drops left); with 600 steps before the window (674 and 377 drops left) the cloth's part was 9,408 then 3,658 B a step before and 35 then 0 (kernels on), 14 then 23 (off) after. The rope's 313 B in window 2 is one event, not a rate: the engine threw away `hitThread`'s optimised code when the ball first met the rope (about 0.9 MB in all, 3,000 steps) and ran it in the interpreter until it optimised it again; in window 3 the rope makes 0.1 B a step. The 15 to 20 B of its window 1 is the same kind (code of the pinned body's small steps still in a lower tier); a rope with no body and a 3D sheet with one show no such window. Not a cloth step, left to PH-16 and PH-17: the liquid's step (about 90 B) and the driver's frame (about 17 KB).
 - PH-14: found with `--trace-gc` and the performance entries of the row. The first guess (a window that starts wherever the young generation is) was true for the kernels-on row: `collectNow()` (a `gc()`, Node started with `--expose-gc` by `vitest.config.ts`, which sets `test.execArgv`) before the observer gave 0 collections in 3 of 3 runs. The kernels-off copy of the row still failed, 2 or 3 collections in each run, with any warm-up (120 to 4,000 steps) and alone it passed: a collection frees the Rust module of the row before, and the optimised code that holds that module goes with it; the first 40 steps of the next row then run in the interpreter and make 26 MB (a scavenge every 15 ms), whatever its warm-up. So each cloth row collects before its own setup as well, and its warm-up makes the code again. The smoke row counted nothing (it checked that its buffers were the same arrays); it counts collections now, 0 in 20 of 20 runs.
 - PH-8: closed by the two above. `npx vitest run --config packages/kernel/bench/vitest.config.ts packages/kernel/bench/physics.bench.ts -t "no garbage"`, 20 runs one after the other: kernels on 0 collections in 20 of 20, kernels off 0 in 20 of 20, smoke 0 in 20 of 20; and each of the two cloth rows alone (`-t "kernels on"`, `-t "kernels off"`), 10 of 10. On `efe4cdb` the row failed in about half of the runs (PH-14).
+
+## Review of 11A fire in the plane (2026-11-18, one round)
+
+Read: builder notes 11A, design 9.7 "Choices made while building it in the plane", `test-report.md` 11A (90 new
+tests, 4 fail).
+
+| Id | Where | What | Evidence | Harm | Status |
+|---|---|---|---|---|---|
+| PH-16 | `driver.ts` (hit handlers during a seek), `handlers.ts` | A seek that has to step through a hit runs the `on b hit` handler's physics steps at the seek's end time, not at the hit: `on ball hit: Ignite(wood)` sought from 0 to 6 s logs `@input physics ignite wood at 6` twice and gives another film than playing. Seek must equal play (design 10). Check `Push` in a hit handler too and fix every physics action the same way. | Tester report 11A, notes. | high | fixed (d9a63af) |
+| PH-17 | `driver.ts` burnable shapes | A solid shape that burns away stays solid and reads defined: a ball on a burnt shelf stays up at 8 s. Design 9.7 and errors.md 4: it stops being solid and reads undefined with `burnt`. | Tester failures 2, 3, 4. | high | fixed (d9a63af) |
+| PH-18 | `smoke2.ts` swirl | `swirl = 10` in a closed jar loses 22.9% of the smoke (11.5 "Smoke kept": within 0.1%). Swirl 0.5 and 2 keep it. | Tester failure 1. | medium | fixed (d9a63af) |
+| PH-19 | `driver.ts`, limits | A 65th burnable thing is ignored instead of refused with `limit` (design 11.3: 64). | Builder notes. | medium | fixed (d9a63af) |
+| PH-20 | `ui.md`, studio tools | No Fire tool, no fire row in `ui.md`, no screenshots or Chrome numbers for fire. | Builder notes. | low | to be implemented (round 11 examples job) |
+| PH-21 | `driver.ts` | A `Pin` to a body that burns away is not handled (not looked at). | Builder notes. | medium | to be implemented |
+| PH-22 | `world2.ts` `save` (contacts), `driver.ts` `worldHash` | A film that rewinds gives another `worldHash` than the same film with the same input lines given at the start, in a number no step reads: the saved `id1` (second feature id) of a contact whose manifold has one point is whatever the pooled contact held before. Positions, speeds and every readout are equal to the bit, and the hashes meet again within a few seconds. | `on ball hit: Push(wood, (0, 2))` (the ball hits at 0.55 s and 0.69 s) played to 2 s, against the played script with the handler line removed: the saved states differ in one number (contact 0, `id1`: 1 against 0) from 0.7 s; equal at 6 s. | low | to be implemented (write 0 for the ids of a point the manifold does not have; check that a manifold that grows to two points never reads the stale ones) |
+| PH-23 | `driver3.ts` / `world3.ts` rewinds | In space, three films of one script differ in the last digits: the played film, the sought film, and the film with the handler's `@input` lines given at the start. The first two rewinds (hits at 0.75 s and 1.65 s) are exact; the third (2.19 s) is not. Cause not found. | `g = Ground()`, `b = Body(Sphere((0, 0, 3), 0.25), bounce = 0.6)`, `c = Body(Sphere((2, 0, 0.25), 0.25))`, `on b hit: Push(c, (0, 2, 0))`, 4 s: three hashes (`cbc17c2d23eb0e5`, `653e3d6a5cb09ca`, `c82782cac2c074a0`); first divergence at 2.2 s, by 2.8e-14 in a contact point (y about 50.35 m); at 4 s seven saved numbers differ by up to 4e-13. Gone with small pushes (the regression tests use them). | medium | to be implemented |
+
+**Fixes for PH-16 to PH-19** (the one fix round):
+
+- PH-16: while stepping (playing or catching up after a seek), a handler that a hit starts must run with the film time
+  of that step, and its physics actions (`Push`, `Ignite`, `Wake`, `Sleep`) must be logged at that time and applied at
+  that step, so playing, seeking from 0 and reloading the played script give the same hash. A replay must still not
+  run a handler twice (design: run once per hit). Regression tests: `on ball hit: Ignite(wood)` and
+  `on ball hit: Push(ball, (2, 0))`, seek from 0 to 6 s equals play to 6 s (hash and the `@input` lines).
+- PH-17: at `burnt = 1` a solid shape leaves the walls (bodies on it fall), its value reads undefined with reason
+  `burnt`, and the `burnt` notice shows once. The tester's three failing tests must pass unchanged.
+- PH-18: keep smoke within 0.1% for every `swirl` up to 10: skip the swirl force on faces next to solids and the box's
+  closed sides, and cap its speed change per face per step at `0.5 × min(dx, dy) / h`. The tester's failing test must
+  pass unchanged; films with `swirl` 0.5 and 2 may change (state it in design 9.7).
+- PH-19: a 65th thing with `burns` is refused with `limit` (errors.md 3), naming the 64.
+
+**As fixed (fix round, commit d9a63af; the fixer measured each point):**
+
+- PH-16: `afterFlush` (plane and space) sets the film time of the hit (`hit.t`) while a handler runs, and `push`, `ignite`,
+  `wake`, `sleep`, `restart` and the cloth grabs log at that time (`clockNow()`), not at the clock's. The log entry is at a
+  step the world has already passed, so `addEntry` rewinds to the checkpoint before it and the world steps on again with
+  the action in place; the hit is not seen again (`frontier`), so a handler runs once per hit. Two gaps found on the way,
+  fixed with it: (1) `Wake` and `Sleep` changed the world at once and were not in the log (design 5.4: "each action while
+  playing is an entry in the input log"), so a seek back lost them; they are now `@input physics wake|sleep name at t`
+  lines, in the plane and in space, also through the worker. (2) A reloaded script that holds the handler's lines ran the
+  handler again at each hit (a `Push` doubled); an action a hit handler writes that an `@input` line of the script already
+  holds is that line (claimed once, in the order of the log), so the played script and its reload have the same lines.
+  Regression tests: `Ignite`, `Push` (centre and at a point) and `Sleep` in a plane handler, `Push` (centre and at a point)
+  and `Sleep` in a space handler: played, sought from 0 and reloaded give the same hash and the same `@input` lines; seeking
+  back and forth over the hits keeps the film; `Wake` and `Sleep` as lines. They fail on the old code (6 of 8 plane tests).
+- PH-17: a solid shape's cell is overridden in `onCompute` while it has burnt away (reason `burnt`) and written when the
+  state changes, also back after a seek before the burn; the world is still built from the rule's own value, so a line
+  changed after the shelf burnt does not bring it back or start the film again. The ball on the shelf sat asleep and
+  the wall's removal did not wake it: `World2.wakeAround(i)` wakes the sleeping bodies whose boxes meet a body that
+  leaves (a burnt shape or a burnt body; a body that rested on a burnt log fell the same way before it was fixed). The
+  tester's three failing tests for the shelf (the ball, and the two that read the cell) pass unchanged.
+- PH-18: as listed, a face takes at most `0.5 min(dx, dy) / h` of speed from the swirl in a step. **It does not bind and
+  does not keep the smoke**: the jar of the test has `swirl = 10` speeds of 3.4 m/s and a step of 0.5 cells at most, and
+  capping the force at 0.5 down to 0.05 m/s a step left 23% to 17% lost; skipping the cells beside solids changed
+  nothing (all the smoke is inside the jar and none is in a solid). What loses the smoke is carrying it back along a
+  turning flow: the raw loss is 0.4% a step at `swirl = 2` and 0.7% to 1% at `swirl = 10` (design 9.4 says about 0.05% for a plain plume; the jar's own raw loss with no swirl was not measured),
+  and the scale that restores the mass is capped at 0.5% a step. So the cap grows with the swirl: `0.5% × (1 + swirl)`
+  (5.5% at 10), and stays 0.5% with no swirl, so a film with no swirl is unchanged. The jar keeps its mass to 1e-13 for
+  `swirl` 0.5, 2, 3, 6 and 10; the swirled smoke's mean height at 10 s is 0.32 m (the test wants over 0.3). Films with
+  `swirl` of 3 and more change (the mass is kept now); 0.5 and 2 are unchanged (the cap did not bind). Design 9.4 and 9.7
+  say so.
+- PH-19: `burnLimitCheck` (a line check) refuses the line that makes the 65th body (each item of a list counts), cloth or solid
+  shape burn, by `burns = …` or `with burns`, with `limit` and the 64 (a `burns` that is a formula is read while the film
+  plays, where the driver still ignores the things past the 64th). The tester's test that said "the 65th is ignored, with
+  no refusal" contradicts design 11.3 ("Over a limit, the line is refused with `limit`", "Burnable things | 64"); it is
+  rewritten (three tests: the 65th refused, every kind counts, turning one off frees a place).
+
+Found while fixing, not fixed in this round: PH-22 and PH-23 above.

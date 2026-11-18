@@ -51,6 +51,10 @@ export interface BodySpec {
   readonly fixed: boolean;
   readonly group: number;
   readonly charge: number;
+  /** Seconds the body burns (design 9.7); left out when it does not burn, so such a body has its old spec. */
+  readonly burns?: number;
+  /** °C above the air at which it lights (150 to 1,000); left out with `burns`. */
+  readonly ignite?: number;
   /** Centre of mass and mass at the start. */
   readonly cx: number;
   readonly cy: number;
@@ -79,6 +83,10 @@ export interface BodyValue {
   readonly touching: readonly string[];
   /** False while the film has not reached a step (the start). */
   readonly moving: boolean;
+  /** A body that burns (design 9.7): its temperature (°C above the air), how much of it has burnt (0 to 1), and whether it burns now. */
+  readonly temperature?: number;
+  readonly burnt?: number;
+  readonly burning?: boolean;
 }
 
 export function isBodyValue(v: unknown): v is BodyValue {
@@ -134,7 +142,7 @@ export function collectBuffers(v: unknown, out: ArrayBuffer[], depth: number): v
     for (const x of v) collectBuffers(x, out, depth + 1);
     return;
   }
-  for (const k of ['forces', 'xs', 'ys', 'zs', 'heights', 'density'] as const) {
+  for (const k of ['forces', 'xs', 'ys', 'zs', 'heights', 'density', 'temp'] as const) {
     const x = (v as Record<string, unknown>)[k];
     if (x !== undefined) collectBuffers(x, out, depth + 1);
   }

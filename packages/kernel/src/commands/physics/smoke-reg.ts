@@ -42,7 +42,7 @@ export function registerSmoke(): void {
     }
     return undefined;
   });
-  registerValueText((v) => (isSmokeValue(v) ? `smoke, ${v.spec.n} by ${v.spec.n}, ${fmt(v.mass)} m² of smoke, air up to ${fmt(v.speed)} m/s` : undefined));
+  registerValueText((v) => (isSmokeValue(v) && !v.spec.fire ? `smoke, ${v.spec.n} by ${v.spec.n}, ${fmt(v.mass)} m² of smoke, air up to ${fmt(v.speed)} m/s` : undefined));
   registerTypeStyle('Smoke', { defaults: { color: '#5f6670', width: 1, opacity: 0.8 } });
   registerLineCheck(smokeLineCheck);
 }
