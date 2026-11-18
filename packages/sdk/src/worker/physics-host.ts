@@ -42,8 +42,9 @@ export class PhysicsWorkerHost {
   frame(t: number): void {
     const f = this.figure;
     // a world with liquid, waves or cloth runs whole in the worker (design 9.6, round 9 for cloth)
-    const wants = f.objects().some((o) => o.type === 'Liquid' || o.type === 'Waves' || o.type === 'Cloth');
     const d = worldDriverOf(f);
+    // and a smoke or fire grid in space (a grid in the plane stays on the page, design 9.4)
+    const wants = f.objects().some((o) => o.type === 'Liquid' || o.type === 'Waves' || o.type === 'Cloth') || ('hasSmokeGrid' in d && d.hasSmokeGrid());
     // a line moved the world between the plane and space: the old driver takes its world back first
     if (!wants || (this.active && this.driver !== d)) {
       if (this.active) this.stop();

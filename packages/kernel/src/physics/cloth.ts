@@ -1718,6 +1718,7 @@ export class ClothSet {
         nz = 0.5 * (dax * dby - day * dbx);
         ar[0] = x[a] as number;
         ar[1] = y[a] as number;
+        ar[2] = z[a] as number;
         this.airAt(air);
         ux = (air[0] as number) - 0.25 * ((vx[a] as number) + (vx[b] as number) + (vx[e] as number) + (vx[q] as number));
         uy = (air[1] as number) - 0.25 * ((vy[a] as number) + (vy[b] as number) + (vy[e] as number) + (vy[q] as number));
@@ -1751,6 +1752,7 @@ export class ClothSet {
         nz = 0.5 * (abx * acy - aby * acx);
         ar[0] = x[a] as number;
         ar[1] = y[a] as number;
+        ar[2] = z[a] as number;
         this.airAt(air);
         ux = (air[0] as number) - ((vx[a] as number) + (vx[b] as number) + (vx[e] as number)) / 3;
         uy = (air[1] as number) - ((vy[a] as number) + (vy[b] as number) + (vy[e] as number)) / 3;

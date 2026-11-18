@@ -240,6 +240,10 @@ Branch `feat/physics-11a`. Plan: `handoff/physics/plan-11a-fire-2d.md`. Design: 
 
 See design 9.7 for the full list. The ones to look at first: the example id `physics-candle-flame` (the id `physics-candle` is the smoke candle that is already there) and `wood` for `log` (`log` is a reserved name); `Ignite` lights a whole thing at once; a cloth's `burns = true` is 10 s a kg of one cell's mass (at least 1 s a cell); `fire_out` needs the fire to have been alight and 1e-4 m² of fuel (never exactly 0); a joint whose rule goes undefined because a body burnt or left the world no longer makes the world start again (it did, and with a burnt body in a weld the film restarted at every pass); `with burns` takes a number too (new property kind `boolnum`); at most 64 burnable things, the rest ignored with no `limit` refusal.
 
+### Found, not fixed
+
+- A body that burnt away (or left the world) is not stepped again, and `World3.load` makes its quaternion unit length once more, which can change its last bit: after a seek the world hash may differ from a straight play by 1e-16 in that body's turn (no value read by a figure depends on it, the body reads undefined). The same as PH-22 and PH-23 in `findings.md`; it shows only through `worldHash`.
+
 ### Left out
 
 - The `limit` refusal of design 11.3 for the 65th burnable thing (ignored in the driver instead).
@@ -251,3 +255,45 @@ See design 9.7 for the full list. The ones to look at first: the example id `phy
 ### Numbers
 
 `physics.bench.ts`, "fire in the plane, 64 × 64, two burning bodies": mean 0.84 ms, 95% 0.89 ms, 99% 0.96 ms, worst 1.28 ms a frame (budget 1 ms); the smoke row on the same run: 0.56 ms. A burning curtain (20 × 14, a 48 × 48 fire) with a burning body and a weld: about 0.9 ms a frame.
+
+## 11B fire in space
+
+Branch `feat/physics-11b`. Plan: `handoff/physics/plan-11b-fire-3d.md`. Design: `docs/features/physics/design.md` 9.8 ("As built (round 11B)" holds every number and decision), 10.3, 11.2 ("Measured (round 11B)"), 11.6 ("Candidates from round 11B"), 12.1. No tests written. Scratch probes only (`$KIROCREW_SCRATCH/probe/s3-*.probe.ts`).
+
+### Files
+
+- New: `packages/kernel/src/physics/smoke3.ts` (`Smoke3`: the grid, its step, the solids, the drag, checkpoints), `physics/fire3.ts` (the fire's steps in space), `physics/burn3.ts` (`Burnables3`), `packages/view/src/gl/volume3.ts` (`VolumePainter3`, `packVolume`, `invert4`, the ray-marching shader).
+- Changed: `physics/fire2.ts` (four constants exported), `physics/cloth.ts` (`ar[2]` set before the air hook: the point's height, two lines), `physics/cloth3.ts` (`smokes`, `hasFlow`, `airAt`); `commands/physics/` `smoke.ts`, `fire.ts`, `smoke-reg.ts`, `fire-reg.ts`, `body3.ts`, `cloth.ts` (`burns` and `ignite` on a sheet), `driver3.ts`, `index.ts` (`burns` on `Body` in space, `Ignite` in space); `packages/sdk/src/worker/physics-host.ts`; `packages/sdk/src/screen/space/` `scene3.ts` (`VolumeItem`, `volumeFaces`), `paint3.ts`; `packages/view/src/gl/` `sheet3.ts` (`GlVolume3`, three optional frame fields), `mesh-painter3.ts` (the volume pass after the drops), `index.ts`; `apps/studio/src/examples.ts` (three examples); `packages/kernel/bench/` `physics.bench.ts`, `chrome-physics.mjs`, `chrome/main.ts`; docs, `agent.md`, tasks, usage log.
+
+### Public API
+
+`Smoke(box: Polyhedron, n, source?, heat?, wind?, until?, swirl?)`, `Fire(box: Polyhedron, n, …)`, `Fire(at: Point3, …)`; `sm.at(x, y, z)`, `f.temperature(x, y, z)`; `burns` and `ignite` on `Body` (and `with`) in space and on a sheet; `b.temperature`, `b.burnt`, `b.burning` for a body in space, `c.burnt` for a sheet; `Ignite(thing)` in space. Kernel exports: `SmokeSpec.space`, `smokeGrid3`, `smokeValue3`, `isSpaceSmoke`; `Physics3Driver.hasSmokeGrid()`, `.ignite()`, `.smokeMembers`.
+
+### Decisions the plan did not settle
+
+- Extra files: `fire3.ts` and `burn3.ts` next to `smoke3.ts` (the plane's `fire2.ts` and `burn2.ts` are the model). `burn3.ts` reuses `BurnDef` of `burn2.ts` with a `z`.
+- The cells are `dx × dy × dz` over the bounding box, not cubes (the box of `Fire(at)` is 2 × 2 × 3 m).
+- `n` outside 4 to 32 is `bad_property_value`, as the plan says (the plane uses `limit` and `bad_argument`); a second grid in space is `limit`.
+- A figure with a grid keeps a checkpoint every second, also when it has cloth (0.25 s would put 24 MB a minute of grid in 4 checkpoints a second); a grid's checkpoint packs two Float32 values to a Float64 slot (the driver's checkpoints are Float64 arrays) so 24³ is 399.7 KB as the design says.
+- A figure with a grid keeps its cloth awake (`c.sleeping = world.sleeping && no grid`): a sleeping cloth wakes only for wind, bodies, grabs and drops, so it would never feel a flame that starts later.
+- `cloth.ts` (`ClothSet.airForces`) now sets `ar[2]` (the point's z) next to `ar[0]` and `ar[1]`: the air hook of a cloth in space needs the height. The plane ignores it and the kernel path is not touched.
+- The grid's start marks the solids where they are before it seeds the source (`startSmoke` calls `markSolids`): after a seek back the marks held the last step's cells, so the start differed by one cell (found by comparing a seek with a play; the plane's `seedFire` reads `own` too but has not shown it).
+- Solid shapes that burn (`p with burns` on a polyhedron) are not built in space; a thing is a body or the cells of a sheet. The 64-thing cap is the plane's constant, not checked by a line check in space.
+- Volume drawing: the screen's depth buffer cannot be read, so `VolumePainter3` renders the solids' (and a cloth's coarse) triangles into a depth texture of its own; the plan said "the depth texture of 12.1", which does not exist.
+- The step budget of `Physics3Driver.advance` counts a grid's cells / 32 (a smoke step is about the cost of 400 bodies' steps for 24³).
+- The example `physics-3d-flag-fire` is a sheet held at its four corners over the fire (a vertical flag beside a plume is not moved by it: the flow runs along the cloth), and `physics-3d-crate-burns` has the fire's source a ball round the crate (a crate beside a flame warms to 6 °C and never lights).
+
+### Found, not fixed
+
+- A body that burnt away (or left the world) is not stepped again, and `World3.load` makes its quaternion unit length once more, which can change its last bit: after a seek the world hash may differ from a straight play by 1e-16 in that body's turn (no value read by a figure depends on it, the body reads undefined). The same as PH-22 and PH-23 in `findings.md`; it shows only through `worldHash`.
+
+### Left out
+
+- Solid shapes burning in space; the `limit` line check of the 65th burnable in space.
+- A line check for `burns` on a polyhedron.
+- Screenshots in the docs, spec tests, `ui.md` (a Fire tool). The crackle works in space, its loudness counting the grid's cells.
+- Any speed-up of the grid beyond the plan: a solid-cell list for the solid faces, a flag for blocks of eight air cells in the carrying, and the centre speeds shared by the three carries are each worth 0.1 to 0.25 ms of the 3.7.
+
+### Numbers
+
+Node (`physics.bench.ts`, "smoke and fire in space"): 24³ fire a frame mean 3.95 to 4.40 ms, 95% 4.4 to 5.0 ms (goal 2 ms); 32³ 9.06 to 9.20 ms, 95% 9.6 to 9.8 (goal 4); a 64 × 32 flag over a 24³ fire 5.00 to 5.18 ms, 95% 5.8 (goal 2.5); a seek anywhere in a 60 s film, warm, median 127.8 ms, worst 300 ms (goal 120); a checkpoint 399.7 KB, 23.4 MB for 60 s; 0 collections in 200 grid steps. Chrome 157, CPU 4× slower (`chrome-physics.mjs --scenes fire24,fire32,flagfire`): 24³ 15.65 and 15.25 ms (goal 8), 32³ 35.27 ms, flag over a fire 20.65 ms. **All over the 25% of the Rust rule** (design 11.6 lists the loops).

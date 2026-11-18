@@ -23,6 +23,10 @@ export const SCENES: Record<string, string[]> = {
   self: ['g = Ground()', 'sheet = Cloth((-2, -1, 3), (4, 0, 0), (0, 0, -2), 64, 32, mass = 0.5, self = true)', 'post = Box((0, 0, 0.5), 1, 1, 1)', 'post with solid = true'],
   two: ['g = Ground()', 'a = Cloth((0, 0, 4), (3, 0, 0), (0, 0, -2), 64, 32, pins = "left")', 'b = Cloth((0, 1, 4), (3, 0, 0), (0, 0, -2), 64, 32, pins = "left")', 'world with wind = (4 + 2 sin(3 t), 1, 0)'],
   wet: ['g = Ground()', 'sheet = Cloth((-3, -1.5, 2), (6, 0, 0), (0, 3, 0), 64, 32, mass = 0.6, pins = "corners")', 'water = Liquid(Box((0, 0, 3), 2, 2, 0.5), 2000)'],
+  // smoke and fire in space (design 9.8, 11.2): the grid steps on the page's main thread here; the product runs it in the worker
+  fire24: ['g = Ground()', 'blaze = Fire((0, 0, 0))'],
+  fire32: ['g = Ground()', 'blaze = Fire(Box((0, 0, 1), 2, 2, 3), 32, source = Sphere((0, 0, 0.1), 0.3))'],
+  flagfire: ['g = Ground()', 'blaze = Fire((0, 0, 0))', 'flag = Cloth((-1, -0.3, 2.4), (2, 0, 0), (0, 0, -1.2), 64, 32, mass = 0.4, pins = "top")'],
 };
 
 const commands = new CommandRegistry();

@@ -48,7 +48,7 @@ The reference app has no physics engine, so it has no physics errors. Hand-made 
 | B018 | `not_a_cloth` (new, C137) | typecheck | `Pin(c, P)` where `c` is not a cloth | `use_suggestion` | "Pin holds a cloth. To hold a body, use `Hinge(b, wall, P)`." `suggest`: that line |
 | B019 | `pin_off_cloth` (new, C138) | typecheck | `Pin(c, P)` with `P` a literal point further than one link from every point of `c` | `fix_line` | names the nearest point of the cloth and how far it is |
 | B020 | `not_burnable` (new, round 11) | typecheck | `Ignite(b)` where `b` has no `burns`, or `burns` on something that is not a body, cloth or solid shape | `use_suggestion` | "b can't burn yet. Add `b with burns = true` first." `suggest`: that line |
-| B021 | `no_fire_grid` (new, round 11) | plan | `Ignite(b)` or `burns` on a thing outside every `Fire` grid | `use_suggestion` | "Nothing can burn outside a fire. Make a fire round b." `suggest`: `Fire(b.pos)` |
+| B021 | `no_fire_grid` (new, round 11) | plan | `Ignite(b)` or `burns` on a thing outside every `Fire` grid | `use_suggestion` | "Nothing can burn outside a fire. Make a fire round b." `suggest`: `Fire(b.pos)`, kept even when the figure has no room for that grid (in space one grid a figure; the plane's 64 × 64 cells), and then the hint says so |
 
 **Values versus text.** A polygon built from points whose edges only cross for some values is not an error. It is an undefined body (section 4). Only a literal shape that can never be valid is refused at check time.
 

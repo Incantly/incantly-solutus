@@ -303,7 +303,8 @@ export class PhysicsDriver implements WorldDriver {
       const last = this.lastCells.get(rec.id);
       return last && computed.defined ? last : undefined;
     }
-    if (this.solidRecs.includes(rec)) {
+    // (told by its `solid` style, not by the scan: a rule is computed before the scan that finds the solids has run)
+    if (rec.p.style.has('solid') || this.solidRecs.includes(rec)) {
       // a solid shape: its rule's value is what the world is built from; one that burnt away reads undefined
       this.solidVals.set(rec.id, computed);
       return this.burntSolids.has(rec.id) ? { defined: false, reason: 'burnt' } : undefined;
@@ -2785,6 +2786,8 @@ export class PhysicsDriver implements WorldDriver {
       if (this.burntSolids.has(id)) continue;
       this.burntSolids.add(id);
       this.everBurnt.add(id);
+      // a rule that was not computed since it got its `solid` style has no value kept yet: keep the one it has now
+      if (!this.solidVals.has(id)) this.solidVals.set(id, r.cell);
       if (this.acc.write(r, { defined: false, reason: 'burnt' })) changed.push(r);
     }
   }

@@ -585,7 +585,7 @@ How it is built (round 6, `packages/sdk/src/worker/`): the worker holds a headle
 
 ### 9.7 Fire (`Fire`, `Ignite`, `burns`)
 
-Status: built in the plane (round 11A, `packages/kernel/src/physics/fire2.ts`, `burn2.ts`); in space it is proposed (round 11B, 9.8). Research: `docs/research/physics-papers.md` 9.
+Status: built in the plane (round 11A, `packages/kernel/src/physics/fire2.ts`, `burn2.ts`) and in space (round 11B, 9.8, `fire3.ts`, `burn3.ts`). Research: `docs/research/physics-papers.md` 9.
 
 Fire is the smoke grid of 9.4 with two more values in each cell: **temperature** `T` (°C above the air) and **fuel**
 `F`. The smoke value `s` stays. The same grid runs in the plane and in space (9.8).
@@ -676,7 +676,7 @@ Choices made while building it in the plane (round 11A, `physics/fire2.ts`, `phy
 
 ### 9.8 Smoke and fire in space
 
-Status: proposed (round 11).
+Status: built (round 11B, `packages/kernel/src/physics/smoke3.ts`, `fire3.ts`, `burn3.ts`; "As built" at the end of this section).
 
 `Smoke(box, n)` and `Fire(box, n)` in space run the same step on a cubic grid of `n` cells a side (4 to 32; one grid in
 space per figure). Flow is staggered as in the plane, with a third speed on the faces across `z`; the pressure solve is
@@ -688,6 +688,18 @@ film stays exact) to halve the memory and the copy. It runs in the physics worke
 - Bodies feel its drag as in 9.4.
 - Checkpoints of a grid in space are kept every 1 s, not every 0.5 s: a 24³ grid is about 390 KB each, so 60 s of film
   is about 23 MB of the 32 MB (10.3). A seek may replay up to 1 s of grid steps (11.2).
+
+**As built (round 11B).** Files: `physics/smoke3.ts` (the grid and its step), `fire3.ts` (the fire's steps), `burn3.ts` (things that burn), `commands/physics/smoke.ts`, `fire.ts`, `smoke-reg.ts`, `fire-reg.ts`, `body3.ts`, `driver3.ts`, `index.ts`. The choices that the plan left open or that differ from the text above:
+
+- **The grid.** `Smoke3` is the plane's `Smoke2` with a third axis: `u`, `v` and `w` on the faces, cell `(k n + j) n + i`, the pressure padded by one ghost cell each side. Every value it keeps (`u v w s T F p`) is a `Float32Array` made once; each stored value is rounded with the array and the arithmetic stays Float64. The cells are `dx × dy × dz` over the bounding box of the region (a box 2 × 2 × 3 m has cells 0.083 × 0.083 × 0.125 m), the pressure solve takes each axis's own weight, and the swirl and its cap use the smallest edge. The step is the plane's, in the plane's order: marks, flow carried (trilinear, the wind from outside), `T` and `F` carried, lift along +z (`a = 0.01 T̄ − 0.5 s̄`), swirl with `ω` a vector (`N × ω`), burning, source, cooling, water, solid faces, 20 red-black passes (ω = 1.8, warm-started, open faces at 0), smoke carried and its mass kept (cap 0.5% × (1 + swirl)), the drag on bodies. A grid with no fire skips the fire steps.
+- **Solids.** Cells are marked inside spheres, convex hulls (their face planes), planes (the floor: `n · x < d`) and terrain (a cell is solid when its centre is under the terrain's triangle at that place); a body's cells take its speed at the face; a body that is not moving at all (the floor) sets its faces to 0 with no sum. A hull thinner than a cell marks the cell of its middle (a thin wall leaks at its edges). The drag is `½ ρ Cd D² |Δv| Δv` with `D` the body's width (`2 × reach`), `ρ = 1.2`, `Cd = 1`, from the mean air speed in the air cells beside the body, at most half the speed difference a smoke step, one step late, added to the world's impulses and counted as `drag`; a push too small to see does not wake a resting body.
+- **Checkpoints.** A grid saves its Float32 values packed two to a Float64 slot (bytes are copied, never read as numbers), so a 24³ grid is 399.7 KB and 60 s of film (a checkpoint a second) is 23.4 MB. A figure with a grid keeps a checkpoint every 1 s, also with cloth (the grid's size decides), which a seek may replay in up to 120 steps. The step budget of a pass counts a grid's cells (a thirty-second of them a body).
+- **Commands.** `Smoke(box, n)` and `Fire(box, n)` take any `Polyhedron` and use its bounding box; `Fire(at: Point3)` is a box 1 m each side of `at` across, from 0.5 m below to 2.5 m above, 24 cells, a ball of fuel of radius 0.25. `source` is a point, a ball or a convex solid. `n` outside 4 to 32 is `bad_property_value`; a second grid in space is `limit` (the 64 × 64 limit of the plane counts only grids in the plane). `sm.at(x, y, z)` and `f.temperature(x, y, z)` take three numbers (the field's type is told by the value, else by the line). The value is the plane's with `spec.space`, `z0`, `z1`, `source3` and `windZ`; its `density` and `temp` are one `Float32Array` each (copies, so the worker moves them to the page each frame).
+- **Where it runs.** A figure with a grid in space runs in the physics worker (`PhysicsWorkerHost` asks the space driver, `hasSmokeGrid()`); the driver steps it after the bodies and the drops and before the cloth, 60 times a second of film (every `round(rate / 60)` world steps). A cloth in a grid feels its flow as wind (`Cloth3.airAt`, trilinear on the faces), and a figure with a grid keeps its cloth awake (a sleeping cloth would not feel a fire that starts later).
+- **Things that burn in space** are bodies, the cells of a sheet and solid shapes (a polyhedron, sphere, cylinder or cone with `solid = true`; round 11B fix round, below). `Body(solid, burns = x, ignite = y)` (and `with burns`) as in the plane; `burns = true` is 10 s a kg, at least 1 s. A body's mass and inertia are 80% less when burnt, the world inverse inertia made again from its turn (the quaternion is not normalised again). At `burnt = 1` it leaves the world as in the plane (`burnt`, joints broken, what rested on it wakes). `Ignite` on a body, a list item or a sheet is an `@input physics ignite name at t` line, as in the plane. A sheet's cell uses the grid cell at its quad's centre and tears through `ClothSet.burnCells`.
+- **After the review (round 11B fix round, `handoff/physics/findings.md` PH-30 to PH-34).** (1) **`Ignite` of a sheet** reaches the space driver: the argument that names an object has no value of its own in the call, so the action read the sheet as a plane thing and refused it with `not_burnable`; it reads the object's value now (a sheet, and a solid shape in space, are told by what they are). (2) **The `torn` notice of a burning sheet** comes: the cloth step clears its count of links torn in the step, and the burnt cells' links were torn before that step, so the count was lost; they are torn after the step, as in the plane (a burning sheet's links in space tear one step later than in the build before, so films of burning sheets in space change a little). (3) **B021 in space** keeps its suggestion `fire = Fire(b.pos)` when the figure already has its one grid in space: the line is refused with `limit`, so the check that offers only lines that would work dropped it. `no_fire_grid` now keeps a suggestion refused for `limit` alone (a plane figure with its 64 × 64 cells used has the same case), and in space the hint says a figure has one smoke or fire grid, so the line should change the grid it has. (4) **Bodies in space count toward the 64 burnable things**, with sheets and solid shapes: the 65th is refused with `limit` by `burns = …` or `with burns`, each item of a list counts. (5) **A solid shape in space that burns** (`p with burns = true`, a number of seconds, `ignite`) is a burnable unit like the plane's: `true` is 10 s a m³ of its volume (at least 1 s), its place is the middle of its box, and a plane, the floor or terrain cannot burn. Once burnt it leaves the world, its cell reads `undefined` with the reason `burnt` (shown once as the notice `burnt`), the grids mark their walls again, the sleeping bodies whose boxes meet it wake (`World3.wakeAround`, used for burnt bodies too, in place of a search of the touching pairs, which made a list each time), and a seek back before the burn gives it back. A rule is told to be a solid by its `solid` style when it is computed, not by the scan of the driver (a rule whose value was not kept before the shelf burnt gave a world built again without the shelf, so the film started over; the driver also keeps the value the rule has when the shelf burns. The plane's driver has the same two guards).
+- **Drawing** is 12.1 ("Smoke and fire in space").
+- **Cost.** A 24³ grid, Float32, 20 passes: about 3.7 ms a smoke step in Node, so a frame is about 4 ms (the plan's budget was 2 ms): the pressure passes alone are 1.3 ms. 32³ is 9 ms, the flag over a fire 5 ms, a seek 130 ms median (11.2). They are candidates for Rust (11.6).
 
 ## 10. Time, exact replay and seeking
 
@@ -726,6 +738,8 @@ Size, at full Float64 precision:
 | Two 64 by 32 cloths | about 200 KB | about 48 MB: thinned after about 40 s |
 
 A figure with cloth saves a checkpoint every **0.25 s** instead of 0.5 s, so a seek steps at most 30 steps (11.2). A checkpoint holds each point's place and speed, the torn links as bits, and the pins.
+
+A figure with a smoke or fire grid in space (9.8) saves a checkpoint every **1 s** instead (0.5 s, or 0.25 s with cloth): a 24³ grid is 399.7 KB a checkpoint (its Float32 values packed two to a slot), so 60 s of film is 23.4 MB, and a 32³ grid (0.95 MB) is thinned after about 30 s. A seek replays at most 1 s of the world, 120 steps.
 
 A figure may use at most **32 MB** for physics checkpoints. Past that, the oldest half of the checkpoints is thinned to every 1 s, then every 2 s, with a notice `checkpoints_thinned`. Seeking into a thinned part takes longer (section 11.2).
 
@@ -824,6 +838,17 @@ Three small steps instead of four (9.5) took the Chrome rows down by 8% to 19%, 
 | 3D liquid, 2,000 drops | | | | 1.60 ms | 1.57 ms | 1.5 ms |
 
 The Chrome means drift by about 10% between runs and over a session on this computer (the first run of the TypeScript loops that day gave the numbers of the round 9 table above), so compare the two columns of this table with each other, not with the table above. The worst frame of the rope is 5 ms with the Rust loops (2.9 ms without), in all three runs; it was not looked into (the product runs cloth in a worker). Rows over their goal in Chrome with the Rust loops: cloth in water, the 32 × 32 on a ball, and the cloth that hits itself (by 14%, 4% and 0%).
+
+**Measured (round 11B), smoke and fire in space.** Node (`physics.bench.ts`, a frame is two steps and one grid step, 20 s after 1 s of warm-up) and Chrome 157 with the CPU 4× slower (`chrome-physics.mjs`, the page's main thread; the product runs it in the worker), Apple M1 Pro:
+
+| Scene | Goal (Chrome ×4) | Chrome mean (95%) | Node goal | Node mean (95%) |
+|---|---|---|---|---|
+| Fire in space, 24³ | 8 ms | 15.5 ms (16.5) | 2 ms | 4.0 to 4.4 ms (5.0) |
+| Fire in space, 32³ | 8 ms | 35.3 ms (36.7) | 4 ms | 9.1 ms (9.7) |
+| 64 × 32 flag over a fire, 24³ | 8 ms | 20.7 ms (22.0) | 2.5 ms | 5.0 to 5.2 ms (5.8) |
+| Seek anywhere in a 60 s film, fire 24³, warm | | | 120 ms | 128 ms median, 300 ms worst |
+
+All four miss their goals by about a factor of two. A smoke step is about 3.7 ms in Node: the 20 pressure passes 1.3 to 1.5, carrying the flow 0.75, `T`, `F` and smoke 0.75, swirl 0.4, the rest 0.3. They are Rust-rule candidates (11.6); no port was made in this round. A checkpoint is 399.7 KB; 200 grid steps make no collection.
 
 ### 11.3 Hard limits
 
@@ -1011,6 +1036,12 @@ flow and the liquid through many hooks, and moving all of it would move most of 
   call and a batch of boxes in one call is the next step), `prepareDrops` and `faceTable` (14% of cloth in water),
   `hitSphere` and the faces a ball meets (about 17% of the 32 × 32 on a ball). Rows still over their goal in Chrome after
   round 1: cloth in water (114%), the 32 × 32 on a ball (104%), self (100%).
+- **Candidates from round 11B (not ported):** the grid in space (9.8). In Chrome with the CPU 4× slower the 24³ fire is 15.5 ms
+  against 8 (194%), the 32³ fire 35.3 ms (441%) and the flag over a fire 20.7 ms (258%), all far over the 25% of the rule. In
+  Node a smoke step is 3.7 ms: the 20 red-black passes of the pressure solve (1.3 to 1.5 ms, 4.8 ns a cell, `Float32Array` was
+  twice as fast as `Float64Array` there), carrying the three speeds (0.75), `T` and `F` (0.4), smoke (0.35) and the swirl (0.4).
+  The passes are the first loop to move: one call a step on the padded pressure and divergence arrays, the fix list for solids
+  and the plain stencil, with the gradient taken off the faces after.
 
 ## 12. Drawing
 
@@ -1041,6 +1072,8 @@ Without WebGL 2, the software painter draws the cloth from every second point (a
 - **Compositing.** There is one canvas on the screen, the 2D one. The page has one WebGL 2 context on a canvas that is never shown (`sharedSpaceGpu()` in `packages/sdk/src/screen/space/gpu3.ts`), shared by every Space view and the PNG export (performance 4.1). Each frame with sheets or drops: (1) the software painter draws the background, floor and faces far to near, with the software dots among them; (2) the GPU writes the faces that hide things (`occludes`, alpha at least 0.5) into its depth buffer only, pushed back a little so a cloth lying on a solid wins; then it draws the opaque sheets, the see-through sheets (no depth write) and the drops, all tested against that depth; (3) its picture is copied over the 2D canvas with `drawImage`; (4) the software painter draws the lines, points and labels on top. Lines and points behind a cloth are drawn dashed and faint, as they are behind a solid: the cloth hides them through a coarse copy of its faces, at most 16 a side. So solids and sheets hide each other per pixel. The limits: a see-through face (a glass tank, a plane, still water) does not hide a sheet or drop behind it, which shows through it as through glass. A sheet or drop in front of a see-through face is drawn over it. Lines and points are judged against the coarse copy, so a line within a few pixels of a cloth's edge can be dashed or not on the wrong side. Labels are always on top, as with solids. A figure with no sheets or drops never touches the GPU.
 - **Without WebGL 2** (the host fault `webgl_unavailable`): the screen's software painter draws a sheet from every `coarse`-th point and every second drop, among the faces as in round 7. The Space pane raises the notice `cloth_drawn_coarse` (B114) once, naming the first object drawn coarser. Waves are drawn as in round 7 (every second corner past 32 a side), which is no coarser than before, so they raise no notice. An SVG always uses the software painter at full detail: every drop, and every point of a cloth. A PNG takes the GPU's picture at its scale, as the screen does.
 - **Speed** (round 9, Chrome 157, Apple M1 Pro, `packages/sdk/bench/chrome-gl.mjs`): a 64 × 32 sheet with threads, 2,000 drops and a ball, 1,000 × 640 px. With the CPU slowed 4 times, the sheet and drops cost about 1.0 ms of the page's frame (median; 95% of frames under 1.4 ms) against the budget of 3 ms. The software fallback on the same page costs 6.1 ms. In Node the page's share is 0.16 ms against a quarter of the budget (0.75 ms).
+
+**Smoke and fire in space (round 11B).** A grid in space is a scene item `volume` (the box, `n`, the `T` and smoke arrays, the fire's `heat`, the smoke colour). *WebGL 2* (`packages/view/src/gl/volume3.ts`): each frame one `texSubImage3D` writes `T / heat` and the smoke into an `RG8` 3D texture (made once per `n`); one full-screen draw a grid marches 48 steps from where each pixel's ray enters the box to where it leaves or meets a solid, front to back, with the plane's black-body ramp of `T` (`fireColor`) as emission times its cover, smoke absorbing `0.85 s` (the covers are for one cell, so a step of `d` cells is `1 − (1 − a)^d`), stopping at alpha 0.98; the output is premultiplied and composited over the sheets and drops. The screen's depth buffer cannot be read, so the painter fills a depth texture of its own (a second pass of the same solids, and a cloth's coarse faces, as triangles) and the shader stops the ray there; the rays come from the inverse of the Space view's own matrix, so every projection works, the eye may be inside the box, and only the box's projected rectangle runs. *Without WebGL 2* the software painter draws 12 slices across the axis that faces the camera most, each cell with a cover over 0.02 a quad of the plane's colour (smoke a grey quad over it), far to near among the faces, with no notice (`cloth_drawn_coarse` is for cloth). PNG takes the GPU's picture; SVG the slices.
 
 ## 13. Where each part lives
 

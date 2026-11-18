@@ -1312,3 +1312,33 @@ describe('a solid shape or a body that burnt away (findings PH-17; design 9.7; e
     expect(g.value('by') as number).toBeLessThan(0.25);
   });
 });
+
+describe('the rules of the 11B fix round, in the plane (findings PH-31, PH-32)', () => {
+  it('PH-31: a rope lit by Ignite tears where it burns and gives the torn notice once, with the links torn so far', () => {
+    all(['g = Ground()', 'cold = Fire(Box((0, 2), 4, 4), 32)', 'rope = Cloth((-1, 1.5), (1, 1.5), 12, mass = 0.05, pins = [(-1, 1.5)], burns = 1)', 'rt = rope.torn', 'rb = rope.burnt']);
+    all(['Ignite(rope)']);
+    let count = 0;
+    let links = 0;
+    for (let k = 1; k <= 60 * 5; k++) {
+      f.setClock(k / 60);
+      for (const w of f.takeWarnings()) {
+        if (w.kind !== 'torn') continue;
+        count++;
+        links = (w.params as { links?: number }).links ?? -1;
+      }
+    }
+    expect(count, 'one torn notice').toBe(1);
+    expect(links).toBeGreaterThan(0);
+    expect(f.value('rb') as number).toBeGreaterThan(0.5);
+    expect(f.value('rt') as number).toBeGreaterThanOrEqual(links);
+  });
+
+  it('PH-32: a body outside every fire still gets fire = Fire(b.pos) when the plane has no room left for the suggested grid', () => {
+    all(['cold = Fire(Box((0, 2), 4, 4), 64)', 'far = Body(Circle((20, 1), 0.2), burns = true)']);
+    // the suggested 48 × 48 fire would be a second grid over the 64 × 64 cells a figure may have: refused with limit, yet it is the line the docs name
+    expect(fail('fire = Fire(far.pos)').kind).toBe('limit');
+    const e = fail('Ignite(far)');
+    expect(e.kind).toBe('no_fire_grid');
+    expect(e.suggest).toEqual(['fire = Fire(far.pos)']);
+  });
+});

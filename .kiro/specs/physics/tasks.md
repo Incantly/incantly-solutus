@@ -104,7 +104,7 @@ Each round is one branch `feat/physics-<n>` and one PR into `integration`, merge
   - [x] 11.2 `Fire` in the plane: temperature and fuel per cell, lift, burning, cooling, the source, named arguments and readouts, B017 and limits, `fire_out`
   - [x] 11.3 `burns` and `Ignite`: heat swap, burning bodies (mass, char, `burnt`, joints break), cloth cells that burn and tear, solid shapes that stop being solid, B020, B021; water that puts fire out
   - [x] 11.4 Drawing in the plane: black-body colour added under the smoke, char on burnt bodies; the crackle with `sound = true`
-  - [ ] 11.5 The grid in space: `Smoke(box, n)`, `Fire(box, n)`, `Fire(at: Point3)`, Float32 cells, in the worker, cloth in its wind, checkpoints every 1 s
-  - [ ] 11.6 Drawing in space: ray marching a 3D texture in the WebGL 2 painter with the solids' depth; 12 slices without WebGL 2; PNG and SVG
-  - [ ] 11.7 (2D examples and `agent.md` rows done in 11A; screenshots, spec tests and the space examples open) Examples, screenshots, spec tests (seek equals play with fire, a log burns away the same on replay, water puts it out, a flag over a fire ripples), the agent's rows in `agent.md`
-  - [ ] 11.8 (the Node row for fire in the plane, 64 × 64, is in `physics.bench.ts`: 0.84 ms; Chrome and space open) Benches for the fire rows of design 11.2 in Node and in Chrome with the CPU 4× slower; the Rust rule of 11.6
+  - [x] 11.5 The grid in space: `Smoke(box, n)`, `Fire(box, n)`, `Fire(at: Point3)`, Float32 cells, in the worker, cloth in its wind, checkpoints every 1 s
+  - [x] 11.6 Drawing in space: ray marching a 3D texture in the WebGL 2 painter with the solids' depth; 12 slices without WebGL 2; PNG and SVG
+  - [ ] 11.7 (2D and space examples and `agent.md` rows done in 11A and 11B; screenshots and spec tests open) Examples, screenshots, spec tests (seek equals play with fire, a log burns away the same on replay, water puts it out, a flag over a fire ripples), the agent's rows in `agent.md`
+  - [x] 11.8 (rows for the plane: 0.84 ms; for space and the Chrome page in `physics.bench.ts` and `chrome-physics.mjs` in 11B, all four space rows about twice their goals: the Rust-rule candidates are written in 11.6, none ported) Benches for the fire rows of design 11.2 in Node and in Chrome with the CPU 4× slower; the Rust rule of 11.6

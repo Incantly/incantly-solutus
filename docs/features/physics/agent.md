@@ -68,9 +68,12 @@ Pour(at: Point|Point3, rate, speed, max?) -> Liquid       # in space: Liquid(Box
 Water(level) -> Water      Water(region, level) -> Water        # floating, cheap
 Waves(box, n) Waves(segment, n, depth?) -> Waves     Smoke(region, n, source?, heat?, wind?, until?, swirl?) -> Smoke   # n 4..64
 Fire(region, n, source?, fuel?, burn?, heat?, smoke?, swirl?, wind?, until?, sound?) -> Fire   Fire(at: Point) -> Fire   # 2 x 4 m, 48 cells
+Smoke(box: Polyhedron, n, source: Point3|Sphere|solid, heat?, wind: Vector3, until?, swirl?)  Fire(box: Polyhedron, n, ...)  Fire(at: Point3)   # in space: n 4..32, one grid a figure; Fire(at) is 2 x 2 x 3 m, 24 cells
 l.count l.level   w.level w.speed w.height(x, y)   sm.mass sm.speed sm.at(x, y)  world with wind = (3, 0)
 f.temperature(x, y) f.burning f.fuel   # and every smoke readout; flames need fuel at a source, or a thing with burns
+sm.at(x, y, z)  f.temperature(x, y, z)   # three numbers for a grid in space; a Cloth in it feels its flow as wind
 wood = Body(Box((0, 0.4), 1.2, 0.2), burns = true)   Cloth(…, burns = true)   p with solid = true, burns = true   # inside a Fire's box
+crate = Body(Box((0, 0, 0.5), 0.5, 0.5, 0.5), burns = 6, ignite = 200)   Cloth((…), …, burns = true)   # in space, in a fire in space
 b.temperature b.burnt b.burning  c.burnt   Ignite(wood)   # burnt away: undefined, reason burnt; never name an object log (reserved)
 ```
 
