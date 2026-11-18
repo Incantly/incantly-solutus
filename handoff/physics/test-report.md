@@ -118,3 +118,19 @@ Covered and passing: `Smoke(box, n)`, `Fire(box, n)` and `Fire(at: Point3)` (box
 - A cloth in a grid with still air is slowed by the relative speed (a flag in a `Smoke` grid with no source swings differently from the same flag with no grid; a rope in a plane `Smoke` grid does the same). Design 9.5 says "with no wind the air does nothing" but also that the push uses the air's speed minus the triangle's, so the test only checks that still air adds no energy. The product owner may want the doc to say which.
 - A solid shape in space does not burn (9.8 "left out"); `p with burns = true` on a polyhedron is refused with `not_burnable`. Not tested further.
 - The body's `force("gravity")` reads 0 at t = 0 in space (it needs a step first); the mass-loss test reads it after 0.2 s.
+
+## 10.10 Rust grid
+
+Tests: `packages/kernel/test/spec/physics-kernels-grid.test.ts`, 41 tests: 41 pass, 0 fail (Node 26.0.0). `npm run lint` passes.
+
+No failing tests for 10.10, so there are no findings for the fixer. What is covered (design 9.8, 10.4, 11.6 "As built, round 2"):
+
+- Kernels on against off, 5 s, every second, `toBe` on every readout (`sm.at(x, y, z)`, `f.temperature(x, y, z)`, `fuel`, `burning`, `mass`, `speed`, body `x`/`y`/`z`, `temperature`, `burnt`, `burning`, cloth `c.at(i, j)`, `torn`, drop `count`, `level`) and `toEqual` on the whole `density`, `temp`, `xs`/`ys`/`zs` and `cut` arrays, plus the notice kinds of each second: fire 24³ (`Fire((0, 0, 0))`), fire 32³, a flag over a fire, a burning crate (`burns = 10`), a crate that burns away (`burns = 2`, with a ball resting on it), smoke round a solid ball in wind, smoke in wind with a ball moving through it, a liquid on a fire whose source stopped (`until = 1`), swirl 10 in a closed box, a fire with swirl 10, `n = 4` and `n = 5` (fire and smoke), a fire in the plane, and a plane fire with a burning log and a rope. Each film moves, and no probe reads `undefined` at 1 s.
+- `physicsKernelsActive(figure)`: true for a figure with only a fire or only a smoke in space, true for a flag over a fire; false for each with `setPhysicsKernels(false)`.
+- Seek equals play with kernels on (checkpoints every 1 s): fire 24³, flag over a fire, burning crate, and the three together; seek 0 → 4 s against play; 4 → 1 → 4 → 2.5 → 4 s against the straight film at each time; a film played with kernels off and sought with kernels on; a seek back from 3 s to 0.5 s and forward, then playing on to 4 s.
+- With `WebAssembly` stubbed undefined and a fresh figure: eight scenes (fire 24³, flag over a fire, crate, smoke round a ball, `n = 4`, `n = 5`, the plane's fire, swirl 10) play 3 s equal to the kernels-off film, no throw; `physicsKernelsActive` does not throw.
+- A figure with a grid built with kernels on and played on with the switch off from 2 s keeps the film; three figures (on, off, on) of a flag over a fire played frame by frame together do not share memory.
+
+Not testable from the public API: the SIMD build (`setPhysicsGridSimd` is not exported from `packages/kernel/src/index.ts`), so "on" is whichever build Node picks. `physicsKernelsActive` for a figure with no WebAssembly is not asserted (the docs give no value).
+
+Seen while running the physics set, not caused by 10.10: `packages/sdk/test/spec/physics-worker.test.ts` has 3 failing tests (`a world with liquid runs whole in the worker ...`, `a push made on the page goes to the worker as an @input line ...`, `a worker that stops hands the world back to the page ...`), all `DataCloneError: Cannot transfer object of unsupported type` at `structuredClone(reply, { transfer })` in the test's same-thread channel. They fail the same with the kernels switched off, the file is unchanged since round 6, and Node 26.0.0 is the runtime here (the repo asks for Node 22 or later). The scene is a plane liquid, which the Rust grid does not touch. Needs a check on the integrator's Node version.
