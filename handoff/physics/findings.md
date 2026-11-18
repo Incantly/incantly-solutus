@@ -87,12 +87,14 @@ tests, 4 fail).
 
 | Id | Where | What | Evidence | Harm | Status |
 |---|---|---|---|---|---|
-| PH-16 | `driver.ts` (hit handlers during a seek), `handlers.ts` | A seek that has to step through a hit runs the `on b hit` handler's physics steps at the seek's end time, not at the hit: `on ball hit: Ignite(wood)` sought from 0 to 6 s logs `@input physics ignite wood at 6` twice and gives another film than playing. Seek must equal play (design 10). Check `Push` in a hit handler too and fix every physics action the same way. | Tester report 11A, notes. | high | open |
-| PH-17 | `driver.ts` burnable shapes | A solid shape that burns away stays solid and reads defined: a ball on a burnt shelf stays up at 8 s. Design 9.7 and errors.md 4: it stops being solid and reads undefined with `burnt`. | Tester failures 2, 3, 4. | high | open |
-| PH-18 | `smoke2.ts` swirl | `swirl = 10` in a closed jar loses 22.9% of the smoke (11.5 "Smoke kept": within 0.1%). Swirl 0.5 and 2 keep it. | Tester failure 1. | medium | open |
-| PH-19 | `driver.ts`, limits | A 65th burnable thing is ignored instead of refused with `limit` (design 11.3: 64). | Builder notes. | medium | open |
+| PH-16 | `driver.ts` (hit handlers during a seek), `handlers.ts` | A seek that has to step through a hit runs the `on b hit` handler's physics steps at the seek's end time, not at the hit: `on ball hit: Ignite(wood)` sought from 0 to 6 s logs `@input physics ignite wood at 6` twice and gives another film than playing. Seek must equal play (design 10). Check `Push` in a hit handler too and fix every physics action the same way. | Tester report 11A, notes. | high | fixed (d9a63af) |
+| PH-17 | `driver.ts` burnable shapes | A solid shape that burns away stays solid and reads defined: a ball on a burnt shelf stays up at 8 s. Design 9.7 and errors.md 4: it stops being solid and reads undefined with `burnt`. | Tester failures 2, 3, 4. | high | fixed (d9a63af) |
+| PH-18 | `smoke2.ts` swirl | `swirl = 10` in a closed jar loses 22.9% of the smoke (11.5 "Smoke kept": within 0.1%). Swirl 0.5 and 2 keep it. | Tester failure 1. | medium | fixed (d9a63af) |
+| PH-19 | `driver.ts`, limits | A 65th burnable thing is ignored instead of refused with `limit` (design 11.3: 64). | Builder notes. | medium | fixed (d9a63af) |
 | PH-20 | `ui.md`, studio tools | No Fire tool, no fire row in `ui.md`, no screenshots or Chrome numbers for fire. | Builder notes. | low | to be implemented (round 11 examples job) |
 | PH-21 | `driver.ts` | A `Pin` to a body that burns away is not handled (not looked at). | Builder notes. | medium | to be implemented |
+| PH-22 | `world2.ts` `save` (contacts), `driver.ts` `worldHash` | A film that rewinds gives another `worldHash` than the same film with the same input lines given at the start, in a number no step reads: the saved `id1` (second feature id) of a contact whose manifold has one point is whatever the pooled contact held before. Positions, speeds and every readout are equal to the bit, and the hashes meet again within a few seconds. | `on ball hit: Push(wood, (0, 2))` (the ball hits at 0.55 s and 0.69 s) played to 2 s, against the played script with the handler line removed: the saved states differ in one number (contact 0, `id1`: 1 against 0) from 0.7 s; equal at 6 s. | low | to be implemented (write 0 for the ids of a point the manifold does not have; check that a manifold that grows to two points never reads the stale ones) |
+| PH-23 | `driver3.ts` / `world3.ts` rewinds | In space, three films of one script differ in the last digits: the played film, the sought film, and the film with the handler's `@input` lines given at the start. The first two rewinds (hits at 0.75 s and 1.65 s) are exact; the third (2.19 s) is not. Cause not found. | `g = Ground()`, `b = Body(Sphere((0, 0, 3), 0.25), bounce = 0.6)`, `c = Body(Sphere((2, 0, 0.25), 0.25))`, `on b hit: Push(c, (0, 2, 0))`, 4 s: three hashes (`cbc17c2d23eb0e5`, `653e3d6a5cb09ca`, `c82782cac2c074a0`); first divergence at 2.2 s, by 2.8e-14 in a contact point (y about 50.35 m); at 4 s seven saved numbers differ by up to 4e-13. Gone with small pushes (the regression tests use them). | medium | to be implemented |
 
 **Fixes for PH-16 to PH-19** (the one fix round):
 
@@ -107,3 +109,41 @@ tests, 4 fail).
   closed sides, and cap its speed change per face per step at `0.5 × min(dx, dy) / h`. The tester's failing test must
   pass unchanged; films with `swirl` 0.5 and 2 may change (state it in design 9.7).
 - PH-19: a 65th thing with `burns` is refused with `limit` (errors.md 3), naming the 64.
+
+**As fixed (fix round, commit d9a63af; the fixer measured each point):**
+
+- PH-16: `afterFlush` (plane and space) sets the film time of the hit (`hit.t`) while a handler runs, and `push`, `ignite`,
+  `wake`, `sleep`, `restart` and the cloth grabs log at that time (`clockNow()`), not at the clock's. The log entry is at a
+  step the world has already passed, so `addEntry` rewinds to the checkpoint before it and the world steps on again with
+  the action in place; the hit is not seen again (`frontier`), so a handler runs once per hit. Two gaps found on the way,
+  fixed with it: (1) `Wake` and `Sleep` changed the world at once and were not in the log (design 5.4: "each action while
+  playing is an entry in the input log"), so a seek back lost them; they are now `@input physics wake|sleep name at t`
+  lines, in the plane and in space, also through the worker. (2) A reloaded script that holds the handler's lines ran the
+  handler again at each hit (a `Push` doubled); an action a hit handler writes that an `@input` line of the script already
+  holds is that line (claimed once, in the order of the log), so the played script and its reload have the same lines.
+  Regression tests: `Ignite`, `Push` (centre and at a point) and `Sleep` in a plane handler, `Push` (centre and at a point)
+  and `Sleep` in a space handler: played, sought from 0 and reloaded give the same hash and the same `@input` lines; seeking
+  back and forth over the hits keeps the film; `Wake` and `Sleep` as lines. They fail on the old code (6 of 8 plane tests).
+- PH-17: a solid shape's cell is overridden in `onCompute` while it has burnt away (reason `burnt`) and written when the
+  state changes, also back after a seek before the burn; the world is still built from the rule's own value, so a line
+  changed after the shelf burnt does not bring it back or start the film again. The ball on the shelf sat asleep and
+  the wall's removal did not wake it: `World2.wakeAround(i)` wakes the sleeping bodies whose boxes meet a body that
+  leaves (a burnt shape or a burnt body; a body that rested on a burnt log fell the same way before it was fixed). The
+  tester's three failing tests for the shelf (the ball, and the two that read the cell) pass unchanged.
+- PH-18: as listed, a face takes at most `0.5 min(dx, dy) / h` of speed from the swirl in a step. **It does not bind and
+  does not keep the smoke**: the jar of the test has `swirl = 10` speeds of 3.4 m/s and a step of 0.5 cells at most, and
+  capping the force at 0.5 down to 0.05 m/s a step left 23% to 17% lost; skipping the cells beside solids changed
+  nothing (all the smoke is inside the jar and none is in a solid). What loses the smoke is carrying it back along a
+  turning flow: the raw loss is 0.4% a step at `swirl = 2` and 0.7% to 1% at `swirl = 10` (design 9.4 says about 0.05% for a plain plume; the jar's own raw loss with no swirl was not measured),
+  and the scale that restores the mass is capped at 0.5% a step. So the cap grows with the swirl: `0.5% × (1 + swirl)`
+  (5.5% at 10), and stays 0.5% with no swirl, so a film with no swirl is unchanged. The jar keeps its mass to 1e-13 for
+  `swirl` 0.5, 2, 3, 6 and 10; the swirled smoke's mean height at 10 s is 0.32 m (the test wants over 0.3). Films with
+  `swirl` of 3 and more change (the mass is kept now); 0.5 and 2 are unchanged (the cap did not bind). Design 9.4 and 9.7
+  say so.
+- PH-19: `burnLimitCheck` (a line check) refuses the line that makes the 65th body (each item of a list counts), cloth or solid
+  shape burn, by `burns = …` or `with burns`, with `limit` and the 64 (a `burns` that is a formula is read while the film
+  plays, where the driver still ignores the things past the 64th). The tester's test that said "the 65th is ignored, with
+  no refusal" contradicts design 11.3 ("Over a limit, the line is refused with `limit`", "Burnable things | 64"); it is
+  rewritten (three tests: the 65th refused, every kind counts, turning one off frees a place).
+
+Found while fixing, not fixed in this round: PH-22 and PH-23 above.
