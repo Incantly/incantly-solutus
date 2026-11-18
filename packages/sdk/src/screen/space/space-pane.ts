@@ -217,6 +217,21 @@ export function mountSpace(opts: SpacePaneOptions): SpacePane {
     return b && typeof b.x === 'number' && typeof b.y === 'number' && typeof b.z === 'number' ? { x: b.x, y: b.y, z: b.z } : undefined;
   };
 
+  const clothMiddle = (name: string): V3 | undefined => {
+    const o = opts.figure().get(name);
+    const c = o?.cell.defined ? (o.cell.value as { schema?: string; xs?: Float64Array; ys?: Float64Array; zs?: Float64Array }) : undefined;
+    if (c?.schema !== 'Cloth' || !c.xs || !c.ys || !c.zs || c.xs.length === 0) return undefined;
+    let x = 0;
+    let y = 0;
+    let z = 0;
+    for (let k = 0; k < c.xs.length; k++) {
+      x += c.xs[k] as number;
+      y += c.ys[k] as number;
+      z += c.zs[k] as number;
+    }
+    return { x: x / c.xs.length, y: y / c.xs.length, z: z / c.xs.length };
+  };
+
   let gesture:
     | { kind: 'orbit' | 'pan'; x: number; y: number; moved: boolean }
     | { kind: 'point'; name: string; from: V3; mode: DragMode; normal: V3; moved: boolean; x: number; y: number }
@@ -236,7 +251,8 @@ export function mountSpace(opts: SpacePaneOptions): SpacePane {
       }
     } else if (hit?.k === 'face' && hit.body !== undefined && opts.drag && (opts.draggable?.(hit.body.replace(/\[\d+\]$/, '')) ?? false)) {
       // a body in space: dragged by its centre, on the camera-facing plane (physics ui.md 4)
-      const from = bodyCentre(hit.body);
+      // a body by its centre; a cloth by its middle (the drag grabs the point nearest the pointer on that plane)
+      const from = bodyCentre(hit.body) ?? clothMiddle(hit.body);
       if (from) gesture = { kind: 'point', name: hit.body, from, mode: e.shiftKey ? 'vertical' : 'plane', normal: facingAxis(cameraFor(viewNow(), w, h)), moved: false, ...p };
       else gesture = { kind: 'orbit', ...p, moved: false };
     } else gesture = { kind: e.shiftKey || e.button === 1 ? 'pan' : 'orbit', ...p, moved: false };

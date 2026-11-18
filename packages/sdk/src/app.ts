@@ -431,6 +431,10 @@ class AppCore implements App {
         // physics ui.md 4: at the start a drag moves where the body starts, later it grabs it
         const r = physics.dragBody(f, name, x, y, done);
         if (!r.ok) return this.failDrag(apiError('api', 'not_draggable', r.why, { hint: 'Drag the shape it is made from.', detail: { name, reason: 'body' } }), done);
+      } else if (o.type === 'Cloth') {
+        // physics ui.md 4: at the start a drag moves where the cloth starts, later it grabs its nearest point
+        const r = physics.dragCloth(f, name, { x, y, z: z ?? 0 }, done);
+        if (!r.ok) return this.failDrag(apiError('api', 'not_draggable', r.why, { hint: 'Drag the points it is made from.', detail: { name, reason: 'cloth' } }), done);
       } else if (o.type === 'Body3' || o.typeText === 'List<Body3>') {
         const r = physics.dragBody3(f, name, { x, y, z: z ?? 0 }, done);
         if (!r.ok) return this.failDrag(apiError('api', 'not_draggable', r.why, { hint: 'Drag the solid it is made from.', detail: { name, reason: 'body' } }), done);

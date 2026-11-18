@@ -40,8 +40,14 @@ import { WaterForces3 } from '../../physics/water3';
 import { WaveGrid } from '../../physics/waves';
 import type { LiquidValue, WaterValue, WavesValue } from './liquid';
 import { inSpace, isLiquidValue, isWaterValue, isWavesValue } from './liquid';
+import { Cloth3 } from '../../physics/cloth3';
+import type { PinDef } from '../../physics/cloth';
+import type { ClothSpec, ClothValue } from './cloth';
+import { clothDef, isClothValue, isPinValue } from './cloth';
 
 const CHECKPOINT_SECONDS = 0.5;
+/** A figure with cloth keeps a checkpoint every 0.25 s, so a seek steps at most 30 steps (design 10.3). */
+const CLOTH_CHECKPOINT_SECONDS = 0.25;
 const CHECKPOINT_BYTES = 32 * 1024 * 1024;
 const STEP_BUDGET = 60000;
 const BLOW_UP = 1e6;
@@ -56,7 +62,9 @@ export type LogEntry3 =
   | { readonly kind: 'grab'; readonly n: number; readonly id: ObjId; readonly item?: number; readonly to: V3; readonly a: V3 }
   | { readonly kind: 'release'; readonly n: number; readonly id: ObjId; readonly item?: number }
   | { readonly kind: 'reset'; readonly n: number }
-  | { readonly kind: 'set'; readonly n: number; readonly id: ObjId; readonly value: unknown };
+  | { readonly kind: 'set'; readonly n: number; readonly id: ObjId; readonly value: unknown }
+  | { readonly kind: 'cgrab'; readonly n: number; readonly id: ObjId; readonly point: number; readonly to: V3 }
+  | { readonly kind: 'crelease'; readonly n: number; readonly id: ObjId; readonly point: number };
 
 type AnyJoint3 = Hinge3 | Distance3 | Weld3 | Slider3;
 
@@ -85,8 +93,29 @@ interface Member3 {
 
 /** True when the figure holds a body, a liquid or waves in space: then it is a world in space. */
 export function isSpaceWorld(list: readonly ObjRec[]): boolean {
-  for (const r of list) if (isBody3Rec(r) || isSpaceFluidRec(r)) return true;
+  for (const r of list) if (isBody3Rec(r) || isSpaceFluidRec(r) || isSpaceClothRec(r)) return true;
   return false;
+}
+
+/** A cloth (or a pin on one) in space: told by the form its line was checked with (a sheet starts at a `Point3`). */
+export function isSpaceClothRec(r: ObjRec): boolean {
+  const k = r.p.type.k;
+  if (k === 'Pin') return r.cell.defined && isPinValue(r.cell.value) ? r.cell.value.space : /Point3/.test(formFirst(r) ?? '') || pinOnSpaceCloth(r);
+  if (k !== 'Cloth') return false;
+  const t = formFirst(r);
+  if (t !== undefined) return t === 'Point3';
+  return r.cell.defined && isClothValue(r.cell.value) && r.cell.value.spec.space;
+}
+
+function formFirst(r: ObjRec): string | undefined {
+  const e = (r.p.checked as { readonly expr?: { readonly n?: string; readonly form?: { readonly params?: readonly { readonly type: string }[] } } }).expr;
+  return e?.n === 'command' ? e.form?.params?.[0]?.type : undefined;
+}
+
+/** A pin whose cloth is in space (its first input). */
+function pinOnSpaceCloth(r: ObjRec): boolean {
+  const c = r.inputs[0];
+  return c !== undefined && c.p.type.k === 'Cloth' && isSpaceClothRec(c);
 }
 
 /**
@@ -168,7 +197,7 @@ export class Physics3Driver implements WorldDriver {
   private startInputs = new Set<ObjId>();
   private brokeAt = new WeakMap<object, number>();
   /** Joints and wheels that broke, for the teacher's `figure` result. */
-  events: { readonly t: number; readonly kind: 'broken'; readonly name: string }[] = [];
+  events: { readonly t: number; readonly kind: 'broken' | 'torn'; readonly name: string; readonly links?: number }[] = [];
   /** Terrain heights, kept while the function, the box and the grid stay the same (a body line does not remeasure it). */
   private terrainCache = new Map<ObjId, { key: unknown[]; shapes: ShapeDef3[] }>();
   /* liquid, still water and waves in space (round 7; design 9.1 to 9.3, 9.6) */
@@ -182,6 +211,13 @@ export class Physics3Driver implements WorldDriver {
   waveMembers: { readonly rec: ObjRec; readonly value: WavesValue; readonly grid: WaveGrid }[] = [];
   private waters: Water3[] = [];
   private waterForces = new WaterForces3();
+  /* cloth in space (round 9; design 9.5, 9.6) */
+  private clothRecs: ObjRec[] = [];
+  private pinRecs: ObjRec[] = [];
+  private clothSpecs = new Map<ObjId, ClothValue>();
+  cloth: Cloth3 | undefined;
+  clothMembers: { readonly rec: ObjRec; readonly value: ClothValue; readonly index: number }[] = [];
+  private pinMembers: ObjRec[] = [];
 
   constructor(readonly figure: Figure) {
     this.acc = figure.driverAccess();
@@ -235,6 +271,13 @@ export class Physics3Driver implements WorldDriver {
       else this.wavesSpecs.delete(rec.id);
       const last = this.lastCells.get(rec.id);
       if (last && computed.defined && this.live() && last.defined && isWavesValue(last.value) && isWavesValue(computed.value) && sameValue(wavesKey(last.value), wavesKey(computed.value))) return last;
+      return undefined;
+    }
+    if (k === 'Cloth' && isSpaceClothRec(rec)) {
+      if (computed.defined && isClothValue(computed.value)) this.clothSpecs.set(rec.id, computed.value);
+      else this.clothSpecs.delete(rec.id);
+      const last = this.lastCells.get(rec.id);
+      if (last && computed.defined && this.live() && last.defined && isClothValue(last.value) && isClothValue(computed.value) && sameValue(last.value.spec, computed.value.spec)) return last;
       return undefined;
     }
     if (k === 'World' && this.hasWorld()) {
@@ -292,6 +335,16 @@ export class Physics3Driver implements WorldDriver {
       }
       return undefined;
     }
+    if (rec.p.type.k === 'Cloth') {
+      // a grab of a cloth point: its index, then where the pointer is
+      const nums = words.slice(3, -2).map(Number);
+      const point = nums[0];
+      if (point === undefined || !Number.isInteger(point) || point < 0 || nums.some((x) => !Number.isFinite(x))) return 'a point index: @input physics grab flag 37 1 0 2 at 2.5';
+      if (kind === 'grab' && nums.length >= 4) this.addEntry({ kind: 'cgrab', n, id: rec.id, point, to: { x: nums[1] as number, y: nums[2] as number, z: nums[3] as number } });
+      else if (kind === 'release') this.addEntry({ kind: 'crelease', n, id: rec.id, point });
+      else return 'grab or release, with the point index and three numbers';
+      return undefined;
+    }
     if (!isBody3Rec(rec)) return false;
     const item = listed ? Number(listed[2]) - 1 : undefined;
     const it = item !== undefined ? { item } : {};
@@ -321,6 +374,7 @@ export class Physics3Driver implements WorldDriver {
     if (this.remote) return this.remoteCells.has(this.acc.byId(id)?.p.name ?? '');
     if (this.byId.has(id) || (this.hasWorld() && this.worldRec?.id === id)) return true;
     if (this.liquidMembers.some((l) => l.rec.id === id) || this.waveMembers.some((m) => m.rec.id === id)) return true;
+    if (this.clothMembers.some((c) => c.rec.id === id) || this.pinMembers.some((r) => r.id === id)) return true;
     return this.world !== undefined && [...this.jointRecs, ...this.wheelRecs, ...this.vehicleRecs].some((r) => r.id === id);
   }
 
@@ -371,8 +425,11 @@ export class Physics3Driver implements WorldDriver {
       if (this.world) {
         this.world = undefined;
         this.fluid = undefined;
+        this.cloth = undefined;
+        this.clothMembers = [];
         this.liquidMembers = [];
         this.waveMembers = [];
+        this.stillCells.clear();
         this.members = [];
         this.byId = new Map();
         this.sig = undefined;
@@ -436,11 +493,16 @@ export class Physics3Driver implements WorldDriver {
     this.liquidRecs = [];
     this.waterRecs = [];
     this.wavesRecs = [];
+    this.clothRecs = [];
+    this.pinRecs = [];
     this.worldRec = undefined;
     this.spaceRec = undefined;
     for (const r of this.acc.list) {
       const k = r.p.type.k;
       if (isBody3Rec(r)) this.bodyRecs.push(r);
+      else if (k === 'Cloth' || k === 'Pin') {
+        if (isSpaceClothRec(r)) (k === 'Cloth' ? this.clothRecs : this.pinRecs).push(r);
+      }
       else if (k === 'Liquid' || k === 'Waves') {
         if (isSpaceFluidRec(r)) (k === 'Liquid' ? this.liquidRecs : this.wavesRecs).push(r);
       } else if (k === 'Water') this.waterRecs.push(r);
@@ -574,6 +636,11 @@ export class Physics3Driver implements WorldDriver {
       const v = this.wavesOf(r);
       sig.push(r.id, v ? wavesKey(v) : null);
     }
+    for (const r of this.clothRecs) sig.push(r.id, this.clothOf(r)?.spec ?? null);
+    for (const r of this.pinRecs) {
+      const v = r.cell.defined && isPinValue(r.cell.value) ? r.cell.value : undefined;
+      sig.push(r.id, v ? [v.point, v.cloth, v.body ? specKey(v.body as never) : null] : null);
+    }
     return sig;
   }
 
@@ -653,11 +720,14 @@ export class Physics3Driver implements WorldDriver {
       defs.push({ type: BodyType3.Static, shapes, friction: this.styleNumber(r, 'friction', Number.NaN), bounce: this.styleNumber(r, 'bounce', 0) });
       members.push({ rec: r, role: 'solid', index: defs.length - 1 });
     }
-    if (!members.some((m) => m.role === 'body') && !this.liquidRecs.some((r) => this.liquidOf(r) !== undefined) && !this.wavesRecs.some((r) => this.wavesOf(r) !== undefined)) {
+    if (!members.some((m) => m.role === 'body') && !this.liquidRecs.some((r) => this.liquidOf(r) !== undefined) && !this.wavesRecs.some((r) => this.wavesOf(r) !== undefined) && !this.clothRecs.some((r) => this.clothOf(r) !== undefined)) {
       this.world = undefined;
       this.fluid = undefined;
+      this.cloth = undefined;
+      this.clothMembers = [];
       this.liquidMembers = [];
       this.waveMembers = [];
+      this.stillCells.clear();
       this.members = [];
       this.byId = new Map();
       return;
@@ -690,6 +760,7 @@ export class Physics3Driver implements WorldDriver {
     world.sleeping = w.sleep;
     world.range = w.range;
     this.world = world;
+    this.stillCells.clear();
     this.members = members;
     this.byId = new Map();
     for (const m of members) if (!this.byId.has(m.rec.id)) this.byId.set(m.rec.id, m);
@@ -720,6 +791,7 @@ export class Physics3Driver implements WorldDriver {
     }
     this.buildFluid();
     this.buildWaves(world);
+    this.buildCloth(world, members);
     this.refreshWaters(true);
     this.n = 0;
     this.prevP = Float64Array.from(world.p);
@@ -728,7 +800,7 @@ export class Physics3Driver implements WorldDriver {
     // a whole number of the drops' pair-listing rounds (twice, for the speed smoothing on every second step), so the step
     // after a checkpoint lists them as the film did
     const K = 2 * PAIR_EVERY;
-    this.cpStride = Math.max(K, K * Math.round((CHECKPOINT_SECONDS * this.rate) / K));
+    this.cpStride = this.cloth ? Math.max(K, K * Math.floor((CLOTH_CHECKPOINT_SECONDS * this.rate) / K)) : Math.max(K, K * Math.round((CHECKPOINT_SECONDS * this.rate) / K));
     this.cpBytes = 0;
     this.failedAt = new Map();
     this.leftAt = new Map();
@@ -878,7 +950,7 @@ export class Physics3Driver implements WorldDriver {
     // a drop costs about a quarter of an awake body, a wave cell a sixty-fourth
     let cells = 0;
     for (const m of this.waveMembers) cells += m.grid.n;
-    const perStep = Math.max(1, w.awakeCount() + 1 + Math.ceil((this.fluid?.ps.n ?? 0) / 4) + Math.ceil(cells / 64));
+    const perStep = Math.max(1, w.awakeCount() + 1 + Math.ceil((this.fluid?.ps.n ?? 0) / 4) + Math.ceil(cells / 64) + Math.ceil((this.cloth?.n ?? 0) / 8));
     let steps = Math.max(2, Math.floor(budget / perStep));
     const varying = this.cone.length > 0 || this.varyingStyle.length > 0 || this.varyingWorld || this.base.size > 0;
     const saved = varying ? this.saveCells() : undefined;
@@ -927,15 +999,18 @@ export class Physics3Driver implements WorldDriver {
       this.refreshWaters(false);
       this.waterForces.apply(w, this.waters, h);
     }
+    const cl = this.cloth;
+    if (cl) cl.applyImpulses(w);
     this.prevP.set(w.p);
     this.prevQ.set(w.q);
     w.step(h);
     this.n = n + 1;
     if (this.waters.length > 0) this.waterForces.account(w);
+    if (cl) cl.account(w, h);
+    if (fl || cl) for (let i = 0; i < w.n; i++) if (w.type[i] !== BodyType3.Static && !w.gone.has(i)) w.updateShapes(i);
     if (fl) {
       fl.account(w, h);
-      // then the drops take their step against the bodies where they are now
-      for (let i = 0; i < w.n; i++) if (w.type[i] !== BodyType3.Static && !w.gone.has(i)) w.updateShapes(i);
+      // then the drops take their step against the bodies where they are now (they meet the cloth in its step)
       fl.step(w, h, w.range);
       const t = Number((this.t0 + this.n / this.rate).toFixed(3));
       for (const owner of fl.left) {
@@ -943,6 +1018,10 @@ export class Physics3Driver implements WorldDriver {
         if (lm) this.warnOnce(`drops:${lm.rec.id}`, makeNotice('left_world', { name: `drops of ${lm.rec.p.name}`, t }, [lm.rec.p.name]));
       }
       if (fl.unstable) for (const lm of this.liquidMembers) this.warnOnce(`unstable-liquid:${lm.rec.id}`, makeNotice('unstable_world', { name: lm.rec.p.name, t, hint: 'make the liquid less viscous or use world with timestep = 1/240' }, [lm.rec.p.name]));
+    }
+    if (cl) {
+      cl.useDrops(fl);
+      this.stepCloth(cl, w, h);
     }
     this.checkHealth();
     for (const jm of [...this.jointMembers, ...this.wheelMembers]) {
@@ -1138,6 +1217,14 @@ export class Physics3Driver implements WorldDriver {
         if (w) out.push(`@input physics set ${base} ${w} at ${t(e.n)}`);
         continue;
       }
+      if (e.kind === 'cgrab') {
+        out.push(`@input physics grab ${base} ${e.point} ${v3(e.to)} at ${t(e.n)}`);
+        continue;
+      }
+      if (e.kind === 'crelease') {
+        out.push(`@input physics release ${base} ${e.point} at ${t(e.n)}`);
+        continue;
+      }
       const nm = e.item !== undefined ? `${base}[${e.item + 1}]` : base;
       if (e.kind === 'push') out.push(`@input physics push ${nm} ${v3(e.j)}${e.at ? ` ${v3(e.at)}` : ''} at ${t(e.n)}`);
       else if (e.kind === 'grab') out.push(`@input physics grab ${nm} ${v3(e.to)} ${v3(e.a)} at ${t(e.n)}`);
@@ -1160,7 +1247,7 @@ export class Physics3Driver implements WorldDriver {
         this.grabs.clear();
         continue;
       }
-      if (e.kind === 'set') continue;
+      if (e.kind === 'set' || e.kind === 'cgrab' || e.kind === 'crelease') continue;
       const m = this.memberOf(e.id, e.item);
       if (!m) continue;
       const i = m.index;
@@ -1313,11 +1400,53 @@ export class Physics3Driver implements WorldDriver {
     if (this.failedAt.has(i)) return { defined: false, reason: 'unstable_world' };
     if (this.leftAt.has(i)) return { defined: false, reason: 'left_world' };
     const w = this.world as World3;
+    const touching = (this.touchLists[i] ?? []).map((k) => this.nameOfIndex[k] ?? '').filter((s) => s !== '');
+    // a body at rest (asleep, or fixed) writes the very cell it wrote last time while nothing of it changed, so the
+    // update pass sees the same value at once instead of comparing a new one field by field
+    const still = w.type[i] !== BodyType3.Dynamic || w.awake[i] === 0;
+    const key = still ? this.stillKey(i, alpha) : undefined;
+    const tkey = still ? touching.join('\u0000') : '';
+    if (key) {
+      const c = this.stillCells.get(m);
+      if (c && c.spec === m.spec && c.touching === tkey && c.key.length === key.length && c.key.every((a, k) => Object.is(a, key[k]))) return c.cell;
+    }
     const v = this.liveValue(m, alpha);
     const forces = Float64Array.from(w.forces.subarray(i * NK * 3, (i + 1) * NK * 3));
     if (v.asleep) forces.fill(0, FK3.net * 3, FK3.net * 3 + 3);
-    const touching = (this.touchLists[i] ?? []).map((k) => this.nameOfIndex[k] ?? '').filter((s) => s !== '');
-    return { defined: true, value: { ...v, forces, touching } };
+    const cell: Cell = { defined: true, value: { ...v, forces, touching } };
+    if (key) this.stillCells.set(m, { key, spec: m.spec, touching: tkey, cell });
+    else this.stillCells.delete(m);
+    return cell;
+  }
+
+  /** The last cell of each body at rest, with what it was made from: its pose, speeds and forces, and what it touched. */
+  private readonly stillCells = new Map<Member3, { key: Float64Array; spec: unknown; touching: string; cell: Cell }>();
+
+  /** What a resting body's cell is made from, as numbers (the drawn pose, the speeds, the forces). */
+  private stillKey(i: number, alpha: number): Float64Array {
+    const w = this.world as World3;
+    const { p, q } = this.pose(i, alpha);
+    const k = new Float64Array(20 + NK * 3);
+    k[13 + NK * 3] = this.prevP[i * 3] as number;
+    k[14 + NK * 3] = this.prevP[i * 3 + 1] as number;
+    k[15 + NK * 3] = this.prevP[i * 3 + 2] as number;
+    k[16 + NK * 3] = w.gx;
+    k[17 + NK * 3] = w.gy;
+    k[18 + NK * 3] = w.gz;
+    k[19 + NK * 3] = w.mass[i] as number;
+    k[0] = p.x;
+    k[1] = p.y;
+    k[2] = p.z;
+    k[3] = q[0];
+    k[4] = q[1];
+    k[5] = q[2];
+    k[6] = q[3];
+    for (let a = 0; a < 3; a++) {
+      k[7 + a] = w.v[i * 3 + a] as number;
+      k[10 + a] = w.w[i * 3 + a] as number;
+    }
+    k.set(w.forces.subarray(i * NK * 3, (i + 1) * NK * 3), 13);
+    return k;
   }
 
   private writeCells(alpha: number): ObjRec[] {
@@ -1342,6 +1471,7 @@ export class Physics3Driver implements WorldDriver {
     for (const [rec, arr] of lists) this.put(rec, { defined: true, value: arr }, changed);
     this.writeLinks(alpha, changed);
     this.writeFluids(alpha, changed);
+    this.writeCloth(alpha, changed);
     if (this.worldRec) {
       const s = this.settings();
       let energy = 0;
@@ -1519,7 +1649,7 @@ export class Physics3Driver implements WorldDriver {
 
   /** True when the figure holds a world in space: bodies, or drops or waves with no bodies yet. */
   private hasWorld(): boolean {
-    return this.bodyRecs.length > 0 || this.liquidRecs.length > 0 || this.wavesRecs.length > 0;
+    return this.bodyRecs.length > 0 || this.liquidRecs.length > 0 || this.wavesRecs.length > 0 || this.clothRecs.length > 0;
   }
 
   /** The world is built here or held by the worker: a rule run of an owned object keeps what the world wrote. */
@@ -1624,7 +1754,7 @@ export class Physics3Driver implements WorldDriver {
       fs.set(w.forces.subarray(i * NK * 3, (i + 1) * NK * 3), q);
       q += NK * 3;
     }
-    const parts = [ws, fs, ...(this.fluid ? [this.fluid.save()] : []), ...this.waveMembers.map((m) => m.grid.save())];
+    const parts = [ws, fs, ...(this.fluid ? [this.fluid.save()] : []), ...this.waveMembers.map((m) => m.grid.save()), ...(this.cloth ? [this.cloth.save()] : [])];
     let len = 1 + parts.length;
     for (const p of parts) len += p.length;
     const out = new Float64Array(len);
@@ -1658,6 +1788,7 @@ export class Physics3Driver implements WorldDriver {
     let i = 2;
     if (this.fluid) this.fluid.load(part(i++));
     for (const m of this.waveMembers) m.grid.load(part(i++));
+    if (this.cloth) this.cloth.load(part(i));
   }
 
   /** A hash of everything a step reads (FNV-1a over the bytes): equal films have equal hashes at every step. */
@@ -1685,6 +1816,178 @@ export class Physics3Driver implements WorldDriver {
     return m ? m.grid.heightAt(x, y) : Number.NaN;
   }
 
+  /* ------------------------------ cloth (round 9; design 9.5, 9.6) ------------------------------ */
+
+  private clothOf(r: ObjRec): ClothValue | undefined {
+    const s = this.clothSpecs.get(r.id);
+    const v = s ?? (!this.written.has(r.id) && r.cell.defined && isClothValue(r.cell.value) ? r.cell.value : undefined);
+    if (!v || !v.spec.space) return undefined;
+    if (!s) this.clothSpecs.set(r.id, v);
+    return v;
+  }
+
+  /** Every cloth of the world in one set, in figure order, with its `pins` and the `Pin` lines on it. */
+  private buildCloth(world: World3, members: readonly Member3[]): void {
+    this.cloth = undefined;
+    this.clothMembers = [];
+    this.pinMembers = [];
+    const list: { rec: ObjRec; v: ClothValue }[] = [];
+    for (const r of this.clothRecs) {
+      const v = this.clothOf(r);
+      if (v) list.push({ rec: r, v });
+    }
+    if (list.length === 0) return;
+    const extra = new Map<ClothSpec, PinDef[]>();
+    for (const r of this.pinRecs) {
+      const pv = r.cell.defined && isPinValue(r.cell.value) ? r.cell.value : undefined;
+      if (!pv) continue;
+      let body = -1;
+      if (pv.body) {
+        const b = this.endIndex({ spec: pv.body as BodySpec3 }, members);
+        if (b === undefined) continue;
+        body = b;
+      }
+      const key = list.find((l) => l.v.spec === pv.cloth || sameValue(l.v.spec, pv.cloth))?.v.spec;
+      if (!key) continue;
+      const arr = extra.get(key) ?? [];
+      arr.push({ point: pv.point, body });
+      extra.set(key, arr);
+      this.pinMembers.push(r);
+    }
+    const defs = list.map(({ v }) => clothDef(v.spec, extra.get(v.spec) ?? []));
+    const c = new Cloth3(defs);
+    c.sleeping = world.sleeping;
+    c.attach(world);
+    this.cloth = c;
+    this.clothMembers = list.map(({ rec, v }, index) => ({ rec, value: v, index }));
+  }
+
+  /** The wind of this step (a formula of `t` is read at each step) and the grabs the log holds at step n. */
+  private clothInputs(c: Cloth3, n: number): void {
+    const wv = this.varyingWorld && this.worldRec?.cell.defined && isWorldValue(this.worldRec.cell.value) ? this.worldRec.cell.value : this.settings();
+    c.windX = wv.windX;
+    c.windY = wv.windY;
+    c.windZ = wv.windZ;
+    c.releaseAll();
+    if (!this.log.some((e) => e.kind === 'cgrab')) return;
+    // the grab that holds each point at step n: its last grab, unless released since
+    const held = new Map<string, V3 | undefined>();
+    for (const e of this.log) {
+      if (e.n > n) break;
+      if (e.kind === 'cgrab') held.set(`${e.id}:${e.point}`, e.to);
+      else if (e.kind === 'crelease') held.set(`${e.id}:${e.point}`, undefined);
+      else if (e.kind === 'reset') held.clear();
+    }
+    for (const [key, to] of held) {
+      if (!to) continue;
+      const [id, point] = key.split(':');
+      const m = this.clothMembers.find((cm) => String(cm.rec.id) === id);
+      const info = m ? c.cloths[m.index] : undefined;
+      if (!info) continue;
+      const i = info.p0 + Number(point);
+      if (i < info.p0 + info.n) c.grab(i, to.x, to.y, to.z);
+    }
+  }
+
+  private stepCloth(c: Cloth3, w: World3, h: number): void {
+    this.clothInputs(c, this.n - 1);
+    c.sleeping = w.sleeping;
+    c.step(w, h);
+    const t = Number((this.t0 + this.n / this.rate).toFixed(3));
+    for (const cm of this.clothMembers) {
+      const info = c.cloths[cm.index];
+      if (!info) continue;
+      const torn = c.tornNow[cm.index] as number;
+      if (torn > 0 && !this.sampling && this.n > this.frontier) {
+        this.events.push({ t: this.t0 + this.n / this.rate, kind: 'torn', name: cm.rec.p.name, links: torn });
+        this.warnOnce(`torn:${cm.rec.id}`, makeNotice('torn', { name: cm.rec.p.name, t, links: info.torn }, [cm.rec.p.name]));
+      }
+      if (info.unstable) this.warnOnce(`unstable-cloth:${cm.rec.id}`, makeNotice('unstable_world', { name: cm.rec.p.name, t, hint: 'lower stretch a little, or add damping' }, [cm.rec.p.name]));
+    }
+  }
+
+  /** Each cloth's points where they are (between the last two steps), and its readouts. */
+  private writeCloth(alpha: number, changed: ObjRec[]): void {
+    const c = this.cloth;
+    if (!c) return;
+    for (const cm of this.clothMembers) {
+      const info = c.cloths[cm.index];
+      if (!info) continue;
+      if (info.unstable) {
+        this.put(cm.rec, { defined: false, reason: 'unstable_world' }, changed);
+        continue;
+      }
+      const n = info.n;
+      const xs = new Float64Array(n);
+      const ys = new Float64Array(n);
+      const zs = new Float64Array(n);
+      for (let k = 0; k < n; k++) {
+        const i = info.p0 + k;
+        const sx = c.sx[i] as number;
+        const sy = c.sy[i] as number;
+        const sz = c.sz[i] as number;
+        xs[k] = sx + ((c.x[i] as number) - sx) * alpha;
+        ys[k] = sy + ((c.y[i] as number) - sy) * alpha;
+        zs[k] = sz + ((c.z[i] as number) - sz) * alpha;
+      }
+      const cut = new Uint8Array(info.tn);
+      if (info.torn > 0) for (let t = 0; t < info.tn; t++) cut[t] = c.triTorn(info.t0 + t) ? 1 : 0;
+      const pinsAt: number[] = [];
+      for (let q = info.pin0; q < info.pin0 + info.pinN; q++) {
+        const i = c.pinPoint[q] as number;
+        pinsAt.push(xs[i - info.p0] as number, ys[i - info.p0] as number, zs[i - info.p0] as number);
+      }
+      const touching = c.touching(cm.index).map((b) => this.nameOfIndex[b] ?? '').filter((s) => s !== '');
+      const value: ClothValue = { ...cm.value, xs, ys, zs, cut, torn: info.torn, stretchMax: c.stretchMax(cm.index), energy: c.energy(cm.index), asleep: info.asleep, touching, pinsAt };
+      this.put(cm.rec, { defined: true, value }, changed);
+    }
+  }
+
+  /** The point of a cloth nearest a point in space now (for a drag), or undefined. */
+  clothPointNear(id: ObjId, at: V3): number | undefined {
+    const m = this.clothMembers.find((cm) => cm.rec.id === id);
+    const info = m && this.cloth ? this.cloth.cloths[m.index] : undefined;
+    if (!m || !info || !this.cloth) {
+      const r = this.acc.byId(id);
+      const v = r?.cell.defined && isClothValue(r.cell.value) ? r.cell.value : undefined;
+      if (!v) return undefined;
+      let best = 0;
+      let bd = Infinity;
+      for (let k = 0; k < v.xs.length; k++) {
+        const d = ((v.xs[k] as number) - at.x) ** 2 + ((v.ys[k] as number) - at.y) ** 2 + ((v.zs[k] as number) - at.z) ** 2;
+        if (d < bd) {
+          bd = d;
+          best = k;
+        }
+      }
+      return best;
+    }
+    return this.cloth.nearest(m.index, at.x, at.y, at.z) - info.p0;
+  }
+
+  /** The learner takes hold of point `point` of a cloth and moves it to `to` (logged with the point's index, ui.md 4). */
+  grabCloth(id: ObjId, point: number, to: V3): boolean {
+    if (this.remote) return this.sendInput(id, undefined, 'grab', [point, to.x, to.y, to.z]);
+    if (!this.clothMembers.some((cm) => cm.rec.id === id)) return false;
+    this.addEntry({ kind: 'cgrab', n: this.gridAt(this.acc.clockT()), id, point, to });
+    return true;
+  }
+
+  releaseCloth(id: ObjId, point: number): void {
+    if (this.remote) {
+      this.sendInput(id, undefined, 'release', [point]);
+      return;
+    }
+    if (!this.clothMembers.some((cm) => cm.rec.id === id)) return;
+    this.addEntry({ kind: 'crelease', n: this.gridAt(this.acc.clockT()), id, point });
+  }
+
+  /** The forces the pins of a cloth carry now (N), summed: for lessons and tests. */
+  pinForce(id: ObjId): V3 | undefined {
+    const m = this.clothMembers.find((cm) => cm.rec.id === id);
+    return m && this.cloth ? this.cloth.pinForce3(m.index) : undefined;
+  }
+
   /* ------------------------------ in a worker (design 9.6; round 7) ------------------------------ */
 
   /** True while the world runs in a worker: this driver writes the cells it is sent and steps nothing. */
@@ -1693,7 +1996,7 @@ export class Physics3Driver implements WorldDriver {
   /** `@input` lines made on the page not yet sent to the worker, and every line of the film, for saving. */
   private outbox: string[] = [];
   private remoteLog: string[] = [];
-  remoteInfo = { drops: 0, awake: 0, contacts: 0, hash: '' };
+  remoteInfo: { drops: number; awake: number; contacts: number; hash: string; cloth?: number } = { drops: 0, awake: 0, contacts: 0, hash: '' };
 
   /** Hands the world to a worker (or takes it back: then it is built again here, from its start, with the same log). */
   setRemote(on: boolean): void {
@@ -1714,6 +2017,8 @@ export class Physics3Driver implements WorldDriver {
       this.remoteLog = this.inputLines();
       this.world = undefined;
       this.fluid = undefined;
+      this.cloth = undefined;
+      this.clothMembers = [];
       this.liquidMembers = [];
       this.waveMembers = [];
       this.sig = undefined;
@@ -1721,7 +2026,7 @@ export class Physics3Driver implements WorldDriver {
   }
 
   /** The cells the worker computed for a frame, written on the next pass; and the worker's whole log, when it changed. */
-  accept(cells: readonly (readonly [string, Cell])[], info?: { drops: number; awake: number; contacts: number; hash: string }, log?: readonly string[]): void {
+  accept(cells: readonly (readonly [string, Cell])[], info?: { drops: number; awake: number; contacts: number; hash: string; cloth?: number }, log?: readonly string[]): void {
     for (const [name, cell] of cells) this.remoteCells.set(name, cell);
     if (info) this.remoteInfo = info;
     // the worker logs what it was sent and what it made itself (a pedal moved while the film played): its log, plus the
@@ -1756,6 +2061,7 @@ export class Physics3Driver implements WorldDriver {
     for (const r of this.vehicleRecs) add(r);
     for (const l of this.liquidMembers) add(l.rec);
     for (const m of this.waveMembers) add(m.rec);
+    for (const c of this.clothMembers) add(c.rec);
     if (this.worldRec) add(this.worldRec);
     return { cells, transfer };
   }

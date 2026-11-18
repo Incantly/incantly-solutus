@@ -26,7 +26,7 @@ export const FORCE_STYLE: Readonly<Record<string, { color: string; label: string
 const KINDS = ['gravity', 'normal', 'friction', 'tension', 'spring', 'buoyancy', 'drag', 'electric', 'applied', 'net'] as const;
 
 export function isPhysicsItem(it: SceneItem): boolean {
-  return it.type === 'Body' || it.type === 'Joint' || it.type === 'Wheel' || it.type === 'Contacts' || it.type === 'Liquid' || it.type === 'Water' || it.type === 'Waves' || it.type === 'Smoke' || (it.type === 'List' && /^List<(Body|Joint|Wheel)>/.test(it.typeText));
+  return it.type === 'Body' || it.type === 'Joint' || it.type === 'Wheel' || it.type === 'Contacts' || it.type === 'Liquid' || it.type === 'Water' || it.type === 'Waves' || it.type === 'Smoke' || it.type === 'Cloth' || it.type === 'Pin' || (it.type === 'List' && /^List<(Body|Joint|Wheel)>/.test(it.typeText));
 }
 
 function bodiesOf(it: SceneItem): physics.BodyValue[] {
@@ -279,6 +279,76 @@ function paintLiquid(ctx: Ctx, vp: Viewport, l: physics.LiquidValue, it: SceneIt
   hits.push({ k: 'circle', x: sx / n, y: sy / n, r: 14, text: `${it.name}: ${l.count} drops${Number.isFinite(l.level) ? `, level ${fmt(l.level)}` : ''}`, id: it.id });
 }
 
+/**
+ * Cloth in the plane (ui.md 7): a net as its threads, thin lines; a rope as one smooth line through its points (each
+ * point the end of a short curve through the midpoints), broken where it tore; pins as small dark dots.
+ */
+function paintCloth(ctx: Ctx, vp: Viewport, c: physics.ClothValue, it: SceneItem, hits: Hit[]): void {
+  const s = c.spec;
+  // a cloth in space is drawn by the Space view
+  if (s.space) return;
+  const { nu, nv } = s;
+  const X = (k: number): number => vp.px(c.xs[k] as number);
+  const Y = (k: number): number => vp.py(c.ys[k] as number);
+  const cutU = (i: number, j: number): boolean => c.cut.length > 0 && c.cut[j * (nu - 1) + i] === 1;
+  const cutV = (i: number, j: number): boolean => c.cut.length > 0 && c.cut[(nu - 1) * nv + j * nu + i] === 1;
+  ctx.save();
+  ctx.strokeStyle = withAlpha(it.color, 0.95);
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  if (s.kind === 'rope') {
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    let open = false;
+    for (let i = 0; i + 1 < nu; i++) {
+      if (cutU(i, 0)) {
+        if (open) ctx.lineTo(X(i), Y(i));
+        open = false;
+        continue;
+      }
+      if (!open) {
+        ctx.moveTo(X(i), Y(i));
+        open = true;
+      }
+      // a smooth line: through the midpoints, each point a control point
+      const mx = 0.5 * (X(i) + X(i + 1));
+      const my = 0.5 * (Y(i) + Y(i + 1));
+      if (i === 0 || cutU(i - 1, 0)) ctx.lineTo(mx, my);
+      else ctx.quadraticCurveTo(X(i), Y(i), mx, my);
+      if (i + 2 >= nu || cutU(i + 1, 0)) ctx.lineTo(X(i + 1), Y(i + 1));
+    }
+    ctx.stroke();
+  } else {
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let j = 0; j < nv; j++) {
+      for (let i = 0; i + 1 < nu; i++) {
+        if (cutU(i, j)) continue;
+        ctx.moveTo(X(j * nu + i), Y(j * nu + i));
+        ctx.lineTo(X(j * nu + i + 1), Y(j * nu + i + 1));
+      }
+    }
+    for (let j = 0; j + 1 < nv; j++) {
+      for (let i = 0; i < nu; i++) {
+        if (cutV(i, j)) continue;
+        ctx.moveTo(X(j * nu + i), Y(j * nu + i));
+        ctx.lineTo(X((j + 1) * nu + i), Y((j + 1) * nu + i));
+      }
+    }
+    ctx.stroke();
+  }
+  // the pins: small dark dots
+  ctx.fillStyle = '#2b2f36';
+  for (let k = 0; k + 2 < c.pinsAt.length; k += 3) {
+    ctx.beginPath();
+    ctx.arc(vp.px(c.pinsAt[k] as number), vp.py(c.pinsAt[k + 1] as number), 3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+  const mid = Math.floor((nu * nv) / 2);
+  hits.push({ k: 'circle', x: X(mid), y: Y(mid), r: 14, text: `${it.name}: ${physics.clothRow(c, it.name).grid}, ${physics.clothRow(c, it.name).live}`, id: it.id });
+}
+
 /** Still water: a light fill below a darker line, inside its region when it has one (ui.md 7). */
 function paintWater(ctx: Ctx, vp: Viewport, w: physics.WaterValue, it: SceneItem, hits: Hit[]): void {
   const b = vp.box();
@@ -470,6 +540,12 @@ export function paintPhysicsItem(ctx: Ctx, vp: Viewport, it: SceneItem, hits: Hi
     paintSmoke(ctx, vp, it.value, it, hits);
     return;
   }
+  if (physics.isClothValue(it.value)) {
+    paintCloth(ctx, vp, it.value, it, hits);
+    return;
+  }
+  // a pin is drawn by its cloth (a small dark dot where it holds)
+  if (physics.isPinValue(it.value)) return;
   if (it.type === 'Contacts') {
     const pts = (it.value as { x: number; y: number; nx: number; ny: number }[]) ?? [];
     ctx.fillStyle = '#b3261e';

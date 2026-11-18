@@ -143,7 +143,7 @@ describe('the studio and physics', () => {
       const s = new KernelSession();
       const r = s.applyLines([...ex.lines], ex.id, 'independent', 'host');
       expect(r.ok, ex.id).toBe(true);
-      const bodies = s.figure.objects().filter((o) => o.type === 'Body' || o.type === 'Body3' || o.type === 'Liquid' || o.type === 'Smoke' || /^List<Body3?>/.test(o.typeText));
+      const bodies = s.figure.objects().filter((o) => o.type === 'Body' || o.type === 'Body3' || o.type === 'Liquid' || o.type === 'Smoke' || o.type === 'Cloth' || /^List<Body3?>/.test(o.typeText));
       expect(bodies.length, ex.id).toBeGreaterThan(0);
       const before = JSON.stringify(bodies.map((o) => s.figure.value(o.id)));
       for (let k = 1; k <= 60; k++) s.setTime(k / 60);

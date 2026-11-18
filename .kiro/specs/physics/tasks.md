@@ -61,18 +61,34 @@ Each round is one branch `feat/physics-<n>` and one PR into `integration`, merge
   - [x] 8.6 Drawing (one grey image a frame under the shapes), the Smoke tool, algebra rows, readouts `sm.mass`, `sm.speed`, `sm.n`, `sm.at(x, y)`; smoke stays on the page, and goes with liquid to the worker
   - [x] 8.7 Examples (smoke past a ball, a candle), screenshots, spec tests, the smoke checks of design 11.5 and the bench rows of 11.2
 - [ ] 9. Round 9: cloth (R10)
-  - [ ] 9.1 `Cloth` (sheet, rope, net), `Pin`, `world with wind`; errors B018, B019, the `torn` notice
-  - [ ] 9.2 XPBD small steps: stretch, shear and bend links, damping, tearing, sleep, checkpoints every 0.25 s
-  - [ ] 9.3 Two-way hits: solids, bodies, drops (shared grid), self
-  - [ ] 9.4 The driver in the physics worker, with the same film without it
+  - [x] 9.1 `Cloth` (sheet, rope, net), `Pin`, `world with wind`; errors B018, B019, the `torn` notice
+    - [x] 9.1.1 Forms, named arguments, pin words, readouts `c.count`, `c.torn`, `c.stretchMax`, `c.energy`, `c.at(i, j)`, `c.asleep`, `c.touching`
+    - [x] 9.1.2 B004, B010, B013 (64 × 32, 400, 4,096, one `self`, 64 pins), B017, B018 `not_a_cloth`, B019 `pin_off_cloth`; notices `torn`, `cloth_drawn_coarse`
+  - [x] 9.2 XPBD small steps: stretch, shear and bend links, damping, tearing, sleep, checkpoints every 0.25 s
+    - [x] 9.2.1 A rope's stretch links as one chain (exact three-band solve); tethers; air once a step on whole cells
+    - [x] 9.2.2 Checkpoints with torn links as bits and the pushes owed to bodies; seek equals play, reload plays the same
+  - [x] 9.3 Two-way hits: solids, bodies, drops (shared grid), self
+    - [x] 9.3.1 Space: spheres (points and faces), hulls, the floor, terrain; the plane: circles (points and threads), polygons, thin walls
+    - [x] 9.3.2 Pins to bodies; bodies held by pins take the cloth's small steps
+    - [x] 9.3.3 Wet cloth (1 kg of water held, design 11.5): the pins carry the sheet and the water within 2%
+  - [x] 9.4 The driver in the physics worker, with the same film without it
   - [x] 9.5 The WebGL 2 painter for cloth and drops; the coarse fallback
     - [x] 9.5.1 `sheet` and `drops` items in the Space view's scene; liquids in space as one batch, waves as a sheet through their corners
     - [x] 9.5.2 `GlBackend3` and `MeshPainter3` in `packages/view/src/gl/`: points as a float texture each frame, triangles once per topology, normals in the vertex shader, the software painter's light, threads every k points, instanced lit discs, a depth pass for the solids, resize, context loss
     - [x] 9.5.3 Compositing: one shared context, its picture copied between the faces and the lines; lines behind a cloth dashed; the order and its limits in design 12.1
     - [x] 9.5.4 Without WebGL 2: every second point and drop on the screen, `cloth_drawn_coarse` (B114) once; SVG at full detail, PNG from the GPU
     - [x] 9.5.5 Spec tests (fallback, split, the painter against a recording context), the Chrome bench with the CPU slowed 4× (`packages/sdk/bench/chrome-gl.mjs`), screenshots
-  - [ ] 9.6 Drag and grab, algebra rows, the Cloth and Pin tools, the readout
+  - [x] 9.6 Drag and grab, algebra rows, the Cloth and Pin tools, the readout
   - [ ] 9.7 Examples, screenshots, spec tests and the cloth checks of design 11.4 and 11.5
+    - [x] 9.7.1 Six examples (a flag, a sheet on a ball, cloth that catches water, a rope, a hammock, a net that tears), screenshots
+    - [x] 9.7.2 Spec tests: kernel (22), worker and painter (5); checks stretch, still flag, energy, tearing, no pass-through, two-way, hanging rope, rope pendulum, no worker, no garbage
+    - [ ] 9.7.3 Node benches of the cloth rows of 11.2: run and reported; the rows over budget are left for round 10
+  - [ ] 9.8 Finish cloth (docs/research/physics-papers.md 8)
+    - [x] 9.8.1 Merge integration (the soft step) into the cloth branch; physics tests pass, pinned balls still carried within 1%
+    - [x] 9.8.2 A body held by pins takes the cloth's small steps, and the counts agree with the soft step's (the body takes the world's own move in each small step; a ball pinned under a sheet sinks under 1 mm, was 3 to 5 cm)
+    - [x] 9.8.3 A heavy ball on a light rope: the body's tether (design 9.5); rope within 0.2% of its length, ball within 0.1% of its reach
+    - [ ] 9.8.4 Hits listed once a step, shapes moved through the small steps; one pass a small step; cloth against cloth once a step; drops by grid cells. Done: three small steps (four with `self`). Already so: hits and cloth pairs listed once a step, drops found on the grid. Tried and left: tethers every second small step (breaks the pinned-ball weight check). Node rows still over: 32 × 32 (0.78 of 0.75 ms), two cloths (2.29 of 2), cloth in water (2.30 of 2)
+    - [x] 9.8.5 Chrome bench with the CPU 4× slower for every cloth row of 11.2 (`packages/kernel/bench/chrome-physics.mjs`); the Rust rule list: cloth in water (28% over its goal)
 - [ ] 10. Round 10: speed (R9)
   - [ ] 10.1 Node benches for every budget of design 11.2
   - [ ] 10.2 Throttled Chrome bench script

@@ -353,6 +353,10 @@ export function sceneOf3(figure: Figure, view: space.View3, opts: Scene3Options 
         items.push({ k: 'drops', id, name: o.name, pos, count: n, color: v.spec.color ?? color, alpha: 0.85, radius: 0.6 * v.size });
         break;
       }
+      case 'Cloth':
+        // cloth in space (physics design 12.1): a sheet for the WebGL 2 painter
+        if (physics.isClothValue(v) && v.spec.space) items.push(...clothItems(id, o.name, v, color, Math.max(alpha, 0.85)));
+        break;
       case 'Waves':
         // a wave surface in space: a lit sheet through the cell corners (physics design 12, 12.1)
         if (physics.isWavesValue(v) && v.space) items.push(...wavesItems(id, o.name, v, color, Math.max(alpha, 0.6)));
@@ -566,6 +570,40 @@ export function dropDots(d: DropsItem, every: number, box?: Box3): DotItem[] {
     if (box && !inBox(box, p)) continue;
     out.push({ k: 'dot', id: d.id, p, color: d.color, alpha: d.alpha, size: d.radius, px: false });
   }
+  return out;
+}
+
+/**
+ * A cloth in space (physics design 12, 12.1): one sheet item for the WebGL 2 painter (the software painter's fallback
+ * draws every second point, with `cloth_drawn_coarse` from the Space pane), its torn cells left out of the triangles,
+ * faint threads every 8 points; its pins as small dark points.
+ */
+function clothItems(id: number, name: string, c: physics.ClothValue, color: string, alpha: number): Item3[] {
+  const { nu, nv } = c.spec;
+  const n = nu * nv;
+  const pos = new Float32Array(n * 3);
+  for (let k = 0; k < n; k++) {
+    pos[k * 3] = c.xs[k] as number;
+    pos[k * 3 + 1] = c.ys[k] as number;
+    pos[k * 3 + 2] = c.zs[k] as number;
+  }
+  let tris: Uint32Array | undefined;
+  if (c.torn > 0 && c.cut.length > 0) {
+    // the faces that are whole: two a cell, split along (i, j)–(i + 1, j + 1) as the engine splits them
+    const out: number[] = [];
+    for (let j = 0; j + 1 < nv; j++) {
+      for (let i = 0; i + 1 < nu; i++) {
+        const t = 2 * (j * (nu - 1) + i);
+        const a = j * nu + i;
+        if (c.cut[t] !== 1) out.push(a, a + 1, a + nu + 1);
+        if (c.cut[t + 1] !== 1) out.push(a, a + nu + 1, a + nu);
+      }
+    }
+    tris = Uint32Array.from(out);
+  }
+  const sheet: SheetItem = { k: 'sheet', id, name, nx: nu, ny: nv, pos, ...(tris ? { tris, topology: c.torn } : {}), color, alpha, threads: 8, occludes: true, coarse: 2, fine: 1 };
+  const out: Item3[] = [sheet];
+  for (let k = 0; k + 2 < c.pinsAt.length; k += 3) out.push({ k: 'dot', id, p: { x: c.pinsAt[k] as number, y: c.pinsAt[k + 1] as number, z: c.pinsAt[k + 2] as number }, color: '#2b2f36', alpha: 1, size: 3, px: true });
   return out;
 }
 

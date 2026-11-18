@@ -356,6 +356,7 @@ export class KernelSession {
   draggable(name: string): boolean {
     const o = this.figure.get(name);
     if (o && (o.type === 'Body3' || o.typeText === 'List<Body3>')) return o.cell.defined;
+    if (o && o.type === 'Cloth') return o.cell.defined;
     if (!o || (o.type !== 'Point' && o.type !== 'Point3') || !o.cell.defined) return false;
     return o.free || this.figure.dragPlan(name, o.cell.value).writes.length > 0;
   }
@@ -370,6 +371,12 @@ export class KernelSession {
       if (!r.ok) return { ok: false, error: { ok: false, kind: 'not_draggable', message: r.why } as never };
       this.figure.flush();
       return this.done(r.did === 'moved start' ? `moved where ${name} starts` : r.did === 'grabbed' ? `holding ${name}` : `let go of ${name}`, []);
+    }
+    if (bt && bt.type === 'Cloth') {
+      const r = physics.dragCloth(this.figure, name, { x, y, z: z ?? 0 }, done);
+      if (!r.ok) return { ok: false, error: { ok: false, kind: 'not_draggable', message: r.why } as never };
+      this.figure.flush();
+      return this.done(r.did === 'moved start' ? `moved where ${name} starts` : r.did === 'grabbed' ? `holding point ${(r.point ?? 0) + 1} of ${name}` : `let go of ${name}`, []);
     }
     if (bt && (bt.type === 'Body3' || bt.typeText === 'List<Body3>')) {
       const r = physics.dragBody3(this.figure, name, { x, y, z: z ?? 0 }, done);
@@ -588,6 +595,8 @@ export class KernelSession {
       if (v.type === 'Liquid') return true;
       // and smoke drifts with it (physics design 9.4)
       if (v.type === 'Smoke') return true;
+      // and cloth waves and falls with it (physics design 9.5)
+      if (v.type === 'Cloth') return true;
       if (/\banimate\s*=/.test(v.definition)) return true;
     }
     if (/^@clock /m.test(this.figure.toScript())) return true;

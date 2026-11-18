@@ -350,3 +350,104 @@ describe('3D liquid and waves (design 11.2, round 7)', () => {
     expect(mean).toBeLessThan(0.25);
   });
 });
+
+/* ------------------------------ cloth (design 11.2 cloth rows, 11.4 "Cloth, …"; round 9) ------------------------------ */
+
+const FLAG64 = ['g = Ground()', 'flag = Cloth((0, 0, 4), (3, 0, 0), (0, 0, -2), 64, 32, mass = 0.5, pins = "left")', 'world with wind = (5 + 3 sin(2 t), 1, 0)'];
+const SHEET32 = ['g = Ground()', 'ball = Sphere((0, 0, 1), 1)', 'ball with solid = true', 'sheet = Cloth((-1.6, -1.6, 2.6), (3.2, 0, 0), (0, 3.2, 0), 32, 32, mass = 0.4)'];
+const ROPE400 = ['rope = Cloth((0, 5), (8, 5), 400, mass = 0.5, pins = [(0, 5)])', 'ball = Body(Circle((8, 5), 0.2), mass = 1)', 'tie = Pin(rope, (8, 5), ball)'];
+const OVER40 = (() => {
+  const l = ['g = Ground()', 'sheet = Cloth((-3, -1.5, 3), (6, 0, 0), (0, 3, 0), 64, 32, mass = 0.6)'];
+  for (let k = 0; k < 40; k++) l.push(`b${k} = Body(Box((${-2.7 + (k % 10) * 0.6}, ${-1.2 + Math.floor(k / 10) * 0.8}, 0.25), 0.4, 0.4, 0.4), mass = 1)`);
+  return l;
+})();
+const SELF = ['g = Ground()', 'sheet = Cloth((-2, -1, 3), (4, 0, 0), (0, 0, -2), 64, 32, mass = 0.5, self = true)', 'post = Box((0, 0, 0.5), 1, 1, 1)', 'post with solid = true'];
+const TWO = ['g = Ground()', 'a = Cloth((0, 0, 4), (3, 0, 0), (0, 0, -2), 64, 32, pins = "left")', 'b = Cloth((0, 1, 4), (3, 0, 0), (0, 0, -2), 64, 32, pins = "left")', 'world with wind = (4 + 2 sin(3 t), 1, 0)'];
+const WET = ['g = Ground()', 'sheet = Cloth((-3, -1.5, 2), (6, 0, 0), (0, 3, 0), 64, 32, mass = 0.6, pins = "corners")', 'water = Liquid(Box((0, 0, 3), 2, 2, 0.5), 2000)'];
+
+/** Frames of 1/60 s from t0 to t1: mean, the 95% frame and the worst, ms. */
+function frames(f: Figure, t0: number, t1: number): { mean: number; p95: number; worst: number } {
+  for (let k = 1; k <= Math.round(t0 * 60); k++) f.setClock(k / 60);
+  const times: number[] = [];
+  for (let k = Math.round(t0 * 60) + 1; k <= Math.round(t1 * 60); k++) {
+    const a = performance.now();
+    f.setClock(k / 60);
+    times.push(performance.now() - a);
+  }
+  const s = sorted(times);
+  return { mean: times.reduce((a, b) => a + b, 0) / times.length, p95: s[Math.floor(s.length * 0.95)] as number, worst: s[s.length - 1] as number };
+}
+
+describe('cloth (design 11.2, round 9)', () => {
+  const rows: [string, readonly string[], number][] = [
+    ['2D rope, 400 points, a ball on it', ROPE400, 0.5],
+    ['3D cloth, the default size 32 × 32, dropped on a ball', SHEET32, 0.75],
+    ['3D cloth, the largest, 64 × 32, in gusts', FLAG64, 1.5],
+    ['3D cloth over bodies, 64 × 32 and 40 bodies', OVER40, 2],
+    ['cloth that hits itself, 64 × 32, self = true', SELF, 2],
+    ['two cloths, 2 × 64 × 32, in gusts', TWO, 2],
+    ['cloth in water, 64 × 32 and 2,000 drops', WET, 2],
+  ];
+  for (const [name, lines, budget] of rows) {
+    it(`${name}: a frame (two steps) under ${budget} ms in Node`, { retry: 2 }, () => {
+      const r = frames(load(lines), 1, 7);
+      console.log(`${name}: mean ${r.mean.toFixed(3)} ms, 95% ${r.p95.toFixed(3)} ms, worst ${r.worst.toFixed(2)} ms (budget ${budget} ms)`);
+      expect(r.mean).toBeLessThan(budget);
+    });
+  }
+
+  it('Cloth, worst frame: a 64 × 32 flag in gusts for 60 s, then a sheet over 40 bodies — the slow frames within 11.2', { retry: 2 }, () => {
+    const a = frames(load(FLAG64), 0, 60);
+    const b = frames(load(OVER40), 0, 10);
+    console.log(`worst frame: flag 60 s mean ${a.mean.toFixed(3)} / 95% ${a.p95.toFixed(3)} / worst ${a.worst.toFixed(2)} ms; over 40 bodies mean ${b.mean.toFixed(3)} / 95% ${b.p95.toFixed(3)} / worst ${b.worst.toFixed(2)} ms`);
+    expect(a.p95).toBeLessThan(1.5);
+    expect(b.p95).toBeLessThan(2);
+  });
+
+  for (const [name, lines, budget] of [['cloth up to 2,048 points', FLAG64, 25], ['4,096 cloth points', TWO, 50]] as const) {
+    it(`seek anywhere in a 60 s film, ${name}, warm: under ${budget} ms in Node`, () => {
+      const f = load(lines);
+      for (let k = 1; k <= 60 * 60; k++) f.setClock(k / 60);
+      const times: number[] = [];
+      for (let i = 0; i < 100; i++) {
+        const t = ((i * 37) % 100) * 0.59 + 0.3;
+        const a = performance.now();
+        f.setClock(t);
+        times.push(performance.now() - a);
+      }
+      const s = sorted(times);
+      console.log(`seek, ${name}: median ${(s[50] as number).toFixed(1)} ms, worst ${(s[99] as number).toFixed(1)} ms (budget ${budget} ms)`);
+      expect(s[95]).toBeLessThan(budget);
+    });
+  }
+
+  it('a checkpoint of a 64 × 32 cloth is about 100 KB (design 10.3)', () => {
+    const f = load(FLAG64);
+    f.setClock(1);
+    const kb = physics3Of(f).checkpointBytes() / 1024;
+    console.log(`a checkpoint with a 64 x 32 cloth: ${kb.toFixed(1)} KB`);
+    expect(kb).toBeLessThan(110);
+  });
+
+  it('Cloth, no garbage: steps of a 64 × 32 sheet make no memory after the first second (no collection runs)', async () => {
+    const f = load(FLAG64.filter((l) => !l.startsWith('world')));
+    f.apply('world with wind = (5, 1, 0)');
+    for (let k = 1; k <= 60; k++) f.setClock(k / 60);
+    const d = physics3Of(f);
+    const c = d.cloth;
+    const w = (d as unknown as { world: import('../src/physics/world3').World3 }).world;
+    if (!c) throw new Error('no cloth');
+    const arrays = [c.x, c.vx, c.la, c.rest];
+    let gcs = 0;
+    const obs = new PerformanceObserver((list) => {
+      gcs += list.getEntries().length;
+    });
+    obs.observe({ entryTypes: ['gc'] });
+    for (let k = 0; k < 2000; k++) c.step(w, 1 / 120);
+    await new Promise((r) => setTimeout(r, 50));
+    obs.disconnect();
+    console.log(`collections during 2,000 cloth steps: ${gcs}`);
+    for (const [a, b] of [[c.x, arrays[0]], [c.vx, arrays[1]], [c.la, arrays[2]], [c.rest, arrays[3]]] as const) expect(a === b).toBe(true);
+    expect(gcs).toBe(0);
+  });
+});
