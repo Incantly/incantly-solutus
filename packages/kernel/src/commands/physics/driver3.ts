@@ -910,7 +910,7 @@ export class Physics3Driver implements WorldDriver {
         if (m.role !== 'body' || w.type[i] !== BodyType3.Dynamic) continue;
         const im = w.invM[i] as number;
         const g = [w.gx, w.gy, w.gz];
-        for (let a = 0; a < 3; a++) w.v[i * 3 + a] = (w.v[i * 3 + a] as number) - 0.5 * h * ((g[a] as number) + im * (w.force[i * 3 + a] as number));
+        for (let a = 0; a < 3; a++) w.v[i * 3 + a] = (w.v[i * 3 + a] as number) - (0.5 * h / w.substeps) * ((g[a] as number) + im * (w.force[i * 3 + a] as number));
       }
     }
     // design 9.6: the drops' push of the last step, then the waves and still water at the pose now, go in first
@@ -1283,9 +1283,11 @@ export class Physics3Driver implements WorldDriver {
   private midPotential(i: number): number {
     const w = this.world as World3;
     const m = w.mass[i] as number;
-    const mx = 0.5 * ((this.prevP[i * 3] as number) + (w.p[i * 3] as number));
-    const my = 0.5 * ((this.prevP[i * 3 + 1] as number) + (w.p[i * 3 + 1] as number));
-    const mz = 0.5 * ((this.prevP[i * 3 + 2] as number) + (w.p[i * 3 + 2] as number));
+    // the speed is the last small step's, so the height is taken in the middle of that small step
+    const hs = 1 / this.rate / w.substeps;
+    const mx = (w.p[i * 3] as number) - 0.5 * hs * (w.v[i * 3] as number);
+    const my = (w.p[i * 3 + 1] as number) - 0.5 * hs * (w.v[i * 3 + 1] as number);
+    const mz = (w.p[i * 3 + 2] as number) - 0.5 * hs * (w.v[i * 3 + 2] as number);
     return -m * (w.gx * mx + w.gy * my + w.gz * mz);
   }
 
@@ -1385,7 +1387,7 @@ export class Physics3Driver implements WorldDriver {
       const a = this.drawnPoint(j.a, j.la, alpha);
       const b = this.drawnPoint(j.b, j.lb, alpha);
       const value: JointValue3 = {
-        ...jm.value, force: j.broken ? 0 : j.force(h), lengthNow: jm.value.kind === 'hinge' || jm.value.kind === 'weld' ? 0 : j.length(w), angleNow: j instanceof Hinge3 ? j.angle(w) : 0, broken: j.broken,
+        ...jm.value, force: j.broken ? 0 : j.force(h / w.substeps), lengthNow: jm.value.kind === 'hinge' || jm.value.kind === 'weld' ? 0 : j.length(w), angleNow: j instanceof Hinge3 ? j.angle(w) : 0, broken: j.broken,
         ax: a.x, ay: a.y, az: a.z, bx: b.x, by: b.y, bz: b.z,
       };
       put(jm.rec, jm.item, value, jl, () => this.jointsOf(jm.rec));

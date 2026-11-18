@@ -112,5 +112,33 @@ Found while comparing engines: our 2D piles never fell asleep, while the other e
 - **Tests.** `packages/kernel/test/spec/physics-bodies.test.ts`: a dropped tower of 20 stands and sleeps, a pile of 100
   sleeps within 5 s. The far-seek test now keeps its pile awake with `world with sleep = false`, since a pile that sleeps
   catches up at once.
-- **Still open.** Tall columns of balls (50 high) breathe for about 10 s before sleeping; 3D towers of touching boxes
-  sway for about 10 s (3D has no block solve for four points). Both point to the soft-step solver.
+- **Then fixed by the soft step (section 7).** Tall columns of balls (50 high) breathed for about 10 s before
+  sleeping; 3D towers of touching boxes swayed for about 10 s.
+
+## 7. The soft step (2026-11-18)
+
+Following Solver2D's soft step, in both worlds: small steps (half the passes, 4 at the default), soft contacts (30 Hz,
+damping ratio 10, push-out at most 3 m/s; twice as stiff against walls), one solve and one relax pass a small step, the
+narrow phase once a step with each point's gap worked out again from its anchors, and pushes spread over the small steps.
+What we added on top, because of our own checks:
+
+- **A soft 2 × 2 block for a face's two points (plane).** Points one after the other leaned a 20-high tower of 1 m boxes
+  a little each small step until it fell.
+- **Bounces off walls before the move.** A point that would go through its gap in the small step turns back where it
+  is with `bounce` × its closing speed before the small step's forces: with semi-implicit Euler this keeps a perfect
+  bounce's height exactly (bouncing after the small steps lost 1.4% a bounce, as the ball sat on the ground for the
+  rest of the step). Between two bodies the bounce stays after the relax pass: turning back before the move let a box
+  sink into the one under it in a falling stack.
+- **Several passes for a face's bounce in space,** so the four corners bounce together and a landing cube does not spin.
+
+Same scenes as section 5, after the change (Node, ms: mean / 95% / worst, bounce 0.2 in 2D):
+
+| Scene | Before | After |
+|---|---|---|
+| 2D 500 boxes | 0.60 / 1.59 / 3.44 | 0.56 / 2.05 / 2.25 |
+| 2D 2,000 balls | 4.84 / 7.77 / 9.90, never slept | 4.69 / 11.06 / 12.25, asleep by 4 s |
+| 3D 500 boxes | 1.55 / 8.98 / 9.52 | 0.98 / 6.52 / 11.69 |
+| 3D tower of 10 | awake after 6 s | asleep by 3 s |
+
+The 2,000 balls' slow frames are slower while the pile lands (the small steps do more work per contact) but it sleeps
+instead of moving for good. The broad and narrow phases are now the largest cost there (about a third of the step).

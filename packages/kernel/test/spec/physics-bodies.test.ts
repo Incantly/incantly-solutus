@@ -153,6 +153,16 @@ describe('bodies and solids (R1)', () => {
     expect(Math.abs(body('b19').x)).toBeLessThan(0.01);
   });
 
+  it('four columns of 50 balls fall asleep within 5 s (soft step, design 6.5)', () => {
+    // hard passes in one step could not carry the weight down a column of 50: it breathed up and down for about 10 s
+    ok('g = Ground()');
+    for (let i = 0; i < 200; i++) ok(`c${i} = Body(Circle((${(i % 4) * 0.5}, ${0.2 + Math.floor(i / 4) * 0.25}), 0.1))`);
+    play(5);
+    let awake = 0;
+    for (let i = 0; i < 200; i++) if (!body(`c${i}`).asleep) awake++;
+    expect(awake).toBe(0);
+  });
+
   it('a pile of 100 boxes dropped in five columns falls asleep within 5 s', () => {
     ok('g = Ground()');
     for (let i = 0; i < 100; i++) ok(`b${i} = Body(Box((${(i % 5) * 1.2 - 2.4}, ${0.6 + Math.floor(i / 5) * 1.1}), 1, 1))`);

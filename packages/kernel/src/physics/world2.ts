@@ -144,8 +144,6 @@ export interface Hit2 {
 }
 
 export const LINEAR_SLOP = 0.005;
-const BAUMGARTE = 0.2;
-const MAX_CORRECTION = 0.2;
 const RESTITUTION_THRESHOLD = 1;
 const HIT_THRESHOLD = 0.05;
 const SLEEP_LIN = 0.01;
@@ -471,14 +469,17 @@ export class World2 implements Poses {
     this.initContacts(h);
     this.beginSoft(hs);
     for (let s = 0; s < S; s++) {
-      this.closingSpeeds(false);
+      // the speeds before the small step's forces, for the bounces' closing speeds
+      this.pfx.set(this.vx);
+      this.pfy.set(this.vy);
+      this.pfw.set(this.w);
       this.integrateForces(hs, s === 0, S);
       if (s === S - 1) {
         this.jx.fill(0);
         this.jy.fill(0);
         this.jt.fill(0);
       }
-      this.closingSpeeds(true);
+      this.closingSpeeds();
       // a point that would go through its gap in this small step bounces now, before it moves (design 6.5)
       this.bounce(hs);
       for (const j of this.joints) if (!j.broken && this.active(j.a, j.b)) j.initVelocity(this, hs);
@@ -914,6 +915,19 @@ export class World2 implements Poses {
     this.sy0.set(this.py);
     this.sc0.set(this.qc);
     this.ss0.set(this.qs);
+    if (this.ddx.length !== n) {
+      this.ddx = new Float64Array(n);
+      this.ddy = new Float64Array(n);
+      this.dca = new Float64Array(n);
+      this.dsa = new Float64Array(n);
+      this.pfx = new Float64Array(n);
+      this.pfy = new Float64Array(n);
+      this.pfw = new Float64Array(n);
+    }
+    this.ddx.fill(0);
+    this.ddy.fill(0);
+    this.dca.fill(1);
+    this.dsa.fill(0);
     // a contact is a stiff, heavily damped spring: 30 Hz (at most a quarter of the small steps' rate), damping ratio 10
     const hz = Math.min(CONTACT_HERTZ, 0.25 / hs);
     const soft = (f: number): [number, number, number] => {
@@ -994,21 +1008,41 @@ export class World2 implements Poses {
       this.py[i] = (this.py[i] as number) + hs * vy;
       this.ang[i] = (this.ang[i] as number) + hs * (this.w[i] as number);
       this.setRot(i);
+      this.dMove(i);
     }
   }
 
   /** Body i's anchor r (in the world at the step's start) where the body is now: r turned by its turn since. */
   private gapOf(a: number, b: number, rAx: number, rAy: number, rBx: number, rBy: number, nx: number, ny: number, adj: number): number {
-    // a body's turn since the start: its rotation now times the start's rotation back
-    const ca = (this.qc[a] as number) * (this.sc0[a] as number) + (this.qs[a] as number) * (this.ss0[a] as number);
-    const sa = (this.qs[a] as number) * (this.sc0[a] as number) - (this.qc[a] as number) * (this.ss0[a] as number);
-    const cb = (this.qc[b] as number) * (this.sc0[b] as number) + (this.qs[b] as number) * (this.ss0[b] as number);
-    const sb = (this.qs[b] as number) * (this.sc0[b] as number) - (this.qc[b] as number) * (this.ss0[b] as number);
-    const pax = (this.px[a] as number) - (this.sx0[a] as number) + ca * rAx - sa * rAy;
-    const pay = (this.py[a] as number) - (this.sy0[a] as number) + sa * rAx + ca * rAy;
-    const pbx = (this.px[b] as number) - (this.sx0[b] as number) + cb * rBx - sb * rBy;
-    const pby = (this.py[b] as number) - (this.sy0[b] as number) + sb * rBx + cb * rBy;
+    // each body's move and turn since the start of the step, kept up to date by the small steps (dMove)
+    const { ddx, ddy, dca, dsa } = this;
+    const ca = dca[a] as number;
+    const sa = dsa[a] as number;
+    const cb = dca[b] as number;
+    const sb = dsa[b] as number;
+    const pax = (ddx[a] as number) + ca * rAx - sa * rAy;
+    const pay = (ddy[a] as number) + sa * rAx + ca * rAy;
+    const pbx = (ddx[b] as number) + cb * rBx - sb * rBy;
+    const pby = (ddy[b] as number) + sb * rBx + cb * rBy;
     return (pbx - pax) * nx + (pby - pay) * ny + adj;
+  }
+
+  /** Each body's move since the start of the step, and its turn since (cos, sin): updated after each small step's move. */
+  private ddx = new Float64Array(0);
+  private ddy = new Float64Array(0);
+  private dca = new Float64Array(0);
+  private dsa = new Float64Array(0);
+
+  private dMove(i: number): void {
+    this.ddx[i] = (this.px[i] as number) - (this.sx0[i] as number);
+    this.ddy[i] = (this.py[i] as number) - (this.sy0[i] as number);
+    // its rotation now times the start's rotation back
+    const c = this.qc[i] as number;
+    const s = this.qs[i] as number;
+    const c0 = this.sc0[i] as number;
+    const s0 = this.ss0[i] as number;
+    this.dca[i] = c * c0 + s * s0;
+    this.dsa[i] = s * c0 - c * s0;
   }
 
   /**
@@ -1148,39 +1182,49 @@ export class World2 implements Poses {
 
 
   /**
-   * Each point's closing speed and gap at the start of a small step (before its forces), or its closing speed after
-   * them, for a bounce in that small step.
+   * Each point's closing speed after a small step's forces and, for a point closing fast enough to bounce, its closing
+   * speed before them and its gap at the start of the small step.
    */
-  private closingSpeeds(afterForces: boolean): void {
-    const vx = this.vx;
-    const vy = this.vy;
-    const w = this.w;
+  private closingSpeeds(): void {
+    const { vx, vy, w, pfx, pfy, pfw } = this;
     for (const c of this.contacts) {
       if (c.restitution === 0) continue;
+      const a = c.a;
+      const b = c.b;
       for (let k = 0; k < c.m.count; k++) {
         const rAx = k === 0 ? c.rAx0 : c.rAx1;
         const rAy = k === 0 ? c.rAy0 : c.rAy1;
         const rBx = k === 0 ? c.rBx0 : c.rBx1;
         const rBy = k === 0 ? c.rBy0 : c.rBy1;
-        const dvx = (vx[c.b] as number) - (w[c.b] as number) * rBy - (vx[c.a] as number) + (w[c.a] as number) * rAy;
-        const dvy = (vy[c.b] as number) + (w[c.b] as number) * rBx - (vy[c.a] as number) - (w[c.a] as number) * rAx;
-        const vn = dvx * c.nx + dvy * c.ny;
-        if (afterForces) {
-          if (k === 0) c.sf0 = vn;
-          else c.sf1 = vn;
-          continue;
+        const dvx = (vx[b] as number) - (w[b] as number) * rBy - (vx[a] as number) + (w[a] as number) * rAy;
+        const dvy = (vy[b] as number) + (w[b] as number) * rBx - (vy[a] as number) - (w[a] as number) * rAx;
+        const vf = dvx * c.nx + dvy * c.ny;
+        // only a point closing fast enough to bounce needs its speed before the forces and its gap
+        let v0 = vf;
+        let g = 0;
+        if (vf <= -RESTITUTION_THRESHOLD) {
+          const ex = (pfx[b] as number) - (pfw[b] as number) * rBy - (pfx[a] as number) + (pfw[a] as number) * rAy;
+          const ey = (pfy[b] as number) + (pfw[b] as number) * rBx - (pfy[a] as number) - (pfw[a] as number) * rAx;
+          v0 = ex * c.nx + ey * c.ny;
+          g = this.gapOf(a, b, rAx, rAy, rBx, rBy, c.nx, c.ny, k === 0 ? c.adj0 : c.adj1);
         }
-        const g = this.gapOf(c.a, c.b, rAx, rAy, rBx, rBy, c.nx, c.ny, k === 0 ? c.adj0 : c.adj1);
         if (k === 0) {
-          c.sv0 = vn;
+          c.sf0 = vf;
+          c.sv0 = v0;
           c.sg0 = g;
         } else {
-          c.sv1 = vn;
+          c.sf1 = vf;
+          c.sv1 = v0;
           c.sg1 = g;
         }
       }
     }
   }
+
+  /** The speeds before a small step's forces. */
+  private pfx = new Float64Array(0);
+  private pfy = new Float64Array(0);
+  private pfw = new Float64Array(0);
 
   /**
    * Bounce (design 6.5). A point bounces in the small step it would go through its gap: its closing speed after the
