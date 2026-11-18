@@ -880,6 +880,9 @@ Speed on average is not enough. The physics bench suite checks all of these, and
 | Cloth, page cost | 4,096 cloth points and 2,000 drops | copy under 0.5 ms, draw under 3 ms a frame |
 | Cloth, no worker | The 64 × 32 flag with the worker turned off | the same world hash every second as with it |
 | Cloth, no garbage | 2,000 steps of a 64 × 32 flag in wind, with the Rust loops on and with them off | no collector run in the 2,000 steps |
+| Liquid, no garbage | Steps of a 3D liquid of 2,000 drops (Rust loops on and off) and of a 2D liquid, after warm-up | no collector run, under 16 bytes a step |
+| Frame, no garbage | Frames through `setClock` of a 64 × 32 flag in constant wind (Rust loops on and off), 300 boxes at rest, a 2D liquid of 2,000 drops, fire 64 × 64 with two burning bodies | no collector run; under 2 KB, 1 KB, 4 KB, 8 KB a frame (the cells, below) |
+| Frame, bodies falling | 300 boxes falling and landing, a frame through `setClock` | under 30 KB a frame (the cells of the bodies that move) |
 
 The "no garbage" rows count collector runs (Node's `gc` performance entries) in a window that starts after a `gc()`, so what
 the setup left in the young generation does not fall into it: the bench's Node is started with `--expose-gc`
@@ -887,6 +890,15 @@ the setup left in the young generation does not fall into it: the bench's Node i
 when it is not. A row collects once before its own setup too: a collection frees the Rust module of the row before, and
 the code the engine made that holds that module is thrown away with it, which makes the next steps run in the interpreter
 and make megabytes in their first 40 steps (a collection in the window, from a row that makes none).
+
+The liquid and frame rows also bound the bytes: the heap in use after a window less before it (the five windows of a
+liquid row, the least taken; ten frames in each of twelve windows for a frame row). A frame cannot make nothing: the
+figure compares a cell with the one it holds, so a cell that changed is a new value object, and `setClock` returns a
+`FrameDelta` and queues the clock's event. The numbers of a cell that are typed arrays (a cloth's points, a liquid's
+drops, smoke and temperature, a body's forces) are written into two arrays in turn (`FlipArrays`), so they make none.
+What a frame of a flag in constant wind makes is the delta (about 300 B), the world's cell (about 270 B) and the cloth's
+(about 190 B). A body that rests keeps the cell it had. The checkpoints a driver keeps are the film, not garbage, so a
+frame row counts a window of ten frames that saves none.
 
 ### 11.5 Accuracy checks (lessons must be right)
 
