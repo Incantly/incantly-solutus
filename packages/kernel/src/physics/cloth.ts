@@ -877,9 +877,13 @@ export class ClothSet {
       this.svx[k] = (this.svx[k] as number) + (this.sdx[k] as number);
       this.svy[k] = (this.svy[k] as number) + (this.sdy[k] as number);
       this.svz[k] = (this.svz[k] as number) + (this.sdz[k] as number);
-      this.spx[k] = (this.spx[k] as number) + (this.svx[k] as number) * hs;
-      this.spy[k] = (this.spy[k] as number) + (this.svy[k] as number) * hs;
-      this.spz[k] = (this.spz[k] as number) + (this.svz[k] as number) * hs;
+      this.swvx[k] = (this.swvx[k] as number) + (this.sdx[k] as number);
+      this.swvy[k] = (this.swvy[k] as number) + (this.sdy[k] as number);
+      this.swvz[k] = (this.swvz[k] as number) + (this.sdz[k] as number);
+      // the world's own move this small step (its contacts and push-outs included), then what the cloth added to the speed
+      this.spx[k] = (this.spx[k] as number) + (this.swx[k] as number) + ((this.svx[k] as number) - (this.swvx[k] as number)) * hs;
+      this.spy[k] = (this.spy[k] as number) + (this.swy[k] as number) + ((this.svy[k] as number) - (this.swvy[k] as number)) * hs;
+      this.spz[k] = (this.spz[k] as number) + (this.swz[k] as number) + ((this.svz[k] as number) - (this.swvz[k] as number)) * hs;
     }
     const out = this.scratch;
     // 1. the speeds from the last small step's moves (less damping), then move by speed, gravity and the air
@@ -982,9 +986,9 @@ export class ClothSet {
     }
     if (this.nCD > 0) this.dropSpeeds(hs);
     for (let k = 0; k < this.nSub; k++) {
-      this.svx[k] = ((this.spx[k] as number) - (this.sqx[k] as number)) / hs;
-      this.svy[k] = ((this.spy[k] as number) - (this.sqy[k] as number)) / hs;
-      this.svz[k] = ((this.spz[k] as number) - (this.sqz[k] as number)) / hs;
+      this.svx[k] = (this.swvx[k] as number) + ((this.spx[k] as number) - (this.sqx[k] as number) - (this.swx[k] as number)) / hs;
+      this.svy[k] = (this.swvy[k] as number) + ((this.spy[k] as number) - (this.sqy[k] as number) - (this.swy[k] as number)) / hs;
+      this.svz[k] = (this.swvz[k] as number) + ((this.spz[k] as number) - (this.sqz[k] as number) - (this.swz[k] as number)) / hs;
     }
   }
 
@@ -1011,6 +1015,13 @@ export class ClothSet {
   private sdx = new Float64Array(0);
   private sdy = new Float64Array(0);
   private sdz = new Float64Array(0);
+  /** The world's move of the body in each small step (a quarter of its move in the world step) and its speed without the cloth. */
+  private swx = new Float64Array(0);
+  private swy = new Float64Array(0);
+  private swz = new Float64Array(0);
+  private swvx = new Float64Array(0);
+  private swvy = new Float64Array(0);
+  private swvz = new Float64Array(0);
 
   /** Body b's place and speed at the start of the world step, and after it (the world's hook): into out[0..11]. */
   protected bodyStep(_b: number, out: Float64Array): void {
@@ -1038,6 +1049,12 @@ export class ClothSet {
       this.sdx = F();
       this.sdy = F();
       this.sdz = F();
+      this.swx = F();
+      this.swy = F();
+      this.swz = F();
+      this.swvx = F();
+      this.swvy = F();
+      this.swvz = F();
     }
     this.subOf.fill(-1);
     this.nSub = 0;
@@ -1060,6 +1077,12 @@ export class ClothSet {
       this.sdx[k] = ((o[9] as number) - (o[3] as number)) / SUBSTEPS;
       this.sdy[k] = ((o[10] as number) - (o[4] as number)) / SUBSTEPS;
       this.sdz[k] = ((o[11] as number) - (o[5] as number)) / SUBSTEPS;
+      this.swx[k] = ((o[6] as number) - (o[0] as number)) / SUBSTEPS;
+      this.swy[k] = ((o[7] as number) - (o[1] as number)) / SUBSTEPS;
+      this.swz[k] = ((o[8] as number) - (o[2] as number)) / SUBSTEPS;
+      this.swvx[k] = o[3] as number;
+      this.swvy[k] = o[4] as number;
+      this.swvz[k] = o[5] as number;
     }
   }
 
