@@ -83,3 +83,17 @@ Source: `docs/features/physics/` (design, errors, agent, ui). Section numbers be
 5. A WebGL 2 painter for cloth and drops in the Space view; without WebGL 2 the software painter draws every second point.
 6. Drag grabs the nearest point (logged); a drag at the start moves the cloth's start.
 7. Examples: a flag in the wind, a sheet on a ball, a swinging rope, a hammock, a net that tears, a cloth that catches water.
+
+## R11. Fire, and smoke in space (design 9.7, 9.8, 11.6)
+
+1. `swirl` (vorticity confinement) on `Smoke` and `Fire`, in the plane and in space.
+2. `Fire(region, n)`, `Fire(at)` in the plane, with `source`, `fuel`, `burn`, `heat`, `smoke`, `swirl`, `wind`, `until`, `sound`; readouts `f.temperature(x, y)`, `f.burning`, `f.fuel` and the smoke readouts.
+3. Temperature, fuel and smoke per cell: lift from heat less smoke, burning between 150 °C and 400 °C, `T⁴` cooling, colour by black-body temperature.
+4. `burns` on bodies, cloth and solid shapes: own temperature, heat swapped with the air, burning from `ignite` or `Ignite(b)`; a burnt body leaves the world (`burnt`), burnt cloth cells tear, a burnt shape stops being solid.
+5. Liquid drops in a cell take its heat and fuel, so water puts a fire out.
+6. `sound = true` plays a crackle that follows the burning, through the sound area; silent unless asked.
+7. `Smoke(box, n)` and `Fire(box, n)`, `Fire(at: Point3)` in space on one cubic grid (4 to 32 a side) in the worker; cloth feels its flow as wind; drawn by ray marching in the WebGL 2 painter, 12 slices without it.
+8. Errors B020 `not_burnable`, B021 `no_fire_grid`; reason `burnt`; notices `burnt`, `fire_out`; limits of design 11.3.
+9. Seek and replay are exact with fire: grids, temperatures and `burnt` in checkpoints, `Ignite` as `@input` lines.
+10. Budgets of design 11.2 for fire; any solver more than 25% over its goal in Chrome with the CPU 4× slower follows design 11.6 (Rust, with the product owner's approval).
+11. Examples: a candle, a camp fire with a log that burns away, a curtain that catches fire, a fire put out by a tap, a flag over a fire in space, smoke round a ball in space.
