@@ -26,7 +26,7 @@ import { isJointValue } from './joints';
 import type { JointMember } from './jointbuild';
 import { buildJoint, jointKey, jointNow, specKey } from './jointbuild';
 import { CheckpointStore } from './checkpoints';
-import { BodyOut, ClothOut, DropsOut, FlipArrays, RecList, makeFloat32 } from './flip';
+import { BodyOut, ClothOut, DropsOut, FlipArrays, RecList, SmokeOut, makeFloat32 } from './flip';
 import type { Hinge2, Slider2, Grab2 } from '../../physics/joints2';
 import { Wheel2, localAnchor } from '../../physics/joints2';
 import type { VehicleValue, WheelValue } from './vehicle';
@@ -98,6 +98,21 @@ interface Member {
   readonly items?: number;
 }
 
+/** What a list of bodies (`Bodies(...)`) is made in each frame, and the list the figure holds (see `writeCells`). */
+class ListBuf {
+  /** The frame (`listStamp`) this list was last filled in. */
+  stamp = -1;
+  /** The value held now: the cell's list, never written over (the figure and its readers keep it). */
+  held: unknown[] | undefined;
+  cell: Cell | undefined;
+  constructor(
+    readonly rec: ObjRec,
+    /** The starts the list was made from: another array means the world was built again. */
+    readonly specs: unknown,
+    readonly scratch: unknown[],
+  ) {}
+}
+
 interface Grab {
   x: number;
   y: number;
@@ -152,7 +167,7 @@ export class PhysicsDriver implements WorldDriver {
   /** Smoke grids (design 9.4): the start each smoke's rule gave, and each grid, in figure order. */
   private smokeRecs: ObjRec[] = [];
   private smokeSpecs = new Map<ObjId, SmokeValue>();
-  smokeMembers: { readonly rec: ObjRec; value: SmokeValue; readonly grid: Smoke2 }[] = [];
+  smokeMembers: { readonly rec: ObjRec; value: SmokeValue; readonly grid: Smoke2; readonly out: SmokeOut }[] = [];
   /** Bodies' steps per smoke step. */
   private smokeEvery = 2;
   /** Things that burn (design 9.7): their units, the things, and the mass and inertia each body unit started with. */
@@ -1070,7 +1085,7 @@ export class PhysicsDriver implements WorldDriver {
       if (!v) continue;
       const grid = smokeGrid(v.spec, v.spec.wind?.x ?? w.windX, v.spec.wind?.y ?? w.windY);
       if (this.world) grid.markSolids(this.world);
-      this.smokeMembers.push({ rec: r, value: v, grid });
+      this.smokeMembers.push({ rec: r, value: v, grid, out: new SmokeOut() });
     }
   }
 
@@ -1484,8 +1499,13 @@ export class PhysicsDriver implements WorldDriver {
 
   /** The world's wind at the step being taken (a formula of t was evaluated for it). */
   private windNow(): { x: number; y: number } {
-    const ws = this.varyingWorld && this.worldRec?.cell.defined && isWorldValue(this.worldRec.cell.value) ? this.worldRec.cell.value : this.settings();
+    const ws = this.windSource();
     return { x: ws.windX, y: ws.windY };
+  }
+
+  /** The settings whose wind is the world's now (what `windNow` reads; nothing is made). */
+  private windSource(): { readonly windX: number; readonly windY: number } {
+    return this.varyingWorld && this.worldRec?.cell.defined && isWorldValue(this.worldRec.cell.value) ? this.worldRec.cell.value : this.settings();
   }
 
   /**
@@ -1495,7 +1515,8 @@ export class PhysicsDriver implements WorldDriver {
   private stepSmoke(w: World2, h: number): void {
     const t = this.t0 + this.n / this.rate;
     const due = this.n % this.smokeEvery === 0;
-    for (const sm of this.smokeMembers) {
+    for (let sq = 0; sq < this.smokeMembers.length; sq++) {
+      const sm = this.smokeMembers[sq] as (typeof this.smokeMembers)[number];
       sm.grid.account(w);
       if (!due) continue;
       // a source or heat that changes during the film is read at each smoke step (the rule ran for this step's time)
@@ -1512,9 +1533,9 @@ export class PhysicsDriver implements WorldDriver {
       // the source makes smoke while the film is before `until`
       sm.grid.making = t - this.smokeEvery * h < spec.until - 1e-9;
       if (!spec.wind) {
-        const ws = this.windNow();
-        sm.grid.windX = ws.x;
-        sm.grid.windY = ws.y;
+        const ws = this.windSource();
+        sm.grid.windX = ws.windX;
+        sm.grid.windY = ws.windY;
       }
       const was = sm.grid.unstable;
       sm.grid.step(w, this.smokeEvery * h, this.fluid?.ps);
@@ -1561,7 +1582,8 @@ export class PhysicsDriver implements WorldDriver {
   /** A body that blows up stops with its island; the others go on (design 4, `unstable_world`). */
   private checkHealth(): void {
     const w = this.world as World2;
-    for (const m of this.members) {
+    for (let q = 0; q < this.members.length; q++) {
+      const m = this.members[q] as Member;
       if (m.role !== 'body') continue;
       const i = m.index;
       if (w.type[i] !== BodyType.Dynamic) continue;
@@ -1665,7 +1687,9 @@ export class PhysicsDriver implements WorldDriver {
 
   private applyLog(n: number): void {
     const w = this.world as World2;
-    for (const e of this.log) {
+    // (indexed: a `for…of` over the log makes an iterator at every step)
+    for (let q = 0; q < this.log.length; q++) {
+      const e = this.log[q] as LogEntry;
       if (e.n !== n) continue;
       if (e.kind === 'reset') {
         const cp = this.checkpoints.get(0);
@@ -1674,14 +1698,12 @@ export class PhysicsDriver implements WorldDriver {
           this.loadState(cp);
           w.stepIndex = keepStep;
         }
-        this.grabs.clear();
+        if (this.grabs.size > 0) this.grabs.clear();
         continue;
       }
       if (e.kind === 'cgrab' || e.kind === 'crelease') continue;
       if (e.kind === 'ignite') {
-        // set a burnable thing alight now (a unit that burnt away stays burnt)
-        const t = this.burnThings.find((x) => x.rec.id === e.id && x.item === e.item);
-        if (t && this.burn) this.burn.igniteThing(this.burnThings.indexOf(t));
+        this.igniteLogged(e.id, e.item);
         continue;
       }
       const m = e.kind === 'set' ? undefined : this.memberOf(e.id, e.item);
@@ -1706,6 +1728,12 @@ export class PhysicsDriver implements WorldDriver {
       else if (e.kind === 'wake' && m) w.wakeBody(m.index);
       else if (e.kind === 'sleep' && m) w.sleepBody(m.index);
     }
+  }
+
+  /** Sets a burnable thing alight now (a unit that burnt away stays burnt). Apart from `applyLog` because of its closures. */
+  private igniteLogged(id: ObjId, item: number | undefined): void {
+    const t = this.burnThings.find((x) => x.rec.id === id && x.item === item);
+    if (t && this.burn) this.burn.igniteThing(this.burnThings.indexOf(t));
   }
 
   /** The value of a logged input at step n. */
@@ -2068,6 +2096,9 @@ export class PhysicsDriver implements WorldDriver {
   }
 
   private touchLists: number[][] = [];
+  private listBufs = new Map<ObjRec, ListBuf>();
+  private listUsed: ListBuf[] = [];
+  private listStamp = 0;
 
   /** How far into the step the cells are drawn (0..1), set by `writeCells` for the writers it calls (a field: a number passed in a call is a heap number). */
   private alphaNow = 1;
@@ -2098,24 +2129,40 @@ export class PhysicsDriver implements WorldDriver {
     changed.reset();
     this.syncBurntSolids(changed);
     this.touchLists = w.touchingAll();
-    let lists: Map<ObjRec, unknown[]> | undefined;
+    this.listStamp++;
+    let listN = 0;
     for (let k = 0; k < this.members.length; k++) {
       const m = this.members[k] as Member;
       if (m.role !== 'body') continue;
       const cell = this.bodyCell(m);
       if (m.item !== undefined) {
-        lists ??= new Map<ObjRec, unknown[]>();
-        let arr = lists.get(m.rec);
-        if (!arr) {
-          arr = (this.specsOfList(m.rec) as unknown[]).slice();
-          lists.set(m.rec, arr);
+        // (the list is worked out in an array kept between frames: a list of resting bodies is the one it was)
+        const specs = this.specsOfList(m.rec);
+        let lb = this.listBufs.get(m.rec);
+        if (lb === undefined || lb.specs !== specs) {
+          lb = new ListBuf(m.rec, specs, (specs as unknown[]).slice());
+          this.listBufs.set(m.rec, lb);
         }
-        arr[m.item] = cell.defined ? cell.value : undefined;
+        if (lb.stamp !== this.listStamp) {
+          lb.stamp = this.listStamp;
+          this.listUsed[listN++] = lb;
+        }
+        lb.scratch[m.item] = cell.defined ? cell.value : undefined;
         continue;
       }
       this.put(m.rec, cell, changed);
     }
-    if (lists) for (const [rec, arr] of lists) this.put(rec, { defined: true, value: arr }, changed);
+    for (let k = 0; k < listN; k++) {
+      const lb = this.listUsed[k] as ListBuf;
+      const held = lb.held;
+      let same = held !== undefined && held.length === lb.scratch.length;
+      if (same && held !== undefined) for (let j = 0; j < held.length; j++) if (held[j] !== lb.scratch[j]) same = false;
+      if (!same || lb.cell === undefined) {
+        lb.held = lb.scratch.slice();
+        lb.cell = { defined: true, value: lb.held };
+      }
+      this.put(lb.rec, lb.cell, changed);
+    }
     this.writeLinks(changed);
     this.writeFluids(changed);
     this.writeSmoke(changed);
@@ -2268,7 +2315,7 @@ export class PhysicsDriver implements WorldDriver {
   private writeSmoke(changed: RecList<ObjRec>): void {
     for (let m = 0; m < this.smokeMembers.length; m++) {
       const sm = this.smokeMembers[m] as (typeof this.smokeMembers)[number];
-      const cell: Cell = sm.grid.unstable ? { defined: false, reason: 'unstable_world' } : { defined: true, value: smokeValue(sm.value.spec, sm.grid) };
+      const cell: Cell = sm.grid.unstable ? { defined: false, reason: 'unstable_world' } : { defined: true, value: smokeValue(sm.value.spec, sm.grid, sm.out) };
       this.put(sm.rec, cell, changed);
     }
   }
@@ -2650,7 +2697,8 @@ export class PhysicsDriver implements WorldDriver {
     const cl = this.cloth;
     if (cl) {
       // where each cloth cell is now: the mean of its corners
-      for (const th of this.burnThings) {
+      for (let bt = 0; bt < this.burnThings.length; bt++) {
+        const th = this.burnThings[bt] as BurnThing;
         if (th.kind !== 'cloth') continue;
         const info = cl.cloths[th.index];
         if (!info) continue;
@@ -2671,7 +2719,10 @@ export class PhysicsDriver implements WorldDriver {
       }
     }
     b.step(w, h);
-    for (const th of this.burnThings) if (th.kind === 'body') this.setBurntMass(w, th.first);
+    for (let bt = 0; bt < this.burnThings.length; bt++) {
+      const th = this.burnThings[bt] as BurnThing;
+      if (th.kind === 'body') this.setBurntMass(w, th.first);
+    }
     for (let q = 0; q < b.nGone; q++) {
       const u = b.newlyGone[q] as number;
       const th = this.burnThings[b.thing[u] as number] as BurnThing;

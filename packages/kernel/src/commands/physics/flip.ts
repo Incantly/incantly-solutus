@@ -100,6 +100,12 @@ export class ClothOut {
   }
 }
 
+/** The arrays a smoke or fire grid's readout is written into: the density, and for a fire the temperature, each in turn (see `FlipArrays`). */
+export class SmokeOut {
+  readonly density = new FlipArrays<Float32Array>(makeFloat32);
+  readonly temp = new FlipArrays<Float32Array>(makeFloat32);
+}
+
 /**
  * The objects a driver changed in a frame, handed to the figure as an array of exactly their number. An array filled and
  * emptied at each frame (`length = 0`, then `push`) makes its places again each time, so the objects go into a work array

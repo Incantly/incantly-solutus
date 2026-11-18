@@ -19,7 +19,6 @@ export const FORCE_KINDS = ['gravity', 'normal', 'friction', 'tension', 'spring'
 export type ForceKind = (typeof FORCE_KINDS)[number];
 export const FK = { gravity: 0, normal: 1, friction: 2, tension: 3, spring: 4, buoyancy: 5, drag: 6, electric: 7, applied: 8, net: 9 } as const;
 const NK = FORCE_KINDS.length;
-const ascending = (x: number, y: number): number => x - y;
 
 export type ShapeDef2 = { readonly kind: 'circle'; readonly x: number; readonly y: number; readonly r: number } | { readonly kind: 'poly'; readonly pts: readonly Pt[] };
 
@@ -66,6 +65,8 @@ export interface Joint2 {
 }
 
 interface Contact {
+  /** The step (`contactStamp`) that last met this contact's pair: one the new step did not meet goes back to the pool. */
+  stamp: number;
   key: number;
   sa: number;
   sb: number;
@@ -208,7 +209,8 @@ export class World2 implements Poses {
 
   joints: Joint2[] = [];
   private contacts: Contact[] = [];
-  private contactMap = new Map<number, Contact>();
+  private contactMap = new ContactTable();
+  private contactStamp = 0;
   private pool: Contact[] = [];
   private pairs = new Float64Array(256);
   private pairCount = 0;
@@ -744,7 +746,7 @@ export class World2 implements Poses {
   /* ------------------------------ contacts ------------------------------ */
 
   /** The contact table and list the next step fills (the last step's are swapped with them: a step makes no new map or list). */
-  private spareMap = new Map<number, Contact>();
+  private spareMap = new ContactTable();
   private spareList: Contact[] = [];
 
   private updateContacts(): void {
@@ -752,6 +754,7 @@ export class World2 implements Poses {
     const next = this.spareMap;
     const list = this.spareList;
     list.length = 0;
+    const stamp = ++this.contactStamp;
     const ns = this.shapes.length;
     let points = 0;
     this.contactsDropped = false;
@@ -779,13 +782,14 @@ export class World2 implements Poses {
         c.touching = false;
         c.pushed = false;
         c.m.count = 0;
-      } else old.delete(key);
+      }
+      c.stamp = stamp;
       c.sa = sa;
       c.sb = sb;
       c.a = A.body;
       c.b = B.body;
       // (the margin in a field the narrow phase reads: a number passed in a call is a heap number)
-      this.margin = this.marginAtRest(A.body) + this.marginOf(B.body);
+      this.setMargin(A.body, B.body);
       const oldCount = c.m.count;
       const o0 = c.m.id0;
       const o1 = c.m.id1;
@@ -821,26 +825,33 @@ export class World2 implements Poses {
       if (c.m.count === 0) {
         c.touching = false;
         c.pushed = false;
-        next.set(key, c);
+        next.set(c);
         continue;
       }
       if (points + c.m.count > MAX_CONTACT_POINTS) {
         this.contactsDropped = true;
         c.m.count = 0;
         c.touching = false;
-        next.set(key, c);
+        next.set(c);
         continue;
       }
       points += c.m.count;
-      c.friction = mixFriction(this.fric[c.a] as number, this.fric[c.b] as number);
+      // (`mixFriction` written out: a number returned from a call that is not inlined is a heap number)
+      const fa = this.fric[c.a] as number;
+      const fb = this.fric[c.b] as number;
+      if (Number.isNaN(fa)) c.friction = Number.isNaN(fb) ? 0.4 : fb;
+      else if (Number.isNaN(fb)) c.friction = fa;
+      else c.friction = Math.sqrt(fa * fb);
       c.restitution = Math.max(this.rest[c.a] as number, this.rest[c.b] as number);
-      next.set(key, c);
+      next.set(c);
       list.push(c);
     }
-    if (old.size > 0) {
-      old.forEach(this.poolContact);
-      old.clear();
+    // a contact the new step did not meet goes back to the pool
+    for (let q = 0; q < old.size; q++) {
+      const c = old.list[q] as Contact;
+      if (c.stamp !== stamp) this.pool.push(c);
     }
+    old.clear();
     this.spareMap = old;
     this.spareList = this.contacts;
     this.contactMap = next;
@@ -853,19 +864,15 @@ export class World2 implements Poses {
   radA = 0;
   radB = 0;
 
-  /** A contact the new step did not meet goes back to the pool (`Map.forEach`: no iterator). */
-  private readonly poolContact = (c: Contact): void => {
-    this.pool.push(c);
-  };
-
-  /** The margin of a body over a step of this step's length. */
-  private marginOf(b: number): number {
-    return 2 * LINEAR_SLOP + this.hStep * (Math.sqrt((this.vx[b] as number) ** 2 + (this.vy[b] as number) ** 2) + Math.abs(this.w[b] as number) * (this.reach[b] as number));
-  }
-
-  /** The margin of a body over a step of 1/120 s (the first body of a pair is taken so, as it always was). */
-  private marginAtRest(b: number): number {
-    return 2 * LINEAR_SLOP + (1 / 120) * (Math.sqrt((this.vx[b] as number) ** 2 + (this.vy[b] as number) ** 2) + Math.abs(this.w[b] as number) * (this.reach[b] as number));
+  /**
+   * The margin the narrow phase is asked for, into `margin`: the first body's over a step of 1/120 s (as it always was)
+   * and the second's over this step's length. Written to a field, not returned: a number returned from a call that is not
+   * inlined is a heap number.
+   */
+  private setMargin(a: number, b: number): void {
+    const ma = 2 * LINEAR_SLOP + (1 / 120) * (Math.sqrt((this.vx[a] as number) ** 2 + (this.vy[a] as number) ** 2) + Math.abs(this.w[a] as number) * (this.reach[a] as number));
+    const mb = 2 * LINEAR_SLOP + this.hStep * (Math.sqrt((this.vx[b] as number) ** 2 + (this.vy[b] as number) ** 2) + Math.abs(this.w[b] as number) * (this.reach[b] as number));
+    this.margin = ma + mb;
   }
 
   private radiusOf(s: number): number {
@@ -955,7 +962,22 @@ export class World2 implements Poses {
     }
   }
 
-  private applyImpulse(a: number, b: number, rAx: number, rAy: number, rBx: number, rBy: number, Px: number, Py: number): void {
+  /** The impulse `applyAt` applies, set by the caller (a field: two numbers passed in a call are two heap numbers when it is not inlined, design 11.4). */
+  private ipx = 0;
+  private ipy = 0;
+  /** The gap `gapAt` worked out (a field, for the same reason as the impulse). */
+  private gap = 0;
+
+  /** The impulse (`ipx`, `ipy`) at point k of contact c, on its two bodies. */
+  private applyAt(c: Contact, k: number): void {
+    const a = c.a;
+    const b = c.b;
+    const rAx = k === 0 ? c.rAx0 : c.rAx1;
+    const rAy = k === 0 ? c.rAy0 : c.rAy1;
+    const rBx = k === 0 ? c.rBx0 : c.rBx1;
+    const rBy = k === 0 ? c.rBy0 : c.rBy1;
+    const Px = this.ipx;
+    const Py = this.ipy;
     this.vx[a] = (this.vx[a] as number) - (this.invM[a] as number) * Px;
     this.vy[a] = (this.vy[a] as number) - (this.invM[a] as number) * Py;
     this.w[a] = (this.w[a] as number) - (this.invI[a] as number) * (rAx * Py - rAy * Px);
@@ -975,8 +997,9 @@ export class World2 implements Poses {
         if (ni === 0 && ti === 0) continue;
         const Px = ni * c.nx + ti * tx;
         const Py = ni * c.ny + ti * ty;
-        if (k === 0) this.applyImpulse(c.a, c.b, c.rAx0, c.rAy0, c.rBx0, c.rBy0, Px, Py);
-        else this.applyImpulse(c.a, c.b, c.rAx1, c.rAy1, c.rBx1, c.rBy1, Px, Py);
+        this.ipx = Px;
+        this.ipy = Py;
+        this.applyAt(c, k);
       }
     }
   }
@@ -1121,7 +1144,16 @@ export class World2 implements Poses {
   }
 
   /** Body i's anchor r (in the world at the step's start) where the body is now: r turned by its turn since. */
-  private gapOf(a: number, b: number, rAx: number, rAy: number, rBx: number, rBy: number, nx: number, ny: number, adj: number): number {
+  private gapAt(c: Contact, k: number): void {
+    const a = c.a;
+    const b = c.b;
+    const rAx = k === 0 ? c.rAx0 : c.rAx1;
+    const rAy = k === 0 ? c.rAy0 : c.rAy1;
+    const rBx = k === 0 ? c.rBx0 : c.rBx1;
+    const rBy = k === 0 ? c.rBy0 : c.rBy1;
+    const nx = c.nx;
+    const ny = c.ny;
+    const adj = k === 0 ? c.adj0 : c.adj1;
     // each body's move and turn since the start of the step, kept up to date by the small steps (dMove)
     const { ddx, ddy, dca, dsa } = this;
     const ca = dca[a] as number;
@@ -1132,7 +1164,7 @@ export class World2 implements Poses {
     const pay = (ddy[a] as number) + sa * rAx + ca * rAy;
     const pbx = (ddx[b] as number) + cb * rBx - sb * rBy;
     const pby = (ddy[b] as number) + sb * rBx + cb * rBy;
-    return (pbx - pax) * nx + (pby - pay) * ny + adj;
+    this.gap = (pbx - pax) * nx + (pby - pay) * ny + adj;
   }
 
   /** Each body's move since the start of the step, and its turn since (cos, sin): updated after each small step's move. */
@@ -1192,15 +1224,20 @@ export class World2 implements Poses {
         const d = nt - old;
         if (k === 0) c.ti0 = nt;
         else c.ti1 = nt;
-        if (d !== 0) this.applyImpulse(a, b, rAx, rAy, rBx, rBy, d * tx, d * ty);
+        if (d !== 0) {
+          this.ipx = d * tx;
+          this.ipy = d * ty;
+          this.applyAt(c, k);
+        }
       }
-      if (c.block && this.softBlock(c, bias, inv_hs, sBias, sMass, sImp)) continue;
+      if (c.block && this.softBlock(c, bias)) continue;
       for (let k = 0; k < c.m.count; k++) {
         const rAx = k === 0 ? c.rAx0 : c.rAx1;
         const rAy = k === 0 ? c.rAy0 : c.rAy1;
         const rBx = k === 0 ? c.rBx0 : c.rBx1;
         const rBy = k === 0 ? c.rBy0 : c.rBy1;
-        const s = this.gapOf(a, b, rAx, rAy, rBx, rBy, c.nx, c.ny, k === 0 ? c.adj0 : c.adj1);
+        this.gapAt(c, k);
+        const s = this.gap;
         let bv = 0;
         let ms = 1;
         let is = 0;
@@ -1223,7 +1260,11 @@ export class World2 implements Poses {
         const d = ni - old;
         if (k === 0) c.ni0 = ni;
         else c.ni1 = ni;
-        if (d !== 0) this.applyImpulse(a, b, rAx, rAy, rBx, rBy, d * c.nx, d * c.ny);
+        if (d !== 0) {
+          this.ipx = d * c.nx;
+          this.ipy = d * c.ny;
+          this.applyAt(c, k);
+        }
       }
     }
   }
@@ -1234,11 +1275,19 @@ export class World2 implements Poses {
    * more and more and fell over. Used when both points overlap (or both have a gap) and both stay pushing; false
    * otherwise, and the points are solved one by one.
    */
-  private softBlock(c: Contact, bias: boolean, inv_hs: number, sBias: number, sMass: number, sImp: number): boolean {
+  private softBlock(c: Contact, bias: boolean): boolean {
     const a = c.a;
     const b = c.b;
-    const s1 = this.gapOf(a, b, c.rAx0, c.rAy0, c.rBx0, c.rBy0, c.nx, c.ny, c.adj0);
-    const s2 = this.gapOf(a, b, c.rAx1, c.rAy1, c.rBx1, c.rBy1, c.nx, c.ny, c.adj1);
+    // (the soft constants of the contact, as `solveSoft` takes them; they are fields, not arguments)
+    const inv_hs = this.invHs;
+    const wall = this.type[a] !== BodyType.Dynamic || this.type[b] !== BodyType.Dynamic;
+    const sBias = wall ? this.wallBias : this.softBias;
+    const sMass = wall ? this.wallMass : this.softMass;
+    const sImp = wall ? this.wallImp : this.softImp;
+    this.gapAt(c, 0);
+    const s1 = this.gap;
+    this.gapAt(c, 1);
+    const s2 = this.gap;
     if (s1 > 0 !== s2 > 0) return false;
     // a face falling onto a wall with a bounce: the point-by-point relax pass leaves it its speed (see solveSoft)
     if (!bias && s1 > 0 && c.restitution > 0 && (this.type[a] !== BodyType.Dynamic || this.type[b] !== BodyType.Dynamic)) return false;
@@ -1271,8 +1320,16 @@ export class World2 implements Poses {
     c.ni1 = n2;
     const d1 = n1 - o1;
     const d2 = n2 - o2;
-    if (d1 !== 0) this.applyImpulse(a, b, c.rAx0, c.rAy0, c.rBx0, c.rBy0, d1 * c.nx, d1 * c.ny);
-    if (d2 !== 0) this.applyImpulse(a, b, c.rAx1, c.rAy1, c.rBx1, c.rBy1, d2 * c.nx, d2 * c.ny);
+    if (d1 !== 0) {
+      this.ipx = d1 * c.nx;
+      this.ipy = d1 * c.ny;
+      this.applyAt(c, 0);
+    }
+    if (d2 !== 0) {
+      this.ipx = d2 * c.nx;
+      this.ipy = d2 * c.ny;
+      this.applyAt(c, 1);
+    }
     return true;
   }
 
@@ -1318,7 +1375,8 @@ export class World2 implements Poses {
           const ex = (pfx[b] as number) - (pfw[b] as number) * rBy - (pfx[a] as number) + (pfw[a] as number) * rAy;
           const ey = (pfy[b] as number) + (pfw[b] as number) * rBx - (pfy[a] as number) - (pfw[a] as number) * rAx;
           v0 = ex * c.nx + ey * c.ny;
-          g = this.gapOf(a, b, rAx, rAy, rBx, rBy, c.nx, c.ny, k === 0 ? c.adj0 : c.adj1);
+          this.gapAt(c, k);
+          g = this.gap;
         }
         if (k === 0) {
           c.sf0 = vf;
@@ -1385,7 +1443,11 @@ export class World2 implements Poses {
         const d = ni - old;
         if (k === 0) c.ni0 = ni;
         else c.ni1 = ni;
-        if (d !== 0) this.applyImpulse(c.a, c.b, rAx, rAy, rBx, rBy, d * c.nx, d * c.ny);
+        if (d !== 0) {
+          this.ipx = d * c.nx;
+          this.ipy = d * c.ny;
+          this.applyAt(c, k);
+        }
       }
     }
   }
@@ -1430,12 +1492,20 @@ export class World2 implements Poses {
     const d2 = x2 - a2;
     c.ni0 = x1;
     c.ni1 = x2;
-    if (d1 !== 0) this.applyImpulse(a, b, c.rAx0, c.rAy0, c.rBx0, c.rBy0, d1 * c.nx, d1 * c.ny);
-    if (d2 !== 0) this.applyImpulse(a, b, c.rAx1, c.rAy1, c.rBx1, c.rBy1, d2 * c.nx, d2 * c.ny);
+    if (d1 !== 0) {
+      this.ipx = d1 * c.nx;
+      this.ipy = d1 * c.ny;
+      this.applyAt(c, 0);
+    }
+    if (d2 !== 0) {
+      this.ipx = d2 * c.nx;
+      this.ipy = d2 * c.ny;
+      this.applyAt(c, 1);
+    }
   }
 
   /** The speed apart (along the normal) of point k of contact c now. */
-  private normalSpeed(c: Contact, k: number): number {
+  private normalSpeed(c: Contact, k: number): void {
     const vx = this.vx;
     const vy = this.vy;
     const w = this.w;
@@ -1447,8 +1517,11 @@ export class World2 implements Poses {
     const rBy = k === 0 ? c.rBy0 : c.rBy1;
     const dvx = (vx[b] as number) - (w[b] as number) * rBy - (vx[a] as number) + (w[a] as number) * rAy;
     const dvy = (vy[b] as number) + (w[b] as number) * rBx - (vy[a] as number) - (w[a] as number) * rAx;
-    return dvx * c.nx + dvy * c.ny;
+    this.speed = dvx * c.nx + dvy * c.ny;
   }
+
+  /** What `normalSpeed` found (a field: a number returned from a call that is not inlined is a heap number). */
+  private speed = 0;
 
   private bounce(): void {
     const hs = this.hsNow;
@@ -1460,8 +1533,6 @@ export class World2 implements Poses {
       const q0 = !c.bounced0 && c.sf0 <= -RESTITUTION_THRESHOLD && c.sg0 + hs * c.sf0 < 0;
       const q1 = c.m.count > 1 && !c.bounced1 && c.sf1 <= -RESTITUTION_THRESHOLD && c.sg1 + hs * c.sf1 < 0;
       if (!q0 && !q1) continue;
-      const a = c.a;
-      const b = c.b;
       // each point's speed apart now (`normalSpeed`), and the speed it must reach
       let x0 = 0;
       let x1 = 0;
@@ -1469,25 +1540,36 @@ export class World2 implements Poses {
       const t1 = -c.restitution * c.sv1;
       if (q0 && q1 && c.block) {
         // both points of a face: K x = target − v, in one solve
-        const d0 = t0 - this.normalSpeed(c, 0);
-        const d1 = t1 - this.normalSpeed(c, 1);
+        this.normalSpeed(c, 0);
+        const d0 = t0 - this.speed;
+        this.normalSpeed(c, 1);
+        const d1 = t1 - this.speed;
         x0 = c.i11 * d0 + c.i12 * d1;
         x1 = c.i12 * d0 + c.i22 * d1;
         if (!(x0 >= 0 && x1 >= 0)) {
           x0 = Math.max(0, c.nm0 * d0);
           x1 = 0;
         }
-      } else if (q0) x0 = Math.max(0, c.nm0 * (t0 - this.normalSpeed(c, 0)));
-      else x1 = Math.max(0, c.nm1 * (t1 - this.normalSpeed(c, 1)));
+      } else if (q0) {
+        this.normalSpeed(c, 0);
+        x0 = Math.max(0, c.nm0 * (t0 - this.speed));
+      } else {
+        this.normalSpeed(c, 1);
+        x1 = Math.max(0, c.nm1 * (t1 - this.speed));
+      }
       if (q0) c.bounced0 = true;
       if (q1) c.bounced1 = true;
       if (x0 > 0) {
-        this.applyImpulse(a, b, c.rAx0, c.rAy0, c.rBx0, c.rBy0, x0 * c.nx, x0 * c.ny);
+        this.ipx = x0 * c.nx;
+        this.ipy = x0 * c.ny;
+        this.applyAt(c, 0);
         c.tn0 += x0;
         if (x0 > c.max0) c.max0 = x0;
       }
       if (x1 > 0) {
-        this.applyImpulse(a, b, c.rAx1, c.rAy1, c.rBx1, c.rBy1, x1 * c.nx, x1 * c.ny);
+        this.ipx = x1 * c.nx;
+        this.ipy = x1 * c.ny;
+        this.applyAt(c, 1);
         c.tn1 += x1;
         if (x1 > c.max1) c.max1 = x1;
       }
@@ -1700,18 +1782,31 @@ export class World2 implements Poses {
       const nfy = ni * c.ny * inv_h;
       const ffx = ti * tx * inv_h;
       const ffy = ti * ty * inv_h;
-      this.addKind(c.b, FK.normal, nfx, nfy);
-      this.addKind(c.a, FK.normal, -nfx, -nfy);
-      this.addKind(c.b, FK.friction, ffx, ffy);
-      this.addKind(c.a, FK.friction, -ffx, -ffy);
+      this.kx = nfx;
+      this.ky = nfy;
+      this.addKindNow(c.b, FK.normal);
+      this.kx = -nfx;
+      this.ky = -nfy;
+      this.addKindNow(c.a, FK.normal);
+      this.kx = ffx;
+      this.ky = ffy;
+      this.addKindNow(c.b, FK.friction);
+      this.kx = -ffx;
+      this.ky = -ffy;
+      this.addKindNow(c.a, FK.friction);
     }
-    for (const j of this.joints) {
+    for (let q = 0; q < this.joints.length; q++) {
+      const j = this.joints[q] as Joint2;
       if (j.broken) continue;
       // a joint's impulse is the last small step's
       const fx = j.impulseX * inv_hs;
       const fy = j.impulseY * inv_hs;
-      this.addKind(j.b, j.kind, fx, fy);
-      this.addKind(j.a, j.kind, -fx, -fy);
+      this.kx = fx;
+      this.ky = fy;
+      this.addKindNow(j.b, j.kind);
+      this.kx = -fx;
+      this.ky = -fy;
+      this.addKindNow(j.a, j.kind);
       if (j.breaks > 0 && fx * fx + fy * fy > j.breaks * j.breaks) j.broken = true;
     }
     for (let i = 0; i < this.n; i++) {
@@ -1724,16 +1819,22 @@ export class World2 implements Poses {
     }
   }
 
-  private addKind(i: number, kind: number, fx: number, fy: number): void {
+  /** The force `addKindNow` adds (a field: two numbers passed in a call are two heap numbers when it is not inlined, design 11.4). */
+  private kx = 0;
+  private ky = 0;
+
+  private addKindNow(i: number, kind: number): void {
     if (this.type[i] !== BodyType.Dynamic || this.awake[i] === 0) return;
     const o = i * NK * 2 + kind * 2;
-    this.forces[o] = (this.forces[o] as number) + fx;
-    this.forces[o + 1] = (this.forces[o + 1] as number) + fy;
+    this.forces[o] = (this.forces[o] as number) + this.kx;
+    this.forces[o + 1] = (this.forces[o + 1] as number) + this.ky;
   }
 
   /** Adds a force of a kind to a body's account (water, springs outside the solver). */
   account(i: number, kind: number, fx: number, fy: number): void {
-    this.addKind(i, kind, fx, fy);
+    this.kx = fx;
+    this.ky = fy;
+    this.addKindNow(i, kind);
   }
 
   forceOf(i: number, kind: number): { x: number; y: number } {
@@ -1813,7 +1914,11 @@ export class World2 implements Poses {
     const out = this.touchLists;
     while (out.length < this.n) out.push([]);
     out.length = this.n;
-    for (let i = 0; i < this.n; i++) (out[i] as number[]).length = 0;
+    // (a list is emptied with `pop`: `length = 0` frees its store and the next push makes one; `sort` with a comparator makes a copy, so the short lists are sorted by insertion)
+    for (let i = 0; i < this.n; i++) {
+      const l = out[i] as number[];
+      while (l.length > 0) l.pop();
+    }
     for (let kc = 0; kc < this.contacts.length; kc++) {
       const c = this.contacts[kc] as Contact;
       if (!c.touching) continue;
@@ -1824,7 +1929,15 @@ export class World2 implements Poses {
     }
     for (let i = 0; i < this.n; i++) {
       const l = out[i] as number[];
-      if (l.length > 1) l.sort(ascending);
+      for (let p = 1; p < l.length; p++) {
+        const v = l[p] as number;
+        let q = p - 1;
+        while (q >= 0 && (l[q] as number) > v) {
+          l[q + 1] = l[q] as number;
+          q--;
+        }
+        l[q + 1] = v;
+      }
     }
     return out;
   }
@@ -1870,12 +1983,15 @@ export class World2 implements Poses {
 
   /** Everything a step reads that changes: bodies, contacts with their impulses, joints. */
   save(): Float64Array {
+    // (no joints: the array is made at its size and written, with no list of numbers made first and copied)
+    if (this.joints.length === 0) return this.saveFlat();
     const out: number[] = [this.stepIndex, this.n];
     for (let i = 0; i < this.n; i++) {
       out.push(this.px[i] as number, this.py[i] as number, this.ang[i] as number, this.vx[i] as number, this.vy[i] as number, this.w[i] as number, this.sleepTime[i] as number, this.awake[i] as number, this.type[i] as number);
     }
     out.push(this.contactMap.size);
-    for (const c of this.contactMap.values()) {
+    for (let q = 0; q < this.contactMap.size; q++) {
+      const c = this.contactMap.list[q] as Contact;
       out.push(c.key, c.m.count, (c.touching ? 1 : 0) + (c.pushed ? 2 : 0), c.m.id0, c.ni0, c.ti0, c.m.id1, c.ni1, c.ti1);
     }
     out.push(this.joints.length);
@@ -1885,6 +2001,51 @@ export class World2 implements Poses {
     }
     out.push(this.gone.size, ...[...this.gone].sort((a, b) => a - b));
     return Float64Array.from(out);
+  }
+
+  /** `save` for a world with no joints: the same numbers in the same order. */
+  private saveFlat(): Float64Array {
+    const n = this.n;
+    const cm = this.contactMap;
+    const out = new Float64Array(2 + 9 * n + 1 + 9 * cm.size + 2 + this.gone.size);
+    out[0] = this.stepIndex;
+    out[1] = n;
+    let k = 2;
+    for (let i = 0; i < n; i++) {
+      out[k++] = this.px[i] as number;
+      out[k++] = this.py[i] as number;
+      out[k++] = this.ang[i] as number;
+      out[k++] = this.vx[i] as number;
+      out[k++] = this.vy[i] as number;
+      out[k++] = this.w[i] as number;
+      out[k++] = this.sleepTime[i] as number;
+      out[k++] = this.awake[i] as number;
+      out[k++] = this.type[i] as number;
+    }
+    out[k++] = cm.size;
+    for (let q = 0; q < cm.size; q++) {
+      const c = cm.list[q] as Contact;
+      out[k++] = c.key;
+      out[k++] = c.m.count;
+      out[k++] = (c.touching ? 1 : 0) + (c.pushed ? 2 : 0);
+      out[k++] = c.m.id0;
+      out[k++] = c.ni0;
+      out[k++] = c.ti0;
+      out[k++] = c.m.id1;
+      out[k++] = c.ni1;
+      out[k++] = c.ti1;
+    }
+    // no joints; the bodies gone, in ascending order
+    out[k++] = 0;
+    out[k++] = this.gone.size;
+    if (this.gone.size > 0) {
+      const from = k;
+      this.gone.forEach((b) => {
+        out[k++] = b;
+      });
+      out.subarray(from, k).sort();
+    }
+    return out;
   }
 
   load(s: Float64Array): void {
@@ -1903,8 +2064,8 @@ export class World2 implements Poses {
       this.type[i] = s[k++] as number;
       this.setRot(i);
     }
-    for (const c of this.contactMap.values()) this.pool.push(c);
-    this.contactMap = new Map();
+    for (let q = 0; q < this.contactMap.size; q++) this.pool.push(this.contactMap.list[q] as Contact);
+    this.contactMap.clear();
     this.contacts = [];
     const nc = s[k++] as number;
     for (let i = 0; i < nc; i++) {
@@ -1920,7 +2081,7 @@ export class World2 implements Poses {
       c.m.id1 = s[k++] as number;
       c.ni1 = s[k++] as number;
       c.ti1 = s[k++] as number;
-      this.contactMap.set(c.key, c);
+      this.contactMap.set(c);
     }
     const nj = s[k++] as number;
     for (let i = 0; i < nj && i < this.joints.length; i++) {
@@ -1955,8 +2116,65 @@ export function mixFriction(a: number, b: number): number {
   return Math.sqrt(a * b);
 }
 
+/**
+ * The contacts by pair key, in the order they were put (the order a checkpoint saves them in). A `Map` that is cleared or
+ * has its entries deleted every step makes a new table each time (design 11.4); this one is two arrays, written over.
+ */
+class ContactTable {
+  /** The contacts in the order put; `size` of them. */
+  readonly list: Contact[] = [];
+  size = 0;
+  private slots = new Int32Array(64);
+  private mask = 63;
+
+  private slotOf(key: number): number {
+    let s = Math.imul(key | 0, 0x9e3779b1) >>> 0;
+    s = (s ^ (s >>> 15)) & this.mask;
+    return s;
+  }
+
+  get(key: number): Contact | undefined {
+    let s = this.slotOf(key);
+    for (;;) {
+      const at = this.slots[s] as number;
+      if (at === 0) return undefined;
+      const c = this.list[at - 1] as Contact;
+      if (c.key === key) return c;
+      s = (s + 1) & this.mask;
+    }
+  }
+
+  /** Puts a contact (its `key` set); a key already there is not expected (a step puts each pair once). */
+  set(c: Contact): void {
+    if ((this.size + 1) * 2 > this.mask + 1) this.grow();
+    let s = this.slotOf(c.key);
+    while ((this.slots[s] as number) !== 0) s = (s + 1) & this.mask;
+    this.list[this.size++] = c;
+    this.slots[s] = this.size;
+  }
+
+  private grow(): void {
+    const cap = (this.mask + 1) * 2;
+    this.slots = new Int32Array(cap);
+    this.mask = cap - 1;
+    for (let i = 0; i < this.size; i++) {
+      let s = this.slotOf((this.list[i] as Contact).key);
+      while ((this.slots[s] as number) !== 0) s = (s + 1) & this.mask;
+      this.slots[s] = i + 1;
+    }
+  }
+
+  /** Empties the table; the arrays stay. */
+  clear(): void {
+    if (this.size === 0) return;
+    this.slots.fill(0);
+    this.size = 0;
+  }
+}
+
 function newContact(): Contact {
   return {
+    stamp: 0,
     key: 0, sa: 0, sb: 0, a: 0, b: 0, m: newManifold(), ni0: 0, ti0: 0, ni1: 0, ti1: 0, friction: 0, restitution: 0, touching: false, wasTouching: false, pushed: false, adj0: 0, adj1: 0, tn0: 0, tn1: 0, tt0: 0, tt1: 0, sv0: 0, sv1: 0, sg0: 0, sg1: 0, sf0: 0, sf1: 0, bounced0: false, bounced1: false,
     nx: 0, ny: 0, rAx0: 0, rAy0: 0, rBx0: 0, rBy0: 0, rAx1: 0, rAy1: 0, rBx1: 0, rBy1: 0, nm0: 0, tm0: 0, nm1: 0, tm1: 0, rv0: 0, rv1: 0, s0: 0, s1: 0, max0: 0, max1: 0, px0: 0, py0: 0,
     block: false, k11: 0, k22: 0, k12: 0, i11: 0, i22: 0, i12: 0,

@@ -208,6 +208,10 @@ export class FigureCore {
   protected readonly ruleCache = new WeakMap<readonly CompiledArg[], CommandRule>();
   protected pass: Pass | null = null;
   protected readonly listeners = new Set<Listener>();
+  /** The listeners as an array, rebuilt only when one subscribes or leaves (delivery walks it with an index, copying nothing). */
+  private listenerList: readonly Listener[] | null = null;
+  /** The event array of the last round, kept for the next one (a round swaps the two). */
+  private spareEvents: FigureEvent[] = [];
   protected pendingValues = new Set<ObjId>();
   protected pendingStyles = new Set<ObjId>();
   protected pendingEvents: FigureEvent[] = [];
@@ -1179,7 +1183,11 @@ export class FigureCore {
   on(listener: Listener): () => void {
     if (typeof listener !== 'function') return () => false;
     this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
+    this.listenerList = null;
+    return () => {
+      this.listenerList = null;
+      return this.listeners.delete(listener);
+    };
   }
 
   protected queue(ev: FigureEvent): void {
@@ -1206,26 +1214,45 @@ export class FigureCore {
     this.delivering = true;
     try {
       for (let round = 0; round < 1000; round++) {
+        // (nothing queued: nothing is made, so a quiet frame with listeners attached makes no garbage)
+        if (this.pendingEvents.length === 0 && this.pendingValues.size === 0 && this.pendingStyles.size === 0) return;
         const evs = this.pendingEvents;
-        this.pendingEvents = [];
-        if (this.pendingValues.size > 0) evs.push({ ev: 'value', ids: [...this.pendingValues] });
-        if (this.pendingStyles.size > 0) evs.push({ ev: 'style', ids: [...this.pendingStyles] });
-        this.pendingValues = new Set();
-        this.pendingStyles = new Set();
-        if (evs.length === 0 || this.listeners.size === 0) return;
-        for (const ev of evs) {
-          for (const l of [...this.listeners]) {
+        this.pendingEvents = this.spareEvents;
+        if (this.pendingValues.size > 0) {
+          evs.push({ ev: 'value', ids: [...this.pendingValues] });
+          this.pendingValues = new Set();
+        }
+        if (this.pendingStyles.size > 0) {
+          evs.push({ ev: 'style', ids: [...this.pendingStyles] });
+          this.pendingStyles = new Set();
+        }
+        if (this.listeners.size === 0) {
+          this.spareEvents = this.emptied(evs);
+          return;
+        }
+        for (let e = 0; e < evs.length; e++) {
+          const ev = evs[e] as FigureEvent;
+          // (a listener that subscribes or leaves changes the list the next event is told to, as the copy it replaces did)
+          const ls = this.listenerList ?? (this.listenerList = [...this.listeners]);
+          for (let i = 0; i < ls.length; i++) {
             try {
-              l(ev);
+              (ls[i] as Listener)(ev);
             } catch {
               this.listenerFailures++;
             }
           }
         }
+        this.spareEvents = this.emptied(evs);
       }
     } finally {
       this.delivering = false;
     }
+  }
+
+  /** Empties a round's events and keeps the array (`length = 0` would free its store and the next push would make one). */
+  private emptied(evs: FigureEvent[]): FigureEvent[] {
+    while (evs.length > 0) evs.pop();
+    return evs;
   }
 
   /** Listener faults since the last call (they become a `listener_failed` notice). */
