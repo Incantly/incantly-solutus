@@ -2,7 +2,7 @@
  * Cloth (docs/features/physics/design.md 9.5, 9.6, 10.3, 11.3): sheets, ropes and nets of points joined by links,
  * stepped by extended position-based dynamics (XPBD) with small steps.
  *
- * One world step of `h` is 4 small steps of `h / 4`. Each small step moves the points by their speed, gravity and the
+ * One world step of `h` is 3 small steps of `h / 3` (4 when a cloth has `self = true`). Each small step moves the points by their speed, gravity and the
  * air, pulls every link back toward its length once in a fixed order (stretch links in red-black order, then shear,
  * then bend), holds the pins, pulls points back within reach of their pins (tethers, below), pushes the points out of
  * solids and bodies with friction, and sets each point's speed from how far it moved, less the damping. After the small
@@ -25,6 +25,8 @@ import { NeighbourGrid3 } from './grid3';
 
 /** Small steps per world step (design 9.5). */
 export const SUBSTEPS = 4;
+/** Small steps per world step when no cloth hits itself (design 9.5): the folds of a cloth on itself need all four. */
+export const SUBSTEPS_FAST = 3;
 /** The most points of one sheet, of one rope, and of every cloth of a figure (design 11.3). */
 export const MAX_SHEET_U = 64;
 export const MAX_SHEET_V = 32;
@@ -196,6 +198,10 @@ export class ClothSet {
   btBody: Int32Array;
   btWorld: Int32Array;
   btRest: Float64Array;
+  /** Small steps per world step: 4 when a cloth hits itself, else 3 (decided when the set is built, so it never changes). */
+  readonly subs: number;
+  /** A rope's bend links are solved every this many small steps (every second one, or once a step when the number is odd). */
+  readonly ropeBendEvery: number;
   gx = 0;
   gy = 0;
   gz = -9.8;
@@ -242,6 +248,8 @@ export class ClothSet {
 
   constructor(defs: readonly ClothDef[], dim: 2 | 3) {
     this.dim = dim;
+    this.subs = defs.some((d) => d.self) ? SUBSTEPS : SUBSTEPS_FAST;
+    this.ropeBendEvery = this.subs % 2 === 0 ? 2 : this.subs;
     let np = 0;
     let nl = 0;
     let nt = 0;
@@ -700,7 +708,7 @@ export class ClothSet {
     return false;
   }
 
-  /** One world step of h: 4 small steps of the cloth against the bodies where they are now (design 9.5, 9.6). */
+  /** One world step of h: 3 (or 4) small steps of the cloth against the bodies where they are now (design 9.5, 9.6). */
   stepCloth(h: number): void {
     this.steps++;
     this.hStep = h;
@@ -769,7 +777,7 @@ export class ClothSet {
     }
     this.prepare(h);
     this.prepareSelf();
-    const hs = h / SUBSTEPS;
+    const hs = h / this.subs;
     this.prepLinks(hs);
     this.beginSub();
     // the air's push, once a step from the speeds at its start, felt in each small step
@@ -777,14 +785,14 @@ export class ClothSet {
       const ci = this.cloths[c] as ClothInfo;
       if (!ci.asleep && !ci.unstable) this.airForces(ci, hs);
     }
-    for (let s = 0; s < SUBSTEPS; s++) {
-      this.subFrac = (s + 1) / SUBSTEPS;
-      this.substep(hs, s === 0, s === SUBSTEPS - 1);
+    for (let s = 0; s < this.subs; s++) {
+      this.subFrac = (s + 1) / this.subs;
+      this.substep(hs, s === 0, s === this.subs - 1);
     }
     this.endSub();
     this.endDrops();
     // the forces on the pins, averaged over the small steps
-    const inv = 1 / (SUBSTEPS * hs * hs);
+    const inv = 1 / (this.subs * hs * hs);
     for (let q = 0; q < this.pinFx.length; q++) {
       this.pinFx[q] = (this.pinFx[q] as number) * inv;
       this.pinFy[q] = (this.pinFy[q] as number) * inv;
@@ -925,13 +933,13 @@ export class ClothSet {
       if (c.def.kind === 'rope') {
         // a rope's stretch links are one chain: solved together along it, then its bend links once each
         this.solveChain(c, inv2);
-        if (this.subFrac * SUBSTEPS % 2 === 0) this.solveLinks(c.l0 + c.n - 1, c.l0 + c.ln, inv2 * 0.25);
+        if (Math.round(this.subFrac * this.subs) % this.ropeBendEvery === 0) this.solveLinks(c.l0 + c.n - 1, c.l0 + c.ln, inv2 / (this.ropeBendEvery * this.ropeBendEvery));
       } else {
-        const k = Math.round(this.subFrac * SUBSTEPS);
-        // bend links once a world step, as over a small step four times as long: the same stiffness for a quarter of
-        // the work (shear links stay in every small step: a sheet crumpled on a post folds its cells flat without them)
+        const k = Math.round(this.subFrac * this.subs);
+        // bend links once a world step, as over a small step as long as the whole step: the same stiffness for a fraction
+        // of the work (shear links stay in every small step: a sheet crumpled on a post folds its cells flat without them)
         this.solveLinks(c.l0, c.bend0, inv2);
-        if (k === SUBSTEPS) this.solveLinks(c.bend0, c.l0 + c.ln, inv2 / (SUBSTEPS * SUBSTEPS));
+        if (k === this.subs) this.solveLinks(c.bend0, c.l0 + c.ln, inv2 / (this.subs * this.subs));
       }
       this.solveTethers(c.te0, c.te0 + c.teN);
       if (c.btN > 0) this.solveBodyTethers(c);
@@ -1074,12 +1082,12 @@ export class ClothSet {
       this.svx[k] = o[3] as number;
       this.svy[k] = o[4] as number;
       this.svz[k] = o[5] as number;
-      this.sdx[k] = ((o[9] as number) - (o[3] as number)) / SUBSTEPS;
-      this.sdy[k] = ((o[10] as number) - (o[4] as number)) / SUBSTEPS;
-      this.sdz[k] = ((o[11] as number) - (o[5] as number)) / SUBSTEPS;
-      this.swx[k] = ((o[6] as number) - (o[0] as number)) / SUBSTEPS;
-      this.swy[k] = ((o[7] as number) - (o[1] as number)) / SUBSTEPS;
-      this.swz[k] = ((o[8] as number) - (o[2] as number)) / SUBSTEPS;
+      this.sdx[k] = ((o[9] as number) - (o[3] as number)) / this.subs;
+      this.sdy[k] = ((o[10] as number) - (o[4] as number)) / this.subs;
+      this.sdz[k] = ((o[11] as number) - (o[5] as number)) / this.subs;
+      this.swx[k] = ((o[6] as number) - (o[0] as number)) / this.subs;
+      this.swy[k] = ((o[7] as number) - (o[1] as number)) / this.subs;
+      this.swz[k] = ((o[8] as number) - (o[2] as number)) / this.subs;
       this.swvx[k] = o[3] as number;
       this.swvy[k] = o[4] as number;
       this.swvz[k] = o[5] as number;
@@ -1212,9 +1220,10 @@ export class ClothSet {
         this.slowL[this.nSlow++] = k;
       }
       else {
-        // as solved: a sheet's bend links once a world step, a rope's every second small step
+        // as solved: a sheet's bend links once a world step, a rope's every second small step (once a step with an odd number)
         const rope = (this.cloths[this.owner[a] as number] as ClothInfo).def.kind === 'rope';
-        const i2 = kind[k] === LinkKind.bend ? (rope ? inv2 * 0.25 : inv2 / (SUBSTEPS * SUBSTEPS)) : inv2;
+        const ev = rope ? this.ropeBendEvery : this.subs;
+        const i2 = kind[k] === LinkKind.bend ? inv2 / (ev * ev) : inv2;
         const ws = (w0[a] as number) + (w0[b] as number);
         lq[k] = ws > 0 && r > 0 ? 1 / (2 * r * r * (ws + (alpha[k] as number) * i2)) : 0;
       }
