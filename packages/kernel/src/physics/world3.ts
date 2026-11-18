@@ -112,6 +112,16 @@ interface CPoint {
   t2m: number;
   rv: number;
   max: number;
+  /** Soft step: the step's impulses added up over its small steps (for the force readouts and hits). */
+  tn: number;
+  t1t: number;
+  t2t: number;
+  /** Soft step: closing speed before and after the small step's forces, the gap then, the bounce given, and if it bounced. */
+  sv: number;
+  sf: number;
+  sg: number;
+  bi: number;
+  bounced: number;
 }
 
 interface Contact3 {
@@ -165,9 +175,11 @@ export interface Joint3 {
 }
 
 const SLOP = 0.005;
-const BAUMGARTE = 0.2;
-const MAX_CORR = 0.2;
 const RESTITUTION_THRESHOLD = 1;
+/** Soft contacts (design 6.5): stiffness in Hz, damping ratio, and the fastest push-out of an overlap, m/s. */
+const CONTACT_HERTZ = 30;
+const CONTACT_DAMPING = 10;
+const MAX_PUSH_OUT = 3;
 const HIT_THRESHOLD = 0.05;
 const SLEEP_LIN = 0.01;
 const SLEEP_ANG = 0.03;
@@ -582,76 +594,51 @@ export class World3 {
     this.pv.set(this.v);
     this.pw.set(this.w);
     for (let i = 0; i < n; i++) if (this.type[i] !== BodyType3.Dynamic || this.awake[i] === 1) this.forces.fill(0, i * NK * 3, (i + 1) * NK * 3);
-    const damp = 1 / (1 + h * this.air);
+    // pushes and steady forces wake a body; the speeds at the start with this step's pushes, for the net force
     const v0 = new Float64Array(this.v);
     for (let i = 0; i < n; i++) {
       if (this.type[i] !== BodyType3.Dynamic) continue;
       const pushed = this.force[i * 3] !== 0 || this.force[i * 3 + 1] !== 0 || this.force[i * 3 + 2] !== 0 || this.impulse[i * 3] !== 0 || this.impulse[i * 3 + 1] !== 0 || this.impulse[i * 3 + 2] !== 0 || this.torque[i * 3] !== 0 || this.torque[i * 3 + 1] !== 0 || this.torque[i * 3 + 2] !== 0;
       if (pushed && this.awake[i] === 0) this.wakeBody(i);
-      if (this.awake[i] === 0) continue;
-      const m = this.mass[i] as number;
-      const im = this.invM[i] as number;
-      const g = [this.gx, this.gy, this.gz];
-      for (let a = 0; a < 3; a++) {
-        const o = i * 3 + a;
-        this.forces[i * NK * 3 + FK3.gravity * 3 + a] = m * (g[a] as number);
-        this.forces[i * NK * 3 + FK3.applied * 3 + a] = this.force[o] as number;
-        let vv = (this.v[o] as number) + h * ((g[a] as number) + im * (this.force[o] as number)) + im * (this.impulse[o] as number);
-        if (this.air > 0) {
-          this.forces[i * NK * 3 + FK3.drag * 3 + a] = (m * vv * (damp - 1)) / h;
-          vv *= damp;
-        }
-        this.v[o] = vv;
-        this.impulse[o] = 0;
-      }
-      // turning: ω += h I⁻¹ τ
-      const tq = [this.torque[i * 3] as number, this.torque[i * 3 + 1] as number, this.torque[i * 3 + 2] as number];
-      const I = this.invIw;
-      for (let a = 0; a < 3; a++) {
-        let s = 0;
-        for (let b = 0; b < 3; b++) s += (I[i * 9 + a * 3 + b] as number) * (tq[b] as number);
-        this.w[i * 3 + a] = ((this.w[i * 3 + a] as number) + h * s) * (this.air > 0 ? damp : 1);
-      }
+      for (let a = 0; a < 3; a++) v0[i * 3 + a] = (v0[i * 3 + a] as number) + (this.invM[i] as number) * (this.impulse[i * 3 + a] as number);
     }
     for (let i = 0; i < n; i++) if ((this.type[i] !== BodyType3.Static || this.stepIndex === 0) && !this.gone.has(i)) this.updateShapes(i);
     this.findPairs();
     this.updateContacts(h);
     this.wakeTouched();
     this.initContacts();
+    // the soft step (design 6.5), as in the plane: small steps of forces, bounce, warm start, solve, move, relax
     const live = this.joints.filter((j) => this.live(j));
-    for (const j of live) j.initVelocity(this, h);
-    this.warmStart();
-    const inv_h = 1 / h;
-    for (let it = 0; it < this.passes; it++) {
-      for (const j of live) if (!j.broken) j.solveVelocity(this, h);
-      this.solveContacts(inv_h);
+    const S = this.substeps;
+    const hs = h / S;
+    const inv_hs = 1 / hs;
+    this.beginSoft(hs);
+    for (let s = 0; s < S; s++) {
+      this.pfv.set(this.v);
+      this.pfw.set(this.w);
+      this.integrateForces(hs, s === 0, S);
+      if (s === S - 1) this.impulse.fill(0);
+      this.closingSpeeds(hs);
+      this.bounceWalls();
+      for (const j of live) if (!j.broken) j.initVelocity(this, hs);
+      this.warmStart();
+      for (const j of live) if (!j.broken) j.solveVelocity(this, hs);
+      this.solveSoft(inv_hs, true);
+      this.integratePositions(hs);
+      for (const j of live) if (!j.broken) j.solveVelocity(this, hs);
+      this.solveSoft(inv_hs, false);
+      this.bounceBodies();
+      this.addUpImpulses();
     }
-    this.restitution();
-    // move: positions and quaternions
-    for (let i = 0; i < n; i++) {
-      if (this.type[i] !== BodyType3.Dynamic || this.awake[i] === 0) continue;
-      for (let a = 0; a < 3; a++) this.p[i * 3 + a] = (this.p[i * 3 + a] as number) + h * (this.v[i * 3 + a] as number);
-      const o = i * 4;
-      const wx = this.w[i * 3] as number;
-      const wy = this.w[i * 3 + 1] as number;
-      const wz = this.w[i * 3 + 2] as number;
-      const qw = this.q[o] as number;
-      const qx = this.q[o + 1] as number;
-      const qy = this.q[o + 2] as number;
-      const qz = this.q[o + 3] as number;
-      const k = 0.5 * h;
-      this.q[o] = qw + k * (-wx * qx - wy * qy - wz * qz);
-      this.q[o + 1] = qx + k * (wx * qw + wy * qz - wz * qy);
-      this.q[o + 2] = qy + k * (-wx * qz + wy * qw + wz * qx);
-      this.q[o + 3] = qz + k * (wx * qy - wy * qx + wz * qw);
-      this.setRot(i);
+    // joints only: contacts need no position pass, their soft push-out took the overlap
+    if (live.length > 0) {
+      for (let it = 0; it < 3; it++) {
+        let ok = true;
+        for (const j of live) if (!j.broken) ok = j.solvePosition(this) && ok;
+        if (ok) break;
+      }
     }
-    for (let it = 0; it < 3; it++) {
-      let ok = this.solvePositions();
-      for (const j of live) if (!j.broken) ok = j.solvePosition(this) && ok;
-      if (ok) break;
-    }
-    this.countForces(h, v0);
+    this.countForces(h, v0, inv_hs);
     this.collectHits();
     if (this.sleeping) this.sleepIslands(h);
     for (let i = 0; i < n; i++) {
@@ -865,7 +852,7 @@ export class World3 {
       const az = q.z - q.s * c.nz;
       const la = this.toLocal(c.a, ax, ay, az);
       const lb = this.toLocal(c.b, q.x, q.y, q.z);
-      const cp: CPoint = { ax: la[0], ay: la[1], az: la[2], bx: lb[0], by: lb[1], bz: lb[2], s: q.s, ni: 0, t1i: 0, t2i: 0, rax: 0, ray: 0, raz: 0, rbx: 0, rby: 0, rbz: 0, nm: 0, t1m: 0, t2m: 0, rv: 0, max: 0 };
+      const cp: CPoint = { ax: la[0], ay: la[1], az: la[2], bx: lb[0], by: lb[1], bz: lb[2], s: q.s, ni: 0, t1i: 0, t2i: 0, rax: 0, ray: 0, raz: 0, rbx: 0, rby: 0, rbz: 0, nm: 0, t1m: 0, t2m: 0, rv: 0, max: 0, tn: 0, t1t: 0, t2t: 0, sv: 0, sf: 0, sg: 0, bi: 0, bounced: 0 };
       // warm start from the old point nearest on B
       let best: CPoint | undefined;
       let bd = 0.04 * 0.04;
@@ -1067,8 +1054,155 @@ export class World3 {
     }
   }
 
-  private solveContacts(inv_h: number): void {
+  /* ------------------------------ the soft step (design 6.5) ------------------------------ */
+
+  /** Small steps a step: half the passes, rounded up (4 at the default 8). */
+  get substeps(): number {
+    return Math.max(1, Math.ceil(this.passes / 2));
+  }
+
+  /** The speeds before a small step's forces (for the bounces), and the soft contact numbers of the small steps. */
+  private pfv = new Float64Array(0);
+  private pfw = new Float64Array(0);
+  private softBias = 0;
+  private softMass = 1;
+  private softImp = 0;
+  private wallBias = 0;
+  private wallMass = 1;
+  private wallImp = 0;
+
+  private beginSoft(hs: number): void {
+    if (this.pfv.length !== this.v.length) {
+      this.pfv = new Float64Array(this.v.length);
+      this.pfw = new Float64Array(this.w.length);
+    }
+    // a contact is a stiff, heavily damped spring: 30 Hz (at most a quarter of the small steps' rate), damping ratio 10
+    const hz = Math.min(CONTACT_HERTZ, 0.25 / hs);
+    const soft = (f: number): [number, number, number] => {
+      const om = 2 * Math.PI * f;
+      const a1 = 2 * CONTACT_DAMPING + hs * om;
+      const a2 = hs * om * a1;
+      const a3 = 1 / (1 + a2);
+      return [om / a1, a2 * a3, a3];
+    };
+    [this.softBias, this.softMass, this.softImp] = soft(hz);
+    [this.wallBias, this.wallMass, this.wallImp] = soft(2 * hz);
     for (const c of this.contacts) {
+      for (const p of c.pts) {
+        p.tn = p.t1t = p.t2t = 0;
+        p.max = 0;
+        p.bounced = 0;
+      }
+    }
+  }
+
+  /** Gravity, steady forces, torques, drag, and the step's pushes spread over its small steps, into the speeds. */
+  private integrateForces(hs: number, first: boolean, S: number): void {
+    const n = this.n;
+    const damp = 1 / (1 + hs * this.air);
+    const g0 = this.gx;
+    const g1 = this.gy;
+    const g2 = this.gz;
+    const I = this.invIw;
+    for (let i = 0; i < n; i++) {
+      if (this.type[i] !== BodyType3.Dynamic || this.awake[i] === 0) continue;
+      const m = this.mass[i] as number;
+      const im = this.invM[i] as number;
+      for (let a = 0; a < 3; a++) {
+        const o = i * 3 + a;
+        const g = a === 0 ? g0 : a === 1 ? g1 : g2;
+        const f = i * NK * 3;
+        if (first) {
+          this.forces[f + FK3.gravity * 3 + a] = m * g;
+          this.forces[f + FK3.applied * 3 + a] = this.force[o] as number;
+        }
+        let vv = (this.v[o] as number) + hs * (g + im * (this.force[o] as number)) + (im * (this.impulse[o] as number)) / S;
+        if (this.air > 0) {
+          // the drag force, the mean over the small steps
+          this.forces[f + FK3.drag * 3 + a] = (first ? 0 : (this.forces[f + FK3.drag * 3 + a] as number)) + (m * vv * (damp - 1)) / hs / S;
+          vv *= damp;
+        }
+        this.v[o] = vv;
+      }
+      // turning: ω += hs I⁻¹ τ
+      const tx = this.torque[i * 3] as number;
+      const ty = this.torque[i * 3 + 1] as number;
+      const tz = this.torque[i * 3 + 2] as number;
+      for (let a = 0; a < 3; a++) {
+        const s = (I[i * 9 + a * 3] as number) * tx + (I[i * 9 + a * 3 + 1] as number) * ty + (I[i * 9 + a * 3 + 2] as number) * tz;
+        this.w[i * 3 + a] = ((this.w[i * 3 + a] as number) + hs * s) * (this.air > 0 ? damp : 1);
+      }
+    }
+  }
+
+  /** Positions and turns move by speed times the small step. */
+  private integratePositions(hs: number): void {
+    const n = this.n;
+    for (let i = 0; i < n; i++) {
+      if (this.type[i] !== BodyType3.Dynamic || this.awake[i] === 0) continue;
+      for (let a = 0; a < 3; a++) this.p[i * 3 + a] = (this.p[i * 3 + a] as number) + hs * (this.v[i * 3 + a] as number);
+      const o = i * 4;
+      const wx = this.w[i * 3] as number;
+      const wy = this.w[i * 3 + 1] as number;
+      const wz = this.w[i * 3 + 2] as number;
+      const qw = this.q[o] as number;
+      const qx = this.q[o + 1] as number;
+      const qy = this.q[o + 2] as number;
+      const qz = this.q[o + 3] as number;
+      const k = 0.5 * hs;
+      this.q[o] = qw + k * (-wx * qx - wy * qy - wz * qz);
+      this.q[o + 1] = qx + k * (wx * qw + wy * qz - wz * qy);
+      this.q[o + 2] = qy + k * (-wx * qz + wy * qw + wz * qx);
+      this.q[o + 3] = qz + k * (wx * qy - wy * qx + wz * qw);
+      this.setRot(i);
+    }
+  }
+
+  /** Point p's gap now: its two anchors at the bodies' poses now, along the contact's normal. */
+  private gapOf(c: Contact3, p: CPoint): number {
+    const R = this.R;
+    const a = c.a;
+    const b = c.b;
+    const ra = a * 9;
+    const rb = b * 9;
+    const ax = (this.p[a * 3] as number) + (R[ra] as number) * p.ax + (R[ra + 1] as number) * p.ay + (R[ra + 2] as number) * p.az;
+    const ay = (this.p[a * 3 + 1] as number) + (R[ra + 3] as number) * p.ax + (R[ra + 4] as number) * p.ay + (R[ra + 5] as number) * p.az;
+    const az = (this.p[a * 3 + 2] as number) + (R[ra + 6] as number) * p.ax + (R[ra + 7] as number) * p.ay + (R[ra + 8] as number) * p.az;
+    const bx = (this.p[b * 3] as number) + (R[rb] as number) * p.bx + (R[rb + 1] as number) * p.by + (R[rb + 2] as number) * p.bz;
+    const by = (this.p[b * 3 + 1] as number) + (R[rb + 3] as number) * p.bx + (R[rb + 4] as number) * p.by + (R[rb + 5] as number) * p.bz;
+    const bz = (this.p[b * 3 + 2] as number) + (R[rb + 6] as number) * p.bx + (R[rb + 7] as number) * p.by + (R[rb + 8] as number) * p.bz;
+    return c.nx * (bx - ax) + c.ny * (by - ay) + c.nz * (bz - az);
+  }
+
+  /** Each point's closing speed after the small step's forces; for a point fast enough to bounce, before them and its gap. */
+  private closingSpeeds(hs: number): void {
+    this.hsNow = hs;
+    for (const c of this.contacts) {
+      if (c.restitution === 0) continue;
+      for (const p of c.pts) {
+        p.sf = this.relV(c.a, c.b, p, c.nx, c.ny, c.nz);
+        if (p.sf <= -RESTITUTION_THRESHOLD) {
+          p.sv = this.relV(c.a, c.b, p, c.nx, c.ny, c.nz, this.pfv, this.pfw);
+          p.sg = this.gapOf(c, p);
+        } else {
+          p.sv = p.sf;
+          p.sg = 0;
+        }
+      }
+    }
+  }
+
+  /**
+   * One pass over the contacts in a small step: friction first, then the push of each point. With `bias`, a point that
+   * overlaps is pushed out softly (at most 3 m/s); without (the relax pass), only to a standstill. A point with a gap may
+   * close it within the small step, but not go below zero (speculative).
+   */
+  private solveSoft(inv_hs: number, bias: boolean): void {
+    for (const c of this.contacts) {
+      const wall = this.type[c.a] !== BodyType3.Dynamic || this.type[c.b] !== BodyType3.Dynamic;
+      const sBias = wall ? this.wallBias : this.softBias;
+      const sMass = wall ? this.wallMass : this.softMass;
+      const sImp = wall ? this.wallImp : this.softImp;
       for (const p of c.pts) {
         // friction in two directions, a box of μ times the push
         const maxF = c.friction * p.ni;
@@ -1090,56 +1224,94 @@ export class World3 {
         }
       }
       for (const p of c.pts) {
+        const s = this.gapOf(c, p);
         const vn = this.relV(c.a, c.b, p, c.nx, c.ny, c.nz);
-        const bias = p.s > 0 ? p.s * inv_h : 0;
+        // the relax pass leaves a fast point with a gap to a wall alone if it bounces: it meets in the next small step
+        // and bounces there with its full speed
+        if (!bias && wall && s > 0 && c.restitution > 0 && vn <= -RESTITUTION_THRESHOLD) continue;
+        let bv = 0;
+        let ms = 1;
+        let is = 0;
+        if (s > 0) bv = s * inv_hs;
+        else if (bias) {
+          bv = Math.max(sBias * s, -MAX_PUSH_OUT);
+          ms = sMass;
+          is = sImp;
+        }
         const old = p.ni;
-        const nw = Math.max(0, old - p.nm * (vn + bias));
+        const nw = Math.max(0, old - p.nm * ms * (vn + bv) - is * old);
         p.ni = nw;
-        if (nw > p.max) p.max = nw;
         const d = nw - old;
         if (d !== 0) this.applyAt(c.a, c.b, p.rax, p.ray, p.raz, p.rbx, p.rby, p.rbz, d * c.nx, d * c.ny, d * c.nz);
       }
     }
   }
 
-  private restitution(): void {
+  /**
+   * Bounces of contact c's points that qualify: each point's speed apart reaches `bounce` × its closing speed before
+   * the small step's forces. The points of a face are solved together by a few passes over them with the bounce
+   * impulses added up and kept at zero or more (one pass, point after point, gave the first corner the bounce and set a
+   * landing box spinning). The bounce is not kept for warm starting.
+   */
+  private bounceContact(c: Contact3, wallStep: boolean): void {
+    let any = false;
+    for (const p of c.pts) {
+      p.bi = 0;
+      const q = p.bounced === 0 && (wallStep ? p.sf <= -RESTITUTION_THRESHOLD && p.sg + this.hsNow * p.sf < 0 : p.sv <= -RESTITUTION_THRESHOLD && p.ni > 0);
+      if (q) {
+        p.bounced = 2;
+        any = true;
+      }
+    }
+    if (!any) return;
+    for (let it = 0; it < 8; it++) {
+      for (const p of c.pts) {
+        if (p.bounced !== 2) continue;
+        const vn = this.relV(c.a, c.b, p, c.nx, c.ny, c.nz);
+        const target = -c.restitution * p.sv;
+        const nw = Math.max(0, p.bi + p.nm * (target - vn));
+        const d = nw - p.bi;
+        p.bi = nw;
+        if (d !== 0) this.applyAt(c.a, c.b, p.rax, p.ray, p.raz, p.rbx, p.rby, p.rbz, d * c.nx, d * c.ny, d * c.nz);
+      }
+    }
+    for (const p of c.pts) {
+      if (p.bounced !== 2) continue;
+      p.bounced = 1;
+      p.tn += p.bi;
+      if (p.bi > p.max) p.max = p.bi;
+    }
+  }
+
+  private hsNow = 0;
+
+  /** Off a wall: a point that would go through its gap in this small step turns back now, before it moves. */
+  private bounceWalls(): void {
     for (const c of this.contacts) {
       if (c.restitution === 0) continue;
-      for (const p of c.pts) {
-        if (p.rv > -RESTITUTION_THRESHOLD || p.max === 0) continue;
-        const vn = this.relV(c.a, c.b, p, c.nx, c.ny, c.nz);
-        const old = p.ni;
-        const nw = Math.max(0, old - p.nm * (vn + c.restitution * p.rv));
-        p.ni = nw;
-        const d = nw - old;
-        if (d !== 0) this.applyAt(c.a, c.b, p.rax, p.ray, p.raz, p.rbx, p.rby, p.rbz, d * c.nx, d * c.ny, d * c.nz);
-      }
+      if (this.type[c.a] === BodyType3.Dynamic && this.type[c.b] === BodyType3.Dynamic) continue;
+      this.bounceContact(c, true);
     }
   }
 
-  private solvePositions(): boolean {
-    let worst = 0;
+  /** Between two bodies: after the relax pass of the small step where a point first pushes (turning back before the move let a falling stack sink and fall over). */
+  private bounceBodies(): void {
     for (const c of this.contacts) {
-      const a = c.a;
-      const b = c.b;
-      if ((this.invM[a] as number) + (this.invM[b] as number) === 0) continue;
+      if (c.restitution === 0 || this.type[c.a] !== BodyType3.Dynamic || this.type[c.b] !== BodyType3.Dynamic) continue;
+      this.bounceContact(c, false);
+    }
+  }
+
+  /** After a small step: its impulses go into the step's totals and the largest push. */
+  private addUpImpulses(): void {
+    for (const c of this.contacts) {
       for (const p of c.pts) {
-        const wa = this.toWorld(a, p.ax, p.ay, p.az);
-        const wb = this.toWorld(b, p.bx, p.by, p.bz);
-        const s = c.nx * (wb[0] - wa[0]) + c.ny * (wb[1] - wa[1]) + c.nz * (wb[2] - wa[2]);
-        if (s < worst) worst = s;
-        const C = Math.max(-MAX_CORR, Math.min(0, BAUMGARTE * (s + SLOP)));
-        if (C === 0) continue;
-        const mx = 0.5 * (wa[0] + wb[0]);
-        const my = 0.5 * (wa[1] + wb[1]);
-        const mz = 0.5 * (wa[2] + wb[2]);
-        const q: CPoint = { ...p, rax: mx - (this.p[a * 3] as number), ray: my - (this.p[a * 3 + 1] as number), raz: mz - (this.p[a * 3 + 2] as number), rbx: mx - (this.p[b * 3] as number), rby: my - (this.p[b * 3 + 1] as number), rbz: mz - (this.p[b * 3 + 2] as number) };
-        const K = this.effMass(a, b, q, c.nx, c.ny, c.nz);
-        const imp = K > 0 ? -C / K : 0;
-        this.movePose(a, b, q, imp * c.nx, imp * c.ny, imp * c.nz);
+        p.tn += p.ni;
+        p.t1t += p.t1i;
+        p.t2t += p.t2i;
+        if (p.ni > p.max) p.max = p.ni;
       }
     }
-    return worst >= -3 * SLOP;
   }
 
   /** A position-pass impulse: moves and turns a and b without touching their speeds. */
@@ -1249,7 +1421,7 @@ export class World3 {
     for (let i = 0; i < n; i++) if (this.type[i] === BodyType3.Dynamic && this.awake[i] === 1 && (minT[this.find(i)] as number) >= TIME_TO_SLEEP) this.sleepBody(i);
   }
 
-  private countForces(h: number, v0: Float64Array): void {
+  private countForces(h: number, v0: Float64Array, inv_hs: number): void {
     const inv_h = 1 / h;
     const add = (i: number, k: number, x: number, y: number, z: number): void => {
       if (this.type[i] !== BodyType3.Dynamic || this.awake[i] === 0) return;
@@ -1262,10 +1434,11 @@ export class World3 {
       let ni = 0;
       let f1 = 0;
       let f2 = 0;
+      // the step's impulses, added up over its small steps
       for (const p of c.pts) {
-        ni += p.ni;
-        f1 += p.t1i;
-        f2 += p.t2i;
+        ni += p.tn;
+        f1 += p.t1t;
+        f2 += p.t2t;
       }
       const nx = ni * c.nx * inv_h;
       const ny = ni * c.ny * inv_h;
@@ -1280,15 +1453,15 @@ export class World3 {
     }
     for (const j of this.joints) {
       if (j.broken) continue;
-      if (j.breaks > 0 && Math.abs(j.impulse) * inv_h > j.breaks) j.broken = true;
-      else j.account?.(this, inv_h);
+      if (j.breaks > 0 && Math.abs(j.impulse) * inv_hs > j.breaks) j.broken = true;
+      else j.account?.(this, inv_hs);
     }
     for (let i = 0; i < this.n; i++) {
       if (this.type[i] !== BodyType3.Dynamic || this.awake[i] === 0) continue;
       const m = this.mass[i] as number;
       for (let a = 0; a < 3; a++) {
         const o = i * NK * 3;
-        this.forces[o + FK3.net * 3 + a] = m * ((this.v[i * 3 + a] as number) - (v0[i * 3 + a] as number)) * inv_h + (this.forces[o + FK3.gravity * 3 + a] as number) + (this.forces[o + FK3.applied * 3 + a] as number) + (this.forces[o + FK3.drag * 3 + a] as number);
+        this.forces[o + FK3.net * 3 + a] = m * ((this.v[i * 3 + a] as number) - (v0[i * 3 + a] as number)) * inv_h;
       }
     }
   }
@@ -1301,7 +1474,7 @@ export class World3 {
       for (const p of c.pts) {
         if (p.max > 0) pushing = true;
         if (p.rv < rv) rv = p.rv;
-        imp += p.ni;
+        imp += p.tn;
       }
       const was = c.pushed;
       c.pushed = pushing;
@@ -1422,7 +1595,7 @@ export class World3 {
       const [sa, sb] = this.shapesOfKey(key);
       const c: Contact3 = { key, a: (this.shapes[sa] as Shape3).body, b: (this.shapes[sb] as Shape3).body, sa, sb, nx: s[k++] as number, ny: s[k++] as number, nz: s[k++] as number, pts: [], friction: 0, restitution: 0, pushed: (flags & 2) === 2, touching: (flags & 1) === 1, t1x: 0, t1y: 0, t1z: 0, t2x: 0, t2y: 0, t2z: 0 };
       for (let q = 0; q < np; q++) {
-        c.pts.push({ ax: s[k++] as number, ay: s[k++] as number, az: s[k++] as number, bx: s[k++] as number, by: s[k++] as number, bz: s[k++] as number, s: 0, ni: s[k++] as number, t1i: s[k++] as number, t2i: s[k++] as number, rax: 0, ray: 0, raz: 0, rbx: 0, rby: 0, rbz: 0, nm: 0, t1m: 0, t2m: 0, rv: 0, max: 0 });
+        c.pts.push({ ax: s[k++] as number, ay: s[k++] as number, az: s[k++] as number, bx: s[k++] as number, by: s[k++] as number, bz: s[k++] as number, s: 0, ni: s[k++] as number, t1i: s[k++] as number, t2i: s[k++] as number, rax: 0, ray: 0, raz: 0, rbx: 0, rby: 0, rbz: 0, nm: 0, t1m: 0, t2m: 0, rv: 0, max: 0, tn: 0, t1t: 0, t2t: 0, sv: 0, sf: 0, sg: 0, bi: 0, bounced: 0 });
       }
       this.contactMap.set(key, c);
     }

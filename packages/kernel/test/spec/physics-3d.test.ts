@@ -113,6 +113,19 @@ describe('the step in space (R5.2, design 7 and 11.5)', () => {
     }
   });
 
+  it('a tower of 10 cubes stands straight and falls asleep within 4 s (soft step, design 6.5)', () => {
+    // the cubes start touching: with hard passes in one step the four corners of each face were solved one after another
+    // and the tower swayed for about 10 s
+    all(['g = Ground()', ...Array.from({ length: 10 }, (_, k) => `b${k} = Body(${CUBE(0, 0, k)}, mass = 1)`)]);
+    play(4);
+    for (let k = 0; k < 10; k++) {
+      const v = body(`b${k}`);
+      expect(Math.hypot(v.x - 0.5, v.y - 0.5)).toBeLessThan(0.02);
+      expect(v.asleep).toBe(true);
+    }
+    expect(body('b9').z).toBeGreaterThan(9.45);
+  });
+
   it('thrown dice land flat on a face and settle', () => {
     all(['g = Ground()', 'd1 = Body(Cube((-2, 0, 3), (-1, 0, 3.4), (-2, 1, 3)), spin = (3, 2, 1), speed = (1.5, 0, 0))', 'd2 = Body(Cube((0, 1, 4), (0.8, 1.6, 4.2), (0, 2, 4)), spin = (-2, 4, 0))']);
     play(6);

@@ -70,7 +70,7 @@ Each round is one branch `feat/physics-<n>` and one PR into `integration`, merge
   - [x] 9.3 Two-way hits: solids, bodies, drops (shared grid), self
     - [x] 9.3.1 Space: spheres (points and faces), hulls, the floor, terrain; the plane: circles (points and threads), polygons, thin walls
     - [x] 9.3.2 Pins to bodies; bodies held by pins take the cloth's small steps
-    - [ ] 9.3.3 Wet cloth (1 kg of water held, design 11.5): a heavy load of drops bounces off; left for round 10
+    - [x] 9.3.3 Wet cloth (1 kg of water held, design 11.5): the pins carry the sheet and the water within 2%
   - [x] 9.4 The driver in the physics worker, with the same film without it
   - [x] 9.5 The WebGL 2 painter for cloth and drops; the coarse fallback
     - [x] 9.5.1 `sheet` and `drops` items in the Space view's scene; liquids in space as one batch, waves as a sheet through their corners
@@ -83,9 +83,17 @@ Each round is one branch `feat/physics-<n>` and one PR into `integration`, merge
     - [x] 9.7.1 Six examples (a flag, a sheet on a ball, cloth that catches water, a rope, a hammock, a net that tears), screenshots
     - [x] 9.7.2 Spec tests: kernel (22), worker and painter (5); checks stretch, still flag, energy, tearing, no pass-through, two-way, hanging rope, rope pendulum, no worker, no garbage
     - [ ] 9.7.3 Node benches of the cloth rows of 11.2: run and reported; the rows over budget are left for round 10
+  - [ ] 9.8 Finish cloth (docs/research/physics-papers.md 8)
+    - [x] 9.8.1 Merge integration (the soft step) into the cloth branch; physics tests pass, pinned balls still carried within 1%
+    - [ ] 9.8.2 A body held by pins takes the cloth's small steps, and the counts agree with the soft step's
+    - [ ] 9.8.3 A heavy ball on a light rope: the ball in the rope's exact chain solve, stretch within 2%
+    - [ ] 9.8.4 Hits listed once a step, shapes moved through the small steps; one pass a small step; cloth against cloth once a step; drops by grid cells
+    - [ ] 9.8.5 Chrome bench with the CPU 4× slower for every cloth row of 11.2; the Rust rule of design 11.6
 - [ ] 10. Round 10: speed (R9)
   - [ ] 10.1 Node benches for every budget of design 11.2
   - [ ] 10.2 Throttled Chrome bench script
   - [ ] 10.3 Checks of design 11.4
   - [ ] 10.4 Cross-browser hash test
   - [ ] 10.5 Exact maths in compiled user formulas
+  - [x] 10.6 Stacks that land stand still and sleep (2D): a face's two points bounce in one block solve, not one after the other (that spun each landing box, so dropped towers tilted, walked over and never slept); spec tests for a dropped tower of 20 and a pile of 100
+  - [x] 10.7 Soft step for bodies in the plane and in space (design 6.2, 6.5): small steps of half the passes, soft contacts (30 Hz, damping 10, push-out at most 3 m/s), a relax pass, gaps from the anchors' moves (narrow phase once a step), pushes spread over the small steps; a face's two points pushed in one soft 2 × 2 solve in the plane; bounces off walls turn back before the move (a perfect bounce keeps its height exactly), between bodies after the relax pass. Columns of 50 balls sleep by 4 s (were 12 s), 3D towers by 3 s (were awake after 10 s). Found and fixed: a grab's anchor was logged with fewer digits than it was used with, so a reload played a hair differently

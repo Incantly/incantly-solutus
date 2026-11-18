@@ -337,14 +337,17 @@ The engine is in `packages/kernel/src/physics/`. It is plain arithmetic on typed
 Each step of `h = world.step` seconds:
 
 1. **Inputs.** Read movers (their new pose and the speed implied by the move), formula forces, gravity, joint settings and the input log entries due at this step.
-2. **Forces.** Add gravity, air drag, steady forces, springs, charge forces and buoyancy to each awake body's speed (semi-implicit Euler: speed first, then position).
-3. **Broad phase.** Find pairs whose boxes overlap (6.3).
-4. **Narrow phase.** For each pair, find contact points with their normal, depth and feature ids (6.4).
-5. **Warm start.** Each contact point that existed last step starts with last step's impulses.
-6. **Velocity passes.** `world.passes` passes over joints and contacts (sequential impulses): push apart, bounce, friction, joint limits and motors (6.5).
-7. **Move.** Positions and angles move by speed times `h`.
-8. **Position passes.** Three passes that remove leftover overlap without adding speed, so nothing gains energy.
-9. **Sleep.** Islands that stayed still long enough fall asleep (6.7).
+2. **Broad phase.** Find pairs whose boxes overlap (6.3).
+3. **Narrow phase.** For each pair, find contact points with their normal, depth and feature ids (6.4), once a step. Each point keeps its anchor on both bodies, so its gap can be worked out again from how far the bodies moved.
+4. **Small steps (soft step, 6.5).** The step is cut into `s = ceil(world.passes / 2)` small steps of `h / s` (4 at the default 8 passes). In each:
+   1. **Forces.** Gravity, air drag, steady forces, springs, charge forces and buoyancy go into each awake body's speed (semi-implicit Euler). Push impulses and the drops' and air's pushes go in at the first small step only.
+   2. **Warm start.** Each contact point and joint starts with its impulse of the small step before (the first small step: of the last step).
+   3. **Solve.** One pass over joints and contacts, with soft contacts that push overlap out gently (6.5).
+   4. **Move.** Positions and angles move by speed times `h / s`.
+   5. **Relax.** One more pass with no push-out, which takes away the speed the push-out added, so nothing gains energy.
+5. **Bounce.** After the small steps, at a new hit faster than 1 m/s (6.5); the points of one face bounce together.
+6. **Joint positions.** Up to three passes that remove leftover joint stretch without adding speed.
+7. **Sleep.** Islands that stayed still long enough fall asleep (6.7).
 10. **Count forces.** Store each kind of force on each body, for the arrows and `b.force(kind)`.
 11. **Events.** Collect new hits for `on … hit` handlers. Handlers run after the step, through the controls area, as one batch.
 
@@ -368,8 +371,10 @@ Contact points carry feature ids (which edge and which corner made them), so a p
 
 ### 6.5 Solver
 
-Sequential impulses with warm starting, as in our legacy kit:
+Sequential impulses with warm starting, run as a **soft step** (Erin Catto's Solver2D comparison, 2024, the solver of Box2D v3; see `docs/research/physics-papers.md`): small steps instead of many passes in one step, soft contacts, and a relax pass. Hard sequential passes in one step left tall stacks rocking: a 20-box tower dropped from a small height walked over, columns of 50 balls kept moving for 10 s, and 3D towers swayed. Small steps carry a push through a tall stack in a few small steps, and the relax pass removes the extra speed the push-out leaves.
 
+- **Soft contacts:** a point that overlaps is pushed out like a stiff, heavily damped spring (30 Hz, damping ratio 10, at most 3 m/s), solved as one row. A point with a gap may close it within the small step but not go below zero (speculative, 6.6). The relax pass solves the same rows with no push-out.
+- **Gaps from the move:** a point's gap in a small step is its gap at the narrow phase plus how far its two anchors moved toward each other since, so the narrow phase runs once a step.
 - **Push apart:** a contact may only push, never pull. The impulse is clamped so the total stays zero or more.
 - **Bounce:** at a new hit faster than 1 m/s, the target separation speed is `bounce` times the approach speed. Slower hits do not bounce, so resting bodies settle. The pair's bounce is the larger of the two.
 - **Friction:** the sideways impulse is clamped to `μ` times the push-apart impulse (Coulomb's rule). The pair's μ is `sqrt(μa * μb)`. One μ is used for both sticking and sliding.

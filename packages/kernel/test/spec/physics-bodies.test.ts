@@ -136,6 +136,42 @@ describe('bodies and solids (R1)', () => {
     expect(top.asleep).toBe(true);
   });
 
+  it('a tower of 20 boxes dropped with gaps (the default bounce 0.2) lands, stands straight and falls asleep', () => {
+    // each box starts 10 cm above the one below: they land one on another and bounce. One point of a face at a time used
+    // to take all of a bounce, so each landing set a box spinning: the tower tilted, walked over and never slept
+    ok('g = Ground()');
+    for (let i = 0; i < 20; i++) ok(`b${i} = Body(Box((0, ${0.6 + i * 1.1}), 1, 1))`);
+    play(5);
+    for (let i = 0; i < 20; i++) {
+      expect(Math.abs(body(`b${i}`).x)).toBeLessThan(0.01);
+      expect(Math.abs(body(`b${i}`).angle)).toBeLessThan(0.005);
+    }
+    // 20 contacts each within the 5 mm slop and the weight above: the top sits about 14 cm below 19.5
+    expect(body('b19').y).toBeGreaterThan(19.3);
+    expect(body('b19').asleep).toBe(true);
+    play(10);
+    expect(Math.abs(body('b19').x)).toBeLessThan(0.01);
+  });
+
+  it('four columns of 50 balls fall asleep within 5 s (soft step, design 6.5)', () => {
+    // hard passes in one step could not carry the weight down a column of 50: it breathed up and down for about 10 s
+    ok('g = Ground()');
+    for (let i = 0; i < 200; i++) ok(`c${i} = Body(Circle((${(i % 4) * 0.5}, ${0.2 + Math.floor(i / 4) * 0.25}), 0.1))`);
+    play(5);
+    let awake = 0;
+    for (let i = 0; i < 200; i++) if (!body(`c${i}`).asleep) awake++;
+    expect(awake).toBe(0);
+  });
+
+  it('a pile of 100 boxes dropped in five columns falls asleep within 5 s', () => {
+    ok('g = Ground()');
+    for (let i = 0; i < 100; i++) ok(`b${i} = Body(Box((${(i % 5) * 1.2 - 2.4}, ${0.6 + Math.floor(i / 5) * 1.1}), 1, 1))`);
+    play(5);
+    let awake = 0;
+    for (let i = 0; i < 100; i++) if (!body(`b${i}`).asleep) awake++;
+    expect(awake).toBe(0);
+  });
+
   it('Bodies makes a list of bodies that fall and land', () => {
     all(['g = Ground()', 'bs = Bodies([Box((0, 1), 1, 1), Box((0, 3), 1, 1), Box((2, 2), 1, 1)], bounce = 0)']);
     play(3);
@@ -257,7 +293,8 @@ describe('the exact film (R2)', () => {
   });
 
   it('a far seek catches up over frames, and the playing clock waits for it (design 10.4, 10.5)', () => {
-    ok('g = Ground()');
+    // the pile is kept awake, so the 40 s of film cost what 200 moving bodies cost (a pile that sleeps catches up at once)
+    all(['g = Ground()', 'world with sleep = false']);
     for (let i = 0; i < 200; i++) ok(`b${i} = Body(Box((${(i % 20) * 1.1 - 11}, ${1 + Math.floor(i / 20) * 1.1}), 1, 1))`);
     f.setClock(40);
     expect(f.driversNeedFrames()).toBe(true);
