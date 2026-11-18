@@ -255,7 +255,7 @@ export class Fluid3 {
   private sz = new Float64Array(0);
   private s2 = new Float64Array(0);
   private visc: Float64Array;
-  private mass: Float64Array;
+  readonly mass: Float64Array;
   /** Planes of the hull being tested, scratch. */
   private planes = new Float64Array(64);
 
@@ -732,7 +732,14 @@ export class Fluid3 {
     const pad = r + 2 * this.d;
     const lo = w.lo;
     const hi = w.hi;
-    const m = this.grid.inBox((lo[k * 3] as number) - pad, (lo[k * 3 + 1] as number) - pad, (lo[k * 3 + 2] as number) - pad, (hi[k * 3] as number) + pad, (hi[k * 3 + 1] as number) + pad, (hi[k * 3 + 2] as number) + pad, n);
+    const box = this.grid.box;
+    box[0] = (lo[k * 3] as number) - pad;
+    box[1] = (lo[k * 3 + 1] as number) - pad;
+    box[2] = (lo[k * 3 + 2] as number) - pad;
+    box[3] = (hi[k * 3] as number) + pad;
+    box[4] = (hi[k * 3 + 1] as number) + pad;
+    box[5] = (hi[k * 3 + 2] as number) + pad;
+    const m = this.grid.inBox(n);
     const found = this.grid.found;
     if (sh.kind === 0) {
       const cx = sh.wc[0] as number;

@@ -1190,7 +1190,7 @@ export class PhysicsDriver implements WorldDriver {
     if (this.smokeMembers.length > 0) this.stepSmoke(w, h);
     if (cl) {
       cl.useDrops(fl);
-      this.stepCloth(cl, w, h);
+      this.stepCloth(cl, w);
     }
     this.checkHealth();
     for (const i of w.left) if (!this.leftAt.has(i)) this.leftAt.set(i, this.n);
@@ -1892,13 +1892,20 @@ export class PhysicsDriver implements WorldDriver {
   }
 
   /** The wind of this step (a formula of `t` is read at each step) and the grabs the log holds at step n. */
+  /** Is a cloth grab in the log? (A loop, not `some` with a function: the function is made at every step, garbage.) */
+  private logHasGrab(): boolean {
+    const log = this.log;
+    for (let k = 0; k < log.length; k++) if ((log[k] as { kind: string }).kind === 'cgrab') return true;
+    return false;
+  }
+
   private clothInputs(c: Cloth2, n: number): void {
     const wv = this.varySet.has(this.worldRec as ObjRec) && this.worldRec?.cell.defined && isWorldValue(this.worldRec.cell.value) ? this.worldRec.cell.value : this.settings();
     c.windX = wv.windX;
     c.windY = wv.windY;
     c.windZ = 0;
     c.releaseAll();
-    if (!this.log.some((e) => e.kind === 'cgrab')) return;
+    if (!this.logHasGrab()) return;
     const held = new Map<string, { x: number; y: number } | undefined>();
     for (const e of this.log) {
       if (e.n > n) break;
@@ -1917,20 +1924,27 @@ export class PhysicsDriver implements WorldDriver {
     }
   }
 
-  private stepCloth(c: Cloth2, w: World2, h: number): void {
+  private stepCloth(c: Cloth2, w: World2): void {
     this.clothInputs(c, this.n - 1);
     c.sleeping = w.sleeping;
-    c.step(w, h);
-    const t = Number((this.t0 + this.n / this.rate).toFixed(3));
-    for (const cm of this.clothMembers) {
+    // the step's length goes in a field of the cloth, not in the call (a number passed in a call is garbage)
+    c.hStep = 1 / this.rate;
+    c.stepWorld(w);
+    // (indexed, and the time worked out only where a notice needs it: a `for … of` and a string made at each step are garbage)
+    for (let m = 0; m < this.clothMembers.length; m++) {
+      const cm = this.clothMembers[m] as (typeof this.clothMembers)[number];
       const info = c.cloths[cm.index];
       if (!info) continue;
       const torn = c.tornNow[cm.index] as number;
       if (torn > 0 && !this.sampling && this.n > this.frontier) {
+        const t = Number((this.t0 + this.n / this.rate).toFixed(3));
         this.events.push({ t: this.t0 + this.n / this.rate, kind: 'torn', name: cm.rec.p.name, links: torn });
         this.warnOnce(`torn:${cm.rec.id}`, makeNotice('torn', { name: cm.rec.p.name, t, links: info.torn }, [cm.rec.p.name]));
       }
-      if (info.unstable) this.warnOnce(`unstable-cloth:${cm.rec.id}`, makeNotice('unstable_world', { name: cm.rec.p.name, t, hint: 'lower stretch a little, or add damping' }, [cm.rec.p.name]));
+      if (info.unstable) {
+        const t = Number((this.t0 + this.n / this.rate).toFixed(3));
+        this.warnOnce(`unstable-cloth:${cm.rec.id}`, makeNotice('unstable_world', { name: cm.rec.p.name, t, hint: 'lower stretch a little, or add damping' }, [cm.rec.p.name]));
+      }
     }
   }
 

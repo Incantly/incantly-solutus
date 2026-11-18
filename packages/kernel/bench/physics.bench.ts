@@ -10,7 +10,7 @@ import { describe, expect, it } from 'vitest';
 import type { Water2 } from '../src/physics/water2';
 import { WaterForces } from '../src/physics/water2';
 import type { World2 } from '../src/physics/world2';
-import { CommandRegistry, Figure, geometry, physics3Of, physicsOf, registerAnimation, registerFunctions, registerLists, registerNumbers, registerPhysics, registerSpace } from '../src/index';
+import { CommandRegistry, Figure, geometry, physics3Of, physicsOf, registerAnimation, registerFunctions, registerLists, registerNumbers, registerPhysics, registerSpace, setPhysicsKernels } from '../src/index';
 
 const REG = (() => {
   const r = new CommandRegistry();
@@ -36,6 +36,17 @@ const CAR_ON_TERRAIN = [
   'w4 = Wheel(chassis, (-1.1, -6.8, 1.15), 0.4)',
   'car = Vehicle(chassis, [w1, w2, w3, w4], motor = 0.5, steer = 0.4, power = 5000)',
 ];
+
+/**
+ * Runs the collector now, so a row that counts collector runs starts from an empty young generation: with the heap
+ * wherever the setup left it, a collection falls in the window whenever the setup's own garbage filled it (the first
+ * frames of a cloth put 9 to 17 MB in the 32 MB). `vitest.config.ts` starts each worker with `--expose-gc`.
+ */
+function collectNow(): void {
+  const gc = (globalThis as { gc?: () => void }).gc;
+  if (!gc) throw new Error('the "no garbage" rows need Node started with --expose-gc: run the benches with packages/kernel/bench/vitest.config.ts');
+  gc();
+}
 
 function load(lines: readonly string[]): Figure {
   const f = new Figure({ commands: REG });
@@ -88,6 +99,7 @@ describe('physics in space (design 11.2)', () => {
     const obs = new PerformanceObserver((l) => {
       for (const e of l.getEntries()) gcs.push({ at: e.startTime, end: e.startTime + e.duration });
     });
+    collectNow();
     obs.observe({ entryTypes: ['gc'] });
     const frames: { at: number; end: number }[] = [];
     for (let k = 2; k <= 61 * 60; k++) {
@@ -258,7 +270,7 @@ describe('smoke (design 11.2, R7)', () => {
     expect(kb).toBeLessThan(140);
   });
 
-  it('a smoke step makes no garbage after the first second', () => {
+  it('a smoke step makes no garbage after the first second (no collection runs)', async () => {
     const f = load(SMOKE);
     for (let k = 1; k <= 60; k++) f.setClock(k / 60);
     const d = physicsOf(f);
@@ -267,9 +279,19 @@ describe('smoke (design 11.2, R7)', () => {
     if (!sm) throw new Error('no smoke');
     const g = sm.grid;
     const arrays = [g.u, g.v, g.s, g.p, g.fx];
+    let gcs = 0;
+    const obs = new PerformanceObserver((list) => {
+      gcs += list.getEntries().length;
+    });
+    collectNow();
+    obs.observe({ entryTypes: ['gc'] });
     for (let k = 0; k < 200; k++) g.step(w, 1 / 60);
+    await new Promise((r) => setTimeout(r, 50));
+    obs.disconnect();
+    console.log(`collections during 200 smoke steps: ${gcs}`);
     // the grid swaps its two buffers each step: after an even number of steps, the very same arrays
     for (const [a, b] of [[g.u, arrays[0]], [g.v, arrays[1]], [g.s, arrays[2]], [g.p, arrays[3]], [g.fx, arrays[4]]] as const) expect(a === b).toBe(true);
+    expect(gcs).toBe(0);
   });
 });
 
@@ -429,25 +451,38 @@ describe('cloth (design 11.2, round 9)', () => {
     expect(kb).toBeLessThan(110);
   });
 
-  it('Cloth, no garbage: steps of a 64 × 32 sheet make no memory after the first second (no collection runs)', async () => {
-    const f = load(FLAG64.filter((l) => !l.startsWith('world')));
-    f.apply('world with wind = (5, 1, 0)');
-    for (let k = 1; k <= 60; k++) f.setClock(k / 60);
-    const d = physics3Of(f);
-    const c = d.cloth;
-    const w = (d as unknown as { world: import('../src/physics/world3').World3 }).world;
-    if (!c) throw new Error('no cloth');
-    const arrays = [c.x, c.vx, c.la, c.rest];
-    let gcs = 0;
-    const obs = new PerformanceObserver((list) => {
-      gcs += list.getEntries().length;
+  for (const kernels of [true, false]) {
+    it(`Cloth, no garbage: steps of a 64 × 32 sheet make no memory after the first second (no collection runs), kernels ${kernels ? 'on' : 'off'}`, async () => {
+      setPhysicsKernels(kernels);
+      // A collection frees the Rust module of the row before, and code the engine made for it that holds that module
+      // (the loops that call it) is thrown away with it: run in the interpreter, a cloth step makes megabytes. So the
+      // module goes now, before the warm-up makes the code again, not at the second `collectNow` below.
+      collectNow();
+      try {
+        const f = load(FLAG64.filter((l) => !l.startsWith('world')));
+        f.apply('world with wind = (5, 1, 0)');
+        for (let k = 1; k <= 60; k++) f.setClock(k / 60);
+        const d = physics3Of(f);
+        const c = d.cloth;
+        const w = (d as unknown as { world: import('../src/physics/world3').World3 }).world;
+        if (!c) throw new Error('no cloth');
+        expect(c.usesKernels).toBe(kernels);
+        const arrays = [c.x, c.vx, c.la, c.rest];
+        let gcs = 0;
+        const obs = new PerformanceObserver((list) => {
+          gcs += list.getEntries().length;
+        });
+        collectNow();
+        obs.observe({ entryTypes: ['gc'] });
+        for (let k = 0; k < 2000; k++) c.step(w, 1 / 120);
+        await new Promise((r) => setTimeout(r, 50));
+        obs.disconnect();
+        console.log(`collections during 2,000 cloth steps, kernels ${kernels ? 'on' : 'off'}: ${gcs}`);
+        for (const [a, b] of [[c.x, arrays[0]], [c.vx, arrays[1]], [c.la, arrays[2]], [c.rest, arrays[3]]] as const) expect(a === b).toBe(true);
+        expect(gcs).toBe(0);
+      } finally {
+        setPhysicsKernels(true);
+      }
     });
-    obs.observe({ entryTypes: ['gc'] });
-    for (let k = 0; k < 2000; k++) c.step(w, 1 / 120);
-    await new Promise((r) => setTimeout(r, 50));
-    obs.disconnect();
-    console.log(`collections during 2,000 cloth steps: ${gcs}`);
-    for (const [a, b] of [[c.x, arrays[0]], [c.vx, arrays[1]], [c.la, arrays[2]], [c.rest, arrays[3]]] as const) expect(a === b).toBe(true);
-    expect(gcs).toBe(0);
-  });
+  }
 });

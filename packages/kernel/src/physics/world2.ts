@@ -1634,7 +1634,10 @@ export class World2 implements Poses {
    */
   keepOut(b: number, io: Float64Array): boolean {
     let changed = false;
-    for (const c of this.contacts) {
+    const cs = this.contacts;
+    // (indexed: a `for … of` makes an iterator on the heap, garbage, in every step before the engine optimises it)
+    for (let k = 0; k < cs.length; k++) {
+      const c = cs[k] as (typeof cs)[number];
       if (!c.touching) continue;
       let s: number;
       if (c.b === b && this.type[c.a] !== BodyType.Dynamic) s = 1;
