@@ -10,8 +10,11 @@
  * - `setPhysicsKernels(false)` turns the kernels off "for solvers built after it"; `initPhysicsKernels()` compiles the module for a page's
  *   main thread; without it the TypeScript loops run there "with the same film".
  */
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CommandRegistry, Figure, geometry, initPhysicsKernels, physics, physicsKernelsOn, registerAnimation, registerFunctions, registerLists, registerNumbers, registerPhysics, registerSpace, setPhysicsKernels } from '../../src/index';
+import { CommandRegistry, Figure, geometry, initPhysicsKernels, physics, physicsKernelsActive, physicsKernelsOn, registerAnimation, registerFunctions, registerLists, registerNumbers, registerPhysics, registerSpace, setPhysicsKernels } from '../../src/index';
 
 const REG = (() => {
   const r = new CommandRegistry();
@@ -465,6 +468,53 @@ describe('at the limits of 11.3 (the module is sized for 2,000 drops and 4,096 p
     expect(off.torns).toBe(1);
     expect(on.cut).toEqual(off.cut);
   }, LONG);
+});
+
+describe('a host can tell which loops run (findings PH-10, design 11.6)', () => {
+  const SHEET = ['g = Ground()', 'ball = Sphere((0, 0, 0.6), 0.6)', 'ball with solid = true', 'sheet = Cloth((-1.5, -1.5, 2), (3, 0, 0), (0, 3, 0), 12, 12, mass = 0.6)'];
+
+  it("a 3D sheet's figure reports true with the kernels on", async () => {
+    expect(await initPhysicsKernels()).toBe(true);
+    setPhysicsKernels(true);
+    const fig = make(SHEET);
+    play(fig, 0.2);
+    expect(physicsKernelsActive(fig)).toBe(true);
+  });
+
+  it('the same figure built with setPhysicsKernels(false) reports false', () => {
+    setPhysicsKernels(false);
+    const fig = make(SHEET);
+    play(fig, 0.2);
+    expect(physicsKernelsActive(fig)).toBe(false);
+  });
+
+  it('a 2D rope reports true, and a 3D liquid reports true', () => {
+    const rope = make(['rope = Cloth((0, 5), (3, 5), 12, mass = 0.2, pins = [(0, 5)])']);
+    play(rope, 0.2);
+    expect(physicsKernelsActive(rope)).toBe(true);
+    const water = make(['g = Ground()', 'water = Liquid(Box((0, 0, 0.5), 1, 1, 0.5), 200)']);
+    play(water, 0.2);
+    expect(physicsKernelsActive(water)).toBe(true);
+  });
+
+  it('a figure with no cloth or liquid solver reports undefined, and so does one with nothing of physics', () => {
+    const body = make(['g = Ground()', 'b = Body(Sphere((0, 0, 2), 0.5), mass = 1)']);
+    play(body, 0.2);
+    expect(physicsKernelsActive(body)).toBeUndefined();
+    expect(physicsKernelsActive(make(['A = (1, 2)']))).toBeUndefined();
+  });
+});
+
+describe('the committed module is the one its sources build (findings PH-11, libraries.md "Build tools")', () => {
+  it('the header of kernels-wasm.ts holds the SHA-256 of lib.rs, Cargo.toml and Cargo.lock', () => {
+    const wasmDir = join(__dirname, '../../wasm');
+    const hash = createHash('sha256');
+    for (const f of ['src/lib.rs', 'Cargo.toml', 'Cargo.lock']) hash.update(readFileSync(join(wasmDir, f)));
+    const generated = readFileSync(join(__dirname, '../../src/physics/wasm/kernels-wasm.ts'), 'utf8');
+    const header = /SHA-256 of the sources \(src\/lib\.rs, Cargo\.toml, Cargo\.lock, in that order, bytes joined\): ([0-9a-f]{64})/.exec(generated);
+    expect(header, 'kernels-wasm.ts has no sources hash in its header: run npm run build:wasm').not.toBeNull();
+    expect(header?.[1], 'a Rust source changed and kernels-wasm.ts was not rebuilt: run npm run build:wasm (needs the Rust toolchain)').toBe(hash.digest('hex'));
+  });
 });
 
 describe('the task scenes are the eight of the task (guard on this file)', () => {

@@ -31,13 +31,14 @@ const MAX_NEIGHBOURS3: i32 = 64;
 
 /// The numbers a cloth call takes are not passed as arguments: a call with a floating-point argument makes the caller
 /// box it unless the engine has inlined the call, and a step must make no garbage (design 11.4). The caller writes them
-/// to a block of its own in the memory, and passes where it is: the small step, its gravity (times the step), the
-/// speeds' factor, 1 / step², and the wind.
+/// to a block of its own in the memory, and passes where it is: the small step, gravity, the cloth's damping,
+/// 1 / step², and the wind. The caller does no arithmetic on them (before the engine optimises the caller, every result
+/// would be a heap number); the products and the speeds' factor are worked out here, as the TypeScript loops do.
 const P_HS: i32 = 0;
 const P_GX: i32 = 1;
 const P_GY: i32 = 2;
 const P_GZ: i32 = 3;
-const P_K: i32 = 4;
+const P_DAMP: i32 = 4;
 const P_INV2: i32 = 5;
 const P_WX: i32 = 6;
 const P_WY: i32 = 7;
@@ -192,7 +193,13 @@ pub unsafe extern "C" fn solve_tethers(
     }
 }
 
-/// `ClothSet.advance` over points [p0, e). `gx`, `gy` and `gz` are the small step times gravity, as the caller works them out.
+/// The speeds' factor of a small step, `1 / (hs (1 + damping hs))`, the damping kept within 0 and 1 (`ClothSet.speeds`).
+#[inline(always)]
+fn speeds_k(hs: f64, damping: f64) -> f64 {
+    1.0 / (hs * (1.0 + js_min(1.0, js_max(0.0, damping)) * hs))
+}
+
+/// `ClothSet.advance` over points [p0, e). The block holds the small step and gravity; `gx` is `hs * gravity.x`, as there.
 #[no_mangle]
 pub unsafe extern "C" fn advance(
     x: F,
@@ -213,9 +220,9 @@ pub unsafe extern "C" fn advance(
     e: i32,
 ) {
     let hs = ld(p, P_HS);
-    let gx = ld(p, P_GX);
-    let gy = ld(p, P_GY);
-    let gz = ld(p, P_GZ);
+    let gx = hs * ld(p, P_GX);
+    let gy = hs * ld(p, P_GY);
+    let gz = hs * ld(p, P_GZ);
     let mut i = p0;
     while i < e {
         let xi = ld(x, i);
@@ -241,7 +248,7 @@ pub unsafe extern "C" fn advance(
     }
 }
 
-/// `ClothSet.speedsAdvance` over points [p0, e). `k` is `1 / (hs (1 + damping hs))`, as the caller works it out.
+/// `ClothSet.speedsAdvance` over points [p0, e). The block holds the small step, gravity and the damping.
 #[no_mangle]
 pub unsafe extern "C" fn speeds_advance(
     x: F,
@@ -262,10 +269,10 @@ pub unsafe extern "C" fn speeds_advance(
     e: i32,
 ) {
     let hs = ld(p, P_HS);
-    let gx = ld(p, P_GX);
-    let gy = ld(p, P_GY);
-    let gz = ld(p, P_GZ);
-    let k = ld(p, P_K);
+    let gx = hs * ld(p, P_GX);
+    let gy = hs * ld(p, P_GY);
+    let gz = hs * ld(p, P_GZ);
+    let k = speeds_k(hs, ld(p, P_DAMP));
     let mut i = p0;
     while i < e {
         let xi = ld(x, i);
@@ -308,7 +315,7 @@ pub unsafe extern "C" fn speeds(
     p0: i32,
     e: i32,
 ) {
-    let k = ld(p, P_K);
+    let k = speeds_k(ld(p, P_HS), ld(p, P_DAMP));
     let mut i = p0;
     while i < e {
         st(vx, i, (ld(x, i) - ld(px, i)) * k);

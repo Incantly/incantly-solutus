@@ -11,7 +11,7 @@
  * This file is the message protocol and the worker's side of it, with no DOM and no timers: `physics.worker.ts` wires
  * it to a real worker, and Node tests run the same handler through a channel that clones the messages.
  */
-import { Figure, worldDriverOf } from '@incantly/kernel';
+import { Figure, physicsKernelsActive, worldDriverOf } from '@incantly/kernel';
 import type { Cell, Notice } from '@incantly/kernel';
 import { sdkRegistry } from '../registry';
 
@@ -24,7 +24,7 @@ export type ToWorker =
 export type FromWorker =
   | {
     readonly k: 'cells'; readonly seq: number; readonly t: number; readonly cells: readonly (readonly [string, Cell])[];
-    readonly info: { readonly drops: number; readonly awake: number; readonly contacts: number; readonly hash: string; readonly cloth?: number }; readonly warnings: readonly Notice[];
+    readonly info: { readonly drops: number; readonly awake: number; readonly contacts: number; readonly hash: string; readonly cloth?: number; readonly kernels?: boolean }; readonly warnings: readonly Notice[];
     /** The worker's whole `@input` log, when it changed: what the page saves (a pedal moved in the worker included). */
     readonly log?: readonly string[];
   }
@@ -60,7 +60,9 @@ export class PhysicsWorkerState {
     const d = worldDriverOf(f);
     const { cells, transfer } = d.ownedCells();
     const w = d.world;
-    const info = { drops: d.fluid?.ps.n ?? 0, awake: w ? w.awakeCount() : 0, contacts: w ? w.contactCount : 0, hash: d.worldHash(), cloth: d.cloth?.n ?? 0 };
+    // whether the worker's solvers run the Rust loops: the page shows it in the physics readout (design 11.6)
+    const kernels = physicsKernelsActive(f);
+    const info = { drops: d.fluid?.ps.n ?? 0, awake: w ? w.awakeCount() : 0, contacts: w ? w.contactCount : 0, hash: d.worldHash(), cloth: d.cloth?.n ?? 0, ...(kernels === undefined ? {} : { kernels }) };
     const lines = d.inputLines();
     const key = lines.join('\n');
     const log = key !== this.lastLog ? lines : undefined;

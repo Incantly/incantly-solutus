@@ -1,7 +1,10 @@
 /** Incantly Studio. Each feature area adds its screens here once it passes all checks. */
+import { initPhysicsKernels } from '@incantly/kernel';
 import { mountStudio } from './studio-page';
 import type { AppModeId } from '@incantly/modes';
 
+// the physics kernels (WebAssembly) compile without blocking; nothing waits for them (physics design 11.6)
+void initPhysicsKernels();
 const root = document.getElementById('app');
 const q = new URLSearchParams(location.search);
 // `?mode=geometry` opens an app; `?start` shows the app tiles first (app-modes ui 1)

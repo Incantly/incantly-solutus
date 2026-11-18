@@ -257,6 +257,12 @@ export class ClothSet {
   /** The memory of the Rust loops, and their functions when this set runs them (undefined: the TypeScript loops run). */
   protected readonly arena: KernelArena | undefined;
   protected readonly kfn: KernelExports | undefined;
+
+  /** True when this set runs the Rust loops (false: the TypeScript loops, because they are off, missing or the arena was too small). */
+  get usesKernels(): boolean {
+    return this.kfn !== undefined;
+  }
+
   /** Where the arrays are in the arena (byte offsets), made once the set is built. */
   protected readonly ko: KOffsets;
   /** A hull's candidate points, its planes, its answer and its numbers, for the Rust test (`Cloth3`). */
@@ -786,9 +792,10 @@ export class ClothSet {
     this.pinFy.fill(0);
     this.pinFz.fill(0);
     const n = this.n;
-    this.sx.set(this.x.subarray(0, n));
-    this.sy.set(this.y.subarray(0, n));
-    this.sz.set(this.z.subarray(0, n));
+    // the arrays hold exactly `n` points (`subarray(0, n)` would make a view, a garbage object, in every step)
+    this.sx.set(this.x);
+    this.sy.set(this.y);
+    this.sz.set(this.z);
     this.wakeCheck();
     if (!this.anyAwake() && !(this.liquid && this.liquid.ps.n > 0)) {
       if (this.wet.length === this.cloths.length) this.wet.fill(0);
@@ -867,21 +874,23 @@ export class ClothSet {
 
   /** Moves the points of cloth c by their speed, gravity and the air (the first small step of a world step). */
   private advance(c: ClothInfo, hs: number): void {
-    const gx = hs * this.gx;
-    const gy = hs * this.gy;
-    const gz = hs * this.gz;
     const e = c.p0 + c.n;
     const kf = this.kfn;
     if (kf) {
+      // no number is worked out here: before the engine optimises this function, every one would be a heap number
+      // (garbage); the Rust loop multiplies the step by gravity itself, the same product (`hs * this.gx`)
       const o = this.ko;
       const p = this.kp;
       p[KP.hs] = hs;
-      p[KP.gx] = gx;
-      p[KP.gy] = gy;
-      p[KP.gz] = gz;
+      p[KP.gx] = this.gx;
+      p[KP.gy] = this.gy;
+      p[KP.gz] = this.gz;
       kf.advance(o.x, o.y, o.z, o.px, o.py, o.pz, o.vx, o.vy, o.vz, o.pinOf, o.afx, o.afy, o.afz, o.kp, c.p0, e);
       return;
     }
+    const gx = hs * this.gx;
+    const gy = hs * this.gy;
+    const gz = hs * this.gz;
     const { x, y, z, px, py, pz, vx, vy, vz, pinOf, afx, afy, afz } = this;
     for (let i = c.p0; i < e; i++) {
       const xi = x[i] as number;
@@ -905,23 +914,24 @@ export class ClothSet {
 
   /** The speeds from the last small step's moves, less damping, then the move of this one: one pass over the points. */
   private speedsAdvance(c: ClothInfo, hs: number): void {
+    const e = c.p0 + c.n;
+    const kf = this.kfn;
+    if (kf) {
+      // the Rust loop works out the step times gravity and the speeds' factor from these (see `advance`)
+      const o = this.ko;
+      const p = this.kp;
+      p[KP.hs] = hs;
+      p[KP.gx] = this.gx;
+      p[KP.gy] = this.gy;
+      p[KP.gz] = this.gz;
+      p[KP.damp] = c.def.damping;
+      kf.speeds_advance(o.x, o.y, o.z, o.px, o.py, o.pz, o.vx, o.vy, o.vz, o.pinOf, o.afx, o.afy, o.afz, o.kp, c.p0, e);
+      return;
+    }
     const gx = hs * this.gx;
     const gy = hs * this.gy;
     const gz = hs * this.gz;
     const k = 1 / (hs * (1 + Math.min(1, Math.max(0, c.def.damping)) * hs));
-    const e = c.p0 + c.n;
-    const kf = this.kfn;
-    if (kf) {
-      const o = this.ko;
-      const p = this.kp;
-      p[KP.hs] = hs;
-      p[KP.gx] = gx;
-      p[KP.gy] = gy;
-      p[KP.gz] = gz;
-      p[KP.k] = k;
-      kf.speeds_advance(o.x, o.y, o.z, o.px, o.py, o.pz, o.vx, o.vy, o.vz, o.pinOf, o.afx, o.afy, o.afz, o.kp, c.p0, e);
-      return;
-    }
     const { x, y, z, px, py, pz, vx, vy, vz, pinOf, afx, afy, afz } = this;
     for (let i = c.p0; i < e; i++) {
       const xi = x[i] as number;
@@ -949,15 +959,16 @@ export class ClothSet {
 
   /** The speeds of cloth c from the moves of the small step, less damping. */
   private speeds(c: ClothInfo, hs: number): void {
-    const k = 1 / (hs * (1 + Math.min(1, Math.max(0, c.def.damping)) * hs));
     const e = c.p0 + c.n;
     const kf = this.kfn;
     if (kf) {
       const o = this.ko;
-      this.kp[KP.k] = k;
+      this.kp[KP.hs] = hs;
+      this.kp[KP.damp] = c.def.damping;
       kf.speeds(o.x, o.y, o.z, o.px, o.py, o.pz, o.vx, o.vy, o.vz, o.kp, c.p0, e);
       return;
     }
+    const k = 1 / (hs * (1 + Math.min(1, Math.max(0, c.def.damping)) * hs));
     const { x, y, z, px, py, pz, vx, vy, vz } = this;
     for (let i = c.p0; i < e; i++) {
       vx[i] = ((x[i] as number) - (px[i] as number)) * k;

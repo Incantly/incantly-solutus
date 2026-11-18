@@ -42,7 +42,7 @@ export type { SoundValue, SoundEvent, SoundFrame, PlayingSound, Wave, NoiseColor
 export * as space from './commands/space/index';
 export { registerSpace } from './commands/space/index';
 export * as physics from './commands/physics/index';
-export { registerPhysics, physicsOf, physics3Of, worldDriverOf } from './commands/physics/index';
+export { registerPhysics, physicsOf, physics3Of, worldDriverOf, physicsKernelsActive } from './commands/physics/index';
 export * as physicsMath from './physics/math';
 export { setPhysicsKernels, physicsKernelsOn, initPhysicsKernels } from './physics/wasm/kernels';
 export { noteFrequency, midiOfNote, midiToFrequency, semitonesUp } from './language/notes';

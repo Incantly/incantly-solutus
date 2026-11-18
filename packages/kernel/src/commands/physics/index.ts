@@ -107,6 +107,25 @@ export function worldDriverOf(figure: Figure): PhysicsDriver | Physics3Driver {
 
 const DRIVERS3 = new WeakMap<object, Physics3Driver>();
 
+/**
+ * Do the figure's cloth and liquid solvers run the Rust loops (design 11.6)? `true` when every solver the figure has now
+ * does, `false` when one runs the TypeScript loops (kernels off, WebAssembly missing or failed to load, a solver built
+ * before they were ready), `undefined` when the figure has no cloth or liquid solver yet. A figure whose physics runs in
+ * a worker has no solver on its page: ask the worker's own figure (its reply carries the answer, `remoteInfo.kernels`).
+ */
+export function physicsKernelsActive(figure: Figure): boolean | undefined {
+  const drivers = [...figure.worldDrivers(), DRIVERS.get(figure), DRIVERS3.get(figure)];
+  let answer: boolean | undefined;
+  for (const d of drivers) {
+    if (!(d instanceof PhysicsDriver) && !(d instanceof Physics3Driver)) continue;
+    const sets: { readonly usesKernels: boolean }[] = [];
+    if (d.cloth) sets.push(d.cloth);
+    if (d instanceof Physics3Driver && d.fluid) sets.push(d.fluid);
+    for (const s of sets) answer = (answer ?? true) && s.usesKernels;
+  }
+  return answer;
+}
+
 /** The figure's physics driver in space (made on first use). */
 export function physics3Of(figure: Figure): Physics3Driver {
   for (const d of figure.worldDrivers()) if (d instanceof Physics3Driver) return d;

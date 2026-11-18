@@ -215,6 +215,12 @@ export function restLevel3(xs: readonly number[], ys: readonly number[], zs: rea
 export class Fluid3 {
   readonly ps: ParticleSet;
   readonly grid = new NeighbourGrid3();
+
+  /** True when the neighbour grid runs the Rust loops. */
+  get usesKernels(): boolean {
+    return this.grid.usesKernels;
+  }
+
   readonly d: number;
   readonly H: number;
   readonly r: number;

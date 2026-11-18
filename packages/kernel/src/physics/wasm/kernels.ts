@@ -36,7 +36,7 @@ export interface KernelExports {
  * number unless the engine inlines the call, and a step must make no garbage (design 11.4). The numbers a call takes go
  * in a block of the arena that the caller writes first, at these places (`lib.rs`: P_HS, …).
  */
-export const KP = { hs: 0, gx: 1, gy: 2, gz: 3, k: 4, inv2: 5, windX: 6, windY: 7, windZ: 8, size: 16 } as const;
+export const KP = { hs: 0, gx: 1, gy: 2, gz: 3, damp: 4, inv2: 5, windX: 6, windY: 7, windZ: 8, size: 16 } as const;
 
 let enabled = true;
 
@@ -52,6 +52,7 @@ export function physicsKernelsOn(): boolean {
 
 let compiled: WebAssembly.Module | undefined;
 let failed = false;
+let pending: Promise<boolean> | undefined;
 
 function decode(text: string): Uint8Array<ArrayBuffer> {
   const A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
@@ -95,16 +96,21 @@ function moduleOf(): WebAssembly.Module | undefined {
  * Compiles the module without blocking (for a page's main thread, where `loadKernels` cannot). Resolves true when the
  * kernels are ready. A host that runs physics on the main thread of a browser calls this once at start-up.
  */
-export async function initPhysicsKernels(): Promise<boolean> {
-  if (compiled) return true;
-  if (failed || typeof WebAssembly === 'undefined') return false;
-  try {
-    compiled = await WebAssembly.compile(decode(KERNELS_WASM_BASE64));
-    return true;
-  } catch (_e) {
-    failed = true;
-    return false;
-  }
+export function initPhysicsKernels(): Promise<boolean> {
+  if (compiled) return Promise.resolve(true);
+  if (failed || typeof WebAssembly === 'undefined') return Promise.resolve(false);
+  // one compile however many apps start: a host that starts several apps calls this each time
+  pending ??= WebAssembly.compile(decode(KERNELS_WASM_BASE64)).then(
+    (m) => {
+      compiled ??= m;
+      return true;
+    },
+    () => {
+      failed = true;
+      return false;
+    },
+  );
+  return pending;
 }
 
 /** One instance of the module with its memory, cut into aligned regions as a solver is built. */

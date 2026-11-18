@@ -118,6 +118,11 @@ export class NeighbourGrid3 {
     if (arena.overflow) this.ar = undefined;
   }
 
+  /** True when the grid runs the Rust loops. */
+  get usesKernels(): boolean {
+    return this.ar !== undefined;
+  }
+
   /** The Rust loops are not used from now on (the arena had no room for something). */
   dropArena(): void {
     this.ar = undefined;
