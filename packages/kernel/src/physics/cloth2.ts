@@ -495,6 +495,14 @@ export class Cloth2 extends ClothSet {
     const e = this.tb[t] as number;
     const ci = this.cloths[this.owner[a] as number];
     if (!ci || ci.asleep) return;
+    // a thread by a pin of this body does not hit it (as its points do not): a rope tied to a ball runs into the ball
+    if (this.hasBodyPins) {
+      const pa = this.pinOf[a] as number;
+      const pe = this.pinOf[e] as number;
+      if ((pa >= 0 && this.pinBody[pa] === b) || (pe >= 0 && this.pinBody[pe] === b)) return;
+      const reach = 2 * reach2(sh) + ci.def.thickness;
+      if (this.nearBodyPin(a, b, reach) || this.nearBodyPin(e, b, reach)) return;
+    }
     const R = sh.radius + ci.def.thickness;
     const cx = sh.wcx + this.off("x", b);
     const cy = sh.wcy + this.off("y", b);

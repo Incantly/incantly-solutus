@@ -243,6 +243,23 @@ describe('cloth meets bodies, solids and drops (design 9.6, 11.4)', () => {
     expect(cloth('sheet').touching).toEqual(['ball']);
   });
 
+  it('a ball tied to the end of a rope of 50 points swings on it: the threads by its pin do not hit the ball, so the rope keeps its length within 2%', () => {
+    // the last points of a rope of 4 cm links lie inside the ball they are tied to; before, the threads there were pushed
+    // out of the ball every small step while the links pulled them back in, and the rope tore itself to many times its length
+    all(['rope = Cloth((0, 5), (2, 5), 50, mass = 0.5, pins = [(0, 5)])', 'ball = Body(Circle((2, 5), 0.2), mass = 1)', 'tie = Pin(rope, (2, 5), ball)']);
+    let worst = 0;
+    for (let k = 1; k <= 180; k++) {
+      f.setClock(k / 60);
+      const v = cloth('rope');
+      let len = 0;
+      for (let i = 0; i + 1 < v.xs.length; i++) len += Math.hypot((v.xs[i + 1] as number) - (v.xs[i] as number), (v.ys[i + 1] as number) - (v.ys[i] as number));
+      worst = Math.max(worst, Math.abs(len / 2 - 1));
+    }
+    expect(worst).toBeLessThan(0.02);
+    const b = f.value('ball') as physics.BodyValue;
+    expect(Math.hypot(b.x, b.y - 5)).toBeLessThan(2.02);
+  });
+
   it('a rope pendulum: a 1 kg ball on a 2 m rope of 0.01 kg, swung 5°, swings with the period 2π √(L / g) within 1% (11.5)', () => {
     const a = (5 * Math.PI) / 180;
     const ex = 2 * Math.sin(a);
@@ -278,9 +295,27 @@ describe('cloth meets bodies, solids and drops (design 9.6, 11.4)', () => {
     for (let k = 0; k < water.count; k++) expect(water.zs?.[k] as number).toBeGreaterThan(low);
   });
 
-  // design 11.5 "Wet cloth" (1 kg of water held, the pins carrying it within 2%) is not met yet: a heavy load of drops
-  // bounces off the sheet (the drops push the cloth one step late, as a change of speed), so most of it is thrown over
-  // the rim. Left for round 10, with the drops' contact moved into the cloth's small steps.
-  it.todo('a sheet that holds 1 kg of water: the pins carry its weight plus 9.8 N within 2% (11.5 "Wet cloth")');
+  it('a sheet that holds 1 kg of water: the pins carry its weight plus the water\'s within 2% (11.5 "Wet cloth")', () => {
+    // 600 drops of 1/600 kg (0.192 m³ at density 5.2083) poured into a soft sheet held at its corners; a few splash over
+    // the rim as they land, the rest stay in the sag
+    all(['sheet = Cloth((-1.5, -1.5, 2), (3, 0, 0), (0, 3, 0), 16, 16, mass = 0.3, stretch = 0.5, damping = 1, pins = "corners")', 'water = Liquid(Box((0, 0, 2.2), 0.8, 0.8, 0.3), 600, density = 5.2083)']);
+    play(6);
+    // the water still sways a little: the pins' pull over 2 s
+    let fz = 0;
+    let n = 0;
+    for (let k = 1; k <= 120; k++) {
+      f.setClock(6 + k / 60);
+      fz += physics3Of(f).pinForce(idOf('sheet'))?.z ?? Number.NaN;
+      n++;
+    }
+    const v = cloth('sheet');
+    let low = Infinity;
+    for (let k = 0; k < v.zs.length; k++) low = Math.min(low, v.zs[k] as number);
+    const water = f.value('water') as physics.LiquidValue;
+    let held = 0;
+    for (let k = 0; k < water.count; k++) if ((water.zs?.[k] as number) > low - 0.1) held++;
+    expect(held).toBeGreaterThanOrEqual(570);
+    expect(Math.abs(-fz / n / ((0.3 + held / 600) * 9.8) - 1)).toBeLessThan(0.02);
+  });
 
 });
