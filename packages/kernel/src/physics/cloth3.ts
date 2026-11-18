@@ -28,9 +28,55 @@ export class Cloth3 extends ClothSet {
   private nWide = 0;
   /** Each body's centre at the start of the step (before the world stepped it), for the paths of the tests. */
   private bp0 = new Float64Array(0);
-  /** Planes of the hull being tested (scratch). */
-  private planes = new Float64Array(64);
+  /** The hulls' face planes this step (n, n·v + thickness, four numbers a face), where each hull's start, and when made. */
+  private planes = new Float64Array(256);
+  private nPlanes = 0;
+  private hullOff = new Int32Array(0);
+  private hullStamp = new Int32Array(0);
+  private hullTh = new Float64Array(0);
   private o3 = new Float64Array(8);
+
+  /** Hull k's face planes for a cloth of thickness th, made at most once a step (a second thickness makes them again). */
+  private hullPlanes(k: number, sh: { readonly faces: readonly Int32Array[]; readonly wv: Float64Array; readonly wn: Float64Array }, th: number): Float64Array {
+    if (this.hullStamp.length <= k) {
+      const n = Math.max(k + 1, this.hullStamp.length * 2, 16);
+      const S = new Int32Array(n).fill(-1);
+      S.set(this.hullStamp);
+      const O = new Int32Array(n);
+      O.set(this.hullOff);
+      const T = new Float64Array(n);
+      T.set(this.hullTh);
+      this.hullStamp = S;
+      this.hullOff = O;
+      this.hullTh = T;
+    }
+    if (this.hullStamp[k] === this.stamp && this.hullTh[k] === th) return this.planes;
+    const nf = sh.faces.length;
+    if (this.nPlanes + nf * 4 > this.planes.length) {
+      const P = new Float64Array(Math.max(this.planes.length * 2, this.nPlanes + nf * 4));
+      P.set(this.planes.subarray(0, this.nPlanes));
+      this.planes = P;
+    }
+    const pl = this.planes;
+    const p0 = this.nPlanes;
+    const { wv, wn } = sh;
+    for (let f = 0; f < nf; f++) {
+      const c0 = (sh.faces[f] as Int32Array)[0] as number;
+      const nx = wn[f * 3] as number;
+      const ny = wn[f * 3 + 1] as number;
+      const nz = wn[f * 3 + 2] as number;
+      const o = p0 + f * 4;
+      pl[o] = nx;
+      pl[o + 1] = ny;
+      pl[o + 2] = nz;
+      pl[o + 3] = nx * (wv[c0 * 3] as number) + ny * (wv[c0 * 3 + 1] as number) + nz * (wv[c0 * 3 + 2] as number) + th;
+    }
+    this.nPlanes += nf * 4;
+    this.hullOff[k] = p0;
+    this.hullStamp[k] = this.stamp;
+    this.hullTh[k] = th;
+    return pl;
+  }
   /** The push the bodies took at the start of this step, as normal force and pin tension (for the force count). */
   private appliedN = new Float64Array(0);
   private appliedT = new Float64Array(0);
@@ -300,6 +346,8 @@ export class Cloth3 extends ClothSet {
     this.nWide = 0;
     this.nFace = 0;
     this.stamp = (this.stamp + 1) % 500000;
+    this.nPlanes = 0;
+    if (this.stamp === 0) this.hullStamp.fill(-1);
     let thick = 0;
     for (let c = 0; c < this.cloths.length; c++) thick = Math.max(thick, (this.cloths[c] as { def: { thickness: number } }).def.thickness);
     const pad = thick + this.pad + 0.01;
@@ -334,10 +382,23 @@ export class Cloth3 extends ClothSet {
         const move = ball ? Math.sqrt(dx * dx + dy * dy + dz * dz) : 0;
         const hh = this.hStep;
         const near0 = ball ? sh.r + thick + 9.8 * hh * hh + (this.nGrab > 0 ? 0.5 : 0) + move + 0.01 : 0;
+        // the grid hands back whole cells: a hull keeps only the points inside its padded box (it is tested every small step)
+        const bx0 = (w.lo[k * 3] as number) - pad + Math.min(0, -dx);
+        const by0 = (w.lo[k * 3 + 1] as number) - pad + Math.min(0, -dy);
+        const bz0 = (w.lo[k * 3 + 2] as number) - pad + Math.min(0, -dz);
+        const bx1 = (w.hi[k * 3] as number) + pad + Math.max(0, -dx);
+        const by1 = (w.hi[k * 3 + 1] as number) + pad + Math.max(0, -dy);
+        const bz1 = (w.hi[k * 3 + 2] as number) + pad + Math.max(0, -dz);
         for (let q = 0; q < m; q++) {
           const i = found[q] as number;
           const ci = this.cloths[this.owner[i] as number];
           if (!ci || ci.asleep || ci.unstable) continue;
+          if (!ball) {
+            const px = this.x[i] as number;
+            const py = this.y[i] as number;
+            const pz = this.z[i] as number;
+            if (px < bx0 || px > bx1 || py < by0 || py > by1 || pz < bz0 || pz > bz1) continue;
+          }
           if (ball) {
             const ex = (this.x[i] as number) - (sh.wc[0] as number);
             const ey = (this.y[i] as number) - (sh.wc[1] as number);
@@ -715,10 +776,10 @@ export class Cloth3 extends ClothSet {
     if (!sh) return;
     const b = sh.body;
     const nf = sh.faces.length;
-    if (this.planes.length < nf * 4) this.planes = new Float64Array(nf * 8);
-    const pl = this.planes;
-    const wv = sh.wv;
-    const wn = sh.wn;
+    // the hull's face planes, worked out once a world step (the body holds its pose in the small steps; its move this
+    // step is the offset below), with the thickness added
+    const pl = this.hullPlanes(k, sh, th);
+    const p0 = this.hullOff[k] as number;
     // the point against the hull where the body is now (it may have been pushed back this step)
     const ob = this.offs(b);
     const x = (this.x[i] as number) - (ob[0] as number);
@@ -727,16 +788,8 @@ export class Cloth3 extends ClothSet {
     let sep = -Infinity;
     let best = 0;
     for (let f = 0; f < nf; f++) {
-      const c0 = (sh.faces[f] as Int32Array)[0] as number;
-      const nx = wn[f * 3] as number;
-      const ny = wn[f * 3 + 1] as number;
-      const nz = wn[f * 3 + 2] as number;
-      pl[f * 4] = nx;
-      pl[f * 4 + 1] = ny;
-      pl[f * 4 + 2] = nz;
-      const d = nx * (wv[c0 * 3] as number) + ny * (wv[c0 * 3 + 1] as number) + nz * (wv[c0 * 3 + 2] as number) + th;
-      pl[f * 4 + 3] = d;
-      const s = nx * x + ny * y + nz * z - d;
+      const o = p0 + f * 4;
+      const s = (pl[o] as number) * x + (pl[o + 1] as number) * y + (pl[o + 2] as number) * z - (pl[o + 3] as number);
       if (s >= 0) return;
       if (s > sep) {
         sep = s;
@@ -753,10 +806,11 @@ export class Cloth3 extends ClothSet {
     let tIn = -Infinity;
     let inFace = -1;
     for (let f = 0; f < nf; f++) {
-      const nx = pl[f * 4] as number;
-      const ny = pl[f * 4 + 1] as number;
-      const nz = pl[f * 4 + 2] as number;
-      const s0 = nx * ax + ny * ay + nz * az - (pl[f * 4 + 3] as number);
+      const o = p0 + f * 4;
+      const nx = pl[o] as number;
+      const ny = pl[o + 1] as number;
+      const nz = pl[o + 2] as number;
+      const s0 = nx * ax + ny * ay + nz * az - (pl[o + 3] as number);
       const du = nx * ux + ny * uy + nz * uz;
       if (du < 0) {
         const t = -s0 / du;
@@ -766,11 +820,11 @@ export class Cloth3 extends ClothSet {
         }
       }
     }
-    const face = inFace >= 0 && tIn >= -1e-9 ? inFace : best;
-    const nx = pl[face * 4] as number;
-    const ny = pl[face * 4 + 1] as number;
-    const nz = pl[face * 4 + 2] as number;
-    const depth = -(nx * x + ny * y + nz * z - (pl[face * 4 + 3] as number));
+    const face = p0 + (inFace >= 0 && tIn >= -1e-9 ? inFace : best) * 4;
+    const nx = pl[face] as number;
+    const ny = pl[face + 1] as number;
+    const nz = pl[face + 2] as number;
+    const depth = -(nx * x + ny * y + nz * z - (pl[face + 3] as number));
     if (!(depth > 0)) return;
     const dynamic = w.type[b] !== BodyType3.Static;
     this.pushOut(i, dynamic ? b : -1, nx, ny, nz, depth, mu, hs);

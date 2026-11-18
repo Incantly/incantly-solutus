@@ -104,3 +104,49 @@ export class ParticleSet {
 export { MAX_NEIGHBOURS, NeighbourGrid } from './grid2';
 export { MAX_NEIGHBOURS3, NeighbourGrid3 } from './grid3';
 
+
+/**
+ * The middle of the first m numbers of a (the mean of the two middle ones when m is even), found by selection in place:
+ * the same number a sort gives, in linear time. The first m numbers are reordered. NaN when m is 0.
+ */
+export function middleOf(a: Float64Array, m: number): number {
+  if (m <= 0) return Number.NaN;
+  const h = m >> 1;
+  const hi = nth(a, m, h);
+  if (m % 2 === 1) return hi;
+  // after the selection every number before h is at most a[h]: the other middle one is the largest of them
+  let lo = -Infinity;
+  for (let i = 0; i < h; i++) if ((a[i] as number) > lo) lo = a[i] as number;
+  return 0.5 * (lo + hi);
+}
+
+/** Puts the k-th smallest of a[0..m) at a[k], the smaller ones before it and the larger ones after (Hoare's selection). */
+function nth(a: Float64Array, m: number, k: number): number {
+  let l = 0;
+  let r = m - 1;
+  while (r > l) {
+    // the middle of three as the pivot, so sorted or flat columns stay linear
+    const c = (l + r) >> 1;
+    const x = a[l] as number;
+    const y = a[c] as number;
+    const z = a[r] as number;
+    const p = x < y ? (y < z ? y : x < z ? z : x) : x < z ? x : y < z ? z : y;
+    let i = l;
+    let j = r;
+    while (i <= j) {
+      while ((a[i] as number) < p) i++;
+      while ((a[j] as number) > p) j--;
+      if (i <= j) {
+        const t = a[i] as number;
+        a[i] = a[j] as number;
+        a[j] = t;
+        i++;
+        j--;
+      }
+    }
+    if (k <= j) r = j;
+    else if (k >= i) l = i;
+    else break;
+  }
+  return a[k] as number;
+}

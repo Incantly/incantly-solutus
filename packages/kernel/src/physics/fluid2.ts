@@ -19,7 +19,7 @@
  */
 import { mix32 } from '../commands/probability/random';
 import type { Pt } from './geom2';
-import { MAX_NEIGHBOURS, NeighbourGrid, ParticleSet } from './particles';
+import { MAX_NEIGHBOURS, middleOf, NeighbourGrid, ParticleSet } from './particles';
 import type { World2 } from './world2';
 import { BodyType, FK } from './world2';
 import { addForce } from './water2';
@@ -764,9 +764,7 @@ export class Fluid2 {
     }
     let m = 0;
     for (let c = 0; c < nc; c++) if ((cols[c] as number) > -Infinity) cols[m++] = cols[c] as number;
-    const tops = cols.subarray(0, m).sort();
-    const mid = m % 2 === 1 ? (tops[(m - 1) / 2] as number) : 0.5 * ((tops[m / 2 - 1] as number) + (tops[m / 2] as number));
-    return mid + this.r;
+    return middleOf(cols, m) + this.r;
   }
 
   /* ------------------------------ checkpoints ------------------------------ */

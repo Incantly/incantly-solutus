@@ -429,6 +429,7 @@ export class Physics3Driver implements WorldDriver {
         this.clothMembers = [];
         this.liquidMembers = [];
         this.waveMembers = [];
+        this.stillCells.clear();
         this.members = [];
         this.byId = new Map();
         this.sig = undefined;
@@ -726,6 +727,7 @@ export class Physics3Driver implements WorldDriver {
       this.clothMembers = [];
       this.liquidMembers = [];
       this.waveMembers = [];
+      this.stillCells.clear();
       this.members = [];
       this.byId = new Map();
       return;
@@ -758,6 +760,7 @@ export class Physics3Driver implements WorldDriver {
     world.sleeping = w.sleep;
     world.range = w.range;
     this.world = world;
+    this.stillCells.clear();
     this.members = members;
     this.byId = new Map();
     for (const m of members) if (!this.byId.has(m.rec.id)) this.byId.set(m.rec.id, m);
@@ -1395,11 +1398,53 @@ export class Physics3Driver implements WorldDriver {
     if (this.failedAt.has(i)) return { defined: false, reason: 'unstable_world' };
     if (this.leftAt.has(i)) return { defined: false, reason: 'left_world' };
     const w = this.world as World3;
+    const touching = (this.touchLists[i] ?? []).map((k) => this.nameOfIndex[k] ?? '').filter((s) => s !== '');
+    // a body at rest (asleep, or fixed) writes the very cell it wrote last time while nothing of it changed, so the
+    // update pass sees the same value at once instead of comparing a new one field by field
+    const still = w.type[i] !== BodyType3.Dynamic || w.awake[i] === 0;
+    const key = still ? this.stillKey(i, alpha) : undefined;
+    const tkey = still ? touching.join('\u0000') : '';
+    if (key) {
+      const c = this.stillCells.get(m);
+      if (c && c.spec === m.spec && c.touching === tkey && c.key.length === key.length && c.key.every((a, k) => Object.is(a, key[k]))) return c.cell;
+    }
     const v = this.liveValue(m, alpha);
     const forces = Float64Array.from(w.forces.subarray(i * NK * 3, (i + 1) * NK * 3));
     if (v.asleep) forces.fill(0, FK3.net * 3, FK3.net * 3 + 3);
-    const touching = (this.touchLists[i] ?? []).map((k) => this.nameOfIndex[k] ?? '').filter((s) => s !== '');
-    return { defined: true, value: { ...v, forces, touching } };
+    const cell: Cell = { defined: true, value: { ...v, forces, touching } };
+    if (key) this.stillCells.set(m, { key, spec: m.spec, touching: tkey, cell });
+    else this.stillCells.delete(m);
+    return cell;
+  }
+
+  /** The last cell of each body at rest, with what it was made from: its pose, speeds and forces, and what it touched. */
+  private readonly stillCells = new Map<Member3, { key: Float64Array; spec: unknown; touching: string; cell: Cell }>();
+
+  /** What a resting body's cell is made from, as numbers (the drawn pose, the speeds, the forces). */
+  private stillKey(i: number, alpha: number): Float64Array {
+    const w = this.world as World3;
+    const { p, q } = this.pose(i, alpha);
+    const k = new Float64Array(20 + NK * 3);
+    k[13 + NK * 3] = this.prevP[i * 3] as number;
+    k[14 + NK * 3] = this.prevP[i * 3 + 1] as number;
+    k[15 + NK * 3] = this.prevP[i * 3 + 2] as number;
+    k[16 + NK * 3] = w.gx;
+    k[17 + NK * 3] = w.gy;
+    k[18 + NK * 3] = w.gz;
+    k[19 + NK * 3] = w.mass[i] as number;
+    k[0] = p.x;
+    k[1] = p.y;
+    k[2] = p.z;
+    k[3] = q[0];
+    k[4] = q[1];
+    k[5] = q[2];
+    k[6] = q[3];
+    for (let a = 0; a < 3; a++) {
+      k[7 + a] = w.v[i * 3 + a] as number;
+      k[10 + a] = w.w[i * 3 + a] as number;
+    }
+    k.set(w.forces.subarray(i * NK * 3, (i + 1) * NK * 3), 13);
+    return k;
   }
 
   private writeCells(alpha: number): ObjRec[] {

@@ -2391,19 +2391,24 @@ export class ClothSet {
 
   /** Sleep: a cloth whose points all move under 1 mm/s for 0.5 s; blow-up: a place or a speed not finite or over 1e6. */
   private settle(h: number): void {
-    const { x, y, z, vx, vy, vz } = this;
+    const { x, y, z, vx, vy, vz, sx, sy, sz } = this;
     for (const c of this.cloths) {
       if (c.asleep || c.unstable) continue;
       let fast = false;
       let bad = false;
       const e = c.p0 + c.n;
-      const s2 = SLEEP_SPEED * SLEEP_SPEED;
+      // still means the step's move: a point resting on a solid trades a little with its links in the small steps (its
+      // last small step's speed is that trade), but over the whole step it goes nowhere
+      const s2 = SLEEP_SPEED * SLEEP_SPEED * h * h;
       for (let i = c.p0; i < e; i++) {
         const a = vx[i] as number;
         const b = vy[i] as number;
         const d = vz[i] as number;
         const v2 = a * a + b * b + d * d;
-        if (v2 > s2) fast = true;
+        const mx = (x[i] as number) - (sx[i] as number);
+        const my = (y[i] as number) - (sy[i] as number);
+        const mz = (z[i] as number) - (sz[i] as number);
+        if (mx * mx + my * my + mz * mz > s2) fast = true;
         if (!(v2 < BLOW_UP * BLOW_UP) || !(Math.abs(x[i] as number) < BLOW_UP && Math.abs(y[i] as number) < BLOW_UP && Math.abs(z[i] as number) < BLOW_UP)) bad = true;
       }
       if (bad) {
