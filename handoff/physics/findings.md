@@ -169,3 +169,23 @@ tests, 4 fail).
   rewritten (three tests: the 65th refused, every kind counts, turning one off frees a place).
 
 Found while fixing, not fixed in this round: PH-22 and PH-23 above.
+
+## Review of 11B smoke and fire in space (2026-11-18, one round)
+
+Read: builder notes 11B, design 9.8 "As built", `test-report.md` 11B (102 new tests, 6 fail). Ids start at PH-30 so
+they do not clash with the open garbage batch (PH-24, PH-25 and any it adds).
+
+| Id | Where | What | Evidence | Harm | Status |
+|---|---|---|---|---|---|
+| PH-30 | `commands/physics` `Ignite` in space | `Ignite(sheet)` on a sheet with `burns` in space is refused with `not_burnable`; so the `no_fire_grid` case and its seek-equals-play cannot happen either. | Tester failures 1 (3 tests). | high | open |
+| PH-31 | cloth burning (space; check the plane too) | A burning sheet tears 183 links but no `torn` notice shows; a tear from `tears` does show one (design 9.5, 9.7). | Tester failure 2. | medium | open |
+| PH-32 | B021 in space | `no_fire_grid` has no `suggest` when the figure has a fire elsewhere; errors.md wants `Fire(b.pos)`. | Tester failure 3. | medium | open |
+| PH-33 | limits in space | Bodies in space with `burns` are not counted: 130 accepted (design 11.3: 64 burnable things a figure, all kinds together). | Tester failure 4. | medium | open |
+| PH-34 | `burn3.ts`, `driver3.ts` | Solid shapes that burn in space are not built (R11 item 4, design 9.7 "A solid shape"). | Builder notes, "Left out". | medium | open |
+| PH-35 | `smoke3.ts` speed | Every grid-in-space row is about 2× its goal: 24³ 4.0 ms Node (2), 15.5 ms Chrome 4× (8); 32³ 9.1 (4), 35.3 (8); flag over a fire 5.1 (2.5), 20.7 (8); seek 128 ms median (120). By design 11.6 the grid in space moves to Rust (approved by the product owner). | Builder notes, design 11.6. | high | to be implemented (next job: Rust for the grid in space) |
+| PH-36 | `world3.ts` `load` | `World3.load` re-normalises the quaternion of a body that burnt away, so `worldHash` can differ by about 1e-16 after a seek (no readout depends on it). Same class as PH-22, PH-23. | Builder notes. | low | to be implemented |
+
+**Fixes for PH-30 to PH-34** (the one fix round): make the tester's 6 failing tests pass without changing them, fix
+every case of each rule in the plane as well as in space (pipeline "Fix every case of a rule"), and add one regression
+test per fix. For PH-34 follow the plane's rules (design 9.7: a burnt shape leaves the walls, reads undefined with
+`burnt`, bodies on it fall and wake; a seek back restores it).
