@@ -145,6 +145,64 @@ describe('A ball pinned under a sheet held by its corners (design 9.5, "Bodies h
   });
 });
 
+describe('Regressions of the review of 9.8 (findings PH-2 and PH-3)', () => {
+  /**
+   * Plays 10 s a 3 × 3 m sheet of 28 × 28 points, 1.2 kg, held by its corners at z = 0.8, over a 3 kg ball of radius
+   * 0.4 resting on Ground() and pinned to the sheet at the ball's top. Returns the ball's lowest and highest centre.
+   */
+  const play = (extra: string): { low: number; high: number; defined: boolean } => {
+    all(['g = Ground()', `sheet = Cloth((-1.5, -1.5, 0.8), (3, 0, 0), (0, 3, 0), 28, 28, mass = 1.2${extra}, pins = "corners")`, 'ball = Body(Sphere((0, 0, 0.4), 0.4), mass = 3)', 'tie = Pin(sheet, (0, 0, 0.8), ball)']);
+    let low = Infinity;
+    let high = -Infinity;
+    for (let k = 1; k <= 600; k++) {
+      f.setClock(k / 60);
+      const b = f.value('ball') as physics.Body3Value | undefined;
+      if (b === undefined || !Number.isFinite(b.x) || !Number.isFinite(b.y) || !Number.isFinite(b.z)) return { low, high, defined: false };
+      low = Math.min(low, b.z);
+      high = Math.max(high, b.z);
+    }
+    return { low, high, defined: true };
+  };
+
+  it('PH-2: a ball of radius 0.4 pinned at its top under a flat sheet (stretch 0.9) resting on Ground() never goes more than 1 cm into the ground in 10 s, and stays defined', () => {
+    const r = play(', stretch = 0.9');
+    expect(r.defined).toBe(true);
+    expect(0.4 - r.low).toBeLessThan(0.01);
+  });
+
+  it('PH-2 (plane, guards the 2D path): a ball of radius 0.5 pinned at its top under a rope held at both ends, on Ground(), never goes more than 1 cm into the ground', () => {
+    all(['g = Ground()', 'rope = Cloth((-1, 1), (1, 1), 20, mass = 0.2, pins = [(-1, 1), (1, 1)])', 'ball = Body(Circle((0, 0.5), 0.5), mass = 1.5)', 'tie = Pin(rope, (0, 1), ball)']);
+    let low = Infinity;
+    for (let k = 1; k <= 600; k++) {
+      f.setClock(k / 60);
+      const b = ball2();
+      expect(b !== undefined && Number.isFinite(b.x) && Number.isFinite(b.y)).toBe(true);
+      low = Math.min(low, b.y);
+    }
+    expect(0.5 - low).toBeLessThan(0.01);
+  });
+
+  it('PH-2: seek equals play with the ball kept out of the ground: the ball and the world hash at 4 s are the same played and sought from 0', () => {
+    const SCENE = ['g = Ground()', 'sheet = Cloth((-1.5, -1.5, 0.8), (3, 0, 0), (0, 3, 0), 28, 28, mass = 1.2, stretch = 0.9, pins = "corners")', 'ball = Body(Sphere((0, 0, 0.4), 0.4), mass = 3)', 'tie = Pin(sheet, (0, 0, 0.8), ball)'];
+    all(SCENE);
+    for (let k = 1; k <= 240; k++) f.setClock(k / 60);
+    const want = ball3();
+    const hash = physics.physicsOf(f).worldHash();
+    const g = make(SCENE);
+    g.setClock(4);
+    expect(ball3(g).z).toBe(want.z);
+    expect(ball3(g).x).toBe(want.x);
+    expect(physics.physicsOf(g).worldHash()).toBe(hash);
+  });
+
+  it('PH-3: the same ball and sheet with the default stretch of 1 (the sheet flat and taut, every point at its tether): the ball stays defined, under 1 cm into the ground and under 2 cm above its start for 10 s', () => {
+    const r = play('');
+    expect(r.defined).toBe(true);
+    expect(0.4 - r.low).toBeLessThan(0.01);
+    expect(r.high - 0.4).toBeLessThan(0.02);
+  });
+});
+
 describe('Seek equals play with the tether active (design 10.2, 10.4)', () => {
   it('the ball\'s x and y after playing to 3 s equal those after seeking to 3 s from 0, and after seeking back and forth', () => {
     all(HEAVY);

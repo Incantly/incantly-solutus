@@ -131,6 +131,16 @@ export class Cloth2 extends ClothSet {
     w.updateShapes(b);
   }
 
+  protected override keepOut(b: number, io: Float64Array): boolean {
+    return (this.world as World2).keepOut(b, io);
+  }
+
+  protected override shiftSpeed(b: number, dx: number, dy: number): void {
+    const w = this.world as World2;
+    w.vx[b] = (w.vx[b] as number) + dx;
+    w.vy[b] = (w.vy[b] as number) + dy;
+  }
+
   private c2 = new Float64Array(3);
   /** Body b's centre in the cloth's small steps. */
   private centre(b: number): Float64Array {

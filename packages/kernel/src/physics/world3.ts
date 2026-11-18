@@ -1485,6 +1485,41 @@ export class World3 {
     }
   }
 
+  /**
+   * Keeps what the cloth did to body b this step out of the fixed shapes (ground, terrain, static or kinematic bodies) it
+   * touches, from the contacts the world found this step (design 9.5). `io` holds the cloth's move of the body in 0..2 and
+   * its speed in 3..5. For each touching contact, in the world's order, with the normal n out of the fixed shape: the part of
+   * the move along -n and of the speed along -n is taken out. Returns true if it changed `io`.
+   */
+  keepOut(b: number, io: Float64Array): boolean {
+    let changed = false;
+    for (const c of this.contacts) {
+      if (!c.touching) continue;
+      let s: number;
+      if (c.b === b && this.type[c.a] !== BodyType3.Dynamic) s = 1;
+      else if (c.a === b && this.type[c.b] !== BodyType3.Dynamic) s = -1;
+      else continue;
+      const nx = s * c.nx;
+      const ny = s * c.ny;
+      const nz = s * c.nz;
+      const dn = (io[0] as number) * nx + (io[1] as number) * ny + (io[2] as number) * nz;
+      if (dn < 0) {
+        io[0] = (io[0] as number) - dn * nx;
+        io[1] = (io[1] as number) - dn * ny;
+        io[2] = (io[2] as number) - dn * nz;
+        changed = true;
+      }
+      const vn = (io[3] as number) * nx + (io[4] as number) * ny + (io[5] as number) * nz;
+      if (vn < 0) {
+        io[3] = (io[3] as number) - vn * nx;
+        io[4] = (io[4] as number) - vn * ny;
+        io[5] = (io[5] as number) - vn * nz;
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
   touchingAll(): number[][] {
     const out: number[][] = [];
     for (let i = 0; i < this.n; i++) out.push([]);

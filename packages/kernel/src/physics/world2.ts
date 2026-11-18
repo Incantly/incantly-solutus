@@ -1626,6 +1626,38 @@ export class World2 implements Poses {
     return [...out].sort((x, y) => x - y);
   }
 
+  /**
+   * Keeps what the cloth did to body b this step out of the fixed shapes (ground, static or kinematic bodies) it touches,
+   * from the contacts the world found this step (design 9.5). `io` holds the cloth's move of the body in 0..1 and its speed
+   * in 3..4 (2 and 5 are not used). For each touching contact, in the world's order, with the normal n out of the fixed
+   * shape: the part of the move and of the speed along -n is taken out. Returns true if it changed `io`.
+   */
+  keepOut(b: number, io: Float64Array): boolean {
+    let changed = false;
+    for (const c of this.contacts) {
+      if (!c.touching) continue;
+      let s: number;
+      if (c.b === b && this.type[c.a] !== BodyType.Dynamic) s = 1;
+      else if (c.a === b && this.type[c.b] !== BodyType.Dynamic) s = -1;
+      else continue;
+      const nx = s * c.nx;
+      const ny = s * c.ny;
+      const dn = (io[0] as number) * nx + (io[1] as number) * ny;
+      if (dn < 0) {
+        io[0] = (io[0] as number) - dn * nx;
+        io[1] = (io[1] as number) - dn * ny;
+        changed = true;
+      }
+      const vn = (io[3] as number) * nx + (io[4] as number) * ny;
+      if (vn < 0) {
+        io[3] = (io[3] as number) - vn * nx;
+        io[4] = (io[4] as number) - vn * ny;
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
   /** For every body, the bodies it touches now, in body order (one pass over the contacts). */
   touchingAll(): number[][] {
     const out: number[][] = [];

@@ -36,6 +36,8 @@ export const MAX_CLOTH_POINTS = 4096;
 export const MAX_PINS = 64;
 /** Defaults of the named arguments (design 2.4). */
 export const CLOTH_DEFAULTS = Object.freeze({ mass: 1, stretch: 1, bend: 0.1, damping: 0.02, thickness: 0.02, friction: 0.4 });
+/** A sheet's or net's point tether is at least this times the start distance: the 2% every check of a length allows. */
+const SHEET_TETHER_MIN = 1.02;
 /** A cloth whose points all move under 1 mm/s for 0.5 s sleeps (design 9.5). */
 const SLEEP_SPEED = 0.001;
 const SLEEP_TIME = 0.5;
@@ -370,7 +372,10 @@ export class ClothSet {
       }
       if (d.tears === 0 && d.pins.length > 0) {
         // each free point keeps within reach of its two nearest pins (by the start distance)
-        const slack = 1 + 2 * (1 - Math.min(1, Math.max(0, d.stretch)));
+        // a sheet or net with a body pin at stretch 1 would sit at the limit of its tethers all over (flat and taut), so every
+        // point is held and the body takes all the push; 2% of play stops that (a rope keeps its slack)
+        const base = 1 + 2 * (1 - Math.min(1, Math.max(0, d.stretch)));
+        const slack = d.kind !== 'rope' && d.pins.some((pd) => pd.body >= 0) ? Math.max(base, SHEET_TETHER_MIN) : base;
         for (let k = 0; k < n; k++) {
           const i = p + k;
           // only free points
@@ -614,7 +619,16 @@ export class ClothSet {
     this.pjz = F();
     this.applied = new Float64Array(nb * 3);
     this.touched = new Uint8Array(nb * Math.max(1, this.cloths.length));
+    this.pinned = new Uint8Array(nb);
+    for (let q = 0; q < this.pinBody.length; q++) {
+      const b = this.pinBody[q] as number;
+      if (b >= 0 && b < nb) this.pinned[b] = 1;
+    }
   }
+
+  /** 1 for each body that a pin holds (from the defs, so it does not depend on the last step). */
+  private pinned = new Uint8Array(0);
+
 
   /* ------------------------------ hooks for the world (in the plane or in space) ------------------------------ */
 
@@ -791,6 +805,7 @@ export class ClothSet {
     }
     this.endSub();
     this.endDrops();
+    this.keepFixed();
     // the forces on the pins, averaged over the small steps
     const inv = 1 / (this.subs * hs * hs);
     for (let q = 0; q < this.pinFx.length; q++) {
@@ -1095,10 +1110,73 @@ export class ClothSet {
   }
 
   private endSub(): void {
-    for (let k = 0; k < this.nSub; k++) this.setBody(this.subB[k] as number, this.spx[k] as number, this.spy[k] as number, this.spz[k] as number, this.svx[k] as number, this.svy[k] as number, this.svz[k] as number);
+    const o = this.sub12;
+    const io = this.keepIo;
+    for (let k = 0; k < this.nSub; k++) {
+      const b = this.subB[k] as number;
+      // the cloth's move and speed change of the body this step, less the part that pushes it into a fixed shape it touches
+      this.bodyStep(b, o);
+      io[0] = (this.spx[k] as number) - (o[6] as number);
+      io[1] = (this.spy[k] as number) - (o[7] as number);
+      io[2] = (this.spz[k] as number) - (o[8] as number);
+      io[3] = this.svx[k] as number;
+      io[4] = this.svy[k] as number;
+      io[5] = this.svz[k] as number;
+      if (this.keepOut(b, io)) {
+        this.spx[k] = (o[6] as number) + (io[0] as number);
+        this.spy[k] = (o[7] as number) + (io[1] as number);
+        this.spz[k] = (o[8] as number) + (io[2] as number);
+        this.svx[k] = io[3] as number;
+        this.svy[k] = io[4] as number;
+        this.svz[k] = io[5] as number;
+      }
+      this.setBody(b, this.spx[k] as number, this.spy[k] as number, this.spz[k] as number, this.svx[k] as number, this.svy[k] as number, this.svz[k] as number);
+    }
   }
 
   private sub12 = new Float64Array(12);
+  protected keepIo = new Float64Array(6);
+
+  /**
+   * Keeps body b's move by the cloth out of the fixed shapes (ground, terrain, static bodies) it touches: `io` holds the
+   * move (0..2) and the speed (3..5); the world's hook takes out of each the part that goes into a touching fixed shape.
+   * Returns true if it changed `io`.
+   */
+  protected keepOut(_b: number, _io: Float64Array): boolean {
+    return false;
+  }
+
+  /** Adds (dx, dy, dz) to body b's speed in the world. */
+  protected shiftSpeed(_b: number, _dx: number, _dy: number, _dz: number): void {}
+
+  /**
+   * What the cloth gave each held body this step and the world applies at the next one (a move, and a push as a change of
+   * speed) goes into no fixed shape the body touches. Done here, with this step's contacts, not at the next step's start
+   * (after a seek the world has no contact list until it steps), so seeking and playing give the same film. The part taken
+   * out of the push is taken from the body's speed now; the next step adds the whole push back.
+   */
+  private keepFixed(): void {
+    const io = this.keepIo;
+    for (let b = 0; b < this.bjx.length; b++) {
+      if (this.pinned[b] !== 1) continue;
+      const im = this.bodyInvMass(b);
+      if (!(im > 0)) continue;
+      const dvx = im * ((this.bjx[b] as number) - (this.pjx[b] as number));
+      const dvy = im * ((this.bjy[b] as number) - (this.pjy[b] as number));
+      const dvz = im * ((this.bjz[b] as number) - (this.pjz[b] as number));
+      io[0] = this.bdx[b] as number;
+      io[1] = this.bdy[b] as number;
+      io[2] = this.bdz[b] as number;
+      io[3] = dvx;
+      io[4] = dvy;
+      io[5] = dvz;
+      if (!this.keepOut(b, io)) continue;
+      this.bdx[b] = io[0] as number;
+      this.bdy[b] = io[1] as number;
+      this.bdz[b] = io[2] as number;
+      this.shiftSpeed(b, (io[3] as number) - dvx, (io[4] as number) - dvy, (io[5] as number) - dvz);
+    }
+  }
 
   /** Where a body that takes the small steps is now, or undefined. */
   protected subAt(b: number, out: Float64Array): boolean {

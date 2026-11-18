@@ -184,6 +184,17 @@ export class Cloth3 extends ClothSet {
     w.updateShapes(b);
   }
 
+  protected override keepOut(b: number, io: Float64Array): boolean {
+    return (this.world as World3).keepOut(b, io);
+  }
+
+  protected override shiftSpeed(b: number, dx: number, dy: number, dz: number): void {
+    const w = this.world as World3;
+    w.v[b * 3] = (w.v[b * 3] as number) + dx;
+    w.v[b * 3 + 1] = (w.v[b * 3 + 1] as number) + dy;
+    w.v[b * 3 + 2] = (w.v[b * 3 + 2] as number) + dz;
+  }
+
   /** Body b's centre now, in the cloth's small steps: where it took the small steps to, or where the world put it. */
   private cx3 = new Float64Array(3);
   private centre(b: number): Float64Array {
