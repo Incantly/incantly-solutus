@@ -100,11 +100,11 @@ Each round is one branch `feat/physics-<n>` and one PR into `integration`, merge
   - [ ] 10.8 The Rust rule of design 11.6: after the TypeScript fixes, measure each solver in Chrome with the CPU 4× slower and report which (if any) are more than 25% over goal; ask the product owner before any Rust tool or crate
   - [x] 10.9 Rust kernels, round 1 (design 11.6 "As built"): the hot loops of the cloth and the neighbour grid in Rust compiled to WebAssembly, called from the TypeScript step; the TypeScript loops stay as the fallback and the reference, the film is the same bits with or without them (hash check of 15 scenes, 10 s each, equal every second). Round 2 (`prepareSelf`, `prepareDrops` and `faceTable`, `hitSphere`) is open if a Chrome row still misses its goal
 - [ ] 11. Round 11: fire, and smoke in space (R11)
-  - [ ] 11.1 `swirl` on `Smoke` (vorticity confinement), with a check that a plume past a ball sheds curls and the mass check of 9.4 still holds
-  - [ ] 11.2 `Fire` in the plane: temperature and fuel per cell, lift, burning, cooling, the source, named arguments and readouts, B017 and limits, `fire_out`
-  - [ ] 11.3 `burns` and `Ignite`: heat swap, burning bodies (mass, char, `burnt`, joints break), cloth cells that burn and tear, solid shapes that stop being solid, B020, B021; water that puts fire out
-  - [ ] 11.4 Drawing in the plane: black-body colour added under the smoke, char on burnt bodies; the crackle with `sound = true`
+  - [x] 11.1 `swirl` on `Smoke` (vorticity confinement), with a check that a plume past a ball sheds curls and the mass check of 9.4 still holds
+  - [x] 11.2 `Fire` in the plane: temperature and fuel per cell, lift, burning, cooling, the source, named arguments and readouts, B017 and limits, `fire_out`
+  - [x] 11.3 `burns` and `Ignite`: heat swap, burning bodies (mass, char, `burnt`, joints break), cloth cells that burn and tear, solid shapes that stop being solid, B020, B021; water that puts fire out
+  - [x] 11.4 Drawing in the plane: black-body colour added under the smoke, char on burnt bodies; the crackle with `sound = true`
   - [ ] 11.5 The grid in space: `Smoke(box, n)`, `Fire(box, n)`, `Fire(at: Point3)`, Float32 cells, in the worker, cloth in its wind, checkpoints every 1 s
   - [ ] 11.6 Drawing in space: ray marching a 3D texture in the WebGL 2 painter with the solids' depth; 12 slices without WebGL 2; PNG and SVG
-  - [ ] 11.7 Examples, screenshots, spec tests (seek equals play with fire, a log burns away the same on replay, water puts it out, a flag over a fire ripples), the agent's rows in `agent.md`
-  - [ ] 11.8 Benches for the fire rows of design 11.2 in Node and in Chrome with the CPU 4× slower; the Rust rule of 11.6
+  - [ ] 11.7 (2D examples and `agent.md` rows done in 11A; screenshots, spec tests and the space examples open) Examples, screenshots, spec tests (seek equals play with fire, a log burns away the same on replay, water puts it out, a flag over a fire ripples), the agent's rows in `agent.md`
+  - [ ] 11.8 (the Node row for fire in the plane, 64 × 64, is in `physics.bench.ts`: 0.84 ms; Chrome and space open) Benches for the fire rows of design 11.2 in Node and in Chrome with the CPU 4× slower; the Rust rule of 11.6
