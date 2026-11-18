@@ -488,8 +488,10 @@ function pushRun(call: ActionCall): ActionOutcome {
 
 /** The types of flat shapes that may be solid, and so may burn (design 9.7). */
 const SOLID_SHAPE_TYPES = new Set(['Polygon', 'Circle', 'Conic', 'Segment', 'Line', 'Ray', 'Arc', 'Sector', 'Polyline', 'Curve', 'Function']);
-/** The types that may burn: bodies, cloths and solid shapes. */
-const BURNABLE_TYPES = new Set(['Body', 'Body3', 'Cloth', ...SOLID_SHAPE_TYPES]);
+/** The types of solids in space that may be solid, and so may burn (design 9.8; a plane, the floor and terrain cannot). */
+const SOLID_SHAPE_TYPES3 = new Set(['Polyhedron', 'Sphere', 'Cylinder', 'Cone']);
+/** The types that may burn: bodies, cloths and solid shapes, in the plane and in space. */
+const BURNABLE_TYPES = new Set(['Body', 'Body3', 'Cloth', ...SOLID_SHAPE_TYPES, ...SOLID_SHAPE_TYPES3]);
 
 /** `Ignite(thing)`: sets a burnable body, cloth or solid shape on fire now (design 9.7), logged as `@input physics ignite`. */
 function igniteRun(call: ActionCall): ActionOutcome {
@@ -500,8 +502,9 @@ function igniteRun(call: ActionCall): ActionOutcome {
   // a body or a cloth in space is lit by the space driver
   let space: boolean;
   if (o && o.type !== 'Body' && !/^List/.test(o.type)) {
-    const v0 = call.values[0];
-    space = o.type === 'Body3' || (isClothValue(v0) && v0.spec.space);
+    // an argument that names an object has no value in `call.values`: read the object's own
+    const v0 = call.values[0] ?? call.figure.value(o.id);
+    space = o.type === 'Body3' || SOLID_SHAPE_TYPES3.has(o.type) || (isClothValue(v0) && v0.spec.space);
     if (!BURNABLE_TYPES.has(o.type)) {
       return { error: err('not_burnable', at, { why: `${o.name} can't burn: it is not a body, a cloth or a solid shape.` }, { hint: `Only a body, a cloth or a solid shape can burn. Make ${o.name} a body first: b = Body(${o.name}, mass = 1, burns = true).`, suggest: [`b = Body(${o.name}, mass = 1, burns = true)`], recovery: 'use_suggestion', fingerprintKey: `ignite:${o.name}` }) };
     }
@@ -524,7 +527,9 @@ function igniteRun(call: ActionCall): ActionOutcome {
     return { error: err('not_burnable', at, { why: `${name} can't burn yet.` }, { hint: `${name} can't burn yet. Add ${name} with burns = true first.`, suggest: [`${name} with burns = true`], recovery: 'use_suggestion', fingerprintKey: `ignite:${name}` }) };
   }
   const where = o && (o.type === 'Body' || o.type === 'Body3') || !o ? `${name}.pos` : `(${fmt(r.x)}, ${fmt(r.y)}${'z' in r && typeof r.z === 'number' ? `, ${fmt(r.z)}` : ''})`;
-  return { error: err('no_fire_grid', at, { why: `${name} is outside every fire.` }, { hint: `Nothing can burn outside a fire. Make a fire round ${name}.`, suggest: [`fire = Fire(${where})`], recovery: 'use_suggestion', fingerprintKey: `ignite:${name}` }) };
+  // a figure has one fire in space: with one already, the suggested line replaces nothing and is refused with `limit` (PH-32)
+  const one = space && d instanceof Physics3Driver && d.hasSmokeGrid() ? ' A figure has one smoke or fire grid in space, so change the line of the one it has to cover it.' : '';
+  return { error: err('no_fire_grid', at, { why: `${name} is outside every fire.` }, { hint: `Nothing can burn outside a fire. Make a fire round ${name}.${one}`, suggest: [`fire = Fire(${where})`], recovery: 'use_suggestion', fingerprintKey: `ignite:${name}` }) };
 }
 
 function wakeRun(awake: boolean): (call: ActionCall) => ActionOutcome {
@@ -966,8 +971,9 @@ function burningThings(rec: ObjRec): number {
   const on = (made: number | undefined): boolean => styled ?? (made ?? 0) > 0;
   const c = rec.cell;
   if (!c.defined) return styled ? 1 : 0;
-  if (Array.isArray(c.value) && rec.p.type.k === 'List') return (c.value as unknown[]).filter((v) => isBodyValue(v) && on(v.spec.burns)).length;
-  if (isBodyValue(c.value)) return on(c.value.spec.burns) ? 1 : 0;
+  // bodies in the plane and in space count the same (PH-33: a body in space was not counted)
+  if (Array.isArray(c.value) && rec.p.type.k === 'List') return (c.value as unknown[]).filter((v) => (isBodyValue(v) || isBody3Value(v)) && on(v.spec.burns)).length;
+  if (isBodyValue(c.value) || isBody3Value(c.value)) return on(c.value.spec.burns) ? 1 : 0;
   if (isClothValue(c.value)) return on(c.value.spec.burns) ? 1 : 0;
   return styled ? 1 : 0;
 }

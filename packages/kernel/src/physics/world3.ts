@@ -649,6 +649,31 @@ export class World3 {
     this.stepIndex++;
   }
 
+  /**
+   * Wakes the sleeping bodies whose boxes meet body `i`'s, called just before `i` leaves the world (a burnt body or shape):
+   * what it held up falls (the plane's `wakeAround`). A sleeping body is not woken by a wall that goes away on its own.
+   */
+  wakeAround(i: number): void {
+    const s0 = this.shape0[i] as number;
+    const sn = this.shapeN[i] as number;
+    const lo = this.lo;
+    const hi = this.hi;
+    for (let j = 0; j < this.n; j++) {
+      if (j === i || this.type[j] !== BodyType3.Dynamic || this.awake[j] === 1 || this.gone.has(j)) continue;
+      const t0 = this.shape0[j] as number;
+      const tn = this.shapeN[j] as number;
+      let meets = false;
+      for (let k = s0; k < s0 + sn && !meets; k++) {
+        for (let q = t0; q < t0 + tn && !meets; q++) {
+          let apart = false;
+          for (let a = 0; a < 3 && !apart; a++) if ((hi[k * 3 + a] as number) < (lo[q * 3 + a] as number) || (hi[q * 3 + a] as number) < (lo[k * 3 + a] as number)) apart = true;
+          if (!apart) meets = true;
+        }
+      }
+      if (meets) this.wakeBody(j);
+    }
+  }
+
   removeBody(i: number): void {
     this.type[i] = BodyType3.Static;
     this.invM[i] = 0;

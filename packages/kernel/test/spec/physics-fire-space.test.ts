@@ -1273,3 +1273,179 @@ describe('the exact film with fire in space (design 10; R11.9)', () => {
     expect(hash(b)).toBe(hash(a));
   });
 });
+
+/* ------------------------------ the fix round (findings PH-30 to PH-34, handoff/physics/findings.md) ------------------------------ */
+
+describe('fix round: PH-30 Ignite of a sheet in space, PH-31 the torn notice', () => {
+  const sheet = (burns: string): string[] => ['cold = Fire(Box((0, 0, 1.5), 3, 3, 3), 16)', `flag = Cloth((-0.6, 0, 2), (1.2, 0, 0), (0, 0, -1), 10, 6, mass = 0.2, pins = "top"${burns})`, 'fb = flag.burnt', 'ft = flag.torn'];
+
+  it('PH-30: Ignite(sheet) in space reaches the space driver: the sheet is lit at once, burns away, and the script keeps the @input line', () => {
+    all(sheet(', burns = 1'));
+    play(1);
+    expect(f.value('fb')).toBe(0);
+    all(['Ignite(flag)']);
+    play(5);
+    expect(f.value('fb') as number).toBeGreaterThan(0.9);
+    expect(f.toScript()).toMatch(/@input physics ignite flag at /);
+  });
+
+  it('PH-30: burns given as a number of seconds, and a sheet with none (not_burnable), reach the same driver', () => {
+    all(sheet(', burns = 2.5'));
+    all(['Ignite(flag)']);
+    play(1);
+    expect(f.value('fb'), 'lit, none burnt away yet').toBe(0);
+    expect(cloth('flag').spec.burns).toBe(2.5);
+    play(4);
+    expect(f.value('fb') as number).toBeGreaterThan(0.9);
+    const g = make(sheet(''));
+    expect(fail('Ignite(flag)', g).kind).toBe('not_burnable');
+  });
+
+  it('PH-31: a sheet lit by Ignite tears where it burns, and the torn notice comes once, with the links torn so far', () => {
+    all(sheet(', burns = 1'));
+    all(['Ignite(flag)']);
+    let first: { t: number; links: number } | undefined;
+    let count = 0;
+    for (let k = 1; k <= 60 * 6; k++) {
+      f.setClock(k / 60);
+      for (const w of f.takeWarnings()) {
+        if (w.kind !== 'torn') continue;
+        count++;
+        first ??= { t: k / 60, links: (w.params as { links?: number }).links ?? -1 };
+      }
+    }
+    expect(count, 'one torn notice').toBe(1);
+    expect(first?.links, 'the notice counts the links torn').toBeGreaterThan(0);
+    expect(f.value('ft') as number).toBeGreaterThanOrEqual(first?.links ?? Infinity);
+  });
+
+  it('PH-31: the links torn by burning are counted the same in a figure reloaded and sought to the end', () => {
+    const a = make(sheet(', burns = 1'));
+    all(['Ignite(flag)'], a);
+    play(6, a);
+    const b = Figure.fromScript(a.toScript(), { commands: REG }).figure;
+    seek(b, 6);
+    expect(b.value('ft')).toBe(a.value('ft'));
+    expect(b.value('ft') as number).toBeGreaterThan(0);
+    expect(hash(b)).toBe(hash(a));
+  });
+});
+
+describe('fix round: PH-32 the suggestion of no_fire_grid, PH-33 the 64 in space', () => {
+  it('PH-32: a body outside a fire that is already the one grid in space still gets Fire(b.pos) as the suggestion, and the hint says there is one grid', () => {
+    all([`cold = Fire(${BOX3}, 12)`, 'far = Body(Box((20, 0, 1), 1, 1, 1), burns = true)']);
+    const e = fail('Ignite(far)');
+    expect(e.kind).toBe('no_fire_grid');
+    expect(e.suggest).toEqual(['fire = Fire(far.pos)']);
+    expect(e.hint ?? '').toMatch(/one smoke or fire grid in space/);
+  });
+
+  it('PH-32: the same for a sheet (where it is) and for a solid shape', () => {
+    all([`cold = Fire(${BOX3}, 12)`, 'c = Cloth((20, 0, 2), (1, 0, 0), (0, 0, -1), 6, 6, burns = true)', 'wall = Box((20, 5, 1), 1, 1, 1)', 'wall with solid = true, burns = true']);
+    const e = fail('Ignite(c)');
+    expect(e.suggest?.length).toBe(1);
+    expect(e.suggest?.[0]).toMatch(/^fire = Fire\(\(/);
+    expect(fail('Ignite(wall)').kind).toBe('no_fire_grid');
+  });
+
+  it('PH-32: with no fire at all the suggestion is still offered, and the line works', () => {
+    all(['b = Body(Box((0, 0, 1), 1, 1, 1), burns = true)']);
+    expect(fail('Ignite(b)').suggest).toEqual(['fire = Fire(b.pos)']);
+  });
+
+  const body = (k: number, extra = 'burns = true'): string => `b${k} = Body(Box((${(k % 10) * 0.4}, ${Math.floor(k / 10) * 0.4}, 2), 0.1, 0.1, 0.1)${extra === '' ? '' : `, ${extra}`})`;
+
+  it('PH-33: bodies, sheets and solid shapes in space count together; the 65th of any kind is limit, and a with burns line counts', () => {
+    all([`cold = Fire(${BOX3}, 8)`]);
+    for (let k = 0; k < 40; k++) all([body(k)]);
+    for (let k = 0; k < 23; k++) all([`c${k} = Cloth((${k * 0.1}, 3, 2), (0.1, 0, 0), (0, 0.1, 0), 3, 3, burns = true)`]);
+    all(['plank = Box((0, -3, 1), 1, 1, 0.2)', 'plank with solid = true, burns = true']);
+    expect(fail(body(90)).kind, 'a 65th body').toBe('limit');
+    expect(fail('late = Cloth((0, 3, 1), (0.1, 0, 0), (0, 0.1, 0), 3, 3, burns = true)').kind, 'a 65th sheet').toBe('limit');
+    all([body(91, '')]);
+    expect(fail('b91 with burns = true').kind, 'a with burns on a 65th').toBe('limit');
+    expect(fail('b91 with burns = 3').kind, 'a number of seconds counts').toBe('limit');
+    all(['b91 with burns = false']);
+    all(['b0 with burns = false', 'b91 with burns = true']);
+  });
+
+  it('PH-33: a list of bodies in space counts each item', () => {
+    all([`cold = Fire(${BOX3}, 8)`]);
+    for (let k = 0; k < 60; k++) all([body(k)]);
+    // four of the list fit (64); the fifth item is the 65th
+    all(['row = Bodies([Box((5, 0, 2), 0.1, 0.1, 0.1), Box((5, 1, 2), 0.1, 0.1, 0.1), Box((5, 2, 2), 0.1, 0.1, 0.1), Box((5, 3, 2), 0.1, 0.1, 0.1)])', 'row with burns = 2']);
+    all(['more = Bodies([Box((6, 0, 2), 0.1, 0.1, 0.1), Box((6, 1, 2), 0.1, 0.1, 0.1)])']);
+    expect(fail('more with burns = 2').kind).toBe('limit');
+  });
+});
+
+describe('fix round: PH-34 a solid shape that burns in space (design 9.7 "A solid shape", 9.8)', () => {
+  const SHELF = ['g = Ground()', 'cold = Fire(Box((0, 0, 1.5), 3, 3, 3), 12)', 'shelf = Box((0, 0, 1), 1.6, 1.6, 0.2)', 'shelf with solid = true, burns = 1', 'ball = Body(Sphere((0, 0, 1.3), 0.2))', 'bz = ball.z'];
+
+  it('burns on a solid in space is accepted (a polyhedron, a sphere), and refused on what cannot burn', () => {
+    all(['a = Box((0, 0, 1), 1, 1, 1)', 'a with solid = true, burns = true', 'b = Sphere((3, 0, 1), 0.5)', 'b with solid = true, burns = 3', 'P = (0, 0, 0)']);
+    expect(fail('P with burns = true').kind).toBe('not_burnable');
+  });
+
+  it('the ball on a burnt shelf falls: the ball sleeps on the shelf, the shelf burns away after Ignite and the ball is back on the ground soon after the burnt notice', () => {
+    all(SHELF);
+    play(3);
+    expect(physics3Of(f).world?.awake[2], 'the ball sleeps on the shelf').toBe(0);
+    expect(f.value('bz') as number).toBeCloseTo(1.3, 2);
+    all(['Ignite(shelf)']);
+    const r = firstNotice(f, 'burnt', 12, true);
+    expect(r.at, 'the shelf never burnt away').toBeDefined();
+    play((r.at as number) + 1.5);
+    expect(f.value('bz') as number).toBeLessThan(0.3);
+  });
+
+  it('the shelf reads undefined with the reason burnt, the notice comes once, and what lights the shelf is the fire: a shelf over the flames burns without Ignite', () => {
+    all(['g = Ground()', 'fire = Fire(Box((0, 0, 1.5), 3, 3, 3), 16, source = Sphere((0, 0, 0.3), 0.3))', 'shelf = Box((0, 0, 0.9), 1.2, 1.2, 0.2)', 'shelf with solid = true, burns = 1']);
+    const r = firstNotice(f, 'burnt', 15);
+    expect(r.at, 'the shelf never burnt away').toBeDefined();
+    expect(r.count).toBe(1);
+    expect(f.get('shelf')?.cell).toMatchObject({ defined: false, reason: 'burnt' });
+  });
+
+  it('seek equals play across the burn; seeking back before it gives the shelf back; a reload of the script plays the same', () => {
+    const a = make(SHELF);
+    play(2, a);
+    all(['Ignite(shelf)'], a);
+    play(7, a);
+    expect(a.get('shelf')?.cell).toMatchObject({ defined: false, reason: 'burnt' });
+    const b = Figure.fromScript(a.toScript(), { commands: REG }).figure;
+    seek(b, 7);
+    expect(b.get('shelf')?.cell).toMatchObject({ defined: false, reason: 'burnt' });
+    expect(hash(b)).toBe(hash(a));
+    seek(b, 2.5);
+    expect(b.get('shelf')?.cell.defined, 'before the burn the shelf is there').toBe(true);
+    expect(b.value('bz') as number).toBeCloseTo(1.3, 1);
+    seek(b, 7);
+    expect(b.get('shelf')?.cell).toMatchObject({ defined: false, reason: 'burnt' });
+    expect(hash(b)).toBe(hash(a));
+    expect(b.value('bz')).toEqual(a.value('bz'));
+  });
+
+  it('a line changed after the shelf burnt away does not bring it back or start the film again', () => {
+    all(SHELF);
+    play(2);
+    all(['Ignite(shelf)']);
+    play(6);
+    const before = f.value('bz');
+    all(['other = Body(Sphere((3, 3, 2), 0.2))']);
+    play(7);
+    expect(f.get('shelf')?.cell).toMatchObject({ defined: false, reason: 'burnt' });
+    expect(f.value('bz') as number).toBeCloseTo(before as number, 3);
+  });
+
+  it('a burning solid sphere reads undefined too; a shelf with no burns and one outside the fire stay', () => {
+    all(['g = Ground()', 'cold = Fire(Box((0, 0, 1.5), 3, 3, 3), 12)', 'orb = Sphere((0, 0, 1), 0.4)', 'orb with solid = true, burns = 1', 'plain = Box((1, 0, 1), 0.5, 0.5, 0.5)', 'plain with solid = true', 'far = Box((20, 0, 1), 0.5, 0.5, 0.5)', 'far with solid = true, burns = 1']);
+    all(['Ignite(orb)']);
+    expect(fail('Ignite(plain)').kind).toBe('not_burnable');
+    expect(fail('Ignite(far)').kind).toBe('no_fire_grid');
+    play(8);
+    expect(f.get('orb')?.cell).toMatchObject({ defined: false, reason: 'burnt' });
+    expect(f.get('plain')?.cell.defined).toBe(true);
+    expect(f.get('far')?.cell.defined).toBe(true);
+  });
+});

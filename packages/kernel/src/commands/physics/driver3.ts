@@ -16,7 +16,7 @@ import type { DriverAccess, Figure } from '../../graph/figure';
 import type { Cell, StyleEntry } from '../../graph/types';
 import { sameValue } from '../../graph/values';
 import type { BodyDef3, ShapeDef3 } from '../../physics/world3';
-import { BodyType3, FK3, World3, quatAxis } from '../../physics/world3';
+import { BodyType3, FK3, World3, quatAxis, volumeOf3 } from '../../physics/world3';
 import { Distance3, Hinge3, Slider3, Weld3, Wheel3 } from '../../physics/joints3';
 import type { JointValue3 } from './joints';
 import { isJoint3Value } from './joints';
@@ -49,7 +49,7 @@ import type { SmokeSpec, SmokeValue } from './smoke';
 import { isSmokeValue, smokeGrid3, smokeValue3 } from './smoke';
 import type { BurnDef3 } from '../../physics/burn3';
 import { Burnables3 } from '../../physics/burn3';
-import { BURN_BODY, BURN_CELL, MAX_BURNABLE } from '../../physics/burn2';
+import { BURN_BODY, BURN_CELL, BURN_SHAPE, MAX_BURNABLE } from '../../physics/burn2';
 import { FUEL_GONE, IGNITE_AT } from '../../physics/fire2';
 import { fuelSum3, hottest3 } from '../../physics/fire3';
 
@@ -79,10 +79,10 @@ export type LogEntry3 =
   | { readonly kind: 'crelease'; readonly n: number; readonly id: ObjId; readonly point: number }
   | { readonly kind: 'wake' | 'sleep' | 'ignite'; readonly n: number; readonly id: ObjId; readonly item?: number };
 
-/** A thing that burns in space (design 9.7, 9.8): a body or a cloth, and the units that stand for it. */
+/** A thing that burns in space (design 9.7, 9.8): a body, a solid shape or a cloth, and the units that stand for it. */
 interface BurnThing3 {
   readonly rec: ObjRec;
-  readonly kind: 'body' | 'cloth';
+  readonly kind: 'body' | 'shape' | 'cloth';
   readonly item?: number;
   /** The world index of a body; the cloth's number in the set. */
   readonly index: number;
@@ -344,7 +344,25 @@ export class Physics3Driver implements WorldDriver {
       const last = this.lastCells.get(rec.id);
       return last && computed.defined ? last : undefined;
     }
+    // (told by its `solid` style, not by the scan: a rule is computed before the scan that finds the solids has run)
+    if (rec.p.style.has('solid') || this.solidRecs.includes(rec)) {
+      // a solid shape: its rule's value is what the world is built from; one that burnt away reads undefined (PH-34)
+      this.solidVals.set(rec.id, computed);
+      return this.burntSolids.has(rec.id) ? { defined: false, reason: 'burnt' } : undefined;
+    }
     return undefined;
+  }
+
+  /** The value each solid shape's rule gave last (a solid that burnt away reads undefined, but the world is still built from this). */
+  private solidVals = new Map<ObjId, Cell>();
+  /** The solid shapes whose cell reads undefined now because they burnt away. */
+  private burntSolids = new Set<ObjId>();
+  /** Solid shapes that have burnt away at some time: a worker sends their cells to the page. */
+  private everBurnt = new Set<ObjId>();
+
+  /** A solid shape's cell as its rule gave it, not as the burning left it. */
+  private solidCell(r: ObjRec): Cell {
+    return this.burntSolids.has(r.id) ? (this.solidVals.get(r.id) ?? r.cell) : r.cell;
   }
 
   /**
@@ -718,7 +736,8 @@ export class Physics3Driver implements WorldDriver {
       sig.push(r.id, on);
       if (!on) continue;
       // a solid that moves during the film is taken where it starts (round 5 moves solids in space)
-      sig.push(this.varySet.has(r) ? 'moving' : r.cell.defined ? r.cell.value : null);
+      const sc = this.solidCell(r);
+      sig.push(this.varySet.has(r) ? 'moving' : sc.defined ? sc.value : null);
       if (r.p.type.k === 'Function') terrain = true;
       for (const k of ['bounce', 'friction'] as const) {
         const e = r.p.style.get(k);
@@ -828,7 +847,7 @@ export class Physics3Driver implements WorldDriver {
         }
         continue;
       }
-      if (!this.solidOn(r) || !r.cell.defined) continue;
+      if (!this.solidOn(r) || !this.solidCell(r).defined) continue;
       const shapes = this.solidShapes(r);
       if (!shapes || shapes.length === 0) continue;
       defs.push({ type: BodyType3.Static, shapes, friction: this.styleNumber(r, 'friction', Number.NaN), bounce: this.styleNumber(r, 'bounce', 0) });
@@ -959,8 +978,9 @@ export class Physics3Driver implements WorldDriver {
 
   /** A solid's walls: the floor of `Ground()`, terrain of `z = f(x, y)`, or the shape itself. */
   private solidShapes(r: ObjRec): ShapeDef3[] | undefined {
-    if (!r.cell.defined) return undefined;
-    const v = r.cell.value;
+    const sc = this.solidCell(r);
+    if (!sc.defined) return undefined;
+    const v = sc.value;
     if (isGround(r)) {
       const g = v as { c?: number };
       return [{ kind: 'plane', n: { x: 0, y: 0, z: 1 }, d: typeof g.c === 'number' ? g.c : 0 }];
@@ -1590,6 +1610,7 @@ export class Physics3Driver implements WorldDriver {
   private writeCells(alpha: number): ObjRec[] {
     const w = this.world as World3;
     const changed: ObjRec[] = [];
+    this.syncBurntSolids(changed);
     this.touchLists = w.touchingAll();
     const lists = new Map<ObjRec, unknown[]>();
     for (const m of this.members) {
@@ -2111,7 +2132,47 @@ export class Physics3Driver implements WorldDriver {
     return { seconds, ignite };
   }
 
-  /** The burnable units of the world (bodies and cloth cells with `burns`), tied to the fire grids. */
+  /**
+   * A solid shape in space that burns (`p with burns = true`): `true` is 10 s a m³ of its volume (at least 1 s), a number the
+   * seconds. Its place is the middle of its box. A plane, a floor or terrain cannot burn.
+   */
+  private solidBurn(r: ObjRec, shapes: readonly ShapeDef3[]): { seconds: number; ignite: number; x: number; y: number; z: number } | undefined {
+    const e = r.p.style.get('burns');
+    if (!e) return undefined;
+    const v = this.evalStyle(r, e);
+    let x0 = Infinity;
+    let y0 = Infinity;
+    let z0 = Infinity;
+    let x1 = -Infinity;
+    let y1 = -Infinity;
+    let z1 = -Infinity;
+    for (const s of shapes) {
+      if (s.kind === 'sphere') {
+        x0 = Math.min(x0, s.c.x - s.r);
+        x1 = Math.max(x1, s.c.x + s.r);
+        y0 = Math.min(y0, s.c.y - s.r);
+        y1 = Math.max(y1, s.c.y + s.r);
+        z0 = Math.min(z0, s.c.z - s.r);
+        z1 = Math.max(z1, s.c.z + s.r);
+      } else if (s.kind === 'hull') {
+        for (const p of s.verts) {
+          x0 = Math.min(x0, p.x);
+          x1 = Math.max(x1, p.x);
+          y0 = Math.min(y0, p.y);
+          y1 = Math.max(y1, p.y);
+          z0 = Math.min(z0, p.z);
+          z1 = Math.max(z1, p.z);
+        }
+      } else return undefined;
+    }
+    const seconds = v === true ? Math.max(1, 10 * volumeOf3(shapes).vol) : typeof v === 'number' && v > 0 ? v : 0;
+    if (!(seconds > 0) || !Number.isFinite(x0)) return undefined;
+    const g = r.p.style.get('ignite');
+    const iv = g ? this.evalStyle(r, g) : undefined;
+    return { seconds, ignite: typeof iv === 'number' && Number.isFinite(iv) ? clamp(iv, 150, 1000) : 250, x: 0.5 * (x0 + x1), y: 0.5 * (y0 + y1), z: 0.5 * (z0 + z1) };
+  }
+
+  /** The burnable units of the world (bodies, solid shapes and cloth cells with `burns`), tied to the fire grids. */
   private buildBurn(world: World3, members: readonly Member3[]): void {
     this.burn = undefined;
     this.burnThings = [];
@@ -2122,6 +2183,15 @@ export class Physics3Driver implements WorldDriver {
     const nameOf = (r: ObjRec, item?: number): string => (item !== undefined ? `${r.p.name}[${item + 1}]` : r.p.name);
     for (const m of members) {
       if (things.length >= MAX_BURNABLE) break;
+      if (m.role === 'solid') {
+        // a solid shape that burns (`p with burns = true`), where the world was built with it (design 9.7; PH-34)
+        const shapes = this.solidCell(m.rec).defined ? this.solidShapes(m.rec) : undefined;
+        const sb = shapes ? this.solidBurn(m.rec, shapes) : undefined;
+        if (!sb) continue;
+        defs.push({ kind: BURN_SHAPE, index: m.index, cell: 0, thing: things.length, ignite: sb.ignite, seconds: sb.seconds, x: sb.x, y: sb.y, z: sb.z });
+        things.push({ rec: m.rec, kind: 'shape', index: m.index, first: defs.length - 1, count: 1, name: m.rec.p.name, dirty: false });
+        continue;
+      }
       if (m.role !== 'body' || !m.spec) continue;
       const b = this.bodyBurn(m.rec, m.spec);
       if (!(b.seconds > 0)) continue;
@@ -2248,13 +2318,46 @@ export class Physics3Driver implements WorldDriver {
         continue;
       }
       const i = th.index;
-      // what rested on it wakes, or a sleeping body would stay where its support was
-      const touch = w.touchingAll();
-      for (let j = 0; j < touch.length; j++) if ((touch[j] as number[]).includes(i)) w.wakeBody(j);
+      // what rested on it wakes, or a sleeping body would stay where its support was (a sleeping body does not fall)
+      w.wakeAround(i);
       w.removeBody(i);
-      // its joints break, as a weld does
-      for (const j of w.joints) if (j.a === i || j.b === i) j.broken = true;
+      if (th.kind === 'body') {
+        // its joints break, as a weld does
+        for (const j of w.joints) if (j.a === i || j.b === i) j.broken = true;
+      } else {
+        // a wall that burnt away is no longer solid: the grids mark their walls again
+        for (const sm of this.smokeMembers) sm.grid.staticDirty = true;
+      }
       this.warnOnce(`burnt:${th.name}`, makeNotice('burnt', { name: th.name, t: Number(t.toFixed(3)) }, [th.name]));
+    }
+  }
+
+  /**
+   * A solid shape that burnt away reads undefined with the reason `burnt` (errors.md 4); after a seek back, or a world
+   * built again, it reads as its rule gives it. The cell is set where the rule is run again (`onCompute`); a shape whose
+   * state changed is handed back so the figure runs its rule.
+   */
+  private syncBurntSolids(changed: ObjRec[]): void {
+    const b = this.burn;
+    if (!b && this.burntSolids.size === 0) return;
+    const gone = new Map<ObjId, ObjRec>();
+    if (b) for (const th of this.burnThings) if (th.kind === 'shape' && b.gone[th.first] === 1) gone.set(th.rec.id, th.rec);
+    for (const id of [...this.burntSolids]) {
+      if (gone.has(id)) continue;
+      this.burntSolids.delete(id);
+      const r = this.acc.byId(id);
+      if (!r) continue;
+      const c = this.acc.compute(r);
+      this.solidVals.set(id, c);
+      if (this.acc.write(r, c)) changed.push(r);
+    }
+    for (const [id, r] of gone) {
+      if (this.burntSolids.has(id)) continue;
+      this.burntSolids.add(id);
+      this.everBurnt.add(id);
+      // a rule that was not computed since it got its `solid` style has no value kept yet: keep the one it has now
+      if (!this.solidVals.has(id)) this.solidVals.set(id, r.cell);
+      if (this.acc.write(r, { defined: false, reason: 'burnt' })) changed.push(r);
     }
   }
 
@@ -2294,7 +2397,13 @@ export class Physics3Driver implements WorldDriver {
       const n = Math.max(1, cur.xs.length);
       return { burns: (c.spec.burns ?? 0) > 0, x: x / n, y: y / n, z: z / n };
     }
-    return undefined;
+    if (!this.solidRecs.includes(rec) || !this.solidCell(rec).defined) return undefined;
+    const shapes = this.solidShapes(rec);
+    if (!shapes || shapes.length === 0) return undefined;
+    const b = this.solidBurn(rec, shapes);
+    if (b) return { burns: true, x: b.x, y: b.y, z: b.z };
+    const m = volumeOf3(shapes);
+    return { burns: false, x: m.cx, y: m.cy, z: m.cz };
   }
 
   /** Is a point inside the box of some fire? */
@@ -2422,8 +2531,10 @@ export class Physics3Driver implements WorldDriver {
     c.sleeping = w.sleeping && this.smokeMembers.length === 0;
     // the step's length goes in a field of the cloth, not in the call (a number passed in a call is garbage)
     c.hStep = 1 / this.rate;
-    if (this.burn) this.burnCloth(c);
     c.stepWorld(w);
+    // cells that burnt away in a smoke step tear their links now, after the step: `stepWorld` clears `tornNow`, so a tear
+    // made before it was never counted and the `torn` notice never came (PH-31); the plane has always done it in this order
+    if (this.burn) this.burnCloth(c);
     // (indexed, and the time worked out only where a notice needs it: a `for … of` and a string made at each step are garbage)
     for (let m = 0; m < this.clothMembers.length; m++) {
       const cm = this.clothMembers[m] as (typeof this.clothMembers)[number];
@@ -2615,6 +2726,13 @@ export class Physics3Driver implements WorldDriver {
     for (const s of this.smokeMembers) add(s.rec);
     for (const c of this.clothMembers) add(c.rec);
     if (this.worldRec) add(this.worldRec);
+    // a solid shape that burnt away reads undefined on the page too (and its rule's value again after a seek back)
+    for (const id of this.everBurnt) {
+      const r = this.acc.byId(id);
+      if (!r || seen.has(id)) continue;
+      seen.add(id);
+      cells.push([r.p.name, this.burntSolids.has(id) ? { defined: false, reason: 'burnt' } : (this.solidVals.get(id) ?? r.cell)]);
+    }
     return { cells, transfer };
   }
 
