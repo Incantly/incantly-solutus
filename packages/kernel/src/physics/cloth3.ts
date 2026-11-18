@@ -619,6 +619,11 @@ export class Cloth3 extends ClothSet {
       const i = this.candP[q] as number;
       const sh = w.shapes[k];
       if (!sh) continue;
+      if (this.kfn && sh.kind !== 0 && !this.hasBodyPins && sh.faces.length * 4 <= this.hullPl.length) {
+        // a hull's points, the run of this shape's candidates, tested in Rust
+        q = this.hullRun(q, k, sh, hs) - 1;
+        continue;
+      }
       const ci = this.cloths[this.owner[i] as number];
       if (!ci) continue;
       const b = sh.body;
@@ -661,6 +666,55 @@ export class Cloth3 extends ClothSet {
         } else if (sh.hf) this.hitTerrain(ci.p0, e, sh.hf, th, fr, hs);
       }
     }
+  }
+
+  /**
+   * The run of candidates from `q` that belong to shape k (`prepare` lists a shape's points together), against a hull, with
+   * the Rust twin of `hitHull`'s test: it goes through the points until one is inside the hull, `pushOut` runs on it here (it
+   * may move the body, so the body's offset is read again), and the test goes on from the next point. The same points meet
+   * the same pushes in the same order as the TypeScript loop gives. Returns the index after the run.
+   */
+  private hullRun(q: number, k: number, sh: { readonly body: number; readonly faces: readonly Int32Array[]; readonly wv: Float64Array; readonly wn: Float64Array }, hs: number): number {
+    const w = this.world as World3;
+    const kf = this.kfn as NonNullable<typeof this.kfn>;
+    const o = this.ko;
+    let e = q;
+    while (e < this.nCand && this.candS[e] === k) e++;
+    const cnt = e - q;
+    const idx = this.hullIdx;
+    const cp = this.candP;
+    for (let c = 0; c < cnt; c++) idx[c] = cp[q + c] as number;
+    const b = sh.body;
+    const nf = sh.faces.length;
+    const dynamic = w.type[b] !== BodyType3.Static;
+    const par = this.hullPar;
+    const out = this.hullOut;
+    let pos = 0;
+    while (pos < cnt) {
+      const ci = this.cloths[this.owner[this.hullIdx[pos] as number] as number];
+      if (!ci) {
+        pos++;
+        continue;
+      }
+      const pl = this.hullPlanes(k, sh, ci.def.thickness);
+      const p0 = this.hullOff[k] as number;
+      const hp = this.hullPl;
+      for (let c = 0; c < nf * 4; c++) hp[c] = pl[p0 + c] as number;
+      const ob = this.offs(b);
+      par[0] = ob[0] as number;
+      par[1] = ob[1] as number;
+      par[2] = ob[2] as number;
+      par[3] = (w.p[b * 3] as number) - (this.bp0[b * 3] as number);
+      par[4] = (w.p[b * 3 + 1] as number) - (this.bp0[b * 3 + 1] as number);
+      par[5] = (w.p[b * 3 + 2] as number) - (this.bp0[b * 3 + 2] as number);
+      pos = kf.hull_hits(o.hullIdx, pos, cnt, o.x, o.y, o.z, o.sx, o.sy, o.sz, o.owner, o.pinOf, o.pinBody, b, o.hullPl, nf, o.hullPar, o.hullOut);
+      if (out[0] === 1) {
+        const i = this.hullIdx[pos - 1] as number;
+        this.pushOut(i, dynamic ? b : -1, out[1] as number, out[2] as number, out[3] as number, out[4] as number, ci.def.friction, hs);
+        if (!dynamic) this.markTouch(i, b);
+      }
+    }
+    return e;
   }
 
   /**

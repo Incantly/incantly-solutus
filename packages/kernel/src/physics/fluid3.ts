@@ -19,6 +19,7 @@ import type { ShapeDef3, World3 } from './world3';
 import { BodyType3, FK3 } from './world3';
 import { MAX_NEIGHBOURS3, middleOf, NeighbourGrid3, ParticleSet } from './particles';
 import { MAX_CORRECTION, MAX_DROPS } from './fluid2';
+import { KernelArena } from './wasm/kernels';
 
 /** A drop's reach in spacings: 18 neighbours at rest on the cubic grid. */
 export const REACH3 = 1.6;
@@ -258,6 +259,9 @@ export class Fluid3 {
     this.r = 0.5 * spacing;
     this.sources = sources;
     this.grid.setSize(this.H);
+    // the grid's arrays in WebAssembly memory for the most drops there may be (design 11.3), its loops in Rust (design 11.6)
+    const arena = KernelArena.create(NeighbourGrid3.arenaBytes(MAX_DROPS, true) + 4096);
+    if (arena) this.grid.useArena(arena, MAX_DROPS, true);
     this.emitted = new Float64Array(sources.length);
     this.visc = new Float64Array(Math.max(1, owners));
     this.mass = new Float64Array(Math.max(1, owners));

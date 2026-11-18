@@ -6,7 +6,12 @@
  * border, so the 26 cells around any drop are in it; otherwise cells are hashed into a table twice the drop count, and
  * two cells that share a slot are told apart by their coordinates. The sort is stable, so each cell lists its drops in
  * index order, and the pairs come in a fixed order: the same sums on every computer.
+ *
+ * With a `KernelArena` (`useArena`), the arrays live in WebAssembly memory, sized once for the most drops it may hold, and
+ * `build`, `findPairs` and `inBox` run in Rust (design 11.6): the same loops, the same bits. A grid asked for more drops
+ * than it has room for, or built without an arena, uses the TypeScript loops below.
  */
+import type { KernelArena } from './wasm/kernels';
 
 /** The most neighbours one drop keeps; more (a crushed cluster) are skipped, the same way every time. */
 export const MAX_NEIGHBOURS3 = 64;
@@ -48,12 +53,96 @@ export class NeighbourGrid3 {
   found = new Int32Array(0);
   private off = new Int32Array(13);
 
+  /** The arena the arrays live in, when the Rust loops run; undefined for the TypeScript loops. */
+  private ar: KernelArena | undefined;
+  /** The most drops the arena's arrays have room for. */
+  private cap = 0;
+  /** Where the arrays are in the arena (byte offsets), the table numbers the Rust side keeps, and room for foreign places. */
+  private o = { cx: 0, cy: 0, cz: 0, slot: 0, start: 0, count: 0, sorted: 0, sx: 0, sy: 0, sz: 0, nbrN: 0, pi: 0, pj: 0, found: 0, mf: 0, mi: 0, px: -1, py: -1, pz: -1 };
+  private cpx = new Float64Array(0);
+  private cpy = new Float64Array(0);
+  private cpz = new Float64Array(0);
+
+  /** The bytes of arena a grid of `cap` drops takes (`own`: it also keeps a copy of the places it is given). */
+  static arenaBytes(cap: number, own: boolean): number {
+    const c = Math.max(16, cap);
+    const b = (n: number, w: number): number => Math.ceil((n * w) / 64) * 64;
+    const table = Math.max(32768, 16 * c, 4 * c, 64) + 2;
+    return 7 * b(c, 4) + 3 * b(c, 8) + 2 * b(table, 4) + 2 * b(c * MAX_NEIGHBOURS3 * 0.5, 4) + b(16, 8) + b(8, 8) + (own ? 3 * b(NeighbourGrid3.roomFor(c), 8) : 0) + 1024;
+  }
+
+  /** The length of a particle store that holds `cap` drops: a power of two from 16 (`ParticleSet.reserve`). */
+  private static roomFor(cap: number): number {
+    let c = 16;
+    while (c < cap) c *= 2;
+    return c;
+  }
+
+  /** Puts the arrays in `arena` with room for `cap` drops, and runs the Rust loops (`own`: the places come from outside it). */
+  useArena(arena: KernelArena, cap: number, own: boolean): void {
+    const c = Math.max(16, cap);
+    this.ar = arena;
+    this.cap = c;
+    const table = Math.max(32768, 16 * c, 4 * c, 64) + 2;
+    this.sorted = arena.i32(c);
+    this.sx = arena.f64(c);
+    this.sy = arena.f64(c);
+    this.sz = arena.f64(c);
+    this.cx = arena.i32(c);
+    this.cy = arena.i32(c);
+    this.cz = arena.i32(c);
+    this.slot = arena.i32(c);
+    this.nbrN = arena.i32(c);
+    this.found = arena.i32(c);
+    this.start = arena.i32(table);
+    this.count = arena.i32(table);
+    this.pi = arena.i32(c * (MAX_NEIGHBOURS3 / 2));
+    this.pj = arena.i32(c * (MAX_NEIGHBOURS3 / 2));
+    const mf = arena.f64(16);
+    const mi = arena.i32(8);
+    if (own) {
+      // room for a whole place array of the caller's (a particle store holds a power of two, at least `cap`)
+      const room = NeighbourGrid3.roomFor(c);
+      this.cpx = arena.f64(room);
+      this.cpy = arena.f64(room);
+      this.cpz = arena.f64(room);
+    }
+    const at = (a: ArrayBufferView): number => a.byteOffset;
+    this.o = {
+      cx: at(this.cx), cy: at(this.cy), cz: at(this.cz), slot: at(this.slot), start: at(this.start), count: at(this.count), sorted: at(this.sorted),
+      sx: at(this.sx), sy: at(this.sy), sz: at(this.sz), nbrN: at(this.nbrN), pi: at(this.pi), pj: at(this.pj), found: at(this.found), mf: at(mf), mi: at(mi),
+      px: own ? at(this.cpx) : -1, py: own ? at(this.cpy) : -1, pz: own ? at(this.cpz) : -1,
+    };
+    this.mf = mf;
+    this.mi = mi;
+    if (arena.overflow) this.ar = undefined;
+  }
+
+  /** The Rust loops are not used from now on (the arena had no room for something). */
+  dropArena(): void {
+    this.ar = undefined;
+  }
+
+  private mf = new Float64Array(0);
+  private mi = new Int32Array(0);
+
+  /** Where places are for the Rust loops: where they already are in the arena, or a copy of them there; −1: nowhere. */
+  private place(a: Float64Array, n: number, copy: Float64Array, off: number): number {
+    const ar = this.ar as KernelArena;
+    if (a.buffer === ar.buffer) return a.byteOffset;
+    if (off < 0) return -1;
+    if (a.length <= copy.length) copy.set(a);
+    else for (let i = 0; i < n; i++) copy[i] = a[i] as number;
+    return off;
+  }
+
   setSize(size: number): void {
     this.size = size;
     this.inv = 1 / size;
   }
 
   private reserve(n: number): void {
+    if (this.ar && n > this.cap) this.ar = undefined;
     if (n <= this.sorted.length) return;
     let c = Math.max(16, this.sorted.length);
     while (c < n) c *= 2;
@@ -94,6 +183,18 @@ export class NeighbourGrid3 {
   /** Sorts the drops into their cells. */
   build(x: Float64Array, y: Float64Array, z: Float64Array, n: number): void {
     this.reserve(n);
+    if (this.ar) {
+      const o = this.o;
+      const px = this.place(x, n, this.cpx, o.px);
+      const py = this.place(y, n, this.cpy, o.py);
+      const pz = this.place(z, n, this.cpz, o.pz);
+      if (px >= 0 && py >= 0 && pz >= 0) {
+        this.mf[8] = this.inv;
+        this.ar.fn.grid_build(px, py, pz, n, o.cx, o.cy, o.cz, o.slot, o.start, o.count, o.sorted, o.mf, o.mi);
+        return;
+      }
+      this.ar = undefined;
+    }
     let x0 = 0;
     let x1 = -1;
     let y0 = 0;
@@ -168,6 +269,17 @@ export class NeighbourGrid3 {
    * inside a cell, then with the 13 cells of one half around it. Returns how many.
    */
   findPairs(x: Float64Array, y: Float64Array, z: Float64Array, n: number, reach: number): number {
+    if (this.ar) {
+      const o = this.o;
+      const px = this.place(x, n, this.cpx, o.px);
+      const py = this.place(y, n, this.cpy, o.py);
+      const pz = this.place(z, n, this.cpz, o.pz);
+      if (px >= 0 && py >= 0 && pz >= 0) {
+        this.mf[9] = reach;
+        this.pairs = this.ar.fn.grid_pairs(px, py, pz, n, o.cx, o.cy, o.cz, o.start, o.sorted, o.sx, o.sy, o.sz, o.nbrN, o.pi, o.pj, o.found, o.mf, o.mi);
+        return this.pairs;
+      }
+    }
     const want = this.sorted.length * (MAX_NEIGHBOURS3 / 2);
     if (this.pi.length < want) {
       this.pi = new Int32Array(want);
@@ -341,6 +453,18 @@ export class NeighbourGrid3 {
    * there are drops, it walks the drops instead (in index order).
    */
   inBox(x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, n: number): number {
+    if (this.ar) {
+      const o = this.o;
+      const mf = this.mf;
+      mf[8] = this.inv;
+      mf[10] = x0;
+      mf[11] = y0;
+      mf[12] = z0;
+      mf[13] = x1;
+      mf[14] = y1;
+      mf[15] = z1;
+      return this.ar.fn.grid_in_box(n, o.cx, o.cy, o.cz, o.start, o.sorted, o.found, o.mf, o.mi);
+    }
     const out = this.found;
     let cx0 = Math.floor(x0 * this.inv);
     let cy0 = Math.floor(y0 * this.inv);

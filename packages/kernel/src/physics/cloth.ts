@@ -20,8 +20,15 @@
  *
  * Everything is plain arithmetic on typed arrays made when the cloth is built: a step makes no garbage. Every loop runs
  * in index order, so the film is the same on every computer.
+ *
+ * The hot loops (the links, the tethers, the moves and speeds, a rope's chain, the air, the neighbour grid and a hull's
+ * test) have a Rust twin compiled to WebAssembly (`./wasm`, design 11.6). The arrays they read live in one `KernelArena`,
+ * sized when the set is built; each ported method calls its twin when there is one and otherwise runs the TypeScript loop
+ * below it, which stays as the reference. Both give the same bits (design 10.2).
  */
 import { NeighbourGrid3 } from './grid3';
+import type { Allocator, KernelExports } from './wasm/kernels';
+import { KernelArena, KP, PLAIN } from './wasm/kernels';
 
 /** Small steps per world step (design 9.5). */
 export const SUBSTEPS = 4;
@@ -247,6 +254,18 @@ export class ClothSet {
   readonly grid = new NeighbourGrid3();
   /** Scratch for the drops' pass. */
   protected scratch = new Float64Array(16);
+  /** The memory of the Rust loops, and their functions when this set runs them (undefined: the TypeScript loops run). */
+  protected readonly arena: KernelArena | undefined;
+  protected readonly kfn: KernelExports | undefined;
+  /** Where the arrays are in the arena (byte offsets), made once the set is built. */
+  protected readonly ko: KOffsets;
+  /** A hull's candidate points, its planes, its answer and its numbers, for the Rust test (`Cloth3`). */
+  protected readonly hullIdx: Int32Array;
+  protected readonly hullPl: Float64Array;
+  protected readonly hullOut: Float64Array;
+  protected readonly hullPar: Float64Array;
+  /** The numbers a Rust call takes, written before it (`KP`): no call has a floating-point argument. */
+  protected readonly kp: Float64Array;
 
   constructor(defs: readonly ClothDef[], dim: 2 | 3) {
     this.dim = dim;
@@ -258,6 +277,8 @@ export class ClothSet {
     let npin = 0;
     let nte = 0;
     let nbt = 0;
+    let ropeTotal = 0;
+    let ropeLongest = 0;
     for (const d of defs) {
       const n = d.nu * d.nv;
       np += n;
@@ -269,11 +290,20 @@ export class ClothSet {
         const nb = d.pins.filter((pd) => pd.body >= 0).length;
         nbt += nb * (d.pins.length - nb);
       }
+      if (d.kind === 'rope') {
+        ropeTotal += n - 1;
+        ropeLongest = Math.max(ropeLongest, n);
+      }
     }
+    // the arrays the Rust loops touch go in one arena (design 11.6); without one they are ordinary typed arrays
+    const arena = KernelArena.create(arenaBytes(np, nl, nt, npin, nte, ropeTotal, ropeLongest, dim));
+    this.arena = arena;
+    const M: Allocator = arena ?? PLAIN;
+    if (arena) this.grid.useArena(arena, Math.max(16, np), false);
     const F = (k: number): Float64Array => new Float64Array(k);
     const I = (k: number): Int32Array => new Int32Array(k);
     // the arrays read together in the small steps are cut from one buffer, staggered (see `Stagger`)
-    const P = new Stagger(np, 19);
+    const P = new Stagger(np, 19, arena);
     this.x = P.f();
     this.y = P.f();
     this.z = P.f();
@@ -288,40 +318,40 @@ export class ClothSet {
     this.vz = P.f();
     this.w = P.f();
     this.w0 = P.f();
-    this.owner = I(np);
+    this.owner = M.i32(np);
     this.pinOf = P.i().fill(-1);
-    this.taut = new Uint8Array(np);
+    this.taut = M.u8(np);
     this.afx = P.f();
     this.afy = P.f();
     this.afz = P.f();
-    const L = new Stagger(nl, 6);
+    const L = new Stagger(nl, 6, arena);
     this.la = L.i();
     this.lb = L.i();
     this.rest = L.f();
-    this.alpha = F(nl);
+    this.alpha = M.f64(nl);
     this.kind = new Uint8Array(nl);
-    this.broken = new Uint8Array(nl);
+    this.broken = M.u8(nl);
     this.lid = I(nl);
     this.lq = L.f();
     this.lr2 = L.f();
-    this.ta = I(nt);
-    this.tb = I(nt);
-    this.tc = I(nt);
+    this.ta = M.i32(nt);
+    this.tb = M.i32(nt);
+    this.tc = M.i32(nt);
     this.te = I(nt * 3).fill(-1);
-    this.triCut = new Uint8Array(nt);
+    this.triCut = M.u8(nt);
     this.pinPoint = I(npin);
-    this.pinBody = I(npin);
+    this.pinBody = M.i32(npin);
     this.pinX = F(npin);
     this.pinY = F(npin);
     this.pinZ = F(npin);
-    this.pinFx = F(npin);
-    this.pinFy = F(npin);
-    this.pinFz = F(npin);
-    this.tePoint = I(nte);
-    this.tePin = I(nte);
+    this.pinFx = M.f64(npin);
+    this.pinFy = M.f64(npin);
+    this.pinFz = M.f64(npin);
+    this.tePoint = M.i32(nte);
+    this.tePin = M.i32(nte);
     this.teRest = F(nte);
-    this.teJ = I(nte);
-    this.teL2 = F(nte);
+    this.teJ = M.i32(nte);
+    this.teL2 = M.f64(nte);
     this.teOf = I(np).fill(-1);
     this.teCnt = new Uint8Array(np);
     this.btBody = I(nbt);
@@ -416,7 +446,7 @@ export class ClothSet {
       p += n;
     });
     this.n = p;
-    this.buildChains();
+    this.buildChains(M);
     this.buildBodyTethers();
     this.px.set(this.x);
     this.py.set(this.y);
@@ -427,6 +457,24 @@ export class ClothSet {
     let longest = 0;
     for (let k = 0; k < l; k++) if (this.kind[k] === LinkKind.stretch) longest = Math.max(longest, this.rest[k] as number);
     this.grid.setSize(Math.max(0.02, 1.5 * longest));
+    this.hullIdx = M.i32(dim === 3 ? np : 0);
+    this.hullPl = M.f64(dim === 3 ? HULL_PLANES : 0);
+    this.hullOut = M.f64(8);
+    this.hullPar = M.f64(8);
+    this.kp = M.f64(KP.size);
+    // a set that did not fit its arena (it is sized with room to spare, so this does not happen) runs the TypeScript loops
+    if (arena && arena.overflow) this.grid.dropArena();
+    this.kfn = arena && !arena.overflow ? arena.fn : undefined;
+    const at = (a: ArrayBufferView): number => a.byteOffset;
+    this.ko = {
+          x: at(this.x), y: at(this.y), z: at(this.z), px: at(this.px), py: at(this.py), pz: at(this.pz), sx: at(this.sx), sy: at(this.sy), sz: at(this.sz),
+          vx: at(this.vx), vy: at(this.vy), vz: at(this.vz), w: at(this.w), w0: at(this.w0), pinOf: at(this.pinOf), afx: at(this.afx), afy: at(this.afy), afz: at(this.afz),
+          owner: at(this.owner), taut: at(this.taut), la: at(this.la), lb: at(this.lb), rest: at(this.rest), alpha: at(this.alpha), broken: at(this.broken),
+          lq: at(this.lq), lr2: at(this.lr2), ta: at(this.ta), tb: at(this.tb), tc: at(this.tc), triCut: at(this.triCut), pinBody: at(this.pinBody),
+          pinFx: at(this.pinFx), pinFy: at(this.pinFy), pinFz: at(this.pinFz), tePoint: at(this.tePoint), tePin: at(this.tePin), teJ: at(this.teJ), teL2: at(this.teL2),
+          chain: at(this.chain), chNx: at(this.chNx), chNy: at(this.chNy), chNz: at(this.chNz), chD: at(this.chD), chU: at(this.chU), chR: at(this.chR),
+          hullIdx: at(this.hullIdx), hullPl: at(this.hullPl), hullOut: at(this.hullOut), hullPar: at(this.hullPar), kp: at(this.kp),
+    };
   }
 
   /**
@@ -466,7 +514,7 @@ export class ClothSet {
   }
 
   /** The chain table of every rope: its stretch links in order along it. */
-  private buildChains(): void {
+  private buildChains(M: Allocator): void {
     let total = 0;
     let longest = 0;
     for (const c of this.cloths) {
@@ -475,7 +523,7 @@ export class ClothSet {
       total += c.n - 1;
       longest = Math.max(longest, c.n);
     }
-    this.chain = new Int32Array(total);
+    this.chain = M.i32(total);
     for (const c of this.cloths) {
       if (c.def.kind !== 'rope') continue;
       for (let l = c.l0; l < c.l0 + c.ln; l++) {
@@ -484,7 +532,7 @@ export class ClothSet {
         this.chain[c.ch0 + a - c.p0] = l;
       }
     }
-    const F = (): Float64Array<ArrayBuffer> => new Float64Array(longest);
+    const F = (): Float64Array<ArrayBuffer> => M.f64(longest);
     this.chNx = F();
     this.chNy = F();
     this.chNz = F();
@@ -819,11 +867,22 @@ export class ClothSet {
 
   /** Moves the points of cloth c by their speed, gravity and the air (the first small step of a world step). */
   private advance(c: ClothInfo, hs: number): void {
-    const { x, y, z, px, py, pz, vx, vy, vz, pinOf, afx, afy, afz } = this;
     const gx = hs * this.gx;
     const gy = hs * this.gy;
     const gz = hs * this.gz;
     const e = c.p0 + c.n;
+    const kf = this.kfn;
+    if (kf) {
+      const o = this.ko;
+      const p = this.kp;
+      p[KP.hs] = hs;
+      p[KP.gx] = gx;
+      p[KP.gy] = gy;
+      p[KP.gz] = gz;
+      kf.advance(o.x, o.y, o.z, o.px, o.py, o.pz, o.vx, o.vy, o.vz, o.pinOf, o.afx, o.afy, o.afz, o.kp, c.p0, e);
+      return;
+    }
+    const { x, y, z, px, py, pz, vx, vy, vz, pinOf, afx, afy, afz } = this;
     for (let i = c.p0; i < e; i++) {
       const xi = x[i] as number;
       const yi = y[i] as number;
@@ -846,12 +905,24 @@ export class ClothSet {
 
   /** The speeds from the last small step's moves, less damping, then the move of this one: one pass over the points. */
   private speedsAdvance(c: ClothInfo, hs: number): void {
-    const { x, y, z, px, py, pz, vx, vy, vz, pinOf, afx, afy, afz } = this;
     const gx = hs * this.gx;
     const gy = hs * this.gy;
     const gz = hs * this.gz;
     const k = 1 / (hs * (1 + Math.min(1, Math.max(0, c.def.damping)) * hs));
     const e = c.p0 + c.n;
+    const kf = this.kfn;
+    if (kf) {
+      const o = this.ko;
+      const p = this.kp;
+      p[KP.hs] = hs;
+      p[KP.gx] = gx;
+      p[KP.gy] = gy;
+      p[KP.gz] = gz;
+      p[KP.k] = k;
+      kf.speeds_advance(o.x, o.y, o.z, o.px, o.py, o.pz, o.vx, o.vy, o.vz, o.pinOf, o.afx, o.afy, o.afz, o.kp, c.p0, e);
+      return;
+    }
+    const { x, y, z, px, py, pz, vx, vy, vz, pinOf, afx, afy, afz } = this;
     for (let i = c.p0; i < e; i++) {
       const xi = x[i] as number;
       const yi = y[i] as number;
@@ -878,9 +949,16 @@ export class ClothSet {
 
   /** The speeds of cloth c from the moves of the small step, less damping. */
   private speeds(c: ClothInfo, hs: number): void {
-    const { x, y, z, px, py, pz, vx, vy, vz } = this;
     const k = 1 / (hs * (1 + Math.min(1, Math.max(0, c.def.damping)) * hs));
     const e = c.p0 + c.n;
+    const kf = this.kfn;
+    if (kf) {
+      const o = this.ko;
+      this.kp[KP.k] = k;
+      kf.speeds(o.x, o.y, o.z, o.px, o.py, o.pz, o.vx, o.vy, o.vz, o.kp, c.p0, e);
+      return;
+    }
+    const { x, y, z, px, py, pz, vx, vy, vz } = this;
     for (let i = c.p0; i < e; i++) {
       vx[i] = ((x[i] as number) - (px[i] as number)) * k;
       vy[i] = ((y[i] as number) - (py[i] as number)) * k;
@@ -1195,6 +1273,13 @@ export class ClothSet {
    * and carries a body a hundred times heavier than itself (a pass link by link needs hundreds of passes for both).
    */
   private solveChain(c: ClothInfo, inv2: number): void {
+    const kf = this.kfn;
+    if (kf && c.n >= 2) {
+      const o = this.ko;
+      this.kp[KP.inv2] = inv2;
+      kf.solve_chain(o.x, o.y, o.z, o.w, o.rest, o.alpha, o.broken, o.chain + c.ch0 * 4, o.chNx, o.chNy, o.chNz, o.chD, o.chU, o.chR, c.p0, c.n, o.kp, o.pinOf, o.pinFx, o.pinFy, o.pinFz);
+      return;
+    }
     const { x, y, z, w, rest, alpha, broken } = this;
     const m = c.n - 1;
     const ch = this.chain;
@@ -1315,6 +1400,20 @@ export class ClothSet {
    * length (a cloth's links are within 2%); past 10% either way the exact step is used.
    */
   private solveLinks(l0: number, l1: number, inv2: number): void {
+    const kf = this.kfn;
+    if (kf) {
+      const o = this.ko;
+      kf.solve_links(o.x, o.y, o.z, o.w0, o.la, o.lb, o.lq, o.lr2, l0, l1);
+    } else this.linksTs(l0, l1);
+    const sl = this.slowL;
+    for (let k = 0; k < this.nSlow; k++) {
+      const l = sl[k] as number;
+      if (l >= l0 && l < l1) this.solveLink(l, inv2);
+    }
+  }
+
+  /** The fast loop of `solveLinks` in TypeScript, the reference of the Rust twin (`solve_links`). */
+  private linksTs(l0: number, l1: number): void {
     const { x, y, z, w0, la, lb, lq, lr2 } = this;
     // links with a pinned end have q < 0 here and move nothing (s ≤ 0 · … is skipped below); they follow in full
     for (let k = l0; k < l1; k++) {
@@ -1337,11 +1436,6 @@ export class ClothSet {
       x[b] = (x[b] as number) - sb * dx;
       y[b] = (y[b] as number) - sb * dy;
       z[b] = (z[b] as number) - sb * dz;
-    }
-    const sl = this.slowL;
-    for (let k = 0; k < this.nSlow; k++) {
-      const l = sl[k] as number;
-      if (l >= l0 && l < l1) this.solveLink(l, inv2);
     }
   }
 
@@ -1400,6 +1494,12 @@ export class ClothSet {
    * kept with each tether.
    */
   private solveTethers(t0: number, t1: number): void {
+    const kf = this.kfn;
+    if (kf) {
+      const o = this.ko;
+      kf.solve_tethers(o.x, o.y, o.z, o.w0, o.tePoint, o.teJ, o.teL2, o.tePin, o.pinFx, o.pinFy, o.pinFz, o.taut, t0, t1);
+      return;
+    }
     const { x, y, z, w0, tePoint, teJ, teL2, tePin, pinFx, pinFy, pinFz, taut } = this;
     for (let k = t0; k < t1; k++) {
       const i = tePoint[k] as number;
@@ -1476,6 +1576,18 @@ export class ClothSet {
     const t1 = c.t0 + c.tn;
     const calm = this.windX === 0 && this.windY === 0 && this.windZ === 0 && !this.hasFlow();
     if (calm && !this.stillAir) return;
+    const kf = this.kfn;
+    if (kf && !this.hasFlow()) {
+      // a steady wind (the same at every face): the Rust loop; the air's speed that depends on the place stays below
+      const o = this.ko;
+      const p = this.kp;
+      p[KP.hs] = hs;
+      p[KP.windX] = this.windX;
+      p[KP.windY] = this.windY;
+      p[KP.windZ] = this.dim === 2 ? 0 : this.windZ;
+      kf.air_forces(o.x, o.y, o.z, o.vx, o.vy, o.vz, o.w, o.ta, o.tb, o.tc, o.triCut, o.pinOf, o.afx, o.afy, o.afz, c.t0, t1, o.kp);
+      return;
+    }
     for (let t = c.t0; t < t1; t++) {
       if (this.triTorn(t)) continue;
       const a = ta[t] as number;
@@ -2960,9 +3072,20 @@ class Stagger {
   private off = 0;
   private readonly n: number;
 
-  constructor(n: number, count: number) {
+  /** With an arena the arrays are cut from a region of its memory (a multiple of 64 bytes from its start), else from a buffer of their own. */
+  constructor(n: number, count: number, arena?: KernelArena) {
     this.n = n;
-    this.buf = new ArrayBuffer(count * (Stagger.span(n) + 192));
+    const bytes = Stagger.bytes(n, count);
+    const at = arena ? arena.take(bytes) : -1;
+    if (arena && at >= 0) {
+      this.buf = arena.buffer;
+      this.off = at;
+    } else this.buf = new ArrayBuffer(bytes);
+  }
+
+  /** The bytes `count` arrays of `n` numbers take. */
+  static bytes(n: number, count: number): number {
+    return count * (Stagger.span(n) + 192);
   }
 
   private static span(n: number): number {
@@ -2982,6 +3105,34 @@ class Stagger {
   i(): Int32Array {
     return new Int32Array(this.buf, this.take(), this.n);
   }
+}
+
+/** Room for a hull's face planes, numbers (four a face) in the Rust test; a hull with more faces is tested in TypeScript. */
+const HULL_PLANES = 1024;
+
+/** Where the arrays the Rust loops touch are in the arena (byte offsets; 0 without one). */
+interface KOffsets {
+  readonly x: number; readonly y: number; readonly z: number; readonly px: number; readonly py: number; readonly pz: number;
+  readonly sx: number; readonly sy: number; readonly sz: number; readonly vx: number; readonly vy: number; readonly vz: number;
+  readonly w: number; readonly w0: number; readonly pinOf: number; readonly afx: number; readonly afy: number; readonly afz: number;
+  readonly owner: number; readonly taut: number; readonly la: number; readonly lb: number; readonly rest: number; readonly alpha: number;
+  readonly broken: number; readonly lq: number; readonly lr2: number; readonly ta: number; readonly tb: number; readonly tc: number;
+  readonly triCut: number; readonly pinBody: number; readonly pinFx: number; readonly pinFy: number; readonly pinFz: number;
+  readonly tePoint: number; readonly tePin: number; readonly teJ: number; readonly teL2: number; readonly chain: number;
+  readonly chNx: number; readonly chNy: number; readonly chNz: number; readonly chD: number; readonly chU: number; readonly chR: number;
+  readonly hullIdx: number; readonly hullPl: number; readonly hullOut: number; readonly hullPar: number; readonly kp: number;
+}
+
+/** The bytes of arena a set of these sizes takes (every region rounded up to 64 bytes, and room to spare). */
+function arenaBytes(np: number, nl: number, nt: number, npin: number, nte: number, ropeTotal: number, ropeLongest: number, dim: 2 | 3): number {
+  const b = (n: number, w: number): number => Math.ceil((n * w) / 64) * 64;
+  return (
+    Stagger.bytes(np, 19) + Stagger.bytes(nl, 6) + 128 +
+    b(np, 4) + b(np, 1) + b(nl, 8) + b(nl, 1) + 3 * b(nt, 4) + b(nt, 1) + b(npin, 4) + 3 * b(npin, 8) + 3 * b(nte, 4) + b(nte, 8) +
+    b(ropeTotal, 4) + 6 * b(ropeLongest, 8) +
+    (dim === 3 ? b(np, 4) + b(HULL_PLANES, 8) : 0) + 2 * b(8, 8) + b(KP.size, 8) +
+    NeighbourGrid3.arenaBytes(Math.max(16, np), false) + 8192
+  );
 }
 
 /** How many links a cloth has. */
