@@ -110,6 +110,9 @@ export interface ClothInfo {
   readonly pinN: number;
   readonly te0: number;
   readonly teN: number;
+  /** The first of this cloth's body tethers and how many (design 9.5). */
+  readonly bt0: number;
+  readonly btN: number;
   /** The first bend link (they come last). */
   readonly bend0: number;
   /** The first shear link (they come after the stretch links). */
@@ -189,6 +192,10 @@ export class ClothSet {
   teL2: Float64Array;
   teOf: Int32Array;
   teCnt: Uint8Array;
+  /** Body tethers: the body's pin, the world pin it keeps within reach of, and the length (m). */
+  btBody: Int32Array;
+  btWorld: Int32Array;
+  btRest: Float64Array;
   gx = 0;
   gy = 0;
   gz = -9.8;
@@ -240,6 +247,7 @@ export class ClothSet {
     let nt = 0;
     let npin = 0;
     let nte = 0;
+    let nbt = 0;
     for (const d of defs) {
       const n = d.nu * d.nv;
       np += n;
@@ -247,6 +255,10 @@ export class ClothSet {
       nt += dim === 2 ? d.nv * (d.nu - 1) + d.nu * (d.nv - 1) : 2 * (d.nu - 1) * (d.nv - 1);
       npin += d.pins.length;
       if (d.tears === 0 && d.pins.length > 0) nte += n * Math.min(2, d.pins.length);
+      if (d.tears === 0) {
+        const nb = d.pins.filter((pd) => pd.body >= 0).length;
+        nbt += nb * (d.pins.length - nb);
+      }
     }
     const F = (k: number): Float64Array => new Float64Array(k);
     const I = (k: number): Int32Array => new Int32Array(k);
@@ -302,6 +314,9 @@ export class ClothSet {
     this.teL2 = F(nte);
     this.teOf = I(np).fill(-1);
     this.teCnt = new Uint8Array(np);
+    this.btBody = I(nbt);
+    this.btWorld = I(nbt);
+    this.btRest = F(nbt);
     this.tornNow = I(defs.length);
     let p = 0;
     let l = 0;
@@ -312,7 +327,7 @@ export class ClothSet {
       const n = d.nu * d.nv;
       const mPt = d.mass / n;
       const info: ClothInfo = {
-        def: d, p0: p, n, l0: l, ln: 0, t0: t, tn: 0, pin0: pin, pinN: d.pins.length, te0: te, teN: 0, ch0: 0, bend0: 0, sh0: 0, mPt,
+        def: d, p0: p, n, l0: l, ln: 0, t0: t, tn: 0, pin0: pin, pinN: d.pins.length, te0: te, teN: 0, bt0: 0, btN: 0, ch0: 0, bend0: 0, sh0: 0, mPt,
         asleep: false, sleepTime: 0, torn: 0, unstable: false, windX: 0, windY: 0, windZ: 0,
       };
       for (let k = 0; k < n; k++) {
@@ -389,6 +404,7 @@ export class ClothSet {
     });
     this.n = p;
     this.buildChains();
+    this.buildBodyTethers();
     this.px.set(this.x);
     this.py.set(this.y);
     this.pz.set(this.z);
@@ -398,6 +414,42 @@ export class ClothSet {
     let longest = 0;
     for (let k = 0; k < l; k++) if (this.kind[k] === LinkKind.stretch) longest = Math.max(longest, this.rest[k] as number);
     this.grid.setSize(Math.max(0.02, 1.5 * longest));
+  }
+
+  /**
+   * A body held by a pin of a cloth with no `tears` keeps within reach of each of that cloth's world pins (design 9.5, "A
+   * body's tether"): along a rope, the sum of the rest lengths of the links between the two pinned points; on a sheet or
+   * net, their start distance times the slack of a point's tether.
+   */
+  private buildBodyTethers(): void {
+    let bt = 0;
+    for (const info of this.cloths) {
+      (info as { bt0: number }).bt0 = bt;
+      if (info.def.tears === 0) {
+        const slack = 1 + 2 * (1 - Math.min(1, Math.max(0, info.def.stretch)));
+        const rope = info.def.kind === 'rope';
+        for (let q = info.pin0; q < info.pin0 + info.pinN; q++) {
+          if ((this.pinBody[q] as number) < 0) continue;
+          for (let q0 = info.pin0; q0 < info.pin0 + info.pinN; q0++) {
+            if ((this.pinBody[q0] as number) >= 0) continue;
+            const a = this.pinPoint[q] as number;
+            const c = this.pinPoint[q0] as number;
+            if (a === c) continue;
+            let len = 0;
+            if (rope) {
+              const lo = Math.min(a, c) - info.p0;
+              const hi = Math.max(a, c) - info.p0;
+              for (let k = lo; k < hi; k++) len += this.rest[this.chain[info.ch0 + k] as number] as number;
+            } else len = dist(this.x, this.y, this.z, a, c) * slack;
+            this.btBody[bt] = q;
+            this.btWorld[bt] = q0;
+            this.btRest[bt] = len;
+            bt++;
+          }
+        }
+      }
+      (info as { btN: number }).btN = bt - info.bt0;
+    }
   }
 
   /** The chain table of every rope: its stretch links in order along it. */
@@ -878,6 +930,7 @@ export class ClothSet {
         if (k === SUBSTEPS) this.solveLinks(c.bend0, c.l0 + c.ln, inv2 / (SUBSTEPS * SUBSTEPS));
       }
       this.solveTethers(c.te0, c.te0 + c.teN);
+      if (c.btN > 0) this.solveBodyTethers(c);
     }
     // 3. body pins: what the point moved, the body moves (a push now, a move at the next step)
     this.inPins = true;
@@ -1257,6 +1310,46 @@ export class ClothSet {
       pinFx[q] = (pinFx[q] as number) + m * dx;
       pinFy[q] = (pinFy[q] as number) + m * dy;
       pinFz[q] = (pinFz[q] as number) + m * dz;
+    }
+  }
+
+  /**
+   * A body that takes the small steps keeps within its tether of the world pins: past it, its centre moves back toward the
+   * pin in one move, and the move counts as the pull on that pin (a link-by-link solve cannot hold a body thousands of
+   * times heavier than a point when a slack rope snaps taut). The body's pinned point goes with it, so the pull of the
+   * links on the point still reaches the body at step 3.
+   */
+  private solveBodyTethers(c: ClothInfo): void {
+    const out = this.scratch;
+    const { x, y, z, pinX, pinY, pinZ, pinFx, pinFy, pinFz, spx, spy, spz } = this;
+    for (let k = c.bt0; k < c.bt0 + c.btN; k++) {
+      const q = this.btBody[k] as number;
+      const b = this.pinBody[q] as number;
+      const sk = this.subOf[b] as number;
+      if (sk < 0) continue;
+      const q0 = this.btWorld[k] as number;
+      this.anchor(q, out);
+      const dx = (pinX[q0] as number) - (out[0] as number);
+      const dy = (pinY[q0] as number) - (out[1] as number);
+      const dz = (pinZ[q0] as number) - (out[2] as number);
+      const d2 = dx * dx + dy * dy + dz * dz;
+      const L = this.btRest[k] as number;
+      if (d2 <= L * L) continue;
+      const f = 1 - L / Math.sqrt(d2);
+      const mx = f * dx;
+      const my = f * dy;
+      const mz = f * dz;
+      spx[sk] = (spx[sk] as number) + mx;
+      spy[sk] = (spy[sk] as number) + my;
+      spz[sk] = (spz[sk] as number) + mz;
+      const i = this.pinPoint[q] as number;
+      x[i] = (x[i] as number) + mx;
+      y[i] = (y[i] as number) + my;
+      z[i] = (z[i] as number) + mz;
+      const m = 1 / this.bodyInvMass(b);
+      pinFx[q0] = (pinFx[q0] as number) - m * mx;
+      pinFy[q0] = (pinFy[q0] as number) - m * my;
+      pinFz[q0] = (pinFz[q0] as number) - m * mz;
     }
   }
 
