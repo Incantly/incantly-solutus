@@ -79,3 +79,31 @@ report. Ran the "no garbage" bench.
 - PH-9: `createHeadlessApp` (which `createApp` starts through) and the studio's `main.ts` call `initPhysicsKernels()` once, not awaited; it now keeps one compile in flight however many apps start. Design 11.6 "Main thread" says so.
 - PH-10: `physicsKernelsActive(figure)` (kernel index) over `ClothSet.usesKernels` and `Fluid3.usesKernels`; the studio's readout ends with "Rust" or "TypeScript" (for a world in the worker, `info.kernels` of the worker's reply). Four regression tests in `physics-kernels.test.ts`.
 - PH-11: `build.mjs` writes the SHA-256 of the three sources into the header of `kernels-wasm.ts`; one regression test hashes them and compares.
+
+## Review of 11A fire in the plane (2026-11-18, one round)
+
+Read: builder notes 11A, design 9.7 "Choices made while building it in the plane", `test-report.md` 11A (90 new
+tests, 4 fail).
+
+| Id | Where | What | Evidence | Harm | Status |
+|---|---|---|---|---|---|
+| PH-16 | `driver.ts` (hit handlers during a seek), `handlers.ts` | A seek that has to step through a hit runs the `on b hit` handler's physics steps at the seek's end time, not at the hit: `on ball hit: Ignite(wood)` sought from 0 to 6 s logs `@input physics ignite wood at 6` twice and gives another film than playing. Seek must equal play (design 10). Check `Push` in a hit handler too and fix every physics action the same way. | Tester report 11A, notes. | high | open |
+| PH-17 | `driver.ts` burnable shapes | A solid shape that burns away stays solid and reads defined: a ball on a burnt shelf stays up at 8 s. Design 9.7 and errors.md 4: it stops being solid and reads undefined with `burnt`. | Tester failures 2, 3, 4. | high | open |
+| PH-18 | `smoke2.ts` swirl | `swirl = 10` in a closed jar loses 22.9% of the smoke (11.5 "Smoke kept": within 0.1%). Swirl 0.5 and 2 keep it. | Tester failure 1. | medium | open |
+| PH-19 | `driver.ts`, limits | A 65th burnable thing is ignored instead of refused with `limit` (design 11.3: 64). | Builder notes. | medium | open |
+| PH-20 | `ui.md`, studio tools | No Fire tool, no fire row in `ui.md`, no screenshots or Chrome numbers for fire. | Builder notes. | low | to be implemented (round 11 examples job) |
+| PH-21 | `driver.ts` | A `Pin` to a body that burns away is not handled (not looked at). | Builder notes. | medium | to be implemented |
+
+**Fixes for PH-16 to PH-19** (the one fix round):
+
+- PH-16: while stepping (playing or catching up after a seek), a handler that a hit starts must run with the film time
+  of that step, and its physics actions (`Push`, `Ignite`, `Wake`, `Sleep`) must be logged at that time and applied at
+  that step, so playing, seeking from 0 and reloading the played script give the same hash. A replay must still not
+  run a handler twice (design: run once per hit). Regression tests: `on ball hit: Ignite(wood)` and
+  `on ball hit: Push(ball, (2, 0))`, seek from 0 to 6 s equals play to 6 s (hash and the `@input` lines).
+- PH-17: at `burnt = 1` a solid shape leaves the walls (bodies on it fall), its value reads undefined with reason
+  `burnt`, and the `burnt` notice shows once. The tester's three failing tests must pass unchanged.
+- PH-18: keep smoke within 0.1% for every `swirl` up to 10: skip the swirl force on faces next to solids and the box's
+  closed sides, and cap its speed change per face per step at `0.5 × min(dx, dy) / h`. The tester's failing test must
+  pass unchanged; films with `swirl` 0.5 and 2 may change (state it in design 9.7).
+- PH-19: a 65th thing with `burns` is refused with `limit` (errors.md 3), naming the 64.
