@@ -165,6 +165,11 @@ export class Fluid2 {
   private vw = new Float64Array(0);
   private visc: Float64Array;
   readonly mass: Float64Array;
+  /** The step length and how far from the origin a drop may go: set by the driver before each step (fields, not arguments: a number passed in a call is a heap number). */
+  hStep = 1 / 120;
+  range = 1e9;
+  /** A push handed to `giveBack` (x, y). */
+  private readonly ar = new Float64Array(4);
 
   constructor(spacing: number, sources: readonly DropSource2[], owners: number) {
     this.d = spacing;
@@ -172,6 +177,7 @@ export class Fluid2 {
     this.r = 0.5 * spacing;
     this.sources = sources;
     this.grid.setSize(this.H);
+    this.grid.reach = this.H;
     this.emitted = new Float64Array(sources.length);
     this.visc = new Float64Array(Math.max(1, owners));
     this.mass = new Float64Array(Math.max(1, owners));
@@ -265,7 +271,8 @@ export class Fluid2 {
   }
 
   /** After the body step: the push of the liquid counts as buoyancy (and in the net force) of each body. */
-  account(w: World2, h: number): void {
+  account(w: World2): void {
+    const h = this.hStep;
     for (let i = 0; i < w.n && i < this.ax.length; i++) {
       const fx = (this.ax[i] as number) / h;
       const fy = (this.ay[i] as number) / h;
@@ -276,11 +283,14 @@ export class Fluid2 {
   }
 
   /** Lets out this step's drops of each tap. */
-  private pour(h: number): void {
+  private pour(): void {
     for (let k = 0; k < this.sources.length; k++) {
       const s = this.sources[k] as DropSource2;
       const p = s.pour;
       if (!p) continue;
+      // (read here, not above the loop: a number read from a field in code the engine has not optimized is a new heap
+      // number, a step with no tap would make one for nothing)
+      const h = this.hStep;
       const target = Math.min(p.max, Math.floor((this.steps + 1) * h * p.rate + 1e-9));
       let e = this.emitted[k] as number;
       if (e >= target) continue;
@@ -307,10 +317,13 @@ export class Fluid2 {
     }
   }
 
-  step(w: World2, h: number, range: number): void {
+  /** One step of the drops, of length `hStep`, against the world's bodies; drops past `range` go. The driver sets both fields first. */
+  step(w: World2): void {
     this.left.length = 0;
+    const h = this.hStep;
+    const range = this.range;
     this.sizeBodies(w.n);
-    this.pour(h);
+    this.pour();
     this.steps++;
     const ps = this.ps;
     const n = ps.n;
@@ -346,10 +359,10 @@ export class Fluid2 {
     }
     const grid = this.grid;
     grid.build(x, y, n);
-    grid.findPairs(x, y, n, this.H);
+    grid.findPairs(x, y, n);
     for (let pass = 0; pass < 2; pass++) {
       this.densityPass(n);
-      this.collide(w, h);
+      this.collide(w);
     }
     // speeds from the move, then a little viscosity (Jacobi, so the order does not matter)
     const inv = 1 / h;
@@ -363,13 +376,17 @@ export class Fluid2 {
     for (let i = 0; i < n; i++) {
       const xi = x[i] as number;
       const yi = y[i] as number;
-      if (!(Math.abs(xi) <= range && Math.abs(yi) <= range)) {
+      // |v| <= range as two comparisons: the same answer for every number (NaN fails both), and no call
+      if (!(xi <= range && xi >= -range && yi <= range && yi >= -range)) {
         if (!Number.isFinite(xi) || !Number.isFinite(yi)) bad = true;
         else this.left.push(ps.owner[i] as number);
       }
     }
     if (bad) this.unstable = true;
-    if (this.left.length > 0 || bad) ps.compact((i) => Math.abs(x[i] as number) <= range && Math.abs(y[i] as number) <= range);
+    if (this.left.length > 0 || bad) {
+      ps.limit = range;
+      ps.compactInside(2);
+    }
   }
 
   /** One density pass over the pairs (each pair once): the crowding of each drop, then the moves that undo it. */
@@ -393,7 +410,9 @@ export class Fluid2 {
     const s2 = this.s2;
     const vw = this.vw;
     const invSelf = 1 / (k6 * H2 * H2 * H2);
-    rho.fill(k6 * H2 * H2 * H2, 0, n);
+    // not `rho.fill(self, 0, n)`: a number passed to a built-in is a heap number
+    const self = k6 * H2 * H2 * H2;
+    for (let i = 0; i < n; i++) rho[i] = self;
     sx.fill(0, 0, n);
     sy.fill(0, 0, n);
     s2.fill(0, 0, n);
@@ -523,7 +542,7 @@ export class Fluid2 {
   /* ------------------------------ drops against bodies and solids ------------------------------ */
 
   /** Pushes drops out of bodies (first), then walls and movers. Bodies get the equal and opposite impulse. */
-  private collide(w: World2, h: number): void {
+  private collide(w: World2): void {
     for (let pass = 0; pass < 2; pass++) {
       for (let b = 0; b < w.n; b++) {
         if (w.gone.has(b)) continue;
@@ -531,12 +550,12 @@ export class Fluid2 {
         if (dynamic !== (pass === 0)) continue;
         const s0 = w.shape0[b] as number;
         const sn = w.shapeN[b] as number;
-        for (let k = s0; k < s0 + sn; k++) this.collideShape(w, b, k, dynamic, h);
+        for (let k = s0; k < s0 + sn; k++) this.collideShape(w, b, k, dynamic);
       }
     }
   }
 
-  private collideShape(w: World2, b: number, k: number, dynamic: boolean, h: number): void {
+  private collideShape(w: World2, b: number, k: number, dynamic: boolean): void {
     const sh = w.shapes[k];
     if (!sh) return;
     const r = this.r;
@@ -565,8 +584,14 @@ export class Fluid2 {
     }
     // drops may have moved up to a cell since the grid was built, and a fast one up to 1.5 spacings this step
     const pad = r + this.H + 1.5 * this.d;
+    const ar = this.ar;
     const ps = this.ps;
-    const m = this.grid.inBox(bx0 - pad, by0 - pad, bx1 + pad, by1 + pad, ps.n);
+    const box = this.grid.box;
+    box[0] = bx0 - pad;
+    box[1] = by0 - pad;
+    box[2] = bx1 + pad;
+    box[3] = by1 + pad;
+    const m = this.grid.inBox(ps.n);
     const found = this.grid.found;
     const x = ps.x;
     const y = ps.y;
@@ -639,7 +664,11 @@ export class Fluid2 {
       }
       x[i] = xi + px;
       y[i] = yi + py;
-      if (dynamic) this.giveBack(w, b, i, px, py, h);
+      if (dynamic) {
+        ar[0] = px;
+        ar[1] = py;
+        this.giveBack(w, b, i);
+      }
     }
   }
 
@@ -705,7 +734,10 @@ export class Fluid2 {
    * The body takes the impulse back: the drop's change of momentum, with the pair's reduced mass along the push so a
    * body lighter than a drop cannot gain energy from it. Applied at the start of the next step.
    */
-  private giveBack(w: World2, b: number, i: number, px: number, py: number, h: number): void {
+  private giveBack(w: World2, b: number, i: number): void {
+    const px = this.ar[0] as number;
+    const py = this.ar[1] as number;
+    const h = this.hStep;
     const l2 = px * px + py * py;
     if (!(l2 > 0)) return;
     const mp = this.mass[this.ps.owner[i] as number] as number;

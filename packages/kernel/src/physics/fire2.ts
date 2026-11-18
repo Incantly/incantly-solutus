@@ -48,42 +48,10 @@ export interface DropsView {
 }
 
 /**
- * Two fields at a point (temperature into `out[0]`, fuel into `out[1]`), from the air cells round it only: a solid's
- * cells hold none and would thin what is beside it.
+ * Temperature and fuel are carried back along the flow, as smoke is (no mass rescaling: only smoke keeps its mass). Each is
+ * read at the point the cell's air came from, from the air cells round it only: a solid's cells hold none and would thin
+ * what is beside it.
  */
-function carry(g: Smoke2, x: number, y: number, ta: Float64Array, fa: Float64Array, out: Float64Array): void {
-  const n = g.n;
-  let fx = (x - g.x0) / g.dx - 0.5;
-  let fy = (y - g.y0) / g.dy - 0.5;
-  if (fx < 0) fx = 0;
-  else if (fx > n - 1) fx = n - 1;
-  if (fy < 0) fy = 0;
-  else if (fy > n - 1) fy = n - 1;
-  let i = Math.floor(fx);
-  let j = Math.floor(fy);
-  if (i > n - 2) i = n - 2;
-  if (j > n - 2) j = n - 2;
-  if (i < 0) i = 0;
-  if (j < 0) j = 0;
-  const tx = fx - i;
-  const ty = fy - j;
-  const own = g.own;
-  const c = j * n + i;
-  const wa = (own[c] as number) < 0 ? (1 - tx) * (1 - ty) : 0;
-  const wb = (own[c + 1] as number) < 0 ? tx * (1 - ty) : 0;
-  const wc = (own[c + n] as number) < 0 ? (1 - tx) * ty : 0;
-  const wd = (own[c + n + 1] as number) < 0 ? tx * ty : 0;
-  const sum = wa + wb + wc + wd;
-  if (!(sum > 0)) {
-    out[0] = 0;
-    out[1] = 0;
-    return;
-  }
-  out[0] = (wa * (ta[c] as number) + wb * (ta[c + 1] as number) + wc * (ta[c + n] as number) + wd * (ta[c + n + 1] as number)) / sum;
-  out[1] = (wa * (fa[c] as number) + wb * (fa[c + 1] as number) + wc * (fa[c + n] as number) + wd * (fa[c + n + 1] as number)) / sum;
-}
-
-/** Temperature and fuel are carried back along the flow, as smoke is (no mass rescaling: only smoke keeps its mass). */
 export function advectFire(g: Smoke2, h: number): void {
   const n = g.n;
   const W = n + 1;
@@ -91,7 +59,6 @@ export function advectFire(g: Smoke2, h: number): void {
   const v = g.v;
   const own = g.own;
   const { T, F, T2, F2 } = g;
-  const two = g.pair;
   for (let j = 0; j < n; j++) {
     const y = g.y0 + (j + 0.5) * g.dy;
     for (let i = 0; i < n; i++) {
@@ -116,10 +83,35 @@ export function advectFire(g: Smoke2, h: number): void {
         F2[c] = 0;
         continue;
       }
-      carry(g, bx, by, T, F, two);
-      T2[c] = two[0] as number;
+      // (`carry` written out here: a call that passes the point as two numbers makes a heap number for each when it is not inlined, design 11.4)
+      let fx = (bx - g.x0) / g.dx - 0.5;
+      let fy = (by - g.y0) / g.dy - 0.5;
+      if (fx < 0) fx = 0;
+      else if (fx > n - 1) fx = n - 1;
+      if (fy < 0) fy = 0;
+      else if (fy > n - 1) fy = n - 1;
+      let ci = Math.floor(fx);
+      let cj = Math.floor(fy);
+      if (ci > n - 2) ci = n - 2;
+      if (cj > n - 2) cj = n - 2;
+      if (ci < 0) ci = 0;
+      if (cj < 0) cj = 0;
+      const tx = fx - ci;
+      const ty = fy - cj;
+      const q = cj * n + ci;
+      const wa = (own[q] as number) < 0 ? (1 - tx) * (1 - ty) : 0;
+      const wb = (own[q + 1] as number) < 0 ? tx * (1 - ty) : 0;
+      const wc = (own[q + n] as number) < 0 ? (1 - tx) * ty : 0;
+      const wd = (own[q + n + 1] as number) < 0 ? tx * ty : 0;
+      const sum = wa + wb + wc + wd;
+      if (!(sum > 0)) {
+        T2[c] = 0;
+        F2[c] = 0;
+        continue;
+      }
+      T2[c] = (wa * (T[q] as number) + wb * (T[q + 1] as number) + wc * (T[q + n] as number) + wd * (T[q + n + 1] as number)) / sum;
       // fuel blended thinner than a millionth of a unit is gone, so a fire with nothing left to burn really holds none
-      const f = two[1] as number;
+      const f = (wa * (F[q] as number) + wb * (F[q + 1] as number) + wc * (F[q + n] as number) + wd * (F[q + n + 1] as number)) / sum;
       F2[c] = f > 1e-6 ? f : 0;
     }
   }

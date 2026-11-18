@@ -56,6 +56,14 @@ export interface Poses {
   readonly py: Float64Array;
   readonly qc: Float64Array;
   readonly qs: Float64Array;
+  /**
+   * The margin a manifold is made within, and the two radii `worldManifold` takes (of the shapes of A and B): set by the
+   * caller before the call (fields, not arguments: a number passed in a call that is not inlined is a heap number, which
+   * is garbage in every contact of every step, design 11.4).
+   */
+  margin: number;
+  radA: number;
+  radB: number;
 }
 
 /** World point to body frame. */
@@ -76,11 +84,11 @@ function rotLocalY(P: Poses, b: number, x: number, y: number): number {
   return -(P.qs[b] as number) * x + (P.qc[b] as number) * y;
 }
 
-export function collideCircles(P: Poses, a: Shape2, b: Shape2, margin: number, m: Manifold): void {
+export function collideCircles(P: Poses, a: Shape2, b: Shape2, m: Manifold): void {
   m.count = 0;
   const dx = b.wcx - a.wcx;
   const dy = b.wcy - a.wcy;
-  const r = a.radius + b.radius + margin;
+  const r = a.radius + b.radius + P.margin;
   if (dx * dx + dy * dy > r * r) return;
   m.type = ManifoldType.Circles;
   m.lpx = a.lcx;
@@ -95,11 +103,11 @@ export function collideCircles(P: Poses, a: Shape2, b: Shape2, margin: number, m
 }
 
 /** `a` is the polygon, `b` the circle. */
-export function collidePolygonCircle(P: Poses, a: Shape2, b: Shape2, margin: number, m: Manifold): void {
+export function collidePolygonCircle(P: Poses, a: Shape2, b: Shape2, m: Manifold): void {
   m.count = 0;
   const cx = b.wcx;
   const cy = b.wcy;
-  const R = a.radius + b.radius + margin;
+  const R = a.radius + b.radius + P.margin;
   const n = a.wx.length;
   let sep = -Infinity;
   let edge = 0;
@@ -225,9 +233,9 @@ function clip(src: Float64Array, dst: Float64Array, nx: number, ny: number, offs
   return k;
 }
 
-export function collidePolygons(P: Poses, a: Shape2, b: Shape2, margin: number, m: Manifold): void {
+export function collidePolygons(P: Poses, a: Shape2, b: Shape2, m: Manifold): void {
   m.count = 0;
-  const R = a.radius + b.radius + margin;
+  const R = a.radius + b.radius + P.margin;
   maxSeparation(a, b);
   const sepA = MAX_SEP.s;
   const edgeA = MAX_SEP.e;
@@ -340,7 +348,9 @@ export function newWorldManifold(): WorldManifold {
   return { nx: 0, ny: 0, x0: 0, y0: 0, s0: 0, x1: 0, y1: 0, s1: 0 };
 }
 
-export function worldManifold(P: Poses, m: Manifold, bodyA: number, rA: number, bodyB: number, rB: number, out: WorldManifold): void {
+export function worldManifold(P: Poses, m: Manifold, bodyA: number, bodyB: number, out: WorldManifold): void {
+  const rA = P.radA;
+  const rB = P.radB;
   const cA = P.qc[bodyA] as number;
   const sA = P.qs[bodyA] as number;
   const cB = P.qc[bodyB] as number;
