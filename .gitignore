@@ -9,4 +9,5 @@ coverage/
 *.tsbuildinfo
 generated/
 test-results/
+packages/kernel/wasm/target/
 playwright-report/

@@ -1,0 +1,18 @@
+[package]
+name = "incantly-physics-kernels"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "The hot loops of the cloth and liquid solvers, compiled to WebAssembly (docs/features/physics/design.md 11.6)."
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+debug = false
